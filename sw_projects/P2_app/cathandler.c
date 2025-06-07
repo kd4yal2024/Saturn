@@ -2,14 +2,14 @@
 //
 // Saturn project: Artix7 FPGA + Raspberry Pi4 Compute Module
 // PCI Express interface from linux on Raspberry pi
-// this application uses C code to emulate HPSDR protocol 2 
+// this application uses C code to emulate HPSDR protocol 2
 //
 // copyright Laurence Barker November 2021
 // licenced under GNU GPL3
 //
 // cathandler.c
 //
-// interpret and generate CAT messages to cmmmunicate over TCP/IP with remote client
+// interpret and generate CAT messages to communicate over TCP/IP with remote client
 // Thetis accepts 1 CAT command per packet, and sends one response per packet
 //
 //////////////////////////////////////////////////////////////
@@ -39,8 +39,6 @@
 #include "catmessages.h"
 #include "serialport.h"
 
-
-
 bool CATPortAssigned = false;                // true if CAT set up and active
 int CATPort = 0;
 bool ThreadActive = false;                  // true while CAT thread running
@@ -50,46 +48,39 @@ pthread_t CATThread;                        // thread reads/writes CAT commands
 pthread_t CATKeepaliveThread;               // thread requests activity every 15s
 bool CATDebugPrint = false;                 // true if to print generated CAT messages
 
-
-
 #define VNUMOPSTRINGS 16                    // size of output queue
 #define VOPSTRSIZE 40                       // size of each string in queue
 //
 // CAT output buffer
 //
-char OutputStrings[VNUMOPSTRINGS] [VOPSTRSIZE];
+char OutputStrings[VNUMOPSTRINGS][VOPSTRSIZE];
 int CATWritePtr = 0;                        // pointer to next string to write
 int CATReadPtr = 0;                         // pointer to next string to read
 
-
 extern SCATCommands GCATCommands[];
-
-
 
 //
 // lookup initial divisor from number of digits
 // (for local numerical conversion)
 //
-long DivisorTable[] =
+long long DivisorTable[] =
 {
-  0L,                                                    // not used
-  1L,                                                    // 1 digit - already have units
-  10L,                                                   // 2 digits - tens is first
-  100L,                                                  // 3 digits - hundreds is 1st
-  1000L,                                                 // 4 digits - thousands is 1st
-  10000L,                                                // 5 digits - ten thousands is 1st
-  100000L,                                               // 6 digits - hundred thousands
-  1000000L,                                              // millions
-  10000000L,                                             // 10 millions
-  100000000L,                                            // 100 millions
-  1000000000L,                                           // 1000 millions
-  10000000000L,                                          // 10000 millions
-  100000000000L,                                         // 100000 millions
-  1000000000000L,                                        // 1000000 millions
-  10000000000000L                                        // 10000000 millions
+    0LL,                                                    // not used
+    1LL,                                                    // 1 digit - already have units
+    10LL,                                                   // 2 digits - tens is first
+    100LL,                                                  // 3 digits - hundreds is 1st
+    1000LL,                                                 // 4 digits - thousands is 1st
+    10000LL,                                                // 5 digits - ten thousands is 1st
+    100000LL,                                               // 6 digits - hundred thousands
+    1000000LL,                                              // millions
+    10000000LL,                                             // 10 millions
+    100000000LL,                                            // 100 millions
+    1000000000LL,                                           // 1 billion
+    10000000000LL,                                          // 10 billion
+    100000000000LL,                                         // 100 billion
+    1000000000000LL,                                        // 1 trillion
+    10000000000000LL                                        // 10 trillion
 };
-
-
 
 
 
@@ -135,7 +126,7 @@ unsigned long Make32BitStr(char* Input)
   unsigned long Result;
   byte CharCntr;
   char Ch;
-  
+
   Result = 0;
   for(CharCntr=0; CharCntr < 4; CharCntr++)
   {
@@ -225,8 +216,8 @@ void ParseCATCmd(char* Buffer,  int Source)
   long ParsedInt;                             // if int expected, it goes here
   char ParsedString[20];                      // if string expected, it goes here
 
-  void (*HandlerPtr)(int SourceDevice, ERXParamType HasParam, bool BoolParam, int NumParam, char* StringParam); 
-  
+  void (*HandlerPtr)(int SourceDevice, ERXParamType HasParam, bool BoolParam, int NumParam, char* StringParam);
+
   CharCnt = strlen(Buffer) - 1;
 //
 // CharCnt holds the input string length excluding the terminating null and excluding the semicolon
@@ -264,7 +255,7 @@ void ParseCATCmd(char* Buffer,  int Source)
 // strategy is: first copy just the param to a string
 // if required type is not a string, parse to a number
 // then if required type is bool, check the value
-//        
+//
         ParsedType = eStr;
         for(ByteCntr = 0; ByteCntr < (CharCnt-4); ByteCntr++)
           ParsedString[ByteCntr] = Buffer[ByteCntr+4];
@@ -291,7 +282,7 @@ void ParseCATCmd(char* Buffer,  int Source)
           else
           {
             ParsedType = eNone;
-            ValidResult = false;            
+            ValidResult = false;
           }
         }
       }
@@ -303,7 +294,7 @@ void ParseCATCmd(char* Buffer,  int Source)
 //    printf("match= %s ; parameter=", GCATCommands[MatchedCAT].CATString);
 //    switch(ParsedType)
 //    {
-//      case eStr: 
+//      case eStr:
 //        printf("%s\n", ParsedString);
 //        break;
 //      case eNum:
@@ -410,7 +401,7 @@ void MakeCATMessageNumeric(int Device, ECATCommands Cmd, long Param)
 {
   char Output[VOPSTRSIZE];                                // TX CAT msg buffer
   byte CharCount;                  // character count to add
-  unsigned long Divisor;           // initial divisor to convert to ascii
+  unsigned long long Divisor;      // initial divisor to convert to ascii
   unsigned long Digit;             // decimal digit found
   char ASCIIDigit;
   SCATCommands* StructPtr;
@@ -418,16 +409,16 @@ void MakeCATMessageNumeric(int Device, ECATCommands Cmd, long Param)
   StructPtr = GCATCommands + (int)Cmd;
   strcpy(Output, StructPtr->CATString);
   CharCount = StructPtr->NumParams;
-//
-// clip the parameter to the allowed numeric range
-//
+  //
+  // clip the parameter to the allowed numeric range
+  //
   if (Param > StructPtr->MaxParamValue)
     Param = StructPtr->MaxParamValue;
   else if (Param < StructPtr->MinParamValue)
     Param = StructPtr->MinParamValue;
-//
-// now add sign if needed
-//
+  //
+  // now add sign if needed
+  //
   if (StructPtr -> AlwaysSigned)
   {
     if (Param < 0)
@@ -442,13 +433,13 @@ void MakeCATMessageNumeric(int Device, ECATCommands Cmd, long Param)
   else if (Param < 0)                   // not always signed, but neg so it needs a sign
   {
       strcat(Output, "-");
-      Param = -Param;      
+      Param = -Param;
       CharCount--;                      // make positive
   }
-//
-// we now have a positive number to fit into <CharCount> digits
-// pad with zeros if needed
-//
+  //
+  // we now have a positive number to fit into <CharCount> digits
+  // pad with zeros if needed
+  //
   Divisor = DivisorTable[CharCount];
   while (Divisor > 1)
   {
@@ -472,7 +463,7 @@ void MakeCATMessageNumeric(int Device, ECATCommands Cmd, long Param)
 // make a CAT command with a bool parameter
 // Device = -1 for CAT port, else a serial device with this file ID
 //
-void MakeCATMessageBool(int Device, ECATCommands Cmd, bool Param) 
+void MakeCATMessageBool(int Device, ECATCommands Cmd, bool Param)
 {
   char Output[VOPSTRSIZE];                                // TX CAT msg buffer
   SCATCommands* StructPtr;
@@ -496,7 +487,7 @@ void MakeCATMessageBool(int Device, ECATCommands Cmd, bool Param)
 // the string is truncated if too long, or padded with spaces if too short
 // Device = -1 for CAT port, else a serial device with this file ID
 //
-void MakeCATMessageString(int Device, ECATCommands Cmd, char* Param) 
+void MakeCATMessageString(int Device, ECATCommands Cmd, char* Param)
 {
   char Output[VOPSTRSIZE];                                // TX CAT msg buffer
   byte ParamLength, ReqdLength;                        // string lengths
@@ -506,20 +497,20 @@ void MakeCATMessageString(int Device, ECATCommands Cmd, char* Param)
   StructPtr = GCATCommands + (byte)Cmd;
   ParamLength = strlen(Param);                        // length of input string
   ReqdLength = StructPtr->NumParams;                  // required length of parameter "nnnn" string not including semicolon
-  
+
   strcpy(Output, StructPtr->CATString);               // copy the base message
   if(ParamLength > ReqdLength)                        // if string too long, truncate it
-    Param[ReqdLength]=0; 
+    Param[ReqdLength]=0;
   strcat(Output, Param);                              // append the string
-//
-// now see if we need to pad
-//
+  //
+  // now see if we need to pad
+  //
   if (ParamLength < ReqdLength)
   for (Cntr=0; Cntr < (ReqdLength-ParamLength); Cntr++)
     strcat(Output, " ");
-//
-// finally terminate and send  
-//
+  //
+  // finally terminate and send
+  //
   strcat(Output, ";");                                // add the terminating semicolon
   if(Device < 0)
     SendCATMessage(Output);
@@ -534,7 +525,7 @@ void MakeCATMessageString(int Device, ECATCommands Cmd, char* Param)
 // otherwise Thetis drops connection after 30s
 //
 void* CATKeepaliveThreadFunction(__attribute__((unused)) void *arg)
-{ 
+{
     int Cntr = 0;
 
     printf("spinning up CAT keepalive thread, pid=%ld\n", syscall(SYS_gettid));
@@ -674,7 +665,7 @@ void* CATHandlerThread(__attribute__((unused)) void *arg)
             if(SendError == -1)
             {
               perror("CAT send Error");
-              ThreadError = true; 
+              ThreadError = true;
               break;
             }
           }
@@ -694,7 +685,7 @@ void* CATHandlerThread(__attribute__((unused)) void *arg)
 //
 // function to setup a CAT port handler
 // save port number, and create a thread if needed
-// note this will be called a lot of times: every time a high priority command message received. 
+// note this will be called a lot of times: every time a high priority command message received.
 // only process this if the port is not yet assigned
 //
 // there is a race condition. This is called from inhighpriority.c, but a necessary condition
@@ -721,7 +712,7 @@ void SetupCATPort(int Port)
               return;
           }
           pthread_detach(CATThread);
-          
+
           // and create the keepalive
           if(pthread_create(&CATKeepaliveThread, NULL, CATKeepaliveThreadFunction, NULL) < 0)
           {
@@ -731,7 +722,7 @@ void SetupCATPort(int Port)
           }
           pthread_detach(CATKeepaliveThread);
         }
-    }  
+    }
 }
 
 
@@ -747,5 +738,3 @@ void ShutdownCATHandler(void)
         usleep(1000);
     SignalThreadEnd = false;
 }
-
-
