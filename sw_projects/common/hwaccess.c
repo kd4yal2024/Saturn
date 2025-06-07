@@ -29,8 +29,8 @@
 #include <unistd.h>
 #include <stdbool.h>
 
-#define VMEMBUFFERSIZE 32768										// memory buffer to reserve
-#define AXIBaseAddress 0x10000									// address of StreamRead/Writer IP
+#define VMEMBUFFERSIZE 32768                                                                     // memory buffer to reserve
+#define AXIBaseAddress 0x10000                                                                  // address of StreamRead/Writer IP
 
 #include "../common/hwaccess.h"
 
@@ -38,7 +38,7 @@
 //
 // mem read/write variables:
 //
-	int register_fd;                             // device identifier
+        int register_fd;                             // device identifier
 
 
 
@@ -49,15 +49,15 @@
 int OpenXDMADriver(bool Silent)
 {
     int Result = 0;
-	if ((register_fd = open("/dev/xdma0_user", O_RDWR)) == -1)
+        if ((register_fd = open("/dev/xdma0_user", O_RDWR)) == -1)
     {
-		if(!Silent)
-			printf("register R/W address space not available\n");
+                if(!Silent)
+                        printf("register R/W address space not available\n");
     }
     else
     {
-		if(!Silent)
-			printf("register access connected to /dev/xdma0_user\n");
+                if(!Silent)
+                        printf("register access connected to /dev/xdma0_user\n");
         Result = 1;
     }
     return Result;
@@ -79,31 +79,31 @@ void CloseXDMADriver(void)
 // fd: file device (an open file)
 // SrcData: pointer to memory block to transfer
 // Length: number of bytes to copy
-// AXIAddr: offset address in the FPGA window 
+// AXIAddr: offset address in the FPGA window
 //
 int DMAWriteToFPGA(int fd, unsigned char*SrcData, uint32_t Length, uint32_t AXIAddr)
 {
-	ssize_t rc;									// response code
-	off_t OffsetAddr;
+        ssize_t rc;                                                                     // response code
+        off_t OffsetAddr;
 
-	OffsetAddr = AXIAddr;
-	rc = lseek(fd, OffsetAddr, SEEK_SET);
-	if (rc != OffsetAddr)
-	{
-		printf("seek off 0x%lx != 0x%lx.\n", rc, OffsetAddr);
-		perror("seek file");
-		return -EIO;
-	}
+        OffsetAddr = AXIAddr;
+        rc = lseek(fd, OffsetAddr, SEEK_SET);
+        if (rc != OffsetAddr)
+        {
+                printf("seek off %ld != 0x%llx.\n", (long int)rc, (unsigned long long)OffsetAddr);
+                perror("seek file");
+                return -EIO;
+        }
 
-	// write data to FPGA from memory buffer
-	rc = write(fd, SrcData, Length);
-	if (rc < 0)
-	{
-		printf("write 0x%x @ 0x%lx failed %ld.\n", Length, OffsetAddr, rc);
-		perror("DMA write");
-		return -EIO;
-	}
-	return 0;
+        // write data to FPGA from memory buffer
+        rc = write(fd, SrcData, Length);
+        if (rc < 0)
+        {
+                printf("write 0x%x @ 0x%llx failed %ld.\n", Length, (unsigned long long)OffsetAddr, (long int)rc);
+                perror("DMA write");
+                return -EIO;
+        }
+        return 0;
 }
 
 //
@@ -112,31 +112,31 @@ int DMAWriteToFPGA(int fd, unsigned char*SrcData, uint32_t Length, uint32_t AXIA
 // fd: file device (an open file)
 // DestData: pointer to memory block to transfer
 // Length: number of bytes to copy
-// AXIAddr: offset address in the FPGA window 
+// AXIAddr: offset address in the FPGA window
 //
 int DMAReadFromFPGA(int fd, unsigned char*DestData, uint32_t Length, uint32_t AXIAddr)
 {
-	ssize_t rc;									// response code
-	off_t OffsetAddr;
+        ssize_t rc;                                                                     // response code
+        off_t OffsetAddr;
 
-	OffsetAddr = AXIAddr;
-	rc = lseek(fd, OffsetAddr, SEEK_SET);
-	if (rc != OffsetAddr)
-	{
-		printf("seek off 0x%lx != 0x%lx.\n", rc, OffsetAddr);
-		perror("seek file");
-		return -EIO;
-	}
+        OffsetAddr = AXIAddr;
+        rc = lseek(fd, OffsetAddr, SEEK_SET);
+        if (rc != OffsetAddr)
+        {
+                printf("seek off %ld != 0x%llx.\n", (long int)rc, (unsigned long long)OffsetAddr);
+                perror("seek file");
+                return -EIO;
+        }
 
-	// write data to FPGA from memory buffer
-	rc = read(fd, DestData, Length);
-	if (rc < 0)
-	{
-		printf("read 0x%x @ 0x%lx failed %ld.\n", Length, OffsetAddr, rc);
-		perror("DMA read");
-		return -EIO;
-	}
-	return 0;
+        // write data to FPGA from memory buffer
+        rc = read(fd, DestData, Length);
+        if (rc < 0)
+        {
+                printf("read 0x%x @ 0x%llx failed %ld.\n", Length, (unsigned long long)OffsetAddr, (long int)rc);
+                perror("DMA read");
+                return -EIO;
+        }
+        return 0;
 }
 
 //
@@ -144,12 +144,12 @@ int DMAReadFromFPGA(int fd, unsigned char*DestData, uint32_t Length, uint32_t AX
 //
 uint32_t RegisterRead(uint32_t Address)
 {
-	uint32_t result = 0;
+        uint32_t result = 0;
 
     ssize_t nread = pread(register_fd, &result, sizeof(result), (off_t) Address);
     if (nread != sizeof(result))
         printf("ERROR: register read: addr=0x%08X   error=%s\n",Address, strerror(errno));
-	
+
     return result;
 }
 
@@ -158,10 +158,7 @@ uint32_t RegisterRead(uint32_t Address)
 //
 void RegisterWrite(uint32_t Address, uint32_t Data)
 {
-    ssize_t nsent = pwrite(register_fd, &Data, sizeof(Data), (off_t) Address); 
+    ssize_t nsent = pwrite(register_fd, &Data, sizeof(Data), (off_t) Address);
     if (nsent != sizeof(Data))
         printf("ERROR: Write: addr=0x%08X   error=%s\n",Address, strerror(errno));
 }
-
-
-
