@@ -10,6 +10,7 @@
 // OutMicAudio.c:
 //
 // handle "outgoing microphone audio" message
+// Updated June 2025 to add mic overflow bit for client alerts
 //
 //////////////////////////////////////////////////////////////
 
@@ -38,7 +39,7 @@
 #define VDMATRANSFERSIZE 128                        // read 1 message at a time
 #define VSTARTUPDELAY 100                           // 100 messages (~100ms) before reporting under or overflows
 
-int DMAReadfile_fd = -1;								// DMA read file device (global, used also by wideband)
+int DMAReadfile_fd = -1;							// DMA read file device (global, used also by wideband)
 
 // this runs as its own thread to send outgoing data
 // thread initiated after a "Start" command
@@ -56,8 +57,8 @@ void *OutgoingMicSamples(void *arg)
     uint8_t UDPBuffer[VMICPACKETSIZE];                      // DDC frame buffer
     uint32_t SequenceCounter = 0;                           // UDP sequence count
 
-    struct ThreadSocketData* ThreadData;            // socket etc data for this thread
-    struct sockaddr_in DestAddr;                    // destination address for outgoing data
+    struct ThreadSocketData* ThreadData;                    // socket etc data for this thread
+    struct sockaddr_in DestAddr;                            // destination address for outgoing data
     bool InitError = false;
     int Error;
 
@@ -128,6 +129,10 @@ void *OutgoingMicSamples(void *arg)
         printf("mic FIFO Depth register = %08x (should be ~0)\n", RegisterValue);
     Depth = 0;
 
+    // planned strategy: just DMA mic data when available; don't copy and DMA a larger amount.
+    // if sufficient FIFO data available: DMA that data and transfer it out. 
+    // if it turns out to be too inefficient, we'll have to try larger DMA.
+
     while (!InitError)
     {
         while(!(SDRActive))
@@ -154,7 +159,7 @@ void *OutgoingMicSamples(void *arg)
         SequenceCounter = 0;
         memcpy(&DestAddr, &reply_addr, sizeof(struct sockaddr_in));           // create local copy of PC destination address
         memset(&iovecinst, 0, sizeof(struct iovec));
-        memset(&datagram, 0, sizeof(datagram));
+        memset(&datagram, 0, sizeof(struct msghdr));
         iovecinst.iov_base = UDPBuffer;
         iovecinst.iov_len = VMICPACKETSIZE;
         datagram.msg_iov = &iovecinst;
@@ -183,7 +188,7 @@ void *OutgoingMicSamples(void *arg)
             while (Depth < (VMICSAMPLESPERFRAME/4))			        // 16 locations = 64 samples
             {
                 struct timespec ts = {0, 1000000}; // 1 ms
-                nanosleep(&ts, NULL);								        // 1ms wait
+                nanosleep(&ts, NULL);							// 1ms wait
                 Depth = ReadFIFOMonitorChannel(eMicCodecDMA, &FIFOOverflow, &FIFOOverThreshold, &FIFOUnderflow, &Current);				// read the FIFO Depth register
                 if((StartupCount == 0) && FIFOOverThreshold)
                 {
@@ -201,11 +206,12 @@ void *OutgoingMicSamples(void *arg)
             // DMA shared with wideband samples, so get semaphore granting access
             sem_wait(&MicWBDMAMutex);                       // get protected access
             DMAReadFromFPGA(DMAReadfile_fd, MicBasePtr, VDMATRANSFERSIZE, VADDRMICSTREAMREAD);
-            sem_post(&MicWBDMAMutex);                       // get protected access
+            sem_post(&MicWBDMAMutex);                       // release protected access
 
-            // Peak limiter to prevent clipping
+            // Peak limiter and overflow detection
             int16_t* audioData = (int16_t*)MicBasePtr;
             int16_t maxValue = 0;
+            bool micOverflow = false;
             for (int i = 0; i < 64; i++) {
                 int16_t sample = audioData[i];
                 if (abs(sample) > maxValue) {
@@ -213,15 +219,18 @@ void *OutgoingMicSamples(void *arg)
                 }
             }
             if (maxValue > 30000) { // 90% of INT16_MAX
+                micOverflow = true;
                 float scale = 30000.0f / maxValue;
                 for (int i = 0; i < 64; i++) {
                     audioData[i] = (int16_t)(audioData[i] * scale);
                 }
+                if (UseDebug) printf("Mic overflow detected, max value = %d, scaling applied\n", maxValue);
             }
 
             // create the packet into UDPBuffer
-            *(uint32_t*)UDPBuffer = htonl(SequenceCounter++);        // add sequence count
-            memcpy(UDPBuffer+4, MicBasePtr, VDMATRANSFERSIZE);       // copy in mic samples
+            *(uint32_t*)UDPBuffer = htonl(SequenceCounter++);        // add sequence count at offset 0
+            UDPBuffer[4] = micOverflow ? 0x01 : 0x00;                // status byte at offset 4, bit 0 for mic overflow
+            memcpy(UDPBuffer+5, MicBasePtr, VDMATRANSFERSIZE);       // copy mic samples at offset 5
             Error = sendmsg(ThreadData->Socketid, &datagram, 0);
             if (Error == -1) {
                 if (errno == EAGAIN) {
@@ -246,7 +255,7 @@ void *OutgoingMicSamples(void *arg)
     // tidy shutdown of the thread
     //
     if(InitError)                                           // if error, flag it to main program
-      ThreadError = true;
+        ThreadError = true;
 
     printf("shutting down outgoing mic data thread\n");
     close(ThreadData->Socketid); 
