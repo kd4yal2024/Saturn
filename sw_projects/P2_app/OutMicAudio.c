@@ -29,7 +29,7 @@
 #include "../common/saturnregisters.h"
 #include "../common/saturndrivers.h"
 #include "../common/hwaccess.h"
-
+#include <time.h> // For nanosleep and clock_gettime
 
 #define VMICSAMPLESPERFRAME 64
 #define VDMABUFFERSIZE 32768						// memory buffer to reserve
@@ -38,11 +38,7 @@
 #define VDMATRANSFERSIZE 128                        // read 1 message at a time
 #define VSTARTUPDELAY 100                           // 100 messages (~100ms) before reporting under or overflows
 
-
-    int DMAReadfile_fd = -1;								// DMA read file device (global, used also by wideband)
-
-
-
+int DMAReadfile_fd = -1;								// DMA read file device (global, used also by wideband)
 
 // this runs as its own thread to send outgoing data
 // thread initiated after a "Start" command
@@ -52,9 +48,9 @@
 //
 void *OutgoingMicSamples(void *arg)
 {
-//
-// variables for outgoing UDP frame
-//
+    //
+    // variables for outgoing UDP frame
+    //
     struct iovec iovecinst;                                 // instance of iovec
     struct msghdr datagram;
     uint8_t UDPBuffer[VMICPACKETSIZE];                      // DDC frame buffer
@@ -65,9 +61,9 @@ void *OutgoingMicSamples(void *arg)
     bool InitError = false;
     int Error;
 
-//
-// variables for DMA buffer 
-//
+    //
+    // variables for DMA buffer 
+    //
     uint8_t* MicReadBuffer = NULL;							// data for DMA read from DDC
     uint32_t MicBufferSize = VDMABUFFERSIZE;
     unsigned char* MicBasePtr;								// ptr to DMA location in mic memory
@@ -77,19 +73,30 @@ void *OutgoingMicSamples(void *arg)
     unsigned int Current;                                   // current occupied locations in FIFO
     unsigned int StartupCount;                              // used to delay reporting of under & overflows
 
+    // Set send buffer size and initialize last send time
+    const int sndbuf = 1024 * 1024; // 1MB
+    struct timespec lastSendTime;
 
-
-//
-// initialise. Get parameters for thread; 
-// then create memory buffers and open DMA file devices
-//
+    //
+    // initialise. Get parameters for thread; 
+    // then create memory buffers and open DMA file devices
+    //
     ThreadData = (struct ThreadSocketData *)arg;
     ThreadData->Active = true;
     printf("spinning up outgoing mic thread with port %d, pid=%ld\n", ThreadData->Portid, syscall(SYS_gettid));
 
-//
-// setup DMA buffer
-//
+    // Set socket to non-blocking mode
+    fcntl(ThreadData->Socketid, F_SETFL, fcntl(ThreadData->Socketid, F_GETFL, 0) | O_NONBLOCK);
+
+    // Set send buffer size
+    setsockopt(ThreadData->Socketid, SOL_SOCKET, SO_SNDBUF, &sndbuf, sizeof(sndbuf));
+
+    // Initialize last send time
+    clock_gettime(CLOCK_MONOTONIC, &lastSendTime);
+
+    //
+    // setup DMA buffer
+    //
     posix_memalign((void**)&MicReadBuffer, VALIGNMENT, MicBufferSize);
     if (!MicReadBuffer)
     {
@@ -99,10 +106,9 @@ void *OutgoingMicSamples(void *arg)
     MicBasePtr = MicReadBuffer + VBASE;
     memset(MicReadBuffer, 0, MicBufferSize);
 
-
-  //
-  // open DMA device driver
-  //
+    //
+    // open DMA device driver
+    //
     DMAReadfile_fd = open(VMICDMADEVICE, O_RDWR);
     if (DMAReadfile_fd < 0)
     {
@@ -110,11 +116,11 @@ void *OutgoingMicSamples(void *arg)
         InitError = true;
     }
 
-  //
-  // now initialise Saturn hardware.
-  // clear FIFO
-  // then read depth
-  //
+    //
+    // now initialise Saturn hardware.
+    // clear FIFO
+    // then read depth
+    //
     SetupFIFOMonitorChannel(eMicCodecDMA, false);
     ResetDMAStreamFIFO(eMicCodecDMA);
     RegisterValue = ReadFIFOMonitorChannel(eMicCodecDMA, &FIFOOverflow, &FIFOOverThreshold, &FIFOUnderflow, &Current);				// read the FIFO Depth register
@@ -122,12 +128,6 @@ void *OutgoingMicSamples(void *arg)
         printf("mic FIFO Depth register = %08x (should be ~0)\n", RegisterValue);
     Depth = 0;
 
-
-  //
-  // planned strategy: just DMA mic data when available; don't copy and DMA a larger amount.
-  // if sufficient FIFO data available: DMA that data and transfer it out. 
-  // if it turns out to be too inefficient, we'll have to try larger DMA.
-  //
     while (!InitError)
     {
         while(!(SDRActive))
@@ -137,14 +137,18 @@ void *OutgoingMicSamples(void *arg)
                 printf("Mic data request change port\n");
                 close(ThreadData->Socketid);                      // close old socket, open new one
                 MakeSocket(ThreadData, 0);                        // this binds to the new port.
+                // Set socket to non-blocking mode for new socket
+                fcntl(ThreadData->Socketid, F_SETFL, fcntl(ThreadData->Socketid, F_GETFL, 0) | O_NONBLOCK);
+                // Set send buffer size for new socket
+                setsockopt(ThreadData->Socketid, SOL_SOCKET, SO_SNDBUF, &sndbuf, sizeof(sndbuf));
                 ThreadData->Cmdid &= ~VBITCHANGEPORT;             // clear command bit
             }
             usleep(100);
         }
-    //
-    // if we get here, run has been initiated
-    // initialise outgoing data packet
-    //
+        //
+        // if we get here, run has been initiated
+        // initialise outgoing data packet
+        //
         printf("starting activity on mic thread\n");
         StartupCount = VSTARTUPDELAY;
         SequenceCounter = 0;
@@ -170,14 +174,16 @@ void *OutgoingMicSamples(void *arg)
                 if(UseDebug)
                     printf("Codec Mic FIFO Overthreshold, depth now = %d\n", Current);
             }
+            if((StartupCount == 0) && FIFOUnderflow)
+            {
+                if(UseDebug)
+                    printf("Codec Mic FIFO Underflowed, depth now = %d\n", Current);
+            }
 
-// note this would often generate a message because we deliberately read it down to zero.
-// this isn't a problem as we can send the data on without the code becoming blocked.
-//            if((StartupCount == 0) && FIFOUnderflow)
-//                printf("Codec Mic FIFO Underflowed, depth now = %d\n", Current);
             while (Depth < (VMICSAMPLESPERFRAME/4))			        // 16 locations = 64 samples
             {
-                usleep(1000);								        // 1ms wait
+                struct timespec ts = {0, 1000000}; // 1 ms
+                nanosleep(&ts, NULL);								        // 1ms wait
                 Depth = ReadFIFOMonitorChannel(eMicCodecDMA, &FIFOOverflow, &FIFOOverThreshold, &FIFOUnderflow, &Current);				// read the FIFO Depth register
                 if((StartupCount == 0) && FIFOOverThreshold)
                 {
@@ -185,8 +191,11 @@ void *OutgoingMicSamples(void *arg)
                     if(UseDebug)
                         printf("Codec Mic FIFO Overthreshold, depth now = %d\n", Current);
                 }
-//                if((StartupCount == 0) && FIFOUnderflow)
-//                    printf("Codec Mic FIFO Underflowed, depth now = %d\n", Current);
+                if((StartupCount == 0) && FIFOUnderflow)
+                {
+                    if(UseDebug)
+                        printf("Codec Mic FIFO Underflowed, depth now = %d\n", Current);
+                }
             }
 
             // DMA shared with wideband samples, so get semaphore granting access
@@ -194,22 +203,48 @@ void *OutgoingMicSamples(void *arg)
             DMAReadFromFPGA(DMAReadfile_fd, MicBasePtr, VDMATRANSFERSIZE, VADDRMICSTREAMREAD);
             sem_post(&MicWBDMAMutex);                       // get protected access
 
+            // Peak limiter to prevent clipping
+            int16_t* audioData = (int16_t*)MicBasePtr;
+            int16_t maxValue = 0;
+            for (int i = 0; i < 64; i++) {
+                int16_t sample = audioData[i];
+                if (abs(sample) > maxValue) {
+                    maxValue = abs(sample);
+                }
+            }
+            if (maxValue > 30000) { // 90% of INT16_MAX
+                float scale = 30000.0f / maxValue;
+                for (int i = 0; i < 64; i++) {
+                    audioData[i] = (int16_t)(audioData[i] * scale);
+                }
+            }
+
             // create the packet into UDPBuffer
             *(uint32_t*)UDPBuffer = htonl(SequenceCounter++);        // add sequence count
             memcpy(UDPBuffer+4, MicBasePtr, VDMATRANSFERSIZE);       // copy in mic samples
-            Error = sendmsg(ThreadData -> Socketid, &datagram, 0);
+            Error = sendmsg(ThreadData->Socketid, &datagram, 0);
+            if (Error == -1) {
+                if (errno == EAGAIN) {
+                    printf("sendmsg: Socket send buffer full, packet dropped\n");
+                } else {
+                    perror("sendmsg, Mic Audio");
+                    InitError = true;
+                }
+            } else {
+                // Log send interval
+                struct timespec currentTime;
+                clock_gettime(CLOCK_MONOTONIC, &currentTime);
+                double sendInterval = (currentTime.tv_sec - lastSendTime.tv_sec) + (currentTime.tv_nsec - lastSendTime.tv_nsec) / 1e9;
+                lastSendTime = currentTime;
+                if (UseDebug) printf("Send interval: %f seconds\n", sendInterval);
+            }
             if(StartupCount != 0)                                   // decrement startup message count
                 StartupCount--;
-            if(Error == -1)
-            {
-                perror("sendmsg, Mic Audio");
-                InitError=true;
-            }
         }
     }
-//
-// tidy shutdown of the thread
-//
+    //
+    // tidy shutdown of the thread
+    //
     if(InitError)                                           // if error, flag it to main program
       ThreadError = true;
 
