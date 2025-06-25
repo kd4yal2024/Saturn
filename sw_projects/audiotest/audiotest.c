@@ -20,6 +20,7 @@
  *
  * Compilation:
  *   gcc -o audiotest audiotest.c `pkg-config --cflags --libs gtk+-3.0` -lpthread -lm
+ *
  */
 
 #include <gtk/gtk.h>
