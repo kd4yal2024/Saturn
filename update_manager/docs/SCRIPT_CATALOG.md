@@ -53,7 +53,7 @@ Not all utilities are directly wired into current UI buttons, but are included i
 |---|---|---|
 | `flash_fpga.sh` | Flash selected FPGA image via `sw_tools/load-FPGA/load-FPGA` using confirmation guard. | `--image`, `--latest`, `--primary`, `--fallback`, `--verify`, `--no-verify`, `--confirm`, `--dry-run` |
 | `update-saturn-go.sh` | Rebuild/redeploy `saturn-go` from the active Saturn repo root (used by `saturngo.html`). | `--verbose`, `--dry-run`, `--skip-git`, `--skip-build`, `--skip-deploy` |
-| `p23-app-manager.sh` | Experimental helper to build/deploy/switch/revert P2/P3 app binaries for `p2app.service` testing (used by hidden `p23test.html`). | `--status`, `--build p2|p3`, `--deploy p2|p3`, `--switch p2|p3`, `--revert`, `--dry-run`, `--verbose`, `--no-restart`, `--no-clean` |
+| `p23-app-manager.sh` | Experimental helper to build/deploy/switch/revert P2/P3 app binaries for `p2app.service` testing (used by hidden `p23test.html`), with startup-profile and front-panel-mode override support. | `--status`, `--build p2|p3`, `--deploy p2|p3`, `--switch p2|p3`, `--revert`, `--mode panel|headless|panel-debug`, `--panel auto|g2|g2v2|prefer-g2|prefer-g2v2|off`, `--dry-run`, `--verbose`, `--no-restart`, `--no-clean` |
 | `qemu_pi_boot.sh` | Boot Raspberry Pi image in QEMU by extracting kernel/DTB and launching `qemu-system-aarch64`. | `--img`, `--work-dir`, `--memory`, `--cpus`, `--machine`, `--extra-append`, `--dry-run` |
 | `log_cleaner.sh` | Local log cleanup helper. | see above |
 
@@ -72,3 +72,4 @@ Not all utilities are directly wired into current UI buttons, but are included i
 - `update-G2.py` participates in the shared update-activity lock with appliance update/rollback routes to avoid overlapping update operations.
 - `update-saturn-go.sh` also participates in the shared update-activity lock and writes last deploy status JSON for the Saturn Go page.
 - `p23-app-manager.sh` is an experimental local test/deploy helper; it modifies a systemd drop-in override for `p2app.service` rather than editing the base unit file directly.
+- `p23-app-manager.sh` writes `Environment=SATURN_FRONT_PANEL_MODE=...` into the generated override for forced/assisted panel detection testing and tags the override with a `# saturn-p23 mode=... panel=...` comment that the status API parses.

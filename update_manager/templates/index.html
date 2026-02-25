@@ -461,6 +461,34 @@ function setCustomStatus(msg, isError=false){
   el.classList.toggle('text-red-400', !!isError);
 }
 
+async function readJsonOrHelpfulError(response, label){
+  const endpoint = String(label || 'API');
+  const statusText = `HTTP ${response.status}`;
+  let raw = '';
+  try{
+    raw = await response.text();
+  }catch(e){
+    throw new Error(`${endpoint}: failed to read response body (${statusText}): ${e.message}`);
+  }
+  const body = String(raw || '');
+  if (!body.trim()) return {};
+  try{
+    return JSON.parse(body);
+  }catch(_e){
+    const sample = body.replace(/\s+/g, ' ').trim().slice(0, 120);
+    if (body.trim().startsWith('<')){
+      let hint = 'HTML page returned instead of JSON';
+      if (response.status === 401 || response.status === 403){
+        hint = 'login/auth page returned instead of JSON';
+      } else if (response.status >= 500){
+        hint = 'server error page returned instead of JSON';
+      }
+      throw new Error(`${endpoint}: ${hint} (${statusText}). Refresh/login again and check saturn-go.service. ${sample ? `Response starts with: ${sample}` : ''}`.trim());
+    }
+    throw new Error(`${endpoint}: invalid JSON response (${statusText}). ${sample ? `Response starts with: ${sample}` : ''}`.trim());
+  }
+}
+
 function parseCsvFlags(text){
   return String(text || '')
     .split(',')
@@ -489,7 +517,7 @@ function fillCustomForm(filename){
 async function loadScripts(){
   try{
     const r = await fetch('./custom_scripts', { cache:'no-store' });
-    const data = await r.json().catch(()=>({}));
+    const data = await readJsonOrHelpfulError(r, 'Custom scripts API');
     if (!r.ok) throw new Error(data.message || `HTTP ${r.status}`);
 
     customScripts = Array.isArray(data.scripts) ? data.scripts : [];
@@ -528,7 +556,7 @@ async function loadScripts(){
 async function loadVersions(){
   try{
     const r = await fetch('./get_versions', { headers:{'Cache-Control':'no-cache'} });
-    const data = await r.json();
+    const data = await readJsonOrHelpfulError(r, 'Versions API');
     const ul = $('version-list'); ul.innerHTML = '';
     Object.entries(data.versions||{}).forEach(([k,v])=>{
       const li = document.createElement('li'); li.textContent = `${k}: ${v}`;
@@ -541,7 +569,7 @@ async function loadVersions(){
 async function loadFlags(filename){
   try{
     const r = await fetch(`./get_flags?script=${encodeURIComponent(filename)}`);
-    const data = await r.json();
+    const data = await readJsonOrHelpfulError(r, 'Flags API');
     const host = $('flags'); host.innerHTML = '';
     (data.flags||[]).forEach(flag=>{
       const lbl = document.createElement('label');
@@ -620,7 +648,7 @@ $('custom-save').addEventListener('click', async ()=>{
       headers: withCsrf({'Content-Type':'application/json'}),
       body: JSON.stringify(payload),
     });
-    const data = await r.json().catch(()=>({}));
+    const data = await readJsonOrHelpfulError(r, 'Custom scripts save API');
     if (!r.ok) throw new Error(data.message || `HTTP ${r.status}`);
     setCustomStatus(`Saved custom script: ${filename}`);
     $('custom-content').value = '';
@@ -649,7 +677,7 @@ $('custom-delete').addEventListener('click', async ()=>{
         delete_file: $('custom-delete-file').checked,
       }),
     });
-    const data = await r.json().catch(()=>({}));
+    const data = await readJsonOrHelpfulError(r, 'Custom scripts delete API');
     if (!r.ok) throw new Error(data.message || `HTTP ${r.status}`);
     setCustomStatus(`Deleted custom script entry: ${filename}`);
     $('custom-filename').value = '';
@@ -688,7 +716,7 @@ $('password-form').addEventListener('submit', async (e)=>{
       method:'POST', headers:withCsrf({'Content-Type':'application/x-www-form-urlencoded'}),
       body:`new_password=${encodeURIComponent(a)}`
     });
-    const data = await r.json();
+    const data = await readJsonOrHelpfulError(r, 'Change password API');
     if (data.status==='success') append('\x1b[32mPassword changed successfully\x1b[0m');
     else throw new Error(data.message||'Unknown error');
   }catch(e){ append(`\x1b[31mChange password failed: ${e.message}\x1b[0m`); }

@@ -242,6 +242,7 @@ Capabilities:
 - `Deploy + Switch P2` / `Deploy + Switch P3`
 - `Switch To P2` / `Switch To P3` (uses previously deployed binaries)
 - `Revert To Unit Default` (removes Saturn override and restores unit `ExecStart`)
+- `Emergency Revert Now` button (forces a real revert + restart even if `Dry run` / `No restart` options are selected)
 - Separate status panel backed by `GET /p23_status`
 
 Switching implementation details:
@@ -251,6 +252,10 @@ Switching implementation details:
 - `p2app.service` is redirected via systemd drop-in:
   - `/etc/systemd/system/p2app.service.d/10-saturn-p23-switch.conf`
 - Revert action removes that drop-in and reloads systemd
+- Switch/deploy overrides can include:
+  - startup profile (`panel`, `panel-debug`, `headless`) -> mapped service args
+  - `Environment=SATURN_FRONT_PANEL_MODE=...` (`auto`, `g2`, `g2v2`, `prefer-g2`, `prefer-g2v2`, `off`)
+- `GET /p23_status` parses the generated override comment metadata (`# saturn-p23 mode=... panel=...`) for display
 
 Safety/usage notes:
 
@@ -258,6 +263,7 @@ Safety/usage notes:
 - Non-dry-run switch/deploy/revert actions require browser confirmation
 - Web mode requires `sudo -n` permission for install/symlink/systemctl steps
 - `No restart` updates symlink/override without restarting `p2app.service`
+- If a switch leaves the local panel UI unusable but networking still works (e.g. Thetis continues to connect), use `/saturn/p23test` from another device and click `Emergency Revert Now`
 
 ### Update piHPSDR (Dedicated Terminal)
 
@@ -406,6 +412,7 @@ Common causes:
 - build failure in `make`
 - `sudo -n` denied for deploy/switch/revert (`install`, `ln`, `systemctl`)
 - stale or unexpected systemd override contents from manual edits
+- wrong front-panel detection mode after switching (try `Front panel mode = g2` or `g2v2` instead of `auto`)
 
 Check:
 
@@ -414,7 +421,26 @@ curl -sS http://127.0.0.1:8080/p23_status | jq
 sudo systemctl status p2app.service
 sudo cat /etc/systemd/system/p2app.service.d/10-saturn-p23-switch.conf
 ls -lah /opt/saturn-go/p23-apps
+sudo /opt/saturn-go/scripts/p23-app-manager.sh --revert --verbose
 ```
+
+### Main UI "Expected token '<'" / HTML Instead Of JSON
+
+If the browser reports a JSON parse error but shows HTML content (for example a login page or an NGINX error page), the UI is receiving an HTML response from an API route such as `/custom_scripts`.
+
+Check:
+
+```bash
+curl -i http://127.0.0.1:8080/custom_scripts
+sudo systemctl status saturn-go.service
+sudo journalctl -u saturn-go.service -n 100 --no-pager
+```
+
+Typical causes:
+
+- `saturn-go.service` stopped/crashed (backend unavailable)
+- reverse proxy/auth returned a login page or error page instead of JSON
+- stale browser session/auth after service restart (refresh/login again)
 
 ### Verify Runtime File Set
 

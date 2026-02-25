@@ -56,6 +56,8 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
 - Saturn Go self-update page now uses explicit run-option checkboxes (`verbose`, `dry-run`, `skip-git`, `skip-build`, `skip-deploy`) and shows a polling "Last Deploy Status" panel.
 - `/run` now injects Saturn Go self-update policy env vars and a deploy-status-file path when launching `update-saturn-go.sh`, and treats Saturn Go self-update as a shared update activity (conflict-guarded like G2/appliance update).
 - Installer now copies `saturngo.html` and hidden `p23test.html`, writes Saturn Go policy/deploy-status service env vars, and auto-bootstrap builds with a rustup-managed stable toolchain (removing legacy apt `cargo`/`rustc` when present).
+- Hidden P2/P3 Test Lab now supports explicit startup profiles (`panel`, `panel-debug`, `headless`) and front-panel mode overrides (`SATURN_FRONT_PANEL_MODE`) for switch/deploy actions, plus an emergency web revert button.
+- `p23_status` now reports parsed override metadata (`panel_mode`, `saturn_meta`) from the generated systemd drop-in for easier troubleshooting.
 
 ### Fixed
 - `update-G2.py`: verbose mode now preserves captured command output used by status sections (fixes `Size: ?` and `Commit: ?` cases).
@@ -82,6 +84,7 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
 - `update-saturn-go.sh`: fixed `--dry-run` staging-helper generation error when the staged directory is intentionally not created.
 - `update-saturn-go.sh`: fixed detached root-helper status-file error handling/JSON quoting so `/saturngo_deploy_status` always returns valid JSON after deploy completion.
 - `p23-app-manager.sh`: dry-run deploy/switch no longer writes a temp override file (avoids failing when `/tmp` is full).
+- `index.html`: custom scripts/version/flags/password UI now reports clearer errors when an API returns HTML (login page / backend error page) instead of JSON.
 
 ## [2026-02-13]
 ### Added

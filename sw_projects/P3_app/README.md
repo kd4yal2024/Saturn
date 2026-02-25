@@ -12,6 +12,22 @@ Date: 2026-02-11
 - Keep runtime behavior compatible with existing protocol flow.
 - Add optional true independent alias socket ports while preserving late-P2 compatibility for Thetis and piHPSDR (shared-port behavior remains default unless distinct alias ports are explicitly requested).
 
+## Front Panel Mode Override (2026-02-25)
+
+For field testing and service-managed P2/P3 switching, `frontpanelhandler.c` now supports
+an environment variable override:
+
+- `SATURN_FRONT_PANEL_MODE=auto` (default behavior)
+- `SATURN_FRONT_PANEL_MODE=g2` (force G2 front panel path)
+- `SATURN_FRONT_PANEL_MODE=g2v2` (force G2V2/serial panel path)
+- `SATURN_FRONT_PANEL_MODE=prefer-g2` or `prefer_g2`
+- `SATURN_FRONT_PANEL_MODE=prefer-g2v2` or `prefer_g2v2`
+- `SATURN_FRONT_PANEL_MODE=off` / `none` (disable front panel initialization)
+
+This is intended to help when auto-detection selects the wrong panel type while the SDR path
+itself is otherwise working (for example, Thetis connectivity is fine but local panel controls
+do not behave as expected).
+
 ## What Changed And Why
 
 ### 1. Shutdown semaphore cleanup fix

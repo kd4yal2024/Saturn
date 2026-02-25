@@ -188,6 +188,8 @@ If a script entry does not define `version`, `/get_versions` now returns
   - reverting to the original unit `ExecStart`
 - Uses `/opt/saturn-go/scripts/p23-app-manager.sh` via `/run`.
 - Status panel polls `GET /p23_status`.
+- Switch/deploy actions now support startup profiles (`panel`, `panel-debug`, `headless`) and front-panel mode overrides (`auto`, `g2`, `g2v2`, `prefer-g2`, `prefer-g2v2`, `off`), written as `SATURN_FRONT_PANEL_MODE` in the systemd drop-in.
+- `/p23test` includes an `Emergency Revert Now` button for fast recovery if a switch leaves the local UI unusable.
 - Intended for local testing; it is not linked from the main navigation.
 
 ## Build and Deploy (Rust Server)

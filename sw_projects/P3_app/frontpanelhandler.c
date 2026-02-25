@@ -43,12 +43,15 @@
 bool FoundG2Panel = false;
 bool FoundG2V2Panel = false;
 
+static const char* GetFrontPanelModeOverride(void)
+{
+    const char* Mode = getenv("SATURN_FRONT_PANEL_MODE");
+    if((Mode == NULL) || (Mode[0] == '\0'))
+        return "auto";
+    return Mode;
+}
 
-//
-// function to initialise a connection to the front panel; call if selected as a command line option
-// establish which if any front panel is attached, and get it set up.
-//
-void InitialiseFrontPanelHandler(void)
+static void InitialiseFrontPanelAuto(void)
 {
     if(CheckG2V2PanelPresent())
     {
@@ -64,6 +67,85 @@ void InitialiseFrontPanelHandler(void)
     }
     else
         printf("No front panel found\n");
+}
+
+
+//
+// function to initialise a connection to the front panel; call if selected as a command line option
+// establish which if any front panel is attached, and get it set up.
+//
+void InitialiseFrontPanelHandler(void)
+{
+    const char* PanelMode;
+
+    FoundG2Panel = false;
+    FoundG2V2Panel = false;
+    PanelMode = GetFrontPanelModeOverride();
+
+    if((strcmp(PanelMode, "off") == 0) || (strcmp(PanelMode, "none") == 0))
+    {
+        printf("Front panel disabled by SATURN_FRONT_PANEL_MODE=%s\n", PanelMode);
+        return;
+    }
+
+    if(strcmp(PanelMode, "g2v2") == 0)
+    {
+        if(CheckG2V2PanelPresent())
+        {
+            printf("Forced front panel mode: g2v2\n");
+            printf("Found serial device interfaced panel\n");
+            FoundG2V2Panel = true;
+            InitialiseG2V2PanelHandler();
+        }
+        else
+            printf("SATURN_FRONT_PANEL_MODE=g2v2 but no G2V2 panel detected\n");
+        return;
+    }
+
+    if(strcmp(PanelMode, "g2") == 0)
+    {
+        if(CheckG2PanelPresent())
+        {
+            printf("Forced front panel mode: g2\n");
+            printf("Found G2 front panel\n");
+            FoundG2Panel = true;
+            InitialiseG2PanelHandler();
+        }
+        else
+            printf("SATURN_FRONT_PANEL_MODE=g2 but no G2 panel detected\n");
+        return;
+    }
+
+    if((strcmp(PanelMode, "prefer-g2") == 0) || (strcmp(PanelMode, "prefer_g2") == 0))
+    {
+        printf("Front panel detection mode: prefer-g2\n");
+        if(CheckG2PanelPresent())
+        {
+            printf("Found G2 front panel\n");
+            FoundG2Panel = true;
+            InitialiseG2PanelHandler();
+        }
+        else if(CheckG2V2PanelPresent())
+        {
+            printf("Found serial device interfaced panel\n");
+            FoundG2V2Panel = true;
+            InitialiseG2V2PanelHandler();
+        }
+        else
+            printf("No front panel found\n");
+        return;
+    }
+
+    if((strcmp(PanelMode, "prefer-g2v2") == 0) || (strcmp(PanelMode, "prefer_g2v2") == 0))
+    {
+        printf("Front panel detection mode: prefer-g2v2\n");
+        InitialiseFrontPanelAuto();
+        return;
+    }
+
+    if(strcmp(PanelMode, "auto") != 0)
+        printf("Unknown SATURN_FRONT_PANEL_MODE=%s, using auto detect\n", PanelMode);
+    InitialiseFrontPanelAuto();
 }
 
 

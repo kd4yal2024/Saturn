@@ -2,6 +2,24 @@
 
 All notable changes to `P3_app` from this hardening pass are documented here.
 
+## [2026-02-25] Front Panel Mode Override
+
+### Added
+
+- Added front-panel detection override via environment variable `SATURN_FRONT_PANEL_MODE` in `frontpanelhandler.c`.
+- Supported values:
+  - `auto` (default)
+  - `g2`
+  - `g2v2`
+  - `prefer-g2`
+  - `prefer-g2v2`
+  - `off` / `none`
+
+### Changed
+
+- `InitialiseFrontPanelHandler()` now resets detected-panel flags before each initialization and can force/disable panel initialization based on `SATURN_FRONT_PANEL_MODE`.
+- Added explicit startup log messages for forced/override panel modes to make field troubleshooting easier when `auto` detection picks the wrong panel path.
+
 ## [2026-02-16] Goal Update
 
 ### Added

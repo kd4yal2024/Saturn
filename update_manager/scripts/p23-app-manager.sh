@@ -13,6 +13,8 @@ VERBOSE=0
 DRY_RUN=0
 NO_RESTART=0
 CLEAN_BUILD=1
+SERVICE_MODE_PROFILE="${P23_SERVICE_MODE_PROFILE:-panel}"
+PANEL_MODE="${P23_PANEL_MODE:-auto}"
 
 progress(){ echo "Progress: $1%"; }
 info(){ echo "$@"; }
@@ -30,6 +32,8 @@ Actions (choose one):
   --revert               Remove Saturn P2/P3 override and restore unit default ExecStart
 
 Options:
+  --mode <profile>       Service startup profile: panel|headless|panel-debug
+  --panel <mode>         Front-panel detect mode: auto|g2|g2v2|prefer-g2|prefer-g2v2|off
   --no-restart           Update symlink/override without restarting p2app.service
   --no-clean             Skip 'make clean' before build
   --dry-run              Print commands without changing system
@@ -76,6 +80,29 @@ resolve_app_name(){
   esac
 }
 
+resolve_service_mode_profile(){
+  case "${1:-}" in
+    panel|headless|panel-debug) echo "$1" ;;
+    *) return 1 ;;
+  esac
+}
+
+resolve_panel_mode(){
+  case "${1:-}" in
+    auto|g2|g2v2|prefer-g2|prefer_g2|prefer-g2v2|prefer_g2v2|off|none) echo "$1" ;;
+    *) return 1 ;;
+  esac
+}
+
+service_args_for_profile(){
+  case "${1:-}" in
+    panel) echo "-s -p" ;;
+    headless) echo "-s" ;;
+    panel-debug) echo "-s -p -d" ;;
+    *) return 1 ;;
+  esac
+}
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --status)
@@ -94,6 +121,20 @@ while [[ $# -gt 0 ]]; do
       shift
       [[ $# -gt 0 ]] || die "$ACTION requires p2 or p3"
       APP="$(resolve_app_name "$1")" || die "Invalid app '$1' (expected p2 or p3)"
+      shift
+      ;;
+    --mode)
+      shift
+      [[ $# -gt 0 ]] || die "--mode requires a profile"
+      SERVICE_MODE_PROFILE="$(resolve_service_mode_profile "$1")" || \
+        die "Invalid mode '$1' (expected panel|headless|panel-debug)"
+      shift
+      ;;
+    --panel)
+      shift
+      [[ $# -gt 0 ]] || die "--panel requires a mode"
+      PANEL_MODE="$(resolve_panel_mode "$1")" || \
+        die "Invalid panel mode '$1' (expected auto|g2|g2v2|prefer-g2|prefer-g2v2|off)"
       shift
       ;;
     --no-restart) NO_RESTART=1; shift ;;
@@ -117,7 +158,14 @@ P2_BIN="$P2_DIR/p2app"
 P3_BIN="$P3_DIR/p3app"
 
 P23_SERVICE_NAME="${P23_SERVICE_NAME:-p2app.service}"
-P23_SERVICE_ARGS="${P23_SERVICE_ARGS:--s -p}"
+P23_PANEL_ENV_NAME="${P23_PANEL_ENV_NAME:-SATURN_FRONT_PANEL_MODE}"
+if [[ -n "${P23_SERVICE_ARGS+x}" ]] && [[ -n "${P23_SERVICE_ARGS}" ]]; then
+  P23_SERVICE_ARGS="$P23_SERVICE_ARGS"
+  SERVICE_MODE_PROFILE="custom"
+else
+  P23_SERVICE_ARGS="$(service_args_for_profile "$SERVICE_MODE_PROFILE")" || \
+    die "Unsupported service mode profile: $SERVICE_MODE_PROFILE"
+fi
 P23_DEPLOY_ROOT="${P23_DEPLOY_ROOT:-/opt/saturn-go/p23-apps}"
 P23_CURRENT_LINK="$P23_DEPLOY_ROOT/current"
 P23_P2_DEPLOY_BIN="$P23_DEPLOY_ROOT/p2app"
@@ -158,6 +206,8 @@ show_status(){
   info "Service: $P23_SERVICE_NAME"
   info "Deploy root: $P23_DEPLOY_ROOT"
   info "Service args: $P23_SERVICE_ARGS"
+  info "Startup profile: $SERVICE_MODE_PROFILE"
+  info "Panel mode env: ${P23_PANEL_ENV_NAME}=${PANEL_MODE}"
   progress 20
 
   if [[ -d "$P2_DIR" ]]; then
@@ -263,6 +313,8 @@ write_override_and_switch(){
     info "[dry-run] install override file -> $P23_OVERRIDE_FILE"
     info "[dry-run] override content:"
     info "[dry-run]   [Service]"
+    info "[dry-run]   # saturn-p23 mode=${SERVICE_MODE_PROFILE} panel=${PANEL_MODE}"
+    info "[dry-run]   Environment=${P23_PANEL_ENV_NAME}=${PANEL_MODE}"
     info "[dry-run]   ExecStart="
     info "[dry-run]   ExecStart=${P23_CURRENT_LINK} ${P23_SERVICE_ARGS}"
   else
@@ -270,6 +322,8 @@ write_override_and_switch(){
     tmp_override="$(mktemp)"
     cat > "$tmp_override" <<EOF
 [Service]
+# saturn-p23 mode=${SERVICE_MODE_PROFILE} panel=${PANEL_MODE}
+Environment=${P23_PANEL_ENV_NAME}=${PANEL_MODE}
 ExecStart=
 ExecStart=${P23_CURRENT_LINK} ${P23_SERVICE_ARGS}
 EOF

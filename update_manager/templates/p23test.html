@@ -37,6 +37,10 @@
         </div>
         <div class="chip">URL: /saturn/p23test</div>
       </div>
+      <div class="row" style="margin-top:10px; justify-content:space-between; gap:12px;">
+        <div class="muted" style="font-size:13px;">If a switch leaves the radio in an unusable local mode, use <code>Revert To Unit Default</code> here (or from another browser/device).</div>
+        <button id="p23-emergency-revert" class="btn" style="border-color:#fca5a5; color:#fecaca;">Emergency Revert Now</button>
+      </div>
     </div>
 
     <div class="grid">
@@ -86,6 +90,23 @@
 
         <h3 style="margin:0 0 8px 0; font-size:16px;">Options</h3>
         <div class="list" style="margin-bottom:12px;">
+          <label>Startup profile
+            <select id="opt-startup-profile" class="btn" style="margin-left:8px;">
+              <option value="panel" selected>Panel (service + panel)</option>
+              <option value="panel-debug">Panel + debug</option>
+              <option value="headless">Headless (Thetis only)</option>
+            </select>
+          </label>
+          <label>Front panel mode
+            <select id="opt-panel-mode" class="btn" style="margin-left:8px;">
+              <option value="auto" selected>Auto detect</option>
+              <option value="g2">Force G2</option>
+              <option value="g2v2">Force G2V2</option>
+              <option value="prefer-g2">Prefer G2</option>
+              <option value="prefer-g2v2">Prefer G2V2</option>
+              <option value="off">Off (disable panel)</option>
+            </select>
+          </label>
           <label><input id="opt-verbose" type="checkbox" checked> Verbose output</label>
           <label><input id="opt-dry-run" type="checkbox"> Dry run (no changes)</label>
           <label><input id="opt-no-restart" type="checkbox"> No restart (update link/override only)</label>
@@ -97,7 +118,9 @@
           <div>- Default service is <code>p2app.service</code>.</div>
           <div>- Deploy installs binaries under <code>/opt/saturn-go/p23-apps/</code> and switches a <code>current</code> symlink.</div>
           <div>- Service switching uses a systemd drop-in override (safer than editing the main unit file).</div>
+          <div>- <code>Front panel mode</code> sets <code>SATURN_FRONT_PANEL_MODE</code> for P2/P3: use <code>g2</code> or <code>g2v2</code> if auto detect picks the wrong panel.</div>
           <div>- Web mode requires working <code>sudo -n</code> permissions for install/restart steps.</div>
+          <div>- Shell emergency revert: <code>sudo /opt/saturn-go/scripts/p23-app-manager.sh --revert --verbose</code></div>
         </div>
       </div>
     </div>
@@ -182,13 +205,17 @@ function formatP23StatusSummary(p){
   const svc = p.service || {};
   const cur = (p.deployed || {}).current || {};
   const src = p.sources || {};
+  const ov = p.override || {};
+  const meta = ov.saturn_meta || {};
   const selected = cur.selected_app ? String(cur.selected_app).toUpperCase() : 'unknown';
   const active = String(svc.active || 'unknown');
   const enabled = String(svc.enabled || 'unknown');
   const running = svc.running_exe ? `running ${svc.running_exe}` : 'no running exe path';
   const p2Built = src.p2_bin && src.p2_bin.exists ? 'yes' : 'no';
   const p3Built = src.p3_bin && src.p3_bin.exists ? 'yes' : 'no';
-  return `Selected: ${selected} | Service: ${active} (${enabled}) | Built P2: ${p2Built} | Built P3: ${p3Built} | ${running}`;
+  const mode = meta.mode || 'n/a';
+  const panel = ov.panel_mode || meta.panel || 'n/a';
+  return `Selected: ${selected} | Service: ${active} (${enabled}) | Mode: ${mode} | Panel: ${panel} | Built P2: ${p2Built} | Built P3: ${p3Built} | ${running}`;
 }
 async function loadP23Status(){
   try{
@@ -207,8 +234,14 @@ function ensureStatusPoll(){
     statusPollTimer = setInterval(()=>{ loadP23Status(); }, 5000);
   }
 }
-function collectOptionFlags(){
+function collectOptionFlags(baseFlags){
   const flags = [];
+  const isSwitchLike = Array.isArray(baseFlags) && (baseFlags.includes('--switch') || baseFlags.includes('--deploy'));
+  if (isSwitchLike){
+    const mode = $('opt-startup-profile').value || 'panel';
+    const panel = $('opt-panel-mode').value || 'auto';
+    flags.push('--mode', mode, '--panel', panel);
+  }
   if ($('opt-verbose').checked) flags.push('--verbose');
   if ($('opt-dry-run').checked) flags.push('--dry-run');
   if ($('opt-no-restart').checked) flags.push('--no-restart');
@@ -245,6 +278,8 @@ async function runAction(baseFlags){
   const isDryRun = $('opt-dry-run').checked;
   const isSwitchLike = baseFlags.includes('--switch') || baseFlags.includes('--deploy') || baseFlags.includes('--revert');
   if (isSwitchLike && !isDryRun){
+    const selectedMode = $('opt-startup-profile').value || 'panel';
+    const selectedPanel = $('opt-panel-mode').value || 'auto';
     const restartMsg = $('opt-no-restart').checked ? 'No restart is selected; the running service will not be restarted automatically.' : 'This will restart p2app.service.';
     let prompt;
     if (baseFlags.includes('--revert')){
@@ -252,7 +287,7 @@ async function runAction(baseFlags){
     } else {
       const action = baseFlags.includes('--deploy') ? 'deploy + switch' : 'switch';
       const app = baseFlags.includes('p3') ? 'P3' : (baseFlags.includes('p2') ? 'P2' : 'unknown');
-      prompt = `${action.toUpperCase()} ${app}?\n\n${restartMsg}\n\nThis changes the active radio app target used by p2app.service.`;
+      prompt = `${action.toUpperCase()} ${app}?\n\n${restartMsg}\nStartup profile: ${selectedMode}\nFront panel mode: ${selectedPanel}\n\nThis changes the active radio app target used by p2app.service.`;
     }
     const ok = confirm(prompt);
     if (!ok) return;
@@ -265,7 +300,7 @@ async function runAction(baseFlags){
   $('p23-progress').value = 0;
   $('p23-progress').classList.remove('hidden');
 
-  const flags = [...baseFlags, ...collectOptionFlags()];
+  const flags = [...baseFlags, ...collectOptionFlags(baseFlags)];
   appendLine(`\x1b[36mRunning ${SCRIPT_NAME} ${flags.join(' ')}\x1b[0m`);
 
   try{
@@ -314,12 +349,29 @@ async function runAction(baseFlags){
   }
 }
 
+async function runEmergencyRevert(){
+  const dry = $('opt-dry-run').checked;
+  const noRestart = $('opt-no-restart').checked;
+  $('opt-dry-run').checked = false;
+  $('opt-no-restart').checked = false;
+  try {
+    await runAction(['--revert']);
+  } finally {
+    $('opt-dry-run').checked = dry;
+    $('opt-no-restart').checked = noRestart;
+  }
+}
+
 $('p23-clear').addEventListener('click', ()=>{
   resetOutput();
   $('p23-progress').value = 0;
   $('p23-progress').classList.add('hidden');
 });
 $('p23-status-refresh').addEventListener('click', ()=>{ loadP23Status(); });
+$('p23-emergency-revert').addEventListener('click', ()=>{
+  if (!confirm('EMERGENCY REVERT?\n\nThis removes the P2/P3 override and restarts p2app.service.')) return;
+  runEmergencyRevert();
+});
 
 document.querySelectorAll('.p23-action').forEach((btn)=>{
   btn.addEventListener('click', ()=>{

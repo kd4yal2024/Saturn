@@ -1846,6 +1846,34 @@ async fn get_p23_status(State(state): State<AppState>) -> Response {
                 .find(|line| line.starts_with("ExecStart=") && *line != "ExecStart=")
                 .map(|s| s.to_string())
         });
+    let override_panel_mode = override_contents.as_deref().and_then(|text| {
+        text.lines()
+            .map(str::trim)
+            .find_map(|line| {
+                line.strip_prefix("Environment=SATURN_FRONT_PANEL_MODE=")
+                    .map(str::to_string)
+            })
+    });
+    let override_saturn_metadata = override_contents.as_deref().and_then(|text| {
+        text.lines()
+            .map(str::trim)
+            .find_map(|line| {
+                let meta = line.strip_prefix("# saturn-p23 ")?;
+                let mut mode = None::<String>;
+                let mut panel = None::<String>;
+                for token in meta.split_whitespace() {
+                    if let Some(v) = token.strip_prefix("mode=") {
+                        mode = Some(v.to_string());
+                    } else if let Some(v) = token.strip_prefix("panel=") {
+                        panel = Some(v.to_string());
+                    }
+                }
+                Some(serde_json::json!({
+                    "mode": mode,
+                    "panel": panel,
+                }))
+            })
+    });
 
     Json(serde_json::json!({
         "status": "ok",
@@ -1881,6 +1909,8 @@ async fn get_p23_status(State(state): State<AppState>) -> Response {
                 "path": override_file.display().to_string(),
                 "exists": override_file.exists(),
                 "exec_start": override_execstart,
+                "panel_mode": override_panel_mode,
+                "saturn_meta": override_saturn_metadata,
                 "contents": override_contents,
             }
         }

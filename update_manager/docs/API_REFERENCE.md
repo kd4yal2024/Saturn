@@ -138,6 +138,9 @@ Notes:
   - source `P2_app` / `P3_app` directories and built binaries in active repo root
   - deployed binaries and `current` symlink under `/opt/saturn-go/p23-apps`
   - systemd drop-in override file state (`/etc/systemd/system/p2app.service.d/10-saturn-p23-switch.conf`)
+- `p23_status.p23.override` also includes parsed Saturn test-lab metadata when present:
+  - `panel_mode` from `Environment=SATURN_FRONT_PANEL_MODE=...`
+  - `saturn_meta` parsed from the generated comment (`# saturn-p23 mode=... panel=...`)
 
 ## Full Backup / Restore
 
