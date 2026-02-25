@@ -40,6 +40,26 @@ info(){ printf "[INFO] %s\n" "$*"; }
 warn(){ printf "[WARN] %s\n" "$*"; }
 err(){  printf "[ERR] %s\n" "$*" >&2; }
 
+check_tmp_space_preflight() {
+  local warn_pct="${SATURN_TMP_WARN_PCT:-90}"
+  local warn_min_kb="${SATURN_TMP_WARN_MIN_KB:-131072}" # 128 MiB
+  local avail_kb used_pct mount_point
+
+  if ! read -r avail_kb used_pct mount_point < <(
+    df -Pk /tmp 2>/dev/null | awk 'NR==2 { gsub(/%/, "", $5); print $4, $5, $6 }'
+  ); then
+    return 0
+  fi
+
+  [[ -n "${avail_kb:-}" && -n "${used_pct:-}" ]] || return 0
+
+  if (( used_pct >= warn_pct || avail_kb <= warn_min_kb )); then
+    warn "/tmp is low on space before apt update (mount=${mount_point:-/tmp}, used=${used_pct}%, avail=${avail_kb}KB)"
+    warn "This can cause apt signature verification/download failures (for example 'Splitting up ... InRelease' or 'No space left on device')."
+    warn "Consider cleaning /tmp and retrying if install fails."
+  fi
+}
+
 if [[ ${EUID:-$(id -u)} -ne 0 ]]; then
   err "Run as root (sudo)."
   exit 1
@@ -179,6 +199,7 @@ ensure_modern_rust_toolchain() {
 }
 
 info "Installing dependencies..."
+check_tmp_space_preflight
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
 apt-get install -y -qq \
