@@ -56,6 +56,7 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
 - Saturn Go self-update page now uses explicit run-option checkboxes (`verbose`, `dry-run`, `skip-git`, `skip-build`, `skip-deploy`) and shows a polling "Last Deploy Status" panel.
 - `/run` now injects Saturn Go self-update policy env vars and a deploy-status-file path when launching `update-saturn-go.sh`, and treats Saturn Go self-update as a shared update activity (conflict-guarded like G2/appliance update).
 - Installer now copies `saturngo.html` and hidden `p23test.html`, writes Saturn Go policy/deploy-status service env vars, and auto-bootstrap builds with a rustup-managed stable toolchain (removing legacy apt `cargo`/`rustc` when present).
+- Installer now warns before `apt-get update` when `/tmp` is too full (helps diagnose misleading APT signature-split errors caused by tmpfs exhaustion).
 - Hidden P2/P3 Test Lab now supports explicit startup profiles (`panel`, `panel-debug`, `headless`) and front-panel mode overrides (`SATURN_FRONT_PANEL_MODE`) for switch/deploy actions, plus an emergency web revert button.
 - `p23_status` now reports parsed override metadata (`panel_mode`, `saturn_meta`) from the generated systemd drop-in for easier troubleshooting.
 
