@@ -169,7 +169,14 @@ def init_logging(verbose=False):
             self.files = files
         def write(self, data):
             for f in self.files:
-                f.write(data)
+                try:
+                    f.write(data)
+                except UnicodeEncodeError:
+                    # Some invokers expose latin-1 stdout/stderr; replace unsupported
+                    # symbols only for that stream instead of crashing the update.
+                    encoding = getattr(f, "encoding", None) or "utf-8"
+                    safe_data = data.encode(encoding, errors="replace").decode(encoding, errors="replace")
+                    f.write(safe_data)
                 f.flush()
         def flush(self):
             for f in self.files:
@@ -178,10 +185,10 @@ def init_logging(verbose=False):
     logging.basicConfig(
         level=logging.DEBUG if verbose else logging.INFO,
         format="%(asctime)s [%(levelname)s] %(message)s",
-        handlers=[logging.FileHandler(log_file)]
+        handlers=[logging.FileHandler(log_file, encoding="utf-8")]
     )
     try:
-        log_handle = open(log_file, 'a')
+        log_handle = open(log_file, 'a', encoding="utf-8")
     except Exception as e:
         print_error(f"Failed to open log file {log_file}: {str(e)}")
     sys.stdout = Tee(sys.__stdout__, log_handle)
