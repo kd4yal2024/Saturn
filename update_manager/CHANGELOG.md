@@ -52,6 +52,7 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
 - Clone target detection now includes USB-attached block devices that report `removable=0` (common for USB SD card readers), while still excluding internal/virtual devices.
 - Saturn Go self-update page now uses explicit run-option checkboxes (`verbose`, `dry-run`, `skip-git`, `skip-build`, `skip-deploy`) and shows a polling "Last Deploy Status" panel.
 - `/run` now injects Saturn Go self-update policy env vars and a deploy-status-file path when launching `update-saturn-go.sh`, and treats Saturn Go self-update as a shared update activity (conflict-guarded like G2/appliance update).
+- Installer now copies `saturngo.html`, writes Saturn Go policy/deploy-status service env vars, and auto-bootstrap builds with a rustup-managed stable toolchain (removing legacy apt `cargo`/`rustc` when present).
 
 ### Fixed
 - `update-G2.py`: verbose mode now preserves captured command output used by status sections (fixes `Size: ?` and `Commit: ?` cases).

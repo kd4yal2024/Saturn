@@ -25,11 +25,14 @@ SATURN_NGINX_CLIENT_MAX_BODY_SIZE="${SATURN_NGINX_CLIENT_MAX_BODY_SIZE:-2G}"
 SATURN_STATE_DIR="${SATURN_STATE_DIR:-/var/lib/saturn-state}"
 SATURN_REPO_ROOT_FILE="${SATURN_REPO_ROOT_FILE:-${SATURN_STATE_DIR}/repo_root.txt}"
 SATURN_UPDATE_POLICY_FILE="${SATURN_UPDATE_POLICY_FILE:-${SATURN_STATE_DIR}/update_policy.json}"
+SATURN_SATURNGO_UPDATE_POLICY_FILE="${SATURN_SATURNGO_UPDATE_POLICY_FILE:-${SATURN_STATE_DIR}/saturngo_update_policy.json}"
+SATURN_SATURNGO_DEPLOY_STATUS_FILE="${SATURN_SATURNGO_DEPLOY_STATUS_FILE:-${SATURN_STATE_DIR}/saturngo_deploy_status.json}"
 SATURN_UPDATE_STATE_FILE="${SATURN_UPDATE_STATE_FILE:-${SATURN_STATE_DIR}/update_state.json}"
 SATURN_SNAPSHOT_DIR="${SATURN_SNAPSHOT_DIR:-${SATURN_STATE_DIR}/snapshots}"
 SATURN_STAGING_DIR="${SATURN_STAGING_DIR:-${SATURN_STATE_DIR}/repo-staging}"
 SATURN_WATCHDOG_URL="${SATURN_WATCHDOG_URL:-http://${SATURN_ADDR}/healthz}"
 SATURN_WATCHDOG_INTERVAL="${SATURN_WATCHDOG_INTERVAL:-30s}"
+RUSTUP_INIT_URL="${RUSTUP_INIT_URL:-https://sh.rustup.rs}"
 
 bold(){ printf "\e[1m%s\e[0m\n" "$*"; }
 ok(){   printf "[OK] %s\n" "$*"; }
@@ -80,6 +83,101 @@ if [[ -z "$SERVICE_HOME" || ! -d "$SERVICE_HOME" ]]; then
 fi
 DEFAULT_REPO_ROOT="${SATURN_REPO_ROOT:-$SERVICE_HOME/github/Saturn}"
 
+if [[ -n "${SUDO_USER:-}" && "${SUDO_USER}" != "root" ]] && id -u "${SUDO_USER}" >/dev/null 2>&1; then
+  BUILD_USER="${SUDO_USER}"
+else
+  BUILD_USER="$SERVICE_USER"
+fi
+BUILD_GROUP="$(id -gn "$BUILD_USER")"
+BUILD_HOME="$(getent passwd "$BUILD_USER" | cut -d: -f6)"
+if [[ -z "$BUILD_HOME" || ! -d "$BUILD_HOME" ]]; then
+  err "Cannot resolve build user home directory for $BUILD_USER"
+  exit 1
+fi
+RUSTUP_BIN_DIR="$BUILD_HOME/.cargo/bin"
+RUSTUP_CARGO_BIN="$RUSTUP_BIN_DIR/cargo"
+RUSTUP_RUSTC_BIN="$RUSTUP_BIN_DIR/rustc"
+RUSTUP_CMD_BIN="$RUSTUP_BIN_DIR/rustup"
+RUST_BUILD_TMP_DIR="$RUST_SRC_DIR/.tmp"
+RUST_BUILD_TARGET_DIR="$RUST_SRC_DIR/target-local"
+
+run_as_build_user() {
+  local cmd="$1"
+  local shell_cmd="export HOME=\"$BUILD_HOME\"; export PATH=\"$RUSTUP_BIN_DIR:\$PATH\"; $cmd"
+  if [[ "$BUILD_USER" == "root" ]]; then
+    bash -lc "$shell_cmd"
+  else
+    runuser -u "$BUILD_USER" -- bash -lc "$shell_cmd"
+  fi
+}
+
+apt_pkg_installed() {
+  dpkg-query -W -f='${Status}' "$1" 2>/dev/null | grep -q '^install ok installed$'
+}
+
+remove_legacy_apt_rust() {
+  local pkgs=()
+  apt_pkg_installed cargo && pkgs+=(cargo)
+  apt_pkg_installed rustc && pkgs+=(rustc)
+  if [[ ${#pkgs[@]} -eq 0 ]]; then
+    return 0
+  fi
+  info "Removing distro Rust packages (using rustup-managed toolchain instead): ${pkgs[*]}"
+  apt-get purge -y -qq "${pkgs[@]}" || warn "Could not fully purge legacy cargo/rustc packages; continuing"
+  apt-get autoremove -y -qq >/dev/null 2>&1 || true
+}
+
+cargo_lock_preflight() {
+  local err_file
+  err_file="$(mktemp)"
+  if run_as_build_user "\"$RUSTUP_CARGO_BIN\" metadata --format-version 1 --locked --no-deps --manifest-path \"$RUST_SRC_DIR/Cargo.toml\"" \
+    >/dev/null 2>"$err_file"; then
+    rm -f "$err_file"
+    return 0
+  fi
+  if grep -q 'lock file version `4`' "$err_file"; then
+    rm -f "$err_file"
+    return 2
+  fi
+  err "Cargo preflight failed:"
+  sed 's/^/  /' "$err_file" >&2 || true
+  rm -f "$err_file"
+  return 1
+}
+
+ensure_modern_rust_toolchain() {
+  remove_legacy_apt_rust
+
+  if [[ ! -x "$RUSTUP_CARGO_BIN" || ! -x "$RUSTUP_RUSTC_BIN" || ! -x "$RUSTUP_CMD_BIN" ]]; then
+    info "Installing rustup toolchain for build user '$BUILD_USER'..."
+    run_as_build_user "curl --proto '=https' --tlsv1.2 -sSf \"$RUSTUP_INIT_URL\" | sh -s -- -y --profile minimal --default-toolchain stable"
+  else
+    info "rustup already installed for build user '$BUILD_USER'; updating stable toolchain..."
+    run_as_build_user "\"$RUSTUP_CMD_BIN\" self update >/dev/null 2>&1 || true"
+  fi
+
+  run_as_build_user "\"$RUSTUP_CMD_BIN\" toolchain install stable --profile minimal"
+  run_as_build_user "\"$RUSTUP_CMD_BIN\" default stable"
+
+  local rc=0
+  if cargo_lock_preflight; then
+    rc=0
+  else
+    rc=$?
+  fi
+  if [[ $rc -ne 0 ]]; then
+    if [[ $rc -eq 2 ]]; then
+      err "Rust toolchain is still too old for Cargo.lock version 4 after rustup bootstrap."
+      exit 1
+    fi
+    exit 1
+  fi
+
+  info "Using Rust toolchain (build user: $BUILD_USER)"
+  info "  $(run_as_build_user "\"$RUSTUP_CARGO_BIN\" --version")"
+  info "  $(run_as_build_user "\"$RUSTUP_RUSTC_BIN\" --version")"
+}
+
 info "Installing dependencies..."
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
@@ -87,8 +185,10 @@ apt-get install -y -qq \
   nginx apache2-utils build-essential pkg-config \
   curl git rsync \
   python3 python3-venv python3-psutil \
-  rustc cargo
+  ca-certificates
 ok "Dependencies installed"
+
+ensure_modern_rust_toolchain
 
 info "Preparing runtime directories..."
 mkdir -p "$BIN_DIR" "$SCRIPTS_DIR" "$WATCHDOG_SCRIPT_DIR" "$WEB_ROOT" "$SATURN_STATE_DIR" "$SATURN_SNAPSHOT_DIR" "$SATURN_STAGING_DIR"
@@ -113,6 +213,7 @@ copy_web_asset "index.html"
 copy_web_asset "monitor.html"
 copy_web_asset "backup.html"
 copy_web_asset "update.html"
+copy_web_asset "saturngo.html"
 copy_web_asset "fpga.html"
 copy_web_asset "pihpsdr.html"
 
@@ -183,9 +284,11 @@ find "$SATURN_STATE_DIR" -type f -print0 | xargs -0 -r chmod 0640
 ok "Permissions set"
 
 info "Building Rust server..."
+mkdir -p "$RUST_BUILD_TMP_DIR" "$RUST_BUILD_TARGET_DIR"
+chown -R "$BUILD_USER:$BUILD_GROUP" "$RUST_BUILD_TMP_DIR" "$RUST_BUILD_TARGET_DIR"
 pushd "$RUST_SRC_DIR" >/dev/null
-cargo build --release
-cp -f target/release/saturn-go "$BIN_DIR/saturn-go"
+run_as_build_user "cd \"$RUST_SRC_DIR\" && TMPDIR=\"$RUST_BUILD_TMP_DIR\" CARGO_TARGET_DIR=\"$RUST_BUILD_TARGET_DIR\" \"$RUSTUP_CARGO_BIN\" build --release -j1"
+cp -f "$RUST_BUILD_TARGET_DIR/release/saturn-go" "$BIN_DIR/saturn-go"
 popd >/dev/null
 chmod 0755 "$BIN_DIR/saturn-go"
 ok "Rust binary installed to $BIN_DIR/saturn-go"
@@ -318,6 +421,8 @@ Environment=SATURN_REPO_ROOT=${DEFAULT_REPO_ROOT}
 Environment=SATURN_REPO_ROOT_FILE=${SATURN_REPO_ROOT_FILE}
 Environment=SATURN_STATE_DIR=${SATURN_STATE_DIR}
 Environment=SATURN_UPDATE_POLICY_FILE=${SATURN_UPDATE_POLICY_FILE}
+Environment=SATURN_SATURNGO_UPDATE_POLICY_FILE=${SATURN_SATURNGO_UPDATE_POLICY_FILE}
+Environment=SATURN_SATURNGO_DEPLOY_STATUS_FILE=${SATURN_SATURNGO_DEPLOY_STATUS_FILE}
 Environment=SATURN_UPDATE_STATE_FILE=${SATURN_UPDATE_STATE_FILE}
 Environment=SATURN_SNAPSHOT_DIR=${SATURN_SNAPSHOT_DIR}
 Environment=SATURN_STAGING_DIR=${SATURN_STAGING_DIR}

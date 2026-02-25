@@ -212,6 +212,7 @@ Auth bootstrap:
 Installer behavior (current):
 
 - Deploys Rust backend only (no legacy Go source generation)
+- Removes legacy distro `cargo`/`rustc` packages (if installed) and bootstraps a current Rust toolchain via `rustup` for the build user before compiling (fixes old-Cargo `Cargo.lock` v4 parse errors on Bookworm)
 - Proxies all `/saturn/*` routes through NGINX to the Rust backend
 - Creates/updates `saturn-go.service` using a non-root service user
 - Enables `saturn-go-watchdog.timer` to auto-restart service when health check fails
@@ -289,6 +290,9 @@ Default URL:
   - Insert the card before connecting some USB readers, then check `dmesg -w`, `lsusb`, and `lsblk`
 - `update-pihpsdr.py` fails with `UnicodeEncodeError` on `latin-1` output:
   - Update the deployed `/opt/saturn-go/scripts/update-pihpsdr.py` from this repo; current script degrades unsupported symbols on non-UTF-8 streams and writes logs as UTF-8
+- Installer fails building Rust server with `lock file version '4'` / old Cargo:
+  - Current installer now removes legacy apt `cargo`/`rustc` and installs a modern stable toolchain via `rustup`
+  - If rerunning after a failed older installer, run `sudo bash update_manager/install_saturn_go_nginx.sh` again
 
 ## Credits
 

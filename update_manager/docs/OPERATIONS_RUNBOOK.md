@@ -23,7 +23,9 @@ sudo bash update_manager/install_saturn_go_nginx.sh
 
 Installer actions include:
 
-- installs dependencies (`nginx`, `apache2-utils`, `rustc`, `cargo`, Python tools, etc.)
+- installs dependencies (`nginx`, `apache2-utils`, build tools, Python tools, etc.)
+- removes legacy distro `cargo`/`rustc` packages (if present)
+- bootstraps/updates a current stable Rust toolchain via `rustup` for the build user, then validates Cargo can read the repo lockfile
 - builds and deploys Rust binary to `/opt/saturn-go/bin/saturn-go`
 - copies web assets to `/var/lib/saturn-web`
 - copies scripts to `/opt/saturn-go/scripts`
@@ -42,6 +44,10 @@ sudo bash update_manager/install_saturn_go_nginx.sh
 ```
 
 Installer is designed to refresh service, web assets, scripts, and config.
+
+If an older install attempt failed with a Cargo lockfile parse error (for example
+`lock file version '4'` on Bookworm using distro `cargo`), rerun the installer.
+Current installer versions self-bootstrap a newer Rust toolchain via `rustup`.
 
 ## Uninstall
 
