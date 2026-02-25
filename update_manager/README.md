@@ -32,7 +32,7 @@ service names still use `saturn-go` for compatibility with existing installs.
 - Dedicated Backup / Restore page (`backup.html`) for repo-root management, backup/restore, Pi imaging, clone, and repair tools
 - Navigation/page names in current UI are: `G2 Update`, `piHPSDR Update`, `FPGA Flash`, `Backup / Restore`, `Custom Scripts`, `Monitor`
 - Pi image creation workflow with progress, validation, cancel, and download
-- SD-to-removable-device cloning workflow with progress and cancel
+- SD-to-removable/USB-device cloning workflow with auto-detected targets, optional quick target wipe, progress, and cancel
 - Repair Pack download and system config verification tools
 - Built-in monitor for CPU, memory, disk, network, and process data
 - Basic auth via NGINX
@@ -88,6 +88,7 @@ Script definitions come from `config.json` plus browser-managed custom entries i
 - Flag list: `/get_flags`
 - Version list ("Show versions above"): `/get_versions`
 - G2 Update page: `/update` (also `/update.html`)
+- Saturn Go page: `/saturngo` (also `/saturngo.html`, `/saturn-go`, `/saturn-go.html`)
 - piHPSDR update page: `/pihpsdr` (also `/pihpsdr.html`)
 - FPGA flash page: `/fpga` (also `/fpga.html`)
 - Custom scripts page: `/custom` (also `/custom.html`, `/index.html`)
@@ -97,6 +98,9 @@ Script definitions come from `config.json` plus browser-managed custom entries i
 - Switch active repo root: `POST /set_repo_root` with JSON `{ "repo_root": "/path/to/tree" }`
 - Get appliance update policy: `GET /update_policy`
 - Set appliance update policy: `POST /update_policy`
+- Get Saturn Go self-update policy: `GET /saturngo_policy`
+- Set Saturn Go self-update policy: `POST /saturngo_policy`
+- Get Saturn Go deploy status: `GET /saturngo_deploy_status`
 - Start transactional update: `POST /update_start` with JSON `{ "channel":"stable|beta|custom", "custom_ref":"..." }`
 - Get update status + last state: `GET /update_status`
 - Roll back to previous repo root: `POST /update_rollback`
@@ -104,6 +108,9 @@ Script definitions come from `config.json` plus browser-managed custom entries i
 - Validate/restore Update G2 backup directory: `POST /g2_restore` with JSON `{ "backup_name":"saturn-backup-...", "dry_run":true|false, "confirm":"RESTORE" }`
 - List piHPSDR backups: `GET /pihpsdr_backups`
 - Validate/restore piHPSDR backup directory: `POST /pihpsdr_restore` with JSON `{ "backup_name":"pihpsdr-backup-...", "dry_run":true|false, "confirm":"RESTORE" }`
+- List clone target devices for SD-to-device copy: `GET /pi_devices`
+- Quick-wipe clone target metadata (signatures/partition tables): `POST /pi_wipe_target` with JSON `{ "target": "/dev/sdX" }`
+- Start/cancel clone job and poll status: `POST /pi_clone_start`, `POST /pi_clone_cancel`, `GET /pi_clone_status`
 - List browser-managed custom scripts: `GET /custom_scripts`
 - Add/update browser-managed custom script entry: `POST /custom_scripts`
 - Delete browser-managed custom script entry: `POST /custom_scripts_delete`
@@ -151,6 +158,24 @@ If a script entry does not define `version`, `/get_versions` now returns
 - First tries `htpasswd` directly
 - Then retries with `sudo -n htpasswd` for service-mode deployments
 - Returns explicit guidance when sudo permissions are missing
+
+### Saturn Go Self-Update (`update-saturn-go.sh`)
+
+- Dedicated page `/saturngo` runs the Saturn Go self-update workflow with:
+  - live terminal output (`/run`)
+  - separate Saturn Go repo/ref policy (`/saturngo_policy`)
+  - last deploy status panel (`/saturngo_deploy_status`)
+- The page runs `/opt/saturn-go/scripts/update-saturn-go.sh` to:
+  - update the repo (optional)
+  - rebuild the Rust backend (`cargo build --release`)
+  - copy web templates
+  - dispatch a detached root helper to stop/copy/start `saturn-go.service`
+- UI run options map to script flags:
+  - `--verbose`, `--dry-run`, `--skip-git`, `--skip-build`, `--skip-deploy`
+- Deploy status is written to:
+  - `/var/lib/saturn-state/saturngo_deploy_status.json` (default)
+- The web terminal may disconnect near the end when `saturn-go.service`
+  restarts; reload the page after ~10-20 seconds.
 
 ## Build and Deploy (Rust Server)
 
@@ -231,6 +256,8 @@ Default URL:
 - `SATURN_MAX_BODY_BYTES` (default `2147483648`)
 - `SATURN_RESTORE_MAX_UPLOAD_BYTES` (default `2147483648`)
 - `SATURN_UPDATE_POLICY_FILE` (default `$SATURN_STATE_DIR/update_policy.json`)
+- `SATURN_SATURNGO_UPDATE_POLICY_FILE` (default `$SATURN_STATE_DIR/saturngo_update_policy.json`)
+- `SATURN_SATURNGO_DEPLOY_STATUS_FILE` (default `$SATURN_STATE_DIR/saturngo_deploy_status.json`)
 - `SATURN_UPDATE_STATE_FILE` (default `$SATURN_STATE_DIR/update_state.json`)
 - `SATURN_SNAPSHOT_DIR` (default `$SATURN_STATE_DIR/snapshots`)
 - `SATURN_STAGING_DIR` (default `$SATURN_STATE_DIR/repo-staging`)
@@ -248,11 +275,20 @@ Default URL:
 - UI loads but script output fails:
   - Check `systemctl status saturn-go.service`
   - Verify script exists and is executable in `/opt/saturn-go/scripts`
+- Saturn Go page shows `ERR:` lines during a successful run:
+  - `cargo` and `systemd-run` may print normal informational lines to stderr
+  - check the progress terminal output and `Last Deploy Status` panel before treating as failure
 - Change Password fails:
   - Ensure `htpasswd` exists and service user can update
     `/etc/nginx/.htpasswd` (directly or via allowed `sudo -n`)
 - Versions panel is blank or `unknown`:
   - Verify `version` keys in `/var/lib/saturn-web/config.json`
+- Clone target dropdown is empty:
+  - Use `lsblk` (not `df`) to verify Linux sees the reader/card as a block device
+  - Unmounted USB/SD readers will not appear in `df`
+  - Insert the card before connecting some USB readers, then check `dmesg -w`, `lsusb`, and `lsblk`
+- `update-pihpsdr.py` fails with `UnicodeEncodeError` on `latin-1` output:
+  - Update the deployed `/opt/saturn-go/scripts/update-pihpsdr.py` from this repo; current script degrades unsupported symbols on non-UTF-8 streams and writes logs as UTF-8
 
 ## Credits
 

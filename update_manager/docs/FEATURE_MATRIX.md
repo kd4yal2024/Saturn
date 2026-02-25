@@ -16,11 +16,13 @@ This matrix maps current capabilities to the implementation points in UI, backen
 | Full repo restore (validate/apply) | `backup.html` | `POST /restore_full` | `tar -tzf`, `tar -xzf`, `rsync -a --delete` (non-dry-run guarded by shared update lock) | Active repo root content |
 | Restore from script-managed directory backups | `backup.html` | `GET /g2_backups`, `POST /g2_restore`, `GET /pihpsdr_backups`, `POST /pihpsdr_restore` | `rsync -a --delete` from selected `saturn-backup-*` or `pihpsdr-backup-*` dir | `~/saturn-backup-*`, `~/pihpsdr-backup-*` |
 | Transactional appliance update | `update.html` (repo URL + branch/ref + health fields in UI) | `GET/POST /update_policy`, `POST /update_start`, `GET /update_status`, `POST /update_rollback` | `git fetch`, `git worktree add/remove`, `curl` health check, snapshot `tar` | `update_policy.json`, `update_state.json`, `snapshots/`, `repo-staging/` |
-| Buffered terminal resume across page switches | `update.html`, `pihpsdr.html`, `index.html` | `GET /run_log` | Offset polling by script + run ID | In-memory per-script run log ring |
+| Saturn Go self-update (rebuild + redeploy) with live terminal | `saturngo.html` | `GET/POST /saturngo_policy`, `POST /run`, `GET /run_log` (with `script=update-saturn-go.sh`) | `update-saturn-go.sh`, `cargo build --release`, `systemd-run`, `systemctl` | `saturngo_update_policy.json`, in-memory run-log buffer |
+| Saturn Go last deploy status panel | `saturngo.html` | `GET /saturngo_deploy_status` | Reads status JSON written by `update-saturn-go.sh` / detached helper | `saturngo_deploy_status.json` |
+| Buffered terminal resume across page switches | `update.html`, `saturngo.html`, `pihpsdr.html`, `index.html` | `GET /run_log` | Offset polling by script + run ID | In-memory per-script run log ring |
 | Pre-update snapshots + retention | `update.html` status panel | Part of update workflow | `tar` snapshot + prune logic | `snapshots/` |
 | G2/appliance mutual exclusion guard | `update.html` conflict feedback | `POST /run` (`update-G2.py` only), `POST /update_start`, `POST /update_rollback` | In-memory activity acquisition/release | Process-local lock slot |
 | Pi image creation and validation | `backup.html` | `POST /pi_image_start`, `GET /pi_image_status`, `POST /pi_image_cancel`, `GET /pi_image_download` | `make_pi_image.sh`, `sha256sum` | In-memory job state; temporary image files |
-| Clone SD card to removable device | `backup.html` | `GET /pi_devices`, `POST /pi_clone_start`, `GET /pi_clone_status`, `POST /pi_clone_cancel` | `clone_pi_to_device.sh` | In-memory clone job state |
+| Clone SD card to removable/USB device (+ quick wipe) | `backup.html` | `GET /pi_devices`, `POST /pi_wipe_target`, `POST /pi_clone_start`, `GET /pi_clone_status`, `POST /pi_clone_cancel` | `wipefs`, optional `sgdisk --zap-all`, `dd` (quick metadata wipe), `clone_pi_to_device.sh` | In-memory clone job state |
 | Repair pack export | `backup.html` | `GET /repair_pack` | `tar -czf -` over key runtime files | Generated manifest in `/tmp` |
 | Runtime/config verification | `backup.html` | `GET /verify_system_config` | Filesystem checks + `systemctl is-active` | N/A |
 | Password change in UI | `index.html` | `POST /change_password` | `htpasswd -i` (direct or `sudo -n`) | `/etc/nginx/.htpasswd` |
@@ -36,6 +38,7 @@ Compared to a simple script-runner deployment, the following were added as first
 
 - Backup and restore page with repo-root awareness
 - Dedicated G2 Update page that pairs Update G2 terminal output with Appliance Update controls
+- Dedicated Saturn Go self-update page with separate policy and rebuild/redeploy terminal workflow
 - Dedicated FPGA Flash page for safe `load-FPGA` execution
 - Transactional appliance update policy, execution, status, and rollback
 - Pre-update snapshots and staging lifecycle management

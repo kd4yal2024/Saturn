@@ -80,17 +80,41 @@ pub struct PiDeviceInfo {
     model: String,
 }
 
+fn pi_clone_device_allowed(name: &str, sys_block_path: &std::path::Path) -> bool {
+    // Skip virtual/non-target block devices and the running system source disk.
+    if name == "mmcblk0"
+        || name.starts_with("loop")
+        || name.starts_with("ram")
+        || name.starts_with("zram")
+        || name.starts_with("dm-")
+        || name.starts_with("md")
+        || name.starts_with("nbd")
+        || name.starts_with("sr")
+    {
+        return false;
+    }
+
+    let removable = fs::read_to_string(sys_block_path.join("removable"))
+        .ok()
+        .map(|s| s.trim() == "1")
+        .unwrap_or(false);
+    if removable {
+        return true;
+    }
+
+    // Many USB SD readers report removable=0; allow USB-attached disks too.
+    fs::canonicalize(sys_block_path.join("device"))
+        .ok()
+        .map(|p| p.to_string_lossy().contains("/usb"))
+        .unwrap_or(false)
+}
+
 pub async fn pi_devices() -> impl IntoResponse {
     let mut devices: Vec<PiDeviceInfo> = Vec::new();
     if let Ok(entries) = fs::read_dir("/sys/block") {
         for ent in entries.flatten() {
             let name = ent.file_name().to_string_lossy().to_string();
-            let removable_path = ent.path().join("removable");
-            let removable = fs::read_to_string(&removable_path)
-                .ok()
-                .map(|s| s.trim() == "1")
-                .unwrap_or(false);
-            if !removable {
+            if !pi_clone_device_allowed(&name, &ent.path()) {
                 continue;
             }
             let size_path = ent.path().join("size");
@@ -133,14 +157,11 @@ pub async fn pi_clone_start(
     }
 
     let name = target.trim_start_matches("/dev/");
-    let removable_path = std::path::Path::new("/sys/block")
-        .join(name)
-        .join("removable");
-    let removable = fs::read_to_string(&removable_path)
-        .ok()
-        .map(|s| s.trim() == "1")
-        .unwrap_or(false);
-    if !removable {
+    let sys_block_path = std::path::Path::new("/sys/block").join(name);
+    if !sys_block_path.exists() {
+        return json_error(StatusCode::BAD_REQUEST, "target device not found in /sys/block");
+    }
+    if !pi_clone_device_allowed(name, &sys_block_path) {
         return json_error(StatusCode::BAD_REQUEST, "target device is not removable");
     }
 

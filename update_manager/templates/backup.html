@@ -86,6 +86,7 @@
       <h1 class="title text-3xl sm:text-4xl">Backup / Restore</h1>
       <div class="flex items-center gap-3">
         <a href="./" class="btn btn-ghost px-3 py-2">G2 Update</a>
+        <a href="./saturngo" class="btn btn-ghost px-3 py-2">Saturn Go</a>
         <a href="./pihpsdr" class="btn btn-ghost px-3 py-2">piHPSDR Update</a>
         <a href="./fpga" class="btn btn-ghost px-3 py-2">FPGA Flash</a>
         <a href="./backup" class="btn btn-ghost px-3 py-2">Backup / Restore</a>
@@ -233,6 +234,7 @@
           </select>
         </div>
         <button id="clone-refresh" class="btn btn-ghost px-4 py-2">Refresh</button>
+        <button id="clone-wipe" class="btn btn-ghost px-4 py-2">Wipe Target</button>
         <button id="clone-start" class="btn btn-primary px-4 py-2">Start Clone</button>
         <button id="clone-cancel" class="btn btn-ghost px-4 py-2" disabled>Cancel</button>
       </div>
@@ -661,20 +663,24 @@ async function pollCloneStatus(){
       setCloneStatus(data.message || 'Running…');
       setCloneLog(data.log || []);
       $('clone-cancel').disabled = false;
+      $('clone-wipe').disabled = true;
     } else if (data.status === 'done'){
       setCloneStatus('Clone complete.');
       setCloneLog(data.log || []);
       $('clone-cancel').disabled = true;
+      $('clone-wipe').disabled = false;
       clearInterval(clonePoll); clonePoll = null;
     } else if (data.status === 'cancelled'){
       setCloneStatus('Cancelled.', true);
       setCloneLog(data.log || []);
       $('clone-cancel').disabled = true;
+      $('clone-wipe').disabled = false;
       clearInterval(clonePoll); clonePoll = null;
     } else {
       setCloneStatus(data.message || 'Failed', true);
       setCloneLog(data.log || []);
       $('clone-cancel').disabled = true;
+      $('clone-wipe').disabled = false;
       clearInterval(clonePoll); clonePoll = null;
     }
   }catch(e){
@@ -683,12 +689,39 @@ async function pollCloneStatus(){
 }
 
 $('clone-refresh').addEventListener('click', loadCloneDevices);
+$('clone-wipe').addEventListener('click', async ()=>{
+  if (clonePoll) { setCloneStatus('Cannot wipe while a clone is running.', true); return; }
+  const target = $('clone-target').value;
+  if (!target) { setCloneStatus('Select a target device first.', true); return; }
+  if (!confirm(`This will erase partition/signature metadata on ${target}. This is a quick wipe (not a full secure erase). Continue?`)) return;
+  $('clone-wipe').disabled = true;
+  $('clone-start').disabled = true;
+  setCloneStatus(`Wiping ${target}...`);
+  try{
+    const r = await fetch('./pi_wipe_target', {
+      method:'POST',
+      headers:withCsrf({'Content-Type':'application/json'}),
+      body: JSON.stringify({ target }),
+    });
+    const data = await r.json().catch(()=>({}));
+    if (!r.ok) throw new Error(data.message || `HTTP ${r.status}`);
+    setCloneStatus(data.message || 'Target wiped.');
+    if (Array.isArray(data.log)) setCloneLog(data.log);
+    await loadCloneDevices();
+  }catch(e){
+    setCloneStatus(`Wipe failed: ${e.message}`, true);
+  }finally{
+    $('clone-wipe').disabled = false;
+    $('clone-start').disabled = false;
+  }
+});
 $('clone-start').addEventListener('click', async ()=>{
   const target = $('clone-target').value;
   if (!target) { setCloneStatus('Select a target device.', true); return; }
   if (!confirm(`This will overwrite ${target}. Continue?`)) return;
   setCloneLog([]);
   setCloneStatus('Starting…');
+  $('clone-wipe').disabled = true;
   try{
     const r = await fetch('./pi_clone_start', {
       method:'POST',
@@ -703,6 +736,7 @@ $('clone-start').addEventListener('click', async ()=>{
     pollCloneStatus();
   }catch(e){
     setCloneStatus(`Start failed: ${e.message}`, true);
+    $('clone-wipe').disabled = false;
   }
 });
 

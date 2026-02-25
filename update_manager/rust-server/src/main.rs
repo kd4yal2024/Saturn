@@ -42,6 +42,8 @@ struct AppState {
     repo_root: Arc<RwLock<PathBuf>>,
     repo_root_file: PathBuf,
     update_policy_file: PathBuf,
+    saturngo_update_policy_file: PathBuf,
+    saturngo_deploy_status_file: PathBuf,
     update_state_file: PathBuf,
     snapshot_dir: PathBuf,
     staging_dir: PathBuf,
@@ -120,6 +122,12 @@ async fn main() {
     let update_policy_file = std::env::var("SATURN_UPDATE_POLICY_FILE")
         .map(PathBuf::from)
         .unwrap_or_else(|_| PathBuf::from(format!("{default_state_dir}/update_policy.json")));
+    let saturngo_update_policy_file = std::env::var("SATURN_SATURNGO_UPDATE_POLICY_FILE")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from(format!("{default_state_dir}/saturngo_update_policy.json")));
+    let saturngo_deploy_status_file = std::env::var("SATURN_SATURNGO_DEPLOY_STATUS_FILE")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from(format!("{default_state_dir}/saturngo_deploy_status.json")));
     let update_state_file = std::env::var("SATURN_UPDATE_STATE_FILE")
         .map(PathBuf::from)
         .unwrap_or_else(|_| PathBuf::from(format!("{default_state_dir}/update_state.json")));
@@ -155,6 +163,12 @@ async fn main() {
     if let Some(parent) = update_policy_file.parent() {
         let _ = tokio::fs::create_dir_all(parent).await;
     }
+    if let Some(parent) = saturngo_update_policy_file.parent() {
+        let _ = tokio::fs::create_dir_all(parent).await;
+    }
+    if let Some(parent) = saturngo_deploy_status_file.parent() {
+        let _ = tokio::fs::create_dir_all(parent).await;
+    }
     if let Some(parent) = update_state_file.parent() {
         let _ = tokio::fs::create_dir_all(parent).await;
     }
@@ -175,6 +189,8 @@ async fn main() {
         repo_root: Arc::new(RwLock::new(repo_root)),
         repo_root_file,
         update_policy_file,
+        saturngo_update_policy_file,
+        saturngo_deploy_status_file,
         update_state_file,
         snapshot_dir,
         staging_dir,
@@ -195,6 +211,10 @@ async fn main() {
         .route("/backup.html", get(backup_handler))
         .route("/update", get(update_handler))
         .route("/update.html", get(update_handler))
+        .route("/saturngo", get(saturngo_handler))
+        .route("/saturngo.html", get(saturngo_handler))
+        .route("/saturn-go", get(saturngo_handler))
+        .route("/saturn-go.html", get(saturngo_handler))
         .route("/fpga", get(fpga_handler))
         .route("/fpga.html", get(fpga_handler))
         .route("/pihpsdr", get(pihpsdr_handler))
@@ -214,6 +234,9 @@ async fn main() {
         .route("/set_repo_root", post(set_repo_root))
         .route("/update_policy", get(get_update_policy))
         .route("/update_policy", post(set_update_policy))
+        .route("/saturngo_policy", get(get_saturngo_policy))
+        .route("/saturngo_policy", post(set_saturngo_policy))
+        .route("/saturngo_deploy_status", get(get_saturngo_deploy_status))
         .route("/update_start", post(update_start))
         .route("/update_status", get(update_status))
         .route("/update_rollback", post(update_rollback))
@@ -228,6 +251,7 @@ async fn main() {
         .route("/pi_image_cancel", post(pi_image_cancel))
         .route("/pi_image_download", get(pi_image_download))
         .route("/pi_devices", get(pi_devices))
+        .route("/pi_wipe_target", post(pi_wipe_target))
         .route("/pi_clone_start", post(pi_clone_start))
         .route("/pi_clone_status", get(pi_clone_status))
         .route("/pi_clone_cancel", post(pi_clone_cancel))
@@ -295,6 +319,10 @@ async fn update_handler(State(state): State<AppState>) -> impl IntoResponse {
     serve_page(&state.webroot, "update.html").await
 }
 
+async fn saturngo_handler(State(state): State<AppState>) -> impl IntoResponse {
+    serve_page(&state.webroot, "saturngo.html").await
+}
+
 async fn fpga_handler(State(state): State<AppState>) -> impl IntoResponse {
     serve_page(&state.webroot, "fpga.html").await
 }
@@ -324,6 +352,11 @@ fn route_to_page(path: &str) -> Option<&'static str> {
         }
         "/update" | "/update/" | "/update.html" | "/saturn/update" | "/saturn/update/" | "/saturn/update.html" => {
             Some("update.html")
+        }
+        "/saturngo" | "/saturngo/" | "/saturngo.html" | "/saturn-go" | "/saturn-go/" | "/saturn-go.html"
+        | "/saturn/saturngo" | "/saturn/saturngo/" | "/saturn/saturngo.html"
+        | "/saturn/saturn-go" | "/saturn/saturn-go/" | "/saturn/saturn-go.html" => {
+            Some("saturngo.html")
         }
         "/fpga" | "/fpga/" | "/fpga.html" | "/saturn/fpga" | "/saturn/fpga/" | "/saturn/fpga.html" => {
             Some("fpga.html")
@@ -1030,6 +1063,10 @@ fn is_g2_update_script(script: &str) -> bool {
     script.eq_ignore_ascii_case("update-G2.py") || script.eq_ignore_ascii_case("update-G2.sh")
 }
 
+fn is_saturngo_update_script(script: &str) -> bool {
+    script.eq_ignore_ascii_case("update-saturn-go.sh")
+}
+
 fn is_safe_repo_part(value: &str) -> bool {
     !value.is_empty()
         && value
@@ -1144,6 +1181,37 @@ async fn save_update_policy(state: &AppState, policy: UpdatePolicy) -> Result<Up
         .await
         .map_err(|e| e.to_string())?;
     let _ = tokio::fs::set_permissions(&state.update_policy_file, std::fs::Permissions::from_mode(0o640)).await;
+    Ok(normalized)
+}
+
+async fn load_saturngo_update_policy(state: &AppState) -> Result<UpdatePolicy, String> {
+    let policy = match tokio::fs::read_to_string(&state.saturngo_update_policy_file).await {
+        Ok(data) => serde_json::from_str::<UpdatePolicy>(&data).unwrap_or_default(),
+        Err(_) => UpdatePolicy::default(),
+    };
+    let normalized = normalize_update_policy(policy, state);
+    if let Err(e) = save_saturngo_update_policy(state, normalized.clone()).await {
+        error!("failed to persist saturngo update policy: {e}");
+    }
+    Ok(normalized)
+}
+
+async fn save_saturngo_update_policy(state: &AppState, policy: UpdatePolicy) -> Result<UpdatePolicy, String> {
+    let normalized = normalize_update_policy(policy, state);
+    if let Some(parent) = state.saturngo_update_policy_file.parent() {
+        tokio::fs::create_dir_all(parent)
+            .await
+            .map_err(|e| e.to_string())?;
+    }
+    let bytes = serde_json::to_vec_pretty(&normalized).map_err(|e| e.to_string())?;
+    tokio::fs::write(&state.saturngo_update_policy_file, bytes)
+        .await
+        .map_err(|e| e.to_string())?;
+    let _ = tokio::fs::set_permissions(
+        &state.saturngo_update_policy_file,
+        std::fs::Permissions::from_mode(0o640),
+    )
+    .await;
     Ok(normalized)
 }
 
@@ -1638,6 +1706,43 @@ async fn set_update_policy(State(state): State<AppState>, Json(policy): Json<Upd
     match save_update_policy(&state, policy).await {
         Ok(policy) => Json(serde_json::json!({ "status": "ok", "policy": policy })).into_response(),
         Err(e) => json_error(StatusCode::INTERNAL_SERVER_ERROR, &e),
+    }
+}
+
+async fn get_saturngo_policy(State(state): State<AppState>) -> Response {
+    match load_saturngo_update_policy(&state).await {
+        Ok(policy) => Json(serde_json::json!({ "policy": policy })).into_response(),
+        Err(e) => json_error(StatusCode::INTERNAL_SERVER_ERROR, &e),
+    }
+}
+
+async fn set_saturngo_policy(State(state): State<AppState>, Json(policy): Json<UpdatePolicy>) -> Response {
+    match save_saturngo_update_policy(&state, policy).await {
+        Ok(policy) => Json(serde_json::json!({ "status": "ok", "policy": policy })).into_response(),
+        Err(e) => json_error(StatusCode::INTERNAL_SERVER_ERROR, &e),
+    }
+}
+
+async fn get_saturngo_deploy_status(State(state): State<AppState>) -> Response {
+    match tokio::fs::read_to_string(&state.saturngo_deploy_status_file).await {
+        Ok(raw) => match serde_json::from_str::<serde_json::Value>(&raw) {
+            Ok(value) => Json(serde_json::json!({ "status": "ok", "deploy": value })).into_response(),
+            Err(e) => json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &format!("invalid Saturn Go deploy status file: {e}"),
+            ),
+        },
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Json(serde_json::json!({
+            "status": "ok",
+            "deploy": {
+                "status": "idle",
+                "phase": "idle",
+                "message": "No Saturn Go deploy recorded yet.",
+                "updated_at": Local::now().to_rfc3339(),
+            }
+        }))
+        .into_response(),
+        Err(e) => json_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
     }
 }
 
@@ -2195,17 +2300,55 @@ struct PiDeviceInfo {
     model: String,
 }
 
+fn pi_clone_device_allowed(name: &str, sys_block_path: &Path) -> bool {
+    // Skip virtual/non-target block devices and the running system source disk.
+    if name == "mmcblk0"
+        || name.starts_with("loop")
+        || name.starts_with("ram")
+        || name.starts_with("zram")
+        || name.starts_with("dm-")
+        || name.starts_with("md")
+        || name.starts_with("nbd")
+        || name.starts_with("sr")
+    {
+        return false;
+    }
+
+    let removable = fs::read_to_string(sys_block_path.join("removable"))
+        .ok()
+        .map(|s| s.trim() == "1")
+        .unwrap_or(false);
+    if removable {
+        return true;
+    }
+
+    // Many USB SD readers report removable=0; allow USB-attached disks too.
+    fs::canonicalize(sys_block_path.join("device"))
+        .ok()
+        .map(|p| p.to_string_lossy().contains("/usb"))
+        .unwrap_or(false)
+}
+
+async fn run_privileged_output(program: &str, args: &[&str]) -> Result<std::process::Output, std::io::Error> {
+    let mut cmd = if users::get_current_uid() == 0 {
+        Command::new(program)
+    } else {
+        let mut c = Command::new("sudo");
+        c.arg("-n").arg(program);
+        c
+    };
+    cmd.args(args)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    cmd.output().await
+}
+
 async fn pi_devices() -> impl IntoResponse {
     let mut devices: Vec<PiDeviceInfo> = Vec::new();
     if let Ok(entries) = fs::read_dir("/sys/block") {
         for ent in entries.flatten() {
             let name = ent.file_name().to_string_lossy().to_string();
-            let removable_path = ent.path().join("removable");
-            let removable = fs::read_to_string(&removable_path)
-                .ok()
-                .map(|s| s.trim() == "1")
-                .unwrap_or(false);
-            if !removable {
+            if !pi_clone_device_allowed(&name, &ent.path()) {
                 continue;
             }
             let size_path = ent.path().join("size");
@@ -2236,6 +2379,192 @@ struct PiCloneStartReq {
     target: String,
 }
 
+async fn pi_wipe_target(Json(req): Json<PiCloneStartReq>) -> Response {
+    let target = req.target;
+    if !target.starts_with("/dev/") {
+        return json_error(StatusCode::BAD_REQUEST, "target must be a /dev path");
+    }
+    if target == "/dev/mmcblk0" {
+        return json_error(StatusCode::BAD_REQUEST, "target cannot be source device");
+    }
+
+    let name = target.trim_start_matches("/dev/");
+    let sys_block_path = Path::new("/sys/block").join(name);
+    if !sys_block_path.exists() {
+        return json_error(StatusCode::BAD_REQUEST, "target device not found in /sys/block");
+    }
+    if !pi_clone_device_allowed(name, &sys_block_path) {
+        return json_error(StatusCode::BAD_REQUEST, "target device is not removable");
+    }
+
+    let mut log: Vec<String> = Vec::new();
+    log.push(format!("Target: {target}"));
+
+    let lsblk_out = match Command::new("lsblk")
+        .arg("-ln")
+        .arg("-o")
+        .arg("PATH,TYPE")
+        .arg(&target)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .output()
+        .await
+    {
+        Ok(out) => out,
+        Err(e) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, &format!("lsblk failed: {e}")),
+    };
+    if !lsblk_out.status.success() {
+        return json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &format!("lsblk failed: {}", output_error_text(&lsblk_out)),
+        );
+    }
+    let lsblk_text = String::from_utf8_lossy(&lsblk_out.stdout);
+    for line in lsblk_text.lines() {
+        let mut parts = line.split_whitespace();
+        let path = match parts.next() {
+            Some(v) => v,
+            None => continue,
+        };
+        let kind = match parts.next() {
+            Some(v) => v,
+            None => continue,
+        };
+        if kind != "part" {
+            continue;
+        }
+        let out = match run_privileged_output("umount", &[path]).await {
+            Ok(out) => out,
+            Err(e) => {
+                return json_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    &format!("umount failed for {path}: {e}"),
+                )
+            }
+        };
+        if out.status.success() {
+            log.push(format!("Unmounted {path}"));
+        } else {
+            let msg = output_error_text(&out);
+            log.push(format!("Unmount {path}: {msg}"));
+        }
+    }
+
+    let wipefs_out = match run_privileged_output("wipefs", &["-af", &target]).await {
+        Ok(out) => out,
+        Err(e) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, &format!("wipefs failed: {e}")),
+    };
+    if !wipefs_out.status.success() {
+        return json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &format!("wipefs failed: {}", output_error_text(&wipefs_out)),
+        );
+    }
+    let wipefs_msg = output_error_text(&wipefs_out);
+    if wipefs_msg.is_empty() {
+        log.push("wipefs: signatures cleared".to_string());
+    } else {
+        log.push(format!("wipefs: {wipefs_msg}"));
+    }
+
+    match run_privileged_output("sgdisk", &["--zap-all", &target]).await {
+        Ok(out) if out.status.success() => log.push("sgdisk: GPT/MBR metadata zapped".to_string()),
+        Ok(out) => log.push(format!("sgdisk: {}", output_error_text(&out))),
+        Err(e) => log.push(format!("sgdisk: skipped ({e})")),
+    }
+
+    let size_out = match run_privileged_output("blockdev", &["--getsize64", &target]).await {
+        Ok(out) => out,
+        Err(e) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, &format!("blockdev failed: {e}")),
+    };
+    if !size_out.status.success() {
+        return json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &format!("blockdev failed: {}", output_error_text(&size_out)),
+        );
+    }
+    let size_bytes = String::from_utf8_lossy(&size_out.stdout)
+        .trim()
+        .parse::<u64>()
+        .unwrap_or(0);
+    if size_bytes == 0 {
+        return json_error(StatusCode::INTERNAL_SERVER_ERROR, "target size is zero");
+    }
+    log.push(format!("Size: {size_bytes} bytes"));
+
+    let dd_head_out = match run_privileged_output(
+        "dd",
+        &[
+            "if=/dev/zero",
+            &format!("of={target}"),
+            "bs=1M",
+            "count=16",
+            "conv=fsync",
+            "status=none",
+        ],
+    )
+    .await
+    {
+        Ok(out) => out,
+        Err(e) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, &format!("dd head wipe failed: {e}")),
+    };
+    if !dd_head_out.status.success() {
+        return json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &format!("dd head wipe failed: {}", output_error_text(&dd_head_out)),
+        );
+    }
+    log.push("Zeroed first 16 MiB".to_string());
+
+    let mib: u64 = 1024 * 1024;
+    let size_mib = size_bytes / mib;
+    if size_mib > 16 {
+        let seek_mib = size_mib - 16;
+        let seek_arg = format!("seek={seek_mib}");
+        let of_arg = format!("of={target}");
+        let dd_tail_out = match run_privileged_output(
+            "dd",
+            &[
+                "if=/dev/zero",
+                &of_arg,
+                "bs=1M",
+                "count=16",
+                &seek_arg,
+                "conv=fsync",
+                "status=none",
+            ],
+        )
+        .await
+        {
+            Ok(out) => out,
+            Err(e) => {
+                return json_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    &format!("dd tail wipe failed: {e}"),
+                )
+            }
+        };
+        if !dd_tail_out.status.success() {
+            return json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &format!("dd tail wipe failed: {}", output_error_text(&dd_tail_out)),
+            );
+        }
+        log.push("Zeroed last 16 MiB".to_string());
+    }
+
+    let _ = run_privileged_output("sync", &[]).await;
+    let _ = run_privileged_output("partprobe", &[&target]).await;
+    let _ = run_privileged_output("udevadm", &["settle"]).await;
+
+    Json(serde_json::json!({
+        "status": "ok",
+        "message": "Target wiped (signatures/partition metadata cleared).",
+        "log": log
+    }))
+    .into_response()
+}
+
 async fn pi_clone_start(Json(req): Json<PiCloneStartReq>) -> Response {
     let target = req.target;
     if !target.starts_with("/dev/") {
@@ -2245,14 +2574,13 @@ async fn pi_clone_start(Json(req): Json<PiCloneStartReq>) -> Response {
         return json_error(StatusCode::BAD_REQUEST, "target cannot be source device");
     }
 
-    // verify target is removable
+    // verify target is a supported removable/USB clone destination
     let name = target.trim_start_matches("/dev/");
-    let removable_path = Path::new("/sys/block").join(name).join("removable");
-    let removable = fs::read_to_string(&removable_path)
-        .ok()
-        .map(|s| s.trim() == "1")
-        .unwrap_or(false);
-    if !removable {
+    let sys_block_path = Path::new("/sys/block").join(name);
+    if !sys_block_path.exists() {
+        return json_error(StatusCode::BAD_REQUEST, "target device not found in /sys/block");
+    }
+    if !pi_clone_device_allowed(name, &sys_block_path) {
         return json_error(StatusCode::BAD_REQUEST, "target device is not removable");
     }
 
@@ -3249,7 +3577,9 @@ async fn run_sse(
         }
     }
     let repo_root_display = repo_root.display().to_string();
-    let g2_policy = if is_g2_update_script(&script) {
+    let g2_script = is_g2_update_script(&script);
+    let saturngo_script = is_saturngo_update_script(&script);
+    let g2_policy = if g2_script {
         let policy = load_update_policy(&state)
             .await
             .map_err(|e| json_error(StatusCode::INTERNAL_SERVER_ERROR, &e))?;
@@ -3263,10 +3593,25 @@ async fn run_sse(
     } else {
         None
     };
-    let update_activity_guard = if is_g2_update_script(&script) {
+    let saturngo_policy = if saturngo_script {
+        let policy = load_saturngo_update_policy(&state)
+            .await
+            .map_err(|e| json_error(StatusCode::INTERNAL_SERVER_ERROR, &e))?;
+        if !update_policy_repo_configured(&policy) {
+            return Err(json_error(
+                StatusCode::BAD_REQUEST,
+                "Saturn Go repo URL is not configured. Save a GitHub repo URL first.",
+            ));
+        }
+        Some(policy)
+    } else {
+        None
+    };
+    let update_activity_guard = if g2_script || saturngo_script {
+        let kind = if g2_script { "update-g2" } else { "saturngo-update" };
         Some(
             begin_update_activity(
-                "update-g2",
+                kind,
                 format!("script={} repo_root={repo_root_display}", script),
             )
             .map_err(|e| json_error(StatusCode::CONFLICT, &e))?,
@@ -3294,6 +3639,21 @@ async fn run_sse(
         cmd.env("SATURN_UPDATE_POLICY_REMOTE", policy.remote.trim());
         cmd.env("SATURN_UPDATE_POLICY_REF", target_ref.trim());
         cmd.env("SATURN_UPDATE_POLICY_URL", expected_remote_url(policy));
+    }
+    if let Some(policy) = &saturngo_policy {
+        let target_ref = policy
+            .custom_ref
+            .clone()
+            .unwrap_or_else(|| policy.stable_ref.clone());
+        cmd.env("SATURN_SATURNGO_POLICY_OWNER", policy.owner.trim());
+        cmd.env("SATURN_SATURNGO_POLICY_REPO", policy.repo.trim());
+        cmd.env("SATURN_SATURNGO_POLICY_REMOTE", policy.remote.trim());
+        cmd.env("SATURN_SATURNGO_POLICY_REF", target_ref.trim());
+        cmd.env("SATURN_SATURNGO_POLICY_URL", expected_remote_url(policy));
+        cmd.env(
+            "SATURN_SATURNGO_DEPLOY_STATUS_FILE",
+            state.saturngo_deploy_status_file.display().to_string(),
+        );
     }
 
     cmd.stdout(std::process::Stdio::piped());

@@ -31,13 +31,17 @@ Backend also enforces same-host checks when `Origin` or `Referer` is present.
 | `/backup.html` | `GET` | No | Serve `backup.html`. |
 | `/update` | `GET` | No | Serve `update.html` (G2 + Appliance Update page). |
 | `/update.html` | `GET` | No | Serve `update.html` (G2 + Appliance Update page). |
+| `/saturngo` | `GET` | No | Serve `saturngo.html` (Saturn Go self-update page). |
+| `/saturngo.html` | `GET` | No | Serve `saturngo.html` (Saturn Go self-update page). |
+| `/saturn-go` | `GET` | No | Serve `saturngo.html` (Saturn Go self-update page). |
+| `/saturn-go.html` | `GET` | No | Serve `saturngo.html` (Saturn Go self-update page). |
 | `/fpga` | `GET` | No | Serve `fpga.html` (FPGA flash terminal/control page). |
 | `/fpga.html` | `GET` | No | Serve `fpga.html` (FPGA flash terminal/control page). |
 | `/pihpsdr` | `GET` | No | Serve `pihpsdr.html` (piHPSDR update terminal). |
 | `/pihpsdr.html` | `GET` | No | Serve `pihpsdr.html` (piHPSDR update terminal). |
 | `/monitor` | `GET` | No | Serve `monitor.html`. |
 | `/monitor.html` | `GET` | No | Serve `monitor.html`. |
-| fallback mapped page paths | `GET` | No | Supports `/saturn`, `/saturn/custom`, `/saturn/backup`, `/saturn/update`, `/saturn/fpga`, `/saturn/pihpsdr`, `/saturn/monitor`, etc. |
+| fallback mapped page paths | `GET` | No | Supports `/saturn`, `/saturn/custom`, `/saturn/backup`, `/saturn/update`, `/saturn/saturngo`, `/saturn/fpga`, `/saturn/pihpsdr`, `/saturn/monitor`, etc. |
 
 ## Health and Metadata
 
@@ -104,6 +108,20 @@ Current UI behavior notes (`update.html`):
 - UI saves policy using `channel=custom` and `custom_ref=<branch/ref>`.
 - `Run Update G2` is gated by valid repo URL in Appliance form and persists that policy before script start.
 
+## Saturn Go Self-Update
+
+| Route | Method | CSRF | Request | Success Response |
+|---|---|---|---|---|
+| `/saturngo_policy` | `GET` | No | none | `{ "policy": { ... } }` |
+| `/saturngo_policy` | `POST` | Yes | full policy JSON | `{ "status":"ok", "policy": { ...normalized... } }` |
+| `/saturngo_deploy_status` | `GET` | No | none | `{ "status":"ok", "deploy": { ... } }` |
+
+Notes:
+
+- `saturngo_policy` uses the same `UpdatePolicy` schema/normalization rules as `update_policy`, but persists to a separate file.
+- `/saturngo_deploy_status` returns a synthetic `idle` payload if no status file exists yet.
+- The Saturn Go page runs `update-saturn-go.sh` through `POST /run` and uses `/run_log` for resume across page refresh/navigation.
+
 ## Full Backup / Restore
 
 | Route | Method | CSRF | Request | Success Response |
@@ -165,13 +183,20 @@ Run-log buffering behavior:
 
 Update-activity behavior for `/run`:
 
-- For `update-G2.py`/`update-G2.sh`, backend acquires the shared update-activity lock.
-- If appliance update/rollback (or another G2 run) is active, route returns `409` with `{ "message": "..." }`.
+- For `update-G2.py`/`update-G2.sh` and `update-saturn-go.sh`, backend acquires the shared update-activity lock.
+- If appliance update/rollback (or another conflicting update action) is active, route returns `409` with `{ "message": "..." }`.
 - `/run` rejects Python scripts when the resolved script path is under active `SATURN_REPO_ROOT`.
 - Child process environment includes:
   - `SATURN_REPO_ROOT`
   - `SATURN_DIR`
   - `SATURN_ACTIVE_REPO_ROOT`
+- `update-saturn-go.sh` runs also include:
+  - `SATURN_SATURNGO_POLICY_OWNER`
+  - `SATURN_SATURNGO_POLICY_REPO`
+  - `SATURN_SATURNGO_POLICY_REMOTE`
+  - `SATURN_SATURNGO_POLICY_REF`
+  - `SATURN_SATURNGO_POLICY_URL`
+  - `SATURN_SATURNGO_DEPLOY_STATUS_FILE`
 - Python child runs also include:
   - `PYTHONDONTWRITEBYTECODE=1`
   - `PYTHONPYCACHEPREFIX=/var/cache/saturn-python`
@@ -204,11 +229,16 @@ Behavior:
 | Route | Method | CSRF | Request | Success Response |
 |---|---|---|---|---|
 | `/pi_devices` | `GET` | No | none | `{ "devices": [{ "name", "path", "size_bytes", "model" }, ...] }` |
+| `/pi_wipe_target` | `POST` | Yes | JSON `{ "target":"/dev/sdX" }` | `{ "status":"ok", "message":"...", "log":[...] }` |
 | `/pi_clone_start` | `POST` | Yes | JSON `{ "target":"/dev/sdX" }` | `{ "job_id":"piclone-..." }` |
 | `/pi_clone_status` | `GET` | No | `?job_id=<id>` | clone job JSON |
 | `/pi_clone_cancel` | `POST` | Yes | `?job_id=<id>` | `{ "status":"cancelled" }` |
 
-Target must be a removable `/dev/*` device and cannot be `/dev/mmcblk0`.
+Notes:
+
+- `/pi_devices` enumerates supported clone targets from `/sys/block`, including USB-attached disks/readers that may report `removable=0`.
+- `/pi_wipe_target` and `/pi_clone_start` reject non-`/dev/*` targets, `/dev/mmcblk0`, and unsupported internal/virtual devices.
+- `/pi_wipe_target` is a quick pre-clone metadata wipe (not a full secure erase): best-effort partition unmount, `wipefs`, optional `sgdisk --zap-all`, and zeroing of the first/last 16 MiB.
 
 ## Monitor and Diagnostics
 

@@ -14,6 +14,11 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
 - Pre-update snapshot archives with retention policy in `/var/lib/saturn-state/snapshots`.
 - Backup UI "Appliance Update" panel for channel policy, start/status, and rollback controls.
 - `saturn-go-watchdog.timer` + `saturn-go-watchdog.service` for periodic health checks and self-heal restart.
+- Backup / Restore clone UI `Wipe Target` action plus `POST /pi_wipe_target` endpoint for quick pre-clone metadata wipe (best-effort unmount, signature/partition-table cleanup, first/last 16 MiB zeroing).
+- Dedicated Saturn Go self-update page (`/saturngo`, `/saturn-go`) with separate repo/ref policy form, live terminal output, and rebuild/redeploy workflow for `saturn-go.service`.
+- Saturn Go self-update policy API (`GET/POST /saturngo_policy`) with a separate persisted policy file from the G2 Appliance Update policy.
+- Saturn Go deploy status endpoint (`GET /saturngo_deploy_status`) backed by a persisted status JSON file for last-run/deploy visibility.
+- New `update-saturn-go.sh` script to update repo/build/redeploy the Rust backend from the web UI via `/run`.
 
 ### Changed
 - CSRF middleware now rejects POST requests that are missing both `Origin` and `Referer` headers, closing a bypass when neither header was sent.
@@ -44,6 +49,9 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
 - Uninstaller now removes watchdog units and watchdog script to stay aligned with installer artifacts.
 - `/run` now blocks Python script execution when the resolved script path is inside the active Saturn repo tree; only installed script copies are allowed.
 - Python scripts launched by `/run` now set `PYTHONDONTWRITEBYTECODE=1` and `PYTHONPYCACHEPREFIX=/var/cache/saturn-python`.
+- Clone target detection now includes USB-attached block devices that report `removable=0` (common for USB SD card readers), while still excluding internal/virtual devices.
+- Saturn Go self-update page now uses explicit run-option checkboxes (`verbose`, `dry-run`, `skip-git`, `skip-build`, `skip-deploy`) and shows a polling "Last Deploy Status" panel.
+- `/run` now injects Saturn Go self-update policy env vars and a deploy-status-file path when launching `update-saturn-go.sh`, and treats Saturn Go self-update as a shared update activity (conflict-guarded like G2/appliance update).
 
 ### Fixed
 - `update-G2.py`: verbose mode now preserves captured command output used by status sections (fixes `Size: ?` and `Commit: ?` cases).
@@ -66,6 +74,9 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
 - G2 terminal runner now enforces a configured Appliance Update repo URL; if not configured, `/run` returns a clear error instead of silently using defaults.
 - G2 terminal runner now passes Appliance Update policy repo/remote/ref into `update-G2.py`, and `update-G2.py` now applies that policy by setting the git remote URL before pulling.
 - `update-G2.py` and `update-pihpsdr.py` now refuse execution when run from inside the Saturn repo tree, preventing accidental repo-local Python runs.
+- `update-pihpsdr.py`: prevented startup crash on non-UTF-8 (`latin-1`) stdout/stderr/log streams by adding per-stream Unicode fallback output and explicit UTF-8 log file writes.
+- `update-saturn-go.sh`: fixed `--dry-run` staging-helper generation error when the staged directory is intentionally not created.
+- `update-saturn-go.sh`: fixed detached root-helper status-file error handling/JSON quoting so `/saturngo_deploy_status` always returns valid JSON after deploy completion.
 
 ## [2026-02-13]
 ### Added
