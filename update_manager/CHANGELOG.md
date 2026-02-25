@@ -21,6 +21,7 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
 - New `update-saturn-go.sh` script to update repo/build/redeploy the Rust backend from the web UI via `/run`.
 - Hidden P2/P3 App Test Lab page (`/p23test`) for build/deploy/switch testing of `P2_app` and `P3_app` without adding navigation links.
 - P2/P3 test-lab status endpoint (`GET /p23_status`) reporting service state, source/deployed binaries, symlink selection, and systemd override state.
+- P2/P3 test-lab performance endpoint (`GET /p23_perf`) for lightweight process/network/XDMA/PCIe snapshots used to baseline P3/P2 runtime behavior and investigate lag.
 - New `p23-app-manager.sh` helper script for P2/P3 build/deploy/switch/revert actions via `/run`.
 
 ### Changed
@@ -59,6 +60,8 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
 - Installer now warns before `apt-get update` when `/tmp` is too full (helps diagnose misleading APT signature-split errors caused by tmpfs exhaustion).
 - Hidden P2/P3 Test Lab now supports explicit startup profiles (`panel`, `panel-debug`, `headless`) and front-panel mode overrides (`SATURN_FRONT_PANEL_MODE`) for switch/deploy actions, plus an emergency web revert button.
 - `p23_status` now reports parsed override metadata (`panel_mode`, `saturn_meta`) from the generated systemd drop-in for easier troubleshooting.
+- Hidden P2/P3 Test Lab now includes a Phase 1 performance panel with resettable baselines (process CPU/RSS/scheduler wait plus `eth0` throughput and XDMA interrupt-rate/PCIe link telemetry).
+- Hidden P2/P3 Test Lab performance panel now highlights threshold alerts for scheduler wait / CPU spikes and XDMA interrupt spikes or drops relative to baseline.
 
 ### Fixed
 - `update-G2.py`: verbose mode now preserves captured command output used by status sections (fixes `Size: ?` and `Commit: ?` cases).

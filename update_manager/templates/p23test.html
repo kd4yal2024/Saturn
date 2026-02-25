@@ -66,6 +66,16 @@
         <div id="p23-status-summary" class="muted" style="margin-bottom:10px;">Loading...</div>
         <pre id="p23-status-view" class="term" style="min-height:180px; max-height:260px; margin-bottom:14px;"></pre>
 
+        <div class="row" style="justify-content:space-between; margin-bottom:8px;">
+          <h2 style="margin:0; font-size: 20px;">Performance (P2/P3 Service)</h2>
+          <div class="row">
+            <button id="p23-perf-refresh" class="btn">Refresh</button>
+            <button id="p23-perf-reset" class="btn">Reset Baseline</button>
+          </div>
+        </div>
+        <div id="p23-perf-summary" class="muted" style="margin-bottom:10px;">Loading...</div>
+        <pre id="p23-perf-view" class="term" style="min-height:160px; max-height:240px; margin-bottom:14px;"></pre>
+
         <hr style="border:0; border-top:1px solid rgba(255,255,255,0.08); margin: 8px 0 14px 0;">
 
         <h2 style="margin:0 0 10px 0; font-size: 20px;">Actions</h2>
@@ -119,6 +129,7 @@
           <div>- Deploy installs binaries under <code>/opt/saturn-go/p23-apps/</code> and switches a <code>current</code> symlink.</div>
           <div>- Service switching uses a systemd drop-in override (safer than editing the main unit file).</div>
           <div>- <code>Front panel mode</code> sets <code>SATURN_FRONT_PANEL_MODE</code> for P2/P3: use <code>g2</code> or <code>g2v2</code> if auto detect picks the wrong panel.</div>
+          <div>- Performance panel polls lightweight `/p23_perf` snapshots and computes client-side deltas/baselines (CPU, RSS, scheduler delay, context switches, I/O).</div>
           <div>- Web mode requires working <code>sudo -n</code> permissions for install/restart steps.</div>
           <div>- Shell emergency revert: <code>sudo /opt/saturn-go/scripts/p23-app-manager.sh --revert --verbose</code></div>
         </div>
@@ -137,6 +148,7 @@ const OUT_KEY = 'saturn:p23test:output';
 const RUN_ID_KEY = 'saturn:p23test:run-id';
 const RUN_NEXT_KEY = 'saturn:p23test:run-next';
 const STATUS_KEY = 'saturn:p23test:status-json';
+const PERF_VIEW_KEY = 'saturn:p23test:perf-view';
 const OUT_MAX = 3500;
 let lines = [];
 let runId = '';
@@ -144,6 +156,20 @@ let nextFrom = 0;
 let runInProgress = false;
 let pollTimer = null;
 let statusPollTimer = null;
+let perfPollTimer = null;
+let perfPrevSample = null;
+let perfBaseline = null;
+const PERF_THRESH = {
+  cpuCoreWarn: 60,
+  cpuCoreCrit: 90,
+  schedWaitWarn: 10,
+  schedWaitCrit: 25,
+  xdmaSpikeWarnRatio: 1.35,
+  xdmaSpikeCritRatio: 1.75,
+  xdmaDropWarnRatio: 0.75,
+  xdmaDropCritRatio: 0.50,
+  xdmaBaselineMinSamples: 10,
+};
 
 function withCsrf(h={}){ return { ...h, [CSRF_HEADER_NAME]: CSRF_HEADER_VALUE }; }
 function ansi(line){ return ansi_up.ansi_to_html(String(line ?? '')); }
@@ -200,6 +226,34 @@ function setStatusView(obj){
   $('p23-status-view').textContent = text;
   try { sessionStorage.setItem(STATUS_KEY, text); } catch(_e) {}
 }
+function setPerfSummary(text, isError=false){
+  const el = $('p23-perf-summary');
+  el.textContent = text || '';
+  el.style.color = isError ? '#fca5a5' : '';
+}
+function setPerfAlertVisual(level){
+  const summary = $('p23-perf-summary');
+  const view = $('p23-perf-view');
+  summary.style.fontWeight = '';
+  summary.style.color = '';
+  view.style.borderColor = 'rgba(255,255,255,0.08)';
+  view.style.boxShadow = 'none';
+  if (level === 'warn'){
+    summary.style.color = '#fde68a';
+    summary.style.fontWeight = '600';
+    view.style.borderColor = 'rgba(251,191,36,0.5)';
+    view.style.boxShadow = '0 0 0 1px rgba(251,191,36,0.15) inset';
+  } else if (level === 'crit'){
+    summary.style.color = '#fca5a5';
+    summary.style.fontWeight = '700';
+    view.style.borderColor = 'rgba(248,113,113,0.6)';
+    view.style.boxShadow = '0 0 0 1px rgba(248,113,113,0.2) inset';
+  }
+}
+function setPerfViewText(text){
+  $('p23-perf-view').textContent = text || '';
+  try { sessionStorage.setItem(PERF_VIEW_KEY, String(text || '')); } catch(_e) {}
+}
 function formatP23StatusSummary(p){
   if (!p || typeof p !== 'object') return 'No status data.';
   const svc = p.service || {};
@@ -233,6 +287,304 @@ function ensureStatusPoll(){
   if (!statusPollTimer){
     statusPollTimer = setInterval(()=>{ loadP23Status(); }, 5000);
   }
+}
+function newPerfBaseline(){
+  return {
+    startedAtMs: Date.now(),
+    samples: 0,
+    cpuPctCore: { min: Infinity, max: -Infinity, sum: 0, count: 0 },
+    rssMb: { min: Infinity, max: -Infinity, sum: 0, count: 0 },
+    schedDelayMsPerSec: { min: Infinity, max: -Infinity, sum: 0, count: 0 },
+    ctxPerSec: { min: Infinity, max: -Infinity, sum: 0, count: 0 },
+    ethRxMbps: { min: Infinity, max: -Infinity, sum: 0, count: 0 },
+    ethTxMbps: { min: Infinity, max: -Infinity, sum: 0, count: 0 },
+    ethRxPps: { min: Infinity, max: -Infinity, sum: 0, count: 0 },
+    xdmaIrqPerSec: { min: Infinity, max: -Infinity, sum: 0, count: 0 },
+  };
+}
+function baselinePush(bucket, value){
+  if (!Number.isFinite(value)) return;
+  bucket.min = Math.min(bucket.min, value);
+  bucket.max = Math.max(bucket.max, value);
+  bucket.sum += value;
+  bucket.count += 1;
+}
+function baselineFmt(bucket, unit=''){
+  if (!bucket || !bucket.count) return 'n/a';
+  const avg = bucket.sum / bucket.count;
+  return `min ${fmtNum(bucket.min)}${unit} | avg ${fmtNum(avg)}${unit} | max ${fmtNum(bucket.max)}${unit}`;
+}
+function bucketAvg(bucket){
+  return (bucket && bucket.count) ? (bucket.sum / bucket.count) : NaN;
+}
+function fmtNum(v, digits=1){
+  return Number.isFinite(v) ? Number(v).toFixed(digits) : 'n/a';
+}
+function fmtInt(v){
+  return Number.isFinite(v) ? String(Math.round(v)) : 'n/a';
+}
+function fmtBytes(v){
+  const n = Number(v);
+  if (!Number.isFinite(n) || n < 0) return 'n/a';
+  const units = ['B','KiB','MiB','GiB'];
+  let x = n, i = 0;
+  while (x >= 1024 && i < units.length - 1){ x /= 1024; i += 1; }
+  return `${x.toFixed(i ? 1 : 0)} ${units[i]}`;
+}
+function perfCounters(perf){
+  const p = (perf && perf.process) || {};
+  const stat = p.stat || {};
+  const st = p.status || {};
+  const io = p.io || {};
+  const sched = p.schedstat || {};
+  const eth0 = perf?.network?.eth0 || {};
+  const eth0Rx = eth0.rx || {};
+  const eth0Tx = eth0.tx || {};
+  const xdma = perf?.xdma || {};
+  return {
+    tsMs: Number(perf?.collected_at_ms) || Date.now(),
+    pid: Number(p.pid) || 0,
+    cpuCount: Number(perf?.system?.cpu_count) || 1,
+    sysTotal: Number(perf?.system?.cpu?.total_ticks) || 0,
+    procCpu: (Number(stat.utime_ticks) || 0) + (Number(stat.stime_ticks) || 0),
+    rssBytes: Number(stat.rss_bytes || st.vmrss_bytes) || 0,
+    vctx: Number(st.voluntary_ctxt_switches) || 0,
+    nvctx: Number(st.nonvoluntary_ctxt_switches) || 0,
+    readBytes: Number(io.read_bytes) || 0,
+    writeBytes: Number(io.write_bytes) || 0,
+    runDelayNs: Number(sched.run_delay_ns) || 0,
+    runtimeNs: Number(sched.runtime_ns) || 0,
+    minflt: Number(stat.minflt) || 0,
+    majflt: Number(stat.majflt) || 0,
+    threads: Number(stat.num_threads || st.threads) || 0,
+    fdCount: Number(p.fd_count) || 0,
+    state: String(stat.state || '?'),
+    exe: p.exe || null,
+    eth0Present: !!eth0.present,
+    eth0RxBytes: Number(eth0Rx.bytes) || 0,
+    eth0TxBytes: Number(eth0Tx.bytes) || 0,
+    eth0RxPackets: Number(eth0Rx.packets) || 0,
+    eth0TxPackets: Number(eth0Tx.packets) || 0,
+    eth0RxErrs: Number(eth0Rx.errs) || 0,
+    eth0RxDrop: Number(eth0Rx.drop) || 0,
+    eth0TxErrs: Number(eth0Tx.errs) || 0,
+    eth0TxDrop: Number(eth0Tx.drop) || 0,
+    xdmaPresent: !!xdma.present,
+    xdmaInterruptsTotal: Number(xdma.interrupts_total) || 0,
+    xdmaPcieLinkSpeed: xdma?.pcie?.current_link_speed || null,
+    xdmaPcieLinkWidth: xdma?.pcie?.current_link_width || null,
+  };
+}
+function derivePerf(current){
+  if (!current || !current.process) return null;
+  const c = perfCounters(current);
+  let dtSec = NaN;
+  let cpuPctCore = NaN;
+  let cpuPctTotal = NaN;
+  let schedDelayMsPerSec = NaN;
+  let ctxPerSec = NaN;
+  let readKBs = NaN;
+  let writeKBs = NaN;
+  let minfltPerSec = NaN;
+  let majfltPerSec = NaN;
+  let runtimeMsPerSec = NaN;
+  let ethRxMbps = NaN;
+  let ethTxMbps = NaN;
+  let ethRxPps = NaN;
+  let ethTxPps = NaN;
+  let xdmaIrqPerSec = NaN;
+  let ethRxErrDelta = NaN;
+  let ethRxDropDelta = NaN;
+  let ethTxErrDelta = NaN;
+  let ethTxDropDelta = NaN;
+  if (perfPrevSample && perfPrevSample.pid === c.pid && c.tsMs > perfPrevSample.tsMs){
+    dtSec = (c.tsMs - perfPrevSample.tsMs) / 1000;
+    const dSys = c.sysTotal - perfPrevSample.sysTotal;
+    const dProc = c.procCpu - perfPrevSample.procCpu;
+    if (dSys > 0){
+      cpuPctTotal = (dProc / dSys) * 100;
+      cpuPctCore = cpuPctTotal * Math.max(1, c.cpuCount);
+    }
+    if (dtSec > 0){
+      schedDelayMsPerSec = ((c.runDelayNs - perfPrevSample.runDelayNs) / 1e6) / dtSec;
+      ctxPerSec = (((c.vctx + c.nvctx) - (perfPrevSample.vctx + perfPrevSample.nvctx))) / dtSec;
+      readKBs = ((c.readBytes - perfPrevSample.readBytes) / 1024) / dtSec;
+      writeKBs = ((c.writeBytes - perfPrevSample.writeBytes) / 1024) / dtSec;
+      minfltPerSec = ((c.minflt - perfPrevSample.minflt)) / dtSec;
+      majfltPerSec = ((c.majflt - perfPrevSample.majflt)) / dtSec;
+      runtimeMsPerSec = ((c.runtimeNs - perfPrevSample.runtimeNs) / 1e6) / dtSec;
+      if (c.eth0Present && perfPrevSample.eth0Present){
+        ethRxMbps = (((c.eth0RxBytes - perfPrevSample.eth0RxBytes) * 8) / 1_000_000) / dtSec;
+        ethTxMbps = (((c.eth0TxBytes - perfPrevSample.eth0TxBytes) * 8) / 1_000_000) / dtSec;
+        ethRxPps = ((c.eth0RxPackets - perfPrevSample.eth0RxPackets)) / dtSec;
+        ethTxPps = ((c.eth0TxPackets - perfPrevSample.eth0TxPackets)) / dtSec;
+        ethRxErrDelta = (c.eth0RxErrs - perfPrevSample.eth0RxErrs);
+        ethRxDropDelta = (c.eth0RxDrop - perfPrevSample.eth0RxDrop);
+        ethTxErrDelta = (c.eth0TxErrs - perfPrevSample.eth0TxErrs);
+        ethTxDropDelta = (c.eth0TxDrop - perfPrevSample.eth0TxDrop);
+      }
+      if (c.xdmaPresent && perfPrevSample.xdmaPresent){
+        xdmaIrqPerSec = ((c.xdmaInterruptsTotal - perfPrevSample.xdmaInterruptsTotal)) / dtSec;
+      }
+    }
+  }
+  perfPrevSample = c;
+  const rssMb = c.rssBytes / (1024 * 1024);
+  return {
+    ...c,
+    dtSec,
+    rssMb,
+    cpuPctCore,
+    cpuPctTotal,
+    schedDelayMsPerSec,
+    ctxPerSec,
+    readKBs,
+    writeKBs,
+    minfltPerSec,
+    majfltPerSec,
+    runtimeMsPerSec,
+    ethRxMbps,
+    ethTxMbps,
+    ethRxPps,
+    ethTxPps,
+    xdmaIrqPerSec,
+    ethRxErrDelta,
+    ethRxDropDelta,
+    ethTxErrDelta,
+    ethTxDropDelta,
+    memAvailBytes: Number(current?.system?.memory?.available_bytes) || NaN,
+    memTotalBytes: Number(current?.system?.memory?.total_bytes) || NaN,
+    load1: Number(current?.system?.loadavg?.one),
+    load5: Number(current?.system?.loadavg?.five),
+    load15: Number(current?.system?.loadavg?.fifteen),
+    xdmaInterruptLines: Array.isArray(current?.xdma?.interrupt_lines) ? current.xdma.interrupt_lines : [],
+  };
+}
+function perfSeverityMax(a, b){
+  const rank = { ok:0, warn:1, crit:2 };
+  return (rank[b] || 0) > (rank[a] || 0) ? b : a;
+}
+function computePerfAlerts(d, baseline){
+  const alerts = [];
+  let level = 'ok';
+  if (Number.isFinite(d.schedDelayMsPerSec)){
+    if (d.schedDelayMsPerSec >= PERF_THRESH.schedWaitCrit){
+      alerts.push(`CRIT scheduler wait ${fmtNum(d.schedDelayMsPerSec)} ms/s`);
+      level = perfSeverityMax(level, 'crit');
+    } else if (d.schedDelayMsPerSec >= PERF_THRESH.schedWaitWarn){
+      alerts.push(`WARN scheduler wait ${fmtNum(d.schedDelayMsPerSec)} ms/s`);
+      level = perfSeverityMax(level, 'warn');
+    }
+  }
+  if (Number.isFinite(d.cpuPctCore)){
+    if (d.cpuPctCore >= PERF_THRESH.cpuCoreCrit){
+      alerts.push(`CRIT CPU ${fmtNum(d.cpuPctCore)}% per-core`);
+      level = perfSeverityMax(level, 'crit');
+    } else if (d.cpuPctCore >= PERF_THRESH.cpuCoreWarn){
+      alerts.push(`WARN CPU ${fmtNum(d.cpuPctCore)}% per-core`);
+      level = perfSeverityMax(level, 'warn');
+    }
+  }
+  if (baseline && baseline.xdmaIrqPerSec && baseline.xdmaIrqPerSec.count >= PERF_THRESH.xdmaBaselineMinSamples && Number.isFinite(d.xdmaIrqPerSec)){
+    const avg = bucketAvg(baseline.xdmaIrqPerSec);
+    if (Number.isFinite(avg) && avg > 0){
+      const ratio = d.xdmaIrqPerSec / avg;
+      if (ratio >= PERF_THRESH.xdmaSpikeCritRatio){
+        alerts.push(`CRIT XDMA IRQ spike ${fmtNum(d.xdmaIrqPerSec)}/s (${fmtNum(ratio,2)}x baseline avg)`);
+        level = perfSeverityMax(level, 'crit');
+      } else if (ratio >= PERF_THRESH.xdmaSpikeWarnRatio){
+        alerts.push(`WARN XDMA IRQ spike ${fmtNum(d.xdmaIrqPerSec)}/s (${fmtNum(ratio,2)}x baseline avg)`);
+        level = perfSeverityMax(level, 'warn');
+      } else if (ratio <= PERF_THRESH.xdmaDropCritRatio){
+        alerts.push(`CRIT XDMA IRQ drop ${fmtNum(d.xdmaIrqPerSec)}/s (${fmtNum(ratio,2)}x baseline avg)`);
+        level = perfSeverityMax(level, 'crit');
+      } else if (ratio <= PERF_THRESH.xdmaDropWarnRatio){
+        alerts.push(`WARN XDMA IRQ drop ${fmtNum(d.xdmaIrqPerSec)}/s (${fmtNum(ratio,2)}x baseline avg)`);
+        level = perfSeverityMax(level, 'warn');
+      }
+    }
+  }
+  return { level, alerts };
+}
+async function loadP23Perf(){
+  try{
+    const r = await fetch('./p23_perf', { cache:'no-store' });
+    const data = await r.json().catch(()=>({}));
+    if (!r.ok) throw new Error(data.message || ('HTTP ' + r.status));
+    const perf = data.perf || {};
+    if (!perf.process){
+      perfPrevSample = null;
+      setPerfSummary('p2app.service main process is not running.', true);
+      setPerfViewText(JSON.stringify({ perf }, null, 2));
+      return;
+    }
+    if (!perfBaseline) perfBaseline = newPerfBaseline();
+    const d = derivePerf(perf);
+    const alertState = computePerfAlerts(d, perfBaseline);
+    baselinePush(perfBaseline.cpuPctCore, d.cpuPctCore);
+    baselinePush(perfBaseline.rssMb, d.rssMb);
+    baselinePush(perfBaseline.schedDelayMsPerSec, d.schedDelayMsPerSec);
+    baselinePush(perfBaseline.ctxPerSec, d.ctxPerSec);
+    baselinePush(perfBaseline.ethRxMbps, d.ethRxMbps);
+    baselinePush(perfBaseline.ethTxMbps, d.ethTxMbps);
+    baselinePush(perfBaseline.ethRxPps, d.ethRxPps);
+    baselinePush(perfBaseline.xdmaIrqPerSec, d.xdmaIrqPerSec);
+    perfBaseline.samples += 1;
+    const memPct = Number.isFinite(d.memAvailBytes) && Number.isFinite(d.memTotalBytes) && d.memTotalBytes > 0
+      ? ((d.memTotalBytes - d.memAvailBytes) / d.memTotalBytes) * 100
+      : NaN;
+    const summaryPrefix = alertState.level === 'crit' ? '[CRIT] ' : (alertState.level === 'warn' ? '[WARN] ' : '');
+    setPerfSummary(
+      `${summaryPrefix}PID ${d.pid} | CPU ${fmtNum(d.cpuPctCore)}% | Sched wait ${fmtNum(d.schedDelayMsPerSec)} ms/s | eth0 RX ${fmtNum(d.ethRxMbps)} Mb/s | XDMA IRQ ${fmtNum(d.xdmaIrqPerSec)} /s`
+    );
+    setPerfAlertVisual(alertState.level);
+    const baselineAgeSec = (Date.now() - perfBaseline.startedAtMs) / 1000;
+    const view = [
+      `Current`,
+      `  PID: ${d.pid}  State: ${d.state}  Threads: ${fmtInt(d.threads)}  FDs: ${fmtInt(d.fdCount)}`,
+      `  CPU (per-core): ${fmtNum(d.cpuPctCore)} %`,
+      `  CPU (total-capacity): ${fmtNum(d.cpuPctTotal)} %`,
+      `  Scheduler wait: ${fmtNum(d.schedDelayMsPerSec)} ms/s  (higher can indicate run-queue stalls)`,
+      `  Runtime on CPU: ${fmtNum(d.runtimeMsPerSec)} ms/s`,
+      `  RSS: ${fmtNum(d.rssMb)} MiB`,
+      `  I/O: read ${fmtNum(d.readKBs)} KiB/s | write ${fmtNum(d.writeKBs)} KiB/s`,
+      `  Faults: minor ${fmtNum(d.minfltPerSec)} /s | major ${fmtNum(d.majfltPerSec)} /s`,
+      `  System: load ${fmtNum(d.load1)}/${fmtNum(d.load5)}/${fmtNum(d.load15)} | mem used ${fmtNum(memPct)}%`,
+      `  eth0: RX ${fmtNum(d.ethRxMbps)} Mb/s (${fmtNum(d.ethRxPps)} pkt/s) | TX ${fmtNum(d.ethTxMbps)} Mb/s (${fmtNum(d.ethTxPps)} pkt/s)`,
+      `  eth0 errors/drops (delta): rx err ${fmtInt(d.ethRxErrDelta)} drop ${fmtInt(d.ethRxDropDelta)} | tx err ${fmtInt(d.ethTxErrDelta)} drop ${fmtInt(d.ethTxDropDelta)}`,
+      `  XDMA IRQ: ${fmtNum(d.xdmaIrqPerSec)} /s | PCIe link ${d.xdmaPcieLinkSpeed || 'n/a'} x${d.xdmaPcieLinkWidth || 'n/a'}`,
+      `  Alerts: ${alertState.alerts.length ? alertState.alerts.join(' | ') : 'none'}`,
+      '',
+      `Baseline (${fmtInt(perfBaseline.samples)} samples, ${fmtNum(baselineAgeSec)} s)`,
+      `  CPU (per-core): ${baselineFmt(perfBaseline.cpuPctCore, '%')}`,
+      `  RSS: ${baselineFmt(perfBaseline.rssMb, ' MiB')}`,
+      `  Scheduler wait: ${baselineFmt(perfBaseline.schedDelayMsPerSec, ' ms/s')}`,
+      `  Context switches: ${baselineFmt(perfBaseline.ctxPerSec, ' /s')}`,
+      `  eth0 RX throughput: ${baselineFmt(perfBaseline.ethRxMbps, ' Mb/s')}`,
+      `  eth0 TX throughput: ${baselineFmt(perfBaseline.ethTxMbps, ' Mb/s')}`,
+      `  eth0 RX packet rate: ${baselineFmt(perfBaseline.ethRxPps, ' pkt/s')}`,
+      `  XDMA interrupt rate: ${baselineFmt(perfBaseline.xdmaIrqPerSec, ' /s')}`,
+      `  XDMA IRQ lines: ${d.xdmaInterruptLines.map(x => `${x.irq}:${x.count}`).join(', ') || 'n/a'}`,
+      '',
+      `Raw snapshot (for diffing/export)`,
+      JSON.stringify({ perf }, null, 2),
+    ].join('\n');
+    setPerfViewText(view);
+  }catch(e){
+    setPerfSummary('Failed to load P2/P3 performance metrics: ' + e.message, true);
+    setPerfAlertVisual('crit');
+  }
+}
+function ensurePerfPoll(){
+  if (!perfPollTimer){
+    perfPollTimer = setInterval(()=>{ loadP23Perf(); }, 2000);
+  }
+}
+function resetPerfBaseline(){
+  perfBaseline = newPerfBaseline();
+  perfPrevSample = null;
+  setPerfSummary('Performance baseline reset. Waiting for samples...', false);
+  setPerfAlertVisual('ok');
 }
 function collectOptionFlags(baseFlags){
   const flags = [];
@@ -344,6 +696,7 @@ async function runAction(baseFlags){
     setButtonsDisabled(false);
     setTimeout(fetchRunLog, 250);
     setTimeout(loadP23Status, 500);
+    setTimeout(loadP23Perf, 700);
     setTimeout(loadP23Status, 5000);
     setTimeout(()=>$('p23-progress').classList.add('hidden'), 1200);
   }
@@ -368,6 +721,8 @@ $('p23-clear').addEventListener('click', ()=>{
   $('p23-progress').classList.add('hidden');
 });
 $('p23-status-refresh').addEventListener('click', ()=>{ loadP23Status(); });
+$('p23-perf-refresh').addEventListener('click', ()=>{ loadP23Perf(); });
+$('p23-perf-reset').addEventListener('click', ()=>{ resetPerfBaseline(); loadP23Perf(); });
 $('p23-emergency-revert').addEventListener('click', ()=>{
   if (!confirm('EMERGENCY REVERT?\n\nThis removes the P2/P3 override and restarts p2app.service.')) return;
   runEmergencyRevert();
@@ -382,8 +737,12 @@ document.querySelectorAll('.p23-action').forEach((btn)=>{
 
 restoreState();
 $('p23-status-view').textContent = sessionStorage.getItem(STATUS_KEY) || '';
+$('p23-perf-view').textContent = sessionStorage.getItem(PERF_VIEW_KEY) || '';
+resetPerfBaseline();
 loadP23Status();
+loadP23Perf();
 ensureStatusPoll();
+ensurePerfPoll();
 fetchRunLog();
 </script>
 </body>

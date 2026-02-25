@@ -103,6 +103,7 @@ Script definitions come from `config.json` plus browser-managed custom entries i
 - Set Saturn Go self-update policy: `POST /saturngo_policy`
 - Get Saturn Go deploy status: `GET /saturngo_deploy_status`
 - Get P2/P3 test-lab status (service/source/deploy/symlink/override): `GET /p23_status`
+- Get P2/P3 test-lab performance snapshot (process + network + XDMA/PCIe counters): `GET /p23_perf`
 - Start transactional update: `POST /update_start` with JSON `{ "channel":"stable|beta|custom", "custom_ref":"..." }`
 - Get update status + last state: `GET /update_status`
 - Roll back to previous repo root: `POST /update_rollback`
@@ -188,6 +189,11 @@ If a script entry does not define `version`, `/get_versions` now returns
   - reverting to the original unit `ExecStart`
 - Uses `/opt/saturn-go/scripts/p23-app-manager.sh` via `/run`.
 - Status panel polls `GET /p23_status`.
+- Performance panel polls `GET /p23_perf` and computes client-side delta/baseline metrics for:
+  - `p2app.service` main process CPU/RSS/scheduler wait/context switches/page faults
+  - `eth0` throughput/packet rate/errors+drops
+  - XDMA interrupt rate (`/proc/interrupts`) and PCIe link speed/width (`/sys/class/xdma/...`)
+- Performance panel includes threshold highlighting/alerts for CPU, scheduler wait, and XDMA interrupt spikes/drops versus baseline.
 - Switch/deploy actions now support startup profiles (`panel`, `panel-debug`, `headless`) and front-panel mode overrides (`auto`, `g2`, `g2v2`, `prefer-g2`, `prefer-g2v2`, `off`), written as `SATURN_FRONT_PANEL_MODE` in the systemd drop-in.
 - `/p23test` includes an `Emergency Revert Now` button for fast recovery if a switch leaves the local UI unusable.
 - Intended for local testing; it is not linked from the main navigation.

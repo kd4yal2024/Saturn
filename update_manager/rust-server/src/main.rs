@@ -240,6 +240,7 @@ async fn main() {
         .route("/saturngo_policy", post(set_saturngo_policy))
         .route("/saturngo_deploy_status", get(get_saturngo_deploy_status))
         .route("/p23_status", get(get_p23_status))
+        .route("/p23_perf", get(get_p23_perf))
         .route("/update_start", post(update_start))
         .route("/update_status", get(update_status))
         .route("/update_rollback", post(update_rollback))
@@ -1913,6 +1914,441 @@ async fn get_p23_status(State(state): State<AppState>) -> Response {
                 "saturn_meta": override_saturn_metadata,
                 "contents": override_contents,
             }
+        }
+    }))
+    .into_response()
+}
+
+async fn get_p23_perf(State(_state): State<AppState>) -> Response {
+    fn parse_system_cpu() -> Option<(u64, u64, u64)> {
+        let raw = fs::read_to_string("/proc/stat").ok()?;
+        let line = raw.lines().find(|l| l.starts_with("cpu "))?;
+        let mut nums = line
+            .split_whitespace()
+            .skip(1)
+            .filter_map(|s| s.parse::<u64>().ok());
+        let user = nums.next()?;
+        let nice = nums.next()?;
+        let system = nums.next()?;
+        let idle = nums.next()?;
+        let iowait = nums.next().unwrap_or(0);
+        let irq = nums.next().unwrap_or(0);
+        let softirq = nums.next().unwrap_or(0);
+        let steal = nums.next().unwrap_or(0);
+        let guest = nums.next().unwrap_or(0);
+        let guest_nice = nums.next().unwrap_or(0);
+        let total =
+            user + nice + system + idle + iowait + irq + softirq + steal + guest + guest_nice;
+        Some((total, idle, iowait))
+    }
+
+    fn parse_meminfo() -> (Option<u64>, Option<u64>) {
+        let raw = match fs::read_to_string("/proc/meminfo") {
+            Ok(v) => v,
+            Err(_) => return (None, None),
+        };
+        let mut total = None::<u64>;
+        let mut avail = None::<u64>;
+        for line in raw.lines() {
+            if let Some(v) = line.strip_prefix("MemTotal:") {
+                total = v
+                    .split_whitespace()
+                    .next()
+                    .and_then(|s| s.parse::<u64>().ok())
+                    .map(|kb| kb * 1024);
+            } else if let Some(v) = line.strip_prefix("MemAvailable:") {
+                avail = v
+                    .split_whitespace()
+                    .next()
+                    .and_then(|s| s.parse::<u64>().ok())
+                    .map(|kb| kb * 1024);
+            }
+        }
+        (total, avail)
+    }
+
+    fn parse_loadavg() -> (Option<f64>, Option<f64>, Option<f64>) {
+        let raw = match fs::read_to_string("/proc/loadavg") {
+            Ok(v) => v,
+            Err(_) => return (None, None, None),
+        };
+        let mut it = raw.split_whitespace();
+        let one = it.next().and_then(|s| s.parse::<f64>().ok());
+        let five = it.next().and_then(|s| s.parse::<f64>().ok());
+        let fifteen = it.next().and_then(|s| s.parse::<f64>().ok());
+        (one, five, fifteen)
+    }
+
+    fn parse_netdev_interface(name: &str) -> serde_json::Value {
+        let raw = match fs::read_to_string("/proc/net/dev") {
+            Ok(v) => v,
+            Err(_) => {
+                return serde_json::json!({
+                    "name": name,
+                    "present": false,
+                })
+            }
+        };
+        for line in raw.lines().skip(2) {
+            let (iface_raw, stats_raw) = match line.split_once(':') {
+                Some(v) => v,
+                None => continue,
+            };
+            let iface = iface_raw.trim();
+            if iface != name {
+                continue;
+            }
+            let nums: Vec<u64> = stats_raw
+                .split_whitespace()
+                .filter_map(|s| s.parse::<u64>().ok())
+                .collect();
+            if nums.len() < 16 {
+                return serde_json::json!({
+                    "name": name,
+                    "present": true,
+                    "parse_error": true,
+                });
+            }
+            return serde_json::json!({
+                "name": name,
+                "present": true,
+                "rx": {
+                    "bytes": nums[0],
+                    "packets": nums[1],
+                    "errs": nums[2],
+                    "drop": nums[3],
+                    "fifo": nums[4],
+                    "frame": nums[5],
+                    "compressed": nums[6],
+                    "multicast": nums[7],
+                },
+                "tx": {
+                    "bytes": nums[8],
+                    "packets": nums[9],
+                    "errs": nums[10],
+                    "drop": nums[11],
+                    "fifo": nums[12],
+                    "colls": nums[13],
+                    "carrier": nums[14],
+                    "compressed": nums[15],
+                }
+            });
+        }
+        serde_json::json!({
+            "name": name,
+            "present": false,
+        })
+    }
+
+    fn read_trimmed(path: &str) -> Option<String> {
+        fs::read_to_string(path).ok().map(|s| s.trim().to_string())
+    }
+
+    fn parse_xdma_interrupts() -> serde_json::Value {
+        let raw = match fs::read_to_string("/proc/interrupts") {
+            Ok(v) => v,
+            Err(_) => return serde_json::json!({ "present": false }),
+        };
+
+        let mut lines_json = Vec::<serde_json::Value>::new();
+        let mut total_count: u64 = 0;
+        let mut found = false;
+
+        for line in raw.lines() {
+            if !line.to_ascii_lowercase().contains("xdma") {
+                continue;
+            }
+            let (irq, rest) = match line.split_once(':') {
+                Some(v) => v,
+                None => continue,
+            };
+            let mut line_count: u64 = 0;
+            for tok in rest.split_whitespace() {
+                match tok.parse::<u64>() {
+                    Ok(v) => line_count = line_count.saturating_add(v),
+                    Err(_) => break,
+                }
+            }
+            total_count = total_count.saturating_add(line_count);
+            found = true;
+            lines_json.push(serde_json::json!({
+                "irq": irq.trim(),
+                "count": line_count,
+                "raw": line.trim(),
+            }));
+        }
+
+        let pcie_speed = read_trimmed("/sys/class/xdma/xdma0_control/device/current_link_speed")
+            .or_else(|| read_trimmed("/sys/class/xdma/xdma0_h2c_0/device/current_link_speed"));
+        let pcie_width = read_trimmed("/sys/class/xdma/xdma0_control/device/current_link_width")
+            .or_else(|| read_trimmed("/sys/class/xdma/xdma0_h2c_0/device/current_link_width"));
+
+        serde_json::json!({
+            "present": found || pcie_speed.is_some() || pcie_width.is_some(),
+            "interrupts_total": if found { Some(total_count) } else { None::<u64> },
+            "interrupt_lines": lines_json,
+            "pcie": {
+                "current_link_speed": pcie_speed,
+                "current_link_width": pcie_width,
+            }
+        })
+    }
+
+    fn parse_proc_status(pid: u32) -> serde_json::Value {
+        let path = format!("/proc/{pid}/status");
+        let raw = match fs::read_to_string(path) {
+            Ok(v) => v,
+            Err(_) => return serde_json::json!({}),
+        };
+        let mut vmrss = None::<u64>;
+        let mut threads = None::<u64>;
+        let mut vctx = None::<u64>;
+        let mut nvctx = None::<u64>;
+        for line in raw.lines() {
+            if let Some(v) = line.strip_prefix("VmRSS:") {
+                vmrss = v
+                    .split_whitespace()
+                    .next()
+                    .and_then(|s| s.parse::<u64>().ok())
+                    .map(|kb| kb * 1024);
+            } else if let Some(v) = line.strip_prefix("Threads:") {
+                threads = v
+                    .split_whitespace()
+                    .next()
+                    .and_then(|s| s.parse::<u64>().ok());
+            } else if let Some(v) = line.strip_prefix("voluntary_ctxt_switches:") {
+                vctx = v
+                    .split_whitespace()
+                    .next()
+                    .and_then(|s| s.parse::<u64>().ok());
+            } else if let Some(v) = line.strip_prefix("nonvoluntary_ctxt_switches:") {
+                nvctx = v
+                    .split_whitespace()
+                    .next()
+                    .and_then(|s| s.parse::<u64>().ok());
+            }
+        }
+        serde_json::json!({
+            "vmrss_bytes": vmrss,
+            "threads": threads,
+            "voluntary_ctxt_switches": vctx,
+            "nonvoluntary_ctxt_switches": nvctx,
+        })
+    }
+
+    fn parse_proc_io(pid: u32) -> serde_json::Value {
+        let path = format!("/proc/{pid}/io");
+        let raw = match fs::read_to_string(path) {
+            Ok(v) => v,
+            Err(_) => return serde_json::json!({}),
+        };
+        let mut read_bytes = None::<u64>;
+        let mut write_bytes = None::<u64>;
+        let mut cancelled_write_bytes = None::<u64>;
+        for line in raw.lines() {
+            if let Some(v) = line.strip_prefix("read_bytes:") {
+                read_bytes = v
+                    .split_whitespace()
+                    .next()
+                    .and_then(|s| s.parse::<u64>().ok());
+            } else if let Some(v) = line.strip_prefix("write_bytes:") {
+                write_bytes = v
+                    .split_whitespace()
+                    .next()
+                    .and_then(|s| s.parse::<u64>().ok());
+            } else if let Some(v) = line.strip_prefix("cancelled_write_bytes:") {
+                cancelled_write_bytes = v
+                    .split_whitespace()
+                    .next()
+                    .and_then(|s| s.parse::<u64>().ok());
+            }
+        }
+        serde_json::json!({
+            "read_bytes": read_bytes,
+            "write_bytes": write_bytes,
+            "cancelled_write_bytes": cancelled_write_bytes,
+        })
+    }
+
+    fn parse_proc_schedstat(pid: u32) -> serde_json::Value {
+        let path = format!("/proc/{pid}/schedstat");
+        let raw = match fs::read_to_string(path) {
+            Ok(v) => v,
+            Err(_) => return serde_json::json!({}),
+        };
+        let mut it = raw.split_whitespace();
+        let runtime_ns = it.next().and_then(|s| s.parse::<u64>().ok());
+        let run_delay_ns = it.next().and_then(|s| s.parse::<u64>().ok());
+        let timeslices = it.next().and_then(|s| s.parse::<u64>().ok());
+        serde_json::json!({
+            "runtime_ns": runtime_ns,
+            "run_delay_ns": run_delay_ns,
+            "timeslices": timeslices,
+        })
+    }
+
+    fn parse_proc_stat(pid: u32, page_size: u64) -> serde_json::Value {
+        let path = format!("/proc/{pid}/stat");
+        let raw = match fs::read_to_string(path) {
+            Ok(v) => v,
+            Err(_) => return serde_json::json!({}),
+        };
+        let l = match raw.find('(') {
+            Some(v) => v,
+            None => return serde_json::json!({}),
+        };
+        let r = match raw.rfind(')') {
+            Some(v) => v,
+            None => return serde_json::json!({}),
+        };
+        let comm = raw.get(l + 1..r).unwrap_or("").to_string();
+        let tail = raw.get(r + 2..).unwrap_or("");
+        let fields: Vec<&str> = tail.split_whitespace().collect();
+        if fields.len() < 22 {
+            return serde_json::json!({ "comm": comm });
+        }
+        let state = fields.first().copied().map(str::to_string);
+        let minflt = fields.get(7).and_then(|s| s.parse::<u64>().ok());
+        let majflt = fields.get(9).and_then(|s| s.parse::<u64>().ok());
+        let utime_ticks = fields.get(11).and_then(|s| s.parse::<u64>().ok());
+        let stime_ticks = fields.get(12).and_then(|s| s.parse::<u64>().ok());
+        let num_threads = fields.get(17).and_then(|s| s.parse::<u64>().ok());
+        let starttime_ticks = fields.get(19).and_then(|s| s.parse::<u64>().ok());
+        let vsize_bytes = fields.get(20).and_then(|s| s.parse::<u64>().ok());
+        let rss_pages = fields.get(21).and_then(|s| s.parse::<i64>().ok());
+        let rss_bytes = rss_pages.and_then(|p| {
+            if p < 0 {
+                None
+            } else {
+                Some((p as u64).saturating_mul(page_size))
+            }
+        });
+        serde_json::json!({
+            "comm": comm,
+            "state": state,
+            "minflt": minflt,
+            "majflt": majflt,
+            "utime_ticks": utime_ticks,
+            "stime_ticks": stime_ticks,
+            "num_threads": num_threads,
+            "starttime_ticks": starttime_ticks,
+            "vsize_bytes": vsize_bytes,
+            "rss_pages": rss_pages,
+            "rss_bytes": rss_bytes,
+        })
+    }
+
+    fn cmdline_for_pid(pid: u32) -> Option<Vec<String>> {
+        let bytes = fs::read(format!("/proc/{pid}/cmdline")).ok()?;
+        let mut parts = Vec::new();
+        for part in bytes.split(|b| *b == 0) {
+            if part.is_empty() {
+                continue;
+            }
+            parts.push(String::from_utf8_lossy(part).to_string());
+        }
+        Some(parts)
+    }
+
+    fn exe_for_pid(pid: u32) -> Option<String> {
+        fs::read_link(format!("/proc/{pid}/exe"))
+            .ok()
+            .map(|p| p.display().to_string())
+    }
+
+    fn fd_count_for_pid(pid: u32) -> Option<u64> {
+        let it = fs::read_dir(format!("/proc/{pid}/fd")).ok()?;
+        Some(it.filter_map(Result::ok).count() as u64)
+    }
+
+    fn page_size_bytes() -> u64 {
+        // Linux on Raspberry Pi uses 4 KiB pages; keep this lightweight and dependency-free.
+        4096
+    }
+
+    fn clock_ticks_per_sec() -> u64 {
+        // Linux procfs CPU accounting is typically USER_HZ=100 on Raspberry Pi.
+        100
+    }
+
+    async fn systemctl_value(args: &[&str]) -> Option<String> {
+        let out = Command::new("systemctl").args(args).output().await.ok()?;
+        if !out.status.success() {
+            return None;
+        }
+        let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        if s.is_empty() { None } else { Some(s) }
+    }
+
+    let service_name = "p2app.service";
+    let main_pid = systemctl_value(&["show", "-p", "MainPID", "--value", service_name])
+        .await
+        .and_then(|s| s.parse::<u32>().ok())
+        .filter(|v| *v > 0);
+
+    let cpu_count = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1);
+    let clk_tck = clock_ticks_per_sec();
+    let page_size = page_size_bytes();
+    let (cpu_total_ticks, cpu_idle_ticks, cpu_iowait_ticks) = parse_system_cpu().unwrap_or((0, 0, 0));
+    let (mem_total_bytes, mem_available_bytes) = parse_meminfo();
+    let (load_1, load_5, load_15) = parse_loadavg();
+
+    let process = main_pid.and_then(|pid| {
+        if !Path::new(&format!("/proc/{pid}")).exists() {
+            return None;
+        }
+        Some(serde_json::json!({
+            "pid": pid,
+            "exe": exe_for_pid(pid),
+            "cmdline": cmdline_for_pid(pid),
+            "fd_count": fd_count_for_pid(pid),
+            "stat": parse_proc_stat(pid, page_size),
+            "status": parse_proc_status(pid),
+            "io": parse_proc_io(pid),
+            "schedstat": parse_proc_schedstat(pid),
+        }))
+    });
+
+    let collected_at_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+
+    Json(serde_json::json!({
+        "status": "ok",
+        "perf": {
+            "collected_at_ms": collected_at_ms,
+            "service": {
+                "name": service_name,
+                "main_pid": main_pid,
+            },
+            "system": {
+                "cpu_count": cpu_count,
+                "clock_ticks_per_sec": clk_tck,
+                "page_size_bytes": page_size,
+                "cpu": {
+                    "total_ticks": cpu_total_ticks,
+                    "idle_ticks": cpu_idle_ticks,
+                    "iowait_ticks": cpu_iowait_ticks,
+                },
+                "memory": {
+                    "total_bytes": mem_total_bytes,
+                    "available_bytes": mem_available_bytes,
+                },
+                "loadavg": {
+                    "one": load_1,
+                    "five": load_5,
+                    "fifteen": load_15,
+                }
+            },
+            "network": {
+                "eth0": parse_netdev_interface("eth0"),
+                "wlan0": parse_netdev_interface("wlan0"),
+            },
+            "xdma": parse_xdma_interrupts(),
+            "process": process,
         }
     }))
     .into_response()
