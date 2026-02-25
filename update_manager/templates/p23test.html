@@ -1,0 +1,338 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>P2/P3 App Test Lab</title>
+  <script src="https://cdn.jsdelivr.net/npm/ansi_up@5.2.1/ansi_up.min.js"></script>
+  <style>
+    :root { color-scheme: dark; }
+    body { margin:0; font-family: ui-sans-serif, system-ui, sans-serif; background:#0b1220; color:#e5e7eb; }
+    .wrap { max-width: 1200px; margin: 0 auto; padding: 20px; }
+    .card { background: rgba(255,255,255,0.04); border:1px solid rgba(255,255,255,0.12); border-radius: 14px; padding: 16px; }
+    .grid { display:grid; grid-template-columns: 1.15fr .85fr; gap: 16px; }
+    .btn { border:1px solid rgba(255,255,255,0.18); background: rgba(255,255,255,0.06); color:#fff; border-radius:10px; padding:10px 12px; cursor:pointer; }
+    .btn:hover { background: rgba(255,255,255,0.1); }
+    .btn:disabled { opacity: .55; cursor: not-allowed; }
+    .btn.primary { background:#1d4ed8; border-color:#2563eb; }
+    .row { display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
+    .muted { color:#cbd5e1; opacity:.9; }
+    .term { min-height: 460px; max-height: 680px; overflow:auto; background:#060b14; border-radius:10px; padding:12px; border:1px solid rgba(255,255,255,0.08); font: 13px/1.35 ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .chip { display:inline-block; border-radius:999px; padding:3px 10px; border:1px solid rgba(255,255,255,0.18); font-size:12px; }
+    .list { display:grid; gap:8px; }
+    label { user-select: none; }
+    progress { width: 180px; height: 12px; }
+    .hidden { display:none; }
+    code { background: rgba(255,255,255,0.08); padding:2px 5px; border-radius:4px; }
+    @media (max-width: 960px) { .grid { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card" style="margin-bottom:16px;">
+      <div class="row" style="justify-content:space-between;">
+        <div>
+          <h1 style="margin:0 0 6px 0; font-size: 28px;">P2 / P3 App Test Lab</h1>
+          <div class="muted">Hidden test page for building, deploying, and switching <code>p2app.service</code> between <code>P2_app</code> and <code>P3_app</code>. Not linked in nav.</div>
+        </div>
+        <div class="chip">URL: /saturn/p23test</div>
+      </div>
+    </div>
+
+    <div class="grid">
+      <div class="card">
+        <div class="row" style="justify-content:space-between; margin-bottom:8px;">
+          <h2 style="margin:0; font-size: 20px;">Terminal</h2>
+          <div class="row">
+            <button id="p23-clear" class="btn">Clear</button>
+            <progress id="p23-progress" max="100" value="0" class="hidden"></progress>
+          </div>
+        </div>
+        <div class="muted" style="margin-bottom:10px;">
+          Runs <code>p23-app-manager.sh</code> via <code>/run</code> with live output.
+        </div>
+        <pre id="p23-output" class="term"></pre>
+      </div>
+
+      <div class="card">
+        <div class="row" style="justify-content:space-between; margin-bottom:8px;">
+          <h2 style="margin:0; font-size: 20px;">P2/P3 Status</h2>
+          <button id="p23-status-refresh" class="btn">Refresh</button>
+        </div>
+        <div id="p23-status-summary" class="muted" style="margin-bottom:10px;">Loading...</div>
+        <pre id="p23-status-view" class="term" style="min-height:180px; max-height:260px; margin-bottom:14px;"></pre>
+
+        <hr style="border:0; border-top:1px solid rgba(255,255,255,0.08); margin: 8px 0 14px 0;">
+
+        <h2 style="margin:0 0 10px 0; font-size: 20px;">Actions</h2>
+        <div class="list" style="margin-bottom:14px;">
+          <div class="row">
+            <button class="btn primary p23-action" data-flags="--status">Status</button>
+          </div>
+          <div class="row">
+            <button class="btn p23-action" data-flags="--build p2">Build P2</button>
+            <button class="btn p23-action" data-flags="--build p3">Build P3</button>
+          </div>
+          <div class="row">
+            <button class="btn p23-action" data-flags="--switch p2">Switch To P2</button>
+            <button class="btn p23-action" data-flags="--switch p3">Switch To P3</button>
+            <button class="btn p23-action" data-flags="--revert">Revert To Unit Default</button>
+          </div>
+          <div class="row">
+            <button class="btn primary p23-action" data-flags="--deploy p2">Deploy + Switch P2</button>
+            <button class="btn primary p23-action" data-flags="--deploy p3">Deploy + Switch P3</button>
+          </div>
+        </div>
+
+        <h3 style="margin:0 0 8px 0; font-size:16px;">Options</h3>
+        <div class="list" style="margin-bottom:12px;">
+          <label><input id="opt-verbose" type="checkbox" checked> Verbose output</label>
+          <label><input id="opt-dry-run" type="checkbox"> Dry run (no changes)</label>
+          <label><input id="opt-no-restart" type="checkbox"> No restart (update link/override only)</label>
+          <label><input id="opt-no-clean" type="checkbox"> No clean (skip <code>make clean</code>)</label>
+        </div>
+
+        <h3 style="margin:0 0 8px 0; font-size:16px;">Notes</h3>
+        <div class="muted" style="display:grid; gap:6px; font-size: 14px;">
+          <div>- Default service is <code>p2app.service</code>.</div>
+          <div>- Deploy installs binaries under <code>/opt/saturn-go/p23-apps/</code> and switches a <code>current</code> symlink.</div>
+          <div>- Service switching uses a systemd drop-in override (safer than editing the main unit file).</div>
+          <div>- Web mode requires working <code>sudo -n</code> permissions for install/restart steps.</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+<script>
+const ansi_up = new AnsiUp();
+ansi_up.use_classes = false;
+const $ = (id)=>document.getElementById(id);
+const SCRIPT_NAME = 'p23-app-manager.sh';
+const CSRF_HEADER_NAME = 'X-Saturn-CSRF';
+const CSRF_HEADER_VALUE = '1';
+const OUT_KEY = 'saturn:p23test:output';
+const RUN_ID_KEY = 'saturn:p23test:run-id';
+const RUN_NEXT_KEY = 'saturn:p23test:run-next';
+const STATUS_KEY = 'saturn:p23test:status-json';
+const OUT_MAX = 3500;
+let lines = [];
+let runId = '';
+let nextFrom = 0;
+let runInProgress = false;
+let pollTimer = null;
+let statusPollTimer = null;
+
+function withCsrf(h={}){ return { ...h, [CSRF_HEADER_NAME]: CSRF_HEADER_VALUE }; }
+function ansi(line){ return ansi_up.ansi_to_html(String(line ?? '')); }
+function saveState(){
+  try {
+    sessionStorage.setItem(OUT_KEY, JSON.stringify(lines));
+    sessionStorage.setItem(RUN_ID_KEY, runId || '');
+    sessionStorage.setItem(RUN_NEXT_KEY, String(nextFrom || 0));
+  } catch(_e) {}
+}
+function restoreState(){
+  try {
+    const raw = sessionStorage.getItem(OUT_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) lines = parsed.map(v=>String(v)).slice(-OUT_MAX);
+    }
+    runId = sessionStorage.getItem(RUN_ID_KEY) || '';
+    const n = Number(sessionStorage.getItem(RUN_NEXT_KEY) || lines.length);
+    nextFrom = Number.isFinite(n) && n >= 0 ? n : lines.length;
+  } catch(_e) {}
+  renderAll();
+}
+function renderAll(){
+  $('p23-output').innerHTML = lines.map(ansi).join('<br>') + (lines.length ? '<br>' : '');
+  $('p23-output').scrollTop = $('p23-output').scrollHeight;
+}
+function appendLine(line){
+  lines.push(String(line ?? ''));
+  if (lines.length > OUT_MAX) lines = lines.slice(-OUT_MAX);
+  const out = $('p23-output');
+  out.innerHTML += ansi(line) + '<br>';
+  out.scrollTop = out.scrollHeight;
+  nextFrom = lines.length;
+  saveState();
+}
+function resetOutput(){
+  lines = [];
+  runId = '';
+  nextFrom = 0;
+  $('p23-output').innerHTML = '';
+  saveState();
+}
+function setButtonsDisabled(disabled){
+  document.querySelectorAll('.p23-action').forEach((b)=> b.disabled = disabled);
+}
+function setStatusSummary(text, isError=false){
+  const el = $('p23-status-summary');
+  el.textContent = text || '';
+  el.style.color = isError ? '#fca5a5' : '';
+}
+function setStatusView(obj){
+  const text = JSON.stringify(obj || {}, null, 2);
+  $('p23-status-view').textContent = text;
+  try { sessionStorage.setItem(STATUS_KEY, text); } catch(_e) {}
+}
+function formatP23StatusSummary(p){
+  if (!p || typeof p !== 'object') return 'No status data.';
+  const svc = p.service || {};
+  const cur = (p.deployed || {}).current || {};
+  const src = p.sources || {};
+  const selected = cur.selected_app ? String(cur.selected_app).toUpperCase() : 'unknown';
+  const active = String(svc.active || 'unknown');
+  const enabled = String(svc.enabled || 'unknown');
+  const running = svc.running_exe ? `running ${svc.running_exe}` : 'no running exe path';
+  const p2Built = src.p2_bin && src.p2_bin.exists ? 'yes' : 'no';
+  const p3Built = src.p3_bin && src.p3_bin.exists ? 'yes' : 'no';
+  return `Selected: ${selected} | Service: ${active} (${enabled}) | Built P2: ${p2Built} | Built P3: ${p3Built} | ${running}`;
+}
+async function loadP23Status(){
+  try{
+    const r = await fetch('./p23_status', { cache:'no-store' });
+    const data = await r.json().catch(()=>({}));
+    if (!r.ok) throw new Error(data.message || ('HTTP ' + r.status));
+    const p = data.p23 || {};
+    setStatusSummary(formatP23StatusSummary(p), false);
+    setStatusView({ p23: p });
+  }catch(e){
+    setStatusSummary('Failed to load P2/P3 status: ' + e.message, true);
+  }
+}
+function ensureStatusPoll(){
+  if (!statusPollTimer){
+    statusPollTimer = setInterval(()=>{ loadP23Status(); }, 5000);
+  }
+}
+function collectOptionFlags(){
+  const flags = [];
+  if ($('opt-verbose').checked) flags.push('--verbose');
+  if ($('opt-dry-run').checked) flags.push('--dry-run');
+  if ($('opt-no-restart').checked) flags.push('--no-restart');
+  if ($('opt-no-clean').checked) flags.push('--no-clean');
+  return flags;
+}
+function clearPoll(){ if (pollTimer){ clearInterval(pollTimer); pollTimer = null; } }
+function ensurePoll(){ if (!pollTimer) pollTimer = setInterval(fetchRunLog, 1200); }
+
+async function fetchRunLog(){
+  if (runInProgress) return;
+  try{
+    const r = await fetch(`./run_log?script=${encodeURIComponent(SCRIPT_NAME)}&from=${Math.max(0,nextFrom)}&limit=500`, { cache:'no-store' });
+    if (!r.ok) return;
+    const data = await r.json().catch(()=>({}));
+    const rid = String(data.run_id || '');
+    if (!rid) { clearPoll(); return; }
+    if (runId && rid !== runId){
+      resetOutput();
+      runId = rid;
+      saveState();
+      return fetchRunLog();
+    }
+    if (!runId) { runId = rid; saveState(); }
+    const newLines = Array.isArray(data.lines) ? data.lines : [];
+    newLines.forEach(appendLine);
+    const n = Number(data.next_from);
+    if (Number.isFinite(n) && n >= 0){ nextFrom = n; saveState(); }
+    if (data.running) ensurePoll(); else clearPoll();
+  }catch(_e){}
+}
+
+async function runAction(baseFlags){
+  const isDryRun = $('opt-dry-run').checked;
+  const isSwitchLike = baseFlags.includes('--switch') || baseFlags.includes('--deploy') || baseFlags.includes('--revert');
+  if (isSwitchLike && !isDryRun){
+    const restartMsg = $('opt-no-restart').checked ? 'No restart is selected; the running service will not be restarted automatically.' : 'This will restart p2app.service.';
+    let prompt;
+    if (baseFlags.includes('--revert')){
+      prompt = `REVERT TO UNIT DEFAULT?\n\n${restartMsg}\n\nThis removes the Saturn P2/P3 systemd override and restores the original ExecStart from p2app.service.`;
+    } else {
+      const action = baseFlags.includes('--deploy') ? 'deploy + switch' : 'switch';
+      const app = baseFlags.includes('p3') ? 'P3' : (baseFlags.includes('p2') ? 'P2' : 'unknown');
+      prompt = `${action.toUpperCase()} ${app}?\n\n${restartMsg}\n\nThis changes the active radio app target used by p2app.service.`;
+    }
+    const ok = confirm(prompt);
+    if (!ok) return;
+  }
+
+  clearPoll();
+  resetOutput();
+  runInProgress = true;
+  setButtonsDisabled(true);
+  $('p23-progress').value = 0;
+  $('p23-progress').classList.remove('hidden');
+
+  const flags = [...baseFlags, ...collectOptionFlags()];
+  appendLine(`\x1b[36mRunning ${SCRIPT_NAME} ${flags.join(' ')}\x1b[0m`);
+
+  try{
+    const fd = new FormData();
+    fd.append('script', SCRIPT_NAME);
+    flags.forEach((f)=>fd.append('flags', f));
+    const res = await fetch('./run', {
+      method: 'POST',
+      body: fd,
+      headers: withCsrf({ 'Accept': 'text/event-stream' }),
+    });
+    if (!res.ok){
+      let msg = 'HTTP ' + res.status;
+      try {
+        const data = await res.json();
+        if (data && data.message) msg = data.message;
+      } catch(_e) {}
+      throw new Error(msg);
+    }
+    const reader = res.body.getReader();
+    const dec = new TextDecoder();
+    let buf = '';
+    while (true){
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      const chunks = buf.split('\n\n');
+      buf = chunks.pop() || '';
+      for (const c of chunks){
+        if (!c.startsWith('data: ')) continue;
+        const line = c.slice(6);
+        appendLine(line);
+        const m = line.match(/Progress:\s*(\d+)%/i);
+        if (m) $('p23-progress').value = parseInt(m[1], 10);
+      }
+    }
+  }catch(e){
+    appendLine(`\x1b[31mRun error: ${e.message}\x1b[0m`);
+  }finally{
+    runInProgress = false;
+    setButtonsDisabled(false);
+    setTimeout(fetchRunLog, 250);
+    setTimeout(loadP23Status, 500);
+    setTimeout(loadP23Status, 5000);
+    setTimeout(()=>$('p23-progress').classList.add('hidden'), 1200);
+  }
+}
+
+$('p23-clear').addEventListener('click', ()=>{
+  resetOutput();
+  $('p23-progress').value = 0;
+  $('p23-progress').classList.add('hidden');
+});
+$('p23-status-refresh').addEventListener('click', ()=>{ loadP23Status(); });
+
+document.querySelectorAll('.p23-action').forEach((btn)=>{
+  btn.addEventListener('click', ()=>{
+    const baseFlags = String(btn.dataset.flags || '').trim().split(/\s+/).filter(Boolean);
+    runAction(baseFlags);
+  });
+});
+
+restoreState();
+$('p23-status-view').textContent = sessionStorage.getItem(STATUS_KEY) || '';
+loadP23Status();
+ensureStatusPoll();
+fetchRunLog();
+</script>
+</body>
+</html>

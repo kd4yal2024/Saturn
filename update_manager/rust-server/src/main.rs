@@ -215,6 +215,8 @@ async fn main() {
         .route("/saturngo.html", get(saturngo_handler))
         .route("/saturn-go", get(saturngo_handler))
         .route("/saturn-go.html", get(saturngo_handler))
+        .route("/p23test", get(p23test_handler))
+        .route("/p23test.html", get(p23test_handler))
         .route("/fpga", get(fpga_handler))
         .route("/fpga.html", get(fpga_handler))
         .route("/pihpsdr", get(pihpsdr_handler))
@@ -237,6 +239,7 @@ async fn main() {
         .route("/saturngo_policy", get(get_saturngo_policy))
         .route("/saturngo_policy", post(set_saturngo_policy))
         .route("/saturngo_deploy_status", get(get_saturngo_deploy_status))
+        .route("/p23_status", get(get_p23_status))
         .route("/update_start", post(update_start))
         .route("/update_status", get(update_status))
         .route("/update_rollback", post(update_rollback))
@@ -323,6 +326,10 @@ async fn saturngo_handler(State(state): State<AppState>) -> impl IntoResponse {
     serve_page(&state.webroot, "saturngo.html").await
 }
 
+async fn p23test_handler(State(state): State<AppState>) -> impl IntoResponse {
+    serve_page(&state.webroot, "p23test.html").await
+}
+
 async fn fpga_handler(State(state): State<AppState>) -> impl IntoResponse {
     serve_page(&state.webroot, "fpga.html").await
 }
@@ -357,6 +364,10 @@ fn route_to_page(path: &str) -> Option<&'static str> {
         | "/saturn/saturngo" | "/saturn/saturngo/" | "/saturn/saturngo.html"
         | "/saturn/saturn-go" | "/saturn/saturn-go/" | "/saturn/saturn-go.html" => {
             Some("saturngo.html")
+        }
+        "/p23test" | "/p23test/" | "/p23test.html"
+        | "/saturn/p23test" | "/saturn/p23test/" | "/saturn/p23test.html" => {
+            Some("p23test.html")
         }
         "/fpga" | "/fpga/" | "/fpga.html" | "/saturn/fpga" | "/saturn/fpga/" | "/saturn/fpga.html" => {
             Some("fpga.html")
@@ -1744,6 +1755,137 @@ async fn get_saturngo_deploy_status(State(state): State<AppState>) -> Response {
         .into_response(),
         Err(e) => json_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
     }
+}
+
+async fn get_p23_status(State(state): State<AppState>) -> Response {
+    fn file_info(path: &Path) -> serde_json::Value {
+        match fs::metadata(path) {
+            Ok(meta) => {
+                let modified = meta
+                    .modified()
+                    .ok()
+                    .map(|t| chrono::DateTime::<Local>::from(t).to_rfc3339());
+                serde_json::json!({
+                    "path": path.display().to_string(),
+                    "exists": true,
+                    "is_file": meta.is_file(),
+                    "size_bytes": meta.len(),
+                    "modified": modified,
+                })
+            }
+            Err(_) => serde_json::json!({
+                "path": path.display().to_string(),
+                "exists": false,
+            }),
+        }
+    }
+
+    fn dir_info(path: &Path) -> serde_json::Value {
+        serde_json::json!({
+            "path": path.display().to_string(),
+            "exists": path.is_dir(),
+        })
+    }
+
+    async fn systemctl_text(args: &[&str]) -> String {
+        match Command::new("systemctl").args(args).output().await {
+            Ok(out) => {
+                let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                if !text.is_empty() {
+                    text
+                } else {
+                    output_error_text(&out)
+                }
+            }
+            Err(e) => format!("error: {e}"),
+        }
+    }
+
+    let repo_root = current_repo_root(&state);
+    let p2_dir = repo_root.join("sw_projects/P2_app");
+    let p3_dir = repo_root.join("sw_projects/P3_app");
+    let p2_bin = p2_dir.join("p2app");
+    let p3_bin = p3_dir.join("p3app");
+
+    let deploy_root = PathBuf::from("/opt/saturn-go/p23-apps");
+    let deploy_p2 = deploy_root.join("p2app");
+    let deploy_p3 = deploy_root.join("p3app");
+    let current_link = deploy_root.join("current");
+    let override_file = PathBuf::from("/etc/systemd/system/p2app.service.d/10-saturn-p23-switch.conf");
+    let service_name = "p2app.service";
+
+    let symlink_meta = fs::symlink_metadata(&current_link).ok();
+    let current_target = fs::read_link(&current_link)
+        .ok()
+        .map(|p| p.display().to_string());
+    let current_target_abs = fs::canonicalize(&current_link)
+        .ok()
+        .map(|p| p.display().to_string());
+    let selected_app = match current_target_abs.as_deref() {
+        Some(v) if v == deploy_p2.display().to_string() => Some("p2"),
+        Some(v) if v == deploy_p3.display().to_string() => Some("p3"),
+        _ => None,
+    };
+
+    let active = systemctl_text(&["is-active", service_name]).await;
+    let enabled = systemctl_text(&["is-enabled", service_name]).await;
+    let main_pid_text = systemctl_text(&["show", "-p", "MainPID", "--value", service_name]).await;
+    let main_pid = main_pid_text.trim().parse::<u32>().ok().filter(|v| *v > 0);
+    let running_exe = main_pid.and_then(|pid| {
+        fs::read_link(format!("/proc/{pid}/exe"))
+            .ok()
+            .map(|p| p.display().to_string())
+    });
+
+    let override_contents = fs::read_to_string(&override_file).ok();
+    let override_execstart = override_contents
+        .as_deref()
+        .and_then(|text| {
+            text.lines()
+                .map(str::trim)
+                .find(|line| line.starts_with("ExecStart=") && *line != "ExecStart=")
+                .map(|s| s.to_string())
+        });
+
+    Json(serde_json::json!({
+        "status": "ok",
+        "p23": {
+            "repo_root": repo_root.display().to_string(),
+            "service": {
+                "name": service_name,
+                "active": active,
+                "enabled": enabled,
+                "main_pid": main_pid,
+                "running_exe": running_exe,
+            },
+            "sources": {
+                "p2_dir": dir_info(&p2_dir),
+                "p3_dir": dir_info(&p3_dir),
+                "p2_bin": file_info(&p2_bin),
+                "p3_bin": file_info(&p3_bin),
+            },
+            "deployed": {
+                "deploy_root": dir_info(&deploy_root),
+                "p2_bin": file_info(&deploy_p2),
+                "p3_bin": file_info(&deploy_p3),
+                "current": {
+                    "path": current_link.display().to_string(),
+                    "exists": symlink_meta.is_some(),
+                    "is_symlink": symlink_meta.as_ref().map(|m| m.file_type().is_symlink()).unwrap_or(false),
+                    "target": current_target,
+                    "target_abs": current_target_abs,
+                    "selected_app": selected_app,
+                }
+            },
+            "override": {
+                "path": override_file.display().to_string(),
+                "exists": override_file.exists(),
+                "exec_start": override_execstart,
+                "contents": override_contents,
+            }
+        }
+    }))
+    .into_response()
 }
 
 async fn update_start(State(state): State<AppState>, Json(req): Json<UpdateStartReq>) -> Response {

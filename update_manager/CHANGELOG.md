@@ -19,6 +19,9 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
 - Saturn Go self-update policy API (`GET/POST /saturngo_policy`) with a separate persisted policy file from the G2 Appliance Update policy.
 - Saturn Go deploy status endpoint (`GET /saturngo_deploy_status`) backed by a persisted status JSON file for last-run/deploy visibility.
 - New `update-saturn-go.sh` script to update repo/build/redeploy the Rust backend from the web UI via `/run`.
+- Hidden P2/P3 App Test Lab page (`/p23test`) for build/deploy/switch testing of `P2_app` and `P3_app` without adding navigation links.
+- P2/P3 test-lab status endpoint (`GET /p23_status`) reporting service state, source/deployed binaries, symlink selection, and systemd override state.
+- New `p23-app-manager.sh` helper script for P2/P3 build/deploy/switch/revert actions via `/run`.
 
 ### Changed
 - CSRF middleware now rejects POST requests that are missing both `Origin` and `Referer` headers, closing a bypass when neither header was sent.
@@ -52,7 +55,7 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
 - Clone target detection now includes USB-attached block devices that report `removable=0` (common for USB SD card readers), while still excluding internal/virtual devices.
 - Saturn Go self-update page now uses explicit run-option checkboxes (`verbose`, `dry-run`, `skip-git`, `skip-build`, `skip-deploy`) and shows a polling "Last Deploy Status" panel.
 - `/run` now injects Saturn Go self-update policy env vars and a deploy-status-file path when launching `update-saturn-go.sh`, and treats Saturn Go self-update as a shared update activity (conflict-guarded like G2/appliance update).
-- Installer now copies `saturngo.html`, writes Saturn Go policy/deploy-status service env vars, and auto-bootstrap builds with a rustup-managed stable toolchain (removing legacy apt `cargo`/`rustc` when present).
+- Installer now copies `saturngo.html` and hidden `p23test.html`, writes Saturn Go policy/deploy-status service env vars, and auto-bootstrap builds with a rustup-managed stable toolchain (removing legacy apt `cargo`/`rustc` when present).
 
 ### Fixed
 - `update-G2.py`: verbose mode now preserves captured command output used by status sections (fixes `Size: ?` and `Commit: ?` cases).
@@ -78,6 +81,7 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
 - `update-pihpsdr.py`: prevented startup crash on non-UTF-8 (`latin-1`) stdout/stderr/log streams by adding per-stream Unicode fallback output and explicit UTF-8 log file writes.
 - `update-saturn-go.sh`: fixed `--dry-run` staging-helper generation error when the staged directory is intentionally not created.
 - `update-saturn-go.sh`: fixed detached root-helper status-file error handling/JSON quoting so `/saturngo_deploy_status` always returns valid JSON after deploy completion.
+- `p23-app-manager.sh`: dry-run deploy/switch no longer writes a temp override file (avoids failing when `/tmp` is full).
 
 ## [2026-02-13]
 ### Added

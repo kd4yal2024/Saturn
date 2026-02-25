@@ -89,6 +89,7 @@ Script definitions come from `config.json` plus browser-managed custom entries i
 - Version list ("Show versions above"): `/get_versions`
 - G2 Update page: `/update` (also `/update.html`)
 - Saturn Go page: `/saturngo` (also `/saturngo.html`, `/saturn-go`, `/saturn-go.html`)
+- Experimental P2/P3 test page (hidden, no nav link): `/p23test` (also `/p23test.html`)
 - piHPSDR update page: `/pihpsdr` (also `/pihpsdr.html`)
 - FPGA flash page: `/fpga` (also `/fpga.html`)
 - Custom scripts page: `/custom` (also `/custom.html`, `/index.html`)
@@ -101,6 +102,7 @@ Script definitions come from `config.json` plus browser-managed custom entries i
 - Get Saturn Go self-update policy: `GET /saturngo_policy`
 - Set Saturn Go self-update policy: `POST /saturngo_policy`
 - Get Saturn Go deploy status: `GET /saturngo_deploy_status`
+- Get P2/P3 test-lab status (service/source/deploy/symlink/override): `GET /p23_status`
 - Start transactional update: `POST /update_start` with JSON `{ "channel":"stable|beta|custom", "custom_ref":"..." }`
 - Get update status + last state: `GET /update_status`
 - Roll back to previous repo root: `POST /update_rollback`
@@ -176,6 +178,17 @@ If a script entry does not define `version`, `/get_versions` now returns
   - `/var/lib/saturn-state/saturngo_deploy_status.json` (default)
 - The web terminal may disconnect near the end when `saturn-go.service`
   restarts; reload the page after ~10-20 seconds.
+
+### P2/P3 App Test Lab (Hidden)
+
+- Hidden page `/p23test` provides an experimental terminal workflow for:
+  - building `P2_app` / `P3_app`
+  - deploying selected binaries under `/opt/saturn-go/p23-apps`
+  - switching `p2app.service` between P2 and P3 via a systemd drop-in override
+  - reverting to the original unit `ExecStart`
+- Uses `/opt/saturn-go/scripts/p23-app-manager.sh` via `/run`.
+- Status panel polls `GET /p23_status`.
+- Intended for local testing; it is not linked from the main navigation.
 
 ## Build and Deploy (Rust Server)
 

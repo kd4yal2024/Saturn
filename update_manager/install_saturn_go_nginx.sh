@@ -214,6 +214,7 @@ copy_web_asset "monitor.html"
 copy_web_asset "backup.html"
 copy_web_asset "update.html"
 copy_web_asset "saturngo.html"
+copy_web_asset "p23test.html"
 copy_web_asset "fpga.html"
 copy_web_asset "pihpsdr.html"
 

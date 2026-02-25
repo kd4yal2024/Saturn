@@ -35,13 +35,15 @@ Backend also enforces same-host checks when `Origin` or `Referer` is present.
 | `/saturngo.html` | `GET` | No | Serve `saturngo.html` (Saturn Go self-update page). |
 | `/saturn-go` | `GET` | No | Serve `saturngo.html` (Saturn Go self-update page). |
 | `/saturn-go.html` | `GET` | No | Serve `saturngo.html` (Saturn Go self-update page). |
+| `/p23test` | `GET` | No | Serve hidden `p23test.html` (experimental P2/P3 app test page). |
+| `/p23test.html` | `GET` | No | Serve hidden `p23test.html` (experimental P2/P3 app test page). |
 | `/fpga` | `GET` | No | Serve `fpga.html` (FPGA flash terminal/control page). |
 | `/fpga.html` | `GET` | No | Serve `fpga.html` (FPGA flash terminal/control page). |
 | `/pihpsdr` | `GET` | No | Serve `pihpsdr.html` (piHPSDR update terminal). |
 | `/pihpsdr.html` | `GET` | No | Serve `pihpsdr.html` (piHPSDR update terminal). |
 | `/monitor` | `GET` | No | Serve `monitor.html`. |
 | `/monitor.html` | `GET` | No | Serve `monitor.html`. |
-| fallback mapped page paths | `GET` | No | Supports `/saturn`, `/saturn/custom`, `/saturn/backup`, `/saturn/update`, `/saturn/saturngo`, `/saturn/fpga`, `/saturn/pihpsdr`, `/saturn/monitor`, etc. |
+| fallback mapped page paths | `GET` | No | Supports `/saturn`, `/saturn/custom`, `/saturn/backup`, `/saturn/update`, `/saturn/saturngo`, `/saturn/p23test`, `/saturn/fpga`, `/saturn/pihpsdr`, `/saturn/monitor`, etc. |
 
 ## Health and Metadata
 
@@ -122,6 +124,21 @@ Notes:
 - `/saturngo_deploy_status` returns a synthetic `idle` payload if no status file exists yet.
 - The Saturn Go page runs `update-saturn-go.sh` through `POST /run` and uses `/run_log` for resume across page refresh/navigation.
 
+## P2/P3 Test Lab (Hidden / Experimental)
+
+| Route | Method | CSRF | Request | Success Response |
+|---|---|---|---|---|
+| `/p23_status` | `GET` | No | none | `{ "status":"ok", "p23": { service, sources, deployed, override, repo_root } }` |
+
+Notes:
+
+- `p23_status` is used by the hidden `/p23test` page status panel.
+- It reports:
+  - `p2app.service` active/enabled/main PID (and running executable path when available)
+  - source `P2_app` / `P3_app` directories and built binaries in active repo root
+  - deployed binaries and `current` symlink under `/opt/saturn-go/p23-apps`
+  - systemd drop-in override file state (`/etc/systemd/system/p2app.service.d/10-saturn-p23-switch.conf`)
+
 ## Full Backup / Restore
 
 | Route | Method | CSRF | Request | Success Response |
@@ -197,6 +214,7 @@ Update-activity behavior for `/run`:
   - `SATURN_SATURNGO_POLICY_REF`
   - `SATURN_SATURNGO_POLICY_URL`
   - `SATURN_SATURNGO_DEPLOY_STATUS_FILE`
+- `p23-app-manager.sh` (hidden P2/P3 test workflow) uses the active repo-root env (`SATURN_ACTIVE_REPO_ROOT`) and runs privileged deploy/switch actions via `sudo -n` when not root.
 - Python child runs also include:
   - `PYTHONDONTWRITEBYTECODE=1`
   - `PYTHONPYCACHEPREFIX=/var/cache/saturn-python`

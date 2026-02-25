@@ -229,6 +229,36 @@ Operational notes:
 - The web terminal may disconnect when `saturn-go.service` restarts; reload after ~10-20 seconds.
 - Some successful lines may still be prefixed `ERR:` in the terminal because `cargo` and `systemd-run` emit informational output on stderr.
 
+### P2/P3 App Test Lab (Hidden / Experimental)
+
+- Open `/saturn/p23test` directly (it is intentionally not linked in navigation).
+- This page is intended for testing `P2_app` vs `P3_app` builds/deploys and service switching.
+- It runs `p23-app-manager.sh` via `/run` and resumes terminal output using `/run_log`.
+
+Capabilities:
+
+- `Status` (script-based status summary)
+- `Build P2` / `Build P3`
+- `Deploy + Switch P2` / `Deploy + Switch P3`
+- `Switch To P2` / `Switch To P3` (uses previously deployed binaries)
+- `Revert To Unit Default` (removes Saturn override and restores unit `ExecStart`)
+- Separate status panel backed by `GET /p23_status`
+
+Switching implementation details:
+
+- Deployed binaries are staged under `/opt/saturn-go/p23-apps/`
+- Active selection is `/opt/saturn-go/p23-apps/current` symlink
+- `p2app.service` is redirected via systemd drop-in:
+  - `/etc/systemd/system/p2app.service.d/10-saturn-p23-switch.conf`
+- Revert action removes that drop-in and reloads systemd
+
+Safety/usage notes:
+
+- Use `Dry run` first for deploy/switch/revert actions
+- Non-dry-run switch/deploy/revert actions require browser confirmation
+- Web mode requires `sudo -n` permission for install/symlink/systemctl steps
+- `No restart` updates symlink/override without restarting `p2app.service`
+
 ### Update piHPSDR (Dedicated Terminal)
 
 - Run `update-pihpsdr.py` from `/saturn/pihpsdr`.
@@ -366,6 +396,24 @@ curl -sS http://127.0.0.1:8080/saturngo_deploy_status | jq
 sudo cat /var/lib/saturn-state/saturngo_deploy_status.json
 sudo systemctl status saturn-go.service
 sudo journalctl -u saturn-go.service -n 200 --no-pager
+```
+
+### P2/P3 Test Lab Errors
+
+Common causes:
+
+- `P3_app` or `P2_app` source tree missing under active repo root
+- build failure in `make`
+- `sudo -n` denied for deploy/switch/revert (`install`, `ln`, `systemctl`)
+- stale or unexpected systemd override contents from manual edits
+
+Check:
+
+```bash
+curl -sS http://127.0.0.1:8080/p23_status | jq
+sudo systemctl status p2app.service
+sudo cat /etc/systemd/system/p2app.service.d/10-saturn-p23-switch.conf
+ls -lah /opt/saturn-go/p23-apps
 ```
 
 ### Verify Runtime File Set

@@ -27,6 +27,10 @@ pub async fn saturngo_handler(State(state): State<AppState>) -> impl IntoRespons
     serve_page(&state.webroot, "saturngo.html").await
 }
 
+pub async fn p23test_handler(State(state): State<AppState>) -> impl IntoResponse {
+    serve_page(&state.webroot, "p23test.html").await
+}
+
 pub async fn fpga_handler(State(state): State<AppState>) -> impl IntoResponse {
     serve_page(&state.webroot, "fpga.html").await
 }
@@ -57,6 +61,8 @@ pub fn route_to_page(path: &str) -> Option<&'static str> {
         | "/saturn-go.html" | "/saturn/saturngo" | "/saturn/saturngo/"
         | "/saturn/saturngo.html" | "/saturn/saturn-go" | "/saturn/saturn-go/"
         | "/saturn/saturn-go.html" => Some("saturngo.html"),
+        "/p23test" | "/p23test/" | "/p23test.html" | "/saturn/p23test" | "/saturn/p23test/"
+        | "/saturn/p23test.html" => Some("p23test.html"),
         "/fpga" | "/fpga/" | "/fpga.html" | "/saturn/fpga" | "/saturn/fpga/"
         | "/saturn/fpga.html" => Some("fpga.html"),
         "/pihpsdr" | "/pihpsdr/" | "/pihpsdr.html" | "/saturn/pihpsdr" | "/saturn/pihpsdr/"
