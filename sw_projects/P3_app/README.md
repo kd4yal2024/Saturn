@@ -28,6 +28,15 @@ This is intended to help when auto-detection selects the wrong panel type while 
 itself is otherwise working (for example, Thetis connectivity is fine but local panel controls
 do not behave as expected).
 
+## Startup Interface/MAC Enumeration Fix (2026-02-26)
+
+`p2app.c` startup MAC discovery now copies the selected interface name before closing
+`/sys/class/net`, validates that a matching interface was found, skips `lo`, and checks
+`ioctl(SIOCGIFHWADDR)` for failure.
+
+This fixes a startup bug where `readdir()` data could be referenced after `closedir()`
+and improves error handling for systems with unexpected interface names.
+
 ## What Changed And Why
 
 ### 1. Shutdown semaphore cleanup fix

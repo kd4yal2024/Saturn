@@ -925,22 +925,27 @@ int main(int argc, char *argv[])
 
 #else // newer way
   DIR *dp;
-  struct dirent *ep;   
+  struct dirent *ep;
   char *posp;
   int ch = 'e';                                    // start character ethernet
+  char InterfaceName[IFNAMSIZ] = {0};
+  bool FoundInterface = false;
 
     dp = opendir("/sys/class/net");
-    if (dp != NULL) 
+    if (dp != NULL)
     {
       while ((ep = readdir(dp)) != NULL)
       {
-        if ( !strcmp(ep->d_name, ".") || !strcmp(ep->d_name, "..") )
-        { 
+        if ( !strcmp(ep->d_name, ".") || !strcmp(ep->d_name, "..") || !strcmp(ep->d_name, "lo") )
+        {
           continue;
         }
         posp = strchr(ep->d_name, ch);
-        if ( posp == ep->d_name ) { 
-          printf("%s: interface name: %s\n", __FUNCTION__, ep->d_name);
+        if ( posp == ep->d_name ) {
+          strncpy(InterfaceName, ep->d_name, IFNAMSIZ - 1);
+          InterfaceName[IFNAMSIZ - 1] = '\0';
+          printf("%s: interface name: %s\n", __FUNCTION__, InterfaceName);
+          FoundInterface = true;
           break;
         }
       }
@@ -949,11 +954,21 @@ int main(int argc, char *argv[])
     else
     {
       printf("%s: Couldn't open the directory\n", __FUNCTION__);
-      return -1; 
-    }   
+      return EXIT_FAILURE;
+    }
+    if(!FoundInterface)
+    {
+      printf("%s: No ethernet interface found\n", __FUNCTION__);
+      return EXIT_FAILURE;
+    }
     memset(&hwaddr, 0, sizeof(hwaddr));
-    strncpy(hwaddr.ifr_name, ep->d_name, IFNAMSIZ - 1); 
-    ioctl(atomic_load(&SocketData[VPORTCOMMAND].Socketid), SIOCGIFHWADDR, &hwaddr);
+    strncpy(hwaddr.ifr_name, InterfaceName, IFNAMSIZ - 1);
+    hwaddr.ifr_name[IFNAMSIZ - 1] = '\0';
+    if(ioctl(atomic_load(&SocketData[VPORTCOMMAND].Socketid), SIOCGIFHWADDR, &hwaddr) != 0)
+    {
+      perror("ioctl SIOCGIFHWADDR");
+      return EXIT_FAILURE;
+    }
     for(i = 0; i < 6; ++i) DiscoveryReply[i + 5] = hwaddr.ifr_addr.sa_data[i];         // copy MAC to reply message
 #endif
   DiscoveryReply[13] = (uint8_t)Version;

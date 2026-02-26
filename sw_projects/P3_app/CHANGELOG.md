@@ -2,6 +2,18 @@
 
 All notable changes to `P3_app` from this hardening pass are documented here.
 
+## [2026-02-26] Startup MAC Discovery Hardening
+
+### Fixed
+
+- Fixed startup interface/MAC enumeration in `p2app.c` so the selected interface name is copied before `closedir()` instead of using a `readdir()` entry pointer after directory close.
+- Added a clean failure path when no matching Ethernet-style interface is found.
+- Added `SIOCGIFHWADDR` error checking during discovery-reply MAC initialization.
+
+### Changed
+
+- Startup interface scan now ignores loopback (`lo`) when selecting the network interface for discovery MAC reporting.
+
 ## [2026-02-25] Front Panel Mode Override
 
 ### Added
