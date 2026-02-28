@@ -239,7 +239,7 @@ build_saturn_apps() {
   log "Skipping P1_app build (not required in provisioning flow)."
   build_dir "$saturn_home" "audiotest"   "$SATURN_REPO_DIR/sw_projects/audiotest" "$nproc" 1
   build_dir "$saturn_home" "biascheck"   "$SATURN_REPO_DIR/sw_projects/biascheck" "$nproc" 1
-  build_dir "$saturn_home" "codectest"   "$SATURN_REPO_DIR/sw_projects/codectest" "$nproc" 1
+ # build_dir "$saturn_home" "codectest"   "$SATURN_REPO_DIR/sw_projects/codectest" "$nproc" 1
   build_dir "$saturn_home" "axi_rw"      "$SATURN_REPO_DIR/sw_tools/axi_rw" "$nproc" 1
   build_dir "$saturn_home" "flashwriter" "$SATURN_REPO_DIR/sw_tools/flashwriter" "$nproc" 1
   build_dir "$saturn_home" "load-FPGA"   "$SATURN_REPO_DIR/sw_tools/load-FPGA" "$nproc" 1
