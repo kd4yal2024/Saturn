@@ -54,8 +54,6 @@ pthread_t CATThread;                        // thread reads/writes CAT commands
 pthread_t CATKeepaliveThread;               // thread requests activity every 15s
 bool CATDebugPrint = false;                 // true if to print generated CAT messages
 
-
-
 #define VNUMOPSTRINGS 16                    // size of output queue
 #define VOPSTRSIZE 40                       // size of each string in queue
 #define VCATPARSESTRINGMAX 63               // max parsed CAT parameter bytes
@@ -862,7 +860,7 @@ void SetupCATPort(int Port)
             return;
         }
         atomic_store(&CATKeepaliveJoinPending, true);
-    }  
+    }
 }
 
 

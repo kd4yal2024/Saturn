@@ -37,6 +37,32 @@ do not behave as expected).
 This fixes a startup bug where `readdir()` data could be referenced after `closedir()`
 and improves error handling for systems with unexpected interface names.
 
+## Thetis Startup Stability and Trace Logging (2026-02-27)
+
+Additional startup-path hardening was applied after repeated field reports where Thetis
+would intermittently fail to start the radio session.
+
+What changed:
+
+- General-packet handling now applies queued startup configuration immediately after packet
+  receipt (duplicate packet suppression is retained).
+- Added one-time startup trace logs for:
+  - Discovery packet received
+  - General packet received/applied
+  - High-priority run-bit observed
+  - Startup handshake completed (`reply + run -> active`)
+- High-priority packet logging was reduced from per-packet spam to first-stream detection.
+- Startup trace flags are reset on explicit client stop and no-activity timeout transitions.
+
+Important regression note:
+
+- A CAT keepalive respawn-throttle experiment was tested to suppress rapid CAT thread
+  restart loops, but this introduced a Thetis compatibility regression in startup.
+- That CAT respawn-guard logic was rolled back; Thetis startup stability returned after
+  rollback.
+- Current baseline keeps startup trace instrumentation and compatibility behavior, without
+  CAT respawn throttling.
+
 ## What Changed And Why
 
 ### 1. Shutdown semaphore cleanup fix

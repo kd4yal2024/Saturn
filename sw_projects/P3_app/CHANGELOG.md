@@ -2,6 +2,33 @@
 
 All notable changes to `P3_app` from this hardening pass are documented here.
 
+## [2026-02-27] Thetis Startup Compatibility and Diagnostics
+
+### Fixed
+
+- Restored Thetis startup reliability by removing the startup holdoff behavior that delayed
+  General-packet application in active startup traffic conditions.
+- Startup configuration now applies immediately after queueing (with duplicate-suppression retained).
+
+### Added
+
+- Added one-time startup trace markers to make startup sequencing visible in logs:
+  - Discovery received
+  - General received
+  - General applied
+  - High-priority run-bit seen
+  - Handshake complete (`reply + run -> active`)
+
+### Changed
+
+- Reduced high-priority log spam by replacing per-packet receive logging with first-stream detection.
+- Startup trace state now resets when client stop/inactivity transitions return the app to inactive state.
+
+### Reverted
+
+- Reverted CAT keepalive respawn-throttle guard in `SetupCATPort(...)` after it introduced
+  a Thetis startup regression in field testing.
+
 ## [2026-02-26] Startup MAC Discovery Hardening
 
 ### Fixed

@@ -14,6 +14,7 @@ set -euo pipefail
 SRC_DEV="/dev/mmcblk0"
 TARGET=""
 SUDO=""
+VERIFY_COMPARE=0
 
 progress(){ echo "Progress: $1%"; }
 info(){ echo "$@"; }
@@ -33,6 +34,10 @@ while [[ $# -gt 0 ]]; do
       [[ $# -ge 2 ]] || err "--target requires a device path"
       TARGET="$2"
       shift 2
+      ;;
+    --verify-compare)
+      VERIFY_COMPARE=1
+      shift
       ;;
     *) err "Unknown argument: $1" ;;
   esac
@@ -65,13 +70,123 @@ progress 10
 
 if command -v pv >/dev/null 2>&1; then
   info "Cloning with pv progress..."
-  # pv -n prints integer percentage to stderr
+  # pv -n prints integer percentage to stderr; map clone phase into 10..84%
   $SUDO pv -n -s "$SRC_BYTES" "$SRC_DEV" \
     | $SUDO dd of="$TARGET" bs=4M conv=fsync status=none \
-    2> >(while read -r p; do progress "$p"; done)
+    2> >(while read -r p; do
+          [[ "$p" =~ ^[0-9]+$ ]] || continue
+          clone_p=$((10 + (p * 74 / 100)))
+          progress "$clone_p"
+        done)
 else
   info "Cloning with dd status=progress..."
   $SUDO dd if="$SRC_DEV" of="$TARGET" bs=4M status=progress conv=fsync
+fi
+
+progress 85
+info "Post-clone validation: refreshing partition table..."
+$SUDO sync || true
+$SUDO partprobe "$TARGET" 2>/dev/null || true
+$SUDO udevadm settle 2>/dev/null || true
+
+part_suffix() {
+  local dev="$1"
+  if [[ "$dev" =~ [0-9]$ ]]; then
+    printf 'p'
+  else
+    printf ''
+  fi
+}
+
+compare_part_layout() {
+  local src="$1" tgt="$2"
+  local src_lines tgt_lines i
+  mapfile -t src_lines < <($SUDO lsblk -nrbo START,SIZE,TYPE "$src" | awk '$3=="part"{print $1 ":" $2}')
+  mapfile -t tgt_lines < <($SUDO lsblk -nrbo START,SIZE,TYPE "$tgt" | awk '$3=="part"{print $1 ":" $2}')
+  if [[ "${#src_lines[@]}" -eq 0 ]]; then
+    err "Validation failed: no source partitions found on $src"
+  fi
+  if [[ "${#src_lines[@]}" -ne "${#tgt_lines[@]}" ]]; then
+    err "Validation failed: partition count mismatch (${#src_lines[@]} source vs ${#tgt_lines[@]} target)"
+  fi
+  for ((i=0; i<${#src_lines[@]}; i++)); do
+    if [[ "${src_lines[$i]}" != "${tgt_lines[$i]}" ]]; then
+      err "Validation failed: partition layout mismatch at index $i (${src_lines[$i]} != ${tgt_lines[$i]})"
+    fi
+  done
+  info "Partition layout check: OK (${#src_lines[@]} partitions)"
+}
+
+validate_fsck_ro() {
+  local dev="$1"
+  local p part fstype rc
+  local suffix
+  suffix="$(part_suffix "$dev")"
+  for p in 1 2 3 4 5 6 7 8; do
+    part="${dev}${suffix}${p}"
+    [[ -b "$part" ]] || continue
+    fstype="$($SUDO blkid -o value -s TYPE "$part" 2>/dev/null || true)"
+    if [[ -z "$fstype" ]]; then
+      info "Validation: $part filesystem type unknown (skipping fsck)"
+      continue
+    fi
+    case "$fstype" in
+      vfat|fat|fat16|fat32|msdos)
+        info "Validation: fsck.vfat -n $part ($fstype)"
+        set +e
+        $SUDO fsck.vfat -n "$part"
+        rc=$?
+        set -e
+        if [[ "$rc" -eq 1 ]]; then
+          info "Validation warning: FAT read-only fsck reported fixable issues on $part (common on live-cloned boot partitions; e.g. dirty bit set)."
+          continue
+        fi
+        ;;
+      ext2|ext3|ext4)
+        info "Validation: e2fsck -fn $part ($fstype)"
+        set +e
+        $SUDO e2fsck -fn "$part"
+        rc=$?
+        set -e
+        # e2fsck uses a bitmask. In read-only mode on a live-cloned source, bit 1 ("errors found")
+        # can be expected because no writes/journal replay are performed. Treat higher bits as failure.
+        if (( (rc & ~1) != 0 )); then
+          err "Validation failed: read-only fsck reported issues on $part (exit $rc)"
+        fi
+        if [[ "$rc" -eq 1 ]]; then
+          info "Validation warning: ext read-only fsck found fixable issues on $part (common on live clones); continuing."
+          continue
+        fi
+        ;;
+      *)
+        info "Validation: unsupported fs type on $part ($fstype), skipping fsck"
+        continue
+        ;;
+    esac
+    if [[ "$rc" -ne 0 ]]; then
+      err "Validation failed: read-only fsck reported issues on $part (exit $rc)"
+    fi
+  done
+  info "Read-only filesystem checks: OK"
+}
+
+progress 90
+compare_part_layout "$SRC_DEV" "$TARGET"
+
+progress 95
+validate_fsck_ro "$TARGET"
+
+if [[ "$VERIFY_COMPARE" -eq 1 ]]; then
+  progress 98
+  info "Optional byte-compare: cmp first ${SRC_BYTES} bytes (live source may differ if data changes during clone)..."
+  set +e
+  $SUDO cmp -n "$SRC_BYTES" "$SRC_DEV" "$TARGET" >/dev/null
+  rc=$?
+  set -e
+  if [[ "$rc" -ne 0 ]]; then
+    err "Optional compare failed (cmp exit $rc). Live source writes can cause mismatches."
+  fi
+  info "Optional byte-compare: OK"
 fi
 
 progress 100

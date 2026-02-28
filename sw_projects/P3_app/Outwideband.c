@@ -258,17 +258,7 @@ void *OutgoingWidebandSamples(void *arg)
     {
         while(!atomic_load(&SDRActive) && !atomic_load(&ExitRequested))
         {
-            for (ADC=0; ADC < VNUMWBADC; ADC++)
-                if(atomic_load(&(ThreadData+ADC)->Cmdid) & VBITCHANGEPORT)
-                {
-                    if(!ThreadSocketIsSharedAlias(ThreadData + ADC))
-                    {
-                        close(GetThreadSocketFD(ThreadData + ADC));               // close old socket, open new one
-                        MakeSocket((ThreadData + ADC), 0);                        // this binds to the new port.
-                        SyncSocketAliasesForOwner(ThreadData + ADC);              // refresh any shared alias socket IDs
-                    }
-                    atomic_fetch_and(&(ThreadData+ADC)->Cmdid, ~((uint_fast32_t)VBITCHANGEPORT));   // clear command bit
-                }
+            // Port rebinding is handled centrally by the p2app control plane.
             usleep(100);
         }
         printf("starting outgoing Wideband data\n");

@@ -61,6 +61,19 @@ void *IncomingDUCSpecific(void *arg)                    // listener thread
     //
     while(!atomic_load(&ExitRequested))
     {
+      if(atomic_load(&ThreadData->Cmdid) & VBITCHANGEPORT)
+      {
+          printf("DUC specific request change port\n");
+          close(GetThreadSocketFD(ThreadData));
+          if(MakeSocket(ThreadData, 0) != 0)
+          {
+              perror("MakeSocket, DUC specific");
+              atomic_store(&ThreadError, true);
+              break;
+          }
+          atomic_fetch_and(&ThreadData->Cmdid, ~((uint_fast32_t)VBITCHANGEPORT));
+      }
+
       memset(&iovecinst, 0, sizeof(struct iovec));
       memset(&datagram, 0, sizeof(datagram));
       iovecinst.iov_base = &UDPInBuffer;                  // set buffer for incoming message number i
@@ -127,7 +140,6 @@ void *IncomingDUCSpecific(void *arg)                    // listener thread
     atomic_store(&ThreadData->Active, false);     // indicate it is closed
     return NULL;
 }
-
 
 
 

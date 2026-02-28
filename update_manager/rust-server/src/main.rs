@@ -2985,6 +2985,27 @@ async fn pi_devices() -> impl IntoResponse {
 #[derive(Deserialize)]
 struct PiCloneStartReq {
     target: String,
+    #[serde(default)]
+    verify_compare: bool,
+}
+
+fn classify_clone_stderr_line(line: &str) -> String {
+    let trimmed = line.trim_end();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+    if trimmed.starts_with("ERR:") {
+        return trimmed.to_string();
+    }
+
+    let is_dd_progress = trimmed.contains(" bytes ") && trimmed.contains(" copied");
+    let is_dd_summary = trimmed.ends_with("records in") || trimmed.ends_with("records out");
+
+    if is_dd_progress || is_dd_summary {
+        trimmed.to_string()
+    } else {
+        format!("stderr: {trimmed}")
+    }
 }
 
 async fn pi_wipe_target(Json(req): Json<PiCloneStartReq>) -> Response {
@@ -3174,7 +3195,10 @@ async fn pi_wipe_target(Json(req): Json<PiCloneStartReq>) -> Response {
 }
 
 async fn pi_clone_start(Json(req): Json<PiCloneStartReq>) -> Response {
-    let target = req.target;
+    let PiCloneStartReq {
+        target,
+        verify_compare,
+    } = req;
     if !target.starts_with("/dev/") {
         return json_error(StatusCode::BAD_REQUEST, "target must be a /dev path");
     }
@@ -3206,6 +3230,9 @@ async fn pi_clone_start(Json(req): Json<PiCloneStartReq>) -> Response {
     tokio::spawn(async move {
         let mut cmd = Command::new("/opt/saturn-go/scripts/clone_pi_to_device.sh");
         cmd.arg("--target").arg(&target);
+        if verify_compare {
+            cmd.arg("--verify-compare");
+        }
         cmd.stdout(std::process::Stdio::piped());
         cmd.stderr(std::process::Stdio::piped());
 
@@ -3246,7 +3273,10 @@ async fn pi_clone_start(Json(req): Json<PiCloneStartReq>) -> Response {
             tokio::spawn(async move {
                 let mut lines = BufReader::new(err).lines();
                 while let Ok(Some(line)) = lines.next_line().await {
-                    let msg = format!("ERR: {line}");
+                    let msg = classify_clone_stderr_line(&line);
+                    if msg.is_empty() {
+                        continue;
+                    }
                     update_clone_job(&id2, |j| j.message = msg.clone());
                     append_clone_log(&id2, msg);
                 }

@@ -100,6 +100,19 @@ void *IncomingSpkrAudio(void *arg)                      // listener thread
   //
     while(!atomic_load(&ExitRequested))
     {
+        if(atomic_load(&ThreadData->Cmdid) & VBITCHANGEPORT)
+        {
+            printf("Speaker audio request change port\n");
+            close(GetThreadSocketFD(ThreadData));
+            if(MakeSocket(ThreadData, 0) != 0)
+            {
+                perror("MakeSocket, Speaker audio");
+                atomic_store(&ThreadError, true);
+                break;
+            }
+            atomic_fetch_and(&ThreadData->Cmdid, ~((uint_fast32_t)VBITCHANGEPORT));
+        }
+
         //
         // now released to start processing. Setup buffers.
         //
@@ -143,11 +156,11 @@ void *IncomingSpkrAudio(void *arg)                      // listener thread
                 if(UseDebug)
                     printf("Codec speaker FIFO Underflowed, depth now = %d\n", Current);
             }
-    //            printf("speaker packet received; depth = %d\n", Depth);
-            while ((Depth < VMEMWORDSPERFRAME) && !atomic_load(&ExitRequested))       // loop till space available
+
+            while ((Depth < VMEMWORDSPERFRAME) && !atomic_load(&ExitRequested))
             {
-                usleep(1000);								                    // 1ms wait
-                Depth = ReadFIFOMonitorChannel(eSpkCodecDMA, &FIFOOverflow, &FIFOOverThreshold, &FIFOUnderflow, &Current);    // read the FIFO free locations
+                usleep(1000);
+                Depth = ReadFIFOMonitorChannel(eSpkCodecDMA, &FIFOOverflow, &FIFOOverThreshold, &FIFOUnderflow, &Current);
                 if((StartupCount == 0) && FIFOOverThreshold && UseDebug)
                     printf("Codec speaker FIFO Overthreshold, depth now = %d\n", Current);
                 if((StartupCount == 0) && FIFOUnderflow)
@@ -161,6 +174,7 @@ void *IncomingSpkrAudio(void *arg)                      // listener thread
             }
             if(atomic_load(&ExitRequested))
                 break;
+
                 // copy sata from UDP Buffer & DMA write it
             memcpy(SpkBasePtr, UDPInBuffer + 4, VDMATRANSFERSIZE);              // copy out spk samples
     //        if(RegVal == 100)

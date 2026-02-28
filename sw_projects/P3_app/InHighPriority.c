@@ -53,6 +53,7 @@ void *IncomingHighPriority(void *arg)                   // listener thread
   uint32_t LongWord;
   uint16_t Word;
   int i;                                                // counter
+  bool HighPriorityStreamLogged = false;
   ESoftwareID FPGASWID;                                 // preprod/release etc
   unsigned int FPGAVersion;                             // firmware version
 
@@ -67,6 +68,19 @@ void *IncomingHighPriority(void *arg)                   // listener thread
   //
   while(!atomic_load(&ExitRequested))
   {
+    if(atomic_load(&ThreadData->Cmdid) & VBITCHANGEPORT)
+    {
+      printf("High priority request change port\n");
+      close(GetThreadSocketFD(ThreadData));
+      if(MakeSocket(ThreadData, 0) != 0)
+      {
+        perror("MakeSocket, high priority");
+        atomic_store(&ThreadError, true);
+        break;
+      }
+      atomic_fetch_and(&ThreadData->Cmdid, ~((uint_fast32_t)VBITCHANGEPORT));
+    }
+
     memset(&iovecinst, 0, sizeof(struct iovec));
     memset(&datagram, 0, sizeof(datagram));
     iovecinst.iov_base = &UDPInBuffer;                  // set buffer for incoming message number i
@@ -89,28 +103,40 @@ void *IncomingHighPriority(void *arg)                   // listener thread
     //
     if(size == VHIGHPRIOTIYTOSDRSIZE)
     {
+      bool WasActive;
       atomic_store(&NewMessageReceived, true);
       LongWord = rd_be_u32(UDPInBuffer);
-      printf("high priority packet received\n");
+      if(!HighPriorityStreamLogged)
+      {
+        printf("STARTUP: High priority packet stream detected\n");
+        HighPriorityStreamLogged = true;
+      }
       Byte = (uint8_t)(UDPInBuffer[4]);
       RunBit = (bool)(Byte&1);
       if(RunBit)
       {
         atomic_store(&StartBitReceived, true);
+        MarkStartupRunBitSeen();
         if(atomic_load(&ReplyAddressSet) && atomic_load(&StartBitReceived))
         {
           atomic_store(&SDRActive, true);                         // only set active if we have replay address too
           SetTXEnable(true);
+          MarkStartupHandshakeComplete();
         }
       }
       else
       {
+        WasActive = atomic_load(&SDRActive);
         atomic_store(&SDRActive, false);                         // set state of whole app
         SetTXEnable(false);
         atomic_store(&IsTXMode, false);
         SetMOX(false);
         EnableCW(false, false);
-        printf("set to inactive by client app\n");
+        if(WasActive)
+        {
+          printf("set to inactive by client app\n");
+          ResetStartupTraceFlags();
+        }
         atomic_store(&StartBitReceived, false);
       }
       //

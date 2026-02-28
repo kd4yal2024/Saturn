@@ -128,6 +128,13 @@ bool ThreadSocketIsSharedAlias(const struct ThreadSocketData* Ptr);
 void SyncSocketAliasesForOwner(const struct ThreadSocketData* OwnerPtr);
 
 //
+// startup state trace helpers (used to log one-time transition milestones)
+//
+void MarkStartupRunBitSeen(void);
+void MarkStartupHandshakeComplete(void);
+void ResetStartupTraceFlags(void);
+
+//
 // function ot get program version
 //
 uint32_t GetP3appVersion(void);

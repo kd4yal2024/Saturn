@@ -233,6 +233,10 @@
             <option value="">Select device…</option>
           </select>
         </div>
+        <label class="inline-flex items-center gap-2 text-sm">
+          <input id="clone-verify-compare" type="checkbox" class="h-4 w-4">
+          Optional byte-compare (slow; live source writes can differ)
+        </label>
         <button id="clone-refresh" class="btn btn-ghost px-4 py-2">Refresh</button>
         <button id="clone-wipe" class="btn btn-ghost px-4 py-2">Wipe Target</button>
         <button id="clone-start" class="btn btn-primary px-4 py-2">Start Clone</button>
@@ -726,7 +730,10 @@ $('clone-start').addEventListener('click', async ()=>{
     const r = await fetch('./pi_clone_start', {
       method:'POST',
       headers:withCsrf({'Content-Type':'application/json'}),
-      body: JSON.stringify({ target }),
+      body: JSON.stringify({
+        target,
+        verify_compare: $('clone-verify-compare').checked
+      }),
     });
     const data = await r.json();
     if (!r.ok) throw new Error(data.message || `HTTP ${r.status}`);

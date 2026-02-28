@@ -109,6 +109,19 @@ void *IncomingDUCIQ(void *arg)                          // listener thread
   //
     while(!atomic_load(&ExitRequested))
     {
+        if(atomic_load(&ThreadData->Cmdid) & VBITCHANGEPORT)
+        {
+            printf("DUC I/Q request change port\n");
+            close(GetThreadSocketFD(ThreadData));
+            if(MakeSocket(ThreadData, 0) != 0)
+            {
+                perror("MakeSocket, DUC I/Q");
+                atomic_store(&ThreadError, true);
+                break;
+            }
+            atomic_fetch_and(&ThreadData->Cmdid, ~((uint_fast32_t)VBITCHANGEPORT));
+        }
+
         bool SDRActiveNow = atomic_load(&SDRActive);
         if(SDRActiveNow && !PrevSDRActive)                  // detect SDRActive has been asserted
             StartupCount = VSTARTUPDELAY;

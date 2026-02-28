@@ -355,13 +355,7 @@ void *OutgoingDDCIQ(void *arg)
     {
         while(!atomic_load(&SDRActive) && !atomic_load(&ExitRequested))
         {
-            for (DDC=0; DDC < VNUMDDC; DDC++)
-                if(atomic_load(&(ThreadData+DDC)->Cmdid) & VBITCHANGEPORT)
-                {
-                    close(atomic_load(&(ThreadData+DDC)->Socketid));          // close old socket, open new one
-                    MakeSocket((ThreadData + DDC), 0);                        // this binds to the new port.
-                    atomic_fetch_and(&(ThreadData+DDC)->Cmdid, ~((uint_fast32_t)VBITCHANGEPORT));   // clear command bit
-                }
+            // Port rebinding is handled centrally by the p2app control plane.
             usleep(100);
         }
         printf("starting outgoing DDC data\n");
@@ -406,7 +400,7 @@ void *OutgoingDDCIQ(void *arg)
                     *(uint32_t*)UDPBuffer[DDC] = htonl(SequenceCounter[DDC]++);     // add sequence count
                     memset(UDPBuffer[DDC] + 4, 0, 8);                               // clear the timestamp data
                     *(uint16_t*)(UDPBuffer[DDC] + 12) = htons(24);                  // bits per sample
-                    *(uint32_t*)(UDPBuffer[DDC] + 14) = htons(VIQSAMPLESPERFRAME);  // I/Q samples for ths frame
+                    *(uint32_t*)(UDPBuffer[DDC] + 14) = htons(VIQSAMPLESPERFRAME);  // I/Q samples for this frame (legacy wire compatibility)
                     //
                     // now add I/Q data & send outgoing packet
                     //

@@ -59,6 +59,19 @@ void *IncomingDDCSpecific(void *arg)                    // listener thread
   //
   while(!atomic_load(&ExitRequested))
   {
+    if(atomic_load(&ThreadData->Cmdid) & VBITCHANGEPORT)
+    {
+      printf("DDC specific request change port\n");
+      close(GetThreadSocketFD(ThreadData));
+      if(MakeSocket(ThreadData, 0) != 0)
+      {
+        perror("MakeSocket, DDC specific");
+        atomic_store(&ThreadError, true);
+        break;
+      }
+      atomic_fetch_and(&ThreadData->Cmdid, ~((uint_fast32_t)VBITCHANGEPORT));
+    }
+
     memset(&iovecinst, 0, sizeof(struct iovec));
     memset(&datagram, 0, sizeof(datagram));
     iovecinst.iov_base = &UDPInBuffer;                  // set buffer for incoming message number i
@@ -98,7 +111,7 @@ void *IncomingDDCSpecific(void *arg)                    // listener thread
       // reuse "random" for DDC enabled.
       // be aware an interleaved "odd" DDC will usually be set to disabled, and we need to revert this!
       //
-      Word = rd_le_u16(UDPInBuffer + 7);                   // get DDC enables 15:0 (note it is already low byte 1st!)
+      Word = rd_le_u16(UDPInBuffer + 7);                   // get DDC enables 15:0 (Thetis/P2 compatibility)
       for(i=0; i<VNUMDDC; i++)
       {
         Enabled = (bool)(Word & 1);                        // get enable state
@@ -193,5 +206,3 @@ void *IncomingDDCSpecific(void *arg)                    // listener thread
   atomic_store(&ThreadData->Active, false);     // indicate it is closed
   return NULL;
 }
-
-

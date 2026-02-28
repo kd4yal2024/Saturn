@@ -221,11 +221,153 @@ pthread_t CheckForExitThread;                 // thread looks for types "exit" c
 pthread_t CheckForNoActivityThread;           // thread looks for inactvity
 static bool CheckForExitThreadStarted = false;
 static bool CheckForNoActivityThreadStarted = false;
+static pthread_mutex_t g_general_packet_mutex = PTHREAD_MUTEX_INITIALIZER;
+static uint8_t g_pending_general_packet[VDISCOVERYSIZE];
+static uint8_t g_last_applied_general_packet[VDISCOVERYSIZE];
+static bool g_pending_general_packet_valid = false;
+static bool g_last_applied_general_packet_valid = false;
+static atomic_bool g_startup_discovery_logged = false;
+static atomic_bool g_startup_general_rx_logged = false;
+static atomic_bool g_startup_general_applied_logged = false;
+static atomic_bool g_startup_run_logged = false;
+static atomic_bool g_startup_active_logged = false;
+
+static void MaybeLogStartupEvent(atomic_bool* EventFlag, const char* EventText)
+{
+  if((EventFlag == NULL) || (EventText == NULL))
+    return;
+
+  if(!atomic_exchange(EventFlag, true))
+  {
+    printf("STARTUP: %s [reply=%d run=%d active=%d]\n",
+            EventText,
+            atomic_load(&ReplyAddressSet),
+            atomic_load(&StartBitReceived),
+            atomic_load(&SDRActive));
+  }
+}
+
+void MarkStartupRunBitSeen(void)
+{
+  MaybeLogStartupEvent(&g_startup_run_logged, "HighPriority run-bit received");
+}
+
+void MarkStartupHandshakeComplete(void)
+{
+  MaybeLogStartupEvent(&g_startup_active_logged, "Startup handshake complete");
+}
+
+void ResetStartupTraceFlags(void)
+{
+  atomic_store(&g_startup_discovery_logged, false);
+  atomic_store(&g_startup_general_rx_logged, false);
+  atomic_store(&g_startup_general_applied_logged, false);
+  atomic_store(&g_startup_run_logged, false);
+  atomic_store(&g_startup_active_logged, false);
+}
+
+static bool QueueGeneralPacketForApply(const uint8_t* PacketBuffer, size_t PacketLen)
+{
+  bool Updated;
+
+  if((PacketBuffer == NULL) || (PacketLen != VDISCOVERYSIZE))
+    return false;
+
+  pthread_mutex_lock(&g_general_packet_mutex);
+  Updated = (!g_pending_general_packet_valid) ||
+            (memcmp(g_pending_general_packet, PacketBuffer, VDISCOVERYSIZE) != 0);
+  if(Updated)
+    memcpy(g_pending_general_packet, PacketBuffer, VDISCOVERYSIZE);
+  g_pending_general_packet_valid = true;
+  pthread_mutex_unlock(&g_general_packet_mutex);
+  return Updated;
+}
+
+static int ApplyQueuedGeneralPacketIfStable(void)
+{
+  uint8_t LocalPacket[VDISCOVERYSIZE];
+  bool HasPending;
+  bool IsNoOp;
+
+  pthread_mutex_lock(&g_general_packet_mutex);
+  HasPending = g_pending_general_packet_valid;
+  if(!HasPending)
+  {
+    pthread_mutex_unlock(&g_general_packet_mutex);
+    return 0;
+  }
+
+  memcpy(LocalPacket, g_pending_general_packet, VDISCOVERYSIZE);
+  g_pending_general_packet_valid = false;
+  IsNoOp = g_last_applied_general_packet_valid &&
+           (memcmp(g_last_applied_general_packet, LocalPacket, VDISCOVERYSIZE) == 0);
+  if(!IsNoOp)
+  {
+    memcpy(g_last_applied_general_packet, LocalPacket, VDISCOVERYSIZE);
+    g_last_applied_general_packet_valid = true;
+  }
+  pthread_mutex_unlock(&g_general_packet_mutex);
+
+  if(IsNoOp)
+    return 0;
+
+  HandleGeneralPacket(LocalPacket);
+  MaybeLogStartupEvent(&g_startup_general_applied_logged, "General packet applied");
+  atomic_store(&ReplyAddressSet, true);
+  if(atomic_load(&ReplyAddressSet) && atomic_load(&StartBitReceived))
+  {
+    atomic_store(&SDRActive, true);
+    SetTXEnable(true);
+    MarkStartupHandshakeComplete();
+  }
+  return 1;
+}
+
+static int ApplyQueuedOutgoingPortRebinds(void)
+{
+  int i;
+
+  for(i = VPORTHIGHPRIORITYFROMSDR; i < VPORTTABLESIZE; i++)
+  {
+    struct ThreadSocketData* ThreadData = SocketData + i;
+    if(!(atomic_load(&ThreadData->Cmdid) & VBITCHANGEPORT))
+      continue;
+
+    if(ThreadSocketIsSharedAlias(ThreadData))
+    {
+      int Socketfd = atomic_load(&ThreadData->Socketid);
+      int SharedSocketfd = GetThreadSocketFD(ThreadData);
+      if((Socketfd > 0) && (Socketfd != SharedSocketfd))
+      {
+        close(Socketfd);
+        atomic_store(&ThreadData->Socketid, 0);
+      }
+    }
+    else
+    {
+      int Socketfd = atomic_load(&ThreadData->Socketid);
+      if(Socketfd > 0)
+      {
+        close(Socketfd);
+        atomic_store(&ThreadData->Socketid, 0);
+      }
+      if(MakeSocket(ThreadData, ThreadData->DDCid) != 0)
+      {
+        perror("control-plane MakeSocket");
+        atomic_store(&ThreadError, true);
+        return -1;
+      }
+    }
+    atomic_fetch_and(&ThreadData->Cmdid, ~((uint_fast32_t)VBITCHANGEPORT));
+  }
+  return 0;
+}
 
 
 //
-// socket ownership mapping for shared-port threads
-// some outgoing threads intentionally share an incoming socket
+// socket ownership mapping for shared-port threads.
+// by default these streams share sockets; if a general packet assigns
+// different ports, the stream falls back to an independent socket.
 //
 static uint32_t ResolveSocketOwnerIndex(uint32_t ThreadNum)
 {
@@ -233,31 +375,22 @@ static uint32_t ResolveSocketOwnerIndex(uint32_t ThreadNum)
   {
     case VPORTMICAUDIO:
       return VPORTDUCSPECIFIC;
+
     case VPORTHIGHPRIORITYFROMSDR:
       return VPORTDDCSPECIFIC;
+
     case VPORTWIDEBAND0:
       return VPORTHIGHPRIORITYTOSDR;
+
     case VPORTWIDEBAND1:
       return VPORTSPKRAUDIO;
+
     default:
       return ThreadNum;
   }
 }
 
-int GetThreadSocketFD(const struct ThreadSocketData* Ptr)
-{
-  uint32_t ThreadNum;
-  uint32_t OwnerNum;
-
-  if((Ptr == NULL) || (Ptr < SocketData) || (Ptr >= (SocketData + VPORTTABLESIZE)))
-    return -1;
-
-  ThreadNum = (uint32_t)(Ptr - SocketData);
-  OwnerNum = ResolveSocketOwnerIndex(ThreadNum);
-  return atomic_load(&SocketData[OwnerNum].Socketid);
-}
-
-bool ThreadSocketIsSharedAlias(const struct ThreadSocketData* Ptr)
+static bool ThreadSocketShouldShareAlias(const struct ThreadSocketData* Ptr)
 {
   uint32_t ThreadNum;
   uint32_t OwnerNum;
@@ -267,28 +400,44 @@ bool ThreadSocketIsSharedAlias(const struct ThreadSocketData* Ptr)
 
   ThreadNum = (uint32_t)(Ptr - SocketData);
   OwnerNum = ResolveSocketOwnerIndex(ThreadNum);
-  return (OwnerNum != ThreadNum);
+  if(OwnerNum == ThreadNum)
+    return false;
+
+  return (atomic_load(&SocketData[ThreadNum].Portid) == atomic_load(&SocketData[OwnerNum].Portid));
+}
+
+int GetThreadSocketFD(const struct ThreadSocketData* Ptr)
+{
+  uint32_t ThreadNum;
+  uint32_t OwnerNum;
+  int Socketfd;
+
+  if((Ptr == NULL) || (Ptr < SocketData) || (Ptr >= (SocketData + VPORTTABLESIZE)))
+    return -1;
+
+  ThreadNum = (uint32_t)(Ptr - SocketData);
+  OwnerNum = ResolveSocketOwnerIndex(ThreadNum);
+
+  // alias streams can split to dedicated sockets if their port differs.
+  // fallback to owner socket until dedicated socket is actually open.
+  if((OwnerNum != ThreadNum) && !ThreadSocketShouldShareAlias(Ptr))
+  {
+    Socketfd = atomic_load(&SocketData[ThreadNum].Socketid);
+    if(Socketfd > 0)
+      return Socketfd;
+  }
+  return atomic_load(&SocketData[OwnerNum].Socketid);
+}
+
+bool ThreadSocketIsSharedAlias(const struct ThreadSocketData* Ptr)
+{
+  return ThreadSocketShouldShareAlias(Ptr);
 }
 
 void SyncSocketAliasesForOwner(const struct ThreadSocketData* OwnerPtr)
 {
-  uint32_t OwnerNum;
-  int OwnerSocketfd;
-
-  if((OwnerPtr == NULL) || (OwnerPtr < SocketData) || (OwnerPtr >= (SocketData + VPORTTABLESIZE)))
-    return;
-
-  OwnerNum = (uint32_t)(OwnerPtr - SocketData);
-  OwnerSocketfd = atomic_load(&SocketData[OwnerNum].Socketid);
-
-  if(OwnerNum == VPORTDUCSPECIFIC)
-    atomic_store(&SocketData[VPORTMICAUDIO].Socketid, OwnerSocketfd);
-  else if(OwnerNum == VPORTDDCSPECIFIC)
-    atomic_store(&SocketData[VPORTHIGHPRIORITYFROMSDR].Socketid, OwnerSocketfd);
-  else if(OwnerNum == VPORTHIGHPRIORITYTOSDR)
-    atomic_store(&SocketData[VPORTWIDEBAND0].Socketid, OwnerSocketfd);
-  else if(OwnerNum == VPORTSPKRAUDIO)
-    atomic_store(&SocketData[VPORTWIDEBAND1].Socketid, OwnerSocketfd);
+  (void)OwnerPtr;
+  // no-op: shared socket aliases were removed for protocol compatibility.
 }
 
 
@@ -336,53 +485,33 @@ bool CheckActiveThreads(int StartingPoint)
 //
 void SetPort(uint32_t ThreadNum, uint16_t PortNum)
 {
-  uint32_t OwnerThreadNum;
   uint16_t CurrentPort;
   uint16_t NewPort;
+  bool WasShared = false;
+  bool IsShared = false;
 
-  OwnerThreadNum = ResolveSocketOwnerIndex(ThreadNum);
+  if(ResolveSocketOwnerIndex(ThreadNum) != ThreadNum)
+    WasShared = ThreadSocketShouldShareAlias(&SocketData[ThreadNum]);
+  CurrentPort = atomic_load(&SocketData[ThreadNum].Portid);
+  NewPort = (PortNum == 0) ? DefaultPorts[ThreadNum] : PortNum;
+  atomic_store(&SocketData[ThreadNum].Portid, NewPort);
+  if(ResolveSocketOwnerIndex(ThreadNum) != ThreadNum)
+    IsShared = ThreadSocketShouldShareAlias(&SocketData[ThreadNum]);
 
-  CurrentPort = atomic_load(&SocketData[OwnerThreadNum].Portid);
+  if ((NewPort != CurrentPort) || (WasShared != IsShared))
+    atomic_fetch_or(&SocketData[ThreadNum].Cmdid, (uint_fast32_t)VBITCHANGEPORT);
 
-  //
-  // shared alias ports still ride on owner sockets.
-  // for protocol compatibility, non-zero alias-port fields can still steer owner ports.
-  // zero-valued alias-port fields are treated as "no override".
-  //
-  if((OwnerThreadNum != ThreadNum) && (PortNum == 0))
-    NewPort = CurrentPort;
-  else if(PortNum == 0)
-    NewPort = DefaultPorts[OwnerThreadNum];                     // default if not set
-  else
-    NewPort = PortNum;
-  atomic_store(&SocketData[OwnerThreadNum].Portid, NewPort);
-
-  //
-  // keep alias port table entries in sync with owner threads
-  //
-  if(OwnerThreadNum == VPORTDUCSPECIFIC)
+  if(NewPort != CurrentPort)
   {
-    atomic_store(&SocketData[VPORTMICAUDIO].Portid, NewPort);
-    atomic_fetch_and(&SocketData[VPORTMICAUDIO].Cmdid, ~((uint_fast32_t)VBITCHANGEPORT));
+    if(ThreadNum == VPORTDUCSPECIFIC)
+      atomic_fetch_or(&SocketData[VPORTMICAUDIO].Cmdid, (uint_fast32_t)VBITCHANGEPORT);
+    else if(ThreadNum == VPORTDDCSPECIFIC)
+      atomic_fetch_or(&SocketData[VPORTHIGHPRIORITYFROMSDR].Cmdid, (uint_fast32_t)VBITCHANGEPORT);
+    else if(ThreadNum == VPORTHIGHPRIORITYTOSDR)
+      atomic_fetch_or(&SocketData[VPORTWIDEBAND0].Cmdid, (uint_fast32_t)VBITCHANGEPORT);
+    else if(ThreadNum == VPORTSPKRAUDIO)
+      atomic_fetch_or(&SocketData[VPORTWIDEBAND1].Cmdid, (uint_fast32_t)VBITCHANGEPORT);
   }
-  else if(OwnerThreadNum == VPORTDDCSPECIFIC)
-  {
-    atomic_store(&SocketData[VPORTHIGHPRIORITYFROMSDR].Portid, NewPort);
-    atomic_fetch_and(&SocketData[VPORTHIGHPRIORITYFROMSDR].Cmdid, ~((uint_fast32_t)VBITCHANGEPORT));
-  }
-  else if(OwnerThreadNum == VPORTHIGHPRIORITYTOSDR)
-  {
-    atomic_store(&SocketData[VPORTWIDEBAND0].Portid, NewPort);
-    atomic_fetch_and(&SocketData[VPORTWIDEBAND0].Cmdid, ~((uint_fast32_t)VBITCHANGEPORT));
-  }
-  else if(OwnerThreadNum == VPORTSPKRAUDIO)
-  {
-    atomic_store(&SocketData[VPORTWIDEBAND1].Portid, NewPort);
-    atomic_fetch_and(&SocketData[VPORTWIDEBAND1].Cmdid, ~((uint_fast32_t)VBITCHANGEPORT));
-  }
-
-  if (NewPort != CurrentPort)
-    atomic_fetch_or(&SocketData[OwnerThreadNum].Cmdid, (uint_fast32_t)VBITCHANGEPORT);
 }
 
 
@@ -503,7 +632,10 @@ void* CheckForActivity(__attribute__((unused)) void *arg)
       atomic_store(&ReplyAddressSet, false);
       atomic_store(&StartBitReceived, false);
       if(PreviouslyActiveState)
+      {
         printf("Reverted to Inactive State after no activity\n");
+        ResetStartupTraceFlags();
+      }
     }
     atomic_store(&NewMessageReceived, false);
   }
@@ -1038,10 +1170,10 @@ int main(int argc, char *argv[])
 
 //
 // create outgoing mic data thread
-// note this shares a port with incoming DUC specific, so don't create a new port
-// instead copy socket settings from DUCSPECIFIC socket:
+// default behavior shares port/socket with incoming DUC specific (1026).
+// if general packet assigns a different mic port, the mic thread will
+// create and use its own socket when it handles VBITCHANGEPORT.
 //
-  memcpy(&SocketData[VPORTMICAUDIO].addr_cmddata, &SocketData[VPORTDUCSPECIFIC].addr_cmddata, sizeof(struct sockaddr_in));
   if(pthread_create(&MicThread, NULL, OutgoingMicSamples, (void*)&SocketData[VPORTMICAUDIO]) != 0)
   {
     perror("pthread_create Mic");
@@ -1052,10 +1184,10 @@ int main(int argc, char *argv[])
 
 //
 // create outgoing high priority data thread
-// note this shares a port with incoming DDC specific, so don't create a new port
-// instead copy socket settings from VPORTDDCSPECIFIC socket:
+// default behavior shares port/socket with incoming DDC specific (1025).
+// if general packet assigns a different outgoing high-priority port, this
+// thread will create/use its own socket when VBITCHANGEPORT is processed.
 //
-  memcpy(&SocketData[VPORTHIGHPRIORITYFROMSDR].addr_cmddata, &SocketData[VPORTDDCSPECIFIC].addr_cmddata, sizeof(struct sockaddr_in));
   if(pthread_create(&HighPriorityFromSDRThread, NULL, OutgoingHighPriority, (void*)&SocketData[VPORTHIGHPRIORITYFROMSDR]) != 0)
   {
     perror("pthread_create outgoing hi priority");
@@ -1129,12 +1261,11 @@ int main(int argc, char *argv[])
   {
 //
 // create outgoing wideband data thread which services bothe wideband0 and wideband1
-// both sockets already exist so copy socket settings from existing sockets:
-// wideband0 shares port 1027 with incoming high priority data
-// wideband1 shares port 1028 with incoming DDC audio
+// default behavior shares sockets with incoming threads:
+// wideband0->high priority in (1027), wideband1->speaker in (1028).
+// if general packet assigns different wideband ports, this thread opens
+// independent sockets when handling VBITCHANGEPORT.
 //
-    memcpy(&SocketData[VPORTWIDEBAND0].addr_cmddata, &SocketData[VPORTHIGHPRIORITYTOSDR].addr_cmddata, sizeof(struct sockaddr_in));
-    memcpy(&SocketData[VPORTWIDEBAND1].addr_cmddata, &SocketData[VPORTSPKRAUDIO].addr_cmddata, sizeof(struct sockaddr_in));
     if(pthread_create(&WidebandDataThread, NULL, OutgoingWidebandSamples, (void*)&SocketData[VPORTWIDEBAND0]) != 0)
     {
       perror("pthread_create outgoing wideband data");
@@ -1192,7 +1323,6 @@ int main(int argc, char *argv[])
         // general packet. Get the port numbers and establish listener threads
         //
         case 0:
-          printf("P2 General packet to SDR, size= %d\n", size);
           //
           // get "from" MAC address and port; this is where the data goes back to
           //
@@ -1202,13 +1332,8 @@ int main(int argc, char *argv[])
           reply_addr.sin_addr.s_addr = addr_from.sin_addr.s_addr;
           reply_addr.sin_port = addr_from.sin_port;                       // (but each outgoing thread needs to set its own sin_port)
           pthread_mutex_unlock(&g_reply_addr_mutex);
-          HandleGeneralPacket(UDPInBuffer);
-          atomic_store(&ReplyAddressSet, true);
-          if(atomic_load(&ReplyAddressSet) && atomic_load(&StartBitReceived))
-          {
-            atomic_store(&SDRActive, true);                         // only set active if we have start bit too
-            SetTXEnable(true);
-          }
+          if(QueueGeneralPacketForApply(UDPInBuffer, (size_t)size))
+            MaybeLogStartupEvent(&g_startup_general_rx_logged, "General packet received");
           break;
 
         //
@@ -1216,6 +1341,7 @@ int main(int argc, char *argv[])
         //
         case 2:
           printf("P2 Discovery packet\n");
+          MaybeLogStartupEvent(&g_startup_discovery_logged, "Discovery packet received");
           if(atomic_load(&SDRActive) || IncompatibleFirmware)
             DiscoveryReply[4] = 3;                             // response 2 if not active, 3 if running
           else
@@ -1240,6 +1366,12 @@ int main(int argc, char *argv[])
 //
 // now do any "post packet" processing
 //
+    (void)ApplyQueuedGeneralPacketIfStable();
+    if(!atomic_load(&SDRActive))
+    {
+      if(ApplyQueuedOutgoingPortRebinds() != 0)
+        break;
+    }
   } //while(1)
   atomic_store(&ExitRequested, true);
   if(atomic_load(&ThreadError))

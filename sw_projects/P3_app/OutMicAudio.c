@@ -142,17 +142,7 @@ void *OutgoingMicSamples(void *arg)
     {
         while(!atomic_load(&SDRActive) && !atomic_load(&ExitRequested))
         {
-            if(atomic_load(&ThreadData->Cmdid) & VBITCHANGEPORT)
-            {
-                printf("Mic data request change port\n");
-                if(!ThreadSocketIsSharedAlias(ThreadData))
-                {
-                    close(GetThreadSocketFD(ThreadData));             // close old socket, open new one
-                    MakeSocket(ThreadData, 0);                        // this binds to the new port.
-                    SyncSocketAliasesForOwner(ThreadData);            // refresh any shared alias socket IDs
-                }
-                atomic_fetch_and(&ThreadData->Cmdid, ~((uint_fast32_t)VBITCHANGEPORT));   // clear command bit
-            }
+            // Port rebinding is handled centrally by the p2app control plane.
             usleep(100);
         }
     //
