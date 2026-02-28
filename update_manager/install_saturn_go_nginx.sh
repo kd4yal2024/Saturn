@@ -373,33 +373,37 @@ NGINX
 
 PASSWORD_MIN_LEN=5
 generated_password=""
-if [[ ! -s "$BASIC_AUTH_FILE" ]]; then
-  info "Creating HTTP basic auth credentials for admin user..."
-  admin_password="${SATURN_ADMIN_PASSWORD:-}"
-  if [[ -z "$admin_password" ]]; then
-    if [[ -t 0 ]]; then
-      while true; do
-        read -r -s -p "Enter admin password (min ${PASSWORD_MIN_LEN} chars): " admin_password; echo
-        read -r -s -p "Confirm admin password: " admin_password_confirm; echo
-        if [[ "$admin_password" != "$admin_password_confirm" ]]; then
-          warn "Passwords do not match. Try again."
-          continue
-        fi
-        if [[ ${#admin_password} -lt ${PASSWORD_MIN_LEN} ]]; then
-          warn "Password too short. Minimum ${PASSWORD_MIN_LEN} characters."
-          continue
-        fi
-        break
-      done
-    else
-      admin_password="$(tr -dc 'A-Za-z0-9@#%^+=_' </dev/urandom | head -c 24)"
-      generated_password="$admin_password"
-      warn "No TTY available; generated random admin password."
-    fi
-  fi
+admin_password="${SATURN_ADMIN_PASSWORD:-}"
+if [[ -n "$admin_password" ]]; then
   if [[ ${#admin_password} -lt ${PASSWORD_MIN_LEN} ]]; then
     err "Provided SATURN_ADMIN_PASSWORD is too short (minimum ${PASSWORD_MIN_LEN} characters)."
     exit 1
+  fi
+  info "Setting HTTP basic auth credentials for admin user from SATURN_ADMIN_PASSWORD..."
+  printf '%s\n' "$admin_password" | htpasswd -i -c "$BASIC_AUTH_FILE" admin >/dev/null
+  chmod 0640 "$BASIC_AUTH_FILE"
+  chown root:www-data "$BASIC_AUTH_FILE"
+  ok "Basic auth configured"
+elif [[ ! -s "$BASIC_AUTH_FILE" ]]; then
+  info "Creating HTTP basic auth credentials for admin user..."
+  if [[ -t 0 ]]; then
+    while true; do
+      read -r -s -p "Enter admin password (min ${PASSWORD_MIN_LEN} chars): " admin_password; echo
+      read -r -s -p "Confirm admin password: " admin_password_confirm; echo
+      if [[ "$admin_password" != "$admin_password_confirm" ]]; then
+        warn "Passwords do not match. Try again."
+        continue
+      fi
+      if [[ ${#admin_password} -lt ${PASSWORD_MIN_LEN} ]]; then
+        warn "Password too short. Minimum ${PASSWORD_MIN_LEN} characters."
+        continue
+      fi
+      break
+    done
+  else
+    admin_password="$(tr -dc 'A-Za-z0-9@#%^+=_' </dev/urandom | head -c 24)"
+    generated_password="$admin_password"
+    warn "No TTY available; generated random admin password."
   fi
 
   printf '%s\n' "$admin_password" | htpasswd -i -c "$BASIC_AUTH_FILE" admin >/dev/null

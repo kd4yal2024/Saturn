@@ -1,10 +1,21 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
+# Preserve explicit environment overrides so /etc/default does not clobber them.
+_ENV_SATURN_FORCE_REPROVISION="${SATURN_FORCE_REPROVISION-}"
+_ENV_SATURN_ADMIN_PASSWORD="${SATURN_ADMIN_PASSWORD-}"
+
 # Optional environment file written by cloud-init user-data.
 if [[ -f /etc/default/saturn-provision ]]; then
   # shellcheck disable=SC1091
   source /etc/default/saturn-provision
+fi
+
+if [[ -n "${_ENV_SATURN_FORCE_REPROVISION}" ]]; then
+  SATURN_FORCE_REPROVISION="${_ENV_SATURN_FORCE_REPROVISION}"
+fi
+if [[ -n "${_ENV_SATURN_ADMIN_PASSWORD}" ]]; then
+  SATURN_ADMIN_PASSWORD="${_ENV_SATURN_ADMIN_PASSWORD}"
 fi
 
 SATURN_USER="${SATURN_USER:-pi}"
@@ -25,13 +36,14 @@ SATURN_FLASH_IMAGE="${SATURN_FLASH_IMAGE:-latest}"
 SATURN_FLASH_FALLBACK="${SATURN_FLASH_FALLBACK:-0}"
 SATURN_FLASH_CONFIRM="${SATURN_FLASH_CONFIRM:-}"
 
-SATURN_ADMIN_PASSWORD="${SATURN_ADMIN_PASSWORD:-}"
+SATURN_ADMIN_PASSWORD="${SATURN_ADMIN_PASSWORD:-admin}"
 SATURN_FORCE_REPROVISION="${SATURN_FORCE_REPROVISION:-0}"
 SATURN_STATE_DIR="${SATURN_STATE_DIR:-/var/lib/saturn-provision}"
 SATURN_LOG_FILE="${SATURN_LOG_FILE:-/var/log/saturn-provision.log}"
 
 apt_updated=0
 PYTHON_GUARD_DIR=""
+UPDATE_MANAGER_PASSWORD_FILE_DEFAULT="/var/lib/saturn-provision/update-manager-admin-password"
 
 log() { printf '[%(%Y-%m-%d %H:%M:%S)T] %s\n' -1 "$*"; }
 die() { log "ERROR: $*"; exit 1; }
@@ -45,6 +57,24 @@ bool_true() {
     1|true|TRUE|yes|YES|on|ON) return 0 ;;
     *) return 1 ;;
   esac
+}
+
+generate_password() {
+  local charset='ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789@#%^+=_'
+  local charset_len="${#charset}"
+  local password=""
+  local hex idx
+
+  # Avoid pipelines here: with `set -o pipefail`, `tr | head` can fail on SIGPIPE.
+  while [[ ${#password} -lt 24 ]]; do
+    hex="$(od -An -N1 -tx1 /dev/urandom)"
+    hex="${hex//[[:space:]]/}"
+    [[ -n "$hex" ]] || continue
+    idx=$((16#$hex % charset_len))
+    password+="${charset:idx:1}"
+  done
+
+  printf '%s' "$password"
 }
 
 run_as_user() {
@@ -336,6 +366,45 @@ install_update_manager() {
     bash "$script"
 }
 
+ensure_update_manager_admin_password() {
+  local password_file
+  local current_umask
+  password_file="${SATURN_UPDATE_MANAGER_PASSWORD_FILE:-$UPDATE_MANAGER_PASSWORD_FILE_DEFAULT}"
+
+  if [[ -n "$SATURN_ADMIN_PASSWORD" ]]; then
+    if [[ ${#SATURN_ADMIN_PASSWORD} -lt 5 ]]; then
+      die "SATURN_ADMIN_PASSWORD must be at least 5 characters."
+    fi
+    install -d -m 0755 "$(dirname "$password_file")"
+    current_umask="$(umask)"
+    umask 077
+    printf '%s\n' "$SATURN_ADMIN_PASSWORD" >"$password_file"
+    umask "$current_umask"
+    chmod 0600 "$password_file"
+    log "Using SATURN_ADMIN_PASSWORD from environment/config."
+    log "Stored update-manager admin password at $password_file (root-only)."
+    return 0
+  fi
+
+  if [[ -s "$password_file" ]]; then
+    SATURN_ADMIN_PASSWORD="$(head -n 1 "$password_file")"
+    if [[ ${#SATURN_ADMIN_PASSWORD} -lt 5 ]]; then
+      die "Existing update-manager password file is invalid (too short): $password_file"
+    fi
+    log "Reusing existing update-manager admin password from $password_file."
+    return 0
+  fi
+
+  SATURN_ADMIN_PASSWORD="$(generate_password)"
+  install -d -m 0755 "$(dirname "$password_file")"
+  current_umask="$(umask)"
+  umask 077
+  printf '%s\n' "$SATURN_ADMIN_PASSWORD" >"$password_file"
+  umask "$current_umask"
+  chmod 0600 "$password_file"
+  log "Generated update-manager admin password and stored at $password_file (root-only)."
+}
+
 maybe_flash_fpga() {
   local flash_script="$SATURN_REPO_DIR/update_manager/scripts/flash_fpga.sh"
   [[ -x "$flash_script" ]] || die "flash_fpga.sh not found/executable: $flash_script"
@@ -419,6 +488,7 @@ main() {
     install_p2app_control "$saturn_home"
   fi
   if bool_true "$SATURN_INSTALL_UPDATE_MANAGER"; then
+    ensure_update_manager_admin_password
     install_update_manager "$saturn_home"
   fi
   if bool_true "$SATURN_FLASH_FPGA"; then
