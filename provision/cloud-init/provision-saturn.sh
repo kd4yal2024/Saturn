@@ -15,8 +15,10 @@ SATURN_REPO_DIR="${SATURN_REPO_DIR:-}"
 SATURN_INSTALL_UPDATE_MANAGER="${SATURN_INSTALL_UPDATE_MANAGER:-1}"
 SATURN_INSTALL_P2APP_CONTROL="${SATURN_INSTALL_P2APP_CONTROL:-1}"
 SATURN_INSTALL_UDEV_RULES="${SATURN_INSTALL_UDEV_RULES:-1}"
+SATURN_INSTALL_SHUTDOWN_WAITER="${SATURN_INSTALL_SHUTDOWN_WAITER:-1}"
 SATURN_REBUILD_XDMA="${SATURN_REBUILD_XDMA:-1}"
 SATURN_BUILD_OPTIONAL_TOOLS="${SATURN_BUILD_OPTIONAL_TOOLS:-1}"
+SATURN_SHUTDOWN_WAITER_ENABLED_DEFAULT="${SATURN_SHUTDOWN_WAITER_ENABLED_DEFAULT:-false}"
 
 SATURN_FLASH_FPGA="${SATURN_FLASH_FPGA:-0}"
 SATURN_FLASH_IMAGE="${SATURN_FLASH_IMAGE:-latest}"
@@ -142,7 +144,7 @@ ensure_packages() {
     git rsync curl wget ca-certificates sudo \
     build-essential pkg-config gcc g++ make \
     python3 python3-venv python3-pip python3-psutil \
-    libgpiod-dev libi2c-dev libgtk-3-dev libglib2.0-bin lxterminal \
+    gpiod libgpiod-dev libi2c-dev libgtk-3-dev libglib2.0-bin lxterminal \
     libasound2-dev libpulse-dev libusb-1.0-0-dev libcurl4-openssl-dev \
     desktop-file-utils xdg-user-dirs
 
@@ -275,6 +277,18 @@ install_udev_rules() {
   fi
 }
 
+install_shutdown_waiter() {
+  local script="$SATURN_REPO_DIR/scripts/install-shutdown-waiter-service.sh"
+  if [[ -x "$script" ]]; then
+    log "Installing saturn-shutdown-waiter.service"
+    SATURN_USER="$SATURN_USER" \
+      SATURN_SHUTDOWN_WAITER_ENABLED_DEFAULT="$SATURN_SHUTDOWN_WAITER_ENABLED_DEFAULT" \
+      bash "$script"
+  else
+    log "WARN: Missing shutdown waiter installer: $script"
+  fi
+}
+
 install_p2app_control() {
   local saturn_home="$1"
   local script="$SATURN_REPO_DIR/sw_tools/p2app-control/install.sh"
@@ -372,6 +386,9 @@ main() {
   prepare_python_env "$saturn_home"
   build_saturn_apps "$nproc"
   install_desktop_shortcuts "$saturn_home"
+  if bool_true "$SATURN_INSTALL_SHUTDOWN_WAITER"; then
+    install_shutdown_waiter
+  fi
 
   if bool_true "$SATURN_REBUILD_XDMA"; then
     build_and_install_xdma "$nproc"

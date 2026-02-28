@@ -485,6 +485,34 @@ build_desktop_apps() {
     fi
 }
 
+# Install shutdown waiter service/config (migrates legacy desktop autostart)
+install_shutdown_waiter_service() {
+    render_section "Shutdown Waiter"
+    status_start "Installing shutdown service"
+    local install_script="$SATURN_DIR/scripts/install-shutdown-waiter-service.sh"
+
+    if [ -f "$install_script" ]; then
+        if [ ! -x "$install_script" ]; then
+            chmod +x "$install_script"
+        fi
+
+        {
+            sudo env SATURN_SHUTDOWN_WAITER_ENABLED_DEFAULT="${SATURN_SHUTDOWN_WAITER_ENABLED_DEFAULT:-false}" \
+                SATURN_USER="${SATURN_USER:-$USER}" \
+                bash "$install_script" > /tmp/shutdown_waiter_output 2>&1 &
+            progress_bar $! "Installing" 10
+            local waiter_status=$?
+            cat /tmp/shutdown_waiter_output
+            return $waiter_status
+        } || {
+            status_error "Shutdown waiter install failed"
+        }
+        status_success "Shutdown service installed"
+    else
+        status_warning "No shutdown waiter install script"
+    fi
+}
+
 # Install udev rules
 install_udev_rules() {
     render_section "Udev Rules"
@@ -648,6 +676,7 @@ main() {
     install_libraries
     build_p2app
     build_desktop_apps
+    install_shutdown_waiter_service
     install_udev_rules
     install_desktop_icons
     check_fpga_binary

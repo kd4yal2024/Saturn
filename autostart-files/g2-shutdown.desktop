@@ -1,3 +1,5 @@
 [Desktop Entry]
 Type=Application
-Exec=/home/pi/github/Saturn/scripts/shutdown-waiter.sh
+Name=Saturn Shutdown Waiter (Deprecated)
+Comment=Deprecated autostart entry; use saturn-shutdown-waiter.service
+Hidden=true

@@ -23,6 +23,7 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
 - P2/P3 test-lab status endpoint (`GET /p23_status`) reporting service state, source/deployed binaries, symlink selection, and systemd override state.
 - P2/P3 test-lab performance endpoint (`GET /p23_perf`) for lightweight process/network/XDMA/PCIe snapshots used to baseline P3/P2 runtime behavior and investigate lag.
 - New `p23-app-manager.sh` helper script for P2/P3 build/deploy/switch/revert actions via `/run`.
+- New `scripts/install-shutdown-waiter-service.sh` migration installer to deploy `saturn-shutdown-waiter.service`, initialize `/etc/default/saturn-shutdown-waiter`, and remove legacy `~/.config/autostart/g2-shutdown.desktop`.
 
 ### Changed
 - CSRF middleware now rejects POST requests that are missing both `Origin` and `Referer` headers, closing a bypass when neither header was sent.
@@ -62,6 +63,10 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
 - `p23_status` now reports parsed override metadata (`panel_mode`, `saturn_meta`) from the generated systemd drop-in for easier troubleshooting.
 - Hidden P2/P3 Test Lab now includes a Phase 1 performance panel with resettable baselines (process CPU/RSS/scheduler wait plus `eth0` throughput and XDMA interrupt-rate/PCIe link telemetry).
 - Hidden P2/P3 Test Lab performance panel now highlights threshold alerts for scheduler wait / CPU spikes and XDMA interrupt spikes or drops relative to baseline.
+- `update-G2.sh` and `update_manager/scripts/update-G2.py` now run the shutdown-waiter migration installer as part of update flow.
+- Provisioning (`provision/cloud-init/provision-saturn.sh`) now installs and runs the shutdown-waiter installer by default (`SATURN_INSTALL_SHUTDOWN_WAITER=1`) and adds `gpiod` to required packages.
+- `scripts/copy-autostart.sh` no longer installs `g2-shutdown.desktop`; shutdown waiting is now service-managed.
+- `autostart-files/g2-shutdown.desktop` is now marked deprecated/hidden to prevent new desktop-session activation.
 
 ### Fixed
 - `update-G2.py`: verbose mode now preserves captured command output used by status sections (fixes `Size: ?` and `Commit: ?` cases).
@@ -89,6 +94,7 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
 - `update-saturn-go.sh`: fixed detached root-helper status-file error handling/JSON quoting so `/saturngo_deploy_status` always returns valid JSON after deploy completion.
 - `p23-app-manager.sh`: dry-run deploy/switch no longer writes a temp override file (avoids failing when `/tmp` is full).
 - `index.html`: custom scripts/version/flags/password UI now reports clearer errors when an API returns HTML (login page / backend error page) instead of JSON.
+- `scripts/shutdown-waiter.sh`: added config-gated modes (`auto|true|false`), pull-up pin reads, high-before-arm guard, and consecutive-low confirmation to reduce false shutdown triggers on mixed hardware variants.
 
 ## [2026-02-13]
 ### Added

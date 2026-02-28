@@ -41,6 +41,7 @@ service names still use `saturn-go` for compatibility with existing installs.
 - Appliance update workflow: transactional repo staging, pre-update snapshot, policy-driven channels (`stable`/`beta`/`custom`), and rollback endpoint
 - Shared update-activity lock prevents overlapping `update-G2` runs with appliance update/rollback operations
 - Script runner injects active repo-root environment (`SATURN_REPO_ROOT`, `SATURN_DIR`, `SATURN_ACTIVE_REPO_ROOT`) so update scripts target the same checkout as backend state
+- Shutdown waiter migration tooling: updater/provisioning now install `saturn-shutdown-waiter.service` with `/etc/default/saturn-shutdown-waiter` defaults and retire legacy desktop autostart (`g2-shutdown.desktop`)
 - Health watchdog timer for self-heal restart if `/healthz` fails
 - Repo-root safety checks for manual root switching and restore operations
 
@@ -146,6 +147,13 @@ If a script entry does not define `version`, `/get_versions` now returns
   elevation is unavailable.
 - Optional privileged steps (currently udev rules install in web/non-TTY mode)
   are skipped with a warning instead of failing the whole run.
+- `update-G2.py` now invokes `scripts/install-shutdown-waiter-service.sh` to
+  install/migrate `saturn-shutdown-waiter.service`, remove legacy
+  `~/.config/autostart/g2-shutdown.desktop`, and initialize
+  `/etc/default/saturn-shutdown-waiter` when missing.
+- Shutdown waiter installer default mode is controlled by
+  `SATURN_SHUTDOWN_WAITER_ENABLED_DEFAULT` (default `false`), so image builds
+  can opt in to `auto`/`true` per hardware profile.
 - When launched by `/run`, the backend sets `SATURN_REPO_ROOT`, `SATURN_DIR`,
   and `SATURN_ACTIVE_REPO_ROOT` to the current active repo root before spawning
   the script.
@@ -309,6 +317,10 @@ Default URL:
   - Use `lsblk` (not `df`) to verify Linux sees the reader/card as a block device
   - Unmounted USB/SD readers will not appear in `df`
   - Insert the card before connecting some USB readers, then check `dmesg -w`, `lsusb`, and `lsblk`
+- System powers off soon after boot:
+  - Check `systemctl status saturn-shutdown-waiter.service`
+  - Verify `/etc/default/saturn-shutdown-waiter` mode (`SATURN_SHUTDOWN_WAITER_ENABLED=false|auto|true`) for the hardware profile
+  - Review recent waiter logs: `journalctl -u saturn-shutdown-waiter.service -n 100 --no-pager`
 - `update-pihpsdr.py` fails with `UnicodeEncodeError` on `latin-1` output:
   - Update the deployed `/opt/saturn-go/scripts/update-pihpsdr.py` from this repo; current script degrades unsupported symbols on non-UTF-8 streams and writes logs as UTF-8
 - Installer fails building Rust server with `lock file version '4'` / old Cargo:

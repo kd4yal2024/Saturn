@@ -514,6 +514,36 @@ def build_desktop_apps():
     run(["bash", script], live=True, cwd=os.path.dirname(script))
     ok("Apps built")
 
+def install_shutdown_waiter_service():
+    section("Shutdown Waiter")
+    script = os.path.join(SATURN_DIR, "scripts", "install-shutdown-waiter-service.sh")
+    if not os.path.isfile(script):
+        warn("No shutdown waiter install script: scripts/install-shutdown-waiter-service.sh")
+        return
+    if args.dry_run:
+        info(f"[Dry Run] Would run (sudo) {script}")
+        return
+
+    sudo_cmd = sudo_prefix("Installing shutdown waiter service", optional=True)
+    if sudo_cmd is None:
+        return
+
+    default_mode = os.environ.get("SATURN_SHUTDOWN_WAITER_ENABLED_DEFAULT", "false")
+    saturn_user = os.environ.get("SATURN_USER") or os.environ.get("USER", "pi")
+    run(
+        sudo_cmd
+        + [
+            "env",
+            f"SATURN_SHUTDOWN_WAITER_ENABLED_DEFAULT={default_mode}",
+            f"SATURN_USER={saturn_user}",
+            "bash",
+            script,
+        ],
+        live=True,
+        cwd=os.path.dirname(script),
+    )
+    ok("Shutdown service installed")
+
 def install_udev_rules():
     section("Udev Rules")
     rules_dir = os.path.join(SATURN_DIR, "rules")
@@ -636,6 +666,7 @@ if __name__ == "__main__":
     patch_p2app_cat_compatibility()
     build_p2app()
     build_desktop_apps()
+    install_shutdown_waiter_service()
     install_udev_rules()
     install_desktop_icons()
     check_fpga_binary()
