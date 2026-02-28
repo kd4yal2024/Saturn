@@ -58,10 +58,20 @@ ensure_root() {
 }
 
 ensure_user() {
-  if ! id -u "$SATURN_USER" >/dev/null 2>&1; then
-    die "User '$SATURN_USER' does not exist. Create it in cloud-init first."
-  fi
-  getent passwd "$SATURN_USER" | cut -d: -f6
+  local saturn_home=""
+  while true; do
+    if id -u "$SATURN_USER" >/dev/null 2>&1; then
+      saturn_home="$(getent passwd "$SATURN_USER" | cut -d: -f6 || true)"
+      if [[ -n "$saturn_home" ]]; then
+        printf '%s\n' "$saturn_home"
+        return 0
+      fi
+      log "User '$SATURN_USER' exists but home directory is unresolved; retrying in 5 minutes."
+    else
+      log "User '$SATURN_USER' not present yet; retrying in 5 minutes."
+    fi
+    sleep 300
+  done
 }
 
 assert_not_repo_python_script() {
@@ -204,34 +214,43 @@ prepare_python_env() {
 }
 
 build_dir() {
-  local label="$1"
-  local dir="$2"
-  local nproc="$3"
+  local saturn_home="$1"
+  local label="$2"
+  local dir="$3"
+  local nproc="$4"
+  local required="${5:-1}"
   [[ -d "$dir" ]] || die "$label directory missing: $dir"
   log "Building $label ($dir)"
-  make -C "$dir" clean >/dev/null 2>&1 || true
-  make -C "$dir" -j"$nproc"
+  if ! run_as_user "$saturn_home" make -C "$dir" -j"$nproc"; then
+    if bool_true "$required"; then
+      die "Build failed for required target: $label"
+    fi
+    log "WARN: Optional build failed for $label; continuing."
+    return 1
+  fi
+  return 0
 }
 
 build_saturn_apps() {
-  local nproc="$1"
+  local saturn_home="$1"
+  local nproc="$2"
 
-  build_dir "P2_app"      "$SATURN_REPO_DIR/sw_projects/P2_app" "$nproc"
-  build_dir "P1_app"      "$SATURN_REPO_DIR/sw_projects/P1_app" "$nproc"
-  build_dir "audiotest"   "$SATURN_REPO_DIR/sw_projects/audiotest" "$nproc"
-  build_dir "biascheck"   "$SATURN_REPO_DIR/sw_projects/biascheck" "$nproc"
-  build_dir "codectest"   "$SATURN_REPO_DIR/sw_projects/codectest" "$nproc"
-  build_dir "axi_rw"      "$SATURN_REPO_DIR/sw_tools/axi_rw" "$nproc"
-  build_dir "flashwriter" "$SATURN_REPO_DIR/sw_tools/flashwriter" "$nproc"
-  build_dir "load-FPGA"   "$SATURN_REPO_DIR/sw_tools/load-FPGA" "$nproc"
-  build_dir "spiload"     "$SATURN_REPO_DIR/sw_tools/spiload" "$nproc"
+  build_dir "$saturn_home" "P2_app"      "$SATURN_REPO_DIR/sw_projects/P2_app" "$nproc" 1
+  log "Skipping P1_app build (not required in provisioning flow)."
+  build_dir "$saturn_home" "audiotest"   "$SATURN_REPO_DIR/sw_projects/audiotest" "$nproc" 1
+  build_dir "$saturn_home" "biascheck"   "$SATURN_REPO_DIR/sw_projects/biascheck" "$nproc" 1
+  build_dir "$saturn_home" "codectest"   "$SATURN_REPO_DIR/sw_projects/codectest" "$nproc" 1
+  build_dir "$saturn_home" "axi_rw"      "$SATURN_REPO_DIR/sw_tools/axi_rw" "$nproc" 1
+  build_dir "$saturn_home" "flashwriter" "$SATURN_REPO_DIR/sw_tools/flashwriter" "$nproc" 1
+  build_dir "$saturn_home" "load-FPGA"   "$SATURN_REPO_DIR/sw_tools/load-FPGA" "$nproc" 1
+  build_dir "$saturn_home" "spiload"     "$SATURN_REPO_DIR/sw_tools/spiload" "$nproc" 1
 
   if bool_true "$SATURN_BUILD_OPTIONAL_TOOLS"; then
-    build_dir "FPGAVersion"   "$SATURN_REPO_DIR/sw_tools/FPGAVersion" "$nproc"
-    build_dir "IQdmatest"     "$SATURN_REPO_DIR/sw_tools/IQdmatest" "$nproc"
-    build_dir "codecwrite"    "$SATURN_REPO_DIR/sw_tools/codecwrite" "$nproc"
-    build_dir "spiadcread"    "$SATURN_REPO_DIR/sw_tools/spiadcread" "$nproc"
-    build_dir "linuxdriver tools" "$SATURN_REPO_DIR/linuxdriver/tools" "$nproc"
+    build_dir "$saturn_home" "FPGAVersion"      "$SATURN_REPO_DIR/sw_tools/FPGAVersion" "$nproc" 0
+    build_dir "$saturn_home" "IQdmatest"        "$SATURN_REPO_DIR/sw_tools/IQdmatest" "$nproc" 0
+    build_dir "$saturn_home" "codecwrite"       "$SATURN_REPO_DIR/sw_tools/codecwrite" "$nproc" 0
+    build_dir "$saturn_home" "spiadcread"       "$SATURN_REPO_DIR/sw_tools/spiadcread" "$nproc" 0
+    build_dir "$saturn_home" "linuxdriver tools" "$SATURN_REPO_DIR/linuxdriver/tools" "$nproc" 0
   fi
 }
 
@@ -384,7 +403,7 @@ main() {
   ensure_repo "$saturn_home"
   enable_python_repo_guard
   prepare_python_env "$saturn_home"
-  build_saturn_apps "$nproc"
+  build_saturn_apps "$saturn_home" "$nproc"
   install_desktop_shortcuts "$saturn_home"
   if bool_true "$SATURN_INSTALL_SHUTDOWN_WAITER"; then
     install_shutdown_waiter

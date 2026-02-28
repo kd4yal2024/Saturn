@@ -153,3 +153,8 @@ Provisioning is configured to keep the repo clean of Python cache artifacts:
 - Ensure `SATURN_USER` exists in the target image before provisioning runs.
 - If you use a user other than `pi`, update `SATURN_USER` in `user-data`.
 - Network access is required on first boot for apt and git operations.
+- `cloud-init` user-data is root-owned; read it with `sudo cat /var/lib/cloud/instance/user-data.txt`.
+- Provisioning now waits and retries every 5 minutes until `SATURN_USER` exists.
+- `P1_app` is intentionally skipped in provisioning (legacy target not required for current images).
+- Before capturing/cloning a reusable image, run `sudo cloud-init clean --logs` so first-boot provisioning re-runs on cloned targets.
+- Keep `meta-data` `instance-id` unique per image/seed when possible.
