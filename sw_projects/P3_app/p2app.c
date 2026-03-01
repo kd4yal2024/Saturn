@@ -283,6 +283,8 @@ static bool QueueGeneralPacketForApply(const uint8_t* PacketBuffer, size_t Packe
   return Updated;
 }
 
+static void MaybeActivateFromStartupHandshake(void);
+
 static int ApplyQueuedGeneralPacketIfStable(void)
 {
   uint8_t LocalPacket[VDISCOVERYSIZE];
@@ -309,18 +311,28 @@ static int ApplyQueuedGeneralPacketIfStable(void)
   pthread_mutex_unlock(&g_general_packet_mutex);
 
   if(IsNoOp)
+  {
+    // Duplicate general packets still refresh startup handshake state.
+    atomic_store(&ReplyAddressSet, true);
     return 0;
+  }
 
   HandleGeneralPacket(LocalPacket);
   MaybeLogStartupEvent(&g_startup_general_applied_logged, "General packet applied");
   atomic_store(&ReplyAddressSet, true);
-  if(atomic_load(&ReplyAddressSet) && atomic_load(&StartBitReceived))
+  return 1;
+}
+
+static void MaybeActivateFromStartupHandshake(void)
+{
+  if(!atomic_load(&SDRActive) &&
+      atomic_load(&ReplyAddressSet) &&
+      atomic_load(&StartBitReceived))
   {
     atomic_store(&SDRActive, true);
     SetTXEnable(true);
     MarkStartupHandshakeComplete();
   }
-  return 1;
 }
 
 static int ApplyQueuedOutgoingPortRebinds(void)
@@ -1372,6 +1384,7 @@ int main(int argc, char *argv[])
       if(ApplyQueuedOutgoingPortRebinds() != 0)
         break;
     }
+    MaybeActivateFromStartupHandshake();
   } //while(1)
   atomic_store(&ExitRequested, true);
   if(atomic_load(&ThreadError))

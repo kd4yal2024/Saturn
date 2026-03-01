@@ -70,13 +70,33 @@ void *IncomingHighPriority(void *arg)                   // listener thread
   {
     if(atomic_load(&ThreadData->Cmdid) & VBITCHANGEPORT)
     {
+      int Socketfd;
       printf("High priority request change port\n");
-      close(GetThreadSocketFD(ThreadData));
-      if(MakeSocket(ThreadData, 0) != 0)
+      if(ThreadSocketIsSharedAlias(ThreadData))
       {
-        perror("MakeSocket, high priority");
-        atomic_store(&ThreadError, true);
-        break;
+        // Shared aliases must not close/rebind the owner socket.
+        Socketfd = atomic_load(&ThreadData->Socketid);
+        if(Socketfd > 0)
+        {
+          int SharedSocketfd = GetThreadSocketFD(ThreadData);
+          if(Socketfd != SharedSocketfd)
+          {
+            close(Socketfd);
+            atomic_store(&ThreadData->Socketid, 0);
+          }
+        }
+      }
+      else
+      {
+        Socketfd = atomic_load(&ThreadData->Socketid);
+        if(Socketfd > 0)
+          close(Socketfd);
+        if(MakeSocket(ThreadData, 0) != 0)
+        {
+          perror("MakeSocket, high priority");
+          atomic_store(&ThreadError, true);
+          break;
+        }
       }
       atomic_fetch_and(&ThreadData->Cmdid, ~((uint_fast32_t)VBITCHANGEPORT));
     }
@@ -89,7 +109,15 @@ void *IncomingHighPriority(void *arg)                   // listener thread
     datagram.msg_iovlen = 1;
     datagram.msg_name = &addr_from;
     datagram.msg_namelen = sizeof(addr_from);
-    size = recvmsg(atomic_load(&ThreadData->Socketid), &datagram, 0);   // get one message. If it times out, ges size=-1
+    {
+      int Socketfd = GetThreadSocketFD(ThreadData);
+      if(Socketfd <= 0)
+      {
+        usleep(1000);
+        continue;
+      }
+      size = recvmsg(Socketfd, &datagram, 0);   // get one message. If it times out, ges size=-1
+    }
     if(size < 0 && errno != EAGAIN)
     {
       perror("recvfrom, high priority");
@@ -251,7 +279,12 @@ void *IncomingHighPriority(void *arg)                   // listener thread
 //
 // close down thread
 //
-  close(atomic_load(&ThreadData->Socketid));    // close incoming data socket
+  if(!ThreadSocketIsSharedAlias(ThreadData))
+  {
+    int Socketfd = atomic_load(&ThreadData->Socketid);
+    if(Socketfd > 0)
+      close(Socketfd);    // close incoming data socket
+  }
   atomic_store(&ThreadData->Socketid, 0);
   atomic_store(&ThreadData->Active, false);     // indicate it is closed
   return NULL;
