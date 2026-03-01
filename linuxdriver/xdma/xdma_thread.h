@@ -117,6 +117,28 @@ int xdma_threads_create(unsigned int num_threads);
 
 /*****************************************************************************/
 /**
+ * xdma_kthread_start() - start one xdma worker thread
+ *
+ * @param[in] thp: pointer to thread context
+ * @param[in] name: base thread name
+ * @param[in] id: thread index suffix
+ *
+ * @return 0 on success, negative errno on failure
+ *****************************************************************************/
+int xdma_kthread_start(struct xdma_kthread *thp, char *name, int id);
+
+/*****************************************************************************/
+/**
+ * xdma_kthread_stop() - stop one xdma worker thread
+ *
+ * @param[in] thp: pointer to thread context
+ *
+ * @return 0 on success, negative errno on failure
+ *****************************************************************************/
+int xdma_kthread_stop(struct xdma_kthread *thp);
+
+/*****************************************************************************/
+/**
  * xdma_threads_destroy() - destroy all the xdma threads created
  *                          during system initialization
  *
