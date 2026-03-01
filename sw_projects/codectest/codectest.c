@@ -77,7 +77,7 @@ int MaxMicLevel = 0;
 //
 void HandlerSetEERMode(bool Unused)
 {
-
+	(void)Unused;
 }
 
 
@@ -106,7 +106,7 @@ void CheckPTT(void)
 // Samples is the number of samples to create
 // data format is twos complement
 // Freq is in Hz
-void CreateTestData(char* MemPtr, uint32_t Samples, uint32_t Freq)
+void CreateTestData(unsigned char* MemPtr, uint32_t Samples, uint32_t Freq)
 {
 	uint32_t* Data;						// ptr to memory block to write data
 	int16_t Word;						// a word of write data
@@ -136,7 +136,7 @@ void CreateTestData(char* MemPtr, uint32_t Samples, uint32_t Freq)
 //
 // DMA Write sample data t oCodec
 // Length = number of bytes to transfer
-void DMAWriteToCodec(char* MemPtr, uint32_t Length)
+void DMAWriteToCodec(unsigned char* MemPtr, uint32_t Length)
 {
 	uint32_t Depth = 0;
 	bool FIFOOverflow, FIFOOverThreshold, FIFOUnderflowed;
@@ -171,7 +171,7 @@ void DMAWriteToCodec(char* MemPtr, uint32_t Length)
 // Length = number of MIC bytes to transfer
 // need to read the bytes in, then write 2 copies to output buffer
 //
-void CopyMicToSpeaker(unsigned char* Read, char *Write, uint32_t Length)
+void CopyMicToSpeaker(unsigned char* Read, unsigned char *Write, uint32_t Length)
 {
 	uint32_t *WritePtr;
 	uint16_t *ReadPtr;
@@ -245,11 +245,12 @@ void DMAReadFromCodec(unsigned char* MemPtr, uint32_t Length)
 //
 int main(int argc, char *argv[])
 {
-  	char* WriteBuffer = NULL;											// data for DMA write
+  	unsigned char* WriteBuffer = NULL;											// data for DMA write
   	unsigned char* ReadBuffer = NULL;											// data for DMA read
 	uint32_t BufferSize = VMEMBUFFERSIZE;
-	uint32_t Frequency;
+	uint32_t Frequency = 0;
 	uint32_t Length;
+	uint16_t PCBVersion = 0;
 	bool MicRing = false;
 	bool EnableBias =false;
 	bool EnableBoost =false;
@@ -310,9 +311,10 @@ int main(int argc, char *argv[])
   		sem_init(&RFGPIOMutex, 0, 1);                                     // for RF GPIO register
   		sem_init(&CodecRegMutex, 0, 1);                                   // for codec writes
 
-		OpenXDMADriver(false);
-		PrintVersionInfo();
-		CodecInitialise();
+			OpenXDMADriver(false);
+			PrintVersionInfo();
+			PCBVersion = GetPCBVersionNumber();
+			CodecInitialise(PCBVersion);
 		SetByteSwapping(false);                                            // h/w to generate normalbyte order
 		SetSpkrMute(false);
 		posix_memalign((void **)&WriteBuffer, VALIGNMENT, BufferSize);
@@ -391,4 +393,3 @@ out:
   		sem_destroy(&CodecRegMutex);
 	}
 }
-
