@@ -2,6 +2,30 @@
 
 All notable changes to `P3_app` from this hardening pass are documented here.
 
+## [2026-03-01] Startup Handshake and High-Priority Socket Stabilization
+
+### Fixed
+
+- Fixed startup handshake activation race by re-evaluating activation from the
+  main control loop after queued port rebind work, instead of relying on a
+  single timing-sensitive activation point.
+- Fixed duplicate-general startup behavior so repeated identical general packets
+  still refresh startup handshake state (`ReplyAddressSet`) and can complete
+  activation with an already-seen run-bit.
+- Fixed high-priority incoming thread socket handling for shared-alias sockets:
+  - avoid closing owner sockets from alias threads
+  - use alias-aware socket resolution for `recvmsg(...)`
+  - avoid alias-owner double-close during shutdown
+
+### Changed
+
+- Startup sequencing now consistently performs:
+  - queue/apply general control updates
+  - queued outgoing rebind processing (while inactive)
+  - handshake activation check (`reply + run -> active`)
+- This ordering reduces startup timing sensitivity observed during repeated
+  Thetis connect/disconnect cycles.
+
 ## [2026-02-27] Thetis Startup Compatibility and Diagnostics
 
 ### Fixed

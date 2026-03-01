@@ -63,6 +63,33 @@ Important regression note:
 - Current baseline keeps startup trace instrumentation and compatibility behavior, without
   CAT respawn throttling.
 
+## Thetis Startup/Rebind Stabilization (2026-03-01)
+
+Follow-up fixes were applied after stress testing P3 startup under repeated
+connect/disconnect traffic patterns.
+
+What changed:
+
+- Startup handshake activation now runs from the main control loop after queued
+  outgoing port-rebind processing, so activation does not depend on a single
+  race-prone timing point.
+- Duplicate general packets now still refresh startup handshake state
+  (`ReplyAddressSet`) even when payload-suppression avoids re-applying an
+  identical general packet.
+- `InHighPriority.c` now uses alias-safe socket handling:
+  - shared aliases do not close owner sockets during rebind
+  - receive path uses alias-aware socket resolution (`GetThreadSocketFD(...)`)
+  - shutdown avoids double-closing owner sockets from alias threads
+
+Why:
+
+- Field/bench testing showed startup could intermittently miss
+  `reply + run -> active` when packet arrival order varied.
+- Rebind activity during inactive startup windows could briefly expose invalid
+  socket IDs to startup traffic threads.
+- Shared-alias close/rebind behavior needed stricter ownership rules to avoid
+  clobbering owner sockets.
+
 ## What Changed And Why
 
 ### 1. Shutdown semaphore cleanup fix
