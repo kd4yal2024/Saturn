@@ -52,6 +52,13 @@ SATURN_UI_SHOW_LOG_DEFAULT="${SATURN_UI_SHOW_LOG_DEFAULT:-0}"
 SATURN_UI_LAUNCHER="${SATURN_UI_LAUNCHER:-/usr/local/bin/saturn-provision-ui-launcher.sh}"
 SATURN_UI_AUTOSTART_NAME="${SATURN_UI_AUTOSTART_NAME:-saturn-provision-ui.desktop}"
 SATURN_CLEAN_TMP_AFTER_PROVISION="${SATURN_CLEAN_TMP_AFTER_PROVISION:-1}"
+SATURN_ENABLE_I2C="${SATURN_ENABLE_I2C:-1}"
+SATURN_ENABLE_SSH="${SATURN_ENABLE_SSH:-1}"
+SATURN_ENABLE_VNC="${SATURN_ENABLE_VNC:-1}"
+SATURN_LCD_PROFILE="${SATURN_LCD_PROFILE:-auto}"
+SATURN_LCD_SIZE_INCH="${SATURN_LCD_SIZE_INCH:-}"
+SATURN_LCD_AUTO_DEFAULT_SIZE_INCH="${SATURN_LCD_AUTO_DEFAULT_SIZE_INCH:-}"
+SATURN_LCD_I2C_DETECT_ADDR="${SATURN_LCD_I2C_DETECT_ADDR:-0x45}"
 
 apt_updated=0
 SATURN_UI_STARTED=0
@@ -423,6 +430,28 @@ ensure_packages() {
   if bool_true "$SATURN_INSTALL_UPDATE_MANAGER"; then
     apt_install nginx apache2-utils rustc cargo
   fi
+
+  if bool_true "$SATURN_ENABLE_I2C"; then
+    apt_install i2c-tools
+  fi
+
+  if bool_true "$SATURN_ENABLE_SSH"; then
+    apt_install openssh-server
+  fi
+
+  if (bool_true "$SATURN_ENABLE_I2C" || bool_true "$SATURN_ENABLE_SSH" || bool_true "$SATURN_ENABLE_VNC") \
+    && ! command -v raspi-config >/dev/null 2>&1 \
+    && apt-cache show raspi-config >/dev/null 2>&1; then
+    apt_install raspi-config
+  fi
+
+  if bool_true "$SATURN_ENABLE_VNC"; then
+    if apt-cache show realvnc-vnc-server >/dev/null 2>&1; then
+      apt_install realvnc-vnc-server
+    else
+      log "WARN: realvnc-vnc-server package not available in apt sources; VNC enablement expects an installed VNC service."
+    fi
+  fi
 }
 
 ensure_kernel_headers() {
@@ -441,6 +470,340 @@ ensure_kernel_headers() {
     apt-get install -y --no-install-recommends raspberrypi-kernel-headers || true
   fi
   [[ -d "$build_dir" ]] || die "Kernel headers still missing at $build_dir"
+}
+
+enable_service_if_available() {
+  local service
+  for service in "$@"; do
+    if systemctl cat "$service" >/dev/null 2>&1; then
+      log "Enabling service: $service"
+      if systemctl enable --now "$service"; then
+        return 0
+      fi
+      log "WARN: Failed to enable/start service: $service"
+    fi
+  done
+  return 1
+}
+
+get_boot_config_file() {
+  local candidate
+  for candidate in /boot/firmware/config.txt /boot/config.txt; do
+    if [[ -f "$candidate" ]]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+  return 1
+}
+
+detect_compute_module_generation() {
+  local model
+  model="$(tr -d '\0' < /proc/device-tree/model 2>/dev/null || true)"
+  case "$model" in
+    *"Compute Module 5"*) printf 'cm5\n' ;;
+    *"Compute Module 4"*) printf 'cm4\n' ;;
+    *) return 1 ;;
+  esac
+}
+
+detect_lcd_size_from_config() {
+  local boot_config="$1"
+  if grep -Eq '^[[:space:]]*dtoverlay=vc4-kms-dsi-waveshare-panel,7_0_inchC,.*' "$boot_config"; then
+    printf '7\n'
+    return 0
+  fi
+  if grep -Eq '^[[:space:]]*dtoverlay=vc4-kms-dsi-waveshare-panel,8_0_inch,.*' "$boot_config"; then
+    printf '8\n'
+    return 0
+  fi
+  return 1
+}
+
+i2c_address_detected() {
+  local bus="$1"
+  local addr="${2:-0x45}"
+  local addr_dec addr_hex out
+
+  command -v i2cdetect >/dev/null 2>&1 || return 1
+  [[ -e "/dev/i2c-${bus}" ]] || return 1
+
+  if ! addr_dec=$((addr)); then
+    return 1
+  fi
+  if (( addr_dec < 0x03 || addr_dec > 0x77 )); then
+    return 1
+  fi
+  addr_hex="$(printf '%02x' "$addr_dec")"
+  out="$(i2cdetect -y "$bus" "$addr_dec" "$addr_dec" 2>/dev/null || true)"
+  grep -Eq "(^|[[:space:]])(UU|${addr_hex})([[:space:]]|$)" <<<"$out"
+}
+
+detect_lcd_size_from_i2c_probe() {
+  local detect_addr="${SATURN_LCD_I2C_DETECT_ADDR:-0x45}"
+  local bus0_has=0 bus1_has=0
+
+  if i2c_address_detected 0 "$detect_addr"; then
+    bus0_has=1
+  fi
+  if i2c_address_detected 1 "$detect_addr"; then
+    bus1_has=1
+  fi
+
+  if [[ "$bus0_has" -eq 1 && "$bus1_has" -eq 0 ]]; then
+    printf '7\n'
+    return 0
+  fi
+  if [[ "$bus1_has" -eq 1 && "$bus0_has" -eq 0 ]]; then
+    printf '8\n'
+    return 0
+  fi
+  return 1
+}
+
+detect_lcd_size_auto() {
+  local boot_config="$1"
+  local size=""
+
+  size="${SATURN_LCD_SIZE_INCH:-}"
+  case "$size" in
+    7|8)
+      printf '%s|env\n' "$size"
+      return 0
+      ;;
+    "")
+      ;;
+    *)
+      log "WARN: Invalid SATURN_LCD_SIZE_INCH='$size'; expected 7 or 8."
+      ;;
+  esac
+
+  if [[ -n "$boot_config" ]]; then
+    size="$(detect_lcd_size_from_config "$boot_config" 2>/dev/null || true)"
+    case "$size" in
+      7|8)
+        printf '%s|config\n' "$size"
+        return 0
+        ;;
+    esac
+  fi
+
+  size="$(detect_lcd_size_from_i2c_probe 2>/dev/null || true)"
+  case "$size" in
+    7|8)
+      printf '%s|i2c-probe\n' "$size"
+      return 0
+      ;;
+  esac
+
+  size="${SATURN_LCD_AUTO_DEFAULT_SIZE_INCH:-}"
+  case "$size" in
+    7|8)
+      printf '%s|default\n' "$size"
+      return 0
+      ;;
+  esac
+
+  return 1
+}
+
+resolve_lcd_profile() {
+  local boot_config="$1"
+  local requested cm size size_source
+  requested="${SATURN_LCD_PROFILE,,}"
+
+  case "$requested" in
+    none|"")
+      return 1
+      ;;
+    cm4-7|cm4-8|cm5-7|cm5-8)
+      printf '%s\n' "$requested"
+      return 0
+      ;;
+    auto)
+      cm="$(detect_compute_module_generation 2>/dev/null || true)"
+      if IFS='|' read -r size size_source < <(detect_lcd_size_auto "$boot_config" 2>/dev/null); then
+        :
+      else
+        size=""
+        size_source=""
+      fi
+      if [[ -z "$cm" || -z "$size" ]]; then
+        log "WARN: SATURN_LCD_PROFILE=auto could not resolve a unique profile (cm='${cm:-unknown}', size='${size:-unknown}'). Set SATURN_LCD_PROFILE explicitly."
+        return 1
+      fi
+      log "Auto-selected LCD profile inputs: cm='$cm', size='${size}' (source=${size_source:-unknown})"
+      printf '%s-%s\n' "$cm" "$size"
+      return 0
+      ;;
+    *)
+      log "WARN: Unknown SATURN_LCD_PROFILE='$SATURN_LCD_PROFILE'; skipping LCD boot configuration."
+      return 1
+      ;;
+  esac
+}
+
+render_lcd_profile_block() {
+  local profile="$1"
+  local uart_line panel_line
+
+  case "$profile" in
+    cm4-7)
+      uart_line='dtoverlay=uart3'
+      panel_line='dtoverlay=vc4-kms-dsi-waveshare-panel,7_0_inchC,i2c0'
+      ;;
+    cm4-8)
+      uart_line='dtoverlay=uart3'
+      panel_line='dtoverlay=vc4-kms-dsi-waveshare-panel,8_0_inch,i2c1'
+      ;;
+    cm5-7)
+      uart_line='dtoverlay=uart2-pi5'
+      panel_line='dtoverlay=vc4-kms-dsi-waveshare-panel,7_0_inchC,i2c0'
+      ;;
+    cm5-8)
+      uart_line='dtoverlay=uart2-pi5'
+      panel_line='dtoverlay=vc4-kms-dsi-waveshare-panel,8_0_inch,i2c1'
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+
+  cat <<EOF
+# Saturn managed LCD profile: $profile
+dtparam=i2c_arm=on
+dtparam=audio=on
+auto_initramfs=1
+dtoverlay=vc4-kms-v3d
+max_framebuffers=2
+disable_fw_kms_setup=1
+arm_64bit=1
+disable_overscan=1
+arm_boost=1
+
+[cm4]
+otg_mode=1
+
+[cm5]
+dtoverlay=dwc2,dr_mode=host
+
+[all]
+dtparam=uart0=on
+$uart_line
+$panel_line
+usb_max_current_enable=1
+EOF
+}
+
+configure_lcd_profile() {
+  local boot_config profile block
+
+  if ! boot_config="$(get_boot_config_file 2>/dev/null)"; then
+    log "WARN: Could not locate /boot/firmware/config.txt or /boot/config.txt for LCD profile setup."
+    return 0
+  fi
+
+  profile="$(resolve_lcd_profile "$boot_config" 2>/dev/null || true)"
+  [[ -n "$profile" ]] || return 0
+
+  if ! block="$(render_lcd_profile_block "$profile")"; then
+    log "WARN: Failed to render LCD block for profile '$profile'; skipping."
+    return 0
+  fi
+
+  sed -i '/^# BEGIN SATURN LCD PROFILE$/,/^# END SATURN LCD PROFILE$/d' "$boot_config"
+  {
+    printf '\n# BEGIN SATURN LCD PROFILE\n'
+    printf '# Managed by Saturn provisioning (non-destructive append)\n'
+    printf '%s\n' "$block"
+    printf '# END SATURN LCD PROFILE\n'
+  } >>"$boot_config"
+
+  log "Applied SATURN_LCD_PROFILE='$profile' to $boot_config"
+  log "HDMI settings preserved (existing HDMI lines were not removed)."
+}
+
+enable_i2c_fallback() {
+  local boot_config
+  boot_config="$(get_boot_config_file 2>/dev/null || true)"
+
+  if [[ -n "$boot_config" ]]; then
+    if grep -Eq '^[[:space:]]*dtparam=i2c_arm=on([[:space:]]*#.*)?$' "$boot_config"; then
+      :
+    elif grep -Eq '^[[:space:]]*#?[[:space:]]*dtparam=i2c_arm=on' "$boot_config"; then
+      if ! sed -i -E 's/^[[:space:]]*#?[[:space:]]*dtparam=i2c_arm=on.*/dtparam=i2c_arm=on/' "$boot_config"; then
+        log "WARN: Failed to update dtparam=i2c_arm=on in $boot_config"
+      fi
+    else
+      if ! printf '\n# Enabled by Saturn provisioning\ndtparam=i2c_arm=on\n' >>"$boot_config"; then
+        log "WARN: Failed to append dtparam=i2c_arm=on to $boot_config"
+      fi
+    fi
+    log "Ensured I2C boot setting in $boot_config"
+  else
+    log "WARN: Could not locate /boot/firmware/config.txt or /boot/config.txt for I2C boot setting."
+  fi
+
+  install -d -m 0755 /etc/modules-load.d
+  if ! printf 'i2c-dev\n' > /etc/modules-load.d/i2c-dev.conf; then
+    log "WARN: Failed to write /etc/modules-load.d/i2c-dev.conf"
+  fi
+  modprobe i2c-dev >/dev/null 2>&1 || true
+}
+
+configure_i2c_vnc_ssh() {
+  local has_raspi_config=0
+  local i2c_done=0 ssh_done=0 vnc_done=0
+
+  if command -v raspi-config >/dev/null 2>&1; then
+    has_raspi_config=1
+  fi
+
+  if bool_true "$SATURN_ENABLE_I2C"; then
+    if [[ "$has_raspi_config" -eq 1 ]]; then
+      log "Enabling I2C via raspi-config"
+      if raspi-config nonint do_i2c 0; then
+        i2c_done=1
+      else
+        log "WARN: raspi-config failed to enable I2C; using fallback."
+      fi
+    fi
+    if [[ "$i2c_done" -eq 0 ]]; then
+      enable_i2c_fallback
+    fi
+  fi
+
+  if bool_true "$SATURN_ENABLE_SSH"; then
+    if [[ "$has_raspi_config" -eq 1 ]]; then
+      log "Enabling SSH via raspi-config"
+      if raspi-config nonint do_ssh 0; then
+        ssh_done=1
+      else
+        log "WARN: raspi-config failed to enable SSH; trying systemd service fallback."
+      fi
+    fi
+    if [[ "$ssh_done" -eq 0 ]]; then
+      if ! enable_service_if_available ssh.service sshd.service; then
+        log "WARN: Could not find an SSH service unit to enable."
+      fi
+    fi
+  fi
+
+  if bool_true "$SATURN_ENABLE_VNC"; then
+    if [[ "$has_raspi_config" -eq 1 ]]; then
+      log "Enabling VNC via raspi-config"
+      if raspi-config nonint do_vnc 0; then
+        vnc_done=1
+      else
+        log "WARN: raspi-config failed to enable VNC; trying systemd service fallback."
+      fi
+    fi
+    if [[ "$vnc_done" -eq 0 ]]; then
+      if ! enable_service_if_available vncserver-x11-serviced.service wayvnc.service x11vnc.service; then
+        log "WARN: Could not find a VNC service unit to enable."
+      fi
+    fi
+  fi
 }
 
 ensure_repo() {
@@ -727,6 +1090,10 @@ main() {
   log "Starting Saturn provisioning for user '$SATURN_USER' (home: $saturn_home)"
   set_ui_stage "Installing build/runtime dependencies"
   ensure_packages
+  set_ui_stage "Applying LCD boot profile"
+  configure_lcd_profile
+  set_ui_stage "Configuring I2C, SSH, and VNC"
+  configure_i2c_vnc_ssh
   set_ui_stage "Preparing desktop provisioning UI"
   install_desktop_ui_autostart "$saturn_home"
   if [[ "$SATURN_UI_STARTED" -eq 0 ]]; then

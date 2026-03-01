@@ -28,13 +28,32 @@ All notable changes to provisioning assets are documented in this file.
   - added explicit stage updates throughout provisioning for richer desktop progress feedback
   - enhanced error handling to publish failure state/messages for UI consumption
   - explicit runtime `SATURN_*` environment variables now override `/etc/default/saturn-provision` values
+  - added default-on provisioning toggles for remote/hardware access:
+    - `SATURN_ENABLE_I2C=1`
+    - `SATURN_ENABLE_SSH=1`
+    - `SATURN_ENABLE_VNC=1`
+  - provisioning now attempts to enable I2C/SSH/VNC during first boot
+    - prefers `raspi-config` non-interactive actions on Raspberry Pi OS images
+    - falls back to service/boot-config handling when `raspi-config` is unavailable
+  - added LCD boot-profile support for mixed hardware variants:
+    - `SATURN_LCD_PROFILE=none|cm4-7|cm4-8|cm5-7|cm5-8|auto`
+    - default LCD profile mode is now `auto`
+    - optional `SATURN_LCD_SIZE_INCH=7|8` explicit override for `auto` resolution
+    - optional `SATURN_LCD_AUTO_DEFAULT_SIZE_INCH=7|8` fallback for ambiguous `auto` detection
+    - optional `SATURN_LCD_I2C_DETECT_ADDR` for custom panel-detect I2C address (default `0x45`)
+    - `auto` mode now detects size in order: env override -> existing config overlay -> I2C probe
+    - writes/replaces a managed LCD block in `config.txt` instead of replacing the whole file
+    - preserves existing HDMI-related lines outside the managed block
 
 ### Documentation
 
 - `README.md`
   - documented optional desktop C++/GTK provisioning UI and usage flags
+  - documented LCD profile mapping and `SATURN_LCD_*` controls
 - `cloud-init/user-data.example.yaml`
   - added desktop provisioning UI example settings (`SATURN_DESKTOP_UI`, `SATURN_UI_TIMEOUT_SECONDS`, `SATURN_UI_SHOW_LOG_DEFAULT`)
+  - added default `SATURN_ENABLE_I2C`, `SATURN_ENABLE_SSH`, and `SATURN_ENABLE_VNC` toggles
+  - added LCD profile settings examples (`SATURN_LCD_PROFILE`, `SATURN_LCD_SIZE_INCH`, `SATURN_LCD_AUTO_DEFAULT_SIZE_INCH`, `SATURN_LCD_I2C_DETECT_ADDR`)
 
 ## [2026-02-28]
 

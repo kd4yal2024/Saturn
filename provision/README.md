@@ -14,6 +14,8 @@ This directory contains provisioning assets for cloud-init based setup of a Satu
 `cloud-init/provision-saturn.sh` runs as root and:
 
 - installs required apt packages
+- enables `i2c`, `ssh`, and `vnc` by default when requested (`SATURN_ENABLE_*`)
+- can apply a managed LCD boot profile for CM4/CM5 + Waveshare 7"/8" combos (`SATURN_LCD_PROFILE`)
 - clones or updates `kd4yal2024/Saturn` (default branch `main`)
 - builds Saturn apps and tools (including `sw_tools`)
 - installs desktop launchers (deprecated `P2app.desktop` is removed and not reinstalled)
@@ -66,6 +68,33 @@ Environment precedence:
 
 - Explicit runtime `SATURN_*` environment variables now take precedence over `/etc/default/saturn-provision`.
 
+## LCD Profiles (CM4/CM5 + 7"/8")
+
+Provisioning can append a managed LCD block to `config.txt` without replacing the file.
+This is designed to preserve existing HDMI-related entries while adding panel-specific overlays.
+
+Environment controls:
+
+- `SATURN_LCD_PROFILE=none|cm4-7|cm4-8|cm5-7|cm5-8|auto` (default: `auto`)
+- `SATURN_LCD_SIZE_INCH=7|8` (optional explicit override for `SATURN_LCD_PROFILE=auto`)
+- `SATURN_LCD_AUTO_DEFAULT_SIZE_INCH=7|8` (optional fallback when auto detection is ambiguous)
+- `SATURN_LCD_I2C_DETECT_ADDR=0x45` (optional I2C address used by size auto-probe)
+
+Profile mapping:
+
+- `cm4-7`: `dtoverlay=uart3` + `dtoverlay=vc4-kms-dsi-waveshare-panel,7_0_inchC,i2c0`
+- `cm4-8`: `dtoverlay=uart3` + `dtoverlay=vc4-kms-dsi-waveshare-panel,8_0_inch,i2c1`
+- `cm5-7`: `dtoverlay=uart2-pi5` + `dtoverlay=vc4-kms-dsi-waveshare-panel,7_0_inchC,i2c0`
+- `cm5-8`: `dtoverlay=uart2-pi5` + `dtoverlay=vc4-kms-dsi-waveshare-panel,8_0_inch,i2c1`
+
+Notes:
+
+- The managed block is delimited by `# BEGIN SATURN LCD PROFILE` and `# END SATURN LCD PROFILE`.
+- Re-running provisioning replaces only that managed block.
+- Existing HDMI lines outside the managed block are left untouched.
+- Display profile changes generally require reboot to take effect.
+- Auto mode resolves in this order: `SATURN_LCD_SIZE_INCH` -> existing Waveshare overlay in `config.txt` -> I2C probe (`i2c-0` implies 7", `i2c-1` implies 8") -> `SATURN_LCD_AUTO_DEFAULT_SIZE_INCH`.
+
 ## Raspberry Pi Imager Workflow (End-to-End)
 
 This section describes the complete workflow for building an SD card with Raspberry Pi Imager and having Saturn provision automatically on first boot.
@@ -87,7 +116,7 @@ Copy and customize as needed:
 
 - set `SATURN_USER` to the actual login user that will exist on the target image
 - keep `SATURN_REPO_URL` and `SATURN_REPO_BRANCH` as needed
-- review feature toggles (`SATURN_INSTALL_*`, `SATURN_REBUILD_XDMA`, `SATURN_BUILD_OPTIONAL_TOOLS`)
+- review feature toggles (`SATURN_INSTALL_*`, `SATURN_REBUILD_XDMA`, `SATURN_BUILD_OPTIONAL_TOOLS`, `SATURN_ENABLE_*`, `SATURN_LCD_*`)
 - leave FPGA flashing off by default unless intentionally enabled
 
 ### 3. Write SD card with Raspberry Pi Imager
@@ -173,6 +202,10 @@ From `user-data.example.yaml`:
 - `SATURN_INSTALL_UDEV_RULES=1`
 - `SATURN_REBUILD_XDMA=1`
 - `SATURN_BUILD_OPTIONAL_TOOLS=1`
+- `SATURN_ENABLE_I2C=1`
+- `SATURN_ENABLE_SSH=1`
+- `SATURN_ENABLE_VNC=1`
+- `SATURN_LCD_PROFILE=auto`
 - `SATURN_DESKTOP_UI=auto`
 - `SATURN_UI_TIMEOUT_SECONDS=2700`
 - `SATURN_UI_SHOW_LOG_DEFAULT=0`
