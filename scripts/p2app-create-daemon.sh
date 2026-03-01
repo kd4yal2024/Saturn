@@ -171,7 +171,7 @@ create_service_file() {
 [Unit]
 Description=P2_app Service for ANAN G2
 After=network.target
-Documentation=https://github.com/laurencebarker/Saturn
+Documentation=https://github.com/kd4yal2024/Saturn
 
 [Service]
 WorkingDirectory=$P2_APP_DIR

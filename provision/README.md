@@ -49,12 +49,15 @@ Environment controls:
 - `SATURN_UI_SHOW_LOG_DEFAULT=1|0` (default: `0`)
 - `SATURN_UI_BINARY` (default: `/usr/local/bin/saturn-provision-ui`)
 - `SATURN_UI_STATUS_FILE` (default: `/var/lib/saturn-provision/ui-status`)
+- `SATURN_CLEAN_TMP_AFTER_PROVISION=1|0` (default: `1`)
 
 Notes:
 
 - Cloud-init boots without a desktop session in many images; in that case `auto` mode will skip UI and continue normal provisioning.
 - Provisioning now installs a per-user autostart entry at `~/.config/autostart/saturn-provision-ui.desktop` for `SATURN_USER` (default `pi`), so the widget appears when that desktop session starts.
+- Once launched, the provisioning UI remains open after completion until the user clicks `Close`.
 - On successful provisioning completion, that autostart entry is removed automatically to avoid launching on every future desktop login.
+- On successful provisioning completion, temporary Saturn artifacts under `/tmp` are cleaned by default (`SATURN_CLEAN_TMP_AFTER_PROVISION=1`).
 - For interactive desktop runs, preserve display environment when escalating, for example:
   - `sudo -E SATURN_DESKTOP_UI=1 bash provision-saturn.sh`
 - No Python files are added for this UI path; the widget is C++/GTK only.

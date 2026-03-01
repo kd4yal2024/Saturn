@@ -51,6 +51,7 @@ SATURN_UI_SOURCE_FILE="${SATURN_UI_SOURCE_FILE:-${SCRIPT_DIR}/saturn-provision-u
 SATURN_UI_SHOW_LOG_DEFAULT="${SATURN_UI_SHOW_LOG_DEFAULT:-0}"
 SATURN_UI_LAUNCHER="${SATURN_UI_LAUNCHER:-/usr/local/bin/saturn-provision-ui-launcher.sh}"
 SATURN_UI_AUTOSTART_NAME="${SATURN_UI_AUTOSTART_NAME:-saturn-provision-ui.desktop}"
+SATURN_CLEAN_TMP_AFTER_PROVISION="${SATURN_CLEAN_TMP_AFTER_PROVISION:-1}"
 
 apt_updated=0
 SATURN_UI_STARTED=0
@@ -82,6 +83,23 @@ bool_true() {
     1|true|TRUE|yes|YES|on|ON) return 0 ;;
     *) return 1 ;;
   esac
+}
+
+ensure_tmp_permissions() {
+  if [[ ! -d /tmp ]]; then
+    install -d -m 1777 /tmp
+  fi
+  chmod 1777 /tmp
+  chown root:root /tmp 2>/dev/null || true
+}
+
+ensure_dir_present() {
+  local dir="$1"
+  local mode="${2:-0755}"
+  if [[ -d "$dir" ]]; then
+    return 0
+  fi
+  install -d -m "$mode" "$dir"
 }
 
 detect_display() {
@@ -211,7 +229,7 @@ remove_desktop_ui_autostart() {
 
 launch_desktop_ui() {
   local saturn_home="$1"
-  local display xauth
+  local display xauth user_uid runtime_dir dbus_address ui_cmd_escaped
   local -a ui_cmd
 
   [[ "$SATURN_UI_STARTED" -eq 0 ]] || return 0
@@ -243,9 +261,15 @@ launch_desktop_ui() {
     ui_cmd+=("--show-log")
   fi
 
-  if run_as_user "$saturn_home" env DISPLAY="$display" XAUTHORITY="$xauth" "${ui_cmd[@]}" >/tmp/saturn-provision-ui.log 2>&1 & then
+  user_uid="$(id -u "$SATURN_USER" 2>/dev/null || true)"
+  runtime_dir="${XDG_RUNTIME_DIR:-/run/user/${user_uid}}"
+  dbus_address="${DBUS_SESSION_BUS_ADDRESS:-unix:path=${runtime_dir}/bus}"
+  printf -v ui_cmd_escaped '%q ' "${ui_cmd[@]}"
+
+  if run_as_user "$saturn_home" env DISPLAY="$display" XAUTHORITY="$xauth" XDG_RUNTIME_DIR="$runtime_dir" DBUS_SESSION_BUS_ADDRESS="$dbus_address" \
+    bash -lc "if pgrep -x saturn-provision-ui >/dev/null 2>&1; then exit 0; fi; nohup ${ui_cmd_escaped} >/tmp/saturn-provision-ui.log 2>&1 < /dev/null &"; then
     SATURN_UI_STARTED=1
-    log "Desktop provisioning UI launched (DISPLAY=$display)."
+    log "Desktop provisioning UI launched (detached, DISPLAY=$display)."
   else
     log "WARN: Failed to launch desktop provisioning UI."
   fi
@@ -641,6 +665,17 @@ cleanup_python_artifacts_in_repo() {
   find "$SATURN_REPO_DIR" -type f \( -name "*.pyc" -o -name "*.pyo" \) -delete 2>/dev/null || true
 }
 
+cleanup_tmp_artifacts() {
+  if ! bool_true "$SATURN_CLEAN_TMP_AFTER_PROVISION"; then
+    return 0
+  fi
+
+  log "Cleaning Saturn temporary artifacts under /tmp"
+  find /tmp -mindepth 1 -maxdepth 1 \
+    \( -name 'saturn-*' -o -name 'p2app-*' -o -name 'p3-*' -o -name 'xdma_make.log' -o -name 'update-desktop-apps-test.log' \) \
+    -exec rm -rf {} + 2>/dev/null || true
+}
+
 write_completion_state() {
   local saturn_home="$1"
   local commit
@@ -657,9 +692,13 @@ EOF
 }
 
 main() {
+  local log_dir
   ensure_root
-  install -d -m 0755 "$(dirname "$SATURN_LOG_FILE")" "$SATURN_STATE_DIR"
-  install -d -m 0755 "$PYTHONPYCACHEPREFIX"
+  ensure_tmp_permissions
+  log_dir="$(dirname "$SATURN_LOG_FILE")"
+  ensure_dir_present "$log_dir" 0755
+  ensure_dir_present "$SATURN_STATE_DIR" 0755
+  ensure_dir_present "$PYTHONPYCACHEPREFIX" 0755
   touch "$SATURN_LOG_FILE"
   exec > >(tee -a "$SATURN_LOG_FILE") 2>&1
 
@@ -735,6 +774,8 @@ main() {
   cleanup_python_artifacts_in_repo
   write_completion_state "$saturn_home"
   remove_desktop_ui_autostart "$saturn_home"
+  set_ui_stage "Cleaning temporary files"
+  cleanup_tmp_artifacts
   write_ui_status "SUCCESS" "Provisioning completed successfully"
   log "Saturn provisioning completed successfully."
   log "State file: ${SATURN_STATE_DIR}/complete"

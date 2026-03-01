@@ -48,7 +48,7 @@ cat > "$TMP_UNIT" <<EOF2
 Description=P2_app Service for ANAN G2
 After=network-online.target
 Wants=network-online.target
-Documentation=https://github.com/laurencebarker/Saturn
+Documentation=https://github.com/kd4yal2024/Saturn
 
 [Service]
 WorkingDirectory=${P2APP_DIR}
