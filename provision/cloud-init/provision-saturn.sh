@@ -1,9 +1,14 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Preserve explicit environment overrides so /etc/default does not clobber them.
-_ENV_SATURN_FORCE_REPROVISION="${SATURN_FORCE_REPROVISION-}"
-_ENV_SATURN_ADMIN_PASSWORD="${SATURN_ADMIN_PASSWORD-}"
+declare -A _ENV_SATURN_OVERRIDES=()
+while IFS='=' read -r _saturn_name _saturn_value; do
+  case "$_saturn_name" in
+    SATURN_*) _ENV_SATURN_OVERRIDES["$_saturn_name"]="$_saturn_value" ;;
+  esac
+done < <(env)
 
 # Optional environment file written by cloud-init user-data.
 if [[ -f /etc/default/saturn-provision ]]; then
@@ -11,12 +16,10 @@ if [[ -f /etc/default/saturn-provision ]]; then
   source /etc/default/saturn-provision
 fi
 
-if [[ -n "${_ENV_SATURN_FORCE_REPROVISION}" ]]; then
-  SATURN_FORCE_REPROVISION="${_ENV_SATURN_FORCE_REPROVISION}"
-fi
-if [[ -n "${_ENV_SATURN_ADMIN_PASSWORD}" ]]; then
-  SATURN_ADMIN_PASSWORD="${_ENV_SATURN_ADMIN_PASSWORD}"
-fi
+for _saturn_name in "${!_ENV_SATURN_OVERRIDES[@]}"; do
+  export "${_saturn_name}=${_ENV_SATURN_OVERRIDES[$_saturn_name]}"
+done
+unset _saturn_name _saturn_value
 
 SATURN_USER="${SATURN_USER:-pi}"
 SATURN_REPO_URL="${SATURN_REPO_URL:-https://github.com/kd4yal2024/Saturn.git}"
@@ -40,13 +43,35 @@ SATURN_ADMIN_PASSWORD="${SATURN_ADMIN_PASSWORD:-admin}"
 SATURN_FORCE_REPROVISION="${SATURN_FORCE_REPROVISION:-0}"
 SATURN_STATE_DIR="${SATURN_STATE_DIR:-/var/lib/saturn-provision}"
 SATURN_LOG_FILE="${SATURN_LOG_FILE:-/var/log/saturn-provision.log}"
+SATURN_DESKTOP_UI="${SATURN_DESKTOP_UI:-auto}"
+SATURN_UI_TIMEOUT_SECONDS="${SATURN_UI_TIMEOUT_SECONDS:-2700}"
+SATURN_UI_STATUS_FILE="${SATURN_UI_STATUS_FILE:-${SATURN_STATE_DIR}/ui-status}"
+SATURN_UI_BINARY="${SATURN_UI_BINARY:-/usr/local/bin/saturn-provision-ui}"
+SATURN_UI_SOURCE_FILE="${SATURN_UI_SOURCE_FILE:-${SCRIPT_DIR}/saturn-provision-ui.cpp}"
+SATURN_UI_SHOW_LOG_DEFAULT="${SATURN_UI_SHOW_LOG_DEFAULT:-0}"
+SATURN_UI_LAUNCHER="${SATURN_UI_LAUNCHER:-/usr/local/bin/saturn-provision-ui-launcher.sh}"
+SATURN_UI_AUTOSTART_NAME="${SATURN_UI_AUTOSTART_NAME:-saturn-provision-ui.desktop}"
 
 apt_updated=0
+SATURN_UI_STARTED=0
+SATURN_UI_AUTOSTART_INSTALLED=0
 PYTHON_GUARD_DIR=""
 UPDATE_MANAGER_PASSWORD_FILE_DEFAULT="/var/lib/saturn-provision/update-manager-admin-password"
 
 log() { printf '[%(%Y-%m-%d %H:%M:%S)T] %s\n' -1 "$*"; }
-die() { log "ERROR: $*"; exit 1; }
+write_ui_status() {
+  local state="$1"
+  local message="${2:-}"
+  local timestamp
+  timestamp="$(date '+%Y-%m-%d %H:%M:%S')"
+  install -d -m 0755 "$SATURN_STATE_DIR" >/dev/null 2>&1 || true
+  printf '%s|%s|%s\n' "$state" "$timestamp" "$message" >"$SATURN_UI_STATUS_FILE" 2>/dev/null || true
+}
+die() {
+  write_ui_status "FAILED" "$*"
+  log "ERROR: $*"
+  exit 1
+}
 
 # Keep Python from dropping bytecode into source trees.
 export PYTHONDONTWRITEBYTECODE=1
@@ -57,6 +82,185 @@ bool_true() {
     1|true|TRUE|yes|YES|on|ON) return 0 ;;
     *) return 1 ;;
   esac
+}
+
+detect_display() {
+  if [[ -n "${DISPLAY:-}" ]]; then
+    printf '%s\n' "$DISPLAY"
+    return 0
+  fi
+  if [[ -S /tmp/.X11-unix/X0 ]]; then
+    printf '%s\n' ":0"
+    return 0
+  fi
+  return 1
+}
+
+desktop_ui_enabled() {
+  case "${SATURN_DESKTOP_UI:-auto}" in
+    1|true|TRUE|yes|YES|on|ON) return 0 ;;
+    0|false|FALSE|no|NO|off|OFF) return 1 ;;
+    auto|AUTO|"") return 0 ;;
+    *)
+      log "WARN: Unknown SATURN_DESKTOP_UI value '${SATURN_DESKTOP_UI}'; desktop UI disabled."
+      return 1
+      ;;
+  esac
+}
+
+build_desktop_ui_binary() {
+  [[ -f "$SATURN_UI_SOURCE_FILE" ]] || {
+    log "WARN: Desktop UI source not found: $SATURN_UI_SOURCE_FILE"
+    return 1
+  }
+
+  if [[ -x "$SATURN_UI_BINARY" && "$SATURN_UI_BINARY" -nt "$SATURN_UI_SOURCE_FILE" ]]; then
+    return 0
+  fi
+
+  if ! command -v g++ >/dev/null 2>&1 || ! command -v pkg-config >/dev/null 2>&1; then
+    log "WARN: g++/pkg-config missing; cannot build desktop UI binary."
+    return 1
+  fi
+
+  local gtk_flags
+  gtk_flags="$(pkg-config --cflags --libs gtk+-3.0 2>/dev/null || true)"
+  if [[ -z "$gtk_flags" ]]; then
+    log "WARN: pkg-config could not resolve gtk+-3.0; desktop UI disabled."
+    return 1
+  fi
+
+  log "Building desktop provisioning UI binary: $SATURN_UI_BINARY"
+  install -d -m 0755 "$(dirname "$SATURN_UI_BINARY")"
+  # shellcheck disable=SC2086
+  if ! g++ -std=c++17 -O2 -Wall -Wextra "$SATURN_UI_SOURCE_FILE" -o "$SATURN_UI_BINARY" $gtk_flags; then
+    log "WARN: Failed to build desktop provisioning UI binary."
+    return 1
+  fi
+  return 0
+}
+
+install_desktop_ui_autostart() {
+  local saturn_home="$1"
+  local autostart_dir desktop_file show_log_flag
+
+  [[ "$SATURN_UI_AUTOSTART_INSTALLED" -eq 0 ]] || return 0
+  desktop_ui_enabled || return 0
+  if ! build_desktop_ui_binary; then
+    return 0
+  fi
+
+  autostart_dir="${saturn_home}/.config/autostart"
+  desktop_file="${autostart_dir}/${SATURN_UI_AUTOSTART_NAME}"
+  if bool_true "$SATURN_UI_SHOW_LOG_DEFAULT"; then
+    show_log_flag="1"
+  else
+    show_log_flag="0"
+  fi
+
+  install -d -m 0755 -o "$SATURN_USER" -g "$SATURN_USER" "$autostart_dir"
+
+  cat > "$SATURN_UI_LAUNCHER" <<EOF
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+if pgrep -u "\$(id -u)" -x saturn-provision-ui >/dev/null 2>&1; then
+  exit 0
+fi
+
+args=(
+  "$SATURN_UI_BINARY"
+  "--log-file" "$SATURN_LOG_FILE"
+  "--completion-file" "${SATURN_STATE_DIR}/complete"
+  "--status-file" "$SATURN_UI_STATUS_FILE"
+  "--timeout-seconds" "$SATURN_UI_TIMEOUT_SECONDS"
+)
+
+if [[ "$show_log_flag" == "1" ]]; then
+  args+=("--show-log")
+fi
+
+exec "\${args[@]}"
+EOF
+  chmod 0755 "$SATURN_UI_LAUNCHER"
+
+  cat > "$desktop_file" <<EOF
+[Desktop Entry]
+Type=Application
+Name=Saturn Provisioning Status
+Comment=Shows Saturn provisioning progress
+Exec=$SATURN_UI_LAUNCHER
+Terminal=false
+X-GNOME-Autostart-enabled=true
+EOF
+  chown "$SATURN_USER:$SATURN_USER" "$desktop_file"
+  chmod 0644 "$desktop_file"
+  SATURN_UI_AUTOSTART_INSTALLED=1
+  log "Installed desktop autostart for $SATURN_USER: $desktop_file"
+}
+
+remove_desktop_ui_autostart() {
+  local saturn_home="$1"
+  local desktop_file
+  desktop_file="${saturn_home}/.config/autostart/${SATURN_UI_AUTOSTART_NAME}"
+  if [[ -f "$desktop_file" ]]; then
+    rm -f "$desktop_file"
+    log "Removed desktop autostart after successful provisioning: $desktop_file"
+  fi
+}
+
+launch_desktop_ui() {
+  local saturn_home="$1"
+  local display xauth
+  local -a ui_cmd
+
+  [[ "$SATURN_UI_STARTED" -eq 0 ]] || return 0
+  desktop_ui_enabled || return 0
+
+  display="$(detect_display 2>/dev/null || true)"
+  if [[ -z "$display" ]]; then
+    if [[ "$SATURN_DESKTOP_UI" == "1" || "$SATURN_DESKTOP_UI" == "true" || "$SATURN_DESKTOP_UI" == "TRUE" || "$SATURN_DESKTOP_UI" == "yes" || "$SATURN_DESKTOP_UI" == "YES" || "$SATURN_DESKTOP_UI" == "on" || "$SATURN_DESKTOP_UI" == "ON" ]]; then
+      log "WARN: SATURN_DESKTOP_UI is forced on, but no desktop display was found."
+    else
+      log "Desktop session not active yet; UI will appear when $SATURN_USER logs in."
+    fi
+    return 0
+  fi
+
+  if ! build_desktop_ui_binary; then
+    return 0
+  fi
+
+  xauth="${XAUTHORITY:-${saturn_home}/.Xauthority}"
+  ui_cmd=(
+    "$SATURN_UI_BINARY"
+    "--log-file" "$SATURN_LOG_FILE"
+    "--completion-file" "${SATURN_STATE_DIR}/complete"
+    "--status-file" "$SATURN_UI_STATUS_FILE"
+    "--timeout-seconds" "$SATURN_UI_TIMEOUT_SECONDS"
+  )
+  if bool_true "$SATURN_UI_SHOW_LOG_DEFAULT"; then
+    ui_cmd+=("--show-log")
+  fi
+
+  if run_as_user "$saturn_home" env DISPLAY="$display" XAUTHORITY="$xauth" "${ui_cmd[@]}" >/tmp/saturn-provision-ui.log 2>&1 & then
+    SATURN_UI_STARTED=1
+    log "Desktop provisioning UI launched (DISPLAY=$display)."
+  else
+    log "WARN: Failed to launch desktop provisioning UI."
+  fi
+}
+
+set_ui_stage() {
+  local message="$1"
+  write_ui_status "RUNNING" "$message"
+}
+
+handle_error() {
+  local line="$1"
+  local cmd="$2"
+  write_ui_status "FAILED" "Line $line failed while running: $cmd"
+  die "Line $line failed while running: $cmd"
 }
 
 generate_password() {
@@ -456,47 +660,78 @@ main() {
   exec > >(tee -a "$SATURN_LOG_FILE") 2>&1
 
   trap cleanup_python_guard EXIT
-  trap 'die "Line $LINENO failed while running: ${BASH_COMMAND}"' ERR
+  trap 'handle_error "$LINENO" "${BASH_COMMAND}"' ERR
 
   if [[ -f "${SATURN_STATE_DIR}/complete" ]] && ! bool_true "$SATURN_FORCE_REPROVISION"; then
+    local existing_home
+    existing_home="$(getent passwd "$SATURN_USER" | cut -d: -f6 || true)"
+    if [[ -n "$existing_home" ]]; then
+      remove_desktop_ui_autostart "$existing_home"
+    fi
+    write_ui_status "SUCCESS" "Provisioning already completed"
     log "Provisioning already completed. Set SATURN_FORCE_REPROVISION=1 to run again."
     exit 0
   fi
 
   local saturn_home nproc
+  set_ui_stage "Resolving Saturn user account"
   saturn_home="$(ensure_user)"
   nproc="$(nproc 2>/dev/null || echo 1)"
 
+  set_ui_stage "Launching desktop provisioning interface"
+  launch_desktop_ui "$saturn_home"
+
   log "Starting Saturn provisioning for user '$SATURN_USER' (home: $saturn_home)"
+  set_ui_stage "Installing build/runtime dependencies"
   ensure_packages
+  set_ui_stage "Preparing desktop provisioning UI"
+  install_desktop_ui_autostart "$saturn_home"
+  if [[ "$SATURN_UI_STARTED" -eq 0 ]]; then
+    launch_desktop_ui "$saturn_home"
+  fi
+
+  set_ui_stage "Syncing Saturn repository"
   ensure_repo "$saturn_home"
+  set_ui_stage "Enabling Python repo guard"
   enable_python_repo_guard
+  set_ui_stage "Preparing Python virtual environment"
   prepare_python_env "$saturn_home"
+  set_ui_stage "Building Saturn applications and tools"
   build_saturn_apps "$saturn_home" "$nproc"
+  set_ui_stage "Installing desktop launchers"
   install_desktop_shortcuts "$saturn_home"
   if bool_true "$SATURN_INSTALL_SHUTDOWN_WAITER"; then
+    set_ui_stage "Installing shutdown waiter service"
     install_shutdown_waiter
   fi
 
   if bool_true "$SATURN_REBUILD_XDMA"; then
+    set_ui_stage "Building and installing XDMA module"
     build_and_install_xdma "$nproc"
   fi
   if bool_true "$SATURN_INSTALL_UDEV_RULES"; then
+    set_ui_stage "Installing udev rules"
     install_udev_rules
   fi
   if bool_true "$SATURN_INSTALL_P2APP_CONTROL"; then
+    set_ui_stage "Installing p2app-control service"
     install_p2app_control "$saturn_home"
   fi
   if bool_true "$SATURN_INSTALL_UPDATE_MANAGER"; then
+    set_ui_stage "Installing Saturn update manager"
     ensure_update_manager_admin_password
     install_update_manager "$saturn_home"
   fi
   if bool_true "$SATURN_FLASH_FPGA"; then
+    set_ui_stage "Flashing FPGA image"
     maybe_flash_fpga
   fi
 
+  set_ui_stage "Finalizing provisioning state"
   cleanup_python_artifacts_in_repo
   write_completion_state "$saturn_home"
+  remove_desktop_ui_autostart "$saturn_home"
+  write_ui_status "SUCCESS" "Provisioning completed successfully"
   log "Saturn provisioning completed successfully."
   log "State file: ${SATURN_STATE_DIR}/complete"
   log "Provision log: $SATURN_LOG_FILE"

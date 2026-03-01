@@ -2,6 +2,40 @@
 
 All notable changes to provisioning assets are documented in this file.
 
+## [2026-03-01]
+
+### Added
+
+- `cloud-init/saturn-provision-ui.cpp`
+  - new C++/GTK3 desktop provisioning widget with:
+    - stage/status display
+    - elapsed and ETA countdown
+    - toggleable live log panel
+    - final success/failure summary based on provisioning state
+
+### Changed
+
+- `cloud-init/provision-saturn.sh`
+  - added optional desktop UI launch controls:
+    - `SATURN_DESKTOP_UI=auto|1|0`
+    - `SATURN_UI_TIMEOUT_SECONDS`
+    - `SATURN_UI_SHOW_LOG_DEFAULT`
+    - `SATURN_UI_BINARY`
+    - `SATURN_UI_STATUS_FILE`
+  - installs desktop autostart for `SATURN_USER` (default `pi`) at `~/.config/autostart/saturn-provision-ui.desktop`
+  - removes the desktop autostart entry automatically after successful provisioning
+  - added UI status protocol file updates (`RUNNING|SUCCESS|FAILED`)
+  - added explicit stage updates throughout provisioning for richer desktop progress feedback
+  - enhanced error handling to publish failure state/messages for UI consumption
+  - explicit runtime `SATURN_*` environment variables now override `/etc/default/saturn-provision` values
+
+### Documentation
+
+- `README.md`
+  - documented optional desktop C++/GTK provisioning UI and usage flags
+- `cloud-init/user-data.example.yaml`
+  - added desktop provisioning UI example settings (`SATURN_DESKTOP_UI`, `SATURN_UI_TIMEOUT_SECONDS`, `SATURN_UI_SHOW_LOG_DEFAULT`)
+
 ## [2026-02-28]
 
 ### Changed

@@ -7,6 +7,7 @@ This directory contains provisioning assets for cloud-init based setup of a Satu
 - `cloud-init/user-data.example.yaml`
 - `cloud-init/meta-data.example.yaml`
 - `cloud-init/provision-saturn.sh`
+- `cloud-init/saturn-provision-ui.cpp`
 
 ## What It Does
 
@@ -26,6 +27,41 @@ Completion and logs:
 
 - state file: `/var/lib/saturn-provision/complete`
 - log file: `/var/log/saturn-provision.log`
+- live status file (desktop UI): `/var/lib/saturn-provision/ui-status`
+
+## Desktop GTK Provisioning UI (Optional)
+
+`provision-saturn.sh` now supports an optional desktop widget written in C++ with GTK3.
+It can show:
+
+- current provisioning stage
+- elapsed time and ETA countdown
+- toggleable live log panel
+- final success/failure state
+
+Environment controls:
+
+- `SATURN_DESKTOP_UI=auto|1|0` (default: `auto`)
+  - `auto`: launches UI only when an X11 display is available
+  - `1`: force attempt to launch UI
+  - `0`: disable UI
+- `SATURN_UI_TIMEOUT_SECONDS` (default: `2700`)
+- `SATURN_UI_SHOW_LOG_DEFAULT=1|0` (default: `0`)
+- `SATURN_UI_BINARY` (default: `/usr/local/bin/saturn-provision-ui`)
+- `SATURN_UI_STATUS_FILE` (default: `/var/lib/saturn-provision/ui-status`)
+
+Notes:
+
+- Cloud-init boots without a desktop session in many images; in that case `auto` mode will skip UI and continue normal provisioning.
+- Provisioning now installs a per-user autostart entry at `~/.config/autostart/saturn-provision-ui.desktop` for `SATURN_USER` (default `pi`), so the widget appears when that desktop session starts.
+- On successful provisioning completion, that autostart entry is removed automatically to avoid launching on every future desktop login.
+- For interactive desktop runs, preserve display environment when escalating, for example:
+  - `sudo -E SATURN_DESKTOP_UI=1 bash provision-saturn.sh`
+- No Python files are added for this UI path; the widget is C++/GTK only.
+
+Environment precedence:
+
+- Explicit runtime `SATURN_*` environment variables now take precedence over `/etc/default/saturn-provision`.
 
 ## Raspberry Pi Imager Workflow (End-to-End)
 
@@ -131,6 +167,9 @@ From `user-data.example.yaml`:
 - `SATURN_INSTALL_UDEV_RULES=1`
 - `SATURN_REBUILD_XDMA=1`
 - `SATURN_BUILD_OPTIONAL_TOOLS=1`
+- `SATURN_DESKTOP_UI=auto`
+- `SATURN_UI_TIMEOUT_SECONDS=2700`
+- `SATURN_UI_SHOW_LOG_DEFAULT=0`
 - `SATURN_FLASH_FPGA=0` (safety default)
 
 Important safety settings for flashing:

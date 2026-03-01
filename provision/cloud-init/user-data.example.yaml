@@ -26,6 +26,14 @@ write_files:
       SATURN_REBUILD_XDMA=1
       SATURN_BUILD_OPTIONAL_TOOLS=1
 
+      # Optional desktop provisioning UI (C++/GTK)
+      # auto = launch when desktop/X11 is available
+      # 1    = force launch attempt
+      # 0    = disable
+      SATURN_DESKTOP_UI=auto
+      SATURN_UI_TIMEOUT_SECONDS=2700
+      SATURN_UI_SHOW_LOG_DEFAULT=0
+
       # FPGA flash is OFF by default for safety.
       SATURN_FLASH_FPGA=0
       SATURN_FLASH_IMAGE=latest
