@@ -392,6 +392,10 @@ ensure_packages() {
     libasound2-dev libpulse-dev libusb-1.0-0-dev libcurl4-openssl-dev \
     desktop-file-utils xdg-user-dirs
 
+  if bool_true "$SATURN_INSTALL_P2APP_CONTROL"; then
+    apt_install libayatana-appindicator3-dev ayatana-indicator-application
+  fi
+
   if bool_true "$SATURN_INSTALL_UPDATE_MANAGER"; then
     apt_install nginx apache2-utils rustc cargo
   fi
@@ -548,7 +552,7 @@ install_p2app_control() {
   if [[ -x "$script" ]]; then
     assert_not_repo_python_script "$script"
     log "Installing p2app-control and p2app.service"
-    env HOME="$saturn_home" SUDO_USER="$SATURN_USER" bash "$script"
+    env HOME="$saturn_home" SUDO_USER="$SATURN_USER" SATURN_USER="$SATURN_USER" bash "$script"
   else
     log "WARN: Missing p2app-control installer: $script"
   fi

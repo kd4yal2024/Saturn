@@ -9,6 +9,7 @@
 #   into:
 #     - ~/.local/share/applications
 #     - Desktop dir (xdg-user-dir DESKTOP or ~/.config/user-dirs.dirs, fallback ~/Desktop)
+#   except deprecated P2app.desktop, which is removed and not reinstalled
 # - Generates/updates launchers for core apps (BiasCheck/AudioTest/AXI/FlashWriter)
 # - Adds a web launcher for Saturn Update Manager (SATURN_URL)
 # - IMPORTANT FIX: auto-adds Path= for Saturn binaries so GTK Builder *.ui loads
@@ -307,11 +308,31 @@ build_dir "$SATURN_ROOT/sw_tools/flashwriter"      "flash writer app"
 USER_APPS_DIR="$HOME/.local/share/applications"
 USER_DESKTOP_DIR="$(detect_desktop_dir)"
 mkdir -p "$USER_APPS_DIR" "$USER_DESKTOP_DIR"
+LEGACY_P2APP_CONTROL_DESKTOP="P2_app-Control.desktop"
+LEGACY_P2APP_DESKTOP="P2app.desktop"
 
 if [[ -z "$USER_DESKTOP_DIR" || "$USER_DESKTOP_DIR" == "/" ]]; then
   log "ERROR: Desktop dir resolved to '$USER_DESKTOP_DIR' — refusing to proceed."
   exit 1
 fi
+
+# ---------- remove deprecated launchers ----------
+remove_legacy_launcher() {
+  local base="$1"
+  local apps_path="$USER_APPS_DIR/$base"
+  local desktop_path="$USER_DESKTOP_DIR/$base"
+  local system_path="/usr/share/applications/$base"
+  if [[ -f "$apps_path" || -f "$desktop_path" ]]; then
+    log "Removing legacy launcher: $base"
+    rm -f "$apps_path" "$desktop_path"
+  fi
+  if [[ ${EUID:-$UID} -eq 0 && -f "$system_path" ]]; then
+    rm -f "$system_path"
+  fi
+}
+
+remove_legacy_launcher "$LEGACY_P2APP_CONTROL_DESKTOP"
+remove_legacy_launcher "$LEGACY_P2APP_DESKTOP"
 
 # ---------- copy all repo .desktop files (recurse, follow symlinks) ----------
 hr; echo; log "Copying Desktop shortcuts from $SHORTCUT_SRC"; echo; hr
@@ -322,6 +343,10 @@ if (( ${#SHORTCUTS[@]} == 0 )); then
 else
   for f in "${SHORTCUTS[@]}"; do
     base="$(basename "$f")"
+    if [[ "$base" == "$LEGACY_P2APP_DESKTOP" ]]; then
+      log "Skipping deprecated launcher from repo: $base"
+      continue
+    fi
     install_desktop_file_processed "$f" "$base" "$USER_APPS_DIR" "$USER_DESKTOP_DIR"
   done
 fi

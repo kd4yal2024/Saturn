@@ -16,10 +16,10 @@ This directory contains provisioning assets for cloud-init based setup of a Satu
 - installs required apt packages
 - clones or updates `kd4yal2024/Saturn` (default branch `main`)
 - builds Saturn apps and tools (including `sw_tools`)
-- installs desktop launchers
+- installs desktop launchers (deprecated `P2app.desktop` is removed and not reinstalled)
 - optionally builds/installs XDMA
 - optionally installs udev rules
-- optionally installs `p2app-control`
+- optionally installs `p2app-control` tray control (AppIndicator-based)
 - optionally installs Update Manager
 - optionally flashes FPGA (disabled by default)
 
@@ -126,6 +126,9 @@ Then `provision-saturn.sh` performs:
 - optional XDMA build/install/load
 - optional udev rules install
 - optional p2app-control install
+  - installs tray autostart (`~/.config/autostart/P2_app-Control-tray.desktop`)
+  - requires `libayatana-appindicator3-dev` and `ayatana-indicator-application`
+  - if a panel does not render the tray icon, run `/usr/local/bin/p2app-control --window` as fallback
 - optional Update Manager install
 - optional FPGA flash (only if explicitly enabled and confirmed)
 - completion marker write

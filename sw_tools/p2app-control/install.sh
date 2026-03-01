@@ -16,6 +16,13 @@ BIN_INSTALL="/usr/local/bin/p2app-control"
 DESKTOP_NAME="P2_app-Control.desktop"
 DESKTOP_DESK="${HOME}/Desktop/${DESKTOP_NAME}"
 DESKTOP_APPS="${HOME}/.local/share/applications/${DESKTOP_NAME}"
+LEGACY_P2APP_LAUNCHER="P2app.desktop"
+LEGACY_P2APP_DESK="${HOME}/Desktop/${LEGACY_P2APP_LAUNCHER}"
+LEGACY_P2APP_APPS="${HOME}/.local/share/applications/${LEGACY_P2APP_LAUNCHER}"
+AUTOSTART_DIR="${HOME}/.config/autostart"
+AUTOSTART_NAME="P2_app-Control-tray.desktop"
+AUTOSTART_FILE="${AUTOSTART_DIR}/${AUTOSTART_NAME}"
+ENABLE_TRAY_AUTOSTART="${ENABLE_TRAY_AUTOSTART:-1}"
 
 POLKIT_RULE="/etc/polkit-1/rules.d/49-p2app.rules"
 
@@ -106,25 +113,38 @@ else
   sudo systemctl start "${UNIT_NAME}"
 fi
 
-echo "[*] Creating desktop shortcut"
-mkdir -p "${HOME}/.local/share/applications"
+echo "[*] Removing legacy desktop shortcuts (window mode launcher no longer installed)"
+rm -f "$DESKTOP_APPS" "$DESKTOP_DESK" "$LEGACY_P2APP_APPS" "$LEGACY_P2APP_DESK"
 
-TMP_DESKTOP="$(mktemp)"
-cat > "$TMP_DESKTOP" <<EOF4
+if [[ "$ENABLE_TRAY_AUTOSTART" == "1" ]]; then
+  TARGET_USER="${SUDO_USER:-${SATURN_USER:-}}"
+  if [[ -z "$TARGET_USER" && ${EUID:-$UID} -eq 0 ]]; then
+    TARGET_USER="$(basename "$HOME")"
+  fi
+
+  echo "[*] Installing tray autostart entry"
+  mkdir -p "$AUTOSTART_DIR"
+  TMP_AUTOSTART="$(mktemp)"
+  cat > "$TMP_AUTOSTART" <<EOF5
 [Desktop Entry]
 Type=Application
-Name=P2_app Control
-Comment=Start/Stop ${UNIT_NAME}
-Exec=${BIN_INSTALL}
+Name=P2_app Control Tray
+Comment=Panel tray control for p2app.service
+Exec=${BIN_INSTALL} --tray
 Icon=utilities-terminal
 Terminal=false
 Categories=Utility;System;
-EOF4
-
-install -m 0644 "$TMP_DESKTOP" "$DESKTOP_APPS"
-install -m 0644 "$TMP_DESKTOP" "$DESKTOP_DESK"
-chmod +x "$DESKTOP_DESK"
-rm -f "$TMP_DESKTOP"
+X-GNOME-Autostart-enabled=true
+EOF5
+  install -m 0644 "$TMP_AUTOSTART" "$AUTOSTART_FILE"
+  if [[ ${EUID:-$UID} -eq 0 && -n "$TARGET_USER" ]] && id -u "$TARGET_USER" >/dev/null 2>&1; then
+    chown "$TARGET_USER:$TARGET_USER" "$AUTOSTART_DIR" "$AUTOSTART_FILE" || true
+  fi
+  rm -f "$TMP_AUTOSTART"
+else
+  echo "[*] Tray autostart disabled by ENABLE_TRAY_AUTOSTART=0"
+  rm -f "$AUTOSTART_FILE"
+fi
 
 command -v update-desktop-database >/dev/null 2>&1 && \
   update-desktop-database "${HOME}/.local/share/applications" >/dev/null 2>&1 || true
@@ -132,7 +152,10 @@ command -v update-desktop-database >/dev/null 2>&1 && \
 echo
 echo "[✓] Done."
 echo "    Widget:   ${BIN_INSTALL}"
-echo "    Desktop:  ${DESKTOP_DESK}"
+echo "    Desktop:  (legacy shortcut removed)"
+if [[ "$ENABLE_TRAY_AUTOSTART" == "1" ]]; then
+  echo "    Autostart:${AUTOSTART_FILE}"
+fi
 echo "    Unit:     ${UNIT_PATH}"
 echo
 echo "Service status:"

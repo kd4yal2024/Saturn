@@ -3,9 +3,11 @@
 Small GTK desktop control widget for starting/stopping the system `p2app.service`
 (P2_app for ANAN G2).
 
-This tool builds a simple GUI with Start / Stop / Restart buttons and a status
-indicator. It also installs/updates the systemd service and creates a desktop
-shortcut.
+This tool supports:
+- window mode (Start / Stop / Restart buttons + status)
+- tray mode (`--tray`) using Ayatana AppIndicator (works with modern Wayland/X11 panels)
+
+It also installs/updates the systemd service and configures tray autostart.
 
 Location in repo:
 `Saturn/sw_tools/p2app-control`
@@ -18,11 +20,19 @@ Location in repo:
 - Installs the widget binary to:
   - `/usr/local/bin/p2app-control`
 
-### Desktop shortcut
-- Creates a launcher:
+### Legacy desktop shortcut
+- Older installs may have:
   - `~/Desktop/P2_app-Control.desktop`
-- Also registers it in:
   - `~/.local/share/applications/P2_app-Control.desktop`
+  - `~/Desktop/P2app.desktop`
+  - `~/.local/share/applications/P2app.desktop`
+- `install.sh` now removes these legacy shortcuts automatically.
+
+### Tray autostart
+- Installs a tray autostart entry by default:
+  - `~/.config/autostart/P2_app-Control-tray.desktop`
+- Autostart command:
+  - `/usr/local/bin/p2app-control --tray`
 
 ### systemd service (system-level)
 - Ensures the service exists and matches the current template:
@@ -52,12 +62,13 @@ This rule is intentionally scoped to:
 
 ## Requirements
 
-Packages needed to build the GTK widget:
+Packages needed to build/run the widget:
 
 ```bash
 sudo apt update
-sudo apt install -y build-essential pkg-config libgtk-3-dev
-````
+sudo apt install -y build-essential pkg-config libgtk-3-dev \
+  libayatana-appindicator3-dev ayatana-indicator-application
+```
 
 `pkexec` / polkit support is normally present on Raspberry Pi Desktop, but the
 installer uses a direct polkit rule instead of prompting.
@@ -89,7 +100,8 @@ This will:
 * create/update `/etc/systemd/system/p2app.service`
 * install the polkit rule
 * enable + start/restart the service
-* create desktop shortcuts
+* remove legacy desktop shortcut files (if present)
+* install tray autostart (unless `ENABLE_TRAY_AUTOSTART=0`)
 
 Run:
 
@@ -98,21 +110,35 @@ chmod +x install.sh
 ./install.sh
 ```
 
+Disable tray autostart install:
+
+```bash
+ENABLE_TRAY_AUTOSTART=0 ./install.sh
+```
+
 You will be prompted for sudo once because the installer writes to `/etc/`.
 
 ---
 
 ## Usage
 
-Run from the desktop shortcut:
-
-* `P2_app Control`
-
-Or from a terminal:
+Run from a terminal:
 
 ```bash
 /usr/local/bin/p2app-control
 ```
+
+Run as panel/toolbar tray widget:
+
+```bash
+/usr/local/bin/p2app-control --tray
+```
+
+On Wayland desktops (for example labwc + wf-panel), the tray icon is provided
+through AppIndicator support instead of deprecated `GtkStatusIcon`.
+If the panel does not render the icon, the process may still be running and
+controllable from the menu; launch `/usr/local/bin/p2app-control --window` as
+an explicit fallback UI.
 
 To check service state manually:
 
@@ -143,7 +169,7 @@ build/install P2_app first, or adjust `P2APP_DIR` / `P2APP_BIN` inside
 
 * Remove launcher(s):
 
-  * `rm -f ~/Desktop/P2_app-Control.desktop ~/.local/share/applications/P2_app-Control.desktop`
+  * `rm -f ~/.config/autostart/P2_app-Control-tray.desktop`
 * Remove binary:
 
   * `sudo rm -f /usr/local/bin/p2app-control`
@@ -154,5 +180,3 @@ build/install P2_app first, or adjust `P2APP_DIR` / `P2APP_BIN` inside
 
   * `sudo systemctl disable --now p2app.service`
   * `sudo rm -f /etc/systemd/system/p2app.service && sudo systemctl daemon-reload`
-
-```
