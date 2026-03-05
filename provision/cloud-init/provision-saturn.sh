@@ -57,7 +57,7 @@ SATURN_ENABLE_SSH="${SATURN_ENABLE_SSH:-1}"
 SATURN_ENABLE_VNC="${SATURN_ENABLE_VNC:-1}"
 SATURN_LCD_PROFILE="${SATURN_LCD_PROFILE:-auto}"
 SATURN_LCD_SIZE_INCH="${SATURN_LCD_SIZE_INCH:-}"
-SATURN_LCD_AUTO_DEFAULT_SIZE_INCH="${SATURN_LCD_AUTO_DEFAULT_SIZE_INCH:-}"
+SATURN_LCD_AUTO_DEFAULT_SIZE_INCH="${SATURN_LCD_AUTO_DEFAULT_SIZE_INCH:-8}"
 SATURN_LCD_I2C_DETECT_ADDR="${SATURN_LCD_I2C_DETECT_ADDR:-0x45}"
 
 apt_updated=0
@@ -66,7 +66,7 @@ SATURN_UI_AUTOSTART_INSTALLED=0
 PYTHON_GUARD_DIR=""
 UPDATE_MANAGER_PASSWORD_FILE_DEFAULT="/var/lib/saturn-provision/update-manager-admin-password"
 
-log() { printf '[%(%Y-%m-%d %H:%M:%S)T] %s\n' -1 "$*"; }
+log() { printf '[%(%Y-%m-%d %H:%M:%S)T] %s\n' -1 "$*" >&2; }
 write_ui_status() {
   local state="$1"
   local message="${2:-}"
@@ -509,6 +509,10 @@ detect_compute_module_generation() {
 
 detect_lcd_size_from_config() {
   local boot_config="$1"
+  if grep -Eq '^[[:space:]]*dtoverlay=vc4-kms-dsi-waveshare-800x480([[:space:]]*,.*)?$' "$boot_config"; then
+    printf '7\n'
+    return 0
+  fi
   if grep -Eq '^[[:space:]]*dtoverlay=vc4-kms-dsi-waveshare-panel,7_0_inchC,.*' "$boot_config"; then
     printf '7\n'
     return 0
@@ -541,7 +545,7 @@ i2c_address_detected() {
 
 detect_lcd_size_from_i2c_probe() {
   local detect_addr="${SATURN_LCD_I2C_DETECT_ADDR:-0x45}"
-  local bus0_has=0 bus1_has=0
+  local bus0_has=0 bus1_has=0 bus10_has=0
 
   if i2c_address_detected 0 "$detect_addr"; then
     bus0_has=1
@@ -549,13 +553,20 @@ detect_lcd_size_from_i2c_probe() {
   if i2c_address_detected 1 "$detect_addr"; then
     bus1_has=1
   fi
+  if i2c_address_detected 10 "$detect_addr"; then
+    bus10_has=1
+  fi
 
-  if [[ "$bus0_has" -eq 1 && "$bus1_has" -eq 0 ]]; then
+  if [[ "$bus1_has" -eq 1 && "$bus0_has" -eq 0 && "$bus10_has" -eq 0 ]]; then
+    printf '8\n'
+    return 0
+  fi
+  if [[ "$bus10_has" -eq 1 && "$bus1_has" -eq 0 ]]; then
     printf '7\n'
     return 0
   fi
-  if [[ "$bus1_has" -eq 1 && "$bus0_has" -eq 0 ]]; then
-    printf '8\n'
+  if [[ "$bus0_has" -eq 1 && "$bus1_has" -eq 0 && "$bus10_has" -eq 0 ]]; then
+    printf '7\n'
     return 0
   fi
   return 1
@@ -609,7 +620,7 @@ detect_lcd_size_auto() {
 
 resolve_lcd_profile() {
   local boot_config="$1"
-  local requested cm size size_source
+  local requested cm size size_source auto_detect_result
   requested="${SATURN_LCD_PROFILE,,}"
 
   case "$requested" in
@@ -622,8 +633,9 @@ resolve_lcd_profile() {
       ;;
     auto)
       cm="$(detect_compute_module_generation 2>/dev/null || true)"
-      if IFS='|' read -r size size_source < <(detect_lcd_size_auto "$boot_config" 2>/dev/null); then
-        :
+      auto_detect_result="$(detect_lcd_size_auto "$boot_config" 2>/dev/null || true)"
+      if [[ -n "$auto_detect_result" ]]; then
+        IFS='|' read -r size size_source <<<"$auto_detect_result"
       else
         size=""
         size_source=""
@@ -650,7 +662,7 @@ render_lcd_profile_block() {
   case "$profile" in
     cm4-7)
       uart_line='dtoverlay=uart3'
-      panel_line='dtoverlay=vc4-kms-dsi-waveshare-panel,7_0_inchC,i2c0'
+      panel_line='dtoverlay=vc4-kms-dsi-waveshare-800x480'
       ;;
     cm4-8)
       uart_line='dtoverlay=uart3'
@@ -658,7 +670,7 @@ render_lcd_profile_block() {
       ;;
     cm5-7)
       uart_line='dtoverlay=uart2-pi5'
-      panel_line='dtoverlay=vc4-kms-dsi-waveshare-panel,7_0_inchC,i2c0'
+      panel_line='dtoverlay=vc4-kms-dsi-waveshare-800x480'
       ;;
     cm5-8)
       uart_line='dtoverlay=uart2-pi5'

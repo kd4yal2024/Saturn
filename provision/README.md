@@ -82,9 +82,9 @@ Environment controls:
 
 Profile mapping:
 
-- `cm4-7`: `dtoverlay=uart3` + `dtoverlay=vc4-kms-dsi-waveshare-panel,7_0_inchC,i2c0`
+- `cm4-7`: `dtoverlay=uart3` + `dtoverlay=vc4-kms-dsi-waveshare-800x480`
 - `cm4-8`: `dtoverlay=uart3` + `dtoverlay=vc4-kms-dsi-waveshare-panel,8_0_inch,i2c1`
-- `cm5-7`: `dtoverlay=uart2-pi5` + `dtoverlay=vc4-kms-dsi-waveshare-panel,7_0_inchC,i2c0`
+- `cm5-7`: `dtoverlay=uart2-pi5` + `dtoverlay=vc4-kms-dsi-waveshare-800x480`
 - `cm5-8`: `dtoverlay=uart2-pi5` + `dtoverlay=vc4-kms-dsi-waveshare-panel,8_0_inch,i2c1`
 
 Notes:
@@ -93,7 +93,7 @@ Notes:
 - Re-running provisioning replaces only that managed block.
 - Existing HDMI lines outside the managed block are left untouched.
 - Display profile changes generally require reboot to take effect.
-- Auto mode resolves in this order: `SATURN_LCD_SIZE_INCH` -> existing Waveshare overlay in `config.txt` -> I2C probe (`i2c-0` implies 7", `i2c-1` implies 8") -> `SATURN_LCD_AUTO_DEFAULT_SIZE_INCH`.
+- Auto mode resolves in this order: `SATURN_LCD_SIZE_INCH` -> existing Waveshare overlay in `config.txt` -> I2C probe (`i2c-10`/`i2c-0` implies 7", `i2c-1` implies 8") -> `SATURN_LCD_AUTO_DEFAULT_SIZE_INCH`.
 
 ## Raspberry Pi Imager Workflow (End-to-End)
 
