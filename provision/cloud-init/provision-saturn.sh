@@ -452,6 +452,12 @@ ensure_packages() {
       log "WARN: realvnc-vnc-server package not available in apt sources; VNC enablement expects an installed VNC service."
     fi
   fi
+
+  if apt-cache show raspberrypi-kernel-headers >/dev/null 2>&1; then
+    apt_install raspberrypi-kernel-headers
+  else
+    log "WARN: raspberrypi-kernel-headers package not available in apt sources."
+  fi
 }
 
 ensure_kernel_headers() {
@@ -495,6 +501,87 @@ get_boot_config_file() {
     fi
   done
   return 1
+}
+
+get_boot_cmdline_file() {
+  local candidate
+  for candidate in /boot/firmware/cmdline.txt /boot/cmdline.txt; do
+    if [[ -f "$candidate" ]]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+  return 1
+}
+
+configure_usb_boot_tweaks() {
+  local boot_config boot_cmdline existing_cmdline
+
+  boot_config="$(get_boot_config_file 2>/dev/null || true)"
+  if [[ -n "$boot_config" ]]; then
+    if grep -Eq '^[[:space:]]*dtoverlay=dwc2,dr_mode=host([[:space:]]*#.*)?$' "$boot_config"; then
+      :
+    elif grep -Eq '^[[:space:]]*#?[[:space:]]*dtoverlay=dwc2,dr_mode=host' "$boot_config"; then
+      sed -i -E 's/^[[:space:]]*#?[[:space:]]*dtoverlay=dwc2,dr_mode=host.*/dtoverlay=dwc2,dr_mode=host/' "$boot_config" || true
+    else
+      printf '\n# enable USB\ndtoverlay=dwc2,dr_mode=host\n' >>"$boot_config"
+    fi
+    log "Ensured USB host overlay in $boot_config"
+  else
+    log "WARN: Could not locate /boot/firmware/config.txt or /boot/config.txt for USB overlay setup."
+  fi
+
+  boot_cmdline="$(get_boot_cmdline_file 2>/dev/null || true)"
+  if [[ -n "$boot_cmdline" ]]; then
+    if grep -Eq '(^|[[:space:]])usbhid\.mousepoll=0([[:space:]]|$)' "$boot_cmdline"; then
+      :
+    else
+      existing_cmdline="$(tr -d '\n' < "$boot_cmdline")"
+      printf '%s usbhid.mousepoll=0\n' "$existing_cmdline" >"$boot_cmdline"
+    fi
+    log "Ensured usbhid.mousepoll=0 in $boot_cmdline"
+  else
+    log "WARN: Could not locate /boot/firmware/cmdline.txt or /boot/cmdline.txt for mousepoll tuning."
+  fi
+}
+
+install_vscode_extensions() {
+  local saturn_home="$1"
+  local ext
+  local -a extensions=("ms-vscode.cpptools" "eamodio.gitlens")
+
+  if ! command -v code >/dev/null 2>&1; then
+    log "WARN: VS Code CLI not found; skipping extension install."
+    return 0
+  fi
+
+  for ext in "${extensions[@]}"; do
+    if run_as_user "$saturn_home" code --install-extension "$ext" --force >/dev/null 2>&1; then
+      log "Installed VS Code extension: $ext"
+    else
+      log "WARN: Failed to install VS Code extension: $ext"
+    fi
+  done
+}
+
+install_desktop_dev_tools() {
+  local saturn_home="$1"
+
+  apt_update_once
+  export DEBIAN_FRONTEND=noninteractive
+
+  if apt-cache show code >/dev/null 2>&1; then
+    apt-get install -y --no-install-recommends code
+    install_vscode_extensions "$saturn_home"
+  else
+    log "WARN: VS Code package 'code' not available in apt sources; skipping editor and extension installation."
+  fi
+
+  if apt-cache show git-cola >/dev/null 2>&1; then
+    apt-get install -y --no-install-recommends git-cola
+  else
+    log "WARN: git-cola package not available in apt sources."
+  fi
 }
 
 detect_compute_module_generation() {
@@ -1086,7 +1173,7 @@ main() {
     if [[ -n "$existing_home" ]]; then
       remove_desktop_ui_autostart "$existing_home"
     fi
-    write_ui_status "SUCCESS" "Provisioning already completed"
+    write_ui_status "SKIPPED" "Already provisioned. No provisioning run was executed."
     log "Provisioning already completed. Set SATURN_FORCE_REPROVISION=1 to run again."
     exit 0
   fi
@@ -1102,10 +1189,14 @@ main() {
   log "Starting Saturn provisioning for user '$SATURN_USER' (home: $saturn_home)"
   set_ui_stage "Installing build/runtime dependencies"
   ensure_packages
+  set_ui_stage "Configuring USB boot and input tuning"
+  configure_usb_boot_tweaks
   set_ui_stage "Applying LCD boot profile"
   configure_lcd_profile
   set_ui_stage "Configuring I2C, SSH, and VNC"
   configure_i2c_vnc_ssh
+  set_ui_stage "Installing developer desktop tools"
+  install_desktop_dev_tools "$saturn_home"
   set_ui_stage "Preparing desktop provisioning UI"
   install_desktop_ui_autostart "$saturn_home"
   if [[ "$SATURN_UI_STARTED" -eq 0 ]]; then

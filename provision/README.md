@@ -14,7 +14,18 @@ This directory contains provisioning assets for cloud-init based setup of a Satu
 `cloud-init/provision-saturn.sh` runs as root and:
 
 - installs required apt packages
+- installs `raspberrypi-kernel-headers` when available in apt sources
+- installs desktop developer tools when available in apt sources:
+  - Visual Studio Code (`code`)
+  - Git Cola (`git-cola`)
+- installs VS Code extensions for `SATURN_USER` when `code` is available:
+  - `ms-vscode.cpptools` (C/C++)
+  - `eamodio.gitlens` (GitLens)
 - enables `i2c`, `ssh`, and `vnc` by default when requested (`SATURN_ENABLE_*`)
+- ensures USB host overlay in boot config:
+  - `dtoverlay=dwc2,dr_mode=host`
+- ensures cordless input tuning in boot cmdline:
+  - `usbhid.mousepoll=0`
 - can apply a managed LCD boot profile for CM4/CM5 + Waveshare 7"/8" combos (`SATURN_LCD_PROFILE`)
 - clones or updates `kd4yal2024/Saturn` (default branch `main`)
 - builds Saturn apps and tools (including `sw_tools`)
@@ -94,6 +105,36 @@ Notes:
 - Existing HDMI lines outside the managed block are left untouched.
 - Display profile changes generally require reboot to take effect.
 - Auto mode resolves in this order: `SATURN_LCD_SIZE_INCH` -> existing Waveshare overlay in `config.txt` -> I2C probe (`i2c-10`/`i2c-0` implies 7", `i2c-1` implies 8") -> `SATURN_LCD_AUTO_DEFAULT_SIZE_INCH`.
+
+## Standalone Execution
+
+You can run `provision-saturn.sh` directly without cloud-init.
+
+Requirements:
+
+- run as root (`sudo`)
+- target user exists (`SATURN_USER`, default `pi`)
+- network access for apt and git operations
+- writable boot files (`/boot/firmware/...` or `/boot/...`) for LCD/USB/cmdline updates
+
+From inside the Saturn repo:
+
+- `sudo ./provision/cloud-init/provision-saturn.sh`
+
+Or by absolute path:
+
+- `sudo /home/pi/github/Saturn/provision/cloud-init/provision-saturn.sh`
+
+With example overrides:
+
+- `sudo SATURN_USER=pi SATURN_REPO_BRANCH=main SATURN_FORCE_REPROVISION=1 /home/pi/github/Saturn/provision/cloud-init/provision-saturn.sh`
+
+Behavior notes:
+
+- script is idempotent by state marker (`/var/lib/saturn-provision/complete`)
+- set `SATURN_FORCE_REPROVISION=1` to force a full rerun
+- if `SATURN_USER` does not exist yet, script waits and retries every 5 minutes
+- when already provisioned and not forced, UI status is `SKIPPED` (not `SUCCESS`)
 
 ## Raspberry Pi Imager Workflow (End-to-End)
 

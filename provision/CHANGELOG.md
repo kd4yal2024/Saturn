@@ -2,6 +2,38 @@
 
 All notable changes to provisioning assets are documented in this file.
 
+## [2026-03-06]
+
+### Changed
+
+- `cloud-init/provision-saturn.sh`
+  - ensures USB host overlay in boot `config.txt`:
+    - `dtoverlay=dwc2,dr_mode=host`
+  - ensures cordless mouse/keyboard polling tuning in boot `cmdline.txt`:
+    - `usbhid.mousepoll=0`
+  - installs `raspberrypi-kernel-headers` during base package setup when available in apt sources
+  - installs desktop dev tools when available in apt sources:
+    - `code` (Visual Studio Code)
+    - `git-cola`
+  - installs VS Code extensions for `SATURN_USER` when `code` CLI is available:
+    - `ms-vscode.cpptools`
+    - `eamodio.gitlens`
+  - when a completion marker already exists and reprovision is not forced, now writes UI state `SKIPPED` instead of `SUCCESS`
+
+- `cloud-init/saturn-provision-ui.cpp`
+  - added explicit `SKIPPED` state handling:
+    - displays "Provisioning skipped"
+    - message clarifies no new run executed on already provisioned systems
+
+### Documentation
+
+- `README.md`
+  - documented new USB/cmdline boot tuning done by provisioning
+  - documented desktop dev tool install behavior (`code`, `git-cola`)
+  - documented automatic VS Code extension installation (`C/C++`, `GitLens`)
+  - added standalone execution section with prerequisites, commands, and rerun behavior
+  - documented `SKIPPED` status semantics for already provisioned systems
+
 ## [2026-03-01]
 
 ### Added

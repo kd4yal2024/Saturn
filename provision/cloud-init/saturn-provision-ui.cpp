@@ -185,6 +185,13 @@ static gboolean on_tick(gpointer user_data)
             set_result(ui, "<span foreground='#ff7f7f' weight='bold' size='x-large'>Provisioning failed</span>");
             set_status(ui, status_message.empty() ? "A provisioning error occurred." : status_message);
         }
+        else if (has_status && status_state == "SKIPPED")
+        {
+            ui->finished = true;
+            gtk_progress_bar_set_fraction(GTK_PROGRESS_BAR(ui->progress_bar), 1.0);
+            set_result(ui, "<span foreground='#f4d35e' weight='bold' size='x-large'>Provisioning skipped</span>");
+            set_status(ui, status_message.empty() ? "System already provisioned. No new run executed." : status_message);
+        }
         else if (has_completion || (has_status && status_state == "SUCCESS"))
         {
             ui->finished = true;
@@ -387,4 +394,3 @@ int main(int argc, char **argv)
     gtk_main();
     return 0;
 }
-
