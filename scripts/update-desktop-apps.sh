@@ -28,6 +28,7 @@ APP_BIAS_BIN="$SATURN_ROOT/sw_projects/biascheck/biascheck"
 APP_AUDIO_BIN="$SATURN_ROOT/sw_projects/audiotest/audiotest"
 APP_AXI_BIN="$SATURN_ROOT/sw_tools/axi_rw/axi_rw"
 APP_FLASH_BIN="$SATURN_ROOT/sw_tools/flashwriter/flashwriter"
+SATURN_SKIP_P2APP_BUILD="${SATURN_SKIP_P2APP_BUILD:-0}"
 
 # Candidate locations for P2App (pick the first with a Makefile)
 P2APP_CANDIDATES=(
@@ -298,7 +299,11 @@ repair_existing_saturn_launchers_in_dir() {
 }
 
 # ---------- build apps ----------
-build_p2app
+if [[ "$SATURN_SKIP_P2APP_BUILD" == "1" ]]; then
+  log "Skipping P2App build in update-desktop-apps.sh (SATURN_SKIP_P2APP_BUILD=1)"
+else
+  build_p2app
+fi
 build_dir "$SATURN_ROOT/sw_projects/biascheck"     "bias check app"
 build_dir "$SATURN_ROOT/sw_projects/audiotest"     "audio test app"
 build_dir "$SATURN_ROOT/sw_tools/axi_rw"           "AXI reader/writer app"

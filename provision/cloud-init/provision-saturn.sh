@@ -58,8 +58,9 @@ SATURN_ENABLE_SSH="${SATURN_ENABLE_SSH:-1}"
 SATURN_ENABLE_VNC="${SATURN_ENABLE_VNC:-1}"
 SATURN_LCD_PROFILE="${SATURN_LCD_PROFILE:-auto}"
 SATURN_LCD_SIZE_INCH="${SATURN_LCD_SIZE_INCH:-}"
-SATURN_LCD_AUTO_DEFAULT_SIZE_INCH="${SATURN_LCD_AUTO_DEFAULT_SIZE_INCH:-8}"
+SATURN_LCD_AUTO_DEFAULT_SIZE_INCH="${SATURN_LCD_AUTO_DEFAULT_SIZE_INCH:-7}"
 SATURN_LCD_I2C_DETECT_ADDR="${SATURN_LCD_I2C_DETECT_ADDR:-0x45}"
+SATURN_LCD_DETECT_ONLY="${SATURN_LCD_DETECT_ONLY:-0}"
 
 apt_updated=0
 SATURN_UI_STARTED=0
@@ -439,7 +440,7 @@ ensure_packages() {
   fi
 
   if bool_true "$SATURN_INSTALL_UPDATE_MANAGER"; then
-    apt_install nginx apache2-utils rustc cargo
+    apt_install nginx apache2-utils
   fi
 
   if bool_true "$SATURN_ENABLE_I2C"; then
@@ -826,10 +827,18 @@ configure_lcd_profile() {
   profile="$(resolve_lcd_profile "$boot_config" 2>/dev/null || true)"
   [[ -n "$profile" ]] || return 0
 
+  if bool_true "$SATURN_LCD_DETECT_ONLY"; then
+    log "SATURN_LCD_DETECT_ONLY=1 set; auto-detection resolved profile '$profile' and no config.txt changes were made."
+    return 0
+  fi
+
   if ! block="$(render_lcd_profile_block "$profile")"; then
     log "WARN: Failed to render LCD block for profile '$profile'; skipping."
     return 0
   fi
+
+  # Remove legacy/foreign active panel overlays before applying managed block.
+  sed -i -E '/^[[:space:]]*dtoverlay=vc4-kms-dsi-waveshare(-800x480|-panel,.*)[[:space:]]*$/d' "$boot_config"
 
   sed -i '/^# BEGIN SATURN LCD PROFILE$/,/^# END SATURN LCD PROFILE$/d' "$boot_config"
   {
@@ -1024,7 +1033,7 @@ install_desktop_shortcuts() {
   if [[ -x "$script" ]]; then
     assert_not_repo_python_script "$script"
     log "Installing/repairing desktop launchers"
-    run_as_user "$saturn_home" env SATURN_ROOT="$SATURN_REPO_DIR" bash "$script"
+    run_as_user "$saturn_home" env SATURN_ROOT="$SATURN_REPO_DIR" SATURN_SKIP_P2APP_BUILD=1 bash "$script"
   else
     log "WARN: Missing script: $script"
   fi
@@ -1216,10 +1225,10 @@ main() {
   ensure_packages
   set_ui_stage "Configuring USB boot and input tuning"
   configure_usb_boot_tweaks
-  set_ui_stage "Applying LCD boot profile"
-  configure_lcd_profile
   set_ui_stage "Configuring I2C, SSH, and VNC"
   configure_i2c_vnc_ssh
+  set_ui_stage "Applying LCD boot profile"
+  configure_lcd_profile
   set_ui_stage "Installing developer desktop tools"
   install_desktop_dev_tools "$saturn_home"
   if [[ "$SATURN_UI_STARTED" -eq 0 ]]; then

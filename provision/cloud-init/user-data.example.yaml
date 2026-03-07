@@ -37,9 +37,11 @@ write_files:
       # Optional override when auto mode cannot infer size (values: 7 or 8)
       # SATURN_LCD_SIZE_INCH=8
       # Optional fallback when auto detection is ambiguous (values: 7 or 8)
-      # SATURN_LCD_AUTO_DEFAULT_SIZE_INCH=8
+      # SATURN_LCD_AUTO_DEFAULT_SIZE_INCH=7
       # I2C address used by auto probe (default 0x45)
       # SATURN_LCD_I2C_DETECT_ADDR=0x45
+      # Detect-only mode for safe validation (1 = detect/log only, no config.txt writes)
+      # SATURN_LCD_DETECT_ONLY=0
 
       # Optional desktop provisioning UI (C++/GTK)
       # auto = launch when desktop/X11 is available

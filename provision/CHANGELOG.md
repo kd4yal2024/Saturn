@@ -12,9 +12,18 @@ All notable changes to provisioning assets are documented in this file.
   - changed `SATURN_USER` wait loop log text to report retry seconds explicitly
   - hardened LCD auto-detection helper behavior to avoid propagating probe failures into profile strings
   - updated I2C probe range validation to align with `i2cdetect` limits (`0x08..0x77`)
+  - changed ambiguous LCD auto-detect fallback default from `8` to `7` (`SATURN_LCD_AUTO_DEFAULT_SIZE_INCH`)
+  - reordered provisioning flow so I2C setup runs before LCD profile resolution (improves first-boot auto-detect reliability)
+  - added `SATURN_LCD_DETECT_ONLY=1` mode to resolve/log profile without writing `config.txt`
+  - when applying LCD profile, now removes active legacy Waveshare panel overlay lines before writing managed block
+  - removed distro `rustc`/`cargo` install from base dependency path (update-manager uses rustup-managed toolchain)
+  - when invoking `scripts/update-desktop-apps.sh`, sets `SATURN_SKIP_P2APP_BUILD=1` to avoid duplicate P2App rebuild
 
 - `scripts/detect-lcd-profile.sh`
   - mirrored LCD auto-detection hardening and `i2cdetect` range validation fixes from provisioning script
+
+- `scripts/update-desktop-apps.sh`
+  - added `SATURN_SKIP_P2APP_BUILD=1` support to skip optional P2App rebuild during launcher refresh
 
 ### Documentation
 
@@ -22,8 +31,11 @@ All notable changes to provisioning assets are documented in this file.
   - documented early UI prerequisite install and near-start launch behavior
   - documented `SATURN_USER_RETRY_SECONDS` default and behavior
   - documented I2C detect address valid range note for LCD auto-probing
+  - documented `SATURN_LCD_DETECT_ONLY` safe dry-run mode and example command
 - `cloud-init/user-data.example.yaml`
   - added `SATURN_USER_RETRY_SECONDS=30` example default
+  - updated LCD fallback example to `SATURN_LCD_AUTO_DEFAULT_SIZE_INCH=7`
+  - added `SATURN_LCD_DETECT_ONLY` example toggle
 
 ## [2026-03-06]
 
