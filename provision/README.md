@@ -67,6 +67,7 @@ Environment controls:
 Notes:
 
 - Cloud-init boots without a desktop session in many images; in that case `auto` mode will skip UI and continue normal provisioning.
+- Provisioning now installs desktop UI prerequisites early (`g++`, `pkg-config`, `libgtk-3-dev`) and attempts to launch the UI near the start of the run.
 - Provisioning now installs a per-user autostart entry at `~/.config/autostart/saturn-provision-ui.desktop` for `SATURN_USER` (default `pi`), so the widget appears when that desktop session starts.
 - Once launched, the provisioning UI remains open after completion until the user clicks `Close`.
 - On successful provisioning completion, that autostart entry is removed automatically to avoid launching on every future desktop login.
@@ -89,7 +90,7 @@ Environment controls:
 - `SATURN_LCD_PROFILE=none|cm4-7|cm4-8|cm5-7|cm5-8|auto` (default: `auto`)
 - `SATURN_LCD_SIZE_INCH=7|8` (optional explicit override for `SATURN_LCD_PROFILE=auto`)
 - `SATURN_LCD_AUTO_DEFAULT_SIZE_INCH=7|8` (optional fallback when auto detection is ambiguous)
-- `SATURN_LCD_I2C_DETECT_ADDR=0x45` (optional I2C address used by size auto-probe)
+- `SATURN_LCD_I2C_DETECT_ADDR=0x45` (optional I2C address used by size auto-probe; valid `i2cdetect` range is `0x08..0x77`)
 
 Profile mapping:
 
@@ -133,7 +134,7 @@ Behavior notes:
 
 - script is idempotent by state marker (`/var/lib/saturn-provision/complete`)
 - set `SATURN_FORCE_REPROVISION=1` to force a full rerun
-- if `SATURN_USER` does not exist yet, script waits and retries every 5 minutes
+- if `SATURN_USER` does not exist yet, script waits and retries every `SATURN_USER_RETRY_SECONDS` (default `30`)
 - when already provisioned and not forced, UI status is `SKIPPED` (not `SUCCESS`)
 
 ## Raspberry Pi Imager Workflow (End-to-End)
@@ -238,6 +239,7 @@ If Update Manager is enabled, also verify service status:
 From `user-data.example.yaml`:
 
 - `SATURN_USER=pi`
+- `SATURN_USER_RETRY_SECONDS=30`
 - `SATURN_INSTALL_UPDATE_MANAGER=1`
 - `SATURN_INSTALL_P2APP_CONTROL=1`
 - `SATURN_INSTALL_UDEV_RULES=1`
@@ -273,7 +275,7 @@ Provisioning is configured to keep the repo clean of Python cache artifacts:
 - If you use a user other than `pi`, update `SATURN_USER` in `user-data`.
 - Network access is required on first boot for apt and git operations.
 - `cloud-init` user-data is root-owned; read it with `sudo cat /var/lib/cloud/instance/user-data.txt`.
-- Provisioning now waits and retries every 5 minutes until `SATURN_USER` exists.
+- Provisioning now waits and retries every `SATURN_USER_RETRY_SECONDS` (default `30`) until `SATURN_USER` exists.
 - `P1_app` is intentionally skipped in provisioning (legacy target not required for current images).
 - Before capturing/cloning a reusable image, run `sudo cloud-init clean --logs` so first-boot provisioning re-runs on cloned targets.
 - Keep `meta-data` `instance-id` unique per image/seed when possible.

@@ -32,6 +32,7 @@ The `vc4-kms-dsi-waveshare-800x480` overlay matches the known-good behavior for 
 
 - Keep only one Waveshare DSI panel overlay active in `config.txt`.
 - If detection is ambiguous, set `SATURN_LCD_SIZE_INCH=7` or `SATURN_LCD_SIZE_INCH=8`.
+- If you override `SATURN_LCD_I2C_DETECT_ADDR`, keep it in the valid `i2cdetect` range (`0x08..0x77`).
 - Auto-detection script:
   - `scripts/detect-lcd-profile.sh`
   - Supports `--json` and `--emit-config` for automation pipelines.

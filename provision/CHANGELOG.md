@@ -2,6 +2,29 @@
 
 All notable changes to provisioning assets are documented in this file.
 
+## [2026-03-07]
+
+### Changed
+
+- `cloud-init/provision-saturn.sh`
+  - moved desktop UI prerequisites/install path earlier in `main()` so status UI can launch near start of provisioning
+  - added `SATURN_USER_RETRY_SECONDS` (default `30`) to control `SATURN_USER` wait-loop cadence
+  - changed `SATURN_USER` wait loop log text to report retry seconds explicitly
+  - hardened LCD auto-detection helper behavior to avoid propagating probe failures into profile strings
+  - updated I2C probe range validation to align with `i2cdetect` limits (`0x08..0x77`)
+
+- `scripts/detect-lcd-profile.sh`
+  - mirrored LCD auto-detection hardening and `i2cdetect` range validation fixes from provisioning script
+
+### Documentation
+
+- `README.md`
+  - documented early UI prerequisite install and near-start launch behavior
+  - documented `SATURN_USER_RETRY_SECONDS` default and behavior
+  - documented I2C detect address valid range note for LCD auto-probing
+- `cloud-init/user-data.example.yaml`
+  - added `SATURN_USER_RETRY_SECONDS=30` example default
+
 ## [2026-03-06]
 
 ### Changed

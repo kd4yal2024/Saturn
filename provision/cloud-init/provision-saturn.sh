@@ -22,6 +22,7 @@ done
 unset _saturn_name _saturn_value
 
 SATURN_USER="${SATURN_USER:-pi}"
+SATURN_USER_RETRY_SECONDS="${SATURN_USER_RETRY_SECONDS:-30}"
 SATURN_REPO_URL="${SATURN_REPO_URL:-https://github.com/kd4yal2024/Saturn.git}"
 SATURN_REPO_BRANCH="${SATURN_REPO_BRANCH:-main}"
 SATURN_REPO_DIR="${SATURN_REPO_DIR:-}"
@@ -324,6 +325,11 @@ ensure_root() {
 
 ensure_user() {
   local saturn_home=""
+  local retry_seconds
+  retry_seconds="${SATURN_USER_RETRY_SECONDS:-30}"
+  if ! [[ "$retry_seconds" =~ ^[0-9]+$ ]] || (( retry_seconds < 1 )); then
+    retry_seconds=30
+  fi
   while true; do
     if id -u "$SATURN_USER" >/dev/null 2>&1; then
       saturn_home="$(getent passwd "$SATURN_USER" | cut -d: -f6 || true)"
@@ -331,11 +337,11 @@ ensure_user() {
         printf '%s\n' "$saturn_home"
         return 0
       fi
-      log "User '$SATURN_USER' exists but home directory is unresolved; retrying in 5 minutes."
+      log "User '$SATURN_USER' exists but home directory is unresolved; retrying in ${retry_seconds}s."
     else
-      log "User '$SATURN_USER' not present yet; retrying in 5 minutes."
+      log "User '$SATURN_USER' not present yet; retrying in ${retry_seconds}s."
     fi
-    sleep 300
+    sleep "$retry_seconds"
   done
 }
 
@@ -411,6 +417,11 @@ apt_install() {
   apt_update_once
   export DEBIAN_FRONTEND=noninteractive
   apt-get install -y --no-install-recommends "$@"
+}
+
+ensure_ui_packages() {
+  log "Installing desktop provisioning UI prerequisites"
+  apt_install g++ pkg-config libgtk-3-dev
 }
 
 ensure_packages() {
@@ -598,17 +609,16 @@ detect_lcd_size_from_config() {
   local boot_config="$1"
   if grep -Eq '^[[:space:]]*dtoverlay=vc4-kms-dsi-waveshare-800x480([[:space:]]*,.*)?$' "$boot_config"; then
     printf '7\n'
-    return 0
+    return
   fi
   if grep -Eq '^[[:space:]]*dtoverlay=vc4-kms-dsi-waveshare-panel,7_0_inchC,.*' "$boot_config"; then
     printf '7\n'
-    return 0
+    return
   fi
   if grep -Eq '^[[:space:]]*dtoverlay=vc4-kms-dsi-waveshare-panel,8_0_inch,.*' "$boot_config"; then
     printf '8\n'
-    return 0
+    return
   fi
-  return 1
 }
 
 i2c_address_detected() {
@@ -616,47 +626,58 @@ i2c_address_detected() {
   local addr="${2:-0x45}"
   local addr_dec addr_hex out
 
-  command -v i2cdetect >/dev/null 2>&1 || return 1
-  [[ -e "/dev/i2c-${bus}" ]] || return 1
+  if ! command -v i2cdetect >/dev/null 2>&1; then
+    printf '0\n'
+    return
+  fi
+  if [[ ! -e "/dev/i2c-${bus}" ]]; then
+    printf '0\n'
+    return
+  fi
 
   if ! addr_dec=$((addr)); then
-    return 1
+    printf '0\n'
+    return
   fi
-  if (( addr_dec < 0x03 || addr_dec > 0x77 )); then
-    return 1
+  if (( addr_dec < 0x08 || addr_dec > 0x77 )); then
+    printf '0\n'
+    return
   fi
   addr_hex="$(printf '%02x' "$addr_dec")"
   out="$(i2cdetect -y "$bus" "$addr_dec" "$addr_dec" 2>/dev/null || true)"
-  grep -Eq "(^|[[:space:]])(UU|${addr_hex})([[:space:]]|$)" <<<"$out"
+  if grep -Eq "(^|[[:space:]])(UU|${addr_hex})([[:space:]]|$)" <<<"$out"; then
+    printf '1\n'
+  else
+    printf '0\n'
+  fi
 }
 
 detect_lcd_size_from_i2c_probe() {
   local detect_addr="${SATURN_LCD_I2C_DETECT_ADDR:-0x45}"
   local bus0_has=0 bus1_has=0 bus10_has=0
 
-  if i2c_address_detected 0 "$detect_addr"; then
+  if [[ "$(i2c_address_detected 0 "$detect_addr")" == "1" ]]; then
     bus0_has=1
   fi
-  if i2c_address_detected 1 "$detect_addr"; then
+  if [[ "$(i2c_address_detected 1 "$detect_addr")" == "1" ]]; then
     bus1_has=1
   fi
-  if i2c_address_detected 10 "$detect_addr"; then
+  if [[ "$(i2c_address_detected 10 "$detect_addr")" == "1" ]]; then
     bus10_has=1
   fi
 
   if [[ "$bus1_has" -eq 1 && "$bus0_has" -eq 0 && "$bus10_has" -eq 0 ]]; then
     printf '8\n'
-    return 0
+    return
   fi
   if [[ "$bus10_has" -eq 1 && "$bus1_has" -eq 0 ]]; then
     printf '7\n'
-    return 0
+    return
   fi
   if [[ "$bus0_has" -eq 1 && "$bus1_has" -eq 0 && "$bus10_has" -eq 0 ]]; then
     printf '7\n'
-    return 0
+    return
   fi
-  return 1
 }
 
 detect_lcd_size_auto() {
@@ -698,11 +719,11 @@ detect_lcd_size_auto() {
   case "$size" in
     7|8)
       printf '%s|default\n' "$size"
-      return 0
+      return
       ;;
   esac
 
-  return 1
+  return
 }
 
 resolve_lcd_profile() {
@@ -1183,6 +1204,10 @@ main() {
   saturn_home="$(ensure_user)"
   nproc="$(nproc 2>/dev/null || echo 1)"
 
+  set_ui_stage "Installing desktop provisioning UI prerequisites"
+  ensure_ui_packages
+  set_ui_stage "Preparing desktop provisioning UI autostart"
+  install_desktop_ui_autostart "$saturn_home"
   set_ui_stage "Launching desktop provisioning interface"
   launch_desktop_ui "$saturn_home"
 
@@ -1197,8 +1222,6 @@ main() {
   configure_i2c_vnc_ssh
   set_ui_stage "Installing developer desktop tools"
   install_desktop_dev_tools "$saturn_home"
-  set_ui_stage "Preparing desktop provisioning UI"
-  install_desktop_ui_autostart "$saturn_home"
   if [[ "$SATURN_UI_STARTED" -eq 0 ]]; then
     launch_desktop_ui "$saturn_home"
   fi

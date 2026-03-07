@@ -16,6 +16,8 @@ write_files:
     content: |
       # Primary provisioning target
       SATURN_USER=pi
+      # Retry cadence while waiting for SATURN_USER to exist and have a home dir.
+      SATURN_USER_RETRY_SECONDS=30
       SATURN_REPO_URL=https://github.com/kd4yal2024/Saturn.git
       SATURN_REPO_BRANCH=main
 
