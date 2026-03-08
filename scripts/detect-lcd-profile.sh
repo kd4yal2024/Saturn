@@ -17,7 +17,7 @@ Usage: $(basename "$0") [--json] [--emit-config]
 Detect Saturn LCD profile using provisioning-compatible logic.
 
 Environment:
-  SATURN_LCD_PROFILE=none|cm4-7|cm4-8|cm5-7|cm5-8|auto
+  SATURN_LCD_PROFILE=none|cm4-7|cm4-8|cm5-7|cm5-7-g2-dual-dsi|cm5-8|auto
   SATURN_LCD_SIZE_INCH=7|8
   SATURN_LCD_AUTO_DEFAULT_SIZE_INCH=7|8
   SATURN_LCD_I2C_DETECT_ADDR=0x45
@@ -26,7 +26,7 @@ Output (default):
   size=<7|8|unknown>
   size_source=<env|config|i2c-probe|default|unknown>
   cm=<cm4|cm5|unknown>
-  profile=<cm4-7|cm4-8|cm5-7|cm5-8|none|unknown>
+  profile=<cm4-7|cm4-8|cm5-7|cm5-7-g2-dual-dsi|cm5-8|none|unknown>
   recommended_uart_overlay=<dtoverlay=...|none|unknown>
   recommended_panel_overlay=<dtoverlay=...|none|unknown>
 USAGE
@@ -70,6 +70,16 @@ detect_lcd_size_from_config() {
   fi
   if grep -Eq '^[[:space:]]*dtoverlay=vc4-kms-dsi-waveshare-panel,8_0_inch,.*' "$boot_config"; then
     printf '8\n'
+    return
+  fi
+}
+
+detect_lcd_profile_from_config() {
+  local boot_config="$1"
+
+  if grep -Eq '^[[:space:]]*dtoverlay=vc4-kms-dsi-waveshare-panel,7_0_inchC,i2c0,dsi1([[:space:]]*#.*)?$' "$boot_config" \
+    && grep -Eq '^[[:space:]]*dtoverlay=vc4-kms-dsi-waveshare-panel,7_0_inchC,i2c1,dsi0([[:space:]]*#.*)?$' "$boot_config"; then
+    printf 'cm5-7-g2-dual-dsi\n'
     return
   fi
 }
@@ -189,13 +199,21 @@ resolve_lcd_profile() {
       printf 'none|none|none\n'
       return 0
       ;;
-    cm4-7|cm4-8|cm5-7|cm5-8)
+    cm4-7|cm4-8|cm5-7|cm5-7-g2-dual-dsi|cm5-8)
       size="${requested##*-}"
-      cm="${requested%-*}"
+      case "$requested" in
+        cm5-7-g2-dual-dsi) cm="cm5" ;;
+        *) cm="${requested%-*}" ;;
+      esac
       printf '%s|%s|explicit\n' "$requested" "$size" "$cm"
       return 0
       ;;
     auto|"")
+      profile="$(detect_lcd_profile_from_config "$boot_config" 2>/dev/null || true)"
+      if [[ -n "$profile" ]]; then
+        printf '%s|7|config-dual-dsi\n' "$profile"
+        return 0
+      fi
       cm="$(detect_compute_module_generation 2>/dev/null || true)"
       auto_detect_result="$(detect_lcd_size_auto "$boot_config" 2>/dev/null || true)"
       if [[ -n "$auto_detect_result" ]]; then
@@ -212,7 +230,7 @@ resolve_lcd_profile() {
       return 0
       ;;
     *)
-      log_warn "Unknown SATURN_LCD_PROFILE='$SATURN_LCD_PROFILE'; expected none|cm4-7|cm4-8|cm5-7|cm5-8|auto"
+      log_warn "Unknown SATURN_LCD_PROFILE='$SATURN_LCD_PROFILE'; expected none|cm4-7|cm4-8|cm5-7|cm5-7-g2-dual-dsi|cm5-8|auto"
       printf 'unknown|unknown|unknown\n'
       return 1
       ;;
@@ -235,6 +253,10 @@ recommended_overlays_for_profile() {
     cm5-7)
       uart='dtoverlay=uart2-pi5'
       panel='dtoverlay=vc4-kms-dsi-waveshare-800x480'
+      ;;
+    cm5-7-g2-dual-dsi)
+      uart='dtoverlay=uart2-pi5'
+      panel='dtoverlay=vc4-kms-dsi-waveshare-panel,7_0_inchC,i2c0,dsi1; dtoverlay=vc4-kms-dsi-waveshare-panel,7_0_inchC,i2c1,dsi0'
       ;;
     cm5-8)
       uart='dtoverlay=uart2-pi5'

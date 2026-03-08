@@ -6,6 +6,9 @@ This document captures the current known-good overlay mapping for Saturn provisi
 
 - 7" Waveshare DSI LCD (C), 800x480:
   - Use `dtoverlay=vc4-kms-dsi-waveshare-800x480`
+- 7" Waveshare DSI LCD (C), Saturn G2 CM5 dual-DSI field configuration:
+  - Use `dtoverlay=vc4-kms-dsi-waveshare-panel,7_0_inchC,i2c0,dsi1`
+  - And `dtoverlay=vc4-kms-dsi-waveshare-panel,7_0_inchC,i2c1,dsi0`
 - 8" Waveshare DSI LCD:
   - Use `dtoverlay=vc4-kms-dsi-waveshare-panel,8_0_inch,i2c1`
 
@@ -21,6 +24,7 @@ UART overlay is selected by compute module:
 | CM4 | 7" Waveshare DSI LCD (C), 800x480 | `dtoverlay=uart3` | `dtoverlay=vc4-kms-dsi-waveshare-800x480` |
 | CM4 | 8" Waveshare DSI LCD | `dtoverlay=uart3` | `dtoverlay=vc4-kms-dsi-waveshare-panel,8_0_inch,i2c1` |
 | CM5 | 7" Waveshare DSI LCD (C), 800x480 | `dtoverlay=uart2-pi5` | `dtoverlay=vc4-kms-dsi-waveshare-800x480` |
+| CM5 Saturn G2 | 7" Waveshare DSI LCD (C), dual-DSI field profile | `dtoverlay=uart2-pi5` | `dtoverlay=vc4-kms-dsi-waveshare-panel,7_0_inchC,i2c0,dsi1` and `dtoverlay=vc4-kms-dsi-waveshare-panel,7_0_inchC,i2c1,dsi0` |
 | CM5 | 8" Waveshare DSI LCD | `dtoverlay=uart2-pi5` | `dtoverlay=vc4-kms-dsi-waveshare-panel,8_0_inch,i2c1` |
 
 ## Why 7" uses `vc4-kms-dsi-waveshare-800x480`
@@ -28,9 +32,13 @@ UART overlay is selected by compute module:
 Field testing showed the `...-panel,7_0_inchC,...` path often reports DSI connected but leaves the display black with control-path I2C failures (for example `Goodix`/`ws_touchscreen` errors).  
 The `vc4-kms-dsi-waveshare-800x480` overlay matches the known-good behavior for the 7" (C) 800x480 panel on Trixie.
 
+## CM5 Saturn G2 exception
+
+Field testing on March 7, 2026 reported a working 7" Saturn G2 CM5 configuration only after reboot, using both DSI paths at once. That profile should be treated as a board-specific exception rather than collapsed into the generic CM5 7" rule.
+
 ## Notes
 
-- Keep only one Waveshare DSI panel overlay active in `config.txt`.
+- Keep only one Waveshare DSI panel overlay active in `config.txt`, except for the CM5 Saturn G2 dual-DSI field profile above.
 - If detection is ambiguous, set `SATURN_LCD_SIZE_INCH=7` or `SATURN_LCD_SIZE_INCH=8`.
 - If you override `SATURN_LCD_I2C_DETECT_ADDR`, keep it in the valid `i2cdetect` range (`0x08..0x77`).
 - Auto-detection script:

@@ -28,6 +28,7 @@ APP_BIAS_BIN="$SATURN_ROOT/sw_projects/biascheck/biascheck"
 APP_AUDIO_BIN="$SATURN_ROOT/sw_projects/audiotest/audiotest"
 APP_AXI_BIN="$SATURN_ROOT/sw_tools/axi_rw/axi_rw"
 APP_FLASH_BIN="$SATURN_ROOT/sw_tools/flashwriter/flashwriter"
+APP_LCD_SETUP_BIN="$SATURN_ROOT/sw_tools/saturn-lcd-setup/saturn-lcd-setup"
 SATURN_SKIP_P2APP_BUILD="${SATURN_SKIP_P2APP_BUILD:-0}"
 
 # Candidate locations for P2App (pick the first with a Makefile)
@@ -308,6 +309,7 @@ build_dir "$SATURN_ROOT/sw_projects/biascheck"     "bias check app"
 build_dir "$SATURN_ROOT/sw_projects/audiotest"     "audio test app"
 build_dir "$SATURN_ROOT/sw_tools/axi_rw"           "AXI reader/writer app"
 build_dir "$SATURN_ROOT/sw_tools/flashwriter"      "flash writer app"
+build_dir "$SATURN_ROOT/sw_tools/saturn-lcd-setup" "Saturn LCD setup tool"
 
 # ---------- paths ----------
 USER_APPS_DIR="$HOME/.local/share/applications"
@@ -380,6 +382,7 @@ ensure_core_launcher "BiasCheck.desktop"       "Bias Check"        "$APP_BIAS_BI
 ensure_core_launcher "AudioTest.desktop"       "Audio Test"        "$APP_AUDIO_BIN"  "Run the Saturn Audio Test utility"            "audiotest"
 ensure_core_launcher "AXIReaderWriter.desktop" "AXI Reader/Writer" "$APP_AXI_BIN"    "Read/write AXI registers on Saturn hardware"  "axi"
 ensure_core_launcher "FlashWriter.desktop"     "Flash Writer"      "$APP_FLASH_BIN"  "Program SPI flash for the FPGA/SoC"           "flashwriter"
+ensure_core_launcher "SaturnLCDSetup.desktop"  "Saturn LCD Setup"  "$APP_LCD_SETUP_BIN" "Inspect and apply Saturn LCD boot profiles"  "saturn"
 
 # ---------- Saturn Update Manager web launcher (ALWAYS update) ----------
 hr; echo; log "Ensuring Saturn Update Manager web launcher"; echo; hr

@@ -87,7 +87,7 @@ This is designed to preserve existing HDMI-related entries while adding panel-sp
 
 Environment controls:
 
-- `SATURN_LCD_PROFILE=none|cm4-7|cm4-8|cm5-7|cm5-8|auto` (default: `auto`)
+- `SATURN_LCD_PROFILE=none|cm4-7|cm4-8|cm5-7|cm5-7-g2-dual-dsi|cm5-8|auto` (default: `auto`)
 - `SATURN_LCD_SIZE_INCH=7|8` (optional explicit override for `SATURN_LCD_PROFILE=auto`)
 - `SATURN_LCD_AUTO_DEFAULT_SIZE_INCH=7|8` (optional fallback when auto detection is ambiguous)
 - `SATURN_LCD_I2C_DETECT_ADDR=0x45` (optional I2C address used by size auto-probe; valid `i2cdetect` range is `0x08..0x77`)
@@ -98,6 +98,7 @@ Profile mapping:
 - `cm4-7`: `dtoverlay=uart3` + `dtoverlay=vc4-kms-dsi-waveshare-800x480`
 - `cm4-8`: `dtoverlay=uart3` + `dtoverlay=vc4-kms-dsi-waveshare-panel,8_0_inch,i2c1`
 - `cm5-7`: `dtoverlay=uart2-pi5` + `dtoverlay=vc4-kms-dsi-waveshare-800x480`
+- `cm5-7-g2-dual-dsi`: `dtoverlay=uart2-pi5` + `dtoverlay=vc4-kms-dsi-waveshare-panel,7_0_inchC,i2c0,dsi1` + `dtoverlay=vc4-kms-dsi-waveshare-panel,7_0_inchC,i2c1,dsi0`
 - `cm5-8`: `dtoverlay=uart2-pi5` + `dtoverlay=vc4-kms-dsi-waveshare-panel,8_0_inch,i2c1`
 
 Notes:
@@ -106,9 +107,49 @@ Notes:
 - Re-running provisioning replaces only that managed block.
 - Existing HDMI lines outside the managed block are left untouched.
 - Display profile changes generally require reboot to take effect.
+- Auto mode preserves an existing dual-overlay CM5 7" G2 config when it finds both `dsi1/i2c0` and `dsi0/i2c1` overlay lines already present.
 - Auto mode resolves in this order: `SATURN_LCD_SIZE_INCH` -> existing Waveshare overlay in `config.txt` -> I2C probe (`i2c-10`/`i2c-0` implies 7", `i2c-1` implies 8") -> `SATURN_LCD_AUTO_DEFAULT_SIZE_INCH`.
 - Safe dry-run example (no boot config changes):
   - `sudo SATURN_FORCE_REPROVISION=1 SATURN_LCD_PROFILE=auto SATURN_LCD_DETECT_ONLY=1 /home/pi/github/Saturn/provision/cloud-init/provision-saturn.sh`
+
+## Saturn LCD Setup Desktop Tool
+
+For interactive systems, Saturn now includes a standalone desktop tool for LCD profile selection and recovery:
+
+- `Saturn LCD Setup`
+- binary: `sw_tools/saturn-lcd-setup/saturn-lcd-setup`
+- helper: `scripts/saturn-lcd-helper.sh`
+
+Use this when:
+
+- auto-detection is ambiguous
+- you are testing multiple LCD configurations
+- you want to preview the exact managed LCD block before writing
+- you need to restore a previous `config.txt` backup after a failed LCD attempt
+
+Behavior:
+
+- shows detected compute module, current profile, and current Waveshare overlay lines
+- previews the selected LCD profile before apply
+- creates a timestamped backup before changing `config.txt`
+- allows restore from saved LCD backups through the UI
+- prompts for reboot after apply or restore
+
+Provisioning integration:
+
+- provisioning builds `saturn-lcd-setup` during the normal app/tool build stage
+- provisioning installs the desktop launcher through `scripts/update-desktop-apps.sh`
+
+Backups created by the tool are stored next to `config.txt` as:
+
+- `config.txt.bak.lcd-tool.<timestamp>`
+
+CLI examples:
+
+- list backups:
+  - `/home/pi/github/Saturn/scripts/saturn-lcd-helper.sh backups`
+- restore latest backup:
+  - `sudo /home/pi/github/Saturn/scripts/saturn-lcd-helper.sh restore-latest`
 
 ## Standalone Execution
 

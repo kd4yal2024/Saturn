@@ -622,6 +622,16 @@ detect_lcd_size_from_config() {
   fi
 }
 
+detect_lcd_profile_from_config() {
+  local boot_config="$1"
+
+  if grep -Eq '^[[:space:]]*dtoverlay=vc4-kms-dsi-waveshare-panel,7_0_inchC,i2c0,dsi1([[:space:]]*#.*)?$' "$boot_config" \
+    && grep -Eq '^[[:space:]]*dtoverlay=vc4-kms-dsi-waveshare-panel,7_0_inchC,i2c1,dsi0([[:space:]]*#.*)?$' "$boot_config"; then
+    printf 'cm5-7-g2-dual-dsi\n'
+    return
+  fi
+}
+
 i2c_address_detected() {
   local bus="$1"
   local addr="${2:-0x45}"
@@ -736,11 +746,17 @@ resolve_lcd_profile() {
     none|"")
       return 1
       ;;
-    cm4-7|cm4-8|cm5-7|cm5-8)
+    cm4-7|cm4-8|cm5-7|cm5-7-g2-dual-dsi|cm5-8)
       printf '%s\n' "$requested"
       return 0
       ;;
     auto)
+      requested="$(detect_lcd_profile_from_config "$boot_config" 2>/dev/null || true)"
+      if [[ -n "$requested" ]]; then
+        log "Auto-selected LCD profile from existing config: '$requested'"
+        printf '%s\n' "$requested"
+        return 0
+      fi
       cm="$(detect_compute_module_generation 2>/dev/null || true)"
       auto_detect_result="$(detect_lcd_size_auto "$boot_config" 2>/dev/null || true)"
       if [[ -n "$auto_detect_result" ]]; then
@@ -780,6 +796,10 @@ render_lcd_profile_block() {
     cm5-7)
       uart_line='dtoverlay=uart2-pi5'
       panel_line='dtoverlay=vc4-kms-dsi-waveshare-800x480'
+      ;;
+    cm5-7-g2-dual-dsi)
+      uart_line='dtoverlay=uart2-pi5'
+      panel_line=$'dtoverlay=vc4-kms-dsi-waveshare-panel,7_0_inchC,i2c0,dsi1\ndtoverlay=vc4-kms-dsi-waveshare-panel,7_0_inchC,i2c1,dsi0'
       ;;
     cm5-8)
       uart_line='dtoverlay=uart2-pi5'
@@ -997,6 +1017,7 @@ build_saturn_apps() {
   build_dir "$saturn_home" "axi_rw"      "$SATURN_REPO_DIR/sw_tools/axi_rw" "$nproc" 1
   build_dir "$saturn_home" "flashwriter" "$SATURN_REPO_DIR/sw_tools/flashwriter" "$nproc" 1
   build_dir "$saturn_home" "load-FPGA"   "$SATURN_REPO_DIR/sw_tools/load-FPGA" "$nproc" 1
+  build_dir "$saturn_home" "saturn-lcd-setup" "$SATURN_REPO_DIR/sw_tools/saturn-lcd-setup" "$nproc" 1
   build_dir "$saturn_home" "spiload"     "$SATURN_REPO_DIR/sw_tools/spiload" "$nproc" 1
 
   if bool_true "$SATURN_BUILD_OPTIONAL_TOOLS"; then

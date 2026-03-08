@@ -15,6 +15,7 @@ struct UiState
     GtkWidget *log_scroller;
     GtkWidget *log_view;
     GtkWidget *toggle_button;
+    GtkWidget *reboot_button;
     GtkWidget *close_button;
     GtkTextBuffer *log_buffer;
 
@@ -26,6 +27,7 @@ struct UiState
     gint64 start_us;
     gsize log_offset;
     bool finished;
+    bool reboot_prompt_shown;
 };
 
 static bool file_exists(const std::string &path)
@@ -148,6 +150,69 @@ static void set_status(UiState *ui, const std::string &message)
     gtk_label_set_text(GTK_LABEL(ui->status_label), message.c_str());
 }
 
+static void request_reboot(UiState *ui)
+{
+    GError *error = nullptr;
+    const gchar *commands[] = {
+        "pkexec /usr/bin/systemctl reboot",
+        "/usr/bin/systemctl reboot",
+    };
+
+    for (const gchar *command : commands)
+    {
+        if (g_spawn_command_line_async(command, &error))
+        {
+            set_status(ui, "Reboot requested. The system should restart shortly.");
+            return;
+        }
+        if (error)
+        {
+            g_error_free(error);
+            error = nullptr;
+        }
+    }
+
+    set_status(ui, "Provisioning completed. Please reboot the system before using Saturn.");
+}
+
+static void maybe_prompt_reboot(UiState *ui)
+{
+    if (ui->reboot_prompt_shown)
+    {
+        return;
+    }
+
+    ui->reboot_prompt_shown = true;
+    gtk_widget_set_sensitive(ui->reboot_button, TRUE);
+
+    GtkWidget *dialog = gtk_message_dialog_new(
+        GTK_WINDOW(ui->window),
+        static_cast<GtkDialogFlags>(GTK_DIALOG_MODAL | GTK_DIALOG_DESTROY_WITH_PARENT),
+        GTK_MESSAGE_QUESTION,
+        GTK_BUTTONS_NONE,
+        "%s",
+        "Provisioning completed successfully. A reboot is recommended before using Saturn.");
+    gtk_message_dialog_format_secondary_text(
+        GTK_MESSAGE_DIALOG(dialog),
+        "%s",
+        "Would you like to reboot now?");
+    gtk_dialog_add_button(GTK_DIALOG(dialog), "Later", GTK_RESPONSE_CANCEL);
+    gtk_dialog_add_button(GTK_DIALOG(dialog), "Reboot Now", GTK_RESPONSE_ACCEPT);
+    gtk_dialog_set_default_response(GTK_DIALOG(dialog), GTK_RESPONSE_ACCEPT);
+
+    const gint response = gtk_dialog_run(GTK_DIALOG(dialog));
+    gtk_widget_destroy(dialog);
+
+    if (response == GTK_RESPONSE_ACCEPT)
+    {
+        request_reboot(ui);
+    }
+    else
+    {
+        set_status(ui, "Provisioning completed. Please reboot the system before using Saturn.");
+    }
+}
+
 static gboolean on_tick(gpointer user_data)
 {
     UiState *ui = static_cast<UiState *>(user_data);
@@ -197,7 +262,7 @@ static gboolean on_tick(gpointer user_data)
             ui->finished = true;
             gtk_progress_bar_set_fraction(GTK_PROGRESS_BAR(ui->progress_bar), 1.0);
             set_result(ui, "<span foreground='#8bf58b' weight='bold' size='x-large'>Provisioning successful</span>");
-            set_status(ui, status_message.empty() ? "All provisioning steps completed." : status_message);
+            set_status(ui, status_message.empty() ? "All provisioning steps completed. A reboot is recommended before using Saturn." : status_message + " Reboot is recommended before using Saturn.");
         }
         else
         {
@@ -215,6 +280,10 @@ static gboolean on_tick(gpointer user_data)
 
     if (ui->finished)
     {
+        if (has_completion || (has_status && status_state == "SUCCESS"))
+        {
+            maybe_prompt_reboot(ui);
+        }
         gtk_widget_set_sensitive(ui->close_button, TRUE);
         gtk_progress_bar_set_text(GTK_PROGRESS_BAR(ui->progress_bar), "Done");
     }
@@ -278,6 +347,7 @@ int main(int argc, char **argv)
     ui.start_us = g_get_monotonic_time();
     ui.log_offset = 0;
     ui.finished = false;
+    ui.reboot_prompt_shown = false;
 
     g_free(arg_log);
     g_free(arg_completion);
@@ -356,6 +426,10 @@ int main(int argc, char **argv)
     ui.toggle_button = gtk_toggle_button_new_with_label("Show Live Log");
     gtk_box_pack_start(GTK_BOX(button_row), ui.toggle_button, FALSE, FALSE, 0);
 
+    ui.reboot_button = gtk_button_new_with_label("Reboot Now");
+    gtk_widget_set_sensitive(ui.reboot_button, FALSE);
+    gtk_box_pack_end(GTK_BOX(button_row), ui.reboot_button, FALSE, FALSE, 0);
+
     ui.close_button = gtk_button_new_with_label("Close");
     gtk_widget_set_sensitive(ui.close_button, FALSE);
     gtk_box_pack_end(GTK_BOX(button_row), ui.close_button, FALSE, FALSE, 0);
@@ -375,6 +449,7 @@ int main(int argc, char **argv)
 
     g_signal_connect(ui.window, "destroy", G_CALLBACK(gtk_main_quit), nullptr);
     g_signal_connect(ui.close_button, "clicked", G_CALLBACK(gtk_main_quit), nullptr);
+    g_signal_connect_swapped(ui.reboot_button, "clicked", G_CALLBACK(request_reboot), &ui);
     g_signal_connect(ui.toggle_button, "toggled", G_CALLBACK(on_toggle_log), &ui);
 
     gtk_widget_show_all(ui.window);
