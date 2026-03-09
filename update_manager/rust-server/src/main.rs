@@ -920,6 +920,7 @@ struct ScriptRunLog {
     status: String, // running|done|error
     started_at: String,
     finished_at: Option<String>,
+    line_offset: usize,
     lines: Vec<String>,
 }
 
@@ -953,6 +954,7 @@ fn begin_script_run_log(script: &str, flags: &[String]) -> (String, String) {
         status: "running".to_string(),
         started_at: Local::now().to_rfc3339(),
         finished_at: None,
+        line_offset: 0,
         lines: vec![start_line.clone()],
     };
     script_run_log_slot()
@@ -974,6 +976,7 @@ fn append_script_run_log_line(script: &str, run_id: &str, line: String) {
     if run.lines.len() > RUN_LOG_MAX_LINES {
         let excess = run.lines.len() - RUN_LOG_MAX_LINES;
         run.lines.drain(0..excess);
+        run.line_offset += excess;
     }
 }
 
@@ -4158,10 +4161,12 @@ async fn get_run_log(Query(q): Query<RunLogQuery>) -> Response {
         .into_response();
     };
 
-    let total = run.lines.len();
-    let start = from.min(total);
-    let end = (start + limit).min(total);
-    let lines = run.lines[start..end].to_vec();
+    let total = run.line_offset + run.lines.len();
+    let start = from.max(run.line_offset).min(total);
+    let start_idx = start.saturating_sub(run.line_offset);
+    let end_idx = (start_idx + limit).min(run.lines.len());
+    let end = run.line_offset + end_idx;
+    let lines = run.lines[start_idx..end_idx].to_vec();
     Json(serde_json::json!({
         "script": script,
         "run_id": run.run_id,

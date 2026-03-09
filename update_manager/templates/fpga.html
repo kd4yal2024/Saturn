@@ -160,6 +160,7 @@
           <button id="fpga-run" class="btn btn-primary px-5 py-2">Run FPGA Flash</button>
           <button id="fpga-clear" class="btn btn-danger px-4 py-2">Clear Output</button>
           <progress id="fpga-progress" max="100" value="0" class="hidden w-48"></progress>
+          <span id="fpga-phase" class="text-sm opacity-85"></span>
         </div>
         <div id="fpga-status" class="text-sm opacity-85 mt-3"></div>
       </div>
@@ -198,21 +199,28 @@ const $ = (id)=>document.getElementById(id);
 const SCRIPT_NAME = 'flash_fpga.sh';
 const CSRF_HEADER_NAME = 'X-Saturn-CSRF';
 const CSRF_HEADER_VALUE = '1';
-const FPGA_OUTPUT_LINES_KEY = 'saturn:fpga:output-lines';
 const FPGA_OUTPUT_MAX_LINES = 2500;
-const FPGA_RUN_ID_KEY = 'saturn:fpga:run-id';
-const FPGA_RUN_NEXT_KEY = 'saturn:fpga:run-next';
+const FPGA_VISIBLE_MAX_LINES = 300;
 let fpgaOutputLines = [];
 let fpgaRunLogRunId = '';
 let fpgaRunLogNext = 0;
 let fpgaRunLogPoll = null;
 let fpgaRunInProgress = false;
+let fpgaRunStatus = 'idle';
+let fpgaStartRequest = null;
+let fpgaPhase = '';
+let fpgaFetchInFlight = false;
+let fpgaFetchPending = false;
 let fpgaImages = [];
 let fpgaLatestImage = '';
 
 function withCsrf(headers = {}){ return { ...headers, [CSRF_HEADER_NAME]: CSRF_HEADER_VALUE }; }
 function show(el, on){ el.classList.toggle('hidden', !on); }
 function setStatus(msg){ $('fpga-status').textContent = String(msg || ''); }
+function setPhase(msg){
+  fpgaPhase = String(msg || '');
+  $('fpga-phase').textContent = fpgaPhase;
+}
 
 function ansiToHtml(line){
   const html = ansi_up.ansi_to_html(String(line ?? ''));
@@ -228,62 +236,91 @@ function renderAnsiLines(lines){
   return lines.map((line)=>ansiToHtml(line)).join('<br>') + '<br>';
 }
 
+function visibleOutputLines(){
+  if (fpgaOutputLines.length <= FPGA_VISIBLE_MAX_LINES){
+    return fpgaOutputLines;
+  }
+  return fpgaOutputLines.slice(-FPGA_VISIBLE_MAX_LINES);
+}
+
 function refreshRenderedOutput(){
   const out = $('fpga-output');
-  out.innerHTML = renderAnsiLines(fpgaOutputLines);
+  out.innerHTML = renderAnsiLines(visibleOutputLines());
   out.scrollTop = out.scrollHeight;
 }
 
-function saveSessionJson(key, value){
-  try{ sessionStorage.setItem(key, JSON.stringify(value)); }catch(_e){}
-}
-
-function loadSessionJson(key, fallback){
-  try{
-    const raw = sessionStorage.getItem(key);
-    if (!raw) return fallback;
-    const parsed = JSON.parse(raw);
-    return parsed == null ? fallback : parsed;
-  }catch(_e){
-    return fallback;
-  }
-}
-
 function persistOutput(){
-  saveSessionJson(FPGA_OUTPUT_LINES_KEY, fpgaOutputLines);
-  try{ sessionStorage.setItem(FPGA_RUN_NEXT_KEY, String(fpgaRunLogNext)); }catch(_e){}
 }
 
 function restoreOutput(){
-  const saved = loadSessionJson(FPGA_OUTPUT_LINES_KEY, []);
-  fpgaOutputLines = Array.isArray(saved) ? saved.map((v)=>String(v)) : [];
-  if (fpgaOutputLines.length > FPGA_OUTPUT_MAX_LINES){
-    fpgaOutputLines = fpgaOutputLines.slice(-FPGA_OUTPUT_MAX_LINES);
-    persistOutput();
-  }
-  try{
-    fpgaRunLogRunId = sessionStorage.getItem(FPGA_RUN_ID_KEY) || '';
-    const rawNext = Number(sessionStorage.getItem(FPGA_RUN_NEXT_KEY) || String(fpgaOutputLines.length));
-    fpgaRunLogNext = Number.isFinite(rawNext) && rawNext >= 0 ? rawNext : fpgaOutputLines.length;
-  }catch(_e){
-    fpgaRunLogRunId = '';
-    fpgaRunLogNext = fpgaOutputLines.length;
-  }
+  fpgaOutputLines = [];
+  fpgaRunLogRunId = '';
+  fpgaRunLogNext = 0;
   refreshRenderedOutput();
 }
 
-function appendOutput(line){
-  const text = String(line ?? '');
-  fpgaOutputLines.push(text);
+function appendOutputBatch(lines){
+  if (!Array.isArray(lines) || !lines.length) return;
+  const batch = lines.map((line)=>String(line ?? ''));
+  const out = $('fpga-output');
+  let rerender = false;
+  let appendedHtml = '';
+  let tailSpace = Math.max(0, FPGA_VISIBLE_MAX_LINES - Math.min(fpgaOutputLines.length, FPGA_VISIBLE_MAX_LINES));
+
+  batch.forEach((text)=>{
+    fpgaOutputLines.push(text);
+    updateProgressFromLine(text);
+    if (fpgaOutputLines.length > FPGA_OUTPUT_MAX_LINES || batch.length > tailSpace){
+      rerender = true;
+    } else if (tailSpace > 0) {
+      appendedHtml += ansiToHtml(text) + '<br>';
+      tailSpace -= 1;
+    }
+  });
+
   if (fpgaOutputLines.length > FPGA_OUTPUT_MAX_LINES){
     fpgaOutputLines = fpgaOutputLines.slice(-FPGA_OUTPUT_MAX_LINES);
-    $('fpga-output').innerHTML = renderAnsiLines(fpgaOutputLines);
-  } else {
-    $('fpga-output').innerHTML += ansiToHtml(text) + '<br>';
+    rerender = true;
   }
-  fpgaRunLogNext = fpgaOutputLines.length;
+
+  if (rerender){
+    out.innerHTML = renderAnsiLines(fpgaOutputLines);
+  } else if (appendedHtml){
+    out.insertAdjacentHTML('beforeend', appendedHtml);
+  }
+
   persistOutput();
-  $('fpga-output').scrollTop = $('fpga-output').scrollHeight;
+  out.scrollTop = out.scrollHeight;
+}
+
+function appendOutput(line){
+  appendOutputBatch([line]);
+}
+
+function updateProgressFromLine(line){
+  const text = String(line ?? '');
+  let match = text.match(/Progress:\s*(\d+(?:\.\d+)?)%/i);
+  if (match){
+    const value = Number.parseFloat(match[1]);
+    if (!Number.isFinite(value)) return;
+    setPhase(`Writing ${value.toFixed(1)}%`);
+    $('fpga-progress').value = Math.max(0, Math.min(50, value / 2));
+    return;
+  }
+  match = text.match(/\((\d+(?:\.\d+)?)%\):(Wrote|Read)\b/i);
+  if (!match) return;
+  const value = Number.parseFloat(match[1]);
+  if (!Number.isFinite(value)) return;
+  const phase = String(match[2] || '').toLowerCase();
+  if (phase === 'wrote'){
+    setPhase(`Writing ${value.toFixed(1)}%`);
+    $('fpga-progress').value = Math.max(0, Math.min(50, value / 2));
+    return;
+  }
+  if (phase === 'read'){
+    setPhase(`Verifying ${value.toFixed(1)}%`);
+    $('fpga-progress').value = Math.max(50, Math.min(100, 50 + (value / 2)));
+  }
 }
 
 function clearRunLogPoll(){
@@ -299,17 +336,42 @@ function ensureRunLogPoll(){
   }
 }
 
+function applyRunLogStatus(status){
+  const normalized = String(status || 'idle');
+  fpgaRunStatus = normalized;
+  if (normalized === 'running'){
+    setStatus('FPGA flash running...');
+    show($('fpga-progress'), true);
+    return;
+  }
+  if (normalized === 'done'){
+    $('fpga-progress').value = 100;
+    setPhase('Complete');
+    setStatus('FPGA flash completed.');
+    show($('fpga-progress'), false);
+    return;
+  }
+  if (normalized === 'error'){
+    if (!fpgaPhase) setPhase('Error');
+    setStatus('FPGA flash failed. Review output below.');
+    show($('fpga-progress'), false);
+    return;
+  }
+  setPhase('');
+  setStatus('');
+}
+
 function resetBufferedState(){
   fpgaRunLogRunId = '';
   fpgaRunLogNext = 0;
   fpgaOutputLines = [];
-  try{ sessionStorage.setItem(FPGA_RUN_ID_KEY, ''); }catch(_e){}
+  fpgaRunStatus = 'idle';
+  setPhase('');
   persistOutput();
   $('fpga-output').innerHTML = '';
 }
 
-async function fetchBufferedRunLog(){
-  if (fpgaRunInProgress) return;
+async function fetchBufferedRunLogOnce(){
   try{
     const from = Math.max(0, Number(fpgaRunLogNext) || 0);
     const r = await fetch(`./run_log?script=${encodeURIComponent(SCRIPT_NAME)}&from=${from}&limit=600`, { cache: 'no-store' });
@@ -317,37 +379,84 @@ async function fetchBufferedRunLog(){
     const data = await r.json().catch(()=>({}));
     const runId = String(data.run_id || '');
     const running = !!data.running;
+    const status = String(data.status || (running ? 'running' : 'idle'));
+    const totalLines = Number(data.total_lines);
 
     if (!runId){
+      applyRunLogStatus('idle');
       clearRunLogPoll();
       return;
     }
     if (fpgaRunLogRunId && runId !== fpgaRunLogRunId){
       resetBufferedState();
       fpgaRunLogRunId = runId;
-      try{ sessionStorage.setItem(FPGA_RUN_ID_KEY, runId); }catch(_e){}
-      await fetchBufferedRunLog();
+      fpgaFetchPending = true;
       return;
     }
     if (!fpgaRunLogRunId){
       fpgaRunLogRunId = runId;
-      try{ sessionStorage.setItem(FPGA_RUN_ID_KEY, runId); }catch(_e){}
     }
 
     const lines = Array.isArray(data.lines) ? data.lines : [];
-    lines.forEach((line)=>appendOutput(line));
+    appendOutputBatch(lines);
 
     const nextFrom = Number(data.next_from);
     if (Number.isFinite(nextFrom) && nextFrom >= 0){
       fpgaRunLogNext = nextFrom;
-      try{ sessionStorage.setItem(FPGA_RUN_NEXT_KEY, String(nextFrom)); }catch(_e){}
     }
 
-    if (running){
+    const caughtUp = Number.isFinite(totalLines) ? fpgaRunLogNext >= totalLines : !lines.length;
+    applyRunLogStatus(status);
+    if (running || !caughtUp){
+      fpgaRunInProgress = true;
       ensureRunLogPoll();
     } else {
+      fpgaRunInProgress = false;
+      $('fpga-run').disabled = false;
       clearRunLogPoll();
     }
+  }catch(_e){}
+}
+
+async function fetchBufferedRunLog(){
+  if (fpgaFetchInFlight){
+    fpgaFetchPending = true;
+    return;
+  }
+
+  fpgaFetchInFlight = true;
+  try{
+    do{
+      fpgaFetchPending = false;
+      await fetchBufferedRunLogOnce();
+    } while (fpgaFetchPending);
+  } finally {
+    fpgaFetchInFlight = false;
+  }
+}
+
+async function startFpgaRun(selectedFlags){
+  const fd = new FormData();
+  fd.append('script', SCRIPT_NAME);
+  selectedFlags.forEach((f)=>fd.append('flags', f));
+
+  const res = await fetch('./run', {
+    method: 'POST',
+    body: fd,
+    headers: withCsrf({'Accept':'text/event-stream'}),
+  });
+  if (!res.ok) {
+    let msg = 'HTTP ' + res.status;
+    try{
+      const data = await res.json();
+      if (data && data.message) msg = data.message;
+    }catch(_e){}
+    throw new Error(msg);
+  }
+
+  // Start the backend job, but drive the UI from /run_log rather than relying on the stream.
+  try{
+    await res.body?.cancel();
   }catch(_e){}
 }
 
@@ -454,9 +563,11 @@ $('fpga-run').addEventListener('click', async ()=>{
   resetBufferedState();
   setStatus('');
   fpgaRunInProgress = true;
+  fpgaRunStatus = 'running';
   btn.disabled = true;
   progress.value = 0;
   show(progress, true);
+  ensureRunLogPoll();
 
   let selectedFlags = [];
   try{
@@ -464,6 +575,7 @@ $('fpga-run').addEventListener('click', async ()=>{
   }catch(e){
     appendOutput('\x1b[31m' + e.message + '\x1b[0m');
     fpgaRunInProgress = false;
+    fpgaRunStatus = 'error';
     btn.disabled = false;
     show(progress, false);
     return;
@@ -472,50 +584,20 @@ $('fpga-run').addEventListener('click', async ()=>{
   appendOutput('\x1b[36mStarting ' + SCRIPT_NAME + '...\x1b[0m');
 
   try{
-    const fd = new FormData();
-    fd.append('script', SCRIPT_NAME);
-    selectedFlags.forEach((f)=>fd.append('flags', f));
-
-    const res = await fetch('./run', {
-      method: 'POST',
-      body: fd,
-      headers: withCsrf({'Accept':'text/event-stream'}),
-    });
-    if (!res.ok) {
-      let msg = 'HTTP ' + res.status;
-      try{
-        const data = await res.json();
-        if (data && data.message) msg = data.message;
-      }catch(_e){}
-      throw new Error(msg);
-    }
-
-    const reader = res.body.getReader();
-    const dec = new TextDecoder();
-    let buf = '';
-
-    while (true){
-      const { done, value } = await reader.read();
-      if (done) break;
-      buf += dec.decode(value, { stream: true });
-      const chunks = buf.split('\n\n');
-      buf = chunks.pop() || '';
-
-      for (const c of chunks){
-        if (!c.startsWith('data: ')) continue;
-        const line = c.slice(6);
-        appendOutput(line);
-        const m = line.match(/Progress:\s*(\d+)%/i);
-        if (m) progress.value = parseInt(m[1], 10);
-      }
-    }
+    fpgaStartRequest = startFpgaRun(selectedFlags);
+    await fpgaStartRequest;
+    await fetchBufferedRunLog();
   }catch(e){
     appendOutput('\x1b[31mRun error: ' + e.message + '\x1b[0m');
-  }finally{
+    fpgaRunStatus = 'error';
     fpgaRunInProgress = false;
     btn.disabled = false;
+    clearRunLogPoll();
+  }finally{
+    fpgaStartRequest = null;
+    ensureRunLogPoll();
     setTimeout(fetchBufferedRunLog, 250);
-    setTimeout(()=>show(progress, false), 600);
+    setTimeout(fetchBufferedRunLog, 1200);
   }
 });
 

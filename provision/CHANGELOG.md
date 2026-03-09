@@ -2,6 +2,19 @@
 
 All notable changes to provisioning assets are documented in this file.
 
+## [2026-03-09]
+
+### Changed
+
+- `../rules/install-rules.sh`
+  - installer now copies both the serial udev rule and the XDMA PCIe rule/helper used by Saturn FPGA access
+  - installer now applies executable permissions to `xdma-udev-command.sh`
+  - installer now reloads udev rules and retriggers the XDMA subsystem after installation
+
+### Fixed
+
+- provisioning/invocation paths that relied on `rules/install-rules.sh` no longer miss the XDMA udev rules, which previously left systems without `/dev/xdma/card0/*` symlinks and non-root-accessible XDMA device nodes after install
+
 ## [2026-03-07]
 
 ### Changed

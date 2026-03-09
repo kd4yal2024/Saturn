@@ -67,6 +67,8 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
 - Provisioning (`provision/cloud-init/provision-saturn.sh`) now installs and runs the shutdown-waiter installer by default (`SATURN_INSTALL_SHUTDOWN_WAITER=1`) and adds `gpiod` to required packages.
 - `scripts/copy-autostart.sh` no longer installs `g2-shutdown.desktop`; shutdown waiting is now service-managed.
 - `autostart-files/g2-shutdown.desktop` is now marked deprecated/hidden to prevent new desktop-session activation.
+- FPGA flash page (`templates/fpga.html`) now uses `/run_log` as the primary source of truth, labels write/verify phases separately, keeps polling until buffered output is fully drained, removes stale session-state replay, and limits rendered output to a smaller visible tail to reduce browser lockups during long flash/verify runs.
+- FPGA flash live log polling now serializes in the browser and batches DOM updates to avoid overlapping fetch/render cycles during high-volume `load-FPGA` output.
 
 ### Fixed
 - `update-G2.py`: verbose mode now preserves captured command output used by status sections (fixes `Size: ?` and `Commit: ?` cases).
@@ -78,6 +80,7 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
 - `/change_password`: switched to `htpasswd -i` with stdin input so passwords are not exposed in process arguments.
 - `restore-backup.sh`: fixed `--list --json` runtime error and malformed JSON output.
 - `restore-backup.sh`: added `--backup-name` support used by web UI restore flow.
+- `/run_log` now tracks absolute line offsets for rolling script logs so long FPGA flash runs continue streaming correctly after the in-memory buffer begins truncating older lines.
 - `monitor.html`: replaced process-row `innerHTML` injection with DOM `textContent` rendering for safer output handling.
 - `scripts/config.json`: corrected restore script `directory` path metadata.
 - Installer health check now fails loudly (with `systemctl`/`journalctl` diagnostics) if backend `/healthz` does not come up.

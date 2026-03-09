@@ -1,42 +1,56 @@
 #!/bin/bash
 #
-# Install serial port rules file in /etc/udev/rules.d
-# This script must be run as root (use sudo)
+# Install Saturn udev rules into /etc/udev/rules.d.
+# This includes the serial-device rule and the XDMA rule/helper used by PCIe access.
 
-# Determine the script's directory
-SCRIPT_DIR=$(dirname "$0")
+set -euo pipefail
 
-# Check if running as root
+SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
+XDMA_RULES_DIR="$SCRIPT_DIR/../linuxdriver/etc/udev/rules.d"
+DEST_DIR="/etc/udev/rules.d"
+
 if [ "$EUID" -ne 0 ]; then
     echo "ERROR: This script must be run as root. Please run it with sudo."
     exit 1
 fi
 
-# Check if the rules file exists
-RULES_FILE="$SCRIPT_DIR/61-g2-serial.rules"
-if [ ! -f "$RULES_FILE" ]; then
-    echo "ERROR: Rules file $RULES_FILE not found."
+declare -a rule_files=()
+
+if [ -f "$SCRIPT_DIR/61-g2-serial.rules" ]; then
+    rule_files+=("$SCRIPT_DIR/61-g2-serial.rules")
+fi
+if [ -f "$XDMA_RULES_DIR/60-xdma.rules" ]; then
+    rule_files+=("$XDMA_RULES_DIR/60-xdma.rules")
+fi
+if [ -f "$XDMA_RULES_DIR/xdma-udev-command.sh" ]; then
+    rule_files+=("$XDMA_RULES_DIR/xdma-udev-command.sh")
+fi
+
+if [ "${#rule_files[@]}" -eq 0 ]; then
+    echo "ERROR: No Saturn udev rule files were found."
     exit 1
 fi
 
 echo "##############################################################"
 echo ""
-echo "Installing serial rules file:"
+echo "Installing Saturn udev rules:"
+printf ' - %s\n' "${rule_files[@]}"
 echo ""
 echo "##############################################################"
 
-# Copy the rules file
-if cp "$RULES_FILE" /etc/udev/rules.d; then
-    echo "✓ Rules file copied successfully."
-else
-    echo "ERROR: Failed to copy rules file."
-    exit 1
-fi
+install -d -m 0755 "$DEST_DIR"
 
-# Reload udev rules
-if udevadm control --reload-rules && udevadm trigger; then
-    echo "✓ Udev rules reloaded successfully."
-else
-    echo "ERROR: Failed to reload udev rules."
-    exit 1
-fi
+for src in "${rule_files[@]}"; do
+    base=$(basename "$src")
+    mode=0644
+    if [ "$base" = "xdma-udev-command.sh" ]; then
+        mode=0755
+    fi
+    install -m "$mode" "$src" "$DEST_DIR/$base"
+done
+
+udevadm control --reload-rules
+udevadm trigger
+udevadm trigger --subsystem-match=xdma || true
+
+echo "✓ Udev rules reloaded successfully."
