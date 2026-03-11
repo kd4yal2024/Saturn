@@ -80,7 +80,7 @@ void MakeCATMessageBool(int Device, ECATCommands Cmd, bool Param);
 // the string is truncated if too long, or padded with spaces if too short
 // Device = -1 for CAT port, else a serial device with this file ID
 //
-void MakeCATMessageString(int Device, ECATCommands Cmd, char* Param);
+void MakeCATMessageString(int Device, ECATCommands Cmd, const char* Param);
 
 
 //
@@ -97,7 +97,7 @@ void ShutdownCATHandler(void);
 //
 // send a CAT message to TCP/IP port
 //
-void SendCATMessage(char* CatString);
+void SendCATMessage(const char* CatString);
 
 //
 // parse a CAT command, and call appropriate handler

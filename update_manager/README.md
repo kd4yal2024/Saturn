@@ -202,6 +202,8 @@ If a script entry does not define `version`, `/get_versions` now returns
   - `eth0` throughput/packet rate/errors+drops
   - XDMA interrupt rate (`/proc/interrupts`) and PCIe link speed/width (`/sys/class/xdma/...`)
 - Performance panel includes threshold highlighting/alerts for CPU, scheduler wait, and XDMA interrupt spikes/drops versus baseline.
+- Performance baseline resets automatically when the running `p2app.service` process identity changes, so P2 and P3 samples are not mixed after a switch/restart.
+- Status/performance panes are always reloaded fresh and are no longer restored from browser session storage.
 - Switch/deploy actions now support startup profiles (`panel`, `panel-debug`, `headless`) and front-panel mode overrides (`auto`, `g2`, `g2v2`, `prefer-g2`, `prefer-g2v2`, `off`), written as `SATURN_FRONT_PANEL_MODE` in the systemd drop-in.
 - `/p23test` includes an `Emergency Revert Now` button for fast recovery if a switch leaves the local UI unusable.
 - Intended for local testing; it is not linked from the main navigation.

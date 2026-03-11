@@ -147,8 +147,6 @@ const CSRF_HEADER_VALUE = '1';
 const OUT_KEY = 'saturn:p23test:output';
 const RUN_ID_KEY = 'saturn:p23test:run-id';
 const RUN_NEXT_KEY = 'saturn:p23test:run-next';
-const STATUS_KEY = 'saturn:p23test:status-json';
-const PERF_VIEW_KEY = 'saturn:p23test:perf-view';
 const OUT_MAX = 3500;
 let lines = [];
 let runId = '';
@@ -157,8 +155,11 @@ let runInProgress = false;
 let pollTimer = null;
 let statusPollTimer = null;
 let perfPollTimer = null;
+let statusPollInFlight = false;
+let perfPollInFlight = false;
 let perfPrevSample = null;
 let perfBaseline = null;
+let perfProcessIdentity = '';
 const PERF_THRESH = {
   cpuCoreWarn: 60,
   cpuCoreCrit: 90,
@@ -224,7 +225,6 @@ function setStatusSummary(text, isError=false){
 function setStatusView(obj){
   const text = JSON.stringify(obj || {}, null, 2);
   $('p23-status-view').textContent = text;
-  try { sessionStorage.setItem(STATUS_KEY, text); } catch(_e) {}
 }
 function setPerfSummary(text, isError=false){
   const el = $('p23-perf-summary');
@@ -252,7 +252,6 @@ function setPerfAlertVisual(level){
 }
 function setPerfViewText(text){
   $('p23-perf-view').textContent = text || '';
-  try { sessionStorage.setItem(PERF_VIEW_KEY, String(text || '')); } catch(_e) {}
 }
 function formatP23StatusSummary(p){
   if (!p || typeof p !== 'object') return 'No status data.';
@@ -272,6 +271,8 @@ function formatP23StatusSummary(p){
   return `Selected: ${selected} | Service: ${active} (${enabled}) | Mode: ${mode} | Panel: ${panel} | Built P2: ${p2Built} | Built P3: ${p3Built} | ${running}`;
 }
 async function loadP23Status(){
+  if (statusPollInFlight) return;
+  statusPollInFlight = true;
   try{
     const r = await fetch('./p23_status', { cache:'no-store' });
     const data = await r.json().catch(()=>({}));
@@ -281,6 +282,8 @@ async function loadP23Status(){
     setStatusView({ p23: p });
   }catch(e){
     setStatusSummary('Failed to load P2/P3 status: ' + e.message, true);
+  }finally{
+    statusPollInFlight = false;
   }
 }
 function ensureStatusPoll(){
@@ -300,6 +303,7 @@ function newPerfBaseline(){
     ethTxMbps: { min: Infinity, max: -Infinity, sum: 0, count: 0 },
     ethRxPps: { min: Infinity, max: -Infinity, sum: 0, count: 0 },
     xdmaIrqPerSec: { min: Infinity, max: -Infinity, sum: 0, count: 0 },
+    xdmaIrqPerMiB: { min: Infinity, max: -Infinity, sum: 0, count: 0 },
   };
 }
 function baselinePush(bucket, value){
@@ -352,6 +356,8 @@ function perfCounters(perf){
     nvctx: Number(st.nonvoluntary_ctxt_switches) || 0,
     readBytes: Number(io.read_bytes) || 0,
     writeBytes: Number(io.write_bytes) || 0,
+    rcharBytes: Number(io.rchar) || 0,
+    wcharBytes: Number(io.wchar) || 0,
     runDelayNs: Number(sched.run_delay_ns) || 0,
     runtimeNs: Number(sched.runtime_ns) || 0,
     minflt: Number(stat.minflt) || 0,
@@ -385,6 +391,9 @@ function derivePerf(current){
   let ctxPerSec = NaN;
   let readKBs = NaN;
   let writeKBs = NaN;
+  let charReadKBs = NaN;
+  let charWriteKBs = NaN;
+  let charTotalMiBs = NaN;
   let minfltPerSec = NaN;
   let majfltPerSec = NaN;
   let runtimeMsPerSec = NaN;
@@ -393,6 +402,7 @@ function derivePerf(current){
   let ethRxPps = NaN;
   let ethTxPps = NaN;
   let xdmaIrqPerSec = NaN;
+  let xdmaIrqPerMiB = NaN;
   let ethRxErrDelta = NaN;
   let ethRxDropDelta = NaN;
   let ethTxErrDelta = NaN;
@@ -410,6 +420,8 @@ function derivePerf(current){
       ctxPerSec = (((c.vctx + c.nvctx) - (perfPrevSample.vctx + perfPrevSample.nvctx))) / dtSec;
       readKBs = ((c.readBytes - perfPrevSample.readBytes) / 1024) / dtSec;
       writeKBs = ((c.writeBytes - perfPrevSample.writeBytes) / 1024) / dtSec;
+      charReadKBs = ((c.rcharBytes - perfPrevSample.rcharBytes) / 1024) / dtSec;
+      charWriteKBs = ((c.wcharBytes - perfPrevSample.wcharBytes) / 1024) / dtSec;
       minfltPerSec = ((c.minflt - perfPrevSample.minflt)) / dtSec;
       majfltPerSec = ((c.majflt - perfPrevSample.majflt)) / dtSec;
       runtimeMsPerSec = ((c.runtimeNs - perfPrevSample.runtimeNs) / 1e6) / dtSec;
@@ -426,6 +438,11 @@ function derivePerf(current){
       if (c.xdmaPresent && perfPrevSample.xdmaPresent){
         xdmaIrqPerSec = ((c.xdmaInterruptsTotal - perfPrevSample.xdmaInterruptsTotal)) / dtSec;
       }
+      const charTotalBytesPerSec = ((c.rcharBytes - perfPrevSample.rcharBytes) + (c.wcharBytes - perfPrevSample.wcharBytes)) / dtSec;
+      charTotalMiBs = charTotalBytesPerSec / (1024 * 1024);
+      if (Number.isFinite(xdmaIrqPerSec) && Number.isFinite(charTotalMiBs) && charTotalMiBs > 0){
+        xdmaIrqPerMiB = xdmaIrqPerSec / charTotalMiBs;
+      }
     }
   }
   perfPrevSample = c;
@@ -440,6 +457,9 @@ function derivePerf(current){
     ctxPerSec,
     readKBs,
     writeKBs,
+    charReadKBs,
+    charWriteKBs,
+    charTotalMiBs,
     minfltPerSec,
     majfltPerSec,
     runtimeMsPerSec,
@@ -448,6 +468,7 @@ function derivePerf(current){
     ethRxPps,
     ethTxPps,
     xdmaIrqPerSec,
+    xdmaIrqPerMiB,
     ethRxErrDelta,
     ethRxDropDelta,
     ethTxErrDelta,
@@ -507,6 +528,8 @@ function computePerfAlerts(d, baseline){
   return { level, alerts };
 }
 async function loadP23Perf(){
+  if (perfPollInFlight) return;
+  perfPollInFlight = true;
   try{
     const r = await fetch('./p23_perf', { cache:'no-store' });
     const data = await r.json().catch(()=>({}));
@@ -514,12 +537,22 @@ async function loadP23Perf(){
     const perf = data.perf || {};
     if (!perf.process){
       perfPrevSample = null;
+      perfBaseline = newPerfBaseline();
+      perfProcessIdentity = '';
       setPerfSummary('p2app.service main process is not running.', true);
       setPerfViewText(JSON.stringify({ perf }, null, 2));
       return;
     }
     if (!perfBaseline) perfBaseline = newPerfBaseline();
     const d = derivePerf(perf);
+    const currentIdentity = `${d.pid}:${d.exe || ''}`;
+    if (perfProcessIdentity && perfProcessIdentity !== currentIdentity){
+      perfBaseline = newPerfBaseline();
+      perfPrevSample = null;
+      setPerfSummary(`Process changed to PID ${d.pid}; performance baseline reset.`, false);
+      setPerfAlertVisual('ok');
+    }
+    perfProcessIdentity = currentIdentity;
     const alertState = computePerfAlerts(d, perfBaseline);
     baselinePush(perfBaseline.cpuPctCore, d.cpuPctCore);
     baselinePush(perfBaseline.rssMb, d.rssMb);
@@ -529,6 +562,7 @@ async function loadP23Perf(){
     baselinePush(perfBaseline.ethTxMbps, d.ethTxMbps);
     baselinePush(perfBaseline.ethRxPps, d.ethRxPps);
     baselinePush(perfBaseline.xdmaIrqPerSec, d.xdmaIrqPerSec);
+    baselinePush(perfBaseline.xdmaIrqPerMiB, d.xdmaIrqPerMiB);
     perfBaseline.samples += 1;
     const memPct = Number.isFinite(d.memAvailBytes) && Number.isFinite(d.memTotalBytes) && d.memTotalBytes > 0
       ? ((d.memTotalBytes - d.memAvailBytes) / d.memTotalBytes) * 100
@@ -548,11 +582,13 @@ async function loadP23Perf(){
       `  Runtime on CPU: ${fmtNum(d.runtimeMsPerSec)} ms/s`,
       `  RSS: ${fmtNum(d.rssMb)} MiB`,
       `  I/O: read ${fmtNum(d.readKBs)} KiB/s | write ${fmtNum(d.writeKBs)} KiB/s`,
+      `  Char I/O proxy: read ${fmtNum(d.charReadKBs)} KiB/s | write ${fmtNum(d.charWriteKBs)} KiB/s | total ${fmtNum(d.charTotalMiBs)} MiB/s`,
       `  Faults: minor ${fmtNum(d.minfltPerSec)} /s | major ${fmtNum(d.majfltPerSec)} /s`,
       `  System: load ${fmtNum(d.load1)}/${fmtNum(d.load5)}/${fmtNum(d.load15)} | mem used ${fmtNum(memPct)}%`,
       `  eth0: RX ${fmtNum(d.ethRxMbps)} Mb/s (${fmtNum(d.ethRxPps)} pkt/s) | TX ${fmtNum(d.ethTxMbps)} Mb/s (${fmtNum(d.ethTxPps)} pkt/s)`,
       `  eth0 errors/drops (delta): rx err ${fmtInt(d.ethRxErrDelta)} drop ${fmtInt(d.ethRxDropDelta)} | tx err ${fmtInt(d.ethTxErrDelta)} drop ${fmtInt(d.ethTxDropDelta)}`,
       `  XDMA IRQ: ${fmtNum(d.xdmaIrqPerSec)} /s | PCIe link ${d.xdmaPcieLinkSpeed || 'n/a'} x${d.xdmaPcieLinkWidth || 'n/a'}`,
+      `  XDMA efficiency proxy: ${fmtNum(d.xdmaIrqPerMiB)} IRQ/MiB of process char I/O`,
       `  Alerts: ${alertState.alerts.length ? alertState.alerts.join(' | ') : 'none'}`,
       '',
       `Baseline (${fmtInt(perfBaseline.samples)} samples, ${fmtNum(baselineAgeSec)} s)`,
@@ -564,6 +600,7 @@ async function loadP23Perf(){
       `  eth0 TX throughput: ${baselineFmt(perfBaseline.ethTxMbps, ' Mb/s')}`,
       `  eth0 RX packet rate: ${baselineFmt(perfBaseline.ethRxPps, ' pkt/s')}`,
       `  XDMA interrupt rate: ${baselineFmt(perfBaseline.xdmaIrqPerSec, ' /s')}`,
+      `  XDMA IRQ per MiB (proxy): ${baselineFmt(perfBaseline.xdmaIrqPerMiB, ' IRQ/MiB')}`,
       `  XDMA IRQ lines: ${d.xdmaInterruptLines.map(x => `${x.irq}:${x.count}`).join(', ') || 'n/a'}`,
       '',
       `Raw snapshot (for diffing/export)`,
@@ -573,6 +610,8 @@ async function loadP23Perf(){
   }catch(e){
     setPerfSummary('Failed to load P2/P3 performance metrics: ' + e.message, true);
     setPerfAlertVisual('crit');
+  }finally{
+    perfPollInFlight = false;
   }
 }
 function ensurePerfPoll(){
@@ -583,6 +622,7 @@ function ensurePerfPoll(){
 function resetPerfBaseline(){
   perfBaseline = newPerfBaseline();
   perfPrevSample = null;
+  perfProcessIdentity = '';
   setPerfSummary('Performance baseline reset. Waiting for samples...', false);
   setPerfAlertVisual('ok');
 }
@@ -736,8 +776,6 @@ document.querySelectorAll('.p23-action').forEach((btn)=>{
 });
 
 restoreState();
-$('p23-status-view').textContent = sessionStorage.getItem(STATUS_KEY) || '';
-$('p23-perf-view').textContent = sessionStorage.getItem(PERF_VIEW_KEY) || '';
 resetPerfBaseline();
 loadP23Status();
 loadP23Perf();

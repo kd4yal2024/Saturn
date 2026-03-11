@@ -2,6 +2,34 @@
 
 All notable changes to `P3_app` from this hardening pass are documented here.
 
+## [2026-03-11] CAT GUID Safety and Runtime Robustness
+
+### Fixed
+
+- Fixed CAT GUID/string response generation for long payload commands such as
+  `ZZGA` / `ZZGR` by sizing the CAT output path for the longest supported
+  payload instead of truncating or overrunning it.
+- Fixed serial-port setup error cleanup so a failed `tcsetattr(...)` no longer
+  leaks an open file descriptor.
+
+### Changed
+
+- CAT message builders now use bounded formatting for no-param, bool, numeric,
+  and string commands, and string formatting no longer mutates caller-owned
+  buffers.
+- SIGINT handling now uses a signal-safe request flag synchronized in the main
+  loop, instead of calling stdio from signal context.
+- The `P3_app` `Makefile` now selects the libgpiod-specific panel source as a
+  distinct object file and sets an explicit default goal, preventing stale
+  panel objects from being silently reused across libgpiod major-version
+  changes.
+
+### Verified
+
+- Clean rebuild completed successfully with:
+  - `make -C /home/pi/github/Saturn/sw_projects/P3_app clean`
+  - `make -C /home/pi/github/Saturn/sw_projects/P3_app -j$(nproc)`
+
 ## [2026-03-01] Startup Handshake and High-Priority Socket Stabilization
 
 ### Fixed

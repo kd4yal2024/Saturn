@@ -70,6 +70,7 @@ int OpenSerialPort(char* DeviceName, unsigned int Baud)
         if (tcsetattr(Device, TCSANOW, &Ser) < 0) 
         {
             perror("tcsetattr()");
+            close(Device);
             return -1;
         }
         tcflush(Device, TCIFLUSH);
@@ -82,7 +83,7 @@ int OpenSerialPort(char* DeviceName, unsigned int Baud)
 //
 // send a string to the serial port
 //
-void SendStringToSerial(int Device, char* Message)
+void SendStringToSerial(int Device, const char* Message)
 {
     int Length;                                     // message length in charactera
 

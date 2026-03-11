@@ -1,8 +1,9 @@
 # P3_app Hardening Notes
 
-This document records the code-safety and concurrency hardening changes applied to `P3_app` in this session, and why each change was made.
+This document records the code-safety, concurrency, and runtime-hardening
+changes applied to `P3_app`, and why each change was made.
 
-Date: 2026-02-11
+Latest update: 2026-03-11
 
 ## Goals
 
@@ -11,6 +12,40 @@ Date: 2026-02-11
 - Fix shutdown/resource cleanup correctness.
 - Keep runtime behavior compatible with existing protocol flow.
 - Add optional true independent alias socket ports while preserving late-P2 compatibility for Thetis and piHPSDR (shared-port behavior remains default unless distinct alias ports are explicitly requested).
+
+## CAT GUID Safety and Runtime Robustness (2026-03-11)
+
+Follow-up hardening was applied after static review identified a correctness
+defect in CAT GUID/string command generation plus a few runtime robustness gaps.
+
+What changed:
+
+- CAT output queue slot sizing now covers the longest supported string command
+  payload instead of assuming a 40-byte maximum.
+- CAT string/bool/no-param builders now use bounded formatting instead of
+  constructing messages into undersized stack buffers.
+- CAT string formatting no longer pads/truncates by modifying the caller-owned
+  input buffer.
+- SIGINT handling now uses a signal-safe request flag, with shutdown state
+  synchronized in the main loop instead of calling stdio from signal context.
+- Serial setup now closes the device on `tcsetattr(...)` failure.
+- The `Makefile` now builds the selected libgpiod panel implementation as its
+  own object file and sets an explicit default build goal so environment
+  changes do not silently reuse the wrong panel object.
+
+Why:
+
+- `ZZGA` / `ZZGR` and other long CAT string responses could overrun the old
+  output buffer and then still fail to enqueue because the queue length limit
+  was smaller than the command definition required.
+- Calling `printf(...)` from the SIGINT handler in a multithreaded process is
+  not async-signal-safe.
+- Switching between libgpiod major versions could leave a stale panel object
+  behind and produce a misleadingly "successful" build.
+
+Verification:
+
+- `make -C /home/pi/github/Saturn/sw_projects/P3_app clean && make -C /home/pi/github/Saturn/sw_projects/P3_app -j$(nproc)` completes successfully.
 
 ## Front Panel Mode Override (2026-02-25)
 

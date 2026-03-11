@@ -1938,10 +1938,9 @@ async fn get_p23_perf(State(_state): State<AppState>) -> Response {
         let irq = nums.next().unwrap_or(0);
         let softirq = nums.next().unwrap_or(0);
         let steal = nums.next().unwrap_or(0);
-        let guest = nums.next().unwrap_or(0);
-        let guest_nice = nums.next().unwrap_or(0);
-        let total =
-            user + nice + system + idle + iowait + irq + softirq + steal + guest + guest_nice;
+        let _guest = nums.next().unwrap_or(0);
+        let _guest_nice = nums.next().unwrap_or(0);
+        let total = user + nice + system + idle + iowait + irq + softirq + steal;
         Some((total, idle, iowait))
     }
 
@@ -2145,11 +2144,23 @@ async fn get_p23_perf(State(_state): State<AppState>) -> Response {
             Ok(v) => v,
             Err(_) => return serde_json::json!({}),
         };
+        let mut rchar = None::<u64>;
+        let mut wchar = None::<u64>;
         let mut read_bytes = None::<u64>;
         let mut write_bytes = None::<u64>;
         let mut cancelled_write_bytes = None::<u64>;
         for line in raw.lines() {
-            if let Some(v) = line.strip_prefix("read_bytes:") {
+            if let Some(v) = line.strip_prefix("rchar:") {
+                rchar = v
+                    .split_whitespace()
+                    .next()
+                    .and_then(|s| s.parse::<u64>().ok());
+            } else if let Some(v) = line.strip_prefix("wchar:") {
+                wchar = v
+                    .split_whitespace()
+                    .next()
+                    .and_then(|s| s.parse::<u64>().ok());
+            } else if let Some(v) = line.strip_prefix("read_bytes:") {
                 read_bytes = v
                     .split_whitespace()
                     .next()
@@ -2167,6 +2178,8 @@ async fn get_p23_perf(State(_state): State<AppState>) -> Response {
             }
         }
         serde_json::json!({
+            "rchar": rchar,
+            "wchar": wchar,
             "read_bytes": read_bytes,
             "write_bytes": write_bytes,
             "cancelled_write_bytes": cancelled_write_bytes,

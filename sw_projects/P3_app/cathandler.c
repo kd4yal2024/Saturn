@@ -23,6 +23,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <fcntl.h>
+#include <inttypes.h>
 #include <sys/time.h>
 #include <sys/ioctl.h>
 #include <sys/socket.h>
@@ -55,7 +56,10 @@ pthread_t CATKeepaliveThread;               // thread requests activity every 15
 bool CATDebugPrint = false;                 // true if to print generated CAT messages
 
 #define VNUMOPSTRINGS 16                    // size of output queue
-#define VOPSTRSIZE 40                       // size of each string in queue
+#define VCATCMDPREFIXSIZE 4                 // "ZZnn"
+#define VCATCMDTERMINATORSIZE 2             // ';' + NUL
+#define VCATMAXPAYLOADSIZE 63               // allow longest parsed string payload
+#define VOPSTRSIZE (VCATCMDPREFIXSIZE + VCATMAXPAYLOADSIZE + VCATCMDTERMINATORSIZE)
 #define VCATPARSESTRINGMAX 63               // max parsed CAT parameter bytes
 //
 // CAT output buffer
@@ -379,7 +383,7 @@ int GetCATOPBufferUsed(void)
 // send a CAT command
 // only attempt send if an active CAT port exists
 //
-void SendCATMessage(char* Msg)
+void SendCATMessage(const char* Msg)
 {
   bool Enqueued = false;
   size_t MsgLength;
@@ -432,10 +436,12 @@ void MakeCATMessageNoParam(int Device, ECATCommands Cmd)
 {
   char Output[VOPSTRSIZE];                                // TX CAT msg buffer
   SCATCommands* StructPtr;
+  int Written;
 
   StructPtr = GCATCommands + (int)Cmd;
-  strcpy(Output, StructPtr->CATString);
-  strcat(Output, ";");
+  Written = snprintf(Output, sizeof(Output), "%s;", StructPtr->CATString);
+  if((Written < 0) || ((size_t)Written >= sizeof(Output)))
+    return;
   if(Device < 0)
     SendCATMessage(Output);
   else
@@ -456,9 +462,13 @@ void MakeCATMessageNumeric(int Device, ECATCommands Cmd, long Param)
   unsigned long Digit;             // decimal digit found
   char ASCIIDigit;
   SCATCommands* StructPtr;
+  size_t OutputLen;
 
   StructPtr = GCATCommands + (int)Cmd;
-  strcpy(Output, StructPtr->CATString);
+  Output[0] = '\0';
+  OutputLen = (size_t)snprintf(Output, sizeof(Output), "%s", StructPtr->CATString);
+  if(OutputLen >= sizeof(Output))
+    return;
   CharCount = StructPtr->NumParams;
 //
 // clip the parameter to the allowed numeric range
@@ -474,16 +484,27 @@ void MakeCATMessageNumeric(int Device, ECATCommands Cmd, long Param)
   {
     if (Param < 0)
     {
+      if((OutputLen + 1U) >= sizeof(Output))
+        return;
       strcat(Output, "-");
+      OutputLen += 1U;
       Param = -Param;                   // make positive
     }
     else
+    {
+      if((OutputLen + 1U) >= sizeof(Output))
+        return;
       strcat(Output, "+");
+      OutputLen += 1U;
+    }
     CharCount--;
   }
   else if (Param < 0)                   // not always signed, but neg so it needs a sign
   {
+      if((OutputLen + 1U) >= sizeof(Output))
+        return;
       strcat(Output, "-");
+      OutputLen += 1U;
       Param = -Param;      
       CharCount--;                      // make positive
   }
@@ -496,12 +517,18 @@ void MakeCATMessageNumeric(int Device, ECATCommands Cmd, long Param)
   {
     Digit = Param / Divisor;                  // get the digit for this decimal position
     ASCIIDigit = (char)(Digit + '0');         // ASCII version - and output it
+    if((OutputLen + 1U) >= sizeof(Output))
+      return;
     Append(Output, ASCIIDigit);
+    OutputLen += 1U;
     Param = Param - (Digit * Divisor);        // get remainder
     Divisor = Divisor / 10;                   // set for next digit
   }
   ASCIIDigit = (char)(Param + '0');           // ASCII version of units digit
+  if((OutputLen + 2U) > sizeof(Output))
+    return;
   Append(Output, ASCIIDigit);
+  OutputLen += 1U;
   strcat(Output, ";");
   if(Device < 0)
     SendCATMessage(Output);
@@ -518,13 +545,12 @@ void MakeCATMessageBool(int Device, ECATCommands Cmd, bool Param)
 {
   char Output[VOPSTRSIZE];                                // TX CAT msg buffer
   SCATCommands* StructPtr;
+  int Written;
 
   StructPtr = GCATCommands + (byte)Cmd;
-  strcpy(Output, StructPtr->CATString);               // copy the base message
-  if (Param)
-    strcat(Output, "1;");
-  else
-    strcat(Output, "0;");
+  Written = snprintf(Output, sizeof(Output), "%s%s", StructPtr->CATString, Param ? "1;" : "0;");
+  if((Written < 0) || ((size_t)Written >= sizeof(Output)))
+    return;
   if(Device < 0)
     SendCATMessage(Output);
   else
@@ -538,31 +564,28 @@ void MakeCATMessageBool(int Device, ECATCommands Cmd, bool Param)
 // the string is truncated if too long, or padded with spaces if too short
 // Device = -1 for CAT port, else a serial device with this file ID
 //
-void MakeCATMessageString(int Device, ECATCommands Cmd, char* Param) 
+void MakeCATMessageString(int Device, ECATCommands Cmd, const char* Param) 
 {
   char Output[VOPSTRSIZE];                                // TX CAT msg buffer
-  byte ParamLength, ReqdLength;                        // string lengths
+  size_t ParamLength, ReqdLength;                      // string lengths
+  size_t CopyLength;
+  int Written;
   SCATCommands* StructPtr;
-  byte Cntr;
 
   StructPtr = GCATCommands + (byte)Cmd;
+  if(Param == NULL)
+    return;
   ParamLength = strlen(Param);                        // length of input string
   ReqdLength = StructPtr->NumParams;                  // required length of parameter "nnnn" string not including semicolon
-  
-  strcpy(Output, StructPtr->CATString);               // copy the base message
-  if(ParamLength > ReqdLength)                        // if string too long, truncate it
-    Param[ReqdLength]=0; 
-  strcat(Output, Param);                              // append the string
-//
-// now see if we need to pad
-//
-  if (ParamLength < ReqdLength)
-  for (Cntr=0; Cntr < (ReqdLength-ParamLength); Cntr++)
-    strcat(Output, " ");
-//
-// finally terminate and send  
-//
-  strcat(Output, ";");                                // add the terminating semicolon
+
+  CopyLength = (ParamLength < ReqdLength) ? ParamLength : ReqdLength;
+  Written = snprintf(Output, sizeof(Output), "%s%-*.*s;",
+                     StructPtr->CATString,
+                     (int)ReqdLength,
+                     (int)CopyLength,
+                     Param);
+  if((Written < 0) || ((size_t)Written >= sizeof(Output)))
+    return;
   if(Device < 0)
     SendCATMessage(Output);
   else

@@ -148,6 +148,13 @@ bool UseLDGATU = false;                     // true if to use an LDG ATU via CAT
 bool UseAriesATU = false;                   // true if to use an Aries ATU
 uint32_t LODebugDDC1Frequency;              // -x debug mode: LO frequency for DDC1
 bool InterleavedDDCDebugMode = false;       // true if interleaved DDC for debug are allowed
+static volatile sig_atomic_t g_signal_exit_requested = 0;
+
+static void SyncSignalExitRequest(void)
+{
+  if(g_signal_exit_requested != 0)
+    atomic_store(&ExitRequested, true);
+}
 
 
 #define SDRBOARDID 1                        // Hermes
@@ -464,8 +471,7 @@ uint32_t GetP3appVersion(void)
 void sig_handler(int signo)
 {
     if (signo == SIGINT)
-        printf("received SIGINT\n");
-    atomic_store(&ExitRequested, true);
+        g_signal_exit_requested = 1;
 }
 
 //
@@ -865,7 +871,12 @@ int main(int argc, char *argv[])
   SetBalancedMicInput(false);
   InitCATHandler();
 
-  if (signal(SIGINT, sig_handler) == SIG_ERR)
+  struct sigaction sa;
+  memset(&sa, 0, sizeof(sa));
+  sa.sa_handler = sig_handler;
+  sigemptyset(&sa.sa_mask);
+  sa.sa_flags = 0;
+  if (sigaction(SIGINT, &sa, NULL) == -1)
     printf("\ncan't catch SIGINT\n");
 
 //
@@ -1301,6 +1312,7 @@ int main(int argc, char *argv[])
   //
   while(1)
   {
+    SyncSignalExitRequest();
     memset(&iovecinst, 0, sizeof(struct iovec));
     memset(&datagram, 0, sizeof(datagram));
     iovecinst.iov_base = &UDPInBuffer;                  // set buffer for incoming message number i
@@ -1315,6 +1327,7 @@ int main(int argc, char *argv[])
       perror("recvfrom, port 1024");
       return EXIT_FAILURE;
     }
+    SyncSignalExitRequest();
     if(atomic_load(&ExitRequested))
       break;
     if(atomic_load(&ThreadError))

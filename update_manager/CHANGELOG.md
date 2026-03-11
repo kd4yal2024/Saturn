@@ -63,6 +63,9 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
 - `p23_status` now reports parsed override metadata (`panel_mode`, `saturn_meta`) from the generated systemd drop-in for easier troubleshooting.
 - Hidden P2/P3 Test Lab now includes a Phase 1 performance panel with resettable baselines (process CPU/RSS/scheduler wait plus `eth0` throughput and XDMA interrupt-rate/PCIe link telemetry).
 - Hidden P2/P3 Test Lab performance panel now highlights threshold alerts for scheduler wait / CPU spikes and XDMA interrupt spikes or drops relative to baseline.
+- Hidden P2/P3 Test Lab status/performance panes no longer restore stale cached content across reloads, browser polling is serialized, and the performance baseline resets automatically when `p2app.service` restarts into a new P2/P3 process identity.
+- `/p23_perf` CPU total-tick parsing now excludes Linux guest accounting fields so process CPU percentages are not slightly under-reported when guest time is present.
+- `/p23_perf` now includes process `rchar`/`wchar` counters, and the hidden P2/P3 Test Lab derives an XDMA efficiency proxy (`IRQ/MiB` of process char I/O) so high raw XDMA interrupt rates can be compared against actual app traffic.
 - `update-G2.sh` and `update_manager/scripts/update-G2.py` now run the shutdown-waiter migration installer as part of update flow.
 - Provisioning (`provision/cloud-init/provision-saturn.sh`) now installs and runs the shutdown-waiter installer by default (`SATURN_INSTALL_SHUTDOWN_WAITER=1`) and adds `gpiod` to required packages.
 - `scripts/copy-autostart.sh` no longer installs `g2-shutdown.desktop`; shutdown waiting is now service-managed.

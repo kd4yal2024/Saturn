@@ -48,7 +48,7 @@ typedef enum
 //
 // send a string to the serial port
 //
-void SendStringToSerial(int Device, char* Message);
+void SendStringToSerial(int Device, const char* Message);
 
 
 //
