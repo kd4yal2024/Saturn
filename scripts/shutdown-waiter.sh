@@ -43,8 +43,46 @@ log() {
   fi
 }
 
+normalize_pin_value() {
+  local value="$1"
+  value="${value//$'\n'/}"
+  value="${value//\"/}"
+  value="${value//\'/}"
+  value="${value##*=}"
+  value="${value##* }"
+  case "${value,,}" in
+    1|active)
+      printf '1\n'
+      return 0
+      ;;
+    0|inactive)
+      printf '0\n'
+      return 0
+      ;;
+  esac
+  return 1
+}
+
 read_pin() {
-  gpioget --bias=pull-up "$GPIO_CHIP" "$GPIO_LINE" 2>/dev/null || return 1
+  local raw
+
+  if raw="$(gpioget --bias=pull-up --numeric -c "$GPIO_CHIP" "$GPIO_LINE" 2>/dev/null)"; then
+    normalize_pin_value "$raw" && return 0
+  fi
+
+  if raw="$(gpioget --bias=pull-up --numeric "$GPIO_CHIP" "$GPIO_LINE" 2>/dev/null)"; then
+    normalize_pin_value "$raw" && return 0
+  fi
+
+  if raw="$(gpioget --bias=pull-up -c "$GPIO_CHIP" "$GPIO_LINE" 2>/dev/null)"; then
+    normalize_pin_value "$raw" && return 0
+  fi
+
+  if raw="$(gpioget --bias=pull-up "$GPIO_CHIP" "$GPIO_LINE" 2>/dev/null)"; then
+    normalize_pin_value "$raw" && return 0
+  fi
+
+  return 1
 }
 
 detect_g2v1_i2c() {

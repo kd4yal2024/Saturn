@@ -42,6 +42,7 @@ service names still use `saturn-go` for compatibility with existing installs.
 - Shared update-activity lock prevents overlapping `update-G2` runs with appliance update/rollback operations
 - Script runner injects active repo-root environment (`SATURN_REPO_ROOT`, `SATURN_DIR`, `SATURN_ACTIVE_REPO_ROOT`) so update scripts target the same checkout as backend state
 - Shutdown waiter migration tooling: updater/provisioning now install `saturn-shutdown-waiter.service` with `/etc/default/saturn-shutdown-waiter` defaults and retire legacy desktop autostart (`g2-shutdown.desktop`)
+- `scripts/shutdown-waiter.sh` is now compatible with both older and newer libgpiod `gpioget` CLI variants, including Trixie/libgpiod v2 syntax (`-c/--chip`, `--numeric`).
 - Health watchdog timer for self-heal restart if `/healthz` fails
 - Repo-root safety checks for manual root switching and restore operations
 

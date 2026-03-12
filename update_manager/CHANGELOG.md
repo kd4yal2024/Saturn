@@ -102,6 +102,7 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
 - `index.html`: custom scripts/version/flags/password UI now reports clearer errors when an API returns HTML (login page / backend error page) instead of JSON.
 - `scripts/shutdown-waiter.sh`: added config-gated modes (`auto|true|false`), pull-up pin reads, high-before-arm guard, and consecutive-low confirmation to reduce false shutdown triggers on mixed hardware variants.
 - `/p23_perf` now falls back to `eth0` byte counters as a documented char-I/O proxy source (`process.io.source = "eth0_netdev_proxy"`) when `/proc/<pid>/io` is unreadable for the running `p2app.service` process, keeping the hidden P23 `IRQ/MiB` metric usable under service-user permission constraints.
+- `scripts/shutdown-waiter.sh` now tolerates both libgpiod CLI styles when reading the shutdown GPIO, trying the newer `gpioget -c/--chip ... --numeric` form first and falling back to the older positional-chip syntax so Bookworm/Trixie and older images both work.
 
 ## [2026-02-13]
 ### Added
