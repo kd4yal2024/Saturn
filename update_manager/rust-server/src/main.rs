@@ -2183,7 +2183,20 @@ async fn get_p23_perf(State(_state): State<AppState>) -> Response {
             "read_bytes": read_bytes,
             "write_bytes": write_bytes,
             "cancelled_write_bytes": cancelled_write_bytes,
+            "source": "procfs",
         })
+    }
+
+    fn netdev_bytes(interface: &serde_json::Value) -> (Option<u64>, Option<u64>) {
+        let rx_bytes = interface
+            .get("rx")
+            .and_then(|rx| rx.get("bytes"))
+            .and_then(|v| v.as_u64());
+        let tx_bytes = interface
+            .get("tx")
+            .and_then(|tx| tx.get("bytes"))
+            .and_then(|v| v.as_u64());
+        (rx_bytes, tx_bytes)
     }
 
     fn parse_proc_schedstat(pid: u32) -> serde_json::Value {
@@ -2311,9 +2324,27 @@ async fn get_p23_perf(State(_state): State<AppState>) -> Response {
     let (mem_total_bytes, mem_available_bytes) = parse_meminfo();
     let (load_1, load_5, load_15) = parse_loadavg();
 
+    let eth0 = parse_netdev_interface("eth0");
+    let wlan0 = parse_netdev_interface("wlan0");
+
     let process = main_pid.and_then(|pid| {
         if !Path::new(&format!("/proc/{pid}")).exists() {
             return None;
+        }
+        let mut io = parse_proc_io(pid);
+        let io_empty = io.as_object().map(|obj| obj.is_empty()).unwrap_or(true);
+        if io_empty {
+            let (rx_bytes, tx_bytes) = netdev_bytes(&eth0);
+            if rx_bytes.is_some() || tx_bytes.is_some() {
+                io = serde_json::json!({
+                    "rchar": rx_bytes,
+                    "wchar": tx_bytes,
+                    "read_bytes": None::<u64>,
+                    "write_bytes": None::<u64>,
+                    "cancelled_write_bytes": None::<u64>,
+                    "source": "eth0_netdev_proxy",
+                });
+            }
         }
         Some(serde_json::json!({
             "pid": pid,
@@ -2322,7 +2353,7 @@ async fn get_p23_perf(State(_state): State<AppState>) -> Response {
             "fd_count": fd_count_for_pid(pid),
             "stat": parse_proc_stat(pid, page_size),
             "status": parse_proc_status(pid),
-            "io": parse_proc_io(pid),
+            "io": io,
             "schedstat": parse_proc_schedstat(pid),
         }))
     });
@@ -2360,8 +2391,8 @@ async fn get_p23_perf(State(_state): State<AppState>) -> Response {
                 }
             },
             "network": {
-                "eth0": parse_netdev_interface("eth0"),
-                "wlan0": parse_netdev_interface("wlan0"),
+                "eth0": eth0,
+                "wlan0": wlan0,
             },
             "xdma": parse_xdma_interrupts(),
             "process": process,

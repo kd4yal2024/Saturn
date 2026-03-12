@@ -40,6 +40,7 @@
 #define VALIGNMENT 4096                             // buffer alignment
 #define VBASE 0x1000								// DMA start at 4K into buffer
 #define VDMATRANSFERSIZE 1440                       // write 1 message at a time
+#define VMAXDMABATCHFRAMES 8                        // opportunistically batch queued UDP frames into one DMA
 #define VSTARTUPDELAY 100                           // 100 messages (~100ms) before reporting under or overflows
 
 //
@@ -70,8 +71,10 @@ void *IncomingDUCIQ(void *arg)                          // listener thread
     uint8_t* SrcPtr;                                        // pointer to data from Thetis
     uint8_t* DestPtr;                                       // pointer to DMA buffer data
     unsigned int Current;                                   // current occupied locations in FIFO
-    unsigned int StartupCount;                              // used to delay reporting of under & overflows
+    unsigned int StartupCount = 0;                          // used to delay reporting of under & overflows
     bool PrevSDRActive = false;                             // used to detect change of state
+    uint32_t BatchFrames = 0;
+    uint32_t BatchBytes = 0;
 
     ThreadData = (struct ThreadSocketData *)arg;
     atomic_store(&ThreadData->Active, true);
@@ -144,9 +147,39 @@ void *IncomingDUCIQ(void *arg)                          // listener thread
         }
         if(size == VDUCIQSIZE)
         {
-            if(StartupCount != 0)                                   // decrement startup message count
-                StartupCount--;
-            atomic_store(&NewMessageReceived, true);
+            BatchFrames = 0;
+            BatchBytes = 0;
+            while((size == VDUCIQSIZE) && (BatchFrames < VMAXDMABATCHFRAMES))
+            {
+                if(StartupCount != 0)                                   // decrement startup message count
+                    StartupCount--;
+                atomic_store(&NewMessageReceived, true);
+                SrcPtr = (uint8_t *) (UDPInBuffer + 4);
+                DestPtr = (uint8_t *) (IQBasePtr + BatchBytes);
+                for (Cntr=0; Cntr < VIQSAMPLESPERFRAME; Cntr++)                     // samplecounter
+                {
+                    *DestPtr++ = *(SrcPtr+3);                           // get I sample (3 bytes)
+                    *DestPtr++ = *(SrcPtr+4);
+                    *DestPtr++ = *(SrcPtr+5);
+                    *DestPtr++ = *(SrcPtr+0);                           // get Q sample (3 bytes)
+                    *DestPtr++ = *(SrcPtr+1);
+                    *DestPtr++ = *(SrcPtr+2);
+                    SrcPtr += 6;                                        // point at next source sample
+                }
+                BatchBytes += VDMATRANSFERSIZE;
+                BatchFrames++;
+                size = recvmsg(atomic_load(&ThreadData->Socketid), &datagram, MSG_DONTWAIT);
+                if(size < 0)
+                {
+                    if((errno == EAGAIN) || (errno == EWOULDBLOCK))
+                        break;
+                    perror("recvfrom fail while draining TX I/Q data");
+                    atomic_store(&ThreadError, true);
+                    break;
+                }
+            }
+            if(atomic_load(&ThreadError))
+                break;
             Depth = ReadFIFOMonitorChannel(eTXDUCDMA, &FIFOOverflow, &FIFOOverThreshold, &FIFOUnderflow, &Current);           // read the FIFO free locations
             if((StartupCount == 0) && FIFOOverThreshold && UseDebug)
                 printf("TX DUC FIFO Overthreshold, depth now = %d\n", Current);
@@ -160,7 +193,7 @@ void *IncomingDUCIQ(void *arg)                          // listener thread
                     printf("TX DUC FIFO Underflowed, depth now = %d\n", Current);
             }
 
-            while ((Depth < VMEMWORDSPERFRAME) && !atomic_load(&ExitRequested))       // loop till space available
+            while ((Depth < (VMEMWORDSPERFRAME * BatchFrames)) && !atomic_load(&ExitRequested))       // loop till space available
             {
                 usleep(500);								                    // 0.5ms wait
                 Depth = ReadFIFOMonitorChannel(eTXDUCDMA, &FIFOOverflow, &FIFOOverThreshold, &FIFOUnderflow, &Current);       // read the FIFO free locations
@@ -177,22 +210,8 @@ void *IncomingDUCIQ(void *arg)                          // listener thread
             }
             if(atomic_load(&ExitRequested))
                 break;
-            // copy data from UDP Buffer & DMA write it
-//            memcpy(IQBasePtr, UDPInBuffer + 4, VDMATRANSFERSIZE);                // copy out I/Q samples
-            // need to swap I & Q samples on replay
-            SrcPtr = (uint8_t *) (UDPInBuffer + 4);
-            DestPtr = (uint8_t *) IQBasePtr;
-            for (Cntr=0; Cntr < VIQSAMPLESPERFRAME; Cntr++)                     // samplecounter
-            {
-                *DestPtr++ = *(SrcPtr+3);                           // get I sample (3 bytes)
-                *DestPtr++ = *(SrcPtr+4);
-                *DestPtr++ = *(SrcPtr+5);
-                *DestPtr++ = *(SrcPtr+0);                           // get Q sample (3 bytes)
-                *DestPtr++ = *(SrcPtr+1);
-                *DestPtr++ = *(SrcPtr+2);
-                SrcPtr += 6;                                        // point at next source sample
-            }
-            DMAWriteToFPGA(DMAWritefile_fd, IQBasePtr, VDMATRANSFERSIZE, VADDRDUCSTREAMWRITE);
+            if(BatchBytes != 0)
+                DMAWriteToFPGA(DMAWritefile_fd, IQBasePtr, BatchBytes, VADDRDUCSTREAMWRITE);
         }
     }
 //

@@ -101,6 +101,7 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
 - `p23-app-manager.sh`: dry-run deploy/switch no longer writes a temp override file (avoids failing when `/tmp` is full).
 - `index.html`: custom scripts/version/flags/password UI now reports clearer errors when an API returns HTML (login page / backend error page) instead of JSON.
 - `scripts/shutdown-waiter.sh`: added config-gated modes (`auto|true|false`), pull-up pin reads, high-before-arm guard, and consecutive-low confirmation to reduce false shutdown triggers on mixed hardware variants.
+- `/p23_perf` now falls back to `eth0` byte counters as a documented char-I/O proxy source (`process.io.source = "eth0_netdev_proxy"`) when `/proc/<pid>/io` is unreadable for the running `p2app.service` process, keeping the hidden P23 `IRQ/MiB` metric usable under service-user permission constraints.
 
 ## [2026-02-13]
 ### Added

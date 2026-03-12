@@ -1117,8 +1117,7 @@ int main(int argc, char *argv[])
       return EXIT_FAILURE;
     }
     memset(&hwaddr, 0, sizeof(hwaddr));
-    strncpy(hwaddr.ifr_name, InterfaceName, IFNAMSIZ - 1);
-    hwaddr.ifr_name[IFNAMSIZ - 1] = '\0';
+    snprintf(hwaddr.ifr_name, sizeof(hwaddr.ifr_name), "%s", InterfaceName);
     if(ioctl(atomic_load(&SocketData[VPORTCOMMAND].Socketid), SIOCGIFHWADDR, &hwaddr) != 0)
     {
       perror("ioctl SIOCGIFHWADDR");

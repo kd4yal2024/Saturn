@@ -101,7 +101,7 @@ uint32_t ReadFIFOMonitorChannel(EDMAStreamSelect Channel, bool* Overflowed, bool
 void ResetDMAStreamFIFO(EDMAStreamSelect DDCNum)
 {
 	uint32_t Data;										// DDC register content
-	uint32_t DataBit;
+	uint32_t DataBit = 0;
 
 	switch (DDCNum)
 	{
@@ -120,6 +120,9 @@ void ResetDMAStreamFIFO(EDMAStreamSelect DDCNum)
 		case eSpkCodecDMA:						// selects speaker samples
 			DataBit = (1 << VBITCODECSPKFIFORESET);
 			break;
+
+		default:
+			return;
 	}
 
 	sem_wait(&DDCResetFIFOMutex);                       // get protected access

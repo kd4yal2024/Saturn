@@ -46,7 +46,30 @@
 #define VDDCPACKETSIZE 1444
 #define VIQSAMPLESPERFRAME 238                      // total I/Q samples in one DDC packet
 #define VIQBYTESPERFRAME 6*VIQSAMPLESPERFRAME       // total bytes in one outgoing frame
+#define VMAXSENDMSGS 8                              // batch ready UDP frames into one sendmmsg call
 #define VSTARTUPDELAY 100                           // 100 messages (~100ms) before reporting under or overflows
+
+static inline void CopyPackedIQSamples(uint8_t* DestPtr, const uint8_t* SrcPtr, uint32_t SampleCount)
+{
+    while (SampleCount >= 4)
+    {
+        memcpy(DestPtr, SrcPtr, 6);
+        memcpy(DestPtr + 6, SrcPtr + 8, 6);
+        memcpy(DestPtr + 12, SrcPtr + 16, 6);
+        memcpy(DestPtr + 18, SrcPtr + 24, 6);
+        DestPtr += 24;
+        SrcPtr += 32;
+        SampleCount -= 4;
+    }
+
+    while (SampleCount != 0)
+    {
+        memcpy(DestPtr, SrcPtr, 6);
+        DestPtr += 6;
+        SrcPtr += 8;
+        SampleCount--;
+    }
+}
 
 //
 // strategy:
@@ -284,18 +307,20 @@ void *OutgoingDDCIQ(void *arg)
 //
 // variables for analysing a DDC frame
 //
-    uint32_t FrameLength;                                       // number of words per frame
+    uint32_t FrameLength = 0;                                   // number of words per frame
     uint32_t DDCCounts[VNUMDDC];                                // number of samples per DDC in a frame
     uint32_t RateWord;                                          // DDC rate word from buffer
     uint32_t HdrWord;                                           // check word read form DMA's data
-    uint16_t* SrcWordPtr, * DestWordPtr;                        // 16 bit read & write pointers
     uint32_t *LongWordPtr;
     uint32_t PrevRateWord;                                      // last used rate word
     uint32_t Cntr;                                              // sample word counter
     bool HeaderFound;
     uint32_t DecodeByteCount;                                   // bytes to decode
     unsigned int Current;                                   // current occupied locations in FIFO
-    unsigned int StartupCount;                              // used to delay reporting of under & overflows
+    unsigned int StartupCount = 0;                          // used to delay reporting of under & overflows
+    struct mmsghdr SendDatagram[VMAXSENDMSGS];
+    struct iovec SendIovec[VMAXSENDMSGS];
+    uint8_t SendBuffer[VMAXSENDMSGS][VDDCPACKETSIZE];
 
 //
 // initialise. Create memory buffers and open DMA file devices
@@ -396,26 +421,40 @@ void *OutgoingDDCIQ(void *arg)
             {
                 while ((IQHeadPtr[DDC] - IQReadPtr[DDC]) > VIQBYTESPERFRAME)
                 {
-//                    printf("enough data for packet: DDC= %d\n", DDC);
-                    *(uint32_t*)UDPBuffer[DDC] = htonl(SequenceCounter[DDC]++);     // add sequence count
-                    memset(UDPBuffer[DDC] + 4, 0, 8);                               // clear the timestamp data
-                    *(uint16_t*)(UDPBuffer[DDC] + 12) = htons(24);                  // bits per sample
-                    *(uint32_t*)(UDPBuffer[DDC] + 14) = htons(VIQSAMPLESPERFRAME);  // I/Q samples for this frame (legacy wire compatibility)
-                    //
-                    // now add I/Q data & send outgoing packet
-                    //
-                    memcpy(UDPBuffer[DDC] + 16, IQReadPtr[DDC], VIQBYTESPERFRAME);
-                    IQReadPtr[DDC] += VIQBYTESPERFRAME;
+                    unsigned int BatchCount = 0;
 
-                    int Error;
-                    Error = sendmsg(atomic_load(&(ThreadData+DDC)->Socketid), &datagram[DDC], 0);
-                    if(StartupCount != 0)                                   // decrement startup message count
-                        StartupCount--;
-
-                    if (Error == -1)
+                    while (((IQHeadPtr[DDC] - IQReadPtr[DDC]) > VIQBYTESPERFRAME) && (BatchCount < VMAXSENDMSGS))
                     {
-                        printf("Send Error, DDC=%d, errno=%d, socket id = %d\n", DDC, errno, atomic_load(&(ThreadData+DDC)->Socketid));
-                        InitError = true;
+                        uint8_t* PacketPtr = SendBuffer[BatchCount];
+                        *(uint32_t*)PacketPtr = htonl(SequenceCounter[DDC]++);               // add sequence count
+                        memset(PacketPtr + 4, 0, 8);                                          // clear the timestamp data
+                        *(uint16_t*)(PacketPtr + 12) = htons(24);                             // bits per sample
+                        *(uint32_t*)(PacketPtr + 14) = htons(VIQSAMPLESPERFRAME);             // I/Q samples for this frame (legacy wire compatibility)
+                        memcpy(PacketPtr + 16, IQReadPtr[DDC], VIQBYTESPERFRAME);
+                        IQReadPtr[DDC] += VIQBYTESPERFRAME;
+
+                        memset(&SendIovec[BatchCount], 0, sizeof(struct iovec));
+                        memset(&SendDatagram[BatchCount], 0, sizeof(struct mmsghdr));
+                        SendIovec[BatchCount].iov_base = PacketPtr;
+                        SendIovec[BatchCount].iov_len = VDDCPACKETSIZE;
+                        SendDatagram[BatchCount].msg_hdr.msg_iov = &SendIovec[BatchCount];
+                        SendDatagram[BatchCount].msg_hdr.msg_iovlen = 1;
+                        SendDatagram[BatchCount].msg_hdr.msg_name = &DestAddr[DDC];
+                        SendDatagram[BatchCount].msg_hdr.msg_namelen = sizeof(struct sockaddr_in);
+                        BatchCount++;
+                        if(StartupCount != 0)                                   // decrement startup message count
+                            StartupCount--;
+                    }
+
+                    if(BatchCount != 0)
+                    {
+                        int Error;
+                        Error = sendmmsg(atomic_load(&(ThreadData+DDC)->Socketid), SendDatagram, BatchCount, 0);
+                        if (Error == -1)
+                        {
+                            printf("Send Error, DDC=%d, errno=%d, socket id = %d\n", DDC, errno, atomic_load(&(ThreadData+DDC)->Socketid));
+                            InitError = true;
+                        }
                     }
                 }
                 //
@@ -546,20 +585,14 @@ void *OutgoingDDCIQ(void *arg)
                     {
                         //THEN COPY DMA DATA TO I / Q BUFFERS
                         DMAReadPtr += 8;                                                // point to 1st location past rate word
-                        SrcWordPtr = (uint16_t*)DMAReadPtr;                             // read sample data in 16 bit chunks
+                        const uint8_t* SrcBytePtr = DMAReadPtr;
                         for (DDC = 0; DDC < VNUMDDC; DDC++)
                         {
                             HdrWord = DDCCounts[DDC];                                   // number of words for this DDC. reuse variable
                             if (HdrWord != 0)
                             {
-                                DestWordPtr = (uint16_t *)IQHeadPtr[DDC];
-                                for (Cntr = 0; Cntr < HdrWord; Cntr++)                  // count 64 bit words
-                                {
-                                    *DestWordPtr++ = *SrcWordPtr++;                     // move 48 bits of sample data
-                                    *DestWordPtr++ = *SrcWordPtr++;
-                                    *DestWordPtr++ = *SrcWordPtr++;
-                                    SrcWordPtr++;                                       // and skip 16 bits where theres no data
-                                }
+                                CopyPackedIQSamples(IQHeadPtr[DDC], SrcBytePtr, HdrWord);
+                                SrcBytePtr += 8 * HdrWord;
                                 IQHeadPtr[DDC] += 6 * HdrWord;                          // 6 bytes per sample
                             }
                             // read N samples; write at head ptr

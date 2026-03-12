@@ -2,6 +2,36 @@
 
 All notable changes to `P3_app` from this hardening pass are documented here.
 
+## [2026-03-12] Datapath Batching and Build Hygiene
+
+### Changed
+
+- Enabled optimized `P3_app` builds with `-O2 -g` as the default build mode for
+  deployed test binaries.
+- Batched queued TX DUC I/Q writes so `InDUCIQ.c` can drain multiple ready
+  frames into a single larger XDMA write when FIFO space allows.
+- Batched queued speaker-audio writes so `InSpkrAudio.c` reduces tiny XDMA
+  transactions under steady packet load.
+- Batched outgoing DDC UDP sends with `sendmmsg(...)` so `OutDDCIQ.c` can emit
+  multiple ready frames per socket with lower syscall overhead.
+- Reworked the DDC packed-sample decode hot loop so 48-bit I/Q samples are
+  copied as contiguous 6-byte payloads instead of repeated 16-bit scalar moves
+  plus a skipped pad word.
+
+### Fixed
+
+- Cleared remaining `P3_app` compiler warnings seen during `p23-app-manager.sh`
+  deploy builds:
+  - interface-name copy in `p2app.c`
+  - uninitialized `DataBit` path in `common/saturndrivers.c`
+  - uninitialized `FrameLength` / startup counters in active DMA worker paths
+
+### Verified
+
+- Clean rebuild completed successfully with:
+  - `make -C /home/pi/github/Saturn/sw_projects/P3_app clean`
+  - `make -C /home/pi/github/Saturn/sw_projects/P3_app -j1`
+
 ## [2026-03-11] CAT GUID Safety and Runtime Robustness
 
 ### Fixed

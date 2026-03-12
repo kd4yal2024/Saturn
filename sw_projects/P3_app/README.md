@@ -3,7 +3,7 @@
 This document records the code-safety, concurrency, and runtime-hardening
 changes applied to `P3_app`, and why each change was made.
 
-Latest update: 2026-03-11
+Latest update: 2026-03-12
 
 ## Goals
 
@@ -11,7 +11,47 @@ Latest update: 2026-03-11
 - Remove high-impact data races across worker threads.
 - Fix shutdown/resource cleanup correctness.
 - Keep runtime behavior compatible with existing protocol flow.
+- Improve steady-state datapath efficiency without changing protocol framing or
+  socket/stream semantics.
 - Add optional true independent alias socket ports while preserving late-P2 compatibility for Thetis and piHPSDR (shared-port behavior remains default unless distinct alias ports are explicitly requested).
+
+## Datapath Performance Passes (2026-03-12)
+
+Follow-up runtime work targeted the hot DMA/network paths after the earlier CAT
+and thread-safety fixes were in place.
+
+What changed:
+
+- `P3_app` now builds with `-O2 -g` by default instead of an effectively
+  debug-only build.
+- `InDUCIQ.c` batches queued TX DUC frames into larger XDMA writes when FIFO
+  space allows.
+- `InSpkrAudio.c` batches queued speaker-audio frames into larger XDMA writes.
+- `OutDDCIQ.c` batches outgoing DDC packets with `sendmmsg(...)` instead of
+  issuing one `sendmsg(...)` per frame.
+- `OutDDCIQ.c` now decodes packed 48-bit I/Q samples with a tighter byte-copy
+  helper instead of three separate 16-bit copies plus an explicit skipped word
+  for every sample.
+- Deploy-time compiler warnings in active worker paths and startup interface
+  setup were cleaned up so `p23-app-manager.sh --deploy p3 ...` builds are
+  warning-free.
+
+Why:
+
+- The earlier P23 metrics work showed XDMA interrupt rate was worth measuring,
+  but the safest first gains were in reducing tiny DMA transactions and hot-loop
+  copy/syscall overhead rather than changing protocol framing.
+- Warning-clean deploys make it easier to spot real regressions during field
+  testing.
+
+How to validate:
+
+- Compare P2 vs P3 on `/saturn/p23test.html` using:
+  - CPU (per-core)
+  - scheduler wait
+  - XDMA IRQ `/s`
+  - XDMA `IRQ/MiB`
+- Keep workload and client/radio mode constant between comparisons.
 
 ## CAT GUID Safety and Runtime Robustness (2026-03-11)
 

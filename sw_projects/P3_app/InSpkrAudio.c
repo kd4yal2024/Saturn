@@ -38,6 +38,7 @@
 #define VALIGNMENT 4096                             // buffer alignment
 #define VBASE 0x1000								// DMA start at 4K into buffer
 #define VDMATRANSFERSIZE 256                        // write 1 message at a time
+#define VMAXDMABATCHFRAMES 8                        // opportunistically batch queued UDP frames into one DMA
 #define VSTARTUPDELAY 100                           // 100 messages (~100ms) before reporting under or overflows
 
 
@@ -67,8 +68,10 @@ void *IncomingSpkrAudio(void *arg)                      // listener thread
     bool FIFOOverflow, FIFOUnderflow, FIFOOverThreshold;
     uint32_t RegVal;
     unsigned int Current;                                   // current occupied locations in FIFO
-    unsigned int StartupCount;                              // used to delay reporting of under & overflows
+    unsigned int StartupCount = 0;                          // used to delay reporting of under & overflows
     bool PrevSDRActive = false;                             // used to detect change of state
+    uint32_t BatchFrames = 0;
+    uint32_t BatchBytes = 0;
 
 
     ThreadData = (struct ThreadSocketData *)arg;
@@ -141,10 +144,29 @@ void *IncomingSpkrAudio(void *arg)                      // listener thread
         }
         if(size == VSPEAKERAUDIOSIZE)                           // we have received a packet!
         {
-            if(StartupCount != 0)                                   // decrement startup message count
-                StartupCount--;
-            atomic_store(&NewMessageReceived, true);
-            RegVal += 1;            //debug
+            BatchFrames = 0;
+            BatchBytes = 0;
+            while((size == VSPEAKERAUDIOSIZE) && (BatchFrames < VMAXDMABATCHFRAMES))
+            {
+                if(StartupCount != 0)                                   // decrement startup message count
+                    StartupCount--;
+                atomic_store(&NewMessageReceived, true);
+                RegVal += 1;            //debug
+                memcpy(SpkBasePtr + BatchBytes, UDPInBuffer + 4, VDMATRANSFERSIZE);              // copy out spk samples
+                BatchBytes += VDMATRANSFERSIZE;
+                BatchFrames++;
+                size = recvmsg(atomic_load(&ThreadData->Socketid), &datagram, MSG_DONTWAIT);
+                if(size < 0)
+                {
+                    if((errno == EAGAIN) || (errno == EWOULDBLOCK))
+                        break;
+                    perror("recvfrom fail while draining Speaker data");
+                    atomic_store(&ThreadError, true);
+                    break;
+                }
+            }
+            if(atomic_load(&ThreadError))
+                break;
             Depth = ReadFIFOMonitorChannel(eSpkCodecDMA, &FIFOOverflow, &FIFOOverThreshold, &FIFOUnderflow, &Current);        // read the FIFO free locations
             if((StartupCount == 0) && FIFOOverThreshold && UseDebug)
                 printf("Codec speaker FIFO Overthreshold, depth now = %d\n", Current);
@@ -157,7 +179,7 @@ void *IncomingSpkrAudio(void *arg)                      // listener thread
                     printf("Codec speaker FIFO Underflowed, depth now = %d\n", Current);
             }
 
-            while ((Depth < VMEMWORDSPERFRAME) && !atomic_load(&ExitRequested))
+            while ((Depth < (VMEMWORDSPERFRAME * BatchFrames)) && !atomic_load(&ExitRequested))
             {
                 usleep(1000);
                 Depth = ReadFIFOMonitorChannel(eSpkCodecDMA, &FIFOOverflow, &FIFOOverThreshold, &FIFOUnderflow, &Current);
@@ -174,12 +196,8 @@ void *IncomingSpkrAudio(void *arg)                      // listener thread
             }
             if(atomic_load(&ExitRequested))
                 break;
-
-                // copy sata from UDP Buffer & DMA write it
-            memcpy(SpkBasePtr, UDPInBuffer + 4, VDMATRANSFERSIZE);              // copy out spk samples
-    //        if(RegVal == 100)
-    //            DumpMemoryBuffer(SpkBasePtr, VDMATRANSFERSIZE);
-            DMAWriteToFPGA(DMAWritefile_fd, SpkBasePtr, VDMATRANSFERSIZE, VADDRSPKRSTREAMWRITE);
+            if(BatchBytes != 0)
+                DMAWriteToFPGA(DMAWritefile_fd, SpkBasePtr, BatchBytes, VADDRSPKRSTREAMWRITE);
         }
     }
 //
