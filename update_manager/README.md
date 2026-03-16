@@ -211,6 +211,11 @@ If a script entry does not define `version`, `/get_versions` now returns
 - Status/performance panes are always reloaded fresh and are no longer restored from browser session storage.
 - Switch/deploy actions now support startup profiles (`panel`, `panel-debug`, `headless`) and front-panel mode overrides (`auto`, `g2`, `g2v2`, `prefer-g2`, `prefer-g2v2`, `off`), written as `SATURN_FRONT_PANEL_MODE` in the systemd drop-in.
 - `/p23test` includes an `Emergency Revert Now` button for fast recovery if a switch leaves the local UI unusable.
+- `/p23test` includes an optional ADC peak telemetry panel:
+  - toggle via `POST /p23_adc_telemetry`
+  - state/snapshot reported by `GET /p23_status`
+  - latest snapshot stored in `/dev/shm/saturn_p23_adc_peak_telemetry.json`
+  - uses `/dev/shm` and overwrites a single file, so it does not create persistent disk churn
 - Intended for local testing; it is not linked from the main navigation.
 
 ## Build and Deploy (Rust Server)

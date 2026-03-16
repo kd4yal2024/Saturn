@@ -26,10 +26,77 @@
 #include <fcntl.h>
 #include <pthread.h>
 #include <syscall.h>
+#include <sys/stat.h>
+#include <time.h>
 #include "../common/saturnregisters.h"
 #include "../common/saturndrivers.h"
 #include "../common/byteio.h"
 #include "LDGATU.h"
+
+#define ADC_PEAK_TELEMETRY_ENABLE_FILE "/dev/shm/saturn_p23_adc_peak_telemetry.enabled"
+#define ADC_PEAK_TELEMETRY_JSON_FILE "/dev/shm/saturn_p23_adc_peak_telemetry.json"
+
+static void MaybeWriteADCPeakTelemetry(const char *AppName, uint16_t ADC1Peak, uint16_t ADC2Peak, uint8_t ADCOverflows)
+{
+  static bool TelemetryEnabled = false;
+  static time_t LastFlagCheck = 0;
+  static time_t LastWrite = 0;
+  time_t Now;
+  char TempPath[160];
+  FILE *File;
+
+  Now = time(NULL);
+  if (Now == (time_t)-1)
+    return;
+
+  if ((LastFlagCheck == 0) || (Now != LastFlagCheck))
+  {
+    TelemetryEnabled = (access(ADC_PEAK_TELEMETRY_ENABLE_FILE, F_OK) == 0);
+    LastFlagCheck = Now;
+  }
+
+  if (!TelemetryEnabled)
+    return;
+
+  if ((LastWrite != 0) && (Now == LastWrite))
+    return;
+
+  snprintf(TempPath, sizeof(TempPath), "%s.%ld.tmp", ADC_PEAK_TELEMETRY_JSON_FILE, (long)getpid());
+  File = fopen(TempPath, "w");
+  if (File == NULL)
+    return;
+
+  fprintf(
+    File,
+    "{\n"
+    "  \"app\": \"%s\",\n"
+    "  \"pid\": %ld,\n"
+    "  \"timestamp_epoch\": %ld,\n"
+    "  \"adc_overflows\": %u,\n"
+    "  \"adc1_peak\": %u,\n"
+    "  \"adc2_peak\": %u\n"
+    "}\n",
+    AppName,
+    (long)getpid(),
+    (long)Now,
+    (unsigned int)ADCOverflows,
+    (unsigned int)ADC1Peak,
+    (unsigned int)ADC2Peak
+  );
+
+  if (fclose(File) != 0)
+  {
+    remove(TempPath);
+    return;
+  }
+
+  if (rename(TempPath, ADC_PEAK_TELEMETRY_JSON_FILE) != 0)
+  {
+    remove(TempPath);
+    return;
+  }
+  LastWrite = Now;
+}
 
 
 uint8_t GlobalFIFOOverflows = 0;             // FIFO overflow words
@@ -134,6 +201,7 @@ void *OutgoingHighPriority(void *arg)
       ADCOverflows = 0;                                         // and clear ready for next test
       wr_be_u16(UDPBuffer+39, PeakADC1MaxAmpl);                 // ADC1 peak hold
       wr_be_u16(UDPBuffer+41, PeakADC2MaxAmpl);                 // ADC2 peak hold
+      MaybeWriteADCPeakTelemetry("p3", PeakADC1MaxAmpl, PeakADC2MaxAmpl, *(uint8_t *)(UDPBuffer+5));
       PeakADC1MaxAmpl = 0;
       PeakADC2MaxAmpl = 0;
       Word = (uint16_t)GetAnalogueIn(4);

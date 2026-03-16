@@ -64,6 +64,8 @@ const DEFAULT_CUSTOM_SCRIPT_CLEAN_LOGS: &str =
     include_str!("../../scripts/cleanup-saturn-logs.sh");
 const DEFAULT_CUSTOM_SCRIPT_CLEAN_BACKUPS: &str =
     include_str!("../../scripts/cleanup-saturn-backups.sh");
+const P23_ADC_PEAK_TELEMETRY_ENABLE_FILE: &str = "/dev/shm/saturn_p23_adc_peak_telemetry.enabled";
+const P23_ADC_PEAK_TELEMETRY_JSON_FILE: &str = "/dev/shm/saturn_p23_adc_peak_telemetry.json";
 
 #[derive(Debug, Deserialize)]
 struct FlagsQuery {
@@ -86,6 +88,11 @@ struct CfgEntry {
     category: Option<String>,
     flags: Option<Vec<String>>,
     version: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct P23AdcTelemetryRequest {
+    enabled: bool,
 }
 
 #[derive(Clone)]
@@ -241,6 +248,7 @@ async fn main() {
         .route("/saturngo_deploy_status", get(get_saturngo_deploy_status))
         .route("/p23_status", get(get_p23_status))
         .route("/p23_perf", get(get_p23_perf))
+        .route("/p23_adc_telemetry", post(set_p23_adc_telemetry))
         .route("/update_start", post(update_start))
         .route("/update_status", get(update_status))
         .route("/update_rollback", post(update_rollback))
@@ -1762,6 +1770,22 @@ async fn get_saturngo_deploy_status(State(state): State<AppState>) -> Response {
 }
 
 async fn get_p23_status(State(state): State<AppState>) -> Response {
+    fn adc_peak_telemetry_info() -> serde_json::Value {
+        let control = PathBuf::from(P23_ADC_PEAK_TELEMETRY_ENABLE_FILE);
+        let snapshot = PathBuf::from(P23_ADC_PEAK_TELEMETRY_JSON_FILE);
+        let current = fs::read_to_string(&snapshot)
+            .ok()
+            .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok());
+
+        serde_json::json!({
+            "enabled": control.exists(),
+            "control_file": control.display().to_string(),
+            "snapshot_file": snapshot.display().to_string(),
+            "snapshot_exists": snapshot.exists(),
+            "current": current,
+        })
+    }
+
     fn file_info(path: &Path) -> serde_json::Value {
         match fs::metadata(path) {
             Ok(meta) => {
@@ -1916,10 +1940,42 @@ async fn get_p23_status(State(state): State<AppState>) -> Response {
                 "panel_mode": override_panel_mode,
                 "saturn_meta": override_saturn_metadata,
                 "contents": override_contents,
-            }
+            },
+            "adc_peak_telemetry": adc_peak_telemetry_info(),
         }
     }))
     .into_response()
+}
+
+async fn set_p23_adc_telemetry(Json(req): Json<P23AdcTelemetryRequest>) -> Response {
+    let control = PathBuf::from(P23_ADC_PEAK_TELEMETRY_ENABLE_FILE);
+    let snapshot = PathBuf::from(P23_ADC_PEAK_TELEMETRY_JSON_FILE);
+
+    let result = if req.enabled {
+        fs::write(&control, b"1\n")
+    } else {
+        let _ = fs::remove_file(&control);
+        let _ = fs::remove_file(&snapshot);
+        Ok(())
+    };
+
+    match result {
+        Ok(_) => Json(serde_json::json!({
+            "status": "ok",
+            "enabled": req.enabled,
+            "control_file": control.display().to_string(),
+            "snapshot_file": snapshot.display().to_string(),
+        }))
+        .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({
+                "status": "error",
+                "message": format!("failed to update ADC telemetry toggle: {e}")
+            })),
+        )
+            .into_response(),
+    }
 }
 
 async fn get_p23_perf(State(_state): State<AppState>) -> Response {

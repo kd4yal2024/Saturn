@@ -48,6 +48,28 @@ The existing ADC overflow bits in byte `5` are unchanged.
 - peak-hold state is explicitly initialized to avoid uninitialized first-packet
   data
 
+## Optional Runtime Telemetry Export
+
+The packet fields above are always produced on the wire, but exporting them to
+local runtime telemetry is optional.
+
+When enabled:
+
+- control file: `/dev/shm/saturn_p23_adc_peak_telemetry.enabled`
+- snapshot file: `/dev/shm/saturn_p23_adc_peak_telemetry.json`
+
+Behavior:
+
+- telemetry export is off by default
+- `P2_app` and `P3_app` check for the control file at runtime
+- when enabled, they overwrite a single latest-snapshot JSON file in `/dev/shm`
+  at most once per second
+- disabling telemetry removes the control file and the current snapshot
+
+This keeps the feature out of persistent storage and avoids continuous disk
+writes while still making the latest ADC peak values available to local tools
+such as `/saturn/p23test`
+
 ## Versioning
 
 - `P2_app`: `V45`

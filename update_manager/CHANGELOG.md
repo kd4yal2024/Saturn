@@ -22,6 +22,7 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
 - Hidden P2/P3 App Test Lab page (`/p23test`) for build/deploy/switch testing of `P2_app` and `P3_app` without adding navigation links.
 - P2/P3 test-lab status endpoint (`GET /p23_status`) reporting service state, source/deployed binaries, symlink selection, and systemd override state.
 - P2/P3 test-lab performance endpoint (`GET /p23_perf`) for lightweight process/network/XDMA/PCIe snapshots used to baseline P3/P2 runtime behavior and investigate lag.
+- P2/P3 ADC peak telemetry toggle endpoint (`POST /p23_adc_telemetry`) and hidden `/p23test` panel for enabling/disabling runtime ADC peak export without persistent disk writes.
 - New `p23-app-manager.sh` helper script for P2/P3 build/deploy/switch/revert actions via `/run`.
 - New `scripts/install-shutdown-waiter-service.sh` migration installer to deploy `saturn-shutdown-waiter.service`, initialize `/etc/default/saturn-shutdown-waiter`, and remove legacy `~/.config/autostart/g2-shutdown.desktop`.
 
@@ -61,8 +62,10 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
 - Installer now warns before `apt-get update` when `/tmp` is too full (helps diagnose misleading APT signature-split errors caused by tmpfs exhaustion).
 - Hidden P2/P3 Test Lab now supports explicit startup profiles (`panel`, `panel-debug`, `headless`) and front-panel mode overrides (`SATURN_FRONT_PANEL_MODE`) for switch/deploy actions, plus an emergency web revert button.
 - `p23_status` now reports parsed override metadata (`panel_mode`, `saturn_meta`) from the generated systemd drop-in for easier troubleshooting.
+- `p23_status` now also reports optional ADC peak telemetry state and the latest exported snapshot from `/dev/shm/saturn_p23_adc_peak_telemetry.json`.
 - Hidden P2/P3 Test Lab now includes a Phase 1 performance panel with resettable baselines (process CPU/RSS/scheduler wait plus `eth0` throughput and XDMA interrupt-rate/PCIe link telemetry).
 - Hidden P2/P3 Test Lab performance panel now highlights threshold alerts for scheduler wait / CPU spikes and XDMA interrupt spikes or drops relative to baseline.
+- `P2_app` / `P3_app` ADC peak telemetry export now writes only a single latest-snapshot JSON file in `/dev/shm` while enabled, capped to roughly once per second, instead of continuously writing persistent logs.
 - Hidden P2/P3 Test Lab status/performance panes no longer restore stale cached content across reloads, browser polling is serialized, and the performance baseline resets automatically when `p2app.service` restarts into a new P2/P3 process identity.
 - `/p23_perf` CPU total-tick parsing now excludes Linux guest accounting fields so process CPU percentages are not slightly under-reported when guest time is present.
 - `/p23_perf` now includes process `rchar`/`wchar` counters, and the hidden P2/P3 Test Lab derives an XDMA efficiency proxy (`IRQ/MiB` of process char I/O) so high raw XDMA interrupt rates can be compared against actual app traffic.
