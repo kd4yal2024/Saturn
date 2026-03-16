@@ -94,6 +94,11 @@ bool_true() {
   esac
 }
 
+kernel_flavor() {
+  local krel="${1:-$(uname -r)}"
+  printf '%s\n' "${krel#*+rpt-}"
+}
+
 ensure_tmp_permissions() {
   if [[ ! -d /tmp ]]; then
     install -d -m 1777 /tmp
@@ -426,6 +431,10 @@ ensure_ui_packages() {
 }
 
 ensure_packages() {
+  local running_krel running_meta_pkg
+  running_krel="$(uname -r)"
+  running_meta_pkg="linux-headers-$(kernel_flavor "$running_krel")"
+
   log "Installing build/runtime dependencies"
   apt_install \
     git rsync curl wget ca-certificates sudo \
@@ -465,17 +474,22 @@ ensure_packages() {
     fi
   fi
 
-  if apt-cache show raspberrypi-kernel-headers >/dev/null 2>&1; then
+  if apt-cache show "linux-headers-${running_krel}" >/dev/null 2>&1; then
+    apt_install "linux-headers-${running_krel}"
+  elif apt-cache show "${running_meta_pkg}" >/dev/null 2>&1; then
+    apt_install "${running_meta_pkg}"
+  elif apt-cache show raspberrypi-kernel-headers >/dev/null 2>&1; then
     apt_install raspberrypi-kernel-headers
   else
-    log "WARN: raspberrypi-kernel-headers package not available in apt sources."
+    log "WARN: No known Raspberry Pi kernel header package found in apt sources."
   fi
 }
 
 ensure_kernel_headers() {
-  local krel build_dir
+  local krel build_dir meta_pkg
   krel="$(uname -r)"
   build_dir="/lib/modules/${krel}/build"
+  meta_pkg="linux-headers-$(kernel_flavor "$krel")"
   if [[ -d "$build_dir" ]]; then
     log "Kernel headers already present for $krel"
     return
@@ -484,8 +498,14 @@ ensure_kernel_headers() {
   log "Installing kernel headers for $krel"
   apt_update_once
   export DEBIAN_FRONTEND=noninteractive
-  if ! apt-get install -y --no-install-recommends "linux-headers-${krel}"; then
-    apt-get install -y --no-install-recommends raspberrypi-kernel-headers || true
+  if apt-cache show "linux-headers-${krel}" >/dev/null 2>&1; then
+    apt-get install -y --no-install-recommends "linux-headers-${krel}"
+  elif apt-cache show "${meta_pkg}" >/dev/null 2>&1; then
+    apt-get install -y --no-install-recommends "${meta_pkg}"
+  elif apt-cache show raspberrypi-kernel-headers >/dev/null 2>&1; then
+    apt-get install -y --no-install-recommends raspberrypi-kernel-headers
+  else
+    die "No suitable kernel header package found for $krel"
   fi
   [[ -d "$build_dir" ]] || die "Kernel headers still missing at $build_dir"
 }
@@ -1030,22 +1050,23 @@ build_saturn_apps() {
 }
 
 build_and_install_xdma() {
-  local nproc="$1"
-  local xdma_dir="$SATURN_REPO_DIR/linuxdriver/xdma"
-  [[ -d "$xdma_dir" ]] || die "XDMA directory missing: $xdma_dir"
+  local saturn_home="$1"
+  local fix_script="$SATURN_REPO_DIR/scripts/fix-xdma.sh"
 
-  ensure_kernel_headers
-  log "Building XDMA kernel module"
-  make -C "$xdma_dir" clean >/dev/null 2>&1 || true
-  make -C "$xdma_dir" -j"$nproc"
-  make -C "$xdma_dir" install
-  depmod -A
+  [[ -x "$fix_script" ]] || die "XDMA rebuild helper not found/executable: $fix_script"
+  assert_not_repo_python_script "$fix_script"
+
+  log "Building and installing XDMA kernel module via fix-xdma.sh"
+  env \
+    HOME="$saturn_home" \
+    SUDO_USER="$SATURN_USER" \
+    SATURN_USER="$SATURN_USER" \
+    SATURN_REPO_DIR="$SATURN_REPO_DIR" \
+    bash "$fix_script"
 
   install -d -m 0755 /etc/modules-load.d
   printf 'xdma\n' > /etc/modules-load.d/xdma.conf
-  modprobe -r xdma >/dev/null 2>&1 || true
-  modprobe xdma || die "Failed to load xdma module"
-  log "XDMA module installed and loaded"
+  log "XDMA module installed, loaded, and configured for boot"
 }
 
 install_desktop_shortcuts() {
@@ -1273,7 +1294,7 @@ main() {
 
   if bool_true "$SATURN_REBUILD_XDMA"; then
     set_ui_stage "Building and installing XDMA module"
-    build_and_install_xdma "$nproc"
+    build_and_install_xdma "$saturn_home"
   fi
   if bool_true "$SATURN_INSTALL_UDEV_RULES"; then
     set_ui_stage "Installing udev rules"

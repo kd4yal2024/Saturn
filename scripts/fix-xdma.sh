@@ -29,8 +29,15 @@ resolve_user_home(){
 }
 
 resolve_driver_dir(){
-  local uh; uh="$(resolve_user_home)"
-  local d="${uh}/github/Saturn/linuxdriver/xdma"
+  local uh d
+  if [[ -n "${SATURN_DRIVER_DIR:-}" ]]; then
+    d="${SATURN_DRIVER_DIR}"
+  elif [[ -n "${SATURN_REPO_DIR:-}" ]]; then
+    d="${SATURN_REPO_DIR}/linuxdriver/xdma"
+  else
+    uh="$(resolve_user_home)"
+    d="${uh}/github/Saturn/linuxdriver/xdma"
+  fi
   [[ -d "$d" ]] || die "Driver directory not found: $d"
   printf "%s" "$d"
 }
