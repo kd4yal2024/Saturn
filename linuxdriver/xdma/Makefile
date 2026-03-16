@@ -22,17 +22,18 @@ ifneq ($(KERNELRELEASE),)
 	$(TARGET_MODULE)-objs := libxdma.o xdma_cdev.o cdev_ctrl.o cdev_events.o cdev_sgdma.o cdev_xvc.o cdev_bypass.o xdma_mod.o xdma_thread.o
 	obj-m := $(TARGET_MODULE).o
 else
-	BUILDSYSTEM_DIR:=/lib/modules/$(shell uname -r)/build
+	KDIR ?= /lib/modules/$(shell uname -r)/build
+	KVER ?= $(shell basename $(dir $(KDIR)))
 	PWD:=$(shell pwd)
 all :
-	$(MAKE) -C $(BUILDSYSTEM_DIR) M=$(PWD) modules
+	$(MAKE) -C $(KDIR) M=$(PWD) modules
 
 clean:
-	$(MAKE) -C $(BUILDSYSTEM_DIR) M=$(PWD) clean
+	$(MAKE) -C $(KDIR) M=$(PWD) clean
 	@/bin/rm -f *.ko modules.order *.mod.c *.o *.o.ur-safe .*.o.cmd
 
 install: all
-	$(MAKE) -C $(BUILDSYSTEM_DIR) M=$(PWD) modules_install
-	depmod -A
+	@set -o pipefail; $(MAKE) -C $(KDIR) M=$(PWD) modules_install 2>&1 | awk '!/Warning: modules_install: missing '\''System.map'\'' file\. Skipping depmod\./ { print }'
+	depmod $(KVER)
 
 endif

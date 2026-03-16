@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # fix-xdma.sh
-# Version: 2.1
-# Rebuild & (re)install XDMA kernel module, stop/start p2app.service, and verify it's running.
+# Version: 2.2
+# Rebuild & (re)install XDMA kernel module for the running kernel and, when
+# present, pre-stage it for the newest installed kernel. Stop/start
+# p2app.service and verify it's running.
 # Usage: sudo bash /home/pi/github/Saturn/scripts/fix-xdma.sh
 # Author: Jerry DeLong, KD4YAL
 
@@ -33,19 +35,86 @@ resolve_driver_dir(){
   printf "%s" "$d"
 }
 
+kernel_flavor(){
+  local krel="$1"
+  printf "%s" "${krel#*+rpt-}"
+}
+
+latest_installed_kernel(){
+  local flavor="${1:-}"
+  find /lib/modules -mindepth 1 -maxdepth 1 -type d -printf '%f\n' 2>/dev/null | \
+    { [[ -n "$flavor" ]] && grep -F "+rpt-${flavor}$" || cat; } | \
+    sort -V | tail -n1
+}
+
+build_dir_for_kernel(){
+  local krel="$1"
+  printf "/lib/modules/%s/build" "$krel"
+}
+
 ensure_headers(){
-  local krel kbuild; krel="$(uname -r)"; kbuild="/lib/modules/${krel}/build"
+  local krel="$1" kbuild meta_pkg
+  kbuild="$(build_dir_for_kernel "$krel")"
+  meta_pkg="linux-headers-$(kernel_flavor "$krel")"
   if [[ ! -d "$kbuild" ]]; then
     warn "Kernel headers for ${krel} not found. Installing…"
     apt-get update -y || die "apt update failed"
-    if apt-cache show raspberrypi-kernel-headers >/dev/null 2>&1; then
+    if apt-cache show "linux-headers-${krel}" >/dev/null 2>&1; then
+      apt-get install -y "linux-headers-${krel}" || die "linux-headers-${krel} install failed"
+    elif apt-cache show "${meta_pkg}" >/dev/null 2>&1; then
+      apt-get install -y "${meta_pkg}" || die "${meta_pkg} install failed"
+    elif apt-cache show raspberrypi-kernel-headers >/dev/null 2>&1; then
       apt-get install -y raspberrypi-kernel-headers || die "raspberrypi-kernel-headers install failed"
     else
-      apt-get install -y "linux-headers-${krel}" || die "linux-headers-${krel} install failed"
+      die "No suitable kernel header package found for ${krel}"
     fi
     [[ -d "$kbuild" ]] || die "Headers still missing after install."
   fi
   ok "Kernel headers present for ${krel}."
+}
+
+warn_if_newer_kernel_installed(){
+  local running_krel latest_krel running_flavor
+  running_krel="$(uname -r)"
+  running_flavor="$(kernel_flavor "$running_krel")"
+  latest_krel="$(latest_installed_kernel "$running_flavor")"
+  [[ -n "$latest_krel" ]] || return 0
+  [[ "$latest_krel" == "$running_krel" ]] && return 0
+
+  warn "A newer kernel is installed (${latest_krel}) than the one currently running (${running_krel})."
+  warn "XDMA will be built for the running kernel now and pre-staged for ${latest_krel} so it is ready after reboot."
+}
+
+target_kernels(){
+  local running_krel latest_krel running_flavor
+  running_krel="$(uname -r)"
+  running_flavor="$(kernel_flavor "$running_krel")"
+  latest_krel="$(latest_installed_kernel "$running_flavor")"
+
+  printf "%s\n" "$running_krel"
+  if [[ -n "$latest_krel" && "$latest_krel" != "$running_krel" ]]; then
+    printf "%s\n" "$latest_krel"
+  fi
+}
+
+build_and_install_for_kernel(){
+  local krel="$1" driver_dir="$2" xdma_inc="$3" kbuild
+  kbuild="$(build_dir_for_kernel "$krel")"
+
+  info "Cleaning previous build for ${krel}…"
+  run_make -C "${kbuild}" M="${driver_dir}" clean || warn "make clean reported issues for ${krel}; continuing"
+
+  info "Building xdma.ko for ${krel}…"
+  run_make -C "${kbuild}" M="${driver_dir}" \
+    EXTRA_CFLAGS="-I${xdma_inc} -Wno-empty-body -Wno-missing-prototypes -Wno-missing-declarations" \
+    KBUILD_VERBOSE=0 \
+    modules
+
+  info "Installing module for ${krel}…"
+  run_make -C "${kbuild}" M="${driver_dir}" DEPMOD=/bin/true modules_install
+
+  info "Running depmod for ${krel}…"
+  depmod "${krel}"
 }
 
 # Emits logs to STDERR, returns include dir on STDOUT
@@ -160,17 +229,24 @@ reload_xdma_module(){
 
 main(){
   need_root
-  ensure_headers
+  warn_if_newer_kernel_installed
 
-  local driver_dir krel kbuild
-  driver_dir="$(resolve_driver_dir)"; krel="$(uname -r)"; kbuild="/lib/modules/${krel}/build"
+  local driver_dir running_krel
+  driver_dir="$(resolve_driver_dir)"
+  running_krel="$(uname -r)"
 
-  info "Kernel: ${krel}"
+  info "Running kernel: ${running_krel}"
   info "Driver: ${driver_dir}"
 
   # Ensure API header
   local xdma_inc; xdma_inc="$(ensure_xdma_header "${driver_dir}")"
   info "Using include dir: ${xdma_inc}"
+
+  local krel
+  while IFS= read -r krel; do
+    [[ -n "$krel" ]] || continue
+    ensure_headers "$krel"
+  done < <(target_kernels)
 
   # 1) Stop service (so it releases /dev/xdma*)
   WAS_ACTIVE=0
@@ -181,20 +257,10 @@ main(){
 
   # 3) Build & install
   cd "${driver_dir}"
-  info "Cleaning previous build…"
-  run_make -C "${kbuild}" M="${driver_dir}" clean || warn "make clean reported issues; continuing"
-
-  info "Building xdma.ko…"
-  run_make -C "${kbuild}" M="${driver_dir}" \
-    EXTRA_CFLAGS="-I${xdma_inc} -Wno-empty-body -Wno-missing-prototypes -Wno-missing-declarations" \
-    KBUILD_VERBOSE=0 \
-    modules
-
-  info "Installing module…"
-  run_make -C "${kbuild}" M="${driver_dir}" DEPMOD=/bin/true modules_install
-
-  info "Running depmod…"
-  depmod -A
+  while IFS= read -r krel; do
+    [[ -n "$krel" ]] || continue
+    build_and_install_for_kernel "$krel" "${driver_dir}" "${xdma_inc}"
+  done < <(target_kernels)
 
   # 4) Reload module
   reload_xdma_module
@@ -204,6 +270,11 @@ main(){
 
   # Friendly summary
   modinfo -n xdma 2>/dev/null | xargs -I{} printf "%s%s%s\n" "${CYA}" "Module file: {}" "${NC}" || true
+  local latest_krel
+  latest_krel="$(latest_installed_kernel "$(kernel_flavor "$running_krel")")"
+  if [[ -n "$latest_krel" && "$latest_krel" != "$running_krel" ]]; then
+    ok "XDMA also staged for ${latest_krel}. Reboot to start using that kernel."
+  fi
   ok "Done: XDMA updated, ${SERVICE_NAME} running."
 }
 

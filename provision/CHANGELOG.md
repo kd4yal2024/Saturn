@@ -2,6 +2,14 @@
 
 All notable changes to provisioning assets are documented in this file.
 
+## [2026-03-16]
+
+### Documentation
+
+- `README.md`
+  - documented `/home/pi/github/Saturn/scripts/fix-xdma.sh` as the preferred post-install XDMA recovery path after kernel updates
+  - documented that the helper rebuilds for the running kernel and pre-stages XDMA for a newer already-installed same-flavor kernel before reboot
+
 ## [2026-03-09]
 
 ### Changed
@@ -59,7 +67,7 @@ All notable changes to provisioning assets are documented in this file.
     - `dtoverlay=dwc2,dr_mode=host`
   - ensures cordless mouse/keyboard polling tuning in boot `cmdline.txt`:
     - `usbhid.mousepoll=0`
-  - installs `raspberrypi-kernel-headers` during base package setup when available in apt sources
+  - installs matching Raspberry Pi kernel headers during base package setup when available in apt sources
   - installs desktop dev tools when available in apt sources:
     - `code` (Visual Studio Code)
     - `git-cola`

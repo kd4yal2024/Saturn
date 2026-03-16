@@ -6,7 +6,7 @@ build instructions for the XDMA driver
 by following the instructions at https://www.raspberrypi.org/documentation/linux/kernel/building.md)
 
 
-sudo apt install raspberrypi-kernel-headers
+sudo apt install "linux-headers-$(uname -r)"
 
 
 2. build the kernel module:

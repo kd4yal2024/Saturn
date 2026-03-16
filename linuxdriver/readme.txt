@@ -119,12 +119,19 @@ Directory and file description:
 		data transfers to the Xilinx FPGA PCIe endpoint device.
 
 Usage:
+  - Preferred rebuild/update path for current Raspberry Pi OS images:
+        sudo bash /home/pi/github/Saturn/scripts/fix-xdma.sh
+
+    This script installs matching headers when needed, rebuilds the driver for
+    the running kernel, and if a newer kernel of the same Raspberry Pi flavor
+    is already installed, also stages XDMA for that next kernel before reboot.
+
   - get the kernel headers so the kernel module can compile: 
     (note if this fails you will need to use an older OS release, or rebuild the kernel 
      by following the instructions at https://www.raspberrypi.org/documentation/linux/kernel/building.md)
 
 
-        sudo apt install raspberrypi-kernel-headers
+        sudo apt install "linux-headers-$(uname -r)"
 
 
   - If you are updating: unload the previous driver from memory.
@@ -136,6 +143,10 @@ Usage:
   - Compile and install the kernel module driver.
         make
 		sudo make install
+
+    To pre-stage the module for a different installed kernel before reboot:
+        make KDIR=/lib/modules/<kernel-version>/build
+        sudo make KDIR=/lib/modules/<kernel-version>/build install
 
   - Load the kernel module driver:
 	sudo modprobe xdma

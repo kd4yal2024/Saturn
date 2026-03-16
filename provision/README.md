@@ -14,7 +14,7 @@ This directory contains provisioning assets for cloud-init based setup of a Satu
 `cloud-init/provision-saturn.sh` runs as root and:
 
 - installs required apt packages
-- installs `raspberrypi-kernel-headers` when available in apt sources
+- installs matching Raspberry Pi kernel headers when available in apt sources
 - installs desktop developer tools when available in apt sources:
   - Visual Studio Code (`code`)
   - Git Cola (`git-cola`)
@@ -31,6 +31,7 @@ This directory contains provisioning assets for cloud-init based setup of a Satu
 - builds Saturn apps and tools (including `sw_tools`)
 - installs desktop launchers (deprecated `P2app.desktop` is removed and not reinstalled)
 - optionally builds/installs XDMA
+- leaves `/home/pi/github/Saturn/scripts/fix-xdma.sh` available for later XDMA rebuilds after kernel updates
 - optionally installs udev rules
 - optionally installs `p2app-control` tray control (AppIndicator-based)
 - optionally installs Update Manager
@@ -242,6 +243,9 @@ Then `provision-saturn.sh` performs:
 - Saturn repo sync and build of apps/tools
 - desktop launcher install
 - optional XDMA build/install/load
+  - later kernel package upgrades can be handled by rerunning:
+    - `sudo bash /home/pi/github/Saturn/scripts/fix-xdma.sh`
+  - that helper rebuilds for the running kernel and, when a newer same-flavor kernel is already installed, also pre-stages XDMA for that next boot
 - optional udev rules install
 - optional p2app-control install
   - installs tray autostart (`~/.config/autostart/P2_app-Control-tray.desktop`)
