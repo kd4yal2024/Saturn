@@ -216,6 +216,7 @@ If a script entry does not define `version`, `/get_versions` now returns
   - state/snapshot reported by `GET /p23_status`
   - latest snapshot stored in `/dev/shm/saturn_p23_adc_peak_telemetry.json`
   - uses `/dev/shm` and overwrites a single file, so it does not create persistent disk churn
+  - disabling telemetry stops updates but retains the last snapshot until a later enabled run overwrites it or it is removed manually
 - Intended for local testing; it is not linked from the main navigation.
 
 ## Build and Deploy (Rust Server)

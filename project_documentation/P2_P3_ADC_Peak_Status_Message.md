@@ -64,7 +64,9 @@ Behavior:
 - `P2_app` and `P3_app` check for the control file at runtime
 - when enabled, they overwrite a single latest-snapshot JSON file in `/dev/shm`
   at most once per second
-- disabling telemetry removes the control file and the current snapshot
+- disabling telemetry removes the control file and stops future snapshot updates
+- the last snapshot file is retained in `/dev/shm` until it is overwritten by a
+  later enabled run or removed manually
 
 This keeps the feature out of persistent storage and avoids continuous disk
 writes while still making the latest ADC peak values available to local tools

@@ -27,6 +27,9 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
 - New `scripts/install-shutdown-waiter-service.sh` migration installer to deploy `saturn-shutdown-waiter.service`, initialize `/etc/default/saturn-shutdown-waiter`, and remove legacy `~/.config/autostart/g2-shutdown.desktop`.
 
 ### Changed
+- ADC peak telemetry documentation now matches runtime behavior: disabling the
+  feature removes the enable flag and stops updates, but the last `/dev/shm`
+  snapshot is retained until overwritten or removed.
 - CSRF middleware now rejects POST requests that are missing both `Origin` and `Referer` headers, closing a bypass when neither header was sent.
 - `/get_system_data`: `proc_regex` query parameter now compiled with a 64 KB size limit via `RegexBuilder` to prevent regex-based CPU exhaustion.
 - `/exit` endpoint now logs the remote IP at `warn` level before initiating shutdown.
