@@ -2,6 +2,24 @@
 
 All notable changes to `P3_app` from this hardening pass are documented here.
 
+## [2026-03-16] ADC Peak Telemetry in High-Priority Status
+
+### Changed
+
+- Extended the 60-byte outgoing high-priority status packet to include:
+  - ADC1 peak amplitude at bytes `39..40`
+  - ADC2 peak amplitude at bytes `41..42`
+- `P3_app` version was bumped from `44` to `45`.
+- Shared register access now returns optional ADC peak amplitudes together with
+  the existing ADC overflow bits.
+
+### Compatibility
+
+- Existing ADC overflow reporting in status byte `5` is unchanged.
+- Peak amplitude fields are populated only when FPGA firmware version `27` or
+  newer exposes the ADC peak registers.
+- Older FPGA builds continue to report `0` for the new peak fields.
+
 ## [2026-03-12] Datapath Batching and Build Hygiene
 
 ### Changed

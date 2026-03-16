@@ -3,7 +3,7 @@
 This document records the code-safety, concurrency, and runtime-hardening
 changes applied to `P3_app`, and why each change was made.
 
-Latest update: 2026-03-12
+Latest update: 2026-03-16
 
 ## Goals
 
@@ -14,6 +14,20 @@ Latest update: 2026-03-12
 - Improve steady-state datapath efficiency without changing protocol framing or
   socket/stream semantics.
 - Add optional true independent alias socket ports while preserving late-P2 compatibility for Thetis and piHPSDR (shared-port behavior remains default unless distinct alias ports are explicitly requested).
+
+## High-Priority ADC Peak Telemetry (2026-03-16)
+
+`P3_app` version `45` now encodes ADC peak amplitudes into the existing
+60-byte outgoing high-priority status packet:
+
+- bytes `39..40`: ADC1 peak amplitude
+- bytes `41..42`: ADC2 peak amplitude
+
+These are big-endian `uint16_t` peak-hold values accumulated over the current
+message period. The existing ADC overflow bits in status byte `5` are unchanged.
+
+This feature depends on FPGA firmware version `27` or newer. On older FPGA
+builds, the peak fields remain `0`.
 
 ## Datapath Performance Passes (2026-03-12)
 

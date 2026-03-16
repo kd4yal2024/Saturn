@@ -66,7 +66,7 @@
 #include "GanymedePAControl.h"
 #include "frontpanelhandler.h"
 
-#define P3APPVERSION 44
+#define P3APPVERSION 45
 #define FWREQUIREDMAJORVERSION 1                  // major version that is required. Only altered if programming interface changes. 
 //
 // the Firmware version is a protection to make sure that if a p3app update is required by the new firmware,
@@ -74,6 +74,7 @@
 //
 //------------------------------------------------------------------------------------------
 // VERSION History
+// V45, 16/03/2026. encodes ADC1/ADC2 peak amplitudes into the high priority status message.
 // V44, 31/01/2026.  Support for Thetis "push" CAT commands for Ganymede, g2v2 indicators & Aries instead of polling
 // V43, 19/01/2026.  Initial support for Ganymede PA controller if stared with -g switch.
 // V42, 05/01/2026.  Support for new codec; debug mode with startup switch to enable interlinked DDC at different frequencies

@@ -2186,16 +2186,36 @@ unsigned int GetP2PTTKeyInputs(void)
 
 
 //
-// GetADCOverflow(void)
+// GetADCOverflow(uint16_t* ADC1Max, uint16_t* ADC2Max)
 // return true if ADC amplitude overflow has occurred since last read.
 // the overflow stored state is reset when this is read.
-// returns bit0: 1 if ADC1 overflow; bit1: 1 if ARC2 overflow
+// returns bit0: 1 if ADC1 overflow; bit1: 1 if ADC2 overflow
+// for FPGA version >= 27, returns the unsigned max amplitude from each ADC
+// through the output parameters
 //
-unsigned int GetADCOverflow(void)
+unsigned int GetADCOverflow(uint16_t* ADC1Max, uint16_t* ADC2Max)
 {
     unsigned int Result = 0;
+    static int PeakAmplitudeSupported = -1;
 
+    if (ADC1Max != NULL)
+        *ADC1Max = 0;
+    if (ADC2Max != NULL)
+        *ADC2Max = 0;
+
+    if (PeakAmplitudeSupported < 0)
+    {
+        ESoftwareID ID;
+        PeakAmplitudeSupported = (GetFirmwareVersion(&ID) >= 27) ? 1 : 0;
+    }
     Result = RegisterRead(VADDRADCOVERFLOWBASE);
+    if (PeakAmplitudeSupported)
+    {
+        if (ADC1Max != NULL)
+            *ADC1Max = (uint16_t)RegisterRead(VADDRADCOVERFLOWBASE + 4);
+        if (ADC2Max != NULL)
+            *ADC2Max = (uint16_t)RegisterRead(VADDRADCOVERFLOWBASE + 8);
+    }
     return (Result & 0x3);
 }
 

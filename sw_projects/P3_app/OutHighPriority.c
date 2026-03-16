@@ -64,6 +64,10 @@ void *OutgoingHighPriority(void *arg)
   bool FIFOOverflow, FIFOUnderflow, FIFOOverThreshold;      // FIFO flags
   uint8_t FIFOOverflows;
   uint8_t ADCOverflows = 0;                       // set non zero if ADC overflows detected
+  uint16_t ADC1MaxAmpl = 0;                       // latest ADC1 peak amplitude sample
+  uint16_t ADC2MaxAmpl = 0;                       // latest ADC2 peak amplitude sample
+  uint16_t PeakADC1MaxAmpl = 0;                   // peak hold for current message period
+  uint16_t PeakADC2MaxAmpl = 0;                   // peak hold for current message period
 
 //
 // initialise. Create memory buffers and open DMA file devices
@@ -97,6 +101,8 @@ void *OutgoingHighPriority(void *arg)
     memset(&iovecinst, 0, sizeof(struct iovec));
     memset(&datagram, 0, sizeof(datagram));
     memset(UDPBuffer, 0,sizeof(UDPBuffer));                      // clear the whole packet
+    PeakADC1MaxAmpl = 0;
+    PeakADC2MaxAmpl = 0;
     iovecinst.iov_base = UDPBuffer;
     iovecinst.iov_len = VHIGHPRIOTIYFROMSDRSIZE;
     datagram.msg_iov = &iovecinst;
@@ -121,9 +127,15 @@ void *OutgoingHighPriority(void *arg)
       ReadStatusRegister();
       PTTBits = (uint8_t)GetP2PTTKeyInputs();
       *(uint8_t *)(UDPBuffer+4) = PTTBits;
-      ADCOverflows |= (uint8_t)GetADCOverflow();                // add in any new overflows
+      ADCOverflows |= (uint8_t)GetADCOverflow(&ADC1MaxAmpl, &ADC2MaxAmpl);  // add in any new overflows
+      PeakADC1MaxAmpl = (ADC1MaxAmpl > PeakADC1MaxAmpl) ? ADC1MaxAmpl : PeakADC1MaxAmpl;
+      PeakADC2MaxAmpl = (ADC2MaxAmpl > PeakADC2MaxAmpl) ? ADC2MaxAmpl : PeakADC2MaxAmpl;
       *(uint8_t *)(UDPBuffer+5) = ADCOverflows;
       ADCOverflows = 0;                                         // and clear ready for next test
+      wr_be_u16(UDPBuffer+39, PeakADC1MaxAmpl);                 // ADC1 peak hold
+      wr_be_u16(UDPBuffer+41, PeakADC2MaxAmpl);                 // ADC2 peak hold
+      PeakADC1MaxAmpl = 0;
+      PeakADC2MaxAmpl = 0;
       Word = (uint16_t)GetAnalogueIn(4);
       wr_be_u16(UDPBuffer+6, Word);                     // exciter power
       Word = (uint16_t)GetAnalogueIn(0);
@@ -206,7 +218,9 @@ void *OutgoingHighPriority(void *arg)
         ReadStatusRegister();
         if ((uint8_t)GetP2PTTKeyInputs() != PTTBits)
           break;
-        ADCOverflows |= (uint8_t)GetADCOverflow();
+        ADCOverflows |= (uint8_t)GetADCOverflow(&ADC1MaxAmpl, &ADC2MaxAmpl);
+        PeakADC1MaxAmpl = (ADC1MaxAmpl > PeakADC1MaxAmpl) ? ADC1MaxAmpl : PeakADC1MaxAmpl;
+        PeakADC2MaxAmpl = (ADC2MaxAmpl > PeakADC2MaxAmpl) ? ADC2MaxAmpl : PeakADC2MaxAmpl;
         if(ADCOverflows != 0)
           break;
         usleep(500);
