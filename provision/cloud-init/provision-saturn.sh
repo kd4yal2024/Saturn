@@ -61,6 +61,8 @@ SATURN_LCD_SIZE_INCH="${SATURN_LCD_SIZE_INCH:-}"
 SATURN_LCD_AUTO_DEFAULT_SIZE_INCH="${SATURN_LCD_AUTO_DEFAULT_SIZE_INCH:-7}"
 SATURN_LCD_I2C_DETECT_ADDR="${SATURN_LCD_I2C_DETECT_ADDR:-0x45}"
 SATURN_LCD_DETECT_ONLY="${SATURN_LCD_DETECT_ONLY:-0}"
+SATURN_APT_LOCK_TIMEOUT_SECONDS="${SATURN_APT_LOCK_TIMEOUT_SECONDS:-120}"
+SATURN_APT_LOCK_RETRY_INTERVAL_SECONDS="${SATURN_APT_LOCK_RETRY_INTERVAL_SECONDS:-3}"
 
 apt_updated=0
 SATURN_UI_STARTED=0
@@ -414,7 +416,7 @@ cleanup_python_guard() {
 apt_update_once() {
   if [[ "$apt_updated" -eq 0 ]]; then
     export DEBIAN_FRONTEND=noninteractive
-    apt-get update -y
+    apt_run update -y
     apt_updated=1
   fi
 }
@@ -422,7 +424,51 @@ apt_update_once() {
 apt_install() {
   apt_update_once
   export DEBIAN_FRONTEND=noninteractive
-  apt-get install -y --no-install-recommends "$@"
+  apt_run install -y --no-install-recommends "$@"
+}
+
+apt_run() {
+  local timeout retry_interval start_ts attempt output rc
+  timeout="${SATURN_APT_LOCK_TIMEOUT_SECONDS:-120}"
+  retry_interval="${SATURN_APT_LOCK_RETRY_INTERVAL_SECONDS:-3}"
+
+  if ! [[ "$timeout" =~ ^[0-9]+$ ]] || (( timeout < 1 )); then
+    timeout=120
+  fi
+  if ! [[ "$retry_interval" =~ ^[0-9]+$ ]] || (( retry_interval < 1 )); then
+    retry_interval=3
+  fi
+
+  start_ts="$(date +%s)"
+  attempt=1
+  while true; do
+    output="$(
+      set +e
+      apt-get "$@" 2>&1
+      rc=$?
+      printf '\n__SATURN_APT_EXIT_CODE__=%s\n' "$rc"
+    )"
+    rc="${output##*__SATURN_APT_EXIT_CODE__=}"
+    output="${output%$'\n'__SATURN_APT_EXIT_CODE__=*}"
+    printf '%s\n' "$output"
+
+    if [[ "$rc" == "0" ]]; then
+      return 0
+    fi
+
+    if [[ "$output" != *"Could not get lock"* && "$output" != *"Unable to lock directory"* ]]; then
+      return "$rc"
+    fi
+
+    if (( $(date +%s) - start_ts >= timeout )); then
+      log "apt-get $* timed out waiting for apt lock after ${timeout}s."
+      return "$rc"
+    fi
+
+    log "apt lock is busy; retrying apt-get $* in ${retry_interval}s (attempt ${attempt})."
+    attempt=$((attempt + 1))
+    sleep "$retry_interval"
+  done
 }
 
 ensure_ui_packages() {

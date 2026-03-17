@@ -14,6 +14,7 @@ This directory contains provisioning assets for cloud-init based setup of a Satu
 `cloud-init/provision-saturn.sh` runs as root and:
 
 - installs required apt packages
+- retries transient apt lock conflicts during package index/install operations instead of failing immediately
 - installs matching Raspberry Pi kernel headers when available in apt sources
 - installs desktop developer tools when available in apt sources:
   - Visual Studio Code (`code`)
@@ -64,6 +65,8 @@ Environment controls:
 - `SATURN_UI_BINARY` (default: `/usr/local/bin/saturn-provision-ui`)
 - `SATURN_UI_STATUS_FILE` (default: `/var/lib/saturn-provision/ui-status`)
 - `SATURN_CLEAN_TMP_AFTER_PROVISION=1|0` (default: `1`)
+- `SATURN_APT_LOCK_TIMEOUT_SECONDS` (default: `120`)
+- `SATURN_APT_LOCK_RETRY_INTERVAL_SECONDS` (default: `3`)
 
 Notes:
 
@@ -76,6 +79,7 @@ Notes:
 - For interactive desktop runs, preserve display environment when escalating, for example:
   - `sudo -E SATURN_DESKTOP_UI=1 bash provision-saturn.sh`
 - No Python files are added for this UI path; the widget is C++/GTK only.
+- Apt lock retries only activate on lock contention. The normal apt path does not add an extra delay.
 
 Environment precedence:
 
@@ -280,6 +284,17 @@ If Update Manager is enabled, also verify service status:
 
 - `bash "$SATURN_HOME/github/Saturn/provision/cloud-init/provision-saturn.sh"`
 
+Cloud-init bootstrap behavior in the example config:
+
+- `package_update: false`
+- `package_upgrade: false`
+- `packages:` remains limited to bootstrap prerequisites:
+  - `git`
+  - `ca-certificates`
+  - `sudo`
+
+This keeps Saturn responsible for the main apt workflow and avoids a redundant cloud-init package index refresh before `provision-saturn.sh` starts.
+
 `cloud-init/meta-data.example.yaml` is the companion metadata file for NoCloud style cloud-init.
 
 ## Important Defaults
@@ -301,6 +316,8 @@ From `user-data.example.yaml`:
 - `SATURN_UI_TIMEOUT_SECONDS=2700`
 - `SATURN_UI_SHOW_LOG_DEFAULT=0`
 - `SATURN_FLASH_FPGA=0` (safety default)
+- `SATURN_APT_LOCK_TIMEOUT_SECONDS=120`
+- `SATURN_APT_LOCK_RETRY_INTERVAL_SECONDS=3`
 
 Important safety settings for flashing:
 

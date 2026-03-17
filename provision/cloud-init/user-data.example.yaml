@@ -2,7 +2,7 @@
 hostname: saturn-g2
 manage_etc_hosts: true
 
-package_update: true
+package_update: false
 package_upgrade: false
 packages:
   - git

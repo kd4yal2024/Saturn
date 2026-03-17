@@ -2,6 +2,25 @@
 
 All notable changes to provisioning assets are documented in this file.
 
+## [2026-03-17]
+
+### Changed
+
+- `cloud-init/provision-saturn.sh`
+  - added bounded apt lock retry handling for `apt-get update` and `apt-get install`
+  - added `SATURN_APT_LOCK_TIMEOUT_SECONDS` (default `120`) to cap wait time when another apt client temporarily owns the lock
+  - added `SATURN_APT_LOCK_RETRY_INTERVAL_SECONDS` (default `3`) to control retry cadence during apt lock contention
+
+- `cloud-init/user-data.example.yaml`
+  - changed `package_update` from `true` to `false` so cloud-init does not perform a redundant package index refresh before handing off to Saturn provisioning
+
+### Documentation
+
+- `README.md`
+  - documented that Saturn provisioning now retries transient apt lock conflicts instead of failing immediately
+  - documented the new apt lock retry tuning environment variables
+  - documented that `user-data.example.yaml` no longer requests a separate cloud-init package index refresh
+
 ## [2026-03-16]
 
 ### Documentation
