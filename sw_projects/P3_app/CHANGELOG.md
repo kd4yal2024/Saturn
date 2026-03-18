@@ -2,6 +2,36 @@
 
 All notable changes to `P3_app` from this hardening pass are documented here.
 
+## [2026-03-18] DMA and Wideband Stability Hardening
+
+### Fixed
+
+- Fixed wideband buffer lifetime and cleanup so the wideband worker now frees
+  only the two ADC packet buffers it actually owns, avoiding out-of-bounds
+  frees during shutdown.
+- Fixed DUC I/Q and speaker-audio worker startup so failed buffer allocation or
+  failed XDMA device opens now abort thread startup cleanly instead of
+  continuing with invalid pointers or file descriptors.
+- Fixed DDC outgoing batching so partial `sendmmsg(...)` completions no longer
+  silently discard unsent frames.
+- Fixed wideband and mic outgoing paths so short or failed `sendmsg(...)`
+  results now raise thread errors instead of being ignored.
+
+### Changed
+
+- Hardened low-level XDMA access wrappers to reject invalid file descriptors or
+  buffers and to treat short `pread(...)` / `pwrite(...)` transfers as errors.
+- Added fail-fast startup behavior in `p2app.c` when `/dev/xdma0_user` cannot be
+  opened for register access.
+- Propagated DMA transfer failures into the active mic, DDC, DUC, speaker, and
+  wideband worker threads so datapath corruption does not continue silently.
+
+### Verified
+
+- Clean rebuild completed successfully with:
+  - `make -C /home/pi/github/Saturn/sw_projects/P3_app clean`
+  - `make -C /home/pi/github/Saturn/sw_projects/P3_app -j2`
+
 ## [2026-03-16] ADC Peak Telemetry in High-Priority Status
 
 ### Changed

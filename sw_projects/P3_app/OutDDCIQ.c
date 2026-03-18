@@ -230,16 +230,20 @@ bool CreateDynamicMemory(void)                              // return true if er
 //
 // first create the buffer for DMA, and initialise its pointers
 //
-    posix_memalign((void**)&DMAReadBuffer, VALIGNMENT, DMABufferSize);
-    DMAReadPtr = DMAReadBuffer + VBASE;		                    // offset 4096 bytes into buffer
-    DMAHeadPtr = DMAReadBuffer + VBASE;
-    DMABasePtr = DMAReadBuffer + VBASE;
+    if (posix_memalign((void**)&DMAReadBuffer, VALIGNMENT, DMABufferSize) != 0)
+        DMAReadBuffer = NULL;
     if (!DMAReadBuffer)
     {
         printf("I/Q read buffer allocation failed\n");
         Result = true;
     }
-    memset(DMAReadBuffer, 0, DMABufferSize);
+    else
+    {
+        DMAReadPtr = DMAReadBuffer + VBASE;		                    // offset 4096 bytes into buffer
+        DMAHeadPtr = DMAReadBuffer + VBASE;
+        DMABasePtr = DMAReadBuffer + VBASE;
+        memset(DMAReadBuffer, 0, DMABufferSize);
+    }
 
     //
     // set up per-DDC data structures
@@ -248,6 +252,12 @@ bool CreateDynamicMemory(void)                              // return true if er
     {
         UDPBuffer[DDC] = malloc(VDDCPACKETSIZE);
         DDCSampleBuffer[DDC] = malloc(DMABufferSize);
+        if((UDPBuffer[DDC] == NULL) || (DDCSampleBuffer[DDC] == NULL))
+        {
+            printf("DDC buffer allocation failed for DDC %u\n", DDC);
+            Result = true;
+            continue;
+        }
         IQReadPtr[DDC] = DDCSampleBuffer[DDC] + VBASE;		// offset 4096 bytes into buffer
         IQHeadPtr[DDC] = DDCSampleBuffer[DDC] + VBASE;
         IQBasePtr[DDC] = DDCSampleBuffer[DDC] + VBASE;
@@ -351,6 +361,9 @@ void *OutgoingDDCIQ(void *arg)
         atomic_store(&(ThreadData + DDC)->Active, true);    // set outgoing socket active
     }
 
+    if(InitError)
+        goto cleanup;
+
 
 
 //
@@ -422,16 +435,18 @@ void *OutgoingDDCIQ(void *arg)
                 while ((IQHeadPtr[DDC] - IQReadPtr[DDC]) > VIQBYTESPERFRAME)
                 {
                     unsigned int BatchCount = 0;
+                    unsigned char* BatchReadPtr = IQReadPtr[DDC];
+                    uint32_t BatchSequence = SequenceCounter[DDC];
 
-                    while (((IQHeadPtr[DDC] - IQReadPtr[DDC]) > VIQBYTESPERFRAME) && (BatchCount < VMAXSENDMSGS))
+                    while (((IQHeadPtr[DDC] - BatchReadPtr) > VIQBYTESPERFRAME) && (BatchCount < VMAXSENDMSGS))
                     {
                         uint8_t* PacketPtr = SendBuffer[BatchCount];
-                        *(uint32_t*)PacketPtr = htonl(SequenceCounter[DDC]++);               // add sequence count
+                        *(uint32_t*)PacketPtr = htonl(BatchSequence++);               // add sequence count
                         memset(PacketPtr + 4, 0, 8);                                          // clear the timestamp data
                         *(uint16_t*)(PacketPtr + 12) = htons(24);                             // bits per sample
                         *(uint32_t*)(PacketPtr + 14) = htons(VIQSAMPLESPERFRAME);             // I/Q samples for this frame (legacy wire compatibility)
-                        memcpy(PacketPtr + 16, IQReadPtr[DDC], VIQBYTESPERFRAME);
-                        IQReadPtr[DDC] += VIQBYTESPERFRAME;
+                        memcpy(PacketPtr + 16, BatchReadPtr, VIQBYTESPERFRAME);
+                        BatchReadPtr += VIQBYTESPERFRAME;
 
                         memset(&SendIovec[BatchCount], 0, sizeof(struct iovec));
                         memset(&SendDatagram[BatchCount], 0, sizeof(struct mmsghdr));
@@ -442,18 +457,35 @@ void *OutgoingDDCIQ(void *arg)
                         SendDatagram[BatchCount].msg_hdr.msg_name = &DestAddr[DDC];
                         SendDatagram[BatchCount].msg_hdr.msg_namelen = sizeof(struct sockaddr_in);
                         BatchCount++;
-                        if(StartupCount != 0)                                   // decrement startup message count
-                            StartupCount--;
                     }
 
                     if(BatchCount != 0)
                     {
                         int Error;
-                        Error = sendmmsg(atomic_load(&(ThreadData+DDC)->Socketid), SendDatagram, BatchCount, 0);
-                        if (Error == -1)
+                        int Socketfd = GetThreadSocketFD(ThreadData + DDC);
+
+                        Error = sendmmsg(Socketfd, SendDatagram, BatchCount, 0);
+                        if (Error <= 0)
                         {
-                            printf("Send Error, DDC=%d, errno=%d, socket id = %d\n", DDC, errno, atomic_load(&(ThreadData+DDC)->Socketid));
+                            if(Error == -1)
+                                printf("Send Error, DDC=%d, errno=%d, socket id = %d\n", DDC, errno, Socketfd);
+                            else
+                                printf("sendmmsg returned %d for DDC=%d, socket id = %d\n", Error, DDC, Socketfd);
                             InitError = true;
+                        }
+                        else
+                        {
+                            IQReadPtr[DDC] += (size_t)Error * VIQBYTESPERFRAME;
+                            SequenceCounter[DDC] += (uint32_t)Error;
+                            if(StartupCount > (unsigned int)Error)
+                                StartupCount -= (unsigned int)Error;
+                            else
+                                StartupCount = 0;
+                            if((unsigned int)Error < BatchCount)
+                            {
+                                printf("Partial sendmmsg, DDC=%d, sent=%d of %u\n", DDC, Error, BatchCount);
+                                usleep(1000);
+                            }
                         }
                     }
                 }
@@ -527,7 +559,11 @@ void *OutgoingDDCIQ(void *arg)
             else
                 DMATransferSize = 4096;
 
-            DMAReadFromFPGA(IQReadfile_fd, DMAHeadPtr, DMATransferSize, VADDRDDCSTREAMREAD);
+            if(DMAReadFromFPGA(IQReadfile_fd, DMAHeadPtr, DMATransferSize, VADDRDDCSTREAMREAD) < 0)
+            {
+                InitError = true;
+                break;
+            }
             DMAHeadPtr += DMATransferSize;
             //
             // find header: may not be the 1st word
@@ -630,6 +666,7 @@ void *OutgoingDDCIQ(void *arg)
 //
 // tidy shutdown of the thread
 //
+cleanup:
     if(InitError)
         atomic_store(&ThreadError, true);
     printf("shutting down DDC outgoing thread\n");

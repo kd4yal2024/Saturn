@@ -32,7 +32,7 @@ void CloseXDMADriver(void);
 
 //
 // initiate a DMA to the FPGA with specified parameters
-// returns 1 if success, else 0
+// returns 0 if success, else a negative error code
 // fd: file device (an open file)
 // SrcData: pointer to memory block to transfer
 // Length: number of bytes to copy
@@ -44,7 +44,7 @@ int DMAWriteToFPGA(int fd, unsigned char*SrcData, uint32_t Length, uint32_t AXIA
 
 //
 // initiate a DMA from the FPGA with specified parameters
-// returns 1 if success, else 0
+// returns 0 if success, else a negative error code
 // fd: file device (an open file)
 // DestData: pointer to memory block to transfer
 // Length: number of bytes to copy

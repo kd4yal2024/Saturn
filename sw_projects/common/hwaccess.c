@@ -38,7 +38,7 @@
 //
 // mem read/write variables:
 //
-	int register_fd;                             // device identifier
+int register_fd = -1;                             // device identifier
 
 
 
@@ -69,7 +69,44 @@ int OpenXDMADriver(bool Silent)
 //
 void CloseXDMADriver(void)
 {
-    close(register_fd);
+    if (register_fd >= 0)
+    {
+        close(register_fd);
+        register_fd = -1;
+    }
+}
+
+static int DMAAccessFPGA(int fd, unsigned char *Data, uint32_t Length, uint32_t AXIAddr, bool IsWrite)
+{
+    ssize_t rc;                                   // response code
+    off_t OffsetAddr = AXIAddr;
+
+    if (Length == 0)
+        return 0;
+
+    if ((fd < 0) || (Data == NULL))
+    {
+        printf("invalid DMA %s request: fd=%d, buffer=%p, len=0x%x @ 0x%lx\n",
+               IsWrite ? "write" : "read", fd, Data, Length, OffsetAddr);
+        return -EINVAL;
+    }
+
+    rc = IsWrite ? pwrite(fd, Data, Length, OffsetAddr) : pread(fd, Data, Length, OffsetAddr);
+    if (rc < 0)
+    {
+        printf("%s 0x%x @ 0x%lx failed %ld.\n", IsWrite ? "write" : "read", Length, OffsetAddr, rc);
+        perror(IsWrite ? "DMA write" : "DMA read");
+        return -EIO;
+    }
+
+    if (rc != (ssize_t)Length)
+    {
+        printf("short DMA %s 0x%x @ 0x%lx transferred %ld bytes.\n",
+               IsWrite ? "write" : "read", Length, OffsetAddr, rc);
+        return -EIO;
+    }
+
+    return 0;
 }
 
 
@@ -83,20 +120,7 @@ void CloseXDMADriver(void)
 //
 int DMAWriteToFPGA(int fd, unsigned char*SrcData, uint32_t Length, uint32_t AXIAddr)
 {
-	ssize_t rc;									// response code
-	off_t OffsetAddr;
-
-	OffsetAddr = AXIAddr;
-
-	// write data to FPGA from memory buffer
-	rc = pwrite(fd, SrcData, Length, OffsetAddr);
-	if (rc < 0)
-	{
-		printf("write 0x%x @ 0x%lx failed %ld.\n", Length, OffsetAddr, rc);
-		perror("DMA write");
-		return -EIO;
-	}
-	return 0;
+	return DMAAccessFPGA(fd, SrcData, Length, AXIAddr, true);
 }
 
 //
@@ -109,20 +133,7 @@ int DMAWriteToFPGA(int fd, unsigned char*SrcData, uint32_t Length, uint32_t AXIA
 //
 int DMAReadFromFPGA(int fd, unsigned char*DestData, uint32_t Length, uint32_t AXIAddr)
 {
-	ssize_t rc;									// response code
-	off_t OffsetAddr;
-
-	OffsetAddr = AXIAddr;
-
-	// read data from FPGA to memory buffer
-	rc = pread(fd, DestData, Length, OffsetAddr);
-	if (rc < 0)
-	{
-		printf("read 0x%x @ 0x%lx failed %ld.\n", Length, OffsetAddr, rc);
-		perror("DMA read");
-		return -EIO;
-	}
-	return 0;
+	return DMAAccessFPGA(fd, DestData, Length, AXIAddr, false);
 }
 
 //
@@ -131,6 +142,12 @@ int DMAReadFromFPGA(int fd, unsigned char*DestData, uint32_t Length, uint32_t AX
 uint32_t RegisterRead(uint32_t Address)
 {
 	uint32_t result = 0;
+
+    if (register_fd < 0)
+    {
+        printf("ERROR: register read attempted before XDMA register device was opened\n");
+        return 0;
+    }
 
     ssize_t nread = pread(register_fd, &result, sizeof(result), (off_t) Address);
     if (nread != sizeof(result))
@@ -144,10 +161,15 @@ uint32_t RegisterRead(uint32_t Address)
 //
 void RegisterWrite(uint32_t Address, uint32_t Data)
 {
+    if (register_fd < 0)
+    {
+        printf("ERROR: register write attempted before XDMA register device was opened\n");
+        return;
+    }
+
     ssize_t nsent = pwrite(register_fd, &Data, sizeof(Data), (off_t) Address); 
     if (nsent != sizeof(Data))
         printf("ERROR: Write: addr=0x%08X   error=%s\n",Address, strerror(errno));
 }
-
 
 

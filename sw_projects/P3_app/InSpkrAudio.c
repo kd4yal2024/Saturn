@@ -81,9 +81,13 @@ void *IncomingSpkrAudio(void *arg)                      // listener thread
     //
     // setup DMA buffer
     //
-    posix_memalign((void**)&SpkWriteBuffer, VALIGNMENT, SpkBufferSize);
-    if (!SpkWriteBuffer)
+    if (posix_memalign((void**)&SpkWriteBuffer, VALIGNMENT, SpkBufferSize) != 0)
+    {
+        SpkWriteBuffer = NULL;
         printf("spkr write buffer allocation failed\n");
+        atomic_store(&ThreadError, true);
+        goto cleanup;
+    }
     SpkBasePtr = SpkWriteBuffer + VBASE;
     memset(SpkWriteBuffer, 0, SpkBufferSize);
 
@@ -93,7 +97,11 @@ void *IncomingSpkrAudio(void *arg)                      // listener thread
     //
     DMAWritefile_fd = open(VSPKDMADEVICE, O_WRONLY);
     if (DMAWritefile_fd < 0)
-        printf("XDMA write device open failed for spk data\n");
+    {
+        perror("XDMA write device open failed for spk data");
+        atomic_store(&ThreadError, true);
+        goto cleanup;
+    }
     ResetDMAStreamFIFO(eSpkCodecDMA);
     SetupFIFOMonitorChannel(eSpkCodecDMA, false);
 
@@ -197,13 +205,24 @@ void *IncomingSpkrAudio(void *arg)                      // listener thread
             if(atomic_load(&ExitRequested))
                 break;
             if(BatchBytes != 0)
-                DMAWriteToFPGA(DMAWritefile_fd, SpkBasePtr, BatchBytes, VADDRSPKRSTREAMWRITE);
+            {
+                if(DMAWriteToFPGA(DMAWritefile_fd, SpkBasePtr, BatchBytes, VADDRSPKRSTREAMWRITE) < 0)
+                {
+                    atomic_store(&ThreadError, true);
+                    break;
+                }
+            }
         }
     }
 //
 // close down thread
 //
-    close(atomic_load(&ThreadData->Socketid));    // close incoming data socket
+cleanup:
+    if(DMAWritefile_fd >= 0)
+        close(DMAWritefile_fd);
+    free(SpkWriteBuffer);
+    if(atomic_load(&ThreadData->Socketid) > 0)
+        close(atomic_load(&ThreadData->Socketid));    // close incoming data socket
     atomic_store(&ThreadData->Socketid, 0);
     atomic_store(&ThreadData->Active, false);     // indicate it is closed
     return NULL;

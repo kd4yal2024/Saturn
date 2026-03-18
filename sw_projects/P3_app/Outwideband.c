@@ -51,7 +51,7 @@
 uint8_t* WBDMAReadBuffer = NULL;								// data for DMA read from DDC
 uint32_t WBDMABufferSize = VDMABUFFERSIZE;
 
-uint8_t* WBUDPBuffer[VNUMDDC];                                  // DDC frame buffer
+uint8_t* WBUDPBuffer[VNUMWBADC];                                // per-ADC frame buffer
 extern atomic_int DMAReadfile_fd;                            // DMA read file device (opened by mic samples thread)
 
 //
@@ -78,13 +78,15 @@ bool CreateWBDynamicMemory(void)                              // return true if 
 //
 // first create the buffer for DMA, and initialise its pointers
 //
-    posix_memalign((void**)&WBDMAReadBuffer, VALIGNMENT, WBDMABufferSize);
+    if (posix_memalign((void**)&WBDMAReadBuffer, VALIGNMENT, WBDMABufferSize) != 0)
+        WBDMAReadBuffer = NULL;
     if (!WBDMAReadBuffer)
     {
         printf("Wideband read buffer allocation failed\n");
         Result = true;
     }
-    memset(WBDMAReadBuffer, 0, WBDMABufferSize);
+    else
+        memset(WBDMAReadBuffer, 0, WBDMABufferSize);
 
     //
     // set up per-Wideband ADC data structures
@@ -92,6 +94,11 @@ bool CreateWBDynamicMemory(void)                              // return true if 
     for (ADC = 0; ADC < VNUMWBADC; ADC++)
     {
         WBUDPBuffer[ADC] = malloc(VWBPACKETSIZE);
+        if(WBUDPBuffer[ADC] == NULL)
+        {
+            printf("Wideband UDP buffer allocation failed for ADC %u\n", ADC);
+            Result = true;
+        }
     }
     return Result;
 }
@@ -105,9 +112,10 @@ void FreeWBDynamicMemory(void)
     //
     // free the per-DDC buffers
     //
-    for (ADC = 0; ADC < VNUMDDC; ADC++)
+    for (ADC = 0; ADC < VNUMWBADC; ADC++)
     {
         free(WBUDPBuffer[ADC]);
+        WBUDPBuffer[ADC] = NULL;
     }
 }
 
@@ -158,7 +166,12 @@ uint32_t ReadFIFOContent()
         if(LocalDMAReadFD < 0)
             return 0;
         sem_wait(&MicWBDMAMutex);                       // get protected access
-        DMAReadFromFPGA(LocalDMAReadFD, WBDMAReadBuffer, WordCount * 8, VADDRWIDEBANDREAD);
+        if(DMAReadFromFPGA(LocalDMAReadFD, WBDMAReadBuffer, WordCount * 8, VADDRWIDEBANDREAD) < 0)
+        {
+            sem_post(&MicWBDMAMutex);                       // release protected access
+            atomic_store(&ThreadError, true);
+            return 0;
+        }
         sem_post(&MicWBDMAMutex);                       // get protected access
         SampleCount = WordCount * 4;
 //        printf("word count in readFIFOContent = %d\n", WordCount);
@@ -237,6 +250,9 @@ void *OutgoingWidebandSamples(void *arg)
         SequenceCounter[ADC] = 0;                           // clear UDP packet counter
         atomic_store(&(ThreadData + ADC)->Active, true);    // set outgoing socket active
     }
+
+    if(InitError)
+        goto cleanup;
 
 
 
@@ -339,6 +355,8 @@ void *OutgoingWidebandSamples(void *arg)
                     SequenceCounter[ADC] = 0;                           // restart at 0 for each frame
                     for(PacketCounter = 0; PacketCounter < LocalPacketCount; PacketCounter++)
                     {
+                        int Error;
+
                         *(uint32_t*)WBUDPBuffer[ADC] = htonl(SequenceCounter[ADC]++);     // add sequence count
                         //
                         // now add I/Q data & send outgoing packet
@@ -348,9 +366,20 @@ void *OutgoingWidebandSamples(void *arg)
                         iovecinst[ADC].iov_len = LocalSamplePerPktCount * 2 + 4;           // P2 data dependent
 
                         Socketfd = GetThreadSocketFD(ThreadData + ADC);
-                        sendmsg(Socketfd, &datagram[ADC], 0);
+                        Error = sendmsg(Socketfd, &datagram[ADC], 0);
+                        if(Error != (int)iovecinst[ADC].iov_len)
+                        {
+                            if(Error == -1)
+                                perror("sendmsg, Wideband");
+                            else
+                                printf("short sendmsg, Wideband: sent %d of %zu bytes\n", Error, iovecinst[ADC].iov_len);
+                            InitError = true;
+                            break;
+                        }
                         usleep(200);                    // gap between outgoing messages
                     }
+                    if(InitError)
+                        break;
                 }
             }
             usleep(5000);
@@ -366,6 +395,9 @@ void *OutgoingWidebandSamples(void *arg)
 // tidy shutdown of the thread
 // halt the wideband IP (strategy step 9)
 //
+cleanup:
+    if(InitError)
+        atomic_store(&ThreadError, true);
     printf("shutting down Wideband outgoing thread\n");
     SetWidebandEnable(false, false, false);
     for (ADC = 0; ADC < VNUMWBADC; ADC++)

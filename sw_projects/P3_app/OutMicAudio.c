@@ -71,7 +71,7 @@ void *OutgoingMicSamples(void *arg)
 //
     uint8_t* MicReadBuffer = NULL;							// data for DMA read from DDC
     uint32_t MicBufferSize = VDMABUFFERSIZE;
-    unsigned char* MicBasePtr;								// ptr to DMA location in mic memory
+    unsigned char* MicBasePtr = NULL;							// ptr to DMA location in mic memory
     uint32_t Depth = 0;
     uint32_t RegisterValue;
     bool FIFOOverflow, FIFOUnderflow, FIFOOverThreshold;
@@ -91,14 +91,17 @@ void *OutgoingMicSamples(void *arg)
 //
 // setup DMA buffer
 //
-    posix_memalign((void**)&MicReadBuffer, VALIGNMENT, MicBufferSize);
-    if (!MicReadBuffer)
+    if (posix_memalign((void**)&MicReadBuffer, VALIGNMENT, MicBufferSize) != 0)
     {
+        MicReadBuffer = NULL;
         printf("mic read buffer allocation failed\n");
         InitError = true;
     }
-    MicBasePtr = MicReadBuffer + VBASE;
-    memset(MicReadBuffer, 0, MicBufferSize);
+    if(!InitError)
+    {
+        MicBasePtr = MicReadBuffer + VBASE;
+        memset(MicReadBuffer, 0, MicBufferSize);
+    }
 
 
   //
@@ -206,9 +209,14 @@ void *OutgoingMicSamples(void *arg)
             {
                 int LocalDMAReadFD = atomic_load(&DMAReadfile_fd);
                 if(LocalDMAReadFD >= 0)
-                    DMAReadFromFPGA(LocalDMAReadFD, MicBasePtr, VDMATRANSFERSIZE, VADDRMICSTREAMREAD);
+                {
+                    if(DMAReadFromFPGA(LocalDMAReadFD, MicBasePtr, VDMATRANSFERSIZE, VADDRMICSTREAMREAD) < 0)
+                        InitError = true;
+                }
             }
             sem_post(&MicWBDMAMutex);                       // get protected access
+            if(InitError)
+                break;
 
             // create the packet into UDPBuffer
             *(uint32_t*)UDPBuffer = htonl(SequenceCounter++);        // add sequence count
@@ -217,9 +225,12 @@ void *OutgoingMicSamples(void *arg)
             Error = sendmsg(Socketfd, &datagram, 0);
             if(StartupCount != 0)                                   // decrement startup message count
                 StartupCount--;
-            if(Error == -1)
+            if(Error != VMICPACKETSIZE)
             {
-                perror("sendmsg, Mic Audio");
+                if(Error == -1)
+                    perror("sendmsg, Mic Audio");
+                else
+                    printf("short sendmsg, Mic Audio: sent %d of %u bytes\n", Error, (unsigned int)VMICPACKETSIZE);
                 InitError=true;
             }
         }
@@ -231,6 +242,7 @@ void *OutgoingMicSamples(void *arg)
       atomic_store(&ThreadError, true);
 
     printf("shutting down outgoing mic data thread\n");
+    free(MicReadBuffer);
     if(!ThreadSocketIsSharedAlias(ThreadData))
         close(GetThreadSocketFD(ThreadData));
     atomic_store(&ThreadData->Active, false);     // signal closed

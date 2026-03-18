@@ -83,9 +83,13 @@ void *IncomingDUCIQ(void *arg)                          // listener thread
     //
     // setup DMA buffer
     //
-    posix_memalign((void**)&IQWriteBuffer, VALIGNMENT, IQBufferSize);
-    if (!IQWriteBuffer)
+    if (posix_memalign((void**)&IQWriteBuffer, VALIGNMENT, IQBufferSize) != 0)
+    {
+        IQWriteBuffer = NULL;
         printf("I/Q TX write buffer allocation failed\n");
+        atomic_store(&ThreadError, true);
+        goto cleanup;
+    }
     IQBasePtr = IQWriteBuffer + VBASE;
     memset(IQWriteBuffer, 0, IQBufferSize);
 
@@ -95,7 +99,11 @@ void *IncomingDUCIQ(void *arg)                          // listener thread
     //
     DMAWritefile_fd = open(VDUCDMADEVICE, O_WRONLY);
     if (DMAWritefile_fd < 0)
-        printf("XDMA write device open failed for TX I/Q data\n");
+    {
+        perror("XDMA write device open failed for TX I/Q data");
+        atomic_store(&ThreadError, true);
+        goto cleanup;
+    }
         
 //
 // setup hardware
@@ -211,13 +219,24 @@ void *IncomingDUCIQ(void *arg)                          // listener thread
             if(atomic_load(&ExitRequested))
                 break;
             if(BatchBytes != 0)
-                DMAWriteToFPGA(DMAWritefile_fd, IQBasePtr, BatchBytes, VADDRDUCSTREAMWRITE);
+            {
+                if(DMAWriteToFPGA(DMAWritefile_fd, IQBasePtr, BatchBytes, VADDRDUCSTREAMWRITE) < 0)
+                {
+                    atomic_store(&ThreadError, true);
+                    break;
+                }
+            }
         }
     }
 //
 // close down thread
 //
-    close(atomic_load(&ThreadData->Socketid));    // close incoming data socket
+cleanup:
+    if(DMAWritefile_fd >= 0)
+        close(DMAWritefile_fd);
+    free(IQWriteBuffer);
+    if(atomic_load(&ThreadData->Socketid) > 0)
+        close(atomic_load(&ThreadData->Socketid));    // close incoming data socket
     atomic_store(&ThreadData->Socketid, 0);
     atomic_store(&ThreadData->Active, false);     // indicate it is closed
     return NULL;

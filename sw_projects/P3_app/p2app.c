@@ -815,7 +815,11 @@ int main(int argc, char *argv[])
 //
   printf("SATURN P3 App (Protocol 2 compatible). press 'x <enter>' in console to close\n");
 
-  OpenXDMADriver(false);
+  if(!OpenXDMADriver(false))
+  {
+    printf("unable to continue without XDMA register access\n");
+    return EXIT_FAILURE;
+  }
   PrintVersionInfo();
   PCBVersion = GetPCBVersionNumber();
   printf("p3app client app software Version:%d Build Date:%s\n", P3APPVERSION, BuildDate);
