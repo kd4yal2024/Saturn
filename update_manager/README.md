@@ -212,6 +212,7 @@ If a script entry does not define `version`, `/get_versions` now returns
   - the current baseline summary/sample count
   - the current status/workload summaries
 - Captured snapshots can be copied as JSON or downloaded from the page for later review/comparison.
+- `fifo_duc_under_events` and `fifo_speaker_under_events` now represent underrun episodes rather than repeated observations of the same active underflow bit during polling recovery, so cumulative totals are more meaningful across long runs.
 - When `/proc/<pid>/io` is unreadable for the active `p2app.service` process,
   `/p23_perf` now reports `process.io.source = "eth0_netdev_proxy"` and uses
   `eth0` RX/TX byte counters as the char-I/O proxy source so the hidden P23

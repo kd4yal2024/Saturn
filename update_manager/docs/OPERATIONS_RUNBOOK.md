@@ -267,6 +267,7 @@ Switching implementation details:
   - host pressure (CPU, scheduler wait, memory, eth0, XDMA)
   - app packet/DMA throughput for DDC, wideband, mic, DUC, and speaker paths
   - app-side error/fifo/overflow deltas
+- Speaker and DUC underrun counters now record underrun episodes on false-to-true transitions rather than incrementing on every FIFO-monitor poll while the same underflow condition is still active. Treat `fifo_speaker_under_events` and `fifo_duc_under_events` as cumulative starvation episodes, then use the per-interval delta cards to see whether the problem is still actively occurring.
 
 Safety/usage notes:
 

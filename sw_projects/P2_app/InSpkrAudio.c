@@ -41,6 +41,35 @@
 #define VDMATRANSFERSIZE 256                        // write 1 message at a time
 #define VSTARTUPDELAY 100                           // 100 messages (~100ms) before reporting under or overflows
 
+static void NoteSpeakerUnderflow(bool ReportingEnabled, bool Underflowed, bool *UnderflowActive,
+                                 unsigned int Current)
+{
+    if (!ReportingEnabled)
+    {
+        *UnderflowActive = false;
+        return;
+    }
+
+    if (!Underflowed)
+    {
+        *UnderflowActive = false;
+        return;
+    }
+
+    pthread_mutex_lock(&g_fifo_overflow_mutex);
+    GlobalFIFOOverflows |= 0b00001000;
+    pthread_mutex_unlock(&g_fifo_overflow_mutex);
+
+    if (!*UnderflowActive)
+    {
+        P23PerfTelemetryCounterAdd(eP23PerfCounterFIFOSpkrUnder, 1U);
+        *UnderflowActive = true;
+    }
+
+    if (UseDebug)
+        printf("Codec speaker FIFO Underflowed, depth now = %d\n", Current);
+}
+
 
 //
 // listener thread for incoming DDC (speaker) audio packets
@@ -68,8 +97,9 @@ void *IncomingSpkrAudio(void *arg)                      // listener thread
     bool FIFOOverflow, FIFOUnderflow, FIFOOverThreshold;
     uint32_t RegVal;
     unsigned int Current;                                   // current occupied locations in FIFO
-    unsigned int StartupCount;                              // used to delay reporting of under & overflows
+    unsigned int StartupCount = 0;                          // used to delay reporting of under & overflows
     bool PrevSDRActive = false;                             // used to detect change of state
+    bool UnderflowActive = false;                           // tracks one continuous starvation episode
 
 
     ThreadData = (struct ThreadSocketData *)arg;
@@ -104,9 +134,15 @@ void *IncomingSpkrAudio(void *arg)                      // listener thread
         //
         // now released to start processing. Setup buffers.
         //
-        if(SDRActive & !PrevSDRActive)                      // detect SDRActive has been asserted
+        bool SDRActiveNow = SDRActive;
+        if(SDRActiveNow & !PrevSDRActive)                   // detect SDRActive has been asserted
+        {
             StartupCount = VSTARTUPDELAY;
-        PrevSDRActive = SDRActive;
+            UnderflowActive = false;
+        }
+        else if(!SDRActiveNow)
+            UnderflowActive = false;
+        PrevSDRActive = SDRActiveNow;
 
         memset(&iovecinst, 0, sizeof(struct iovec));            // clear buffers
         memset(&datagram, 0, sizeof(datagram));
@@ -137,15 +173,7 @@ void *IncomingSpkrAudio(void *arg)                      // listener thread
             Depth = ReadFIFOMonitorChannel(eSpkCodecDMA, &FIFOOverflow, &FIFOOverThreshold, &FIFOUnderflow, &Current);        // read the FIFO free locations
             if((StartupCount == 0) && FIFOOverThreshold && UseDebug)
                 printf("Codec speaker FIFO Overthreshold, depth now = %d\n", Current);
-            if((StartupCount == 0) && FIFOUnderflow)
-            {
-                pthread_mutex_lock(&g_fifo_overflow_mutex);
-                GlobalFIFOOverflows |= 0b00001000;
-                pthread_mutex_unlock(&g_fifo_overflow_mutex);
-                P23PerfTelemetryCounterAdd(eP23PerfCounterFIFOSpkrUnder, 1U);
-                if(UseDebug)
-                    printf("Codec speaker FIFO Underflowed, depth now = %d\n", Current);
-            }
+            NoteSpeakerUnderflow((StartupCount == 0) && SDRActiveNow, FIFOUnderflow, &UnderflowActive, Current);
     //            printf("speaker packet received; depth = %d\n", Depth);
             while (Depth < VMEMWORDSPERFRAME)       // loop till space available
             {
@@ -153,15 +181,7 @@ void *IncomingSpkrAudio(void *arg)                      // listener thread
                 Depth = ReadFIFOMonitorChannel(eSpkCodecDMA, &FIFOOverflow, &FIFOOverThreshold, &FIFOUnderflow, &Current);    // read the FIFO free locations
                 if((StartupCount == 0) && FIFOOverThreshold && UseDebug)
                     printf("Codec speaker FIFO Overthreshold, depth now = %d\n", Current);
-                if((StartupCount == 0) && FIFOUnderflow)
-                {
-                    pthread_mutex_lock(&g_fifo_overflow_mutex);
-                    GlobalFIFOOverflows |= 0b00001000;
-                    pthread_mutex_unlock(&g_fifo_overflow_mutex);
-                    P23PerfTelemetryCounterAdd(eP23PerfCounterFIFOSpkrUnder, 1U);
-                    if(UseDebug)
-                        printf("Codec speaker FIFO Underflowed, depth now = %d\n", Current);
-                }
+                NoteSpeakerUnderflow((StartupCount == 0) && SDRActiveNow, FIFOUnderflow, &UnderflowActive, Current);
             }
                 // copy sata from UDP Buffer & DMA write it
             memcpy(SpkBasePtr, UDPInBuffer + 4, VDMATRANSFERSIZE);              // copy out spk samples
@@ -184,5 +204,4 @@ void *IncomingSpkrAudio(void *arg)                      // listener thread
     ThreadData->Active = false;                   // indicate it is closed
     return NULL;
 }
-
 

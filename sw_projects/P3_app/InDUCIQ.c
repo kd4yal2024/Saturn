@@ -44,6 +44,35 @@
 #define VMAXDMABATCHFRAMES 8                        // opportunistically batch queued UDP frames into one DMA
 #define VSTARTUPDELAY 100                           // 100 messages (~100ms) before reporting under or overflows
 
+static void NoteDUCUnderflow(bool ReportingEnabled, bool Underflowed, bool *UnderflowActive,
+                             unsigned int Current)
+{
+    if (!ReportingEnabled)
+    {
+        *UnderflowActive = false;
+        return;
+    }
+
+    if (!Underflowed)
+    {
+        *UnderflowActive = false;
+        return;
+    }
+
+    pthread_mutex_lock(&g_fifo_overflow_mutex);
+    GlobalFIFOOverflows |= 0b00000100;
+    pthread_mutex_unlock(&g_fifo_overflow_mutex);
+
+    if (!*UnderflowActive)
+    {
+        P23PerfTelemetryCounterAdd(eP23PerfCounterFIFODucUnder, 1U);
+        *UnderflowActive = true;
+    }
+
+    if (UseDebug)
+        printf("TX DUC FIFO Underflowed, depth now = %d\n", Current);
+}
+
 //
 // listener thread for incoming DUC I/Q packets
 // planned strategy: just DMA spkr data when available; don't copy and DMA a larger amount.
@@ -74,6 +103,7 @@ void *IncomingDUCIQ(void *arg)                          // listener thread
     unsigned int Current;                                   // current occupied locations in FIFO
     unsigned int StartupCount = 0;                          // used to delay reporting of under & overflows
     bool PrevSDRActive = false;                             // used to detect change of state
+    bool UnderflowActive = false;                           // tracks one continuous starvation episode
     uint32_t BatchFrames = 0;
     uint32_t BatchBytes = 0;
 
@@ -136,7 +166,12 @@ void *IncomingDUCIQ(void *arg)                          // listener thread
 
         bool SDRActiveNow = atomic_load(&SDRActive);
         if(SDRActiveNow && !PrevSDRActive)                  // detect SDRActive has been asserted
+        {
             StartupCount = VSTARTUPDELAY;
+            UnderflowActive = false;
+        }
+        else if(!SDRActiveNow)
+            UnderflowActive = false;
         PrevSDRActive = SDRActiveNow;
 
         memset(&iovecinst, 0, sizeof(struct iovec));
@@ -196,16 +231,7 @@ void *IncomingDUCIQ(void *arg)                          // listener thread
             Depth = ReadFIFOMonitorChannel(eTXDUCDMA, &FIFOOverflow, &FIFOOverThreshold, &FIFOUnderflow, &Current);           // read the FIFO free locations
             if((StartupCount == 0) && FIFOOverThreshold && UseDebug)
                 printf("TX DUC FIFO Overthreshold, depth now = %d\n", Current);
-
-            if((StartupCount == 0) && FIFOUnderflow)
-            {
-                pthread_mutex_lock(&g_fifo_overflow_mutex);
-                GlobalFIFOOverflows |= 0b00000100;
-                pthread_mutex_unlock(&g_fifo_overflow_mutex);
-                P23PerfTelemetryCounterAdd(eP23PerfCounterFIFODucUnder, 1U);
-                if(UseDebug)
-                    printf("TX DUC FIFO Underflowed, depth now = %d\n", Current);
-            }
+            NoteDUCUnderflow((StartupCount == 0) && SDRActiveNow, FIFOUnderflow, &UnderflowActive, Current);
 
             while ((Depth < (VMEMWORDSPERFRAME * BatchFrames)) && !atomic_load(&ExitRequested))       // loop till space available
             {
@@ -213,15 +239,7 @@ void *IncomingDUCIQ(void *arg)                          // listener thread
                 Depth = ReadFIFOMonitorChannel(eTXDUCDMA, &FIFOOverflow, &FIFOOverThreshold, &FIFOUnderflow, &Current);       // read the FIFO free locations
                 if((StartupCount == 0) && FIFOOverThreshold && UseDebug)
                     printf("TX DUC FIFO Overthreshold, depth now = %d\n", Current);
-                if((StartupCount == 0) && FIFOUnderflow)
-                {
-                    pthread_mutex_lock(&g_fifo_overflow_mutex);
-                    GlobalFIFOOverflows |= 0b00000100;
-                    pthread_mutex_unlock(&g_fifo_overflow_mutex);
-                    P23PerfTelemetryCounterAdd(eP23PerfCounterFIFODucUnder, 1U);
-                    if(UseDebug)
-                        printf("TX DUC FIFO Underflowed, depth now = %d\n", Current);
-                }
+                NoteDUCUnderflow((StartupCount == 0) && SDRActiveNow, FIFOUnderflow, &UnderflowActive, Current);
             }
             if(atomic_load(&ExitRequested))
                 break;
