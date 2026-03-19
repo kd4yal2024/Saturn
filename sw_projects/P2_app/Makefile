@@ -5,6 +5,7 @@
 CC = gcc
 LD = gcc
 CFLAGS = -Wall -Wextra -Wno-unused-function -g -D_GNU_SOURCE
+DEPFLAGS = -MMD -MP
 LDFLAGS = -lm -lpthread
 
 # NOTE (2026-01): keep "local" libs here. libgpiod link flags are added below
@@ -17,6 +18,7 @@ GIT_DATE := $(wordlist 2,5, $(shell git log -1 --format=%cd --date=rfc))
 
 SRCS = $(TARGET).c hwaccess.c saturnregisters.c codecwrite.c saturndrivers.c version.c generalpacket.c IncomingDDCSpecific.c  IncomingDUCSpecific.c InHighPriority.c InDUCIQ.c InSpkrAudio.c OutMicAudio.c OutDDCIQ.c OutHighPriority.c debugaids.c auxadc.c cathandler.c frontpanelhandler.c catmessages.c g2panel.c LDGATU.c g2v2panel.c i2cdriver.c andromedacatmessages.c Outwideband.c serialport.c AriesATU.c GanymedePAControl.c p23_perf_telemetry.c
 OBJS = $(SRCS:.c=.o)
+DEPS = $(OBJS:.o=.d)
 
 # for cppcheck
 CPP_OPTIONS= --inline-suppr --enable=all --suppress=unmatchedSuppression
@@ -32,10 +34,10 @@ cppcheck:
 	cppcheck $(CPP_OPTIONS) $(SRCS)
 
 %.o: %.c
-	$(CC) -c -o $(@F) $(CFLAGS) -D GIT_DATE='"$(GIT_DATE)"' $<
+	$(CC) -c -o $(@F) $(CFLAGS) $(DEPFLAGS) -D GIT_DATE='"$(GIT_DATE)"' $<
 
 clean:
-	rm -rf $(TARGET) *.o *.bin
+	rm -rf $(TARGET) *.o *.d *.bin
 
 # =============================================================================
 # BEGIN GPIOD AUTO-DETECT (repo maintained)
@@ -79,8 +81,10 @@ $(info building with $(G2PANEL_SRC))
 
 # Build g2panel.o from the selected source file (output name stays g2panel.o)
 g2panel.o: $(G2PANEL_SRC) g2panel.h
-	$(CC) $(CFLAGS) -c $< -o $@
+	$(CC) $(CFLAGS) $(DEPFLAGS) -c $< -o $@
 
 # =============================================================================
 # END GPIOD AUTO-DETECT (repo maintained)
 # =============================================================================
+
+-include $(DEPS)

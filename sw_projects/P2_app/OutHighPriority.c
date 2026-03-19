@@ -218,8 +218,6 @@ void *OutgoingHighPriority(void *arg)
       wr_be_u16(UDPBuffer+39, PeakADC1MaxAmpl);                 // ADC1 peak hold
       wr_be_u16(UDPBuffer+41, PeakADC2MaxAmpl);                 // ADC2 peak hold
       MaybeWriteADCPeakTelemetry("p2", PeakADC1MaxAmpl, PeakADC2MaxAmpl, *(uint8_t *)(UDPBuffer+5));
-      PeakADC1MaxAmpl = 0;
-      PeakADC2MaxAmpl = 0;
       Word = (uint16_t)GetAnalogueIn(4);
       wr_be_u16(UDPBuffer+6, Word);                     // exciter power
       Word = (uint16_t)GetAnalogueIn(0);
@@ -281,6 +279,8 @@ void *OutgoingHighPriority(void *arg)
       P23PerfTelemetrySetADCSnapshot(PeakADC1MaxAmpl, PeakADC2MaxAmpl, *(uint8_t *)(UDPBuffer+5));
       if(*(uint8_t *)(UDPBuffer+5) != 0)
         P23PerfTelemetryCounterAdd(eP23PerfCounterADCOverflowEvents, 1U);
+      PeakADC1MaxAmpl = 0;
+      PeakADC2MaxAmpl = 0;
       FIFOOverflows = 0;
       Error = sendmsg(ThreadData -> Socketid, &datagram, 0);
 

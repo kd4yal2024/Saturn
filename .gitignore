@@ -15,3 +15,4 @@ __pycache__/
 
 # Local backups / local tools
 sw_projects/P2_app/p2app.prev.*
+update_manager/.saturngo-deploy-stage/

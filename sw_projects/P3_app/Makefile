@@ -5,6 +5,7 @@
 CC = gcc
 LD = gcc
 CFLAGS = -Wall -Wextra -Wno-unused-function -O2 -g -D_GNU_SOURCE
+DEPFLAGS = -MMD -MP
 LDFLAGS = -lm -lpthread
 .DEFAULT_GOAL := all
 
@@ -23,7 +24,7 @@ CPP_OPTIONS= --inline-suppr --enable=all --suppress=unmatchedSuppression
 CPP_OPTIONS += -D__linux__ --suppress=missingIncludeSystem --suppress=unusedFunction
 
 %.o: %.c
-	$(CC) -c -o $(@F) $(CFLAGS) -D GIT_DATE='"$(GIT_DATE)"' $<
+	$(CC) -c -o $(@F) $(CFLAGS) $(DEPFLAGS) -D GIT_DATE='"$(GIT_DATE)"' $<
 
 # =============================================================================
 # BEGIN GPIOD AUTO-DETECT (repo maintained)
@@ -65,13 +66,14 @@ endif
 
 G2PANEL_OBJ := $(G2PANEL_SRC:.c=.o)
 OBJS = $(BASE_SRCS:.c=.o) $(G2PANEL_OBJ)
+DEPS = $(OBJS:.o=.d)
 
 $(info building with $(G2PANEL_SRC))
 
 # Build the selected panel implementation as its own object, so switching
 # libgpiod major versions does not silently reuse a stale g2panel.o.
 $(G2PANEL_OBJ): $(G2PANEL_SRC) g2panel.h
-	$(CC) $(CFLAGS) -c $< -o $@
+	$(CC) $(CFLAGS) $(DEPFLAGS) -c $< -o $@
 
 # =============================================================================
 # END GPIOD AUTO-DETECT (repo maintained)
@@ -87,7 +89,9 @@ cppcheck:
 	cppcheck $(CPP_OPTIONS) $(BASE_SRCS) $(G2PANEL_SRC)
 
 clean:
-	rm -rf $(TARGET) p2app *.o *.bin
+	rm -rf $(TARGET) p2app *.o *.d *.bin
 
 smoke-shutdown: all
 	bash ./tools/shutdown_smoke.sh ./$(TARGET)
+
+-include $(DEPS)
