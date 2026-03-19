@@ -26,6 +26,8 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
 - New `p23-app-manager.sh` helper script for P2/P3 build/deploy/switch/revert actions via `/run`.
 - New `scripts/install-shutdown-waiter-service.sh` migration installer to deploy `saturn-shutdown-waiter.service`, initialize `/etc/default/saturn-shutdown-waiter`, and remove legacy `~/.config/autostart/g2-shutdown.desktop`.
 - Hidden P2/P3 Test Lab now includes a `Capture Snapshot` action that packages the current `/p23_perf` payload, derived runtime counters, and baseline sample summary into a copyable/downloadable JSON snapshot for lab review.
+- G2 Update page now includes a read-only `Show App / Firmware Info` action that prints the active P2/P3 app/version from `/p23_perf` plus the latest `p2app.service` startup banner lines for FPGA firmware, build date, bit-file date code, clocks, and startup die temperature.
+- G2 Update now includes `Update Web Manager Too`; when `update-G2.py` detects pulled changes under `update_manager/`, the page can automatically launch `update-saturn-go.sh --skip-git --verbose` as a separate final post-step after the G2 run completes, rebuilding from the already-updated active repo root.
 
 ### Changed
 - P2/P3 app speaker and DUC underrun telemetry now counts underflow episodes on edge transitions instead of incrementing on every FIFO-monitor poll while the same starvation condition is still active. This makes `/p23_perf` cumulative underrun history comparable across runs and prevents one recovery period from inflating the totals.

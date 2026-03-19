@@ -47,6 +47,7 @@ LOG_DIR = os.path.join(HOME, "saturn-logs")
 os.makedirs(LOG_DIR, exist_ok=True)
 LOG_FILE = os.path.join(LOG_DIR, f"saturn-update-{datetime.now().strftime('%Y%m%d-%H%M%S')}.log")
 BACKUP_DIR = os.path.join(HOME, f"saturn-backup-{datetime.now().strftime('%Y%m%d-%H%M%S')}")
+WEB_MANAGER_CHANGED = False
 
 # Optional banner dependency; do NOT hard fail if missing
 try:
@@ -176,6 +177,13 @@ def run(cmd, *, live=False, cwd=None, check=True, env=None):
         if check and cp.returncode != 0:
             err_out(f"Command failed ({cp.returncode}): {' '.join(cmd)}\n{out}")
         return cp.returncode, out
+
+def emit_web_manager_changed_marker(changed):
+    global WEB_MANAGER_CHANGED
+    WEB_MANAGER_CHANGED = bool(changed)
+    marker = f"SATURN_WEB_MANAGER_CHANGED={'1' if WEB_MANAGER_CHANGED else '0'}"
+    print(marker)
+    logging.info(marker)
 
 # -----------------------------
 # Logging (safe Tee that works in web/pipe)
@@ -348,8 +356,10 @@ def maybe_backup():
         err_out(f"Backup failed: {e}")
 
 def update_git():
+    global WEB_MANAGER_CHANGED
     if args.skip_git:
         warn("Skipping repository update")
+        emit_web_manager_changed_marker(False)
         return
     section("Git Update")
 
@@ -392,12 +402,19 @@ def update_git():
 
     _rc, out = run(["git", "rev-parse", "--short", "HEAD"], cwd=SATURN_DIR, check=False)
     after = out.strip()
+    WEB_MANAGER_CHANGED = False
     if before and after and before != after:
         _rc, out = run(["git", "log", "--oneline", f"{before}..HEAD"], cwd=SATURN_DIR, check=False)
         nchanges = len([ln for ln in out.splitlines() if ln.strip()])
         info(f"New commit: {after} ({nchanges} changes)")
+        _rc, out = run(["git", "diff", "--name-only", f"{before}..HEAD"], cwd=SATURN_DIR, check=False)
+        changed_paths = [ln.strip() for ln in out.splitlines() if ln.strip()]
+        WEB_MANAGER_CHANGED = any(path.startswith("update_manager/") for path in changed_paths)
+        if WEB_MANAGER_CHANGED:
+            info("Detected update_manager/ changes in this G2 update run")
     else:
         info("Up to date")
+    emit_web_manager_changed_marker(WEB_MANAGER_CHANGED)
     ok("Repository updated")
 
 def install_libraries():

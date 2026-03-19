@@ -192,6 +192,9 @@ Update behavior:
 ### Update G2 (Dedicated Terminal)
 
 - Run `update-G2.py` from the G2 Update page to keep terminal output and Appliance Update state together.
+- Use `Show App / Firmware Info` on the same page for a read-only status pull without starting an update run.
+- `Update Web Manager Too` is enabled by default and only takes effect when the current `Run Update G2` actually pulls changes under `update_manager/`.
+- The chained post-step runs `update-saturn-go.sh --skip-git --verbose`, so it rebuilds/redeploys from the already-updated active repo root and does not need a second Saturn Go git pull.
 - Repo URL in Appliance section must be valid before G2 run is enabled.
 - Backend injects active repo-root environment for `/run`:
   - `SATURN_REPO_ROOT`
@@ -201,6 +204,14 @@ Update behavior:
 - Python runs from `/run` set `PYTHONDONTWRITEBYTECODE=1` and `PYTHONPYCACHEPREFIX=/var/cache/saturn-python`.
 - This allows `update-G2.py` to target the active Saturn checkout without hardcoded path dependence.
 - Output can be resumed from backend run logs (`/run_log`) after navigating away and back.
+- The info action runs `g2-version-info.sh` via `/run` and prints:
+  - active P2/P3 selection and app version from `/p23_perf`
+  - current deployed app binary path
+  - the most recent `p2app.service` startup banner lines for FPGA product/firmware/build/date-code info
+  - the startup die-temperature line captured by the service log
+- When `Run Update G2` pulls new commits, `update-G2.py` now emits a marker if any changed path is under `update_manager/`.
+- If that marker is present and `Update Web Manager Too` is checked, the page automatically launches `update-saturn-go.sh --skip-git --verbose` after the G2 run finishes.
+- The follow-up Saturn Go self-update remains a separate final step, so the active G2 run is not interrupted mid-update; expect the page to disconnect briefly when `saturn-go.service` restarts near the end of that follow-up step.
 
 ### Saturn Go Self-Update (Dedicated Terminal + Redeploy)
 

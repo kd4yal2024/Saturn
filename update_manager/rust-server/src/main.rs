@@ -1091,6 +1091,10 @@ fn is_saturngo_update_script(script: &str) -> bool {
     script.eq_ignore_ascii_case("update-saturn-go.sh")
 }
 
+fn has_flag(flags: &[String], wanted: &str) -> bool {
+    flags.iter().any(|flag| flag == wanted)
+}
+
 fn is_safe_repo_part(value: &str) -> bool {
     !value.is_empty()
         && value
@@ -4442,6 +4446,7 @@ async fn run_sse(
     let repo_root_display = repo_root.display().to_string();
     let g2_script = is_g2_update_script(&script);
     let saturngo_script = is_saturngo_update_script(&script);
+    let saturngo_skip_git = saturngo_script && has_flag(&flags, "--skip-git");
     let g2_policy = if g2_script {
         let policy = load_update_policy(&state)
             .await
@@ -4460,13 +4465,17 @@ async fn run_sse(
         let policy = load_saturngo_update_policy(&state)
             .await
             .map_err(|e| json_error(StatusCode::INTERNAL_SERVER_ERROR, &e))?;
-        if !update_policy_repo_configured(&policy) {
+        if !saturngo_skip_git && !update_policy_repo_configured(&policy) {
             return Err(json_error(
                 StatusCode::BAD_REQUEST,
                 "Saturn Go repo URL is not configured. Save a GitHub repo URL first.",
             ));
         }
-        Some(policy)
+        if update_policy_repo_configured(&policy) {
+            Some(policy)
+        } else {
+            None
+        }
     } else {
         None
     };

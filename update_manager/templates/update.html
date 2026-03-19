@@ -122,9 +122,17 @@
 
         <div class="flex flex-wrap gap-3 items-center mb-3">
           <button id="g2-run" class="btn btn-primary px-5 py-2">Run Update G2</button>
+          <button id="g2-info" class="btn btn-primary px-5 py-2">Show App / Firmware Info</button>
           <button id="g2-clear" class="btn btn-ghost px-4 py-2">Clear Output</button>
           <progress id="g2-progress" max="100" value="0" class="hidden w-48"></progress>
         </div>
+
+        <label class="inline-flex items-center gap-2 mb-3 text-sm opacity-90">
+          <input id="g2-auto-webmgr" type="checkbox" class="h-4 w-4" checked />
+          <span>Update Web Manager Too</span>
+        </label>
+
+        <p class="text-xs opacity-75 mb-3">The info action is read-only. It shows the active P2/P3 app, current app version, and the latest startup banner with FPGA firmware and startup die temperature.</p>
 
         <pre id="g2-output" style="min-height:360px; max-height:520px; overflow:auto;"></pre>
       </div>
@@ -237,12 +245,16 @@ function loadSessionText(key, fallback=''){
 const G2_OUTPUT_LINES_KEY = 'saturn:update:g2-output-lines';
 const G2_OUTPUT_MAX_LINES = 2500;
 const UPDATE_STATUS_TEXT_KEY = 'saturn:update:status-text';
+const G2_RUN_SCRIPT_KEY = 'saturn:update:g2-run-script';
 const G2_RUN_ID_KEY = 'saturn:update:g2-run-id';
 const G2_RUN_NEXT_KEY = 'saturn:update:g2-run-next';
+const G2_AUTO_WEB_MANAGER_KEY = 'saturn:update:auto-web-manager';
 let g2OutputLines = [];
+let g2RunLogScript = 'update-G2.py';
 let g2RunLogRunId = '';
 let g2RunLogNext = 0;
 let g2RunLogPoll = null;
+let g2WebManagerChanged = null;
 
 function renderAnsiLines(lines){
   if (!Array.isArray(lines) || !lines.length) return '';
@@ -261,11 +273,28 @@ function restoreG2Output(){
     g2OutputLines = g2OutputLines.slice(-G2_OUTPUT_MAX_LINES);
     persistG2Output();
   }
+  const savedScript = loadSessionText(G2_RUN_SCRIPT_KEY, 'update-G2.py');
+  g2RunLogScript = savedScript || 'update-G2.py';
   g2RunLogRunId = loadSessionText(G2_RUN_ID_KEY, '');
   const savedNext = Number(loadSessionText(G2_RUN_NEXT_KEY, String(g2OutputLines.length)));
   g2RunLogNext = Number.isFinite(savedNext) && savedNext >= 0 ? savedNext : g2OutputLines.length;
   $('g2-output').innerHTML = renderAnsiLines(g2OutputLines);
   $('g2-output').scrollTop = $('g2-output').scrollHeight;
+}
+
+function restoreG2AutoWebManager(){
+  try{
+    const saved = localStorage.getItem(G2_AUTO_WEB_MANAGER_KEY);
+    $('g2-auto-webmgr').checked = saved === null ? true : saved === '1';
+  }catch(_e){
+    $('g2-auto-webmgr').checked = true;
+  }
+}
+
+function persistG2AutoWebManager(){
+  try{
+    localStorage.setItem(G2_AUTO_WEB_MANAGER_KEY, $('g2-auto-webmgr').checked ? '1' : '0');
+  }catch(_e){}
 }
 
 function appendG2(line){
@@ -281,6 +310,17 @@ function appendG2(line){
   persistG2Output();
   const out = $('g2-output');
   out.scrollTop = out.scrollHeight;
+}
+
+function handleG2SpecialLine(line){
+  const text = String(line || '');
+  const marker = text.match(/^SATURN_WEB_MANAGER_CHANGED=(0|1)$/);
+  if (!marker) return false;
+  g2WebManagerChanged = marker[1] === '1';
+  if (g2WebManagerChanged){
+    appendG2('\x1b[33mDetected update_manager/ changes in this G2 run.\x1b[0m');
+  }
+  return true;
 }
 
 function clearG2RunLogPoll(){
@@ -308,8 +348,9 @@ function resetG2BufferedState(){
 async function fetchBufferedG2RunLog(){
   if (g2RunInProgress) return;
   try{
+    const scriptName = g2RunLogScript || 'update-G2.py';
     const from = Math.max(0, Number(g2RunLogNext) || 0);
-    const r = await fetch(`./run_log?script=${encodeURIComponent('update-G2.py')}&from=${from}&limit=600`, { cache: 'no-store' });
+    const r = await fetch(`./run_log?script=${encodeURIComponent(scriptName)}&from=${from}&limit=600`, { cache: 'no-store' });
     if (!r.ok) return;
     const data = await r.json().catch(()=>({}));
     const runId = String(data.run_id || '');
@@ -393,6 +434,7 @@ async function sendBackupResponse(letter){
 
 $('backup-yes').addEventListener('click', ()=>sendBackupResponse('y'));
 $('backup-no').addEventListener('click', ()=>sendBackupResponse('n'));
+$('g2-auto-webmgr').addEventListener('change', persistG2AutoWebManager);
 
 $('g2-clear').addEventListener('click', ()=>{
   resetG2BufferedState();
@@ -401,44 +443,83 @@ $('g2-clear').addEventListener('click', ()=>{
 });
 
 let g2RunInProgress = false;
+let g2InfoInProgress = false;
 
-$('g2-run').addEventListener('click', async ()=>{
-  let selectedRepo;
-  try{
-    selectedRepo = parseRepoInput($('upd-repo-url').value);
-  }catch(e){
-    appendG2('\x1b[31m' + e.message + ' Configure Appliance Update first, then run G2.\x1b[0m');
-    syncG2RunPrereq();
+function syncG2ActionButtons(){
+  const runBtn = $('g2-run');
+  const infoBtn = $('g2-info');
+  if (g2RunInProgress || g2InfoInProgress) {
+    runBtn.disabled = true;
+    runBtn.title = g2RunInProgress ? 'G2 update is running' : 'Another G2 action is running';
+    if (infoBtn) {
+      infoBtn.disabled = true;
+      infoBtn.title = 'Another G2 action is running';
+    }
     return;
   }
+  if (infoBtn) {
+    infoBtn.disabled = false;
+    infoBtn.title = '';
+  }
+  try{
+    parseRepoInput($('upd-repo-url').value);
+    runBtn.disabled = false;
+    runBtn.title = '';
+  }catch(e){
+    runBtn.disabled = true;
+    runBtn.title = 'Enter a valid GitHub Repo URL in Appliance Update first';
+  }
+}
 
-  const btn = $('g2-run');
+async function runG2TerminalScript(script, selectedFlags, options = {}){
+  const requiresPolicy = options.requiresPolicy === true;
+  const showProgressBar = options.showProgressBar === true;
+  const startupMessage = String(options.startupMessage || '');
+  const preserveOutput = options.preserveOutput === true;
   const progress = $('g2-progress');
   clearG2RunLogPoll();
-  resetG2BufferedState();
-  g2RunInProgress = true;
-  btn.disabled = true;
-  progress.value = 0;
-  show(progress, true);
-  appendG2('\x1b[36mSaving update settings...\x1b[0m');
-
-  try{
-    const policy = await persistUpdatePolicy();
-    appendG2('\x1b[36mUsing repo ' + selectedRepo.owner + '/' + selectedRepo.repo + ' @ ' + String(policy.custom_ref || $('upd-branch').value.trim() || 'main') + '\x1b[0m');
-  }catch(e){
-    appendG2('\x1b[31mCannot start G2 update: ' + e.message + '\x1b[0m');
-    show(progress, false);
-    syncG2RunPrereq();
-    return;
+  g2RunLogScript = String(script || 'update-G2.py');
+  saveSessionText(G2_RUN_SCRIPT_KEY, g2RunLogScript);
+  if (!preserveOutput){
+    resetG2BufferedState();
+  } else if (g2OutputLines.length){
+    appendG2('');
   }
-
-  appendG2('\x1b[36mStarting update-G2.py...\x1b[0m');
-
-  const selectedFlags = Array.from(document.querySelectorAll('#g2-flags input[type=checkbox]:checked')).map(el=>el.value);
+  if (script === 'update-G2.py') {
+    g2RunInProgress = true;
+    g2WebManagerChanged = null;
+  } else {
+    g2InfoInProgress = true;
+  }
+  syncG2ActionButtons();
+  progress.value = 0;
+  show(progress, showProgressBar);
 
   try{
+    if (requiresPolicy) {
+      let selectedRepo;
+      try{
+        selectedRepo = parseRepoInput($('upd-repo-url').value);
+      }catch(e){
+        appendG2('\x1b[31m' + e.message + ' Configure Appliance Update first, then run G2.\x1b[0m');
+        return;
+      }
+      appendG2('\x1b[36mSaving update settings...\x1b[0m');
+      try{
+        const policy = await persistUpdatePolicy();
+        appendG2('\x1b[36mUsing repo ' + selectedRepo.owner + '/' + selectedRepo.repo + ' @ ' + String(policy.custom_ref || $('upd-branch').value.trim() || 'main') + '\x1b[0m');
+      }catch(e){
+        appendG2('\x1b[31mCannot start G2 update: ' + e.message + '\x1b[0m');
+        return;
+      }
+    }
+
+    if (startupMessage) {
+      appendG2(startupMessage);
+    }
+
     const fd = new FormData();
-    fd.append('script', 'update-G2.py');
+    fd.append('script', script);
     selectedFlags.forEach((f)=>fd.append('flags', f));
 
     const res = await fetch('./run', {
@@ -476,19 +557,58 @@ $('g2-run').addEventListener('click', async ()=>{
           continue;
         }
 
+        if (script === 'update-G2.py' && handleG2SpecialLine(line)){
+          continue;
+        }
+
         appendG2(line);
-        const m = line.match(/Progress:\s*(\d+)%/i);
-        if (m) progress.value = parseInt(m[1], 10);
+        if (showProgressBar) {
+          const m = line.match(/Progress:\s*(\d+)%/i);
+          if (m) progress.value = parseInt(m[1], 10);
+        }
       }
     }
   }catch(e){
     appendG2('\x1b[31mRun error: ' + e.message + '\x1b[0m');
   }finally{
-    g2RunInProgress = false;
-    syncG2RunPrereq();
     setTimeout(fetchBufferedG2RunLog, 250);
+    if (script === 'update-G2.py') {
+      const shouldChainSelfUpdate = g2WebManagerChanged === true && $('g2-auto-webmgr').checked;
+      g2RunInProgress = false;
+      if (g2WebManagerChanged === true && !shouldChainSelfUpdate){
+        appendG2('\x1b[33mupdate_manager/ changed during this G2 run, but web manager auto-update is off.\x1b[0m');
+      }
+      if (shouldChainSelfUpdate){
+        appendG2('\x1b[36mStarting Saturn Go self-update from the updated repo (--skip-git)...\x1b[0m');
+        setTimeout(()=>{
+          runG2TerminalScript('update-saturn-go.sh', ['--skip-git', '--verbose'], {
+            showProgressBar: true,
+            preserveOutput: true,
+            startupMessage: '\x1b[36mLaunching Saturn Go self-update as the final post-step...\x1b[0m',
+          });
+        }, 300);
+      }
+    } else {
+      g2InfoInProgress = false;
+    }
+    syncG2ActionButtons();
     setTimeout(()=>show(progress, false), 600);
   }
+}
+
+$('g2-run').addEventListener('click', async ()=>{
+  const selectedFlags = Array.from(document.querySelectorAll('#g2-flags input[type=checkbox]:checked')).map(el=>el.value);
+  await runG2TerminalScript('update-G2.py', selectedFlags, {
+    requiresPolicy: true,
+    showProgressBar: true,
+    startupMessage: '\x1b[36mStarting update-G2.py...\x1b[0m',
+  });
+});
+
+$('g2-info').addEventListener('click', async ()=>{
+  await runG2TerminalScript('g2-version-info.sh', [], {
+    startupMessage: '\x1b[36mCollecting current app, firmware, and startup banner info...\x1b[0m',
+  });
 });
 
 let updPoll = null;
@@ -565,7 +685,7 @@ function applyUpdatePolicyToForm(policy){
   $('upd-health-url').value = String(policy.healthcheck_url || updPolicyCache.healthcheck_url || 'http://127.0.0.1:8080/healthz');
   const timeout = Number(policy.healthcheck_timeout_secs || updPolicyCache.healthcheck_timeout_secs || 8);
   $('upd-health-timeout').value = Number.isFinite(timeout) && timeout > 0 ? String(timeout) : '8';
-  syncG2RunPrereq();
+  syncG2ActionButtons();
 }
 
 function getPolicyFromForm(){
@@ -587,23 +707,6 @@ function getPolicyFromForm(){
     healthcheck_url: healthUrl,
     healthcheck_timeout_secs: Number.isFinite(healthTimeout) && healthTimeout > 0 ? healthTimeout : 8,
   };
-}
-
-function syncG2RunPrereq(){
-  const btn = $('g2-run');
-  if (g2RunInProgress) {
-    btn.disabled = true;
-    btn.title = 'G2 update is running';
-    return;
-  }
-  try{
-    parseRepoInput($('upd-repo-url').value);
-    btn.disabled = false;
-    btn.title = '';
-  }catch(e){
-    btn.disabled = true;
-    btn.title = 'Enter a valid GitHub Repo URL in Appliance Update first';
-  }
 }
 
 async function persistUpdatePolicy(){
@@ -668,8 +771,8 @@ $('upd-policy-refresh').addEventListener('click', async ()=>{
   await loadActiveRepoRoot();
 });
 
-$('upd-repo-url').addEventListener('input', syncG2RunPrereq);
-$('upd-repo-url').addEventListener('blur', syncG2RunPrereq);
+$('upd-repo-url').addEventListener('input', syncG2ActionButtons);
+$('upd-repo-url').addEventListener('blur', syncG2ActionButtons);
 
 $('upd-policy-save').addEventListener('click', async ()=>{
   try{
@@ -722,11 +825,12 @@ $('upd-rollback').addEventListener('click', async ()=>{
 
 loadG2Flags();
 restoreG2Output();
+restoreG2AutoWebManager();
 setUpdateStatusText(loadSessionText(UPDATE_STATUS_TEXT_KEY, ''));
 loadUpdatePolicy();
 refreshUpdateStatus();
 loadActiveRepoRoot();
-syncG2RunPrereq();
+syncG2ActionButtons();
 fetchBufferedG2RunLog();
 </script>
 </body>

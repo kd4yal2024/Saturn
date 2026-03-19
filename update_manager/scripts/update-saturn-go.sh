@@ -128,7 +128,6 @@ REPO_ROOT="${SATURN_ACTIVE_REPO_ROOT:-${SATURN_REPO_ROOT:-}}"
 SATURNGO_URL="${SATURN_SATURNGO_POLICY_URL:-}"
 SATURNGO_REMOTE="${SATURN_SATURNGO_POLICY_REMOTE:-origin}"
 SATURNGO_REF="${SATURN_SATURNGO_POLICY_REF:-main}"
-[[ -n "$SATURNGO_URL" ]] || die "Saturn Go policy repo URL not configured. Save Saturn Go page settings first."
 
 RUST_DIR="$REPO_ROOT/update_manager/rust-server"
 TEMPLATES_DIR="$REPO_ROOT/update_manager/templates"
@@ -154,11 +153,16 @@ write_status "running" "init" "Starting Saturn Go self-update"
 
 progress 5
 info "Repo root: $REPO_ROOT"
-info "Remote: ${SATURNGO_REMOTE} -> ${SATURNGO_URL}"
+if [[ -n "$SATURNGO_URL" ]]; then
+  info "Remote: ${SATURNGO_REMOTE} -> ${SATURNGO_URL}"
+else
+  info "Remote: ${SATURNGO_REMOTE} (git update skipped; using active repo root)"
+fi
 info "Ref: ${SATURNGO_REF}"
 info "Service: ${SERVICE_NAME}"
 
 if (( ! SKIP_GIT )); then
+  [[ -n "$SATURNGO_URL" ]] || die "Saturn Go policy repo URL not configured. Save Saturn Go page settings first."
   STATUS_PHASE="git"
   write_status "running" "$STATUS_PHASE" "Updating git checkout"
   progress 10

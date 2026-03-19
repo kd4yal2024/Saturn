@@ -23,6 +23,8 @@ service names still use `saturn-go` for compatibility with existing installs.
 - Runtime repo-root switching via API/UI (`/list_repo_roots`, `/set_repo_root`)
 - G2 Update is the default landing page (`/`, `update.html`) with Appliance Update policy/start/rollback
 - Appliance Update policy panel (right side on desktop, below G2 terminal on narrow screens) stores GitHub repo URL + branch/ref + health-check values used by both Appliance Update and Run Update G2
+- G2 Update page includes a read-only `Show App / Firmware Info` action that reports the active P2/P3 app, app version, and the latest `p2app.service` startup banner with FPGA firmware/build/date-code details
+- G2 Update page also includes `Update Web Manager Too`; when enabled, `Run Update G2` watches for repo changes under `update_manager/` and automatically launches `update-saturn-go.sh --skip-git` as a detached final step after the G2 run completes, reusing the just-updated active repo root instead of requiring a separate Saturn Go repo pull
 - Dedicated piHPSDR Update page (`pihpsdr.html`) for `update-pihpsdr.py` terminal execution
 - Dedicated FPGA Flash page (`fpga.html`) for `flash_fpga.sh` using `load-FPGA` (`-b`, `-v`, `-f`) with explicit confirmation guard
 - Dedicated Custom Scripts page (`custom.html` / `index.html`) to add/update/delete runnable scripts from browser with file upload + flag metadata
