@@ -27,6 +27,9 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
 - New `scripts/install-shutdown-waiter-service.sh` migration installer to deploy `saturn-shutdown-waiter.service`, initialize `/etc/default/saturn-shutdown-waiter`, and remove legacy `~/.config/autostart/g2-shutdown.desktop`.
 
 ### Changed
+- `update-saturn-go.sh` now deploys the same web/script asset set as provisioning: release binary, HTML pages, `config.json`, `themes.json`, and packaged runtime scripts, while preserving browser-managed extra scripts in `/opt/saturn-go/scripts`.
+- Hidden P2/P3 Test Lab `/p23test` now uses a workload-first dashboard layout instead of a single dense text block, making host pressure and app behavior easier to read together.
+- `/p23_perf` now includes workload tags plus optional app-exported telemetry (`/dev/shm/saturn_p23_perf_stats.json`) so the lab can correlate host metrics with DDC/wideband/mic/DUC/speaker activity.
 - ADC peak telemetry documentation now matches runtime behavior: disabling the
   feature removes the enable flag and stops updates, but the last `/dev/shm`
   snapshot is retained until overwritten or removed.

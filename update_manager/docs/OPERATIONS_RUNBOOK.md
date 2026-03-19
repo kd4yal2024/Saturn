@@ -225,6 +225,8 @@ Typical test sequence:
 Operational notes:
 
 - The script builds from the active repo root selected on Backup / Restore page (`SATURN_ACTIVE_REPO_ROOT`).
+- The deploy payload includes the release binary, all HTML web assets, `config.json`, `themes.json`, and packaged scripts from `update_manager/scripts`.
+- Browser-managed extra scripts in `/opt/saturn-go/scripts` are left in place; the self-update only refreshes the repo-managed files.
 - Final stop/copy/start of `saturn-go.service` is dispatched via detached `systemd-run` helper (`saturn-go-self-deploy-<timestamp>`).
 - The web terminal may disconnect when `saturn-go.service` restarts; reload after ~10-20 seconds.
 - Some successful lines may still be prefixed `ERR:` in the terminal because `cargo` and `systemd-run` emit informational output on stderr.
@@ -244,6 +246,7 @@ Capabilities:
 - `Revert To Unit Default` (removes Saturn override and restores unit `ExecStart`)
 - `Emergency Revert Now` button (forces a real revert + restart even if `Dry run` / `No restart` options are selected)
 - Separate status panel backed by `GET /p23_status`
+- Separate workload/performance dashboard backed by `GET /p23_perf`
 
 Switching implementation details:
 
@@ -256,6 +259,13 @@ Switching implementation details:
   - startup profile (`panel`, `panel-debug`, `headless`) -> mapped service args
   - `Environment=SATURN_FRONT_PANEL_MODE=...` (`auto`, `g2`, `g2v2`, `prefer-g2`, `prefer-g2v2`, `off`)
 - `GET /p23_status` parses the generated override comment metadata (`# saturn-p23 mode=... panel=...`) for display
+- `GET /p23_perf` overlays host metrics with workload tags and live app telemetry exported from `/dev/shm/saturn_p23_perf_stats.json`
+- The dashboard baseline resets automatically when the active workload identity changes (PID, selected app/mode, or routing shape)
+- The dashboard is organized around:
+  - workload identity and app shape
+  - host pressure (CPU, scheduler wait, memory, eth0, XDMA)
+  - app packet/DMA throughput for DDC, wideband, mic, DUC, and speaker paths
+  - app-side error/fifo/overflow deltas
 
 Safety/usage notes:
 

@@ -6,90 +6,247 @@
   <title>P2/P3 App Test Lab</title>
   <script src="https://cdn.jsdelivr.net/npm/ansi_up@5.2.1/ansi_up.min.js"></script>
   <style>
-    :root { color-scheme: dark; }
-    body { margin:0; font-family: ui-sans-serif, system-ui, sans-serif; background:#0b1220; color:#e5e7eb; }
-    .wrap { max-width: 1200px; margin: 0 auto; padding: 20px; }
-    .card { background: rgba(255,255,255,0.04); border:1px solid rgba(255,255,255,0.12); border-radius: 14px; padding: 16px; }
-    .grid { display:grid; grid-template-columns: 1.15fr .85fr; gap: 16px; }
-    .btn { border:1px solid rgba(255,255,255,0.18); background: rgba(255,255,255,0.06); color:#fff; border-radius:10px; padding:10px 12px; cursor:pointer; }
-    .btn:hover { background: rgba(255,255,255,0.1); }
-    .btn:disabled { opacity: .55; cursor: not-allowed; }
-    .btn.primary { background:#1d4ed8; border-color:#2563eb; }
+    :root {
+      color-scheme: dark;
+      --bg-0: #071018;
+      --bg-1: #0c1723;
+      --bg-2: #122131;
+      --bg-3: #182b40;
+      --line: rgba(255,255,255,0.1);
+      --line-strong: rgba(255,255,255,0.16);
+      --text: #e7edf5;
+      --muted: #a8b8ca;
+      --accent: #8ad4ff;
+      --good: #6ee7b7;
+      --warn: #fde68a;
+      --crit: #fca5a5;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Trebuchet MS", "Segoe UI", system-ui, sans-serif;
+      color: var(--text);
+      background:
+        radial-gradient(circle at top right, rgba(56, 189, 248, 0.12), transparent 28%),
+        radial-gradient(circle at top left, rgba(110, 231, 183, 0.10), transparent 24%),
+        linear-gradient(180deg, #08121c 0%, #071018 100%);
+    }
+    .wrap { max-width: 1400px; margin: 0 auto; padding: 22px; }
+    .card {
+      background: linear-gradient(180deg, rgba(18,33,49,0.98), rgba(11,23,35,0.98));
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      padding: 18px;
+      box-shadow: 0 14px 40px rgba(0,0,0,0.22);
+    }
+    .hero {
+      margin-bottom: 16px;
+      background:
+        linear-gradient(135deg, rgba(138,212,255,0.13), rgba(110,231,183,0.06)),
+        linear-gradient(180deg, rgba(18,33,49,0.98), rgba(11,23,35,0.98));
+    }
+    .main-grid {
+      display: grid;
+      grid-template-columns: 0.92fr 1.08fr;
+      gap: 16px;
+      align-items: start;
+    }
+    .overview-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
+      margin-bottom: 16px;
+    }
+    .overview-card {
+      min-height: 132px;
+      display: grid;
+      gap: 10px;
+      align-content: start;
+    }
+    .section-kicker {
+      font-size: 11px;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--accent);
+      opacity: 0.92;
+    }
     .row { display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
-    .muted { color:#cbd5e1; opacity:.9; }
-    .term { min-height: 460px; max-height: 680px; overflow:auto; background:#060b14; border-radius:10px; padding:12px; border:1px solid rgba(255,255,255,0.08); font: 13px/1.35 ui-monospace, SFMono-Regular, Menlo, monospace; }
-    .chip { display:inline-block; border-radius:999px; padding:3px 10px; border:1px solid rgba(255,255,255,0.18); font-size:12px; }
-    .list { display:grid; gap:8px; }
-    label { user-select: none; }
+    .row.space { justify-content: space-between; }
+    .btn {
+      border:1px solid rgba(255,255,255,0.18);
+      background: rgba(255,255,255,0.06);
+      color:#fff;
+      border-radius:12px;
+      padding:10px 12px;
+      cursor:pointer;
+      transition: background 120ms ease, border-color 120ms ease, transform 120ms ease;
+    }
+    .btn:hover { background: rgba(255,255,255,0.1); border-color: rgba(255,255,255,0.24); transform: translateY(-1px); }
+    .btn:disabled { opacity:.55; cursor:not-allowed; transform:none; }
+    .btn.primary { background:#184ea8; border-color:#2a63c6; }
+    .btn.danger { border-color: rgba(252,165,165,0.5); color: #fecaca; }
+    .muted { color: var(--muted); }
+    .summary {
+      font-size: 15px;
+      line-height: 1.45;
+      color: #dce6f2;
+    }
+    .chip {
+      display:inline-block;
+      border-radius:999px;
+      padding:4px 10px;
+      border:1px solid rgba(255,255,255,0.16);
+      font-size:12px;
+      background: rgba(255,255,255,0.04);
+    }
+    .list { display:grid; gap:10px; }
+    .option-grid { display:grid; gap:10px; }
+    label { user-select:none; color: #d7e2ef; }
     progress { width: 180px; height: 12px; }
     .hidden { display:none; }
     code { background: rgba(255,255,255,0.08); padding:2px 5px; border-radius:4px; }
-    @media (max-width: 960px) { .grid { grid-template-columns: 1fr; } }
+    .dashboard-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 10px;
+      margin-top: 12px;
+    }
+    .metric {
+      border: 1px solid rgba(255,255,255,0.08);
+      background: rgba(255,255,255,0.035);
+      border-radius: 14px;
+      padding: 12px;
+      min-height: 84px;
+    }
+    .metric-label {
+      font-size: 11px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin-bottom: 6px;
+    }
+    .metric-value {
+      font-size: 20px;
+      font-weight: 700;
+      line-height: 1.15;
+      color: #f7fbff;
+    }
+    .metric-sub {
+      font-size: 12px;
+      color: var(--muted);
+      margin-top: 6px;
+      line-height: 1.35;
+    }
+    .details-stack { display:grid; gap: 10px; margin-top: 14px; }
+    details {
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 12px;
+      background: rgba(255,255,255,0.02);
+      padding: 10px 12px;
+    }
+    summary {
+      cursor: pointer;
+      color: #dfe8f3;
+      font-weight: 600;
+    }
+    .term {
+      min-height: 340px;
+      max-height: 620px;
+      overflow:auto;
+      background:#050a11;
+      border-radius:12px;
+      padding:12px;
+      border:1px solid rgba(255,255,255,0.08);
+      font: 13px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
+    }
+    .term.compact { min-height: 120px; max-height: 240px; }
+    .note-list { display:grid; gap:7px; font-size:14px; }
+    .terminal-card { margin-top: 16px; }
+    .terminal-head { margin-bottom: 10px; }
+    hr { border:0; border-top:1px solid rgba(255,255,255,0.08); margin: 12px 0; }
+    @media (max-width: 1180px) {
+      .overview-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .main-grid { grid-template-columns: 1fr; }
+      .dashboard-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
+    @media (max-width: 720px) {
+      .overview-grid { grid-template-columns: 1fr; }
+      .dashboard-grid { grid-template-columns: 1fr; }
+      .wrap { padding: 14px; }
+    }
   </style>
 </head>
 <body>
   <div class="wrap">
-    <div class="card" style="margin-bottom:16px;">
-      <div class="row" style="justify-content:space-between;">
+    <div class="card hero">
+      <div class="row space">
         <div>
-          <h1 style="margin:0 0 6px 0; font-size: 28px;">P2 / P3 App Test Lab</h1>
-          <div class="muted">Hidden test page for building, deploying, and switching <code>p2app.service</code> between <code>P2_app</code> and <code>P3_app</code>. Not linked in nav.</div>
+          <div class="section-kicker">P2 / P3 Service Lab</div>
+          <h1 style="margin:4px 0 6px 0; font-size: 30px;">Build, switch, and read the live workload in one place</h1>
+          <div class="muted">Hidden test page for building, deploying, and switching <code>p2app.service</code> between <code>P2_app</code> and <code>P3_app</code>.</div>
         </div>
         <div class="chip">URL: /saturn/p23test</div>
       </div>
-      <div class="row" style="margin-top:10px; justify-content:space-between; gap:12px;">
-        <div class="muted" style="font-size:13px;">If a switch leaves the radio in an unusable local mode, use <code>Revert To Unit Default</code> here (or from another browser/device).</div>
-        <button id="p23-emergency-revert" class="btn" style="border-color:#fca5a5; color:#fecaca;">Emergency Revert Now</button>
+      <div class="row space" style="margin-top:12px;">
+        <div class="muted" style="font-size:13px;">If a switch leaves the radio in an unusable local mode, revert the override here or from another browser/device.</div>
+        <button id="p23-emergency-revert" class="btn danger">Emergency Revert Now</button>
       </div>
     </div>
 
-    <div class="grid">
-      <div class="card">
-        <div class="row" style="justify-content:space-between; margin-bottom:8px;">
-          <h2 style="margin:0; font-size: 20px;">Terminal</h2>
-          <div class="row">
-            <button id="p23-clear" class="btn">Clear</button>
-            <progress id="p23-progress" max="100" value="0" class="hidden"></progress>
+    <div class="overview-grid">
+      <div class="card overview-card">
+        <div class="row space">
+          <div>
+            <div class="section-kicker">Service</div>
+            <h2 style="margin:4px 0 0 0; font-size: 20px;">Runtime Status</h2>
           </div>
-        </div>
-        <div class="muted" style="margin-bottom:10px;">
-          Runs <code>p23-app-manager.sh</code> via <code>/run</code> with live output.
-        </div>
-        <pre id="p23-output" class="term"></pre>
-      </div>
-
-      <div class="card">
-        <div class="row" style="justify-content:space-between; margin-bottom:8px;">
-          <h2 style="margin:0; font-size: 20px;">P2/P3 Status</h2>
           <button id="p23-status-refresh" class="btn">Refresh</button>
         </div>
-        <div id="p23-status-summary" class="muted" style="margin-bottom:10px;">Loading...</div>
-        <pre id="p23-status-view" class="term" style="min-height:180px; max-height:260px; margin-bottom:14px;"></pre>
+        <div id="p23-status-summary" class="summary">Loading...</div>
+      </div>
 
-        <div class="row" style="justify-content:space-between; margin-bottom:8px;">
-          <h2 style="margin:0; font-size: 20px;">ADC Peak Telemetry</h2>
+      <div class="card overview-card">
+        <div class="section-kicker">Workload Tags</div>
+        <h2 style="margin:4px 0 0 0; font-size: 20px;">Current App Shape</h2>
+        <div id="p23-workload-summary" class="summary">Waiting for performance sample...</div>
+      </div>
+
+      <div class="card overview-card">
+        <div class="row space">
+          <div>
+            <div class="section-kicker">ADC Telemetry</div>
+            <h2 style="margin:4px 0 0 0; font-size: 20px;">Latest Snapshot</h2>
+          </div>
           <div class="row">
             <button id="p23-adc-enable" class="btn">Enable</button>
             <button id="p23-adc-disable" class="btn">Disable</button>
           </div>
         </div>
-        <div id="p23-adc-summary" class="muted" style="margin-bottom:10px;">Loading...</div>
-        <pre id="p23-adc-view" class="term" style="min-height:120px; max-height:180px; margin-bottom:14px;"></pre>
+        <div id="p23-adc-summary" class="summary">Loading...</div>
+      </div>
 
-        <div class="row" style="justify-content:space-between; margin-bottom:8px;">
-          <h2 style="margin:0; font-size: 20px;">Performance (P2/P3 Service)</h2>
+      <div class="card overview-card" id="p23-perf-card">
+        <div class="row space">
+          <div class="row">
+            <div>
+              <div class="section-kicker">Performance Health</div>
+              <h2 style="margin:4px 0 0 0; font-size: 20px;">Host + App</h2>
+            </div>
+          </div>
           <div class="row">
             <button id="p23-perf-refresh" class="btn">Refresh</button>
             <button id="p23-perf-reset" class="btn">Reset Baseline</button>
           </div>
         </div>
-        <div id="p23-perf-summary" class="muted" style="margin-bottom:10px;">Loading...</div>
-        <pre id="p23-perf-view" class="term" style="min-height:160px; max-height:240px; margin-bottom:14px;"></pre>
+        <div id="p23-perf-summary" class="summary">Loading...</div>
+      </div>
+    </div>
 
-        <hr style="border:0; border-top:1px solid rgba(255,255,255,0.08); margin: 8px 0 14px 0;">
-
-        <h2 style="margin:0 0 10px 0; font-size: 20px;">Actions</h2>
-        <div class="list" style="margin-bottom:14px;">
+    <div class="main-grid">
+      <div class="card">
+        <div class="section-kicker">Control Plane</div>
+        <h2 style="margin:4px 0 10px 0; font-size: 24px;">Actions</h2>
+        <div class="list" style="margin-bottom:16px;">
           <div class="row">
             <button class="btn primary p23-action" data-flags="--status">Status</button>
           </div>
@@ -108,8 +265,10 @@
           </div>
         </div>
 
-        <h3 style="margin:0 0 8px 0; font-size:16px;">Options</h3>
-        <div class="list" style="margin-bottom:12px;">
+        <hr>
+
+        <h3 style="margin:0 0 8px 0; font-size:18px;">Options</h3>
+        <div class="option-grid" style="margin-bottom:12px;">
           <label>Startup profile
             <select id="opt-startup-profile" class="btn" style="margin-left:8px;">
               <option value="panel" selected>Panel (service + panel)</option>
@@ -133,18 +292,62 @@
           <label><input id="opt-no-clean" type="checkbox"> No clean (skip <code>make clean</code>)</label>
         </div>
 
-        <h3 style="margin:0 0 8px 0; font-size:16px;">Notes</h3>
-        <div class="muted" style="display:grid; gap:6px; font-size: 14px;">
+        <hr>
+
+        <h3 style="margin:0 0 8px 0; font-size:18px;">Notes</h3>
+        <div class="muted note-list">
           <div>- Default service is <code>p2app.service</code>.</div>
           <div>- Deploy installs binaries under <code>/opt/saturn-go/p23-apps/</code> and switches a <code>current</code> symlink.</div>
           <div>- Service switching uses a systemd drop-in override (safer than editing the main unit file).</div>
-          <div>- <code>Front panel mode</code> sets <code>SATURN_FRONT_PANEL_MODE</code> for P2/P3: use <code>g2</code> or <code>g2v2</code> if auto detect picks the wrong panel.</div>
-          <div>- Performance panel polls lightweight `/p23_perf` snapshots and computes client-side deltas/baselines (CPU, RSS, scheduler delay, context switches, I/O).</div>
+          <div>- <code>Front panel mode</code> sets <code>SATURN_FRONT_PANEL_MODE</code> for P2/P3: use <code>g2</code> or <code>g2v2</code> if auto-detect picks the wrong panel.</div>
+          <div>- Performance view combines host metrics with app-published counters from <code>/dev/shm</code> when available.</div>
           <div>- ADC peak telemetry is optional and writes only a latest-snapshot JSON file in <code>/dev/shm</code> while enabled.</div>
           <div>- Web mode requires working <code>sudo -n</code> permissions for install/restart steps.</div>
           <div>- Shell emergency revert: <code>sudo /opt/saturn-go/scripts/p23-app-manager.sh --revert --verbose</code></div>
         </div>
       </div>
+
+      <div class="card" id="p23-runtime-card">
+        <div class="row space">
+          <div>
+            <div class="section-kicker">Runtime Dashboard</div>
+            <h2 style="margin:4px 0 0 0; font-size: 24px;">Performance (P2/P3 Service)</h2>
+          </div>
+          <div class="chip">Baseline auto-resets on workload changes</div>
+        </div>
+        <div id="p23-perf-dashboard" class="dashboard-grid" style="margin-top:14px;">
+          <div class="metric"><div class="metric-label">Loading</div><div class="metric-value">Waiting...</div></div>
+        </div>
+        <div class="details-stack">
+          <details>
+            <summary>Service Status JSON</summary>
+            <pre id="p23-status-view" class="term compact"></pre>
+          </details>
+          <details>
+            <summary>ADC Telemetry JSON</summary>
+            <pre id="p23-adc-view" class="term compact"></pre>
+          </details>
+          <details>
+            <summary>Raw Performance Snapshot</summary>
+            <pre id="p23-perf-raw" class="term compact"></pre>
+          </details>
+        </div>
+      </div>
+    </div>
+
+    <div class="card terminal-card">
+      <div class="row space terminal-head">
+        <div>
+          <div class="section-kicker">Execution Log</div>
+          <h2 style="margin:4px 0 0 0; font-size: 22px;">Terminal</h2>
+        </div>
+        <div class="row">
+          <button id="p23-clear" class="btn">Clear</button>
+          <progress id="p23-progress" max="100" value="0" class="hidden"></progress>
+        </div>
+      </div>
+      <div class="muted" style="margin-bottom:10px;">Runs <code>p23-app-manager.sh</code> via <code>/run</code> with live output.</div>
+      <pre id="p23-output" class="term"></pre>
     </div>
   </div>
 
@@ -171,6 +374,7 @@ let perfPollInFlight = false;
 let perfPrevSample = null;
 let perfBaseline = null;
 let perfProcessIdentity = '';
+let latestP23Status = null;
 const PERF_THRESH = {
   cpuCoreWarn: 60,
   cpuCoreCrit: 90,
@@ -245,6 +449,11 @@ function setAdcSummary(text, isError=false){
 function setAdcView(obj){
   $('p23-adc-view').textContent = JSON.stringify(obj || {}, null, 2);
 }
+function setWorkloadSummary(text, isError=false){
+  const el = $('p23-workload-summary');
+  el.textContent = text || '';
+  el.style.color = isError ? '#fca5a5' : '';
+}
 function setPerfSummary(text, isError=false){
   const el = $('p23-perf-summary');
   el.textContent = text || '';
@@ -252,25 +461,40 @@ function setPerfSummary(text, isError=false){
 }
 function setPerfAlertVisual(level){
   const summary = $('p23-perf-summary');
-  const view = $('p23-perf-view');
+  const card = $('p23-runtime-card');
+  const overview = $('p23-perf-card');
   summary.style.fontWeight = '';
   summary.style.color = '';
-  view.style.borderColor = 'rgba(255,255,255,0.08)';
-  view.style.boxShadow = 'none';
+  card.style.borderColor = 'rgba(255,255,255,0.1)';
+  card.style.boxShadow = '0 14px 40px rgba(0,0,0,0.22)';
+  overview.style.borderColor = 'rgba(255,255,255,0.1)';
   if (level === 'warn'){
     summary.style.color = '#fde68a';
     summary.style.fontWeight = '600';
-    view.style.borderColor = 'rgba(251,191,36,0.5)';
-    view.style.boxShadow = '0 0 0 1px rgba(251,191,36,0.15) inset';
+    card.style.borderColor = 'rgba(251,191,36,0.45)';
+    card.style.boxShadow = '0 0 0 1px rgba(251,191,36,0.15) inset, 0 14px 40px rgba(0,0,0,0.22)';
+    overview.style.borderColor = 'rgba(251,191,36,0.45)';
   } else if (level === 'crit'){
     summary.style.color = '#fca5a5';
     summary.style.fontWeight = '700';
-    view.style.borderColor = 'rgba(248,113,113,0.6)';
-    view.style.boxShadow = '0 0 0 1px rgba(248,113,113,0.2) inset';
+    card.style.borderColor = 'rgba(248,113,113,0.6)';
+    card.style.boxShadow = '0 0 0 1px rgba(248,113,113,0.18) inset, 0 14px 40px rgba(0,0,0,0.22)';
+    overview.style.borderColor = 'rgba(248,113,113,0.6)';
   }
 }
-function setPerfViewText(text){
-  $('p23-perf-view').textContent = text || '';
+function setPerfDashboardHtml(html){
+  $('p23-perf-dashboard').innerHTML = html || '';
+}
+function setPerfRawText(text){
+  $('p23-perf-raw').textContent = text || '';
+}
+function escapeHtml(value){
+  return String(value ?? '')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
 }
 function formatP23StatusSummary(p){
   if (!p || typeof p !== 'object') return 'No status data.';
@@ -308,11 +532,13 @@ async function loadP23Status(){
     const data = await r.json().catch(()=>({}));
     if (!r.ok) throw new Error(data.message || ('HTTP ' + r.status));
     const p = data.p23 || {};
+    latestP23Status = p;
     setStatusSummary(formatP23StatusSummary(p), false);
     setStatusView({ p23: p });
     setAdcSummary(formatAdcTelemetrySummary(p.adc_peak_telemetry || {}), false);
     setAdcView({ adc_peak_telemetry: p.adc_peak_telemetry || {} });
   }catch(e){
+    latestP23Status = null;
     setStatusSummary('Failed to load P2/P3 status: ' + e.message, true);
     setAdcSummary('Failed to load ADC telemetry: ' + e.message, true);
   }finally{
@@ -382,6 +608,61 @@ function fmtBytes(v){
   while (x >= 1024 && i < units.length - 1){ x /= 1024; i += 1; }
   return `${x.toFixed(i ? 1 : 0)} ${units[i]}`;
 }
+function counterValue(counters, key){
+  return Number(counters?.[key]) || 0;
+}
+function buildPerfIdentity(perf){
+  const proc = perf?.process || {};
+  const workload = perf?.workload || {};
+  const telemetry = perf?.app_telemetry || {};
+  const current = telemetry.current || {};
+  const ddcKey = Array.isArray(current?.routing?.ddc)
+    ? current.routing.ddc.map((item)=>`${item?.id ?? 'x'}:${item?.enabled ? 1 : 0}:${item?.interleaved ? 1 : 0}:${Number(item?.sample_rate_khz) || 0}`).join(',')
+    : 'ddc:none';
+  const wb = current?.routing?.wideband || {};
+  const wbKey = `${wb?.adc1_enabled ? 1 : 0}${wb?.adc2_enabled ? 1 : 0}:${Number(wb?.samples_per_packet) || 0}:${Number(wb?.sample_size_bits) || 0}:${Number(wb?.update_rate_ms) || 0}:${Number(wb?.packets_per_frame) || 0}`;
+  return [
+    Number(proc?.pid) || 0,
+    proc?.exe || '',
+    workload?.workload_key || '',
+    telemetry?.pid_matches_service ? 'live' : 'stale',
+    ddcKey,
+    wbKey,
+  ].join('|');
+}
+function metricCard(label, value, sub=''){
+  return `
+    <div class="metric">
+      <div class="metric-label">${escapeHtml(label)}</div>
+      <div class="metric-value">${escapeHtml(value)}</div>
+      <div class="metric-sub">${escapeHtml(sub)}</div>
+    </div>
+  `;
+}
+function formatWorkloadSummaryFromPerf(perf){
+  const workload = perf?.workload || {};
+  const telemetry = perf?.app_telemetry || {};
+  const current = telemetry.current || {};
+  const ddc = Array.isArray(current?.routing?.ddc) ? current.routing.ddc : [];
+  const enabledCount = ddc.filter((item)=>item?.enabled).length;
+  const interleavedCount = ddc.filter((item)=>item?.interleaved).length;
+  const wb = current?.routing?.wideband || {};
+  const state = current?.state || {};
+  const selected = String(
+    workload?.selected_app ||
+    latestP23Status?.deployed?.current?.selected_app ||
+    current?.app ||
+    'unknown'
+  ).toUpperCase();
+  const mode = workload?.startup_mode || latestP23Status?.override?.saturn_meta?.mode || 'n/a';
+  const panel = workload?.panel_mode || latestP23Status?.override?.panel_mode || latestP23Status?.override?.saturn_meta?.panel || 'n/a';
+  const wbMode = (wb?.adc1_enabled || wb?.adc2_enabled)
+    ? `WB ${(wb?.adc1_enabled && wb?.adc2_enabled) ? 'ADC1+ADC2' : (wb?.adc1_enabled ? 'ADC1' : 'ADC2')}`
+    : 'WB off';
+  const liveState = telemetry?.pid_matches_service ? 'live app stats' : 'host-only stats';
+  const radioState = state?.tx_mode ? 'TX' : 'RX';
+  return `App ${selected} | Mode ${mode} | Panel ${panel} | ${liveState} | DDC ${enabledCount} on / ${interleavedCount} interleaved | ${wbMode} | ${radioState}`;
+}
 function perfCounters(perf){
   const p = (perf && perf.process) || {};
   const stat = p.stat || {};
@@ -392,6 +673,8 @@ function perfCounters(perf){
   const eth0Rx = eth0.rx || {};
   const eth0Tx = eth0.tx || {};
   const xdma = perf?.xdma || {};
+  const telemetry = perf?.app_telemetry || {};
+  const appCurrent = telemetry?.current || {};
   return {
     tsMs: Number(perf?.collected_at_ms) || Date.now(),
     pid: Number(p.pid) || 0,
@@ -426,6 +709,18 @@ function perfCounters(perf){
     xdmaInterruptsTotal: Number(xdma.interrupts_total) || 0,
     xdmaPcieLinkSpeed: xdma?.pcie?.current_link_speed || null,
     xdmaPcieLinkWidth: xdma?.pcie?.current_link_width || null,
+    workloadKey: String(perf?.workload?.workload_key || ''),
+    selectedApp: perf?.workload?.selected_app || null,
+    startupMode: perf?.workload?.startup_mode || null,
+    panelMode: perf?.workload?.panel_mode || null,
+    appTelemetryPresent: !!telemetry?.snapshot_exists,
+    appPidMatchesService: !!telemetry?.pid_matches_service,
+    appAgeSeconds: Number(telemetry?.age_seconds),
+    appTimestampMs: (Number(appCurrent?.timestamp_epoch) || 0) * 1000,
+    appCounters: appCurrent?.counters || {},
+    appState: appCurrent?.state || {},
+    appFeatures: appCurrent?.features || {},
+    appRouting: appCurrent?.routing || {},
   };
 }
 function derivePerf(current){
@@ -454,6 +749,34 @@ function derivePerf(current){
   let ethRxDropDelta = NaN;
   let ethTxErrDelta = NaN;
   let ethTxDropDelta = NaN;
+  let hpPps = NaN;
+  let micPps = NaN;
+  let ddcPps = NaN;
+  let wbPps = NaN;
+  let ducPps = NaN;
+  let spkrPps = NaN;
+  let ddcDmaMiBs = NaN;
+  let wbDmaMiBs = NaN;
+  let micDmaKiBs = NaN;
+  let ducDmaMiBs = NaN;
+  let spkrDmaKiBs = NaN;
+  let hpSendErrDelta = NaN;
+  let micSendErrDelta = NaN;
+  let micDmaErrDelta = NaN;
+  let ddcSendErrDelta = NaN;
+  let ddcDmaErrDelta = NaN;
+  let ddcPartialDelta = NaN;
+  let ddcHeaderErrDelta = NaN;
+  let wbSendErrDelta = NaN;
+  let ducRecvErrDelta = NaN;
+  let ducDmaErrDelta = NaN;
+  let spkrRecvErrDelta = NaN;
+  let spkrDmaErrDelta = NaN;
+  let fifoDdcOverDelta = NaN;
+  let fifoMicOverDelta = NaN;
+  let fifoDucUnderDelta = NaN;
+  let fifoSpkrUnderDelta = NaN;
+  let adcOverflowEventDelta = NaN;
   if (perfPrevSample && perfPrevSample.pid === c.pid && c.tsMs > perfPrevSample.tsMs){
     dtSec = (c.tsMs - perfPrevSample.tsMs) / 1000;
     const dSys = c.sysTotal - perfPrevSample.sysTotal;
@@ -490,6 +813,37 @@ function derivePerf(current){
       if (Number.isFinite(xdmaIrqPerSec) && Number.isFinite(charTotalMiBs) && charTotalMiBs > 0){
         xdmaIrqPerMiB = xdmaIrqPerSec / charTotalMiBs;
       }
+      if (c.appPidMatchesService && perfPrevSample.appPidMatchesService){
+        const rate = (key)=> (counterValue(c.appCounters, key) - counterValue(perfPrevSample.appCounters, key)) / dtSec;
+        hpPps = rate('high_priority_packets');
+        micPps = rate('mic_packets');
+        ddcPps = rate('ddc_packets');
+        wbPps = rate('wideband_packets');
+        ducPps = rate('duc_packets');
+        spkrPps = rate('speaker_packets');
+        ddcDmaMiBs = rate('ddc_dma_read_bytes') / (1024 * 1024);
+        wbDmaMiBs = rate('wideband_dma_read_bytes') / (1024 * 1024);
+        micDmaKiBs = rate('mic_dma_read_bytes') / 1024;
+        ducDmaMiBs = rate('duc_dma_write_bytes') / (1024 * 1024);
+        spkrDmaKiBs = rate('speaker_dma_write_bytes') / 1024;
+        hpSendErrDelta = counterValue(c.appCounters, 'high_priority_send_errors') - counterValue(perfPrevSample.appCounters, 'high_priority_send_errors');
+        micSendErrDelta = counterValue(c.appCounters, 'mic_send_errors') - counterValue(perfPrevSample.appCounters, 'mic_send_errors');
+        micDmaErrDelta = counterValue(c.appCounters, 'mic_dma_errors') - counterValue(perfPrevSample.appCounters, 'mic_dma_errors');
+        ddcSendErrDelta = counterValue(c.appCounters, 'ddc_send_errors') - counterValue(perfPrevSample.appCounters, 'ddc_send_errors');
+        ddcDmaErrDelta = counterValue(c.appCounters, 'ddc_dma_errors') - counterValue(perfPrevSample.appCounters, 'ddc_dma_errors');
+        ddcPartialDelta = counterValue(c.appCounters, 'ddc_partial_sends') - counterValue(perfPrevSample.appCounters, 'ddc_partial_sends');
+        ddcHeaderErrDelta = counterValue(c.appCounters, 'ddc_header_errors') - counterValue(perfPrevSample.appCounters, 'ddc_header_errors');
+        wbSendErrDelta = counterValue(c.appCounters, 'wideband_send_errors') - counterValue(perfPrevSample.appCounters, 'wideband_send_errors');
+        ducRecvErrDelta = counterValue(c.appCounters, 'duc_recv_errors') - counterValue(perfPrevSample.appCounters, 'duc_recv_errors');
+        ducDmaErrDelta = counterValue(c.appCounters, 'duc_dma_errors') - counterValue(perfPrevSample.appCounters, 'duc_dma_errors');
+        spkrRecvErrDelta = counterValue(c.appCounters, 'speaker_recv_errors') - counterValue(perfPrevSample.appCounters, 'speaker_recv_errors');
+        spkrDmaErrDelta = counterValue(c.appCounters, 'speaker_dma_errors') - counterValue(perfPrevSample.appCounters, 'speaker_dma_errors');
+        fifoDdcOverDelta = counterValue(c.appCounters, 'fifo_rx_ddc_over_events') - counterValue(perfPrevSample.appCounters, 'fifo_rx_ddc_over_events');
+        fifoMicOverDelta = counterValue(c.appCounters, 'fifo_mic_over_events') - counterValue(perfPrevSample.appCounters, 'fifo_mic_over_events');
+        fifoDucUnderDelta = counterValue(c.appCounters, 'fifo_duc_under_events') - counterValue(perfPrevSample.appCounters, 'fifo_duc_under_events');
+        fifoSpkrUnderDelta = counterValue(c.appCounters, 'fifo_speaker_under_events') - counterValue(perfPrevSample.appCounters, 'fifo_speaker_under_events');
+        adcOverflowEventDelta = counterValue(c.appCounters, 'adc_overflow_events') - counterValue(perfPrevSample.appCounters, 'adc_overflow_events');
+      }
     }
   }
   perfPrevSample = c;
@@ -520,6 +874,34 @@ function derivePerf(current){
     ethRxDropDelta,
     ethTxErrDelta,
     ethTxDropDelta,
+    hpPps,
+    micPps,
+    ddcPps,
+    wbPps,
+    ducPps,
+    spkrPps,
+    ddcDmaMiBs,
+    wbDmaMiBs,
+    micDmaKiBs,
+    ducDmaMiBs,
+    spkrDmaKiBs,
+    hpSendErrDelta,
+    micSendErrDelta,
+    micDmaErrDelta,
+    ddcSendErrDelta,
+    ddcDmaErrDelta,
+    ddcPartialDelta,
+    ddcHeaderErrDelta,
+    wbSendErrDelta,
+    ducRecvErrDelta,
+    ducDmaErrDelta,
+    spkrRecvErrDelta,
+    spkrDmaErrDelta,
+    fifoDdcOverDelta,
+    fifoMicOverDelta,
+    fifoDucUnderDelta,
+    fifoSpkrUnderDelta,
+    adcOverflowEventDelta,
     memAvailBytes: Number(current?.system?.memory?.available_bytes) || NaN,
     memTotalBytes: Number(current?.system?.memory?.total_bytes) || NaN,
     load1: Number(current?.system?.loadavg?.one),
@@ -535,6 +917,14 @@ function perfSeverityMax(a, b){
 function computePerfAlerts(d, baseline){
   const alerts = [];
   let level = 'ok';
+  if (d.appTelemetryPresent && !d.appPidMatchesService){
+    alerts.push('WARN app telemetry snapshot does not match current service PID');
+    level = perfSeverityMax(level, 'warn');
+  }
+  if (Number.isFinite(d.appAgeSeconds) && d.appAgeSeconds > 5){
+    alerts.push(`WARN app telemetry age ${fmtNum(d.appAgeSeconds)} s`);
+    level = perfSeverityMax(level, 'warn');
+  }
   if (Number.isFinite(d.schedDelayMsPerSec)){
     if (d.schedDelayMsPerSec >= PERF_THRESH.schedWaitCrit){
       alerts.push(`CRIT scheduler wait ${fmtNum(d.schedDelayMsPerSec)} ms/s`);
@@ -574,6 +964,59 @@ function computePerfAlerts(d, baseline){
   }
   return { level, alerts };
 }
+function renderPerfDashboard(d, perf, alertState, baseline){
+  const baselineAgeSec = (Date.now() - baseline.startedAtMs) / 1000;
+  const memPct = Number.isFinite(d.memAvailBytes) && Number.isFinite(d.memTotalBytes) && d.memTotalBytes > 0
+    ? ((d.memTotalBytes - d.memAvailBytes) / d.memTotalBytes) * 100
+    : NaN;
+  const app = perf?.app_telemetry?.current || {};
+  const ddc = Array.isArray(app?.routing?.ddc) ? app.routing.ddc : [];
+  const enabledCount = ddc.filter((item)=>item?.enabled).length;
+  const interleavedCount = ddc.filter((item)=>item?.interleaved).length;
+  const wb = app?.routing?.wideband || {};
+  const wbState = (wb?.adc1_enabled || wb?.adc2_enabled)
+    ? `${wb?.adc1_enabled && wb?.adc2_enabled ? 'ADC1+ADC2' : (wb?.adc1_enabled ? 'ADC1' : 'ADC2')} @ ${fmtInt(wb?.samples_per_packet)} smp/pkt`
+    : 'disabled';
+  const featureBits = [
+    app?.features?.control_panel ? 'panel' : null,
+    app?.features?.ganymede ? 'ganymede' : null,
+    app?.features?.ldg_atu ? 'ldg' : null,
+    app?.features?.aries_atu ? 'aries' : null,
+  ].filter(Boolean).join(', ') || 'none';
+  const errorBurst = [
+    `ADC ov ${fmtInt(d.adcOverflowEventDelta)}`,
+    `DDC send ${fmtInt(d.ddcSendErrDelta)}`,
+    `DDC dma ${fmtInt(d.ddcDmaErrDelta)}`,
+    `DDC hdr ${fmtInt(d.ddcHeaderErrDelta)}`,
+    `WB send ${fmtInt(d.wbSendErrDelta)}`,
+    `Mic send ${fmtInt(d.micSendErrDelta)}`,
+    `DUC recv ${fmtInt(d.ducRecvErrDelta)}`,
+    `Spkr recv ${fmtInt(d.spkrRecvErrDelta)}`,
+  ].join(' | ');
+  const fifoBurst = [
+    `RX DDC ${fmtInt(d.fifoDdcOverDelta)}`,
+    `Mic ${fmtInt(d.fifoMicOverDelta)}`,
+    `DUC ${fmtInt(d.fifoDucUnderDelta)}`,
+    `Spkr ${fmtInt(d.fifoSpkrUnderDelta)}`,
+  ].join(' | ');
+  return [
+    metricCard('CPU', `${fmtNum(d.cpuPctCore)}%`, `per-core | runtime ${fmtNum(d.runtimeMsPerSec)} ms/s | load ${fmtNum(d.load1)}/${fmtNum(d.load5)}/${fmtNum(d.load15)}`),
+    metricCard('Scheduler Wait', `${fmtNum(d.schedDelayMsPerSec)} ms/s`, `context ${fmtNum(d.ctxPerSec)} /s | faults ${fmtNum(d.minfltPerSec)} / ${fmtNum(d.majfltPerSec)} /s`),
+    metricCard('Memory', `${fmtNum(d.rssMb)} MiB`, `threads ${fmtInt(d.threads)} | FDs ${fmtInt(d.fdCount)} | system used ${fmtNum(memPct)}%`),
+    metricCard('eth0', `${fmtNum(d.ethRxMbps)} Mb/s RX`, `TX ${fmtNum(d.ethTxMbps)} Mb/s | RX ${fmtNum(d.ethRxPps)} pkt/s | TX ${fmtNum(d.ethTxPps)} pkt/s`),
+    metricCard('XDMA', `${fmtNum(d.xdmaIrqPerSec)} IRQ/s`, `PCIe ${d.xdmaPcieLinkSpeed || 'n/a'} x${d.xdmaPcieLinkWidth || 'n/a'} | ${fmtNum(d.xdmaIrqPerMiB)} IRQ/MiB`),
+    metricCard('Workload', `${String(d.selectedApp || perf?.workload?.selected_app || 'unknown').toUpperCase()} / ${d.startupMode || 'n/a'} / ${d.panelMode || 'n/a'}`, `DDC ${enabledCount} enabled, ${interleavedCount} interleaved | WB ${wbState}`),
+    metricCard('App Telemetry', d.appPidMatchesService ? 'live' : 'host-only', `uptime ${fmtInt(app?.uptime_sec)} s | features ${featureBits} | ${app?.state?.tx_mode ? 'TX' : 'RX'}`),
+    metricCard('App Packet Rate', `${fmtNum(d.ddcPps)} DDC pkt/s`, `HP ${fmtNum(d.hpPps)} | Mic ${fmtNum(d.micPps)} | WB ${fmtNum(d.wbPps)} pkt/s`),
+    metricCard('App Ingest Rate', `${fmtNum(d.ducPps)} DUC pkt/s`, `Spkr ${fmtNum(d.spkrPps)} pkt/s | DDC DMA ${fmtNum(d.ddcDmaMiBs)} MiB/s | WB DMA ${fmtNum(d.wbDmaMiBs)} MiB/s`),
+    metricCard('DMA Write Rate', `${fmtNum(d.ducDmaMiBs)} MiB/s DUC`, `Spkr ${fmtNum(d.spkrDmaKiBs)} KiB/s | Mic DMA ${fmtNum(d.micDmaKiBs)} KiB/s`),
+    metricCard('Event Deltas', errorBurst, fifoBurst),
+    metricCard('Baseline', `${fmtInt(baseline.samples)} samples`, `CPU avg ${baselineFmt(baseline.cpuPctCore, '%')} | XDMA avg ${baselineFmt(baseline.xdmaIrqPerSec, ' /s')} | age ${fmtNum(baselineAgeSec)} s`),
+    metricCard('I/O Proxy', `${fmtNum(d.charTotalMiBs)} MiB/s`, `read ${fmtNum(d.charReadKBs)} KiB/s | write ${fmtNum(d.charWriteKBs)} KiB/s | source ${(perf?.process?.io?.source || 'n/a')}`),
+    metricCard('Alerts', alertState.alerts.length ? alertState.alerts[0] : 'none', alertState.alerts.slice(1).join(' | ') || 'within current thresholds'),
+    metricCard('Errors / Drops', `RX err ${fmtInt(d.ethRxErrDelta)} drop ${fmtInt(d.ethRxDropDelta)}`, `TX err ${fmtInt(d.ethTxErrDelta)} drop ${fmtInt(d.ethTxDropDelta)} | XDMA lines ${(d.xdmaInterruptLines || []).map(x => `${x.irq}:${x.count}`).join(', ') || 'n/a'}`),
+  ].join('');
+}
 async function loadP23Perf(){
   if (perfPollInFlight) return;
   perfPollInFlight = true;
@@ -586,20 +1029,23 @@ async function loadP23Perf(){
       perfPrevSample = null;
       perfBaseline = newPerfBaseline();
       perfProcessIdentity = '';
+      setWorkloadSummary('No running p2app.service process.', true);
       setPerfSummary('p2app.service main process is not running.', true);
-      setPerfViewText(JSON.stringify({ perf }, null, 2));
+      setPerfDashboardHtml(metricCard('Service', 'not running', 'start or switch the service to collect samples'));
+      setPerfRawText(JSON.stringify({ perf }, null, 2));
       return;
     }
     if (!perfBaseline) perfBaseline = newPerfBaseline();
-    const d = derivePerf(perf);
-    const currentIdentity = `${d.pid}:${d.exe || ''}`;
+    const currentIdentity = buildPerfIdentity(perf);
     if (perfProcessIdentity && perfProcessIdentity !== currentIdentity){
       perfBaseline = newPerfBaseline();
       perfPrevSample = null;
-      setPerfSummary(`Process changed to PID ${d.pid}; performance baseline reset.`, false);
+      setPerfSummary('Workload changed; performance baseline reset.', false);
       setPerfAlertVisual('ok');
     }
+    const d = derivePerf(perf);
     perfProcessIdentity = currentIdentity;
+    setWorkloadSummary(formatWorkloadSummaryFromPerf(perf), false);
     const alertState = computePerfAlerts(d, perfBaseline);
     baselinePush(perfBaseline.cpuPctCore, d.cpuPctCore);
     baselinePush(perfBaseline.rssMb, d.rssMb);
@@ -611,51 +1057,18 @@ async function loadP23Perf(){
     baselinePush(perfBaseline.xdmaIrqPerSec, d.xdmaIrqPerSec);
     baselinePush(perfBaseline.xdmaIrqPerMiB, d.xdmaIrqPerMiB);
     perfBaseline.samples += 1;
-    const memPct = Number.isFinite(d.memAvailBytes) && Number.isFinite(d.memTotalBytes) && d.memTotalBytes > 0
-      ? ((d.memTotalBytes - d.memAvailBytes) / d.memTotalBytes) * 100
-      : NaN;
     const summaryPrefix = alertState.level === 'crit' ? '[CRIT] ' : (alertState.level === 'warn' ? '[WARN] ' : '');
     setPerfSummary(
-      `${summaryPrefix}PID ${d.pid} | CPU ${fmtNum(d.cpuPctCore)}% | Sched wait ${fmtNum(d.schedDelayMsPerSec)} ms/s | eth0 RX ${fmtNum(d.ethRxMbps)} Mb/s | XDMA IRQ ${fmtNum(d.xdmaIrqPerSec)} /s`
+      `${summaryPrefix}PID ${d.pid} | CPU ${fmtNum(d.cpuPctCore)}% | DDC ${fmtNum(d.ddcPps)} pkt/s | DUC ${fmtNum(d.ducPps)} pkt/s | XDMA ${fmtNum(d.xdmaIrqPerSec)} /s`
     );
     setPerfAlertVisual(alertState.level);
-    const baselineAgeSec = (Date.now() - perfBaseline.startedAtMs) / 1000;
-    const view = [
-      `Current`,
-      `  PID: ${d.pid}  State: ${d.state}  Threads: ${fmtInt(d.threads)}  FDs: ${fmtInt(d.fdCount)}`,
-      `  CPU (per-core): ${fmtNum(d.cpuPctCore)} %`,
-      `  CPU (total-capacity): ${fmtNum(d.cpuPctTotal)} %`,
-      `  Scheduler wait: ${fmtNum(d.schedDelayMsPerSec)} ms/s  (higher can indicate run-queue stalls)`,
-      `  Runtime on CPU: ${fmtNum(d.runtimeMsPerSec)} ms/s`,
-      `  RSS: ${fmtNum(d.rssMb)} MiB`,
-      `  I/O: read ${fmtNum(d.readKBs)} KiB/s | write ${fmtNum(d.writeKBs)} KiB/s`,
-      `  Char I/O proxy: read ${fmtNum(d.charReadKBs)} KiB/s | write ${fmtNum(d.charWriteKBs)} KiB/s | total ${fmtNum(d.charTotalMiBs)} MiB/s`,
-      `  Faults: minor ${fmtNum(d.minfltPerSec)} /s | major ${fmtNum(d.majfltPerSec)} /s`,
-      `  System: load ${fmtNum(d.load1)}/${fmtNum(d.load5)}/${fmtNum(d.load15)} | mem used ${fmtNum(memPct)}%`,
-      `  eth0: RX ${fmtNum(d.ethRxMbps)} Mb/s (${fmtNum(d.ethRxPps)} pkt/s) | TX ${fmtNum(d.ethTxMbps)} Mb/s (${fmtNum(d.ethTxPps)} pkt/s)`,
-      `  eth0 errors/drops (delta): rx err ${fmtInt(d.ethRxErrDelta)} drop ${fmtInt(d.ethRxDropDelta)} | tx err ${fmtInt(d.ethTxErrDelta)} drop ${fmtInt(d.ethTxDropDelta)}`,
-      `  XDMA IRQ: ${fmtNum(d.xdmaIrqPerSec)} /s | PCIe link ${d.xdmaPcieLinkSpeed || 'n/a'} x${d.xdmaPcieLinkWidth || 'n/a'}`,
-      `  XDMA efficiency proxy: ${fmtNum(d.xdmaIrqPerMiB)} IRQ/MiB of process char I/O`,
-      `  Alerts: ${alertState.alerts.length ? alertState.alerts.join(' | ') : 'none'}`,
-      '',
-      `Baseline (${fmtInt(perfBaseline.samples)} samples, ${fmtNum(baselineAgeSec)} s)`,
-      `  CPU (per-core): ${baselineFmt(perfBaseline.cpuPctCore, '%')}`,
-      `  RSS: ${baselineFmt(perfBaseline.rssMb, ' MiB')}`,
-      `  Scheduler wait: ${baselineFmt(perfBaseline.schedDelayMsPerSec, ' ms/s')}`,
-      `  Context switches: ${baselineFmt(perfBaseline.ctxPerSec, ' /s')}`,
-      `  eth0 RX throughput: ${baselineFmt(perfBaseline.ethRxMbps, ' Mb/s')}`,
-      `  eth0 TX throughput: ${baselineFmt(perfBaseline.ethTxMbps, ' Mb/s')}`,
-      `  eth0 RX packet rate: ${baselineFmt(perfBaseline.ethRxPps, ' pkt/s')}`,
-      `  XDMA interrupt rate: ${baselineFmt(perfBaseline.xdmaIrqPerSec, ' /s')}`,
-      `  XDMA IRQ per MiB (proxy): ${baselineFmt(perfBaseline.xdmaIrqPerMiB, ' IRQ/MiB')}`,
-      `  XDMA IRQ lines: ${d.xdmaInterruptLines.map(x => `${x.irq}:${x.count}`).join(', ') || 'n/a'}`,
-      '',
-      `Raw snapshot (for diffing/export)`,
-      JSON.stringify({ perf }, null, 2),
-    ].join('\n');
-    setPerfViewText(view);
+    setPerfDashboardHtml(renderPerfDashboard(d, perf, alertState, perfBaseline));
+    setPerfRawText(JSON.stringify({ perf }, null, 2));
   }catch(e){
+    setWorkloadSummary('Failed to load workload tags: ' + e.message, true);
     setPerfSummary('Failed to load P2/P3 performance metrics: ' + e.message, true);
+    setPerfDashboardHtml(metricCard('Performance', 'load failed', e.message));
+    setPerfRawText('');
     setPerfAlertVisual('crit');
   }finally{
     perfPollInFlight = false;
@@ -671,6 +1084,9 @@ function resetPerfBaseline(){
   perfPrevSample = null;
   perfProcessIdentity = '';
   setPerfSummary('Performance baseline reset. Waiting for samples...', false);
+  setWorkloadSummary('Waiting for the next workload sample...', false);
+  setPerfDashboardHtml(metricCard('Baseline', 'reset', 'waiting for the next live sample'));
+  setPerfRawText('');
   setPerfAlertVisual('ok');
 }
 function collectOptionFlags(baseFlags){

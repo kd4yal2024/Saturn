@@ -66,6 +66,7 @@ const DEFAULT_CUSTOM_SCRIPT_CLEAN_BACKUPS: &str =
     include_str!("../../scripts/cleanup-saturn-backups.sh");
 const P23_ADC_PEAK_TELEMETRY_ENABLE_FILE: &str = "/dev/shm/saturn_p23_adc_peak_telemetry.enabled";
 const P23_ADC_PEAK_TELEMETRY_JSON_FILE: &str = "/dev/shm/saturn_p23_adc_peak_telemetry.json";
+const P23_APP_PERF_TELEMETRY_JSON_FILE: &str = "/dev/shm/saturn_p23_perf_stats.json";
 
 #[derive(Debug, Deserialize)]
 struct FlagsQuery {
@@ -2365,6 +2366,123 @@ async fn get_p23_perf(State(_state): State<AppState>) -> Response {
         if s.is_empty() { None } else { Some(s) }
     }
 
+    fn p23_workload_info(main_pid: Option<u32>) -> serde_json::Value {
+        let deploy_root = PathBuf::from("/opt/saturn-go/p23-apps");
+        let deploy_p2 = deploy_root.join("p2app");
+        let deploy_p3 = deploy_root.join("p3app");
+        let current_link = deploy_root.join("current");
+        let override_file = PathBuf::from("/etc/systemd/system/p2app.service.d/10-saturn-p23-switch.conf");
+
+        let current_target = fs::read_link(&current_link)
+            .ok()
+            .map(|p| p.display().to_string());
+        let current_target_abs = fs::canonicalize(&current_link)
+            .ok()
+            .map(|p| p.display().to_string());
+        let selected_app = match current_target_abs.as_deref() {
+            Some(v) if v == deploy_p2.display().to_string() => Some("p2"),
+            Some(v) if v == deploy_p3.display().to_string() => Some("p3"),
+            _ => None,
+        };
+
+        let override_contents = fs::read_to_string(&override_file).ok();
+        let panel_mode = override_contents.as_deref().and_then(|text| {
+            text.lines()
+                .map(str::trim)
+                .find_map(|line| {
+                    line.strip_prefix("Environment=SATURN_FRONT_PANEL_MODE=")
+                        .map(str::to_string)
+                })
+        });
+        let saturn_meta = override_contents.as_deref().and_then(|text| {
+            text.lines()
+                .map(str::trim)
+                .find_map(|line| {
+                    let meta = line.strip_prefix("# saturn-p23 ")?;
+                    let mut mode = None::<String>;
+                    let mut panel = None::<String>;
+                    for token in meta.split_whitespace() {
+                        if let Some(v) = token.strip_prefix("mode=") {
+                            mode = Some(v.to_string());
+                        } else if let Some(v) = token.strip_prefix("panel=") {
+                            panel = Some(v.to_string());
+                        }
+                    }
+                    Some(serde_json::json!({
+                        "mode": mode,
+                        "panel": panel,
+                    }))
+                })
+        });
+
+        let mode = saturn_meta
+            .as_ref()
+            .and_then(|meta| meta.get("mode"))
+            .and_then(|v| v.as_str())
+            .map(str::to_string);
+        let panel = panel_mode.clone().or_else(|| {
+            saturn_meta
+                .as_ref()
+                .and_then(|meta| meta.get("panel"))
+                .and_then(|v| v.as_str())
+                .map(str::to_string)
+        });
+        let selected = selected_app.unwrap_or("unknown");
+        let mode_key = mode.clone().unwrap_or_else(|| "n/a".to_string());
+        let panel_key = panel.clone().unwrap_or_else(|| "n/a".to_string());
+
+        serde_json::json!({
+            "selected_app": selected_app,
+            "current_target": current_target,
+            "current_target_abs": current_target_abs,
+            "startup_mode": mode,
+            "panel_mode": panel,
+            "saturn_meta": saturn_meta,
+            "service_main_pid": main_pid,
+            "workload_key": format!("{selected}|mode={mode_key}|panel={panel_key}"),
+        })
+    }
+
+    fn p23_app_perf_telemetry(main_pid: Option<u32>) -> serde_json::Value {
+        let snapshot = PathBuf::from(P23_APP_PERF_TELEMETRY_JSON_FILE);
+        let meta = fs::metadata(&snapshot).ok();
+        let modified = meta
+            .as_ref()
+            .and_then(|m| m.modified().ok())
+            .map(|t| chrono::DateTime::<Local>::from(t).to_rfc3339());
+        let current = fs::read_to_string(&snapshot)
+            .ok()
+            .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok());
+        let snapshot_pid = current
+            .as_ref()
+            .and_then(|v| v.get("pid"))
+            .and_then(|v| v.as_u64());
+        let pid_matches_service = match (main_pid, snapshot_pid) {
+            (Some(service_pid), Some(snapshot_pid)) => snapshot_pid == service_pid as u64,
+            _ => false,
+        };
+        let age_seconds = current
+            .as_ref()
+            .and_then(|v| v.get("timestamp_epoch"))
+            .and_then(|v| v.as_i64())
+            .and_then(|ts| {
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .ok()
+                    .map(|now| now.as_secs() as i64 - ts)
+            });
+
+        serde_json::json!({
+            "snapshot_file": snapshot.display().to_string(),
+            "snapshot_exists": snapshot.exists(),
+            "modified": modified,
+            "pid_matches_service": pid_matches_service,
+            "snapshot_pid": snapshot_pid,
+            "age_seconds": age_seconds,
+            "current": current,
+        })
+    }
+
     let service_name = "p2app.service";
     let main_pid = systemctl_value(&["show", "-p", "MainPID", "--value", service_name])
         .await
@@ -2451,6 +2569,8 @@ async fn get_p23_perf(State(_state): State<AppState>) -> Response {
                 "wlan0": wlan0,
             },
             "xdma": parse_xdma_interrupts(),
+            "workload": p23_workload_info(main_pid),
+            "app_telemetry": p23_app_perf_telemetry(main_pid),
             "process": process,
         }
     }))

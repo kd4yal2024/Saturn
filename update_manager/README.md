@@ -105,7 +105,7 @@ Script definitions come from `config.json` plus browser-managed custom entries i
 - Set Saturn Go self-update policy: `POST /saturngo_policy`
 - Get Saturn Go deploy status: `GET /saturngo_deploy_status`
 - Get P2/P3 test-lab status (service/source/deploy/symlink/override): `GET /p23_status`
-- Get P2/P3 test-lab performance snapshot (process + network + XDMA/PCIe counters): `GET /p23_perf`
+- Get P2/P3 test-lab performance snapshot (host metrics + workload tags + optional app telemetry): `GET /p23_perf`
 - Start transactional update: `POST /update_start` with JSON `{ "channel":"stable|beta|custom", "custom_ref":"..." }`
 - Get update status + last state: `GET /update_status`
 - Roll back to previous repo root: `POST /update_rollback`
@@ -180,7 +180,8 @@ If a script entry does not define `version`, `/get_versions` now returns
 - The page runs `/opt/saturn-go/scripts/update-saturn-go.sh` to:
   - update the repo (optional)
   - rebuild the Rust backend (`cargo build --release`)
-  - copy web templates
+  - sync deployed web assets (`*.html`, `config.json`, `themes.json`)
+  - sync packaged scripts into `/opt/saturn-go/scripts` without removing browser-managed extras
   - dispatch a detached root helper to stop/copy/start `saturn-go.service`
 - UI run options map to script flags:
   - `--verbose`, `--dry-run`, `--skip-git`, `--skip-build`, `--skip-deploy`
@@ -198,11 +199,13 @@ If a script entry does not define `version`, `/get_versions` now returns
   - reverting to the original unit `ExecStart`
 - Uses `/opt/saturn-go/scripts/p23-app-manager.sh` via `/run`.
 - Status panel polls `GET /p23_status`.
-- Performance panel polls `GET /p23_perf` and computes client-side delta/baseline metrics for:
+- Performance panel polls `GET /p23_perf` and combines host metrics with workload tags and app-emitted counters for:
   - `p2app.service` main process CPU/RSS/scheduler wait/context switches/page faults
   - `eth0` throughput/packet rate/errors+drops
   - XDMA interrupt rate (`/proc/interrupts`) and PCIe link speed/width (`/sys/class/xdma/...`)
-- Performance panel includes threshold highlighting/alerts for CPU, scheduler wait, and XDMA interrupt spikes/drops versus baseline.
+- current workload shape (`P2`/`P3`, startup mode, panel mode, DDC enable/interleave state, wideband mode)
+- app packet/DMA/error counters for high-priority, DDC, wideband, mic, DUC, and speaker paths
+- Performance panel includes a workload-first dashboard layout plus threshold highlighting/alerts for CPU, scheduler wait, XDMA interrupt spikes/drops, and stale app telemetry.
 - When `/proc/<pid>/io` is unreadable for the active `p2app.service` process,
   `/p23_perf` now reports `process.io.source = "eth0_netdev_proxy"` and uses
   `eth0` RX/TX byte counters as the char-I/O proxy source so the hidden P23
@@ -229,10 +232,13 @@ cargo check
 cargo build --release
 ```
 
-Deploy binary:
+Quick manual redeploy:
 
 ```bash
 sudo cp target/release/saturn-go /opt/saturn-go/bin/saturn-go
+sudo cp ../templates/*.html /var/lib/saturn-web/
+sudo cp ../scripts/config.json ../scripts/themes.json /var/lib/saturn-web/
+sudo cp ../scripts/* /opt/saturn-go/scripts/
 sudo systemctl restart saturn-go.service
 ```
 

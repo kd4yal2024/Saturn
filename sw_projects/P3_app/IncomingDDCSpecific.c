@@ -26,6 +26,7 @@
 #include <string.h>
 #include "../common/saturnregisters.h"
 #include "../common/byteio.h"
+#include "../common/p23_perf_telemetry.h"
 #include "OutDDCIQ.h"
 #include <pthread.h>
 #include <syscall.h>
@@ -190,6 +191,7 @@ void *IncomingDDCSpecific(void *arg)                    // listener thread
 
         }
         SetP2SampleRate(i, Enabled, Word2, Interleaved);
+        P23PerfTelemetrySetDDCConfig((unsigned int)i, Enabled, Interleaved, Word2);
         Word = Word >> 1;                                 // move onto next DDC enabled bit
       }
       // now set register, and see if any changes made; reuse Dither again

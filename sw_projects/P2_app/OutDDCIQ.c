@@ -30,6 +30,7 @@
 #include "../common/saturndrivers.h"
 #include "../common/hwaccess.h"
 #include "../common/debugaids.h"
+#include "../common/p23_perf_telemetry.h"
 
 
 
@@ -419,7 +420,13 @@ void *OutgoingDDCIQ(void *arg)
                     if (Error == -1)
                     {
                         printf("Send Error, DDC=%d, errno=%d, socket id = %d\n", DDC, errno, (ThreadData+DDC)->Socketid);
+                        P23PerfTelemetryCounterAdd(eP23PerfCounterDDCSendErrors, 1U);
                         InitError = true;
+                    }
+                    else
+                    {
+                        P23PerfTelemetryCounterAdd(eP23PerfCounterDDCPackets, 1U);
+                        P23PerfTelemetryCounterAdd(eP23PerfCounterDDCBytes, VDDCPACKETSIZE);
                     }
                 }
                 //
@@ -457,6 +464,7 @@ void *OutgoingDDCIQ(void *arg)
                 pthread_mutex_lock(&g_fifo_overflow_mutex);
                 GlobalFIFOOverflows |= 0b00000001;
                 pthread_mutex_unlock(&g_fifo_overflow_mutex);
+                P23PerfTelemetryCounterAdd(eP23PerfCounterFIFORXDdcOver, 1U);
                 if(UseDebug)
                     printf("RX DDC FIFO Overthreshold, depth now = %d\n", Current);
             }
@@ -474,6 +482,7 @@ void *OutgoingDDCIQ(void *arg)
                     pthread_mutex_lock(&g_fifo_overflow_mutex);
                     GlobalFIFOOverflows |= 0b00000001;
                     pthread_mutex_unlock(&g_fifo_overflow_mutex);
+                    P23PerfTelemetryCounterAdd(eP23PerfCounterFIFORXDdcOver, 1U);
                     if(UseDebug)
                         printf("RX DDC FIFO Overthreshold, depth now = %d\n", Current);
                 }
@@ -490,7 +499,13 @@ void *OutgoingDDCIQ(void *arg)
             else
                 DMATransferSize = 4096;
 
-            DMAReadFromFPGA(IQReadfile_fd, DMAHeadPtr, DMATransferSize, VADDRDDCSTREAMREAD);
+            if(DMAReadFromFPGA(IQReadfile_fd, DMAHeadPtr, DMATransferSize, VADDRDDCSTREAMREAD) < 0)
+                P23PerfTelemetryCounterAdd(eP23PerfCounterDDCDMAErrors, 1U);
+            else
+            {
+                P23PerfTelemetryCounterAdd(eP23PerfCounterDDCDMAReads, 1U);
+                P23PerfTelemetryCounterAdd(eP23PerfCounterDDCDMAReadBytes, DMATransferSize);
+            }
             DMAHeadPtr += DMATransferSize;
             //
             // find header: may not be the 1st word
@@ -510,6 +525,7 @@ void *OutgoingDDCIQ(void *arg)
             if (HeaderFound == false)                                        // if rate flag not set
             {
 //                printf("Rate word not found when expected. rate= %08x\n", RateWord);
+                P23PerfTelemetryCounterAdd(eP23PerfCounterDDCHeaderErrors, 1U);
                 InitError = true;
                 exit(1);
             }
@@ -530,6 +546,7 @@ void *OutgoingDDCIQ(void *arg)
                 if(*(DMAReadPtr + 7) != 0x80)
                 {
                     printf("header not found for rate word at addr %lx\n", (uint64_t)DMAReadPtr);
+                    P23PerfTelemetryCounterAdd(eP23PerfCounterDDCHeaderErrors, 1U);
                     exit(1);
                 }
                 else                                                                    // analyse word, then process

@@ -77,6 +77,7 @@ extern bool ReplyAddressSet;                        // true when reply address h
 extern bool StartBitReceived;                       // true when "run" bit has been set
 extern bool NewMessageReceived;                     // set whenever a message is received
 extern bool ThreadError;                            // set true if a thread reports an error
+extern bool ExitRequested;                          // true when app-wide shutdown has been requested
 extern bool UseDebug;                               // true if debugging enabled
 extern uint8_t GlobalFIFOOverflows;                 // FIFO overflow words
 extern pthread_mutex_t g_fifo_overflow_mutex;       // protect GlobalFIFOOverflows from race conditions

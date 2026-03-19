@@ -5,7 +5,7 @@ set -euo pipefail
 # Rebuild and redeploy Saturn Update Manager (saturn-go) from the active Saturn repo.
 # Intended to be run from the web UI via /run (SSE terminal output).
 
-SCRIPT_VERSION="1.0.0"
+SCRIPT_VERSION="1.1.0"
 SCRIPT_NAME="$(basename "$0")"
 
 SKIP_GIT=0
@@ -147,6 +147,8 @@ trap 'rc=$?; if (( rc != 0 )); then write_status "error" "$STATUS_PHASE" "Saturn
 [[ -f "$RUST_DIR/Cargo.toml" ]] || die "Rust server Cargo.toml not found: $RUST_DIR/Cargo.toml"
 [[ -d "$TEMPLATES_DIR" ]] || die "Templates dir not found: $TEMPLATES_DIR"
 [[ -d "$SCRIPTS_SRC_DIR" ]] || die "Scripts dir not found: $SCRIPTS_SRC_DIR"
+[[ -f "$SCRIPTS_SRC_DIR/config.json" ]] || die "Missing config.json in $SCRIPTS_SRC_DIR"
+[[ -f "$SCRIPTS_SRC_DIR/themes.json" ]] || die "Missing themes.json in $SCRIPTS_SRC_DIR"
 
 write_status "running" "init" "Starting Saturn Go self-update"
 
@@ -222,29 +224,36 @@ if (( SKIP_DEPLOY )); then
   exit 0
 fi
 
-STAGE_BASE="$REPO_ROOT/update_manager/.saturngo-deploy-stage"
+STAGE_BASE="${SATURN_SATURNGO_STAGE_BASE:-/var/tmp/saturngo-deploy-stage}"
 STAMP="$(date +%Y%m%d%H%M%S)"
 STAGE_DIR="$STAGE_BASE/$STAMP"
+STAGE_WEB_DIR="$STAGE_DIR/webroot"
+STAGE_SCRIPTS_DIR="$STAGE_DIR/scripts"
 UNIT_NAME="saturn-go-self-deploy-${STAMP}"
 
 info "Preparing staged deploy payload..."
 STATUS_PHASE="stage"
 write_status "running" "$STATUS_PHASE" "Preparing staged deploy payload"
-run_cmd mkdir -p "$STAGE_DIR/templates" "$STAGE_DIR/scripts"
+run_cmd mkdir -p "$STAGE_WEB_DIR" "$STAGE_SCRIPTS_DIR"
 if (( ! DRY_RUN )); then
   cp "$BIN_SRC" "$STAGE_DIR/saturn-go"
-  cp "$TEMPLATES_DIR"/*.html "$STAGE_DIR/templates/"
-  cp "$SCRIPTS_SRC_DIR/update-saturn-go.sh" "$STAGE_DIR/scripts/"
-  chmod 755 "$STAGE_DIR/saturn-go" "$STAGE_DIR/scripts/update-saturn-go.sh"
+  cp "$TEMPLATES_DIR"/*.html "$STAGE_WEB_DIR/"
+  cp "$SCRIPTS_SRC_DIR/config.json" "$STAGE_WEB_DIR/config.json"
+  cp "$SCRIPTS_SRC_DIR/themes.json" "$STAGE_WEB_DIR/themes.json"
+  find "$SCRIPTS_SRC_DIR" -maxdepth 1 -type f -exec cp "{}" "$STAGE_SCRIPTS_DIR/" \;
+  chmod 755 "$STAGE_DIR/saturn-go"
+  find "$STAGE_SCRIPTS_DIR" -maxdepth 1 -type f \( -name '*.sh' -o -name '*.py' \) -print0 | xargs -0 -r chmod 755
+  find "$STAGE_SCRIPTS_DIR" -maxdepth 1 -type f ! \( -name '*.sh' -o -name '*.py' \) -print0 | xargs -0 -r chmod 644
+  find "$STAGE_WEB_DIR" -maxdepth 1 -type f -print0 | xargs -0 -r chmod 644
 else
-  info "[dry-run] stage binary/templates/scripts under $STAGE_DIR"
+  info "[dry-run] stage binary, web assets, and packaged scripts under $STAGE_DIR"
 fi
 
-# Copy templates immediately so the UI updates even before the service restart.
-info "Deploying templates..."
+# Copy web assets immediately so the UI updates even before the service restart.
+info "Deploying web assets..."
 STATUS_PHASE="deploy"
-write_status "running" "$STATUS_PHASE" "Copying templates to webroot"
-run_cmd sudo -n cp "$TEMPLATES_DIR"/*.html "$DEPLOY_WEBROOT/"
+write_status "running" "$STATUS_PHASE" "Copying web assets to webroot"
+run_cmd sudo -n cp "$STAGE_WEB_DIR/"* "$DEPLOY_WEBROOT/"
 
 HELPER="$STAGE_DIR/deploy-root-helper.sh"
 if (( ! DRY_RUN )); then
@@ -291,10 +300,23 @@ JSON
 }
 trap 'rc=\$?; write_status "error" "root-deploy" "Root deploy helper failed" 1 "\$rc"; exit "\$rc"' ERR
 write_status "running" "root-deploy" "Root deploy helper started"
+SCRIPT_UID="\$(stat -c '%u' "$DEPLOY_SCRIPTS_DIR")"
+SCRIPT_GID="\$(stat -c '%g' "$DEPLOY_SCRIPTS_DIR")"
+mkdir -p "$DEPLOY_WEBROOT" "$DEPLOY_SCRIPTS_DIR"
 systemctl stop "$SERVICE_NAME"
 install -m 0755 "$STAGE_DIR/saturn-go" "$DEPLOY_BIN"
-cp "$STAGE_DIR/templates/"*.html "$DEPLOY_WEBROOT/"
-install -m 0755 "$STAGE_DIR/scripts/update-saturn-go.sh" "$DEPLOY_SCRIPTS_DIR/update-saturn-go.sh"
+for src in "$STAGE_WEB_DIR/"*; do
+  [[ -f "\$src" ]] || continue
+  install -m 0644 "\$src" "$DEPLOY_WEBROOT/\$(basename "\$src")"
+done
+for src in "$STAGE_SCRIPTS_DIR/"*; do
+  [[ -f "\$src" ]] || continue
+  mode=0644
+  case "\$src" in
+    *.sh|*.py) mode=0755 ;;
+  esac
+  install -m "\$mode" -o "\$SCRIPT_UID" -g "\$SCRIPT_GID" "\$src" "$DEPLOY_SCRIPTS_DIR/\$(basename "\$src")"
+done
 systemctl start "$SERVICE_NAME"
 write_status "success" "root-deploy" "Root deploy helper completed" 1 0
 EOF

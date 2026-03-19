@@ -30,6 +30,7 @@
 #include "../common/saturnregisters.h"
 #include "../common/hwaccess.h"
 #include "../common/debugaids.h"
+#include "../common/p23_perf_telemetry.h"
 
 
 //
@@ -140,6 +141,7 @@ void SetWidebandParams(uint8_t Enables, uint16_t SampleCount, uint8_t SampleSize
     StoredSampleSize = SampleSize;                      // sample resolution in bits (typ 16)
     StoredRate = Rate;                                  // update rate in ms
     StoredPacketCount = PacketCount;                    // packets to be transferred out
+    P23PerfTelemetrySetWidebandConfig(StoredEnables, StoredSamplePerPktCount, StoredSampleSize, StoredRate, StoredPacketCount);
     ParamsChanged = WBParamsChanged;
     pthread_mutex_unlock(&g_wideband_params_mutex);
 
@@ -173,6 +175,8 @@ uint32_t ReadFIFOContent()
             return 0;
         }
         sem_post(&MicWBDMAMutex);                       // get protected access
+        P23PerfTelemetryCounterAdd(eP23PerfCounterWidebandDMAReads, 1U);
+        P23PerfTelemetryCounterAdd(eP23PerfCounterWidebandDMAReadBytes, (uint64_t)WordCount * 8U);
         SampleCount = WordCount * 4;
 //        printf("word count in readFIFOContent = %d\n", WordCount);
     }
@@ -373,9 +377,12 @@ void *OutgoingWidebandSamples(void *arg)
                                 perror("sendmsg, Wideband");
                             else
                                 printf("short sendmsg, Wideband: sent %d of %zu bytes\n", Error, iovecinst[ADC].iov_len);
+                            P23PerfTelemetryCounterAdd(eP23PerfCounterWidebandSendErrors, 1U);
                             InitError = true;
                             break;
                         }
+                        P23PerfTelemetryCounterAdd(eP23PerfCounterWidebandPackets, 1U);
+                        P23PerfTelemetryCounterAdd(eP23PerfCounterWidebandBytes, (uint64_t)iovecinst[ADC].iov_len);
                         usleep(200);                    // gap between outgoing messages
                     }
                     if(InitError)

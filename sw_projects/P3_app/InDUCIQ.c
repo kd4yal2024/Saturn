@@ -27,6 +27,7 @@
 #include "../common/saturnregisters.h"
 #include "../common/saturndrivers.h"
 #include "../common/hwaccess.h"
+#include "../common/p23_perf_telemetry.h"
 #include <pthread.h>
 #include <syscall.h>
 
@@ -150,6 +151,7 @@ void *IncomingDUCIQ(void *arg)                          // listener thread
         if(size < 0 && errno != EAGAIN)
         {
             perror("recvfrom fail, TX I/Q data");
+            P23PerfTelemetryCounterAdd(eP23PerfCounterDUCRecvErrors, 1U);
             atomic_store(&ThreadError, true);
             break;
         }
@@ -162,6 +164,8 @@ void *IncomingDUCIQ(void *arg)                          // listener thread
                 if(StartupCount != 0)                                   // decrement startup message count
                     StartupCount--;
                 atomic_store(&NewMessageReceived, true);
+                P23PerfTelemetryCounterAdd(eP23PerfCounterDUCPackets, 1U);
+                P23PerfTelemetryCounterAdd(eP23PerfCounterDUCBytes, VDUCIQSIZE);
                 SrcPtr = (uint8_t *) (UDPInBuffer + 4);
                 DestPtr = (uint8_t *) (IQBasePtr + BatchBytes);
                 for (Cntr=0; Cntr < VIQSAMPLESPERFRAME; Cntr++)                     // samplecounter
@@ -182,6 +186,7 @@ void *IncomingDUCIQ(void *arg)                          // listener thread
                     if((errno == EAGAIN) || (errno == EWOULDBLOCK))
                         break;
                     perror("recvfrom fail while draining TX I/Q data");
+                    P23PerfTelemetryCounterAdd(eP23PerfCounterDUCRecvErrors, 1U);
                     atomic_store(&ThreadError, true);
                     break;
                 }
@@ -197,6 +202,7 @@ void *IncomingDUCIQ(void *arg)                          // listener thread
                 pthread_mutex_lock(&g_fifo_overflow_mutex);
                 GlobalFIFOOverflows |= 0b00000100;
                 pthread_mutex_unlock(&g_fifo_overflow_mutex);
+                P23PerfTelemetryCounterAdd(eP23PerfCounterFIFODucUnder, 1U);
                 if(UseDebug)
                     printf("TX DUC FIFO Underflowed, depth now = %d\n", Current);
             }
@@ -212,6 +218,7 @@ void *IncomingDUCIQ(void *arg)                          // listener thread
                     pthread_mutex_lock(&g_fifo_overflow_mutex);
                     GlobalFIFOOverflows |= 0b00000100;
                     pthread_mutex_unlock(&g_fifo_overflow_mutex);
+                    P23PerfTelemetryCounterAdd(eP23PerfCounterFIFODucUnder, 1U);
                     if(UseDebug)
                         printf("TX DUC FIFO Underflowed, depth now = %d\n", Current);
                 }
@@ -222,9 +229,12 @@ void *IncomingDUCIQ(void *arg)                          // listener thread
             {
                 if(DMAWriteToFPGA(DMAWritefile_fd, IQBasePtr, BatchBytes, VADDRDUCSTREAMWRITE) < 0)
                 {
+                    P23PerfTelemetryCounterAdd(eP23PerfCounterDUCDMAErrors, 1U);
                     atomic_store(&ThreadError, true);
                     break;
                 }
+                P23PerfTelemetryCounterAdd(eP23PerfCounterDUCDMAWrites, 1U);
+                P23PerfTelemetryCounterAdd(eP23PerfCounterDUCDMAWriteBytes, BatchBytes);
             }
         }
     }

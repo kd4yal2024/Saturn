@@ -27,6 +27,7 @@
 #include "../common/saturnregisters.h"
 #include "../common/saturndrivers.h"
 #include "../common/hwaccess.h"
+#include "../common/p23_perf_telemetry.h"
 #include <pthread.h>
 #include <syscall.h>
 
@@ -125,6 +126,7 @@ void *IncomingDUCIQ(void *arg)                          // listener thread
         if(size < 0 && errno != EAGAIN)
         {
             perror("recvfrom fail, TX I/Q data");
+            P23PerfTelemetryCounterAdd(eP23PerfCounterDUCRecvErrors, 1U);
             return NULL;
         }
         if(size == VDUCIQSIZE)
@@ -132,6 +134,8 @@ void *IncomingDUCIQ(void *arg)                          // listener thread
             if(StartupCount != 0)                                   // decrement startup message count
                 StartupCount--;
             NewMessageReceived = true;
+            P23PerfTelemetryCounterAdd(eP23PerfCounterDUCPackets, 1U);
+            P23PerfTelemetryCounterAdd(eP23PerfCounterDUCBytes, VDUCIQSIZE);
             Depth = ReadFIFOMonitorChannel(eTXDUCDMA, &FIFOOverflow, &FIFOOverThreshold, &FIFOUnderflow, &Current);           // read the FIFO free locations
             if((StartupCount == 0) && FIFOOverThreshold && UseDebug)
                 printf("TX DUC FIFO Overthreshold, depth now = %d\n", Current);
@@ -141,6 +145,7 @@ void *IncomingDUCIQ(void *arg)                          // listener thread
                 pthread_mutex_lock(&g_fifo_overflow_mutex);
                 GlobalFIFOOverflows |= 0b00000100;
                 pthread_mutex_unlock(&g_fifo_overflow_mutex);
+                P23PerfTelemetryCounterAdd(eP23PerfCounterFIFODucUnder, 1U);
                 if(UseDebug)
                     printf("TX DUC FIFO Underflowed, depth now = %d\n", Current);
             }
@@ -156,6 +161,7 @@ void *IncomingDUCIQ(void *arg)                          // listener thread
                     pthread_mutex_lock(&g_fifo_overflow_mutex);
                     GlobalFIFOOverflows |= 0b00000100;
                     pthread_mutex_unlock(&g_fifo_overflow_mutex);
+                    P23PerfTelemetryCounterAdd(eP23PerfCounterFIFODucUnder, 1U);
                     if(UseDebug)
                         printf("TX DUC FIFO Underflowed, depth now = %d\n", Current);
                 }
@@ -175,7 +181,13 @@ void *IncomingDUCIQ(void *arg)                          // listener thread
                 *DestPtr++ = *(SrcPtr+2);
                 SrcPtr += 6;                                        // point at next source sample
             }
-            DMAWriteToFPGA(DMAWritefile_fd, IQBasePtr, VDMATRANSFERSIZE, VADDRDUCSTREAMWRITE);
+            if(DMAWriteToFPGA(DMAWritefile_fd, IQBasePtr, VDMATRANSFERSIZE, VADDRDUCSTREAMWRITE) < 0)
+                P23PerfTelemetryCounterAdd(eP23PerfCounterDUCDMAErrors, 1U);
+            else
+            {
+                P23PerfTelemetryCounterAdd(eP23PerfCounterDUCDMAWrites, 1U);
+                P23PerfTelemetryCounterAdd(eP23PerfCounterDUCDMAWriteBytes, VDMATRANSFERSIZE);
+            }
         }
     }
 //

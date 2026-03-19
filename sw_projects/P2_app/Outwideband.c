@@ -30,6 +30,7 @@
 #include "../common/saturnregisters.h"
 #include "../common/hwaccess.h"
 #include "../common/debugaids.h"
+#include "../common/p23_perf_telemetry.h"
 
 
 //
@@ -128,6 +129,7 @@ void SetWidebandParams(uint8_t Enables, uint16_t SampleCount, uint8_t SampleSize
     StoredSampleSize = SampleSize;                      // sample resolution in bits (typ 16)
     StoredRate = Rate;                                  // update rate in ms
     StoredPacketCount = PacketCount;                    // packets to be transferred out
+    P23PerfTelemetrySetWidebandConfig(StoredEnables, StoredSamplePerPktCount, StoredSampleSize, StoredRate, StoredPacketCount);
 
     if(WBParamsChanged)
         printf("New WB data: Enables=%d, Sample/pkt = %d, Samplesize=%d, Rate=%d, PktCount=%d\n", Enables, SampleCount, SampleSize, Rate, PacketCount);
@@ -149,7 +151,11 @@ uint32_t ReadFIFOContent()
     if(WordCount != 0)
     {
         sem_wait(&MicWBDMAMutex);                       // get protected access
-        DMAReadFromFPGA(DMAReadfile_fd, WBDMAReadBuffer, WordCount * 8, VADDRWIDEBANDREAD);
+        if(DMAReadFromFPGA(DMAReadfile_fd, WBDMAReadBuffer, WordCount * 8, VADDRWIDEBANDREAD) >= 0)
+        {
+            P23PerfTelemetryCounterAdd(eP23PerfCounterWidebandDMAReads, 1U);
+            P23PerfTelemetryCounterAdd(eP23PerfCounterWidebandDMAReadBytes, (uint64_t)WordCount * 8U);
+        }
         sem_post(&MicWBDMAMutex);                       // get protected access
         SampleCount = WordCount * 4;
 //        printf("word count in readFIFOContent = %d\n", WordCount);
@@ -328,7 +334,13 @@ void *OutgoingWidebandSamples(void *arg)
                         memcpy(WBUDPBuffer[ADC] + 4, WBDMAReadBuffer + StartAddress, StoredSamplePerPktCount * 2);
                         iovecinst[ADC].iov_len = StoredSamplePerPktCount * 2 + 4;           // P2 data dependent
 
-                        sendmsg((ThreadData+ADC)->Socketid, &datagram[ADC], 0);
+                        if(sendmsg((ThreadData+ADC)->Socketid, &datagram[ADC], 0) < 0)
+                            P23PerfTelemetryCounterAdd(eP23PerfCounterWidebandSendErrors, 1U);
+                        else
+                        {
+                            P23PerfTelemetryCounterAdd(eP23PerfCounterWidebandPackets, 1U);
+                            P23PerfTelemetryCounterAdd(eP23PerfCounterWidebandBytes, (uint64_t)iovecinst[ADC].iov_len);
+                        }
                         usleep(200);                    // gap between outgoing messages
                     }
                 }

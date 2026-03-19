@@ -31,6 +31,7 @@
 #include "../common/saturnregisters.h"
 #include "../common/saturndrivers.h"
 #include "../common/byteio.h"
+#include "../common/p23_perf_telemetry.h"
 #include "LDGATU.h"
 
 #define ADC_PEAK_TELEMETRY_ENABLE_FILE "/dev/shm/saturn_p23_adc_peak_telemetry.enabled"
@@ -126,6 +127,10 @@ void *OutgoingHighPriority(void *arg)
   uint8_t Byte;                                   // data being encoded
   uint16_t Word;                                  // data being encoded
   unsigned int FIFOCount;
+  uint32_t DDCFIFOSamples;
+  uint32_t MicFIFOSamples;
+  uint32_t DUCFIFOSamples;
+  uint32_t SpeakerFIFOSamples;
   bool ATUTuneRequest = false;
   bool FIFOOverflow, FIFOUnderflow, FIFOOverThreshold;      // FIFO flags
   uint8_t FIFOOverflows;
@@ -158,6 +163,15 @@ void *OutgoingHighPriority(void *arg)
         MakeSocket(ThreadData, 0);                        // this binds to the new port.
         ThreadData->Cmdid &= ~VBITCHANGEPORT;             // clear command bit
       }
+      P23PerfTelemetrySetRuntimeFlags(
+        SDRActive,
+        IsTXMode,
+        ReplyAddressSet,
+        StartBitReceived,
+        ThreadError,
+        ExitRequested
+      );
+      P23PerfTelemetryMaybeWrite();
       usleep(100);
     }
     //
@@ -230,6 +244,7 @@ void *OutgoingHighPriority(void *arg)
 //
       FIFOOverflows = 0;
       ReadFIFOMonitorChannel(eRXDDCDMA, &FIFOOverflow, &FIFOOverThreshold, &FIFOUnderflow, &FIFOCount);				// read the DDC FIFO Depth register
+      DDCFIFOSamples = FIFOCount;
       wr_be_u16(UDPBuffer+31, FIFOCount);                       // DDC samples
       if(FIFOOverThreshold)
         FIFOOverflows |= 0b00000001;
@@ -237,18 +252,21 @@ void *OutgoingHighPriority(void *arg)
       ReadFIFOMonitorChannel(eMicCodecDMA, &FIFOOverflow, &FIFOOverThreshold, &FIFOUnderflow, &FIFOCount);				// read the mic FIFO Depth register
 
       Word = Word*4;                                            // 4 samples per FIFO location
+      MicFIFOSamples = FIFOCount;
       wr_be_u16(UDPBuffer+33, FIFOCount);                       // mic samples
       if(FIFOOverThreshold)
         FIFOOverflows |= 0b00000010;
 
       ReadFIFOMonitorChannel(eTXDUCDMA, &FIFOOverflow, &FIFOOverThreshold, &FIFOUnderflow, &FIFOCount);				// read the DUC FIFO Depth register
       Word = (Word*4)/3;                                        // 4/3 samples per FIFO location
+      DUCFIFOSamples = FIFOCount;
       wr_be_u16(UDPBuffer+35, FIFOCount);                       // DUC samples
       if(FIFOUnderflow)
         FIFOOverflows |= 0b00000100;
 
       ReadFIFOMonitorChannel(eSpkCodecDMA, &FIFOOverflow, &FIFOOverThreshold, &FIFOUnderflow, &FIFOCount);				// read the speaker FIFO Depth register
       Word = Word*2;                                            // 2 samples per FIFO location
+      SpeakerFIFOSamples = FIFOCount;
       wr_be_u16(UDPBuffer+37, FIFOCount);                       // speaker samples
       if(FIFOUnderflow)
         FIFOOverflows |= 0b00001000;
@@ -258,6 +276,11 @@ void *OutgoingHighPriority(void *arg)
       GlobalFIFOOverflows = 0;                                // clear any overflows
       pthread_mutex_unlock(&g_fifo_overflow_mutex);
       *(uint8_t *)(UDPBuffer+30) = FIFOOverflows;
+      P23PerfTelemetrySetRuntimeFlags(SDRActive, IsTXMode, ReplyAddressSet, StartBitReceived, ThreadError, ExitRequested);
+      P23PerfTelemetrySetFIFOSnapshot(DDCFIFOSamples, MicFIFOSamples, DUCFIFOSamples, SpeakerFIFOSamples, FIFOOverflows);
+      P23PerfTelemetrySetADCSnapshot(PeakADC1MaxAmpl, PeakADC2MaxAmpl, *(uint8_t *)(UDPBuffer+5));
+      if(*(uint8_t *)(UDPBuffer+5) != 0)
+        P23PerfTelemetryCounterAdd(eP23PerfCounterADCOverflowEvents, 1U);
       FIFOOverflows = 0;
       Error = sendmsg(ThreadData -> Socketid, &datagram, 0);
 
@@ -273,8 +296,15 @@ void *OutgoingHighPriority(void *arg)
       {
         printf("High Priority Send Error, errno=%d\n", errno);
         printf("socket id = %d\n", ThreadData -> Socketid);
+        P23PerfTelemetryCounterAdd(eP23PerfCounterHighPrioritySendErrors, 1U);
         InitError=true;
       }
+      else
+      {
+        P23PerfTelemetryCounterAdd(eP23PerfCounterHighPriorityPackets, 1U);
+        P23PerfTelemetryCounterAdd(eP23PerfCounterHighPriorityBytes, (uint64_t)Error);
+      }
+      P23PerfTelemetryMaybeWrite();
       //
       // now we need to sleep for 1ms (in TX) or 200ms (not in TX)
       // BUT if any of the PTT or key inputs change, or ADC overflow detected, send a message immediately

@@ -48,6 +48,7 @@
 #include "../common/codecwrite.h"                   // codec register I/O for Saturn
 #include "../common/version.h"                      // version I/O for Saturn
 #include "../common/auxadc.h"                       // version I/O for Saturn
+#include "../common/p23_perf_telemetry.h"
 
 #include "threaddata.h"
 #include "generalpacket.h"
@@ -263,6 +264,7 @@ void SetPort(uint32_t ThreadNum, uint16_t PortNum)
     SocketData[ThreadNum].Portid = DefaultPorts[ThreadNum];     //default if not set
   else
     SocketData[ThreadNum].Portid = PortNum;
+  P23PerfTelemetrySetPort(ThreadNum, SocketData[ThreadNum].Portid);
 
   if (SocketData[ThreadNum].Portid != CurrentPort)
     SocketData[ThreadNum].Cmdid |= VBITCHANGEPORT;
@@ -455,6 +457,9 @@ int main(int argc, char *argv[])
   sem_init(&RFGPIOMutex, 0, 1);                                     // for RF GPIO register
   sem_init(&CodecRegMutex, 0, 1);                                   // for codec accesss
   sem_init(&MicWBDMAMutex, 0, 1);                                   // for mic and WB DMA
+  P23PerfTelemetryInit("p2", GetP2appVersion());
+  for(i = 0; i < VPORTTABLESIZE; i++)
+    P23PerfTelemetrySetPort((unsigned int)i, SocketData[i].Portid);
     
 //
 // setup Saturn hardware
@@ -655,6 +660,7 @@ int main(int argc, char *argv[])
     }
   }
   printf("\n");
+  P23PerfTelemetrySetFeatureFlags(UseControlPanel, UseGanymede, UseLDGATU, UseAriesATU);
 
 
 //
@@ -974,6 +980,3 @@ int main(int argc, char *argv[])
   Shutdown();
   return EXIT_SUCCESS;
 }
-
-
-

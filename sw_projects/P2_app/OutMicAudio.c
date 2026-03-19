@@ -29,6 +29,7 @@
 #include "../common/saturnregisters.h"
 #include "../common/saturndrivers.h"
 #include "../common/hwaccess.h"
+#include "../common/p23_perf_telemetry.h"
 
 
 #define VMICSAMPLESPERFRAME 64
@@ -170,6 +171,7 @@ void *OutgoingMicSamples(void *arg)
                 pthread_mutex_lock(&g_fifo_overflow_mutex);
                 GlobalFIFOOverflows |= 0b00000010;
                 pthread_mutex_unlock(&g_fifo_overflow_mutex);
+                P23PerfTelemetryCounterAdd(eP23PerfCounterFIFOMicOver, 1U);
                 if(UseDebug)
                     printf("Codec Mic FIFO Overthreshold, depth now = %d\n", Current);
             }
@@ -187,6 +189,7 @@ void *OutgoingMicSamples(void *arg)
                     pthread_mutex_lock(&g_fifo_overflow_mutex);
                     GlobalFIFOOverflows |= 0b00000010;
                     pthread_mutex_unlock(&g_fifo_overflow_mutex);
+                    P23PerfTelemetryCounterAdd(eP23PerfCounterFIFOMicOver, 1U);
                     if(UseDebug)
                         printf("Codec Mic FIFO Overthreshold, depth now = %d\n", Current);
                 }
@@ -196,7 +199,13 @@ void *OutgoingMicSamples(void *arg)
 
             // DMA shared with wideband samples, so get semaphore granting access
             sem_wait(&MicWBDMAMutex);                       // get protected access
-            DMAReadFromFPGA(DMAReadfile_fd, MicBasePtr, VDMATRANSFERSIZE, VADDRMICSTREAMREAD);
+            if(DMAReadFromFPGA(DMAReadfile_fd, MicBasePtr, VDMATRANSFERSIZE, VADDRMICSTREAMREAD) < 0)
+                P23PerfTelemetryCounterAdd(eP23PerfCounterMicDMAErrors, 1U);
+            else
+            {
+                P23PerfTelemetryCounterAdd(eP23PerfCounterMicDMAReads, 1U);
+                P23PerfTelemetryCounterAdd(eP23PerfCounterMicDMAReadBytes, VDMATRANSFERSIZE);
+            }
             sem_post(&MicWBDMAMutex);                       // get protected access
 
             // create the packet into UDPBuffer
@@ -208,7 +217,13 @@ void *OutgoingMicSamples(void *arg)
             if(Error == -1)
             {
                 perror("sendmsg, Mic Audio");
+                P23PerfTelemetryCounterAdd(eP23PerfCounterMicSendErrors, 1U);
                 InitError=true;
+            }
+            else
+            {
+                P23PerfTelemetryCounterAdd(eP23PerfCounterMicPackets, 1U);
+                P23PerfTelemetryCounterAdd(eP23PerfCounterMicBytes, VMICPACKETSIZE);
             }
         }
     }

@@ -29,6 +29,7 @@
 #include "../common/saturnregisters.h"
 #include "../common/saturndrivers.h"
 #include "../common/hwaccess.h"
+#include "../common/p23_perf_telemetry.h"
 
 
 #define VSPKSAMPLESPERFRAME 64                      // samples per UDP frame
@@ -122,6 +123,7 @@ void *IncomingSpkrAudio(void *arg)                      // listener thread
         if(size < 0 && errno != EAGAIN)
         {
             perror("recvfrom fail, Speaker data");
+            P23PerfTelemetryCounterAdd(eP23PerfCounterSpkrRecvErrors, 1U);
             return NULL;
         }
         if(size == VSPEAKERAUDIOSIZE)                           // we have received a packet!
@@ -129,6 +131,8 @@ void *IncomingSpkrAudio(void *arg)                      // listener thread
             if(StartupCount != 0)                                   // decrement startup message count
                 StartupCount--;
             NewMessageReceived = true;
+            P23PerfTelemetryCounterAdd(eP23PerfCounterSpkrPackets, 1U);
+            P23PerfTelemetryCounterAdd(eP23PerfCounterSpkrBytes, VSPEAKERAUDIOSIZE);
             RegVal += 1;            //debug
             Depth = ReadFIFOMonitorChannel(eSpkCodecDMA, &FIFOOverflow, &FIFOOverThreshold, &FIFOUnderflow, &Current);        // read the FIFO free locations
             if((StartupCount == 0) && FIFOOverThreshold && UseDebug)
@@ -138,6 +142,7 @@ void *IncomingSpkrAudio(void *arg)                      // listener thread
                 pthread_mutex_lock(&g_fifo_overflow_mutex);
                 GlobalFIFOOverflows |= 0b00001000;
                 pthread_mutex_unlock(&g_fifo_overflow_mutex);
+                P23PerfTelemetryCounterAdd(eP23PerfCounterFIFOSpkrUnder, 1U);
                 if(UseDebug)
                     printf("Codec speaker FIFO Underflowed, depth now = %d\n", Current);
             }
@@ -153,6 +158,7 @@ void *IncomingSpkrAudio(void *arg)                      // listener thread
                     pthread_mutex_lock(&g_fifo_overflow_mutex);
                     GlobalFIFOOverflows |= 0b00001000;
                     pthread_mutex_unlock(&g_fifo_overflow_mutex);
+                    P23PerfTelemetryCounterAdd(eP23PerfCounterFIFOSpkrUnder, 1U);
                     if(UseDebug)
                         printf("Codec speaker FIFO Underflowed, depth now = %d\n", Current);
                 }
@@ -161,7 +167,13 @@ void *IncomingSpkrAudio(void *arg)                      // listener thread
             memcpy(SpkBasePtr, UDPInBuffer + 4, VDMATRANSFERSIZE);              // copy out spk samples
     //        if(RegVal == 100)
     //            DumpMemoryBuffer(SpkBasePtr, VDMATRANSFERSIZE);
-            DMAWriteToFPGA(DMAWritefile_fd, SpkBasePtr, VDMATRANSFERSIZE, VADDRSPKRSTREAMWRITE);
+            if(DMAWriteToFPGA(DMAWritefile_fd, SpkBasePtr, VDMATRANSFERSIZE, VADDRSPKRSTREAMWRITE) < 0)
+                P23PerfTelemetryCounterAdd(eP23PerfCounterSpkrDMAErrors, 1U);
+            else
+            {
+                P23PerfTelemetryCounterAdd(eP23PerfCounterSpkrDMAWrites, 1U);
+                P23PerfTelemetryCounterAdd(eP23PerfCounterSpkrDMAWriteBytes, VDMATRANSFERSIZE);
+            }
         }
     }
 //
@@ -172,6 +184,5 @@ void *IncomingSpkrAudio(void *arg)                      // listener thread
     ThreadData->Active = false;                   // indicate it is closed
     return NULL;
 }
-
 
 

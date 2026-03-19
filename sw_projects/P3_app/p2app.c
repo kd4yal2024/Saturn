@@ -48,6 +48,7 @@
 #include "../common/codecwrite.h"                   // codec register I/O for Saturn
 #include "../common/version.h"                      // version I/O for Saturn
 #include "../common/auxadc.h"                       // version I/O for Saturn
+#include "../common/p23_perf_telemetry.h"
 
 #include "threaddata.h"
 #include "generalpacket.h"
@@ -514,6 +515,7 @@ void SetPort(uint32_t ThreadNum, uint16_t PortNum)
   CurrentPort = atomic_load(&SocketData[ThreadNum].Portid);
   NewPort = (PortNum == 0) ? DefaultPorts[ThreadNum] : PortNum;
   atomic_store(&SocketData[ThreadNum].Portid, NewPort);
+  P23PerfTelemetrySetPort(ThreadNum, NewPort);
   if(ResolveSocketOwnerIndex(ThreadNum) != ThreadNum)
     IsShared = ThreadSocketShouldShareAlias(&SocketData[ThreadNum]);
 
@@ -809,6 +811,9 @@ int main(int argc, char *argv[])
   sem_init(&RFGPIOMutex, 0, 1);                                     // for RF GPIO register
   sem_init(&CodecRegMutex, 0, 1);                                   // for codec accesss
   sem_init(&MicWBDMAMutex, 0, 1);                                   // for mic and WB DMA
+  P23PerfTelemetryInit("p3", GetP3appVersion());
+  for(i = 0; i < VPORTTABLESIZE; i++)
+    P23PerfTelemetrySetPort((unsigned int)i, atomic_load(&SocketData[i].Portid));
     
 //
 // setup Saturn hardware
@@ -1018,6 +1023,7 @@ int main(int argc, char *argv[])
     }
   }
   printf("\n");
+  P23PerfTelemetrySetFeatureFlags(UseControlPanel, UseGanymede, UseLDGATU, UseAriesATU);
 
 
 //

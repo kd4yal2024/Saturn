@@ -129,6 +129,7 @@ Notes:
 | Route | Method | CSRF | Request | Success Response |
 |---|---|---|---|---|
 | `/p23_status` | `GET` | No | none | `{ "status":"ok", "p23": { service, sources, deployed, override, repo_root } }` |
+| `/p23_perf` | `GET` | No | none | `{ "status":"ok", "perf": { collected_at_ms, system, process, network, xdma, workload, app_telemetry } }` |
 
 Notes:
 
@@ -141,6 +142,16 @@ Notes:
 - `p23_status.p23.override` also includes parsed Saturn test-lab metadata when present:
   - `panel_mode` from `Environment=SATURN_FRONT_PANEL_MODE=...`
   - `saturn_meta` parsed from the generated comment (`# saturn-p23 mode=... panel=...`)
+- `p23_perf` is used by the hidden `/p23test` performance dashboard.
+- It reports:
+  - host/process/network/XDMA snapshots used for baseline deltas
+  - `workload` metadata derived from the deployed `current` symlink and the `p2app.service` drop-in (`selected_app`, startup mode, panel mode, workload key)
+  - `app_telemetry` parsed from `/dev/shm/saturn_p23_perf_stats.json` when the running P2/P3 app exports live counters
+- `app_telemetry.current` includes:
+  - runtime flags and feature flags
+  - port/DDC/wideband routing shape
+  - FIFO/ADC gauges
+  - cumulative counters for high-priority, mic, DDC, wideband, DUC, and speaker packet/DMA/error activity
 
 ## Full Backup / Restore
 
