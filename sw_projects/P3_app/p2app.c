@@ -545,6 +545,8 @@ int MakeSocket(struct ThreadSocketData* Ptr, int DDCid)
 {
   struct timeval ReadTimeout;                                       // read timeout
   int yes = 1;
+  int ReceiveBufferSize = 512 * 1024;                               // absorb short scheduler/network jitter bursts
+  int SendBufferSize = 256 * 1024;                                  // keep outbound UDP writes from stalling on tiny buffers
   int Socketfd;
   uint16_t Portid;
 //  struct sockaddr_in addr_cmddata;
@@ -563,6 +565,8 @@ int MakeSocket(struct ThreadSocketData* Ptr, int DDCid)
   // set 1ms timeout, and re-use any recently open ports
   //
   setsockopt(Socketfd, SOL_SOCKET, SO_REUSEADDR, (void *)&yes , sizeof(yes));
+  setsockopt(Socketfd, SOL_SOCKET, SO_RCVBUF, (void *)&ReceiveBufferSize, sizeof(ReceiveBufferSize));
+  setsockopt(Socketfd, SOL_SOCKET, SO_SNDBUF, (void *)&SendBufferSize, sizeof(SendBufferSize));
   ReadTimeout.tv_sec = 0;
   ReadTimeout.tv_usec = 1000;
   setsockopt(Socketfd, SOL_SOCKET, SO_RCVTIMEO, (void *)&ReadTimeout , sizeof(ReadTimeout));

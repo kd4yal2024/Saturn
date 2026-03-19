@@ -2,6 +2,32 @@
 
 All notable changes to `P3_app` from this hardening pass are documented here.
 
+## [2026-03-18] Speaker/DUC Socket and Prefill Tuning
+
+### Changed
+
+- Increased UDP socket buffer sizing in `MakeSocket(...)` so active P3 ports can
+  absorb short bursts of scheduler or network jitter with less packet loss
+  pressure.
+- Reworked `InSpkrAudio.c` and `InDUCIQ.c` to receive inbound frames with
+  `recvmmsg(...)` and stage them in a short-lived software queue before DMA, so
+  batching can span multiple wakeups instead of being limited to one syscall.
+- Added speaker and DUC prefill hysteresis plus short queue-age flush limits so
+  startup and underrun recovery aim for a healthier FIFO occupancy band without
+  allowing unbounded extra latency.
+
+### Verified
+
+- Clean rebuild completed successfully with:
+  - `make -C /home/pi/github/Saturn/sw_projects/P3_app -j2`
+- Live `/p23_perf` validation on `/saturn/p23test` showed:
+  - CPU returned to the normal `~16%` per-core range after replacing the first
+    spin-heavy queue attempt with blocking age-budget waits
+  - XDMA efficiency improved to roughly `593 IRQ/MiB` current and `548 IRQ/MiB`
+    average over a multi-hour baseline
+  - DUC underruns remained at `0`
+  - speaker underruns fell to rare events (`11` over about `3.7` hours)
+
 ## [2026-03-18] DMA and Wideband Stability Hardening
 
 ### Fixed

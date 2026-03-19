@@ -24,6 +24,8 @@
 #include <unistd.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/socket.h>
+#include <time.h>
 #include "../common/saturnregisters.h"
 #include "../common/saturndrivers.h"
 #include "../common/hwaccess.h"
@@ -41,8 +43,13 @@
 #define VALIGNMENT 4096                             // buffer alignment
 #define VBASE 0x1000								// DMA start at 4K into buffer
 #define VDMATRANSFERSIZE 1440                       // write 1 message at a time
-#define VMAXDMABATCHFRAMES 8                        // opportunistically batch queued UDP frames into one DMA
+#define VDUCNORMALQUEUEFRAMES 2                     // normal queue depth before a DMA write
+#define VDUCPREFILLQUEUEFRAMES 4                    // refill deeper after startup or underrun recovery
+#define VMAXDMABATCHFRAMES 11                       // older 2048-word TX FIFOs cannot safely accept larger single bursts
 #define VSTARTUPDELAY 100                           // 100 messages (~100ms) before reporting under or overflows
+#define VDUCPREFILLLOWFRAMES 3                      // re-enter prefill when FIFO occupancy falls below this
+#define VDUCPREFILLHIGHFRAMES 8                     // stay in prefill until FIFO occupancy reaches this
+#define VDUCMAXQUEUEAGEUS 1500U                     // cap added TX latency while still allowing occasional coalescing
 
 static void NoteDUCUnderflow(bool ReportingEnabled, bool Underflowed, bool *UnderflowActive,
                              unsigned int Current)
@@ -73,6 +80,29 @@ static void NoteDUCUnderflow(bool ReportingEnabled, bool Underflowed, bool *Unde
         printf("TX DUC FIFO Underflowed, depth now = %d\n", Current);
 }
 
+static uint64_t GetMonotonicTimeNs(void)
+{
+    struct timespec Now;
+
+    if (clock_gettime(CLOCK_MONOTONIC, &Now) != 0)
+        return 0;
+
+    return ((uint64_t)Now.tv_sec * 1000000000ULL) + (uint64_t)Now.tv_nsec;
+}
+
+static uint32_t GetDUCTargetFrames(unsigned int Current, bool *PrefillActive)
+{
+    const unsigned int LowWords = VDUCPREFILLLOWFRAMES * VMEMWORDSPERFRAME;
+    const unsigned int HighWords = VDUCPREFILLHIGHFRAMES * VMEMWORDSPERFRAME;
+
+    if (Current < LowWords)
+        *PrefillActive = true;
+    else if (Current >= HighWords)
+        *PrefillActive = false;
+
+    return *PrefillActive ? VDUCPREFILLQUEUEFRAMES : VDUCNORMALQUEUEFRAMES;
+}
+
 //
 // listener thread for incoming DUC I/Q packets
 // planned strategy: just DMA spkr data when available; don't copy and DMA a larger amount.
@@ -82,11 +112,11 @@ static void NoteDUCUnderflow(bool ReportingEnabled, bool Underflowed, bool *Unde
 void *IncomingDUCIQ(void *arg)                          // listener thread
 {
     struct ThreadSocketData *ThreadData;                  // socket etc data for this thread
-    struct sockaddr_in addr_from;                         // holds MAC address of source of incoming messages
-    uint8_t UDPInBuffer[VDUCIQSIZE];                      // incoming buffer
-    struct iovec iovecinst;                               // iovcnt buffer - 1 for each outgoing buffer
-    struct msghdr datagram;                               // multiple incoming message header
-    int size;                                             // UDP datagram length
+    uint8_t UDPInBuffers[VMAXDMABATCHFRAMES][VDUCIQSIZE];
+    struct iovec IovecList[VMAXDMABATCHFRAMES];
+    struct mmsghdr DatagramList[VMAXDMABATCHFRAMES];
+    unsigned int MsgIndex = 0;
+    int Received = 0;
 
                                                           //
 // variables for DMA buffer 
@@ -100,16 +130,31 @@ void *IncomingDUCIQ(void *arg)                          // listener thread
     uint32_t Cntr;                                          // sample counter
     uint8_t* SrcPtr;                                        // pointer to data from Thetis
     uint8_t* DestPtr;                                       // pointer to DMA buffer data
-    unsigned int Current;                                   // current occupied locations in FIFO
+    unsigned int Current = 0;                               // current occupied locations in FIFO
     unsigned int StartupCount = 0;                          // used to delay reporting of under & overflows
     bool PrevSDRActive = false;                             // used to detect change of state
     bool UnderflowActive = false;                           // tracks one continuous starvation episode
-    uint32_t BatchFrames = 0;
-    uint32_t BatchBytes = 0;
+    bool PrefillActive = true;                              // maintains a DUC FIFO cushion after startup or underrun
+    uint32_t PendingFrames = 0;
+    uint32_t PendingBytes = 0;
+    uint64_t PendingStartNs = 0;
+    uint32_t TargetFrames = VDUCPREFILLQUEUEFRAMES;
+    uint64_t QueueAgeUs = 0;
+    struct timespec ReceiveTimeout;
+    struct timespec *ReceiveTimeoutPtr = NULL;
 
     ThreadData = (struct ThreadSocketData *)arg;
     atomic_store(&ThreadData->Active, true);
     printf("spinning up DUC I/Q thread with port %u, pid=%ld\n", (unsigned int)atomic_load(&ThreadData->Portid), syscall(SYS_gettid));
+
+    memset(DatagramList, 0, sizeof(DatagramList));
+    for (MsgIndex = 0; MsgIndex < VMAXDMABATCHFRAMES; MsgIndex++)
+    {
+        IovecList[MsgIndex].iov_base = UDPInBuffers[MsgIndex];
+        IovecList[MsgIndex].iov_len = VDUCIQSIZE;
+        DatagramList[MsgIndex].msg_hdr.msg_iov = &IovecList[MsgIndex];
+        DatagramList[MsgIndex].msg_hdr.msg_iovlen = 1;
+    }
   
     //
     // setup DMA buffer
@@ -169,40 +214,75 @@ void *IncomingDUCIQ(void *arg)                          // listener thread
         {
             StartupCount = VSTARTUPDELAY;
             UnderflowActive = false;
+            PrefillActive = true;
+            PendingFrames = 0;
+            PendingBytes = 0;
+            PendingStartNs = 0;
         }
         else if(!SDRActiveNow)
+        {
             UnderflowActive = false;
+            PrefillActive = true;
+            Current = 0;
+            PendingFrames = 0;
+            PendingBytes = 0;
+            PendingStartNs = 0;
+        }
         PrevSDRActive = SDRActiveNow;
 
-        memset(&iovecinst, 0, sizeof(struct iovec));
-        memset(&datagram, 0, sizeof(datagram));
-        iovecinst.iov_base = &UDPInBuffer;                  // set buffer for incoming message number i
-        iovecinst.iov_len = VDUCIQSIZE;
-        datagram.msg_iov = &iovecinst;
-        datagram.msg_iovlen = 1;
-        datagram.msg_name = &addr_from;
-        datagram.msg_namelen = sizeof(addr_from);
-        size = recvmsg(atomic_load(&ThreadData->Socketid), &datagram, 0);   // get one message. If it times out, ges size=-1
-        if(size < 0 && errno != EAGAIN)
+        if(PendingFrames < VMAXDMABATCHFRAMES)
         {
-            perror("recvfrom fail, TX I/Q data");
-            P23PerfTelemetryCounterAdd(eP23PerfCounterDUCRecvErrors, 1U);
-            atomic_store(&ThreadError, true);
-            break;
-        }
-        if(size == VDUCIQSIZE)
-        {
-            BatchFrames = 0;
-            BatchBytes = 0;
-            while((size == VDUCIQSIZE) && (BatchFrames < VMAXDMABATCHFRAMES))
+            unsigned int ReceiveGoal = VMAXDMABATCHFRAMES - PendingFrames;
+            int ReceiveFlags = MSG_WAITFORONE;
+
+            ReceiveTimeoutPtr = NULL;
+            if((PendingFrames != 0) && (PendingStartNs != 0))
             {
+                uint64_t RemainingAgeUs = 0;
+                uint64_t ElapsedAgeUs = (GetMonotonicTimeNs() - PendingStartNs) / 1000ULL;
+                if(ElapsedAgeUs < VDUCMAXQUEUEAGEUS)
+                    RemainingAgeUs = VDUCMAXQUEUEAGEUS - ElapsedAgeUs;
+                if(RemainingAgeUs == 0)
+                    Received = 0;
+                else
+                {
+                    ReceiveTimeout.tv_sec = (time_t)(RemainingAgeUs / 1000000ULL);
+                    ReceiveTimeout.tv_nsec = (long)((RemainingAgeUs % 1000000ULL) * 1000ULL);
+                    ReceiveTimeoutPtr = &ReceiveTimeout;
+                    Received = recvmmsg(atomic_load(&ThreadData->Socketid), DatagramList, ReceiveGoal, ReceiveFlags, ReceiveTimeoutPtr);
+                }
+            }
+            else
+                Received = recvmmsg(atomic_load(&ThreadData->Socketid), DatagramList, ReceiveGoal, ReceiveFlags, NULL);
+
+            if((Received < 0) && (errno != EAGAIN) && (errno != EWOULDBLOCK))
+            {
+                perror("recvfrom fail, TX I/Q data");
+                P23PerfTelemetryCounterAdd(eP23PerfCounterDUCRecvErrors, 1U);
+                atomic_store(&ThreadError, true);
+                break;
+            }
+            if(Received < 0)
+                Received = 0;
+        }
+        else
+            Received = 0;
+
+        if(Received > 0)
+        {
+            for(MsgIndex = 0; MsgIndex < (unsigned int)Received; MsgIndex++)
+            {
+                if(DatagramList[MsgIndex].msg_len != VDUCIQSIZE)
+                    continue;
+                if(PendingFrames == 0)
+                    PendingStartNs = GetMonotonicTimeNs();
                 if(StartupCount != 0)                                   // decrement startup message count
                     StartupCount--;
                 atomic_store(&NewMessageReceived, true);
                 P23PerfTelemetryCounterAdd(eP23PerfCounterDUCPackets, 1U);
                 P23PerfTelemetryCounterAdd(eP23PerfCounterDUCBytes, VDUCIQSIZE);
-                SrcPtr = (uint8_t *) (UDPInBuffer + 4);
-                DestPtr = (uint8_t *) (IQBasePtr + BatchBytes);
+                SrcPtr = (uint8_t *) (UDPInBuffers[MsgIndex] + 4);
+                DestPtr = (uint8_t *) (IQBasePtr + PendingBytes);
                 for (Cntr=0; Cntr < VIQSAMPLESPERFRAME; Cntr++)                     // samplecounter
                 {
                     *DestPtr++ = *(SrcPtr+3);                           // get I sample (3 bytes)
@@ -213,46 +293,60 @@ void *IncomingDUCIQ(void *arg)                          // listener thread
                     *DestPtr++ = *(SrcPtr+2);
                     SrcPtr += 6;                                        // point at next source sample
                 }
-                BatchBytes += VDMATRANSFERSIZE;
-                BatchFrames++;
-                size = recvmsg(atomic_load(&ThreadData->Socketid), &datagram, MSG_DONTWAIT);
-                if(size < 0)
-                {
-                    if((errno == EAGAIN) || (errno == EWOULDBLOCK))
-                        break;
-                    perror("recvfrom fail while draining TX I/Q data");
-                    P23PerfTelemetryCounterAdd(eP23PerfCounterDUCRecvErrors, 1U);
-                    atomic_store(&ThreadError, true);
+                PendingBytes += VDMATRANSFERSIZE;
+                PendingFrames++;
+                if(PendingFrames >= VMAXDMABATCHFRAMES)
                     break;
-                }
             }
-            if(atomic_load(&ThreadError))
-                break;
+        }
+
+        if(PendingFrames == 0)
+            continue;
+
+        QueueAgeUs = 0;
+        if(PendingStartNs != 0)
+            QueueAgeUs = (GetMonotonicTimeNs() - PendingStartNs) / 1000ULL;
+
+        TargetFrames = GetDUCTargetFrames(Current, &PrefillActive);
+        if((PendingFrames < TargetFrames) && (QueueAgeUs < VDUCMAXQUEUEAGEUS) && (PendingFrames < VMAXDMABATCHFRAMES))
+            continue;
+
+        {
             Depth = ReadFIFOMonitorChannel(eTXDUCDMA, &FIFOOverflow, &FIFOOverThreshold, &FIFOUnderflow, &Current);           // read the FIFO free locations
             if((StartupCount == 0) && FIFOOverThreshold && UseDebug)
                 printf("TX DUC FIFO Overthreshold, depth now = %d\n", Current);
+            if(FIFOUnderflow)
+                PrefillActive = true;
             NoteDUCUnderflow((StartupCount == 0) && SDRActiveNow, FIFOUnderflow, &UnderflowActive, Current);
 
-            while ((Depth < (VMEMWORDSPERFRAME * BatchFrames)) && !atomic_load(&ExitRequested))       // loop till space available
+            while ((Depth < (VMEMWORDSPERFRAME * PendingFrames)) && !atomic_load(&ExitRequested))      // loop till space available
             {
                 usleep(500);								                    // 0.5ms wait
                 Depth = ReadFIFOMonitorChannel(eTXDUCDMA, &FIFOOverflow, &FIFOOverThreshold, &FIFOUnderflow, &Current);       // read the FIFO free locations
                 if((StartupCount == 0) && FIFOOverThreshold && UseDebug)
                     printf("TX DUC FIFO Overthreshold, depth now = %d\n", Current);
+                if(FIFOUnderflow)
+                    PrefillActive = true;
                 NoteDUCUnderflow((StartupCount == 0) && SDRActiveNow, FIFOUnderflow, &UnderflowActive, Current);
             }
             if(atomic_load(&ExitRequested))
                 break;
-            if(BatchBytes != 0)
+            if(PendingBytes != 0)
             {
-                if(DMAWriteToFPGA(DMAWritefile_fd, IQBasePtr, BatchBytes, VADDRDUCSTREAMWRITE) < 0)
+                if(DMAWriteToFPGA(DMAWritefile_fd, IQBasePtr, PendingBytes, VADDRDUCSTREAMWRITE) < 0)
                 {
                     P23PerfTelemetryCounterAdd(eP23PerfCounterDUCDMAErrors, 1U);
                     atomic_store(&ThreadError, true);
                     break;
                 }
                 P23PerfTelemetryCounterAdd(eP23PerfCounterDUCDMAWrites, 1U);
-                P23PerfTelemetryCounterAdd(eP23PerfCounterDUCDMAWriteBytes, BatchBytes);
+                P23PerfTelemetryCounterAdd(eP23PerfCounterDUCDMAWriteBytes, PendingBytes);
+                Current += PendingFrames * VMEMWORDSPERFRAME;
+                if(Current >= (VDUCPREFILLHIGHFRAMES * VMEMWORDSPERFRAME))
+                    PrefillActive = false;
+                PendingFrames = 0;
+                PendingBytes = 0;
+                PendingStartNs = 0;
             }
         }
     }
