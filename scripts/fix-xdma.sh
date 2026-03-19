@@ -42,6 +42,27 @@ resolve_driver_dir(){
   printf "%s" "$d"
 }
 
+resolve_build_user(){
+  local u
+  if [[ -n "${SATURN_BUILD_USER:-}" ]]; then
+    u="${SATURN_BUILD_USER}"
+  elif [[ -n "${SUDO_USER:-}" && "${SUDO_USER}" != "root" ]]; then
+    u="${SUDO_USER}"
+  elif [[ -n "${SATURN_USER:-}" ]]; then
+    u="${SATURN_USER}"
+  else
+    u="pi"
+  fi
+
+  getent passwd "${u}" >/dev/null 2>&1 || die "Build user not found: ${u}"
+  printf "%s" "${u}"
+}
+
+resolve_build_home(){
+  local user="$1"
+  getent passwd "${user}" | cut -d: -f6
+}
+
 kernel_flavor(){
   local krel="$1"
   printf "%s" "${krel#*+rpt-}"
@@ -57,6 +78,11 @@ latest_installed_kernel(){
 build_dir_for_kernel(){
   local krel="$1"
   printf "/lib/modules/%s/build" "$krel"
+}
+
+module_updates_dir_for_kernel(){
+  local krel="$1"
+  printf "/lib/modules/%s/updates" "$krel"
 }
 
 ensure_headers(){
@@ -109,16 +135,19 @@ build_and_install_for_kernel(){
   kbuild="$(build_dir_for_kernel "$krel")"
 
   info "Cleaning previous build for ${krel}…"
-  run_make -C "${kbuild}" M="${driver_dir}" clean || warn "make clean reported issues for ${krel}; continuing"
+  run_make_as_build_user -C "${kbuild}" M="${driver_dir}" clean || warn "make clean reported issues for ${krel}; continuing"
 
   info "Building xdma.ko for ${krel}…"
-  run_make -C "${kbuild}" M="${driver_dir}" \
+  run_make_as_build_user -C "${kbuild}" M="${driver_dir}" \
     EXTRA_CFLAGS="-I${xdma_inc} -Wno-empty-body -Wno-missing-prototypes -Wno-missing-declarations" \
     KBUILD_VERBOSE=0 \
     modules
 
+  backup_existing_module "${krel}"
+
   info "Installing module for ${krel}…"
   run_make -C "${kbuild}" M="${driver_dir}" DEPMOD=/bin/true modules_install
+  normalize_installed_module_owner "${krel}"
 
   info "Running depmod for ${krel}…"
   depmod "${krel}"
@@ -167,6 +196,59 @@ run_make(){
   else
     env MAKEFLAGS="${MAKEFLAGS:-} -s" make "$@" 2>&1 | \
       awk '!/Makefile:[0-9]+: XVC_FLAGS: \./ && !/Warning: modules_install: missing '\''System.map'\'' file\. Skipping depmod\./ { print }'
+  fi
+}
+
+run_make_as_build_user(){
+  local user="${BUILD_USER:-root}" home="${BUILD_HOME:-/root}"
+
+  if [[ "$user" == "root" ]]; then
+    run_make "$@"
+    return
+  fi
+
+  if [[ "${VERBOSE:-0}" == "1" ]]; then
+    runuser -u "$user" -- \
+      env HOME="$home" USER="$user" LOGNAME="$user" PATH="$PATH" \
+      make "$@"
+  else
+    runuser -u "$user" -- \
+      env HOME="$home" USER="$user" LOGNAME="$user" PATH="$PATH" MAKEFLAGS="${MAKEFLAGS:-} -s" \
+      make "$@" 2>&1 | \
+      awk '!/Makefile:[0-9]+: XVC_FLAGS: \./ && !/Warning: modules_install: missing '\''System.map'\'' file\. Skipping depmod\./ { print }'
+  fi
+}
+
+backup_existing_module(){
+  local krel="$1" moddir stamp
+  moddir="$(module_updates_dir_for_kernel "$krel")"
+  stamp="$(date +%Y%m%d-%H%M%S)"
+
+  [[ -d "$moddir" ]] || return 0
+
+  if [[ -f "${moddir}/xdma.ko.xz" ]]; then
+    cp -a "${moddir}/xdma.ko.xz" "${moddir}/xdma.ko.xz.bak-${stamp}"
+    ok "Backed up ${moddir}/xdma.ko.xz"
+  fi
+
+  if [[ -f "${moddir}/xdma.ko" ]]; then
+    cp -a "${moddir}/xdma.ko" "${moddir}/xdma.ko.bak-${stamp}"
+    ok "Backed up ${moddir}/xdma.ko"
+  fi
+}
+
+normalize_installed_module_owner(){
+  local krel="$1" moddir
+  moddir="$(module_updates_dir_for_kernel "$krel")"
+
+  [[ -d "$moddir" ]] || return 0
+
+  if [[ -f "${moddir}/xdma.ko" ]]; then
+    chown root:root "${moddir}/xdma.ko"
+  fi
+
+  if [[ -f "${moddir}/xdma.ko.xz" ]]; then
+    chown root:root "${moddir}/xdma.ko.xz"
   fi
 }
 
@@ -241,9 +323,12 @@ main(){
   local driver_dir running_krel
   driver_dir="$(resolve_driver_dir)"
   running_krel="$(uname -r)"
+  BUILD_USER="$(resolve_build_user)"
+  BUILD_HOME="$(resolve_build_home "${BUILD_USER}")"
 
   info "Running kernel: ${running_krel}"
   info "Driver: ${driver_dir}"
+  info "Building module as: ${BUILD_USER}"
 
   # Ensure API header
   local xdma_inc; xdma_inc="$(ensure_xdma_header "${driver_dir}")"

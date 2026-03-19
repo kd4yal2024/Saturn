@@ -250,6 +250,7 @@ Then `provision-saturn.sh` performs:
   - later kernel package upgrades can be handled by rerunning:
     - `sudo bash /home/pi/github/Saturn/scripts/fix-xdma.sh`
   - that helper rebuilds for the running kernel and, when a newer same-flavor kernel is already installed, also pre-stages XDMA for that next boot
+  - the helper now builds in the repo as `SATURN_USER` and reserves root only for module install/reload, which avoids leaving kernel build outputs owned by root or other mapped IDs in `linuxdriver/xdma`
 - optional udev rules install
 - optional p2app-control install
   - installs tray autostart (`~/.config/autostart/P2_app-Control-tray.desktop`)

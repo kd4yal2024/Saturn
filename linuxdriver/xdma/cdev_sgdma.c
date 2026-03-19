@@ -47,6 +47,14 @@ MODULE_PARM_DESC(c2h_timeout, "C2H sgdma timeout in seconds, default is 10 sec."
 extern struct kmem_cache *cdev_cache;
 static void char_sgdma_unmap_user_buf(struct xdma_io_cb *cb, bool write);
 
+static void cdev_async_io_release(struct cdev_async_io *caio)
+{
+	if (!caio)
+		return;
+
+	kfree(caio->cb);
+	kmem_cache_free(cdev_cache, caio);
+}
 
 static void async_io_handler(unsigned long  cb_hndl, int err)
 {
@@ -57,8 +65,8 @@ static void async_io_handler(unsigned long  cb_hndl, int err)
 	struct cdev_async_io *caio = (struct cdev_async_io *)cb->private;
 	ssize_t numbytes = 0;
 	ssize_t res, res2;
-	int lock_stat;
 	int rv;
+	bool complete = false;
 
 	if (caio == NULL) {
 		pr_err("Invalid work struct\n");
@@ -69,18 +77,6 @@ static void async_io_handler(unsigned long  cb_hndl, int err)
 	rv = xcdev_check(__func__, xcdev, 1);
 	if (rv < 0)
 		return;
-
-	/* Safeguarding for cancel requests */
-	lock_stat = spin_trylock(&caio->lock);
-	if (!lock_stat) {
-		pr_err("caio lock not acquired\n");
-		goto skip_dev_lock;
-	}
-
-	if (false != caio->cancel) {
-		pr_err("skipping aio\n");
-		goto skip_tran;
-	}
 
 	engine = xcdev->engine;
 	xdev = xcdev->xdev;
@@ -94,6 +90,10 @@ static void async_io_handler(unsigned long  cb_hndl, int err)
 
 	char_sgdma_unmap_user_buf(cb, cb->write);
 
+	spin_lock(&caio->lock);
+	if (false != caio->cancel)
+		pr_err("skipping aio\n");
+
 	caio->res2 |= (err < 0) ? err : 0;
 	if (caio->res2)
 		caio->err_cnt++;
@@ -104,31 +104,21 @@ static void async_io_handler(unsigned long  cb_hndl, int err)
 	if (caio->cmpl_cnt == caio->req_cnt) {
 		res = caio->res;
 		res2 = caio->res2;
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 16, 0)
-    caio->iocb->ki_complete(caio->iocb, res);
-#elif LINUX_VERSION_CODE >= KERNEL_VERSION(4, 1, 0)
-    caio->iocb->ki_complete(caio->iocb, res, res2);
-#else
-    aio_complete(caio->iocb, res, res2);
-#endif
-skip_tran:
-		spin_unlock(&caio->lock);
-		kmem_cache_free(cdev_cache, caio);
-		kfree(cb);
-		return;
-	} 
+		complete = true;
+	}
 	spin_unlock(&caio->lock);
-	return;
 
-skip_dev_lock:
+	if (!complete)
+		return;
+
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 16, 0)
-    caio->iocb->ki_complete(caio->iocb, numbytes);
+	caio->iocb->ki_complete(caio->iocb, res);
 #elif LINUX_VERSION_CODE >= KERNEL_VERSION(4, 1, 0)
-    caio->iocb->ki_complete(caio->iocb, numbytes, -EBUSY);
+	caio->iocb->ki_complete(caio->iocb, res, res2);
 #else
-    aio_complete(caio->iocb, numbytes, -EBUSY);
+	aio_complete(caio->iocb, res, res2);
 #endif
-	kmem_cache_free(cdev_cache, caio);
+	cdev_async_io_release(caio);
 }
 
 
@@ -284,6 +274,7 @@ static int char_sgdma_map_user_buf_to_sgl(struct xdma_io_cb *cb, bool write)
 				>> PAGE_SHIFT;
 	int i;
 	int rv;
+	int gup_write = write ? 0 : 1;
 
 	if (pages_nr == 0)
 		return -EINVAL;
@@ -300,7 +291,7 @@ static int char_sgdma_map_user_buf_to_sgl(struct xdma_io_cb *cb, bool write)
 		goto err_out;
 	}
 
-	rv = get_user_pages_fast((unsigned long)buf, pages_nr, 1/* write */,
+	rv = get_user_pages_fast((unsigned long)buf, pages_nr, gup_write,
 				cb->pages);
 	/* No pages were pinned */
 	if (rv < 0) {
@@ -426,7 +417,7 @@ static ssize_t cdev_aio_write(struct kiocb *iocb, const struct iovec *io,
 	struct xdma_engine *engine;
 	struct xdma_dev *xdev;
 	int rv;
-	unsigned long i;
+	unsigned long i, submitted = 0;
 
 	if (!xcdev) {
 		pr_info("file 0x%p, xcdev NULL, %llu, pos %llu, W %d.\n",
@@ -443,17 +434,26 @@ static ssize_t cdev_aio_write(struct kiocb *iocb, const struct iovec *io,
 		return -EINVAL;
 	}
 
+	if (!count)
+		return 0;
+
 	caio = kmem_cache_alloc(cdev_cache, GFP_KERNEL);
+	if (!caio)
+		return -ENOMEM;
+
 	memset(caio, 0, sizeof(struct cdev_async_io));
 
-	caio->cb = kzalloc(count * (sizeof(struct xdma_io_cb)), GFP_KERNEL);
+	caio->cb = kcalloc(count, sizeof(struct xdma_io_cb), GFP_KERNEL);
+	if (!caio->cb) {
+		kmem_cache_free(cdev_cache, caio);
+		return -ENOMEM;
+	}
 
 	spin_lock_init(&caio->lock);
 	iocb->private = caio;
 	caio->iocb = iocb;
 	caio->write = true;
 	caio->cancel = false;
-	caio->req_cnt = count;
 
 	for (i = 0; i < count; i++) {
 
@@ -469,20 +469,39 @@ static ssize_t cdev_aio_write(struct kiocb *iocb, const struct iovec *io,
 					caio->cb[i].len, pos, 1);
 		if (rv) {
 			pr_info("Invalid transfer alignment detected\n");
-			kmem_cache_free(cdev_cache, caio);
-			return rv;
+			goto submit_error;
 		}
 
 		rv = char_sgdma_map_user_buf_to_sgl(&caio->cb[i], true);
 		if (rv < 0)
-			return rv;
+			goto submit_error;
 
 		rv = xdma_xfer_submit_nowait((void *)&caio->cb[i], xdev,
 					engine->channel, caio->cb[i].write,
 					caio->cb[i].ep_addr, &caio->cb[i].sgt,
 					0, h2c_timeout * 1000);
+		if (rv != -EIOCBQUEUED) {
+			char_sgdma_unmap_user_buf(&caio->cb[i],
+						caio->cb[i].write);
+			goto submit_error;
+		}
+
+		submitted++;
 	}
 
+	caio->req_cnt = submitted;
+	if (engine->cmplthp)
+		xdma_kthread_wakeup(engine->cmplthp);
+
+	return -EIOCBQUEUED;
+
+submit_error:
+	if (!submitted) {
+		cdev_async_io_release(caio);
+		return rv;
+	}
+
+	caio->req_cnt = submitted;
 	if (engine->cmplthp)
 		xdma_kthread_wakeup(engine->cmplthp);
 
@@ -499,7 +518,7 @@ static ssize_t cdev_aio_read(struct kiocb *iocb, const struct iovec *io,
 	struct xdma_engine *engine;
 	struct xdma_dev *xdev;
 	int rv;
-	unsigned long i;
+	unsigned long i, submitted = 0;
 
 	if (!xcdev) {
 		pr_info("file 0x%p, xcdev NULL, %llu, pos %llu, W %d.\n",
@@ -516,17 +535,26 @@ static ssize_t cdev_aio_read(struct kiocb *iocb, const struct iovec *io,
 		return -EINVAL;
 	}
 
+	if (!count)
+		return 0;
+
 	caio = kmem_cache_alloc(cdev_cache, GFP_KERNEL);
+	if (!caio)
+		return -ENOMEM;
+
 	memset(caio, 0, sizeof(struct cdev_async_io));
 
-	caio->cb = kzalloc(count * (sizeof(struct xdma_io_cb)), GFP_KERNEL);
+	caio->cb = kcalloc(count, sizeof(struct xdma_io_cb), GFP_KERNEL);
+	if (!caio->cb) {
+		kmem_cache_free(cdev_cache, caio);
+		return -ENOMEM;
+	}
 
 	spin_lock_init(&caio->lock);
 	iocb->private = caio;
 	caio->iocb = iocb;
 	caio->write = false;
 	caio->cancel = false;
-	caio->req_cnt = count;
 
 	for (i = 0; i < count; i++) {
 
@@ -543,20 +571,39 @@ static ssize_t cdev_aio_read(struct kiocb *iocb, const struct iovec *io,
 					caio->cb[i].len, pos, 1);
 		if (rv) {
 			pr_info("Invalid transfer alignment detected\n");
-			kmem_cache_free(cdev_cache, caio);
-			return rv;
+			goto submit_error;
 		}
 
-		rv = char_sgdma_map_user_buf_to_sgl(&caio->cb[i], true);
+		rv = char_sgdma_map_user_buf_to_sgl(&caio->cb[i], false);
 		if (rv < 0)
-			return rv;
+			goto submit_error;
 
 		rv = xdma_xfer_submit_nowait((void *)&caio->cb[i], xdev,
 					engine->channel, caio->cb[i].write,
 					caio->cb[i].ep_addr, &caio->cb[i].sgt,
 					0, c2h_timeout * 1000);
+		if (rv != -EIOCBQUEUED) {
+			char_sgdma_unmap_user_buf(&caio->cb[i],
+						caio->cb[i].write);
+			goto submit_error;
+		}
+
+		submitted++;
 	}
 
+	caio->req_cnt = submitted;
+	if (engine->cmplthp)
+		xdma_kthread_wakeup(engine->cmplthp);
+
+	return -EIOCBQUEUED;
+
+submit_error:
+	if (!submitted) {
+		cdev_async_io_release(caio);
+		return rv;
+	}
+
+	caio->req_cnt = submitted;
 	if (engine->cmplthp)
 		xdma_kthread_wakeup(engine->cmplthp);
 

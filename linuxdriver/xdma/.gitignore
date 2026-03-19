@@ -4,7 +4,7 @@ sw/build/*
 #-------------
 
 # Prerequisites
-#*.d
+*.d
 
 # Object files
 *.o

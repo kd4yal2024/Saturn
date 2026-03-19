@@ -30,7 +30,8 @@ all :
 
 clean:
 	$(MAKE) -C $(KDIR) M=$(PWD) clean
-	@/bin/rm -f *.ko modules.order *.mod.c *.o *.o.ur-safe .*.o.cmd
+	@/bin/rm -f *.ko *.mod *.mod.c *.o *.o.ur-safe *.symvers \
+		modules.order Module.symvers .*.cmd .*.d
 
 install: all
 	@set -o pipefail; $(MAKE) -C $(KDIR) M=$(PWD) modules_install 2>&1 | awk '!/Warning: modules_install: missing '\''System.map'\'' file\. Skipping depmod\./ { print }'

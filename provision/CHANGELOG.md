@@ -2,6 +2,20 @@
 
 All notable changes to provisioning assets are documented in this file.
 
+## [2026-03-18]
+
+### Changed
+
+- `../scripts/fix-xdma.sh`
+  - now builds the XDMA module as the invoking Saturn user and only uses root for module install/reload
+  - now creates timestamped backups of any installed `xdma.ko` or `xdma.ko.xz` before replacing them
+  - now normalizes the active installed XDMA module ownership to `root:root` after `modules_install`
+
+### Documentation
+
+- `README.md`
+  - documented that `fix-xdma.sh` keeps repo build artifacts owned by the Saturn user instead of root-only build/install flow
+
 ## [2026-03-17]
 
 ### Changed
