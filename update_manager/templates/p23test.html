@@ -236,6 +236,7 @@
           <div class="row">
             <button id="p23-perf-refresh" class="btn">Refresh</button>
             <button id="p23-perf-reset" class="btn">Reset Baseline</button>
+            <button id="p23-perf-snapshot" class="btn">Capture Snapshot</button>
           </div>
         </div>
         <div id="p23-perf-summary" class="summary">Loading...</div>
@@ -331,6 +332,17 @@
             <summary>Raw Performance Snapshot</summary>
             <pre id="p23-perf-raw" class="term compact"></pre>
           </details>
+          <details id="p23-snapshot-details">
+            <summary>Captured Snapshot</summary>
+            <div class="row space" style="margin:10px 0;">
+              <div id="p23-snapshot-summary" class="muted">No snapshot captured yet.</div>
+              <div class="row">
+                <button id="p23-snapshot-copy" class="btn" disabled>Copy JSON</button>
+                <button id="p23-snapshot-download" class="btn" disabled>Download</button>
+              </div>
+            </div>
+            <pre id="p23-snapshot-view" class="term compact"></pre>
+          </details>
         </div>
       </div>
     </div>
@@ -375,6 +387,10 @@ let perfPrevSample = null;
 let perfBaseline = null;
 let perfProcessIdentity = '';
 let latestP23Status = null;
+let latestP23Perf = null;
+let latestDerivedPerf = null;
+let latestPerfAlertState = null;
+let latestCapturedSnapshot = null;
 const PERF_THRESH = {
   cpuCoreWarn: 60,
   cpuCoreCrit: 90,
@@ -487,6 +503,18 @@ function setPerfDashboardHtml(html){
 }
 function setPerfRawText(text){
   $('p23-perf-raw').textContent = text || '';
+}
+function setSnapshotSummary(text, isError=false){
+  const el = $('p23-snapshot-summary');
+  el.textContent = text || '';
+  el.style.color = isError ? '#fca5a5' : '';
+}
+function setSnapshotViewText(text){
+  $('p23-snapshot-view').textContent = text || '';
+}
+function setSnapshotButtonsEnabled(enabled){
+  $('p23-snapshot-copy').disabled = !enabled;
+  $('p23-snapshot-download').disabled = !enabled;
 }
 function escapeHtml(value){
   return String(value ?? '')
@@ -607,6 +635,126 @@ function fmtBytes(v){
   let x = n, i = 0;
   while (x >= 1024 && i < units.length - 1){ x /= 1024; i += 1; }
   return `${x.toFixed(i ? 1 : 0)} ${units[i]}`;
+}
+function jsonSafe(value){
+  if (value === null) return null;
+  if (typeof value === 'number') return Number.isFinite(value) ? value : null;
+  if (typeof value === 'string' || typeof value === 'boolean') return value;
+  if (Array.isArray(value)) return value.map((item)=>jsonSafe(item));
+  if (typeof value === 'object'){
+    const out = {};
+    Object.entries(value).forEach(([key, val])=>{
+      if (typeof val === 'undefined') return;
+      out[key] = jsonSafe(val);
+    });
+    return out;
+  }
+  return value ?? null;
+}
+function summarizeBaselineBucket(bucket){
+  if (!bucket || !bucket.count){
+    return { count: 0, min: null, avg: null, max: null };
+  }
+  return {
+    count: bucket.count,
+    min: Number.isFinite(bucket.min) ? bucket.min : null,
+    avg: Number.isFinite(bucket.sum / bucket.count) ? (bucket.sum / bucket.count) : null,
+    max: Number.isFinite(bucket.max) ? bucket.max : null,
+  };
+}
+function serializePerfBaseline(baseline){
+  if (!baseline) return null;
+  const startedAtMs = Number(baseline.startedAtMs) || Date.now();
+  return {
+    started_at_ms: startedAtMs,
+    started_at_iso: new Date(startedAtMs).toISOString(),
+    age_seconds: (Date.now() - startedAtMs) / 1000,
+    samples: Number(baseline.samples) || 0,
+    metrics: {
+      cpu_pct_core: summarizeBaselineBucket(baseline.cpuPctCore),
+      rss_mb: summarizeBaselineBucket(baseline.rssMb),
+      sched_delay_ms_per_sec: summarizeBaselineBucket(baseline.schedDelayMsPerSec),
+      ctx_per_sec: summarizeBaselineBucket(baseline.ctxPerSec),
+      eth_rx_mbps: summarizeBaselineBucket(baseline.ethRxMbps),
+      eth_tx_mbps: summarizeBaselineBucket(baseline.ethTxMbps),
+      eth_rx_pps: summarizeBaselineBucket(baseline.ethRxPps),
+      xdma_irq_per_sec: summarizeBaselineBucket(baseline.xdmaIrqPerSec),
+      xdma_irq_per_mib: summarizeBaselineBucket(baseline.xdmaIrqPerMiB),
+    },
+  };
+}
+function snapshotTimestampTag(date){
+  const pad = (n)=>String(n).padStart(2, '0');
+  return `${date.getFullYear()}${pad(date.getMonth() + 1)}${pad(date.getDate())}-${pad(date.getHours())}${pad(date.getMinutes())}${pad(date.getSeconds())}`;
+}
+function buildPerfSnapshot(){
+  if (!latestP23Perf || !latestDerivedPerf) return null;
+  const now = new Date();
+  return {
+    captured_at_ms: now.getTime(),
+    captured_at_iso: now.toISOString(),
+    page: {
+      path: window.location.pathname,
+      workload_summary: $('p23-workload-summary').textContent || '',
+      perf_summary: $('p23-perf-summary').textContent || '',
+      alert_level: latestPerfAlertState?.level || 'ok',
+      baseline_samples: Number(perfBaseline?.samples) || 0,
+    },
+    workload_key: latestP23Perf?.workload?.workload_key || '',
+    selected_app: latestP23Perf?.workload?.selected_app || '',
+    startup_mode: latestP23Perf?.workload?.startup_mode || '',
+    panel_mode: latestP23Perf?.workload?.panel_mode || '',
+    current_sample: jsonSafe(latestDerivedPerf),
+    baseline: jsonSafe(serializePerfBaseline(perfBaseline)),
+    raw: jsonSafe({ perf: latestP23Perf }),
+    status: jsonSafe({ p23: latestP23Status || null }),
+  };
+}
+function renderCapturedSnapshot(snapshot){
+  latestCapturedSnapshot = snapshot;
+  const text = JSON.stringify(snapshot, null, 2);
+  const sampleCount = Number(snapshot?.page?.baseline_samples) || 0;
+  const level = String(snapshot?.page?.alert_level || 'ok').toUpperCase();
+  setSnapshotSummary(`Captured ${new Date(snapshot.captured_at_ms).toLocaleString()} | baseline ${sampleCount} samples | alert ${level}`, false);
+  setSnapshotViewText(text);
+  setSnapshotButtonsEnabled(true);
+  $('p23-snapshot-details').open = true;
+}
+async function copyCapturedSnapshot(){
+  if (!latestCapturedSnapshot) return;
+  const text = JSON.stringify(latestCapturedSnapshot, null, 2);
+  try{
+    if (!navigator.clipboard?.writeText) throw new Error('Clipboard API unavailable');
+    await navigator.clipboard.writeText(text);
+    setSnapshotSummary(`Captured ${new Date(latestCapturedSnapshot.captured_at_ms).toLocaleString()} | copied JSON to clipboard`, false);
+  }catch(e){
+    setSnapshotSummary('Failed to copy snapshot JSON: ' + e.message, true);
+  }
+}
+function downloadCapturedSnapshot(){
+  if (!latestCapturedSnapshot) return;
+  const text = JSON.stringify(latestCapturedSnapshot, null, 2);
+  const blob = new Blob([text], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  const stamp = snapshotTimestampTag(new Date(latestCapturedSnapshot.captured_at_ms));
+  a.href = url;
+  a.download = `p23-perf-snapshot-${stamp}.json`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+  setSnapshotSummary(`Captured ${new Date(latestCapturedSnapshot.captured_at_ms).toLocaleString()} | downloaded JSON snapshot`, false);
+}
+function capturePerfSnapshot(){
+  const snapshot = buildPerfSnapshot();
+  if (!snapshot){
+    setSnapshotSummary('No live performance sample available yet. Wait for the next poll and try again.', true);
+    setSnapshotViewText('');
+    setSnapshotButtonsEnabled(false);
+    return;
+  }
+  renderCapturedSnapshot(snapshot);
 }
 function counterValue(counters, key){
   return Number(counters?.[key]) || 0;
@@ -1026,6 +1174,9 @@ async function loadP23Perf(){
     if (!r.ok) throw new Error(data.message || ('HTTP ' + r.status));
     const perf = data.perf || {};
     if (!perf.process){
+      latestP23Perf = null;
+      latestDerivedPerf = null;
+      latestPerfAlertState = null;
       perfPrevSample = null;
       perfBaseline = newPerfBaseline();
       perfProcessIdentity = '';
@@ -1047,6 +1198,9 @@ async function loadP23Perf(){
     perfProcessIdentity = currentIdentity;
     setWorkloadSummary(formatWorkloadSummaryFromPerf(perf), false);
     const alertState = computePerfAlerts(d, perfBaseline);
+    latestP23Perf = perf;
+    latestDerivedPerf = d;
+    latestPerfAlertState = alertState;
     baselinePush(perfBaseline.cpuPctCore, d.cpuPctCore);
     baselinePush(perfBaseline.rssMb, d.rssMb);
     baselinePush(perfBaseline.schedDelayMsPerSec, d.schedDelayMsPerSec);
@@ -1065,6 +1219,9 @@ async function loadP23Perf(){
     setPerfDashboardHtml(renderPerfDashboard(d, perf, alertState, perfBaseline));
     setPerfRawText(JSON.stringify({ perf }, null, 2));
   }catch(e){
+    latestP23Perf = null;
+    latestDerivedPerf = null;
+    latestPerfAlertState = null;
     setWorkloadSummary('Failed to load workload tags: ' + e.message, true);
     setPerfSummary('Failed to load P2/P3 performance metrics: ' + e.message, true);
     setPerfDashboardHtml(metricCard('Performance', 'load failed', e.message));
@@ -1228,6 +1385,9 @@ $('p23-adc-enable').addEventListener('click', ()=>{ setAdcTelemetry(true); });
 $('p23-adc-disable').addEventListener('click', ()=>{ setAdcTelemetry(false); });
 $('p23-perf-refresh').addEventListener('click', ()=>{ loadP23Perf(); });
 $('p23-perf-reset').addEventListener('click', ()=>{ resetPerfBaseline(); loadP23Perf(); });
+$('p23-perf-snapshot').addEventListener('click', ()=>{ capturePerfSnapshot(); });
+$('p23-snapshot-copy').addEventListener('click', ()=>{ copyCapturedSnapshot(); });
+$('p23-snapshot-download').addEventListener('click', ()=>{ downloadCapturedSnapshot(); });
 $('p23-emergency-revert').addEventListener('click', ()=>{
   if (!confirm('EMERGENCY REVERT?\n\nThis removes the P2/P3 override and restarts p2app.service.')) return;
   runEmergencyRevert();

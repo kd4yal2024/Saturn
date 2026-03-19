@@ -247,6 +247,7 @@ Capabilities:
 - `Emergency Revert Now` button (forces a real revert + restart even if `Dry run` / `No restart` options are selected)
 - Separate status panel backed by `GET /p23_status`
 - Separate workload/performance dashboard backed by `GET /p23_perf`
+- `Capture Snapshot` button for exporting a point-in-time JSON bundle of the live `/p23_perf` sample, derived metrics, and current baseline summary
 
 Switching implementation details:
 
@@ -274,6 +275,12 @@ Safety/usage notes:
 - Web mode requires `sudo -n` permission for install/symlink/systemctl steps
 - `No restart` updates symlink/override without restarting `p2app.service`
 - If a switch leaves the local panel UI unusable but networking still works (e.g. Thetis continues to connect), use `/saturn/p23test` from another device and click `Emergency Revert Now`
+- Reasonable snapshot capture times:
+  - `2 minutes` for post-change smoke checks
+  - `10-15 minutes` for steady-state baseline comparisons
+  - `30-60 minutes` for longer stability, underrun, or jitter investigations
+  - `5 minutes` each for transition cases such as idle RX, active RX, TX, and disconnect/reconnect recovery
+- When reviewing a captured snapshot, remember it is a single point-in-time sample plus page baseline summary; if the page reports hundreds of samples, that sample count comes from the browser baseline history rather than the raw `/p23_perf` payload itself.
 
 ### Update piHPSDR (Dedicated Terminal)
 

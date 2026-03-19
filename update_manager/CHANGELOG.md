@@ -25,6 +25,7 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
 - P2/P3 ADC peak telemetry toggle endpoint (`POST /p23_adc_telemetry`) and hidden `/p23test` panel for enabling/disabling runtime ADC peak export without persistent disk writes.
 - New `p23-app-manager.sh` helper script for P2/P3 build/deploy/switch/revert actions via `/run`.
 - New `scripts/install-shutdown-waiter-service.sh` migration installer to deploy `saturn-shutdown-waiter.service`, initialize `/etc/default/saturn-shutdown-waiter`, and remove legacy `~/.config/autostart/g2-shutdown.desktop`.
+- Hidden P2/P3 Test Lab now includes a `Capture Snapshot` action that packages the current `/p23_perf` payload, derived runtime counters, and baseline sample summary into a copyable/downloadable JSON snapshot for lab review.
 
 ### Changed
 - P2/P3 app high-priority telemetry now preserves the live ADC peak-hold values when exporting `/dev/shm/saturn_p23_perf_stats.json`, so the lab page ADC gauges match runtime packet content instead of being zeroed before snapshot.

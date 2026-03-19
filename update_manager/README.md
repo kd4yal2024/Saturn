@@ -206,6 +206,12 @@ If a script entry does not define `version`, `/get_versions` now returns
 - current workload shape (`P2`/`P3`, startup mode, panel mode, DDC enable/interleave state, wideband mode)
 - app packet/DMA/error counters for high-priority, DDC, wideband, mic, DUC, and speaker paths
 - Performance panel includes a workload-first dashboard layout plus threshold highlighting/alerts for CPU, scheduler wait, XDMA interrupt spikes/drops, and stale app telemetry.
+- Performance panel includes a `Capture Snapshot` action that packages:
+  - the current `/p23_perf` payload
+  - the page's derived runtime counters
+  - the current baseline summary/sample count
+  - the current status/workload summaries
+- Captured snapshots can be copied as JSON or downloaded from the page for later review/comparison.
 - When `/proc/<pid>/io` is unreadable for the active `p2app.service` process,
   `/p23_perf` now reports `process.io.source = "eth0_netdev_proxy"` and uses
   `eth0` RX/TX byte counters as the char-I/O proxy source so the hidden P23
@@ -220,6 +226,11 @@ If a script entry does not define `version`, `/get_versions` now returns
   - latest snapshot stored in `/dev/shm/saturn_p23_adc_peak_telemetry.json`
   - uses `/dev/shm` and overwrites a single file, so it does not create persistent disk churn
   - disabling telemetry stops updates but retains the last snapshot until a later enabled run overwrites it or it is removed manually
+- Recommended snapshot timing when comparing P2/P3 or driver changes:
+  - `2 minutes` for a quick smoke test after a build/deploy change
+  - `10-15 minutes` for a normal baseline capture under a steady workload
+  - `30-60 minutes` for longer stability/jitter investigations
+  - `5 minutes` each for mode transitions such as idle RX, active RX, TX, and reconnect recovery
 - Intended for local testing; it is not linked from the main navigation.
 
 ## Build and Deploy (Rust Server)
