@@ -1820,6 +1820,21 @@ async fn get_p23_status(State(state): State<AppState>) -> Response {
         })
     }
 
+    fn systemd_env_value(env_text: &str, key: &str) -> Option<String> {
+        let prefix = format!("{key}=");
+        env_text
+            .split_whitespace()
+            .find_map(|token| token.strip_prefix(&prefix).map(str::to_string))
+    }
+
+    fn parse_boolish(value: Option<&str>) -> Option<bool> {
+        match value.map(|v| v.trim().to_ascii_lowercase()) {
+            Some(v) if matches!(v.as_str(), "1" | "true" | "yes" | "on") => Some(true),
+            Some(v) if matches!(v.as_str(), "0" | "false" | "no" | "off") => Some(false),
+            _ => None,
+        }
+    }
+
     async fn systemctl_text(args: &[&str]) -> String {
         match Command::new("systemctl").args(args).output().await {
             Ok(out) => {
@@ -1863,6 +1878,8 @@ async fn get_p23_status(State(state): State<AppState>) -> Response {
     let active = systemctl_text(&["is-active", service_name]).await;
     let enabled = systemctl_text(&["is-enabled", service_name]).await;
     let main_pid_text = systemctl_text(&["show", "-p", "MainPID", "--value", service_name]).await;
+    let service_environment_text =
+        systemctl_text(&["show", "-p", "Environment", "--value", service_name]).await;
     let main_pid = main_pid_text.trim().parse::<u32>().ok().filter(|v| *v > 0);
     let running_exe = main_pid.and_then(|pid| {
         fs::read_link(format!("/proc/{pid}/exe"))
@@ -1907,6 +1924,37 @@ async fn get_p23_status(State(state): State<AppState>) -> Response {
                 }))
             })
     });
+    let service_environment_error = service_environment_text
+        .strip_prefix("error: ")
+        .map(str::to_string);
+    let service_panel_mode = systemd_env_value(&service_environment_text, "SATURN_FRONT_PANEL_MODE");
+    let rt_enable_raw = systemd_env_value(&service_environment_text, "SATURN_P3_RT_AUDIO_ENABLE");
+    let rt_policy = systemd_env_value(&service_environment_text, "SATURN_P3_RT_AUDIO_POLICY");
+    let rt_priority_raw =
+        systemd_env_value(&service_environment_text, "SATURN_P3_RT_AUDIO_PRIORITY");
+    let rt_priority = rt_priority_raw
+        .as_deref()
+        .and_then(|value| value.parse::<i32>().ok());
+    let rt_cpus = systemd_env_value(&service_environment_text, "SATURN_P3_RT_AUDIO_CPUS");
+    let rt_enabled = parse_boolish(rt_enable_raw.as_deref()).unwrap_or(false);
+    let rt_configured =
+        rt_enable_raw.is_some() || rt_policy.is_some() || rt_priority_raw.is_some() || rt_cpus.is_some();
+    let mut relevant_environment = BTreeMap::<String, String>::new();
+    if let Some(value) = service_panel_mode.clone() {
+        relevant_environment.insert("SATURN_FRONT_PANEL_MODE".to_string(), value);
+    }
+    if let Some(value) = rt_enable_raw.clone() {
+        relevant_environment.insert("SATURN_P3_RT_AUDIO_ENABLE".to_string(), value);
+    }
+    if let Some(value) = rt_policy.clone() {
+        relevant_environment.insert("SATURN_P3_RT_AUDIO_POLICY".to_string(), value);
+    }
+    if let Some(value) = rt_priority_raw.clone() {
+        relevant_environment.insert("SATURN_P3_RT_AUDIO_PRIORITY".to_string(), value);
+    }
+    if let Some(value) = rt_cpus.clone() {
+        relevant_environment.insert("SATURN_P3_RT_AUDIO_CPUS".to_string(), value);
+    }
 
     Json(serde_json::json!({
         "status": "ok",
@@ -1943,8 +1991,24 @@ async fn get_p23_status(State(state): State<AppState>) -> Response {
                 "exists": override_file.exists(),
                 "exec_start": override_execstart,
                 "panel_mode": override_panel_mode,
+                "panel_mode_effective": service_panel_mode.clone().or_else(|| override_panel_mode.clone()),
                 "saturn_meta": override_saturn_metadata,
                 "contents": override_contents,
+            },
+            "service_runtime": {
+                "source": "systemctl show -p Environment --value",
+                "error": service_environment_error,
+                "front_panel_mode": service_panel_mode.clone().or_else(|| override_panel_mode.clone()),
+                "environment": relevant_environment,
+                "audio_rt": {
+                    "configured": rt_configured,
+                    "enabled": rt_enabled,
+                    "enable_raw": rt_enable_raw,
+                    "policy": rt_policy,
+                    "priority": rt_priority,
+                    "priority_raw": rt_priority_raw,
+                    "cpus": rt_cpus,
+                }
             },
             "adc_peak_telemetry": adc_peak_telemetry_info(),
         }

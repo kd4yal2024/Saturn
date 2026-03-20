@@ -50,6 +50,9 @@
 #define VDUCPREFILLLOWFRAMES 3                      // re-enter prefill when FIFO occupancy falls below this
 #define VDUCPREFILLHIGHFRAMES 8                     // stay in prefill until FIFO occupancy reaches this
 #define VDUCMAXQUEUEAGEUS 1500U                     // cap added TX latency while still allowing occasional coalescing
+#define VDUCEMERGENCYLOWFRAMES 2                    // when FIFO occupancy falls this low, stop waiting for deep refill batches
+#define VDUCEMERGENCYQUEUEFRAMES 2                  // low-water target to keep the TX DUC FIFO fed
+#define VDUCEMERGENCYMAXQUEUEAGEUS 500U             // flush sooner when the TX FIFO is near empty
 
 static void NoteDUCUnderflow(bool ReportingEnabled, bool Underflowed, bool *UnderflowActive,
                              unsigned int Current)
@@ -103,6 +106,20 @@ static uint32_t GetDUCTargetFrames(unsigned int Current, bool *PrefillActive)
     return *PrefillActive ? VDUCPREFILLQUEUEFRAMES : VDUCNORMALQUEUEFRAMES;
 }
 
+static uint64_t GetDUCQueueAgeLimitUs(unsigned int Current, uint32_t *TargetFrames)
+{
+    const unsigned int EmergencyWords = VDUCEMERGENCYLOWFRAMES * VMEMWORDSPERFRAME;
+
+    if (Current < EmergencyWords)
+    {
+        if (*TargetFrames > VDUCEMERGENCYQUEUEFRAMES)
+            *TargetFrames = VDUCEMERGENCYQUEUEFRAMES;
+        return VDUCEMERGENCYMAXQUEUEAGEUS;
+    }
+
+    return VDUCMAXQUEUEAGEUS;
+}
+
 //
 // listener thread for incoming DUC I/Q packets
 // planned strategy: just DMA spkr data when available; don't copy and DMA a larger amount.
@@ -140,12 +157,14 @@ void *IncomingDUCIQ(void *arg)                          // listener thread
     uint64_t PendingStartNs = 0;
     uint32_t TargetFrames = VDUCPREFILLQUEUEFRAMES;
     uint64_t QueueAgeUs = 0;
+    uint64_t MaxQueueAgeUs = VDUCMAXQUEUEAGEUS;
     struct timespec ReceiveTimeout;
     struct timespec *ReceiveTimeoutPtr = NULL;
 
     ThreadData = (struct ThreadSocketData *)arg;
     atomic_store(&ThreadData->Active, true);
     printf("spinning up DUC I/Q thread with port %u, pid=%ld\n", (unsigned int)atomic_load(&ThreadData->Portid), syscall(SYS_gettid));
+    ApplyCriticalAudioThreadRuntime("DUC I/Q");
 
     memset(DatagramList, 0, sizeof(DatagramList));
     for (MsgIndex = 0; MsgIndex < VMAXDMABATCHFRAMES; MsgIndex++)
@@ -307,18 +326,19 @@ void *IncomingDUCIQ(void *arg)                          // listener thread
         if(PendingStartNs != 0)
             QueueAgeUs = (GetMonotonicTimeNs() - PendingStartNs) / 1000ULL;
 
+        Depth = ReadFIFOMonitorChannel(eTXDUCDMA, &FIFOOverflow, &FIFOOverThreshold, &FIFOUnderflow, &Current);           // refresh actual FIFO occupancy before deciding to keep batching
+        if((StartupCount == 0) && FIFOOverThreshold && UseDebug)
+            printf("TX DUC FIFO Overthreshold, depth now = %d\n", Current);
+        if(FIFOUnderflow)
+            PrefillActive = true;
+        NoteDUCUnderflow((StartupCount == 0) && SDRActiveNow, FIFOUnderflow, &UnderflowActive, Current);
+
         TargetFrames = GetDUCTargetFrames(Current, &PrefillActive);
-        if((PendingFrames < TargetFrames) && (QueueAgeUs < VDUCMAXQUEUEAGEUS) && (PendingFrames < VMAXDMABATCHFRAMES))
+        MaxQueueAgeUs = GetDUCQueueAgeLimitUs(Current, &TargetFrames);
+        if((PendingFrames < TargetFrames) && (QueueAgeUs < MaxQueueAgeUs) && (PendingFrames < VMAXDMABATCHFRAMES))
             continue;
 
         {
-            Depth = ReadFIFOMonitorChannel(eTXDUCDMA, &FIFOOverflow, &FIFOOverThreshold, &FIFOUnderflow, &Current);           // read the FIFO free locations
-            if((StartupCount == 0) && FIFOOverThreshold && UseDebug)
-                printf("TX DUC FIFO Overthreshold, depth now = %d\n", Current);
-            if(FIFOUnderflow)
-                PrefillActive = true;
-            NoteDUCUnderflow((StartupCount == 0) && SDRActiveNow, FIFOUnderflow, &UnderflowActive, Current);
-
             while ((Depth < (VMEMWORDSPERFRAME * PendingFrames)) && !atomic_load(&ExitRequested))      // loop till space available
             {
                 usleep(500);								                    // 0.5ms wait

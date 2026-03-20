@@ -213,7 +213,8 @@ If a script entry does not define `version`, `/get_versions` now returns
   - the page's derived runtime counters
   - the current baseline summary/sample count
   - the current status/workload summaries
-- Captured snapshots can be copied as JSON or downloaded from the page for later review/comparison.
+  - the effective `p2app.service` runtime environment subset used by the lab (`SATURN_FRONT_PANEL_MODE`, `SATURN_P3_RT_AUDIO_*`) when available
+- Captured snapshots can be copied as JSON or downloaded from the page for later review/comparison; browsers without `navigator.clipboard` automatically fall back to a legacy in-page copy method.
 - `fifo_duc_under_events` and `fifo_speaker_under_events` now represent underrun episodes rather than repeated observations of the same active underflow bit during polling recovery, so cumulative totals are more meaningful across long runs.
 - When `/proc/<pid>/io` is unreadable for the active `p2app.service` process,
   `/p23_perf` now reports `process.io.source = "eth0_netdev_proxy"` and uses
@@ -222,6 +223,7 @@ If a script entry does not define `version`, `/get_versions` now returns
 - Performance baseline resets automatically when the running `p2app.service` process identity changes, so P2 and P3 samples are not mixed after a switch/restart.
 - Status/performance panes are always reloaded fresh and are no longer restored from browser session storage.
 - Switch/deploy actions now support startup profiles (`panel`, `panel-debug`, `headless`) and front-panel mode overrides (`auto`, `g2`, `g2v2`, `prefer-g2`, `prefer-g2v2`, `off`), written as `SATURN_FRONT_PANEL_MODE` in the systemd drop-in.
+- Status/dashboard views also report the effective service runtime environment seen by `p2app.service`, including optional `SATURN_P3_RT_AUDIO_ENABLE`, `SATURN_P3_RT_AUDIO_POLICY`, `SATURN_P3_RT_AUDIO_PRIORITY`, and `SATURN_P3_RT_AUDIO_CPUS`.
 - `/p23test` includes an `Emergency Revert Now` button for fast recovery if a switch leaves the local UI unusable.
 - `/p23test` includes an optional ADC peak telemetry panel:
   - toggle via `POST /p23_adc_telemetry`

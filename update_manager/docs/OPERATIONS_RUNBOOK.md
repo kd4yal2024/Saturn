@@ -258,7 +258,7 @@ Capabilities:
 - `Emergency Revert Now` button (forces a real revert + restart even if `Dry run` / `No restart` options are selected)
 - Separate status panel backed by `GET /p23_status`
 - Separate workload/performance dashboard backed by `GET /p23_perf`
-- `Capture Snapshot` button for exporting a point-in-time JSON bundle of the live `/p23_perf` sample, derived metrics, and current baseline summary
+- `Capture Snapshot` button for exporting a point-in-time JSON bundle of the live `/p23_perf` sample, derived metrics, current baseline summary, and effective `p2app.service` runtime tuning state seen by the lab
 
 Switching implementation details:
 
@@ -271,8 +271,10 @@ Switching implementation details:
   - startup profile (`panel`, `panel-debug`, `headless`) -> mapped service args
   - `Environment=SATURN_FRONT_PANEL_MODE=...` (`auto`, `g2`, `g2v2`, `prefer-g2`, `prefer-g2v2`, `off`)
 - `GET /p23_status` parses the generated override comment metadata (`# saturn-p23 mode=... panel=...`) for display
+- `GET /p23_status` also reports the effective `p2app.service` runtime environment subset from `systemctl show -p Environment`, including optional `SATURN_P3_RT_AUDIO_*` settings for P3 audio-thread tuning
 - `GET /p23_perf` overlays host metrics with workload tags and live app telemetry exported from `/dev/shm/saturn_p23_perf_stats.json`
 - The dashboard baseline resets automatically when the active workload identity changes (PID, selected app/mode, or routing shape)
+- Snapshot `Copy JSON` falls back to a legacy in-page copy path when the browser Clipboard API is unavailable
 - The dashboard is organized around:
   - workload identity and app shape
   - host pressure (CPU, scheduler wait, memory, eth0, XDMA)

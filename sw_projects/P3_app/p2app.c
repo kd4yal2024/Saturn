@@ -21,6 +21,7 @@
 #include <limits.h>
 #include <stdint.h>
 #include <string.h>
+#include <strings.h>
 #include <unistd.h>
 #include <fcntl.h>
 #include <math.h>
@@ -39,6 +40,7 @@
 #include <sys/types.h>
 #include <dirent.h>
 #include <pthread.h>
+#include <sched.h>
 #include <syscall.h>
 
 
@@ -67,7 +69,7 @@
 #include "GanymedePAControl.h"
 #include "frontpanelhandler.h"
 
-#define P3APPVERSION 45
+#define P3APPVERSION 46
 #define FWREQUIREDMAJORVERSION 1                  // major version that is required. Only altered if programming interface changes. 
 //
 // the Firmware version is a protection to make sure that if a p3app update is required by the new firmware,
@@ -75,6 +77,7 @@
 //
 //------------------------------------------------------------------------------------------
 // VERSION History
+// V46, 19/03/2026. optional SCHED_RR/FIFO + CPU affinity tuning for speaker/DUC threads via SATURN_P3_RT_AUDIO_* env vars.
 // V45, 16/03/2026. encodes ADC1/ADC2 peak amplitudes into the high priority status message.
 // V44, 31/01/2026.  Support for Thetis "push" CAT commands for Ganymede, g2v2 indicators & Aries instead of polling
 // V43, 19/01/2026.  Initial support for Ganymede PA controller if stared with -g switch.
@@ -151,6 +154,18 @@ bool UseAriesATU = false;                   // true if to use an Aries ATU
 uint32_t LODebugDDC1Frequency;              // -x debug mode: LO frequency for DDC1
 bool InterleavedDDCDebugMode = false;       // true if interleaved DDC for debug are allowed
 static volatile sig_atomic_t g_signal_exit_requested = 0;
+
+struct CriticalAudioRuntimeConfig
+{
+  bool Enabled;
+  int Policy;
+  int Priority;
+  bool CpuSetConfigured;
+  cpu_set_t CpuSet;
+  char CpuListText[64];
+};
+
+static struct CriticalAudioRuntimeConfig gCriticalAudioRuntime;
 
 static void SyncSignalExitRequest(void)
 {
@@ -468,6 +483,335 @@ void SyncSocketAliasesForOwner(const struct ThreadSocketData* OwnerPtr)
 uint32_t GetP3appVersion(void)
 {
   return P3APPVERSION;
+}
+
+static const char* SchedulerPolicyName(int Policy)
+{
+  switch(Policy)
+  {
+    case SCHED_OTHER:
+      return "SCHED_OTHER";
+    case SCHED_FIFO:
+      return "SCHED_FIFO";
+    case SCHED_RR:
+      return "SCHED_RR";
+    default:
+      return "UNKNOWN";
+  }
+}
+
+static bool ParseBoolEnvValue(const char* Value, bool* ParsedValue)
+{
+  if((Value == NULL) || (ParsedValue == NULL))
+    return false;
+
+  if((strcasecmp(Value, "1") == 0) || (strcasecmp(Value, "true") == 0) ||
+     (strcasecmp(Value, "yes") == 0) || (strcasecmp(Value, "on") == 0))
+  {
+    *ParsedValue = true;
+    return true;
+  }
+
+  if((strcasecmp(Value, "0") == 0) || (strcasecmp(Value, "false") == 0) ||
+     (strcasecmp(Value, "no") == 0) || (strcasecmp(Value, "off") == 0))
+  {
+    *ParsedValue = false;
+    return true;
+  }
+
+  return false;
+}
+
+static char* TrimWhitespace(char* Text)
+{
+  char* EndPtr;
+
+  if(Text == NULL)
+    return NULL;
+
+  while((*Text == ' ') || (*Text == '\t'))
+    Text++;
+
+  if(*Text == '\0')
+    return Text;
+
+  EndPtr = Text + strlen(Text) - 1;
+  while((EndPtr > Text) && ((*EndPtr == ' ') || (*EndPtr == '\t')))
+  {
+    *EndPtr = '\0';
+    EndPtr--;
+  }
+
+  return Text;
+}
+
+static bool ParseLongValue(const char* Text, long* ParsedValue)
+{
+  char* EndPtr = NULL;
+
+  if((Text == NULL) || (ParsedValue == NULL))
+    return false;
+
+  errno = 0;
+  *ParsedValue = strtol(Text, &EndPtr, 10);
+  if(errno != 0)
+    return false;
+
+  while((EndPtr != NULL) && ((*EndPtr == ' ') || (*EndPtr == '\t')))
+    EndPtr++;
+
+  return (EndPtr != NULL) && (*EndPtr == '\0');
+}
+
+static int ParseSchedulerPolicy(const char* Value)
+{
+  if(Value == NULL)
+    return SCHED_RR;
+
+  if((strcasecmp(Value, "rr") == 0) || (strcasecmp(Value, "sched_rr") == 0))
+    return SCHED_RR;
+
+  if((strcasecmp(Value, "fifo") == 0) || (strcasecmp(Value, "sched_fifo") == 0))
+    return SCHED_FIFO;
+
+  if((strcasecmp(Value, "other") == 0) || (strcasecmp(Value, "sched_other") == 0))
+    return SCHED_OTHER;
+
+  return -1;
+}
+
+static bool ParseCPUSetToken(char* Token, long MaxCpuIndex, cpu_set_t* CpuSet, bool* AddedAny)
+{
+  char* DashPtr = NULL;
+  long StartCPU;
+  long EndCPU;
+  long CpuNum;
+
+  if((Token == NULL) || (CpuSet == NULL) || (AddedAny == NULL))
+    return false;
+
+  DashPtr = strchr(Token, '-');
+  if(DashPtr != NULL)
+  {
+    *DashPtr = '\0';
+    Token = TrimWhitespace(Token);
+    DashPtr = TrimWhitespace(DashPtr + 1);
+    if((Token == NULL) || (DashPtr == NULL) || (*Token == '\0') || (*DashPtr == '\0'))
+      return false;
+    if(!ParseLongValue(Token, &StartCPU) || !ParseLongValue(DashPtr, &EndCPU))
+      return false;
+  }
+  else
+  {
+    Token = TrimWhitespace(Token);
+    if((Token == NULL) || (*Token == '\0'))
+      return false;
+    if(!ParseLongValue(Token, &StartCPU))
+      return false;
+    EndCPU = StartCPU;
+  }
+
+  if((StartCPU < 0) || (EndCPU < StartCPU) || (EndCPU > MaxCpuIndex) || (EndCPU >= CPU_SETSIZE))
+    return false;
+
+  for(CpuNum = StartCPU; CpuNum <= EndCPU; CpuNum++)
+  {
+    CPU_SET((int)CpuNum, CpuSet);
+    *AddedAny = true;
+  }
+
+  return true;
+}
+
+static bool ParseCPUSetList(const char* Value, cpu_set_t* CpuSet, char* CpuListText, size_t CpuListTextLength)
+{
+  char Buffer[96];
+  char* SavePtr = NULL;
+  char* Token = NULL;
+  long CpuCount;
+  long MaxCpuIndex;
+  bool AddedAny = false;
+
+  if((Value == NULL) || (CpuSet == NULL) || (CpuListText == NULL) || (CpuListTextLength == 0))
+    return false;
+
+  if(strlen(Value) >= sizeof(Buffer))
+    return false;
+
+  CpuCount = sysconf(_SC_NPROCESSORS_ONLN);
+  MaxCpuIndex = (CpuCount > 0) ? (CpuCount - 1) : (CPU_SETSIZE - 1);
+  if(MaxCpuIndex >= CPU_SETSIZE)
+    MaxCpuIndex = CPU_SETSIZE - 1;
+
+  memset(Buffer, 0, sizeof(Buffer));
+  strncpy(Buffer, Value, sizeof(Buffer) - 1);
+  CPU_ZERO(CpuSet);
+
+  for(Token = strtok_r(Buffer, ",", &SavePtr); Token != NULL; Token = strtok_r(NULL, ",", &SavePtr))
+  {
+    if(!ParseCPUSetToken(Token, MaxCpuIndex, CpuSet, &AddedAny))
+      return false;
+  }
+
+  if(!AddedAny)
+    return false;
+
+  snprintf(CpuListText, CpuListTextLength, "%s", Value);
+  return true;
+}
+
+static void LoadCriticalAudioRuntimeConfig(void)
+{
+  const char* EnableEnv = getenv("SATURN_P3_RT_AUDIO_ENABLE");
+  const char* PolicyEnv = getenv("SATURN_P3_RT_AUDIO_POLICY");
+  const char* PriorityEnv = getenv("SATURN_P3_RT_AUDIO_PRIORITY");
+  const char* CpuEnv = getenv("SATURN_P3_RT_AUDIO_CPUS");
+  bool EnableRequested = false;
+  bool EnableValue = false;
+  int DefaultPriority = 10;
+  int MinPriority;
+  int MaxPriority;
+  int ParsedPolicy = SCHED_RR;
+  long ParsedPriority = 0;
+
+  memset(&gCriticalAudioRuntime, 0, sizeof(gCriticalAudioRuntime));
+  gCriticalAudioRuntime.Policy = SCHED_RR;
+  gCriticalAudioRuntime.Priority = DefaultPriority;
+
+  if(EnableEnv != NULL)
+  {
+    if(!ParseBoolEnvValue(EnableEnv, &EnableValue))
+    {
+      printf("Ignoring invalid SATURN_P3_RT_AUDIO_ENABLE=%s\n", EnableEnv);
+      return;
+    }
+    EnableRequested = EnableValue;
+  }
+  else if((PolicyEnv != NULL) || (PriorityEnv != NULL) || (CpuEnv != NULL))
+  {
+    EnableRequested = true;
+  }
+
+  if(!EnableRequested)
+    return;
+
+  if(PolicyEnv != NULL)
+  {
+    ParsedPolicy = ParseSchedulerPolicy(PolicyEnv);
+    if(ParsedPolicy < 0)
+    {
+      printf("Ignoring invalid SATURN_P3_RT_AUDIO_POLICY=%s, using SCHED_RR\n", PolicyEnv);
+      ParsedPolicy = SCHED_RR;
+    }
+  }
+  gCriticalAudioRuntime.Policy = ParsedPolicy;
+
+  MinPriority = sched_get_priority_min(gCriticalAudioRuntime.Policy);
+  MaxPriority = sched_get_priority_max(gCriticalAudioRuntime.Policy);
+  if((MinPriority < 0) || (MaxPriority < 0))
+  {
+    perror("sched_get_priority_*");
+    MinPriority = 0;
+    MaxPriority = 0;
+  }
+
+  if(gCriticalAudioRuntime.Policy == SCHED_OTHER)
+    gCriticalAudioRuntime.Priority = 0;
+  else
+  {
+    if(DefaultPriority < MinPriority)
+      DefaultPriority = MinPriority;
+    if(DefaultPriority > MaxPriority)
+      DefaultPriority = MaxPriority;
+    gCriticalAudioRuntime.Priority = DefaultPriority;
+
+    if(PriorityEnv != NULL)
+    {
+      if(!ParseLongValue(PriorityEnv, &ParsedPriority))
+      {
+        printf("Ignoring invalid SATURN_P3_RT_AUDIO_PRIORITY=%s, using %d\n",
+               PriorityEnv, gCriticalAudioRuntime.Priority);
+      }
+      else
+      {
+        if(ParsedPriority < MinPriority)
+        {
+          printf("SATURN_P3_RT_AUDIO_PRIORITY=%ld below minimum %d, clamping\n",
+                 ParsedPriority, MinPriority);
+          ParsedPriority = MinPriority;
+        }
+        else if(ParsedPriority > MaxPriority)
+        {
+          printf("SATURN_P3_RT_AUDIO_PRIORITY=%ld above maximum %d, clamping\n",
+                 ParsedPriority, MaxPriority);
+          ParsedPriority = MaxPriority;
+        }
+        gCriticalAudioRuntime.Priority = (int)ParsedPriority;
+      }
+    }
+  }
+
+  if(CpuEnv != NULL)
+  {
+    if(ParseCPUSetList(CpuEnv, &gCriticalAudioRuntime.CpuSet,
+                       gCriticalAudioRuntime.CpuListText, sizeof(gCriticalAudioRuntime.CpuListText)))
+    {
+      gCriticalAudioRuntime.CpuSetConfigured = true;
+    }
+    else
+    {
+      printf("Ignoring invalid SATURN_P3_RT_AUDIO_CPUS=%s\n", CpuEnv);
+    }
+  }
+
+  gCriticalAudioRuntime.Enabled = true;
+  printf("P3 critical audio RT enabled: policy=%s priority=%d",
+         SchedulerPolicyName(gCriticalAudioRuntime.Policy), gCriticalAudioRuntime.Priority);
+  if(gCriticalAudioRuntime.CpuSetConfigured)
+    printf(" cpus=%s", gCriticalAudioRuntime.CpuListText);
+  printf("\n");
+}
+
+void ApplyCriticalAudioThreadRuntime(const char* ThreadName)
+{
+  struct sched_param SchedParam;
+  pid_t ThreadID;
+  int Result;
+
+  if(!gCriticalAudioRuntime.Enabled)
+    return;
+
+  ThreadID = (pid_t)syscall(SYS_gettid);
+
+  if(gCriticalAudioRuntime.CpuSetConfigured)
+  {
+    if(sched_setaffinity(0, sizeof(gCriticalAudioRuntime.CpuSet), &gCriticalAudioRuntime.CpuSet) != 0)
+    {
+      printf("%s affinity request failed, pid=%ld cpus=%s: %s\n",
+             ThreadName, (long)ThreadID, gCriticalAudioRuntime.CpuListText, strerror(errno));
+    }
+    else
+    {
+      printf("%s affinity applied, pid=%ld cpus=%s\n",
+             ThreadName, (long)ThreadID, gCriticalAudioRuntime.CpuListText);
+    }
+  }
+
+  memset(&SchedParam, 0, sizeof(SchedParam));
+  SchedParam.sched_priority = gCriticalAudioRuntime.Priority;
+  Result = pthread_setschedparam(pthread_self(), gCriticalAudioRuntime.Policy, &SchedParam);
+  if(Result != 0)
+  {
+    printf("%s scheduler request failed, pid=%ld policy=%s priority=%d: %s\n",
+           ThreadName, (long)ThreadID, SchedulerPolicyName(gCriticalAudioRuntime.Policy),
+           gCriticalAudioRuntime.Priority, strerror(Result));
+  }
+  else
+  {
+    printf("%s scheduler applied, pid=%ld policy=%s priority=%d\n",
+           ThreadName, (long)ThreadID, SchedulerPolicyName(gCriticalAudioRuntime.Policy),
+           gCriticalAudioRuntime.Priority);
+  }
 }
 
 void sig_handler(int signo)
@@ -1028,6 +1372,7 @@ int main(int argc, char *argv[])
   }
   printf("\n");
   P23PerfTelemetrySetFeatureFlags(UseControlPanel, UseGanymede, UseLDGATU, UseAriesATU);
+  LoadCriticalAudioRuntimeConfig();
 
 
 //

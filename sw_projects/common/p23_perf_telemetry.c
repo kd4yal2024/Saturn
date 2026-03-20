@@ -45,6 +45,11 @@ typedef struct
   uint16_t ADC1Peak;
   uint16_t ADC2Peak;
   uint8_t ADCOverflowBits;
+  uint32_t SpeakerUnderQueueFrames;
+  uint32_t SpeakerUnderFIFOFrames;
+  uint32_t SpeakerUnderQueueAgeUs;
+  uint8_t SpeakerUnderMode;
+  bool SpeakerUnderGapActive;
 } TP23PerfState;
 
 static const char *g_port_names[P23_PERF_MAX_PORTS] =
@@ -107,6 +112,12 @@ static const char *g_counter_names[eP23PerfCounterCount] =
   "speaker_dma_write_bytes",
   "speaker_recv_errors",
   "speaker_dma_errors",
+  "speaker_gap_events",
+  "speaker_stall_events",
+  "speaker_gap_dropped_frames",
+  "speaker_silence_frames",
+  "speaker_underrun_queue_empty_events",
+  "speaker_underrun_queue_ready_events",
   "fifo_rx_ddc_over_events",
   "fifo_mic_over_events",
   "fifo_duc_under_events",
@@ -121,6 +132,23 @@ static char g_app_name[16] = "unknown";
 static uint32_t g_app_version = 0;
 static time_t g_started_at = 0;
 static time_t g_last_write = 0;
+
+static const char *SpeakerUnderrunModeName(uint8_t Mode)
+{
+  switch (Mode)
+  {
+    case 1U:
+      return "normal";
+    case 2U:
+      return "prefill";
+    case 3U:
+      return "emergency";
+    case 4U:
+      return "gap_fill";
+    default:
+      return "unknown";
+  }
+}
 
 static void AppendCounterJSON(FILE *File)
 {
@@ -244,6 +272,19 @@ void P23PerfTelemetrySetADCSnapshot(uint16_t ADC1Peak, uint16_t ADC2Peak, uint8_
   g_perf_state.ADC1Peak = ADC1Peak;
   g_perf_state.ADC2Peak = ADC2Peak;
   g_perf_state.ADCOverflowBits = OverflowBits;
+  pthread_mutex_unlock(&g_perf_mutex);
+}
+
+void P23PerfTelemetrySetSpeakerUnderrunContext(uint32_t QueueFrames, uint32_t FIFOFrames,
+                                               uint32_t QueueAgeUs, uint8_t Mode,
+                                               bool GapActive)
+{
+  pthread_mutex_lock(&g_perf_mutex);
+  g_perf_state.SpeakerUnderQueueFrames = QueueFrames;
+  g_perf_state.SpeakerUnderFIFOFrames = FIFOFrames;
+  g_perf_state.SpeakerUnderQueueAgeUs = QueueAgeUs;
+  g_perf_state.SpeakerUnderMode = Mode;
+  g_perf_state.SpeakerUnderGapActive = GapActive;
   pthread_mutex_unlock(&g_perf_mutex);
 }
 
@@ -376,6 +417,14 @@ void P23PerfTelemetryMaybeWrite(void)
           "      \"peak1\": %" PRIu16 ",\n"
           "      \"peak2\": %" PRIu16 ",\n"
           "      \"overflow_bits\": %" PRIu8 "\n"
+          "    },\n"
+          "    \"speaker_underrun\": {\n"
+          "      \"last_queue_frames\": %" PRIu32 ",\n"
+          "      \"last_fifo_frames\": %" PRIu32 ",\n"
+          "      \"last_queue_age_us\": %" PRIu32 ",\n"
+          "      \"last_mode\": \"%s\",\n"
+          "      \"last_mode_code\": %" PRIu8 ",\n"
+          "      \"last_gap_active\": %s\n"
           "    }\n"
           "  },\n",
           Snapshot.FIFODDCSamples,
@@ -385,7 +434,13 @@ void P23PerfTelemetryMaybeWrite(void)
           Snapshot.FIFOOverflowBits,
           Snapshot.ADC1Peak,
           Snapshot.ADC2Peak,
-          Snapshot.ADCOverflowBits);
+          Snapshot.ADCOverflowBits,
+          Snapshot.SpeakerUnderQueueFrames,
+          Snapshot.SpeakerUnderFIFOFrames,
+          Snapshot.SpeakerUnderQueueAgeUs,
+          SpeakerUnderrunModeName(Snapshot.SpeakerUnderMode),
+          Snapshot.SpeakerUnderMode,
+          Snapshot.SpeakerUnderGapActive ? "true" : "false");
 
   AppendCounterJSON(File);
   fprintf(File, "}\n");

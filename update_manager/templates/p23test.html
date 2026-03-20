@@ -516,6 +516,41 @@ function setSnapshotButtonsEnabled(enabled){
   $('p23-snapshot-copy').disabled = !enabled;
   $('p23-snapshot-download').disabled = !enabled;
 }
+function legacyCopyText(text){
+  const ta = document.createElement('textarea');
+  ta.value = text;
+  ta.setAttribute('readonly', 'readonly');
+  ta.style.position = 'fixed';
+  ta.style.left = '-9999px';
+  ta.style.top = '0';
+  ta.style.opacity = '0';
+  document.body.appendChild(ta);
+  ta.focus();
+  ta.select();
+  ta.setSelectionRange(0, ta.value.length);
+  let ok = false;
+  try{
+    ok = document.execCommand('copy');
+  }catch(_e){
+    ok = false;
+  }
+  ta.remove();
+  return ok;
+}
+async function copyTextWithFallback(text){
+  let clipboardError = null;
+  if (navigator.clipboard?.writeText){
+    try{
+      await navigator.clipboard.writeText(text);
+      return 'clipboard';
+    }catch(e){
+      clipboardError = e;
+    }
+  }
+  if (legacyCopyText(text)) return 'execCommand';
+  if (clipboardError) throw clipboardError;
+  throw new Error('Clipboard API unavailable');
+}
 function escapeHtml(value){
   return String(value ?? '')
     .replaceAll('&', '&amp;')
@@ -524,12 +559,31 @@ function escapeHtml(value){
     .replaceAll('"', '&quot;')
     .replaceAll("'", '&#39;');
 }
+function formatAudioRtSummary(runtime){
+  if (!runtime || typeof runtime !== 'object') return 'RT audio n/a';
+  if (runtime.error) return 'RT audio unknown';
+  const audio = runtime.audio_rt || {};
+  if (!audio.configured) return 'RT audio off';
+  const mode = String(audio.policy || 'default').toUpperCase();
+  const prio = Number.isFinite(Number(audio.priority)) ? `prio ${Number(audio.priority)}` : 'prio default';
+  const cpus = audio.cpus ? `CPUs ${audio.cpus}` : 'all CPUs';
+  if (!audio.enabled) return `RT configured off (${mode}, ${prio}, ${cpus})`;
+  return `RT ${mode} ${prio} ${cpus}`;
+}
+function formatAudioRtSubtext(runtime){
+  if (!runtime || typeof runtime !== 'object') return 'effective service runtime unavailable';
+  if (runtime.error) return `service env read failed: ${runtime.error}`;
+  const panel = runtime.front_panel_mode || 'n/a';
+  const source = runtime.source || 'systemd environment';
+  return `panel ${panel} | ${source}`;
+}
 function formatP23StatusSummary(p){
   if (!p || typeof p !== 'object') return 'No status data.';
   const svc = p.service || {};
   const cur = (p.deployed || {}).current || {};
   const src = p.sources || {};
   const ov = p.override || {};
+  const rt = p.service_runtime || {};
   const meta = ov.saturn_meta || {};
   const selected = cur.selected_app ? String(cur.selected_app).toUpperCase() : 'unknown';
   const active = String(svc.active || 'unknown');
@@ -538,8 +592,8 @@ function formatP23StatusSummary(p){
   const p2Built = src.p2_bin && src.p2_bin.exists ? 'yes' : 'no';
   const p3Built = src.p3_bin && src.p3_bin.exists ? 'yes' : 'no';
   const mode = meta.mode || 'n/a';
-  const panel = ov.panel_mode || meta.panel || 'n/a';
-  return `Selected: ${selected} | Service: ${active} (${enabled}) | Mode: ${mode} | Panel: ${panel} | Built P2: ${p2Built} | Built P3: ${p3Built} | ${running}`;
+  const panel = rt.front_panel_mode || ov.panel_mode_effective || ov.panel_mode || meta.panel || 'n/a';
+  return `Selected: ${selected} | Service: ${active} (${enabled}) | Mode: ${mode} | Panel: ${panel} | ${formatAudioRtSummary(rt)} | Built P2: ${p2Built} | Built P3: ${p3Built} | ${running}`;
 }
 function formatAdcTelemetrySummary(t){
   if (!t || typeof t !== 'object') return 'No ADC telemetry data.';
@@ -706,6 +760,7 @@ function buildPerfSnapshot(){
     panel_mode: latestP23Perf?.workload?.panel_mode || '',
     current_sample: jsonSafe(latestDerivedPerf),
     baseline: jsonSafe(serializePerfBaseline(perfBaseline)),
+    service_runtime: jsonSafe(latestP23Status?.service_runtime || null),
     raw: jsonSafe({ perf: latestP23Perf }),
     status: jsonSafe({ p23: latestP23Status || null }),
   };
@@ -724,9 +779,9 @@ async function copyCapturedSnapshot(){
   if (!latestCapturedSnapshot) return;
   const text = JSON.stringify(latestCapturedSnapshot, null, 2);
   try{
-    if (!navigator.clipboard?.writeText) throw new Error('Clipboard API unavailable');
-    await navigator.clipboard.writeText(text);
-    setSnapshotSummary(`Captured ${new Date(latestCapturedSnapshot.captured_at_ms).toLocaleString()} | copied JSON to clipboard`, false);
+    const method = await copyTextWithFallback(text);
+    const methodNote = method === 'execCommand' ? 'copied JSON to clipboard (fallback)' : 'copied JSON to clipboard';
+    setSnapshotSummary(`Captured ${new Date(latestCapturedSnapshot.captured_at_ms).toLocaleString()} | ${methodNote}`, false);
   }catch(e){
     setSnapshotSummary('Failed to copy snapshot JSON: ' + e.message, true);
   }
@@ -866,6 +921,7 @@ function perfCounters(perf){
     appAgeSeconds: Number(telemetry?.age_seconds),
     appTimestampMs: (Number(appCurrent?.timestamp_epoch) || 0) * 1000,
     appCounters: appCurrent?.counters || {},
+    appGauges: appCurrent?.gauges || {},
     appState: appCurrent?.state || {},
     appFeatures: appCurrent?.features || {},
     appRouting: appCurrent?.routing || {},
@@ -1114,6 +1170,7 @@ function computePerfAlerts(d, baseline){
 }
 function renderPerfDashboard(d, perf, alertState, baseline){
   const baselineAgeSec = (Date.now() - baseline.startedAtMs) / 1000;
+  const serviceRuntime = latestP23Status?.service_runtime || null;
   const memPct = Number.isFinite(d.memAvailBytes) && Number.isFinite(d.memTotalBytes) && d.memTotalBytes > 0
     ? ((d.memTotalBytes - d.memAvailBytes) / d.memTotalBytes) * 100
     : NaN;
@@ -1154,6 +1211,7 @@ function renderPerfDashboard(d, perf, alertState, baseline){
     metricCard('eth0', `${fmtNum(d.ethRxMbps)} Mb/s RX`, `TX ${fmtNum(d.ethTxMbps)} Mb/s | RX ${fmtNum(d.ethRxPps)} pkt/s | TX ${fmtNum(d.ethTxPps)} pkt/s`),
     metricCard('XDMA', `${fmtNum(d.xdmaIrqPerSec)} IRQ/s`, `PCIe ${d.xdmaPcieLinkSpeed || 'n/a'} x${d.xdmaPcieLinkWidth || 'n/a'} | ${fmtNum(d.xdmaIrqPerMiB)} IRQ/MiB`),
     metricCard('Workload', `${String(d.selectedApp || perf?.workload?.selected_app || 'unknown').toUpperCase()} / ${d.startupMode || 'n/a'} / ${d.panelMode || 'n/a'}`, `DDC ${enabledCount} enabled, ${interleavedCount} interleaved | WB ${wbState}`),
+    metricCard('Service Runtime', formatAudioRtSummary(serviceRuntime), formatAudioRtSubtext(serviceRuntime)),
     metricCard('App Telemetry', d.appPidMatchesService ? 'live' : 'host-only', `uptime ${fmtInt(app?.uptime_sec)} s | features ${featureBits} | ${app?.state?.tx_mode ? 'TX' : 'RX'}`),
     metricCard('App Packet Rate', `${fmtNum(d.ddcPps)} DDC pkt/s`, `HP ${fmtNum(d.hpPps)} | Mic ${fmtNum(d.micPps)} | WB ${fmtNum(d.wbPps)} pkt/s`),
     metricCard('App Ingest Rate', `${fmtNum(d.ducPps)} DUC pkt/s`, `Spkr ${fmtNum(d.spkrPps)} pkt/s | DDC DMA ${fmtNum(d.ddcDmaMiBs)} MiB/s | WB DMA ${fmtNum(d.wbDmaMiBs)} MiB/s`),

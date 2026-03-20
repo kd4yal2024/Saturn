@@ -26,6 +26,7 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
 - New `p23-app-manager.sh` helper script for P2/P3 build/deploy/switch/revert actions via `/run`.
 - New `scripts/install-shutdown-waiter-service.sh` migration installer to deploy `saturn-shutdown-waiter.service`, initialize `/etc/default/saturn-shutdown-waiter`, and remove legacy `~/.config/autostart/g2-shutdown.desktop`.
 - Hidden P2/P3 Test Lab now includes a `Capture Snapshot` action that packages the current `/p23_perf` payload, derived runtime counters, and baseline sample summary into a copyable/downloadable JSON snapshot for lab review.
+- Hidden P2/P3 Test Lab snapshot capture now also carries the effective `p2app.service` runtime-tuning state from `systemctl show -p Environment`, so lab snapshots can record live `SATURN_P3_RT_AUDIO_*` settings alongside host/app metrics.
 - G2 Update page now includes a read-only `Show App / Firmware Info` action that prints the active P2/P3 app/version from `/p23_perf` plus the latest `p2app.service` startup banner lines for FPGA firmware, build date, bit-file date code, clocks, and startup die temperature.
 - G2 Update now includes `Update Web Manager Too`; when `update-G2.py` detects pulled changes under `update_manager/`, the page can automatically launch `update-saturn-go.sh --skip-git --verbose` as a separate final post-step after the G2 run completes, rebuilding from the already-updated active repo root.
 
@@ -35,6 +36,7 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
 - P2/P3 app Makefiles now emit and include header dependency files, preventing stale object reuse after telemetry enum/header changes; this fixed shifted `/p23_perf` counters such as bogus wideband send errors and corrupted DUC/speaker totals after incremental rebuilds.
 - `update-saturn-go.sh` now deploys the same web/script asset set as provisioning: release binary, HTML pages, `config.json`, `themes.json`, and packaged runtime scripts, while preserving browser-managed extra scripts in `/opt/saturn-go/scripts`.
 - Hidden P2/P3 Test Lab `/p23test` now uses a workload-first dashboard layout instead of a single dense text block, making host pressure and app behavior easier to read together.
+- Hidden P2/P3 Test Lab status and dashboard panes now surface the effective service runtime/audio-RT configuration, and `Copy JSON` falls back to a legacy textarea copy path when the browser Clipboard API is unavailable.
 - `/p23_perf` now includes workload tags plus optional app-exported telemetry (`/dev/shm/saturn_p23_perf_stats.json`) so the lab can correlate host metrics with DDC/wideband/mic/DUC/speaker activity.
 - ADC peak telemetry documentation now matches runtime behavior: disabling the
   feature removes the enable flag and stops updates, but the last `/dev/shm`

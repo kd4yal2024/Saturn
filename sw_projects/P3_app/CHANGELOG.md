@@ -2,6 +2,58 @@
 
 All notable changes to `P3_app` from this hardening pass are documented here.
 
+## [2026-03-19] Optional Realtime Tuning for Speaker / DUC Threads
+
+### Changed
+
+- Tightened inbound speaker/DUC batching decisions so they refresh real FIFO
+  occupancy before deferring a DMA write, instead of relying on the previous
+  write's cached fill estimate.
+- Added a low-water fast-flush path for speaker and DUC so prefill mode stops
+  waiting for a deep batch when the hardware FIFO is already near empty.
+- Increased the speaker-only prefill reserve band and made low-water speaker
+  flushes more aggressive after dual-RX testing showed the speaker path still
+  needed more cushion than the TX DUC path.
+- Replaced the speaker path's short-lived batch with a bounded software reserve
+  queue so queued speaker audio can survive scheduler jitter across loop
+  iterations and DMA writes can be sized from real FIFO need instead of only
+  from the latest socket wakeup.
+- Added sequence-aware speaker discontinuity handling so short network jitter
+  no longer looks like a stream gap. The speaker thread now bridges real packet
+  sequence jumps with bounded silence in its software reserve, and only falls
+  back to silence refill after a much longer true empty-queue stall.
+- After testing a deeper steady-state speaker reserve band, returned to the
+  earlier sequence-gap baseline when the larger reserve did not reduce the
+  normalized dual-RX underrun rate.
+- Added speaker underrun-context telemetry so snapshots now distinguish
+  sequence gaps from true empty-queue stalls and record whether each new
+  speaker underrun happened with queued audio already available, along with the
+  last underrun's queue depth, FIFO depth, queue age, and write mode.
+
+### Added
+
+- Added opt-in realtime tuning for the two most timing-sensitive inbound worker
+  threads:
+  - speaker audio (`InSpkrAudio.c`)
+  - TX DUC I/Q (`InDUCIQ.c`)
+- New environment knobs:
+  - `SATURN_P3_RT_AUDIO_ENABLE=1`
+  - `SATURN_P3_RT_AUDIO_POLICY=rr|fifo|other`
+  - `SATURN_P3_RT_AUDIO_PRIORITY=<n>`
+  - `SATURN_P3_RT_AUDIO_CPUS=<cpu-list>`
+- The app now parses that profile once during startup and applies it from
+  inside the speaker / DUC thread contexts so CPU affinity can target the
+  running thread directly and scheduler failures degrade safely with a log
+  message instead of aborting startup.
+
+### Notes
+
+- This is intentionally off by default.
+- `SCHED_RR` is the intended first test mode; `SCHED_FIFO` is available for
+  controlled experiments but should be used more carefully.
+- CPU lists accept comma-separated cores and simple ranges such as `2` or
+  `2-3`.
+
 ## [2026-03-18] Speaker/DUC Socket and Prefill Tuning
 
 ### Changed

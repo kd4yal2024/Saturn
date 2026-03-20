@@ -128,6 +128,12 @@ bool ThreadSocketIsSharedAlias(const struct ThreadSocketData* Ptr);
 void SyncSocketAliasesForOwner(const struct ThreadSocketData* OwnerPtr);
 
 //
+// optionally apply configured realtime policy / CPU affinity to critical
+// inbound audio threads (speaker + DUC) when SATURN_P3_RT_AUDIO_* env vars are set
+//
+void ApplyCriticalAudioThreadRuntime(const char* ThreadName);
+
+//
 // startup state trace helpers (used to log one-time transition milestones)
 //
 void MarkStartupRunBitSeen(void);
