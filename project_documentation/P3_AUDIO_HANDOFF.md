@@ -252,6 +252,12 @@ twice:
   - `speaker_stall_events=1`
   - speaker batching healthy at about `6831538 / 1757302 ≈ 3.89`
   - CPU current `30.2%`, baseline average `23.8%`
+- follow-up snapshot at 2026-03-21 11:22 EDT on the same PID:
+  - runtime about `9529s`
+  - `fifo_speaker_under_events` still `15`
+  - `speaker_underrun_queue_ready_events` still `15`
+  - `fifo_duc_under_events=0`
+  - no new steady-state speaker underruns over that additional interval
 
 Interpretation:
 
@@ -268,43 +274,49 @@ Conclusion:
 - remaining speaker underruns still present as queue-ready emergency events,
   but now primarily clustered near startup rather than continuing to grow
   materially in steady state
+- RX tuning should stop here unless a later TX/RX transition test reveals a
+  concrete regression
 
 ## Next Test To Run
 
-Run one transition-focused validation on the committed startup-grace build.
+Move on to TX and mixed-mode validation on the committed startup-grace build
+(`2604fb1`).
 
-Recommended test:
+Recommended TX checklist:
 
 - restart `p2app.service`
-- enable `RX1` and `RX2`
-- capture one snapshot at `2-5 minutes`
-- perform one normal transition:
-  - toggle `RX1/RX2`, or
-  - change the mode/band/sample-rate combination that matters most in normal use
-- capture one more snapshot after the transition settles
+- capture one idle / RX baseline snapshot before entering TX
+- enter TX with the normal mode, sample rate, and audio routing you care about
+- capture one early TX snapshot at `1-3 minutes`
+- capture one sustained TX snapshot at `10-20 minutes`
+- return to RX and capture one post-TX recovery snapshot after the path settles
 
 Success criteria:
 
-- `fifo_speaker_under_events` grows slowly or not at all after the transition
-- `speaker_underrun_queue_ready_events` remains the only speaker underrun class
-- `speaker_underrun_queue_empty_events` stays `0`
 - `fifo_duc_under_events=0`
+- `duc_recv_errors=0`
+- `duc_dma_errors=0`
+- CPU remains near the normal range for the selected TX workload
+- `xdmaIrqPerMiB` stays in a sane band for that workload
+- returning to RX does not trigger a new speaker underrun burst
+- if RX remains active after TX, `speaker_underrun_queue_empty_events` stays `0`
 - `speaker_gap_events` stays low with no dropped frames
-- CPU remains near the normal range, not the old `74-86%` regression
 
-If that transition test stays clean, stop RX tuning and move to TX or broader
-system validation.
+If the TX and post-TX recovery snapshots stay clean, move to broader mixed-use
+validation instead of more targeted buffer tuning.
 
 Key fields to inspect in the next snapshot:
 
-- `fifo_speaker_under_events`
+- `fifo_duc_under_events`
+- `duc_recv_errors`
+- `duc_dma_errors`
+- `duc_dma_write_bytes`
+- `duc_dma_writes`
+- `duc_packets`
+- `mic_packets`
+- `mic_dma_reads`
 - `speaker_underrun_queue_ready_events`
 - `speaker_underrun_queue_empty_events`
-- `speaker_gap_events`
-- `speaker_stall_events`
-- `speaker_dma_writes`
-- `speaker_packets`
-- `gauges.speaker_underrun`
 - `cpuPctCore`
 - `xdmaIrqPerMiB`
 
