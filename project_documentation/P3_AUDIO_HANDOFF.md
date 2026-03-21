@@ -1,6 +1,6 @@
 # P3 Audio Lab Handoff
 
-Date: 2026-03-20
+Date: 2026-03-21
 
 ## Purpose
 
@@ -209,35 +209,91 @@ Conclusion:
 
 This is the current preferred runtime state after the baseline commit.
 
+## Startup Grace Improvement (2026-03-21)
+
+After the `a001dd1` candidate isolated the remaining problem to startup or
+transition behavior, a second narrow speaker-side change was tested:
+
+- file: `sw_projects/P3_app/InSpkrAudio.c`
+- summary:
+  - reset `LastObservedFIFOFrames` to `0` on SDR activation/deactivation
+  - add `VSTARTUPGRACEFRAMES` so queued speaker audio bypasses the normal
+    receive wait for a short activation window while the hardware speaker FIFO
+    reserve settles
+
+This change is intentionally startup-scoped:
+
+- steady-state `GetSpeakerWriteFrames(...)` logic is unchanged
+- sequence-aware gap handling is unchanged
+- underrun-context telemetry is unchanged
+- startup reporting suppression remains unchanged
+- steady-state receive-wait behavior returns to normal after the grace window
+
+### Validated Result
+
+Fresh process `PID 686626` was restarted on 2026-03-21 08:43 EDT and captured
+twice:
+
+- early snapshot at 2026-03-21 09:15 EDT:
+  - runtime about `1923s`
+  - `fifo_speaker_under_events=12`
+  - `speaker_underrun_queue_ready_events=12`
+  - `fifo_duc_under_events=0`
+  - `speaker_gap_events=0`
+  - `speaker_stall_events=1`
+  - speaker batching healthy at about `1426987 / 376835 ≈ 3.79`
+  - CPU current `16.6%`
+- later snapshot at 2026-03-21 11:15 EDT on the same PID:
+  - runtime about `9129s`
+  - `fifo_speaker_under_events=15`
+  - `speaker_underrun_queue_ready_events=15`
+  - `fifo_duc_under_events=0`
+  - `speaker_gap_events=0`
+  - `speaker_stall_events=1`
+  - speaker batching healthy at about `6831538 / 1757302 ≈ 3.89`
+  - CPU current `30.2%`, baseline average `23.8%`
+
+Interpretation:
+
+- the startup/front-load problem improved materially
+- only `3` new speaker underruns occurred over about `7206s` of additional
+  runtime, about `1.5/hour` in steady state
+- whole-run speaker underrun rate was about `15 / 9129s ≈ 5.9/hour`
+- DUC stayed clean
+- no new gap-detection regressions appeared
+
+Conclusion:
+
+- this startup-grace change is the new preferred RX candidate after `a001dd1`
+- remaining speaker underruns still present as queue-ready emergency events,
+  but now primarily clustered near startup rather than continuing to grow
+  materially in steady state
+
 ## Next Test To Run
 
-Do not keep tuning steady-state RX blindly. The next useful work is a
-startup/transition test matrix against committed build `a001dd1`.
+Run one transition-focused validation on the committed startup-grace build.
 
-Test setup:
+Recommended test:
 
-- `P3`
-- `panel=auto`
-- RT audio profile enabled
-- `RX1` and `RX2` both active
-- both DDCs at `384 kHz`
 - restart `p2app.service`
+- enable `RX1` and `RX2`
 - capture one snapshot at `2-5 minutes`
-- capture one snapshot at `30-60 minutes`
-- if practical, toggle `RX1/RX2` or perform the transition that matters most
-  in normal use
+- perform one normal transition:
+  - toggle `RX1/RX2`, or
+  - change the mode/band/sample-rate combination that matters most in normal use
+- capture one more snapshot after the transition settles
 
 Success criteria:
 
-- startup or transition events are bounded and identifiable
-- later steady-state run stays flat again
-- CPU remains near the normal range, not the old `74-86%` regression
+- `fifo_speaker_under_events` grows slowly or not at all after the transition
+- `speaker_underrun_queue_ready_events` remains the only speaker underrun class
+- `speaker_underrun_queue_empty_events` stays `0`
 - `fifo_duc_under_events=0`
-- `speaker_underrun_queue_ready_events` does not continue climbing during the
-  long steady-state portion
-- `speaker_underrun_queue_empty_events` remains `0`
-- `speaker_gap_events` stays low and does not correlate with dropped frames
-- `speaker_stall_events` remains small
+- `speaker_gap_events` stays low with no dropped frames
+- CPU remains near the normal range, not the old `74-86%` regression
+
+If that transition test stays clean, stop RX tuning and move to TX or broader
+system validation.
 
 Key fields to inspect in the next snapshot:
 
@@ -252,9 +308,22 @@ Key fields to inspect in the next snapshot:
 - `cpuPctCore`
 - `xdmaIrqPerMiB`
 
-If the early snapshot takes the hit and the later one stays flat, the next code
-change should be a narrow startup/routing-change prefill or grace path, not
-another steady-state speaker loop rewrite.
+## If Startup/Transition Clustering Is Confirmed
+
+If the long snapshot confirms that events stopped clustering after the early
+window, the next code change should be a narrow startup/routing-change grace
+or prefill path in `sw_projects/P3_app/InSpkrAudio.c`.
+
+What to do:
+
+- do not rewrite the steady-state speaker loop
+- do not restore the broad queue-first loop
+- the fix should be limited to the startup window and/or a routing-change
+  transition: extend the prefill reserve, add a grace period, or delay
+  underrun reporting until the FIFO has had time to stabilize
+- keep the sequence-aware gap detection
+- keep the emergency-only fast path from `a001dd1`
+- keep the underrun-context telemetry
 
 ## Useful Commands
 

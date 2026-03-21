@@ -48,6 +48,7 @@
 #define VSPKSOFTQUEUEFRAMES 32                      // software reserve to absorb jitter across wakeups
 #define VSPKMAXDMAWRITEFRAMES 12                    // max speaker frames we coalesce into one DMA write
 #define VSTARTUPDELAY 100                           // 100 messages (~100ms) before reporting under or overflows
+#define VSTARTUPGRACEFRAMES 200                     // bypass recv wait for the first ~267ms of each activation while speaker reserve is settling
 #define VSPKPREFILLLOWFRAMES 6                      // re-enter prefill when speaker FIFO reserve drops below this
 #define VSPKPREFILLHIGHFRAMES 16                    // refill toward this reserve before leaving prefill mode
 #define VSPKMAXQUEUEAGEUS 3000U                     // bound speaker latency while still allowing reserve building
@@ -239,6 +240,7 @@ void *IncomingSpkrAudio(void *arg)                      // listener thread
     uint32_t RegVal = 0;
     unsigned int Current = 0;                               // current occupied locations in FIFO
     unsigned int StartupCount = 0;                          // used to delay reporting of under & overflows
+    uint32_t StartupGraceCount = 0;                         // short activation grace that prioritizes refill over waiting for more packets
     bool PrevSDRActive = false;                             // used to detect change of state
     bool UnderflowActive = false;                           // tracks one continuous starvation episode
     bool PrefillActive = true;                              // maintains a speaker FIFO cushion after startup or underrun
@@ -327,10 +329,12 @@ void *IncomingSpkrAudio(void *arg)                      // listener thread
         if(SDRActiveNow && !PrevSDRActive)                  // detect SDRActive has been asserted
         {
             StartupCount = VSTARTUPDELAY;
+            StartupGraceCount = VSTARTUPGRACEFRAMES;
             UnderflowActive = false;
             PrefillActive = true;
             QueueHead = 0;
             QueueCount = 0;
+            LastObservedFIFOFrames = 0;
             LastPacketNs = 0;
             GapMuteActive = false;
             SequenceValid = false;
@@ -344,6 +348,8 @@ void *IncomingSpkrAudio(void *arg)                      // listener thread
             Current = 0;
             QueueHead = 0;
             QueueCount = 0;
+            StartupGraceCount = 0;
+            LastObservedFIFOFrames = 0;
             LastPacketNs = 0;
             GapMuteActive = false;
             SequenceValid = false;
@@ -365,7 +371,7 @@ void *IncomingSpkrAudio(void *arg)                      // listener thread
                 QueueAgeUs = 0;
                 if(QueueArrivalNs[QueueHead] != 0)
                     QueueAgeUs = (GetMonotonicTimeNs() - QueueArrivalNs[QueueHead]) / 1000ULL;
-                if(LastObservedFIFOFrames < VSPKEMERGENCYLOWFRAMES)
+                if((LastObservedFIFOFrames < VSPKEMERGENCYLOWFRAMES) || (StartupGraceCount != 0U))
                     RemainingAgeUs = 0;
                 else if(QueueAgeUs < VSPKMAXQUEUEAGEUS)
                     RemainingAgeUs = VSPKMAXQUEUEAGEUS - QueueAgeUs;
@@ -425,6 +431,8 @@ void *IncomingSpkrAudio(void *arg)                      // listener thread
                     break;
                 if(StartupCount != 0)                                   // decrement startup message count
                     StartupCount--;
+                if(StartupGraceCount != 0U)
+                    StartupGraceCount--;
                 atomic_store(&NewMessageReceived, true);
                 P23PerfTelemetryCounterAdd(eP23PerfCounterSpkrPackets, 1U);
                 P23PerfTelemetryCounterAdd(eP23PerfCounterSpkrBytes, VSPEAKERAUDIOSIZE);

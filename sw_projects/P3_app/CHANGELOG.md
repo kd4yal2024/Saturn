@@ -33,6 +33,10 @@ All notable changes to `P3_app` from this hardening pass are documented here.
   the last observed hardware speaker FIFO was already near empty and queued
   audio is ready, so the remaining queue-ready underruns can be attacked
   without reintroducing the earlier high-CPU loop ordering regression.
+- Reset the cached speaker FIFO estimate on SDR activation/deactivation and
+  added a short activation grace window that bypasses the queued-audio receive
+  wait while the speaker reserve settles, so startup no longer relies on a
+  stale healthy FIFO estimate before the first real occupancy read.
 
 ### Added
 
