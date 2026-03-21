@@ -4,6 +4,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)"
 REPO_DIR="${SCRIPT_DIR}"
+PATCH_DIR="${SCRIPT_DIR}/patches"
+DESKHPSDR_GPIO_PATCH="${PATCH_DIR}/deskhpsdr-libgpiod-v2.patch"
 JOBS="${JOBS:-$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 2)}"
 INSTALL_DEPS=0
 RUN_CLEAN=1
@@ -26,10 +28,44 @@ Options:
 
 Notes:
   - This script probes build compatibility for the current image.
-  - It forces SATURN=ON for the build probe.
+  - It applies the local Saturn libgpiod v2 compatibility patch before building.
+  - It forces SATURN=ON and GPIO=ON for the build probe.
   - It does not run "make install".
   - On success it creates a user-level launcher and Desktop shortcut by default.
 EOF
+}
+
+apply_saturn_patch() {
+  local repo_dir patch_file patch_name
+
+  repo_dir="$1"
+  patch_file="$2"
+  patch_name="$(basename "${patch_file}")"
+
+  if [[ ! -f "${patch_file}" ]]; then
+    echo "Required Saturn patch not found: ${patch_file}" >&2
+    exit 1
+  fi
+
+  if ! command -v git >/dev/null 2>&1; then
+    echo "git is required to apply Saturn deskHPSDR patches." >&2
+    exit 1
+  fi
+
+  if git -C "${repo_dir}" apply --check "${patch_file}" >/dev/null 2>&1; then
+    echo "Applying local Saturn patch: ${patch_name}"
+    git -C "${repo_dir}" apply "${patch_file}"
+    return 0
+  fi
+
+  if git -C "${repo_dir}" apply --reverse --check "${patch_file}" >/dev/null 2>&1; then
+    echo "Local Saturn patch already present: ${patch_name}"
+    return 0
+  fi
+
+  echo "Local Saturn patch could not be applied cleanly: ${patch_name}" >&2
+  git -C "${repo_dir}" apply --check "${patch_file}" || true
+  exit 1
 }
 
 create_desktop_shortcut() {
@@ -229,6 +265,7 @@ echo "  image:          ${PRETTY_NAME:-unknown}"
 echo "  codename:       ${VERSION_CODENAME:-unknown}"
 echo "  jobs:           ${JOBS}"
 echo "  SATURN:         ON"
+echo "  GPIO:           ON"
 echo "  WebKitGTK:      ${webkit_version:-missing}"
 echo "  GTK3:           ${gtk_version:-missing}"
 echo "  fftw3:          ${fftw3_version:-missing}"
@@ -252,10 +289,12 @@ mkdir -p "${LOG_DIR}"
 STAMP="$(date +%Y%m%d-%H%M%S)"
 BUILD_LOG="${LOG_DIR}/deskhpsdr-build-${STAMP}.log"
 
+apply_saturn_patch "${REPO_DIR}" "${DESKHPSDR_GPIO_PATCH}"
+
 MAKE_ARGS=(
   -C "${REPO_DIR}"
   "SATURN=ON"
-  "GPIO=OFF"
+  "GPIO=ON"
   "SOAPYSDR=OFF"
   "AUDIO=PULSE"
   "ATU=OFF"

@@ -232,6 +232,7 @@ Update-activity behavior for `/run`:
   - `SATURN_SATURNGO_DEPLOY_STATUS_FILE`
 - `p23-app-manager.sh` (hidden P2/P3 test workflow) uses the active repo-root env (`SATURN_ACTIVE_REPO_ROOT`) and runs privileged deploy/switch actions via `sudo -n` when not root.
 - `update-deskhpsdr.py` uses the active repo-root env to find `scripts/deskhpsdr-test-build-on-current-image.sh`, clones/pulls `~/github/deskhpsdr` unless `--skip-git` is set, then runs the helper-script build flow with the selected flags.
+- `scripts/deskhpsdr-test-build-on-current-image.sh` now applies `scripts/patches/deskhpsdr-libgpiod-v2.patch` before the build when needed, treats an already-applied patch as success, and builds with `GPIO=ON` plus `SATURN=ON`.
 - Python child runs also include:
   - `PYTHONDONTWRITEBYTECODE=1`
   - `PYTHONPYCACHEPREFIX=/var/cache/saturn-python`

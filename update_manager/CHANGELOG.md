@@ -32,6 +32,7 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
 - Dedicated deskHPSDR Update page (`/deskhpsdr`) and `update-deskhpsdr.py` runner for live clone/update/build terminal workflow, including helper-script-driven dependency/build flags and fresh-image clone support.
 
 ### Changed
+- deskHPSDR update/build flow now applies a Saturn-managed `deskhpsdr` libgpiod v2 compatibility patch before build and probes with `GPIO=ON` instead of forcing `GPIO=OFF`, preserving GPIO support on Trixie during update-manager driven builds.
 - P2/P3 app speaker and DUC underrun telemetry now counts underflow episodes on edge transitions instead of incrementing on every FIFO-monitor poll while the same starvation condition is still active. This makes `/p23_perf` cumulative underrun history comparable across runs and prevents one recovery period from inflating the totals.
 - P2/P3 app high-priority telemetry now preserves the live ADC peak-hold values when exporting `/dev/shm/saturn_p23_perf_stats.json`, so the lab page ADC gauges match runtime packet content instead of being zeroed before snapshot.
 - P2/P3 app Makefiles now emit and include header dependency files, preventing stale object reuse after telemetry enum/header changes; this fixed shifted `/p23_perf` counters such as bogus wideband send errors and corrupted DUC/speaker totals after incremental rebuilds.
