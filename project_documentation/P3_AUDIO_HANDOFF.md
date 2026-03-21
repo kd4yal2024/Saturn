@@ -157,8 +157,11 @@ This is the baseline to compare against for future speaker-side changes.
 
 ## Confirmed Improvement After Baseline
 
-After baseline `85349c8`, one narrow speaker-side improvement was tested and
-validated:
+After baseline `85349c8`, one narrow speaker-side improvement was tested,
+validated, and committed as `a001dd1`:
+
+- commit: `a001dd1`
+- commit message: `Reduce queue-ready speaker underruns`
 
 - file: `sw_projects/P3_app/InSpkrAudio.c`
 - summary:
@@ -173,7 +176,7 @@ This change is intentionally narrow:
 - it keeps the underrun-context telemetry
 - it does not restore the broad queue-first loop
 
-Validated result from the clean dual-RX run:
+Initial validated result from the clean dual-RX run:
 
 - `fifo_speaker_under_events=14`
 - runtime about `3654s`
@@ -186,12 +189,30 @@ Validated result from the clean dual-RX run:
 - `speaker_underrun_queue_ready_events=14`
 - `speaker_gap_dropped_frames=0`
 
+Longer confirmation on the same live PID (`572826`) was stronger:
+
+- later runtime about `9174s`
+- `fifo_speaker_under_events` stayed at `14`
+- `speaker_underrun_queue_ready_events` stayed at `14`
+- no new speaker underruns for about `92` additional minutes
+- whole-run normalized rate improved to about `5.5 underruns/hour`
+- `fifo_duc_under_events=0`
+- `speaker_gap_dropped_frames=0`
+- `speaker_stall_events=1`
+- CPU remained normal, with current sample at `16.0%`
+
+Conclusion:
+
+- treat `a001dd1` as the current RX candidate
+- steady-state dual-RX no longer looks like the main problem
+- remaining events are more likely clustered around startup or RX transitions
+
 This is the current preferred runtime state after the baseline commit.
 
 ## Next Test To Run
 
-Run one more clean confirmation dual-RX test against the current deployed
-build.
+Do not keep tuning steady-state RX blindly. The next useful work is a
+startup/transition test matrix against committed build `a001dd1`.
 
 Test setup:
 
@@ -200,17 +221,22 @@ Test setup:
 - RT audio profile enabled
 - `RX1` and `RX2` both active
 - both DDCs at `384 kHz`
-- run `30-40 minutes`
+- restart `p2app.service`
+- capture one snapshot at `2-5 minutes`
+- capture one snapshot at `30-60 minutes`
+- if practical, toggle `RX1/RX2` or perform the transition that matters most
+  in normal use
 
 Success criteria:
 
+- startup or transition events are bounded and identifiable
+- later steady-state run stays flat again
 - CPU remains near the normal range, not the old `74-86%` regression
-- `speaker_dma_writes` does not collapse toward `speaker_packets` 1:1
 - `fifo_duc_under_events=0`
-- `speaker_underrun_queue_ready_events` stays near or below the current
-  improved rate
+- `speaker_underrun_queue_ready_events` does not continue climbing during the
+  long steady-state portion
 - `speaker_underrun_queue_empty_events` remains `0`
-- `speaker_gap_events` remains near `0`
+- `speaker_gap_events` stays low and does not correlate with dropped frames
 - `speaker_stall_events` remains small
 
 Key fields to inspect in the next snapshot:
@@ -226,8 +252,9 @@ Key fields to inspect in the next snapshot:
 - `cpuPctCore`
 - `xdmaIrqPerMiB`
 
-If that confirmation run looks similar, the emergency-only speaker fast path
-should be treated as the next committed step after baseline `85349c8`.
+If the early snapshot takes the hit and the later one stays flat, the next code
+change should be a narrow startup/routing-change prefill or grace path, not
+another steady-state speaker loop rewrite.
 
 ## Useful Commands
 
