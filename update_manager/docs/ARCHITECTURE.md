@@ -21,15 +21,20 @@ Saturn Update Manager is deployed as a small appliance-style web stack:
 
 - `index.html`
   - Custom Scripts page (browser-managed script catalog + runner) and password change.
-  - `update-G2.py`, `update-pihpsdr.py`, and `restore-backup.sh` are intentionally hidden from this page dropdown.
+  - `update-G2.py`, `update-pihpsdr.py`, `update-deskhpsdr.py`, and `restore-backup.sh` are intentionally hidden from this page dropdown.
   - Supports browser file upload for custom script content and includes backend-seeded default custom cleanup scripts.
 - `update.html`
   - Default landing page (`/`) that combines:
     - Update G2 terminal workflow (`POST /run` with `update-G2.py`)
     - Appliance Update policy/start/status/rollback controls (repo URL + branch/ref + healthcheck inputs in current UI).
     - G2 run button is gated by valid Appliance repo URL input.
+- `saturngo.html`
+  - Dedicated Saturn Go self-update terminal workflow (`POST /run` with `update-saturn-go.sh`) plus repo/ref policy and last-deploy-status panels.
 - `pihpsdr.html`
   - Dedicated piHPSDR update terminal workflow (`POST /run` with `update-pihpsdr.py`).
+- `deskhpsdr.html`
+  - Dedicated deskHPSDR update terminal workflow (`POST /run` with `update-deskhpsdr.py`).
+  - The script clones/pulls `~/github/deskhpsdr` and delegates build/install-dependency behavior to helper scripts from the active Saturn repo root.
 - `fpga.html`
   - Dedicated FPGA flash workflow (`POST /run` with `flash_fpga.sh`) plus image discovery (`GET /get_fpga_images`).
 - `backup.html`
@@ -46,7 +51,7 @@ Saturn Update Manager is deployed as a small appliance-style web stack:
 - `/opt/saturn-go/scripts/`
   - Executable maintenance scripts (also target directory for browser-managed custom scripts).
 - `/var/lib/saturn-web/`
-  - Web assets: `index.html`, `update.html`, `pihpsdr.html`, `fpga.html`, `backup.html`, `monitor.html`, `config.json`, `themes.json`.
+  - Web assets: `index.html`, `update.html`, `saturngo.html`, `pihpsdr.html`, `deskhpsdr.html`, `fpga.html`, `backup.html`, `monitor.html`, `config.json`, `themes.json`.
 - `/var/lib/saturn-state/`
   - Mutable state: `repo_root.txt`, `update_policy.json`, `update_state.json`, snapshots, staged worktrees.
 - `/etc/systemd/system/saturn-go.service`

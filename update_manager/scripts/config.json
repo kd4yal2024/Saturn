@@ -18,6 +18,15 @@
     "version": "1.10"
   },
   {
+    "filename": "update-deskhpsdr.py",
+    "name": "Update deskHPSDR",
+    "description": "Updates deskHPSDR",
+    "directory": "/opt/saturn-go/scripts",
+    "category": "Update Scripts",
+    "flags": ["--skip-git", "-y", "-n", "--no-install-deps", "--no-clean", "--no-desktop-shortcut", "--dry-run", "--verbose"],
+    "version": "1.0"
+  },
+  {
     "filename": "log_cleaner.sh",
     "name": "Log Cleaner",
     "description": "Searches for *.log files, reports space usage, and optionally deletes them",

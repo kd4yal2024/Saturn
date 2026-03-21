@@ -29,6 +29,7 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
 - Hidden P2/P3 Test Lab snapshot capture now also carries the effective `p2app.service` runtime-tuning state from `systemctl show -p Environment`, so lab snapshots can record live `SATURN_P3_RT_AUDIO_*` settings alongside host/app metrics.
 - G2 Update page now includes a read-only `Show App / Firmware Info` action that prints the active P2/P3 app/version from `/p23_perf` plus the latest `p2app.service` startup banner lines for FPGA firmware, build date, bit-file date code, clocks, and startup die temperature.
 - G2 Update now includes `Update Web Manager Too`; when `update-G2.py` detects pulled changes under `update_manager/`, the page can automatically launch `update-saturn-go.sh --skip-git --verbose` as a separate final post-step after the G2 run completes, rebuilding from the already-updated active repo root.
+- Dedicated deskHPSDR Update page (`/deskhpsdr`) and `update-deskhpsdr.py` runner for live clone/update/build terminal workflow, including helper-script-driven dependency/build flags and fresh-image clone support.
 
 ### Changed
 - P2/P3 app speaker and DUC underrun telemetry now counts underflow episodes on edge transitions instead of incrementing on every FIFO-monitor poll while the same starvation condition is still active. This makes `/p23_perf` cumulative underrun history comparable across runs and prevents one recovery period from inflating the totals.

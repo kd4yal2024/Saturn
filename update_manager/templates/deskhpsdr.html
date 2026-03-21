@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-<title>piHPSDR Update</title>
+<title>deskHPSDR Update</title>
 <script src="https://cdn.tailwindcss.com"></script>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/ansi_up@5.2.1/ansi_up.min.js"></script>
@@ -80,7 +80,7 @@
 <body class="min-h-screen">
   <div class="max-w-6xl mx-auto px-4 py-6 sm:py-10">
     <div class="flex flex-wrap items-center justify-between gap-3 mb-6">
-      <h1 class="title text-3xl sm:text-4xl">piHPSDR Update</h1>
+      <h1 class="title text-3xl sm:text-4xl">deskHPSDR Update</h1>
       <div class="flex items-center gap-3">
         <a href="./" class="btn btn-ghost px-4 py-2">G2 Update</a>
         <a href="./saturngo" class="btn btn-ghost px-4 py-2">Saturn Go</a>
@@ -100,21 +100,21 @@
     </div>
 
     <div class="card p-5">
-      <h2 class="text-xl font-semibold mb-2">Update piHPSDR (Terminal)</h2>
-      <p class="text-sm opacity-80 mb-4">Runs <code>update-pihpsdr.py</code> with live terminal output.</p>
+      <h2 class="text-xl font-semibold mb-2">Update deskHPSDR (Terminal)</h2>
+      <p class="text-sm opacity-80 mb-4">Runs <code>update-deskhpsdr.py</code> with live terminal output.</p>
 
       <div class="mb-3">
         <label class="block text-sm mb-1">Flags</label>
-        <div id="pihpsdr-flags" class="flex flex-wrap gap-4"></div>
+        <div id="deskhpsdr-flags" class="flex flex-wrap gap-4"></div>
       </div>
 
       <div class="flex flex-wrap gap-3 items-center mb-3">
-        <button id="pihpsdr-run" class="btn btn-primary px-5 py-2">Run piHPSDR Update</button>
-        <button id="pihpsdr-clear" class="btn btn-ghost px-4 py-2">Clear Output</button>
-        <progress id="pihpsdr-progress" max="100" value="0" class="hidden w-48"></progress>
+        <button id="deskhpsdr-run" class="btn btn-primary px-5 py-2">Run deskHPSDR Update</button>
+        <button id="deskhpsdr-clear" class="btn btn-ghost px-4 py-2">Clear Output</button>
+        <progress id="deskhpsdr-progress" max="100" value="0" class="hidden w-48"></progress>
       </div>
 
-      <pre id="pihpsdr-output" style="min-height:420px; max-height:620px; overflow:auto;"></pre>
+      <pre id="deskhpsdr-output" style="min-height:420px; max-height:620px; overflow:auto;"></pre>
     </div>
   </div>
 
@@ -155,7 +155,7 @@ ansi_up.use_classes = false;
 const $ = (id)=>document.getElementById(id);
 const CSRF_HEADER_NAME = 'X-Saturn-CSRF';
 const CSRF_HEADER_VALUE = '1';
-const SCRIPT_NAME = 'update-pihpsdr.py';
+const SCRIPT_NAME = 'update-deskhpsdr.py';
 function withCsrf(headers = {}){ return { ...headers, [CSRF_HEADER_NAME]: CSRF_HEADER_VALUE }; }
 function show(el, on){ el.classList.toggle('hidden', !on); }
 function saveSessionJson(key, value){
@@ -172,15 +172,15 @@ function loadSessionJson(key, fallback){
   }
 }
 
-const PIH_OUTPUT_LINES_KEY = 'saturn:pihpsdr:output-lines';
-const PIH_OUTPUT_MAX_LINES = 2500;
-const PIH_RUN_ID_KEY = 'saturn:pihpsdr:run-id';
-const PIH_RUN_NEXT_KEY = 'saturn:pihpsdr:run-next';
-let pihOutputLines = [];
-let pihRunLogRunId = '';
-let pihRunLogNext = 0;
-let pihRunLogPoll = null;
-let pihRunInProgress = false;
+const DESK_OUTPUT_LINES_KEY = 'saturn:deskhpsdr:output-lines';
+const DESK_OUTPUT_MAX_LINES = 2500;
+const DESK_RUN_ID_KEY = 'saturn:deskhpsdr:run-id';
+const DESK_RUN_NEXT_KEY = 'saturn:deskhpsdr:run-next';
+let deskOutputLines = [];
+let deskRunLogRunId = '';
+let deskRunLogNext = 0;
+let deskRunLogPoll = null;
+let deskRunInProgress = false;
 
 function ansiToHtml(line){
   const html = ansi_up.ansi_to_html(String(line ?? ''));
@@ -197,76 +197,76 @@ function renderAnsiLines(lines){
 }
 
 function refreshRenderedOutput(){
-  const out = $('pihpsdr-output');
-  out.innerHTML = renderAnsiLines(pihOutputLines);
+  const out = $('deskhpsdr-output');
+  out.innerHTML = renderAnsiLines(deskOutputLines);
   out.scrollTop = out.scrollHeight;
 }
 
 function persistOutput(){
-  saveSessionJson(PIH_OUTPUT_LINES_KEY, pihOutputLines);
-  try{ sessionStorage.setItem(PIH_RUN_NEXT_KEY, String(pihRunLogNext)); }catch(_e){}
+  saveSessionJson(DESK_OUTPUT_LINES_KEY, deskOutputLines);
+  try{ sessionStorage.setItem(DESK_RUN_NEXT_KEY, String(deskRunLogNext)); }catch(_e){}
 }
 
 function restoreOutput(){
-  const saved = loadSessionJson(PIH_OUTPUT_LINES_KEY, []);
-  pihOutputLines = Array.isArray(saved) ? saved.map((v)=>String(v)) : [];
-  if (pihOutputLines.length > PIH_OUTPUT_MAX_LINES){
-    pihOutputLines = pihOutputLines.slice(-PIH_OUTPUT_MAX_LINES);
+  const saved = loadSessionJson(DESK_OUTPUT_LINES_KEY, []);
+  deskOutputLines = Array.isArray(saved) ? saved.map((v)=>String(v)) : [];
+  if (deskOutputLines.length > DESK_OUTPUT_MAX_LINES){
+    deskOutputLines = deskOutputLines.slice(-DESK_OUTPUT_MAX_LINES);
     persistOutput();
   }
   try{
-    pihRunLogRunId = sessionStorage.getItem(PIH_RUN_ID_KEY) || '';
-    const rawNext = Number(sessionStorage.getItem(PIH_RUN_NEXT_KEY) || String(pihOutputLines.length));
-    pihRunLogNext = Number.isFinite(rawNext) && rawNext >= 0 ? rawNext : pihOutputLines.length;
+    deskRunLogRunId = sessionStorage.getItem(DESK_RUN_ID_KEY) || '';
+    const rawNext = Number(sessionStorage.getItem(DESK_RUN_NEXT_KEY) || String(deskOutputLines.length));
+    deskRunLogNext = Number.isFinite(rawNext) && rawNext >= 0 ? rawNext : deskOutputLines.length;
   }catch(_e){
-    pihRunLogRunId = '';
-    pihRunLogNext = pihOutputLines.length;
+    deskRunLogRunId = '';
+    deskRunLogNext = deskOutputLines.length;
   }
-  $('pihpsdr-output').innerHTML = renderAnsiLines(pihOutputLines);
-  $('pihpsdr-output').scrollTop = $('pihpsdr-output').scrollHeight;
+  $('deskhpsdr-output').innerHTML = renderAnsiLines(deskOutputLines);
+  $('deskhpsdr-output').scrollTop = $('deskhpsdr-output').scrollHeight;
 }
 
 function appendOutput(line){
   const text = String(line ?? '');
-  pihOutputLines.push(text);
-  if (pihOutputLines.length > PIH_OUTPUT_MAX_LINES){
-    pihOutputLines = pihOutputLines.slice(-PIH_OUTPUT_MAX_LINES);
-    $('pihpsdr-output').innerHTML = renderAnsiLines(pihOutputLines);
+  deskOutputLines.push(text);
+  if (deskOutputLines.length > DESK_OUTPUT_MAX_LINES){
+    deskOutputLines = deskOutputLines.slice(-DESK_OUTPUT_MAX_LINES);
+    $('deskhpsdr-output').innerHTML = renderAnsiLines(deskOutputLines);
   } else {
-    $('pihpsdr-output').innerHTML += ansiToHtml(text) + '<br>';
+    $('deskhpsdr-output').innerHTML += ansiToHtml(text) + '<br>';
   }
-  pihRunLogNext = pihOutputLines.length;
+  deskRunLogNext = deskOutputLines.length;
   persistOutput();
-  const out = $('pihpsdr-output');
+  const out = $('deskhpsdr-output');
   out.scrollTop = out.scrollHeight;
 }
 
 function clearRunLogPoll(){
-  if (pihRunLogPoll){
-    clearInterval(pihRunLogPoll);
-    pihRunLogPoll = null;
+  if (deskRunLogPoll){
+    clearInterval(deskRunLogPoll);
+    deskRunLogPoll = null;
   }
 }
 
 function ensureRunLogPoll(){
-  if (!pihRunLogPoll){
-    pihRunLogPoll = setInterval(fetchBufferedRunLog, 1200);
+  if (!deskRunLogPoll){
+    deskRunLogPoll = setInterval(fetchBufferedRunLog, 1200);
   }
 }
 
 function resetBufferedState(){
-  pihRunLogRunId = '';
-  pihRunLogNext = 0;
-  pihOutputLines = [];
-  try{ sessionStorage.setItem(PIH_RUN_ID_KEY, ''); }catch(_e){}
+  deskRunLogRunId = '';
+  deskRunLogNext = 0;
+  deskOutputLines = [];
+  try{ sessionStorage.setItem(DESK_RUN_ID_KEY, ''); }catch(_e){}
   persistOutput();
-  $('pihpsdr-output').innerHTML = '';
+  $('deskhpsdr-output').innerHTML = '';
 }
 
 async function fetchBufferedRunLog(){
-  if (pihRunInProgress) return;
+  if (deskRunInProgress) return;
   try{
-    const from = Math.max(0, Number(pihRunLogNext) || 0);
+    const from = Math.max(0, Number(deskRunLogNext) || 0);
     const r = await fetch(`./run_log?script=${encodeURIComponent(SCRIPT_NAME)}&from=${from}&limit=600`, { cache: 'no-store' });
     if (!r.ok) return;
     const data = await r.json().catch(()=>({}));
@@ -277,16 +277,16 @@ async function fetchBufferedRunLog(){
       clearRunLogPoll();
       return;
     }
-    if (pihRunLogRunId && runId !== pihRunLogRunId){
+    if (deskRunLogRunId && runId !== deskRunLogRunId){
       resetBufferedState();
-      pihRunLogRunId = runId;
-      try{ sessionStorage.setItem(PIH_RUN_ID_KEY, runId); }catch(_e){}
+      deskRunLogRunId = runId;
+      try{ sessionStorage.setItem(DESK_RUN_ID_KEY, runId); }catch(_e){}
       await fetchBufferedRunLog();
       return;
     }
-    if (!pihRunLogRunId){
-      pihRunLogRunId = runId;
-      try{ sessionStorage.setItem(PIH_RUN_ID_KEY, runId); }catch(_e){}
+    if (!deskRunLogRunId){
+      deskRunLogRunId = runId;
+      try{ sessionStorage.setItem(DESK_RUN_ID_KEY, runId); }catch(_e){}
     }
 
     const lines = Array.isArray(data.lines) ? data.lines : [];
@@ -294,8 +294,8 @@ async function fetchBufferedRunLog(){
 
     const nextFrom = Number(data.next_from);
     if (Number.isFinite(nextFrom) && nextFrom >= 0){
-      pihRunLogNext = nextFrom;
-      try{ sessionStorage.setItem(PIH_RUN_NEXT_KEY, String(nextFrom)); }catch(_e){}
+      deskRunLogNext = nextFrom;
+      try{ sessionStorage.setItem(DESK_RUN_NEXT_KEY, String(nextFrom)); }catch(_e){}
     }
 
     if (running){
@@ -307,7 +307,7 @@ async function fetchBufferedRunLog(){
 }
 
 async function loadFlags(){
-  const host = $('pihpsdr-flags');
+  const host = $('deskhpsdr-flags');
   host.innerHTML = '';
   try{
     const r = await fetch('./get_flags?script=' + encodeURIComponent(SCRIPT_NAME));
@@ -351,24 +351,24 @@ async function sendBackupResponse(letter){
 $('backup-yes').addEventListener('click', ()=>sendBackupResponse('y'));
 $('backup-no').addEventListener('click', ()=>sendBackupResponse('n'));
 
-$('pihpsdr-clear').addEventListener('click', ()=>{
+$('deskhpsdr-clear').addEventListener('click', ()=>{
   resetBufferedState();
-  $('pihpsdr-progress').value = 0;
-  show($('pihpsdr-progress'), false);
+  $('deskhpsdr-progress').value = 0;
+  show($('deskhpsdr-progress'), false);
 });
 
-$('pihpsdr-run').addEventListener('click', async ()=>{
-  const btn = $('pihpsdr-run');
-  const progress = $('pihpsdr-progress');
+$('deskhpsdr-run').addEventListener('click', async ()=>{
+  const btn = $('deskhpsdr-run');
+  const progress = $('deskhpsdr-progress');
   clearRunLogPoll();
   resetBufferedState();
-  pihRunInProgress = true;
+  deskRunInProgress = true;
   btn.disabled = true;
   progress.value = 0;
   show(progress, true);
   appendOutput('\x1b[36mStarting ' + SCRIPT_NAME + '...\x1b[0m');
 
-  const selectedFlags = Array.from(document.querySelectorAll('#pihpsdr-flags input[type=checkbox]:checked')).map(el=>el.value);
+  const selectedFlags = Array.from(document.querySelectorAll('#deskhpsdr-flags input[type=checkbox]:checked')).map(el=>el.value);
 
   try{
     const fd = new FormData();
@@ -416,7 +416,7 @@ $('pihpsdr-run').addEventListener('click', async ()=>{
   }catch(e){
     appendOutput('\x1b[31mRun error: ' + e.message + '\x1b[0m');
   }finally{
-    pihRunInProgress = false;
+    deskRunInProgress = false;
     btn.disabled = false;
     setTimeout(fetchBufferedRunLog, 250);
     setTimeout(()=>show(progress, false), 600);

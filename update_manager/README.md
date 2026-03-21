@@ -26,13 +26,14 @@ service names still use `saturn-go` for compatibility with existing installs.
 - G2 Update page includes a read-only `Show App / Firmware Info` action that reports the active P2/P3 app, app version, and the latest `p2app.service` startup banner with FPGA firmware/build/date-code details
 - G2 Update page also includes `Update Web Manager Too`; when enabled, `Run Update G2` watches for repo changes under `update_manager/` and automatically launches `update-saturn-go.sh --skip-git` as a detached final step after the G2 run completes, reusing the just-updated active repo root instead of requiring a separate Saturn Go repo pull
 - Dedicated piHPSDR Update page (`pihpsdr.html`) for `update-pihpsdr.py` terminal execution
+- Dedicated deskHPSDR Update page (`deskhpsdr.html`) for `update-deskhpsdr.py` terminal execution using the active Saturn repo-root helper scripts
 - Dedicated FPGA Flash page (`fpga.html`) for `flash_fpga.sh` using `load-FPGA` (`-b`, `-v`, `-f`) with explicit confirmation guard
 - Dedicated Custom Scripts page (`custom.html` / `index.html`) to add/update/delete runnable scripts from browser with file upload + flag metadata
 - Default browser-managed custom scripts are auto-seeded on startup:
   - `cleanup-saturn-logs.sh`
   - `cleanup-saturn-backups.sh`
 - Dedicated Backup / Restore page (`backup.html`) for repo-root management, backup/restore, Pi imaging, clone, and repair tools
-- Navigation/page names in current UI are: `G2 Update`, `piHPSDR Update`, `FPGA Flash`, `Backup / Restore`, `Custom Scripts`, `Monitor`
+- Navigation/page names in current UI are: `G2 Update`, `Saturn Go`, `piHPSDR Update`, `deskHPSDR Update`, `FPGA Flash`, `Backup / Restore`, `Custom Scripts`, `Monitor`
 - Pi image creation workflow with progress, validation, cancel, and download
 - SD-to-removable/USB-device cloning workflow with auto-detected targets, optional quick target wipe, progress, and cancel
 - Repair Pack download and system config verification tools
@@ -60,7 +61,9 @@ Typical deployed paths:
 /var/lib/saturn-web/
   index.html
   update.html
+  saturngo.html
   pihpsdr.html
+  deskhpsdr.html
   fpga.html
   monitor.html
   backup.html
@@ -95,6 +98,7 @@ Script definitions come from `config.json` plus browser-managed custom entries i
 - Saturn Go page: `/saturngo` (also `/saturngo.html`, `/saturn-go`, `/saturn-go.html`)
 - Experimental P2/P3 test page (hidden, no nav link): `/p23test` (also `/p23test.html`)
 - piHPSDR update page: `/pihpsdr` (also `/pihpsdr.html`)
+- deskHPSDR update page: `/deskhpsdr` (also `/deskhpsdr.html`)
 - FPGA flash page: `/fpga` (also `/fpga.html`)
 - Custom scripts page: `/custom` (also `/custom.html`, `/index.html`)
 - Discover FPGA image candidates: `GET /get_fpga_images`
@@ -191,6 +195,18 @@ If a script entry does not define `version`, `/get_versions` now returns
   - `/var/lib/saturn-state/saturngo_deploy_status.json` (default)
 - The web terminal may disconnect near the end when `saturn-go.service`
   restarts; reload the page after ~10-20 seconds.
+
+### deskHPSDR Update (`update-deskhpsdr.py`)
+
+- Dedicated page `/deskhpsdr` runs the deskHPSDR update/build workflow with live terminal output and buffered resume via `/run` + `/run_log`.
+- If `~/github/deskhpsdr` does not exist and `--skip-git` is not selected, the updater clones `https://github.com/dl1bz/deskhpsdr.git` before building.
+- If the checkout already exists and `--skip-git` is not selected, the updater pulls `origin/<current-branch>` using `--ff-only` and auto-stashes local changes first when needed.
+- The build step delegates to the active Saturn repo-root helper script:
+  - `scripts/deskhpsdr-test-build-on-current-image.sh --repo ~/github/deskhpsdr`
+- UI run options map to script flags:
+  - `--skip-git`, `-y`, `-n`, `--no-install-deps`, `--no-clean`, `--no-desktop-shortcut`, `--dry-run`, `--verbose`
+- The updater resolves helper scripts from the active backend repo root (`SATURN_REPO_ROOT` / `SATURN_ACTIVE_REPO_ROOT`), so it stays aligned with the currently selected Saturn checkout.
+- On a fresh image, do not select `--skip-git`; otherwise the updater will fail because there is no local `~/github/deskhpsdr` checkout to build.
 
 ### P2/P3 App Test Lab (Hidden)
 

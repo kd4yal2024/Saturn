@@ -41,9 +41,11 @@ Backend also enforces same-host checks when `Origin` or `Referer` is present.
 | `/fpga.html` | `GET` | No | Serve `fpga.html` (FPGA flash terminal/control page). |
 | `/pihpsdr` | `GET` | No | Serve `pihpsdr.html` (piHPSDR update terminal). |
 | `/pihpsdr.html` | `GET` | No | Serve `pihpsdr.html` (piHPSDR update terminal). |
+| `/deskhpsdr` | `GET` | No | Serve `deskhpsdr.html` (deskHPSDR update terminal). |
+| `/deskhpsdr.html` | `GET` | No | Serve `deskhpsdr.html` (deskHPSDR update terminal). |
 | `/monitor` | `GET` | No | Serve `monitor.html`. |
 | `/monitor.html` | `GET` | No | Serve `monitor.html`. |
-| fallback mapped page paths | `GET` | No | Supports `/saturn`, `/saturn/custom`, `/saturn/backup`, `/saturn/update`, `/saturn/saturngo`, `/saturn/p23test`, `/saturn/fpga`, `/saturn/pihpsdr`, `/saturn/monitor`, etc. |
+| fallback mapped page paths | `GET` | No | Supports `/saturn`, `/saturn/custom`, `/saturn/backup`, `/saturn/update`, `/saturn/saturngo`, `/saturn/p23test`, `/saturn/fpga`, `/saturn/pihpsdr`, `/saturn/deskhpsdr`, `/saturn/monitor`, etc. |
 
 ## Health and Metadata
 
@@ -229,6 +231,7 @@ Update-activity behavior for `/run`:
   - `SATURN_SATURNGO_POLICY_URL`
   - `SATURN_SATURNGO_DEPLOY_STATUS_FILE`
 - `p23-app-manager.sh` (hidden P2/P3 test workflow) uses the active repo-root env (`SATURN_ACTIVE_REPO_ROOT`) and runs privileged deploy/switch actions via `sudo -n` when not root.
+- `update-deskhpsdr.py` uses the active repo-root env to find `scripts/deskhpsdr-test-build-on-current-image.sh`, clones/pulls `~/github/deskhpsdr` unless `--skip-git` is set, then runs the helper-script build flow with the selected flags.
 - Python child runs also include:
   - `PYTHONDONTWRITEBYTECODE=1`
   - `PYTHONPYCACHEPREFIX=/var/cache/saturn-python`

@@ -104,12 +104,14 @@ curl -fsS "http://127.0.0.1:8080/run_log?script=update-G2.py&from=0&limit=20"
 ### Navigation Layout
 
 - `/saturn/` opens G2 Update (default landing page).
+- `/saturn/saturngo` opens dedicated Saturn Go self-update page.
 - `/saturn/pihpsdr` opens dedicated piHPSDR update page.
+- `/saturn/deskhpsdr` opens dedicated deskHPSDR update page.
 - `/saturn/fpga` opens dedicated FPGA flash page.
 - `/saturn/backup` opens Backup / Restore.
 - `/saturn/custom` (and `/saturn/index`) opens Custom Scripts page.
 - `/saturn/monitor` opens Monitor.
-- Navigation order in current UI: `G2 Update` -> `piHPSDR Update` -> `FPGA Flash` -> `Backup / Restore` -> `Custom Scripts` -> `Monitor`.
+- Navigation order in current UI: `G2 Update` -> `Saturn Go` -> `piHPSDR Update` -> `deskHPSDR Update` -> `FPGA Flash` -> `Backup / Restore` -> `Custom Scripts` -> `Monitor`.
 
 ### Repo Root Management
 
@@ -303,6 +305,18 @@ Safety/usage notes:
 - In non-interactive web execution, backup prompts are skipped unless `-y` is selected.
 - Output can be resumed from backend run logs (`/run_log`) after navigating away and back.
 - On systems exposing non-UTF-8 stdout/stderr (for example `latin-1`), the updater now degrades unsupported status symbols instead of crashing; mirrored log files are written as UTF-8.
+
+### Update deskHPSDR (Dedicated Terminal)
+
+- Run `update-deskhpsdr.py` from `/saturn/deskhpsdr`.
+- This page mirrors the dedicated terminal workflow (flags + SSE output) used by Update G2 and Update piHPSDR.
+- If `~/github/deskhpsdr` does not exist and `--skip-git` is not selected, the updater clones the upstream deskHPSDR repo before the build step.
+- If the checkout already exists and `--skip-git` is not selected, the updater pulls `origin/<current-branch>` with `--ff-only` and auto-stashes local changes first when needed.
+- The build step resolves helper scripts from the active Saturn repo root and then runs `scripts/deskhpsdr-test-build-on-current-image.sh --repo ~/github/deskhpsdr`.
+- `--no-install-deps`, `--no-clean`, and `--no-desktop-shortcut` map directly to the helper-script build flow.
+- In non-interactive web execution, backup prompts are skipped unless `-y` is selected.
+- On a fresh image, do not select `--skip-git`; otherwise the run fails because there is no local deskHPSDR checkout to build.
+- Output can be resumed from backend run logs (`/run_log`) after navigating away and back.
 
 ### FPGA Flash (Dedicated Terminal)
 

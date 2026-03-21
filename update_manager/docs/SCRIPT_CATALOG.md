@@ -10,6 +10,7 @@ Defined in `config.json` and surfaced by `/get_scripts`.
 |---|---|---|---|
 | `update-G2.py` | `2.14` | Update Saturn repository and related components with backup options and privilege-aware behavior. | `--skip-git`, `-y`, `-n`, `--dry-run`, `--verbose` |
 | `update-pihpsdr.py` | `1.10` | Update/build piHPSDR repository with backup options. | `--skip-git`, `-y`, `-n`, `--no-gpio`, `--dry-run`, `--verbose` |
+| `update-deskhpsdr.py` | `1.0` | Clone/update/build deskHPSDR with backup options and helper-script-driven build/install-dependency behavior. | `--skip-git`, `-y`, `-n`, `--no-install-deps`, `--no-clean`, `--no-desktop-shortcut`, `--dry-run`, `--verbose` |
 | `log_cleaner.sh` | `3.00` | Find and optionally delete `*.log` files under home directory. | `--delete-all`, `--no-recursive`, `--dry-run` |
 | `restore-backup.sh` | `3.10` | Restore Saturn or piHPSDR from backup directories with list/latest/explicit selection support. | `--saturn`, `--pihpsdr`, `--latest`, `--list`, `--backup-dir`, `--backup-name`, `--dry-run`, `--verbose`, `--json` |
 
@@ -21,6 +22,8 @@ UI usage notes:
 - `p23test.html` is a hidden/experimental UI for testing P2/P3 app build/deploy/switch actions using `p23-app-manager.sh` (not linked in main navigation).
 - `index.html` (Custom Scripts page) intentionally excludes `update-pihpsdr.py` from the dropdown.
 - `pihpsdr.html` is the dedicated UI for running `update-pihpsdr.py` with live SSE terminal output.
+- `index.html` (Custom Scripts page) intentionally excludes `update-deskhpsdr.py` from the dropdown.
+- `deskhpsdr.html` is the dedicated UI for running `update-deskhpsdr.py` with live SSE terminal output.
 - `fpga.html` is the dedicated UI for running `flash_fpga.sh` with confirmation and FPGA image discovery.
 - `restore-backup.sh` is intentionally excluded from the main dropdown; Backup / Restore page provides dedicated restore controls for script-created backup directories.
 - `index.html` is used as the browser-managed Custom Scripts page (`/custom`), backed by `custom_scripts.json`.
@@ -74,5 +77,6 @@ Not all utilities are directly wired into current UI buttons, but are included i
 - `update-saturn-go.sh` also participates in the shared update-activity lock and writes last deploy status JSON for the Saturn Go page.
 - `update-G2.py` emits `SATURN_WEB_MANAGER_CHANGED=1` when pulled commits modify paths under `update_manager/`; the G2 page uses that marker to optionally chain a final `update-saturn-go.sh --skip-git --verbose` post-step.
 - `update-saturn-go.sh --skip-git` now works from the active repo root even if no separate Saturn Go repo policy URL is configured, which is what allows the post-G2 self-update chain to reuse the repo that `update-G2.py` just updated.
+- `update-deskhpsdr.py` resolves helper scripts from the active repo root, clones/pulls `~/github/deskhpsdr` unless `--skip-git` is selected, and then delegates the build to `scripts/deskhpsdr-test-build-on-current-image.sh`.
 - `p23-app-manager.sh` is an experimental local test/deploy helper; it modifies a systemd drop-in override for `p2app.service` rather than editing the base unit file directly.
 - `p23-app-manager.sh` writes `Environment=SATURN_FRONT_PANEL_MODE=...` into the generated override for forced/assisted panel detection testing and tags the override with a `# saturn-p23 mode=... panel=...` comment that the status API parses.

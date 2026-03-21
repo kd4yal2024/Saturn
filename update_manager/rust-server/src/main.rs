@@ -229,6 +229,8 @@ async fn main() {
         .route("/fpga.html", get(fpga_handler))
         .route("/pihpsdr", get(pihpsdr_handler))
         .route("/pihpsdr.html", get(pihpsdr_handler))
+        .route("/deskhpsdr", get(deskhpsdr_handler))
+        .route("/deskhpsdr.html", get(deskhpsdr_handler))
         .route("/monitor", get(monitor_handler))
         .route("/monitor.html", get(monitor_handler))
         .route("/healthz", get(healthz))
@@ -348,6 +350,10 @@ async fn pihpsdr_handler(State(state): State<AppState>) -> impl IntoResponse {
     serve_page(&state.webroot, "pihpsdr.html").await
 }
 
+async fn deskhpsdr_handler(State(state): State<AppState>) -> impl IntoResponse {
+    serve_page(&state.webroot, "deskhpsdr.html").await
+}
+
 async fn monitor_handler(State(state): State<AppState>) -> impl IntoResponse {
     serve_page(&state.webroot, "monitor.html").await
 }
@@ -384,6 +390,9 @@ fn route_to_page(path: &str) -> Option<&'static str> {
         }
         "/pihpsdr" | "/pihpsdr/" | "/pihpsdr.html" | "/saturn/pihpsdr" | "/saturn/pihpsdr/" | "/saturn/pihpsdr.html" => {
             Some("pihpsdr.html")
+        }
+        "/deskhpsdr" | "/deskhpsdr/" | "/deskhpsdr.html" | "/saturn/deskhpsdr" | "/saturn/deskhpsdr/" | "/saturn/deskhpsdr.html" => {
+            Some("deskhpsdr.html")
         }
         "/monitor" | "/monitor/" | "/monitor.html" | "/saturn/monitor" | "/saturn/monitor/" | "/saturn/monitor.html" => {
             Some("monitor.html")

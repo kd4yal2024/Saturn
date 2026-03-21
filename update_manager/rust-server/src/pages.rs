@@ -39,6 +39,10 @@ pub async fn pihpsdr_handler(State(state): State<AppState>) -> impl IntoResponse
     serve_page(&state.webroot, "pihpsdr.html").await
 }
 
+pub async fn deskhpsdr_handler(State(state): State<AppState>) -> impl IntoResponse {
+    serve_page(&state.webroot, "deskhpsdr.html").await
+}
+
 pub async fn monitor_handler(State(state): State<AppState>) -> impl IntoResponse {
     serve_page(&state.webroot, "monitor.html").await
 }
@@ -67,6 +71,8 @@ pub fn route_to_page(path: &str) -> Option<&'static str> {
         | "/saturn/fpga.html" => Some("fpga.html"),
         "/pihpsdr" | "/pihpsdr/" | "/pihpsdr.html" | "/saturn/pihpsdr" | "/saturn/pihpsdr/"
         | "/saturn/pihpsdr.html" => Some("pihpsdr.html"),
+        "/deskhpsdr" | "/deskhpsdr/" | "/deskhpsdr.html" | "/saturn/deskhpsdr"
+        | "/saturn/deskhpsdr/" | "/saturn/deskhpsdr.html" => Some("deskhpsdr.html"),
         "/monitor" | "/monitor/" | "/monitor.html" | "/saturn/monitor" | "/saturn/monitor/"
         | "/saturn/monitor.html" => Some("monitor.html"),
         _ => None,
