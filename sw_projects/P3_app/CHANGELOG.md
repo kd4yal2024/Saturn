@@ -29,6 +29,10 @@ All notable changes to `P3_app` from this hardening pass are documented here.
   sequence gaps from true empty-queue stalls and record whether each new
   speaker underrun happened with queued audio already available, along with the
   last underrun's queue depth, FIFO depth, queue age, and write mode.
+- Added an emergency-only speaker fast path that skips the receive wait when
+  the last observed hardware speaker FIFO was already near empty and queued
+  audio is ready, so the remaining queue-ready underruns can be attacked
+  without reintroducing the earlier high-CPU loop ordering regression.
 
 ### Added
 

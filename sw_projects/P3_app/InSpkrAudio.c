@@ -247,6 +247,7 @@ void *IncomingSpkrAudio(void *arg)                      // listener thread
     uint32_t FramesToWrite = 0;
     uint32_t SilenceFramesToWrite = 0;
     uint32_t WriteBytes = 0;
+    unsigned int LastObservedFIFOFrames = VSPKPREFILLHIGHFRAMES;
     uint64_t QueueAgeUs = 0;
     uint64_t RemainingAgeUs = 0;
     uint64_t LastPacketNs = 0;
@@ -364,7 +365,9 @@ void *IncomingSpkrAudio(void *arg)                      // listener thread
                 QueueAgeUs = 0;
                 if(QueueArrivalNs[QueueHead] != 0)
                     QueueAgeUs = (GetMonotonicTimeNs() - QueueArrivalNs[QueueHead]) / 1000ULL;
-                if(QueueAgeUs < VSPKMAXQUEUEAGEUS)
+                if(LastObservedFIFOFrames < VSPKEMERGENCYLOWFRAMES)
+                    RemainingAgeUs = 0;
+                else if(QueueAgeUs < VSPKMAXQUEUEAGEUS)
                     RemainingAgeUs = VSPKMAXQUEUEAGEUS - QueueAgeUs;
                 else
                     RemainingAgeUs = 0;
@@ -486,6 +489,7 @@ void *IncomingSpkrAudio(void *arg)                      // listener thread
                 continue;
 
             Depth = ReadFIFOMonitorChannel(eSpkCodecDMA, &FIFOOverflow, &FIFOOverThreshold, &FIFOUnderflow, &Current);
+            LastObservedFIFOFrames = Current / VMEMWORDSPERFRAME;
             if((StartupCount == 0) && FIFOOverThreshold && UseDebug)
                 printf("Codec speaker FIFO Overthreshold, depth now = %d\n", Current);
             if(FIFOUnderflow)
@@ -516,6 +520,7 @@ void *IncomingSpkrAudio(void *arg)                      // listener thread
             QueueAgeUs = (GetMonotonicTimeNs() - QueueArrivalNs[QueueHead]) / 1000ULL;
 
         Depth = ReadFIFOMonitorChannel(eSpkCodecDMA, &FIFOOverflow, &FIFOOverThreshold, &FIFOUnderflow, &Current);        // refresh actual FIFO occupancy before deciding to keep batching
+        LastObservedFIFOFrames = Current / VMEMWORDSPERFRAME;
         if((StartupCount == 0) && FIFOOverThreshold && UseDebug)
             printf("Codec speaker FIFO Overthreshold, depth now = %d\n", Current);
         if(FIFOUnderflow)
@@ -531,6 +536,7 @@ void *IncomingSpkrAudio(void *arg)                      // listener thread
         {
             usleep(500);
             Depth = ReadFIFOMonitorChannel(eSpkCodecDMA, &FIFOOverflow, &FIFOOverThreshold, &FIFOUnderflow, &Current);
+            LastObservedFIFOFrames = Current / VMEMWORDSPERFRAME;
             if((StartupCount == 0) && FIFOOverThreshold && UseDebug)
                 printf("Codec speaker FIFO Overthreshold, depth now = %d\n", Current);
             if(FIFOUnderflow)
@@ -564,6 +570,7 @@ void *IncomingSpkrAudio(void *arg)                      // listener thread
         P23PerfTelemetryCounterAdd(eP23PerfCounterSpkrDMAWrites, 1U);
         P23PerfTelemetryCounterAdd(eP23PerfCounterSpkrDMAWriteBytes, WriteBytes);
         Current += FramesToWrite * VMEMWORDSPERFRAME;
+        LastObservedFIFOFrames = Current / VMEMWORDSPERFRAME;
         if(Current >= (VSPKPREFILLHIGHFRAMES * VMEMWORDSPERFRAME))
             PrefillActive = false;
     }

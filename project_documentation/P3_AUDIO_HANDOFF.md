@@ -155,10 +155,10 @@ Use this as the most trustworthy tested reference point:
 
 This is the baseline to compare against for future speaker-side changes.
 
-## Current Uncommitted Experimental State
+## Confirmed Improvement After Baseline
 
-After the stable baseline commit, one narrow experimental change was deployed
-but not committed yet:
+After baseline `85349c8`, one narrow speaker-side improvement was tested and
+validated:
 
 - file: `sw_projects/P3_app/InSpkrAudio.c`
 - summary:
@@ -167,18 +167,31 @@ but not committed yet:
     was already in the emergency band, skip the normal receive wait and move
     more quickly toward the next speaker DMA write
 
-This experiment is intentionally narrow:
+This change is intentionally narrow:
 
 - it keeps the sequence-aware gap handling
 - it keeps the underrun-context telemetry
 - it does not restore the broad queue-first loop
 
-At the time of writing, this experimental state still needs a clean dual-RX
-validation snapshot.
+Validated result from the clean dual-RX run:
+
+- `fifo_speaker_under_events=14`
+- runtime about `3654s`
+- about `13.8 underruns/hour`
+- prior stable rollback baseline was about `19.5/hour`
+- improvement is about `29%`
+- CPU did not regress into the failed `74-86%` range
+- `fifo_duc_under_events=0`
+- `speaker_underrun_queue_empty_events=0`
+- `speaker_underrun_queue_ready_events=14`
+- `speaker_gap_dropped_frames=0`
+
+This is the current preferred runtime state after the baseline commit.
 
 ## Next Test To Run
 
-Run a clean dual-RX test against the current deployed build.
+Run one more clean confirmation dual-RX test against the current deployed
+build.
 
 Test setup:
 
@@ -194,7 +207,8 @@ Success criteria:
 - CPU remains near the normal range, not the old `74-86%` regression
 - `speaker_dma_writes` does not collapse toward `speaker_packets` 1:1
 - `fifo_duc_under_events=0`
-- `speaker_underrun_queue_ready_events` is lower than the stable baseline rate
+- `speaker_underrun_queue_ready_events` stays near or below the current
+  improved rate
 - `speaker_underrun_queue_empty_events` remains `0`
 - `speaker_gap_events` remains near `0`
 - `speaker_stall_events` remains small
@@ -211,6 +225,9 @@ Key fields to inspect in the next snapshot:
 - `gauges.speaker_underrun`
 - `cpuPctCore`
 - `xdmaIrqPerMiB`
+
+If that confirmation run looks similar, the emergency-only speaker fast path
+should be treated as the next committed step after baseline `85349c8`.
 
 ## Useful Commands
 
