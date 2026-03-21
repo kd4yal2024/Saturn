@@ -166,6 +166,7 @@ void *OutgoingHighPriority(void *arg)
         atomic_load(&ThreadError),
         atomic_load(&ExitRequested)
       );
+      P23PerfTelemetrySetPureSignalEnabled(GetPureSignalEnabled());
       P23PerfTelemetryMaybeWrite();
       // Port rebinding is handled centrally by the p2app control plane.
       usleep(100);
@@ -280,6 +281,7 @@ void *OutgoingHighPriority(void *arg)
         atomic_load(&ThreadError),
         atomic_load(&ExitRequested)
       );
+      P23PerfTelemetrySetPureSignalEnabled(GetPureSignalEnabled());
       P23PerfTelemetrySetFIFOSnapshot(DDCFIFOSamples, MicFIFOSamples, DUCFIFOSamples, SpeakerFIFOSamples, FIFOOverflows);
       P23PerfTelemetrySetADCSnapshot(PeakADC1MaxAmpl, PeakADC2MaxAmpl, *(uint8_t *)(UDPBuffer+5));
       if(*(uint8_t *)(UDPBuffer+5) != 0)

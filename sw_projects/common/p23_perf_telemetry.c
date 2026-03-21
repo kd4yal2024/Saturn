@@ -22,6 +22,7 @@ typedef struct
 {
   bool SDRActive;
   bool TXMode;
+  bool PureSignalEnabled;
   bool ReplyAddressSet;
   bool StartBitReceived;
   bool ThreadError;
@@ -206,6 +207,13 @@ void P23PerfTelemetrySetRuntimeFlags(bool SDRIsActive, bool TXMode, bool ReplyIs
   pthread_mutex_unlock(&g_perf_mutex);
 }
 
+void P23PerfTelemetrySetPureSignalEnabled(bool Enabled)
+{
+  pthread_mutex_lock(&g_perf_mutex);
+  g_perf_state.PureSignalEnabled = Enabled;
+  pthread_mutex_unlock(&g_perf_mutex);
+}
+
 void P23PerfTelemetrySetFeatureFlags(bool ControlPanelEnabled, bool GanymedeEnabled,
                                      bool LDGATUEnabled, bool AriesATUEnabled)
 {
@@ -336,6 +344,7 @@ void P23PerfTelemetryMaybeWrite(void)
           "  \"state\": {\n"
           "    \"sdr_active\": %s,\n"
           "    \"tx_mode\": %s,\n"
+          "    \"pure_signal_enabled\": %s,\n"
           "    \"reply_address_set\": %s,\n"
           "    \"start_bit_received\": %s,\n"
           "    \"thread_error\": %s,\n"
@@ -343,6 +352,7 @@ void P23PerfTelemetryMaybeWrite(void)
           "  },\n",
           Snapshot.SDRActive ? "true" : "false",
           Snapshot.TXMode ? "true" : "false",
+          Snapshot.PureSignalEnabled ? "true" : "false",
           Snapshot.ReplyAddressSet ? "true" : "false",
           Snapshot.StartBitReceived ? "true" : "false",
           Snapshot.ThreadError ? "true" : "false",

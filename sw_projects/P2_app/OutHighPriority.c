@@ -171,6 +171,7 @@ void *OutgoingHighPriority(void *arg)
         ThreadError,
         ExitRequested
       );
+      P23PerfTelemetrySetPureSignalEnabled(GetPureSignalEnabled());
       P23PerfTelemetryMaybeWrite();
       usleep(100);
     }
@@ -275,6 +276,7 @@ void *OutgoingHighPriority(void *arg)
       pthread_mutex_unlock(&g_fifo_overflow_mutex);
       *(uint8_t *)(UDPBuffer+30) = FIFOOverflows;
       P23PerfTelemetrySetRuntimeFlags(SDRActive, IsTXMode, ReplyAddressSet, StartBitReceived, ThreadError, ExitRequested);
+      P23PerfTelemetrySetPureSignalEnabled(GetPureSignalEnabled());
       P23PerfTelemetrySetFIFOSnapshot(DDCFIFOSamples, MicFIFOSamples, DUCFIFOSamples, SpeakerFIFOSamples, FIFOOverflows);
       P23PerfTelemetrySetADCSnapshot(PeakADC1MaxAmpl, PeakADC2MaxAmpl, *(uint8_t *)(UDPBuffer+5));
       if(*(uint8_t *)(UDPBuffer+5) != 0)

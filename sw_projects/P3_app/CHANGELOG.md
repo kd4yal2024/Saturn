@@ -37,6 +37,9 @@ All notable changes to `P3_app` from this hardening pass are documented here.
   added a short activation grace window that bypasses the queued-audio receive
   wait while the speaker reserve settles, so startup no longer relies on a
   stale healthy FIFO estimate before the first real occupancy read.
+- Added a live `pure_signal_enabled` flag to the shared `/p23_perf` app
+  telemetry export so lab snapshots can distinguish plain TX from PureSignal
+  TX without relying on client-side UI state.
 
 ### Added
 

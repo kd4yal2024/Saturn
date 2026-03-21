@@ -502,6 +502,12 @@ void SetCodecLineInGain(unsigned int Gain);
 //
 void EnablePureSignal(bool Enabled);
 
+//
+// GetPureSignalEnabled(void)
+// returns true if PureSignal operation is enabled
+//
+bool GetPureSignalEnabled(void);
+
 
 //
 // SetADCAttenuator(EADCSelect ADC, unsigned int Atten, bool Enabled, bool RXAtten)

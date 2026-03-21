@@ -864,7 +864,10 @@ function formatWorkloadSummaryFromPerf(perf){
     : 'WB off';
   const liveState = telemetry?.pid_matches_service ? 'live app stats' : 'host-only stats';
   const radioState = state?.tx_mode ? 'TX' : 'RX';
-  return `App ${selected} | Mode ${mode} | Panel ${panel} | ${liveState} | DDC ${enabledCount} on / ${interleavedCount} interleaved | ${wbMode} | ${radioState}`;
+  const pureSignalState = Object.prototype.hasOwnProperty.call(state, 'pure_signal_enabled')
+    ? `PS ${state?.pure_signal_enabled ? 'on' : 'off'}`
+    : 'PS n/a';
+  return `App ${selected} | Mode ${mode} | Panel ${panel} | ${liveState} | DDC ${enabledCount} on / ${interleavedCount} interleaved | ${wbMode} | ${radioState} | ${pureSignalState}`;
 }
 function perfCounters(perf){
   const p = (perf && perf.process) || {};
@@ -1188,6 +1191,9 @@ function renderPerfDashboard(d, perf, alertState, baseline){
     app?.features?.ldg_atu ? 'ldg' : null,
     app?.features?.aries_atu ? 'aries' : null,
   ].filter(Boolean).join(', ') || 'none';
+  const pureSignalState = Object.prototype.hasOwnProperty.call(app?.state || {}, 'pure_signal_enabled')
+    ? `PS ${app?.state?.pure_signal_enabled ? 'on' : 'off'}`
+    : 'PS n/a';
   const errorBurst = [
     `ADC ov ${fmtInt(d.adcOverflowEventDelta)}`,
     `DDC send ${fmtInt(d.ddcSendErrDelta)}`,
@@ -1212,7 +1218,7 @@ function renderPerfDashboard(d, perf, alertState, baseline){
     metricCard('XDMA', `${fmtNum(d.xdmaIrqPerSec)} IRQ/s`, `PCIe ${d.xdmaPcieLinkSpeed || 'n/a'} x${d.xdmaPcieLinkWidth || 'n/a'} | ${fmtNum(d.xdmaIrqPerMiB)} IRQ/MiB`),
     metricCard('Workload', `${String(d.selectedApp || perf?.workload?.selected_app || 'unknown').toUpperCase()} / ${d.startupMode || 'n/a'} / ${d.panelMode || 'n/a'}`, `DDC ${enabledCount} enabled, ${interleavedCount} interleaved | WB ${wbState}`),
     metricCard('Service Runtime', formatAudioRtSummary(serviceRuntime), formatAudioRtSubtext(serviceRuntime)),
-    metricCard('App Telemetry', d.appPidMatchesService ? 'live' : 'host-only', `uptime ${fmtInt(app?.uptime_sec)} s | features ${featureBits} | ${app?.state?.tx_mode ? 'TX' : 'RX'}`),
+    metricCard('App Telemetry', d.appPidMatchesService ? 'live' : 'host-only', `uptime ${fmtInt(app?.uptime_sec)} s | features ${featureBits} | ${app?.state?.tx_mode ? 'TX' : 'RX'} | ${pureSignalState}`),
     metricCard('App Packet Rate', `${fmtNum(d.ddcPps)} DDC pkt/s`, `HP ${fmtNum(d.hpPps)} | Mic ${fmtNum(d.micPps)} | WB ${fmtNum(d.wbPps)} pkt/s`),
     metricCard('App Ingest Rate', `${fmtNum(d.ducPps)} DUC pkt/s`, `Spkr ${fmtNum(d.spkrPps)} pkt/s | DDC DMA ${fmtNum(d.ddcDmaMiBs)} MiB/s | WB DMA ${fmtNum(d.wbDmaMiBs)} MiB/s`),
     metricCard('DMA Write Rate', `${fmtNum(d.ducDmaMiBs)} MiB/s DUC`, `Spkr ${fmtNum(d.spkrDmaKiBs)} KiB/s | Mic DMA ${fmtNum(d.micDmaKiBs)} KiB/s`),

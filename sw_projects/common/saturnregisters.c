@@ -1415,6 +1415,11 @@ void EnablePureSignal(bool Enabled)
     GPureSignalEnabled = Enabled;
 }
 
+bool GetPureSignalEnabled(void)
+{
+    return GPureSignalEnabled;
+}
+
 
 //
 // SetADCAttenuator(EADCSelect ADC, unsigned int Atten, bool Enabled, bool RXAtten)

@@ -60,6 +60,7 @@ typedef enum
 void P23PerfTelemetryInit(const char *AppName, uint32_t AppVersion);
 void P23PerfTelemetrySetRuntimeFlags(bool SDRIsActive, bool TXMode, bool ReplyIsSet,
                                      bool StartBitIsSet, bool ThreadHasError, bool ExitIsRequested);
+void P23PerfTelemetrySetPureSignalEnabled(bool Enabled);
 void P23PerfTelemetrySetFeatureFlags(bool ControlPanelEnabled, bool GanymedeEnabled,
                                      bool LDGATUEnabled, bool AriesATUEnabled);
 void P23PerfTelemetrySetPort(unsigned int PortIndex, uint16_t PortValue);
