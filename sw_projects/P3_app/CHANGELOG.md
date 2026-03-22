@@ -2,7 +2,19 @@
 
 All notable changes to `P3_app` from this hardening pass are documented here.
 
-## [2026-03-19] Optional Realtime Tuning for Speaker / DUC Threads
+## [2026-03-21] Speaker Startup Refill Timing and PureSignal Telemetry
+
+### Changed
+
+- Reset the cached speaker FIFO estimate on SDR activation/deactivation and
+  added a short activation grace window that bypasses the queued-audio receive
+  wait while the speaker reserve settles, so startup no longer relies on a
+  stale healthy FIFO estimate before the first real occupancy read.
+- Added a live `pure_signal_enabled` flag to the shared `/p23_perf` app
+  telemetry export so lab snapshots can distinguish plain TX from PureSignal
+  TX without relying on client-side UI state.
+
+## [2026-03-20] Audio Baseline, Realtime Tuning, and Queue-Ready Underrun Reduction
 
 ### Changed
 
@@ -33,13 +45,6 @@ All notable changes to `P3_app` from this hardening pass are documented here.
   the last observed hardware speaker FIFO was already near empty and queued
   audio is ready, so the remaining queue-ready underruns can be attacked
   without reintroducing the earlier high-CPU loop ordering regression.
-- Reset the cached speaker FIFO estimate on SDR activation/deactivation and
-  added a short activation grace window that bypasses the queued-audio receive
-  wait while the speaker reserve settles, so startup no longer relies on a
-  stale healthy FIFO estimate before the first real occupancy read.
-- Added a live `pure_signal_enabled` flag to the shared `/p23_perf` app
-  telemetry export so lab snapshots can distinguish plain TX from PureSignal
-  TX without relying on client-side UI state.
 
 ### Added
 
@@ -65,7 +70,7 @@ All notable changes to `P3_app` from this hardening pass are documented here.
 - CPU lists accept comma-separated cores and simple ranges such as `2` or
   `2-3`.
 
-## [2026-03-18] Speaker/DUC Socket and Prefill Tuning
+## [2026-03-19] Speaker/DUC Socket and Prefill Tuning
 
 ### Changed
 
@@ -90,6 +95,31 @@ All notable changes to `P3_app` from this hardening pass are documented here.
     average over a multi-hour baseline
   - DUC underruns remained at `0`
   - speaker underruns fell to rare events (`11` over about `3.7` hours)
+
+## [2026-03-18] P23 Workload Telemetry and Underrun Episode Tracking
+
+### Added
+
+- Added shared `/p23_perf` app telemetry export for P3 worker activity,
+  including per-path packet/byte/error counters, DMA counters, runtime flags,
+  active port assignments, feature flags, and wideband configuration snapshots.
+- Wired speaker, DUC, DDC, mic, wideband, and high-priority paths into the P23
+  telemetry counters so lab runs can correlate underruns, socket errors, FIFO
+  state, and DMA behavior from the app itself.
+
+### Fixed
+
+- Fixed ADC peak telemetry export ordering so `/p23_perf` snapshots capture the
+  live peak values before the per-frame peak-hold counters are reset.
+- Added dependency-file generation to the `Makefile`, included
+  `p23_perf_telemetry.c` explicitly in the build, and ignored generated `.d`
+  files so telemetry-source changes trigger correct incremental rebuilds.
+
+### Changed
+
+- Speaker and DUC FIFO underruns are now counted as distinct starvation
+  episodes instead of incrementing continuously while the same underflow
+  condition persists.
 
 ## [2026-03-18] DMA and Wideband Stability Hardening
 
