@@ -497,7 +497,7 @@ install_shutdown_waiter_service() {
         fi
 
         {
-            sudo env SATURN_SHUTDOWN_WAITER_ENABLED_DEFAULT="${SATURN_SHUTDOWN_WAITER_ENABLED_DEFAULT:-false}" \
+            sudo env SATURN_SHUTDOWN_WAITER_ENABLED_DEFAULT="${SATURN_SHUTDOWN_WAITER_ENABLED_DEFAULT:-auto}" \
                 SATURN_USER="${SATURN_USER:-$USER}" \
                 bash "$install_script" > /tmp/shutdown_waiter_output 2>&1 &
             progress_bar $! "Installing" 10

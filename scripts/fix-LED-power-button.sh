@@ -15,13 +15,26 @@
 
 set -euo pipefail
 
+SCRIPT_SELF="$(readlink -f "${BASH_SOURCE[0]:-$0}" 2>/dev/null || printf '%s\n' "${BASH_SOURCE[0]:-$0}")"
+SCRIPT_ARGS=("$@")
 SERVICE_NAME="${SERVICE_NAME:-gpio15-setup.service}"
 SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}"
 EARLY_DEFAULT="${EARLY_DEFAULT:-1}"
 
 log(){ echo "$1" | systemd-cat -t fix-LED-power-button; }
 
-require_root() { if [ "$(id -u)" -ne 0 ]; then echo "Run with sudo." >&2; log "error: not root"; exit 1; fi; }
+require_root() {
+  if [ "$(id -u)" -ne 0 ]; then
+    if command -v sudo >/dev/null 2>&1; then
+      if sudo -n env EARLY_DEFAULT="$EARLY_DEFAULT" SERVICE_NAME="$SERVICE_NAME" bash "$SCRIPT_SELF" "${SCRIPT_ARGS[@]}"; then
+        exit 0
+      fi
+    fi
+    echo "Root privileges required. Run with sudo or configure passwordless sudo for this script." >&2
+    log "error: not root"
+    exit 1
+  fi
+}
 require_root
 
 # ----- locate config.txt for Bookworm/Trixie -----

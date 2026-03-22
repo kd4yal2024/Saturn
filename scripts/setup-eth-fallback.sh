@@ -1,8 +1,8 @@
 #!/bin/bash
 # setup-eth-fallback.sh - enabling automatic IPv4 link-local (APIPA) fallback (Bookworm + Trixie)
-# Version: 2.4
+# Version: 2.5
 # Written by: Jerry DeLong, KD4YAL
-# Date: 2026-01-01
+# Date: 2026-03-22
 #
 ## Setup-Eth-Fallback.sh Script Documentation
 ##
@@ -85,6 +85,8 @@ die()  { echo -e "${RED}ERROR:${RESET} $*" >&2; exit 1; }
 # ----------------------------
 # Args / defaults
 # ----------------------------
+SCRIPT_SELF="$(readlink -f "${BASH_SOURCE[0]:-$0}" 2>/dev/null || printf '%s\n' "${BASH_SOURCE[0]:-$0}")"
+SCRIPT_ARGS=("$@")
 INTERFACE="${1:-eth0}"
 
 CON_DIR="/etc/NetworkManager/system-connections"
@@ -105,9 +107,16 @@ DHCP_TIMEOUT=6              # DHCP transaction timeout seconds (NM property)
 FALLBACK_WAIT=6             # wait after switching profiles
 
 # ----------------------------
-# Root check
+# Root check / non-interactive sudo handoff
 # ----------------------------
-[[ ${EUID:-$(id -u)} -eq 0 ]] || die "Run as root: sudo bash $0 ${INTERFACE}"
+if [[ ${EUID:-$(id -u)} -ne 0 ]]; then
+  if command -v sudo >/dev/null 2>&1; then
+    if sudo -n bash "$SCRIPT_SELF" "${SCRIPT_ARGS[@]}"; then
+      exit 0
+    fi
+  fi
+  die "Root privileges required. Run with sudo or configure passwordless sudo for this script."
+fi
 
 # ----------------------------
 # Helpers

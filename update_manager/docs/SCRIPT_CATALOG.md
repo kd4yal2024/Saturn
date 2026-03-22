@@ -1,6 +1,6 @@
 # Script Catalog
 
-This file documents the scripts deployed into `/opt/saturn-go/scripts` and related helper scripts currently in `update_manager/scripts`.
+This file documents the scripts deployed into `/opt/saturn-go/scripts` and related helper scripts currently sourced from `update_manager/scripts` plus selected repo-root `scripts/` helpers.
 
 ## Config-Driven Scripts (Exposed by API)
 
@@ -38,6 +38,8 @@ These are created/registered by backend startup when missing and appear in `/cus
 |---|---|---|
 | `cleanup-saturn-logs.sh` | Remove Saturn update log files in `~/saturn-logs` (retention-oriented by default). | `--all`, `--older-7`, `--dry-run`, `--verbose` |
 | `cleanup-saturn-backups.sh` | Prune `~/saturn-backup-*` and `~/pihpsdr-backup-*` directories (keeps newest 2 by default). | `--saturn-only`, `--pihpsdr-only`, `--delete-all`, `--dry-run`, `--verbose` |
+| `fix-LED-power-button.sh` | Install the BCM15 front-panel LED handler for red-on-boot and white-on-shutdown behavior; script self-elevates with `sudo -n` when launched from the web manager. | none |
+| `setup-eth-fallback.sh` | Configure NetworkManager DHCP-to-APIPA fallback for direct Ethernet links; script self-elevates with `sudo -n` when launched from the web manager. | none |
 
 ## Backup Page Workflows
 
@@ -63,7 +65,7 @@ Not all utilities are directly wired into current UI buttons, but are included i
 
 ## Operational Notes
 
-- Scripts are copied from `update_manager/scripts` during install.
+- Scripts are copied from `update_manager/scripts` plus selected repo-root helper scripts during install.
 - File permissions are normalized by installer:
   - `*.sh` and `*.py` scripts are set executable.
 - Script execution from UI is constrained to filenames in `/opt/saturn-go/scripts`.

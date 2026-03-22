@@ -32,6 +32,8 @@ service names still use `saturn-go` for compatibility with existing installs.
 - Default browser-managed custom scripts are auto-seeded on startup:
   - `cleanup-saturn-logs.sh`
   - `cleanup-saturn-backups.sh`
+  - `fix-LED-power-button.sh`
+  - `setup-eth-fallback.sh`
 - Dedicated Backup / Restore page (`backup.html`) for repo-root management, backup/restore, Pi imaging, clone, and repair tools
 - Navigation/page names in current UI are: `G2 Update`, `Saturn Go`, `piHPSDR Update`, `deskHPSDR Update`, `FPGA Flash`, `Backup / Restore`, `Custom Scripts`, `Monitor`
 - Pi image creation workflow with progress, validation, cancel, and download
@@ -159,7 +161,7 @@ If a script entry does not define `version`, `/get_versions` now returns
   `~/.config/autostart/g2-shutdown.desktop`, and initialize
   `/etc/default/saturn-shutdown-waiter` when missing.
 - Shutdown waiter installer default mode is controlled by
-  `SATURN_SHUTDOWN_WAITER_ENABLED_DEFAULT` (default `false`), so image builds
+  `SATURN_SHUTDOWN_WAITER_ENABLED_DEFAULT` (default `auto`), so image builds
   can opt in to `auto`/`true` per hardware profile.
 - When launched by `/run`, the backend sets `SATURN_REPO_ROOT`, `SATURN_DIR`,
   and `SATURN_ACTIVE_REPO_ROOT` to the current active repo root before spawning
@@ -301,7 +303,7 @@ Installer behavior (current):
 - Applies systemd hardening defaults (restricted kernel/control-group access, syscall architecture/address-family restrictions)
 - Leaves `NoNewPrivileges` disabled so controlled `sudo -n` paths (for example password update) can work when sudoers permits them
 - Sets `/opt/saturn-go/scripts` ownership to the service user/group so browser-managed custom script content can be saved
-- Syncs packaged scripts from `update_manager/scripts` without deleting browser-managed custom scripts; packaged copies update only when source files are newer
+- Syncs packaged scripts from `update_manager/scripts` plus selected repo-root helper scripts without deleting browser-managed custom scripts; packaged copies update only when source files are newer
 - Installs root-owned watchdog script at `/usr/local/lib/saturn-go/saturn-health-watchdog.sh` (outside writable custom script path)
 
 ## Uninstall

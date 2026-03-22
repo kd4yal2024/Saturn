@@ -64,6 +64,10 @@ const DEFAULT_CUSTOM_SCRIPT_CLEAN_LOGS: &str =
     include_str!("../../scripts/cleanup-saturn-logs.sh");
 const DEFAULT_CUSTOM_SCRIPT_CLEAN_BACKUPS: &str =
     include_str!("../../scripts/cleanup-saturn-backups.sh");
+const DEFAULT_CUSTOM_SCRIPT_FIX_LED_POWER_BUTTON: &str =
+    include_str!("../../../scripts/fix-LED-power-button.sh");
+const DEFAULT_CUSTOM_SCRIPT_SETUP_ETH_FALLBACK: &str =
+    include_str!("../../../scripts/setup-eth-fallback.sh");
 const P23_ADC_PEAK_TELEMETRY_ENABLE_FILE: &str = "/dev/shm/saturn_p23_adc_peak_telemetry.enabled";
 const P23_ADC_PEAK_TELEMETRY_JSON_FILE: &str = "/dev/shm/saturn_p23_adc_peak_telemetry.json";
 const P23_APP_PERF_TELEMETRY_JSON_FILE: &str = "/dev/shm/saturn_p23_perf_stats.json";
@@ -674,7 +678,7 @@ fn default_custom_scripts(state: &AppState) -> Vec<DefaultCustomScript> {
                 filename: "cleanup-saturn-backups.sh".to_string(),
                 name: Some("Cleanup Saturn Backups".to_string()),
                 description: Some("Prune Saturn/piHPSDR backup directories (keeps 2 newest by default)".to_string()),
-                directory: Some(scripts_dir),
+                directory: Some(scripts_dir.clone()),
                 category: Some("Custom Scripts".to_string()),
                 flags: Some(vec![
                     "--saturn-only".to_string(),
@@ -686,6 +690,36 @@ fn default_custom_scripts(state: &AppState) -> Vec<DefaultCustomScript> {
                 version: Some("custom-default".to_string()),
             },
             content: DEFAULT_CUSTOM_SCRIPT_CLEAN_BACKUPS,
+        },
+        DefaultCustomScript {
+            entry: CfgEntry {
+                filename: "fix-LED-power-button.sh".to_string(),
+                name: Some("Fix LED Power Button".to_string()),
+                description: Some(
+                    "Install the BCM15 front-panel LED boot/shutdown handler and optional early boot default."
+                        .to_string(),
+                ),
+                directory: Some(scripts_dir.clone()),
+                category: Some("Custom Scripts".to_string()),
+                flags: Some(vec![]),
+                version: Some("custom-default".to_string()),
+            },
+            content: DEFAULT_CUSTOM_SCRIPT_FIX_LED_POWER_BUTTON,
+        },
+        DefaultCustomScript {
+            entry: CfgEntry {
+                filename: "setup-eth-fallback.sh".to_string(),
+                name: Some("Setup Ethernet Fallback".to_string()),
+                description: Some(
+                    "Configure NetworkManager DHCP-to-APIPA fallback for direct Ethernet links."
+                        .to_string(),
+                ),
+                directory: Some(scripts_dir),
+                category: Some("Custom Scripts".to_string()),
+                flags: Some(vec![]),
+                version: Some("custom-default".to_string()),
+            },
+            content: DEFAULT_CUSTOM_SCRIPT_SETUP_ETH_FALLBACK,
         },
     ]
 }

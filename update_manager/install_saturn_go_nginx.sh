@@ -69,10 +69,21 @@ if [[ ! -d "$SOURCE_DIR" ]]; then
   err "Source directory not found: $SOURCE_DIR"
   exit 1
 fi
+REPO_SOURCE_DIR="$(cd "$SOURCE_DIR/.." && pwd)"
+EXTRA_PACKAGED_SCRIPTS=(
+  "$REPO_SOURCE_DIR/scripts/fix-LED-power-button.sh"
+  "$REPO_SOURCE_DIR/scripts/setup-eth-fallback.sh"
+)
 if [[ ! -f "$RUST_SRC_DIR/Cargo.toml" ]]; then
   err "Rust server source not found: $RUST_SRC_DIR"
   exit 1
 fi
+for extra_script in "${EXTRA_PACKAGED_SCRIPTS[@]}"; do
+  if [[ ! -f "$extra_script" ]]; then
+    err "Extra packaged script not found: $extra_script"
+    exit 1
+  fi
+done
 
 # Pick a non-root service user by default.
 if [[ -n "${SATURN_SERVICE_USER:-}" ]]; then
@@ -275,6 +286,18 @@ while IFS= read -r -d '' src; do
     kept_scripts=$((kept_scripts + 1))
   fi
 done < <(find "$SOURCE_DIR/scripts" -maxdepth 1 -type f -print0)
+for src in "${EXTRA_PACKAGED_SCRIPTS[@]}"; do
+  dest="$SCRIPTS_DIR/$(basename "$src")"
+  if [[ ! -e "$dest" ]]; then
+    cp -f "$src" "$dest"
+    added_scripts=$((added_scripts + 1))
+  elif [[ "$src" -nt "$dest" ]]; then
+    cp -f "$src" "$dest"
+    updated_scripts=$((updated_scripts + 1))
+  else
+    kept_scripts=$((kept_scripts + 1))
+  fi
+done
 
 cat >"$WATCHDOG_SCRIPT_PATH" <<'WATCHDOG'
 #!/usr/bin/env bash

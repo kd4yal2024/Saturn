@@ -545,7 +545,7 @@ def install_shutdown_waiter_service():
     if sudo_cmd is None:
         return
 
-    default_mode = os.environ.get("SATURN_SHUTDOWN_WAITER_ENABLED_DEFAULT", "false")
+    default_mode = os.environ.get("SATURN_SHUTDOWN_WAITER_ENABLED_DEFAULT", "auto")
     saturn_user = os.environ.get("SATURN_USER") or os.environ.get("USER", "pi")
     run(
         sudo_cmd

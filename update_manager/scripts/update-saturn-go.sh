@@ -124,6 +124,10 @@ REPO_ROOT="${SATURN_ACTIVE_REPO_ROOT:-${SATURN_REPO_ROOT:-}}"
 [[ -n "$REPO_ROOT" ]] || die "SATURN_ACTIVE_REPO_ROOT is not set"
 [[ -d "$REPO_ROOT/.git" ]] || die "Repo root is not a git checkout: $REPO_ROOT"
 [[ -d "$REPO_ROOT/update_manager" ]] || die "Repo root does not contain update_manager/: $REPO_ROOT"
+EXTRA_PACKAGED_SCRIPTS=(
+  "$REPO_ROOT/scripts/fix-LED-power-button.sh"
+  "$REPO_ROOT/scripts/setup-eth-fallback.sh"
+)
 
 SATURNGO_URL="${SATURN_SATURNGO_POLICY_URL:-}"
 SATURNGO_REMOTE="${SATURN_SATURNGO_POLICY_REMOTE:-origin}"
@@ -148,6 +152,9 @@ trap 'rc=$?; if (( rc != 0 )); then write_status "error" "$STATUS_PHASE" "Saturn
 [[ -d "$SCRIPTS_SRC_DIR" ]] || die "Scripts dir not found: $SCRIPTS_SRC_DIR"
 [[ -f "$SCRIPTS_SRC_DIR/config.json" ]] || die "Missing config.json in $SCRIPTS_SRC_DIR"
 [[ -f "$SCRIPTS_SRC_DIR/themes.json" ]] || die "Missing themes.json in $SCRIPTS_SRC_DIR"
+for extra_script in "${EXTRA_PACKAGED_SCRIPTS[@]}"; do
+  [[ -f "$extra_script" ]] || die "Extra packaged script not found: $extra_script"
+done
 
 write_status "running" "init" "Starting Saturn Go self-update"
 
@@ -245,6 +252,9 @@ if (( ! DRY_RUN )); then
   cp "$SCRIPTS_SRC_DIR/config.json" "$STAGE_WEB_DIR/config.json"
   cp "$SCRIPTS_SRC_DIR/themes.json" "$STAGE_WEB_DIR/themes.json"
   find "$SCRIPTS_SRC_DIR" -maxdepth 1 -type f -exec cp "{}" "$STAGE_SCRIPTS_DIR/" \;
+  for extra_script in "${EXTRA_PACKAGED_SCRIPTS[@]}"; do
+    cp "$extra_script" "$STAGE_SCRIPTS_DIR/"
+  done
   chmod 755 "$STAGE_DIR/saturn-go"
   find "$STAGE_SCRIPTS_DIR" -maxdepth 1 -type f \( -name '*.sh' -o -name '*.py' \) -print0 | xargs -0 -r chmod 755
   find "$STAGE_SCRIPTS_DIR" -maxdepth 1 -type f ! \( -name '*.sh' -o -name '*.py' \) -print0 | xargs -0 -r chmod 644

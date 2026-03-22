@@ -30,8 +30,13 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
 - G2 Update page now includes a read-only `Show App / Firmware Info` action that prints the active P2/P3 app/version from `/p23_perf` plus the latest `p2app.service` startup banner lines for FPGA firmware, build date, bit-file date code, clocks, and startup die temperature.
 - G2 Update now includes `Update Web Manager Too`; when `update-G2.py` detects pulled changes under `update_manager/`, the page can automatically launch `update-saturn-go.sh --skip-git --verbose` as a separate final post-step after the G2 run completes, rebuilding from the already-updated active repo root.
 - Dedicated deskHPSDR Update page (`/deskhpsdr`) and `update-deskhpsdr.py` runner for live clone/update/build terminal workflow, including helper-script-driven dependency/build flags and fresh-image clone support.
+- Default Custom Scripts startup seeding now also includes `setup-eth-fallback.sh`, exposing the Ethernet APIPA fallback repair helper in the web manager.
+- Default Custom Scripts startup seeding now also includes `fix-LED-power-button.sh`, exposing the front-panel LED/power-button repair helper in the web manager.
 
 ### Changed
+- Shutdown waiter install/provision defaults now use `SATURN_SHUTDOWN_WAITER_ENABLED_DEFAULT=auto`, so fresh images arm the post-boot power-button watcher unless hardware auto-detect says not to.
+- Saturn Go installer/self-update script sync now includes the repo-root `scripts/setup-eth-fallback.sh` helper in the managed `/opt/saturn-go/scripts` set.
+- Saturn Go installer/self-update script sync now also includes the repo-root `scripts/fix-LED-power-button.sh` helper in the managed `/opt/saturn-go/scripts` set.
 - deskHPSDR update/build flow now applies a Saturn-managed `deskhpsdr` libgpiod v2 compatibility patch before build and probes with `GPIO=ON` instead of forcing `GPIO=OFF`, preserving GPIO support on Trixie during update-manager driven builds.
 - P2/P3 app speaker and DUC underrun telemetry now counts underflow episodes on edge transitions instead of incrementing on every FIFO-monitor poll while the same starvation condition is still active. This makes `/p23_perf` cumulative underrun history comparable across runs and prevents one recovery period from inflating the totals.
 - P2/P3 app high-priority telemetry now preserves the live ADC peak-hold values when exporting `/dev/shm/saturn_p23_perf_stats.json`, so the lab page ADC gauges match runtime packet content instead of being zeroed before snapshot.

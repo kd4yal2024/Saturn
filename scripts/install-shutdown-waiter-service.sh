@@ -5,7 +5,7 @@ set -euo pipefail
 # legacy desktop-autostart startup.
 #
 # Environment knobs:
-#   SATURN_SHUTDOWN_WAITER_ENABLED_DEFAULT (default: false)
+#   SATURN_SHUTDOWN_WAITER_ENABLED_DEFAULT (default: auto)
 #     -> written only when /etc/default/saturn-shutdown-waiter does not exist
 #   SATURN_USER (default: pi)
 
@@ -18,7 +18,7 @@ UNIT_PATH="/etc/systemd/system/saturn-shutdown-waiter.service"
 CONF_PATH="/etc/default/saturn-shutdown-waiter"
 
 SATURN_USER="${SATURN_USER:-pi}"
-DEFAULT_ENABLED="${SATURN_SHUTDOWN_WAITER_ENABLED_DEFAULT:-false}"
+DEFAULT_ENABLED="${SATURN_SHUTDOWN_WAITER_ENABLED_DEFAULT:-auto}"
 
 log() { printf '[shutdown-waiter-install] %s\n' "$*"; }
 die() { printf '[shutdown-waiter-install] ERROR: %s\n' "$*" >&2; exit 1; }
