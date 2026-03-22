@@ -30,6 +30,8 @@ Installer actions include:
 - copies web assets to `/var/lib/saturn-web`
 - copies scripts to `/opt/saturn-go/scripts`
 - grants service-user ownership of `/opt/saturn-go/scripts` so browser-managed custom script edits can persist
+- installs root-owned privileged helper copies to `/usr/local/lib/saturn-go/scripts`
+- rewrites `/etc/sudoers.d/saturn-go-maintenance` for those privileged helper paths
 - writes NGINX config for `/saturn/*` and SSE route `/saturn/run`
 - writes `saturn-go.service`, watchdog service, and watchdog timer
 - waits for backend health at `/healthz`
@@ -175,6 +177,8 @@ Current UI behavior:
 - `Run Update G2` requires valid Appliance repo URL before run can start.
 - `Run Update G2` auto-saves current Appliance settings before spawning script.
 - Terminal output is resumable after tab/page changes using buffered `/run_log` polling.
+- Update G2 also runs the installed shutdown waiter, Ethernet fallback, and
+  LED/power-button repair helpers as part of the maintenance flow.
 
 G2 Update coordination notes:
 
@@ -214,6 +218,9 @@ Update behavior:
 - When `Run Update G2` pulls new commits, `update-G2.py` now emits a marker if any changed path is under `update_manager/`.
 - If that marker is present and `Update Web Manager Too` is checked, the page automatically launches `update-saturn-go.sh --skip-git --verbose` after the G2 run finishes.
 - The follow-up Saturn Go self-update remains a separate final step, so the active G2 run is not interrupted mid-update; expect the page to disconnect briefly when `saturn-go.service` restarts near the end of that follow-up step.
+- Installed systems now rely on `/etc/sudoers.d/saturn-go-maintenance` so the
+  service user can run the root-owned copies under
+  `/usr/local/lib/saturn-go/scripts` with `sudo -n` during web execution.
 
 ### Saturn Go Self-Update (Dedicated Terminal + Redeploy)
 

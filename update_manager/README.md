@@ -160,9 +160,18 @@ If a script entry does not define `version`, `/get_versions` now returns
   install/migrate `saturn-shutdown-waiter.service`, remove legacy
   `~/.config/autostart/g2-shutdown.desktop`, and initialize
   `/etc/default/saturn-shutdown-waiter` when missing.
+- `update-G2.py` now also runs `setup-eth-fallback.sh` and
+  `fix-LED-power-button.sh` from the installed runtime script set. Those helper
+  scripts self-handoff to trusted root-owned copies under
+  `/usr/local/lib/saturn-go/scripts`, so Update G2 refreshes the Ethernet
+  fallback and front-panel LED/power-button helpers in the same maintenance
+  flow.
 - Shutdown waiter installer default mode is controlled by
   `SATURN_SHUTDOWN_WAITER_ENABLED_DEFAULT` (default `auto`), so image builds
   can opt in to `auto`/`true` per hardware profile.
+- Installer now writes a narrow sudoers policy for the service user so the web
+  UI can execute the root-owned `install-shutdown-waiter-service.sh`,
+  `setup-eth-fallback.sh`, and `fix-LED-power-button.sh` helpers via `sudo -n`.
 - When launched by `/run`, the backend sets `SATURN_REPO_ROOT`, `SATURN_DIR`,
   and `SATURN_ACTIVE_REPO_ROOT` to the current active repo root before spawning
   the script.
@@ -190,6 +199,7 @@ If a script entry does not define `version`, `/get_versions` now returns
   - rebuild the Rust backend (`cargo build --release`)
   - sync deployed web assets (`*.html`, `config.json`, `themes.json`)
   - sync packaged scripts into `/opt/saturn-go/scripts` without removing browser-managed extras
+  - refresh trusted helper copies in `/usr/local/lib/saturn-go/scripts` and rewrite the narrow sudoers policy
   - dispatch a detached root helper to stop/copy/start `saturn-go.service`
 - UI run options map to script flags:
   - `--verbose`, `--dry-run`, `--skip-git`, `--skip-build`, `--skip-deploy`
@@ -304,6 +314,9 @@ Installer behavior (current):
 - Leaves `NoNewPrivileges` disabled so controlled `sudo -n` paths (for example password update) can work when sudoers permits them
 - Sets `/opt/saturn-go/scripts` ownership to the service user/group so browser-managed custom script content can be saved
 - Syncs packaged scripts from `update_manager/scripts` plus selected repo-root helper scripts without deleting browser-managed custom scripts; packaged copies update only when source files are newer
+- Writes `/etc/sudoers.d/saturn-go-maintenance` so the service user can run the
+  narrow set of Update G2 repair helpers non-interactively
+- Installs matching root-owned privileged helper copies under `/usr/local/lib/saturn-go/scripts`
 - Installs root-owned watchdog script at `/usr/local/lib/saturn-go/saturn-health-watchdog.sh` (outside writable custom script path)
 
 ## Uninstall

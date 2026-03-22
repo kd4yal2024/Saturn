@@ -5,6 +5,7 @@ SATURN_ROOT="/opt/saturn-go"
 BIN_DIR="$SATURN_ROOT/bin"
 SCRIPTS_DIR="$SATURN_ROOT/scripts"
 WATCHDOG_SCRIPT_DIR="/usr/local/lib/saturn-go"
+PRIVILEGED_SCRIPTS_DIR="$WATCHDOG_SCRIPT_DIR/scripts"
 WEB_ROOT="/var/lib/saturn-web"
 NGINX_SITE="/etc/nginx/sites-available/saturn"
 NGINX_SITE_LINK="/etc/nginx/sites-enabled/saturn"
@@ -15,6 +16,7 @@ WATCHDOG_SCRIPT_NAME="saturn-health-watchdog.sh"
 WATCHDOG_SCRIPT_PATH="$WATCHDOG_SCRIPT_DIR/$WATCHDOG_SCRIPT_NAME"
 WATCHDOG_SERVICE_FILE="/etc/systemd/system/saturn-go-watchdog.service"
 WATCHDOG_TIMER_FILE="/etc/systemd/system/saturn-go-watchdog.timer"
+SUDOERS_FILE="/etc/sudoers.d/saturn-go-maintenance"
 SOURCE_DIR="/home/${SUDO_USER:-$USER}/github/Saturn/update_manager"
 RUST_SRC_DIR="$SOURCE_DIR/rust-server"
 
@@ -72,6 +74,14 @@ fi
 REPO_SOURCE_DIR="$(cd "$SOURCE_DIR/.." && pwd)"
 EXTRA_PACKAGED_SCRIPTS=(
   "$REPO_SOURCE_DIR/scripts/fix-LED-power-button.sh"
+  "$REPO_SOURCE_DIR/scripts/install-shutdown-waiter-service.sh"
+  "$REPO_SOURCE_DIR/scripts/shutdown-waiter.sh"
+  "$REPO_SOURCE_DIR/scripts/setup-eth-fallback.sh"
+)
+PRIVILEGED_HELPER_SCRIPTS=(
+  "$REPO_SOURCE_DIR/scripts/fix-LED-power-button.sh"
+  "$REPO_SOURCE_DIR/scripts/install-shutdown-waiter-service.sh"
+  "$REPO_SOURCE_DIR/scripts/shutdown-waiter.sh"
   "$REPO_SOURCE_DIR/scripts/setup-eth-fallback.sh"
 )
 if [[ ! -f "$RUST_SRC_DIR/Cargo.toml" ]]; then
@@ -81,6 +91,12 @@ fi
 for extra_script in "${EXTRA_PACKAGED_SCRIPTS[@]}"; do
   if [[ ! -f "$extra_script" ]]; then
     err "Extra packaged script not found: $extra_script"
+    exit 1
+  fi
+done
+for privileged_script in "${PRIVILEGED_HELPER_SCRIPTS[@]}"; do
+  if [[ ! -f "$privileged_script" ]]; then
+    err "Privileged helper script not found: $privileged_script"
     exit 1
   fi
 done
@@ -223,7 +239,7 @@ ok "Dependencies installed"
 ensure_modern_rust_toolchain
 
 info "Preparing runtime directories..."
-mkdir -p "$BIN_DIR" "$SCRIPTS_DIR" "$WATCHDOG_SCRIPT_DIR" "$WEB_ROOT" "$SATURN_STATE_DIR" "$SATURN_SNAPSHOT_DIR" "$SATURN_STAGING_DIR"
+mkdir -p "$BIN_DIR" "$SCRIPTS_DIR" "$WATCHDOG_SCRIPT_DIR" "$PRIVILEGED_SCRIPTS_DIR" "$WEB_ROOT" "$SATURN_STATE_DIR" "$SATURN_SNAPSHOT_DIR" "$SATURN_STAGING_DIR"
 ok "Directories ready"
 
 copy_web_asset () {
@@ -299,6 +315,11 @@ for src in "${EXTRA_PACKAGED_SCRIPTS[@]}"; do
   fi
 done
 
+info "Installing privileged helper scripts..."
+for src in "${PRIVILEGED_HELPER_SCRIPTS[@]}"; do
+  install -m 0755 -o root -g root "$src" "$PRIVILEGED_SCRIPTS_DIR/$(basename "$src")"
+done
+
 cat >"$WATCHDOG_SCRIPT_PATH" <<'WATCHDOG'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -321,13 +342,32 @@ find "$WEB_ROOT" -type f -print0 | xargs -0 -r chmod 0644
 find "$SCRIPTS_DIR" -type d -print0 | xargs -0 -r chmod 0775
 find "$SCRIPTS_DIR" -type f \( -name '*.sh' -o -name '*.py' \) -print0 | xargs -0 -r chmod 0755
 find "$SCRIPTS_DIR" -type f ! \( -name '*.sh' -o -name '*.py' \) -print0 | xargs -0 -r chmod 0644
-chown root:root "$WATCHDOG_SCRIPT_DIR" "$WATCHDOG_SCRIPT_PATH"
-chmod 0755 "$WATCHDOG_SCRIPT_DIR" "$WATCHDOG_SCRIPT_PATH"
+chown root:root "$WATCHDOG_SCRIPT_DIR" "$PRIVILEGED_SCRIPTS_DIR" "$WATCHDOG_SCRIPT_PATH"
+chmod 0755 "$WATCHDOG_SCRIPT_DIR" "$PRIVILEGED_SCRIPTS_DIR" "$WATCHDOG_SCRIPT_PATH"
+find "$PRIVILEGED_SCRIPTS_DIR" -maxdepth 1 -type f -print0 | xargs -0 -r chown root:root
+find "$PRIVILEGED_SCRIPTS_DIR" -maxdepth 1 -type f -print0 | xargs -0 -r chmod 0755
 chown -R "$SERVICE_USER:$SERVICE_GROUP" "$SCRIPTS_DIR"
 chown -R "$SERVICE_USER:$SERVICE_GROUP" "$SATURN_STATE_DIR"
 find "$SATURN_STATE_DIR" -type d -print0 | xargs -0 -r chmod 0750
 find "$SATURN_STATE_DIR" -type f -print0 | xargs -0 -r chmod 0640
 ok "Permissions set"
+
+info "Writing sudoers policy for privileged helper scripts..."
+cat >"$SUDOERS_FILE" <<EOF
+# Managed by install_saturn_go_nginx.sh
+Defaults:${SERVICE_USER} secure_path="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+${SERVICE_USER} ALL=(root) NOPASSWD: ${PRIVILEGED_SCRIPTS_DIR}/install-shutdown-waiter-service.sh
+${SERVICE_USER} ALL=(root) NOPASSWD: ${PRIVILEGED_SCRIPTS_DIR}/install-shutdown-waiter-service.sh *
+${SERVICE_USER} ALL=(root) NOPASSWD: ${PRIVILEGED_SCRIPTS_DIR}/setup-eth-fallback.sh
+${SERVICE_USER} ALL=(root) NOPASSWD: ${PRIVILEGED_SCRIPTS_DIR}/setup-eth-fallback.sh *
+${SERVICE_USER} ALL=(root) NOPASSWD: ${PRIVILEGED_SCRIPTS_DIR}/fix-LED-power-button.sh
+${SERVICE_USER} ALL=(root) NOPASSWD: ${PRIVILEGED_SCRIPTS_DIR}/fix-LED-power-button.sh *
+EOF
+chmod 0440 "$SUDOERS_FILE"
+if command -v visudo >/dev/null 2>&1; then
+  visudo -cf "$SUDOERS_FILE" >/dev/null
+fi
+ok "Sudoers policy installed at $SUDOERS_FILE"
 
 info "Building Rust server..."
 mkdir -p "$RUST_BUILD_TMP_DIR" "$RUST_BUILD_TARGET_DIR"

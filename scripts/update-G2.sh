@@ -21,6 +21,7 @@ RESET='\033[0m'
 SCRIPT_NAME="Saturn Update"
 SCRIPT_VERSION="2.1"
 SATURN_DIR="$HOME/github/Saturn"
+RUNTIME_SCRIPTS_DIR="${SATURN_RUNTIME_SCRIPTS_DIR:-/opt/saturn-go/scripts}"
 LOG_DIR="$HOME/saturn-logs"
 LOG_FILE="$LOG_DIR/saturn-update-$(date +%Y%m%d-%H%M%S).log"
 BACKUP_DIR="$HOME/saturn-backup-$(date +%Y%m%d-%H%M%S)"
@@ -188,6 +189,21 @@ status_error() {
         draw_line
     fi
     exit 1
+}
+
+resolve_helper_script() {
+    local name="$1"
+    local candidate
+    for candidate in \
+        "$RUNTIME_SCRIPTS_DIR/$name" \
+        "$SATURN_DIR/scripts/$name"
+    do
+        if [ -f "$candidate" ]; then
+            echo "$candidate"
+            return 0
+        fi
+    done
+    status_error "Required helper script not found: $name"
 }
 
 # Initialize logging
@@ -489,7 +505,8 @@ build_desktop_apps() {
 install_shutdown_waiter_service() {
     render_section "Shutdown Waiter"
     status_start "Installing shutdown service"
-    local install_script="$SATURN_DIR/scripts/install-shutdown-waiter-service.sh"
+    local install_script
+    install_script="$(resolve_helper_script install-shutdown-waiter-service.sh)"
 
     if [ -f "$install_script" ]; then
         if [ ! -x "$install_script" ]; then
@@ -497,9 +514,9 @@ install_shutdown_waiter_service() {
         fi
 
         {
-            sudo env SATURN_SHUTDOWN_WAITER_ENABLED_DEFAULT="${SATURN_SHUTDOWN_WAITER_ENABLED_DEFAULT:-auto}" \
-                SATURN_USER="${SATURN_USER:-$USER}" \
-                bash "$install_script" > /tmp/shutdown_waiter_output 2>&1 &
+            "$install_script" \
+                --enabled-default "${SATURN_SHUTDOWN_WAITER_ENABLED_DEFAULT:-auto}" \
+                --saturn-user "${SATURN_USER:-$USER}" > /tmp/shutdown_waiter_output 2>&1 &
             progress_bar $! "Installing" 10
             local waiter_status=$?
             cat /tmp/shutdown_waiter_output
@@ -511,6 +528,42 @@ install_shutdown_waiter_service() {
     else
         status_warning "No shutdown waiter install script"
     fi
+}
+
+setup_eth_fallback() {
+    render_section "Ethernet Fallback"
+    status_start "Configuring Ethernet fallback"
+    local script
+    script="$(resolve_helper_script setup-eth-fallback.sh)"
+
+    {
+        "$script" > /tmp/eth_fallback_output 2>&1 &
+        progress_bar $! "Configuring" 10
+        local rc=$?
+        cat /tmp/eth_fallback_output
+        return $rc
+    } || {
+        status_error "Ethernet fallback configuration failed"
+    }
+    status_success "Ethernet fallback configured"
+}
+
+fix_led_power_button() {
+    render_section "LED Power Button"
+    status_start "Repairing LED power button"
+    local script
+    script="$(resolve_helper_script fix-LED-power-button.sh)"
+
+    {
+        "$script" > /tmp/fix_led_power_output 2>&1 &
+        progress_bar $! "Repairing" 10
+        local rc=$?
+        cat /tmp/fix_led_power_output
+        return $rc
+    } || {
+        status_error "LED power button repair failed"
+    }
+    status_success "LED power button configured"
 }
 
 # Install udev rules
@@ -677,6 +730,8 @@ main() {
     build_p2app
     build_desktop_apps
     install_shutdown_waiter_service
+    setup_eth_fallback
+    fix_led_power_button
     install_udev_rules
     install_desktop_icons
     check_fpga_binary

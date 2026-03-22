@@ -58,6 +58,8 @@ Not all utilities are directly wired into current UI buttons, but are included i
 |---|---|---|
 | `flash_fpga.sh` | Flash selected FPGA image via `sw_tools/load-FPGA/load-FPGA` using confirmation guard. | `--image`, `--latest`, `--primary`, `--fallback`, `--verify`, `--no-verify`, `--confirm`, `--dry-run` |
 | `g2-version-info.sh` | Read-only helper for G2 Update page that reports active P2/P3 selection, app version, live `/p23_perf` details when available, and recent `p2app.service` startup banner lines for FPGA firmware/date-code/temp. | none |
+| `install-shutdown-waiter-service.sh` | Install or refresh `saturn-shutdown-waiter.service` and its default config. Used by Update G2. | `--enabled-default <mode>`, `--saturn-user <user>` |
+| `shutdown-waiter.sh` | Runtime shutdown-waiter payload installed by `install-shutdown-waiter-service.sh`. | none |
 | `update-saturn-go.sh` | Rebuild/redeploy `saturn-go` from the active Saturn repo root (used by `saturngo.html`). | `--verbose`, `--dry-run`, `--skip-git`, `--skip-build`, `--skip-deploy` |
 | `p23-app-manager.sh` | Experimental helper to build/deploy/switch/revert P2/P3 app binaries for `p2app.service` testing (used by hidden `p23test.html`), with startup-profile and front-panel-mode override support. | `--status`, `--build p2|p3`, `--deploy p2|p3`, `--switch p2|p3`, `--revert`, `--mode panel|headless|panel-debug`, `--panel auto|g2|g2v2|prefer-g2|prefer-g2v2|off`, `--dry-run`, `--verbose`, `--no-restart`, `--no-clean` |
 | `qemu_pi_boot.sh` | Boot Raspberry Pi image in QEMU by extracting kernel/DTB and launching `qemu-system-aarch64`. | `--img`, `--work-dir`, `--memory`, `--cpus`, `--machine`, `--extra-append`, `--dry-run` |
@@ -66,16 +68,25 @@ Not all utilities are directly wired into current UI buttons, but are included i
 ## Operational Notes
 
 - Scripts are copied from `update_manager/scripts` plus selected repo-root helper scripts during install.
+- Installer also writes `/etc/sudoers.d/saturn-go-maintenance` so the service
+  user can run root-owned copies of `install-shutdown-waiter-service.sh`,
+  `setup-eth-fallback.sh`, and `fix-LED-power-button.sh` from
+  `/usr/local/lib/saturn-go/scripts` with `sudo -n`.
 - File permissions are normalized by installer:
   - `*.sh` and `*.py` scripts are set executable.
 - Script execution from UI is constrained to filenames in `/opt/saturn-go/scripts`.
 - `/run` rejects `.py` execution if the resolved script path is under the active repo root (`SATURN_REPO_ROOT`), preventing repo-tree Python runs.
 - Installer permissions keep `/opt/saturn-go/scripts` writable by the service user so browser-managed custom script content updates can persist.
+- Matching root-owned helper copies live in `/usr/local/lib/saturn-go/scripts`
+  for privileged handoff from Update G2 and the Custom Scripts page.
 - SSE streaming route (`/run`) handles stdout and stderr with low-latency buffering behavior.
 - `/run` injects active repo-root context (`SATURN_REPO_ROOT`, `SATURN_DIR`, `SATURN_ACTIVE_REPO_ROOT`) so scripts operate on the currently selected Saturn checkout.
 - `/run` injects Saturn Go self-update policy variables and `SATURN_SATURNGO_DEPLOY_STATUS_FILE` when launching `update-saturn-go.sh`.
 - Python scripts launched by `/run` use `PYTHONDONTWRITEBYTECODE=1` and `PYTHONPYCACHEPREFIX=/var/cache/saturn-python`.
 - `update-G2.py` participates in the shared update-activity lock with appliance update/rollback routes to avoid overlapping update operations.
+- `update-G2.py` now runs `install-shutdown-waiter-service.sh`,
+  `setup-eth-fallback.sh`, and `fix-LED-power-button.sh` as part of the G2
+  maintenance flow.
 - `update-saturn-go.sh` also participates in the shared update-activity lock and writes last deploy status JSON for the Saturn Go page.
 - `update-G2.py` emits `SATURN_WEB_MANAGER_CHANGED=1` when pulled commits modify paths under `update_manager/`; the G2 page uses that marker to optionally chain a final `update-saturn-go.sh --skip-git --verbose` post-step.
 - `update-saturn-go.sh --skip-git` now works from the active repo root even if no separate Saturn Go repo policy URL is configured, which is what allows the post-G2 self-update chain to reuse the repo that `update-G2.py` just updated.

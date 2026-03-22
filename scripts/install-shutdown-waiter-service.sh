@@ -8,8 +8,14 @@ set -euo pipefail
 #   SATURN_SHUTDOWN_WAITER_ENABLED_DEFAULT (default: auto)
 #     -> written only when /etc/default/saturn-shutdown-waiter does not exist
 #   SATURN_USER (default: pi)
+#
+# Optional flags:
+#   --enabled-default <mode>
+#   --saturn-user <user>
 
-HERE="$(cd "$(dirname "$0")" && pwd)"
+SCRIPT_SELF="$(readlink -f "${BASH_SOURCE[0]:-$0}" 2>/dev/null || printf '%s\n' "${BASH_SOURCE[0]:-$0}")"
+PRIVILEGED_SCRIPT_PATH="${SATURN_PRIVILEGED_SCRIPT_PATH:-/usr/local/lib/saturn-go/scripts/$(basename "$SCRIPT_SELF")}"
+HERE="$(cd "$(dirname "$SCRIPT_SELF")" && pwd)"
 REPO_ROOT="$(cd "$HERE/.." && pwd)"
 
 SRC_SCRIPT="${REPO_ROOT}/scripts/shutdown-waiter.sh"
@@ -22,9 +28,55 @@ DEFAULT_ENABLED="${SATURN_SHUTDOWN_WAITER_ENABLED_DEFAULT:-auto}"
 
 log() { printf '[shutdown-waiter-install] %s\n' "$*"; }
 die() { printf '[shutdown-waiter-install] ERROR: %s\n' "$*" >&2; exit 1; }
+has_tty() { [[ -t 0 || -t 1 ]]; }
+
+parse_args() {
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --enabled-default)
+        shift
+        [[ $# -gt 0 ]] || die "--enabled-default requires a value"
+        DEFAULT_ENABLED="$1"
+        shift
+        ;;
+      --saturn-user)
+        shift
+        [[ $# -gt 0 ]] || die "--saturn-user requires a value"
+        SATURN_USER="$1"
+        shift
+        ;;
+      -h|--help)
+        cat <<'EOF'
+Usage: install-shutdown-waiter-service.sh [options]
+  --enabled-default <mode>  Set SATURN_SHUTDOWN_WAITER_ENABLED default (auto|true|false)
+  --saturn-user <user>      User whose legacy autostart entry should be removed
+EOF
+        exit 0
+        ;;
+      *)
+        die "Unknown argument: $1"
+        ;;
+    esac
+  done
+}
 
 require_root() {
-  [[ "$(id -u)" -eq 0 ]] || die "run as root"
+  [[ "$(id -u)" -eq 0 ]] && return 0
+  command -v sudo >/dev/null 2>&1 || die "run as root or install sudo"
+
+  local target="$PRIVILEGED_SCRIPT_PATH"
+  if [[ ! -x "$target" ]]; then
+    if has_tty; then
+      target="$SCRIPT_SELF"
+    else
+      die "installed privileged copy not found at $PRIVILEGED_SCRIPT_PATH"
+    fi
+  fi
+
+  if has_tty; then
+    exec sudo "$target" --enabled-default "$DEFAULT_ENABLED" --saturn-user "$SATURN_USER"
+  fi
+  exec sudo -n "$target" --enabled-default "$DEFAULT_ENABLED" --saturn-user "$SATURN_USER"
 }
 
 write_unit_file() {
@@ -78,6 +130,7 @@ remove_legacy_autostart_entry() {
 }
 
 main() {
+  parse_args "$@"
   require_root
   [[ -f "$SRC_SCRIPT" ]] || die "missing script: $SRC_SCRIPT"
 

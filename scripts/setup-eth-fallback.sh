@@ -87,6 +87,7 @@ die()  { echo -e "${RED}ERROR:${RESET} $*" >&2; exit 1; }
 # ----------------------------
 SCRIPT_SELF="$(readlink -f "${BASH_SOURCE[0]:-$0}" 2>/dev/null || printf '%s\n' "${BASH_SOURCE[0]:-$0}")"
 SCRIPT_ARGS=("$@")
+PRIVILEGED_SCRIPT_PATH="${SATURN_PRIVILEGED_SCRIPT_PATH:-/usr/local/lib/saturn-go/scripts/$(basename "$SCRIPT_SELF")}"
 INTERFACE="${1:-eth0}"
 
 CON_DIR="/etc/NetworkManager/system-connections"
@@ -109,13 +110,26 @@ FALLBACK_WAIT=6             # wait after switching profiles
 # ----------------------------
 # Root check / non-interactive sudo handoff
 # ----------------------------
+has_tty() { [[ -t 0 || -t 1 ]]; }
+
 if [[ ${EUID:-$(id -u)} -ne 0 ]]; then
-  if command -v sudo >/dev/null 2>&1; then
-    if sudo -n bash "$SCRIPT_SELF" "${SCRIPT_ARGS[@]}"; then
-      exit 0
+  if ! command -v sudo >/dev/null 2>&1; then
+    die "Root privileges required. Install sudo or run this script as root."
+  fi
+
+  HANDOFF_TARGET="$PRIVILEGED_SCRIPT_PATH"
+  if [[ ! -x "$HANDOFF_TARGET" ]]; then
+    if has_tty; then
+      HANDOFF_TARGET="$SCRIPT_SELF"
+    else
+      die "Root privileges required. Installed privileged copy not found at $PRIVILEGED_SCRIPT_PATH."
     fi
   fi
-  die "Root privileges required. Run with sudo or configure passwordless sudo for this script."
+
+  if has_tty; then
+    exec sudo "$HANDOFF_TARGET" "${SCRIPT_ARGS[@]}"
+  fi
+  exec sudo -n "$HANDOFF_TARGET" "${SCRIPT_ARGS[@]}"
 fi
 
 # ----------------------------

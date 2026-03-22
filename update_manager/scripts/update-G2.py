@@ -38,6 +38,7 @@ HOME = os.path.expanduser("~")
 DEFAULT_SATURN_DIR = os.path.join(HOME, "github", "Saturn")
 SATURN_DIR = os.environ.get("SATURN_REPO_ROOT") or os.environ.get("SATURN_DIR") or DEFAULT_SATURN_DIR
 SATURN_DIR = os.path.abspath(SATURN_DIR)
+RUNTIME_SCRIPTS_DIR = os.environ.get("SATURN_RUNTIME_SCRIPTS_DIR", "/opt/saturn-go/scripts")
 POLICY_OWNER = os.environ.get("SATURN_UPDATE_POLICY_OWNER", "").strip()
 POLICY_REPO = os.environ.get("SATURN_UPDATE_POLICY_REPO", "").strip()
 POLICY_REMOTE = os.environ.get("SATURN_UPDATE_POLICY_REMOTE", "origin").strip() or "origin"
@@ -150,6 +151,21 @@ def section(title):
     cols, _ = term_size()
     print(f"\n{C.CYA}{'═'*5} {trunc(title, cols-12)} {'═'*5}{C.END}\n")
     logging.info(f"=== {title} ===")
+
+def resolve_helper_script(name):
+    candidates = [
+        os.path.join(RUNTIME_SCRIPTS_DIR, name),
+        os.path.join(SATURN_DIR, "scripts", name),
+    ]
+    seen = set()
+    for candidate in candidates:
+        candidate = os.path.realpath(candidate)
+        if candidate in seen:
+            continue
+        seen.add(candidate)
+        if os.path.isfile(candidate):
+            return candidate
+    err_out(f"Required helper script not found: {name}")
 
 def run(cmd, *, live=False, cwd=None, check=True, env=None):
     """Run a command. If live=True, stream output; else capture and return (rc, out)."""
@@ -533,33 +549,43 @@ def build_desktop_apps():
 
 def install_shutdown_waiter_service():
     section("Shutdown Waiter")
-    script = os.path.join(SATURN_DIR, "scripts", "install-shutdown-waiter-service.sh")
-    if not os.path.isfile(script):
-        warn("No shutdown waiter install script: scripts/install-shutdown-waiter-service.sh")
-        return
-    if args.dry_run:
-        info(f"[Dry Run] Would run (sudo) {script}")
-        return
-
-    sudo_cmd = sudo_prefix("Installing shutdown waiter service", optional=True)
-    if sudo_cmd is None:
-        return
-
+    script = resolve_helper_script("install-shutdown-waiter-service.sh")
     default_mode = os.environ.get("SATURN_SHUTDOWN_WAITER_ENABLED_DEFAULT", "auto")
     saturn_user = os.environ.get("SATURN_USER") or os.environ.get("USER", "pi")
+    if args.dry_run:
+        info(f"[Dry Run] Would run {script} --enabled-default {default_mode} --saturn-user {saturn_user}")
+        return
+
     run(
-        sudo_cmd
-        + [
-            "env",
-            f"SATURN_SHUTDOWN_WAITER_ENABLED_DEFAULT={default_mode}",
-            f"SATURN_USER={saturn_user}",
-            "bash",
+        [
             script,
+            "--enabled-default",
+            default_mode,
+            "--saturn-user",
+            saturn_user,
         ],
         live=True,
         cwd=os.path.dirname(script),
     )
     ok("Shutdown service installed")
+
+def setup_eth_fallback():
+    section("Ethernet Fallback")
+    script = resolve_helper_script("setup-eth-fallback.sh")
+    if args.dry_run:
+        info(f"[Dry Run] Would run {script}")
+        return
+    run([script], live=True, cwd=os.path.dirname(script))
+    ok("Ethernet fallback configured")
+
+def fix_led_power_button():
+    section("LED Power Button")
+    script = resolve_helper_script("fix-LED-power-button.sh")
+    if args.dry_run:
+        info(f"[Dry Run] Would run {script}")
+        return
+    run([script], live=True, cwd=os.path.dirname(script))
+    ok("LED power button configured")
 
 def install_udev_rules():
     section("Udev Rules")
@@ -684,6 +710,8 @@ if __name__ == "__main__":
     build_p2app()
     build_desktop_apps()
     install_shutdown_waiter_service()
+    setup_eth_fallback()
+    fix_led_power_button()
     install_udev_rules()
     install_desktop_icons()
     check_fpga_binary()

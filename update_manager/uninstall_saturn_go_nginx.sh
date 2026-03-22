@@ -42,7 +42,15 @@ WEB_ROOT="/var/lib/saturn-web"
 WATCHDOG_SCRIPT_NEW="/usr/local/lib/saturn-go/saturn-health-watchdog.sh"
 WATCHDOG_SCRIPT_OLD="/opt/saturn-go/scripts/saturn-health-watchdog.sh"
 WATCHDOG_SCRIPT_DIR="/usr/local/lib/saturn-go"
+PRIVILEGED_SCRIPTS_DIR="$WATCHDOG_SCRIPT_DIR/scripts"
 SATURN_STATE_DIR="/var/lib/saturn-state"
+SUDOERS_FILE="/etc/sudoers.d/saturn-go-maintenance"
+PRIVILEGED_HELPERS=(
+  "$PRIVILEGED_SCRIPTS_DIR/fix-LED-power-button.sh"
+  "$PRIVILEGED_SCRIPTS_DIR/install-shutdown-waiter-service.sh"
+  "$PRIVILEGED_SCRIPTS_DIR/shutdown-waiter.sh"
+  "$PRIVILEGED_SCRIPTS_DIR/setup-eth-fallback.sh"
+)
 
 run_cmd() {
   if [[ $DRY_RUN -eq 1 ]]; then
@@ -100,12 +108,29 @@ if [[ -f "$WATCHDOG_TIMER" ]]; then
   echo "[INFO] Removing watchdog timer file: $WATCHDOG_TIMER"
   run_cmd rm -f "$WATCHDOG_TIMER"
 fi
+if [[ -f "$SUDOERS_FILE" ]]; then
+  echo "[INFO] Removing sudoers policy: $SUDOERS_FILE"
+  run_cmd rm -f "$SUDOERS_FILE"
+fi
 for watchdog_script in "$WATCHDOG_SCRIPT_NEW" "$WATCHDOG_SCRIPT_OLD"; do
   if [[ -f "$watchdog_script" ]]; then
     echo "[INFO] Removing watchdog script: $watchdog_script"
     run_cmd rm -f "$watchdog_script"
   fi
 done
+for helper_script in "${PRIVILEGED_HELPERS[@]}"; do
+  if [[ -f "$helper_script" ]]; then
+    echo "[INFO] Removing privileged helper script: $helper_script"
+    run_cmd rm -f "$helper_script"
+  fi
+done
+if [[ -d "$PRIVILEGED_SCRIPTS_DIR" ]]; then
+  if [[ $DRY_RUN -eq 1 ]]; then
+    echo "[DRY] rmdir $PRIVILEGED_SCRIPTS_DIR (if empty)"
+  else
+    rmdir "$PRIVILEGED_SCRIPTS_DIR" >/dev/null 2>&1 || true
+  fi
+fi
 if [[ -d "$WATCHDOG_SCRIPT_DIR" ]]; then
   if [[ $DRY_RUN -eq 1 ]]; then
     echo "[DRY] rmdir $WATCHDOG_SCRIPT_DIR (if empty)"

@@ -126,6 +126,14 @@ REPO_ROOT="${SATURN_ACTIVE_REPO_ROOT:-${SATURN_REPO_ROOT:-}}"
 [[ -d "$REPO_ROOT/update_manager" ]] || die "Repo root does not contain update_manager/: $REPO_ROOT"
 EXTRA_PACKAGED_SCRIPTS=(
   "$REPO_ROOT/scripts/fix-LED-power-button.sh"
+  "$REPO_ROOT/scripts/install-shutdown-waiter-service.sh"
+  "$REPO_ROOT/scripts/shutdown-waiter.sh"
+  "$REPO_ROOT/scripts/setup-eth-fallback.sh"
+)
+PRIVILEGED_HELPER_SCRIPTS=(
+  "$REPO_ROOT/scripts/fix-LED-power-button.sh"
+  "$REPO_ROOT/scripts/install-shutdown-waiter-service.sh"
+  "$REPO_ROOT/scripts/shutdown-waiter.sh"
   "$REPO_ROOT/scripts/setup-eth-fallback.sh"
 )
 
@@ -140,9 +148,12 @@ BUILD_TMP_DIR="$RUST_DIR/.tmp"
 BUILD_TARGET_DIR="$RUST_DIR/target-local"
 
 SERVICE_NAME="${SATURN_SATURNGO_SERVICE_NAME:-saturn-go.service}"
+DEPLOY_RUN_USER="${SATURN_SATURNGO_RUN_USER:-$(id -un)}"
 DEPLOY_BIN="${SATURN_SATURNGO_BIN_DEST:-/opt/saturn-go/bin/saturn-go}"
 DEPLOY_WEBROOT="${SATURN_SATURNGO_WEBROOT:-/var/lib/saturn-web}"
 DEPLOY_SCRIPTS_DIR="${SATURN_SATURNGO_SCRIPTS_DIR:-/opt/saturn-go/scripts}"
+DEPLOY_PRIVILEGED_SCRIPTS_DIR="${SATURN_SATURNGO_PRIVILEGED_SCRIPTS_DIR:-/usr/local/lib/saturn-go/scripts}"
+DEPLOY_SUDOERS_FILE="${SATURN_SATURNGO_SUDOERS_FILE:-/etc/sudoers.d/saturn-go-maintenance}"
 STATUS_FILE="${SATURN_SATURNGO_DEPLOY_STATUS_FILE:-/var/lib/saturn-state/saturngo_deploy_status.json}"
 
 trap 'rc=$?; if (( rc != 0 )); then write_status "error" "$STATUS_PHASE" "Saturn Go self-update failed" 1 "$rc"; fi' EXIT
@@ -154,6 +165,9 @@ trap 'rc=$?; if (( rc != 0 )); then write_status "error" "$STATUS_PHASE" "Saturn
 [[ -f "$SCRIPTS_SRC_DIR/themes.json" ]] || die "Missing themes.json in $SCRIPTS_SRC_DIR"
 for extra_script in "${EXTRA_PACKAGED_SCRIPTS[@]}"; do
   [[ -f "$extra_script" ]] || die "Extra packaged script not found: $extra_script"
+done
+for privileged_script in "${PRIVILEGED_HELPER_SCRIPTS[@]}"; do
+  [[ -f "$privileged_script" ]] || die "Privileged helper script not found: $privileged_script"
 done
 
 write_status "running" "init" "Starting Saturn Go self-update"
@@ -240,12 +254,13 @@ STAMP="$(date +%Y%m%d%H%M%S)"
 STAGE_DIR="$STAGE_BASE/$STAMP"
 STAGE_WEB_DIR="$STAGE_DIR/webroot"
 STAGE_SCRIPTS_DIR="$STAGE_DIR/scripts"
+STAGE_PRIVILEGED_SCRIPTS_DIR="$STAGE_DIR/privileged-scripts"
 UNIT_NAME="saturn-go-self-deploy-${STAMP}"
 
 info "Preparing staged deploy payload..."
 STATUS_PHASE="stage"
 write_status "running" "$STATUS_PHASE" "Preparing staged deploy payload"
-run_cmd mkdir -p "$STAGE_WEB_DIR" "$STAGE_SCRIPTS_DIR"
+run_cmd mkdir -p "$STAGE_WEB_DIR" "$STAGE_SCRIPTS_DIR" "$STAGE_PRIVILEGED_SCRIPTS_DIR"
 if (( ! DRY_RUN )); then
   cp "$BIN_SRC" "$STAGE_DIR/saturn-go"
   cp "$TEMPLATES_DIR"/*.html "$STAGE_WEB_DIR/"
@@ -255,12 +270,16 @@ if (( ! DRY_RUN )); then
   for extra_script in "${EXTRA_PACKAGED_SCRIPTS[@]}"; do
     cp "$extra_script" "$STAGE_SCRIPTS_DIR/"
   done
+  for privileged_script in "${PRIVILEGED_HELPER_SCRIPTS[@]}"; do
+    cp "$privileged_script" "$STAGE_PRIVILEGED_SCRIPTS_DIR/"
+  done
   chmod 755 "$STAGE_DIR/saturn-go"
   find "$STAGE_SCRIPTS_DIR" -maxdepth 1 -type f \( -name '*.sh' -o -name '*.py' \) -print0 | xargs -0 -r chmod 755
   find "$STAGE_SCRIPTS_DIR" -maxdepth 1 -type f ! \( -name '*.sh' -o -name '*.py' \) -print0 | xargs -0 -r chmod 644
+  find "$STAGE_PRIVILEGED_SCRIPTS_DIR" -maxdepth 1 -type f -print0 | xargs -0 -r chmod 755
   find "$STAGE_WEB_DIR" -maxdepth 1 -type f -print0 | xargs -0 -r chmod 644
 else
-  info "[dry-run] stage binary, web assets, and packaged scripts under $STAGE_DIR"
+  info "[dry-run] stage binary, web assets, packaged scripts, and privileged helpers under $STAGE_DIR"
 fi
 
 # Copy web assets immediately so the UI updates even before the service restart.
@@ -277,6 +296,9 @@ set -euo pipefail
 STATUS_FILE="$(printf '%s' "$STATUS_FILE")"
 UNIT_NAME="$(printf '%s' "$UNIT_NAME")"
 SERVICE_NAME="$(printf '%s' "$SERVICE_NAME")"
+DEPLOY_RUN_USER="$(printf '%s' "$DEPLOY_RUN_USER")"
+DEPLOY_PRIVILEGED_SCRIPTS_DIR="$(printf '%s' "$DEPLOY_PRIVILEGED_SCRIPTS_DIR")"
+DEPLOY_SUDOERS_FILE="$(printf '%s' "$DEPLOY_SUDOERS_FILE")"
 STARTED_AT="$(printf '%s' "$RUN_STARTED_AT")"
 json_escape(){
   local s="\${1-}"
@@ -314,9 +336,11 @@ JSON
 }
 trap 'rc=\$?; write_status "error" "root-deploy" "Root deploy helper failed" 1 "\$rc"; exit "\$rc"' ERR
 write_status "running" "root-deploy" "Root deploy helper started"
-SCRIPT_UID="\$(stat -c '%u' "$DEPLOY_SCRIPTS_DIR")"
-SCRIPT_GID="\$(stat -c '%g' "$DEPLOY_SCRIPTS_DIR")"
-mkdir -p "$DEPLOY_WEBROOT" "$DEPLOY_SCRIPTS_DIR"
+SCRIPT_UID="\$(id -u "$DEPLOY_RUN_USER")"
+SCRIPT_GID="\$(id -g "$DEPLOY_RUN_USER")"
+install -d -m 0755 "$DEPLOY_WEBROOT"
+install -d -m 0775 -o "\$SCRIPT_UID" -g "\$SCRIPT_GID" "$DEPLOY_SCRIPTS_DIR"
+install -d -m 0755 -o root -g root "$DEPLOY_PRIVILEGED_SCRIPTS_DIR"
 systemctl stop "$SERVICE_NAME"
 install -m 0755 "$STAGE_DIR/saturn-go" "$DEPLOY_BIN"
 for src in "$STAGE_WEB_DIR/"*; do
@@ -331,6 +355,24 @@ for src in "$STAGE_SCRIPTS_DIR/"*; do
   esac
   install -m "\$mode" -o "\$SCRIPT_UID" -g "\$SCRIPT_GID" "\$src" "$DEPLOY_SCRIPTS_DIR/\$(basename "\$src")"
 done
+for src in "$STAGE_PRIVILEGED_SCRIPTS_DIR/"*; do
+  [[ -f "\$src" ]] || continue
+  install -m 0755 -o root -g root "\$src" "$DEPLOY_PRIVILEGED_SCRIPTS_DIR/\$(basename "\$src")"
+done
+cat >"$DEPLOY_SUDOERS_FILE" <<SUDOERS
+# Managed by update-saturn-go.sh
+Defaults:${DEPLOY_RUN_USER} secure_path="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+${DEPLOY_RUN_USER} ALL=(root) NOPASSWD: ${DEPLOY_PRIVILEGED_SCRIPTS_DIR}/install-shutdown-waiter-service.sh
+${DEPLOY_RUN_USER} ALL=(root) NOPASSWD: ${DEPLOY_PRIVILEGED_SCRIPTS_DIR}/install-shutdown-waiter-service.sh *
+${DEPLOY_RUN_USER} ALL=(root) NOPASSWD: ${DEPLOY_PRIVILEGED_SCRIPTS_DIR}/setup-eth-fallback.sh
+${DEPLOY_RUN_USER} ALL=(root) NOPASSWD: ${DEPLOY_PRIVILEGED_SCRIPTS_DIR}/setup-eth-fallback.sh *
+${DEPLOY_RUN_USER} ALL=(root) NOPASSWD: ${DEPLOY_PRIVILEGED_SCRIPTS_DIR}/fix-LED-power-button.sh
+${DEPLOY_RUN_USER} ALL=(root) NOPASSWD: ${DEPLOY_PRIVILEGED_SCRIPTS_DIR}/fix-LED-power-button.sh *
+SUDOERS
+chmod 0440 "$DEPLOY_SUDOERS_FILE"
+if command -v visudo >/dev/null 2>&1; then
+  visudo -cf "$DEPLOY_SUDOERS_FILE" >/dev/null
+fi
 systemctl start "$SERVICE_NAME"
 write_status "success" "root-deploy" "Root deploy helper completed" 1 0
 EOF

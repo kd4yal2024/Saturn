@@ -16,23 +16,72 @@
 set -euo pipefail
 
 SCRIPT_SELF="$(readlink -f "${BASH_SOURCE[0]:-$0}" 2>/dev/null || printf '%s\n' "${BASH_SOURCE[0]:-$0}")"
-SCRIPT_ARGS=("$@")
+PRIVILEGED_SCRIPT_PATH="${SATURN_PRIVILEGED_SCRIPT_PATH:-/usr/local/lib/saturn-go/scripts/$(basename "$SCRIPT_SELF")}"
 SERVICE_NAME="${SERVICE_NAME:-gpio15-setup.service}"
 SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}"
 EARLY_DEFAULT="${EARLY_DEFAULT:-1}"
 
 log(){ echo "$1" | systemd-cat -t fix-LED-power-button; }
+has_tty(){ [[ -t 0 || -t 1 ]]; }
+
+parse_args() {
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --service-name)
+        shift
+        [[ $# -gt 0 ]] || { echo "Missing value for --service-name" >&2; exit 1; }
+        SERVICE_NAME="$1"
+        SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}"
+        shift
+        ;;
+      --early-default)
+        shift
+        [[ $# -gt 0 ]] || { echo "Missing value for --early-default" >&2; exit 1; }
+        EARLY_DEFAULT="$1"
+        shift
+        ;;
+      -h|--help)
+        cat <<'EOF'
+Usage: fix-LED-power-button.sh [options]
+  --service-name <name>   Override systemd unit name (default: gpio15-setup.service)
+  --early-default <0|1>   Control config.txt gpio=15 default (default: 1)
+EOF
+        exit 0
+        ;;
+      *)
+        echo "Unknown argument: $1" >&2
+        exit 1
+        ;;
+    esac
+  done
+}
+
+parse_args "$@"
+SCRIPT_ARGS=(--service-name "$SERVICE_NAME" --early-default "$EARLY_DEFAULT")
 
 require_root() {
   if [ "$(id -u)" -ne 0 ]; then
-    if command -v sudo >/dev/null 2>&1; then
-      if sudo -n env EARLY_DEFAULT="$EARLY_DEFAULT" SERVICE_NAME="$SERVICE_NAME" bash "$SCRIPT_SELF" "${SCRIPT_ARGS[@]}"; then
-        exit 0
+    if ! command -v sudo >/dev/null 2>&1; then
+      echo "Root privileges required. Install sudo or run this script as root." >&2
+      log "error: sudo not available"
+      exit 1
+    fi
+
+    local target="$PRIVILEGED_SCRIPT_PATH"
+    if [[ ! -x "$target" ]]; then
+      if has_tty; then
+        target="$SCRIPT_SELF"
+      else
+        echo "Root privileges required. Installed privileged copy not found at $PRIVILEGED_SCRIPT_PATH." >&2
+        log "error: privileged helper missing"
+        exit 1
       fi
     fi
-    echo "Root privileges required. Run with sudo or configure passwordless sudo for this script." >&2
-    log "error: not root"
-    exit 1
+
+    if has_tty; then
+      exec sudo "$target" "${SCRIPT_ARGS[@]}"
+    fi
+    exec sudo -n "$target" "${SCRIPT_ARGS[@]}"
   fi
 }
 require_root
