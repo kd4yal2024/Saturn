@@ -88,6 +88,53 @@ need_cmd(){
   command -v "$1" >/dev/null 2>&1 || die "Required command not found: $1"
 }
 
+resolve_user_home(){
+  local user="${1:-$(id -un)}"
+  if [[ -n "${HOME:-}" && "${HOME}" != "/" && -d "${HOME}" ]]; then
+    printf '%s\n' "$HOME"
+    return 0
+  fi
+
+  local passwd_home
+  passwd_home="$(getent passwd "$user" | cut -d: -f6)"
+  if [[ -n "$passwd_home" && -d "$passwd_home" ]]; then
+    printf '%s\n' "$passwd_home"
+    return 0
+  fi
+
+  die "Could not resolve home directory for user: $user"
+}
+
+resolve_cargo_bin(){
+  if [[ -n "${SATURN_SATURNGO_CARGO_BIN:-}" ]]; then
+    [[ -x "${SATURN_SATURNGO_CARGO_BIN}" ]] || die "SATURN_SATURNGO_CARGO_BIN is not executable: ${SATURN_SATURNGO_CARGO_BIN}"
+    printf '%s\n' "${SATURN_SATURNGO_CARGO_BIN}"
+    return 0
+  fi
+
+  local candidate=""
+  candidate="$(command -v cargo 2>/dev/null || true)"
+  if [[ -n "$candidate" && -x "$candidate" ]]; then
+    printf '%s\n' "$candidate"
+    return 0
+  fi
+
+  local build_user build_home
+  build_user="${SATURN_SATURNGO_BUILD_USER:-$(id -un)}"
+  build_home="$(resolve_user_home "$build_user")"
+  for candidate in \
+    "$build_home/.cargo/bin/cargo" \
+    "/home/$build_user/.cargo/bin/cargo"
+  do
+    if [[ -x "$candidate" ]]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+
+  die "Required command not found: cargo (checked PATH and $build_home/.cargo/bin)"
+}
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --skip-git) SKIP_GIT=1; shift ;;
@@ -116,8 +163,17 @@ progress 2
 info "Saturn Go self-update ${SCRIPT_VERSION}"
 
 need_cmd git
-need_cmd cargo
 need_cmd systemd-run
+
+BUILD_USER="${SATURN_SATURNGO_BUILD_USER:-$(id -un)}"
+BUILD_HOME="$(resolve_user_home "$BUILD_USER")"
+if [[ -z "${HOME:-}" || "${HOME}" == "/" ]]; then
+  export HOME="$BUILD_HOME"
+fi
+export CARGO_HOME="${CARGO_HOME:-$BUILD_HOME/.cargo}"
+export RUSTUP_HOME="${RUSTUP_HOME:-$BUILD_HOME/.rustup}"
+CARGO_BIN="$(resolve_cargo_bin)"
+export PATH="$(dirname "$CARGO_BIN"):$PATH"
 
 RUN_STARTED_AT="$(date -Is)"
 REPO_ROOT="${SATURN_ACTIVE_REPO_ROOT:-${SATURN_REPO_ROOT:-}}"
@@ -218,13 +274,13 @@ if (( ! SKIP_BUILD )); then
   info "Building saturn-go release binary..."
   run_cmd mkdir -p "$BUILD_TMP_DIR" "$BUILD_TARGET_DIR"
   if (( DRY_RUN )); then
-    info "[dry-run] TMPDIR=$BUILD_TMP_DIR CARGO_TARGET_DIR=$BUILD_TARGET_DIR cargo build --release -j1 (cwd=$RUST_DIR)"
+    info "[dry-run] TMPDIR=$BUILD_TMP_DIR CARGO_TARGET_DIR=$BUILD_TARGET_DIR $CARGO_BIN build --release -j1 (cwd=$RUST_DIR)"
   else
     (
       cd "$RUST_DIR"
       TMPDIR="$BUILD_TMP_DIR" \
       CARGO_TARGET_DIR="$BUILD_TARGET_DIR" \
-      cargo build --release -j1
+      "$CARGO_BIN" build --release -j1
     )
   fi
 else

@@ -34,9 +34,10 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
 - Default Custom Scripts startup seeding now also includes `fix-LED-power-button.sh`, exposing the front-panel LED/power-button repair helper in the web manager.
 
 ### Changed
-- Update G2 now runs all three repair helpers as part of the maintenance flow:
-  `install-shutdown-waiter-service.sh`, `setup-eth-fallback.sh`, and
-  `fix-LED-power-button.sh`.
+- Update G2 now runs the shutdown waiter installer plus
+  `fix-LED-power-button.sh` as part of the maintenance flow.
+- `setup-eth-fallback.sh` remains available in Custom Scripts, but no longer
+  auto-runs during Update G2.
 - Installer now deploys `install-shutdown-waiter-service.sh` and
   `shutdown-waiter.sh` into the runtime script set, installs matching
   root-owned helper copies under `/usr/local/lib/saturn-go/scripts`, and

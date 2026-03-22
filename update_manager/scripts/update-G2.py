@@ -569,15 +569,6 @@ def install_shutdown_waiter_service():
     )
     ok("Shutdown service installed")
 
-def setup_eth_fallback():
-    section("Ethernet Fallback")
-    script = resolve_helper_script("setup-eth-fallback.sh")
-    if args.dry_run:
-        info(f"[Dry Run] Would run {script}")
-        return
-    run([script], live=True, cwd=os.path.dirname(script))
-    ok("Ethernet fallback configured")
-
 def fix_led_power_button():
     section("LED Power Button")
     script = resolve_helper_script("fix-LED-power-button.sh")
@@ -710,7 +701,6 @@ if __name__ == "__main__":
     build_p2app()
     build_desktop_apps()
     install_shutdown_waiter_service()
-    setup_eth_fallback()
     fix_led_power_button()
     install_udev_rules()
     install_desktop_icons()

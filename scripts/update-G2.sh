@@ -530,24 +530,6 @@ install_shutdown_waiter_service() {
     fi
 }
 
-setup_eth_fallback() {
-    render_section "Ethernet Fallback"
-    status_start "Configuring Ethernet fallback"
-    local script
-    script="$(resolve_helper_script setup-eth-fallback.sh)"
-
-    {
-        "$script" > /tmp/eth_fallback_output 2>&1 &
-        progress_bar $! "Configuring" 10
-        local rc=$?
-        cat /tmp/eth_fallback_output
-        return $rc
-    } || {
-        status_error "Ethernet fallback configuration failed"
-    }
-    status_success "Ethernet fallback configured"
-}
-
 fix_led_power_button() {
     render_section "LED Power Button"
     status_start "Repairing LED power button"
@@ -730,7 +712,6 @@ main() {
     build_p2app
     build_desktop_apps
     install_shutdown_waiter_service
-    setup_eth_fallback
     fix_led_power_button
     install_udev_rules
     install_desktop_icons

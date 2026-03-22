@@ -84,9 +84,10 @@ Not all utilities are directly wired into current UI buttons, but are included i
 - `/run` injects Saturn Go self-update policy variables and `SATURN_SATURNGO_DEPLOY_STATUS_FILE` when launching `update-saturn-go.sh`.
 - Python scripts launched by `/run` use `PYTHONDONTWRITEBYTECODE=1` and `PYTHONPYCACHEPREFIX=/var/cache/saturn-python`.
 - `update-G2.py` participates in the shared update-activity lock with appliance update/rollback routes to avoid overlapping update operations.
-- `update-G2.py` now runs `install-shutdown-waiter-service.sh`,
-  `setup-eth-fallback.sh`, and `fix-LED-power-button.sh` as part of the G2
-  maintenance flow.
+- `update-G2.py` now runs `install-shutdown-waiter-service.sh` and
+  `fix-LED-power-button.sh` as part of the G2 maintenance flow.
+- `setup-eth-fallback.sh` remains available through Custom Scripts for manual
+  execution when needed.
 - `update-saturn-go.sh` also participates in the shared update-activity lock and writes last deploy status JSON for the Saturn Go page.
 - `update-G2.py` emits `SATURN_WEB_MANAGER_CHANGED=1` when pulled commits modify paths under `update_manager/`; the G2 page uses that marker to optionally chain a final `update-saturn-go.sh --skip-git --verbose` post-step.
 - `update-saturn-go.sh --skip-git` now works from the active repo root even if no separate Saturn Go repo policy URL is configured, which is what allows the post-G2 self-update chain to reuse the repo that `update-G2.py` just updated.

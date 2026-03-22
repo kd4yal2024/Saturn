@@ -177,8 +177,10 @@ Current UI behavior:
 - `Run Update G2` requires valid Appliance repo URL before run can start.
 - `Run Update G2` auto-saves current Appliance settings before spawning script.
 - Terminal output is resumable after tab/page changes using buffered `/run_log` polling.
-- Update G2 also runs the installed shutdown waiter, Ethernet fallback, and
-  LED/power-button repair helpers as part of the maintenance flow.
+- Update G2 also runs the installed shutdown waiter and LED/power-button repair
+  helpers as part of the maintenance flow.
+- Ethernet fallback remains available as a manual Custom Script, not an
+  automatic Update G2 step.
 
 G2 Update coordination notes:
 

@@ -504,6 +504,10 @@ Wants=network-online.target
 
 [Service]
 Type=simple
+Environment=HOME=${SERVICE_HOME}
+Environment=PATH=${SERVICE_HOME}/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+Environment=CARGO_HOME=${SERVICE_HOME}/.cargo
+Environment=RUSTUP_HOME=${SERVICE_HOME}/.rustup
 Environment=SATURN_WEBROOT=${WEB_ROOT}
 Environment=SATURN_CONFIG=${WEB_ROOT}/config.json
 Environment=SATURN_ADDR=${SATURN_ADDR}
