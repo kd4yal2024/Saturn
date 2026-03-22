@@ -305,7 +305,7 @@ if (( SKIP_DEPLOY )); then
   exit 0
 fi
 
-STAGE_BASE="${SATURN_SATURNGO_STAGE_BASE:-/var/tmp/saturngo-deploy-stage}"
+STAGE_BASE="${SATURN_SATURNGO_STAGE_BASE:-${SATURN_STAGING_DIR:-/var/lib/saturn-state/repo-staging}/saturngo-deploy-stage}"
 STAMP="$(date +%Y%m%d%H%M%S)"
 STAGE_DIR="$STAGE_BASE/$STAMP"
 STAGE_WEB_DIR="$STAGE_DIR/webroot"
