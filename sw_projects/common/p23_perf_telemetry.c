@@ -46,6 +46,10 @@ typedef struct
   uint16_t ADC1Peak;
   uint16_t ADC2Peak;
   uint8_t ADCOverflowBits;
+  uint32_t DUCQueueFrames;
+  uint32_t DUCFIFOFrames;
+  uint32_t DUCQueueAgeUs;
+  uint8_t DUCWriteMode;
   uint32_t SpeakerUnderQueueFrames;
   uint32_t SpeakerUnderFIFOFrames;
   uint32_t SpeakerUnderQueueAgeUs;
@@ -107,6 +111,10 @@ static const char *g_counter_names[eP23PerfCounterCount] =
   "duc_dma_write_bytes",
   "duc_recv_errors",
   "duc_dma_errors",
+  "duc_gap_events",
+  "duc_gap_dropped_frames",
+  "duc_queue_drop_events",
+  "duc_queue_dropped_frames",
   "speaker_packets",
   "speaker_bytes",
   "speaker_dma_writes",
@@ -146,6 +154,21 @@ static const char *SpeakerUnderrunModeName(uint8_t Mode)
       return "emergency";
     case 4U:
       return "gap_fill";
+    default:
+      return "unknown";
+  }
+}
+
+static const char *DUCWriteModeName(uint8_t Mode)
+{
+  switch (Mode)
+  {
+    case 1U:
+      return "normal";
+    case 2U:
+      return "prefill";
+    case 3U:
+      return "emergency";
     default:
       return "unknown";
   }
@@ -280,6 +303,17 @@ void P23PerfTelemetrySetADCSnapshot(uint16_t ADC1Peak, uint16_t ADC2Peak, uint8_
   g_perf_state.ADC1Peak = ADC1Peak;
   g_perf_state.ADC2Peak = ADC2Peak;
   g_perf_state.ADCOverflowBits = OverflowBits;
+  pthread_mutex_unlock(&g_perf_mutex);
+}
+
+void P23PerfTelemetrySetDUCQueueContext(uint32_t QueueFrames, uint32_t FIFOFrames,
+                                        uint32_t QueueAgeUs, uint8_t Mode)
+{
+  pthread_mutex_lock(&g_perf_mutex);
+  g_perf_state.DUCQueueFrames = QueueFrames;
+  g_perf_state.DUCFIFOFrames = FIFOFrames;
+  g_perf_state.DUCQueueAgeUs = QueueAgeUs;
+  g_perf_state.DUCWriteMode = Mode;
   pthread_mutex_unlock(&g_perf_mutex);
 }
 
@@ -428,6 +462,13 @@ void P23PerfTelemetryMaybeWrite(void)
           "      \"peak2\": %" PRIu16 ",\n"
           "      \"overflow_bits\": %" PRIu8 "\n"
           "    },\n"
+          "    \"duc_queue\": {\n"
+          "      \"last_queue_frames\": %" PRIu32 ",\n"
+          "      \"last_fifo_frames\": %" PRIu32 ",\n"
+          "      \"last_queue_age_us\": %" PRIu32 ",\n"
+          "      \"last_mode\": \"%s\",\n"
+          "      \"last_mode_code\": %" PRIu8 "\n"
+          "    },\n"
           "    \"speaker_underrun\": {\n"
           "      \"last_queue_frames\": %" PRIu32 ",\n"
           "      \"last_fifo_frames\": %" PRIu32 ",\n"
@@ -445,6 +486,11 @@ void P23PerfTelemetryMaybeWrite(void)
           Snapshot.ADC1Peak,
           Snapshot.ADC2Peak,
           Snapshot.ADCOverflowBits,
+          Snapshot.DUCQueueFrames,
+          Snapshot.DUCFIFOFrames,
+          Snapshot.DUCQueueAgeUs,
+          DUCWriteModeName(Snapshot.DUCWriteMode),
+          Snapshot.DUCWriteMode,
           Snapshot.SpeakerUnderQueueFrames,
           Snapshot.SpeakerUnderFIFOFrames,
           Snapshot.SpeakerUnderQueueAgeUs,

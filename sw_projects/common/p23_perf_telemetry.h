@@ -37,6 +37,10 @@ typedef enum
   eP23PerfCounterDUCDMAWriteBytes,
   eP23PerfCounterDUCRecvErrors,
   eP23PerfCounterDUCDMAErrors,
+  eP23PerfCounterDUCGapEvents,
+  eP23PerfCounterDUCGapDroppedFrames,
+  eP23PerfCounterDUCQueueDropEvents,
+  eP23PerfCounterDUCQueueDroppedFrames,
   eP23PerfCounterSpkrPackets,
   eP23PerfCounterSpkrBytes,
   eP23PerfCounterSpkrDMAWrites,
@@ -73,6 +77,8 @@ void P23PerfTelemetrySetFIFOSnapshot(uint32_t DDCSamples, uint32_t MicSamples,
                                      uint32_t DUCSamples, uint32_t SpeakerSamples,
                                      uint8_t OverflowBits);
 void P23PerfTelemetrySetADCSnapshot(uint16_t ADC1Peak, uint16_t ADC2Peak, uint8_t OverflowBits);
+void P23PerfTelemetrySetDUCQueueContext(uint32_t QueueFrames, uint32_t FIFOFrames,
+                                        uint32_t QueueAgeUs, uint8_t Mode);
 void P23PerfTelemetrySetSpeakerUnderrunContext(uint32_t QueueFrames, uint32_t FIFOFrames,
                                                uint32_t QueueAgeUs, uint8_t Mode,
                                                bool GapActive);

@@ -2,6 +2,34 @@
 
 All notable changes to `P3_app` from this hardening pass are documented here.
 
+## [2026-03-23] TX DUC Queue Decoupling And Telemetry
+
+### Changed
+
+- Reworked `InDUCIQ.c` so UDP ingress and TX XDMA writes are now decoupled by a
+  bounded software queue instead of sharing one combined receive/write loop.
+- Added an explicit oldest-frame drop policy for queued TX frames so stale live
+  TX does not continue to accumulate latency when backlog exceeds the software
+  age budget.
+- Added TX DUC sequence-gap accounting and queue/drop telemetry so `/p23_perf`
+  can show when the client stream skipped ahead or the app had to shed queued
+  TX frames to stay current.
+
+### Added
+
+- Added `/p23_perf` DUC queue gauges for:
+  - last queued frame count
+  - last observed TX FIFO frame depth
+  - last queue age in microseconds
+  - last write mode (`normal`, `prefill`, `emergency`)
+
+### Notes
+
+- This is the first flow-control increment toward a steadier client -> P3 ->
+  XDMA path.
+- It deliberately stays within the current UDP protocol semantics; there is
+  still no true end-to-end backpressure to the client yet.
+
 ## [2026-03-21] Speaker Startup Refill Timing and PureSignal Telemetry
 
 ### Changed
