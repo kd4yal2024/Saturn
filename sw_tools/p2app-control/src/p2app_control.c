@@ -9,10 +9,13 @@ static const char *UNIT = "p2app.service";
 typedef struct {
     gboolean tray_mode;
     GtkWidget *win;
-    GtkWidget *label;
+    GtkWidget *status_label;
+    GtkWidget *boot_label;
     GtkWidget *btn_start;
     GtkWidget *btn_stop;
     GtkWidget *btn_restart;
+    GtkWidget *btn_enable_boot;
+    GtkWidget *btn_disable_boot;
     GtkWidget *btn_quit;
     AppIndicator *indicator;
     GtkWidget *tray_menu;
@@ -20,6 +23,8 @@ typedef struct {
     GtkWidget *tray_start_item;
     GtkWidget *tray_stop_item;
     GtkWidget *tray_restart_item;
+    GtkWidget *tray_enable_boot_item;
+    GtkWidget *tray_disable_boot_item;
 } UI;
 
 static gboolean run_capture(const char *cmd, char *out, gsize outlen) {
@@ -61,12 +66,42 @@ static void get_service_state(char *out, gsize outlen) {
     g_strstrip(out);
 }
 
+static void get_enable_state(char *out, gsize outlen) {
+    char cmd[256];
+    g_strlcpy(out, "unknown", outlen);
+    snprintf(cmd, sizeof(cmd), "systemctl is-enabled %s 2>/dev/null || true", UNIT);
+    if (!run_capture(cmd, out, outlen)) {
+        return;
+    }
+    g_strstrip(out);
+    if (!*out) {
+        g_strlcpy(out, "unknown", outlen);
+    }
+}
+
 static gboolean is_active_state(const char *state) {
     return g_strcmp0(state, "active") == 0;
 }
 
-static void pkexec_systemctl(const char *verb) {
+static gboolean is_enabled_state(const char *state) {
+    return g_strcmp0(state, "enabled") == 0 ||
+           g_strcmp0(state, "enabled-runtime") == 0 ||
+           g_strcmp0(state, "linked") == 0 ||
+           g_strcmp0(state, "linked-runtime") == 0 ||
+           g_strcmp0(state, "alias") == 0;
+}
+
+static void privileged_systemctl(const char *verb) {
     char cmd[256];
+    int rc;
+
+    /* Prefer the installer-provided sudoers rule; fall back to pkexec on older installs. */
+    snprintf(cmd, sizeof(cmd), "sudo -n /bin/systemctl %s %s >/dev/null 2>&1", verb, UNIT);
+    rc = system(cmd);
+    if (rc == 0) {
+        return;
+    }
+
     snprintf(cmd, sizeof(cmd), "pkexec /bin/systemctl %s %s", verb, UNIT);
     (void)system(cmd);
 }
@@ -93,19 +128,31 @@ static void hide_window(UI *ui) {
 static void on_start(GtkWidget *unused, gpointer data) {
     (void)unused;
     (void)data;
-    pkexec_systemctl("start");
+    privileged_systemctl("start");
 }
 
 static void on_stop(GtkWidget *unused, gpointer data) {
     (void)unused;
     (void)data;
-    pkexec_systemctl("stop");
+    privileged_systemctl("stop");
 }
 
 static void on_restart(GtkWidget *unused, gpointer data) {
     (void)unused;
     (void)data;
-    pkexec_systemctl("restart");
+    privileged_systemctl("restart");
+}
+
+static void on_enable_boot(GtkWidget *unused, gpointer data) {
+    (void)unused;
+    (void)data;
+    privileged_systemctl("enable");
+}
+
+static void on_disable_boot(GtkWidget *unused, gpointer data) {
+    (void)unused;
+    (void)data;
+    privileged_systemctl("disable");
 }
 
 static void on_quit(GtkWidget *unused, gpointer data) {
@@ -176,19 +223,41 @@ static void update_tray_state(UI *ui, const char *state, gboolean active) {
 static gboolean refresh(gpointer data) {
     UI *ui = (UI *)data;
     char state[128] = {0};
-    char window_status[160];
+    char enable_state[128] = {0};
+    char service_status[160];
+    char boot_status[160];
     gboolean active;
+    gboolean boot_enabled;
 
     get_service_state(state, sizeof(state));
+    get_enable_state(enable_state, sizeof(enable_state));
     active = is_active_state(state);
+    boot_enabled = is_enabled_state(enable_state);
 
-    snprintf(window_status, sizeof(window_status), "P2_app: %s", active ? "RUNNING" : "STOPPED");
-    gtk_label_set_text(GTK_LABEL(ui->label), window_status);
+    if (g_strcmp0(state, "failed") == 0) {
+        snprintf(service_status, sizeof(service_status), "P2_app: FAILED");
+    } else if (active) {
+        snprintf(service_status, sizeof(service_status), "P2_app: RUNNING");
+    } else {
+        snprintf(service_status, sizeof(service_status), "P2_app: %s", *state ? state : "unknown");
+    }
+    snprintf(boot_status, sizeof(boot_status), "Boot Start: %s", *enable_state ? enable_state : "unknown");
+
+    gtk_label_set_text(GTK_LABEL(ui->status_label), service_status);
+    gtk_label_set_text(GTK_LABEL(ui->boot_label), boot_status);
     gtk_widget_set_sensitive(ui->btn_start, !active);
     gtk_widget_set_sensitive(ui->btn_stop, active);
     gtk_widget_set_sensitive(ui->btn_restart, TRUE);
+    gtk_widget_set_sensitive(ui->btn_enable_boot, !boot_enabled);
+    gtk_widget_set_sensitive(ui->btn_disable_boot, boot_enabled);
 
     update_tray_state(ui, state, active);
+    if (ui->tray_enable_boot_item) {
+        gtk_widget_set_sensitive(ui->tray_enable_boot_item, !boot_enabled);
+    }
+    if (ui->tray_disable_boot_item) {
+        gtk_widget_set_sensitive(ui->tray_disable_boot_item, boot_enabled);
+    }
     update_window_visibility_item(ui);
     return TRUE;
 }
@@ -201,6 +270,8 @@ static gboolean create_tray(UI *ui) {
     ui->tray_start_item = gtk_menu_item_new_with_label("Start P2_app");
     ui->tray_stop_item = gtk_menu_item_new_with_label("Stop P2_app");
     ui->tray_restart_item = gtk_menu_item_new_with_label("Restart P2_app");
+    ui->tray_enable_boot_item = gtk_menu_item_new_with_label("Enable at Boot");
+    ui->tray_disable_boot_item = gtk_menu_item_new_with_label("Disable at Boot");
     tray_quit_item = gtk_menu_item_new_with_label("Quit");
 
     gtk_menu_shell_append(GTK_MENU_SHELL(ui->tray_menu), ui->tray_show_item);
@@ -209,6 +280,9 @@ static gboolean create_tray(UI *ui) {
     gtk_menu_shell_append(GTK_MENU_SHELL(ui->tray_menu), ui->tray_stop_item);
     gtk_menu_shell_append(GTK_MENU_SHELL(ui->tray_menu), ui->tray_restart_item);
     gtk_menu_shell_append(GTK_MENU_SHELL(ui->tray_menu), gtk_separator_menu_item_new());
+    gtk_menu_shell_append(GTK_MENU_SHELL(ui->tray_menu), ui->tray_enable_boot_item);
+    gtk_menu_shell_append(GTK_MENU_SHELL(ui->tray_menu), ui->tray_disable_boot_item);
+    gtk_menu_shell_append(GTK_MENU_SHELL(ui->tray_menu), gtk_separator_menu_item_new());
     gtk_menu_shell_append(GTK_MENU_SHELL(ui->tray_menu), tray_quit_item);
     gtk_widget_show_all(ui->tray_menu);
 
@@ -216,6 +290,8 @@ static gboolean create_tray(UI *ui) {
     g_signal_connect(ui->tray_start_item, "activate", G_CALLBACK(on_start), ui);
     g_signal_connect(ui->tray_stop_item, "activate", G_CALLBACK(on_stop), ui);
     g_signal_connect(ui->tray_restart_item, "activate", G_CALLBACK(on_restart), ui);
+    g_signal_connect(ui->tray_enable_boot_item, "activate", G_CALLBACK(on_enable_boot), ui);
+    g_signal_connect(ui->tray_disable_boot_item, "activate", G_CALLBACK(on_disable_boot), ui);
     g_signal_connect(tray_quit_item, "activate", G_CALLBACK(on_quit), ui);
 
     ui->indicator = app_indicator_new_with_path("p2app-control",
@@ -283,8 +359,12 @@ int main(int argc, char **argv) {
 
     gtk_container_add(GTK_CONTAINER(ui.win), vbox);
 
-    ui.label = gtk_label_new("P2_app: ...");
-    gtk_box_pack_start(GTK_BOX(vbox), ui.label, FALSE, FALSE, 0);
+    ui.status_label = gtk_label_new("P2_app: ...");
+    ui.boot_label = gtk_label_new("Boot Start: ...");
+    gtk_label_set_xalign(GTK_LABEL(ui.status_label), 0.0f);
+    gtk_label_set_xalign(GTK_LABEL(ui.boot_label), 0.0f);
+    gtk_box_pack_start(GTK_BOX(vbox), ui.status_label, FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(vbox), ui.boot_label, FALSE, FALSE, 0);
 
     hbox = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
     gtk_box_pack_start(GTK_BOX(vbox), hbox, FALSE, FALSE, 0);
@@ -296,12 +376,22 @@ int main(int argc, char **argv) {
     gtk_box_pack_start(GTK_BOX(hbox), ui.btn_stop, TRUE, TRUE, 0);
     gtk_box_pack_start(GTK_BOX(hbox), ui.btn_restart, TRUE, TRUE, 0);
 
+    hbox = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
+    gtk_box_pack_start(GTK_BOX(vbox), hbox, FALSE, FALSE, 0);
+
+    ui.btn_enable_boot = gtk_button_new_with_label("Enable Boot");
+    ui.btn_disable_boot = gtk_button_new_with_label("Disable Boot");
+    gtk_box_pack_start(GTK_BOX(hbox), ui.btn_enable_boot, TRUE, TRUE, 0);
+    gtk_box_pack_start(GTK_BOX(hbox), ui.btn_disable_boot, TRUE, TRUE, 0);
+
     ui.btn_quit = gtk_button_new_with_label("Quit");
     gtk_box_pack_start(GTK_BOX(vbox), ui.btn_quit, FALSE, FALSE, 0);
 
     g_signal_connect(ui.btn_start, "clicked", G_CALLBACK(on_start), &ui);
     g_signal_connect(ui.btn_stop, "clicked", G_CALLBACK(on_stop), &ui);
     g_signal_connect(ui.btn_restart, "clicked", G_CALLBACK(on_restart), &ui);
+    g_signal_connect(ui.btn_enable_boot, "clicked", G_CALLBACK(on_enable_boot), &ui);
+    g_signal_connect(ui.btn_disable_boot, "clicked", G_CALLBACK(on_disable_boot), &ui);
     g_signal_connect(ui.btn_quit, "clicked", G_CALLBACK(on_quit), &ui);
     g_signal_connect(ui.win, "delete-event", G_CALLBACK(on_window_delete), &ui);
     g_signal_connect(ui.win, "destroy", G_CALLBACK(on_window_destroy), &ui);

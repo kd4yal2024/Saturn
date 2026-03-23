@@ -25,6 +25,13 @@ AUTOSTART_FILE="${AUTOSTART_DIR}/${AUTOSTART_NAME}"
 ENABLE_TRAY_AUTOSTART="${ENABLE_TRAY_AUTOSTART:-1}"
 
 POLKIT_RULE="/etc/polkit-1/rules.d/49-p2app.rules"
+SUDOERS_RULE="/etc/sudoers.d/49-p2app-control"
+SYSTEMCTL_BIN="/bin/systemctl"
+CONTROL_USER="${SUDO_USER:-${SATURN_USER:-${USER:-pi}}}"
+
+if [[ -z "${CONTROL_USER}" || "${CONTROL_USER}" == "root" ]]; then
+  CONTROL_USER="${SATURN_USER:-pi}"
+fi
 
 echo "[*] Repo root: ${REPO_ROOT}"
 
@@ -79,10 +86,10 @@ rm -f "$TMP_UNIT"
 
 echo "[*] Installing polkit rule (no password for start/stop/restart of p2app.service)"
 TMP_RULE="$(mktemp)"
-cat > "$TMP_RULE" <<'EOF3'
+cat > "$TMP_RULE" <<EOF3
 polkit.addRule(function(action, subject) {
     if (action.id === "org.freedesktop.systemd1.manage-units" &&
-        subject.user === "pi" &&
+        subject.user === "${CONTROL_USER}" &&
         subject.active === true &&
         subject.local === true) {
 
@@ -102,6 +109,25 @@ if [[ ! -f "${POLKIT_RULE}" ]] || ! sudo cmp -s "$TMP_RULE" "$POLKIT_RULE"; then
   sudo systemctl restart polkit || true
 fi
 rm -f "$TMP_RULE"
+
+echo "[*] Installing sudoers rule (no password for start/stop/restart/enable/disable of p2app.service)"
+TMP_SUDOERS="$(mktemp)"
+cat > "$TMP_SUDOERS" <<EOF4
+${CONTROL_USER} ALL=(root) NOPASSWD: ${SYSTEMCTL_BIN} start ${UNIT_NAME}
+${CONTROL_USER} ALL=(root) NOPASSWD: ${SYSTEMCTL_BIN} stop ${UNIT_NAME}
+${CONTROL_USER} ALL=(root) NOPASSWD: ${SYSTEMCTL_BIN} restart ${UNIT_NAME}
+${CONTROL_USER} ALL=(root) NOPASSWD: ${SYSTEMCTL_BIN} enable ${UNIT_NAME}
+${CONTROL_USER} ALL=(root) NOPASSWD: ${SYSTEMCTL_BIN} disable ${UNIT_NAME}
+EOF4
+
+if command -v visudo >/dev/null 2>&1; then
+  sudo visudo -cf "$TMP_SUDOERS" >/dev/null
+fi
+
+if [[ ! -f "${SUDOERS_RULE}" ]] || ! sudo cmp -s "$TMP_SUDOERS" "$SUDOERS_RULE"; then
+  sudo install -D -m 0440 "$TMP_SUDOERS" "$SUDOERS_RULE"
+fi
+rm -f "$TMP_SUDOERS"
 
 echo "[*] Reloading systemd + enabling service"
 sudo systemctl daemon-reload
@@ -157,6 +183,7 @@ if [[ "$ENABLE_TRAY_AUTOSTART" == "1" ]]; then
   echo "    Autostart:${AUTOSTART_FILE}"
 fi
 echo "    Unit:     ${UNIT_PATH}"
+echo "    Sudoers:  ${SUDOERS_RULE}"
 echo
 echo "Service status:"
 sudo systemctl status "${UNIT_NAME}" --no-pager | sed -n '1,12p'
