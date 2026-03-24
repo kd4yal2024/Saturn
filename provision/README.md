@@ -269,6 +269,9 @@ Then `provision-saturn.sh` performs:
 - optional p2app-control install
   - installs tray autostart (`~/.config/autostart/P2_app-Control-tray.desktop`)
   - requires `libayatana-appindicator3-dev` and `ayatana-indicator-application`
+  - generated `p2app.service` now waits for `/dev/xdma0_user` before launching `p2app`
+  - installer now waits for `p2app.service` to reach `active/running`
+  - if the XDMA kernel module is loaded but `/dev/xdma0_user` is still missing, provisioning logs the condition and continues instead of failing the whole run at the `p2app-control` step
   - if a panel does not render the tray icon, run `/usr/local/bin/p2app-control --window` as fallback
 - optional Update Manager install
 - optional FPGA flash (only if explicitly enabled and confirmed)
@@ -281,6 +284,8 @@ After boot completes, verify:
 - `sudo cat /var/lib/saturn-provision/complete`
 - `sudo cat /var/lib/saturn-provision/front-panel-type`
 - `sudo tail -n 200 /var/log/saturn-provision.log`
+- `sudo systemctl status p2app.service --no-pager`
+- `ls -l /dev/xdma0_user /dev/xdma/card0 2>/dev/null`
 
 If Update Manager is enabled, also verify service status:
 

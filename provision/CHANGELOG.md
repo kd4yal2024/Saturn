@@ -15,6 +15,11 @@ All notable changes to provisioning assets are documented in this file.
   - added `SATURN_DETECT_FRONT_PANEL` (default `1`)
   - front-panel detection now records `G2V1`, `G2V2`, or `NONE` in provisioning state
 
+- `../sw_tools/p2app-control/install.sh`
+  - generated `p2app.service` now waits for `/dev/xdma0_user` before launching `p2app`
+  - installer now waits for `p2app.service` to reach `active/running` instead of treating transient start/restart states as an immediate provisioning failure
+  - if XDMA is loaded but `/dev/xdma0_user` is still missing, the installer now logs the condition and lets provisioning continue so the log points at XDMA/FPGA device enumeration instead of the tray-widget install step
+
 - `../scripts/detect-lcd-profile.sh`
   - added explicit `cm4-7-custom-jd` profile detection/output
   - added explicit `cm4-7-g2-single-dsi` and `cm5-7-g2-single-dsi` profile detection/output
@@ -32,6 +37,9 @@ All notable changes to provisioning assets are documented in this file.
 - `README.md`
   - documented front-panel detection behavior, state file, and provisioning toggle
   - documented the new custom and Laurence-style single-DSI 7-inch LCD profiles
+
+- `../sw_tools/p2app-control/README.md`
+  - documented the new XDMA wait behavior and the provisioning-time troubleshooting path for `register write attempted before XDMA register device was opened`
 
 ## [2026-03-18]
 

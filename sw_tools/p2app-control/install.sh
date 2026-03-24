@@ -6,6 +6,9 @@ REPO_ROOT="$(cd "$HERE/../.." && pwd)"
 
 UNIT_NAME="p2app.service"
 UNIT_PATH="/etc/systemd/system/${UNIT_NAME}"
+XDMA_REG_DEV="/dev/xdma0_user"
+P2APP_XDMA_WAIT_SECONDS="${P2APP_XDMA_WAIT_SECONDS:-20}"
+P2APP_START_TIMEOUT_SECONDS="${P2APP_START_TIMEOUT_SECONDS:-30}"
 
 P2APP_DIR="${REPO_ROOT}/sw_projects/P2_app"
 P2APP_BIN="${P2APP_DIR}/p2app"
@@ -35,6 +38,25 @@ fi
 
 echo "[*] Repo root: ${REPO_ROOT}"
 
+service_is_running() {
+  local active_state sub_state
+  active_state="$(sudo systemctl show -p ActiveState --value "${UNIT_NAME}" 2>/dev/null || true)"
+  sub_state="$(sudo systemctl show -p SubState --value "${UNIT_NAME}" 2>/dev/null || true)"
+  [[ "${active_state}" == "active" && "${sub_state}" == "running" ]]
+}
+
+wait_for_service_running() {
+  local elapsed=0
+  while (( elapsed < P2APP_START_TIMEOUT_SECONDS )); do
+    if service_is_running; then
+      return 0
+    fi
+    sleep 1
+    ((elapsed+=1))
+  done
+  return 1
+}
+
 echo "[*] Building widget..."
 make -C "$HERE"
 
@@ -59,6 +81,7 @@ Documentation=https://github.com/kd4yal2024/Saturn
 
 [Service]
 WorkingDirectory=${P2APP_DIR}
+ExecStartPre=/bin/sh -c 'for i in \$(seq 1 ${P2APP_XDMA_WAIT_SECONDS}); do [ -e "${XDMA_REG_DEV}" ] && exit 0; sleep 1; done; echo "${XDMA_REG_DEV} not present after ${P2APP_XDMA_WAIT_SECONDS}s" >&2; exit 1'
 ExecStart=${P2APP_BIN} -s -p
 User=root
 Group=root
@@ -133,10 +156,27 @@ echo "[*] Reloading systemd + enabling service"
 sudo systemctl daemon-reload
 sudo systemctl enable "${UNIT_NAME}" >/dev/null
 
+start_cmd_rc=0
 if sudo systemctl is-active --quiet "${UNIT_NAME}"; then
-  sudo systemctl restart "${UNIT_NAME}"
+  sudo systemctl restart "${UNIT_NAME}" || start_cmd_rc=$?
 else
-  sudo systemctl start "${UNIT_NAME}"
+  sudo systemctl start "${UNIT_NAME}" || start_cmd_rc=$?
+fi
+
+start_rc=0
+if [[ "${start_cmd_rc}" -ne 0 ]]; then
+  echo "[!] WARN: initial systemctl start for ${UNIT_NAME} returned ${start_cmd_rc}."
+fi
+if ! wait_for_service_running; then
+  echo "[!] WARN: ${UNIT_NAME} did not reach active/running within ${P2APP_START_TIMEOUT_SECONDS}s."
+  if [[ ! -e "${XDMA_REG_DEV}" ]]; then
+    echo "[!] WARN: ${XDMA_REG_DEV} is not present."
+    echo "[!] WARN: XDMA may be loaded but the FPGA/register device is not enumerated yet."
+    echo "[!] WARN: Provisioning will continue; p2app.service will keep retrying in the background."
+  else
+    echo "[!] ERROR: ${XDMA_REG_DEV} exists, but ${UNIT_NAME} is still not active."
+    start_rc=1
+  fi
 fi
 
 echo "[*] Removing legacy desktop shortcuts (window mode launcher no longer installed)"
@@ -186,4 +226,9 @@ echo "    Unit:     ${UNIT_PATH}"
 echo "    Sudoers:  ${SUDOERS_RULE}"
 echo
 echo "Service status:"
-sudo systemctl status "${UNIT_NAME}" --no-pager | sed -n '1,12p'
+status_output="$(sudo systemctl status "${UNIT_NAME}" --no-pager 2>&1 || true)"
+printf '%s\n' "$status_output" | sed -n '1,12p'
+
+if [[ "${start_rc}" -ne 0 ]]; then
+  exit "${start_rc}"
+fi

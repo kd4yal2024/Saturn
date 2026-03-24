@@ -40,6 +40,10 @@ Location in repo:
 - Enables it at boot and starts/restarts it:
   - `systemctl enable p2app.service`
   - `systemctl start|restart p2app.service`
+- Waits up to `P2APP_XDMA_WAIT_SECONDS` seconds (default `20`) for
+  `/dev/xdma0_user` before launching `p2app`
+- Waits up to `P2APP_START_TIMEOUT_SECONDS` seconds (default `30`) for the
+  service to reach `active/running` during install
 
 The service runs `P2_app` as root using the repo build:
 - Working directory:
@@ -167,6 +171,26 @@ If `install.sh` errors because it cannot find:
 
 build/install P2_app first, or adjust `P2APP_DIR` / `P2APP_BIN` inside
 `install.sh`.
+
+### `register write attempted before XDMA register device was opened`
+
+This message means `p2app` tried to touch Saturn registers before
+`/dev/xdma0_user` was available.
+
+`install.sh` now waits for `/dev/xdma0_user` before launching `p2app` and
+does not fail provisioning just because the XDMA register device has not
+enumerated yet. If the device node still never appears, the service will keep
+retrying and the installer will log that the problem is FPGA/XDMA device
+enumeration rather than widget installation.
+
+Useful checks:
+
+```bash
+ls -l /dev/xdma0_user /dev/xdma/card0 2>/dev/null
+systemctl status p2app.service --no-pager
+journalctl -u p2app.service -n 100 --no-pager
+sudo bash /home/pi/github/Saturn/scripts/fix-xdma.sh
+```
 
 ### Removing
 
