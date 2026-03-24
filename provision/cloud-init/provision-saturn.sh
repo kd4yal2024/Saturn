@@ -33,6 +33,7 @@ SATURN_INSTALL_UDEV_RULES="${SATURN_INSTALL_UDEV_RULES:-1}"
 SATURN_INSTALL_SHUTDOWN_WAITER="${SATURN_INSTALL_SHUTDOWN_WAITER:-1}"
 SATURN_REBUILD_XDMA="${SATURN_REBUILD_XDMA:-1}"
 SATURN_BUILD_OPTIONAL_TOOLS="${SATURN_BUILD_OPTIONAL_TOOLS:-1}"
+SATURN_DETECT_FRONT_PANEL="${SATURN_DETECT_FRONT_PANEL:-1}"
 SATURN_SHUTDOWN_WAITER_ENABLED_DEFAULT="${SATURN_SHUTDOWN_WAITER_ENABLED_DEFAULT:-auto}"
 
 SATURN_FLASH_FPGA="${SATURN_FLASH_FPGA:-0}"
@@ -69,6 +70,8 @@ SATURN_UI_STARTED=0
 SATURN_UI_AUTOSTART_INSTALLED=0
 PYTHON_GUARD_DIR=""
 UPDATE_MANAGER_PASSWORD_FILE_DEFAULT="/var/lib/saturn-provision/update-manager-admin-password"
+SATURN_FRONT_PANEL_TYPE=""
+SATURN_FRONT_PANEL_STATE_FILE="${SATURN_FRONT_PANEL_STATE_FILE:-${SATURN_STATE_DIR}/front-panel-type}"
 
 log() { printf '[%(%Y-%m-%d %H:%M:%S)T] %s\n' -1 "$*" >&2; }
 write_ui_status() {
@@ -690,10 +693,38 @@ detect_lcd_size_from_config() {
 
 detect_lcd_profile_from_config() {
   local boot_config="$1"
+  local managed_profile=""
+
+  managed_profile="$(awk '
+    /^# BEGIN SATURN LCD PROFILE$/ { in_block=1; next }
+    /^# END SATURN LCD PROFILE$/ { in_block=0 }
+    in_block && /^# Saturn managed LCD profile: / {
+      sub(/^# Saturn managed LCD profile: /, "")
+      print
+      exit
+    }
+  ' "$boot_config")"
+
+  case "$managed_profile" in
+    cm4-7|cm4-7-custom-jd|cm4-7-g2-single-dsi|cm4-8|cm5-7|cm5-7-g2-single-dsi|cm5-7-g2-dual-dsi|cm5-8)
+      printf '%s\n' "$managed_profile"
+      return
+      ;;
+  esac
 
   if grep -Eq '^[[:space:]]*dtoverlay=vc4-kms-dsi-waveshare-panel,7_0_inchC,i2c0,dsi1([[:space:]]*#.*)?$' "$boot_config" \
     && grep -Eq '^[[:space:]]*dtoverlay=vc4-kms-dsi-waveshare-panel,7_0_inchC,i2c1,dsi0([[:space:]]*#.*)?$' "$boot_config"; then
     printf 'cm5-7-g2-dual-dsi\n'
+    return
+  fi
+  if grep -Eq '^[[:space:]]*dtoverlay=vc4-kms-dsi-waveshare-panel,7_0_inchC,i2c0([[:space:]]*#.*)?$' "$boot_config" \
+    && grep -Eq '^[[:space:]]*dtoverlay=uart3([[:space:]]*#.*)?$' "$boot_config"; then
+    printf 'cm4-7-g2-single-dsi\n'
+    return
+  fi
+  if grep -Eq '^[[:space:]]*dtoverlay=vc4-kms-dsi-waveshare-panel,7_0_inchC,i2c0([[:space:]]*#.*)?$' "$boot_config" \
+    && grep -Eq '^[[:space:]]*dtoverlay=uart2-pi5([[:space:]]*#.*)?$' "$boot_config"; then
+    printf 'cm5-7-g2-single-dsi\n'
     return
   fi
 }
@@ -812,7 +843,7 @@ resolve_lcd_profile() {
     none|"")
       return 1
       ;;
-    cm4-7|cm4-8|cm5-7|cm5-7-g2-dual-dsi|cm5-8)
+    cm4-7|cm4-7-custom-jd|cm4-7-g2-single-dsi|cm4-8|cm5-7|cm5-7-g2-single-dsi|cm5-7-g2-dual-dsi|cm5-8)
       printf '%s\n' "$requested"
       return 0
       ;;
@@ -855,6 +886,14 @@ render_lcd_profile_block() {
       uart_line='dtoverlay=uart3'
       panel_line='dtoverlay=vc4-kms-dsi-waveshare-800x480'
       ;;
+    cm4-7-custom-jd)
+      uart_line='dtoverlay=uart3'
+      panel_line='dtoverlay=vc4-kms-dsi-waveshare-800x480'
+      ;;
+    cm4-7-g2-single-dsi)
+      uart_line='dtoverlay=uart3'
+      panel_line='dtoverlay=vc4-kms-dsi-waveshare-panel,7_0_inchC,i2c0'
+      ;;
     cm4-8)
       uart_line='dtoverlay=uart3'
       panel_line='dtoverlay=vc4-kms-dsi-waveshare-panel,8_0_inch,i2c1'
@@ -862,6 +901,10 @@ render_lcd_profile_block() {
     cm5-7)
       uart_line='dtoverlay=uart2-pi5'
       panel_line='dtoverlay=vc4-kms-dsi-waveshare-800x480'
+      ;;
+    cm5-7-g2-single-dsi)
+      uart_line='dtoverlay=uart2-pi5'
+      panel_line='dtoverlay=vc4-kms-dsi-waveshare-panel,7_0_inchC,i2c0'
       ;;
     cm5-7-g2-dual-dsi)
       uart_line='dtoverlay=uart2-pi5'
@@ -1162,6 +1205,33 @@ install_p2app_control() {
   fi
 }
 
+detect_front_panel() {
+  local script="$SATURN_REPO_DIR/scripts/detect-front-panel.sh"
+  local detected=""
+
+  if [[ ! -x "$script" ]]; then
+    log "WARN: Missing front-panel detector: $script"
+    return 0
+  fi
+
+  detected="$(bash "$script" 2>/dev/null | tr -d '\r\n' || true)"
+  case "$detected" in
+    G2V1|G2V2|NONE)
+      SATURN_FRONT_PANEL_TYPE="$detected"
+      install -d -m 0755 "$(dirname "$SATURN_FRONT_PANEL_STATE_FILE")"
+      printf '%s\n' "$SATURN_FRONT_PANEL_TYPE" >"$SATURN_FRONT_PANEL_STATE_FILE"
+      chmod 0644 "$SATURN_FRONT_PANEL_STATE_FILE"
+      log "Detected front panel: $SATURN_FRONT_PANEL_TYPE"
+      if [[ "$SATURN_FRONT_PANEL_TYPE" == "NONE" && ! -e /dev/serial/by-id/g2-front-9600 ]]; then
+        log "Front-panel serial alias /dev/serial/by-id/g2-front-9600 not present; G2V2 detection depends on Saturn udev rules."
+      fi
+      ;;
+    *)
+      log "WARN: Front-panel detector returned unexpected result: ${detected:-<empty>}"
+      ;;
+  esac
+}
+
 install_update_manager() {
   local saturn_home="$1"
   local script="$SATURN_REPO_DIR/update_manager/install_saturn_go_nginx.sh"
@@ -1268,6 +1338,7 @@ repo_url=${SATURN_REPO_URL}
 repo_branch=${SATURN_REPO_BRANCH}
 repo_dir=${SATURN_REPO_DIR}
 repo_commit=${commit:-unknown}
+front_panel_type=${SATURN_FRONT_PANEL_TYPE:-unknown}
 EOF
 }
 
@@ -1345,6 +1416,10 @@ main() {
   if bool_true "$SATURN_INSTALL_UDEV_RULES"; then
     set_ui_stage "Installing udev rules"
     install_udev_rules
+  fi
+  if bool_true "$SATURN_DETECT_FRONT_PANEL"; then
+    set_ui_stage "Detecting front panel"
+    detect_front_panel
   fi
   if bool_true "$SATURN_INSTALL_P2APP_CONTROL"; then
     set_ui_stage "Installing p2app-control service"

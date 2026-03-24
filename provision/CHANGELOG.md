@@ -2,6 +2,37 @@
 
 All notable changes to provisioning assets are documented in this file.
 
+## [Unreleased]
+
+### Changed
+
+- `cloud-init/provision-saturn.sh`
+  - added explicit `cm4-7-custom-jd` LCD profile as a preserved alias for the current CM4 custom 7-inch panel setup
+  - added explicit `cm4-7-g2-single-dsi` and `cm5-7-g2-single-dsi` LCD profiles for Laurence-style `7_0_inchC,i2c0` configs
+  - auto LCD detection now preserves Saturn-managed explicit profile ids from the managed block comment before falling back to overlay heuristics
+  - auto LCD detection now preserves existing Laurence-style single-DSI 7-inch configs instead of collapsing them into the generic `cm4-7` / `cm5-7` profiles
+  - added front-panel detection stage after the udev-install step
+  - added `SATURN_DETECT_FRONT_PANEL` (default `1`)
+  - front-panel detection now records `G2V1`, `G2V2`, or `NONE` in provisioning state
+
+- `../scripts/detect-lcd-profile.sh`
+  - added explicit `cm4-7-custom-jd` profile detection/output
+  - added explicit `cm4-7-g2-single-dsi` and `cm5-7-g2-single-dsi` profile detection/output
+
+- `../scripts/saturn-lcd-helper.sh`
+  - now lists the custom and Laurence-style single-DSI 7-inch profiles alongside the existing generic and dual-DSI profiles
+
+- `../scripts/detect-front-panel.sh`
+  - added a standalone front-panel detector
+  - G2V1 detection probes I2C address `0x20`
+  - G2V2 detection sends `ZZZS;` to `/dev/serial/by-id/g2-front-9600` and looks for `ZZZS05`
+
+### Documentation
+
+- `README.md`
+  - documented front-panel detection behavior, state file, and provisioning toggle
+  - documented the new custom and Laurence-style single-DSI 7-inch LCD profiles
+
 ## [2026-03-18]
 
 ### Changed

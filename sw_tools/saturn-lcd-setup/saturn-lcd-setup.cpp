@@ -204,13 +204,15 @@ void refresh_detected_state(AppState *app)
     const std::string profile = extract_value(lines, "profile");
     const std::string size = extract_value(lines, "size");
     const std::string source = extract_value(lines, "size_source");
+    const std::string front_panel_type = extract_value(lines, "front_panel_type");
     const std::string boot_config = extract_value(lines, "boot_config_path");
     const std::string overlays = extract_block(lines, "current_overlay_lines");
 
     std::string recommendation = "Detected: cm=" + (cm.empty() ? "unknown" : cm) +
                                  " size=" + (size.empty() ? "unknown" : size) +
                                  " profile=" + (profile.empty() ? "unknown" : profile) +
-                                 " source=" + (source.empty() ? "unknown" : source);
+                                 " source=" + (source.empty() ? "unknown" : source) +
+                                 " front_panel=" + (front_panel_type.empty() ? "unknown" : front_panel_type);
     gtk_label_set_text(GTK_LABEL(app->recommendation_label), recommendation.c_str());
     gtk_label_set_text(GTK_LABEL(app->boot_config_label), boot_config.empty() ? "Boot config: unknown" : ("Boot config: " + boot_config).c_str());
     gtk_label_set_text(GTK_LABEL(app->current_overlays), overlays.empty() ? "(none)" : overlays.c_str());

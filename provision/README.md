@@ -41,6 +41,7 @@ This directory contains provisioning assets for cloud-init based setup of a Satu
 Completion and logs:
 
 - state file: `/var/lib/saturn-provision/complete`
+- front-panel state file: `/var/lib/saturn-provision/front-panel-type`
 - log file: `/var/log/saturn-provision.log`
 - live status file (desktop UI): `/var/lib/saturn-provision/ui-status`
 
@@ -67,6 +68,8 @@ Environment controls:
 - `SATURN_CLEAN_TMP_AFTER_PROVISION=1|0` (default: `1`)
 - `SATURN_APT_LOCK_TIMEOUT_SECONDS` (default: `120`)
 - `SATURN_APT_LOCK_RETRY_INTERVAL_SECONDS` (default: `3`)
+- `SATURN_DETECT_FRONT_PANEL=1|0` (default: `1`)
+- `SATURN_FRONT_PANEL_STATE_FILE` (default: `/var/lib/saturn-provision/front-panel-type`)
 
 Notes:
 
@@ -92,7 +95,7 @@ This is designed to preserve existing HDMI-related entries while adding panel-sp
 
 Environment controls:
 
-- `SATURN_LCD_PROFILE=none|cm4-7|cm4-8|cm5-7|cm5-7-g2-dual-dsi|cm5-8|auto` (default: `auto`)
+- `SATURN_LCD_PROFILE=none|cm4-7|cm4-7-custom-jd|cm4-7-g2-single-dsi|cm4-8|cm5-7|cm5-7-g2-single-dsi|cm5-7-g2-dual-dsi|cm5-8|auto` (default: `auto`)
 - `SATURN_LCD_SIZE_INCH=7|8` (optional explicit override for `SATURN_LCD_PROFILE=auto`)
 - `SATURN_LCD_AUTO_DEFAULT_SIZE_INCH=7|8` (optional fallback when auto detection is ambiguous)
 - `SATURN_LCD_I2C_DETECT_ADDR=0x45` (optional I2C address used by size auto-probe; valid `i2cdetect` range is `0x08..0x77`)
@@ -101,8 +104,11 @@ Environment controls:
 Profile mapping:
 
 - `cm4-7`: `dtoverlay=uart3` + `dtoverlay=vc4-kms-dsi-waveshare-800x480`
+- `cm4-7-custom-jd`: `dtoverlay=uart3` + `dtoverlay=vc4-kms-dsi-waveshare-800x480`
+- `cm4-7-g2-single-dsi`: `dtoverlay=uart3` + `dtoverlay=vc4-kms-dsi-waveshare-panel,7_0_inchC,i2c0`
 - `cm4-8`: `dtoverlay=uart3` + `dtoverlay=vc4-kms-dsi-waveshare-panel,8_0_inch,i2c1`
 - `cm5-7`: `dtoverlay=uart2-pi5` + `dtoverlay=vc4-kms-dsi-waveshare-800x480`
+- `cm5-7-g2-single-dsi`: `dtoverlay=uart2-pi5` + `dtoverlay=vc4-kms-dsi-waveshare-panel,7_0_inchC,i2c0`
 - `cm5-7-g2-dual-dsi`: `dtoverlay=uart2-pi5` + `dtoverlay=vc4-kms-dsi-waveshare-panel,7_0_inchC,i2c0,dsi1` + `dtoverlay=vc4-kms-dsi-waveshare-panel,7_0_inchC,i2c1,dsi0`
 - `cm5-8`: `dtoverlay=uart2-pi5` + `dtoverlay=vc4-kms-dsi-waveshare-panel,8_0_inch,i2c1`
 
@@ -112,6 +118,8 @@ Notes:
 - Re-running provisioning replaces only that managed block.
 - Existing HDMI lines outside the managed block are left untouched.
 - Display profile changes generally require reboot to take effect.
+- Auto mode first preserves a known Saturn-managed profile id from the managed LCD block comment when one is present.
+- Auto mode preserves Laurence-style single-DSI 7-inch configs when it finds `dtoverlay=vc4-kms-dsi-waveshare-panel,7_0_inchC,i2c0` paired with `dtoverlay=uart3` or `dtoverlay=uart2-pi5`.
 - Auto mode preserves an existing dual-overlay CM5 7" G2 config when it finds both `dsi1/i2c0` and `dsi0/i2c1` overlay lines already present.
 - Auto mode resolves in this order: `SATURN_LCD_SIZE_INCH` -> existing Waveshare overlay in `config.txt` -> I2C probe (`i2c-10`/`i2c-0` implies 7", `i2c-1` implies 8") -> `SATURN_LCD_AUTO_DEFAULT_SIZE_INCH`.
 - Safe dry-run example (no boot config changes):
@@ -252,6 +260,12 @@ Then `provision-saturn.sh` performs:
   - that helper rebuilds for the running kernel and, when a newer same-flavor kernel is already installed, also pre-stages XDMA for that next boot
   - the helper now builds in the repo as `SATURN_USER` and reserves root only for module install/reload, which avoids leaving kernel build outputs owned by root or other mapped IDs in `linuxdriver/xdma`
 - optional udev rules install
+- optional front-panel detection
+  - runs after the udev-install step
+  - detects G2V1 by I2C device presence at `0x20`
+  - detects G2V2 by CAT response on `/dev/serial/by-id/g2-front-9600`
+  - records `G2V1`, `G2V2`, or `NONE` in `/var/lib/saturn-provision/front-panel-type`
+  - also includes `front_panel_type=...` in `/var/lib/saturn-provision/complete`
 - optional p2app-control install
   - installs tray autostart (`~/.config/autostart/P2_app-Control-tray.desktop`)
   - requires `libayatana-appindicator3-dev` and `ayatana-indicator-application`
@@ -265,6 +279,7 @@ Then `provision-saturn.sh` performs:
 After boot completes, verify:
 
 - `sudo cat /var/lib/saturn-provision/complete`
+- `sudo cat /var/lib/saturn-provision/front-panel-type`
 - `sudo tail -n 200 /var/log/saturn-provision.log`
 
 If Update Manager is enabled, also verify service status:
@@ -311,6 +326,7 @@ From `user-data.example.yaml`:
 - `SATURN_SHUTDOWN_WAITER_ENABLED_DEFAULT=auto`
 - `SATURN_REBUILD_XDMA=1`
 - `SATURN_BUILD_OPTIONAL_TOOLS=1`
+- `SATURN_DETECT_FRONT_PANEL=1`
 - `SATURN_ENABLE_I2C=1`
 - `SATURN_ENABLE_SSH=1`
 - `SATURN_ENABLE_VNC=1`

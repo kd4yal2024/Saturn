@@ -5,6 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 PROVISION_SCRIPT="${REPO_ROOT}/provision/cloud-init/provision-saturn.sh"
 DETECT_SCRIPT="${SCRIPT_DIR}/detect-lcd-profile.sh"
+FRONT_PANEL_DETECT_SCRIPT="${SCRIPT_DIR}/detect-front-panel.sh"
 
 usage() {
   cat <<'EOF'
@@ -20,8 +21,11 @@ Usage:
 Profiles:
   auto
   cm4-7
+  cm4-7-custom-jd
+  cm4-7-g2-single-dsi
   cm4-8
   cm5-7
+  cm5-7-g2-single-dsi
   cm5-7-g2-dual-dsi
   cm5-8
 EOF
@@ -72,8 +76,11 @@ profile_label() {
   case "$1" in
     auto) printf 'Auto Detect\n' ;;
     cm4-7) printf 'CM4 7-inch\n' ;;
+    cm4-7-custom-jd) printf 'CM4 7-inch Custom JD\n' ;;
+    cm4-7-g2-single-dsi) printf 'CM4 7-inch G2 Single-DSI\n' ;;
     cm4-8) printf 'CM4 8-inch\n' ;;
     cm5-7) printf 'CM5 7-inch\n' ;;
+    cm5-7-g2-single-dsi) printf 'CM5 7-inch G2 Single-DSI\n' ;;
     cm5-7-g2-dual-dsi) printf 'CM5 7-inch G2 Dual-DSI\n' ;;
     cm5-8) printf 'CM5 8-inch\n' ;;
     *) printf '%s\n' "$1" ;;
@@ -84,8 +91,11 @@ profile_description() {
   case "$1" in
     auto) printf 'Use current detection logic and existing config hints.\n' ;;
     cm4-7) printf 'CM4 with Waveshare 7-inch panel using the single-overlay 800x480 path.\n' ;;
+    cm4-7-custom-jd) printf 'CM4 custom JD 7-inch panel profile using the current known-good 800x480 overlay path.\n' ;;
+    cm4-7-g2-single-dsi) printf 'CM4 with Laurence-style 7-inch single-DSI Waveshare panel (7_0_inchC on i2c0).\n' ;;
     cm4-8) printf 'CM4 with Waveshare 8-inch panel using i2c1.\n' ;;
     cm5-7) printf 'CM5 with Waveshare 7-inch panel using the single-overlay 800x480 path.\n' ;;
+    cm5-7-g2-single-dsi) printf 'CM5 with Laurence-style 7-inch single-DSI Waveshare panel (7_0_inchC on i2c0).\n' ;;
     cm5-7-g2-dual-dsi) printf 'CM5 Saturn G2 7-inch field profile using both DSI paths.\n' ;;
     cm5-8) printf 'CM5 with Waveshare 8-inch panel using i2c1.\n' ;;
     *) printf 'Unknown profile.\n' ;;
@@ -94,17 +104,27 @@ profile_description() {
 
 print_profiles() {
   local profile
-  for profile in auto cm4-7 cm4-8 cm5-7 cm5-7-g2-dual-dsi cm5-8; do
+  for profile in auto cm4-7 cm4-7-custom-jd cm4-7-g2-single-dsi cm4-8 cm5-7 cm5-7-g2-single-dsi cm5-7-g2-dual-dsi cm5-8; do
     printf '%s|%s|%s\n' "$profile" "$(profile_label "$profile")" "$(profile_description "$profile")"
   done
 }
 
 print_detect() {
-  local detect_output boot_config current_profile current_overlays
+  local detect_output boot_config current_profile current_overlays front_panel_type
   [[ -x "$DETECT_SCRIPT" ]] || die "Missing detect script: $DETECT_SCRIPT"
 
   detect_output="$("$DETECT_SCRIPT" 2>/dev/null || true)"
   printf '%s\n' "$detect_output"
+
+  front_panel_type="unknown"
+  if [[ -x "$FRONT_PANEL_DETECT_SCRIPT" ]]; then
+    front_panel_type="$("$FRONT_PANEL_DETECT_SCRIPT" 2>/dev/null | tr -d '\r\n' || true)"
+    case "$front_panel_type" in
+      G2V1|G2V2|NONE) ;;
+      *) front_panel_type="unknown" ;;
+    esac
+  fi
+  printf 'front_panel_type=%s\n' "$front_panel_type"
 
   boot_config="$(get_boot_config_path 2>/dev/null || true)"
   if [[ -n "$boot_config" ]]; then

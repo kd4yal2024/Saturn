@@ -5,7 +5,7 @@
 ## What It Does
 
 - inspects the current LCD-related boot configuration
-- shows the currently detected compute module, LCD profile, and active Waveshare overlay lines
+- shows the currently detected compute module, LCD profile, front-panel type, and active Waveshare overlay lines
 - previews the managed LCD block before any change is written
 - applies a selected LCD profile through a privileged helper
 - creates a timestamped backup of `config.txt` before each apply
@@ -18,14 +18,18 @@ Current supported profiles:
 
 - `auto`
 - `cm4-7`
+- `cm4-7-custom-jd`
+- `cm4-7-g2-single-dsi`
 - `cm4-8`
 - `cm5-7`
+- `cm5-7-g2-single-dsi`
 - `cm5-7-g2-dual-dsi`
 - `cm5-8`
 
 The profile logic is shared with Saturn provisioning by reusing helpers from:
 
 - `provision/cloud-init/provision-saturn.sh`
+- `scripts/detect-front-panel.sh`
 - `scripts/detect-lcd-profile.sh`
 - `scripts/saturn-lcd-helper.sh`
 
@@ -89,3 +93,4 @@ The UI uses:
 - LCD changes are boot-config changes and generally require reboot
 - the tool is intentionally conservative: it previews before apply and always creates a backup
 - the GTK app itself runs as the desktop user; privileged actions are performed with `pkexec`
+- the detected-state summary also includes front-panel type from `scripts/detect-front-panel.sh` when available
