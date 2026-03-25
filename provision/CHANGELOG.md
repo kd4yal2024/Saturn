@@ -7,13 +7,20 @@ All notable changes to provisioning assets are documented in this file.
 ### Changed
 
 - `cloud-init/provision-saturn.sh`
+  - now sources shared LCD/profile logic from `../scripts/saturn-lcd-lib.sh` instead of carrying a separate copy of those helpers
   - added explicit `cm4-7-custom-jd` LCD profile as a preserved alias for the current CM4 custom 7-inch panel setup
   - added explicit `cm4-7-g2-single-dsi` and `cm5-7-g2-single-dsi` LCD profiles for Laurence-style `7_0_inchC,i2c0` configs
   - auto LCD detection now preserves Saturn-managed explicit profile ids from the managed block comment before falling back to overlay heuristics
   - auto LCD detection now preserves existing Laurence-style single-DSI 7-inch configs instead of collapsing them into the generic `cm4-7` / `cm5-7` profiles
-  - added front-panel detection stage after the udev-install step
+  - LCD auto mode now prefers `cm4-7-g2-single-dsi` / `cm5-7-g2-single-dsi` over the generic 7-inch profile when front-panel detection confirms `G2V1` or `G2V2`
+  - moved udev install and front-panel detection ahead of LCD profile application so the G2 7-inch tiebreaker is active on the first provisioning run
   - added `SATURN_DETECT_FRONT_PANEL` (default `1`)
   - front-panel detection now records `G2V1`, `G2V2`, or `NONE` in provisioning state
+
+- `../scripts/saturn-lcd-lib.sh`
+  - new shared shell library for LCD/profile detection, rendering, and config application
+  - now serves as the single authoritative implementation for provisioning, CLI detection, and the LCD setup helper
+  - LCD I2C probe path now uses `i2cdetect -r` read-mode probing
 
 - `../sw_tools/p2app-control/install.sh`
   - generated `p2app.service` now waits for `/dev/xdma0_user` before launching `p2app`
@@ -21,10 +28,15 @@ All notable changes to provisioning assets are documented in this file.
   - if XDMA is loaded but `/dev/xdma0_user` is still missing, the installer now logs the condition and lets provisioning continue so the log points at XDMA/FPGA device enumeration instead of the tray-widget install step
 
 - `../scripts/detect-lcd-profile.sh`
+  - now acts as a thin CLI wrapper around `saturn-lcd-lib.sh`
   - added explicit `cm4-7-custom-jd` profile detection/output
   - added explicit `cm4-7-g2-single-dsi` and `cm5-7-g2-single-dsi` profile detection/output
 
 - `../scripts/saturn-lcd-helper.sh`
+  - now sources `saturn-lcd-lib.sh` directly instead of sourcing `provision-saturn.sh`
+  - now prefers `/var/lib/saturn-provision/front-panel-type` over a live probe when resolving front-panel state
+  - `detect` output now includes both `front_panel_type=` and `front_panel_source=`
+  - `apply --profile auto` now reports and writes the same resolved profile
   - now lists the custom and Laurence-style single-DSI 7-inch profiles alongside the existing generic and dual-DSI profiles
 
 - `../scripts/detect-front-panel.sh`
@@ -36,6 +48,7 @@ All notable changes to provisioning assets are documented in this file.
 
 - `README.md`
   - documented front-panel detection behavior, state file, and provisioning toggle
+  - documented the new shared LCD/profile library and the first-provision front-panel-aware G2 7-inch LCD tiebreaker
   - documented the new custom and Laurence-style single-DSI 7-inch LCD profiles
 
 - `../sw_tools/p2app-control/README.md`

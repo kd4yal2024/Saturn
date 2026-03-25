@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-03-25
+
+- LCD/profile resolution now comes from shared library `scripts/saturn-lcd-lib.sh`
+- the helper now prefers the saved provisioning front-panel state file over a live re-probe
+- `scripts/saturn-lcd-helper.sh detect` now reports both `front_panel_type=` and `front_panel_source=`
+- helper auto/apply paths now use the same resolved profile that is reported to the user
+- front-panel-aware G2 7-inch auto-selection is now available on first provisioning, not only in helper/reprovision flows
+
 ## 2026-03-23
 
 - added `cm4-7-custom-jd` LCD profile to the shared helper output

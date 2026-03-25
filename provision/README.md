@@ -118,10 +118,13 @@ Notes:
 - Re-running provisioning replaces only that managed block.
 - Existing HDMI lines outside the managed block are left untouched.
 - Display profile changes generally require reboot to take effect.
+- LCD/profile detection logic is centralized in `scripts/saturn-lcd-lib.sh` so provisioning, CLI detection, and the GTK setup tool resolve profiles the same way.
 - Auto mode first preserves a known Saturn-managed profile id from the managed LCD block comment when one is present.
 - Auto mode preserves Laurence-style single-DSI 7-inch configs when it finds `dtoverlay=vc4-kms-dsi-waveshare-panel,7_0_inchC,i2c0` paired with `dtoverlay=uart3` or `dtoverlay=uart2-pi5`.
 - Auto mode preserves an existing dual-overlay CM5 7" G2 config when it finds both `dsi1/i2c0` and `dsi0/i2c1` overlay lines already present.
 - Auto mode resolves in this order: `SATURN_LCD_SIZE_INCH` -> existing Waveshare overlay in `config.txt` -> I2C probe (`i2c-10`/`i2c-0` implies 7", `i2c-1` implies 8") -> `SATURN_LCD_AUTO_DEFAULT_SIZE_INCH`.
+- After `cm` and size are known, auto mode prefers `${cm}-7-g2-single-dsi` over `${cm}-7` when front-panel detection confirms `G2V1` or `G2V2`.
+- First provisioning now installs udev rules and detects the front panel before applying the LCD profile, so the G2 7-inch tiebreaker is active on the first run instead of only on reprovision/helper use.
 - Safe dry-run example (no boot config changes):
   - `sudo SATURN_FORCE_REPROVISION=1 SATURN_LCD_PROFILE=auto SATURN_LCD_DETECT_ONLY=1 /home/pi/github/Saturn/provision/cloud-init/provision-saturn.sh`
 
@@ -143,6 +146,7 @@ Use this when:
 Behavior:
 
 - shows detected compute module, current profile, and current Waveshare overlay lines
+- shows detected front-panel type and whether it came from the saved provisioning state file or a live probe
 - previews the selected LCD profile before apply
 - creates a timestamped backup before changing `config.txt`
 - allows restore from saved LCD backups through the UI
@@ -251,6 +255,17 @@ On first boot, cloud-init processes `user-data` and executes:
 Then `provision-saturn.sh` performs:
 
 - apt package install
+- I2C/SSH/VNC enablement
+- optional udev rules install
+- optional front-panel detection
+  - runs before LCD profile application
+  - detects G2V1 by I2C device presence at `0x20`
+  - detects G2V2 by CAT response on `/dev/serial/by-id/g2-front-9600`
+  - records `G2V1`, `G2V2`, or `NONE` in `/var/lib/saturn-provision/front-panel-type`
+  - also includes `front_panel_type=...` in `/var/lib/saturn-provision/complete`
+- LCD boot profile apply
+  - uses the shared logic from `scripts/saturn-lcd-lib.sh`
+  - on 7-inch systems, prefers `cm4-7-g2-single-dsi` / `cm5-7-g2-single-dsi` when front-panel detection confirms `G2V1` or `G2V2`
 - kernel header checks/install (for XDMA build path)
 - Saturn repo sync and build of apps/tools
 - desktop launcher install
@@ -259,13 +274,6 @@ Then `provision-saturn.sh` performs:
     - `sudo bash /home/pi/github/Saturn/scripts/fix-xdma.sh`
   - that helper rebuilds for the running kernel and, when a newer same-flavor kernel is already installed, also pre-stages XDMA for that next boot
   - the helper now builds in the repo as `SATURN_USER` and reserves root only for module install/reload, which avoids leaving kernel build outputs owned by root or other mapped IDs in `linuxdriver/xdma`
-- optional udev rules install
-- optional front-panel detection
-  - runs after the udev-install step
-  - detects G2V1 by I2C device presence at `0x20`
-  - detects G2V2 by CAT response on `/dev/serial/by-id/g2-front-9600`
-  - records `G2V1`, `G2V2`, or `NONE` in `/var/lib/saturn-provision/front-panel-type`
-  - also includes `front_panel_type=...` in `/var/lib/saturn-provision/complete`
 - optional p2app-control install
   - installs tray autostart (`~/.config/autostart/P2_app-Control-tray.desktop`)
   - requires `libayatana-appindicator3-dev` and `ayatana-indicator-application`

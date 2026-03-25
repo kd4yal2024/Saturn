@@ -28,7 +28,7 @@ Current supported profiles:
 
 The profile logic is shared with Saturn provisioning by reusing helpers from:
 
-- `provision/cloud-init/provision-saturn.sh`
+- `scripts/saturn-lcd-lib.sh`
 - `scripts/detect-front-panel.sh`
 - `scripts/detect-lcd-profile.sh`
 - `scripts/saturn-lcd-helper.sh`
@@ -93,4 +93,5 @@ The UI uses:
 - LCD changes are boot-config changes and generally require reboot
 - the tool is intentionally conservative: it previews before apply and always creates a backup
 - the GTK app itself runs as the desktop user; privileged actions are performed with `pkexec`
-- the detected-state summary also includes front-panel type from `scripts/detect-front-panel.sh` when available
+- the helper prefers the saved provisioning state file at `/var/lib/saturn-provision/front-panel-type` and falls back to `scripts/detect-front-panel.sh` only when that state file is absent
+- the detected-state summary includes both `front_panel_type=` and `front_panel_source=` so saved state versus live probe is visible
