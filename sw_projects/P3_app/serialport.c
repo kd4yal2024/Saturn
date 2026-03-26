@@ -88,7 +88,7 @@ void SendStringToSerial(int Device, const char* Message)
     int Length;                                     // message length in charactera
 
     Length = strlen(Message);
-    write(Device, Message, Length);
+    { ssize_t _r = write(Device, Message, Length); (void)_r; }
 }
 
 
@@ -125,7 +125,7 @@ void* CATSerial(void *arg)
             sleep(1);                                   // allow serial to start (particularly for USB)
 
             if(atomic_load(&DeviceData->RequestID) && atomic_load(&DeviceData->DeviceActive))
-                write(DeviceHandle, "ZZZS;", 5);
+                { ssize_t _r = write(DeviceHandle, "ZZZS;", 5); (void)_r; }
         }
 
     //

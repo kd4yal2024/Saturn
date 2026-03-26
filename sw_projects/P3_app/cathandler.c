@@ -295,16 +295,23 @@ void ParseCATCmd(char* Buffer,  int Source)
             ParsedString[ByteCntr] = Buffer[ByteCntr+4];
           ParsedString[ParamLength] = 0;
 // now see if we want a non string type
-// for an integer - use atoi, but see if 1st character is numeric, + or -
+// for an integer - use strtol with error detection instead of atoi
           if (StructPtr->RXType != eStr)
           {
             ch=ParsedString[0];
             if (isNumeric(ch))
             {
+              char *ParsedIntEnd;
               ParsedType = eNum;
-              ParsedInt = atoi(ParsedString);
-// finally see if we need a bool
-              if (StructPtr->RXType == eBool)
+              errno = 0;
+              ParsedInt = strtol(ParsedString, &ParsedIntEnd, 10);
+              if(ParsedIntEnd == ParsedString || *ParsedIntEnd != '\0' || errno == ERANGE)
+              {
+                ParsedType = eNone;
+                ValidResult = false;
+              }
+// finally see if we need a bool (only when the integer parse succeeded)
+              if (ValidResult && StructPtr->RXType == eBool)
               {
                 ParsedType = eBool;
                 if (ParsedInt == 1)
@@ -658,6 +665,8 @@ void* CATHandlerThread(__attribute__((unused)) void *arg)
     char* SemicolonPosition;
     size_t RXAssemblyLength = 0;
     size_t CommandLength;
+    struct timespec RXAssemblyStartTime = {0, 0};   // when the first byte of the current incomplete frame arrived
+#define VCATASSEMBLY_TIMEOUT_S 5                    // drop incomplete CAT frame after this many seconds
     size_t RemainingLength;
     char SendBuffer[1024] = {0};
     unsigned int TXMessageLength;
@@ -744,11 +753,25 @@ void* CATHandlerThread(__attribute__((unused)) void *arg)
           ReadResult = recv(CATSocketid, ReadBuffer, sizeof(ReadBuffer), 0);
           if(ReadResult > 0)
           {
+              // Age-out stale incomplete frame before appending new data.
+              if(RXAssemblyLength > 0)
+              {
+                  struct timespec Now;
+                  clock_gettime(CLOCK_MONOTONIC, &Now);
+                  if((Now.tv_sec - RXAssemblyStartTime.tv_sec) >= VCATASSEMBLY_TIMEOUT_S)
+                  {
+                      printf("CAT assembly timeout: dropping %zu stale bytes\n", RXAssemblyLength);
+                      RXAssemblyLength = 0;
+                  }
+              }
               if((RXAssemblyLength + (size_t)ReadResult) >= sizeof(RXAssembly))
               {
                   // Defensive reset if peer sends malformed/oversized CAT stream without terminators.
                   RXAssemblyLength = 0;
               }
+              // Record arrival time when buffer transitions from empty to non-empty.
+              if(RXAssemblyLength == 0)
+                  clock_gettime(CLOCK_MONOTONIC, &RXAssemblyStartTime);
               memcpy(RXAssembly + RXAssemblyLength, ReadBuffer, (size_t)ReadResult);
               RXAssemblyLength += (size_t)ReadResult;
               RXAssembly[RXAssemblyLength] = 0;
@@ -781,6 +804,9 @@ void* CATHandlerThread(__attribute__((unused)) void *arg)
                       memmove(RXAssembly, RXAssembly + CommandLength, RemainingLength);
                   RXAssemblyLength = RemainingLength;
                   RXAssembly[RXAssemblyLength] = 0;
+                  // Reset timestamp; next incomplete fragment gets a fresh start time.
+                  if(RXAssemblyLength == 0)
+                      RXAssemblyStartTime.tv_sec = 0;
               }
           }
           else if(ReadResult == 0)

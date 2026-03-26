@@ -3,7 +3,7 @@
 This document records the code-safety, concurrency, and runtime-hardening
 changes applied to `P3_app`, and why each change was made.
 
-Latest update: 2026-03-16
+Latest update: 2026-03-25
 
 ## Goals
 
@@ -14,6 +14,34 @@ Latest update: 2026-03-16
 - Improve steady-state datapath efficiency without changing protocol framing or
   socket/stream semantics.
 - Add optional true independent alias socket ports while preserving late-P2 compatibility for Thetis and piHPSDR (shared-port behavior remains default unless distinct alias ports are explicitly requested).
+
+## CAT Parse And Residue Hardening (2026-03-25)
+
+What changed:
+
+- `cathandler.c` now parses numeric CAT parameters with `strtol(...)` instead of
+  `atoi(...)`, rejecting malformed payloads, overflow, and trailing junk before
+  dispatch.
+- The TCP CAT assembly buffer now drops incomplete fragments that sit for more
+  than 5 seconds without reaching a semicolon terminator.
+- `OutDDCIQ.c` now guards both residue-compaction pointer subtractions with an
+  explicit `ResidueBytes > VBASE` check and discards impossible residue instead
+  of copying below the start of the staging window.
+- The default `Makefile` now adds `-Wformat-security`,
+  `-fstack-protector-strong`, and `-D_FORTIFY_SOURCE=2`.
+
+Why:
+
+- CAT input arrives from the network and should fail closed on malformed numeric
+  parameters.
+- Residue compaction relies on a 4 KiB headroom window; explicit guards make
+  that assumption visible and recoverable.
+- The extra compiler flags raise the default baseline for field builds without
+  changing protocol behavior.
+
+Verification:
+
+- `make -C /home/pi/github/Saturn/sw_projects/P3_app clean all`
 
 ## High-Priority ADC Peak Telemetry (2026-03-16)
 

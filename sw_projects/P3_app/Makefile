@@ -4,7 +4,8 @@
 
 CC = gcc
 LD = gcc
-CFLAGS = -Wall -Wextra -Wno-unused-function -O2 -g -D_GNU_SOURCE
+CFLAGS = -Wall -Wextra -Wno-unused-function -O2 -g -D_GNU_SOURCE \
+         -Wformat-security -fstack-protector-strong -D_FORTIFY_SOURCE=2
 DEPFLAGS = -MMD -MP
 LDFLAGS = -lm -lpthread
 .DEFAULT_GOAL := all

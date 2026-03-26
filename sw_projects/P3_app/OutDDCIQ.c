@@ -505,12 +505,24 @@ void *OutgoingDDCIQ(void *arg)
                 {
                     if (ResidueBytes != 0) 		// if there is residue to move
                     {
-                        memcpy(IQBasePtr[DDC] - ResidueBytes, IQReadPtr[DDC], ResidueBytes);
-                        IQReadPtr[DDC] = IQBasePtr[DDC] - ResidueBytes;
+                        if(ResidueBytes > VBASE)                                    // guard: subtraction would go below buffer start
+                        {
+                            printf("OutDDCIQ: IQ residue %u > VBASE, discarding\n", (unsigned)ResidueBytes);
+                            IQReadPtr[DDC] = IQBasePtr[DDC];
+                            IQHeadPtr[DDC] = IQBasePtr[DDC];
+                        }
+                        else
+                        {
+                            memcpy(IQBasePtr[DDC] - ResidueBytes, IQReadPtr[DDC], ResidueBytes);
+                            IQReadPtr[DDC] = IQBasePtr[DDC] - ResidueBytes;
+                            IQHeadPtr[DDC] = IQBasePtr[DDC];                        // ready for new data at base
+                        }
                     }
                     else
+                    {
                         IQReadPtr[DDC] = IQBasePtr[DDC];
-                    IQHeadPtr[DDC] = IQBasePtr[DDC];                            // ready for new data at base
+                        IQHeadPtr[DDC] = IQBasePtr[DDC];
+                    }
                 }
             }
             //
@@ -665,12 +677,24 @@ void *OutgoingDDCIQ(void *arg)
             {
                 if (ResidueBytes != 0) 		// if there is residue to move
                 {
-                    memcpy(DMABasePtr - ResidueBytes, DMAReadPtr, ResidueBytes);
-                    DMAReadPtr = DMABasePtr - ResidueBytes;
+                    if(ResidueBytes > VBASE)                            // guard: subtraction would go below buffer start
+                    {
+                        printf("OutDDCIQ: DMA residue %u > VBASE, discarding\n", (unsigned)ResidueBytes);
+                        DMAReadPtr = DMABasePtr;
+                        DMAHeadPtr = DMABasePtr;
+                    }
+                    else
+                    {
+                        memcpy(DMABasePtr - ResidueBytes, DMAReadPtr, ResidueBytes);
+                        DMAReadPtr = DMABasePtr - ResidueBytes;
+                        DMAHeadPtr = DMABasePtr;                        // ready for new data at base
+                    }
                 }
                 else
+                {
                     DMAReadPtr = DMABasePtr;
-                DMAHeadPtr = DMABasePtr;                            // ready for new data at base
+                    DMAHeadPtr = DMABasePtr;
+                }
             }
         }     // end of while(!InitError) loop
     }

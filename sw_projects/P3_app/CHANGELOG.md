@@ -2,6 +2,34 @@
 
 All notable changes to `P3_app` from this hardening pass are documented here.
 
+## [2026-03-25] CAT Parse Hardening, Residue Guards, and Build Flags
+
+### Changed
+
+- Replaced CAT numeric parameter parsing in `cathandler.c` with `strtol(...)`
+  so malformed numeric payloads, overflow, and trailing junk are rejected
+  before any handler runs.
+- Added a 5-second timeout for incomplete TCP CAT command fragments in the CAT
+  assembly buffer, so stale partial frames are dropped instead of lingering
+  indefinitely.
+- Added explicit `ResidueBytes > VBASE` guards in `OutDDCIQ.c` before pointer
+  subtraction in both the IQ residue and DMA residue compaction paths.
+- Enabled additional compiler hardening flags in the default `P3_app` build:
+  `-Wformat-security`, `-fstack-protector-strong`, and
+  `-D_FORTIFY_SOURCE=2`.
+
+### Fixed
+
+- Fixed the DDC residue compaction refactor so both read and head pointers are
+  reset consistently on the zero-residue path, preventing stale-buffer reuse
+  after a fully drained batch.
+- Cleared the remaining unchecked `write(...)` warnings in `serialport.c` so
+  the hardened build remains warning-free.
+
+### Verified
+
+- `make -C /home/pi/github/Saturn/sw_projects/P3_app clean all`
+
 ## [2026-03-23] TX DUC Queue Decoupling And Telemetry
 
 ### Changed
