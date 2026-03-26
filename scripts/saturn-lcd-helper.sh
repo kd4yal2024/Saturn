@@ -73,14 +73,14 @@ read_front_panel_type() {
   if [[ -f "$SATURN_FRONT_PANEL_STATE_FILE" ]]; then
     result="$(tr -d '[:space:]' < "$SATURN_FRONT_PANEL_STATE_FILE" 2>/dev/null || true)"
     case "$result" in
-      G2V1|G2V2|NONE) printf '%s|state-file\n' "$result"; return ;;
+      G2V1|G2V2|RemoteHead|NONE) printf '%s|state-file\n' "$result"; return ;;
     esac
   fi
 
   if [[ -x "$FRONT_PANEL_DETECT_SCRIPT" ]]; then
     result="$("$FRONT_PANEL_DETECT_SCRIPT" 2>/dev/null | tr -d '\r\n' || true)"
     case "$result" in
-      G2V1|G2V2|NONE) printf '%s|live-probe\n' "$result"; return ;;
+      G2V1|G2V2|RemoteHead|NONE) printf '%s|live-probe\n' "$result"; return ;;
     esac
   fi
 

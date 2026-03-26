@@ -905,7 +905,7 @@ detect_front_panel() {
 
   detected="$(bash "$script" 2>/dev/null | tr -d '\r\n' || true)"
   case "$detected" in
-    G2V1|G2V2|NONE)
+    G2V1|G2V2|RemoteHead|NONE)
       SATURN_FRONT_PANEL_TYPE="$detected"
       install -d -m 0755 "$(dirname "$SATURN_FRONT_PANEL_STATE_FILE")"
       printf '%s\n' "$SATURN_FRONT_PANEL_TYPE" >"$SATURN_FRONT_PANEL_STATE_FILE"

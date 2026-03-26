@@ -123,7 +123,7 @@ Notes:
 - Auto mode preserves Laurence-style single-DSI 7-inch configs when it finds `dtoverlay=vc4-kms-dsi-waveshare-panel,7_0_inchC,i2c0` paired with `dtoverlay=uart3` or `dtoverlay=uart2-pi5`.
 - Auto mode preserves an existing dual-overlay CM5 7" G2 config when it finds both `dsi1/i2c0` and `dsi0/i2c1` overlay lines already present.
 - Auto mode resolves in this order: `SATURN_LCD_SIZE_INCH` -> existing Waveshare overlay in `config.txt` -> I2C probe (`i2c-10`/`i2c-0` implies 7", `i2c-1` implies 8") -> `SATURN_LCD_AUTO_DEFAULT_SIZE_INCH`.
-- After `cm` and size are known, auto mode prefers `${cm}-7-g2-single-dsi` over `${cm}-7` when front-panel detection confirms `G2V1` or `G2V2`.
+- After `cm` and size are known, auto mode prefers `${cm}-7-g2-single-dsi` over `${cm}-7` when front-panel detection confirms `G2V1` or `G2V2`; `RemoteHead` does not trigger the G2 LCD tiebreaker.
 - First provisioning now installs udev rules and detects the front panel before applying the LCD profile, so the G2 7-inch tiebreaker is active on the first run instead of only on reprovision/helper use.
 - Safe dry-run example (no boot config changes):
   - `sudo SATURN_FORCE_REPROVISION=1 SATURN_LCD_PROFILE=auto SATURN_LCD_DETECT_ONLY=1 /home/pi/github/Saturn/provision/cloud-init/provision-saturn.sh`
@@ -259,9 +259,10 @@ Then `provision-saturn.sh` performs:
 - optional udev rules install
 - optional front-panel detection
   - runs before LCD profile application
-  - detects G2V1 by I2C device presence at `0x20`
-  - detects G2V2 by CAT response on `/dev/serial/by-id/g2-front-9600`
-  - records `G2V1`, `G2V2`, or `NONE` in `/var/lib/saturn-provision/front-panel-type`
+  - detects G2V1 by an MCP23017-compatible register response (`IODIR_A == 0xFF`) at I2C address `0x20`
+  - detects G2V2 by `ZZZS05...` CAT response on `/dev/serial/by-id/g2-front-9600`
+  - detects `RemoteHead` by `ZZZS08...` CAT response on `/dev/serial/by-id/g2-front-9600`
+  - records `G2V1`, `G2V2`, `RemoteHead`, or `NONE` in `/var/lib/saturn-provision/front-panel-type`
   - also includes `front_panel_type=...` in `/var/lib/saturn-provision/complete`
 - LCD boot profile apply
   - uses the shared logic from `scripts/saturn-lcd-lib.sh`

@@ -15,7 +15,7 @@ All notable changes to provisioning assets are documented in this file.
   - LCD auto mode now prefers `cm4-7-g2-single-dsi` / `cm5-7-g2-single-dsi` over the generic 7-inch profile when front-panel detection confirms `G2V1` or `G2V2`
   - moved udev install and front-panel detection ahead of LCD profile application so the G2 7-inch tiebreaker is active on the first provisioning run
   - added `SATURN_DETECT_FRONT_PANEL` (default `1`)
-  - front-panel detection now records `G2V1`, `G2V2`, or `NONE` in provisioning state
+  - front-panel detection now records `G2V1`, `G2V2`, `RemoteHead`, or `NONE` in provisioning state
 
 - `../scripts/saturn-lcd-lib.sh`
   - new shared shell library for LCD/profile detection, rendering, and config application
@@ -38,11 +38,14 @@ All notable changes to provisioning assets are documented in this file.
   - `detect` output now includes both `front_panel_type=` and `front_panel_source=`
   - `apply --profile auto` now reports and writes the same resolved profile
   - now lists the custom and Laurence-style single-DSI 7-inch profiles alongside the existing generic and dual-DSI profiles
+  - now accepts saved or live `RemoteHead` front-panel results in detection output
 
 - `../scripts/detect-front-panel.sh`
   - added a standalone front-panel detector
-  - G2V1 detection probes I2C address `0x20`
+  - G2V1 detection now checks for an MCP23017-compatible `IODIR_A == 0xFF` register response at I2C address `0x20`
+  - serial detection now retries once before returning `NONE`
   - G2V2 detection sends `ZZZS;` to `/dev/serial/by-id/g2-front-9600` and looks for `ZZZS05`
+  - `RemoteHead` detection sends `ZZZS;` to `/dev/serial/by-id/g2-front-9600` and looks for `ZZZS08`
 
 ### Documentation
 

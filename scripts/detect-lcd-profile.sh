@@ -23,7 +23,7 @@ Environment:
   SATURN_LCD_SIZE_INCH=7|8
   SATURN_LCD_AUTO_DEFAULT_SIZE_INCH=7|8
   SATURN_LCD_I2C_DETECT_ADDR=0x45
-  SATURN_FRONT_PANEL_TYPE=G2V1|G2V2|NONE  (tiebreaker: G2V1/G2V2 on 7-inch → g2-single-dsi)
+  SATURN_FRONT_PANEL_TYPE=G2V1|G2V2|RemoteHead|NONE  (tiebreaker: G2V1/G2V2 on 7-inch → g2-single-dsi; RemoteHead is recorded but does not change LCD profile)
 
 Output (default):
   size=<7|8|unknown>
