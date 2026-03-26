@@ -34,6 +34,19 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
 - Default Custom Scripts startup seeding now also includes `fix-LED-power-button.sh`, exposing the front-panel LED/power-button repair helper in the web manager.
 
 ### Changed
+- Appliance update policy now includes `healthcheck_retries` and
+  `healthcheck_initial_delay_secs`, allowing staged repo switches and rollback
+  probes to tolerate slower local service startup before declaring health-check
+  failure.
+- Startup repo-root resolution now canonicalizes both the default root and any
+  saved `repo_root.txt` path before Saturn repo validation, closing symlink
+  bypasses in the early startup path.
+- Browser-managed custom script metadata is now bounded at load and write time:
+  script count, flag count, and flag length are capped, and oversized
+  `custom_scripts.json` files are rejected before deserialization.
+- Full restore tar preflight now parses verbose tar listings so restore can
+  validate archive paths and symlink targets, measure uncompressed size, reject
+  extreme expansion ratios, and check `/tmp` free space before extraction.
 - Update G2 now runs the shutdown waiter installer plus
   `fix-LED-power-button.sh` as part of the maintenance flow.
 - `setup-eth-fallback.sh` remains available in Custom Scripts, but no longer
@@ -107,6 +120,11 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
 - FPGA flash live log polling now serializes in the browser and batches DOM updates to avoid overlapping fetch/render cycles during high-volume `load-FPGA` output.
 
 ### Fixed
+- Appliance update and rollback health checks no longer fail on the first
+  transient timeout by default; the local health probe can now wait and retry
+  according to normalized policy values.
+- Full restore now rejects unsafe symlink targets and archives that would
+  over-expand or exceed current `/tmp` free space before extraction begins.
 - `update-G2.py`: verbose mode now preserves captured command output used by status sections (fixes `Size: ?` and `Commit: ?` cases).
 - `update-G2.py`: library install now checks which APT packages are actually missing before attempting privileged installs.
 - `update-G2.py`: privileged steps now use adaptive sudo behavior (`sudo` with TTY, `sudo -n` without TTY) with clearer failure messages.

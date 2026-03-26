@@ -99,12 +99,16 @@ Conflict behavior (`409`):
 - `channel`, `stable_ref`, `beta_ref`, `custom_ref`
 - `auto_snapshot`, `keep_snapshots`
 - `healthcheck_url`, `healthcheck_timeout_secs`
+- `healthcheck_retries`
+- `healthcheck_initial_delay_secs`
 
 Normalization rules:
 
 - invalid owner/repo/remote/ref values are sanitized to safe defaults
 - `keep_snapshots` is clamped to `1..50`
 - `healthcheck_timeout_secs` is clamped to `2..30`
+- `healthcheck_retries` is clamped to `0..5`
+- `healthcheck_initial_delay_secs` is clamped to `0..30`
 
 Current UI behavior notes (`update.html`):
 
@@ -174,6 +178,11 @@ Restore responses:
 Restore safety checks:
 
 - upload size limit from `SATURN_RESTORE_MAX_UPLOAD_BYTES`
+- tar entries may not be absolute or contain `..`
+- symlink targets may not be absolute or contain `..`
+- the backend rejects archives whose uncompressed size exceeds the configured
+  expansion-ratio guard
+- the backend rejects archives that would exceed current `/tmp` free space
 - tar path traversal guard (reject absolute and `..` paths)
 - must extract to a single top-level directory
 - extracted top-level directory must pass Saturn repo-root validation (`.git` + `update_manager/`)

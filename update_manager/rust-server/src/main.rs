@@ -53,8 +53,18 @@ struct AppState {
 const DEFAULT_MAX_BODY_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 const DEFAULT_RESTORE_MAX_UPLOAD_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 const DEFAULT_UPDATE_HEALTH_TIMEOUT_SECS: u64 = 8;
+const DEFAULT_UPDATE_HEALTH_RETRIES: u32 = 2;
+const DEFAULT_UPDATE_HEALTH_INITIAL_DELAY_SECS: u64 = 0;
+const HEALTH_CHECK_RETRY_INTERVAL_SECS: u64 = 2;
 const DEFAULT_UPDATE_KEEP_SNAPSHOTS: usize = 5;
 const DEFAULT_STAGE_WORKTREE_KEEP: usize = 6;
+const MAX_CUSTOM_SCRIPTS: usize = 64;
+const MAX_SCRIPT_FLAG_LEN: usize = 256; // characters
+const MAX_SCRIPT_FLAGS: usize = 32;
+const MAX_TAR_EXPANSION_FACTOR: u64 = 10;
+// Upper bound on the raw JSON file to guard deserialization cost.
+// Derived from MAX_CUSTOM_SCRIPTS * (MAX_SCRIPT_FLAGS * MAX_SCRIPT_FLAG_LEN + per-entry overhead).
+const MAX_CUSTOM_SCRIPTS_FILE_BYTES: u64 = 1_048_576; // 1 MiB
 const CSRF_HEADER_NAME: &str = "x-saturn-csrf";
 const CSRF_HEADER_VALUE: &str = "1";
 const RUN_LOG_MAX_LINES: usize = 5000;
@@ -159,13 +169,18 @@ async fn main() {
         .unwrap_or(DEFAULT_MAX_BODY_BYTES)
         .min(usize::MAX as u64) as usize;
 
-    let mut repo_root = PathBuf::from(default_repo_root);
+    // Canonicalize both paths at startup to resolve symlinks before validation,
+    // so a symlink planted in SATURN_REPO_ROOT or repo_root.txt cannot bypass
+    // the is_saturn_repo_root() check.
+    let mut repo_root = tokio::fs::canonicalize(&default_repo_root).await
+        .unwrap_or_else(|_| PathBuf::from(&default_repo_root));
     if let Ok(saved) = tokio::fs::read_to_string(&repo_root_file).await {
         let saved = saved.trim();
         if !saved.is_empty() {
-            let candidate = PathBuf::from(saved);
-            if is_saturn_repo_root(&candidate) {
-                repo_root = candidate;
+            if let Ok(canonical) = tokio::fs::canonicalize(saved).await {
+                if is_saturn_repo_root(&canonical) {
+                    repo_root = canonical;
+                }
             }
         }
     }
@@ -761,12 +776,32 @@ async fn ensure_default_custom_scripts(state: &AppState) -> Result<(), String> {
 }
 
 async fn load_custom_scripts(state: &AppState) -> Result<Vec<CfgEntry>, String> {
+    // Reject oversized files before deserializing to bound memory cost.
+    match tokio::fs::metadata(&state.custom_scripts_file).await {
+        Ok(meta) if meta.len() > MAX_CUSTOM_SCRIPTS_FILE_BYTES => {
+            return Err(format!(
+                "custom_scripts.json exceeds size limit ({} bytes)",
+                meta.len()
+            ));
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        _ => {}
+    }
     let data = match tokio::fs::read_to_string(&state.custom_scripts_file).await {
         Ok(v) => v,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
         Err(e) => return Err(format!("failed to read custom scripts: {e}")),
     };
-    serde_json::from_str::<Vec<CfgEntry>>(&data).map_err(|e| format!("invalid custom scripts json: {e}"))
+    let mut entries = serde_json::from_str::<Vec<CfgEntry>>(&data)
+        .map_err(|e| format!("invalid custom scripts json: {e}"))?;
+    entries.truncate(MAX_CUSTOM_SCRIPTS);
+    // Normalize flags on every loaded entry so oversized values already on disk
+    // are clamped before they reach any handler.
+    for entry in &mut entries {
+        let sanitized = sanitize_custom_flags(entry.flags.take());
+        entry.flags = if sanitized.is_empty() { None } else { Some(sanitized) };
+    }
+    Ok(entries)
 }
 
 async fn save_custom_scripts(state: &AppState, entries: &[CfgEntry]) -> Result<(), String> {
@@ -811,7 +846,8 @@ fn sanitize_custom_flags(flags: Option<Vec<String>>) -> Vec<String> {
     flags
         .unwrap_or_default()
         .into_iter()
-        .map(|f| f.trim().to_string())
+        .take(MAX_SCRIPT_FLAGS)
+        .map(|f| f.trim().chars().take(MAX_SCRIPT_FLAG_LEN).collect::<String>())
         .filter(|f| !f.is_empty())
         .filter(|f| !f.contains('\n') && !f.contains('\r') && !f.contains('\0'))
         .collect()
@@ -899,6 +935,13 @@ struct UpdatePolicy {
     keep_snapshots: usize,
     healthcheck_url: String,
     healthcheck_timeout_secs: u64,
+    /// Number of retry attempts after an initial failure (0 = no retries).
+    #[serde(default)]
+    healthcheck_retries: u32,
+    /// Seconds to wait before the first health check attempt, allowing slow
+    /// services time to start before the first probe.
+    #[serde(default)]
+    healthcheck_initial_delay_secs: u64,
 }
 
 impl Default for UpdatePolicy {
@@ -916,6 +959,8 @@ impl Default for UpdatePolicy {
             keep_snapshots: DEFAULT_UPDATE_KEEP_SNAPSHOTS,
             healthcheck_url: "http://127.0.0.1:8080/healthz".to_string(),
             healthcheck_timeout_secs: DEFAULT_UPDATE_HEALTH_TIMEOUT_SECS,
+            healthcheck_retries: DEFAULT_UPDATE_HEALTH_RETRIES,
+            healthcheck_initial_delay_secs: DEFAULT_UPDATE_HEALTH_INITIAL_DELAY_SECS,
         }
     }
 }
@@ -1218,6 +1263,8 @@ fn normalize_update_policy(mut policy: UpdatePolicy, state: &AppState) -> Update
 
     policy.keep_snapshots = policy.keep_snapshots.clamp(1, 50);
     policy.healthcheck_timeout_secs = policy.healthcheck_timeout_secs.clamp(2, 30);
+    policy.healthcheck_retries = policy.healthcheck_retries.clamp(0, 5);
+    policy.healthcheck_initial_delay_secs = policy.healthcheck_initial_delay_secs.clamp(0, 30);
 
     let hc = policy.healthcheck_url.trim();
     if hc.is_empty() {
@@ -1514,20 +1561,90 @@ async fn prune_staged_worktrees(
     Ok(())
 }
 
-async fn health_check_url(url: &str, timeout_secs: u64) -> Result<(), String> {
-    let output = Command::new("curl")
-        .arg("-fsS")
-        .arg("--max-time")
-        .arg(timeout_secs.to_string())
-        .arg(url)
+/// Returns true if any path component is exactly `..` or if the path is absolute.
+/// Used to detect directory-traversal entries in tar archives.
+fn has_unsafe_path_component(path: &str) -> bool {
+    path.starts_with('/') || path.split('/').any(|c| c == "..")
+}
+
+/// Parses one line of GNU tar verbose (`-v`) output.
+/// Format: "PERMS OWNER SIZE DATE TIME PATH[ -> TARGET]"
+/// Returns (full_path_field, uncompressed_size_bytes).
+/// Skips exactly five whitespace-delimited tokens, then treats the remainder as
+/// the path — this correctly handles filenames that contain spaces.
+fn parse_tar_verbose_line(line: &str) -> Option<(&str, u64)> {
+    let mut rest = line;
+    for _ in 0..5 {
+        rest = rest.trim_start_matches(|c: char| c.is_ascii_whitespace());
+        if rest.is_empty() {
+            return None;
+        }
+        let token_end = rest
+            .find(|c: char| c.is_ascii_whitespace())
+            .unwrap_or(rest.len());
+        rest = &rest[token_end..];
+    }
+    let path = rest.trim_start_matches(|c: char| c.is_ascii_whitespace());
+    if path.is_empty() {
+        return None;
+    }
+    // Size is the third whitespace-separated token (index 2).
+    let size = line
+        .split_ascii_whitespace()
+        .nth(2)?
+        .parse::<u64>()
+        .ok()?;
+    Some((path, size))
+}
+
+async fn available_bytes_at(path: &str) -> Option<u64> {
+    let out = Command::new("df")
+        .arg("-B1")
+        .arg("--output=avail")
+        .arg(path)
         .output()
         .await
-        .map_err(|e| e.to_string())?;
-    if output.status.success() {
-        Ok(())
-    } else {
-        Err(format!("health check failed: {}", output_error_text(&output)))
+        .ok()?;
+    if !out.status.success() {
+        return None;
     }
+    // Output: "       Avail\n  12345678\n"
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .nth(1)?
+        .trim()
+        .parse::<u64>()
+        .ok()
+}
+
+async fn health_check_url(
+    url: &str,
+    timeout_secs: u64,
+    retries: u32,
+    initial_delay_secs: u64,
+) -> Result<(), String> {
+    if initial_delay_secs > 0 {
+        tokio::time::sleep(tokio::time::Duration::from_secs(initial_delay_secs)).await;
+    }
+    let mut last_err = String::new();
+    for attempt in 0..=retries {
+        if attempt > 0 {
+            tokio::time::sleep(tokio::time::Duration::from_secs(HEALTH_CHECK_RETRY_INTERVAL_SECS)).await;
+        }
+        let output = Command::new("curl")
+            .arg("-fsS")
+            .arg("--max-time")
+            .arg(timeout_secs.to_string())
+            .arg(url)
+            .output()
+            .await
+            .map_err(|e| e.to_string())?;
+        if output.status.success() {
+            return Ok(());
+        }
+        last_err = format!("health check failed: {}", output_error_text(&output));
+    }
+    Err(last_err)
 }
 
 async fn run_appliance_update(
@@ -1717,7 +1834,12 @@ async fn run_appliance_update(
         job.new_repo_root = Some(stage_dir.display().to_string());
     });
 
-    if let Err(e) = health_check_url(&policy.healthcheck_url, policy.healthcheck_timeout_secs).await {
+    if let Err(e) = health_check_url(
+        &policy.healthcheck_url,
+        policy.healthcheck_timeout_secs,
+        policy.healthcheck_retries,
+        policy.healthcheck_initial_delay_secs,
+    ).await {
         let _ = set_active_repo_root(&state, &active_root).await;
         let _ = remove_worktree(&active_root, &stage_dir).await;
         update_appliance_update_job(&job_id, |job| {
@@ -2808,7 +2930,12 @@ async fn update_rollback(State(state): State<AppState>) -> Response {
     }
 
     let policy = load_update_policy(&state).await.unwrap_or_else(|_| normalize_update_policy(UpdatePolicy::default(), &state));
-    if let Err(e) = health_check_url(&policy.healthcheck_url, policy.healthcheck_timeout_secs).await {
+    if let Err(e) = health_check_url(
+        &policy.healthcheck_url,
+        policy.healthcheck_timeout_secs,
+        policy.healthcheck_retries,
+        policy.healthcheck_initial_delay_secs,
+    ).await {
         let _ = set_active_repo_root(&state, &current_root).await;
         return json_error(
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -4095,9 +4222,10 @@ async fn restore_full(
         return Err(json_error(StatusCode::BAD_REQUEST, &e));
     }
 
-    // Pre-validate tar contents for traversal attempts.
+    // Pre-validate tar contents: traversal paths, sparse-bomb expansion, and available space.
+    // -tzvf gives verbose output with sizes so we can measure uncompressed bytes in one pass.
     let list_out = Command::new("tar")
-        .arg("-tzf")
+        .arg("-tzvf")
         .arg(&upload_path)
         .output()
         .await
@@ -4107,10 +4235,52 @@ async fn restore_full(
         let _ = tokio::fs::remove_file(&upload_path).await;
         return Err(json_error(StatusCode::BAD_REQUEST, &format!("tar list failed: {msg}")));
     }
+    let mut uncompressed_bytes: u64 = 0;
     for line in String::from_utf8_lossy(&list_out.stdout).lines() {
-        if line.starts_with('/') || line.contains("..") {
+        let Some((path_field, size)) = parse_tar_verbose_line(line) else {
+            continue;
+        };
+        // Symlink entries look like "linkname -> target" — check both sides.
+        let (link_name, link_target) = match path_field.find(" -> ") {
+            Some(pos) => (&path_field[..pos], Some(&path_field[pos + 4..])),
+            None => (path_field, None),
+        };
+        if has_unsafe_path_component(link_name) {
             let _ = tokio::fs::remove_file(&upload_path).await;
             return Err(json_error(StatusCode::BAD_REQUEST, "archive contains unsafe paths"));
+        }
+        if let Some(target) = link_target {
+            if has_unsafe_path_component(target) {
+                let _ = tokio::fs::remove_file(&upload_path).await;
+                return Err(json_error(StatusCode::BAD_REQUEST, "archive contains unsafe symlink target"));
+            }
+        }
+        uncompressed_bytes = uncompressed_bytes.saturating_add(size);
+    }
+    // Sparse-archive bomb check: reject if expansion ratio exceeds the safety limit.
+    if uncompressed_bytes > upload_bytes.saturating_mul(MAX_TAR_EXPANSION_FACTOR) {
+        let _ = tokio::fs::remove_file(&upload_path).await;
+        return Err(json_error(
+            StatusCode::BAD_REQUEST,
+            &format!(
+                "archive expansion ratio too large ({} MB uncompressed from {} MB compressed)",
+                uncompressed_bytes / 1024 / 1024,
+                upload_bytes / 1024 / 1024
+            ),
+        ));
+    }
+    // Available-space check: ensure /tmp has enough room to extract.
+    if let Some(avail) = available_bytes_at("/tmp").await {
+        if uncompressed_bytes > avail {
+            let _ = tokio::fs::remove_file(&upload_path).await;
+            return Err(json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &format!(
+                    "insufficient space in /tmp: need {} MB, have {} MB",
+                    uncompressed_bytes / 1024 / 1024,
+                    avail / 1024 / 1024
+                ),
+            ));
         }
     }
 
@@ -4268,6 +4438,12 @@ async fn upsert_custom_script(State(state): State<AppState>, Json(req): Json<Cus
     if let Some(existing) = scripts.iter_mut().find(|s| s.filename == filename) {
         *existing = entry.clone();
     } else {
+        if scripts.len() >= MAX_CUSTOM_SCRIPTS {
+            return json_error(
+                StatusCode::BAD_REQUEST,
+                &format!("custom script limit ({MAX_CUSTOM_SCRIPTS}) reached"),
+            );
+        }
         scripts.push(entry.clone());
     }
 

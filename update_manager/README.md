@@ -19,16 +19,27 @@ service names still use `saturn-go` for compatibility with existing installs.
 - Server-Sent Events (SSE) script output streaming
 - Backend run-log buffering endpoint (`/run_log`) so terminal output can resume after page switches
 - Full repository backup download and restore with archive validation
+- Full restore preflight now validates tar paths and symlink targets, checks
+  uncompressed expansion ratio, and verifies `/tmp` free space before
+  extraction
 - Script backup integration: list and restore `saturn-backup-*` and `pihpsdr-backup-*` directories from Backup / Restore page
 - Runtime repo-root switching via API/UI (`/list_repo_roots`, `/set_repo_root`)
+- Startup repo-root selection canonicalizes configured and saved paths before
+  Saturn repo validation
 - G2 Update is the default landing page (`/`, `update.html`) with Appliance Update policy/start/rollback
 - Appliance Update policy panel (right side on desktop, below G2 terminal on narrow screens) stores GitHub repo URL + branch/ref + health-check values used by both Appliance Update and Run Update G2
+- Appliance Update health policy also supports retry count and initial startup
+  delay so a good staged switch is less likely to roll back on a slow first
+  probe
 - G2 Update page includes a read-only `Show App / Firmware Info` action that reports the active P2/P3 app, app version, and the latest `p2app.service` startup banner with FPGA firmware/build/date-code details
 - G2 Update page also includes `Update Web Manager Too`; when enabled, `Run Update G2` watches for repo changes under `update_manager/` and automatically launches `update-saturn-go.sh --skip-git` as a detached final step after the G2 run completes, reusing the just-updated active repo root instead of requiring a separate Saturn Go repo pull
 - Dedicated piHPSDR Update page (`pihpsdr.html`) for `update-pihpsdr.py` terminal execution
 - Dedicated deskHPSDR Update page (`deskhpsdr.html`) for `update-deskhpsdr.py` terminal execution using the active Saturn repo-root helper scripts, including the local `deskHPSDR` libgpiod v2 compatibility patch flow
 - Dedicated FPGA Flash page (`fpga.html`) for `flash_fpga.sh` using `load-FPGA` (`-b`, `-v`, `-f`) with explicit confirmation guard
 - Dedicated Custom Scripts page (`custom.html` / `index.html`) to add/update/delete runnable scripts from browser with file upload + flag metadata
+- Browser-managed custom script metadata is bounded by server-side limits
+  (script count, flag count, flag length), and oversized `custom_scripts.json`
+  files are rejected before load
 - Default browser-managed custom scripts are auto-seeded on startup:
   - `cleanup-saturn-logs.sh`
   - `cleanup-saturn-backups.sh`

@@ -78,6 +78,9 @@ Browser-managed custom scripts:
 
 - Metadata persisted at `SATURN_CUSTOM_SCRIPTS_FILE` (default `/var/lib/saturn-state/custom_scripts.json`).
 - Optional script content writes to `SATURN_SCRIPTS_DIR` (default `/opt/saturn-go/scripts`).
+- The loader enforces bounded metadata size:
+  - `custom_scripts.json` is rejected if it exceeds the backend size cap
+  - script count, flag count, and per-flag length are clamped on load/save
 - Backend seeds default custom entries (and missing files) on startup:
   - `cleanup-saturn-logs.sh`
   - `cleanup-saturn-backups.sh`
@@ -85,6 +88,8 @@ Browser-managed custom scripts:
 ## Core State Model
 
 - Active repo root is held in memory and persisted to `repo_root.txt`.
+- Startup canonicalizes the default repo root and any saved `repo_root.txt`
+  value before Saturn repo validation.
 - Update policy is persisted in `update_policy.json`.
 - Last successful update/rollback metadata is persisted in `update_state.json`.
 - Snapshot archives are stored in `snapshots/`.
@@ -114,6 +119,8 @@ All mutating (`POST`) routes require:
   - `.git` exists
   - `update_manager/` exists
 - Restore archive is rejected if any tar entry is absolute or includes `..`.
+- Restore also rejects unsafe symlink targets, oversized expansion ratios, and
+  archives that would exceed `/tmp` free space before extraction.
 - Restore requires explicit `confirm=RESTORE` unless dry-run mode is used.
 - Script runner rejects script names containing path traversal or separators.
 
@@ -167,6 +174,8 @@ Concurrency guard:
 - Full restore (`POST /restore_full`): uploads archive to `/tmp`, validates and extracts it, then `rsync --delete` into active repo root.
 - Dry-run restore (`?dry_run=1`) reports extracted tree stats without applying changes.
 - Full restore requires extracted top-level directory to pass Saturn repo-root validation (`.git` + `update_manager/`).
+- Full restore preflight also validates symlink targets plus decompressed size
+  and `/tmp` free space before extraction.
 - Non-dry-run full restore acquires the shared update-activity lock and returns `409 Conflict` if another update action is active.
 - Update G2 directory backups (`GET /g2_backups`, `POST /g2_restore`): lists `saturn-backup-*` directories under backend `$HOME` and restores selected backup into active repo root with validation and confirm guard.
 - piHPSDR directory backups (`GET /pihpsdr_backups`, `POST /pihpsdr_restore`): lists `pihpsdr-backup-*` directories under backend `$HOME` and restores selected backup into configured piHPSDR checkout.
