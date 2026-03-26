@@ -23,7 +23,9 @@ All notable changes to provisioning assets are documented in this file.
   - LCD I2C probe path now uses `i2cdetect -r` read-mode probing
 
 - `../sw_tools/p2app-control/install.sh`
-  - generated `p2app.service` now waits for `/dev/xdma0_user` before launching `p2app`
+  - installer now installs `/usr/local/bin/saturn-xdma-doctor.sh` as the supported XDMA diagnostic helper
+  - installer now installs `/usr/local/bin/saturn-xdma-ready.sh` and a dedicated `saturn-xdma-ready.service` gate
+  - generated `p2app.service` now depends on `saturn-xdma-ready.service` instead of owning the XDMA readiness loop directly
   - installer now waits for `p2app.service` to reach `active/running` instead of treating transient start/restart states as an immediate provisioning failure
   - if XDMA is loaded but `/dev/xdma0_user` is still missing, the installer now logs the condition and lets provisioning continue so the log points at XDMA/FPGA device enumeration instead of the tray-widget install step
 
@@ -53,9 +55,10 @@ All notable changes to provisioning assets are documented in this file.
   - documented front-panel detection behavior, state file, and provisioning toggle
   - documented the new shared LCD/profile library and the first-provision front-panel-aware G2 7-inch LCD tiebreaker
   - documented the new custom and Laurence-style single-DSI 7-inch LCD profiles
+  - documented the new XDMA readiness gate and doctor path installed with `p2app-control`
 
 - `../sw_tools/p2app-control/README.md`
-  - documented the new XDMA wait behavior and the provisioning-time troubleshooting path for `register write attempted before XDMA register device was opened`
+  - documented the new XDMA readiness gate, doctor script, and the provisioning-time troubleshooting path for `register write attempted before XDMA register device was opened`
 
 ## [2026-03-18]
 

@@ -158,6 +158,8 @@ P2_BIN="$P2_DIR/p2app"
 P3_BIN="$P3_DIR/p3app"
 
 P23_SERVICE_NAME="${P23_SERVICE_NAME:-p2app.service}"
+P23_XDMA_READY_SERVICE="${P23_XDMA_READY_SERVICE:-saturn-xdma-ready.service}"
+P23_XDMA_DOCTOR="${P23_XDMA_DOCTOR:-/usr/local/bin/saturn-xdma-doctor.sh}"
 P23_PANEL_ENV_NAME="${P23_PANEL_ENV_NAME:-SATURN_FRONT_PANEL_MODE}"
 if [[ -n "${P23_SERVICE_ARGS+x}" ]] && [[ -n "${P23_SERVICE_ARGS}" ]]; then
   P23_SERVICE_ARGS="$P23_SERVICE_ARGS"
@@ -197,6 +199,48 @@ app_deploy_bin_for(){
     p3) echo "$P23_P3_DEPLOY_BIN" ;;
     *) return 1 ;;
   esac
+}
+
+show_xdma_doctor_stage(){
+  if [[ ! -x "$P23_XDMA_DOCTOR" ]]; then
+    warn "XDMA doctor not found: $P23_XDMA_DOCTOR"
+    return 0
+  fi
+  local stage
+  stage="$("$P23_XDMA_DOCTOR" --stage-only --skip-service-check 2>/dev/null || true)"
+  info "XDMA doctor stage: ${stage:-unknown}"
+}
+
+emit_xdma_doctor_report(){
+  if [[ ! -x "$P23_XDMA_DOCTOR" ]]; then
+    warn "XDMA doctor not found: $P23_XDMA_DOCTOR"
+    return 0
+  fi
+  info "XDMA doctor report:"
+  "$P23_XDMA_DOCTOR" --skip-service-check 2>&1 | sed 's/^/  /'
+}
+
+restart_service_and_report(){
+  if (( NO_RESTART )); then
+    info "Skipping restart (--no-restart)"
+    return 0
+  fi
+
+  if ! run_root_cmd systemctl restart "$P23_SERVICE_NAME"; then
+    warn "systemctl restart failed for $P23_SERVICE_NAME"
+    emit_xdma_doctor_report
+    die "Failed to restart $P23_SERVICE_NAME"
+  fi
+
+  progress 90
+  if ! run_root_cmd systemctl --no-pager --full --lines=0 status "$P23_SERVICE_NAME" >/dev/null; then
+    warn "Restart verification failed for $P23_SERVICE_NAME"
+    emit_xdma_doctor_report
+    die "$P23_SERVICE_NAME did not restart cleanly"
+  fi
+
+  info "Service restarted: $P23_SERVICE_NAME"
+  show_xdma_doctor_stage
 }
 
 show_status(){
@@ -259,6 +303,15 @@ show_status(){
   else
     warn "Service not found: $P23_SERVICE_NAME"
   fi
+  if systemctl list-unit-files "$P23_XDMA_READY_SERVICE" >/dev/null 2>&1; then
+    local ready_active ready_result
+    ready_active="$(systemctl show -p ActiveState --value "$P23_XDMA_READY_SERVICE" 2>/dev/null || true)"
+    ready_result="$(systemctl show -p Result --value "$P23_XDMA_READY_SERVICE" 2>/dev/null || true)"
+    info "XDMA readiness gate: active_state=${ready_active:-unknown} result=${ready_result:-unknown}"
+  else
+    warn "XDMA readiness service not found: $P23_XDMA_READY_SERVICE"
+  fi
+  show_xdma_doctor_stage
   if [[ -f "$P23_OVERRIDE_FILE" ]]; then
     info "Override file: $P23_OVERRIDE_FILE"
     sed 's/^/  /' "$P23_OVERRIDE_FILE"
@@ -333,14 +386,7 @@ EOF
 
   progress 55
   run_root_cmd systemctl daemon-reload
-  if (( NO_RESTART )); then
-    info "Skipping restart (--no-restart)"
-  else
-    run_root_cmd systemctl restart "$P23_SERVICE_NAME"
-    progress 90
-    run_root_cmd systemctl --no-pager --full --lines=0 status "$P23_SERVICE_NAME" >/dev/null
-    info "Service restarted: $P23_SERVICE_NAME"
-  fi
+  restart_service_and_report
 
   progress 100
   info "Done"
@@ -400,14 +446,7 @@ revert_to_unit_default(){
 
   progress 55
   run_root_cmd systemctl daemon-reload
-  if (( NO_RESTART )); then
-    info "Skipping restart (--no-restart)"
-  else
-    run_root_cmd systemctl restart "$P23_SERVICE_NAME"
-    progress 90
-    run_root_cmd systemctl --no-pager --full --lines=0 status "$P23_SERVICE_NAME" >/dev/null
-    info "Service restarted: $P23_SERVICE_NAME"
-  fi
+  restart_service_and_report
 
   progress 100
   info "Done"

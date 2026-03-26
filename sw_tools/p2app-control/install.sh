@@ -6,12 +6,17 @@ REPO_ROOT="$(cd "$HERE/../.." && pwd)"
 
 UNIT_NAME="p2app.service"
 UNIT_PATH="/etc/systemd/system/${UNIT_NAME}"
+XDMA_READY_UNIT_NAME="saturn-xdma-ready.service"
+XDMA_READY_UNIT_PATH="/etc/systemd/system/${XDMA_READY_UNIT_NAME}"
 XDMA_REG_DEV="/dev/xdma0_user"
-P2APP_XDMA_WAIT_SECONDS="${P2APP_XDMA_WAIT_SECONDS:-20}"
 P2APP_START_TIMEOUT_SECONDS="${P2APP_START_TIMEOUT_SECONDS:-30}"
 
 P2APP_DIR="${REPO_ROOT}/sw_projects/P2_app"
 P2APP_BIN="${P2APP_DIR}/p2app"
+XDMA_DOCTOR_LOCAL="${REPO_ROOT}/scripts/saturn-xdma-doctor.sh"
+XDMA_DOCTOR_INSTALL="/usr/local/bin/saturn-xdma-doctor.sh"
+XDMA_READY_LOCAL="${REPO_ROOT}/scripts/saturn-xdma-ready.sh"
+XDMA_READY_INSTALL="/usr/local/bin/saturn-xdma-ready.sh"
 
 BIN_LOCAL="${HERE}/p2app-control"
 BIN_INSTALL="/usr/local/bin/p2app-control"
@@ -35,6 +40,13 @@ CONTROL_USER="${SUDO_USER:-${SATURN_USER:-${USER:-pi}}}"
 if [[ -z "${CONTROL_USER}" || "${CONTROL_USER}" == "root" ]]; then
   CONTROL_USER="${SATURN_USER:-pi}"
 fi
+
+TMP_XDMA_READY_UNIT=""
+TMP_UNIT=""
+TMP_RULE=""
+TMP_SUDOERS=""
+TMP_AUTOSTART=""
+trap 'rm -f "$TMP_XDMA_READY_UNIT" "$TMP_UNIT" "$TMP_RULE" "$TMP_SUDOERS" "$TMP_AUTOSTART" 2>/dev/null || true' EXIT
 
 echo "[*] Repo root: ${REPO_ROOT}"
 
@@ -63,6 +75,21 @@ make -C "$HERE"
 echo "[*] Installing widget binary -> ${BIN_INSTALL}"
 sudo install -D -m 0755 "$BIN_LOCAL" "$BIN_INSTALL"
 
+if [[ ! -x "${XDMA_DOCTOR_LOCAL}" ]]; then
+  echo "[!] ERROR: XDMA doctor script not found or not executable:"
+  echo "    ${XDMA_DOCTOR_LOCAL}"
+  exit 1
+fi
+if [[ ! -x "${XDMA_READY_LOCAL}" ]]; then
+  echo "[!] ERROR: XDMA readiness script not found or not executable:"
+  echo "    ${XDMA_READY_LOCAL}"
+  exit 1
+fi
+
+echo "[*] Installing XDMA support helpers"
+sudo install -D -m 0755 "${XDMA_DOCTOR_LOCAL}" "${XDMA_DOCTOR_INSTALL}"
+sudo install -D -m 0755 "${XDMA_READY_LOCAL}" "${XDMA_READY_INSTALL}"
+
 echo "[*] Ensuring systemd unit exists/updated -> ${UNIT_PATH}"
 
 if [[ ! -x "${P2APP_BIN}" ]]; then
@@ -71,17 +98,44 @@ if [[ ! -x "${P2APP_BIN}" ]]; then
   exit 1
 fi
 
+echo "[*] Ensuring XDMA readiness unit exists/updated -> ${XDMA_READY_UNIT_PATH}"
+TMP_XDMA_READY_UNIT="$(mktemp)"
+cat > "$TMP_XDMA_READY_UNIT" <<EOF2
+[Unit]
+Description=Saturn XDMA Readiness Gate
+After=systemd-udevd.service
+Wants=systemd-udevd.service
+
+[Service]
+Type=oneshot
+ExecStart=${XDMA_READY_INSTALL}
+User=root
+Group=root
+Environment=SATURN_XDMA_DOCTOR_PATH=${XDMA_DOCTOR_INSTALL}
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=saturn-xdma-ready
+EOF2
+
+if [[ ! -f "${XDMA_READY_UNIT_PATH}" ]] || ! sudo cmp -s "$TMP_XDMA_READY_UNIT" "$XDMA_READY_UNIT_PATH"; then
+  echo "    -> writing XDMA readiness unit file"
+  sudo install -D -m 0644 "$TMP_XDMA_READY_UNIT" "$XDMA_READY_UNIT_PATH"
+else
+  echo "    -> XDMA readiness unit already matches (no change)"
+fi
+rm -f "$TMP_XDMA_READY_UNIT"
+
 TMP_UNIT="$(mktemp)"
-cat > "$TMP_UNIT" <<EOF2
+cat > "$TMP_UNIT" <<EOF3
 [Unit]
 Description=P2_app Service for ANAN G2
-After=network-online.target
+After=network-online.target ${XDMA_READY_UNIT_NAME}
 Wants=network-online.target
+Requires=${XDMA_READY_UNIT_NAME}
 Documentation=https://github.com/kd4yal2024/Saturn
 
 [Service]
 WorkingDirectory=${P2APP_DIR}
-ExecStartPre=/bin/sh -c 'for i in \$(seq 1 ${P2APP_XDMA_WAIT_SECONDS}); do [ -e "${XDMA_REG_DEV}" ] && exit 0; sleep 1; done; echo "${XDMA_REG_DEV} not present after ${P2APP_XDMA_WAIT_SECONDS}s" >&2; exit 1'
 ExecStart=${P2APP_BIN} -s -p
 User=root
 Group=root
@@ -97,7 +151,7 @@ LimitNOFILE=4096
 
 [Install]
 WantedBy=multi-user.target
-EOF2
+EOF3
 
 if [[ ! -f "${UNIT_PATH}" ]] || ! sudo cmp -s "$TMP_UNIT" "$UNIT_PATH"; then
   echo "    -> writing unit file"
@@ -218,10 +272,13 @@ command -v update-desktop-database >/dev/null 2>&1 && \
 echo
 echo "[✓] Done."
 echo "    Widget:   ${BIN_INSTALL}"
+echo "    Doctor:   ${XDMA_DOCTOR_INSTALL}"
+echo "    XDMA gate:${XDMA_READY_INSTALL}"
 echo "    Desktop:  (legacy shortcut removed)"
 if [[ "$ENABLE_TRAY_AUTOSTART" == "1" ]]; then
   echo "    Autostart:${AUTOSTART_FILE}"
 fi
+echo "    ReadyUnit:${XDMA_READY_UNIT_PATH}"
 echo "    Unit:     ${UNIT_PATH}"
 echo "    Sudoers:  ${SUDOERS_RULE}"
 echo

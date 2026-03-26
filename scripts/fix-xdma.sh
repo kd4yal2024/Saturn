@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # fix-xdma.sh
-# Version: 2.2
+# Version: 2.3
 # Rebuild & (re)install XDMA kernel module for the running kernel and, when
 # present, pre-stage it for the newest installed kernel. Stop/start
-# p2app.service and verify it's running.
+# p2app.service, verify it's running, and emit a structured XDMA diagnosis.
 # Usage: sudo bash /home/pi/github/Saturn/scripts/fix-xdma.sh
 # Author: Jerry DeLong, KD4YAL
 
@@ -61,6 +61,19 @@ resolve_build_user(){
 resolve_build_home(){
   local user="$1"
   getent passwd "${user}" | cut -d: -f6
+}
+
+resolve_doctor_script(){
+  local uh d
+  if [[ -n "${SATURN_XDMA_DOCTOR_SCRIPT:-}" ]]; then
+    d="${SATURN_XDMA_DOCTOR_SCRIPT}"
+  elif [[ -n "${SATURN_REPO_DIR:-}" ]]; then
+    d="${SATURN_REPO_DIR}/scripts/saturn-xdma-doctor.sh"
+  else
+    uh="$(resolve_user_home)"
+    d="${uh}/github/Saturn/scripts/saturn-xdma-doctor.sh"
+  fi
+  printf "%s" "$d"
 }
 
 kernel_flavor(){
@@ -219,6 +232,21 @@ run_make_as_build_user(){
   fi
 }
 
+run_xdma_doctor(){
+  local doctor_script="${DOCTOR_SCRIPT:-}"
+  if [[ -z "$doctor_script" ]]; then
+    doctor_script="$(resolve_doctor_script)"
+  fi
+
+  if [[ ! -x "$doctor_script" ]]; then
+    warn "XDMA doctor script not found/executable: ${doctor_script}"
+    return 0
+  fi
+
+  info "Running Saturn XDMA doctor…"
+  "$doctor_script" "$@" || true
+}
+
 backup_existing_module(){
   local krel="$1" moddir stamp
   moddir="$(module_updates_dir_for_kernel "$krel")"
@@ -287,6 +315,7 @@ start_service_and_verify(){
     if service_active; then
       ok "${SERVICE_NAME} is active."
     else
+      run_xdma_doctor
       die "${SERVICE_NAME} is not active after start. Check: journalctl -u ${SERVICE_NAME} -n 50 --no-pager"
     fi
   fi
@@ -308,7 +337,10 @@ reload_xdma_module(){
     modprobe -r xdma || warn "Could not unload xdma; another process may be holding /dev/xdma*"
   fi
   info "Loading xdma…"
-  modprobe xdma || die "xdma failed to load; check dmesg"
+  if ! modprobe xdma; then
+    run_xdma_doctor --mark-modprobe-failed
+    die "xdma failed to load; see Saturn XDMA doctor output above"
+  fi
   if lsmod | awk '{print $1}' | grep -qx xdma; then
     ok "xdma loaded."
   else
@@ -325,6 +357,7 @@ main(){
   running_krel="$(uname -r)"
   BUILD_USER="$(resolve_build_user)"
   BUILD_HOME="$(resolve_build_home "${BUILD_USER}")"
+  DOCTOR_SCRIPT="$(resolve_doctor_script)"
 
   info "Running kernel: ${running_krel}"
   info "Driver: ${driver_dir}"
@@ -359,6 +392,9 @@ main(){
 
   # 5) Start service and verify
   start_service_and_verify
+
+  # 6) Emit structured diagnosis so repair ends with a classified state.
+  run_xdma_doctor
 
   # Friendly summary
   modinfo -n xdma 2>/dev/null | xargs -I{} printf "%s%s%s\n" "${CYA}" "Module file: {}" "${NC}" || true

@@ -19,6 +19,10 @@ Location in repo:
 ### Binary
 - Installs the widget binary to:
   - `/usr/local/bin/p2app-control`
+- Installs the XDMA doctor helper to:
+  - `/usr/local/bin/saturn-xdma-doctor.sh`
+- Installs the XDMA readiness helper to:
+  - `/usr/local/bin/saturn-xdma-ready.sh`
 
 ### Legacy desktop shortcut
 - Older installs may have:
@@ -35,13 +39,17 @@ Location in repo:
   - `/usr/local/bin/p2app-control --tray`
 
 ### systemd service (system-level)
+- Ensures the dedicated XDMA readiness gate exists:
+  - `/etc/systemd/system/saturn-xdma-ready.service`
 - Ensures the service exists and matches the current template:
   - `/etc/systemd/system/p2app.service`
 - Enables it at boot and starts/restarts it:
   - `systemctl enable p2app.service`
   - `systemctl start|restart p2app.service`
-- Waits up to `P2APP_XDMA_WAIT_SECONDS` seconds (default `20`) for
-  `/dev/xdma0_user` before launching `p2app`
+- Uses `saturn-xdma-ready.service` to verify:
+  - PCIe endpoint presence
+  - `xdma` module load/bind
+  - `/dev/xdma0_user`
 - Waits up to `P2APP_START_TIMEOUT_SECONDS` seconds (default `30`) for the
   service to reach `active/running` during install
 
@@ -101,6 +109,9 @@ This will:
 
 * build the widget
 * install `/usr/local/bin/p2app-control`
+* install `/usr/local/bin/saturn-xdma-doctor.sh`
+* install `/usr/local/bin/saturn-xdma-ready.sh`
+* create/update `/etc/systemd/system/saturn-xdma-ready.service`
 * create/update `/etc/systemd/system/p2app.service`
 * install scoped privilege rules for service control
 * enable + start/restart the service
@@ -177,16 +188,20 @@ build/install P2_app first, or adjust `P2APP_DIR` / `P2APP_BIN` inside
 This message means `p2app` tried to touch Saturn registers before
 `/dev/xdma0_user` was available.
 
-`install.sh` now waits for `/dev/xdma0_user` before launching `p2app` and
-does not fail provisioning just because the XDMA register device has not
-enumerated yet. If the device node still never appears, the service will keep
-retrying and the installer will log that the problem is FPGA/XDMA device
-enumeration rather than widget installation.
+`install.sh` now installs a dedicated `saturn-xdma-ready.service` gate and the
+supported diagnostic helper `/usr/local/bin/saturn-xdma-doctor.sh`.
+
+`p2app.service` now depends on the readiness gate instead of owning the XDMA
+wait loop directly. If the device node still never appears, the installer logs
+that the problem is FPGA/XDMA device enumeration rather than widget
+installation.
 
 Useful checks:
 
 ```bash
+/usr/local/bin/saturn-xdma-doctor.sh
 ls -l /dev/xdma0_user /dev/xdma/card0 2>/dev/null
+systemctl status saturn-xdma-ready.service --no-pager
 systemctl status p2app.service --no-pager
 journalctl -u p2app.service -n 100 --no-pager
 sudo bash /home/pi/github/Saturn/scripts/fix-xdma.sh

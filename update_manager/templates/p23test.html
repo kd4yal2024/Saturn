@@ -183,7 +183,7 @@
         <div>
           <div class="section-kicker">P2 / P3 Service Lab</div>
           <h1 style="margin:4px 0 6px 0; font-size: 30px;">Build, switch, and read the live workload in one place</h1>
-          <div class="muted">Hidden test page for building, deploying, and switching <code>p2app.service</code> between <code>P2_app</code> and <code>P3_app</code>.</div>
+          <div class="muted">Hidden test page for building, deploying, and switching <code>p2app.service</code> between <code>P2_app</code> and <code>P3_app</code>, with XDMA readiness gated underneath by <code>saturn-xdma-ready.service</code>.</div>
         </div>
         <div class="chip">URL: /saturn/p23test</div>
       </div>
@@ -298,8 +298,11 @@
         <h3 style="margin:0 0 8px 0; font-size:18px;">Notes</h3>
         <div class="muted note-list">
           <div>- Default service is <code>p2app.service</code>.</div>
+          <div>- Service restarts now flow through <code>saturn-xdma-ready.service</code>, so XDMA/PCIe readiness is checked before the radio app starts.</div>
+          <div>- The readiness gate is a one-shot service; after a successful run it normally shows <code>inactive (dead)</code> with a successful result.</div>
           <div>- Deploy installs binaries under <code>/opt/saturn-go/p23-apps/</code> and switches a <code>current</code> symlink.</div>
           <div>- Service switching uses a systemd drop-in override (safer than editing the main unit file).</div>
+          <div>- If a restart fails because the XDMA stack is not ready, the terminal log will include output from <code>saturn-xdma-doctor.sh</code>.</div>
           <div>- <code>Front panel mode</code> sets <code>SATURN_FRONT_PANEL_MODE</code> for P2/P3: use <code>g2</code> or <code>g2v2</code> if auto-detect picks the wrong panel.</div>
           <div>- Performance view combines host metrics with app-published counters from <code>/dev/shm</code> when available.</div>
           <div>- ADC peak telemetry is optional and writes only a latest-snapshot JSON file in <code>/dev/shm</code> while enabled.</div>
