@@ -23,6 +23,10 @@ Location in repo:
   - `/usr/local/bin/saturn-xdma-doctor.sh`
 - Installs the XDMA readiness helper to:
   - `/usr/local/bin/saturn-xdma-ready.sh`
+- Installs the XDMA repair helper copy to:
+  - `/usr/local/bin/saturn-fix-xdma.sh`
+- Installs the kernel post-install staging helper to:
+  - `/usr/local/bin/saturn-xdma-kernel-postinst.sh`
 
 ### Legacy desktop shortcut
 - Older installs may have:
@@ -41,6 +45,8 @@ Location in repo:
 ### systemd service (system-level)
 - Ensures the dedicated XDMA readiness gate exists:
   - `/etc/systemd/system/saturn-xdma-ready.service`
+- Ensures the kernel post-install hook exists:
+  - `/etc/kernel/postinst.d/saturn-xdma`
 - Ensures the service exists and matches the current template:
   - `/etc/systemd/system/p2app.service`
 - Enables it at boot and starts/restarts it:
@@ -111,6 +117,9 @@ This will:
 * install `/usr/local/bin/p2app-control`
 * install `/usr/local/bin/saturn-xdma-doctor.sh`
 * install `/usr/local/bin/saturn-xdma-ready.sh`
+* install `/usr/local/bin/saturn-fix-xdma.sh`
+* install `/usr/local/bin/saturn-xdma-kernel-postinst.sh`
+* create/update `/etc/kernel/postinst.d/saturn-xdma`
 * create/update `/etc/systemd/system/saturn-xdma-ready.service`
 * create/update `/etc/systemd/system/p2app.service`
 * install scoped privilege rules for service control
@@ -191,6 +200,11 @@ This message means `p2app` tried to touch Saturn registers before
 `install.sh` now installs a dedicated `saturn-xdma-ready.service` gate and the
 supported diagnostic helper `/usr/local/bin/saturn-xdma-doctor.sh`.
 
+It also installs a kernel post-install hook (`/etc/kernel/postinst.d/saturn-xdma`)
+that calls `/usr/local/bin/saturn-xdma-kernel-postinst.sh`, which reuses
+`/usr/local/bin/saturn-fix-xdma.sh --stage-kernel <release>` to pre-stage XDMA
+for newly installed kernels without disturbing the currently running system.
+
 `p2app.service` now depends on the readiness gate instead of owning the XDMA
 wait loop directly. If the device node still never appears, the installer logs
 that the problem is FPGA/XDMA device enumeration rather than widget
@@ -200,6 +214,7 @@ Useful checks:
 
 ```bash
 /usr/local/bin/saturn-xdma-doctor.sh
+/usr/local/bin/saturn-fix-xdma.sh --stage-kernel "$(uname -r)"
 ls -l /dev/xdma0_user /dev/xdma/card0 2>/dev/null
 systemctl status saturn-xdma-ready.service --no-pager
 systemctl status p2app.service --no-pager

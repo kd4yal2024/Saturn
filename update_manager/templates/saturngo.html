@@ -115,6 +115,16 @@
 
         <div class="text-xs opacity-75 mb-3">Note: the terminal connection may drop near the end when <code>saturn-go.service</code> restarts. Reload the page after 10-20 seconds.</div>
         <pre id="saturngo-output" style="min-height:420px; max-height:620px; overflow:auto;"></pre>
+
+        <div class="mt-5 pt-5 border-t border-white/10">
+          <h3 class="text-lg font-semibold mb-2">XDMA Doctor</h3>
+          <p class="text-sm opacity-80 mb-3">Runs the read-only Saturn XDMA doctor through the web manager's privileged helper path and shows the classified stage plus key PCIe/XDMA details.</p>
+          <div class="flex flex-wrap gap-3 items-center mb-3">
+            <button id="saturngo-xdma-run" class="btn btn-ghost px-4 py-2">Run XDMA Doctor</button>
+            <button id="saturngo-xdma-clear" class="btn btn-ghost px-4 py-2">Clear Output</button>
+          </div>
+          <pre id="saturngo-xdma-output" style="min-height:220px; max-height:340px; overflow:auto;"></pre>
+        </div>
       </div>
 
       <div class="card p-5">
@@ -194,6 +204,7 @@ const $ = (id)=>document.getElementById(id);
 const CSRF_HEADER_NAME = 'X-Saturn-CSRF';
 const CSRF_HEADER_VALUE = '1';
 const SCRIPT_NAME = 'update-saturn-go.sh';
+const XDMA_SCRIPT_NAME = 'xdma-doctor.sh';
 function withCsrf(headers = {}){ return { ...headers, [CSRF_HEADER_NAME]: CSRF_HEADER_VALUE }; }
 function show(el, on){ el.classList.toggle('hidden', !on); }
 function saveSessionJson(key, value){ try{ sessionStorage.setItem(key, JSON.stringify(value)); }catch(_e){} }
@@ -215,11 +226,13 @@ const RUN_NEXT_KEY = 'saturn:saturngo:run-next';
 const POLICY_JSON_KEY = 'saturn:saturngo:policy-json';
 const DEPLOY_STATUS_JSON_KEY = 'saturn:saturngo:deploy-status-json';
 let outLines = [];
+let xdmaOutLines = [];
 let runLogRunId = '';
 let runLogNext = 0;
 let runLogPoll = null;
 let satgoStatusPoll = null;
 let runInProgress = false;
+let xdmaRunInProgress = false;
 let satgoPolicyCache = {
   remote: 'origin',
   beta_ref: 'beta',
@@ -277,6 +290,21 @@ function appendOutput(line){
 }
 function clearRunLogPoll(){ if (runLogPoll){ clearInterval(runLogPoll); runLogPoll = null; } }
 function ensureRunLogPoll(){ if (!runLogPoll){ runLogPoll = setInterval(fetchBufferedRunLog, 1200); } }
+function refreshXdmaOutput(){
+  const out = $('saturngo-xdma-output');
+  out.innerHTML = renderAnsiLines(xdmaOutLines);
+  out.scrollTop = out.scrollHeight;
+}
+function appendXdmaOutput(line){
+  const text = String(line ?? '');
+  xdmaOutLines.push(text);
+  $('saturngo-xdma-output').innerHTML += ansiToHtml(text) + '<br>';
+  $('saturngo-xdma-output').scrollTop = $('saturngo-xdma-output').scrollHeight;
+}
+function resetXdmaOutput(){
+  xdmaOutLines = [];
+  $('saturngo-xdma-output').innerHTML = '';
+}
 function resetBufferedState(){
   runLogRunId = '';
   runLogNext = 0;
@@ -506,6 +534,10 @@ $('saturngo-clear').addEventListener('click', ()=>{
   show($('saturngo-progress'), false);
 });
 
+$('saturngo-xdma-clear').addEventListener('click', ()=>{
+  resetXdmaOutput();
+});
+
 $('saturngo-run').addEventListener('click', async ()=>{
   const btn = $('saturngo-run');
   const progress = $('saturngo-progress');
@@ -579,6 +611,56 @@ $('saturngo-run').addEventListener('click', async ()=>{
     setTimeout(loadSaturnGoDeployStatus, 5000);
     setTimeout(loadSaturnGoDeployStatus, 15000);
     setTimeout(()=>show(progress, false), 1200);
+  }
+});
+
+$('saturngo-xdma-run').addEventListener('click', async ()=>{
+  const btn = $('saturngo-xdma-run');
+  if (xdmaRunInProgress) return;
+  xdmaRunInProgress = true;
+  btn.disabled = true;
+  resetXdmaOutput();
+  appendXdmaOutput('\x1b[36mStarting ' + XDMA_SCRIPT_NAME + '...\x1b[0m');
+
+  try{
+    const fd = new FormData();
+    fd.append('script', XDMA_SCRIPT_NAME);
+
+    const res = await fetch('./run', {
+      method:'POST',
+      body: fd,
+      headers: withCsrf({'Accept':'text/event-stream'}),
+    });
+    if (!res.ok){
+      let msg = 'HTTP ' + res.status;
+      try{
+        const data = await res.json();
+        if (data && data.message) msg = data.message;
+      }catch(_e){}
+      throw new Error(msg);
+    }
+
+    const reader = res.body.getReader();
+    const dec = new TextDecoder();
+    let buf = '';
+
+    while (true){
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      const chunks = buf.split('\n\n');
+      buf = chunks.pop() || '';
+
+      for (const c of chunks){
+        if (!c.startsWith('data: ')) continue;
+        appendXdmaOutput(c.slice(6));
+      }
+    }
+  }catch(e){
+    appendXdmaOutput('\x1b[31mRun error: ' + e.message + '\x1b[0m');
+  }finally{
+    xdmaRunInProgress = false;
+    btn.disabled = false;
   }
 });
 

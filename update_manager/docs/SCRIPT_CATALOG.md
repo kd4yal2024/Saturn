@@ -19,6 +19,7 @@ UI usage notes:
 - `index.html` (Custom Scripts page) intentionally excludes `update-G2.py` from the dropdown.
 - `update.html` (G2 Update page) is the dedicated UI for running `update-G2.py` with live SSE terminal output.
 - `saturngo.html` is the dedicated UI for running `update-saturn-go.sh` (separate Saturn Go repo policy + self-redeploy workflow).
+- `saturngo.html` also exposes an `XDMA Doctor` button that runs `xdma-doctor.sh` through the same `/run` terminal path.
 - `p23test.html` is a hidden/experimental UI for testing P2/P3 app build/deploy/switch actions using `p23-app-manager.sh` (not linked in main navigation).
 - `index.html` (Custom Scripts page) intentionally excludes `update-pihpsdr.py` from the dropdown.
 - `pihpsdr.html` is the dedicated UI for running `update-pihpsdr.py` with live SSE terminal output.
@@ -61,6 +62,7 @@ Not all utilities are directly wired into current UI buttons, but are included i
 | `install-shutdown-waiter-service.sh` | Install or refresh `saturn-shutdown-waiter.service` and its default config. Used by Update G2. | `--enabled-default <mode>`, `--saturn-user <user>` |
 | `shutdown-waiter.sh` | Runtime shutdown-waiter payload installed by `install-shutdown-waiter-service.sh`. | none |
 | `update-saturn-go.sh` | Rebuild/redeploy `saturn-go` from the active Saturn repo root (used by `saturngo.html`). | `--verbose`, `--dry-run`, `--skip-git`, `--skip-build`, `--skip-deploy` |
+| `xdma-doctor.sh` | Run the classified Saturn XDMA doctor through the privileged helper path (used by `saturngo.html`). | passthrough (`--json`, `--stage-only`, `--skip-service-check` if needed) |
 | `p23-app-manager.sh` | Experimental helper to build/deploy/switch/revert P2/P3 app binaries for `p2app.service` testing (used by hidden `p23test.html`), with startup-profile and front-panel-mode override support. | `--status`, `--build p2|p3`, `--deploy p2|p3`, `--switch p2|p3`, `--revert`, `--mode panel|headless|panel-debug`, `--panel auto|g2|g2v2|prefer-g2|prefer-g2v2|off`, `--dry-run`, `--verbose`, `--no-restart`, `--no-clean` |
 | `qemu_pi_boot.sh` | Boot Raspberry Pi image in QEMU by extracting kernel/DTB and launching `qemu-system-aarch64`. | `--img`, `--work-dir`, `--memory`, `--cpus`, `--machine`, `--extra-append`, `--dry-run` |
 | `log_cleaner.sh` | Local log cleanup helper. | see above |
@@ -70,7 +72,8 @@ Not all utilities are directly wired into current UI buttons, but are included i
 - Scripts are copied from `update_manager/scripts` plus selected repo-root helper scripts during install.
 - Installer also writes `/etc/sudoers.d/saturn-go-maintenance` so the service
   user can run root-owned copies of `install-shutdown-waiter-service.sh`,
-  `setup-eth-fallback.sh`, and `fix-LED-power-button.sh` from
+  `setup-eth-fallback.sh`, `fix-LED-power-button.sh`, and
+  `saturn-xdma-doctor.sh` from
   `/usr/local/lib/saturn-go/scripts` with `sudo -n`.
 - File permissions are normalized by installer:
   - `*.sh` and `*.py` scripts are set executable.

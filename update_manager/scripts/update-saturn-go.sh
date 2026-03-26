@@ -187,6 +187,7 @@ EXTRA_PACKAGED_SCRIPTS=(
   "$REPO_ROOT/scripts/setup-eth-fallback.sh"
 )
 PRIVILEGED_HELPER_SCRIPTS=(
+  "$REPO_ROOT/scripts/saturn-xdma-doctor.sh"
   "$REPO_ROOT/scripts/fix-LED-power-button.sh"
   "$REPO_ROOT/scripts/install-shutdown-waiter-service.sh"
   "$REPO_ROOT/scripts/shutdown-waiter.sh"
@@ -424,6 +425,8 @@ ${DEPLOY_RUN_USER} ALL=(root) NOPASSWD: ${DEPLOY_PRIVILEGED_SCRIPTS_DIR}/setup-e
 ${DEPLOY_RUN_USER} ALL=(root) NOPASSWD: ${DEPLOY_PRIVILEGED_SCRIPTS_DIR}/setup-eth-fallback.sh *
 ${DEPLOY_RUN_USER} ALL=(root) NOPASSWD: ${DEPLOY_PRIVILEGED_SCRIPTS_DIR}/fix-LED-power-button.sh
 ${DEPLOY_RUN_USER} ALL=(root) NOPASSWD: ${DEPLOY_PRIVILEGED_SCRIPTS_DIR}/fix-LED-power-button.sh *
+${DEPLOY_RUN_USER} ALL=(root) NOPASSWD: ${DEPLOY_PRIVILEGED_SCRIPTS_DIR}/saturn-xdma-doctor.sh
+${DEPLOY_RUN_USER} ALL=(root) NOPASSWD: ${DEPLOY_PRIVILEGED_SCRIPTS_DIR}/saturn-xdma-doctor.sh *
 SUDOERS
 chmod 0440 "$DEPLOY_SUDOERS_FILE"
 if command -v visudo >/dev/null 2>&1; then

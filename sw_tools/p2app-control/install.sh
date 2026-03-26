@@ -17,6 +17,11 @@ XDMA_DOCTOR_LOCAL="${REPO_ROOT}/scripts/saturn-xdma-doctor.sh"
 XDMA_DOCTOR_INSTALL="/usr/local/bin/saturn-xdma-doctor.sh"
 XDMA_READY_LOCAL="${REPO_ROOT}/scripts/saturn-xdma-ready.sh"
 XDMA_READY_INSTALL="/usr/local/bin/saturn-xdma-ready.sh"
+FIX_XDMA_LOCAL="${REPO_ROOT}/scripts/fix-xdma.sh"
+FIX_XDMA_INSTALL="/usr/local/bin/saturn-fix-xdma.sh"
+XDMA_POSTINST_LOCAL="${REPO_ROOT}/scripts/saturn-xdma-kernel-postinst.sh"
+XDMA_POSTINST_INSTALL="/usr/local/bin/saturn-xdma-kernel-postinst.sh"
+XDMA_POSTINST_HOOK_PATH="/etc/kernel/postinst.d/saturn-xdma"
 
 BIN_LOCAL="${HERE}/p2app-control"
 BIN_INSTALL="/usr/local/bin/p2app-control"
@@ -46,7 +51,8 @@ TMP_UNIT=""
 TMP_RULE=""
 TMP_SUDOERS=""
 TMP_AUTOSTART=""
-trap 'rm -f "$TMP_XDMA_READY_UNIT" "$TMP_UNIT" "$TMP_RULE" "$TMP_SUDOERS" "$TMP_AUTOSTART" 2>/dev/null || true' EXIT
+TMP_POSTINST_HOOK=""
+trap 'rm -f "$TMP_XDMA_READY_UNIT" "$TMP_UNIT" "$TMP_RULE" "$TMP_SUDOERS" "$TMP_AUTOSTART" "$TMP_POSTINST_HOOK" 2>/dev/null || true' EXIT
 
 echo "[*] Repo root: ${REPO_ROOT}"
 
@@ -85,10 +91,42 @@ if [[ ! -x "${XDMA_READY_LOCAL}" ]]; then
   echo "    ${XDMA_READY_LOCAL}"
   exit 1
 fi
+if [[ ! -x "${FIX_XDMA_LOCAL}" ]]; then
+  echo "[!] ERROR: fix-xdma script not found or not executable:"
+  echo "    ${FIX_XDMA_LOCAL}"
+  exit 1
+fi
+if [[ ! -x "${XDMA_POSTINST_LOCAL}" ]]; then
+  echo "[!] ERROR: XDMA kernel postinst helper not found or not executable:"
+  echo "    ${XDMA_POSTINST_LOCAL}"
+  exit 1
+fi
 
 echo "[*] Installing XDMA support helpers"
 sudo install -D -m 0755 "${XDMA_DOCTOR_LOCAL}" "${XDMA_DOCTOR_INSTALL}"
 sudo install -D -m 0755 "${XDMA_READY_LOCAL}" "${XDMA_READY_INSTALL}"
+sudo install -D -m 0755 "${FIX_XDMA_LOCAL}" "${FIX_XDMA_INSTALL}"
+sudo install -D -m 0755 "${XDMA_POSTINST_LOCAL}" "${XDMA_POSTINST_INSTALL}"
+
+echo "[*] Ensuring kernel postinst hook exists/updated -> ${XDMA_POSTINST_HOOK_PATH}"
+TMP_POSTINST_HOOK="$(mktemp)"
+cat > "$TMP_POSTINST_HOOK" <<EOF1
+#!/bin/sh
+set -eu
+HELPER="${XDMA_POSTINST_INSTALL}"
+if [ -x "\$HELPER" ]; then
+  "\$HELPER" "\$@" || true
+fi
+exit 0
+EOF1
+
+if [[ ! -f "${XDMA_POSTINST_HOOK_PATH}" ]] || ! sudo cmp -s "$TMP_POSTINST_HOOK" "$XDMA_POSTINST_HOOK_PATH"; then
+  echo "    -> writing kernel postinst hook"
+  sudo install -D -m 0755 "$TMP_POSTINST_HOOK" "$XDMA_POSTINST_HOOK_PATH"
+else
+  echo "    -> kernel postinst hook already matches (no change)"
+fi
+rm -f "$TMP_POSTINST_HOOK"
 
 echo "[*] Ensuring systemd unit exists/updated -> ${UNIT_PATH}"
 
@@ -274,10 +312,13 @@ echo "[✓] Done."
 echo "    Widget:   ${BIN_INSTALL}"
 echo "    Doctor:   ${XDMA_DOCTOR_INSTALL}"
 echo "    XDMA gate:${XDMA_READY_INSTALL}"
+echo "    Fix XDMA: ${FIX_XDMA_INSTALL}"
+echo "    Postinst: ${XDMA_POSTINST_INSTALL}"
 echo "    Desktop:  (legacy shortcut removed)"
 if [[ "$ENABLE_TRAY_AUTOSTART" == "1" ]]; then
   echo "    Autostart:${AUTOSTART_FILE}"
 fi
+echo "    KernelHook:${XDMA_POSTINST_HOOK_PATH}"
 echo "    ReadyUnit:${XDMA_READY_UNIT_PATH}"
 echo "    Unit:     ${UNIT_PATH}"
 echo "    Sudoers:  ${SUDOERS_RULE}"

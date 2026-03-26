@@ -32,8 +32,10 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
 - Dedicated deskHPSDR Update page (`/deskhpsdr`) and `update-deskhpsdr.py` runner for live clone/update/build terminal workflow, including helper-script-driven dependency/build flags and fresh-image clone support.
 - Default Custom Scripts startup seeding now also includes `setup-eth-fallback.sh`, exposing the Ethernet APIPA fallback repair helper in the web manager.
 - Default Custom Scripts startup seeding now also includes `fix-LED-power-button.sh`, exposing the front-panel LED/power-button repair helper in the web manager.
+- Saturn Go page now includes an `XDMA Doctor` action that runs a classified read-only PCIe/XDMA report through the existing privileged helper lane.
 
 ### Changed
+- Saturn Go installer/self-update now also deploys the root-owned `saturn-xdma-doctor.sh` helper into `/usr/local/lib/saturn-go/scripts` and extends the narrow sudoers policy so the non-root web service can invoke it via `/opt/saturn-go/scripts/xdma-doctor.sh`.
 - Appliance update policy now includes `healthcheck_retries` and
   `healthcheck_initial_delay_secs`, allowing staged repo switches and rollback
   probes to tolerate slower local service startup before declaring health-check

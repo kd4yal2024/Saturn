@@ -33,6 +33,7 @@ This directory contains provisioning assets for cloud-init based setup of a Satu
 - installs desktop launchers (deprecated `P2app.desktop` is removed and not reinstalled)
 - optionally builds/installs XDMA
 - leaves `/home/pi/github/Saturn/scripts/fix-xdma.sh` available for later XDMA rebuilds after kernel updates
+- optional `p2app-control` install also adds a kernel post-install hook so future kernel upgrades can pre-stage XDMA automatically
 - optionally installs udev rules
 - optionally installs `p2app-control` tray control (AppIndicator-based)
 - optionally installs Update Manager
@@ -280,6 +281,8 @@ Then `provision-saturn.sh` performs:
   - requires `libayatana-appindicator3-dev` and `ayatana-indicator-application`
   - installs `/usr/local/bin/saturn-xdma-doctor.sh` as the supported XDMA diagnostic helper
   - installs `/usr/local/bin/saturn-xdma-ready.sh` plus `saturn-xdma-ready.service` as the dedicated XDMA readiness gate
+  - installs `/usr/local/bin/saturn-fix-xdma.sh` and `/usr/local/bin/saturn-xdma-kernel-postinst.sh`
+  - installs `/etc/kernel/postinst.d/saturn-xdma` so future kernel package installs pre-stage `xdma.ko` without unloading the live module or restarting `p2app.service`
   - generated `p2app.service` now depends on `saturn-xdma-ready.service` instead of owning the XDMA readiness loop directly
   - installer now waits for `p2app.service` to reach `active/running`
   - if the XDMA kernel module is loaded but `/dev/xdma0_user` is still missing, provisioning logs the condition and continues instead of failing the whole run at the `p2app-control` step

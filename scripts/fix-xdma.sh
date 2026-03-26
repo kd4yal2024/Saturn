@@ -1,15 +1,22 @@
 #!/usr/bin/env bash
 # fix-xdma.sh
-# Version: 2.3
+# Version: 2.4
 # Rebuild & (re)install XDMA kernel module for the running kernel and, when
 # present, pre-stage it for the newest installed kernel. Stop/start
 # p2app.service, verify it's running, and emit a structured XDMA diagnosis.
-# Usage: sudo bash /home/pi/github/Saturn/scripts/fix-xdma.sh
+# Supports a stage-only kernel mode for post-install hooks that must not touch
+# the live module or service.
+# Usage:
+#   sudo bash /home/pi/github/Saturn/scripts/fix-xdma.sh
+#   sudo bash /home/pi/github/Saturn/scripts/fix-xdma.sh --stage-kernel <kernel-release>
 # Author: Jerry DeLong, KD4YAL
 
 set -euo pipefail
 
 SERVICE_NAME="p2app.service"
+STAGE_ONLY=0
+TARGET_KERNELS=()
+LOCK_FD=""
 
 RED=$'\033[0;31m'; GRN=$'\033[0;32m'; YLW=$'\033[0;33m'; CYA=$'\033[0;36m'; NC=$'\033[0m'
 info(){ printf "${CYA}[INFO]${NC} %s\n" "$*"; }
@@ -17,6 +24,42 @@ ok()  { printf "${GRN}[ OK ]${NC} %s\n" "$*"; }
 warn(){ printf "${YLW}[WARN]${NC} %s\n" "$*"; }
 die(){ printf "${RED}[ERR ] %s${NC}\n" "$*" >&2; exit 1; }
 have(){ command -v "$1" >/dev/null 2>&1; }
+
+usage(){
+  cat <<'EOF'
+Usage:
+  sudo bash /home/pi/github/Saturn/scripts/fix-xdma.sh
+  sudo bash /home/pi/github/Saturn/scripts/fix-xdma.sh --stage-kernel <kernel-release>
+
+Options:
+  --stage-kernel <kernel-release>  Build/install XDMA only for the named kernel
+                                   without stopping p2app, unloading xdma, or
+                                   touching the live running system.
+  -h, --help                       Show this help text.
+EOF
+}
+
+parse_args(){
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --stage-kernel)
+        [[ $# -ge 2 ]] || die "--stage-kernel requires a kernel release argument"
+        [[ -n "${2:-}" ]] || die "--stage-kernel requires a non-empty kernel release argument"
+        [[ "${2}" =~ ^[0-9][A-Za-z0-9._+-]*$ ]] || die "--stage-kernel: invalid release format: ${2}"
+        STAGE_ONLY=1
+        TARGET_KERNELS+=("$2")
+        shift 2
+        ;;
+      -h|--help)
+        usage
+        exit 0
+        ;;
+      *)
+        die "Unknown argument: $1"
+        ;;
+    esac
+  done
+}
 
 need_root(){ [[ $(id -u) -eq 0 ]] || die "Please run as root (sudo)."; }
 
@@ -132,6 +175,11 @@ warn_if_newer_kernel_installed(){
 }
 
 target_kernels(){
+  if [[ ${#TARGET_KERNELS[@]} -gt 0 ]]; then
+    printf "%s\n" "${TARGET_KERNELS[@]}"
+    return 0
+  fi
+
   local running_krel latest_krel running_flavor
   running_krel="$(uname -r)"
   running_flavor="$(kernel_flavor "$running_krel")"
@@ -230,6 +278,20 @@ run_make_as_build_user(){
       make "$@" 2>&1 | \
       awk '!/Makefile:[0-9]+: XVC_FLAGS: \./ && !/Warning: modules_install: missing '\''System.map'\'' file\. Skipping depmod\./ { print }'
   fi
+}
+
+acquire_build_lock(){
+  local lock_file="${SATURN_XDMA_BUILD_LOCK:-/var/lock/saturn-xdma-build.lock}"
+
+  if ! have flock; then
+    warn "flock not found; proceeding without an XDMA build lock."
+    return 0
+  fi
+
+  install -d -m 0755 "$(dirname "$lock_file")" 2>/dev/null || true
+  exec {LOCK_FD}> "$lock_file"
+  flock -x "$LOCK_FD"
+  info "Acquired XDMA build lock: ${lock_file}"
 }
 
 run_xdma_doctor(){
@@ -349,8 +411,12 @@ reload_xdma_module(){
 }
 
 main(){
+  parse_args "$@"
   need_root
-  warn_if_newer_kernel_installed
+  acquire_build_lock
+  if (( ! STAGE_ONLY )); then
+    warn_if_newer_kernel_installed
+  fi
 
   local driver_dir running_krel
   driver_dir="$(resolve_driver_dir)"
@@ -372,6 +438,17 @@ main(){
     [[ -n "$krel" ]] || continue
     ensure_headers "$krel"
   done < <(target_kernels)
+
+  if (( STAGE_ONLY )); then
+    info "Stage-only mode: building/staging XDMA without touching the live module or service."
+    cd "${driver_dir}"
+    while IFS= read -r krel; do
+      [[ -n "$krel" ]] || continue
+      build_and_install_for_kernel "$krel" "${driver_dir}" "${xdma_inc}"
+    done < <(target_kernels)
+    ok "XDMA staged for kernel(s): ${TARGET_KERNELS[*]}"
+    return 0
+  fi
 
   # 1) Stop service (so it releases /dev/xdma*)
   WAS_ACTIVE=0

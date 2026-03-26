@@ -182,7 +182,8 @@ If a script entry does not define `version`, `/get_versions` now returns
   can opt in to `auto`/`true` per hardware profile.
 - Installer now writes a narrow sudoers policy for the service user so the web
   UI can execute the root-owned `install-shutdown-waiter-service.sh`,
-  `setup-eth-fallback.sh`, and `fix-LED-power-button.sh` helpers via `sudo -n`.
+  `setup-eth-fallback.sh`, `fix-LED-power-button.sh`, and
+  `saturn-xdma-doctor.sh` helpers via `sudo -n`.
 - When launched by `/run`, the backend sets `SATURN_REPO_ROOT`, `SATURN_DIR`,
   and `SATURN_ACTIVE_REPO_ROOT` to the current active repo root before spawning
   the script.
@@ -205,6 +206,7 @@ If a script entry does not define `version`, `/get_versions` now returns
   - live terminal output (`/run`)
   - separate Saturn Go repo/ref policy (`/saturngo_policy`)
   - last deploy status panel (`/saturngo_deploy_status`)
+  - an `XDMA Doctor` action for privileged read-only PCIe/XDMA diagnostics
 - The page runs `/opt/saturn-go/scripts/update-saturn-go.sh` to:
   - update the repo (optional)
   - rebuild the Rust backend (`cargo build --release`)
@@ -212,6 +214,9 @@ If a script entry does not define `version`, `/get_versions` now returns
   - sync packaged scripts into `/opt/saturn-go/scripts` without removing browser-managed extras
   - refresh trusted helper copies in `/usr/local/lib/saturn-go/scripts` and rewrite the narrow sudoers policy
   - dispatch a detached root helper to stop/copy/start `saturn-go.service`
+- The page also runs `/opt/saturn-go/scripts/xdma-doctor.sh` for a classified
+  read-only XDMA/PCIe report. That wrapper escalates to the root-owned helper
+  copy at `/usr/local/lib/saturn-go/scripts/saturn-xdma-doctor.sh`.
 - UI run options map to script flags:
   - `--verbose`, `--dry-run`, `--skip-git`, `--skip-build`, `--skip-deploy`
 - Deploy status is written to:

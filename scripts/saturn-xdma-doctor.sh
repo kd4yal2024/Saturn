@@ -107,8 +107,27 @@ collect_matching_endpoints() {
   done
 }
 
+find_module_path_on_disk() {
+  local modules_root="/lib/modules/${RUNNING_KERNEL}"
+  local candidate=""
+
+  [[ -d "$modules_root" ]] || return 0
+
+  while IFS= read -r candidate; do
+    printf '%s' "$candidate"
+    return 0
+  done < <(
+    find "$modules_root" -type f \
+      \( -name "${SATURN_XDMA_MODULE}.ko" -o -name "${SATURN_XDMA_MODULE}.ko.xz" \) \
+      -print 2>/dev/null | sort | head -n1
+  )
+}
+
 detect_module_state() {
   MODULE_PATH="$(modinfo -k "$RUNNING_KERNEL" -n "$SATURN_XDMA_MODULE" 2>/dev/null || true)"
+  if [[ -z "$MODULE_PATH" || ! -e "$MODULE_PATH" ]]; then
+    MODULE_PATH="$(find_module_path_on_disk)"
+  fi
   if [[ -n "$MODULE_PATH" && -e "$MODULE_PATH" ]]; then
     MODULE_INSTALLED_FOR_KERNEL=1
   else
@@ -221,15 +240,15 @@ determine_stage() {
   if [[ "${#ENDPOINT_PATHS[@]}" -eq 0 ]]; then
     STAGE="PCIE_ENDPOINT_MISSING"
     STAGE_SUMMARY="No Saturn FPGA PCIe endpoint (10ee:7024) is visible. This is upstream of XDMA."
-  elif [[ "$MODULE_INSTALLED_FOR_KERNEL" -ne 1 ]]; then
-    STAGE="XDMA_MODULE_NOT_INSTALLED_FOR_KERNEL"
-    STAGE_SUMMARY="The xdma module is not installed for the running kernel."
   elif [[ "$MARK_MODPROBE_FAILED" -eq 1 && "$MODULE_LOADED" -ne 1 ]]; then
     STAGE="XDMA_MODPROBE_FAILED"
     STAGE_SUMMARY="A prior modprobe attempt failed and xdma is still not loaded."
   elif [[ "$MODPROBE_ATTEMPTED" -eq 1 && "$MODPROBE_EXIT_CODE" -ne 0 ]]; then
     STAGE="XDMA_MODPROBE_FAILED"
     STAGE_SUMMARY="modprobe xdma failed."
+  elif [[ "$MODULE_INSTALLED_FOR_KERNEL" -ne 1 && "$MODULE_LOADED" -ne 1 ]]; then
+    STAGE="XDMA_MODULE_NOT_INSTALLED_FOR_KERNEL"
+    STAGE_SUMMARY="The xdma module is not installed for the running kernel."
   elif [[ "$MODULE_LOADED" -ne 1 ]]; then
     STAGE="XDMA_MODULE_NOT_LOADED"
     STAGE_SUMMARY="The xdma module is installed for this kernel but is not currently loaded."

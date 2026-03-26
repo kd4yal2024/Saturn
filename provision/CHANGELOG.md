@@ -25,6 +25,8 @@ All notable changes to provisioning assets are documented in this file.
 - `../sw_tools/p2app-control/install.sh`
   - installer now installs `/usr/local/bin/saturn-xdma-doctor.sh` as the supported XDMA diagnostic helper
   - installer now installs `/usr/local/bin/saturn-xdma-ready.sh` and a dedicated `saturn-xdma-ready.service` gate
+  - installer now installs `/usr/local/bin/saturn-fix-xdma.sh` plus `/usr/local/bin/saturn-xdma-kernel-postinst.sh`
+  - installer now installs `/etc/kernel/postinst.d/saturn-xdma` so future kernel installs can pre-stage XDMA without touching the live module/service
   - generated `p2app.service` now depends on `saturn-xdma-ready.service` instead of owning the XDMA readiness loop directly
   - installer now waits for `p2app.service` to reach `active/running` instead of treating transient start/restart states as an immediate provisioning failure
   - if XDMA is loaded but `/dev/xdma0_user` is still missing, the installer now logs the condition and lets provisioning continue so the log points at XDMA/FPGA device enumeration instead of the tray-widget install step
