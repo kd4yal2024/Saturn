@@ -5,6 +5,9 @@
 #include <string.h>
 
 static const char *UNIT = "p2app.service";
+static const char *ICON_NAME = "p2appcontrol";
+static const char *ICON_DIR = "/usr/local/share/pixmaps";
+static const char *ICON_PATH = "/usr/local/share/pixmaps/p2appcontrol.png";
 
 typedef struct {
     gboolean tray_mode;
@@ -89,6 +92,10 @@ static gboolean is_enabled_state(const char *state) {
            g_strcmp0(state, "linked") == 0 ||
            g_strcmp0(state, "linked-runtime") == 0 ||
            g_strcmp0(state, "alias") == 0;
+}
+
+static gboolean have_custom_icon(void) {
+    return g_file_test(ICON_PATH, G_FILE_TEST_EXISTS);
 }
 
 static void privileged_systemctl(const char *verb) {
@@ -198,12 +205,21 @@ static void update_tray_state(UI *ui, const char *state, gboolean active) {
         return;
     }
 
-    if (g_strcmp0(state, "active") == 0) {
-        icon_name = "media-playback-start";
-        status_desc = "P2_app RUNNING";
-    } else if (g_strcmp0(state, "failed") == 0) {
-        icon_name = "dialog-error";
-        status_desc = "P2_app FAILED";
+    if (have_custom_icon()) {
+        icon_name = ICON_NAME;
+        if (g_strcmp0(state, "active") == 0) {
+            status_desc = "P2_app RUNNING";
+        } else if (g_strcmp0(state, "failed") == 0) {
+            status_desc = "P2_app FAILED";
+        }
+    } else {
+        if (g_strcmp0(state, "active") == 0) {
+            icon_name = "media-playback-start";
+            status_desc = "P2_app RUNNING";
+        } else if (g_strcmp0(state, "failed") == 0) {
+            icon_name = "dialog-error";
+            status_desc = "P2_app FAILED";
+        }
     }
 
     app_indicator_set_status(ui->indicator, APP_INDICATOR_STATUS_ACTIVE);
@@ -295,9 +311,9 @@ static gboolean create_tray(UI *ui) {
     g_signal_connect(tray_quit_item, "activate", G_CALLBACK(on_quit), ui);
 
     ui->indicator = app_indicator_new_with_path("p2app-control",
-                                                "media-playback-stop",
+                                                have_custom_icon() ? ICON_NAME : "media-playback-stop",
                                                 APP_INDICATOR_CATEGORY_SYSTEM_SERVICES,
-                                                NULL);
+                                                have_custom_icon() ? ICON_DIR : NULL);
     if (!ui->indicator) {
         g_printerr("Failed to create AppIndicator instance.\n");
         return FALSE;
@@ -350,6 +366,13 @@ int main(int argc, char **argv) {
 
     ui.win = gtk_window_new(GTK_WINDOW_TOPLEVEL);
     gtk_window_set_title(GTK_WINDOW(ui.win), "P2_app Control");
+    if (have_custom_icon()) {
+        GError *icon_error = NULL;
+        gtk_window_set_icon_from_file(GTK_WINDOW(ui.win), ICON_PATH, &icon_error);
+        if (icon_error != NULL) {
+            g_error_free(icon_error);
+        }
+    }
     gtk_window_set_resizable(GTK_WINDOW(ui.win), FALSE);
     gtk_container_set_border_width(GTK_CONTAINER(ui.win), 10);
     gtk_window_set_keep_above(GTK_WINDOW(ui.win), TRUE);

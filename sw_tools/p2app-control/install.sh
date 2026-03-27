@@ -25,6 +25,8 @@ XDMA_POSTINST_HOOK_PATH="/etc/kernel/postinst.d/saturn-xdma"
 
 BIN_LOCAL="${HERE}/p2app-control"
 BIN_INSTALL="/usr/local/bin/p2app-control"
+ICON_LOCAL="${HERE}/p2appcontrol.png"
+ICON_INSTALL="/usr/local/share/pixmaps/p2appcontrol.png"
 
 DESKTOP_NAME="P2_app-Control.desktop"
 DESKTOP_DESK="${HOME}/Desktop/${DESKTOP_NAME}"
@@ -80,6 +82,15 @@ make -C "$HERE"
 
 echo "[*] Installing widget binary -> ${BIN_INSTALL}"
 sudo install -D -m 0755 "$BIN_LOCAL" "$BIN_INSTALL"
+
+if [[ ! -f "${ICON_LOCAL}" ]]; then
+  echo "[!] ERROR: Expected icon file not found:"
+  echo "    ${ICON_LOCAL}"
+  exit 1
+fi
+
+echo "[*] Installing p2app-control icon -> ${ICON_INSTALL}"
+sudo install -D -m 0644 "${ICON_LOCAL}" "${ICON_INSTALL}"
 
 if [[ ! -x "${XDMA_DOCTOR_LOCAL}" ]]; then
   echo "[!] ERROR: XDMA doctor script not found or not executable:"
@@ -289,7 +300,7 @@ Type=Application
 Name=P2_app Control Tray
 Comment=Panel tray control for p2app.service
 Exec=${BIN_INSTALL} --tray
-Icon=utilities-terminal
+Icon=${ICON_INSTALL}
 Terminal=false
 Categories=Utility;System;
 X-GNOME-Autostart-enabled=true
@@ -310,6 +321,7 @@ command -v update-desktop-database >/dev/null 2>&1 && \
 echo
 echo "[✓] Done."
 echo "    Widget:   ${BIN_INSTALL}"
+echo "    Icon:     ${ICON_INSTALL}"
 echo "    Doctor:   ${XDMA_DOCTOR_INSTALL}"
 echo "    XDMA gate:${XDMA_READY_INSTALL}"
 echo "    Fix XDMA: ${FIX_XDMA_INSTALL}"

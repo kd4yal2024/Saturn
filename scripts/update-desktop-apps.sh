@@ -382,7 +382,7 @@ ensure_core_launcher "BiasCheck.desktop"       "Bias Check"        "$APP_BIAS_BI
 ensure_core_launcher "AudioTest.desktop"       "Audio Test"        "$APP_AUDIO_BIN"  "Run the Saturn Audio Test utility"            "audiotest"
 ensure_core_launcher "AXIReaderWriter.desktop" "AXI Reader/Writer" "$APP_AXI_BIN"    "Read/write AXI registers on Saturn hardware"  "axi"
 ensure_core_launcher "FlashWriter.desktop"     "Flash Writer"      "$APP_FLASH_BIN"  "Program SPI flash for the FPGA/SoC"           "flashwriter"
-ensure_core_launcher "SaturnLCDSetup.desktop"  "Saturn LCD Setup"  "$APP_LCD_SETUP_BIN" "Inspect and apply Saturn LCD boot profiles"  "saturn"
+ensure_core_launcher "SaturnLCDSetup.desktop"  "Saturn LCD Setup"  "$APP_LCD_SETUP_BIN" "Inspect and apply Saturn LCD boot profiles"  "saturn-lcd-setup"
 
 # ---------- Saturn Update Manager web launcher (ALWAYS update) ----------
 hr; echo; log "Ensuring Saturn Update Manager web launcher"; echo; hr
@@ -393,7 +393,7 @@ if [[ -f "$SHORTCUT_SRC/$SATURN_DESKTOP_NAME" ]]; then
   install_desktop_file_processed "$SHORTCUT_SRC/$SATURN_DESKTOP_NAME" "$SATURN_DESKTOP_NAME" "$USER_APPS_DIR" "$USER_DESKTOP_DIR"
 else
   tmp="$(mktemp)"
-  write_launcher "$tmp" "Saturn Update Manager" "$(browser_cmd)" "Open the Saturn Update Manager web UI" "$(find_icon saturn)" "Utility;Engineering;" "false"
+  write_launcher "$tmp" "Saturn Update Manager" "$(browser_cmd)" "Open the Saturn Update Manager web UI" "$(find_icon saturn-update-manager)" "Utility;Engineering;" "false"
   install_desktop_file_processed "$tmp" "$SATURN_DESKTOP_NAME" "$USER_APPS_DIR" "$USER_DESKTOP_DIR"
   rm -f "$tmp"
 fi

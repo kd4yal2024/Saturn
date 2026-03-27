@@ -510,6 +510,7 @@ int main(int argc, char **argv)
 
     app.window = gtk_window_new(GTK_WINDOW_TOPLEVEL);
     gtk_window_set_title(GTK_WINDOW(app.window), "Saturn LCD Setup");
+    gtk_window_set_icon_name(GTK_WINDOW(app.window), "saturn-lcd-setup");
     gtk_window_set_default_size(GTK_WINDOW(app.window), 900, 700);
     gtk_window_set_position(GTK_WINDOW(app.window), GTK_WIN_POS_CENTER);
 
