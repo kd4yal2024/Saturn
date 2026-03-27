@@ -8,6 +8,9 @@
 - helper auto/apply paths now use the same resolved profile that is reported to the user
 - front-panel-aware G2 7-inch auto-selection is now available on first provisioning, not only in helper/reprovision flows
 - front-panel detection now accepts `RemoteHead` in both saved-state and live-probe paths; the LCD G2 tiebreaker remains limited to `G2V1` and `G2V2`
+- the CM5 7-inch auto rule now separates `G2V1` and `G2V2`:
+  - `G2V1` -> `cm5-7-g2-dual-dsi`
+  - `G2V2` -> `cm5-7-g2-single-dsi`
 
 ## 2026-03-23
 

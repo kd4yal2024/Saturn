@@ -45,6 +45,11 @@ Completion and logs:
 - front-panel state file: `/var/lib/saturn-provision/front-panel-type`
 - log file: `/var/log/saturn-provision.log`
 - live status file (desktop UI): `/var/lib/saturn-provision/ui-status`
+- completion state now also records:
+  - `hardware_model`
+  - `hardware_platform_vendor`
+  - `hardware_module_family`
+  - `hardware_storage_variant`
 
 ## Desktop GTK Provisioning UI (Optional)
 
@@ -120,11 +125,21 @@ Notes:
 - Existing HDMI lines outside the managed block are left untouched.
 - Display profile changes generally require reboot to take effect.
 - LCD/profile detection logic is centralized in `scripts/saturn-lcd-lib.sh` so provisioning, CLI detection, and the GTK setup tool resolve profiles the same way.
+- Hardware classification now reads `/proc/device-tree/model` and reports:
+  - raw `model`
+  - `platform_vendor` (`raspberrypi`, `radxa`, or `unknown`)
+  - `module_family` (`cm4`, `cm5`, or `unknown`)
+  - `storage_variant` (`lite`, `emmc`, or `unknown`; best-effort only)
 - Auto mode first preserves a known Saturn-managed profile id from the managed LCD block comment when one is present.
 - Auto mode preserves Laurence-style single-DSI 7-inch configs when it finds `dtoverlay=vc4-kms-dsi-waveshare-panel,7_0_inchC,i2c0` paired with `dtoverlay=uart3` or `dtoverlay=uart2-pi5`.
 - Auto mode preserves an existing dual-overlay CM5 7" G2 config when it finds both `dsi1/i2c0` and `dsi0/i2c1` overlay lines already present.
 - Auto mode resolves in this order: `SATURN_LCD_SIZE_INCH` -> existing Waveshare overlay in `config.txt` -> I2C probe (`i2c-10`/`i2c-0` implies 7", `i2c-1` implies 8") -> `SATURN_LCD_AUTO_DEFAULT_SIZE_INCH`.
-- After `cm` and size are known, auto mode prefers `${cm}-7-g2-single-dsi` over `${cm}-7` when front-panel detection confirms `G2V1` or `G2V2`; `RemoteHead` does not trigger the G2 LCD tiebreaker.
+- `SATURN_LCD_PROFILE=auto` currently applies Raspberry Pi CM4/CM5 overlay rules only; on non-Raspberry-Pi platforms such as Radxa it will log the detected model/vendor and require an explicit profile.
+- After `cm` and size are known, the 7-inch front-panel tiebreaker now separates G2 variants:
+  - `CM4 + G2V1/G2V2` -> `${cm}-7-g2-single-dsi`
+  - `CM5 + G2V1` -> `${cm}-7-g2-dual-dsi`
+  - `CM5 + G2V2` -> `${cm}-7-g2-single-dsi`
+  - `RemoteHead` does not trigger the G2 LCD tiebreaker
 - First provisioning now installs udev rules and detects the front panel before applying the LCD profile, so the G2 7-inch tiebreaker is active on the first run instead of only on reprovision/helper use.
 - Safe dry-run example (no boot config changes):
   - `sudo SATURN_FORCE_REPROVISION=1 SATURN_LCD_PROFILE=auto SATURN_LCD_DETECT_ONLY=1 /home/pi/github/Saturn/provision/cloud-init/provision-saturn.sh`
@@ -267,7 +282,10 @@ Then `provision-saturn.sh` performs:
   - also includes `front_panel_type=...` in `/var/lib/saturn-provision/complete`
 - LCD boot profile apply
   - uses the shared logic from `scripts/saturn-lcd-lib.sh`
-  - on 7-inch systems, prefers `cm4-7-g2-single-dsi` / `cm5-7-g2-single-dsi` when front-panel detection confirms `G2V1` or `G2V2`
+  - on 7-inch systems, now separates G2 variants:
+    - `CM4 + G2V1/G2V2` -> `cm4-7-g2-single-dsi`
+    - `CM5 + G2V1` -> `cm5-7-g2-dual-dsi`
+    - `CM5 + G2V2` -> `cm5-7-g2-single-dsi`
 - kernel header checks/install (for XDMA build path)
 - Saturn repo sync and build of apps/tools
 - desktop launcher install

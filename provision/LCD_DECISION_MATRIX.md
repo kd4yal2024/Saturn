@@ -1,6 +1,7 @@
 # Saturn LCD Decision Matrix (CM4/CM5, 7"/8")
 
 This document captures the current known-good overlay mapping for Saturn provisioning on Raspberry Pi OS Trixie.
+It is a Raspberry Pi CM4/CM5 matrix, not a generic compute-module matrix for Radxa or other vendors.
 
 ## Summary
 
@@ -46,8 +47,16 @@ The `vc4-kms-dsi-waveshare-800x480` overlay matches the known-good behavior for 
 
 Field testing on March 7, 2026 reported a working 7" Saturn G2 CM5 configuration only after reboot, using both DSI paths at once. That profile should be treated as a board-specific exception rather than collapsed into the generic CM5 7" rule.
 
+## Current front-panel-aware auto rule
+
+- `CM4 + G2V1/G2V2` -> `cm4-7-g2-single-dsi`
+- `CM5 + G2V1` -> `cm5-7-g2-dual-dsi`
+- `CM5 + G2V2` -> `cm5-7-g2-single-dsi`
+
 ## Notes
 
+- Auto LCD classification now records the raw `/proc/device-tree/model` plus a best-effort `platform_vendor`, `module_family`, and `storage_variant`.
+- `SATURN_LCD_PROFILE=auto` is currently limited to Raspberry Pi CM4/CM5 overlay selection. Non-Raspberry-Pi platforms should use an explicit profile until they have their own validated matrix.
 - Keep only one Waveshare DSI panel overlay active in `config.txt`, except for the CM5 Saturn G2 dual-DSI field profile above.
 - Saturn auto-detect now preserves explicit managed profile ids from the `# Saturn managed LCD profile: ...` comment when present in the managed block.
 - Saturn also preserves Laurence-style single-DSI configs when it sees `dtoverlay=vc4-kms-dsi-waveshare-panel,7_0_inchC,i2c0` paired with the expected UART overlay.

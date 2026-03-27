@@ -1017,8 +1017,12 @@ cleanup_tmp_artifacts() {
 
 write_completion_state() {
   local saturn_home="$1"
-  local commit
+  local commit hardware_model hardware_platform_vendor hardware_module_family hardware_storage_variant
   commit="$(run_as_user "$saturn_home" git -C "$SATURN_REPO_DIR" rev-parse --short HEAD 2>/dev/null || true)"
+  hardware_model="$(read_device_tree_model 2>/dev/null || true)"
+  hardware_platform_vendor="$(detect_platform_vendor 2>/dev/null || true)"
+  hardware_module_family="$(detect_module_family 2>/dev/null || true)"
+  hardware_storage_variant="$(detect_module_storage_variant 2>/dev/null || true)"
   install -d -m 0755 "$SATURN_STATE_DIR"
   cat > "${SATURN_STATE_DIR}/complete" <<EOF
 completed_at=$(date --iso-8601=seconds)
@@ -1027,6 +1031,10 @@ repo_url=${SATURN_REPO_URL}
 repo_branch=${SATURN_REPO_BRANCH}
 repo_dir=${SATURN_REPO_DIR}
 repo_commit=${commit:-unknown}
+hardware_model=${hardware_model:-unknown}
+hardware_platform_vendor=${hardware_platform_vendor:-unknown}
+hardware_module_family=${hardware_module_family:-unknown}
+hardware_storage_variant=${hardware_storage_variant:-unknown}
 front_panel_type=${SATURN_FRONT_PANEL_TYPE:-unknown}
 EOF
 }

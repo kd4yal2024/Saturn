@@ -12,7 +12,10 @@ All notable changes to provisioning assets are documented in this file.
   - added explicit `cm4-7-g2-single-dsi` and `cm5-7-g2-single-dsi` LCD profiles for Laurence-style `7_0_inchC,i2c0` configs
   - auto LCD detection now preserves Saturn-managed explicit profile ids from the managed block comment before falling back to overlay heuristics
   - auto LCD detection now preserves existing Laurence-style single-DSI 7-inch configs instead of collapsing them into the generic `cm4-7` / `cm5-7` profiles
-  - LCD auto mode now prefers `cm4-7-g2-single-dsi` / `cm5-7-g2-single-dsi` over the generic 7-inch profile when front-panel detection confirms `G2V1` or `G2V2`
+  - LCD auto mode now separates G2 variants on 7-inch systems:
+    - `CM4 + G2V1/G2V2` -> `cm4-7-g2-single-dsi`
+    - `CM5 + G2V1` -> `cm5-7-g2-dual-dsi`
+    - `CM5 + G2V2` -> `cm5-7-g2-single-dsi`
   - moved udev install and front-panel detection ahead of LCD profile application so the G2 7-inch tiebreaker is active on the first provisioning run
   - added `SATURN_DETECT_FRONT_PANEL` (default `1`)
   - front-panel detection now records `G2V1`, `G2V2`, `RemoteHead`, or `NONE` in provisioning state
@@ -21,6 +24,8 @@ All notable changes to provisioning assets are documented in this file.
   - new shared shell library for LCD/profile detection, rendering, and config application
   - now serves as the single authoritative implementation for provisioning, CLI detection, and the LCD setup helper
   - LCD I2C probe path now uses `i2cdetect -r` read-mode probing
+  - now classifies hardware from `/proc/device-tree/model` into `platform_vendor`, `module_family`, and `storage_variant`
+  - `SATURN_LCD_PROFILE=auto` now logs full hardware classification and refuses to apply Raspberry Pi overlay assumptions to non-Raspberry-Pi platforms
 
 - `../sw_tools/p2app-control/install.sh`
   - installer now installs `/usr/local/bin/saturn-xdma-doctor.sh` as the supported XDMA diagnostic helper
@@ -35,6 +40,7 @@ All notable changes to provisioning assets are documented in this file.
   - now acts as a thin CLI wrapper around `saturn-lcd-lib.sh`
   - added explicit `cm4-7-custom-jd` profile detection/output
   - added explicit `cm4-7-g2-single-dsi` and `cm5-7-g2-single-dsi` profile detection/output
+  - now reports raw hardware model plus `platform_vendor`, `module_family`, and `storage_variant`
 
 - `../scripts/saturn-lcd-helper.sh`
   - now sources `saturn-lcd-lib.sh` directly instead of sourcing `provision-saturn.sh`
@@ -58,6 +64,7 @@ All notable changes to provisioning assets are documented in this file.
   - documented the new shared LCD/profile library and the first-provision front-panel-aware G2 7-inch LCD tiebreaker
   - documented the new custom and Laurence-style single-DSI 7-inch LCD profiles
   - documented the new XDMA readiness gate and doctor path installed with `p2app-control`
+  - documented the new hardware classification fields and that `SATURN_LCD_PROFILE=auto` is currently Raspberry-Pi-only
 
 - `../sw_tools/p2app-control/README.md`
   - documented the new XDMA readiness gate, doctor script, and the provisioning-time troubleshooting path for `register write attempted before XDMA register device was opened`

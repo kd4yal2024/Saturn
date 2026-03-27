@@ -62,11 +62,51 @@ get_boot_config_file() {
 # ---------------------------------------------------------------------------
 
 detect_compute_module_generation() {
+  detect_module_family
+}
+
+read_device_tree_model() {
   local model
   model="$(tr -d '\0' < /proc/device-tree/model 2>/dev/null || true)"
+  [[ -n "$model" ]] || return 1
+  printf '%s\n' "$model"
+}
+
+detect_platform_vendor() {
+  local model lower
+  model="$(read_device_tree_model 2>/dev/null || true)"
+  lower="${model,,}"
+  case "$lower" in
+    *radxa*) printf 'radxa\n' ;;
+    *"raspberry pi"*|*"compute module"*) printf 'raspberrypi\n' ;;
+    *) return 1 ;;
+  esac
+}
+
+detect_module_family() {
+  local model lower
+  model="$(read_device_tree_model 2>/dev/null || true)"
+  lower="${model,,}"
   case "$model" in
     *"Compute Module 5"*) printf 'cm5\n' ;;
     *"Compute Module 4"*) printf 'cm4\n' ;;
+    *)
+      case "$lower" in
+        *cm5*) printf 'cm5\n' ;;
+        *cm4*) printf 'cm4\n' ;;
+        *) return 1 ;;
+      esac
+      ;;
+  esac
+}
+
+detect_module_storage_variant() {
+  local model lower
+  model="$(read_device_tree_model 2>/dev/null || true)"
+  lower="${model,,}"
+  case "$lower" in
+    *" lite"*) printf 'lite\n' ;;
+    *emmc*)    printf 'emmc\n' ;;
     *) return 1 ;;
   esac
 }
@@ -266,7 +306,7 @@ detect_lcd_size_auto() {
 # Returns 0 on success (including the none case), 1 if resolution fails.
 resolve_lcd_profile() {
   local boot_config="$1"
-  local requested cm size size_source auto_detect_result profile
+  local requested cm size size_source auto_detect_result profile model platform_vendor
 
   requested="${SATURN_LCD_PROFILE,,}"
 
@@ -287,6 +327,8 @@ resolve_lcd_profile() {
         return 0
       fi
 
+      model="$(read_device_tree_model 2>/dev/null || true)"
+      platform_vendor="$(detect_platform_vendor 2>/dev/null || true)"
       cm="$(detect_compute_module_generation 2>/dev/null || true)"
       auto_detect_result="$(detect_lcd_size_auto "$boot_config" 2>/dev/null || true)"
       if [[ -n "$auto_detect_result" ]]; then
@@ -296,23 +338,46 @@ resolve_lcd_profile() {
         size_source=""
       fi
 
-      if [[ -z "$cm" || -z "$size" ]]; then
-        _saturn_lcd_log "WARN: SATURN_LCD_PROFILE=auto could not resolve a unique profile (cm='${cm:-unknown}', size='${size:-unknown}'). Set SATURN_LCD_PROFILE explicitly."
+      if [[ "$platform_vendor" != "raspberrypi" ]]; then
+        _saturn_lcd_log "WARN: SATURN_LCD_PROFILE=auto currently supports Raspberry Pi CM4/CM5 overlays only (model='${model:-unknown}', vendor='${platform_vendor:-unknown}', module='${cm:-unknown}'). Set SATURN_LCD_PROFILE explicitly."
         return 1
       fi
 
-      _saturn_lcd_log "Auto-selected LCD profile inputs: cm='$cm', size='${size}' (source=${size_source:-unknown})"
+      if [[ -z "$cm" || -z "$size" ]]; then
+        _saturn_lcd_log "WARN: SATURN_LCD_PROFILE=auto could not resolve a unique profile (model='${model:-unknown}', vendor='${platform_vendor:-unknown}', cm='${cm:-unknown}', size='${size:-unknown}'). Set SATURN_LCD_PROFILE explicitly."
+        return 1
+      fi
 
-      # Front-panel tiebreaker: a confirmed G2 panel on a 7-inch board selects
-      # the g2 single-DSI profile over the generic base profile.
+      _saturn_lcd_log "Auto-selected LCD profile inputs: model='${model:-unknown}', vendor='${platform_vendor:-unknown}', cm='$cm', size='${size}' (source=${size_source:-unknown})"
+
+      # Front-panel tiebreaker:
+      #   - CM4 + G2V1/G2V2 -> single-DSI G2 profile
+      #   - CM5 + G2V1      -> dual-DSI G2 field profile
+      #   - CM5 + G2V2      -> single-DSI G2 profile
       # Only active when SATURN_FRONT_PANEL_TYPE is pre-populated by the caller
       # (helper reads the state file; provisioning sets it after detection).
       local fp_type="${SATURN_FRONT_PANEL_TYPE:-}"
-      if [[ "$size" == "7" && ( "$fp_type" == "G2V1" || "$fp_type" == "G2V2" ) ]]; then
-        profile="${cm}-7-g2-single-dsi"
-        _saturn_lcd_log "Front-panel tiebreaker: type='$fp_type' → using profile '$profile'"
-        printf '%s|%s|%s\n' "$profile" "$size" "$size_source"
-        return 0
+      if [[ "$size" == "7" ]]; then
+        case "$cm:$fp_type" in
+          cm4:G2V1|cm4:G2V2)
+            profile="${cm}-7-g2-single-dsi"
+            _saturn_lcd_log "Front-panel tiebreaker: cm='$cm', type='$fp_type' → using profile '$profile'"
+            printf '%s|%s|%s\n' "$profile" "$size" "$size_source"
+            return 0
+            ;;
+          cm5:G2V1)
+            profile="${cm}-7-g2-dual-dsi"
+            _saturn_lcd_log "Front-panel tiebreaker: cm='$cm', type='$fp_type' → using profile '$profile'"
+            printf '%s|%s|%s\n' "$profile" "$size" "$size_source"
+            return 0
+            ;;
+          cm5:G2V2)
+            profile="${cm}-7-g2-single-dsi"
+            _saturn_lcd_log "Front-panel tiebreaker: cm='$cm', type='$fp_type' → using profile '$profile'"
+            printf '%s|%s|%s\n' "$profile" "$size" "$size_source"
+            return 0
+            ;;
+        esac
       fi
 
       printf '%s-%s|%s|%s\n' "$cm" "$size" "$size" "$size_source"
