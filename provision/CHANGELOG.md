@@ -16,9 +16,16 @@ All notable changes to provisioning assets are documented in this file.
     - `CM4 + G2V1/G2V2` -> `cm4-7-g2-single-dsi`
     - `CM5 + G2V1` -> `cm5-7-g2-dual-dsi`
     - `CM5 + G2V2` -> `cm5-7-g2-single-dsi`
-  - moved udev install and front-panel detection ahead of LCD profile application so the G2 7-inch tiebreaker is active on the first provisioning run
+  - front-panel detection is now treated as hardware-only state:
+    - provisioning records only `G2V1`, `G2V2`, or `NONE`
+    - `ZZZS08...` is folded into `G2V2`-class hardware for LCD/provisioning purposes
+    - any future `RemoteHead` concept should be modeled separately as a system role
+  - front-panel detection now runs in two phases:
+    - a pre-udev raw-device pass for early `G2V2` identification
+    - a post-udev verification pass after rule installation
+  - udev rule installation now receives the detected front-panel type for logging/state, while continuing to use the standard serial rules file unless explicitly overridden
   - added `SATURN_DETECT_FRONT_PANEL` (default `1`)
-  - front-panel detection now records `G2V1`, `G2V2`, `RemoteHead`, or `NONE` in provisioning state
+  - front-panel detection now records `G2V1`, `G2V2`, or `NONE` in provisioning state
 
 - `../scripts/saturn-lcd-lib.sh`
   - new shared shell library for LCD/profile detection, rendering, and config application
@@ -48,14 +55,18 @@ All notable changes to provisioning assets are documented in this file.
   - `detect` output now includes both `front_panel_type=` and `front_panel_source=`
   - `apply --profile auto` now reports and writes the same resolved profile
   - now lists the custom and Laurence-style single-DSI 7-inch profiles alongside the existing generic and dual-DSI profiles
-  - now accepts saved or live `RemoteHead` front-panel results in detection output
 
 - `../scripts/detect-front-panel.sh`
   - added a standalone front-panel detector
   - G2V1 detection now checks for an MCP23017-compatible `IODIR_A == 0xFF` register response at I2C address `0x20`
   - serial detection now retries once before returning `NONE`
-  - G2V2 detection sends `ZZZS;` to `/dev/serial/by-id/g2-front-9600` and looks for `ZZZS05`
-  - `RemoteHead` detection sends `ZZZS;` to `/dev/serial/by-id/g2-front-9600` and looks for `ZZZS08`
+  - now supports `--pre-udev` raw probing and `--post-udev` aliased probing modes
+  - pre-udev mode probes raw UART/USB candidates first so G2V2-class panel hardware can be identified before udev renaming
+  - G2V2 detection sends `ZZZS;` and looks for `ZZZS05`
+  - `ZZZS08...` replies are currently treated as `G2V2`-class front-panel hardware for provisioning/LCD purposes
+
+- `../rules/install-rules.sh`
+  - now accepts `SATURN_FRONT_PANEL_TYPE` for logging/state while continuing to install the standard `61-g2-serial.rules` file unless explicitly overridden
 
 ### Documentation
 

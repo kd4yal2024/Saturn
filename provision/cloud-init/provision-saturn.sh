@@ -857,8 +857,8 @@ install_udev_rules() {
   fi
   if [[ -n "$script" ]]; then
     assert_not_repo_python_script "$script"
-    log "Installing udev rules"
-    bash "$script"
+    log "Installing udev rules${SATURN_FRONT_PANEL_TYPE:+ for front panel '$SATURN_FRONT_PANEL_TYPE'}"
+    SATURN_FRONT_PANEL_TYPE="$SATURN_FRONT_PANEL_TYPE" bash "$script"
   else
     log "WARN: Missing udev script (checked SATURN_REPO_DIR='${SATURN_REPO_DIR:-}' and SCRIPT_DIR='$SCRIPT_DIR')"
   fi
@@ -888,7 +888,14 @@ install_p2app_control() {
   fi
 }
 
-detect_front_panel() {
+write_front_panel_state() {
+  install -d -m 0755 "$(dirname "$SATURN_FRONT_PANEL_STATE_FILE")"
+  printf '%s\n' "$SATURN_FRONT_PANEL_TYPE" >"$SATURN_FRONT_PANEL_STATE_FILE"
+  chmod 0644 "$SATURN_FRONT_PANEL_STATE_FILE"
+}
+
+run_front_panel_detector() {
+  local mode="${1:-post-udev}"
   local script="" detected=""
   # Prefer SATURN_REPO_DIR when already set; fall back to SCRIPT_DIR-relative
   # path so this function works before ensure_repo populates SATURN_REPO_DIR.
@@ -900,23 +907,54 @@ detect_front_panel() {
 
   if [[ -z "$script" ]]; then
     log "WARN: Missing front-panel detector (checked SATURN_REPO_DIR='${SATURN_REPO_DIR:-}' and SCRIPT_DIR='$SCRIPT_DIR')"
-    return 0
+    return 1
   fi
 
-  detected="$(bash "$script" 2>/dev/null | tr -d '\r\n' || true)"
+  detected="$(SATURN_PANEL_DETECT_MODE="$mode" bash "$script" 2>/dev/null | tr -d '\r\n' || true)"
+  printf '%s\n' "$detected"
+}
+
+detect_front_panel() {
+  local mode="${1:-post-udev}"
+  local detected=""
+
+  detected="$(run_front_panel_detector "$mode" || true)"
   case "$detected" in
-    G2V1|G2V2|RemoteHead|NONE)
+    G2V1|G2V2|NONE)
       SATURN_FRONT_PANEL_TYPE="$detected"
-      install -d -m 0755 "$(dirname "$SATURN_FRONT_PANEL_STATE_FILE")"
-      printf '%s\n' "$SATURN_FRONT_PANEL_TYPE" >"$SATURN_FRONT_PANEL_STATE_FILE"
-      chmod 0644 "$SATURN_FRONT_PANEL_STATE_FILE"
-      log "Detected front panel: $SATURN_FRONT_PANEL_TYPE"
-      if [[ "$SATURN_FRONT_PANEL_TYPE" == "NONE" && ! -e /dev/serial/by-id/g2-front-9600 ]]; then
-        log "Front-panel serial alias /dev/serial/by-id/g2-front-9600 not present; G2V2 detection depends on Saturn udev rules."
+      write_front_panel_state
+      log "Detected front panel (${mode}): $SATURN_FRONT_PANEL_TYPE"
+      if [[ "$mode" == "post-udev" && "$SATURN_FRONT_PANEL_TYPE" == "NONE" && ! -e /dev/serial/by-id/g2-front-9600 ]]; then
+        log "Front-panel serial alias /dev/serial/by-id/g2-front-9600 not present after udev install."
       fi
       ;;
     *)
-      log "WARN: Front-panel detector returned unexpected result: ${detected:-<empty>}"
+      log "WARN: Front-panel detector (${mode}) returned unexpected result: ${detected:-<empty>}"
+      ;;
+  esac
+}
+
+verify_front_panel_after_udev() {
+  local detected="" pre_detected="${SATURN_FRONT_PANEL_TYPE:-unknown}"
+
+  detected="$(run_front_panel_detector post-udev || true)"
+  case "$detected" in
+    G2V1|G2V2|NONE)
+      if [[ "$detected" == "$pre_detected" ]]; then
+        log "Verified front panel after udev: $detected"
+      elif [[ -z "$pre_detected" || "$pre_detected" == "unknown" || "$pre_detected" == "NONE" ]]; then
+        SATURN_FRONT_PANEL_TYPE="$detected"
+        write_front_panel_state
+        log "Detected front panel (post-udev): $detected (updated from pre-udev '${pre_detected:-unknown}')"
+      else
+        log "WARN: Front-panel post-udev verification disagrees with pre-udev result (pre='$pre_detected', post='$detected'). Keeping pre-udev result."
+      fi
+      if [[ "$detected" == "NONE" && ! -e /dev/serial/by-id/g2-front-9600 ]]; then
+        log "Front-panel serial alias /dev/serial/by-id/g2-front-9600 not present after udev install."
+      fi
+      ;;
+    *)
+      log "WARN: Front-panel detector (post-udev verification) returned unexpected result: ${detected:-<empty>}"
       ;;
   esac
 }
@@ -1083,13 +1121,16 @@ main() {
   configure_usb_boot_tweaks
   set_ui_stage "Configuring I2C, SSH, and VNC"
   configure_i2c_vnc_ssh
+  if bool_true "$SATURN_DETECT_FRONT_PANEL"; then
+    set_ui_stage "Detecting front panel"
+    detect_front_panel pre-udev
+  fi
   if bool_true "$SATURN_INSTALL_UDEV_RULES"; then
     set_ui_stage "Installing udev rules"
     install_udev_rules
   fi
-  if bool_true "$SATURN_DETECT_FRONT_PANEL"; then
-    set_ui_stage "Detecting front panel"
-    detect_front_panel
+  if bool_true "$SATURN_DETECT_FRONT_PANEL" && bool_true "$SATURN_INSTALL_UDEV_RULES"; then
+    verify_front_panel_after_udev
   fi
   set_ui_stage "Applying LCD boot profile"
   configure_lcd_profile

@@ -7,7 +7,7 @@
 - `scripts/saturn-lcd-helper.sh detect` now reports both `front_panel_type=` and `front_panel_source=`
 - helper auto/apply paths now use the same resolved profile that is reported to the user
 - front-panel-aware G2 7-inch auto-selection is now available on first provisioning, not only in helper/reprovision flows
-- front-panel detection now accepts `RemoteHead` in both saved-state and live-probe paths; the LCD G2 tiebreaker remains limited to `G2V1` and `G2V2`
+- front-panel detection state is now treated as hardware-only (`G2V1`, `G2V2`, `NONE`); any future `RemoteHead` concept should be modeled separately as a system role
 - the CM5 7-inch auto rule now separates `G2V1` and `G2V2`:
   - `G2V1` -> `cm5-7-g2-dual-dsi`
   - `G2V2` -> `cm5-7-g2-single-dsi`
@@ -19,7 +19,7 @@
 - added `cm4-7-g2-single-dsi` and `cm5-7-g2-single-dsi` LCD profiles to the shared helper output
 - LCD auto-detect now preserves Laurence-style single-DSI 7-inch `config.txt` overlays
 - surfaced front-panel detection in `saturn-lcd-setup`
-- `scripts/saturn-lcd-helper.sh detect` now reports `front_panel_type=G2V1|G2V2|RemoteHead|NONE|unknown`
+- `scripts/saturn-lcd-helper.sh detect` now reports `front_panel_type=G2V1|G2V2|NONE|unknown`
 
 ## 2026-03-08
 

@@ -139,8 +139,11 @@ Notes:
   - `CM4 + G2V1/G2V2` -> `${cm}-7-g2-single-dsi`
   - `CM5 + G2V1` -> `${cm}-7-g2-dual-dsi`
   - `CM5 + G2V2` -> `${cm}-7-g2-single-dsi`
-  - `RemoteHead` does not trigger the G2 LCD tiebreaker
 - First provisioning now installs udev rules and detects the front panel before applying the LCD profile, so the G2 7-inch tiebreaker is active on the first run instead of only on reprovision/helper use.
+- Front-panel detection in Saturn is now intentionally hardware-only:
+  - state file values are `G2V1`, `G2V2`, or `NONE`
+  - `ZZZS08...` is currently treated as `G2V2`-class hardware for LCD/provisioning purposes
+  - a future `RemoteHead` concept should be modeled separately as a system role, not as a front-panel type
 - Safe dry-run example (no boot config changes):
   - `sudo SATURN_FORCE_REPROVISION=1 SATURN_LCD_PROFILE=auto SATURN_LCD_DETECT_ONLY=1 /home/pi/github/Saturn/provision/cloud-init/provision-saturn.sh`
 
@@ -274,12 +277,16 @@ Then `provision-saturn.sh` performs:
 - I2C/SSH/VNC enablement
 - optional udev rules install
 - optional front-panel detection
+  - now runs a pre-udev raw detection pass before udev rule installation
+  - then runs a post-udev verification pass after rule installation
   - runs before LCD profile application
   - detects G2V1 by an MCP23017-compatible register response (`IODIR_A == 0xFF`) at I2C address `0x20`
-  - detects G2V2 by `ZZZS05...` CAT response on `/dev/serial/by-id/g2-front-9600`
-  - detects `RemoteHead` by `ZZZS08...` CAT response on `/dev/serial/by-id/g2-front-9600`
-  - records `G2V1`, `G2V2`, `RemoteHead`, or `NONE` in `/var/lib/saturn-provision/front-panel-type`
+  - pre-udev serial detection now probes raw UART/USB device nodes first so G2V2-class front-panel hardware can be identified before serial alias rules are installed
+  - post-udev serial detection still uses `/dev/serial/by-id/g2-front-9600` for stable normal operation
+  - detects G2V2-class panel hardware by `ZZZS05...` or `ZZZS08...` CAT response
+  - records `G2V1`, `G2V2`, or `NONE` in `/var/lib/saturn-provision/front-panel-type`
   - also includes `front_panel_type=...` in `/var/lib/saturn-provision/complete`
+- udev serial rule installation now receives the detected front-panel type for logging/state, but currently installs the standard `61-g2-serial.rules` file unless explicitly overridden
 - LCD boot profile apply
   - uses the shared logic from `scripts/saturn-lcd-lib.sh`
   - on 7-inch systems, now separates G2 variants:
