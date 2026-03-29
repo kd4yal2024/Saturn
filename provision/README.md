@@ -240,6 +240,8 @@ Copy and customize as needed:
 - keep `SATURN_REPO_URL` and `SATURN_REPO_BRANCH` as needed
 - review feature toggles (`SATURN_INSTALL_*`, `SATURN_REBUILD_XDMA`, `SATURN_BUILD_OPTIONAL_TOOLS`, `SATURN_ENABLE_*`, `SATURN_LCD_*`)
 - leave FPGA flashing off by default unless intentionally enabled
+- on current Raspberry Pi OS cloud-init images, preserve the login-user creation in the active `user-data`
+  - if you replace Imager-generated `user-data` wholesale, make sure the login user still exists and matches `SATURN_USER`
 
 ### 3. Write SD card with Raspberry Pi Imager
 
@@ -248,6 +250,7 @@ Copy and customize as needed:
 - Select storage
 - Open Imager OS customization and set hostname/user/SSH/network as needed
 - Ensure the username configured in Imager matches `SATURN_USER` in `user-data`
+- If you later replace or merge `user-data`, do not accidentally drop the login-user creation that Imager wrote there
 
 ### 4. Provide cloud-init seed files to the image
 
@@ -266,10 +269,18 @@ Depending on image behavior:
 On first boot, cloud-init processes `user-data` and executes:
 
 - writes `/etc/default/saturn-provision`
+- writes `/usr/local/sbin/saturn-cloudinit-bootstrap.sh`
+- logs early bootstrap work to `/var/log/saturn-cloudinit-bootstrap.log`
 - ensures `~/github/Saturn` exists for `SATURN_USER`
 - clones or updates `kd4yal2024/Saturn`
 - runs:
   - `bash "$SATURN_HOME/github/Saturn/provision/cloud-init/provision-saturn.sh"`
+
+Bootstrap behavior before the main Saturn script now is:
+
+- retries while waiting for `SATURN_USER` to exist
+- if the configured `SATURN_USER` never appears, falls back to the first normal `/home/*` login user when one exists
+- fails with an explicit bootstrap log message instead of silently stopping before Saturn logging begins
 
 Then `provision-saturn.sh` performs:
 
@@ -320,6 +331,7 @@ Then `provision-saturn.sh` performs:
 
 After boot completes, verify:
 
+- `sudo tail -n 200 /var/log/saturn-cloudinit-bootstrap.log`
 - `sudo cat /var/lib/saturn-provision/complete`
 - `sudo cat /var/lib/saturn-provision/front-panel-type`
 - `sudo tail -n 200 /var/log/saturn-provision.log`
@@ -343,6 +355,7 @@ If Update Manager is enabled, also verify service status:
 `cloud-init/user-data.example.yaml` writes `/etc/default/saturn-provision` and executes:
 
 - `bash "$SATURN_HOME/github/Saturn/provision/cloud-init/provision-saturn.sh"`
+- via `/usr/local/sbin/saturn-cloudinit-bootstrap.sh`, which records early bootstrap activity in `/var/log/saturn-cloudinit-bootstrap.log`
 
 Cloud-init bootstrap behavior in the example config:
 
@@ -401,9 +414,11 @@ Provisioning is configured to keep the repo clean of Python cache artifacts:
 
 - Ensure `SATURN_USER` exists in the target image before provisioning runs.
 - If you use a user other than `pi`, update `SATURN_USER` in `user-data`.
+- On current Raspberry Pi OS cloud-init images, if you replace the generated `user-data`, keep the login-user creation block or Saturn bootstrap may not find the expected user.
 - Network access is required on first boot for apt and git operations.
 - `cloud-init` user-data is root-owned; read it with `sudo cat /var/lib/cloud/instance/user-data.txt`.
 - Provisioning now waits and retries every `SATURN_USER_RETRY_SECONDS` (default `30`) until `SATURN_USER` exists.
+- Early clone/bootstrap failures are logged to `/var/log/saturn-cloudinit-bootstrap.log`.
 - `P1_app` is intentionally skipped in provisioning (legacy target not required for current images).
 - Before capturing/cloning a reusable image, run `sudo cloud-init clean --logs` so first-boot provisioning re-runs on cloned targets.
 - Keep `meta-data` `instance-id` unique per image/seed when possible.

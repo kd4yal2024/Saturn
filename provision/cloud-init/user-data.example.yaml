@@ -35,6 +35,7 @@ write_files:
 
       # LCD boot profile (managed block appended to config.txt; existing HDMI lines are preserved)
       # Valid: none | cm4-7 | cm4-7-custom-jd | cm4-7-g2-single-dsi | cm4-8 | cm5-7 | cm5-7-g2-single-dsi | cm5-7-g2-dual-dsi | cm5-8 | auto
+      # Note: auto currently requires an explicit/manual choice for CM5 + 7" paths.
       SATURN_LCD_PROFILE=auto
       # Optional override when auto mode cannot infer size (values: 7 or 8)
       # SATURN_LCD_SIZE_INCH=8
@@ -69,8 +70,74 @@ write_files:
 
       # Detect front-panel hardware during provisioning and record G2V1/G2V2/NONE.
       SATURN_DETECT_FRONT_PANEL=1
+  - path: /usr/local/sbin/saturn-cloudinit-bootstrap.sh
+    permissions: "0755"
+    owner: root:root
+    content: |
+      #!/usr/bin/env bash
+      set -Eeuo pipefail
+
+      LOG_FILE="/var/log/saturn-cloudinit-bootstrap.log"
+      exec > >(tee -a "$LOG_FILE") 2>&1
+
+      echo "[$(date '+%Y-%m-%d %H:%M:%S')] Saturn cloud-init bootstrap starting"
+
+      source /etc/default/saturn-provision
+
+      retry_seconds="${SATURN_USER_RETRY_SECONDS:-30}"
+      if ! [[ "$retry_seconds" =~ ^[0-9]+$ ]] || (( retry_seconds < 1 )); then
+        retry_seconds=30
+      fi
+
+      find_fallback_user() {
+        getent passwd | awk -F: '
+          $1 != "nobody" &&
+          $3 >= 1000 && $3 < 60000 &&
+          $6 ~ "^/home/" {
+            print $1 ":" $6
+            exit
+          }
+        '
+      }
+
+      SATURN_HOME=""
+      for _attempt in $(seq 1 20); do
+        SATURN_HOME="$(getent passwd "$SATURN_USER" | cut -d: -f6 || true)"
+        if [[ -n "$SATURN_HOME" ]]; then
+          break
+        fi
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] Waiting for SATURN_USER '$SATURN_USER' to exist..."
+        sleep "$retry_seconds"
+      done
+
+      if [[ -z "$SATURN_HOME" ]]; then
+        fallback="$(find_fallback_user || true)"
+        if [[ -n "$fallback" ]]; then
+          SATURN_USER="${fallback%%:*}"
+          SATURN_HOME="${fallback#*:}"
+          echo "[$(date '+%Y-%m-%d %H:%M:%S')] WARN: configured SATURN_USER was missing; falling back to detected login user '$SATURN_USER' ($SATURN_HOME)."
+        else
+          echo "[$(date '+%Y-%m-%d %H:%M:%S')] ERROR: SATURN_USER '$SATURN_USER' was not created before bootstrap ran."
+          echo "On current cloud-init based Raspberry Pi OS images, make sure the active user-data still creates the login user and that it matches SATURN_USER."
+          exit 1
+        fi
+      fi
+
+      install -d -m 0755 -o "$SATURN_USER" -g "$SATURN_USER" "$SATURN_HOME/github"
+
+      if [[ ! -d "$SATURN_HOME/github/Saturn/.git" ]]; then
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] Cloning Saturn repo"
+        sudo -u "$SATURN_USER" -H git clone --depth 1 --branch "$SATURN_REPO_BRANCH" "$SATURN_REPO_URL" "$SATURN_HOME/github/Saturn"
+      else
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] Updating existing Saturn repo"
+        sudo -u "$SATURN_USER" -H git -C "$SATURN_HOME/github/Saturn" fetch --depth 1 origin "$SATURN_REPO_BRANCH"
+        sudo -u "$SATURN_USER" -H git -C "$SATURN_HOME/github/Saturn" checkout -B "$SATURN_REPO_BRANCH" "origin/$SATURN_REPO_BRANCH"
+      fi
+
+      echo "[$(date '+%Y-%m-%d %H:%M:%S')] Launching Saturn provisioning"
+      exec bash "$SATURN_HOME/github/Saturn/provision/cloud-init/provision-saturn.sh"
 
 runcmd:
-  - [bash, -lc, "set -euo pipefail; source /etc/default/saturn-provision; SATURN_HOME=$(getent passwd \"$SATURN_USER\" | cut -d: -f6); install -d -m 0755 -o \"$SATURN_USER\" -g \"$SATURN_USER\" \"$SATURN_HOME/github\"; if [[ ! -d \"$SATURN_HOME/github/Saturn/.git\" ]]; then sudo -u \"$SATURN_USER\" -H git clone --depth 1 --branch \"$SATURN_REPO_BRANCH\" \"$SATURN_REPO_URL\" \"$SATURN_HOME/github/Saturn\"; else sudo -u \"$SATURN_USER\" -H git -C \"$SATURN_HOME/github/Saturn\" fetch --depth 1 origin \"$SATURN_REPO_BRANCH\"; sudo -u \"$SATURN_USER\" -H git -C \"$SATURN_HOME/github/Saturn\" checkout -B \"$SATURN_REPO_BRANCH\" \"origin/$SATURN_REPO_BRANCH\"; fi; bash \"$SATURN_HOME/github/Saturn/provision/cloud-init/provision-saturn.sh\""]
+  - [bash, -lc, "/usr/local/sbin/saturn-cloudinit-bootstrap.sh"]
 
 final_message: "Saturn provisioning complete. Review /var/log/saturn-provision.log and /var/lib/saturn-provision/complete"
