@@ -6,6 +6,16 @@ All notable changes to provisioning assets are documented in this file.
 
 ### Changed
 
+- `cloud-init/user-data.example.yaml`
+  - now writes `/usr/local/sbin/saturn-cloudinit-bootstrap.sh` as an explicit first-boot bootstrap helper
+  - bootstrap now logs to `/var/log/saturn-cloudinit-bootstrap.log` before the Saturn repo is cloned
+  - bootstrap now retries while waiting for `SATURN_USER`
+  - if the configured `SATURN_USER` never appears, bootstrap now falls back to the first normal `/home/*` login user instead of failing immediately at `getent passwd`
+  - bootstrap now waits for system clock synchronization before first apt/git activity
+  - added `SATURN_CLOCK_SYNC_WAIT_SECONDS` (default `180`) and `SATURN_CLOCK_SYNC_POLL_SECONDS` (default `5`)
+  - bootstrap now installs its own `git` / `ca-certificates` / `sudo` prerequisites after the clock is sane instead of relying on top-level cloud-init `packages:`
+  - removed the example top-level cloud-init `packages:` block so apt signature checks do not run before time sync is established
+
 - `cloud-init/provision-saturn.sh`
   - now sources shared LCD/profile logic from `../scripts/saturn-lcd-lib.sh` instead of carrying a separate copy of those helpers
   - added explicit `cm4-7-custom-jd` LCD profile as a preserved alias for the current CM4 custom 7-inch panel setup
@@ -77,6 +87,8 @@ All notable changes to provisioning assets are documented in this file.
   - documented the new XDMA readiness gate and doctor path installed with `p2app-control`
   - documented the new hardware classification fields and that `SATURN_LCD_PROFILE=auto` is currently Raspberry-Pi-only
 
+  - documented the new `/var/log/saturn-cloudinit-bootstrap.log` early bootstrap log and the warning about preserving login-user creation in cloud-init `user-data`
+  - documented the new first-boot clock-sync wait and the removal of early cloud-init `packages:` bootstrap apt work
 - `../sw_tools/p2app-control/README.md`
   - documented the new XDMA readiness gate, doctor script, and the provisioning-time troubleshooting path for `register write attempted before XDMA register device was opened`
 

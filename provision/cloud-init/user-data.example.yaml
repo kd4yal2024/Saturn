@@ -4,10 +4,6 @@ manage_etc_hosts: true
 
 package_update: false
 package_upgrade: false
-packages:
-  - git
-  - ca-certificates
-  - sudo
 
 write_files:
   - path: /etc/default/saturn-provision
@@ -18,6 +14,10 @@ write_files:
       SATURN_USER=pi
       # Retry cadence while waiting for SATURN_USER to exist and have a home dir.
       SATURN_USER_RETRY_SECONDS=30
+      # Wait for NTP/system clock sync before first apt/git activity.
+      # Set to 0 to skip the wait.
+      SATURN_CLOCK_SYNC_WAIT_SECONDS=180
+      SATURN_CLOCK_SYNC_POLL_SECONDS=5
       SATURN_REPO_URL=https://github.com/kd4yal2024/Saturn.git
       SATURN_REPO_BRANCH=main
 
@@ -89,6 +89,56 @@ write_files:
         retry_seconds=30
       fi
 
+      clock_wait_seconds="${SATURN_CLOCK_SYNC_WAIT_SECONDS:-180}"
+      if ! [[ "$clock_wait_seconds" =~ ^[0-9]+$ ]] || (( clock_wait_seconds < 0 )); then
+        clock_wait_seconds=180
+      fi
+
+      clock_poll_seconds="${SATURN_CLOCK_SYNC_POLL_SECONDS:-5}"
+      if ! [[ "$clock_poll_seconds" =~ ^[0-9]+$ ]] || (( clock_poll_seconds < 1 )); then
+        clock_poll_seconds=5
+      fi
+
+      clock_is_synchronized() {
+        local ntp_sync="" system_sync=""
+        command -v timedatectl >/dev/null 2>&1 || return 1
+        ntp_sync="$(timedatectl show -p NTPSynchronized --value 2>/dev/null || true)"
+        system_sync="$(timedatectl show -p SystemClockSynchronized --value 2>/dev/null || true)"
+        [[ "$ntp_sync" == "yes" || "$system_sync" == "yes" ]]
+      }
+
+      wait_for_clock_sync() {
+        local elapsed=0
+
+        if (( clock_wait_seconds == 0 )); then
+          echo "[$(date '+%Y-%m-%d %H:%M:%S')] SATURN_CLOCK_SYNC_WAIT_SECONDS=0; skipping clock sync wait."
+          return 0
+        fi
+
+        if ! command -v timedatectl >/dev/null 2>&1; then
+          echo "[$(date '+%Y-%m-%d %H:%M:%S')] WARN: timedatectl not available; skipping explicit clock sync wait."
+          return 0
+        fi
+
+        if command -v systemctl >/dev/null 2>&1 && systemctl list-unit-files systemd-timesyncd.service >/dev/null 2>&1; then
+          systemctl start systemd-timesyncd.service >/dev/null 2>&1 || true
+        fi
+
+        until clock_is_synchronized; do
+          if (( elapsed >= clock_wait_seconds )); then
+            echo "[$(date '+%Y-%m-%d %H:%M:%S')] ERROR: timed out waiting ${clock_wait_seconds}s for system clock synchronization."
+            echo "Provisioning stops here because incorrect time can break apt signature verification and HTTPS git clone."
+            echo "Bring up network time or set SATURN_CLOCK_SYNC_WAIT_SECONDS=0 to bypass this guard explicitly."
+            return 1
+          fi
+          echo "[$(date '+%Y-%m-%d %H:%M:%S')] Waiting for system clock sync before first apt/git activity..."
+          sleep "$clock_poll_seconds"
+          elapsed=$((elapsed + clock_poll_seconds))
+        done
+
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] System clock synchronized; continuing bootstrap."
+      }
+
       find_fallback_user() {
         getent passwd | awk -F: '
           $1 != "nobody" &&
@@ -99,6 +149,27 @@ write_files:
           }
         '
       }
+
+      ensure_bootstrap_packages() {
+        local missing=()
+
+        command -v git >/dev/null 2>&1 || missing+=(git)
+        command -v sudo >/dev/null 2>&1 || missing+=(sudo)
+        dpkg -s ca-certificates >/dev/null 2>&1 || missing+=(ca-certificates)
+
+        if (( ${#missing[@]} == 0 )); then
+          echo "[$(date '+%Y-%m-%d %H:%M:%S')] Bootstrap packages already present."
+          return 0
+        fi
+
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] Installing bootstrap packages: ${missing[*]}"
+        export DEBIAN_FRONTEND=noninteractive
+        apt-get update
+        apt-get install -y --no-install-recommends "${missing[@]}"
+      }
+
+      wait_for_clock_sync
+      ensure_bootstrap_packages
 
       SATURN_HOME=""
       for _attempt in $(seq 1 20); do

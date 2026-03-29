@@ -280,6 +280,8 @@ Bootstrap behavior before the main Saturn script now is:
 
 - retries while waiting for `SATURN_USER` to exist
 - if the configured `SATURN_USER` never appears, falls back to the first normal `/home/*` login user when one exists
+- waits for system clock synchronization before first apt/git activity
+- installs bootstrap prerequisites itself after the clock is sane
 - fails with an explicit bootstrap log message instead of silently stopping before Saturn logging begins
 
 Then `provision-saturn.sh` performs:
@@ -361,12 +363,12 @@ Cloud-init bootstrap behavior in the example config:
 
 - `package_update: false`
 - `package_upgrade: false`
-- `packages:` remains limited to bootstrap prerequisites:
-  - `git`
-  - `ca-certificates`
-  - `sudo`
+- bootstrap now waits for NTP/system clock sync before its own apt/git work
+- the example no longer uses top-level cloud-init `packages:` for Saturn bootstrap prerequisites
+  - this avoids early apt signature checks running before time sync is established
+  - the bootstrap helper installs `git`, `ca-certificates`, and `sudo` itself only after the clock is sane
 
-This keeps Saturn responsible for the main apt workflow and avoids a redundant cloud-init package index refresh before `provision-saturn.sh` starts.
+This keeps Saturn responsible for the first meaningful apt activity, avoids a redundant cloud-init package index refresh before `provision-saturn.sh` starts, and prevents early package work from racing ahead of time synchronization.
 
 `cloud-init/meta-data.example.yaml` is the companion metadata file for NoCloud style cloud-init.
 
@@ -377,6 +379,8 @@ From `user-data.example.yaml`:
 - `SATURN_USER=pi`
 - `SATURN_USER_RETRY_SECONDS=30`
 - `SATURN_INSTALL_UPDATE_MANAGER=1`
+- `SATURN_CLOCK_SYNC_WAIT_SECONDS=180`
+- `SATURN_CLOCK_SYNC_POLL_SECONDS=5`
 - `SATURN_INSTALL_P2APP_CONTROL=1`
 - `SATURN_INSTALL_UDEV_RULES=1`
 - `SATURN_INSTALL_SHUTDOWN_WAITER=1`
@@ -417,6 +421,7 @@ Provisioning is configured to keep the repo clean of Python cache artifacts:
 - On current Raspberry Pi OS cloud-init images, if you replace the generated `user-data`, keep the login-user creation block or Saturn bootstrap may not find the expected user.
 - Network access is required on first boot for apt and git operations.
 - `cloud-init` user-data is root-owned; read it with `sudo cat /var/lib/cloud/instance/user-data.txt`.
+- On first boot without an RTC, provisioning now waits for network time before bootstrap apt/git activity instead of hitting repository signature checks with a stale clock.
 - Provisioning now waits and retries every `SATURN_USER_RETRY_SECONDS` (default `30`) until `SATURN_USER` exists.
 - Early clone/bootstrap failures are logged to `/var/log/saturn-cloudinit-bootstrap.log`.
 - `P1_app` is intentionally skipped in provisioning (legacy target not required for current images).
