@@ -17,6 +17,7 @@ All notable changes to provisioning assets are documented in this file.
   - removed the example top-level cloud-init `packages:` block so apt signature checks do not run before time sync is established
 
 - `cloud-init/provision-saturn.sh`
+  - now runs `../scripts/fix-LED-power-button.sh` during provisioning so first-boot setup configures the BCM15 power-switch/front-panel LED the same way as the Update G2 maintenance flow
   - now sources shared LCD/profile logic from `../scripts/saturn-lcd-lib.sh` instead of carrying a separate copy of those helpers
   - added explicit `cm4-7-custom-jd` LCD profile as a preserved alias for the current CM4 custom 7-inch panel setup
   - added explicit `cm4-7-g2-single-dsi` and `cm5-7-g2-single-dsi` LCD profiles for Laurence-style `7_0_inchC,i2c0` configs
@@ -81,6 +82,7 @@ All notable changes to provisioning assets are documented in this file.
 ### Documentation
 
 - `README.md`
+  - documented that provisioning now configures the BCM15 power-switch/front-panel LED helper
   - documented front-panel detection behavior, state file, and provisioning toggle
   - documented the new shared LCD/profile library and the first-provision front-panel-aware G2 7-inch LCD tiebreaker
   - documented the new custom and Laurence-style single-DSI 7-inch LCD profiles

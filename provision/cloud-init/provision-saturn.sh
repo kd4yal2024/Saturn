@@ -876,6 +876,18 @@ install_shutdown_waiter() {
   fi
 }
 
+install_led_power_button_fix() {
+  local script="$SATURN_REPO_DIR/scripts/fix-LED-power-button.sh"
+  if [[ -x "$script" ]]; then
+    log "Configuring power-switch LED and shutdown color state"
+    if ! bash "$script"; then
+      log "WARN: LED/power-button repair helper failed: $script"
+    fi
+  else
+    log "WARN: Missing LED/power-button repair helper: $script"
+  fi
+}
+
 install_p2app_control() {
   local saturn_home="$1"
   local script="$SATURN_REPO_DIR/sw_tools/p2app-control/install.sh"
@@ -1154,6 +1166,8 @@ main() {
     set_ui_stage "Installing shutdown waiter service"
     install_shutdown_waiter
   fi
+  set_ui_stage "Configuring power-switch LED"
+  install_led_power_button_fix
 
   if bool_true "$SATURN_REBUILD_XDMA"; then
     set_ui_stage "Building and installing XDMA module"

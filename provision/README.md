@@ -35,6 +35,7 @@ This directory contains provisioning assets for cloud-init based setup of a Satu
 - leaves `/home/pi/github/Saturn/scripts/fix-xdma.sh` available for later XDMA rebuilds after kernel updates
 - optional `p2app-control` install also adds a kernel post-install hook so future kernel upgrades can pre-stage XDMA automatically
 - optionally installs udev rules
+- configures the power-switch/front-panel LED helper so BCM15 is driven red during normal operation and white on shutdown
 - optionally installs `p2app-control` tray control (AppIndicator-based)
 - optionally installs Update Manager
 - optionally flashes FPGA (disabled by default)
