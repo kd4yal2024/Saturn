@@ -3,11 +3,13 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/wait.h>
 
 static const char *UNIT = "p2app.service";
 static const char *ICON_NAME = "p2appcontrol";
 static const char *ICON_DIR = "/usr/local/share/pixmaps";
 static const char *ICON_PATH = "/usr/local/share/pixmaps/p2appcontrol.png";
+static const char *APP_INFO_HELPER = "/usr/local/bin/saturn-g2-version-info.sh";
 
 typedef struct {
     gboolean tray_mode;
@@ -19,6 +21,7 @@ typedef struct {
     GtkWidget *btn_restart;
     GtkWidget *btn_enable_boot;
     GtkWidget *btn_disable_boot;
+    GtkWidget *btn_show_info;
     GtkWidget *btn_quit;
     AppIndicator *indicator;
     GtkWidget *tray_menu;
@@ -26,11 +29,12 @@ typedef struct {
     GtkWidget *tray_start_item;
     GtkWidget *tray_stop_item;
     GtkWidget *tray_restart_item;
+    GtkWidget *tray_show_info_item;
     GtkWidget *tray_enable_boot_item;
     GtkWidget *tray_disable_boot_item;
 } UI;
 
-static gboolean run_capture(const char *cmd, char *out, gsize outlen) {
+static gboolean run_capture_status(const char *cmd, char *out, gsize outlen, int *exit_code) {
     gchar *stdout_buf = NULL;
     gchar *stderr_buf = NULL;
     gint status = 0;
@@ -49,6 +53,14 @@ static gboolean run_capture(const char *cmd, char *out, gsize outlen) {
         return FALSE;
     }
 
+    if (exit_code) {
+        if (WIFEXITED(status)) {
+            *exit_code = WEXITSTATUS(status);
+        } else {
+            *exit_code = -1;
+        }
+    }
+
     if (out && outlen) {
         const char *src = (stdout_buf && *stdout_buf) ? stdout_buf : (stderr_buf ? stderr_buf : "");
         g_strlcpy(out, src, outlen);
@@ -57,6 +69,10 @@ static gboolean run_capture(const char *cmd, char *out, gsize outlen) {
     g_free(stdout_buf);
     g_free(stderr_buf);
     return TRUE;
+}
+
+static gboolean run_capture(const char *cmd, char *out, gsize outlen) {
+    return run_capture_status(cmd, out, outlen, NULL);
 }
 
 static void get_service_state(char *out, gsize outlen) {
@@ -160,6 +176,117 @@ static void on_disable_boot(GtkWidget *unused, gpointer data) {
     (void)unused;
     (void)data;
     privileged_systemctl("disable");
+}
+
+static gboolean collect_app_info(char *out, gsize outlen) {
+    char cmd[512];
+    int rc = -1;
+
+    if (!out || outlen == 0) {
+        return FALSE;
+    }
+
+    out[0] = '\0';
+
+    snprintf(cmd, sizeof(cmd), "sudo -n %s", APP_INFO_HELPER);
+    if (run_capture_status(cmd, out, outlen, &rc) && rc == 0 && *out) {
+        return TRUE;
+    }
+
+    snprintf(cmd, sizeof(cmd), "%s", APP_INFO_HELPER);
+    if (run_capture_status(cmd, out, outlen, &rc) && rc == 0 && *out) {
+        return TRUE;
+    }
+
+    if (!*out) {
+        g_strlcpy(out,
+                  "Unable to collect app info.\n"
+                  "Check that saturn-g2-version-info.sh is installed and readable.",
+                  outlen);
+    }
+    return FALSE;
+}
+
+static void app_info_copy_to_clipboard(const char *text) {
+    GtkClipboard *clipboard = gtk_clipboard_get(GDK_SELECTION_CLIPBOARD);
+    if (clipboard && text) {
+        gtk_clipboard_set_text(clipboard, text, -1);
+    }
+}
+
+static void show_app_info_dialog(UI *ui) {
+    GtkWidget *parent = NULL;
+    GtkWidget *dialog;
+    GtkWidget *content;
+    GtkWidget *scroller;
+    GtkWidget *text_view;
+    GtkTextBuffer *buffer;
+    char info[32768];
+    gint response;
+
+    if (gtk_widget_get_visible(ui->win)) {
+        parent = ui->win;
+    }
+
+    collect_app_info(info, sizeof(info));
+
+    dialog = gtk_dialog_new_with_buttons("Saturn App / Firmware Info",
+                                         parent ? GTK_WINDOW(parent) : NULL,
+                                         GTK_DIALOG_MODAL | GTK_DIALOG_DESTROY_WITH_PARENT,
+                                         "Refresh", 1,
+                                         "Copy", 2,
+                                         "Close", GTK_RESPONSE_CLOSE,
+                                         NULL);
+    gtk_window_set_default_size(GTK_WINDOW(dialog), 860, 560);
+
+    content = gtk_dialog_get_content_area(GTK_DIALOG(dialog));
+    scroller = gtk_scrolled_window_new(NULL, NULL);
+    gtk_widget_set_hexpand(scroller, TRUE);
+    gtk_widget_set_vexpand(scroller, TRUE);
+    gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(scroller),
+                                   GTK_POLICY_AUTOMATIC,
+                                   GTK_POLICY_AUTOMATIC);
+    gtk_container_add(GTK_CONTAINER(content), scroller);
+
+    text_view = gtk_text_view_new();
+    gtk_text_view_set_editable(GTK_TEXT_VIEW(text_view), FALSE);
+    gtk_text_view_set_cursor_visible(GTK_TEXT_VIEW(text_view), FALSE);
+    gtk_text_view_set_wrap_mode(GTK_TEXT_VIEW(text_view), GTK_WRAP_NONE);
+    gtk_text_view_set_monospace(GTK_TEXT_VIEW(text_view), TRUE);
+    gtk_container_add(GTK_CONTAINER(scroller), text_view);
+
+    buffer = gtk_text_view_get_buffer(GTK_TEXT_VIEW(text_view));
+    gtk_text_buffer_set_text(buffer, info, -1);
+
+    gtk_widget_show_all(dialog);
+
+    for (;;) {
+        response = gtk_dialog_run(GTK_DIALOG(dialog));
+        if (response == 1) {
+            collect_app_info(info, sizeof(info));
+            gtk_text_buffer_set_text(buffer, info, -1);
+            continue;
+        }
+        if (response == 2) {
+            GtkTextIter start;
+            GtkTextIter end;
+            gchar *text;
+
+            gtk_text_buffer_get_bounds(buffer, &start, &end);
+            text = gtk_text_buffer_get_text(buffer, &start, &end, FALSE);
+            app_info_copy_to_clipboard(text);
+            g_free(text);
+            continue;
+        }
+        break;
+    }
+
+    gtk_widget_destroy(dialog);
+}
+
+static void on_show_info(GtkWidget *unused, gpointer data) {
+    (void)unused;
+    show_app_info_dialog((UI *)data);
 }
 
 static void on_quit(GtkWidget *unused, gpointer data) {
@@ -286,6 +413,7 @@ static gboolean create_tray(UI *ui) {
     ui->tray_start_item = gtk_menu_item_new_with_label("Start P2_app");
     ui->tray_stop_item = gtk_menu_item_new_with_label("Stop P2_app");
     ui->tray_restart_item = gtk_menu_item_new_with_label("Restart P2_app");
+    ui->tray_show_info_item = gtk_menu_item_new_with_label("Show App Info");
     ui->tray_enable_boot_item = gtk_menu_item_new_with_label("Enable at Boot");
     ui->tray_disable_boot_item = gtk_menu_item_new_with_label("Disable at Boot");
     tray_quit_item = gtk_menu_item_new_with_label("Quit");
@@ -295,6 +423,7 @@ static gboolean create_tray(UI *ui) {
     gtk_menu_shell_append(GTK_MENU_SHELL(ui->tray_menu), ui->tray_start_item);
     gtk_menu_shell_append(GTK_MENU_SHELL(ui->tray_menu), ui->tray_stop_item);
     gtk_menu_shell_append(GTK_MENU_SHELL(ui->tray_menu), ui->tray_restart_item);
+    gtk_menu_shell_append(GTK_MENU_SHELL(ui->tray_menu), ui->tray_show_info_item);
     gtk_menu_shell_append(GTK_MENU_SHELL(ui->tray_menu), gtk_separator_menu_item_new());
     gtk_menu_shell_append(GTK_MENU_SHELL(ui->tray_menu), ui->tray_enable_boot_item);
     gtk_menu_shell_append(GTK_MENU_SHELL(ui->tray_menu), ui->tray_disable_boot_item);
@@ -306,6 +435,7 @@ static gboolean create_tray(UI *ui) {
     g_signal_connect(ui->tray_start_item, "activate", G_CALLBACK(on_start), ui);
     g_signal_connect(ui->tray_stop_item, "activate", G_CALLBACK(on_stop), ui);
     g_signal_connect(ui->tray_restart_item, "activate", G_CALLBACK(on_restart), ui);
+    g_signal_connect(ui->tray_show_info_item, "activate", G_CALLBACK(on_show_info), ui);
     g_signal_connect(ui->tray_enable_boot_item, "activate", G_CALLBACK(on_enable_boot), ui);
     g_signal_connect(ui->tray_disable_boot_item, "activate", G_CALLBACK(on_disable_boot), ui);
     g_signal_connect(tray_quit_item, "activate", G_CALLBACK(on_quit), ui);
@@ -407,14 +537,20 @@ int main(int argc, char **argv) {
     gtk_box_pack_start(GTK_BOX(hbox), ui.btn_enable_boot, TRUE, TRUE, 0);
     gtk_box_pack_start(GTK_BOX(hbox), ui.btn_disable_boot, TRUE, TRUE, 0);
 
+    hbox = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
+    gtk_box_pack_start(GTK_BOX(vbox), hbox, FALSE, FALSE, 0);
+
+    ui.btn_show_info = gtk_button_new_with_label("App Info");
     ui.btn_quit = gtk_button_new_with_label("Quit");
-    gtk_box_pack_start(GTK_BOX(vbox), ui.btn_quit, FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(hbox), ui.btn_show_info, TRUE, TRUE, 0);
+    gtk_box_pack_start(GTK_BOX(hbox), ui.btn_quit, TRUE, TRUE, 0);
 
     g_signal_connect(ui.btn_start, "clicked", G_CALLBACK(on_start), &ui);
     g_signal_connect(ui.btn_stop, "clicked", G_CALLBACK(on_stop), &ui);
     g_signal_connect(ui.btn_restart, "clicked", G_CALLBACK(on_restart), &ui);
     g_signal_connect(ui.btn_enable_boot, "clicked", G_CALLBACK(on_enable_boot), &ui);
     g_signal_connect(ui.btn_disable_boot, "clicked", G_CALLBACK(on_disable_boot), &ui);
+    g_signal_connect(ui.btn_show_info, "clicked", G_CALLBACK(on_show_info), &ui);
     g_signal_connect(ui.btn_quit, "clicked", G_CALLBACK(on_quit), &ui);
     g_signal_connect(ui.win, "delete-event", G_CALLBACK(on_window_delete), &ui);
     g_signal_connect(ui.win, "destroy", G_CALLBACK(on_window_destroy), &ui);

@@ -22,6 +22,8 @@ FIX_XDMA_INSTALL="/usr/local/bin/saturn-fix-xdma.sh"
 XDMA_POSTINST_LOCAL="${REPO_ROOT}/scripts/saturn-xdma-kernel-postinst.sh"
 XDMA_POSTINST_INSTALL="/usr/local/bin/saturn-xdma-kernel-postinst.sh"
 XDMA_POSTINST_HOOK_PATH="/etc/kernel/postinst.d/saturn-xdma"
+APP_INFO_LOCAL="${REPO_ROOT}/update_manager/scripts/g2-version-info.sh"
+APP_INFO_INSTALL="/usr/local/bin/saturn-g2-version-info.sh"
 
 BIN_LOCAL="${HERE}/p2app-control"
 BIN_INSTALL="/usr/local/bin/p2app-control"
@@ -112,12 +114,18 @@ if [[ ! -x "${XDMA_POSTINST_LOCAL}" ]]; then
   echo "    ${XDMA_POSTINST_LOCAL}"
   exit 1
 fi
+if [[ ! -x "${APP_INFO_LOCAL}" ]]; then
+  echo "[!] ERROR: App info helper not found or not executable:"
+  echo "    ${APP_INFO_LOCAL}"
+  exit 1
+fi
 
 echo "[*] Installing XDMA support helpers"
 sudo install -D -m 0755 "${XDMA_DOCTOR_LOCAL}" "${XDMA_DOCTOR_INSTALL}"
 sudo install -D -m 0755 "${XDMA_READY_LOCAL}" "${XDMA_READY_INSTALL}"
 sudo install -D -m 0755 "${FIX_XDMA_LOCAL}" "${FIX_XDMA_INSTALL}"
 sudo install -D -m 0755 "${XDMA_POSTINST_LOCAL}" "${XDMA_POSTINST_INSTALL}"
+sudo install -D -m 0755 "${APP_INFO_LOCAL}" "${APP_INFO_INSTALL}"
 
 echo "[*] Ensuring kernel postinst hook exists/updated -> ${XDMA_POSTINST_HOOK_PATH}"
 TMP_POSTINST_HOOK="$(mktemp)"
@@ -244,6 +252,7 @@ ${CONTROL_USER} ALL=(root) NOPASSWD: ${SYSTEMCTL_BIN} stop ${UNIT_NAME}
 ${CONTROL_USER} ALL=(root) NOPASSWD: ${SYSTEMCTL_BIN} restart ${UNIT_NAME}
 ${CONTROL_USER} ALL=(root) NOPASSWD: ${SYSTEMCTL_BIN} enable ${UNIT_NAME}
 ${CONTROL_USER} ALL=(root) NOPASSWD: ${SYSTEMCTL_BIN} disable ${UNIT_NAME}
+${CONTROL_USER} ALL=(root) NOPASSWD: ${APP_INFO_INSTALL}
 EOF4
 
 if command -v visudo >/dev/null 2>&1; then
@@ -326,6 +335,7 @@ echo "    Doctor:   ${XDMA_DOCTOR_INSTALL}"
 echo "    XDMA gate:${XDMA_READY_INSTALL}"
 echo "    Fix XDMA: ${FIX_XDMA_INSTALL}"
 echo "    Postinst: ${XDMA_POSTINST_INSTALL}"
+echo "    App Info: ${APP_INFO_INSTALL}"
 echo "    Desktop:  (legacy shortcut removed)"
 if [[ "$ENABLE_TRAY_AUTOSTART" == "1" ]]; then
   echo "    Autostart:${AUTOSTART_FILE}"

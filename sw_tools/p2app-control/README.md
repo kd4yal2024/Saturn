@@ -4,8 +4,8 @@ Small GTK desktop control widget for starting/stopping the system `p2app.service
 (P2_app for ANAN G2).
 
 This tool supports:
-- window mode (`Start`, `Stop`, `Restart`, `Enable Boot`, `Disable Boot` + status)
-- tray mode (`--tray`) using Ayatana AppIndicator (works with modern Wayland/X11 panels)
+- window mode (`Start`, `Stop`, `Restart`, `Enable Boot`, `Disable Boot`, `App Info` + status)
+- tray mode (`--tray`) using Ayatana AppIndicator (works with modern Wayland/X11 panels), including `Show App Info`
 
 It also installs/updates the systemd service and configures tray autostart.
 
@@ -27,6 +27,8 @@ Location in repo:
   - `/usr/local/bin/saturn-fix-xdma.sh`
 - Installs the kernel post-install staging helper to:
   - `/usr/local/bin/saturn-xdma-kernel-postinst.sh`
+- Installs the app/firmware info helper to:
+  - `/usr/local/bin/saturn-g2-version-info.sh`
 
 ### Legacy desktop shortcut
 - Older installs may have:
@@ -74,6 +76,8 @@ the installer adds:
 Scope details:
 - polkit rule: installing desktop user (normally `pi`), local + active session only, unit `p2app.service`, verbs `start` / `stop` / `restart`
 - sudoers rule: installing desktop user (normally `pi`), exact commands for `systemctl start|stop|restart|enable|disable p2app.service`
+- sudoers rule also permits:
+  - `/usr/local/bin/saturn-g2-version-info.sh`
 
 ---
 
@@ -119,6 +123,7 @@ This will:
 * install `/usr/local/bin/saturn-xdma-ready.sh`
 * install `/usr/local/bin/saturn-fix-xdma.sh`
 * install `/usr/local/bin/saturn-xdma-kernel-postinst.sh`
+* install `/usr/local/bin/saturn-g2-version-info.sh`
 * create/update `/etc/kernel/postinst.d/saturn-xdma`
 * create/update `/etc/systemd/system/saturn-xdma-ready.service`
 * create/update `/etc/systemd/system/p2app.service`
@@ -156,6 +161,12 @@ Run as panel/toolbar tray widget:
 
 ```bash
 /usr/local/bin/p2app-control --tray
+```
+
+Show app / firmware info directly:
+
+```bash
+/usr/local/bin/saturn-g2-version-info.sh
 ```
 
 On Wayland desktops (for example labwc + wf-panel), the tray icon is provided
@@ -204,6 +215,13 @@ It also installs a kernel post-install hook (`/etc/kernel/postinst.d/saturn-xdma
 that calls `/usr/local/bin/saturn-xdma-kernel-postinst.sh`, which reuses
 `/usr/local/bin/saturn-fix-xdma.sh --stage-kernel <release>` to pre-stage XDMA
 for newly installed kernels without disturbing the currently running system.
+
+The `App Info` action in the widget uses `/usr/local/bin/saturn-g2-version-info.sh`
+to show:
+- active P2/P3 app selection
+- source-version fallback
+- live `/p23_perf` details when available
+- latest `p2app.service` startup banner lines from the journal
 
 `p2app.service` now depends on the readiness gate instead of owning the XDMA
 wait loop directly. If the device node still never appears, the installer logs
