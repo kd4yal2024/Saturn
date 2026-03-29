@@ -56,6 +56,9 @@ SATURN_UI_SOURCE_FILE="${SATURN_UI_SOURCE_FILE:-${SCRIPT_DIR}/saturn-provision-u
 SATURN_UI_SHOW_LOG_DEFAULT="${SATURN_UI_SHOW_LOG_DEFAULT:-0}"
 SATURN_UI_LAUNCHER="${SATURN_UI_LAUNCHER:-/usr/local/bin/saturn-provision-ui-launcher.sh}"
 SATURN_UI_AUTOSTART_NAME="${SATURN_UI_AUTOSTART_NAME:-saturn-provision-ui.desktop}"
+SATURN_UI_POWER_HELPER_SOURCE="${SATURN_UI_POWER_HELPER_SOURCE:-${SCRIPT_DIR}/saturn-provision-powerctl.sh}"
+SATURN_UI_POWER_HELPER="${SATURN_UI_POWER_HELPER:-/usr/local/sbin/saturn-provision-powerctl}"
+SATURN_UI_POWER_SUDOERS="${SATURN_UI_POWER_SUDOERS:-/etc/sudoers.d/49-saturn-provision-powerctl}"
 SATURN_CLEAN_TMP_AFTER_PROVISION="${SATURN_CLEAN_TMP_AFTER_PROVISION:-1}"
 SATURN_ENABLE_I2C="${SATURN_ENABLE_I2C:-1}"
 SATURN_ENABLE_SSH="${SATURN_ENABLE_SSH:-1}"
@@ -295,6 +298,33 @@ launch_desktop_ui() {
   else
     log "WARN: Failed to launch desktop provisioning UI."
   fi
+}
+
+install_desktop_ui_power_helper() {
+  local tmp_sudoers
+
+  if [[ ! -f "$SATURN_UI_POWER_HELPER_SOURCE" ]]; then
+    log "WARN: Desktop UI power helper source not found: $SATURN_UI_POWER_HELPER_SOURCE"
+    return 1
+  fi
+
+  install -d -m 0755 "$(dirname "$SATURN_UI_POWER_HELPER")"
+  install -m 0755 "$SATURN_UI_POWER_HELPER_SOURCE" "$SATURN_UI_POWER_HELPER"
+
+  tmp_sudoers="$(mktemp)"
+  cat > "$tmp_sudoers" <<EOF
+Defaults!${SATURN_UI_POWER_HELPER} !requiretty
+${SATURN_USER} ALL=(root) NOPASSWD: ${SATURN_UI_POWER_HELPER} reboot, ${SATURN_UI_POWER_HELPER} poweroff
+EOF
+
+  if command -v visudo >/dev/null 2>&1; then
+    visudo -cf "$tmp_sudoers" >/dev/null || die "Generated sudoers entry for Saturn provisioning power helper is invalid."
+  fi
+
+  install -m 0440 "$tmp_sudoers" "$SATURN_UI_POWER_SUDOERS"
+  rm -f "$tmp_sudoers"
+  log "Installed desktop UI power helper: $SATURN_UI_POWER_HELPER"
+  log "Installed desktop UI power sudoers rule: $SATURN_UI_POWER_SUDOERS"
 }
 
 set_ui_stage() {
@@ -1121,6 +1151,8 @@ main() {
 
   set_ui_stage "Installing desktop provisioning UI prerequisites"
   ensure_ui_packages
+  set_ui_stage "Installing desktop power helper"
+  install_desktop_ui_power_helper
   set_ui_stage "Preparing desktop provisioning UI autostart"
   install_desktop_ui_autostart "$saturn_home"
   set_ui_stage "Launching desktop provisioning interface"

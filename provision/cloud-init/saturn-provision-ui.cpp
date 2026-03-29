@@ -4,6 +4,7 @@
 #include <fstream>
 #include <sstream>
 #include <string>
+#include <vector>
 
 struct UiState
 {
@@ -150,28 +151,97 @@ static void set_status(UiState *ui, const std::string &message)
     gtk_label_set_text(GTK_LABEL(ui->status_label), message.c_str());
 }
 
-static void request_reboot(UiState *ui)
+static bool try_command_sync(gchar **argv, std::string *error_text)
 {
     GError *error = nullptr;
-    const gchar *commands[] = {
-        "pkexec /usr/bin/systemctl reboot",
-        "/usr/bin/systemctl reboot",
+    gchar *standard_output = nullptr;
+    gchar *standard_error = nullptr;
+    gint wait_status = 0;
+
+    const gboolean spawned = g_spawn_sync(nullptr,
+                                          argv,
+                                          nullptr,
+                                          static_cast<GSpawnFlags>(G_SPAWN_SEARCH_PATH),
+                                          nullptr,
+                                          nullptr,
+                                          &standard_output,
+                                          &standard_error,
+                                          &wait_status,
+                                          &error);
+    if (!spawned)
+    {
+        if (error)
+        {
+            *error_text = error->message ? error->message : "Failed to start command.";
+            g_error_free(error);
+        }
+        else
+        {
+            *error_text = "Failed to start command.";
+        }
+        g_free(standard_output);
+        g_free(standard_error);
+        return false;
+    }
+
+    if (g_spawn_check_wait_status(wait_status, &error))
+    {
+        g_free(standard_output);
+        g_free(standard_error);
+        return true;
+    }
+
+    std::string combined_error;
+    if (error && error->message)
+    {
+        combined_error = error->message;
+        g_error_free(error);
+    }
+    if (standard_error && *standard_error)
+    {
+        if (!combined_error.empty())
+        {
+            combined_error += " ";
+        }
+        combined_error += standard_error;
+    }
+    if (combined_error.empty())
+    {
+        combined_error = "Command exited unsuccessfully.";
+    }
+    *error_text = trim_copy(combined_error);
+    g_free(standard_output);
+    g_free(standard_error);
+    return false;
+}
+
+static void request_reboot(UiState *ui)
+{
+    std::vector<std::vector<gchar *>> commands = {
+        {const_cast<gchar *>("/usr/bin/sudo"), const_cast<gchar *>("-n"), const_cast<gchar *>("/usr/local/sbin/saturn-provision-powerctl"), const_cast<gchar *>("reboot"), nullptr},
+        {const_cast<gchar *>("pkexec"), const_cast<gchar *>("/usr/local/sbin/saturn-provision-powerctl"), const_cast<gchar *>("reboot"), nullptr},
+        {const_cast<gchar *>("/usr/bin/systemctl"), const_cast<gchar *>("reboot"), nullptr},
     };
 
-    for (const gchar *command : commands)
+    gtk_widget_set_sensitive(ui->reboot_button, FALSE);
+    set_status(ui, "Requesting reboot...");
+
+    std::string last_error;
+    for (auto &command : commands)
     {
-        if (g_spawn_command_line_async(command, &error))
+        if (try_command_sync(command.data(), &last_error))
         {
             set_status(ui, "Reboot requested. The system should restart shortly.");
             return;
         }
-        if (error)
-        {
-            g_error_free(error);
-            error = nullptr;
-        }
     }
 
+    gtk_widget_set_sensitive(ui->reboot_button, TRUE);
+    if (!last_error.empty())
+    {
+        set_status(ui, "Reboot request failed: " + last_error);
+        return;
+    }
     set_status(ui, "Provisioning completed. Please reboot the system before using Saturn.");
 }
 

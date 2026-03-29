@@ -18,6 +18,7 @@ All notable changes to provisioning assets are documented in this file.
 
 - `cloud-init/provision-saturn.sh`
   - now runs `../scripts/fix-LED-power-button.sh` during provisioning so first-boot setup configures the BCM15 power-switch/front-panel LED the same way as the Update G2 maintenance flow
+  - now installs `/usr/local/sbin/saturn-provision-powerctl` plus a restricted sudoers rule for `SATURN_USER`, giving the desktop provisioning UI a reliable reboot path that does not depend on a working polkit prompt
   - now sources shared LCD/profile logic from `../scripts/saturn-lcd-lib.sh` instead of carrying a separate copy of those helpers
   - added explicit `cm4-7-custom-jd` LCD profile as a preserved alias for the current CM4 custom 7-inch panel setup
   - added explicit `cm4-7-g2-single-dsi` and `cm5-7-g2-single-dsi` LCD profiles for Laurence-style `7_0_inchC,i2c0` configs
@@ -79,6 +80,10 @@ All notable changes to provisioning assets are documented in this file.
 - `../rules/install-rules.sh`
   - now accepts `SATURN_FRONT_PANEL_TYPE` for logging/state while continuing to install the standard `61-g2-serial.rules` file unless explicitly overridden
 
+- `cloud-init/saturn-provision-ui.cpp`
+  - reboot requests now verify the real helper exit status instead of treating command spawn success as proof that reboot authorization worked
+  - the UI now prefers the installed `saturn-provision-powerctl` helper and reports a visible failure message when reboot could not be requested
+
 ### Documentation
 
 - `README.md`
@@ -87,8 +92,8 @@ All notable changes to provisioning assets are documented in this file.
   - documented the new shared LCD/profile library and the first-provision front-panel-aware G2 7-inch LCD tiebreaker
   - documented the new custom and Laurence-style single-DSI 7-inch LCD profiles
   - documented the new XDMA readiness gate and doctor path installed with `p2app-control`
+  - documented the root-owned provisioning power helper used by the desktop UI reboot action
   - documented the new hardware classification fields and that `SATURN_LCD_PROFILE=auto` is currently Raspberry-Pi-only
-
   - documented the new `/var/log/saturn-cloudinit-bootstrap.log` early bootstrap log and the warning about preserving login-user creation in cloud-init `user-data`
   - documented the new first-boot clock-sync wait and the removal of early cloud-init `packages:` bootstrap apt work
 - `../sw_tools/p2app-control/README.md`

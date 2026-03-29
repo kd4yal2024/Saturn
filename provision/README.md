@@ -7,6 +7,7 @@ This directory contains provisioning assets for cloud-init based setup of a Satu
 - `cloud-init/user-data.example.yaml`
 - `cloud-init/meta-data.example.yaml`
 - `cloud-init/provision-saturn.sh`
+- `cloud-init/saturn-provision-powerctl.sh`
 - `cloud-init/saturn-provision-ui.cpp`
 
 ## What It Does
@@ -36,6 +37,7 @@ This directory contains provisioning assets for cloud-init based setup of a Satu
 - optional `p2app-control` install also adds a kernel post-install hook so future kernel upgrades can pre-stage XDMA automatically
 - optionally installs udev rules
 - configures the power-switch/front-panel LED helper so BCM15 is driven red during normal operation and white on shutdown
+- installs a root-owned provisioning power helper so the desktop UI can request reboot reliably at the end of first-boot setup
 - optionally installs `p2app-control` tray control (AppIndicator-based)
 - optionally installs Update Manager
 - optionally flashes FPGA (disabled by default)
@@ -83,6 +85,7 @@ Notes:
 - Cloud-init boots without a desktop session in many images; in that case `auto` mode will skip UI and continue normal provisioning.
 - Provisioning now installs desktop UI prerequisites early (`g++`, `pkg-config`, `libgtk-3-dev`) and attempts to launch the UI near the start of the run.
 - Provisioning now installs a per-user autostart entry at `~/.config/autostart/saturn-provision-ui.desktop` for `SATURN_USER` (default `pi`), so the widget appears when that desktop session starts.
+- Provisioning also installs `/usr/local/sbin/saturn-provision-powerctl` plus a restricted sudoers entry so the UI `Reboot Now` action does not depend on an interactive polkit prompt or TTY-bound `systemctl` authorization.
 - Once launched, the provisioning UI remains open after completion until the user clicks `Close`.
 - On successful provisioning completion, that autostart entry is removed automatically to avoid launching on every future desktop login.
 - On successful provisioning completion, temporary Saturn artifacts under `/tmp` are cleaned by default (`SATURN_CLEAN_TMP_AFTER_PROVISION=1`).
