@@ -4,6 +4,12 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
 
 ## [Unreleased]
 ### Added
+- Rust server test coverage for the extracted handler/helper modules (`auth`,
+  `middleware`, `pages`, `update`, `util`, `monitor`, `clone`, `image`,
+  `repair`), including endpoint-level checks for CSRF enforcement, update
+  policy/status handlers, the shared `begin_update_activity` conflict gate, Pi
+  image request validation, and repair-pack/verify-system-config response
+  shape.
 - Graceful shutdown: server now handles SIGINT/SIGTERM via `axum::serve().with_graceful_shutdown()`, allowing in-flight requests to complete before exit.
 - Runtime repo-tree discovery/switching API: `GET /list_repo_roots`, `POST /set_repo_root`, with persisted active root (`repo_root.txt`).
 - Backup UI controls for selecting and applying the active repo root.
@@ -35,6 +41,20 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
 - Saturn Go page now includes an `XDMA Doctor` action that runs a classified read-only PCIe/XDMA report through the existing privileged helper lane.
 
 ### Changed
+- `update_manager/rust-server/src/main.rs` is no longer carrying shadow copies
+  of the server subsystems. The extracted modules (`state`, `util`, `update`,
+  `auth`, `middleware`, `pages`, `monitor`, `clone`, `image`, `repair`) are
+  now wired into the live binary, and `main.rs` has been reduced to router and
+  remaining shared runtime logic instead of a parallel monolith plus orphaned
+  code paths.
+- Backup/restore test tooling now carries forward the active clone/image
+  request behavior: clone start supports `verify_compare`, stderr
+  classification is normalized in the clone job log, and `pi_wipe_target`
+  lives beside the rest of the clone-device workflow instead of remaining
+  inline in `main.rs`.
+- Hidden P2/P3 Test Lab `/p23test` now honors the shared light/dark browser
+  theme preference and includes an in-page theme toggle instead of forcing a
+  dark-only palette.
 - Saturn Go installer/self-update now also deploys the root-owned `saturn-xdma-doctor.sh` helper into `/usr/local/lib/saturn-go/scripts` and extends the narrow sudoers policy so the non-root web service can invoke it via `/opt/saturn-go/scripts/xdma-doctor.sh`.
 - Appliance update policy now includes `healthcheck_retries` and
   `healthcheck_initial_delay_secs`, allowing staged repo switches and rollback

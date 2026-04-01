@@ -301,3 +301,51 @@ pub async fn pi_image_download(
 
     Ok((headers, body).into_response())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
+    use axum::routing::post;
+    use tower::ServiceExt;
+
+    fn job_router() -> axum::Router {
+        axum::Router::new()
+            .route("/pi_image_start", post(pi_image_start))
+    }
+
+    /// POST with an out_dir that does not exist must return 400.
+    #[tokio::test]
+    async fn test_image_start_bad_out_dir() {
+        let app = job_router();
+        let req = Request::builder()
+            .method("POST")
+            .uri("/pi_image_start")
+            .header("content-type", "application/json")
+            .body(Body::from(r#"{"out_dir":"/no/such/path/xyz"}"#))
+            .unwrap();
+        let res = app.oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+    }
+
+    /// POST with an empty body (defaults applied: shrink=true, compress=false,
+    /// out_dir="/tmp") must accept the request and return 200 with a job_id.
+    /// The background task spawned by the handler will fail (script missing)
+    /// but that is async and does not affect the HTTP response.
+    #[tokio::test]
+    async fn test_image_start_default_params_accepted() {
+        let app = job_router();
+        let req = Request::builder()
+            .method("POST")
+            .uri("/pi_image_start")
+            .header("content-type", "application/json")
+            .body(Body::from("{}"))
+            .unwrap();
+        let res = app.oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(res.into_body(), 4096).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert!(json.get("job_id").is_some(), "response must contain job_id");
+    }
+}

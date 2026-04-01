@@ -8,7 +8,7 @@ use std::time::Duration;
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 
-use crate::util::{json_error, output_error_text};
+use crate::util::output_error_text;
 
 #[derive(Deserialize)]
 pub struct PasswordForm {
@@ -172,14 +172,112 @@ fn is_protected_pid(pid: i32) -> bool {
         return true;
     }
     if let Ok(data) = std::fs::read_to_string(format!("/proc/{pid}/status")) {
-        for line in data.lines() {
-            if line.starts_with("Uid:") {
-                let parts: Vec<&str> = line.split_whitespace().collect();
-                if parts.len() >= 2 {
-                    return parts[1] == "0";
-                }
+        return uid_is_root_from_status(&data);
+    }
+    false
+}
+
+/// Parse a /proc/PID/status blob and return true if the real UID (Uid: field,
+/// first value) is 0. Extracted so it can be unit-tested without /proc access.
+pub(crate) fn uid_is_root_from_status(status: &str) -> bool {
+    for line in status.lines() {
+        if line.starts_with("Uid:") {
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            if parts.len() >= 2 {
+                return parts[1] == "0";
             }
         }
     }
     false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
+    use axum::routing::post;
+    use tower::ServiceExt;
+
+    fn kill_router() -> axum::Router {
+        axum::Router::new().route("/kill_process/:pid", post(kill_process))
+    }
+
+    // --- change_password validation ---
+
+    /// Passwords shorter than 5 characters must be rejected before any htpasswd
+    /// call is made (no external process needed for this path).
+    #[tokio::test]
+    async fn test_change_password_rejects_short() {
+        let app = axum::Router::new()
+            .route("/change_password", post(change_password));
+        let req = Request::builder()
+            .method("POST")
+            .uri("/change_password")
+            .header("content-type", "application/x-www-form-urlencoded")
+            .body(Body::from("new_password=abc"))
+            .unwrap();
+        let res = app.oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::OK); // handler returns 200 with error JSON
+        let body = axum::body::to_bytes(res.into_body(), 4096).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["status"], "error");
+        assert!(json["message"].as_str().unwrap().contains("min length"));
+    }
+
+    // --- kill_process validation ---
+
+    /// PID 0 must return 400.
+    #[tokio::test]
+    async fn test_kill_process_rejects_zero_pid() {
+        let app = kill_router();
+        let req = Request::builder()
+            .method("POST")
+            .uri("/kill_process/0")
+            .body(Body::empty())
+            .unwrap();
+        let res = app.oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+    }
+
+    /// An unknown signal name must return 400.
+    #[tokio::test]
+    async fn test_kill_process_rejects_bad_signal() {
+        let app = kill_router();
+        let req = Request::builder()
+            .method("POST")
+            .uri("/kill_process/99999?sig=hup") // valid PID range, invalid sig name
+            .body(Body::empty())
+            .unwrap();
+        let res = app.oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+    }
+
+    // --- is_protected_pid / uid_is_root_from_status ---
+
+    /// pid <= 2 is always protected regardless of /proc content.
+    #[test]
+    fn test_protected_pid_low_values() {
+        assert!(is_protected_pid(0));
+        assert!(is_protected_pid(1));
+        assert!(is_protected_pid(2));
+    }
+
+    #[test]
+    fn test_uid_is_root_true() {
+        let status = "Name:\tinit\nUid:\t0\t0\t0\t0\nGid:\t0\t0\t0\t0\n";
+        assert!(uid_is_root_from_status(status));
+    }
+
+    #[test]
+    fn test_uid_is_root_false_for_nonroot() {
+        let status = "Name:\tpi\nUid:\t1000\t1000\t1000\t1000\nGid:\t1000\t1000\t1000\t1000\n";
+        assert!(!uid_is_root_from_status(status));
+    }
+
+    #[test]
+    fn test_uid_is_root_false_for_missing_uid_line() {
+        let status = "Name:\tpi\nGid:\t1000\t1000\t1000\t1000\n";
+        assert!(!uid_is_root_from_status(status));
+    }
 }

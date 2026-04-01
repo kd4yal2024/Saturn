@@ -244,3 +244,53 @@ pub async fn verify_system_config() -> impl IntoResponse {
         "checks": checks,
     }))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::body::{to_bytes, Body};
+    use axum::http::{Request, StatusCode};
+    use axum::routing::get;
+    use tower::ServiceExt;
+
+    fn verify_router() -> axum::Router {
+        axum::Router::new().route("/verify_system_config", get(verify_system_config))
+    }
+
+    #[tokio::test]
+    async fn test_verify_system_config_json_shape() {
+        let app = verify_router();
+        let req = Request::builder()
+            .method("GET")
+            .uri("/verify_system_config")
+            .body(Body::empty())
+            .unwrap();
+        let res = app.oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let body = to_bytes(res.into_body(), 64 * 1024).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert!(json.get("ok").is_some(), "response must contain ok");
+        assert!(json.get("missing").is_some(), "response must contain missing");
+        assert!(json.get("warnings").is_some(), "response must contain warnings");
+        assert!(json.get("checks").is_some(), "response must contain checks");
+    }
+
+    #[tokio::test]
+    async fn test_repair_pack_sets_gzip_headers() {
+        let res = repair_pack().await.expect("repair_pack should return a response");
+        assert_eq!(res.status(), StatusCode::OK);
+        assert_eq!(
+            res.headers().get("Content-Type").and_then(|v| v.to_str().ok()),
+            Some("application/gzip")
+        );
+        let disposition = res
+            .headers()
+            .get("Content-Disposition")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("");
+        assert!(
+            disposition.contains("saturn-repair-pack-"),
+            "Content-Disposition should include generated repair pack filename"
+        );
+    }
+}

@@ -3,6 +3,9 @@ name = "saturn-go"
 version = "0.1.0"
 edition = "2021"
 
+[dev-dependencies]
+tower = { version = "0.4", features = ["util"] }
+
 [dependencies]
 axum = { version = "0.7", features = ["multipart"] }
 serde = { version = "1.0", features = ["derive"] }

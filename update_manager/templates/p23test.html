@@ -7,7 +7,7 @@
   <script src="https://cdn.jsdelivr.net/npm/ansi_up@5.2.1/ansi_up.min.js"></script>
   <style>
     :root {
-      color-scheme: dark;
+      color-scheme: light dark;
       --bg-0: #071018;
       --bg-1: #0c1723;
       --bg-2: #122131;
@@ -30,6 +30,22 @@
         radial-gradient(circle at top right, rgba(56, 189, 248, 0.12), transparent 28%),
         radial-gradient(circle at top left, rgba(110, 231, 183, 0.10), transparent 24%),
         linear-gradient(180deg, #08121c 0%, #071018 100%);
+      transition: background .25s ease, color .25s ease;
+    }
+    body.light {
+      color-scheme: light;
+      --line: rgba(15,23,42,0.10);
+      --line-strong: rgba(15,23,42,0.16);
+      --text: #1f2937;
+      --muted: #64748b;
+      --accent: #2563eb;
+      --good: #059669;
+      --warn: #d97706;
+      --crit: #dc2626;
+      background:
+        radial-gradient(circle at top right, rgba(59, 130, 246, 0.14), transparent 28%),
+        radial-gradient(circle at top left, rgba(16, 185, 129, 0.10), transparent 24%),
+        linear-gradient(180deg, #f8fbff 0%, #edf4fb 100%);
     }
     .wrap { max-width: 1400px; margin: 0 auto; padding: 22px; }
     .card {
@@ -44,6 +60,15 @@
       background:
         linear-gradient(135deg, rgba(138,212,255,0.13), rgba(110,231,183,0.06)),
         linear-gradient(180deg, rgba(18,33,49,0.98), rgba(11,23,35,0.98));
+    }
+    body.light .card {
+      background: linear-gradient(180deg, rgba(255,255,255,0.98), rgba(245,248,252,0.98));
+      box-shadow: 0 12px 30px rgba(15,23,42,0.08);
+    }
+    body.light .hero {
+      background:
+        linear-gradient(135deg, rgba(37,99,235,0.09), rgba(16,185,129,0.04)),
+        linear-gradient(180deg, rgba(255,255,255,0.98), rgba(245,248,252,0.98));
     }
     .main-grid {
       display: grid;
@@ -83,14 +108,24 @@
     }
     .btn:hover { background: rgba(255,255,255,0.1); border-color: rgba(255,255,255,0.24); transform: translateY(-1px); }
     .btn:disabled { opacity:.55; cursor:not-allowed; transform:none; }
+    .btn.icon { display:inline-flex; align-items:center; justify-content:center; width:40px; height:40px; padding:0; }
     .btn.primary { background:#184ea8; border-color:#2a63c6; }
     .btn.danger { border-color: rgba(252,165,165,0.5); color: #fecaca; }
+    body.light .btn {
+      border-color: rgba(15,23,42,0.12);
+      background: rgba(15,23,42,0.04);
+      color: #1f2937;
+    }
+    body.light .btn:hover { background: rgba(37,99,235,0.08); border-color: rgba(37,99,235,0.24); }
+    body.light .btn.primary { background:#2563eb; border-color:#1d4ed8; color:#fff; }
+    body.light .btn.danger { border-color: rgba(220,38,38,0.35); background: rgba(220,38,38,0.04); color: #b91c1c; }
     .muted { color: var(--muted); }
     .summary {
       font-size: 15px;
       line-height: 1.45;
       color: #dce6f2;
     }
+    body.light .summary { color: #243244; }
     .chip {
       display:inline-block;
       border-radius:999px;
@@ -99,12 +134,15 @@
       font-size:12px;
       background: rgba(255,255,255,0.04);
     }
+    body.light .chip { border-color: rgba(15,23,42,0.12); background: rgba(37,99,235,0.06); }
     .list { display:grid; gap:10px; }
     .option-grid { display:grid; gap:10px; }
     label { user-select:none; color: #d7e2ef; }
+    body.light label { color: #334155; }
     progress { width: 180px; height: 12px; }
     .hidden { display:none; }
     code { background: rgba(255,255,255,0.08); padding:2px 5px; border-radius:4px; }
+    body.light code { background: rgba(37,99,235,0.08); }
     .dashboard-grid {
       display: grid;
       grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -117,6 +155,10 @@
       border-radius: 14px;
       padding: 12px;
       min-height: 84px;
+    }
+    body.light .metric {
+      border-color: rgba(15,23,42,0.08);
+      background: rgba(37,99,235,0.04);
     }
     .metric-label {
       font-size: 11px;
@@ -131,6 +173,7 @@
       line-height: 1.15;
       color: #f7fbff;
     }
+    body.light .metric-value { color: #0f172a; }
     .metric-sub {
       font-size: 12px;
       color: var(--muted);
@@ -144,11 +187,16 @@
       background: rgba(255,255,255,0.02);
       padding: 10px 12px;
     }
+    body.light details {
+      border-color: rgba(15,23,42,0.08);
+      background: rgba(255,255,255,0.70);
+    }
     summary {
       cursor: pointer;
       color: #dfe8f3;
       font-weight: 600;
     }
+    body.light summary { color: #1e293b; }
     .term {
       min-height: 340px;
       max-height: 620px;
@@ -157,13 +205,16 @@
       border-radius:12px;
       padding:12px;
       border:1px solid rgba(255,255,255,0.08);
+      color: inherit;
       font: 13px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
     }
+    body.light .term { background:#f3f4f6; border-color:#d1d5db; color:#111827; }
     .term.compact { min-height: 120px; max-height: 240px; }
     .note-list { display:grid; gap:7px; font-size:14px; }
     .terminal-card { margin-top: 16px; }
     .terminal-head { margin-bottom: 10px; }
     hr { border:0; border-top:1px solid rgba(255,255,255,0.08); margin: 12px 0; }
+    body.light hr { border-top-color: rgba(15,23,42,0.08); }
     @media (max-width: 1180px) {
       .overview-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .main-grid { grid-template-columns: 1fr; }
@@ -185,7 +236,15 @@
           <h1 style="margin:4px 0 6px 0; font-size: 30px;">Build, switch, and read the live workload in one place</h1>
           <div class="muted">Hidden test page for building, deploying, and switching <code>p2app.service</code> between <code>P2_app</code> and <code>P3_app</code>, with XDMA readiness gated underneath by <code>saturn-xdma-ready.service</code>.</div>
         </div>
-        <div class="chip">URL: /saturn/p23test</div>
+        <div class="row">
+          <div class="chip">URL: /saturn/p23test</div>
+          <button id="theme-toggle" class="btn icon" title="Toggle theme" aria-label="Toggle theme">
+            <svg id="theme-icon" width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+               d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z"/>
+            </svg>
+          </button>
+        </div>
       </div>
       <div class="row space" style="margin-top:12px;">
         <div class="muted" style="font-size:13px;">If a switch leaves the radio in an unusable local mode, revert the override here or from another browser/device.</div>
@@ -370,6 +429,24 @@
 const ansi_up = new AnsiUp();
 ansi_up.use_classes = false;
 const $ = (id)=>document.getElementById(id);
+(function themeInit(){
+  const toggle = document.getElementById('theme-toggle');
+  const icon = document.getElementById('theme-icon');
+  if (!toggle || !icon) return;
+  function setIcon(light){
+    icon.innerHTML = light
+      ? '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z"/>'
+      : '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z"/>';
+  }
+  const light = localStorage.getItem('theme') === 'light';
+  document.body.classList.toggle('light', light);
+  setIcon(light);
+  toggle.addEventListener('click', ()=>{
+    const isLight = document.body.classList.toggle('light');
+    localStorage.setItem('theme', isLight ? 'light' : 'dark');
+    setIcon(isLight);
+  });
+})();
 const SCRIPT_NAME = 'p23-app-manager.sh';
 const CSRF_HEADER_NAME = 'X-Saturn-CSRF';
 const CSRF_HEADER_VALUE = '1';

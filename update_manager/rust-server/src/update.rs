@@ -1,5 +1,5 @@
 use axum::{
-    extract::{Query, State},
+    extract::State,
     http::StatusCode,
     response::{IntoResponse, Json, Response},
 };
@@ -13,8 +13,9 @@ use tokio::process::Command;
 use tracing::error;
 
 use crate::state::{
-    AppState, DEFAULT_STAGE_WORKTREE_KEEP, DEFAULT_UPDATE_HEALTH_TIMEOUT_SECS,
-    DEFAULT_UPDATE_KEEP_SNAPSHOTS,
+    AppState, DEFAULT_STAGE_WORKTREE_KEEP, DEFAULT_UPDATE_HEALTH_INITIAL_DELAY_SECS,
+    DEFAULT_UPDATE_HEALTH_RETRIES, DEFAULT_UPDATE_HEALTH_TIMEOUT_SECS,
+    DEFAULT_UPDATE_KEEP_SNAPSHOTS, HEALTH_CHECK_RETRY_INTERVAL_SECS,
 };
 use crate::util::{
     current_repo_root, is_safe_ref_name, is_safe_repo_part, json_error,
@@ -38,6 +39,13 @@ pub struct UpdatePolicy {
     pub keep_snapshots: usize,
     pub healthcheck_url: String,
     pub healthcheck_timeout_secs: u64,
+    /// Number of retry attempts after an initial failure (0 = no retries).
+    #[serde(default)]
+    pub healthcheck_retries: u32,
+    /// Seconds to wait before the first health check attempt, allowing slow
+    /// services time to start before the first probe.
+    #[serde(default)]
+    pub healthcheck_initial_delay_secs: u64,
 }
 
 impl Default for UpdatePolicy {
@@ -55,6 +63,8 @@ impl Default for UpdatePolicy {
             keep_snapshots: DEFAULT_UPDATE_KEEP_SNAPSHOTS,
             healthcheck_url: "http://127.0.0.1:8080/healthz".to_string(),
             healthcheck_timeout_secs: DEFAULT_UPDATE_HEALTH_TIMEOUT_SECS,
+            healthcheck_retries: DEFAULT_UPDATE_HEALTH_RETRIES,
+            healthcheck_initial_delay_secs: DEFAULT_UPDATE_HEALTH_INITIAL_DELAY_SECS,
         }
     }
 }
@@ -282,6 +292,8 @@ pub fn normalize_update_policy(mut policy: UpdatePolicy, state: &AppState) -> Up
 
     policy.keep_snapshots = policy.keep_snapshots.clamp(1, 50);
     policy.healthcheck_timeout_secs = policy.healthcheck_timeout_secs.clamp(2, 30);
+    policy.healthcheck_retries = policy.healthcheck_retries.clamp(0, 5);
+    policy.healthcheck_initial_delay_secs = policy.healthcheck_initial_delay_secs.clamp(0, 30);
 
     let hc = policy.healthcheck_url.trim();
     if hc.is_empty() {
@@ -572,23 +584,35 @@ async fn prune_staged_worktrees(
     Ok(())
 }
 
-async fn health_check_url(url: &str, timeout_secs: u64) -> Result<(), String> {
-    let output = Command::new("curl")
-        .arg("-fsS")
-        .arg("--max-time")
-        .arg(timeout_secs.to_string())
-        .arg(url)
-        .output()
-        .await
-        .map_err(|e| e.to_string())?;
-    if output.status.success() {
-        Ok(())
-    } else {
-        Err(format!(
-            "health check failed: {}",
-            output_error_text(&output)
-        ))
+async fn health_check_url(
+    url: &str,
+    timeout_secs: u64,
+    retries: u32,
+    initial_delay_secs: u64,
+) -> Result<(), String> {
+    if initial_delay_secs > 0 {
+        tokio::time::sleep(tokio::time::Duration::from_secs(initial_delay_secs)).await;
     }
+    let mut last_err = String::new();
+    for attempt in 0..=retries {
+        if attempt > 0 {
+            tokio::time::sleep(tokio::time::Duration::from_secs(HEALTH_CHECK_RETRY_INTERVAL_SECS))
+                .await;
+        }
+        let output = Command::new("curl")
+            .arg("-fsS")
+            .arg("--max-time")
+            .arg(timeout_secs.to_string())
+            .arg(url)
+            .output()
+            .await
+            .map_err(|e| e.to_string())?;
+        if output.status.success() {
+            return Ok(());
+        }
+        last_err = format!("health check failed: {}", output_error_text(&output));
+    }
+    Err(last_err)
 }
 
 // --- Appliance update flow ---
@@ -787,8 +811,13 @@ async fn run_appliance_update(
         job.new_repo_root = Some(stage_dir.display().to_string());
     });
 
-    if let Err(e) =
-        health_check_url(&policy.healthcheck_url, policy.healthcheck_timeout_secs).await
+    if let Err(e) = health_check_url(
+        &policy.healthcheck_url,
+        policy.healthcheck_timeout_secs,
+        policy.healthcheck_retries,
+        policy.healthcheck_initial_delay_secs,
+    )
+    .await
     {
         let _ = set_active_repo_root(&state, &active_root).await;
         let _ = remove_worktree(&active_root, &stage_dir).await;
@@ -999,8 +1028,13 @@ pub async fn update_rollback(State(state): State<AppState>) -> Response {
     let policy = load_update_policy(&state)
         .await
         .unwrap_or_else(|_| normalize_update_policy(UpdatePolicy::default(), &state));
-    if let Err(e) =
-        health_check_url(&policy.healthcheck_url, policy.healthcheck_timeout_secs).await
+    if let Err(e) = health_check_url(
+        &policy.healthcheck_url,
+        policy.healthcheck_timeout_secs,
+        policy.healthcheck_retries,
+        policy.healthcheck_initial_delay_secs,
+    )
+    .await
     {
         let _ = set_active_repo_root(&state, &current_root).await;
         return json_error(
@@ -1102,4 +1136,205 @@ pub async fn set_repo_root(
         "repo_root": canonical
     }))
     .into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
+    use axum::routing::{get, post};
+    use tower::ServiceExt;
+
+    fn test_state() -> AppState {
+        let tmp = std::path::PathBuf::from("/tmp/saturn-test-update");
+        AppState {
+            webroot: tmp.clone(),
+            config_path: tmp.join("config.json"),
+            custom_scripts_file: tmp.join("custom_scripts.json"),
+            scripts_dir: tmp.join("scripts"),
+            saturn_addr: "127.0.0.1:8080".to_string(),
+            repo_root: std::sync::Arc::new(std::sync::RwLock::new(tmp.clone())),
+            repo_root_file: tmp.join("repo_root"),
+            update_policy_file: tmp.join("update_policy.json"),
+            saturngo_update_policy_file: tmp.join("saturngo_policy.json"),
+            saturngo_deploy_status_file: tmp.join("saturngo_deploy.json"),
+            update_state_file: tmp.join("update_state.json"),
+            snapshot_dir: tmp.join("snapshots"),
+            staging_dir: tmp.join("staging"),
+            restore_max_upload_bytes: 2 * 1024 * 1024 * 1024,
+        }
+    }
+
+    fn test_router(state: AppState) -> axum::Router {
+        axum::Router::new()
+            .route("/update_policy", get(get_update_policy).post(set_update_policy))
+            .route("/update_start", post(update_start))
+            .route("/update_status", get(update_status))
+            .route("/update_rollback", post(update_rollback))
+            .with_state(state)
+    }
+
+    // --- begin_update_activity ---
+
+    /// The activity lock must be exclusive: a second call while the first guard
+    /// is held must fail, and succeed again after the guard is dropped.
+    ///
+    /// Run the test suite with `--test-threads=1` (or `RUST_TEST_THREADS=1`)
+    /// to avoid interference from other tests that touch the same global slot.
+    #[test]
+    fn test_activity_exclusive() {
+        let guard = begin_update_activity("test-kind", "detail").unwrap();
+        let second = begin_update_activity("other-kind", "");
+        assert!(second.is_err(), "second begin_update_activity should fail while first guard is held");
+        drop(guard);
+        // After release the slot must accept a new caller.
+        let guard2 = begin_update_activity("after-release", "").unwrap();
+        drop(guard2);
+    }
+
+    // --- normalize_update_policy ---
+
+    #[test]
+    fn test_normalize_policy_clamps_retries() {
+        let state = test_state();
+        let mut policy = UpdatePolicy::default();
+        policy.healthcheck_retries = 99;
+        policy.healthcheck_initial_delay_secs = 999;
+        let n = normalize_update_policy(policy, &state);
+        assert_eq!(n.healthcheck_retries, 5, "retries must clamp to max 5");
+        assert_eq!(n.healthcheck_initial_delay_secs, 30, "initial delay must clamp to max 30");
+    }
+
+    #[test]
+    fn test_normalize_policy_rejects_dotdot_ref() {
+        let state = test_state();
+        let mut policy = UpdatePolicy::default();
+        policy.stable_ref = "../evil".to_string();
+        policy.beta_ref = "..%2Fevil".to_string();
+        let n = normalize_update_policy(policy, &state);
+        assert_eq!(n.stable_ref, "main", "dotdot in stable_ref must fall back to 'main'");
+        assert_eq!(n.beta_ref, "beta", "dotdot in beta_ref must fall back to 'beta'");
+    }
+
+    #[test]
+    fn test_normalize_policy_rejects_legacy_unconfigured() {
+        // owner=Saturn repo=Saturn was the old placeholder — must stay unconfigured.
+        let state = test_state();
+        let mut policy = UpdatePolicy::default();
+        policy.owner = "Saturn".to_string();
+        policy.repo = "Saturn".to_string();
+        let n = normalize_update_policy(policy, &state);
+        assert!(!n.repo_url_configured, "legacy Saturn/Saturn placeholder must remain unconfigured");
+    }
+
+    #[test]
+    fn test_normalize_policy_valid_repo_configures() {
+        let state = test_state();
+        let mut policy = UpdatePolicy::default();
+        policy.owner = "myorg".to_string();
+        policy.repo = "myrepo".to_string();
+        let n = normalize_update_policy(policy, &state);
+        assert!(n.repo_url_configured);
+        assert!(update_policy_repo_configured(&n));
+    }
+
+    // --- HTTP: update_start ---
+
+    /// POST /update_start with no policy file (repo not configured) must return 400.
+    /// This is the primary smoke test confirming the update_start route is live
+    /// and that the repo-configured gate fires before any git operations.
+    #[tokio::test]
+    async fn test_update_start_400_repo_not_configured() {
+        let app = test_router(test_state());
+        let req = Request::builder()
+            .method("POST")
+            .uri("/update_start")
+            .header("content-type", "application/json")
+            .body(Body::from("{}"))
+            .unwrap();
+        let res = app.oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+    }
+
+    /// POST /update_start must return 409 when another activity already holds the
+    /// shared gate.  This is the end-to-end complement to `test_activity_exclusive`:
+    /// instead of testing the lock at the unit level we drive the full HTTP handler
+    /// and confirm the CONFLICT response propagates correctly.
+    ///
+    /// Uses a unique temp dir (/tmp/saturn-test-update-409) to avoid file-level
+    /// interference with other tests.  The global activity slot is shared, so run
+    /// with `RUST_TEST_THREADS=1` if you see spurious failures on this test or on
+    /// `test_activity_exclusive`.
+    #[tokio::test]
+    async fn test_update_start_409_activity_held() {
+        let tmp = std::path::PathBuf::from("/tmp/saturn-test-update-409");
+        std::fs::create_dir_all(&tmp).unwrap();
+        // Write a configured policy so the handler passes the repo-configured
+        // gate and reaches the activity check.
+        let policy_json = serde_json::json!({
+            "owner": "myorg",
+            "repo": "myrepo",
+            "repo_url_configured": true,
+            "remote": "origin",
+            "channel": "stable",
+            "stable_ref": "main",
+            "beta_ref": "beta",
+            "auto_snapshot": false,
+            "keep_snapshots": 3,
+            "healthcheck_timeout_secs": 10,
+            "healthcheck_retries": 0,
+            "healthcheck_initial_delay_secs": 0,
+            "healthcheck_url": ""
+        });
+        std::fs::write(tmp.join("update_policy.json"), policy_json.to_string()).unwrap();
+        let state = AppState {
+            webroot: tmp.clone(),
+            config_path: tmp.join("config.json"),
+            custom_scripts_file: tmp.join("custom_scripts.json"),
+            scripts_dir: tmp.join("scripts"),
+            saturn_addr: "127.0.0.1:8080".to_string(),
+            repo_root: std::sync::Arc::new(std::sync::RwLock::new(tmp.clone())),
+            repo_root_file: tmp.join("repo_root"),
+            update_policy_file: tmp.join("update_policy.json"),
+            saturngo_update_policy_file: tmp.join("saturngo_policy.json"),
+            saturngo_deploy_status_file: tmp.join("saturngo_deploy.json"),
+            update_state_file: tmp.join("update_state.json"),
+            snapshot_dir: tmp.join("snapshots"),
+            staging_dir: tmp.join("staging"),
+            restore_max_upload_bytes: 2 * 1024 * 1024 * 1024,
+        };
+
+        // Hold the activity slot before issuing the request.  The guard is Send
+        // so it may be held across the await point below.
+        let _guard = begin_update_activity("test-409", "held for HTTP 409 test").unwrap();
+
+        let app = test_router(state);
+        let req = Request::builder()
+            .method("POST")
+            .uri("/update_start")
+            .header("content-type", "application/json")
+            .body(Body::from("{}"))
+            .unwrap();
+        let res = app.oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::CONFLICT);
+        // _guard dropped here, releasing the activity slot for subsequent tests.
+    }
+
+    /// GET /update_policy with no policy file must return 200 with a default policy.
+    #[tokio::test]
+    async fn test_get_update_policy_returns_default() {
+        let app = test_router(test_state());
+        let req = Request::builder()
+            .method("GET")
+            .uri("/update_policy")
+            .body(Body::empty())
+            .unwrap();
+        let res = app.oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(res.into_body(), 65536).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert!(json.get("policy").is_some(), "response must contain a 'policy' key");
+        assert_eq!(json["policy"]["channel"], "stable");
+    }
 }

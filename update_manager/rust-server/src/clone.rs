@@ -6,12 +6,14 @@ use axum::{
 use chrono::Local;
 use serde::{Deserialize, Serialize};
 use std::fs;
+use std::path::Path;
 use std::sync::{Mutex, OnceLock};
-use tokio::io::AsyncBufReadExt;
+use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
+use users::get_current_uid;
 
 use crate::state::{PiImageStatusQuery, MAX_COMPLETED_JOBS};
-use crate::util::json_error;
+use crate::util::{json_error, output_error_text};
 
 #[derive(Debug, Clone, Serialize)]
 pub struct PiCloneJob {
@@ -142,13 +144,49 @@ pub async fn pi_devices() -> impl IntoResponse {
 
 #[derive(Deserialize)]
 pub struct PiCloneStartReq {
-    target: String,
+    pub target: String,
+    #[serde(default)]
+    pub verify_compare: bool,
+}
+
+fn classify_clone_stderr_line(line: &str) -> String {
+    let trimmed = line.trim_end();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+    if trimmed.starts_with("ERR:") {
+        return trimmed.to_string();
+    }
+    let is_dd_progress = trimmed.contains(" bytes ") && trimmed.contains(" copied");
+    let is_dd_summary = trimmed.ends_with("records in") || trimmed.ends_with("records out");
+    if is_dd_progress || is_dd_summary {
+        trimmed.to_string()
+    } else {
+        format!("stderr: {trimmed}")
+    }
+}
+
+pub async fn run_privileged_output(
+    program: &str,
+    args: &[&str],
+) -> Result<std::process::Output, std::io::Error> {
+    let mut cmd = if get_current_uid() == 0 {
+        Command::new(program)
+    } else {
+        let mut c = Command::new("sudo");
+        c.arg("-n").arg(program);
+        c
+    };
+    cmd.args(args)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    cmd.output().await
 }
 
 pub async fn pi_clone_start(
     axum::extract::Json(req): axum::extract::Json<PiCloneStartReq>,
 ) -> Response {
-    let target = req.target;
+    let PiCloneStartReq { target, verify_compare } = req;
     if !target.starts_with("/dev/") {
         return json_error(StatusCode::BAD_REQUEST, "target must be a /dev path");
     }
@@ -183,6 +221,9 @@ pub async fn pi_clone_start(
     tokio::spawn(async move {
         let mut cmd = Command::new("/opt/saturn-go/scripts/clone_pi_to_device.sh");
         cmd.arg("--target").arg(&target);
+        if verify_compare {
+            cmd.arg("--verify-compare");
+        }
         cmd.stdout(std::process::Stdio::piped());
         cmd.stderr(std::process::Stdio::piped());
 
@@ -205,7 +246,7 @@ pub async fn pi_clone_start(
         if let Some(out) = stdout {
             let id2 = id.clone();
             tokio::spawn(async move {
-                let mut lines = tokio::io::BufReader::new(out).lines();
+                let mut lines = BufReader::new(out).lines();
                 while let Ok(Some(line)) = lines.next_line().await {
                     if let Some(p) = line.strip_prefix("Progress: ") {
                         if let Ok(v) = p.trim_end_matches('%').trim().parse::<u8>() {
@@ -221,9 +262,12 @@ pub async fn pi_clone_start(
         if let Some(err) = stderr {
             let id2 = id.clone();
             tokio::spawn(async move {
-                let mut lines = tokio::io::BufReader::new(err).lines();
+                let mut lines = BufReader::new(err).lines();
                 while let Ok(Some(line)) = lines.next_line().await {
-                    let msg = format!("ERR: {line}");
+                    let msg = classify_clone_stderr_line(&line);
+                    if msg.is_empty() {
+                        continue;
+                    }
                     update_clone_job(&id2, |j| j.message = msg.clone());
                     append_clone_log(&id2, msg);
                 }
@@ -283,4 +327,256 @@ pub async fn pi_clone_cancel(Query(q): Query<PiImageStatusQuery>) -> impl IntoRe
         j.pid = None;
     });
     Json(serde_json::json!({ "status": "cancelled" })).into_response()
+}
+
+pub async fn pi_wipe_target(
+    axum::extract::Json(req): axum::extract::Json<PiCloneStartReq>,
+) -> Response {
+    let target = req.target;
+    if !target.starts_with("/dev/") {
+        return json_error(StatusCode::BAD_REQUEST, "target must be a /dev path");
+    }
+    if target == "/dev/mmcblk0" {
+        return json_error(StatusCode::BAD_REQUEST, "target cannot be source device");
+    }
+
+    let name = target.trim_start_matches("/dev/");
+    let sys_block_path = Path::new("/sys/block").join(name);
+    if !sys_block_path.exists() {
+        return json_error(StatusCode::BAD_REQUEST, "target device not found in /sys/block");
+    }
+    if !pi_clone_device_allowed(name, &sys_block_path) {
+        return json_error(StatusCode::BAD_REQUEST, "target device is not removable");
+    }
+
+    let mut log: Vec<String> = Vec::new();
+    log.push(format!("Target: {target}"));
+
+    let lsblk_out = match Command::new("lsblk")
+        .arg("-ln")
+        .arg("-o")
+        .arg("PATH,TYPE")
+        .arg(&target)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .output()
+        .await
+    {
+        Ok(out) => out,
+        Err(e) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, &format!("lsblk failed: {e}")),
+    };
+    if !lsblk_out.status.success() {
+        return json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &format!("lsblk failed: {}", output_error_text(&lsblk_out)),
+        );
+    }
+    let lsblk_text = String::from_utf8_lossy(&lsblk_out.stdout);
+    for line in lsblk_text.lines() {
+        let mut parts = line.split_whitespace();
+        let path = match parts.next() {
+            Some(v) => v,
+            None => continue,
+        };
+        let kind = match parts.next() {
+            Some(v) => v,
+            None => continue,
+        };
+        if kind != "part" {
+            continue;
+        }
+        let out = match run_privileged_output("umount", &[path]).await {
+            Ok(out) => out,
+            Err(e) => {
+                return json_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    &format!("umount failed for {path}: {e}"),
+                )
+            }
+        };
+        if out.status.success() {
+            log.push(format!("Unmounted {path}"));
+        } else {
+            let msg = output_error_text(&out);
+            log.push(format!("Unmount {path}: {msg}"));
+        }
+    }
+
+    let wipefs_out = match run_privileged_output("wipefs", &["-af", &target]).await {
+        Ok(out) => out,
+        Err(e) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, &format!("wipefs failed: {e}")),
+    };
+    if !wipefs_out.status.success() {
+        return json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &format!("wipefs failed: {}", output_error_text(&wipefs_out)),
+        );
+    }
+    let wipefs_msg = output_error_text(&wipefs_out);
+    if wipefs_msg.is_empty() {
+        log.push("wipefs: signatures cleared".to_string());
+    } else {
+        log.push(format!("wipefs: {wipefs_msg}"));
+    }
+
+    match run_privileged_output("sgdisk", &["--zap-all", &target]).await {
+        Ok(out) if out.status.success() => log.push("sgdisk: GPT/MBR metadata zapped".to_string()),
+        Ok(out) => log.push(format!("sgdisk: {}", output_error_text(&out))),
+        Err(e) => log.push(format!("sgdisk: skipped ({e})")),
+    }
+
+    let size_out = match run_privileged_output("blockdev", &["--getsize64", &target]).await {
+        Ok(out) => out,
+        Err(e) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, &format!("blockdev failed: {e}")),
+    };
+    if !size_out.status.success() {
+        return json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &format!("blockdev failed: {}", output_error_text(&size_out)),
+        );
+    }
+    let size_bytes = String::from_utf8_lossy(&size_out.stdout)
+        .trim()
+        .parse::<u64>()
+        .unwrap_or(0);
+    if size_bytes == 0 {
+        return json_error(StatusCode::INTERNAL_SERVER_ERROR, "target size is zero");
+    }
+    log.push(format!("Size: {size_bytes} bytes"));
+
+    let dd_head_out = match run_privileged_output(
+        "dd",
+        &[
+            "if=/dev/zero",
+            &format!("of={target}"),
+            "bs=1M",
+            "count=16",
+            "conv=fsync",
+            "status=none",
+        ],
+    )
+    .await
+    {
+        Ok(out) => out,
+        Err(e) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, &format!("dd head wipe failed: {e}")),
+    };
+    if !dd_head_out.status.success() {
+        return json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &format!("dd head wipe failed: {}", output_error_text(&dd_head_out)),
+        );
+    }
+    log.push("Zeroed first 16 MiB".to_string());
+
+    let mib: u64 = 1024 * 1024;
+    let size_mib = size_bytes / mib;
+    if size_mib > 16 {
+        let seek_mib = size_mib - 16;
+        let seek_arg = format!("seek={seek_mib}");
+        let of_arg = format!("of={target}");
+        let dd_tail_out = match run_privileged_output(
+            "dd",
+            &[
+                "if=/dev/zero",
+                &of_arg,
+                "bs=1M",
+                "count=16",
+                &seek_arg,
+                "conv=fsync",
+                "status=none",
+            ],
+        )
+        .await
+        {
+            Ok(out) => out,
+            Err(e) => {
+                return json_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    &format!("dd tail wipe failed: {e}"),
+                )
+            }
+        };
+        if !dd_tail_out.status.success() {
+            return json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &format!("dd tail wipe failed: {}", output_error_text(&dd_tail_out)),
+            );
+        }
+        log.push("Zeroed last 16 MiB".to_string());
+    }
+
+    let _ = run_privileged_output("sync", &[]).await;
+    let _ = run_privileged_output("partprobe", &[&target]).await;
+    let _ = run_privileged_output("udevadm", &["settle"]).await;
+
+    Json(serde_json::json!({
+        "status": "ok",
+        "message": "Target wiped (signatures/partition metadata cleared).",
+        "log": log
+    }))
+    .into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // --- classify_clone_stderr_line ---
+
+    #[test]
+    fn test_classify_empty_line() {
+        assert_eq!(classify_clone_stderr_line(""), "");
+        assert_eq!(classify_clone_stderr_line("   \t"), "");
+    }
+
+    #[test]
+    fn test_classify_err_prefix_passthrough() {
+        let line = "ERR: something bad happened";
+        assert_eq!(classify_clone_stderr_line(line), line);
+    }
+
+    #[test]
+    fn test_classify_dd_progress() {
+        let line = "1073741824 bytes (1.1 GB, 1.0 GiB) copied, 5.12 s, 210 MB/s";
+        let result = classify_clone_stderr_line(line);
+        assert_eq!(result, line.trim_end());
+    }
+
+    #[test]
+    fn test_classify_dd_records() {
+        assert_eq!(
+            classify_clone_stderr_line("16+0 records in"),
+            "16+0 records in"
+        );
+        assert_eq!(
+            classify_clone_stderr_line("16+0 records out"),
+            "16+0 records out"
+        );
+    }
+
+    #[test]
+    fn test_classify_generic_stderr_prefixed() {
+        let result = classify_clone_stderr_line("some warning message");
+        assert_eq!(result, "stderr: some warning message");
+    }
+
+    // --- pi_clone_device_allowed ---
+
+    #[test]
+    fn test_mmcblk0_always_blocked() {
+        let path = std::path::Path::new("/sys/block/mmcblk0");
+        assert!(!pi_clone_device_allowed("mmcblk0", path));
+    }
+
+    #[test]
+    fn test_loop_device_blocked() {
+        let path = std::path::Path::new("/sys/block/loop0");
+        assert!(!pi_clone_device_allowed("loop0", path));
+    }
+
+    #[test]
+    fn test_zram_blocked() {
+        let path = std::path::Path::new("/sys/block/zram0");
+        assert!(!pi_clone_device_allowed("zram0", path));
+    }
 }

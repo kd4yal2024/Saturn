@@ -96,3 +96,117 @@ pub async fn serve_page(webroot: &Path, page: &str) -> Response {
         Err(_) => (StatusCode::NOT_FOUND, "page not found").into_response(),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
+    use axum::routing::get;
+    use tower::ServiceExt;
+
+    use crate::state::AppState;
+
+    fn test_state() -> AppState {
+        let tmp = std::path::PathBuf::from("/tmp/saturn-test-pages");
+        AppState {
+            webroot: tmp.clone(),
+            config_path: tmp.join("config.json"),
+            custom_scripts_file: tmp.join("custom_scripts.json"),
+            scripts_dir: tmp.join("scripts"),
+            saturn_addr: "127.0.0.1:8080".to_string(),
+            repo_root: std::sync::Arc::new(std::sync::RwLock::new(tmp.clone())),
+            repo_root_file: tmp.join("repo_root"),
+            update_policy_file: tmp.join("update_policy.json"),
+            saturngo_update_policy_file: tmp.join("saturngo_policy.json"),
+            saturngo_deploy_status_file: tmp.join("saturngo_deploy.json"),
+            update_state_file: tmp.join("update_state.json"),
+            snapshot_dir: tmp.join("snapshots"),
+            staging_dir: tmp.join("staging"),
+            restore_max_upload_bytes: 2 * 1024 * 1024 * 1024,
+        }
+    }
+
+    // --- route_to_page ---
+
+    #[test]
+    fn test_root_routes_to_update() {
+        assert_eq!(route_to_page("/"), Some("update.html"));
+        assert_eq!(route_to_page("/saturn"), Some("update.html"));
+        assert_eq!(route_to_page("/update"), Some("update.html"));
+        assert_eq!(route_to_page("/update.html"), Some("update.html"));
+    }
+
+    #[test]
+    fn test_custom_routes_to_index() {
+        assert_eq!(route_to_page("/custom"), Some("index.html"));
+        assert_eq!(route_to_page("/index.html"), Some("index.html"));
+        assert_eq!(route_to_page("/saturn/custom"), Some("index.html"));
+    }
+
+    #[test]
+    fn test_saturngo_aliases() {
+        assert_eq!(route_to_page("/saturngo"), Some("saturngo.html"));
+        assert_eq!(route_to_page("/saturn-go"), Some("saturngo.html"));
+        assert_eq!(route_to_page("/saturn/saturngo.html"), Some("saturngo.html"));
+    }
+
+    #[test]
+    fn test_unknown_path_returns_none() {
+        assert_eq!(route_to_page("/unknown"), None);
+        assert_eq!(route_to_page("/api/something"), None);
+        assert_eq!(route_to_page(""), None);
+    }
+
+    // --- fallback_handler ---
+
+    /// A request for an unknown path must return 404.
+    #[tokio::test]
+    async fn test_fallback_unknown_path_returns_404() {
+        let state = test_state();
+        let app = axum::Router::new()
+            .fallback(get(fallback_handler))
+            .with_state(state);
+        let req = Request::builder()
+            .method("GET")
+            .uri("/no-such-page")
+            .body(Body::empty())
+            .unwrap();
+        let res = app.oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::NOT_FOUND);
+    }
+
+    /// A request for a known route alias whose HTML file does not exist on disk
+    /// must return 404 (serve_page falls back when the file is missing).
+    #[tokio::test]
+    async fn test_fallback_known_route_missing_file_returns_404() {
+        // /tmp/saturn-test-pages/update.html does not exist, so serving fails.
+        let state = test_state();
+        let app = axum::Router::new()
+            .fallback(get(fallback_handler))
+            .with_state(state);
+        let req = Request::builder()
+            .method("GET")
+            .uri("/update")
+            .body(Body::empty())
+            .unwrap();
+        let res = app.oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::NOT_FOUND);
+    }
+
+    /// healthz must return 200 regardless of filesystem state.
+    #[tokio::test]
+    async fn test_healthz_returns_200() {
+        let state = test_state();
+        let app = axum::Router::new()
+            .route("/healthz", get(healthz))
+            .with_state(state);
+        let req = Request::builder()
+            .method("GET")
+            .uri("/healthz")
+            .body(Body::empty())
+            .unwrap();
+        let res = app.oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+    }
+}

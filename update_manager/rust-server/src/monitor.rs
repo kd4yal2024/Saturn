@@ -495,3 +495,92 @@ fn list_procs_sysinfo(
         })
         .collect()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // --- base_device_name ---
+
+    #[test]
+    fn test_base_device_name_sda1() {
+        assert_eq!(base_device_name("/dev/sda1"), "sda");
+    }
+
+    #[test]
+    fn test_base_device_name_nvme() {
+        assert_eq!(base_device_name("/dev/nvme0n1p3"), "nvme0n1");
+    }
+
+    #[test]
+    fn test_base_device_name_mmcblk() {
+        assert_eq!(base_device_name("/dev/mmcblk0p1"), "mmcblk0");
+    }
+
+    #[test]
+    fn test_base_device_name_no_partition() {
+        assert_eq!(base_device_name("/dev/sda"), "sda");
+    }
+
+    // --- calc_rate ---
+
+    /// First call returns 0 bps (no previous sample).
+    /// Second call with increased counters returns a positive rate.
+    #[test]
+    fn test_calc_rate_first_call_is_zero() {
+        // Use a unique key to avoid interference with other tests.
+        let (ra, rb) = calc_rate("test-first-call", 1000, 2000);
+        assert_eq!(ra, 0, "first call must return 0 — no previous sample");
+        assert_eq!(rb, 0);
+    }
+
+    #[test]
+    fn test_calc_rate_second_call_positive() {
+        calc_rate("test-second-call", 0, 0); // seed
+        // Give dt_ms a chance to be > 0 by sleeping 5 ms.
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        let (ra, rb) = calc_rate("test-second-call", 5000, 10000);
+        assert!(ra > 0, "rate must be positive after counter increase");
+        assert!(rb > 0);
+    }
+
+    // --- list_procs_sysinfo pagination ---
+
+    /// Default cap: more than 20 processes in the list must be truncated to 20.
+    #[test]
+    fn test_proc_list_default_cap_20() {
+        let sys = System::new();
+        let q = ProcQuery::default();
+        // total_mem_kb = 0 causes all mem_pct to be 0 — fine for this test.
+        let result = list_procs_sysinfo(&sys, 0.0, &q);
+        assert!(
+            result.len() <= 20,
+            "default query must cap output at 20 entries"
+        );
+    }
+
+    /// proc_top=5 must limit output to at most 5 entries.
+    #[test]
+    fn test_proc_list_top_param() {
+        let sys = System::new();
+        let q = ProcQuery {
+            proc_top: Some(5),
+            ..Default::default()
+        };
+        let result = list_procs_sysinfo(&sys, 0.0, &q);
+        assert!(result.len() <= 5, "proc_top=5 must cap output at 5");
+    }
+
+    /// proc_regex that matches nothing must return an empty list.
+    #[test]
+    fn test_proc_list_regex_no_match() {
+        let mut sys = System::new();
+        sys.refresh_processes();
+        let q = ProcQuery {
+            proc_regex: Some("ZZZNOMATCH_XYZXYZ_999".to_string()),
+            ..Default::default()
+        };
+        let result = list_procs_sysinfo(&sys, 0.0, &q);
+        assert!(result.is_empty(), "no-match regex must return empty list");
+    }
+}

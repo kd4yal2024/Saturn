@@ -49,7 +49,8 @@ pub fn sanitize_custom_flags(flags: Option<Vec<String>>) -> Vec<String> {
     flags
         .unwrap_or_default()
         .into_iter()
-        .map(|f| f.trim().to_string())
+        .take(crate::state::MAX_SCRIPT_FLAGS)
+        .map(|f| f.trim().chars().take(crate::state::MAX_SCRIPT_FLAG_LEN).collect::<String>())
         .filter(|f| !f.is_empty())
         .filter(|f| !f.contains('\n') && !f.contains('\r') && !f.contains('\0'))
         .collect()
@@ -161,4 +162,84 @@ pub fn list_repo_root_candidates(active: &Path) -> Vec<String> {
         }
     }
     set.into_iter().collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // --- sanitize_custom_flags ---
+
+    /// The count limit (MAX_SCRIPT_FLAGS) must be enforced: excess flags are dropped.
+    #[test]
+    fn test_sanitize_flags_count_limit() {
+        let flags: Vec<String> = (0..100).map(|i| format!("--flag{i}")).collect();
+        let result = sanitize_custom_flags(Some(flags));
+        assert_eq!(
+            result.len(),
+            crate::state::MAX_SCRIPT_FLAGS,
+            "output must be capped at MAX_SCRIPT_FLAGS"
+        );
+    }
+
+    /// Each flag must be truncated at MAX_SCRIPT_FLAG_LEN characters.
+    #[test]
+    fn test_sanitize_flags_length_limit() {
+        let long_flag = "a".repeat(crate::state::MAX_SCRIPT_FLAG_LEN + 50);
+        let result = sanitize_custom_flags(Some(vec![long_flag]));
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].len(), crate::state::MAX_SCRIPT_FLAG_LEN);
+    }
+
+    /// Flags with *embedded* newlines or null bytes must be dropped;
+    /// trailing whitespace (including `\n`/`\r`) is stripped by trim() before
+    /// the filter runs, so those become clean flags rather than being rejected.
+    #[test]
+    fn test_sanitize_flags_rejects_embedded_control_chars() {
+        let flags = vec![
+            "--ok".to_string(),
+            "--em\nbedded".to_string(),    // embedded \n → rejected
+            "--em\rbedded".to_string(),    // embedded \r → rejected
+            "prefix\0suffix".to_string(), // embedded \0 → rejected
+            "--trailing-newline\n".to_string(), // trailing \n → trimmed → kept
+            "--also-ok".to_string(),
+        ];
+        let result = sanitize_custom_flags(Some(flags));
+        // Trailing \n is stripped by trim(); embedded control chars are filtered out.
+        assert_eq!(result, vec!["--ok", "--trailing-newline", "--also-ok"]);
+    }
+
+    // --- is_safe_ref_name ---
+
+    #[test]
+    fn test_safe_ref_rejects_dotdot() {
+        assert!(!is_safe_ref_name("../evil"));
+        assert!(!is_safe_ref_name("refs/../evil"));
+    }
+
+    #[test]
+    fn test_safe_ref_rejects_leading_dash() {
+        assert!(!is_safe_ref_name("-bad-flag"));
+    }
+
+    #[test]
+    fn test_safe_ref_accepts_valid() {
+        assert!(is_safe_ref_name("main"));
+        assert!(is_safe_ref_name("refs/heads/feature-1"));
+        assert!(is_safe_ref_name("v1.2.3"));
+    }
+
+    // --- is_safe_custom_script_filename ---
+
+    #[test]
+    fn test_safe_script_filename_rejects_traversal() {
+        assert!(!is_safe_custom_script_filename("../secret.sh"));
+        assert!(!is_safe_custom_script_filename("/etc/passwd"));
+    }
+
+    #[test]
+    fn test_safe_script_filename_accepts_valid() {
+        assert!(is_safe_custom_script_filename("my-script.sh"));
+        assert!(is_safe_custom_script_filename("update_v2.py"));
+    }
 }
