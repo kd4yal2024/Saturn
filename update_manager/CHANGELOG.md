@@ -4,6 +4,10 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
 
 ## [Unreleased]
 ### Added
+- Saturn Go XDMA tools now include a `Stage Running Kernel` maintenance action
+  in `saturngo.html`, backed by a narrow privileged helper that runs
+  `saturn-fix-xdma.sh --stage-kernel "$(uname -r)"` without restarting
+  `p2app.service`.
 - Rust server test coverage for the extracted handler/helper modules (`auth`,
   `middleware`, `pages`, `update`, `util`, `monitor`, `clone`, `image`,
   `repair`), including endpoint-level checks for CSRF enforcement, update
@@ -41,6 +45,18 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
 - Saturn Go page now includes an `XDMA Doctor` action that runs a classified read-only PCIe/XDMA report through the existing privileged helper lane.
 
 ### Changed
+- `saturn-xdma-doctor.sh` now emits an explicit advisory when XDMA is working
+  only because the module is already loaded but the module is not installed on
+  disk for the running kernel, so the doctor output distinguishes "runtime OK"
+  from "reboot/recovery safe".
+- The privileged XDMA doctor/staging helpers now re-exec through
+  `systemd-run --pipe` when launched from `saturn-go.service`, so Saturn Go
+  can inspect or stage `/lib/modules/.../xdma.ko` without inheriting the
+  service's kernel-module protection sandbox.
+- `scripts/fix-xdma.sh` now falls back to `/usr/src/linux-headers-<kernel>`
+  and repairs missing `/lib/modules/<kernel>/{build,source}` links before
+  failing header detection, which fixes false "headers missing" failures on
+  kernels whose header package is already installed.
 - `update_manager/rust-server/src/main.rs` is no longer carrying shadow copies
   of the server subsystems. The extracted modules (`state`, `util`, `update`,
   `auth`, `middleware`, `pages`, `monitor`, `clone`, `image`, `repair`) are

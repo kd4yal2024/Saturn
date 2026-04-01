@@ -13,6 +13,9 @@ JSON_OUTPUT=0
 MARK_MODPROBE_FAILED=0
 SKIP_SERVICE_CHECK=0
 STAGE_ONLY=0
+ADVISORY=""
+ADVISORY_SUMMARY=""
+SATURN_XDMA_TRANSIENT_MARKER="${SATURN_XDMA_TRANSIENT_MARKER:-0}"
 
 usage() {
   cat <<'EOF'
@@ -53,6 +56,23 @@ join_by() {
   done
 }
 
+running_under_saturngo_service() {
+  grep -q 'saturn-go\.service' /proc/self/cgroup 2>/dev/null
+}
+
+maybe_reexec_via_systemd_run() {
+  [[ "$SATURN_XDMA_TRANSIENT_MARKER" == "1" ]] && return 0
+  running_under_saturngo_service || return 0
+  command -v systemd-run >/dev/null 2>&1 || return 0
+  systemd-run --help 2>&1 | grep -q -- '--pipe' || return 0
+
+  local unit="saturn-xdma-doctor-$(date +%Y%m%d%H%M%S)-$$"
+  exec systemd-run --quiet --wait --collect --pipe --service-type=exec \
+    --unit "$unit" \
+    --setenv=SATURN_XDMA_TRANSIENT_MARKER=1 \
+    "$0" "$@"
+}
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --json) JSON_OUTPUT=1 ;;
@@ -65,6 +85,8 @@ while [[ $# -gt 0 ]]; do
   esac
   shift
 done
+
+maybe_reexec_via_systemd_run "$@"
 
 TMP_DIR="$(mktemp -d)"
 trap 'rm -rf "$TMP_DIR"' EXIT
@@ -270,10 +292,24 @@ determine_stage() {
   fi
 }
 
+determine_advisory() {
+  ADVISORY=""
+  ADVISORY_SUMMARY=""
+
+  if [[ "$MODULE_LOADED" -eq 1 && "$MODULE_INSTALLED_FOR_KERNEL" -ne 1 ]]; then
+    ADVISORY="XDMA_MODULE_NOT_STAGED_FOR_RUNNING_KERNEL"
+    ADVISORY_SUMMARY="XDMA is working now because the module is already loaded, but it is not installed on disk for the running kernel. Reboot, modprobe reload, or recovery after a service stop may fail until the module is staged for $(uname -r)."
+  fi
+}
+
 print_human_output() {
   printf 'Saturn XDMA Doctor\n'
   printf 'stage=%s\n' "$STAGE"
   printf 'summary=%s\n' "$STAGE_SUMMARY"
+  if [[ -n "$ADVISORY" ]]; then
+    printf 'advisory=%s\n' "$ADVISORY"
+    printf 'advisory_summary=%s\n' "$ADVISORY_SUMMARY"
+  fi
   printf 'running_kernel=%s\n' "$RUNNING_KERNEL"
   printf 'endpoint_present=%s\n' "$( [[ "${#ENDPOINT_PATHS[@]}" -gt 0 ]] && printf true || printf false )"
   printf 'endpoint_bdfs=%s\n' "$(join_by "," "${ENDPOINT_BDFS[@]:-}")"
@@ -340,7 +376,7 @@ print_json_output() {
   ENDPOINT_BDFS_TEXT="$(printf '%s\n' "${ENDPOINT_BDFS[@]:-}")"
   ENDPOINT_DRIVERS_TEXT="$(printf '%s\n' "${ENDPOINT_DRIVERS[@]:-}")"
 
-  export STAGE STAGE_SUMMARY RUNNING_KERNEL MODULE_PATH SERVICE_ACTIVE_STATE SERVICE_SUB_STATE
+  export STAGE STAGE_SUMMARY ADVISORY ADVISORY_SUMMARY RUNNING_KERNEL MODULE_PATH SERVICE_ACTIVE_STATE SERVICE_SUB_STATE
   export SATURN_XDMA_DEVICE_NODE SATURN_XDMA_UDEV_NODE SATURN_XDMA_SERVICE
   export endpoint_present_text module_installed_text module_loaded_text bound_to_xdma_text
   export devnode_exists_text udev_symlink_exists_text service_exists_text service_running_text modprobe_attempted_text
@@ -367,6 +403,8 @@ def read_lines_from_env(name):
 data = {
     "stage": os.environ.get("STAGE", ""),
     "summary": os.environ.get("STAGE_SUMMARY", ""),
+    "advisory": os.environ.get("ADVISORY", ""),
+    "advisory_summary": os.environ.get("ADVISORY_SUMMARY", ""),
     "running_kernel": os.environ.get("RUNNING_KERNEL", ""),
     "endpoint_present": os.environ.get("endpoint_present_text") == "true",
     "endpoint_bdfs": read_lines_from_env("ENDPOINT_BDFS_TEXT"),
@@ -407,6 +445,7 @@ detect_binding_state
 detect_service_state
 collect_supporting_output
 determine_stage
+determine_advisory
 
 if [[ "$STAGE_ONLY" -eq 1 ]]; then
   printf '%s\n' "$STAGE"

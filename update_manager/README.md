@@ -207,6 +207,8 @@ If a script entry does not define `version`, `/get_versions` now returns
   - separate Saturn Go repo/ref policy (`/saturngo_policy`)
   - last deploy status panel (`/saturngo_deploy_status`)
   - an `XDMA Doctor` action for privileged read-only PCIe/XDMA diagnostics
+  - a `Stage Running Kernel` action for safe XDMA pre-staging on the currently
+    running kernel without restarting `p2app.service`
 - The page runs `/opt/saturn-go/scripts/update-saturn-go.sh` to:
   - update the repo (optional)
   - rebuild the Rust backend (`cargo build --release`)
@@ -216,7 +218,17 @@ If a script entry does not define `version`, `/get_versions` now returns
   - dispatch a detached root helper to stop/copy/start `saturn-go.service`
 - The page also runs `/opt/saturn-go/scripts/xdma-doctor.sh` for a classified
   read-only XDMA/PCIe report. That wrapper escalates to the root-owned helper
-  copy at `/usr/local/lib/saturn-go/scripts/saturn-xdma-doctor.sh`.
+  copy at `/usr/local/lib/saturn-go/scripts/saturn-xdma-doctor.sh`. When the
+  helper is launched from `saturn-go.service`, it re-execs through a transient
+  `systemd-run --pipe` unit so the check runs outside the service's
+  `ProtectKernelModules=true` sandbox.
+- The page also runs `/opt/saturn-go/scripts/xdma-stage-current.sh` when XDMA
+  is working but not installed on disk for the running kernel. That wrapper
+  escalates to `/usr/local/lib/saturn-go/scripts/saturn-xdma-stage-current.sh`,
+  which calls `saturn-fix-xdma.sh --stage-kernel "$(uname -r)"` without
+  touching the live module/service state. The privileged helper uses the same
+  transient-unit escape so Saturn Go can stage the module on disk without
+  inheriting the web service's mount protections.
 - UI run options map to script flags:
   - `--verbose`, `--dry-run`, `--skip-git`, `--skip-build`, `--skip-deploy`
 - Deploy status is written to:

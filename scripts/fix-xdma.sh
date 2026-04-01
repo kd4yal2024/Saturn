@@ -133,7 +133,15 @@ latest_installed_kernel(){
 
 build_dir_for_kernel(){
   local krel="$1"
-  printf "/lib/modules/%s/build" "$krel"
+  local modules_build="/lib/modules/${krel}/build"
+  local headers_dir="/usr/src/linux-headers-${krel}"
+  if [[ -d "$modules_build" ]]; then
+    printf "%s" "$modules_build"
+  elif [[ -d "$headers_dir" ]]; then
+    printf "%s" "$headers_dir"
+  else
+    printf "%s" "$modules_build"
+  fi
 }
 
 module_updates_dir_for_kernel(){
@@ -141,8 +149,31 @@ module_updates_dir_for_kernel(){
   printf "/lib/modules/%s/updates" "$krel"
 }
 
+repair_kernel_header_links(){
+  local krel="$1"
+  local modules_dir="/lib/modules/${krel}"
+  local build_link="${modules_dir}/build"
+  local source_link="${modules_dir}/source"
+  local headers_dir="/usr/src/linux-headers-${krel}"
+  local common_dir="/usr/src/linux-headers-${krel%-rpi*}-common-rpi"
+
+  [[ -d "$modules_dir" ]] || return 0
+
+  if [[ -d "$headers_dir" && ! -d "$build_link" ]]; then
+    ln -sfn "../../../src/linux-headers-${krel}" "$build_link"
+    ok "Repaired kernel build link for ${krel}."
+  fi
+
+  if [[ -d "$common_dir" && ! -d "$source_link" ]]; then
+    ln -sfn "../../../src/$(basename "$common_dir")" "$source_link"
+    ok "Repaired kernel source link for ${krel}."
+  fi
+}
+
 ensure_headers(){
-  local krel="$1" kbuild meta_pkg
+  local krel="$1" kbuild meta_pkg headers_dir
+  headers_dir="/usr/src/linux-headers-${krel}"
+  repair_kernel_header_links "$krel"
   kbuild="$(build_dir_for_kernel "$krel")"
   meta_pkg="linux-headers-$(kernel_flavor "$krel")"
   if [[ ! -d "$kbuild" ]]; then
@@ -156,6 +187,11 @@ ensure_headers(){
       apt-get install -y raspberrypi-kernel-headers || die "raspberrypi-kernel-headers install failed"
     else
       die "No suitable kernel header package found for ${krel}"
+    fi
+    repair_kernel_header_links "$krel"
+    kbuild="$(build_dir_for_kernel "$krel")"
+    if [[ ! -d "$kbuild" && -d "$headers_dir" ]]; then
+      kbuild="$headers_dir"
     fi
     [[ -d "$kbuild" ]] || die "Headers still missing after install."
   fi
