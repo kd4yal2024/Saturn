@@ -15,8 +15,26 @@
 #ifndef __version_h
 #define __version_h
 
+#include <stdbool.h>
 #include <stdint.h>
 
+#define VPRODUCT_NAME_MAX_LEN 32U
+#define VFIRMWARE_NAME_MAX_LEN 64U
+
+typedef struct
+{
+    uint16_t ProductId;
+    uint16_t ProductVersion;
+    uint16_t FirmwareVersion;
+    uint8_t FirmwareId;
+    uint8_t FirmwareMajorVersion;
+    uint32_t DateCode;
+    uint8_t ClockMask;
+    bool AllClocksPresent;
+    bool FallbackConfig;
+    char ProductName[VPRODUCT_NAME_MAX_LEN];
+    char FirmwareName[VFIRMWARE_NAME_MAX_LEN];
+} TVersionInfoSnapshot;
 
 
 //
@@ -48,6 +66,11 @@ typedef enum
 // function call to get firmware ID and version
 //
 unsigned int GetFirmwareVersion(ESoftwareID* ID);
+
+//
+// read all version-related FPGA register fields into a structured snapshot
+//
+void GetVersionInfoSnapshot(TVersionInfoSnapshot* Snapshot);
 
 
 //

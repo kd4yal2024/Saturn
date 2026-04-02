@@ -31,6 +31,7 @@
 #include "../common/saturnregisters.h"
 #include "../common/saturndrivers.h"
 #include "../common/byteio.h"
+#include "../common/auxadc.h"
 #include "../common/p23_perf_telemetry.h"
 #include "LDGATU.h"
 
@@ -167,6 +168,7 @@ void *OutgoingHighPriority(void *arg)
         atomic_load(&ExitRequested)
       );
       P23PerfTelemetrySetPureSignalEnabled(GetPureSignalEnabled());
+      P23PerfTelemetrySetDieTempC(GetDieTempC());
       P23PerfTelemetryMaybeWrite();
       // Port rebinding is handled centrally by the p2app control plane.
       usleep(100);
@@ -216,7 +218,7 @@ void *OutgoingHighPriority(void *arg)
       ADCOverflows = 0;                                         // and clear ready for next test
       wr_be_u16(UDPBuffer+39, PeakADC1MaxAmpl);                 // ADC1 peak hold
       wr_be_u16(UDPBuffer+41, PeakADC2MaxAmpl);                 // ADC2 peak hold
-      MaybeWriteADCPeakTelemetry("p3", PeakADC1MaxAmpl, PeakADC2MaxAmpl, *(uint8_t *)(UDPBuffer+5));
+      MaybeWriteADCPeakTelemetry("p2", PeakADC1MaxAmpl, PeakADC2MaxAmpl, *(uint8_t *)(UDPBuffer+5));
       Word = (uint16_t)GetAnalogueIn(4);
       wr_be_u16(UDPBuffer+6, Word);                     // exciter power
       Word = (uint16_t)GetAnalogueIn(0);
@@ -312,6 +314,7 @@ void *OutgoingHighPriority(void *arg)
         P23PerfTelemetryCounterAdd(eP23PerfCounterHighPriorityPackets, 1U);
         P23PerfTelemetryCounterAdd(eP23PerfCounterHighPriorityBytes, (uint64_t)Error);
       }
+      P23PerfTelemetrySetDieTempC(GetDieTempC());
       P23PerfTelemetryMaybeWrite();
       //
       // now we need to sleep for 1ms (in TX) or 200ms (not in TX)

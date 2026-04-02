@@ -31,6 +31,7 @@
 #include "../common/saturnregisters.h"
 #include "../common/saturndrivers.h"
 #include "../common/byteio.h"
+#include "../common/auxadc.h"
 #include "../common/p23_perf_telemetry.h"
 #include "LDGATU.h"
 
@@ -172,6 +173,7 @@ void *OutgoingHighPriority(void *arg)
         ExitRequested
       );
       P23PerfTelemetrySetPureSignalEnabled(GetPureSignalEnabled());
+      P23PerfTelemetrySetDieTempC(GetDieTempC());
       P23PerfTelemetryMaybeWrite();
       usleep(100);
     }
@@ -306,6 +308,7 @@ void *OutgoingHighPriority(void *arg)
         P23PerfTelemetryCounterAdd(eP23PerfCounterHighPriorityPackets, 1U);
         P23PerfTelemetryCounterAdd(eP23PerfCounterHighPriorityBytes, (uint64_t)Error);
       }
+      P23PerfTelemetrySetDieTempC(GetDieTempC());
       P23PerfTelemetryMaybeWrite();
       //
       // now we need to sleep for 1ms (in TX) or 200ms (not in TX)

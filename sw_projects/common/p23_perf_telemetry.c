@@ -55,6 +55,10 @@ typedef struct
   uint32_t SpeakerUnderQueueAgeUs;
   uint8_t SpeakerUnderMode;
   bool SpeakerUnderGapActive;
+  bool FPGAInfoValid;
+  TVersionInfoSnapshot FPGAInfo;
+  bool DieTempValid;
+  float DieTempC;
 } TP23PerfState;
 
 static const char *g_port_names[P23_PERF_MAX_PORTS] =
@@ -248,6 +252,25 @@ void P23PerfTelemetrySetFeatureFlags(bool ControlPanelEnabled, bool GanymedeEnab
   pthread_mutex_unlock(&g_perf_mutex);
 }
 
+void P23PerfTelemetrySetVersionInfo(const TVersionInfoSnapshot *Snapshot)
+{
+  if (Snapshot == NULL)
+    return;
+
+  pthread_mutex_lock(&g_perf_mutex);
+  g_perf_state.FPGAInfo = *Snapshot;
+  g_perf_state.FPGAInfoValid = true;
+  pthread_mutex_unlock(&g_perf_mutex);
+}
+
+void P23PerfTelemetrySetDieTempC(float TempC)
+{
+  pthread_mutex_lock(&g_perf_mutex);
+  g_perf_state.DieTempC = TempC;
+  g_perf_state.DieTempValid = true;
+  pthread_mutex_unlock(&g_perf_mutex);
+}
+
 void P23PerfTelemetrySetPort(unsigned int PortIndex, uint16_t PortValue)
 {
   if (PortIndex >= P23_PERF_MAX_PORTS)
@@ -402,6 +425,39 @@ void P23PerfTelemetryMaybeWrite(void)
           Snapshot.UseGanymede ? "true" : "false",
           Snapshot.UseLDGATU ? "true" : "false",
           Snapshot.UseAriesATU ? "true" : "false");
+  fprintf(File,
+          "  \"fpga\": {\n"
+          "    \"available\": %s,\n"
+          "    \"product_id\": %" PRIu16 ",\n"
+          "    \"product\": \"%s\",\n"
+          "    \"product_version\": %" PRIu16 ",\n"
+          "    \"firmware_id\": %" PRIu8 ",\n"
+          "    \"firmware_name\": \"%s\",\n"
+          "    \"firmware_version\": %" PRIu16 ",\n"
+          "    \"firmware_major_version\": %" PRIu8 ",\n"
+          "    \"date_code_raw\": %" PRIu32 ",\n"
+          "    \"date_code_hex\": \"%08" PRIX32 "\",\n"
+          "    \"clock_mask\": %" PRIu8 ",\n"
+          "    \"all_clocks_present\": %s,\n"
+          "    \"fallback_config\": %s,\n"
+          "    \"die_temp_valid\": %s,\n"
+          "    \"die_temp_c\": %.1f\n"
+          "  },\n",
+          Snapshot.FPGAInfoValid ? "true" : "false",
+          Snapshot.FPGAInfo.ProductId,
+          Snapshot.FPGAInfo.ProductName,
+          Snapshot.FPGAInfo.ProductVersion,
+          Snapshot.FPGAInfo.FirmwareId,
+          Snapshot.FPGAInfo.FirmwareName,
+          Snapshot.FPGAInfo.FirmwareVersion,
+          Snapshot.FPGAInfo.FirmwareMajorVersion,
+          Snapshot.FPGAInfo.DateCode,
+          Snapshot.FPGAInfo.DateCode,
+          Snapshot.FPGAInfo.ClockMask,
+          Snapshot.FPGAInfo.AllClocksPresent ? "true" : "false",
+          Snapshot.FPGAInfo.FallbackConfig ? "true" : "false",
+          Snapshot.DieTempValid ? "true" : "false",
+          Snapshot.DieTempC);
 
   fprintf(File, "  \"routing\": {\n");
   fprintf(File, "    \"ports\": {\n");

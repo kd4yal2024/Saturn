@@ -17,6 +17,10 @@
 
 #include <stdint.h>
 
+//
+// returns die temperature in Celsius
+//
+float GetDieTempC(void);
 
 
 //

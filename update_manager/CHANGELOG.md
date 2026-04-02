@@ -4,6 +4,10 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
 
 ## [Unreleased]
 ### Added
+- P2/P3 runtime telemetry (`/p23_perf`) now includes a structured `fpga`
+  section with live product, firmware name/version, bit-file date code, clock
+  state, fallback-image state, and die-temperature data exported directly from
+  the running app instead of relying only on startup-banner text.
 - FPGA flashing now uses a dedicated root-owned helper (`saturn-flash-fpga.sh`)
   under `/usr/local/lib/saturn-go/scripts`, with the web-facing
   `flash_fpga.sh` reduced to a narrow `sudo -n` wrapper. This fixes the FPGA
@@ -52,6 +56,10 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
 - Saturn Go page now includes an `XDMA Doctor` action that runs a classified read-only PCIe/XDMA report through the existing privileged helper lane.
 
 ### Changed
+- `g2-version-info.sh` now prefers live `/p23_perf` FPGA/runtime metadata for
+  firmware version, product/version, bit-file date code, fallback state, and
+  die temperature, using the `p2app.service` startup-banner journal scrape only
+  as a fallback when runtime telemetry is unavailable.
 - `g2-version-info.sh` now reports the deployment slot separately from the
   live app identity, avoids printing two competing `Runtime` blocks, and scopes
   the FPGA startup-banner scrape to the current `p2app.service` instance

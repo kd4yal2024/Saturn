@@ -4,6 +4,8 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#include "version.h"
+
 #define P23_PERF_MAX_DDC 10U
 #define P23_PERF_MAX_PORTS 20U
 
@@ -67,6 +69,8 @@ void P23PerfTelemetrySetRuntimeFlags(bool SDRIsActive, bool TXMode, bool ReplyIs
 void P23PerfTelemetrySetPureSignalEnabled(bool Enabled);
 void P23PerfTelemetrySetFeatureFlags(bool ControlPanelEnabled, bool GanymedeEnabled,
                                      bool LDGATUEnabled, bool AriesATUEnabled);
+void P23PerfTelemetrySetVersionInfo(const TVersionInfoSnapshot *Snapshot);
+void P23PerfTelemetrySetDieTempC(float TempC);
 void P23PerfTelemetrySetPort(unsigned int PortIndex, uint16_t PortValue);
 void P23PerfTelemetrySetDDCConfig(unsigned int DDCIndex, bool Enabled, bool Interleaved,
                                   uint32_t SampleRateKHz);

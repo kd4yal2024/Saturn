@@ -448,6 +448,7 @@ int main(int argc, char *argv[])
   unsigned int MajorVersion = 0;
   bool IncompatibleFirmware = false;                                // becomes set if firmware is not compatible with this version
   unsigned int PCBVersion;
+  TVersionInfoSnapshot VersionInfo;
 
   //
   // initialise register access semaphores
@@ -467,9 +468,12 @@ int main(int argc, char *argv[])
   printf("SATURN Protocol 2 App. press 'x <enter>' in console to close\n");
 
   OpenXDMADriver(false);
+  GetVersionInfoSnapshot(&VersionInfo);
+  P23PerfTelemetrySetVersionInfo(&VersionInfo);
   PrintVersionInfo();
   PCBVersion = GetPCBVersionNumber();
   printf("p2app client app software Version:%d Build Date:%s\n", P2APPVERSION, BuildDate);
+  P23PerfTelemetrySetDieTempC(GetDieTempC());
   PrintAuxADCInfo();
   if (IsFallbackConfig())
       printf("FPGA load is a fallback - you should re-flash the primary FPGA image!\n");

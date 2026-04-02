@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SCRIPT_VERSION="1.1"
+SCRIPT_VERSION="1.3"
 PERF_URL="${SATURN_LOCAL_P23_PERF_URL:-http://127.0.0.1:8080/p23_perf}"
 CURRENT_TARGET="$(readlink -f /opt/saturn-go/p23-apps/current 2>/dev/null || true)"
 REPO_ROOT="${SATURN_ACTIVE_REPO_ROOT:-${SATURN_REPO_ROOT:-/home/pi/github/Saturn}}"
@@ -96,6 +96,7 @@ app_pid = current.get("pid") or service.get("main_pid") or "unknown"
 uptime_sec = current.get("uptime_sec")
 startup_mode = workload.get("startup_mode") or "unknown"
 panel_mode = workload.get("panel_mode") or "unknown"
+fpga = current.get("fpga") or {}
 
 print(f"  Service: {service.get('name', 'p2app.service')}")
 print(f"  Deployment slot: {deployment_slot}")
@@ -109,6 +110,26 @@ if uptime_sec is not None:
     print(f"  Uptime: {uptime_sec} sec")
 print(f"  Startup mode: {startup_mode}")
 print(f"  Panel mode: {panel_mode}")
+if fpga.get("available"):
+    print(f"  FPGA product: {fpga.get('product', 'unknown')}; Version = {fpga.get('product_version', 'unknown')}")
+    print(
+        "  FPGA firmware: "
+        f"{fpga.get('firmware_name', 'unknown')}; "
+        f"FW Version = {fpga.get('firmware_version', 'unknown')}, "
+        f"major version = {fpga.get('firmware_major_version', 'unknown')}"
+    )
+    if fpga.get("date_code_hex"):
+        print(f"  FPGA BIT file date code: {fpga.get('date_code_hex')}")
+    if fpga.get("all_clocks_present") is True:
+        print("  FPGA clocks: all present")
+    elif fpga.get("clock_mask") is not None:
+        print(f"  FPGA clock mask: 0x{int(fpga.get('clock_mask', 0)):X}")
+    print(f"  FPGA fallback config: {'yes' if fpga.get('fallback_config') else 'no'}")
+    if fpga.get("die_temp_valid"):
+        try:
+            print(f"  Die Temp (runtime): {float(fpga.get('die_temp_c')):.1f}C")
+        except Exception:
+            pass
 PY
 else
   say "  Service: p2app.service"
@@ -127,26 +148,37 @@ fi
 say
 say "Latest startup banner"
 ACTIVE_SINCE="$(systemctl show -p ActiveEnterTimestamp --value p2app.service 2>/dev/null || true)"
+CURRENT_STARTUP_LINES=""
+LAST_KNOWN_STARTUP_LINES=""
 if [[ -n "${ACTIVE_SINCE}" ]]; then
-  STARTUP_LINES="$(
+  CURRENT_STARTUP_LINES="$(
     journalctl -u p2app.service --since "${ACTIVE_SINCE}" --no-pager -o cat 2>/dev/null \
       | grep -E 'FPGA BIT file data code| Product:| FPGA Firmware loaded:|All clocks present|Die Temp =' || true
   )"
-else
-  STARTUP_LINES="$(
-    journalctl -u p2app.service --no-pager -o cat 2>/dev/null \
-      | grep -E 'FPGA BIT file data code| Product:| FPGA Firmware loaded:|All clocks present|Die Temp =' \
-      | tail -n 5 || true
-  )"
 fi
+LAST_KNOWN_STARTUP_LINES="$(
+  journalctl -u p2app.service --no-pager -o cat 2>/dev/null \
+    | grep -E 'FPGA BIT file data code| Product:| FPGA Firmware loaded:|All clocks present|Die Temp =' \
+    | tail -n 5 || true
+)"
 
-if [[ -n "${STARTUP_LINES}" ]]; then
+if [[ -n "${CURRENT_STARTUP_LINES}" ]]; then
   while IFS= read -r line; do
     [[ -n "${line}" ]] || continue
     say "  ${line}"
-  done <<< "${STARTUP_LINES}"
+  done <<< "${CURRENT_STARTUP_LINES}"
+elif [[ -n "${LAST_KNOWN_STARTUP_LINES}" ]]; then
+  say "  Current p2app.service start at ${ACTIVE_SINCE:-unknown time} did not emit matching startup banner lines."
+  say "  Showing most recent captured banner from an earlier retained start:"
+  while IFS= read -r line; do
+    [[ -n "${line}" ]] || continue
+    say "  ${line}"
+  done <<< "${LAST_KNOWN_STARTUP_LINES}"
 else
-  say "  No matching startup lines found in p2app.service journal."
+  if [[ -n "${ACTIVE_SINCE}" ]]; then
+    say "  Current p2app.service start at ${ACTIVE_SINCE} did not emit matching startup banner lines."
+  fi
+  say "  No retained FPGA startup banner lines were found in p2app.service journal."
 fi
 
 say

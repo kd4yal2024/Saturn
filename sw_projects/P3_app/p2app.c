@@ -69,11 +69,11 @@
 #include "GanymedePAControl.h"
 #include "frontpanelhandler.h"
 
-#define P3APPVERSION 46
+#define P2APPVERSION 46
 #define FWREQUIREDMAJORVERSION 1                  // major version that is required. Only altered if programming interface changes. 
 //
-// the Firmware version is a protection to make sure that if a p3app update is required by the new firmware,
-// it won't work with an old version. This means p3app will always need to be updated if the firmware is updated to new major version.
+// the Firmware version is a protection to make sure that if a p2app update is required by the new firmware,
+// it won't work with an old version. This means p2app will always need to be updated if the firmware is updated to new major version.
 //
 //------------------------------------------------------------------------------------------
 // VERSION History
@@ -154,6 +154,7 @@ bool UseAriesATU = false;                   // true if to use an Aries ATU
 uint32_t LODebugDDC1Frequency;              // -x debug mode: LO frequency for DDC1
 bool InterleavedDDCDebugMode = false;       // true if interleaved DDC for debug are allowed
 static volatile sig_atomic_t g_signal_exit_requested = 0;
+static atomic_uint_fast16_t gClientControlWord = 0;
 
 struct CriticalAudioRuntimeConfig
 {
@@ -480,9 +481,19 @@ void SyncSocketAliasesForOwner(const struct ThreadSocketData* OwnerPtr)
 //
 // function ot get program version
 //
-uint32_t GetP3appVersion(void)
+uint32_t GetP2appVersion(void)
 {
-  return P3APPVERSION;
+  return P2APPVERSION;
+}
+
+void SetClientControlWord(uint16_t Word)
+{
+  atomic_store(&gClientControlWord, (uint_fast16_t)Word);
+}
+
+uint16_t GetClientControlWord(void)
+{
+  return (uint16_t)atomic_load(&gClientControlWord);
 }
 
 static const char* SchedulerPolicyName(int Policy)
@@ -765,7 +776,7 @@ static void LoadCriticalAudioRuntimeConfig(void)
   }
 
   gCriticalAudioRuntime.Enabled = true;
-  printf("P3 critical audio RT enabled: policy=%s priority=%d",
+  printf("P2 critical audio RT enabled: policy=%s priority=%d",
          SchedulerPolicyName(gCriticalAudioRuntime.Policy), gCriticalAudioRuntime.Priority);
   if(gCriticalAudioRuntime.CpuSetConfigured)
     printf(" cpus=%s", gCriticalAudioRuntime.CpuListText);
@@ -1108,8 +1119,8 @@ void Shutdown()
 // has a loop that reads & processes incoming command packets
 // see protocol documentation
 // 
-// if invoked "./p3app" - ADCs selected as normal
-// if invoked "./p3app 1900000" - ADC1 and ADC2 inputs set to DDS test source at 1900000Hz
+// if invoked "./p2app" - ADCs selected as normal
+// if invoked "./p2app 1900000" - ADC1 and ADC2 inputs set to DDS test source at 1900000Hz
 //
 int main(int argc, char *argv[])
 {
@@ -1150,6 +1161,7 @@ int main(int argc, char *argv[])
   unsigned int MajorVersion = 0;
   bool IncompatibleFirmware = false;                                // becomes set if firmware is not compatible with this version
   unsigned int PCBVersion;
+  TVersionInfoSnapshot VersionInfo;
 
   //
   // initialise register access semaphores
@@ -1159,23 +1171,26 @@ int main(int argc, char *argv[])
   sem_init(&RFGPIOMutex, 0, 1);                                     // for RF GPIO register
   sem_init(&CodecRegMutex, 0, 1);                                   // for codec accesss
   sem_init(&MicWBDMAMutex, 0, 1);                                   // for mic and WB DMA
-  P23PerfTelemetryInit("p3", GetP3appVersion());
+  P23PerfTelemetryInit("p2", GetP2appVersion());
   for(i = 0; i < VPORTTABLESIZE; i++)
     P23PerfTelemetrySetPort((unsigned int)i, atomic_load(&SocketData[i].Portid));
     
 //
 // setup Saturn hardware
 //
-  printf("SATURN P3 App (Protocol 2 compatible). press 'x <enter>' in console to close\n");
+  printf("SATURN P2 App (hardened Protocol 2 path). press 'x <enter>' in console to close\n");
 
   if(!OpenXDMADriver(false))
   {
     printf("unable to continue without XDMA register access\n");
     return EXIT_FAILURE;
   }
+  GetVersionInfoSnapshot(&VersionInfo);
+  P23PerfTelemetrySetVersionInfo(&VersionInfo);
   PrintVersionInfo();
   PCBVersion = GetPCBVersionNumber();
-  printf("p3app client app software Version:%d Build Date:%s\n", P3APPVERSION, BuildDate);
+  printf("p2app client app software Version:%d Build Date:%s\n", P2APPVERSION, BuildDate);
+  P23PerfTelemetrySetDieTempC(GetDieTempC());
   PrintAuxADCInfo();
   if (IsFallbackConfig())
       printf("FPGA load is a fallback - you should re-flash the primary FPGA image!\n");
@@ -1217,9 +1232,9 @@ int main(int argc, char *argv[])
     printf("***************************************************************************\n");
     printf("Incompatible Saturn FPGA firmware v%d; major version%d\n",
              Version,  MajorVersion);
-    printf("This version of p3app requires major version = %d\n", FWREQUIREDMAJORVERSION);
-    printf("You must update your copy of p3app to use that firmware version - see User manual\n");
-    printf("p3app will refuse a connection request until this is resolved!\n");
+    printf("This version of p2app requires major version = %d\n", FWREQUIREDMAJORVERSION);
+    printf("You must update your copy of p2app to use that firmware version - see User manual\n");
+    printf("p2app will refuse a connection request until this is resolved!\n");
     printf("\n\n\n***************************************************************************\n");
     IncompatibleFirmware = true;
   }
@@ -1256,7 +1271,7 @@ int main(int argc, char *argv[])
     switch(CmdOption)
     {
       case 'h':
-        printf("usage: ./p3app <optional arguments>\n");
+        printf("usage: ./p2app <optional arguments>\n");
         printf("optional arguments:\n");
         printf("-a LDG        control TUNE for LDG ATU\n");
         printf("-a Aries      control TUNE for Aries ATU\n");
@@ -1486,7 +1501,7 @@ int main(int argc, char *argv[])
     for(i = 0; i < 6; ++i) DiscoveryReply[i + 5] = hwaddr.ifr_addr.sa_data[i];         // copy MAC to reply message
 #endif
   DiscoveryReply[13] = (uint8_t)Version;
-  DiscoveryReply[23] = (uint8_t)P3APPVERSION;
+  DiscoveryReply[23] = (uint8_t)P2APPVERSION;
   
 
 

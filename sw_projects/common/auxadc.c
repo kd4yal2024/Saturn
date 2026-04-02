@@ -41,10 +41,10 @@
 
 
 //
-// prints temperature information
+// returns die temperature in Celsius
 // temperature conversion according to UG480 page 23
 //
-void PrintAuxADCInfo(void)
+float GetDieTempC(void)
 {
     uint32_t RegisterValue;
     float Temp;
@@ -54,9 +54,18 @@ void PrintAuxADCInfo(void)
     Temp = Temp / 65536.0;
     Temp -= 273.15;
 
-    printf("Die Temp = %4.1fC\n", Temp);
+    return Temp;
 }
 
+
+
+//
+// prints temperature information
+//
+void PrintAuxADCInfo(void)
+{
+    printf("Die Temp = %4.1fC\n", GetDieTempC());
+}
 
 
 

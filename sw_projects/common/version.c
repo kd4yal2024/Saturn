@@ -76,6 +76,50 @@ const char* ClockStrings[] =
 #define SATURNPRODUCTID 1					// Saturn, any version
 #define SATURNGOLDENCONFIGID 3				// "golden" configuration id
 
+static void FillVersionInfoSnapshot(TVersionInfoSnapshot* Snapshot)
+{
+	uint32_t SoftwareInformation;
+	uint32_t ProductInformation;
+	uint32_t DateCode;
+	uint32_t SWID;
+	uint32_t ProdID;
+
+	if (Snapshot == NULL)
+		return;
+
+	memset(Snapshot, 0, sizeof(*Snapshot));
+
+	SoftwareInformation = RegisterRead(VADDRSWVERSIONREG);
+	ProductInformation = RegisterRead(VADDRPRODVERSIONREG);
+	DateCode = RegisterRead(VADDRUSERVERSIONREG);
+
+	Snapshot->DateCode = DateCode;
+	Snapshot->ClockMask = (uint8_t)(SoftwareInformation & 0x0FU);
+	Snapshot->FirmwareVersion = (uint16_t)((SoftwareInformation >> 4) & 0xFFFFU);
+	SWID = (SoftwareInformation >> 20) & 0x1FU;
+	Snapshot->FirmwareId = (uint8_t)SWID;
+	Snapshot->FirmwareMajorVersion = (uint8_t)(SoftwareInformation >> 25);
+	Snapshot->ProductVersion = (uint16_t)(ProductInformation & 0xFFFFU);
+	ProdID = ProductInformation >> 16;
+	Snapshot->ProductId = (uint16_t)ProdID;
+	Snapshot->AllClocksPresent = (Snapshot->ClockMask == 0x0FU);
+	Snapshot->FallbackConfig = ((ProdID == SATURNPRODUCTID) && (SWID == SATURNGOLDENCONFIGID));
+
+	if (ProdID > VMAXPRODUCTID)
+		snprintf(Snapshot->ProductName, sizeof(Snapshot->ProductName), "%s", ProductIDStrings[0]);
+	else
+		snprintf(Snapshot->ProductName, sizeof(Snapshot->ProductName), "%s", ProductIDStrings[ProdID]);
+
+	if (SWID > VMAXSWID)
+		snprintf(Snapshot->FirmwareName, sizeof(Snapshot->FirmwareName), "%s", SWIDStrings[0]);
+	else
+		snprintf(Snapshot->FirmwareName, sizeof(Snapshot->FirmwareName), "%s", SWIDStrings[SWID]);
+}
+
+void GetVersionInfoSnapshot(TVersionInfoSnapshot* Snapshot)
+{
+	FillVersionInfoSnapshot(Snapshot);
+}
 
 
 //
@@ -84,35 +128,9 @@ const char* ClockStrings[] =
 //
 bool IsFallbackConfig(void)
 {
-	bool Result = false;
-	uint32_t SoftwareInformation;			// swid & version
-	uint32_t ProductInformation;			// product id & version
-//	uint32_t DateCode;						// date code from user register in FPGA
-
-//	uint32_t SWVer;							// s/w version
-	uint32_t SWID;							// s/w id
-//	uint32_t ProdVer;						// product version
-	uint32_t ProdID;						// product id
-//	uint32_t ClockInfo;						// clock status
-
-	//
-	// read the raw data from registers
-	//
-	SoftwareInformation = RegisterRead(VADDRSWVERSIONREG);
-	ProductInformation = RegisterRead(VADDRPRODVERSIONREG);
-//	DateCode = RegisterRead(VADDRUSERVERSIONREG);
-
-//	ClockInfo = (SoftwareInformation & 0xF);				// 4 clock bits
-//	SWVer = (SoftwareInformation >> 4) & 0xFFFF;			// 16 bit sw version
-	SWID = SoftwareInformation >> 20;						// 12 bit software ID
-
-//	ProdVer = ProductInformation & 0xFFFF;					// 16 bit product version
-	ProdID = ProductInformation >> 16;						// 16 bit product ID
-
-	if ((ProdID == SATURNPRODUCTID) && (SWID == SATURNGOLDENCONFIGID))
-		Result = true;
-
-	return Result;
+	TVersionInfoSnapshot Snapshot;
+	FillVersionInfoSnapshot(&Snapshot);
+	return Snapshot.FallbackConfig;
 }
 
 //
@@ -120,62 +138,25 @@ bool IsFallbackConfig(void)
 //
 void PrintVersionInfo(void)
 {
-	uint32_t SoftwareInformation;			// swid & version
-	uint32_t ProductInformation;			// product id & version
-	uint32_t DateCode;						// date code from user register in FPGA
-
-	uint32_t SWVer, SWID;					// s/w version and id
-	uint32_t ProdVer, ProdID;				// product version and id
-	uint32_t ClockInfo;						// clock status
+	TVersionInfoSnapshot Snapshot;
 	uint32_t Cntr;
-	uint32_t MajorVersion;
 
-	const char* ProdString;
-	const char* SWString;
+	FillVersionInfoSnapshot(&Snapshot);
+	printf("FPGA BIT file data code = %08x\n", Snapshot.DateCode);
+	printf(" Product: %s; Version = %d\n", Snapshot.ProductName, Snapshot.ProductVersion);
+	printf(" FPGA Firmware loaded: %s; FW Version = %d, major version = %d\n",
+	       Snapshot.FirmwareName, Snapshot.FirmwareVersion, Snapshot.FirmwareMajorVersion);
 
-	//
-	// read the raw data from registers
-	//
-	SoftwareInformation = RegisterRead(VADDRSWVERSIONREG);
-	ProductInformation = RegisterRead(VADDRPRODVERSIONREG);
-	DateCode = RegisterRead(VADDRUSERVERSIONREG);
-	printf("FPGA BIT file data code = %08x\n", DateCode);
-
-	ClockInfo = (SoftwareInformation & 0xF);				// 4 clock bits
-	SWVer = (SoftwareInformation >> 4) & 0xFFFF;			// 16 bit sw version
-	SWID = (SoftwareInformation >> 20) & 0x1F;				// 5 bit software ID
-	MajorVersion = SoftwareInformation >> 25;				// 7 bit major version
-
-	ProdVer = ProductInformation & 0xFFFF;					// 16 bit product version
-	ProdID = ProductInformation >> 16;						// 16 bit product ID
-
-	//
-	// now chack if IDs are valid and print strings
-	//
-	if (ProdID > VMAXPRODUCTID)
-		ProdString = ProductIDStrings[0];
-	else
-		ProdString = ProductIDStrings[ProdID];
-
-	if (SWID > VMAXSWID)
-		SWString = SWIDStrings[0];
-	else
-		SWString = SWIDStrings[SWID];
-
-	printf(" Product: %s; Version = %d\n", ProdString, ProdVer);
-	printf(" FPGA Firmware loaded: %s; FW Version = %d, major version = %d\n", SWString, SWVer, MajorVersion);
-
-	if (ClockInfo == 0xF)
+	if (Snapshot.AllClocksPresent)
 		printf("All clocks present\n");
 	else
 	{
 		for (Cntr = 0; Cntr < 4; Cntr++)
 		{
-			if (ClockInfo & 1)
+			if (Snapshot.ClockMask & (1U << Cntr))
 				printf("%s present\n", ClockStrings[Cntr]);
 			else
 				printf("%s not present\n", ClockStrings[Cntr]);
-			ClockInfo = ClockInfo >> 1;
 		}
 	}
 }
@@ -187,13 +168,10 @@ void PrintVersionInfo(void)
 //
 unsigned int GetFirmwareVersion(ESoftwareID* ID)
 {
-	unsigned int Version = 0;
-	uint32_t SoftwareInformation;			// swid & version
-
-	SoftwareInformation = RegisterRead(VADDRSWVERSIONREG);
-	Version = (SoftwareInformation >> 4) & 0xFFFF;			// 16 bit sw version
-	*ID = (ESoftwareID)((SoftwareInformation >> 20) & 0x1F);						// 5 bit software ID
-	return Version;
+	TVersionInfoSnapshot Snapshot;
+	FillVersionInfoSnapshot(&Snapshot);
+	*ID = (ESoftwareID)Snapshot.FirmwareId;
+	return Snapshot.FirmwareVersion;
 }
 
 
@@ -203,12 +181,9 @@ unsigned int GetFirmwareVersion(ESoftwareID* ID)
 //
 unsigned int GetFirmwareMajorVersion(void)
 {
-	unsigned int MajorVersion = 0;
-	uint32_t SoftwareInformation;			// swid & version
-
-	SoftwareInformation = RegisterRead(VADDRSWVERSIONREG);
-	MajorVersion = (SoftwareInformation >> 25) & 0x7F;			// 7 bit major fw version
-	return MajorVersion;
+	TVersionInfoSnapshot Snapshot;
+	FillVersionInfoSnapshot(&Snapshot);
+	return Snapshot.FirmwareMajorVersion;
 }
 
 
@@ -218,15 +193,9 @@ unsigned int GetFirmwareMajorVersion(void)
 //
 bool IsSaturnPCB(void)
 {
-	bool Result = false;
-	uint32_t ProductInformation;			// productid & version
-	uint32_t Version;
-
-	ProductInformation = RegisterRead(VADDRPRODVERSIONREG);
-	Version = (ProductInformation >> 16) & 0xFFFF;			// 16 bit product ID
-	if (Version == 1)
-		Result = true;
-	return Result;
+	TVersionInfoSnapshot Snapshot;
+	FillVersionInfoSnapshot(&Snapshot);
+	return (Snapshot.ProductId == SATURNPRODUCTID);
 
 }
 
@@ -237,10 +206,7 @@ bool IsSaturnPCB(void)
 //
 uint16_t GetPCBVersionNumber(void)
 {
-	uint32_t ProductInformation;			// productid & version
-	uint16_t Version;
-
-	ProductInformation = RegisterRead(VADDRPRODVERSIONREG);
-	Version = (uint16_t)(ProductInformation  & 0xFFFF);			// 16 bit product version
-	return Version;
+	TVersionInfoSnapshot Snapshot;
+	FillVersionInfoSnapshot(&Snapshot);
+	return Snapshot.ProductVersion;
 }
