@@ -4,6 +4,10 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
 
 ## [Unreleased]
 ### Added
+- FPGA flashing now uses a dedicated root-owned helper (`saturn-flash-fpga.sh`)
+  under `/usr/local/lib/saturn-go/scripts`, with the web-facing
+  `flash_fpga.sh` reduced to a narrow `sudo -n` wrapper. This fixes the FPGA
+  Flash page when the service user does not have general passwordless sudo.
 - Saturn Go XDMA tools now include a `Stage Running Kernel` maintenance action
   in `saturngo.html`, backed by a narrow privileged helper that runs
   `saturn-fix-xdma.sh --stage-kernel "$(uname -r)"` without restarting
@@ -48,6 +52,10 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
 - Saturn Go page now includes an `XDMA Doctor` action that runs a classified read-only PCIe/XDMA report through the existing privileged helper lane.
 
 ### Changed
+- `g2-version-info.sh` now reports the deployment slot separately from the
+  live app identity, avoids printing two competing `Runtime` blocks, and scopes
+  the FPGA startup-banner scrape to the current `p2app.service` instance
+  instead of grepping the full unit journal.
 - `saturn-xdma-doctor.sh` now emits an explicit advisory when XDMA is working
   only because the module is already loaded but the module is not installed on
   disk for the running kernel, so the doctor output distinguishes "runtime OK"

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SCRIPT_VERSION="1.0"
+SCRIPT_VERSION="1.1"
 PERF_URL="${SATURN_LOCAL_P23_PERF_URL:-http://127.0.0.1:8080/p23_perf}"
 CURRENT_TARGET="$(readlink -f /opt/saturn-go/p23-apps/current 2>/dev/null || true)"
 REPO_ROOT="${SATURN_ACTIVE_REPO_ROOT:-${SATURN_REPO_ROOT:-/home/pi/github/Saturn}}"
@@ -52,37 +52,32 @@ if [[ -n "${CURRENT_TARGET}" && -f "${CURRENT_TARGET}" ]]; then
 fi
 
 say "Runtime"
-say "  Service: p2app.service"
-say "  Active app: ${ACTIVE_APP}"
-say "  Active binary: ${CURRENT_TARGET:-unknown}"
-if [[ -n "${APP_VERSION_FALLBACK}" ]]; then
-  say "  App version (source): ${APP_VERSION_FALLBACK}"
-fi
-if [[ -n "${BINARY_MODIFIED}" ]]; then
-  say "  Binary modified: ${BINARY_MODIFIED}"
-fi
 
 if command -v curl >/dev/null 2>&1; then
   curl -fsS "${PERF_URL}" -o "${TMP_PERF_JSON}" 2>/dev/null || true
 fi
 
 if [[ -s "${TMP_PERF_JSON}" ]]; then
-  say "  Extra live telemetry:"
-  CURRENT_TARGET="${CURRENT_TARGET}" python3 - "${TMP_PERF_JSON}" <<'PY'
+  CURRENT_TARGET="${CURRENT_TARGET}" \
+  ACTIVE_APP_FALLBACK="${ACTIVE_APP}" \
+  APP_VERSION_FALLBACK="${APP_VERSION_FALLBACK}" \
+  BINARY_MODIFIED="${BINARY_MODIFIED}" \
+  python3 - "${TMP_PERF_JSON}" <<'PY'
 import json
 import os
 import sys
 
 path = sys.argv[1]
 current_target = os.environ.get("CURRENT_TARGET", "")
+active_app_fallback = os.environ.get("ACTIVE_APP_FALLBACK", "unknown")
+app_version_fallback = os.environ.get("APP_VERSION_FALLBACK", "")
+binary_modified = os.environ.get("BINARY_MODIFIED", "")
 
 try:
     with open(path, "r", encoding="utf-8") as handle:
         data = json.load(handle)
 except Exception as exc:
-    print("Runtime")
     print(f"  Unable to parse /p23_perf output: {exc}")
-    print("")
     sys.exit(0)
 
 perf = data.get("perf") or {}
@@ -91,37 +86,59 @@ current = telemetry.get("current") or {}
 workload = perf.get("workload") or {}
 service = perf.get("service") or {}
 
-active_app = workload.get("selected_app") or current.get("app") or "unknown"
+deployment_slot = workload.get("selected_app") or active_app_fallback or "unknown"
+app_identity = current.get("app") or deployment_slot or active_app_fallback or "unknown"
 active_binary = workload.get("current_target_abs") or workload.get("current_target") or current_target or "unknown"
 app_version = current.get("version")
+if app_version is None:
+    app_version = app_version_fallback or "unknown"
 app_pid = current.get("pid") or service.get("main_pid") or "unknown"
 uptime_sec = current.get("uptime_sec")
 startup_mode = workload.get("startup_mode") or "unknown"
 panel_mode = workload.get("panel_mode") or "unknown"
 
-print("Runtime")
 print(f"  Service: {service.get('name', 'p2app.service')}")
-print(f"  Active app: {active_app}")
+print(f"  Deployment slot: {deployment_slot}")
+print(f"  App identity: {app_identity}")
 print(f"  Active binary: {active_binary}")
-print(f"  App version: {app_version if app_version is not None else 'unknown'}")
+print(f"  App version: {app_version}")
+if binary_modified:
+    print(f"  Binary modified: {binary_modified}")
 print(f"  PID: {app_pid}")
 if uptime_sec is not None:
     print(f"  Uptime: {uptime_sec} sec")
 print(f"  Startup mode: {startup_mode}")
 print(f"  Panel mode: {panel_mode}")
-print("")
 PY
 else
-  say "  Extra live telemetry: unavailable (/p23_perf)"
-  say
+  say "  Service: p2app.service"
+  say "  Deployment slot: ${ACTIVE_APP}"
+  say "  App identity: ${ACTIVE_APP}"
+  say "  Active binary: ${CURRENT_TARGET:-unknown}"
+  if [[ -n "${APP_VERSION_FALLBACK}" ]]; then
+    say "  App version: ${APP_VERSION_FALLBACK}"
+  fi
+  if [[ -n "${BINARY_MODIFIED}" ]]; then
+    say "  Binary modified: ${BINARY_MODIFIED}"
+  fi
+  say "  Live telemetry: unavailable (/p23_perf)"
 fi
 
+say
 say "Latest startup banner"
-STARTUP_LINES="$(
-  journalctl -u p2app.service --no-pager -o cat 2>/dev/null \
-    | grep -E 'FPGA BIT file data code| Product:| FPGA Firmware loaded:|All clocks present|Die Temp =' \
-    | tail -n 5 || true
-)"
+ACTIVE_SINCE="$(systemctl show -p ActiveEnterTimestamp --value p2app.service 2>/dev/null || true)"
+if [[ -n "${ACTIVE_SINCE}" ]]; then
+  STARTUP_LINES="$(
+    journalctl -u p2app.service --since "${ACTIVE_SINCE}" --no-pager -o cat 2>/dev/null \
+      | grep -E 'FPGA BIT file data code| Product:| FPGA Firmware loaded:|All clocks present|Die Temp =' || true
+  )"
+else
+  STARTUP_LINES="$(
+    journalctl -u p2app.service --no-pager -o cat 2>/dev/null \
+      | grep -E 'FPGA BIT file data code| Product:| FPGA Firmware loaded:|All clocks present|Die Temp =' \
+      | tail -n 5 || true
+  )"
+fi
 
 if [[ -n "${STARTUP_LINES}" ]]; then
   while IFS= read -r line; do

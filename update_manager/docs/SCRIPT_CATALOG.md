@@ -58,8 +58,8 @@ Not all utilities are directly wired into current UI buttons, but are included i
 
 | Script | Purpose | Key Flags |
 |---|---|---|
-| `flash_fpga.sh` | Flash selected FPGA image via `sw_tools/load-FPGA/load-FPGA` using confirmation guard. | `--image`, `--latest`, `--primary`, `--fallback`, `--verify`, `--no-verify`, `--confirm`, `--dry-run` |
-| `g2-version-info.sh` | Read-only helper for G2 Update page that reports active P2/P3 selection, app version, live `/p23_perf` details when available, and recent `p2app.service` startup banner lines for FPGA firmware/date-code/temp. | none |
+| `flash_fpga.sh` | Web-facing wrapper that hands FPGA flashing to the root-owned `saturn-flash-fpga.sh` helper, preserving confirmation guard and `load-FPGA` behavior without granting sudo to the writable runtime script path. | `--image`, `--latest`, `--primary`, `--fallback`, `--verify`, `--no-verify`, `--confirm`, `--dry-run` |
+| `g2-version-info.sh` | Read-only helper for G2 Update page that reports deployment slot, live app identity/version from `/p23_perf` when available, and the current `p2app.service` startup banner lines for FPGA firmware/date-code/temp. | none |
 | `install-shutdown-waiter-service.sh` | Install or refresh `saturn-shutdown-waiter.service` and its default config. Used by Update G2. | `--enabled-default <mode>`, `--saturn-user <user>` |
 | `shutdown-waiter.sh` | Runtime shutdown-waiter payload installed by `install-shutdown-waiter-service.sh`. | none |
 | `update-saturn-go.sh` | Rebuild/redeploy `saturn-go` from the active Saturn repo root (used by `saturngo.html`). | `--verbose`, `--dry-run`, `--skip-git`, `--skip-build`, `--skip-deploy` |
@@ -74,8 +74,8 @@ Not all utilities are directly wired into current UI buttons, but are included i
 - Scripts are copied from `update_manager/scripts` plus selected repo-root helper scripts during install.
 - Installer also writes `/etc/sudoers.d/saturn-go-maintenance` so the service
   user can run root-owned copies of `install-shutdown-waiter-service.sh`,
-  `setup-eth-fallback.sh`, `fix-LED-power-button.sh`, and
-  `saturn-xdma-doctor.sh` from
+  `setup-eth-fallback.sh`, `fix-LED-power-button.sh`,
+  `saturn-flash-fpga.sh`, and `saturn-xdma-doctor.sh` from
   `/usr/local/lib/saturn-go/scripts` with `sudo -n`.
 - File permissions are normalized by installer:
   - `*.sh` and `*.py` scripts are set executable.

@@ -213,9 +213,9 @@ Update behavior:
 - This allows `update-G2.py` to target the active Saturn checkout without hardcoded path dependence.
 - Output can be resumed from backend run logs (`/run_log`) after navigating away and back.
 - The info action runs `g2-version-info.sh` via `/run` and prints:
-  - active P2/P3 selection and app version from `/p23_perf`
+  - deployment slot and live app identity/version from `/p23_perf`
   - current deployed app binary path
-  - the most recent `p2app.service` startup banner lines for FPGA product/firmware/build/date-code info
+  - the current `p2app.service` startup banner lines for FPGA product/firmware/build/date-code info
   - the startup die-temperature line captured by the service log
 - When `Run Update G2` pulls new commits, `update-G2.py` now emits a marker if any changed path is under `update_manager/`.
 - If that marker is present and `Update Web Manager Too` is checked, the page automatically launches `update-saturn-go.sh --skip-git --verbose` after the G2 run finishes.
@@ -332,6 +332,9 @@ Safety/usage notes:
 ### FPGA Flash (Dedicated Terminal)
 
 - Run `flash_fpga.sh` from `/saturn/fpga`.
+- The page invokes the writable runtime wrapper in `/opt/saturn-go/scripts`,
+  which immediately hands off to the root-owned
+  `/usr/local/lib/saturn-go/scripts/saturn-flash-fpga.sh` helper via `sudo -n`.
 - The page discovers candidate images from `GET /get_fpga_images`.
 - Use `Show only most current firmware` to limit dropdown selection to `latest_image` from backend scan.
 - The script uses `sw_tools/load-FPGA/load-FPGA` with:
