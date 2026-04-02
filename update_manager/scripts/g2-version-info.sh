@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SCRIPT_VERSION="1.3"
+SCRIPT_VERSION="1.4"
 PERF_URL="${SATURN_LOCAL_P23_PERF_URL:-http://127.0.0.1:8080/p23_perf}"
 CURRENT_TARGET="$(readlink -f /opt/saturn-go/p23-apps/current 2>/dev/null || true)"
 REPO_ROOT="${SATURN_ACTIVE_REPO_ROOT:-${SATURN_REPO_ROOT:-/home/pi/github/Saturn}}"
@@ -99,9 +99,9 @@ panel_mode = workload.get("panel_mode") or "unknown"
 fpga = current.get("fpga") or {}
 
 print(f"  Service: {service.get('name', 'p2app.service')}")
-print(f"  Deployment slot: {deployment_slot}")
-print(f"  App identity: {app_identity}")
-print(f"  Active binary: {active_binary}")
+print(f"  Deployed slot/binary family: {deployment_slot}")
+print(f"  Runtime protocol identity: {app_identity}")
+print(f"  Active binary path: {active_binary}")
 print(f"  App version: {app_version}")
 if binary_modified:
     print(f"  Binary modified: {binary_modified}")
@@ -133,9 +133,9 @@ if fpga.get("available"):
 PY
 else
   say "  Service: p2app.service"
-  say "  Deployment slot: ${ACTIVE_APP}"
-  say "  App identity: ${ACTIVE_APP}"
-  say "  Active binary: ${CURRENT_TARGET:-unknown}"
+  say "  Deployed slot/binary family: ${ACTIVE_APP}"
+  say "  Runtime protocol identity: ${ACTIVE_APP}"
+  say "  Active binary path: ${CURRENT_TARGET:-unknown}"
   if [[ -n "${APP_VERSION_FALLBACK}" ]]; then
     say "  App version: ${APP_VERSION_FALLBACK}"
   fi

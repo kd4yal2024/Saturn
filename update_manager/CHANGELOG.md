@@ -60,6 +60,9 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
   firmware version, product/version, bit-file date code, fallback state, and
   die temperature, using the `p2app.service` startup-banner journal scrape only
   as a fallback when runtime telemetry is unavailable.
+- `g2-version-info.sh` now labels the selected deployed slot separately from
+  the app's live runtime protocol identity so the current transition state
+  (`p3` slot running as `p2`) reads clearly instead of looking contradictory.
 - `g2-version-info.sh` now reports the deployment slot separately from the
   live app identity, avoids printing two competing `Runtime` blocks, and scopes
   the FPGA startup-banner scrape to the current `p2app.service` instance
