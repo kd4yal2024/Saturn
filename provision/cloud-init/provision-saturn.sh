@@ -317,9 +317,10 @@ Defaults!${SATURN_UI_POWER_HELPER} !requiretty
 ${SATURN_USER} ALL=(root) NOPASSWD: ${SATURN_UI_POWER_HELPER} reboot, ${SATURN_UI_POWER_HELPER} poweroff
 EOF
 
-  if command -v visudo >/dev/null 2>&1; then
-    visudo -cf "$tmp_sudoers" >/dev/null || die "Generated sudoers entry for Saturn provisioning power helper is invalid."
-  fi
+  command -v visudo >/dev/null 2>&1 || \
+    die "visudo is required to validate the Saturn provisioning power-helper sudoers entry."
+  visudo -cf "$tmp_sudoers" >/dev/null || \
+    die "Generated sudoers entry for Saturn provisioning power helper is invalid."
 
   install -m 0440 "$tmp_sudoers" "$SATURN_UI_POWER_SUDOERS"
   rm -f "$tmp_sudoers"

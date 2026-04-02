@@ -63,6 +63,11 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
 - `g2-version-info.sh` now labels the selected deployed slot separately from
   the app's live runtime protocol identity so the current transition state
   (`p3` slot running as `p2`) reads clearly instead of looking contradictory.
+- `g2-version-info.sh` now emits an explicit warning when `/p23_perf` fetches
+  fail or return no data instead of silently falling back to the non-telemetry
+  path.
+- The FPGA flash helper now resolves `--latest` with a safe per-file mtime scan
+  instead of relying on `ls -t "$FPGA_DIR"/*.bin`.
 - `g2-version-info.sh` now reports the deployment slot separately from the
   live app identity, avoids printing two competing `Runtime` blocks, and scopes
   the FPGA startup-banner scrape to the current `p2app.service` instance

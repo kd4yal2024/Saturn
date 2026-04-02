@@ -84,6 +84,9 @@ void *IncomingHighPriority(void *arg)                   // listener thread
       EXIT_FAILURE;
     }
 
+    if((datagram.msg_flags & MSG_TRUNC) != 0)
+      continue;
+
     //
     // if correct packet, process it
     //
@@ -230,6 +233,5 @@ void *IncomingHighPriority(void *arg)                   // listener thread
   ThreadData->Active = false;                   // indicate it is closed
   return NULL;
 }
-
 
 

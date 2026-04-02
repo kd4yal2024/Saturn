@@ -126,6 +126,9 @@ void *IncomingHighPriority(void *arg)                   // listener thread
       break;
     }
 
+    if((datagram.msg_flags & MSG_TRUNC) != 0)
+      continue;
+
     //
     // if correct packet, process it
     //

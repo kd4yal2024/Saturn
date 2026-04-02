@@ -91,6 +91,26 @@ resolve_saturn_dir(){
   return 1
 }
 
+find_latest_image() {
+  local dir="$1"
+  local latest_image=""
+  local latest_mtime=-1
+  local candidate=""
+  local candidate_mtime=""
+
+  shopt -s nullglob
+  for candidate in "$dir"/*.bin; do
+    candidate_mtime="$(stat -c '%Y' "$candidate" 2>/dev/null || echo 0)"
+    if (( candidate_mtime > latest_mtime )); then
+      latest_mtime="$candidate_mtime"
+      latest_image="$candidate"
+    fi
+  done
+  shopt -u nullglob
+
+  printf '%s\n' "$latest_image"
+}
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --image)
@@ -178,7 +198,7 @@ if [[ ! -d "$FPGA_DIR" ]]; then
 fi
 
 if [[ -z "$IMAGE" || "$IMAGE" == "latest" ]]; then
-  IMAGE="$(ls -t "$FPGA_DIR"/*.bin 2>/dev/null | head -n1 || true)"
+  IMAGE="$(find_latest_image "$FPGA_DIR")"
   [[ -n "$IMAGE" ]] || err "No FPGA .bin image found in $FPGA_DIR"
 fi
 

@@ -17,6 +17,9 @@ All notable changes to `P3_app` from this hardening pass are documented here.
 - High-priority bytes `1396:1397` (`ClientControl`) are now parsed and stored
   in `InHighPriority.c` before CAT-port parsing at `1398`, while zero remains
   an inert default.
+- Incoming high-priority UDP handling now ignores `MSG_TRUNC` datagrams before
+  decode so oversized/truncated packets are not treated like valid 1444-byte
+  Protocol 2 control frames.
 
 ### Added
 

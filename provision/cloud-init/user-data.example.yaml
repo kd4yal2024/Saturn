@@ -90,7 +90,7 @@ write_files:
       fi
 
       clock_wait_seconds="${SATURN_CLOCK_SYNC_WAIT_SECONDS:-180}"
-      if ! [[ "$clock_wait_seconds" =~ ^[0-9]+$ ]] || (( clock_wait_seconds < 0 )); then
+      if ! [[ "$clock_wait_seconds" =~ ^[0-9]+$ ]] || (( clock_wait_seconds < 0 || clock_wait_seconds > 3600 )); then
         clock_wait_seconds=180
       fi
 

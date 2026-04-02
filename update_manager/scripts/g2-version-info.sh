@@ -6,6 +6,7 @@ PERF_URL="${SATURN_LOCAL_P23_PERF_URL:-http://127.0.0.1:8080/p23_perf}"
 CURRENT_TARGET="$(readlink -f /opt/saturn-go/p23-apps/current 2>/dev/null || true)"
 REPO_ROOT="${SATURN_ACTIVE_REPO_ROOT:-${SATURN_REPO_ROOT:-/home/pi/github/Saturn}}"
 TMP_PERF_JSON="$(mktemp)"
+PERF_FETCH_STATUS=""
 
 cleanup() {
   rm -f "${TMP_PERF_JSON}"
@@ -54,7 +55,13 @@ fi
 say "Runtime"
 
 if command -v curl >/dev/null 2>&1; then
-  curl -fsS "${PERF_URL}" -o "${TMP_PERF_JSON}" 2>/dev/null || true
+  if ! curl -fsS "${PERF_URL}" -o "${TMP_PERF_JSON}" 2>/dev/null; then
+    PERF_FETCH_STATUS="fetch failed"
+  elif [[ ! -s "${TMP_PERF_JSON}" ]]; then
+    PERF_FETCH_STATUS="empty response"
+  fi
+else
+  PERF_FETCH_STATUS="curl not installed"
 fi
 
 if [[ -s "${TMP_PERF_JSON}" ]]; then
@@ -132,6 +139,11 @@ if fpga.get("available"):
             pass
 PY
 else
+  if [[ -n "${PERF_FETCH_STATUS}" ]]; then
+    say "  WARN: Live telemetry unavailable (${PERF_FETCH_STATUS})"
+  else
+    say "  WARN: Live telemetry unavailable (/p23_perf returned no data)"
+  fi
   say "  Service: p2app.service"
   say "  Deployed slot/binary family: ${ACTIVE_APP}"
   say "  Runtime protocol identity: ${ACTIVE_APP}"
@@ -142,7 +154,6 @@ else
   if [[ -n "${BINARY_MODIFIED}" ]]; then
     say "  Binary modified: ${BINARY_MODIFIED}"
   fi
-  say "  Live telemetry: unavailable (/p23_perf)"
 fi
 
 say
