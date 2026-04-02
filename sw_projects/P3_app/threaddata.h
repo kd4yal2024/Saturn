@@ -141,9 +141,13 @@ void MarkStartupHandshakeComplete(void);
 void ResetStartupTraceFlags(void);
 
 //
-// function ot get program version
+// function to get program version
 //
-uint32_t GetP3appVersion(void);
+uint32_t GetP2appVersion(void);
+
+// Parsed from HP-to-SDR bytes 1396:1397. Zero remains an inert default.
+void SetClientControlWord(uint16_t Word);
+uint16_t GetClientControlWord(void);
 
 
 

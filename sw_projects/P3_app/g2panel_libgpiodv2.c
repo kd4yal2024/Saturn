@@ -58,7 +58,7 @@ unsigned int G2V2Arduino = 0x15;
 bool G2PanelControlled = false;
 static struct gpiod_chip *chip = NULL;
 char* gpio_device = NULL;
-char *consumer = (char*)"p3app";
+char *consumer = (char*)"p2app";
 
 /* v2 GPIO handles */
 static struct gpiod_line_request *VFORequest = NULL;              // request for offsets 17 (edge) and 18 (input)
@@ -209,7 +209,7 @@ void* G2PanelTick(__attribute__((unused)) void *arg)
             if(CATDetected == false)
             {
                 CATDetected = true;
-                MakeProductVersionCAT(PRODUCTID, HWVERSION, GetP3appVersion());
+                MakeProductVersionCAT(PRODUCTID, HWVERSION, GetP2appVersion());
             }
         }
         else

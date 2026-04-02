@@ -74,7 +74,7 @@ bool G2PanelControlled = false;
 extern int i2c_fd;                                  // file reference
 static struct gpiod_chip *chip = NULL;
 char* gpio_device = NULL;
-char *consumer = "p3app";
+char *consumer = "p2app";
 struct gpiod_line *VFO1;                            // declare GPIO for VFO
 struct gpiod_line *VFO2;
 pthread_t VFOEncoderThread;                         // thread looks for encoder edge events
@@ -97,7 +97,7 @@ uint32_t PBIOPins[VNUMGPIO] = {20, 26, 6, 5, 4, 21, 7, 9,
                                16, 19, 10, 11, 25, 8, 12, 13,
                                22, 27, 23, 24};
 struct gpiod_line_bulk PBInLines;
-struct gpiod_line_request_config config = {"p3app", GPIOD_LINE_REQUEST_DIRECTION_INPUT, 0};
+struct gpiod_line_request_config config = {"p2app", GPIOD_LINE_REQUEST_DIRECTION_INPUT, 0};
 int32_t IOPinValues[VNUMGPIO] = {-1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1};
 
 //
@@ -339,7 +339,7 @@ void* G2PanelTick(__attribute__((unused)) void *arg)
             if(CATDetected == false)
             {
                 CATDetected = true;
-                MakeProductVersionCAT(PRODUCTID, HWVERSION, GetP3appVersion());
+                MakeProductVersionCAT(PRODUCTID, HWVERSION, GetP2appVersion());
             }
         }
         else

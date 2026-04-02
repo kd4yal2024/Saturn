@@ -5,6 +5,13 @@ changes applied to `P3_app`, and why each change was made.
 
 Latest update: 2026-03-25
 
+## Related Protocol Documentation
+
+- Repo-level Protocol 2 compatibility note:
+  [`../../docs/protocol2/Saturn_vs_openHPSDR_v4.4.md`](../../docs/protocol2/Saturn_vs_openHPSDR_v4.4.md)
+- Packet-capture regression checklist:
+  [`Thetis_P2_Compatibility_Regression_Checklist.md`](./Thetis_P2_Compatibility_Regression_Checklist.md)
+
 ## Goals
 
 - Remove memory-safety issues in CAT input/output paths.

@@ -63,7 +63,7 @@ static bool GanymedeTickThreadStarted = false;
 
 #define GANYMEDEPATH "/dev/serial/by-path/g2-ganymede-9600"           // ganymede controller (note needs udev rule to map name)
 
-#define P3APPVERSIONID 6
+#define P2APPVERSIONID 6
 #define G2FIRMWAREVERSIONID 7
 
 #define ID_GANYMEDE "c6e1f9a4-53b2-47d8-8c0e-2a7b5d14f963"
@@ -161,7 +161,7 @@ void InitialiseGanymedeHandler(void)
     // now see if anything came back from CAT handler
     // disable devices if not used - this will cause it to close the file
     // if detected, create periodic tick thread
-    // and send CAT commands for p3app, firmware versions
+    // and send CAT commands for p2app, firmware versions
     //
     if(atomic_load(&GanymedeDetected))
     {
@@ -179,7 +179,7 @@ void InitialiseGanymedeHandler(void)
         if((DeviceHandle != -1) && atomic_load(&GanymedeData.IsOpen))
         {
             MakeCATMessageNumeric(DeviceHandle, eZZZS,
-                (long)MakeVersionParam(P3APPVERSIONID, 1U, (uint8_t)GetP3appVersion()));
+                (long)MakeVersionParam(P2APPVERSIONID, 1U, (uint8_t)GetP2appVersion()));
             MakeCATMessageNumeric(DeviceHandle, eZZZS,
                 (long)MakeVersionParam(G2FIRMWAREVERSIONID, (uint8_t)GetPCBVersionNumber(),
                                        (uint8_t)GetFirmwareVersion(&FirmwareID)));

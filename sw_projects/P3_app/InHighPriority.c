@@ -193,6 +193,13 @@ void *IncomingHighPriority(void *arg)                   // listener thread
       Byte = (uint8_t)(UDPInBuffer[345]);
       SetTXDriveLevel(Byte);
       //
+      // bytes 1396:1397 = ClientControl. Zero remains a no-op for now, but
+      // parsing/storing the word keeps Saturn aligned with later Protocol 4.4
+      // cleanup without shifting the CAT port field.
+      //
+      Word = rd_be_u16(UDPInBuffer+1396);
+      SetClientControlWord(Word);
+      //
       // create CAT port (if set)
       // shut down CAT port if not set and the CAT thread is active
       //

@@ -2,6 +2,34 @@
 
 All notable changes to `P3_app` from this hardening pass are documented here.
 
+## [2026-04-01] P2 Identity Convergence, ClientControl Parsing, and Regression Helpers
+
+### Changed
+
+- The hardened `P3_app` build now converges toward the long-term `p2app`
+  identity:
+  - default build target is `p2app`
+  - a compatibility `p3app` symlink target is still emitted for existing
+    `p23-app-manager` workflows during the dual-tree transition
+  - startup banners, usage strings, GPIO consumer labels, and CAT version
+    reporting now identify the app as `p2app`
+  - shared telemetry/ADC peak exports now tag the hardened app as `p2`
+- High-priority bytes `1396:1397` (`ClientControl`) are now parsed and stored
+  in `InHighPriority.c` before CAT-port parsing at `1398`, while zero remains
+  an inert default.
+
+### Added
+
+- Added `tools/protocol2_regression_capture.sh` to record checklist metadata and
+  launch the standard Protocol 2 `tcpdump` capture filter.
+- Added `tools/protocol2_regression_summary.sh` to summarize observed UDP
+  source/destination ports, payload lengths, packet counts, and simple gap
+  timing from saved captures.
+
+### Verified
+
+- `bash -n tools/protocol2_regression_capture.sh tools/protocol2_regression_summary.sh tools/shutdown_smoke.sh`
+
 ## [2026-03-25] CAT Parse Hardening, Residue Guards, and Build Flags
 
 ### Changed

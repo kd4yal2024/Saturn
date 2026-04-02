@@ -45,6 +45,36 @@ Version stamping (record every run):
 - Interface used (`eth0`, etc.)
 - Test state (`idle`, `RX`, `TX`)
 
+## Automation Helpers
+
+Repo helpers now exist to make the checklist more repeatable:
+
+- `tools/protocol2_regression_capture.sh`
+  - writes a run-record sidecar with the same metadata this checklist asks for
+  - launches `tcpdump` with the standard Saturn/Thetis UDP filter
+- `tools/protocol2_regression_summary.sh`
+  - reads a saved pcap with `tcpdump -r`
+  - summarizes observed UDP source/destination ports, payload lengths, counts,
+    and simple gap timing per flow
+
+Example capture:
+
+```bash
+./tools/protocol2_regression_capture.sh \
+  --iface eth0 \
+  --out-dir ./captures \
+  --label after-clientcontrol \
+  --client Thetis \
+  --app p2app \
+  --state RX
+```
+
+Example summary:
+
+```bash
+./tools/protocol2_regression_summary.sh ./captures/after-clientcontrol-*.pcap
+```
+
 ## Packet/Port Expectations (P2-Compatible)
 
 Common Thetis/P2 UDP ports to monitor:
@@ -86,7 +116,7 @@ Recommended Wireshark columns:
 Saturn-side capture (`tcpdump`):
 
 ```bash
-sudo tcpdump -i <iface> -nn -s 0 -w p3app-regression.pcap \
+sudo tcpdump -i <iface> -nn -s 0 -w protocol2-regression.pcap \
 'udp and (port 1024 or port 1025 or port 1026 or port 1027 or port 1028 or port 1029 or portrange 1035-1044)'
 ```
 
@@ -146,7 +176,7 @@ Pass:
 
 6. Reconnect / Restart Recovery
 - Stop/start Thetis.
-- Restart `p3app`.
+- Restart the app under test.
 - Reconnect and verify discovery + port rebinding recover cleanly.
 
 Pass:
@@ -179,7 +209,7 @@ Fail the regression if any of the following occur (unless intentionally changed 
 ```text
 Date/Time:
 Tester:
-P3_app commit:
+App commit:
 Thetis version:
 FPGA version:
 Active app/profile:
@@ -191,4 +221,3 @@ After-change pcap:
 Result: PASS / FAIL
 Notes:
 ```
-

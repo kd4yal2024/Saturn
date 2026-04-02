@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-APP_PATH="${1:-./p3app}"
+APP_PATH="${1:-./p2app}"
 RUN_SECONDS="${RUN_SECONDS:-3}"
 SHUTDOWN_TIMEOUT_SECONDS="${SHUTDOWN_TIMEOUT_SECONDS:-10}"
-LOG_FILE="${LOG_FILE:-/tmp/p3app_shutdown_smoke.log}"
+LOG_FILE="${LOG_FILE:-/tmp/p2app_shutdown_smoke.log}"
 
 if [[ ! -x "${APP_PATH}" ]]; then
   echo "[ERROR] App binary not executable: ${APP_PATH}" >&2
