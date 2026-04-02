@@ -8,6 +8,9 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
   in `saturngo.html`, backed by a narrow privileged helper that runs
   `saturn-fix-xdma.sh --stage-kernel "$(uname -r)"` without restarting
   `p2app.service`.
+- `saturngo.html` now includes a compact XDMA status card that surfaces the
+  parsed doctor stage/advisory state without requiring users to read the full
+  terminal dump.
 - Rust server test coverage for the extracted handler/helper modules (`auth`,
   `middleware`, `pages`, `update`, `util`, `monitor`, `clone`, `image`,
   `repair`), including endpoint-level checks for CSRF enforcement, update

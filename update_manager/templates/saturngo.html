@@ -51,6 +51,20 @@
   pre{ font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; background:#0a0a0a; color:#fff; border-radius:10px; border:1px solid #333; padding:1rem; }
   body.light pre{ background:#f3f4f6; color:#111; border-color:#d1d5db }
   .title{ font-weight:800; letter-spacing:.2px }
+  .status-panel{ border:1px solid var(--border); border-radius:12px; padding:1rem; background:rgba(255,255,255,.04); }
+  body.light .status-panel{ background:rgba(15,23,42,.03); }
+  .status-panel-ok{ border-color:rgba(16,185,129,.35); background:rgba(16,185,129,.10); }
+  .status-panel-warn{ border-color:rgba(245,158,11,.35); background:rgba(245,158,11,.10); }
+  .status-panel-bad{ border-color:rgba(239,68,68,.35); background:rgba(239,68,68,.10); }
+  .status-pill{ display:inline-flex; align-items:center; border-radius:9999px; padding:.2rem .65rem; border:1px solid transparent; font-size:.75rem; font-weight:800; letter-spacing:.04em; text-transform:uppercase; }
+  .status-ok{ color:#a7f3d0; background:rgba(16,185,129,.18); border-color:rgba(16,185,129,.4); }
+  .status-warn{ color:#fcd34d; background:rgba(245,158,11,.18); border-color:rgba(245,158,11,.4); }
+  .status-bad{ color:#fca5a5; background:rgba(239,68,68,.18); border-color:rgba(239,68,68,.4); }
+  .status-unknown{ color:#d1d5db; background:rgba(107,114,128,.18); border-color:rgba(107,114,128,.35); }
+  body.light .status-ok{ color:#047857; background:rgba(16,185,129,.14); }
+  body.light .status-warn{ color:#b45309; background:rgba(245,158,11,.14); }
+  body.light .status-bad{ color:#b91c1c; background:rgba(239,68,68,.14); }
+  body.light .status-unknown{ color:#4b5563; background:rgba(107,114,128,.12); }
 </style>
 </head>
 <body class="min-h-screen">
@@ -119,6 +133,19 @@
         <div class="mt-5 pt-5 border-t border-white/10">
           <h3 class="text-lg font-semibold mb-2">XDMA Doctor</h3>
           <p class="text-sm opacity-80 mb-3">Runs the read-only Saturn XDMA doctor through the web manager's privileged helper path and shows the classified stage plus key PCIe/XDMA details. If the doctor reports that XDMA is loaded but not staged for the running kernel, use <code>Stage Running Kernel</code> to pre-stage <code>xdma.ko</code> without restarting <code>p2app.service</code>.</p>
+          <div id="saturngo-xdma-status-card" class="status-panel status-panel-unknown mb-3">
+            <div class="flex flex-wrap items-center gap-3">
+              <span id="saturngo-xdma-badge" class="status-pill status-unknown">Unknown</span>
+              <div id="saturngo-xdma-summary" class="font-medium">Run XDMA Doctor to load live status.</div>
+            </div>
+            <div id="saturngo-xdma-advisory" class="text-sm opacity-80 mt-2 hidden"></div>
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-2 mt-3 text-sm">
+              <div><span class="opacity-70">Kernel:</span> <span id="saturngo-xdma-kernel" class="font-mono">unknown</span></div>
+              <div><span class="opacity-70">Module:</span> <span id="saturngo-xdma-module" class="font-mono">unknown</span></div>
+              <div><span class="opacity-70">Nodes:</span> <span id="saturngo-xdma-nodes">unknown</span></div>
+              <div><span class="opacity-70">Service:</span> <span id="saturngo-xdma-service">unknown</span></div>
+            </div>
+          </div>
           <div class="flex flex-wrap gap-3 items-center mb-3">
             <button id="saturngo-xdma-run" class="btn btn-ghost px-4 py-2">Run XDMA Doctor</button>
             <button id="saturngo-xdma-stage" class="btn btn-ghost px-4 py-2">Stage Running Kernel</button>
@@ -225,10 +252,12 @@ const OUT_LINES_KEY = 'saturn:saturngo:output-lines';
 const OUT_MAX_LINES = 3500;
 const RUN_ID_KEY = 'saturn:saturngo:run-id';
 const RUN_NEXT_KEY = 'saturn:saturngo:run-next';
+const XDMA_STATUS_KEY = 'saturn:saturngo:xdma-status';
 const POLICY_JSON_KEY = 'saturn:saturngo:policy-json';
 const DEPLOY_STATUS_JSON_KEY = 'saturn:saturngo:deploy-status-json';
 let outLines = [];
 let xdmaOutLines = [];
+let xdmaStatus = null;
 let runLogRunId = '';
 let runLogNext = 0;
 let runLogPoll = null;
@@ -255,6 +284,9 @@ function ansiToHtml(line){
 function renderAnsiLines(lines){
   if (!Array.isArray(lines) || !lines.length) return '';
   return lines.map((line)=>ansiToHtml(line)).join('<br>') + '<br>';
+}
+function stripAnsi(text){
+  return String(text ?? '').replace(/\x1b\[[0-9;]*m/g, '');
 }
 function refreshRenderedOutput(){
   const out = $('saturngo-output');
@@ -297,15 +329,198 @@ function refreshXdmaOutput(){
   out.innerHTML = renderAnsiLines(xdmaOutLines);
   out.scrollTop = out.scrollHeight;
 }
+function parseXdmaDoctorOutput(lines){
+  const parsed = {};
+  const wanted = new Set([
+    'stage',
+    'summary',
+    'advisory',
+    'advisory_summary',
+    'running_kernel',
+    'module_installed_for_kernel',
+    'module_path',
+    'module_loaded',
+    'bound_to_xdma',
+    'devnode_exists',
+    'udev_symlink_exists',
+    'service_exists',
+    'service_active_state',
+    'service_sub_state',
+  ]);
+  let inBlock = false;
+
+  for (const rawLine of lines){
+    const line = stripAnsi(rawLine).trim();
+    if (!line || line === 'Done') continue;
+    if (line.endsWith('<<EOF')){
+      inBlock = true;
+      continue;
+    }
+    if (line === 'EOF'){
+      inBlock = false;
+      continue;
+    }
+    if (inBlock) continue;
+
+    const eq = line.indexOf('=');
+    if (eq <= 0) continue;
+    const key = line.slice(0, eq).trim();
+    if (!wanted.has(key)) continue;
+    parsed[key] = line.slice(eq + 1).trim();
+  }
+
+  return parsed.stage ? parsed : null;
+}
+function xdmaStatusLevel(status){
+  if (!status || !status.stage) return 'unknown';
+  if (status.stage === 'OK') return status.advisory ? 'warn' : 'ok';
+  return 'bad';
+}
+function xdmaBoolText(value, yes='yes', no='no'){
+  return String(value || '').trim().toLowerCase() === 'true' ? yes : no;
+}
+function setXdmaStatus(status){
+  xdmaStatus = status && status.stage ? status : null;
+  if (xdmaStatus) saveSessionJson(XDMA_STATUS_KEY, xdmaStatus);
+  else saveSessionJson(XDMA_STATUS_KEY, null);
+  renderXdmaStatus();
+}
+function renderXdmaStatus(){
+  const card = $('saturngo-xdma-status-card');
+  const badge = $('saturngo-xdma-badge');
+  const summary = $('saturngo-xdma-summary');
+  const advisory = $('saturngo-xdma-advisory');
+  const kernel = $('saturngo-xdma-kernel');
+  const module = $('saturngo-xdma-module');
+  const nodes = $('saturngo-xdma-nodes');
+  const service = $('saturngo-xdma-service');
+  const level = xdmaStatusLevel(xdmaStatus);
+
+  card.className = `status-panel status-panel-${level} mb-3`;
+  badge.className = `status-pill status-${level}`;
+
+  if (!xdmaStatus){
+    badge.textContent = 'Unknown';
+    summary.textContent = 'Run XDMA Doctor to load live status.';
+    advisory.textContent = '';
+    advisory.classList.add('hidden');
+    kernel.textContent = 'unknown';
+    module.textContent = 'unknown';
+    nodes.textContent = 'unknown';
+    service.textContent = 'unknown';
+    return;
+  }
+
+  badge.textContent = String(xdmaStatus.stage || 'unknown');
+  summary.textContent = String(xdmaStatus.summary || 'No XDMA summary available.');
+
+  const advisoryText = String(xdmaStatus.advisory_summary || xdmaStatus.advisory || '').trim();
+  if (advisoryText){
+    advisory.textContent = advisoryText;
+    advisory.classList.remove('hidden');
+  } else {
+    advisory.textContent = '';
+    advisory.classList.add('hidden');
+  }
+
+  kernel.textContent = String(xdmaStatus.running_kernel || 'unknown');
+
+  const moduleInstalled = String(xdmaStatus.module_installed_for_kernel || '').trim().toLowerCase() === 'true';
+  const modulePath = String(xdmaStatus.module_path || '').trim();
+  const moduleLoaded = xdmaBoolText(xdmaStatus.module_loaded, 'loaded', 'not loaded');
+  const moduleBound = xdmaBoolText(xdmaStatus.bound_to_xdma, 'bound', 'not bound');
+  module.textContent = moduleInstalled ? `${modulePath || 'installed'} (${moduleLoaded}, ${moduleBound})` : `not staged (${moduleLoaded}, ${moduleBound})`;
+
+  nodes.textContent = `${xdmaBoolText(xdmaStatus.devnode_exists, 'device present', 'device missing')} / ${xdmaBoolText(xdmaStatus.udev_symlink_exists, 'symlink present', 'symlink missing')}`;
+
+  const serviceExists = String(xdmaStatus.service_exists || '').trim().toLowerCase() === 'true';
+  if (serviceExists){
+    service.textContent = `${String(xdmaStatus.service_active_state || 'unknown')}/${String(xdmaStatus.service_sub_state || 'unknown')}`;
+  } else {
+    service.textContent = 'not checked';
+  }
+}
+function updateXdmaStatusFromOutput(){
+  const parsed = parseXdmaDoctorOutput(xdmaOutLines);
+  if (parsed) setXdmaStatus(parsed);
+}
 function appendXdmaOutput(line){
   const text = String(line ?? '');
   xdmaOutLines.push(text);
   $('saturngo-xdma-output').innerHTML += ansiToHtml(text) + '<br>';
   $('saturngo-xdma-output').scrollTop = $('saturngo-xdma-output').scrollHeight;
+  updateXdmaStatusFromOutput();
 }
 function resetXdmaOutput(){
   xdmaOutLines = [];
   $('saturngo-xdma-output').innerHTML = '';
+}
+function restoreXdmaStatus(){
+  const saved = loadSessionJson(XDMA_STATUS_KEY, null);
+  xdmaStatus = saved && typeof saved === 'object' ? saved : null;
+  renderXdmaStatus();
+}
+function setXdmaButtonsDisabled(disabled){
+  $('saturngo-xdma-run').disabled = !!disabled;
+  $('saturngo-xdma-stage').disabled = !!disabled;
+}
+async function runXdmaScript(scriptName, options = {}){
+  const {
+    clearOutput = true,
+    confirmMessage = '',
+    startMessage = `\x1b[36mStarting ${scriptName}...\x1b[0m`,
+  } = options;
+
+  if (xdmaRunInProgress) return false;
+  if (confirmMessage && !confirm(confirmMessage)) return false;
+
+  xdmaRunInProgress = true;
+  setXdmaButtonsDisabled(true);
+  if (clearOutput) resetXdmaOutput();
+  if (startMessage) appendXdmaOutput(startMessage);
+
+  try{
+    const fd = new FormData();
+    fd.append('script', scriptName);
+
+    const res = await fetch('./run', {
+      method:'POST',
+      body: fd,
+      headers: withCsrf({'Accept':'text/event-stream'}),
+    });
+    if (!res.ok){
+      let msg = 'HTTP ' + res.status;
+      try{
+        const data = await res.json();
+        if (data && data.message) msg = data.message;
+      }catch(_e){}
+      throw new Error(msg);
+    }
+
+    const reader = res.body.getReader();
+    const dec = new TextDecoder();
+    let buf = '';
+
+    while (true){
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      const chunks = buf.split('\n\n');
+      buf = chunks.pop() || '';
+
+      for (const c of chunks){
+        if (!c.startsWith('data: ')) continue;
+        appendXdmaOutput(c.slice(6));
+      }
+    }
+    return true;
+  }catch(e){
+    appendXdmaOutput('\x1b[31mRun error: ' + e.message + '\x1b[0m');
+    return false;
+  }finally{
+    xdmaRunInProgress = false;
+    setXdmaButtonsDisabled(false);
+  }
 }
 function resetBufferedState(){
   runLogRunId = '';
@@ -617,107 +832,21 @@ $('saturngo-run').addEventListener('click', async ()=>{
 });
 
 $('saturngo-xdma-run').addEventListener('click', async ()=>{
-  const btn = $('saturngo-xdma-run');
-  if (xdmaRunInProgress) return;
-  xdmaRunInProgress = true;
-  btn.disabled = true;
-  resetXdmaOutput();
-  appendXdmaOutput('\x1b[36mStarting ' + XDMA_SCRIPT_NAME + '...\x1b[0m');
-
-  try{
-    const fd = new FormData();
-    fd.append('script', XDMA_SCRIPT_NAME);
-
-    const res = await fetch('./run', {
-      method:'POST',
-      body: fd,
-      headers: withCsrf({'Accept':'text/event-stream'}),
-    });
-    if (!res.ok){
-      let msg = 'HTTP ' + res.status;
-      try{
-        const data = await res.json();
-        if (data && data.message) msg = data.message;
-      }catch(_e){}
-      throw new Error(msg);
-    }
-
-    const reader = res.body.getReader();
-    const dec = new TextDecoder();
-    let buf = '';
-
-    while (true){
-      const { done, value } = await reader.read();
-      if (done) break;
-      buf += dec.decode(value, { stream: true });
-      const chunks = buf.split('\n\n');
-      buf = chunks.pop() || '';
-
-      for (const c of chunks){
-        if (!c.startsWith('data: ')) continue;
-        appendXdmaOutput(c.slice(6));
-      }
-    }
-  }catch(e){
-    appendXdmaOutput('\x1b[31mRun error: ' + e.message + '\x1b[0m');
-  }finally{
-    xdmaRunInProgress = false;
-    btn.disabled = false;
-  }
+  await runXdmaScript(XDMA_SCRIPT_NAME);
 });
 
 $('saturngo-xdma-stage').addEventListener('click', async ()=>{
-  const btn = $('saturngo-xdma-stage');
-  if (xdmaRunInProgress) return;
-  if (!confirm('Stage XDMA for the running kernel without restarting p2app.service?')) return;
-  xdmaRunInProgress = true;
-  btn.disabled = true;
-  resetXdmaOutput();
-  appendXdmaOutput('\x1b[36mStarting ' + XDMA_STAGE_SCRIPT_NAME + '...\x1b[0m');
-
-  try{
-    const fd = new FormData();
-    fd.append('script', XDMA_STAGE_SCRIPT_NAME);
-
-    const res = await fetch('./run', {
-      method:'POST',
-      body: fd,
-      headers: withCsrf({'Accept':'text/event-stream'}),
-    });
-    if (!res.ok){
-      let msg = 'HTTP ' + res.status;
-      try{
-        const data = await res.json();
-        if (data && data.message) msg = data.message;
-      }catch(_e){}
-      throw new Error(msg);
-    }
-
-    const reader = res.body.getReader();
-    const dec = new TextDecoder();
-    let buf = '';
-
-    while (true){
-      const { done, value } = await reader.read();
-      if (done) break;
-      buf += dec.decode(value, { stream: true });
-      const chunks = buf.split('\n\n');
-      buf = chunks.pop() || '';
-
-      for (const c of chunks){
-        if (!c.startsWith('data: ')) continue;
-        appendXdmaOutput(c.slice(6));
-      }
-    }
-  }catch(e){
-    appendXdmaOutput('\x1b[31mRun error: ' + e.message + '\x1b[0m');
-  }finally{
-    xdmaRunInProgress = false;
-    btn.disabled = false;
+  const staged = await runXdmaScript(XDMA_STAGE_SCRIPT_NAME, {
+    confirmMessage: 'Stage XDMA for the running kernel without restarting p2app.service?',
+  });
+  if (staged){
+    appendXdmaOutput('\x1b[36mRefreshing XDMA doctor...\x1b[0m');
+    await runXdmaScript(XDMA_SCRIPT_NAME, { clearOutput: false, startMessage: '' });
   }
 });
 
 restoreOutput();
+restoreXdmaStatus();
 $('satgo-policy-view').textContent = loadSessionText(POLICY_JSON_KEY, '');
 $('satgo-status-view').textContent = loadSessionText(DEPLOY_STATUS_JSON_KEY, '');
 loadSaturnGoPolicy();
