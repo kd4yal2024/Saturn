@@ -5,6 +5,25 @@ All notable changes from the hardened app convergence pass are documented here.
 This changelog originated under `P3_app` and now follows the converged
 `P2_app` implementation.
 
+## [2026-04-07] Socket Binding Safety Follow-up
+
+### Changed
+
+- Socket alias/owner handling now uses a single binding snapshot helper before
+  close/rebind decisions are made, instead of a split alias check followed by a
+  separate FD lookup.
+- Thread shutdown paths that previously combined `ThreadSocketIsSharedAlias(...)`
+  with a later `GetThreadSocketFD(...)` close now use an explicit
+  `CloseThreadSocketIfOwned(...)` helper so shared aliases do not accidentally
+  target the owner socket during cleanup.
+- Serial thread-data globals for Aries, Ganymede, and the G2V2 panel are now
+  zero-initialized explicitly to remove startup dependence on static-storage
+  defaults being inferred by readers.
+
+### Verified
+
+- `make -C /home/pi/github/Saturn/sw_projects/P2_app -j1`
+
 ## [2026-04-07] Cutover Into Converged P2_app
 
 ### Changed

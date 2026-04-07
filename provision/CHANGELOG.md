@@ -6,6 +6,18 @@ All notable changes to provisioning assets are documented in this file.
 
 ### Changed
 
+- `cloud-init/provision-saturn.sh`
+  - `ensure_ui_packages()` now installs `sudo` so the later desktop power-helper `visudo` validation path is satisfied in the current call order
+  - `resolve_system_role()` now validates the stored front-panel state and ignores unexpected values instead of silently propagating them into role resolution
+
+- `cloud-init/user-data.example.yaml`
+  - invalid `SATURN_CLOCK_SYNC_WAIT_SECONDS` values now emit an explicit bootstrap warning before falling back to the default `180` second wait
+
+- `../scripts/update-desktop-apps.sh`
+  - desktop/theme icons are now installed before launcher generation, so `.desktop` files never point at a theme icon name that failed to stage silently
+  - icon install failures are now fatal instead of being swallowed as best-effort behavior
+  - `gtk-update-icon-cache` refresh remains warning-only because a stale cache should not abort launcher installation
+
 - `cloud-init/user-data.example.yaml`
   - now writes `/usr/local/sbin/saturn-cloudinit-bootstrap.sh` as an explicit first-boot bootstrap helper
   - bootstrap now logs to `/var/log/saturn-cloudinit-bootstrap.log` before the Saturn repo is cloned
