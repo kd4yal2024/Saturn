@@ -82,6 +82,7 @@ SATURN_FRONT_PANEL_STATE_FILE="${SATURN_FRONT_PANEL_STATE_FILE:-${SATURN_STATE_D
 SATURN_XDMA_PRESENT=""
 SATURN_SYSTEM_ROLE=""
 SATURN_SYSTEM_ROLE_STATE_FILE="${SATURN_SYSTEM_ROLE_STATE_FILE:-${SATURN_STATE_DIR}/system-role}"
+SATURN_PROFILE_ENV_FILE="${SATURN_PROFILE_ENV_FILE:-${SATURN_STATE_DIR}/profile.env}"
 
 log() { printf '[%(%Y-%m-%d %H:%M:%S)T] %s\n' -1 "$*" >&2; }
 write_ui_status() {
@@ -1074,6 +1075,205 @@ resolve_system_role() {
   log "Resolved system role: ${SATURN_SYSTEM_ROLE} (module=${module_family:-unknown}, front_panel=${front_panel_type:-unknown}, xdma_present=${SATURN_XDMA_PRESENT})"
 }
 
+device_alias_present() {
+  local path="$1"
+  if [[ -e "$path" ]]; then
+    printf '1\n'
+  else
+    printf '0\n'
+  fi
+}
+
+first_existing_device_path() {
+  local path
+  for path in "$@"; do
+    if [[ -e "$path" ]]; then
+      printf '%s\n' "$path"
+      return 0
+    fi
+  done
+  printf 'none\n'
+}
+
+resolve_discovered_processor() {
+  local platform_vendor="${1:-unknown}"
+  local module_family="${2:-unknown}"
+  case "${platform_vendor}:${module_family}" in
+    raspberrypi:cm4) printf 'pi CM4\n' ;;
+    raspberrypi:cm5) printf 'pi CM5\n' ;;
+    *) printf 'other\n' ;;
+  esac
+}
+
+resolve_front_panel_device_path() {
+  local front_panel_type="${1:-unknown}"
+  case "$front_panel_type" in
+    G2V1)
+      if [[ -e /dev/i2c-1 ]]; then
+        printf '/dev/i2c-1\n'
+      else
+        printf 'none\n'
+      fi
+      ;;
+    G2V2)
+      first_existing_device_path /dev/serial/by-id/g2-front-9600 /dev/serial/by-id/g2-front-115200
+      ;;
+    *)
+      printf 'none\n'
+      ;;
+  esac
+}
+
+resolve_front_panel_device_addr() {
+  local front_panel_type="${1:-unknown}"
+  case "$front_panel_type" in
+    G2V1) printf '0x20\n' ;;
+    *) printf 'none\n' ;;
+  esac
+}
+
+resolve_expected_display_type() {
+  local front_panel_type="${1:-unknown}"
+  local system_role="${2:-unknown}"
+  if [[ "$system_role" == "remotehead_candidate" ]]; then
+    printf '8\n'
+    return 0
+  fi
+
+  case "$front_panel_type" in
+    G2V1) printf '7\n' ;;
+    G2V2) printf '8\n' ;;
+    *) printf 'none\n' ;;
+  esac
+}
+
+resolve_radio_profile() {
+  local module_family="${1:-unknown}"
+  local front_panel_type="${2:-unknown}"
+  local xdma_present="${3:-unknown}"
+  local system_role="${4:-unknown}"
+  local ganymede_present="${5:-0}"
+
+  if [[ "$ganymede_present" == "1" ]]; then
+    printf 'G2-1K\n'
+    return 0
+  fi
+
+  if [[ "$system_role" == "remotehead_candidate" ]]; then
+    printf 'RemoteHead\n'
+    return 0
+  fi
+
+  if [[ "$xdma_present" == "1" || "$front_panel_type" == "G2V1" || "$front_panel_type" == "G2V2" ]]; then
+    if [[ "$module_family" == "cm5" && "$front_panel_type" == "G2V2" ]]; then
+      printf 'G2 Ultra\n'
+    else
+      printf 'G2\n'
+    fi
+    return 0
+  fi
+
+  printf 'unknown\n'
+}
+
+write_profile_env_line() {
+  local key="$1"
+  local value="${2:-unknown}"
+  printf '%s=%q\n' "$key" "$value"
+}
+
+write_profile_env_state() {
+  local hardware_model hardware_platform_vendor hardware_module_family hardware_storage_variant
+  local boot_config profile_raw lcd_profile display_size_inch lcd_profile_source overlay_raw uart_overlay panel_overlay
+  local discovered_processor radio_profile expected_display_type
+  local front_panel_device_path front_panel_device_addr
+  local ganymede_present ganymede_device_path aries_present aries_device_path
+  local pa_protection atu
+
+  hardware_model="$(read_device_tree_model 2>/dev/null || true)"
+  hardware_platform_vendor="$(detect_platform_vendor 2>/dev/null || true)"
+  hardware_module_family="$(detect_module_family 2>/dev/null || true)"
+  hardware_storage_variant="$(detect_module_storage_variant 2>/dev/null || true)"
+  discovered_processor="$(resolve_discovered_processor "${hardware_platform_vendor:-unknown}" "${hardware_module_family:-unknown}")"
+
+  boot_config="$(get_boot_config_file 2>/dev/null || true)"
+  profile_raw=""
+  if [[ -n "$boot_config" ]]; then
+    profile_raw="$(resolve_lcd_profile "$boot_config" 2>/dev/null || true)"
+  fi
+
+  lcd_profile="unknown"
+  display_size_inch="unknown"
+  lcd_profile_source="unknown"
+  if [[ -n "$profile_raw" ]]; then
+    IFS='|' read -r lcd_profile display_size_inch lcd_profile_source <<<"$profile_raw"
+    lcd_profile="${lcd_profile:-unknown}"
+    display_size_inch="${display_size_inch:-unknown}"
+    lcd_profile_source="${lcd_profile_source:-unknown}"
+  fi
+
+  overlay_raw="$(recommended_overlays_for_profile "$lcd_profile" 2>/dev/null || true)"
+  uart_overlay="unknown"
+  panel_overlay="unknown"
+  if [[ -n "$overlay_raw" ]]; then
+    IFS='|' read -r uart_overlay panel_overlay <<<"$overlay_raw"
+    uart_overlay="${uart_overlay:-unknown}"
+    panel_overlay="${panel_overlay:-unknown}"
+  fi
+
+  front_panel_device_path="$(resolve_front_panel_device_path "${SATURN_FRONT_PANEL_TYPE:-unknown}")"
+  front_panel_device_addr="$(resolve_front_panel_device_addr "${SATURN_FRONT_PANEL_TYPE:-unknown}")"
+  expected_display_type="$(resolve_expected_display_type "${SATURN_FRONT_PANEL_TYPE:-unknown}" "${SATURN_SYSTEM_ROLE:-unknown}")"
+
+  ganymede_device_path="$(first_existing_device_path /dev/serial/by-path/g2-ganymede-9600)"
+  aries_device_path="$(first_existing_device_path /dev/serial/by-id/aries-atu-115200)"
+  ganymede_present="$(device_alias_present /dev/serial/by-path/g2-ganymede-9600)"
+  aries_present="$(device_alias_present /dev/serial/by-id/aries-atu-115200)"
+  if [[ "$ganymede_present" == "1" ]]; then
+    pa_protection="Ganymede"
+  else
+    pa_protection="none"
+  fi
+  if [[ "$aries_present" == "1" ]]; then
+    atu="Aries"
+  else
+    atu="none"
+  fi
+  radio_profile="$(resolve_radio_profile "${hardware_module_family:-unknown}" "${SATURN_FRONT_PANEL_TYPE:-unknown}" "${SATURN_XDMA_PRESENT:-unknown}" "${SATURN_SYSTEM_ROLE:-unknown}" "$ganymede_present")"
+
+  install -d -m 0755 "$(dirname "$SATURN_PROFILE_ENV_FILE")"
+  {
+    write_profile_env_line "profile_format_version" "1"
+    write_profile_env_line "profile_generated_at" "$(date --iso-8601=seconds)"
+    write_profile_env_line "radio_profile" "$radio_profile"
+    write_profile_env_line "radio_profile_source" "heuristic"
+    write_profile_env_line "discovered_processor" "$discovered_processor"
+    write_profile_env_line "hardware_model" "${hardware_model:-unknown}"
+    write_profile_env_line "hardware_platform_vendor" "${hardware_platform_vendor:-unknown}"
+    write_profile_env_line "hardware_module_family" "${hardware_module_family:-unknown}"
+    write_profile_env_line "hardware_storage_variant" "${hardware_storage_variant:-unknown}"
+    write_profile_env_line "front_panel_type" "${SATURN_FRONT_PANEL_TYPE:-unknown}"
+    write_profile_env_line "front_panel_device_path" "$front_panel_device_path"
+    write_profile_env_line "front_panel_device_addr" "$front_panel_device_addr"
+    write_profile_env_line "xdma_present" "${SATURN_XDMA_PRESENT:-unknown}"
+    write_profile_env_line "system_role" "${SATURN_SYSTEM_ROLE:-unknown}"
+    write_profile_env_line "expected_display_type" "$expected_display_type"
+    write_profile_env_line "lcd_profile" "$lcd_profile"
+    write_profile_env_line "display_size_inch" "$display_size_inch"
+    write_profile_env_line "lcd_profile_source" "$lcd_profile_source"
+    write_profile_env_line "uart_overlay" "$uart_overlay"
+    write_profile_env_line "panel_overlay" "$panel_overlay"
+    write_profile_env_line "pa_protection" "$pa_protection"
+    write_profile_env_line "ganymede_present" "$ganymede_present"
+    write_profile_env_line "ganymede_device_path" "$ganymede_device_path"
+    write_profile_env_line "atu" "$atu"
+    write_profile_env_line "aries_present" "$aries_present"
+    write_profile_env_line "aries_device_path" "$aries_device_path"
+  } >"$SATURN_PROFILE_ENV_FILE"
+  chmod 0644 "$SATURN_PROFILE_ENV_FILE"
+  log "Wrote provisioning profile: $SATURN_PROFILE_ENV_FILE"
+}
+
 install_update_manager() {
   local saturn_home="$1"
   local script="$SATURN_REPO_DIR/update_manager/install_saturn_go_nginx.sh"
@@ -1298,6 +1498,7 @@ main() {
 
   set_ui_stage "Finalizing provisioning state"
   cleanup_python_artifacts_in_repo
+  write_profile_env_state
   write_completion_state "$saturn_home"
   remove_desktop_ui_autostart "$saturn_home"
   set_ui_stage "Cleaning temporary files"

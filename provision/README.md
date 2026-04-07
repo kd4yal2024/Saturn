@@ -45,6 +45,7 @@ This directory contains provisioning assets for cloud-init based setup of a Satu
 Completion and logs:
 
 - state file: `/var/lib/saturn-provision/complete`
+- provisioning profile file: `/var/lib/saturn-provision/profile.env`
 - front-panel state file: `/var/lib/saturn-provision/front-panel-type`
 - system-role state file: `/var/lib/saturn-provision/system-role`
 - log file: `/var/log/saturn-provision.log`
@@ -83,6 +84,7 @@ Environment controls:
 - `SATURN_DETECT_FRONT_PANEL=1|0` (default: `1`)
 - `SATURN_FRONT_PANEL_STATE_FILE` (default: `/var/lib/saturn-provision/front-panel-type`)
 - `SATURN_FORCE_SYSTEM_ROLE=local_saturn|remotehead_candidate|unknown` (optional conservative support override)
+- `SATURN_PROFILE_ENV_FILE` (default: `/var/lib/saturn-provision/profile.env`)
 
 Notes:
 
@@ -154,6 +156,29 @@ Notes:
   - `local_saturn` when XDMA is present
   - `remotehead_candidate` when the current heuristic sees `CM5 + G2V2 + no XDMA`
   - `unknown` otherwise
+- provisioning now also writes a factual machine-readable profile summary to `/var/lib/saturn-provision/profile.env`
+  - current first fields include:
+    - `radio_profile`
+    - `radio_profile_source`
+    - `discovered_processor`
+    - `hardware_*`
+    - `front_panel_type`
+    - `front_panel_device_path`
+    - `front_panel_device_addr`
+    - `xdma_present`
+    - `system_role`
+    - `expected_display_type`
+    - `lcd_profile`
+    - `display_size_inch`
+    - `lcd_profile_source`
+    - `uart_overlay`
+    - `panel_overlay`
+    - `pa_protection`
+    - `ganymede_present`
+    - `ganymede_device_path`
+    - `atu`
+    - `aries_present`
+    - `aries_device_path`
 - that `system_role` state is reporting-only for now; it does not auto-apply role-specific boot behavior yet
 - `CM5 + 7"` is currently explicit/manual-only in `SATURN_LCD_PROFILE=auto`
   - explicit profiles `cm5-7`, `cm5-7-g2-single-dsi`, and `cm5-7-g2-dual-dsi` are still available for Saturn LCD Setup and manual testing

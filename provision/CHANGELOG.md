@@ -9,6 +9,8 @@ All notable changes to provisioning assets are documented in this file.
 - `cloud-init/provision-saturn.sh`
   - `ensure_ui_packages()` now installs `sudo` so the later desktop power-helper `visudo` validation path is satisfied in the current call order
   - `resolve_system_role()` now validates the stored front-panel state and ignores unexpected values instead of silently propagating them into role resolution
+  - now writes `/var/lib/saturn-provision/profile.env` as a factual machine-readable provisioning summary
+  - the first profile file includes hardware classification, heuristic `radio_profile`, discovered processor, front-panel type/path facts, conservative `system_role`, expected display type, resolved LCD profile, recommended overlay facts, and safe udev-alias presence/path facts for Ganymede and Aries
 
 - `cloud-init/user-data.example.yaml`
   - invalid `SATURN_CLOCK_SYNC_WAIT_SECONDS` values now emit an explicit bootstrap warning before falling back to the default `180` second wait
@@ -108,6 +110,7 @@ All notable changes to provisioning assets are documented in this file.
 - `README.md`
   - documented that provisioning now configures the BCM15 power-switch/front-panel LED helper
   - documented the root-owned provisioning power helper used by the desktop UI reboot action
+  - documented the new `/var/lib/saturn-provision/profile.env` factual provisioning summary and its first exported fields
   - documented front-panel detection behavior, state file, and provisioning toggle
   - documented the new shared LCD/profile library and the first-provision front-panel-aware G2 7-inch LCD tiebreaker
   - documented the new custom and Laurence-style single-DSI 7-inch LCD profiles
