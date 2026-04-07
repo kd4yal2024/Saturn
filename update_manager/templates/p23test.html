@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>P2/P3 App Test Lab</title>
+  <title>p2app Service Lab</title>
   <script src="https://cdn.jsdelivr.net/npm/ansi_up@5.2.1/ansi_up.min.js"></script>
   <style>
     :root {
@@ -232,9 +232,9 @@
     <div class="card hero">
       <div class="row space">
         <div>
-          <div class="section-kicker">P2 / P3 Service Lab</div>
-          <h1 style="margin:4px 0 6px 0; font-size: 30px;">Build, switch, and read the live workload in one place</h1>
-          <div class="muted">Hidden test page for building, deploying, and switching <code>p2app.service</code> between <code>P2_app</code> and <code>P3_app</code>, with XDMA readiness gated underneath by <code>saturn-xdma-ready.service</code>.</div>
+          <div class="section-kicker">p2app Service Lab</div>
+          <h1 style="margin:4px 0 6px 0; font-size: 30px;">Build, deploy, restart, and read the live workload in one place</h1>
+          <div class="muted">Hidden test page for the converged hardened <code>p2app.service</code> path, with XDMA readiness gated underneath by <code>saturn-xdma-ready.service</code>.</div>
         </div>
         <div class="row">
           <div class="chip">URL: /saturn/p23test</div>
@@ -247,8 +247,7 @@
         </div>
       </div>
       <div class="row space" style="margin-top:12px;">
-        <div class="muted" style="font-size:13px;">If a switch leaves the radio in an unusable local mode, revert the override here or from another browser/device.</div>
-        <button id="p23-emergency-revert" class="btn danger">Emergency Revert Now</button>
+        <div class="muted" style="font-size:13px;">If a restart or override change leaves the radio in an unusable local mode, use the restore action below from this page or another browser/device.</div>
       </div>
     </div>
 
@@ -311,17 +310,14 @@
             <button class="btn primary p23-action" data-flags="--status">Status</button>
           </div>
           <div class="row">
-            <button class="btn p23-action" data-flags="--build p2">Build P2</button>
-            <button class="btn p23-action" data-flags="--build p3">Build P3</button>
+            <button class="btn p23-action" data-flags="--build">Build p2app</button>
           </div>
           <div class="row">
-            <button class="btn p23-action" data-flags="--switch p2">Switch To P2</button>
-            <button class="btn p23-action" data-flags="--switch p3">Switch To P3</button>
-            <button class="btn p23-action" data-flags="--revert">Revert To Unit Default</button>
+            <button class="btn p23-action" data-flags="--restart">Restart With Current Override</button>
+            <button class="btn p23-action" data-flags="--revert">Restore Unit Default</button>
           </div>
           <div class="row">
-            <button class="btn primary p23-action" data-flags="--deploy p2">Deploy + Switch P2</button>
-            <button class="btn primary p23-action" data-flags="--deploy p3">Deploy + Switch P3</button>
+            <button class="btn primary p23-action" data-flags="--deploy">Build + Deploy p2app</button>
           </div>
         </div>
 
@@ -359,14 +355,14 @@
           <div>- Default service is <code>p2app.service</code>.</div>
           <div>- Service restarts now flow through <code>saturn-xdma-ready.service</code>, so XDMA/PCIe readiness is checked before the radio app starts.</div>
           <div>- The readiness gate is a one-shot service; after a successful run it normally shows <code>inactive (dead)</code> with a successful result.</div>
-          <div>- Deploy installs binaries under <code>/opt/saturn-go/p23-apps/</code> and switches a <code>current</code> symlink.</div>
-          <div>- Service switching uses a systemd drop-in override (safer than editing the main unit file).</div>
+          <div>- <code>Deploy</code> installs the converged binary under <code>/opt/saturn-go/p23-apps/</code> and refreshes the <code>current</code> symlink.</div>
+          <div>- Service restarts and panel-mode changes use a systemd drop-in override (safer than editing the main unit file).</div>
           <div>- If a restart fails because the XDMA stack is not ready, the terminal log will include output from <code>saturn-xdma-doctor.sh</code>.</div>
-          <div>- <code>Front panel mode</code> sets <code>SATURN_FRONT_PANEL_MODE</code> for P2/P3: use <code>g2</code> or <code>g2v2</code> if auto-detect picks the wrong panel.</div>
+          <div>- <code>Front panel mode</code> sets <code>SATURN_FRONT_PANEL_MODE</code> for <code>p2app</code>: use <code>g2</code> or <code>g2v2</code> if auto-detect picks the wrong panel.</div>
           <div>- Performance view combines host metrics with app-published counters from <code>/dev/shm</code> when available.</div>
           <div>- ADC peak telemetry is optional and writes only a latest-snapshot JSON file in <code>/dev/shm</code> while enabled.</div>
           <div>- Web mode requires working <code>sudo -n</code> permissions for install/restart steps.</div>
-          <div>- Shell emergency revert: <code>sudo /opt/saturn-go/scripts/p23-app-manager.sh --revert --verbose</code></div>
+          <div>- Shell restore: <code>sudo /opt/saturn-go/scripts/p23-app-manager.sh --revert --verbose</code></div>
         </div>
       </div>
 
@@ -374,7 +370,7 @@
         <div class="row space">
           <div>
             <div class="section-kicker">Runtime Dashboard</div>
-            <h2 style="margin:4px 0 0 0; font-size: 24px;">Performance (P2/P3 Service)</h2>
+            <h2 style="margin:4px 0 0 0; font-size: 24px;">Performance (p2app Service)</h2>
           </div>
           <div class="chip">Baseline auto-resets on workload changes</div>
         </div>
@@ -665,15 +661,18 @@ function formatP23StatusSummary(p){
   const ov = p.override || {};
   const rt = p.service_runtime || {};
   const meta = ov.saturn_meta || {};
-  const selected = cur.selected_app ? String(cur.selected_app).toUpperCase() : 'unknown';
+  const family = cur.selected_app ? String(cur.selected_app).toUpperCase() : 'UNKNOWN';
+  const runtimeApp = String(latestP23Perf?.app_telemetry?.current?.app || '').toUpperCase();
   const active = String(svc.active || 'unknown');
   const enabled = String(svc.enabled || 'unknown');
   const running = svc.running_exe ? `running ${svc.running_exe}` : 'no running exe path';
   const p2Built = src.p2_bin && src.p2_bin.exists ? 'yes' : 'no';
-  const p3Built = src.p3_bin && src.p3_bin.exists ? 'yes' : 'no';
   const mode = meta.mode || 'n/a';
   const panel = rt.front_panel_mode || ov.panel_mode_effective || ov.panel_mode || meta.panel || 'n/a';
-  return `Selected: ${selected} | Service: ${active} (${enabled}) | Mode: ${mode} | Panel: ${panel} | ${formatAudioRtSummary(rt)} | Built P2: ${p2Built} | Built P3: ${p3Built} | ${running}`;
+  const identity = runtimeApp && runtimeApp !== 'UNKNOWN'
+    ? (runtimeApp === family ? `App ${runtimeApp}` : `App ${runtimeApp} | Family ${family}`)
+    : `Family ${family}`;
+  return `${identity} | Service: ${active} (${enabled}) | Mode: ${mode} | Panel: ${panel} | ${formatAudioRtSummary(rt)} | Source built: ${p2Built} | ${running}`;
 }
 function formatAdcTelemetrySummary(t){
   if (!t || typeof t !== 'object') return 'No ADC telemetry data.';
@@ -701,7 +700,7 @@ async function loadP23Status(){
     setAdcView({ adc_peak_telemetry: p.adc_peak_telemetry || {} });
   }catch(e){
     latestP23Status = null;
-    setStatusSummary('Failed to load P2/P3 status: ' + e.message, true);
+    setStatusSummary('Failed to load p2app status: ' + e.message, true);
     setAdcSummary('Failed to load ADC telemetry: ' + e.message, true);
   }finally{
     statusPollInFlight = false;
@@ -931,12 +930,12 @@ function formatWorkloadSummaryFromPerf(perf){
   const interleavedCount = ddc.filter((item)=>item?.interleaved).length;
   const wb = current?.routing?.wideband || {};
   const state = current?.state || {};
-  const selected = String(
+  const family = String(
     workload?.selected_app ||
     latestP23Status?.deployed?.current?.selected_app ||
-    current?.app ||
     'unknown'
   ).toUpperCase();
+  const runtimeApp = String(current?.app || family || 'unknown').toUpperCase();
   const mode = workload?.startup_mode || latestP23Status?.override?.saturn_meta?.mode || 'n/a';
   const panel = workload?.panel_mode || latestP23Status?.override?.panel_mode || latestP23Status?.override?.saturn_meta?.panel || 'n/a';
   const wbMode = (wb?.adc1_enabled || wb?.adc2_enabled)
@@ -947,7 +946,8 @@ function formatWorkloadSummaryFromPerf(perf){
   const pureSignalState = Object.prototype.hasOwnProperty.call(state, 'pure_signal_enabled')
     ? `PS ${state?.pure_signal_enabled ? 'on' : 'off'}`
     : 'PS n/a';
-  return `App ${selected} | Mode ${mode} | Panel ${panel} | ${liveState} | DDC ${enabledCount} on / ${interleavedCount} interleaved | ${wbMode} | ${radioState} | ${pureSignalState}`;
+  const identity = runtimeApp === family ? `App ${runtimeApp}` : `App ${runtimeApp} | Family ${family}`;
+  return `${identity} | Mode ${mode} | Panel ${panel} | ${liveState} | DDC ${enabledCount} on / ${interleavedCount} interleaved | ${wbMode} | ${radioState} | ${pureSignalState}`;
 }
 function perfCounters(perf){
   const p = (perf && perf.process) || {};
@@ -1265,6 +1265,10 @@ function renderPerfDashboard(d, perf, alertState, baseline){
   const wbState = (wb?.adc1_enabled || wb?.adc2_enabled)
     ? `${wb?.adc1_enabled && wb?.adc2_enabled ? 'ADC1+ADC2' : (wb?.adc1_enabled ? 'ADC1' : 'ADC2')} @ ${fmtInt(wb?.samples_per_packet)} smp/pkt`
     : 'disabled';
+  const runtimeApp = String(app?.app || d.selectedApp || perf?.workload?.selected_app || 'unknown').toUpperCase();
+  const family = String(d.selectedApp || perf?.workload?.selected_app || runtimeApp || 'unknown').toUpperCase();
+  const workloadIdentity = runtimeApp !== 'UNKNOWN' ? runtimeApp : family;
+  const workloadSubPrefix = family && family !== workloadIdentity ? `Family ${family} | ` : '';
   const featureBits = [
     app?.features?.control_panel ? 'panel' : null,
     app?.features?.ganymede ? 'ganymede' : null,
@@ -1296,7 +1300,7 @@ function renderPerfDashboard(d, perf, alertState, baseline){
     metricCard('Memory', `${fmtNum(d.rssMb)} MiB`, `threads ${fmtInt(d.threads)} | FDs ${fmtInt(d.fdCount)} | system used ${fmtNum(memPct)}%`),
     metricCard('eth0', `${fmtNum(d.ethRxMbps)} Mb/s RX`, `TX ${fmtNum(d.ethTxMbps)} Mb/s | RX ${fmtNum(d.ethRxPps)} pkt/s | TX ${fmtNum(d.ethTxPps)} pkt/s`),
     metricCard('XDMA', `${fmtNum(d.xdmaIrqPerSec)} IRQ/s`, `PCIe ${d.xdmaPcieLinkSpeed || 'n/a'} x${d.xdmaPcieLinkWidth || 'n/a'} | ${fmtNum(d.xdmaIrqPerMiB)} IRQ/MiB`),
-    metricCard('Workload', `${String(d.selectedApp || perf?.workload?.selected_app || 'unknown').toUpperCase()} / ${d.startupMode || 'n/a'} / ${d.panelMode || 'n/a'}`, `DDC ${enabledCount} enabled, ${interleavedCount} interleaved | WB ${wbState}`),
+    metricCard('Workload', `${workloadIdentity} / ${d.startupMode || 'n/a'} / ${d.panelMode || 'n/a'}`, `${workloadSubPrefix}DDC ${enabledCount} enabled, ${interleavedCount} interleaved | WB ${wbState}`),
     metricCard('Service Runtime', formatAudioRtSummary(serviceRuntime), formatAudioRtSubtext(serviceRuntime)),
     metricCard('App Telemetry', d.appPidMatchesService ? 'live' : 'host-only', `uptime ${fmtInt(app?.uptime_sec)} s | features ${featureBits} | ${app?.state?.tx_mode ? 'TX' : 'RX'} | ${pureSignalState}`),
     metricCard('App Packet Rate', `${fmtNum(d.ddcPps)} DDC pkt/s`, `HP ${fmtNum(d.hpPps)} | Mic ${fmtNum(d.micPps)} | WB ${fmtNum(d.wbPps)} pkt/s`),
@@ -1367,7 +1371,7 @@ async function loadP23Perf(){
     latestDerivedPerf = null;
     latestPerfAlertState = null;
     setWorkloadSummary('Failed to load workload tags: ' + e.message, true);
-    setPerfSummary('Failed to load P2/P3 performance metrics: ' + e.message, true);
+    setPerfSummary('Failed to load p2app performance metrics: ' + e.message, true);
     setPerfDashboardHtml(metricCard('Performance', 'load failed', e.message));
     setPerfRawText('');
     setPerfAlertVisual('crit');
@@ -1392,8 +1396,8 @@ function resetPerfBaseline(){
 }
 function collectOptionFlags(baseFlags){
   const flags = [];
-  const isSwitchLike = Array.isArray(baseFlags) && (baseFlags.includes('--switch') || baseFlags.includes('--deploy'));
-  if (isSwitchLike){
+  const needsOverrideArgs = Array.isArray(baseFlags) && (baseFlags.includes('--restart') || baseFlags.includes('--deploy'));
+  if (needsOverrideArgs){
     const mode = $('opt-startup-profile').value || 'panel';
     const panel = $('opt-panel-mode').value || 'auto';
     flags.push('--mode', mode, '--panel', panel);
@@ -1432,18 +1436,17 @@ async function fetchRunLog(){
 
 async function runAction(baseFlags){
   const isDryRun = $('opt-dry-run').checked;
-  const isSwitchLike = baseFlags.includes('--switch') || baseFlags.includes('--deploy') || baseFlags.includes('--revert');
-  if (isSwitchLike && !isDryRun){
+  const isMutating = baseFlags.includes('--restart') || baseFlags.includes('--deploy') || baseFlags.includes('--revert');
+  if (isMutating && !isDryRun){
     const selectedMode = $('opt-startup-profile').value || 'panel';
     const selectedPanel = $('opt-panel-mode').value || 'auto';
     const restartMsg = $('opt-no-restart').checked ? 'No restart is selected; the running service will not be restarted automatically.' : 'This will restart p2app.service.';
     let prompt;
     if (baseFlags.includes('--revert')){
-      prompt = `REVERT TO UNIT DEFAULT?\n\n${restartMsg}\n\nThis removes the Saturn P2/P3 systemd override and restores the original ExecStart from p2app.service.`;
+      prompt = `REVERT TO UNIT DEFAULT?\n\n${restartMsg}\n\nThis removes the Saturn service override and restores the original ExecStart from p2app.service.`;
     } else {
-      const action = baseFlags.includes('--deploy') ? 'deploy + switch' : 'switch';
-      const app = baseFlags.includes('p3') ? 'P3' : (baseFlags.includes('p2') ? 'P2' : 'unknown');
-      prompt = `${action.toUpperCase()} ${app}?\n\n${restartMsg}\nStartup profile: ${selectedMode}\nFront panel mode: ${selectedPanel}\n\nThis changes the active radio app target used by p2app.service.`;
+      const action = baseFlags.includes('--deploy') ? 'BUILD + DEPLOY P2APP' : 'RESTART WITH CURRENT OVERRIDE';
+      prompt = `${action}?\n\n${restartMsg}\nStartup profile: ${selectedMode}\nFront panel mode: ${selectedPanel}\n\nThis refreshes the active p2app target used by p2app.service.`;
     }
     const ok = confirm(prompt);
     if (!ok) return;
@@ -1506,19 +1509,6 @@ async function runAction(baseFlags){
   }
 }
 
-async function runEmergencyRevert(){
-  const dry = $('opt-dry-run').checked;
-  const noRestart = $('opt-no-restart').checked;
-  $('opt-dry-run').checked = false;
-  $('opt-no-restart').checked = false;
-  try {
-    await runAction(['--revert']);
-  } finally {
-    $('opt-dry-run').checked = dry;
-    $('opt-no-restart').checked = noRestart;
-  }
-}
-
 $('p23-clear').addEventListener('click', ()=>{
   resetOutput();
   $('p23-progress').value = 0;
@@ -1532,11 +1522,6 @@ $('p23-perf-reset').addEventListener('click', ()=>{ resetPerfBaseline(); loadP23
 $('p23-perf-snapshot').addEventListener('click', ()=>{ capturePerfSnapshot(); });
 $('p23-snapshot-copy').addEventListener('click', ()=>{ copyCapturedSnapshot(); });
 $('p23-snapshot-download').addEventListener('click', ()=>{ downloadCapturedSnapshot(); });
-$('p23-emergency-revert').addEventListener('click', ()=>{
-  if (!confirm('EMERGENCY REVERT?\n\nThis removes the P2/P3 override and restarts p2app.service.')) return;
-  runEmergencyRevert();
-});
-
 document.querySelectorAll('.p23-action').forEach((btn)=>{
   btn.addEventListener('click', ()=>{
     const baseFlags = String(btn.dataset.flags || '').trim().split(/\s+/).filter(Boolean);

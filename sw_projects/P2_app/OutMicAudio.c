@@ -40,7 +40,7 @@
 #define VSTARTUPDELAY 100                           // 100 messages (~100ms) before reporting under or overflows
 
 
-    int DMAReadfile_fd = -1;								// DMA read file device (global, used also by wideband)
+atomic_int DMAReadfile_fd = -1;                        // DMA read file device (global, used also by wideband)
 
 
 
@@ -65,13 +65,14 @@ void *OutgoingMicSamples(void *arg)
     struct sockaddr_in DestAddr;                    // destination address for outgoing data
     bool InitError = false;
     int Error;
+    int Socketfd;
 
 //
 // variables for DMA buffer 
 //
     uint8_t* MicReadBuffer = NULL;							// data for DMA read from DDC
     uint32_t MicBufferSize = VDMABUFFERSIZE;
-    unsigned char* MicBasePtr;								// ptr to DMA location in mic memory
+    unsigned char* MicBasePtr = NULL;							// ptr to DMA location in mic memory
     uint32_t Depth = 0;
     uint32_t RegisterValue;
     bool FIFOOverflow, FIFOUnderflow, FIFOOverThreshold;
@@ -85,30 +86,41 @@ void *OutgoingMicSamples(void *arg)
 // then create memory buffers and open DMA file devices
 //
     ThreadData = (struct ThreadSocketData *)arg;
-    ThreadData->Active = true;
-    printf("spinning up outgoing mic thread with port %d, pid=%ld\n", ThreadData->Portid, syscall(SYS_gettid));
+    atomic_store(&ThreadData->Active, true);
+    printf("spinning up outgoing mic thread with port %u, pid=%ld\n", (unsigned int)atomic_load(&ThreadData->Portid), syscall(SYS_gettid));
 
 //
 // setup DMA buffer
 //
-    posix_memalign((void**)&MicReadBuffer, VALIGNMENT, MicBufferSize);
-    if (!MicReadBuffer)
+    if (posix_memalign((void**)&MicReadBuffer, VALIGNMENT, MicBufferSize) != 0)
     {
+        MicReadBuffer = NULL;
         printf("mic read buffer allocation failed\n");
         InitError = true;
     }
-    MicBasePtr = MicReadBuffer + VBASE;
-    memset(MicReadBuffer, 0, MicBufferSize);
+    if(!InitError)
+    {
+        MicBasePtr = MicReadBuffer + VBASE;
+        memset(MicReadBuffer, 0, MicBufferSize);
+    }
 
 
   //
   // open DMA device driver
   // opened readonly to accommodate potential use of a different XDMA device driver
   //
-    DMAReadfile_fd = open(VMICDMADEVICE, O_RDONLY);
-    if (DMAReadfile_fd < 0)
     {
-        printf("XDMA read device open failed for mic data\n");
+        int LocalDMAReadFD = open(VMICDMADEVICE, O_RDONLY);
+        if (LocalDMAReadFD < 0)
+        {
+            printf("XDMA read device open failed for mic data\n");
+            InitError = true;
+        }
+        else
+            atomic_store(&DMAReadfile_fd, LocalDMAReadFD);
+    }
+    if (atomic_load(&DMAReadfile_fd) < 0)
+    {
         InitError = true;
     }
 
@@ -130,17 +142,11 @@ void *OutgoingMicSamples(void *arg)
   // if sufficient FIFO data available: DMA that data and transfer it out. 
   // if it turns out to be too inefficient, we'll have to try larger DMA.
   //
-    while (!InitError)
+    while (!InitError && !atomic_load(&ExitRequested))
     {
-        while(!(SDRActive))
+        while(!atomic_load(&SDRActive) && !atomic_load(&ExitRequested))
         {
-            if(ThreadData->Cmdid & VBITCHANGEPORT)
-            {
-                printf("Mic data request change port\n");
-                close(ThreadData->Socketid);                      // close old socket, open new one
-                MakeSocket(ThreadData, 0);                        // this binds to the new port.
-                ThreadData->Cmdid &= ~VBITCHANGEPORT;             // clear command bit
-            }
+            // Port rebinding is handled centrally by the p2app control plane.
             usleep(100);
         }
     //
@@ -150,7 +156,9 @@ void *OutgoingMicSamples(void *arg)
         printf("starting activity on mic thread\n");
         StartupCount = VSTARTUPDELAY;
         SequenceCounter = 0;
+        pthread_mutex_lock(&g_reply_addr_mutex);
         memcpy(&DestAddr, &reply_addr, sizeof(struct sockaddr_in));           // create local copy of PC destination address
+        pthread_mutex_unlock(&g_reply_addr_mutex);
         memset(&iovecinst, 0, sizeof(struct iovec));
         memset(&datagram, 0, sizeof(datagram));
         iovecinst.iov_base = UDPBuffer;
@@ -160,7 +168,7 @@ void *OutgoingMicSamples(void *arg)
         datagram.msg_name = &DestAddr;                              // MAC addr & port to send to
         datagram.msg_namelen = sizeof(DestAddr);
 
-        while(SDRActive && !InitError)                              // main loop
+        while(atomic_load(&SDRActive) && !InitError && !atomic_load(&ExitRequested))               // main loop
         {
             //
             // now wait until there is data, then DMA it
@@ -180,7 +188,7 @@ void *OutgoingMicSamples(void *arg)
 // this isn't a problem as we can send the data on without the code becoming blocked.
 //            if((StartupCount == 0) && FIFOUnderflow)
 //                printf("Codec Mic FIFO Underflowed, depth now = %d\n", Current);
-            while (Depth < (VMICSAMPLESPERFRAME/4))			        // 16 locations = 64 samples
+            while ((Depth < (VMICSAMPLESPERFRAME/4)) && !atomic_load(&ExitRequested))			        // 16 locations = 64 samples
             {
                 usleep(1000);								        // 1ms wait
                 Depth = ReadFIFOMonitorChannel(eMicCodecDMA, &FIFOOverflow, &FIFOOverThreshold, &FIFOUnderflow, &Current);				// read the FIFO Depth register
@@ -196,27 +204,44 @@ void *OutgoingMicSamples(void *arg)
 //                if((StartupCount == 0) && FIFOUnderflow)
 //                    printf("Codec Mic FIFO Underflowed, depth now = %d\n", Current);
             }
+            if(atomic_load(&ExitRequested))
+                break;
 
             // DMA shared with wideband samples, so get semaphore granting access
             sem_wait(&MicWBDMAMutex);                       // get protected access
-            if(DMAReadFromFPGA(DMAReadfile_fd, MicBasePtr, VDMATRANSFERSIZE, VADDRMICSTREAMREAD) < 0)
-                P23PerfTelemetryCounterAdd(eP23PerfCounterMicDMAErrors, 1U);
-            else
             {
-                P23PerfTelemetryCounterAdd(eP23PerfCounterMicDMAReads, 1U);
-                P23PerfTelemetryCounterAdd(eP23PerfCounterMicDMAReadBytes, VDMATRANSFERSIZE);
+                int LocalDMAReadFD = atomic_load(&DMAReadfile_fd);
+                if(LocalDMAReadFD >= 0)
+                {
+                    if(DMAReadFromFPGA(LocalDMAReadFD, MicBasePtr, VDMATRANSFERSIZE, VADDRMICSTREAMREAD) < 0)
+                    {
+                        P23PerfTelemetryCounterAdd(eP23PerfCounterMicDMAErrors, 1U);
+                        InitError = true;
+                    }
+                    else
+                    {
+                        P23PerfTelemetryCounterAdd(eP23PerfCounterMicDMAReads, 1U);
+                        P23PerfTelemetryCounterAdd(eP23PerfCounterMicDMAReadBytes, VDMATRANSFERSIZE);
+                    }
+                }
             }
             sem_post(&MicWBDMAMutex);                       // get protected access
+            if(InitError)
+                break;
 
             // create the packet into UDPBuffer
             *(uint32_t*)UDPBuffer = htonl(SequenceCounter++);        // add sequence count
             memcpy(UDPBuffer+4, MicBasePtr, VDMATRANSFERSIZE);       // copy in mic samples
-            Error = sendmsg(ThreadData -> Socketid, &datagram, 0);
+            Socketfd = GetThreadSocketFD(ThreadData);
+            Error = sendmsg(Socketfd, &datagram, 0);
             if(StartupCount != 0)                                   // decrement startup message count
                 StartupCount--;
-            if(Error == -1)
+            if(Error != VMICPACKETSIZE)
             {
-                perror("sendmsg, Mic Audio");
+                if(Error == -1)
+                    perror("sendmsg, Mic Audio");
+                else
+                    printf("short sendmsg, Mic Audio: sent %d of %u bytes\n", Error, (unsigned int)VMICPACKETSIZE);
                 P23PerfTelemetryCounterAdd(eP23PerfCounterMicSendErrors, 1U);
                 InitError=true;
             }
@@ -231,10 +256,12 @@ void *OutgoingMicSamples(void *arg)
 // tidy shutdown of the thread
 //
     if(InitError)                                           // if error, flag it to main program
-      ThreadError = true;
+      atomic_store(&ThreadError, true);
 
     printf("shutting down outgoing mic data thread\n");
-    close(ThreadData->Socketid); 
-    ThreadData->Active = false;                   // signal closed
+    free(MicReadBuffer);
+    if(!ThreadSocketIsSharedAlias(ThreadData))
+        close(GetThreadSocketFD(ThreadData));
+    atomic_store(&ThreadData->Active, false);     // signal closed
     return NULL;
 }

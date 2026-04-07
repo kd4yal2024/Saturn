@@ -125,6 +125,7 @@ void *OutgoingHighPriority(void *arg)
   struct sockaddr_in DestAddr;                    // destination address for outgoing data
   bool InitError = false;
   int Error;
+  int Socketfd;
   uint8_t Byte;                                   // data being encoded
   uint16_t Word;                                  // data being encoded
   unsigned int FIFOCount;
@@ -145,8 +146,8 @@ void *OutgoingHighPriority(void *arg)
 // initialise. Create memory buffers and open DMA file devices
 //
   ThreadData = (struct ThreadSocketData *)arg;
-  ThreadData->Active = true;
-  printf("spinning up outgoing high priority with port %d, pid=%ld\n", ThreadData->Portid, syscall(SYS_gettid));
+  atomic_store(&ThreadData->Active, true);
+  printf("spinning up outgoing high priority with port %u, pid=%ld\n", (unsigned int)atomic_load(&ThreadData->Portid), syscall(SYS_gettid));
 
 //
 // OK, now the main work
@@ -154,27 +155,22 @@ void *OutgoingHighPriority(void *arg)
 // threat may also be commanded to close down and re-open its socket by command byte 
 // VBITCHANGEPORT bit being set (shold only happen when not running)
 //
-  while (!InitError)
+  while (!InitError && !atomic_load(&ExitRequested))
   {
-    while(!(SDRActive))
+    while(!atomic_load(&SDRActive) && !atomic_load(&ExitRequested))
     {
-      if(ThreadData->Cmdid & VBITCHANGEPORT)
-      {
-        close(ThreadData->Socketid);                      // close old socket, open new one
-        MakeSocket(ThreadData, 0);                        // this binds to the new port.
-        ThreadData->Cmdid &= ~VBITCHANGEPORT;             // clear command bit
-      }
       P23PerfTelemetrySetRuntimeFlags(
-        SDRActive,
-        IsTXMode,
-        ReplyAddressSet,
-        StartBitReceived,
-        ThreadError,
-        ExitRequested
+        atomic_load(&SDRActive),
+        atomic_load(&IsTXMode),
+        atomic_load(&ReplyAddressSet),
+        atomic_load(&StartBitReceived),
+        atomic_load(&ThreadError),
+        atomic_load(&ExitRequested)
       );
       P23PerfTelemetrySetPureSignalEnabled(GetPureSignalEnabled());
       P23PerfTelemetrySetDieTempC(GetDieTempC());
       P23PerfTelemetryMaybeWrite();
+      // Port rebinding is handled centrally by the p2app control plane.
       usleep(100);
     }
     //
@@ -183,7 +179,9 @@ void *OutgoingHighPriority(void *arg)
     //
     SequenceCounter = 0;
     printf("starting outgoing high priority data\n");
+    pthread_mutex_lock(&g_reply_addr_mutex);
     memcpy(&DestAddr, &reply_addr, sizeof(struct sockaddr_in));           // local copy of PC destination address
+    pthread_mutex_unlock(&g_reply_addr_mutex);
     memset(&iovecinst, 0, sizeof(struct iovec));
     memset(&datagram, 0, sizeof(datagram));
     memset(UDPBuffer, 0,sizeof(UDPBuffer));                      // clear the whole packet
@@ -204,7 +202,7 @@ void *OutgoingHighPriority(void *arg)
     // when a DDC becomes enabled, its paired DDC may not know yet and may still be set to interleaved.
     // when a DDC is set to interleaved, the paired DDC may not have been disabled yet.
     //
-    while(SDRActive && !InitError)                               // main loop
+    while(atomic_load(&SDRActive) && !InitError && !atomic_load(&ExitRequested))                // main loop
     {
       uint16_t SleepCount;                                      // counter for sending next message
       uint8_t PTTBits;                                          // PTT bits - and change means a new message needed
@@ -277,7 +275,14 @@ void *OutgoingHighPriority(void *arg)
       GlobalFIFOOverflows = 0;                                // clear any overflows
       pthread_mutex_unlock(&g_fifo_overflow_mutex);
       *(uint8_t *)(UDPBuffer+30) = FIFOOverflows;
-      P23PerfTelemetrySetRuntimeFlags(SDRActive, IsTXMode, ReplyAddressSet, StartBitReceived, ThreadError, ExitRequested);
+      P23PerfTelemetrySetRuntimeFlags(
+        atomic_load(&SDRActive),
+        atomic_load(&IsTXMode),
+        atomic_load(&ReplyAddressSet),
+        atomic_load(&StartBitReceived),
+        atomic_load(&ThreadError),
+        atomic_load(&ExitRequested)
+      );
       P23PerfTelemetrySetPureSignalEnabled(GetPureSignalEnabled());
       P23PerfTelemetrySetFIFOSnapshot(DDCFIFOSamples, MicFIFOSamples, DUCFIFOSamples, SpeakerFIFOSamples, FIFOOverflows);
       P23PerfTelemetrySetADCSnapshot(PeakADC1MaxAmpl, PeakADC2MaxAmpl, *(uint8_t *)(UDPBuffer+5));
@@ -286,7 +291,8 @@ void *OutgoingHighPriority(void *arg)
       PeakADC1MaxAmpl = 0;
       PeakADC2MaxAmpl = 0;
       FIFOOverflows = 0;
-      Error = sendmsg(ThreadData -> Socketid, &datagram, 0);
+      Socketfd = GetThreadSocketFD(ThreadData);
+      Error = sendmsg(Socketfd, &datagram, 0);
 
 
       //
@@ -299,7 +305,7 @@ void *OutgoingHighPriority(void *arg)
       if(Error == -1)
       {
         printf("High Priority Send Error, errno=%d\n", errno);
-        printf("socket id = %d\n", ThreadData -> Socketid);
+        printf("socket id = %d\n", Socketfd);
         P23PerfTelemetryCounterAdd(eP23PerfCounterHighPrioritySendErrors, 1U);
         InitError=true;
       }
@@ -317,7 +323,7 @@ void *OutgoingHighPriority(void *arg)
       // thank you to Rick N1GP for recommending this approach
       //
       SleepCount = (MOXAsserted) ? 2 : 400;
-      while (SleepCount-- > 0)
+      while ((SleepCount-- > 0) && !atomic_load(&ExitRequested))
       {
         ReadStatusRegister();
         if ((uint8_t)GetP2PTTKeyInputs() != PTTBits)
@@ -335,9 +341,10 @@ void *OutgoingHighPriority(void *arg)
 // tidy shutdown of the thread
 //
   if(InitError)                                           // if error, flag it to main program
-    ThreadError = true;
+    atomic_store(&ThreadError, true);
   printf("shutting down outgoing high priority thread\n");
-  close(ThreadData->Socketid); 
-  ThreadData->Active = false;                   // signal closed
+  if(!ThreadSocketIsSharedAlias(ThreadData))
+    close(GetThreadSocketFD(ThreadData));
+  atomic_store(&ThreadData->Active, false);     // signal closed
   return NULL;
 }

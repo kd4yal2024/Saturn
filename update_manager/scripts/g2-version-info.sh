@@ -106,8 +106,8 @@ panel_mode = workload.get("panel_mode") or "unknown"
 fpga = current.get("fpga") or {}
 
 print(f"  Service: {service.get('name', 'p2app.service')}")
-print(f"  Deployed slot/binary family: {deployment_slot}")
-print(f"  Runtime protocol identity: {app_identity}")
+print(f"  Active binary family: {deployment_slot}")
+print(f"  Runtime app identity: {app_identity}")
 print(f"  Active binary path: {active_binary}")
 print(f"  App version: {app_version}")
 if binary_modified:
@@ -145,8 +145,8 @@ else
     say "  WARN: Live telemetry unavailable (/p23_perf returned no data)"
   fi
   say "  Service: p2app.service"
-  say "  Deployed slot/binary family: ${ACTIVE_APP}"
-  say "  Runtime protocol identity: ${ACTIVE_APP}"
+  say "  Active binary family: ${ACTIVE_APP}"
+  say "  Runtime app identity: ${ACTIVE_APP}"
   say "  Active binary path: ${CURRENT_TARGET:-unknown}"
   if [[ -n "${APP_VERSION_FALLBACK}" ]]; then
     say "  App version: ${APP_VERSION_FALLBACK}"

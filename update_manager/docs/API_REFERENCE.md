@@ -35,8 +35,8 @@ Backend also enforces same-host checks when `Origin` or `Referer` is present.
 | `/saturngo.html` | `GET` | No | Serve `saturngo.html` (Saturn Go self-update page). |
 | `/saturn-go` | `GET` | No | Serve `saturngo.html` (Saturn Go self-update page). |
 | `/saturn-go.html` | `GET` | No | Serve `saturngo.html` (Saturn Go self-update page). |
-| `/p23test` | `GET` | No | Serve hidden `p23test.html` (experimental P2/P3 app test page). |
-| `/p23test.html` | `GET` | No | Serve hidden `p23test.html` (experimental P2/P3 app test page). |
+| `/p23test` | `GET` | No | Serve hidden `p23test.html` (experimental `p2app` service lab page). |
+| `/p23test.html` | `GET` | No | Serve hidden `p23test.html` (experimental `p2app` service lab page). |
 | `/fpga` | `GET` | No | Serve `fpga.html` (FPGA flash terminal/control page). |
 | `/fpga.html` | `GET` | No | Serve `fpga.html` (FPGA flash terminal/control page). |
 | `/pihpsdr` | `GET` | No | Serve `pihpsdr.html` (piHPSDR update terminal). |
@@ -130,7 +130,7 @@ Notes:
 - `/saturngo_deploy_status` returns a synthetic `idle` payload if no status file exists yet.
 - The Saturn Go page runs `update-saturn-go.sh` through `POST /run` and uses `/run_log` for resume across page refresh/navigation.
 
-## P2/P3 Test Lab (Hidden / Experimental)
+## p2app Service Lab (Hidden / Experimental)
 
 | Route | Method | CSRF | Request | Success Response |
 |---|---|---|---|---|
@@ -142,8 +142,7 @@ Notes:
 - `p23_status` is used by the hidden `/p23test` page status panel.
 - It reports:
   - `p2app.service` active/enabled/main PID (and running executable path when available)
-  - source `P2_app` / `P3_app` directories and built binaries in active repo root
-  - deployed binaries and `current` symlink under `/opt/saturn-go/p23-apps`
+  - source/deployed binary details in the active repo root and `/opt/saturn-go/p23-apps`
   - systemd drop-in override file state (`/etc/systemd/system/p2app.service.d/10-saturn-p23-switch.conf`)
 - `p23_status.p23.override` also includes parsed Saturn test-lab metadata when present:
   - `panel_mode` from `Environment=SATURN_FRONT_PANEL_MODE=...`
@@ -152,7 +151,7 @@ Notes:
 - It reports:
   - host/process/network/XDMA snapshots used for baseline deltas
   - `workload` metadata derived from the deployed `current` symlink and the `p2app.service` drop-in (`selected_app`, startup mode, panel mode, workload key)
-  - `app_telemetry` parsed from `/dev/shm/saturn_p23_perf_stats.json` when the running P2/P3 app exports live counters
+  - `app_telemetry` parsed from `/dev/shm/saturn_p23_perf_stats.json` when the running `p2app`-compatible app exports live counters
 - `app_telemetry.current` includes:
   - runtime flags and feature flags
   - port/DDC/wideband routing shape
@@ -239,7 +238,7 @@ Update-activity behavior for `/run`:
   - `SATURN_SATURNGO_POLICY_REF`
   - `SATURN_SATURNGO_POLICY_URL`
   - `SATURN_SATURNGO_DEPLOY_STATUS_FILE`
-- `p23-app-manager.sh` (hidden P2/P3 test workflow) uses the active repo-root env (`SATURN_ACTIVE_REPO_ROOT`) and runs privileged deploy/switch actions via `sudo -n` when not root.
+- `p23-app-manager.sh` (hidden `p2app` lab workflow) uses the active repo-root env (`SATURN_ACTIVE_REPO_ROOT`) and runs privileged deploy/restart actions via `sudo -n` when not root.
 - `update-deskhpsdr.py` uses the active repo-root env to find `scripts/deskhpsdr-test-build-on-current-image.sh`, clones/pulls `~/github/deskhpsdr` unless `--skip-git` is set, then runs the helper-script build flow with the selected flags.
 - `scripts/deskhpsdr-test-build-on-current-image.sh` now applies `scripts/patches/deskhpsdr-libgpiod-v2.patch` before the build when needed, treats an already-applied patch as success, and builds with `GPIO=ON` plus `SATURN=ON`.
 - Python child runs also include:

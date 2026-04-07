@@ -47,7 +47,30 @@
 #define VDDCPACKETSIZE 1444
 #define VIQSAMPLESPERFRAME 238                      // total I/Q samples in one DDC packet
 #define VIQBYTESPERFRAME 6*VIQSAMPLESPERFRAME       // total bytes in one outgoing frame
+#define VMAXSENDMSGS 8                              // batch ready UDP frames into one sendmmsg call
 #define VSTARTUPDELAY 100                           // 100 messages (~100ms) before reporting under or overflows
+
+static inline void CopyPackedIQSamples(uint8_t* DestPtr, const uint8_t* SrcPtr, uint32_t SampleCount)
+{
+    while (SampleCount >= 4)
+    {
+        memcpy(DestPtr, SrcPtr, 6);
+        memcpy(DestPtr + 6, SrcPtr + 8, 6);
+        memcpy(DestPtr + 12, SrcPtr + 16, 6);
+        memcpy(DestPtr + 18, SrcPtr + 24, 6);
+        DestPtr += 24;
+        SrcPtr += 32;
+        SampleCount -= 4;
+    }
+
+    while (SampleCount != 0)
+    {
+        memcpy(DestPtr, SrcPtr, 6);
+        DestPtr += 6;
+        SrcPtr += 8;
+        SampleCount--;
+    }
+}
 
 //
 // strategy:
@@ -208,16 +231,20 @@ bool CreateDynamicMemory(void)                              // return true if er
 //
 // first create the buffer for DMA, and initialise its pointers
 //
-    posix_memalign((void**)&DMAReadBuffer, VALIGNMENT, DMABufferSize);
-    DMAReadPtr = DMAReadBuffer + VBASE;		                    // offset 4096 bytes into buffer
-    DMAHeadPtr = DMAReadBuffer + VBASE;
-    DMABasePtr = DMAReadBuffer + VBASE;
+    if (posix_memalign((void**)&DMAReadBuffer, VALIGNMENT, DMABufferSize) != 0)
+        DMAReadBuffer = NULL;
     if (!DMAReadBuffer)
     {
         printf("I/Q read buffer allocation failed\n");
         Result = true;
     }
-    memset(DMAReadBuffer, 0, DMABufferSize);
+    else
+    {
+        DMAReadPtr = DMAReadBuffer + VBASE;		                    // offset 4096 bytes into buffer
+        DMAHeadPtr = DMAReadBuffer + VBASE;
+        DMABasePtr = DMAReadBuffer + VBASE;
+        memset(DMAReadBuffer, 0, DMABufferSize);
+    }
 
     //
     // set up per-DDC data structures
@@ -226,6 +253,12 @@ bool CreateDynamicMemory(void)                              // return true if er
     {
         UDPBuffer[DDC] = malloc(VDDCPACKETSIZE);
         DDCSampleBuffer[DDC] = malloc(DMABufferSize);
+        if((UDPBuffer[DDC] == NULL) || (DDCSampleBuffer[DDC] == NULL))
+        {
+            printf("DDC buffer allocation failed for DDC %u\n", DDC);
+            Result = true;
+            continue;
+        }
         IQReadPtr[DDC] = DDCSampleBuffer[DDC] + VBASE;		// offset 4096 bytes into buffer
         IQHeadPtr[DDC] = DDCSampleBuffer[DDC] + VBASE;
         IQBasePtr[DDC] = DDCSampleBuffer[DDC] + VBASE;
@@ -285,18 +318,20 @@ void *OutgoingDDCIQ(void *arg)
 //
 // variables for analysing a DDC frame
 //
-    uint32_t FrameLength;                                       // number of words per frame
+    uint32_t FrameLength = 0;                                   // number of words per frame
     uint32_t DDCCounts[VNUMDDC];                                // number of samples per DDC in a frame
     uint32_t RateWord;                                          // DDC rate word from buffer
     uint32_t HdrWord;                                           // check word read form DMA's data
-    uint16_t* SrcWordPtr, * DestWordPtr;                        // 16 bit read & write pointers
     uint32_t *LongWordPtr;
     uint32_t PrevRateWord;                                      // last used rate word
     uint32_t Cntr;                                              // sample word counter
     bool HeaderFound;
     uint32_t DecodeByteCount;                                   // bytes to decode
     unsigned int Current;                                   // current occupied locations in FIFO
-    unsigned int StartupCount;                              // used to delay reporting of under & overflows
+    unsigned int StartupCount = 0;                          // used to delay reporting of under & overflows
+    struct mmsghdr SendDatagram[VMAXSENDMSGS];
+    struct iovec SendIovec[VMAXSENDMSGS];
+    uint8_t SendBuffer[VMAXSENDMSGS][VDDCPACKETSIZE];
 
 //
 // initialise. Create memory buffers and open DMA file devices
@@ -316,7 +351,7 @@ void *OutgoingDDCIQ(void *arg)
     }
 
     ThreadData = (struct ThreadSocketData*)arg;
-    printf("spinning up outgoing I/Q thread with port %d, pid=%ld\n", ThreadData->Portid, syscall(SYS_gettid));
+    printf("spinning up outgoing I/Q thread with port %u, pid=%ld\n", (unsigned int)atomic_load(&ThreadData->Portid), syscall(SYS_gettid));
 
     //
     // set up per-DDC data structures
@@ -324,8 +359,11 @@ void *OutgoingDDCIQ(void *arg)
     for (DDC = 0; DDC < VNUMDDC; DDC++)
     {
         SequenceCounter[DDC] = 0;                           // clear UDP packet counter
-        (ThreadData + DDC)->Active = true;                  // set outgoing socket active
+        atomic_store(&(ThreadData + DDC)->Active, true);    // set outgoing socket active
     }
+
+    if(InitError)
+        goto cleanup;
 
 
 
@@ -352,17 +390,11 @@ void *OutgoingDDCIQ(void *arg)
 // while there is enough I/Q data, make outgoing packets;
 // when not enough data, read more.
 //
-    while(!InitError)
+    while(!InitError && !atomic_load(&ExitRequested))
     {
-        while(!SDRActive)
+        while(!atomic_load(&SDRActive) && !atomic_load(&ExitRequested))
         {
-            for (DDC=0; DDC < VNUMDDC; DDC++)
-                if((ThreadData+DDC) -> Cmdid & VBITCHANGEPORT)
-                {
-                    close((ThreadData+DDC) -> Socketid);                      // close old socket, open new one
-                    MakeSocket((ThreadData + DDC), 0);                        // this binds to the new port.
-                    (ThreadData + DDC) -> Cmdid &= ~VBITCHANGEPORT;           // clear command bit
-                }
+            // Port rebinding is handled centrally by the p2app control plane.
             usleep(100);
         }
         printf("starting outgoing DDC data\n");
@@ -373,7 +405,9 @@ void *OutgoingDDCIQ(void *arg)
         for (DDC = 0; DDC < VNUMDDC; DDC++)
         {
             SequenceCounter[DDC] = 0;
+            pthread_mutex_lock(&g_reply_addr_mutex);
             memcpy(&DestAddr[DDC], &reply_addr, sizeof(struct sockaddr_in));           // local copy of PC destination address (reply_addr is global)
+            pthread_mutex_unlock(&g_reply_addr_mutex);
             memset(&iovecinst[DDC], 0, sizeof(struct iovec));
             memset(&datagram[DDC], 0, sizeof(struct msghdr));
             iovecinst[DDC].iov_base = UDPBuffer[DDC];
@@ -389,7 +423,7 @@ void *OutgoingDDCIQ(void *arg)
         printf("outDDCIQ: enable data transfer\n");
         SetRXDDCEnabled(true);
         HeaderFound = false;
-        while(!InitError && SDRActive)
+        while(!InitError && atomic_load(&SDRActive) && !atomic_load(&ExitRequested))
         {
 
         //
@@ -401,32 +435,63 @@ void *OutgoingDDCIQ(void *arg)
             {
                 while ((IQHeadPtr[DDC] - IQReadPtr[DDC]) > VIQBYTESPERFRAME)
                 {
-//                    printf("enough data for packet: DDC= %d\n", DDC);
-                    *(uint32_t*)UDPBuffer[DDC] = htonl(SequenceCounter[DDC]++);     // add sequence count
-                    memset(UDPBuffer[DDC] + 4, 0, 8);                               // clear the timestamp data
-                    *(uint16_t*)(UDPBuffer[DDC] + 12) = htons(24);                  // bits per sample
-                    *(uint32_t*)(UDPBuffer[DDC] + 14) = htons(VIQSAMPLESPERFRAME);  // I/Q samples for ths frame
-                    //
-                    // now add I/Q data & send outgoing packet
-                    //
-                    memcpy(UDPBuffer[DDC] + 16, IQReadPtr[DDC], VIQBYTESPERFRAME);
-                    IQReadPtr[DDC] += VIQBYTESPERFRAME;
+                    unsigned int BatchCount = 0;
+                    unsigned char* BatchReadPtr = IQReadPtr[DDC];
+                    uint32_t BatchSequence = SequenceCounter[DDC];
 
-                    int Error;
-                    Error = sendmsg((ThreadData+DDC)->Socketid, &datagram[DDC], 0);
-                    if(StartupCount != 0)                                   // decrement startup message count
-                        StartupCount--;
-
-                    if (Error == -1)
+                    while (((IQHeadPtr[DDC] - BatchReadPtr) > VIQBYTESPERFRAME) && (BatchCount < VMAXSENDMSGS))
                     {
-                        printf("Send Error, DDC=%d, errno=%d, socket id = %d\n", DDC, errno, (ThreadData+DDC)->Socketid);
-                        P23PerfTelemetryCounterAdd(eP23PerfCounterDDCSendErrors, 1U);
-                        InitError = true;
+                        uint8_t* PacketPtr = SendBuffer[BatchCount];
+                        *(uint32_t*)PacketPtr = htonl(BatchSequence++);               // add sequence count
+                        memset(PacketPtr + 4, 0, 8);                                          // clear the timestamp data
+                        *(uint16_t*)(PacketPtr + 12) = htons(24);                             // bits per sample
+                        *(uint32_t*)(PacketPtr + 14) = htons(VIQSAMPLESPERFRAME);             // I/Q samples for this frame (legacy wire compatibility)
+                        memcpy(PacketPtr + 16, BatchReadPtr, VIQBYTESPERFRAME);
+                        BatchReadPtr += VIQBYTESPERFRAME;
+
+                        memset(&SendIovec[BatchCount], 0, sizeof(struct iovec));
+                        memset(&SendDatagram[BatchCount], 0, sizeof(struct mmsghdr));
+                        SendIovec[BatchCount].iov_base = PacketPtr;
+                        SendIovec[BatchCount].iov_len = VDDCPACKETSIZE;
+                        SendDatagram[BatchCount].msg_hdr.msg_iov = &SendIovec[BatchCount];
+                        SendDatagram[BatchCount].msg_hdr.msg_iovlen = 1;
+                        SendDatagram[BatchCount].msg_hdr.msg_name = &DestAddr[DDC];
+                        SendDatagram[BatchCount].msg_hdr.msg_namelen = sizeof(struct sockaddr_in);
+                        BatchCount++;
                     }
-                    else
+
+                    if(BatchCount != 0)
                     {
-                        P23PerfTelemetryCounterAdd(eP23PerfCounterDDCPackets, 1U);
-                        P23PerfTelemetryCounterAdd(eP23PerfCounterDDCBytes, VDDCPACKETSIZE);
+                        int Error;
+                        int Socketfd = GetThreadSocketFD(ThreadData + DDC);
+
+                        Error = sendmmsg(Socketfd, SendDatagram, BatchCount, 0);
+                        if (Error <= 0)
+                        {
+                            if(Error == -1)
+                                printf("Send Error, DDC=%d, errno=%d, socket id = %d\n", DDC, errno, Socketfd);
+                            else
+                                printf("sendmmsg returned %d for DDC=%d, socket id = %d\n", Error, DDC, Socketfd);
+                            P23PerfTelemetryCounterAdd(eP23PerfCounterDDCSendErrors, 1U);
+                            InitError = true;
+                        }
+                        else
+                        {
+                            P23PerfTelemetryCounterAdd(eP23PerfCounterDDCPackets, (uint64_t)Error);
+                            P23PerfTelemetryCounterAdd(eP23PerfCounterDDCBytes, (uint64_t)Error * VDDCPACKETSIZE);
+                            IQReadPtr[DDC] += (size_t)Error * VIQBYTESPERFRAME;
+                            SequenceCounter[DDC] += (uint32_t)Error;
+                            if(StartupCount > (unsigned int)Error)
+                                StartupCount -= (unsigned int)Error;
+                            else
+                                StartupCount = 0;
+                            if((unsigned int)Error < BatchCount)
+                            {
+                                P23PerfTelemetryCounterAdd(eP23PerfCounterDDCPartialSends, (uint64_t)(BatchCount - (unsigned int)Error));
+                                printf("Partial sendmmsg, DDC=%d, sent=%d of %u\n", DDC, Error, BatchCount);
+                                usleep(1000);
+                            }
+                        }
                     }
                 }
                 //
@@ -440,12 +505,24 @@ void *OutgoingDDCIQ(void *arg)
                 {
                     if (ResidueBytes != 0) 		// if there is residue to move
                     {
-                        memcpy(IQBasePtr[DDC] - ResidueBytes, IQReadPtr[DDC], ResidueBytes);
-                        IQReadPtr[DDC] = IQBasePtr[DDC] - ResidueBytes;
+                        if(ResidueBytes > VBASE)                                    // guard: subtraction would go below buffer start
+                        {
+                            printf("OutDDCIQ: IQ residue %u > VBASE, discarding\n", (unsigned)ResidueBytes);
+                            IQReadPtr[DDC] = IQBasePtr[DDC];
+                            IQHeadPtr[DDC] = IQBasePtr[DDC];
+                        }
+                        else
+                        {
+                            memcpy(IQBasePtr[DDC] - ResidueBytes, IQReadPtr[DDC], ResidueBytes);
+                            IQReadPtr[DDC] = IQBasePtr[DDC] - ResidueBytes;
+                            IQHeadPtr[DDC] = IQBasePtr[DDC];                        // ready for new data at base
+                        }
                     }
                     else
+                    {
                         IQReadPtr[DDC] = IQBasePtr[DDC];
-                    IQHeadPtr[DDC] = IQBasePtr[DDC];                            // ready for new data at base
+                        IQHeadPtr[DDC] = IQBasePtr[DDC];
+                    }
                 }
             }
             //
@@ -473,7 +550,7 @@ void *OutgoingDDCIQ(void *arg)
 //            if((StartupCount == 0) && FIFOUnderflow)
 //                 printf("RX DDC FIFO Underflowed, depth now = %d\n", Current);
             //		printf("read: depth = %d\n", Depth);
-            while(Depth < (DMATransferSize/8U))			// 8 bytes per location
+            while((Depth < (DMATransferSize/8U)) && !atomic_load(&ExitRequested))			// 8 bytes per location
             {
                 usleep(500);								// 1ms wait
                 Depth = ReadFIFOMonitorChannel(eRXDDCDMA, &FIFOOverflow, &FIFOOverThreshold, &FIFOUnderflow, &Current);				// read the FIFO Depth register
@@ -489,6 +566,8 @@ void *OutgoingDDCIQ(void *arg)
 //                if((StartupCount == 0) && FIFOUnderflow)
 //                    printf("RX DDC FIFO Underflowed, depth now = %d\n", Current);
              }
+            if(atomic_load(&ExitRequested))
+                break;
 //            printf("DDC DMA read %d bytes from destination to base\n", DMATransferSize);
             if(Depth > 4096)
                 DMATransferSize = 32768;
@@ -500,12 +579,13 @@ void *OutgoingDDCIQ(void *arg)
                 DMATransferSize = 4096;
 
             if(DMAReadFromFPGA(IQReadfile_fd, DMAHeadPtr, DMATransferSize, VADDRDDCSTREAMREAD) < 0)
-                P23PerfTelemetryCounterAdd(eP23PerfCounterDDCDMAErrors, 1U);
-            else
             {
-                P23PerfTelemetryCounterAdd(eP23PerfCounterDDCDMAReads, 1U);
-                P23PerfTelemetryCounterAdd(eP23PerfCounterDDCDMAReadBytes, DMATransferSize);
+                P23PerfTelemetryCounterAdd(eP23PerfCounterDDCDMAErrors, 1U);
+                InitError = true;
+                break;
             }
+            P23PerfTelemetryCounterAdd(eP23PerfCounterDDCDMAReads, 1U);
+            P23PerfTelemetryCounterAdd(eP23PerfCounterDDCDMAReadBytes, DMATransferSize);
             DMAHeadPtr += DMATransferSize;
             //
             // find header: may not be the 1st word
@@ -524,10 +604,10 @@ void *OutgoingDDCIQ(void *arg)
                 }
             if (HeaderFound == false)                                        // if rate flag not set
             {
-//                printf("Rate word not found when expected. rate= %08x\n", RateWord);
+                printf("DDC rate header not found while decoding DMA buffer\n");
                 P23PerfTelemetryCounterAdd(eP23PerfCounterDDCHeaderErrors, 1U);
                 InitError = true;
-                exit(1);
+                break;
             }
 
 
@@ -547,7 +627,8 @@ void *OutgoingDDCIQ(void *arg)
                 {
                     printf("header not found for rate word at addr %lx\n", (uint64_t)DMAReadPtr);
                     P23PerfTelemetryCounterAdd(eP23PerfCounterDDCHeaderErrors, 1U);
-                    exit(1);
+                    InitError = true;
+                    break;
                 }
                 else                                                                    // analyse word, then process
                 {
@@ -564,20 +645,14 @@ void *OutgoingDDCIQ(void *arg)
                     {
                         //THEN COPY DMA DATA TO I / Q BUFFERS
                         DMAReadPtr += 8;                                                // point to 1st location past rate word
-                        SrcWordPtr = (uint16_t*)DMAReadPtr;                             // read sample data in 16 bit chunks
+                        const uint8_t* SrcBytePtr = DMAReadPtr;
                         for (DDC = 0; DDC < VNUMDDC; DDC++)
                         {
                             HdrWord = DDCCounts[DDC];                                   // number of words for this DDC. reuse variable
                             if (HdrWord != 0)
                             {
-                                DestWordPtr = (uint16_t *)IQHeadPtr[DDC];
-                                for (Cntr = 0; Cntr < HdrWord; Cntr++)                  // count 64 bit words
-                                {
-                                    *DestWordPtr++ = *SrcWordPtr++;                     // move 48 bits of sample data
-                                    *DestWordPtr++ = *SrcWordPtr++;
-                                    *DestWordPtr++ = *SrcWordPtr++;
-                                    SrcWordPtr++;                                       // and skip 16 bits where theres no data
-                                }
+                                CopyPackedIQSamples(IQHeadPtr[DDC], SrcBytePtr, HdrWord);
+                                SrcBytePtr += 8 * HdrWord;
                                 IQHeadPtr[DDC] += 6 * HdrWord;                          // 6 bytes per sample
                             }
                             // read N samples; write at head ptr
@@ -589,6 +664,8 @@ void *OutgoingDDCIQ(void *arg)
                         break;                                                          // if not enough left, exit loop
                 }
             }
+            if(InitError)
+                break;
             //
             // now copy any residue to the start of the buffer (before the data copy in point)
             // unless the buffer already starts at or below the base
@@ -600,12 +677,24 @@ void *OutgoingDDCIQ(void *arg)
             {
                 if (ResidueBytes != 0) 		// if there is residue to move
                 {
-                    memcpy(DMABasePtr - ResidueBytes, DMAReadPtr, ResidueBytes);
-                    DMAReadPtr = DMABasePtr - ResidueBytes;
+                    if(ResidueBytes > VBASE)                            // guard: subtraction would go below buffer start
+                    {
+                        printf("OutDDCIQ: DMA residue %u > VBASE, discarding\n", (unsigned)ResidueBytes);
+                        DMAReadPtr = DMABasePtr;
+                        DMAHeadPtr = DMABasePtr;
+                    }
+                    else
+                    {
+                        memcpy(DMABasePtr - ResidueBytes, DMAReadPtr, ResidueBytes);
+                        DMAReadPtr = DMABasePtr - ResidueBytes;
+                        DMAHeadPtr = DMABasePtr;                        // ready for new data at base
+                    }
                 }
                 else
+                {
                     DMAReadPtr = DMABasePtr;
-                DMAHeadPtr = DMABasePtr;                            // ready for new data at base
+                    DMAHeadPtr = DMABasePtr;
+                }
             }
         }     // end of while(!InitError) loop
     }
@@ -613,9 +702,18 @@ void *OutgoingDDCIQ(void *arg)
 //
 // tidy shutdown of the thread
 //
+cleanup:
+    if(InitError)
+        atomic_store(&ThreadError, true);
     printf("shutting down DDC outgoing thread\n");
-    close(ThreadData->Socketid); 
-    ThreadData->Active = false;                   // signal closed
+    if(IQReadfile_fd >= 0)
+        close(IQReadfile_fd);
+    for (DDC = 0; DDC < VNUMDDC; DDC++)
+    {
+        if(!ThreadSocketIsSharedAlias(ThreadData + DDC))
+            close(GetThreadSocketFD(ThreadData + DDC));
+        atomic_store(&(ThreadData + DDC)->Active, false);     // signal closed
+    }
     FreeDynamicMemory();
     return NULL;
 }

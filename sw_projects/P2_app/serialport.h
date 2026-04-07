@@ -18,6 +18,7 @@
 #define __SERIALPORT_C
 
 #include <stdbool.h>
+#include <stdatomic.h>
 #include <termios.h>
 
 
@@ -35,7 +36,7 @@ typedef struct
 //
 // define the potential types of serial device
 //
-typedef enum 
+typedef enum
 {
   eG2V2Panel,
   eG2V1PanelAdapter,
@@ -47,7 +48,7 @@ typedef enum
 //
 // send a string to the serial port
 //
-void SendStringToSerial(int Device, char* Message);
+void SendStringToSerial(int Device, const char* Message);
 
 
 //
@@ -56,11 +57,11 @@ void SendStringToSerial(int Device, char* Message);
 typedef struct
 {
   char PathName[120];               // device path name
-  int DeviceHandle;                 // file device, returned from OS
+  atomic_int DeviceHandle;          // file device, returned from OS
   ESerialDeviceType Device;         // expected device type
-  bool DeviceActive;                // true if device is active
-  bool RequestID;                   // true if thread should request device ID using ZZZS;
-  bool IsOpen;                      // true if file device is open
+  atomic_bool DeviceActive;         // true if device is active
+  atomic_bool RequestID;            // true if thread should request device ID using ZZZS;
+  atomic_bool IsOpen;               // true if file device is open
   unsigned int Baud;
 } TSerialThreadData;
 

@@ -215,8 +215,9 @@ Update behavior:
 - The info action runs `g2-version-info.sh` via `/run` and prints:
   - deployment slot and live app identity/version from `/p23_perf`
   - current deployed app binary path
-  - the current `p2app.service` startup banner lines for FPGA product/firmware/build/date-code info
-  - the startup die-temperature line captured by the service log
+  - the current `p2app.service` startup banner lines for FPGA product/firmware/build/date-code info when that start emitted them
+  - otherwise, the most recent retained banner block if one still exists in the journal
+  - the startup die-temperature line only when it was captured in those banner lines
 - When `Run Update G2` pulls new commits, `update-G2.py` now emits a marker if any changed path is under `update_manager/`.
 - If that marker is present and `Update Web Manager Too` is checked, the page automatically launches `update-saturn-go.sh --skip-git --verbose` after the G2 run finishes.
 - The follow-up Saturn Go self-update remains a separate final step, so the active G2 run is not interrupted mid-update; expect the page to disconnect briefly when `saturn-go.service` restarts near the end of that follow-up step.
@@ -253,38 +254,37 @@ Operational notes:
 - The web terminal may disconnect when `saturn-go.service` restarts; reload after ~10-20 seconds.
 - Some successful lines may still be prefixed `ERR:` in the terminal because `cargo` and `systemd-run` emit informational output on stderr.
 
-### P2/P3 App Test Lab (Hidden / Experimental)
+### p2app Service Lab (Hidden / Experimental)
 
 - Open `/saturn/p23test` directly (it is intentionally not linked in navigation).
-- This page is intended for testing `P2_app` vs `P3_app` builds/deploys and service switching.
+- This page is intended for testing the converged `p2app` build/deploy/restart path and override behavior.
 - It runs `p23-app-manager.sh` via `/run` and resumes terminal output using `/run_log`.
 
 Capabilities:
 
 - `Status` (script-based status summary)
-- `Build P2` / `Build P3`
-- `Deploy + Switch P2` / `Deploy + Switch P3`
-- `Switch To P2` / `Switch To P3` (uses previously deployed binaries)
-- `Revert To Unit Default` (removes Saturn override and restores unit `ExecStart`)
-- `Emergency Revert Now` button (forces a real revert + restart even if `Dry run` / `No restart` options are selected)
+- `Build p2app`
+- `Build + Deploy p2app`
+- `Restart With Current Override`
+- `Restore Unit Default` (removes Saturn override and restores unit `ExecStart`)
 - Separate status panel backed by `GET /p23_status`
 - Separate workload/performance dashboard backed by `GET /p23_perf`
 - `Capture Snapshot` button for exporting a point-in-time JSON bundle of the live `/p23_perf` sample, derived metrics, current baseline summary, and effective `p2app.service` runtime tuning state seen by the lab
 
-Switching implementation details:
+Implementation details:
 
-- Deployed binaries are staged under `/opt/saturn-go/p23-apps/`
-- Active selection is `/opt/saturn-go/p23-apps/current` symlink
+- Deployed binary is staged as `/opt/saturn-go/p23-apps/p2app`
+- Active launch path is `/opt/saturn-go/p23-apps/current` symlink
 - `p2app.service` is redirected via systemd drop-in:
   - `/etc/systemd/system/p2app.service.d/10-saturn-p23-switch.conf`
 - Revert action removes that drop-in and reloads systemd
-- Switch/deploy overrides can include:
+- Restart/deploy overrides can include:
   - startup profile (`panel`, `panel-debug`, `headless`) -> mapped service args
   - `Environment=SATURN_FRONT_PANEL_MODE=...` (`auto`, `g2`, `g2v2`, `prefer-g2`, `prefer-g2v2`, `off`)
 - `GET /p23_status` parses the generated override comment metadata (`# saturn-p23 mode=... panel=...`) for display
 - `GET /p23_status` also reports the effective `p2app.service` runtime environment subset from `systemctl show -p Environment`, including optional `SATURN_P3_RT_AUDIO_*` settings for P3 audio-thread tuning
 - `GET /p23_perf` overlays host metrics with workload tags and live app telemetry exported from `/dev/shm/saturn_p23_perf_stats.json`
-- The dashboard baseline resets automatically when the active workload identity changes (PID, selected app/mode, or routing shape)
+- The dashboard baseline resets automatically when the active workload identity changes (PID, binary-family/mode, or routing shape)
 - Snapshot `Copy JSON` falls back to a legacy in-page copy path when the browser Clipboard API is unavailable
 - The dashboard is organized around:
   - workload identity and app shape
@@ -295,11 +295,11 @@ Switching implementation details:
 
 Safety/usage notes:
 
-- Use `Dry run` first for deploy/switch/revert actions
-- Non-dry-run switch/deploy/revert actions require browser confirmation
+- Use `Dry run` first for deploy/restart/revert actions
+- Non-dry-run deploy/restart/revert actions require browser confirmation
 - Web mode requires `sudo -n` permission for install/symlink/systemctl steps
 - `No restart` updates symlink/override without restarting `p2app.service`
-- If a switch leaves the local panel UI unusable but networking still works (e.g. Thetis continues to connect), use `/saturn/p23test` from another device and click `Emergency Revert Now`
+- If a restart or override change leaves the local panel UI unusable but networking still works (e.g. Thetis continues to connect), use `/saturn/p23test` from another device and run `Restore Unit Default`
 - Reasonable snapshot capture times:
   - `2 minutes` for post-change smoke checks
   - `10-15 minutes` for steady-state baseline comparisons
@@ -463,15 +463,15 @@ sudo systemctl status saturn-go.service
 sudo journalctl -u saturn-go.service -n 200 --no-pager
 ```
 
-### P2/P3 Test Lab Errors
+### p2app Service Lab Errors
 
 Common causes:
 
-- `P3_app` or `P2_app` source tree missing under active repo root
+- `P2_app` source tree missing under active repo root
 - build failure in `make`
-- `sudo -n` denied for deploy/switch/revert (`install`, `ln`, `systemctl`)
+- `sudo -n` denied for deploy/restart/revert (`install`, `ln`, `systemctl`)
 - stale or unexpected systemd override contents from manual edits
-- wrong front-panel detection mode after switching (try `Front panel mode = g2` or `g2v2` instead of `auto`)
+- wrong front-panel detection mode after restart (try `Front panel mode = g2` or `g2v2` instead of `auto`)
 
 Check:
 

@@ -2,7 +2,7 @@
 //
 // Saturn project: Artix7 FPGA + Raspberry Pi4 Compute Module
 // PCI Express interface from linux on Raspberry pi
-// this application uses C code to emulate HPSDR protocol 2 
+// this application uses C code to emulate HPSDR protocol 2
 //
 // copyright Laurence Barker November 2021
 // licenced under GNU GPL3
@@ -19,9 +19,10 @@
 #include "../common/saturntypes.h"
 #include <stdbool.h>
 #include <stdint.h>
+#include <stdatomic.h>
 
 
-extern bool GanymedeActive;
+extern atomic_bool GanymedeActive;
 
 
 //

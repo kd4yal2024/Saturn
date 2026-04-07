@@ -20,6 +20,7 @@
 
 #include <stdint.h>
 #include <netinet/in.h>
+#include <stdatomic.h>
 #include "../common/saturntypes.h"
 #include <semaphore.h>
 
@@ -59,29 +60,31 @@
 struct ThreadSocketData
 {
   uint32_t DDCid;                               // only relevant to DDC threads
-  int Socketid;                                 // socket to access internet
-  uint16_t Portid;                              // port to access
+  atomic_int Socketid;                          // socket to access internet
+  atomic_ushort Portid;                         // port to access
   char *Nameid;                                 // name (for error msg etc)
-  bool Active;                                  // true if thread is active
+  atomic_bool Active;                           // true if thread is active
   struct sockaddr_in addr_cmddata;
-  uint32_t Cmdid;                               // command from app to thread - bits set for each command
+  atomic_uint_fast32_t Cmdid;                   // command from app to thread - bits set for each command
   uint32_t DDCSampleRate;                       // DDC sample rate
 };
 
 
 extern struct ThreadSocketData SocketData[];        // data for each thread
 extern struct sockaddr_in reply_addr;               // destination address for outgoing data
-extern bool IsTXMode;                               // true if in TX
-extern bool SDRActive;                              // true if this SDR is running at the moment
-extern bool ReplyAddressSet;                        // true when reply address has been set
-extern bool StartBitReceived;                       // true when "run" bit has been set
-extern bool NewMessageReceived;                     // set whenever a message is received
-extern bool ThreadError;                            // set true if a thread reports an error
-extern bool ExitRequested;                          // true when app-wide shutdown has been requested
+extern pthread_mutex_t g_reply_addr_mutex;          // protect reply_addr updates and snapshots
+extern atomic_bool IsTXMode;                        // true if in TX
+extern atomic_bool SDRActive;                       // true if this SDR is running at the moment
+extern atomic_bool ReplyAddressSet;                 // true when reply address has been set
+extern atomic_bool StartBitReceived;                // true when "run" bit has been set
+extern atomic_bool NewMessageReceived;              // set whenever a message is received
+extern atomic_bool ThreadError;                     // set true if a thread reports an error
+extern atomic_bool ExitRequested;                   // true when app-wide shutdown has been requested
 extern bool UseDebug;                               // true if debugging enabled
 extern uint8_t GlobalFIFOOverflows;                 // FIFO overflow words
 extern pthread_mutex_t g_fifo_overflow_mutex;       // protect GlobalFIFOOverflows from race conditions
 extern sem_t MicWBDMAMutex;                         // protect one DMA read channel shared by mic and WB read
+extern atomic_int DMAReadfile_fd;                   // shared DMA read FD used by mic and wideband paths
 
 
 #define VBITCHANGEPORT 1                        // if set, thread must close its socket and open a new one on different port
@@ -110,9 +113,41 @@ void SetPort(uint32_t ThreadNum, uint16_t PortNum);
 int MakeSocket(struct ThreadSocketData* Ptr, int DDCid);
 
 //
-// function ot get program version
+// helper to get current socket FD for a thread, resolving shared-socket aliases
+//
+int GetThreadSocketFD(const struct ThreadSocketData* Ptr);
+
+//
+// helper to test if a thread uses a shared socket owned by another thread
+//
+bool ThreadSocketIsSharedAlias(const struct ThreadSocketData* Ptr);
+
+//
+// helper to mirror owner socket FD to any alias threads that share it
+//
+void SyncSocketAliasesForOwner(const struct ThreadSocketData* OwnerPtr);
+
+//
+// optionally apply configured realtime policy / CPU affinity to critical
+// inbound audio threads (speaker + DUC) when SATURN_P3_RT_AUDIO_* env vars are set
+//
+void ApplyCriticalAudioThreadRuntime(const char* ThreadName);
+
+//
+// startup state trace helpers (used to log one-time transition milestones)
+//
+void MarkStartupRunBitSeen(void);
+void MarkStartupHandshakeComplete(void);
+void ResetStartupTraceFlags(void);
+
+//
+// function to get program version
 //
 uint32_t GetP2appVersion(void);
+
+// Parsed from HP-to-SDR bytes 1396:1397. Zero remains an inert default.
+void SetClientControlWord(uint16_t Word);
+uint16_t GetClientControlWord(void);
 
 
 

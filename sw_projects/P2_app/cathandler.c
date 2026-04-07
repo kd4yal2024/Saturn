@@ -23,6 +23,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <fcntl.h>
+#include <inttypes.h>
 #include <sys/time.h>
 #include <sys/ioctl.h>
 #include <sys/socket.h>
@@ -41,25 +42,32 @@
 
 
 
-bool CATPortAssigned = false;                // true if CAT set up and active
-int CATPort = 0;
-bool ThreadActive = false;                  // true while CAT thread running
-bool CATKeepaliveActive = false;            // true while keepalive thread running
-bool SignalThreadEnd = false;               // asserted to terminate thread
+atomic_bool CATPortAssigned = false;         // true if CAT set up and active
+atomic_int CATPort = 0;
+atomic_bool ThreadActive = false;           // true while CAT thread running
+atomic_bool CATKeepaliveActive = false;     // true while keepalive thread running
+atomic_bool SignalThreadEnd = false;        // asserted to terminate thread
+static atomic_bool CATThreadRunning = false;          // true while CAT worker thread exists
+static atomic_bool CATKeepaliveThreadRunning = false; // true while CAT keepalive thread exists
+static atomic_bool CATThreadJoinPending = false;      // true once CAT thread is created and not yet joined
+static atomic_bool CATKeepaliveJoinPending = false;   // true once keepalive thread is created and not yet joined
 pthread_t CATThread;                        // thread reads/writes CAT commands
 pthread_t CATKeepaliveThread;               // thread requests activity every 15s
 bool CATDebugPrint = false;                 // true if to print generated CAT messages
 
-
-
 #define VNUMOPSTRINGS 16                    // size of output queue
-#define VOPSTRSIZE 100                      // size of each string in queue
+#define VCATCMDPREFIXSIZE 4                 // "ZZnn"
+#define VCATCMDTERMINATORSIZE 2             // ';' + NUL
+#define VCATMAXPAYLOADSIZE 63               // allow longest parsed string payload
+#define VOPSTRSIZE (VCATCMDPREFIXSIZE + VCATMAXPAYLOADSIZE + VCATCMDTERMINATORSIZE)
+#define VCATPARSESTRINGMAX 63               // max parsed CAT parameter bytes
 //
 // CAT output buffer
 //
 char OutputStrings[VNUMOPSTRINGS] [VOPSTRSIZE];
 int CATWritePtr = 0;                        // pointer to next string to write
 int CATReadPtr = 0;                         // pointer to next string to read
+static pthread_mutex_t CATOPBufferMutex = PTHREAD_MUTEX_INITIALIZER;
 
 
 extern SCATCommands GCATCommands[];
@@ -181,8 +189,15 @@ void InitCATHandler()
     MatchWord = Make32BitStr(GCATCommands[CmdCntr].CATString);
     GCATMatch[CmdCntr] = MatchWord;
   }
-  CATPort = 0;                        // set port not assigned
-  CATPortAssigned = false;
+  atomic_store(&CATPort, 0);                 // set port not assigned
+  atomic_store(&CATPortAssigned, false);
+  atomic_store(&ThreadActive, false);
+  atomic_store(&CATKeepaliveActive, false);
+  atomic_store(&SignalThreadEnd, false);
+  atomic_store(&CATThreadRunning, false);
+  atomic_store(&CATKeepaliveThreadRunning, false);
+  atomic_store(&CATThreadJoinPending, false);
+  atomic_store(&CATKeepaliveJoinPending, false);
 }
 
 
@@ -218,16 +233,17 @@ void ParseCATCmd(char* Buffer,  int Source)
   int CmdCntr;                              // counts CAT commands
   SCATCommands* StructPtr;                  // pointer to structure with CAT data
   ERXParamType ParsedType;                  // type of parameter actually found
+  int ParamLength;
   int ByteCntr;
   char ch;
   bool ValidResult = true;                  // true if we get a valid parse result
-  bool ParsedBool;                          // if a bool expected, it goes here
-  long ParsedInt;                           // if int expected, it goes here
-  bool IsRequestOnly = false;               // true if we get a CAT command with no parameter eg ZZZA;
-  char ParsedString[100];                   // if string expected, it goes here
+  bool ParsedBool = false;                    // if a bool expected, it goes here
+  long ParsedInt = 0;                         // if int expected, it goes here
+  char ParsedString[VCATPARSESTRINGMAX + 1];  // if string expected, it goes here
 
-  void (*HandlerPtr)(int SourceDevice, ERXParamType HasParam, bool BoolParam, int NumParam, char* StringParam, bool IsRequest); 
+  void (*HandlerPtr)(int SourceDevice, ERXParamType HasParam, bool BoolParam, int NumParam, char* StringParam);
   
+  ParsedString[0] = 0;
   CharCnt = strlen(Buffer) - 1;
 //
 // CharCnt holds the input string length excluding the terminating null and excluding the semicolon
@@ -258,7 +274,7 @@ void ParseCATCmd(char* Buffer,  int Source)
 // any parameter starts at position 4 and ends at (charcnt-1)
 //
       if (CharCnt == 4)
-        IsRequestOnly = true;
+        ParsedType=eNone;
       else
       {
 //
@@ -267,32 +283,48 @@ void ParseCATCmd(char* Buffer,  int Source)
 // then if required type is bool, check the value
 //        
         ParsedType = eStr;
-        for(ByteCntr = 0; ByteCntr < (CharCnt-4); ByteCntr++)
-          ParsedString[ByteCntr] = Buffer[ByteCntr+4];
-        ParsedString[CharCnt - 4] = 0;
-// now see if we want a non string type
-// for an integer - use atoi, but see if 1st character is numeric, + or -
-        if (StructPtr->RXType != eStr)
+        ParamLength = CharCnt - 4;
+        if(ParamLength > VCATPARSESTRINGMAX)
         {
-          ch=ParsedString[0];
-          if (isNumeric(ch))
+          ParsedType = eNone;
+          ValidResult = false;
+        }
+        else
+        {
+          for(ByteCntr = 0; ByteCntr < ParamLength; ByteCntr++)
+            ParsedString[ByteCntr] = Buffer[ByteCntr+4];
+          ParsedString[ParamLength] = 0;
+// now see if we want a non string type
+// for an integer - use strtol with error detection instead of atoi
+          if (StructPtr->RXType != eStr)
           {
-            ParsedType = eNum;
-            ParsedInt = atoi(ParsedString);
-// finally see if we need a bool
-            if (StructPtr->RXType == eBool)
+            ch=ParsedString[0];
+            if (isNumeric(ch))
             {
-              ParsedType = eBool;
-              if (ParsedInt == 1)
-                ParsedBool = true;
-              else
-                ParsedBool = false;
+              char *ParsedIntEnd;
+              ParsedType = eNum;
+              errno = 0;
+              ParsedInt = strtol(ParsedString, &ParsedIntEnd, 10);
+              if(ParsedIntEnd == ParsedString || *ParsedIntEnd != '\0' || errno == ERANGE)
+              {
+                ParsedType = eNone;
+                ValidResult = false;
+              }
+// finally see if we need a bool (only when the integer parse succeeded)
+              if (ValidResult && StructPtr->RXType == eBool)
+              {
+                ParsedType = eBool;
+                if (ParsedInt == 1)
+                  ParsedBool = true;
+                else
+                  ParsedBool = false;
+              }
             }
-          }
-          else
-          {
-            ParsedType = eNone;
-            ValidResult = false;            
+            else
+            {
+              ParsedType = eNone;
+              ValidResult = false;
+            }
           }
         }
       }
@@ -300,7 +332,7 @@ void ParseCATCmd(char* Buffer,  int Source)
   }
   if (ValidResult == true)
   {
-// debug: print the match found
+    // debug: print the match found
 //    printf("match= %s ; parameter=", GCATCommands[MatchedCAT].CATString);
 //    switch(ParsedType)
 //    {
@@ -323,18 +355,19 @@ void ParseCATCmd(char* Buffer,  int Source)
 //    }
     HandlerPtr = GCATCommands[MatchedCAT].handler;
     if(HandlerPtr != NULL)
-      (*HandlerPtr)(Source, ParsedType, ParsedBool, ParsedInt, ParsedString, IsRequestOnly);
+      (*HandlerPtr)(Source, ParsedType, ParsedBool, ParsedInt, ParsedString);
   }
   else
   {
-    printf("Invalid CAT command received: %s\n", Buffer);
+//    Serial.print("Parse Error - cmd= ");
+//    Serial.println(GCATInputBuffer);
   }
 }
 
 //
 // get CAT o/p buffer Used
 //
-int GetCATOPBufferUsed(void)
+static int GetCATOPBufferUsedUnlocked(void)
 {
   int Used;                           // number of occupied locations
   Used = CATWritePtr - CATReadPtr;
@@ -343,24 +376,44 @@ int GetCATOPBufferUsed(void)
   return Used;
 }
 
+int GetCATOPBufferUsed(void)
+{
+  int Used;                           // number of occupied locations
+  pthread_mutex_lock(&CATOPBufferMutex);
+  Used = GetCATOPBufferUsedUnlocked();
+  pthread_mutex_unlock(&CATOPBufferMutex);
+  return Used;
+}
+
 
 //
 // send a CAT command
 // only attempt send if an active CAT port exists
 //
-void SendCATMessage(char* Msg)
+void SendCATMessage(const char* Msg)
 {
-  if(SDRActive == true)
+  bool Enqueued = false;
+  size_t MsgLength;
+
+  if((Msg == NULL) || (atomic_load(&SDRActive) != true) || (atomic_load(&CATPortAssigned) != true))
+    return;
+
+  MsgLength = strlen(Msg);
+  if(MsgLength >= VOPSTRSIZE)
+    return;
+
+  pthread_mutex_lock(&CATOPBufferMutex);
+  if(GetCATOPBufferUsedUnlocked() < (VNUMOPSTRINGS - 1))
   {
-    if((GetCATOPBufferUsed() <= (VNUMOPSTRINGS - 1))&&(CATPortAssigned == true))
-    {
-      strcpy(OutputStrings[CATWritePtr++], Msg);
-      if(CATWritePtr >= VNUMOPSTRINGS)
-        CATWritePtr = 0;
-      if (CATDebugPrint)
-        printf("Sent CAT msg %s\n", Msg);                       // debug
-    }
+    strcpy(OutputStrings[CATWritePtr++], Msg);
+    if(CATWritePtr >= VNUMOPSTRINGS)
+      CATWritePtr = 0;
+    Enqueued = true;
   }
+  pthread_mutex_unlock(&CATOPBufferMutex);
+
+  if(CATDebugPrint && Enqueued)
+    printf("Sent CAT msg %s\n", Msg);                       // debug
 }
 
 
@@ -390,10 +443,12 @@ void MakeCATMessageNoParam(int Device, ECATCommands Cmd)
 {
   char Output[VOPSTRSIZE];                                // TX CAT msg buffer
   SCATCommands* StructPtr;
+  int Written;
 
   StructPtr = GCATCommands + (int)Cmd;
-  strcpy(Output, StructPtr->CATString);
-  strcat(Output, ";");
+  Written = snprintf(Output, sizeof(Output), "%s;", StructPtr->CATString);
+  if((Written < 0) || ((size_t)Written >= sizeof(Output)))
+    return;
   if(Device < 0)
     SendCATMessage(Output);
   else
@@ -414,9 +469,13 @@ void MakeCATMessageNumeric(int Device, ECATCommands Cmd, long Param)
   unsigned long Digit;             // decimal digit found
   char ASCIIDigit;
   SCATCommands* StructPtr;
+  size_t OutputLen;
 
   StructPtr = GCATCommands + (int)Cmd;
-  strcpy(Output, StructPtr->CATString);
+  Output[0] = '\0';
+  OutputLen = (size_t)snprintf(Output, sizeof(Output), "%s", StructPtr->CATString);
+  if(OutputLen >= sizeof(Output))
+    return;
   CharCount = StructPtr->NumParams;
 //
 // clip the parameter to the allowed numeric range
@@ -432,16 +491,27 @@ void MakeCATMessageNumeric(int Device, ECATCommands Cmd, long Param)
   {
     if (Param < 0)
     {
+      if((OutputLen + 1U) >= sizeof(Output))
+        return;
       strcat(Output, "-");
+      OutputLen += 1U;
       Param = -Param;                   // make positive
     }
     else
+    {
+      if((OutputLen + 1U) >= sizeof(Output))
+        return;
       strcat(Output, "+");
+      OutputLen += 1U;
+    }
     CharCount--;
   }
   else if (Param < 0)                   // not always signed, but neg so it needs a sign
   {
+      if((OutputLen + 1U) >= sizeof(Output))
+        return;
       strcat(Output, "-");
+      OutputLen += 1U;
       Param = -Param;      
       CharCount--;                      // make positive
   }
@@ -454,12 +524,18 @@ void MakeCATMessageNumeric(int Device, ECATCommands Cmd, long Param)
   {
     Digit = Param / Divisor;                  // get the digit for this decimal position
     ASCIIDigit = (char)(Digit + '0');         // ASCII version - and output it
+    if((OutputLen + 1U) >= sizeof(Output))
+      return;
     Append(Output, ASCIIDigit);
+    OutputLen += 1U;
     Param = Param - (Digit * Divisor);        // get remainder
     Divisor = Divisor / 10;                   // set for next digit
   }
   ASCIIDigit = (char)(Param + '0');           // ASCII version of units digit
+  if((OutputLen + 2U) > sizeof(Output))
+    return;
   Append(Output, ASCIIDigit);
+  OutputLen += 1U;
   strcat(Output, ";");
   if(Device < 0)
     SendCATMessage(Output);
@@ -476,13 +552,12 @@ void MakeCATMessageBool(int Device, ECATCommands Cmd, bool Param)
 {
   char Output[VOPSTRSIZE];                                // TX CAT msg buffer
   SCATCommands* StructPtr;
+  int Written;
 
   StructPtr = GCATCommands + (byte)Cmd;
-  strcpy(Output, StructPtr->CATString);               // copy the base message
-  if (Param)
-    strcat(Output, "1;");
-  else
-    strcat(Output, "0;");
+  Written = snprintf(Output, sizeof(Output), "%s%s", StructPtr->CATString, Param ? "1;" : "0;");
+  if((Written < 0) || ((size_t)Written >= sizeof(Output)))
+    return;
   if(Device < 0)
     SendCATMessage(Output);
   else
@@ -496,31 +571,28 @@ void MakeCATMessageBool(int Device, ECATCommands Cmd, bool Param)
 // the string is truncated if too long, or padded with spaces if too short
 // Device = -1 for CAT port, else a serial device with this file ID
 //
-void MakeCATMessageString(int Device, ECATCommands Cmd, char* Param) 
+void MakeCATMessageString(int Device, ECATCommands Cmd, const char* Param)
 {
   char Output[VOPSTRSIZE];                                // TX CAT msg buffer
-  byte ParamLength, ReqdLength;                        // string lengths
+  size_t ParamLength, ReqdLength;                      // string lengths
+  size_t CopyLength;
+  int Written;
   SCATCommands* StructPtr;
-  byte Cntr;
 
   StructPtr = GCATCommands + (byte)Cmd;
+  if(Param == NULL)
+    return;
   ParamLength = strlen(Param);                        // length of input string
   ReqdLength = StructPtr->NumParams;                  // required length of parameter "nnnn" string not including semicolon
-  
-  strcpy(Output, StructPtr->CATString);               // copy the base message
-  if(ParamLength > ReqdLength)                        // if string too long, truncate it
-    Param[ReqdLength]=0; 
-  strcat(Output, Param);                              // append the string
-//
-// now see if we need to pad
-//
-  if (ParamLength < ReqdLength)
-  for (Cntr=0; Cntr < (ReqdLength-ParamLength); Cntr++)
-    strcat(Output, " ");
-//
-// finally terminate and send  
-//
-  strcat(Output, ";");                                // add the terminating semicolon
+
+  CopyLength = (ParamLength < ReqdLength) ? ParamLength : ReqdLength;
+  Written = snprintf(Output, sizeof(Output), "%s%-*.*s;",
+                     StructPtr->CATString,
+                     (int)ReqdLength,
+                     (int)CopyLength,
+                     Param);
+  if((Written < 0) || ((size_t)Written >= sizeof(Output)))
+    return;
   if(Device < 0)
     SendCATMessage(Output);
   else
@@ -537,6 +609,7 @@ void* CATKeepaliveThreadFunction(__attribute__((unused)) void *arg)
 { 
     int Cntr = 0;
 
+    atomic_store(&CATKeepaliveThreadRunning, true);
     printf("spinning up CAT keepalive thread, pid=%ld\n", syscall(SYS_gettid));
 
 //
@@ -544,12 +617,18 @@ void* CATKeepaliveThreadFunction(__attribute__((unused)) void *arg)
 // (there seems to be a race condition between general packet to SDR and high priority data packet
 // and we can get here without it set)
 //
-    while((Cntr++ < 10 && !SDRActive))
+    while((Cntr++ < 10) && !atomic_load(&SDRActive) && !atomic_load(&SignalThreadEnd) && (atomic_load(&CATPort) != 0))
         sleep(1);
 
+    if(atomic_load(&SignalThreadEnd) || (atomic_load(&CATPort) == 0))
+    {
+        atomic_store(&CATKeepaliveThreadRunning, false);
+        return NULL;
+    }
+
     Cntr = 0;
-    CATKeepaliveActive = true;
-    while(SDRActive && !SignalThreadEnd)
+    atomic_store(&CATKeepaliveActive, true);
+    while(atomic_load(&SDRActive) && !atomic_load(&SignalThreadEnd) && (atomic_load(&CATPort) != 0))
     {
         if(Cntr++ == 1500)
         {
@@ -559,7 +638,8 @@ void* CATKeepaliveThreadFunction(__attribute__((unused)) void *arg)
         usleep(10000);                                                  // 10ms * 1500 = 15 sec delay between keepalives
     }
     printf("closing CAT keepalive thread\n");
-    CATKeepaliveActive = false;
+    atomic_store(&CATKeepaliveActive, false);
+    atomic_store(&CATKeepaliveThreadRunning, false);
     return NULL;
 }
 
@@ -573,50 +653,60 @@ void* CATKeepaliveThreadFunction(__attribute__((unused)) void *arg)
 //
 void* CATHandlerThread(__attribute__((unused)) void *arg)
 {
-    bool ThreadError = false;
+    bool LocalThreadError = false;
     int CATSocketid;                                 // socket to access internet
     struct sockaddr_in addr_cat;
     int ActiveCATPort;
     int ReadResult;
     int Cntr = 0;
-    char ReadBuffer[1024] = {0};
+    char ReadBuffer[1024];
+    char RXAssembly[2048];
+    char StringToParse[1024];
+    char* SemicolonPosition;
+    size_t RXAssemblyLength = 0;
+    size_t CommandLength;
+    struct timespec RXAssemblyStartTime = {0, 0};   // when the first byte of the current incomplete frame arrived
+#define VCATASSEMBLY_TIMEOUT_S 5                    // drop incomplete CAT frame after this many seconds
+    size_t RemainingLength;
     char SendBuffer[1024] = {0};
     unsigned int TXMessageLength;
     int SendError = 0;
-    char* SemicolonPosition = 0;
-    unsigned int ReadBufferLength;
-    char StringToParse[1024];
-    bool CharsRemaining;
-    unsigned int CatStringLength;
-    
 
 //    bool DebugMessageSent = false;
+    atomic_store(&CATThreadRunning, true);
+    memset(RXAssembly, 0, sizeof(RXAssembly));
 
 //
 // wait up to 10s for SDR active to become set
 // (there seems to be a race condition between general packet to SDR and high priority data packet
 // and we can get here without it set)
 //
-    while((Cntr++ < 10 && !SDRActive))
+    while((Cntr++ < 10) && !atomic_load(&SDRActive) && !atomic_load(&SignalThreadEnd) && (atomic_load(&CATPort) != 0))
       sleep(1);
 
     //
     // loop, creating then using socket
     // written this way so that if the port changes, we can exit the processing loop & re-connect
     //
-    while(!ThreadError && SDRActive && !SignalThreadEnd)
+    while(!LocalThreadError && atomic_load(&SDRActive) && !atomic_load(&SignalThreadEnd))
     {
       //
       // create socket for TCP/IP connection
       //
-      printf("Creating CAT socket on port %d, pid=%ld\n", CATPort, syscall(SYS_gettid));
+      ActiveCATPort = atomic_load(&CATPort);
+      if(ActiveCATPort == 0)
+        break;
+      printf("Creating CAT socket on port %d, pid=%ld\n", ActiveCATPort, syscall(SYS_gettid));
       struct timeval ReadTimeout;                                       // read timeout
       int yes = 1;
       if((CATSocketid = socket(AF_INET, SOCK_STREAM, 0)) < 0)
       {
           perror("CAT socket fail");
+          atomic_store(&CATPort, 0);
+          atomic_store(&CATPortAssigned, false);
+          atomic_store(&ThreadActive, false);
+          atomic_store(&CATThreadRunning, false);
           return NULL;
-          CATPort = 0;
       }
 
     //
@@ -628,22 +718,27 @@ void* CATHandlerThread(__attribute__((unused)) void *arg)
       setsockopt(CATSocketid, SOL_SOCKET, SO_RCVTIMEO, (void *)&ReadTimeout , sizeof(ReadTimeout));
 
     //
-    // connect to destination port
-    //
+      // connect to destination port
+      //
+      pthread_mutex_lock(&g_reply_addr_mutex);
       addr_cat.sin_addr.s_addr = reply_addr.sin_addr.s_addr;
+      pthread_mutex_unlock(&g_reply_addr_mutex);
       addr_cat.sin_family = AF_INET;
-      addr_cat.sin_port = htons(CATPort);
-      ActiveCATPort = CATPort;
-      printf("Connecting CAT socket to port %d\n", CATPort);
+      addr_cat.sin_port = htons((uint16_t)ActiveCATPort);
+      printf("Connecting CAT socket to port %d\n", ActiveCATPort);
 
       if(connect(CATSocketid, (struct sockaddr *)&addr_cat, sizeof(struct sockaddr_in)) < 0)
       {
           perror("CAT connect");
-          ActiveCATPort = 0;
+          close(CATSocketid);
+          atomic_store(&CATPort, 0);
+          atomic_store(&CATPortAssigned, false);
+          atomic_store(&ThreadActive, false);
+          atomic_store(&CATThreadRunning, false);
           return NULL;
       }
-      ThreadActive = true;
-      CATPortAssigned = true;
+      atomic_store(&ThreadActive, true);
+      atomic_store(&CATPortAssigned, true);
 
       printf("connected to CAT\n");
 
@@ -651,63 +746,105 @@ void* CATHandlerThread(__attribute__((unused)) void *arg)
       //
       // now loop; process read, write events
       // exit loop if port number changes
-      // a TCP/IP packet can contain one or several CAT commands, so need to break them up!
       //
-      while(!ThreadError && SDRActive && !SignalThreadEnd && (ActiveCATPort == CATPort))    // thread main loop
+      while(!LocalThreadError && atomic_load(&SDRActive) && !atomic_load(&SignalThreadEnd) && (ActiveCATPort == atomic_load(&CATPort)))    // thread main loop
       {
   //        ReadResult = read(CATSocketid, ReadBuffer, 1023);
-          ReadResult = recv(CATSocketid, ReadBuffer, 1023, 0);
+          ReadResult = recv(CATSocketid, ReadBuffer, sizeof(ReadBuffer), 0);
           if(ReadResult > 0)
           {
-              CharsRemaining = true;
-              //
-              // break into indivisual CAT commands, and process them
-              //
-              while(CharsRemaining)
+              // Age-out stale incomplete frame before appending new data.
+              if(RXAssemblyLength > 0)
               {
-                ReadBufferLength = strlen(ReadBuffer);
-                if(ReadBufferLength < 3)
-                  CharsRemaining = false;                               // minimum CAT cat command length
-                SemicolonPosition = strchr(ReadBuffer, ';');
-                if(SemicolonPosition == NULL)                           // if no semicolon we don't have a CAT command
-                  break;
-                CatStringLength = (SemicolonPosition - ReadBuffer) + 1;
-                strncpy(StringToParse, ReadBuffer, CatStringLength);
-                StringToParse[CatStringLength] = 0;                     // null terminate
-                ParseCATCmd(StringToParse, DESTTCPCATPORT);
-                //
-                // now remove that CAT command from the buffer, and see if there is anything left to process
-                //
-                if(ReadBufferLength>CatStringLength)
-                {
-                    strncpy(ReadBuffer, ReadBuffer+CatStringLength, (ReadBufferLength-CatStringLength));
-                    ReadBuffer[ReadBufferLength-CatStringLength] = 0;         // null terminate
-                }
-                else 
-                  CharsRemaining = false;
+                  struct timespec Now;
+                  clock_gettime(CLOCK_MONOTONIC, &Now);
+                  if((Now.tv_sec - RXAssemblyStartTime.tv_sec) >= VCATASSEMBLY_TIMEOUT_S)
+                  {
+                      printf("CAT assembly timeout: dropping %zu stale bytes\n", RXAssemblyLength);
+                      RXAssemblyLength = 0;
+                  }
               }
-              memset(ReadBuffer, 0, sizeof(ReadBuffer));
+              if((RXAssemblyLength + (size_t)ReadResult) >= sizeof(RXAssembly))
+              {
+                  // Defensive reset if peer sends malformed/oversized CAT stream without terminators.
+                  RXAssemblyLength = 0;
+              }
+              // Record arrival time when buffer transitions from empty to non-empty.
+              if(RXAssemblyLength == 0)
+                  clock_gettime(CLOCK_MONOTONIC, &RXAssemblyStartTime);
+              memcpy(RXAssembly + RXAssemblyLength, ReadBuffer, (size_t)ReadResult);
+              RXAssemblyLength += (size_t)ReadResult;
+              RXAssembly[RXAssemblyLength] = 0;
+
+              // TCP is a stream: extract and parse each semicolon-terminated CAT command.
+              while(1)
+              {
+                  SemicolonPosition = memchr(RXAssembly, ';', RXAssemblyLength);
+                  if(SemicolonPosition == NULL)
+                      break;
+
+                  CommandLength = (size_t)(SemicolonPosition - RXAssembly) + 1U;  // include semicolon
+                  if(CommandLength >= sizeof(StringToParse))
+                  {
+                      // Drop oversized malformed command and continue with subsequent stream content.
+                      RemainingLength = RXAssemblyLength - CommandLength;
+                      if(RemainingLength > 0)
+                          memmove(RXAssembly, RXAssembly + CommandLength, RemainingLength);
+                      RXAssemblyLength = RemainingLength;
+                      RXAssembly[RXAssemblyLength] = 0;
+                      continue;
+                  }
+
+                  memcpy(StringToParse, RXAssembly, CommandLength);
+                  StringToParse[CommandLength] = 0;
+                  ParseCATCmd(StringToParse, DESTTCPCATPORT);
+
+                  RemainingLength = RXAssemblyLength - CommandLength;
+                  if(RemainingLength > 0)
+                      memmove(RXAssembly, RXAssembly + CommandLength, RemainingLength);
+                  RXAssemblyLength = RemainingLength;
+                  RXAssembly[RXAssemblyLength] = 0;
+                  // Reset timestamp; next incomplete fragment gets a fresh start time.
+                  if(RXAssemblyLength == 0)
+                      RXAssemblyStartTime.tv_sec = 0;
+              }
+          }
+          else if(ReadResult == 0)
+          {
+              printf("CAT server closed connection\n");
+              LocalThreadError = true;
           }
           else if((ReadResult == -1) && (errno == 104))            // error 104 happens if server drops connection
           {
             printf("CAT server dropped connection\n");
-            ThreadError = true;
+            LocalThreadError = true;
           }
 
           //
           // if there are CAT messages available, send them
           //
-          while((GetCATOPBufferUsed() != 0) && !SignalThreadEnd && !ThreadError)
+          while(!atomic_load(&SignalThreadEnd) && !LocalThreadError)
           {
-            TXMessageLength = strlen(OutputStrings[CATReadPtr]);
-            strcpy(SendBuffer, OutputStrings[CATReadPtr++]);
-            if(CATReadPtr >= VNUMOPSTRINGS)
-              CATReadPtr = 0;
+            bool HasMessage = false;
+            pthread_mutex_lock(&CATOPBufferMutex);
+            if(GetCATOPBufferUsedUnlocked() != 0)
+            {
+              strcpy(SendBuffer, OutputStrings[CATReadPtr++]);
+              if(CATReadPtr >= VNUMOPSTRINGS)
+                CATReadPtr = 0;
+              HasMessage = true;
+            }
+            pthread_mutex_unlock(&CATOPBufferMutex);
+
+            if(!HasMessage)
+              break;
+
+            TXMessageLength = strlen(SendBuffer);
             SendError = send(CATSocketid, SendBuffer, TXMessageLength, 0);
             if(SendError == -1)
             {
               perror("CAT send Error");
-              ThreadError = true; 
+              LocalThreadError = true;
               break;
             }
           }
@@ -715,11 +852,13 @@ void* CATHandlerThread(__attribute__((unused)) void *arg)
       close(CATSocketid);
       printf("Closing CAT Port & terminating thread\n");
       ActiveCATPort = 0;
-      CATPort = 0;                                            // set port not assigned
-      CATPortAssigned = false;
+      atomic_store(&CATPort, 0);                              // set port not assigned
+      atomic_store(&CATPortAssigned, false);
     }
-    ThreadActive = false;
-    ThreadError = false;
+    atomic_store(&ThreadActive, false);
+    if(!atomic_load(&CATPortAssigned))
+      atomic_store(&CATPort, 0);
+    atomic_store(&CATThreadRunning, false);
     return NULL;
 }
 
@@ -738,33 +877,39 @@ void* CATHandlerThread(__attribute__((unused)) void *arg)
 //
 void SetupCATPort(int Port)
 {
-    if (CATPort == 0)
+    int ExpectedPort = 0;
+    if (atomic_compare_exchange_strong(&CATPort, &ExpectedPort, Port))
     {
-        CATPort = Port;
-        printf("CATPort initialised to %d\n", Port);
-        SignalThreadEnd = false;
-        ThreadActive = false;
+        if(atomic_exchange(&CATKeepaliveJoinPending, false))
+            pthread_join(CATKeepaliveThread, NULL);
+        if(atomic_exchange(&CATThreadJoinPending, false))
+            pthread_join(CATThread, NULL);
 
-        if((!ThreadActive) && (CATPort != 0))
+        printf("CATPort initialised to %d\n", Port);
+        atomic_store(&SignalThreadEnd, false);
+        atomic_store(&ThreadActive, false);
+
+        if(pthread_create(&CATThread, NULL, CATHandlerThread, NULL) != 0)
         {
-          if(pthread_create(&CATThread, NULL, CATHandlerThread, NULL) < 0)
-          {
-              perror("pthread_create CAT handler");
-              CATPort = 0;
-              return;
-          }
-          pthread_detach(CATThread);
-          
-          // and create the keepalive
-          if(pthread_create(&CATKeepaliveThread, NULL, CATKeepaliveThreadFunction, NULL) < 0)
-          {
-              perror("pthread_create CAT keepalive");
-              CATPort = 0;
-              return;
-          }
-          pthread_detach(CATKeepaliveThread);
+            perror("pthread_create CAT handler");
+            atomic_store(&CATPort, 0);
+            return;
         }
-    }  
+        atomic_store(&CATThreadJoinPending, true);
+
+        // and create the keepalive
+        if(pthread_create(&CATKeepaliveThread, NULL, CATKeepaliveThreadFunction, NULL) != 0)
+        {
+            perror("pthread_create CAT keepalive");
+            atomic_store(&SignalThreadEnd, true);
+            atomic_store(&CATPort, 0);
+            if(atomic_exchange(&CATThreadJoinPending, false))
+                pthread_join(CATThread, NULL);
+            atomic_store(&SignalThreadEnd, false);
+            return;
+        }
+        atomic_store(&CATKeepaliveJoinPending, true);
+    }
 }
 
 
@@ -775,10 +920,14 @@ void SetupCATPort(int Port)
 //
 void ShutdownCATHandler(void)
 {
-    SignalThreadEnd = true;
-    while(ThreadActive || CATKeepaliveActive)
+    atomic_store(&SignalThreadEnd, true);
+    atomic_store(&CATPort, 0);
+    if(atomic_exchange(&CATKeepaliveJoinPending, false))
+        pthread_join(CATKeepaliveThread, NULL);
+    if(atomic_exchange(&CATThreadJoinPending, false))
+        pthread_join(CATThread, NULL);
+    while(atomic_load(&ThreadActive) || atomic_load(&CATKeepaliveActive) ||
+          atomic_load(&CATThreadRunning) || atomic_load(&CATKeepaliveThreadRunning))
         usleep(1000);
-    SignalThreadEnd = false;
+    atomic_store(&SignalThreadEnd, false);
 }
-
-

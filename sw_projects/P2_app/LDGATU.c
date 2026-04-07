@@ -37,15 +37,15 @@
 #include "cathandler.h"
 
 
-bool ATUControlled = false;
-bool TuneRequestedState = false;                // true if tune power requested
+static atomic_bool ATUControlled = false;
+static atomic_bool TuneRequestedState = false;  // true if tune power requested
 
 //
 // function to initialise a connection to the  ATU; call if selected as a command line option
 //
 void InitialiseLDGHandler(void)
 {
-    ATUControlled = true;
+    atomic_store(&ATUControlled, true);
 }
 
 
@@ -55,17 +55,17 @@ void InitialiseLDGHandler(void)
 //
 void RequestATUTune(bool TuneRequested)
 {
-    if(ATUControlled)                // only do anything if ATU control has been requested
+    if(atomic_load(&ATUControlled))  // only do anything if ATU control has been requested
     {
-        if(CATPortAssigned)
+        if(atomic_load(&CATPortAssigned))
         {
-            if(TuneRequested != TuneRequestedState)         // act on change only
+            if(TuneRequested != atomic_load(&TuneRequestedState))         // act on change only
             {
-                TuneRequestedState = TuneRequested;
+                atomic_store(&TuneRequestedState, TuneRequested);
                 MakeCATMessageBool(DESTTCPCATPORT, eZZTU, TuneRequested);
             }
         }
         else
-            TuneRequestedState = false;                     // set not requested if connection lost
+            atomic_store(&TuneRequestedState, false);       // set not requested if connection lost
     }
 }

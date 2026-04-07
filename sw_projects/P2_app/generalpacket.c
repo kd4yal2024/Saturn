@@ -23,7 +23,7 @@
 #include "Outwideband.h"
 
 
-bool HW_Timer_Enable = true;
+atomic_bool HW_Timer_Enable = true;
 uint8_t WidebandEnables;
 uint16_t WidebandSampleCount;
 uint8_t WidebandSampleSize;
@@ -69,7 +69,7 @@ int HandleGeneralPacket(uint8_t *PacketBuffer)
       SetPort(VPORTWIDEBAND0+i, 0);
     else
       SetPort(VPORTWIDEBAND0+i, Port+i);
-  }  
+  }
 //
 // now set the other data carried by this packet
 // wideband capture data:
@@ -97,7 +97,7 @@ int HandleGeneralPacket(uint8_t *PacketBuffer)
   SetFreqPhaseWord((bool)(Byte&8));
 
   Byte = *(uint8_t*)(PacketBuffer+38);                // enable timeout
-  HW_Timer_Enable = ((bool)(Byte&1));
+  atomic_store(&HW_Timer_Enable, ((bool)(Byte&1)));
   
   Byte = *(uint8_t*)(PacketBuffer+58);                // flag bits
   SetPAEnabled((bool)(Byte&1));
@@ -108,4 +108,3 @@ int HandleGeneralPacket(uint8_t *PacketBuffer)
 
   return 0;
 }
-

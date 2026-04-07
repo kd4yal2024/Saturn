@@ -4,6 +4,13 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
 
 ## [Unreleased]
 ### Added
+- Hidden `/p23test` lab and `p23-app-manager.sh` now document and drive the
+  converged `p2app` service path directly instead of presenting `P2_app` and
+  `P3_app` as separate active deploy targets. Legacy `p3` action arguments are
+  still accepted as compatibility aliases.
+- G2/app-status wording now distinguishes runtime app identity from deployed
+  binary family, which makes the transition state readable when an older `p3`
+  deploy family is still running the converged `p2` identity.
 - P2/P3 runtime telemetry (`/p23_perf`) now includes a structured `fpga`
   section with live product, firmware name/version, bit-file date code, clock
   state, fallback-image state, and die-temperature data exported directly from

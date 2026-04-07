@@ -18,10 +18,11 @@
 
 #include "../common/saturntypes.h"
 #include <stdbool.h>
+#include <stdatomic.h>
 #include <stdint.h>
 
 
-extern bool AriesATUActive;
+extern atomic_bool AriesATUActive;
 
 
 //

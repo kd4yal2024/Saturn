@@ -53,13 +53,26 @@ void *IncomingDDCSpecific(void *arg)                    // listener thread
   EADCSelect ADC = eADC1;                               // ADC to use for a DDC
 
   ThreadData = (struct ThreadSocketData *)arg;
-  ThreadData->Active = true;
-  printf("spinning up DDC specific thread with port %d, pid=%ld\n", ThreadData->Portid, syscall(SYS_gettid));
+  atomic_store(&ThreadData->Active, true);
+  printf("spinning up DDC specific thread with port %u, pid=%ld\n", (unsigned int)atomic_load(&ThreadData->Portid), syscall(SYS_gettid));
   //
   // main processing loop
   //
-  while(1)
+  while(!atomic_load(&ExitRequested))
   {
+    if(atomic_load(&ThreadData->Cmdid) & VBITCHANGEPORT)
+    {
+      printf("DDC specific request change port\n");
+      close(GetThreadSocketFD(ThreadData));
+      if(MakeSocket(ThreadData, 0) != 0)
+      {
+        perror("MakeSocket, DDC specific");
+        atomic_store(&ThreadError, true);
+        break;
+      }
+      atomic_fetch_and(&ThreadData->Cmdid, ~((uint_fast32_t)VBITCHANGEPORT));
+    }
+
     memset(&iovecinst, 0, sizeof(struct iovec));
     memset(&datagram, 0, sizeof(datagram));
     iovecinst.iov_base = &UDPInBuffer;                  // set buffer for incoming message number i
@@ -68,15 +81,16 @@ void *IncomingDDCSpecific(void *arg)                    // listener thread
     datagram.msg_iovlen = 1;
     datagram.msg_name = &addr_from;
     datagram.msg_namelen = sizeof(addr_from);
-    size = recvmsg(ThreadData->Socketid, &datagram, 0);         // get one message. If it times out, ges size=-1
+    size = recvmsg(atomic_load(&ThreadData->Socketid), &datagram, 0);   // get one message. If it times out, ges size=-1
     if(size < 0 && errno != EAGAIN)
     {
       perror("recvfrom, DDC Specific");
-      return NULL;
+      atomic_store(&ThreadError, true);
+      break;
     }
     if(size == VDDCSPECIFICSIZE)
     {
-      NewMessageReceived = true;
+      atomic_store(&NewMessageReceived, true);
       printf("DDC specific packet received\n");
       // get ADC details:
       Byte1 = *(uint8_t*)(UDPInBuffer+4);                   // get ADC count
@@ -98,7 +112,7 @@ void *IncomingDDCSpecific(void *arg)                    // listener thread
       // reuse "random" for DDC enabled.
       // be aware an interleaved "odd" DDC will usually be set to disabled, and we need to revert this!
       //
-      Word = rd_le_u16(UDPInBuffer + 7);                   // get DDC enables 15:0 (note it is already low byte 1st!)
+      Word = rd_le_u16(UDPInBuffer + 7);                   // get DDC enables 15:0 (Thetis/P2 compatibility)
       for(i=0; i<VNUMDDC; i++)
       {
         Enabled = (bool)(Word & 1);                        // get enable state
@@ -189,13 +203,8 @@ void *IncomingDDCSpecific(void *arg)                    // listener thread
 //
 // close down thread
 //
-  close(ThreadData->Socketid);                  // close incoming data socket
-  ThreadData->Socketid = 0;
-  ThreadData->Active = false;                   // indicate it is closed
+  close(atomic_load(&ThreadData->Socketid));    // close incoming data socket
+  atomic_store(&ThreadData->Socketid, 0);
+  atomic_store(&ThreadData->Active, false);     // indicate it is closed
   return NULL;
 }
-
-
-
-
-

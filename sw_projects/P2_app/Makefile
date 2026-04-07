@@ -1,12 +1,14 @@
-# Makefile for p2app
+# Makefile for the hardened Protocol 2 app
 # *****************************************************
 # Variables to control Makefile operation
 
 CC = gcc
 LD = gcc
-CFLAGS = -Wall -Wextra -Wno-unused-function -g -D_GNU_SOURCE
+CFLAGS = -Wall -Wextra -Wno-unused-function -O2 -g -D_GNU_SOURCE \
+         -Wformat-security -fstack-protector-strong -D_FORTIFY_SOURCE=2
 DEPFLAGS = -MMD -MP
 LDFLAGS = -lm -lpthread
+.DEFAULT_GOAL := all
 
 # NOTE (2026-01): keep "local" libs here. libgpiod link flags are added below
 #                 via pkg-config (with a safe fallback).
@@ -16,28 +18,14 @@ TARGET = p2app
 VPATH=.:../common
 GIT_DATE := $(wordlist 2,5, $(shell git log -1 --format=%cd --date=rfc))
 
-SRCS = $(TARGET).c hwaccess.c saturnregisters.c codecwrite.c saturndrivers.c version.c generalpacket.c IncomingDDCSpecific.c  IncomingDUCSpecific.c InHighPriority.c InDUCIQ.c InSpkrAudio.c OutMicAudio.c OutDDCIQ.c OutHighPriority.c debugaids.c auxadc.c cathandler.c frontpanelhandler.c catmessages.c g2panel.c LDGATU.c g2v2panel.c i2cdriver.c andromedacatmessages.c Outwideband.c serialport.c AriesATU.c GanymedePAControl.c p23_perf_telemetry.c
-OBJS = $(SRCS:.c=.o)
-DEPS = $(OBJS:.o=.d)
+BASE_SRCS = p2app.c hwaccess.c saturnregisters.c codecwrite.c saturndrivers.c version.c generalpacket.c IncomingDDCSpecific.c IncomingDUCSpecific.c InHighPriority.c InDUCIQ.c InSpkrAudio.c OutMicAudio.c OutDDCIQ.c OutHighPriority.c debugaids.c auxadc.c cathandler.c frontpanelhandler.c catmessages.c LDGATU.c g2v2panel.c i2cdriver.c andromedacatmessages.c Outwideband.c serialport.c AriesATU.c GanymedePAControl.c p23_perf_telemetry.c
 
 # for cppcheck
 CPP_OPTIONS= --inline-suppr --enable=all --suppress=unmatchedSuppression
 CPP_OPTIONS += -D__linux__ --suppress=missingIncludeSystem --suppress=unusedFunction
 
-# ****************************************************
-# Targets needed to bring the executable up to date
-
-all: $(OBJS)
-	$(LD) -o $(TARGET) $(OBJS) $(LDFLAGS) $(LIBS)
-
-cppcheck:
-	cppcheck $(CPP_OPTIONS) $(SRCS)
-
 %.o: %.c
 	$(CC) -c -o $(@F) $(CFLAGS) $(DEPFLAGS) -D GIT_DATE='"$(GIT_DATE)"' $<
-
-clean:
-	rm -rf $(TARGET) *.o *.d *.bin
 
 # =============================================================================
 # BEGIN GPIOD AUTO-DETECT (repo maintained)
@@ -77,14 +65,36 @@ else
   G2PANEL_SRC := g2panel.c
 endif
 
+G2PANEL_OBJ := $(G2PANEL_SRC:.c=.o)
+OBJS = $(BASE_SRCS:.c=.o) $(G2PANEL_OBJ)
+DEPS = $(OBJS:.o=.d)
+
 $(info building with $(G2PANEL_SRC))
 
-# Build g2panel.o from the selected source file (output name stays g2panel.o)
-g2panel.o: $(G2PANEL_SRC) g2panel.h
+# Build the selected panel implementation as its own object, so switching
+# libgpiod major versions does not silently reuse a stale g2panel.o.
+$(G2PANEL_OBJ): $(G2PANEL_SRC) g2panel.h
 	$(CC) $(CFLAGS) $(DEPFLAGS) -c $< -o $@
 
 # =============================================================================
 # END GPIOD AUTO-DETECT (repo maintained)
 # =============================================================================
+
+# ****************************************************
+# Targets needed to bring the executable up to date
+
+all: $(TARGET)
+
+$(TARGET): $(OBJS)
+	$(LD) -o $(TARGET) $(OBJS) $(LDFLAGS) $(LIBS)
+
+cppcheck:
+	cppcheck $(CPP_OPTIONS) $(BASE_SRCS) $(G2PANEL_SRC)
+
+clean:
+	rm -rf $(TARGET) *.o *.d *.bin
+
+smoke-shutdown: all
+	bash ./tools/shutdown_smoke.sh ./$(TARGET)
 
 -include $(DEPS)

@@ -17,7 +17,6 @@
 #define __catmessages_h
 
 #include "cattypes.h"
-#include <stdint.h>
 //#include "cathandler.h"
 
 
@@ -56,12 +55,7 @@ typedef enum
 }ECATCommands;
 
 
-//
-// makeproductversionCAT
-// create a ZZZS Message
-// DestDevice identifies where message should go (-1 = TCP/IP, else a serial handle)
-//
-void MakeProductVersionCAT(uint8_t ProductID, uint8_t HWVersion, uint8_t SWVersion, int DestDevice);
+
 
 
 

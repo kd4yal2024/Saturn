@@ -46,24 +46,23 @@
 
 
 bool G2V2PanelControlled = false;
-bool G2V2PanelActive = false;                       // true while panel active and threads should run
-bool G2V2CATDetected = false;                       // true if panel ID message has been sent
+atomic_bool G2V2PanelActive = false;               // true while panel active and threads should run
+atomic_bool G2V2CATDetected = false;               // true if panel ID message has been sent
 
 extern int i2c_fd;                                  // file reference
 char* gpio_dev = NULL;
-struct gpiod_line *intline;
+struct gpiod_line *intline = NULL;
 pthread_t G2V2PanelTickThread;                      // thread with periodic tick
 pthread_t G2V2PanelInterruptThread;                 // thread with periodic tick
+static bool G2V2PanelTickThreadStarted = false;
+static bool G2V2PanelInterruptThreadStarted = false;
 uint8_t G2V2PanelSWID;
 uint8_t G2V2PanelHWVersion = 1;
 uint8_t G2V2PanelProductID;
-uint32_t VKeepAliveCnt;                             // count of ticks for keepalive
-uint8_t CATPollCntr;                                // determines which message to poll for
 static struct gpiod_chip *chip = NULL;
-bool G2ToneState;                                   // true if 2 tone test in progress
-bool GVFOBSelected;                                 // true if VFO B selected
-uint32_t GCombinedVFOState;                         // reported VFO state bits
-uint16_t GLEDState;                                 // LED state settings
+atomic_bool G2ToneState = false;                   // true if 2 tone test in progress
+atomic_bool GVFOBSelected = false;                 // true if VFO B selected
+atomic_uint_fast32_t GCombinedVFOState = 0;        // reported VFO state bits
 
 
 
@@ -82,6 +81,7 @@ uint16_t GLEDState;                                 // LED state settings
 void SetupG2V2PanelGPIO(void)
 {
     chip = NULL;
+    intline = NULL;
 
     //
     // Open GPIO device. Try devices for RPi4 and RPi5
@@ -110,11 +110,11 @@ void SetupG2V2PanelGPIO(void)
         intline = gpiod_chip_get_line(chip, 4);
         if(!intline)
             perror("gpiod_chip_get_line");
-
-//
-// setup interrupt line as an input, with falling edge events
-//    
-        gpiod_line_request_falling_edge_events(intline, "interrupt");
+        else if(gpiod_line_request_falling_edge_events(intline, "interrupt") < 0)
+        {
+            perror("gpiod_line_request_falling_edge_events");
+            intline = NULL;
+        }
     }
 }
 
@@ -181,7 +181,7 @@ uint8_t GetThetisScanCode(uint8_t V2Code, bool* Shifted)
 //
 // interrupt thread
 //
-void G2V2PanelInterrupt(__attribute__((unused)) void *arg)
+void* G2V2PanelInterrupt(__attribute__((unused)) void *arg)
 {
     uint16_t Retval;
     uint8_t EventCount;
@@ -192,15 +192,13 @@ void G2V2PanelInterrupt(__attribute__((unused)) void *arg)
     struct timespec ts = {1, 0};                                    // timeout time = 1s
     struct gpiod_line_event intevent;
     uint8_t Encoder;
-    bool ThetisPBShift;
-    uint8_t ThetisScanCode;
 
     printf("G2 panel Interrupt Handler thread established\n");
 //
 // now loop waiting for interrupt, then reading the i2c Event register
 // need to read all i2c data, until it reports no more events
 //
-    while(G2V2PanelActive)
+    while(atomic_load(&G2V2PanelActive))
     {
         Retval = gpiod_line_event_wait(intline, &ts);                   // wait for interrupt from Arduino
         if(Retval > 0)                                                  // if event occurred ie not timeout
@@ -278,6 +276,7 @@ void G2V2PanelInterrupt(__attribute__((unused)) void *arg)
             }
         }
     }
+    return NULL;
 }
 
 
@@ -288,23 +287,26 @@ void G2V2PanelInterrupt(__attribute__((unused)) void *arg)
 //
 // periodic timestep
 //
-void G2V2PanelTick(__attribute__((unused)) void *arg)
+void* G2V2PanelTick(__attribute__((unused)) void *arg)
 {
     uint32_t NewLEDStates = 0;
+    uint32_t VKeepAliveCnt = 0;                     // owned by tick thread
+    uint8_t CATPollCntr = 0;                        // owned by tick thread
+    uint16_t GLEDState = 0;                         // owned by tick thread
 
     printf("Started G2V2 panel tick thread, pid=%ld\n", syscall(SYS_gettid));
-    while(G2V2PanelActive)
+    while(atomic_load(&G2V2PanelActive))
     {
-        if(CATPortAssigned)                     // see if CAT has become available for the 1st time
+        if(atomic_load(&CATPortAssigned))      // see if CAT has become available for the 1st time
         {
-            if(G2V2CATDetected == false)
+            if(atomic_load(&G2V2CATDetected) == false)
             {
-                G2V2CATDetected = true;
-                MakeProductVersionCAT(G2V2PanelProductID, G2V2PanelHWVersion, G2V2PanelSWID, DESTTCPCATPORT);
+                atomic_store(&G2V2CATDetected, true);
+                MakeProductVersionCAT(G2V2PanelProductID, G2V2PanelHWVersion, G2V2PanelSWID);
             }
         }
         else
-            G2V2CATDetected = false;
+            atomic_store(&G2V2CATDetected, false);
 //
 // poll CAT
 //
@@ -341,21 +343,25 @@ void G2V2PanelTick(__attribute__((unused)) void *arg)
 // ATU tune LEDs are internal to P2app, not Thetis
 //
         NewLEDStates = 0;
-        if((GCombinedVFOState & (1<<6)) != 0)
+        uint32_t CombinedVFOState = atomic_load(&GCombinedVFOState);
+        bool ToneState = atomic_load(&G2ToneState);
+        bool VFOBSelected = atomic_load(&GVFOBSelected);
+
+        if((CombinedVFOState & (1<<6)) != 0)
             NewLEDStates |= 1;                          // MOX bit
-        if((GCombinedVFOState & (1<<7)) != 0)
+        if((CombinedVFOState & (1<<7)) != 0)
             NewLEDStates |= (1 << 1);                   // TUNE bit
-        if(G2ToneState)
+        if(ToneState)
             NewLEDStates |= (1 << 2);                   // 2 tone bit
-        if((GCombinedVFOState & (1<<8)) != 0)
+        if((CombinedVFOState & (1<<8)) != 0)
             NewLEDStates |= (1 << 5);                   // XIT bit
-        if((GCombinedVFOState & (1<<0)) != 0)
+        if((CombinedVFOState & (1<<0)) != 0)
             NewLEDStates |= (1 << 6);                   // RIT bit
-        if(GVFOBSelected)
+        if(VFOBSelected)
             NewLEDStates |= (1 << 7);                   // VFO B bit
 
-        if((((GCombinedVFOState & (1<<2)) != 0) && GVFOBSelected) ||
-        (((GCombinedVFOState & (1<<1)) != 0) && !GVFOBSelected))
+        if((((CombinedVFOState & (1<<2)) != 0) && VFOBSelected) ||
+        (((CombinedVFOState & (1<<1)) != 0) && !VFOBSelected))
             NewLEDStates |= (1 << 8);                   // VFO Lock bit
 
 
@@ -369,6 +375,7 @@ void G2V2PanelTick(__attribute__((unused)) void *arg)
 
     }
 
+    return NULL;
 }
 
 
@@ -383,15 +390,26 @@ void InitialiseG2V2PanelHandler(void)
     printf("Initialising G2V2 panel handler\n");
     SetupG2V2PanelGPIO();
     SetupG2V2PanelI2C();
-    G2V2PanelActive = true;
+    G2V2PanelTickThreadStarted = false;
+    G2V2PanelInterruptThreadStarted = false;
 
-    if(pthread_create(&G2V2PanelTickThread, NULL, G2V2PanelTick, NULL) < 0)
-        perror("pthread_create G2 panel tick");
-    pthread_detach(G2V2PanelTickThread);
+    if((chip == NULL) || (intline == NULL))
+    {
+        printf("G2V2 panel GPIO setup incomplete; handler threads not started\n");
+        return;
+    }
 
-    if(pthread_create(&G2V2PanelInterruptThread, NULL, G2V2PanelInterrupt, NULL) < 0)
+    atomic_store(&G2V2PanelActive, true);
+
+    if(pthread_create(&G2V2PanelTickThread, NULL, G2V2PanelTick, NULL) != 0)
         perror("pthread_create G2 panel tick");
-    pthread_detach(G2V2PanelInterruptThread);
+    else
+        G2V2PanelTickThreadStarted = true;
+
+    if(pthread_create(&G2V2PanelInterruptThread, NULL, G2V2PanelInterrupt, NULL) != 0)
+        perror("pthread_create G2 panel tick");
+    else
+        G2V2PanelInterruptThreadStarted = true;
 }
 
 
@@ -400,12 +418,27 @@ void InitialiseG2V2PanelHandler(void)
 //
 void ShutdownG2V2PanelHandler(void)
 {
+    atomic_store(&G2V2PanelActive, false);
+    if(G2V2PanelTickThreadStarted)
+    {
+        pthread_join(G2V2PanelTickThread, NULL);
+        G2V2PanelTickThreadStarted = false;
+    }
+    if(G2V2PanelInterruptThreadStarted)
+    {
+        pthread_join(G2V2PanelInterruptThread, NULL);
+        G2V2PanelInterruptThreadStarted = false;
+    }
+
     if (chip != NULL)
     {
-        G2V2PanelActive = false;
-        sleep(2);                                       // wait 2s to allow threads to close
-        gpiod_line_release(intline);
+        if(intline)
+        {
+            gpiod_line_release(intline);
+            intline = NULL;
+        }
         gpiod_chip_close(chip);
+        chip = NULL;
     }
 }
 
@@ -415,7 +448,7 @@ void ShutdownG2V2PanelHandler(void)
 //
 void SetG2V2ZZUTState(bool NewState)
 {
-    G2ToneState = NewState;
+    atomic_store(&G2ToneState, NewState);
 }
 
 
@@ -424,7 +457,7 @@ void SetG2V2ZZUTState(bool NewState)
 //
 void SetG2V2ZZYRState(bool NewState)
 {
-    GVFOBSelected = NewState;
+    atomic_store(&GVFOBSelected, NewState);
 }
 
 
@@ -434,5 +467,5 @@ void SetG2V2ZZYRState(bool NewState)
 //
 void SetG2V2ZZXVState(uint32_t NewState)
 {
-    GCombinedVFOState = NewState;
+    atomic_store(&GCombinedVFOState, NewState);
 }

@@ -31,7 +31,7 @@ service names still use `saturn-go` for compatibility with existing installs.
 - Appliance Update health policy also supports retry count and initial startup
   delay so a good staged switch is less likely to roll back on a slow first
   probe
-- G2 Update page includes a read-only `Show App / Firmware Info` action that reports the active P2/P3 app, app version, and the latest `p2app.service` startup banner with FPGA firmware/build/date-code details
+- G2 Update page includes a read-only `Show App / Firmware Info` action that reports the active runtime app identity, current binary family, app version, and any current or retained `p2app.service` startup banner lines with FPGA firmware/build/date-code details when they were captured
 - G2 Update page also includes `Update Web Manager Too`; when enabled, `Run Update G2` watches for repo changes under `update_manager/` and automatically launches `update-saturn-go.sh --skip-git` as a detached final step after the G2 run completes, reusing the just-updated active repo root instead of requiring a separate Saturn Go repo pull
 - Dedicated piHPSDR Update page (`pihpsdr.html`) for `update-pihpsdr.py` terminal execution
 - Dedicated deskHPSDR Update page (`deskhpsdr.html`) for `update-deskhpsdr.py` terminal execution using the active Saturn repo-root helper scripts, including the local `deskHPSDR` libgpiod v2 compatibility patch flow
@@ -109,7 +109,7 @@ Script definitions come from `config.json` plus browser-managed custom entries i
 - Version list ("Show versions above"): `/get_versions`
 - G2 Update page: `/update` (also `/update.html`)
 - Saturn Go page: `/saturngo` (also `/saturngo.html`, `/saturn-go`, `/saturn-go.html`)
-- Experimental P2/P3 test page (hidden, no nav link): `/p23test` (also `/p23test.html`)
+- Experimental `p2app` service lab page (hidden, no nav link): `/p23test` (also `/p23test.html`)
 - piHPSDR update page: `/pihpsdr` (also `/pihpsdr.html`)
 - deskHPSDR update page: `/deskhpsdr` (also `/deskhpsdr.html`)
 - FPGA flash page: `/fpga` (also `/fpga.html`)
@@ -123,8 +123,8 @@ Script definitions come from `config.json` plus browser-managed custom entries i
 - Get Saturn Go self-update policy: `GET /saturngo_policy`
 - Set Saturn Go self-update policy: `POST /saturngo_policy`
 - Get Saturn Go deploy status: `GET /saturngo_deploy_status`
-- Get P2/P3 test-lab status (service/source/deploy/symlink/override): `GET /p23_status`
-- Get P2/P3 test-lab performance snapshot (host metrics + workload tags + optional app telemetry): `GET /p23_perf`
+- Get hidden `p2app` service-lab status (service/source/deploy/symlink/override): `GET /p23_status`
+- Get hidden `p2app` service-lab performance snapshot (host metrics + workload tags + optional app telemetry): `GET /p23_perf`
 - Start transactional update: `POST /update_start` with JSON `{ "channel":"stable|beta|custom", "custom_ref":"..." }`
 - Get update status + last state: `GET /update_status`
 - Roll back to previous repo root: `POST /update_rollback`
@@ -250,12 +250,12 @@ If a script entry does not define `version`, `/get_versions` now returns
 - The updater resolves helper scripts from the active backend repo root (`SATURN_REPO_ROOT` / `SATURN_ACTIVE_REPO_ROOT`), so it stays aligned with the currently selected Saturn checkout.
 - On a fresh image, do not select `--skip-git`; otherwise the updater will fail because there is no local `~/github/deskhpsdr` checkout to build.
 
-### P2/P3 App Test Lab (Hidden)
+### p2app Service Lab (Hidden)
 
 - Hidden page `/p23test` provides an experimental terminal workflow for:
-  - building `P2_app` / `P3_app`
-  - deploying selected binaries under `/opt/saturn-go/p23-apps`
-  - switching `p2app.service` between P2 and P3 via a systemd drop-in override
+  - building the converged `P2_app`
+  - deploying the managed `p2app` binary under `/opt/saturn-go/p23-apps`
+  - refreshing `p2app.service` override metadata, current symlink, and restart behavior
   - reverting to the original unit `ExecStart`
 - Uses `/opt/saturn-go/scripts/p23-app-manager.sh` via `/run`.
 - Status panel polls `GET /p23_status`.
@@ -263,7 +263,7 @@ If a script entry does not define `version`, `/get_versions` now returns
   - `p2app.service` main process CPU/RSS/scheduler wait/context switches/page faults
   - `eth0` throughput/packet rate/errors+drops
   - XDMA interrupt rate (`/proc/interrupts`) and PCIe link speed/width (`/sys/class/xdma/...`)
-- current workload shape (`P2`/`P3`, startup mode, panel mode, DDC enable/interleave state, wideband mode)
+- current workload shape (runtime app identity, binary family, startup mode, panel mode, DDC enable/interleave state, wideband mode)
 - app packet/DMA/error counters for high-priority, DDC, wideband, mic, DUC, and speaker paths
 - Performance panel includes a workload-first dashboard layout plus threshold highlighting/alerts for CPU, scheduler wait, XDMA interrupt spikes/drops, and stale app telemetry.
 - Performance panel includes a `Capture Snapshot` action that packages:
@@ -278,18 +278,18 @@ If a script entry does not define `version`, `/get_versions` now returns
   `/p23_perf` now reports `process.io.source = "eth0_netdev_proxy"` and uses
   `eth0` RX/TX byte counters as the char-I/O proxy source so the hidden P23
   `IRQ/MiB` metric remains available.
-- Performance baseline resets automatically when the running `p2app.service` process identity changes, so P2 and P3 samples are not mixed after a switch/restart.
+- Performance baseline resets automatically when the running `p2app.service` workload identity changes, so old and new restart samples are not mixed together.
 - Status/performance panes are always reloaded fresh and are no longer restored from browser session storage.
-- Switch/deploy actions now support startup profiles (`panel`, `panel-debug`, `headless`) and front-panel mode overrides (`auto`, `g2`, `g2v2`, `prefer-g2`, `prefer-g2v2`, `off`), written as `SATURN_FRONT_PANEL_MODE` in the systemd drop-in.
+- Restart/deploy actions support startup profiles (`panel`, `panel-debug`, `headless`) and front-panel mode overrides (`auto`, `g2`, `g2v2`, `prefer-g2`, `prefer-g2v2`, `off`), written as `SATURN_FRONT_PANEL_MODE` in the systemd drop-in.
 - Status/dashboard views also report the effective service runtime environment seen by `p2app.service`, including optional `SATURN_P3_RT_AUDIO_ENABLE`, `SATURN_P3_RT_AUDIO_POLICY`, `SATURN_P3_RT_AUDIO_PRIORITY`, and `SATURN_P3_RT_AUDIO_CPUS`.
-- `/p23test` includes an `Emergency Revert Now` button for fast recovery if a switch leaves the local UI unusable.
+- `/p23test` includes a `Restore Unit Default` action for clearing the Saturn override and returning `p2app.service` to the base unit launch path.
 - `/p23test` includes an optional ADC peak telemetry panel:
   - toggle via `POST /p23_adc_telemetry`
   - state/snapshot reported by `GET /p23_status`
   - latest snapshot stored in `/dev/shm/saturn_p23_adc_peak_telemetry.json`
   - uses `/dev/shm` and overwrites a single file, so it does not create persistent disk churn
   - disabling telemetry stops updates but retains the last snapshot until a later enabled run overwrites it or it is removed manually
-- Recommended snapshot timing when comparing P2/P3 or driver changes:
+- Recommended snapshot timing when comparing `p2app` builds or driver changes:
   - `2 minutes` for a quick smoke test after a build/deploy change
   - `10-15 minutes` for a normal baseline capture under a steady workload
   - `30-60 minutes` for longer stability/jitter investigations

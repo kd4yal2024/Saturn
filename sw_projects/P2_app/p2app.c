@@ -21,6 +21,7 @@
 #include <limits.h>
 #include <stdint.h>
 #include <string.h>
+#include <strings.h>
 #include <unistd.h>
 #include <fcntl.h>
 #include <math.h>
@@ -39,6 +40,7 @@
 #include <sys/types.h>
 #include <dirent.h>
 #include <pthread.h>
+#include <sched.h>
 #include <syscall.h>
 
 
@@ -64,10 +66,10 @@
 #include "cathandler.h"
 #include "LDGATU.h"
 #include "AriesATU.h"
-#include "frontpanelhandler.h"
 #include "GanymedePAControl.h"
+#include "frontpanelhandler.h"
 
-#define P2APPVERSION 45
+#define P2APPVERSION 46
 #define FWREQUIREDMAJORVERSION 1                  // major version that is required. Only altered if programming interface changes. 
 //
 // the Firmware version is a protection to make sure that if a p2app update is required by the new firmware,
@@ -75,6 +77,7 @@
 //
 //------------------------------------------------------------------------------------------
 // VERSION History
+// V46, 19/03/2026. optional SCHED_RR/FIFO + CPU affinity tuning for speaker/DUC threads via SATURN_P3_RT_AUDIO_* env vars.
 // V45, 16/03/2026. encodes ADC1/ADC2 peak amplitudes into the high priority status message.
 // V44, 31/01/2026.  Support for Thetis "push" CAT commands for Ganymede, g2v2 indicators & Aries instead of polling
 // V43, 19/01/2026.  Initial support for Ganymede PA controller if stared with -g switch.
@@ -133,15 +136,16 @@ extern sem_t CodecRegMutex;                 // protect writes to codec
 sem_t MicWBDMAMutex;                        // protect one DMA read channel shared by mic and WB read
 
 struct sockaddr_in reply_addr;              // destination address for outgoing data
+pthread_mutex_t g_reply_addr_mutex = PTHREAD_MUTEX_INITIALIZER;
 
-bool IsTXMode;                              // true if in TX
-bool SDRActive;                             // true if this SDR is running at the moment
-bool ReplyAddressSet = false;               // true when reply address has been set
-bool StartBitReceived = false;              // true when "run" bit has been set
-bool NewMessageReceived = false;            // set whenever a message is received
-bool ExitRequested = false;                 // true if "exit checking" thread requests shutdown
+atomic_bool IsTXMode = false;               // true if in TX
+atomic_bool SDRActive = false;              // true if this SDR is running at the moment
+atomic_bool ReplyAddressSet = false;        // true when reply address has been set
+atomic_bool StartBitReceived = false;       // true when "run" bit has been set
+atomic_bool NewMessageReceived = false;     // set whenever a message is received
+atomic_bool ExitRequested = false;          // true if "exit checking" thread requests shutdown
 bool SkipExitCheck = false;                 // true to skip "exit checking", if running as a service
-bool ThreadError = false;                   // true if a thread reports an error
+atomic_bool ThreadError = false;            // true if a thread reports an error
 bool UseDebug = false;                      // true if to enable debugging
 bool UseControlPanel = false;               // true if to use a control panel
 bool UseGanymede = false;                   // true if to use Ganymede PA protection
@@ -149,6 +153,26 @@ bool UseLDGATU = false;                     // true if to use an LDG ATU via CAT
 bool UseAriesATU = false;                   // true if to use an Aries ATU
 uint32_t LODebugDDC1Frequency;              // -x debug mode: LO frequency for DDC1
 bool InterleavedDDCDebugMode = false;       // true if interleaved DDC for debug are allowed
+static volatile sig_atomic_t g_signal_exit_requested = 0;
+static atomic_uint_fast16_t gClientControlWord = 0;
+
+struct CriticalAudioRuntimeConfig
+{
+  bool Enabled;
+  int Policy;
+  int Priority;
+  bool CpuSetConfigured;
+  cpu_set_t CpuSet;
+  char CpuListText[64];
+};
+
+static struct CriticalAudioRuntimeConfig gCriticalAudioRuntime;
+
+static void SyncSignalExitRequest(void)
+{
+  if(g_signal_exit_requested != 0)
+    atomic_store(&ExitRequested, true);
+}
 
 
 #define SDRBOARDID 1                        // Hermes
@@ -208,24 +232,603 @@ pthread_t DDCIQThread[VNUMDDC];               // array, but not sure how many
 pthread_t MicThread;
 pthread_t HighPriorityFromSDRThread;
 pthread_t WidebandDataThread;
+static bool DDCSpecificThreadStarted = false;
+static bool DUCSpecificThreadStarted = false;
+static bool HighPriorityToSDRThreadStarted = false;
+static bool SpkrAudioThreadStarted = false;
+static bool DUCIQThreadStarted = false;
+static bool DDCIQThreadStarted[VNUMDDC] = {false};
+static bool MicThreadStarted = false;
+static bool HighPriorityFromSDRThreadStarted = false;
+static bool WidebandDataThreadStarted = false;
 
 pthread_t CheckForExitThread;                 // thread looks for types "exit" command
 pthread_t CheckForNoActivityThread;           // thread looks for inactvity
+static bool CheckForExitThreadStarted = false;
+static bool CheckForNoActivityThreadStarted = false;
+static pthread_mutex_t g_general_packet_mutex = PTHREAD_MUTEX_INITIALIZER;
+static uint8_t g_pending_general_packet[VDISCOVERYSIZE];
+static uint8_t g_last_applied_general_packet[VDISCOVERYSIZE];
+static bool g_pending_general_packet_valid = false;
+static bool g_last_applied_general_packet_valid = false;
+static atomic_bool g_startup_discovery_logged = false;
+static atomic_bool g_startup_general_rx_logged = false;
+static atomic_bool g_startup_general_applied_logged = false;
+static atomic_bool g_startup_run_logged = false;
+static atomic_bool g_startup_active_logged = false;
+
+static void MaybeLogStartupEvent(atomic_bool* EventFlag, const char* EventText)
+{
+  if((EventFlag == NULL) || (EventText == NULL))
+    return;
+
+  if(!atomic_exchange(EventFlag, true))
+  {
+    printf("STARTUP: %s [reply=%d run=%d active=%d]\n",
+            EventText,
+            atomic_load(&ReplyAddressSet),
+            atomic_load(&StartBitReceived),
+            atomic_load(&SDRActive));
+  }
+}
+
+void MarkStartupRunBitSeen(void)
+{
+  MaybeLogStartupEvent(&g_startup_run_logged, "HighPriority run-bit received");
+}
+
+void MarkStartupHandshakeComplete(void)
+{
+  MaybeLogStartupEvent(&g_startup_active_logged, "Startup handshake complete");
+}
+
+void ResetStartupTraceFlags(void)
+{
+  atomic_store(&g_startup_discovery_logged, false);
+  atomic_store(&g_startup_general_rx_logged, false);
+  atomic_store(&g_startup_general_applied_logged, false);
+  atomic_store(&g_startup_run_logged, false);
+  atomic_store(&g_startup_active_logged, false);
+}
+
+static bool QueueGeneralPacketForApply(const uint8_t* PacketBuffer, size_t PacketLen)
+{
+  bool Updated;
+
+  if((PacketBuffer == NULL) || (PacketLen != VDISCOVERYSIZE))
+    return false;
+
+  pthread_mutex_lock(&g_general_packet_mutex);
+  Updated = (!g_pending_general_packet_valid) ||
+            (memcmp(g_pending_general_packet, PacketBuffer, VDISCOVERYSIZE) != 0);
+  if(Updated)
+    memcpy(g_pending_general_packet, PacketBuffer, VDISCOVERYSIZE);
+  g_pending_general_packet_valid = true;
+  pthread_mutex_unlock(&g_general_packet_mutex);
+  return Updated;
+}
+
+static void MaybeActivateFromStartupHandshake(void);
+
+static int ApplyQueuedGeneralPacketIfStable(void)
+{
+  uint8_t LocalPacket[VDISCOVERYSIZE];
+  bool HasPending;
+  bool IsNoOp;
+
+  pthread_mutex_lock(&g_general_packet_mutex);
+  HasPending = g_pending_general_packet_valid;
+  if(!HasPending)
+  {
+    pthread_mutex_unlock(&g_general_packet_mutex);
+    return 0;
+  }
+
+  memcpy(LocalPacket, g_pending_general_packet, VDISCOVERYSIZE);
+  g_pending_general_packet_valid = false;
+  IsNoOp = g_last_applied_general_packet_valid &&
+           (memcmp(g_last_applied_general_packet, LocalPacket, VDISCOVERYSIZE) == 0);
+  if(!IsNoOp)
+  {
+    memcpy(g_last_applied_general_packet, LocalPacket, VDISCOVERYSIZE);
+    g_last_applied_general_packet_valid = true;
+  }
+  pthread_mutex_unlock(&g_general_packet_mutex);
+
+  if(IsNoOp)
+  {
+    // Duplicate general packets still refresh startup handshake state.
+    atomic_store(&ReplyAddressSet, true);
+    return 0;
+  }
+
+  HandleGeneralPacket(LocalPacket);
+  MaybeLogStartupEvent(&g_startup_general_applied_logged, "General packet applied");
+  atomic_store(&ReplyAddressSet, true);
+  return 1;
+}
+
+static void MaybeActivateFromStartupHandshake(void)
+{
+  if(!atomic_load(&SDRActive) &&
+      atomic_load(&ReplyAddressSet) &&
+      atomic_load(&StartBitReceived))
+  {
+    atomic_store(&SDRActive, true);
+    SetTXEnable(true);
+    MarkStartupHandshakeComplete();
+  }
+}
+
+static int ApplyQueuedOutgoingPortRebinds(void)
+{
+  int i;
+
+  for(i = VPORTHIGHPRIORITYFROMSDR; i < VPORTTABLESIZE; i++)
+  {
+    struct ThreadSocketData* ThreadData = SocketData + i;
+    if(!(atomic_load(&ThreadData->Cmdid) & VBITCHANGEPORT))
+      continue;
+
+    if(ThreadSocketIsSharedAlias(ThreadData))
+    {
+      int Socketfd = atomic_load(&ThreadData->Socketid);
+      int SharedSocketfd = GetThreadSocketFD(ThreadData);
+      if((Socketfd > 0) && (Socketfd != SharedSocketfd))
+      {
+        close(Socketfd);
+        atomic_store(&ThreadData->Socketid, 0);
+      }
+    }
+    else
+    {
+      int Socketfd = atomic_load(&ThreadData->Socketid);
+      if(Socketfd > 0)
+      {
+        close(Socketfd);
+        atomic_store(&ThreadData->Socketid, 0);
+      }
+      if(MakeSocket(ThreadData, ThreadData->DDCid) != 0)
+      {
+        perror("control-plane MakeSocket");
+        atomic_store(&ThreadError, true);
+        return -1;
+      }
+    }
+    atomic_fetch_and(&ThreadData->Cmdid, ~((uint_fast32_t)VBITCHANGEPORT));
+  }
+  return 0;
+}
 
 
 //
-// function to get program version
+// socket ownership mapping for shared-port threads.
+// by default these streams share sockets; if a general packet assigns
+// different ports, the stream falls back to an independent socket.
+//
+static uint32_t ResolveSocketOwnerIndex(uint32_t ThreadNum)
+{
+  switch(ThreadNum)
+  {
+    case VPORTMICAUDIO:
+      return VPORTDUCSPECIFIC;
+
+    case VPORTHIGHPRIORITYFROMSDR:
+      return VPORTDDCSPECIFIC;
+
+    case VPORTWIDEBAND0:
+      return VPORTHIGHPRIORITYTOSDR;
+
+    case VPORTWIDEBAND1:
+      return VPORTSPKRAUDIO;
+
+    default:
+      return ThreadNum;
+  }
+}
+
+static bool ThreadSocketShouldShareAlias(const struct ThreadSocketData* Ptr)
+{
+  uint32_t ThreadNum;
+  uint32_t OwnerNum;
+
+  if((Ptr == NULL) || (Ptr < SocketData) || (Ptr >= (SocketData + VPORTTABLESIZE)))
+    return false;
+
+  ThreadNum = (uint32_t)(Ptr - SocketData);
+  OwnerNum = ResolveSocketOwnerIndex(ThreadNum);
+  if(OwnerNum == ThreadNum)
+    return false;
+
+  return (atomic_load(&SocketData[ThreadNum].Portid) == atomic_load(&SocketData[OwnerNum].Portid));
+}
+
+int GetThreadSocketFD(const struct ThreadSocketData* Ptr)
+{
+  uint32_t ThreadNum;
+  uint32_t OwnerNum;
+  int Socketfd;
+
+  if((Ptr == NULL) || (Ptr < SocketData) || (Ptr >= (SocketData + VPORTTABLESIZE)))
+    return -1;
+
+  ThreadNum = (uint32_t)(Ptr - SocketData);
+  OwnerNum = ResolveSocketOwnerIndex(ThreadNum);
+
+  // alias streams can split to dedicated sockets if their port differs.
+  // fallback to owner socket until dedicated socket is actually open.
+  if((OwnerNum != ThreadNum) && !ThreadSocketShouldShareAlias(Ptr))
+  {
+    Socketfd = atomic_load(&SocketData[ThreadNum].Socketid);
+    if(Socketfd > 0)
+      return Socketfd;
+  }
+  return atomic_load(&SocketData[OwnerNum].Socketid);
+}
+
+bool ThreadSocketIsSharedAlias(const struct ThreadSocketData* Ptr)
+{
+  return ThreadSocketShouldShareAlias(Ptr);
+}
+
+void SyncSocketAliasesForOwner(const struct ThreadSocketData* OwnerPtr)
+{
+  (void)OwnerPtr;
+  // no-op: shared socket aliases were removed for protocol compatibility.
+}
+
+
+//
+// function ot get program version
 //
 uint32_t GetP2appVersion(void)
 {
   return P2APPVERSION;
 }
 
+void SetClientControlWord(uint16_t Word)
+{
+  atomic_store(&gClientControlWord, (uint_fast16_t)Word);
+}
+
+uint16_t GetClientControlWord(void)
+{
+  return (uint16_t)atomic_load(&gClientControlWord);
+}
+
+static const char* SchedulerPolicyName(int Policy)
+{
+  switch(Policy)
+  {
+    case SCHED_OTHER:
+      return "SCHED_OTHER";
+    case SCHED_FIFO:
+      return "SCHED_FIFO";
+    case SCHED_RR:
+      return "SCHED_RR";
+    default:
+      return "UNKNOWN";
+  }
+}
+
+static bool ParseBoolEnvValue(const char* Value, bool* ParsedValue)
+{
+  if((Value == NULL) || (ParsedValue == NULL))
+    return false;
+
+  if((strcasecmp(Value, "1") == 0) || (strcasecmp(Value, "true") == 0) ||
+     (strcasecmp(Value, "yes") == 0) || (strcasecmp(Value, "on") == 0))
+  {
+    *ParsedValue = true;
+    return true;
+  }
+
+  if((strcasecmp(Value, "0") == 0) || (strcasecmp(Value, "false") == 0) ||
+     (strcasecmp(Value, "no") == 0) || (strcasecmp(Value, "off") == 0))
+  {
+    *ParsedValue = false;
+    return true;
+  }
+
+  return false;
+}
+
+static char* TrimWhitespace(char* Text)
+{
+  char* EndPtr;
+
+  if(Text == NULL)
+    return NULL;
+
+  while((*Text == ' ') || (*Text == '\t'))
+    Text++;
+
+  if(*Text == '\0')
+    return Text;
+
+  EndPtr = Text + strlen(Text) - 1;
+  while((EndPtr > Text) && ((*EndPtr == ' ') || (*EndPtr == '\t')))
+  {
+    *EndPtr = '\0';
+    EndPtr--;
+  }
+
+  return Text;
+}
+
+static bool ParseLongValue(const char* Text, long* ParsedValue)
+{
+  char* EndPtr = NULL;
+
+  if((Text == NULL) || (ParsedValue == NULL))
+    return false;
+
+  errno = 0;
+  *ParsedValue = strtol(Text, &EndPtr, 10);
+  if(errno != 0)
+    return false;
+
+  while((EndPtr != NULL) && ((*EndPtr == ' ') || (*EndPtr == '\t')))
+    EndPtr++;
+
+  return (EndPtr != NULL) && (*EndPtr == '\0');
+}
+
+static int ParseSchedulerPolicy(const char* Value)
+{
+  if(Value == NULL)
+    return SCHED_RR;
+
+  if((strcasecmp(Value, "rr") == 0) || (strcasecmp(Value, "sched_rr") == 0))
+    return SCHED_RR;
+
+  if((strcasecmp(Value, "fifo") == 0) || (strcasecmp(Value, "sched_fifo") == 0))
+    return SCHED_FIFO;
+
+  if((strcasecmp(Value, "other") == 0) || (strcasecmp(Value, "sched_other") == 0))
+    return SCHED_OTHER;
+
+  return -1;
+}
+
+static bool ParseCPUSetToken(char* Token, long MaxCpuIndex, cpu_set_t* CpuSet, bool* AddedAny)
+{
+  char* DashPtr = NULL;
+  long StartCPU;
+  long EndCPU;
+  long CpuNum;
+
+  if((Token == NULL) || (CpuSet == NULL) || (AddedAny == NULL))
+    return false;
+
+  DashPtr = strchr(Token, '-');
+  if(DashPtr != NULL)
+  {
+    *DashPtr = '\0';
+    Token = TrimWhitespace(Token);
+    DashPtr = TrimWhitespace(DashPtr + 1);
+    if((Token == NULL) || (DashPtr == NULL) || (*Token == '\0') || (*DashPtr == '\0'))
+      return false;
+    if(!ParseLongValue(Token, &StartCPU) || !ParseLongValue(DashPtr, &EndCPU))
+      return false;
+  }
+  else
+  {
+    Token = TrimWhitespace(Token);
+    if((Token == NULL) || (*Token == '\0'))
+      return false;
+    if(!ParseLongValue(Token, &StartCPU))
+      return false;
+    EndCPU = StartCPU;
+  }
+
+  if((StartCPU < 0) || (EndCPU < StartCPU) || (EndCPU > MaxCpuIndex) || (EndCPU >= CPU_SETSIZE))
+    return false;
+
+  for(CpuNum = StartCPU; CpuNum <= EndCPU; CpuNum++)
+  {
+    CPU_SET((int)CpuNum, CpuSet);
+    *AddedAny = true;
+  }
+
+  return true;
+}
+
+static bool ParseCPUSetList(const char* Value, cpu_set_t* CpuSet, char* CpuListText, size_t CpuListTextLength)
+{
+  char Buffer[96];
+  char* SavePtr = NULL;
+  char* Token = NULL;
+  long CpuCount;
+  long MaxCpuIndex;
+  bool AddedAny = false;
+
+  if((Value == NULL) || (CpuSet == NULL) || (CpuListText == NULL) || (CpuListTextLength == 0))
+    return false;
+
+  if(strlen(Value) >= sizeof(Buffer))
+    return false;
+
+  CpuCount = sysconf(_SC_NPROCESSORS_ONLN);
+  MaxCpuIndex = (CpuCount > 0) ? (CpuCount - 1) : (CPU_SETSIZE - 1);
+  if(MaxCpuIndex >= CPU_SETSIZE)
+    MaxCpuIndex = CPU_SETSIZE - 1;
+
+  memset(Buffer, 0, sizeof(Buffer));
+  strncpy(Buffer, Value, sizeof(Buffer) - 1);
+  CPU_ZERO(CpuSet);
+
+  for(Token = strtok_r(Buffer, ",", &SavePtr); Token != NULL; Token = strtok_r(NULL, ",", &SavePtr))
+  {
+    if(!ParseCPUSetToken(Token, MaxCpuIndex, CpuSet, &AddedAny))
+      return false;
+  }
+
+  if(!AddedAny)
+    return false;
+
+  snprintf(CpuListText, CpuListTextLength, "%s", Value);
+  return true;
+}
+
+static void LoadCriticalAudioRuntimeConfig(void)
+{
+  const char* EnableEnv = getenv("SATURN_P3_RT_AUDIO_ENABLE");
+  const char* PolicyEnv = getenv("SATURN_P3_RT_AUDIO_POLICY");
+  const char* PriorityEnv = getenv("SATURN_P3_RT_AUDIO_PRIORITY");
+  const char* CpuEnv = getenv("SATURN_P3_RT_AUDIO_CPUS");
+  bool EnableRequested = false;
+  bool EnableValue = false;
+  int DefaultPriority = 10;
+  int MinPriority;
+  int MaxPriority;
+  int ParsedPolicy = SCHED_RR;
+  long ParsedPriority = 0;
+
+  memset(&gCriticalAudioRuntime, 0, sizeof(gCriticalAudioRuntime));
+  gCriticalAudioRuntime.Policy = SCHED_RR;
+  gCriticalAudioRuntime.Priority = DefaultPriority;
+
+  if(EnableEnv != NULL)
+  {
+    if(!ParseBoolEnvValue(EnableEnv, &EnableValue))
+    {
+      printf("Ignoring invalid SATURN_P3_RT_AUDIO_ENABLE=%s\n", EnableEnv);
+      return;
+    }
+    EnableRequested = EnableValue;
+  }
+  else if((PolicyEnv != NULL) || (PriorityEnv != NULL) || (CpuEnv != NULL))
+  {
+    EnableRequested = true;
+  }
+
+  if(!EnableRequested)
+    return;
+
+  if(PolicyEnv != NULL)
+  {
+    ParsedPolicy = ParseSchedulerPolicy(PolicyEnv);
+    if(ParsedPolicy < 0)
+    {
+      printf("Ignoring invalid SATURN_P3_RT_AUDIO_POLICY=%s, using SCHED_RR\n", PolicyEnv);
+      ParsedPolicy = SCHED_RR;
+    }
+  }
+  gCriticalAudioRuntime.Policy = ParsedPolicy;
+
+  MinPriority = sched_get_priority_min(gCriticalAudioRuntime.Policy);
+  MaxPriority = sched_get_priority_max(gCriticalAudioRuntime.Policy);
+  if((MinPriority < 0) || (MaxPriority < 0))
+  {
+    perror("sched_get_priority_*");
+    MinPriority = 0;
+    MaxPriority = 0;
+  }
+
+  if(gCriticalAudioRuntime.Policy == SCHED_OTHER)
+    gCriticalAudioRuntime.Priority = 0;
+  else
+  {
+    if(DefaultPriority < MinPriority)
+      DefaultPriority = MinPriority;
+    if(DefaultPriority > MaxPriority)
+      DefaultPriority = MaxPriority;
+    gCriticalAudioRuntime.Priority = DefaultPriority;
+
+    if(PriorityEnv != NULL)
+    {
+      if(!ParseLongValue(PriorityEnv, &ParsedPriority))
+      {
+        printf("Ignoring invalid SATURN_P3_RT_AUDIO_PRIORITY=%s, using %d\n",
+               PriorityEnv, gCriticalAudioRuntime.Priority);
+      }
+      else
+      {
+        if(ParsedPriority < MinPriority)
+        {
+          printf("SATURN_P3_RT_AUDIO_PRIORITY=%ld below minimum %d, clamping\n",
+                 ParsedPriority, MinPriority);
+          ParsedPriority = MinPriority;
+        }
+        else if(ParsedPriority > MaxPriority)
+        {
+          printf("SATURN_P3_RT_AUDIO_PRIORITY=%ld above maximum %d, clamping\n",
+                 ParsedPriority, MaxPriority);
+          ParsedPriority = MaxPriority;
+        }
+        gCriticalAudioRuntime.Priority = (int)ParsedPriority;
+      }
+    }
+  }
+
+  if(CpuEnv != NULL)
+  {
+    if(ParseCPUSetList(CpuEnv, &gCriticalAudioRuntime.CpuSet,
+                       gCriticalAudioRuntime.CpuListText, sizeof(gCriticalAudioRuntime.CpuListText)))
+    {
+      gCriticalAudioRuntime.CpuSetConfigured = true;
+    }
+    else
+    {
+      printf("Ignoring invalid SATURN_P3_RT_AUDIO_CPUS=%s\n", CpuEnv);
+    }
+  }
+
+  gCriticalAudioRuntime.Enabled = true;
+  printf("P2 critical audio RT enabled: policy=%s priority=%d",
+         SchedulerPolicyName(gCriticalAudioRuntime.Policy), gCriticalAudioRuntime.Priority);
+  if(gCriticalAudioRuntime.CpuSetConfigured)
+    printf(" cpus=%s", gCriticalAudioRuntime.CpuListText);
+  printf("\n");
+}
+
+void ApplyCriticalAudioThreadRuntime(const char* ThreadName)
+{
+  struct sched_param SchedParam;
+  pid_t ThreadID;
+  int Result;
+
+  if(!gCriticalAudioRuntime.Enabled)
+    return;
+
+  ThreadID = (pid_t)syscall(SYS_gettid);
+
+  if(gCriticalAudioRuntime.CpuSetConfigured)
+  {
+    if(sched_setaffinity(0, sizeof(gCriticalAudioRuntime.CpuSet), &gCriticalAudioRuntime.CpuSet) != 0)
+    {
+      printf("%s affinity request failed, pid=%ld cpus=%s: %s\n",
+             ThreadName, (long)ThreadID, gCriticalAudioRuntime.CpuListText, strerror(errno));
+    }
+    else
+    {
+      printf("%s affinity applied, pid=%ld cpus=%s\n",
+             ThreadName, (long)ThreadID, gCriticalAudioRuntime.CpuListText);
+    }
+  }
+
+  memset(&SchedParam, 0, sizeof(SchedParam));
+  SchedParam.sched_priority = gCriticalAudioRuntime.Priority;
+  Result = pthread_setschedparam(pthread_self(), gCriticalAudioRuntime.Policy, &SchedParam);
+  if(Result != 0)
+  {
+    printf("%s scheduler request failed, pid=%ld policy=%s priority=%d: %s\n",
+           ThreadName, (long)ThreadID, SchedulerPolicyName(gCriticalAudioRuntime.Policy),
+           gCriticalAudioRuntime.Priority, strerror(Result));
+  }
+  else
+  {
+    printf("%s scheduler applied, pid=%ld policy=%s priority=%d\n",
+           ThreadName, (long)ThreadID, SchedulerPolicyName(gCriticalAudioRuntime.Policy),
+           gCriticalAudioRuntime.Priority);
+  }
+}
+
 void sig_handler(int signo)
 {
     if (signo == SIGINT)
-        printf("received SIGINT\n");
-    ExitRequested = true;
+        g_signal_exit_requested = 1;
 }
 
 //
@@ -240,7 +843,7 @@ bool CheckActiveThreads(int StartingPoint)
 
   for (int i = StartingPoint; i < VPORTTABLESIZE; i++)          // loop through the socket table
   {
-    if(Ptr->Active)                                 // check this thread
+    if(atomic_load(&Ptr->Active))                   // check this thread
       Result = true;
     Ptr++;
   }
@@ -258,16 +861,33 @@ bool CheckActiveThreads(int StartingPoint)
 void SetPort(uint32_t ThreadNum, uint16_t PortNum)
 {
   uint16_t CurrentPort;
+  uint16_t NewPort;
+  bool WasShared = false;
+  bool IsShared = false;
 
-  CurrentPort = SocketData[ThreadNum].Portid;
-  if(PortNum == 0)
-    SocketData[ThreadNum].Portid = DefaultPorts[ThreadNum];     //default if not set
-  else
-    SocketData[ThreadNum].Portid = PortNum;
-  P23PerfTelemetrySetPort(ThreadNum, SocketData[ThreadNum].Portid);
+  if(ResolveSocketOwnerIndex(ThreadNum) != ThreadNum)
+    WasShared = ThreadSocketShouldShareAlias(&SocketData[ThreadNum]);
+  CurrentPort = atomic_load(&SocketData[ThreadNum].Portid);
+  NewPort = (PortNum == 0) ? DefaultPorts[ThreadNum] : PortNum;
+  atomic_store(&SocketData[ThreadNum].Portid, NewPort);
+  P23PerfTelemetrySetPort(ThreadNum, NewPort);
+  if(ResolveSocketOwnerIndex(ThreadNum) != ThreadNum)
+    IsShared = ThreadSocketShouldShareAlias(&SocketData[ThreadNum]);
 
-  if (SocketData[ThreadNum].Portid != CurrentPort)
-    SocketData[ThreadNum].Cmdid |= VBITCHANGEPORT;
+  if ((NewPort != CurrentPort) || (WasShared != IsShared))
+    atomic_fetch_or(&SocketData[ThreadNum].Cmdid, (uint_fast32_t)VBITCHANGEPORT);
+
+  if(NewPort != CurrentPort)
+  {
+    if(ThreadNum == VPORTDUCSPECIFIC)
+      atomic_fetch_or(&SocketData[VPORTMICAUDIO].Cmdid, (uint_fast32_t)VBITCHANGEPORT);
+    else if(ThreadNum == VPORTDDCSPECIFIC)
+      atomic_fetch_or(&SocketData[VPORTHIGHPRIORITYFROMSDR].Cmdid, (uint_fast32_t)VBITCHANGEPORT);
+    else if(ThreadNum == VPORTHIGHPRIORITYTOSDR)
+      atomic_fetch_or(&SocketData[VPORTWIDEBAND0].Cmdid, (uint_fast32_t)VBITCHANGEPORT);
+    else if(ThreadNum == VPORTSPKRAUDIO)
+      atomic_fetch_or(&SocketData[VPORTWIDEBAND1].Cmdid, (uint_fast32_t)VBITCHANGEPORT);
+  }
 }
 
 
@@ -280,44 +900,56 @@ int MakeSocket(struct ThreadSocketData* Ptr, int DDCid)
 {
   struct timeval ReadTimeout;                                       // read timeout
   int yes = 1;
+  int ReceiveBufferSize = 512 * 1024;                               // absorb short scheduler/network jitter bursts
+  int SendBufferSize = 256 * 1024;                                  // keep outbound UDP writes from stalling on tiny buffers
+  int Socketfd;
+  uint16_t Portid;
 //  struct sockaddr_in addr_cmddata;
   //
   // create socket for incoming data
   //
-  if((Ptr->Socketid = socket(AF_INET, SOCK_DGRAM, 0)) < 0)
+  Socketfd = socket(AF_INET, SOCK_DGRAM, 0);
+  if(Socketfd < 0)
   {
     perror("socket fail");
     return EXIT_FAILURE;
   }
+  atomic_store(&Ptr->Socketid, Socketfd);
 
   //
   // set 1ms timeout, and re-use any recently open ports
   //
-  setsockopt(Ptr->Socketid, SOL_SOCKET, SO_REUSEADDR, (void *)&yes , sizeof(yes));
+  setsockopt(Socketfd, SOL_SOCKET, SO_REUSEADDR, (void *)&yes , sizeof(yes));
+  setsockopt(Socketfd, SOL_SOCKET, SO_RCVBUF, (void *)&ReceiveBufferSize, sizeof(ReceiveBufferSize));
+  setsockopt(Socketfd, SOL_SOCKET, SO_SNDBUF, (void *)&SendBufferSize, sizeof(SendBufferSize));
   ReadTimeout.tv_sec = 0;
   ReadTimeout.tv_usec = 1000;
-  setsockopt(Ptr->Socketid, SOL_SOCKET, SO_RCVTIMEO, (void *)&ReadTimeout , sizeof(ReadTimeout));
+  setsockopt(Socketfd, SOL_SOCKET, SO_RCVTIMEO, (void *)&ReadTimeout , sizeof(ReadTimeout));
 
   //
   // bind application to the specified port
   //
+  Portid = atomic_load(&Ptr->Portid);
   memset(&Ptr->addr_cmddata, 0, sizeof(struct sockaddr_in));
   Ptr->addr_cmddata.sin_family = AF_INET;
   Ptr->addr_cmddata.sin_addr.s_addr = htonl(INADDR_ANY);
-  Ptr->addr_cmddata.sin_port = htons(Ptr->Portid);
+  Ptr->addr_cmddata.sin_port = htons(Portid);
 
-  if(bind(Ptr->Socketid, (struct sockaddr *)&Ptr->addr_cmddata, sizeof(struct sockaddr_in)) < 0)
+  if(bind(Socketfd, (struct sockaddr *)&Ptr->addr_cmddata, sizeof(struct sockaddr_in)) < 0)
   {
     perror("bind");
+    close(Socketfd);
+    atomic_store(&Ptr->Socketid, 0);
     return EXIT_FAILURE;
   }
 
   struct sockaddr_in checkin;
   socklen_t len = sizeof(checkin);
-  if(getsockname(Ptr->Socketid, (struct sockaddr *)&checkin, &len)==-1)
+  if(getsockname(Socketfd, (struct sockaddr *)&checkin, &len)==-1)
     perror("getsockname");
 
   Ptr->DDCid = DDCid;                       // set DDC number, for outgoing ports
+  SyncSocketAliasesForOwner(Ptr);           // mirror owner socket FD to any shared-alias thread entries
   return 0;
 }
 
@@ -328,19 +960,32 @@ int MakeSocket(struct ThreadSocketData* Ptr, int DDCid)
 //
 void* CheckForExitCommand(__attribute__((unused)) void *arg)
 {
+  int Flags;
+  int ReadCount;
   char ch;
   printf("spinning up Check For Exit thread, pid=%ld\n", syscall(SYS_gettid));
-  
-  while (1)
+
+  Flags = fcntl(STDIN_FILENO, F_GETFL, 0);
+  if(Flags != -1)
+    fcntl(STDIN_FILENO, F_SETFL, Flags | O_NONBLOCK);
+
+  while (!atomic_load(&ExitRequested))
   {
     usleep(10000);
-    ch = getchar();
-    if((ch == 'x') || (ch == 'X'))
+    ReadCount = read(STDIN_FILENO, &ch, 1);
+    if(ReadCount > 0)
     {
-      ExitRequested = true;
-      break;
+      if((ch == 'x') || (ch == 'X'))
+      {
+        atomic_store(&ExitRequested, true);
+        break;
+      }
     }
   }
+
+  if(Flags != -1)
+    fcntl(STDIN_FILENO, F_SETFL, Flags);
+
   return NULL;
 }
 
@@ -353,24 +998,28 @@ void* CheckForActivity(__attribute__((unused)) void *arg)
 {
   bool PreviouslyActiveState;               
   printf("Started check for activity thread, pid=%ld\n", syscall(SYS_gettid));
-  while(1)
+  while(!atomic_load(&ExitRequested))
   {
     sleep(1);                                   // wait for 1 second
-    PreviouslyActiveState = SDRActive;          // see if active on entry
-    if (!NewMessageReceived && HW_Timer_Enable) // if no messages received,
+    PreviouslyActiveState = atomic_load(&SDRActive);          // see if active on entry
+    if (!atomic_load(&NewMessageReceived) && atomic_load(&HW_Timer_Enable)) // if no messages received,
     {
-      SDRActive = false;                        // set back to inactive
-      IsTXMode = false;
+      atomic_store(&SDRActive, false);          // set back to inactive
+      atomic_store(&IsTXMode, false);
       SetMOX(false);
       SetTXEnable(false);
       EnableCW(false, false);
-      ReplyAddressSet = false;
-      StartBitReceived = false;
+      atomic_store(&ReplyAddressSet, false);
+      atomic_store(&StartBitReceived, false);
       if(PreviouslyActiveState)
+      {
         printf("Reverted to Inactive State after no activity\n");
+        ResetStartupTraceFlags();
+      }
     }
-    NewMessageReceived = false;
+    atomic_store(&NewMessageReceived, false);
   }
+  return NULL;
 }
 
 
@@ -382,18 +1031,82 @@ void* CheckForActivity(__attribute__((unused)) void *arg)
 //
 void Shutdown()
 {
+  int i;
+
+  atomic_store(&ExitRequested, true);
+  if(CheckForExitThreadStarted)
+  {
+    pthread_join(CheckForExitThread, NULL);
+    CheckForExitThreadStarted = false;
+  }
+  if(CheckForNoActivityThreadStarted)
+  {
+    pthread_join(CheckForNoActivityThread, NULL);
+    CheckForNoActivityThreadStarted = false;
+  }
+  if(DDCSpecificThreadStarted)
+  {
+    pthread_join(DDCSpecificThread, NULL);
+    DDCSpecificThreadStarted = false;
+  }
+  if(DUCSpecificThreadStarted)
+  {
+    pthread_join(DUCSpecificThread, NULL);
+    DUCSpecificThreadStarted = false;
+  }
+  if(HighPriorityToSDRThreadStarted)
+  {
+    pthread_join(HighPriorityToSDRThread, NULL);
+    HighPriorityToSDRThreadStarted = false;
+  }
+  if(SpkrAudioThreadStarted)
+  {
+    pthread_join(SpkrAudioThread, NULL);
+    SpkrAudioThreadStarted = false;
+  }
+  if(DUCIQThreadStarted)
+  {
+    pthread_join(DUCIQThread, NULL);
+    DUCIQThreadStarted = false;
+  }
+  if(MicThreadStarted)
+  {
+    pthread_join(MicThread, NULL);
+    MicThreadStarted = false;
+  }
+  if(HighPriorityFromSDRThreadStarted)
+  {
+    pthread_join(HighPriorityFromSDRThread, NULL);
+    HighPriorityFromSDRThreadStarted = false;
+  }
+  for(i = 0; i < VNUMDDC; i++)
+  {
+    if(DDCIQThreadStarted[i])
+    {
+      pthread_join(DDCIQThread[i], NULL);
+      DDCIQThreadStarted[i] = false;
+    }
+  }
+  if(WidebandDataThreadStarted)
+  {
+    pthread_join(WidebandDataThread, NULL);
+    WidebandDataThreadStarted = false;
+  }
+
   ShutdownCATHandler();                                   // close CAT connection socket
   if(UseControlPanel)
     ShutdownFrontPanelHandler();
   if(UseAriesATU)
     ShutdownAriesHandler();
+  if(UseGanymede)
+    ShutdownGanymedeHandler();
 
-  close(SocketData[0].Socketid);                          // close incoming data socket
+  close(atomic_load(&SocketData[0].Socketid));            // close incoming data socket
   sem_destroy(&DDCInSelMutex);
   sem_destroy(&DDCResetFIFOMutex);
   sem_destroy(&RFGPIOMutex);
   sem_destroy(&CodecRegMutex);
-  sem_destroy(&DDCResetFIFOMutex);                        // for DMA
+  sem_destroy(&MicWBDMAMutex);                            // for DMA
   SetMOX(false);
   SetTXEnable(false);
   EnableCW(false, false);
@@ -460,14 +1173,18 @@ int main(int argc, char *argv[])
   sem_init(&MicWBDMAMutex, 0, 1);                                   // for mic and WB DMA
   P23PerfTelemetryInit("p2", GetP2appVersion());
   for(i = 0; i < VPORTTABLESIZE; i++)
-    P23PerfTelemetrySetPort((unsigned int)i, SocketData[i].Portid);
+    P23PerfTelemetrySetPort((unsigned int)i, atomic_load(&SocketData[i].Portid));
     
 //
 // setup Saturn hardware
 //
-  printf("SATURN Protocol 2 App. press 'x <enter>' in console to close\n");
+  printf("SATURN P2 App (hardened Protocol 2 path). press 'x <enter>' in console to close\n");
 
-  OpenXDMADriver(false);
+  if(!OpenXDMADriver(false))
+  {
+    printf("unable to continue without XDMA register access\n");
+    return EXIT_FAILURE;
+  }
   GetVersionInfoSnapshot(&VersionInfo);
   P23PerfTelemetrySetVersionInfo(&VersionInfo);
   PrintVersionInfo();
@@ -527,18 +1244,23 @@ int main(int argc, char *argv[])
   SetBalancedMicInput(false);
   InitCATHandler();
 
-  if (signal(SIGINT, sig_handler) == SIG_ERR)
+  struct sigaction sa;
+  memset(&sa, 0, sizeof(sa));
+  sa.sa_handler = sig_handler;
+  sigemptyset(&sa.sa_mask);
+  sa.sa_flags = 0;
+  if (sigaction(SIGINT, &sa, NULL) == -1)
     printf("\ncan't catch SIGINT\n");
 
 //
 // start up thread to check for no longer getting messages, to set back to inactive
 //
-  if(pthread_create(&CheckForNoActivityThread, NULL, CheckForActivity, NULL) < 0)
+  if(pthread_create(&CheckForNoActivityThread, NULL, CheckForActivity, NULL) != 0)
   {
     perror("pthread_create check for exit");
     return EXIT_FAILURE;
   }
-  pthread_detach(CheckForNoActivityThread);
+  CheckForNoActivityThreadStarted = true;
 
 //
 // option string needs a colon after each option letter that has a parameter after it
@@ -587,7 +1309,7 @@ int main(int argc, char *argv[])
         break;
 
       case 'g':
-        printf ("Ganymede PA control enabled\n");                  
+        printf ("Ganymede PA control enabled\n");
         UseGanymede = true;
         break;
 
@@ -665,6 +1387,7 @@ int main(int argc, char *argv[])
   }
   printf("\n");
   P23PerfTelemetrySetFeatureFlags(UseControlPanel, UseGanymede, UseLDGATU, UseAriesATU);
+  LoadCriticalAudioRuntimeConfig();
 
 
 //
@@ -678,10 +1401,6 @@ int main(int argc, char *argv[])
 //
   if(UseAriesATU)
     InitialiseAriesHandler();
-
-//
-// startup Ganymede handler if needed
-//
   if(UseGanymede)
     InitialiseGanymedeHandler();
 
@@ -702,18 +1421,22 @@ int main(int argc, char *argv[])
 //
   if (SkipExitCheck == false)
   {
-    if(pthread_create(&CheckForExitThread, NULL, CheckForExitCommand, NULL) < 0)
+    if(pthread_create(&CheckForExitThread, NULL, CheckForExitCommand, NULL) != 0)
     {
       perror("pthread_create check for exit");
       return EXIT_FAILURE;
     }
+    CheckForExitThreadStarted = true;
   }
-  pthread_detach(CheckForExitThread);
 
   //
   // create socket for incoming data on the command port
   //
-  MakeSocket(SocketData, 0);
+  if(MakeSocket(SocketData, 0) != 0)
+  {
+    printf("failed to create command socket\n");
+    return EXIT_FAILURE;
+  }
 
   
 
@@ -732,22 +1455,27 @@ int main(int argc, char *argv[])
 
 #else // newer way
   DIR *dp;
-  struct dirent *ep;   
+  struct dirent *ep;
   char *posp;
   int ch = 'e';                                    // start character ethernet
+  char InterfaceName[IFNAMSIZ] = {0};
+  bool FoundInterface = false;
 
     dp = opendir("/sys/class/net");
-    if (dp != NULL) 
+    if (dp != NULL)
     {
       while ((ep = readdir(dp)) != NULL)
       {
-        if ( !strcmp(ep->d_name, ".") || !strcmp(ep->d_name, "..") )
-        { 
+        if ( !strcmp(ep->d_name, ".") || !strcmp(ep->d_name, "..") || !strcmp(ep->d_name, "lo") )
+        {
           continue;
         }
         posp = strchr(ep->d_name, ch);
-        if ( posp == ep->d_name ) { 
-          printf("%s: interface name: %s\n", __FUNCTION__, ep->d_name);
+        if ( posp == ep->d_name ) {
+          strncpy(InterfaceName, ep->d_name, IFNAMSIZ - 1);
+          InterfaceName[IFNAMSIZ - 1] = '\0';
+          printf("%s: interface name: %s\n", __FUNCTION__, InterfaceName);
+          FoundInterface = true;
           break;
         }
       }
@@ -756,11 +1484,20 @@ int main(int argc, char *argv[])
     else
     {
       printf("%s: Couldn't open the directory\n", __FUNCTION__);
-      return -1; 
-    }   
+      return EXIT_FAILURE;
+    }
+    if(!FoundInterface)
+    {
+      printf("%s: No ethernet interface found\n", __FUNCTION__);
+      return EXIT_FAILURE;
+    }
     memset(&hwaddr, 0, sizeof(hwaddr));
-    strncpy(hwaddr.ifr_name, ep->d_name, IFNAMSIZ - 1); 
-    ioctl(SocketData[VPORTCOMMAND].Socketid, SIOCGIFHWADDR, &hwaddr);
+    snprintf(hwaddr.ifr_name, sizeof(hwaddr.ifr_name), "%s", InterfaceName);
+    if(ioctl(atomic_load(&SocketData[VPORTCOMMAND].Socketid), SIOCGIFHWADDR, &hwaddr) != 0)
+    {
+      perror("ioctl SIOCGIFHWADDR");
+      return EXIT_FAILURE;
+    }
     for(i = 0; i < 6; ++i) DiscoveryReply[i + 5] = hwaddr.ifr_addr.sa_data[i];         // copy MAC to reply message
 #endif
   DiscoveryReply[13] = (uint8_t)Version;
@@ -768,115 +1505,170 @@ int main(int argc, char *argv[])
   
 
 
-  MakeSocket(SocketData+VPORTDDCSPECIFIC, 0);            // create and bind a socket
-  if(pthread_create(&DDCSpecificThread, NULL, IncomingDDCSpecific, (void*)&SocketData[VPORTDDCSPECIFIC]) < 0)
+  if(MakeSocket(SocketData+VPORTDDCSPECIFIC, 0) != 0)            // create and bind a socket
+  {
+    printf("failed to create DDC specific socket\n");
+    return EXIT_FAILURE;
+  }
+  if(pthread_create(&DDCSpecificThread, NULL, IncomingDDCSpecific, (void*)&SocketData[VPORTDDCSPECIFIC]) != 0)
   {
     perror("pthread_create DDC specific");
     return EXIT_FAILURE;
   }
-  pthread_detach(DDCSpecificThread);
+  DDCSpecificThreadStarted = true;
 
-  MakeSocket(SocketData+VPORTDUCSPECIFIC, 0);            // create and bind a socket
-  if(pthread_create(&DUCSpecificThread, NULL, IncomingDUCSpecific, (void*)&SocketData[VPORTDUCSPECIFIC]) < 0)
+  if(MakeSocket(SocketData+VPORTDUCSPECIFIC, 0) != 0)            // create and bind a socket
+  {
+    printf("failed to create DUC specific socket\n");
+    return EXIT_FAILURE;
+  }
+  if(pthread_create(&DUCSpecificThread, NULL, IncomingDUCSpecific, (void*)&SocketData[VPORTDUCSPECIFIC]) != 0)
   {
     perror("pthread_create DUC specific");
     return EXIT_FAILURE;
   }
-  pthread_detach(DUCSpecificThread);
+  DUCSpecificThreadStarted = true;
 
-  MakeSocket(SocketData+VPORTHIGHPRIORITYTOSDR, 0);            // create and bind a socket
-  if(pthread_create(&HighPriorityToSDRThread, NULL, IncomingHighPriority, (void*)&SocketData[VPORTHIGHPRIORITYTOSDR]) < 0)
+  if(MakeSocket(SocketData+VPORTHIGHPRIORITYTOSDR, 0) != 0)            // create and bind a socket
+  {
+    printf("failed to create incoming high priority socket\n");
+    return EXIT_FAILURE;
+  }
+  if(pthread_create(&HighPriorityToSDRThread, NULL, IncomingHighPriority, (void*)&SocketData[VPORTHIGHPRIORITYTOSDR]) != 0)
   {
     perror("pthread_create High priority to SDR");
     return EXIT_FAILURE;
   }
-  pthread_detach(HighPriorityToSDRThread);
+  HighPriorityToSDRThreadStarted = true;
 
-  MakeSocket(SocketData+VPORTSPKRAUDIO, 0);            // create and bind a socket
-  if(pthread_create(&SpkrAudioThread, NULL, IncomingSpkrAudio, (void*)&SocketData[VPORTSPKRAUDIO]) < 0)
+  if(MakeSocket(SocketData+VPORTSPKRAUDIO, 0) != 0)            // create and bind a socket
+  {
+    printf("failed to create speaker audio socket\n");
+    return EXIT_FAILURE;
+  }
+  if(pthread_create(&SpkrAudioThread, NULL, IncomingSpkrAudio, (void*)&SocketData[VPORTSPKRAUDIO]) != 0)
   {
     perror("pthread_create speaker audio");
     return EXIT_FAILURE;
   }
-  pthread_detach(SpkrAudioThread);
+  SpkrAudioThreadStarted = true;
 
-  MakeSocket(SocketData+VPORTDUCIQ, 0);            // create and bind a socket
-  if(pthread_create(&DUCIQThread, NULL, IncomingDUCIQ, (void*)&SocketData[VPORTDUCIQ]) < 0)
+  if(MakeSocket(SocketData+VPORTDUCIQ, 0) != 0)            // create and bind a socket
+  {
+    printf("failed to create DUC I/Q socket\n");
+    return EXIT_FAILURE;
+  }
+  if(pthread_create(&DUCIQThread, NULL, IncomingDUCIQ, (void*)&SocketData[VPORTDUCIQ]) != 0)
   {
     perror("pthread_create DUC I/Q");
     return EXIT_FAILURE;
   }
-  pthread_detach(DUCIQThread);
+  DUCIQThreadStarted = true;
 
 //
 // create outgoing mic data thread
-// note this shares a port with incoming DUC specific, so don't create a new port
-// instead copy socket settings from DUCSPECIFIC socket:
+// default behavior shares port/socket with incoming DUC specific (1026).
+// if general packet assigns a different mic port, the mic thread will
+// create and use its own socket when it handles VBITCHANGEPORT.
 //
-  SocketData[VPORTMICAUDIO].Socketid = SocketData[VPORTDUCSPECIFIC].Socketid;
-  memcpy(&SocketData[VPORTMICAUDIO].addr_cmddata, &SocketData[VPORTDUCSPECIFIC].addr_cmddata, sizeof(struct sockaddr_in));
-  if(pthread_create(&MicThread, NULL, OutgoingMicSamples, (void*)&SocketData[VPORTMICAUDIO]) < 0)
+  if(pthread_create(&MicThread, NULL, OutgoingMicSamples, (void*)&SocketData[VPORTMICAUDIO]) != 0)
   {
     perror("pthread_create Mic");
     return EXIT_FAILURE;
   }
-  pthread_detach(MicThread);
+  MicThreadStarted = true;
 
 
 //
 // create outgoing high priority data thread
-// note this shares a port with incoming DDC specific, so don't create a new port
-// instead copy socket settings from VPORTDDCSPECIFIC socket:
+// default behavior shares port/socket with incoming DDC specific (1025).
+// if general packet assigns a different outgoing high-priority port, this
+// thread will create/use its own socket when VBITCHANGEPORT is processed.
 //
-  SocketData[VPORTHIGHPRIORITYFROMSDR].Socketid = SocketData[VPORTDDCSPECIFIC].Socketid;
-  memcpy(&SocketData[VPORTHIGHPRIORITYFROMSDR].addr_cmddata, &SocketData[VPORTDDCSPECIFIC].addr_cmddata, sizeof(struct sockaddr_in));
-  if(pthread_create(&HighPriorityFromSDRThread, NULL, OutgoingHighPriority, (void*)&SocketData[VPORTHIGHPRIORITYFROMSDR]) < 0)
+  if(pthread_create(&HighPriorityFromSDRThread, NULL, OutgoingHighPriority, (void*)&SocketData[VPORTHIGHPRIORITYFROMSDR]) != 0)
   {
     perror("pthread_create outgoing hi priority");
     return EXIT_FAILURE;
   }
-  pthread_detach(HighPriorityFromSDRThread);
+  HighPriorityFromSDRThreadStarted = true;
 
 
 //
 // and for now create just one outgoing DDC data thread for DDC 0
 // create all the sockets though!
 //
-  MakeSocket(SocketData + VPORTDDCIQ0, 0);
-  MakeSocket(SocketData + VPORTDDCIQ1, 0);
-  MakeSocket(SocketData + VPORTDDCIQ2, 0);
-  MakeSocket(SocketData + VPORTDDCIQ3, 0);
-  MakeSocket(SocketData + VPORTDDCIQ4, 0);
-  MakeSocket(SocketData + VPORTDDCIQ5, 0);
-  MakeSocket(SocketData + VPORTDDCIQ6, 0);
-  MakeSocket(SocketData + VPORTDDCIQ7, 0);
-  MakeSocket(SocketData + VPORTDDCIQ8, 0);
-  MakeSocket(SocketData + VPORTDDCIQ9, 0);
-  if(pthread_create(&DDCIQThread[0], NULL, OutgoingDDCIQ, (void*)&SocketData[VPORTDDCIQ0]) < 0)
+  if(MakeSocket(SocketData + VPORTDDCIQ0, 0) != 0)
+  {
+    printf("failed to create DDC I/Q socket 0\n");
+    return EXIT_FAILURE;
+  }
+  if(MakeSocket(SocketData + VPORTDDCIQ1, 0) != 0)
+  {
+    printf("failed to create DDC I/Q socket 1\n");
+    return EXIT_FAILURE;
+  }
+  if(MakeSocket(SocketData + VPORTDDCIQ2, 0) != 0)
+  {
+    printf("failed to create DDC I/Q socket 2\n");
+    return EXIT_FAILURE;
+  }
+  if(MakeSocket(SocketData + VPORTDDCIQ3, 0) != 0)
+  {
+    printf("failed to create DDC I/Q socket 3\n");
+    return EXIT_FAILURE;
+  }
+  if(MakeSocket(SocketData + VPORTDDCIQ4, 0) != 0)
+  {
+    printf("failed to create DDC I/Q socket 4\n");
+    return EXIT_FAILURE;
+  }
+  if(MakeSocket(SocketData + VPORTDDCIQ5, 0) != 0)
+  {
+    printf("failed to create DDC I/Q socket 5\n");
+    return EXIT_FAILURE;
+  }
+  if(MakeSocket(SocketData + VPORTDDCIQ6, 0) != 0)
+  {
+    printf("failed to create DDC I/Q socket 6\n");
+    return EXIT_FAILURE;
+  }
+  if(MakeSocket(SocketData + VPORTDDCIQ7, 0) != 0)
+  {
+    printf("failed to create DDC I/Q socket 7\n");
+    return EXIT_FAILURE;
+  }
+  if(MakeSocket(SocketData + VPORTDDCIQ8, 0) != 0)
+  {
+    printf("failed to create DDC I/Q socket 8\n");
+    return EXIT_FAILURE;
+  }
+  if(MakeSocket(SocketData + VPORTDDCIQ9, 0) != 0)
+  {
+    printf("failed to create DDC I/Q socket 9\n");
+    return EXIT_FAILURE;
+  }
+  if(pthread_create(&DDCIQThread[0], NULL, OutgoingDDCIQ, (void*)&SocketData[VPORTDDCIQ0]) != 0)
   {
     perror("pthread_create DUC I/Q");
     return EXIT_FAILURE;
   }
-  pthread_detach(DDCIQThread[0]);
+  DDCIQThreadStarted[0] = true;
 
   if(Version >= 18)
   {
 //
 // create outgoing wideband data thread which services bothe wideband0 and wideband1
-// both sockets already exist so copy socket settings from existing sockets:
-// wideband0 shares port 1027 with incoming high priority data
-// wideband1 shares port 1028 with incoming DDC audio
+// default behavior shares sockets with incoming threads:
+// wideband0->high priority in (1027), wideband1->speaker in (1028).
+// if general packet assigns different wideband ports, this thread opens
+// independent sockets when handling VBITCHANGEPORT.
 //
-    SocketData[VPORTWIDEBAND0].Socketid = SocketData[VPORTHIGHPRIORITYTOSDR].Socketid;
-    SocketData[VPORTWIDEBAND1].Socketid = SocketData[VPORTSPKRAUDIO].Socketid;
-    memcpy(&SocketData[VPORTWIDEBAND0].addr_cmddata, &SocketData[VPORTHIGHPRIORITYTOSDR].addr_cmddata, sizeof(struct sockaddr_in));
-    memcpy(&SocketData[VPORTWIDEBAND1].addr_cmddata, &SocketData[VPORTSPKRAUDIO].addr_cmddata, sizeof(struct sockaddr_in));
-    if(pthread_create(&WidebandDataThread, NULL, OutgoingWidebandSamples, (void*)&SocketData[VPORTWIDEBAND0]) < 0)
+    if(pthread_create(&WidebandDataThread, NULL, OutgoingWidebandSamples, (void*)&SocketData[VPORTWIDEBAND0]) != 0)
     {
       perror("pthread_create outgoing wideband data");
       return EXIT_FAILURE;
     }
-    pthread_detach(WidebandDataThread);
+    WidebandDataThreadStarted = true;
   }
 
 
@@ -894,6 +1686,7 @@ int main(int argc, char *argv[])
   //
   while(1)
   {
+    SyncSignalExitRequest();
     memset(&iovecinst, 0, sizeof(struct iovec));
     memset(&datagram, 0, sizeof(datagram));
     iovecinst.iov_base = &UDPInBuffer;                  // set buffer for incoming message number i
@@ -902,15 +1695,16 @@ int main(int argc, char *argv[])
     datagram.msg_iovlen = 1;
     datagram.msg_name = &addr_from;
     datagram.msg_namelen = sizeof(addr_from);
-    size = recvmsg(SocketData[0].Socketid, &datagram, 0);         // get one message. If it times out, gets size=-1
+    size = recvmsg(atomic_load(&SocketData[0].Socketid), &datagram, 0);  // get one message. If it times out, gets size=-1
     if(size < 0 && errno != EAGAIN)
     {
       perror("recvfrom, port 1024");
       return EXIT_FAILURE;
     }
-    if(ExitRequested)
+    SyncSignalExitRequest();
+    if(atomic_load(&ExitRequested))
       break;
-    if(ThreadError)
+    if(atomic_load(&ThreadError))
       break;
 
 
@@ -921,28 +1715,24 @@ int main(int argc, char *argv[])
     CmdByte = UDPInBuffer[4];
     if(size==VDISCOVERYSIZE)  
     {
-      NewMessageReceived = true;
+      atomic_store(&NewMessageReceived, true);
       switch(CmdByte)
       {
         //
         // general packet. Get the port numbers and establish listener threads
         //
         case 0:
-          printf("P2 General packet to SDR, size= %d\n", size);
           //
           // get "from" MAC address and port; this is where the data goes back to
           //
+          pthread_mutex_lock(&g_reply_addr_mutex);
           memset(&reply_addr, 0, sizeof(reply_addr));
           reply_addr.sin_family = AF_INET;
           reply_addr.sin_addr.s_addr = addr_from.sin_addr.s_addr;
           reply_addr.sin_port = addr_from.sin_port;                       // (but each outgoing thread needs to set its own sin_port)
-          HandleGeneralPacket(UDPInBuffer);
-          ReplyAddressSet = true;
-          if(ReplyAddressSet && StartBitReceived)
-          {
-            SDRActive = true;                                       // only set active if we have start bit too
-            SetTXEnable(true);
-          }
+          pthread_mutex_unlock(&g_reply_addr_mutex);
+          if(QueueGeneralPacketForApply(UDPInBuffer, (size_t)size))
+            MaybeLogStartupEvent(&g_startup_general_rx_logged, "General packet received");
           break;
 
         //
@@ -950,14 +1740,15 @@ int main(int argc, char *argv[])
         //
         case 2:
           printf("P2 Discovery packet\n");
-          if(SDRActive || IncompatibleFirmware)
+          MaybeLogStartupEvent(&g_startup_discovery_logged, "Discovery packet received");
+          if(atomic_load(&SDRActive) || IncompatibleFirmware)
             DiscoveryReply[4] = 3;                             // response 2 if not active, 3 if running
           else
             DiscoveryReply[4] = 2;                             // response 2 if not active, 3 if running
 
           memset(&UDPInBuffer, 0, VDISCOVERYREPLYSIZE);
           memcpy(&UDPInBuffer, DiscoveryReply, VDISCOVERYREPLYSIZE);
-          sendto(SocketData[0].Socketid, &UDPInBuffer, VDISCOVERYREPLYSIZE, 0, (struct sockaddr *)&addr_from, sizeof(addr_from));
+          sendto(atomic_load(&SocketData[0].Socketid), &UDPInBuffer, VDISCOVERYREPLYSIZE, 0, (struct sockaddr *)&addr_from, sizeof(addr_from));
           break;
 
         case 3:
@@ -974,8 +1765,16 @@ int main(int argc, char *argv[])
 //
 // now do any "post packet" processing
 //
+    (void)ApplyQueuedGeneralPacketIfStable();
+    if(!atomic_load(&SDRActive))
+    {
+      if(ApplyQueuedOutgoingPortRebinds() != 0)
+        break;
+    }
+    MaybeActivateFromStartupHandshake();
   } //while(1)
-  if(ThreadError)
+  atomic_store(&ExitRequested, true);
+  if(atomic_load(&ThreadError))
     printf("Thread error reported - exiting\n");
   //
   // clean exit

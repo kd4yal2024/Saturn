@@ -1,7 +1,8 @@
-# P3_app Hardening Notes
+# Hardened p2app Notes
 
 This document records the code-safety, concurrency, and runtime-hardening
-changes applied to `P3_app`, and why each change was made.
+changes that were originally staged in `P3_app` and are now carried by the
+converged hardened `P2_app` implementation.
 
 Latest update: 2026-03-25
 
@@ -48,11 +49,11 @@ Why:
 
 Verification:
 
-- `make -C /home/pi/github/Saturn/sw_projects/P3_app clean all`
+- `make -C /home/pi/github/Saturn/sw_projects/P2_app clean all`
 
 ## High-Priority ADC Peak Telemetry (2026-03-16)
 
-`P3_app` version `45` now encodes ADC peak amplitudes into the existing
+The hardened app version `45` now encodes ADC peak amplitudes into the existing
 60-byte outgoing high-priority status packet:
 
 - bytes `39..40`: ADC1 peak amplitude
@@ -71,7 +72,7 @@ and thread-safety fixes were in place.
 
 What changed:
 
-- `P3_app` now builds with `-O2 -g` by default instead of an effectively
+- The hardened app now builds with `-O2 -g` by default instead of an effectively
   debug-only build.
 - `InDUCIQ.c` batches queued TX DUC frames into larger XDMA writes when FIFO
   space allows.
@@ -134,7 +135,7 @@ Why:
 
 Verification:
 
-- `make -C /home/pi/github/Saturn/sw_projects/P3_app clean && make -C /home/pi/github/Saturn/sw_projects/P3_app -j$(nproc)` completes successfully.
+- `make -C /home/pi/github/Saturn/sw_projects/P2_app clean && make -C /home/pi/github/Saturn/sw_projects/P2_app -j$(nproc)` completes successfully.
 
 ## Front Panel Mode Override (2026-02-25)
 
@@ -1053,7 +1054,7 @@ Why:
 
 - Repeated `gcc -fsyntax-only` checks on touched modules.
 - Full project build completed successfully:
-  - `make -j4` in `sw_projects/P3_app`
+  - `make -j4` in `sw_projects/P2_app`
 
 ## Behavior Notes
 

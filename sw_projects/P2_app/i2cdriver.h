@@ -23,6 +23,16 @@
 #include <stdint.h>
 #include <stdbool.h>
 
+//
+// open and configure shared I2C device file
+//
+int i2c_open_device(const char* device_path, int slave_addr);
+
+//
+// close shared I2C device file
+//
+void i2c_close_device(void);
+
 
 //
 // 8 bit write

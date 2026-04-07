@@ -70,6 +70,7 @@ int OpenSerialPort(char* DeviceName, unsigned int Baud)
         if (tcsetattr(Device, TCSANOW, &Ser) < 0) 
         {
             perror("tcsetattr()");
+            close(Device);
             return -1;
         }
         tcflush(Device, TCIFLUSH);
@@ -82,12 +83,12 @@ int OpenSerialPort(char* DeviceName, unsigned int Baud)
 //
 // send a string to the serial port
 //
-void SendStringToSerial(int Device, char* Message)
+void SendStringToSerial(int Device, const char* Message)
 {
     int Length;                                     // message length in charactera
 
     Length = strlen(Message);
-    write(Device, Message, Length);
+    { ssize_t _r = write(Device, Message, Length); (void)_r; }
 }
 
 
@@ -102,34 +103,38 @@ void* CATSerial(void *arg)
 {
     char SerialInputBuffer[VESERINSIZE];
     char CATMessageBuffer[VESERINSIZE];
+    int DeviceHandle;
     int ReadCnt;
     int Cntr;
     int CATWritePtr = 0;
     char ch;                                    // individual read character
-    int MatchPositionZZZS;
-    int MatchPositionZZZP;
+    bool StartsWithZZZS;
+    bool StartsWithZZZP;
 
     TSerialThreadData *DeviceData;
 
     DeviceData = (TSerialThreadData *) arg;
-    DeviceData -> DeviceHandle = OpenSerialPort(DeviceData -> PathName, DeviceData -> Baud);
-    if(DeviceData -> DeviceHandle != -1)
+    DeviceHandle = OpenSerialPort(DeviceData -> PathName, DeviceData -> Baud);
+    atomic_store(&DeviceData->DeviceHandle, DeviceHandle);
+    if(DeviceHandle != -1)
     {
         printf("Setting up CAT Serial read handler thread for device %s, pid=%ld\n", DeviceNames[(int)DeviceData->Device], syscall(SYS_gettid));
-        DeviceData -> IsOpen = true;
-        DeviceData -> DeviceActive = true;
-        sleep(1);                                   // allow serial to start (particularly for USB)
+        atomic_store(&DeviceData->IsOpen, true);
+        if(atomic_load(&DeviceData->DeviceActive))
+        {
+            sleep(1);                                   // allow serial to start (particularly for USB)
 
-        if(DeviceData -> RequestID)
-            write(DeviceData ->DeviceHandle, "ZZZS;", 5);
+            if(atomic_load(&DeviceData->RequestID) && atomic_load(&DeviceData->DeviceActive))
+                { ssize_t _r = write(DeviceHandle, "ZZZS;", 5); (void)_r; }
+        }
 
     //
     // now loop waiting for characters, then form them into CAT messages terminated by semicolon
     // read() will return after timoeut with no characters, so do check the count!
     //
-        while(DeviceData -> DeviceActive)
+        while(atomic_load(&DeviceData->DeviceActive))
         {
-            ReadCnt = read(DeviceData -> DeviceHandle, &SerialInputBuffer, VESERINSIZE);
+            ReadCnt = read(DeviceHandle, &SerialInputBuffer, VESERINSIZE);
             if (ReadCnt > 0)
             {
     //
@@ -140,19 +145,26 @@ void* CATSerial(void *arg)
                 for(Cntr=0; Cntr < ReadCnt; Cntr++)
                 {
                     ch=SerialInputBuffer[Cntr];
+                    if(((unsigned char)ch < 0x20) && (ch != ';'))
+                    {
+                        CATWritePtr = 0;                                // control chars abandon current message
+                        continue;
+                    }
+                    if(CATWritePtr >= (VESERINSIZE - 2))
+                        CATWritePtr = 0;                                // prevent overwrite; restart buffer
                     CATMessageBuffer[CATWritePtr++] = ch;
                     if (ch == ';')                                      // found end of a complete CAT message
                     {
-                        CATMessageBuffer[CATWritePtr++] = 0;            // terminate the string
-                        MatchPositionZZZS = (int)(strstr(CATMessageBuffer, "ZZZS") - CATMessageBuffer);
-                        MatchPositionZZZP = (int)(strstr(CATMessageBuffer, "ZZZP") - CATMessageBuffer);
+                        CATMessageBuffer[CATWritePtr] = 0;              // terminate the string
+                        StartsWithZZZS = (strncmp(CATMessageBuffer, "ZZZS", 4) == 0);
+                        StartsWithZZZP = (strncmp(CATMessageBuffer, "ZZZP", 4) == 0);
                         if((DeviceData -> Device == eG2V2Panel) ||(DeviceData -> Device == eG2V1PanelAdapter))
                         {
                         //
                         // if ZZZS or ZZZP, send to local handler; else send to SDR client app
                         //
-                            if((MatchPositionZZZS == 0) || (MatchPositionZZZP == 0))
-                                ParseCATCmd(CATMessageBuffer, DeviceData -> DeviceHandle);              // if ZZZS, process locally; else send to TCPIP CAT port
+                            if(StartsWithZZZS || StartsWithZZZP)
+                                ParseCATCmd(CATMessageBuffer, DeviceHandle);              // if ZZZS, process locally; else send to TCPIP CAT port
                             else
                                 SendCATMessage(CATMessageBuffer);           // send unprocessed to SDR client app via TCP/IP
                         }
@@ -161,7 +173,7 @@ void* CATSerial(void *arg)
                         //
                         // for non front panel devices, process CAT commands locally
                         //
-                            ParseCATCmd(CATMessageBuffer, DeviceData -> DeviceHandle);
+                            ParseCATCmd(CATMessageBuffer, DeviceHandle);
                         }
                         CATWritePtr = 0;                                // reset for next CAT message
                     }
@@ -169,8 +181,9 @@ void* CATSerial(void *arg)
             }
         }
         printf("Closing CAT Serial read handler thread for device %s\n", DeviceNames[(int)DeviceData->Device]);
-        close(DeviceData -> DeviceHandle);
-        DeviceData -> IsOpen = false;
+        close(DeviceHandle);
+        atomic_store(&DeviceData->IsOpen, false);
+        atomic_store(&DeviceData->DeviceHandle, -1);
     }
     return NULL;
 }

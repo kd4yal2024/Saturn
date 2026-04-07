@@ -15,7 +15,6 @@ LDFLAGS = -lm -lpthread
 LIBS = -li2c
 
 TARGET = p2app
-COMPAT_TARGET = p3app
 VPATH=.:../common
 GIT_DATE := $(wordlist 2,5, $(shell git log -1 --format=%cd --date=rfc))
 
@@ -84,20 +83,16 @@ $(G2PANEL_OBJ): $(G2PANEL_SRC) g2panel.h
 # ****************************************************
 # Targets needed to bring the executable up to date
 
-all: $(TARGET) $(COMPAT_TARGET)
+all: $(TARGET)
 
 $(TARGET): $(OBJS)
 	$(LD) -o $(TARGET) $(OBJS) $(LDFLAGS) $(LIBS)
-
-# Keep the legacy P3 binary name available during the dual-tree transition.
-$(COMPAT_TARGET): $(TARGET)
-	ln -sfn $(TARGET) $(COMPAT_TARGET)
 
 cppcheck:
 	cppcheck $(CPP_OPTIONS) $(BASE_SRCS) $(G2PANEL_SRC)
 
 clean:
-	rm -rf $(TARGET) $(COMPAT_TARGET) *.o *.d *.bin
+	rm -rf $(TARGET) *.o *.d *.bin
 
 smoke-shutdown: all
 	bash ./tools/shutdown_smoke.sh ./$(TARGET)

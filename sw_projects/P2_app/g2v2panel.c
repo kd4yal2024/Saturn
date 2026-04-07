@@ -44,33 +44,32 @@
 #include "andromedacatmessages.h"
 #include "AriesATU.h"
 
-
 #define ID_G2V2_PANEL "9f2b6c5a-4d7e-4c3b-9a21-3f8d0e6b12c4"
 
 
 bool G2V2PanelControlled = false;
-bool G2V2PanelActive = false;                       // true while panel active and threads should run
-bool G2V2CATDetected = false;                       // true if panel ID message has been sent
-bool G2V2Detected = false;                          // true if G2V2 panel detected from ZZZS response
-bool G2V1AdapterDetected = false;                   // true if G2V1 adapter detected from ZZZS response
-bool GZZZIReceived = false;                         // true if a ZZZI message received (so halt polling)
+atomic_bool G2V2PanelActive = false;               // true while panel active and threads should run
+atomic_bool G2V2CATDetected = false;               // true if panel ID message has been sent
+atomic_bool G2V2Detected = false;                  // true if G2V2 panel detected from ZZZS response
+atomic_bool G2V1AdapterDetected = false;           // true if G2V1 adapter detected from ZZZS response
+atomic_bool GZZZIReceived = false;                 // true if a ZZZI message received (so halt polling)
 
 extern int i2c_fd;                                  // file reference
 char* gpio_dev = NULL;
 pthread_t G2V2PanelTickThread;                      // thread with periodic tick
 pthread_t G2V2PanelSerialThread;                    // thread wfor serial read from panel
-pthread_t G2V1AdapterSerialThread;                    // thread wfor serial read from panel
-uint8_t G2V2PanelSWID;
-uint8_t G2V2PanelHWVersion;
-uint8_t G2V2PanelProductID;
-uint8_t CATPollCntr;                                // determines which message to poll for
-bool G2ToneState;                                   // true if 2 tone test in progress
-bool GVFOBSelected;                                 // true if VFO B selected
-uint32_t GCombinedVFOState;                         // reported VFO state bits
-uint16_t GLEDState;                                 // LED state settings
+pthread_t G2V1AdapterSerialThread;                // thread wfor serial read from panel
+static bool G2V2PanelTickThreadStarted = false;
+static bool G2V2PanelSerialThreadStarted = false;
+atomic_uchar G2V2PanelSWID;
+atomic_uchar G2V2PanelHWVersion;
+atomic_uchar G2V2PanelProductID;
+atomic_bool G2ToneState = false;                   // true if 2 tone test in progress
+atomic_bool GVFOBSelected = false;                 // true if VFO B selected
+atomic_uint_fast32_t GCombinedVFOState = 0;        // reported VFO state bits
 TSerialThreadData G2V2Data;                         // data for G2V2 read thread
-bool ATURedLED = false;
-bool ATUGreenLED = false;                           // LED states
+atomic_bool ATURedLED = false;
+atomic_bool ATUGreenLED = false;                   // LED states
 
 
 #define VKEEPALIVECOUNT 150                         // 15s period between keepalive requests (based on 100ms tick)
@@ -106,6 +105,8 @@ bool CheckG2V2PanelPresent(void)
     int Found = 0;
 
     printf("checking for G2V2 or G2V1 adapter\n");
+    atomic_store(&G2V2Detected, false);
+    atomic_store(&G2V1AdapterDetected, false);
 
 //
 // try to find a device that exists
@@ -136,26 +137,43 @@ bool CheckG2V2PanelPresent(void)
     //
         strcpy(G2V2Data.PathName, SaturnSerialPortsList[Found].port);
         G2V2Data.Baud = SaturnSerialPortsList[Found].baud;
-        G2V2Data.IsOpen = false;
-        G2V2Data.RequestID = true;
+        atomic_store(&G2V2Data.DeviceHandle, -1);
+        atomic_store(&G2V2Data.IsOpen, false);
+        atomic_store(&G2V2Data.DeviceActive, true);
+        atomic_store(&G2V2Data.RequestID, true);
         G2V2Data.Device = eG2V2Panel;
+        G2V2PanelSerialThreadStarted = false;
 
-        if(pthread_create(&G2V2PanelSerialThread, NULL, CATSerial, (void *)&G2V2Data) < 0)
+        if(pthread_create(&G2V2PanelSerialThread, NULL, CATSerial, (void *)&G2V2Data) != 0)
+        {
             perror("pthread_create G2V2 serial thread");
-        pthread_detach(G2V2PanelSerialThread);
-
-
-        sleep(2);
+            atomic_store(&G2V2Data.DeviceActive, false);
+        }
+        else
+            G2V2PanelSerialThreadStarted = true;
+        for(int WaitCntr = 0; WaitCntr < 20; WaitCntr++)
+        {
+            if(atomic_load(&G2V1AdapterDetected) || atomic_load(&G2V2Detected))
+                break;
+            usleep(100000);
+        }
     //
     // now see if anything came back from CAT handler
     // disable devices not to be used - this will cause them to close their files
     //
-        if(G2V1AdapterDetected || G2V2Detected)
+        if(atomic_load(&G2V1AdapterDetected) || atomic_load(&G2V2Detected))
         {
             Result = true;
         }
         else
-            G2V2Data.DeviceActive = false;
+        {
+            atomic_store(&G2V2Data.DeviceActive, false);
+            if(G2V2PanelSerialThreadStarted)
+            {
+                pthread_join(G2V2PanelSerialThread, NULL);
+                G2V2PanelSerialThreadStarted = false;
+            }
+        }
     }
 
     return Result;
@@ -172,24 +190,26 @@ bool CheckG2V2PanelPresent(void)
 void* G2V2PanelTick(__attribute__((unused)) void *arg)
 {
     uint32_t NewLEDStates = 0;
+    uint8_t CATPollCntr = 0;                        // owned by tick thread
+    uint16_t GLEDState = 0;                         // owned by tick thread
 
-    while(G2V2PanelActive)
+    while(atomic_load(&G2V2PanelActive))
     {
-        if(CATPortAssigned)                     // see if CAT has become available for the 1st time
+        if(atomic_load(&CATPortAssigned))      // see if CAT has become available for the 1st time
         {
-            if(G2V2CATDetected == false)
+            if(atomic_load(&G2V2CATDetected) == false)
             {
-                G2V2CATDetected = true;
-                MakeProductVersionCAT(G2V2PanelProductID, G2V2PanelHWVersion, G2V2PanelSWID, DESTTCPCATPORT);
+                atomic_store(&G2V2CATDetected, true);
+                MakeProductVersionCAT(atomic_load(&G2V2PanelProductID), atomic_load(&G2V2PanelHWVersion), atomic_load(&G2V2PanelSWID));
                 MakeCATMessageString(DESTTCPCATPORT, eZZGA, ID_G2V2_PANEL);
             }
         }
         else
-            G2V2CATDetected = false;
+            atomic_store(&G2V2CATDetected, false);
 //
 // poll CAT, if we haven't been sent an indicator message
 //
-        if(GZZZIReceived == false)
+        if(atomic_load(&GZZZIReceived) == false)
             switch(CATPollCntr++)
             {
                 case 0:
@@ -213,28 +233,34 @@ void* G2V2PanelTick(__attribute__((unused)) void *arg)
 // store into NewLEDStates; then set to I2C create ZZZI if different from what we had before
 // ATU tune LEDs are internal to P2app, not Thetis
 //
-        if(GZZZIReceived == false)
+        if(atomic_load(&GZZZIReceived) == false)
         {
+            uint32_t CombinedVFOState = atomic_load(&GCombinedVFOState);
+            bool ToneState = atomic_load(&G2ToneState);
+            bool VFOBSelected = atomic_load(&GVFOBSelected);
+            bool LocalATURedLED = atomic_load(&ATURedLED);
+            bool LocalATUGreenLED = atomic_load(&ATUGreenLED);
+
             NewLEDStates = 0;
-            if((GCombinedVFOState & (1<<6)) != 0)
+            if((CombinedVFOState & (1<<6)) != 0)
                 NewLEDStates |= 1;                          // MOX bit
-            if((GCombinedVFOState & (1<<7)) != 0)
+            if((CombinedVFOState & (1<<7)) != 0)
                 NewLEDStates |= (1 << 1);                   // TUNE bit
-            if(G2ToneState)
+            if(ToneState)
                 NewLEDStates |= (1 << 2);                   // 2 tone bit
-            if(ATURedLED)
+            if(LocalATURedLED)
                 NewLEDStates |= (1 << 3);                   // red ATU bit
-            if(ATUGreenLED)
+            if(LocalATUGreenLED)
                 NewLEDStates |= (1 << 4);                   // green ATU bit
-            if((GCombinedVFOState & (1<<8)) != 0)
+            if((CombinedVFOState & (1<<8)) != 0)
                 NewLEDStates |= (1 << 6);                   // XIT bit
-            if((GCombinedVFOState & (1<<0)) != 0)
+            if((CombinedVFOState & (1<<0)) != 0)
                 NewLEDStates |= (1 << 5);                   // RIT bit
-            if(!GVFOBSelected)
+            if(!VFOBSelected)
                 NewLEDStates |= (1 << 7);                   // led lit if VFO A selected
 
-            if((((GCombinedVFOState & (1<<2)) != 0) && GVFOBSelected) ||
-            (((GCombinedVFOState & (1<<1)) != 0) && !GVFOBSelected))
+            if((((CombinedVFOState & (1<<2)) != 0) && VFOBSelected) ||
+            (((CombinedVFOState & (1<<1)) != 0) && !VFOBSelected))
                 NewLEDStates |= (1 << 8);                   // VFO Lock bit
 
 //
@@ -253,8 +279,11 @@ void* G2V2PanelTick(__attribute__((unused)) void *arg)
                 {
                     NewState = (NewLEDStates & Mask) >> Cntr;
                     Param = ((Cntr +1)* 10) + NewState;
-                    if(G2V2Data.IsOpen)
-                        MakeCATMessageNumeric(G2V2Data.DeviceHandle, eZZZI, Param);
+                    {
+                        int DeviceHandle = atomic_load(&G2V2Data.DeviceHandle);
+                        if(atomic_load(&G2V2Data.IsOpen) && (DeviceHandle != -1))
+                            MakeCATMessageNumeric(DeviceHandle, eZZZI, Param);
+                    }
 
                 }
                 Mask = Mask << 1;                               // bitmask for next bit
@@ -279,11 +308,13 @@ void InitialiseG2V2PanelHandler(void)
 {
     G2V2PanelControlled = true;
     printf("Initialising G2V2 panel handler\n");
-    G2V2PanelActive = true;
+    atomic_store(&G2V2PanelActive, true);
+    G2V2PanelTickThreadStarted = false;
 
-    if(pthread_create(&G2V2PanelTickThread, NULL, G2V2PanelTick, NULL) < 0)
+    if(pthread_create(&G2V2PanelTickThread, NULL, G2V2PanelTick, NULL) != 0)
         perror("pthread_create G2 panel tick");
-    pthread_detach(G2V2PanelTickThread);
+    else
+        G2V2PanelTickThreadStarted = true;
 }
 
 
@@ -293,9 +324,18 @@ void InitialiseG2V2PanelHandler(void)
 //
 void ShutdownG2V2PanelHandler(void)
 {
-    G2V2PanelActive = false;
-    G2V2Data.DeviceActive = false;
-    sleep(1);
+    atomic_store(&G2V2PanelActive, false);
+    if(G2V2PanelTickThreadStarted)
+    {
+        pthread_join(G2V2PanelTickThread, NULL);
+        G2V2PanelTickThreadStarted = false;
+    }
+    atomic_store(&G2V2Data.DeviceActive, false);
+    if(G2V2PanelSerialThreadStarted)
+    {
+        pthread_join(G2V2PanelSerialThread, NULL);
+        G2V2PanelSerialThreadStarted = false;
+    }
 }
 
 
@@ -304,7 +344,7 @@ void ShutdownG2V2PanelHandler(void)
 //
 void SetG2V2ZZUTState(bool NewState)
 {
-    G2ToneState = NewState;
+    atomic_store(&G2ToneState, NewState);
 }
 
 
@@ -313,7 +353,7 @@ void SetG2V2ZZUTState(bool NewState)
 //
 void SetG2V2ZZYRState(bool NewState)
 {
-    GVFOBSelected = NewState;
+    atomic_store(&GVFOBSelected, NewState);
 }
 
 
@@ -323,7 +363,7 @@ void SetG2V2ZZYRState(bool NewState)
 //
 void SetG2V2ZZXVState(uint32_t NewState)
 {
-    GCombinedVFOState = NewState;
+    atomic_store(&GCombinedVFOState, NewState);
 }
 
 
@@ -337,18 +377,18 @@ void SetG2V2ZZZSState(uint8_t ProductID, uint8_t HWVersion, uint8_t SWID)
     if(ProductID == 4)
     {
         printf("found G2V1 adapter, product ID=%d", ProductID);
-        G2V1AdapterDetected = true;
+        atomic_store(&G2V1AdapterDetected, true);
     }
     else if(ProductID == 5)
     {
         printf("found G2V2 panel, product ID=%d", ProductID);
-        G2V2Detected = true;
+        atomic_store(&G2V2Detected, true);
     }
     printf("; H/W verson = %d", HWVersion);
     printf("; S/W verson = %d\n", SWID);
-    G2V2PanelProductID = ProductID;
-    G2V2PanelHWVersion = HWVersion;
-    G2V2PanelSWID = SWID;
+    atomic_store(&G2V2PanelProductID, ProductID);
+    atomic_store(&G2V2PanelHWVersion, HWVersion);
+    atomic_store(&G2V2PanelSWID, SWID);
 }
 
 
@@ -359,8 +399,12 @@ void SetG2V2ZZZSState(uint8_t ProductID, uint8_t HWVersion, uint8_t SWID)
 //
 void SetG2V2ZZZIState(uint32_t Param)
 {
-    GZZZIReceived = true;
-    MakeCATMessageNumeric(G2V2Data.DeviceHandle, eZZZI, Param);
+    int DeviceHandle = atomic_load(&G2V2Data.DeviceHandle);
+
+    atomic_store(&GZZZIReceived, true);
+    if((DeviceHandle != -1) && atomic_load(&G2V2Data.IsOpen))
+        MakeCATMessageNumeric(DeviceHandle, eZZZI, Param);
+
 }
 
 #define VATUBUTTONSCANCODE 4
@@ -390,7 +434,7 @@ void HandleG2V2ZZZPMessage(uint32_t Param)
 bool IsFrontPanelSerial(int32_t Handle)
 {
     bool Result = false;
-    if((Handle==G2V2Data.DeviceHandle) && (G2V2Data.IsOpen == true))
+    if((Handle == atomic_load(&G2V2Data.DeviceHandle)) && atomic_load(&G2V2Data.IsOpen))
         Result = true;
     return Result;
 }
@@ -402,9 +446,6 @@ bool IsFrontPanelSerial(int32_t Handle)
 //
 void SetATULEDs(bool GreenLED, bool RedLED)
 {
-    ATURedLED = RedLED;
-    ATUGreenLED = GreenLED;
+    atomic_store(&ATURedLED, RedLED);
+    atomic_store(&ATUGreenLED, GreenLED);
 }
-
-
-

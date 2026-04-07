@@ -133,7 +133,7 @@
           <span>Update Web Manager Too</span>
         </label>
 
-        <p class="text-xs opacity-75 mb-3">The info action is read-only. It shows the active P2/P3 app, current app version, and the latest startup banner with FPGA firmware and startup die temperature.</p>
+        <p class="text-xs opacity-75 mb-3">The info action is read-only. It shows the runtime app identity, active binary family, current app version, and the current or last retained startup banner when FPGA firmware and startup die temperature lines were captured.</p>
 
         <pre id="g2-output" style="min-height:360px; max-height:520px; overflow:auto;"></pre>
       </div>
@@ -608,7 +608,7 @@ $('g2-run').addEventListener('click', async ()=>{
 
 $('g2-info').addEventListener('click', async ()=>{
   await runG2TerminalScript('g2-version-info.sh', [], {
-    startupMessage: '\x1b[36mCollecting current app, firmware, and startup banner info...\x1b[0m',
+    startupMessage: '\x1b[36mCollecting current app info and any available startup banner details...\x1b[0m',
   });
 });
 

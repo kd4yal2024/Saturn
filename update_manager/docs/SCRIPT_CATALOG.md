@@ -21,7 +21,7 @@ UI usage notes:
 - `saturngo.html` is the dedicated UI for running `update-saturn-go.sh` (separate Saturn Go repo policy + self-redeploy workflow).
 - `saturngo.html` also exposes an `XDMA Doctor` button that runs `xdma-doctor.sh` through the same `/run` terminal path.
 - `saturngo.html` also exposes a `Stage Running Kernel` button that runs `xdma-stage-current.sh` through the same `/run` terminal path.
-- `p23test.html` is a hidden/experimental UI for testing P2/P3 app build/deploy/switch actions using `p23-app-manager.sh` (not linked in main navigation).
+- `p23test.html` is a hidden/experimental UI for testing the converged `p2app` build/deploy/restart workflow using `p23-app-manager.sh` (not linked in main navigation).
 - `index.html` (Custom Scripts page) intentionally excludes `update-pihpsdr.py` from the dropdown.
 - `pihpsdr.html` is the dedicated UI for running `update-pihpsdr.py` with live SSE terminal output.
 - `index.html` (Custom Scripts page) intentionally excludes `update-deskhpsdr.py` from the dropdown.
@@ -59,13 +59,13 @@ Not all utilities are directly wired into current UI buttons, but are included i
 | Script | Purpose | Key Flags |
 |---|---|---|
 | `flash_fpga.sh` | Web-facing wrapper that hands FPGA flashing to the root-owned `saturn-flash-fpga.sh` helper, preserving confirmation guard and `load-FPGA` behavior without granting sudo to the writable runtime script path. | `--image`, `--latest`, `--primary`, `--fallback`, `--verify`, `--no-verify`, `--confirm`, `--dry-run` |
-| `g2-version-info.sh` | Read-only helper for G2 Update page that reports deployment slot, live app identity/version from `/p23_perf` when available, and the current `p2app.service` startup banner lines for FPGA firmware/date-code/temp. | none |
+| `g2-version-info.sh` | Read-only helper for G2 Update page that reports active binary family, live runtime app identity/version from `/p23_perf` when available, and current or retained `p2app.service` startup banner lines for FPGA firmware/date-code/temp when those lines exist in the journal. | none |
 | `install-shutdown-waiter-service.sh` | Install or refresh `saturn-shutdown-waiter.service` and its default config. Used by Update G2. | `--enabled-default <mode>`, `--saturn-user <user>` |
 | `shutdown-waiter.sh` | Runtime shutdown-waiter payload installed by `install-shutdown-waiter-service.sh`. | none |
 | `update-saturn-go.sh` | Rebuild/redeploy `saturn-go` from the active Saturn repo root (used by `saturngo.html`). | `--verbose`, `--dry-run`, `--skip-git`, `--skip-build`, `--skip-deploy` |
 | `xdma-doctor.sh` | Run the classified Saturn XDMA doctor through the privileged helper path (used by `saturngo.html`); helper emits an advisory when XDMA is loaded but not staged for the running kernel. | passthrough (`--json`, `--stage-only`, `--skip-service-check` if needed) |
 | `xdma-stage-current.sh` | Pre-stage XDMA for the running kernel through a narrow privileged helper without restarting `p2app.service`; helper re-execs through a transient systemd unit when launched from Saturn Go so `/lib/modules` stays writable. | none |
-| `p23-app-manager.sh` | Experimental helper to build/deploy/switch/revert P2/P3 app binaries for `p2app.service` testing (used by hidden `p23test.html`), with startup-profile and front-panel-mode override support. | `--status`, `--build p2|p3`, `--deploy p2|p3`, `--switch p2|p3`, `--revert`, `--mode panel|headless|panel-debug`, `--panel auto|g2|g2v2|prefer-g2|prefer-g2v2|off`, `--dry-run`, `--verbose`, `--no-restart`, `--no-clean` |
+| `p23-app-manager.sh` | Experimental helper to build/deploy/restart/revert the converged `p2app` service path (used by hidden `p23test.html`), with startup-profile and front-panel-mode override support. Legacy `p3` arguments are accepted but mapped to the same converged binary. | `--status`, `--build [p2|p3]`, `--deploy [p2|p3]`, `--restart [p2|p3]`, `--switch [p2|p3]`, `--revert`, `--mode panel|headless|panel-debug`, `--panel auto|g2|g2v2|prefer-g2|prefer-g2v2|off`, `--dry-run`, `--verbose`, `--no-restart`, `--no-clean` |
 | `qemu_pi_boot.sh` | Boot Raspberry Pi image in QEMU by extracting kernel/DTB and launching `qemu-system-aarch64`. | `--img`, `--work-dir`, `--memory`, `--cpus`, `--machine`, `--extra-append`, `--dry-run` |
 | `log_cleaner.sh` | Local log cleanup helper. | see above |
 
@@ -101,3 +101,4 @@ Not all utilities are directly wired into current UI buttons, but are included i
 - The deskHPSDR helper build now probes with `GPIO=ON` instead of forcing `GPIO=OFF`, which is what preserves GPIO support on Trixie/libgpiod v2 images.
 - `p23-app-manager.sh` is an experimental local test/deploy helper; it modifies a systemd drop-in override for `p2app.service` rather than editing the base unit file directly.
 - `p23-app-manager.sh` writes `Environment=SATURN_FRONT_PANEL_MODE=...` into the generated override for forced/assisted panel detection testing and tags the override with a `# saturn-p23 mode=... panel=...` comment that the status API parses.
+- `p23-app-manager.sh` now drives only the converged `P2_app` source tree and deployed `p2app` binary; old `p3` arguments remain compatibility aliases.

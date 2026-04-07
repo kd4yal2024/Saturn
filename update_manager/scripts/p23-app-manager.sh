@@ -2,13 +2,13 @@
 set -euo pipefail
 
 # p23-app-manager.sh
-# Hidden/test utility for building, deploying, and switching between P2_app/p2app
-# and P3_app/p3app from the Saturn web UI terminal runner.
+# Hidden/test utility for the converged hardened p2app implementation.
+# The historical P2/P3 split has been retired; this script now manages a
+# single supported app path while keeping the same web UI/override endpoints.
 
-SCRIPT_VERSION="0.1.0"
+SCRIPT_VERSION="0.3.0"
 
 ACTION=""
-APP=""
 VERBOSE=0
 DRY_RUN=0
 NO_RESTART=0
@@ -26,10 +26,11 @@ usage(){
 Usage: p23-app-manager.sh [options]
 Actions (choose one):
   --status               Show current build/deploy/service status
-  --build p2|p3          Build selected app in repo tree
-  --deploy p2|p3         Build, install, switch service to selected app
-  --switch p2|p3         Switch service to already-deployed selected app
-  --revert               Remove Saturn P2/P3 override and restore unit default ExecStart
+  --build [p2|p3]        Build the converged app in sw_projects/P2_app
+  --deploy [p2|p3]       Build, install, and optionally restart the converged app
+  --restart [p2|p3]      Reapply override metadata/current symlink and restart service
+  --switch [p2|p3]       Deprecated alias for --restart
+  --revert               Remove Saturn override and restore unit default ExecStart
 
 Options:
   --mode <profile>       Service startup profile: panel|headless|panel-debug
@@ -72,12 +73,20 @@ need_cmd(){
   command -v "$1" >/dev/null 2>&1 || die "Required command not found: $1"
 }
 
-resolve_app_name(){
-  case "${1:-}" in
-    p2|P2) echo "p2" ;;
-    p3|P3) echo "p3" ;;
-    *) return 1 ;;
-  esac
+consume_legacy_app_arg(){
+  if [[ $# -gt 0 ]]; then
+    case "${1:-}" in
+      p2|P2)
+        info "Using converged p2app implementation"
+        return 0
+        ;;
+      p3|P3)
+        warn "Legacy P3 selection requested; using the converged p2app implementation instead."
+        return 0
+        ;;
+    esac
+  fi
+  return 1
 }
 
 resolve_service_mode_profile(){
@@ -115,13 +124,16 @@ while [[ $# -gt 0 ]]; do
       ACTION="revert"
       shift
       ;;
-    --build|--deploy|--switch)
+    --build|--deploy|--restart|--switch)
       [[ -z "$ACTION" ]] || die "Only one action may be specified"
-      ACTION="${1#--}"
+      case "$1" in
+        --switch) ACTION="restart" ;;
+        *) ACTION="${1#--}" ;;
+      esac
       shift
-      [[ $# -gt 0 ]] || die "$ACTION requires p2 or p3"
-      APP="$(resolve_app_name "$1")" || die "Invalid app '$1' (expected p2 or p3)"
-      shift
+      if consume_legacy_app_arg "${1:-}"; then
+        shift
+      fi
       ;;
     --mode)
       shift
@@ -146,16 +158,14 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-[[ -n "$ACTION" ]] || die "No action specified. Use --status, --build, --deploy, or --switch."
+[[ -n "$ACTION" ]] || die "No action specified. Use --status, --build, --deploy, --restart, or --revert."
 
 REPO_ROOT="${SATURN_ACTIVE_REPO_ROOT:-${SATURN_REPO_ROOT:-}}"
 [[ -n "$REPO_ROOT" ]] || die "SATURN_ACTIVE_REPO_ROOT/SATURN_REPO_ROOT is not set"
 [[ -d "$REPO_ROOT/.git" ]] || die "Repo root is not a git checkout: $REPO_ROOT"
 
 P2_DIR="$REPO_ROOT/sw_projects/P2_app"
-P3_DIR="$REPO_ROOT/sw_projects/P3_app"
 P2_BIN="$P2_DIR/p2app"
-P3_BIN="$P3_DIR/p3app"
 
 P23_SERVICE_NAME="${P23_SERVICE_NAME:-p2app.service}"
 P23_XDMA_READY_SERVICE="${P23_XDMA_READY_SERVICE:-saturn-xdma-ready.service}"
@@ -170,36 +180,11 @@ else
 fi
 P23_DEPLOY_ROOT="${P23_DEPLOY_ROOT:-/opt/saturn-go/p23-apps}"
 P23_CURRENT_LINK="$P23_DEPLOY_ROOT/current"
-P23_P2_DEPLOY_BIN="$P23_DEPLOY_ROOT/p2app"
-P23_P3_DEPLOY_BIN="$P23_DEPLOY_ROOT/p3app"
+P23_DEPLOY_BIN="$P23_DEPLOY_ROOT/p2app"
 P23_OVERRIDE_DIR="/etc/systemd/system/${P23_SERVICE_NAME}.d"
 P23_OVERRIDE_FILE="$P23_OVERRIDE_DIR/10-saturn-p23-switch.conf"
 
 need_cmd make
-
-app_dir_for(){
-  case "$1" in
-    p2) echo "$P2_DIR" ;;
-    p3) echo "$P3_DIR" ;;
-    *) return 1 ;;
-  esac
-}
-
-app_repo_bin_for(){
-  case "$1" in
-    p2) echo "$P2_BIN" ;;
-    p3) echo "$P3_BIN" ;;
-    *) return 1 ;;
-  esac
-}
-
-app_deploy_bin_for(){
-  case "$1" in
-    p2) echo "$P23_P2_DEPLOY_BIN" ;;
-    p3) echo "$P23_P3_DEPLOY_BIN" ;;
-    *) return 1 ;;
-  esac
-}
 
 show_xdma_doctor_stage(){
   if [[ ! -x "$P23_XDMA_DOCTOR" ]]; then
@@ -243,9 +228,43 @@ restart_service_and_report(){
   show_xdma_doctor_stage
 }
 
+render_override_to(){
+  local target_file="$1"
+  cat > "$target_file" <<EOF
+[Service]
+# saturn-p23 mode=${SERVICE_MODE_PROFILE} panel=${PANEL_MODE}
+Environment=${P23_PANEL_ENV_NAME}=${PANEL_MODE}
+ExecStart=
+ExecStart=${P23_CURRENT_LINK} ${P23_SERVICE_ARGS}
+EOF
+}
+
+write_override(){
+  run_root_cmd mkdir -p "$P23_DEPLOY_ROOT" "$P23_OVERRIDE_DIR"
+  run_root_cmd ln -sfn "$P23_DEPLOY_BIN" "$P23_CURRENT_LINK"
+
+  if (( DRY_RUN )); then
+    info "[dry-run] install override file -> $P23_OVERRIDE_FILE"
+    info "[dry-run] override content:"
+    info "[dry-run]   [Service]"
+    info "[dry-run]   # saturn-p23 mode=${SERVICE_MODE_PROFILE} panel=${PANEL_MODE}"
+    info "[dry-run]   Environment=${P23_PANEL_ENV_NAME}=${PANEL_MODE}"
+    info "[dry-run]   ExecStart="
+    info "[dry-run]   ExecStart=${P23_CURRENT_LINK} ${P23_SERVICE_ARGS}"
+  else
+    local tmp_override
+    tmp_override="$(mktemp)"
+    render_override_to "$tmp_override"
+    run_root_cmd install -m 0644 "$tmp_override" "$P23_OVERRIDE_FILE"
+    rm -f "$tmp_override"
+  fi
+
+  run_root_cmd systemctl daemon-reload
+}
+
 show_status(){
   progress 5
-  info "P2/P3 App Manager ${SCRIPT_VERSION}"
+  info "p2app Service Manager ${SCRIPT_VERSION}"
   info "Repo root: $REPO_ROOT"
   info "Service: $P23_SERVICE_NAME"
   info "Deploy root: $P23_DEPLOY_ROOT"
@@ -255,41 +274,28 @@ show_status(){
   progress 20
 
   if [[ -d "$P2_DIR" ]]; then
-    info "P2 dir: $P2_DIR"
+    info "Source dir: $P2_DIR"
   else
-    warn "P2 dir missing: $P2_DIR"
-  fi
-  if [[ -d "$P3_DIR" ]]; then
-    info "P3 dir: $P3_DIR"
-  else
-    warn "P3 dir missing: $P3_DIR"
+    warn "Source dir missing: $P2_DIR"
   fi
 
-  for f in "$P2_BIN" "$P3_BIN"; do
-    if [[ -x "$f" ]]; then
-      info "Built: $f ($(stat -c '%y' "$f" 2>/dev/null || echo unknown))"
-    else
-      info "Built: $f (missing)"
-    fi
-  done
+  if [[ -x "$P2_BIN" ]]; then
+    info "Built: $P2_BIN ($(stat -c '%y' "$P2_BIN" 2>/dev/null || echo unknown))"
+  else
+    info "Built: $P2_BIN (missing)"
+  fi
   progress 45
 
-  for f in "$P23_P2_DEPLOY_BIN" "$P23_P3_DEPLOY_BIN"; do
-    if [[ -x "$f" ]]; then
-      info "Deployed: $f ($(stat -c '%y' "$f" 2>/dev/null || echo unknown))"
-    else
-      info "Deployed: $f (missing)"
-    fi
-  done
+  if [[ -x "$P23_DEPLOY_BIN" ]]; then
+    info "Deployed: $P23_DEPLOY_BIN ($(stat -c '%y' "$P23_DEPLOY_BIN" 2>/dev/null || echo unknown))"
+  else
+    info "Deployed: $P23_DEPLOY_BIN (missing)"
+  fi
 
   if [[ -L "$P23_CURRENT_LINK" ]]; then
+    local local_target
     local_target="$(readlink -f "$P23_CURRENT_LINK" 2>/dev/null || true)"
     info "Current symlink: $P23_CURRENT_LINK -> ${local_target:-unknown}"
-    case "$local_target" in
-      "$P23_P2_DEPLOY_BIN") info "Active selection (symlink): p2" ;;
-      "$P23_P3_DEPLOY_BIN") info "Active selection (symlink): p3" ;;
-      *) warn "Current symlink target is unexpected" ;;
-    esac
   elif [[ -e "$P23_CURRENT_LINK" ]]; then
     warn "Current path exists but is not a symlink: $P23_CURRENT_LINK"
   else
@@ -323,105 +329,65 @@ show_status(){
 }
 
 build_app(){
-  local app="$1"
-  local app_dir app_bin
-  app_dir="$(app_dir_for "$app")"
-  app_bin="$(app_repo_bin_for "$app")"
-  [[ -d "$app_dir" ]] || die "App directory not found: $app_dir"
+  [[ -d "$P2_DIR" ]] || die "App directory not found: $P2_DIR"
 
   progress 10
-  info "Building $app in $app_dir"
+  info "Building converged app in $P2_DIR"
   if (( CLEAN_BUILD )); then
-    run_cmd make -C "$app_dir" clean
+    run_cmd make -C "$P2_DIR" clean
   else
     info "Skipping clean (--no-clean)"
   fi
   progress 40
-  run_cmd make -C "$app_dir" -j1
+  run_cmd make -C "$P2_DIR" -j1
   progress 80
 
-  if (( ! DRY_RUN )) && [[ ! -x "$app_bin" ]]; then
-    die "Build finished but binary not found: $app_bin"
+  if (( ! DRY_RUN )) && [[ ! -x "$P2_BIN" ]]; then
+    die "Build finished but binary not found: $P2_BIN"
   fi
-  info "Built binary: $app_bin"
+  info "Built binary: $P2_BIN"
   progress 100
   info "Done"
 }
 
-write_override_and_switch(){
-  local app="$1"
-  local deploy_bin
-  deploy_bin="$(app_deploy_bin_for "$app")"
-  [[ -n "$deploy_bin" ]] || die "Unknown app '$app'"
-  if (( ! DRY_RUN )) && [[ ! -x "$deploy_bin" ]]; then
-    die "Deployed binary missing: $deploy_bin (run --deploy $app first)"
-  fi
+deploy_app(){
+  [[ -d "$P2_DIR" ]] || die "App directory not found: $P2_DIR"
 
-  progress 15
-  info "Switching $P23_SERVICE_NAME to $app"
-  run_root_cmd mkdir -p "$P23_DEPLOY_ROOT" "$P23_OVERRIDE_DIR"
-  run_root_cmd ln -sfn "$deploy_bin" "$P23_CURRENT_LINK"
-
-  if (( DRY_RUN )); then
-    info "[dry-run] install override file -> $P23_OVERRIDE_FILE"
-    info "[dry-run] override content:"
-    info "[dry-run]   [Service]"
-    info "[dry-run]   # saturn-p23 mode=${SERVICE_MODE_PROFILE} panel=${PANEL_MODE}"
-    info "[dry-run]   Environment=${P23_PANEL_ENV_NAME}=${PANEL_MODE}"
-    info "[dry-run]   ExecStart="
-    info "[dry-run]   ExecStart=${P23_CURRENT_LINK} ${P23_SERVICE_ARGS}"
+  progress 5
+  info "Deploy action: build + install + refresh override"
+  if (( CLEAN_BUILD )); then
+    run_cmd make -C "$P2_DIR" clean
   else
-    local tmp_override
-    tmp_override="$(mktemp)"
-    cat > "$tmp_override" <<EOF
-[Service]
-# saturn-p23 mode=${SERVICE_MODE_PROFILE} panel=${PANEL_MODE}
-Environment=${P23_PANEL_ENV_NAME}=${PANEL_MODE}
-ExecStart=
-ExecStart=${P23_CURRENT_LINK} ${P23_SERVICE_ARGS}
-EOF
-    run_root_cmd install -m 0644 "$tmp_override" "$P23_OVERRIDE_FILE"
-    rm -f "$tmp_override"
+    info "Skipping clean (--no-clean)"
+  fi
+  progress 25
+  run_cmd make -C "$P2_DIR" -j1
+  progress 50
+
+  if (( ! DRY_RUN )) && [[ ! -x "$P2_BIN" ]]; then
+    die "Built binary not found: $P2_BIN"
   fi
 
-  progress 55
-  run_root_cmd systemctl daemon-reload
+  run_root_cmd mkdir -p "$P23_DEPLOY_ROOT" "$P23_OVERRIDE_DIR"
+  run_root_cmd install -m 0755 "$P2_BIN" "$P23_DEPLOY_BIN"
+  info "Installed: $P23_DEPLOY_BIN"
+  progress 70
+
+  write_override
   restart_service_and_report
 
   progress 100
   info "Done"
 }
 
-deploy_app(){
-  local app="$1"
-  local app_dir repo_bin deploy_bin
-  app_dir="$(app_dir_for "$app")"
-  repo_bin="$(app_repo_bin_for "$app")"
-  deploy_bin="$(app_deploy_bin_for "$app")"
-
-  [[ -d "$app_dir" ]] || die "App directory not found: $app_dir"
-
-  progress 5
-  info "Deploy action: build + install + switch ($app)"
-  if (( CLEAN_BUILD )); then
-    run_cmd make -C "$app_dir" clean
-  else
-    info "Skipping clean (--no-clean)"
-  fi
-  progress 25
-  run_cmd make -C "$app_dir" -j1
-  progress 50
-
-  if (( ! DRY_RUN )) && [[ ! -x "$repo_bin" ]]; then
-    die "Built binary not found: $repo_bin"
-  fi
-
-  run_root_cmd mkdir -p "$P23_DEPLOY_ROOT" "$P23_OVERRIDE_DIR"
-  run_root_cmd install -m 0755 "$repo_bin" "$deploy_bin"
-  info "Installed: $deploy_bin"
-  progress 70
-
-  write_override_and_switch "$app"
+restart_with_current_override(){
+  progress 15
+  info "Refreshing override/current symlink for converged p2app"
+  write_override
+  progress 55
+  restart_service_and_report
+  progress 100
+  info "Done"
 }
 
 revert_to_unit_default(){
@@ -435,7 +401,6 @@ revert_to_unit_default(){
     info "Override already absent: $P23_OVERRIDE_FILE"
   fi
 
-  # Best effort cleanup of now-empty override dir.
   if [[ -d "$P23_OVERRIDE_DIR" ]]; then
     if (( DRY_RUN )); then
       info "[dry-run] rmdir $P23_OVERRIDE_DIR (if empty)"
@@ -454,9 +419,9 @@ revert_to_unit_default(){
 
 case "$ACTION" in
   status) show_status ;;
-  build) build_app "$APP" ;;
-  switch) write_override_and_switch "$APP" ;;
-  deploy) deploy_app "$APP" ;;
+  build) build_app ;;
+  deploy) deploy_app ;;
+  restart) restart_with_current_override ;;
   revert) revert_to_unit_default ;;
   *) die "Unhandled action: $ACTION" ;;
 esac

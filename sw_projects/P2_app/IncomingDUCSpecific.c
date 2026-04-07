@@ -54,13 +54,26 @@ void *IncomingDUCSpecific(void *arg)                    // listener thread
     uint32_t CWRampTime_us;
 
     ThreadData = (struct ThreadSocketData *)arg;
-    ThreadData->Active = true;
-    printf("spinning up DUC specific thread with port %d, pid=%ld\n", ThreadData->Portid, syscall(SYS_gettid));
+    atomic_store(&ThreadData->Active, true);
+    printf("spinning up DUC specific thread with port %u, pid=%ld\n", (unsigned int)atomic_load(&ThreadData->Portid), syscall(SYS_gettid));
     //
     // main processing loop
     //
-    while(1)
+    while(!atomic_load(&ExitRequested))
     {
+      if(atomic_load(&ThreadData->Cmdid) & VBITCHANGEPORT)
+      {
+          printf("DUC specific request change port\n");
+          close(GetThreadSocketFD(ThreadData));
+          if(MakeSocket(ThreadData, 0) != 0)
+          {
+              perror("MakeSocket, DUC specific");
+              atomic_store(&ThreadError, true);
+              break;
+          }
+          atomic_fetch_and(&ThreadData->Cmdid, ~((uint_fast32_t)VBITCHANGEPORT));
+      }
+
       memset(&iovecinst, 0, sizeof(struct iovec));
       memset(&datagram, 0, sizeof(datagram));
       iovecinst.iov_base = &UDPInBuffer;                  // set buffer for incoming message number i
@@ -69,15 +82,16 @@ void *IncomingDUCSpecific(void *arg)                    // listener thread
       datagram.msg_iovlen = 1;
       datagram.msg_name = &addr_from;
       datagram.msg_namelen = sizeof(addr_from);
-      size = recvmsg(ThreadData->Socketid, &datagram, 0);         // get one message. If it times out, ges size=-1
+      size = recvmsg(atomic_load(&ThreadData->Socketid), &datagram, 0);   // get one message. If it times out, ges size=-1
       if(size < 0 && errno != EAGAIN)
       {
           perror("recvfrom, DUC specific");
-          return NULL;
+          atomic_store(&ThreadError, true);
+          break;
       }
       if(size == VDUCSPECIFICSIZE)
       {
-          NewMessageReceived = true;
+          atomic_store(&NewMessageReceived, true);
           printf("DUC packet received\n");
 // iambic settings
           IambicSpeed = *(uint8_t*)(UDPInBuffer+9);               // keyer speed
@@ -121,16 +135,11 @@ void *IncomingDUCSpecific(void *arg)                    // listener thread
 //
 // close down thread
 //
-    close(ThreadData->Socketid);                  // close incoming data socket
-    ThreadData->Socketid = 0;
-    ThreadData->Active = false;                   // indicate it is closed
+    close(atomic_load(&ThreadData->Socketid));    // close incoming data socket
+    atomic_store(&ThreadData->Socketid, 0);
+    atomic_store(&ThreadData->Active, false);     // indicate it is closed
     return NULL;
 }
-
-
-
-
-
 
 
 

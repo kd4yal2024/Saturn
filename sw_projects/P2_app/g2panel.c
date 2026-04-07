@@ -65,7 +65,7 @@
 #define PRODUCTID 4                         // report as being G2
 #endif
 
-int i2c_fd;                                  // file reference
+int i2c_fd = -1;                             // file reference
 char* pi_i2c_device = "/dev/i2c-1";
 unsigned int G2MCP23017 = 0x20;                     // i2c slave address of MCP23017 on G2 panel
 unsigned int G2V2Arduino = 0x15;                    // i2c slave address of Arduino on G2V2
@@ -79,11 +79,11 @@ struct gpiod_line *VFO1;                            // declare GPIO for VFO
 struct gpiod_line *VFO2;
 pthread_t VFOEncoderThread;                         // thread looks for encoder edge events
 pthread_t G2PanelTickThread;                        // thread with periodic
-uint16_t GDeltaCount;                    // count stored since last retrieved
+static bool GVFOEncoderThreadStarted = false;
+static bool GG2PanelTickThreadStarted = false;
 struct timespec ts = {1, 0};
-bool G2PanelActive = false;                         // true while panel active and threads should run
-bool EncodersInitialised = false;                   // true after 1st scan
-bool CATDetected = false;                           // true if panel ID message has been sent
+atomic_uint_fast16_t GDeltaCount;                  // count stored since last retrieved
+atomic_bool G2PanelActive = false;                 // true while panel active and threads should run
 
 #define VNUMGPIOPUSHBUTTONS 4
 #define VNUMMCPPUSHBUTTONS 16
@@ -212,17 +212,16 @@ bool CheckG2PanelPresent(void)
     bool Error;
 
 
-    i2c_fd=open(pi_i2c_device, O_RDWR);
-    if(i2c_fd < 0)
+    if(i2c_open_device(pi_i2c_device, (int)G2MCP23017) < 0)
         printf("failed to open i2c device\n");
-    else if(ioctl(i2c_fd, I2C_SLAVE, G2MCP23017) >= 0)
-        // check for G2 front panel on i2c. Change device address then byte read
+    else
+        // check for G2 front panel on i2c
     {
         i2c_read_byte_data(0x0, &Error);              // trial read
         if (!Error)
             Result = true;
         else
-            close(i2c_fd);
+            i2c_close_device();
     }
     return Result;    
 }
@@ -238,11 +237,16 @@ bool CheckG2PanelPresent(void)
 //
 int8_t ReadOpticalEncoder(void)
 {
-  int8_t Result;
+  uint_fast16_t Current;
+  uint_fast16_t Next;
 
-  Result = GDeltaCount / VOPTENCODERDIVISOR;                         // get count value
-  GDeltaCount = GDeltaCount % VOPTENCODERDIVISOR;                    // remaining residue for next time
-  return Result;
+  Current = atomic_load(&GDeltaCount);
+  while(1)
+  {
+    Next = Current % VOPTENCODERDIVISOR;
+    if(atomic_compare_exchange_weak(&GDeltaCount, &Current, Next))
+      return (int8_t)(Current / VOPTENCODERDIVISOR);                 // get count value
+  }
 }
 
 
@@ -260,7 +264,7 @@ void* VFOEventHandler(__attribute__((unused)) void *arg)
     struct gpiod_line_event Event;
 
     printf("Started VFO event handler thread, pid=%ld\n", syscall(SYS_gettid));
-    while(G2PanelActive)
+    while(atomic_load(&G2PanelActive))
     {
         returnval = gpiod_line_event_wait(VFO1, &ts);
         if(returnval > 0)
@@ -268,9 +272,9 @@ void* VFOEventHandler(__attribute__((unused)) void *arg)
             returnval = gpiod_line_event_read(VFO1, &Event);            // undocumented: this is needed to clear the event
             DirectionBit = gpiod_line_get_value(VFO2);
             if(DirectionBit)
-              GDeltaCount--;
+              atomic_fetch_sub(&GDeltaCount, 1);
             else
-              GDeltaCount++;
+              atomic_fetch_add(&GDeltaCount, 1);
 //            printf("delta count=%d\n", GDeltaCount);
         }
     }
@@ -286,15 +290,13 @@ int8_t EncoderStepTable[] =    {0,1,-1,2,
 // Encoder tick
 // process its 2 new I/O inputs and update number of counts
 //
-void EncoderTick(uint32_t Enc, uint8_t Pin1, uint8_t Pin2)
+void EncoderTick(uint32_t Enc, uint8_t Pin1, uint8_t Pin2, bool EncodersInitialised)
 {
     EncoderStates[Enc] = ((EncoderStates[Enc] << 2) | (Pin2 << 1) | Pin1) &0b1111;          // b0,1=new state; 2,3=prev state
     if(EncodersInitialised)
         EncoderCounts[Enc] += EncoderStepTable[EncoderStates[Enc]];
 }
 
-
-uint32_t TickCounter;
 #define VFASTTICKSPERSLOWTICK 3
 
 
@@ -325,16 +327,19 @@ void* G2PanelTick(__attribute__((unused)) void *arg)
     uint32_t MCPData;
     uint32_t Cntr;
     bool I2Cerror;
+    bool EncodersInitialised = false;           // owned by tick thread
+    bool CATDetected = false;                   // owned by tick thread
+    uint32_t TickCounter = 0;                   // owned by tick thread
 
     printf("Started G2 panel tick thread, pid=%ld\n", syscall(SYS_gettid));
-    while(G2PanelActive)
+    while(atomic_load(&G2PanelActive))
     {
-        if(CATPortAssigned)                     // see if CAT has become available for the 1st time
+        if(atomic_load(&CATPortAssigned))       // see if CAT has become available for the 1st time
         {
             if(CATDetected == false)
             {
                 CATDetected = true;
-                MakeProductVersionCAT(PRODUCTID, HWVERSION, GetP2appVersion(), DESTTCPCATPORT);
+                MakeProductVersionCAT(PRODUCTID, HWVERSION, GetP2appVersion());
             }
         }
         else
@@ -345,7 +350,7 @@ void* G2PanelTick(__attribute__((unused)) void *arg)
 // process encoders
 //
         for(Cntr=0; Cntr < VNUMENCODERS; Cntr++)
-            EncoderTick(Cntr, IOPinValues[2*Cntr], IOPinValues[2*Cntr+1]);
+            EncoderTick(Cntr, IOPinValues[2*Cntr], IOPinValues[2*Cntr+1], EncodersInitialised);
         EncodersInitialised = true;
 //
 // execute slower code every 10ms
@@ -506,16 +511,25 @@ void InitialiseG2PanelHandler(void)
 {
     G2PanelControlled = true;
     SetupG2PanelGPIO();
+    if(chip == NULL)
+    {
+        printf("G2 panel GPIO setup incomplete; handler threads not started\n");
+        return;
+    }
     SetupG2PanelI2C();
 
-    G2PanelActive = true;                                   // enable threads
-    if(pthread_create(&VFOEncoderThread, NULL, VFOEventHandler, NULL) < 0)
+    GVFOEncoderThreadStarted = false;
+    GG2PanelTickThreadStarted = false;
+    atomic_store(&G2PanelActive, true);                     // enable threads
+    if(pthread_create(&VFOEncoderThread, NULL, VFOEventHandler, NULL) != 0)
         perror("pthread_create VFO encoder");
-    pthread_detach(VFOEncoderThread);
+    else
+        GVFOEncoderThreadStarted = true;
 
-    if(pthread_create(&G2PanelTickThread, NULL, G2PanelTick, NULL) < 0)
+    if(pthread_create(&G2PanelTickThread, NULL, G2PanelTick, NULL) != 0)
         perror("pthread_create G2 panel tick");
-    pthread_detach(G2PanelTickThread);
+    else
+        GG2PanelTickThreadStarted = true;
 }
 
 
@@ -524,18 +538,25 @@ void InitialiseG2PanelHandler(void)
 //
 void ShutdownG2PanelHandler(void)
 {
+    atomic_store(&G2PanelActive, false);
+    if(GVFOEncoderThreadStarted)
+    {
+        pthread_join(VFOEncoderThread, NULL);
+        GVFOEncoderThreadStarted = false;
+    }
+    if(GG2PanelTickThreadStarted)
+    {
+        pthread_join(G2PanelTickThread, NULL);
+        GG2PanelTickThreadStarted = false;
+    }
+
     if (chip != NULL)
     {
-        G2PanelActive = false;
-        sleep(2);                                       // wait 2s to allow threads to close
         gpiod_line_release(VFO1);
         gpiod_line_release(VFO2);
         gpiod_line_release_bulk(&PBInLines);
         gpiod_chip_close(chip);
+        chip = NULL;
     }
-    close(i2c_fd);
+    i2c_close_device();
 }
-
-
-
-

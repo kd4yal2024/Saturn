@@ -40,23 +40,20 @@
 #include "g2v2panel.h"
 #include "AriesATU.h"
 
-#define ID_ARIES_ATU "2a7d4e1f-8b65-4a9c-b3d2-0f5e9c14a7e8"
 
-
-
-bool AriesATUActive;                                // true if Aries is operating
-bool AriesDetected;                                 // true if Aries detected from CAT message
+atomic_bool AriesATUActive = false;                 // true if Aries is operating
+static atomic_bool AriesDetected = false;           // true if Aries detected from CAT message
 TSerialThreadData AriesData;                        // data for G2V1 adapter read thread
 pthread_t AriesSerialThread;                        // thread for serial read from Aries
 pthread_t AriesTickThread;                          // thread with periodic tick
+static bool AriesSerialThreadStarted = false;
+static bool AriesTickThreadStarted = false;
 unsigned int CurrentTXAntenna = 0;                  // 0 if not known.
 unsigned int CurrentRXAntenna = 0;                  // 0 if not known.
 uint32_t CurrentFrequency = 0;                      // 10KHz units. 0 if not known
 bool EnabledForAntenna[4] = {false, false, false, false};  // enabled state for each possible TX antenna 0 entry is "unknown antenna"
 bool TuneSolutionFound = false;                     // true if there is a tune solution for current frequency
-
-extern bool IsTXMode;                               // true if in TX
-
+pthread_mutex_t g_aries_state_mutex = PTHREAD_MUTEX_INITIALIZER;  // protect shared Aries tune/antenna state
 
 #define ARIESPATH "/dev/serial/by-id/aries-atu-115200"                    // Aries ATU (note needs udev rule to map name)
 
@@ -70,18 +67,24 @@ void CalculateAriesLEDs(void)
     bool RedLEDState = false;
     bool GreenLEDState = false;
     bool Enabled = false;
+    unsigned int TXAntenna;
+    bool LocalTuneSolutionFound = false;
 
-    if(CurrentTXAntenna != 0)                       // if we have antenna set, see if enabled
+    pthread_mutex_lock(&g_aries_state_mutex);
+    TXAntenna = CurrentTXAntenna;
+    if(TXAntenna != 0)                              // if we have antenna set, see if enabled
     {
-        Enabled = EnabledForAntenna[CurrentTXAntenna];
+        Enabled = EnabledForAntenna[TXAntenna];
+        LocalTuneSolutionFound = TuneSolutionFound;
         if(Enabled)
         {
-            if(TuneSolutionFound)
+            if(LocalTuneSolutionFound)
                 GreenLEDState = true;
             else
                 RedLEDState = true; 
         }
     }
+    pthread_mutex_unlock(&g_aries_state_mutex);
     SetATULEDs(GreenLEDState, RedLEDState);
 }
 
@@ -96,22 +99,27 @@ void* AriesTick(__attribute__((unused)) void *arg)
 {
     bool PreviousTXMode = false;                                    // for detecting TX state change
     bool PreviousSDRActive = false;                                 // for detecting SDR active state change
+    bool SDRActiveNow;
+    bool TXModeNow;
 
     printf("opened Aries periodic tick thread, pid=%ld\n", syscall(SYS_gettid));
-    while(AriesATUActive)
+    while(atomic_load(&AriesATUActive))
     {
+        SDRActiveNow = atomic_load(&SDRActive);
         //
         // look for a change in SDR active
         //
-        if(SDRActive != PreviousSDRActive)                          // state change
+        if(SDRActiveNow != PreviousSDRActive)                       // state change
         {
-            PreviousSDRActive = SDRActive;                          // state change recognised
-            if(SDRActive == false)
+            PreviousSDRActive = SDRActiveNow;                       // state change recognised
+            if(SDRActiveNow == false)
             {
+                pthread_mutex_lock(&g_aries_state_mutex);
                 CurrentTXAntenna = 0;                               // mark ants and freq as "uknown"
                 CurrentRXAntenna = 0;
                 CurrentFrequency = 0;
                 TuneSolutionFound = false;                          // no tune solution
+                pthread_mutex_unlock(&g_aries_state_mutex);
                 SetAriesEnabledState(false);                        // disable while SDR not active
             }
             else
@@ -122,10 +130,11 @@ void* AriesTick(__attribute__((unused)) void *arg)
         // look for a change in TX state
         // if we enter TX, send out a TUNE request message to find if this is a TUNE or not. 
         //
-        if(IsTXMode != PreviousTXMode)                              // state change
+        TXModeNow = atomic_load(&IsTXMode);
+        if(TXModeNow != PreviousTXMode)                             // state change
         {
-            PreviousTXMode = IsTXMode;                          // state change recognised
-            if(IsTXMode)
+            PreviousTXMode = TXModeNow;                             // state change recognised
+            if(TXModeNow)
                 MakeCATMessageNoParam(DESTTCPCATPORT, eZZTU);
         }
         usleep(20000);                                              // 20ms period
@@ -143,38 +152,60 @@ void* AriesTick(__attribute__((unused)) void *arg)
 void InitialiseAriesHandler(void)
 {
     printf("checking for Aries ATU\n");
+    atomic_store(&AriesDetected, false);
+    atomic_store(&AriesATUActive, false);
 
 //
 // launch serial handler for Aries
 //
     strcpy(AriesData.PathName, ARIESPATH);
-    AriesData.IsOpen = false;
-    AriesData.RequestID = true;
+    atomic_store(&AriesData.DeviceHandle, -1);
+    atomic_store(&AriesData.IsOpen, false);
+    atomic_store(&AriesData.DeviceActive, true);
+    atomic_store(&AriesData.RequestID, true);
     AriesData.Device = eAriesATU;
     AriesData.Baud = B9600;
+    AriesSerialThreadStarted = false;
+    AriesTickThreadStarted = false;
 
-    if(pthread_create(&AriesSerialThread, NULL, CATSerial, (void *)&AriesData) < 0)
+    if(pthread_create(&AriesSerialThread, NULL, CATSerial, (void *)&AriesData) != 0)
+    {
         perror("pthread_create Aries ATU thread");
-    pthread_detach(AriesSerialThread);
+        atomic_store(&AriesData.DeviceActive, false);
+    }
+    else
+        AriesSerialThreadStarted = true;
 
-
-    sleep(2);                               // ID request only goes out after 1s
+    for(int WaitCntr = 0; WaitCntr < 20; WaitCntr++)
+    {
+        if(atomic_load(&AriesDetected))
+            break;
+        usleep(100000);
+    }
 //
 // now see if anything came back from CAT handler
 // disable devices if not used - this will cause it to close the file
 // if setected, create periodic tick thread
 //
-    if(AriesDetected)
+    if(atomic_load(&AriesDetected))
     {
         printf("Aries ATU Selected and Active\n");
-        AriesATUActive = true;
-        if(pthread_create(&AriesTickThread, NULL, AriesTick, NULL) < 0)
+        atomic_store(&AriesATUActive, true);
+        if(pthread_create(&AriesTickThread, NULL, AriesTick, NULL) != 0)
             perror("pthread_create Aries tick");
-        pthread_detach(AriesTickThread);
+        else
+            AriesTickThreadStarted = true;
 
     }
     else
-        AriesData.DeviceActive = false;
+    {
+        atomic_store(&AriesData.DeviceActive, false);
+        if(AriesSerialThreadStarted)
+        {
+            pthread_join(AriesSerialThread, NULL);
+            AriesSerialThreadStarted = false;
+        }
+    }
 }
 
 
@@ -183,9 +214,18 @@ void InitialiseAriesHandler(void)
 //
 void ShutdownAriesHandler(void)
 {
-    AriesATUActive = false;                     // shut down tick thread
-    AriesData.DeviceActive = false;             // shut down serial thread
-    sleep(1);                                   // allow time for tick thread to close
+    atomic_store(&AriesATUActive, false);      // shut down tick thread
+    if(AriesTickThreadStarted)
+    {
+        pthread_join(AriesTickThread, NULL);
+        AriesTickThreadStarted = false;
+    }
+    atomic_store(&AriesData.DeviceActive, false);             // shut down serial thread
+    if(AriesSerialThreadStarted)
+    {
+        pthread_join(AriesSerialThread, NULL);
+        AriesSerialThreadStarted = false;
+    }
 }
 
 
@@ -201,7 +241,7 @@ void SetAriesZZZSState(uint8_t ProductID, uint8_t HWVersion, uint8_t SWID)
         printf("found Aries ATU, product ID=%d", ProductID);
         printf("; H/W verson = %d", HWVersion);
         printf("; S/W verson = %d\n", SWID);
-        AriesDetected = true;
+        atomic_store(&AriesDetected, true);
     }
 }
 
@@ -213,7 +253,9 @@ void SetAriesZZZSState(uint8_t ProductID, uint8_t HWVersion, uint8_t SWID)
 //
 void HandleAriesZZOXMessage(bool Param)
 {
+    pthread_mutex_lock(&g_aries_state_mutex);
     TuneSolutionFound = Param;
+    pthread_mutex_unlock(&g_aries_state_mutex);
     printf("ZZOX handler: Aries reports tune solution = %d\n", Param);
     CalculateAriesLEDs();
 }
@@ -226,7 +268,11 @@ void HandleAriesZZOXMessage(bool Param)
 //
 void HandleAriesZZOZMessage(bool Param)
 {
-    printf("Aries erased tune solutions for TX Antenna %d, success = %d\n", CurrentTXAntenna, (int)Param);
+    unsigned int TXAntenna;
+    pthread_mutex_lock(&g_aries_state_mutex);
+    TXAntenna = CurrentTXAntenna;
+    pthread_mutex_unlock(&g_aries_state_mutex);
+    printf("Aries erased tune solutions for TX Antenna %d, success = %d\n", TXAntenna, (int)Param);
 }
 
 
@@ -237,10 +283,13 @@ void HandleAriesZZOZMessage(bool Param)
 //
 void SetAriesTuneState(bool Param)
 {
+    int DeviceHandle = atomic_load(&AriesData.DeviceHandle);
+
     if(Param)
     {
         printf("Aries detected TUNE state\n");
-        MakeCATMessageBool(AriesData.DeviceHandle, eZZTU, true);            // tell Aries it is in TUNE
+        if((DeviceHandle != -1) && atomic_load(&AriesData.IsOpen))
+            MakeCATMessageBool(DeviceHandle, eZZTU, true);            // tell Aries it is in TUNE
     }
     else
         printf("Aries detected normal TX state\n");
@@ -255,7 +304,7 @@ void SetAriesTuneState(bool Param)
 bool IsAriesSerial(int Handle)
 {
     bool Result = false;
-    if((Handle==AriesData.DeviceHandle) && (AriesData.IsOpen == true))
+    if((Handle == atomic_load(&AriesData.DeviceHandle)) && atomic_load(&AriesData.IsOpen))
         Result = true;
     return Result;
 }
@@ -268,7 +317,9 @@ bool IsAriesSerial(int Handle)
 //
 void SetAriesEnabledState(bool IsEnabled)
 {
-    MakeCATMessageBool(AriesData.DeviceHandle, eZZOV, IsEnabled);            // set enabled state
+    int DeviceHandle = atomic_load(&AriesData.DeviceHandle);
+    if((DeviceHandle != -1) && atomic_load(&AriesData.IsOpen))
+        MakeCATMessageBool(DeviceHandle, eZZOV, IsEnabled);            // set enabled state
     CalculateAriesLEDs();
 }
 
@@ -281,16 +332,25 @@ void SetAriesTXFrequency(uint32_t NewFreq)
     double Frequency;
     uint32_t Freq_Hz;
     uint32_t Freq_10KHz;
-    if(AriesATUActive)
+    bool FrequencyChanged = false;
+    if(atomic_load(&AriesATUActive))
     {
         Frequency = (double)(NewFreq * 0.028610229 + 0.5);            // convert to Hz, rounded
         Freq_Hz = (uint32_t)Frequency;
         Freq_10KHz = Frequency / 10000;
+        pthread_mutex_lock(&g_aries_state_mutex);
         if(Freq_10KHz != CurrentFrequency)
         {
             CurrentFrequency = Freq_10KHz;
+            FrequencyChanged = true;
+        }
+        pthread_mutex_unlock(&g_aries_state_mutex);
+        if(FrequencyChanged)
+        {
             printf("Aries get Freq = %d\n", Freq_Hz);
-            MakeCATMessageNumeric(AriesData.DeviceHandle, eZZFT, Freq_Hz);            // set enabled state
+            int DeviceHandle = atomic_load(&AriesData.DeviceHandle);
+            if((DeviceHandle != -1) && atomic_load(&AriesData.IsOpen))
+                MakeCATMessageNumeric(DeviceHandle, eZZFT, Freq_Hz);            // set enabled state
         }
     }
 }
@@ -304,8 +364,10 @@ void SetAriesTXFrequency(uint32_t NewFreq)
 void SetAriesAlexTXWord(uint16_t Word)
 {
     unsigned int Antenna = 0;
+    bool AntennaChanged = false;
+    bool Enabled = false;
 
-    if(AriesATUActive)
+    if(atomic_load(&AriesATUActive))
     {
         if(Word & 0x0100)
             Antenna = 1;
@@ -313,19 +375,33 @@ void SetAriesAlexTXWord(uint16_t Word)
             Antenna = 2;
         else if(Word & 0x0400)
             Antenna = 3;
-        if((CurrentTXAntenna != Antenna) && (Antenna != 0))
+        if(Antenna != 0)
         {
-            CurrentTXAntenna = Antenna;
-            printf("Aries detected TX Ant=%d\n", Antenna);
-            if(EnabledForAntenna[Antenna])
+            pthread_mutex_lock(&g_aries_state_mutex);
+            if(CurrentTXAntenna != Antenna)
             {
-                MakeCATMessageNumeric(AriesData.DeviceHandle, eZZOC, Antenna);      // set antenna
-                SetAriesEnabledState(true);            // set enabled state
+                CurrentTXAntenna = Antenna;
+                Enabled = EnabledForAntenna[Antenna];
+                AntennaChanged = true;
             }
-            else
+            pthread_mutex_unlock(&g_aries_state_mutex);
+
+            if(AntennaChanged)
             {
-                SetAriesEnabledState(false);            // set enabled state
-                MakeCATMessageNumeric(AriesData.DeviceHandle, eZZOC, Antenna);      // set antenna
+                int DeviceHandle = atomic_load(&AriesData.DeviceHandle);
+                printf("Aries detected TX Ant=%d\n", Antenna);
+                if(Enabled)
+                {
+                    if((DeviceHandle != -1) && atomic_load(&AriesData.IsOpen))
+                        MakeCATMessageNumeric(DeviceHandle, eZZOC, Antenna);      // set antenna
+                    SetAriesEnabledState(true);            // set enabled state
+                }
+                else
+                {
+                    SetAriesEnabledState(false);            // set enabled state
+                    if((DeviceHandle != -1) && atomic_load(&AriesData.IsOpen))
+                        MakeCATMessageNumeric(DeviceHandle, eZZOC, Antenna);      // set antenna
+                }
             }
         }
     }
@@ -340,7 +416,8 @@ void SetAriesAlexTXWord(uint16_t Word)
 void SetAriesAlexRXWord(uint16_t Word)
 {
     unsigned int Antenna = 0;
-    if(AriesATUActive)
+    bool AntennaChanged = false;
+    if(atomic_load(&AriesATUActive))
     {   
         if(Word & 0x0100)
             Antenna = 1;
@@ -348,10 +425,18 @@ void SetAriesAlexRXWord(uint16_t Word)
             Antenna = 2;
         else if(Word & 0x0400)
             Antenna = 3;
+        pthread_mutex_lock(&g_aries_state_mutex);
         if(CurrentRXAntenna != Antenna)
         {
             CurrentRXAntenna = Antenna;
-            MakeCATMessageNumeric(AriesData.DeviceHandle, eZZOA, Antenna);
+            AntennaChanged = true;
+        }
+        pthread_mutex_unlock(&g_aries_state_mutex);
+        if(AntennaChanged)
+        {
+            int DeviceHandle = atomic_load(&AriesData.DeviceHandle);
+            if((DeviceHandle != -1) && atomic_load(&AriesData.IsOpen))
+                MakeCATMessageNumeric(DeviceHandle, eZZOA, Antenna);
             printf("Aries detected RX Ant=%d\n", Antenna);
         }
     }
@@ -365,18 +450,34 @@ void SetAriesAlexRXWord(uint16_t Word)
 //
 void HandleATUButtonPress(uint8_t Event)
 {
-    if((AriesATUActive) && (CurrentTXAntenna != 0))
+    unsigned int TXAntenna = 0;
+    bool EnabledState = false;
+
+    if(atomic_load(&AriesATUActive))
     {   
+        pthread_mutex_lock(&g_aries_state_mutex);
+        TXAntenna = CurrentTXAntenna;
+        if((Event == 1) && (TXAntenna != 0))
+        {
+            EnabledForAntenna[TXAntenna] = !EnabledForAntenna[TXAntenna];
+            EnabledState = EnabledForAntenna[TXAntenna];
+        }
+        pthread_mutex_unlock(&g_aries_state_mutex);
+    }
+
+    if((atomic_load(&AriesATUActive)) && (TXAntenna != 0))
+    {
         printf("Aries ATU Button Press, Event=%d\n", Event);
         if(Event == 2)                      // long press: set not enabled, erase for current antenna
         {
+            int DeviceHandle = atomic_load(&AriesData.DeviceHandle);
             SetAriesEnabledState(false);            // set enabled state
-            MakeCATMessageNumeric(AriesData.DeviceHandle, eZZOZ, CurrentTXAntenna);
+            if((DeviceHandle != -1) && atomic_load(&AriesData.IsOpen))
+                MakeCATMessageNumeric(DeviceHandle, eZZOZ, TXAntenna);
         }    
         else if(Event == 1)                 // short press. toggle enabled/not for antenna.
         {
-            EnabledForAntenna[CurrentTXAntenna] = !EnabledForAntenna[CurrentTXAntenna];
-            SetAriesEnabledState(EnabledForAntenna[CurrentTXAntenna]);            // set enabled state
+            SetAriesEnabledState(EnabledState);            // set enabled state
         }
         CalculateAriesLEDs();
     }
@@ -399,5 +500,3 @@ void HandleAriesZZZPMessage(uint32_t Param)
     if(ScanCode == 1)
         HandleATUButtonPress(State);
 }
-
-
