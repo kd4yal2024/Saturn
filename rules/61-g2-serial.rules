@@ -30,8 +30,10 @@ KERNELS=="1-1.4", ATTRS{idVendor}=="2e8a", ATTRS{idProduct}=="0003", SYMLINK+="s
 
 LABEL="g2_other"
 # detect G2-1K protection module with arduino nano every: look on USB port normally at radio front panel
-# KERNELS=="5-1.3" on RPi CM5, external front USB port
+# KERNELS=="5-1.3" on RPi CM5 Bookworm/external front USB port
 KERNELS=="5-1.3", ATTRS{idVendor}=="2341", ATTRS{idProduct}=="0058", SYMLINK+="serial/by-path/g2-ganymede-9600"
+# KERNELS=="1-1.3" on RPi CM5 Trixie/external front USB port
+KERNELS=="1-1.3", ATTRS{idVendor}=="2341", ATTRS{idProduct}=="0058", SYMLINK+="serial/by-path/g2-ganymede-9600"
 
 # detect Aries Arduino nano 33 IoT
 ATTRS{idVendor}=="2341", ATTRS{idProduct}=="8057", SYMLINK+="serial/by-id/aries-atu-115200"

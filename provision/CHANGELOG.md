@@ -18,6 +18,9 @@ All notable changes to provisioning assets are documented in this file.
   - icon install failures are now fatal instead of being swallowed as best-effort behavior
   - `gtk-update-icon-cache` refresh remains warning-only because a stale cache should not abort launcher installation
 
+- `../rules/61-g2-serial.rules`
+  - added the missing `KERNELS=="1-1.3"` Ganymede Nano Every mapping alongside the existing `5-1.3` rule so Pi CM5/Trixie units still get `/dev/serial/by-path/g2-ganymede-9600`
+
 - `cloud-init/user-data.example.yaml`
   - now writes `/usr/local/sbin/saturn-cloudinit-bootstrap.sh` as an explicit first-boot bootstrap helper
   - bootstrap now logs to `/var/log/saturn-cloudinit-bootstrap.log` before the Saturn repo is cloned
