@@ -302,6 +302,7 @@ Keep the fields factual, not policy-heavy. Good first fields are:
 - `xdma_present`
 - `system_role`
 - `expected_display_type`
+- `configured_display_type`
 - `lcd_profile`
 - `display_size_inch`
 - `uart_overlay`

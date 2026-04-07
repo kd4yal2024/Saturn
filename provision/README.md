@@ -168,6 +168,7 @@ Notes:
     - `xdma_present`
     - `system_role`
     - `expected_display_type`
+    - `configured_display_type`
     - `lcd_profile`
     - `display_size_inch`
     - `lcd_profile_source`
@@ -179,6 +180,8 @@ Notes:
     - `atu`
     - `aries_present`
     - `aries_device_path`
+- `expected_display_type` is the front-panel/system-role expectation and may differ from a user-installed display
+- `configured_display_type` reflects the actual configured LCD/profile result written or preserved in boot config
 - that `system_role` state is reporting-only for now; it does not auto-apply role-specific boot behavior yet
 - `CM5 + 7"` is currently explicit/manual-only in `SATURN_LCD_PROFILE=auto`
   - explicit profiles `cm5-7`, `cm5-7-g2-single-dsi`, and `cm5-7-g2-dual-dsi` are still available for Saturn LCD Setup and manual testing

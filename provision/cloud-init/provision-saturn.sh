@@ -1185,7 +1185,7 @@ write_profile_env_line() {
 write_profile_env_state() {
   local hardware_model hardware_platform_vendor hardware_module_family hardware_storage_variant
   local boot_config profile_raw lcd_profile display_size_inch lcd_profile_source overlay_raw uart_overlay panel_overlay
-  local discovered_processor radio_profile expected_display_type
+  local discovered_processor radio_profile expected_display_type configured_display_type
   local front_panel_device_path front_panel_device_addr
   local ganymede_present ganymede_device_path aries_present aries_device_path
   local pa_protection atu
@@ -1224,6 +1224,7 @@ write_profile_env_state() {
   front_panel_device_path="$(resolve_front_panel_device_path "${SATURN_FRONT_PANEL_TYPE:-unknown}")"
   front_panel_device_addr="$(resolve_front_panel_device_addr "${SATURN_FRONT_PANEL_TYPE:-unknown}")"
   expected_display_type="$(resolve_expected_display_type "${SATURN_FRONT_PANEL_TYPE:-unknown}" "${SATURN_SYSTEM_ROLE:-unknown}")"
+  configured_display_type="${display_size_inch:-unknown}"
 
   ganymede_device_path="$(first_existing_device_path /dev/serial/by-path/g2-ganymede-9600)"
   aries_device_path="$(first_existing_device_path /dev/serial/by-id/aries-atu-115200)"
@@ -1258,6 +1259,7 @@ write_profile_env_state() {
     write_profile_env_line "xdma_present" "${SATURN_XDMA_PRESENT:-unknown}"
     write_profile_env_line "system_role" "${SATURN_SYSTEM_ROLE:-unknown}"
     write_profile_env_line "expected_display_type" "$expected_display_type"
+    write_profile_env_line "configured_display_type" "$configured_display_type"
     write_profile_env_line "lcd_profile" "$lcd_profile"
     write_profile_env_line "display_size_inch" "$display_size_inch"
     write_profile_env_line "lcd_profile_source" "$lcd_profile_source"

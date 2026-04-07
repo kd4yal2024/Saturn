@@ -11,6 +11,7 @@ All notable changes to provisioning assets are documented in this file.
   - `resolve_system_role()` now validates the stored front-panel state and ignores unexpected values instead of silently propagating them into role resolution
   - now writes `/var/lib/saturn-provision/profile.env` as a factual machine-readable provisioning summary
   - the first profile file includes hardware classification, heuristic `radio_profile`, discovered processor, front-panel type/path facts, conservative `system_role`, expected display type, resolved LCD profile, recommended overlay facts, and safe udev-alias presence/path facts for Ganymede and Aries
+  - `profile.env` now also exports `configured_display_type` so self-installed displays are represented separately from front-panel-implied `expected_display_type`
 
 - `cloud-init/user-data.example.yaml`
   - invalid `SATURN_CLOCK_SYNC_WAIT_SECONDS` values now emit an explicit bootstrap warning before falling back to the default `180` second wait
