@@ -156,7 +156,12 @@ find_icon() {
   if [[ -d "$SHORTCUT_SRC/icons" ]]; then
     icon="$(find "$SHORTCUT_SRC/icons" -maxdepth 1 -type f \( -iname "${stem}.*" -o -iname "${stem}-icon.*" \) -print | head -n1 || true)"
   fi
-  if [[ -n "$icon" ]]; then printf '%s\n' "$icon"; else printf '%s\n' "applications-utilities"; fi
+  if [[ -n "$icon" ]]; then
+    # Desktop launchers should prefer theme icon names over repo file paths.
+    printf '%s\n' "$stem"
+  else
+    printf '%s\n' "applications-utilities"
+  fi
 }
 
 browser_cmd() {
@@ -411,12 +416,18 @@ done
 
 # ---------- optional: install repo icons to user theme ----------
 if [[ -d "$SHORTCUT_SRC/icons" ]]; then
-  ICON_DST="$HOME/.local/share/icons/hicolor/256x256/apps"
-  mkdir -p "$ICON_DST"
+  ICON_THEME_ROOT="$HOME/.local/share/icons/hicolor"
   find "$SHORTCUT_SRC/icons" -type f \( -iname '*.png' -o -iname '*.svg' -o -iname '*.xpm' \) -print0 \
     | while IFS= read -r -d '' ic; do
         log "Installing icon: $(basename "$ic")"
-        install -Dm644 "$ic" "$ICON_DST/$(basename "$ic")"
+        case "${ic##*.}" in
+          svg|SVG)
+            install -Dm644 "$ic" "$ICON_THEME_ROOT/scalable/apps/$(basename "$ic")"
+            ;;
+          *)
+            install -Dm644 "$ic" "$ICON_THEME_ROOT/256x256/apps/$(basename "$ic")"
+            ;;
+        esac
       done
 fi
 
@@ -433,6 +444,9 @@ fi
 # ---------- refresh caches ----------
 if command -v update-desktop-database >/dev/null 2>&1; then
   update-desktop-database "$USER_APPS_DIR" || true
+fi
+if command -v gtk-update-icon-cache >/dev/null 2>&1; then
+  gtk-update-icon-cache -f -t "$HOME/.local/share/icons/hicolor" >/dev/null 2>&1 || true
 fi
 if command -v xdg-desktop-menu >/dev/null 2>&1; then
   xdg-desktop-menu forceupdate || true

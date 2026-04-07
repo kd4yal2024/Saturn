@@ -9,8 +9,8 @@
 - front-panel-aware G2 7-inch auto-selection is now available on first provisioning, not only in helper/reprovision flows
 - front-panel detection state is now treated as hardware-only (`G2V1`, `G2V2`, `NONE`); any future `RemoteHead` concept should be modeled separately as a system role
 - the CM5 7-inch auto rule now separates `G2V1` and `G2V2`:
-  - `G2V1` -> `cm5-7-g2-dual-dsi`
-  - `G2V2` -> `cm5-7-g2-single-dsi`
+  - this auto-selection is now withdrawn from provisioning/auto mode until `CM5 + 7"` is validated under Trixie
+  - explicit `cm5-7`, `cm5-7-g2-single-dsi`, and `cm5-7-g2-dual-dsi` profiles remain available manually in Saturn LCD Setup
 
 ## 2026-03-23
 

@@ -352,8 +352,9 @@ resolve_lcd_profile() {
 
       # Front-panel tiebreaker:
       #   - CM4 + G2V1/G2V2 -> single-DSI G2 profile
-      #   - CM5 + G2V1      -> dual-DSI G2 field profile
-      #   - CM5 + G2V2      -> single-DSI G2 profile
+      # CM5 7-inch remains explicit/manual-only for now because the
+      # currently known CM5 + 7" combinations are still not validated as
+      # working under Trixie.
       # Only active when SATURN_FRONT_PANEL_TYPE is pre-populated by the caller
       # (helper reads the state file; provisioning sets it after detection).
       local fp_type="${SATURN_FRONT_PANEL_TYPE:-}"
@@ -365,19 +366,12 @@ resolve_lcd_profile() {
             printf '%s|%s|%s\n' "$profile" "$size" "$size_source"
             return 0
             ;;
-          cm5:G2V1)
-            profile="${cm}-7-g2-dual-dsi"
-            _saturn_lcd_log "Front-panel tiebreaker: cm='$cm', type='$fp_type' → using profile '$profile'"
-            printf '%s|%s|%s\n' "$profile" "$size" "$size_source"
-            return 0
-            ;;
-          cm5:G2V2)
-            profile="${cm}-7-g2-single-dsi"
-            _saturn_lcd_log "Front-panel tiebreaker: cm='$cm', type='$fp_type' → using profile '$profile'"
-            printf '%s|%s|%s\n' "$profile" "$size" "$size_source"
-            return 0
-            ;;
         esac
+      fi
+
+      if [[ "$cm" == "cm5" && "$size" == "7" ]]; then
+        _saturn_lcd_log "WARN: SATURN_LCD_PROFILE=auto will not auto-select a CM5 7-inch profile yet (model='${model:-unknown}', type='${fp_type:-unknown}'). Use Saturn LCD Setup or set SATURN_LCD_PROFILE explicitly."
+        return 1
       fi
 
       printf '%s-%s|%s|%s\n' "$cm" "$size" "$size" "$size_source"

@@ -46,6 +46,7 @@ Completion and logs:
 
 - state file: `/var/lib/saturn-provision/complete`
 - front-panel state file: `/var/lib/saturn-provision/front-panel-type`
+- system-role state file: `/var/lib/saturn-provision/system-role`
 - log file: `/var/log/saturn-provision.log`
 - live status file (desktop UI): `/var/lib/saturn-provision/ui-status`
 - completion state now also records:
@@ -53,6 +54,8 @@ Completion and logs:
   - `hardware_platform_vendor`
   - `hardware_module_family`
   - `hardware_storage_variant`
+  - `xdma_present`
+  - `system_role`
 
 ## Desktop GTK Provisioning UI (Optional)
 
@@ -79,6 +82,7 @@ Environment controls:
 - `SATURN_APT_LOCK_RETRY_INTERVAL_SECONDS` (default: `3`)
 - `SATURN_DETECT_FRONT_PANEL=1|0` (default: `1`)
 - `SATURN_FRONT_PANEL_STATE_FILE` (default: `/var/lib/saturn-provision/front-panel-type`)
+- `SATURN_FORCE_SYSTEM_ROLE=local_saturn|remotehead_candidate|unknown` (optional conservative support override)
 
 Notes:
 
@@ -141,13 +145,19 @@ Notes:
 - `SATURN_LCD_PROFILE=auto` currently applies Raspberry Pi CM4/CM5 overlay rules only; on non-Raspberry-Pi platforms such as Radxa it will log the detected model/vendor and require an explicit profile.
 - After `cm` and size are known, the 7-inch front-panel tiebreaker now separates G2 variants:
   - `CM4 + G2V1/G2V2` -> `${cm}-7-g2-single-dsi`
-  - `CM5 + G2V1` -> `${cm}-7-g2-dual-dsi`
-  - `CM5 + G2V2` -> `${cm}-7-g2-single-dsi`
 - First provisioning now installs udev rules and detects the front panel before applying the LCD profile, so the G2 7-inch tiebreaker is active on the first run instead of only on reprovision/helper use.
 - Front-panel detection in Saturn is now intentionally hardware-only:
   - state file values are `G2V1`, `G2V2`, or `NONE`
   - `ZZZS08...` is currently treated as `G2V2`-class hardware for LCD/provisioning purposes
   - a future `RemoteHead` concept should be modeled separately as a system role, not as a front-panel type
+- provisioning now also records a conservative `system_role` result:
+  - `local_saturn` when XDMA is present
+  - `remotehead_candidate` when the current heuristic sees `CM5 + G2V2 + no XDMA`
+  - `unknown` otherwise
+- that `system_role` state is reporting-only for now; it does not auto-apply role-specific boot behavior yet
+- `CM5 + 7"` is currently explicit/manual-only in `SATURN_LCD_PROFILE=auto`
+  - explicit profiles `cm5-7`, `cm5-7-g2-single-dsi`, and `cm5-7-g2-dual-dsi` are still available for Saturn LCD Setup and manual testing
+  - auto mode now refuses to pick a CM5 7-inch profile until that path is validated under Trixie
 - Safe dry-run example (no boot config changes):
   - `sudo SATURN_FORCE_REPROVISION=1 SATURN_LCD_PROFILE=auto SATURN_LCD_DETECT_ONLY=1 /home/pi/github/Saturn/provision/cloud-init/provision-saturn.sh`
 
@@ -282,10 +292,10 @@ On first boot, cloud-init processes `user-data` and executes:
 
 Bootstrap behavior before the main Saturn script now is:
 
-- retries while waiting for `SATURN_USER` to exist
-- if the configured `SATURN_USER` never appears, falls back to the first normal `/home/*` login user when one exists
 - waits for system clock synchronization before first apt/git activity
 - installs bootstrap prerequisites itself after the clock is sane
+- retries while waiting for `SATURN_USER` to exist
+- if the configured `SATURN_USER` never appears, falls back to the first normal `/home/*` login user when one exists
 - fails with an explicit bootstrap log message instead of silently stopping before Saturn logging begins
 
 Then `provision-saturn.sh` performs:
@@ -308,8 +318,7 @@ Then `provision-saturn.sh` performs:
   - uses the shared logic from `scripts/saturn-lcd-lib.sh`
   - on 7-inch systems, now separates G2 variants:
     - `CM4 + G2V1/G2V2` -> `cm4-7-g2-single-dsi`
-    - `CM5 + G2V1` -> `cm5-7-g2-dual-dsi`
-    - `CM5 + G2V2` -> `cm5-7-g2-single-dsi`
+  - on `CM5 + 7"` systems, `SATURN_LCD_PROFILE=auto` now warns and requires an explicit profile instead of pretending the path is validated
 - kernel header checks/install (for XDMA build path)
 - Saturn repo sync and build of apps/tools
 - desktop launcher install
@@ -382,9 +391,9 @@ From `user-data.example.yaml`:
 
 - `SATURN_USER=pi`
 - `SATURN_USER_RETRY_SECONDS=30`
-- `SATURN_INSTALL_UPDATE_MANAGER=1`
 - `SATURN_CLOCK_SYNC_WAIT_SECONDS=180`
 - `SATURN_CLOCK_SYNC_POLL_SECONDS=5`
+- `SATURN_INSTALL_UPDATE_MANAGER=1`
 - `SATURN_INSTALL_P2APP_CONTROL=1`
 - `SATURN_INSTALL_UDEV_RULES=1`
 - `SATURN_INSTALL_SHUTDOWN_WAITER=1`
@@ -424,8 +433,8 @@ Provisioning is configured to keep the repo clean of Python cache artifacts:
 - If you use a user other than `pi`, update `SATURN_USER` in `user-data`.
 - On current Raspberry Pi OS cloud-init images, if you replace the generated `user-data`, keep the login-user creation block or Saturn bootstrap may not find the expected user.
 - Network access is required on first boot for apt and git operations.
-- `cloud-init` user-data is root-owned; read it with `sudo cat /var/lib/cloud/instance/user-data.txt`.
 - On first boot without an RTC, provisioning now waits for network time before bootstrap apt/git activity instead of hitting repository signature checks with a stale clock.
+- `cloud-init` user-data is root-owned; read it with `sudo cat /var/lib/cloud/instance/user-data.txt`.
 - Provisioning now waits and retries every `SATURN_USER_RETRY_SECONDS` (default `30`) until `SATURN_USER` exists.
 - Early clone/bootstrap failures are logged to `/var/log/saturn-cloudinit-bootstrap.log`.
 - `P1_app` is intentionally skipped in provisioning (legacy target not required for current images).

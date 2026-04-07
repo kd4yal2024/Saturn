@@ -26,8 +26,7 @@ All notable changes to provisioning assets are documented in this file.
   - auto LCD detection now preserves existing Laurence-style single-DSI 7-inch configs instead of collapsing them into the generic `cm4-7` / `cm5-7` profiles
   - LCD auto mode now separates G2 variants on 7-inch systems:
     - `CM4 + G2V1/G2V2` -> `cm4-7-g2-single-dsi`
-    - `CM5 + G2V1` -> `cm5-7-g2-dual-dsi`
-    - `CM5 + G2V2` -> `cm5-7-g2-single-dsi`
+  - `SATURN_LCD_PROFILE=auto` now refuses unresolved `CM5 + 7"` combinations and requires an explicit/manual profile until that path is validated under Trixie
   - front-panel detection is now treated as hardware-only state:
     - provisioning records only `G2V1`, `G2V2`, or `NONE`
     - `ZZZS08...` is folded into `G2V2`-class hardware for LCD/provisioning purposes
@@ -38,6 +37,11 @@ All notable changes to provisioning assets are documented in this file.
   - udev rule installation now receives the detected front-panel type for logging/state, while continuing to use the standard serial rules file unless explicitly overridden
   - added `SATURN_DETECT_FRONT_PANEL` (default `1`)
   - front-panel detection now records `G2V1`, `G2V2`, or `NONE` in provisioning state
+  - provisioning now records a conservative `system_role` result alongside front-panel type:
+    - `local_saturn` when XDMA is present
+    - `remotehead_candidate` for the current `CM5 + G2V2 + no XDMA` heuristic
+    - `unknown` otherwise
+  - added `SATURN_FORCE_SYSTEM_ROLE` as a reporting/support override without changing role-specific boot behavior yet
 
 - `../scripts/saturn-lcd-lib.sh`
   - new shared shell library for LCD/profile detection, rendering, and config application
@@ -88,14 +92,15 @@ All notable changes to provisioning assets are documented in this file.
 
 - `README.md`
   - documented that provisioning now configures the BCM15 power-switch/front-panel LED helper
+  - documented the root-owned provisioning power helper used by the desktop UI reboot action
   - documented front-panel detection behavior, state file, and provisioning toggle
   - documented the new shared LCD/profile library and the first-provision front-panel-aware G2 7-inch LCD tiebreaker
   - documented the new custom and Laurence-style single-DSI 7-inch LCD profiles
   - documented the new XDMA readiness gate and doctor path installed with `p2app-control`
-  - documented the root-owned provisioning power helper used by the desktop UI reboot action
   - documented the new hardware classification fields and that `SATURN_LCD_PROFILE=auto` is currently Raspberry-Pi-only
   - documented the new `/var/log/saturn-cloudinit-bootstrap.log` early bootstrap log and the warning about preserving login-user creation in cloud-init `user-data`
   - documented the new first-boot clock-sync wait and the removal of early cloud-init `packages:` bootstrap apt work
+
 - `../sw_tools/p2app-control/README.md`
   - documented the new XDMA readiness gate, doctor script, and the provisioning-time troubleshooting path for `register write attempted before XDMA register device was opened`
 

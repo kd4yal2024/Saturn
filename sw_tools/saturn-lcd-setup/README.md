@@ -33,6 +33,11 @@ The profile logic is shared with Saturn provisioning by reusing helpers from:
 - `scripts/detect-lcd-profile.sh`
 - `scripts/saturn-lcd-helper.sh`
 
+Note:
+
+- the explicit `CM5 7"` profiles remain available here for manual testing
+- `SATURN_LCD_PROFILE=auto` no longer auto-selects `CM5 + 7"` as a validated path under Trixie
+
 ## Build
 
 From the repo root:

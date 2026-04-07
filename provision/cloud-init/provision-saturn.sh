@@ -38,6 +38,7 @@ SATURN_REBUILD_XDMA="${SATURN_REBUILD_XDMA:-1}"
 SATURN_BUILD_OPTIONAL_TOOLS="${SATURN_BUILD_OPTIONAL_TOOLS:-1}"
 SATURN_DETECT_FRONT_PANEL="${SATURN_DETECT_FRONT_PANEL:-1}"
 SATURN_SHUTDOWN_WAITER_ENABLED_DEFAULT="${SATURN_SHUTDOWN_WAITER_ENABLED_DEFAULT:-auto}"
+SATURN_FORCE_SYSTEM_ROLE="${SATURN_FORCE_SYSTEM_ROLE:-}"
 
 SATURN_FLASH_FPGA="${SATURN_FLASH_FPGA:-0}"
 SATURN_FLASH_IMAGE="${SATURN_FLASH_IMAGE:-latest}"
@@ -78,6 +79,9 @@ PYTHON_GUARD_DIR=""
 UPDATE_MANAGER_PASSWORD_FILE_DEFAULT="/var/lib/saturn-provision/update-manager-admin-password"
 SATURN_FRONT_PANEL_TYPE=""
 SATURN_FRONT_PANEL_STATE_FILE="${SATURN_FRONT_PANEL_STATE_FILE:-${SATURN_STATE_DIR}/front-panel-type}"
+SATURN_XDMA_PRESENT=""
+SATURN_SYSTEM_ROLE=""
+SATURN_SYSTEM_ROLE_STATE_FILE="${SATURN_SYSTEM_ROLE_STATE_FILE:-${SATURN_STATE_DIR}/system-role}"
 
 log() { printf '[%(%Y-%m-%d %H:%M:%S)T] %s\n' -1 "$*" >&2; }
 write_ui_status() {
@@ -1002,6 +1006,65 @@ verify_front_panel_after_udev() {
   esac
 }
 
+write_system_role_state() {
+  install -d -m 0755 "$(dirname "$SATURN_SYSTEM_ROLE_STATE_FILE")"
+  printf '%s\n' "$SATURN_SYSTEM_ROLE" >"$SATURN_SYSTEM_ROLE_STATE_FILE"
+  chmod 0644 "$SATURN_SYSTEM_ROLE_STATE_FILE"
+}
+
+detect_xdma_presence() {
+  if [[ -e /dev/xdma0_user || -e /dev/xdma/card0/user ]]; then
+    printf '1\n'
+    return
+  fi
+  if command -v lspci >/dev/null 2>&1 && lspci 2>/dev/null | grep -qi xilinx; then
+    printf '1\n'
+    return
+  fi
+  printf '0\n'
+}
+
+resolve_system_role() {
+  local module_family front_panel_type xdma_present forced_role
+  module_family="$(detect_module_family 2>/dev/null || true)"
+  front_panel_type="${SATURN_FRONT_PANEL_TYPE:-}"
+  xdma_present="$(detect_xdma_presence)"
+  forced_role="${SATURN_FORCE_SYSTEM_ROLE:-}"
+
+  if [[ -z "$front_panel_type" && -f "$SATURN_FRONT_PANEL_STATE_FILE" ]]; then
+    front_panel_type="$(tr -d '\r\n' < "$SATURN_FRONT_PANEL_STATE_FILE" 2>/dev/null || true)"
+  fi
+
+  case "$forced_role" in
+    local_saturn|remotehead_candidate|unknown)
+      SATURN_SYSTEM_ROLE="$forced_role"
+      ;;
+    "")
+      if [[ "$xdma_present" == "1" ]]; then
+        SATURN_SYSTEM_ROLE="local_saturn"
+      elif [[ "$module_family" == "cm5" && "$front_panel_type" == "G2V2" ]]; then
+        SATURN_SYSTEM_ROLE="remotehead_candidate"
+      else
+        SATURN_SYSTEM_ROLE="unknown"
+      fi
+      ;;
+    *)
+      log "WARN: Ignoring unsupported SATURN_FORCE_SYSTEM_ROLE='$forced_role'; expected local_saturn|remotehead_candidate|unknown."
+      if [[ "$xdma_present" == "1" ]]; then
+        SATURN_SYSTEM_ROLE="local_saturn"
+      elif [[ "$module_family" == "cm5" && "$front_panel_type" == "G2V2" ]]; then
+        SATURN_SYSTEM_ROLE="remotehead_candidate"
+      else
+        SATURN_SYSTEM_ROLE="unknown"
+      fi
+      ;;
+  esac
+
+  SATURN_XDMA_PRESENT="$xdma_present"
+  write_system_role_state
+  log "Resolved system role: ${SATURN_SYSTEM_ROLE} (module=${module_family:-unknown}, front_panel=${front_panel_type:-unknown}, xdma_present=${SATURN_XDMA_PRESENT})"
+}
+
 install_update_manager() {
   local saturn_home="$1"
   local script="$SATURN_REPO_DIR/update_manager/install_saturn_go_nginx.sh"
@@ -1117,6 +1180,8 @@ hardware_platform_vendor=${hardware_platform_vendor:-unknown}
 hardware_module_family=${hardware_module_family:-unknown}
 hardware_storage_variant=${hardware_storage_variant:-unknown}
 front_panel_type=${SATURN_FRONT_PANEL_TYPE:-unknown}
+xdma_present=${SATURN_XDMA_PRESENT:-unknown}
+system_role=${SATURN_SYSTEM_ROLE:-unknown}
 EOF
 }
 
@@ -1177,6 +1242,8 @@ main() {
   if bool_true "$SATURN_DETECT_FRONT_PANEL" && bool_true "$SATURN_INSTALL_UDEV_RULES"; then
     verify_front_panel_after_udev
   fi
+  set_ui_stage "Resolving hardware role"
+  resolve_system_role
   set_ui_stage "Applying LCD boot profile"
   configure_lcd_profile
   set_ui_stage "Installing developer desktop tools"

@@ -1,39 +1,66 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-label="Saturn Go desktop icon">
   <defs>
-    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#18253c"/>
-      <stop offset="100%" stop-color="#254c7a"/>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0F172A"></stop>
+      <stop offset="100%" stop-color="#1E293B"></stop>
     </linearGradient>
-    <linearGradient id="panel" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#f4f8fb"/>
-      <stop offset="100%" stop-color="#dce8f3"/>
+
+    <linearGradient id="ring" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#38BDF8"></stop>
+      <stop offset="100%" stop-color="#22D3EE"></stop>
     </linearGradient>
-    <linearGradient id="orbit" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#74d4ff"/>
-      <stop offset="100%" stop-color="#22b573"/>
+
+    <linearGradient id="wf" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#0EA5E9"></stop>
+      <stop offset="50%" stop-color="#22D3EE"></stop>
+      <stop offset="100%" stop-color="#10B981"></stop>
     </linearGradient>
-    <linearGradient id="alert" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#ffd45d"/>
-      <stop offset="100%" stop-color="#ff8a3d"/>
-    </linearGradient>
+
+    <filter id="softGlow" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="4" result="blur"></feGaussianBlur>
+      <feMerge>
+        <feMergeNode in="blur"></feMergeNode>
+        <feMergeNode in="SourceGraphic"></feMergeNode>
+      </feMerge>
+    </filter>
   </defs>
 
-  <rect x="16" y="16" width="224" height="224" rx="52" fill="url(#bg)"/>
+  <!-- Background -->
+  <rect x="12" y="12" width="232" height="232" rx="52" fill="url(#bg)"></rect>
 
-  <rect x="44" y="56" width="168" height="144" rx="18" fill="#0d1729" opacity="0.45"/>
-  <rect x="50" y="62" width="156" height="132" rx="14" fill="url(#panel)"/>
-  <rect x="50" y="62" width="156" height="28" rx="14" fill="#d1e1ef"/>
+  <!-- Inner panel -->
+  <rect x="28" y="28" width="200" height="200" rx="36" fill="#111827" opacity="0.92"></rect>
 
-  <circle cx="72" cy="76" r="5" fill="#ff8a7a"/>
-  <circle cx="88" cy="76" r="5" fill="#f2c14b"/>
-  <circle cx="104" cy="76" r="5" fill="#54c27a"/>
+  <!-- Saturn RF ring -->
+  <ellipse cx="128" cy="96" rx="72" ry="26" fill="none" stroke="url(#ring)" stroke-width="11" transform="rotate(-12 128 96)" stroke-linecap="round" filter="url(#softGlow)"></ellipse>
 
-  <circle cx="128" cy="134" r="34" fill="none" stroke="url(#orbit)" stroke-width="12"/>
-  <path d="M126 84a51 51 0 1 1 -35 14" fill="none" stroke="#2b6484" stroke-width="10" stroke-linecap="round"/>
-  <path d="M78 95l13 -1 2 12" fill="none" stroke="#2b6484" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/>
-  <path d="M126 103v36l22 15" fill="none" stroke="#1d2d4a" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/>
+  <!-- Antenna mast -->
+  <path d="M128 58 L128 150" stroke="#FFFFFF" stroke-width="12" stroke-linecap="round"></path>
+  <circle cx="128" cy="50" r="9" fill="#FFFFFF"></circle>
 
-  <rect x="152" y="148" width="34" height="26" rx="8" fill="url(#alert)"/>
-  <path d="M169 155v8" stroke="#fff6df" stroke-width="6" stroke-linecap="round"/>
-  <circle cx="169" cy="168" r="3" fill="#fff6df"/>
+  <!-- Tower legs -->
+  <path d="M128 150 L96 188" stroke="#FFFFFF" stroke-width="10" stroke-linecap="round"></path>
+  <path d="M128 150 L160 188" stroke="#FFFFFF" stroke-width="10" stroke-linecap="round"></path>
+
+  <!-- Base line -->
+  <path d="M88 188 H168" stroke="#FFFFFF" stroke-width="10" stroke-linecap="round"></path>
+
+  <!-- Small cross braces -->
+  <path d="M116 98 H140" stroke="#CBD5E1" stroke-width="6" stroke-linecap="round" opacity="0.9"></path>
+  <path d="M110 122 H146" stroke="#CBD5E1" stroke-width="6" stroke-linecap="round" opacity="0.9"></path>
+
+  <!-- Waterfall / SDR strip -->
+  <g transform="translate(52 198)">
+    <rect x="0" y="0" width="152" height="16" rx="8" fill="#0B1220"></rect>
+    <rect x="6" y="3" width="16" height="10" rx="3" fill="url(#wf)" opacity="0.85"></rect>
+    <rect x="26" y="3" width="11" height="10" rx="3" fill="url(#wf)" opacity="0.55"></rect>
+    <rect x="41" y="3" width="20" height="10" rx="3" fill="url(#wf)" opacity="0.95"></rect>
+    <rect x="65" y="3" width="12" height="10" rx="3" fill="url(#wf)" opacity="0.45"></rect>
+    <rect x="81" y="3" width="26" height="10" rx="3" fill="url(#wf)" opacity="1"></rect>
+    <rect x="111" y="3" width="10" height="10" rx="3" fill="url(#wf)" opacity="0.5"></rect>
+    <rect x="125" y="3" width="21" height="10" rx="3" fill="url(#wf)" opacity="0.8"></rect>
+  </g>
+
+  <!-- Tiny update status accent -->
+  <circle cx="198" cy="58" r="10" fill="#10B981"></circle>
 </svg>
