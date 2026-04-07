@@ -43,7 +43,7 @@
 
 atomic_bool AriesATUActive = false;                 // true if Aries is operating
 static atomic_bool AriesDetected = false;           // true if Aries detected from CAT message
-TSerialThreadData AriesData;                        // data for G2V1 adapter read thread
+TSerialThreadData AriesData = {0};                  // data for G2V1 adapter read thread
 pthread_t AriesSerialThread;                        // thread for serial read from Aries
 pthread_t AriesTickThread;                          // thread with periodic tick
 static bool AriesSerialThreadStarted = false;

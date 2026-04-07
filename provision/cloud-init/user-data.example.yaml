@@ -89,8 +89,10 @@ write_files:
         retry_seconds=30
       fi
 
-      clock_wait_seconds="${SATURN_CLOCK_SYNC_WAIT_SECONDS:-180}"
+      clock_wait_seconds_raw="${SATURN_CLOCK_SYNC_WAIT_SECONDS:-180}"
+      clock_wait_seconds="$clock_wait_seconds_raw"
       if ! [[ "$clock_wait_seconds" =~ ^[0-9]+$ ]] || (( clock_wait_seconds < 0 || clock_wait_seconds > 3600 )); then
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] WARN: SATURN_CLOCK_SYNC_WAIT_SECONDS='${clock_wait_seconds_raw}' is invalid; using 180 (valid range: 0..3600)."
         clock_wait_seconds=180
       fi
 

@@ -69,6 +69,15 @@ struct ThreadSocketData
   uint32_t DDCSampleRate;                       // DDC sample rate
 };
 
+struct ThreadSocketBindingSnapshot
+{
+  int Socketfd;
+  int ThreadSocketfd;
+  int OwnerSocketfd;
+  bool OwnerThread;
+  bool SharedAlias;
+};
+
 
 extern struct ThreadSocketData SocketData[];        // data for each thread
 extern struct sockaddr_in reply_addr;               // destination address for outgoing data
@@ -113,6 +122,12 @@ void SetPort(uint32_t ThreadNum, uint16_t PortNum);
 int MakeSocket(struct ThreadSocketData* Ptr, int DDCid);
 
 //
+// helper to snapshot current socket binding state for a thread, resolving
+// owner/shared-alias state from one consistent set of atomic loads
+//
+bool GetThreadSocketBinding(const struct ThreadSocketData* Ptr, struct ThreadSocketBindingSnapshot* Snapshot);
+
+//
 // helper to get current socket FD for a thread, resolving shared-socket aliases
 //
 int GetThreadSocketFD(const struct ThreadSocketData* Ptr);
@@ -121,6 +136,11 @@ int GetThreadSocketFD(const struct ThreadSocketData* Ptr);
 // helper to test if a thread uses a shared socket owned by another thread
 //
 bool ThreadSocketIsSharedAlias(const struct ThreadSocketData* Ptr);
+
+//
+// helper to close a thread socket only when it is not a shared alias
+//
+bool CloseThreadSocketIfOwned(const struct ThreadSocketData* Ptr);
 
 //
 // helper to mirror owner socket FD to any alias threads that share it

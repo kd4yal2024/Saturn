@@ -372,11 +372,12 @@ static int ApplyQueuedOutgoingPortRebinds(void)
 
     if(ThreadSocketIsSharedAlias(ThreadData))
     {
-      int Socketfd = atomic_load(&ThreadData->Socketid);
-      int SharedSocketfd = GetThreadSocketFD(ThreadData);
-      if((Socketfd > 0) && (Socketfd != SharedSocketfd))
+      struct ThreadSocketBindingSnapshot Binding;
+      if(GetThreadSocketBinding(ThreadData, &Binding) &&
+         (Binding.ThreadSocketfd > 0) &&
+         (Binding.ThreadSocketfd != Binding.OwnerSocketfd))
       {
-        close(Socketfd);
+        close(Binding.ThreadSocketfd);
         atomic_store(&ThreadData->Socketid, 0);
       }
     }
@@ -429,46 +430,82 @@ static uint32_t ResolveSocketOwnerIndex(uint32_t ThreadNum)
 
 static bool ThreadSocketShouldShareAlias(const struct ThreadSocketData* Ptr)
 {
+  struct ThreadSocketBindingSnapshot Binding;
+
+  if(!GetThreadSocketBinding(Ptr, &Binding))
+    return false;
+  return Binding.SharedAlias;
+}
+
+bool GetThreadSocketBinding(const struct ThreadSocketData* Ptr, struct ThreadSocketBindingSnapshot* Snapshot)
+{
   uint32_t ThreadNum;
   uint32_t OwnerNum;
 
-  if((Ptr == NULL) || (Ptr < SocketData) || (Ptr >= (SocketData + VPORTTABLESIZE)))
+  if((Snapshot == NULL) || (Ptr == NULL) || (Ptr < SocketData) || (Ptr >= (SocketData + VPORTTABLESIZE)))
     return false;
 
   ThreadNum = (uint32_t)(Ptr - SocketData);
   OwnerNum = ResolveSocketOwnerIndex(ThreadNum);
-  if(OwnerNum == ThreadNum)
-    return false;
+  Snapshot->ThreadSocketfd = atomic_load(&SocketData[ThreadNum].Socketid);
 
-  return (atomic_load(&SocketData[ThreadNum].Portid) == atomic_load(&SocketData[OwnerNum].Portid));
+  if(OwnerNum == ThreadNum)
+  {
+    Snapshot->OwnerSocketfd = Snapshot->ThreadSocketfd;
+    Snapshot->OwnerThread = true;
+    Snapshot->SharedAlias = false;
+    Snapshot->Socketfd = Snapshot->ThreadSocketfd;
+    return true;
+  }
+
+  Snapshot->OwnerSocketfd = atomic_load(&SocketData[OwnerNum].Socketid);
+  Snapshot->OwnerThread = false;
+  Snapshot->SharedAlias =
+    (atomic_load(&SocketData[ThreadNum].Portid) == atomic_load(&SocketData[OwnerNum].Portid));
+
+  // alias streams can split to dedicated sockets if their port differs.
+  // fallback to owner socket until dedicated socket is actually open.
+  if(Snapshot->SharedAlias)
+    Snapshot->Socketfd = Snapshot->OwnerSocketfd;
+  else if(Snapshot->ThreadSocketfd > 0)
+    Snapshot->Socketfd = Snapshot->ThreadSocketfd;
+  else
+    Snapshot->Socketfd = Snapshot->OwnerSocketfd;
+
+  return true;
 }
 
 int GetThreadSocketFD(const struct ThreadSocketData* Ptr)
 {
-  uint32_t ThreadNum;
-  uint32_t OwnerNum;
-  int Socketfd;
+  struct ThreadSocketBindingSnapshot Binding;
 
-  if((Ptr == NULL) || (Ptr < SocketData) || (Ptr >= (SocketData + VPORTTABLESIZE)))
+  if(!GetThreadSocketBinding(Ptr, &Binding))
     return -1;
-
-  ThreadNum = (uint32_t)(Ptr - SocketData);
-  OwnerNum = ResolveSocketOwnerIndex(ThreadNum);
-
-  // alias streams can split to dedicated sockets if their port differs.
-  // fallback to owner socket until dedicated socket is actually open.
-  if((OwnerNum != ThreadNum) && !ThreadSocketShouldShareAlias(Ptr))
-  {
-    Socketfd = atomic_load(&SocketData[ThreadNum].Socketid);
-    if(Socketfd > 0)
-      return Socketfd;
-  }
-  return atomic_load(&SocketData[OwnerNum].Socketid);
+  return Binding.Socketfd;
 }
 
 bool ThreadSocketIsSharedAlias(const struct ThreadSocketData* Ptr)
 {
   return ThreadSocketShouldShareAlias(Ptr);
+}
+
+bool CloseThreadSocketIfOwned(const struct ThreadSocketData* Ptr)
+{
+  struct ThreadSocketBindingSnapshot Binding;
+
+  if(!GetThreadSocketBinding(Ptr, &Binding))
+    return false;
+  if(Binding.OwnerThread)
+  {
+    if(Binding.ThreadSocketfd <= 0)
+      return false;
+    close(Binding.ThreadSocketfd);
+    return true;
+  }
+  if(Binding.SharedAlias || (Binding.ThreadSocketfd <= 0))
+    return false;
+  close(Binding.ThreadSocketfd);
+  return true;
 }
 
 void SyncSocketAliasesForOwner(const struct ThreadSocketData* OwnerPtr)

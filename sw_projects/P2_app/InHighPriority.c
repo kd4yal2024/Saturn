@@ -70,25 +70,22 @@ void *IncomingHighPriority(void *arg)                   // listener thread
   {
     if(atomic_load(&ThreadData->Cmdid) & VBITCHANGEPORT)
     {
-      int Socketfd;
       printf("High priority request change port\n");
       if(ThreadSocketIsSharedAlias(ThreadData))
       {
         // Shared aliases must not close/rebind the owner socket.
-        Socketfd = atomic_load(&ThreadData->Socketid);
-        if(Socketfd > 0)
+        struct ThreadSocketBindingSnapshot Binding;
+        if(GetThreadSocketBinding(ThreadData, &Binding) &&
+           (Binding.ThreadSocketfd > 0) &&
+           (Binding.ThreadSocketfd != Binding.OwnerSocketfd))
         {
-          int SharedSocketfd = GetThreadSocketFD(ThreadData);
-          if(Socketfd != SharedSocketfd)
-          {
-            close(Socketfd);
-            atomic_store(&ThreadData->Socketid, 0);
-          }
+          close(Binding.ThreadSocketfd);
+          atomic_store(&ThreadData->Socketid, 0);
         }
       }
       else
       {
-        Socketfd = atomic_load(&ThreadData->Socketid);
+        int Socketfd = atomic_load(&ThreadData->Socketid);
         if(Socketfd > 0)
           close(Socketfd);
         if(MakeSocket(ThreadData, 0) != 0)
@@ -289,12 +286,7 @@ void *IncomingHighPriority(void *arg)                   // listener thread
 //
 // close down thread
 //
-  if(!ThreadSocketIsSharedAlias(ThreadData))
-  {
-    int Socketfd = atomic_load(&ThreadData->Socketid);
-    if(Socketfd > 0)
-      close(Socketfd);    // close incoming data socket
-  }
+  CloseThreadSocketIfOwned(ThreadData);    // close incoming data socket
   atomic_store(&ThreadData->Socketid, 0);
   atomic_store(&ThreadData->Active, false);     // indicate it is closed
   return NULL;

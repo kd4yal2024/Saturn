@@ -67,7 +67,7 @@ atomic_uchar G2V2PanelProductID;
 atomic_bool G2ToneState = false;                   // true if 2 tone test in progress
 atomic_bool GVFOBSelected = false;                 // true if VFO B selected
 atomic_uint_fast32_t GCombinedVFOState = 0;        // reported VFO state bits
-TSerialThreadData G2V2Data;                         // data for G2V2 read thread
+TSerialThreadData G2V2Data = {0};                   // data for G2V2 read thread
 atomic_bool ATURedLED = false;
 atomic_bool ATUGreenLED = false;                   // LED states
 

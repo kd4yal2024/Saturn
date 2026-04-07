@@ -157,10 +157,42 @@ find_icon() {
     icon="$(find "$SHORTCUT_SRC/icons" -maxdepth 1 -type f \( -iname "${stem}.*" -o -iname "${stem}-icon.*" \) -print | head -n1 || true)"
   fi
   if [[ -n "$icon" ]]; then
-    # Desktop launchers should prefer theme icon names over repo file paths.
+    # Icons are staged into the local theme before launchers are written.
     printf '%s\n' "$stem"
   else
     printf '%s\n' "applications-utilities"
+  fi
+}
+
+install_theme_icons() {
+  local icon_theme_root="$HOME/.local/share/icons/hicolor"
+  local installed_any=0
+
+  [[ -d "$SHORTCUT_SRC/icons" ]] || return 0
+
+  while IFS= read -r -d '' ic; do
+    local dest=""
+
+    log "Installing icon: $(basename "$ic")"
+    case "${ic##*.}" in
+      svg|SVG)
+        dest="$icon_theme_root/scalable/apps/$(basename "$ic")"
+        ;;
+      *)
+        dest="$icon_theme_root/256x256/apps/$(basename "$ic")"
+        ;;
+    esac
+
+    if ! install -Dm644 "$ic" "$dest"; then
+      log "ERROR: Failed to install icon '$ic' to '$dest'"
+      return 1
+    fi
+    installed_any=1
+  done < <(find "$SHORTCUT_SRC/icons" -type f \( -iname '*.png' -o -iname '*.svg' -o -iname '*.xpm' \) -print0)
+
+  if (( installed_any )) && command -v gtk-update-icon-cache >/dev/null 2>&1; then
+    gtk-update-icon-cache -f -t "$icon_theme_root" >/dev/null 2>&1 || \
+      log "WARN: gtk-update-icon-cache failed for $icon_theme_root"
   fi
 }
 
@@ -346,6 +378,12 @@ remove_legacy_launcher() {
 remove_legacy_launcher "$LEGACY_P2APP_CONTROL_DESKTOP"
 remove_legacy_launcher "$LEGACY_P2APP_DESKTOP"
 
+# ---------- install repo icons before writing launchers ----------
+if ! install_theme_icons; then
+  log "ERROR: Failed to stage desktop icons."
+  exit 1
+fi
+
 # ---------- copy all repo .desktop files (recurse, follow symlinks) ----------
 hr; echo; log "Copying Desktop shortcuts from $SHORTCUT_SRC"; echo; hr
 readarray -d '' SHORTCUTS < <(find -L "$SHORTCUT_SRC" -type f -iname '*.desktop' -print0 2>/dev/null || true)
@@ -413,23 +451,6 @@ chmod +x "$USER_DESKTOP_DIR"/*.desktop 2>/dev/null || true
 for f in "$USER_DESKTOP_DIR"/*.desktop; do
   [[ -f "$f" ]] && mark_trusted "$f"
 done
-
-# ---------- optional: install repo icons to user theme ----------
-if [[ -d "$SHORTCUT_SRC/icons" ]]; then
-  ICON_THEME_ROOT="$HOME/.local/share/icons/hicolor"
-  find "$SHORTCUT_SRC/icons" -type f \( -iname '*.png' -o -iname '*.svg' -o -iname '*.xpm' \) -print0 \
-    | while IFS= read -r -d '' ic; do
-        log "Installing icon: $(basename "$ic")"
-        case "${ic##*.}" in
-          svg|SVG)
-            install -Dm644 "$ic" "$ICON_THEME_ROOT/scalable/apps/$(basename "$ic")"
-            ;;
-          *)
-            install -Dm644 "$ic" "$ICON_THEME_ROOT/256x256/apps/$(basename "$ic")"
-            ;;
-        esac
-      done
-fi
 
 # ---------- system-wide (root) ----------
 if [[ ${EUID:-$UID} -eq 0 ]]; then

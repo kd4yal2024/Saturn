@@ -710,8 +710,7 @@ cleanup:
         close(IQReadfile_fd);
     for (DDC = 0; DDC < VNUMDDC; DDC++)
     {
-        if(!ThreadSocketIsSharedAlias(ThreadData + DDC))
-            close(GetThreadSocketFD(ThreadData + DDC));
+        CloseThreadSocketIfOwned(ThreadData + DDC);
         atomic_store(&(ThreadData + DDC)->Active, false);     // signal closed
     }
     FreeDynamicMemory();

@@ -54,7 +54,7 @@ static atomic_uchar GanymedeProductID = 0;
 static atomic_uint_fast32_t MostRecentAmplifierState = 0;   // reported amplifier state
 
 
-TSerialThreadData GanymedeData;                       // data for Ganymede read thread
+TSerialThreadData GanymedeData = {0};                 // data for Ganymede read thread
 pthread_t GanymedeSerialThread;                       // thread for serial read from Ganymede
 pthread_t GanymedeTickThread;                         // thread with periodic tick
 static bool GanymedeSerialThreadStarted = false;

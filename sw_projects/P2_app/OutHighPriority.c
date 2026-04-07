@@ -343,8 +343,7 @@ void *OutgoingHighPriority(void *arg)
   if(InitError)                                           // if error, flag it to main program
     atomic_store(&ThreadError, true);
   printf("shutting down outgoing high priority thread\n");
-  if(!ThreadSocketIsSharedAlias(ThreadData))
-    close(GetThreadSocketFD(ThreadData));
+  CloseThreadSocketIfOwned(ThreadData);
   atomic_store(&ThreadData->Active, false);     // signal closed
   return NULL;
 }

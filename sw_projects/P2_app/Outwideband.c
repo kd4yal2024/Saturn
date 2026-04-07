@@ -409,8 +409,7 @@ cleanup:
     SetWidebandEnable(false, false, false);
     for (ADC = 0; ADC < VNUMWBADC; ADC++)
     {
-        if(!ThreadSocketIsSharedAlias(ThreadData + ADC))
-            close(GetThreadSocketFD(ThreadData + ADC));
+        CloseThreadSocketIfOwned(ThreadData + ADC);
         atomic_store(&(ThreadData + ADC)->Active, false);     // signal closed
     }
     FreeWBDynamicMemory();

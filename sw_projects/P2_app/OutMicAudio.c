@@ -260,8 +260,7 @@ void *OutgoingMicSamples(void *arg)
 
     printf("shutting down outgoing mic data thread\n");
     free(MicReadBuffer);
-    if(!ThreadSocketIsSharedAlias(ThreadData))
-        close(GetThreadSocketFD(ThreadData));
+    CloseThreadSocketIfOwned(ThreadData);
     atomic_store(&ThreadData->Active, false);     // signal closed
     return NULL;
 }

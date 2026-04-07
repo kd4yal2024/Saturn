@@ -514,7 +514,7 @@ apt_run() {
 
 ensure_ui_packages() {
   log "Installing desktop provisioning UI prerequisites"
-  apt_install g++ pkg-config libgtk-3-dev
+  apt_install g++ pkg-config libgtk-3-dev sudo
 }
 
 ensure_packages() {
@@ -1034,6 +1034,15 @@ resolve_system_role() {
   if [[ -z "$front_panel_type" && -f "$SATURN_FRONT_PANEL_STATE_FILE" ]]; then
     front_panel_type="$(tr -d '\r\n' < "$SATURN_FRONT_PANEL_STATE_FILE" 2>/dev/null || true)"
   fi
+
+  case "$front_panel_type" in
+    ""|G2V1|G2V2|NONE)
+      ;;
+    *)
+      log "WARN: Ignoring unexpected front-panel state '${front_panel_type}' from ${SATURN_FRONT_PANEL_STATE_FILE}."
+      front_panel_type=""
+      ;;
+  esac
 
   case "$forced_role" in
     local_saturn|remotehead_candidate|unknown)
