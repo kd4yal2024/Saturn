@@ -627,15 +627,7 @@ int main(int argc, char **argv)
     g_signal_connect(ui.window, "delete-event", G_CALLBACK(on_window_delete), &ui);
     g_signal_connect_swapped(ui.window, "destroy", G_CALLBACK(gtk_main_quit), nullptr);
 
-    if (!arg_show_log)
-    {
-        gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(ui.toggle_button), FALSE);
-        gtk_widget_set_visible(ui.log_frame, FALSE);
-    }
-    else
-    {
-        gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(ui.toggle_button), TRUE);
-    }
+    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(ui.toggle_button), arg_show_log ? TRUE : FALSE);
 
     g_free(arg_icon_file);
 

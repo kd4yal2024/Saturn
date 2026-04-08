@@ -229,9 +229,28 @@ build_pihpsdr_installer_binary() {
   return 0
 }
 
+read_desktop_entry_value() {
+  local desktop_file="$1"
+  local key="$2"
+  local line value
+
+  [[ -f "$desktop_file" ]] || return 1
+
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    [[ "$line" =~ ^[[:space:]]*${key}[[:space:]]*= ]] || continue
+    value="${line#*=}"
+    value="${value#"${value%%[![:space:]]*}"}"
+    value="${value%"${value##*[![:space:]]}"}"
+    printf '%s\n' "$value"
+    return 0
+  done < "$desktop_file"
+
+  return 1
+}
+
 resolve_pihpsdr_icon() {
   local saturn_home="$1"
-  local desktop_file icon_line icon_path
+  local desktop_file icon_path
 
   if [[ -n "$SATURN_PIHPSDR_INSTALLER_ICON_FILE" && -f "$SATURN_PIHPSDR_INSTALLER_ICON_FILE" ]]; then
     printf '%s\n' "$SATURN_PIHPSDR_INSTALLER_ICON_FILE"
@@ -249,8 +268,7 @@ resolve_pihpsdr_icon() {
     "/usr/share/applications/pihpsdr.desktop"
   do
     [[ -f "$desktop_file" ]] || continue
-    icon_line="$(awk -F= '/^Icon=/{print $2; exit}' "$desktop_file" 2>/dev/null || true)"
-    icon_path="${icon_line:-}"
+    icon_path="$(read_desktop_entry_value "$desktop_file" "Icon" 2>/dev/null || true)"
     if [[ -n "$icon_path" && -f "$icon_path" ]]; then
       printf '%s\n' "$icon_path"
       return 0
