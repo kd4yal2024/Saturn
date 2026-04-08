@@ -104,6 +104,36 @@ Environment precedence:
 
 - Explicit runtime `SATURN_*` environment variables now take precedence over `/etc/default/saturn-provision`.
 
+## Standalone piHPSDR Installer Shortcut
+
+Provisioning can also stage a separate Desktop shortcut for a standalone piHPSDR installer UI.
+This is intentionally separate from the Saturn provisioning window.
+
+What it does:
+
+- installs a Desktop shortcut at `~/Desktop/piHPSDR-Installer.desktop`
+- uses its own GTK C++ UI with a dedicated `Install piHPSDR` button
+- shows terminal output in a bottom panel
+- runs the installed `/opt/saturn-go/scripts/update-pihpsdr.py` flow
+- removes the Desktop shortcut after a successful install when the user clicks `Close`
+
+Environment controls:
+
+- `SATURN_PIHPSDR_INSTALLER_ENABLED=1|0` (default: `1`)
+- `SATURN_PIHPSDR_INSTALLER_BINARY` (default: `/usr/local/bin/pihpsdr-installer-ui`)
+- `SATURN_PIHPSDR_INSTALLER_RUNNER` (default: `/usr/local/bin/pihpsdr-installer-run.sh`)
+- `SATURN_PIHPSDR_INSTALLER_LAUNCHER` (default: `/usr/local/bin/pihpsdr-installer-launcher.sh`)
+- `SATURN_PIHPSDR_INSTALLER_SHORTCUT_NAME` (default: `piHPSDR-Installer.desktop`)
+- `SATURN_PIHPSDR_INSTALLER_TITLE` (default: `piHPSDR Installer`)
+- `SATURN_PIHPSDR_INSTALLER_ICON_FILE` (optional explicit icon override)
+
+Notes:
+
+- This shortcut is created only after the Saturn Update Manager install step has deployed `update-pihpsdr.py` under `/opt/saturn-go/scripts/`.
+- The standalone installer is not auto-launched; it is meant to be user-invoked from the Desktop.
+- When no explicit icon override is set, provisioning reuses the existing piHPSDR icon when present (`piHPSDR_logo.png` or the current `pihpsdr.desktop` icon path).
+- Closing the window while an install is still running leaves the Desktop shortcut in place so the user can reopen the installer and continue watching progress.
+
 ## LCD Profiles (CM4/CM5 + 7"/8")
 
 Provisioning can append a managed LCD block to `config.txt` without replacing the file.

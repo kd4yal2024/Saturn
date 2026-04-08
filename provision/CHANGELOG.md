@@ -12,6 +12,8 @@ All notable changes to provisioning assets are documented in this file.
   - now writes `/var/lib/saturn-provision/profile.env` as a factual machine-readable provisioning summary
   - the first profile file includes hardware classification, heuristic `radio_profile`, discovered processor, front-panel type/path facts, conservative `system_role`, expected display type, resolved LCD profile, recommended overlay facts, and safe udev-alias presence/path facts for Ganymede and Aries
   - `profile.env` now also exports `configured_display_type` so self-installed displays are represented separately from front-panel-implied `expected_display_type`
+  - Saturn provisioning UI remains Saturn-branded and continues to use the original autostart-only flow
+  - provisioning can now also stage a separate standalone Desktop shortcut for a dedicated piHPSDR installer UI after the update-manager install step
 
 - `cloud-init/user-data.example.yaml`
   - invalid `SATURN_CLOCK_SYNC_WAIT_SECONDS` values now emit an explicit bootstrap warning before falling back to the default `180` second wait
@@ -112,13 +114,24 @@ All notable changes to provisioning assets are documented in this file.
   - documented that provisioning now configures the BCM15 power-switch/front-panel LED helper
   - documented the root-owned provisioning power helper used by the desktop UI reboot action
   - documented the new `/var/lib/saturn-provision/profile.env` factual provisioning summary and its first exported fields
-  - documented front-panel detection behavior, state file, and provisioning toggle
-  - documented the new shared LCD/profile library and the first-provision front-panel-aware G2 7-inch LCD tiebreaker
-  - documented the new custom and Laurence-style single-DSI 7-inch LCD profiles
+  - clarified that the provisioning UI remains Saturn-branded
+  - documented the standalone Desktop piHPSDR installer shortcut, its dedicated GTK UI, and shortcut-removal behavior after a successful close
   - documented the new XDMA readiness gate and doctor path installed with `p2app-control`
   - documented the new hardware classification fields and that `SATURN_LCD_PROFILE=auto` is currently Raspberry-Pi-only
   - documented the new `/var/log/saturn-cloudinit-bootstrap.log` early bootstrap log and the warning about preserving login-user creation in cloud-init `user-data`
   - documented the new first-boot clock-sync wait and the removal of early cloud-init `packages:` bootstrap apt work
+  - documented front-panel detection behavior, state file, and provisioning toggle
+  - documented the new shared LCD/profile library and the first-provision front-panel-aware G2 7-inch LCD tiebreaker
+  - documented the new custom and Laurence-style single-DSI 7-inch LCD profiles
+
+- `cloud-init/saturn-provision-ui.cpp`
+  - reverted temporary piHPSDR-specific branding so the provisioning UI remains Saturn-specific
+
+- `cloud-init/pihpsdr-installer-ui.cpp`
+  - added a standalone GTK C++ piHPSDR installer UI with its own `Install piHPSDR` button, bottom terminal-output panel, and Desktop-shortcut cleanup on successful close
+
+- `cloud-init/pihpsdr-installer-run.sh`
+  - added a standalone runner that writes status/log files for the piHPSDR installer UI while executing the installed `update-pihpsdr.py` flow
 
 - `../sw_tools/p2app-control/README.md`
   - documented the new XDMA readiness gate, doctor script, and the provisioning-time troubleshooting path for `register write attempted before XDMA register device was opened`

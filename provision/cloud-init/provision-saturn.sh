@@ -60,6 +60,15 @@ SATURN_UI_AUTOSTART_NAME="${SATURN_UI_AUTOSTART_NAME:-saturn-provision-ui.deskto
 SATURN_UI_POWER_HELPER_SOURCE="${SATURN_UI_POWER_HELPER_SOURCE:-${SCRIPT_DIR}/saturn-provision-powerctl.sh}"
 SATURN_UI_POWER_HELPER="${SATURN_UI_POWER_HELPER:-/usr/local/sbin/saturn-provision-powerctl}"
 SATURN_UI_POWER_SUDOERS="${SATURN_UI_POWER_SUDOERS:-/etc/sudoers.d/49-saturn-provision-powerctl}"
+SATURN_PIHPSDR_INSTALLER_ENABLED="${SATURN_PIHPSDR_INSTALLER_ENABLED:-1}"
+SATURN_PIHPSDR_INSTALLER_BINARY="${SATURN_PIHPSDR_INSTALLER_BINARY:-/usr/local/bin/pihpsdr-installer-ui}"
+SATURN_PIHPSDR_INSTALLER_SOURCE_FILE="${SATURN_PIHPSDR_INSTALLER_SOURCE_FILE:-${SCRIPT_DIR}/pihpsdr-installer-ui.cpp}"
+SATURN_PIHPSDR_INSTALLER_RUNNER="${SATURN_PIHPSDR_INSTALLER_RUNNER:-/usr/local/bin/pihpsdr-installer-run.sh}"
+SATURN_PIHPSDR_INSTALLER_RUNNER_SOURCE="${SATURN_PIHPSDR_INSTALLER_RUNNER_SOURCE:-${SCRIPT_DIR}/pihpsdr-installer-run.sh}"
+SATURN_PIHPSDR_INSTALLER_LAUNCHER="${SATURN_PIHPSDR_INSTALLER_LAUNCHER:-/usr/local/bin/pihpsdr-installer-launcher.sh}"
+SATURN_PIHPSDR_INSTALLER_SHORTCUT_NAME="${SATURN_PIHPSDR_INSTALLER_SHORTCUT_NAME:-piHPSDR-Installer.desktop}"
+SATURN_PIHPSDR_INSTALLER_TITLE="${SATURN_PIHPSDR_INSTALLER_TITLE:-piHPSDR Installer}"
+SATURN_PIHPSDR_INSTALLER_ICON_FILE="${SATURN_PIHPSDR_INSTALLER_ICON_FILE:-}"
 SATURN_CLEAN_TMP_AFTER_PROVISION="${SATURN_CLEAN_TMP_AFTER_PROVISION:-1}"
 SATURN_ENABLE_I2C="${SATURN_ENABLE_I2C:-1}"
 SATURN_ENABLE_SSH="${SATURN_ENABLE_SSH:-1}"
@@ -188,6 +197,69 @@ build_desktop_ui_binary() {
   return 0
 }
 
+build_pihpsdr_installer_binary() {
+  [[ -f "$SATURN_PIHPSDR_INSTALLER_SOURCE_FILE" ]] || {
+    log "WARN: piHPSDR installer UI source not found: $SATURN_PIHPSDR_INSTALLER_SOURCE_FILE"
+    return 1
+  }
+
+  if [[ -x "$SATURN_PIHPSDR_INSTALLER_BINARY" && "$SATURN_PIHPSDR_INSTALLER_BINARY" -nt "$SATURN_PIHPSDR_INSTALLER_SOURCE_FILE" ]]; then
+    return 0
+  fi
+
+  if ! command -v g++ >/dev/null 2>&1 || ! command -v pkg-config >/dev/null 2>&1; then
+    log "WARN: g++/pkg-config missing; cannot build piHPSDR installer UI binary."
+    return 1
+  fi
+
+  local gtk_flags
+  gtk_flags="$(pkg-config --cflags --libs gtk+-3.0 2>/dev/null || true)"
+  if [[ -z "$gtk_flags" ]]; then
+    log "WARN: pkg-config could not resolve gtk+-3.0; piHPSDR installer UI disabled."
+    return 1
+  fi
+
+  log "Building piHPSDR installer UI binary: $SATURN_PIHPSDR_INSTALLER_BINARY"
+  install -d -m 0755 "$(dirname "$SATURN_PIHPSDR_INSTALLER_BINARY")"
+  # shellcheck disable=SC2086
+  if ! g++ -std=c++17 -O2 -Wall -Wextra "$SATURN_PIHPSDR_INSTALLER_SOURCE_FILE" -o "$SATURN_PIHPSDR_INSTALLER_BINARY" $gtk_flags; then
+    log "WARN: Failed to build piHPSDR installer UI binary."
+    return 1
+  fi
+  return 0
+}
+
+resolve_pihpsdr_icon() {
+  local saturn_home="$1"
+  local desktop_file icon_line icon_path
+
+  if [[ -n "$SATURN_PIHPSDR_INSTALLER_ICON_FILE" && -f "$SATURN_PIHPSDR_INSTALLER_ICON_FILE" ]]; then
+    printf '%s\n' "$SATURN_PIHPSDR_INSTALLER_ICON_FILE"
+    return 0
+  fi
+
+  if [[ -f "${saturn_home}/github/pihpsdr/piHPSDR_logo.png" ]]; then
+    printf '%s\n' "${saturn_home}/github/pihpsdr/piHPSDR_logo.png"
+    return 0
+  fi
+
+  for desktop_file in \
+    "${saturn_home}/.local/share/applications/pihpsdr.desktop" \
+    "${saturn_home}/github/pihpsdr/pihpsdr.desktop" \
+    "/usr/share/applications/pihpsdr.desktop"
+  do
+    [[ -f "$desktop_file" ]] || continue
+    icon_line="$(awk -F= '/^Icon=/{print $2; exit}' "$desktop_file" 2>/dev/null || true)"
+    icon_path="${icon_line:-}"
+    if [[ -n "$icon_path" && -f "$icon_path" ]]; then
+      printf '%s\n' "$icon_path"
+      return 0
+    fi
+  done
+
+  printf '\n'
+}
+
 install_desktop_ui_autostart() {
   local saturn_home="$1"
   local autostart_dir desktop_file show_log_flag
@@ -255,6 +327,86 @@ remove_desktop_ui_autostart() {
     rm -f "$desktop_file"
     log "Removed desktop autostart after successful provisioning: $desktop_file"
   fi
+}
+
+install_pihpsdr_installer_shortcut() {
+  local saturn_home="$1"
+  local icon_file icon_line desktop_dir desktop_file
+
+  bool_true "$SATURN_PIHPSDR_INSTALLER_ENABLED" || return 0
+
+  if [[ ! -f "$SATURN_PIHPSDR_INSTALLER_RUNNER_SOURCE" ]]; then
+    log "WARN: piHPSDR installer runner source not found: $SATURN_PIHPSDR_INSTALLER_RUNNER_SOURCE"
+    return 0
+  fi
+
+  if [[ ! -f /opt/saturn-go/scripts/update-pihpsdr.py ]]; then
+    log "WARN: Installed update-pihpsdr.py not found under /opt/saturn-go/scripts; skipping piHPSDR installer shortcut."
+    return 0
+  fi
+
+  if ! build_pihpsdr_installer_binary; then
+    return 0
+  fi
+
+  icon_file="$(resolve_pihpsdr_icon "$saturn_home")"
+  if [[ -n "$icon_file" ]]; then
+    icon_line="Icon=${icon_file}"
+  else
+    icon_line=""
+    log "WARN: piHPSDR icon not found; standalone installer shortcut will use the default icon."
+  fi
+
+  install -d -m 0755 "$(dirname "$SATURN_PIHPSDR_INSTALLER_RUNNER")"
+  install -m 0755 "$SATURN_PIHPSDR_INSTALLER_RUNNER_SOURCE" "$SATURN_PIHPSDR_INSTALLER_RUNNER"
+
+  cat > "$SATURN_PIHPSDR_INSTALLER_LAUNCHER" <<EOF
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+if pgrep -u "\$(id -u)" -f "$SATURN_PIHPSDR_INSTALLER_BINARY" >/dev/null 2>&1; then
+  exit 0
+fi
+
+state_dir="\${XDG_STATE_HOME:-\$HOME/.local/state}/pihpsdr-installer"
+shortcut_path="\$HOME/Desktop/$SATURN_PIHPSDR_INSTALLER_SHORTCUT_NAME"
+mkdir -p "\$state_dir"
+
+args=(
+  "$SATURN_PIHPSDR_INSTALLER_BINARY"
+  "--log-file" "\${state_dir}/install.log"
+  "--status-file" "\${state_dir}/status"
+  "--runner" "$SATURN_PIHPSDR_INSTALLER_RUNNER"
+  "--desktop-shortcut" "\$shortcut_path"
+  "--window-title" "$SATURN_PIHPSDR_INSTALLER_TITLE"
+  "--show-log"
+)
+
+if [[ -n "$icon_file" ]]; then
+  args+=("--icon-file" "$icon_file")
+fi
+
+exec "\${args[@]}"
+EOF
+  chmod 0755 "$SATURN_PIHPSDR_INSTALLER_LAUNCHER"
+
+  desktop_dir="${saturn_home}/Desktop"
+  desktop_file="${desktop_dir}/${SATURN_PIHPSDR_INSTALLER_SHORTCUT_NAME}"
+  install -d -m 0755 -o "$SATURN_USER" -g "$SATURN_USER" "$desktop_dir"
+  cat > "$desktop_file" <<EOF
+[Desktop Entry]
+Type=Application
+Name=$SATURN_PIHPSDR_INSTALLER_TITLE
+Comment=Open the standalone piHPSDR installer
+Exec=$SATURN_PIHPSDR_INSTALLER_LAUNCHER
+Path=$saturn_home
+Terminal=false
+StartupNotify=true
+${icon_line}
+EOF
+  chown "$SATURN_USER:$SATURN_USER" "$desktop_file"
+  chmod 0755 "$desktop_file"
+  log "Installed standalone piHPSDR installer shortcut for $SATURN_USER: $desktop_file"
 }
 
 launch_desktop_ui() {
@@ -1492,6 +1644,8 @@ main() {
     set_ui_stage "Installing Saturn update manager"
     ensure_update_manager_admin_password
     install_update_manager "$saturn_home"
+    set_ui_stage "Installing standalone piHPSDR shortcut"
+    install_pihpsdr_installer_shortcut "$saturn_home"
   fi
   if bool_true "$SATURN_FLASH_FPGA"; then
     set_ui_stage "Flashing FPGA image"
