@@ -28,7 +28,10 @@ APP_INFO_INSTALL="/usr/local/bin/saturn-g2-version-info.sh"
 BIN_LOCAL="${HERE}/p2app-control"
 BIN_INSTALL="/usr/local/bin/p2app-control"
 ICON_LOCAL="${HERE}/p2appcontrol.png"
-ICON_INSTALL="/usr/local/share/pixmaps/p2appcontrol.png"
+ICON_PIXMAP_INSTALL="/usr/local/share/pixmaps/p2appcontrol.png"
+ICON_THEME_DIR="/usr/local/share/icons/hicolor/32x32/apps"
+ICON_THEME_INSTALL="${ICON_THEME_DIR}/p2appcontrol.png"
+ICON_THEME_ROOT="/usr/local/share/icons/hicolor"
 
 DESKTOP_NAME="P2_app-Control.desktop"
 DESKTOP_DESK="${HOME}/Desktop/${DESKTOP_NAME}"
@@ -91,8 +94,15 @@ if [[ ! -f "${ICON_LOCAL}" ]]; then
   exit 1
 fi
 
-echo "[*] Installing p2app-control icon -> ${ICON_INSTALL}"
-sudo install -D -m 0644 "${ICON_LOCAL}" "${ICON_INSTALL}"
+echo "[*] Installing p2app-control icon -> ${ICON_PIXMAP_INSTALL}"
+sudo install -D -m 0644 "${ICON_LOCAL}" "${ICON_PIXMAP_INSTALL}"
+echo "[*] Installing p2app-control theme icon -> ${ICON_THEME_INSTALL}"
+sudo install -D -m 0644 "${ICON_LOCAL}" "${ICON_THEME_INSTALL}"
+if command -v gtk-update-icon-cache >/dev/null 2>&1; then
+  echo "[*] Refreshing icon cache -> ${ICON_THEME_ROOT}"
+  sudo gtk-update-icon-cache -f -t "${ICON_THEME_ROOT}" >/dev/null 2>&1 || \
+    echo "[!] WARN: gtk-update-icon-cache failed for ${ICON_THEME_ROOT}"
+fi
 
 if [[ ! -x "${XDMA_DOCTOR_LOCAL}" ]]; then
   echo "[!] ERROR: XDMA doctor script not found or not executable:"
@@ -309,7 +319,7 @@ Type=Application
 Name=P2_app Control Tray
 Comment=Panel tray control for p2app.service
 Exec=${BIN_INSTALL} --tray
-Icon=${ICON_INSTALL}
+Icon=${ICON_PIXMAP_INSTALL}
 Terminal=false
 Categories=Utility;System;
 X-GNOME-Autostart-enabled=true
@@ -330,7 +340,8 @@ command -v update-desktop-database >/dev/null 2>&1 && \
 echo
 echo "[✓] Done."
 echo "    Widget:   ${BIN_INSTALL}"
-echo "    Icon:     ${ICON_INSTALL}"
+echo "    Icon:     ${ICON_PIXMAP_INSTALL}"
+echo "    ThemeIcon:${ICON_THEME_INSTALL}"
 echo "    Doctor:   ${XDMA_DOCTOR_INSTALL}"
 echo "    XDMA gate:${XDMA_READY_INSTALL}"
 echo "    Fix XDMA: ${FIX_XDMA_INSTALL}"

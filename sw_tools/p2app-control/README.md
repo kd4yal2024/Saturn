@@ -19,6 +19,9 @@ Location in repo:
 ### Binary
 - Installs the widget binary to:
   - `/usr/local/bin/p2app-control`
+- Installs the widget icon to:
+  - `/usr/local/share/pixmaps/p2appcontrol.png`
+  - `/usr/local/share/icons/hicolor/32x32/apps/p2appcontrol.png`
 - Installs the XDMA doctor helper to:
   - `/usr/local/bin/saturn-xdma-doctor.sh`
 - Installs the XDMA readiness helper to:

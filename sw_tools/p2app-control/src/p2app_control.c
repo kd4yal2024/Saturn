@@ -7,8 +7,10 @@
 
 static const char *UNIT = "p2app.service";
 static const char *ICON_NAME = "p2appcontrol";
-static const char *ICON_DIR = "/usr/local/share/pixmaps";
-static const char *ICON_PATH = "/usr/local/share/pixmaps/p2appcontrol.png";
+static const char *ICON_PIXMAP_DIR = "/usr/local/share/pixmaps";
+static const char *ICON_PIXMAP_PATH = "/usr/local/share/pixmaps/p2appcontrol.png";
+static const char *ICON_THEME_DIR = "/usr/local/share/icons/hicolor/32x32/apps";
+static const char *ICON_THEME_PATH = "/usr/local/share/icons/hicolor/32x32/apps/p2appcontrol.png";
 static const char *APP_INFO_HELPER = "/usr/local/bin/saturn-g2-version-info.sh";
 
 typedef struct {
@@ -110,8 +112,36 @@ static gboolean is_enabled_state(const char *state) {
            g_strcmp0(state, "alias") == 0;
 }
 
+static gboolean have_custom_theme_icon(void) {
+    return g_file_test(ICON_THEME_PATH, G_FILE_TEST_EXISTS);
+}
+
+static gboolean have_custom_pixmap_icon(void) {
+    return g_file_test(ICON_PIXMAP_PATH, G_FILE_TEST_EXISTS);
+}
+
 static gboolean have_custom_icon(void) {
-    return g_file_test(ICON_PATH, G_FILE_TEST_EXISTS);
+    return have_custom_theme_icon() || have_custom_pixmap_icon();
+}
+
+static const char *custom_icon_file(void) {
+    if (have_custom_theme_icon()) {
+        return ICON_THEME_PATH;
+    }
+    if (have_custom_pixmap_icon()) {
+        return ICON_PIXMAP_PATH;
+    }
+    return NULL;
+}
+
+static const char *custom_icon_lookup_dir(void) {
+    if (have_custom_theme_icon()) {
+        return ICON_THEME_DIR;
+    }
+    if (have_custom_pixmap_icon()) {
+        return ICON_PIXMAP_DIR;
+    }
+    return NULL;
 }
 
 static void privileged_systemctl(const char *verb) {
@@ -443,7 +473,7 @@ static gboolean create_tray(UI *ui) {
     ui->indicator = app_indicator_new_with_path("p2app-control",
                                                 have_custom_icon() ? ICON_NAME : "media-playback-stop",
                                                 APP_INDICATOR_CATEGORY_SYSTEM_SERVICES,
-                                                have_custom_icon() ? ICON_DIR : NULL);
+                                                custom_icon_lookup_dir());
     if (!ui->indicator) {
         g_printerr("Failed to create AppIndicator instance.\n");
         return FALSE;
@@ -498,7 +528,7 @@ int main(int argc, char **argv) {
     gtk_window_set_title(GTK_WINDOW(ui.win), "P2_app Control");
     if (have_custom_icon()) {
         GError *icon_error = NULL;
-        gtk_window_set_icon_from_file(GTK_WINDOW(ui.win), ICON_PATH, &icon_error);
+        gtk_window_set_icon_from_file(GTK_WINDOW(ui.win), custom_icon_file(), &icon_error);
         if (icon_error != NULL) {
             g_error_free(icon_error);
         }
