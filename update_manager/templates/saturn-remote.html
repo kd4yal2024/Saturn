@@ -1,0 +1,2084 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Saturn Remote</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Space+Grotesk:wght@400;500;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg-0: #071217;
+      --bg-1: #0d1d24;
+      --bg-2: rgba(13, 29, 36, 0.82);
+      --bg-3: rgba(10, 23, 30, 0.96);
+      --card: rgba(11, 24, 30, 0.86);
+      --line: rgba(147, 197, 253, 0.12);
+      --line-strong: rgba(148, 163, 184, 0.22);
+      --text: #eef7f7;
+      --muted: #8ba6ab;
+      --accent: #62d0ff;
+      --accent-warm: #f4b860;
+      --good: #5de8b5;
+      --warn: #f6c873;
+      --danger: #fb7c74;
+      --shadow: rgba(2, 12, 16, 0.45);
+      --mono: "IBM Plex Mono", "SFMono-Regular", Consolas, monospace;
+      --sans: "Space Grotesk", "Trebuchet MS", "Segoe UI", sans-serif;
+    }
+    * { box-sizing: border-box; }
+    html, body { min-height: 100%; }
+    body {
+      margin: 0;
+      font-family: var(--sans);
+      color: var(--text);
+      background:
+        radial-gradient(circle at top left, rgba(98, 208, 255, 0.16), transparent 28%),
+        radial-gradient(circle at top right, rgba(244, 184, 96, 0.15), transparent 24%),
+        linear-gradient(180deg, var(--bg-0), var(--bg-1));
+    }
+    button, input, select {
+      font: inherit;
+      color: inherit;
+    }
+    .page {
+      max-width: 1580px;
+      margin: 0 auto;
+      padding: 22px;
+    }
+    .hero {
+      position: relative;
+      overflow: hidden;
+      border: 1px solid var(--line);
+      border-radius: 26px;
+      padding: 20px 22px;
+      margin-bottom: 18px;
+      background:
+        linear-gradient(135deg, rgba(98, 208, 255, 0.10), rgba(244, 184, 96, 0.04)),
+        linear-gradient(180deg, rgba(10, 24, 31, 0.96), rgba(9, 19, 26, 0.92));
+      box-shadow: 0 22px 50px var(--shadow);
+    }
+    .hero::after {
+      content: "";
+      position: absolute;
+      inset: auto -8% -55% 42%;
+      height: 220px;
+      background: radial-gradient(circle, rgba(98, 208, 255, 0.18), transparent 68%);
+      pointer-events: none;
+    }
+    .hero-top {
+      display: flex;
+      gap: 18px;
+      align-items: flex-start;
+      justify-content: space-between;
+      flex-wrap: wrap;
+    }
+    .kicker {
+      font-family: var(--mono);
+      font-size: 11px;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: var(--accent);
+      margin-bottom: 8px;
+    }
+    h1 {
+      margin: 0 0 8px;
+      font-size: clamp(34px, 5vw, 58px);
+      line-height: 0.95;
+      letter-spacing: -0.04em;
+    }
+    .subtitle {
+      max-width: 900px;
+      color: #d7e6e7;
+      font-size: 16px;
+      line-height: 1.5;
+    }
+    .hero-actions {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+    .nav-link, .btn {
+      border-radius: 14px;
+      border: 1px solid var(--line-strong);
+      background: rgba(255, 255, 255, 0.04);
+      color: var(--text);
+      text-decoration: none;
+      padding: 11px 14px;
+      cursor: pointer;
+      transition: transform 120ms ease, border-color 120ms ease, background 120ms ease;
+    }
+    .nav-link:hover, .btn:hover {
+      transform: translateY(-1px);
+      border-color: rgba(98, 208, 255, 0.34);
+      background: rgba(98, 208, 255, 0.10);
+    }
+    .btn.primary {
+      border-color: rgba(98, 208, 255, 0.44);
+      background: linear-gradient(135deg, rgba(51, 125, 169, 0.92), rgba(27, 82, 126, 0.92));
+      box-shadow: 0 12px 28px rgba(12, 66, 100, 0.34);
+    }
+    .btn.alt {
+      border-color: rgba(244, 184, 96, 0.34);
+      background: rgba(244, 184, 96, 0.10);
+    }
+    .btn.ghost {
+      background: rgba(255, 255, 255, 0.02);
+    }
+    .hero-cards {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
+      margin-top: 18px;
+    }
+    .hero-card {
+      padding: 14px;
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      background: rgba(255, 255, 255, 0.03);
+      min-height: 120px;
+    }
+    .hero-card .label {
+      font-family: var(--mono);
+      font-size: 11px;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin-bottom: 10px;
+    }
+    .hero-card .value {
+      font-size: 20px;
+      font-weight: 700;
+      margin-bottom: 6px;
+    }
+    .hero-card .detail {
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.4;
+    }
+    .layout {
+      display: grid;
+      grid-template-columns: 320px minmax(0, 1fr) 300px;
+      gap: 16px;
+      align-items: start;
+    }
+    .stack {
+      display: grid;
+      gap: 16px;
+    }
+    .panel {
+      border: 1px solid var(--line);
+      border-radius: 22px;
+      background: linear-gradient(180deg, rgba(10, 23, 29, 0.96), rgba(8, 18, 24, 0.92));
+      box-shadow: 0 16px 36px rgba(0, 0, 0, 0.18);
+      overflow: hidden;
+    }
+    .panel-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 14px;
+      align-items: baseline;
+      padding: 16px 18px 0;
+    }
+    .panel-title {
+      margin: 0;
+      font-size: 15px;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      color: #dff6fb;
+    }
+    .panel-meta {
+      font-family: var(--mono);
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .panel-body {
+      padding: 16px 18px 18px;
+    }
+    .field {
+      width: 100%;
+      border-radius: 14px;
+      border: 1px solid var(--line-strong);
+      background: rgba(255, 255, 255, 0.04);
+      color: var(--text);
+      padding: 11px 12px;
+      outline: none;
+      font-family: var(--mono);
+    }
+    .field:focus {
+      border-color: rgba(98, 208, 255, 0.44);
+      box-shadow: 0 0 0 3px rgba(98, 208, 255, 0.10);
+    }
+    .label {
+      display: block;
+      margin-bottom: 7px;
+      font-size: 12px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--muted);
+      font-family: var(--mono);
+    }
+    .row {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+    .row.spread {
+      justify-content: space-between;
+    }
+    .field-row {
+      display: grid;
+      gap: 14px;
+      margin-bottom: 16px;
+    }
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      min-height: 34px;
+      padding: 7px 11px;
+      border-radius: 999px;
+      border: 1px solid var(--line-strong);
+      font-family: var(--mono);
+      font-size: 12px;
+      color: var(--muted);
+      background: rgba(255, 255, 255, 0.03);
+    }
+    .dot {
+      width: 9px;
+      height: 9px;
+      border-radius: 50%;
+      background: var(--muted);
+      box-shadow: 0 0 0 4px rgba(255, 255, 255, 0.04);
+    }
+    .dot.live {
+      background: var(--good);
+      box-shadow: 0 0 12px rgba(93, 232, 181, 0.55);
+    }
+    .dot.warn {
+      background: var(--warn);
+      box-shadow: 0 0 12px rgba(246, 200, 115, 0.42);
+    }
+    .dot.dead {
+      background: var(--danger);
+      box-shadow: 0 0 12px rgba(251, 124, 116, 0.45);
+    }
+    .button-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+    }
+    .mode-grid, .band-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 8px;
+    }
+    .mode-btn, .band-btn {
+      border-radius: 12px;
+      border: 1px solid var(--line-strong);
+      background: rgba(255, 255, 255, 0.04);
+      color: var(--text);
+      padding: 10px 0;
+      font-family: var(--mono);
+      cursor: pointer;
+      transition: transform 120ms ease, border-color 120ms ease, background 120ms ease;
+    }
+    .mode-btn:hover, .band-btn:hover {
+      transform: translateY(-1px);
+      border-color: rgba(98, 208, 255, 0.34);
+    }
+    .mode-btn.active, .band-btn.active {
+      border-color: rgba(98, 208, 255, 0.44);
+      background: rgba(98, 208, 255, 0.12);
+      color: #e9fbff;
+    }
+    .mode-btn.warm.active {
+      border-color: rgba(244, 184, 96, 0.42);
+      background: rgba(244, 184, 96, 0.12);
+    }
+    .range-wrap {
+      display: grid;
+      gap: 8px;
+    }
+    input[type="range"] {
+      width: 100%;
+      accent-color: var(--accent);
+    }
+    .metric-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+      margin-top: 14px;
+    }
+    .metric {
+      padding: 12px;
+      border-radius: 16px;
+      border: 1px solid var(--line);
+      background: rgba(255, 255, 255, 0.03);
+      min-height: 96px;
+    }
+    .metric .metric-label {
+      font-size: 11px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--muted);
+      font-family: var(--mono);
+      margin-bottom: 8px;
+    }
+    .metric .metric-value {
+      font-size: 26px;
+      line-height: 1;
+      font-weight: 700;
+      margin-bottom: 8px;
+    }
+    .metric .metric-sub {
+      font-size: 13px;
+      color: var(--muted);
+      line-height: 1.4;
+    }
+    .meter-bar {
+      position: relative;
+      height: 12px;
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.06);
+      overflow: hidden;
+      border: 1px solid rgba(255, 255, 255, 0.06);
+    }
+    .meter-fill {
+      position: absolute;
+      inset: 0 auto 0 0;
+      width: 0%;
+      border-radius: inherit;
+      background: linear-gradient(90deg, #309cff 0%, #5de8b5 55%, #f4b860 80%, #fb7c74 100%);
+    }
+    .stage {
+      display: grid;
+      gap: 14px;
+    }
+    .display-card {
+      position: relative;
+      border: 1px solid var(--line);
+      border-radius: 24px;
+      overflow: hidden;
+      background:
+        radial-gradient(circle at top, rgba(98, 208, 255, 0.08), transparent 40%),
+        linear-gradient(180deg, rgba(6, 17, 23, 0.98), rgba(4, 12, 18, 0.98));
+      min-height: 400px;
+    }
+    .display-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      align-items: center;
+      padding: 16px 18px 0;
+    }
+    .display-meta {
+      color: var(--muted);
+      font-family: var(--mono);
+      font-size: 12px;
+    }
+    .display-stack {
+      display: grid;
+      gap: 12px;
+      padding: 14px 16px 16px;
+    }
+    .spectrum-shell, .waterfall-shell {
+      position: relative;
+      border-radius: 20px;
+      overflow: hidden;
+      border: 1px solid rgba(255, 255, 255, 0.06);
+      background:
+        linear-gradient(180deg, rgba(17, 34, 44, 0.86), rgba(8, 18, 24, 0.92)),
+        repeating-linear-gradient(to right, rgba(255,255,255,0.04) 0 1px, transparent 1px 10%),
+        repeating-linear-gradient(to top, rgba(255,255,255,0.03) 0 1px, transparent 1px 16%);
+    }
+    .spectrum-shell {
+      height: 360px;
+    }
+    .waterfall-shell {
+      height: 250px;
+    }
+    canvas {
+      position: absolute;
+      inset: 0;
+      display: block;
+      width: 100%;
+      height: 100%;
+    }
+    .center-line {
+      position: absolute;
+      top: 0;
+      bottom: 0;
+      left: 50%;
+      width: 1px;
+      transform: translateX(-50%);
+      background: linear-gradient(180deg, rgba(98, 208, 255, 0.12), rgba(98, 208, 255, 0.66), rgba(98, 208, 255, 0.12));
+      pointer-events: none;
+    }
+    .filter-window {
+      position: absolute;
+      top: 12px;
+      bottom: 12px;
+      left: 45%;
+      width: 10%;
+      border: 1px solid rgba(244, 184, 96, 0.55);
+      background: linear-gradient(180deg, rgba(244, 184, 96, 0.14), rgba(244, 184, 96, 0.04));
+      border-radius: 14px;
+      pointer-events: none;
+      box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.04);
+    }
+    .axis-row {
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      font-family: var(--mono);
+      font-size: 11px;
+      color: var(--muted);
+      padding: 0 2px;
+    }
+    .insight-list {
+      display: grid;
+      gap: 12px;
+    }
+    .insight {
+      padding: 12px 14px;
+      border-radius: 16px;
+      border: 1px solid var(--line);
+      background: rgba(255, 255, 255, 0.03);
+    }
+    .insight .insight-title {
+      margin: 0 0 6px;
+      font-size: 13px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: #dff8fb;
+    }
+    .insight .insight-body {
+      font-size: 13px;
+      line-height: 1.45;
+      color: var(--muted);
+    }
+    .log-card pre {
+      margin: 0;
+      min-height: 180px;
+      max-height: 280px;
+      overflow: auto;
+      padding: 16px 18px 18px;
+      font-family: var(--mono);
+      font-size: 12px;
+      line-height: 1.45;
+      color: #daeff1;
+      background: rgba(3, 11, 15, 0.88);
+    }
+    .muted {
+      color: var(--muted);
+    }
+    .mono {
+      font-family: var(--mono);
+    }
+    .small {
+      font-size: 12px;
+    }
+    @media (max-width: 1320px) {
+      .layout {
+        grid-template-columns: 1fr;
+      }
+      .hero-cards {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+    }
+    @media (max-width: 780px) {
+      .page {
+        padding: 14px;
+      }
+      .hero {
+        padding: 16px;
+      }
+      .hero-cards {
+        grid-template-columns: 1fr;
+      }
+      .button-grid,
+      .mode-grid,
+      .band-grid,
+      .metric-grid {
+        grid-template-columns: 1fr;
+      }
+      .display-card {
+        min-height: 320px;
+      }
+      .spectrum-shell {
+        height: 280px;
+      }
+      .waterfall-shell {
+        height: 180px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <section class="hero">
+      <div class="hero-top">
+        <div>
+          <div class="kicker">Saturn Remote</div>
+          <h1>Direct G2 control with a browser-native display path.</h1>
+          <div class="subtitle">
+            This page is the first independent <span class="mono">saturn-remote</span> frontend:
+            DOM for control and session state, WebGL2 for high-DPI spectrum and waterfall,
+            and <span class="mono">saturn-bridge</span> as the protocol boundary underneath.
+          </div>
+        </div>
+        <div class="hero-actions">
+          <a class="nav-link" href="./">Update</a>
+          <a class="nav-link" href="./monitor">Monitor</a>
+          <a class="nav-link" href="./p23test">p2app Lab</a>
+          <button class="btn alt" id="demo-btn" type="button">Preview Only</button>
+        </div>
+      </div>
+
+      <div class="hero-cards">
+        <div class="hero-card">
+          <div class="label">Control Plane</div>
+          <div class="value">DOM + TCI</div>
+          <div class="detail">Connection status, VFO, mode, filters, sample rate, and session diagnostics stay in the normal document layer.</div>
+        </div>
+        <div class="hero-card">
+          <div class="label">Display Engine</div>
+          <div class="value">WebGL2</div>
+          <div class="detail">Spectrum and waterfall render into dedicated GPU canvases, sized against <span class="mono">devicePixelRatio</span> for crisp shack displays.</div>
+        </div>
+        <div class="hero-card">
+          <div class="label">LAN Contract</div>
+          <div class="value">Raw IQ Now</div>
+          <div class="detail">The current bridge sends TCI-style float32 IQ frames directly. This keeps the first browser path honest and close to the radio.</div>
+        </div>
+        <div class="hero-card">
+          <div class="label">WAN Direction</div>
+          <div class="value">FFT Rows Later</div>
+          <div class="detail">For internet use, move panadapter transport toward display-oriented FFT rows and compressed audio instead of raw IQ everywhere.</div>
+        </div>
+      </div>
+    </section>
+
+    <section class="layout">
+      <div class="stack">
+        <div class="panel">
+          <div class="panel-head">
+            <h2 class="panel-title">Session</h2>
+            <div class="panel-meta" id="connection-summary">Idle</div>
+          </div>
+          <div class="panel-body">
+            <div class="field-row">
+              <div>
+                <label class="label" for="ws-url">Bridge WebSocket</label>
+                <input class="field" id="ws-url" spellcheck="false" />
+              </div>
+              <div class="row">
+                <span class="pill"><span class="dot" id="conn-dot"></span><span id="conn-label">Disconnected</span></span>
+                <span class="pill"><span id="stream-label">IQ stopped</span></span>
+                <span class="pill"><span id="audio-label">Audio stopped</span></span>
+              </div>
+            </div>
+
+            <div class="button-grid">
+              <button class="btn primary" id="connect-btn" type="button">Connect</button>
+              <button class="btn ghost" id="disconnect-btn" type="button">Disconnect</button>
+              <button class="btn alt" id="start-iq-btn" type="button">Start IQ</button>
+              <button class="btn ghost" id="stop-iq-btn" type="button">Stop IQ</button>
+              <button class="btn warm" id="start-audio-btn" type="button">Start Audio</button>
+              <button class="btn ghost" id="stop-audio-btn" type="button">Stop Audio</button>
+            </div>
+
+            <div class="field-row" style="margin-top: 16px;">
+              <div>
+                <label class="label" for="sample-rate">IQ Sample Rate</label>
+                <select class="field" id="sample-rate">
+                  <option value="48000">48 kHz</option>
+                  <option value="96000">96 kHz</option>
+                  <option value="192000" selected>192 kHz</option>
+                  <option value="384000">384 kHz</option>
+                </select>
+              </div>
+              <div>
+                <label class="label" for="vfo-a-input">VFO A (Hz)</label>
+                <input class="field" id="vfo-a-input" inputmode="numeric" />
+              </div>
+              <div>
+                <label class="label" for="rx-adc">RX Input</label>
+                <select class="field" id="rx-adc">
+                  <option value="0">ADC1</option>
+                  <option value="1">ADC2</option>
+                </select>
+              </div>
+              <div>
+                <label class="label" for="rx-antenna">RX Antenna</label>
+                <select class="field" id="rx-antenna">
+                  <option value="1">ANT1</option>
+                  <option value="2">ANT2</option>
+                  <option value="3">ANT3</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="field-row">
+              <div>
+                <label class="label">Tune Step</label>
+                <div class="band-grid" id="tune-grid">
+                  <button class="band-btn" data-step="-1000" type="button">-1 kHz</button>
+                  <button class="band-btn" data-step="-100" type="button">-100 Hz</button>
+                  <button class="band-btn" data-step="-10" type="button">-10 Hz</button>
+                  <button class="band-btn" data-step="10" type="button">+10 Hz</button>
+                  <button class="band-btn" data-step="100" type="button">+100 Hz</button>
+                  <button class="band-btn" data-step="1000" type="button">+1 kHz</button>
+                </div>
+              </div>
+            </div>
+
+            <div class="field-row">
+              <div>
+                <label class="label">Band Recall</label>
+                <div class="band-grid" id="band-grid">
+                  <button class="band-btn" data-band="1840000" type="button">160m</button>
+                  <button class="band-btn" data-band="3800000" type="button">80m</button>
+                  <button class="band-btn" data-band="7150000" type="button">40m</button>
+                  <button class="band-btn" data-band="14200000" type="button">20m</button>
+                  <button class="band-btn" data-band="21300000" type="button">15m</button>
+                  <button class="band-btn" data-band="28400000" type="button">10m</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-head">
+            <h2 class="panel-title">Receive Controls</h2>
+            <div class="panel-meta">DOM control layer</div>
+          </div>
+          <div class="panel-body">
+            <div class="field-row">
+              <label class="label">Mode</label>
+              <div class="mode-grid" id="mode-grid">
+                <button class="mode-btn active" data-mode="USB" type="button">USB</button>
+                <button class="mode-btn" data-mode="LSB" type="button">LSB</button>
+                <button class="mode-btn" data-mode="AM" type="button">AM</button>
+                <button class="mode-btn warm" data-mode="SAM" type="button">SAM</button>
+                <button class="mode-btn" data-mode="FM" type="button">FM</button>
+                <button class="mode-btn" data-mode="DIGU" type="button">DIGU</button>
+              </div>
+            </div>
+
+            <div class="field-row">
+              <div class="range-wrap">
+                <div class="row spread">
+                  <span class="label" style="margin: 0;">RX Volume</span>
+                  <span class="mono small" id="rx-volume-readout">-20.0 dB</span>
+                </div>
+                <input id="rx-volume" type="range" min="-40" max="0" step="0.5" value="-20" />
+              </div>
+              <div class="range-wrap">
+                <div class="row spread">
+                  <span class="label" style="margin: 0;">Filter Low</span>
+                  <span class="mono small" id="filter-low-readout">300 Hz</span>
+                </div>
+                <input id="filter-low" type="range" min="-12000" max="12000" step="50" value="300" />
+              </div>
+              <div class="range-wrap">
+                <div class="row spread">
+                  <span class="label" style="margin: 0;">Filter High</span>
+                  <span class="mono small" id="filter-high-readout">3000 Hz</span>
+                </div>
+                <input id="filter-high" type="range" min="-12000" max="12000" step="50" value="3000" />
+              </div>
+            </div>
+
+            <div class="metric-grid">
+              <div class="metric">
+                <div class="metric-label">Center</div>
+                <div class="metric-value mono" id="dds-readout">14.200.000</div>
+                <div class="metric-sub">DDS / panadapter center frequency</div>
+              </div>
+              <div class="metric">
+                <div class="metric-label">Mode</div>
+                <div class="metric-value mono" id="mode-readout">USB</div>
+                <div class="metric-sub">Current bridge mode echo</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="stage">
+        <div class="display-card">
+          <div class="display-head">
+            <div>
+              <div class="panel-title" style="margin-bottom: 4px;">Panadapter + Waterfall</div>
+              <div class="display-meta" id="display-caption">Waiting for TCI IQ frames from saturn-bridge</div>
+            </div>
+            <div class="pill mono" id="display-resolution">Display: --</div>
+          </div>
+          <div class="display-stack">
+            <div class="spectrum-shell" id="spectrum-shell">
+              <canvas id="spectrum-canvas"></canvas>
+              <div class="filter-window" id="filter-window"></div>
+              <div class="center-line"></div>
+            </div>
+            <div class="axis-row">
+              <span id="axis-left">-96 kHz</span>
+              <span id="axis-center">Center 14.200.000</span>
+              <span id="axis-right">+96 kHz</span>
+            </div>
+            <div class="waterfall-shell" id="waterfall-shell">
+              <canvas id="waterfall-canvas"></canvas>
+              <div class="center-line"></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="panel log-card">
+          <div class="panel-head">
+            <h2 class="panel-title">Bridge Log</h2>
+            <div class="panel-meta">Live client-side trace</div>
+          </div>
+          <pre id="event-log"></pre>
+        </div>
+      </div>
+
+      <div class="stack">
+        <div class="panel">
+          <div class="panel-head">
+            <h2 class="panel-title">Telemetry</h2>
+            <div class="panel-meta">Observed radio state</div>
+          </div>
+          <div class="panel-body">
+            <div class="field-row">
+              <div class="row spread">
+                <span class="label" style="margin: 0;">S-Meter</span>
+                <span class="mono small" id="meter-readout">-- dBm</span>
+              </div>
+              <div class="meter-bar">
+                <div class="meter-fill" id="meter-fill"></div>
+              </div>
+            </div>
+
+            <div class="metric-grid">
+              <div class="metric">
+                <div class="metric-label">TX Power</div>
+                <div class="metric-value mono" id="tx-power-readout">--</div>
+                <div class="metric-sub">Forward power from high-priority telemetry</div>
+              </div>
+              <div class="metric">
+                <div class="metric-label">SWR</div>
+                <div class="metric-value mono" id="swr-readout">--</div>
+                <div class="metric-sub">Bridge-derived from forward and reverse power</div>
+              </div>
+              <div class="metric">
+                <div class="metric-label">Frame Rate</div>
+                <div class="metric-value mono" id="frame-rate-readout">0 fps</div>
+                <div class="metric-sub">Client IQ frame cadence</div>
+              </div>
+              <div class="metric">
+                <div class="metric-label">FFT Width</div>
+                <div class="metric-value mono" id="fft-readout">--</div>
+                <div class="metric-sub">Current panadapter bin count</div>
+              </div>
+              <div class="metric">
+                <div class="metric-label">Audio Resyncs</div>
+                <div class="metric-value mono" id="audio-drop-readout">0</div>
+                <div class="metric-sub">Browser playback queue trims after drift/backpressure</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-head">
+            <h2 class="panel-title">Render Contract</h2>
+            <div class="panel-meta">v2 frontend boundary</div>
+          </div>
+          <div class="panel-body">
+            <div class="insight-list">
+              <div class="insight">
+                <h3 class="insight-title">DOM owns stateful controls</h3>
+                <div class="insight-body">WebSocket endpoint, connection state, VFO entry, mode, filters, meters, and session policy stay in the normal document tree for maintainability.</div>
+              </div>
+              <div class="insight">
+                <h3 class="insight-title">WebGL owns dense pixels</h3>
+                <div class="insight-body">Spectrum and waterfall use GPU canvases so the page stays sharp on 4k shack screens and can scale later to denser FFT and overlay layers.</div>
+              </div>
+              <div class="insight">
+                <h3 class="insight-title">LAN vs WAN split</h3>
+                <div class="insight-body">Current bridge contract is raw IQ over TCI for LAN truth. WAN should evolve toward FFT rows, compressed audio, and better session transport instead of forwarding raw IQ by default.</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+
+    const state = {
+      ws: null,
+      wsUrl: "",
+      connected: false,
+      iqStreaming: false,
+      audioStreaming: false,
+      demoMode: false,
+      mode: "USB",
+      vfoA: 14200000,
+      vfoB: 14200000,
+      dds: 14200000,
+      rxAdc: 0,
+      rxAntenna: 1,
+      sampleRate: 192000,
+      rxVolumeDb: -20.0,
+      filterLow: 300,
+      filterHigh: 3000,
+      meterDbm: null,
+      txPower: null,
+      swr: null,
+      latestBins: new Float32Array(1024),
+      fftWidth: 1024,
+      lastFrameAt: 0,
+      frameCounter: 0,
+      frameRate: 0,
+      audioFramesPlayed: 0,
+      audioSampleRate: 48000,
+      audioCtx: null,
+      audioGainNode: null,
+      audioNextTime: 0,
+      audioBackpressureDrops: 0,
+      displayCaption: "Waiting for TCI IQ frames from saturn-bridge",
+      lastSummaryAt: 0,
+      displayFloorDb: -200,
+      displayCeilingDb: -120,
+      iqPackets: [],
+      lastSpectrumRenderAt: 0,
+    };
+
+    class FftProcessor {
+      constructor(size) {
+        this.size = size;
+        this.window = new Float32Array(size);
+        this.bitReverse = new Uint32Array(size);
+        this.cosTable = new Float32Array(size / 2);
+        this.sinTable = new Float32Array(size / 2);
+        this.scratchRe = new Float32Array(size);
+        this.scratchIm = new Float32Array(size);
+        this.prevBins = new Float32Array(size);
+        for (let i = 0; i < size; i += 1) {
+          this.window[i] = 0.5 - 0.5 * Math.cos((2 * Math.PI * i) / (size - 1));
+          let j = 0;
+          for (let bit = 0; (1 << bit) < size; bit += 1) {
+            j = (j << 1) | ((i >> bit) & 1);
+          }
+          this.bitReverse[i] = j;
+        }
+        for (let i = 0; i < size / 2; i += 1) {
+          const angle = (-2 * Math.PI * i) / size;
+          this.cosTable[i] = Math.cos(angle);
+          this.sinTable[i] = Math.sin(angle);
+        }
+      }
+
+      transform(iqInterleaved) {
+        const samplePairs = Math.floor(iqInterleaved.length / 2);
+        const stride = Math.max(1, Math.floor(samplePairs / this.size));
+
+        for (let i = 0; i < this.size; i += 1) {
+          const sourcePair = Math.min(samplePairs - 1, i * stride);
+          const sourceOffset = sourcePair * 2;
+          const window = this.window[i];
+          const target = this.bitReverse[i];
+          this.scratchRe[target] = iqInterleaved[sourceOffset] * window;
+          this.scratchIm[target] = iqInterleaved[sourceOffset + 1] * window;
+        }
+
+        for (let span = 2; span <= this.size; span <<= 1) {
+          const half = span >> 1;
+          const tableStep = this.size / span;
+          for (let start = 0; start < this.size; start += span) {
+            for (let i = 0; i < half; i += 1) {
+              const twiddleIndex = i * tableStep;
+              const evenIndex = start + i;
+              const oddIndex = evenIndex + half;
+              const oddRe = this.scratchRe[oddIndex];
+              const oddIm = this.scratchIm[oddIndex];
+              const twiddleRe = this.cosTable[twiddleIndex];
+              const twiddleIm = this.sinTable[twiddleIndex];
+              const rotRe = oddRe * twiddleRe - oddIm * twiddleIm;
+              const rotIm = oddRe * twiddleIm + oddIm * twiddleRe;
+              const evenRe = this.scratchRe[evenIndex];
+              const evenIm = this.scratchIm[evenIndex];
+              this.scratchRe[oddIndex] = evenRe - rotRe;
+              this.scratchIm[oddIndex] = evenIm - rotIm;
+              this.scratchRe[evenIndex] = evenRe + rotRe;
+              this.scratchIm[evenIndex] = evenIm + rotIm;
+            }
+          }
+        }
+
+        const shifted = new Float32Array(this.size);
+        const half = this.size / 2;
+        for (let i = 0; i < this.size; i += 1) {
+          const shiftedIndex = (i + half) % this.size;
+          const re = this.scratchRe[shiftedIndex];
+          const im = this.scratchIm[shiftedIndex];
+          const magnitude = Math.hypot(re, im) / this.size;
+          const db = 20 * Math.log10(magnitude + 1e-8);
+          const smoothed = this.prevBins[i] * 0.82 + db * 0.18;
+          this.prevBins[i] = smoothed;
+          shifted[i] = smoothed;
+        }
+        return shifted;
+      }
+    }
+
+    class SpectrumRenderer {
+      constructor(canvas) {
+        this.canvas = canvas;
+        this.gl = null;
+        this.ctx = null;
+        this.program = null;
+        this.vertexBuffer = null;
+        this.positionLocation = -1;
+        this.colorLocation = null;
+        this.resolution = { width: 0, height: 0 };
+        try {
+          this.gl = canvas.getContext("webgl2", { antialias: true, alpha: false });
+          if (this.gl) {
+            this.setup();
+          }
+        } catch (error) {
+          console.warn("Saturn Remote spectrum WebGL init failed, falling back to Canvas2D", error);
+          this.gl = null;
+        }
+        if (!this.gl) {
+          this.ctx = canvas.getContext("2d");
+        }
+        this.backend = this.gl ? "webgl2" : (this.ctx ? "canvas2d" : "none");
+        this.supported = this.backend !== "none";
+      }
+
+      setup() {
+        const gl = this.gl;
+        const vertexShader = this.compile(gl.VERTEX_SHADER, `
+          #version 300 es
+          in vec2 a_position;
+          void main() {
+            gl_Position = vec4(a_position, 0.0, 1.0);
+          }
+        `);
+        const fragmentShader = this.compile(gl.FRAGMENT_SHADER, `
+          #version 300 es
+          precision highp float;
+          uniform vec4 u_color;
+          out vec4 outColor;
+          void main() {
+            outColor = u_color;
+          }
+        `);
+        this.program = this.link(vertexShader, fragmentShader);
+        this.positionLocation = gl.getAttribLocation(this.program, "a_position");
+        this.colorLocation = gl.getUniformLocation(this.program, "u_color");
+        this.vertexBuffer = gl.createBuffer();
+      }
+
+      compile(type, source) {
+        const shader = this.gl.createShader(type);
+        this.gl.shaderSource(shader, source.trimStart());
+        this.gl.compileShader(shader);
+        if (!this.gl.getShaderParameter(shader, this.gl.COMPILE_STATUS)) {
+          const info = this.gl.getShaderInfoLog(shader) || "unknown shader compile error";
+          this.gl.deleteShader(shader);
+          throw new Error(info);
+        }
+        return shader;
+      }
+
+      link(vertexShader, fragmentShader) {
+        const program = this.gl.createProgram();
+        this.gl.attachShader(program, vertexShader);
+        this.gl.attachShader(program, fragmentShader);
+        this.gl.linkProgram(program);
+        if (!this.gl.getProgramParameter(program, this.gl.LINK_STATUS)) {
+          const info = this.gl.getProgramInfoLog(program) || "unknown program link error";
+          this.gl.deleteProgram(program);
+          throw new Error(info);
+        }
+        return program;
+      }
+
+      resize() {
+        if (!this.supported) {
+          return;
+        }
+        const dpr = Math.max(1, window.devicePixelRatio || 1);
+        const host = this.canvas.parentElement || this.canvas;
+        const rect = host.getBoundingClientRect();
+        const cssWidth = rect.width || this.canvas.clientWidth || host.clientWidth || 0;
+        const cssHeight = rect.height || this.canvas.clientHeight || host.clientHeight || 0;
+        const width = Math.max(2, Math.floor(cssWidth * dpr));
+        const height = Math.max(2, Math.floor(cssHeight * dpr));
+        this.canvas.style.width = `${Math.max(2, Math.floor(cssWidth))}px`;
+        this.canvas.style.height = `${Math.max(2, Math.floor(cssHeight))}px`;
+        if (width === this.canvas.width && height === this.canvas.height) {
+          return;
+        }
+        this.canvas.width = width;
+        this.canvas.height = height;
+        if (this.gl) {
+          this.gl.viewport(0, 0, width, height);
+        }
+        this.resolution = { width, height };
+      }
+
+      render(bins, floorDb, ceilingDb) {
+        if (!this.supported || !bins || bins.length < 2) {
+          return;
+        }
+        this.resize();
+        if (this.ctx) {
+          this.render2d(bins, floorDb, ceilingDb);
+          return;
+        }
+        const gl = this.gl;
+        const vertices = new Float32Array(bins.length * 2);
+        for (let i = 0; i < bins.length; i += 1) {
+          const x = (i / (bins.length - 1)) * 2 - 1;
+          const normalized = (bins[i] - floorDb) / (ceilingDb - floorDb);
+          const y = Math.max(-1, Math.min(1, normalized * 1.8 - 0.9));
+          const index = i * 2;
+          vertices[index] = x;
+          vertices[index + 1] = y;
+        }
+
+        gl.clearColor(0.02, 0.06, 0.08, 1.0);
+        gl.clear(gl.COLOR_BUFFER_BIT);
+        gl.useProgram(this.program);
+        gl.bindBuffer(gl.ARRAY_BUFFER, this.vertexBuffer);
+        gl.bufferData(gl.ARRAY_BUFFER, vertices, gl.DYNAMIC_DRAW);
+        gl.enableVertexAttribArray(this.positionLocation);
+        gl.vertexAttribPointer(this.positionLocation, 2, gl.FLOAT, false, 0, 0);
+        gl.uniform4f(this.colorLocation, 0.38, 0.81, 1.0, 0.98);
+        gl.drawArrays(gl.LINE_STRIP, 0, bins.length);
+      }
+
+      render2d(bins, floorDb, ceilingDb) {
+        const ctx = this.ctx;
+        const width = this.canvas.width;
+        const height = this.canvas.height;
+        ctx.clearRect(0, 0, width, height);
+        ctx.fillStyle = "#051118";
+        ctx.fillRect(0, 0, width, height);
+
+        ctx.strokeStyle = "rgba(255,255,255,0.07)";
+        ctx.lineWidth = 1;
+        for (let row = 1; row < 5; row += 1) {
+          const y = Math.round((row / 5) * height) + 0.5;
+          ctx.beginPath();
+          ctx.moveTo(0, y);
+          ctx.lineTo(width, y);
+          ctx.stroke();
+        }
+        for (let col = 1; col < 10; col += 1) {
+          const x = Math.round((col / 10) * width) + 0.5;
+          ctx.beginPath();
+          ctx.moveTo(x, 0);
+          ctx.lineTo(x, height);
+          ctx.stroke();
+        }
+
+        ctx.strokeStyle = "#62d0ff";
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        for (let i = 0; i < bins.length; i += 1) {
+          const x = (i / (bins.length - 1)) * width;
+          const normalized = (bins[i] - floorDb) / Math.max(1, (ceilingDb - floorDb));
+          const y = height - Math.max(0, Math.min(1, normalized)) * height;
+          if (i === 0) {
+            ctx.moveTo(x, y);
+          } else {
+            ctx.lineTo(x, y);
+          }
+        }
+        ctx.stroke();
+
+        ctx.strokeStyle = "rgba(98,208,255,0.45)";
+        ctx.beginPath();
+        const centerX = Math.round(width / 2) + 0.5;
+        ctx.moveTo(centerX, 0);
+        ctx.lineTo(centerX, height);
+        ctx.stroke();
+      }
+    }
+
+    class WaterfallRenderer {
+      constructor(canvas) {
+        this.canvas = canvas;
+        this.gl = null;
+        this.ctx = null;
+        this.program = null;
+        this.positionBuffer = null;
+        this.texture = null;
+        this.textureWidth = 1024;
+        this.textureHeight = 512;
+        this.textureData = new Uint8Array(this.textureWidth * this.textureHeight * 4);
+        this.pendingBins = null;
+        this.pendingFloorDb = -180;
+        this.pendingCeilingDb = -120;
+        try {
+          this.gl = canvas.getContext("webgl2", { antialias: false, alpha: false });
+          if (this.gl) {
+            this.setup();
+          }
+        } catch (error) {
+          console.warn("Saturn Remote waterfall WebGL init failed, falling back to Canvas2D", error);
+          this.gl = null;
+        }
+        if (!this.gl) {
+          this.ctx = canvas.getContext("2d");
+        }
+        this.backend = this.gl ? "webgl2" : (this.ctx ? "canvas2d" : "none");
+        this.supported = this.backend !== "none";
+      }
+
+      setup() {
+        const gl = this.gl;
+        const vertexShader = this.compile(gl.VERTEX_SHADER, `
+          #version 300 es
+          in vec2 a_position;
+          out vec2 v_uv;
+          void main() {
+            v_uv = (a_position + 1.0) * 0.5;
+            gl_Position = vec4(a_position, 0.0, 1.0);
+          }
+        `);
+        const fragmentShader = this.compile(gl.FRAGMENT_SHADER, `
+          #version 300 es
+          precision mediump float;
+          uniform sampler2D u_texture;
+          in vec2 v_uv;
+          out vec4 outColor;
+          void main() {
+            outColor = texture(u_texture, vec2(v_uv.x, 1.0 - v_uv.y));
+          }
+        `);
+        this.program = this.link(vertexShader, fragmentShader);
+        this.positionBuffer = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, this.positionBuffer);
+        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([
+          -1, -1,
+           1, -1,
+          -1,  1,
+           1,  1,
+        ]), gl.STATIC_DRAW);
+        this.texture = gl.createTexture();
+        gl.bindTexture(gl.TEXTURE_2D, this.texture);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, this.textureWidth, this.textureHeight, 0, gl.RGBA, gl.UNSIGNED_BYTE, this.textureData);
+      }
+
+      compile(type, source) {
+        const shader = this.gl.createShader(type);
+        this.gl.shaderSource(shader, source.trimStart());
+        this.gl.compileShader(shader);
+        if (!this.gl.getShaderParameter(shader, this.gl.COMPILE_STATUS)) {
+          const info = this.gl.getShaderInfoLog(shader) || "unknown shader compile error";
+          this.gl.deleteShader(shader);
+          throw new Error(info);
+        }
+        return shader;
+      }
+
+      link(vertexShader, fragmentShader) {
+        const program = this.gl.createProgram();
+        this.gl.attachShader(program, vertexShader);
+        this.gl.attachShader(program, fragmentShader);
+        this.gl.linkProgram(program);
+        if (!this.gl.getProgramParameter(program, this.gl.LINK_STATUS)) {
+          const info = this.gl.getProgramInfoLog(program) || "unknown program link error";
+          this.gl.deleteProgram(program);
+          throw new Error(info);
+        }
+        return program;
+      }
+
+      resize() {
+        if (!this.supported) {
+          return;
+        }
+        const dpr = Math.max(1, window.devicePixelRatio || 1);
+        const host = this.canvas.parentElement || this.canvas;
+        const rect = host.getBoundingClientRect();
+        const cssWidth = rect.width || this.canvas.clientWidth || host.clientWidth || 0;
+        const cssHeight = rect.height || this.canvas.clientHeight || host.clientHeight || 0;
+        const width = Math.max(2, Math.floor(cssWidth * dpr));
+        const height = Math.max(2, Math.floor(cssHeight * dpr));
+        this.canvas.style.width = `${Math.max(2, Math.floor(cssWidth))}px`;
+        this.canvas.style.height = `${Math.max(2, Math.floor(cssHeight))}px`;
+        if (width === this.canvas.width && height === this.canvas.height) {
+          return;
+        }
+        this.canvas.width = width;
+        this.canvas.height = height;
+        if (this.gl) {
+          this.gl.viewport(0, 0, width, height);
+        }
+      }
+
+      ensureWidth(width) {
+        if (!this.gl || width === this.textureWidth) {
+          return;
+        }
+        this.textureWidth = width;
+        this.textureData = new Uint8Array(this.textureWidth * this.textureHeight * 4);
+        const gl = this.gl;
+        gl.bindTexture(gl.TEXTURE_2D, this.texture);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, this.textureWidth, this.textureHeight, 0, gl.RGBA, gl.UNSIGNED_BYTE, this.textureData);
+      }
+
+      pushLine(bins, floorDb, ceilingDb) {
+        if (!this.supported || !bins || bins.length === 0) {
+          return;
+        }
+        if (this.ctx) {
+          this.pendingBins = bins;
+          this.pendingFloorDb = floorDb;
+          this.pendingCeilingDb = ceilingDb;
+          return;
+        }
+        this.ensureWidth(bins.length);
+        const rowBytes = this.textureWidth * 4;
+        this.textureData.copyWithin(rowBytes, 0, rowBytes * (this.textureHeight - 1));
+        for (let i = 0; i < this.textureWidth; i += 1) {
+          const color = this.colorForDb(bins[i], floorDb, ceilingDb);
+          const offset = i * 4;
+          this.textureData[offset] = color[0];
+          this.textureData[offset + 1] = color[1];
+          this.textureData[offset + 2] = color[2];
+          this.textureData[offset + 3] = 255;
+        }
+        const gl = this.gl;
+        gl.bindTexture(gl.TEXTURE_2D, this.texture);
+        gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, this.textureWidth, this.textureHeight, gl.RGBA, gl.UNSIGNED_BYTE, this.textureData);
+      }
+
+      colorForDb(db, floorDb, ceilingDb) {
+        const t = Math.max(0, Math.min(1, (db - floorDb) / (ceilingDb - floorDb)));
+        if (t < 0.28) {
+          return [4, Math.round(26 + t * 50), Math.round(58 + t * 120)];
+        }
+        if (t < 0.58) {
+          const u = (t - 0.28) / 0.30;
+          return [
+            Math.round(8 + u * 36),
+            Math.round(40 + u * 138),
+            Math.round(128 + u * 82),
+          ];
+        }
+        if (t < 0.82) {
+          const u = (t - 0.58) / 0.24;
+          return [
+            Math.round(44 + u * 188),
+            Math.round(178 + u * 42),
+            Math.round(210 - u * 118),
+          ];
+        }
+        const u = (t - 0.82) / 0.18;
+        return [
+          232 + Math.round(u * 18),
+          220 - Math.round(u * 90),
+          92 - Math.round(u * 60),
+        ];
+      }
+
+      render() {
+        if (!this.supported) {
+          return;
+        }
+        this.resize();
+        if (this.ctx) {
+          this.render2d();
+          return;
+        }
+        const gl = this.gl;
+        gl.clearColor(0.02, 0.05, 0.07, 1.0);
+        gl.clear(gl.COLOR_BUFFER_BIT);
+        gl.useProgram(this.program);
+        gl.bindBuffer(gl.ARRAY_BUFFER, this.positionBuffer);
+        const positionLocation = gl.getAttribLocation(this.program, "a_position");
+        gl.enableVertexAttribArray(positionLocation);
+        gl.vertexAttribPointer(positionLocation, 2, gl.FLOAT, false, 0, 0);
+        gl.bindTexture(gl.TEXTURE_2D, this.texture);
+        gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+      }
+
+      render2d() {
+        if (!this.pendingBins) {
+          return;
+        }
+        const ctx = this.ctx;
+        const width = this.canvas.width;
+        const height = this.canvas.height;
+        if (width <= 0 || height <= 0) {
+          return;
+        }
+        ctx.drawImage(this.canvas, 0, 0, width, height, 0, 1, width, Math.max(0, height - 1));
+        for (let x = 0; x < width; x += 1) {
+          const sourceIndex = Math.min(
+            this.pendingBins.length - 1,
+            Math.floor((x / Math.max(1, width - 1)) * (this.pendingBins.length - 1))
+          );
+          const color = this.colorForDb(
+            this.pendingBins[sourceIndex],
+            this.pendingFloorDb,
+            this.pendingCeilingDb
+          );
+          ctx.fillStyle = `rgb(${color[0]}, ${color[1]}, ${color[2]})`;
+          ctx.fillRect(x, 0, 1, 1);
+        }
+      }
+    }
+
+    const spectrumRenderer = new SpectrumRenderer($("spectrum-canvas"));
+    const waterfallRenderer = new WaterfallRenderer($("waterfall-canvas"));
+    let fftProcessor = new FftProcessor(1024);
+
+    function updateDisplayRange(bins) {
+      if (!bins || bins.length === 0) {
+        return;
+      }
+      let min = Number.POSITIVE_INFINITY;
+      let max = Number.NEGATIVE_INFINITY;
+      for (let i = 0; i < bins.length; i += 1) {
+        const value = bins[i];
+        if (value < min) {
+          min = value;
+        }
+        if (value > max) {
+          max = value;
+        }
+      }
+      if (!Number.isFinite(min) || !Number.isFinite(max)) {
+        return;
+      }
+      const span = Math.max(36, max - min + 12);
+      const targetFloor = min - 6;
+      const targetCeiling = targetFloor + span;
+      state.displayFloorDb = state.displayFloorDb * 0.85 + targetFloor * 0.15;
+      state.displayCeilingDb = state.displayCeilingDb * 0.85 + targetCeiling * 0.15;
+    }
+
+    function logEvent(message) {
+      const stamp = new Date().toLocaleTimeString();
+      const area = $("event-log");
+      const lines = area.textContent ? area.textContent.trimEnd().split("\n") : [];
+      lines.push(`[${stamp}] ${message}`);
+      while (lines.length > 90) {
+        lines.shift();
+      }
+      area.textContent = lines.join("\n");
+      area.scrollTop = area.scrollHeight;
+    }
+
+    function defaultWsUrl() {
+      const saved = localStorage.getItem("saturn.remote.wsUrl");
+      if (saved) {
+        return saved;
+      }
+      const scheme = window.location.protocol === "https:" ? "wss" : "ws";
+      return `${scheme}://${window.location.hostname || "127.0.0.1"}:50001`;
+    }
+
+    function formatFrequency(hz) {
+      const text = Math.round(hz).toString().padStart(7, "0");
+      const whole = text.slice(0, -6) || "0";
+      const khz = text.slice(-6, -3);
+      const rest = text.slice(-3);
+      return `${whole}.${khz}.${rest}`;
+    }
+
+    function clampRxVolumeDb(value) {
+      return Math.max(-40, Math.min(0, Number(value)));
+    }
+
+    function clampRxAdc(value) {
+      return Math.max(0, Math.min(1, Math.round(Number(value))));
+    }
+
+    function clampRxAntenna(value) {
+      return Math.max(1, Math.min(3, Math.round(Number(value))));
+    }
+
+    function volumeAmplitudeFromDb(volumeDb) {
+      if (volumeDb <= -39.5) {
+        return 0;
+      }
+      if (volumeDb >= 0) {
+        return 1;
+      }
+      return Math.pow(10, 0.05 * volumeDb);
+    }
+
+    function applyRxVolumeGain() {
+      if (!state.audioGainNode || !state.audioCtx) {
+        return;
+      }
+      const gain = volumeAmplitudeFromDb(state.rxVolumeDb);
+      state.audioGainNode.gain.setTargetAtTime(gain, state.audioCtx.currentTime, 0.01);
+    }
+
+    function setFrequency(hz, syncBoth = false) {
+      const nextHz = Math.max(0, Math.round(hz));
+      state.vfoA = nextHz;
+      state.dds = nextHz;
+      if (syncBoth) {
+        state.vfoB = nextHz;
+      }
+      updateUi();
+      sendTci(`vfo:0,0,${nextHz};dds:0,${nextHz};${syncBoth ? `vfo:0,1,${nextHz};` : ""}`);
+    }
+
+    function tuneBy(stepHz) {
+      setFrequency(state.vfoA + stepHz);
+    }
+
+    function frequencyFromDisplayPoint(clientX, element) {
+      const rect = element.getBoundingClientRect();
+      if (!rect.width) {
+        return state.vfoA;
+      }
+      const normalized = (clientX - rect.left) / rect.width;
+      const offsetHz = (normalized - 0.5) * state.sampleRate;
+      return state.dds + offsetHz;
+    }
+
+    function updateFilterOverlay() {
+      const rate = Math.max(1, state.sampleRate);
+      const left = 50 + (state.filterLow / rate) * 100;
+      const right = 50 + (state.filterHigh / rate) * 100;
+      const clampedLeft = Math.max(0, Math.min(100, left));
+      const clampedRight = Math.max(0, Math.min(100, right));
+      $("filter-window").style.left = `${Math.min(clampedLeft, clampedRight)}%`;
+      $("filter-window").style.width = `${Math.max(1.5, Math.abs(clampedRight - clampedLeft))}%`;
+    }
+
+    function updateAxes() {
+      const spanKhz = (state.sampleRate / 2000).toFixed(0);
+      $("axis-left").textContent = `-${spanKhz} kHz`;
+      $("axis-right").textContent = `+${spanKhz} kHz`;
+      $("axis-center").textContent = `Center ${formatFrequency(state.dds)}`;
+    }
+
+    function updateUi() {
+      $("vfo-a-input").value = `${state.vfoA}`;
+      $("dds-readout").textContent = formatFrequency(state.dds);
+      $("mode-readout").textContent = state.mode;
+      $("rx-volume-readout").textContent = `${state.rxVolumeDb.toFixed(1)} dB`;
+      $("filter-low-readout").textContent = `${state.filterLow} Hz`;
+      $("filter-high-readout").textContent = `${state.filterHigh} Hz`;
+      $("meter-readout").textContent = state.meterDbm == null ? "-- dBm" : `${state.meterDbm.toFixed(1)} dBm`;
+      $("tx-power-readout").textContent = state.txPower == null ? "--" : `${state.txPower.toFixed(1)} W`;
+      $("swr-readout").textContent = state.swr == null ? "--" : `${state.swr.toFixed(2)} : 1`;
+      $("frame-rate-readout").textContent = `${state.frameRate.toFixed(1)} fps`;
+      $("fft-readout").textContent = `${state.fftWidth}`;
+      $("audio-drop-readout").textContent = `${state.audioBackpressureDrops}`;
+      $("display-caption").textContent = state.displayCaption;
+      $("connection-summary").textContent = state.connected ? `Live on ${state.wsUrl}` : (state.demoMode ? "Preview mode" : "Idle");
+      $("stream-label").textContent = state.iqStreaming ? "IQ running" : "IQ stopped";
+      $("audio-label").textContent = state.audioStreaming ? `Audio ${Math.round(state.audioSampleRate / 1000)} kHz` : "Audio stopped";
+      $("conn-label").textContent = state.connected ? "Connected" : (state.demoMode ? "Preview" : "Disconnected");
+      const connDot = $("conn-dot");
+      connDot.className = "dot " + (state.connected ? "live" : (state.demoMode ? "warn" : "dead"));
+      const meterPercent = state.meterDbm == null ? 0 : Math.max(0, Math.min(100, ((state.meterDbm + 140) / 120) * 100));
+      $("meter-fill").style.width = `${meterPercent}%`;
+      $("display-resolution").textContent = `Display: ${Math.max(1, Math.round(window.devicePixelRatio || 1))}x DPR`;
+      $("display-resolution").textContent += ` | ${state.displayFloorDb.toFixed(0)}..${state.displayCeilingDb.toFixed(0)} dB`;
+      updateAxes();
+      updateFilterOverlay();
+      syncActiveButtons();
+    }
+
+    function syncActiveButtons() {
+      document.querySelectorAll("#mode-grid .mode-btn").forEach((button) => {
+        button.classList.toggle("active", button.dataset.mode === state.mode);
+      });
+      document.querySelectorAll("#band-grid .band-btn").forEach((button) => {
+        const target = Number(button.dataset.band);
+        button.classList.toggle("active", Math.abs(target - state.vfoA) < 20000);
+      });
+      const sampleRate = `${state.sampleRate}`;
+      if ($("sample-rate").value !== sampleRate) {
+        const option = Array.from($("sample-rate").options).find((item) => item.value === sampleRate);
+        if (option) {
+          $("sample-rate").value = sampleRate;
+        }
+      }
+      const rxAdc = `${state.rxAdc}`;
+      if ($("rx-adc").value !== rxAdc) {
+        $("rx-adc").value = rxAdc;
+      }
+      const rxAntenna = `${state.rxAntenna}`;
+      if ($("rx-antenna").value !== rxAntenna) {
+        $("rx-antenna").value = rxAntenna;
+      }
+      const rxVolume = `${state.rxVolumeDb}`;
+      if ($("rx-volume").value !== rxVolume) {
+        $("rx-volume").value = rxVolume;
+      }
+    }
+
+    function sendTci(text) {
+      if (!state.connected || !state.ws || state.ws.readyState !== WebSocket.OPEN) {
+        return;
+      }
+      state.ws.send(text);
+    }
+
+    function requestFullState() {
+      sendTci(`iq_samplerate:${state.sampleRate};`);
+      sendTci(`rx_adc:0,${state.rxAdc};`);
+      sendTci(`rx_antenna:0,${state.rxAntenna};`);
+      sendTci(`modulation:0,${state.mode};`);
+      sendTci(`rx_volume:0,0,${state.rxVolumeDb.toFixed(1)};`);
+      sendTci(`rx_filter_band:0,${state.filterLow},${state.filterHigh};`);
+      sendTci(`dds:0,${state.dds};`);
+      sendTci(`vfo:0,0,${state.vfoA};`);
+      sendTci(`vfo:0,1,${state.vfoB};`);
+      sendTci("rx_smeter:0,0;");
+    }
+
+    function startIq() {
+      state.iqStreaming = true;
+      sendTci("iq_start:0;");
+      updateUi();
+    }
+
+    function stopIq() {
+      state.iqStreaming = false;
+      sendTci("iq_stop:0;");
+      updateUi();
+    }
+
+    async function startRxAudio() {
+      if (!state.connected) {
+        logEvent("Audio start ignored: bridge is not connected");
+        return;
+      }
+      if (state.audioCtx) {
+        await state.audioCtx.close();
+      }
+      state.audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 48000 });
+      state.audioGainNode = state.audioCtx.createGain();
+      state.audioGainNode.connect(state.audioCtx.destination);
+      if (state.audioCtx.state === "suspended") {
+        await state.audioCtx.resume();
+      }
+      state.audioStreaming = true;
+      state.audioSampleRate = 48000;
+      state.audioFramesPlayed = 0;
+      state.audioBackpressureDrops = 0;
+      state.audioNextTime = state.audioCtx.currentTime + 0.05;
+      applyRxVolumeGain();
+      sendTci(
+        `audio_start:0;audio_stream_samples:2048;audio_stream_channels:2;audio_stream_sample_type:float32;audio_samplerate:48000;rx_volume:0,0,${state.rxVolumeDb.toFixed(1)};`
+      );
+      logEvent("RX audio requested");
+      updateUi();
+    }
+
+    async function stopRxAudio(notifyBridge = true) {
+      if (notifyBridge) {
+        sendTci("audio_stop:0;");
+      }
+      state.audioStreaming = false;
+      state.audioFramesPlayed = 0;
+      state.audioNextTime = 0;
+      if (state.audioGainNode) {
+        state.audioGainNode.disconnect();
+        state.audioGainNode = null;
+      }
+      if (state.audioCtx) {
+        await state.audioCtx.close();
+        state.audioCtx = null;
+      }
+      updateUi();
+    }
+
+    function connectBridge() {
+      if (state.ws && state.ws.readyState <= WebSocket.OPEN) {
+        return;
+      }
+      state.demoMode = false;
+      state.wsUrl = $("ws-url").value.trim();
+      localStorage.setItem("saturn.remote.wsUrl", state.wsUrl);
+      logEvent(`Connecting to ${state.wsUrl}`);
+      const ws = new WebSocket(state.wsUrl);
+      ws.binaryType = "arraybuffer";
+      ws.onopen = () => {
+        state.ws = ws;
+        state.connected = true;
+        logEvent("WebSocket connected");
+        requestFullState();
+        startIq();
+        updateUi();
+      };
+      ws.onmessage = (event) => {
+        if (typeof event.data === "string") {
+          handleTciText(event.data);
+        } else {
+          handleBinaryFrame(event.data);
+        }
+      };
+      ws.onclose = () => {
+        logEvent("WebSocket closed");
+        state.connected = false;
+        state.iqStreaming = false;
+        state.ws = null;
+        state.iqPackets = [];
+        void stopRxAudio(false);
+        updateUi();
+      };
+      ws.onerror = () => {
+        logEvent("WebSocket error");
+      };
+      state.ws = ws;
+    }
+
+    function disconnectBridge() {
+      if (state.ws) {
+        state.ws.close();
+      }
+      state.connected = false;
+      state.iqStreaming = false;
+      state.ws = null;
+      state.iqPackets = [];
+      void stopRxAudio(false);
+      updateUi();
+    }
+
+    function handleTciText(text) {
+      text.split(";").map((item) => item.trim()).filter(Boolean).forEach((command) => {
+        if (command.toLowerCase() === "ready") {
+          logEvent("Bridge reported ready");
+          return;
+        }
+        const parts = command.split(":");
+        if (parts.length < 2) {
+          return;
+        }
+        const name = parts[0].toLowerCase();
+        const args = parts.slice(1).join(":").split(",");
+        if (name === "vfo" && args.length >= 3) {
+          const which = args[1].trim();
+          const hz = Number(args[2].trim());
+          if (which === "0") {
+            state.vfoA = hz;
+          } else if (which === "1") {
+            state.vfoB = hz;
+          }
+        } else if (name === "dds" && args.length >= 2) {
+          state.dds = Number(args[1].trim());
+        } else if (name === "rx_adc") {
+          const adc = args.length >= 2 ? Number(args[1].trim()) : Number(args[args.length - 1]?.trim());
+          if (!Number.isNaN(adc)) {
+            state.rxAdc = clampRxAdc(adc);
+          }
+        } else if (name === "rx_antenna") {
+          const antenna = args.length >= 2 ? Number(args[1].trim()) : Number(args[args.length - 1]?.trim());
+          if (!Number.isNaN(antenna)) {
+            state.rxAntenna = clampRxAntenna(antenna);
+          }
+        } else if (name === "iq_samplerate" && args.length >= 1) {
+          state.sampleRate = Number(args[0].trim());
+        } else if (name === "modulation" && args.length >= 2) {
+          state.mode = args[1].trim().toUpperCase();
+        } else if (name === "rx_volume") {
+          const volume = args.length >= 3 ? Number(args[2].trim()) : Number(args[args.length - 1]?.trim());
+          if (!Number.isNaN(volume)) {
+            state.rxVolumeDb = clampRxVolumeDb(volume);
+            applyRxVolumeGain();
+          }
+        } else if (name === "rx_filter_band" && args.length >= 3) {
+          state.filterLow = Number(args[1].trim());
+          state.filterHigh = Number(args[2].trim());
+          $("filter-low").value = `${state.filterLow}`;
+          $("filter-high").value = `${state.filterHigh}`;
+        } else if (name === "rx_smeter") {
+          const meter = args.length >= 3 ? Number(args[2].trim()) : Number(args[0].trim());
+          if (!Number.isNaN(meter)) {
+            state.meterDbm = meter;
+          }
+        } else if (name === "tx_power") {
+          const value = args.length >= 2 ? Number(args[1].trim()) : Number(args[0].trim());
+          if (!Number.isNaN(value)) {
+            state.txPower = value;
+          }
+        } else if (name === "swr") {
+          const value = args.length >= 2 ? Number(args[1].trim()) : Number(args[0].trim());
+          if (!Number.isNaN(value)) {
+            state.swr = value;
+          }
+        } else if (name === "trx" && args.length >= 2) {
+          const on = args[1].trim().toLowerCase() === "true";
+          $("display-caption").textContent = on ? "Transmit state echoed from bridge" : state.displayCaption;
+        } else if (name === "audio_start") {
+          state.audioStreaming = true;
+          logEvent("Bridge acknowledged audio_start");
+        } else if (name === "audio_stop") {
+          state.audioStreaming = false;
+          logEvent("Bridge acknowledged audio_stop");
+        } else if (name === "audio_samplerate" && args.length >= 1) {
+          const rate = Number(args[0].trim());
+          if (!Number.isNaN(rate) && rate > 0) {
+            state.audioSampleRate = rate;
+          }
+        }
+      });
+      updateUi();
+    }
+
+    function handleBinaryFrame(buffer) {
+      if (!(buffer instanceof ArrayBuffer) || buffer.byteLength < 64) {
+        return;
+      }
+      const view = new DataView(buffer);
+      const frameType = view.getUint32(24, true);
+      if (frameType === 1) {
+        handleAudioFrame(buffer);
+        return;
+      }
+      handleIqFrame(buffer);
+    }
+
+    function fftSizeForSamples(value) {
+      if (value >= 2048) {
+        return 2048;
+      }
+      let size = 32;
+      while ((size << 1) <= value && (size << 1) <= 2048) {
+        size <<= 1;
+      }
+      return Math.max(32, size);
+    }
+
+    function appendIqPacket(iq) {
+      state.iqPackets.push(new Float32Array(iq));
+      while (state.iqPackets.length > 12) {
+        state.iqPackets.shift();
+      }
+    }
+
+    function buildRenderIqWindow() {
+      if (state.iqPackets.length === 0) {
+        return null;
+      }
+
+      const desiredComplexSamples = 1024;
+      const selected = [];
+      let totalFloats = 0;
+      for (let i = state.iqPackets.length - 1; i >= 0; i -= 1) {
+        const packet = state.iqPackets[i];
+        selected.push(packet);
+        totalFloats += packet.length;
+        if ((totalFloats / 2) >= desiredComplexSamples) {
+          break;
+        }
+      }
+
+      selected.reverse();
+      const combined = new Float32Array(totalFloats);
+      let offset = 0;
+      for (const packet of selected) {
+        combined.set(packet, offset);
+        offset += packet.length;
+      }
+      return combined;
+    }
+
+    function handleIqFrame(buffer) {
+      const view = new DataView(buffer);
+      if (buffer.byteLength < 64) {
+        return;
+      }
+      const sampleRate = view.getUint32(4, true);
+      const floatCount = view.getUint32(20, true);
+      if (!floatCount || buffer.byteLength < 64 + floatCount * 4) {
+        return;
+      }
+
+      const iq = new Float32Array(buffer, 64, floatCount);
+      const samplePairs = Math.floor(iq.length / 2);
+      state.sampleRate = sampleRate;
+      appendIqPacket(iq);
+      if (performance.now() - state.lastFrameAt > 2500) {
+        logEvent(`Received IQ frame: ${samplePairs} complex samples @ ${Math.round(sampleRate / 1000)} kHz`);
+      }
+      state.lastFrameAt = performance.now();
+      state.frameCounter += 1;
+      state.displayCaption = `Live IQ frame: ${samplePairs} complex samples at ${Math.round(sampleRate / 1000)} kHz`;
+      updateUi();
+    }
+
+    function handleAudioFrame(buffer) {
+      const view = new DataView(buffer);
+      const sampleRate = view.getUint32(4, true);
+      const floatCount = view.getUint32(20, true);
+      const channels = Math.max(1, view.getUint32(28, true) || 2);
+      if (!state.audioCtx || !state.audioStreaming || !floatCount || buffer.byteLength < 64 + floatCount * 4) {
+        return;
+      }
+
+      if (state.audioCtx.state === "suspended") {
+        void state.audioCtx.resume();
+      }
+
+      state.audioSampleRate = sampleRate;
+      const frames = Math.floor(floatCount / channels);
+      if (frames < 1) {
+        return;
+      }
+
+      const floats = new Float32Array(buffer, 64, floatCount);
+      const audioBuffer = state.audioCtx.createBuffer(2, frames, sampleRate);
+      const left = audioBuffer.getChannelData(0);
+      const right = audioBuffer.getChannelData(1);
+
+      for (let i = 0; i < frames; i += 1) {
+        const leftSample = floats[i * channels];
+        const rightSample = channels > 1 ? floats[i * channels + 1] : leftSample;
+        left[i] = leftSample;
+        right[i] = rightSample;
+      }
+
+      scheduleAudioPlayback(audioBuffer);
+    }
+
+    function scheduleAudioPlayback(audioBuffer) {
+      if (!state.audioCtx) {
+        return;
+      }
+      const now = state.audioCtx.currentTime;
+      if (state.audioNextTime < now) {
+        state.audioNextTime = now + 0.02;
+      }
+      if (state.audioNextTime > now + 0.35) {
+        state.audioBackpressureDrops += 1;
+        state.audioNextTime = now + 0.04;
+        if (state.audioBackpressureDrops === 1 || state.audioBackpressureDrops % 25 === 0) {
+          logEvent(`Audio queue resynced ${state.audioBackpressureDrops} time(s)`);
+        }
+      }
+      const source = state.audioCtx.createBufferSource();
+      source.buffer = audioBuffer;
+      source.connect(state.audioGainNode || state.audioCtx.destination);
+      source.onended = () => {
+        source.disconnect();
+      };
+      source.start(state.audioNextTime);
+      state.audioNextTime += audioBuffer.duration;
+      state.audioFramesPlayed += 1;
+    }
+
+    function renderIdleFrame(now) {
+      const bins = new Float32Array(state.fftWidth || 1024);
+      const width = bins.length;
+      for (let i = 0; i < width; i += 1) {
+        const x = i / width;
+        const lobeA = Math.exp(-Math.pow((x - 0.48 - 0.05 * Math.sin(now * 0.0002)) / 0.055, 2));
+        const lobeB = Math.exp(-Math.pow((x - 0.66 + 0.03 * Math.cos(now * 0.00031)) / 0.028, 2));
+        const floor = -126 + 6 * Math.sin(now * 0.0005 + x * 12.0);
+        bins[i] = floor + lobeA * 54 + lobeB * 24;
+      }
+      state.latestBins = bins;
+      updateDisplayRange(bins);
+      spectrumRenderer.render(bins, state.displayFloorDb, state.displayCeilingDb);
+      waterfallRenderer.pushLine(bins, state.displayFloorDb, state.displayCeilingDb);
+      waterfallRenderer.render();
+    }
+
+    function animationLoop(now) {
+      if (state.connected && state.iqStreaming && state.iqPackets.length !== 0) {
+        if (now - state.lastSpectrumRenderAt >= 33) {
+          const iqWindow = buildRenderIqWindow();
+          if (iqWindow && iqWindow.length >= 64) {
+            const samplePairs = Math.floor(iqWindow.length / 2);
+            const fftSize = fftSizeForSamples(samplePairs);
+            if (fftSize !== fftProcessor.size) {
+              fftProcessor = new FftProcessor(fftSize);
+            }
+            const bins = fftProcessor.transform(iqWindow);
+            state.latestBins = bins;
+            state.fftWidth = bins.length;
+            updateDisplayRange(bins);
+            spectrumRenderer.render(bins, state.displayFloorDb, state.displayCeilingDb);
+            waterfallRenderer.pushLine(bins, state.displayFloorDb, state.displayCeilingDb);
+            waterfallRenderer.render();
+            state.lastSpectrumRenderAt = now;
+          }
+        }
+      } else if (!state.connected && !state.demoMode) {
+        renderIdleFrame(now);
+      } else if (state.demoMode && now - state.lastFrameAt > 120) {
+        state.lastFrameAt = now;
+        renderIdleFrame(now);
+      } else {
+        waterfallRenderer.render();
+      }
+      requestAnimationFrame(animationLoop);
+    }
+
+    function pulseTelemetry() {
+      const now = performance.now();
+      const elapsed = now - state.lastSummaryAt;
+      if (elapsed >= 1000) {
+        state.frameRate = state.frameCounter * (1000 / Math.max(1, elapsed));
+        state.frameCounter = 0;
+        state.lastSummaryAt = now;
+        if (state.connected) {
+          sendTci("rx_smeter:0,0;");
+        }
+        updateUi();
+      }
+      if (state.connected && now - state.lastFrameAt > 2500) {
+        state.displayCaption = "Connected, waiting for fresh IQ frames";
+      }
+    }
+
+    function initInteractions() {
+      $("connect-btn").addEventListener("click", connectBridge);
+      $("disconnect-btn").addEventListener("click", disconnectBridge);
+      $("start-iq-btn").addEventListener("click", startIq);
+      $("stop-iq-btn").addEventListener("click", stopIq);
+      $("start-audio-btn").addEventListener("click", () => { void startRxAudio(); });
+      $("stop-audio-btn").addEventListener("click", () => { void stopRxAudio(); });
+      $("demo-btn").addEventListener("click", () => {
+        state.demoMode = !state.demoMode;
+        if (state.demoMode) {
+          disconnectBridge();
+          state.displayCaption = "Preview mode: browser-side synthetic spectrum";
+          logEvent("Preview mode enabled");
+        } else {
+          state.displayCaption = "Waiting for TCI IQ frames from saturn-bridge";
+          logEvent("Preview mode disabled");
+        }
+        updateUi();
+      });
+      $("sample-rate").addEventListener("change", () => {
+        state.sampleRate = Number($("sample-rate").value);
+        updateUi();
+        sendTci(`iq_samplerate:${state.sampleRate};`);
+      });
+      $("rx-adc").addEventListener("change", () => {
+        state.rxAdc = clampRxAdc($("rx-adc").value);
+        updateUi();
+        sendTci(`rx_adc:0,${state.rxAdc};`);
+      });
+      $("rx-antenna").addEventListener("change", () => {
+        state.rxAntenna = clampRxAntenna($("rx-antenna").value);
+        updateUi();
+        sendTci(`rx_antenna:0,${state.rxAntenna};`);
+      });
+      $("vfo-a-input").addEventListener("keydown", (event) => {
+        if (event.key === "Enter") {
+          event.preventDefault();
+          $("vfo-a-input").blur();
+        }
+      });
+      $("vfo-a-input").addEventListener("change", () => {
+        const hz = Number($("vfo-a-input").value);
+        if (!Number.isNaN(hz) && hz > 0) {
+          setFrequency(hz);
+        }
+      });
+      $("rx-volume").addEventListener("input", () => {
+        state.rxVolumeDb = clampRxVolumeDb($("rx-volume").value);
+        applyRxVolumeGain();
+        updateUi();
+      });
+      $("rx-volume").addEventListener("change", () => {
+        sendTci(`rx_volume:0,0,${state.rxVolumeDb.toFixed(1)};`);
+      });
+      $("filter-low").addEventListener("input", () => {
+        state.filterLow = Number($("filter-low").value);
+        updateUi();
+      });
+      $("filter-low").addEventListener("change", () => {
+        sendTci(`rx_filter_band:0,${state.filterLow},${state.filterHigh};`);
+      });
+      $("filter-high").addEventListener("input", () => {
+        state.filterHigh = Number($("filter-high").value);
+        updateUi();
+      });
+      $("filter-high").addEventListener("change", () => {
+        sendTci(`rx_filter_band:0,${state.filterLow},${state.filterHigh};`);
+      });
+      document.querySelectorAll("#mode-grid .mode-btn").forEach((button) => {
+        button.addEventListener("click", () => {
+          state.mode = button.dataset.mode;
+          updateUi();
+          sendTci(`modulation:0,${state.mode};`);
+        });
+      });
+      document.querySelectorAll("#band-grid .band-btn").forEach((button) => {
+        button.addEventListener("click", () => {
+          const hz = Number(button.dataset.band);
+          setFrequency(hz, true);
+        });
+      });
+      document.querySelectorAll("#tune-grid .band-btn").forEach((button) => {
+        button.addEventListener("click", () => {
+          tuneBy(Number(button.dataset.step));
+        });
+      });
+      for (const element of [$("spectrum-shell"), $("waterfall-shell")]) {
+        element.addEventListener("click", (event) => {
+          setFrequency(frequencyFromDisplayPoint(event.clientX, element));
+        });
+        element.addEventListener("wheel", (event) => {
+          event.preventDefault();
+          const step = event.shiftKey ? 1000 : (event.ctrlKey || event.metaKey ? 10 : 100);
+          const direction = event.deltaY < 0 ? step : -step;
+          tuneBy(direction);
+        }, { passive: false });
+      }
+      window.addEventListener("resize", () => {
+        spectrumRenderer.resize();
+        waterfallRenderer.resize();
+        updateUi();
+      });
+    }
+
+    function init() {
+      $("ws-url").value = defaultWsUrl();
+      state.wsUrl = $("ws-url").value;
+      $("sample-rate").value = `${state.sampleRate}`;
+      $("rx-adc").value = `${state.rxAdc}`;
+      $("rx-antenna").value = `${state.rxAntenna}`;
+      $("rx-volume").value = `${state.rxVolumeDb}`;
+      $("filter-low").value = `${state.filterLow}`;
+      $("filter-high").value = `${state.filterHigh}`;
+      logEvent("Saturn Remote loaded");
+      logEvent("Current bridge target: TCI over WebSocket");
+      logEvent(`Display backends: spectrum=${spectrumRenderer.backend}, waterfall=${waterfallRenderer.backend}`);
+      initInteractions();
+      updateUi();
+      setInterval(pulseTelemetry, 250);
+      requestAnimationFrame(animationLoop);
+    }
+
+    init();
+  </script>
+</body>
+</html>

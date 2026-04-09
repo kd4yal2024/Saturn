@@ -1,0 +1,19 @@
+[Unit]
+Description=Saturn Bridge
+After=network.target p2app.service
+Wants=p2app.service
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi/github/Saturn/update_manager/saturn-bridge
+ExecStart=/opt/saturn-go/bin/saturn-bridge
+Restart=on-failure
+RestartSec=2
+Environment=SATURN_BRIDGE_RADIO_HOST=127.0.0.1
+Environment=SATURN_BRIDGE_RADIO_PORT=1024
+Environment=SATURN_BRIDGE_CLIENT_HOST=127.0.0.1
+Environment=SATURN_BRIDGE_CLIENT_PORT=12000
+
+[Install]
+WantedBy=multi-user.target

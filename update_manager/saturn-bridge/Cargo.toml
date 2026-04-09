@@ -1,0 +1,8 @@
+[package]
+name = "saturn-bridge"
+version = "0.1.0"
+edition = "2021"
+build = "build.rs"
+
+[dependencies]
+tungstenite = "0.21"
