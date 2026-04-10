@@ -269,6 +269,7 @@ copy_web_asset "p23test.html"
 copy_web_asset "fpga.html"
 copy_web_asset "pihpsdr.html"
 copy_web_asset "deskhpsdr.html"
+copy_web_asset "saturn-remote.html"
 
 if [[ -f "$SOURCE_DIR/scripts/config.json" ]]; then
   cp -f "$SOURCE_DIR/scripts/config.json" "$WEB_ROOT/config.json"

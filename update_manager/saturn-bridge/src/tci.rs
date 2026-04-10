@@ -39,6 +39,11 @@ pub enum TciCommand {
     SetAgcMode(AgcMode),
     SetTxDrive(u8),
     SetTxMicGain(f64),
+    SetTxFilterBand { low_hz: i32, high_hz: i32 },
+    SetRxEqEnabled(bool),
+    SetRxEqBand { band: usize, gain_db: i32 },
+    SetTxEqEnabled(bool),
+    SetTxEqBand { band: usize, gain_db: i32 },
     MicAudioFrame(Vec<f32>),
     ClientConnected,
     ClientDisconnected,
@@ -182,6 +187,16 @@ impl TciFrontend {
         self.send_text(format!("tx_drive:0,{};", model.desired.tx_drive));
         self.send_text(format!("tx_mic_gain:0,{:.1};", model.desired.tx_mic_gain_db));
         self.send_text(format!("trx:0,{};", model.desired.tx_enabled));
+        self.send_text(format!(
+            "tx_filter_band:0,{},{};",
+            model.desired.tx_filter_low_hz, model.desired.tx_filter_high_hz
+        ));
+        self.send_text(format!("rx_eq_enable:0,{};", model.desired.rx_eq_enabled));
+        self.send_text(format!("tx_eq_enable:0,{};", model.desired.tx_eq_enabled));
+        for i in 1..=10 {
+            self.send_text(format!("rx_eq_band:0,{},{};", i, model.desired.rx_eq_bands[i]));
+            self.send_text(format!("tx_eq_band:0,{},{};", i, model.desired.tx_eq_bands[i]));
+        }
         self.send_text("tune:0,false;".to_string());
         self.publish_telemetry(model);
     }
@@ -426,9 +441,22 @@ fn initial_snapshot_messages(model: &RadioModel) -> Vec<String> {
         format!("tx_drive:0,{};", model.desired.tx_drive),
         format!("tx_mic_gain:0,{:.1};", model.desired.tx_mic_gain_db),
         format!("trx:0,{};", model.desired.tx_enabled),
-        "tune:0,false;".to_string(),
-        "audio_samplerate:48000;".to_string(),
+        format!(
+            "tx_filter_band:0,{},{};",
+            model.desired.tx_filter_low_hz, model.desired.tx_filter_high_hz
+        ),
+        format!("rx_eq_enable:0,{};", model.desired.rx_eq_enabled),
+        format!("tx_eq_enable:0,{};", model.desired.tx_eq_enabled),
     ]
+    .into_iter()
+    .chain((1..=10).flat_map(|i| {
+        vec![
+            format!("rx_eq_band:0,{},{};", i, model.desired.rx_eq_bands[i]),
+            format!("tx_eq_band:0,{},{};", i, model.desired.tx_eq_bands[i]),
+        ]
+    }))
+    .chain(["tune:0,false;".to_string(), "audio_samplerate:48000;".to_string()])
+    .collect()
 }
 
 fn handle_incoming_message(
@@ -675,21 +703,74 @@ fn parse_tci_command(command: &str, command_tx: &Sender<TciCommand>, client_stat
                 }
             }
         }
+        "tx_filter_band" => {
+            if args.len() >= 3 {
+                if let (Ok(low_hz), Ok(high_hz)) = (
+                    args[1].trim().parse::<i32>(),
+                    args[2].trim().parse::<i32>(),
+                ) {
+                    let _ = command_tx.send(TciCommand::SetTxFilterBand { low_hz, high_hz });
+                }
+            }
+        }
+        "rx_eq_enable" => {
+            let enabled_arg = if args.len() >= 2 { args.get(1) } else { args.first() };
+            if let Some(enabled_text) = enabled_arg {
+                if let Some(enabled) = parse_tci_bool(enabled_text) {
+                    let _ = command_tx.send(TciCommand::SetRxEqEnabled(enabled));
+                }
+            }
+        }
+        "tx_eq_enable" => {
+            let enabled_arg = if args.len() >= 2 { args.get(1) } else { args.first() };
+            if let Some(enabled_text) = enabled_arg {
+                if let Some(enabled) = parse_tci_bool(enabled_text) {
+                    let _ = command_tx.send(TciCommand::SetTxEqEnabled(enabled));
+                }
+            }
+        }
+        "rx_eq_band" => {
+            // rx_eq_band:0,band_idx,gain_db  — band_idx 1-10, gain_db in dB integers
+            if args.len() >= 3 {
+                if let (Ok(band), Ok(gain_db)) = (
+                    args[1].trim().parse::<usize>(),
+                    args[2].trim().parse::<i32>(),
+                ) {
+                    if band >= 1 && band <= 10 {
+                        let _ = command_tx.send(TciCommand::SetRxEqBand { band, gain_db });
+                    }
+                }
+            }
+        }
+        "tx_eq_band" => {
+            if args.len() >= 3 {
+                if let (Ok(band), Ok(gain_db)) = (
+                    args[1].trim().parse::<usize>(),
+                    args[2].trim().parse::<i32>(),
+                ) {
+                    if band >= 1 && band <= 10 {
+                        let _ = command_tx.send(TciCommand::SetTxEqBand { band, gain_db });
+                    }
+                }
+            }
+        }
         _ => {}
     }
 }
 
-/// Parse a TCI binary frame that may contain TX mic audio from the client.
+/// Parse a TCI binary frame that contains TX mic audio from the client.
 /// Frame layout: 64-byte header + f32 LE samples.
 ///   header[20..24] = sample_count (u32 LE)
-///   header[24..28] = stream_type  (u32 LE); 1 = audio, 2 = TX mic
+///   header[24..28] = stream_type  (u32 LE); must be 2 (TX mic)
+///
+/// stream_type == 1 is intentionally excluded: it is the RX audio type used by
+/// the server→client direction and must not be fed into the TX DSP path.
 fn parse_tci_mic_frame(data: &[u8]) -> Option<Vec<f32>> {
     if data.len() < 68 {
         return None; // need at least header + 1 sample
     }
     let stream_type = u32::from_le_bytes(data[24..28].try_into().ok()?);
-    // Accept stream_type 1 (audio) or 2 (TX/mic) from the client
-    if stream_type != 1 && stream_type != 2 {
+    if stream_type != 2 {
         return None;
     }
     let sample_count = u32::from_le_bytes(data[20..24].try_into().ok()?) as usize;

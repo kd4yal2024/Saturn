@@ -172,6 +172,22 @@ fn main() -> Result<(), Box<dyn Error>> {
                 TciCommand::SetTxMicGain(gain_db) => {
                     model.desired.tx_mic_gain_db = gain_db.clamp(-20.0, 20.0);
                 }
+                TciCommand::SetTxFilterBand { low_hz, high_hz } => {
+                    model.desired.tx_filter_low_hz = low_hz;
+                    model.desired.tx_filter_high_hz = high_hz;
+                }
+                TciCommand::SetRxEqEnabled(enabled) => {
+                    model.desired.rx_eq_enabled = enabled;
+                }
+                TciCommand::SetRxEqBand { band, gain_db } => {
+                    model.desired.rx_eq_bands[band] = gain_db.clamp(-20, 20);
+                }
+                TciCommand::SetTxEqEnabled(enabled) => {
+                    model.desired.tx_eq_enabled = enabled;
+                }
+                TciCommand::SetTxEqBand { band, gain_db } => {
+                    model.desired.tx_eq_bands[band] = gain_db.clamp(-20, 20);
+                }
                 TciCommand::MicAudioFrame(samples) => {
                     // Extract mono from interleaved stereo (or treat as mono).
                     let mono: Vec<f32> = if samples.len() % 2 == 0 {

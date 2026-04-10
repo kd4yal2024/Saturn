@@ -160,6 +160,12 @@ unsafe extern "C" {
     fn SetTXAPanelSelect(channel: i32, select: i32);
     fn SetTXAPanelGain1(channel: i32, gain: f64);
     fn SetTXAPostGenRun(channel: i32, run: i32);
+
+    // Graphic EQ (10-band) — RX and TX
+    fn SetRXAEQRun(channel: i32, run: i32);
+    fn SetRXAGrphEQ10(channel: i32, rxeq: *mut i32);
+    fn SetTXAEQRun(channel: i32, run: i32);
+    fn SetTXAGrphEQ10(channel: i32, txeq: *mut i32);
 }
 
 #[derive(Debug)]
@@ -203,6 +209,8 @@ pub struct WdspRxEngine {
     frame_float_count: usize,
     last_meter_dbm: Option<f32>,
     nb_initialized: bool,
+    rx_eq_enabled: bool,
+    rx_eq_bands: [i32; 11],
 }
 
 impl WdspRxEngine {
@@ -229,6 +237,8 @@ impl WdspRxEngine {
             frame_float_count: WDSP_AUDIO_FRAME_FLOATS,
             last_meter_dbm: None,
             nb_initialized: false,
+            rx_eq_enabled: false,
+            rx_eq_bands: [0i32; 11],
         };
         engine.reconfigure(model)?;
         Ok(engine)
@@ -288,6 +298,17 @@ impl WdspRxEngine {
             self.filter_high_hz = model.desired.filter_high_hz;
             unsafe {
                 RXASetPassband(self.channel_id, self.filter_low_hz as f64, self.filter_high_hz as f64);
+            }
+        }
+
+        if model.desired.rx_eq_enabled != self.rx_eq_enabled
+            || model.desired.rx_eq_bands != self.rx_eq_bands
+        {
+            self.rx_eq_enabled = model.desired.rx_eq_enabled;
+            self.rx_eq_bands = model.desired.rx_eq_bands;
+            unsafe {
+                SetRXAGrphEQ10(self.channel_id, self.rx_eq_bands.as_mut_ptr());
+                SetRXAEQRun(self.channel_id, self.rx_eq_enabled as i32);
             }
         }
 
@@ -420,6 +441,7 @@ impl WdspRxEngine {
                 0.0001, 0.0001, 0.0001, 0.05, 20.0);
         }
         self.nb_initialized = true;
+        unsafe { SetRXAEQRun(self.channel_id, 0); }
         self.apply_agc();
         self.apply_noise_blanker();
         self.apply_anf();
@@ -585,6 +607,8 @@ pub struct WdspTxEngine {
     output_buffer: Vec<f64>,
     pending_mic: VecDeque<f64>,
     pub pending_iq: VecDeque<f32>,
+    tx_eq_enabled: bool,
+    tx_eq_bands: [i32; 11],
 }
 
 impl WdspTxEngine {
@@ -593,14 +617,16 @@ impl WdspTxEngine {
             channel_id: WDSP_TX_CHANNEL,
             mode: model.desired.mode,
             mic_gain_db: model.desired.tx_mic_gain_db,
-            filter_low_hz: model.desired.filter_low_hz,
-            filter_high_hz: model.desired.filter_high_hz,
+            filter_low_hz: model.desired.tx_filter_low_hz,
+            filter_high_hz: model.desired.tx_filter_high_hz,
             tx_active: false,
             // DSP block size: 64 complex samples → 128 f64 values each direction
             input_buffer: vec![0.0f64; WDSP_DSP_SIZE * 2],
             output_buffer: vec![0.0f64; WDSP_DSP_SIZE * 2],
             pending_mic: VecDeque::new(),
             pending_iq: VecDeque::new(),
+            tx_eq_enabled: false,
+            tx_eq_bands: [0i32; 11],
         };
         engine.open_channel();
         engine
@@ -635,6 +661,7 @@ impl WdspTxEngine {
             SetTXAPanelSelect(self.channel_id, 2); // use mic I channel (left)
             SetTXAPostGenRun(self.channel_id, 0);
             SetTXAPanelGain1(self.channel_id, panel_gain_for_volume_db(self.mic_gain_db));
+            SetTXAEQRun(self.channel_id, 0);
             SetTXABandpassFreqs(
                 self.channel_id,
                 self.filter_low_hz as f64,
@@ -650,11 +677,11 @@ impl WdspTxEngine {
             unsafe { SetTXAMode(self.channel_id, wdsp_mode(self.mode)); }
         }
 
-        if model.desired.filter_low_hz != self.filter_low_hz
-            || model.desired.filter_high_hz != self.filter_high_hz
+        if model.desired.tx_filter_low_hz != self.filter_low_hz
+            || model.desired.tx_filter_high_hz != self.filter_high_hz
         {
-            self.filter_low_hz = model.desired.filter_low_hz;
-            self.filter_high_hz = model.desired.filter_high_hz;
+            self.filter_low_hz = model.desired.tx_filter_low_hz;
+            self.filter_high_hz = model.desired.tx_filter_high_hz;
             unsafe {
                 SetTXABandpassFreqs(
                     self.channel_id,
@@ -667,6 +694,17 @@ impl WdspTxEngine {
         if (model.desired.tx_mic_gain_db - self.mic_gain_db).abs() > f64::EPSILON {
             self.mic_gain_db = model.desired.tx_mic_gain_db;
             unsafe { SetTXAPanelGain1(self.channel_id, panel_gain_for_volume_db(self.mic_gain_db)); }
+        }
+
+        if model.desired.tx_eq_enabled != self.tx_eq_enabled
+            || model.desired.tx_eq_bands != self.tx_eq_bands
+        {
+            self.tx_eq_enabled = model.desired.tx_eq_enabled;
+            self.tx_eq_bands = model.desired.tx_eq_bands;
+            unsafe {
+                SetTXAGrphEQ10(self.channel_id, self.tx_eq_bands.as_mut_ptr());
+                SetTXAEQRun(self.channel_id, self.tx_eq_enabled as i32);
+            }
         }
     }
 

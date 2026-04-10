@@ -803,6 +803,59 @@
       background: linear-gradient(135deg, rgba(140, 94, 32, 0.92), rgba(92, 59, 21, 0.94));
       box-shadow: 0 12px 28px rgba(86, 51, 18, 0.28);
     }
+    .ptt-btn {
+      width: 100%; font-size: 15px; letter-spacing: 3px; font-weight: 700; padding: 16px;
+    }
+    .ptt-btn.active {
+      border-color: rgba(255, 80, 80, 0.75);
+      background: linear-gradient(135deg, rgba(160, 30, 30, 0.95), rgba(100, 18, 18, 0.95));
+      box-shadow: 0 0 28px rgba(255, 60, 60, 0.45);
+    }
+
+    .eq-section {
+      margin-top: 12px;
+    }
+    .eq-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 8px;
+    }
+    .eq-grid {
+      display: grid;
+      grid-template-columns: repeat(5, 1fr);
+      gap: 6px 4px;
+    }
+    .eq-band {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 2px;
+    }
+    .eq-freq {
+      font-family: var(--mono);
+      font-size: 9px;
+      color: var(--muted);
+      text-align: center;
+    }
+    .eq-band input[type=range] {
+      writing-mode: vertical-lr;
+      direction: rtl;
+      width: 22px;
+      height: 60px;
+      padding: 0;
+      cursor: pointer;
+      accent-color: var(--accent);
+    }
+    .eq-val {
+      font-family: var(--mono);
+      font-size: 9px;
+      color: var(--text);
+    }
+    .eq-enable-btn.active {
+      border-color: var(--good);
+      color: var(--good);
+    }
 
     .control-cluster {
       display: grid;
@@ -1038,33 +1091,6 @@
       border-top: 1px solid rgba(255, 255, 255, 0.04);
       background:
         linear-gradient(180deg, rgba(5, 9, 14, 0.96), rgba(4, 8, 12, 0.98));
-    }
-
-    .note-list {
-      display: grid;
-      gap: 10px;
-    }
-
-    .note-card {
-      padding: 12px 13px;
-      border-radius: 16px;
-      border: 1px solid rgba(170, 197, 219, 0.12);
-      background: rgba(255, 255, 255, 0.025);
-    }
-
-    .note-card h3 {
-      margin: 0 0 6px;
-      font-size: 12px;
-      letter-spacing: 0.12em;
-      text-transform: uppercase;
-      color: #dce7ef;
-    }
-
-    .note-card p {
-      margin: 0;
-      font-size: 13px;
-      line-height: 1.45;
-      color: var(--muted);
     }
 
     @media (max-width: 1520px) {
@@ -1367,8 +1393,17 @@
                 <input id="filter-high" type="range" min="-12000" max="12000" step="50" value="3000" />
               </div>
             </div>
+
+            <div class="eq-section">
+              <div class="eq-header">
+                <span class="label" style="margin: 0;">RX 10-Band EQ</span>
+                <button class="btn eq-enable-btn" id="rx-eq-enable-btn" type="button" style="font-size:11px;padding:4px 10px;">EQ Off</button>
+              </div>
+              <div class="eq-grid" id="rx-eq-grid"></div>
+            </div>
           </div>
         </div>
+
       </div>
 
       <div class="stage console-stage">
@@ -1555,23 +1590,53 @@
 
         <div class="panel">
           <div class="panel-head">
-            <h2 class="panel-title">Operator Notes</h2>
-            <div class="panel-meta">Why this layout</div>
+            <h2 class="panel-title">Transmit</h2>
+            <div class="panel-meta" id="tx-status-meta">RX</div>
           </div>
           <div class="panel-body">
-            <div class="note-list">
-              <div class="note-card">
-                <h3>Persistent Frequency Deck</h3>
-                <p>The primary VFO stays dominant even while meters and controls move around it. That keeps the page closer to a real operator console than a generic web dashboard.</p>
+            <div class="field-row">
+              <button class="btn ptt-btn" id="ptt-btn" type="button">PTT</button>
+            </div>
+            <div class="field-row">
+              <div class="range-wrap">
+                <div class="row spread">
+                  <span class="label" style="margin: 0;">TX Drive</span>
+                  <span class="mono small" id="tx-drive-readout">200</span>
+                </div>
+                <input id="tx-drive" type="range" min="0" max="255" step="1" value="200" />
               </div>
-              <div class="note-card">
-                <h3>Center-First Display</h3>
-                <p>The panadapter and waterfall own the middle of the page. Controls are rails around the signal view, not competing hero cards above it.</p>
+              <div class="range-wrap">
+                <div class="row spread">
+                  <span class="label" style="margin: 0;">Mic Gain</span>
+                  <span class="mono small" id="tx-mic-gain-readout">0.0 dB</span>
+                </div>
+                <input id="tx-mic-gain" type="range" min="-20" max="20" step="0.5" value="0" />
               </div>
-              <div class="note-card">
-                <h3>Browser Advantage</h3>
-                <p>Thetis-style density is useful, but this page should be cleaner: faster scan paths, less chrome, and clearer separation between routing, tuning, DSP, and live telemetry.</p>
+            </div>
+
+            <div class="field-row">
+              <div class="range-wrap">
+                <div class="row spread">
+                  <span class="label" style="margin: 0;">TX Filter Low</span>
+                  <span class="mono small" id="tx-filter-low-readout">300 Hz</span>
+                </div>
+                <input id="tx-filter-low" type="range" min="-8000" max="8000" step="50" value="300" />
               </div>
+              <div class="range-wrap">
+                <div class="row spread">
+                  <span class="label" style="margin: 0;">TX Filter High</span>
+                  <span class="mono small" id="tx-filter-high-readout">3000 Hz</span>
+                </div>
+                <input id="tx-filter-high" type="range" min="100" max="8000" step="50" value="3000" />
+              </div>
+            </div>
+
+            <div class="eq-section">
+              <div class="eq-header">
+                <span class="label" style="margin: 0;">TX 10-Band EQ</span>
+                <button class="btn eq-enable-btn" id="tx-eq-enable-btn" type="button" style="font-size:11px;padding:4px 10px;">EQ Off</button>
+              </div>
+              <div class="eq-grid" id="tx-eq-grid"></div>
             </div>
           </div>
         </div>
@@ -1628,6 +1693,18 @@
       displayCeilingDb: -120,
       iqPackets: [],
       lastSpectrumRenderAt: 0,
+      txEnabled: false,
+      txDrive: 200,
+      txMicGainDb: 0,
+      micStream: null,
+      micNode: null,
+      micCapturing: false,
+      txFilterLow: 300,
+      txFilterHigh: 3000,
+      rxEqEnabled: false,
+      rxEqBands: new Array(11).fill(0),
+      txEqEnabled: false,
+      txEqBands: new Array(11).fill(0),
     };
 
     class FftProcessor {
@@ -2461,7 +2538,10 @@
     }
 
     function updateUi() {
-      $("vfo-a-input").value = `${state.vfoA}`;
+      // Don't clobber the VFO input while the operator is typing.
+      if (document.activeElement !== $("vfo-a-input")) {
+        $("vfo-a-input").value = `${state.vfoA}`;
+      }
       $("dds-readout").innerHTML = formatFrequencyMarkup(state.dds);
       $("vfo-b-readout").textContent = formatFrequency(state.vfoB);
       $("operator-center-readout").innerHTML = formatFrequencyMarkup(state.dds);
@@ -2473,6 +2553,16 @@
       $("zoom-readout").textContent = `${state.displayZoom.toFixed(1)}x`;
       $("filter-low-readout").textContent = `${state.filterLow} Hz`;
       $("filter-high-readout").textContent = `${state.filterHigh} Hz`;
+      $("tx-drive-readout").textContent = `${state.txDrive}`;
+      $("tx-mic-gain-readout").textContent = `${state.txMicGainDb.toFixed(1)} dB`;
+      $("tx-filter-low-readout").textContent = `${state.txFilterLow} Hz`;
+      $("tx-filter-high-readout").textContent = `${state.txFilterHigh} Hz`;
+      $("rx-eq-enable-btn").textContent = state.rxEqEnabled ? "EQ On" : "EQ Off";
+      $("rx-eq-enable-btn").classList.toggle("active", state.rxEqEnabled);
+      $("tx-eq-enable-btn").textContent = state.txEqEnabled ? "EQ On" : "EQ Off";
+      $("tx-eq-enable-btn").classList.toggle("active", state.txEqEnabled);
+      $("ptt-btn").classList.toggle("active", state.txEnabled);
+      $("tx-status-meta").textContent = state.txEnabled ? "TX" : "RX";
       $("meter-readout").textContent = state.meterDbm == null ? "-- dBm" : `${state.meterDbm.toFixed(1)} dBm`;
       $("tx-power-readout").textContent = state.txPower == null ? "-- W" : `${state.txPower.toFixed(1)} W`;
       $("swr-readout").textContent = state.swr == null ? "-- : 1" : `${state.swr.toFixed(2)} : 1`;
@@ -2535,6 +2625,29 @@
       document.querySelectorAll("#rx-nr-grid .mode-btn").forEach((button) => {
         button.classList.toggle("active", normalizeNrMode(button.dataset.nrMode) === state.rxNoiseReductionMode);
       });
+      const txDrive = `${state.txDrive}`;
+      if ($("tx-drive").value !== txDrive) { $("tx-drive").value = txDrive; }
+      const txMicGain = `${state.txMicGainDb}`;
+      if ($("tx-mic-gain").value !== txMicGain) { $("tx-mic-gain").value = txMicGain; }
+      const txFl = `${state.txFilterLow}`;
+      if ($("tx-filter-low").value !== txFl) { $("tx-filter-low").value = txFl; }
+      const txFh = `${state.txFilterHigh}`;
+      if ($("tx-filter-high").value !== txFh) { $("tx-filter-high").value = txFh; }
+      // Sync EQ band sliders
+      for (let i = 1; i <= 10; i++) {
+        const rxSlider = document.getElementById(`rx-eq-band-${i}`);
+        const txSlider = document.getElementById(`tx-eq-band-${i}`);
+        if (rxSlider && `${state.rxEqBands[i]}` !== rxSlider.value) {
+          rxSlider.value = `${state.rxEqBands[i]}`;
+          const rv = document.getElementById(`rx-eq-val-${i}`);
+          if (rv) rv.textContent = `${state.rxEqBands[i]}`;
+        }
+        if (txSlider && `${state.txEqBands[i]}` !== txSlider.value) {
+          txSlider.value = `${state.txEqBands[i]}`;
+          const tv = document.getElementById(`tx-eq-val-${i}`);
+          if (tv) tv.textContent = `${state.txEqBands[i]}`;
+        }
+      }
     }
 
     function sendTci(text) {
@@ -2557,6 +2670,15 @@
       sendTci(`vfo:0,0,${state.vfoA};`);
       sendTci(`vfo:0,1,${state.vfoB};`);
       sendTci("rx_smeter:0,0;");
+      sendTci(`tx_drive:0,${state.txDrive};`);
+      sendTci(`tx_mic_gain:0,${state.txMicGainDb.toFixed(1)};`);
+      sendTci(`tx_filter_band:0,${state.txFilterLow},${state.txFilterHigh};`);
+      sendTci(`rx_eq_enable:0,${state.rxEqEnabled};`);
+      sendTci(`tx_eq_enable:0,${state.txEqEnabled};`);
+      for (let i = 1; i <= 10; i++) {
+        sendTci(`rx_eq_band:0,${i},${state.rxEqBands[i]};`);
+        sendTci(`tx_eq_band:0,${i},${state.txEqBands[i]};`);
+      }
     }
 
     function startIq() {
@@ -2616,6 +2738,89 @@
       updateUi();
     }
 
+    // ── TX / PTT ─────────────────────────────────────────────────────────────
+
+    function buildTxMicFrame(stereoSamples) {
+      const buf = new ArrayBuffer(64 + stereoSamples.length * 4);
+      const view = new DataView(buf);
+      view.setUint32(0, 0, true);                        // receiver
+      view.setUint32(4, 48000, true);                    // sample_rate
+      view.setUint32(8, 3, true);
+      view.setUint32(20, stereoSamples.length, true);    // sample_count
+      view.setUint32(24, 2, true);                       // stream_type = 2 (TX mic)
+      view.setUint32(28, 2, true);                       // channels = 2 (stereo)
+      for (let i = 0; i < stereoSamples.length; i++) {
+        view.setFloat32(64 + i * 4, stereoSamples[i], true);
+      }
+      return buf;
+    }
+
+    async function startMicCapture() {
+      if (state.micCapturing) { return; }
+      try {
+        state.micStream = await navigator.mediaDevices.getUserMedia({
+          audio: { sampleRate: 48000, channelCount: 1, echoCancellation: false, noiseSuppression: false, autoGainControl: false },
+        });
+        const micCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 48000 });
+        const source = micCtx.createMediaStreamSource(state.micStream);
+        // ScriptProcessorNode: 2048-sample blocks (≈42 ms at 48 kHz)
+        const proc = micCtx.createScriptProcessor(2048, 1, 1);
+        proc.onaudioprocess = (evt) => {
+          if (!state.txEnabled || !state.connected || !state.ws || state.ws.readyState !== WebSocket.OPEN) { return; }
+          const mono = evt.inputBuffer.getChannelData(0);
+          // Duplicate each sample to stereo interleaved so the bridge step_by(2) returns all mono samples.
+          const stereo = new Float32Array(mono.length * 2);
+          for (let i = 0; i < mono.length; i++) {
+            stereo[i * 2] = mono[i];
+            stereo[i * 2 + 1] = mono[i];
+          }
+          state.ws.send(buildTxMicFrame(stereo));
+        };
+        // Route through a silent gain node so the ScriptProcessorNode fires
+        // without also playing mic audio through the browser's speakers.
+        const silentGain = micCtx.createGain();
+        silentGain.gain.value = 0;
+        source.connect(proc);
+        proc.connect(silentGain);
+        silentGain.connect(micCtx.destination);
+        state.micNode = { ctx: micCtx, source, proc, silentGain };
+        state.micCapturing = true;
+        logEvent("Mic capture started");
+      } catch (err) {
+        logEvent(`Mic capture failed: ${err.message}`);
+        state.txEnabled = false;
+        updateUi();
+      }
+    }
+
+    function stopMicCapture() {
+      if (!state.micCapturing) { return; }
+      if (state.micNode) {
+        state.micNode.source.disconnect();
+        state.micNode.proc.disconnect();
+        void state.micNode.ctx.close();
+        state.micNode = null;
+      }
+      if (state.micStream) {
+        state.micStream.getTracks().forEach((t) => t.stop());
+        state.micStream = null;
+      }
+      state.micCapturing = false;
+      logEvent("Mic capture stopped");
+    }
+
+    async function setPtt(active) {
+      if (active === state.txEnabled) { return; }
+      state.txEnabled = active;
+      sendTci(`trx:0,${active};`);
+      if (active) {
+        await startMicCapture();
+      } else {
+        stopMicCapture();
+      }
+      updateUi();
+    }
+
     function connectBridge() {
       if (state.ws && state.ws.readyState <= WebSocket.OPEN) {
         return;
@@ -2632,8 +2837,10 @@
       }
       localStorage.setItem("saturn.remote.wsUrl", state.wsUrl);
       ws.binaryType = "arraybuffer";
+      // Assign state.ws before callbacks so the staleness guard can reference it.
+      state.ws = ws;
       ws.onopen = () => {
-        state.ws = ws;
+        if (ws !== state.ws) { ws.close(); return; }
         state.connected = true;
         logEvent("WebSocket connected");
         requestFullState();
@@ -2641,6 +2848,7 @@
         updateUi();
       };
       ws.onmessage = (event) => {
+        if (ws !== state.ws) return;
         if (typeof event.data === "string") {
           handleTciText(event.data);
         } else {
@@ -2648,18 +2856,21 @@
         }
       };
       ws.onclose = () => {
+        if (ws !== state.ws) return;
         logEvent("WebSocket closed");
         state.connected = false;
         state.iqStreaming = false;
         state.ws = null;
         state.iqPackets = [];
+        state.txEnabled = false;
+        stopMicCapture();
         void stopRxAudio(false);
         updateUi();
       };
       ws.onerror = () => {
+        if (ws !== state.ws) return;
         logEvent("WebSocket error");
       };
-      state.ws = ws;
     }
 
     function disconnectBridge() {
@@ -2670,6 +2881,8 @@
       state.iqStreaming = false;
       state.ws = null;
       state.iqPackets = [];
+      state.txEnabled = false;
+      stopMicCapture();
       void stopRxAudio(false);
       updateUi();
     }
@@ -2767,7 +2980,41 @@
           }
         } else if (name === "trx" && args.length >= 2) {
           const on = args[1].trim().toLowerCase() === "true";
-          $("display-caption").textContent = on ? "Transmit state echoed from bridge" : state.displayCaption;
+          state.txEnabled = on;
+        } else if (name === "tx_filter_band" && args.length >= 3) {
+          const fl = Number(args[1].trim()), fh = Number(args[2].trim());
+          if (Number.isFinite(fl) && Number.isFinite(fh)) {
+            state.txFilterLow = fl;
+            state.txFilterHigh = fh;
+            const txFlEl = $("tx-filter-low");
+            const txFhEl = $("tx-filter-high");
+            if (txFlEl) txFlEl.value = `${fl}`;
+            if (txFhEl) txFhEl.value = `${fh}`;
+          }
+        } else if (name === "rx_eq_enable") {
+          const arg = (args[1] || args[0] || "").trim().toLowerCase();
+          state.rxEqEnabled = ["1", "true", "on", "yes"].includes(arg);
+        } else if (name === "tx_eq_enable") {
+          const arg = (args[1] || args[0] || "").trim().toLowerCase();
+          state.txEqEnabled = ["1", "true", "on", "yes"].includes(arg);
+        } else if (name === "rx_eq_band" && args.length >= 3) {
+          const band = Number(args[1].trim()), gain = Number(args[2].trim());
+          if (band >= 1 && band <= 10 && Number.isFinite(gain)) {
+            state.rxEqBands[band] = Math.round(gain);
+            const slider = document.getElementById(`rx-eq-band-${band}`);
+            const valEl = document.getElementById(`rx-eq-val-${band}`);
+            if (slider) slider.value = `${Math.round(gain)}`;
+            if (valEl) valEl.textContent = `${Math.round(gain)}`;
+          }
+        } else if (name === "tx_eq_band" && args.length >= 3) {
+          const band = Number(args[1].trim()), gain = Number(args[2].trim());
+          if (band >= 1 && band <= 10 && Number.isFinite(gain)) {
+            state.txEqBands[band] = Math.round(gain);
+            const slider = document.getElementById(`tx-eq-band-${band}`);
+            const valEl = document.getElementById(`tx-eq-val-${band}`);
+            if (slider) slider.value = `${Math.round(gain)}`;
+            if (valEl) valEl.textContent = `${Math.round(gain)}`;
+          }
         } else if (name === "audio_start") {
           state.audioStreaming = true;
           logEvent("Bridge acknowledged audio_start");
@@ -3169,6 +3416,99 @@
         waterfallRenderer.resize();
         updateUi();
       });
+      $("ptt-btn").addEventListener("click", () => { void setPtt(!state.txEnabled); });
+      $("tx-drive").addEventListener("input", () => {
+        state.txDrive = Math.round(Number($("tx-drive").value));
+        updateUi();
+      });
+      $("tx-drive").addEventListener("change", () => {
+        sendTci(`tx_drive:0,${state.txDrive};`);
+      });
+      $("tx-mic-gain").addEventListener("input", () => {
+        state.txMicGainDb = Number($("tx-mic-gain").value);
+        updateUi();
+      });
+      $("tx-mic-gain").addEventListener("change", () => {
+        sendTci(`tx_mic_gain:0,${state.txMicGainDb.toFixed(1)};`);
+      });
+      $("tx-filter-low").addEventListener("input", () => {
+        state.txFilterLow = Number($("tx-filter-low").value);
+        updateUi();
+      });
+      $("tx-filter-low").addEventListener("change", () => {
+        sendTci(`tx_filter_band:0,${state.txFilterLow},${state.txFilterHigh};`);
+      });
+      $("tx-filter-high").addEventListener("input", () => {
+        state.txFilterHigh = Number($("tx-filter-high").value);
+        updateUi();
+      });
+      $("tx-filter-high").addEventListener("change", () => {
+        sendTci(`tx_filter_band:0,${state.txFilterLow},${state.txFilterHigh};`);
+      });
+      $("rx-eq-enable-btn").addEventListener("click", () => {
+        state.rxEqEnabled = !state.rxEqEnabled;
+        sendTci(`rx_eq_enable:0,${state.rxEqEnabled};`);
+        updateUi();
+      });
+      $("tx-eq-enable-btn").addEventListener("click", () => {
+        state.txEqEnabled = !state.txEqEnabled;
+        sendTci(`tx_eq_enable:0,${state.txEqEnabled};`);
+        updateUi();
+      });
+    }
+
+    // ── EQ Grid Builder ──────────────────────────────────────────────────────
+
+    const EQ_FREQS = ["32","63","125","250","500","1k","2k","4k","8k","16k"];
+
+    function buildEqGrid(gridId, prefix) {
+      const grid = $(gridId);
+      if (!grid) return;
+      grid.innerHTML = "";
+      for (let i = 1; i <= 10; i++) {
+        const band = document.createElement("div");
+        band.className = "eq-band";
+
+        const freq = document.createElement("span");
+        freq.className = "eq-freq";
+        freq.textContent = EQ_FREQS[i - 1];
+
+        const slider = document.createElement("input");
+        slider.type = "range";
+        slider.id = `${prefix}-eq-band-${i}`;
+        slider.min = "-20";
+        slider.max = "20";
+        slider.step = "1";
+        slider.value = "0";
+
+        const val = document.createElement("span");
+        val.className = "eq-val";
+        val.id = `${prefix}-eq-val-${i}`;
+        val.textContent = "0";
+
+        slider.addEventListener("input", () => {
+          const gain = Number(slider.value);
+          if (prefix === "rx") {
+            state.rxEqBands[i] = gain;
+          } else {
+            state.txEqBands[i] = gain;
+          }
+          val.textContent = `${gain}`;
+        });
+        slider.addEventListener("change", () => {
+          const gain = Number(slider.value);
+          if (prefix === "rx") {
+            sendTci(`rx_eq_band:0,${i},${gain};`);
+          } else {
+            sendTci(`tx_eq_band:0,${i},${gain};`);
+          }
+        });
+
+        band.appendChild(freq);
+        band.appendChild(slider);
+        band.appendChild(val);
+        grid.appendChild(band);
+      }
     }
 
     // ── Analog Meters ────────────────────────────────────────────────────────
@@ -3331,6 +3671,8 @@
       $("display-zoom").value = `${state.displayZoom}`;
       $("filter-low").value = `${state.filterLow}`;
       $("filter-high").value = `${state.filterHigh}`;
+      buildEqGrid("rx-eq-grid", "rx");
+      buildEqGrid("tx-eq-grid", "tx");
       logEvent("Saturn Remote loaded");
       logEvent("Current bridge target: TCI over WebSocket");
       logEvent(`Display backends: spectrum=${spectrumRenderer.backend}, waterfall=${waterfallRenderer.backend}`);

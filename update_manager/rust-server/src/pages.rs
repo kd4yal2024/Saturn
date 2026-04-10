@@ -1,6 +1,6 @@
 use axum::{
     extract::State,
-    http::StatusCode,
+    http::{header, StatusCode},
     response::{Html, IntoResponse, Response},
 };
 use std::path::Path;
@@ -47,6 +47,10 @@ pub async fn monitor_handler(State(state): State<AppState>) -> impl IntoResponse
     serve_page(&state.webroot, "monitor.html").await
 }
 
+pub async fn remote_handler(State(state): State<AppState>) -> impl IntoResponse {
+    serve_page(&state.webroot, "saturn-remote.html").await
+}
+
 pub async fn healthz() -> impl IntoResponse {
     StatusCode::OK
 }
@@ -73,6 +77,10 @@ pub fn route_to_page(path: &str) -> Option<&'static str> {
         | "/saturn/pihpsdr.html" => Some("pihpsdr.html"),
         "/deskhpsdr" | "/deskhpsdr/" | "/deskhpsdr.html" | "/saturn/deskhpsdr"
         | "/saturn/deskhpsdr/" | "/saturn/deskhpsdr.html" => Some("deskhpsdr.html"),
+        "/remote" | "/remote/" | "/remote.html" | "/saturn-remote" | "/saturn-remote/"
+        | "/saturn-remote.html" | "/saturn/remote" | "/saturn/remote/"
+        | "/saturn/remote.html" | "/saturn/saturn-remote" | "/saturn/saturn-remote/"
+        | "/saturn/saturn-remote.html" => Some("saturn-remote.html"),
         "/monitor" | "/monitor/" | "/monitor.html" | "/saturn/monitor" | "/saturn/monitor/"
         | "/saturn/monitor.html" => Some("monitor.html"),
         _ => None,
@@ -92,7 +100,11 @@ pub async fn fallback_handler(
 pub async fn serve_page(webroot: &Path, page: &str) -> Response {
     let page_path = webroot.join(page);
     match tokio::fs::read_to_string(&page_path).await {
-        Ok(body) => Html(body).into_response(),
+        Ok(body) => (
+            [(header::CACHE_CONTROL, "no-cache, no-store, must-revalidate")],
+            Html(body),
+        )
+            .into_response(),
         Err(_) => (StatusCode::NOT_FOUND, "page not found").into_response(),
     }
 }
@@ -149,6 +161,13 @@ mod tests {
         assert_eq!(route_to_page("/saturngo"), Some("saturngo.html"));
         assert_eq!(route_to_page("/saturn-go"), Some("saturngo.html"));
         assert_eq!(route_to_page("/saturn/saturngo.html"), Some("saturngo.html"));
+    }
+
+    #[test]
+    fn test_remote_aliases() {
+        assert_eq!(route_to_page("/remote"), Some("saturn-remote.html"));
+        assert_eq!(route_to_page("/saturn-remote"), Some("saturn-remote.html"));
+        assert_eq!(route_to_page("/saturn/remote.html"), Some("saturn-remote.html"));
     }
 
     #[test]

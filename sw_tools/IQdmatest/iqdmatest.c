@@ -21,6 +21,7 @@
 #include <assert.h>
 #include <fcntl.h>
 #include <getopt.h>
+#include <inttypes.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -49,11 +50,10 @@
 // dump a memory buffer to terminal in hex
 // should be a multiple of 16 bytes long!
 //
-void DumpMemoryBuffer(char* MemPtr, uint32_t Length)
+void DumpMemoryBuffer(const unsigned char *MemPtr, uint32_t Length)
 {
-	unsigned char Byte;
 	uint32_t ByteCntr;
-  uint32_t RowCntr;
+	uint32_t RowCntr;
 
 	for (RowCntr=0; RowCntr < Length/16; RowCntr++)
 	{
@@ -76,7 +76,7 @@ void DumpMemoryBuffer(char* MemPtr, uint32_t Length)
 // Length: number of bytes to copy
 // AXIAddr: offset address in the FPGA window 
 //
-int DMAReadFromFPGA(int fd, char*DestData, uint32_t Length, uint32_t AXIAddr)
+int DMAReadFromFPGA(int fd, unsigned char *DestData, uint32_t Length, uint32_t AXIAddr)
 {
 	ssize_t rc;									// response code
 	off_t OffsetAddr;
@@ -85,7 +85,7 @@ int DMAReadFromFPGA(int fd, char*DestData, uint32_t Length, uint32_t AXIAddr)
 	rc = lseek(fd, OffsetAddr, SEEK_SET);
 	if (rc != OffsetAddr)
 	{
-		printf("seek off 0x%lx != 0x%lx.\n", rc, OffsetAddr);
+		printf("seek off 0x%jx != 0x%jx.\n", (uintmax_t)rc, (uintmax_t)OffsetAddr);
 		perror("seek file");
 		return -EIO;
 	}
@@ -94,7 +94,7 @@ int DMAReadFromFPGA(int fd, char*DestData, uint32_t Length, uint32_t AXIAddr)
 	rc = read(fd, DestData, Length);
 	if (rc < 0)
 	{
-		printf("read 0x%lx @ 0x%lx failed %ld.\n", Length, OffsetAddr, rc);
+		printf("read 0x%" PRIx32 " @ 0x%jx failed %zd.\n", Length, (uintmax_t)OffsetAddr, rc);
 		perror("DMA read");
 		return -EIO;
 	}
@@ -107,9 +107,11 @@ uint32_t RegisterRead(uint32_t Address)
 {
 	uint32_t result = 0;
 
-    ssize_t nread = pread(register_fd, &result, sizeof(result), (off_t) Address);
-    if (nread != sizeof(result))
-        printf("ERROR: register read: addr=0x%08X   error=%s\n",Address, strerror(errno));
+	ssize_t nread = pread(register_fd, &result, sizeof(result), (off_t) Address);
+	if (nread != sizeof(result))
+	{
+		printf("ERROR: register read: addr=0x%08X   error=%s\n", Address, strerror(errno));
+	}
 	return result;
 }
 
@@ -119,9 +121,11 @@ uint32_t RegisterRead(uint32_t Address)
 //
 void RegisterWrite(uint32_t Address, uint32_t Data)
 {
-    ssize_t nsent = pwrite(register_fd, &Data, sizeof(Data), (off_t) Address); 
-    if (nsent != sizeof(Data))
-        printf("ERROR: Write: addr=0x%08X   error=%s\n",Address, strerror(errno));
+	ssize_t nsent = pwrite(register_fd, &Data, sizeof(Data), (off_t) Address);
+	if (nsent != sizeof(Data))
+	{
+		printf("ERROR: Write: addr=0x%08X   error=%s\n", Address, strerror(errno));
+	}
 }
 
 
@@ -160,10 +164,10 @@ unsigned char * CSVWrite(FILE* fd, unsigned char* Ptr, uint32_t* Counter)
 //
 // main program
 //
-int main(int argc, char *argv[])
+int main(void)
 {
 	int DMAReadfile_fd = -1;											// DMA read file device
-  	char* ReadBuffer = NULL;											// data for DMA write
+	unsigned char *ReadBuffer = NULL;										// data for DMA write
 	uint32_t BufferSize = 32768;
 
 	uint32_t RegisterValue;
@@ -171,8 +175,6 @@ int main(int argc, char *argv[])
 	FILE *fp;
 	uint32_t SampleCounter = 0;
 
-	uint32_t Head = 0;											// byte address of 1st free location
-	uint32_t Read = 0;											// read point in buffer
 	unsigned char* ReadPtr;									// pointer for reading out an I or Q sample
 	unsigned char* HeadPtr;									// ptr to 1st free location
 	unsigned char* BasePtr;									// ptr to DMA location
@@ -180,8 +182,7 @@ int main(int argc, char *argv[])
 //
 // initialise. Create memory buffers and open DMA file devices
 //
-	posix_memalign((void **)&ReadBuffer, VALIGNMENT, BufferSize);
-	if(!ReadBuffer)
+	if (posix_memalign((void **)&ReadBuffer, VALIGNMENT, BufferSize) != 0 || !ReadBuffer)
 	{
 		printf("read buffer allocation failed\n");
 		goto out;
@@ -305,4 +306,3 @@ out:
 
 	free(ReadBuffer);
 }
-

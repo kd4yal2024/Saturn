@@ -16,7 +16,7 @@ use crate::middleware::csrf_protect;
 use crate::monitor::{get_system_data, network_test};
 use crate::pages::{
     backup_handler, custom_handler, deskhpsdr_handler, fallback_handler, fpga_handler,
-    healthz, monitor_handler, p23test_handler, pihpsdr_handler, root_handler,
+    healthz, monitor_handler, p23test_handler, pihpsdr_handler, remote_handler, root_handler,
     saturngo_handler, update_handler,
 };
 use crate::update::{
@@ -210,6 +210,10 @@ async fn main() {
         .route("/pihpsdr.html", get(pihpsdr_handler))
         .route("/deskhpsdr", get(deskhpsdr_handler))
         .route("/deskhpsdr.html", get(deskhpsdr_handler))
+        .route("/remote", get(remote_handler))
+        .route("/remote.html", get(remote_handler))
+        .route("/saturn-remote", get(remote_handler))
+        .route("/saturn-remote.html", get(remote_handler))
         .route("/monitor", get(monitor_handler))
         .route("/monitor.html", get(monitor_handler))
         .route("/healthz", get(healthz))

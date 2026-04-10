@@ -24,6 +24,7 @@
 #include <string.h>
 #include <fcntl.h>
 #include <inttypes.h>
+#include <poll.h>
 #include <sys/time.h>
 #include <sys/ioctl.h>
 #include <sys/socket.h>
@@ -61,6 +62,8 @@ bool CATDebugPrint = false;                 // true if to print generated CAT me
 #define VCATMAXPAYLOADSIZE 63               // allow longest parsed string payload
 #define VOPSTRSIZE (VCATCMDPREFIXSIZE + VCATMAXPAYLOADSIZE + VCATCMDTERMINATORSIZE)
 #define VCATPARSESTRINGMAX 63               // max parsed CAT parameter bytes
+#define VCATCONNECT_TIMEOUT_MS 750          // keep startup retries responsive instead of blocking for OS TCP timeout
+#define VCATCONNECT_RETRY_DELAY_US 200000   // short backoff between CAT connect attempts
 //
 // CAT output buffer
 //
@@ -105,6 +108,87 @@ long DivisorTable[] =
 // this array holds a 32 bit representation of the CAT command
 // to so a compare in a single test
 unsigned long GCATMatch[VNUMCATCMDS];
+
+static int ConnectSocketWithTimeout(int Socketfd, const struct sockaddr_in* AddressPtr, int TimeoutMs)
+{
+  int Flags;
+  int Result;
+  int SavedErrno;
+  struct pollfd PollFd;
+  int SocketError = 0;
+  socklen_t SocketErrorLength = sizeof(SocketError);
+
+  if((Socketfd < 0) || (AddressPtr == NULL))
+  {
+    errno = EINVAL;
+    return -1;
+  }
+
+  Flags = fcntl(Socketfd, F_GETFL, 0);
+  if(Flags < 0)
+    return -1;
+
+  if(fcntl(Socketfd, F_SETFL, Flags | O_NONBLOCK) < 0)
+    return -1;
+
+  Result = connect(Socketfd, (const struct sockaddr*)AddressPtr, sizeof(*AddressPtr));
+  if(Result == 0)
+  {
+    (void)fcntl(Socketfd, F_SETFL, Flags);
+    return 0;
+  }
+
+  if(errno != EINPROGRESS)
+  {
+    SavedErrno = errno;
+    (void)fcntl(Socketfd, F_SETFL, Flags);
+    errno = SavedErrno;
+    return -1;
+  }
+
+  memset(&PollFd, 0, sizeof(PollFd));
+  PollFd.fd = Socketfd;
+  PollFd.events = POLLOUT;
+  do
+  {
+    Result = poll(&PollFd, 1, TimeoutMs);
+  } while((Result < 0) && (errno == EINTR));
+
+  if(Result == 0)
+  {
+    (void)fcntl(Socketfd, F_SETFL, Flags);
+    errno = ETIMEDOUT;
+    return -1;
+  }
+
+  if(Result < 0)
+  {
+    SavedErrno = errno;
+    (void)fcntl(Socketfd, F_SETFL, Flags);
+    errno = SavedErrno;
+    return -1;
+  }
+
+  if(getsockopt(Socketfd, SOL_SOCKET, SO_ERROR, &SocketError, &SocketErrorLength) < 0)
+  {
+    SavedErrno = errno;
+    (void)fcntl(Socketfd, F_SETFL, Flags);
+    errno = SavedErrno;
+    return -1;
+  }
+
+  if(SocketError != 0)
+  {
+    (void)fcntl(Socketfd, F_SETFL, Flags);
+    errno = SocketError;
+    return -1;
+  }
+
+  if(fcntl(Socketfd, F_SETFL, Flags) < 0)
+    return -1;
+
+  return 0;
+}
 
 
 //
@@ -671,6 +755,7 @@ void* CATHandlerThread(__attribute__((unused)) void *arg)
     char SendBuffer[1024] = {0};
     unsigned int TXMessageLength;
     int SendError = 0;
+    int ConnectFailureCount = 0;
 
 //    bool DebugMessageSent = false;
     atomic_store(&CATThreadRunning, true);
@@ -727,16 +812,19 @@ void* CATHandlerThread(__attribute__((unused)) void *arg)
       addr_cat.sin_port = htons((uint16_t)ActiveCATPort);
       printf("Connecting CAT socket to port %d\n", ActiveCATPort);
 
-      if(connect(CATSocketid, (struct sockaddr *)&addr_cat, sizeof(struct sockaddr_in)) < 0)
+      if(ConnectSocketWithTimeout(CATSocketid, &addr_cat, VCATCONNECT_TIMEOUT_MS) < 0)
       {
-          perror("CAT connect");
+          if((ConnectFailureCount++ % 10) == 0)
+            perror("CAT connect");
           close(CATSocketid);
-          atomic_store(&CATPort, 0);
           atomic_store(&CATPortAssigned, false);
           atomic_store(&ThreadActive, false);
-          atomic_store(&CATThreadRunning, false);
-          return NULL;
+          if(!atomic_load(&SDRActive) || atomic_load(&SignalThreadEnd) || (ActiveCATPort != atomic_load(&CATPort)))
+            break;
+          usleep(VCATCONNECT_RETRY_DELAY_US);
+          continue;
       }
+      ConnectFailureCount = 0;
       atomic_store(&ThreadActive, true);
       atomic_store(&CATPortAssigned, true);
 

@@ -221,6 +221,12 @@ pub struct DesiredRadioState {
     pub ddc0_sample_size_bits: u8,
     pub tx_drive: u8,
     pub tx_mic_gain_db: f64,
+    pub tx_filter_low_hz: i32,
+    pub tx_filter_high_hz: i32,
+    pub rx_eq_enabled: bool,
+    pub rx_eq_bands: [i32; 11],
+    pub tx_eq_enabled: bool,
+    pub tx_eq_bands: [i32; 11],
 }
 
 #[derive(Clone, Debug, Default)]
@@ -272,6 +278,12 @@ impl RadioModel {
                 ddc0_sample_size_bits,
                 tx_drive: 200,
                 tx_mic_gain_db: 0.0,
+                tx_filter_low_hz: 300,
+                tx_filter_high_hz: 3000,
+                rx_eq_enabled: false,
+                rx_eq_bands: [0i32; 11],
+                tx_eq_enabled: false,
+                tx_eq_bands: [0i32; 11],
             },
             observed: ObservedRadioState::default(),
         }
