@@ -69,6 +69,133 @@ impl DemodMode {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum NoiseReductionMode {
+    Off,
+    Nr1,
+    Nr2,
+    Nr3,
+    Nr4,
+}
+
+impl Default for NoiseReductionMode {
+    fn default() -> Self {
+        Self::Off
+    }
+}
+
+impl fmt::Display for NoiseReductionMode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let text = match self {
+            Self::Off => "OFF",
+            Self::Nr1 => "NR1",
+            Self::Nr2 => "NR2",
+            Self::Nr3 => "NR3",
+            Self::Nr4 => "NR4",
+        };
+        f.write_str(text)
+    }
+}
+
+impl NoiseReductionMode {
+    pub fn from_tci(text: &str) -> Self {
+        match text.trim().to_ascii_uppercase().as_str() {
+            "0" | "OFF" => Self::Off,
+            "1" | "NR1" | "ANR" => Self::Nr1,
+            "2" | "NR2" | "EMNR" => Self::Nr2,
+            "3" | "NR3" | "RNNR" => Self::Nr3,
+            "4" | "NR4" | "SBNR" => Self::Nr4,
+            _ => Self::Off,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum NoiseBlankerMode {
+    Off,
+    Nb1,
+    Nb2,
+}
+
+impl Default for NoiseBlankerMode {
+    fn default() -> Self {
+        Self::Off
+    }
+}
+
+impl fmt::Display for NoiseBlankerMode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let text = match self {
+            Self::Off => "OFF",
+            Self::Nb1 => "NB1",
+            Self::Nb2 => "NB2",
+        };
+        f.write_str(text)
+    }
+}
+
+impl NoiseBlankerMode {
+    pub fn from_tci(text: &str) -> Self {
+        match text.trim().to_ascii_uppercase().as_str() {
+            "0" | "OFF" => Self::Off,
+            "1" | "NB1" | "NB" => Self::Nb1,
+            "2" | "NB2" | "NOB" => Self::Nb2,
+            _ => Self::Off,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AgcMode {
+    Off,
+    Long,
+    Slow,
+    Medium,
+    Fast,
+}
+
+impl Default for AgcMode {
+    fn default() -> Self {
+        Self::Medium
+    }
+}
+
+impl fmt::Display for AgcMode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let text = match self {
+            Self::Off => "OFF",
+            Self::Long => "LONG",
+            Self::Slow => "SLOW",
+            Self::Medium => "MEDIUM",
+            Self::Fast => "FAST",
+        };
+        f.write_str(text)
+    }
+}
+
+impl AgcMode {
+    pub fn from_tci(text: &str) -> Self {
+        match text.trim().to_ascii_uppercase().as_str() {
+            "0" | "OFF" => Self::Off,
+            "1" | "LONG" => Self::Long,
+            "2" | "SLOW" => Self::Slow,
+            "3" | "MEDIUM" | "MED" => Self::Medium,
+            "4" | "FAST" => Self::Fast,
+            _ => Self::Medium,
+        }
+    }
+
+    pub fn wdsp_value(self) -> i32 {
+        match self {
+            Self::Off => 0,
+            Self::Long => 1,
+            Self::Slow => 2,
+            Self::Medium => 3,
+            Self::Fast => 4,
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct DesiredRadioState {
     pub running: bool,
@@ -82,10 +209,18 @@ pub struct DesiredRadioState {
     pub rx_antenna: u8,
     pub mode: DemodMode,
     pub rx_volume_db: f64,
+    pub rx_noise_reduction_mode: NoiseReductionMode,
+    pub rx_noise_reduction_level: f64,
+    pub nb_mode: NoiseBlankerMode,
+    pub nb_threshold: f64,
+    pub anf_enabled: bool,
+    pub agc_mode: AgcMode,
     pub filter_low_hz: i32,
     pub filter_high_hz: i32,
     pub ddc0_sample_rate_khz: u16,
     pub ddc0_sample_size_bits: u8,
+    pub tx_drive: u8,
+    pub tx_mic_gain_db: f64,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -114,7 +249,7 @@ impl RadioModel {
     ) -> Self {
         Self {
             desired: DesiredRadioState {
-                running: true,
+                running: false,
                 tx_enabled: false,
                 rx_ddc_index: rx_ddc_index.min(9),
                 vfo_a_hz: ddc0_frequency_hz,
@@ -124,11 +259,19 @@ impl RadioModel {
                 ddc0_adc: ddc0_adc.min(2),
                 rx_antenna: 1,
                 mode: DemodMode::Usb,
-                rx_volume_db: -20.0,
+                rx_volume_db: -10.0,
+                rx_noise_reduction_mode: NoiseReductionMode::Off,
+                rx_noise_reduction_level: 100.0,
+                nb_mode: NoiseBlankerMode::Off,
+                nb_threshold: 4.95,
+                anf_enabled: false,
+                agc_mode: AgcMode::Medium,
                 filter_low_hz: 300,
                 filter_high_hz: 3000,
                 ddc0_sample_rate_khz,
                 ddc0_sample_size_bits,
+                tx_drive: 200,
+                tx_mic_gain_db: 0.0,
             },
             observed: ObservedRadioState::default(),
         }
@@ -145,7 +288,6 @@ impl RadioModel {
 
     pub fn apply_ddc_frame(&mut self, frame: DdcIqFrame) {
         if frame.ddc_index == self.desired.rx_ddc_index {
-            self.observed.ddc0_meter_dbm = Some(frame.approx_meter_dbm);
             self.observed.ddc0_packets += 1;
             self.observed.last_ddc0_frame = Some(frame);
         }
@@ -219,7 +361,7 @@ impl RadioModel {
             .unwrap_or_else(|| format!("ddc{}=waiting", self.desired.rx_ddc_index));
 
         format!(
-            "vfoA={} vfoB={} dds={} ddc={} adc={} rxant=ANT{} mode={} vol={:.1}dB filter={}..{} rate={}k {} | {} | {} | counters hp={} ddc{}={}",
+            "vfoA={} vfoB={} dds={} ddc={} adc={} rxant=ANT{} mode={} vol={:.1}dB nr={}({:.0}%) nb={} anf={} agc={} tx={} drive={} filter={}..{} rate={}k {} | {} | {} | counters hp={} ddc{}={}",
             self.desired.vfo_a_hz,
             self.desired.vfo_b_hz,
             self.desired.iq_center_hz,
@@ -228,6 +370,13 @@ impl RadioModel {
             self.desired.rx_antenna.max(1).min(3),
             self.desired.mode,
             self.desired.rx_volume_db,
+            self.desired.rx_noise_reduction_mode,
+            self.desired.rx_noise_reduction_level,
+            self.desired.nb_mode,
+            if self.desired.anf_enabled { "ON" } else { "OFF" },
+            self.desired.agc_mode,
+            if self.desired.tx_enabled { "TX" } else { "RX" },
+            self.desired.tx_drive,
             self.desired.filter_low_hz,
             self.desired.filter_high_hz,
             self.desired.ddc0_sample_rate_khz,

@@ -8,6 +8,8 @@ pub const DDC_SPECIFIC_PACKET_SIZE: usize = 1444;
 pub const HIGH_PRIORITY_TO_SDR_PACKET_SIZE: usize = 1444;
 pub const HIGH_PRIORITY_FROM_SDR_PACKET_SIZE: usize = 60;
 pub const DDC_IQ_PACKET_SIZE: usize = 1444;
+pub const DUC_IQ_PACKET_SIZE: usize = 1444;
+pub const DUC_IQ_SAMPLES: usize = 240;
 
 #[derive(Clone, Copy, Debug)]
 pub struct DdcSetup {
@@ -99,8 +101,27 @@ pub fn build_general_packet(port_map: &P2PortMap) -> [u8; GENERAL_PACKET_SIZE] {
     packet
 }
 
-pub fn build_duc_specific_packet() -> [u8; DUC_SPECIFIC_PACKET_SIZE] {
-    [0u8; DUC_SPECIFIC_PACKET_SIZE]
+pub fn build_duc_specific_packet(sequence: u32) -> [u8; DUC_SPECIFIC_PACKET_SIZE] {
+    let mut packet = [0u8; DUC_SPECIFIC_PACKET_SIZE];
+    write_u32_be(&mut packet, 0, sequence);
+    packet[4] = 1; // 1 DUC stream enabled
+    packet
+}
+
+/// Build a 1444-byte DUC IQ packet from up to 240 IQ pairs (interleaved I,Q f32).
+/// Each sample is encoded as a signed 24-bit big-endian integer.
+pub fn build_duc_iq_packet(sequence: u32, iq_samples: &[f32]) -> [u8; DUC_IQ_PACKET_SIZE] {
+    let mut packet = [0u8; DUC_IQ_PACKET_SIZE];
+    write_u32_be(&mut packet, 0, sequence);
+    let pair_count = (iq_samples.len() / 2).min(DUC_IQ_SAMPLES);
+    for i in 0..pair_count {
+        let i_val = (iq_samples[i * 2].clamp(-1.0, 1.0) * 8_388_607.0).round() as i32;
+        let q_val = (iq_samples[i * 2 + 1].clamp(-1.0, 1.0) * 8_388_607.0).round() as i32;
+        let offset = 4 + i * 6;
+        write_signed_24_be(&mut packet, offset, i_val);
+        write_signed_24_be(&mut packet, offset + 3, q_val);
+    }
+    packet
 }
 
 pub fn build_ddc_specific_packet(setup: DdcSetup) -> [u8; DDC_SPECIFIC_PACKET_SIZE] {
@@ -177,8 +198,8 @@ pub fn parse_high_priority_from_sdr(packet: &[u8]) -> Option<HighPriorityFromSdr
         adc1_peak: read_u16_be(packet, 39),
         adc2_peak: read_u16_be(packet, 41),
         supply_voltage: read_u16_be(packet, 49),
-        user_analog1: read_u16_be(packet, 57),
-        user_analog2: read_u16_be(packet, 55),
+        user_analog1: read_u16_be(packet, 55),
+        user_analog2: read_u16_be(packet, 57),
         user_io_bits: packet[59],
     })
 }
@@ -265,6 +286,13 @@ fn write_u16_le(packet: &mut [u8], offset: usize, value: u16) {
 fn write_u32_be(packet: &mut [u8], offset: usize, value: u32) {
     let bytes = value.to_be_bytes();
     packet[offset..offset + 4].copy_from_slice(&bytes);
+}
+
+fn write_signed_24_be(packet: &mut [u8], offset: usize, value: i32) {
+    let clamped = value.clamp(-(1 << 23), (1 << 23) - 1);
+    packet[offset] = ((clamped >> 16) & 0xFF) as u8;
+    packet[offset + 1] = ((clamped >> 8) & 0xFF) as u8;
+    packet[offset + 2] = (clamped & 0xFF) as u8;
 }
 
 #[cfg(test)]

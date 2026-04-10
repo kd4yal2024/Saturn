@@ -14,7 +14,7 @@ use config::BridgeConfig;
 use p2::session::{P2Event, P2Session};
 use radio_model::RadioModel;
 use tci::{TciCommand, TciFrontend};
-use wdsp::WdspRxEngine;
+use wdsp::{WdspRxEngine, WdspTxEngine, DUC_IQ_SAMPLES_PER_PACKET};
 
 fn main() -> Result<(), Box<dyn Error>> {
     let config = BridgeConfig::from_env();
@@ -31,6 +31,10 @@ fn main() -> Result<(), Box<dyn Error>> {
         let model = radio_model.lock().unwrap();
         WdspRxEngine::new(&model)?
     };
+    let mut wdsp_tx = {
+        let model = radio_model.lock().unwrap();
+        WdspTxEngine::new(&model)
+    };
     let stop_flag = Arc::new(AtomicBool::new(false));
 
     println!(
@@ -40,11 +44,13 @@ fn main() -> Result<(), Box<dyn Error>> {
         config.tci_bind_addr
     );
 
-    session.bootstrap(&radio_model)?;
     let hp_thread = session.spawn_high_priority_loop(radio_model.clone(), stop_flag.clone())?;
 
     let mut last_status = Instant::now();
     loop {
+        let mut needs_bootstrap = false;
+        let mut needs_stop = false;
+
         while let Some(command) = tci.try_recv_command() {
             let mut model = radio_model.lock().unwrap();
             let mut reconfigure_ddc = false;
@@ -79,7 +85,20 @@ fn main() -> Result<(), Box<dyn Error>> {
                     model.desired.rx_antenna = antenna.clamp(1, 3);
                 }
                 TciCommand::SetRxVolume(volume_db) => {
-                    model.desired.rx_volume_db = volume_db.clamp(-40.0, 0.0);
+                    model.desired.rx_volume_db = volume_db.clamp(-40.0, 12.0);
+                }
+                TciCommand::SetRxNoiseReductionMode(mode) => {
+                    model.desired.rx_noise_reduction_mode = mode;
+                }
+                TciCommand::SetRxNoiseReductionEnabled(enabled) => {
+                    model.desired.rx_noise_reduction_mode = if enabled {
+                        radio_model::NoiseReductionMode::Nr1
+                    } else {
+                        radio_model::NoiseReductionMode::Off
+                    };
+                }
+                TciCommand::SetRxNoiseReductionLevel(level) => {
+                    model.desired.rx_noise_reduction_level = level.clamp(0.0, 100.0);
                 }
                 TciCommand::SetIqSampleRate(rate_hz) => {
                     let rate_khz = (rate_hz / 1000).clamp(48, u16::MAX as u32) as u16;
@@ -121,6 +140,55 @@ fn main() -> Result<(), Box<dyn Error>> {
                         );
                     }
                 }
+                TciCommand::ClientConnected => {
+                    model.desired.running = true;
+                    needs_bootstrap = true;
+                    println!("saturn-bridge: TCI client active — taking P2 controller role");
+                }
+                TciCommand::ClientDisconnected => {
+                    model.desired.running = false;
+                    needs_stop = true;
+                    println!("saturn-bridge: no TCI clients — releasing P2 controller role");
+                }
+                TciCommand::SetTxEnabled(enabled) => {
+                    model.desired.tx_enabled = enabled;
+                    wdsp_tx.set_active(enabled);
+                }
+                TciCommand::SetNoiseBlankerMode(mode) => {
+                    model.desired.nb_mode = mode;
+                }
+                TciCommand::SetNoiseBlankerThreshold(thresh) => {
+                    model.desired.nb_threshold = thresh;
+                }
+                TciCommand::SetAnfEnabled(enabled) => {
+                    model.desired.anf_enabled = enabled;
+                }
+                TciCommand::SetAgcMode(mode) => {
+                    model.desired.agc_mode = mode;
+                }
+                TciCommand::SetTxDrive(drive) => {
+                    model.desired.tx_drive = drive;
+                }
+                TciCommand::SetTxMicGain(gain_db) => {
+                    model.desired.tx_mic_gain_db = gain_db.clamp(-20.0, 20.0);
+                }
+                TciCommand::MicAudioFrame(samples) => {
+                    // Extract mono from interleaved stereo (or treat as mono).
+                    let mono: Vec<f32> = if samples.len() % 2 == 0 {
+                        // Stereo interleaved: take every other sample (left channel)
+                        samples.iter().step_by(2).copied().collect()
+                    } else {
+                        samples
+                    };
+                    wdsp_tx.push_mic(&mono);
+                    // Drain completed 240-sample DUC IQ packets
+                    let floats_per_packet = DUC_IQ_SAMPLES_PER_PACKET * 2;
+                    while wdsp_tx.pending_iq.len() >= floats_per_packet {
+                        let chunk: Vec<f32> =
+                            wdsp_tx.pending_iq.drain(..floats_per_packet).collect();
+                        session.send_duc_iq(&chunk)?;
+                    }
+                }
             }
 
             if reconfigure_ddc {
@@ -132,7 +200,17 @@ fn main() -> Result<(), Box<dyn Error>> {
                 )?;
             }
             wdsp.sync_model(&model)?;
+            wdsp_tx.sync_model(&model);
             tci.publish_radio_state(&model);
+        }
+
+        // bootstrap() acquires the radio_model lock internally, so it must be called
+        // after the command loop has released it, never while holding it.
+        if needs_bootstrap {
+            session.bootstrap(&radio_model)?;
+        }
+        if needs_stop {
+            session.send_stop()?;
         }
 
         if let Some(event) = session.recv_event()? {
@@ -150,6 +228,9 @@ fn main() -> Result<(), Box<dyn Error>> {
                     tci.publish_iq_frame(sample_rate_hz, &frame.iq_samples);
                     for audio_frame in wdsp.push_iq(&frame.iq_samples) {
                         tci.publish_audio_frame(wdsp.audio_sample_rate_hz(), &audio_frame);
+                    }
+                    if let Some(dbm) = wdsp.smeter_dbm() {
+                        model.observed.ddc0_meter_dbm = Some(dbm);
                     }
                     model.apply_ddc_frame(frame);
                 }

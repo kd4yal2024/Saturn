@@ -1,16 +1,41 @@
 use std::collections::VecDeque;
 use std::error::Error;
+use std::ffi::c_char;
 use std::fmt;
+use std::sync::Once;
 
-use crate::radio_model::{DemodMode, RadioModel};
+use crate::radio_model::{AgcMode, DemodMode, NoiseBlankerMode, NoiseReductionMode, RadioModel};
 
 const WDSP_RX_CHANNEL: i32 = 0;
+const WDSP_TX_CHANNEL: i32 = 1;
 const WDSP_AUDIO_RATE_HZ: u32 = 48_000;
 const WDSP_DSP_SIZE: usize = 64;
 const WDSP_AUDIO_FRAME_FLOATS: usize = 2048;
+const WDSP_ANR_TAPS: i32 = 64;
+const WDSP_ANR_DELAY: i32 = 16;
+const WDSP_NR_POSITION_POST_AGC: i32 = 1;
+const WDSP_NR2_GAIN_METHOD: i32 = 2;
+const WDSP_NR2_NPE_METHOD: i32 = 0;
+const WDSP_NR2_TRAIN_ZETA_THRESH: f64 = -0.5;
+const WDSP_NR2_TRAIN_T2: f64 = 0.2;
+const WDSP_NR4_WHITENING_FACTOR: f32 = 0.0;
+const WDSP_NR4_NOISE_SCALING_TYPE: i32 = 0;
 
+// NoiseBlanker defaults (from pihpsdr receiver.c)
+const NB_TAU: f64 = 0.00001;
+const NB_HANGTIME: f64 = 0.00001;
+const NB_ADVTIME: f64 = 0.00001;
+
+// AGC modes (wdsp values)
+const AGC_OFF: i32 = 0;
+#[allow(dead_code)]
 const AGC_MEDIUM: i32 = 3;
 const AGC_FAST: i32 = 4;
+
+// RXA meter type indices (from wdsp/RXA.h)
+const RXA_S_AV: i32 = 1; // average S-meter value in dBm
+
+static LOAD_RNNR_MODEL: Once = Once::new();
 
 unsafe extern "C" {
     fn OpenChannel(
@@ -29,7 +54,10 @@ unsafe extern "C" {
         bfo: i32,
     );
     fn CloseChannel(channel: i32);
+    fn SetChannelState(channel: i32, state: i32, dmode: i32) -> i32;
     fn fexchange0(channel: i32, input: *const f64, output: *mut f64, error: *mut i32);
+
+    // RX DSP
     fn SetRXAMode(channel: i32, mode: i32);
     fn RXASetPassband(channel: i32, low_hz: f64, high_hz: f64);
     fn RXASetNC(channel: i32, nc: i32);
@@ -39,7 +67,69 @@ unsafe extern "C" {
     fn SetRXAAMDSBMode(channel: i32, sbmode: i32);
     fn SetRXAPanelRun(channel: i32, run: i32);
     fn SetRXAPanelSelect(channel: i32, select: i32);
+    fn SetRXAPanelCopy(channel: i32, copy: i32);
     fn SetRXAPanelGain1(channel: i32, gain: f64);
+
+    // Noise Blanker 1 (preemptive) — must call create_anbEXT before Set* functions
+    #[allow(improper_ctypes)]
+    fn create_anbEXT(
+        id: i32, run: i32, buffsize: i32, samplerate: f64,
+        tau: f64, hangtime: f64, advtime: f64, backtau: f64, threshold: f64,
+    );
+    fn destroy_anbEXT(id: i32);
+    fn SetEXTANBRun(id: i32, run: i32);
+    fn SetEXTANBTau(id: i32, tau: f64);
+    fn SetEXTANBHangtime(id: i32, time: f64);
+    fn SetEXTANBAdvtime(id: i32, time: f64);
+    fn SetEXTANBThreshold(id: i32, thresh: f64);
+
+    // Noise Blanker 2 (interpolating) — must call create_nobEXT before Set* functions
+    #[allow(improper_ctypes)]
+    fn create_nobEXT(
+        id: i32, run: i32, mode: i32, buffsize: i32, samplerate: f64,
+        slewtime: f64, hangtime: f64, advtime: f64, backtau: f64, threshold: f64,
+    );
+    fn destroy_nobEXT(id: i32);
+    fn SetEXTNOBRun(id: i32, run: i32);
+    fn SetEXTNOBMode(id: i32, mode: i32);
+    fn SetEXTNOBTau(id: i32, tau: f64);
+    fn SetEXTNOBHangtime(id: i32, time: f64);
+    fn SetEXTNOBAdvtime(id: i32, time: f64);
+    fn SetEXTNOBThreshold(id: i32, thresh: f64);
+
+    // Auto Notch Filter
+    fn SetRXAANFRun(channel: i32, run: i32);
+    fn SetRXAANFPosition(channel: i32, position: i32);
+
+    // Noise Reduction
+    fn SetRXAANRRun(channel: i32, run: i32);
+    fn SetRXAANRVals(channel: i32, taps: i32, delay: i32, gain: f64, leakage: f64);
+    fn SetRXAANRPosition(channel: i32, position: i32);
+    fn SetRXAEMNRRun(channel: i32, run: i32);
+    fn SetRXAEMNRgainMethod(channel: i32, method: i32);
+    fn SetRXAEMNRnpeMethod(channel: i32, method: i32);
+    fn SetRXAEMNRaeRun(channel: i32, run: i32);
+    fn SetRXAEMNRPosition(channel: i32, position: i32);
+    fn SetRXAEMNRtrainZetaThresh(channel: i32, thresh: f64);
+    fn SetRXAEMNRtrainT2(channel: i32, t2: f64);
+    fn SetRXAEMNRpost2Run(channel: i32, run: i32);
+    fn SetRXAEMNRpost2Nlevel(channel: i32, nlevel: f64);
+    fn SetRXAEMNRpost2Factor(channel: i32, factor: f64);
+    fn SetRXAEMNRpost2Rate(channel: i32, tc: f64);
+    fn SetRXAEMNRpost2Taper(channel: i32, taper: i32);
+    fn SetRXARNNRRun(channel: i32, run: i32);
+    fn RNNRloadModel(file_path: *const c_char);
+    fn SetRXARNNRPosition(channel: i32, position: i32);
+    fn SetRXASBNRRun(channel: i32, run: i32);
+    fn SetRXASBNRreductionAmount(channel: i32, amount: f32);
+    fn SetRXASBNRsmoothingFactor(channel: i32, factor: f32);
+    fn SetRXASBNRwhiteningFactor(channel: i32, factor: f32);
+    fn SetRXASBNRnoiseRescale(channel: i32, factor: f32);
+    fn SetRXASBNRpostFilterThreshold(channel: i32, threshold: f32);
+    fn SetRXASBNRnoiseScalingType(channel: i32, noise_scaling_type: i32);
+    fn SetRXASBNRPosition(channel: i32, position: i32);
+
+    // AGC
     fn SetRXAAGCMode(channel: i32, mode: i32);
     fn SetRXAAGCSlope(channel: i32, slope: i32);
     fn SetRXAAGCTop(channel: i32, max_agc: f64);
@@ -48,6 +138,28 @@ unsafe extern "C" {
     fn SetRXAAGCDecay(channel: i32, decay: i32);
     fn SetRXAAGCHangThreshold(channel: i32, hangthreshold: i32);
     fn SetRXAAGCMaxInputLevel(channel: i32, level: f64);
+
+    // Meter
+    fn GetRXAMeter(channel: i32, mt: i32) -> f64;
+
+    // TX DSP
+    fn SetTXAMode(channel: i32, mode: i32);
+    fn SetTXABandpassWindow(channel: i32, wintype: i32);
+    fn SetTXABandpassRun(channel: i32, run: i32);
+    fn SetTXABandpassFreqs(channel: i32, f_low: f64, f_high: f64);
+    fn SetTXACFIRRun(channel: i32, run: i32);
+    fn SetTXAAMSQRun(channel: i32, run: i32);
+    fn SetTXAALCSt(channel: i32, state: i32);
+    fn SetTXAALCAttack(channel: i32, attack: i32);
+    fn SetTXAALCDecay(channel: i32, decay: i32);
+    fn SetTXAPreGenMode(channel: i32, mode: i32);
+    fn SetTXAPreGenToneMag(channel: i32, mag: f64);
+    fn SetTXAPreGenToneFreq(channel: i32, freq: f64);
+    fn SetTXAPreGenRun(channel: i32, run: i32);
+    fn SetTXAPanelRun(channel: i32, run: i32);
+    fn SetTXAPanelSelect(channel: i32, select: i32);
+    fn SetTXAPanelGain1(channel: i32, gain: f64);
+    fn SetTXAPostGenRun(channel: i32, run: i32);
 }
 
 #[derive(Debug)]
@@ -67,11 +179,19 @@ impl fmt::Display for WdspError {
 
 impl Error for WdspError {}
 
+// ── RX Engine ────────────────────────────────────────────────────────────────
+
 pub struct WdspRxEngine {
     channel_id: i32,
     input_sample_rate_hz: u32,
     mode: DemodMode,
     volume_db: f64,
+    noise_reduction_mode: NoiseReductionMode,
+    noise_reduction_level: f64,
+    nb_mode: NoiseBlankerMode,
+    nb_threshold: f64,
+    anf_enabled: bool,
+    agc_mode: AgcMode,
     filter_low_hz: i32,
     filter_high_hz: i32,
     input_complex_samples: usize,
@@ -81,6 +201,8 @@ pub struct WdspRxEngine {
     pending_iq: VecDeque<f64>,
     pending_audio: VecDeque<f32>,
     frame_float_count: usize,
+    last_meter_dbm: Option<f32>,
+    nb_initialized: bool,
 }
 
 impl WdspRxEngine {
@@ -89,7 +211,13 @@ impl WdspRxEngine {
             channel_id: WDSP_RX_CHANNEL,
             input_sample_rate_hz: 0,
             mode: DemodMode::Unknown,
-            volume_db: -20.0,
+            volume_db: -10.0,
+            noise_reduction_mode: NoiseReductionMode::Off,
+            noise_reduction_level: 100.0,
+            nb_mode: NoiseBlankerMode::Off,
+            nb_threshold: 4.95,
+            anf_enabled: false,
+            agc_mode: AgcMode::Medium,
             filter_low_hz: 0,
             filter_high_hz: 0,
             input_complex_samples: 0,
@@ -99,9 +227,15 @@ impl WdspRxEngine {
             pending_iq: VecDeque::new(),
             pending_audio: VecDeque::new(),
             frame_float_count: WDSP_AUDIO_FRAME_FLOATS,
+            last_meter_dbm: None,
+            nb_initialized: false,
         };
         engine.reconfigure(model)?;
         Ok(engine)
+    }
+
+    pub fn smeter_dbm(&self) -> Option<f32> {
+        self.last_meter_dbm
     }
 
     pub fn sync_model(&mut self, model: &RadioModel) -> Result<(), WdspError> {
@@ -112,20 +246,44 @@ impl WdspRxEngine {
 
         if model.desired.mode != self.mode {
             self.mode = model.desired.mode;
-            unsafe {
-                SetRXAMode(self.channel_id, wdsp_mode(self.mode));
-            }
-            self.apply_default_agc();
+            unsafe { SetRXAMode(self.channel_id, wdsp_mode(self.mode)); }
+            self.apply_agc();
         }
 
         if (model.desired.rx_volume_db - self.volume_db).abs() > f64::EPSILON {
             self.volume_db = model.desired.rx_volume_db;
-            unsafe {
-                SetRXAPanelGain1(self.channel_id, panel_gain_for_volume_db(self.volume_db));
-            }
+            unsafe { SetRXAPanelGain1(self.channel_id, panel_gain_for_volume_db(self.volume_db)); }
         }
 
-        if model.desired.filter_low_hz != self.filter_low_hz || model.desired.filter_high_hz != self.filter_high_hz {
+        if model.desired.rx_noise_reduction_mode != self.noise_reduction_mode
+            || (model.desired.rx_noise_reduction_level - self.noise_reduction_level).abs() > f64::EPSILON
+        {
+            self.noise_reduction_mode = model.desired.rx_noise_reduction_mode;
+            self.noise_reduction_level = model.desired.rx_noise_reduction_level;
+            self.apply_noise_reduction();
+        }
+
+        if model.desired.nb_mode != self.nb_mode
+            || (model.desired.nb_threshold - self.nb_threshold).abs() > f64::EPSILON
+        {
+            self.nb_mode = model.desired.nb_mode;
+            self.nb_threshold = model.desired.nb_threshold;
+            self.apply_noise_blanker();
+        }
+
+        if model.desired.anf_enabled != self.anf_enabled {
+            self.anf_enabled = model.desired.anf_enabled;
+            self.apply_anf();
+        }
+
+        if model.desired.agc_mode != self.agc_mode {
+            self.agc_mode = model.desired.agc_mode;
+            self.apply_agc();
+        }
+
+        if model.desired.filter_low_hz != self.filter_low_hz
+            || model.desired.filter_high_hz != self.filter_high_hz
+        {
             self.filter_low_hz = model.desired.filter_low_hz;
             self.filter_high_hz = model.desired.filter_high_hz;
             unsafe {
@@ -160,12 +318,17 @@ impl WdspRxEngine {
             }
 
             if error != 0 {
+                eprintln!("saturn-bridge: wdsp fexchange0 error {error}");
                 continue;
             }
 
-            for sample in &self.output_buffer {
-                self.pending_audio
-                    .push_back((*sample as f32).clamp(-1.0, 1.0));
+            self.last_meter_dbm = Some(unsafe { GetRXAMeter(self.channel_id, RXA_S_AV) } as f32);
+
+            // HF radio is mono — always duplicate the left channel to both outputs.
+            for sample_pair in self.output_buffer.chunks_exact(2) {
+                let mono = (sample_pair[0] as f32).clamp(-1.0, 1.0);
+                self.pending_audio.push_back(mono);
+                self.pending_audio.push_back(mono);
             }
 
             while self.pending_audio.len() >= self.frame_float_count {
@@ -192,14 +355,22 @@ impl WdspRxEngine {
         }
 
         if self.input_sample_rate_hz != 0 {
-            unsafe {
-                CloseChannel(self.channel_id);
-            }
+            unsafe { CloseChannel(self.channel_id); }
         }
+
+        LOAD_RNNR_MODEL.call_once(|| unsafe {
+            RNNRloadModel(std::ptr::null());
+        });
 
         self.input_sample_rate_hz = input_sample_rate_hz;
         self.mode = model.desired.mode;
         self.volume_db = model.desired.rx_volume_db;
+        self.noise_reduction_mode = model.desired.rx_noise_reduction_mode;
+        self.noise_reduction_level = model.desired.rx_noise_reduction_level;
+        self.nb_mode = model.desired.nb_mode;
+        self.nb_threshold = model.desired.nb_threshold;
+        self.anf_enabled = model.desired.anf_enabled;
+        self.agc_mode = model.desired.agc_mode;
         self.filter_low_hz = model.desired.filter_low_hz;
         self.filter_high_hz = model.desired.filter_high_hz;
         self.input_complex_samples = (ratio as usize) * WDSP_DSP_SIZE;
@@ -229,32 +400,71 @@ impl WdspRxEngine {
             SetRXABandpassRun(self.channel_id, 1);
             SetRXAAMDSBMode(self.channel_id, 0);
             SetRXAPanelRun(self.channel_id, 1);
-            SetRXAPanelSelect(self.channel_id, 3);
+            SetRXAPanelSelect(self.channel_id, 3); // use both I and Q input
+            SetRXAPanelCopy(self.channel_id, 1);   // copy I→Q so both speakers get audio
             SetRXAPanelGain1(self.channel_id, panel_gain_for_volume_db(self.volume_db));
             RXASetNC(self.channel_id, 2048);
             RXASetMP(self.channel_id, 0);
             SetRXAMode(self.channel_id, wdsp_mode(self.mode));
             RXASetPassband(self.channel_id, self.filter_low_hz as f64, self.filter_high_hz as f64);
+
+            // Create (or re-create) the EXT NB objects for this channel
+            if self.nb_initialized {
+                destroy_anbEXT(self.channel_id);
+                destroy_nobEXT(self.channel_id);
+            }
+            let sr = self.input_sample_rate_hz as f64;
+            create_anbEXT(self.channel_id, 1, WDSP_DSP_SIZE as i32, sr,
+                0.0001, 0.0001, 0.0001, 0.05, 20.0);
+            create_nobEXT(self.channel_id, 1, 0, WDSP_DSP_SIZE as i32, sr,
+                0.0001, 0.0001, 0.0001, 0.05, 20.0);
         }
-        self.apply_default_agc();
+        self.nb_initialized = true;
+        self.apply_agc();
+        self.apply_noise_blanker();
+        self.apply_anf();
+        self.apply_noise_reduction();
         Ok(())
     }
 
-    fn apply_default_agc(&self) {
-        let agc_mode = default_agc_mode(self.mode);
+    fn apply_agc(&self) {
+        let agc_mode = if self.agc_mode == AgcMode::Off {
+            AGC_OFF
+        } else {
+            match self.mode {
+                DemodMode::DigU | DemodMode::DigL | DemodMode::Cwl | DemodMode::Cwu => AGC_FAST,
+                _ => self.agc_mode.wdsp_value(),
+            }
+        };
         unsafe {
             SetRXAAGCMode(self.channel_id, agc_mode);
             SetRXAAGCSlope(self.channel_id, 35);
             SetRXAAGCTop(self.channel_id, 80.0);
             SetRXAAGCMaxInputLevel(self.channel_id, 1.0);
             match agc_mode {
+                AGC_OFF => {}
                 AGC_FAST => {
                     SetRXAAGCAttack(self.channel_id, 2);
                     SetRXAAGCHang(self.channel_id, 0);
                     SetRXAAGCDecay(self.channel_id, 50);
                     SetRXAAGCHangThreshold(self.channel_id, 100);
                 }
+                1 => {
+                    // LONG
+                    SetRXAAGCAttack(self.channel_id, 2);
+                    SetRXAAGCHang(self.channel_id, 2000);
+                    SetRXAAGCDecay(self.channel_id, 2000);
+                    SetRXAAGCHangThreshold(self.channel_id, 100);
+                }
+                2 => {
+                    // SLOW
+                    SetRXAAGCAttack(self.channel_id, 2);
+                    SetRXAAGCHang(self.channel_id, 1000);
+                    SetRXAAGCDecay(self.channel_id, 500);
+                    SetRXAAGCHangThreshold(self.channel_id, 100);
+                }
                 _ => {
+                    // MEDIUM
                     SetRXAAGCAttack(self.channel_id, 2);
                     SetRXAAGCHang(self.channel_id, 0);
                     SetRXAAGCDecay(self.channel_id, 250);
@@ -263,19 +473,276 @@ impl WdspRxEngine {
             }
         }
     }
+
+    fn apply_noise_blanker(&self) {
+        let threshold = self.nb_threshold;
+        unsafe {
+            SetEXTANBTau(self.channel_id, NB_TAU);
+            SetEXTANBHangtime(self.channel_id, NB_HANGTIME);
+            SetEXTANBAdvtime(self.channel_id, NB_ADVTIME);
+            SetEXTANBThreshold(self.channel_id, threshold);
+            SetEXTANBRun(self.channel_id, (self.nb_mode == NoiseBlankerMode::Nb1) as i32);
+
+            SetEXTNOBMode(self.channel_id, 0); // zero mode
+            SetEXTNOBTau(self.channel_id, NB_TAU);
+            SetEXTNOBHangtime(self.channel_id, NB_HANGTIME);
+            SetEXTNOBAdvtime(self.channel_id, NB_ADVTIME);
+            SetEXTNOBThreshold(self.channel_id, threshold);
+            SetEXTNOBRun(self.channel_id, (self.nb_mode == NoiseBlankerMode::Nb2) as i32);
+        }
+    }
+
+    fn apply_anf(&self) {
+        unsafe {
+            SetRXAANFRun(self.channel_id, self.anf_enabled as i32);
+            SetRXAANFPosition(self.channel_id, WDSP_NR_POSITION_POST_AGC);
+        }
+    }
+
+    fn apply_noise_reduction(&self) {
+        let level = self.noise_reduction_level.clamp(0.0, 100.0);
+        unsafe {
+            SetRXAANRVals(
+                self.channel_id,
+                WDSP_ANR_TAPS,
+                WDSP_ANR_DELAY,
+                anr_gain_for_level(level),
+                anr_leakage_for_level(level),
+            );
+            SetRXAANRPosition(self.channel_id, WDSP_NR_POSITION_POST_AGC);
+            SetRXAANRRun(
+                self.channel_id,
+                matches!(self.noise_reduction_mode, NoiseReductionMode::Nr1) as i32,
+            );
+
+            SetRXAEMNRPosition(self.channel_id, WDSP_NR_POSITION_POST_AGC);
+            SetRXAEMNRgainMethod(self.channel_id, WDSP_NR2_GAIN_METHOD);
+            SetRXAEMNRnpeMethod(self.channel_id, WDSP_NR2_NPE_METHOD);
+            SetRXAEMNRtrainZetaThresh(self.channel_id, WDSP_NR2_TRAIN_ZETA_THRESH);
+            SetRXAEMNRtrainT2(self.channel_id, WDSP_NR2_TRAIN_T2);
+            SetRXAEMNRaeRun(self.channel_id, 1);
+            SetRXAEMNRpost2Taper(self.channel_id, nr2_taper_for_level(level));
+            SetRXAEMNRpost2Nlevel(self.channel_id, nr2_nlevel_for_level(level));
+            SetRXAEMNRpost2Factor(self.channel_id, nr2_factor_for_level(level));
+            SetRXAEMNRpost2Rate(self.channel_id, nr2_rate_for_level(level));
+            SetRXAEMNRpost2Run(
+                self.channel_id,
+                (matches!(self.noise_reduction_mode, NoiseReductionMode::Nr2) && level >= 1.0) as i32,
+            );
+            SetRXAEMNRRun(
+                self.channel_id,
+                matches!(self.noise_reduction_mode, NoiseReductionMode::Nr2) as i32,
+            );
+
+            SetRXARNNRPosition(self.channel_id, WDSP_NR_POSITION_POST_AGC);
+            SetRXARNNRRun(
+                self.channel_id,
+                matches!(self.noise_reduction_mode, NoiseReductionMode::Nr3) as i32,
+            );
+
+            SetRXASBNRreductionAmount(self.channel_id, nr4_reduction_amount_for_level(level));
+            SetRXASBNRsmoothingFactor(self.channel_id, nr4_smoothing_factor_for_level(level));
+            SetRXASBNRwhiteningFactor(self.channel_id, WDSP_NR4_WHITENING_FACTOR);
+            SetRXASBNRnoiseRescale(self.channel_id, nr4_noise_rescale_for_level(level));
+            SetRXASBNRpostFilterThreshold(self.channel_id, nr4_post_threshold_for_level(level));
+            SetRXASBNRnoiseScalingType(self.channel_id, WDSP_NR4_NOISE_SCALING_TYPE);
+            SetRXASBNRPosition(self.channel_id, WDSP_NR_POSITION_POST_AGC);
+            SetRXASBNRRun(
+                self.channel_id,
+                matches!(self.noise_reduction_mode, NoiseReductionMode::Nr4) as i32,
+            );
+        }
+    }
 }
 
 impl Drop for WdspRxEngine {
     fn drop(&mut self) {
         if self.input_sample_rate_hz != 0 {
             unsafe {
+                if self.nb_initialized {
+                    destroy_anbEXT(self.channel_id);
+                    destroy_nobEXT(self.channel_id);
+                }
                 CloseChannel(self.channel_id);
             }
         }
     }
 }
 
-fn wdsp_mode(mode: DemodMode) -> i32 {
+// ── TX Engine ────────────────────────────────────────────────────────────────
+
+// 240 samples per DUC IQ packet (from P2 protocol spec)
+pub const DUC_IQ_SAMPLES_PER_PACKET: usize = 240;
+
+pub struct WdspTxEngine {
+    channel_id: i32,
+    mode: DemodMode,
+    mic_gain_db: f64,
+    filter_low_hz: i32,
+    filter_high_hz: i32,
+    tx_active: bool,
+    input_buffer: Vec<f64>,
+    output_buffer: Vec<f64>,
+    pending_mic: VecDeque<f64>,
+    pub pending_iq: VecDeque<f32>,
+}
+
+impl WdspTxEngine {
+    pub fn new(model: &RadioModel) -> Self {
+        let mut engine = Self {
+            channel_id: WDSP_TX_CHANNEL,
+            mode: model.desired.mode,
+            mic_gain_db: model.desired.tx_mic_gain_db,
+            filter_low_hz: model.desired.filter_low_hz,
+            filter_high_hz: model.desired.filter_high_hz,
+            tx_active: false,
+            // DSP block size: 64 complex samples → 128 f64 values each direction
+            input_buffer: vec![0.0f64; WDSP_DSP_SIZE * 2],
+            output_buffer: vec![0.0f64; WDSP_DSP_SIZE * 2],
+            pending_mic: VecDeque::new(),
+            pending_iq: VecDeque::new(),
+        };
+        engine.open_channel();
+        engine
+    }
+
+    fn open_channel(&mut self) {
+        unsafe {
+            OpenChannel(
+                self.channel_id,
+                WDSP_DSP_SIZE as i32,          // in_size
+                WDSP_DSP_SIZE as i32,          // dsp_size
+                WDSP_AUDIO_RATE_HZ as i32,     // input_samplerate (mic = 48 kHz)
+                WDSP_AUDIO_RATE_HZ as i32,     // dsp_rate
+                WDSP_AUDIO_RATE_HZ as i32,     // output_samplerate (TX IQ = 48 kHz)
+                1,                             // channel_type = TX
+                0,                             // state = stopped (don't run yet)
+                0.010, 0.025, 0.0, 0.010,
+                1,
+            );
+            SetTXABandpassWindow(self.channel_id, 1);
+            SetTXABandpassRun(self.channel_id, 1);
+            SetTXACFIRRun(self.channel_id, 1);
+            SetTXAAMSQRun(self.channel_id, 0);
+            SetTXAALCAttack(self.channel_id, 1);
+            SetTXAALCDecay(self.channel_id, 10);
+            SetTXAALCSt(self.channel_id, 1);
+            SetTXAPreGenMode(self.channel_id, 0);
+            SetTXAPreGenToneMag(self.channel_id, 0.0);
+            SetTXAPreGenToneFreq(self.channel_id, 0.0);
+            SetTXAPreGenRun(self.channel_id, 0);
+            SetTXAPanelRun(self.channel_id, 1);
+            SetTXAPanelSelect(self.channel_id, 2); // use mic I channel (left)
+            SetTXAPostGenRun(self.channel_id, 0);
+            SetTXAPanelGain1(self.channel_id, panel_gain_for_volume_db(self.mic_gain_db));
+            SetTXABandpassFreqs(
+                self.channel_id,
+                self.filter_low_hz as f64,
+                self.filter_high_hz as f64,
+            );
+            SetTXAMode(self.channel_id, wdsp_mode(self.mode));
+        }
+    }
+
+    pub fn sync_model(&mut self, model: &RadioModel) {
+        if model.desired.mode != self.mode {
+            self.mode = model.desired.mode;
+            unsafe { SetTXAMode(self.channel_id, wdsp_mode(self.mode)); }
+        }
+
+        if model.desired.filter_low_hz != self.filter_low_hz
+            || model.desired.filter_high_hz != self.filter_high_hz
+        {
+            self.filter_low_hz = model.desired.filter_low_hz;
+            self.filter_high_hz = model.desired.filter_high_hz;
+            unsafe {
+                SetTXABandpassFreqs(
+                    self.channel_id,
+                    self.filter_low_hz as f64,
+                    self.filter_high_hz as f64,
+                );
+            }
+        }
+
+        if (model.desired.tx_mic_gain_db - self.mic_gain_db).abs() > f64::EPSILON {
+            self.mic_gain_db = model.desired.tx_mic_gain_db;
+            unsafe { SetTXAPanelGain1(self.channel_id, panel_gain_for_volume_db(self.mic_gain_db)); }
+        }
+    }
+
+    /// Enable or disable the TX DSP chain. Call with `true` when PTT goes
+    /// active, `false` when PTT releases (waits for slew-down before returning).
+    pub fn set_active(&mut self, active: bool) {
+        if active == self.tx_active {
+            return;
+        }
+        self.tx_active = active;
+        if active {
+            unsafe { SetChannelState(self.channel_id, 1, 0); } // run, no wait
+        } else {
+            unsafe { SetChannelState(self.channel_id, 0, 1); } // stop, wait for slew-down
+            self.pending_mic.clear();
+            self.pending_iq.clear();
+        }
+    }
+
+    /// Push mono mic audio samples (f32, normalized ±1.0) through the TX DSP
+    /// chain. IQ output is accumulated in `self.pending_iq`; callers should
+    /// drain it in 240-sample (DUC_IQ_SAMPLES_PER_PACKET) batches.
+    pub fn push_mic(&mut self, samples: &[f32]) {
+        if !self.tx_active {
+            return;
+        }
+        // Expand mono mic to stereo interleaved [L, R] where L=mic, R=0.0
+        for s in samples {
+            self.pending_mic.push_back(*s as f64); // I (left = mic)
+            self.pending_mic.push_back(0.0);       // Q (right = zero)
+        }
+
+        let needed = WDSP_DSP_SIZE * 2;
+        while self.pending_mic.len() >= needed {
+            for sample in &mut self.input_buffer {
+                *sample = self.pending_mic.pop_front().unwrap_or(0.0);
+            }
+
+            let mut error = 0;
+            unsafe {
+                fexchange0(
+                    self.channel_id,
+                    self.input_buffer.as_ptr(),
+                    self.output_buffer.as_mut_ptr(),
+                    &mut error,
+                );
+            }
+
+            if error != 0 {
+                eprintln!("saturn-bridge: wdsp TX fexchange0 error {error}");
+                continue;
+            }
+
+            // Output is interleaved [I, Q] IQ pairs at TX sample rate
+            for sample_pair in self.output_buffer.chunks_exact(2) {
+                self.pending_iq.push_back(sample_pair[0] as f32); // I
+                self.pending_iq.push_back(sample_pair[1] as f32); // Q
+            }
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn is_active(&self) -> bool {
+        self.tx_active
+    }
+}
+
+impl Drop for WdspTxEngine {
+    fn drop(&mut self) {
+        unsafe { CloseChannel(self.channel_id); }
+    }
+}
+
+// ── Helper functions ─────────────────────────────────────────────────────────
+
+pub fn wdsp_mode(mode: DemodMode) -> i32 {
     match mode {
         DemodMode::Lsb => 0,
         DemodMode::Usb => 1,
@@ -290,19 +757,94 @@ fn wdsp_mode(mode: DemodMode) -> i32 {
     }
 }
 
-fn default_agc_mode(mode: DemodMode) -> i32 {
-    match mode {
-        DemodMode::DigU | DemodMode::DigL | DemodMode::Cwl | DemodMode::Cwu => AGC_FAST,
-        _ => AGC_MEDIUM,
+fn panel_gain_for_volume_db(volume_db: f64) -> f64 {
+    let clamped = volume_db.clamp(-40.0, 12.0);
+    if clamped <= -39.5 {
+        0.0
+    } else {
+        10.0f64.powf(0.05 * clamped)
     }
 }
 
-fn panel_gain_for_volume_db(volume_db: f64) -> f64 {
-    if volume_db <= -39.5 {
-        0.0
-    } else if volume_db >= 0.0 {
-        1.0
-    } else {
-        10.0f64.powf(0.05 * volume_db)
+fn anr_gain_for_level(level_percent: f64) -> f64 {
+    let normalized = level_percent.clamp(0.0, 100.0) / 100.0;
+    1.0e-4 * 16.0f64.powf(normalized)
+}
+
+fn anr_leakage_for_level(level_percent: f64) -> f64 {
+    let normalized = level_percent.clamp(0.0, 100.0) / 100.0;
+    10.0f64.powf(-1.0 - 5.0 * normalized)
+}
+
+fn nr2_nlevel_for_level(level_percent: f64) -> f64 {
+    level_percent.clamp(0.0, 100.0) * 0.3
+}
+
+fn nr2_factor_for_level(level_percent: f64) -> f64 {
+    level_percent.clamp(0.0, 100.0) * 0.3
+}
+
+fn nr2_rate_for_level(level_percent: f64) -> f64 {
+    level_percent.clamp(0.0, 100.0) * 0.1
+}
+
+fn nr2_taper_for_level(level_percent: f64) -> i32 {
+    (4.0 + level_percent.clamp(0.0, 100.0) * 0.16).round() as i32
+}
+
+fn nr4_reduction_amount_for_level(level_percent: f64) -> f32 {
+    (level_percent.clamp(0.0, 100.0) * 0.2) as f32
+}
+
+fn nr4_smoothing_factor_for_level(level_percent: f64) -> f32 {
+    (level_percent.clamp(0.0, 100.0) * 0.4) as f32
+}
+
+fn nr4_noise_rescale_for_level(level_percent: f64) -> f32 {
+    (level_percent.clamp(0.0, 100.0) * 0.04) as f32
+}
+
+fn nr4_post_threshold_for_level(level_percent: f64) -> f32 {
+    (-10.0 + level_percent.clamp(0.0, 100.0) * 0.14) as f32
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        anr_gain_for_level, anr_leakage_for_level, nr2_factor_for_level, nr2_nlevel_for_level,
+        nr2_rate_for_level, nr2_taper_for_level, nr4_post_threshold_for_level,
+        nr4_reduction_amount_for_level, panel_gain_for_volume_db,
+    };
+
+    #[test]
+    fn anr_gain_scale_matches_expected_endpoints() {
+        assert!((anr_gain_for_level(0.0) - 1.0e-4).abs() < 1.0e-12);
+        assert!((anr_gain_for_level(100.0) - 16.0e-4).abs() < 1.0e-12);
+    }
+
+    #[test]
+    fn anr_leakage_scale_matches_expected_endpoints() {
+        assert!((anr_leakage_for_level(0.0) - 1.0e-1).abs() < 1.0e-12);
+        assert!((anr_leakage_for_level(100.0) - 1.0e-6).abs() < 1.0e-12);
+    }
+
+    #[test]
+    fn nr2_level_scale_matches_midpoint_defaults() {
+        assert!((nr2_nlevel_for_level(50.0) - 15.0).abs() < 1.0e-12);
+        assert!((nr2_factor_for_level(50.0) - 15.0).abs() < 1.0e-12);
+        assert!((nr2_rate_for_level(50.0) - 5.0).abs() < 1.0e-12);
+        assert_eq!(nr2_taper_for_level(50.0), 12);
+    }
+
+    #[test]
+    fn nr4_level_scale_matches_midpoint_defaults() {
+        assert!((nr4_reduction_amount_for_level(50.0) - 10.0).abs() < f32::EPSILON);
+        assert!((nr4_post_threshold_for_level(50.0) + 3.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn panel_gain_supports_positive_monitor_gain() {
+        assert!((panel_gain_for_volume_db(0.0) - 1.0).abs() < 1.0e-12);
+        assert!(panel_gain_for_volume_db(12.0) > 3.9);
     }
 }

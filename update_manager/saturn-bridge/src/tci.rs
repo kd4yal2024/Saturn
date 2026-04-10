@@ -1,5 +1,6 @@
 use std::io;
-use std::net::TcpListener;
+use std::net::{SocketAddr, TcpListener, TcpStream};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender, SyncSender, TryRecvError, TrySendError};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -9,7 +10,7 @@ use tungstenite::error::Error as WsError;
 use tungstenite::{accept, Message};
 
 use crate::config::BridgeConfig;
-use crate::radio_model::{DemodMode, RadioModel};
+use crate::radio_model::{AgcMode, DemodMode, NoiseBlankerMode, NoiseReductionMode, RadioModel};
 
 #[derive(Clone, Debug)]
 pub enum TciCommand {
@@ -21,6 +22,9 @@ pub enum TciCommand {
     SetRxAdc(u8),
     SetRxAntenna(u8),
     SetRxVolume(f64),
+    SetRxNoiseReductionMode(NoiseReductionMode),
+    SetRxNoiseReductionEnabled(bool),
+    SetRxNoiseReductionLevel(f64),
     SetIqSampleRate(u32),
     SetIqStreaming,
     RequestSmeter,
@@ -28,6 +32,16 @@ pub enum TciCommand {
     SetAudioSampleRate(u32),
     SetAudioFrameSamples(u32),
     SetAudioChannels(u32),
+    SetTxEnabled(bool),
+    SetNoiseBlankerMode(NoiseBlankerMode),
+    SetNoiseBlankerThreshold(f64),
+    SetAnfEnabled(bool),
+    SetAgcMode(AgcMode),
+    SetTxDrive(u8),
+    SetTxMicGain(f64),
+    MicAudioFrame(Vec<f32>),
+    ClientConnected,
+    ClientDisconnected,
 }
 
 #[derive(Clone, Debug)]
@@ -58,6 +72,7 @@ pub struct TciFrontend {
     command_rx: Receiver<TciCommand>,
     outbound_tx: Arc<Mutex<Option<SyncSender<OutboundMessage>>>>,
     client_state: Arc<Mutex<ClientState>>,
+    drop_count: Arc<AtomicU64>,
     _accept_thread: JoinGuard,
 }
 
@@ -74,114 +89,42 @@ impl TciFrontend {
         let (command_tx, command_rx) = mpsc::channel();
         let outbound_tx = Arc::new(Mutex::new(None));
         let client_state = Arc::new(Mutex::new(ClientState::default()));
+        let active_client_id = Arc::new(AtomicU64::new(0));
+        let drop_count = Arc::new(AtomicU64::new(0));
 
         let outbound_slot = outbound_tx.clone();
         let client_flags = client_state.clone();
+        let latest_client = active_client_id.clone();
+        let radio_model = radio_model.clone();
         let handle = thread::spawn(move || {
             loop {
                 match listener.accept() {
                     Ok((stream, addr)) => {
-                        println!("saturn-bridge: TCI client connected from {addr}");
-                        let _ = stream.set_nonblocking(true);
-                        match accept(stream) {
-                            Ok(mut websocket) => {
-                                let (client_tx, client_rx) = mpsc::sync_channel::<OutboundMessage>(256);
-                                {
-                                    let mut slot = outbound_slot.lock().unwrap();
-                                    *slot = Some(client_tx.clone());
-                                }
-                                {
-                                    let mut flags = client_flags.lock().unwrap();
-                                    flags.iq_stream_enabled = false;
-                                    flags.audio_stream_enabled = false;
-                                    flags.audio_sample_rate_hz = 48_000;
-                                    flags.audio_frame_float_count = 2048;
-                                    flags.audio_channels = 2;
-                                }
-
-                                for message in initial_snapshot_messages(&radio_model.lock().unwrap()) {
-                                    let _ = client_tx.send(OutboundMessage::Text(message));
-                                }
-
-                                loop {
-                                    let mut pending_flush = false;
-                                    match websocket.read() {
-                                        Ok(message) => {
-                                            if !handle_incoming_message(message, &command_tx, &client_flags) {
-                                                break;
-                                            }
-                                        }
-                                        Err(WsError::Io(error))
-                                            if error.kind() == io::ErrorKind::WouldBlock =>
-                                        {
-                                        }
-                                        Err(WsError::ConnectionClosed) | Err(WsError::AlreadyClosed) => break,
-                                        Err(error) => {
-                                            eprintln!("saturn-bridge: TCI websocket read error: {error}");
-                                            break;
-                                        }
-                                    }
-
-                                    loop {
-                                        match client_rx.try_recv() {
-                                            Ok(message) => {
-                                                match send_outbound(&mut websocket, message) {
-                                                    Ok(()) => {
-                                                        pending_flush = true;
-                                                    }
-                                                    Err(WsError::Io(error))
-                                                        if error.kind() == io::ErrorKind::WouldBlock =>
-                                                    {
-                                                        pending_flush = true;
-                                                        break;
-                                                    }
-                                                    Err(error) => {
-                                                        eprintln!(
-                                                            "saturn-bridge: TCI websocket send error: {error}"
-                                                        );
-                                                        pending_flush = true;
-                                                        break;
-                                                    }
-                                                }
-                                            }
-                                            Err(TryRecvError::Empty) => break,
-                                            Err(TryRecvError::Disconnected) => break,
-                                        }
-                                    }
-
-                                    if pending_flush {
-                                        match websocket.flush() {
-                                            Ok(()) => {}
-                                            Err(WsError::Io(error))
-                                                if error.kind() == io::ErrorKind::WouldBlock => {}
-                                            Err(WsError::ConnectionClosed) | Err(WsError::AlreadyClosed) => break,
-                                            Err(error) => {
-                                                eprintln!(
-                                                    "saturn-bridge: TCI websocket flush error: {error}"
-                                                );
-                                                break;
-                                            }
-                                        }
-                                    }
-
-                                    thread::sleep(Duration::from_millis(10));
-                                }
-                            }
-                            Err(error) => {
-                                eprintln!("saturn-bridge: TCI websocket accept failed: {error}");
-                            }
+                        let client_id = latest_client.fetch_add(1, Ordering::SeqCst) + 1;
+                        if client_id > 1 {
+                            println!("saturn-bridge: replacing prior TCI client with {addr}");
+                        } else {
+                            println!("saturn-bridge: TCI client connected from {addr}");
                         }
 
-                        {
-                            let mut slot = outbound_slot.lock().unwrap();
-                            *slot = None;
-                        }
-                        {
-                            let mut flags = client_flags.lock().unwrap();
-                            flags.iq_stream_enabled = false;
-                            flags.audio_stream_enabled = false;
-                        }
-                        println!("saturn-bridge: TCI client disconnected");
+                        let command_tx = command_tx.clone();
+                        let outbound_slot = outbound_slot.clone();
+                        let client_flags = client_flags.clone();
+                        let latest_client = latest_client.clone();
+                        let radio_model = radio_model.clone();
+
+                        thread::spawn(move || {
+                            handle_client(
+                                stream,
+                                addr,
+                                client_id,
+                                &command_tx,
+                                &outbound_slot,
+                                &client_flags,
+                                &latest_client,
+                                &radio_model,
+                            );
+                        });
                     }
                     Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
                         thread::sleep(Duration::from_millis(50));
@@ -198,6 +141,7 @@ impl TciFrontend {
             command_rx,
             outbound_tx,
             client_state,
+            drop_count,
             _accept_thread: JoinGuard { handle },
         })
     }
@@ -216,9 +160,27 @@ impl TciFrontend {
         self.send_text(format!("modulation:0,{};", model.desired.mode));
         self.send_text(format!("rx_volume:0,0,{:.1};", model.desired.rx_volume_db));
         self.send_text(format!(
+            "rx_nr:0,{};",
+            model.desired.rx_noise_reduction_mode != NoiseReductionMode::Off
+        ));
+        self.send_text(format!(
+            "rx_nr_mode:0,{};",
+            model.desired.rx_noise_reduction_mode
+        ));
+        self.send_text(format!(
+            "rx_nr_level:0,{:.0};",
+            model.desired.rx_noise_reduction_level
+        ));
+        self.send_text(format!(
             "rx_filter_band:0,{},{};",
             model.desired.filter_low_hz, model.desired.filter_high_hz
         ));
+        self.send_text(format!("rx_nb:0,{};", model.desired.nb_mode));
+        self.send_text(format!("rx_nb_threshold:0,{:.2};", model.desired.nb_threshold));
+        self.send_text(format!("rx_anf:0,{};", model.desired.anf_enabled));
+        self.send_text(format!("rx_agc:0,{};", model.desired.agc_mode));
+        self.send_text(format!("tx_drive:0,{};", model.desired.tx_drive));
+        self.send_text(format!("tx_mic_gain:0,{:.1};", model.desired.tx_mic_gain_db));
         self.send_text(format!("trx:0,{};", model.desired.tx_enabled));
         self.send_text("tune:0,false;".to_string());
         self.publish_telemetry(model);
@@ -231,6 +193,10 @@ impl TciFrontend {
         if let Some(packet) = model.observed.high_priority.as_ref() {
             self.send_text(format!("tx_power:0,{:.1};", packet.forward_power as f32));
             self.send_text(format!("swr:0,{:.2};", calculate_swr(packet.forward_power, packet.reverse_power)));
+        }
+        let drops = self.drop_count.swap(0, Ordering::Relaxed);
+        if drops > 0 {
+            self.send_text(format!("rx_drops:{drops};"));
         }
     }
 
@@ -283,14 +249,146 @@ impl TciFrontend {
         if let Some(sender) = self.outbound_tx.lock().unwrap().as_ref().cloned() {
             match sender.try_send(message) {
                 Ok(()) => {}
-                Err(TrySendError::Full(message)) => {
-                    if matches!(message, OutboundMessage::Text(_)) {
-                        eprintln!("saturn-bridge: dropping outbound TCI text due to websocket backpressure");
-                    }
+                Err(TrySendError::Full(_)) => {
+                    self.drop_count.fetch_add(1, Ordering::Relaxed);
                 }
                 Err(TrySendError::Disconnected(_)) => {}
             }
         }
+    }
+}
+
+fn handle_client(
+    stream: TcpStream,
+    addr: SocketAddr,
+    client_id: u64,
+    command_tx: &Sender<TciCommand>,
+    outbound_slot: &Arc<Mutex<Option<SyncSender<OutboundMessage>>>>,
+    client_flags: &Arc<Mutex<ClientState>>,
+    latest_client: &Arc<AtomicU64>,
+    radio_model: &Arc<Mutex<RadioModel>>,
+) {
+    let _ = stream.set_nonblocking(true);
+    match accept(stream) {
+        Ok(mut websocket) => {
+            if latest_client.load(Ordering::SeqCst) != client_id {
+                let _ = websocket.close(None);
+                return;
+            }
+
+            let (client_tx, client_rx) = mpsc::sync_channel::<OutboundMessage>(256);
+            {
+                let mut slot = outbound_slot.lock().unwrap();
+                *slot = Some(client_tx.clone());
+            }
+            reset_client_state(client_flags);
+
+            for message in initial_snapshot_messages(&radio_model.lock().unwrap()) {
+                let _ = client_tx.send(OutboundMessage::Text(message));
+            }
+
+            let _ = command_tx.send(TciCommand::ClientConnected);
+
+            let mut superseded = false;
+            loop {
+                if latest_client.load(Ordering::SeqCst) != client_id {
+                    superseded = true;
+                    let _ = websocket.close(None);
+                    break;
+                }
+
+                let mut pending_flush = false;
+                match websocket.read() {
+                    Ok(message) => {
+                        if !handle_incoming_message(message, command_tx, client_flags) {
+                            break;
+                        }
+                    }
+                    Err(WsError::Io(error)) if error.kind() == io::ErrorKind::WouldBlock => {}
+                    Err(WsError::ConnectionClosed) | Err(WsError::AlreadyClosed) => break,
+                    Err(error) => {
+                        eprintln!("saturn-bridge: TCI websocket read error from {addr}: {error}");
+                        break;
+                    }
+                }
+
+                loop {
+                    match client_rx.try_recv() {
+                        Ok(message) => match send_outbound(&mut websocket, message) {
+                            Ok(()) => {
+                                pending_flush = true;
+                            }
+                            Err(WsError::Io(error)) if error.kind() == io::ErrorKind::WouldBlock => {
+                                pending_flush = true;
+                                break;
+                            }
+                            Err(error) => {
+                                eprintln!("saturn-bridge: TCI websocket send error to {addr}: {error}");
+                                pending_flush = true;
+                                break;
+                            }
+                        },
+                        Err(TryRecvError::Empty) => break,
+                        Err(TryRecvError::Disconnected) => break,
+                    }
+                }
+
+                if pending_flush {
+                    match websocket.flush() {
+                        Ok(()) => {}
+                        Err(WsError::Io(error)) if error.kind() == io::ErrorKind::WouldBlock => {}
+                        Err(WsError::ConnectionClosed) | Err(WsError::AlreadyClosed) => break,
+                        Err(error) => {
+                            eprintln!("saturn-bridge: TCI websocket flush error for {addr}: {error}");
+                            break;
+                        }
+                    }
+                }
+
+                thread::sleep(Duration::from_millis(10));
+            }
+
+            clear_active_client(outbound_slot, client_flags, latest_client, client_id);
+            if superseded {
+                println!("saturn-bridge: TCI client {addr} superseded by a newer session");
+            } else {
+                println!("saturn-bridge: TCI client disconnected from {addr}");
+                let _ = command_tx.send(TciCommand::ClientDisconnected);
+            }
+        }
+        Err(error) => {
+            eprintln!("saturn-bridge: TCI websocket accept failed from {addr}: {error}");
+        }
+    }
+}
+
+fn reset_client_state(client_flags: &Arc<Mutex<ClientState>>) {
+    let mut flags = client_flags.lock().unwrap();
+    flags.iq_stream_enabled = false;
+    flags.audio_stream_enabled = false;
+    flags.audio_sample_rate_hz = 48_000;
+    flags.audio_frame_float_count = 2048;
+    flags.audio_channels = 2;
+}
+
+fn clear_active_client(
+    outbound_slot: &Arc<Mutex<Option<SyncSender<OutboundMessage>>>>,
+    client_flags: &Arc<Mutex<ClientState>>,
+    latest_client: &Arc<AtomicU64>,
+    client_id: u64,
+) {
+    if latest_client.load(Ordering::SeqCst) != client_id {
+        return;
+    }
+
+    {
+        let mut slot = outbound_slot.lock().unwrap();
+        *slot = None;
+    }
+    {
+        let mut flags = client_flags.lock().unwrap();
+        flags.iq_stream_enabled = false;
+        flags.audio_stream_enabled = false;
     }
 }
 
@@ -306,9 +404,27 @@ fn initial_snapshot_messages(model: &RadioModel) -> Vec<String> {
         format!("modulation:0,{};", model.desired.mode),
         format!("rx_volume:0,0,{:.1};", model.desired.rx_volume_db),
         format!(
+            "rx_nr:0,{};",
+            model.desired.rx_noise_reduction_mode != NoiseReductionMode::Off
+        ),
+        format!(
+            "rx_nr_mode:0,{};",
+            model.desired.rx_noise_reduction_mode
+        ),
+        format!(
+            "rx_nr_level:0,{:.0};",
+            model.desired.rx_noise_reduction_level
+        ),
+        format!(
             "rx_filter_band:0,{},{};",
             model.desired.filter_low_hz, model.desired.filter_high_hz
         ),
+        format!("rx_nb:0,{};", model.desired.nb_mode),
+        format!("rx_nb_threshold:0,{:.2};", model.desired.nb_threshold),
+        format!("rx_anf:0,{};", model.desired.anf_enabled),
+        format!("rx_agc:0,{};", model.desired.agc_mode),
+        format!("tx_drive:0,{};", model.desired.tx_drive),
+        format!("tx_mic_gain:0,{:.1};", model.desired.tx_mic_gain_db),
         format!("trx:0,{};", model.desired.tx_enabled),
         "tune:0,false;".to_string(),
         "audio_samplerate:48000;".to_string(),
@@ -327,7 +443,12 @@ fn handle_incoming_message(
             }
             true
         }
-        Message::Binary(_) => true,
+        Message::Binary(data) => {
+            if let Some(samples) = parse_tci_mic_frame(&data) {
+                let _ = command_tx.send(TciCommand::MicAudioFrame(samples));
+            }
+            true
+        }
         Message::Ping(payload) => {
             let _ = command_tx.send(TciCommand::RequestSmeter);
             let _ = payload;
@@ -388,6 +509,42 @@ fn parse_tci_command(command: &str, command_tx: &Sender<TciCommand>, client_stat
             if let Some(volume_text) = volume_arg {
                 if let Ok(volume_db) = volume_text.trim().parse::<f64>() {
                     let _ = command_tx.send(TciCommand::SetRxVolume(volume_db));
+                }
+            }
+        }
+        "rx_nr_mode" | "nr_mode" => {
+            let mode_arg = if args.len() >= 2 {
+                args.get(1)
+            } else {
+                args.first()
+            };
+            if let Some(mode_text) = mode_arg {
+                let _ = command_tx.send(TciCommand::SetRxNoiseReductionMode(
+                    NoiseReductionMode::from_tci(mode_text),
+                ));
+            }
+        }
+        "rx_nr" | "nr" => {
+            let enabled_arg = if args.len() >= 2 {
+                args.get(1)
+            } else {
+                args.first()
+            };
+            if let Some(enabled_text) = enabled_arg {
+                if let Some(enabled) = parse_tci_bool(enabled_text) {
+                    let _ = command_tx.send(TciCommand::SetRxNoiseReductionEnabled(enabled));
+                }
+            }
+        }
+        "rx_nr_level" | "nr_level" => {
+            let level_arg = if args.len() >= 2 {
+                args.get(1)
+            } else {
+                args.first()
+            };
+            if let Some(level_text) = level_arg {
+                if let Ok(level) = level_text.trim().parse::<f64>() {
+                    let _ = command_tx.send(TciCommand::SetRxNoiseReductionLevel(level));
                 }
             }
         }
@@ -462,8 +619,90 @@ fn parse_tci_command(command: &str, command_tx: &Sender<TciCommand>, client_stat
         "rx_smeter" | "s_meter" | "smeter" => {
             let _ = command_tx.send(TciCommand::RequestSmeter);
         }
+        "trx" => {
+            // trx:0,true or trx:0,false — PTT on/off
+            let enabled_arg = if args.len() >= 2 { args.get(1) } else { args.first() };
+            if let Some(enabled_text) = enabled_arg {
+                if let Some(enabled) = parse_tci_bool(enabled_text) {
+                    let _ = command_tx.send(TciCommand::SetTxEnabled(enabled));
+                }
+            }
+        }
+        "rx_nb" => {
+            // rx_nb:0,mode — NB mode: 0=OFF, 1=NB1, 2=NB2
+            let mode_arg = if args.len() >= 2 { args.get(1) } else { args.first() };
+            if let Some(mode_text) = mode_arg {
+                let _ = command_tx.send(TciCommand::SetNoiseBlankerMode(
+                    NoiseBlankerMode::from_tci(mode_text),
+                ));
+            }
+        }
+        "rx_nb_threshold" => {
+            let thresh_arg = if args.len() >= 2 { args.get(1) } else { args.first() };
+            if let Some(thresh_text) = thresh_arg {
+                if let Ok(thresh) = thresh_text.trim().parse::<f64>() {
+                    let _ = command_tx.send(TciCommand::SetNoiseBlankerThreshold(thresh));
+                }
+            }
+        }
+        "rx_anf" => {
+            let enabled_arg = if args.len() >= 2 { args.get(1) } else { args.first() };
+            if let Some(enabled_text) = enabled_arg {
+                if let Some(enabled) = parse_tci_bool(enabled_text) {
+                    let _ = command_tx.send(TciCommand::SetAnfEnabled(enabled));
+                }
+            }
+        }
+        "rx_agc" => {
+            let mode_arg = if args.len() >= 2 { args.get(1) } else { args.first() };
+            if let Some(mode_text) = mode_arg {
+                let _ = command_tx.send(TciCommand::SetAgcMode(AgcMode::from_tci(mode_text)));
+            }
+        }
+        "tx_drive" => {
+            let drive_arg = if args.len() >= 2 { args.get(1) } else { args.first() };
+            if let Some(drive_text) = drive_arg {
+                if let Ok(drive) = drive_text.trim().parse::<u8>() {
+                    let _ = command_tx.send(TciCommand::SetTxDrive(drive));
+                }
+            }
+        }
+        "tx_mic_gain" => {
+            let gain_arg = if args.len() >= 2 { args.get(1) } else { args.first() };
+            if let Some(gain_text) = gain_arg {
+                if let Ok(gain_db) = gain_text.trim().parse::<f64>() {
+                    let _ = command_tx.send(TciCommand::SetTxMicGain(gain_db));
+                }
+            }
+        }
         _ => {}
     }
+}
+
+/// Parse a TCI binary frame that may contain TX mic audio from the client.
+/// Frame layout: 64-byte header + f32 LE samples.
+///   header[20..24] = sample_count (u32 LE)
+///   header[24..28] = stream_type  (u32 LE); 1 = audio, 2 = TX mic
+fn parse_tci_mic_frame(data: &[u8]) -> Option<Vec<f32>> {
+    if data.len() < 68 {
+        return None; // need at least header + 1 sample
+    }
+    let stream_type = u32::from_le_bytes(data[24..28].try_into().ok()?);
+    // Accept stream_type 1 (audio) or 2 (TX/mic) from the client
+    if stream_type != 1 && stream_type != 2 {
+        return None;
+    }
+    let sample_count = u32::from_le_bytes(data[20..24].try_into().ok()?) as usize;
+    let payload = &data[64..];
+    if payload.len() < sample_count * 4 {
+        return None;
+    }
+    let mut samples = Vec::with_capacity(sample_count);
+    for i in 0..sample_count {
+        let bytes: [u8; 4] = payload[i * 4..i * 4 + 4].try_into().ok()?;
+        samples.push(f32::from_le_bytes(bytes));
+    }
+    Some(samples)
 }
 
 fn send_outbound(
@@ -532,6 +771,14 @@ fn write_u32_le(buffer: &mut [u8], offset: usize, value: u32) {
     buffer[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
 }
 
+fn parse_tci_bool(text: &str) -> Option<bool> {
+    match text.trim().to_ascii_lowercase().as_str() {
+        "1" | "true" | "on" | "yes" => Some(true),
+        "0" | "false" | "off" | "no" => Some(false),
+        _ => None,
+    }
+}
+
 fn calculate_swr(forward: u16, reverse: u16) -> f32 {
     if forward == 0 || reverse == 0 || reverse >= forward {
         return 1.0;
@@ -570,5 +817,12 @@ mod tests {
     fn swr_formula_is_reasonable() {
         assert!((calculate_swr(1000, 0) - 1.0).abs() < 0.01);
         assert!(calculate_swr(1000, 250) > 1.0);
+    }
+
+    #[test]
+    fn parses_boolish_tci_values() {
+        assert_eq!(parse_tci_bool("true"), Some(true));
+        assert_eq!(parse_tci_bool("0"), Some(false));
+        assert_eq!(parse_tci_bool("bogus"), None);
     }
 }

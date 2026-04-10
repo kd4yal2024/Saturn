@@ -1,112 +1,135 @@
 # Saturn Bridge
 
-`saturn-bridge` is the first standalone backend for direct G2 remote operation.
+`saturn-bridge` is the standalone backend for direct G2 remote operation.
+It owns the Protocol 2 session to `p2app`, runs the WDSP DSP chain for both
+RX and TX, and exposes a TCI WebSocket frontend to browser clients.
 
-Current scope:
+## Feature Set
 
-- owns one downstream Protocol 2 session to `p2app`
-- keeps a canonical `radio_model` with desired vs observed state
-- sends Saturn/Thetis-style startup traffic to `p2app`
-- ingests RX-only DDC IQ and high-priority status from `p2app`
-- exposes a first TCI WebSocket frontend for RX-only remote control/panadapter
-- has a first browser frontend path in `update_manager/templates/saturn-remote.html`
+### RX Chain
+- Owns one downstream Protocol 2 UDP session to `p2app`
+- Ingests DDC IQ streams and high-priority status packets
+- Full WDSP RX DSP channel (channel 0):
+  - All demodulation modes: USB, LSB, CWU, CWL, AM, SAM, FM, DIGU, DIGL
+  - Full AGC: OFF, LONG, SLOW, MEDIUM, FAST with per-mode time constants
+  - Noise Blanker 1 (NB1 — preemptive EXTANB): threshold-controlled impulse blanking
+  - Noise Blanker 2 (NB2 — interpolating EXTNOB): zero/sample-and-hold modes
+  - Noise Reduction: NR1 (ANR), NR2 (EMNR), NR3 (RNNR), NR4 (SBNR)
+  - Auto Notch Filter (ANF)
+  - Calibrated S-meter via `GetRXAMeter(RXA_S_AV)`
+  - 48 kHz stereo audio output (both channels from panel copy mode)
 
-This is the `v2` architecture boundary, even though the current feature set is
-still intentionally small.
+### TX Chain
+- WDSP TX DSP channel (channel 1):
+  - Bandpass filter, ALC, CFIR mic conditioning
+  - Adjustable mic gain via `SetTXAPanelGain1`
+  - PTT-controlled channel state with slew-down on release
+- DUC IQ packets: 240 samples × 6 bytes signed 24-bit big-endian (1444 bytes)
+  sent to `p2app` port 1029
+- Mic audio received from TCI client as binary audio frames (stream_type 1 or 2)
 
-## Why It Is Separate
+### TCI Frontend
+- WebSocket server, default `0.0.0.0:50001`
+- Single active client (newest connection wins)
+- **Commands received from client:**
+  - `vfo:0,{ch},{hz}` — VFO A/B frequency
+  - `dds:0,{hz}` — IQ center frequency
+  - `modulation:0,{mode}` — demodulation mode
+  - `rx_filter_band:0,{low},{high}` — RX passband
+  - `rx_volume:0,0,{db}` — RX audio gain
+  - `rx_nr_mode:0,{mode}` — NR mode (OFF/NR1/NR2/NR3/NR4/ANR/EMNR/RNNR/SBNR)
+  - `rx_nr:0,{bool}` — NR on/off
+  - `rx_nr_level:0,{pct}` — NR level 0–100
+  - `rx_nb:0,{0|1|2}` — noise blanker mode (OFF/NB1/NB2)
+  - `rx_nb_threshold:0,{val}` — NB threshold
+  - `rx_anf:0,{bool}` — auto notch filter on/off
+  - `rx_agc:0,{mode}` — AGC mode (OFF/LONG/SLOW/MEDIUM/FAST)
+  - `rx_adc:0,{0|1|2}` — ADC select (ADC1/ADC2/TXSAMPLES)
+  - `rx_antenna:0,{1|2|3}` — RX antenna
+  - `iq_samplerate:{hz}` — IQ sample rate
+  - `iq_start` / `iq_stop` — IQ stream on/off
+  - `audio_start` / `audio_stop` — audio stream on/off
+  - `audio_samplerate:{hz}` — audio sample rate
+  - `trx:0,{bool}` — PTT (transmit/receive)
+  - `tx_drive:0,{0–255}` — TX drive level
+  - `tx_mic_gain:0,{db}` — TX mic gain dB
+  - Binary audio frame — mic audio for TX (stream_type 1 or 2)
+- **Messages sent to client:**
+  - Full radio state snapshot on connect
+  - `rx_smeter:0,0,{dbm}` — S-meter (per IQ frame)
+  - `tx_power:0,{w}` / `swr:0,{ratio}` — TX telemetry
+  - IQ binary frames (64-byte TCI header + float32 I/Q)
+  - Audio binary frames (64-byte TCI header + float32 stereo)
 
-`p2app` remains the radio transport/runtime engine.
+## Architecture
 
-`saturn-bridge` is where these responsibilities now belong:
+```
+Browser (saturn-remote.html)
+        │  WebSocket :50001 (TCI)
+        ▼
+saturn-bridge
+  ├── TciFrontend    — WebSocket accept + message routing
+  ├── RadioModel     — desired vs observed state
+  ├── WdspRxEngine   — WDSP channel 0 RX DSP
+  ├── WdspTxEngine   — WDSP channel 1 TX DSP
+  └── P2Session      — UDP client to p2app
+        │  UDP (Protocol 2)
+        ▼
+p2app / radio firmware
+```
 
-- session ownership
-- bridge protocol adapters like TCI
-- WDSP-based RX/TX DSP
-- multi-client arbitration
-- remote-specific telemetry and policy
+## Same-Host P2 Port Map
 
-That keeps the real-time SDR engine stable while giving Saturn a clean place to
-grow browser remote control, native clients, and role-based access later.
-
-## Same-Host P2 Model
-
-The bridge is designed to run on the same Pi as `p2app`.
-
-Important detail:
-
-- the bridge binds one local UDP port, default `127.0.0.1:12000`
-- discovery/general traffic is sent to `p2app` on `127.0.0.1:1024`
-- `p2app` replies and streams RX data back to the bridge's source port
-- the bridge demuxes incoming traffic by the SDR source ports:
-  - `1025` high-priority from SDR
-  - `1035+` DDC IQ streams
-
-That avoids changing `p2app` while still allowing the bridge to act like a
-normal Protocol 2 client.
-
-## Current Wire Setup
-
-Startup packets currently sent by the bridge:
-
-- discovery request on `1024`
-- general packet on `1024`
-- DDC specific on `1025`
-- DUC specific on `1026`
-- periodic high-priority to SDR on `1027`
-
-Current RX ingest:
-
-- high-priority from SDR on `1025`
-- DDC0 IQ from SDR on `1035`
-
-Current TCI frontend:
-
-- binds `127.0.0.1:50001` by default
-- single-client for now
-- supports:
-  - `ready`
-  - `vfo`
-  - `dds`
-  - `modulation`
-  - `rx_filter_band`
-  - `rx_smeter`
-  - `tx_power`
-  - `swr`
-  - `iq_samplerate`
-  - `iq_start`
-  - `iq_stop`
-- sends IQ binary frames in a TCI-style 64-byte header + float32 I/Q payload
+| Traffic              | Direction        | Port  |
+|----------------------|------------------|-------|
+| Discovery / General  | bridge → radio   | 1024  |
+| DDC specific         | bridge → radio   | 1025  |
+| DUC specific         | bridge → radio   | 1026  |
+| High-priority to SDR | bridge → radio   | 1027  |
+| DUC IQ               | bridge → radio   | 1029  |
+| High-priority from SDR | radio → bridge | 1025  |
+| DDC IQ stream 0      | radio → bridge   | 1035  |
+| DDC IQ stream N      | radio → bridge   | 1035+N |
+| Bridge UDP bind      | local            | 12000 |
 
 ## Build
 
 ```bash
-cargo build --manifest-path /home/pi/github/Saturn/update_manager/saturn-bridge/Cargo.toml
+cargo build --release
 ```
 
-## Run
+Requires `libwdsp.a`, `librnnoise.a`, and `libspecbleach.a` in the pihpsdr
+build tree (see `build.rs`).
+
+## Deploy
 
 ```bash
-cargo run --manifest-path /home/pi/github/Saturn/update_manager/saturn-bridge/Cargo.toml
+sudo cp target/release/saturn-bridge /opt/saturn-go/bin/saturn-bridge
+sudo systemctl restart saturn-bridge
 ```
 
-Useful environment variables:
+A ready-to-install systemd unit is in `saturn-bridge.service.example`.
 
-- `SATURN_BRIDGE_RADIO_HOST`
-- `SATURN_BRIDGE_RADIO_PORT`
-- `SATURN_BRIDGE_CLIENT_HOST`
-- `SATURN_BRIDGE_CLIENT_PORT`
-- `SATURN_BRIDGE_TCI_HOST`
-- `SATURN_BRIDGE_TCI_PORT`
-- `SATURN_BRIDGE_ENABLE_DISCOVERY`
-- `SATURN_BRIDGE_HP_PERIOD_MS`
-- `SATURN_BRIDGE_DDC0_FREQUENCY_HZ`
-- `SATURN_BRIDGE_DDC0_SAMPLE_RATE_KHZ`
-- `SATURN_BRIDGE_DDC0_SAMPLE_SIZE_BITS`
+## Environment Variables
+
+| Variable | Default | Description |
+|---|---|---|
+| `SATURN_BRIDGE_RADIO_HOST` | `127.0.0.1` | p2app host |
+| `SATURN_BRIDGE_RADIO_PORT` | `1024` | p2app discovery port |
+| `SATURN_BRIDGE_CLIENT_HOST` | `0.0.0.0` | local UDP bind host |
+| `SATURN_BRIDGE_CLIENT_PORT` | `12000` | local UDP bind port |
+| `SATURN_BRIDGE_TCI_HOST` | `0.0.0.0` | TCI WebSocket bind host |
+| `SATURN_BRIDGE_TCI_PORT` | `50001` | TCI WebSocket bind port |
+| `SATURN_BRIDGE_ENABLE_DISCOVERY` | `true` | send P2 discovery on start |
+| `SATURN_BRIDGE_HP_PERIOD_MS` | `200` | high-priority send interval |
+| `SATURN_BRIDGE_RX_DDC_INDEX` | `2` | DDC stream index (0–9) |
+| `SATURN_BRIDGE_DDC0_FREQUENCY_HZ` | `14200000` | initial VFO frequency |
+| `SATURN_BRIDGE_DDC0_ADC` | `0` | ADC selection (0=ADC1, 1=ADC2) |
+| `SATURN_BRIDGE_DDC0_SAMPLE_RATE_KHZ` | `192` | IQ sample rate kHz |
+| `SATURN_BRIDGE_DDC0_SAMPLE_SIZE_BITS` | `24` | IQ sample bit depth |
 
 ## Next Steps
 
-1. WDSP RX audio path
-2. TX path with WDSP TXA -> DUC IQ
-3. multi-client roles and arbitration
-4. proxied/authenticated remote deployment through Saturn Go and nginx
+1. Multi-client roles and arbitration
+2. Proxied/authenticated remote access through Saturn Go and nginx
+3. TX audio monitoring / sidetone

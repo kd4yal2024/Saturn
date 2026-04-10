@@ -9,6 +9,14 @@ Saturn Update Manager is deployed as a small appliance-style web stack:
 3. Backend launches shell/Python scripts for maintenance tasks.
 4. Systemd keeps the backend running and uses a watchdog timer for health-based restart.
 
+An experimental remote-control backend now also lives in the repo:
+
+- `saturn-bridge`
+  - separate from `saturn-go`
+  - intended to become the direct G2 remote/session bridge
+  - owns the downstream Protocol 2 client role to `p2app`
+  - is the planned home for TCI, WDSP integration, and multi-client arbitration
+
 ## Request Flow
 
 1. Browser requests `http://<host>/saturn/`.
@@ -35,6 +43,10 @@ Saturn Update Manager is deployed as a small appliance-style web stack:
 - `deskhpsdr.html`
   - Dedicated deskHPSDR update terminal workflow (`POST /run` with `update-deskhpsdr.py`).
   - The script clones/pulls `~/github/deskhpsdr` and delegates build/install-dependency behavior to helper scripts from the active Saturn repo root.
+- `saturn-remote.html`
+  - First direct-G2 remote frontend page.
+  - Uses DOM for connection/session/radio controls and WebGL2 for high-DPI panadapter and waterfall rendering.
+  - Targets `saturn-bridge` as the remote protocol boundary instead of talking to `p2app` directly.
 - `fpga.html`
   - Dedicated FPGA flash workflow (`POST /run` with `flash_fpga.sh`) plus image discovery (`GET /get_fpga_images`).
 - `backup.html`
@@ -51,7 +63,7 @@ Saturn Update Manager is deployed as a small appliance-style web stack:
 - `/opt/saturn-go/scripts/`
   - Executable maintenance scripts (also target directory for browser-managed custom scripts).
 - `/var/lib/saturn-web/`
-  - Web assets: `index.html`, `update.html`, `saturngo.html`, `pihpsdr.html`, `deskhpsdr.html`, `fpga.html`, `backup.html`, `monitor.html`, `config.json`, `themes.json`.
+  - Web assets: `index.html`, `update.html`, `saturngo.html`, `pihpsdr.html`, `deskhpsdr.html`, `saturn-remote.html`, `fpga.html`, `backup.html`, `monitor.html`, `config.json`, `themes.json`.
 - `/var/lib/saturn-state/`
   - Mutable state: `repo_root.txt`, `update_policy.json`, `update_state.json`, snapshots, staged worktrees.
 - `/etc/systemd/system/saturn-go.service`
@@ -69,8 +81,12 @@ Saturn Update Manager is deployed as a small appliance-style web stack:
 
 - `update_manager/rust-server/`
   - Rust backend source code.
+- `update_manager/saturn-bridge/`
+  - standalone direct-G2 bridge source code (currently bootstrap + RX-only ingest).
 - `update_manager/templates/`
   - UI templates copied to web root during install.
+- `update_manager/docs/SATURN_REMOTE_ARCHITECTURE.md`
+  - Detailed frontend/rendering contract for `saturn-remote`.
 - `update_manager/scripts/`
   - Runtime scripts copied to `/opt/saturn-go/scripts`.
 
@@ -84,6 +100,29 @@ Browser-managed custom scripts:
 - Backend seeds default custom entries (and missing files) on startup:
   - `cleanup-saturn-logs.sh`
   - `cleanup-saturn-backups.sh`
+
+## Saturn Remote Display Model
+
+`saturn-remote` is intentionally split into two UI layers:
+
+- DOM layer
+  - session controls
+  - VFO entry
+  - mode/filter controls
+  - textual telemetry and diagnostics
+- GPU canvas layer
+  - panadapter
+  - waterfall
+  - dense, per-frame visual overlays
+
+Current transport posture:
+
+- LAN-first
+  - consume raw IQ from `saturn-bridge` over the first TCI/WebSocket path
+- WAN-later
+  - move toward display-oriented FFT row transport and compressed audio once the remote stack grows beyond same-LAN operation
+
+See `SATURN_REMOTE_ARCHITECTURE.md` for the concrete bridge/display contract.
 
 ## Core State Model
 

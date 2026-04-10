@@ -6,7 +6,7 @@
   <title>Saturn Remote</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Space+Grotesk:wght@400;500;700&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Oxanium:wght@400;500;600;700&family=Space+Grotesk:wght@400;500;700&display=swap" rel="stylesheet">
   <style>
     :root {
       color-scheme: dark;
@@ -340,20 +340,26 @@
       color: var(--muted);
       line-height: 1.4;
     }
-    .meter-bar {
-      position: relative;
-      height: 12px;
-      border-radius: 999px;
-      background: rgba(255, 255, 255, 0.06);
+    .analog-meter-shell {
+      background: #080f14;
+      border: 1px solid rgba(98, 208, 255, 0.10);
+      border-radius: 13px;
       overflow: hidden;
-      border: 1px solid rgba(255, 255, 255, 0.06);
     }
-    .meter-fill {
-      position: absolute;
-      inset: 0 auto 0 0;
-      width: 0%;
-      border-radius: inherit;
-      background: linear-gradient(90deg, #309cff 0%, #5de8b5 55%, #f4b860 80%, #fb7c74 100%);
+    .analog-meter-shell svg { display: block; width: 100%; height: auto; }
+    .meter-dBm-row {
+      display: flex; justify-content: space-between; align-items: center;
+      padding: 2px 12px 6px;
+    }
+    .aux-meter-row {
+      display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 10px;
+    }
+    .aux-meter-val {
+      text-align: center; padding: 1px 4px 5px;
+      font-family: var(--mono); font-size: 11px;
+    }
+    #smeter-needle, #txpwr-needle, #swr-needle {
+      transition: transform 0.22s cubic-bezier(0.34, 1.56, 0.64, 1);
     }
     .stage {
       display: grid;
@@ -517,74 +523,702 @@
         height: 180px;
       }
     }
+
+    :root {
+      --bg-0: #06090d;
+      --bg-1: #111922;
+      --bg-2: rgba(16, 24, 33, 0.88);
+      --bg-3: rgba(11, 17, 24, 0.98);
+      --card: rgba(15, 22, 31, 0.94);
+      --line: rgba(135, 164, 186, 0.16);
+      --line-strong: rgba(170, 197, 219, 0.22);
+      --text: #edf3f7;
+      --muted: #92a4b4;
+      --accent: #71c6ff;
+      --accent-warm: #f2b35f;
+      --shadow: rgba(0, 0, 0, 0.42);
+      --display: "Oxanium", "Space Grotesk", sans-serif;
+    }
+
+    body {
+      background:
+        radial-gradient(circle at top left, rgba(113, 198, 255, 0.11), transparent 22%),
+        radial-gradient(circle at top right, rgba(242, 179, 95, 0.12), transparent 20%),
+        linear-gradient(180deg, #05080c, #0c1118 38%, #141a23);
+    }
+
+    .page.console-page {
+      max-width: 1720px;
+      padding: 18px 18px 26px;
+    }
+
+    .console-header {
+      display: flex;
+      gap: 20px;
+      align-items: flex-start;
+      justify-content: space-between;
+      margin-bottom: 14px;
+      padding: 4px 2px;
+    }
+
+    .console-header .kicker {
+      color: var(--accent-warm);
+      margin-bottom: 6px;
+      letter-spacing: 0.22em;
+    }
+
+    .console-header h1 {
+      margin: 0 0 6px;
+      font-size: clamp(30px, 3.8vw, 46px);
+      line-height: 0.9;
+      letter-spacing: -0.05em;
+    }
+
+    .console-header .subtitle {
+      max-width: 760px;
+      color: #c6d5df;
+      font-size: 14px;
+      line-height: 1.45;
+    }
+
+    .console-header .hero-actions {
+      justify-content: flex-end;
+    }
+
+    .command-strip {
+      margin-bottom: 16px;
+      border-radius: 26px;
+      border: 1px solid rgba(170, 197, 219, 0.16);
+      background:
+        linear-gradient(180deg, rgba(20, 27, 36, 0.98), rgba(11, 17, 24, 0.96)),
+        repeating-linear-gradient(90deg, rgba(255, 255, 255, 0.03) 0 1px, transparent 1px 80px);
+      box-shadow: 0 24px 44px rgba(0, 0, 0, 0.26);
+    }
+
+    .strip-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1.5fr) minmax(260px, 0.82fr) minmax(360px, 1fr);
+      gap: 14px;
+      align-items: stretch;
+    }
+
+    .vfo-deck,
+    .control-cluster {
+      position: relative;
+      min-height: 172px;
+      padding: 16px 18px;
+      border-radius: 22px;
+      border: 1px solid rgba(170, 197, 219, 0.12);
+      overflow: hidden;
+      background:
+        linear-gradient(180deg, rgba(19, 27, 36, 0.96), rgba(10, 16, 23, 0.94)),
+        radial-gradient(circle at top right, rgba(113, 198, 255, 0.12), transparent 36%);
+    }
+
+    .vfo-deck::after,
+    .control-cluster::after {
+      content: "";
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      background:
+        linear-gradient(135deg, rgba(255, 255, 255, 0.06), transparent 16%, transparent 84%, rgba(255, 255, 255, 0.03));
+      mix-blend-mode: screen;
+      opacity: 0.45;
+    }
+
+    .secondary-deck {
+      background:
+        linear-gradient(180deg, rgba(18, 24, 33, 0.96), rgba(10, 15, 21, 0.94)),
+        radial-gradient(circle at top right, rgba(242, 179, 95, 0.12), transparent 40%);
+    }
+
+    .deck-top {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      align-items: flex-start;
+      margin-bottom: 10px;
+    }
+
+    .deck-label {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      font-family: var(--mono);
+      font-size: 11px;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: #90a7ba;
+    }
+
+    .deck-label::before {
+      content: "";
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--accent);
+      box-shadow: 0 0 12px rgba(113, 198, 255, 0.45);
+    }
+
+    .secondary-deck .deck-label::before {
+      background: var(--accent-warm);
+      box-shadow: 0 0 12px rgba(242, 179, 95, 0.35);
+    }
+
+    .deck-frequency {
+      font-family: var(--display);
+      font-weight: 600;
+      line-height: 0.92;
+      letter-spacing: 0.08em;
+      color: #f7fbff;
+      text-shadow: 0 0 24px rgba(113, 198, 255, 0.14);
+    }
+
+    .freq-readout {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 2px;
+      align-items: center;
+    }
+
+    .freq-digit {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 0.78em;
+      border-radius: 10px;
+      padding: 0.04em 0.02em;
+      cursor: ns-resize;
+      transition: background 120ms ease, color 120ms ease, transform 120ms ease;
+      user-select: none;
+    }
+
+    .freq-digit:hover,
+    .freq-digit:focus-visible {
+      outline: none;
+      background: rgba(98, 208, 255, 0.14);
+      color: #ffffff;
+      transform: translateY(-1px);
+    }
+
+    .freq-separator {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      padding: 0.04em 0.08em;
+      color: rgba(216, 228, 237, 0.82);
+    }
+
+    .primary-deck .deck-frequency {
+      margin: 12px 0 18px;
+      font-size: clamp(44px, 4.8vw, 68px);
+    }
+
+    .secondary-deck .deck-frequency {
+      margin: 18px 0 8px;
+      font-size: clamp(30px, 2.8vw, 42px);
+      color: #dde8f1;
+    }
+
+    .deck-subline {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      font-family: var(--mono);
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    .deck-input-row {
+      display: flex;
+      gap: 12px;
+      align-items: center;
+      margin-top: 8px;
+    }
+
+    .deck-input-row .field {
+      max-width: 320px;
+      font-size: 18px;
+      font-weight: 600;
+      padding: 12px 14px;
+      border-radius: 16px;
+    }
+
+    .deck-note {
+      font-size: 12px;
+      color: var(--muted);
+      line-height: 1.45;
+      max-width: 240px;
+    }
+
+    .nr-grid {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: 8px;
+    }
+
+    .status-ribbon {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-bottom: 12px;
+    }
+
+    .status-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      min-height: 36px;
+      padding: 7px 12px;
+      border-radius: 999px;
+      border: 1px solid rgba(170, 197, 219, 0.18);
+      background: rgba(255, 255, 255, 0.04);
+      font-family: var(--mono);
+      font-size: 12px;
+      color: #d6e1e8;
+    }
+
+    .status-chip.ghost {
+      color: var(--muted);
+      background: rgba(255, 255, 255, 0.02);
+    }
+
+    .launch-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+    }
+
+    .launch-grid .btn {
+      width: 100%;
+      justify-content: center;
+      min-height: 46px;
+      padding: 12px 14px;
+      font-weight: 600;
+    }
+
+    .btn.warm {
+      border-color: rgba(242, 179, 95, 0.38);
+      background: linear-gradient(135deg, rgba(140, 94, 32, 0.92), rgba(92, 59, 21, 0.94));
+      box-shadow: 0 12px 28px rgba(86, 51, 18, 0.28);
+    }
+
+    .control-cluster {
+      display: grid;
+      gap: 14px;
+      align-content: start;
+    }
+
+    .control-cluster .panel-meta {
+      font-size: 12px;
+    }
+
+    .control-cluster .row {
+      align-items: stretch;
+    }
+
+    .control-cluster .field {
+      flex: 1 1 100%;
+    }
+
+    .console-layout {
+      grid-template-columns: 320px minmax(0, 1fr) 320px;
+      gap: 16px;
+    }
+
+    .panel {
+      border-radius: 24px;
+      border-color: rgba(170, 197, 219, 0.14);
+      background:
+        linear-gradient(180deg, rgba(17, 24, 32, 0.97), rgba(10, 15, 22, 0.96)),
+        repeating-linear-gradient(90deg, rgba(255, 255, 255, 0.02) 0 1px, transparent 1px 72px);
+      box-shadow: 0 18px 34px rgba(0, 0, 0, 0.22);
+    }
+
+    .panel-head {
+      padding: 14px 16px 0;
+      align-items: center;
+    }
+
+    .panel-title {
+      font-size: 13px;
+      letter-spacing: 0.15em;
+      color: #d8e4ed;
+    }
+
+    .panel-meta {
+      color: #7f93a5;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.12em;
+    }
+
+    .panel-body {
+      padding: 14px 16px 16px;
+    }
+
+    .field-row {
+      gap: 12px;
+      margin-bottom: 14px;
+    }
+
+    .label {
+      margin-bottom: 6px;
+    }
+
+    .field {
+      border-radius: 16px;
+      background: rgba(255, 255, 255, 0.03);
+      border-color: rgba(170, 197, 219, 0.14);
+    }
+
+    .mode-grid {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+
+    .band-grid {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+
+    .mode-btn,
+    .band-btn {
+      min-height: 44px;
+      padding: 11px 8px;
+      border-radius: 14px;
+      background: rgba(255, 255, 255, 0.03);
+    }
+
+    .metric-grid {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+    }
+
+    .metric {
+      min-height: 90px;
+      border-radius: 18px;
+      background:
+        linear-gradient(180deg, rgba(255, 255, 255, 0.03), rgba(255, 255, 255, 0.015));
+    }
+
+    .metric .metric-value {
+      font-family: var(--display);
+      font-size: 24px;
+      letter-spacing: 0.04em;
+    }
+
+    .scope-frame {
+      border-radius: 28px;
+      background:
+        radial-gradient(circle at top, rgba(113, 198, 255, 0.09), transparent 34%),
+        linear-gradient(180deg, rgba(7, 12, 19, 0.98), rgba(4, 9, 15, 0.99));
+      box-shadow: 0 24px 46px rgba(0, 0, 0, 0.28);
+    }
+
+    .display-head {
+      align-items: flex-start;
+      padding: 16px 18px 0;
+    }
+
+    .display-pill-row {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+
+    .display-pill {
+      display: inline-flex;
+      align-items: center;
+      min-height: 34px;
+      padding: 7px 11px;
+      border-radius: 999px;
+      border: 1px solid rgba(170, 197, 219, 0.16);
+      background: rgba(255, 255, 255, 0.03);
+      font-family: var(--mono);
+      font-size: 12px;
+      color: #dce6ee;
+    }
+
+    .frequency-ruler {
+      display: grid;
+      gap: 6px;
+      padding: 8px 18px 10px;
+    }
+
+    .ruler-main {
+      font-family: var(--display);
+      font-size: clamp(28px, 3vw, 42px);
+      line-height: 0.95;
+      letter-spacing: 0.08em;
+      color: #f3f8fc;
+    }
+
+    .ruler-sub {
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      color: var(--muted);
+      font-family: var(--mono);
+      font-size: 11px;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+    }
+
+    .display-zoom {
+      display: grid;
+      gap: 6px;
+      padding: 0 18px 12px;
+    }
+
+    .display-stack {
+      gap: 10px;
+      padding: 0 16px 16px;
+    }
+
+    .spectrum-shell,
+    .waterfall-shell {
+      border-radius: 22px;
+      border-color: rgba(255, 255, 255, 0.08);
+      background:
+        linear-gradient(180deg, rgba(17, 25, 35, 0.94), rgba(7, 13, 20, 0.98)),
+        repeating-linear-gradient(to right, rgba(255, 255, 255, 0.035) 0 1px, transparent 1px 8.33%),
+        repeating-linear-gradient(to top, rgba(255, 255, 255, 0.028) 0 1px, transparent 1px 14%);
+    }
+
+    .spectrum-shell {
+      height: 390px;
+      box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.03);
+    }
+
+    .waterfall-shell {
+      height: 230px;
+    }
+
+    .filter-window {
+      top: 14px;
+      bottom: 14px;
+      border-radius: 16px;
+      border-color: rgba(242, 179, 95, 0.5);
+    }
+
+    .scope-footer {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 10px;
+      padding: 0 16px 16px;
+    }
+
+    .scope-stat {
+      padding: 10px 12px;
+      border-radius: 16px;
+      border: 1px solid rgba(170, 197, 219, 0.12);
+      background: rgba(255, 255, 255, 0.03);
+    }
+
+    .scope-stat-label {
+      margin-bottom: 6px;
+      font-family: var(--mono);
+      font-size: 10px;
+      color: var(--muted);
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+    }
+
+    .scope-stat-value {
+      font-family: var(--display);
+      font-size: 21px;
+      letter-spacing: 0.04em;
+      color: #eef5fb;
+    }
+
+    .console-log pre {
+      min-height: 210px;
+      max-height: 210px;
+      border-top: 1px solid rgba(255, 255, 255, 0.04);
+      background:
+        linear-gradient(180deg, rgba(5, 9, 14, 0.96), rgba(4, 8, 12, 0.98));
+    }
+
+    .note-list {
+      display: grid;
+      gap: 10px;
+    }
+
+    .note-card {
+      padding: 12px 13px;
+      border-radius: 16px;
+      border: 1px solid rgba(170, 197, 219, 0.12);
+      background: rgba(255, 255, 255, 0.025);
+    }
+
+    .note-card h3 {
+      margin: 0 0 6px;
+      font-size: 12px;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: #dce7ef;
+    }
+
+    .note-card p {
+      margin: 0;
+      font-size: 13px;
+      line-height: 1.45;
+      color: var(--muted);
+    }
+
+    @media (max-width: 1520px) {
+      .strip-grid {
+        grid-template-columns: minmax(0, 1.35fr) minmax(240px, 0.8fr);
+      }
+
+      .control-cluster {
+        grid-column: 1 / -1;
+        min-height: auto;
+      }
+    }
+
+    @media (max-width: 1360px) {
+      .console-layout {
+        grid-template-columns: minmax(280px, 320px) minmax(0, 1fr);
+      }
+
+      .right-rail {
+        grid-column: 1 / -1;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+    }
+
+    @media (max-width: 1080px) {
+      .console-header,
+      .strip-grid,
+      .console-layout {
+        grid-template-columns: 1fr;
+        display: grid;
+      }
+
+      .console-header .hero-actions {
+        justify-content: flex-start;
+      }
+
+      .right-rail {
+        grid-template-columns: 1fr;
+      }
+
+      .scope-footer {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+    }
+
+    @media (max-width: 780px) {
+      .page.console-page {
+        padding: 12px;
+      }
+
+      .primary-deck .deck-frequency,
+      .secondary-deck .deck-frequency,
+      .ruler-main {
+        font-size: 28px;
+      }
+
+      .deck-input-row {
+        flex-direction: column;
+        align-items: stretch;
+      }
+
+      .deck-input-row .field {
+        max-width: none;
+      }
+
+      .status-ribbon,
+      .display-pill-row,
+      .ruler-sub {
+        flex-direction: column;
+        align-items: flex-start;
+      }
+
+      .scope-footer,
+      .metric-grid,
+      .launch-grid,
+      .mode-grid,
+      .nr-grid,
+      .band-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .spectrum-shell {
+        height: 300px;
+      }
+
+      .waterfall-shell {
+        height: 190px;
+      }
+    }
   </style>
 </head>
 <body>
-  <div class="page">
-    <section class="hero">
-      <div class="hero-top">
-        <div>
-          <div class="kicker">Saturn Remote</div>
-          <h1>Direct G2 control with a browser-native display path.</h1>
-          <div class="subtitle">
-            This page is the first independent <span class="mono">saturn-remote</span> frontend:
-            DOM for control and session state, WebGL2 for high-DPI spectrum and waterfall,
-            and <span class="mono">saturn-bridge</span> as the protocol boundary underneath.
-          </div>
-        </div>
-        <div class="hero-actions">
-          <a class="nav-link" href="./">Update</a>
-          <a class="nav-link" href="./monitor">Monitor</a>
-          <a class="nav-link" href="./p23test">p2app Lab</a>
-          <button class="btn alt" id="demo-btn" type="button">Preview Only</button>
+  <div class="page console-page">
+    <header class="console-header">
+      <div>
+        <div class="kicker">Saturn Remote / Operator Console</div>
+        <h1>Saturn Remote</h1>
+        <div class="subtitle">
+          A denser browser console for G2 receive work: persistent frequency deck, center-first panadapter,
+          compact control rails, and a cleaner operator hierarchy than the current “dashboard card” pattern.
         </div>
       </div>
-
-      <div class="hero-cards">
-        <div class="hero-card">
-          <div class="label">Control Plane</div>
-          <div class="value">DOM + TCI</div>
-          <div class="detail">Connection status, VFO, mode, filters, sample rate, and session diagnostics stay in the normal document layer.</div>
-        </div>
-        <div class="hero-card">
-          <div class="label">Display Engine</div>
-          <div class="value">WebGL2</div>
-          <div class="detail">Spectrum and waterfall render into dedicated GPU canvases, sized against <span class="mono">devicePixelRatio</span> for crisp shack displays.</div>
-        </div>
-        <div class="hero-card">
-          <div class="label">LAN Contract</div>
-          <div class="value">Raw IQ Now</div>
-          <div class="detail">The current bridge sends TCI-style float32 IQ frames directly. This keeps the first browser path honest and close to the radio.</div>
-        </div>
-        <div class="hero-card">
-          <div class="label">WAN Direction</div>
-          <div class="value">FFT Rows Later</div>
-          <div class="detail">For internet use, move panadapter transport toward display-oriented FFT rows and compressed audio instead of raw IQ everywhere.</div>
-        </div>
+      <div class="hero-actions">
+        <a class="nav-link" href="./">Update</a>
+        <a class="nav-link" href="./monitor">Monitor</a>
+        <a class="nav-link" href="./p23test">p2app Lab</a>
+        <button class="btn alt" id="demo-btn" type="button">Preview Only</button>
       </div>
-    </section>
+    </header>
 
-    <section class="layout">
-      <div class="stack">
-        <div class="panel">
-          <div class="panel-head">
-            <h2 class="panel-title">Session</h2>
-            <div class="panel-meta" id="connection-summary">Idle</div>
-          </div>
-          <div class="panel-body">
-            <div class="field-row">
-              <div>
-                <label class="label" for="ws-url">Bridge WebSocket</label>
-                <input class="field" id="ws-url" spellcheck="false" />
+    <section class="command-strip panel">
+      <div class="panel-body">
+        <div class="strip-grid">
+          <div class="vfo-deck primary-deck">
+            <div class="deck-top">
+              <span class="deck-label">Primary VFO</span>
+              <span class="status-chip ghost" id="connection-summary">Idle</span>
+            </div>
+            <div class="deck-frequency mono freq-readout" id="dds-readout">14.200.000</div>
+            <div class="deck-subline">
+              <span id="path-summary">ADC1 • ANT1 • 192 kHz IQ</span>
+              <span>Center frequency / click-to-tune reference</span>
+            </div>
+            <div class="deck-input-row">
+              <div style="flex: 1 1 auto;">
+                <label class="label" for="vfo-a-input">Direct Frequency Entry</label>
+                <input class="field" id="vfo-a-input" inputmode="numeric" />
               </div>
-              <div class="row">
-                <span class="pill"><span class="dot" id="conn-dot"></span><span id="conn-label">Disconnected</span></span>
-                <span class="pill"><span id="stream-label">IQ stopped</span></span>
-                <span class="pill"><span id="audio-label">Audio stopped</span></span>
+              <div class="deck-note">
+                Tune by direct entry, wheel or click the frequency digits, or use the panadapter and step controls.
               </div>
             </div>
+          </div>
 
-            <div class="button-grid">
+          <div class="vfo-deck secondary-deck">
+            <div class="deck-top">
+              <span class="deck-label">Standby VFO B</span>
+              <span class="status-chip ghost" id="stream-label">IQ stopped</span>
+            </div>
+            <div class="deck-frequency mono" id="vfo-b-readout">14.200.000</div>
+            <div class="deck-subline">
+              <span class="status-chip ghost" id="audio-label">Audio stopped</span>
+              <span class="status-chip ghost"><span class="dot" id="conn-dot"></span><span id="conn-label">Disconnected</span></span>
+            </div>
+          </div>
+
+          <div class="control-cluster">
+            <div class="panel-meta">Launch Path</div>
+            <div class="status-ribbon">
+              <span class="status-chip">Bridge / TCI transport</span>
+              <span class="status-chip ghost">Browser panadapter + audio</span>
+              <span class="status-chip ghost">LAN-truth RX path</span>
+            </div>
+            <div class="launch-grid">
               <button class="btn primary" id="connect-btn" type="button">Connect</button>
               <button class="btn ghost" id="disconnect-btn" type="button">Disconnect</button>
               <button class="btn alt" id="start-iq-btn" type="button">Start IQ</button>
@@ -592,8 +1226,26 @@
               <button class="btn warm" id="start-audio-btn" type="button">Start Audio</button>
               <button class="btn ghost" id="stop-audio-btn" type="button">Stop Audio</button>
             </div>
+          </div>
+        </div>
+      </div>
+    </section>
 
-            <div class="field-row" style="margin-top: 16px;">
+    <section class="layout console-layout">
+      <div class="stack left-rail">
+        <div class="panel">
+          <div class="panel-head">
+            <h2 class="panel-title">Routing</h2>
+            <div class="panel-meta">Bridge / sampling path</div>
+          </div>
+          <div class="panel-body">
+            <div class="field-row">
+              <div>
+                <label class="label" for="ws-url">Bridge WebSocket</label>
+                <input class="field" id="ws-url" spellcheck="false" />
+              </div>
+            </div>
+            <div class="field-row">
               <div>
                 <label class="label" for="sample-rate">IQ Sample Rate</label>
                 <select class="field" id="sample-rate">
@@ -602,10 +1254,6 @@
                   <option value="192000" selected>192 kHz</option>
                   <option value="384000">384 kHz</option>
                 </select>
-              </div>
-              <div>
-                <label class="label" for="vfo-a-input">VFO A (Hz)</label>
-                <input class="field" id="vfo-a-input" inputmode="numeric" />
               </div>
               <div>
                 <label class="label" for="rx-adc">RX Input</label>
@@ -623,7 +1271,15 @@
                 </select>
               </div>
             </div>
+          </div>
+        </div>
 
+        <div class="panel">
+          <div class="panel-head">
+            <h2 class="panel-title">Tuning</h2>
+            <div class="panel-meta">Recall / nudge / jump</div>
+          </div>
+          <div class="panel-body">
             <div class="field-row">
               <div>
                 <label class="label">Tune Step</label>
@@ -637,7 +1293,6 @@
                 </div>
               </div>
             </div>
-
             <div class="field-row">
               <div>
                 <label class="label">Band Recall</label>
@@ -656,8 +1311,8 @@
 
         <div class="panel">
           <div class="panel-head">
-            <h2 class="panel-title">Receive Controls</h2>
-            <div class="panel-meta">DOM control layer</div>
+            <h2 class="panel-title">Demod</h2>
+            <div class="panel-meta">Mode / gain / passband</div>
           </div>
           <div class="panel-body">
             <div class="field-row">
@@ -676,10 +1331,27 @@
               <div class="range-wrap">
                 <div class="row spread">
                   <span class="label" style="margin: 0;">RX Volume</span>
-                  <span class="mono small" id="rx-volume-readout">-20.0 dB</span>
+                  <span class="mono small" id="rx-volume-readout">-10.0 dB</span>
                 </div>
-                <input id="rx-volume" type="range" min="-40" max="0" step="0.5" value="-20" />
+                <input id="rx-volume" type="range" min="-40" max="12" step="0.5" value="-10" />
               </div>
+              <div class="range-wrap">
+                <div class="row spread">
+                  <span class="label" style="margin: 0;">Noise Reduction</span>
+                  <span class="mono small" id="rx-nr-readout">Off</span>
+                </div>
+                <div class="nr-grid" id="rx-nr-grid">
+                  <button class="mode-btn active" data-nr-mode="OFF" type="button">Off</button>
+                  <button class="mode-btn" data-nr-mode="NR1" type="button">NR1</button>
+                  <button class="mode-btn" data-nr-mode="NR2" type="button">NR2</button>
+                  <button class="mode-btn" data-nr-mode="NR3" type="button">NR3</button>
+                  <button class="mode-btn" data-nr-mode="NR4" type="button">NR4</button>
+                </div>
+                <input id="rx-nr-level" type="range" min="0" max="100" step="1" value="100" />
+              </div>
+            </div>
+
+            <div class="field-row">
               <div class="range-wrap">
                 <div class="row spread">
                   <span class="label" style="margin: 0;">Filter Low</span>
@@ -695,31 +1367,37 @@
                 <input id="filter-high" type="range" min="-12000" max="12000" step="50" value="3000" />
               </div>
             </div>
-
-            <div class="metric-grid">
-              <div class="metric">
-                <div class="metric-label">Center</div>
-                <div class="metric-value mono" id="dds-readout">14.200.000</div>
-                <div class="metric-sub">DDS / panadapter center frequency</div>
-              </div>
-              <div class="metric">
-                <div class="metric-label">Mode</div>
-                <div class="metric-value mono" id="mode-readout">USB</div>
-                <div class="metric-sub">Current bridge mode echo</div>
-              </div>
-            </div>
           </div>
         </div>
       </div>
 
-      <div class="stage">
-        <div class="display-card">
+      <div class="stage console-stage">
+        <div class="display-card scope-frame">
           <div class="display-head">
             <div>
-              <div class="panel-title" style="margin-bottom: 4px;">Panadapter + Waterfall</div>
+              <div class="panel-title" style="margin-bottom: 4px;">Panadapter / Waterfall</div>
               <div class="display-meta" id="display-caption">Waiting for TCI IQ frames from saturn-bridge</div>
             </div>
-            <div class="pill mono" id="display-resolution">Display: --</div>
+            <div class="display-pill-row">
+              <span class="display-pill mono" id="mode-readout">USB</span>
+              <span class="display-pill mono" id="sample-rate-readout">192 kHz</span>
+              <span class="display-pill mono" id="display-resolution">Display: --</span>
+            </div>
+          </div>
+          <div class="display-zoom">
+            <div class="row spread">
+              <span class="label" style="margin: 0;">Display Zoom</span>
+              <span class="mono small" id="zoom-readout">1.0x</span>
+            </div>
+                <input id="display-zoom" type="range" min="1" max="32" step="1" value="1" />
+          </div>
+          <div class="frequency-ruler">
+            <div class="ruler-main mono freq-readout" id="operator-center-readout">14.200.000</div>
+            <div class="ruler-sub">
+              <span id="axis-left">-96 kHz</span>
+              <span id="axis-center">Center 14.200.000</span>
+              <span id="axis-right">+96 kHz</span>
+            </div>
           </div>
           <div class="display-stack">
             <div class="spectrum-shell" id="spectrum-shell">
@@ -727,69 +1405,149 @@
               <div class="filter-window" id="filter-window"></div>
               <div class="center-line"></div>
             </div>
-            <div class="axis-row">
-              <span id="axis-left">-96 kHz</span>
-              <span id="axis-center">Center 14.200.000</span>
-              <span id="axis-right">+96 kHz</span>
-            </div>
             <div class="waterfall-shell" id="waterfall-shell">
               <canvas id="waterfall-canvas"></canvas>
               <div class="center-line"></div>
             </div>
           </div>
+          <div class="scope-footer">
+            <div class="scope-stat">
+              <div class="scope-stat-label">Frame Rate</div>
+              <div class="scope-stat-value mono" id="frame-rate-readout">0 fps</div>
+            </div>
+            <div class="scope-stat">
+              <div class="scope-stat-label">FFT Width</div>
+              <div class="scope-stat-value mono" id="fft-readout">--</div>
+            </div>
+            <div class="scope-stat">
+              <div class="scope-stat-label">Audio Resyncs</div>
+              <div class="scope-stat-value mono" id="audio-drop-readout">0</div>
+            </div>
+            <div class="scope-stat">
+              <div class="scope-stat-label">Display Contract</div>
+              <div class="scope-stat-value mono">TCI IQ</div>
+            </div>
+          </div>
         </div>
 
-        <div class="panel log-card">
+        <div class="panel log-card console-log">
           <div class="panel-head">
-            <h2 class="panel-title">Bridge Log</h2>
-            <div class="panel-meta">Live client-side trace</div>
+            <h2 class="panel-title">Operator Log</h2>
+            <div class="panel-meta">Live client trace</div>
           </div>
           <pre id="event-log"></pre>
         </div>
       </div>
 
-      <div class="stack">
+      <div class="stack right-rail">
         <div class="panel">
           <div class="panel-head">
             <h2 class="panel-title">Telemetry</h2>
             <div class="panel-meta">Observed radio state</div>
           </div>
           <div class="panel-body">
-            <div class="field-row">
-              <div class="row spread">
-                <span class="label" style="margin: 0;">S-Meter</span>
-                <span class="mono small" id="meter-readout">-- dBm</span>
-              </div>
-              <div class="meter-bar">
-                <div class="meter-fill" id="meter-fill"></div>
+            <!-- S-Meter -->
+            <div class="analog-meter-shell" style="margin-bottom:10px;">
+              <svg id="smeter-svg" viewBox="0 0 360 185" xmlns="http://www.w3.org/2000/svg">
+                <defs>
+                  <radialGradient id="smeter-face" cx="50%" cy="85%" r="70%">
+                    <stop offset="0%" stop-color="#14242c"/>
+                    <stop offset="100%" stop-color="#060d12"/>
+                  </radialGradient>
+                  <linearGradient id="smeter-needle-g" x1="180" y1="38" x2="180" y2="165" gradientUnits="userSpaceOnUse">
+                    <stop offset="0%" stop-color="#ffe060"/>
+                    <stop offset="55%" stop-color="#d4a820"/>
+                    <stop offset="100%" stop-color="#7a5a08"/>
+                  </linearGradient>
+                </defs>
+                <!-- Bezel -->
+                <rect x="1" y="1" width="358" height="183" rx="13" fill="#141e24" stroke="#2e4858" stroke-width="1.5"/>
+                <!-- Face -->
+                <rect x="5" y="5" width="350" height="175" rx="10" fill="url(#smeter-face)"/>
+                <!-- Arc zones (built by JS) -->
+                <path id="smeter-arc-s"    fill="none" stroke="#a87818" stroke-width="4" stroke-linecap="round"/>
+                <path id="smeter-arc-over" fill="none" stroke="#a02828" stroke-width="4" stroke-linecap="round"/>
+                <!-- Ticks and labels (built by JS) -->
+                <g id="smeter-ticks"></g>
+                <g id="smeter-labels"></g>
+                <!-- Title -->
+                <text x="180" y="16" text-anchor="middle" font-family="IBM Plex Mono,monospace"
+                  font-size="8" letter-spacing="5" fill="#3a6070">S I G N A L</text>
+                <!-- Needle -->
+                <g id="smeter-needle" style="transform:rotate(-60deg);transform-origin:180px 165px;">
+                  <polygon points="179.5,162 180.5,162 180.2,42 179.8,42" fill="rgba(0,0,0,0.30)" transform="translate(1.5,1.5)"/>
+                  <polygon points="179,162 181,162 180.3,40 179.7,40" fill="url(#smeter-needle-g)"/>
+                  <polygon points="179.7,150 180,150 180,42 179.7,42" fill="rgba(255,248,180,0.50)"/>
+                  <rect x="178.5" y="163" width="3" height="9" rx="1.5" fill="#c09018"/>
+                </g>
+                <!-- Pivot -->
+                <circle cx="180" cy="165" r="9"   fill="#101c24" stroke="#304858" stroke-width="1.5"/>
+                <circle cx="180" cy="165" r="5.5" fill="#1e3040" stroke="#486070" stroke-width="1"/>
+                <circle cx="180" cy="165" r="2.5" fill="#7aa0b8"/>
+                <circle cx="180" cy="165" r="1"   fill="#c0d8e0"/>
+                <!-- Glass glare -->
+                <ellipse cx="135" cy="58" rx="85" ry="28" fill="rgba(255,255,255,0.025)" transform="rotate(-12,135,58)"/>
+              </svg>
+              <div class="meter-dBm-row">
+                <span style="font-family:var(--mono);font-size:9px;letter-spacing:3px;color:#3a6070;">S-METER</span>
+                <span class="mono small" id="meter-readout" style="color:#b08018;">-- dBm</span>
               </div>
             </div>
 
-            <div class="metric-grid">
-              <div class="metric">
-                <div class="metric-label">TX Power</div>
-                <div class="metric-value mono" id="tx-power-readout">--</div>
-                <div class="metric-sub">Forward power from high-priority telemetry</div>
+            <!-- TX Power + SWR gauges -->
+            <div class="aux-meter-row">
+              <div class="analog-meter-shell">
+                <svg id="txpwr-svg" viewBox="0 0 175 115" xmlns="http://www.w3.org/2000/svg">
+                  <defs>
+                    <radialGradient id="aux-face" cx="50%" cy="85%" r="70%">
+                      <stop offset="0%" stop-color="#14242c"/>
+                      <stop offset="100%" stop-color="#060d12"/>
+                    </radialGradient>
+                  </defs>
+                  <rect x="1" y="1" width="173" height="113" rx="10" fill="#141e24" stroke="#2e4858" stroke-width="1.5"/>
+                  <rect x="4" y="4" width="167" height="107" rx="8" fill="url(#aux-face)"/>
+                  <path id="txpwr-arc-bg"   fill="none" stroke="#1a2c38" stroke-width="3.5" stroke-linecap="round"/>
+                  <path id="txpwr-arc-fill" fill="none" stroke="#309cff" stroke-width="3.5" stroke-linecap="round"/>
+                  <g id="txpwr-ticks"></g>
+                  <g id="txpwr-labels"></g>
+                  <g id="txpwr-needle" style="transform:rotate(-65deg);transform-origin:87px 100px;">
+                    <polygon points="86.5,98 87.5,98 87.2,30 86.8,30" fill="rgba(0,0,0,0.3)" transform="translate(1,1)"/>
+                    <polygon points="86.5,98 87.5,98 87.2,30 86.8,30" fill="#62d0ff"/>
+                    <rect x="86" y="99" width="2" height="6" rx="1" fill="#3080a0"/>
+                  </g>
+                  <circle cx="87" cy="100" r="7"   fill="#101c24" stroke="#304858" stroke-width="1.5"/>
+                  <circle cx="87" cy="100" r="4"   fill="#1e3040" stroke="#486070" stroke-width="1"/>
+                  <circle cx="87" cy="100" r="1.5" fill="#7aa0b8"/>
+                  <text x="87" y="14" text-anchor="middle" font-family="IBM Plex Mono,monospace"
+                    font-size="7" letter-spacing="3" fill="#3a6070">TX PWR</text>
+                </svg>
+                <div class="aux-meter-val" style="color:#62d0ff;">
+                  <span id="tx-power-readout">-- W</span>
+                </div>
               </div>
-              <div class="metric">
-                <div class="metric-label">SWR</div>
-                <div class="metric-value mono" id="swr-readout">--</div>
-                <div class="metric-sub">Bridge-derived from forward and reverse power</div>
-              </div>
-              <div class="metric">
-                <div class="metric-label">Frame Rate</div>
-                <div class="metric-value mono" id="frame-rate-readout">0 fps</div>
-                <div class="metric-sub">Client IQ frame cadence</div>
-              </div>
-              <div class="metric">
-                <div class="metric-label">FFT Width</div>
-                <div class="metric-value mono" id="fft-readout">--</div>
-                <div class="metric-sub">Current panadapter bin count</div>
-              </div>
-              <div class="metric">
-                <div class="metric-label">Audio Resyncs</div>
-                <div class="metric-value mono" id="audio-drop-readout">0</div>
-                <div class="metric-sub">Browser playback queue trims after drift/backpressure</div>
+              <div class="analog-meter-shell">
+                <svg id="swrmeter-svg" viewBox="0 0 175 115" xmlns="http://www.w3.org/2000/svg">
+                  <rect x="1" y="1" width="173" height="113" rx="10" fill="#141e24" stroke="#2e4858" stroke-width="1.5"/>
+                  <rect x="4" y="4" width="167" height="107" rx="8" fill="url(#aux-face)"/>
+                  <path id="swr-arc-good" fill="none" stroke="#28a870" stroke-width="3.5" stroke-linecap="round"/>
+                  <path id="swr-arc-warn" fill="none" stroke="#c08820" stroke-width="3.5" stroke-linecap="round"/>
+                  <path id="swr-arc-bad"  fill="none" stroke="#a02828" stroke-width="3.5" stroke-linecap="round"/>
+                  <g id="swr-ticks"></g>
+                  <g id="swr-labels"></g>
+                  <g id="swr-needle" style="transform:rotate(-65deg);transform-origin:87px 100px;">
+                    <polygon points="86.5,98 87.5,98 87.2,30 86.8,30" fill="rgba(0,0,0,0.3)" transform="translate(1,1)"/>
+                    <polygon id="swr-needle-poly" points="86.5,98 87.5,98 87.2,30 86.8,30" fill="#5de8b5"/>
+                    <rect x="86" y="99" width="2" height="6" rx="1" fill="#207858"/>
+                  </g>
+                  <circle cx="87" cy="100" r="7"   fill="#101c24" stroke="#304858" stroke-width="1.5"/>
+                  <circle cx="87" cy="100" r="4"   fill="#1e3040" stroke="#486070" stroke-width="1"/>
+                  <circle cx="87" cy="100" r="1.5" fill="#7aa0b8"/>
+                  <text x="87" y="14" text-anchor="middle" font-family="IBM Plex Mono,monospace"
+                    font-size="7" letter-spacing="3" fill="#3a6070">S W R</text>
+                </svg>
+                <div class="aux-meter-val" style="color:#5de8b5;">
+                  <span id="swr-readout">-- : 1</span>
+                </div>
               </div>
             </div>
           </div>
@@ -797,22 +1555,22 @@
 
         <div class="panel">
           <div class="panel-head">
-            <h2 class="panel-title">Render Contract</h2>
-            <div class="panel-meta">v2 frontend boundary</div>
+            <h2 class="panel-title">Operator Notes</h2>
+            <div class="panel-meta">Why this layout</div>
           </div>
           <div class="panel-body">
-            <div class="insight-list">
-              <div class="insight">
-                <h3 class="insight-title">DOM owns stateful controls</h3>
-                <div class="insight-body">WebSocket endpoint, connection state, VFO entry, mode, filters, meters, and session policy stay in the normal document tree for maintainability.</div>
+            <div class="note-list">
+              <div class="note-card">
+                <h3>Persistent Frequency Deck</h3>
+                <p>The primary VFO stays dominant even while meters and controls move around it. That keeps the page closer to a real operator console than a generic web dashboard.</p>
               </div>
-              <div class="insight">
-                <h3 class="insight-title">WebGL owns dense pixels</h3>
-                <div class="insight-body">Spectrum and waterfall use GPU canvases so the page stays sharp on 4k shack screens and can scale later to denser FFT and overlay layers.</div>
+              <div class="note-card">
+                <h3>Center-First Display</h3>
+                <p>The panadapter and waterfall own the middle of the page. Controls are rails around the signal view, not competing hero cards above it.</p>
               </div>
-              <div class="insight">
-                <h3 class="insight-title">LAN vs WAN split</h3>
-                <div class="insight-body">Current bridge contract is raw IQ over TCI for LAN truth. WAN should evolve toward FFT rows, compressed audio, and better session transport instead of forwarding raw IQ by default.</div>
+              <div class="note-card">
+                <h3>Browser Advantage</h3>
+                <p>Thetis-style density is useful, but this page should be cleaner: faster scan paths, less chrome, and clearer separation between routing, tuning, DSP, and live telemetry.</p>
               </div>
             </div>
           </div>
@@ -823,6 +1581,9 @@
 
   <script>
     const $ = (id) => document.getElementById(id);
+    const DISPLAY_COMPLEX_SAMPLES_TARGET = 4096;
+    const DISPLAY_MAX_FFT_SIZE = 4096;
+    const DISPLAY_PACKET_HISTORY = 48;
 
     const state = {
       ws: null,
@@ -838,7 +1599,10 @@
       rxAdc: 0,
       rxAntenna: 1,
       sampleRate: 192000,
-      rxVolumeDb: -20.0,
+      rxVolumeDb: -10.0,
+      rxNoiseReductionMode: "OFF",
+      rxNoiseReductionLevel: 100,
+      displayZoom: 1,
       filterLow: 300,
       filterHigh: 3000,
       meterDbm: null,
@@ -855,6 +1619,9 @@
       audioGainNode: null,
       audioNextTime: 0,
       audioBackpressureDrops: 0,
+      spectrumShiftCarryBins: 0,
+      waterfallShiftCarryPixels: 0,
+      waterfallSettleFrames: 0,
       displayCaption: "Waiting for TCI IQ frames from saturn-bridge",
       lastSummaryAt: 0,
       displayFloorDb: -200,
@@ -1248,6 +2015,87 @@
         gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, this.textureWidth, this.textureHeight, 0, gl.RGBA, gl.UNSIGNED_BYTE, this.textureData);
       }
 
+      clear() {
+        if (this.gl) {
+          this.textureData.fill(0);
+          const gl = this.gl;
+          gl.bindTexture(gl.TEXTURE_2D, this.texture);
+          gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, this.textureWidth, this.textureHeight, gl.RGBA, gl.UNSIGNED_BYTE, this.textureData);
+        } else if (this.ctx) {
+          this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+        }
+      }
+
+      shiftPixels(shiftPixels) {
+        if (!this.supported || !Number.isFinite(shiftPixels) || shiftPixels === 0) {
+          return false;
+        }
+        if (this.ctx) {
+          const width = this.canvas.width;
+          const height = this.canvas.height;
+          if (width <= 0 || height <= 0) {
+            return false;
+          }
+          if (Math.abs(shiftPixels) >= width) {
+            this.ctx.clearRect(0, 0, width, height);
+            return true;
+          }
+          const snapshot = this.ctx.getImageData(0, 0, width, height);
+          this.ctx.clearRect(0, 0, width, height);
+          this.ctx.putImageData(snapshot, shiftPixels, 0);
+          return true;
+        }
+
+        if (Math.abs(shiftPixels) >= this.textureWidth) {
+          this.clear();
+          return true;
+        }
+
+        const rowBytes = this.textureWidth * 4;
+        const fillStart = shiftPixels > 0 ? 0 : this.textureWidth + shiftPixels;
+        const fillWidth = Math.abs(shiftPixels);
+        for (let row = 0; row < this.textureHeight; row += 1) {
+          const rowOffset = row * rowBytes;
+          if (shiftPixels > 0) {
+            this.textureData.copyWithin(
+              rowOffset + shiftPixels * 4,
+              rowOffset,
+              rowOffset + (this.textureWidth - shiftPixels) * 4
+            );
+          } else {
+            const offset = -shiftPixels;
+            this.textureData.copyWithin(
+              rowOffset,
+              rowOffset + offset * 4,
+              rowOffset + this.textureWidth * 4
+            );
+          }
+          this.textureData.fill(0, rowOffset + fillStart * 4, rowOffset + (fillStart + fillWidth) * 4);
+        }
+
+        const gl = this.gl;
+        gl.bindTexture(gl.TEXTURE_2D, this.texture);
+        gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, this.textureWidth, this.textureHeight, gl.RGBA, gl.UNSIGNED_BYTE, this.textureData);
+        return true;
+      }
+
+      shiftFrequency(deltaHz, spanHz, carryPixels = 0) {
+        if (!Number.isFinite(deltaHz) || deltaHz === 0 || !Number.isFinite(spanHz) || spanHz <= 0) {
+          return { applied: false, remainder: carryPixels };
+        }
+        const width = this.ctx ? this.canvas.width : this.textureWidth;
+        if (!width) {
+          return { applied: false, remainder: carryPixels };
+        }
+        const shiftedPixelsFloat = (deltaHz / spanHz) * width + carryPixels;
+        const shiftedPixels = Math.trunc(shiftedPixelsFloat);
+        const remainder = shiftedPixelsFloat - shiftedPixels;
+        if (shiftedPixels === 0) {
+          return { applied: false, remainder };
+        }
+        return { applied: this.shiftPixels(shiftedPixels), remainder };
+      }
+
       pushLine(bins, floorDb, ceilingDb) {
         if (!this.supported || !bins || bins.length === 0) {
           return;
@@ -1409,8 +2257,49 @@
       return `${whole}.${khz}.${rest}`;
     }
 
+    function normalizeNrMode(value) {
+      const text = String(value || "").trim().toUpperCase();
+      if (["NR1", "ANR", "1"].includes(text)) {
+        return "NR1";
+      }
+      if (["NR2", "EMNR", "2"].includes(text)) {
+        return "NR2";
+      }
+      if (["NR3", "RNNR", "3"].includes(text)) {
+        return "NR3";
+      }
+      if (["NR4", "SBNR", "4"].includes(text)) {
+        return "NR4";
+      }
+      return "OFF";
+    }
+
+    function displaySpanHz() {
+      return Math.max(1000, state.sampleRate / Math.max(1, state.displayZoom));
+    }
+
+    function formatFrequencyMarkup(hz) {
+      const digits = Math.max(0, Math.round(hz)).toString();
+      const padded = digits.padStart(Math.max(7, digits.length), "0");
+      const parts = [];
+      for (let i = 0; i < padded.length; i += 1) {
+        if (i > 0 && ((padded.length - i) % 3) === 0) {
+          parts.push('<span class="freq-separator">.</span>');
+        }
+        const step = 10 ** (padded.length - i - 1);
+        parts.push(
+          `<span class="freq-digit" data-step="${step}" tabindex="0" aria-label="Tune ${step} Hz digit">${padded[i]}</span>`
+        );
+      }
+      return parts.join("");
+    }
+
     function clampRxVolumeDb(value) {
-      return Math.max(-40, Math.min(0, Number(value)));
+      return Math.max(-40, Math.min(12, Number(value)));
+    }
+
+    function clampRxNoiseReductionLevel(value) {
+      return Math.max(0, Math.min(100, Math.round(Number(value))));
     }
 
     function clampRxAdc(value) {
@@ -1421,14 +2310,20 @@
       return Math.max(1, Math.min(3, Math.round(Number(value))));
     }
 
+    function adcLabel(value) {
+      return clampRxAdc(value) === 1 ? "ADC2" : "ADC1";
+    }
+
+    function antennaLabel(value) {
+      return `ANT${clampRxAntenna(value)}`;
+    }
+
     function volumeAmplitudeFromDb(volumeDb) {
-      if (volumeDb <= -39.5) {
+      const clamped = clampRxVolumeDb(volumeDb);
+      if (clamped <= -39.5) {
         return 0;
       }
-      if (volumeDb >= 0) {
-        return 1;
-      }
-      return Math.pow(10, 0.05 * volumeDb);
+      return Math.pow(10, 0.05 * clamped);
     }
 
     function applyRxVolumeGain() {
@@ -1439,8 +2334,73 @@
       state.audioGainNode.gain.setTargetAtTime(gain, state.audioCtx.currentTime, 0.01);
     }
 
+    function noiseReductionLabel() {
+      if (state.rxNoiseReductionMode === "OFF") {
+        return "Off";
+      }
+      if (state.rxNoiseReductionMode === "NR3") {
+        return "NR3 fixed";
+      }
+      return `${state.rxNoiseReductionMode} ${state.rxNoiseReductionLevel}%`;
+    }
+
+    function visibleBinsForDisplay(bins) {
+      if (!bins || bins.length === 0) {
+        return bins;
+      }
+      const visibleCount = Math.max(128, Math.floor(bins.length / Math.max(1, state.displayZoom)));
+      if (visibleCount >= bins.length) {
+        return bins;
+      }
+      const start = Math.floor((bins.length - visibleCount) / 2);
+      return bins.subarray(start, start + visibleCount);
+    }
+
+    function shiftBinsHorizontally(bins, shiftBins) {
+      if (!bins || bins.length === 0 || shiftBins === 0) {
+        return bins;
+      }
+      const shifted = new Float32Array(bins.length);
+      shifted.fill(state.displayFloorDb);
+      if (Math.abs(shiftBins) >= bins.length) {
+        return shifted;
+      }
+      if (shiftBins > 0) {
+        shifted.set(bins.subarray(0, bins.length - shiftBins), shiftBins);
+      } else {
+        shifted.set(bins.subarray(-shiftBins), 0);
+      }
+      return shifted;
+    }
+
+    function shiftDisplayForCenterChange(nextCenterHz) {
+      const spanHz = displaySpanHz();
+      const deltaHz = state.dds - nextCenterHz;
+      if (!Number.isFinite(deltaHz) || deltaHz === 0 || !Number.isFinite(spanHz) || spanHz <= 0) {
+        return;
+      }
+
+      if (state.latestBins && state.latestBins.length > 0) {
+        const shiftBinsFloat = (deltaHz / spanHz) * state.latestBins.length + state.spectrumShiftCarryBins;
+        const shiftBins = Math.trunc(shiftBinsFloat);
+        state.spectrumShiftCarryBins = shiftBinsFloat - shiftBins;
+        if (shiftBins !== 0) {
+          state.latestBins = shiftBinsHorizontally(state.latestBins, shiftBins);
+          spectrumRenderer.render(state.latestBins, state.displayFloorDb, state.displayCeilingDb);
+        }
+      }
+
+      const shiftedWaterfall = waterfallRenderer.shiftFrequency(deltaHz, spanHz, state.waterfallShiftCarryPixels);
+      state.waterfallShiftCarryPixels = shiftedWaterfall.remainder;
+      if (shiftedWaterfall.applied) {
+        state.waterfallSettleFrames = Math.max(state.waterfallSettleFrames, 2);
+        waterfallRenderer.render();
+      }
+    }
+
     function setFrequency(hz, syncBoth = false) {
       const nextHz = Math.max(0, Math.round(hz));
+      shiftDisplayForCenterChange(nextHz);
       state.vfoA = nextHz;
       state.dds = nextHz;
       if (syncBoth) {
@@ -1454,18 +2414,37 @@
       setFrequency(state.vfoA + stepHz);
     }
 
+    function tuneDigitByStep(stepHz, direction) {
+      const magnitude = Math.max(1, Math.round(Number(stepHz)));
+      const delta = magnitude * (direction >= 0 ? 1 : -1);
+      setFrequency(state.vfoA + delta);
+    }
+
+    function adjustDisplayZoom(direction) {
+      const next = Math.max(1, Math.min(32, state.displayZoom + direction));
+      if (next !== state.displayZoom) {
+        state.displayZoom = next;
+        state.spectrumShiftCarryBins = 0;
+        state.waterfallShiftCarryPixels = 0;
+        state.waterfallSettleFrames = 0;
+        waterfallRenderer.clear();
+        localStorage.setItem("saturn.remote.displayZoom", `${state.displayZoom}`);
+        updateUi();
+      }
+    }
+
     function frequencyFromDisplayPoint(clientX, element) {
       const rect = element.getBoundingClientRect();
       if (!rect.width) {
         return state.vfoA;
       }
       const normalized = (clientX - rect.left) / rect.width;
-      const offsetHz = (normalized - 0.5) * state.sampleRate;
+      const offsetHz = (normalized - 0.5) * displaySpanHz();
       return state.dds + offsetHz;
     }
 
     function updateFilterOverlay() {
-      const rate = Math.max(1, state.sampleRate);
+      const rate = Math.max(1, displaySpanHz());
       const left = 50 + (state.filterLow / rate) * 100;
       const right = 50 + (state.filterHigh / rate) * 100;
       const clampedLeft = Math.max(0, Math.min(100, left));
@@ -1475,7 +2454,7 @@
     }
 
     function updateAxes() {
-      const spanKhz = (state.sampleRate / 2000).toFixed(0);
+      const spanKhz = (displaySpanHz() / 2000).toFixed(0);
       $("axis-left").textContent = `-${spanKhz} kHz`;
       $("axis-right").textContent = `+${spanKhz} kHz`;
       $("axis-center").textContent = `Center ${formatFrequency(state.dds)}`;
@@ -1483,14 +2462,23 @@
 
     function updateUi() {
       $("vfo-a-input").value = `${state.vfoA}`;
-      $("dds-readout").textContent = formatFrequency(state.dds);
+      $("dds-readout").innerHTML = formatFrequencyMarkup(state.dds);
+      $("vfo-b-readout").textContent = formatFrequency(state.vfoB);
+      $("operator-center-readout").innerHTML = formatFrequencyMarkup(state.dds);
       $("mode-readout").textContent = state.mode;
+      $("sample-rate-readout").textContent = `IQ ${Math.round(state.sampleRate / 1000)} kHz`;
+      $("path-summary").textContent = `${adcLabel(state.rxAdc)} • ${antennaLabel(state.rxAntenna)} • ${Math.round(state.sampleRate / 1000)} kHz IQ`;
       $("rx-volume-readout").textContent = `${state.rxVolumeDb.toFixed(1)} dB`;
+      $("rx-nr-readout").textContent = noiseReductionLabel();
+      $("zoom-readout").textContent = `${state.displayZoom.toFixed(1)}x`;
       $("filter-low-readout").textContent = `${state.filterLow} Hz`;
       $("filter-high-readout").textContent = `${state.filterHigh} Hz`;
       $("meter-readout").textContent = state.meterDbm == null ? "-- dBm" : `${state.meterDbm.toFixed(1)} dBm`;
-      $("tx-power-readout").textContent = state.txPower == null ? "--" : `${state.txPower.toFixed(1)} W`;
-      $("swr-readout").textContent = state.swr == null ? "--" : `${state.swr.toFixed(2)} : 1`;
+      $("tx-power-readout").textContent = state.txPower == null ? "-- W" : `${state.txPower.toFixed(1)} W`;
+      $("swr-readout").textContent = state.swr == null ? "-- : 1" : `${state.swr.toFixed(2)} : 1`;
+      updateSmeter(state.meterDbm);
+      updateTxPwrMeter(state.txPower);
+      updateSwrMeter(state.swr);
       $("frame-rate-readout").textContent = `${state.frameRate.toFixed(1)} fps`;
       $("fft-readout").textContent = `${state.fftWidth}`;
       $("audio-drop-readout").textContent = `${state.audioBackpressureDrops}`;
@@ -1501,8 +2489,6 @@
       $("conn-label").textContent = state.connected ? "Connected" : (state.demoMode ? "Preview" : "Disconnected");
       const connDot = $("conn-dot");
       connDot.className = "dot " + (state.connected ? "live" : (state.demoMode ? "warn" : "dead"));
-      const meterPercent = state.meterDbm == null ? 0 : Math.max(0, Math.min(100, ((state.meterDbm + 140) / 120) * 100));
-      $("meter-fill").style.width = `${meterPercent}%`;
       $("display-resolution").textContent = `Display: ${Math.max(1, Math.round(window.devicePixelRatio || 1))}x DPR`;
       $("display-resolution").textContent += ` | ${state.displayFloorDb.toFixed(0)}..${state.displayCeilingDb.toFixed(0)} dB`;
       updateAxes();
@@ -1537,6 +2523,18 @@
       if ($("rx-volume").value !== rxVolume) {
         $("rx-volume").value = rxVolume;
       }
+      const nrLevel = `${state.rxNoiseReductionLevel}`;
+      if ($("rx-nr-level").value !== nrLevel) {
+        $("rx-nr-level").value = nrLevel;
+      }
+      const zoomLevel = `${state.displayZoom}`;
+      if ($("display-zoom").value !== zoomLevel) {
+        $("display-zoom").value = zoomLevel;
+      }
+      $("rx-nr-level").disabled = state.rxNoiseReductionMode === "OFF" || state.rxNoiseReductionMode === "NR3";
+      document.querySelectorAll("#rx-nr-grid .mode-btn").forEach((button) => {
+        button.classList.toggle("active", normalizeNrMode(button.dataset.nrMode) === state.rxNoiseReductionMode);
+      });
     }
 
     function sendTci(text) {
@@ -1552,6 +2550,8 @@
       sendTci(`rx_antenna:0,${state.rxAntenna};`);
       sendTci(`modulation:0,${state.mode};`);
       sendTci(`rx_volume:0,0,${state.rxVolumeDb.toFixed(1)};`);
+      sendTci(`rx_nr_mode:0,${state.rxNoiseReductionMode};`);
+      sendTci(`rx_nr_level:0,${state.rxNoiseReductionLevel};`);
       sendTci(`rx_filter_band:0,${state.filterLow},${state.filterHigh};`);
       sendTci(`dds:0,${state.dds};`);
       sendTci(`vfo:0,0,${state.vfoA};`);
@@ -1622,9 +2622,15 @@
       }
       state.demoMode = false;
       state.wsUrl = $("ws-url").value.trim();
-      localStorage.setItem("saturn.remote.wsUrl", state.wsUrl);
       logEvent(`Connecting to ${state.wsUrl}`);
-      const ws = new WebSocket(state.wsUrl);
+      let ws;
+      try {
+        ws = new WebSocket(state.wsUrl);
+      } catch (err) {
+        logEvent(`Invalid WebSocket URL: ${err.message}`);
+        return;
+      }
+      localStorage.setItem("saturn.remote.wsUrl", state.wsUrl);
       ws.binaryType = "arraybuffer";
       ws.onopen = () => {
         state.ws = ws;
@@ -1689,7 +2695,11 @@
             state.vfoB = hz;
           }
         } else if (name === "dds" && args.length >= 2) {
-          state.dds = Number(args[1].trim());
+          const nextDds = Number(args[1].trim());
+          if (!Number.isNaN(nextDds) && nextDds !== state.dds) {
+            shiftDisplayForCenterChange(nextDds);
+            state.dds = nextDds;
+          }
         } else if (name === "rx_adc") {
           const adc = args.length >= 2 ? Number(args[1].trim()) : Number(args[args.length - 1]?.trim());
           if (!Number.isNaN(adc)) {
@@ -1701,7 +2711,14 @@
             state.rxAntenna = clampRxAntenna(antenna);
           }
         } else if (name === "iq_samplerate" && args.length >= 1) {
-          state.sampleRate = Number(args[0].trim());
+          const nextRate = Number(args[0].trim());
+          if (!Number.isNaN(nextRate) && nextRate > 0 && nextRate !== state.sampleRate) {
+            state.sampleRate = nextRate;
+            state.spectrumShiftCarryBins = 0;
+            state.waterfallShiftCarryPixels = 0;
+            state.waterfallSettleFrames = 0;
+            waterfallRenderer.clear();
+          }
         } else if (name === "modulation" && args.length >= 2) {
           state.mode = args[1].trim().toUpperCase();
         } else if (name === "rx_volume") {
@@ -1710,9 +2727,27 @@
             state.rxVolumeDb = clampRxVolumeDb(volume);
             applyRxVolumeGain();
           }
+        } else if (name === "rx_nr_mode" || name === "nr_mode") {
+          const modeText = args.length >= 2 ? args[1].trim() : args[args.length - 1]?.trim();
+          state.rxNoiseReductionMode = normalizeNrMode(modeText);
+        } else if (name === "rx_nr" || name === "nr") {
+          const enabledText = args.length >= 2 ? args[1].trim() : args[args.length - 1]?.trim();
+          const enabled = ["1", "true", "on", "yes"].includes((enabledText || "").toLowerCase());
+          if (!enabled) {
+            state.rxNoiseReductionMode = "OFF";
+          } else if (state.rxNoiseReductionMode === "OFF") {
+            state.rxNoiseReductionMode = "NR1";
+          }
+        } else if (name === "rx_nr_level" || name === "nr_level") {
+          const level = args.length >= 2 ? Number(args[1].trim()) : Number(args[args.length - 1]?.trim());
+          if (!Number.isNaN(level)) {
+            state.rxNoiseReductionLevel = clampRxNoiseReductionLevel(level);
+          }
         } else if (name === "rx_filter_band" && args.length >= 3) {
-          state.filterLow = Number(args[1].trim());
-          state.filterHigh = Number(args[2].trim());
+          const fl = Number(args[1].trim()), fh = Number(args[2].trim());
+          if (!Number.isFinite(fl) || !Number.isFinite(fh)) return;
+          state.filterLow = fl;
+          state.filterHigh = fh;
           $("filter-low").value = `${state.filterLow}`;
           $("filter-high").value = `${state.filterHigh}`;
         } else if (name === "rx_smeter") {
@@ -1763,11 +2798,11 @@
     }
 
     function fftSizeForSamples(value) {
-      if (value >= 2048) {
-        return 2048;
+      if (value >= DISPLAY_MAX_FFT_SIZE) {
+        return DISPLAY_MAX_FFT_SIZE;
       }
       let size = 32;
-      while ((size << 1) <= value && (size << 1) <= 2048) {
+      while ((size << 1) <= value && (size << 1) <= DISPLAY_MAX_FFT_SIZE) {
         size <<= 1;
       }
       return Math.max(32, size);
@@ -1775,7 +2810,7 @@
 
     function appendIqPacket(iq) {
       state.iqPackets.push(new Float32Array(iq));
-      while (state.iqPackets.length > 12) {
+      while (state.iqPackets.length > DISPLAY_PACKET_HISTORY) {
         state.iqPackets.shift();
       }
     }
@@ -1785,7 +2820,7 @@
         return null;
       }
 
-      const desiredComplexSamples = 1024;
+      const desiredComplexSamples = DISPLAY_COMPLEX_SAMPLES_TARGET;
       const selected = [];
       let totalFloats = 0;
       for (let i = state.iqPackets.length - 1; i >= 0; i -= 1) {
@@ -1820,6 +2855,12 @@
 
       const iq = new Float32Array(buffer, 64, floatCount);
       const samplePairs = Math.floor(iq.length / 2);
+      if (sampleRate !== state.sampleRate) {
+        state.spectrumShiftCarryBins = 0;
+        state.waterfallShiftCarryPixels = 0;
+        state.waterfallSettleFrames = 0;
+        waterfallRenderer.clear();
+      }
       state.sampleRate = sampleRate;
       appendIqPacket(iq);
       if (performance.now() - state.lastFrameAt > 2500) {
@@ -1901,10 +2942,12 @@
         const floor = -126 + 6 * Math.sin(now * 0.0005 + x * 12.0);
         bins[i] = floor + lobeA * 54 + lobeB * 24;
       }
-      state.latestBins = bins;
-      updateDisplayRange(bins);
-      spectrumRenderer.render(bins, state.displayFloorDb, state.displayCeilingDb);
-      waterfallRenderer.pushLine(bins, state.displayFloorDb, state.displayCeilingDb);
+      const visibleBins = visibleBinsForDisplay(bins);
+      state.latestBins = visibleBins;
+      state.fftWidth = visibleBins.length;
+      updateDisplayRange(visibleBins);
+      spectrumRenderer.render(visibleBins, state.displayFloorDb, state.displayCeilingDb);
+      waterfallRenderer.pushLine(visibleBins, state.displayFloorDb, state.displayCeilingDb);
       waterfallRenderer.render();
     }
 
@@ -1919,12 +2962,17 @@
               fftProcessor = new FftProcessor(fftSize);
             }
             const bins = fftProcessor.transform(iqWindow);
-            state.latestBins = bins;
-            state.fftWidth = bins.length;
-            updateDisplayRange(bins);
-            spectrumRenderer.render(bins, state.displayFloorDb, state.displayCeilingDb);
-            waterfallRenderer.pushLine(bins, state.displayFloorDb, state.displayCeilingDb);
-            waterfallRenderer.render();
+            const visibleBins = visibleBinsForDisplay(bins);
+            state.latestBins = visibleBins;
+            state.fftWidth = visibleBins.length;
+            updateDisplayRange(visibleBins);
+            spectrumRenderer.render(visibleBins, state.displayFloorDb, state.displayCeilingDb);
+            if (state.waterfallSettleFrames > 0) {
+              state.waterfallSettleFrames -= 1;
+            } else {
+              waterfallRenderer.pushLine(visibleBins, state.displayFloorDb, state.displayCeilingDb);
+              waterfallRenderer.render();
+            }
             state.lastSpectrumRenderAt = now;
           }
         }
@@ -1956,6 +3004,36 @@
       }
     }
 
+    function bindFrequencyDigitControl(element) {
+      element.addEventListener("click", (event) => {
+        const digit = event.target.closest(".freq-digit");
+        if (!digit) {
+          return;
+        }
+        const rect = digit.getBoundingClientRect();
+        const direction = (event.clientY - rect.top) < (rect.height / 2) ? 1 : -1;
+        tuneDigitByStep(Number(digit.dataset.step), direction);
+      });
+      element.addEventListener("wheel", (event) => {
+        const digit = event.target.closest(".freq-digit");
+        if (!digit) {
+          return;
+        }
+        event.preventDefault();
+        tuneDigitByStep(Number(digit.dataset.step), event.deltaY < 0 ? 1 : -1);
+      }, { passive: false });
+      element.addEventListener("keydown", (event) => {
+        const digit = event.target.closest(".freq-digit");
+        if (!digit) {
+          return;
+        }
+        if (event.key === "ArrowUp" || event.key === "ArrowDown") {
+          event.preventDefault();
+          tuneDigitByStep(Number(digit.dataset.step), event.key === "ArrowUp" ? 1 : -1);
+        }
+      });
+    }
+
     function initInteractions() {
       $("connect-btn").addEventListener("click", connectBridge);
       $("disconnect-btn").addEventListener("click", disconnectBridge);
@@ -1977,6 +3055,10 @@
       });
       $("sample-rate").addEventListener("change", () => {
         state.sampleRate = Number($("sample-rate").value);
+        state.spectrumShiftCarryBins = 0;
+        state.waterfallShiftCarryPixels = 0;
+        state.waterfallSettleFrames = 0;
+        waterfallRenderer.clear();
         updateUi();
         sendTci(`iq_samplerate:${state.sampleRate};`);
       });
@@ -2010,6 +3092,29 @@
       $("rx-volume").addEventListener("change", () => {
         sendTci(`rx_volume:0,0,${state.rxVolumeDb.toFixed(1)};`);
       });
+      document.querySelectorAll("#rx-nr-grid .mode-btn").forEach((button) => {
+        button.addEventListener("click", () => {
+          state.rxNoiseReductionMode = normalizeNrMode(button.dataset.nrMode);
+          updateUi();
+          sendTci(`rx_nr_mode:0,${state.rxNoiseReductionMode};`);
+        });
+      });
+      $("rx-nr-level").addEventListener("input", () => {
+        state.rxNoiseReductionLevel = clampRxNoiseReductionLevel($("rx-nr-level").value);
+        updateUi();
+      });
+      $("rx-nr-level").addEventListener("change", () => {
+        sendTci(`rx_nr_level:0,${state.rxNoiseReductionLevel};`);
+      });
+      $("display-zoom").addEventListener("input", () => {
+        state.displayZoom = Math.max(1, Math.min(32, Number($("display-zoom").value)));
+        state.spectrumShiftCarryBins = 0;
+        state.waterfallShiftCarryPixels = 0;
+        state.waterfallSettleFrames = 0;
+        waterfallRenderer.clear();
+        localStorage.setItem("saturn.remote.displayZoom", `${state.displayZoom}`);
+        updateUi();
+      });
       $("filter-low").addEventListener("input", () => {
         state.filterLow = Number($("filter-low").value);
         updateUi();
@@ -2042,12 +3147,18 @@
           tuneBy(Number(button.dataset.step));
         });
       });
+      bindFrequencyDigitControl($("dds-readout"));
+      bindFrequencyDigitControl($("operator-center-readout"));
       for (const element of [$("spectrum-shell"), $("waterfall-shell")]) {
         element.addEventListener("click", (event) => {
           setFrequency(frequencyFromDisplayPoint(event.clientX, element));
         });
         element.addEventListener("wheel", (event) => {
           event.preventDefault();
+          if (event.ctrlKey || event.metaKey || event.altKey) {
+            adjustDisplayZoom(event.deltaY < 0 ? 1 : -1);
+            return;
+          }
           const step = event.shiftKey ? 1000 : (event.ctrlKey || event.metaKey ? 10 : 100);
           const direction = event.deltaY < 0 ? step : -step;
           tuneBy(direction);
@@ -2060,6 +3171,151 @@
       });
     }
 
+    // ── Analog Meters ────────────────────────────────────────────────────────
+
+    const NS = 'http://www.w3.org/2000/svg';
+
+    function svgArcPath(cx, cy, r, startDeg, endDeg) {
+      const rad = (d) => d * Math.PI / 180;
+      const sx = cx + r * Math.cos(rad(startDeg)), sy = cy + r * Math.sin(rad(startDeg));
+      const ex = cx + r * Math.cos(rad(endDeg)),   ey = cy + r * Math.sin(rad(endDeg));
+      const large = ((endDeg - startDeg + 360) % 360) > 180 ? 1 : 0;
+      return `M ${sx.toFixed(2)} ${sy.toFixed(2)} A ${r} ${r} 0 ${large} 1 ${ex.toFixed(2)} ${ey.toFixed(2)}`;
+    }
+
+    function svgTick(cx, cy, outerR, innerR, angleDeg, color, width) {
+      const rad = angleDeg * Math.PI / 180;
+      const cos = Math.cos(rad), sin = Math.sin(rad);
+      const el = document.createElementNS(NS, 'line');
+      el.setAttribute('x1', (cx + outerR * cos).toFixed(2)); el.setAttribute('y1', (cy + outerR * sin).toFixed(2));
+      el.setAttribute('x2', (cx + innerR * cos).toFixed(2)); el.setAttribute('y2', (cy + innerR * sin).toFixed(2));
+      el.setAttribute('stroke', color); el.setAttribute('stroke-width', width);
+      el.setAttribute('stroke-linecap', 'round');
+      return el;
+    }
+
+    function svgLabel(cx, cy, r, angleDeg, text, color, size) {
+      const rad = angleDeg * Math.PI / 180;
+      const el = document.createElementNS(NS, 'text');
+      el.setAttribute('x', (cx + r * Math.cos(rad)).toFixed(2));
+      el.setAttribute('y', (cy + r * Math.sin(rad) + 3.5).toFixed(2));
+      el.setAttribute('text-anchor', 'middle');
+      el.setAttribute('font-family', 'IBM Plex Mono, monospace');
+      el.setAttribute('font-size', size || '9');
+      el.setAttribute('fill', color);
+      el.textContent = text;
+      return el;
+    }
+
+    // S-Meter geometry: pivot (180,165), radius 130, sweep ±60° from vertical
+    // In SVG angles (0°=right, clockwise): vertical=270°, so range 210°–330°
+    const SM_CX = 180, SM_CY = 165, SM_R = 130;
+    const SM_START = 210, SM_END = 330; // SVG degrees
+    const SM_S9_DEG = SM_START + ((-73 + 121) / 108) * 120; // ~263.3°
+
+    function dbmToSmDeg(dbm) {
+      return SM_START + Math.max(0, Math.min(1, (dbm + 121) / 108)) * 120;
+    }
+
+    function initSmeter() {
+      $('smeter-arc-s').setAttribute('d',    svgArcPath(SM_CX, SM_CY, SM_R, SM_START, SM_S9_DEG));
+      $('smeter-arc-over').setAttribute('d', svgArcPath(SM_CX, SM_CY, SM_R, SM_S9_DEG, SM_END));
+
+      const major = [
+        [-121,'S1',false],[-115,'S2',false],[-109,'S3',false],[-103,'S4',false],
+        [-97,'S5',false], [-91,'S6',false], [-85,'S7',false], [-79,'S8',false],
+        [-73,'S9',false], [-63,'+10',true], [-53,'+20',true], [-33,'+40',true], [-13,'+60',true]
+      ];
+      const majorSet = new Set(major.map(([d]) => d));
+      const tg = $('smeter-ticks'), lg = $('smeter-labels');
+
+      major.forEach(([dbm, lbl, over]) => {
+        const deg = dbmToSmDeg(dbm);
+        const tc = over ? '#b83030' : (dbm >= -85 ? '#c8a830' : '#a87828');
+        const lc = over ? '#b06060' : '#a09030';
+        tg.appendChild(svgTick(SM_CX, SM_CY, SM_R, SM_R - 13, deg, tc, '2'));
+        lg.appendChild(svgLabel(SM_CX, SM_CY, SM_R + 17, deg, lbl, lc, '9'));
+      });
+
+      // Minor ticks every 2 dBm
+      for (let d = -121; d <= -13; d += 2) {
+        if (majorSet.has(d)) continue;
+        const deg = dbmToSmDeg(d);
+        const over = d > -73;
+        tg.appendChild(svgTick(SM_CX, SM_CY, SM_R, SM_R - 6, deg, over ? '#702020' : '#6a5018', '1'));
+      }
+    }
+
+    function updateSmeter(dbm) {
+      const svgDeg = dbm == null ? SM_START : Math.max(SM_START, Math.min(SM_END, dbmToSmDeg(dbm)));
+      $('smeter-needle').style.transform = `rotate(${(svgDeg - 270).toFixed(1)}deg)`;
+    }
+
+    // Aux meter geometry: pivot (87,100), radius 68, sweep ±65° from vertical → 205°–335°
+    const AX_CX = 87, AX_CY = 100, AX_R = 68;
+    const AX_START = 205, AX_END = 335;
+
+    function auxDeg(value, min, max) {
+      return AX_START + Math.max(0, Math.min(1, (value - min) / (max - min))) * 130;
+    }
+
+    function initTxPwrMeter() {
+      const MAX = 120;
+      $('txpwr-arc-bg').setAttribute('d', svgArcPath(AX_CX, AX_CY, AX_R, AX_START, AX_END));
+      $('txpwr-arc-fill').setAttribute('d', svgArcPath(AX_CX, AX_CY, AX_R, AX_START, AX_START + 0.5));
+      const marks = [[0,'0'],[30,''],[60,'60'],[90,''],[120,'120']];
+      const tg = $('txpwr-ticks'), lg = $('txpwr-labels');
+      marks.forEach(([w, lbl]) => {
+        const deg = auxDeg(w, 0, MAX);
+        const c = w >= 100 ? '#c04030' : (w >= 75 ? '#c08820' : '#2880b0');
+        tg.appendChild(svgTick(AX_CX, AX_CY, AX_R, AX_R - 8, deg, c, '1.5'));
+        if (lbl) lg.appendChild(svgLabel(AX_CX, AX_CY, AX_R + 12, deg, lbl, '#50788a', '8'));
+      });
+      for (let w = 10; w < MAX; w += 10) {
+        if (marks.some(([m]) => m === w)) continue;
+        const c = w >= 100 ? '#702018' : (w >= 75 ? '#705010' : '#1a4060');
+        tg.appendChild(svgTick(AX_CX, AX_CY, AX_R, AX_R - 4, auxDeg(w, 0, MAX), c, '1'));
+      }
+    }
+
+    function updateTxPwrMeter(watts) {
+      const MAX = 120;
+      const w = watts == null ? 0 : Math.max(0, Math.min(MAX, watts));
+      const deg = auxDeg(w, 0, MAX);
+      $('txpwr-needle').style.transform = `rotate(${(deg - 270).toFixed(1)}deg)`;
+      const fillDeg = (watts == null || watts <= 0) ? AX_START + 0.5 : deg;
+      const c = w >= 100 ? '#ff6050' : (w >= 75 ? '#f4b860' : '#309cff');
+      const arc = $('txpwr-arc-fill');
+      arc.setAttribute('d', svgArcPath(AX_CX, AX_CY, AX_R, AX_START, fillDeg));
+      arc.setAttribute('stroke', c);
+    }
+
+    function initSwrMeter() {
+      const goodEnd = auxDeg(1.5, 1, 4), warnEnd = auxDeg(2.5, 1, 4);
+      $('swr-arc-good').setAttribute('d', svgArcPath(AX_CX, AX_CY, AX_R, AX_START, goodEnd));
+      $('swr-arc-warn').setAttribute('d', svgArcPath(AX_CX, AX_CY, AX_R, goodEnd, warnEnd));
+      $('swr-arc-bad').setAttribute('d',  svgArcPath(AX_CX, AX_CY, AX_R, warnEnd, AX_END));
+      const marks = [[1.0,'1'],[1.5,'1.5'],[2.0,'2'],[2.5,''],[3.0,'3'],[4.0,'4']];
+      const tg = $('swr-ticks'), lg = $('swr-labels');
+      marks.forEach(([s, lbl]) => {
+        const deg = auxDeg(s, 1, 4);
+        const c = s >= 2.5 ? '#b03030' : (s >= 1.5 ? '#b08020' : '#208060');
+        tg.appendChild(svgTick(AX_CX, AX_CY, AX_R, AX_R - 8, deg, c, '1.5'));
+        if (lbl) lg.appendChild(svgLabel(AX_CX, AX_CY, AX_R + 12, deg, lbl, '#50788a', '8'));
+      });
+    }
+
+    function updateSwrMeter(swr) {
+      const deg = swr == null ? AX_START : auxDeg(Math.max(1, Math.min(4, swr)), 1, 4);
+      $('swr-needle').style.transform = `rotate(${(deg - 270).toFixed(1)}deg)`;
+      const c = swr == null ? '#5de8b5' : (swr >= 2.5 ? '#fb7c74' : (swr >= 1.5 ? '#f4b860' : '#5de8b5'));
+      $('swr-needle-poly').setAttribute('fill', c);
+    }
+
+    function initAnalogMeters() { initSmeter(); initTxPwrMeter(); initSwrMeter(); }
+
+    // ─────────────────────────────────────────────────────────────────────────
+
     function init() {
       $("ws-url").value = defaultWsUrl();
       state.wsUrl = $("ws-url").value;
@@ -2067,11 +3323,18 @@
       $("rx-adc").value = `${state.rxAdc}`;
       $("rx-antenna").value = `${state.rxAntenna}`;
       $("rx-volume").value = `${state.rxVolumeDb}`;
+      $("rx-nr-level").value = `${state.rxNoiseReductionLevel}`;
+      const savedZoom = Number(localStorage.getItem("saturn.remote.displayZoom"));
+      if (!Number.isNaN(savedZoom) && savedZoom >= 1 && savedZoom <= 32) {
+        state.displayZoom = savedZoom;
+      }
+      $("display-zoom").value = `${state.displayZoom}`;
       $("filter-low").value = `${state.filterLow}`;
       $("filter-high").value = `${state.filterHigh}`;
       logEvent("Saturn Remote loaded");
       logEvent("Current bridge target: TCI over WebSocket");
       logEvent(`Display backends: spectrum=${spectrumRenderer.backend}, waterfall=${waterfallRenderer.backend}`);
+      initAnalogMeters();
       initInteractions();
       updateUi();
       setInterval(pulseTelemetry, 250);

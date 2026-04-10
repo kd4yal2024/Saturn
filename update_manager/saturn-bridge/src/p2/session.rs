@@ -1,16 +1,16 @@
 use std::io;
 use std::net::{SocketAddr, UdpSocket};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use crate::config::BridgeConfig;
 use crate::p2::packets::{
-    build_ddc_specific_packet, build_discovery_request, build_duc_specific_packet,
-    build_general_packet, build_high_priority_to_sdr, parse_ddc_iq_frame, parse_discovery_reply,
-    parse_high_priority_from_sdr, DdcIqFrame, DdcSetup, DiscoveryReply, HighPriorityFromSdr,
-    HighPriorityToSdr,
+    build_ddc_specific_packet, build_discovery_request, build_duc_iq_packet,
+    build_duc_specific_packet, build_general_packet, build_high_priority_to_sdr,
+    parse_ddc_iq_frame, parse_discovery_reply, parse_high_priority_from_sdr, DdcIqFrame, DdcSetup,
+    DiscoveryReply, DUC_IQ_SAMPLES, HighPriorityFromSdr, HighPriorityToSdr,
 };
 use crate::p2::ports::{P2PortMap, COMMAND_DISCOVERY_PORT};
 use crate::radio_model::RadioModel;
@@ -24,13 +24,14 @@ pub enum P2Event {
 pub struct P2Session {
     config: BridgeConfig,
     socket: UdpSocket,
+    duc_iq_sequence: AtomicU32,
 }
 
 impl P2Session {
     pub fn bind(config: BridgeConfig) -> io::Result<Self> {
         let socket = UdpSocket::bind(config.client_bind_addr)?;
         socket.set_read_timeout(Some(config.receive_timeout))?;
-        Ok(Self { config, socket })
+        Ok(Self { config, socket, duc_iq_sequence: AtomicU32::new(0) })
     }
 
     pub fn client_bind_addr(&self) -> SocketAddr {
@@ -77,7 +78,7 @@ impl P2Session {
         self.send_packet(self.target_addr(self.config.port_map.ddc_specific), &build_ddc_specific_packet(ddc_setup))?;
         self.send_packet(
             self.target_addr(self.config.port_map.duc_specific),
-            &build_duc_specific_packet(),
+            &build_duc_specific_packet(0),
         )?;
         Ok(())
     }
@@ -100,7 +101,7 @@ impl P2Session {
                         tx: model.desired.tx_enabled,
                         ddc_phase_words: build_ddc_phase_array(&model),
                         duc_phase_word: frequency_to_phase_word(model.desired.tx_frequency_hz),
-                        tx_drive: 0,
+                        tx_drive: model.desired.tx_drive,
                         cat_port: 0,
                         alex_tx_word: build_alex_tx_word(model.desired.tx_frequency_hz, 1),
                         alex_rx_word: build_alex_legacy_rx_word(
@@ -114,8 +115,10 @@ impl P2Session {
                     }
                 };
 
-                let packet = build_high_priority_to_sdr(&state);
-                socket.send_to(&packet, target)?;
+                if state.run {
+                    let packet = build_high_priority_to_sdr(&state);
+                    socket.send_to(&packet, target)?;
+                }
                 thread::sleep(period);
             }
             Ok(())
@@ -134,6 +137,44 @@ impl P2Session {
             }
             Err(error) => Err(error),
         }
+    }
+
+    /// Send a single run=false high-priority packet to cleanly release controller ownership.
+    /// Call this when the last TCI client disconnects so the SDR goes idle immediately
+    /// rather than waiting for its watchdog to expire.
+    pub fn send_stop(&self) -> io::Result<()> {
+        let packet = build_high_priority_to_sdr(&HighPriorityToSdr {
+            run: false,
+            tx: false,
+            ddc_phase_words: [0u32; 10],
+            duc_phase_word: 0,
+            tx_drive: 0,
+            cat_port: 0,
+            alex_tx_word: 0,
+            alex_rx_word: 0,
+            alex_rx2_filter_word: 0,
+            alex_rx1_filter_word: 0,
+            rx2_attenuation_db: 0,
+            rx1_attenuation_db: 0,
+        });
+        self.send_packet(self.target_addr(self.config.port_map.high_priority_to_sdr), &packet)?;
+        Ok(())
+    }
+
+    /// Send DUC IQ samples to the radio in 240-sample (1444-byte) packets.
+    /// `iq_samples` is interleaved [I, Q, I, Q, …] f32 values; only complete
+    /// 240-pair chunks are transmitted — any trailing partial chunk is dropped.
+    pub fn send_duc_iq(&self, iq_samples: &[f32]) -> io::Result<()> {
+        let target = self.target_addr(self.config.port_map.duc_iq);
+        for chunk in iq_samples.chunks(DUC_IQ_SAMPLES * 2) {
+            if chunk.len() < DUC_IQ_SAMPLES * 2 {
+                break;
+            }
+            let seq = self.duc_iq_sequence.fetch_add(1, Ordering::Relaxed);
+            let packet = build_duc_iq_packet(seq, chunk);
+            self.send_packet(target, &packet)?;
+        }
+        Ok(())
     }
 
     pub fn target_addr(&self, port: u16) -> SocketAddr {
@@ -192,7 +233,8 @@ fn build_ddc_phase_array(model: &RadioModel) -> [u32; 10] {
 }
 
 fn frequency_to_phase_word(frequency_hz: u32) -> u32 {
-    ((frequency_hz as f64) * (4_294_967_296.0 / 122_880_000.0)) as u32
+    let clamped = frequency_hz.min(122_880_000);
+    ((clamped as f64) * (4_294_967_296.0 / 122_880_000.0)) as u32
 }
 
 fn build_alex_tx_word(frequency_hz: u32, antenna: u8) -> u16 {
