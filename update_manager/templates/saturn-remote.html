@@ -397,6 +397,7 @@
       border-radius: 20px;
       overflow: hidden;
       border: 1px solid rgba(255, 255, 255, 0.06);
+      touch-action: manipulation;
       background:
         linear-gradient(180deg, rgba(17, 34, 44, 0.86), rgba(8, 18, 24, 0.92)),
         repeating-linear-gradient(to right, rgba(255,255,255,0.04) 0 1px, transparent 1px 10%),
@@ -538,13 +539,145 @@
       --accent-warm: #f2b35f;
       --shadow: rgba(0, 0, 0, 0.42);
       --display: "Oxanium", "Space Grotesk", sans-serif;
-    }
-
-    body {
-      background:
+      --theme-body-bg:
         radial-gradient(circle at top left, rgba(113, 198, 255, 0.11), transparent 22%),
         radial-gradient(circle at top right, rgba(242, 179, 95, 0.12), transparent 20%),
         linear-gradient(180deg, #05080c, #0c1118 38%, #141a23);
+      --theme-subtitle: #c6d5df;
+      --theme-command-border: rgba(170, 197, 219, 0.16);
+      --theme-command-bg:
+        linear-gradient(180deg, rgba(20, 27, 36, 0.98), rgba(11, 17, 24, 0.96)),
+        repeating-linear-gradient(90deg, rgba(255, 255, 255, 0.03) 0 1px, transparent 1px 80px);
+      --theme-command-shadow: 0 24px 44px rgba(0, 0, 0, 0.26);
+      --theme-cluster-border: rgba(170, 197, 219, 0.12);
+      --theme-cluster-bg:
+        linear-gradient(180deg, rgba(19, 27, 36, 0.96), rgba(10, 16, 23, 0.94)),
+        radial-gradient(circle at top right, rgba(113, 198, 255, 0.12), transparent 36%);
+      --theme-cluster-overlay:
+        linear-gradient(135deg, rgba(255, 255, 255, 0.06), transparent 16%, transparent 84%, rgba(255, 255, 255, 0.03));
+      --theme-secondary-deck-bg:
+        linear-gradient(180deg, rgba(18, 24, 33, 0.96), rgba(10, 15, 21, 0.94)),
+        radial-gradient(circle at top right, rgba(242, 179, 95, 0.12), transparent 40%);
+      --theme-deck-label: #90a7ba;
+      --theme-deck-frequency: #f7fbff;
+      --theme-deck-frequency-secondary: #dde8f1;
+      --theme-freq-hover: rgba(98, 208, 255, 0.14);
+      --theme-freq-separator: rgba(216, 228, 237, 0.82);
+      --theme-status-border: rgba(170, 197, 219, 0.18);
+      --theme-status-bg: rgba(255, 255, 255, 0.04);
+      --theme-status-ghost-bg: rgba(255, 255, 255, 0.02);
+      --theme-status-text: #d6e1e8;
+      --theme-panel-bg:
+        linear-gradient(180deg, rgba(17, 24, 32, 0.97), rgba(10, 15, 22, 0.96)),
+        repeating-linear-gradient(90deg, rgba(255, 255, 255, 0.02) 0 1px, transparent 1px 72px);
+      --theme-panel-border: rgba(170, 197, 219, 0.14);
+      --theme-panel-shadow: 0 18px 34px rgba(0, 0, 0, 0.22);
+      --theme-panel-title: #d8e4ed;
+      --theme-panel-meta: #7f93a5;
+      --theme-field-bg: rgba(255, 255, 255, 0.03);
+      --theme-field-border: rgba(170, 197, 219, 0.14);
+      --theme-metric-bg:
+        linear-gradient(180deg, rgba(255, 255, 255, 0.03), rgba(255, 255, 255, 0.015));
+      --theme-scope-bg:
+        radial-gradient(circle at top, rgba(113, 198, 255, 0.09), transparent 34%),
+        linear-gradient(180deg, rgba(7, 12, 19, 0.98), rgba(4, 9, 15, 0.99));
+      --theme-scope-shadow: 0 24px 46px rgba(0, 0, 0, 0.28);
+      --theme-display-pill-border: rgba(170, 197, 219, 0.16);
+      --theme-display-pill-bg: rgba(255, 255, 255, 0.03);
+      --theme-display-pill-text: #dce6ee;
+      --theme-ruler-main: #f3f8fc;
+      --theme-display-shell-border: rgba(255, 255, 255, 0.08);
+      --theme-display-shell-bg:
+        linear-gradient(180deg, rgba(17, 25, 35, 0.94), rgba(7, 13, 20, 0.98)),
+        repeating-linear-gradient(to right, rgba(255, 255, 255, 0.035) 0 1px, transparent 1px 8.33%),
+        repeating-linear-gradient(to top, rgba(255, 255, 255, 0.028) 0 1px, transparent 1px 14%);
+      --theme-scope-stat-border: rgba(170, 197, 219, 0.12);
+      --theme-scope-stat-bg: rgba(255, 255, 255, 0.03);
+      --theme-scope-stat-value: #eef5fb;
+      --theme-console-log-border: rgba(255, 255, 255, 0.04);
+      --theme-console-log-bg:
+        linear-gradient(180deg, rgba(5, 9, 14, 0.96), rgba(4, 8, 12, 0.98));
+    }
+
+    :root[data-theme="light"] {
+      color-scheme: light;
+      --bg-0: #e8eef2;
+      --bg-1: #dbe3ea;
+      --bg-2: rgba(233, 239, 243, 0.94);
+      --bg-3: rgba(223, 231, 237, 0.97);
+      --card: rgba(242, 246, 248, 0.94);
+      --line: rgba(93, 120, 142, 0.14);
+      --line-strong: rgba(85, 113, 136, 0.22);
+      --text: #172833;
+      --muted: #617684;
+      --accent: #1a77a6;
+      --accent-warm: #b87424;
+      --good: #1f8d66;
+      --warn: #c98d22;
+      --danger: #c64b47;
+      --shadow: rgba(80, 103, 123, 0.16);
+      --theme-body-bg:
+        radial-gradient(circle at top left, rgba(26, 119, 166, 0.12), transparent 24%),
+        radial-gradient(circle at top right, rgba(184, 116, 36, 0.10), transparent 20%),
+        linear-gradient(180deg, #f1f5f7, #e5ebf0 40%, #d7e0e7);
+      --theme-subtitle: #536876;
+      --theme-command-border: rgba(93, 120, 142, 0.18);
+      --theme-command-bg:
+        linear-gradient(180deg, rgba(244, 247, 249, 0.97), rgba(230, 237, 242, 0.98)),
+        repeating-linear-gradient(90deg, rgba(20, 48, 74, 0.03) 0 1px, transparent 1px 80px);
+      --theme-command-shadow: 0 22px 40px rgba(131, 149, 165, 0.16);
+      --theme-cluster-border: rgba(93, 120, 142, 0.16);
+      --theme-cluster-bg:
+        linear-gradient(180deg, rgba(244, 247, 249, 0.98), rgba(229, 236, 241, 0.96)),
+        radial-gradient(circle at top right, rgba(26, 119, 166, 0.08), transparent 38%);
+      --theme-cluster-overlay:
+        linear-gradient(135deg, rgba(255, 255, 255, 0.36), transparent 18%, transparent 84%, rgba(26, 119, 166, 0.05));
+      --theme-secondary-deck-bg:
+        linear-gradient(180deg, rgba(244, 240, 233, 0.98), rgba(232, 225, 212, 0.94)),
+        radial-gradient(circle at top right, rgba(184, 116, 36, 0.10), transparent 42%);
+      --theme-deck-label: #5a7281;
+      --theme-deck-frequency: #16303d;
+      --theme-deck-frequency-secondary: #28404c;
+      --theme-freq-hover: rgba(26, 119, 166, 0.10);
+      --theme-freq-separator: rgba(71, 88, 101, 0.62);
+      --theme-status-border: rgba(93, 120, 142, 0.18);
+      --theme-status-bg: rgba(233, 239, 243, 0.88);
+      --theme-status-ghost-bg: rgba(225, 232, 237, 0.94);
+      --theme-status-text: #304859;
+      --theme-panel-bg:
+        linear-gradient(180deg, rgba(242, 246, 248, 0.97), rgba(228, 235, 240, 0.98)),
+        repeating-linear-gradient(90deg, rgba(20, 48, 74, 0.02) 0 1px, transparent 1px 72px);
+      --theme-panel-border: rgba(93, 120, 142, 0.16);
+      --theme-panel-shadow: 0 18px 34px rgba(131, 149, 165, 0.16);
+      --theme-panel-title: #2b4250;
+      --theme-panel-meta: #6d8290;
+      --theme-field-bg: rgba(239, 244, 246, 0.92);
+      --theme-field-border: rgba(93, 120, 142, 0.18);
+      --theme-metric-bg:
+        linear-gradient(180deg, rgba(239, 244, 247, 0.98), rgba(225, 233, 238, 0.96));
+      --theme-scope-bg:
+        radial-gradient(circle at top, rgba(26, 119, 166, 0.08), transparent 34%),
+        linear-gradient(180deg, rgba(244, 247, 249, 0.98), rgba(227, 235, 240, 0.99));
+      --theme-scope-shadow: 0 24px 46px rgba(131, 149, 165, 0.14);
+      --theme-display-pill-border: rgba(93, 120, 142, 0.16);
+      --theme-display-pill-bg: rgba(235, 241, 244, 0.90);
+      --theme-display-pill-text: #314a5a;
+      --theme-ruler-main: #1c3643;
+      --theme-display-shell-border: rgba(109, 134, 154, 0.16);
+      --theme-display-shell-bg:
+        linear-gradient(180deg, rgba(238, 243, 246, 0.95), rgba(219, 228, 235, 0.98)),
+        repeating-linear-gradient(to right, rgba(20, 48, 74, 0.035) 0 1px, transparent 1px 8.33%),
+        repeating-linear-gradient(to top, rgba(20, 48, 74, 0.025) 0 1px, transparent 1px 14%);
+      --theme-scope-stat-border: rgba(93, 120, 142, 0.14);
+      --theme-scope-stat-bg: rgba(235, 241, 244, 0.92);
+      --theme-scope-stat-value: #203845;
+      --theme-console-log-border: rgba(93, 120, 142, 0.12);
+      --theme-console-log-bg:
+        linear-gradient(180deg, rgba(239, 244, 247, 0.98), rgba(225, 233, 238, 0.98));
+    }
+
+    body {
+      background: var(--theme-body-bg);
     }
 
     .page.console-page {
@@ -576,7 +709,7 @@
 
     .console-header .subtitle {
       max-width: 760px;
-      color: #c6d5df;
+      color: var(--theme-subtitle);
       font-size: 14px;
       line-height: 1.45;
     }
@@ -588,11 +721,9 @@
     .command-strip {
       margin-bottom: 16px;
       border-radius: 26px;
-      border: 1px solid rgba(170, 197, 219, 0.16);
-      background:
-        linear-gradient(180deg, rgba(20, 27, 36, 0.98), rgba(11, 17, 24, 0.96)),
-        repeating-linear-gradient(90deg, rgba(255, 255, 255, 0.03) 0 1px, transparent 1px 80px);
-      box-shadow: 0 24px 44px rgba(0, 0, 0, 0.26);
+      border: 1px solid var(--theme-command-border);
+      background: var(--theme-command-bg);
+      box-shadow: var(--theme-command-shadow);
     }
 
     .strip-grid {
@@ -608,11 +739,9 @@
       min-height: 172px;
       padding: 16px 18px;
       border-radius: 22px;
-      border: 1px solid rgba(170, 197, 219, 0.12);
+      border: 1px solid var(--theme-cluster-border);
       overflow: hidden;
-      background:
-        linear-gradient(180deg, rgba(19, 27, 36, 0.96), rgba(10, 16, 23, 0.94)),
-        radial-gradient(circle at top right, rgba(113, 198, 255, 0.12), transparent 36%);
+      background: var(--theme-cluster-bg);
     }
 
     .vfo-deck::after,
@@ -621,16 +750,13 @@
       position: absolute;
       inset: 0;
       pointer-events: none;
-      background:
-        linear-gradient(135deg, rgba(255, 255, 255, 0.06), transparent 16%, transparent 84%, rgba(255, 255, 255, 0.03));
+      background: var(--theme-cluster-overlay);
       mix-blend-mode: screen;
       opacity: 0.45;
     }
 
     .secondary-deck {
-      background:
-        linear-gradient(180deg, rgba(18, 24, 33, 0.96), rgba(10, 15, 21, 0.94)),
-        radial-gradient(circle at top right, rgba(242, 179, 95, 0.12), transparent 40%);
+      background: var(--theme-secondary-deck-bg);
     }
 
     .deck-top {
@@ -649,7 +775,7 @@
       font-size: 11px;
       letter-spacing: 0.18em;
       text-transform: uppercase;
-      color: #90a7ba;
+      color: var(--theme-deck-label);
     }
 
     .deck-label::before {
@@ -671,13 +797,13 @@
       font-weight: 600;
       line-height: 0.92;
       letter-spacing: 0.08em;
-      color: #f7fbff;
+      color: var(--theme-deck-frequency);
       text-shadow: 0 0 24px rgba(113, 198, 255, 0.14);
     }
 
     .freq-readout {
       display: flex;
-      flex-wrap: wrap;
+      flex-wrap: nowrap;
       gap: 2px;
       align-items: center;
     }
@@ -690,6 +816,7 @@
       border-radius: 10px;
       padding: 0.04em 0.02em;
       cursor: ns-resize;
+      touch-action: manipulation;
       transition: background 120ms ease, color 120ms ease, transform 120ms ease;
       user-select: none;
     }
@@ -697,8 +824,8 @@
     .freq-digit:hover,
     .freq-digit:focus-visible {
       outline: none;
-      background: rgba(98, 208, 255, 0.14);
-      color: #ffffff;
+      background: var(--theme-freq-hover);
+      color: var(--theme-deck-frequency);
       transform: translateY(-1px);
     }
 
@@ -707,7 +834,7 @@
       align-items: center;
       justify-content: center;
       padding: 0.04em 0.08em;
-      color: rgba(216, 228, 237, 0.82);
+      color: var(--theme-freq-separator);
     }
 
     .primary-deck .deck-frequency {
@@ -718,7 +845,7 @@
     .secondary-deck .deck-frequency {
       margin: 18px 0 8px;
       font-size: clamp(30px, 2.8vw, 42px);
-      color: #dde8f1;
+      color: var(--theme-deck-frequency-secondary);
     }
 
     .deck-subline {
@@ -772,16 +899,16 @@
       min-height: 36px;
       padding: 7px 12px;
       border-radius: 999px;
-      border: 1px solid rgba(170, 197, 219, 0.18);
-      background: rgba(255, 255, 255, 0.04);
+      border: 1px solid var(--theme-status-border);
+      background: var(--theme-status-bg);
       font-family: var(--mono);
       font-size: 12px;
-      color: #d6e1e8;
+      color: var(--theme-status-text);
     }
 
     .status-chip.ghost {
       color: var(--muted);
-      background: rgba(255, 255, 255, 0.02);
+      background: var(--theme-status-ghost-bg);
     }
 
     .launch-grid {
@@ -805,6 +932,10 @@
     }
     .ptt-btn {
       width: 100%; font-size: 15px; letter-spacing: 3px; font-weight: 700; padding: 16px;
+      touch-action: none;
+      user-select: none;
+      -webkit-user-select: none;
+      -webkit-touch-callout: none;
     }
     .ptt-btn.active {
       border-color: rgba(255, 80, 80, 0.75);
@@ -882,11 +1013,9 @@
 
     .panel {
       border-radius: 24px;
-      border-color: rgba(170, 197, 219, 0.14);
-      background:
-        linear-gradient(180deg, rgba(17, 24, 32, 0.97), rgba(10, 15, 22, 0.96)),
-        repeating-linear-gradient(90deg, rgba(255, 255, 255, 0.02) 0 1px, transparent 1px 72px);
-      box-shadow: 0 18px 34px rgba(0, 0, 0, 0.22);
+      border-color: var(--theme-panel-border);
+      background: var(--theme-panel-bg);
+      box-shadow: var(--theme-panel-shadow);
     }
 
     .panel-head {
@@ -894,14 +1023,32 @@
       align-items: center;
     }
 
+    .panel-toggle-btn {
+      display: none;
+      align-items: center;
+      justify-content: center;
+      margin-left: auto;
+      min-height: 30px;
+      padding: 6px 10px;
+      border-radius: 999px;
+      border: 1px solid var(--line-strong);
+      background: rgba(255, 255, 255, 0.04);
+      color: var(--muted);
+      font-family: var(--mono);
+      font-size: 10px;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      cursor: pointer;
+    }
+
     .panel-title {
       font-size: 13px;
       letter-spacing: 0.15em;
-      color: #d8e4ed;
+      color: var(--theme-panel-title);
     }
 
     .panel-meta {
-      color: #7f93a5;
+      color: var(--theme-panel-meta);
       font-size: 11px;
       text-transform: uppercase;
       letter-spacing: 0.12em;
@@ -922,8 +1069,8 @@
 
     .field {
       border-radius: 16px;
-      background: rgba(255, 255, 255, 0.03);
-      border-color: rgba(170, 197, 219, 0.14);
+      background: var(--theme-field-bg);
+      border-color: var(--theme-field-border);
     }
 
     .mode-grid {
@@ -950,8 +1097,7 @@
     .metric {
       min-height: 90px;
       border-radius: 18px;
-      background:
-        linear-gradient(180deg, rgba(255, 255, 255, 0.03), rgba(255, 255, 255, 0.015));
+      background: var(--theme-metric-bg);
     }
 
     .metric .metric-value {
@@ -962,10 +1108,8 @@
 
     .scope-frame {
       border-radius: 28px;
-      background:
-        radial-gradient(circle at top, rgba(113, 198, 255, 0.09), transparent 34%),
-        linear-gradient(180deg, rgba(7, 12, 19, 0.98), rgba(4, 9, 15, 0.99));
-      box-shadow: 0 24px 46px rgba(0, 0, 0, 0.28);
+      background: var(--theme-scope-bg);
+      box-shadow: var(--theme-scope-shadow);
     }
 
     .display-head {
@@ -986,11 +1130,11 @@
       min-height: 34px;
       padding: 7px 11px;
       border-radius: 999px;
-      border: 1px solid rgba(170, 197, 219, 0.16);
-      background: rgba(255, 255, 255, 0.03);
+      border: 1px solid var(--theme-display-pill-border);
+      background: var(--theme-display-pill-bg);
       font-family: var(--mono);
       font-size: 12px;
-      color: #dce6ee;
+      color: var(--theme-display-pill-text);
     }
 
     .frequency-ruler {
@@ -1004,7 +1148,7 @@
       font-size: clamp(28px, 3vw, 42px);
       line-height: 0.95;
       letter-spacing: 0.08em;
-      color: #f3f8fc;
+      color: var(--theme-ruler-main);
     }
 
     .ruler-sub {
@@ -1032,11 +1176,8 @@
     .spectrum-shell,
     .waterfall-shell {
       border-radius: 22px;
-      border-color: rgba(255, 255, 255, 0.08);
-      background:
-        linear-gradient(180deg, rgba(17, 25, 35, 0.94), rgba(7, 13, 20, 0.98)),
-        repeating-linear-gradient(to right, rgba(255, 255, 255, 0.035) 0 1px, transparent 1px 8.33%),
-        repeating-linear-gradient(to top, rgba(255, 255, 255, 0.028) 0 1px, transparent 1px 14%);
+      border-color: var(--theme-display-shell-border);
+      background: var(--theme-display-shell-bg);
     }
 
     .spectrum-shell {
@@ -1065,8 +1206,8 @@
     .scope-stat {
       padding: 10px 12px;
       border-radius: 16px;
-      border: 1px solid rgba(170, 197, 219, 0.12);
-      background: rgba(255, 255, 255, 0.03);
+      border: 1px solid var(--theme-scope-stat-border);
+      background: var(--theme-scope-stat-bg);
     }
 
     .scope-stat-label {
@@ -1082,15 +1223,321 @@
       font-family: var(--display);
       font-size: 21px;
       letter-spacing: 0.04em;
-      color: #eef5fb;
+      color: var(--theme-scope-stat-value);
     }
 
     .console-log pre {
       min-height: 210px;
       max-height: 210px;
-      border-top: 1px solid rgba(255, 255, 255, 0.04);
-      background:
-        linear-gradient(180deg, rgba(5, 9, 14, 0.96), rgba(4, 8, 12, 0.98));
+      border-top: 1px solid var(--theme-console-log-border);
+      background: var(--theme-console-log-bg);
+    }
+
+    :root[data-theme="light"] .nav-link,
+    :root[data-theme="light"] .btn {
+      border-color: rgba(93, 120, 142, 0.22);
+      background: rgba(228, 235, 240, 0.92);
+      color: #203845;
+    }
+
+    :root[data-theme="light"] .nav-link:hover,
+    :root[data-theme="light"] .btn:hover {
+      border-color: rgba(23, 126, 182, 0.34);
+      background: rgba(23, 126, 182, 0.10);
+    }
+
+    :root[data-theme="light"] .btn.primary {
+      border-color: rgba(23, 126, 182, 0.42);
+      background: linear-gradient(135deg, rgba(36, 138, 194, 0.96), rgba(20, 101, 150, 0.96));
+      box-shadow: 0 12px 28px rgba(35, 109, 154, 0.20);
+      color: #f8fcff;
+    }
+
+    :root[data-theme="light"] .btn.alt {
+      border-color: rgba(201, 125, 31, 0.34);
+      background: rgba(201, 125, 31, 0.12);
+    }
+
+    :root[data-theme="light"] .btn.ghost {
+      background: rgba(220, 228, 234, 0.96);
+    }
+
+    :root[data-theme="light"] .status-chip {
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.45);
+    }
+
+    :root[data-theme="light"] .panel-toggle-btn {
+      background: rgba(220, 228, 234, 0.96);
+    }
+
+    :root[data-layout="phone"] .page.console-page {
+      max-width: 560px;
+      padding: 10px 10px 20px;
+    }
+
+    :root[data-layout="phone"] .console-header {
+      display: grid;
+      gap: 10px;
+      margin-bottom: 10px;
+      padding: 0;
+    }
+
+    :root[data-layout="phone"] .console-header .subtitle {
+      display: none;
+    }
+
+    :root[data-layout="phone"] .console-header .kicker {
+      margin-bottom: 4px;
+      font-size: 10px;
+    }
+
+    :root[data-layout="phone"] .console-header h1 {
+      margin: 0;
+      font-size: clamp(24px, 8vw, 32px);
+    }
+
+    :root[data-layout="phone"] .hero-actions {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+      width: 100%;
+    }
+
+    :root[data-layout="phone"] .hero-actions > * {
+      width: 100%;
+      justify-content: center;
+      text-align: center;
+    }
+
+    :root[data-layout="phone"] .command-strip {
+      border-radius: 20px;
+    }
+
+    :root[data-layout="phone"] .strip-grid {
+      grid-template-columns: 1fr;
+      gap: 10px;
+    }
+
+    :root[data-layout="phone"] .vfo-deck,
+    :root[data-layout="phone"] .control-cluster {
+      min-height: auto;
+      padding: 14px;
+      border-radius: 18px;
+    }
+
+    :root[data-layout="phone"] .primary-deck .deck-frequency {
+      margin: 8px 0 10px;
+      letter-spacing: 0.05em;
+      font-size: clamp(34px, 10vw, 48px);
+    }
+
+    :root[data-layout="phone"] .secondary-deck .deck-frequency {
+      margin: 10px 0 4px;
+      letter-spacing: 0.05em;
+      font-size: clamp(24px, 7vw, 34px);
+    }
+
+    :root[data-layout="phone"] .freq-readout {
+      gap: 1px;
+      overflow-x: auto;
+      overflow-y: hidden;
+      scrollbar-width: none;
+      -ms-overflow-style: none;
+    }
+
+    :root[data-layout="phone"] .freq-readout::-webkit-scrollbar {
+      display: none;
+    }
+
+    :root[data-layout="phone"] .freq-digit {
+      min-width: 0.9em;
+      min-height: 1.35em;
+      padding: 0.1em 0.05em;
+    }
+
+    :root[data-layout="phone"] .deck-input-row {
+      flex-direction: column;
+      align-items: stretch;
+      gap: 10px;
+    }
+
+    :root[data-layout="phone"] .deck-input-row .field {
+      max-width: none;
+    }
+
+    :root[data-layout="phone"] .deck-note {
+      max-width: none;
+    }
+
+    :root[data-layout="phone"] .status-ribbon {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 8px;
+      margin-bottom: 10px;
+    }
+
+    :root[data-layout="phone"] .launch-grid {
+      grid-template-columns: 1fr;
+    }
+
+    :root[data-layout="phone"] .console-layout {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    :root[data-layout="phone"] .console-stage {
+      order: 1;
+    }
+
+    :root[data-layout="phone"] .left-rail {
+      order: 2;
+    }
+
+    :root[data-layout="phone"] .right-rail {
+      order: 3;
+    }
+
+    :root[data-layout="phone"] .stage,
+    :root[data-layout="phone"] .stack {
+      gap: 12px;
+    }
+
+    :root[data-layout="phone"] .scope-frame {
+      border-radius: 22px;
+    }
+
+    :root[data-layout="phone"] .display-head {
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 10px;
+      padding: 14px 14px 0;
+    }
+
+    :root[data-layout="phone"] .display-pill-row {
+      justify-content: flex-start;
+    }
+
+    :root[data-layout="phone"] .display-pill {
+      min-height: 32px;
+      font-size: 11px;
+    }
+
+    :root[data-layout="phone"] .display-zoom {
+      padding: 0 14px 10px;
+    }
+
+    :root[data-layout="phone"] .frequency-ruler {
+      padding: 6px 14px 10px;
+    }
+
+    :root[data-layout="phone"] .ruler-main {
+      font-size: clamp(24px, 7vw, 34px);
+    }
+
+    :root[data-layout="phone"] .ruler-sub {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 4px;
+    }
+
+    :root[data-layout="phone"] .display-stack {
+      gap: 8px;
+      padding: 0 12px 12px;
+    }
+
+    :root[data-layout="phone"] .spectrum-shell {
+      height: 250px;
+      border-radius: 16px;
+    }
+
+    :root[data-layout="phone"] .waterfall-shell {
+      height: 120px;
+      border-radius: 16px;
+    }
+
+    :root[data-layout="phone"] .scope-footer {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+      padding: 0 12px 12px;
+    }
+
+    :root[data-layout="phone"] .scope-stat {
+      padding: 9px 10px;
+    }
+
+    :root[data-layout="phone"] .panel {
+      border-radius: 18px;
+    }
+
+    :root[data-layout="phone"] .panel-head {
+      padding: 12px 14px;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    :root[data-layout="phone"] .panel-head .panel-meta {
+      width: 100%;
+      font-size: 10px;
+      letter-spacing: 0.1em;
+    }
+
+    :root[data-layout="phone"] .panel-body {
+      padding: 0 14px 14px;
+    }
+
+    :root[data-layout="phone"] .panel-toggle-btn {
+      display: inline-flex;
+    }
+
+    :root[data-layout="phone"] .panel[data-phone-collapsed="true"] > :not(.panel-head) {
+      display: none;
+    }
+
+    :root[data-layout="phone"] .field-row {
+      gap: 10px;
+      margin-bottom: 12px;
+    }
+
+    :root[data-layout="phone"] #mode-grid,
+    :root[data-layout="phone"] #band-grid {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    :root[data-layout="phone"] #tune-grid {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+
+    :root[data-layout="phone"] #rx-nr-grid {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+
+    :root[data-layout="phone"] .mode-btn,
+    :root[data-layout="phone"] .band-btn {
+      min-height: 42px;
+      padding: 10px 6px;
+      font-size: 12px;
+    }
+
+    :root[data-layout="phone"] .eq-grid {
+      display: flex;
+      gap: 8px;
+      overflow-x: auto;
+      padding-bottom: 4px;
+    }
+
+    :root[data-layout="phone"] .eq-band {
+      min-width: 40px;
+    }
+
+    :root[data-layout="phone"] .aux-meter-row {
+      grid-template-columns: 1fr;
+    }
+
+    :root[data-layout="phone"] .console-log pre {
+      min-height: 120px;
+      max-height: 160px;
+      padding: 12px 14px 14px;
     }
 
     @media (max-width: 1520px) {
@@ -1196,8 +1643,8 @@
       <div class="hero-actions">
         <a class="nav-link" href="./">Update</a>
         <a class="nav-link" href="./monitor">Monitor</a>
-        <a class="nav-link" href="./p23test">p2app Lab</a>
-        <button class="btn alt" id="demo-btn" type="button">Preview Only</button>
+        <button class="btn ghost" id="layout-btn" type="button">Phone: Off</button>
+        <button class="btn ghost" id="theme-btn" type="button">Theme: Dark</button>
       </div>
     </header>
 
@@ -1245,12 +1692,7 @@
               <span class="status-chip ghost">LAN-truth RX path</span>
             </div>
             <div class="launch-grid">
-              <button class="btn primary" id="connect-btn" type="button">Connect</button>
-              <button class="btn ghost" id="disconnect-btn" type="button">Disconnect</button>
-              <button class="btn alt" id="start-iq-btn" type="button">Start IQ</button>
-              <button class="btn ghost" id="stop-iq-btn" type="button">Stop IQ</button>
-              <button class="btn warm" id="start-audio-btn" type="button">Start Audio</button>
-              <button class="btn ghost" id="stop-audio-btn" type="button">Stop Audio</button>
+              <button class="btn primary" id="go-live-btn" type="button">Go Live</button>
             </div>
           </div>
         </div>
@@ -1259,7 +1701,7 @@
 
     <section class="layout console-layout">
       <div class="stack left-rail">
-        <div class="panel">
+        <div class="panel" data-phone-panel="routing">
           <div class="panel-head">
             <h2 class="panel-title">Routing</h2>
             <div class="panel-meta">Bridge / sampling path</div>
@@ -1283,10 +1725,11 @@
               </div>
               <div>
                 <label class="label" for="rx-adc">RX Input</label>
-                <select class="field" id="rx-adc">
-                  <option value="0">ADC1</option>
-                  <option value="1">ADC2</option>
-                </select>
+                  <select class="field" id="rx-adc">
+                    <option value="0">ADC1</option>
+                    <option value="1">ADC2</option>
+                    <option value="2">ADC3</option>
+                  </select>
               </div>
               <div>
                 <label class="label" for="rx-antenna">RX Antenna</label>
@@ -1300,7 +1743,7 @@
           </div>
         </div>
 
-        <div class="panel">
+        <div class="panel" data-phone-panel="tuning">
           <div class="panel-head">
             <h2 class="panel-title">Tuning</h2>
             <div class="panel-meta">Recall / nudge / jump</div>
@@ -1335,7 +1778,7 @@
           </div>
         </div>
 
-        <div class="panel">
+        <div class="panel" data-phone-panel="demod">
           <div class="panel-head">
             <h2 class="panel-title">Demod</h2>
             <div class="panel-meta">Mode / gain / passband</div>
@@ -1380,17 +1823,45 @@
             <div class="field-row">
               <div class="range-wrap">
                 <div class="row spread">
+                  <span class="label" style="margin: 0;">Noise Blanker</span>
+                  <span class="mono small" id="rx-nb-threshold-readout">4.95</span>
+                </div>
+                <div class="nr-grid" id="rx-nb-grid">
+                  <button class="mode-btn active" data-nb-mode="OFF" type="button">Off</button>
+                  <button class="mode-btn" data-nb-mode="NB1" type="button">NB1</button>
+                  <button class="mode-btn" data-nb-mode="NB2" type="button">NB2</button>
+                </div>
+                <input id="rx-nb-threshold" type="range" min="2.5" max="82.5" step="0.05" value="4.95" />
+              </div>
+              <div class="range-wrap">
+                <div class="row spread">
+                  <span class="label" style="margin: 0;">ANF / AGC</span>
+                  <button class="btn eq-enable-btn" id="rx-anf-btn" type="button" style="font-size:11px;padding:4px 10px;">ANF Off</button>
+                </div>
+                <div class="nr-grid" id="rx-agc-grid">
+                  <button class="mode-btn" data-agc-mode="OFF" type="button">Off</button>
+                  <button class="mode-btn" data-agc-mode="LONG" type="button">Long</button>
+                  <button class="mode-btn" data-agc-mode="SLOW" type="button">Slow</button>
+                  <button class="mode-btn active" data-agc-mode="MEDIUM" type="button">Med</button>
+                  <button class="mode-btn" data-agc-mode="FAST" type="button">Fast</button>
+                </div>
+              </div>
+            </div>
+
+            <div class="field-row">
+              <div class="range-wrap">
+                <div class="row spread">
                   <span class="label" style="margin: 0;">Filter Low</span>
                   <span class="mono small" id="filter-low-readout">300 Hz</span>
                 </div>
-                <input id="filter-low" type="range" min="-12000" max="12000" step="50" value="300" />
+                <input id="filter-low" type="range" min="0" max="300" step="50" value="300" />
               </div>
               <div class="range-wrap">
                 <div class="row spread">
                   <span class="label" style="margin: 0;">Filter High</span>
                   <span class="mono small" id="filter-high-readout">3000 Hz</span>
                 </div>
-                <input id="filter-high" type="range" min="-12000" max="12000" step="50" value="3000" />
+                <input id="filter-high" type="range" min="500" max="6000" step="50" value="3000" />
               </div>
             </div>
 
@@ -1442,6 +1913,7 @@
             </div>
             <div class="waterfall-shell" id="waterfall-shell">
               <canvas id="waterfall-canvas"></canvas>
+              <div class="filter-window" id="waterfall-filter-window"></div>
               <div class="center-line"></div>
             </div>
           </div>
@@ -1465,7 +1937,7 @@
           </div>
         </div>
 
-        <div class="panel log-card console-log">
+        <div class="panel log-card console-log" data-phone-panel="log">
           <div class="panel-head">
             <h2 class="panel-title">Operator Log</h2>
             <div class="panel-meta">Live client trace</div>
@@ -1475,7 +1947,7 @@
       </div>
 
       <div class="stack right-rail">
-        <div class="panel">
+        <div class="panel" data-phone-panel="telemetry">
           <div class="panel-head">
             <h2 class="panel-title">Telemetry</h2>
             <div class="panel-meta">Observed radio state</div>
@@ -1588,7 +2060,7 @@
           </div>
         </div>
 
-        <div class="panel">
+        <div class="panel" data-phone-panel="tx">
           <div class="panel-head">
             <h2 class="panel-title">Transmit</h2>
             <div class="panel-meta" id="tx-status-meta">RX</div>
@@ -1601,9 +2073,9 @@
               <div class="range-wrap">
                 <div class="row spread">
                   <span class="label" style="margin: 0;">TX Drive</span>
-                  <span class="mono small" id="tx-drive-readout">200</span>
+                  <span class="mono small" id="tx-drive-readout">100</span>
                 </div>
-                <input id="tx-drive" type="range" min="0" max="255" step="1" value="200" />
+                <input id="tx-drive" type="range" min="0" max="100" step="1" value="100" />
               </div>
               <div class="range-wrap">
                 <div class="row spread">
@@ -1620,14 +2092,14 @@
                   <span class="label" style="margin: 0;">TX Filter Low</span>
                   <span class="mono small" id="tx-filter-low-readout">300 Hz</span>
                 </div>
-                <input id="tx-filter-low" type="range" min="-8000" max="8000" step="50" value="300" />
+                <input id="tx-filter-low" type="range" min="0" max="300" step="50" value="300" />
               </div>
               <div class="range-wrap">
                 <div class="row spread">
                   <span class="label" style="margin: 0;">TX Filter High</span>
                   <span class="mono small" id="tx-filter-high-readout">3000 Hz</span>
                 </div>
-                <input id="tx-filter-high" type="range" min="100" max="8000" step="50" value="3000" />
+                <input id="tx-filter-high" type="range" min="500" max="6000" step="50" value="3000" />
               </div>
             </div>
 
@@ -1637,6 +2109,23 @@
                 <button class="btn eq-enable-btn" id="tx-eq-enable-btn" type="button" style="font-size:11px;padding:4px 10px;">EQ Off</button>
               </div>
               <div class="eq-grid" id="tx-eq-grid"></div>
+            </div>
+
+            <div class="eq-section" style="margin-top:10px;">
+              <div class="eq-header">
+                <span class="label" style="margin: 0;">CFC (10-Band Compression)</span>
+                <button class="btn eq-enable-btn" id="cfc-enable-btn" type="button" style="font-size:11px;padding:4px 10px;">CFC Off</button>
+              </div>
+              <div style="display:flex;align-items:center;gap:10px;margin-top:6px;margin-bottom:4px;">
+                <span class="label" style="margin:0;min-width:80px;">Pre-comp</span>
+                <input id="cfc-precomp" type="range" min="0" max="20" step="0.5" value="0" style="flex:1;" />
+                <span id="cfc-precomp-readout" style="min-width:40px;text-align:right;">0.0 dB</span>
+              </div>
+              <div class="eq-grid" id="cfc-band-grid"></div>
+            </div>
+
+            <div style="margin-top:10px;">
+              <button class="btn" id="two-tone-btn" type="button" style="width:100%;font-size:12px;">2-Tone Test Off</button>
             </div>
           </div>
         </div>
@@ -1649,6 +2138,17 @@
     const DISPLAY_COMPLEX_SAMPLES_TARGET = 4096;
     const DISPLAY_MAX_FFT_SIZE = 4096;
     const DISPLAY_PACKET_HISTORY = 48;
+    const PHONE_PANEL_DEFAULTS = Object.freeze({
+      routing: true,
+      tuning: false,
+      demod: false,
+      log: true,
+      telemetry: true,
+      tx: true,
+    });
+    const RADIO_PREFS_KEY = "saturn.remote.radioPrefs";
+    const ALLOWED_SAMPLE_RATES = Object.freeze([48000, 96000, 192000, 384000]);
+    const ALLOWED_DEMOD_MODES = Object.freeze(["USB", "LSB", "AM", "SAM", "FM", "DIGU", "DIGL", "CWU", "CWL"]);
 
     const state = {
       ws: null,
@@ -1667,6 +2167,10 @@
       rxVolumeDb: -10.0,
       rxNoiseReductionMode: "OFF",
       rxNoiseReductionLevel: 100,
+      rxNbMode: "OFF",
+      rxNbThreshold: 4.95,
+      anfEnabled: false,
+      agcMode: "MEDIUM",
       displayZoom: 1,
       filterLow: 300,
       filterHigh: 3000,
@@ -1694,17 +2198,26 @@
       iqPackets: [],
       lastSpectrumRenderAt: 0,
       txEnabled: false,
-      txDrive: 200,
+      txDrive: 100,
       txMicGainDb: 0,
       micStream: null,
       micNode: null,
       micCapturing: false,
+      pttRequestId: 0,
+      pttPointerId: null,
       txFilterLow: 300,
       txFilterHigh: 3000,
       rxEqEnabled: false,
       rxEqBands: new Array(11).fill(0),
       txEqEnabled: false,
       txEqBands: new Array(11).fill(0),
+      cfcEnabled: false,
+      cfcPrecomp: 0.0,
+      cfcBands: new Array(11).fill(0.0),
+      twoToneEnabled: false,
+      theme: "dark",
+      layoutMode: "desktop",
+      phonePanels: { ...PHONE_PANEL_DEFAULTS },
     };
 
     class FftProcessor {
@@ -2317,13 +2830,178 @@
       area.scrollTop = area.scrollHeight;
     }
 
+    function secureProxyWsUrl() {
+      const host = window.location.host || window.location.hostname || "127.0.0.1";
+      return `wss://${host}/tci`;
+    }
+
     function defaultWsUrl() {
       const saved = localStorage.getItem("saturn.remote.wsUrl");
+      if (window.location.protocol === "https:") {
+        if (!saved) {
+          return secureProxyWsUrl();
+        }
+        try {
+          const parsed = new URL(saved, window.location.href);
+          if (parsed.protocol === "wss:" && parsed.host === window.location.host) {
+            return parsed.toString();
+          }
+        } catch (_) {
+          // Fall through to the secure same-origin proxy.
+        }
+        return secureProxyWsUrl();
+      }
       if (saved) {
         return saved;
       }
-      const scheme = window.location.protocol === "https:" ? "wss" : "ws";
-      return `${scheme}://${window.location.hostname || "127.0.0.1"}:50001`;
+      return `ws://${window.location.hostname || "127.0.0.1"}:50001`;
+    }
+
+    function preferredLayout() {
+      return localStorage.getItem("saturn.remote.layout") === "phone" ? "phone" : "desktop";
+    }
+
+    function loadPhonePanelState() {
+      const fallback = { ...PHONE_PANEL_DEFAULTS };
+      const saved = localStorage.getItem("saturn.remote.phonePanels");
+      if (!saved) {
+        return fallback;
+      }
+      try {
+        const parsed = JSON.parse(saved);
+        if (!parsed || typeof parsed !== "object") {
+          return fallback;
+        }
+        Object.keys(fallback).forEach((key) => {
+          if (typeof parsed[key] === "boolean") {
+            fallback[key] = parsed[key];
+          }
+        });
+      } catch (_) {
+        return fallback;
+      }
+      return fallback;
+    }
+
+    function savePhonePanelState() {
+      localStorage.setItem("saturn.remote.phonePanels", JSON.stringify(state.phonePanels));
+    }
+
+    function updateLayoutButton() {
+      const button = $("layout-btn");
+      if (!button) {
+        return;
+      }
+      const isPhone = state.layoutMode === "phone";
+      button.textContent = `Phone: ${isPhone ? "On" : "Off"}`;
+      button.className = isPhone ? "btn alt" : "btn ghost";
+      button.setAttribute("aria-pressed", isPhone ? "true" : "false");
+      button.title = isPhone ? "Switch to desktop layout" : "Switch to phone layout";
+    }
+
+    function syncPhonePanels() {
+      document.querySelectorAll("[data-phone-panel]").forEach((panel) => {
+        const key = panel.dataset.phonePanel;
+        const collapsed = Boolean(state.phonePanels[key]);
+        const label = panel.querySelector(".panel-title")?.textContent?.trim() || key;
+        panel.dataset.phoneCollapsed = collapsed ? "true" : "false";
+        const button = panel.querySelector(".panel-toggle-btn");
+        if (button) {
+          button.textContent = collapsed ? "Show" : "Hide";
+          button.setAttribute("aria-expanded", collapsed ? "false" : "true");
+          button.setAttribute("aria-label", `${collapsed ? "Show" : "Hide"} ${label}`);
+          button.title = `${collapsed ? "Show" : "Hide"} ${label}`;
+        }
+      });
+    }
+
+    function togglePhonePanel(key) {
+      if (!(key in state.phonePanels)) {
+        return;
+      }
+      state.phonePanels[key] = !state.phonePanels[key];
+      savePhonePanelState();
+      syncPhonePanels();
+      requestAnimationFrame(() => {
+        spectrumRenderer.resize();
+        waterfallRenderer.resize();
+      });
+    }
+
+    function initPhonePanels() {
+      state.phonePanels = loadPhonePanelState();
+      document.querySelectorAll("[data-phone-panel]").forEach((panel) => {
+        const head = panel.querySelector(".panel-head");
+        if (!head || head.querySelector(".panel-toggle-btn")) {
+          return;
+        }
+        const key = panel.dataset.phonePanel;
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "panel-toggle-btn";
+        button.addEventListener("click", (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          togglePhonePanel(key);
+        });
+        head.appendChild(button);
+      });
+      syncPhonePanels();
+    }
+
+    function applyLayout(mode, persist = true, refresh = true) {
+      state.layoutMode = mode === "phone" ? "phone" : "desktop";
+      document.documentElement.dataset.layout = state.layoutMode;
+      if (persist) {
+        localStorage.setItem("saturn.remote.layout", state.layoutMode);
+      }
+      updateLayoutButton();
+      syncPhonePanels();
+      if (refresh) {
+        requestAnimationFrame(() => {
+          spectrumRenderer.resize();
+          waterfallRenderer.resize();
+          updateUi();
+        });
+      }
+    }
+
+    function toggleLayout() {
+      applyLayout(state.layoutMode === "phone" ? "desktop" : "phone");
+    }
+
+    function preferredTheme() {
+      const saved = localStorage.getItem("saturn.remote.theme");
+      if (saved === "light" || saved === "dark") {
+        return saved;
+      }
+      return window.matchMedia && window.matchMedia("(prefers-color-scheme: light)").matches
+        ? "light"
+        : "dark";
+    }
+
+    function updateThemeButton() {
+      const button = $("theme-btn");
+      if (!button) {
+        return;
+      }
+      button.textContent = `Theme: ${state.theme === "light" ? "Light" : "Dark"}`;
+      button.setAttribute("aria-label", `Switch to ${state.theme === "light" ? "dark" : "light"} theme`);
+      button.title = `Switch to ${state.theme === "light" ? "dark" : "light"} theme`;
+    }
+
+    function applyTheme(theme, persist = true) {
+      state.theme = theme === "light" ? "light" : "dark";
+      document.documentElement.dataset.theme = state.theme;
+      document.documentElement.style.colorScheme = state.theme;
+      if (persist) {
+        localStorage.setItem("saturn.remote.theme", state.theme);
+      }
+      updateThemeButton();
+    }
+
+    function toggleTheme() {
+      applyTheme(state.theme === "light" ? "dark" : "light");
     }
 
     function formatFrequency(hz) {
@@ -2351,8 +3029,44 @@
       return "OFF";
     }
 
+    function normalizeNbMode(value) {
+      const text = String(value || "").trim().toUpperCase();
+      if (["NB1", "NB", "1"].includes(text)) {
+        return "NB1";
+      }
+      if (["NB2", "NOB", "2"].includes(text)) {
+        return "NB2";
+      }
+      return "OFF";
+    }
+
+    function normalizeAgcMode(value) {
+      const text = String(value || "").trim().toUpperCase();
+      if (["OFF", "0"].includes(text)) {
+        return "OFF";
+      }
+      if (["LONG", "1"].includes(text)) {
+        return "LONG";
+      }
+      if (["SLOW", "2"].includes(text)) {
+        return "SLOW";
+      }
+      if (["FAST", "4"].includes(text)) {
+        return "FAST";
+      }
+      return "MEDIUM";
+    }
+
     function displaySpanHz() {
       return Math.max(1000, state.sampleRate / Math.max(1, state.displayZoom));
+    }
+
+    // Only rebuild the digit spans when no child of the container has focus.
+    // This prevents updateUi() from destroying an active keyboard-tuning session.
+    function updateFrequencyReadout(element, hz) {
+      if (!element) return;
+      if (element.contains(document.activeElement)) return;
+      element.innerHTML = formatFrequencyMarkup(hz);
     }
 
     function formatFrequencyMarkup(hz) {
@@ -2379,8 +3093,237 @@
       return Math.max(0, Math.min(100, Math.round(Number(value))));
     }
 
+    function clampRxNbThreshold(value) {
+      return Math.max(2.5, Math.min(82.5, Number(value)));
+    }
+
+    function clampFilterLowHz(value) {
+      return Math.max(0, Math.min(300, Number(value)));
+    }
+
+    function clampFilterHighHz(value) {
+      return Math.max(500, Math.min(6000, Number(value)));
+    }
+
+    function clampSampleRateHz(value) {
+      const sampleRate = Math.round(Number(value));
+      return ALLOWED_SAMPLE_RATES.includes(sampleRate) ? sampleRate : 192000;
+    }
+
+    function normalizeDemodMode(mode) {
+      return `${mode || ""}`.trim().toUpperCase();
+    }
+
+    function clampDemodMode(mode) {
+      const normalized = normalizeDemodMode(mode);
+      return ALLOWED_DEMOD_MODES.includes(normalized) ? normalized : "USB";
+    }
+
+    function isNegativePassbandMode(mode) {
+      const normalized = normalizeDemodMode(mode);
+      return normalized === "LSB" || normalized === "DIGL" || normalized === "CWL";
+    }
+
+    function isSymmetricPassbandMode(mode) {
+      const normalized = normalizeDemodMode(mode);
+      return normalized === "AM" || normalized === "SAM" || normalized === "FM" || normalized === "DSB";
+    }
+
+    function defaultSignedRxPassbandForMode(mode) {
+      switch (normalizeDemodMode(mode)) {
+        case "LSB":
+          return { lowHz: -3000, highHz: -300 };
+        case "DIGL":
+          return { lowHz: -3000, highHz: -300 };
+        case "CWL":
+          return { lowHz: -800, highHz: -200 };
+        case "CWU":
+          return { lowHz: 200, highHz: 800 };
+        case "AM":
+        case "SAM":
+          return { lowHz: -4000, highHz: 4000 };
+        case "FM":
+          return { lowHz: -6000, highHz: 6000 };
+        case "DIGU":
+        case "USB":
+        default:
+          return { lowHz: 300, highHz: 3000 };
+      }
+    }
+
+    function defaultSignedTxPassbandForMode(mode) {
+      switch (normalizeDemodMode(mode)) {
+        case "LSB":
+          return { lowHz: -3000, highHz: -300 };
+        case "DIGL":
+          return { lowHz: -3000, highHz: 0 };
+        case "AM":
+        case "SAM":
+        case "FM":
+          return { lowHz: -3000, highHz: 3000 };
+        case "CWL":
+          return { lowHz: -800, highHz: -200 };
+        case "CWU":
+          return { lowHz: 200, highHz: 800 };
+        case "DIGU":
+          return { lowHz: 0, highHz: 3000 };
+        case "USB":
+        default:
+          return { lowHz: 300, highHz: 3000 };
+      }
+    }
+
+    function signedPassbandFromUiCuts(lowCutHz, highCutHz, mode = state.mode) {
+      const low = clampFilterLowHz(lowCutHz);
+      const high = clampFilterHighHz(highCutHz);
+      if (isNegativePassbandMode(mode)) {
+        return { lowHz: -high, highHz: -low };
+      }
+      if (isSymmetricPassbandMode(mode)) {
+        return { lowHz: -high, highHz: high };
+      }
+      return { lowHz: low, highHz: high };
+    }
+
+    function uiCutsFromSignedPassband(lowHz, highHz, mode = state.mode) {
+      if (lowHz <= 0 && highHz <= 0) {
+        return {
+          lowCutHz: clampFilterLowHz(-highHz),
+          highCutHz: clampFilterHighHz(-lowHz),
+        };
+      }
+      if (lowHz >= 0 && highHz >= 0) {
+        return {
+          lowCutHz: clampFilterLowHz(lowHz),
+          highCutHz: clampFilterHighHz(highHz),
+        };
+      }
+      return {
+        lowCutHz: isSymmetricPassbandMode(mode) ? 0 : clampFilterLowHz(Math.min(Math.abs(lowHz), Math.abs(highHz))),
+        highCutHz: clampFilterHighHz(Math.max(Math.abs(lowHz), Math.abs(highHz))),
+      };
+    }
+
+    function applyModeDefaultFilters(mode) {
+      const rxDefaults = defaultSignedRxPassbandForMode(mode);
+      const rxCuts = uiCutsFromSignedPassband(rxDefaults.lowHz, rxDefaults.highHz, mode);
+      state.filterLow = rxCuts.lowCutHz;
+      state.filterHigh = rxCuts.highCutHz;
+      const txDefaults = defaultSignedTxPassbandForMode(mode);
+      const txCuts = uiCutsFromSignedPassband(txDefaults.lowHz, txDefaults.highHz, mode);
+      state.txFilterLow = txCuts.lowCutHz;
+      state.txFilterHigh = txCuts.highCutHz;
+    }
+
+    function clampTxDriveWatts(value) {
+      return Math.max(0, Math.min(100, Math.round(Number(value))));
+    }
+
+    function clampTxMicGainDb(value) {
+      return Math.max(-20, Math.min(20, Number(value)));
+    }
+
+    function clampEqGainDb(value) {
+      return Math.max(-20, Math.min(20, Math.round(Number(value))));
+    }
+
+    function sanitizeEqBands(values, fallback = new Array(11).fill(0)) {
+      const bands = fallback.slice(0, 11);
+      while (bands.length < 11) {
+        bands.push(0);
+      }
+      for (let i = 1; i <= 10; i += 1) {
+        const next = Array.isArray(values) ? values[i] : undefined;
+        if (Number.isFinite(Number(next))) {
+          bands[i] = clampEqGainDb(next);
+        } else {
+          bands[i] = clampEqGainDb(bands[i] || 0);
+        }
+      }
+      bands[0] = 0;
+      return bands;
+    }
+
+    function currentRadioPrefs() {
+      return {
+        sampleRate: clampSampleRateHz(state.sampleRate),
+        rxAdc: clampRxAdc(state.rxAdc),
+        rxAntenna: clampRxAntenna(state.rxAntenna),
+        mode: clampDemodMode(state.mode),
+        rxVolumeDb: clampRxVolumeDb(state.rxVolumeDb),
+        rxNoiseReductionMode: normalizeNrMode(state.rxNoiseReductionMode),
+        rxNoiseReductionLevel: clampRxNoiseReductionLevel(state.rxNoiseReductionLevel),
+        rxNbMode: normalizeNbMode(state.rxNbMode),
+        rxNbThreshold: clampRxNbThreshold(state.rxNbThreshold),
+        anfEnabled: Boolean(state.anfEnabled),
+        agcMode: normalizeAgcMode(state.agcMode),
+        filterLow: clampFilterLowHz(state.filterLow),
+        filterHigh: clampFilterHighHz(state.filterHigh),
+        txDrive: clampTxDriveWatts(state.txDrive),
+        txMicGainDb: clampTxMicGainDb(state.txMicGainDb),
+        txFilterLow: clampFilterLowHz(state.txFilterLow),
+        txFilterHigh: clampFilterHighHz(state.txFilterHigh),
+        rxEqEnabled: Boolean(state.rxEqEnabled),
+        rxEqBands: sanitizeEqBands(state.rxEqBands),
+        txEqEnabled: Boolean(state.txEqEnabled),
+        txEqBands: sanitizeEqBands(state.txEqBands),
+        cfcEnabled: Boolean(state.cfcEnabled),
+        cfcPrecomp: Number(state.cfcPrecomp) || 0,
+        cfcBands: (state.cfcBands || []).map(v => Math.max(0, Math.min(20, Number(v) || 0))),
+      };
+    }
+
+    function saveRadioPrefs() {
+      try {
+        localStorage.setItem(RADIO_PREFS_KEY, JSON.stringify(currentRadioPrefs()));
+      } catch (error) {
+        console.warn("Saturn Remote radio preference save failed", error);
+      }
+    }
+
+    function applySavedRadioPrefs() {
+      const raw = localStorage.getItem(RADIO_PREFS_KEY);
+      if (!raw) {
+        return;
+      }
+      try {
+        const prefs = JSON.parse(raw);
+        if (!prefs || typeof prefs !== "object") {
+          return;
+        }
+        state.sampleRate = clampSampleRateHz(prefs.sampleRate ?? state.sampleRate);
+        state.rxAdc = clampRxAdc(prefs.rxAdc ?? state.rxAdc);
+        state.rxAntenna = clampRxAntenna(prefs.rxAntenna ?? state.rxAntenna);
+        state.mode = clampDemodMode(prefs.mode ?? state.mode);
+        state.rxVolumeDb = clampRxVolumeDb(prefs.rxVolumeDb ?? state.rxVolumeDb);
+        state.rxNoiseReductionMode = normalizeNrMode(prefs.rxNoiseReductionMode ?? state.rxNoiseReductionMode);
+        state.rxNoiseReductionLevel = clampRxNoiseReductionLevel(prefs.rxNoiseReductionLevel ?? state.rxNoiseReductionLevel);
+        state.rxNbMode = normalizeNbMode(prefs.rxNbMode ?? state.rxNbMode);
+        state.rxNbThreshold = clampRxNbThreshold(prefs.rxNbThreshold ?? state.rxNbThreshold);
+        state.anfEnabled = Boolean(prefs.anfEnabled ?? state.anfEnabled);
+        state.agcMode = normalizeAgcMode(prefs.agcMode ?? state.agcMode);
+        state.filterLow = clampFilterLowHz(prefs.filterLow ?? state.filterLow);
+        state.filterHigh = clampFilterHighHz(prefs.filterHigh ?? state.filterHigh);
+        state.txDrive = clampTxDriveWatts(prefs.txDrive ?? state.txDrive);
+        state.txMicGainDb = clampTxMicGainDb(prefs.txMicGainDb ?? state.txMicGainDb);
+        state.txFilterLow = clampFilterLowHz(prefs.txFilterLow ?? state.txFilterLow);
+        state.txFilterHigh = clampFilterHighHz(prefs.txFilterHigh ?? state.txFilterHigh);
+        state.rxEqEnabled = Boolean(prefs.rxEqEnabled ?? state.rxEqEnabled);
+        state.rxEqBands = sanitizeEqBands(prefs.rxEqBands, state.rxEqBands);
+        state.txEqEnabled = Boolean(prefs.txEqEnabled ?? state.txEqEnabled);
+        state.txEqBands = sanitizeEqBands(prefs.txEqBands, state.txEqBands);
+        state.cfcEnabled = Boolean(prefs.cfcEnabled ?? state.cfcEnabled);
+        state.cfcPrecomp = Number(prefs.cfcPrecomp ?? state.cfcPrecomp) || 0;
+        if (Array.isArray(prefs.cfcBands)) {
+          state.cfcBands = prefs.cfcBands.map(v => Math.max(0, Math.min(20, Number(v) || 0)));
+        }
+      } catch (error) {
+        console.warn("Saturn Remote radio preference restore failed", error);
+      }
+    }
+
     function clampRxAdc(value) {
-      return Math.max(0, Math.min(1, Math.round(Number(value))));
+      return Math.max(0, Math.min(2, Math.round(Number(value))));
     }
 
     function clampRxAntenna(value) {
@@ -2388,7 +3331,11 @@
     }
 
     function adcLabel(value) {
-      return clampRxAdc(value) === 1 ? "ADC2" : "ADC1";
+      const adc = clampRxAdc(value);
+      if (adc === 2) {
+        return "ADC3";
+      }
+      return adc === 1 ? "ADC2" : "ADC1";
     }
 
     function antennaLabel(value) {
@@ -2520,14 +3467,24 @@
       return state.dds + offsetHz;
     }
 
+    function displayPassbandHz() {
+      const passband = signedPassbandFromUiCuts(state.filterLow, state.filterHigh, state.mode);
+      return { startHz: passband.lowHz, endHz: passband.highHz };
+    }
+
     function updateFilterOverlay() {
       const rate = Math.max(1, displaySpanHz());
-      const left = 50 + (state.filterLow / rate) * 100;
-      const right = 50 + (state.filterHigh / rate) * 100;
+      const passband = displayPassbandHz();
+      const left = 50 + (passband.startHz / rate) * 100;
+      const right = 50 + (passband.endHz / rate) * 100;
       const clampedLeft = Math.max(0, Math.min(100, left));
       const clampedRight = Math.max(0, Math.min(100, right));
-      $("filter-window").style.left = `${Math.min(clampedLeft, clampedRight)}%`;
-      $("filter-window").style.width = `${Math.max(1.5, Math.abs(clampedRight - clampedLeft))}%`;
+      const windowLeft = `${Math.min(clampedLeft, clampedRight)}%`;
+      const windowWidth = `${Math.max(1.5, Math.abs(clampedRight - clampedLeft))}%`;
+      $("filter-window").style.left = windowLeft;
+      $("filter-window").style.width = windowWidth;
+      $("waterfall-filter-window").style.left = windowLeft;
+      $("waterfall-filter-window").style.width = windowWidth;
     }
 
     function updateAxes() {
@@ -2542,14 +3499,17 @@
       if (document.activeElement !== $("vfo-a-input")) {
         $("vfo-a-input").value = `${state.vfoA}`;
       }
-      $("dds-readout").innerHTML = formatFrequencyMarkup(state.dds);
+      updateFrequencyReadout($("dds-readout"), state.dds);
       $("vfo-b-readout").textContent = formatFrequency(state.vfoB);
-      $("operator-center-readout").innerHTML = formatFrequencyMarkup(state.dds);
+      updateFrequencyReadout($("operator-center-readout"), state.dds);
       $("mode-readout").textContent = state.mode;
       $("sample-rate-readout").textContent = `IQ ${Math.round(state.sampleRate / 1000)} kHz`;
       $("path-summary").textContent = `${adcLabel(state.rxAdc)} • ${antennaLabel(state.rxAntenna)} • ${Math.round(state.sampleRate / 1000)} kHz IQ`;
       $("rx-volume-readout").textContent = `${state.rxVolumeDb.toFixed(1)} dB`;
       $("rx-nr-readout").textContent = noiseReductionLabel();
+      $("rx-nb-threshold-readout").textContent = state.rxNbThreshold.toFixed(2);
+      $("rx-anf-btn").textContent = state.anfEnabled ? "ANF On" : "ANF Off";
+      $("rx-anf-btn").classList.toggle("active", state.anfEnabled);
       $("zoom-readout").textContent = `${state.displayZoom.toFixed(1)}x`;
       $("filter-low-readout").textContent = `${state.filterLow} Hz`;
       $("filter-high-readout").textContent = `${state.filterHigh} Hz`;
@@ -2561,6 +3521,18 @@
       $("rx-eq-enable-btn").classList.toggle("active", state.rxEqEnabled);
       $("tx-eq-enable-btn").textContent = state.txEqEnabled ? "EQ On" : "EQ Off";
       $("tx-eq-enable-btn").classList.toggle("active", state.txEqEnabled);
+      $("cfc-enable-btn").textContent = state.cfcEnabled ? "CFC On" : "CFC Off";
+      $("cfc-enable-btn").classList.toggle("active", state.cfcEnabled);
+      $("cfc-precomp").value = state.cfcPrecomp;
+      $("cfc-precomp-readout").textContent = `${state.cfcPrecomp.toFixed(1)} dB`;
+      for (let i = 1; i <= 10; i++) {
+        const slider = document.getElementById(`cfc-band-${i}`);
+        const valEl = document.getElementById(`cfc-val-${i}`);
+        if (slider) slider.value = `${state.cfcBands[i]}`;
+        if (valEl) valEl.textContent = `${state.cfcBands[i].toFixed(1)}`;
+      }
+      $("two-tone-btn").textContent = state.twoToneEnabled ? "2-Tone Test ON" : "2-Tone Test Off";
+      $("two-tone-btn").classList.toggle("active", state.twoToneEnabled);
       $("ptt-btn").classList.toggle("active", state.txEnabled);
       $("tx-status-meta").textContent = state.txEnabled ? "TX" : "RX";
       $("meter-readout").textContent = state.meterDbm == null ? "-- dBm" : `${state.meterDbm.toFixed(1)} dBm`;
@@ -2579,6 +3551,17 @@
       $("conn-label").textContent = state.connected ? "Connected" : (state.demoMode ? "Preview" : "Disconnected");
       const connDot = $("conn-dot");
       connDot.className = "dot " + (state.connected ? "live" : (state.demoMode ? "warn" : "dead"));
+      const goLiveBtn = $("go-live-btn");
+      if (state.connected) {
+        goLiveBtn.textContent = "Go Offline";
+        goLiveBtn.className = "btn ghost";
+      } else if (state.ws && state.ws.readyState === WebSocket.CONNECTING) {
+        goLiveBtn.textContent = "Connecting…";
+        goLiveBtn.className = "btn ghost";
+      } else {
+        goLiveBtn.textContent = "Go Live";
+        goLiveBtn.className = "btn primary";
+      }
       $("display-resolution").textContent = `Display: ${Math.max(1, Math.round(window.devicePixelRatio || 1))}x DPR`;
       $("display-resolution").textContent += ` | ${state.displayFloorDb.toFixed(0)}..${state.displayCeilingDb.toFixed(0)} dB`;
       updateAxes();
@@ -2617,14 +3600,29 @@
       if ($("rx-nr-level").value !== nrLevel) {
         $("rx-nr-level").value = nrLevel;
       }
+      const rxFl = `${state.filterLow}`;
+      if ($("filter-low").value !== rxFl) { $("filter-low").value = rxFl; }
+      const rxFh = `${state.filterHigh}`;
+      if ($("filter-high").value !== rxFh) { $("filter-high").value = rxFh; }
       const zoomLevel = `${state.displayZoom}`;
       if ($("display-zoom").value !== zoomLevel) {
         $("display-zoom").value = zoomLevel;
       }
       $("rx-nr-level").disabled = state.rxNoiseReductionMode === "OFF" || state.rxNoiseReductionMode === "NR3";
+      $("rx-nb-threshold").disabled = state.rxNbMode === "OFF";
       document.querySelectorAll("#rx-nr-grid .mode-btn").forEach((button) => {
         button.classList.toggle("active", normalizeNrMode(button.dataset.nrMode) === state.rxNoiseReductionMode);
       });
+      document.querySelectorAll("#rx-nb-grid .mode-btn").forEach((button) => {
+        button.classList.toggle("active", normalizeNbMode(button.dataset.nbMode) === state.rxNbMode);
+      });
+      document.querySelectorAll("#rx-agc-grid .mode-btn").forEach((button) => {
+        button.classList.toggle("active", normalizeAgcMode(button.dataset.agcMode) === state.agcMode);
+      });
+      const nbThreshold = `${state.rxNbThreshold}`;
+      if ($("rx-nb-threshold").value !== nbThreshold) {
+        $("rx-nb-threshold").value = nbThreshold;
+      }
       const txDrive = `${state.txDrive}`;
       if ($("tx-drive").value !== txDrive) { $("tx-drive").value = txDrive; }
       const txMicGain = `${state.txMicGainDb}`;
@@ -2657,6 +3655,16 @@
       state.ws.send(text);
     }
 
+    function sendRxFilterBand() {
+      const passband = signedPassbandFromUiCuts(state.filterLow, state.filterHigh, state.mode);
+      sendTci(`rx_filter_band:0,${passband.lowHz},${passband.highHz};`);
+    }
+
+    function sendTxFilterBand() {
+      const passband = signedPassbandFromUiCuts(state.txFilterLow, state.txFilterHigh, state.mode);
+      sendTci(`tx_filter_band:0,${passband.lowHz},${passband.highHz};`);
+    }
+
     function requestFullState() {
       sendTci(`iq_samplerate:${state.sampleRate};`);
       sendTci(`rx_adc:0,${state.rxAdc};`);
@@ -2665,20 +3673,30 @@
       sendTci(`rx_volume:0,0,${state.rxVolumeDb.toFixed(1)};`);
       sendTci(`rx_nr_mode:0,${state.rxNoiseReductionMode};`);
       sendTci(`rx_nr_level:0,${state.rxNoiseReductionLevel};`);
-      sendTci(`rx_filter_band:0,${state.filterLow},${state.filterHigh};`);
+      sendTci(`rx_nb:0,${state.rxNbMode};`);
+      sendTci(`rx_nb_threshold:0,${state.rxNbThreshold.toFixed(2)};`);
+      sendTci(`rx_anf:0,${state.anfEnabled};`);
+      sendTci(`rx_agc:0,${state.agcMode};`);
+      sendRxFilterBand();
       sendTci(`dds:0,${state.dds};`);
       sendTci(`vfo:0,0,${state.vfoA};`);
       sendTci(`vfo:0,1,${state.vfoB};`);
       sendTci("rx_smeter:0,0;");
       sendTci(`tx_drive:0,${state.txDrive};`);
       sendTci(`tx_mic_gain:0,${state.txMicGainDb.toFixed(1)};`);
-      sendTci(`tx_filter_band:0,${state.txFilterLow},${state.txFilterHigh};`);
+      sendTxFilterBand();
       sendTci(`rx_eq_enable:0,${state.rxEqEnabled};`);
       sendTci(`tx_eq_enable:0,${state.txEqEnabled};`);
       for (let i = 1; i <= 10; i++) {
         sendTci(`rx_eq_band:0,${i},${state.rxEqBands[i]};`);
         sendTci(`tx_eq_band:0,${i},${state.txEqBands[i]};`);
       }
+      sendTci(`tx_cfc_enable:0,${state.cfcEnabled};`);
+      sendTci(`tx_cfc_precomp:0,${state.cfcPrecomp.toFixed(1)};`);
+      for (let i = 1; i <= 10; i++) {
+        sendTci(`tx_cfc_band:0,${i},${(state.cfcBands[i] || 0).toFixed(1)};`);
+      }
+      sendTci(`tx_two_tone:0,${state.twoToneEnabled};`);
     }
 
     function startIq() {
@@ -2701,17 +3719,26 @@
       if (state.audioCtx) {
         await state.audioCtx.close();
       }
-      state.audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 48000 });
-      state.audioGainNode = state.audioCtx.createGain();
-      state.audioGainNode.connect(state.audioCtx.destination);
-      if (state.audioCtx.state === "suspended") {
-        await state.audioCtx.resume();
+      // Keep a local reference so the async continuation can detect whether
+      // stopRxAudio() ran and replaced/nulled state.audioCtx while suspended.
+      const ctx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 48000 });
+      state.audioCtx = ctx;
+      state.audioGainNode = ctx.createGain();
+      state.audioGainNode.connect(ctx.destination);
+      if (ctx.state === "suspended") {
+        await ctx.resume();
+      }
+      // If the context was replaced while we were awaiting (e.g. disconnect
+      // arrived during the resume), discard this stale context and bail.
+      if (state.audioCtx !== ctx) {
+        await ctx.close();
+        return;
       }
       state.audioStreaming = true;
       state.audioSampleRate = 48000;
       state.audioFramesPlayed = 0;
       state.audioBackpressureDrops = 0;
-      state.audioNextTime = state.audioCtx.currentTime + 0.05;
+      state.audioNextTime = ctx.currentTime + 0.05;
       applyRxVolumeGain();
       sendTci(
         `audio_start:0;audio_stream_samples:2048;audio_stream_channels:2;audio_stream_sample_type:float32;audio_samplerate:48000;rx_volume:0,0,${state.rxVolumeDb.toFixed(1)};`
@@ -2755,14 +3782,68 @@
       return buf;
     }
 
-    async function startMicCapture() {
-      if (state.micCapturing) { return; }
+    function requestMicrophoneStream(constraints) {
+      if (navigator.mediaDevices && typeof navigator.mediaDevices.getUserMedia === "function") {
+        return navigator.mediaDevices.getUserMedia(constraints);
+      }
+      const legacyGetUserMedia =
+        navigator.getUserMedia ||
+        navigator.webkitGetUserMedia ||
+        navigator.mozGetUserMedia ||
+        navigator.msGetUserMedia;
+      if (typeof legacyGetUserMedia === "function") {
+        return new Promise((resolve, reject) => {
+          legacyGetUserMedia.call(navigator, constraints, resolve, reject);
+        });
+      }
+      const secureHint = window.isSecureContext
+        ? "this browser does not expose a microphone capture API"
+        : "this page is not running in a secure context; most phone browsers require HTTPS for microphone access";
+      const error = new Error(`Browser mic capture is unavailable: ${secureHint}`);
+      error.name = "MicUnavailableError";
+      return Promise.reject(error);
+    }
+
+    function describeMicCaptureError(err) {
+      const name = String(err && err.name ? err.name : "").trim();
+      if (name === "MicUnavailableError") {
+        return err.message;
+      }
+      if (name === "NotAllowedError" || name === "PermissionDeniedError") {
+        return window.isSecureContext
+          ? "Microphone access was denied by the browser"
+          : "Microphone access is blocked on insecure HTTP pages; open the remote over HTTPS to use the phone microphone";
+      }
+      if (name === "NotFoundError" || name === "DevicesNotFoundError") {
+        return "No microphone was found on this device";
+      }
+      if (name === "NotReadableError" || name === "TrackStartError") {
+        return "The browser could not start the microphone";
+      }
+      if (err && err.message) {
+        return err.message;
+      }
+      return "Unknown microphone capture failure";
+    }
+
+    async function startMicCapture(requestId) {
+      if (state.micCapturing) { return true; }
+      let micStream = null;
+      let micCtx = null;
       try {
-        state.micStream = await navigator.mediaDevices.getUserMedia({
+        micStream = await requestMicrophoneStream({
           audio: { sampleRate: 48000, channelCount: 1, echoCancellation: false, noiseSuppression: false, autoGainControl: false },
         });
-        const micCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 48000 });
-        const source = micCtx.createMediaStreamSource(state.micStream);
+        micCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 48000 });
+        if (micCtx.state === "suspended") {
+          await micCtx.resume();
+        }
+        if (state.pttRequestId !== requestId) {
+          await micCtx.close();
+          micStream.getTracks().forEach((track) => track.stop());
+          return false;
+        }
+        const source = micCtx.createMediaStreamSource(micStream);
         // ScriptProcessorNode: 2048-sample blocks (≈42 ms at 48 kHz)
         const proc = micCtx.createScriptProcessor(2048, 1, 1);
         proc.onaudioprocess = (evt) => {
@@ -2783,13 +3864,20 @@
         source.connect(proc);
         proc.connect(silentGain);
         silentGain.connect(micCtx.destination);
+        state.micStream = micStream;
         state.micNode = { ctx: micCtx, source, proc, silentGain };
         state.micCapturing = true;
         logEvent("Mic capture started");
+        return true;
       } catch (err) {
-        logEvent(`Mic capture failed: ${err.message}`);
-        state.txEnabled = false;
-        updateUi();
+        if (micCtx) {
+          try { await micCtx.close(); } catch {}
+        }
+        if (micStream) {
+          micStream.getTracks().forEach((track) => track.stop());
+        }
+        logEvent(`Mic capture failed: ${describeMicCaptureError(err)}`);
+        return false;
       }
     }
 
@@ -2798,6 +3886,7 @@
       if (state.micNode) {
         state.micNode.source.disconnect();
         state.micNode.proc.disconnect();
+        state.micNode.silentGain.disconnect();
         void state.micNode.ctx.close();
         state.micNode = null;
       }
@@ -2811,14 +3900,94 @@
 
     async function setPtt(active) {
       if (active === state.txEnabled) { return; }
-      state.txEnabled = active;
-      sendTci(`trx:0,${active};`);
       if (active) {
-        await startMicCapture();
+        const requestId = state.pttRequestId + 1;
+        state.pttRequestId = requestId;
+        state.txEnabled = true;
+        sendTci("trx:0,true,tci;");
+        updateUi();
+        const started = await startMicCapture(requestId);
+        if (!started || state.pttRequestId !== requestId) {
+          if (state.pttRequestId === requestId) {
+            logEvent("PTT keyed without browser mic audio");
+          }
+          return;
+        }
       } else {
+        state.pttRequestId += 1;
+        state.txEnabled = false;
+        sendTci("trx:0,false;");
         stopMicCapture();
       }
       updateUi();
+    }
+
+    function bindPttButton() {
+      const button = $("ptt-btn");
+      if (!button) { return; }
+
+      const releasePtt = (event) => {
+        if (state.pttPointerId !== null && event.pointerId !== undefined && event.pointerId !== state.pttPointerId) {
+          return;
+        }
+        if (state.pttPointerId !== null && button.hasPointerCapture?.(state.pttPointerId)) {
+          try {
+            button.releasePointerCapture(state.pttPointerId);
+          } catch (_) {}
+        }
+        state.pttPointerId = null;
+        event.preventDefault();
+        void setPtt(false);
+      };
+
+      button.addEventListener("pointerdown", (event) => {
+        if (event.pointerType === "mouse" && event.button !== 0) {
+          return;
+        }
+        state.pttPointerId = event.pointerId;
+        if (button.setPointerCapture) {
+          try {
+            button.setPointerCapture(event.pointerId);
+          } catch (_) {}
+        }
+        event.preventDefault();
+        void setPtt(true);
+      });
+      button.addEventListener("pointerup", releasePtt);
+      button.addEventListener("pointercancel", releasePtt);
+      button.addEventListener("lostpointercapture", releasePtt);
+      button.addEventListener("pointerleave", (event) => {
+        if (event.pointerType === "mouse" && state.pttPointerId !== null) {
+          releasePtt(event);
+        }
+      });
+      button.addEventListener("keydown", (event) => {
+        if (event.repeat || (event.code !== "Space" && event.code !== "Enter")) {
+          return;
+        }
+        event.preventDefault();
+        void setPtt(true);
+      });
+      button.addEventListener("keyup", (event) => {
+        if (event.code !== "Space" && event.code !== "Enter") {
+          return;
+        }
+        event.preventDefault();
+        void setPtt(false);
+      });
+      button.addEventListener("contextmenu", (event) => {
+        event.preventDefault();
+      });
+    }
+
+    function goLive() {
+      const isConnectingOrLive = state.connected ||
+        (state.ws && state.ws.readyState === WebSocket.CONNECTING);
+      if (isConnectingOrLive) {
+        disconnectBridge();
+      } else {
+        connectBridge();
+      }
     }
 
     function connectBridge() {
@@ -2845,6 +4014,7 @@
         logEvent("WebSocket connected");
         requestFullState();
         startIq();
+        void startRxAudio();
         updateUi();
       };
       ws.onmessage = (event) => {
@@ -2933,7 +4103,7 @@
             waterfallRenderer.clear();
           }
         } else if (name === "modulation" && args.length >= 2) {
-          state.mode = args[1].trim().toUpperCase();
+          state.mode = clampDemodMode(args[1].trim());
         } else if (name === "rx_volume") {
           const volume = args.length >= 3 ? Number(args[2].trim()) : Number(args[args.length - 1]?.trim());
           if (!Number.isNaN(volume)) {
@@ -2956,11 +4126,26 @@
           if (!Number.isNaN(level)) {
             state.rxNoiseReductionLevel = clampRxNoiseReductionLevel(level);
           }
+        } else if (name === "rx_nb") {
+          const modeText = args.length >= 2 ? args[1].trim() : args[args.length - 1]?.trim();
+          state.rxNbMode = normalizeNbMode(modeText);
+        } else if (name === "rx_nb_threshold") {
+          const threshold = args.length >= 2 ? Number(args[1].trim()) : Number(args[args.length - 1]?.trim());
+          if (!Number.isNaN(threshold)) {
+            state.rxNbThreshold = clampRxNbThreshold(threshold);
+          }
+        } else if (name === "rx_anf") {
+          const enabledText = args.length >= 2 ? args[1].trim() : args[args.length - 1]?.trim();
+          state.anfEnabled = ["1", "true", "on", "yes"].includes((enabledText || "").toLowerCase());
+        } else if (name === "rx_agc") {
+          const modeText = args.length >= 2 ? args[1].trim() : args[args.length - 1]?.trim();
+          state.agcMode = normalizeAgcMode(modeText);
         } else if (name === "rx_filter_band" && args.length >= 3) {
           const fl = Number(args[1].trim()), fh = Number(args[2].trim());
           if (!Number.isFinite(fl) || !Number.isFinite(fh)) return;
-          state.filterLow = fl;
-          state.filterHigh = fh;
+          const cuts = uiCutsFromSignedPassband(fl, fh, state.mode);
+          state.filterLow = cuts.lowCutHz;
+          state.filterHigh = cuts.highCutHz;
           $("filter-low").value = `${state.filterLow}`;
           $("filter-high").value = `${state.filterHigh}`;
         } else if (name === "rx_smeter") {
@@ -2973,6 +4158,11 @@
           if (!Number.isNaN(value)) {
             state.txPower = value;
           }
+        } else if (name === "tx_drive") {
+          const value = args.length >= 2 ? Number(args[1].trim()) : Number(args[args.length - 1]?.trim());
+          if (!Number.isNaN(value)) {
+            state.txDrive = clampTxDriveWatts(value);
+          }
         } else if (name === "swr") {
           const value = args.length >= 2 ? Number(args[1].trim()) : Number(args[0].trim());
           if (!Number.isNaN(value)) {
@@ -2984,12 +4174,13 @@
         } else if (name === "tx_filter_band" && args.length >= 3) {
           const fl = Number(args[1].trim()), fh = Number(args[2].trim());
           if (Number.isFinite(fl) && Number.isFinite(fh)) {
-            state.txFilterLow = fl;
-            state.txFilterHigh = fh;
+            const cuts = uiCutsFromSignedPassband(fl, fh, state.mode);
+            state.txFilterLow = cuts.lowCutHz;
+            state.txFilterHigh = cuts.highCutHz;
             const txFlEl = $("tx-filter-low");
             const txFhEl = $("tx-filter-high");
-            if (txFlEl) txFlEl.value = `${fl}`;
-            if (txFhEl) txFhEl.value = `${fh}`;
+            if (txFlEl) txFlEl.value = `${state.txFilterLow}`;
+            if (txFhEl) txFhEl.value = `${state.txFilterHigh}`;
           }
         } else if (name === "rx_eq_enable") {
           const arg = (args[1] || args[0] || "").trim().toLowerCase();
@@ -3015,6 +4206,24 @@
             if (slider) slider.value = `${Math.round(gain)}`;
             if (valEl) valEl.textContent = `${Math.round(gain)}`;
           }
+        } else if (name === "tx_cfc_enable") {
+          const arg = (args[1] || args[0] || "").trim().toLowerCase();
+          state.cfcEnabled = ["1", "true", "on", "yes"].includes(arg);
+        } else if (name === "tx_cfc_precomp") {
+          const v = Number((args[1] || args[0] || "").trim());
+          if (Number.isFinite(v)) state.cfcPrecomp = v;
+        } else if (name === "tx_cfc_band" && args.length >= 3) {
+          const band = Number(args[1].trim()), gain = Number(args[2].trim());
+          if (band >= 1 && band <= 10 && Number.isFinite(gain)) {
+            state.cfcBands[band] = Math.max(0, Math.min(20, gain));
+            const slider = document.getElementById(`cfc-band-${band}`);
+            const valEl = document.getElementById(`cfc-val-${band}`);
+            if (slider) slider.value = `${state.cfcBands[band]}`;
+            if (valEl) valEl.textContent = `${state.cfcBands[band].toFixed(1)}`;
+          }
+        } else if (name === "tx_two_tone") {
+          const arg = (args[1] || args[0] || "").trim().toLowerCase();
+          state.twoToneEnabled = ["1", "true", "on", "yes"].includes(arg);
         } else if (name === "audio_start") {
           state.audioStreaming = true;
           logEvent("Bridge acknowledged audio_start");
@@ -3142,10 +4351,26 @@
       const audioBuffer = state.audioCtx.createBuffer(2, frames, sampleRate);
       const left = audioBuffer.getChannelData(0);
       const right = audioBuffer.getChannelData(1);
+      // The receive path is mono in practice; if the transport's right lane is
+      // silent, mirror the left lane so playback stays centered.
+      let mirrorMonoToBoth = channels < 2;
+
+      if (!mirrorMonoToBoth && channels >= 2) {
+        mirrorMonoToBoth = true;
+        const probeFrames = Math.min(frames, 128);
+        for (let i = 0; i < probeFrames; i += 1) {
+          if (Math.abs(floats[i * channels + 1]) > 1e-6) {
+            mirrorMonoToBoth = false;
+            break;
+          }
+        }
+      }
 
       for (let i = 0; i < frames; i += 1) {
         const leftSample = floats[i * channels];
-        const rightSample = channels > 1 ? floats[i * channels + 1] : leftSample;
+        const rightSample = mirrorMonoToBoth
+          ? leftSample
+          : (channels > 1 ? floats[i * channels + 1] : leftSample);
         left[i] = leftSample;
         right[i] = rightSample;
       }
@@ -3252,11 +4477,15 @@
     }
 
     function bindFrequencyDigitControl(element) {
-      element.addEventListener("click", (event) => {
+      element.addEventListener("pointerdown", (event) => {
         const digit = event.target.closest(".freq-digit");
         if (!digit) {
           return;
         }
+        if (event.pointerType === "mouse" && event.button !== 0) {
+          return;
+        }
+        event.preventDefault();
         const rect = digit.getBoundingClientRect();
         const direction = (event.clientY - rect.top) < (rect.height / 2) ? 1 : -1;
         tuneDigitByStep(Number(digit.dataset.step), direction);
@@ -3282,40 +4511,28 @@
     }
 
     function initInteractions() {
-      $("connect-btn").addEventListener("click", connectBridge);
-      $("disconnect-btn").addEventListener("click", disconnectBridge);
-      $("start-iq-btn").addEventListener("click", startIq);
-      $("stop-iq-btn").addEventListener("click", stopIq);
-      $("start-audio-btn").addEventListener("click", () => { void startRxAudio(); });
-      $("stop-audio-btn").addEventListener("click", () => { void stopRxAudio(); });
-      $("demo-btn").addEventListener("click", () => {
-        state.demoMode = !state.demoMode;
-        if (state.demoMode) {
-          disconnectBridge();
-          state.displayCaption = "Preview mode: browser-side synthetic spectrum";
-          logEvent("Preview mode enabled");
-        } else {
-          state.displayCaption = "Waiting for TCI IQ frames from saturn-bridge";
-          logEvent("Preview mode disabled");
-        }
-        updateUi();
-      });
+      $("go-live-btn").addEventListener("click", goLive);
+      $("layout-btn").addEventListener("click", toggleLayout);
+      $("theme-btn").addEventListener("click", toggleTheme);
       $("sample-rate").addEventListener("change", () => {
-        state.sampleRate = Number($("sample-rate").value);
+        state.sampleRate = clampSampleRateHz($("sample-rate").value);
         state.spectrumShiftCarryBins = 0;
         state.waterfallShiftCarryPixels = 0;
         state.waterfallSettleFrames = 0;
         waterfallRenderer.clear();
+        saveRadioPrefs();
         updateUi();
         sendTci(`iq_samplerate:${state.sampleRate};`);
       });
       $("rx-adc").addEventListener("change", () => {
         state.rxAdc = clampRxAdc($("rx-adc").value);
+        saveRadioPrefs();
         updateUi();
         sendTci(`rx_adc:0,${state.rxAdc};`);
       });
       $("rx-antenna").addEventListener("change", () => {
         state.rxAntenna = clampRxAntenna($("rx-antenna").value);
+        saveRadioPrefs();
         updateUi();
         sendTci(`rx_antenna:0,${state.rxAntenna};`);
       });
@@ -3334,6 +4551,7 @@
       $("rx-volume").addEventListener("input", () => {
         state.rxVolumeDb = clampRxVolumeDb($("rx-volume").value);
         applyRxVolumeGain();
+        saveRadioPrefs();
         updateUi();
       });
       $("rx-volume").addEventListener("change", () => {
@@ -3342,16 +4560,50 @@
       document.querySelectorAll("#rx-nr-grid .mode-btn").forEach((button) => {
         button.addEventListener("click", () => {
           state.rxNoiseReductionMode = normalizeNrMode(button.dataset.nrMode);
+          saveRadioPrefs();
           updateUi();
           sendTci(`rx_nr_mode:0,${state.rxNoiseReductionMode};`);
         });
       });
       $("rx-nr-level").addEventListener("input", () => {
         state.rxNoiseReductionLevel = clampRxNoiseReductionLevel($("rx-nr-level").value);
+        saveRadioPrefs();
         updateUi();
       });
       $("rx-nr-level").addEventListener("change", () => {
         sendTci(`rx_nr_level:0,${state.rxNoiseReductionLevel};`);
+      });
+      document.querySelectorAll("#rx-nb-grid .mode-btn").forEach((button) => {
+        button.addEventListener("click", () => {
+          state.rxNbMode = normalizeNbMode(button.dataset.nbMode);
+          saveRadioPrefs();
+          updateUi();
+          sendTci(`rx_nb:0,${state.rxNbMode};`);
+          sendTci(`rx_nb_threshold:0,${state.rxNbThreshold.toFixed(2)};`);
+        });
+      });
+      $("rx-nb-threshold").addEventListener("input", () => {
+        state.rxNbThreshold = clampRxNbThreshold($("rx-nb-threshold").value);
+        $("rx-nb-threshold").value = `${state.rxNbThreshold}`;
+        saveRadioPrefs();
+        updateUi();
+      });
+      $("rx-nb-threshold").addEventListener("change", () => {
+        sendTci(`rx_nb_threshold:0,${state.rxNbThreshold.toFixed(2)};`);
+      });
+      $("rx-anf-btn").addEventListener("click", () => {
+        state.anfEnabled = !state.anfEnabled;
+        saveRadioPrefs();
+        updateUi();
+        sendTci(`rx_anf:0,${state.anfEnabled};`);
+      });
+      document.querySelectorAll("#rx-agc-grid .mode-btn").forEach((button) => {
+        button.addEventListener("click", () => {
+          state.agcMode = normalizeAgcMode(button.dataset.agcMode);
+          saveRadioPrefs();
+          updateUi();
+          sendTci(`rx_agc:0,${state.agcMode};`);
+        });
       });
       $("display-zoom").addEventListener("input", () => {
         state.displayZoom = Math.max(1, Math.min(32, Number($("display-zoom").value)));
@@ -3363,24 +4615,32 @@
         updateUi();
       });
       $("filter-low").addEventListener("input", () => {
-        state.filterLow = Number($("filter-low").value);
+        state.filterLow = clampFilterLowHz($("filter-low").value);
+        $("filter-low").value = `${state.filterLow}`;
+        saveRadioPrefs();
         updateUi();
       });
       $("filter-low").addEventListener("change", () => {
-        sendTci(`rx_filter_band:0,${state.filterLow},${state.filterHigh};`);
+        sendRxFilterBand();
       });
       $("filter-high").addEventListener("input", () => {
-        state.filterHigh = Number($("filter-high").value);
+        state.filterHigh = clampFilterHighHz($("filter-high").value);
+        $("filter-high").value = `${state.filterHigh}`;
+        saveRadioPrefs();
         updateUi();
       });
       $("filter-high").addEventListener("change", () => {
-        sendTci(`rx_filter_band:0,${state.filterLow},${state.filterHigh};`);
+        sendRxFilterBand();
       });
       document.querySelectorAll("#mode-grid .mode-btn").forEach((button) => {
         button.addEventListener("click", () => {
           state.mode = button.dataset.mode;
+          applyModeDefaultFilters(state.mode);
+          saveRadioPrefs();
           updateUi();
           sendTci(`modulation:0,${state.mode};`);
+          sendRxFilterBand();
+          sendTxFilterBand();
         });
       });
       document.querySelectorAll("#band-grid .band-btn").forEach((button) => {
@@ -3397,7 +4657,11 @@
       bindFrequencyDigitControl($("dds-readout"));
       bindFrequencyDigitControl($("operator-center-readout"));
       for (const element of [$("spectrum-shell"), $("waterfall-shell")]) {
-        element.addEventListener("click", (event) => {
+        element.addEventListener("pointerdown", (event) => {
+          if (event.pointerType === "mouse" && event.button !== 0) {
+            return;
+          }
+          event.preventDefault();
           setFrequency(frequencyFromDisplayPoint(event.clientX, element));
         });
         element.addEventListener("wheel", (event) => {
@@ -3416,45 +4680,119 @@
         waterfallRenderer.resize();
         updateUi();
       });
-      $("ptt-btn").addEventListener("click", () => { void setPtt(!state.txEnabled); });
+      bindPttButton();
       $("tx-drive").addEventListener("input", () => {
-        state.txDrive = Math.round(Number($("tx-drive").value));
+        state.txDrive = clampTxDriveWatts($("tx-drive").value);
+        $("tx-drive").value = `${state.txDrive}`;
+        saveRadioPrefs();
         updateUi();
       });
       $("tx-drive").addEventListener("change", () => {
         sendTci(`tx_drive:0,${state.txDrive};`);
       });
       $("tx-mic-gain").addEventListener("input", () => {
-        state.txMicGainDb = Number($("tx-mic-gain").value);
+        state.txMicGainDb = clampTxMicGainDb($("tx-mic-gain").value);
+        $("tx-mic-gain").value = `${state.txMicGainDb}`;
+        saveRadioPrefs();
         updateUi();
       });
       $("tx-mic-gain").addEventListener("change", () => {
         sendTci(`tx_mic_gain:0,${state.txMicGainDb.toFixed(1)};`);
       });
       $("tx-filter-low").addEventListener("input", () => {
-        state.txFilterLow = Number($("tx-filter-low").value);
+        state.txFilterLow = clampFilterLowHz($("tx-filter-low").value);
+        $("tx-filter-low").value = `${state.txFilterLow}`;
+        saveRadioPrefs();
         updateUi();
       });
       $("tx-filter-low").addEventListener("change", () => {
-        sendTci(`tx_filter_band:0,${state.txFilterLow},${state.txFilterHigh};`);
+        sendTxFilterBand();
       });
       $("tx-filter-high").addEventListener("input", () => {
-        state.txFilterHigh = Number($("tx-filter-high").value);
+        state.txFilterHigh = clampFilterHighHz($("tx-filter-high").value);
+        $("tx-filter-high").value = `${state.txFilterHigh}`;
+        saveRadioPrefs();
         updateUi();
       });
       $("tx-filter-high").addEventListener("change", () => {
-        sendTci(`tx_filter_band:0,${state.txFilterLow},${state.txFilterHigh};`);
+        sendTxFilterBand();
       });
       $("rx-eq-enable-btn").addEventListener("click", () => {
         state.rxEqEnabled = !state.rxEqEnabled;
+        saveRadioPrefs();
         sendTci(`rx_eq_enable:0,${state.rxEqEnabled};`);
         updateUi();
       });
       $("tx-eq-enable-btn").addEventListener("click", () => {
         state.txEqEnabled = !state.txEqEnabled;
+        saveRadioPrefs();
         sendTci(`tx_eq_enable:0,${state.txEqEnabled};`);
         updateUi();
       });
+      $("cfc-enable-btn").addEventListener("click", () => {
+        state.cfcEnabled = !state.cfcEnabled;
+        saveRadioPrefs();
+        sendTci(`tx_cfc_enable:0,${state.cfcEnabled};`);
+        updateUi();
+      });
+      $("cfc-precomp").addEventListener("input", () => {
+        state.cfcPrecomp = Number($("cfc-precomp").value);
+        saveRadioPrefs();
+        sendTci(`tx_cfc_precomp:0,${state.cfcPrecomp.toFixed(1)};`);
+        updateUi();
+      });
+      $("two-tone-btn").addEventListener("click", () => {
+        state.twoToneEnabled = !state.twoToneEnabled;
+        sendTci(`tx_two_tone:0,${state.twoToneEnabled};`);
+        updateUi();
+      });
+    }
+
+    // ── CFC Band Grid Builder ─────────────────────────────────────────────────
+
+    const CFC_FREQS_LABELS = ["50","100","200","500","1k","1.5k","2.5k","3k","5k","8k"];
+
+    function buildCfcBandGrid(gridId) {
+      const grid = $(gridId);
+      if (!grid) return;
+      grid.innerHTML = "";
+      for (let i = 1; i <= 10; i++) {
+        const band = document.createElement("div");
+        band.className = "eq-band";
+
+        const freq = document.createElement("span");
+        freq.className = "eq-freq";
+        freq.textContent = CFC_FREQS_LABELS[i - 1];
+
+        const slider = document.createElement("input");
+        slider.type = "range";
+        slider.id = `cfc-band-${i}`;
+        slider.min = "0";
+        slider.max = "20";
+        slider.step = "0.5";
+        slider.value = "0";
+
+        const val = document.createElement("span");
+        val.className = "eq-val";
+        val.id = `cfc-val-${i}`;
+        val.textContent = "0.0";
+
+        slider.addEventListener("input", () => {
+          const gain = Math.max(0, Math.min(20, Number(slider.value)));
+          slider.value = `${gain}`;
+          state.cfcBands[i] = gain;
+          val.textContent = `${gain.toFixed(1)}`;
+          saveRadioPrefs();
+        });
+        slider.addEventListener("change", () => {
+          sendTci(`tx_cfc_band:0,${i},${Number(slider.value).toFixed(1)};`);
+        });
+
+        band.appendChild(freq);
+        band.appendChild(slider);
+        band.appendChild(val);
+        grid.appendChild(band);
+      }
     }
 
     // ── EQ Grid Builder ──────────────────────────────────────────────────────
@@ -3487,13 +4825,15 @@
         val.textContent = "0";
 
         slider.addEventListener("input", () => {
-          const gain = Number(slider.value);
+          const gain = clampEqGainDb(slider.value);
+          slider.value = `${gain}`;
           if (prefix === "rx") {
             state.rxEqBands[i] = gain;
           } else {
             state.txEqBands[i] = gain;
           }
           val.textContent = `${gain}`;
+          saveRadioPrefs();
         });
         slider.addEventListener("change", () => {
           const gain = Number(slider.value);
@@ -3657,6 +4997,9 @@
     // ─────────────────────────────────────────────────────────────────────────
 
     function init() {
+      applyLayout(preferredLayout(), false, false);
+      applyTheme(preferredTheme(), false);
+      applySavedRadioPrefs();
       $("ws-url").value = defaultWsUrl();
       state.wsUrl = $("ws-url").value;
       $("sample-rate").value = `${state.sampleRate}`;
@@ -3664,15 +5007,34 @@
       $("rx-antenna").value = `${state.rxAntenna}`;
       $("rx-volume").value = `${state.rxVolumeDb}`;
       $("rx-nr-level").value = `${state.rxNoiseReductionLevel}`;
+      $("rx-nb-threshold").value = `${state.rxNbThreshold}`;
       const savedZoom = Number(localStorage.getItem("saturn.remote.displayZoom"));
       if (!Number.isNaN(savedZoom) && savedZoom >= 1 && savedZoom <= 32) {
         state.displayZoom = savedZoom;
       }
+      state.rxNbMode = normalizeNbMode(state.rxNbMode);
+      state.rxNbThreshold = clampRxNbThreshold(state.rxNbThreshold);
+      state.anfEnabled = Boolean(state.anfEnabled);
+      state.agcMode = normalizeAgcMode(state.agcMode);
+      state.filterLow = clampFilterLowHz(state.filterLow);
+      state.filterHigh = clampFilterHighHz(state.filterHigh);
+      state.txDrive = clampTxDriveWatts(state.txDrive);
+      state.txMicGainDb = clampTxMicGainDb(state.txMicGainDb);
+      state.txFilterLow = clampFilterLowHz(state.txFilterLow);
+      state.txFilterHigh = clampFilterHighHz(state.txFilterHigh);
+      state.rxEqBands = sanitizeEqBands(state.rxEqBands);
+      state.txEqBands = sanitizeEqBands(state.txEqBands);
       $("display-zoom").value = `${state.displayZoom}`;
       $("filter-low").value = `${state.filterLow}`;
       $("filter-high").value = `${state.filterHigh}`;
+      $("tx-drive").value = `${state.txDrive}`;
+      $("tx-mic-gain").value = `${state.txMicGainDb}`;
+      $("tx-filter-low").value = `${state.txFilterLow}`;
+      $("tx-filter-high").value = `${state.txFilterHigh}`;
+      initPhonePanels();
       buildEqGrid("rx-eq-grid", "rx");
       buildEqGrid("tx-eq-grid", "tx");
+      buildCfcBandGrid("cfc-band-grid");
       logEvent("Saturn Remote loaded");
       logEvent("Current bridge target: TCI over WebSocket");
       logEvent(`Display backends: spectrum=${spectrumRenderer.backend}, waterfall=${waterfallRenderer.backend}`);

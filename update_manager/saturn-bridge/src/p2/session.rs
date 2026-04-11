@@ -15,6 +15,8 @@ use crate::p2::packets::{
 use crate::p2::ports::{P2PortMap, COMMAND_DISCOVERY_PORT};
 use crate::radio_model::RadioModel;
 
+const ALEX_TX_RELAY_BIT: u16 = 0x0800;
+
 #[derive(Debug)]
 pub enum P2Event {
     HighPriorityFromSdr(HighPriorityFromSdr),
@@ -25,13 +27,19 @@ pub struct P2Session {
     config: BridgeConfig,
     socket: UdpSocket,
     duc_iq_sequence: AtomicU32,
+    duc_specific_sequence: AtomicU32,
 }
 
 impl P2Session {
     pub fn bind(config: BridgeConfig) -> io::Result<Self> {
         let socket = UdpSocket::bind(config.client_bind_addr)?;
         socket.set_read_timeout(Some(config.receive_timeout))?;
-        Ok(Self { config, socket, duc_iq_sequence: AtomicU32::new(0) })
+        Ok(Self {
+            config,
+            socket,
+            duc_iq_sequence: AtomicU32::new(0),
+            duc_specific_sequence: AtomicU32::new(0),
+        })
     }
 
     pub fn client_bind_addr(&self) -> SocketAddr {
@@ -76,10 +84,7 @@ impl P2Session {
             }
         };
         self.send_packet(self.target_addr(self.config.port_map.ddc_specific), &build_ddc_specific_packet(ddc_setup))?;
-        self.send_packet(
-            self.target_addr(self.config.port_map.duc_specific),
-            &build_duc_specific_packet(0),
-        )?;
+        self.send_duc_specific()?;
         Ok(())
     }
 
@@ -93,6 +98,7 @@ impl P2Session {
         let period = self.config.high_priority_period;
 
         Ok(thread::spawn(move || {
+            let mut prev_tx = false;
             while !stop_flag.load(Ordering::Relaxed) {
                 let state = {
                     let model = radio_model.lock().unwrap();
@@ -101,12 +107,13 @@ impl P2Session {
                         tx: model.desired.tx_enabled,
                         ddc_phase_words: build_ddc_phase_array(&model),
                         duc_phase_word: frequency_to_phase_word(model.desired.tx_frequency_hz),
-                        tx_drive: model.desired.tx_drive,
+                        tx_drive: (model.desired.tx_drive as u16 * 255 / 100) as u8,
                         cat_port: 0,
                         alex_tx_word: build_alex_tx_word(model.desired.tx_frequency_hz, 1),
-                        alex_rx_word: build_alex_legacy_rx_word(
+                        alex_rx_word: build_alex_legacy_tx_word(
                             model.desired.tx_frequency_hz,
                             model.desired.rx_antenna,
+                            model.desired.tx_enabled,
                         ),
                         alex_rx2_filter_word: build_alex_rx_filter_word(model.desired.iq_center_hz),
                         alex_rx1_filter_word: build_alex_rx_filter_word(model.desired.iq_center_hz),
@@ -114,6 +121,15 @@ impl P2Session {
                         rx1_attenuation_db: 0,
                     }
                 };
+
+                if state.tx != prev_tx {
+                    println!(
+                        "saturn-bridge: HP loop MOX -> {} (byte4=0x{:02x})",
+                        if state.tx { "TX" } else { "RX" },
+                        if state.run { 0x01u8 } else { 0u8 } | if state.tx { 0x02 } else { 0 }
+                    );
+                    prev_tx = state.tx;
+                }
 
                 if state.run {
                     let packet = build_high_priority_to_sdr(&state);
@@ -174,6 +190,14 @@ impl P2Session {
             let packet = build_duc_iq_packet(seq, chunk);
             self.send_packet(target, &packet)?;
         }
+        Ok(())
+    }
+
+    pub fn send_duc_specific(&self) -> io::Result<()> {
+        let target = self.target_addr(self.config.port_map.duc_specific);
+        let seq = self.duc_specific_sequence.fetch_add(1, Ordering::Relaxed);
+        let packet = build_duc_specific_packet(seq);
+        self.send_packet(target, &packet)?;
         Ok(())
     }
 
@@ -238,11 +262,15 @@ fn frequency_to_phase_word(frequency_hz: u32) -> u32 {
 }
 
 fn build_alex_tx_word(frequency_hz: u32, antenna: u8) -> u16 {
-    alex_tx_filter_bits(frequency_hz) | alex_antenna_bits(antenna)
+    alex_tx_filter_bits(frequency_hz) | alex_antenna_bits(antenna) | ALEX_TX_RELAY_BIT
 }
 
-fn build_alex_legacy_rx_word(frequency_hz: u32, antenna: u8) -> u16 {
-    alex_tx_filter_bits(frequency_hz) | alex_antenna_bits(antenna)
+fn build_alex_legacy_tx_word(frequency_hz: u32, antenna: u8, tx_active: bool) -> u16 {
+    let mut word = alex_tx_filter_bits(frequency_hz) | alex_antenna_bits(antenna);
+    if tx_active {
+        word |= ALEX_TX_RELAY_BIT;
+    }
+    word
 }
 
 fn build_alex_rx_filter_word(frequency_hz: u32) -> u16 {
@@ -310,5 +338,15 @@ mod tests {
         assert_eq!(alex_rx_filter_bits(10_000_000), 0x0010);
         assert_eq!(alex_tx_filter_bits(14_200_000), 0x0010);
         assert_eq!(alex_tx_filter_bits(3_900_000), 0x0040);
+    }
+
+    #[test]
+    fn saturn_tx_words_carry_pa_and_tx_relay_bits() {
+        assert_eq!(build_alex_tx_word(14_200_000, 1) & ALEX_TX_RELAY_BIT, ALEX_TX_RELAY_BIT);
+        assert_eq!(build_alex_legacy_tx_word(14_200_000, 1, false) & ALEX_TX_RELAY_BIT, 0);
+        assert_eq!(
+            build_alex_legacy_tx_word(14_200_000, 1, true) & ALEX_TX_RELAY_BIT,
+            ALEX_TX_RELAY_BIT
+        );
     }
 }

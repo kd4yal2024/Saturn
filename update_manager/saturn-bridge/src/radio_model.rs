@@ -64,7 +64,20 @@ impl DemodMode {
             Self::Cwl => (-800, -200),
             Self::Cwu => (200, 800),
             Self::Am | Self::Sam => (-4000, 4000),
-            Self::Fm => (-8000, 8000),
+            Self::Fm => (-6000, 6000),
+        }
+    }
+
+    pub fn default_tx_filter_band(self) -> (i32, i32) {
+        match self {
+            Self::Lsb => (-3000, -300),
+            Self::DigL => (-3000, 0),
+            Self::Usb | Self::Unknown => (300, 3000),
+            Self::DigU => (0, 3000),
+            Self::Cwl => (-800, -200),
+            Self::Cwu => (200, 800),
+            Self::Am | Self::Sam => (-3000, 3000),
+            Self::Fm => (-3000, 3000),
         }
     }
 }
@@ -227,6 +240,10 @@ pub struct DesiredRadioState {
     pub rx_eq_bands: [i32; 11],
     pub tx_eq_enabled: bool,
     pub tx_eq_bands: [i32; 11],
+    pub cfc_enabled: bool,
+    pub cfc_precomp_db: f64,
+    pub cfc_bands: [f64; 10],
+    pub two_tone_enabled: bool,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -253,6 +270,9 @@ impl RadioModel {
         ddc0_sample_rate_khz: u16,
         ddc0_sample_size_bits: u8,
     ) -> Self {
+        let mode = DemodMode::Usb;
+        let (filter_low_hz, filter_high_hz) = mode.default_filter_band();
+        let (tx_filter_low_hz, tx_filter_high_hz) = mode.default_tx_filter_band();
         Self {
             desired: DesiredRadioState {
                 running: false,
@@ -264,7 +284,7 @@ impl RadioModel {
                 tx_frequency_hz: ddc0_frequency_hz,
                 ddc0_adc: ddc0_adc.min(2),
                 rx_antenna: 1,
-                mode: DemodMode::Usb,
+                mode,
                 rx_volume_db: -10.0,
                 rx_noise_reduction_mode: NoiseReductionMode::Off,
                 rx_noise_reduction_level: 100.0,
@@ -272,18 +292,22 @@ impl RadioModel {
                 nb_threshold: 4.95,
                 anf_enabled: false,
                 agc_mode: AgcMode::Medium,
-                filter_low_hz: 300,
-                filter_high_hz: 3000,
+                filter_low_hz,
+                filter_high_hz,
                 ddc0_sample_rate_khz,
                 ddc0_sample_size_bits,
-                tx_drive: 200,
+                tx_drive: 100,
                 tx_mic_gain_db: 0.0,
-                tx_filter_low_hz: 300,
-                tx_filter_high_hz: 3000,
+                tx_filter_low_hz,
+                tx_filter_high_hz,
                 rx_eq_enabled: false,
                 rx_eq_bands: [0i32; 11],
                 tx_eq_enabled: false,
                 tx_eq_bands: [0i32; 11],
+                cfc_enabled: false,
+                cfc_precomp_db: 0.0,
+                cfc_bands: [0.0f64; 10],
+                two_tone_enabled: false,
             },
             observed: ObservedRadioState::default(),
         }

@@ -47,9 +47,18 @@ fn main() -> Result<(), Box<dyn Error>> {
     let hp_thread = session.spawn_high_priority_loop(radio_model.clone(), stop_flag.clone())?;
 
     let mut last_status = Instant::now();
+    let mut last_duc_specific = Instant::now();
+    let tx_silence_gap = Duration::from_millis(75);
+    let tx_packet_period =
+        Duration::from_secs_f64(DUC_IQ_SAMPLES_PER_PACKET as f64 / 48_000.0);
+    let tx_silence_packet = vec![0.0_f32; DUC_IQ_SAMPLES_PER_PACKET * 2];
+    let mut last_tx_audio_at = Instant::now();
+    let mut next_tx_keepalive_at = Instant::now();
+    let mut tx_silence_keepalive_active = false;
     loop {
         let mut needs_bootstrap = false;
         let mut needs_stop = false;
+        let mut needs_duc_specific = false;
 
         while let Some(command) = tci.try_recv_command() {
             let mut model = radio_model.lock().unwrap();
@@ -69,9 +78,12 @@ fn main() -> Result<(), Box<dyn Error>> {
                 }
                 TciCommand::SetMode(mode) => {
                     model.desired.mode = mode;
-                    let (low_hz, high_hz) = mode.default_filter_band();
-                    model.desired.filter_low_hz = low_hz;
-                    model.desired.filter_high_hz = high_hz;
+                    let (rx_low_hz, rx_high_hz) = mode.default_filter_band();
+                    model.desired.filter_low_hz = rx_low_hz;
+                    model.desired.filter_high_hz = rx_high_hz;
+                    let (tx_low_hz, tx_high_hz) = mode.default_tx_filter_band();
+                    model.desired.tx_filter_low_hz = tx_low_hz;
+                    model.desired.tx_filter_high_hz = tx_high_hz;
                 }
                 TciCommand::SetFilterBand { low_hz, high_hz } => {
                     model.desired.filter_low_hz = low_hz;
@@ -143,6 +155,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 TciCommand::ClientConnected => {
                     model.desired.running = true;
                     needs_bootstrap = true;
+                    needs_duc_specific = true;
                     println!("saturn-bridge: TCI client active — taking P2 controller role");
                 }
                 TciCommand::ClientDisconnected => {
@@ -153,6 +166,15 @@ fn main() -> Result<(), Box<dyn Error>> {
                 TciCommand::SetTxEnabled(enabled) => {
                     model.desired.tx_enabled = enabled;
                     wdsp_tx.set_active(enabled);
+                    needs_duc_specific = true;
+                    if enabled {
+                        let now = Instant::now();
+                        last_tx_audio_at = now.checked_sub(tx_silence_gap).unwrap_or(now);
+                        next_tx_keepalive_at = now;
+                    } else {
+                        tx_silence_keepalive_active = false;
+                    }
+                    println!("saturn-bridge: TX state -> {}", if enabled { "ON" } else { "OFF" });
                 }
                 TciCommand::SetNoiseBlankerMode(mode) => {
                     model.desired.nb_mode = mode;
@@ -167,7 +189,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                     model.desired.agc_mode = mode;
                 }
                 TciCommand::SetTxDrive(drive) => {
-                    model.desired.tx_drive = drive;
+                    model.desired.tx_drive = drive.min(100);
                 }
                 TciCommand::SetTxMicGain(gain_db) => {
                     model.desired.tx_mic_gain_db = gain_db.clamp(-20.0, 20.0);
@@ -188,7 +210,26 @@ fn main() -> Result<(), Box<dyn Error>> {
                 TciCommand::SetTxEqBand { band, gain_db } => {
                     model.desired.tx_eq_bands[band] = gain_db.clamp(-20, 20);
                 }
+                TciCommand::SetTxCfcEnabled(enabled) => {
+                    model.desired.cfc_enabled = enabled;
+                }
+                TciCommand::SetTxCfcPrecomp(db) => {
+                    model.desired.cfc_precomp_db = db.clamp(0.0, 20.0);
+                }
+                TciCommand::SetTxCfcBand { band, gain_db } => {
+                    model.desired.cfc_bands[band - 1] = gain_db.clamp(0.0, 20.0);
+                }
+                TciCommand::SetTxTwoToneTest(enabled) => {
+                    model.desired.two_tone_enabled = enabled;
+                    println!("saturn-bridge: two-tone test -> {}", if enabled { "ON (700/1900 Hz)" } else { "OFF" });
+                }
                 TciCommand::MicAudioFrame(samples) => {
+                    last_tx_audio_at = Instant::now();
+                    next_tx_keepalive_at = last_tx_audio_at + tx_packet_period;
+                    if tx_silence_keepalive_active {
+                        tx_silence_keepalive_active = false;
+                        println!("saturn-bridge: TX live audio active");
+                    }
                     // Extract mono from interleaved stereo (or treat as mono).
                     let mono: Vec<f32> = if samples.len() % 2 == 0 {
                         // Stereo interleaved: take every other sample (left channel)
@@ -220,13 +261,43 @@ fn main() -> Result<(), Box<dyn Error>> {
             tci.publish_radio_state(&model);
         }
 
+        if needs_duc_specific {
+            session.send_duc_specific()?;
+            last_duc_specific = Instant::now();
+        }
+
         // bootstrap() acquires the radio_model lock internally, so it must be called
         // after the command loop has released it, never while holding it.
         if needs_bootstrap {
             session.bootstrap(&radio_model)?;
+            last_duc_specific = Instant::now();
         }
         if needs_stop {
             session.send_stop()?;
+        }
+
+        let running = { radio_model.lock().unwrap().desired.running };
+        if running && last_duc_specific.elapsed() >= config.high_priority_period {
+            session.send_duc_specific()?;
+            last_duc_specific = Instant::now();
+        }
+
+        let tx_enabled = { radio_model.lock().unwrap().desired.tx_enabled };
+        if tx_enabled && last_tx_audio_at.elapsed() >= tx_silence_gap {
+            let now = Instant::now();
+            let mut sent_packets = 0usize;
+            while now >= next_tx_keepalive_at && sent_packets < 8 {
+                session.send_duc_iq(&tx_silence_packet)?;
+                next_tx_keepalive_at += tx_packet_period;
+                sent_packets += 1;
+            }
+            if sent_packets > 0 && !tx_silence_keepalive_active {
+                tx_silence_keepalive_active = true;
+                println!("saturn-bridge: TX silence keepalive active (no mic audio)");
+            }
+            if sent_packets == 8 && now >= next_tx_keepalive_at {
+                next_tx_keepalive_at = now + tx_packet_period;
+            }
         }
 
         if let Some(event) = session.recv_event()? {
@@ -242,8 +313,14 @@ fn main() -> Result<(), Box<dyn Error>> {
                     }
                     let sample_rate_hz = model.desired.ddc0_sample_rate_khz as u32 * 1000;
                     tci.publish_iq_frame(sample_rate_hz, &frame.iq_samples);
-                    for audio_frame in wdsp.push_iq(&frame.iq_samples) {
-                        tci.publish_audio_frame(wdsp.audio_sample_rate_hz(), &audio_frame);
+                    // Mute RX audio during TX to prevent TX carrier bleed-through.
+                    if !model.desired.tx_enabled {
+                        for audio_frame in wdsp.push_iq(&frame.iq_samples) {
+                            tci.publish_audio_frame(wdsp.audio_sample_rate_hz(), &audio_frame);
+                        }
+                    } else {
+                        // Still drain WDSP to keep its internal state consistent.
+                        let _ = wdsp.push_iq(&frame.iq_samples);
                     }
                     if let Some(dbm) = wdsp.smeter_dbm() {
                         model.observed.ddc0_meter_dbm = Some(dbm);

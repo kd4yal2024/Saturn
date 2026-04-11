@@ -166,6 +166,19 @@ unsafe extern "C" {
     fn SetRXAGrphEQ10(channel: i32, rxeq: *mut i32);
     fn SetTXAEQRun(channel: i32, run: i32);
     fn SetTXAGrphEQ10(channel: i32, txeq: *mut i32);
+
+    // CFC (Continuous Frequency Compression)
+    fn SetTXACFCOMPRun(channel: i32, run: i32);
+    fn SetTXACFCOMPPosition(channel: i32, pos: i32);
+    fn SetTXACFCOMPprofile(channel: i32, nfreqs: i32, f: *const f64, g: *const f64, e: *const f64);
+    fn SetTXACFCOMPPrecomp(channel: i32, precomp: f64);
+    fn SetTXACFCOMPPeqRun(channel: i32, run: i32);
+    fn SetTXACFCOMPPrePeq(channel: i32, prepeq: f64);
+
+    // PostGen — two-tone test signal generator (mode 2 = two-tone)
+    fn SetTXAPostGenMode(channel: i32, mode: i32);
+    fn SetTXAPostGenTTMag(channel: i32, mag1: f64, mag2: f64);
+    fn SetTXAPostGenTTFreq(channel: i32, freq1: f64, freq2: f64);
 }
 
 #[derive(Debug)]
@@ -596,6 +609,9 @@ impl Drop for WdspRxEngine {
 // 240 samples per DUC IQ packet (from P2 protocol spec)
 pub const DUC_IQ_SAMPLES_PER_PACKET: usize = 240;
 
+// CFC default frequency bands (Hz) — same as pihpsdr transmitter.c
+const CFC_FREQS: [f64; 10] = [50.0, 100.0, 200.0, 500.0, 1000.0, 1500.0, 2500.0, 3000.0, 5000.0, 8000.0];
+
 pub struct WdspTxEngine {
     channel_id: i32,
     mode: DemodMode,
@@ -609,6 +625,10 @@ pub struct WdspTxEngine {
     pub pending_iq: VecDeque<f32>,
     tx_eq_enabled: bool,
     tx_eq_bands: [i32; 11],
+    cfc_enabled: bool,
+    cfc_precomp_db: f64,
+    cfc_bands: [f64; 10],
+    two_tone_enabled: bool,
 }
 
 impl WdspTxEngine {
@@ -627,6 +647,10 @@ impl WdspTxEngine {
             pending_iq: VecDeque::new(),
             tx_eq_enabled: false,
             tx_eq_bands: [0i32; 11],
+            cfc_enabled: false,
+            cfc_precomp_db: 0.0,
+            cfc_bands: [0.0f64; 10],
+            two_tone_enabled: false,
         };
         engine.open_channel();
         engine
@@ -668,6 +692,22 @@ impl WdspTxEngine {
                 self.filter_high_hz as f64,
             );
             SetTXAMode(self.channel_id, wdsp_mode(self.mode));
+
+            // CFC — initialize with flat profile, disabled
+            let gains = [0.0f64; 10];
+            let post_eq = [0.0f64; 10];
+            SetTXACFCOMPprofile(self.channel_id, 10, CFC_FREQS.as_ptr(), gains.as_ptr(), post_eq.as_ptr());
+            SetTXACFCOMPPosition(self.channel_id, 0);
+            SetTXACFCOMPPrecomp(self.channel_id, 0.0);
+            SetTXACFCOMPPeqRun(self.channel_id, 0);
+            SetTXACFCOMPPrePeq(self.channel_id, 0.0);
+            SetTXACFCOMPRun(self.channel_id, 0);
+
+            // Two-tone test generator — configure freqs, leave disabled
+            SetTXAPostGenMode(self.channel_id, 2);
+            SetTXAPostGenTTMag(self.channel_id, 0.49, 0.49);
+            SetTXAPostGenTTFreq(self.channel_id, 700.0, 1900.0);
+            SetTXAPostGenRun(self.channel_id, 0);
         }
     }
 
@@ -704,6 +744,29 @@ impl WdspTxEngine {
             unsafe {
                 SetTXAGrphEQ10(self.channel_id, self.tx_eq_bands.as_mut_ptr());
                 SetTXAEQRun(self.channel_id, self.tx_eq_enabled as i32);
+            }
+        }
+
+        if model.desired.cfc_enabled != self.cfc_enabled
+            || (model.desired.cfc_precomp_db - self.cfc_precomp_db).abs() > f64::EPSILON
+            || model.desired.cfc_bands != self.cfc_bands
+        {
+            self.cfc_enabled = model.desired.cfc_enabled;
+            self.cfc_precomp_db = model.desired.cfc_precomp_db;
+            self.cfc_bands = model.desired.cfc_bands;
+            let post_eq = [0.0f64; 10];
+            unsafe {
+                SetTXACFCOMPprofile(self.channel_id, 10, CFC_FREQS.as_ptr(), self.cfc_bands.as_ptr(), post_eq.as_ptr());
+                SetTXACFCOMPPrecomp(self.channel_id, self.cfc_precomp_db);
+                SetTXACFCOMPPeqRun(self.channel_id, self.cfc_enabled as i32);
+                SetTXACFCOMPRun(self.channel_id, self.cfc_enabled as i32);
+            }
+        }
+
+        if model.desired.two_tone_enabled != self.two_tone_enabled {
+            self.two_tone_enabled = model.desired.two_tone_enabled;
+            unsafe {
+                SetTXAPostGenRun(self.channel_id, self.two_tone_enabled as i32);
             }
         }
     }

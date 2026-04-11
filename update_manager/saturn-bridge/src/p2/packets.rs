@@ -97,6 +97,9 @@ pub fn build_general_packet(port_map: &P2PortMap) -> [u8; GENERAL_PACKET_SIZE] {
     write_u16_be(&mut packet, 21, port_map.wideband_base);
     packet[37] = 0x08;
     packet[38] = 1;
+    // Match piHPSDR's Saturn path: keep the PA enabled unless a higher-level
+    // policy explicitly disables it.
+    packet[58] = 0x01;
     packet[59] = 0x03;
     packet
 }
@@ -105,6 +108,9 @@ pub fn build_duc_specific_packet(sequence: u32) -> [u8; DUC_SPECIFIC_PACKET_SIZE
     let mut packet = [0u8; DUC_SPECIFIC_PACKET_SIZE];
     write_u32_be(&mut packet, 0, sequence);
     packet[4] = 1; // 1 DUC stream enabled
+    // Match piHPSDR's safe Saturn/P2 defaults for the TX-specific path.
+    // Byte 50 bit 2 must be set to keep Orion mic-PTT disabled.
+    packet[50] = 0x04;
     packet
 }
 
@@ -309,6 +315,7 @@ mod tests {
         assert_eq!(P2PortMap::default().ddc_index_from_source_port(1037), Some(2));
         assert_eq!(packet[37], 0x08);
         assert_eq!(packet[38], 1);
+        assert_eq!(packet[58], 0x01);
         assert_eq!(packet[59], 0x03);
     }
 
@@ -363,5 +370,13 @@ mod tests {
         assert_eq!(read_u16_be(&packet, 30), 48);
         assert_eq!(packet[29], 1);
         assert_eq!(packet[34], 24);
+    }
+
+    #[test]
+    fn duc_specific_packet_uses_safe_tx_defaults() {
+        let packet = build_duc_specific_packet(7);
+        assert_eq!(read_u32_be(&packet, 0), 7);
+        assert_eq!(packet[4], 1);
+        assert_eq!(packet[50] & 0x04, 0x04);
     }
 }

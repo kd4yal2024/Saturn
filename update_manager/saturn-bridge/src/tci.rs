@@ -44,6 +44,10 @@ pub enum TciCommand {
     SetRxEqBand { band: usize, gain_db: i32 },
     SetTxEqEnabled(bool),
     SetTxEqBand { band: usize, gain_db: i32 },
+    SetTxCfcEnabled(bool),
+    SetTxCfcPrecomp(f64),
+    SetTxCfcBand { band: usize, gain_db: f64 },
+    SetTxTwoToneTest(bool),
     MicAudioFrame(Vec<f32>),
     ClientConnected,
     ClientDisconnected,
@@ -197,6 +201,12 @@ impl TciFrontend {
             self.send_text(format!("rx_eq_band:0,{},{};", i, model.desired.rx_eq_bands[i]));
             self.send_text(format!("tx_eq_band:0,{},{};", i, model.desired.tx_eq_bands[i]));
         }
+        self.send_text(format!("tx_cfc_enable:0,{};", model.desired.cfc_enabled));
+        self.send_text(format!("tx_cfc_precomp:0,{:.1};", model.desired.cfc_precomp_db));
+        for i in 0..10 {
+            self.send_text(format!("tx_cfc_band:0,{},{:.1};", i + 1, model.desired.cfc_bands[i]));
+        }
+        self.send_text(format!("tx_two_tone:0,{};", model.desired.two_tone_enabled));
         self.send_text("tune:0,false;".to_string());
         self.publish_telemetry(model);
     }
@@ -206,8 +216,10 @@ impl TciFrontend {
             self.send_text(format!("rx_smeter:0,0,{meter_dbm:.1};"));
         }
         if let Some(packet) = model.observed.high_priority.as_ref() {
-            self.send_text(format!("tx_power:0,{:.1};", packet.forward_power as f32));
-            self.send_text(format!("swr:0,{:.2};", calculate_swr(packet.forward_power, packet.reverse_power)));
+            let fwd_watts = saturn_adc_to_watts(packet.forward_power, 32);
+            let rev_watts = saturn_adc_to_watts(packet.reverse_power, 28);
+            self.send_text(format!("tx_power:0,{:.1};", fwd_watts));
+            self.send_text(format!("swr:0,{:.2};", calculate_swr_watts(fwd_watts, rev_watts)));
         }
         let drops = self.drop_count.swap(0, Ordering::Relaxed);
         if drops > 0 {
@@ -455,7 +467,18 @@ fn initial_snapshot_messages(model: &RadioModel) -> Vec<String> {
             format!("tx_eq_band:0,{},{};", i, model.desired.tx_eq_bands[i]),
         ]
     }))
-    .chain(["tune:0,false;".to_string(), "audio_samplerate:48000;".to_string()])
+    .chain([
+        format!("tx_cfc_enable:0,{};", model.desired.cfc_enabled),
+        format!("tx_cfc_precomp:0,{:.1};", model.desired.cfc_precomp_db),
+    ])
+    .chain((0..10usize).map(|i| {
+        format!("tx_cfc_band:0,{},{:.1};", i + 1, model.desired.cfc_bands[i])
+    }))
+    .chain([
+        format!("tx_two_tone:0,{};", model.desired.two_tone_enabled),
+        "tune:0,false;".to_string(),
+        "audio_samplerate:48000;".to_string(),
+    ])
     .collect()
 }
 
@@ -648,10 +671,11 @@ fn parse_tci_command(command: &str, command_tx: &Sender<TciCommand>, client_stat
             let _ = command_tx.send(TciCommand::RequestSmeter);
         }
         "trx" => {
-            // trx:0,true or trx:0,false — PTT on/off
+            // trx:0,true or trx:0,true,tci — PTT on/off
             let enabled_arg = if args.len() >= 2 { args.get(1) } else { args.first() };
             if let Some(enabled_text) = enabled_arg {
                 if let Some(enabled) = parse_tci_bool(enabled_text) {
+                    println!("saturn-bridge: TCI trx requested -> {}", enabled);
                     let _ = command_tx.send(TciCommand::SetTxEnabled(enabled));
                 }
             }
@@ -751,6 +775,43 @@ fn parse_tci_command(command: &str, command_tx: &Sender<TciCommand>, client_stat
                     if band >= 1 && band <= 10 {
                         let _ = command_tx.send(TciCommand::SetTxEqBand { band, gain_db });
                     }
+                }
+            }
+        }
+        "tx_cfc_enable" => {
+            let enabled_arg = if args.len() >= 2 { args.get(1) } else { args.first() };
+            if let Some(enabled_text) = enabled_arg {
+                if let Some(enabled) = parse_tci_bool(enabled_text) {
+                    let _ = command_tx.send(TciCommand::SetTxCfcEnabled(enabled));
+                }
+            }
+        }
+        "tx_cfc_precomp" => {
+            let precomp_arg = if args.len() >= 2 { args.get(1) } else { args.first() };
+            if let Some(precomp_text) = precomp_arg {
+                if let Ok(db) = precomp_text.trim().parse::<f64>() {
+                    let _ = command_tx.send(TciCommand::SetTxCfcPrecomp(db));
+                }
+            }
+        }
+        "tx_cfc_band" => {
+            // tx_cfc_band:0,band_idx,gain_db  — band_idx 1-10, gain_db in dB
+            if args.len() >= 3 {
+                if let (Ok(band), Ok(gain_db)) = (
+                    args[1].trim().parse::<usize>(),
+                    args[2].trim().parse::<f64>(),
+                ) {
+                    if band >= 1 && band <= 10 {
+                        let _ = command_tx.send(TciCommand::SetTxCfcBand { band, gain_db });
+                    }
+                }
+            }
+        }
+        "tx_two_tone" => {
+            let enabled_arg = if args.len() >= 2 { args.get(1) } else { args.first() };
+            if let Some(enabled_text) = enabled_arg {
+                if let Some(enabled) = parse_tci_bool(enabled_text) {
+                    let _ = command_tx.send(TciCommand::SetTxTwoToneTest(enabled));
                 }
             }
         }
@@ -860,6 +921,29 @@ fn parse_tci_bool(text: &str) -> Option<bool> {
     }
 }
 
+/// Convert a Saturn G2 raw power ADC reading to watts.
+/// Uses the ANAN-7000/Saturn 100 W PA calibration constants from pihpsdr:
+///   ADC_REF = 5.0 V, coupling = 0.12 (fwd) / 0.12 (rev), fwd_offset = 32, rev_offset = 28.
+/// Formula: V = ((raw - offset) / 4095) * 5.0;  watts = V² / 0.12
+fn saturn_adc_to_watts(raw: u16, offset: i32) -> f32 {
+    let corrected = (raw as i32 - offset).max(0) as f32;
+    let v = (corrected / 4095.0) * 5.0;
+    (v * v) / 0.12
+}
+
+fn calculate_swr_watts(fwd_watts: f32, rev_watts: f32) -> f32 {
+    if fwd_watts <= 0.0 || rev_watts <= 0.0 || rev_watts >= fwd_watts {
+        return 1.0;
+    }
+    let ratio = (rev_watts / fwd_watts).sqrt();
+    if ratio >= 0.999 {
+        99.0
+    } else {
+        ((1.0 + ratio) / (1.0 - ratio)).max(1.0)
+    }
+}
+
+#[allow(dead_code)]
 fn calculate_swr(forward: u16, reverse: u16) -> f32 {
     if forward == 0 || reverse == 0 || reverse >= forward {
         return 1.0;
