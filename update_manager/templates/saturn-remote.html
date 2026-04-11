@@ -5035,6 +5035,13 @@
       buildEqGrid("rx-eq-grid", "rx");
       buildEqGrid("tx-eq-grid", "tx");
       buildCfcBandGrid("cfc-band-grid");
+      // Hide Update/Monitor nav links when served over HTTPS — those routes
+      // are not mounted on the TLS listener and would 404 or confuse the user.
+      if (window.location.protocol === 'https:') {
+        document.querySelectorAll('.hero-actions .nav-link').forEach(el => {
+          el.style.display = 'none';
+        });
+      }
       logEvent("Saturn Remote loaded");
       logEvent("Current bridge target: TCI over WebSocket");
       logEvent(`Display backends: spectrum=${spectrumRenderer.backend}, waterfall=${waterfallRenderer.backend}`);

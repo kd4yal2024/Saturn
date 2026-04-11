@@ -5,6 +5,7 @@ mod middleware;
 mod repair;
 mod monitor;
 mod pages;
+mod remote_tls;
 mod state;
 mod update;
 mod util;
@@ -12,6 +13,7 @@ use crate::auth::{change_password, exit_server, kill_process};
 use crate::clone::{pi_clone_cancel, pi_clone_start, pi_clone_status, pi_devices, pi_wipe_target};
 use crate::image::{pi_image_cancel, pi_image_download, pi_image_start, pi_image_status};
 use crate::repair::{repair_pack, verify_system_config};
+use crate::remote_tls::{ensure_self_signed_cert, load_remote_tls_config, remote_tls_router};
 use crate::middleware::csrf_protect;
 use crate::monitor::{get_system_data, network_test};
 use crate::pages::{
@@ -52,11 +54,14 @@ use axum::{
     routing::{get, post},
     Router,
 };
+use axum_server::tls_rustls::RustlsConfig;
+use axum_server::Handle as AxumServerHandle;
 use chrono::Local;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeMap,
     fs,
+    net::SocketAddr,
     os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
     sync::{Arc, Mutex, OnceLock, RwLock},
@@ -65,11 +70,11 @@ use std::{
 use tokio::{
     io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, BufReader},
     process::Command,
-    sync::mpsc,
+    sync::{mpsc, watch},
 };
 use tokio_stream::{wrappers::UnboundedReceiverStream, StreamExt};
 use tokio_util::io::ReaderStream;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 #[derive(Debug, Deserialize)]
 struct P23AdcTelemetryRequest {
@@ -128,6 +133,10 @@ async fn main() {
         .and_then(|v| v.parse::<u64>().ok())
         .unwrap_or(DEFAULT_MAX_BODY_BYTES)
         .min(usize::MAX as u64) as usize;
+    let bridge_ws_url = std::env::var("SATURN_REMOTE_BRIDGE_WS")
+        .unwrap_or_else(|_| "ws://127.0.0.1:50001".to_string());
+    let remote_tls_config = load_remote_tls_config(&default_state_dir)
+        .expect("invalid SATURN_REMOTE_TLS_ADDR/SATURN_REMOTE_TLS_CERT/SATURN_REMOTE_TLS_KEY");
 
     // Canonicalize both paths at startup to resolve symlinks before validation,
     // so a symlink planted in SATURN_REPO_ROOT or repo_root.txt cannot bypass
@@ -173,6 +182,7 @@ async fn main() {
         custom_scripts_file,
         scripts_dir,
         saturn_addr: addr.clone(),
+        bridge_ws_url: bridge_ws_url.clone(),
         repo_root: Arc::new(RwLock::new(repo_root)),
         repo_root_file,
         update_policy_file,
@@ -271,12 +281,55 @@ async fn main() {
         ))
         .layer(DefaultBodyLimit::max(max_body_bytes));
 
+    let remote_tls_router = if let Some(remote_tls_addr) = remote_tls_config.addr {
+        match ensure_self_signed_cert(&remote_tls_config.cert_path, &remote_tls_config.key_path).await {
+            Err(err) => {
+                warn!("Saturn Remote TLS disabled (cert setup failed): {err}");
+                None
+            }
+            Ok(()) => {
+                match RustlsConfig::from_pem_file(
+                    remote_tls_config.cert_path.clone(),
+                    remote_tls_config.key_path.clone(),
+                )
+                .await
+                {
+                    Err(err) => {
+                        warn!("Saturn Remote TLS disabled (rustls config failed): {err}");
+                        None
+                    }
+                    Ok(rustls_config) => {
+                        Some((remote_tls_addr, rustls_config, remote_tls_router(state.clone())))
+                    }
+                }
+            }
+        }
+    } else {
+        None
+    };
+
+    let (shutdown_tx, shutdown_rx) = watch::channel(false);
+    let signal_task = tokio::spawn(async move {
+        shutdown_signal().await;
+        let _ = shutdown_tx.send(true);
+    });
+
     info!("Saturn server listening on {addr}");
     let listener = tokio::net::TcpListener::bind(&addr).await.expect("bind failed");
-    axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal())
-        .await
-        .expect("server failed");
+    let http_server = serve_http(listener, app, shutdown_rx.clone());
+
+    if let Some((remote_tls_addr, rustls_config, remote_tls_app)) = remote_tls_router {
+        info!("Saturn Remote TLS listening on https://{remote_tls_addr}");
+        let tls_shutdown = shutdown_rx.clone();
+        tokio::spawn(async move {
+            if let Err(err) = serve_remote_tls(remote_tls_addr, rustls_config, remote_tls_app, tls_shutdown).await {
+                error!("Saturn Remote TLS server error: {err}");
+            }
+        });
+    }
+    http_server.await.expect("server failed");
+
+    let _ = signal_task.await;
     info!("Saturn server shut down");
 }
 
@@ -299,6 +352,42 @@ async fn shutdown_signal() {
         _ = ctrl_c => { info!("received SIGINT, shutting down"); }
         _ = terminate => { info!("received SIGTERM, shutting down"); }
     }
+}
+
+async fn serve_http(
+    listener: tokio::net::TcpListener,
+    app: Router,
+    shutdown_rx: watch::Receiver<bool>,
+) -> std::io::Result<()> {
+    axum::serve(listener, app)
+        .with_graceful_shutdown(wait_for_shutdown(shutdown_rx))
+        .await
+}
+
+async fn serve_remote_tls(
+    addr: SocketAddr,
+    rustls_config: RustlsConfig,
+    app: Router,
+    shutdown_rx: watch::Receiver<bool>,
+) -> std::io::Result<()> {
+    let handle = AxumServerHandle::new();
+    let shutdown_handle = handle.clone();
+    tokio::spawn(async move {
+        wait_for_shutdown(shutdown_rx).await;
+        shutdown_handle.graceful_shutdown(None);
+    });
+
+    axum_server::bind_rustls(addr, rustls_config)
+        .handle(handle)
+        .serve(app.into_make_service())
+        .await
+}
+
+async fn wait_for_shutdown(mut shutdown_rx: watch::Receiver<bool>) {
+    if *shutdown_rx.borrow() {
+        return;
+    }
+    let _ = shutdown_rx.changed().await;
 }
 
 fn stdbuf_binary() -> Option<&'static str> {
