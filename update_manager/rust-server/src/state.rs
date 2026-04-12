@@ -44,6 +44,7 @@ pub struct AppState {
     pub custom_scripts_file: PathBuf,
     pub scripts_dir: PathBuf,
     pub saturn_addr: String,
+    pub bridge_ws_url: String,
     pub repo_root: Arc<RwLock<PathBuf>>,
     pub repo_root_file: PathBuf,
     pub update_policy_file: PathBuf,

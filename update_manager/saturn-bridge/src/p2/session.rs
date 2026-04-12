@@ -33,7 +33,7 @@ pub struct P2Session {
 impl P2Session {
     pub fn bind(config: BridgeConfig) -> io::Result<Self> {
         let socket = UdpSocket::bind(config.client_bind_addr)?;
-        socket.set_read_timeout(Some(config.receive_timeout))?;
+        socket.set_nonblocking(true)?;
         Ok(Self {
             config,
             socket,
@@ -95,31 +95,15 @@ impl P2Session {
     ) -> io::Result<JoinHandle<io::Result<()>>> {
         let socket = self.socket.try_clone()?;
         let target = self.target_addr(self.config.port_map.high_priority_to_sdr);
-        let period = self.config.high_priority_period;
+        let rx_period = self.config.high_priority_period;
+        let tx_period = rx_period.min(Duration::from_millis(10));
 
         Ok(thread::spawn(move || {
             let mut prev_tx = false;
             while !stop_flag.load(Ordering::Relaxed) {
                 let state = {
                     let model = radio_model.lock().unwrap();
-                    HighPriorityToSdr {
-                        run: model.desired.running,
-                        tx: model.desired.tx_enabled,
-                        ddc_phase_words: build_ddc_phase_array(&model),
-                        duc_phase_word: frequency_to_phase_word(model.desired.tx_frequency_hz),
-                        tx_drive: (model.desired.tx_drive as u16 * 255 / 100) as u8,
-                        cat_port: 0,
-                        alex_tx_word: build_alex_tx_word(model.desired.tx_frequency_hz, 1),
-                        alex_rx_word: build_alex_legacy_tx_word(
-                            model.desired.tx_frequency_hz,
-                            model.desired.rx_antenna,
-                            model.desired.tx_enabled,
-                        ),
-                        alex_rx2_filter_word: build_alex_rx_filter_word(model.desired.iq_center_hz),
-                        alex_rx1_filter_word: build_alex_rx_filter_word(model.desired.iq_center_hz),
-                        rx2_attenuation_db: 0,
-                        rx1_attenuation_db: 0,
-                    }
+                    build_high_priority_state(&model)
                 };
 
                 if state.tx != prev_tx {
@@ -135,10 +119,16 @@ impl P2Session {
                     let packet = build_high_priority_to_sdr(&state);
                     socket.send_to(&packet, target)?;
                 }
-                thread::sleep(period);
+                thread::sleep(if state.tx { tx_period } else { rx_period });
             }
             Ok(())
         }))
+    }
+
+    pub fn send_high_priority(&self, model: &RadioModel) -> io::Result<()> {
+        let packet = build_high_priority_to_sdr(&build_high_priority_state(model));
+        self.send_packet(self.target_addr(self.config.port_map.high_priority_to_sdr), &packet)?;
+        Ok(())
     }
 
     pub fn recv_event(&self) -> io::Result<Option<P2Event>> {
@@ -228,6 +218,7 @@ impl P2Session {
                 Err(error)
                     if error.kind() == io::ErrorKind::WouldBlock || error.kind() == io::ErrorKind::TimedOut =>
                 {
+                    thread::sleep(self.config.receive_timeout.min(Duration::from_millis(5)));
                     continue;
                 }
                 Err(error) => return Err(error),
@@ -254,6 +245,27 @@ fn build_ddc_phase_array(model: &RadioModel) -> [u32; 10] {
     let mut phase_words = [0u32; 10];
     phase_words[usize::from(model.desired.rx_ddc_index)] = frequency_to_phase_word(model.desired.iq_center_hz);
     phase_words
+}
+
+fn build_high_priority_state(model: &RadioModel) -> HighPriorityToSdr {
+    HighPriorityToSdr {
+        run: model.desired.running,
+        tx: model.desired.tx_enabled,
+        ddc_phase_words: build_ddc_phase_array(model),
+        duc_phase_word: frequency_to_phase_word(model.desired.tx_frequency_hz),
+        tx_drive: (model.desired.tx_drive as u16 * 255 / 100) as u8,
+        cat_port: 0,
+        alex_tx_word: build_alex_tx_word(model.desired.tx_frequency_hz, 1),
+        alex_rx_word: build_alex_legacy_tx_word(
+            model.desired.tx_frequency_hz,
+            model.desired.rx_antenna,
+            model.desired.tx_enabled,
+        ),
+        alex_rx2_filter_word: build_alex_rx_filter_word(model.desired.iq_center_hz),
+        alex_rx1_filter_word: build_alex_rx_filter_word(model.desired.iq_center_hz),
+        rx2_attenuation_db: 0,
+        rx1_attenuation_db: 0,
+    }
 }
 
 fn frequency_to_phase_word(frequency_hz: u32) -> u32 {

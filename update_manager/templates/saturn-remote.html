@@ -2149,6 +2149,11 @@
     const RADIO_PREFS_KEY = "saturn.remote.radioPrefs";
     const ALLOWED_SAMPLE_RATES = Object.freeze([48000, 96000, 192000, 384000]);
     const ALLOWED_DEMOD_MODES = Object.freeze(["USB", "LSB", "AM", "SAM", "FM", "DIGU", "DIGL", "CWU", "CWL"]);
+    const RX_AUDIO_FRAME_FLOATS = 1024;
+    const RX_AUDIO_START_PREROLL_SEC = 0.03;
+    const RX_AUDIO_RECOVERY_PREROLL_SEC = 0.01;
+    const RX_AUDIO_RESYNC_PREROLL_SEC = 0.02;
+    const TX_MIC_BLOCK_SAMPLES = 1024;
 
     const state = {
       ws: null,
@@ -2793,6 +2798,20 @@
     const waterfallRenderer = new WaterfallRenderer($("waterfall-canvas"));
     let fftProcessor = new FftProcessor(1024);
 
+    function resetDisplayHistory() {
+      state.iqPackets = [];
+      state.latestBins = new Float32Array(fftProcessor.size);
+      state.fftWidth = state.latestBins.length;
+      state.lastSpectrumRenderAt = 0;
+      state.spectrumShiftCarryBins = 0;
+      state.waterfallShiftCarryPixels = 0;
+      state.waterfallSettleFrames = 0;
+      fftProcessor = new FftProcessor(fftProcessor.size);
+      spectrumRenderer.render(state.latestBins, state.displayFloorDb, state.displayCeilingDb);
+      waterfallRenderer.clear();
+      waterfallRenderer.render();
+    }
+
     function updateDisplayRange(bins) {
       if (!bins || bins.length === 0) {
         return;
@@ -2830,26 +2849,32 @@
       area.scrollTop = area.scrollHeight;
     }
 
-    function secureProxyWsUrl() {
+    function sameOriginProxyWsUrl() {
       const host = window.location.host || window.location.hostname || "127.0.0.1";
-      return `wss://${host}/tci`;
+      const scheme = window.location.protocol === "https:" ? "wss" : "ws";
+      return `${scheme}://${host}/tci`;
     }
 
     function defaultWsUrl() {
       const saved = localStorage.getItem("saturn.remote.wsUrl");
-      if (window.location.protocol === "https:") {
+      if (window.location.protocol === "https:" || window.location.protocol === "http:") {
         if (!saved) {
-          return secureProxyWsUrl();
+          return sameOriginProxyWsUrl();
         }
         try {
           const parsed = new URL(saved, window.location.href);
-          if (parsed.protocol === "wss:" && parsed.host === window.location.host) {
+          const expectedProtocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+          if (
+            parsed.protocol === expectedProtocol &&
+            parsed.host === window.location.host &&
+            parsed.pathname === "/tci"
+          ) {
             return parsed.toString();
           }
         } catch (_) {
-          // Fall through to the secure same-origin proxy.
+          // Fall through to the same-origin proxy.
         }
-        return secureProxyWsUrl();
+        return sameOriginProxyWsUrl();
       }
       if (saved) {
         return saved;
@@ -3666,37 +3691,10 @@
     }
 
     function requestFullState() {
-      sendTci(`iq_samplerate:${state.sampleRate};`);
-      sendTci(`rx_adc:0,${state.rxAdc};`);
-      sendTci(`rx_antenna:0,${state.rxAntenna};`);
-      sendTci(`modulation:0,${state.mode};`);
-      sendTci(`rx_volume:0,0,${state.rxVolumeDb.toFixed(1)};`);
-      sendTci(`rx_nr_mode:0,${state.rxNoiseReductionMode};`);
-      sendTci(`rx_nr_level:0,${state.rxNoiseReductionLevel};`);
-      sendTci(`rx_nb:0,${state.rxNbMode};`);
-      sendTci(`rx_nb_threshold:0,${state.rxNbThreshold.toFixed(2)};`);
-      sendTci(`rx_anf:0,${state.anfEnabled};`);
-      sendTci(`rx_agc:0,${state.agcMode};`);
-      sendRxFilterBand();
-      sendTci(`dds:0,${state.dds};`);
-      sendTci(`vfo:0,0,${state.vfoA};`);
-      sendTci(`vfo:0,1,${state.vfoB};`);
+      // The bridge already pushes a full state snapshot on connect. Keep the
+      // initial handshake read-only so a stale browser profile cannot retune or
+      // reconfigure a live radio session.
       sendTci("rx_smeter:0,0;");
-      sendTci(`tx_drive:0,${state.txDrive};`);
-      sendTci(`tx_mic_gain:0,${state.txMicGainDb.toFixed(1)};`);
-      sendTxFilterBand();
-      sendTci(`rx_eq_enable:0,${state.rxEqEnabled};`);
-      sendTci(`tx_eq_enable:0,${state.txEqEnabled};`);
-      for (let i = 1; i <= 10; i++) {
-        sendTci(`rx_eq_band:0,${i},${state.rxEqBands[i]};`);
-        sendTci(`tx_eq_band:0,${i},${state.txEqBands[i]};`);
-      }
-      sendTci(`tx_cfc_enable:0,${state.cfcEnabled};`);
-      sendTci(`tx_cfc_precomp:0,${state.cfcPrecomp.toFixed(1)};`);
-      for (let i = 1; i <= 10; i++) {
-        sendTci(`tx_cfc_band:0,${i},${(state.cfcBands[i] || 0).toFixed(1)};`);
-      }
-      sendTci(`tx_two_tone:0,${state.twoToneEnabled};`);
     }
 
     function startIq() {
@@ -3738,10 +3736,10 @@
       state.audioSampleRate = 48000;
       state.audioFramesPlayed = 0;
       state.audioBackpressureDrops = 0;
-      state.audioNextTime = ctx.currentTime + 0.05;
+      state.audioNextTime = ctx.currentTime + RX_AUDIO_START_PREROLL_SEC;
       applyRxVolumeGain();
       sendTci(
-        `audio_start:0;audio_stream_samples:2048;audio_stream_channels:2;audio_stream_sample_type:float32;audio_samplerate:48000;rx_volume:0,0,${state.rxVolumeDb.toFixed(1)};`
+        `audio_stream_samples:${RX_AUDIO_FRAME_FLOATS};audio_stream_channels:2;audio_stream_sample_type:float32;audio_samplerate:48000;audio_start:0;rx_volume:0,0,${state.rxVolumeDb.toFixed(1)};`
       );
       logEvent("RX audio requested");
       updateUi();
@@ -3844,8 +3842,8 @@
           return false;
         }
         const source = micCtx.createMediaStreamSource(micStream);
-        // ScriptProcessorNode: 2048-sample blocks (≈42 ms at 48 kHz)
-        const proc = micCtx.createScriptProcessor(2048, 1, 1);
+        // ScriptProcessorNode: 1024-sample blocks (≈21 ms at 48 kHz)
+        const proc = micCtx.createScriptProcessor(TX_MIC_BLOCK_SAMPLES, 1, 1);
         proc.onaudioprocess = (evt) => {
           if (!state.txEnabled || !state.connected || !state.ws || state.ws.readyState !== WebSocket.OPEN) { return; }
           const mono = evt.inputBuffer.getChannelData(0);
@@ -4011,6 +4009,7 @@
       ws.onopen = () => {
         if (ws !== state.ws) { ws.close(); return; }
         state.connected = true;
+        resetDisplayHistory();
         logEvent("WebSocket connected");
         requestFullState();
         startIq();
@@ -4031,7 +4030,7 @@
         state.connected = false;
         state.iqStreaming = false;
         state.ws = null;
-        state.iqPackets = [];
+        resetDisplayHistory();
         state.txEnabled = false;
         stopMicCapture();
         void stopRxAudio(false);
@@ -4050,7 +4049,7 @@
       state.connected = false;
       state.iqStreaming = false;
       state.ws = null;
-      state.iqPackets = [];
+      resetDisplayHistory();
       state.txEnabled = false;
       stopMicCapture();
       void stopRxAudio(false);
@@ -4097,10 +4096,7 @@
           const nextRate = Number(args[0].trim());
           if (!Number.isNaN(nextRate) && nextRate > 0 && nextRate !== state.sampleRate) {
             state.sampleRate = nextRate;
-            state.spectrumShiftCarryBins = 0;
-            state.waterfallShiftCarryPixels = 0;
-            state.waterfallSettleFrames = 0;
-            waterfallRenderer.clear();
+            resetDisplayHistory();
           }
         } else if (name === "modulation" && args.length >= 2) {
           state.mode = clampDemodMode(args[1].trim());
@@ -4312,10 +4308,7 @@
       const iq = new Float32Array(buffer, 64, floatCount);
       const samplePairs = Math.floor(iq.length / 2);
       if (sampleRate !== state.sampleRate) {
-        state.spectrumShiftCarryBins = 0;
-        state.waterfallShiftCarryPixels = 0;
-        state.waterfallSettleFrames = 0;
-        waterfallRenderer.clear();
+        resetDisplayHistory();
       }
       state.sampleRate = sampleRate;
       appendIqPacket(iq);
@@ -4384,11 +4377,11 @@
       }
       const now = state.audioCtx.currentTime;
       if (state.audioNextTime < now) {
-        state.audioNextTime = now + 0.02;
+        state.audioNextTime = now + RX_AUDIO_RECOVERY_PREROLL_SEC;
       }
       if (state.audioNextTime > now + 0.35) {
         state.audioBackpressureDrops += 1;
-        state.audioNextTime = now + 0.04;
+        state.audioNextTime = now + RX_AUDIO_RESYNC_PREROLL_SEC;
         if (state.audioBackpressureDrops === 1 || state.audioBackpressureDrops % 25 === 0) {
           logEvent(`Audio queue resynced ${state.audioBackpressureDrops} time(s)`);
         }

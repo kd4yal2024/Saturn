@@ -29,8 +29,10 @@ RX and TX, and exposes a TCI WebSocket frontend to browser clients.
 - Mic audio received from TCI client as binary audio frames (stream_type 1 or 2)
 
 ### TCI Frontend
-- WebSocket server, default `0.0.0.0:50001`
+- WebSocket server, default `127.0.0.1:50001`
 - Single active client (newest connection wins)
+- Intended browser path is the Saturn Go same-origin proxy (`/tci`); expose
+  raw `:50001` only when you explicitly need direct access and trust the LAN.
 - **Commands received from client:**
   - `vfo:0,{ch},{hz}` — VFO A/B frequency
   - `dds:0,{hz}` — IQ center frequency
@@ -65,7 +67,10 @@ RX and TX, and exposes a TCI WebSocket frontend to browser clients.
 
 ```
 Browser (saturn-remote.html)
-        │  WebSocket :50001 (TCI)
+        │  WebSocket /tci (same-origin proxy)
+        ▼
+saturn-go / remote TLS proxy
+        │  WebSocket 127.0.0.1:50001 (TCI)
         ▼
 saturn-bridge
   ├── TciFrontend    — WebSocket accept + message routing
@@ -118,7 +123,7 @@ A ready-to-install systemd unit is in `saturn-bridge.service.example`.
 | `SATURN_BRIDGE_RADIO_PORT` | `1024` | p2app discovery port |
 | `SATURN_BRIDGE_CLIENT_HOST` | `0.0.0.0` | local UDP bind host |
 | `SATURN_BRIDGE_CLIENT_PORT` | `12000` | local UDP bind port |
-| `SATURN_BRIDGE_TCI_HOST` | `0.0.0.0` | TCI WebSocket bind host |
+| `SATURN_BRIDGE_TCI_HOST` | `127.0.0.1` | TCI WebSocket bind host |
 | `SATURN_BRIDGE_TCI_PORT` | `50001` | TCI WebSocket bind port |
 | `SATURN_BRIDGE_ENABLE_DISCOVERY` | `true` | send P2 discovery on start |
 | `SATURN_BRIDGE_HP_PERIOD_MS` | `200` | high-priority send interval |

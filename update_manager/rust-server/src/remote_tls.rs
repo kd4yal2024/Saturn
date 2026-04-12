@@ -2,6 +2,7 @@ use std::{
     collections::BTreeSet,
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
     path::{Path, PathBuf},
+    sync::OnceLock,
 };
 
 use axum::{
@@ -9,24 +10,39 @@ use axum::{
         ws::{Message as AxumMessage, WebSocket, WebSocketUpgrade},
         State,
     },
-    http::{header, HeaderMap, StatusCode},
+    http::{header, HeaderMap, HeaderValue, StatusCode},
     response::{IntoResponse, Response},
     routing::get,
     Router,
 };
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use futures_util::{SinkExt, StreamExt};
 use rcgen::{CertificateParams, DistinguishedName, DnType, IsCa, KeyPair, SanType};
 use tokio_tungstenite::{connect_async, tungstenite::Message as TungsteniteMessage};
 use tracing::{error, info, warn};
 
 use crate::{
-    pages::{healthz, remote_handler},
+    pages::{healthz, serve_page},
     state::AppState,
 };
 
 type RemoteTlsResult<T> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
 const DEFAULT_REMOTE_TLS_ADDR: &str = "0.0.0.0:8443";
+const REMOTE_BASIC_AUTH_ENV: &str = "SATURN_REMOTE_BASIC_AUTH";
+const REMOTE_BASIC_AUTH_CHALLENGE: &str = "Basic realm=\"Saturn Remote\", charset=\"UTF-8\"";
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct NormalizedAuthority {
+    host: String,
+    port: u16,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct OriginAuthority {
+    authority: NormalizedAuthority,
+    default_port: u16,
+}
 
 pub struct RemoteTlsConfig {
     pub addr: Option<SocketAddr>,
@@ -100,71 +116,159 @@ pub async fn ensure_self_signed_cert(cert_path: &Path, key_path: &Path) -> Remot
 
 pub fn remote_tls_router(state: AppState) -> Router {
     Router::new()
-        .route("/", get(remote_handler))
-        .route("/remote", get(remote_handler))
-        .route("/remote.html", get(remote_handler))
-        .route("/saturn-remote", get(remote_handler))
-        .route("/saturn-remote.html", get(remote_handler))
+        .route("/", get(remote_page_handler))
+        .route("/remote", get(remote_page_handler))
+        .route("/remote.html", get(remote_page_handler))
+        .route("/saturn-remote", get(remote_page_handler))
+        .route("/saturn-remote.html", get(remote_page_handler))
         .route("/healthz", get(healthz))
         .route("/tci", get(remote_bridge_ws_handler))
         .with_state(state)
 }
 
-async fn remote_bridge_ws_handler(
+async fn remote_page_handler(headers: HeaderMap, State(state): State<AppState>) -> Response {
+    if let Err(rejection) = check_remote_basic_auth(&headers) {
+        return rejection;
+    }
+    serve_page(&state.webroot, "saturn-remote.html").await
+}
+
+pub async fn remote_bridge_ws_handler(
     headers: HeaderMap,
     ws: WebSocketUpgrade,
     State(state): State<AppState>,
 ) -> Response {
+    if let Err(rejection) = check_remote_basic_auth(&headers) {
+        return rejection;
+    }
     if let Err(rejection) = check_ws_origin(&headers) {
         return rejection;
     }
     ws.on_upgrade(move |socket| proxy_bridge_socket(socket, state.bridge_ws_url))
 }
 
-/// Reject WebSocket upgrades whose Origin header names a different host than
-/// the request Host.  Browsers always send Origin on WebSocket handshakes, so
-/// a mismatch indicates a cross-origin request from another page.
-/// Native (non-browser) clients that omit Origin entirely are allowed through.
+/// Reject WebSocket upgrades whose Origin authority differs from the request
+/// Host authority. This is the browser-facing proxy path, so require an Origin
+/// header and treat host+port mismatches as cross-origin.
 fn check_ws_origin(headers: &HeaderMap) -> Result<(), Response> {
     let Some(origin) = headers.get(header::ORIGIN).and_then(|v| v.to_str().ok()) else {
-        return Ok(()); // no Origin header — native client, allow
+        return Err((StatusCode::FORBIDDEN, "missing Origin header").into_response());
     };
     if origin.eq_ignore_ascii_case("null") {
         // Opaque origin (sandboxed iframe, data: URL, etc.) — reject.
         return Err((StatusCode::FORBIDDEN, "cross-origin websocket rejected").into_response());
     }
-    let origin_host = ws_host_from_url(origin)
+    let origin_authority = origin_authority_from_url(origin)
         .ok_or_else(|| (StatusCode::FORBIDDEN, "invalid Origin header").into_response())?;
     let request_host = headers
         .get(header::HOST)
         .and_then(|v| v.to_str().ok())
-        .and_then(ws_host_from_authority)
+        .and_then(|v| authority_from_host_header(v, Some(origin_authority.default_port)))
         .ok_or_else(|| (StatusCode::BAD_REQUEST, "missing Host header").into_response())?;
-    if origin_host != request_host {
+    if origin_authority.authority != request_host {
         return Err((StatusCode::FORBIDDEN, "cross-origin websocket rejected").into_response());
     }
     Ok(())
 }
 
-fn ws_host_from_authority(value: &str) -> Option<String> {
+fn check_remote_basic_auth(headers: &HeaderMap) -> Result<(), Response> {
+    let Some(expected) = configured_basic_auth_header() else {
+        return Ok(());
+    };
+    let actual = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .map(str::trim);
+    if actual == Some(expected) {
+        return Ok(());
+    }
+
+    let mut response = (StatusCode::UNAUTHORIZED, "authentication required").into_response();
+    response.headers_mut().insert(
+        header::WWW_AUTHENTICATE,
+        HeaderValue::from_static(REMOTE_BASIC_AUTH_CHALLENGE),
+    );
+    Err(response)
+}
+
+fn configured_basic_auth_header() -> Option<&'static str> {
+    static AUTH_HEADER: OnceLock<Option<String>> = OnceLock::new();
+    AUTH_HEADER
+        .get_or_init(|| match std::env::var(REMOTE_BASIC_AUTH_ENV) {
+            Ok(raw) => build_basic_auth_header(&raw).or_else(|| {
+                warn!(
+                    "{REMOTE_BASIC_AUTH_ENV} is set but must use the format username:password"
+                );
+                None
+            }),
+            Err(_) => None,
+        })
+        .as_deref()
+}
+
+fn build_basic_auth_header(spec: &str) -> Option<String> {
+    let trimmed = spec.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let (username, password) = trimmed.split_once(':')?;
+    Some(format!(
+        "Basic {}",
+        BASE64.encode(format!("{username}:{password}"))
+    ))
+}
+
+fn authority_from_host_header(value: &str, default_port: Option<u16>) -> Option<NormalizedAuthority> {
     let authority = value.trim().rsplit('@').next().unwrap_or(value.trim()).trim();
     if authority.is_empty() {
         return None;
     }
     if authority.starts_with('[') {
-        // IPv6 literal — include the brackets, drop the port
         let end = authority.find(']')?;
-        return Some(authority[..=end].to_ascii_lowercase());
+        let host = authority[..=end].to_ascii_lowercase();
+        let remainder = authority[end + 1..].trim();
+        let port = if remainder.is_empty() {
+            default_port?
+        } else if let Some(port_text) = remainder.strip_prefix(':') {
+            port_text.parse::<u16>().ok()?
+        } else {
+            return None;
+        };
+        return Some(NormalizedAuthority { host, port });
     }
-    let host = authority.split(':').next().unwrap_or("").trim().to_ascii_lowercase();
-    if host.is_empty() { None } else { Some(host) }
+    let (host_text, port) = match authority.rsplit_once(':') {
+        Some((host_text, port_text))
+            if !host_text.contains(':')
+                && !port_text.is_empty()
+                && port_text.chars().all(|ch| ch.is_ascii_digit()) =>
+        {
+            (host_text.trim(), port_text.parse::<u16>().ok()?)
+        }
+        _ => (authority, default_port?),
+    };
+    let host = host_text.trim().to_ascii_lowercase();
+    if host.is_empty() {
+        None
+    } else {
+        Some(NormalizedAuthority { host, port })
+    }
 }
 
-fn ws_host_from_url(value: &str) -> Option<String> {
+fn origin_authority_from_url(value: &str) -> Option<OriginAuthority> {
     let scheme_end = value.find("://")?;
+    let scheme = value[..scheme_end].trim().to_ascii_lowercase();
+    let default_port = match scheme.as_str() {
+        "http" | "ws" => 80,
+        "https" | "wss" => 443,
+        _ => return None,
+    };
     let rest = &value[scheme_end + 3..];
     let authority = rest.split('/').next().unwrap_or("");
-    ws_host_from_authority(authority)
+    let authority = authority_from_host_header(authority, Some(default_port))?;
+    Some(OriginAuthority {
+        authority,
+        default_port,
+    })
 }
 
 async fn proxy_bridge_socket(client: WebSocket, bridge_ws_url: String) {
@@ -332,4 +436,85 @@ fn collect_subject_alt_names() -> Vec<SanType> {
         sans.push(SanType::IpAddress(ip));
     }
     sans
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn builds_basic_auth_header_from_username_and_password() {
+        assert_eq!(
+            build_basic_auth_header("admin:secret").as_deref(),
+            Some("Basic YWRtaW46c2VjcmV0")
+        );
+    }
+
+    #[test]
+    fn rejects_malformed_basic_auth_spec() {
+        assert_eq!(build_basic_auth_header("missing-delimiter"), None);
+        assert_eq!(build_basic_auth_header(""), None);
+    }
+
+    #[test]
+    fn parses_origin_authority_with_explicit_port() {
+        assert_eq!(
+            origin_authority_from_url("https://radio.local:8443/tci"),
+            Some(OriginAuthority {
+                authority: NormalizedAuthority {
+                    host: "radio.local".to_string(),
+                    port: 8443,
+                },
+                default_port: 443,
+            })
+        );
+    }
+
+    #[test]
+    fn parses_origin_authority_with_default_https_port() {
+        assert_eq!(
+            origin_authority_from_url("https://radio.local/tci"),
+            Some(OriginAuthority {
+                authority: NormalizedAuthority {
+                    host: "radio.local".to_string(),
+                    port: 443,
+                },
+                default_port: 443,
+            })
+        );
+    }
+
+    #[test]
+    fn parses_host_authority_with_ipv6_and_port() {
+        assert_eq!(
+            authority_from_host_header("[::1]:8443", Some(443)),
+            Some(NormalizedAuthority {
+                host: "[::1]".to_string(),
+                port: 8443,
+            })
+        );
+    }
+
+    #[test]
+    fn check_ws_origin_rejects_cross_origin_port_mismatch() {
+        let mut headers = HeaderMap::new();
+        headers.insert(header::ORIGIN, HeaderValue::from_static("https://radio.local:3000"));
+        headers.insert(header::HOST, HeaderValue::from_static("radio.local:8443"));
+        assert!(check_ws_origin(&headers).is_err());
+    }
+
+    #[test]
+    fn check_ws_origin_accepts_same_origin_authority() {
+        let mut headers = HeaderMap::new();
+        headers.insert(header::ORIGIN, HeaderValue::from_static("https://radio.local:8443"));
+        headers.insert(header::HOST, HeaderValue::from_static("radio.local:8443"));
+        assert!(check_ws_origin(&headers).is_ok());
+    }
+
+    #[test]
+    fn check_ws_origin_requires_origin_header() {
+        let mut headers = HeaderMap::new();
+        headers.insert(header::HOST, HeaderValue::from_static("radio.local:8443"));
+        assert!(check_ws_origin(&headers).is_err());
+    }
 }

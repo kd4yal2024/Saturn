@@ -13,7 +13,9 @@ use crate::auth::{change_password, exit_server, kill_process};
 use crate::clone::{pi_clone_cancel, pi_clone_start, pi_clone_status, pi_devices, pi_wipe_target};
 use crate::image::{pi_image_cancel, pi_image_download, pi_image_start, pi_image_status};
 use crate::repair::{repair_pack, verify_system_config};
-use crate::remote_tls::{ensure_self_signed_cert, load_remote_tls_config, remote_tls_router};
+use crate::remote_tls::{
+    ensure_self_signed_cert, load_remote_tls_config, remote_bridge_ws_handler, remote_tls_router,
+};
 use crate::middleware::csrf_protect;
 use crate::monitor::{get_system_data, network_test};
 use crate::pages::{
@@ -224,6 +226,7 @@ async fn main() {
         .route("/remote.html", get(remote_handler))
         .route("/saturn-remote", get(remote_handler))
         .route("/saturn-remote.html", get(remote_handler))
+        .route("/tci", get(remote_bridge_ws_handler))
         .route("/monitor", get(monitor_handler))
         .route("/monitor.html", get(monitor_handler))
         .route("/healthz", get(healthz))

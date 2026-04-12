@@ -56,11 +56,14 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut next_tx_keepalive_at = Instant::now();
     let mut tx_silence_keepalive_active = false;
     loop {
+        let mut did_work = false;
         let mut needs_bootstrap = false;
         let mut needs_stop = false;
         let mut needs_duc_specific = false;
+        let mut needs_high_priority = false;
 
         while let Some(command) = tci.try_recv_command() {
+            did_work = true;
             let mut model = radio_model.lock().unwrap();
             let mut reconfigure_ddc = false;
 
@@ -69,12 +72,14 @@ fn main() -> Result<(), Box<dyn Error>> {
                     model.desired.vfo_a_hz = freq_hz;
                     model.desired.iq_center_hz = freq_hz;
                     model.desired.tx_frequency_hz = freq_hz;
+                    needs_high_priority = true;
                 }
                 TciCommand::SetVfoB(freq_hz) => {
                     model.desired.vfo_b_hz = freq_hz;
                 }
                 TciCommand::SetIqCenter(freq_hz) => {
                     model.desired.iq_center_hz = freq_hz;
+                    needs_high_priority = true;
                 }
                 TciCommand::SetMode(mode) => {
                     model.desired.mode = mode;
@@ -95,6 +100,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 }
                 TciCommand::SetRxAntenna(antenna) => {
                     model.desired.rx_antenna = antenna.clamp(1, 3);
+                    needs_high_priority = true;
                 }
                 TciCommand::SetRxVolume(volume_db) => {
                     model.desired.rx_volume_db = volume_db.clamp(-40.0, 12.0);
@@ -137,10 +143,12 @@ fn main() -> Result<(), Box<dyn Error>> {
                     tci.publish_audio_started(wdsp.audio_sample_rate_hz());
                 }
                 TciCommand::SetAudioFrameSamples(sample_count) => {
-                    if sample_count != 2048 {
+                    let normalized = wdsp.set_audio_frame_float_count(sample_count as usize) as u32;
+                    if sample_count != normalized {
                         eprintln!(
-                            "saturn-bridge: requested audio frame size {} float32 samples, using 2048",
-                            sample_count
+                            "saturn-bridge: requested audio frame size {} float32 samples, using {}",
+                            sample_count,
+                            normalized
                         );
                     }
                 }
@@ -164,17 +172,21 @@ fn main() -> Result<(), Box<dyn Error>> {
                     println!("saturn-bridge: no TCI clients — releasing P2 controller role");
                 }
                 TciCommand::SetTxEnabled(enabled) => {
-                    model.desired.tx_enabled = enabled;
-                    wdsp_tx.set_active(enabled);
-                    needs_duc_specific = true;
-                    if enabled {
-                        let now = Instant::now();
-                        last_tx_audio_at = now.checked_sub(tx_silence_gap).unwrap_or(now);
-                        next_tx_keepalive_at = now;
-                    } else {
-                        tx_silence_keepalive_active = false;
+                    if model.desired.tx_enabled != enabled {
+                        model.desired.tx_enabled = enabled;
+                        wdsp.reset_stream_buffers();
+                        wdsp_tx.set_active(enabled);
+                        needs_duc_specific = true;
+                        needs_high_priority = true;
+                        if enabled {
+                            let now = Instant::now();
+                            last_tx_audio_at = now.checked_sub(tx_silence_gap).unwrap_or(now);
+                            next_tx_keepalive_at = now;
+                        } else {
+                            tx_silence_keepalive_active = false;
+                        }
+                        println!("saturn-bridge: TX state -> {}", if enabled { "ON" } else { "OFF" });
                     }
-                    println!("saturn-bridge: TX state -> {}", if enabled { "ON" } else { "OFF" });
                 }
                 TciCommand::SetNoiseBlankerMode(mode) => {
                     model.desired.nb_mode = mode;
@@ -190,6 +202,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 }
                 TciCommand::SetTxDrive(drive) => {
                     model.desired.tx_drive = drive.min(100);
+                    needs_high_priority = true;
                 }
                 TciCommand::SetTxMicGain(gain_db) => {
                     model.desired.tx_mic_gain_db = gain_db.clamp(-20.0, 20.0);
@@ -264,6 +277,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         if needs_duc_specific {
             session.send_duc_specific()?;
             last_duc_specific = Instant::now();
+            did_work = true;
         }
 
         // bootstrap() acquires the radio_model lock internally, so it must be called
@@ -271,15 +285,23 @@ fn main() -> Result<(), Box<dyn Error>> {
         if needs_bootstrap {
             session.bootstrap(&radio_model)?;
             last_duc_specific = Instant::now();
+            did_work = true;
         }
         if needs_stop {
             session.send_stop()?;
+            did_work = true;
+        }
+        if needs_high_priority {
+            let model = radio_model.lock().unwrap();
+            session.send_high_priority(&model)?;
+            did_work = true;
         }
 
         let running = { radio_model.lock().unwrap().desired.running };
         if running && last_duc_specific.elapsed() >= config.high_priority_period {
             session.send_duc_specific()?;
             last_duc_specific = Instant::now();
+            did_work = true;
         }
 
         let tx_enabled = { radio_model.lock().unwrap().desired.tx_enabled };
@@ -298,9 +320,13 @@ fn main() -> Result<(), Box<dyn Error>> {
             if sent_packets == 8 && now >= next_tx_keepalive_at {
                 next_tx_keepalive_at = now + tx_packet_period;
             }
+            if sent_packets > 0 {
+                did_work = true;
+            }
         }
 
         if let Some(event) = session.recv_event()? {
+            did_work = true;
             let mut model = radio_model.lock().unwrap();
             match event {
                 P2Event::HighPriorityFromSdr(packet) => {
@@ -334,10 +360,15 @@ fn main() -> Result<(), Box<dyn Error>> {
             let model = radio_model.lock().unwrap();
             println!("saturn-bridge: {}", model.status_line());
             last_status = Instant::now();
+            did_work = true;
         }
 
         if stop_flag.load(Ordering::Relaxed) {
             break;
+        }
+
+        if !did_work {
+            thread::sleep(Duration::from_millis(1));
         }
     }
 

@@ -381,6 +381,22 @@ impl WdspRxEngine {
         WDSP_AUDIO_RATE_HZ
     }
 
+    pub fn set_audio_frame_float_count(&mut self, frame_float_count: usize) -> usize {
+        let normalized = frame_float_count.clamp(256, 8192) & !1usize;
+        if normalized != self.frame_float_count {
+            self.frame_float_count = normalized;
+            self.pending_audio.clear();
+        }
+        normalized
+    }
+
+    pub fn reset_stream_buffers(&mut self) {
+        self.pending_iq.clear();
+        self.pending_audio.clear();
+        self.input_buffer.fill(0.0);
+        self.output_buffer.fill(0.0);
+    }
+
     fn reconfigure(&mut self, model: &RadioModel) -> Result<(), WdspError> {
         let input_sample_rate_hz = model.desired.ddc0_sample_rate_khz as u32 * 1000;
         let ratio = input_sample_rate_hz / WDSP_AUDIO_RATE_HZ;

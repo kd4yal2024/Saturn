@@ -124,6 +124,7 @@ mod tests {
             custom_scripts_file: tmp.join("custom_scripts.json"),
             scripts_dir: tmp.join("scripts"),
             saturn_addr: "127.0.0.1:8080".to_string(),
+            bridge_ws_url: "ws://127.0.0.1:50001".to_string(),
             repo_root: std::sync::Arc::new(std::sync::RwLock::new(tmp.clone())),
             repo_root_file: tmp.join("repo_root"),
             update_policy_file: tmp.join("update_policy.json"),

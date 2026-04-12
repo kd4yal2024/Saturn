@@ -26,7 +26,7 @@ impl Default for BridgeConfig {
         Self {
             radio_command_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), COMMAND_DISCOVERY_PORT),
             client_bind_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 12000),
-            tci_bind_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 50001),
+            tci_bind_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 50001),
             port_map: P2PortMap::default(),
             enable_discovery: true,
             discovery_timeout: Duration::from_millis(500),
@@ -49,7 +49,7 @@ impl BridgeConfig {
         let radio_port = parse_env_u16("SATURN_BRIDGE_RADIO_PORT", defaults.radio_command_addr.port());
         let client_host = env::var("SATURN_BRIDGE_CLIENT_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
         let client_port = parse_env_u16("SATURN_BRIDGE_CLIENT_PORT", defaults.client_bind_addr.port());
-        let tci_host = env::var("SATURN_BRIDGE_TCI_HOST").unwrap_or_else(|_| "0.0.0.0".to_string());
+        let tci_host = env::var("SATURN_BRIDGE_TCI_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
         let tci_port = parse_env_u16("SATURN_BRIDGE_TCI_PORT", defaults.tci_bind_addr.port());
 
         Self {

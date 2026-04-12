@@ -7,7 +7,8 @@ use std::thread;
 use std::time::Duration;
 
 use tungstenite::error::Error as WsError;
-use tungstenite::{accept, Message};
+use tungstenite::protocol::WebSocketConfig;
+use tungstenite::{accept_with_config, Message};
 
 use crate::config::BridgeConfig;
 use crate::radio_model::{AgcMode, DemodMode, NoiseBlankerMode, NoiseReductionMode, RadioModel};
@@ -76,6 +77,10 @@ struct ClientState {
     audio_frame_float_count: u32,
     audio_channels: u32,
 }
+
+const MAX_TCI_INBOUND_MESSAGE_BYTES: usize = 256 * 1024;
+const MAX_TCI_INBOUND_FRAME_BYTES: usize = 256 * 1024;
+const MAX_TCI_MIC_FLOAT_SAMPLES: usize = 32_768;
 
 pub struct TciFrontend {
     command_rx: Receiver<TciCommand>,
@@ -296,7 +301,7 @@ fn handle_client(
     radio_model: &Arc<Mutex<RadioModel>>,
 ) {
     let _ = stream.set_nonblocking(true);
-    match accept(stream) {
+    match accept_with_config(stream, Some(tci_websocket_config())) {
         Ok(mut websocket) => {
             if latest_client.load(Ordering::SeqCst) != client_id {
                 let _ = websocket.close(None);
@@ -835,6 +840,9 @@ fn parse_tci_mic_frame(data: &[u8]) -> Option<Vec<f32>> {
         return None;
     }
     let sample_count = u32::from_le_bytes(data[20..24].try_into().ok()?) as usize;
+    if sample_count == 0 || sample_count > MAX_TCI_MIC_FLOAT_SAMPLES {
+        return None;
+    }
     let payload = &data[64..];
     if payload.len() < sample_count * 4 {
         return None;
@@ -845,6 +853,14 @@ fn parse_tci_mic_frame(data: &[u8]) -> Option<Vec<f32>> {
         samples.push(f32::from_le_bytes(bytes));
     }
     Some(samples)
+}
+
+fn tci_websocket_config() -> WebSocketConfig {
+    WebSocketConfig {
+        max_message_size: Some(MAX_TCI_INBOUND_MESSAGE_BYTES),
+        max_frame_size: Some(MAX_TCI_INBOUND_FRAME_BYTES),
+        ..WebSocketConfig::default()
+    }
 }
 
 fn send_outbound(
@@ -976,6 +992,23 @@ mod tests {
         assert_eq!(u32::from_le_bytes(frame[4..8].try_into().unwrap()), 48_000);
         assert_eq!(u32::from_le_bytes(frame[24..28].try_into().unwrap()), 1);
         assert_eq!(u32::from_le_bytes(frame[28..32].try_into().unwrap()), 2);
+    }
+
+    #[test]
+    fn rejects_oversized_tci_mic_frames() {
+        let sample_count = (MAX_TCI_MIC_FLOAT_SAMPLES + 1) as u32;
+        let mut frame = vec![0u8; 64];
+        write_u32_le(&mut frame, 20, sample_count);
+        write_u32_le(&mut frame, 24, 2);
+        frame.resize(64 + sample_count as usize * 4, 0);
+        assert!(parse_tci_mic_frame(&frame).is_none());
+    }
+
+    #[test]
+    fn websocket_config_limits_inbound_message_size() {
+        let config = tci_websocket_config();
+        assert_eq!(config.max_message_size, Some(MAX_TCI_INBOUND_MESSAGE_BYTES));
+        assert_eq!(config.max_frame_size, Some(MAX_TCI_INBOUND_FRAME_BYTES));
     }
 
     #[test]
