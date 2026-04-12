@@ -149,10 +149,17 @@
           <a href="./backup" class="inline-block mt-2 text-sm underline opacity-90">Manage repo roots in Backup / Restore</a>
         </div>
 
+        <div id="upd-repo-warning" class="hidden mb-3 px-3 py-2 rounded text-sm" style="background:rgba(255,200,0,0.15);border:1px solid rgba(255,200,0,0.5);">
+          ⚠ The saved repo URL does not match the default (<strong>kd4yal2024/Saturn</strong>). Anonymous G2 updates require a public GitHub repo.
+          <button type="button" onclick="document.getElementById('upd-repo-url').value='https://github.com/kd4yal2024/Saturn';document.getElementById('upd-repo-warning').classList.add('hidden');" class="ml-2 underline opacity-90">Reset to default</button>
+        </div>
         <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
           <div>
             <label class="block text-sm mb-1">GitHub Repo URL</label>
-            <input id="upd-repo-url" type="text" class="field px-3 py-2 w-full" placeholder="https://github.com/kd4yal2024/Saturn" />
+            <div class="flex gap-2">
+              <input id="upd-repo-url" type="text" class="field px-3 py-2 w-full" placeholder="https://github.com/kd4yal2024/Saturn" />
+              <button type="button" id="upd-repo-reset" class="btn btn-ghost px-3 py-2 text-xs whitespace-nowrap" title="Reset to kd4yal2024/Saturn">Reset default</button>
+            </div>
           </div>
           <div>
             <label class="block text-sm mb-1">Branch / Ref</label>
@@ -682,6 +689,7 @@ function applyUpdatePolicyToForm(policy){
   if (!policy) return;
   updPolicyCache = { ...updPolicyCache, ...policy };
   $('upd-repo-url').value = normalizeRepoUrl(policy.owner, policy.repo);
+  checkRepoWarning();
   const branch = String(policy.custom_ref || policy.stable_ref || 'main').trim() || 'main';
   $('upd-branch').value = branch;
   $('upd-health-url').value = String(policy.healthcheck_url || updPolicyCache.healthcheck_url || 'http://127.0.0.1:8080/healthz');
@@ -773,8 +781,27 @@ $('upd-policy-refresh').addEventListener('click', async ()=>{
   await loadActiveRepoRoot();
 });
 
-$('upd-repo-url').addEventListener('input', syncG2ActionButtons);
-$('upd-repo-url').addEventListener('blur', syncG2ActionButtons);
+const CANONICAL_REPO_URL = 'https://github.com/kd4yal2024/Saturn';
+
+function checkRepoWarning(){
+  const val = ($('upd-repo-url').value || '').trim().replace(/\.git$/i, '').toLowerCase();
+  const canonical = CANONICAL_REPO_URL.toLowerCase();
+  const warn = $('upd-repo-warning');
+  if (val && val !== canonical) {
+    warn.classList.remove('hidden');
+  } else {
+    warn.classList.add('hidden');
+  }
+}
+
+$('upd-repo-reset').addEventListener('click', ()=>{
+  $('upd-repo-url').value = CANONICAL_REPO_URL;
+  $('upd-repo-warning').classList.add('hidden');
+  syncG2ActionButtons();
+});
+
+$('upd-repo-url').addEventListener('input', ()=>{ syncG2ActionButtons(); checkRepoWarning(); });
+$('upd-repo-url').addEventListener('blur', ()=>{ syncG2ActionButtons(); checkRepoWarning(); });
 
 $('upd-policy-save').addEventListener('click', async ()=>{
   try{

@@ -890,6 +890,45 @@ pub async fn set_update_policy(
     State(state): State<AppState>,
     Json(policy): Json<UpdatePolicy>,
 ) -> Response {
+    // Probe the repo for anonymous reachability before persisting, so a bad or
+    // private repo URL is rejected at save time rather than at update time.
+    let normalized_pre = normalize_update_policy(policy.clone(), &state);
+    if normalized_pre.repo_url_configured {
+        let probe_url = expected_remote_url(&normalized_pre);
+        let probe = Command::new("git")
+            .arg("ls-remote")
+            .arg("--symref")
+            .arg(&probe_url)
+            .arg("HEAD")
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .output()
+            .await;
+        match probe {
+            Ok(out) if out.status.success() => {}
+            Ok(out) => {
+                let stderr = String::from_utf8_lossy(&out.stderr);
+                let msg = if stderr.contains("could not read Username")
+                    || stderr.contains("terminal prompts disabled")
+                    || stderr.contains("Authentication failed")
+                {
+                    format!(
+                        "Repo {probe_url} is not publicly reachable over HTTPS. \
+                        Anonymous G2 updates require a public GitHub repo. \
+                        Check the owner/repo spelling (e.g. kd4yal2024/Saturn)."
+                    )
+                } else {
+                    format!("Cannot reach repo {probe_url}: {stderr}")
+                };
+                return json_error(StatusCode::BAD_REQUEST, &msg);
+            }
+            Err(e) => {
+                return json_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    &format!("failed to probe repo: {e}"),
+                );
+            }
+        }
+    }
     match save_update_policy(&state, policy).await {
         Ok(policy) => {
             Json(serde_json::json!({ "status": "ok", "policy": policy })).into_response()
