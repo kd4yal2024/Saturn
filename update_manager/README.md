@@ -221,6 +221,11 @@ If a script entry does not define `version`, `/get_versions` now returns
   - sync packaged scripts into `/opt/saturn-go/scripts` without removing browser-managed extras
   - refresh trusted helper copies in `/usr/local/lib/saturn-go/scripts` and rewrite the narrow sudoers policy
   - dispatch a detached root helper to stop/copy/start `saturn-go.service`
+- When a Saturn Go policy repo URL is provided, `update-saturn-go.sh` now
+  verifies that the repo/ref is publicly reachable over HTTPS and fetches
+  directly from that policy URL instead of rewriting the local git remote. This
+  keeps anonymous/self-update flows from failing with ambiguous GitHub
+  credential prompts when the configured repo is private or mistyped.
 - The page also runs `/opt/saturn-go/scripts/xdma-doctor.sh` for a classified
   read-only XDMA/PCIe report. That wrapper escalates to the root-owned helper
   copy at `/usr/local/lib/saturn-go/scripts/saturn-xdma-doctor.sh`. When the

@@ -63,6 +63,13 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
 - Saturn Go page now includes an `XDMA Doctor` action that runs a classified read-only PCIe/XDMA report through the existing privileged helper lane.
 
 ### Changed
+- `update-G2.py` and `update-saturn-go.sh` now verify that configured policy
+  repos/refs are publicly reachable over HTTPS before pulling, use the
+  validated policy URL directly instead of rewriting the local git remote, and
+  surface a clear "public repo required" error when a private or mistyped
+  GitHub repo is saved for unattended/anonymous update flows.
+- `update.html` and `saturngo.html` now warn that saved GitHub repos must be
+  public for unattended or anonymous appliance/self-update runs.
 - `g2-version-info.sh` now prefers live `/p23_perf` FPGA/runtime metadata for
   firmware version, product/version, bit-file date code, fallback state, and
   die temperature, using the `p2app.service` startup-banner journal scrape only

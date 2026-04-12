@@ -84,6 +84,67 @@ run_cmd(){
   "$@"
 }
 
+run_git_no_prompt(){
+  if (( DRY_RUN )); then
+    info "[dry-run] GIT_TERMINAL_PROMPT=0 $*"
+    return 0
+  fi
+  if (( VERBOSE )); then
+    info "+ GIT_TERMINAL_PROMPT=0 $*"
+  fi
+  GIT_TERMINAL_PROMPT=0 "$@"
+}
+
+summarize_cmd_error(){
+  local out="${1-}"
+  local last_line=""
+  while IFS= read -r line; do
+    [[ -n "$line" ]] && last_line="$line"
+  done <<< "$out"
+  if [[ -n "$last_line" ]]; then
+    printf '%s\n' "$last_line"
+  else
+    printf 'Unknown command error\n'
+  fi
+}
+
+ensure_public_policy_repo_accessible(){
+  local policy_url="${1-}"
+  local target_ref="${2-}"
+  local out rc lower detail
+
+  if (( DRY_RUN )); then
+    info "[dry-run] validate public policy repo: $policy_url @ $target_ref"
+    return 0
+  fi
+
+  set +e
+  out="$(GIT_TERMINAL_PROMPT=0 git ls-remote --symref "$policy_url" HEAD 2>&1)"
+  rc=$?
+  set -e
+  if (( rc != 0 )); then
+    lower="${out,,}"
+    detail="$(summarize_cmd_error "$out")"
+    if [[ "$lower" == *"could not read username"* || "$lower" == *"authentication failed"* ]]; then
+      detail="GitHub requested credentials for $policy_url. This usually means the repo is private or the owner/repo is misspelled."
+    elif [[ "$lower" == *"repository not found"* || "$lower" == *"not found"* ]]; then
+      detail="GitHub could not find $policy_url. Check the owner/repo spelling."
+    fi
+    die "Configured Saturn Go repo $policy_url is not publicly reachable over HTTPS. Anonymous/self-update flows require a public GitHub repo. $detail"
+  fi
+
+  if [[ -n "$target_ref" && ! "$target_ref" =~ ^[0-9a-fA-F]{7,40}$ ]]; then
+    set +e
+    out="$(GIT_TERMINAL_PROMPT=0 git ls-remote --exit-code "$policy_url" "$target_ref" 2>&1)"
+    rc=$?
+    set -e
+    if (( rc != 0 )); then
+      detail="$(summarize_cmd_error "$out")"
+      die "Configured Saturn Go ref '$target_ref' was not found in public repo $policy_url. $detail"
+    fi
+  fi
+}
+
 need_cmd(){
   command -v "$1" >/dev/null 2>&1 || die "Required command not found: $1"
 }
@@ -255,8 +316,9 @@ if (( ! SKIP_GIT )); then
   fi
 
   info "Updating git remote and fetching target ref..."
-  run_cmd git -C "$REPO_ROOT" remote set-url "$SATURNGO_REMOTE" "$SATURNGO_URL"
-  run_cmd git -C "$REPO_ROOT" fetch --prune "$SATURNGO_REMOTE" "$SATURNGO_REF"
+  ensure_public_policy_repo_accessible "$SATURNGO_URL" "$SATURNGO_REF"
+  info "Using public policy repo directly for anonymous-safe Saturn Go update"
+  run_git_no_prompt git -C "$REPO_ROOT" fetch --prune "$SATURNGO_URL" "$SATURNGO_REF"
   if (( ! DRY_RUN )); then
     # Reset only after clean-tree checks to avoid clobbering local work unexpectedly.
     run_cmd git -C "$REPO_ROOT" reset --hard FETCH_HEAD
