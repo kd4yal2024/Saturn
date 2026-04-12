@@ -187,6 +187,11 @@ If a script entry does not define `version`, `/get_versions` now returns
 - When launched by `/run`, the backend sets `SATURN_REPO_ROOT`, `SATURN_DIR`,
   and `SATURN_ACTIVE_REPO_ROOT` to the current active repo root before spawning
   the script.
+- When a policy repo URL is provided, `update-G2.py` verifies that the repo is
+  publicly reachable over HTTPS and then pulls directly from that policy URL
+  instead of depending on the local repo's fetch remote. This keeps anonymous
+  G2 update flows from failing with ambiguous credential prompts when a private
+  or mistyped GitHub repo is configured.
 - `/run` refuses Python script execution when the resolved script path is inside
   the active repo tree; use installed scripts under `/opt/saturn-go/scripts`.
 - Python script runs from `/run` set `PYTHONDONTWRITEBYTECODE=1` and

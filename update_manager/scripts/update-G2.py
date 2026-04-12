@@ -194,6 +194,53 @@ def run(cmd, *, live=False, cwd=None, check=True, env=None):
             err_out(f"Command failed ({cp.returncode}): {' '.join(cmd)}\n{out}")
         return cp.returncode, out
 
+def git_no_prompt_env():
+    env = os.environ.copy()
+    env["GIT_TERMINAL_PROMPT"] = "0"
+    return env
+
+def summarize_git_error(output):
+    lines = [ln.strip() for ln in (output or "").splitlines() if ln.strip()]
+    return lines[-1] if lines else "Unknown git error"
+
+def ensure_public_policy_repo_accessible(policy_url, target_ref):
+    probe_env = git_no_prompt_env()
+    rc, out = run(
+        ["git", "ls-remote", "--symref", policy_url, "HEAD"],
+        cwd=SATURN_DIR,
+        check=False,
+        env=probe_env,
+    )
+    if rc != 0:
+        lower = out.lower()
+        detail = summarize_git_error(out)
+        if "could not read username" in lower or "authentication failed" in lower:
+            detail = (
+                f"GitHub requested credentials for {policy_url}. This usually means the repo is private "
+                "or the owner/repo is misspelled."
+            )
+        elif "repository not found" in lower or "not found" in lower:
+            detail = f"GitHub could not find {policy_url}. Check the owner/repo spelling."
+        err_out(
+            f"Configured update repo {policy_url} is not publicly reachable over HTTPS. "
+            "Anonymous G2 updates require a public GitHub repo. "
+            f"{detail}"
+        )
+
+    if target_ref and not re.fullmatch(r"[0-9a-fA-F]{7,40}", target_ref):
+        rc, out = run(
+            ["git", "ls-remote", "--exit-code", policy_url, target_ref],
+            cwd=SATURN_DIR,
+            check=False,
+            env=probe_env,
+        )
+        if rc != 0:
+            detail = summarize_git_error(out)
+            err_out(
+                f"Configured update ref '{target_ref}' was not found in public repo {policy_url}. "
+                f"{detail}"
+            )
+
 def emit_web_manager_changed_marker(changed):
     global WEB_MANAGER_CHANGED
     WEB_MANAGER_CHANGED = bool(changed)
@@ -402,19 +449,25 @@ def update_git():
     target_remote = POLICY_REMOTE
     target_ref = POLICY_REF or "main"
     policy_url = POLICY_URL
+    pull_source = target_remote
     if not policy_url and POLICY_OWNER and POLICY_REPO:
         policy_url = f"https://github.com/{POLICY_OWNER}/{POLICY_REPO}.git"
 
     if policy_url:
         info(f"Policy repo: {policy_url} @ {target_ref}")
-        rc, _ = run(["git", "remote", "get-url", target_remote], cwd=SATURN_DIR, check=False)
-        if rc == 0:
-            run(["git", "remote", "set-url", target_remote, policy_url], cwd=SATURN_DIR, live=bool(args.verbose))
-        else:
-            run(["git", "remote", "add", target_remote, policy_url], cwd=SATURN_DIR, live=bool(args.verbose))
+        ensure_public_policy_repo_accessible(policy_url, target_ref)
+        info("Using public policy repo directly for anonymous-safe update")
+        pull_source = policy_url
+    else:
+        rc, out = run(["git", "remote", "get-url", target_remote], cwd=SATURN_DIR, check=False)
+        if rc != 0:
+            err_out(
+                f"Git remote '{target_remote}' is not configured and no policy repo URL was provided."
+            )
+        info(f"Remote: {out.strip()} @ {target_ref}")
 
-    # Pull from configured/default remote+ref
-    run(["git", "pull", target_remote, target_ref], cwd=SATURN_DIR, live=True)
+    # Pull from the validated policy URL when configured; otherwise use the local remote.
+    run(["git", "pull", pull_source, target_ref], cwd=SATURN_DIR, live=True, env=git_no_prompt_env())
 
     _rc, out = run(["git", "rev-parse", "--short", "HEAD"], cwd=SATURN_DIR, check=False)
     after = out.strip()
