@@ -60,7 +60,8 @@ impl DemodMode {
     pub fn default_filter_band(self) -> (i32, i32) {
         match self {
             Self::Lsb | Self::DigL => (-3000, -300),
-            Self::Usb | Self::DigU | Self::Unknown => (300, 3000),
+            Self::Usb | Self::Unknown => (50, 3050),
+            Self::DigU => (300, 3000),
             Self::Cwl => (-800, -200),
             Self::Cwu => (200, 800),
             Self::Am | Self::Sam => (-4000, 4000),
@@ -72,7 +73,7 @@ impl DemodMode {
         match self {
             Self::Lsb => (-3000, -300),
             Self::DigL => (-3000, 0),
-            Self::Usb | Self::Unknown => (300, 3000),
+            Self::Usb | Self::Unknown => (50, 3050),
             Self::DigU => (0, 3000),
             Self::Cwl => (-800, -200),
             Self::Cwu => (200, 800),
@@ -228,6 +229,7 @@ pub struct DesiredRadioState {
     pub nb_threshold: f64,
     pub anf_enabled: bool,
     pub agc_mode: AgcMode,
+    pub agc_gain: f64,
     pub filter_low_hz: i32,
     pub filter_high_hz: i32,
     pub ddc0_sample_rate_khz: u16,
@@ -286,12 +288,13 @@ impl RadioModel {
                 rx_antenna: 1,
                 mode,
                 rx_volume_db: -10.0,
-                rx_noise_reduction_mode: NoiseReductionMode::Off,
+                rx_noise_reduction_mode: NoiseReductionMode::Nr2,
                 rx_noise_reduction_level: 100.0,
                 nb_mode: NoiseBlankerMode::Off,
                 nb_threshold: 4.95,
                 anf_enabled: false,
                 agc_mode: AgcMode::Medium,
+                agc_gain: 80.0,
                 filter_low_hz,
                 filter_high_hz,
                 ddc0_sample_rate_khz,
@@ -397,7 +400,7 @@ impl RadioModel {
             .unwrap_or_else(|| format!("ddc{}=waiting", self.desired.rx_ddc_index));
 
         format!(
-            "vfoA={} vfoB={} dds={} ddc={} adc={} rxant=ANT{} mode={} vol={:.1}dB nr={}({:.0}%) nb={} anf={} agc={} tx={} drive={} filter={}..{} rate={}k {} | {} | {} | counters hp={} ddc{}={}",
+            "vfoA={} vfoB={} dds={} ddc={} adc={} rxant=ANT{} mode={} vol={:.1}dB nr={}({:.0}%) nb={} anf={} agc={} top={:.0} tx={} drive={} filter={}..{} rate={}k {} | {} | {} | counters hp={} ddc{}={}",
             self.desired.vfo_a_hz,
             self.desired.vfo_b_hz,
             self.desired.iq_center_hz,
@@ -411,6 +414,7 @@ impl RadioModel {
             self.desired.nb_mode,
             if self.desired.anf_enabled { "ON" } else { "OFF" },
             self.desired.agc_mode,
+            self.desired.agc_gain,
             if self.desired.tx_enabled { "TX" } else { "RX" },
             self.desired.tx_drive,
             self.desired.filter_low_hz,

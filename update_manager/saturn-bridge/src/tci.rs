@@ -38,6 +38,7 @@ pub enum TciCommand {
     SetNoiseBlankerThreshold(f64),
     SetAnfEnabled(bool),
     SetAgcMode(AgcMode),
+    SetAgcGain(f64),
     SetTxDrive(u8),
     SetTxMicGain(f64),
     SetTxFilterBand { low_hz: i32, high_hz: i32 },
@@ -193,6 +194,7 @@ impl TciFrontend {
         self.send_text(format!("rx_nb_threshold:0,{:.2};", model.desired.nb_threshold));
         self.send_text(format!("rx_anf:0,{};", model.desired.anf_enabled));
         self.send_text(format!("rx_agc:0,{};", model.desired.agc_mode));
+        self.send_text(format!("rx_agc_gain:0,{:.0};", model.desired.agc_gain));
         self.send_text(format!("tx_drive:0,{};", model.desired.tx_drive));
         self.send_text(format!("tx_mic_gain:0,{:.1};", model.desired.tx_mic_gain_db));
         self.send_text(format!("trx:0,{};", model.desired.tx_enabled));
@@ -455,6 +457,7 @@ fn initial_snapshot_messages(model: &RadioModel) -> Vec<String> {
         format!("rx_nb_threshold:0,{:.2};", model.desired.nb_threshold),
         format!("rx_anf:0,{};", model.desired.anf_enabled),
         format!("rx_agc:0,{};", model.desired.agc_mode),
+        format!("rx_agc_gain:0,{:.0};", model.desired.agc_gain),
         format!("tx_drive:0,{};", model.desired.tx_drive),
         format!("tx_mic_gain:0,{:.1};", model.desired.tx_mic_gain_db),
         format!("trx:0,{};", model.desired.tx_enabled),
@@ -714,6 +717,14 @@ fn parse_tci_command(command: &str, command_tx: &Sender<TciCommand>, client_stat
             let mode_arg = if args.len() >= 2 { args.get(1) } else { args.first() };
             if let Some(mode_text) = mode_arg {
                 let _ = command_tx.send(TciCommand::SetAgcMode(AgcMode::from_tci(mode_text)));
+            }
+        }
+        "rx_agc_gain" => {
+            let gain_arg = if args.len() >= 2 { args.get(1) } else { args.first() };
+            if let Some(gain_text) = gain_arg {
+                if let Ok(gain) = gain_text.trim().parse::<f64>() {
+                    let _ = command_tx.send(TciCommand::SetAgcGain(gain));
+                }
             }
         }
         "tx_drive" => {

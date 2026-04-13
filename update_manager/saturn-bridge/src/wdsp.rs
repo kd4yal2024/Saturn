@@ -211,6 +211,7 @@ pub struct WdspRxEngine {
     nb_threshold: f64,
     anf_enabled: bool,
     agc_mode: AgcMode,
+    agc_gain: f64,
     filter_low_hz: i32,
     filter_high_hz: i32,
     input_complex_samples: usize,
@@ -239,6 +240,7 @@ impl WdspRxEngine {
             nb_threshold: 4.95,
             anf_enabled: false,
             agc_mode: AgcMode::Medium,
+            agc_gain: 80.0,
             filter_low_hz: 0,
             filter_high_hz: 0,
             input_complex_samples: 0,
@@ -301,6 +303,11 @@ impl WdspRxEngine {
 
         if model.desired.agc_mode != self.agc_mode {
             self.agc_mode = model.desired.agc_mode;
+            self.apply_agc();
+        }
+
+        if (model.desired.agc_gain - self.agc_gain).abs() > f64::EPSILON {
+            self.agc_gain = model.desired.agc_gain;
             self.apply_agc();
         }
 
@@ -421,6 +428,7 @@ impl WdspRxEngine {
         self.nb_threshold = model.desired.nb_threshold;
         self.anf_enabled = model.desired.anf_enabled;
         self.agc_mode = model.desired.agc_mode;
+        self.agc_gain = model.desired.agc_gain;
         self.filter_low_hz = model.desired.filter_low_hz;
         self.filter_high_hz = model.desired.filter_high_hz;
         self.input_complex_samples = (ratio as usize) * WDSP_DSP_SIZE;
@@ -490,7 +498,7 @@ impl WdspRxEngine {
         unsafe {
             SetRXAAGCMode(self.channel_id, agc_mode);
             SetRXAAGCSlope(self.channel_id, 35);
-            SetRXAAGCTop(self.channel_id, 80.0);
+            SetRXAAGCTop(self.channel_id, self.agc_gain.clamp(0.0, 100.0));
             SetRXAAGCMaxInputLevel(self.channel_id, 1.0);
             match agc_mode {
                 AGC_OFF => {}

@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 
@@ -17,6 +18,7 @@ pub const MAX_TAR_EXPANSION_FACTOR: u64 = 10;
 // Upper bound on the raw JSON file to guard deserialization cost.
 // Derived from MAX_CUSTOM_SCRIPTS * (MAX_SCRIPT_FLAGS * MAX_SCRIPT_FLAG_LEN + per-entry overhead).
 pub const MAX_CUSTOM_SCRIPTS_FILE_BYTES: u64 = 1_048_576; // 1 MiB
+pub const MAX_REMOTE_SETTINGS_FILE_BYTES: u64 = 1_048_576; // 1 MiB
 pub const CSRF_HEADER_NAME: &str = "x-saturn-csrf";
 pub const CSRF_HEADER_VALUE: &str = "1";
 pub const RUN_LOG_MAX_LINES: usize = 5000;
@@ -32,16 +34,15 @@ pub const DEFAULT_CUSTOM_SCRIPT_SETUP_ETH_FALLBACK: &str =
     include_str!("../../../scripts/setup-eth-fallback.sh");
 pub const P23_ADC_PEAK_TELEMETRY_ENABLE_FILE: &str =
     "/dev/shm/saturn_p23_adc_peak_telemetry.enabled";
-pub const P23_ADC_PEAK_TELEMETRY_JSON_FILE: &str =
-    "/dev/shm/saturn_p23_adc_peak_telemetry.json";
-pub const P23_APP_PERF_TELEMETRY_JSON_FILE: &str =
-    "/dev/shm/saturn_p23_perf_stats.json";
+pub const P23_ADC_PEAK_TELEMETRY_JSON_FILE: &str = "/dev/shm/saturn_p23_adc_peak_telemetry.json";
+pub const P23_APP_PERF_TELEMETRY_JSON_FILE: &str = "/dev/shm/saturn_p23_perf_stats.json";
 
 #[derive(Clone)]
 pub struct AppState {
     pub webroot: PathBuf,
     pub config_path: PathBuf,
     pub custom_scripts_file: PathBuf,
+    pub remote_settings_file: PathBuf,
     pub scripts_dir: PathBuf,
     pub saturn_addr: String,
     pub bridge_ws_url: String,
@@ -88,4 +89,48 @@ pub struct RunLogQuery {
 #[derive(Deserialize)]
 pub struct PiImageStatusQuery {
     pub job_id: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+#[serde(default, rename_all = "camelCase")]
+pub struct RemoteRadioPrefs {
+    pub sample_rate: Option<u32>,
+    pub rx_adc: Option<u8>,
+    pub rx_antenna: Option<u8>,
+    pub mode: Option<String>,
+    pub rx_volume_db: Option<f64>,
+    pub rx_noise_reduction_mode: Option<String>,
+    pub rx_noise_reduction_level: Option<u8>,
+    pub rx_nb_mode: Option<String>,
+    pub rx_nb_threshold: Option<f64>,
+    pub anf_enabled: Option<bool>,
+    pub agc_mode: Option<String>,
+    pub agc_gain: Option<u8>,
+    pub filter_low: Option<i32>,
+    pub filter_high: Option<i32>,
+    pub tx_drive: Option<u8>,
+    pub tx_mic_gain_db: Option<f64>,
+    pub tx_filter_low: Option<i32>,
+    pub tx_filter_high: Option<i32>,
+    pub rx_eq_enabled: Option<bool>,
+    pub rx_eq_bands: Vec<i32>,
+    pub tx_eq_enabled: Option<bool>,
+    pub tx_eq_bands: Vec<i32>,
+    pub cfc_enabled: Option<bool>,
+    pub cfc_precomp: Option<f64>,
+    pub cfc_bands: Vec<f64>,
+    pub two_tone_enabled: Option<bool>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+#[serde(default, rename_all = "camelCase")]
+pub struct RemoteSettings {
+    pub ws_url: Option<String>,
+    pub display_zoom: Option<f64>,
+    pub frequency_lock: Option<bool>,
+    pub keep_screen_awake: Option<bool>,
+    pub layout_mode: Option<String>,
+    pub theme: Option<String>,
+    pub phone_panels: BTreeMap<String, bool>,
+    pub radio_prefs: RemoteRadioPrefs,
 }

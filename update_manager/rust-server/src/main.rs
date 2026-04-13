@@ -2,47 +2,46 @@ mod auth;
 mod clone;
 mod image;
 mod middleware;
-mod repair;
 mod monitor;
 mod pages;
 mod remote_tls;
+mod repair;
 mod state;
 mod update;
 mod util;
 use crate::auth::{change_password, exit_server, kill_process};
 use crate::clone::{pi_clone_cancel, pi_clone_start, pi_clone_status, pi_devices, pi_wipe_target};
 use crate::image::{pi_image_cancel, pi_image_download, pi_image_start, pi_image_status};
-use crate::repair::{repair_pack, verify_system_config};
-use crate::remote_tls::{
-    ensure_self_signed_cert, load_remote_tls_config, remote_bridge_ws_handler, remote_tls_router,
-};
 use crate::middleware::csrf_protect;
 use crate::monitor::{get_system_data, network_test};
 use crate::pages::{
-    backup_handler, custom_handler, deskhpsdr_handler, fallback_handler, fpga_handler,
-    healthz, monitor_handler, p23test_handler, pihpsdr_handler, remote_handler, root_handler,
+    backup_handler, custom_handler, deskhpsdr_handler, fallback_handler, fpga_handler, healthz,
+    monitor_handler, p23test_handler, pihpsdr_handler, remote_handler, root_handler,
     saturngo_handler, update_handler,
+};
+use crate::remote_tls::{
+    ensure_self_signed_cert, load_remote_tls_config, remote_bridge_ws_handler, remote_tls_router,
+};
+use crate::repair::{repair_pack, verify_system_config};
+use crate::state::{
+    AppState, CfgEntry, DefaultCustomScript, FlagsQuery, RemoteSettings, RunLogQuery,
+    DEFAULT_CUSTOM_SCRIPT_CLEAN_BACKUPS, DEFAULT_CUSTOM_SCRIPT_CLEAN_LOGS,
+    DEFAULT_CUSTOM_SCRIPT_FIX_LED_POWER_BUTTON, DEFAULT_CUSTOM_SCRIPT_SETUP_ETH_FALLBACK,
+    DEFAULT_MAX_BODY_BYTES, DEFAULT_RESTORE_MAX_UPLOAD_BYTES, MAX_CUSTOM_SCRIPTS,
+    MAX_CUSTOM_SCRIPTS_FILE_BYTES, MAX_REMOTE_SETTINGS_FILE_BYTES, MAX_TAR_EXPANSION_FACTOR,
+    P23_ADC_PEAK_TELEMETRY_ENABLE_FILE, P23_ADC_PEAK_TELEMETRY_JSON_FILE,
+    P23_APP_PERF_TELEMETRY_JSON_FILE, RUN_LOG_FETCH_MAX_LINES, RUN_LOG_MAX_LINES,
 };
 use crate::update::{
     begin_update_activity, expected_remote_url, get_repo_root, get_update_policy, list_repo_roots,
     load_update_policy, normalize_update_policy, set_repo_root, set_update_policy,
-    update_policy_repo_configured, update_rollback, update_start, update_status,
-    UpdatePolicy,
+    update_policy_repo_configured, update_rollback, update_start, update_status, UpdatePolicy,
 };
 use crate::util::{
-    backup_home_dir, current_repo_root, is_safe_backup_name_with_prefix, is_safe_custom_script_filename,
-    is_safe_script_name, is_saturn_repo_root, json_error, output_error_text, parse_boolish,
-    pihpsdr_repo_root, sanitize_custom_flags, validate_pihpsdr_repo_root, validate_saturn_repo_root,
-};
-use crate::state::{
-    AppState, CfgEntry, DefaultCustomScript, FlagsQuery, RunLogQuery,
-    DEFAULT_CUSTOM_SCRIPT_CLEAN_BACKUPS, DEFAULT_CUSTOM_SCRIPT_CLEAN_LOGS,
-    DEFAULT_CUSTOM_SCRIPT_FIX_LED_POWER_BUTTON, DEFAULT_CUSTOM_SCRIPT_SETUP_ETH_FALLBACK,
-    DEFAULT_MAX_BODY_BYTES, DEFAULT_RESTORE_MAX_UPLOAD_BYTES,
-    MAX_CUSTOM_SCRIPTS, MAX_CUSTOM_SCRIPTS_FILE_BYTES,
-    MAX_TAR_EXPANSION_FACTOR,
-    P23_ADC_PEAK_TELEMETRY_ENABLE_FILE, P23_ADC_PEAK_TELEMETRY_JSON_FILE,
-    P23_APP_PERF_TELEMETRY_JSON_FILE, RUN_LOG_FETCH_MAX_LINES, RUN_LOG_MAX_LINES,
+    backup_home_dir, current_repo_root, is_safe_backup_name_with_prefix,
+    is_safe_custom_script_filename, is_safe_script_name, is_saturn_repo_root, json_error,
+    output_error_text, parse_boolish, pihpsdr_repo_root, sanitize_custom_flags,
+    validate_pihpsdr_repo_root, validate_saturn_repo_root,
 };
 
 use axum::{
@@ -85,22 +84,25 @@ struct P23AdcTelemetryRequest {
 
 #[tokio::main]
 async fn main() {
-    tracing_subscriber::fmt()
-        .with_env_filter("info")
-        .init();
+    tracing_subscriber::fmt().with_env_filter("info").init();
 
     let addr = std::env::var("SATURN_ADDR").unwrap_or_else(|_| "127.0.0.1:8080".to_string());
-    let webroot = std::env::var("SATURN_WEBROOT").unwrap_or_else(|_| "/var/lib/saturn-web".to_string());
+    let webroot =
+        std::env::var("SATURN_WEBROOT").unwrap_or_else(|_| "/var/lib/saturn-web".to_string());
     let config_path = std::env::var("SATURN_CONFIG")
         .map(PathBuf::from)
         .unwrap_or_else(|_| PathBuf::from(format!("{webroot}/config.json")));
     let scripts_dir = std::env::var("SATURN_SCRIPTS_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|_| PathBuf::from("/opt/saturn-go/scripts"));
-    let default_state_dir = std::env::var("SATURN_STATE_DIR").unwrap_or_else(|_| "/var/lib/saturn-state".to_string());
+    let default_state_dir =
+        std::env::var("SATURN_STATE_DIR").unwrap_or_else(|_| "/var/lib/saturn-state".to_string());
     let custom_scripts_file = std::env::var("SATURN_CUSTOM_SCRIPTS_FILE")
         .map(PathBuf::from)
         .unwrap_or_else(|_| PathBuf::from(format!("{default_state_dir}/custom_scripts.json")));
+    let remote_settings_file = std::env::var("SATURN_REMOTE_SETTINGS_FILE")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from(format!("{default_state_dir}/remote_settings.json")));
     let default_repo_root = std::env::var("SATURN_REPO_ROOT").unwrap_or_else(|_| {
         let home = std::env::var("HOME").unwrap_or_else(|_| "/home/pi".to_string());
         format!("{home}/github/Saturn")
@@ -113,10 +115,14 @@ async fn main() {
         .unwrap_or_else(|_| PathBuf::from(format!("{default_state_dir}/update_policy.json")));
     let saturngo_update_policy_file = std::env::var("SATURN_SATURNGO_UPDATE_POLICY_FILE")
         .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from(format!("{default_state_dir}/saturngo_update_policy.json")));
+        .unwrap_or_else(|_| {
+            PathBuf::from(format!("{default_state_dir}/saturngo_update_policy.json"))
+        });
     let saturngo_deploy_status_file = std::env::var("SATURN_SATURNGO_DEPLOY_STATUS_FILE")
         .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from(format!("{default_state_dir}/saturngo_deploy_status.json")));
+        .unwrap_or_else(|_| {
+            PathBuf::from(format!("{default_state_dir}/saturngo_deploy_status.json"))
+        });
     let update_state_file = std::env::var("SATURN_UPDATE_STATE_FILE")
         .map(PathBuf::from)
         .unwrap_or_else(|_| PathBuf::from(format!("{default_state_dir}/update_state.json")));
@@ -143,7 +149,8 @@ async fn main() {
     // Canonicalize both paths at startup to resolve symlinks before validation,
     // so a symlink planted in SATURN_REPO_ROOT or repo_root.txt cannot bypass
     // the is_saturn_repo_root() check.
-    let mut repo_root = tokio::fs::canonicalize(&default_repo_root).await
+    let mut repo_root = tokio::fs::canonicalize(&default_repo_root)
+        .await
         .unwrap_or_else(|_| PathBuf::from(&default_repo_root));
     if let Ok(saved) = tokio::fs::read_to_string(&repo_root_file).await {
         let saved = saved.trim();
@@ -173,6 +180,9 @@ async fn main() {
     if let Some(parent) = custom_scripts_file.parent() {
         let _ = tokio::fs::create_dir_all(parent).await;
     }
+    if let Some(parent) = remote_settings_file.parent() {
+        let _ = tokio::fs::create_dir_all(parent).await;
+    }
     let _ = tokio::fs::create_dir_all(&scripts_dir).await;
     let _ = tokio::fs::create_dir_all(&snapshot_dir).await;
     let _ = tokio::fs::create_dir_all(&staging_dir).await;
@@ -182,6 +192,7 @@ async fn main() {
         webroot: PathBuf::from(webroot),
         config_path,
         custom_scripts_file,
+        remote_settings_file,
         scripts_dir,
         saturn_addr: addr.clone(),
         bridge_ws_url: bridge_ws_url.clone(),
@@ -236,6 +247,8 @@ async fn main() {
         .route("/custom_scripts", get(get_custom_scripts))
         .route("/custom_scripts", post(upsert_custom_script))
         .route("/custom_scripts_delete", post(delete_custom_script))
+        .route("/remote_settings", get(get_remote_settings))
+        .route("/remote_settings", post(set_remote_settings))
         .route("/get_fpga_images", get(get_fpga_images))
         .route("/get_repo_root", get(get_repo_root))
         .route("/list_repo_roots", get(list_repo_roots))
@@ -285,7 +298,9 @@ async fn main() {
         .layer(DefaultBodyLimit::max(max_body_bytes));
 
     let remote_tls_router = if let Some(remote_tls_addr) = remote_tls_config.addr {
-        match ensure_self_signed_cert(&remote_tls_config.cert_path, &remote_tls_config.key_path).await {
+        match ensure_self_signed_cert(&remote_tls_config.cert_path, &remote_tls_config.key_path)
+            .await
+        {
             Err(err) => {
                 warn!("Saturn Remote TLS disabled (cert setup failed): {err}");
                 None
@@ -301,9 +316,11 @@ async fn main() {
                         warn!("Saturn Remote TLS disabled (rustls config failed): {err}");
                         None
                     }
-                    Ok(rustls_config) => {
-                        Some((remote_tls_addr, rustls_config, remote_tls_router(state.clone())))
-                    }
+                    Ok(rustls_config) => Some((
+                        remote_tls_addr,
+                        rustls_config,
+                        remote_tls_router(state.clone()),
+                    )),
                 }
             }
         }
@@ -318,14 +335,18 @@ async fn main() {
     });
 
     info!("Saturn server listening on {addr}");
-    let listener = tokio::net::TcpListener::bind(&addr).await.expect("bind failed");
+    let listener = tokio::net::TcpListener::bind(&addr)
+        .await
+        .expect("bind failed");
     let http_server = serve_http(listener, app, shutdown_rx.clone());
 
     if let Some((remote_tls_addr, rustls_config, remote_tls_app)) = remote_tls_router {
         info!("Saturn Remote TLS listening on https://{remote_tls_addr}");
         let tls_shutdown = shutdown_rx.clone();
         tokio::spawn(async move {
-            if let Err(err) = serve_remote_tls(remote_tls_addr, rustls_config, remote_tls_app, tls_shutdown).await {
+            if let Err(err) =
+                serve_remote_tls(remote_tls_addr, rustls_config, remote_tls_app, tls_shutdown).await
+            {
                 error!("Saturn Remote TLS server error: {err}");
             }
         });
@@ -464,8 +485,7 @@ async fn stream_process_output<R>(
     tx: mpsc::UnboundedSender<String>,
     prefix: &'static str,
     line_sink: Option<RunLineSink>,
-)
-where
+) where
     R: AsyncRead + Unpin,
 {
     let mut buf = [0u8; 2048];
@@ -603,18 +623,30 @@ async fn ensure_default_custom_scripts(state: &AppState) -> Result<(), String> {
         match tokio::fs::metadata(&path).await {
             Ok(meta) => {
                 if !meta.is_file() {
-                    return Err(format!("default script path is not a file: {}", path.display()));
+                    return Err(format!(
+                        "default script path is not a file: {}",
+                        path.display()
+                    ));
                 }
             }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                 tokio::fs::write(&path, default.content)
                     .await
-                    .map_err(|err| format!("failed to write default script {}: {err}", path.display()))?;
+                    .map_err(|err| {
+                        format!("failed to write default script {}: {err}", path.display())
+                    })?;
                 tokio::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
                     .await
-                    .map_err(|err| format!("failed to chmod default script {}: {err}", path.display()))?;
+                    .map_err(|err| {
+                        format!("failed to chmod default script {}: {err}", path.display())
+                    })?;
             }
-            Err(e) => return Err(format!("failed to stat default script {}: {e}", path.display())),
+            Err(e) => {
+                return Err(format!(
+                    "failed to stat default script {}: {e}",
+                    path.display()
+                ))
+            }
         }
     }
 
@@ -656,7 +688,11 @@ async fn load_custom_scripts(state: &AppState) -> Result<Vec<CfgEntry>, String> 
     // are clamped before they reach any handler.
     for entry in &mut entries {
         let sanitized = sanitize_custom_flags(entry.flags.take());
-        entry.flags = if sanitized.is_empty() { None } else { Some(sanitized) };
+        entry.flags = if sanitized.is_empty() {
+            None
+        } else {
+            Some(sanitized)
+        };
     }
     Ok(entries)
 }
@@ -667,7 +703,8 @@ async fn save_custom_scripts(state: &AppState, entries: &[CfgEntry]) -> Result<(
             .await
             .map_err(|e| format!("failed to create custom scripts dir: {e}"))?;
     }
-    let bytes = serde_json::to_vec_pretty(entries).map_err(|e| format!("failed to serialize custom scripts: {e}"))?;
+    let bytes = serde_json::to_vec_pretty(entries)
+        .map_err(|e| format!("failed to serialize custom scripts: {e}"))?;
     tokio::fs::write(&state.custom_scripts_file, bytes)
         .await
         .map_err(|e| format!("failed to write custom scripts: {e}"))?;
@@ -688,7 +725,6 @@ async fn read_all_script_entries(state: &AppState) -> Result<Vec<CfgEntry>, Stri
     merged.append(&mut custom);
     Ok(merged)
 }
-
 
 #[derive(Debug, Clone)]
 struct ScriptRunLog {
@@ -782,7 +818,10 @@ async fn load_saturngo_update_policy(state: &AppState) -> Result<UpdatePolicy, S
     Ok(normalized)
 }
 
-async fn save_saturngo_update_policy(state: &AppState, policy: UpdatePolicy) -> Result<UpdatePolicy, String> {
+async fn save_saturngo_update_policy(
+    state: &AppState,
+    policy: UpdatePolicy,
+) -> Result<UpdatePolicy, String> {
     let normalized = normalize_update_policy(policy, state);
     if let Some(parent) = state.saturngo_update_policy_file.parent() {
         tokio::fs::create_dir_all(parent)
@@ -808,9 +847,74 @@ async fn get_saturngo_policy(State(state): State<AppState>) -> Response {
     }
 }
 
-async fn set_saturngo_policy(State(state): State<AppState>, Json(policy): Json<UpdatePolicy>) -> Response {
+async fn set_saturngo_policy(
+    State(state): State<AppState>,
+    Json(policy): Json<UpdatePolicy>,
+) -> Response {
     match save_saturngo_update_policy(&state, policy).await {
         Ok(policy) => Json(serde_json::json!({ "status": "ok", "policy": policy })).into_response(),
+        Err(e) => json_error(StatusCode::INTERNAL_SERVER_ERROR, &e),
+    }
+}
+
+async fn load_remote_settings_file(path: &Path) -> Result<RemoteSettings, String> {
+    let metadata = match tokio::fs::metadata(path).await {
+        Ok(metadata) => metadata,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(RemoteSettings::default()),
+        Err(e) => return Err(format!("failed to stat remote settings file: {e}")),
+    };
+    if metadata.len() > MAX_REMOTE_SETTINGS_FILE_BYTES {
+        return Err(format!(
+            "remote settings file exceeds {} bytes",
+            MAX_REMOTE_SETTINGS_FILE_BYTES
+        ));
+    }
+    let raw = tokio::fs::read_to_string(path)
+        .await
+        .map_err(|e| format!("failed to read remote settings file: {e}"))?;
+    if raw.trim().is_empty() {
+        return Ok(RemoteSettings::default());
+    }
+    serde_json::from_str::<RemoteSettings>(&raw)
+        .map_err(|e| format!("invalid remote settings file: {e}"))
+}
+
+async fn save_remote_settings_file(path: &Path, settings: &RemoteSettings) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        tokio::fs::create_dir_all(parent)
+            .await
+            .map_err(|e| format!("failed to create remote settings dir: {e}"))?;
+    }
+    let bytes = serde_json::to_vec_pretty(settings)
+        .map_err(|e| format!("failed to serialize remote settings: {e}"))?;
+    if bytes.len() as u64 > MAX_REMOTE_SETTINGS_FILE_BYTES {
+        return Err(format!(
+            "remote settings payload exceeds {} bytes",
+            MAX_REMOTE_SETTINGS_FILE_BYTES
+        ));
+    }
+    tokio::fs::write(path, bytes)
+        .await
+        .map_err(|e| format!("failed to write remote settings file: {e}"))?;
+    let _ = tokio::fs::set_permissions(path, std::fs::Permissions::from_mode(0o640)).await;
+    Ok(())
+}
+
+pub async fn get_remote_settings(State(state): State<AppState>) -> Response {
+    match load_remote_settings_file(&state.remote_settings_file).await {
+        Ok(settings) => {
+            Json(serde_json::json!({ "status": "ok", "settings": settings })).into_response()
+        }
+        Err(e) => json_error(StatusCode::INTERNAL_SERVER_ERROR, &e),
+    }
+}
+
+pub async fn set_remote_settings(
+    State(state): State<AppState>,
+    Json(settings): Json<RemoteSettings>,
+) -> Response {
+    match save_remote_settings_file(&state.remote_settings_file, &settings).await {
+        Ok(()) => Json(serde_json::json!({ "status": "ok", "settings": settings })).into_response(),
         Err(e) => json_error(StatusCode::INTERNAL_SERVER_ERROR, &e),
     }
 }
@@ -818,7 +922,9 @@ async fn set_saturngo_policy(State(state): State<AppState>, Json(policy): Json<U
 async fn get_saturngo_deploy_status(State(state): State<AppState>) -> Response {
     match tokio::fs::read_to_string(&state.saturngo_deploy_status_file).await {
         Ok(raw) => match serde_json::from_str::<serde_json::Value>(&raw) {
-            Ok(value) => Json(serde_json::json!({ "status": "ok", "deploy": value })).into_response(),
+            Ok(value) => {
+                Json(serde_json::json!({ "status": "ok", "deploy": value })).into_response()
+            }
             Err(e) => json_error(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 &format!("invalid Saturn Go deploy status file: {e}"),
@@ -923,7 +1029,8 @@ async fn get_p23_status(State(state): State<AppState>) -> Response {
     let deploy_p2 = deploy_root.join("p2app");
     let deploy_p3 = deploy_root.join("p3app");
     let current_link = deploy_root.join("current");
-    let override_file = PathBuf::from("/etc/systemd/system/p2app.service.d/10-saturn-p23-switch.conf");
+    let override_file =
+        PathBuf::from("/etc/systemd/system/p2app.service.d/10-saturn-p23-switch.conf");
     let service_name = "p2app.service";
 
     let symlink_meta = fs::symlink_metadata(&current_link).ok();
@@ -952,46 +1059,41 @@ async fn get_p23_status(State(state): State<AppState>) -> Response {
     });
 
     let override_contents = fs::read_to_string(&override_file).ok();
-    let override_execstart = override_contents
-        .as_deref()
-        .and_then(|text| {
-            text.lines()
-                .map(str::trim)
-                .find(|line| line.starts_with("ExecStart=") && *line != "ExecStart=")
-                .map(|s| s.to_string())
-        });
-    let override_panel_mode = override_contents.as_deref().and_then(|text| {
+    let override_execstart = override_contents.as_deref().and_then(|text| {
         text.lines()
             .map(str::trim)
-            .find_map(|line| {
-                line.strip_prefix("Environment=SATURN_FRONT_PANEL_MODE=")
-                    .map(str::to_string)
-            })
+            .find(|line| line.starts_with("ExecStart=") && *line != "ExecStart=")
+            .map(|s| s.to_string())
+    });
+    let override_panel_mode = override_contents.as_deref().and_then(|text| {
+        text.lines().map(str::trim).find_map(|line| {
+            line.strip_prefix("Environment=SATURN_FRONT_PANEL_MODE=")
+                .map(str::to_string)
+        })
     });
     let override_saturn_metadata = override_contents.as_deref().and_then(|text| {
-        text.lines()
-            .map(str::trim)
-            .find_map(|line| {
-                let meta = line.strip_prefix("# saturn-p23 ")?;
-                let mut mode = None::<String>;
-                let mut panel = None::<String>;
-                for token in meta.split_whitespace() {
-                    if let Some(v) = token.strip_prefix("mode=") {
-                        mode = Some(v.to_string());
-                    } else if let Some(v) = token.strip_prefix("panel=") {
-                        panel = Some(v.to_string());
-                    }
+        text.lines().map(str::trim).find_map(|line| {
+            let meta = line.strip_prefix("# saturn-p23 ")?;
+            let mut mode = None::<String>;
+            let mut panel = None::<String>;
+            for token in meta.split_whitespace() {
+                if let Some(v) = token.strip_prefix("mode=") {
+                    mode = Some(v.to_string());
+                } else if let Some(v) = token.strip_prefix("panel=") {
+                    panel = Some(v.to_string());
                 }
-                Some(serde_json::json!({
-                    "mode": mode,
-                    "panel": panel,
-                }))
-            })
+            }
+            Some(serde_json::json!({
+                "mode": mode,
+                "panel": panel,
+            }))
+        })
     });
     let service_environment_error = service_environment_text
         .strip_prefix("error: ")
         .map(str::to_string);
-    let service_panel_mode = systemd_env_value(&service_environment_text, "SATURN_FRONT_PANEL_MODE");
+    let service_panel_mode =
+        systemd_env_value(&service_environment_text, "SATURN_FRONT_PANEL_MODE");
     let rt_enable_raw = systemd_env_value(&service_environment_text, "SATURN_P3_RT_AUDIO_ENABLE");
     let rt_policy = systemd_env_value(&service_environment_text, "SATURN_P3_RT_AUDIO_POLICY");
     let rt_priority_raw =
@@ -1001,8 +1103,10 @@ async fn get_p23_status(State(state): State<AppState>) -> Response {
         .and_then(|value| value.parse::<i32>().ok());
     let rt_cpus = systemd_env_value(&service_environment_text, "SATURN_P3_RT_AUDIO_CPUS");
     let rt_enabled = parse_boolish(rt_enable_raw.as_deref()).unwrap_or(false);
-    let rt_configured =
-        rt_enable_raw.is_some() || rt_policy.is_some() || rt_priority_raw.is_some() || rt_cpus.is_some();
+    let rt_configured = rt_enable_raw.is_some()
+        || rt_policy.is_some()
+        || rt_priority_raw.is_some()
+        || rt_cpus.is_some();
     let mut relevant_environment = BTreeMap::<String, String>::new();
     if let Some(value) = service_panel_mode.clone() {
         relevant_environment.insert("SATURN_FRONT_PANEL_MODE".to_string(), value);
@@ -1495,7 +1599,11 @@ async fn get_p23_perf(State(_state): State<AppState>) -> Response {
             return None;
         }
         let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
-        if s.is_empty() { None } else { Some(s) }
+        if s.is_empty() {
+            None
+        } else {
+            Some(s)
+        }
     }
 
     fn p23_workload_info(main_pid: Option<u32>) -> serde_json::Value {
@@ -1503,7 +1611,8 @@ async fn get_p23_perf(State(_state): State<AppState>) -> Response {
         let deploy_p2 = deploy_root.join("p2app");
         let deploy_p3 = deploy_root.join("p3app");
         let current_link = deploy_root.join("current");
-        let override_file = PathBuf::from("/etc/systemd/system/p2app.service.d/10-saturn-p23-switch.conf");
+        let override_file =
+            PathBuf::from("/etc/systemd/system/p2app.service.d/10-saturn-p23-switch.conf");
 
         let current_target = fs::read_link(&current_link)
             .ok()
@@ -1519,32 +1628,28 @@ async fn get_p23_perf(State(_state): State<AppState>) -> Response {
 
         let override_contents = fs::read_to_string(&override_file).ok();
         let panel_mode = override_contents.as_deref().and_then(|text| {
-            text.lines()
-                .map(str::trim)
-                .find_map(|line| {
-                    line.strip_prefix("Environment=SATURN_FRONT_PANEL_MODE=")
-                        .map(str::to_string)
-                })
+            text.lines().map(str::trim).find_map(|line| {
+                line.strip_prefix("Environment=SATURN_FRONT_PANEL_MODE=")
+                    .map(str::to_string)
+            })
         });
         let saturn_meta = override_contents.as_deref().and_then(|text| {
-            text.lines()
-                .map(str::trim)
-                .find_map(|line| {
-                    let meta = line.strip_prefix("# saturn-p23 ")?;
-                    let mut mode = None::<String>;
-                    let mut panel = None::<String>;
-                    for token in meta.split_whitespace() {
-                        if let Some(v) = token.strip_prefix("mode=") {
-                            mode = Some(v.to_string());
-                        } else if let Some(v) = token.strip_prefix("panel=") {
-                            panel = Some(v.to_string());
-                        }
+            text.lines().map(str::trim).find_map(|line| {
+                let meta = line.strip_prefix("# saturn-p23 ")?;
+                let mut mode = None::<String>;
+                let mut panel = None::<String>;
+                for token in meta.split_whitespace() {
+                    if let Some(v) = token.strip_prefix("mode=") {
+                        mode = Some(v.to_string());
+                    } else if let Some(v) = token.strip_prefix("panel=") {
+                        panel = Some(v.to_string());
                     }
-                    Some(serde_json::json!({
-                        "mode": mode,
-                        "panel": panel,
-                    }))
-                })
+                }
+                Some(serde_json::json!({
+                    "mode": mode,
+                    "panel": panel,
+                }))
+            })
         });
 
         let mode = saturn_meta
@@ -1626,7 +1731,8 @@ async fn get_p23_perf(State(_state): State<AppState>) -> Response {
         .unwrap_or(1);
     let clk_tck = clock_ticks_per_sec();
     let page_size = page_size_bytes();
-    let (cpu_total_ticks, cpu_idle_ticks, cpu_iowait_ticks) = parse_system_cpu().unwrap_or((0, 0, 0));
+    let (cpu_total_ticks, cpu_idle_ticks, cpu_iowait_ticks) =
+        parse_system_cpu().unwrap_or((0, 0, 0));
     let (mem_total_bytes, mem_available_bytes) = parse_meminfo();
     let (load_1, load_5, load_15) = parse_loadavg();
 
@@ -1760,7 +1866,10 @@ async fn backup_full(State(state): State<AppState>) -> Result<Response, Response
     }
 
     let parent = repo_root.parent().unwrap_or(Path::new("/")).to_path_buf();
-    let base = repo_root.file_name().and_then(|s| s.to_str()).unwrap_or("Saturn");
+    let base = repo_root
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("Saturn");
 
     let ts = Local::now().format("%Y%m%d-%H%M%S").to_string();
     let filename = format!("{base}.bak-{ts}.tar.gz");
@@ -1781,7 +1890,9 @@ async fn backup_full(State(state): State<AppState>) -> Result<Response, Response
 
     let stdout = match child.stdout.take() {
         Some(s) => s,
-        None => return Err((StatusCode::INTERNAL_SERVER_ERROR, "tar stdout missing").into_response()),
+        None => {
+            return Err((StatusCode::INTERNAL_SERVER_ERROR, "tar stdout missing").into_response())
+        }
     };
     let stderr = child.stderr.take();
 
@@ -1806,9 +1917,8 @@ async fn backup_full(State(state): State<AppState>) -> Result<Response, Response
     headers.insert("Content-Type", HeaderValue::from_static("application/gzip"));
     headers.insert(
         "Content-Disposition",
-        HeaderValue::from_str(&format!("attachment; filename=\"{filename}\"")).unwrap_or_else(|_| {
-            HeaderValue::from_static("attachment")
-        }),
+        HeaderValue::from_str(&format!("attachment; filename=\"{filename}\""))
+            .unwrap_or_else(|_| HeaderValue::from_static("attachment")),
     );
 
     Ok((headers, body).into_response())
@@ -1865,7 +1975,12 @@ async fn list_backups_with_prefix(prefix: &str) -> Response {
     let mut rows: Vec<(String, PathBuf, u64)> = Vec::new();
     let mut read_dir = match tokio::fs::read_dir(&home).await {
         Ok(v) => v,
-        Err(e) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, &format!("failed to list backups: {e}")),
+        Err(e) => {
+            return json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &format!("failed to list backups: {e}"),
+            )
+        }
     };
 
     while let Ok(Some(ent)) = read_dir.next_entry().await {
@@ -1949,11 +2064,7 @@ fn parse_tar_verbose_line(line: &str) -> Option<(&str, u64)> {
         return None;
     }
     // Size is the third whitespace-separated token (index 2).
-    let size = line
-        .split_ascii_whitespace()
-        .nth(2)?
-        .parse::<u64>()
-        .ok()?;
+    let size = line.split_ascii_whitespace().nth(2)?.parse::<u64>().ok()?;
     Some((path, size))
 }
 
@@ -2007,7 +2118,10 @@ async fn restore_backup_by_kind(state: &AppState, req: G2RestoreReq, kind: &str)
 
     let repo_root = if kind == "saturn" {
         if let Err(e) = validate_saturn_repo_root(&backup_root) {
-            return json_error(StatusCode::BAD_REQUEST, &format!("backup is not a Saturn repo snapshot: {e}"));
+            return json_error(
+                StatusCode::BAD_REQUEST,
+                &format!("backup is not a Saturn repo snapshot: {e}"),
+            );
         }
         let root = current_repo_root(state);
         if let Err(e) = validate_saturn_repo_root(&root) {
@@ -2051,7 +2165,12 @@ async fn restore_backup_by_kind(state: &AppState, req: G2RestoreReq, kind: &str)
         .await
     {
         Ok(v) => v,
-        Err(e) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, &format!("failed to run rsync: {e}")),
+        Err(e) => {
+            return json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &format!("failed to run rsync: {e}"),
+            )
+        }
     };
     if !status.success() {
         return json_error(StatusCode::INTERNAL_SERVER_ERROR, "rsync failed");
@@ -2143,7 +2262,10 @@ async fn restore_full(
     if !dry_run {
         if confirm.as_deref() != Some("RESTORE") {
             let _ = tokio::fs::remove_file(&upload_path).await;
-            return Err(json_error(StatusCode::BAD_REQUEST, "confirm token required"));
+            return Err(json_error(
+                StatusCode::BAD_REQUEST,
+                "confirm token required",
+            ));
         }
     }
 
@@ -2163,7 +2285,10 @@ async fn restore_full(
     if !list_out.status.success() {
         let msg = String::from_utf8_lossy(&list_out.stderr).trim().to_string();
         let _ = tokio::fs::remove_file(&upload_path).await;
-        return Err(json_error(StatusCode::BAD_REQUEST, &format!("tar list failed: {msg}")));
+        return Err(json_error(
+            StatusCode::BAD_REQUEST,
+            &format!("tar list failed: {msg}"),
+        ));
     }
     let mut uncompressed_bytes: u64 = 0;
     for line in String::from_utf8_lossy(&list_out.stdout).lines() {
@@ -2177,12 +2302,18 @@ async fn restore_full(
         };
         if has_unsafe_path_component(link_name) {
             let _ = tokio::fs::remove_file(&upload_path).await;
-            return Err(json_error(StatusCode::BAD_REQUEST, "archive contains unsafe paths"));
+            return Err(json_error(
+                StatusCode::BAD_REQUEST,
+                "archive contains unsafe paths",
+            ));
         }
         if let Some(target) = link_target {
             if has_unsafe_path_component(target) {
                 let _ = tokio::fs::remove_file(&upload_path).await;
-                return Err(json_error(StatusCode::BAD_REQUEST, "archive contains unsafe symlink target"));
+                return Err(json_error(
+                    StatusCode::BAD_REQUEST,
+                    "archive contains unsafe symlink target",
+                ));
             }
         }
         uncompressed_bytes = uncompressed_bytes.saturating_add(size);
@@ -2247,7 +2378,10 @@ async fn restore_full(
     if top_dirs.len() != 1 {
         let _ = tokio::fs::remove_file(&upload_path).await;
         let _ = tokio::fs::remove_dir_all(&extract_dir).await;
-        return Err(json_error(StatusCode::BAD_REQUEST, "archive must contain a single top-level directory"));
+        return Err(json_error(
+            StatusCode::BAD_REQUEST,
+            "archive must contain a single top-level directory",
+        ));
     }
     let extracted_root = top_dirs.remove(0);
     if let Err(e) = validate_saturn_repo_root(&extracted_root) {
@@ -2291,7 +2425,10 @@ async fn restore_full(
     let _ = tokio::fs::remove_dir_all(&extract_dir).await;
 
     if !rsync_status.success() {
-        return Err(json_error(StatusCode::INTERNAL_SERVER_ERROR, "rsync failed"));
+        return Err(json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "rsync failed",
+        ));
     }
 
     Ok(Json(serde_json::json!({ "status": "ok" })).into_response())
@@ -2319,7 +2456,10 @@ async fn get_custom_scripts(State(state): State<AppState>) -> Response {
     }
 }
 
-async fn upsert_custom_script(State(state): State<AppState>, Json(req): Json<CustomScriptUpsertReq>) -> Response {
+async fn upsert_custom_script(
+    State(state): State<AppState>,
+    Json(req): Json<CustomScriptUpsertReq>,
+) -> Response {
     let filename = req.filename.trim();
     if !is_safe_custom_script_filename(filename) {
         return json_error(StatusCode::BAD_REQUEST, "invalid filename");
@@ -2333,18 +2473,30 @@ async fn upsert_custom_script(State(state): State<AppState>, Json(req): Json<Cus
         }
         if let Some(parent) = script_path.parent() {
             if let Err(e) = tokio::fs::create_dir_all(parent).await {
-                return json_error(StatusCode::INTERNAL_SERVER_ERROR, &format!("failed to create script dir: {e}"));
+                return json_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    &format!("failed to create script dir: {e}"),
+                );
             }
         }
         if let Err(e) = tokio::fs::write(&script_path, normalized).await {
-            return json_error(StatusCode::INTERNAL_SERVER_ERROR, &format!("failed to write script: {e}"));
+            return json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &format!("failed to write script: {e}"),
+            );
         }
-        let _ = tokio::fs::set_permissions(&script_path, std::fs::Permissions::from_mode(0o755)).await;
+        let _ =
+            tokio::fs::set_permissions(&script_path, std::fs::Permissions::from_mode(0o755)).await;
     }
 
     let meta = match tokio::fs::metadata(&script_path).await {
         Ok(v) => v,
-        Err(_) => return json_error(StatusCode::BAD_REQUEST, "script file not found in scripts directory"),
+        Err(_) => {
+            return json_error(
+                StatusCode::BAD_REQUEST,
+                "script file not found in scripts directory",
+            )
+        }
     };
     if !meta.is_file() {
         return json_error(StatusCode::BAD_REQUEST, "script path is not a file");
@@ -2388,7 +2540,10 @@ async fn upsert_custom_script(State(state): State<AppState>, Json(req): Json<Cus
     .into_response()
 }
 
-async fn delete_custom_script(State(state): State<AppState>, Json(req): Json<CustomScriptDeleteReq>) -> Response {
+async fn delete_custom_script(
+    State(state): State<AppState>,
+    Json(req): Json<CustomScriptDeleteReq>,
+) -> Response {
     let filename = req.filename.trim();
     if !is_safe_custom_script_filename(filename) {
         return json_error(StatusCode::BAD_REQUEST, "invalid filename");
@@ -2431,20 +2586,20 @@ async fn get_scripts(State(state): State<AppState>) -> impl IntoResponse {
     let mut grouped: BTreeMap<String, Vec<serde_json::Value>> = BTreeMap::new();
     for e in entries {
         let cat = e.category.clone().unwrap_or_else(|| "Scripts".to_string());
-        grouped
-            .entry(cat)
-            .or_default()
-            .push(serde_json::json!({
-                "filename": e.filename,
-                "name": e.name.unwrap_or_default(),
-                "description": e.description.unwrap_or_default(),
-            }));
+        grouped.entry(cat).or_default().push(serde_json::json!({
+            "filename": e.filename,
+            "name": e.name.unwrap_or_default(),
+            "description": e.description.unwrap_or_default(),
+        }));
     }
 
     Json(serde_json::json!({ "scripts": grouped, "warnings": [] }))
 }
 
-async fn get_flags(State(state): State<AppState>, Query(q): Query<FlagsQuery>) -> impl IntoResponse {
+async fn get_flags(
+    State(state): State<AppState>,
+    Query(q): Query<FlagsQuery>,
+) -> impl IntoResponse {
     let script = q.script.unwrap_or_default();
     let entries = match read_all_script_entries(&state).await {
         Ok(v) => v,
@@ -2550,7 +2705,10 @@ async fn get_fpga_images(State(state): State<AppState>) -> impl IntoResponse {
     }
 
     let warning = if selected.is_none() {
-        Some("No FPGA directory found (set SATURN_FPGA_DIR or place images in ~/github/Saturn/FPGA)".to_string())
+        Some(
+            "No FPGA directory found (set SATURN_FPGA_DIR or place images in ~/github/Saturn/FPGA)"
+                .to_string(),
+        )
     } else if images.is_empty() {
         Some("FPGA directory found but no .bin images were found".to_string())
     } else {
@@ -2572,10 +2730,7 @@ async fn get_run_log(Query(q): Query<RunLogQuery>) -> Response {
         return json_error(StatusCode::BAD_REQUEST, "invalid script");
     }
     let from = q.from.unwrap_or(0);
-    let limit = q
-        .limit
-        .unwrap_or(300)
-        .clamp(1, RUN_LOG_FETCH_MAX_LINES);
+    let limit = q.limit.unwrap_or(300).clamp(1, RUN_LOG_FETCH_MAX_LINES);
 
     let guard = script_run_log_slot().lock().unwrap();
     let Some(run) = guard.get(&script) else {
@@ -2689,7 +2844,11 @@ async fn run_sse(
         None
     };
     let update_activity_guard = if g2_script || saturngo_script {
-        let kind = if g2_script { "update-g2" } else { "saturngo-update" };
+        let kind = if g2_script {
+            "update-g2"
+        } else {
+            "saturngo-update"
+        };
         Some(
             begin_update_activity(
                 kind,

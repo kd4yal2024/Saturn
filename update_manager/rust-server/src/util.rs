@@ -50,7 +50,12 @@ pub fn sanitize_custom_flags(flags: Option<Vec<String>>) -> Vec<String> {
         .unwrap_or_default()
         .into_iter()
         .take(crate::state::MAX_SCRIPT_FLAGS)
-        .map(|f| f.trim().chars().take(crate::state::MAX_SCRIPT_FLAG_LEN).collect::<String>())
+        .map(|f| {
+            f.trim()
+                .chars()
+                .take(crate::state::MAX_SCRIPT_FLAG_LEN)
+                .collect::<String>()
+        })
         .filter(|f| !f.is_empty())
         .filter(|f| !f.contains('\n') && !f.contains('\r') && !f.contains('\0'))
         .collect()
@@ -198,9 +203,9 @@ mod tests {
     fn test_sanitize_flags_rejects_embedded_control_chars() {
         let flags = vec![
             "--ok".to_string(),
-            "--em\nbedded".to_string(),    // embedded \n → rejected
-            "--em\rbedded".to_string(),    // embedded \r → rejected
-            "prefix\0suffix".to_string(), // embedded \0 → rejected
+            "--em\nbedded".to_string(),         // embedded \n → rejected
+            "--em\rbedded".to_string(),         // embedded \r → rejected
+            "prefix\0suffix".to_string(),       // embedded \0 → rejected
             "--trailing-newline\n".to_string(), // trailing \n → trimmed → kept
             "--also-ok".to_string(),
         ];

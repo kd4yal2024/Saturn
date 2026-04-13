@@ -200,6 +200,9 @@ fn main() -> Result<(), Box<dyn Error>> {
                 TciCommand::SetAgcMode(mode) => {
                     model.desired.agc_mode = mode;
                 }
+                TciCommand::SetAgcGain(gain) => {
+                    model.desired.agc_gain = gain.clamp(0.0, 100.0);
+                }
                 TciCommand::SetTxDrive(drive) => {
                     model.desired.tx_drive = drive.min(100);
                     needs_high_priority = true;

@@ -51,6 +51,41 @@ If an older install attempt failed with a Cargo lockfile parse error (for exampl
 `lock file version '4'` on Bookworm using distro `cargo`), rerun the installer.
 Current installer versions self-bootstrap a newer Rust toolchain via `rustup`.
 
+Remote entry behavior:
+
+- `http://<host>/remote` should redirect to `https://<host>:8443/remote`.
+- `http://<host>/saturn/remote` should redirect to `https://<host>:8443/remote`.
+- `https://<host>:8443/remote` is the live remote UI.
+- Shared remote settings persist in `/var/lib/saturn-state/remote_settings.json`.
+
+## GitHub Commit and Push
+
+From the Saturn repo root:
+
+```bash
+cd /home/pi/github/Saturn
+git status --short
+git add <paths>
+git commit -m "Describe the change"
+git push origin HEAD
+```
+
+If you need a new branch:
+
+```bash
+cd /home/pi/github/Saturn
+git checkout -b <branch-name>
+git add <paths>
+git commit -m "Describe the change"
+git push -u origin <branch-name>
+```
+
+Operational notes:
+
+- Review `git status --short` first so you do not accidentally commit unrelated local work.
+- Use `git push --force-with-lease` only when you intentionally rewrote already-pushed history.
+- If a commit message contains an unwanted trailer, fix it with `git commit --amend` before pushing.
+
 ## Uninstall
 
 ```bash

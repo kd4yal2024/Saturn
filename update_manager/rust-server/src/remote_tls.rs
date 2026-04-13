@@ -12,8 +12,8 @@ use axum::{
     },
     http::{header, HeaderMap, HeaderValue, StatusCode},
     response::{IntoResponse, Response},
-    routing::get,
-    Router,
+    routing::{get, post},
+    Json, Router,
 };
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use futures_util::{SinkExt, StreamExt};
@@ -22,8 +22,10 @@ use tokio_tungstenite::{connect_async, tungstenite::Message as TungsteniteMessag
 use tracing::{error, info, warn};
 
 use crate::{
+    get_remote_settings,
     pages::{healthz, serve_page},
-    state::AppState,
+    set_remote_settings,
+    state::{AppState, RemoteSettings},
 };
 
 type RemoteTlsResult<T> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
@@ -58,10 +60,14 @@ pub fn load_remote_tls_config(default_state_dir: &str) -> RemoteTlsResult<Remote
 
     let cert_path = std::env::var("SATURN_REMOTE_TLS_CERT")
         .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from(format!("{default_state_dir}/remote-tls/saturn-remote.crt")));
+        .unwrap_or_else(|_| {
+            PathBuf::from(format!("{default_state_dir}/remote-tls/saturn-remote.crt"))
+        });
     let key_path = std::env::var("SATURN_REMOTE_TLS_KEY")
         .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from(format!("{default_state_dir}/remote-tls/saturn-remote.key")));
+        .unwrap_or_else(|_| {
+            PathBuf::from(format!("{default_state_dir}/remote-tls/saturn-remote.key"))
+        });
 
     Ok(RemoteTlsConfig {
         addr,
@@ -122,6 +128,8 @@ pub fn remote_tls_router(state: AppState) -> Router {
         .route("/saturn-remote", get(remote_page_handler))
         .route("/saturn-remote.html", get(remote_page_handler))
         .route("/healthz", get(healthz))
+        .route("/remote_settings", get(remote_settings_get_handler))
+        .route("/remote_settings", post(remote_settings_post_handler))
         .route("/tci", get(remote_bridge_ws_handler))
         .with_state(state)
 }
@@ -145,6 +153,27 @@ pub async fn remote_bridge_ws_handler(
         return rejection;
     }
     ws.on_upgrade(move |socket| proxy_bridge_socket(socket, state.bridge_ws_url))
+}
+
+async fn remote_settings_get_handler(
+    headers: HeaderMap,
+    State(state): State<AppState>,
+) -> Response {
+    if let Err(rejection) = check_remote_basic_auth(&headers) {
+        return rejection;
+    }
+    get_remote_settings(State(state)).await
+}
+
+async fn remote_settings_post_handler(
+    headers: HeaderMap,
+    State(state): State<AppState>,
+    Json(settings): Json<RemoteSettings>,
+) -> Response {
+    if let Err(rejection) = check_remote_basic_auth(&headers) {
+        return rejection;
+    }
+    set_remote_settings(State(state), Json(settings)).await
 }
 
 /// Reject WebSocket upgrades whose Origin authority differs from the request
@@ -196,9 +225,7 @@ fn configured_basic_auth_header() -> Option<&'static str> {
     AUTH_HEADER
         .get_or_init(|| match std::env::var(REMOTE_BASIC_AUTH_ENV) {
             Ok(raw) => build_basic_auth_header(&raw).or_else(|| {
-                warn!(
-                    "{REMOTE_BASIC_AUTH_ENV} is set but must use the format username:password"
-                );
+                warn!("{REMOTE_BASIC_AUTH_ENV} is set but must use the format username:password");
                 None
             }),
             Err(_) => None,
@@ -218,8 +245,16 @@ fn build_basic_auth_header(spec: &str) -> Option<String> {
     ))
 }
 
-fn authority_from_host_header(value: &str, default_port: Option<u16>) -> Option<NormalizedAuthority> {
-    let authority = value.trim().rsplit('@').next().unwrap_or(value.trim()).trim();
+fn authority_from_host_header(
+    value: &str,
+    default_port: Option<u16>,
+) -> Option<NormalizedAuthority> {
+    let authority = value
+        .trim()
+        .rsplit('@')
+        .next()
+        .unwrap_or(value.trim())
+        .trim();
     if authority.is_empty() {
         return None;
     }
@@ -417,7 +452,11 @@ fn collect_subject_alt_names() -> Vec<SanType> {
     }
 
     if let Ok(extra) = std::env::var("SATURN_REMOTE_TLS_EXTRA_SANS") {
-        for value in extra.split(',').map(str::trim).filter(|value| !value.is_empty()) {
+        for value in extra
+            .split(',')
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
             if let Ok(ip) = value.parse::<IpAddr>() {
                 ip_addrs.insert(ip);
             } else {
@@ -498,7 +537,10 @@ mod tests {
     #[test]
     fn check_ws_origin_rejects_cross_origin_port_mismatch() {
         let mut headers = HeaderMap::new();
-        headers.insert(header::ORIGIN, HeaderValue::from_static("https://radio.local:3000"));
+        headers.insert(
+            header::ORIGIN,
+            HeaderValue::from_static("https://radio.local:3000"),
+        );
         headers.insert(header::HOST, HeaderValue::from_static("radio.local:8443"));
         assert!(check_ws_origin(&headers).is_err());
     }
@@ -506,7 +548,10 @@ mod tests {
     #[test]
     fn check_ws_origin_accepts_same_origin_authority() {
         let mut headers = HeaderMap::new();
-        headers.insert(header::ORIGIN, HeaderValue::from_static("https://radio.local:8443"));
+        headers.insert(
+            header::ORIGIN,
+            HeaderValue::from_static("https://radio.local:8443"),
+        );
         headers.insert(header::HOST, HeaderValue::from_static("radio.local:8443"));
         assert!(check_ws_origin(&headers).is_ok());
     }

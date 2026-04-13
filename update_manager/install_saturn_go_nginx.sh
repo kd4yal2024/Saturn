@@ -412,6 +412,30 @@ server {
     return 302 /saturn/;
   }
 
+  location = /remote {
+    return 302 https://\$host:8443/remote;
+  }
+
+  location = /remote/ {
+    return 302 https://\$host:8443/remote;
+  }
+
+  location = /remote.html {
+    return 302 https://\$host:8443/remote;
+  }
+
+  location = /saturn/remote {
+    return 302 https://\$host:8443/remote;
+  }
+
+  location = /saturn/remote/ {
+    return 302 https://\$host:8443/remote;
+  }
+
+  location = /saturn/remote.html {
+    return 302 https://\$host:8443/remote;
+  }
+
   location = /saturn/run {
     auth_basic "Restricted";
     auth_basic_user_file ${BASIC_AUTH_FILE};

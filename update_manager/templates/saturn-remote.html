@@ -1490,7 +1490,7 @@
       display: inline-flex;
     }
 
-    :root[data-layout="phone"] .panel[data-phone-collapsed="true"] > :not(.panel-head) {
+    :root[data-layout="phone"] [data-phone-panel][data-phone-collapsed="true"] > :not([data-phone-panel-head]) {
       display: none;
     }
 
@@ -1648,7 +1648,11 @@
       </div>
     </header>
 
-    <section class="command-strip panel">
+    <section class="command-strip panel" data-phone-panel="session">
+      <div class="panel-head" data-phone-panel-head>
+        <h2 class="panel-title">Session</h2>
+        <div class="panel-meta">Launch / VFO / bridge controls</div>
+      </div>
       <div class="panel-body">
         <div class="strip-grid">
           <div class="vfo-deck primary-deck">
@@ -1702,7 +1706,7 @@
     <section class="layout console-layout">
       <div class="stack left-rail">
         <div class="panel" data-phone-panel="routing">
-          <div class="panel-head">
+          <div class="panel-head" data-phone-panel-head>
             <h2 class="panel-title">Routing</h2>
             <div class="panel-meta">Bridge / sampling path</div>
           </div>
@@ -1744,7 +1748,7 @@
         </div>
 
         <div class="panel" data-phone-panel="tuning">
-          <div class="panel-head">
+          <div class="panel-head" data-phone-panel-head>
             <h2 class="panel-title">Tuning</h2>
             <div class="panel-meta">Recall / nudge / jump</div>
           </div>
@@ -1779,7 +1783,7 @@
         </div>
 
         <div class="panel" data-phone-panel="demod">
-          <div class="panel-head">
+          <div class="panel-head" data-phone-panel-head>
             <h2 class="panel-title">Demod</h2>
             <div class="panel-meta">Mode / gain / passband</div>
           </div>
@@ -1810,9 +1814,9 @@
                   <span class="mono small" id="rx-nr-readout">Off</span>
                 </div>
                 <div class="nr-grid" id="rx-nr-grid">
-                  <button class="mode-btn active" data-nr-mode="OFF" type="button">Off</button>
+                  <button class="mode-btn" data-nr-mode="OFF" type="button">Off</button>
                   <button class="mode-btn" data-nr-mode="NR1" type="button">NR1</button>
-                  <button class="mode-btn" data-nr-mode="NR2" type="button">NR2</button>
+                  <button class="mode-btn active" data-nr-mode="NR2" type="button">NR2</button>
                   <button class="mode-btn" data-nr-mode="NR3" type="button">NR3</button>
                   <button class="mode-btn" data-nr-mode="NR4" type="button">NR4</button>
                 </div>
@@ -1845,6 +1849,11 @@
                   <button class="mode-btn active" data-agc-mode="MEDIUM" type="button">Med</button>
                   <button class="mode-btn" data-agc-mode="FAST" type="button">Fast</button>
                 </div>
+                <div class="row spread" style="margin-top: 10px;">
+                  <span class="label" style="margin: 0;">AGC Gain</span>
+                  <span class="mono small" id="agc-gain-readout">80</span>
+                </div>
+                <input id="agc-gain" type="range" min="0" max="100" step="1" value="80" />
               </div>
             </div>
 
@@ -1852,16 +1861,16 @@
               <div class="range-wrap">
                 <div class="row spread">
                   <span class="label" style="margin: 0;">Filter Low</span>
-                  <span class="mono small" id="filter-low-readout">300 Hz</span>
+                  <span class="mono small" id="filter-low-readout">50 Hz</span>
                 </div>
-                <input id="filter-low" type="range" min="0" max="300" step="50" value="300" />
+                <input id="filter-low" type="range" min="0" max="300" step="50" value="50" />
               </div>
               <div class="range-wrap">
                 <div class="row spread">
                   <span class="label" style="margin: 0;">Filter High</span>
-                  <span class="mono small" id="filter-high-readout">3000 Hz</span>
+                  <span class="mono small" id="filter-high-readout">3050 Hz</span>
                 </div>
-                <input id="filter-high" type="range" min="500" max="6000" step="50" value="3000" />
+                <input id="filter-high" type="range" min="500" max="6000" step="50" value="3050" />
               </div>
             </div>
 
@@ -1878,8 +1887,8 @@
       </div>
 
       <div class="stage console-stage">
-        <div class="display-card scope-frame">
-          <div class="display-head">
+        <div class="display-card scope-frame" data-phone-panel="display">
+          <div class="display-head" data-phone-panel-head>
             <div>
               <div class="panel-title" style="margin-bottom: 4px;">Panadapter / Waterfall</div>
               <div class="display-meta" id="display-caption">Waiting for TCI IQ frames from saturn-bridge</div>
@@ -1888,6 +1897,8 @@
               <span class="display-pill mono" id="mode-readout">USB</span>
               <span class="display-pill mono" id="sample-rate-readout">192 kHz</span>
               <span class="display-pill mono" id="display-resolution">Display: --</span>
+              <button class="btn eq-enable-btn" id="wake-lock-btn" type="button" style="font-size:11px;padding:4px 10px;">Stay Awake</button>
+              <button class="btn eq-enable-btn" id="freq-lock-btn" type="button" style="font-size:11px;padding:4px 10px;">Freq Lock</button>
             </div>
           </div>
           <div class="display-zoom">
@@ -1938,7 +1949,7 @@
         </div>
 
         <div class="panel log-card console-log" data-phone-panel="log">
-          <div class="panel-head">
+          <div class="panel-head" data-phone-panel-head>
             <h2 class="panel-title">Operator Log</h2>
             <div class="panel-meta">Live client trace</div>
           </div>
@@ -1948,7 +1959,7 @@
 
       <div class="stack right-rail">
         <div class="panel" data-phone-panel="telemetry">
-          <div class="panel-head">
+          <div class="panel-head" data-phone-panel-head>
             <h2 class="panel-title">Telemetry</h2>
             <div class="panel-meta">Observed radio state</div>
           </div>
@@ -2061,7 +2072,7 @@
         </div>
 
         <div class="panel" data-phone-panel="tx">
-          <div class="panel-head">
+          <div class="panel-head" data-phone-panel-head>
             <h2 class="panel-title">Transmit</h2>
             <div class="panel-meta" id="tx-status-meta">RX</div>
           </div>
@@ -2090,16 +2101,16 @@
               <div class="range-wrap">
                 <div class="row spread">
                   <span class="label" style="margin: 0;">TX Filter Low</span>
-                  <span class="mono small" id="tx-filter-low-readout">300 Hz</span>
+                  <span class="mono small" id="tx-filter-low-readout">50 Hz</span>
                 </div>
-                <input id="tx-filter-low" type="range" min="0" max="300" step="50" value="300" />
+                <input id="tx-filter-low" type="range" min="0" max="300" step="50" value="50" />
               </div>
               <div class="range-wrap">
                 <div class="row spread">
                   <span class="label" style="margin: 0;">TX Filter High</span>
-                  <span class="mono small" id="tx-filter-high-readout">3000 Hz</span>
+                  <span class="mono small" id="tx-filter-high-readout">3050 Hz</span>
                 </div>
-                <input id="tx-filter-high" type="range" min="500" max="6000" step="50" value="3000" />
+                <input id="tx-filter-high" type="range" min="500" max="6000" step="50" value="3050" />
               </div>
             </div>
 
@@ -2139,14 +2150,21 @@
     const DISPLAY_MAX_FFT_SIZE = 4096;
     const DISPLAY_PACKET_HISTORY = 48;
     const PHONE_PANEL_DEFAULTS = Object.freeze({
+      session: false,
       routing: true,
       tuning: false,
       demod: false,
+      display: false,
       log: true,
       telemetry: true,
       tx: true,
     });
     const RADIO_PREFS_KEY = "saturn.remote.radioPrefs";
+    const FREQ_LOCK_KEY = "saturn.remote.freqLock";
+    const WAKE_LOCK_KEY = "saturn.remote.keepScreenAwake";
+    const REMOTE_SETTINGS_PATH = "/remote_settings";
+    const CSRF_HEADER_NAME = "X-Saturn-CSRF";
+    const CSRF_HEADER_VALUE = "1";
     const ALLOWED_SAMPLE_RATES = Object.freeze([48000, 96000, 192000, 384000]);
     const ALLOWED_DEMOD_MODES = Object.freeze(["USB", "LSB", "AM", "SAM", "FM", "DIGU", "DIGL", "CWU", "CWL"]);
     const RX_AUDIO_FRAME_FLOATS = 1024;
@@ -2154,11 +2172,14 @@
     const RX_AUDIO_RECOVERY_PREROLL_SEC = 0.01;
     const RX_AUDIO_RESYNC_PREROLL_SEC = 0.02;
     const TX_MIC_BLOCK_SAMPLES = 1024;
+    const REMOTE_PROFILE_APPLY_DELAY_MS = 150;
+    const REMOTE_SETTINGS_SAVE_DEBOUNCE_MS = 750;
 
     const state = {
       ws: null,
       wsUrl: "",
       connected: false,
+      connectPending: false,
       iqStreaming: false,
       audioStreaming: false,
       demoMode: false,
@@ -2170,15 +2191,16 @@
       rxAntenna: 1,
       sampleRate: 192000,
       rxVolumeDb: -10.0,
-      rxNoiseReductionMode: "OFF",
+      rxNoiseReductionMode: "NR2",
       rxNoiseReductionLevel: 100,
       rxNbMode: "OFF",
       rxNbThreshold: 4.95,
       anfEnabled: false,
       agcMode: "MEDIUM",
+      agcGain: 80,
       displayZoom: 1,
-      filterLow: 300,
-      filterHigh: 3000,
+      filterLow: 50,
+      filterHigh: 3050,
       meterDbm: null,
       txPower: null,
       swr: null,
@@ -2210,8 +2232,8 @@
       micCapturing: false,
       pttRequestId: 0,
       pttPointerId: null,
-      txFilterLow: 300,
-      txFilterHigh: 3000,
+      txFilterLow: 50,
+      txFilterHigh: 3050,
       rxEqEnabled: false,
       rxEqBands: new Array(11).fill(0),
       txEqEnabled: false,
@@ -2223,7 +2245,13 @@
       theme: "dark",
       layoutMode: "desktop",
       phonePanels: { ...PHONE_PANEL_DEFAULTS },
+      frequencyLock: false,
+      keepScreenAwake: false,
+      wakeLockSentinel: null,
+      wakeLockActive: false,
+      wakeLockPending: false,
     };
+    let remoteSettingsSaveTimer = null;
 
     class FftProcessor {
       constructor(size) {
@@ -2855,14 +2883,17 @@
       return `${scheme}://${host}/tci`;
     }
 
-    function defaultWsUrl() {
-      const saved = localStorage.getItem("saturn.remote.wsUrl");
+    function normalizeWsUrlPreference(raw) {
+      const fallback = window.location.protocol === "http:" || window.location.protocol === "https:"
+        ? sameOriginProxyWsUrl()
+        : `ws://${window.location.hostname || "127.0.0.1"}:50001`;
+      const text = `${raw || ""}`.trim();
+      if (!text) {
+        return fallback;
+      }
       if (window.location.protocol === "https:" || window.location.protocol === "http:") {
-        if (!saved) {
-          return sameOriginProxyWsUrl();
-        }
         try {
-          const parsed = new URL(saved, window.location.href);
+          const parsed = new URL(text, window.location.href);
           const expectedProtocol = window.location.protocol === "https:" ? "wss:" : "ws:";
           if (
             parsed.protocol === expectedProtocol &&
@@ -2876,10 +2907,16 @@
         }
         return sameOriginProxyWsUrl();
       }
-      if (saved) {
-        return saved;
+      try {
+        return new URL(text, window.location.href).toString();
+      } catch (_) {
+        return fallback;
       }
-      return `ws://${window.location.hostname || "127.0.0.1"}:50001`;
+    }
+
+    function defaultWsUrl() {
+      const saved = localStorage.getItem("saturn.remote.wsUrl");
+      return normalizeWsUrlPreference(saved);
     }
 
     function preferredLayout() {
@@ -2893,23 +2930,27 @@
         return fallback;
       }
       try {
-        const parsed = JSON.parse(saved);
-        if (!parsed || typeof parsed !== "object") {
-          return fallback;
-        }
-        Object.keys(fallback).forEach((key) => {
-          if (typeof parsed[key] === "boolean") {
-            fallback[key] = parsed[key];
-          }
-        });
+        return sanitizePhonePanels(JSON.parse(saved), fallback);
       } catch (_) {
         return fallback;
       }
-      return fallback;
     }
 
     function savePhonePanelState() {
       localStorage.setItem("saturn.remote.phonePanels", JSON.stringify(state.phonePanels));
+    }
+
+    function sanitizePhonePanels(values, fallback = { ...PHONE_PANEL_DEFAULTS }) {
+      const panels = { ...fallback };
+      if (!values || typeof values !== "object") {
+        return panels;
+      }
+      Object.keys(panels).forEach((key) => {
+        if (typeof values[key] === "boolean") {
+          panels[key] = values[key];
+        }
+      });
+      return panels;
     }
 
     function updateLayoutButton() {
@@ -2946,6 +2987,7 @@
       }
       state.phonePanels[key] = !state.phonePanels[key];
       savePhonePanelState();
+      scheduleRemoteSettingsSave();
       syncPhonePanels();
       requestAnimationFrame(() => {
         spectrumRenderer.resize();
@@ -2956,7 +2998,7 @@
     function initPhonePanels() {
       state.phonePanels = loadPhonePanelState();
       document.querySelectorAll("[data-phone-panel]").forEach((panel) => {
-        const head = panel.querySelector(".panel-head");
+        const head = panel.querySelector("[data-phone-panel-head]") || panel.querySelector(".panel-head");
         if (!head || head.querySelector(".panel-toggle-btn")) {
           return;
         }
@@ -2979,6 +3021,7 @@
       document.documentElement.dataset.layout = state.layoutMode;
       if (persist) {
         localStorage.setItem("saturn.remote.layout", state.layoutMode);
+        scheduleRemoteSettingsSave();
       }
       updateLayoutButton();
       syncPhonePanels();
@@ -3021,6 +3064,7 @@
       document.documentElement.style.colorScheme = state.theme;
       if (persist) {
         localStorage.setItem("saturn.remote.theme", state.theme);
+        scheduleRemoteSettingsSave();
       }
       updateThemeButton();
     }
@@ -3122,12 +3166,41 @@
       return Math.max(2.5, Math.min(82.5, Number(value)));
     }
 
+    function clampAgcGain(value) {
+      return Math.max(0, Math.min(100, Math.round(Number(value))));
+    }
+
+    function safeFiniteNumber(value, fallback = 0) {
+      const numeric = Number(value);
+      return Number.isFinite(numeric) ? numeric : fallback;
+    }
+
+    function safeFixed(value, digits, fallbackText) {
+      const numeric = Number(value);
+      return Number.isFinite(numeric) ? numeric.toFixed(digits) : fallbackText;
+    }
+
     function clampFilterLowHz(value) {
       return Math.max(0, Math.min(300, Number(value)));
     }
 
     function clampFilterHighHz(value) {
       return Math.max(500, Math.min(6000, Number(value)));
+    }
+
+    function defaultFrequencyLockEnabled() {
+      return preferredLayout() === "phone" || window.matchMedia("(pointer: coarse)").matches;
+    }
+
+    function defaultKeepScreenAwakeEnabled() {
+      return preferredLayout() === "phone" || window.matchMedia("(pointer: coarse)").matches;
+    }
+
+    function wakeLockSupported() {
+      return window.isSecureContext &&
+        navigator &&
+        navigator.wakeLock &&
+        typeof navigator.wakeLock.request === "function";
     }
 
     function clampSampleRateHz(value) {
@@ -3170,9 +3243,10 @@
         case "FM":
           return { lowHz: -6000, highHz: 6000 };
         case "DIGU":
+          return { lowHz: 300, highHz: 3000 };
         case "USB":
         default:
-          return { lowHz: 300, highHz: 3000 };
+          return { lowHz: 50, highHz: 3050 };
       }
     }
 
@@ -3194,7 +3268,7 @@
           return { lowHz: 0, highHz: 3000 };
         case "USB":
         default:
-          return { lowHz: 300, highHz: 3000 };
+          return { lowHz: 50, highHz: 3050 };
       }
     }
 
@@ -3269,6 +3343,23 @@
       return bands;
     }
 
+    function sanitizeCfcBands(values, fallback = new Array(11).fill(0)) {
+      const bands = fallback.slice(0, 11);
+      while (bands.length < 11) {
+        bands.push(0);
+      }
+      for (let i = 1; i <= 10; i += 1) {
+        const next = Array.isArray(values) ? values[i] : undefined;
+        if (Number.isFinite(Number(next))) {
+          bands[i] = Math.max(0, Math.min(20, Number(next)));
+        } else {
+          bands[i] = Math.max(0, Math.min(20, Number(bands[i]) || 0));
+        }
+      }
+      bands[0] = 0;
+      return bands;
+    }
+
     function currentRadioPrefs() {
       return {
         sampleRate: clampSampleRateHz(state.sampleRate),
@@ -3282,6 +3373,7 @@
         rxNbThreshold: clampRxNbThreshold(state.rxNbThreshold),
         anfEnabled: Boolean(state.anfEnabled),
         agcMode: normalizeAgcMode(state.agcMode),
+        agcGain: clampAgcGain(state.agcGain),
         filterLow: clampFilterLowHz(state.filterLow),
         filterHigh: clampFilterHighHz(state.filterHigh),
         txDrive: clampTxDriveWatts(state.txDrive),
@@ -3294,8 +3386,54 @@
         txEqBands: sanitizeEqBands(state.txEqBands),
         cfcEnabled: Boolean(state.cfcEnabled),
         cfcPrecomp: Number(state.cfcPrecomp) || 0,
-        cfcBands: (state.cfcBands || []).map(v => Math.max(0, Math.min(20, Number(v) || 0))),
+        cfcBands: sanitizeCfcBands(state.cfcBands),
+        twoToneEnabled: Boolean(state.twoToneEnabled),
       };
+    }
+
+    function currentRemoteSettings() {
+      return {
+        wsUrl: normalizeWsUrlPreference(($("ws-url")?.value || state.wsUrl).trim()),
+        displayZoom: Math.max(1, Math.min(32, Number(state.displayZoom) || 1)),
+        frequencyLock: Boolean(state.frequencyLock),
+        keepScreenAwake: Boolean(state.keepScreenAwake),
+        layoutMode: state.layoutMode === "phone" ? "phone" : "desktop",
+        theme: state.theme === "light" ? "light" : "dark",
+        phonePanels: sanitizePhonePanels(state.phonePanels),
+        radioPrefs: currentRadioPrefs(),
+      };
+    }
+
+    function applyRadioPrefsObject(prefs) {
+      if (!prefs || typeof prefs !== "object") {
+        return;
+      }
+      state.sampleRate = clampSampleRateHz(prefs.sampleRate ?? state.sampleRate);
+      state.rxAdc = clampRxAdc(prefs.rxAdc ?? state.rxAdc);
+      state.rxAntenna = clampRxAntenna(prefs.rxAntenna ?? state.rxAntenna);
+      state.mode = clampDemodMode(prefs.mode ?? state.mode);
+      state.rxVolumeDb = clampRxVolumeDb(prefs.rxVolumeDb ?? state.rxVolumeDb);
+      state.rxNoiseReductionMode = normalizeNrMode(prefs.rxNoiseReductionMode ?? state.rxNoiseReductionMode);
+      state.rxNoiseReductionLevel = clampRxNoiseReductionLevel(prefs.rxNoiseReductionLevel ?? state.rxNoiseReductionLevel);
+      state.rxNbMode = normalizeNbMode(prefs.rxNbMode ?? state.rxNbMode);
+      state.rxNbThreshold = clampRxNbThreshold(prefs.rxNbThreshold ?? state.rxNbThreshold);
+      state.anfEnabled = Boolean(prefs.anfEnabled ?? state.anfEnabled);
+      state.agcMode = normalizeAgcMode(prefs.agcMode ?? state.agcMode);
+      state.agcGain = clampAgcGain(prefs.agcGain ?? state.agcGain);
+      state.filterLow = clampFilterLowHz(prefs.filterLow ?? state.filterLow);
+      state.filterHigh = clampFilterHighHz(prefs.filterHigh ?? state.filterHigh);
+      state.txDrive = clampTxDriveWatts(prefs.txDrive ?? state.txDrive);
+      state.txMicGainDb = clampTxMicGainDb(prefs.txMicGainDb ?? state.txMicGainDb);
+      state.txFilterLow = clampFilterLowHz(prefs.txFilterLow ?? state.txFilterLow);
+      state.txFilterHigh = clampFilterHighHz(prefs.txFilterHigh ?? state.txFilterHigh);
+      state.rxEqEnabled = Boolean(prefs.rxEqEnabled ?? state.rxEqEnabled);
+      state.rxEqBands = sanitizeEqBands(prefs.rxEqBands, state.rxEqBands);
+      state.txEqEnabled = Boolean(prefs.txEqEnabled ?? state.txEqEnabled);
+      state.txEqBands = sanitizeEqBands(prefs.txEqBands, state.txEqBands);
+      state.cfcEnabled = Boolean(prefs.cfcEnabled ?? state.cfcEnabled);
+      state.cfcPrecomp = Number(prefs.cfcPrecomp ?? state.cfcPrecomp) || 0;
+      state.cfcBands = sanitizeCfcBands(prefs.cfcBands, state.cfcBands);
+      state.twoToneEnabled = Boolean(prefs.twoToneEnabled ?? state.twoToneEnabled);
     }
 
     function saveRadioPrefs() {
@@ -3304,6 +3442,8 @@
       } catch (error) {
         console.warn("Saturn Remote radio preference save failed", error);
       }
+      persistLocalSettingsFallback(currentRemoteSettings());
+      scheduleRemoteSettingsSave();
     }
 
     function applySavedRadioPrefs() {
@@ -3313,38 +3453,256 @@
       }
       try {
         const prefs = JSON.parse(raw);
-        if (!prefs || typeof prefs !== "object") {
-          return;
-        }
-        state.sampleRate = clampSampleRateHz(prefs.sampleRate ?? state.sampleRate);
-        state.rxAdc = clampRxAdc(prefs.rxAdc ?? state.rxAdc);
-        state.rxAntenna = clampRxAntenna(prefs.rxAntenna ?? state.rxAntenna);
-        state.mode = clampDemodMode(prefs.mode ?? state.mode);
-        state.rxVolumeDb = clampRxVolumeDb(prefs.rxVolumeDb ?? state.rxVolumeDb);
-        state.rxNoiseReductionMode = normalizeNrMode(prefs.rxNoiseReductionMode ?? state.rxNoiseReductionMode);
-        state.rxNoiseReductionLevel = clampRxNoiseReductionLevel(prefs.rxNoiseReductionLevel ?? state.rxNoiseReductionLevel);
-        state.rxNbMode = normalizeNbMode(prefs.rxNbMode ?? state.rxNbMode);
-        state.rxNbThreshold = clampRxNbThreshold(prefs.rxNbThreshold ?? state.rxNbThreshold);
-        state.anfEnabled = Boolean(prefs.anfEnabled ?? state.anfEnabled);
-        state.agcMode = normalizeAgcMode(prefs.agcMode ?? state.agcMode);
-        state.filterLow = clampFilterLowHz(prefs.filterLow ?? state.filterLow);
-        state.filterHigh = clampFilterHighHz(prefs.filterHigh ?? state.filterHigh);
-        state.txDrive = clampTxDriveWatts(prefs.txDrive ?? state.txDrive);
-        state.txMicGainDb = clampTxMicGainDb(prefs.txMicGainDb ?? state.txMicGainDb);
-        state.txFilterLow = clampFilterLowHz(prefs.txFilterLow ?? state.txFilterLow);
-        state.txFilterHigh = clampFilterHighHz(prefs.txFilterHigh ?? state.txFilterHigh);
-        state.rxEqEnabled = Boolean(prefs.rxEqEnabled ?? state.rxEqEnabled);
-        state.rxEqBands = sanitizeEqBands(prefs.rxEqBands, state.rxEqBands);
-        state.txEqEnabled = Boolean(prefs.txEqEnabled ?? state.txEqEnabled);
-        state.txEqBands = sanitizeEqBands(prefs.txEqBands, state.txEqBands);
-        state.cfcEnabled = Boolean(prefs.cfcEnabled ?? state.cfcEnabled);
-        state.cfcPrecomp = Number(prefs.cfcPrecomp ?? state.cfcPrecomp) || 0;
-        if (Array.isArray(prefs.cfcBands)) {
-          state.cfcBands = prefs.cfcBands.map(v => Math.max(0, Math.min(20, Number(v) || 0)));
-        }
+        applyRadioPrefsObject(prefs);
       } catch (error) {
         console.warn("Saturn Remote radio preference restore failed", error);
       }
+    }
+
+    function persistLocalSettingsFallback(settings = currentRemoteSettings()) {
+      try {
+        localStorage.setItem(RADIO_PREFS_KEY, JSON.stringify(settings.radioPrefs || currentRadioPrefs()));
+        localStorage.setItem("saturn.remote.wsUrl", normalizeWsUrlPreference(settings.wsUrl));
+        localStorage.setItem("saturn.remote.displayZoom", `${Math.max(1, Math.min(32, Number(settings.displayZoom) || 1))}`);
+        localStorage.setItem(FREQ_LOCK_KEY, settings.frequencyLock ? "1" : "0");
+        localStorage.setItem(WAKE_LOCK_KEY, settings.keepScreenAwake ? "1" : "0");
+        localStorage.setItem("saturn.remote.layout", settings.layoutMode === "phone" ? "phone" : "desktop");
+        localStorage.setItem("saturn.remote.theme", settings.theme === "light" ? "light" : "dark");
+        localStorage.setItem("saturn.remote.phonePanels", JSON.stringify(sanitizePhonePanels(settings.phonePanels)));
+      } catch (error) {
+        console.warn("Saturn Remote settings fallback save failed", error);
+      }
+    }
+
+    function applyRemoteSettingsObject(settings) {
+      if (!settings || typeof settings !== "object") {
+        return false;
+      }
+      applyRadioPrefsObject(settings.radioPrefs && typeof settings.radioPrefs === "object" ? settings.radioPrefs : settings);
+      if (settings.wsUrl != null) {
+        state.wsUrl = normalizeWsUrlPreference(settings.wsUrl);
+      }
+      if (Number.isFinite(Number(settings.displayZoom))) {
+        state.displayZoom = Math.max(1, Math.min(32, Number(settings.displayZoom)));
+      }
+      if (typeof settings.frequencyLock === "boolean") {
+        state.frequencyLock = settings.frequencyLock;
+      }
+      if (typeof settings.keepScreenAwake === "boolean") {
+        state.keepScreenAwake = settings.keepScreenAwake;
+      }
+      if (settings.layoutMode != null) {
+        applyLayout(settings.layoutMode, false, false);
+      }
+      if (settings.theme != null) {
+        applyTheme(settings.theme, false);
+      }
+      if (settings.phonePanels && typeof settings.phonePanels === "object") {
+        state.phonePanels = sanitizePhonePanels(settings.phonePanels, state.phonePanels);
+        syncPhonePanels();
+      }
+      if ($("ws-url")) {
+        $("ws-url").value = state.wsUrl || defaultWsUrl();
+      }
+      if ($("display-zoom")) {
+        $("display-zoom").value = `${state.displayZoom}`;
+      }
+      persistLocalSettingsFallback(currentRemoteSettings());
+      return true;
+    }
+
+    async function loadRemoteSettingsFromServer(logFailures = false) {
+      try {
+        const response = await fetch(REMOTE_SETTINGS_PATH, {
+          cache: "no-store",
+          credentials: "same-origin",
+        });
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}`);
+        }
+        const payload = await response.json();
+        const settings = payload && typeof payload === "object" && payload.settings
+          ? payload.settings
+          : payload;
+        if (applyRemoteSettingsObject(settings)) {
+          updateUi();
+        }
+        return true;
+      } catch (error) {
+        if (logFailures) {
+          logEvent(`Remote settings load skipped: ${error.message || error}`);
+        }
+        console.warn("Saturn Remote server settings load failed", error);
+        return false;
+      }
+    }
+
+    async function saveRemoteSettingsToServer(logFailures = false) {
+      if (remoteSettingsSaveTimer !== null) {
+        window.clearTimeout(remoteSettingsSaveTimer);
+        remoteSettingsSaveTimer = null;
+      }
+      const settings = currentRemoteSettings();
+      persistLocalSettingsFallback(settings);
+      try {
+        const response = await fetch(REMOTE_SETTINGS_PATH, {
+          method: "POST",
+          credentials: "same-origin",
+          keepalive: true,
+          headers: {
+            "Content-Type": "application/json",
+            [CSRF_HEADER_NAME]: CSRF_HEADER_VALUE,
+          },
+          body: JSON.stringify(settings),
+        });
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}`);
+        }
+        return true;
+      } catch (error) {
+        if (logFailures) {
+          logEvent(`Remote settings save skipped: ${error.message || error}`);
+        }
+        console.warn("Saturn Remote server settings save failed", error);
+        return false;
+      }
+    }
+
+    function scheduleRemoteSettingsSave(delayMs = REMOTE_SETTINGS_SAVE_DEBOUNCE_MS) {
+      if (remoteSettingsSaveTimer !== null) {
+        window.clearTimeout(remoteSettingsSaveTimer);
+      }
+      remoteSettingsSaveTimer = window.setTimeout(() => {
+        remoteSettingsSaveTimer = null;
+        void saveRemoteSettingsToServer(false);
+      }, Math.max(0, Number(delayMs) || 0));
+    }
+
+    function setFrequencyLock(locked, persist = true) {
+      state.frequencyLock = Boolean(locked);
+      if (persist) {
+        try {
+          localStorage.setItem(FREQ_LOCK_KEY, state.frequencyLock ? "1" : "0");
+        } catch (error) {
+          console.warn("Saturn Remote frequency lock save failed", error);
+        }
+      }
+      scheduleRemoteSettingsSave();
+      updateUi();
+    }
+
+    function shouldHoldWakeLock() {
+      return wakeLockSupported() &&
+        state.keepScreenAwake &&
+        state.connected &&
+        !document.hidden;
+    }
+
+    async function acquireWakeLock(logFailures = false) {
+      if (!shouldHoldWakeLock()) {
+        return false;
+      }
+      if (state.wakeLockSentinel || state.wakeLockPending) {
+        return true;
+      }
+      state.wakeLockPending = true;
+      updateUi();
+      try {
+        const sentinel = await navigator.wakeLock.request("screen");
+        state.wakeLockSentinel = sentinel;
+        state.wakeLockActive = !sentinel.released;
+        sentinel.addEventListener("release", () => {
+          if (state.wakeLockSentinel === sentinel) {
+            state.wakeLockSentinel = null;
+          }
+          state.wakeLockActive = false;
+          state.wakeLockPending = false;
+          updateUi();
+          if (shouldHoldWakeLock()) {
+            void acquireWakeLock(false);
+          }
+        });
+        return true;
+      } catch (error) {
+        state.wakeLockSentinel = null;
+        state.wakeLockActive = false;
+        if (logFailures) {
+          logEvent(`Stay Awake unavailable: ${error.message || error}`);
+        }
+        console.warn("Saturn Remote wake lock request failed", error);
+        return false;
+      } finally {
+        state.wakeLockPending = false;
+        state.wakeLockActive = Boolean(state.wakeLockSentinel);
+        updateUi();
+      }
+    }
+
+    async function releaseWakeLock() {
+      const sentinel = state.wakeLockSentinel;
+      state.wakeLockSentinel = null;
+      state.wakeLockActive = false;
+      state.wakeLockPending = false;
+      if (sentinel) {
+        try {
+          await sentinel.release();
+        } catch (error) {
+          console.warn("Saturn Remote wake lock release failed", error);
+        }
+      }
+      updateUi();
+    }
+
+    async function syncWakeLock(logFailures = false) {
+      if (shouldHoldWakeLock()) {
+        return acquireWakeLock(logFailures);
+      }
+      await releaseWakeLock();
+      return false;
+    }
+
+    function setKeepScreenAwake(enabled, persist = true) {
+      state.keepScreenAwake = Boolean(enabled);
+      if (persist) {
+        try {
+          localStorage.setItem(WAKE_LOCK_KEY, state.keepScreenAwake ? "1" : "0");
+        } catch (error) {
+          console.warn("Saturn Remote wake lock preference save failed", error);
+        }
+      }
+      void syncWakeLock(false);
+      updateUi();
+    }
+
+    function normalizeUiState() {
+      state.sampleRate = clampSampleRateHz(state.sampleRate);
+      state.rxAdc = clampRxAdc(state.rxAdc);
+      state.rxAntenna = clampRxAntenna(state.rxAntenna);
+      state.rxVolumeDb = clampRxVolumeDb(state.rxVolumeDb);
+      state.rxNoiseReductionMode = normalizeNrMode(state.rxNoiseReductionMode);
+      state.rxNoiseReductionLevel = clampRxNoiseReductionLevel(state.rxNoiseReductionLevel);
+      state.rxNbMode = normalizeNbMode(state.rxNbMode);
+      state.rxNbThreshold = clampRxNbThreshold(state.rxNbThreshold);
+      state.anfEnabled = Boolean(state.anfEnabled);
+      state.agcMode = normalizeAgcMode(state.agcMode);
+      state.agcGain = clampAgcGain(state.agcGain);
+      state.displayZoom = Math.max(1, Math.min(32, safeFiniteNumber(state.displayZoom, 1)));
+      state.filterLow = clampFilterLowHz(state.filterLow);
+      state.filterHigh = clampFilterHighHz(state.filterHigh);
+      state.txDrive = clampTxDriveWatts(state.txDrive);
+      state.txMicGainDb = clampTxMicGainDb(state.txMicGainDb);
+      state.txFilterLow = clampFilterLowHz(state.txFilterLow);
+      state.txFilterHigh = clampFilterHighHz(state.txFilterHigh);
+      state.rxEqBands = sanitizeEqBands(state.rxEqBands);
+      state.txEqBands = sanitizeEqBands(state.txEqBands);
+      state.cfcEnabled = Boolean(state.cfcEnabled);
+      state.cfcPrecomp = safeFiniteNumber(state.cfcPrecomp, 0);
+      state.cfcBands = sanitizeCfcBands(state.cfcBands);
+      state.frameRate = Math.max(0, safeFiniteNumber(state.frameRate, 0));
+      state.fftWidth = Math.max(0, Math.round(safeFiniteNumber(state.fftWidth, 0)));
+      state.audioBackpressureDrops = Math.max(0, Math.round(safeFiniteNumber(state.audioBackpressureDrops, 0)));
+      state.displayFloorDb = safeFiniteNumber(state.displayFloorDb, -200);
+      state.displayCeilingDb = safeFiniteNumber(state.displayCeilingDb, -120);
     }
 
     function clampRxAdc(value) {
@@ -3478,6 +3836,7 @@
         state.waterfallSettleFrames = 0;
         waterfallRenderer.clear();
         localStorage.setItem("saturn.remote.displayZoom", `${state.displayZoom}`);
+        scheduleRemoteSettingsSave();
         updateUi();
       }
     }
@@ -3520,6 +3879,7 @@
     }
 
     function updateUi() {
+      normalizeUiState();
       // Don't clobber the VFO input while the operator is typing.
       if (document.activeElement !== $("vfo-a-input")) {
         $("vfo-a-input").value = `${state.vfoA}`;
@@ -3530,16 +3890,32 @@
       $("mode-readout").textContent = state.mode;
       $("sample-rate-readout").textContent = `IQ ${Math.round(state.sampleRate / 1000)} kHz`;
       $("path-summary").textContent = `${adcLabel(state.rxAdc)} • ${antennaLabel(state.rxAntenna)} • ${Math.round(state.sampleRate / 1000)} kHz IQ`;
-      $("rx-volume-readout").textContent = `${state.rxVolumeDb.toFixed(1)} dB`;
+      const wakeLockBtn = $("wake-lock-btn");
+      if (wakeLockSupported()) {
+        wakeLockBtn.disabled = false;
+        if (state.keepScreenAwake) {
+          wakeLockBtn.textContent = state.wakeLockActive ? "Stay Awake On" : (state.wakeLockPending ? "Stay Awake…" : "Stay Awake Ready");
+        } else {
+          wakeLockBtn.textContent = "Stay Awake Off";
+        }
+      } else {
+        wakeLockBtn.disabled = true;
+        wakeLockBtn.textContent = "Stay Awake N/A";
+      }
+      wakeLockBtn.classList.toggle("active", state.keepScreenAwake && (state.wakeLockActive || state.wakeLockPending));
+      $("freq-lock-btn").textContent = state.frequencyLock ? "Freq Lock On" : "Freq Lock Off";
+      $("freq-lock-btn").classList.toggle("active", state.frequencyLock);
+      $("rx-volume-readout").textContent = `${safeFixed(state.rxVolumeDb, 1, "-10.0")} dB`;
       $("rx-nr-readout").textContent = noiseReductionLabel();
-      $("rx-nb-threshold-readout").textContent = state.rxNbThreshold.toFixed(2);
+      $("rx-nb-threshold-readout").textContent = safeFixed(state.rxNbThreshold, 2, "0.00");
       $("rx-anf-btn").textContent = state.anfEnabled ? "ANF On" : "ANF Off";
       $("rx-anf-btn").classList.toggle("active", state.anfEnabled);
-      $("zoom-readout").textContent = `${state.displayZoom.toFixed(1)}x`;
+      $("agc-gain-readout").textContent = `${state.agcGain}`;
+      $("zoom-readout").textContent = `${safeFixed(state.displayZoom, 1, "1.0")}x`;
       $("filter-low-readout").textContent = `${state.filterLow} Hz`;
       $("filter-high-readout").textContent = `${state.filterHigh} Hz`;
       $("tx-drive-readout").textContent = `${state.txDrive}`;
-      $("tx-mic-gain-readout").textContent = `${state.txMicGainDb.toFixed(1)} dB`;
+      $("tx-mic-gain-readout").textContent = `${safeFixed(state.txMicGainDb, 1, "0.0")} dB`;
       $("tx-filter-low-readout").textContent = `${state.txFilterLow} Hz`;
       $("tx-filter-high-readout").textContent = `${state.txFilterHigh} Hz`;
       $("rx-eq-enable-btn").textContent = state.rxEqEnabled ? "EQ On" : "EQ Off";
@@ -3549,12 +3925,12 @@
       $("cfc-enable-btn").textContent = state.cfcEnabled ? "CFC On" : "CFC Off";
       $("cfc-enable-btn").classList.toggle("active", state.cfcEnabled);
       $("cfc-precomp").value = state.cfcPrecomp;
-      $("cfc-precomp-readout").textContent = `${state.cfcPrecomp.toFixed(1)} dB`;
+      $("cfc-precomp-readout").textContent = `${safeFixed(state.cfcPrecomp, 1, "0.0")} dB`;
       for (let i = 1; i <= 10; i++) {
         const slider = document.getElementById(`cfc-band-${i}`);
         const valEl = document.getElementById(`cfc-val-${i}`);
         if (slider) slider.value = `${state.cfcBands[i]}`;
-        if (valEl) valEl.textContent = `${state.cfcBands[i].toFixed(1)}`;
+        if (valEl) valEl.textContent = safeFixed(state.cfcBands[i], 1, "0.0");
       }
       $("two-tone-btn").textContent = state.twoToneEnabled ? "2-Tone Test ON" : "2-Tone Test Off";
       $("two-tone-btn").classList.toggle("active", state.twoToneEnabled);
@@ -3566,7 +3942,7 @@
       updateSmeter(state.meterDbm);
       updateTxPwrMeter(state.txPower);
       updateSwrMeter(state.swr);
-      $("frame-rate-readout").textContent = `${state.frameRate.toFixed(1)} fps`;
+      $("frame-rate-readout").textContent = `${safeFixed(state.frameRate, 1, "0.0")} fps`;
       $("fft-readout").textContent = `${state.fftWidth}`;
       $("audio-drop-readout").textContent = `${state.audioBackpressureDrops}`;
       $("display-caption").textContent = state.displayCaption;
@@ -3580,7 +3956,7 @@
       if (state.connected) {
         goLiveBtn.textContent = "Go Offline";
         goLiveBtn.className = "btn ghost";
-      } else if (state.ws && state.ws.readyState === WebSocket.CONNECTING) {
+      } else if (state.connectPending || (state.ws && state.ws.readyState === WebSocket.CONNECTING)) {
         goLiveBtn.textContent = "Connecting…";
         goLiveBtn.className = "btn ghost";
       } else {
@@ -3588,7 +3964,10 @@
         goLiveBtn.className = "btn primary";
       }
       $("display-resolution").textContent = `Display: ${Math.max(1, Math.round(window.devicePixelRatio || 1))}x DPR`;
-      $("display-resolution").textContent += ` | ${state.displayFloorDb.toFixed(0)}..${state.displayCeilingDb.toFixed(0)} dB`;
+      $("display-resolution").textContent += ` | ${safeFixed(state.displayFloorDb, 0, "-200")}..${safeFixed(state.displayCeilingDb, 0, "-120")} dB`;
+      for (const element of [$("spectrum-shell"), $("waterfall-shell")]) {
+        element.style.touchAction = state.frequencyLock ? "pan-y" : "manipulation";
+      }
       updateAxes();
       updateFilterOverlay();
       syncActiveButtons();
@@ -3644,6 +4023,10 @@
       document.querySelectorAll("#rx-agc-grid .mode-btn").forEach((button) => {
         button.classList.toggle("active", normalizeAgcMode(button.dataset.agcMode) === state.agcMode);
       });
+      const agcGain = `${state.agcGain}`;
+      if ($("agc-gain").value !== agcGain) {
+        $("agc-gain").value = agcGain;
+      }
       const nbThreshold = `${state.rxNbThreshold}`;
       if ($("rx-nb-threshold").value !== nbThreshold) {
         $("rx-nb-threshold").value = nbThreshold;
@@ -3692,9 +4075,42 @@
 
     function requestFullState() {
       // The bridge already pushes a full state snapshot on connect. Keep the
-      // initial handshake read-only so a stale browser profile cannot retune or
-      // reconfigure a live radio session.
+      // initial handshake read-only, then apply the persisted remote profile
+      // explicitly once the session is up.
       sendTci("rx_smeter:0,0;");
+    }
+
+    function sendCurrentRadioPrefsToBridge() {
+      if (!state.connected) {
+        return;
+      }
+      const rxEqBands = sanitizeEqBands(state.rxEqBands);
+      const txEqBands = sanitizeEqBands(state.txEqBands);
+      sendTci(`iq_samplerate:${clampSampleRateHz(state.sampleRate)};`);
+      sendTci(`rx_adc:0,${clampRxAdc(state.rxAdc)};`);
+      sendTci(`rx_antenna:0,${clampRxAntenna(state.rxAntenna)};`);
+      sendTci(`modulation:0,${clampDemodMode(state.mode)};`);
+      sendTci(`rx_volume:0,0,${clampRxVolumeDb(state.rxVolumeDb).toFixed(1)};`);
+      sendTci(`rx_nr_mode:0,${normalizeNrMode(state.rxNoiseReductionMode)};`);
+      sendTci(`rx_nr_level:0,${clampRxNoiseReductionLevel(state.rxNoiseReductionLevel)};`);
+      sendTci(`rx_nb:0,${normalizeNbMode(state.rxNbMode)};`);
+      sendTci(`rx_nb_threshold:0,${clampRxNbThreshold(state.rxNbThreshold).toFixed(2)};`);
+      sendTci(`rx_anf:0,${Boolean(state.anfEnabled)};`);
+      sendTci(`rx_agc:0,${normalizeAgcMode(state.agcMode)};`);
+      sendTci(`rx_agc_gain:0,${clampAgcGain(state.agcGain)};`);
+      sendRxFilterBand();
+      sendTci(`tx_drive:0,${clampTxDriveWatts(state.txDrive)};`);
+      sendTci(`tx_mic_gain:0,${clampTxMicGainDb(state.txMicGainDb).toFixed(1)};`);
+      sendTxFilterBand();
+      sendTci(`rx_eq_enable:0,${Boolean(state.rxEqEnabled)};`);
+      sendTci(`tx_eq_enable:0,${Boolean(state.txEqEnabled)};`);
+      for (let i = 1; i <= 10; i += 1) {
+        sendTci(`rx_eq_band:0,${i},${rxEqBands[i]};`);
+        sendTci(`tx_eq_band:0,${i},${txEqBands[i]};`);
+        sendTci(`tx_cfc_band:0,${i},${Math.max(0, Math.min(20, Number(state.cfcBands[i]) || 0)).toFixed(1)};`);
+      }
+      sendTci(`tx_cfc_enable:0,${Boolean(state.cfcEnabled)};`);
+      sendTci(`tx_cfc_precomp:0,${(Number(state.cfcPrecomp) || 0).toFixed(1)};`);
     }
 
     function startIq() {
@@ -3980,26 +4396,33 @@
 
     function goLive() {
       const isConnectingOrLive = state.connected ||
+        state.connectPending ||
         (state.ws && state.ws.readyState === WebSocket.CONNECTING);
       if (isConnectingOrLive) {
-        disconnectBridge();
+        void disconnectBridge();
       } else {
-        connectBridge();
+        void connectBridge();
       }
     }
 
-    function connectBridge() {
-      if (state.ws && state.ws.readyState <= WebSocket.OPEN) {
+    async function connectBridge() {
+      if (state.connectPending || (state.ws && state.ws.readyState <= WebSocket.OPEN)) {
         return;
       }
+      state.connectPending = true;
+      updateUi();
+      await loadRemoteSettingsFromServer(false);
       state.demoMode = false;
-      state.wsUrl = $("ws-url").value.trim();
+      state.wsUrl = normalizeWsUrlPreference($("ws-url").value.trim());
+      $("ws-url").value = state.wsUrl;
       logEvent(`Connecting to ${state.wsUrl}`);
       let ws;
       try {
         ws = new WebSocket(state.wsUrl);
       } catch (err) {
         logEvent(`Invalid WebSocket URL: ${err.message}`);
+        state.connectPending = false;
+        updateUi();
         return;
       }
       localStorage.setItem("saturn.remote.wsUrl", state.wsUrl);
@@ -4008,12 +4431,20 @@
       state.ws = ws;
       ws.onopen = () => {
         if (ws !== state.ws) { ws.close(); return; }
+        state.connectPending = false;
         state.connected = true;
         resetDisplayHistory();
         logEvent("WebSocket connected");
         requestFullState();
+        window.setTimeout(() => {
+          if (ws !== state.ws || !state.connected) {
+            return;
+          }
+          sendCurrentRadioPrefsToBridge();
+        }, REMOTE_PROFILE_APPLY_DELAY_MS);
         startIq();
         void startRxAudio();
+        void syncWakeLock(true);
         updateUi();
       };
       ws.onmessage = (event) => {
@@ -4027,6 +4458,7 @@
       ws.onclose = () => {
         if (ws !== state.ws) return;
         logEvent("WebSocket closed");
+        state.connectPending = false;
         state.connected = false;
         state.iqStreaming = false;
         state.ws = null;
@@ -4034,15 +4466,20 @@
         state.txEnabled = false;
         stopMicCapture();
         void stopRxAudio(false);
+        void releaseWakeLock();
         updateUi();
       };
       ws.onerror = () => {
         if (ws !== state.ws) return;
+        state.connectPending = false;
         logEvent("WebSocket error");
+        updateUi();
       };
     }
 
-    function disconnectBridge() {
+    async function disconnectBridge() {
+      state.connectPending = false;
+      await saveRemoteSettingsToServer(false);
       if (state.ws) {
         state.ws.close();
       }
@@ -4053,6 +4490,7 @@
       state.txEnabled = false;
       stopMicCapture();
       void stopRxAudio(false);
+      await releaseWakeLock();
       updateUi();
     }
 
@@ -4136,6 +4574,11 @@
         } else if (name === "rx_agc") {
           const modeText = args.length >= 2 ? args[1].trim() : args[args.length - 1]?.trim();
           state.agcMode = normalizeAgcMode(modeText);
+        } else if (name === "rx_agc_gain") {
+          const gain = args.length >= 2 ? Number(args[1].trim()) : Number(args[args.length - 1]?.trim());
+          if (!Number.isNaN(gain)) {
+            state.agcGain = clampAgcGain(gain);
+          }
         } else if (name === "rx_filter_band" && args.length >= 3) {
           const fl = Number(args[1].trim()), fh = Number(args[2].trim());
           if (!Number.isFinite(fl) || !Number.isFinite(fh)) return;
@@ -4475,6 +4918,9 @@
         if (!digit) {
           return;
         }
+        if (state.frequencyLock) {
+          return;
+        }
         if (event.pointerType === "mouse" && event.button !== 0) {
           return;
         }
@@ -4488,12 +4934,18 @@
         if (!digit) {
           return;
         }
+        if (state.frequencyLock) {
+          return;
+        }
         event.preventDefault();
         tuneDigitByStep(Number(digit.dataset.step), event.deltaY < 0 ? 1 : -1);
       }, { passive: false });
       element.addEventListener("keydown", (event) => {
         const digit = event.target.closest(".freq-digit");
         if (!digit) {
+          return;
+        }
+        if (state.frequencyLock) {
           return;
         }
         if (event.key === "ArrowUp" || event.key === "ArrowDown") {
@@ -4507,6 +4959,12 @@
       $("go-live-btn").addEventListener("click", goLive);
       $("layout-btn").addEventListener("click", toggleLayout);
       $("theme-btn").addEventListener("click", toggleTheme);
+      $("wake-lock-btn").addEventListener("click", () => {
+        setKeepScreenAwake(!state.keepScreenAwake);
+      });
+      $("freq-lock-btn").addEventListener("click", () => {
+        setFrequencyLock(!state.frequencyLock);
+      });
       $("sample-rate").addEventListener("change", () => {
         state.sampleRate = clampSampleRateHz($("sample-rate").value);
         state.spectrumShiftCarryBins = 0;
@@ -4598,6 +5056,15 @@
           sendTci(`rx_agc:0,${state.agcMode};`);
         });
       });
+      $("agc-gain").addEventListener("input", () => {
+        state.agcGain = clampAgcGain($("agc-gain").value);
+        $("agc-gain").value = `${state.agcGain}`;
+        saveRadioPrefs();
+        updateUi();
+      });
+      $("agc-gain").addEventListener("change", () => {
+        sendTci(`rx_agc_gain:0,${state.agcGain};`);
+      });
       $("display-zoom").addEventListener("input", () => {
         state.displayZoom = Math.max(1, Math.min(32, Number($("display-zoom").value)));
         state.spectrumShiftCarryBins = 0;
@@ -4651,6 +5118,9 @@
       bindFrequencyDigitControl($("operator-center-readout"));
       for (const element of [$("spectrum-shell"), $("waterfall-shell")]) {
         element.addEventListener("pointerdown", (event) => {
+          if (state.frequencyLock) {
+            return;
+          }
           if (event.pointerType === "mouse" && event.button !== 0) {
             return;
           }
@@ -4658,6 +5128,9 @@
           setFrequency(frequencyFromDisplayPoint(event.clientX, element));
         });
         element.addEventListener("wheel", (event) => {
+          if (state.frequencyLock) {
+            return;
+          }
           event.preventDefault();
           if (event.ctrlKey || event.metaKey || event.altKey) {
             adjustDisplayZoom(event.deltaY < 0 ? 1 : -1);
@@ -4736,6 +5209,7 @@
       });
       $("two-tone-btn").addEventListener("click", () => {
         state.twoToneEnabled = !state.twoToneEnabled;
+        saveRadioPrefs();
         sendTci(`tx_two_tone:0,${state.twoToneEnabled};`);
         updateUi();
       });
@@ -4989,7 +5463,7 @@
 
     // ─────────────────────────────────────────────────────────────────────────
 
-    function init() {
+    async function init() {
       applyLayout(preferredLayout(), false, false);
       applyTheme(preferredTheme(), false);
       applySavedRadioPrefs();
@@ -5001,14 +5475,28 @@
       $("rx-volume").value = `${state.rxVolumeDb}`;
       $("rx-nr-level").value = `${state.rxNoiseReductionLevel}`;
       $("rx-nb-threshold").value = `${state.rxNbThreshold}`;
+      $("agc-gain").value = `${state.agcGain}`;
       const savedZoom = Number(localStorage.getItem("saturn.remote.displayZoom"));
       if (!Number.isNaN(savedZoom) && savedZoom >= 1 && savedZoom <= 32) {
         state.displayZoom = savedZoom;
+      }
+      const savedFrequencyLock = localStorage.getItem(FREQ_LOCK_KEY);
+      if (savedFrequencyLock === "1" || savedFrequencyLock === "0") {
+        state.frequencyLock = savedFrequencyLock === "1";
+      } else {
+        state.frequencyLock = defaultFrequencyLockEnabled();
+      }
+      const savedWakeLock = localStorage.getItem(WAKE_LOCK_KEY);
+      if (savedWakeLock === "1" || savedWakeLock === "0") {
+        state.keepScreenAwake = savedWakeLock === "1";
+      } else {
+        state.keepScreenAwake = defaultKeepScreenAwakeEnabled();
       }
       state.rxNbMode = normalizeNbMode(state.rxNbMode);
       state.rxNbThreshold = clampRxNbThreshold(state.rxNbThreshold);
       state.anfEnabled = Boolean(state.anfEnabled);
       state.agcMode = normalizeAgcMode(state.agcMode);
+      state.agcGain = clampAgcGain(state.agcGain);
       state.filterLow = clampFilterLowHz(state.filterLow);
       state.filterHigh = clampFilterHighHz(state.filterHigh);
       state.txDrive = clampTxDriveWatts(state.txDrive);
@@ -5035,17 +5523,25 @@
           el.style.display = 'none';
         });
       }
+      await loadRemoteSettingsFromServer(false);
       logEvent("Saturn Remote loaded");
       logEvent("Current bridge target: TCI over WebSocket");
       logEvent(`Display backends: spectrum=${spectrumRenderer.backend}, waterfall=${waterfallRenderer.backend}`);
       initAnalogMeters();
       initInteractions();
+      document.addEventListener("visibilitychange", () => {
+        void syncWakeLock(false);
+      });
+      window.addEventListener("pagehide", () => {
+        void saveRemoteSettingsToServer(false);
+        void releaseWakeLock();
+      });
       updateUi();
       setInterval(pulseTelemetry, 250);
       requestAnimationFrame(animationLoop);
     }
 
-    init();
+    void init();
   </script>
 </body>
 </html>

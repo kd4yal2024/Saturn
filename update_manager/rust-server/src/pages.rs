@@ -1,7 +1,7 @@
 use axum::{
-    extract::State,
+    extract::{Host, State},
     http::{header, StatusCode},
-    response::{Html, IntoResponse, Response},
+    response::{Html, IntoResponse, Redirect, Response},
 };
 use std::path::Path;
 
@@ -47,8 +47,27 @@ pub async fn monitor_handler(State(state): State<AppState>) -> impl IntoResponse
     serve_page(&state.webroot, "monitor.html").await
 }
 
-pub async fn remote_handler(State(state): State<AppState>) -> impl IntoResponse {
-    serve_page(&state.webroot, "saturn-remote.html").await
+fn remote_host_without_port(host: &str) -> &str {
+    if host.starts_with('[') {
+        if let Some(end) = host.find(']') {
+            return &host[..=end];
+        }
+        return host;
+    }
+    match host.rsplit_once(':') {
+        Some((name, port)) if !name.contains(':') && port.chars().all(|ch| ch.is_ascii_digit()) => {
+            name
+        }
+        _ => host,
+    }
+}
+
+fn remote_https_url(host: &str) -> String {
+    format!("https://{}:8443/remote", remote_host_without_port(host))
+}
+
+pub async fn remote_handler(Host(host): Host) -> impl IntoResponse {
+    Redirect::temporary(&remote_https_url(&host))
 }
 
 pub async fn healthz() -> impl IntoResponse {
@@ -58,30 +77,77 @@ pub async fn healthz() -> impl IntoResponse {
 pub fn route_to_page(path: &str) -> Option<&'static str> {
     match path {
         "/" | "/saturn" | "/saturn/" => Some("update.html"),
-        "/custom" | "/custom/" | "/custom.html" | "/index" | "/index.html" | "/saturn/custom"
-        | "/saturn/custom/" | "/saturn/custom.html" | "/saturn/index"
+        "/custom"
+        | "/custom/"
+        | "/custom.html"
+        | "/index"
+        | "/index.html"
+        | "/saturn/custom"
+        | "/saturn/custom/"
+        | "/saturn/custom.html"
+        | "/saturn/index"
         | "/saturn/index.html" => Some("index.html"),
-        "/backup" | "/backup/" | "/backup.html" | "/saturn/backup" | "/saturn/backup/"
+        "/backup"
+        | "/backup/"
+        | "/backup.html"
+        | "/saturn/backup"
+        | "/saturn/backup/"
         | "/saturn/backup.html" => Some("backup.html"),
-        "/update" | "/update/" | "/update.html" | "/saturn/update" | "/saturn/update/"
+        "/update"
+        | "/update/"
+        | "/update.html"
+        | "/saturn/update"
+        | "/saturn/update/"
         | "/saturn/update.html" => Some("update.html"),
-        "/saturngo" | "/saturngo/" | "/saturngo.html" | "/saturn-go" | "/saturn-go/"
-        | "/saturn-go.html" | "/saturn/saturngo" | "/saturn/saturngo/"
-        | "/saturn/saturngo.html" | "/saturn/saturn-go" | "/saturn/saturn-go/"
+        "/saturngo"
+        | "/saturngo/"
+        | "/saturngo.html"
+        | "/saturn-go"
+        | "/saturn-go/"
+        | "/saturn-go.html"
+        | "/saturn/saturngo"
+        | "/saturn/saturngo/"
+        | "/saturn/saturngo.html"
+        | "/saturn/saturn-go"
+        | "/saturn/saturn-go/"
         | "/saturn/saturn-go.html" => Some("saturngo.html"),
-        "/p23test" | "/p23test/" | "/p23test.html" | "/saturn/p23test" | "/saturn/p23test/"
+        "/p23test"
+        | "/p23test/"
+        | "/p23test.html"
+        | "/saturn/p23test"
+        | "/saturn/p23test/"
         | "/saturn/p23test.html" => Some("p23test.html"),
         "/fpga" | "/fpga/" | "/fpga.html" | "/saturn/fpga" | "/saturn/fpga/"
         | "/saturn/fpga.html" => Some("fpga.html"),
-        "/pihpsdr" | "/pihpsdr/" | "/pihpsdr.html" | "/saturn/pihpsdr" | "/saturn/pihpsdr/"
+        "/pihpsdr"
+        | "/pihpsdr/"
+        | "/pihpsdr.html"
+        | "/saturn/pihpsdr"
+        | "/saturn/pihpsdr/"
         | "/saturn/pihpsdr.html" => Some("pihpsdr.html"),
-        "/deskhpsdr" | "/deskhpsdr/" | "/deskhpsdr.html" | "/saturn/deskhpsdr"
-        | "/saturn/deskhpsdr/" | "/saturn/deskhpsdr.html" => Some("deskhpsdr.html"),
-        "/remote" | "/remote/" | "/remote.html" | "/saturn-remote" | "/saturn-remote/"
-        | "/saturn-remote.html" | "/saturn/remote" | "/saturn/remote/"
-        | "/saturn/remote.html" | "/saturn/saturn-remote" | "/saturn/saturn-remote/"
+        "/deskhpsdr"
+        | "/deskhpsdr/"
+        | "/deskhpsdr.html"
+        | "/saturn/deskhpsdr"
+        | "/saturn/deskhpsdr/"
+        | "/saturn/deskhpsdr.html" => Some("deskhpsdr.html"),
+        "/remote"
+        | "/remote/"
+        | "/remote.html"
+        | "/saturn-remote"
+        | "/saturn-remote/"
+        | "/saturn-remote.html"
+        | "/saturn/remote"
+        | "/saturn/remote/"
+        | "/saturn/remote.html"
+        | "/saturn/saturn-remote"
+        | "/saturn/saturn-remote/"
         | "/saturn/saturn-remote.html" => Some("saturn-remote.html"),
-        "/monitor" | "/monitor/" | "/monitor.html" | "/saturn/monitor" | "/saturn/monitor/"
+        "/monitor"
+        | "/monitor/"
+        | "/monitor.html"
+        | "/saturn/monitor"
+        | "/saturn/monitor/"
         | "/saturn/monitor.html" => Some("monitor.html"),
         _ => None,
     }
@@ -89,9 +155,13 @@ pub fn route_to_page(path: &str) -> Option<&'static str> {
 
 pub async fn fallback_handler(
     State(state): State<AppState>,
+    Host(host): Host,
     axum::extract::OriginalUri(uri): axum::extract::OriginalUri,
 ) -> impl IntoResponse {
     if let Some(page) = route_to_page(uri.path()) {
+        if page == "saturn-remote.html" {
+            return Redirect::temporary(&remote_https_url(&host)).into_response();
+        }
         return serve_page(&state.webroot, page).await;
     }
     (StatusCode::NOT_FOUND, "Not Found").into_response()
@@ -125,6 +195,7 @@ mod tests {
             webroot: tmp.clone(),
             config_path: tmp.join("config.json"),
             custom_scripts_file: tmp.join("custom_scripts.json"),
+            remote_settings_file: tmp.join("remote_settings.json"),
             scripts_dir: tmp.join("scripts"),
             saturn_addr: "127.0.0.1:8080".to_string(),
             bridge_ws_url: "ws://127.0.0.1:50001".to_string(),
@@ -161,14 +232,20 @@ mod tests {
     fn test_saturngo_aliases() {
         assert_eq!(route_to_page("/saturngo"), Some("saturngo.html"));
         assert_eq!(route_to_page("/saturn-go"), Some("saturngo.html"));
-        assert_eq!(route_to_page("/saturn/saturngo.html"), Some("saturngo.html"));
+        assert_eq!(
+            route_to_page("/saturn/saturngo.html"),
+            Some("saturngo.html")
+        );
     }
 
     #[test]
     fn test_remote_aliases() {
         assert_eq!(route_to_page("/remote"), Some("saturn-remote.html"));
         assert_eq!(route_to_page("/saturn-remote"), Some("saturn-remote.html"));
-        assert_eq!(route_to_page("/saturn/remote.html"), Some("saturn-remote.html"));
+        assert_eq!(
+            route_to_page("/saturn/remote.html"),
+            Some("saturn-remote.html")
+        );
     }
 
     #[test]
@@ -190,6 +267,7 @@ mod tests {
         let req = Request::builder()
             .method("GET")
             .uri("/no-such-page")
+            .header("host", "127.0.0.1:8080")
             .body(Body::empty())
             .unwrap();
         let res = app.oneshot(req).await.unwrap();
@@ -208,10 +286,51 @@ mod tests {
         let req = Request::builder()
             .method("GET")
             .uri("/update")
+            .header("host", "127.0.0.1:8080")
             .body(Body::empty())
             .unwrap();
         let res = app.oneshot(req).await.unwrap();
         assert_eq!(res.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn test_remote_handler_redirects_to_tls_remote() {
+        let state = test_state();
+        let app = axum::Router::new()
+            .route("/remote", get(remote_handler))
+            .with_state(state);
+        let req = Request::builder()
+            .method("GET")
+            .uri("/remote")
+            .header("host", "192.168.0.139")
+            .body(Body::empty())
+            .unwrap();
+        let res = app.oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::TEMPORARY_REDIRECT);
+        assert_eq!(
+            res.headers().get(header::LOCATION).unwrap(),
+            "https://192.168.0.139:8443/remote"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_fallback_remote_alias_redirects_to_tls_remote() {
+        let state = test_state();
+        let app = axum::Router::new()
+            .fallback(get(fallback_handler))
+            .with_state(state);
+        let req = Request::builder()
+            .method("GET")
+            .uri("/saturn/remote")
+            .header("host", "192.168.0.139:8080")
+            .body(Body::empty())
+            .unwrap();
+        let res = app.oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::TEMPORARY_REDIRECT);
+        assert_eq!(
+            res.headers().get(header::LOCATION).unwrap(),
+            "https://192.168.0.139:8443/remote"
+        );
     }
 
     /// healthz must return 200 regardless of filesystem state.

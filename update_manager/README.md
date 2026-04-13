@@ -326,6 +326,35 @@ sudo cp ../scripts/* /opt/saturn-go/scripts/
 sudo systemctl restart saturn-go.service
 ```
 
+## Commit and Push to GitHub
+
+Basic local commit flow from the Saturn repo root:
+
+```bash
+cd /home/pi/github/Saturn
+git status --short
+git add <paths>
+git commit -m "Describe the change"
+git push origin HEAD
+```
+
+If you want a branch on GitHub first:
+
+```bash
+cd /home/pi/github/Saturn
+git checkout -b <branch-name>
+git add <paths>
+git commit -m "Describe the change"
+git push -u origin <branch-name>
+```
+
+Notes:
+
+- Use `git status --short` before commit so you can see unrelated local changes.
+- Prefer `git push origin HEAD` when working on a branch; it pushes the current branch without retyping the branch name.
+- If you amend or rebase commits that were already pushed, update GitHub with `git push --force-with-lease`.
+- If a commit message picks up an unwanted trailer such as `Co-Authored-By`, remove it with `git commit --amend` before pushing.
+
 ## Installation
 
 Installer (deploy paths, service, web assets, scripts):
@@ -346,6 +375,7 @@ Installer behavior (current):
 - Deploys Rust backend only (no legacy Go source generation)
 - Removes legacy distro `cargo`/`rustc` packages (if installed) and bootstraps a current Rust toolchain via `rustup` for the build user before compiling (fixes old-Cargo `Cargo.lock` v4 parse errors on Bookworm)
 - Proxies all `/saturn/*` routes through NGINX to the Rust backend
+- Redirects plain HTTP remote entry points such as `/remote` and `/saturn/remote` to `https://<host>:8443/remote`
 - Creates/updates `saturn-go.service` using a non-root service user
 - Enables `saturn-go-watchdog.timer` to auto-restart service when health check fails
 - Applies systemd hardening defaults (restricted kernel/control-group access, syscall architecture/address-family restrictions)
@@ -356,6 +386,11 @@ Installer behavior (current):
   narrow set of privileged maintenance helpers non-interactively
 - Installs matching root-owned privileged helper copies under `/usr/local/lib/saturn-go/scripts`
 - Installs root-owned watchdog script at `/usr/local/lib/saturn-go/saturn-health-watchdog.sh` (outside writable custom script path)
+
+Remote state notes:
+
+- The live remote UI is served from `https://<host>:8443/remote`.
+- Shared remote settings persist in `/var/lib/saturn-state/remote_settings.json`.
 
 ## Uninstall
 

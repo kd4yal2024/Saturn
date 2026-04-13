@@ -122,6 +122,7 @@ mod tests {
             webroot: tmp.clone(),
             config_path: tmp.join("config.json"),
             custom_scripts_file: tmp.join("custom_scripts.json"),
+            remote_settings_file: tmp.join("remote_settings.json"),
             scripts_dir: tmp.join("scripts"),
             saturn_addr: "127.0.0.1:8080".to_string(),
             bridge_ws_url: "ws://127.0.0.1:50001".to_string(),
@@ -249,7 +250,10 @@ mod tests {
             .uri("/test")
             .header("host", "example.com")
             .header("origin", "http://evil.com")
-            .header(crate::state::CSRF_HEADER_NAME, crate::state::CSRF_HEADER_VALUE)
+            .header(
+                crate::state::CSRF_HEADER_NAME,
+                crate::state::CSRF_HEADER_VALUE,
+            )
             .body(Body::empty())
             .unwrap();
         let res = app.oneshot(req).await.unwrap();
@@ -266,7 +270,10 @@ mod tests {
             .uri("/test")
             .header("host", "example.com")
             .header("origin", "http://example.com")
-            .header(crate::state::CSRF_HEADER_NAME, crate::state::CSRF_HEADER_VALUE)
+            .header(
+                crate::state::CSRF_HEADER_NAME,
+                crate::state::CSRF_HEADER_VALUE,
+            )
             .body(Body::empty())
             .unwrap();
         let res = app.oneshot(req).await.unwrap();

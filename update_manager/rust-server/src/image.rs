@@ -255,9 +255,7 @@ pub async fn pi_image_cancel(Query(q): Query<PiImageStatusQuery>) -> impl IntoRe
     Json(serde_json::json!({ "status": "cancelled" })).into_response()
 }
 
-pub async fn pi_image_download(
-    Query(q): Query<PiImageStatusQuery>,
-) -> Result<Response, Response> {
+pub async fn pi_image_download(Query(q): Query<PiImageStatusQuery>) -> Result<Response, Response> {
     let job = match get_job(&q.job_id) {
         Some(j) => j,
         None => return Err(json_error(StatusCode::NOT_FOUND, "job not found")),
@@ -311,8 +309,7 @@ mod tests {
     use tower::ServiceExt;
 
     fn job_router() -> axum::Router {
-        axum::Router::new()
-            .route("/pi_image_start", post(pi_image_start))
+        axum::Router::new().route("/pi_image_start", post(pi_image_start))
     }
 
     /// POST with an out_dir that does not exist must return 400.

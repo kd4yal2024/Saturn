@@ -186,7 +186,10 @@ pub async fn run_privileged_output(
 pub async fn pi_clone_start(
     axum::extract::Json(req): axum::extract::Json<PiCloneStartReq>,
 ) -> Response {
-    let PiCloneStartReq { target, verify_compare } = req;
+    let PiCloneStartReq {
+        target,
+        verify_compare,
+    } = req;
     if !target.starts_with("/dev/") {
         return json_error(StatusCode::BAD_REQUEST, "target must be a /dev path");
     }
@@ -197,7 +200,10 @@ pub async fn pi_clone_start(
     let name = target.trim_start_matches("/dev/");
     let sys_block_path = std::path::Path::new("/sys/block").join(name);
     if !sys_block_path.exists() {
-        return json_error(StatusCode::BAD_REQUEST, "target device not found in /sys/block");
+        return json_error(
+            StatusCode::BAD_REQUEST,
+            "target device not found in /sys/block",
+        );
     }
     if !pi_clone_device_allowed(name, &sys_block_path) {
         return json_error(StatusCode::BAD_REQUEST, "target device is not removable");
@@ -343,7 +349,10 @@ pub async fn pi_wipe_target(
     let name = target.trim_start_matches("/dev/");
     let sys_block_path = Path::new("/sys/block").join(name);
     if !sys_block_path.exists() {
-        return json_error(StatusCode::BAD_REQUEST, "target device not found in /sys/block");
+        return json_error(
+            StatusCode::BAD_REQUEST,
+            "target device not found in /sys/block",
+        );
     }
     if !pi_clone_device_allowed(name, &sys_block_path) {
         return json_error(StatusCode::BAD_REQUEST, "target device is not removable");
@@ -363,7 +372,12 @@ pub async fn pi_wipe_target(
         .await
     {
         Ok(out) => out,
-        Err(e) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, &format!("lsblk failed: {e}")),
+        Err(e) => {
+            return json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &format!("lsblk failed: {e}"),
+            )
+        }
     };
     if !lsblk_out.status.success() {
         return json_error(
@@ -404,7 +418,12 @@ pub async fn pi_wipe_target(
 
     let wipefs_out = match run_privileged_output("wipefs", &["-af", &target]).await {
         Ok(out) => out,
-        Err(e) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, &format!("wipefs failed: {e}")),
+        Err(e) => {
+            return json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &format!("wipefs failed: {e}"),
+            )
+        }
     };
     if !wipefs_out.status.success() {
         return json_error(
@@ -427,7 +446,12 @@ pub async fn pi_wipe_target(
 
     let size_out = match run_privileged_output("blockdev", &["--getsize64", &target]).await {
         Ok(out) => out,
-        Err(e) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, &format!("blockdev failed: {e}")),
+        Err(e) => {
+            return json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &format!("blockdev failed: {e}"),
+            )
+        }
     };
     if !size_out.status.success() {
         return json_error(
@@ -458,7 +482,12 @@ pub async fn pi_wipe_target(
     .await
     {
         Ok(out) => out,
-        Err(e) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, &format!("dd head wipe failed: {e}")),
+        Err(e) => {
+            return json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &format!("dd head wipe failed: {e}"),
+            )
+        }
     };
     if !dd_head_out.status.success() {
         return json_error(

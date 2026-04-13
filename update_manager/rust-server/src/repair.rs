@@ -58,10 +58,7 @@ pub async fn repair_pack() -> Result<Response, Response> {
     }
 
     let ts = Local::now().format("%Y%m%d-%H%M%S").to_string();
-    let temp_dir = PathBuf::from(format!(
-        "/tmp/saturn-repair-{ts}-{}",
-        std::process::id()
-    ));
+    let temp_dir = PathBuf::from(format!("/tmp/saturn-repair-{ts}-{}", std::process::id()));
     tokio::fs::create_dir_all(&temp_dir)
         .await
         .map_err(|e| json_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
@@ -133,9 +130,8 @@ pub async fn repair_pack() -> Result<Response, Response> {
     headers.insert("Content-Type", HeaderValue::from_static("application/gzip"));
     headers.insert(
         "Content-Disposition",
-        HeaderValue::from_str(&format!("attachment; filename=\"{filename}\"")).unwrap_or_else(
-            |_| HeaderValue::from_static("attachment"),
-        ),
+        HeaderValue::from_str(&format!("attachment; filename=\"{filename}\""))
+            .unwrap_or_else(|_| HeaderValue::from_static("attachment")),
     );
 
     Ok((headers, body).into_response())
@@ -270,17 +266,27 @@ mod tests {
         let body = to_bytes(res.into_body(), 64 * 1024).await.unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert!(json.get("ok").is_some(), "response must contain ok");
-        assert!(json.get("missing").is_some(), "response must contain missing");
-        assert!(json.get("warnings").is_some(), "response must contain warnings");
+        assert!(
+            json.get("missing").is_some(),
+            "response must contain missing"
+        );
+        assert!(
+            json.get("warnings").is_some(),
+            "response must contain warnings"
+        );
         assert!(json.get("checks").is_some(), "response must contain checks");
     }
 
     #[tokio::test]
     async fn test_repair_pack_sets_gzip_headers() {
-        let res = repair_pack().await.expect("repair_pack should return a response");
+        let res = repair_pack()
+            .await
+            .expect("repair_pack should return a response");
         assert_eq!(res.status(), StatusCode::OK);
         assert_eq!(
-            res.headers().get("Content-Type").and_then(|v| v.to_str().ok()),
+            res.headers()
+                .get("Content-Type")
+                .and_then(|v| v.to_str().ok()),
             Some("application/gzip")
         );
         let disposition = res

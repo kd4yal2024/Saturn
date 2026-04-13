@@ -137,11 +137,9 @@ pub async fn kill_process(
         .await;
 
     match output {
-        Ok(o) if o.status.success() => (
-            StatusCode::OK,
-            Json(serde_json::json!({ "message": "OK" })),
-        )
-            .into_response(),
+        Ok(o) if o.status.success() => {
+            (StatusCode::OK, Json(serde_json::json!({ "message": "OK" }))).into_response()
+        }
         Ok(o) => {
             let stderr = String::from_utf8_lossy(&o.stderr).trim().to_string();
             let stderr_lc = stderr.to_lowercase();
@@ -209,8 +207,7 @@ mod tests {
     /// call is made (no external process needed for this path).
     #[tokio::test]
     async fn test_change_password_rejects_short() {
-        let app = axum::Router::new()
-            .route("/change_password", post(change_password));
+        let app = axum::Router::new().route("/change_password", post(change_password));
         let req = Request::builder()
             .method("POST")
             .uri("/change_password")

@@ -18,8 +18,8 @@ use crate::state::{
     DEFAULT_UPDATE_KEEP_SNAPSHOTS, HEALTH_CHECK_RETRY_INTERVAL_SECS,
 };
 use crate::util::{
-    current_repo_root, is_safe_ref_name, is_safe_repo_part, json_error,
-    list_repo_root_candidates, output_error_text, validate_saturn_repo_root,
+    current_repo_root, is_safe_ref_name, is_safe_repo_part, json_error, list_repo_root_candidates,
+    output_error_text, validate_saturn_repo_root,
 };
 
 // --- Types ---
@@ -596,8 +596,10 @@ async fn health_check_url(
     let mut last_err = String::new();
     for attempt in 0..=retries {
         if attempt > 0 {
-            tokio::time::sleep(tokio::time::Duration::from_secs(HEALTH_CHECK_RETRY_INTERVAL_SECS))
-                .await;
+            tokio::time::sleep(tokio::time::Duration::from_secs(
+                HEALTH_CHECK_RETRY_INTERVAL_SECS,
+            ))
+            .await;
         }
         let output = Command::new("curl")
             .arg("-fsS")
@@ -793,11 +795,7 @@ async fn run_appliance_update(
             return;
         }
         Err(e) => {
-            finish_appliance_update_job(
-                &job_id,
-                "error",
-                format!("git worktree add failed: {e}"),
-            );
+            finish_appliance_update_job(&job_id, "error", format!("git worktree add failed: {e}"));
             return;
         }
     }
@@ -930,9 +928,7 @@ pub async fn set_update_policy(
         }
     }
     match save_update_policy(&state, policy).await {
-        Ok(policy) => {
-            Json(serde_json::json!({ "status": "ok", "policy": policy })).into_response()
-        }
+        Ok(policy) => Json(serde_json::json!({ "status": "ok", "policy": policy })).into_response(),
         Err(e) => json_error(StatusCode::INTERNAL_SERVER_ERROR, &e),
     }
 }
@@ -1158,9 +1154,7 @@ pub async fn set_repo_root(
 
     let canonical = match tokio::fs::canonicalize(requested).await {
         Ok(p) => p,
-        Err(e) => {
-            return json_error(StatusCode::BAD_REQUEST, &format!("invalid repo_root: {e}"))
-        }
+        Err(e) => return json_error(StatusCode::BAD_REQUEST, &format!("invalid repo_root: {e}")),
     };
     if let Err(e) = validate_saturn_repo_root(&canonical) {
         return json_error(StatusCode::BAD_REQUEST, &e);
@@ -1191,6 +1185,7 @@ mod tests {
             webroot: tmp.clone(),
             config_path: tmp.join("config.json"),
             custom_scripts_file: tmp.join("custom_scripts.json"),
+            remote_settings_file: tmp.join("remote_settings.json"),
             scripts_dir: tmp.join("scripts"),
             saturn_addr: "127.0.0.1:8080".to_string(),
             bridge_ws_url: "ws://127.0.0.1:50001".to_string(),
@@ -1208,7 +1203,10 @@ mod tests {
 
     fn test_router(state: AppState) -> axum::Router {
         axum::Router::new()
-            .route("/update_policy", get(get_update_policy).post(set_update_policy))
+            .route(
+                "/update_policy",
+                get(get_update_policy).post(set_update_policy),
+            )
             .route("/update_start", post(update_start))
             .route("/update_status", get(update_status))
             .route("/update_rollback", post(update_rollback))
@@ -1226,7 +1224,10 @@ mod tests {
     fn test_activity_exclusive() {
         let guard = begin_update_activity("test-kind", "detail").unwrap();
         let second = begin_update_activity("other-kind", "");
-        assert!(second.is_err(), "second begin_update_activity should fail while first guard is held");
+        assert!(
+            second.is_err(),
+            "second begin_update_activity should fail while first guard is held"
+        );
         drop(guard);
         // After release the slot must accept a new caller.
         let guard2 = begin_update_activity("after-release", "").unwrap();
@@ -1243,7 +1244,10 @@ mod tests {
         policy.healthcheck_initial_delay_secs = 999;
         let n = normalize_update_policy(policy, &state);
         assert_eq!(n.healthcheck_retries, 5, "retries must clamp to max 5");
-        assert_eq!(n.healthcheck_initial_delay_secs, 30, "initial delay must clamp to max 30");
+        assert_eq!(
+            n.healthcheck_initial_delay_secs, 30,
+            "initial delay must clamp to max 30"
+        );
     }
 
     #[test]
@@ -1253,8 +1257,14 @@ mod tests {
         policy.stable_ref = "../evil".to_string();
         policy.beta_ref = "..%2Fevil".to_string();
         let n = normalize_update_policy(policy, &state);
-        assert_eq!(n.stable_ref, "main", "dotdot in stable_ref must fall back to 'main'");
-        assert_eq!(n.beta_ref, "beta", "dotdot in beta_ref must fall back to 'beta'");
+        assert_eq!(
+            n.stable_ref, "main",
+            "dotdot in stable_ref must fall back to 'main'"
+        );
+        assert_eq!(
+            n.beta_ref, "beta",
+            "dotdot in beta_ref must fall back to 'beta'"
+        );
     }
 
     #[test]
@@ -1265,7 +1275,10 @@ mod tests {
         policy.owner = "Saturn".to_string();
         policy.repo = "Saturn".to_string();
         let n = normalize_update_policy(policy, &state);
-        assert!(!n.repo_url_configured, "legacy Saturn/Saturn placeholder must remain unconfigured");
+        assert!(
+            !n.repo_url_configured,
+            "legacy Saturn/Saturn placeholder must remain unconfigured"
+        );
     }
 
     #[test]
@@ -1332,6 +1345,7 @@ mod tests {
             webroot: tmp.clone(),
             config_path: tmp.join("config.json"),
             custom_scripts_file: tmp.join("custom_scripts.json"),
+            remote_settings_file: tmp.join("remote_settings.json"),
             scripts_dir: tmp.join("scripts"),
             saturn_addr: "127.0.0.1:8080".to_string(),
             bridge_ws_url: "ws://127.0.0.1:50001".to_string(),
@@ -1375,7 +1389,10 @@ mod tests {
         assert_eq!(res.status(), StatusCode::OK);
         let body = axum::body::to_bytes(res.into_body(), 65536).await.unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert!(json.get("policy").is_some(), "response must contain a 'policy' key");
+        assert!(
+            json.get("policy").is_some(),
+            "response must contain a 'policy' key"
+        );
         assert_eq!(json["policy"]["channel"], "stable");
     }
 }

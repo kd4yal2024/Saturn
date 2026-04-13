@@ -386,11 +386,7 @@ struct ProcInfo {
     start_time: u64,
 }
 
-fn list_procs_sysinfo(
-    sys: &System,
-    total_mem_kb: f64,
-    q: &ProcQuery,
-) -> Vec<serde_json::Value> {
+fn list_procs_sysinfo(sys: &System, total_mem_kb: f64, q: &ProcQuery) -> Vec<serde_json::Value> {
     let mut out: Vec<ProcInfo> = Vec::new();
     for (pid, proc_) in sys.processes() {
         let pid_i32 = pid.as_u32() as i32;
@@ -537,7 +533,7 @@ mod tests {
     #[test]
     fn test_calc_rate_second_call_positive() {
         calc_rate("test-second-call", 0, 0); // seed
-        // Give dt_ms a chance to be > 0 by sleeping 5 ms.
+                                             // Give dt_ms a chance to be > 0 by sleeping 5 ms.
         std::thread::sleep(std::time::Duration::from_millis(5));
         let (ra, rb) = calc_rate("test-second-call", 5000, 10000);
         assert!(ra > 0, "rate must be positive after counter increase");
