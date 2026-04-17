@@ -57,6 +57,15 @@ Remote entry behavior:
 - `http://<host>/saturn/remote` should redirect to `https://<host>:8443/remote`.
 - `https://<host>:8443/remote` is the live remote UI.
 - Shared remote settings persist in `/var/lib/saturn-state/remote_settings.json`.
+- Named remote Setup profiles persist in `/var/lib/saturn-state/remote_profiles.json`.
+- The remote `Setup` menu supports profile save/load/delete, startup profile selection, and panadapter/waterfall display presets.
+
+Remote Setup profile notes:
+
+- `remote_settings.json` holds the active working state, including the current active profile name.
+- `remote_profiles.json` holds the saved profile catalog plus the optional startup profile selection.
+- A startup profile should be applied before opening a live phone session when you want a known panadapter, waterfall, and radio-control baseline.
+- If the Setup menu opens underneath the panadapter after a deploy, confirm the latest `saturn-remote.html` was synced into `/var/lib/saturn-web/`.
 
 ## GitHub Commit and Push
 

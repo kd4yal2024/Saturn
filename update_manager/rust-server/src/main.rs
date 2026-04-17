@@ -24,12 +24,13 @@ use crate::remote_tls::{
 };
 use crate::repair::{repair_pack, verify_system_config};
 use crate::state::{
-    AppState, CfgEntry, DefaultCustomScript, FlagsQuery, RemoteSettings, RunLogQuery,
-    DEFAULT_CUSTOM_SCRIPT_CLEAN_BACKUPS, DEFAULT_CUSTOM_SCRIPT_CLEAN_LOGS,
+    AppState, CfgEntry, DefaultCustomScript, FlagsQuery, RemoteProfileDeleteRequest,
+    RemoteProfileSaveRequest, RemoteProfileStartupRequest, RemoteProfilesFile, RemoteSettings,
+    RunLogQuery, DEFAULT_CUSTOM_SCRIPT_CLEAN_BACKUPS, DEFAULT_CUSTOM_SCRIPT_CLEAN_LOGS,
     DEFAULT_CUSTOM_SCRIPT_FIX_LED_POWER_BUTTON, DEFAULT_CUSTOM_SCRIPT_SETUP_ETH_FALLBACK,
     DEFAULT_MAX_BODY_BYTES, DEFAULT_RESTORE_MAX_UPLOAD_BYTES, MAX_CUSTOM_SCRIPTS,
-    MAX_CUSTOM_SCRIPTS_FILE_BYTES, MAX_REMOTE_SETTINGS_FILE_BYTES, MAX_TAR_EXPANSION_FACTOR,
-    P23_ADC_PEAK_TELEMETRY_ENABLE_FILE, P23_ADC_PEAK_TELEMETRY_JSON_FILE,
+    MAX_CUSTOM_SCRIPTS_FILE_BYTES, MAX_REMOTE_PROFILES_FILE_BYTES, MAX_REMOTE_SETTINGS_FILE_BYTES,
+    MAX_TAR_EXPANSION_FACTOR, P23_ADC_PEAK_TELEMETRY_ENABLE_FILE, P23_ADC_PEAK_TELEMETRY_JSON_FILE,
     P23_APP_PERF_TELEMETRY_JSON_FILE, RUN_LOG_FETCH_MAX_LINES, RUN_LOG_MAX_LINES,
 };
 use crate::update::{
@@ -103,6 +104,9 @@ async fn main() {
     let remote_settings_file = std::env::var("SATURN_REMOTE_SETTINGS_FILE")
         .map(PathBuf::from)
         .unwrap_or_else(|_| PathBuf::from(format!("{default_state_dir}/remote_settings.json")));
+    let remote_profiles_file = std::env::var("SATURN_REMOTE_PROFILES_FILE")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from(format!("{default_state_dir}/remote_profiles.json")));
     let default_repo_root = std::env::var("SATURN_REPO_ROOT").unwrap_or_else(|_| {
         let home = std::env::var("HOME").unwrap_or_else(|_| "/home/pi".to_string());
         format!("{home}/github/Saturn")
@@ -183,6 +187,9 @@ async fn main() {
     if let Some(parent) = remote_settings_file.parent() {
         let _ = tokio::fs::create_dir_all(parent).await;
     }
+    if let Some(parent) = remote_profiles_file.parent() {
+        let _ = tokio::fs::create_dir_all(parent).await;
+    }
     let _ = tokio::fs::create_dir_all(&scripts_dir).await;
     let _ = tokio::fs::create_dir_all(&snapshot_dir).await;
     let _ = tokio::fs::create_dir_all(&staging_dir).await;
@@ -193,6 +200,7 @@ async fn main() {
         config_path,
         custom_scripts_file,
         remote_settings_file,
+        remote_profiles_file,
         scripts_dir,
         saturn_addr: addr.clone(),
         bridge_ws_url: bridge_ws_url.clone(),
@@ -249,6 +257,10 @@ async fn main() {
         .route("/custom_scripts_delete", post(delete_custom_script))
         .route("/remote_settings", get(get_remote_settings))
         .route("/remote_settings", post(set_remote_settings))
+        .route("/remote_profiles", get(get_remote_profiles))
+        .route("/remote_profiles/save", post(save_remote_profile))
+        .route("/remote_profiles/delete", post(delete_remote_profile))
+        .route("/remote_profiles/startup", post(set_remote_profile_startup))
         .route("/get_fpga_images", get(get_fpga_images))
         .route("/get_repo_root", get(get_repo_root))
         .route("/list_repo_roots", get(list_repo_roots))
@@ -900,6 +912,72 @@ async fn save_remote_settings_file(path: &Path, settings: &RemoteSettings) -> Re
     Ok(())
 }
 
+async fn load_remote_profiles_file(path: &Path) -> Result<RemoteProfilesFile, String> {
+    let metadata = match tokio::fs::metadata(path).await {
+        Ok(metadata) => metadata,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(RemoteProfilesFile::default())
+        }
+        Err(e) => return Err(format!("failed to stat remote profiles file: {e}")),
+    };
+    if metadata.len() > MAX_REMOTE_PROFILES_FILE_BYTES {
+        return Err(format!(
+            "remote profiles file exceeds {} bytes",
+            MAX_REMOTE_PROFILES_FILE_BYTES
+        ));
+    }
+    let raw = tokio::fs::read_to_string(path)
+        .await
+        .map_err(|e| format!("failed to read remote profiles file: {e}"))?;
+    if raw.trim().is_empty() {
+        return Ok(RemoteProfilesFile::default());
+    }
+    serde_json::from_str::<RemoteProfilesFile>(&raw)
+        .map_err(|e| format!("invalid remote profiles file: {e}"))
+}
+
+async fn save_remote_profiles_file(
+    path: &Path,
+    profiles: &RemoteProfilesFile,
+) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        tokio::fs::create_dir_all(parent)
+            .await
+            .map_err(|e| format!("failed to create remote profiles dir: {e}"))?;
+    }
+    let bytes = serde_json::to_vec_pretty(profiles)
+        .map_err(|e| format!("failed to serialize remote profiles: {e}"))?;
+    if bytes.len() as u64 > MAX_REMOTE_PROFILES_FILE_BYTES {
+        return Err(format!(
+            "remote profiles payload exceeds {} bytes",
+            MAX_REMOTE_PROFILES_FILE_BYTES
+        ));
+    }
+    tokio::fs::write(path, bytes)
+        .await
+        .map_err(|e| format!("failed to write remote profiles file: {e}"))?;
+    let _ = tokio::fs::set_permissions(path, std::fs::Permissions::from_mode(0o640)).await;
+    Ok(())
+}
+
+fn normalize_remote_profile_name(name: &str) -> Option<String> {
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if trimmed.len() > 64 {
+        return None;
+    }
+    if trimmed
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, ' ' | '-' | '_' | '.'))
+    {
+        Some(trimmed.to_string())
+    } else {
+        None
+    }
+}
+
 pub async fn get_remote_settings(State(state): State<AppState>) -> Response {
     match load_remote_settings_file(&state.remote_settings_file).await {
         Ok(settings) => {
@@ -915,6 +993,90 @@ pub async fn set_remote_settings(
 ) -> Response {
     match save_remote_settings_file(&state.remote_settings_file, &settings).await {
         Ok(()) => Json(serde_json::json!({ "status": "ok", "settings": settings })).into_response(),
+        Err(e) => json_error(StatusCode::INTERNAL_SERVER_ERROR, &e),
+    }
+}
+
+pub async fn get_remote_profiles(State(state): State<AppState>) -> Response {
+    match load_remote_profiles_file(&state.remote_profiles_file).await {
+        Ok(profiles) => {
+            Json(serde_json::json!({ "status": "ok", "profiles": profiles })).into_response()
+        }
+        Err(e) => json_error(StatusCode::INTERNAL_SERVER_ERROR, &e),
+    }
+}
+
+pub async fn save_remote_profile(
+    State(state): State<AppState>,
+    Json(request): Json<RemoteProfileSaveRequest>,
+) -> Response {
+    let Some(name) = normalize_remote_profile_name(&request.name) else {
+        return json_error(StatusCode::BAD_REQUEST, "invalid remote profile name");
+    };
+    let mut profiles = match load_remote_profiles_file(&state.remote_profiles_file).await {
+        Ok(profiles) => profiles,
+        Err(e) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, &e),
+    };
+    profiles.profiles.insert(name.clone(), request.settings);
+    if request.make_startup {
+        profiles.startup_profile = Some(name.clone());
+    }
+    match save_remote_profiles_file(&state.remote_profiles_file, &profiles).await {
+        Ok(()) => Json(serde_json::json!({
+            "status": "ok",
+            "name": name,
+            "profiles": profiles
+        }))
+        .into_response(),
+        Err(e) => json_error(StatusCode::INTERNAL_SERVER_ERROR, &e),
+    }
+}
+
+pub async fn delete_remote_profile(
+    State(state): State<AppState>,
+    Json(request): Json<RemoteProfileDeleteRequest>,
+) -> Response {
+    let Some(name) = normalize_remote_profile_name(&request.name) else {
+        return json_error(StatusCode::BAD_REQUEST, "invalid remote profile name");
+    };
+    let mut profiles = match load_remote_profiles_file(&state.remote_profiles_file).await {
+        Ok(profiles) => profiles,
+        Err(e) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, &e),
+    };
+    if profiles.profiles.remove(&name).is_none() {
+        return json_error(StatusCode::NOT_FOUND, "remote profile not found");
+    }
+    if profiles.startup_profile.as_deref() == Some(name.as_str()) {
+        profiles.startup_profile = None;
+    }
+    match save_remote_profiles_file(&state.remote_profiles_file, &profiles).await {
+        Ok(()) => Json(serde_json::json!({ "status": "ok", "profiles": profiles })).into_response(),
+        Err(e) => json_error(StatusCode::INTERNAL_SERVER_ERROR, &e),
+    }
+}
+
+pub async fn set_remote_profile_startup(
+    State(state): State<AppState>,
+    Json(request): Json<RemoteProfileStartupRequest>,
+) -> Response {
+    let mut profiles = match load_remote_profiles_file(&state.remote_profiles_file).await {
+        Ok(profiles) => profiles,
+        Err(e) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, &e),
+    };
+    match request.name.as_deref() {
+        Some(name) => {
+            let Some(name) = normalize_remote_profile_name(name) else {
+                return json_error(StatusCode::BAD_REQUEST, "invalid remote profile name");
+            };
+            if !profiles.profiles.contains_key(&name) {
+                return json_error(StatusCode::NOT_FOUND, "remote profile not found");
+            }
+            profiles.startup_profile = Some(name);
+        }
+        None => profiles.startup_profile = None,
+    }
+    match save_remote_profiles_file(&state.remote_profiles_file, &profiles).await {
+        Ok(()) => Json(serde_json::json!({ "status": "ok", "profiles": profiles })).into_response(),
         Err(e) => json_error(StatusCode::INTERNAL_SERVER_ERROR, &e),
     }
 }

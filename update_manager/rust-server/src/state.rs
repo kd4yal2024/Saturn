@@ -19,6 +19,7 @@ pub const MAX_TAR_EXPANSION_FACTOR: u64 = 10;
 // Derived from MAX_CUSTOM_SCRIPTS * (MAX_SCRIPT_FLAGS * MAX_SCRIPT_FLAG_LEN + per-entry overhead).
 pub const MAX_CUSTOM_SCRIPTS_FILE_BYTES: u64 = 1_048_576; // 1 MiB
 pub const MAX_REMOTE_SETTINGS_FILE_BYTES: u64 = 1_048_576; // 1 MiB
+pub const MAX_REMOTE_PROFILES_FILE_BYTES: u64 = 1_048_576; // 1 MiB
 pub const CSRF_HEADER_NAME: &str = "x-saturn-csrf";
 pub const CSRF_HEADER_VALUE: &str = "1";
 pub const RUN_LOG_MAX_LINES: usize = 5000;
@@ -43,6 +44,7 @@ pub struct AppState {
     pub config_path: PathBuf,
     pub custom_scripts_file: PathBuf,
     pub remote_settings_file: PathBuf,
+    pub remote_profiles_file: PathBuf,
     pub scripts_dir: PathBuf,
     pub saturn_addr: String,
     pub bridge_ws_url: String,
@@ -124,7 +126,25 @@ pub struct RemoteRadioPrefs {
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
 #[serde(default, rename_all = "camelCase")]
-pub struct RemoteSettings {
+pub struct RemoteDisplayPrefs {
+    pub spectrum_auto_range: Option<bool>,
+    pub spectrum_floor_db: Option<f64>,
+    pub spectrum_ceiling_db: Option<f64>,
+    pub waterfall_auto_range: Option<bool>,
+    pub waterfall_floor_db: Option<f64>,
+    pub waterfall_ceiling_db: Option<f64>,
+    pub spectrum_average: Option<u8>,
+    pub waterfall_speed: Option<u8>,
+    pub waterfall_palette: Option<String>,
+    pub spectrum_peak_hold: Option<bool>,
+    pub show_grid: Option<bool>,
+    pub show_center_line: Option<bool>,
+    pub show_band_edges: Option<bool>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+#[serde(default, rename_all = "camelCase")]
+pub struct RemoteProfileData {
     pub ws_url: Option<String>,
     pub display_zoom: Option<f64>,
     pub frequency_lock: Option<bool>,
@@ -132,5 +152,49 @@ pub struct RemoteSettings {
     pub layout_mode: Option<String>,
     pub theme: Option<String>,
     pub phone_panels: BTreeMap<String, bool>,
+    pub display_prefs: RemoteDisplayPrefs,
     pub radio_prefs: RemoteRadioPrefs,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+#[serde(default, rename_all = "camelCase")]
+pub struct RemoteSettings {
+    pub active_profile: Option<String>,
+    pub ws_url: Option<String>,
+    pub display_zoom: Option<f64>,
+    pub frequency_lock: Option<bool>,
+    pub keep_screen_awake: Option<bool>,
+    pub layout_mode: Option<String>,
+    pub theme: Option<String>,
+    pub phone_panels: BTreeMap<String, bool>,
+    pub display_prefs: RemoteDisplayPrefs,
+    pub radio_prefs: RemoteRadioPrefs,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+#[serde(default, rename_all = "camelCase")]
+pub struct RemoteProfilesFile {
+    pub startup_profile: Option<String>,
+    pub profiles: BTreeMap<String, RemoteProfileData>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteProfileSaveRequest {
+    pub name: String,
+    pub settings: RemoteProfileData,
+    #[serde(default)]
+    pub make_startup: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteProfileDeleteRequest {
+    pub name: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+#[serde(default, rename_all = "camelCase")]
+pub struct RemoteProfileStartupRequest {
+    pub name: Option<String>,
 }

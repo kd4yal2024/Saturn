@@ -391,6 +391,13 @@ Remote state notes:
 
 - The live remote UI is served from `https://<host>:8443/remote`.
 - Shared remote settings persist in `/var/lib/saturn-state/remote_settings.json`.
+- Named remote Setup profiles persist in `/var/lib/saturn-state/remote_profiles.json`.
+- The remote `Setup` menu now supports:
+  - saving the current radio and display state as a named server-side profile
+  - loading and deleting saved profiles
+  - assigning one saved profile as the startup profile
+  - advanced panadapter/waterfall display presets such as spectrum floor/ceiling, waterfall floor/ceiling, averaging, speed, palette, peak hold, and grid/marker toggles
+- When a startup profile is set, the remote applies it on page load before connecting.
 
 ## Uninstall
 

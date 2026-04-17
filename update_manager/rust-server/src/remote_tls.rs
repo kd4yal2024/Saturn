@@ -22,10 +22,13 @@ use tokio_tungstenite::{connect_async, tungstenite::Message as TungsteniteMessag
 use tracing::{error, info, warn};
 
 use crate::{
-    get_remote_settings,
+    delete_remote_profile, get_remote_profiles, get_remote_settings,
     pages::{healthz, serve_page},
-    set_remote_settings,
-    state::{AppState, RemoteSettings},
+    save_remote_profile, set_remote_profile_startup, set_remote_settings,
+    state::{
+        AppState, RemoteProfileDeleteRequest, RemoteProfileSaveRequest,
+        RemoteProfileStartupRequest, RemoteSettings,
+    },
 };
 
 type RemoteTlsResult<T> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
@@ -130,6 +133,16 @@ pub fn remote_tls_router(state: AppState) -> Router {
         .route("/healthz", get(healthz))
         .route("/remote_settings", get(remote_settings_get_handler))
         .route("/remote_settings", post(remote_settings_post_handler))
+        .route("/remote_profiles", get(remote_profiles_get_handler))
+        .route("/remote_profiles/save", post(remote_profiles_save_handler))
+        .route(
+            "/remote_profiles/delete",
+            post(remote_profiles_delete_handler),
+        )
+        .route(
+            "/remote_profiles/startup",
+            post(remote_profiles_startup_handler),
+        )
         .route("/tci", get(remote_bridge_ws_handler))
         .with_state(state)
 }
@@ -174,6 +187,49 @@ async fn remote_settings_post_handler(
         return rejection;
     }
     set_remote_settings(State(state), Json(settings)).await
+}
+
+async fn remote_profiles_get_handler(
+    headers: HeaderMap,
+    State(state): State<AppState>,
+) -> Response {
+    if let Err(rejection) = check_remote_basic_auth(&headers) {
+        return rejection;
+    }
+    get_remote_profiles(State(state)).await
+}
+
+async fn remote_profiles_save_handler(
+    headers: HeaderMap,
+    State(state): State<AppState>,
+    Json(request): Json<RemoteProfileSaveRequest>,
+) -> Response {
+    if let Err(rejection) = check_remote_basic_auth(&headers) {
+        return rejection;
+    }
+    save_remote_profile(State(state), Json(request)).await
+}
+
+async fn remote_profiles_delete_handler(
+    headers: HeaderMap,
+    State(state): State<AppState>,
+    Json(request): Json<RemoteProfileDeleteRequest>,
+) -> Response {
+    if let Err(rejection) = check_remote_basic_auth(&headers) {
+        return rejection;
+    }
+    delete_remote_profile(State(state), Json(request)).await
+}
+
+async fn remote_profiles_startup_handler(
+    headers: HeaderMap,
+    State(state): State<AppState>,
+    Json(request): Json<RemoteProfileStartupRequest>,
+) -> Response {
+    if let Err(rejection) = check_remote_basic_auth(&headers) {
+        return rejection;
+    }
+    set_remote_profile_startup(State(state), Json(request)).await
 }
 
 /// Reject WebSocket upgrades whose Origin authority differs from the request

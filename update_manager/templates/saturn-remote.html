@@ -398,10 +398,7 @@
       overflow: hidden;
       border: 1px solid rgba(255, 255, 255, 0.06);
       touch-action: manipulation;
-      background:
-        linear-gradient(180deg, rgba(17, 34, 44, 0.86), rgba(8, 18, 24, 0.92)),
-        repeating-linear-gradient(to right, rgba(255,255,255,0.04) 0 1px, transparent 1px 10%),
-        repeating-linear-gradient(to top, rgba(255,255,255,0.03) 0 1px, transparent 1px 16%);
+      background: linear-gradient(180deg, rgba(17, 34, 44, 0.86), rgba(8, 18, 24, 0.92));
     }
     .spectrum-shell {
       height: 360px;
@@ -416,6 +413,22 @@
       width: 100%;
       height: 100%;
     }
+    .display-grid-overlay,
+    .band-edge-layer {
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+    }
+    .display-grid-overlay {
+      background:
+        repeating-linear-gradient(to right, rgba(255,255,255,0.04) 0 1px, transparent 1px 10%),
+        repeating-linear-gradient(to top, rgba(255,255,255,0.03) 0 1px, transparent 1px 16%);
+      opacity: 1;
+      transition: opacity 140ms ease;
+    }
+    .shell-no-grid .display-grid-overlay {
+      opacity: 0;
+    }
     .center-line {
       position: absolute;
       top: 0;
@@ -425,6 +438,38 @@
       transform: translateX(-50%);
       background: linear-gradient(180deg, rgba(98, 208, 255, 0.12), rgba(98, 208, 255, 0.66), rgba(98, 208, 255, 0.12));
       pointer-events: none;
+    }
+    .shell-no-center .center-line {
+      display: none;
+    }
+    .band-edge-marker {
+      position: absolute;
+      top: 0;
+      bottom: 0;
+      width: 1px;
+      background: linear-gradient(180deg, rgba(242, 179, 95, 0.14), rgba(242, 179, 95, 0.68), rgba(242, 179, 95, 0.14));
+      transform: translateX(-50%);
+      opacity: 0.95;
+    }
+    .band-edge-marker::before {
+      content: attr(data-label);
+      position: absolute;
+      top: 8px;
+      left: 50%;
+      transform: translateX(-50%);
+      padding: 2px 6px;
+      border-radius: 999px;
+      background: rgba(11, 24, 31, 0.82);
+      border: 1px solid rgba(242, 179, 95, 0.22);
+      color: rgba(244, 210, 160, 0.92);
+      font-family: var(--mono);
+      font-size: 10px;
+      letter-spacing: 0.08em;
+      white-space: nowrap;
+      text-transform: uppercase;
+    }
+    .shell-no-band-edges .band-edge-layer {
+      display: none;
     }
     .filter-window {
       position: absolute;
@@ -719,11 +764,14 @@
     }
 
     .command-strip {
+      position: relative;
       margin-bottom: 16px;
       border-radius: 26px;
       border: 1px solid var(--theme-command-border);
       background: var(--theme-command-bg);
       box-shadow: var(--theme-command-shadow);
+      overflow: visible;
+      z-index: 20;
     }
 
     .strip-grid {
@@ -740,8 +788,16 @@
       padding: 16px 18px;
       border-radius: 22px;
       border: 1px solid var(--theme-cluster-border);
-      overflow: hidden;
       background: var(--theme-cluster-bg);
+    }
+
+    .vfo-deck {
+      overflow: hidden;
+    }
+
+    .control-cluster {
+      overflow: visible;
+      z-index: 3;
     }
 
     .vfo-deck::after,
@@ -915,6 +971,131 @@
       display: grid;
       grid-template-columns: repeat(2, minmax(0, 1fr));
       gap: 10px;
+    }
+
+    .setup-anchor {
+      position: relative;
+      width: 100%;
+    }
+
+    .setup-anchor > .btn {
+      width: 100%;
+      justify-content: center;
+    }
+
+    .setup-menu {
+      position: absolute;
+      top: calc(100% + 10px);
+      right: 0;
+      z-index: 50;
+      width: min(560px, calc(100vw - 40px));
+      padding: 14px;
+      border-radius: 22px;
+      border: 1px solid var(--theme-panel-border);
+      background: linear-gradient(180deg, rgba(13, 24, 30, 0.98), rgba(8, 16, 22, 0.98));
+      box-shadow: 0 24px 46px rgba(0, 0, 0, 0.34);
+      backdrop-filter: blur(14px);
+    }
+
+    :root[data-theme="light"] .setup-menu {
+      background: linear-gradient(180deg, rgba(242, 247, 250, 0.98), rgba(232, 239, 243, 0.98));
+    }
+
+    .setup-menu[hidden] {
+      display: none;
+    }
+
+    .setup-menu-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      align-items: center;
+      margin-bottom: 12px;
+    }
+
+    .setup-title {
+      font-family: var(--display);
+      font-size: 20px;
+      letter-spacing: 0.03em;
+      color: var(--theme-panel-title);
+    }
+
+    .setup-meta {
+      font-size: 12px;
+      color: var(--theme-panel-meta);
+    }
+
+    .setup-stack {
+      display: grid;
+      gap: 12px;
+    }
+
+    .setup-section {
+      display: grid;
+      gap: 10px;
+      padding: 12px;
+      border-radius: 18px;
+      border: 1px solid var(--theme-panel-border);
+      background: rgba(255, 255, 255, 0.02);
+    }
+
+    .setup-section-title {
+      font-family: var(--mono);
+      font-size: 11px;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      color: var(--theme-panel-meta);
+    }
+
+    .setup-row {
+      display: grid;
+      gap: 6px;
+    }
+
+    .setup-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+    }
+
+    .setup-button-row {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 8px;
+    }
+
+    .setup-button-row .btn,
+    .setup-grid .btn {
+      width: 100%;
+      justify-content: center;
+      min-height: 40px;
+    }
+
+    .toggle-field {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      min-height: 42px;
+      padding: 10px 12px;
+      border-radius: 14px;
+      border: 1px solid var(--theme-field-border);
+      background: var(--theme-field-bg);
+      color: var(--text);
+    }
+
+    .toggle-field input {
+      width: 18px;
+      height: 18px;
+      accent-color: var(--accent);
+    }
+
+    .setup-readout {
+      font-family: var(--mono);
+      font-size: 11px;
+      color: var(--muted);
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
     }
 
     .launch-grid .btn {
@@ -1380,6 +1561,17 @@
       grid-template-columns: 1fr;
     }
 
+    :root[data-layout="phone"] .setup-menu {
+      position: static;
+      width: 100%;
+      margin-top: 10px;
+    }
+
+    :root[data-layout="phone"] .setup-grid,
+    :root[data-layout="phone"] .setup-button-row {
+      grid-template-columns: 1fr 1fr;
+    }
+
     :root[data-layout="phone"] .console-layout {
       display: flex;
       flex-direction: column;
@@ -1697,6 +1889,97 @@
             </div>
             <div class="launch-grid">
               <button class="btn primary" id="go-live-btn" type="button">Go Live</button>
+              <div class="setup-anchor">
+                <button class="btn ghost" id="setup-menu-btn" type="button" aria-expanded="false">Setup</button>
+                <div class="setup-menu" id="setup-menu" hidden>
+                  <div class="setup-menu-head">
+                    <div>
+                      <div class="setup-title">Setup</div>
+                      <div class="setup-meta">Server-side profiles and display startup behavior</div>
+                    </div>
+                    <button class="btn ghost" id="setup-close-btn" type="button">Close</button>
+                  </div>
+                  <div class="setup-stack">
+                    <div class="setup-section">
+                      <div class="setup-section-title">Profiles</div>
+                      <div class="setup-row">
+                        <label class="label" for="setup-profile-select">Active Profile</label>
+                        <select class="field" id="setup-profile-select"></select>
+                        <div class="setup-readout" id="setup-profile-status">Working settings only</div>
+                      </div>
+                      <div class="setup-button-row">
+                        <button class="btn ghost" id="setup-profile-load-btn" type="button">Load</button>
+                        <button class="btn alt" id="setup-profile-save-btn" type="button">Save</button>
+                        <button class="btn alt" id="setup-profile-save-as-btn" type="button">Save As</button>
+                        <button class="btn ghost" id="setup-profile-delete-btn" type="button">Delete</button>
+                      </div>
+                      <div class="setup-row">
+                        <label class="label" for="setup-startup-profile-select">Startup Profile</label>
+                        <select class="field" id="setup-startup-profile-select"></select>
+                        <div class="setup-button-row" style="grid-template-columns: repeat(2, minmax(0, 1fr));">
+                          <button class="btn ghost" id="setup-startup-apply-btn" type="button">Set Startup</button>
+                          <button class="btn ghost" id="setup-startup-clear-btn" type="button">Clear Startup</button>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div class="setup-section">
+                      <div class="setup-section-title">Panadapter / Waterfall</div>
+                      <div class="setup-grid">
+                        <label class="toggle-field"><span>Spectrum Auto Range</span><input id="display-spectrum-auto-range" type="checkbox" /></label>
+                        <label class="toggle-field"><span>Waterfall Auto Range</span><input id="display-waterfall-auto-range" type="checkbox" /></label>
+                      </div>
+                      <div class="setup-grid">
+                        <div class="setup-row">
+                          <label class="label" for="display-spectrum-floor">Spectrum Floor</label>
+                          <input id="display-spectrum-floor" type="range" min="-220" max="-80" step="1" value="-200" />
+                          <div class="setup-readout" id="display-spectrum-floor-readout">-200 dB</div>
+                        </div>
+                        <div class="setup-row">
+                          <label class="label" for="display-spectrum-ceiling">Spectrum Ceiling</label>
+                          <input id="display-spectrum-ceiling" type="range" min="-180" max="-40" step="1" value="-120" />
+                          <div class="setup-readout" id="display-spectrum-ceiling-readout">-120 dB</div>
+                        </div>
+                        <div class="setup-row">
+                          <label class="label" for="display-waterfall-floor">Waterfall Floor</label>
+                          <input id="display-waterfall-floor" type="range" min="-220" max="-80" step="1" value="-200" />
+                          <div class="setup-readout" id="display-waterfall-floor-readout">-200 dB</div>
+                        </div>
+                        <div class="setup-row">
+                          <label class="label" for="display-waterfall-ceiling">Waterfall Ceiling</label>
+                          <input id="display-waterfall-ceiling" type="range" min="-180" max="-40" step="1" value="-120" />
+                          <div class="setup-readout" id="display-waterfall-ceiling-readout">-120 dB</div>
+                        </div>
+                        <div class="setup-row">
+                          <label class="label" for="display-spectrum-average">Spectrum Average</label>
+                          <input id="display-spectrum-average" type="range" min="1" max="12" step="1" value="1" />
+                          <div class="setup-readout" id="display-spectrum-average-readout">1 frame</div>
+                        </div>
+                        <div class="setup-row">
+                          <label class="label" for="display-waterfall-speed">Waterfall Speed</label>
+                          <input id="display-waterfall-speed" type="range" min="1" max="6" step="1" value="1" />
+                          <div class="setup-readout" id="display-waterfall-speed-readout">1x</div>
+                        </div>
+                      </div>
+                      <div class="setup-grid">
+                        <div class="setup-row">
+                          <label class="label" for="display-waterfall-palette">Waterfall Palette</label>
+                          <select class="field" id="display-waterfall-palette">
+                            <option value="classic">Classic</option>
+                            <option value="ember">Ember</option>
+                            <option value="ice">Ice</option>
+                            <option value="forest">Forest</option>
+                          </select>
+                        </div>
+                        <label class="toggle-field"><span>Spectrum Peak Hold</span><input id="display-spectrum-peak-hold" type="checkbox" /></label>
+                        <label class="toggle-field"><span>Show Grid</span><input id="display-show-grid" type="checkbox" /></label>
+                        <label class="toggle-field"><span>Show Center Line</span><input id="display-show-center-line" type="checkbox" /></label>
+                        <label class="toggle-field"><span>Show Band Edges</span><input id="display-show-band-edges" type="checkbox" /></label>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
         </div>
@@ -1918,12 +2201,16 @@
           </div>
           <div class="display-stack">
             <div class="spectrum-shell" id="spectrum-shell">
+              <div class="display-grid-overlay"></div>
               <canvas id="spectrum-canvas"></canvas>
+              <div class="band-edge-layer" id="spectrum-band-edges"></div>
               <div class="filter-window" id="filter-window"></div>
               <div class="center-line"></div>
             </div>
             <div class="waterfall-shell" id="waterfall-shell">
+              <div class="display-grid-overlay"></div>
               <canvas id="waterfall-canvas"></canvas>
+              <div class="band-edge-layer" id="waterfall-band-edges"></div>
               <div class="filter-window" id="waterfall-filter-window"></div>
               <div class="center-line"></div>
             </div>
@@ -2162,11 +2449,31 @@
     const RADIO_PREFS_KEY = "saturn.remote.radioPrefs";
     const FREQ_LOCK_KEY = "saturn.remote.freqLock";
     const WAKE_LOCK_KEY = "saturn.remote.keepScreenAwake";
+    const DISPLAY_PREFS_KEY = "saturn.remote.displayPrefs";
+    const ACTIVE_PROFILE_KEY = "saturn.remote.activeProfile";
     const REMOTE_SETTINGS_PATH = "/remote_settings";
+    const REMOTE_PROFILES_PATH = "/remote_profiles";
+    const REMOTE_PROFILES_SAVE_PATH = "/remote_profiles/save";
+    const REMOTE_PROFILES_DELETE_PATH = "/remote_profiles/delete";
+    const REMOTE_PROFILES_STARTUP_PATH = "/remote_profiles/startup";
     const CSRF_HEADER_NAME = "X-Saturn-CSRF";
     const CSRF_HEADER_VALUE = "1";
     const ALLOWED_SAMPLE_RATES = Object.freeze([48000, 96000, 192000, 384000]);
     const ALLOWED_DEMOD_MODES = Object.freeze(["USB", "LSB", "AM", "SAM", "FM", "DIGU", "DIGL", "CWU", "CWL"]);
+    const WATERFALL_PALETTES = Object.freeze(["classic", "ember", "ice", "forest"]);
+    const HAM_BAND_EDGES_HZ = Object.freeze([
+      { start: 1800000, end: 2000000, label: "160m" },
+      { start: 3500000, end: 4000000, label: "80m" },
+      { start: 5330500, end: 5403500, label: "60m" },
+      { start: 7000000, end: 7300000, label: "40m" },
+      { start: 10100000, end: 10150000, label: "30m" },
+      { start: 14000000, end: 14350000, label: "20m" },
+      { start: 18068000, end: 18168000, label: "17m" },
+      { start: 21000000, end: 21450000, label: "15m" },
+      { start: 24890000, end: 24990000, label: "12m" },
+      { start: 28000000, end: 29700000, label: "10m" },
+      { start: 50000000, end: 54000000, label: "6m" },
+    ]);
     const RX_AUDIO_FRAME_FLOATS = 1024;
     const RX_AUDIO_START_PREROLL_SEC = 0.03;
     const RX_AUDIO_RECOVERY_PREROLL_SEC = 0.01;
@@ -2199,6 +2506,8 @@
       agcMode: "MEDIUM",
       agcGain: 80,
       displayZoom: 1,
+      activeProfile: "",
+      startupProfile: "",
       filterLow: 50,
       filterHigh: 3050,
       meterDbm: null,
@@ -2218,12 +2527,25 @@
       spectrumShiftCarryBins: 0,
       waterfallShiftCarryPixels: 0,
       waterfallSettleFrames: 0,
+      waterfallFrameSkipCounter: 0,
       displayCaption: "Waiting for TCI IQ frames from saturn-bridge",
       lastSummaryAt: 0,
+      spectrumAutoRange: true,
       displayFloorDb: -200,
       displayCeilingDb: -120,
+      waterfallAutoRange: true,
+      waterfallFloorDb: -200,
+      waterfallCeilingDb: -120,
+      spectrumAverage: 1,
+      waterfallSpeed: 1,
+      waterfallPalette: "classic",
+      spectrumPeakHold: false,
+      showGrid: true,
+      showCenterLine: true,
+      showBandEdges: true,
       iqPackets: [],
       lastSpectrumRenderAt: 0,
+      peakHoldBins: new Float32Array(1024),
       txEnabled: false,
       txDrive: 100,
       txMicGainDb: 0,
@@ -2250,6 +2572,7 @@
       wakeLockSentinel: null,
       wakeLockActive: false,
       wakeLockPending: false,
+      remoteProfiles: {},
     };
     let remoteSettingsSaveTimer = null;
 
@@ -2524,6 +2847,7 @@
         this.pendingBins = null;
         this.pendingFloorDb = -180;
         this.pendingCeilingDb = -120;
+        this.pendingPalette = "classic";
         try {
           this.gl = canvas.getContext("webgl2", { antialias: false, alpha: false });
           if (this.gl) {
@@ -2719,7 +3043,7 @@
         return { applied: this.shiftPixels(shiftedPixels), remainder };
       }
 
-      pushLine(bins, floorDb, ceilingDb) {
+      pushLine(bins, floorDb, ceilingDb, palette = "classic") {
         if (!this.supported || !bins || bins.length === 0) {
           return;
         }
@@ -2727,13 +3051,14 @@
           this.pendingBins = bins;
           this.pendingFloorDb = floorDb;
           this.pendingCeilingDb = ceilingDb;
+          this.pendingPalette = normalizeWaterfallPalette(palette);
           return;
         }
         this.ensureWidth(bins.length);
         const rowBytes = this.textureWidth * 4;
         this.textureData.copyWithin(rowBytes, 0, rowBytes * (this.textureHeight - 1));
         for (let i = 0; i < this.textureWidth; i += 1) {
-          const color = this.colorForDb(bins[i], floorDb, ceilingDb);
+          const color = this.colorForDb(bins[i], floorDb, ceilingDb, palette);
           const offset = i * 4;
           this.textureData[offset] = color[0];
           this.textureData[offset + 1] = color[1];
@@ -2745,8 +3070,37 @@
         gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, this.textureWidth, this.textureHeight, gl.RGBA, gl.UNSIGNED_BYTE, this.textureData);
       }
 
-      colorForDb(db, floorDb, ceilingDb) {
+      colorForDb(db, floorDb, ceilingDb, palette = "classic") {
         const t = Math.max(0, Math.min(1, (db - floorDb) / (ceilingDb - floorDb)));
+        const normalizedPalette = normalizeWaterfallPalette(palette);
+        if (normalizedPalette === "ember") {
+          if (t < 0.45) {
+            const u = t / 0.45;
+            return [Math.round(10 + u * 110), Math.round(4 + u * 48), Math.round(16 + u * 22)];
+          }
+          if (t < 0.78) {
+            const u = (t - 0.45) / 0.33;
+            return [Math.round(120 + u * 110), Math.round(52 + u * 90), Math.round(38 + u * 24)];
+          }
+          const u = (t - 0.78) / 0.22;
+          return [240, Math.round(144 + u * 90), Math.round(62 + u * 92)];
+        }
+        if (normalizedPalette === "ice") {
+          if (t < 0.5) {
+            const u = t / 0.5;
+            return [Math.round(4 + u * 38), Math.round(18 + u * 110), Math.round(54 + u * 156)];
+          }
+          const u = (t - 0.5) / 0.5;
+          return [Math.round(42 + u * 188), Math.round(128 + u * 112), 210];
+        }
+        if (normalizedPalette === "forest") {
+          if (t < 0.55) {
+            const u = t / 0.55;
+            return [Math.round(6 + u * 34), Math.round(18 + u * 124), Math.round(20 + u * 44)];
+          }
+          const u = (t - 0.55) / 0.45;
+          return [Math.round(40 + u * 200), Math.round(142 + u * 90), Math.round(64 - u * 22)];
+        }
         if (t < 0.28) {
           return [4, Math.round(26 + t * 50), Math.round(58 + t * 120)];
         }
@@ -2814,7 +3168,8 @@
           const color = this.colorForDb(
             this.pendingBins[sourceIndex],
             this.pendingFloorDb,
-            this.pendingCeilingDb
+            this.pendingCeilingDb,
+            this.pendingPalette
           );
           ctx.fillStyle = `rgb(${color[0]}, ${color[1]}, ${color[2]})`;
           ctx.fillRect(x, 0, 1, 1);
@@ -2834,7 +3189,9 @@
       state.spectrumShiftCarryBins = 0;
       state.waterfallShiftCarryPixels = 0;
       state.waterfallSettleFrames = 0;
+      state.waterfallFrameSkipCounter = 0;
       fftProcessor = new FftProcessor(fftProcessor.size);
+      resetPeakHoldBins(fftProcessor.size);
       spectrumRenderer.render(state.latestBins, state.displayFloorDb, state.displayCeilingDb);
       waterfallRenderer.clear();
       waterfallRenderer.render();
@@ -2861,8 +3218,96 @@
       const span = Math.max(36, max - min + 12);
       const targetFloor = min - 6;
       const targetCeiling = targetFloor + span;
-      state.displayFloorDb = state.displayFloorDb * 0.85 + targetFloor * 0.15;
-      state.displayCeilingDb = state.displayCeilingDb * 0.85 + targetCeiling * 0.15;
+      if (state.spectrumAutoRange) {
+        state.displayFloorDb = state.displayFloorDb * 0.85 + targetFloor * 0.15;
+        state.displayCeilingDb = state.displayCeilingDb * 0.85 + targetCeiling * 0.15;
+      }
+      if (state.waterfallAutoRange) {
+        state.waterfallFloorDb = state.waterfallFloorDb * 0.88 + targetFloor * 0.12;
+        state.waterfallCeilingDb = state.waterfallCeilingDb * 0.88 + targetCeiling * 0.12;
+      }
+    }
+
+    function bandEdgesInView() {
+      const halfSpan = displaySpanHz() / 2;
+      const low = state.dds - halfSpan;
+      const high = state.dds + halfSpan;
+      return HAM_BAND_EDGES_HZ.flatMap((band) => {
+        const markers = [];
+        if (band.start >= low && band.start <= high) {
+          markers.push({ hz: band.start, label: `${band.label} lo` });
+        }
+        if (band.end >= low && band.end <= high) {
+          markers.push({ hz: band.end, label: `${band.label} hi` });
+        }
+        return markers;
+      });
+    }
+
+    function renderBandEdges() {
+      const markers = bandEdgesInView();
+      for (const id of ["spectrum-band-edges", "waterfall-band-edges"]) {
+        const layer = $(id);
+        if (!layer) continue;
+        layer.innerHTML = "";
+        markers.forEach((marker) => {
+          const offsetPercent = ((marker.hz - state.dds) / displaySpanHz()) * 100 + 50;
+          if (offsetPercent < 0 || offsetPercent > 100) {
+            return;
+          }
+          const edge = document.createElement("div");
+          edge.className = "band-edge-marker";
+          edge.style.left = `${offsetPercent}%`;
+          edge.dataset.label = marker.label;
+          layer.appendChild(edge);
+        });
+      }
+    }
+
+    function updateDisplayDecorations() {
+      for (const id of ["spectrum-shell", "waterfall-shell"]) {
+        const shell = $(id);
+        if (!shell) continue;
+        shell.classList.toggle("shell-no-grid", !state.showGrid);
+        shell.classList.toggle("shell-no-center", !state.showCenterLine);
+        shell.classList.toggle("shell-no-band-edges", !state.showBandEdges);
+      }
+      renderBandEdges();
+    }
+
+    function processedDisplayBins(rawBins) {
+      if (!rawBins || rawBins.length === 0) {
+        return rawBins;
+      }
+      const avgFrames = clampSpectrumAverage(state.spectrumAverage);
+      let bins = new Float32Array(rawBins.length);
+      if (!state.latestBins || state.latestBins.length !== rawBins.length) {
+        state.latestBins = new Float32Array(rawBins.length);
+      }
+      if (avgFrames > 1 && state.latestBins.length === rawBins.length) {
+        const alpha = 1 / avgFrames;
+        for (let i = 0; i < rawBins.length; i += 1) {
+          bins[i] = state.latestBins[i] * (1 - alpha) + rawBins[i] * alpha;
+        }
+      } else {
+        bins.set(rawBins);
+      }
+
+      if (state.spectrumPeakHold) {
+        if (!state.peakHoldBins || state.peakHoldBins.length !== bins.length) {
+          resetPeakHoldBins(bins.length);
+        }
+        for (let i = 0; i < bins.length; i += 1) {
+          state.peakHoldBins[i] = Math.max(bins[i], state.peakHoldBins[i] - 0.35);
+          bins[i] = Math.max(bins[i], state.peakHoldBins[i]);
+        }
+      } else if (state.peakHoldBins?.length !== bins.length) {
+        resetPeakHoldBins(bins.length);
+      }
+
+      state.latestBins = bins;
+      state.fftWidth = bins.length;
+      return bins;
     }
 
     function logEvent(message) {
@@ -3391,7 +3836,42 @@
       };
     }
 
-    function currentRemoteSettings() {
+    function clampDisplayDb(value, fallback) {
+      return Math.max(-220, Math.min(-20, safeFiniteNumber(value, fallback)));
+    }
+
+    function clampSpectrumAverage(value) {
+      return Math.max(1, Math.min(12, Math.round(safeFiniteNumber(value, 1))));
+    }
+
+    function clampWaterfallSpeed(value) {
+      return Math.max(1, Math.min(6, Math.round(safeFiniteNumber(value, 1))));
+    }
+
+    function normalizeWaterfallPalette(value) {
+      const palette = String(value || "").trim().toLowerCase();
+      return WATERFALL_PALETTES.includes(palette) ? palette : "classic";
+    }
+
+    function currentDisplayPrefs() {
+      return {
+        spectrumAutoRange: Boolean(state.spectrumAutoRange),
+        spectrumFloorDb: clampDisplayDb(state.displayFloorDb, -200),
+        spectrumCeilingDb: clampDisplayDb(state.displayCeilingDb, -120),
+        waterfallAutoRange: Boolean(state.waterfallAutoRange),
+        waterfallFloorDb: clampDisplayDb(state.waterfallFloorDb, -200),
+        waterfallCeilingDb: clampDisplayDb(state.waterfallCeilingDb, -120),
+        spectrumAverage: clampSpectrumAverage(state.spectrumAverage),
+        waterfallSpeed: clampWaterfallSpeed(state.waterfallSpeed),
+        waterfallPalette: normalizeWaterfallPalette(state.waterfallPalette),
+        spectrumPeakHold: Boolean(state.spectrumPeakHold),
+        showGrid: Boolean(state.showGrid),
+        showCenterLine: Boolean(state.showCenterLine),
+        showBandEdges: Boolean(state.showBandEdges),
+      };
+    }
+
+    function currentProfileSettings() {
       return {
         wsUrl: normalizeWsUrlPreference(($("ws-url")?.value || state.wsUrl).trim()),
         displayZoom: Math.max(1, Math.min(32, Number(state.displayZoom) || 1)),
@@ -3400,7 +3880,15 @@
         layoutMode: state.layoutMode === "phone" ? "phone" : "desktop",
         theme: state.theme === "light" ? "light" : "dark",
         phonePanels: sanitizePhonePanels(state.phonePanels),
+        displayPrefs: currentDisplayPrefs(),
         radioPrefs: currentRadioPrefs(),
+      };
+    }
+
+    function currentRemoteSettings() {
+      return {
+        activeProfile: state.activeProfile || null,
+        ...currentProfileSettings(),
       };
     }
 
@@ -3436,6 +3924,33 @@
       state.twoToneEnabled = Boolean(prefs.twoToneEnabled ?? state.twoToneEnabled);
     }
 
+    function resetPeakHoldBins(length = state.latestBins?.length || 1024) {
+      state.peakHoldBins = new Float32Array(Math.max(1, length));
+      state.peakHoldBins.fill(-240);
+    }
+
+    function applyDisplayPrefsObject(prefs) {
+      if (!prefs || typeof prefs !== "object") {
+        return;
+      }
+      state.spectrumAutoRange = Boolean(prefs.spectrumAutoRange ?? state.spectrumAutoRange);
+      state.displayFloorDb = clampDisplayDb(prefs.spectrumFloorDb ?? state.displayFloorDb, -200);
+      state.displayCeilingDb = clampDisplayDb(prefs.spectrumCeilingDb ?? state.displayCeilingDb, -120);
+      state.waterfallAutoRange = Boolean(prefs.waterfallAutoRange ?? state.waterfallAutoRange);
+      state.waterfallFloorDb = clampDisplayDb(prefs.waterfallFloorDb ?? state.waterfallFloorDb, -200);
+      state.waterfallCeilingDb = clampDisplayDb(prefs.waterfallCeilingDb ?? state.waterfallCeilingDb, -120);
+      state.spectrumAverage = clampSpectrumAverage(prefs.spectrumAverage ?? state.spectrumAverage);
+      state.waterfallSpeed = clampWaterfallSpeed(prefs.waterfallSpeed ?? state.waterfallSpeed);
+      state.waterfallPalette = normalizeWaterfallPalette(prefs.waterfallPalette ?? state.waterfallPalette);
+      state.spectrumPeakHold = Boolean(prefs.spectrumPeakHold ?? state.spectrumPeakHold);
+      state.showGrid = Boolean(prefs.showGrid ?? state.showGrid);
+      state.showCenterLine = Boolean(prefs.showCenterLine ?? state.showCenterLine);
+      state.showBandEdges = Boolean(prefs.showBandEdges ?? state.showBandEdges);
+      if (!state.spectrumPeakHold) {
+        resetPeakHoldBins();
+      }
+    }
+
     function saveRadioPrefs() {
       try {
         localStorage.setItem(RADIO_PREFS_KEY, JSON.stringify(currentRadioPrefs()));
@@ -3469,6 +3984,8 @@
         localStorage.setItem("saturn.remote.layout", settings.layoutMode === "phone" ? "phone" : "desktop");
         localStorage.setItem("saturn.remote.theme", settings.theme === "light" ? "light" : "dark");
         localStorage.setItem("saturn.remote.phonePanels", JSON.stringify(sanitizePhonePanels(settings.phonePanels)));
+        localStorage.setItem(DISPLAY_PREFS_KEY, JSON.stringify(settings.displayPrefs || currentDisplayPrefs()));
+        localStorage.setItem(ACTIVE_PROFILE_KEY, settings.activeProfile || "");
       } catch (error) {
         console.warn("Saturn Remote settings fallback save failed", error);
       }
@@ -3479,8 +3996,12 @@
         return false;
       }
       applyRadioPrefsObject(settings.radioPrefs && typeof settings.radioPrefs === "object" ? settings.radioPrefs : settings);
+      applyDisplayPrefsObject(settings.displayPrefs);
       if (settings.wsUrl != null) {
         state.wsUrl = normalizeWsUrlPreference(settings.wsUrl);
+      }
+      if (typeof settings.activeProfile === "string") {
+        state.activeProfile = settings.activeProfile.trim();
       }
       if (Number.isFinite(Number(settings.displayZoom))) {
         state.displayZoom = Math.max(1, Math.min(32, Number(settings.displayZoom)));
@@ -3507,6 +4028,7 @@
       if ($("display-zoom")) {
         $("display-zoom").value = `${state.displayZoom}`;
       }
+      syncSetupMenuFields();
       persistLocalSettingsFallback(currentRemoteSettings());
       return true;
     }
@@ -3566,6 +4088,248 @@
         console.warn("Saturn Remote server settings save failed", error);
         return false;
       }
+    }
+
+    function refreshProfileSelects() {
+      const names = Object.keys(state.remoteProfiles).sort((a, b) => a.localeCompare(b));
+      const profileSelect = $("setup-profile-select");
+      const startupSelect = $("setup-startup-profile-select");
+      if (profileSelect) {
+        profileSelect.innerHTML = "";
+        const working = document.createElement("option");
+        working.value = "";
+        working.textContent = "Working Settings";
+        profileSelect.appendChild(working);
+        names.forEach((name) => {
+          const option = document.createElement("option");
+          option.value = name;
+          option.textContent = name;
+          profileSelect.appendChild(option);
+        });
+        profileSelect.value = names.includes(state.activeProfile) ? state.activeProfile : "";
+      }
+      if (startupSelect) {
+        startupSelect.innerHTML = "";
+        const none = document.createElement("option");
+        none.value = "";
+        none.textContent = "None";
+        startupSelect.appendChild(none);
+        names.forEach((name) => {
+          const option = document.createElement("option");
+          option.value = name;
+          option.textContent = name;
+          startupSelect.appendChild(option);
+        });
+        startupSelect.value = names.includes(state.startupProfile) ? state.startupProfile : "";
+      }
+      const status = $("setup-profile-status");
+      if (status) {
+        if (state.activeProfile && names.includes(state.activeProfile)) {
+          status.textContent = `Active: ${state.activeProfile}`;
+        } else {
+          status.textContent = "Working settings only";
+        }
+      }
+    }
+
+    function syncSetupMenuFields() {
+      refreshProfileSelects();
+      const prefs = currentDisplayPrefs();
+      const setChecked = (id, value) => {
+        const node = $(id);
+        if (node) node.checked = Boolean(value);
+      };
+      const setValue = (id, value) => {
+        const node = $(id);
+        if (node) node.value = `${value}`;
+      };
+      setChecked("display-spectrum-auto-range", prefs.spectrumAutoRange);
+      setChecked("display-waterfall-auto-range", prefs.waterfallAutoRange);
+      setChecked("display-spectrum-peak-hold", prefs.spectrumPeakHold);
+      setChecked("display-show-grid", prefs.showGrid);
+      setChecked("display-show-center-line", prefs.showCenterLine);
+      setChecked("display-show-band-edges", prefs.showBandEdges);
+      setValue("display-spectrum-floor", prefs.spectrumFloorDb);
+      setValue("display-spectrum-ceiling", prefs.spectrumCeilingDb);
+      setValue("display-waterfall-floor", prefs.waterfallFloorDb);
+      setValue("display-waterfall-ceiling", prefs.waterfallCeilingDb);
+      setValue("display-spectrum-average", prefs.spectrumAverage);
+      setValue("display-waterfall-speed", prefs.waterfallSpeed);
+      setValue("display-waterfall-palette", prefs.waterfallPalette);
+      if ($("display-spectrum-floor-readout")) $("display-spectrum-floor-readout").textContent = `${Math.round(prefs.spectrumFloorDb)} dB`;
+      if ($("display-spectrum-ceiling-readout")) $("display-spectrum-ceiling-readout").textContent = `${Math.round(prefs.spectrumCeilingDb)} dB`;
+      if ($("display-waterfall-floor-readout")) $("display-waterfall-floor-readout").textContent = `${Math.round(prefs.waterfallFloorDb)} dB`;
+      if ($("display-waterfall-ceiling-readout")) $("display-waterfall-ceiling-readout").textContent = `${Math.round(prefs.waterfallCeilingDb)} dB`;
+      if ($("display-spectrum-average-readout")) $("display-spectrum-average-readout").textContent = `${prefs.spectrumAverage} frame${prefs.spectrumAverage === 1 ? "" : "s"}`;
+      if ($("display-waterfall-speed-readout")) $("display-waterfall-speed-readout").textContent = `${prefs.waterfallSpeed}x`;
+    }
+
+    function setSetupMenuOpen(open) {
+      const menu = $("setup-menu");
+      const button = $("setup-menu-btn");
+      if (!menu || !button) {
+        return;
+      }
+      const next = Boolean(open);
+      menu.hidden = !next;
+      button.setAttribute("aria-expanded", next ? "true" : "false");
+      if (next) {
+        syncSetupMenuFields();
+      }
+    }
+
+    function toggleSetupMenu() {
+      setSetupMenuOpen($("setup-menu")?.hidden !== false);
+    }
+
+    async function loadRemoteProfilesFromServer(logFailures = false) {
+      try {
+        const response = await fetch(REMOTE_PROFILES_PATH, {
+          cache: "no-store",
+          credentials: "same-origin",
+        });
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}`);
+        }
+        const payload = await response.json();
+        const catalog = payload && typeof payload === "object" && payload.profiles
+          ? payload.profiles
+          : payload;
+        state.remoteProfiles = catalog && typeof catalog.profiles === "object"
+          ? catalog.profiles
+          : {};
+        state.startupProfile = typeof catalog?.startupProfile === "string"
+          ? catalog.startupProfile.trim()
+          : "";
+        refreshProfileSelects();
+        return true;
+      } catch (error) {
+        if (logFailures) {
+          logEvent(`Remote profiles load skipped: ${error.message || error}`);
+        }
+        console.warn("Saturn Remote profile catalog load failed", error);
+        return false;
+      }
+    }
+
+    function applyProfileSettingsObject(settings) {
+      return applyRemoteSettingsObject({
+        ...settings,
+        activeProfile: state.activeProfile || null,
+      });
+    }
+
+    function applyProfileByName(name, persist = true) {
+      const profile = state.remoteProfiles[name];
+      if (!profile || typeof profile !== "object") {
+        return false;
+      }
+      state.activeProfile = name;
+      applyProfileSettingsObject(profile);
+      syncSetupMenuFields();
+      updateUi();
+      if (persist) {
+        scheduleRemoteSettingsSave(REMOTE_PROFILE_APPLY_DELAY_MS);
+      }
+      return true;
+    }
+
+    async function saveProfileToServer(name, makeStartup = false) {
+      const trimmed = `${name || ""}`.trim();
+      if (!trimmed) {
+        return false;
+      }
+      const response = await fetch(REMOTE_PROFILES_SAVE_PATH, {
+        method: "POST",
+        credentials: "same-origin",
+        headers: {
+          "Content-Type": "application/json",
+          [CSRF_HEADER_NAME]: CSRF_HEADER_VALUE,
+        },
+        body: JSON.stringify({
+          name: trimmed,
+          settings: currentProfileSettings(),
+          makeStartup,
+        }),
+      });
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+      const payload = await response.json();
+      const catalog = payload && typeof payload === "object" && payload.profiles
+        ? payload.profiles
+        : null;
+      if (catalog && typeof catalog.profiles === "object") {
+        state.remoteProfiles = catalog.profiles;
+        state.startupProfile = typeof catalog.startupProfile === "string" ? catalog.startupProfile.trim() : "";
+      } else {
+        state.remoteProfiles[trimmed] = currentProfileSettings();
+      }
+      state.activeProfile = trimmed;
+      persistLocalSettingsFallback(currentRemoteSettings());
+      refreshProfileSelects();
+      return true;
+    }
+
+    async function deleteProfileFromServer(name) {
+      const response = await fetch(REMOTE_PROFILES_DELETE_PATH, {
+        method: "POST",
+        credentials: "same-origin",
+        headers: {
+          "Content-Type": "application/json",
+          [CSRF_HEADER_NAME]: CSRF_HEADER_VALUE,
+        },
+        body: JSON.stringify({ name }),
+      });
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+      const payload = await response.json();
+      const catalog = payload && typeof payload === "object" && payload.profiles
+        ? payload.profiles
+        : null;
+      state.remoteProfiles = catalog?.profiles && typeof catalog.profiles === "object" ? catalog.profiles : {};
+      state.startupProfile = typeof catalog?.startupProfile === "string" ? catalog.startupProfile.trim() : "";
+      if (state.activeProfile === name) {
+        state.activeProfile = "";
+      }
+      refreshProfileSelects();
+      persistLocalSettingsFallback(currentRemoteSettings());
+    }
+
+    async function setStartupProfileOnServer(name) {
+      const response = await fetch(REMOTE_PROFILES_STARTUP_PATH, {
+        method: "POST",
+        credentials: "same-origin",
+        headers: {
+          "Content-Type": "application/json",
+          [CSRF_HEADER_NAME]: CSRF_HEADER_VALUE,
+        },
+        body: JSON.stringify({ name: name || null }),
+      });
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+      const payload = await response.json();
+      const catalog = payload && typeof payload === "object" && payload.profiles
+        ? payload.profiles
+        : null;
+      state.startupProfile = typeof catalog?.startupProfile === "string" ? catalog.startupProfile.trim() : "";
+      if (catalog?.profiles && typeof catalog.profiles === "object") {
+        state.remoteProfiles = catalog.profiles;
+      }
+      refreshProfileSelects();
+    }
+
+    async function applyStartupProfileIfConfigured() {
+      if (!state.startupProfile || !state.remoteProfiles[state.startupProfile]) {
+        return false;
+      }
+      const applied = applyProfileByName(state.startupProfile, false);
+      if (applied) {
+        persistLocalSettingsFallback(currentRemoteSettings());
+      }
+      return applied;
     }
 
     function scheduleRemoteSettingsSave(delayMs = REMOTE_SETTINGS_SAVE_DEBOUNCE_MS) {
@@ -3701,8 +4465,19 @@
       state.frameRate = Math.max(0, safeFiniteNumber(state.frameRate, 0));
       state.fftWidth = Math.max(0, Math.round(safeFiniteNumber(state.fftWidth, 0)));
       state.audioBackpressureDrops = Math.max(0, Math.round(safeFiniteNumber(state.audioBackpressureDrops, 0)));
-      state.displayFloorDb = safeFiniteNumber(state.displayFloorDb, -200);
-      state.displayCeilingDb = safeFiniteNumber(state.displayCeilingDb, -120);
+      state.spectrumAutoRange = Boolean(state.spectrumAutoRange);
+      state.displayFloorDb = clampDisplayDb(state.displayFloorDb, -200);
+      state.displayCeilingDb = clampDisplayDb(state.displayCeilingDb, -120);
+      state.waterfallAutoRange = Boolean(state.waterfallAutoRange);
+      state.waterfallFloorDb = clampDisplayDb(state.waterfallFloorDb, -200);
+      state.waterfallCeilingDb = clampDisplayDb(state.waterfallCeilingDb, -120);
+      state.spectrumAverage = clampSpectrumAverage(state.spectrumAverage);
+      state.waterfallSpeed = clampWaterfallSpeed(state.waterfallSpeed);
+      state.waterfallPalette = normalizeWaterfallPalette(state.waterfallPalette);
+      state.spectrumPeakHold = Boolean(state.spectrumPeakHold);
+      state.showGrid = Boolean(state.showGrid);
+      state.showCenterLine = Boolean(state.showCenterLine);
+      state.showBandEdges = Boolean(state.showBandEdges);
     }
 
     function clampRxAdc(value) {
@@ -3964,12 +4739,15 @@
         goLiveBtn.className = "btn primary";
       }
       $("display-resolution").textContent = `Display: ${Math.max(1, Math.round(window.devicePixelRatio || 1))}x DPR`;
-      $("display-resolution").textContent += ` | ${safeFixed(state.displayFloorDb, 0, "-200")}..${safeFixed(state.displayCeilingDb, 0, "-120")} dB`;
+      $("display-resolution").textContent += ` | S ${safeFixed(state.displayFloorDb, 0, "-200")}..${safeFixed(state.displayCeilingDb, 0, "-120")} dB`;
+      $("display-resolution").textContent += ` | W ${safeFixed(state.waterfallFloorDb, 0, "-200")}..${safeFixed(state.waterfallCeilingDb, 0, "-120")} dB`;
       for (const element of [$("spectrum-shell"), $("waterfall-shell")]) {
         element.style.touchAction = state.frequencyLock ? "pan-y" : "manipulation";
       }
+      updateDisplayDecorations();
       updateAxes();
       updateFilterOverlay();
+      syncSetupMenuFields();
       syncActiveButtons();
     }
 
@@ -4851,11 +5629,10 @@
         bins[i] = floor + lobeA * 54 + lobeB * 24;
       }
       const visibleBins = visibleBinsForDisplay(bins);
-      state.latestBins = visibleBins;
-      state.fftWidth = visibleBins.length;
-      updateDisplayRange(visibleBins);
-      spectrumRenderer.render(visibleBins, state.displayFloorDb, state.displayCeilingDb);
-      waterfallRenderer.pushLine(visibleBins, state.displayFloorDb, state.displayCeilingDb);
+      const processedBins = processedDisplayBins(visibleBins);
+      updateDisplayRange(processedBins);
+      spectrumRenderer.render(processedBins, state.displayFloorDb, state.displayCeilingDb);
+      waterfallRenderer.pushLine(processedBins, state.waterfallFloorDb, state.waterfallCeilingDb, state.waterfallPalette);
       waterfallRenderer.render();
     }
 
@@ -4871,15 +5648,17 @@
             }
             const bins = fftProcessor.transform(iqWindow);
             const visibleBins = visibleBinsForDisplay(bins);
-            state.latestBins = visibleBins;
-            state.fftWidth = visibleBins.length;
-            updateDisplayRange(visibleBins);
-            spectrumRenderer.render(visibleBins, state.displayFloorDb, state.displayCeilingDb);
+            const processedBins = processedDisplayBins(visibleBins);
+            updateDisplayRange(processedBins);
+            spectrumRenderer.render(processedBins, state.displayFloorDb, state.displayCeilingDb);
             if (state.waterfallSettleFrames > 0) {
               state.waterfallSettleFrames -= 1;
             } else {
-              waterfallRenderer.pushLine(visibleBins, state.displayFloorDb, state.displayCeilingDb);
-              waterfallRenderer.render();
+              state.waterfallFrameSkipCounter = (state.waterfallFrameSkipCounter + 1) % clampWaterfallSpeed(state.waterfallSpeed);
+              if (state.waterfallFrameSkipCounter === 0) {
+                waterfallRenderer.pushLine(processedBins, state.waterfallFloorDb, state.waterfallCeilingDb, state.waterfallPalette);
+                waterfallRenderer.render();
+              }
             }
             state.lastSpectrumRenderAt = now;
           }
@@ -4957,6 +5736,102 @@
 
     function initInteractions() {
       $("go-live-btn").addEventListener("click", goLive);
+      $("setup-menu-btn").addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        toggleSetupMenu();
+      });
+      $("setup-close-btn").addEventListener("click", () => {
+        setSetupMenuOpen(false);
+      });
+      document.addEventListener("pointerdown", (event) => {
+        const menu = $("setup-menu");
+        const anchor = event.target.closest(".setup-anchor");
+        if (!menu || menu.hidden) {
+          return;
+        }
+        if (!anchor) {
+          setSetupMenuOpen(false);
+        }
+      });
+      $("setup-profile-load-btn").addEventListener("click", () => {
+        const name = $("setup-profile-select").value;
+        if (!name) {
+          state.activeProfile = "";
+          scheduleRemoteSettingsSave();
+          syncSetupMenuFields();
+          updateUi();
+          return;
+        }
+        if (applyProfileByName(name, true)) {
+          logEvent(`Loaded profile: ${name}`);
+        }
+      });
+      $("setup-profile-save-btn").addEventListener("click", async () => {
+        const selected = $("setup-profile-select").value || state.activeProfile;
+        if (!selected) {
+          $("setup-profile-save-as-btn").click();
+          return;
+        }
+        try {
+          await saveProfileToServer(selected, selected === state.startupProfile);
+          scheduleRemoteSettingsSave();
+          logEvent(`Saved profile: ${selected}`);
+          updateUi();
+        } catch (error) {
+          logEvent(`Profile save failed: ${error.message || error}`);
+        }
+      });
+      $("setup-profile-save-as-btn").addEventListener("click", async () => {
+        const proposed = state.activeProfile || "New Profile";
+        const name = window.prompt("Save profile as", proposed);
+        if (!name) {
+          return;
+        }
+        try {
+          await saveProfileToServer(name, false);
+          scheduleRemoteSettingsSave();
+          logEvent(`Saved profile as: ${name}`);
+          updateUi();
+        } catch (error) {
+          logEvent(`Profile save failed: ${error.message || error}`);
+        }
+      });
+      $("setup-profile-delete-btn").addEventListener("click", async () => {
+        const name = $("setup-profile-select").value || state.activeProfile;
+        if (!name) {
+          return;
+        }
+        if (!window.confirm(`Delete remote profile "${name}"?`)) {
+          return;
+        }
+        try {
+          await deleteProfileFromServer(name);
+          scheduleRemoteSettingsSave();
+          logEvent(`Deleted profile: ${name}`);
+          updateUi();
+        } catch (error) {
+          logEvent(`Profile delete failed: ${error.message || error}`);
+        }
+      });
+      $("setup-startup-apply-btn").addEventListener("click", async () => {
+        try {
+          await setStartupProfileOnServer($("setup-startup-profile-select").value || "");
+          logEvent(state.startupProfile ? `Startup profile set: ${state.startupProfile}` : "Startup profile cleared");
+          updateUi();
+        } catch (error) {
+          logEvent(`Startup profile update failed: ${error.message || error}`);
+        }
+      });
+      $("setup-startup-clear-btn").addEventListener("click", async () => {
+        try {
+          await setStartupProfileOnServer("");
+          logEvent("Startup profile cleared");
+          updateUi();
+        } catch (error) {
+          logEvent(`Startup profile update failed: ${error.message || error}`);
+        }
+      });
       $("layout-btn").addEventListener("click", toggleLayout);
       $("theme-btn").addEventListener("click", toggleTheme);
       $("wake-lock-btn").addEventListener("click", () => {
@@ -5072,6 +5947,70 @@
         state.waterfallSettleFrames = 0;
         waterfallRenderer.clear();
         localStorage.setItem("saturn.remote.displayZoom", `${state.displayZoom}`);
+        persistLocalSettingsFallback(currentRemoteSettings());
+        scheduleRemoteSettingsSave();
+        updateUi();
+      });
+      const bindDisplayToggle = (id, assign) => {
+        $(id).addEventListener("change", () => {
+          assign(Boolean($(id).checked));
+          persistLocalSettingsFallback(currentRemoteSettings());
+          scheduleRemoteSettingsSave();
+          updateUi();
+        });
+      };
+      bindDisplayToggle("display-spectrum-auto-range", (value) => { state.spectrumAutoRange = value; });
+      bindDisplayToggle("display-waterfall-auto-range", (value) => { state.waterfallAutoRange = value; });
+      bindDisplayToggle("display-spectrum-peak-hold", (value) => {
+        state.spectrumPeakHold = value;
+        if (!value) {
+          resetPeakHoldBins();
+        }
+      });
+      bindDisplayToggle("display-show-grid", (value) => { state.showGrid = value; });
+      bindDisplayToggle("display-show-center-line", (value) => { state.showCenterLine = value; });
+      bindDisplayToggle("display-show-band-edges", (value) => { state.showBandEdges = value; });
+      $("display-spectrum-floor").addEventListener("input", () => {
+        state.displayFloorDb = clampDisplayDb($("display-spectrum-floor").value, -200);
+        persistLocalSettingsFallback(currentRemoteSettings());
+        scheduleRemoteSettingsSave();
+        updateUi();
+      });
+      $("display-spectrum-ceiling").addEventListener("input", () => {
+        state.displayCeilingDb = clampDisplayDb($("display-spectrum-ceiling").value, -120);
+        persistLocalSettingsFallback(currentRemoteSettings());
+        scheduleRemoteSettingsSave();
+        updateUi();
+      });
+      $("display-waterfall-floor").addEventListener("input", () => {
+        state.waterfallFloorDb = clampDisplayDb($("display-waterfall-floor").value, -200);
+        persistLocalSettingsFallback(currentRemoteSettings());
+        scheduleRemoteSettingsSave();
+        updateUi();
+      });
+      $("display-waterfall-ceiling").addEventListener("input", () => {
+        state.waterfallCeilingDb = clampDisplayDb($("display-waterfall-ceiling").value, -120);
+        persistLocalSettingsFallback(currentRemoteSettings());
+        scheduleRemoteSettingsSave();
+        updateUi();
+      });
+      $("display-spectrum-average").addEventListener("input", () => {
+        state.spectrumAverage = clampSpectrumAverage($("display-spectrum-average").value);
+        persistLocalSettingsFallback(currentRemoteSettings());
+        scheduleRemoteSettingsSave();
+        updateUi();
+      });
+      $("display-waterfall-speed").addEventListener("input", () => {
+        state.waterfallSpeed = clampWaterfallSpeed($("display-waterfall-speed").value);
+        persistLocalSettingsFallback(currentRemoteSettings());
+        scheduleRemoteSettingsSave();
+        updateUi();
+      });
+      $("display-waterfall-palette").addEventListener("change", () => {
+        state.waterfallPalette = normalizeWaterfallPalette($("display-waterfall-palette").value);
+        persistLocalSettingsFallback(currentRemoteSettings());
+        scheduleRemoteSettingsSave();
+        waterfallRenderer.render();
         updateUi();
       });
       $("filter-low").addEventListener("input", () => {
@@ -5467,6 +6406,15 @@
       applyLayout(preferredLayout(), false, false);
       applyTheme(preferredTheme(), false);
       applySavedRadioPrefs();
+      try {
+        const savedDisplayPrefs = localStorage.getItem(DISPLAY_PREFS_KEY);
+        if (savedDisplayPrefs) {
+          applyDisplayPrefsObject(JSON.parse(savedDisplayPrefs));
+        }
+      } catch (error) {
+        console.warn("Saturn Remote display preference restore failed", error);
+      }
+      state.activeProfile = `${localStorage.getItem(ACTIVE_PROFILE_KEY) || ""}`.trim();
       $("ws-url").value = defaultWsUrl();
       state.wsUrl = $("ws-url").value;
       $("sample-rate").value = `${state.sampleRate}`;
@@ -5524,6 +6472,10 @@
         });
       }
       await loadRemoteSettingsFromServer(false);
+      await loadRemoteProfilesFromServer(false);
+      if (await applyStartupProfileIfConfigured()) {
+        void saveRemoteSettingsToServer(false);
+      }
       logEvent("Saturn Remote loaded");
       logEvent("Current bridge target: TCI over WebSocket");
       logEvent(`Display backends: spectrum=${spectrumRenderer.backend}, waterfall=${waterfallRenderer.backend}`);
