@@ -2513,6 +2513,13 @@
       meterDbm: null,
       txPower: null,
       swr: null,
+      meterDbmVisual: null,
+      meterDbmPeak: null,
+      meterDbmPeakAt: 0,
+      txPowerVisual: null,
+      txPowerPeak: null,
+      txPowerPeakAt: 0,
+      swrVisual: null,
       latestBins: new Float32Array(1024),
       fftWidth: 1024,
       lastFrameAt: 0,
@@ -2530,6 +2537,7 @@
       waterfallFrameSkipCounter: 0,
       displayCaption: "Waiting for TCI IQ frames from saturn-bridge",
       lastSummaryAt: 0,
+      lastMeterVisualAt: 0,
       spectrumAutoRange: true,
       displayFloorDb: -200,
       displayCeilingDb: -120,
@@ -3251,7 +3259,7 @@
         if (!layer) continue;
         layer.innerHTML = "";
         markers.forEach((marker) => {
-          const offsetPercent = ((marker.hz - state.dds) / displaySpanHz()) * 100 + 50;
+          const offsetPercent = displayPercentForOffsetHz(marker.hz - state.dds);
           if (offsetPercent < 0 || offsetPercent > 100) {
             return;
           }
@@ -4120,7 +4128,9 @@
           option.textContent = name;
           startupSelect.appendChild(option);
         });
-        startupSelect.value = names.includes(state.startupProfile) ? state.startupProfile : "";
+        startupSelect.value = names.includes(state.startupProfile)
+          ? state.startupProfile
+          : (names.includes(state.activeProfile) ? state.activeProfile : "");
       }
       const status = $("setup-profile-status");
       if (status) {
@@ -4531,11 +4541,17 @@
         return bins;
       }
       const visibleCount = Math.max(128, Math.floor(bins.length / Math.max(1, state.displayZoom)));
-      if (visibleCount >= bins.length) {
-        return bins;
+      const source = visibleCount >= bins.length
+        ? bins
+        : bins.subarray(Math.floor((bins.length - visibleCount) / 2), Math.floor((bins.length - visibleCount) / 2) + visibleCount);
+      if (!isNegativePassbandMode(state.mode)) {
+        return source;
       }
-      const start = Math.floor((bins.length - visibleCount) / 2);
-      return bins.subarray(start, start + visibleCount);
+      const reversed = new Float32Array(source.length);
+      for (let i = 0; i < source.length; i += 1) {
+        reversed[i] = source[source.length - 1 - i];
+      }
+      return reversed;
     }
 
     function shiftBinsHorizontally(bins, shiftBins) {
@@ -4561,9 +4577,11 @@
       if (!Number.isFinite(deltaHz) || deltaHz === 0 || !Number.isFinite(spanHz) || spanHz <= 0) {
         return;
       }
+      const direction = isNegativePassbandMode(state.mode) ? -1 : 1;
 
       if (state.latestBins && state.latestBins.length > 0) {
-        const shiftBinsFloat = (deltaHz / spanHz) * state.latestBins.length + state.spectrumShiftCarryBins;
+        const shiftBinsFloat =
+          ((deltaHz / spanHz) * direction * state.latestBins.length) + state.spectrumShiftCarryBins;
         const shiftBins = Math.trunc(shiftBinsFloat);
         state.spectrumShiftCarryBins = shiftBinsFloat - shiftBins;
         if (shiftBins !== 0) {
@@ -4572,7 +4590,11 @@
         }
       }
 
-      const shiftedWaterfall = waterfallRenderer.shiftFrequency(deltaHz, spanHz, state.waterfallShiftCarryPixels);
+      const shiftedWaterfall = waterfallRenderer.shiftFrequency(
+        deltaHz * direction,
+        spanHz,
+        state.waterfallShiftCarryPixels
+      );
       state.waterfallShiftCarryPixels = shiftedWaterfall.remainder;
       if (shiftedWaterfall.applied) {
         state.waterfallSettleFrames = Math.max(state.waterfallSettleFrames, 2);
@@ -4622,8 +4644,28 @@
         return state.vfoA;
       }
       const normalized = (clientX - rect.left) / rect.width;
-      const offsetHz = (normalized - 0.5) * displaySpanHz();
+      const direction = isNegativePassbandMode(state.mode) ? -1 : 1;
+      const offsetHz = (normalized - 0.5) * displaySpanHz() * direction;
       return state.dds + offsetHz;
+    }
+
+    function clickTuneCarrierOffsetHz(mode = state.mode) {
+      const normalized = normalizeDemodMode(mode);
+      if (
+        normalized !== "LSB" &&
+        normalized !== "DIGL" &&
+        normalized !== "DIGU" &&
+        normalized !== "CWL" &&
+        normalized !== "CWU"
+      ) {
+        return 0;
+      }
+      const passband = signedPassbandFromUiCuts(state.filterLow, state.filterHigh, normalized);
+      return (passband.lowHz + passband.highHz) / 2;
+    }
+
+    function tunedFrequencyFromDisplayPoint(clientX, element) {
+      return frequencyFromDisplayPoint(clientX, element) - clickTuneCarrierOffsetHz(state.mode);
     }
 
     function displayPassbandHz() {
@@ -4631,11 +4673,14 @@
       return { startHz: passband.lowHz, endHz: passband.highHz };
     }
 
+    function displayPercentForOffsetHz(offsetHz) {
+      return 50 + (offsetHz / Math.max(1, displaySpanHz())) * 100;
+    }
+
     function updateFilterOverlay() {
-      const rate = Math.max(1, displaySpanHz());
       const passband = displayPassbandHz();
-      const left = 50 + (passband.startHz / rate) * 100;
-      const right = 50 + (passband.endHz / rate) * 100;
+      const left = displayPercentForOffsetHz(passband.startHz);
+      const right = displayPercentForOffsetHz(passband.endHz);
       const clampedLeft = Math.max(0, Math.min(100, left));
       const clampedRight = Math.max(0, Math.min(100, right));
       const windowLeft = `${Math.min(clampedLeft, clampedRight)}%`;
@@ -4647,9 +4692,14 @@
     }
 
     function updateAxes() {
-      const spanKhz = (displaySpanHz() / 2000).toFixed(0);
-      $("axis-left").textContent = `-${spanKhz} kHz`;
-      $("axis-right").textContent = `+${spanKhz} kHz`;
+      const halfSpanKhz = Math.abs(displaySpanHz() / 2000).toFixed(0);
+      if (isNegativePassbandMode(state.mode)) {
+        $("axis-left").textContent = `+${halfSpanKhz} kHz`;
+        $("axis-right").textContent = `-${halfSpanKhz} kHz`;
+      } else {
+        $("axis-left").textContent = `-${halfSpanKhz} kHz`;
+        $("axis-right").textContent = `+${halfSpanKhz} kHz`;
+      }
       $("axis-center").textContent = `Center ${formatFrequency(state.dds)}`;
     }
 
@@ -4711,12 +4761,12 @@
       $("two-tone-btn").classList.toggle("active", state.twoToneEnabled);
       $("ptt-btn").classList.toggle("active", state.txEnabled);
       $("tx-status-meta").textContent = state.txEnabled ? "TX" : "RX";
-      $("meter-readout").textContent = state.meterDbm == null ? "-- dBm" : `${state.meterDbm.toFixed(1)} dBm`;
-      $("tx-power-readout").textContent = state.txPower == null ? "-- W" : `${state.txPower.toFixed(1)} W`;
-      $("swr-readout").textContent = state.swr == null ? "-- : 1" : `${state.swr.toFixed(2)} : 1`;
-      updateSmeter(state.meterDbm);
-      updateTxPwrMeter(state.txPower);
-      updateSwrMeter(state.swr);
+      $("meter-readout").textContent = state.meterDbmVisual == null ? "-- dBm" : `${state.meterDbmVisual.toFixed(1)} dBm`;
+      $("tx-power-readout").textContent = state.txPowerVisual == null ? "-- W" : `${state.txPowerVisual.toFixed(1)} W`;
+      $("swr-readout").textContent = state.swrVisual == null ? "-- : 1" : `${state.swrVisual.toFixed(2)} : 1`;
+      updateSmeter(state.meterDbmVisual);
+      updateTxPwrMeter(state.txPowerVisual, state.txPowerPeak);
+      updateSwrMeter(state.swrVisual);
       $("frame-rate-readout").textContent = `${safeFixed(state.frameRate, 1, "0.0")} fps`;
       $("fft-readout").textContent = `${state.fftWidth}`;
       $("audio-drop-readout").textContent = `${state.audioBackpressureDrops}`;
@@ -5242,6 +5292,14 @@
         state.ws = null;
         resetDisplayHistory();
         state.txEnabled = false;
+        state.meterDbm = null;
+        state.meterDbmVisual = null;
+        state.meterDbmPeak = null;
+        state.txPower = null;
+        state.txPowerVisual = null;
+        state.txPowerPeak = null;
+        state.swr = null;
+        state.swrVisual = null;
         stopMicCapture();
         void stopRxAudio(false);
         void releaseWakeLock();
@@ -5266,6 +5324,14 @@
       state.ws = null;
       resetDisplayHistory();
       state.txEnabled = false;
+      state.meterDbm = null;
+      state.meterDbmVisual = null;
+      state.meterDbmPeak = null;
+      state.txPower = null;
+      state.txPowerVisual = null;
+      state.txPowerPeak = null;
+      state.swr = null;
+      state.swrVisual = null;
       stopMicCapture();
       void stopRxAudio(false);
       await releaseWakeLock();
@@ -5637,6 +5703,7 @@
     }
 
     function animationLoop(now) {
+      updateMeterVisualState(now);
       if (state.connected && state.iqStreaming && state.iqPackets.length !== 0) {
         if (now - state.lastSpectrumRenderAt >= 33) {
           const iqWindow = buildRenderIqWindow();
@@ -5671,6 +5738,12 @@
       } else {
         waterfallRenderer.render();
       }
+      $("meter-readout").textContent = state.meterDbmVisual == null ? "-- dBm" : `${state.meterDbmVisual.toFixed(1)} dBm`;
+      $("tx-power-readout").textContent = state.txPowerVisual == null ? "-- W" : `${state.txPowerVisual.toFixed(1)} W`;
+      $("swr-readout").textContent = state.swrVisual == null ? "-- : 1" : `${state.swrVisual.toFixed(2)} : 1`;
+      updateSmeter(state.meterDbmVisual);
+      updateTxPwrMeter(state.txPowerVisual, state.txPowerPeak);
+      updateSwrMeter(state.swrVisual);
       requestAnimationFrame(animationLoop);
     }
 
@@ -5816,7 +5889,16 @@
       });
       $("setup-startup-apply-btn").addEventListener("click", async () => {
         try {
-          await setStartupProfileOnServer($("setup-startup-profile-select").value || "");
+          const selected =
+            $("setup-startup-profile-select").value ||
+            $("setup-profile-select").value ||
+            state.activeProfile ||
+            "";
+          if (!selected) {
+            logEvent("Select or save a profile before setting startup");
+            return;
+          }
+          await setStartupProfileOnServer(selected);
           logEvent(state.startupProfile ? `Startup profile set: ${state.startupProfile}` : "Startup profile cleared");
           updateUi();
         } catch (error) {
@@ -6064,7 +6146,7 @@
             return;
           }
           event.preventDefault();
-          setFrequency(frequencyFromDisplayPoint(event.clientX, element));
+          setFrequency(tunedFrequencyFromDisplayPoint(event.clientX, element));
         });
         element.addEventListener("wheel", (event) => {
           if (state.frequencyLock) {
@@ -6298,9 +6380,32 @@
     const SM_CX = 180, SM_CY = 165, SM_R = 130;
     const SM_START = 210, SM_END = 330; // SVG degrees
     const SM_S9_DEG = SM_START + ((-73 + 121) / 108) * 120; // ~263.3°
+    const SMETER_ATTACK_PER_SEC = 85;
+    const SMETER_RELEASE_PER_SEC = 22;
+    const SMETER_PEAK_HOLD_MS = 900;
+    const SMETER_PEAK_DROP_PER_SEC = 18;
+    const TX_POWER_ATTACK_PER_SEC = 140;
+    const TX_POWER_RELEASE_PER_SEC = 45;
+    const TX_POWER_PEAK_HOLD_MS = 1100;
+    const TX_POWER_PEAK_DROP_PER_SEC = 40;
+    const SWR_ATTACK_PER_SEC = 5;
+    const SWR_RELEASE_PER_SEC = 3;
 
     function dbmToSmDeg(dbm) {
       return SM_START + Math.max(0, Math.min(1, (dbm + 121) / 108)) * 120;
+    }
+
+    function lerp(start, end, t) {
+      return start + (end - start) * t;
+    }
+
+    function moveToward(current, target, risePerSec, fallPerSec, dtSec) {
+      if (!Number.isFinite(target)) return current;
+      if (!Number.isFinite(current)) return target;
+      if (target >= current) {
+        return Math.min(target, current + (risePerSec * dtSec));
+      }
+      return Math.max(target, current - (fallPerSec * dtSec));
     }
 
     function initSmeter() {
@@ -6340,61 +6445,145 @@
     // Aux meter geometry: pivot (87,100), radius 68, sweep ±65° from vertical → 205°–335°
     const AX_CX = 87, AX_CY = 100, AX_R = 68;
     const AX_START = 205, AX_END = 335;
+    const AX_SPAN = AX_END - AX_START;
 
     function auxDeg(value, min, max) {
-      return AX_START + Math.max(0, Math.min(1, (value - min) / (max - min))) * 130;
+      return AX_START + Math.max(0, Math.min(1, (value - min) / (max - min))) * AX_SPAN;
+    }
+
+    function txPowerToAuxDeg(watts) {
+      const w = Math.max(0, Math.min(120, Number(watts) || 0));
+      if (w <= 5) return lerp(AX_START, AX_START + AX_SPAN * 0.1875, w / 5);
+      if (w <= 10) return lerp(AX_START + AX_SPAN * 0.1875, AX_START + AX_SPAN * 0.375, (w - 5) / 5);
+      if (w <= 50) return lerp(AX_START + AX_SPAN * 0.375, AX_START + AX_SPAN * 0.5625, (w - 10) / 40);
+      if (w <= 100) return lerp(AX_START + AX_SPAN * 0.5625, AX_START + AX_SPAN * 0.75, (w - 50) / 50);
+      return lerp(AX_START + AX_SPAN * 0.75, AX_END, (w - 100) / 20);
+    }
+
+    function swrToAuxDeg(swr) {
+      const value = Math.max(1, Math.min(5, Number(swr) || 1));
+      if (value <= 3) {
+        return lerp(AX_START, AX_START + AX_SPAN * 0.75, (value - 1) / 2);
+      }
+      return lerp(AX_START + AX_SPAN * 0.75, AX_END, (value - 3) / 2);
+    }
+
+    function updateMeterVisualState(now) {
+      const dtSec = state.lastMeterVisualAt > 0
+        ? Math.min(0.2, Math.max(0.001, (now - state.lastMeterVisualAt) / 1000))
+        : (1 / 60);
+      state.lastMeterVisualAt = now;
+
+      if (state.meterDbm == null) {
+        state.meterDbmVisual = null;
+        state.meterDbmPeak = null;
+      } else {
+        state.meterDbmVisual = moveToward(
+          state.meterDbmVisual,
+          state.meterDbm,
+          SMETER_ATTACK_PER_SEC,
+          SMETER_RELEASE_PER_SEC,
+          dtSec
+        );
+        if (state.meterDbmPeak == null || state.meterDbmVisual >= state.meterDbmPeak) {
+          state.meterDbmPeak = state.meterDbmVisual;
+          state.meterDbmPeakAt = now;
+        } else if (now - state.meterDbmPeakAt > SMETER_PEAK_HOLD_MS) {
+          state.meterDbmPeak = Math.max(
+            state.meterDbmVisual,
+            state.meterDbmPeak - (SMETER_PEAK_DROP_PER_SEC * dtSec)
+          );
+        }
+      }
+
+      if (state.txPower == null) {
+        state.txPowerVisual = null;
+        state.txPowerPeak = null;
+      } else {
+        state.txPowerVisual = moveToward(
+          state.txPowerVisual,
+          state.txPower,
+          TX_POWER_ATTACK_PER_SEC,
+          TX_POWER_RELEASE_PER_SEC,
+          dtSec
+        );
+        if (state.txPowerPeak == null || state.txPowerVisual >= state.txPowerPeak) {
+          state.txPowerPeak = state.txPowerVisual;
+          state.txPowerPeakAt = now;
+        } else if (now - state.txPowerPeakAt > TX_POWER_PEAK_HOLD_MS) {
+          state.txPowerPeak = Math.max(
+            state.txPowerVisual,
+            state.txPowerPeak - (TX_POWER_PEAK_DROP_PER_SEC * dtSec)
+          );
+        }
+      }
+
+      if (state.swr == null) {
+        state.swrVisual = null;
+      } else {
+        state.swrVisual = moveToward(
+          state.swrVisual,
+          state.swr,
+          SWR_ATTACK_PER_SEC,
+          SWR_RELEASE_PER_SEC,
+          dtSec
+        );
+      }
     }
 
     function initTxPwrMeter() {
-      const MAX = 120;
       $('txpwr-arc-bg').setAttribute('d', svgArcPath(AX_CX, AX_CY, AX_R, AX_START, AX_END));
       $('txpwr-arc-fill').setAttribute('d', svgArcPath(AX_CX, AX_CY, AX_R, AX_START, AX_START + 0.5));
-      const marks = [[0,'0'],[30,''],[60,'60'],[90,''],[120,'120']];
+      const marks = [[0,'0'],[5,'5'],[10,'10'],[50,'50'],[100,'100'],[120,'120+']];
       const tg = $('txpwr-ticks'), lg = $('txpwr-labels');
       marks.forEach(([w, lbl]) => {
-        const deg = auxDeg(w, 0, MAX);
+        const deg = txPowerToAuxDeg(w);
         const c = w >= 100 ? '#c04030' : (w >= 75 ? '#c08820' : '#2880b0');
         tg.appendChild(svgTick(AX_CX, AX_CY, AX_R, AX_R - 8, deg, c, '1.5'));
         if (lbl) lg.appendChild(svgLabel(AX_CX, AX_CY, AX_R + 12, deg, lbl, '#50788a', '8'));
       });
-      for (let w = 10; w < MAX; w += 10) {
+      for (let w = 5; w < 120; w += 5) {
         if (marks.some(([m]) => m === w)) continue;
         const c = w >= 100 ? '#702018' : (w >= 75 ? '#705010' : '#1a4060');
-        tg.appendChild(svgTick(AX_CX, AX_CY, AX_R, AX_R - 4, auxDeg(w, 0, MAX), c, '1'));
+        tg.appendChild(svgTick(AX_CX, AX_CY, AX_R, AX_R - 4, txPowerToAuxDeg(w), c, '1'));
       }
     }
 
-    function updateTxPwrMeter(watts) {
-      const MAX = 120;
-      const w = watts == null ? 0 : Math.max(0, Math.min(MAX, watts));
-      const deg = auxDeg(w, 0, MAX);
+    function updateTxPwrMeter(watts, peakWatts = null) {
+      const w = watts == null ? 0 : Math.max(0, Math.min(120, watts));
+      const deg = txPowerToAuxDeg(w);
       $('txpwr-needle').style.transform = `rotate(${(deg - 270).toFixed(1)}deg)`;
       const fillDeg = (watts == null || watts <= 0) ? AX_START + 0.5 : deg;
       const c = w >= 100 ? '#ff6050' : (w >= 75 ? '#f4b860' : '#309cff');
       const arc = $('txpwr-arc-fill');
       arc.setAttribute('d', svgArcPath(AX_CX, AX_CY, AX_R, AX_START, fillDeg));
       arc.setAttribute('stroke', c);
+      const peakDeg = peakWatts == null ? fillDeg : txPowerToAuxDeg(Math.max(0, Math.min(120, peakWatts)));
+      arc.setAttribute('opacity', peakWatts != null && peakWatts > w ? '0.92' : '1');
+      if (peakWatts != null && peakWatts > w) {
+        arc.setAttribute('d', svgArcPath(AX_CX, AX_CY, AX_R, AX_START, peakDeg));
+      }
     }
 
     function initSwrMeter() {
-      const goodEnd = auxDeg(1.5, 1, 4), warnEnd = auxDeg(2.5, 1, 4);
+      const goodEnd = swrToAuxDeg(2.0), warnEnd = swrToAuxDeg(3.0);
       $('swr-arc-good').setAttribute('d', svgArcPath(AX_CX, AX_CY, AX_R, AX_START, goodEnd));
       $('swr-arc-warn').setAttribute('d', svgArcPath(AX_CX, AX_CY, AX_R, goodEnd, warnEnd));
       $('swr-arc-bad').setAttribute('d',  svgArcPath(AX_CX, AX_CY, AX_R, warnEnd, AX_END));
-      const marks = [[1.0,'1'],[1.5,'1.5'],[2.0,'2'],[2.5,''],[3.0,'3'],[4.0,'4']];
+      const marks = [[1.0,'1'],[1.5,'1.5'],[2.0,'2'],[3.0,'3'],[4.0,'4'],[5.0,'5']];
       const tg = $('swr-ticks'), lg = $('swr-labels');
       marks.forEach(([s, lbl]) => {
-        const deg = auxDeg(s, 1, 4);
-        const c = s >= 2.5 ? '#b03030' : (s >= 1.5 ? '#b08020' : '#208060');
+        const deg = swrToAuxDeg(s);
+        const c = s >= 3.0 ? '#b03030' : (s >= 2.0 ? '#b08020' : '#208060');
         tg.appendChild(svgTick(AX_CX, AX_CY, AX_R, AX_R - 8, deg, c, '1.5'));
         if (lbl) lg.appendChild(svgLabel(AX_CX, AX_CY, AX_R + 12, deg, lbl, '#50788a', '8'));
       });
     }
 
     function updateSwrMeter(swr) {
-      const deg = swr == null ? AX_START : auxDeg(Math.max(1, Math.min(4, swr)), 1, 4);
+      const deg = swr == null ? AX_START : swrToAuxDeg(Math.max(1, Math.min(5, swr)));
       $('swr-needle').style.transform = `rotate(${(deg - 270).toFixed(1)}deg)`;
-      const c = swr == null ? '#5de8b5' : (swr >= 2.5 ? '#fb7c74' : (swr >= 1.5 ? '#f4b860' : '#5de8b5'));
+      const c = swr == null ? '#5de8b5' : (swr >= 3.0 ? '#fb7c74' : (swr >= 2.0 ? '#f4b860' : '#5de8b5'));
       $('swr-needle-poly').setAttribute('fill', c);
     }
 
