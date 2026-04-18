@@ -4858,14 +4858,11 @@
       const source = visibleCount >= bins.length
         ? bins
         : bins.subarray(Math.floor((bins.length - visibleCount) / 2), Math.floor((bins.length - visibleCount) / 2) + visibleCount);
-      if (!isNegativePassbandMode(state.mode)) {
-        return source;
-      }
-      const reversed = new Float32Array(source.length);
+      const oriented = new Float32Array(source.length);
       for (let i = 0; i < source.length; i += 1) {
-        reversed[i] = source[source.length - 1 - i];
+        oriented[i] = source[source.length - 1 - i];
       }
-      return reversed;
+      return oriented;
     }
 
     function shiftBinsHorizontally(bins, shiftBins) {
@@ -4891,11 +4888,10 @@
       if (!Number.isFinite(deltaHz) || deltaHz === 0 || !Number.isFinite(spanHz) || spanHz <= 0) {
         return;
       }
-      const direction = isNegativePassbandMode(state.mode) ? -1 : 1;
 
       if (state.latestBins && state.latestBins.length > 0) {
         const shiftBinsFloat =
-          ((deltaHz / spanHz) * direction * state.latestBins.length) + state.spectrumShiftCarryBins;
+          ((deltaHz / spanHz) * state.latestBins.length) + state.spectrumShiftCarryBins;
         const shiftBins = Math.trunc(shiftBinsFloat);
         state.spectrumShiftCarryBins = shiftBinsFloat - shiftBins;
         if (shiftBins !== 0) {
@@ -4905,7 +4901,7 @@
       }
 
       const shiftedWaterfall = waterfallRenderer.shiftFrequency(
-        deltaHz * direction,
+        deltaHz,
         spanHz,
         state.waterfallShiftCarryPixels
       );
@@ -4958,8 +4954,7 @@
         return state.vfoA;
       }
       const normalized = (clientX - rect.left) / rect.width;
-      const direction = isNegativePassbandMode(state.mode) ? -1 : 1;
-      const offsetHz = (normalized - 0.5) * displaySpanHz() * direction;
+      const offsetHz = (normalized - 0.5) * displaySpanHz();
       return state.dds + offsetHz;
     }
 
@@ -5007,13 +5002,8 @@
 
     function updateAxes() {
       const halfSpanKhz = Math.abs(displaySpanHz() / 2000).toFixed(0);
-      if (isNegativePassbandMode(state.mode)) {
-        $("axis-left").textContent = `+${halfSpanKhz} kHz`;
-        $("axis-right").textContent = `-${halfSpanKhz} kHz`;
-      } else {
-        $("axis-left").textContent = `-${halfSpanKhz} kHz`;
-        $("axis-right").textContent = `+${halfSpanKhz} kHz`;
-      }
+      $("axis-left").textContent = `-${halfSpanKhz} kHz`;
+      $("axis-right").textContent = `+${halfSpanKhz} kHz`;
       $("axis-center").textContent = `Center ${formatFrequency(state.dds)}`;
     }
 
@@ -5347,22 +5337,25 @@
         logEvent("Audio start ignored: bridge is not connected");
         return;
       }
-      if (state.audioCtx) {
-        await state.audioCtx.close();
+      let ctx = state.audioCtx;
+      if (!ctx) {
+        ctx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 48000 });
+        state.audioCtx = ctx;
       }
-      // Keep a local reference so the async continuation can detect whether
-      // stopRxAudio() ran and replaced/nulled state.audioCtx while suspended.
-      const ctx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 48000 });
-      state.audioCtx = ctx;
-      state.audioGainNode = ctx.createGain();
-      state.audioGainNode.connect(ctx.destination);
+      if (!state.audioGainNode) {
+        state.audioGainNode = ctx.createGain();
+        state.audioGainNode.connect(ctx.destination);
+      }
       if (ctx.state === "suspended") {
-        await ctx.resume();
+        try {
+          await ctx.resume();
+        } catch (error) {
+          logEvent(`RX audio resume failed: ${error.message || error}`);
+          updateUi();
+          return;
+        }
       }
-      // If the context was replaced while we were awaiting (e.g. disconnect
-      // arrived during the resume), discard this stale context and bail.
       if (state.audioCtx !== ctx) {
-        await ctx.close();
         return;
       }
       state.audioStreaming = true;
@@ -5376,6 +5369,39 @@
       );
       logEvent("RX audio requested");
       updateUi();
+    }
+
+    async function primeRxAudioContextFromGesture() {
+      if (state.audioCtx) {
+        if (state.audioCtx.state === "suspended") {
+          try {
+            await state.audioCtx.resume();
+          } catch (error) {
+            logEvent(`RX audio priming failed: ${error.message || error}`);
+            return false;
+          }
+        }
+        if (!state.audioGainNode) {
+          state.audioGainNode = state.audioCtx.createGain();
+          state.audioGainNode.connect(state.audioCtx.destination);
+          applyRxVolumeGain();
+        }
+        return true;
+      }
+      try {
+        const ctx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 48000 });
+        state.audioCtx = ctx;
+        state.audioGainNode = ctx.createGain();
+        state.audioGainNode.connect(ctx.destination);
+        if (ctx.state === "suspended") {
+          await ctx.resume();
+        }
+        applyRxVolumeGain();
+        return true;
+      } catch (error) {
+        logEvent(`RX audio priming failed: ${error.message || error}`);
+        return false;
+      }
     }
 
     async function stopRxAudio(notifyBridge = true) {
@@ -5680,6 +5706,7 @@
       }
       state.connectPending = true;
       updateUi();
+      await primeRxAudioContextFromGesture();
       await loadRemoteSettingsFromServer(false);
       state.demoMode = false;
       state.wsUrl = normalizeWsUrlPreference($("ws-url").value.trim());
