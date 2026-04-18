@@ -49,8 +49,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut last_status = Instant::now();
     let mut last_duc_specific = Instant::now();
     let tx_silence_gap = Duration::from_millis(75);
-    let tx_packet_period =
-        Duration::from_secs_f64(DUC_IQ_SAMPLES_PER_PACKET as f64 / 48_000.0);
+    let tx_packet_period = Duration::from_secs_f64(DUC_IQ_SAMPLES_PER_PACKET as f64 / 48_000.0);
     let tx_silence_packet = vec![0.0_f32; DUC_IQ_SAMPLES_PER_PACKET * 2];
     let mut last_tx_audio_at = Instant::now();
     let mut next_tx_keepalive_at = Instant::now();
@@ -118,6 +117,25 @@ fn main() -> Result<(), Box<dyn Error>> {
                 TciCommand::SetRxNoiseReductionLevel(level) => {
                     model.desired.rx_noise_reduction_level = level.clamp(0.0, 100.0);
                 }
+                TciCommand::SetRxAnrVals {
+                    taps,
+                    delay,
+                    gain,
+                    leakage,
+                } => {
+                    if taps != i32::MIN {
+                        model.desired.rx_anr_taps = taps.clamp(1, 128);
+                    }
+                    if delay != i32::MIN {
+                        model.desired.rx_anr_delay = delay.clamp(0, 127);
+                    }
+                    if gain.is_finite() {
+                        model.desired.rx_anr_gain = gain.clamp(0.0, 1.0);
+                    }
+                    if leakage.is_finite() {
+                        model.desired.rx_anr_leakage = leakage.clamp(0.0, 1.0);
+                    }
+                }
                 TciCommand::SetIqSampleRate(rate_hz) => {
                     let rate_khz = (rate_hz / 1000).clamp(48, u16::MAX as u32) as u16;
                     model.desired.ddc0_sample_rate_khz = rate_khz;
@@ -167,6 +185,15 @@ fn main() -> Result<(), Box<dyn Error>> {
                     println!("saturn-bridge: TCI client active — taking P2 controller role");
                 }
                 TciCommand::ClientDisconnected => {
+                    if model.desired.tx_enabled {
+                        model.desired.tx_enabled = false;
+                        wdsp.reset_stream_buffers();
+                        wdsp_tx.set_active(false);
+                        needs_duc_specific = true;
+                        needs_high_priority = true;
+                        tx_silence_keepalive_active = false;
+                    }
+                    model.desired.two_tone_enabled = false;
                     model.desired.running = false;
                     needs_stop = true;
                     println!("saturn-bridge: no TCI clients — releasing P2 controller role");
@@ -185,7 +212,10 @@ fn main() -> Result<(), Box<dyn Error>> {
                         } else {
                             tx_silence_keepalive_active = false;
                         }
-                        println!("saturn-bridge: TX state -> {}", if enabled { "ON" } else { "OFF" });
+                        println!(
+                            "saturn-bridge: TX state -> {}",
+                            if enabled { "ON" } else { "OFF" }
+                        );
                     }
                 }
                 TciCommand::SetNoiseBlankerMode(mode) => {
@@ -196,6 +226,25 @@ fn main() -> Result<(), Box<dyn Error>> {
                 }
                 TciCommand::SetAnfEnabled(enabled) => {
                     model.desired.anf_enabled = enabled;
+                }
+                TciCommand::SetRxAnfVals {
+                    taps,
+                    delay,
+                    gain,
+                    leakage,
+                } => {
+                    if taps != i32::MIN {
+                        model.desired.rx_anf_taps = taps.clamp(1, 128);
+                    }
+                    if delay != i32::MIN {
+                        model.desired.rx_anf_delay = delay.clamp(0, 127);
+                    }
+                    if gain.is_finite() {
+                        model.desired.rx_anf_gain = gain.clamp(0.0, 1.0);
+                    }
+                    if leakage.is_finite() {
+                        model.desired.rx_anf_leakage = leakage.clamp(0.0, 1.0);
+                    }
                 }
                 TciCommand::SetAgcMode(mode) => {
                     model.desired.agc_mode = mode;
@@ -237,7 +286,25 @@ fn main() -> Result<(), Box<dyn Error>> {
                 }
                 TciCommand::SetTxTwoToneTest(enabled) => {
                     model.desired.two_tone_enabled = enabled;
-                    println!("saturn-bridge: two-tone test -> {}", if enabled { "ON (700/1900 Hz)" } else { "OFF" });
+                    println!(
+                        "saturn-bridge: two-tone test -> {}",
+                        if enabled { "ON (700/1900 Hz)" } else { "OFF" }
+                    );
+                }
+                TciCommand::SetTxTwoToneFreq1(freq_hz) => {
+                    model.desired.tx_two_tone_freq1_hz = freq_hz.clamp(10.0, 10_000.0);
+                }
+                TciCommand::SetTxTwoToneFreq2(freq_hz) => {
+                    model.desired.tx_two_tone_freq2_hz = freq_hz.clamp(10.0, 10_000.0);
+                }
+                TciCommand::SetTxTwoToneLevelDb(level_db) => {
+                    model.desired.tx_two_tone_level_db = level_db.clamp(-40.0, 0.0);
+                }
+                TciCommand::SetTxTwoToneInvertLsb(enabled) => {
+                    model.desired.tx_two_tone_invert_lsb = enabled;
+                }
+                TciCommand::SetTxTwoToneDelayMs(delay_ms) => {
+                    model.desired.tx_two_tone_delay_ms = delay_ms.min(2_000);
                 }
                 TciCommand::MicAudioFrame(samples) => {
                     last_tx_audio_at = Instant::now();
@@ -376,7 +443,9 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
 
     stop_flag.store(true, Ordering::Relaxed);
-    let hp_result = hp_thread.join().map_err(|_| "high-priority thread panicked")?;
+    let hp_result = hp_thread
+        .join()
+        .map_err(|_| "high-priority thread panicked")?;
     hp_result?;
     thread::sleep(Duration::from_millis(10));
     Ok(())

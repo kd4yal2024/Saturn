@@ -2,7 +2,8 @@ use std::env;
 use std::path::PathBuf;
 
 fn main() {
-    let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR not set"));
+    let manifest_dir =
+        PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR not set"));
     let wdsp_dir = manifest_dir.join("../../../pihpsdr/wdsp");
     let libwdsp = wdsp_dir.join("libwdsp.a");
     let rnnoise_dir = manifest_dir.join("../../../pihpsdr/rnnoise");
@@ -25,7 +26,10 @@ fn main() {
     }
 
     println!("cargo:rerun-if-changed={}", libwdsp.display());
-    println!("cargo:rerun-if-changed={}", wdsp_dir.join("wdsp.h").display());
+    println!(
+        "cargo:rerun-if-changed={}",
+        wdsp_dir.join("wdsp.h").display()
+    );
     println!(
         "cargo:rerun-if-changed={}",
         rnnoise_dir.join("librnnoise.a").display()
@@ -36,7 +40,10 @@ fn main() {
     );
     println!("cargo:rustc-link-search=native={}", wdsp_dir.display());
     println!("cargo:rustc-link-search=native={}", rnnoise_dir.display());
-    println!("cargo:rustc-link-search=native={}", specbleach_dir.display());
+    println!(
+        "cargo:rustc-link-search=native={}",
+        specbleach_dir.display()
+    );
     println!("cargo:rustc-link-lib=static=wdsp");
     println!("cargo:rustc-link-lib=static=specbleach");
     println!("cargo:rustc-link-lib=static=rnnoise");

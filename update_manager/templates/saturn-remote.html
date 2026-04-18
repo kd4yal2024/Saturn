@@ -1030,6 +1030,48 @@
       gap: 12px;
     }
 
+    .setup-nav,
+    .setup-subnav {
+      display: grid;
+      gap: 8px;
+    }
+
+    .setup-nav {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      margin-bottom: 12px;
+    }
+
+    .setup-subnav {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .setup-tab-btn {
+      min-height: 40px;
+      border-radius: 14px;
+      border: 1px solid var(--theme-field-border);
+      background: var(--theme-field-bg);
+      color: var(--muted);
+      font-family: var(--mono);
+      font-size: 12px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    .setup-tab-btn.active {
+      color: var(--text);
+      border-color: rgba(114, 191, 255, 0.4);
+      background: linear-gradient(180deg, rgba(40, 87, 122, 0.9), rgba(20, 49, 73, 0.95));
+    }
+
+    :root[data-theme="light"] .setup-tab-btn.active {
+      background: linear-gradient(180deg, rgba(203, 226, 245, 0.95), rgba(185, 214, 238, 0.95));
+    }
+
+    .setup-panel[hidden],
+    .setup-subpanel[hidden] {
+      display: none;
+    }
+
     .setup-section {
       display: grid;
       gap: 10px;
@@ -1096,6 +1138,12 @@
       color: var(--muted);
       letter-spacing: 0.08em;
       text-transform: uppercase;
+    }
+
+    .setup-inline-fields {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
     }
 
     .launch-grid .btn {
@@ -1895,86 +1943,172 @@
                   <div class="setup-menu-head">
                     <div>
                       <div class="setup-title">Setup</div>
-                      <div class="setup-meta">Server-side profiles and display startup behavior</div>
+                      <div class="setup-meta">Profiles, display, and Thetis-style DSP control surfaces</div>
                     </div>
                     <button class="btn ghost" id="setup-close-btn" type="button">Close</button>
                   </div>
+                  <div class="setup-nav">
+                    <button class="setup-tab-btn active" id="setup-tab-profiles" data-setup-panel="profiles" type="button">Profiles</button>
+                    <button class="setup-tab-btn" id="setup-tab-display" data-setup-panel="display" type="button">Display</button>
+                    <button class="setup-tab-btn" id="setup-tab-dsp" data-setup-panel="dsp" type="button">DSP</button>
+                  </div>
                   <div class="setup-stack">
-                    <div class="setup-section">
-                      <div class="setup-section-title">Profiles</div>
-                      <div class="setup-row">
-                        <label class="label" for="setup-profile-select">Active Profile</label>
-                        <select class="field" id="setup-profile-select"></select>
-                        <div class="setup-readout" id="setup-profile-status">Working settings only</div>
-                      </div>
-                      <div class="setup-button-row">
-                        <button class="btn ghost" id="setup-profile-load-btn" type="button">Load</button>
-                        <button class="btn alt" id="setup-profile-save-btn" type="button">Save</button>
-                        <button class="btn alt" id="setup-profile-save-as-btn" type="button">Save As</button>
-                        <button class="btn ghost" id="setup-profile-delete-btn" type="button">Delete</button>
-                      </div>
-                      <div class="setup-row">
-                        <label class="label" for="setup-startup-profile-select">Startup Profile</label>
-                        <select class="field" id="setup-startup-profile-select"></select>
-                        <div class="setup-button-row" style="grid-template-columns: repeat(2, minmax(0, 1fr));">
-                          <button class="btn ghost" id="setup-startup-apply-btn" type="button">Set Startup</button>
-                          <button class="btn ghost" id="setup-startup-clear-btn" type="button">Clear Startup</button>
+                    <div class="setup-panel" id="setup-panel-profiles" data-setup-panel-id="profiles">
+                      <div class="setup-section">
+                        <div class="setup-section-title">Profiles</div>
+                        <div class="setup-row">
+                          <label class="label" for="setup-profile-select">Active Profile</label>
+                          <select class="field" id="setup-profile-select"></select>
+                          <div class="setup-readout" id="setup-profile-status">Working settings only</div>
+                        </div>
+                        <div class="setup-button-row">
+                          <button class="btn ghost" id="setup-profile-load-btn" type="button">Load</button>
+                          <button class="btn alt" id="setup-profile-save-btn" type="button">Save</button>
+                          <button class="btn alt" id="setup-profile-save-as-btn" type="button">Save As</button>
+                          <button class="btn ghost" id="setup-profile-delete-btn" type="button">Delete</button>
+                        </div>
+                        <div class="setup-row">
+                          <label class="label" for="setup-startup-profile-select">Startup Profile</label>
+                          <select class="field" id="setup-startup-profile-select"></select>
+                          <div class="setup-button-row" style="grid-template-columns: repeat(2, minmax(0, 1fr));">
+                            <button class="btn ghost" id="setup-startup-apply-btn" type="button">Set Startup</button>
+                            <button class="btn ghost" id="setup-startup-clear-btn" type="button">Clear Startup</button>
+                          </div>
                         </div>
                       </div>
                     </div>
 
-                    <div class="setup-section">
-                      <div class="setup-section-title">Panadapter / Waterfall</div>
-                      <div class="setup-grid">
-                        <label class="toggle-field"><span>Spectrum Auto Range</span><input id="display-spectrum-auto-range" type="checkbox" /></label>
-                        <label class="toggle-field"><span>Waterfall Auto Range</span><input id="display-waterfall-auto-range" type="checkbox" /></label>
+                    <div class="setup-panel" id="setup-panel-display" data-setup-panel-id="display" hidden>
+                      <div class="setup-section">
+                        <div class="setup-section-title">Panadapter / Waterfall</div>
+                        <div class="setup-grid">
+                          <label class="toggle-field"><span>Spectrum Auto Range</span><input id="display-spectrum-auto-range" type="checkbox" /></label>
+                          <label class="toggle-field"><span>Waterfall Auto Range</span><input id="display-waterfall-auto-range" type="checkbox" /></label>
+                        </div>
+                        <div class="setup-grid">
+                          <div class="setup-row">
+                            <label class="label" for="display-spectrum-floor">Spectrum Floor</label>
+                            <input id="display-spectrum-floor" type="range" min="-220" max="-80" step="1" value="-200" />
+                            <div class="setup-readout" id="display-spectrum-floor-readout">-200 dB</div>
+                          </div>
+                          <div class="setup-row">
+                            <label class="label" for="display-spectrum-ceiling">Spectrum Ceiling</label>
+                            <input id="display-spectrum-ceiling" type="range" min="-180" max="-40" step="1" value="-120" />
+                            <div class="setup-readout" id="display-spectrum-ceiling-readout">-120 dB</div>
+                          </div>
+                          <div class="setup-row">
+                            <label class="label" for="display-waterfall-floor">Waterfall Floor</label>
+                            <input id="display-waterfall-floor" type="range" min="-220" max="-80" step="1" value="-200" />
+                            <div class="setup-readout" id="display-waterfall-floor-readout">-200 dB</div>
+                          </div>
+                          <div class="setup-row">
+                            <label class="label" for="display-waterfall-ceiling">Waterfall Ceiling</label>
+                            <input id="display-waterfall-ceiling" type="range" min="-180" max="-40" step="1" value="-120" />
+                            <div class="setup-readout" id="display-waterfall-ceiling-readout">-120 dB</div>
+                          </div>
+                          <div class="setup-row">
+                            <label class="label" for="display-spectrum-average">Spectrum Average</label>
+                            <input id="display-spectrum-average" type="range" min="1" max="12" step="1" value="1" />
+                            <div class="setup-readout" id="display-spectrum-average-readout">1 frame</div>
+                          </div>
+                          <div class="setup-row">
+                            <label class="label" for="display-waterfall-speed">Waterfall Speed</label>
+                            <input id="display-waterfall-speed" type="range" min="1" max="6" step="1" value="1" />
+                            <div class="setup-readout" id="display-waterfall-speed-readout">1x</div>
+                          </div>
+                        </div>
+                        <div class="setup-grid">
+                          <div class="setup-row">
+                            <label class="label" for="display-waterfall-palette">Waterfall Palette</label>
+                            <select class="field" id="display-waterfall-palette">
+                              <option value="classic">Classic</option>
+                              <option value="ember">Ember</option>
+                              <option value="ice">Ice</option>
+                              <option value="forest">Forest</option>
+                            </select>
+                          </div>
+                          <label class="toggle-field"><span>Spectrum Peak Hold</span><input id="display-spectrum-peak-hold" type="checkbox" /></label>
+                          <label class="toggle-field"><span>Show Grid</span><input id="display-show-grid" type="checkbox" /></label>
+                          <label class="toggle-field"><span>Show Center Line</span><input id="display-show-center-line" type="checkbox" /></label>
+                          <label class="toggle-field"><span>Show Band Edges</span><input id="display-show-band-edges" type="checkbox" /></label>
+                        </div>
                       </div>
-                      <div class="setup-grid">
-                        <div class="setup-row">
-                          <label class="label" for="display-spectrum-floor">Spectrum Floor</label>
-                          <input id="display-spectrum-floor" type="range" min="-220" max="-80" step="1" value="-200" />
-                          <div class="setup-readout" id="display-spectrum-floor-readout">-200 dB</div>
+                    </div>
+
+                    <div class="setup-panel" id="setup-panel-dsp" data-setup-panel-id="dsp" hidden>
+                      <div class="setup-section">
+                        <div class="setup-section-title">DSP</div>
+                        <div class="setup-subnav">
+                          <button class="setup-tab-btn active" id="setup-dsp-tab-nr" data-setup-dsp-panel="nr" type="button">NR</button>
+                          <button class="setup-tab-btn" id="setup-dsp-tab-anf" data-setup-dsp-panel="anf" type="button">ANF</button>
                         </div>
-                        <div class="setup-row">
-                          <label class="label" for="display-spectrum-ceiling">Spectrum Ceiling</label>
-                          <input id="display-spectrum-ceiling" type="range" min="-180" max="-40" step="1" value="-120" />
-                          <div class="setup-readout" id="display-spectrum-ceiling-readout">-120 dB</div>
+
+                        <div class="setup-subpanel" id="setup-dsp-panel-nr" data-setup-dsp-panel-id="nr">
+                          <div class="setup-row">
+                            <label class="label" for="setup-dsp-nr-mode">Noise Reduction Mode</label>
+                            <select class="field" id="setup-dsp-nr-mode">
+                              <option value="OFF">Off</option>
+                              <option value="NR1">NR1 / LMS ANR</option>
+                              <option value="NR2">NR2 / EMNR</option>
+                              <option value="NR3">NR3 / RNNR</option>
+                              <option value="NR4">NR4 / SBNR</option>
+                            </select>
+                            <div class="setup-readout">Thetis-style LMS controls below affect NR1. NR2/NR3/NR4 continue to use the live level path.</div>
+                          </div>
+                          <div class="setup-row">
+                            <label class="label" for="setup-dsp-nr-level">NR Amount</label>
+                            <input id="setup-dsp-nr-level" type="range" min="0" max="100" step="1" value="100" />
+                            <div class="setup-readout" id="setup-dsp-nr-level-readout">100%</div>
+                          </div>
+                          <div class="setup-inline-fields">
+                            <div class="setup-row">
+                              <label class="label" for="setup-dsp-anr-taps">ANR Taps</label>
+                              <input class="field" id="setup-dsp-anr-taps" type="number" min="1" max="128" step="1" value="64" />
+                            </div>
+                            <div class="setup-row">
+                              <label class="label" for="setup-dsp-anr-delay">ANR Delay</label>
+                              <input class="field" id="setup-dsp-anr-delay" type="number" min="0" max="127" step="1" value="16" />
+                            </div>
+                            <div class="setup-row">
+                              <label class="label" for="setup-dsp-anr-gain">ANR Gain</label>
+                              <input class="field" id="setup-dsp-anr-gain" type="number" min="0" max="1" step="0.00001" value="0.00020" />
+                            </div>
+                            <div class="setup-row">
+                              <label class="label" for="setup-dsp-anr-leakage">ANR Leakage</label>
+                              <input class="field" id="setup-dsp-anr-leakage" type="number" min="0" max="1" step="0.00001" value="0.00005" />
+                            </div>
+                          </div>
+                          <div class="setup-button-row" style="grid-template-columns: repeat(2, minmax(0, 1fr));">
+                            <button class="btn ghost" id="setup-dsp-anr-thetis-btn" type="button">Thetis LMS Default</button>
+                            <button class="btn ghost" id="setup-dsp-anr-wide-btn" type="button">Wideband ANR</button>
+                          </div>
                         </div>
-                        <div class="setup-row">
-                          <label class="label" for="display-waterfall-floor">Waterfall Floor</label>
-                          <input id="display-waterfall-floor" type="range" min="-220" max="-80" step="1" value="-200" />
-                          <div class="setup-readout" id="display-waterfall-floor-readout">-200 dB</div>
+
+                        <div class="setup-subpanel" id="setup-dsp-panel-anf" data-setup-dsp-panel-id="anf" hidden>
+                          <label class="toggle-field"><span>ANF Enabled</span><input id="setup-dsp-anf-enabled" type="checkbox" /></label>
+                          <div class="setup-inline-fields">
+                            <div class="setup-row">
+                              <label class="label" for="setup-dsp-anf-taps">ANF Taps</label>
+                              <input class="field" id="setup-dsp-anf-taps" type="number" min="1" max="128" step="1" value="64" />
+                            </div>
+                            <div class="setup-row">
+                              <label class="label" for="setup-dsp-anf-delay">ANF Delay</label>
+                              <input class="field" id="setup-dsp-anf-delay" type="number" min="0" max="127" step="1" value="16" />
+                            </div>
+                            <div class="setup-row">
+                              <label class="label" for="setup-dsp-anf-gain">ANF Gain</label>
+                              <input class="field" id="setup-dsp-anf-gain" type="number" min="0" max="1" step="0.00001" value="0.00012" />
+                            </div>
+                            <div class="setup-row">
+                              <label class="label" for="setup-dsp-anf-leakage">ANF Leakage</label>
+                              <input class="field" id="setup-dsp-anf-leakage" type="number" min="0" max="1" step="0.00001" value="0.00008" />
+                            </div>
+                          </div>
+                          <div class="setup-button-row" style="grid-template-columns: repeat(2, minmax(0, 1fr));">
+                            <button class="btn ghost" id="setup-dsp-anf-thetis-btn" type="button">Thetis ANF Default</button>
+                            <button class="btn ghost" id="setup-dsp-anf-sharp-btn" type="button">Sharp Carrier Hunt</button>
+                          </div>
                         </div>
-                        <div class="setup-row">
-                          <label class="label" for="display-waterfall-ceiling">Waterfall Ceiling</label>
-                          <input id="display-waterfall-ceiling" type="range" min="-180" max="-40" step="1" value="-120" />
-                          <div class="setup-readout" id="display-waterfall-ceiling-readout">-120 dB</div>
-                        </div>
-                        <div class="setup-row">
-                          <label class="label" for="display-spectrum-average">Spectrum Average</label>
-                          <input id="display-spectrum-average" type="range" min="1" max="12" step="1" value="1" />
-                          <div class="setup-readout" id="display-spectrum-average-readout">1 frame</div>
-                        </div>
-                        <div class="setup-row">
-                          <label class="label" for="display-waterfall-speed">Waterfall Speed</label>
-                          <input id="display-waterfall-speed" type="range" min="1" max="6" step="1" value="1" />
-                          <div class="setup-readout" id="display-waterfall-speed-readout">1x</div>
-                        </div>
-                      </div>
-                      <div class="setup-grid">
-                        <div class="setup-row">
-                          <label class="label" for="display-waterfall-palette">Waterfall Palette</label>
-                          <select class="field" id="display-waterfall-palette">
-                            <option value="classic">Classic</option>
-                            <option value="ember">Ember</option>
-                            <option value="ice">Ice</option>
-                            <option value="forest">Forest</option>
-                          </select>
-                        </div>
-                        <label class="toggle-field"><span>Spectrum Peak Hold</span><input id="display-spectrum-peak-hold" type="checkbox" /></label>
-                        <label class="toggle-field"><span>Show Grid</span><input id="display-show-grid" type="checkbox" /></label>
-                        <label class="toggle-field"><span>Show Center Line</span><input id="display-show-center-line" type="checkbox" /></label>
-                        <label class="toggle-field"><span>Show Band Edges</span><input id="display-show-band-edges" type="checkbox" /></label>
                       </div>
                     </div>
                   </div>
@@ -2328,6 +2462,10 @@
                 </svg>
                 <div class="aux-meter-val" style="color:#62d0ff;">
                   <span id="tx-power-readout">-- W</span>
+                  <select id="tx-meter-mode" class="field" style="margin-top:6px;width:92px;font-size:11px;padding:4px 8px;">
+                    <option value="peak">Peak</option>
+                    <option value="avg">Avg</option>
+                  </select>
                 </div>
               </div>
               <div class="analog-meter-shell">
@@ -2425,6 +2563,41 @@
             <div style="margin-top:10px;">
               <button class="btn" id="two-tone-btn" type="button" style="width:100%;font-size:12px;">2-Tone Test Off</button>
             </div>
+            <div class="field-row" style="margin-top:10px;">
+              <div class="range-wrap">
+                <div class="row spread">
+                  <span class="label" style="margin:0;">2-Tone F1</span>
+                  <span class="mono small" id="two-tone-freq1-readout">700 Hz</span>
+                </div>
+                <input id="two-tone-freq1" type="range" min="50" max="2500" step="10" value="700" />
+              </div>
+              <div class="range-wrap">
+                <div class="row spread">
+                  <span class="label" style="margin:0;">2-Tone F2</span>
+                  <span class="mono small" id="two-tone-freq2-readout">1900 Hz</span>
+                </div>
+                <input id="two-tone-freq2" type="range" min="100" max="4000" step="10" value="1900" />
+              </div>
+            </div>
+            <div class="field-row">
+              <div class="range-wrap">
+                <div class="row spread">
+                  <span class="label" style="margin:0;">2-Tone Level</span>
+                  <span class="mono small" id="two-tone-level-readout">0.0 dB</span>
+                </div>
+                <input id="two-tone-level" type="range" min="-40" max="0" step="0.5" value="0" />
+              </div>
+              <div class="range-wrap">
+                <div class="row spread">
+                  <span class="label" style="margin:0;">Tone 2 Delay</span>
+                  <span class="mono small" id="two-tone-delay-readout">0 ms</span>
+                </div>
+                <input id="two-tone-delay" type="range" min="0" max="1000" step="10" value="0" />
+              </div>
+            </div>
+            <div class="field-row">
+              <label class="toggle-field"><span>Invert On LSB/DIGL/CWL</span><input id="two-tone-invert-lsb" type="checkbox" checked /></label>
+            </div>
           </div>
         </div>
       </div>
@@ -2502,9 +2675,19 @@
       rxNoiseReductionLevel: 100,
       rxNbMode: "OFF",
       rxNbThreshold: 4.95,
+      rxAnrTaps: 64,
+      rxAnrDelay: 16,
+      rxAnrGain: 0.0002,
+      rxAnrLeakage: 0.00005,
       anfEnabled: false,
+      rxAnfTaps: 64,
+      rxAnfDelay: 16,
+      rxAnfGain: 0.00012,
+      rxAnfLeakage: 0.00008,
       agcMode: "MEDIUM",
       agcGain: 80,
+      setupPanel: "profiles",
+      setupDspPanel: "nr",
       displayZoom: 1,
       activeProfile: "",
       startupProfile: "",
@@ -2519,6 +2702,7 @@
       txPowerVisual: null,
       txPowerPeak: null,
       txPowerPeakAt: 0,
+      txPowerAvg: null,
       swrVisual: null,
       latestBins: new Float32Array(1024),
       fftWidth: 1024,
@@ -2571,7 +2755,14 @@
       cfcEnabled: false,
       cfcPrecomp: 0.0,
       cfcBands: new Array(11).fill(0.0),
+      txMeterMode: "peak",
       twoToneEnabled: false,
+      twoTonePttOwned: false,
+      txTwoToneFreq1: 700,
+      txTwoToneFreq2: 1900,
+      txTwoToneLevelDb: 0.0,
+      txTwoToneInvertLsb: true,
+      txTwoToneDelayMs: 0,
       theme: "dark",
       layoutMode: "desktop",
       phonePanels: { ...PHONE_PANEL_DEFAULTS },
@@ -3623,6 +3814,22 @@
       return Math.max(0, Math.min(100, Math.round(Number(value))));
     }
 
+    function clampDspTapCount(value) {
+      return Math.max(1, Math.min(128, Math.round(safeFiniteNumber(value, 64))));
+    }
+
+    function clampDspDelay(value) {
+      return Math.max(0, Math.min(127, Math.round(safeFiniteNumber(value, 16))));
+    }
+
+    function clampDspGain(value, fallback = 0.0001) {
+      return Math.max(0, Math.min(1, safeFiniteNumber(value, fallback)));
+    }
+
+    function clampDspLeakage(value, fallback = 0.0001) {
+      return Math.max(0, Math.min(1, safeFiniteNumber(value, fallback)));
+    }
+
     function safeFiniteNumber(value, fallback = 0) {
       const numeric = Number(value);
       return Number.isFinite(numeric) ? numeric : fallback;
@@ -3775,6 +3982,22 @@
       return Math.max(-20, Math.min(20, Number(value)));
     }
 
+    function normalizeTxMeterMode(value) {
+      return String(value || "").trim().toLowerCase() === "avg" ? "avg" : "peak";
+    }
+
+    function clampTwoToneFreqHz(value, fallback) {
+      return Math.max(10, Math.min(10_000, Math.round(safeFiniteNumber(value, fallback))));
+    }
+
+    function clampTwoToneLevelDb(value) {
+      return Math.max(-40, Math.min(0, safeFiniteNumber(value, 0)));
+    }
+
+    function clampTwoToneDelayMs(value) {
+      return Math.max(0, Math.min(2000, Math.round(safeFiniteNumber(value, 0))));
+    }
+
     function clampEqGainDb(value) {
       return Math.max(-20, Math.min(20, Math.round(Number(value))));
     }
@@ -3824,7 +4047,15 @@
         rxNoiseReductionLevel: clampRxNoiseReductionLevel(state.rxNoiseReductionLevel),
         rxNbMode: normalizeNbMode(state.rxNbMode),
         rxNbThreshold: clampRxNbThreshold(state.rxNbThreshold),
+        rxAnrTaps: clampDspTapCount(state.rxAnrTaps),
+        rxAnrDelay: clampDspDelay(state.rxAnrDelay),
+        rxAnrGain: clampDspGain(state.rxAnrGain, 0.0002),
+        rxAnrLeakage: clampDspLeakage(state.rxAnrLeakage, 0.00005),
         anfEnabled: Boolean(state.anfEnabled),
+        rxAnfTaps: clampDspTapCount(state.rxAnfTaps),
+        rxAnfDelay: clampDspDelay(state.rxAnfDelay),
+        rxAnfGain: clampDspGain(state.rxAnfGain, 0.00012),
+        rxAnfLeakage: clampDspLeakage(state.rxAnfLeakage, 0.00008),
         agcMode: normalizeAgcMode(state.agcMode),
         agcGain: clampAgcGain(state.agcGain),
         filterLow: clampFilterLowHz(state.filterLow),
@@ -3840,7 +4071,13 @@
         cfcEnabled: Boolean(state.cfcEnabled),
         cfcPrecomp: Number(state.cfcPrecomp) || 0,
         cfcBands: sanitizeCfcBands(state.cfcBands),
+        txMeterMode: normalizeTxMeterMode(state.txMeterMode),
         twoToneEnabled: Boolean(state.twoToneEnabled),
+        txTwoToneFreq1: clampTwoToneFreqHz(state.txTwoToneFreq1, 700),
+        txTwoToneFreq2: clampTwoToneFreqHz(state.txTwoToneFreq2, 1900),
+        txTwoToneLevelDb: clampTwoToneLevelDb(state.txTwoToneLevelDb),
+        txTwoToneInvertLsb: Boolean(state.txTwoToneInvertLsb),
+        txTwoToneDelayMs: clampTwoToneDelayMs(state.txTwoToneDelayMs),
       };
     }
 
@@ -3913,7 +4150,15 @@
       state.rxNoiseReductionLevel = clampRxNoiseReductionLevel(prefs.rxNoiseReductionLevel ?? state.rxNoiseReductionLevel);
       state.rxNbMode = normalizeNbMode(prefs.rxNbMode ?? state.rxNbMode);
       state.rxNbThreshold = clampRxNbThreshold(prefs.rxNbThreshold ?? state.rxNbThreshold);
+      state.rxAnrTaps = clampDspTapCount(prefs.rxAnrTaps ?? state.rxAnrTaps);
+      state.rxAnrDelay = clampDspDelay(prefs.rxAnrDelay ?? state.rxAnrDelay);
+      state.rxAnrGain = clampDspGain(prefs.rxAnrGain ?? state.rxAnrGain, 0.0002);
+      state.rxAnrLeakage = clampDspLeakage(prefs.rxAnrLeakage ?? state.rxAnrLeakage, 0.00005);
       state.anfEnabled = Boolean(prefs.anfEnabled ?? state.anfEnabled);
+      state.rxAnfTaps = clampDspTapCount(prefs.rxAnfTaps ?? state.rxAnfTaps);
+      state.rxAnfDelay = clampDspDelay(prefs.rxAnfDelay ?? state.rxAnfDelay);
+      state.rxAnfGain = clampDspGain(prefs.rxAnfGain ?? state.rxAnfGain, 0.00012);
+      state.rxAnfLeakage = clampDspLeakage(prefs.rxAnfLeakage ?? state.rxAnfLeakage, 0.00008);
       state.agcMode = normalizeAgcMode(prefs.agcMode ?? state.agcMode);
       state.agcGain = clampAgcGain(prefs.agcGain ?? state.agcGain);
       state.filterLow = clampFilterLowHz(prefs.filterLow ?? state.filterLow);
@@ -3929,7 +4174,13 @@
       state.cfcEnabled = Boolean(prefs.cfcEnabled ?? state.cfcEnabled);
       state.cfcPrecomp = Number(prefs.cfcPrecomp ?? state.cfcPrecomp) || 0;
       state.cfcBands = sanitizeCfcBands(prefs.cfcBands, state.cfcBands);
+      state.txMeterMode = normalizeTxMeterMode(prefs.txMeterMode ?? state.txMeterMode);
       state.twoToneEnabled = Boolean(prefs.twoToneEnabled ?? state.twoToneEnabled);
+      state.txTwoToneFreq1 = clampTwoToneFreqHz(prefs.txTwoToneFreq1 ?? state.txTwoToneFreq1, 700);
+      state.txTwoToneFreq2 = clampTwoToneFreqHz(prefs.txTwoToneFreq2 ?? state.txTwoToneFreq2, 1900);
+      state.txTwoToneLevelDb = clampTwoToneLevelDb(prefs.txTwoToneLevelDb ?? state.txTwoToneLevelDb);
+      state.txTwoToneInvertLsb = Boolean(prefs.txTwoToneInvertLsb ?? state.txTwoToneInvertLsb);
+      state.txTwoToneDelayMs = clampTwoToneDelayMs(prefs.txTwoToneDelayMs ?? state.txTwoToneDelayMs);
     }
 
     function resetPeakHoldBins(length = state.latestBins?.length || 1024) {
@@ -4145,6 +4396,7 @@
     function syncSetupMenuFields() {
       refreshProfileSelects();
       const prefs = currentDisplayPrefs();
+      const radio = currentRadioPrefs();
       const setChecked = (id, value) => {
         const node = $(id);
         if (node) node.checked = Boolean(value);
@@ -4172,6 +4424,53 @@
       if ($("display-waterfall-ceiling-readout")) $("display-waterfall-ceiling-readout").textContent = `${Math.round(prefs.waterfallCeilingDb)} dB`;
       if ($("display-spectrum-average-readout")) $("display-spectrum-average-readout").textContent = `${prefs.spectrumAverage} frame${prefs.spectrumAverage === 1 ? "" : "s"}`;
       if ($("display-waterfall-speed-readout")) $("display-waterfall-speed-readout").textContent = `${prefs.waterfallSpeed}x`;
+      setValue("setup-dsp-nr-mode", radio.rxNoiseReductionMode);
+      setValue("setup-dsp-nr-level", radio.rxNoiseReductionLevel);
+      setValue("setup-dsp-anr-taps", radio.rxAnrTaps);
+      setValue("setup-dsp-anr-delay", radio.rxAnrDelay);
+      setValue("setup-dsp-anr-gain", safeFixed(radio.rxAnrGain, 6, "0.000200"));
+      setValue("setup-dsp-anr-leakage", safeFixed(radio.rxAnrLeakage, 6, "0.000050"));
+      setChecked("setup-dsp-anf-enabled", radio.anfEnabled);
+      setValue("setup-dsp-anf-taps", radio.rxAnfTaps);
+      setValue("setup-dsp-anf-delay", radio.rxAnfDelay);
+      setValue("setup-dsp-anf-gain", safeFixed(radio.rxAnfGain, 6, "0.000120"));
+      setValue("setup-dsp-anf-leakage", safeFixed(radio.rxAnfLeakage, 6, "0.000080"));
+      if ($("setup-dsp-nr-level-readout")) {
+        $("setup-dsp-nr-level-readout").textContent = `${radio.rxNoiseReductionLevel}%`;
+      }
+      const nrLevelDisabled = radio.rxNoiseReductionMode === "OFF" || radio.rxNoiseReductionMode === "NR3";
+      if ($("setup-dsp-nr-level")) $("setup-dsp-nr-level").disabled = nrLevelDisabled;
+      const anrFieldsDisabled = radio.rxNoiseReductionMode !== "NR1";
+      ["setup-dsp-anr-taps", "setup-dsp-anr-delay", "setup-dsp-anr-gain", "setup-dsp-anr-leakage",
+        "setup-dsp-anr-thetis-btn", "setup-dsp-anr-wide-btn"].forEach((id) => {
+        if ($(id)) $(id).disabled = anrFieldsDisabled;
+      });
+      syncSetupPanels();
+    }
+
+    function syncSetupPanels() {
+      document.querySelectorAll("[data-setup-panel]").forEach((button) => {
+        button.classList.toggle("active", button.dataset.setupPanel === state.setupPanel);
+      });
+      document.querySelectorAll("[data-setup-panel-id]").forEach((panel) => {
+        panel.hidden = panel.dataset.setupPanelId !== state.setupPanel;
+      });
+      document.querySelectorAll("[data-setup-dsp-panel]").forEach((button) => {
+        button.classList.toggle("active", button.dataset.setupDspPanel === state.setupDspPanel);
+      });
+      document.querySelectorAll("[data-setup-dsp-panel-id]").forEach((panel) => {
+        panel.hidden = panel.dataset.setupDspPanelId !== state.setupDspPanel;
+      });
+    }
+
+    function setSetupPanel(panelId) {
+      state.setupPanel = ["profiles", "display", "dsp"].includes(panelId) ? panelId : "profiles";
+      syncSetupPanels();
+    }
+
+    function setSetupDspPanel(panelId) {
+      state.setupDspPanel = ["nr", "anf"].includes(panelId) ? panelId : "nr";
+      syncSetupPanels();
     }
 
     function setSetupMenuOpen(open) {
@@ -4457,7 +4756,15 @@
       state.rxNoiseReductionLevel = clampRxNoiseReductionLevel(state.rxNoiseReductionLevel);
       state.rxNbMode = normalizeNbMode(state.rxNbMode);
       state.rxNbThreshold = clampRxNbThreshold(state.rxNbThreshold);
+      state.rxAnrTaps = clampDspTapCount(state.rxAnrTaps);
+      state.rxAnrDelay = clampDspDelay(state.rxAnrDelay);
+      state.rxAnrGain = clampDspGain(state.rxAnrGain, 0.0002);
+      state.rxAnrLeakage = clampDspLeakage(state.rxAnrLeakage, 0.00005);
       state.anfEnabled = Boolean(state.anfEnabled);
+      state.rxAnfTaps = clampDspTapCount(state.rxAnfTaps);
+      state.rxAnfDelay = clampDspDelay(state.rxAnfDelay);
+      state.rxAnfGain = clampDspGain(state.rxAnfGain, 0.00012);
+      state.rxAnfLeakage = clampDspLeakage(state.rxAnfLeakage, 0.00008);
       state.agcMode = normalizeAgcMode(state.agcMode);
       state.agcGain = clampAgcGain(state.agcGain);
       state.displayZoom = Math.max(1, Math.min(32, safeFiniteNumber(state.displayZoom, 1)));
@@ -4472,6 +4779,13 @@
       state.cfcEnabled = Boolean(state.cfcEnabled);
       state.cfcPrecomp = safeFiniteNumber(state.cfcPrecomp, 0);
       state.cfcBands = sanitizeCfcBands(state.cfcBands);
+      state.txMeterMode = normalizeTxMeterMode(state.txMeterMode);
+      state.twoToneEnabled = Boolean(state.twoToneEnabled);
+      state.txTwoToneFreq1 = clampTwoToneFreqHz(state.txTwoToneFreq1, 700);
+      state.txTwoToneFreq2 = clampTwoToneFreqHz(state.txTwoToneFreq2, 1900);
+      state.txTwoToneLevelDb = clampTwoToneLevelDb(state.txTwoToneLevelDb);
+      state.txTwoToneInvertLsb = Boolean(state.txTwoToneInvertLsb);
+      state.txTwoToneDelayMs = clampTwoToneDelayMs(state.txTwoToneDelayMs);
       state.frameRate = Math.max(0, safeFiniteNumber(state.frameRate, 0));
       state.fftWidth = Math.max(0, Math.round(safeFiniteNumber(state.fftWidth, 0)));
       state.audioBackpressureDrops = Math.max(0, Math.round(safeFiniteNumber(state.audioBackpressureDrops, 0)));
@@ -4762,11 +5076,25 @@
       $("ptt-btn").classList.toggle("active", state.txEnabled);
       $("tx-status-meta").textContent = state.txEnabled ? "TX" : "RX";
       $("meter-readout").textContent = state.meterDbmVisual == null ? "-- dBm" : `${state.meterDbmVisual.toFixed(1)} dBm`;
-      $("tx-power-readout").textContent = state.txPowerVisual == null ? "-- W" : `${state.txPowerVisual.toFixed(1)} W`;
+      const txMeterValue = state.txMeterMode === "avg" ? state.txPowerAvg : state.txPowerPeak;
+      $("tx-power-readout").textContent = txMeterValue == null ? "-- W" : `${txMeterValue.toFixed(1)} W`;
       $("swr-readout").textContent = state.swrVisual == null ? "-- : 1" : `${state.swrVisual.toFixed(2)} : 1`;
       updateSmeter(state.meterDbmVisual);
-      updateTxPwrMeter(state.txPowerVisual, state.txPowerPeak);
+      updateTxPwrMeter(
+        state.txMeterMode === "avg" ? state.txPowerAvg : state.txPowerVisual,
+        state.txMeterMode === "peak" ? state.txPowerPeak : null
+      );
       updateSwrMeter(state.swrVisual);
+      $("tx-meter-mode").value = normalizeTxMeterMode(state.txMeterMode);
+      $("two-tone-freq1-readout").textContent = `${clampTwoToneFreqHz(state.txTwoToneFreq1, 700)} Hz`;
+      $("two-tone-freq2-readout").textContent = `${clampTwoToneFreqHz(state.txTwoToneFreq2, 1900)} Hz`;
+      $("two-tone-level-readout").textContent = `${clampTwoToneLevelDb(state.txTwoToneLevelDb).toFixed(1)} dB`;
+      $("two-tone-delay-readout").textContent = `${clampTwoToneDelayMs(state.txTwoToneDelayMs)} ms`;
+      $("two-tone-freq1").value = `${clampTwoToneFreqHz(state.txTwoToneFreq1, 700)}`;
+      $("two-tone-freq2").value = `${clampTwoToneFreqHz(state.txTwoToneFreq2, 1900)}`;
+      $("two-tone-level").value = `${clampTwoToneLevelDb(state.txTwoToneLevelDb)}`;
+      $("two-tone-delay").value = `${clampTwoToneDelayMs(state.txTwoToneDelayMs)}`;
+      $("two-tone-invert-lsb").checked = Boolean(state.txTwoToneInvertLsb);
       $("frame-rate-readout").textContent = `${safeFixed(state.frameRate, 1, "0.0")} fps`;
       $("fft-readout").textContent = `${state.fftWidth}`;
       $("audio-drop-readout").textContent = `${state.audioBackpressureDrops}`;
@@ -4901,11 +5229,62 @@
       sendTci(`tx_filter_band:0,${passband.lowHz},${passband.highHz};`);
     }
 
+    function sendAnrSettings() {
+      sendTci(`rx_anr_taps:0,${clampDspTapCount(state.rxAnrTaps)};`);
+      sendTci(`rx_anr_delay:0,${clampDspDelay(state.rxAnrDelay)};`);
+      sendTci(`rx_anr_gain:0,${clampDspGain(state.rxAnrGain, 0.0002).toFixed(6)};`);
+      sendTci(`rx_anr_leakage:0,${clampDspLeakage(state.rxAnrLeakage, 0.00005).toFixed(6)};`);
+    }
+
+    function sendAnfSettings() {
+      sendTci(`rx_anf:0,${Boolean(state.anfEnabled)};`);
+      sendTci(`rx_anf_taps:0,${clampDspTapCount(state.rxAnfTaps)};`);
+      sendTci(`rx_anf_delay:0,${clampDspDelay(state.rxAnfDelay)};`);
+      sendTci(`rx_anf_gain:0,${clampDspGain(state.rxAnfGain, 0.00012).toFixed(6)};`);
+      sendTci(`rx_anf_leakage:0,${clampDspLeakage(state.rxAnfLeakage, 0.00008).toFixed(6)};`);
+    }
+
+    function applyAnrPreset(preset) {
+      if (preset === "wide") {
+        state.rxAnrTaps = 96;
+        state.rxAnrDelay = 24;
+        state.rxAnrGain = 0.00035;
+        state.rxAnrLeakage = 0.00003;
+      } else {
+        state.rxAnrTaps = 64;
+        state.rxAnrDelay = 16;
+        state.rxAnrGain = 0.0002;
+        state.rxAnrLeakage = 0.00005;
+      }
+    }
+
+    function applyAnfPreset(preset) {
+      if (preset === "sharp") {
+        state.rxAnfTaps = 96;
+        state.rxAnfDelay = 12;
+        state.rxAnfGain = 0.00018;
+        state.rxAnfLeakage = 0.00005;
+      } else {
+        state.rxAnfTaps = 64;
+        state.rxAnfDelay = 16;
+        state.rxAnfGain = 0.00012;
+        state.rxAnfLeakage = 0.00008;
+      }
+    }
+
     function requestFullState() {
       // The bridge already pushes a full state snapshot on connect. Keep the
       // initial handshake read-only, then apply the persisted remote profile
       // explicitly once the session is up.
       sendTci("rx_smeter:0,0;");
+    }
+
+    function sendCurrentTwoToneSettings() {
+      sendTci(`tx_two_tone_freq1:0,${clampTwoToneFreqHz(state.txTwoToneFreq1, 700)};`);
+      sendTci(`tx_two_tone_freq2:0,${clampTwoToneFreqHz(state.txTwoToneFreq2, 1900)};`);
+      sendTci(`tx_two_tone_level_db:0,${clampTwoToneLevelDb(state.txTwoToneLevelDb).toFixed(1)};`);
+      sendTci(`tx_two_tone_invert_lsb:0,${Boolean(state.txTwoToneInvertLsb)};`);
+      sendTci(`tx_two_tone_delay_ms:0,${clampTwoToneDelayMs(state.txTwoToneDelayMs)};`);
     }
 
     function sendCurrentRadioPrefsToBridge() {
@@ -4923,7 +5302,15 @@
       sendTci(`rx_nr_level:0,${clampRxNoiseReductionLevel(state.rxNoiseReductionLevel)};`);
       sendTci(`rx_nb:0,${normalizeNbMode(state.rxNbMode)};`);
       sendTci(`rx_nb_threshold:0,${clampRxNbThreshold(state.rxNbThreshold).toFixed(2)};`);
+      sendTci(`rx_anr_taps:0,${clampDspTapCount(state.rxAnrTaps)};`);
+      sendTci(`rx_anr_delay:0,${clampDspDelay(state.rxAnrDelay)};`);
+      sendTci(`rx_anr_gain:0,${clampDspGain(state.rxAnrGain, 0.0002).toFixed(6)};`);
+      sendTci(`rx_anr_leakage:0,${clampDspLeakage(state.rxAnrLeakage, 0.00005).toFixed(6)};`);
       sendTci(`rx_anf:0,${Boolean(state.anfEnabled)};`);
+      sendTci(`rx_anf_taps:0,${clampDspTapCount(state.rxAnfTaps)};`);
+      sendTci(`rx_anf_delay:0,${clampDspDelay(state.rxAnfDelay)};`);
+      sendTci(`rx_anf_gain:0,${clampDspGain(state.rxAnfGain, 0.00012).toFixed(6)};`);
+      sendTci(`rx_anf_leakage:0,${clampDspLeakage(state.rxAnfLeakage, 0.00008).toFixed(6)};`);
       sendTci(`rx_agc:0,${normalizeAgcMode(state.agcMode)};`);
       sendTci(`rx_agc_gain:0,${clampAgcGain(state.agcGain)};`);
       sendRxFilterBand();
@@ -4939,6 +5326,8 @@
       }
       sendTci(`tx_cfc_enable:0,${Boolean(state.cfcEnabled)};`);
       sendTci(`tx_cfc_precomp:0,${(Number(state.cfcPrecomp) || 0).toFixed(1)};`);
+      sendCurrentTwoToneSettings();
+      sendTci(`tx_two_tone:0,${Boolean(state.twoToneEnabled)};`);
     }
 
     function startIq() {
@@ -5140,26 +5529,78 @@
       logEvent("Mic capture stopped");
     }
 
-    async function setPtt(active) {
-      if (active === state.txEnabled) { return; }
+    function sendTxShutdownIfPossible(clearTwoTone = false) {
+      if (!state.connected || !state.ws || state.ws.readyState !== WebSocket.OPEN) {
+        return;
+      }
+      if (clearTwoTone) {
+        sendTci("tx_two_tone:0,false;");
+      }
+      sendTci("trx:0,false;");
+    }
+
+    async function setPtt(active, options = {}) {
+      const useMic = options.useMic !== false;
+      if (active === state.txEnabled) { return true; }
       if (active) {
+        if (!state.connected || !state.ws || state.ws.readyState !== WebSocket.OPEN) {
+          logEvent("Connect before transmitting");
+          state.txEnabled = false;
+          updateUi();
+          return false;
+        }
         const requestId = state.pttRequestId + 1;
         state.pttRequestId = requestId;
+        if (useMic) {
+          const started = await startMicCapture(requestId);
+          if (!started || state.pttRequestId !== requestId) {
+            if (state.pttRequestId === requestId) {
+              state.txEnabled = false;
+              logEvent("PTT cancelled because browser mic audio is unavailable");
+              updateUi();
+            }
+            return false;
+          }
+        }
         state.txEnabled = true;
         sendTci("trx:0,true,tci;");
-        updateUi();
-        const started = await startMicCapture(requestId);
-        if (!started || state.pttRequestId !== requestId) {
-          if (state.pttRequestId === requestId) {
-            logEvent("PTT keyed without browser mic audio");
-          }
-          return;
-        }
       } else {
         state.pttRequestId += 1;
+        sendTxShutdownIfPossible(false);
         state.txEnabled = false;
-        sendTci("trx:0,false;");
         stopMicCapture();
+        state.twoTonePttOwned = false;
+      }
+      updateUi();
+      return true;
+    }
+
+    async function setTwoToneEnabled(enabled) {
+      if (enabled === state.twoToneEnabled) {
+        return;
+      }
+      state.twoToneEnabled = enabled;
+      saveRadioPrefs();
+      if (enabled) {
+        sendCurrentTwoToneSettings();
+        state.twoTonePttOwned = !state.txEnabled;
+        if (state.twoTonePttOwned) {
+          const started = await setPtt(true, { useMic: false });
+          if (!started) {
+            state.twoToneEnabled = false;
+            state.twoTonePttOwned = false;
+            saveRadioPrefs();
+            updateUi();
+            return;
+          }
+        }
+        sendTci("tx_two_tone:0,true;");
+      } else {
+        sendTci("tx_two_tone:0,false;");
+        if (state.twoTonePttOwned && state.txEnabled) {
+          await setPtt(false);
+        }
+        state.twoTonePttOwned = false;
       }
       updateUi();
     }
@@ -5298,8 +5739,10 @@
         state.txPower = null;
         state.txPowerVisual = null;
         state.txPowerPeak = null;
+        state.txPowerAvg = null;
         state.swr = null;
         state.swrVisual = null;
+        state.twoTonePttOwned = false;
         stopMicCapture();
         void stopRxAudio(false);
         void releaseWakeLock();
@@ -5316,6 +5759,7 @@
     async function disconnectBridge() {
       state.connectPending = false;
       await saveRemoteSettingsToServer(false);
+      sendTxShutdownIfPossible(true);
       if (state.ws) {
         state.ws.close();
       }
@@ -5330,8 +5774,10 @@
       state.txPower = null;
       state.txPowerVisual = null;
       state.txPowerPeak = null;
+      state.txPowerAvg = null;
       state.swr = null;
       state.swrVisual = null;
+      state.twoTonePttOwned = false;
       stopMicCapture();
       void stopRxAudio(false);
       await releaseWakeLock();
@@ -5412,9 +5858,49 @@
           if (!Number.isNaN(threshold)) {
             state.rxNbThreshold = clampRxNbThreshold(threshold);
           }
+        } else if (name === "rx_anr_taps") {
+          const taps = args.length >= 2 ? Number(args[1].trim()) : Number(args[args.length - 1]?.trim());
+          if (!Number.isNaN(taps)) {
+            state.rxAnrTaps = clampDspTapCount(taps);
+          }
+        } else if (name === "rx_anr_delay") {
+          const delay = args.length >= 2 ? Number(args[1].trim()) : Number(args[args.length - 1]?.trim());
+          if (!Number.isNaN(delay)) {
+            state.rxAnrDelay = clampDspDelay(delay);
+          }
+        } else if (name === "rx_anr_gain") {
+          const gain = args.length >= 2 ? Number(args[1].trim()) : Number(args[args.length - 1]?.trim());
+          if (!Number.isNaN(gain)) {
+            state.rxAnrGain = clampDspGain(gain, 0.0002);
+          }
+        } else if (name === "rx_anr_leakage") {
+          const leakage = args.length >= 2 ? Number(args[1].trim()) : Number(args[args.length - 1]?.trim());
+          if (!Number.isNaN(leakage)) {
+            state.rxAnrLeakage = clampDspLeakage(leakage, 0.00005);
+          }
         } else if (name === "rx_anf") {
           const enabledText = args.length >= 2 ? args[1].trim() : args[args.length - 1]?.trim();
           state.anfEnabled = ["1", "true", "on", "yes"].includes((enabledText || "").toLowerCase());
+        } else if (name === "rx_anf_taps") {
+          const taps = args.length >= 2 ? Number(args[1].trim()) : Number(args[args.length - 1]?.trim());
+          if (!Number.isNaN(taps)) {
+            state.rxAnfTaps = clampDspTapCount(taps);
+          }
+        } else if (name === "rx_anf_delay") {
+          const delay = args.length >= 2 ? Number(args[1].trim()) : Number(args[args.length - 1]?.trim());
+          if (!Number.isNaN(delay)) {
+            state.rxAnfDelay = clampDspDelay(delay);
+          }
+        } else if (name === "rx_anf_gain") {
+          const gain = args.length >= 2 ? Number(args[1].trim()) : Number(args[args.length - 1]?.trim());
+          if (!Number.isNaN(gain)) {
+            state.rxAnfGain = clampDspGain(gain, 0.00012);
+          }
+        } else if (name === "rx_anf_leakage") {
+          const leakage = args.length >= 2 ? Number(args[1].trim()) : Number(args[args.length - 1]?.trim());
+          if (!Number.isNaN(leakage)) {
+            state.rxAnfLeakage = clampDspLeakage(leakage, 0.00008);
+          }
         } else if (name === "rx_agc") {
           const modeText = args.length >= 2 ? args[1].trim() : args[args.length - 1]?.trim();
           state.agcMode = normalizeAgcMode(modeText);
@@ -5507,6 +5993,29 @@
         } else if (name === "tx_two_tone") {
           const arg = (args[1] || args[0] || "").trim().toLowerCase();
           state.twoToneEnabled = ["1", "true", "on", "yes"].includes(arg);
+        } else if (name === "tx_two_tone_freq1") {
+          const value = args.length >= 2 ? Number(args[1].trim()) : Number(args[0].trim());
+          if (!Number.isNaN(value)) {
+            state.txTwoToneFreq1 = clampTwoToneFreqHz(value, 700);
+          }
+        } else if (name === "tx_two_tone_freq2") {
+          const value = args.length >= 2 ? Number(args[1].trim()) : Number(args[0].trim());
+          if (!Number.isNaN(value)) {
+            state.txTwoToneFreq2 = clampTwoToneFreqHz(value, 1900);
+          }
+        } else if (name === "tx_two_tone_level_db") {
+          const value = args.length >= 2 ? Number(args[1].trim()) : Number(args[0].trim());
+          if (!Number.isNaN(value)) {
+            state.txTwoToneLevelDb = clampTwoToneLevelDb(value);
+          }
+        } else if (name === "tx_two_tone_invert_lsb") {
+          const arg = (args[1] || args[0] || "").trim().toLowerCase();
+          state.txTwoToneInvertLsb = ["1", "true", "on", "yes"].includes(arg);
+        } else if (name === "tx_two_tone_delay_ms") {
+          const value = args.length >= 2 ? Number(args[1].trim()) : Number(args[0].trim());
+          if (!Number.isNaN(value)) {
+            state.txTwoToneDelayMs = clampTwoToneDelayMs(value);
+          }
         } else if (name === "audio_start") {
           state.audioStreaming = true;
           logEvent("Bridge acknowledged audio_start");
@@ -5739,10 +6248,14 @@
         waterfallRenderer.render();
       }
       $("meter-readout").textContent = state.meterDbmVisual == null ? "-- dBm" : `${state.meterDbmVisual.toFixed(1)} dBm`;
-      $("tx-power-readout").textContent = state.txPowerVisual == null ? "-- W" : `${state.txPowerVisual.toFixed(1)} W`;
+      const txMeterValue = state.txMeterMode === "avg" ? state.txPowerAvg : state.txPowerPeak;
+      $("tx-power-readout").textContent = txMeterValue == null ? "-- W" : `${txMeterValue.toFixed(1)} W`;
       $("swr-readout").textContent = state.swrVisual == null ? "-- : 1" : `${state.swrVisual.toFixed(2)} : 1`;
       updateSmeter(state.meterDbmVisual);
-      updateTxPwrMeter(state.txPowerVisual, state.txPowerPeak);
+      updateTxPwrMeter(
+        state.txMeterMode === "avg" ? state.txPowerAvg : state.txPowerVisual,
+        state.txMeterMode === "peak" ? state.txPowerPeak : null
+      );
       updateSwrMeter(state.swrVisual);
       requestAnimationFrame(animationLoop);
     }
@@ -5817,6 +6330,16 @@
       $("setup-close-btn").addEventListener("click", () => {
         setSetupMenuOpen(false);
       });
+      document.querySelectorAll("[data-setup-panel]").forEach((button) => {
+        button.addEventListener("click", () => {
+          setSetupPanel(button.dataset.setupPanel);
+        });
+      });
+      document.querySelectorAll("[data-setup-dsp-panel]").forEach((button) => {
+        button.addEventListener("click", () => {
+          setSetupDspPanel(button.dataset.setupDspPanel);
+        });
+      });
       document.addEventListener("pointerdown", (event) => {
         const menu = $("setup-menu");
         const anchor = event.target.closest(".setup-anchor");
@@ -5826,6 +6349,66 @@
         if (!anchor) {
           setSetupMenuOpen(false);
         }
+      });
+      $("setup-dsp-nr-mode").addEventListener("change", () => {
+        state.rxNoiseReductionMode = normalizeNrMode($("setup-dsp-nr-mode").value);
+        saveRadioPrefs();
+        updateUi();
+        sendTci(`rx_nr_mode:0,${state.rxNoiseReductionMode};`);
+      });
+      $("setup-dsp-nr-level").addEventListener("input", () => {
+        state.rxNoiseReductionLevel = clampRxNoiseReductionLevel($("setup-dsp-nr-level").value);
+        saveRadioPrefs();
+        updateUi();
+      });
+      $("setup-dsp-nr-level").addEventListener("change", () => {
+        sendTci(`rx_nr_level:0,${state.rxNoiseReductionLevel};`);
+      });
+      const bindDspNumberField = (id, assign, commit) => {
+        $(id).addEventListener("change", () => {
+          assign($(id).value);
+          saveRadioPrefs();
+          updateUi();
+          commit();
+        });
+      };
+      bindDspNumberField("setup-dsp-anr-taps", (value) => { state.rxAnrTaps = clampDspTapCount(value); }, sendAnrSettings);
+      bindDspNumberField("setup-dsp-anr-delay", (value) => { state.rxAnrDelay = clampDspDelay(value); }, sendAnrSettings);
+      bindDspNumberField("setup-dsp-anr-gain", (value) => { state.rxAnrGain = clampDspGain(value, 0.0002); }, sendAnrSettings);
+      bindDspNumberField("setup-dsp-anr-leakage", (value) => { state.rxAnrLeakage = clampDspLeakage(value, 0.00005); }, sendAnrSettings);
+      bindDspNumberField("setup-dsp-anf-taps", (value) => { state.rxAnfTaps = clampDspTapCount(value); }, sendAnfSettings);
+      bindDspNumberField("setup-dsp-anf-delay", (value) => { state.rxAnfDelay = clampDspDelay(value); }, sendAnfSettings);
+      bindDspNumberField("setup-dsp-anf-gain", (value) => { state.rxAnfGain = clampDspGain(value, 0.00012); }, sendAnfSettings);
+      bindDspNumberField("setup-dsp-anf-leakage", (value) => { state.rxAnfLeakage = clampDspLeakage(value, 0.00008); }, sendAnfSettings);
+      $("setup-dsp-anf-enabled").addEventListener("change", () => {
+        state.anfEnabled = Boolean($("setup-dsp-anf-enabled").checked);
+        saveRadioPrefs();
+        updateUi();
+        sendAnfSettings();
+      });
+      $("setup-dsp-anr-thetis-btn").addEventListener("click", () => {
+        applyAnrPreset("thetis");
+        saveRadioPrefs();
+        updateUi();
+        sendAnrSettings();
+      });
+      $("setup-dsp-anr-wide-btn").addEventListener("click", () => {
+        applyAnrPreset("wide");
+        saveRadioPrefs();
+        updateUi();
+        sendAnrSettings();
+      });
+      $("setup-dsp-anf-thetis-btn").addEventListener("click", () => {
+        applyAnfPreset("thetis");
+        saveRadioPrefs();
+        updateUi();
+        sendAnfSettings();
+      });
+      $("setup-dsp-anf-sharp-btn").addEventListener("click", () => {
+        applyAnfPreset("sharp");
+        saveRadioPrefs();
+        updateUi();
+        sendAnfSettings();
       });
       $("setup-profile-load-btn").addEventListener("click", () => {
         const name = $("setup-profile-select").value;
@@ -6003,7 +6586,7 @@
         state.anfEnabled = !state.anfEnabled;
         saveRadioPrefs();
         updateUi();
-        sendTci(`rx_anf:0,${state.anfEnabled};`);
+        sendAnfSettings();
       });
       document.querySelectorAll("#rx-agc-grid .mode-btn").forEach((button) => {
         button.addEventListener("click", () => {
@@ -6228,11 +6811,43 @@
         sendTci(`tx_cfc_precomp:0,${state.cfcPrecomp.toFixed(1)};`);
         updateUi();
       });
-      $("two-tone-btn").addEventListener("click", () => {
-        state.twoToneEnabled = !state.twoToneEnabled;
+      $("tx-meter-mode").addEventListener("change", () => {
+        state.txMeterMode = normalizeTxMeterMode($("tx-meter-mode").value);
         saveRadioPrefs();
-        sendTci(`tx_two_tone:0,${state.twoToneEnabled};`);
         updateUi();
+      });
+      $("two-tone-freq1").addEventListener("input", () => {
+        state.txTwoToneFreq1 = clampTwoToneFreqHz($("two-tone-freq1").value, 700);
+        saveRadioPrefs();
+        sendTci(`tx_two_tone_freq1:0,${state.txTwoToneFreq1};`);
+        updateUi();
+      });
+      $("two-tone-freq2").addEventListener("input", () => {
+        state.txTwoToneFreq2 = clampTwoToneFreqHz($("two-tone-freq2").value, 1900);
+        saveRadioPrefs();
+        sendTci(`tx_two_tone_freq2:0,${state.txTwoToneFreq2};`);
+        updateUi();
+      });
+      $("two-tone-level").addEventListener("input", () => {
+        state.txTwoToneLevelDb = clampTwoToneLevelDb($("two-tone-level").value);
+        saveRadioPrefs();
+        sendTci(`tx_two_tone_level_db:0,${state.txTwoToneLevelDb.toFixed(1)};`);
+        updateUi();
+      });
+      $("two-tone-delay").addEventListener("input", () => {
+        state.txTwoToneDelayMs = clampTwoToneDelayMs($("two-tone-delay").value);
+        saveRadioPrefs();
+        sendTci(`tx_two_tone_delay_ms:0,${state.txTwoToneDelayMs};`);
+        updateUi();
+      });
+      $("two-tone-invert-lsb").addEventListener("change", () => {
+        state.txTwoToneInvertLsb = Boolean($("two-tone-invert-lsb").checked);
+        saveRadioPrefs();
+        sendTci(`tx_two_tone_invert_lsb:0,${state.txTwoToneInvertLsb};`);
+        updateUi();
+      });
+      $("two-tone-btn").addEventListener("click", () => {
+        void setTwoToneEnabled(!state.twoToneEnabled);
       });
     }
 
@@ -6499,6 +7114,7 @@
       if (state.txPower == null) {
         state.txPowerVisual = null;
         state.txPowerPeak = null;
+        state.txPowerAvg = null;
       } else {
         state.txPowerVisual = moveToward(
           state.txPowerVisual,
@@ -6516,6 +7132,9 @@
             state.txPowerPeak - (TX_POWER_PEAK_DROP_PER_SEC * dtSec)
           );
         }
+        state.txPowerAvg = state.txPowerAvg == null
+          ? state.txPower
+          : (state.txPowerAvg * 0.82) + (state.txPower * 0.18);
       }
 
       if (state.swr == null) {
@@ -6674,6 +7293,7 @@
         void syncWakeLock(false);
       });
       window.addEventListener("pagehide", () => {
+        sendTxShutdownIfPossible(true);
         void saveRemoteSettingsToServer(false);
         void releaseWakeLock();
       });

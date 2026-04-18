@@ -59,16 +59,22 @@ Remote entry behavior:
 - Shared remote settings persist in `/var/lib/saturn-state/remote_settings.json`.
 - Named remote Setup profiles persist in `/var/lib/saturn-state/remote_profiles.json`.
 - The remote `Setup` menu supports profile save/load/delete, startup profile selection, and panadapter/waterfall display presets.
+- The remote `Setup -> DSP` menu supports server-backed `NR` and `ANF` controls, including taps, delay, gain, and leakage.
 - The remote meter panel now applies local smoothing for S-meter, TX power, and SWR so the analog gauges track like an operator console instead of stepping on raw samples.
+- The TX power meter supports `Peak` and `Avg` display modes.
+- Browser disconnect and `pagehide` now send an explicit TX-off command before the TCI websocket closes, and the bridge also forces TX/two-tone off when the client detaches.
+- Two-tone test settings now persist in `remote_settings.json`, including `freq1`, `freq2`, `level`, `invert LSB-family`, and `tone 2 delay`.
 - USB/LSB mode changes should move the transparent RX passband box to the correct side of center in both the panadapter and waterfall.
 
 Remote Setup profile notes:
 
 - `remote_settings.json` holds the active working state, including the current active profile name.
+- `remote_settings.json` also carries the current DSP and TX test-control preferences used by the remote.
 - `remote_profiles.json` holds the saved profile catalog plus the optional startup profile selection.
 - A startup profile should be applied before opening a live phone session when you want a known panadapter, waterfall, and radio-control baseline.
 - If the Setup menu opens underneath the panadapter after a deploy, confirm the latest `saturn-remote.html` was synced into `/var/lib/saturn-web/`.
 - If USB/LSB signals or the transparent passband box appear on the wrong side of center after a deploy, confirm the latest `saturn-remote.html` was synced into `/var/lib/saturn-web/`.
+- If TX appears stuck after a browser crash or tab close, confirm both `saturn-bridge.service` and `saturn-go.service` are on the latest deployed build with the explicit TX-release path.
 
 ## GitHub Commit and Push
 

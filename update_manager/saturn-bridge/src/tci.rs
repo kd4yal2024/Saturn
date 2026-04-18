@@ -19,13 +19,22 @@ pub enum TciCommand {
     SetVfoB(u32),
     SetIqCenter(u32),
     SetMode(DemodMode),
-    SetFilterBand { low_hz: i32, high_hz: i32 },
+    SetFilterBand {
+        low_hz: i32,
+        high_hz: i32,
+    },
     SetRxAdc(u8),
     SetRxAntenna(u8),
     SetRxVolume(f64),
     SetRxNoiseReductionMode(NoiseReductionMode),
     SetRxNoiseReductionEnabled(bool),
     SetRxNoiseReductionLevel(f64),
+    SetRxAnrVals {
+        taps: i32,
+        delay: i32,
+        gain: f64,
+        leakage: f64,
+    },
     SetIqSampleRate(u32),
     SetIqStreaming,
     RequestSmeter,
@@ -37,19 +46,42 @@ pub enum TciCommand {
     SetNoiseBlankerMode(NoiseBlankerMode),
     SetNoiseBlankerThreshold(f64),
     SetAnfEnabled(bool),
+    SetRxAnfVals {
+        taps: i32,
+        delay: i32,
+        gain: f64,
+        leakage: f64,
+    },
     SetAgcMode(AgcMode),
     SetAgcGain(f64),
     SetTxDrive(u8),
     SetTxMicGain(f64),
-    SetTxFilterBand { low_hz: i32, high_hz: i32 },
+    SetTxFilterBand {
+        low_hz: i32,
+        high_hz: i32,
+    },
     SetRxEqEnabled(bool),
-    SetRxEqBand { band: usize, gain_db: i32 },
+    SetRxEqBand {
+        band: usize,
+        gain_db: i32,
+    },
     SetTxEqEnabled(bool),
-    SetTxEqBand { band: usize, gain_db: i32 },
+    SetTxEqBand {
+        band: usize,
+        gain_db: i32,
+    },
     SetTxCfcEnabled(bool),
     SetTxCfcPrecomp(f64),
-    SetTxCfcBand { band: usize, gain_db: f64 },
+    SetTxCfcBand {
+        band: usize,
+        gain_db: f64,
+    },
     SetTxTwoToneTest(bool),
+    SetTxTwoToneFreq1(f64),
+    SetTxTwoToneFreq2(f64),
+    SetTxTwoToneLevelDb(f64),
+    SetTxTwoToneInvertLsb(bool),
+    SetTxTwoToneDelayMs(u16),
     MicAudioFrame(Vec<f32>),
     ClientConnected,
     ClientDisconnected,
@@ -111,43 +143,41 @@ impl TciFrontend {
         let client_flags = client_state.clone();
         let latest_client = active_client_id.clone();
         let radio_model = radio_model.clone();
-        let handle = thread::spawn(move || {
-            loop {
-                match listener.accept() {
-                    Ok((stream, addr)) => {
-                        let client_id = latest_client.fetch_add(1, Ordering::SeqCst) + 1;
-                        if client_id > 1 {
-                            println!("saturn-bridge: replacing prior TCI client with {addr}");
-                        } else {
-                            println!("saturn-bridge: TCI client connected from {addr}");
-                        }
+        let handle = thread::spawn(move || loop {
+            match listener.accept() {
+                Ok((stream, addr)) => {
+                    let client_id = latest_client.fetch_add(1, Ordering::SeqCst) + 1;
+                    if client_id > 1 {
+                        println!("saturn-bridge: replacing prior TCI client with {addr}");
+                    } else {
+                        println!("saturn-bridge: TCI client connected from {addr}");
+                    }
 
-                        let command_tx = command_tx.clone();
-                        let outbound_slot = outbound_slot.clone();
-                        let client_flags = client_flags.clone();
-                        let latest_client = latest_client.clone();
-                        let radio_model = radio_model.clone();
+                    let command_tx = command_tx.clone();
+                    let outbound_slot = outbound_slot.clone();
+                    let client_flags = client_flags.clone();
+                    let latest_client = latest_client.clone();
+                    let radio_model = radio_model.clone();
 
-                        thread::spawn(move || {
-                            handle_client(
-                                stream,
-                                addr,
-                                client_id,
-                                &command_tx,
-                                &outbound_slot,
-                                &client_flags,
-                                &latest_client,
-                                &radio_model,
-                            );
-                        });
-                    }
-                    Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
-                        thread::sleep(Duration::from_millis(50));
-                    }
-                    Err(error) => {
-                        eprintln!("saturn-bridge: TCI listener error: {error}");
-                        thread::sleep(Duration::from_millis(250));
-                    }
+                    thread::spawn(move || {
+                        handle_client(
+                            stream,
+                            addr,
+                            client_id,
+                            &command_tx,
+                            &outbound_slot,
+                            &client_flags,
+                            &latest_client,
+                            &radio_model,
+                        );
+                    });
+                }
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                    thread::sleep(Duration::from_millis(50));
+                }
+                Err(error) => {
+                    eprintln!("saturn-bridge: TCI listener error: {error}");
+                    thread::sleep(Duration::from_millis(250));
                 }
             }
         });
@@ -170,8 +200,14 @@ impl TciFrontend {
         self.send_text(format!("vfo:0,1,{};", model.desired.vfo_b_hz));
         self.send_text(format!("dds:0,{};", model.desired.iq_center_hz));
         self.send_text(format!("rx_adc:0,{};", model.desired.ddc0_adc));
-        self.send_text(format!("rx_antenna:0,{};", model.desired.rx_antenna.max(1).min(3)));
-        self.send_text(format!("iq_samplerate:{};", model.desired.ddc0_sample_rate_khz as u32 * 1000));
+        self.send_text(format!(
+            "rx_antenna:0,{};",
+            model.desired.rx_antenna.max(1).min(3)
+        ));
+        self.send_text(format!(
+            "iq_samplerate:{};",
+            model.desired.ddc0_sample_rate_khz as u32 * 1000
+        ));
         self.send_text(format!("modulation:0,{};", model.desired.mode));
         self.send_text(format!("rx_volume:0,0,{:.1};", model.desired.rx_volume_db));
         self.send_text(format!(
@@ -191,12 +227,32 @@ impl TciFrontend {
             model.desired.filter_low_hz, model.desired.filter_high_hz
         ));
         self.send_text(format!("rx_nb:0,{};", model.desired.nb_mode));
-        self.send_text(format!("rx_nb_threshold:0,{:.2};", model.desired.nb_threshold));
+        self.send_text(format!(
+            "rx_nb_threshold:0,{:.2};",
+            model.desired.nb_threshold
+        ));
+        self.send_text(format!("rx_anr_taps:0,{};", model.desired.rx_anr_taps));
+        self.send_text(format!("rx_anr_delay:0,{};", model.desired.rx_anr_delay));
+        self.send_text(format!("rx_anr_gain:0,{:.6};", model.desired.rx_anr_gain));
+        self.send_text(format!(
+            "rx_anr_leakage:0,{:.6};",
+            model.desired.rx_anr_leakage
+        ));
         self.send_text(format!("rx_anf:0,{};", model.desired.anf_enabled));
+        self.send_text(format!("rx_anf_taps:0,{};", model.desired.rx_anf_taps));
+        self.send_text(format!("rx_anf_delay:0,{};", model.desired.rx_anf_delay));
+        self.send_text(format!("rx_anf_gain:0,{:.6};", model.desired.rx_anf_gain));
+        self.send_text(format!(
+            "rx_anf_leakage:0,{:.6};",
+            model.desired.rx_anf_leakage
+        ));
         self.send_text(format!("rx_agc:0,{};", model.desired.agc_mode));
         self.send_text(format!("rx_agc_gain:0,{:.0};", model.desired.agc_gain));
         self.send_text(format!("tx_drive:0,{};", model.desired.tx_drive));
-        self.send_text(format!("tx_mic_gain:0,{:.1};", model.desired.tx_mic_gain_db));
+        self.send_text(format!(
+            "tx_mic_gain:0,{:.1};",
+            model.desired.tx_mic_gain_db
+        ));
         self.send_text(format!("trx:0,{};", model.desired.tx_enabled));
         self.send_text(format!(
             "tx_filter_band:0,{},{};",
@@ -205,15 +261,48 @@ impl TciFrontend {
         self.send_text(format!("rx_eq_enable:0,{};", model.desired.rx_eq_enabled));
         self.send_text(format!("tx_eq_enable:0,{};", model.desired.tx_eq_enabled));
         for i in 1..=10 {
-            self.send_text(format!("rx_eq_band:0,{},{};", i, model.desired.rx_eq_bands[i]));
-            self.send_text(format!("tx_eq_band:0,{},{};", i, model.desired.tx_eq_bands[i]));
+            self.send_text(format!(
+                "rx_eq_band:0,{},{};",
+                i, model.desired.rx_eq_bands[i]
+            ));
+            self.send_text(format!(
+                "tx_eq_band:0,{},{};",
+                i, model.desired.tx_eq_bands[i]
+            ));
         }
         self.send_text(format!("tx_cfc_enable:0,{};", model.desired.cfc_enabled));
-        self.send_text(format!("tx_cfc_precomp:0,{:.1};", model.desired.cfc_precomp_db));
+        self.send_text(format!(
+            "tx_cfc_precomp:0,{:.1};",
+            model.desired.cfc_precomp_db
+        ));
         for i in 0..10 {
-            self.send_text(format!("tx_cfc_band:0,{},{:.1};", i + 1, model.desired.cfc_bands[i]));
+            self.send_text(format!(
+                "tx_cfc_band:0,{},{:.1};",
+                i + 1,
+                model.desired.cfc_bands[i]
+            ));
         }
         self.send_text(format!("tx_two_tone:0,{};", model.desired.two_tone_enabled));
+        self.send_text(format!(
+            "tx_two_tone_freq1:0,{:.0};",
+            model.desired.tx_two_tone_freq1_hz
+        ));
+        self.send_text(format!(
+            "tx_two_tone_freq2:0,{:.0};",
+            model.desired.tx_two_tone_freq2_hz
+        ));
+        self.send_text(format!(
+            "tx_two_tone_level_db:0,{:.1};",
+            model.desired.tx_two_tone_level_db
+        ));
+        self.send_text(format!(
+            "tx_two_tone_invert_lsb:0,{};",
+            model.desired.tx_two_tone_invert_lsb
+        ));
+        self.send_text(format!(
+            "tx_two_tone_delay_ms:0,{};",
+            model.desired.tx_two_tone_delay_ms
+        ));
         self.send_text("tune:0,false;".to_string());
         self.publish_telemetry(model);
     }
@@ -226,7 +315,10 @@ impl TciFrontend {
             let fwd_watts = saturn_adc_to_watts(packet.forward_power, 32);
             let rev_watts = saturn_adc_to_watts(packet.reverse_power, 28);
             self.send_text(format!("tx_power:0,{:.1};", fwd_watts));
-            self.send_text(format!("swr:0,{:.2};", calculate_swr_watts(fwd_watts, rev_watts)));
+            self.send_text(format!(
+                "swr:0,{:.2};",
+                calculate_swr_watts(fwd_watts, rev_watts)
+            ));
         }
         let drops = self.drop_count.swap(0, Ordering::Relaxed);
         if drops > 0 {
@@ -348,20 +440,24 @@ fn handle_client(
 
                 loop {
                     match client_rx.try_recv() {
-                        Ok(message) => match send_outbound(&mut websocket, message) {
-                            Ok(()) => {
-                                pending_flush = true;
+                        Ok(message) => {
+                            match send_outbound(&mut websocket, message) {
+                                Ok(()) => {
+                                    pending_flush = true;
+                                }
+                                Err(WsError::Io(error))
+                                    if error.kind() == io::ErrorKind::WouldBlock =>
+                                {
+                                    pending_flush = true;
+                                    break;
+                                }
+                                Err(error) => {
+                                    eprintln!("saturn-bridge: TCI websocket send error to {addr}: {error}");
+                                    pending_flush = true;
+                                    break;
+                                }
                             }
-                            Err(WsError::Io(error)) if error.kind() == io::ErrorKind::WouldBlock => {
-                                pending_flush = true;
-                                break;
-                            }
-                            Err(error) => {
-                                eprintln!("saturn-bridge: TCI websocket send error to {addr}: {error}");
-                                pending_flush = true;
-                                break;
-                            }
-                        },
+                        }
                         Err(TryRecvError::Empty) => break,
                         Err(TryRecvError::Disconnected) => break,
                     }
@@ -373,7 +469,9 @@ fn handle_client(
                         Err(WsError::Io(error)) if error.kind() == io::ErrorKind::WouldBlock => {}
                         Err(WsError::ConnectionClosed) | Err(WsError::AlreadyClosed) => break,
                         Err(error) => {
-                            eprintln!("saturn-bridge: TCI websocket flush error for {addr}: {error}");
+                            eprintln!(
+                                "saturn-bridge: TCI websocket flush error for {addr}: {error}"
+                            );
                             break;
                         }
                     }
@@ -434,17 +532,17 @@ fn initial_snapshot_messages(model: &RadioModel) -> Vec<String> {
         format!("dds:0,{};", model.desired.iq_center_hz),
         format!("rx_adc:0,{};", model.desired.ddc0_adc),
         format!("rx_antenna:0,{};", model.desired.rx_antenna.max(1).min(3)),
-        format!("iq_samplerate:{};", model.desired.ddc0_sample_rate_khz as u32 * 1000),
+        format!(
+            "iq_samplerate:{};",
+            model.desired.ddc0_sample_rate_khz as u32 * 1000
+        ),
         format!("modulation:0,{};", model.desired.mode),
         format!("rx_volume:0,0,{:.1};", model.desired.rx_volume_db),
         format!(
             "rx_nr:0,{};",
             model.desired.rx_noise_reduction_mode != NoiseReductionMode::Off
         ),
-        format!(
-            "rx_nr_mode:0,{};",
-            model.desired.rx_noise_reduction_mode
-        ),
+        format!("rx_nr_mode:0,{};", model.desired.rx_noise_reduction_mode),
         format!(
             "rx_nr_level:0,{:.0};",
             model.desired.rx_noise_reduction_level
@@ -455,7 +553,15 @@ fn initial_snapshot_messages(model: &RadioModel) -> Vec<String> {
         ),
         format!("rx_nb:0,{};", model.desired.nb_mode),
         format!("rx_nb_threshold:0,{:.2};", model.desired.nb_threshold),
+        format!("rx_anr_taps:0,{};", model.desired.rx_anr_taps),
+        format!("rx_anr_delay:0,{};", model.desired.rx_anr_delay),
+        format!("rx_anr_gain:0,{:.6};", model.desired.rx_anr_gain),
+        format!("rx_anr_leakage:0,{:.6};", model.desired.rx_anr_leakage),
         format!("rx_anf:0,{};", model.desired.anf_enabled),
+        format!("rx_anf_taps:0,{};", model.desired.rx_anf_taps),
+        format!("rx_anf_delay:0,{};", model.desired.rx_anf_delay),
+        format!("rx_anf_gain:0,{:.6};", model.desired.rx_anf_gain),
+        format!("rx_anf_leakage:0,{:.6};", model.desired.rx_anf_leakage),
         format!("rx_agc:0,{};", model.desired.agc_mode),
         format!("rx_agc_gain:0,{:.0};", model.desired.agc_gain),
         format!("tx_drive:0,{};", model.desired.tx_drive),
@@ -479,11 +585,31 @@ fn initial_snapshot_messages(model: &RadioModel) -> Vec<String> {
         format!("tx_cfc_enable:0,{};", model.desired.cfc_enabled),
         format!("tx_cfc_precomp:0,{:.1};", model.desired.cfc_precomp_db),
     ])
-    .chain((0..10usize).map(|i| {
-        format!("tx_cfc_band:0,{},{:.1};", i + 1, model.desired.cfc_bands[i])
-    }))
+    .chain(
+        (0..10usize).map(|i| format!("tx_cfc_band:0,{},{:.1};", i + 1, model.desired.cfc_bands[i])),
+    )
     .chain([
         format!("tx_two_tone:0,{};", model.desired.two_tone_enabled),
+        format!(
+            "tx_two_tone_freq1:0,{:.0};",
+            model.desired.tx_two_tone_freq1_hz
+        ),
+        format!(
+            "tx_two_tone_freq2:0,{:.0};",
+            model.desired.tx_two_tone_freq2_hz
+        ),
+        format!(
+            "tx_two_tone_level_db:0,{:.1};",
+            model.desired.tx_two_tone_level_db
+        ),
+        format!(
+            "tx_two_tone_invert_lsb:0,{};",
+            model.desired.tx_two_tone_invert_lsb
+        ),
+        format!(
+            "tx_two_tone_delay_ms:0,{};",
+            model.desired.tx_two_tone_delay_ms
+        ),
         "tune:0,false;".to_string(),
         "audio_samplerate:48000;".to_string(),
     ])
@@ -497,7 +623,11 @@ fn handle_incoming_message(
 ) -> bool {
     match message {
         Message::Text(text) => {
-            for command in text.split(';').map(str::trim).filter(|part| !part.is_empty()) {
+            for command in text
+                .split(';')
+                .map(str::trim)
+                .filter(|part| !part.is_empty())
+            {
                 parse_tci_command(command, command_tx, client_state);
             }
             true
@@ -518,7 +648,11 @@ fn handle_incoming_message(
     }
 }
 
-fn parse_tci_command(command: &str, command_tx: &Sender<TciCommand>, client_state: &Arc<Mutex<ClientState>>) {
+fn parse_tci_command(
+    command: &str,
+    command_tx: &Sender<TciCommand>,
+    client_state: &Arc<Mutex<ClientState>>,
+) {
     let Some((name, rest)) = command.split_once(':') else {
         return;
     };
@@ -551,7 +685,8 @@ fn parse_tci_command(command: &str, command_tx: &Sender<TciCommand>, client_stat
         }
         "rx_filter_band" => {
             if args.len() >= 3 {
-                if let (Ok(low_hz), Ok(high_hz)) = (args[1].trim().parse::<i32>(), args[2].trim().parse::<i32>())
+                if let (Ok(low_hz), Ok(high_hz)) =
+                    (args[1].trim().parse::<i32>(), args[2].trim().parse::<i32>())
                 {
                     let _ = command_tx.send(TciCommand::SetFilterBand { low_hz, high_hz });
                 }
@@ -607,8 +742,80 @@ fn parse_tci_command(command: &str, command_tx: &Sender<TciCommand>, client_stat
                 }
             }
         }
+        "rx_anr_taps" => {
+            let taps_arg = if args.len() >= 2 {
+                args.get(1)
+            } else {
+                args.first()
+            };
+            if let Some(taps_text) = taps_arg {
+                if let Ok(taps) = taps_text.trim().parse::<i32>() {
+                    let _ = command_tx.send(TciCommand::SetRxAnrVals {
+                        taps,
+                        delay: i32::MIN,
+                        gain: f64::NAN,
+                        leakage: f64::NAN,
+                    });
+                }
+            }
+        }
+        "rx_anr_delay" => {
+            let delay_arg = if args.len() >= 2 {
+                args.get(1)
+            } else {
+                args.first()
+            };
+            if let Some(delay_text) = delay_arg {
+                if let Ok(delay) = delay_text.trim().parse::<i32>() {
+                    let _ = command_tx.send(TciCommand::SetRxAnrVals {
+                        taps: i32::MIN,
+                        delay,
+                        gain: f64::NAN,
+                        leakage: f64::NAN,
+                    });
+                }
+            }
+        }
+        "rx_anr_gain" => {
+            let gain_arg = if args.len() >= 2 {
+                args.get(1)
+            } else {
+                args.first()
+            };
+            if let Some(gain_text) = gain_arg {
+                if let Ok(gain) = gain_text.trim().parse::<f64>() {
+                    let _ = command_tx.send(TciCommand::SetRxAnrVals {
+                        taps: i32::MIN,
+                        delay: i32::MIN,
+                        gain,
+                        leakage: f64::NAN,
+                    });
+                }
+            }
+        }
+        "rx_anr_leakage" => {
+            let leakage_arg = if args.len() >= 2 {
+                args.get(1)
+            } else {
+                args.first()
+            };
+            if let Some(leakage_text) = leakage_arg {
+                if let Ok(leakage) = leakage_text.trim().parse::<f64>() {
+                    let _ = command_tx.send(TciCommand::SetRxAnrVals {
+                        taps: i32::MIN,
+                        delay: i32::MIN,
+                        gain: f64::NAN,
+                        leakage,
+                    });
+                }
+            }
+        }
         "rx_adc" => {
-            let adc_arg = if args.len() >= 2 { args.get(1) } else { args.first() };
+            let adc_arg = if args.len() >= 2 {
+                args.get(1)
+            } else {
+                args.first()
+            };
             if let Some(adc_text) = adc_arg {
                 if let Ok(adc) = adc_text.trim().parse::<u8>() {
                     let _ = command_tx.send(TciCommand::SetRxAdc(adc.min(2)));
@@ -616,7 +823,11 @@ fn parse_tci_command(command: &str, command_tx: &Sender<TciCommand>, client_stat
             }
         }
         "rx_antenna" => {
-            let antenna_arg = if args.len() >= 2 { args.get(1) } else { args.first() };
+            let antenna_arg = if args.len() >= 2 {
+                args.get(1)
+            } else {
+                args.first()
+            };
             if let Some(antenna_text) = antenna_arg {
                 if let Ok(antenna) = antenna_text.trim().parse::<u8>() {
                     let _ = command_tx.send(TciCommand::SetRxAntenna(antenna.clamp(1, 3)));
@@ -680,7 +891,11 @@ fn parse_tci_command(command: &str, command_tx: &Sender<TciCommand>, client_stat
         }
         "trx" => {
             // trx:0,true or trx:0,true,tci — PTT on/off
-            let enabled_arg = if args.len() >= 2 { args.get(1) } else { args.first() };
+            let enabled_arg = if args.len() >= 2 {
+                args.get(1)
+            } else {
+                args.first()
+            };
             if let Some(enabled_text) = enabled_arg {
                 if let Some(enabled) = parse_tci_bool(enabled_text) {
                     println!("saturn-bridge: TCI trx requested -> {}", enabled);
@@ -690,7 +905,11 @@ fn parse_tci_command(command: &str, command_tx: &Sender<TciCommand>, client_stat
         }
         "rx_nb" => {
             // rx_nb:0,mode — NB mode: 0=OFF, 1=NB1, 2=NB2
-            let mode_arg = if args.len() >= 2 { args.get(1) } else { args.first() };
+            let mode_arg = if args.len() >= 2 {
+                args.get(1)
+            } else {
+                args.first()
+            };
             if let Some(mode_text) = mode_arg {
                 let _ = command_tx.send(TciCommand::SetNoiseBlankerMode(
                     NoiseBlankerMode::from_tci(mode_text),
@@ -698,7 +917,11 @@ fn parse_tci_command(command: &str, command_tx: &Sender<TciCommand>, client_stat
             }
         }
         "rx_nb_threshold" => {
-            let thresh_arg = if args.len() >= 2 { args.get(1) } else { args.first() };
+            let thresh_arg = if args.len() >= 2 {
+                args.get(1)
+            } else {
+                args.first()
+            };
             if let Some(thresh_text) = thresh_arg {
                 if let Ok(thresh) = thresh_text.trim().parse::<f64>() {
                     let _ = command_tx.send(TciCommand::SetNoiseBlankerThreshold(thresh));
@@ -706,21 +929,101 @@ fn parse_tci_command(command: &str, command_tx: &Sender<TciCommand>, client_stat
             }
         }
         "rx_anf" => {
-            let enabled_arg = if args.len() >= 2 { args.get(1) } else { args.first() };
+            let enabled_arg = if args.len() >= 2 {
+                args.get(1)
+            } else {
+                args.first()
+            };
             if let Some(enabled_text) = enabled_arg {
                 if let Some(enabled) = parse_tci_bool(enabled_text) {
                     let _ = command_tx.send(TciCommand::SetAnfEnabled(enabled));
                 }
             }
         }
+        "rx_anf_taps" => {
+            let taps_arg = if args.len() >= 2 {
+                args.get(1)
+            } else {
+                args.first()
+            };
+            if let Some(taps_text) = taps_arg {
+                if let Ok(taps) = taps_text.trim().parse::<i32>() {
+                    let _ = command_tx.send(TciCommand::SetRxAnfVals {
+                        taps,
+                        delay: i32::MIN,
+                        gain: f64::NAN,
+                        leakage: f64::NAN,
+                    });
+                }
+            }
+        }
+        "rx_anf_delay" => {
+            let delay_arg = if args.len() >= 2 {
+                args.get(1)
+            } else {
+                args.first()
+            };
+            if let Some(delay_text) = delay_arg {
+                if let Ok(delay) = delay_text.trim().parse::<i32>() {
+                    let _ = command_tx.send(TciCommand::SetRxAnfVals {
+                        taps: i32::MIN,
+                        delay,
+                        gain: f64::NAN,
+                        leakage: f64::NAN,
+                    });
+                }
+            }
+        }
+        "rx_anf_gain" => {
+            let gain_arg = if args.len() >= 2 {
+                args.get(1)
+            } else {
+                args.first()
+            };
+            if let Some(gain_text) = gain_arg {
+                if let Ok(gain) = gain_text.trim().parse::<f64>() {
+                    let _ = command_tx.send(TciCommand::SetRxAnfVals {
+                        taps: i32::MIN,
+                        delay: i32::MIN,
+                        gain,
+                        leakage: f64::NAN,
+                    });
+                }
+            }
+        }
+        "rx_anf_leakage" => {
+            let leakage_arg = if args.len() >= 2 {
+                args.get(1)
+            } else {
+                args.first()
+            };
+            if let Some(leakage_text) = leakage_arg {
+                if let Ok(leakage) = leakage_text.trim().parse::<f64>() {
+                    let _ = command_tx.send(TciCommand::SetRxAnfVals {
+                        taps: i32::MIN,
+                        delay: i32::MIN,
+                        gain: f64::NAN,
+                        leakage,
+                    });
+                }
+            }
+        }
         "rx_agc" => {
-            let mode_arg = if args.len() >= 2 { args.get(1) } else { args.first() };
+            let mode_arg = if args.len() >= 2 {
+                args.get(1)
+            } else {
+                args.first()
+            };
             if let Some(mode_text) = mode_arg {
                 let _ = command_tx.send(TciCommand::SetAgcMode(AgcMode::from_tci(mode_text)));
             }
         }
         "rx_agc_gain" => {
-            let gain_arg = if args.len() >= 2 { args.get(1) } else { args.first() };
+            let gain_arg = if args.len() >= 2 {
+                args.get(1)
+            } else {
+                args.first()
+            };
             if let Some(gain_text) = gain_arg {
                 if let Ok(gain) = gain_text.trim().parse::<f64>() {
                     let _ = command_tx.send(TciCommand::SetAgcGain(gain));
@@ -728,7 +1031,11 @@ fn parse_tci_command(command: &str, command_tx: &Sender<TciCommand>, client_stat
             }
         }
         "tx_drive" => {
-            let drive_arg = if args.len() >= 2 { args.get(1) } else { args.first() };
+            let drive_arg = if args.len() >= 2 {
+                args.get(1)
+            } else {
+                args.first()
+            };
             if let Some(drive_text) = drive_arg {
                 if let Ok(drive) = drive_text.trim().parse::<u8>() {
                     let _ = command_tx.send(TciCommand::SetTxDrive(drive));
@@ -736,7 +1043,11 @@ fn parse_tci_command(command: &str, command_tx: &Sender<TciCommand>, client_stat
             }
         }
         "tx_mic_gain" => {
-            let gain_arg = if args.len() >= 2 { args.get(1) } else { args.first() };
+            let gain_arg = if args.len() >= 2 {
+                args.get(1)
+            } else {
+                args.first()
+            };
             if let Some(gain_text) = gain_arg {
                 if let Ok(gain_db) = gain_text.trim().parse::<f64>() {
                     let _ = command_tx.send(TciCommand::SetTxMicGain(gain_db));
@@ -745,16 +1056,19 @@ fn parse_tci_command(command: &str, command_tx: &Sender<TciCommand>, client_stat
         }
         "tx_filter_band" => {
             if args.len() >= 3 {
-                if let (Ok(low_hz), Ok(high_hz)) = (
-                    args[1].trim().parse::<i32>(),
-                    args[2].trim().parse::<i32>(),
-                ) {
+                if let (Ok(low_hz), Ok(high_hz)) =
+                    (args[1].trim().parse::<i32>(), args[2].trim().parse::<i32>())
+                {
                     let _ = command_tx.send(TciCommand::SetTxFilterBand { low_hz, high_hz });
                 }
             }
         }
         "rx_eq_enable" => {
-            let enabled_arg = if args.len() >= 2 { args.get(1) } else { args.first() };
+            let enabled_arg = if args.len() >= 2 {
+                args.get(1)
+            } else {
+                args.first()
+            };
             if let Some(enabled_text) = enabled_arg {
                 if let Some(enabled) = parse_tci_bool(enabled_text) {
                     let _ = command_tx.send(TciCommand::SetRxEqEnabled(enabled));
@@ -762,7 +1076,11 @@ fn parse_tci_command(command: &str, command_tx: &Sender<TciCommand>, client_stat
             }
         }
         "tx_eq_enable" => {
-            let enabled_arg = if args.len() >= 2 { args.get(1) } else { args.first() };
+            let enabled_arg = if args.len() >= 2 {
+                args.get(1)
+            } else {
+                args.first()
+            };
             if let Some(enabled_text) = enabled_arg {
                 if let Some(enabled) = parse_tci_bool(enabled_text) {
                     let _ = command_tx.send(TciCommand::SetTxEqEnabled(enabled));
@@ -795,7 +1113,11 @@ fn parse_tci_command(command: &str, command_tx: &Sender<TciCommand>, client_stat
             }
         }
         "tx_cfc_enable" => {
-            let enabled_arg = if args.len() >= 2 { args.get(1) } else { args.first() };
+            let enabled_arg = if args.len() >= 2 {
+                args.get(1)
+            } else {
+                args.first()
+            };
             if let Some(enabled_text) = enabled_arg {
                 if let Some(enabled) = parse_tci_bool(enabled_text) {
                     let _ = command_tx.send(TciCommand::SetTxCfcEnabled(enabled));
@@ -803,7 +1125,11 @@ fn parse_tci_command(command: &str, command_tx: &Sender<TciCommand>, client_stat
             }
         }
         "tx_cfc_precomp" => {
-            let precomp_arg = if args.len() >= 2 { args.get(1) } else { args.first() };
+            let precomp_arg = if args.len() >= 2 {
+                args.get(1)
+            } else {
+                args.first()
+            };
             if let Some(precomp_text) = precomp_arg {
                 if let Ok(db) = precomp_text.trim().parse::<f64>() {
                     let _ = command_tx.send(TciCommand::SetTxCfcPrecomp(db));
@@ -824,10 +1150,74 @@ fn parse_tci_command(command: &str, command_tx: &Sender<TciCommand>, client_stat
             }
         }
         "tx_two_tone" => {
-            let enabled_arg = if args.len() >= 2 { args.get(1) } else { args.first() };
+            let enabled_arg = if args.len() >= 2 {
+                args.get(1)
+            } else {
+                args.first()
+            };
             if let Some(enabled_text) = enabled_arg {
                 if let Some(enabled) = parse_tci_bool(enabled_text) {
                     let _ = command_tx.send(TciCommand::SetTxTwoToneTest(enabled));
+                }
+            }
+        }
+        "tx_two_tone_freq1" => {
+            let freq_arg = if args.len() >= 2 {
+                args.get(1)
+            } else {
+                args.first()
+            };
+            if let Some(freq_text) = freq_arg {
+                if let Ok(freq_hz) = freq_text.trim().parse::<f64>() {
+                    let _ = command_tx.send(TciCommand::SetTxTwoToneFreq1(freq_hz));
+                }
+            }
+        }
+        "tx_two_tone_freq2" => {
+            let freq_arg = if args.len() >= 2 {
+                args.get(1)
+            } else {
+                args.first()
+            };
+            if let Some(freq_text) = freq_arg {
+                if let Ok(freq_hz) = freq_text.trim().parse::<f64>() {
+                    let _ = command_tx.send(TciCommand::SetTxTwoToneFreq2(freq_hz));
+                }
+            }
+        }
+        "tx_two_tone_level_db" => {
+            let level_arg = if args.len() >= 2 {
+                args.get(1)
+            } else {
+                args.first()
+            };
+            if let Some(level_text) = level_arg {
+                if let Ok(level_db) = level_text.trim().parse::<f64>() {
+                    let _ = command_tx.send(TciCommand::SetTxTwoToneLevelDb(level_db));
+                }
+            }
+        }
+        "tx_two_tone_invert_lsb" => {
+            let enabled_arg = if args.len() >= 2 {
+                args.get(1)
+            } else {
+                args.first()
+            };
+            if let Some(enabled_text) = enabled_arg {
+                if let Some(enabled) = parse_tci_bool(enabled_text) {
+                    let _ = command_tx.send(TciCommand::SetTxTwoToneInvertLsb(enabled));
+                }
+            }
+        }
+        "tx_two_tone_delay_ms" => {
+            let delay_arg = if args.len() >= 2 {
+                args.get(1)
+            } else {
+                args.first()
+            };
+            if let Some(delay_text) = delay_arg {
+                if let Ok(delay_ms) = delay_text.trim().parse::<u16>() {
+                    let _ = command_tx.send(TciCommand::SetTxTwoToneDelayMs(delay_ms));
                 }
             }
         }
@@ -884,13 +1274,11 @@ fn send_outbound(
             receiver,
             sample_rate,
             iq_samples,
-        } => {
-            websocket.send(Message::Binary(build_tci_iq_frame(
-                receiver,
-                sample_rate,
-                &iq_samples,
-            )))
-        }
+        } => websocket.send(Message::Binary(build_tci_iq_frame(
+            receiver,
+            sample_rate,
+            &iq_samples,
+        ))),
         OutboundMessage::AudioFrame {
             receiver,
             sample_rate,

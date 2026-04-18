@@ -10,7 +10,7 @@ use crate::p2::packets::{
     build_ddc_specific_packet, build_discovery_request, build_duc_iq_packet,
     build_duc_specific_packet, build_general_packet, build_high_priority_to_sdr,
     parse_ddc_iq_frame, parse_discovery_reply, parse_high_priority_from_sdr, DdcIqFrame, DdcSetup,
-    DiscoveryReply, DUC_IQ_SAMPLES, HighPriorityFromSdr, HighPriorityToSdr,
+    DiscoveryReply, HighPriorityFromSdr, HighPriorityToSdr, DUC_IQ_SAMPLES,
 };
 use crate::p2::ports::{P2PortMap, COMMAND_DISCOVERY_PORT};
 use crate::radio_model::RadioModel;
@@ -71,7 +71,10 @@ impl P2Session {
             let _ = self.try_discover(radio_model)?;
         }
 
-        self.send_packet(self.config.radio_command_addr, &build_general_packet(&self.config.port_map))?;
+        self.send_packet(
+            self.config.radio_command_addr,
+            &build_general_packet(&self.config.port_map),
+        )?;
 
         let ddc_setup = {
             let model = radio_model.lock().unwrap();
@@ -83,7 +86,10 @@ impl P2Session {
                 sample_size_bits: model.desired.ddc0_sample_size_bits,
             }
         };
-        self.send_packet(self.target_addr(self.config.port_map.ddc_specific), &build_ddc_specific_packet(ddc_setup))?;
+        self.send_packet(
+            self.target_addr(self.config.port_map.ddc_specific),
+            &build_ddc_specific_packet(ddc_setup),
+        )?;
         self.send_duc_specific()?;
         Ok(())
     }
@@ -127,7 +133,10 @@ impl P2Session {
 
     pub fn send_high_priority(&self, model: &RadioModel) -> io::Result<()> {
         let packet = build_high_priority_to_sdr(&build_high_priority_state(model));
-        self.send_packet(self.target_addr(self.config.port_map.high_priority_to_sdr), &packet)?;
+        self.send_packet(
+            self.target_addr(self.config.port_map.high_priority_to_sdr),
+            &packet,
+        )?;
         Ok(())
     }
 
@@ -137,7 +146,8 @@ impl P2Session {
         match self.socket.recv_from(&mut buffer) {
             Ok((size, source)) => Ok(self.decode_event(&buffer[..size], source.port())),
             Err(error)
-                if error.kind() == io::ErrorKind::WouldBlock || error.kind() == io::ErrorKind::TimedOut =>
+                if error.kind() == io::ErrorKind::WouldBlock
+                    || error.kind() == io::ErrorKind::TimedOut =>
             {
                 Ok(None)
             }
@@ -163,7 +173,10 @@ impl P2Session {
             rx2_attenuation_db: 0,
             rx1_attenuation_db: 0,
         });
-        self.send_packet(self.target_addr(self.config.port_map.high_priority_to_sdr), &packet)?;
+        self.send_packet(
+            self.target_addr(self.config.port_map.high_priority_to_sdr),
+            &packet,
+        )?;
         Ok(())
     }
 
@@ -199,7 +212,10 @@ impl P2Session {
         self.socket.send_to(packet, target)
     }
 
-    fn try_discover(&self, radio_model: &Arc<Mutex<RadioModel>>) -> io::Result<Option<DiscoveryReply>> {
+    fn try_discover(
+        &self,
+        radio_model: &Arc<Mutex<RadioModel>>,
+    ) -> io::Result<Option<DiscoveryReply>> {
         self.send_packet(self.config.radio_command_addr, &build_discovery_request())?;
         let deadline = Instant::now() + self.config.discovery_timeout;
         let mut buffer = [0u8; 2048];
@@ -207,7 +223,8 @@ impl P2Session {
         while Instant::now() < deadline {
             match self.socket.recv_from(&mut buffer) {
                 Ok((size, source))
-                    if source.port() == COMMAND_DISCOVERY_PORT && size == crate::p2::packets::DISCOVERY_REPLY_SIZE =>
+                    if source.port() == COMMAND_DISCOVERY_PORT
+                        && size == crate::p2::packets::DISCOVERY_REPLY_SIZE =>
                 {
                     if let Some(reply) = parse_discovery_reply(&buffer[..size]) {
                         radio_model.lock().unwrap().apply_discovery(reply.clone());
@@ -216,7 +233,8 @@ impl P2Session {
                 }
                 Ok(_) => {}
                 Err(error)
-                    if error.kind() == io::ErrorKind::WouldBlock || error.kind() == io::ErrorKind::TimedOut =>
+                    if error.kind() == io::ErrorKind::WouldBlock
+                        || error.kind() == io::ErrorKind::TimedOut =>
                 {
                     thread::sleep(self.config.receive_timeout.min(Duration::from_millis(5)));
                     continue;
@@ -243,7 +261,8 @@ impl P2Session {
 
 fn build_ddc_phase_array(model: &RadioModel) -> [u32; 10] {
     let mut phase_words = [0u32; 10];
-    phase_words[usize::from(model.desired.rx_ddc_index)] = frequency_to_phase_word(model.desired.iq_center_hz);
+    phase_words[usize::from(model.desired.rx_ddc_index)] =
+        frequency_to_phase_word(model.desired.iq_center_hz);
     phase_words
 }
 
@@ -354,8 +373,14 @@ mod tests {
 
     #[test]
     fn saturn_tx_words_carry_pa_and_tx_relay_bits() {
-        assert_eq!(build_alex_tx_word(14_200_000, 1) & ALEX_TX_RELAY_BIT, ALEX_TX_RELAY_BIT);
-        assert_eq!(build_alex_legacy_tx_word(14_200_000, 1, false) & ALEX_TX_RELAY_BIT, 0);
+        assert_eq!(
+            build_alex_tx_word(14_200_000, 1) & ALEX_TX_RELAY_BIT,
+            ALEX_TX_RELAY_BIT
+        );
+        assert_eq!(
+            build_alex_legacy_tx_word(14_200_000, 1, false) & ALEX_TX_RELAY_BIT,
+            0
+        );
         assert_eq!(
             build_alex_legacy_tx_word(14_200_000, 1, true) & ALEX_TX_RELAY_BIT,
             ALEX_TX_RELAY_BIT

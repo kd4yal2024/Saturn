@@ -24,7 +24,10 @@ pub struct BridgeConfig {
 impl Default for BridgeConfig {
     fn default() -> Self {
         Self {
-            radio_command_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), COMMAND_DISCOVERY_PORT),
+            radio_command_addr: SocketAddr::new(
+                IpAddr::V4(Ipv4Addr::LOCALHOST),
+                COMMAND_DISCOVERY_PORT,
+            ),
             client_bind_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 12000),
             tci_bind_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 50001),
             port_map: P2PortMap::default(),
@@ -45,19 +48,39 @@ impl BridgeConfig {
     pub fn from_env() -> Self {
         let defaults = Self::default();
 
-        let radio_host = env::var("SATURN_BRIDGE_RADIO_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
-        let radio_port = parse_env_u16("SATURN_BRIDGE_RADIO_PORT", defaults.radio_command_addr.port());
-        let client_host = env::var("SATURN_BRIDGE_CLIENT_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
-        let client_port = parse_env_u16("SATURN_BRIDGE_CLIENT_PORT", defaults.client_bind_addr.port());
-        let tci_host = env::var("SATURN_BRIDGE_TCI_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
+        let radio_host =
+            env::var("SATURN_BRIDGE_RADIO_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
+        let radio_port = parse_env_u16(
+            "SATURN_BRIDGE_RADIO_PORT",
+            defaults.radio_command_addr.port(),
+        );
+        let client_host =
+            env::var("SATURN_BRIDGE_CLIENT_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
+        let client_port = parse_env_u16(
+            "SATURN_BRIDGE_CLIENT_PORT",
+            defaults.client_bind_addr.port(),
+        );
+        let tci_host =
+            env::var("SATURN_BRIDGE_TCI_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
         let tci_port = parse_env_u16("SATURN_BRIDGE_TCI_PORT", defaults.tci_bind_addr.port());
 
         Self {
-            radio_command_addr: parse_socket_addr(&radio_host, radio_port, defaults.radio_command_addr),
-            client_bind_addr: parse_socket_addr(&client_host, client_port, defaults.client_bind_addr),
+            radio_command_addr: parse_socket_addr(
+                &radio_host,
+                radio_port,
+                defaults.radio_command_addr,
+            ),
+            client_bind_addr: parse_socket_addr(
+                &client_host,
+                client_port,
+                defaults.client_bind_addr,
+            ),
             tci_bind_addr: parse_socket_addr(&tci_host, tci_port, defaults.tci_bind_addr),
             port_map: defaults.port_map,
-            enable_discovery: parse_env_bool("SATURN_BRIDGE_ENABLE_DISCOVERY", defaults.enable_discovery),
+            enable_discovery: parse_env_bool(
+                "SATURN_BRIDGE_ENABLE_DISCOVERY",
+                defaults.enable_discovery,
+            ),
             discovery_timeout: Duration::from_millis(parse_env_u64(
                 "SATURN_BRIDGE_DISCOVERY_TIMEOUT_MS",
                 defaults.discovery_timeout.as_millis() as u64,
@@ -71,7 +94,10 @@ impl BridgeConfig {
                 defaults.high_priority_period.as_millis() as u64,
             )),
             rx_ddc_index: parse_env_u8("SATURN_BRIDGE_RX_DDC_INDEX", defaults.rx_ddc_index).min(9),
-            ddc0_frequency_hz: parse_env_u32("SATURN_BRIDGE_DDC0_FREQUENCY_HZ", defaults.ddc0_frequency_hz),
+            ddc0_frequency_hz: parse_env_u32(
+                "SATURN_BRIDGE_DDC0_FREQUENCY_HZ",
+                defaults.ddc0_frequency_hz,
+            ),
             ddc0_adc: parse_env_u8("SATURN_BRIDGE_DDC0_ADC", defaults.ddc0_adc).min(2),
             ddc0_sample_rate_khz: parse_env_u16(
                 "SATURN_BRIDGE_DDC0_SAMPLE_RATE_KHZ",

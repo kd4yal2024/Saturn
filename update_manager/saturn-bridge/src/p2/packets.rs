@@ -108,8 +108,8 @@ pub fn build_duc_specific_packet(sequence: u32) -> [u8; DUC_SPECIFIC_PACKET_SIZE
     let mut packet = [0u8; DUC_SPECIFIC_PACKET_SIZE];
     write_u32_be(&mut packet, 0, sequence);
     packet[4] = 1; // 1 DUC stream enabled
-    // Match piHPSDR's safe Saturn/P2 defaults for the TX-specific path.
-    // Byte 50 bit 2 must be set to keep Orion mic-PTT disabled.
+                   // Match piHPSDR's safe Saturn/P2 defaults for the TX-specific path.
+                   // Byte 50 bit 2 must be set to keep Orion mic-PTT disabled.
     packet[50] = 0x04;
     packet
 }
@@ -141,7 +141,9 @@ pub fn build_ddc_specific_packet(setup: DdcSetup) -> [u8; DDC_SPECIFIC_PACKET_SI
     packet
 }
 
-pub fn build_high_priority_to_sdr(state: &HighPriorityToSdr) -> [u8; HIGH_PRIORITY_TO_SDR_PACKET_SIZE] {
+pub fn build_high_priority_to_sdr(
+    state: &HighPriorityToSdr,
+) -> [u8; HIGH_PRIORITY_TO_SDR_PACKET_SIZE] {
     let mut packet = [0u8; HIGH_PRIORITY_TO_SDR_PACKET_SIZE];
 
     if state.run {
@@ -312,7 +314,10 @@ mod tests {
         assert_eq!(packet[4], 0);
         assert_eq!(read_u16_be(&packet, 5), 1025);
         assert_eq!(read_u16_be(&packet, 17), 1035);
-        assert_eq!(P2PortMap::default().ddc_index_from_source_port(1037), Some(2));
+        assert_eq!(
+            P2PortMap::default().ddc_index_from_source_port(1037),
+            Some(2)
+        );
         assert_eq!(packet[37], 0x08);
         assert_eq!(packet[38], 1);
         assert_eq!(packet[58], 0x01);

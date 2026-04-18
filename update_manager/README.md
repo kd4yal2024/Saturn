@@ -397,8 +397,14 @@ Remote state notes:
   - loading and deleting saved profiles
   - assigning one saved profile as the startup profile
   - advanced panadapter/waterfall display presets such as spectrum floor/ceiling, waterfall floor/ceiling, averaging, speed, palette, peak hold, and grid/marker toggles
+- The remote `Setup -> DSP` panel now supports:
+  - `NR` controls for mode, amount, taps, delay, gain, and leakage
+  - `ANF` controls for enable, taps, delay, gain, and leakage
 - When a startup profile is set, the remote applies it on page load before connecting.
 - The live remote meter panel now uses smoothed operator-facing analog behavior for S-meter, TX power, and SWR instead of raw stepwise updates.
+- The TX power meter now supports `Peak` and `Avg` display modes.
+- Browser disconnect/pagehide now forces an explicit TX release so the bridge does not stay keyed after a client vanishes mid-transmit.
+- Two-tone test now persists server-side and supports configurable `freq1`, `freq2`, `level`, `invert LSB-family`, and `tone 2 delay` settings.
 - USB/LSB panadapter and waterfall alignment now keep the signed passband box on the correct side of center when switching modes.
 
 ## Uninstall
