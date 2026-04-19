@@ -168,9 +168,9 @@ All mutating (`POST`) routes require:
 `POST /update_start` starts an async update job.
 
 1. Load and normalize update policy.
-2. Enforce expected remote URL (`https://github.com/<owner>/<repo>.git`) on configured remote name.
-3. `git fetch --prune` on active repo.
-4. Resolve target commit from selected channel (`stable`, `beta`, or `custom`).
+2. Probe expected public policy URL (`https://github.com/<owner>/<repo>.git`) and selected ref with `git ls-remote`.
+3. `git fetch --prune <policy-url> <target-ref>` on active repo, leaving local remotes unchanged.
+4. Resolve target commit from `FETCH_HEAD`.
 5. If unchanged, mark job `no_change`.
 6. Optional snapshot creation (`tar`) with retention pruning.
 7. Create detached staged worktree in `repo-staging`.

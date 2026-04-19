@@ -227,6 +227,9 @@ Current UI behavior:
 
 - UI persists policy using `channel=custom` and `custom_ref=<branch/ref>`.
 - Appliance policy panel stores repo/ref/health settings consumed by both transactional Appliance Update and `Run Update G2`.
+- Appliance Update requires the configured GitHub repo/ref to be publicly
+  reachable over HTTPS for anonymous appliance users. It fetches directly from
+  the saved policy URL and does not rewrite the local checkout's `origin`.
 - `Run Update G2` requires valid Appliance repo URL before run can start.
 - `Run Update G2` auto-saves current Appliance settings before spawning script.
 - Terminal output is resumable after tab/page changes using buffered `/run_log` polling.

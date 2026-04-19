@@ -192,6 +192,11 @@ If a script entry does not define `version`, `/get_versions` now returns
   instead of depending on the local repo's fetch remote. This keeps anonymous
   G2 update flows from failing with ambiguous credential prompts when a private
   or mistyped GitHub repo is configured.
+- Appliance Update uses the same public-repo policy: it probes the configured
+  repo/ref with `git ls-remote`, fetches the selected ref directly from the
+  policy URL into `FETCH_HEAD`, and does not rewrite the local checkout's
+  `origin` remote. Anonymous update users therefore get an explicit "public
+  repo required" error for private or misspelled GitHub repos.
 - `/run` refuses Python script execution when the resolved script path is inside
   the active repo tree; use installed scripts under `/opt/saturn-go/scripts`.
 - Python script runs from `/run` set `PYTHONDONTWRITEBYTECODE=1` and

@@ -109,6 +109,9 @@ Normalization rules:
 - `healthcheck_timeout_secs` is clamped to `2..30`
 - `healthcheck_retries` is clamped to `0..5`
 - `healthcheck_initial_delay_secs` is clamped to `0..30`
+- saved repo URLs must be publicly reachable over HTTPS for anonymous appliance
+  updates; update start also verifies the selected ref before fetching directly
+  from the policy URL
 
 Current UI behavior notes (`update.html`):
 

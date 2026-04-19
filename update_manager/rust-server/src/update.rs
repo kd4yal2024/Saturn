@@ -438,6 +438,63 @@ async fn git_rev_parse(repo_root: &Path, rev: &str) -> Result<String, String> {
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
+fn git_auth_failure_text(text: &str) -> bool {
+    text.contains("could not read Username")
+        || text.contains("terminal prompts disabled")
+        || text.contains("Authentication failed")
+        || text.contains("Repository not found")
+}
+
+async fn ensure_public_update_repo_ref(repo_url: &str, target_ref: &str) -> Result<(), String> {
+    let head_out = Command::new("git")
+        .arg("ls-remote")
+        .arg("--symref")
+        .arg(repo_url)
+        .arg("HEAD")
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .output()
+        .await
+        .map_err(|e| format!("failed to probe update repo: {e}"))?;
+    if !head_out.status.success() {
+        let details = output_error_text(&head_out);
+        if git_auth_failure_text(&details) {
+            return Err(format!(
+                "Configured Appliance Update repo {repo_url} is not publicly reachable over HTTPS. \
+                Anonymous appliance updates require a public GitHub repo. \
+                GitHub requested credentials for {repo_url}. This usually means the repo is private \
+                or the owner/repo is misspelled."
+            ));
+        }
+        return Err(format!("cannot reach update repo {repo_url}: {details}"));
+    }
+
+    let ref_out = Command::new("git")
+        .arg("ls-remote")
+        .arg("--exit-code")
+        .arg(repo_url)
+        .arg(target_ref)
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .output()
+        .await
+        .map_err(|e| format!("failed to probe update ref: {e}"))?;
+    if !ref_out.status.success() {
+        let details = output_error_text(&ref_out);
+        if git_auth_failure_text(&details) {
+            return Err(format!(
+                "Configured Appliance Update repo {repo_url} is not publicly reachable over HTTPS. \
+                Anonymous appliance updates require a public GitHub repo. \
+                GitHub requested credentials for {repo_url}. This usually means the repo is private \
+                or the owner/repo is misspelled."
+            ));
+        }
+        return Err(format!(
+            "configured Appliance Update ref {target_ref} was not found in {repo_url}: {details}"
+        ));
+    }
+
+    Ok(())
+}
+
 async fn create_repo_snapshot(repo_root: &Path, snapshot_dir: &Path) -> Result<PathBuf, String> {
     let parent = repo_root
         .parent()
@@ -639,46 +696,25 @@ async fn run_appliance_update(
     let expected_remote = expected_remote_url(&policy);
     append_appliance_update_log(
         &job_id,
-        format!(
-            "Enforcing git remote {} -> {}",
-            policy.remote, expected_remote
-        ),
+        format!("Validating public update repo {expected_remote} ({target_ref})"),
     );
-    let set_remote = Command::new("git")
-        .arg("-C")
-        .arg(&active_root)
-        .arg("remote")
-        .arg("set-url")
-        .arg(&policy.remote)
-        .arg(&expected_remote)
-        .output()
-        .await;
-    match set_remote {
-        Ok(out) if out.status.success() => {}
-        Ok(out) => {
-            finish_appliance_update_job(
-                &job_id,
-                "error",
-                format!("failed to set remote: {}", output_error_text(&out)),
-            );
-            return;
-        }
-        Err(e) => {
-            finish_appliance_update_job(&job_id, "error", format!("failed to set remote: {e}"));
-            return;
-        }
+    if let Err(e) = ensure_public_update_repo_ref(&expected_remote, &target_ref).await {
+        finish_appliance_update_job(&job_id, "error", e);
+        return;
     }
 
     append_appliance_update_log(
         &job_id,
-        format!("Fetching from {} ({})", policy.remote, expected_remote),
+        format!("Fetching {target_ref} directly from {expected_remote}"),
     );
     let fetch_out = Command::new("git")
         .arg("-C")
         .arg(&active_root)
         .arg("fetch")
         .arg("--prune")
-        .arg(&policy.remote)
+        .arg(&expected_remote)
+        .arg(&target_ref)
+        .env("GIT_TERMINAL_PROMPT", "0")
         .output()
         .await;
     match fetch_out {
@@ -708,11 +744,7 @@ async fn run_appliance_update(
         job.previous_commit = Some(previous_commit.clone());
     });
 
-    let resolve_ref = if channel == "custom" {
-        target_ref.clone()
-    } else {
-        format!("{}/{}", policy.remote, target_ref)
-    };
+    let resolve_ref = "FETCH_HEAD";
     let target_commit = match git_rev_parse(&active_root, &resolve_ref).await {
         Ok(v) => v,
         Err(e) => {
@@ -728,7 +760,7 @@ async fn run_appliance_update(
         finish_appliance_update_job(
             &job_id,
             "no_change",
-            format!("already on {target_commit} ({resolve_ref})"),
+            format!("already on {target_commit} ({expected_remote} {target_ref})"),
         );
         return;
     }
@@ -911,7 +943,7 @@ pub async fn set_update_policy(
                 {
                     format!(
                         "Repo {probe_url} is not publicly reachable over HTTPS. \
-                        Anonymous G2 updates require a public GitHub repo. \
+                        Anonymous appliance updates require a public GitHub repo. \
                         Check the owner/repo spelling (e.g. kd4yal2024/Saturn)."
                     )
                 } else {
