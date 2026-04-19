@@ -63,6 +63,11 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
 - Saturn Go page now includes an `XDMA Doctor` action that runs a classified read-only PCIe/XDMA report through the existing privileged helper lane.
 
 ### Changed
+- Saturn Remote TX control now treats PTT as a low-latency control-plane event:
+  the browser keys immediately before microphone startup completes, stops
+  enqueueing mic frames before sending PTT-off, uses smaller TX mic frames, and
+  the bridge no longer blocks the main loop waiting for WDSP TX slew-down on
+  release.
 - `update-G2.py` and `update-saturn-go.sh` now verify that configured policy
   repos/refs are publicly reachable over HTTPS before pulling, use the
   validated policy URL directly instead of rewriting the local git remote, and

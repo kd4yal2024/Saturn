@@ -2651,7 +2651,7 @@
     const RX_AUDIO_START_PREROLL_SEC = 0.03;
     const RX_AUDIO_RECOVERY_PREROLL_SEC = 0.01;
     const RX_AUDIO_RESYNC_PREROLL_SEC = 0.02;
-    const TX_MIC_BLOCK_SAMPLES = 1024;
+    const TX_MIC_BLOCK_SAMPLES = 256;
     const REMOTE_PROFILE_APPLY_DELAY_MS = 150;
     const REMOTE_SETTINGS_SAVE_DEBOUNCE_MS = 750;
 
@@ -5501,7 +5501,8 @@
           return false;
         }
         const source = micCtx.createMediaStreamSource(micStream);
-        // ScriptProcessorNode: 1024-sample blocks (≈21 ms at 48 kHz)
+        // ScriptProcessorNode: 256-sample blocks (≈5.3 ms at 48 kHz).
+        // Keep TX mic frames small so PTT release is not trapped behind audio.
         const proc = micCtx.createScriptProcessor(TX_MIC_BLOCK_SAMPLES, 1, 1);
         proc.onaudioprocess = (evt) => {
           if (!state.txEnabled || !state.connected || !state.ws || state.ws.readyState !== WebSocket.OPEN) { return; }
@@ -5577,10 +5578,14 @@
         }
         const requestId = state.pttRequestId + 1;
         state.pttRequestId = requestId;
+        state.txEnabled = true;
+        updateUi();
+        sendTci("trx:0,true,tci;");
         if (useMic) {
           const started = await startMicCapture(requestId);
           if (!started || state.pttRequestId !== requestId) {
-            if (state.pttRequestId === requestId) {
+            if (state.pttRequestId === requestId && state.txEnabled) {
+              sendTxShutdownIfPossible(false);
               state.txEnabled = false;
               logEvent("PTT cancelled because browser mic audio is unavailable");
               updateUi();
@@ -5588,12 +5593,11 @@
             return false;
           }
         }
-        state.txEnabled = true;
-        sendTci("trx:0,true,tci;");
       } else {
         state.pttRequestId += 1;
-        sendTxShutdownIfPossible(false);
         state.txEnabled = false;
+        updateUi();
+        sendTxShutdownIfPossible(false);
         stopMicCapture();
         state.twoTonePttOwned = false;
       }

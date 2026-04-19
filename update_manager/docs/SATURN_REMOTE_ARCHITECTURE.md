@@ -77,6 +77,16 @@ Binary IQ subset:
 - float32 interleaved IQ payload
 - browser computes FFT locally for the panadapter
 
+TX control subset:
+
+- PTT/MOX is control-plane first; browser UI and `trx` command update
+  immediately and do not wait for microphone capture startup.
+- Browser mic frames are intentionally small so release commands are not
+  trapped behind large audio buffers.
+- `saturn-bridge` drains pending websocket frames in bounded batches and stops
+  WDSP TX without waiting for slew-down, allowing the high-priority RX recovery
+  packet to go out immediately.
+
 This is the right first-step contract because it keeps the frontend close to the actual radio stream instead of hiding complexity too early.
 
 ## LAN vs WAN

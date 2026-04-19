@@ -1009,8 +1009,9 @@ impl WdspTxEngine {
         }
     }
 
-    /// Enable or disable the TX DSP chain. Call with `true` when PTT goes
-    /// active, `false` when PTT releases (waits for slew-down before returning).
+    /// Enable or disable the TX DSP chain. PTT is a control-plane event for
+    /// the remote bridge; never wait for WDSP slew-down on release or the main
+    /// loop cannot send the immediate RX-recovery high-priority packet.
     pub fn set_active(&mut self, active: bool) {
         if active == self.tx_active {
             return;
@@ -1022,8 +1023,8 @@ impl WdspTxEngine {
             } // run, no wait
         } else {
             unsafe {
-                SetChannelState(self.channel_id, 0, 1);
-            } // stop, wait for slew-down
+                SetChannelState(self.channel_id, 0, 0);
+            } // stop, no wait
             self.pending_mic.clear();
             self.pending_iq.clear();
             self.two_tone_started_at = None;

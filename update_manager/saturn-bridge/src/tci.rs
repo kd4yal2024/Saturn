@@ -423,18 +423,33 @@ fn handle_client(
                 }
 
                 let mut pending_flush = false;
-                match websocket.read() {
-                    Ok(message) => {
-                        if !handle_incoming_message(message, command_tx, client_flags) {
+                let mut client_closed = false;
+                for _ in 0..64 {
+                    match websocket.read() {
+                        Ok(message) => {
+                            if !handle_incoming_message(message, command_tx, client_flags) {
+                                client_closed = true;
+                                break;
+                            }
+                        }
+                        Err(WsError::Io(error)) if error.kind() == io::ErrorKind::WouldBlock => {
+                            break;
+                        }
+                        Err(WsError::ConnectionClosed) | Err(WsError::AlreadyClosed) => {
+                            client_closed = true;
+                            break;
+                        }
+                        Err(error) => {
+                            eprintln!(
+                                "saturn-bridge: TCI websocket read error from {addr}: {error}"
+                            );
+                            client_closed = true;
                             break;
                         }
                     }
-                    Err(WsError::Io(error)) if error.kind() == io::ErrorKind::WouldBlock => {}
-                    Err(WsError::ConnectionClosed) | Err(WsError::AlreadyClosed) => break,
-                    Err(error) => {
-                        eprintln!("saturn-bridge: TCI websocket read error from {addr}: {error}");
-                        break;
-                    }
+                }
+                if client_closed {
+                    break;
                 }
 
                 loop {
@@ -476,7 +491,7 @@ fn handle_client(
                     }
                 }
 
-                thread::sleep(Duration::from_millis(10));
+                thread::sleep(Duration::from_millis(2));
             }
 
             clear_active_client(outbound_slot, client_flags, latest_client, client_id);
