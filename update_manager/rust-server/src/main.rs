@@ -20,7 +20,8 @@ use crate::pages::{
     saturngo_handler, update_handler,
 };
 use crate::remote_tls::{
-    ensure_self_signed_cert, load_remote_tls_config, remote_bridge_ws_handler, remote_tls_router,
+    ensure_self_signed_cert, load_remote_tls_config, remote_basic_auth_configured,
+    remote_bridge_ws_handler, remote_tls_router,
 };
 use crate::repair::{repair_pack, verify_system_config};
 use crate::state::{
@@ -353,6 +354,12 @@ async fn main() {
     let http_server = serve_http(listener, app, shutdown_rx.clone());
 
     if let Some((remote_tls_addr, rustls_config, remote_tls_app)) = remote_tls_router {
+        if !remote_basic_auth_configured() {
+            warn!(
+                "Saturn Remote TLS is listening on https://{remote_tls_addr} without {env} configured; remote control is unauthenticated",
+                env = "SATURN_REMOTE_BASIC_AUTH"
+            );
+        }
         info!("Saturn Remote TLS listening on https://{remote_tls_addr}");
         let tls_shutdown = shutdown_rx.clone();
         tokio::spawn(async move {

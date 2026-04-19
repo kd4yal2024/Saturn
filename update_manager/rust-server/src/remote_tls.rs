@@ -23,6 +23,7 @@ use tracing::{error, info, warn};
 
 use crate::{
     delete_remote_profile, get_remote_profiles, get_remote_settings,
+    middleware::csrf_protect,
     pages::{healthz, serve_page},
     save_remote_profile, set_remote_profile_startup, set_remote_settings,
     state::{
@@ -144,7 +145,8 @@ pub fn remote_tls_router(state: AppState) -> Router {
             post(remote_profiles_startup_handler),
         )
         .route("/tci", get(remote_bridge_ws_handler))
-        .with_state(state)
+        .with_state(state.clone())
+        .layer(axum::middleware::from_fn_with_state(state, csrf_protect))
 }
 
 async fn remote_page_handler(headers: HeaderMap, State(state): State<AppState>) -> Response {
@@ -287,6 +289,10 @@ fn configured_basic_auth_header() -> Option<&'static str> {
             Err(_) => None,
         })
         .as_deref()
+}
+
+pub fn remote_basic_auth_configured() -> bool {
+    configured_basic_auth_header().is_some()
 }
 
 fn build_basic_auth_header(spec: &str) -> Option<String> {

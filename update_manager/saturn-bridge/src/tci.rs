@@ -30,10 +30,10 @@ pub enum TciCommand {
     SetRxNoiseReductionEnabled(bool),
     SetRxNoiseReductionLevel(f64),
     SetRxAnrVals {
-        taps: i32,
-        delay: i32,
-        gain: f64,
-        leakage: f64,
+        taps: Option<i32>,
+        delay: Option<i32>,
+        gain: Option<f64>,
+        leakage: Option<f64>,
     },
     SetIqSampleRate(u32),
     SetIqStreaming,
@@ -47,10 +47,10 @@ pub enum TciCommand {
     SetNoiseBlankerThreshold(f64),
     SetAnfEnabled(bool),
     SetRxAnfVals {
-        taps: i32,
-        delay: i32,
-        gain: f64,
-        leakage: f64,
+        taps: Option<i32>,
+        delay: Option<i32>,
+        gain: Option<f64>,
+        leakage: Option<f64>,
     },
     SetAgcMode(AgcMode),
     SetAgcGain(f64),
@@ -117,7 +117,7 @@ const MAX_TCI_MIC_FLOAT_SAMPLES: usize = 32_768;
 
 pub struct TciFrontend {
     command_rx: Receiver<TciCommand>,
-    outbound_tx: Arc<Mutex<Option<SyncSender<OutboundMessage>>>>,
+    outbound_tx: Arc<Mutex<Option<(u64, SyncSender<OutboundMessage>)>>>,
     client_state: Arc<Mutex<ClientState>>,
     drop_count: Arc<AtomicU64>,
     _accept_thread: JoinGuard,
@@ -372,7 +372,7 @@ impl TciFrontend {
     }
 
     fn send_message(&self, message: OutboundMessage) {
-        if let Some(sender) = self.outbound_tx.lock().unwrap().as_ref().cloned() {
+        if let Some((_, sender)) = self.outbound_tx.lock().unwrap().as_ref().cloned() {
             match sender.try_send(message) {
                 Ok(()) => {}
                 Err(TrySendError::Full(_)) => {
@@ -389,7 +389,7 @@ fn handle_client(
     addr: SocketAddr,
     client_id: u64,
     command_tx: &Sender<TciCommand>,
-    outbound_slot: &Arc<Mutex<Option<SyncSender<OutboundMessage>>>>,
+    outbound_slot: &Arc<Mutex<Option<(u64, SyncSender<OutboundMessage>)>>>,
     client_flags: &Arc<Mutex<ClientState>>,
     latest_client: &Arc<AtomicU64>,
     radio_model: &Arc<Mutex<RadioModel>>,
@@ -397,15 +397,14 @@ fn handle_client(
     let _ = stream.set_nonblocking(true);
     match accept_with_config(stream, Some(tci_websocket_config())) {
         Ok(mut websocket) => {
-            if latest_client.load(Ordering::SeqCst) != client_id {
-                let _ = websocket.close(None);
-                return;
-            }
-
             let (client_tx, client_rx) = mpsc::sync_channel::<OutboundMessage>(256);
             {
                 let mut slot = outbound_slot.lock().unwrap();
-                *slot = Some(client_tx.clone());
+                if latest_client.load(Ordering::SeqCst) != client_id {
+                    let _ = websocket.close(None);
+                    return;
+                }
+                *slot = Some((client_id, client_tx.clone()));
             }
             reset_client_state(client_flags);
 
@@ -504,7 +503,7 @@ fn reset_client_state(client_flags: &Arc<Mutex<ClientState>>) {
 }
 
 fn clear_active_client(
-    outbound_slot: &Arc<Mutex<Option<SyncSender<OutboundMessage>>>>,
+    outbound_slot: &Arc<Mutex<Option<(u64, SyncSender<OutboundMessage>)>>>,
     client_flags: &Arc<Mutex<ClientState>>,
     latest_client: &Arc<AtomicU64>,
     client_id: u64,
@@ -515,7 +514,9 @@ fn clear_active_client(
 
     {
         let mut slot = outbound_slot.lock().unwrap();
-        *slot = None;
+        if slot.as_ref().map(|(active_id, _)| *active_id) == Some(client_id) {
+            *slot = None;
+        }
     }
     {
         let mut flags = client_flags.lock().unwrap();
@@ -751,10 +752,10 @@ fn parse_tci_command(
             if let Some(taps_text) = taps_arg {
                 if let Ok(taps) = taps_text.trim().parse::<i32>() {
                     let _ = command_tx.send(TciCommand::SetRxAnrVals {
-                        taps,
-                        delay: i32::MIN,
-                        gain: f64::NAN,
-                        leakage: f64::NAN,
+                        taps: Some(taps),
+                        delay: None,
+                        gain: None,
+                        leakage: None,
                     });
                 }
             }
@@ -768,10 +769,10 @@ fn parse_tci_command(
             if let Some(delay_text) = delay_arg {
                 if let Ok(delay) = delay_text.trim().parse::<i32>() {
                     let _ = command_tx.send(TciCommand::SetRxAnrVals {
-                        taps: i32::MIN,
-                        delay,
-                        gain: f64::NAN,
-                        leakage: f64::NAN,
+                        taps: None,
+                        delay: Some(delay),
+                        gain: None,
+                        leakage: None,
                     });
                 }
             }
@@ -785,10 +786,10 @@ fn parse_tci_command(
             if let Some(gain_text) = gain_arg {
                 if let Ok(gain) = gain_text.trim().parse::<f64>() {
                     let _ = command_tx.send(TciCommand::SetRxAnrVals {
-                        taps: i32::MIN,
-                        delay: i32::MIN,
-                        gain,
-                        leakage: f64::NAN,
+                        taps: None,
+                        delay: None,
+                        gain: Some(gain),
+                        leakage: None,
                     });
                 }
             }
@@ -802,10 +803,10 @@ fn parse_tci_command(
             if let Some(leakage_text) = leakage_arg {
                 if let Ok(leakage) = leakage_text.trim().parse::<f64>() {
                     let _ = command_tx.send(TciCommand::SetRxAnrVals {
-                        taps: i32::MIN,
-                        delay: i32::MIN,
-                        gain: f64::NAN,
-                        leakage,
+                        taps: None,
+                        delay: None,
+                        gain: None,
+                        leakage: Some(leakage),
                     });
                 }
             }
@@ -949,10 +950,10 @@ fn parse_tci_command(
             if let Some(taps_text) = taps_arg {
                 if let Ok(taps) = taps_text.trim().parse::<i32>() {
                     let _ = command_tx.send(TciCommand::SetRxAnfVals {
-                        taps,
-                        delay: i32::MIN,
-                        gain: f64::NAN,
-                        leakage: f64::NAN,
+                        taps: Some(taps),
+                        delay: None,
+                        gain: None,
+                        leakage: None,
                     });
                 }
             }
@@ -966,10 +967,10 @@ fn parse_tci_command(
             if let Some(delay_text) = delay_arg {
                 if let Ok(delay) = delay_text.trim().parse::<i32>() {
                     let _ = command_tx.send(TciCommand::SetRxAnfVals {
-                        taps: i32::MIN,
-                        delay,
-                        gain: f64::NAN,
-                        leakage: f64::NAN,
+                        taps: None,
+                        delay: Some(delay),
+                        gain: None,
+                        leakage: None,
                     });
                 }
             }
@@ -983,10 +984,10 @@ fn parse_tci_command(
             if let Some(gain_text) = gain_arg {
                 if let Ok(gain) = gain_text.trim().parse::<f64>() {
                     let _ = command_tx.send(TciCommand::SetRxAnfVals {
-                        taps: i32::MIN,
-                        delay: i32::MIN,
-                        gain,
-                        leakage: f64::NAN,
+                        taps: None,
+                        delay: None,
+                        gain: Some(gain),
+                        leakage: None,
                     });
                 }
             }
@@ -1000,10 +1001,10 @@ fn parse_tci_command(
             if let Some(leakage_text) = leakage_arg {
                 if let Ok(leakage) = leakage_text.trim().parse::<f64>() {
                     let _ = command_tx.send(TciCommand::SetRxAnfVals {
-                        taps: i32::MIN,
-                        delay: i32::MIN,
-                        gain: f64::NAN,
-                        leakage,
+                        taps: None,
+                        delay: None,
+                        gain: None,
+                        leakage: Some(leakage),
                     });
                 }
             }

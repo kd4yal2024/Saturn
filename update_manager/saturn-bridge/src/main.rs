@@ -123,16 +123,16 @@ fn main() -> Result<(), Box<dyn Error>> {
                     gain,
                     leakage,
                 } => {
-                    if taps != i32::MIN {
+                    if let Some(taps) = taps {
                         model.desired.rx_anr_taps = taps.clamp(1, 128);
                     }
-                    if delay != i32::MIN {
+                    if let Some(delay) = delay {
                         model.desired.rx_anr_delay = delay.clamp(0, 127);
                     }
-                    if gain.is_finite() {
+                    if let Some(gain) = gain {
                         model.desired.rx_anr_gain = gain.clamp(0.0, 1.0);
                     }
-                    if leakage.is_finite() {
+                    if let Some(leakage) = leakage {
                         model.desired.rx_anr_leakage = leakage.clamp(0.0, 1.0);
                     }
                 }
@@ -233,16 +233,16 @@ fn main() -> Result<(), Box<dyn Error>> {
                     gain,
                     leakage,
                 } => {
-                    if taps != i32::MIN {
+                    if let Some(taps) = taps {
                         model.desired.rx_anf_taps = taps.clamp(1, 128);
                     }
-                    if delay != i32::MIN {
+                    if let Some(delay) = delay {
                         model.desired.rx_anf_delay = delay.clamp(0, 127);
                     }
-                    if gain.is_finite() {
+                    if let Some(gain) = gain {
                         model.desired.rx_anf_gain = gain.clamp(0.0, 1.0);
                     }
-                    if leakage.is_finite() {
+                    if let Some(leakage) = leakage {
                         model.desired.rx_anf_leakage = leakage.clamp(0.0, 1.0);
                     }
                 }
