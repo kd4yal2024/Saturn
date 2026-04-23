@@ -1,0 +1,121 @@
+import type { DemodMode } from '../radio/passband';
+
+export type LayoutMode = 'desktop' | 'phone';
+export type ThemeMode = 'dark' | 'light';
+export type NoiseReductionMode = 'OFF' | 'NR1' | 'NR2' | 'NR3' | 'NR4';
+export type NoiseBlankerMode = 'OFF' | 'NB1' | 'NB2';
+export type AgcMode = 'OFF' | 'LONG' | 'SLOW' | 'MEDIUM' | 'FAST';
+export type TxMeterMode = 'peak' | 'avg';
+export type WaterfallPalette = 'classic' | 'ember' | 'ice' | 'forest';
+
+export type PhonePanels = {
+  radio: boolean;
+  dsp: boolean;
+  tx: boolean;
+  meters: boolean;
+  setup: boolean;
+  logs: boolean;
+};
+
+export type RadioPrefs = {
+  sampleRate: number;
+  rxAdc: number;
+  rxAntenna: number;
+  mode: DemodMode;
+  rxVolumeDb: number;
+  rxNoiseReductionMode: NoiseReductionMode;
+  rxNoiseReductionLevel: number;
+  rxNbMode: NoiseBlankerMode;
+  rxNbThreshold: number;
+  rxAnrTaps: number;
+  rxAnrDelay: number;
+  rxAnrGain: number;
+  rxAnrLeakage: number;
+  anfEnabled: boolean;
+  rxAnfTaps: number;
+  rxAnfDelay: number;
+  rxAnfGain: number;
+  rxAnfLeakage: number;
+  agcMode: AgcMode;
+  agcGain: number;
+  filterLow: number;
+  filterHigh: number;
+  txDrive: number;
+  txMicGainDb: number;
+  txFilterLow: number;
+  txFilterHigh: number;
+  rxEqEnabled: boolean;
+  rxEqBands: number[];
+  txEqEnabled: boolean;
+  txEqBands: number[];
+  cfcEnabled: boolean;
+  cfcPrecomp: number;
+  cfcBands: number[];
+  txMeterMode: TxMeterMode;
+  twoToneEnabled: boolean;
+  txTwoToneFreq1: number;
+  txTwoToneFreq2: number;
+  txTwoToneLevelDb: number;
+  txTwoToneInvertLsb: boolean;
+  txTwoToneDelayMs: number;
+};
+
+export type DisplayPrefs = {
+  spectrumAutoRange: boolean;
+  spectrumFloorDb: number;
+  spectrumCeilingDb: number;
+  waterfallAutoRange: boolean;
+  waterfallFloorDb: number;
+  waterfallCeilingDb: number;
+  spectrumAverage: number;
+  waterfallSpeed: number;
+  waterfallPalette: WaterfallPalette;
+  spectrumPeakHold: boolean;
+  showGrid: boolean;
+  showCenterLine: boolean;
+  showBandEdges: boolean;
+};
+
+export type ProfileSettings = {
+  wsUrl: string;
+  displayZoom: number;
+  frequencyLock: boolean;
+  keepScreenAwake: boolean;
+  layoutMode: LayoutMode;
+  theme: ThemeMode;
+  phonePanels: PhonePanels;
+  displayPrefs: DisplayPrefs;
+  radioPrefs: RadioPrefs;
+};
+
+export type RemoteSettings = ProfileSettings & {
+  activeProfile: string | null;
+};
+
+export type SettingsState = {
+  wsUrl: string;
+  displayZoom: number;
+  frequencyLock: boolean;
+  keepScreenAwake: boolean;
+  layoutMode: LayoutMode;
+  theme: ThemeMode;
+  phonePanels: PhonePanels;
+  activeProfile: string;
+  radioPrefs: RadioPrefs;
+  displayPrefs: DisplayPrefs;
+};
+
+export type WsUrlEnvironment = {
+  protocol: string;
+  host: string;
+  hostname: string;
+  href: string;
+};
+
+export type DeepPartial<T> = {
+  [K in keyof T]?: T[K] extends (infer U)[]
+    ? U[]
+    : T[K] extends object
+      ? DeepPartial<T[K]>
+      : T[K];
+};

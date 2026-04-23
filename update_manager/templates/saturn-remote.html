@@ -1161,7 +1161,7 @@
     }
     .ptt-btn {
       width: 100%; font-size: 15px; letter-spacing: 3px; font-weight: 700; padding: 16px;
-      touch-action: none;
+      touch-action: manipulation;
       user-select: none;
       -webkit-user-select: none;
       -webkit-touch-callout: none;
@@ -2503,7 +2503,7 @@
           </div>
           <div class="panel-body">
             <div class="field-row">
-              <button class="btn ptt-btn" id="ptt-btn" type="button">PTT</button>
+              <button class="btn ptt-btn" id="ptt-btn" type="button" aria-pressed="false">PTT</button>
             </div>
             <div class="field-row">
               <div class="range-wrap">
@@ -2604,11 +2604,17 @@
     </section>
   </div>
 
+  <script src="/remote-assets/storage.js"></script>
+  <script src="/remote-assets/session.js"></script>
+  <script src="/remote-assets/tci.js"></script>
+  <script src="/remote-assets/transport.js"></script>
+  <script src="/remote-assets/browser.js"></script>
   <script>
     const $ = (id) => document.getElementById(id);
-    const DISPLAY_COMPLEX_SAMPLES_TARGET = 4096;
-    const DISPLAY_MAX_FFT_SIZE = 4096;
-    const DISPLAY_PACKET_HISTORY = 48;
+    const DISPLAY_MAX_FFT_SIZE = 262144;
+    const DISPLAY_BASE_FFT_SIZE = 4096;
+    const DISPLAY_PACKET_HISTORY_BASE = 48;
+    const DISPLAY_PACKET_HISTORY_MAX = 1024;
     const PHONE_PANEL_DEFAULTS = Object.freeze({
       session: false,
       routing: true,
@@ -2647,11 +2653,178 @@
       { start: 28000000, end: 29700000, label: "10m" },
       { start: 50000000, end: 54000000, label: "6m" },
     ]);
-    const RX_AUDIO_FRAME_FLOATS = 1024;
-    const RX_AUDIO_START_PREROLL_SEC = 0.03;
-    const RX_AUDIO_RECOVERY_PREROLL_SEC = 0.01;
-    const RX_AUDIO_RESYNC_PREROLL_SEC = 0.02;
+    const RX_AUDIO_FRAME_FLOATS = 512;
+    const RX_AUDIO_START_PREROLL_SEC = 0.008;
+    const RX_AUDIO_RECOVERY_PREROLL_SEC = 0.002;
+    const RX_AUDIO_RESYNC_PREROLL_SEC = 0.004;
     const TX_MIC_BLOCK_SAMPLES = 256;
+
+    // AudioWorklet ring-buffer constants.
+    const RX_RING_FRAMES = 4096;       // 85 ms at 48 kHz, one slot kept empty
+    const RX_RING_CHANNELS = 2;        // stereo interleaved in ring
+    const RX_CONTROL_SLOTS = 8;        // Uint32 slots in control SAB
+
+    // Indices into the control SharedArrayBuffer (Uint32Array view)
+    const CTRL_READ_IDX  = 0;
+    const CTRL_WRITE_IDX = 1;
+    // slot 2-3: reserved / padding
+    const CTRL_GAIN_IDX  = 4;  // Float32 view
+    const CTRL_MUTED_IDX = 5;  // 0 = unmuted, 1 = muted
+
+    const WORKLET_SOURCE = `
+class SaturnRxProcessor extends AudioWorkletProcessor {
+  constructor(options) {
+    super();
+    this.ringF32   = null;   // Float32Array over SharedArrayBuffer
+    this.ctrlU32   = null;   // Uint32Array  over SharedArrayBuffer
+    this.ctrlF32   = null;   // Float32Array over SharedArrayBuffer
+    this.ringLen   = 0;      // total float slots (frames * 2)
+    this.msgQueue  = [];     // fallback postMessage queue
+    this.msgOffset = 0;
+    this.useSab    = false;
+    this.port.onmessage = (e) => this._onMessage(e.data);
+  }
+
+  _onMessage(msg) {
+    if (msg.type === 'init-sab') {
+      this.ringF32 = new Float32Array(msg.ringBuf);
+      this.ctrlU32 = new Uint32Array(msg.ctrlBuf);
+      this.ctrlF32 = new Float32Array(msg.ctrlBuf);
+      this.ringLen = this.ringF32.length;
+      this.useSab  = true;
+    } else if (msg.type === 'audio') {
+      this.msgQueue.push({ left: msg.left, right: msg.right, offset: 0 });
+    } else if (msg.type === 'gain') {
+      this._msgGain = msg.value;
+    } else if (msg.type === 'mute') {
+      this._msgMuted = msg.value;
+    } else if (msg.type === 'flush') {
+      this.msgQueue.length = 0;
+      this.msgOffset = 0;
+    }
+  }
+
+  process(inputs, outputs) {
+    const out = outputs[0];
+    if (!out || out.length < 2) return true;
+    const outL = out[0];
+    const outR = out[1];
+    const len  = outL.length; // 128
+
+    if (this.useSab) {
+      this._processSab(outL, outR, len);
+    } else {
+      this._processMsg(outL, outR, len);
+    }
+    return true;
+  }
+
+  _processSab(outL, outR, len) {
+    const ctrl  = this.ctrlU32;
+    const ctrlF = this.ctrlF32;
+    const ring  = this.ringF32;
+    const cap   = this.ringLen >>> 1; // frames capacity
+    const muted = Atomics.load(ctrl, ${CTRL_MUTED_IDX});
+    const gain  = muted ? 0.0 : ctrlF[${CTRL_GAIN_IDX}];
+
+    let rd = Atomics.load(ctrl, ${CTRL_READ_IDX});
+    const wr = Atomics.load(ctrl, ${CTRL_WRITE_IDX});
+
+    // available frames in ring
+    let avail = wr >= rd ? wr - rd : cap - rd + wr;
+
+    if (avail < len) {
+      // underrun: output silence
+      outL.fill(0);
+      outR.fill(0);
+      return;
+    }
+
+    for (let i = 0; i < len; i++) {
+      const idx = rd * 2;
+      outL[i] = ring[idx]     * gain;
+      outR[i] = ring[idx + 1] * gain;
+      rd = (rd + 1) % cap;
+    }
+    Atomics.store(ctrl, ${CTRL_READ_IDX}, rd);
+  }
+
+  _processMsg(outL, outR, len) {
+    const gain  = (this._msgMuted) ? 0.0 : (this._msgGain ?? 1.0);
+    let written = 0;
+
+    while (written < len && this.msgQueue.length > 0) {
+      const pkt = this.msgQueue[0];
+      const left  = pkt.left;
+      const right = pkt.right;
+      const pktLen = left.length;
+      const remain = pktLen - pkt.offset;
+      const take   = Math.min(remain, len - written);
+
+      for (let i = 0; i < take; i++) {
+        outL[written + i] = left[pkt.offset + i]  * gain;
+        outR[written + i] = right[pkt.offset + i] * gain;
+      }
+      pkt.offset += take;
+      written += take;
+
+      if (pkt.offset >= pktLen) {
+        this.msgQueue.shift();
+      }
+    }
+    // fill remainder with silence
+    for (let i = written; i < len; i++) {
+      outL[i] = 0;
+      outR[i] = 0;
+    }
+  }
+}
+registerProcessor('saturn-rx-player', SaturnRxProcessor);
+
+class SaturnTxProcessor extends AudioWorkletProcessor {
+  constructor() {
+    super();
+    this.buf = new Float32Array(${TX_MIC_BLOCK_SAMPLES});
+    this.pos = 0;
+  }
+  process(inputs, outputs) {
+    const input = inputs[0];
+    const mono = input && input.length > 0 ? input[0] : null;
+    if (mono) {
+      for (let i = 0; i < mono.length; i++) {
+        this.buf[this.pos++] = mono[i];
+        if (this.pos >= ${TX_MIC_BLOCK_SAMPLES}) {
+          this.port.postMessage({ samples: this.buf }, [this.buf.buffer]);
+          this.buf = new Float32Array(${TX_MIC_BLOCK_SAMPLES});
+          this.pos = 0;
+        }
+      }
+    }
+    const out = outputs[0];
+    if (out) {
+      for (let ch = 0; ch < out.length; ch++) {
+        out[ch].fill(0);
+      }
+    }
+    return true;
+  }
+}
+registerProcessor('saturn-tx-capture', SaturnTxProcessor);
+`;
+
+    const _workletRegistered = new WeakSet();
+    async function ensureWorkletRegistered(ctx) {
+      if (_workletRegistered.has(ctx)) return;
+      const blob = new Blob([WORKLET_SOURCE], { type: "application/javascript" });
+      const url = URL.createObjectURL(blob);
+      try {
+        await ctx.audioWorklet.addModule(url);
+        _workletRegistered.add(ctx);
+      } finally {
+        URL.revokeObjectURL(url);
+      }
+    }
+
     const REMOTE_PROFILE_APPLY_DELAY_MS = 150;
     const REMOTE_SETTINGS_SAVE_DEBOUNCE_MS = 750;
 
@@ -2713,8 +2886,17 @@
       audioSampleRate: 48000,
       audioCtx: null,
       audioGainNode: null,
+      audioSources: new Set(),
       audioNextTime: 0,
       audioBackpressureDrops: 0,
+      audioWorkletMode: null,     // 'sab' | 'msg' | null (legacy)
+      rxWorkletNode: null,        // AudioWorkletNode for RX
+      rxRingBuf: null,            // SharedArrayBuffer for ring
+      rxCtrlBuf: null,            // SharedArrayBuffer for control
+      rxRingF32: null,            // Float32Array view of ring
+      rxCtrlU32: null,            // Uint32Array view of control
+      rxCtrlF32: null,            // Float32Array view of control
+      rxWorkletDrops: 0,
       spectrumShiftCarryBins: 0,
       waterfallShiftCarryPixels: 0,
       waterfallSettleFrames: 0,
@@ -2732,6 +2914,7 @@
       waterfallSpeed: 1,
       waterfallPalette: "classic",
       spectrumPeakHold: false,
+      spectrumAverageBypassFrames: 0,
       showGrid: true,
       showCenterLine: true,
       showBandEdges: true,
@@ -2739,13 +2922,13 @@
       lastSpectrumRenderAt: 0,
       peakHoldBins: new Float32Array(1024),
       txEnabled: false,
+      moxRequested: false,
       txDrive: 100,
       txMicGainDb: 0,
       micStream: null,
       micNode: null,
       micCapturing: false,
       pttRequestId: 0,
-      pttPointerId: null,
       txFilterLow: 50,
       txFilterHigh: 3050,
       rxEqEnabled: false,
@@ -3378,6 +3561,99 @@
 
     const spectrumRenderer = new SpectrumRenderer($("spectrum-canvas"));
     const waterfallRenderer = new WaterfallRenderer($("waterfall-canvas"));
+
+    function runtimeStorageApi() {
+      const api = window.SaturnRemoteStorage;
+      return api && typeof api.load === "function" && typeof api.save === "function"
+        ? api
+        : null;
+    }
+
+    function runtimeSessionApi() {
+      const api = window.SaturnRemoteSession;
+      if (
+        api
+        && typeof api.parseTciText === "function"
+        && typeof api.classifySocketMessage === "function"
+      ) {
+        return api;
+      }
+      throw new Error("Saturn Remote session runtime helper is unavailable");
+    }
+
+    function runtimeTciApi() {
+      const api = window.SaturnRemoteTci;
+      if (api && typeof api.applyCommands === "function") {
+        return api;
+      }
+      throw new Error("Saturn Remote TCI runtime helper is unavailable");
+    }
+
+    function runtimeTransportApi() {
+      const api = window.SaturnRemoteTransport;
+      if (
+        api
+        && typeof api.classifyFrame === "function"
+        && typeof api.decodeFrame === "function"
+        && typeof api.applyIqFrame === "function"
+        && typeof api.applyAudioFrame === "function"
+        && typeof api.fftSizeForSamples === "function"
+        && typeof api.buildRenderIqWindow === "function"
+      ) {
+        return api;
+      }
+      throw new Error("Saturn Remote transport runtime helper is unavailable");
+    }
+
+    let _runtimeRefs = null;
+    function runtimeRefs() {
+      if (_runtimeRefs) {
+        return _runtimeRefs;
+      }
+      const session = runtimeSessionApi();
+      const tci = runtimeTciApi();
+      const transport = runtimeTransportApi();
+      const api = window.SaturnRemoteBrowserRuntime;
+      if (!api || typeof api.create !== "function") {
+        throw new Error("Saturn Remote browser runtime helper is unavailable");
+      }
+      const browser = api.create({
+        state,
+        constants: {
+          DISPLAY_BASE_FFT_SIZE,
+          DISPLAY_MAX_FFT_SIZE,
+          DISPLAY_PACKET_HISTORY_BASE,
+          DISPLAY_PACKET_HISTORY_MAX,
+          RX_RING_FRAMES,
+          CTRL_READ_IDX,
+          CTRL_WRITE_IDX,
+        },
+        getSessionApi: () => session,
+        getTciApi: () => tci,
+        getTransportApi: () => transport,
+        shiftDisplayForCenterChange,
+        resetDisplayHistory,
+        applyRxVolumeGain,
+        stopMicCapture,
+        recoverRxAfterMox,
+        startRxAudio,
+        logEvent,
+        updateUi,
+        flushRxAudioQueue,
+        scheduleAudioPlayback,
+      });
+      _runtimeRefs = { session, tci, transport, browser };
+      return _runtimeRefs;
+    }
+
+    function loadPersistedLocalSettings() {
+      try {
+        return runtimeStorageApi()?.load() || null;
+      } catch (error) {
+        console.warn("Saturn Remote persisted settings restore failed", error);
+        return null;
+      }
+    }
     let fftProcessor = new FftProcessor(1024);
 
     function resetDisplayHistory() {
@@ -3483,13 +3759,17 @@
       if (!state.latestBins || state.latestBins.length !== rawBins.length) {
         state.latestBins = new Float32Array(rawBins.length);
       }
-      if (avgFrames > 1 && state.latestBins.length === rawBins.length) {
+      const bypassAverage = state.spectrumAverageBypassFrames > 0;
+      if (avgFrames > 1 && !bypassAverage && state.latestBins.length === rawBins.length) {
         const alpha = 1 / avgFrames;
         for (let i = 0; i < rawBins.length; i += 1) {
           bins[i] = state.latestBins[i] * (1 - alpha) + rawBins[i] * alpha;
         }
       } else {
         bins.set(rawBins);
+        if (bypassAverage) {
+          state.spectrumAverageBypassFrames -= 1;
+        }
       }
 
       if (state.spectrumPeakHold) {
@@ -4235,6 +4515,7 @@
 
     function persistLocalSettingsFallback(settings = currentRemoteSettings()) {
       try {
+        runtimeStorageApi()?.save(settings);
         localStorage.setItem(RADIO_PREFS_KEY, JSON.stringify(settings.radioPrefs || currentRadioPrefs()));
         localStorage.setItem("saturn.remote.wsUrl", normalizeWsUrlPreference(settings.wsUrl));
         localStorage.setItem("saturn.remote.displayZoom", `${Math.max(1, Math.min(32, Number(settings.displayZoom) || 1))}`);
@@ -4833,11 +5114,41 @@
     }
 
     function applyRxVolumeGain() {
+      const gain = volumeAmplitudeFromDb(state.rxVolumeDb);
+      if (state.audioWorkletMode === "sab" && state.rxCtrlF32 && state.rxCtrlU32) {
+        state.rxCtrlF32[CTRL_GAIN_IDX] = gain;
+        Atomics.store(state.rxCtrlU32, CTRL_MUTED_IDX, gain <= 0 ? 1 : 0);
+        return;
+      }
+      if (state.audioWorkletMode === "msg" && state.rxWorkletNode) {
+        state.rxWorkletNode.port.postMessage({ type: "gain", value: gain });
+        state.rxWorkletNode.port.postMessage({ type: "mute", value: gain <= 0 });
+        return;
+      }
       if (!state.audioGainNode || !state.audioCtx) {
         return;
       }
-      const gain = volumeAmplitudeFromDb(state.rxVolumeDb);
       state.audioGainNode.gain.setTargetAtTime(gain, state.audioCtx.currentTime, 0.01);
+    }
+
+    function applyRxVolumeGainImmediate() {
+      const gain = volumeAmplitudeFromDb(state.rxVolumeDb);
+      if (state.audioWorkletMode === "sab" && state.rxCtrlF32 && state.rxCtrlU32) {
+        state.rxCtrlF32[CTRL_GAIN_IDX] = gain;
+        Atomics.store(state.rxCtrlU32, CTRL_MUTED_IDX, gain <= 0 ? 1 : 0);
+        return;
+      }
+      if (state.audioWorkletMode === "msg" && state.rxWorkletNode) {
+        state.rxWorkletNode.port.postMessage({ type: "gain", value: gain });
+        state.rxWorkletNode.port.postMessage({ type: "mute", value: gain <= 0 });
+        return;
+      }
+      if (!state.audioGainNode || !state.audioCtx) {
+        return;
+      }
+      const now = state.audioCtx.currentTime;
+      state.audioGainNode.gain.cancelScheduledValues(now);
+      state.audioGainNode.gain.setValueAtTime(gain, now);
     }
 
     function noiseReductionLabel() {
@@ -5063,8 +5374,11 @@
       }
       $("two-tone-btn").textContent = state.twoToneEnabled ? "2-Tone Test ON" : "2-Tone Test Off";
       $("two-tone-btn").classList.toggle("active", state.twoToneEnabled);
-      $("ptt-btn").classList.toggle("active", state.txEnabled);
-      $("tx-status-meta").textContent = state.txEnabled ? "TX" : "RX";
+      const moxActive = state.moxRequested || state.txEnabled;
+      $("ptt-btn").classList.toggle("active", moxActive);
+      $("ptt-btn").setAttribute("aria-pressed", moxActive ? "true" : "false");
+      $("ptt-btn").textContent = state.txEnabled ? "MOX ON" : (state.moxRequested ? "MOX ARM" : "MOX");
+      $("tx-status-meta").textContent = state.txEnabled ? "TX" : (state.moxRequested ? "ARM" : "RX");
       $("meter-readout").textContent = state.meterDbmVisual == null ? "-- dBm" : `${state.meterDbmVisual.toFixed(1)} dBm`;
       const txMeterValue = state.txMeterMode === "avg" ? state.txPowerAvg : state.txPowerPeak;
       $("tx-power-readout").textContent = txMeterValue == null ? "-- W" : `${txMeterValue.toFixed(1)} W`;
@@ -5339,12 +5653,8 @@
       }
       let ctx = state.audioCtx;
       if (!ctx) {
-        ctx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 48000 });
+        ctx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 48000, latencyHint: "interactive" });
         state.audioCtx = ctx;
-      }
-      if (!state.audioGainNode) {
-        state.audioGainNode = ctx.createGain();
-        state.audioGainNode.connect(ctx.destination);
       }
       if (ctx.state === "suspended") {
         try {
@@ -5358,12 +5668,68 @@
       if (state.audioCtx !== ctx) {
         return;
       }
+
+      // Try AudioWorklet path
+      let workletReady = false;
+      if (ctx.audioWorklet) {
+        try {
+          await ensureWorkletRegistered(ctx);
+          workletReady = true;
+        } catch (err) {
+          logEvent(`AudioWorklet registration failed: ${err.message || err}`);
+        }
+      }
+
+      if (workletReady) {
+        const node = new AudioWorkletNode(ctx, "saturn-rx-player", {
+          numberOfInputs: 0,
+          numberOfOutputs: 1,
+          outputChannelCount: [2],
+        });
+        node.connect(ctx.destination);
+        state.rxWorkletNode = node;
+
+        // Try SharedArrayBuffer ring buffer
+        if (typeof SharedArrayBuffer !== "undefined") {
+          const ringBuf = new SharedArrayBuffer(RX_RING_FRAMES * RX_RING_CHANNELS * 4);
+          const ctrlBuf = new SharedArrayBuffer(RX_CONTROL_SLOTS * 4);
+          state.rxRingBuf = ringBuf;
+          state.rxCtrlBuf = ctrlBuf;
+          state.rxRingF32 = new Float32Array(ringBuf);
+          state.rxCtrlU32 = new Uint32Array(ctrlBuf);
+          state.rxCtrlF32 = new Float32Array(ctrlBuf);
+          // Set initial gain
+          const gain = volumeAmplitudeFromDb(state.rxVolumeDb);
+          state.rxCtrlF32[CTRL_GAIN_IDX] = gain;
+          Atomics.store(state.rxCtrlU32, CTRL_MUTED_IDX, 0);
+          Atomics.store(state.rxCtrlU32, CTRL_READ_IDX, 0);
+          Atomics.store(state.rxCtrlU32, CTRL_WRITE_IDX, 0);
+          node.port.postMessage({ type: "init-sab", ringBuf, ctrlBuf });
+          state.audioWorkletMode = "sab";
+          logEvent("RX audio: AudioWorklet + SharedArrayBuffer ring buffer");
+        } else {
+          // Fallback: worklet with postMessage
+          const gain = volumeAmplitudeFromDb(state.rxVolumeDb);
+          node.port.postMessage({ type: "gain", value: gain });
+          state.audioWorkletMode = "msg";
+          logEvent("RX audio: AudioWorklet + postMessage (no SharedArrayBuffer)");
+        }
+      } else {
+        // Legacy path: GainNode + BufferSource scheduling
+        if (!state.audioGainNode) {
+          state.audioGainNode = ctx.createGain();
+          state.audioGainNode.connect(ctx.destination);
+        }
+        state.audioWorkletMode = null;
+        state.audioNextTime = ctx.currentTime + RX_AUDIO_START_PREROLL_SEC;
+        applyRxVolumeGain();
+        logEvent("RX audio: legacy BufferSource scheduling");
+      }
+
       state.audioStreaming = true;
       state.audioSampleRate = 48000;
       state.audioFramesPlayed = 0;
       state.audioBackpressureDrops = 0;
-      state.audioNextTime = ctx.currentTime + RX_AUDIO_START_PREROLL_SEC;
-      applyRxVolumeGain();
       sendTci(
         `audio_stream_samples:${RX_AUDIO_FRAME_FLOATS};audio_stream_channels:2;audio_stream_sample_type:float32;audio_samplerate:48000;audio_start:0;rx_volume:0,0,${state.rxVolumeDb.toFixed(1)};`
       );
@@ -5381,7 +5747,11 @@
             return false;
           }
         }
-        if (!state.audioGainNode) {
+        // Pre-register worklet during user gesture
+        if (state.audioCtx.audioWorklet) {
+          try { await ensureWorkletRegistered(state.audioCtx); } catch {}
+        }
+        if (!state.audioGainNode && !state.audioWorkletMode) {
           state.audioGainNode = state.audioCtx.createGain();
           state.audioGainNode.connect(state.audioCtx.destination);
           applyRxVolumeGain();
@@ -5389,13 +5759,17 @@
         return true;
       }
       try {
-        const ctx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 48000 });
+        const ctx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 48000, latencyHint: "interactive" });
         state.audioCtx = ctx;
-        state.audioGainNode = ctx.createGain();
-        state.audioGainNode.connect(ctx.destination);
         if (ctx.state === "suspended") {
           await ctx.resume();
         }
+        // Pre-register worklet during user gesture
+        if (ctx.audioWorklet) {
+          try { await ensureWorkletRegistered(ctx); } catch {}
+        }
+        state.audioGainNode = ctx.createGain();
+        state.audioGainNode.connect(ctx.destination);
         applyRxVolumeGain();
         return true;
       } catch (error) {
@@ -5408,9 +5782,22 @@
       if (notifyBridge) {
         sendTci("audio_stop:0;");
       }
+      flushRxAudioQueue();
       state.audioStreaming = false;
       state.audioFramesPlayed = 0;
       state.audioNextTime = 0;
+      state.audioWorkletMode = null;
+      state.rxWorkletDrops = 0;
+      if (state.rxWorkletNode) {
+        state.rxWorkletNode.port.postMessage({ type: "flush" });
+        state.rxWorkletNode.disconnect();
+        state.rxWorkletNode = null;
+      }
+      state.rxRingBuf = null;
+      state.rxCtrlBuf = null;
+      state.rxRingF32 = null;
+      state.rxCtrlU32 = null;
+      state.rxCtrlF32 = null;
       if (state.audioGainNode) {
         state.audioGainNode.disconnect();
         state.audioGainNode = null;
@@ -5422,19 +5809,91 @@
       updateUi();
     }
 
+    function flushRxAudioQueue() {
+      for (const source of state.audioSources) {
+        try {
+          source.onended = null;
+          source.stop();
+        } catch (_) {
+          // Source may already have ended or not have started yet.
+        }
+        try {
+          source.disconnect();
+        } catch (_) {
+          // Disconnect is best-effort; ended sources may already be detached.
+        }
+      }
+      state.audioSources.clear();
+      if (state.rxWorkletNode && state.audioWorkletMode === "msg") {
+        state.rxWorkletNode.port.postMessage({ type: "flush" });
+      }
+      if (state.audioWorkletMode === "sab" && state.rxCtrlU32) {
+        const wr = Atomics.load(state.rxCtrlU32, CTRL_WRITE_IDX);
+        Atomics.store(state.rxCtrlU32, CTRL_READ_IDX, wr);
+      }
+      if (state.audioCtx) {
+        state.audioNextTime = state.audioCtx.currentTime;
+      } else {
+        state.audioNextTime = 0;
+      }
+    }
+
+    function muteRxAudioForMox() {
+      flushRxAudioQueue();
+      if (state.audioWorkletMode === "sab" && state.rxCtrlU32) {
+        Atomics.store(state.rxCtrlU32, CTRL_MUTED_IDX, 1);
+      } else if (state.audioWorkletMode === "msg" && state.rxWorkletNode) {
+        state.rxWorkletNode.port.postMessage({ type: "mute", value: true });
+      }
+      if (state.audioGainNode) {
+        if (state.audioCtx) {
+          state.audioGainNode.gain.cancelScheduledValues(state.audioCtx.currentTime);
+          state.audioGainNode.gain.setValueAtTime(0, state.audioCtx.currentTime);
+        } else {
+          state.audioGainNode.gain.value = 0;
+        }
+      }
+      state.audioNextTime = state.audioCtx ? state.audioCtx.currentTime : 0;
+    }
+
+    function switchDisplayToTxArm() {
+      state.displayCaption = state.txEnabled ? "TX spectrum active" : "TX armed - RX panadapter muted";
+      state.lastFrameAt = performance.now();
+      state.lastSpectrumRenderAt = 0;
+      updateUi();
+    }
+
+    function recoverRxAfterMox() {
+      flushRxAudioQueue();
+      state.spectrumAverageBypassFrames = 2;
+      state.displayCaption = "RX active";
+      state.lastSpectrumRenderAt = 0;
+      state.waterfallSettleFrames = 0;
+      state.waterfallFrameSkipCounter = 0;
+      if (state.audioCtx) {
+        state.audioNextTime = state.audioCtx.currentTime;
+      }
+      applyRxVolumeGainImmediate();
+      updateUi();
+    }
+
     // ── TX / PTT ─────────────────────────────────────────────────────────────
 
-    function buildTxMicFrame(stereoSamples) {
-      const buf = new ArrayBuffer(64 + stereoSamples.length * 4);
+    function buildTxMicFrame(monoSamples) {
+      const stereoCount = monoSamples.length * 2;
+      const buf = new ArrayBuffer(64 + stereoCount * 4);
       const view = new DataView(buf);
       view.setUint32(0, 0, true);                        // receiver
       view.setUint32(4, 48000, true);                    // sample_rate
       view.setUint32(8, 3, true);
-      view.setUint32(20, stereoSamples.length, true);    // sample_count
+      view.setUint32(20, stereoCount, true);             // sample_count
       view.setUint32(24, 2, true);                       // stream_type = 2 (TX mic)
       view.setUint32(28, 2, true);                       // channels = 2 (stereo)
-      for (let i = 0; i < stereoSamples.length; i++) {
-        view.setFloat32(64 + i * 4, stereoSamples[i], true);
+      for (let i = 0; i < monoSamples.length; i++) {
+        const sample = monoSamples[i];
+        const stereoIdx = i * 2;
+        view.setFloat32(64 + stereoIdx * 4, sample, true);
+        view.setFloat32(64 + (stereoIdx + 1) * 4, sample, true);
       }
       return buf;
     }
@@ -5491,9 +5950,14 @@
         micStream = await requestMicrophoneStream({
           audio: { sampleRate: 48000, channelCount: 1, echoCancellation: false, noiseSuppression: false, autoGainControl: false },
         });
-        micCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 48000 });
+        micCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 48000, latencyHint: "interactive" });
         if (micCtx.state === "suspended") {
           await micCtx.resume();
+        }
+        if (micCtx.audioWorklet) {
+          try { await ensureWorkletRegistered(micCtx); } catch (error) {
+            logEvent(`Mic AudioWorklet registration failed: ${error.message || error}`);
+          }
         }
         if (state.pttRequestId !== requestId) {
           await micCtx.close();
@@ -5501,31 +5965,44 @@
           return false;
         }
         const source = micCtx.createMediaStreamSource(micStream);
-        // ScriptProcessorNode: 256-sample blocks (≈5.3 ms at 48 kHz).
-        // Keep TX mic frames small so PTT release is not trapped behind audio.
-        const proc = micCtx.createScriptProcessor(TX_MIC_BLOCK_SAMPLES, 1, 1);
-        proc.onaudioprocess = (evt) => {
-          if (!state.txEnabled || !state.connected || !state.ws || state.ws.readyState !== WebSocket.OPEN) { return; }
-          const mono = evt.inputBuffer.getChannelData(0);
-          // Duplicate each sample to stereo interleaved so the bridge step_by(2) returns all mono samples.
-          const stereo = new Float32Array(mono.length * 2);
-          for (let i = 0; i < mono.length; i++) {
-            stereo[i * 2] = mono[i];
-            stereo[i * 2 + 1] = mono[i];
-          }
-          state.ws.send(buildTxMicFrame(stereo));
-        };
-        // Route through a silent gain node so the ScriptProcessorNode fires
-        // without also playing mic audio through the browser's speakers.
         const silentGain = micCtx.createGain();
         silentGain.gain.value = 0;
+        let proc = null;
+        let txMode = "legacy";
+        if (micCtx.audioWorklet) {
+          try {
+            proc = new AudioWorkletNode(micCtx, "saturn-tx-capture", {
+              numberOfInputs: 1,
+              numberOfOutputs: 1,
+              outputChannelCount: [1],
+            });
+            proc.port.onmessage = (evt) => {
+              if (!state.moxRequested || !state.connected || !state.ws || state.ws.readyState !== WebSocket.OPEN) { return; }
+              state.ws.send(buildTxMicFrame(evt.data.samples));
+            };
+            txMode = "worklet";
+          } catch (error) {
+            logEvent(`Mic AudioWorklet start failed: ${error.message || error}`);
+            proc = null;
+          }
+        }
+        if (!proc) {
+          // ScriptProcessorNode fallback: 256-sample blocks (about 5.3 ms at 48 kHz).
+          proc = micCtx.createScriptProcessor(TX_MIC_BLOCK_SAMPLES, 1, 1);
+          proc.onaudioprocess = (evt) => {
+            if (!state.moxRequested || !state.connected || !state.ws || state.ws.readyState !== WebSocket.OPEN) { return; }
+            state.ws.send(buildTxMicFrame(evt.inputBuffer.getChannelData(0)));
+          };
+        }
+        // Route through a silent gain node so capture processing stays active
+        // without also playing mic audio through the browser's speakers.
         source.connect(proc);
         proc.connect(silentGain);
         silentGain.connect(micCtx.destination);
         state.micStream = micStream;
         state.micNode = { ctx: micCtx, source, proc, silentGain };
         state.micCapturing = true;
-        logEvent("Mic capture started");
+        logEvent(`Mic capture started (${txMode})`);
         return true;
       } catch (err) {
         if (micCtx) {
@@ -5568,24 +6045,46 @@
 
     async function setPtt(active, options = {}) {
       const useMic = options.useMic !== false;
-      if (active === state.txEnabled) { return true; }
+      if (!active) {
+        if (!state.moxRequested && !state.txEnabled && !state.micCapturing) {
+          return true;
+        }
+        state.pttRequestId += 1;
+        state.moxRequested = false;
+        state.txEnabled = false;
+        updateUi();
+        sendTxShutdownIfPossible(false);
+        stopMicCapture();
+        recoverRxAfterMox();
+        if (state.connected && !state.audioStreaming) {
+          void startRxAudio();
+        }
+        state.twoTonePttOwned = false;
+        updateUi();
+        return true;
+      }
+      if (active === state.moxRequested) { return true; }
       if (active) {
         if (!state.connected || !state.ws || state.ws.readyState !== WebSocket.OPEN) {
           logEvent("Connect before transmitting");
+          state.moxRequested = false;
           state.txEnabled = false;
           updateUi();
           return false;
         }
         const requestId = state.pttRequestId + 1;
         state.pttRequestId = requestId;
-        state.txEnabled = true;
+        state.moxRequested = true;
+        muteRxAudioForMox();
+        switchDisplayToTxArm();
         updateUi();
         sendTci("trx:0,true,tci;");
         if (useMic) {
           const started = await startMicCapture(requestId);
           if (!started || state.pttRequestId !== requestId) {
-            if (state.pttRequestId === requestId && state.txEnabled) {
+            if (state.pttRequestId === requestId && state.moxRequested) {
               sendTxShutdownIfPossible(false);
+              state.moxRequested = false;
               state.txEnabled = false;
               logEvent("PTT cancelled because browser mic audio is unavailable");
               updateUi();
@@ -5593,13 +6092,6 @@
             return false;
           }
         }
-      } else {
-        state.pttRequestId += 1;
-        state.txEnabled = false;
-        updateUi();
-        sendTxShutdownIfPossible(false);
-        stopMicCapture();
-        state.twoTonePttOwned = false;
       }
       updateUi();
       return true;
@@ -5613,7 +6105,7 @@
       saveRadioPrefs();
       if (enabled) {
         sendCurrentTwoToneSettings();
-        state.twoTonePttOwned = !state.txEnabled;
+        state.twoTonePttOwned = !state.moxRequested;
         if (state.twoTonePttOwned) {
           const started = await setPtt(true, { useMic: false });
           if (!started) {
@@ -5627,7 +6119,7 @@
         sendTci("tx_two_tone:0,true;");
       } else {
         sendTci("tx_two_tone:0,false;");
-        if (state.twoTonePttOwned && state.txEnabled) {
+        if (state.twoTonePttOwned && state.moxRequested) {
           await setPtt(false);
         }
         state.twoTonePttOwned = false;
@@ -5639,57 +6131,24 @@
       const button = $("ptt-btn");
       if (!button) { return; }
 
-      const releasePtt = (event) => {
-        if (state.pttPointerId !== null && event.pointerId !== undefined && event.pointerId !== state.pttPointerId) {
-          return;
-        }
-        if (state.pttPointerId !== null && button.hasPointerCapture?.(state.pttPointerId)) {
-          try {
-            button.releasePointerCapture(state.pttPointerId);
-          } catch (_) {}
-        }
-        state.pttPointerId = null;
+      const togglePtt = (event) => {
         event.preventDefault();
-        void setPtt(false);
+        void setPtt(!state.moxRequested);
       };
 
-      button.addEventListener("pointerdown", (event) => {
-        if (event.pointerType === "mouse" && event.button !== 0) {
-          return;
-        }
-        state.pttPointerId = event.pointerId;
-        if (button.setPointerCapture) {
-          try {
-            button.setPointerCapture(event.pointerId);
-          } catch (_) {}
-        }
-        event.preventDefault();
-        void setPtt(true);
-      });
-      button.addEventListener("pointerup", releasePtt);
-      button.addEventListener("pointercancel", releasePtt);
-      button.addEventListener("lostpointercapture", releasePtt);
-      button.addEventListener("pointerleave", (event) => {
-        if (event.pointerType === "mouse" && state.pttPointerId !== null) {
-          releasePtt(event);
-        }
-      });
-      button.addEventListener("keydown", (event) => {
-        if (event.repeat || (event.code !== "Space" && event.code !== "Enter")) {
-          return;
-        }
-        event.preventDefault();
-        void setPtt(true);
-      });
-      button.addEventListener("keyup", (event) => {
-        if (event.code !== "Space" && event.code !== "Enter") {
-          return;
-        }
-        event.preventDefault();
-        void setPtt(false);
-      });
+      button.addEventListener("click", togglePtt);
       button.addEventListener("contextmenu", (event) => {
         event.preventDefault();
+      });
+      window.addEventListener("pagehide", () => {
+        if (state.moxRequested || state.txEnabled || state.micCapturing) {
+          void setPtt(false);
+        }
+      });
+      document.addEventListener("visibilitychange", () => {
+        if (document.visibilityState === "hidden" && (state.moxRequested || state.txEnabled || state.micCapturing)) {
+          void setPtt(false);
+        }
       });
     }
 
@@ -5749,10 +6208,11 @@
       };
       ws.onmessage = (event) => {
         if (ws !== state.ws) return;
-        if (typeof event.data === "string") {
-          handleTciText(event.data);
-        } else {
-          handleBinaryFrame(event.data);
+        const classified = runtimeRefs().session.classifySocketMessage(event.data);
+        if (classified.kind === "text") {
+          runtimeRefs().browser.handleTciText(classified.text, classified.commands);
+        } else if (classified.kind === "binary") {
+          runtimeRefs().browser.handleBinaryFrame(classified.buffer);
         }
       };
       ws.onclose = () => {
@@ -5763,6 +6223,7 @@
         state.iqStreaming = false;
         state.ws = null;
         resetDisplayHistory();
+        state.moxRequested = false;
         state.txEnabled = false;
         state.meterDbm = null;
         state.meterDbmVisual = null;
@@ -5798,6 +6259,7 @@
       state.iqStreaming = false;
       state.ws = null;
       resetDisplayHistory();
+      state.moxRequested = false;
       state.txEnabled = false;
       state.meterDbm = null;
       state.meterDbmVisual = null;
@@ -5815,387 +6277,96 @@
       updateUi();
     }
 
-    function handleTciText(text) {
-      text.split(";").map((item) => item.trim()).filter(Boolean).forEach((command) => {
-        if (command.toLowerCase() === "ready") {
-          logEvent("Bridge reported ready");
-          return;
-        }
-        const parts = command.split(":");
-        if (parts.length < 2) {
-          return;
-        }
-        const name = parts[0].toLowerCase();
-        const args = parts.slice(1).join(":").split(",");
-        if (name === "vfo" && args.length >= 3) {
-          const which = args[1].trim();
-          const hz = Number(args[2].trim());
-          if (which === "0") {
-            state.vfoA = hz;
-          } else if (which === "1") {
-            state.vfoB = hz;
-          }
-        } else if (name === "dds" && args.length >= 2) {
-          const nextDds = Number(args[1].trim());
-          if (!Number.isNaN(nextDds) && nextDds !== state.dds) {
-            shiftDisplayForCenterChange(nextDds);
-            state.dds = nextDds;
-          }
-        } else if (name === "rx_adc") {
-          const adc = args.length >= 2 ? Number(args[1].trim()) : Number(args[args.length - 1]?.trim());
-          if (!Number.isNaN(adc)) {
-            state.rxAdc = clampRxAdc(adc);
-          }
-        } else if (name === "rx_antenna") {
-          const antenna = args.length >= 2 ? Number(args[1].trim()) : Number(args[args.length - 1]?.trim());
-          if (!Number.isNaN(antenna)) {
-            state.rxAntenna = clampRxAntenna(antenna);
-          }
-        } else if (name === "iq_samplerate" && args.length >= 1) {
-          const nextRate = Number(args[0].trim());
-          if (!Number.isNaN(nextRate) && nextRate > 0 && nextRate !== state.sampleRate) {
-            state.sampleRate = nextRate;
-            resetDisplayHistory();
-          }
-        } else if (name === "modulation" && args.length >= 2) {
-          state.mode = clampDemodMode(args[1].trim());
-        } else if (name === "rx_volume") {
-          const volume = args.length >= 3 ? Number(args[2].trim()) : Number(args[args.length - 1]?.trim());
-          if (!Number.isNaN(volume)) {
-            state.rxVolumeDb = clampRxVolumeDb(volume);
-            applyRxVolumeGain();
-          }
-        } else if (name === "rx_nr_mode" || name === "nr_mode") {
-          const modeText = args.length >= 2 ? args[1].trim() : args[args.length - 1]?.trim();
-          state.rxNoiseReductionMode = normalizeNrMode(modeText);
-        } else if (name === "rx_nr" || name === "nr") {
-          const enabledText = args.length >= 2 ? args[1].trim() : args[args.length - 1]?.trim();
-          const enabled = ["1", "true", "on", "yes"].includes((enabledText || "").toLowerCase());
-          if (!enabled) {
-            state.rxNoiseReductionMode = "OFF";
-          } else if (state.rxNoiseReductionMode === "OFF") {
-            state.rxNoiseReductionMode = "NR1";
-          }
-        } else if (name === "rx_nr_level" || name === "nr_level") {
-          const level = args.length >= 2 ? Number(args[1].trim()) : Number(args[args.length - 1]?.trim());
-          if (!Number.isNaN(level)) {
-            state.rxNoiseReductionLevel = clampRxNoiseReductionLevel(level);
-          }
-        } else if (name === "rx_nb") {
-          const modeText = args.length >= 2 ? args[1].trim() : args[args.length - 1]?.trim();
-          state.rxNbMode = normalizeNbMode(modeText);
-        } else if (name === "rx_nb_threshold") {
-          const threshold = args.length >= 2 ? Number(args[1].trim()) : Number(args[args.length - 1]?.trim());
-          if (!Number.isNaN(threshold)) {
-            state.rxNbThreshold = clampRxNbThreshold(threshold);
-          }
-        } else if (name === "rx_anr_taps") {
-          const taps = args.length >= 2 ? Number(args[1].trim()) : Number(args[args.length - 1]?.trim());
-          if (!Number.isNaN(taps)) {
-            state.rxAnrTaps = clampDspTapCount(taps);
-          }
-        } else if (name === "rx_anr_delay") {
-          const delay = args.length >= 2 ? Number(args[1].trim()) : Number(args[args.length - 1]?.trim());
-          if (!Number.isNaN(delay)) {
-            state.rxAnrDelay = clampDspDelay(delay);
-          }
-        } else if (name === "rx_anr_gain") {
-          const gain = args.length >= 2 ? Number(args[1].trim()) : Number(args[args.length - 1]?.trim());
-          if (!Number.isNaN(gain)) {
-            state.rxAnrGain = clampDspGain(gain, 0.0002);
-          }
-        } else if (name === "rx_anr_leakage") {
-          const leakage = args.length >= 2 ? Number(args[1].trim()) : Number(args[args.length - 1]?.trim());
-          if (!Number.isNaN(leakage)) {
-            state.rxAnrLeakage = clampDspLeakage(leakage, 0.00005);
-          }
-        } else if (name === "rx_anf") {
-          const enabledText = args.length >= 2 ? args[1].trim() : args[args.length - 1]?.trim();
-          state.anfEnabled = ["1", "true", "on", "yes"].includes((enabledText || "").toLowerCase());
-        } else if (name === "rx_anf_taps") {
-          const taps = args.length >= 2 ? Number(args[1].trim()) : Number(args[args.length - 1]?.trim());
-          if (!Number.isNaN(taps)) {
-            state.rxAnfTaps = clampDspTapCount(taps);
-          }
-        } else if (name === "rx_anf_delay") {
-          const delay = args.length >= 2 ? Number(args[1].trim()) : Number(args[args.length - 1]?.trim());
-          if (!Number.isNaN(delay)) {
-            state.rxAnfDelay = clampDspDelay(delay);
-          }
-        } else if (name === "rx_anf_gain") {
-          const gain = args.length >= 2 ? Number(args[1].trim()) : Number(args[args.length - 1]?.trim());
-          if (!Number.isNaN(gain)) {
-            state.rxAnfGain = clampDspGain(gain, 0.00012);
-          }
-        } else if (name === "rx_anf_leakage") {
-          const leakage = args.length >= 2 ? Number(args[1].trim()) : Number(args[args.length - 1]?.trim());
-          if (!Number.isNaN(leakage)) {
-            state.rxAnfLeakage = clampDspLeakage(leakage, 0.00008);
-          }
-        } else if (name === "rx_agc") {
-          const modeText = args.length >= 2 ? args[1].trim() : args[args.length - 1]?.trim();
-          state.agcMode = normalizeAgcMode(modeText);
-        } else if (name === "rx_agc_gain") {
-          const gain = args.length >= 2 ? Number(args[1].trim()) : Number(args[args.length - 1]?.trim());
-          if (!Number.isNaN(gain)) {
-            state.agcGain = clampAgcGain(gain);
-          }
-        } else if (name === "rx_filter_band" && args.length >= 3) {
-          const fl = Number(args[1].trim()), fh = Number(args[2].trim());
-          if (!Number.isFinite(fl) || !Number.isFinite(fh)) return;
-          const cuts = uiCutsFromSignedPassband(fl, fh, state.mode);
-          state.filterLow = cuts.lowCutHz;
-          state.filterHigh = cuts.highCutHz;
-          $("filter-low").value = `${state.filterLow}`;
-          $("filter-high").value = `${state.filterHigh}`;
-        } else if (name === "rx_smeter") {
-          const meter = args.length >= 3 ? Number(args[2].trim()) : Number(args[0].trim());
-          if (!Number.isNaN(meter)) {
-            state.meterDbm = meter;
-          }
-        } else if (name === "tx_power") {
-          const value = args.length >= 2 ? Number(args[1].trim()) : Number(args[0].trim());
-          if (!Number.isNaN(value)) {
-            state.txPower = value;
-          }
-        } else if (name === "tx_drive") {
-          const value = args.length >= 2 ? Number(args[1].trim()) : Number(args[args.length - 1]?.trim());
-          if (!Number.isNaN(value)) {
-            state.txDrive = clampTxDriveWatts(value);
-          }
-        } else if (name === "swr") {
-          const value = args.length >= 2 ? Number(args[1].trim()) : Number(args[0].trim());
-          if (!Number.isNaN(value)) {
-            state.swr = value;
-          }
-        } else if (name === "trx" && args.length >= 2) {
-          const on = args[1].trim().toLowerCase() === "true";
-          state.txEnabled = on;
-        } else if (name === "tx_filter_band" && args.length >= 3) {
-          const fl = Number(args[1].trim()), fh = Number(args[2].trim());
-          if (Number.isFinite(fl) && Number.isFinite(fh)) {
-            const cuts = uiCutsFromSignedPassband(fl, fh, state.mode);
-            state.txFilterLow = cuts.lowCutHz;
-            state.txFilterHigh = cuts.highCutHz;
-            const txFlEl = $("tx-filter-low");
-            const txFhEl = $("tx-filter-high");
-            if (txFlEl) txFlEl.value = `${state.txFilterLow}`;
-            if (txFhEl) txFhEl.value = `${state.txFilterHigh}`;
-          }
-        } else if (name === "rx_eq_enable") {
-          const arg = (args[1] || args[0] || "").trim().toLowerCase();
-          state.rxEqEnabled = ["1", "true", "on", "yes"].includes(arg);
-        } else if (name === "tx_eq_enable") {
-          const arg = (args[1] || args[0] || "").trim().toLowerCase();
-          state.txEqEnabled = ["1", "true", "on", "yes"].includes(arg);
-        } else if (name === "rx_eq_band" && args.length >= 3) {
-          const band = Number(args[1].trim()), gain = Number(args[2].trim());
-          if (band >= 1 && band <= 10 && Number.isFinite(gain)) {
-            state.rxEqBands[band] = Math.round(gain);
-            const slider = document.getElementById(`rx-eq-band-${band}`);
-            const valEl = document.getElementById(`rx-eq-val-${band}`);
-            if (slider) slider.value = `${Math.round(gain)}`;
-            if (valEl) valEl.textContent = `${Math.round(gain)}`;
-          }
-        } else if (name === "tx_eq_band" && args.length >= 3) {
-          const band = Number(args[1].trim()), gain = Number(args[2].trim());
-          if (band >= 1 && band <= 10 && Number.isFinite(gain)) {
-            state.txEqBands[band] = Math.round(gain);
-            const slider = document.getElementById(`tx-eq-band-${band}`);
-            const valEl = document.getElementById(`tx-eq-val-${band}`);
-            if (slider) slider.value = `${Math.round(gain)}`;
-            if (valEl) valEl.textContent = `${Math.round(gain)}`;
-          }
-        } else if (name === "tx_cfc_enable") {
-          const arg = (args[1] || args[0] || "").trim().toLowerCase();
-          state.cfcEnabled = ["1", "true", "on", "yes"].includes(arg);
-        } else if (name === "tx_cfc_precomp") {
-          const v = Number((args[1] || args[0] || "").trim());
-          if (Number.isFinite(v)) state.cfcPrecomp = v;
-        } else if (name === "tx_cfc_band" && args.length >= 3) {
-          const band = Number(args[1].trim()), gain = Number(args[2].trim());
-          if (band >= 1 && band <= 10 && Number.isFinite(gain)) {
-            state.cfcBands[band] = Math.max(0, Math.min(20, gain));
-            const slider = document.getElementById(`cfc-band-${band}`);
-            const valEl = document.getElementById(`cfc-val-${band}`);
-            if (slider) slider.value = `${state.cfcBands[band]}`;
-            if (valEl) valEl.textContent = `${state.cfcBands[band].toFixed(1)}`;
-          }
-        } else if (name === "tx_two_tone") {
-          const arg = (args[1] || args[0] || "").trim().toLowerCase();
-          state.twoToneEnabled = ["1", "true", "on", "yes"].includes(arg);
-        } else if (name === "tx_two_tone_freq1") {
-          const value = args.length >= 2 ? Number(args[1].trim()) : Number(args[0].trim());
-          if (!Number.isNaN(value)) {
-            state.txTwoToneFreq1 = clampTwoToneFreqHz(value, 700);
-          }
-        } else if (name === "tx_two_tone_freq2") {
-          const value = args.length >= 2 ? Number(args[1].trim()) : Number(args[0].trim());
-          if (!Number.isNaN(value)) {
-            state.txTwoToneFreq2 = clampTwoToneFreqHz(value, 1900);
-          }
-        } else if (name === "tx_two_tone_level_db") {
-          const value = args.length >= 2 ? Number(args[1].trim()) : Number(args[0].trim());
-          if (!Number.isNaN(value)) {
-            state.txTwoToneLevelDb = clampTwoToneLevelDb(value);
-          }
-        } else if (name === "tx_two_tone_invert_lsb") {
-          const arg = (args[1] || args[0] || "").trim().toLowerCase();
-          state.txTwoToneInvertLsb = ["1", "true", "on", "yes"].includes(arg);
-        } else if (name === "tx_two_tone_delay_ms") {
-          const value = args.length >= 2 ? Number(args[1].trim()) : Number(args[0].trim());
-          if (!Number.isNaN(value)) {
-            state.txTwoToneDelayMs = clampTwoToneDelayMs(value);
-          }
-        } else if (name === "audio_start") {
-          state.audioStreaming = true;
-          logEvent("Bridge acknowledged audio_start");
-        } else if (name === "audio_stop") {
-          state.audioStreaming = false;
-          logEvent("Bridge acknowledged audio_stop");
-        } else if (name === "audio_samplerate" && args.length >= 1) {
-          const rate = Number(args[0].trim());
-          if (!Number.isNaN(rate) && rate > 0) {
-            state.audioSampleRate = rate;
-          }
-        }
-      });
-      updateUi();
-    }
-
-    function handleBinaryFrame(buffer) {
-      if (!(buffer instanceof ArrayBuffer) || buffer.byteLength < 64) {
-        return;
+    function syncTciUiSideEffects(previous, next, events) {
+      if (events.ready) {
+        logEvent("Bridge reported ready");
       }
-      const view = new DataView(buffer);
-      const frameType = view.getUint32(24, true);
-      if (frameType === 1) {
-        handleAudioFrame(buffer);
-        return;
+      if (events.displayCenterHzChanged) {
+        shiftDisplayForCenterChange(next.dds);
       }
-      handleIqFrame(buffer);
-    }
-
-    function fftSizeForSamples(value) {
-      if (value >= DISPLAY_MAX_FFT_SIZE) {
-        return DISPLAY_MAX_FFT_SIZE;
-      }
-      let size = 32;
-      while ((size << 1) <= value && (size << 1) <= DISPLAY_MAX_FFT_SIZE) {
-        size <<= 1;
-      }
-      return Math.max(32, size);
-    }
-
-    function appendIqPacket(iq) {
-      state.iqPackets.push(new Float32Array(iq));
-      while (state.iqPackets.length > DISPLAY_PACKET_HISTORY) {
-        state.iqPackets.shift();
-      }
-    }
-
-    function buildRenderIqWindow() {
-      if (state.iqPackets.length === 0) {
-        return null;
-      }
-
-      const desiredComplexSamples = DISPLAY_COMPLEX_SAMPLES_TARGET;
-      const selected = [];
-      let totalFloats = 0;
-      for (let i = state.iqPackets.length - 1; i >= 0; i -= 1) {
-        const packet = state.iqPackets[i];
-        selected.push(packet);
-        totalFloats += packet.length;
-        if ((totalFloats / 2) >= desiredComplexSamples) {
-          break;
-        }
-      }
-
-      selected.reverse();
-      const combined = new Float32Array(totalFloats);
-      let offset = 0;
-      for (const packet of selected) {
-        combined.set(packet, offset);
-        offset += packet.length;
-      }
-      return combined;
-    }
-
-    function handleIqFrame(buffer) {
-      const view = new DataView(buffer);
-      if (buffer.byteLength < 64) {
-        return;
-      }
-      const sampleRate = view.getUint32(4, true);
-      const floatCount = view.getUint32(20, true);
-      if (!floatCount || buffer.byteLength < 64 + floatCount * 4) {
-        return;
-      }
-
-      const iq = new Float32Array(buffer, 64, floatCount);
-      const samplePairs = Math.floor(iq.length / 2);
-      if (sampleRate !== state.sampleRate) {
+      if (events.sampleRateChanged) {
         resetDisplayHistory();
       }
-      state.sampleRate = sampleRate;
-      appendIqPacket(iq);
-      if (performance.now() - state.lastFrameAt > 2500) {
-        logEvent(`Received IQ frame: ${samplePairs} complex samples @ ${Math.round(sampleRate / 1000)} kHz`);
-      }
-      state.lastFrameAt = performance.now();
-      state.frameCounter += 1;
-      state.displayCaption = `Live IQ frame: ${samplePairs} complex samples at ${Math.round(sampleRate / 1000)} kHz`;
-      updateUi();
-    }
 
-    function handleAudioFrame(buffer) {
-      const view = new DataView(buffer);
-      const sampleRate = view.getUint32(4, true);
-      const floatCount = view.getUint32(20, true);
-      const channels = Math.max(1, view.getUint32(28, true) || 2);
-      if (!state.audioCtx || !state.audioStreaming || !floatCount || buffer.byteLength < 64 + floatCount * 4) {
-        return;
+      Object.assign(state, next);
+
+      if (previous.filterLow !== state.filterLow) {
+        $("filter-low").value = `${state.filterLow}`;
+      }
+      if (previous.filterHigh !== state.filterHigh) {
+        $("filter-high").value = `${state.filterHigh}`;
+      }
+      if (previous.txFilterLow !== state.txFilterLow) {
+        const txFlEl = $("tx-filter-low");
+        if (txFlEl) txFlEl.value = `${state.txFilterLow}`;
+      }
+      if (previous.txFilterHigh !== state.txFilterHigh) {
+        const txFhEl = $("tx-filter-high");
+        if (txFhEl) txFhEl.value = `${state.txFilterHigh}`;
       }
 
-      if (state.audioCtx.state === "suspended") {
-        void state.audioCtx.resume();
-      }
-
-      state.audioSampleRate = sampleRate;
-      const frames = Math.floor(floatCount / channels);
-      if (frames < 1) {
-        return;
-      }
-
-      const floats = new Float32Array(buffer, 64, floatCount);
-      const audioBuffer = state.audioCtx.createBuffer(2, frames, sampleRate);
-      const left = audioBuffer.getChannelData(0);
-      const right = audioBuffer.getChannelData(1);
-      // The receive path is mono in practice; if the transport's right lane is
-      // silent, mirror the left lane so playback stays centered.
-      let mirrorMonoToBoth = channels < 2;
-
-      if (!mirrorMonoToBoth && channels >= 2) {
-        mirrorMonoToBoth = true;
-        const probeFrames = Math.min(frames, 128);
-        for (let i = 0; i < probeFrames; i += 1) {
-          if (Math.abs(floats[i * channels + 1]) > 1e-6) {
-            mirrorMonoToBoth = false;
-            break;
-          }
+      for (let band = 1; band <= 10; band += 1) {
+        if (previous.rxEqBands?.[band] !== state.rxEqBands?.[band]) {
+          const slider = document.getElementById(`rx-eq-band-${band}`);
+          const valEl = document.getElementById(`rx-eq-val-${band}`);
+          if (slider) slider.value = `${Math.round(state.rxEqBands[band])}`;
+          if (valEl) valEl.textContent = `${Math.round(state.rxEqBands[band])}`;
+        }
+        if (previous.txEqBands?.[band] !== state.txEqBands?.[band]) {
+          const slider = document.getElementById(`tx-eq-band-${band}`);
+          const valEl = document.getElementById(`tx-eq-val-${band}`);
+          if (slider) slider.value = `${Math.round(state.txEqBands[band])}`;
+          if (valEl) valEl.textContent = `${Math.round(state.txEqBands[band])}`;
+        }
+        if (previous.cfcBands?.[band] !== state.cfcBands?.[band]) {
+          const slider = document.getElementById(`cfc-band-${band}`);
+          const valEl = document.getElementById(`cfc-val-${band}`);
+          if (slider) slider.value = `${state.cfcBands[band]}`;
+          if (valEl) valEl.textContent = `${state.cfcBands[band].toFixed(1)}`;
         }
       }
 
-      for (let i = 0; i < frames; i += 1) {
-        const leftSample = floats[i * channels];
-        const rightSample = mirrorMonoToBoth
-          ? leftSample
-          : (channels > 1 ? floats[i * channels + 1] : leftSample);
-        left[i] = leftSample;
-        right[i] = rightSample;
+      if (events.rxVolumeChanged) {
+        applyRxVolumeGain();
       }
+      if (events.txReleased) {
+        stopMicCapture();
+        recoverRxAfterMox();
+        if (state.connected && !state.audioStreaming) {
+          void startRxAudio();
+        }
+      }
+    }
 
-      scheduleAudioPlayback(audioBuffer);
+    function writeRxAudioFrameToSab(left, right) {
+      if (!state.rxRingF32 || !state.rxCtrlU32) {
+        return false;
+      }
+      const ring = state.rxRingF32;
+      const ctrl = state.rxCtrlU32;
+      const cap = RX_RING_FRAMES;
+      const frames = Math.min(left.length, cap - 1);
+      let rd = Atomics.load(ctrl, CTRL_READ_IDX);
+      let wr = Atomics.load(ctrl, CTRL_WRITE_IDX);
+      const used = wr >= rd ? wr - rd : cap - rd + wr;
+      let free = cap - used - 1;
+      if (free < frames) {
+        const advance = frames - free;
+        rd = (rd + advance) % cap;
+        Atomics.store(ctrl, CTRL_READ_IDX, rd);
+        state.rxWorkletDrops += 1;
+        if (state.rxWorkletDrops === 1 || state.rxWorkletDrops % 25 === 0) {
+          logEvent(`RX worklet ring resynced ${state.rxWorkletDrops} time(s)`);
+        }
+      }
+      for (let i = 0; i < frames; i += 1) {
+        const idx = wr * 2;
+        ring[idx] = left[i];
+        ring[idx + 1] = right[i];
+        wr = (wr + 1) % cap;
+      }
+      Atomics.store(ctrl, CTRL_WRITE_IDX, wr);
+      return true;
     }
 
     function scheduleAudioPlayback(audioBuffer) {
@@ -6206,7 +6377,7 @@
       if (state.audioNextTime < now) {
         state.audioNextTime = now + RX_AUDIO_RECOVERY_PREROLL_SEC;
       }
-      if (state.audioNextTime > now + 0.35) {
+      if (state.audioNextTime > now + 0.12) {
         state.audioBackpressureDrops += 1;
         state.audioNextTime = now + RX_AUDIO_RESYNC_PREROLL_SEC;
         if (state.audioBackpressureDrops === 1 || state.audioBackpressureDrops % 25 === 0) {
@@ -6217,8 +6388,10 @@
       source.buffer = audioBuffer;
       source.connect(state.audioGainNode || state.audioCtx.destination);
       source.onended = () => {
+        state.audioSources.delete(source);
         source.disconnect();
       };
+      state.audioSources.add(source);
       source.start(state.audioNextTime);
       state.audioNextTime += audioBuffer.duration;
       state.audioFramesPlayed += 1;
@@ -6244,12 +6417,14 @@
 
     function animationLoop(now) {
       updateMeterVisualState(now);
-      if (state.connected && state.iqStreaming && state.iqPackets.length !== 0) {
+      if (state.moxRequested || state.txEnabled) {
+        waterfallRenderer.render();
+      } else if (state.connected && state.iqStreaming && state.iqPackets.length !== 0) {
         if (now - state.lastSpectrumRenderAt >= 33) {
-          const iqWindow = buildRenderIqWindow();
+          const iqWindow = runtimeRefs().browser.buildRenderIqWindow();
           if (iqWindow && iqWindow.length >= 64) {
             const samplePairs = Math.floor(iqWindow.length / 2);
-            const fftSize = fftSizeForSamples(samplePairs);
+            const fftSize = runtimeRefs().browser.fftSizeForSamples(samplePairs, state.displayZoom);
             if (fftSize !== fftProcessor.size) {
               fftProcessor = new FftProcessor(fftSize);
             }
@@ -7242,20 +7417,45 @@
     // ─────────────────────────────────────────────────────────────────────────
 
     async function init() {
+      void runtimeRefs();
       applyLayout(preferredLayout(), false, false);
       applyTheme(preferredTheme(), false);
-      applySavedRadioPrefs();
-      try {
-        const savedDisplayPrefs = localStorage.getItem(DISPLAY_PREFS_KEY);
-        if (savedDisplayPrefs) {
-          applyDisplayPrefsObject(JSON.parse(savedDisplayPrefs));
+      const persistedSettings = loadPersistedLocalSettings();
+      if (persistedSettings) {
+        applyRemoteSettingsObject(persistedSettings);
+      } else {
+        applySavedRadioPrefs();
+        try {
+          const savedDisplayPrefs = localStorage.getItem(DISPLAY_PREFS_KEY);
+          if (savedDisplayPrefs) {
+            applyDisplayPrefsObject(JSON.parse(savedDisplayPrefs));
+          }
+        } catch (error) {
+          console.warn("Saturn Remote display preference restore failed", error);
         }
-      } catch (error) {
-        console.warn("Saturn Remote display preference restore failed", error);
+        state.activeProfile = `${localStorage.getItem(ACTIVE_PROFILE_KEY) || ""}`.trim();
+        state.wsUrl = defaultWsUrl();
+        const savedZoom = Number(localStorage.getItem("saturn.remote.displayZoom"));
+        if (!Number.isNaN(savedZoom) && savedZoom >= 1 && savedZoom <= 32) {
+          state.displayZoom = savedZoom;
+        }
+        const savedFrequencyLock = localStorage.getItem(FREQ_LOCK_KEY);
+        if (savedFrequencyLock === "1" || savedFrequencyLock === "0") {
+          state.frequencyLock = savedFrequencyLock === "1";
+        } else {
+          state.frequencyLock = defaultFrequencyLockEnabled();
+        }
+        const savedWakeLock = localStorage.getItem(WAKE_LOCK_KEY);
+        if (savedWakeLock === "1" || savedWakeLock === "0") {
+          state.keepScreenAwake = savedWakeLock === "1";
+        } else {
+          state.keepScreenAwake = defaultKeepScreenAwakeEnabled();
+        }
       }
-      state.activeProfile = `${localStorage.getItem(ACTIVE_PROFILE_KEY) || ""}`.trim();
-      $("ws-url").value = defaultWsUrl();
-      state.wsUrl = $("ws-url").value;
+      if (!state.wsUrl) {
+        state.wsUrl = defaultWsUrl();
+      }
+      $("ws-url").value = state.wsUrl;
       $("sample-rate").value = `${state.sampleRate}`;
       $("rx-adc").value = `${state.rxAdc}`;
       $("rx-antenna").value = `${state.rxAntenna}`;
@@ -7263,22 +7463,6 @@
       $("rx-nr-level").value = `${state.rxNoiseReductionLevel}`;
       $("rx-nb-threshold").value = `${state.rxNbThreshold}`;
       $("agc-gain").value = `${state.agcGain}`;
-      const savedZoom = Number(localStorage.getItem("saturn.remote.displayZoom"));
-      if (!Number.isNaN(savedZoom) && savedZoom >= 1 && savedZoom <= 32) {
-        state.displayZoom = savedZoom;
-      }
-      const savedFrequencyLock = localStorage.getItem(FREQ_LOCK_KEY);
-      if (savedFrequencyLock === "1" || savedFrequencyLock === "0") {
-        state.frequencyLock = savedFrequencyLock === "1";
-      } else {
-        state.frequencyLock = defaultFrequencyLockEnabled();
-      }
-      const savedWakeLock = localStorage.getItem(WAKE_LOCK_KEY);
-      if (savedWakeLock === "1" || savedWakeLock === "0") {
-        state.keepScreenAwake = savedWakeLock === "1";
-      } else {
-        state.keepScreenAwake = defaultKeepScreenAwakeEnabled();
-      }
       state.rxNbMode = normalizeNbMode(state.rxNbMode);
       state.rxNbThreshold = clampRxNbThreshold(state.rxNbThreshold);
       state.anfEnabled = Boolean(state.anfEnabled);
@@ -7324,7 +7508,9 @@
         void syncWakeLock(false);
       });
       window.addEventListener("pagehide", () => {
-        sendTxShutdownIfPossible(true);
+        if (state.moxRequested || state.txEnabled || state.twoToneEnabled) {
+          sendTxShutdownIfPossible(true);
+        }
         void saveRemoteSettingsToServer(false);
         void releaseWakeLock();
       });

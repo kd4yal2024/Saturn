@@ -7,6 +7,7 @@ use std::{
 
 use axum::{
     extract::{
+        Path as AxumPath,
         ws::{Message as AxumMessage, WebSocket, WebSocketUpgrade},
         State,
     },
@@ -145,6 +146,7 @@ pub fn remote_tls_router(state: AppState) -> Router {
             post(remote_profiles_startup_handler),
         )
         .route("/tci", get(remote_bridge_ws_handler))
+        .route("/remote-assets/:asset", get(remote_asset_handler))
         .with_state(state.clone())
         .layer(axum::middleware::from_fn_with_state(state, csrf_protect))
 }
@@ -153,7 +155,49 @@ async fn remote_page_handler(headers: HeaderMap, State(state): State<AppState>) 
     if let Err(rejection) = check_remote_basic_auth(&headers) {
         return rejection;
     }
-    serve_page(&state.webroot, "saturn-remote.html").await
+    let mut resp = serve_page(&state.webroot, "saturn-remote.html").await;
+    // Enable SharedArrayBuffer for AudioWorklet ring-buffer audio pipeline.
+    let hdrs = resp.headers_mut();
+    hdrs.insert(
+        header::HeaderName::from_static("cross-origin-opener-policy"),
+        HeaderValue::from_static("same-origin"),
+    );
+    hdrs.insert(
+        header::HeaderName::from_static("cross-origin-embedder-policy"),
+        HeaderValue::from_static("credentialless"),
+    );
+    resp
+}
+
+async fn remote_asset_handler(
+    headers: HeaderMap,
+    AxumPath(asset): AxumPath<String>,
+    State(state): State<AppState>,
+) -> Response {
+    if let Err(rejection) = check_remote_basic_auth(&headers) {
+        return rejection;
+    }
+
+    let filename = match asset.as_str() {
+        "storage.js" => "saturn-remote-storage.js",
+        "session.js" => "saturn-remote-session.js",
+        "tci.js" => "saturn-remote-tci.js",
+        "transport.js" => "saturn-remote-transport.js",
+        "browser.js" => "saturn-remote-browser.js",
+        _ => return (StatusCode::NOT_FOUND, "asset not found").into_response(),
+    };
+
+    match tokio::fs::read(state.webroot.join(filename)).await {
+        Ok(body) => (
+            [
+                (header::CACHE_CONTROL, "no-cache, no-store, must-revalidate"),
+                (header::CONTENT_TYPE, "application/javascript; charset=utf-8"),
+            ],
+            body,
+        )
+            .into_response(),
+        Err(_) => (StatusCode::NOT_FOUND, "asset not found").into_response(),
+    }
 }
 
 pub async fn remote_bridge_ws_handler(
@@ -542,6 +586,39 @@ fn collect_subject_alt_names() -> Vec<SanType> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::{
+        body::{to_bytes, Body},
+        http::{Request, StatusCode},
+    };
+    use tower::ServiceExt;
+
+    fn test_state(name: &str) -> AppState {
+        let pid = std::process::id();
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let tmp = std::env::temp_dir().join(format!("saturn-test-remote-tls-{name}-{pid}-{nanos}"));
+        AppState {
+            webroot: tmp.clone(),
+            config_path: tmp.join("config.json"),
+            custom_scripts_file: tmp.join("custom_scripts.json"),
+            remote_settings_file: tmp.join("remote_settings.json"),
+            remote_profiles_file: tmp.join("remote_profiles.json"),
+            scripts_dir: tmp.join("scripts"),
+            saturn_addr: "127.0.0.1:8080".to_string(),
+            bridge_ws_url: "ws://127.0.0.1:50001".to_string(),
+            repo_root: std::sync::Arc::new(std::sync::RwLock::new(tmp.clone())),
+            repo_root_file: tmp.join("repo_root"),
+            update_policy_file: tmp.join("update_policy.json"),
+            saturngo_update_policy_file: tmp.join("saturngo_policy.json"),
+            saturngo_deploy_status_file: tmp.join("saturngo_deploy.json"),
+            update_state_file: tmp.join("update_state.json"),
+            snapshot_dir: tmp.join("snapshots"),
+            staging_dir: tmp.join("staging"),
+            restore_max_upload_bytes: 2 * 1024 * 1024 * 1024,
+        }
+    }
 
     #[test]
     fn builds_basic_auth_header_from_username_and_password() {
@@ -623,5 +700,149 @@ mod tests {
         let mut headers = HeaderMap::new();
         headers.insert(header::HOST, HeaderValue::from_static("radio.local:8443"));
         assert!(check_ws_origin(&headers).is_err());
+    }
+
+    #[tokio::test]
+    async fn remote_asset_route_serves_known_asset() {
+        let state = test_state("asset-ok");
+        tokio::fs::create_dir_all(&state.webroot).await.unwrap();
+        tokio::fs::write(
+            state.webroot.join("saturn-remote-storage.js"),
+            "window.testStorage = true;",
+        )
+        .await
+        .unwrap();
+
+        let app = remote_tls_router(state);
+        let req = Request::builder()
+            .uri("/remote-assets/storage.js")
+            .body(Body::empty())
+            .unwrap();
+        let res = app.oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        assert_eq!(
+            res.headers().get(header::CONTENT_TYPE).unwrap(),
+            "application/javascript; charset=utf-8"
+        );
+        let body = to_bytes(res.into_body(), 4096).await.unwrap();
+        assert_eq!(body, &b"window.testStorage = true;"[..]);
+    }
+
+    #[tokio::test]
+    async fn remote_asset_route_serves_session_asset() {
+        let state = test_state("asset-session");
+        tokio::fs::create_dir_all(&state.webroot).await.unwrap();
+        tokio::fs::write(
+            state.webroot.join("saturn-remote-session.js"),
+            "window.testSession = true;",
+        )
+        .await
+        .unwrap();
+
+        let app = remote_tls_router(state);
+        let req = Request::builder()
+            .uri("/remote-assets/session.js")
+            .body(Body::empty())
+            .unwrap();
+        let res = app.oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        assert_eq!(
+            res.headers().get(header::CONTENT_TYPE).unwrap(),
+            "application/javascript; charset=utf-8"
+        );
+        let body = to_bytes(res.into_body(), 4096).await.unwrap();
+        assert_eq!(body, &b"window.testSession = true;"[..]);
+    }
+
+    #[tokio::test]
+    async fn remote_asset_route_serves_tci_asset() {
+        let state = test_state("asset-tci");
+        tokio::fs::create_dir_all(&state.webroot).await.unwrap();
+        tokio::fs::write(
+            state.webroot.join("saturn-remote-tci.js"),
+            "window.testTci = true;",
+        )
+        .await
+        .unwrap();
+
+        let app = remote_tls_router(state);
+        let req = Request::builder()
+            .uri("/remote-assets/tci.js")
+            .body(Body::empty())
+            .unwrap();
+        let res = app.oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        assert_eq!(
+            res.headers().get(header::CONTENT_TYPE).unwrap(),
+            "application/javascript; charset=utf-8"
+        );
+        let body = to_bytes(res.into_body(), 4096).await.unwrap();
+        assert_eq!(body, &b"window.testTci = true;"[..]);
+    }
+
+    #[tokio::test]
+    async fn remote_asset_route_serves_transport_asset() {
+        let state = test_state("asset-transport");
+        tokio::fs::create_dir_all(&state.webroot).await.unwrap();
+        tokio::fs::write(
+            state.webroot.join("saturn-remote-transport.js"),
+            "window.testTransport = true;",
+        )
+        .await
+        .unwrap();
+
+        let app = remote_tls_router(state);
+        let req = Request::builder()
+            .uri("/remote-assets/transport.js")
+            .body(Body::empty())
+            .unwrap();
+        let res = app.oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        assert_eq!(
+            res.headers().get(header::CONTENT_TYPE).unwrap(),
+            "application/javascript; charset=utf-8"
+        );
+        let body = to_bytes(res.into_body(), 4096).await.unwrap();
+        assert_eq!(body, &b"window.testTransport = true;"[..]);
+    }
+
+    #[tokio::test]
+    async fn remote_asset_route_serves_browser_asset() {
+        let state = test_state("asset-browser");
+        tokio::fs::create_dir_all(&state.webroot).await.unwrap();
+        tokio::fs::write(
+            state.webroot.join("saturn-remote-browser.js"),
+            "window.testBrowser = true;",
+        )
+        .await
+        .unwrap();
+
+        let app = remote_tls_router(state);
+        let req = Request::builder()
+            .uri("/remote-assets/browser.js")
+            .body(Body::empty())
+            .unwrap();
+        let res = app.oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        assert_eq!(
+            res.headers().get(header::CONTENT_TYPE).unwrap(),
+            "application/javascript; charset=utf-8"
+        );
+        let body = to_bytes(res.into_body(), 4096).await.unwrap();
+        assert_eq!(body, &b"window.testBrowser = true;"[..]);
+    }
+
+    #[tokio::test]
+    async fn remote_asset_route_rejects_unknown_asset() {
+        let state = test_state("asset-missing");
+        tokio::fs::create_dir_all(&state.webroot).await.unwrap();
+
+        let app = remote_tls_router(state);
+        let req = Request::builder()
+            .uri("/remote-assets/nope.js")
+            .body(Body::empty())
+            .unwrap();
+        let res = app.oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::NOT_FOUND);
     }
 }

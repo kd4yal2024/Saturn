@@ -1,0 +1,76 @@
+export type DemodMode = 'USB' | 'LSB' | 'AM' | 'SAM' | 'FM' | 'DIGU' | 'DIGL' | 'CWU' | 'CWL';
+
+export type Passband = {
+  lowHz: number;
+  highHz: number;
+};
+
+export const DEMOD_MODES: readonly DemodMode[] = ['USB', 'LSB', 'AM', 'SAM', 'FM', 'DIGU', 'DIGL', 'CWU', 'CWL'];
+
+const NEGATIVE_PASSBAND_MODES = new Set<DemodMode>(['LSB', 'DIGL', 'CWL']);
+const SYMMETRIC_PASSBAND_MODES = new Set<DemodMode>(['AM', 'SAM', 'FM']);
+
+export function normalizeDemodMode(value: string | undefined | null): DemodMode {
+  const normalized = String(value || '').trim().toUpperCase();
+  return DEMOD_MODES.includes(normalized as DemodMode) ? (normalized as DemodMode) : 'USB';
+}
+
+export function clampDemodMode(value: string | undefined | null): DemodMode {
+  return normalizeDemodMode(value);
+}
+
+export function isNegativePassbandMode(mode: string): boolean {
+  return NEGATIVE_PASSBAND_MODES.has(normalizeDemodMode(mode));
+}
+
+export function isSymmetricPassbandMode(mode: string): boolean {
+  return SYMMETRIC_PASSBAND_MODES.has(normalizeDemodMode(mode));
+}
+
+export function clampFilterLowHz(value: number): number {
+  if (!Number.isFinite(value)) return 50;
+  return Math.max(0, Math.min(300, Math.round(value)));
+}
+
+export function clampFilterHighHz(value: number): number {
+  if (!Number.isFinite(value)) return 3_050;
+  return Math.max(500, Math.min(6_000, Math.round(value)));
+}
+
+export function signedPassbandFromUiCuts(lowCutHz: number, highCutHz: number, mode: string): Passband {
+  const normalized = normalizeDemodMode(mode);
+  const low = clampFilterLowHz(lowCutHz);
+  const high = Math.max(low + 1, clampFilterHighHz(highCutHz));
+
+  if (SYMMETRIC_PASSBAND_MODES.has(normalized)) {
+    const edge = Math.max(Math.abs(low), Math.abs(high));
+    return { lowHz: -edge, highHz: edge };
+  }
+
+  if (NEGATIVE_PASSBAND_MODES.has(normalized)) {
+    return { lowHz: -high, highHz: -low };
+  }
+
+  return { lowHz: low, highHz: high };
+}
+
+export function uiCutsFromSignedPassband(lowHz: number, highHz: number, mode: string): Passband {
+  const normalized = normalizeDemodMode(mode);
+
+  if (SYMMETRIC_PASSBAND_MODES.has(normalized)) {
+    const edge = Math.max(Math.abs(lowHz), Math.abs(highHz));
+    return { lowHz: 0, highHz: clampFilterHighHz(edge) };
+  }
+
+  if (NEGATIVE_PASSBAND_MODES.has(normalized)) {
+    return {
+      lowHz: clampFilterLowHz(Math.abs(highHz)),
+      highHz: clampFilterHighHz(Math.abs(lowHz)),
+    };
+  }
+
+  return {
+    lowHz: clampFilterLowHz(lowHz),
+    highHz: clampFilterHighHz(highHz),
+  };
+}
