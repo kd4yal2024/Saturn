@@ -53,12 +53,22 @@ impl P2Session {
         sample_size_bits: u8,
         adc: u8,
     ) -> io::Result<()> {
+        let effective_ddc = ddc_index.min(9);
+        let effective_adc = adc.min(2);
+        println!(
+            "saturn-bridge: configure RX DDC{} <- ADC{} rate={}k bits={} enable_mask=0x{:04x}",
+            effective_ddc,
+            effective_adc + 1,
+            sample_rate_khz,
+            sample_size_bits,
+            1u16 << effective_ddc
+        );
         self.send_packet(
             self.target_addr(self.config.port_map.ddc_specific),
             &build_ddc_specific_packet(DdcSetup {
-                enable_mask: 1u16 << ddc_index.min(9),
+                enable_mask: 1u16 << effective_ddc,
                 ddc_index,
-                adc,
+                adc: effective_adc,
                 sample_rate_khz,
                 sample_size_bits,
             }),
@@ -103,13 +113,14 @@ impl P2Session {
         let target = self.target_addr(self.config.port_map.high_priority_to_sdr);
         let rx_period = self.config.high_priority_period;
         let tx_period = rx_period.min(Duration::from_millis(10));
+        let tx_100w_drive_byte = self.config.remote_tx_100w_drive_byte;
 
         Ok(thread::spawn(move || {
             let mut prev_tx = false;
             while !stop_flag.load(Ordering::Relaxed) {
                 let state = {
                     let model = radio_model.lock().unwrap();
-                    build_high_priority_state(&model)
+                    build_high_priority_state(&model, tx_100w_drive_byte)
                 };
 
                 if state.tx != prev_tx {
@@ -132,7 +143,10 @@ impl P2Session {
     }
 
     pub fn send_high_priority(&self, model: &RadioModel) -> io::Result<()> {
-        let packet = build_high_priority_to_sdr(&build_high_priority_state(model));
+        let packet = build_high_priority_to_sdr(&build_high_priority_state(
+            model,
+            self.config.remote_tx_100w_drive_byte,
+        ));
         self.send_packet(
             self.target_addr(self.config.port_map.high_priority_to_sdr),
             &packet,
@@ -266,15 +280,55 @@ fn build_ddc_phase_array(model: &RadioModel) -> [u32; 10] {
     phase_words
 }
 
-fn build_high_priority_state(model: &RadioModel) -> HighPriorityToSdr {
+fn tx_drive_watts_to_p2_byte(watts: u8, drive_byte_at_100w: u8) -> u8 {
+    if watts == 0 {
+        return 0;
+    }
+    let calibrated_full_scale = f64::from(drive_byte_at_100w.max(1));
+    let target_watts = f64::from(watts.min(100));
+    let measured_curve_at_68 = [
+        (0.0, 0.0),
+        (5.0, 18.0),
+        (10.0, 24.0),
+        (25.0, 34.0),
+        (50.0, 46.0),
+        (100.0, 68.0),
+    ];
+
+    let mut lower = measured_curve_at_68[0];
+    let mut upper = *measured_curve_at_68.last().unwrap();
+    for window in measured_curve_at_68.windows(2) {
+        if target_watts <= window[1].0 {
+            lower = window[0];
+            upper = window[1];
+            break;
+        }
+    }
+
+    let span = upper.0 - lower.0;
+    let fraction = if span > 0.0 {
+        (target_watts - lower.0) / span
+    } else {
+        0.0
+    };
+    let drive_at_68 = lower.1 + ((upper.1 - lower.1) * fraction);
+    let drive = drive_at_68 * (calibrated_full_scale / 68.0);
+    drive.round().clamp(1.0, calibrated_full_scale) as u8
+}
+
+fn build_high_priority_state(model: &RadioModel, drive_byte_at_100w: u8) -> HighPriorityToSdr {
     HighPriorityToSdr {
         run: model.desired.running,
         tx: model.desired.tx_enabled,
         ddc_phase_words: build_ddc_phase_array(model),
         duc_phase_word: frequency_to_phase_word(model.desired.tx_frequency_hz),
-        tx_drive: (model.desired.tx_drive as u16 * 255 / 100) as u8,
+        tx_drive: tx_drive_watts_to_p2_byte(model.desired.tx_drive, drive_byte_at_100w),
         cat_port: 0,
-        alex_tx_word: build_alex_tx_word(model.desired.tx_frequency_hz, 1),
+        alex_tx_word: build_alex_tx_word(
+            model.desired.tx_frequency_hz,
+            1,
+            model.desired.tx_enabled,
+        ),
         alex_rx_word: build_alex_legacy_tx_word(
             model.desired.tx_frequency_hz,
             model.desired.rx_antenna,
@@ -292,8 +346,12 @@ fn frequency_to_phase_word(frequency_hz: u32) -> u32 {
     ((clamped as f64) * (4_294_967_296.0 / 122_880_000.0)) as u32
 }
 
-fn build_alex_tx_word(frequency_hz: u32, antenna: u8) -> u16 {
-    alex_tx_filter_bits(frequency_hz) | alex_antenna_bits(antenna) | ALEX_TX_RELAY_BIT
+fn build_alex_tx_word(frequency_hz: u32, antenna: u8, tx_active: bool) -> u16 {
+    let mut word = alex_tx_filter_bits(frequency_hz) | alex_antenna_bits(antenna);
+    if tx_active {
+        word |= ALEX_TX_RELAY_BIT;
+    }
+    word
 }
 
 fn build_alex_legacy_tx_word(frequency_hz: u32, antenna: u8, tx_active: bool) -> u16 {
@@ -352,7 +410,7 @@ mod tests {
 
     #[test]
     fn active_rx_ddc_uses_selected_slot_and_delta_phase() {
-        let mut model = RadioModel::new(2, 14_200_000, 0, 192, 24);
+        let mut model = RadioModel::new(2, 14_200_000, 0, 192, 24, 2048, true, 4096, true);
         model.desired.rx_ddc_index = 2;
         model.desired.iq_center_hz = 14_200_000;
 
@@ -372,9 +430,13 @@ mod tests {
     }
 
     #[test]
-    fn saturn_tx_words_carry_pa_and_tx_relay_bits() {
+    fn saturn_tx_words_only_carry_tx_relay_when_active() {
         assert_eq!(
-            build_alex_tx_word(14_200_000, 1) & ALEX_TX_RELAY_BIT,
+            build_alex_tx_word(14_200_000, 1, false) & ALEX_TX_RELAY_BIT,
+            0
+        );
+        assert_eq!(
+            build_alex_tx_word(14_200_000, 1, true) & ALEX_TX_RELAY_BIT,
             ALEX_TX_RELAY_BIT
         );
         assert_eq!(
@@ -385,5 +447,27 @@ mod tests {
             build_alex_legacy_tx_word(14_200_000, 1, true) & ALEX_TX_RELAY_BIT,
             ALEX_TX_RELAY_BIT
         );
+    }
+
+    #[test]
+    fn tx_drive_watts_uses_measured_power_curve() {
+        assert_eq!(tx_drive_watts_to_p2_byte(0, 68), 0);
+        assert_eq!(tx_drive_watts_to_p2_byte(1, 68), 4);
+        assert_eq!(tx_drive_watts_to_p2_byte(5, 68), 18);
+        assert_eq!(tx_drive_watts_to_p2_byte(10, 68), 24);
+        assert_eq!(tx_drive_watts_to_p2_byte(25, 68), 34);
+        assert_eq!(tx_drive_watts_to_p2_byte(37, 68), 40);
+        assert_eq!(tx_drive_watts_to_p2_byte(50, 68), 46);
+        assert_eq!(tx_drive_watts_to_p2_byte(100, 68), 68);
+    }
+
+    #[test]
+    fn high_priority_tx_drive_is_watt_target_not_percent_full_scale() {
+        let mut model = RadioModel::new(2, 14_200_000, 0, 192, 24, 2048, true, 4096, true);
+        model.desired.tx_drive = 50;
+
+        let state = build_high_priority_state(&model, 68);
+
+        assert_eq!(state.tx_drive, 46);
     }
 }

@@ -14,6 +14,13 @@ use crate::config::BridgeConfig;
 use crate::radio_model::{AgcMode, DemodMode, NoiseBlankerMode, NoiseReductionMode, RadioModel};
 
 #[derive(Clone, Debug)]
+pub struct TciMicFrame {
+    pub sample_rate_hz: u32,
+    pub channels: u32,
+    pub samples: Vec<f32>,
+}
+
+#[derive(Clone, Debug)]
 pub enum TciCommand {
     SetVfoA(u32),
     SetVfoB(u32),
@@ -82,7 +89,13 @@ pub enum TciCommand {
     SetTxTwoToneLevelDb(f64),
     SetTxTwoToneInvertLsb(bool),
     SetTxTwoToneDelayMs(u16),
-    MicAudioFrame(Vec<f32>),
+    SetTxNoiseGateEnabled(bool),
+    SetTxNoiseGateThreshold(f64),
+    SetRxFftSize(u32),
+    SetRxLowLatency(bool),
+    SetTxFftSize(u32),
+    SetTxLowLatency(bool),
+    MicAudioFrame(TciMicFrame),
     ClientConnected,
     ClientDisconnected,
 }
@@ -91,6 +104,11 @@ pub enum TciCommand {
 enum OutboundMessage {
     Text(String),
     IqFrame {
+        receiver: u32,
+        sample_rate: u32,
+        iq_samples: Vec<f32>,
+    },
+    TxIqFrame {
         receiver: u32,
         sample_rate: u32,
         iq_samples: Vec<f32>,
@@ -121,6 +139,14 @@ pub struct TciFrontend {
     client_state: Arc<Mutex<ClientState>>,
     drop_count: Arc<AtomicU64>,
     _accept_thread: JoinGuard,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct TciClientSnapshot {
+    pub active: bool,
+    pub iq_stream_enabled: bool,
+    pub audio_stream_enabled: bool,
+    pub outbound_drops: u64,
 }
 
 struct JoinGuard {
@@ -195,6 +221,16 @@ impl TciFrontend {
         self.command_rx.try_recv().ok()
     }
 
+    pub fn client_snapshot(&self) -> TciClientSnapshot {
+        let flags = self.client_state.lock().unwrap();
+        TciClientSnapshot {
+            active: self.outbound_tx.lock().unwrap().is_some(),
+            iq_stream_enabled: flags.iq_stream_enabled,
+            audio_stream_enabled: flags.audio_stream_enabled,
+            outbound_drops: self.drop_count.load(Ordering::Relaxed),
+        }
+    }
+
     pub fn publish_radio_state(&self, model: &RadioModel) {
         self.send_text(format!("vfo:0,0,{};", model.desired.vfo_a_hz));
         self.send_text(format!("vfo:0,1,{};", model.desired.vfo_b_hz));
@@ -254,6 +290,7 @@ impl TciFrontend {
             model.desired.tx_mic_gain_db
         ));
         self.send_text(format!("trx:0,{};", model.desired.tx_enabled));
+        self.send_text(format!("tx_state:0,{};", model.desired.tx_phase));
         self.send_text(format!(
             "tx_filter_band:0,{},{};",
             model.desired.tx_filter_low_hz, model.desired.tx_filter_high_hz
@@ -303,6 +340,24 @@ impl TciFrontend {
             "tx_two_tone_delay_ms:0,{};",
             model.desired.tx_two_tone_delay_ms
         ));
+        self.send_text(format!(
+            "tx_noise_gate:0,{};",
+            model.desired.tx_noise_gate_enabled
+        ));
+        self.send_text(format!(
+            "tx_noise_gate_threshold:0,{:.1};",
+            model.desired.tx_noise_gate_threshold_db
+        ));
+        self.send_text(format!("rx_fft_size:0,{};", model.desired.rx_fft_size));
+        self.send_text(format!(
+            "rx_low_latency:0,{};",
+            model.desired.rx_low_latency
+        ));
+        self.send_text(format!("tx_fft_size:0,{};", model.desired.tx_fft_size));
+        self.send_text(format!(
+            "tx_low_latency:0,{};",
+            model.desired.tx_low_latency
+        ));
         self.send_text("tune:0,false;".to_string());
         self.publish_telemetry(model);
     }
@@ -332,6 +387,18 @@ impl TciFrontend {
         }
 
         self.send_message(OutboundMessage::IqFrame {
+            receiver: 0,
+            sample_rate: sample_rate_hz,
+            iq_samples: iq_samples.to_vec(),
+        });
+    }
+
+    pub fn publish_tx_iq_frame(&self, sample_rate_hz: u32, iq_samples: &[f32]) {
+        if !self.is_iq_stream_enabled() {
+            return;
+        }
+
+        self.send_message(OutboundMessage::TxIqFrame {
             receiver: 0,
             sample_rate: sample_rate_hz,
             iq_samples: iq_samples.to_vec(),
@@ -583,6 +650,7 @@ fn initial_snapshot_messages(model: &RadioModel) -> Vec<String> {
         format!("tx_drive:0,{};", model.desired.tx_drive),
         format!("tx_mic_gain:0,{:.1};", model.desired.tx_mic_gain_db),
         format!("trx:0,{};", model.desired.tx_enabled),
+        format!("tx_state:0,{};", model.desired.tx_phase),
         format!(
             "tx_filter_band:0,{},{};",
             model.desired.tx_filter_low_hz, model.desired.tx_filter_high_hz
@@ -626,6 +694,18 @@ fn initial_snapshot_messages(model: &RadioModel) -> Vec<String> {
             "tx_two_tone_delay_ms:0,{};",
             model.desired.tx_two_tone_delay_ms
         ),
+        format!(
+            "tx_noise_gate:0,{};",
+            model.desired.tx_noise_gate_enabled
+        ),
+        format!(
+            "tx_noise_gate_threshold:0,{:.1};",
+            model.desired.tx_noise_gate_threshold_db
+        ),
+        format!("rx_fft_size:0,{};", model.desired.rx_fft_size),
+        format!("rx_low_latency:0,{};", model.desired.rx_low_latency),
+        format!("tx_fft_size:0,{};", model.desired.tx_fft_size),
+        format!("tx_low_latency:0,{};", model.desired.tx_low_latency),
         "tune:0,false;".to_string(),
         "audio_samplerate:48000;".to_string(),
     ])
@@ -649,8 +729,8 @@ fn handle_incoming_message(
             true
         }
         Message::Binary(data) => {
-            if let Some(samples) = parse_tci_mic_frame(&data) {
-                let _ = command_tx.send(TciCommand::MicAudioFrame(samples));
+            if let Some(frame) = parse_tci_mic_frame(&data) {
+                let _ = command_tx.send(TciCommand::MicAudioFrame(frame));
             }
             true
         }
@@ -1237,6 +1317,80 @@ fn parse_tci_command(
                 }
             }
         }
+        "tx_noise_gate" => {
+            let enabled_arg = if args.len() >= 2 {
+                args.get(1)
+            } else {
+                args.first()
+            };
+            if let Some(enabled_text) = enabled_arg {
+                if let Some(enabled) = parse_tci_bool(enabled_text) {
+                    let _ = command_tx.send(TciCommand::SetTxNoiseGateEnabled(enabled));
+                }
+            }
+        }
+        "tx_noise_gate_threshold" => {
+            let thresh_arg = if args.len() >= 2 {
+                args.get(1)
+            } else {
+                args.first()
+            };
+            if let Some(thresh_text) = thresh_arg {
+                if let Ok(thresh_db) = thresh_text.trim().parse::<f64>() {
+                    let clamped = thresh_db.clamp(-80.0, 0.0);
+                    let _ =
+                        command_tx.send(TciCommand::SetTxNoiseGateThreshold(clamped));
+                }
+            }
+        }
+        "rx_fft_size" => {
+            let size_arg = if args.len() >= 2 {
+                args.get(1)
+            } else {
+                args.first()
+            };
+            if let Some(text) = size_arg {
+                if let Ok(size) = text.trim().parse::<u32>() {
+                    let _ = command_tx.send(TciCommand::SetRxFftSize(size));
+                }
+            }
+        }
+        "rx_low_latency" => {
+            let val_arg = if args.len() >= 2 {
+                args.get(1)
+            } else {
+                args.first()
+            };
+            if let Some(text) = val_arg {
+                if let Some(val) = parse_tci_bool(text) {
+                    let _ = command_tx.send(TciCommand::SetRxLowLatency(val));
+                }
+            }
+        }
+        "tx_fft_size" => {
+            let size_arg = if args.len() >= 2 {
+                args.get(1)
+            } else {
+                args.first()
+            };
+            if let Some(text) = size_arg {
+                if let Ok(size) = text.trim().parse::<u32>() {
+                    let _ = command_tx.send(TciCommand::SetTxFftSize(size));
+                }
+            }
+        }
+        "tx_low_latency" => {
+            let val_arg = if args.len() >= 2 {
+                args.get(1)
+            } else {
+                args.first()
+            };
+            if let Some(text) = val_arg {
+                if let Some(val) = parse_tci_bool(text) {
+                    let _ = command_tx.send(TciCommand::SetTxLowLatency(val));
+                }
+            }
+        }
         _ => {}
     }
 }
@@ -1245,17 +1399,24 @@ fn parse_tci_command(
 /// Frame layout: 64-byte header + f32 LE samples.
 ///   header[20..24] = sample_count (u32 LE)
 ///   header[24..28] = stream_type  (u32 LE); must be 2 (TX mic)
+///   header[28..32] = channels     (u32 LE); 1=mono, 2=stereo
 ///
 /// stream_type == 1 is intentionally excluded: it is the RX audio type used by
 /// the server→client direction and must not be fed into the TX DSP path.
-fn parse_tci_mic_frame(data: &[u8]) -> Option<Vec<f32>> {
+fn parse_tci_mic_frame(data: &[u8]) -> Option<TciMicFrame> {
     if data.len() < 68 {
         return None; // need at least header + 1 sample
     }
+    let sample_rate_hz = u32::from_le_bytes(data[4..8].try_into().ok()?);
     let stream_type = u32::from_le_bytes(data[24..28].try_into().ok()?);
     if stream_type != 2 {
         return None;
     }
+    let raw_channels = u32::from_le_bytes(data[28..32].try_into().ok()?);
+    let channels = match raw_channels {
+        0 | 1 => 1,
+        _ => 2,
+    };
     let sample_count = u32::from_le_bytes(data[20..24].try_into().ok()?) as usize;
     if sample_count == 0 || sample_count > MAX_TCI_MIC_FLOAT_SAMPLES {
         return None;
@@ -1269,7 +1430,11 @@ fn parse_tci_mic_frame(data: &[u8]) -> Option<Vec<f32>> {
         let bytes: [u8; 4] = payload[i * 4..i * 4 + 4].try_into().ok()?;
         samples.push(f32::from_le_bytes(bytes));
     }
-    Some(samples)
+    Some(TciMicFrame {
+        sample_rate_hz,
+        channels,
+        samples,
+    })
 }
 
 fn tci_websocket_config() -> WebSocketConfig {
@@ -1295,6 +1460,15 @@ fn send_outbound(
             sample_rate,
             &iq_samples,
         ))),
+        OutboundMessage::TxIqFrame {
+            receiver,
+            sample_rate,
+            iq_samples,
+        } => websocket.send(Message::Binary(build_tci_tx_iq_frame(
+            receiver,
+            sample_rate,
+            &iq_samples,
+        ))),
         OutboundMessage::AudioFrame {
             receiver,
             sample_rate,
@@ -1309,6 +1483,10 @@ fn send_outbound(
 
 fn build_tci_iq_frame(receiver: u32, sample_rate: u32, iq_samples: &[f32]) -> Vec<u8> {
     build_tci_float_frame(receiver, sample_rate, iq_samples, 0, 2)
+}
+
+fn build_tci_tx_iq_frame(receiver: u32, sample_rate: u32, iq_samples: &[f32]) -> Vec<u8> {
+    build_tci_float_frame(receiver, sample_rate, iq_samples, 3, 2)
 }
 
 fn build_tci_audio_frame(receiver: u32, sample_rate: u32, audio_samples: &[f32]) -> Vec<u8> {
@@ -1401,6 +1579,15 @@ mod tests {
     }
 
     #[test]
+    fn builds_tx_iq_frame_with_distinct_stream_type() {
+        let frame = build_tci_tx_iq_frame(0, 192_000, &[0.25, -0.25, 0.5, -0.5]);
+        assert_eq!(frame.len(), 64 + 16);
+        assert_eq!(u32::from_le_bytes(frame[4..8].try_into().unwrap()), 192_000);
+        assert_eq!(u32::from_le_bytes(frame[24..28].try_into().unwrap()), 3);
+        assert_eq!(u32::from_le_bytes(frame[28..32].try_into().unwrap()), 2);
+    }
+
+    #[test]
     fn builds_audio_frame_with_expected_header() {
         let frame = build_tci_audio_frame(0, 48_000, &[0.25, -0.25, 0.5, -0.5]);
         assert_eq!(frame.len(), 64 + 16);
@@ -1417,6 +1604,40 @@ mod tests {
         write_u32_le(&mut frame, 24, 2);
         frame.resize(64 + sample_count as usize * 4, 0);
         assert!(parse_tci_mic_frame(&frame).is_none());
+    }
+
+    #[test]
+    fn parses_mono_tci_mic_frame_with_channel_metadata() {
+        let mut frame = vec![0u8; 64 + 8];
+        write_u32_le(&mut frame, 4, 48_000);
+        write_u32_le(&mut frame, 20, 2);
+        write_u32_le(&mut frame, 24, 2);
+        write_u32_le(&mut frame, 28, 1);
+        frame[64..68].copy_from_slice(&0.25f32.to_le_bytes());
+        frame[68..72].copy_from_slice(&(-0.5f32).to_le_bytes());
+
+        let parsed = parse_tci_mic_frame(&frame).unwrap();
+        assert_eq!(parsed.sample_rate_hz, 48_000);
+        assert_eq!(parsed.channels, 1);
+        assert_eq!(parsed.samples, vec![0.25, -0.5]);
+    }
+
+    #[test]
+    fn parses_stereo_tci_mic_frame_with_channel_metadata() {
+        let mut frame = vec![0u8; 64 + 16];
+        write_u32_le(&mut frame, 4, 48_000);
+        write_u32_le(&mut frame, 20, 4);
+        write_u32_le(&mut frame, 24, 2);
+        write_u32_le(&mut frame, 28, 2);
+        for (index, sample) in [0.25f32, -0.25, 0.5, -0.5].iter().enumerate() {
+            let offset = 64 + index * 4;
+            frame[offset..offset + 4].copy_from_slice(&sample.to_le_bytes());
+        }
+
+        let parsed = parse_tci_mic_frame(&frame).unwrap();
+        assert_eq!(parsed.sample_rate_hz, 48_000);
+        assert_eq!(parsed.channels, 2);
+        assert_eq!(parsed.samples, vec![0.25, -0.25, 0.5, -0.5]);
     }
 
     #[test]

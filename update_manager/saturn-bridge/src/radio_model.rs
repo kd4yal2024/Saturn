@@ -210,10 +210,29 @@ impl AgcMode {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum TxPhase {
+    #[default]
+    Rx,
+    Armed,
+    Keyed,
+}
+
+impl fmt::Display for TxPhase {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Rx => write!(f, "rx"),
+            Self::Armed => write!(f, "armed"),
+            Self::Keyed => write!(f, "keyed"),
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct DesiredRadioState {
     pub running: bool,
     pub tx_enabled: bool,
+    pub tx_phase: TxPhase,
     pub rx_ddc_index: u8,
     pub vfo_a_hz: u32,
     pub vfo_b_hz: u32,
@@ -242,6 +261,8 @@ pub struct DesiredRadioState {
     pub filter_high_hz: i32,
     pub ddc0_sample_rate_khz: u16,
     pub ddc0_sample_size_bits: u8,
+    /// Remote TX power target in watts. The P2 drive byte is derived from this
+    /// target in the high-priority packet builder.
     pub tx_drive: u8,
     pub tx_mic_gain_db: f64,
     pub tx_filter_low_hz: i32,
@@ -259,6 +280,12 @@ pub struct DesiredRadioState {
     pub tx_two_tone_level_db: f64,
     pub tx_two_tone_invert_lsb: bool,
     pub tx_two_tone_delay_ms: u16,
+    pub rx_fft_size: u32,
+    pub rx_low_latency: bool,
+    pub tx_fft_size: u32,
+    pub tx_low_latency: bool,
+    pub tx_noise_gate_enabled: bool,
+    pub tx_noise_gate_threshold_db: f64,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -284,6 +311,10 @@ impl RadioModel {
         ddc0_adc: u8,
         ddc0_sample_rate_khz: u16,
         ddc0_sample_size_bits: u8,
+        rx_fft_size: u32,
+        rx_low_latency: bool,
+        tx_fft_size: u32,
+        tx_low_latency: bool,
     ) -> Self {
         let mode = DemodMode::Usb;
         let (filter_low_hz, filter_high_hz) = mode.default_filter_band();
@@ -292,6 +323,7 @@ impl RadioModel {
             desired: DesiredRadioState {
                 running: false,
                 tx_enabled: false,
+                tx_phase: TxPhase::Rx,
                 rx_ddc_index: rx_ddc_index.min(9),
                 vfo_a_hz: ddc0_frequency_hz,
                 vfo_b_hz: ddc0_frequency_hz,
@@ -301,8 +333,8 @@ impl RadioModel {
                 rx_antenna: 1,
                 mode,
                 rx_volume_db: -10.0,
-                rx_noise_reduction_mode: NoiseReductionMode::Nr2,
-                rx_noise_reduction_level: 100.0,
+                rx_noise_reduction_mode: NoiseReductionMode::Off,
+                rx_noise_reduction_level: 0.0,
                 nb_mode: NoiseBlankerMode::Off,
                 nb_threshold: 4.95,
                 rx_anr_taps: 64,
@@ -320,7 +352,7 @@ impl RadioModel {
                 filter_high_hz,
                 ddc0_sample_rate_khz,
                 ddc0_sample_size_bits,
-                tx_drive: 100,
+                tx_drive: 10,
                 tx_mic_gain_db: 0.0,
                 tx_filter_low_hz,
                 tx_filter_high_hz,
@@ -337,6 +369,12 @@ impl RadioModel {
                 tx_two_tone_level_db: 0.0,
                 tx_two_tone_invert_lsb: true,
                 tx_two_tone_delay_ms: 0,
+                rx_fft_size,
+                rx_low_latency,
+                tx_fft_size,
+                tx_low_latency,
+                tx_noise_gate_enabled: true,
+                tx_noise_gate_threshold_db: -30.0,
             },
             observed: ObservedRadioState::default(),
         }
@@ -426,7 +464,7 @@ impl RadioModel {
             .unwrap_or_else(|| format!("ddc{}=waiting", self.desired.rx_ddc_index));
 
         format!(
-            "vfoA={} vfoB={} dds={} ddc={} adc={} rxant=ANT{} mode={} vol={:.1}dB nr={}({:.0}%) nb={} anf={} agc={} top={:.0} tx={} drive={} filter={}..{} rate={}k {} | {} | {} | counters hp={} ddc{}={}",
+            "vfoA={} vfoB={} dds={} ddc={} adc={} rxant=ANT{} mode={} vol={:.1}dB nr={}({:.0}%) nb={} anf={} agc={} top={:.0} tx={} target={}W filter={}..{} rate={}k {} | {} | {} | counters hp={} ddc{}={}",
             self.desired.vfo_a_hz,
             self.desired.vfo_b_hz,
             self.desired.iq_center_hz,

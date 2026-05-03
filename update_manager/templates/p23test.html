@@ -213,6 +213,23 @@
     .note-list { display:grid; gap:7px; font-size:14px; }
     .terminal-card { margin-top: 16px; }
     .terminal-head { margin-bottom: 10px; }
+    .tab-row {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin: 0 0 16px 0;
+    }
+    .tab-btn[aria-selected="true"] {
+      background: #184ea8;
+      border-color: #2a63c6;
+      color: #fff;
+    }
+    body.light .tab-btn[aria-selected="true"] {
+      background: #2563eb;
+      border-color: #1d4ed8;
+      color: #fff;
+    }
+    .lab-panel[hidden] { display: none; }
     hr { border:0; border-top:1px solid rgba(255,255,255,0.08); margin: 12px 0; }
     body.light hr { border-top-color: rgba(15,23,42,0.08); }
     @media (max-width: 1180px) {
@@ -294,6 +311,8 @@
           <div class="row">
             <button id="p23-perf-refresh" class="btn">Refresh</button>
             <button id="p23-perf-reset" class="btn">Reset Baseline</button>
+            <button id="p23-baseline-copy" class="btn">Copy Baseline</button>
+            <button id="p23-baseline-download" class="btn">Download Baseline</button>
             <button id="p23-perf-snapshot" class="btn">Capture Snapshot</button>
           </div>
         </div>
@@ -301,7 +320,12 @@
       </div>
     </div>
 
-    <div class="main-grid">
+    <div class="tab-row" role="tablist" aria-label="Service Lab views">
+      <button id="tab-p23" class="btn tab-btn" role="tab" aria-controls="panel-p23" aria-selected="true">p2app Service</button>
+      <button id="tab-bridge" class="btn tab-btn" role="tab" aria-controls="panel-bridge" aria-selected="false">Bridge Diagnostics</button>
+    </div>
+
+    <div id="panel-p23" class="lab-panel main-grid" role="tabpanel" aria-labelledby="tab-p23">
       <div class="card">
         <div class="section-kicker">Control Plane</div>
         <h2 style="margin:4px 0 10px 0; font-size: 24px;">Actions</h2>
@@ -405,6 +429,47 @@
       </div>
     </div>
 
+    <div id="panel-bridge" class="lab-panel" role="tabpanel" aria-labelledby="tab-bridge" hidden>
+      <div class="main-grid">
+        <div class="card">
+          <div class="row space">
+            <div>
+              <div class="section-kicker">saturn-bridge.service</div>
+              <h2 style="margin:4px 0 0 0; font-size: 24px;">Bridge Diagnostics</h2>
+            </div>
+            <div class="row">
+              <button id="bridge-diag-refresh" class="btn">Refresh</button>
+              <button id="bridge-diag-copy" class="btn">Copy JSON</button>
+              <button id="bridge-diag-download" class="btn">Download</button>
+            </div>
+          </div>
+          <div id="bridge-diag-summary" class="summary" style="margin-top:10px;">Loading bridge diagnostics...</div>
+          <div id="bridge-diag-dashboard" class="dashboard-grid" style="margin-top:14px;">
+            <div class="metric"><div class="metric-label">Loading</div><div class="metric-value">Waiting...</div></div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="section-kicker">Latest Status</div>
+          <h2 style="margin:4px 0 10px 0; font-size: 24px;">Bridge Log Stream</h2>
+          <div class="details-stack">
+            <details open>
+              <summary>Latest Bridge Diagnostics</summary>
+              <pre id="bridge-diag-lines" class="term compact"></pre>
+            </details>
+            <details>
+              <summary>Latest Bridge Status / TX Lines</summary>
+              <pre id="bridge-status-lines" class="term compact"></pre>
+            </details>
+            <details>
+              <summary>Raw Bridge JSON</summary>
+              <pre id="bridge-diag-raw" class="term compact"></pre>
+            </details>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <div class="card terminal-card">
       <div class="row space terminal-head">
         <div>
@@ -467,6 +532,9 @@ let latestP23Perf = null;
 let latestDerivedPerf = null;
 let latestPerfAlertState = null;
 let latestCapturedSnapshot = null;
+let bridgeDiagPollTimer = null;
+let bridgeDiagPollInFlight = false;
+let latestBridgeDiag = null;
 const PERF_THRESH = {
   cpuCoreWarn: 60,
   cpuCoreCrit: 90,
@@ -579,6 +647,24 @@ function setPerfDashboardHtml(html){
 }
 function setPerfRawText(text){
   $('p23-perf-raw').textContent = text || '';
+}
+function setBridgeDiagSummary(text, isError=false){
+  const el = $('bridge-diag-summary');
+  if (!el) return;
+  el.textContent = text || '';
+  el.style.color = isError ? '#fca5a5' : '';
+}
+function setBridgeDiagDashboardHtml(html){
+  const el = $('bridge-diag-dashboard');
+  if (el) el.innerHTML = html || '';
+}
+function setBridgeDiagText(diag){
+  const raw = $('bridge-diag-raw');
+  const diagLines = $('bridge-diag-lines');
+  const statusLines = $('bridge-status-lines');
+  if (raw) raw.textContent = JSON.stringify(diag || {}, null, 2);
+  if (diagLines) diagLines.textContent = (diag?.journal?.diag_lines || []).join('\n');
+  if (statusLines) statusLines.textContent = (diag?.journal?.status_lines || []).join('\n');
 }
 function setSnapshotSummary(text, isError=false){
   const el = $('p23-snapshot-summary');
@@ -844,6 +930,37 @@ function buildPerfSnapshot(){
     status: jsonSafe({ p23: latestP23Status || null }),
   };
 }
+function buildBaselineSnapshot(){
+  if (!perfBaseline || !perfBaseline.samples) return null;
+  const now = new Date();
+  return {
+    captured_at_ms: now.getTime(),
+    captured_at_iso: now.toISOString(),
+    page: {
+      path: window.location.pathname,
+      workload_summary: $('p23-workload-summary').textContent || '',
+      perf_summary: $('p23-perf-summary').textContent || '',
+      alert_level: latestPerfAlertState?.level || 'ok',
+    },
+    workload_key: latestP23Perf?.workload?.workload_key || '',
+    selected_app: latestP23Perf?.workload?.selected_app || '',
+    startup_mode: latestP23Perf?.workload?.startup_mode || '',
+    panel_mode: latestP23Perf?.workload?.panel_mode || '',
+    baseline: jsonSafe(serializePerfBaseline(perfBaseline)),
+    service_runtime: jsonSafe(latestP23Status?.service_runtime || null),
+    latest_sample_summary: jsonSafe(latestDerivedPerf ? {
+      pid: latestDerivedPerf.pid,
+      cpu_pct_core: latestDerivedPerf.cpuPctCore,
+      rss_mb: latestDerivedPerf.rssMb,
+      scheduler_delay_ms_per_sec: latestDerivedPerf.schedDelayMsPerSec,
+      ddc_packets_per_sec: latestDerivedPerf.ddcPps,
+      duc_packets_per_sec: latestDerivedPerf.ducPps,
+      xdma_irq_per_sec: latestDerivedPerf.xdmaIrqPerSec,
+      xdma_irq_per_mib: latestDerivedPerf.xdmaIrqPerMiB,
+    } : null),
+    alerts: jsonSafe(latestPerfAlertState?.alerts || []),
+  };
+}
 function renderCapturedSnapshot(snapshot){
   latestCapturedSnapshot = snapshot;
   const text = JSON.stringify(snapshot, null, 2);
@@ -890,6 +1007,39 @@ function capturePerfSnapshot(){
   }
   renderCapturedSnapshot(snapshot);
 }
+async function copyBaselineSnapshot(){
+  const snapshot = buildBaselineSnapshot();
+  if (!snapshot){
+    setPerfSummary('No baseline samples available yet. Wait for performance polling, then copy again.', true);
+    return;
+  }
+  const text = JSON.stringify(snapshot, null, 2);
+  try{
+    await copyTextWithFallback(text);
+    setPerfSummary(`Copied baseline snapshot | ${snapshot.baseline?.samples || 0} samples | ${snapshot.page.alert_level.toUpperCase()}`, false);
+  }catch(e){
+    setPerfSummary('Failed to copy baseline snapshot: ' + e.message, true);
+  }
+}
+function downloadBaselineSnapshot(){
+  const snapshot = buildBaselineSnapshot();
+  if (!snapshot){
+    setPerfSummary('No baseline samples available yet. Wait for performance polling, then download again.', true);
+    return;
+  }
+  const text = JSON.stringify(snapshot, null, 2);
+  const blob = new Blob([text], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  const stamp = snapshotTimestampTag(new Date(snapshot.captured_at_ms));
+  a.href = url;
+  a.download = `p23-baseline-snapshot-${stamp}.json`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+  setPerfSummary(`Downloaded baseline snapshot | ${snapshot.baseline?.samples || 0} samples | ${snapshot.page.alert_level.toUpperCase()}`, false);
+}
 function counterValue(counters, key){
   return Number(counters?.[key]) || 0;
 }
@@ -920,6 +1070,129 @@ function metricCard(label, value, sub=''){
       <div class="metric-sub">${escapeHtml(sub)}</div>
     </div>
   `;
+}
+function bridgeField(fields, key){
+  const value = fields?.[key];
+  if (value === null || typeof value === 'undefined') return null;
+  return value;
+}
+function formatBridgeSummary(bridge){
+  if (!bridge || typeof bridge !== 'object') return 'No bridge diagnostic data.';
+  const svc = bridge.service || {};
+  const latest = bridge.journal?.latest_diag || {};
+  const fields = latest.fields || {};
+  const active = svc.active || 'unknown';
+  const client = bridgeField(fields, 'client');
+  const hp = bridgeField(fields, 'hp_s');
+  const ddc = bridgeField(fields, 'ddc_s');
+  const txState = bridgeField(fields, 'state') || 'idle';
+  const mic = bridgeField(fields, 'tci_mic_frames_s');
+  const drops = bridgeField(fields, 'outbound_drops');
+  return `saturn-bridge ${active} | client ${client ?? 'n/a'} | HP ${hp ?? 'n/a'}/s | DDC ${ddc ?? 'n/a'}/s | TX ${txState} | mic ${mic ?? 'n/a'}/s | drops ${drops ?? 'n/a'}`;
+}
+function renderBridgeDashboard(bridge){
+  const fields = bridge?.journal?.latest_diag?.fields || {};
+  const service = bridge?.service || {};
+  const latestStatus = bridge?.journal?.latest_status || 'no status line yet';
+  return [
+    metricCard('Service', service.active || 'unknown', `enabled ${service.enabled || 'unknown'} | pid ${service.main_pid || 'n/a'}`),
+    metricCard('TCI Client', String(bridgeField(fields, 'client') ?? 'n/a'), `IQ ${bridgeField(fields, 'iq') ?? 'n/a'} | audio ${bridgeField(fields, 'audio') ?? 'n/a'} | drops ${bridgeField(fields, 'outbound_drops') ?? 'n/a'}`),
+    metricCard('P2 Packet Rate', `${bridgeField(fields, 'hp_s') ?? 'n/a'} HP/s`, `DDC ${bridgeField(fields, 'ddc_s') ?? 'n/a'} /s`),
+    metricCard('RX Audio', `${bridgeField(fields, 'rx_audio_frames_s') ?? 'n/a'} frames/s`, `${bridgeField(fields, 'rx_audio_samples_s') ?? 'n/a'} samples/s`),
+    metricCard('Browser Mic', `${bridgeField(fields, 'tci_mic_frames_s') ?? 'n/a'} frames/s`, `${bridgeField(fields, 'tci_mic_samples_s') ?? 'n/a'} samples/s`),
+    metricCard('TX State', String(bridgeField(fields, 'state') || 'idle'), `RF ${bridgeField(fields, 'rf') ?? 'n/a'} | mic_recent ${bridgeField(fields, 'mic_recent') ?? 'n/a'} | armed ${bridgeField(fields, 'armed_ms') ?? 'n/a'} ms | keyed ${bridgeField(fields, 'keyed_ms') ?? 'n/a'} ms`),
+    metricCard('TX Timing', `mic ${bridgeField(fields, 'first_mic_ms') ?? 'n/a'} ms`, `IQ ${bridgeField(fields, 'first_iq_ms') ?? 'n/a'} ms | keyable_iq ${bridgeField(fields, 'first_keyable_iq_ms') ?? 'n/a'} ms | DUC ${bridgeField(fields, 'duc_packets') ?? 'n/a'} packets`),
+    metricCard('TX Levels', `in ${bridgeField(fields, 'in_pk') ?? 'n/a'}`, `out ${bridgeField(fields, 'out_pk') ?? 'n/a'} | WDSP out ${bridgeField(fields, 'out_pk_db') ?? 'n/a'} dB`),
+    metricCard('TX DSP', `mic ${bridgeField(fields, 'mic_pk_db') ?? 'n/a'} dB`, `comp ${bridgeField(fields, 'comp_pk_db') ?? 'n/a'} / ${bridgeField(fields, 'comp_avg_db') ?? 'n/a'} dB | ALC ${bridgeField(fields, 'alc_pk_db') ?? 'n/a'} / ${bridgeField(fields, 'alc_avg_db') ?? 'n/a'} dB / gain ${bridgeField(fields, 'alc_gain_db') ?? 'n/a'} dB`),
+    metricCard('TX Queues', `mic ${bridgeField(fields, 'pending_mic') ?? 'n/a'}`, `IQ ${bridgeField(fields, 'pending_iq') ?? 'n/a'} | input samples ${bridgeField(fields, 'in_samples') ?? 'n/a'}`),
+    metricCard('Latest Status', latestStatus.slice(0, 72), latestStatus.length > 72 ? latestStatus.slice(72, 160) : ''),
+  ].join('');
+}
+function buildBridgeDiagSnapshot(){
+  if (!latestBridgeDiag) return null;
+  const now = new Date();
+  return {
+    captured_at_ms: now.getTime(),
+    captured_at_iso: now.toISOString(),
+    page: {
+      path: window.location.pathname,
+      bridge_summary: $('bridge-diag-summary')?.textContent || '',
+    },
+    bridge: jsonSafe(latestBridgeDiag),
+  };
+}
+async function copyBridgeDiagSnapshot(){
+  const snapshot = buildBridgeDiagSnapshot();
+  if (!snapshot){
+    setBridgeDiagSummary('No bridge diagnostics available yet. Wait for the next poll, then copy again.', true);
+    return;
+  }
+  try{
+    await copyTextWithFallback(JSON.stringify(snapshot, null, 2));
+    setBridgeDiagSummary(`Copied bridge diagnostics JSON | ${snapshot.page.bridge_summary}`, false);
+  }catch(e){
+    setBridgeDiagSummary('Failed to copy bridge diagnostics JSON: ' + e.message, true);
+  }
+}
+function downloadBridgeDiagSnapshot(){
+  const snapshot = buildBridgeDiagSnapshot();
+  if (!snapshot){
+    setBridgeDiagSummary('No bridge diagnostics available yet. Wait for the next poll, then download again.', true);
+    return;
+  }
+  const text = JSON.stringify(snapshot, null, 2);
+  const blob = new Blob([text], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  const stamp = snapshotTimestampTag(new Date(snapshot.captured_at_ms));
+  a.href = url;
+  a.download = `saturn-bridge-diagnostics-${stamp}.json`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+  setBridgeDiagSummary(`Downloaded bridge diagnostics JSON | ${snapshot.page.bridge_summary}`, false);
+}
+async function loadBridgeDiag(){
+  if (bridgeDiagPollInFlight) return;
+  bridgeDiagPollInFlight = true;
+  try{
+    let r = await fetch('./bridge_diag', { cache:'no-store' });
+    if (r.status === 404) {
+      r = await fetch('/bridge_diag', { cache:'no-store' });
+    }
+    const data = await r.json().catch(()=>({}));
+    if (!r.ok) throw new Error(data.message || ('HTTP ' + r.status));
+    const bridge = data.bridge || {};
+    latestBridgeDiag = bridge;
+    setBridgeDiagSummary(formatBridgeSummary(bridge), false);
+    setBridgeDiagDashboardHtml(renderBridgeDashboard(bridge));
+    setBridgeDiagText(bridge);
+  }catch(e){
+    latestBridgeDiag = null;
+    setBridgeDiagSummary('Failed to load bridge diagnostics: ' + e.message, true);
+    setBridgeDiagDashboardHtml(metricCard('Bridge Diagnostics', 'load failed', e.message));
+    setBridgeDiagText(null);
+  }finally{
+    bridgeDiagPollInFlight = false;
+  }
+}
+function ensureBridgeDiagPoll(){
+  if (!bridgeDiagPollTimer){
+    bridgeDiagPollTimer = setInterval(()=>{ loadBridgeDiag(); }, 2000);
+  }
+}
+function showLabPanel(name){
+  const panels = [
+    { name: 'p23', tab: $('tab-p23'), panel: $('panel-p23') },
+    { name: 'bridge', tab: $('tab-bridge'), panel: $('panel-bridge') },
+  ];
+  panels.forEach((item)=>{
+    const active = item.name === name;
+    if (item.tab) item.tab.setAttribute('aria-selected', active ? 'true' : 'false');
+    if (item.panel) item.panel.hidden = !active;
+  });
+  if (name === 'bridge') loadBridgeDiag();
 }
 function formatWorkloadSummaryFromPerf(perf){
   const workload = perf?.workload || {};
@@ -1519,9 +1792,16 @@ $('p23-adc-enable').addEventListener('click', ()=>{ setAdcTelemetry(true); });
 $('p23-adc-disable').addEventListener('click', ()=>{ setAdcTelemetry(false); });
 $('p23-perf-refresh').addEventListener('click', ()=>{ loadP23Perf(); });
 $('p23-perf-reset').addEventListener('click', ()=>{ resetPerfBaseline(); loadP23Perf(); });
+$('p23-baseline-copy').addEventListener('click', ()=>{ copyBaselineSnapshot(); });
+$('p23-baseline-download').addEventListener('click', ()=>{ downloadBaselineSnapshot(); });
 $('p23-perf-snapshot').addEventListener('click', ()=>{ capturePerfSnapshot(); });
 $('p23-snapshot-copy').addEventListener('click', ()=>{ copyCapturedSnapshot(); });
 $('p23-snapshot-download').addEventListener('click', ()=>{ downloadCapturedSnapshot(); });
+$('bridge-diag-refresh').addEventListener('click', ()=>{ loadBridgeDiag(); });
+$('bridge-diag-copy').addEventListener('click', ()=>{ copyBridgeDiagSnapshot(); });
+$('bridge-diag-download').addEventListener('click', ()=>{ downloadBridgeDiagSnapshot(); });
+$('tab-p23').addEventListener('click', ()=>{ showLabPanel('p23'); });
+$('tab-bridge').addEventListener('click', ()=>{ showLabPanel('bridge'); });
 document.querySelectorAll('.p23-action').forEach((btn)=>{
   btn.addEventListener('click', ()=>{
     const baseFlags = String(btn.dataset.flags || '').trim().split(/\s+/).filter(Boolean);
@@ -1535,6 +1815,7 @@ loadP23Status();
 loadP23Perf();
 ensureStatusPoll();
 ensurePerfPoll();
+ensureBridgeDiagPoll();
 fetchRunLog();
 </script>
 </body>

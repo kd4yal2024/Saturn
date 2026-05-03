@@ -19,6 +19,11 @@ pub struct BridgeConfig {
     pub ddc0_adc: u8,
     pub ddc0_sample_rate_khz: u16,
     pub ddc0_sample_size_bits: u8,
+    pub rx_fft_size: u32,
+    pub rx_low_latency: bool,
+    pub tx_fft_size: u32,
+    pub tx_low_latency: bool,
+    pub remote_tx_100w_drive_byte: u8,
 }
 
 impl Default for BridgeConfig {
@@ -40,6 +45,11 @@ impl Default for BridgeConfig {
             ddc0_adc: 0,
             ddc0_sample_rate_khz: 192,
             ddc0_sample_size_bits: 24,
+            rx_fft_size: 2048,
+            rx_low_latency: true,
+            tx_fft_size: 4096,
+            tx_low_latency: true,
+            remote_tx_100w_drive_byte: 68,
         }
     }
 }
@@ -107,6 +117,21 @@ impl BridgeConfig {
                 "SATURN_BRIDGE_DDC0_SAMPLE_SIZE_BITS",
                 defaults.ddc0_sample_size_bits,
             ),
+            rx_fft_size: clamp_fft_size(parse_env_u32(
+                "SATURN_BRIDGE_RX_FFT_SIZE",
+                defaults.rx_fft_size,
+            )),
+            rx_low_latency: parse_env_bool("SATURN_BRIDGE_RX_LOW_LATENCY", defaults.rx_low_latency),
+            tx_fft_size: clamp_fft_size(parse_env_u32(
+                "SATURN_BRIDGE_TX_FFT_SIZE",
+                defaults.tx_fft_size,
+            )),
+            tx_low_latency: parse_env_bool("SATURN_BRIDGE_TX_LOW_LATENCY", defaults.tx_low_latency),
+            remote_tx_100w_drive_byte: parse_env_u8(
+                "SATURN_REMOTE_TX_100W_DRIVE_BYTE",
+                defaults.remote_tx_100w_drive_byte,
+            )
+            .clamp(1, u8::MAX),
         }
     }
 }
@@ -153,4 +178,14 @@ fn parse_env_u64(name: &str, default: u64) -> u64 {
         .ok()
         .and_then(|value| value.parse::<u64>().ok())
         .unwrap_or(default)
+}
+
+/// Clamp an FFT size to the nearest valid power-of-two in [1024, 262144].
+/// Follows piHPSDR/Thetis convention: only power-of-two sizes are valid for WDSP.
+fn clamp_fft_size(value: u32) -> u32 {
+    const MIN_FFT: u32 = 1024;
+    const MAX_FFT: u32 = 262144;
+    let clamped = value.clamp(MIN_FFT, MAX_FFT);
+    // Round down to nearest power of two
+    1 << (31 - clamped.leading_zeros())
 }

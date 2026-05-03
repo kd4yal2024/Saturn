@@ -11,7 +11,13 @@ const WDSP_RX_CHANNEL: i32 = 0;
 const WDSP_TX_CHANNEL: i32 = 1;
 const WDSP_AUDIO_RATE_HZ: u32 = 48_000;
 const WDSP_DSP_SIZE: usize = 64;
-const WDSP_AUDIO_FRAME_FLOATS: usize = 2048;
+pub const TX_MIC_SAMPLES_PER_DSP_BLOCK: usize = 512;
+const WDSP_TX_DSP_SIZE: usize = 2048;
+const WDSP_TX_DSP_RATE_HZ: u32 = 96_000;
+pub const WDSP_TX_IQ_RATE_HZ: u32 = 192_000;
+const WDSP_TX_OUTPUT_SAMPLES: usize =
+    TX_MIC_SAMPLES_PER_DSP_BLOCK * (WDSP_TX_IQ_RATE_HZ as usize / WDSP_AUDIO_RATE_HZ as usize);
+const WDSP_AUDIO_FRAME_FLOATS: usize = 512;
 const WDSP_ANR_TAPS: i32 = 64;
 const WDSP_ANR_DELAY: i32 = 16;
 const WDSP_ANR_GAIN: f64 = 0.0002;
@@ -41,6 +47,15 @@ const AGC_FAST: i32 = 4;
 
 // RXA meter type indices (from wdsp/RXA.h)
 const RXA_S_AV: i32 = 1; // average S-meter value in dBm
+const TXA_MIC_PK: i32 = 0;
+const TXA_MIC_AV: i32 = 1;
+const TXA_COMP_PK: i32 = 10;
+const TXA_COMP_AV: i32 = 11;
+const TXA_ALC_PK: i32 = 12;
+const TXA_ALC_AV: i32 = 13;
+const TXA_ALC_GAIN: i32 = 14;
+const TXA_OUT_PK: i32 = 15;
+const TXA_OUT_AV: i32 = 16;
 
 static LOAD_RNNR_MODEL: Once = Once::new();
 
@@ -172,9 +187,16 @@ unsafe extern "C" {
     fn SetTXABandpassFreqs(channel: i32, f_low: f64, f_high: f64);
     fn SetTXACFIRRun(channel: i32, run: i32);
     fn SetTXAAMSQRun(channel: i32, run: i32);
+    fn SetTXAAMSQThreshold(channel: i32, threshold: f64);
+    fn SetTXAAMSQMutedGain(channel: i32, db_level: f64);
     fn SetTXAALCSt(channel: i32, state: i32);
     fn SetTXAALCAttack(channel: i32, attack: i32);
     fn SetTXAALCDecay(channel: i32, decay: i32);
+    fn SetTXAALCMaxGain(channel: i32, maxgain: f64);
+    fn SetTXALevelerSt(channel: i32, state: i32);
+    fn SetTXALevelerAttack(channel: i32, attack: i32);
+    fn SetTXALevelerDecay(channel: i32, decay: i32);
+    fn SetTXALevelerTop(channel: i32, maxgain: f64);
     fn SetTXAPreGenMode(channel: i32, mode: i32);
     fn SetTXAPreGenToneMag(channel: i32, mag: f64);
     fn SetTXAPreGenToneFreq(channel: i32, freq: f64);
@@ -202,6 +224,22 @@ unsafe extern "C" {
     fn SetTXAPostGenMode(channel: i32, mode: i32);
     fn SetTXAPostGenTTMag(channel: i32, mag1: f64, mag2: f64);
     fn SetTXAPostGenTTFreq(channel: i32, freq1: f64, freq2: f64);
+    fn TXASetNC(channel: i32, nc: i32);
+    fn TXASetMP(channel: i32, mp: i32);
+    fn GetTXAMeter(channel: i32, mt: i32) -> f64;
+
+    // DEXP — downward expander / noise gate (operates on mic input buffer)
+    fn SetDEXPRun(id: i32, run: i32);
+    fn SetDEXPDetectorTau(id: i32, tau: f64);
+    fn SetDEXPAttackTime(id: i32, time: f64);
+    fn SetDEXPReleaseTime(id: i32, time: f64);
+    fn SetDEXPHoldTime(id: i32, time: f64);
+    fn SetDEXPExpansionRatio(id: i32, ratio: f64);
+    fn SetDEXPHysteresisRatio(id: i32, ratio: f64);
+    fn SetDEXPAttackThreshold(id: i32, thresh: f64);
+    fn SetDEXPLowCut(id: i32, lowcut: f64);
+    fn SetDEXPHighCut(id: i32, highcut: f64);
+    fn SetDEXPRunSideChannelFilter(id: i32, run: i32);
 }
 
 #[derive(Debug)]
@@ -254,6 +292,8 @@ pub struct WdspRxEngine {
     frame_float_count: usize,
     last_meter_dbm: Option<f32>,
     nb_initialized: bool,
+    rx_fft_size: u32,
+    rx_low_latency: bool,
     rx_eq_enabled: bool,
     rx_eq_bands: [i32; 11],
 }
@@ -291,6 +331,8 @@ impl WdspRxEngine {
             frame_float_count: WDSP_AUDIO_FRAME_FLOATS,
             last_meter_dbm: None,
             nb_initialized: false,
+            rx_fft_size: model.desired.rx_fft_size,
+            rx_low_latency: model.desired.rx_low_latency,
             rx_eq_enabled: false,
             rx_eq_bands: [0i32; 11],
         };
@@ -386,6 +428,17 @@ impl WdspRxEngine {
             }
         }
 
+        if model.desired.rx_fft_size != self.rx_fft_size
+            || model.desired.rx_low_latency != self.rx_low_latency
+        {
+            self.rx_fft_size = model.desired.rx_fft_size;
+            self.rx_low_latency = model.desired.rx_low_latency;
+            unsafe {
+                RXASetNC(self.channel_id, self.rx_fft_size as i32);
+                RXASetMP(self.channel_id, self.rx_low_latency as i32);
+            }
+        }
+
         if model.desired.rx_eq_enabled != self.rx_eq_enabled
             || model.desired.rx_eq_bands != self.rx_eq_bands
         {
@@ -469,6 +522,10 @@ impl WdspRxEngine {
         self.output_buffer.fill(0.0);
     }
 
+    pub fn reset_audio_packetizer(&mut self) {
+        self.pending_audio.clear();
+    }
+
     fn reconfigure(&mut self, model: &RadioModel) -> Result<(), WdspError> {
         let input_sample_rate_hz = model.desired.ddc0_sample_rate_khz as u32 * 1000;
         let ratio = input_sample_rate_hz / WDSP_AUDIO_RATE_HZ;
@@ -488,6 +545,8 @@ impl WdspRxEngine {
         });
 
         self.input_sample_rate_hz = input_sample_rate_hz;
+        self.rx_fft_size = model.desired.rx_fft_size;
+        self.rx_low_latency = model.desired.rx_low_latency;
         self.mode = model.desired.mode;
         self.volume_db = model.desired.rx_volume_db;
         self.noise_reduction_mode = model.desired.rx_noise_reduction_mode;
@@ -537,8 +596,11 @@ impl WdspRxEngine {
             SetRXAPanelSelect(self.channel_id, 3); // use both I and Q input
             SetRXAPanelCopy(self.channel_id, 1); // copy I→Q so both speakers get audio
             SetRXAPanelGain1(self.channel_id, panel_gain_for_volume_db(self.volume_db));
-            RXASetNC(self.channel_id, 2048);
-            RXASetMP(self.channel_id, 0);
+            RXASetNC(self.channel_id, model.desired.rx_fft_size as i32);
+            // Thetis defaults to Low_Latency (MP=1) for both RX and TX.
+            // Linear phase (MP=0) adds NC/2 samples of group delay;
+            // minimum phase (MP=1) cuts that drastically.
+            RXASetMP(self.channel_id, self.rx_low_latency as i32);
             SetRXAMode(self.channel_id, wdsp_mode(self.mode));
             RXASetPassband(
                 self.channel_id,
@@ -759,6 +821,8 @@ pub struct WdspTxEngine {
     mic_gain_db: f64,
     filter_low_hz: i32,
     filter_high_hz: i32,
+    tx_fft_size: u32,
+    tx_low_latency: bool,
     tx_active: bool,
     input_buffer: Vec<f64>,
     output_buffer: Vec<f64>,
@@ -777,6 +841,31 @@ pub struct WdspTxEngine {
     two_tone_delay_ms: u16,
     two_tone_started_at: Option<Instant>,
     two_tone_second_active: bool,
+    noise_gate_enabled: bool,
+    noise_gate_threshold_db: f64,
+    last_input_peak: f32,
+    last_output_peak: f32,
+    total_input_samples: u64,
+    total_output_pairs: u64,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct TxDspDiagnostics {
+    pub input_peak: f32,
+    pub output_peak: f32,
+    pub total_input_samples: u64,
+    pub total_output_pairs: u64,
+    pub pending_mic_floats: usize,
+    pub pending_iq_floats: usize,
+    pub mic_peak_db: f64,
+    pub mic_avg_db: f64,
+    pub comp_peak_db: f64,
+    pub comp_avg_db: f64,
+    pub alc_peak_db: f64,
+    pub alc_avg_db: f64,
+    pub alc_gain_db: f64,
+    pub out_peak_db: f64,
+    pub out_avg_db: f64,
 }
 
 impl WdspTxEngine {
@@ -787,10 +876,13 @@ impl WdspTxEngine {
             mic_gain_db: model.desired.tx_mic_gain_db,
             filter_low_hz: model.desired.tx_filter_low_hz,
             filter_high_hz: model.desired.tx_filter_high_hz,
+            tx_fft_size: model.desired.tx_fft_size,
+            tx_low_latency: model.desired.tx_low_latency,
             tx_active: false,
-            // DSP block size: 64 complex samples → 128 f64 values each direction
-            input_buffer: vec![0.0f64; WDSP_DSP_SIZE * 2],
-            output_buffer: vec![0.0f64; WDSP_DSP_SIZE * 2],
+            // Match piHPSDR's Protocol 2 TX shape: 512 mic samples in,
+            // 2048 IQ pairs out at 192 kHz.
+            input_buffer: vec![0.0f64; TX_MIC_SAMPLES_PER_DSP_BLOCK * 2],
+            output_buffer: vec![0.0f64; WDSP_TX_OUTPUT_SAMPLES * 2],
             pending_mic: VecDeque::new(),
             pending_iq: VecDeque::new(),
             tx_eq_enabled: false,
@@ -806,6 +898,12 @@ impl WdspTxEngine {
             two_tone_delay_ms: model.desired.tx_two_tone_delay_ms,
             two_tone_started_at: None,
             two_tone_second_active: false,
+            noise_gate_enabled: model.desired.tx_noise_gate_enabled,
+            noise_gate_threshold_db: model.desired.tx_noise_gate_threshold_db,
+            last_input_peak: 0.0,
+            last_output_peak: 0.0,
+            total_input_samples: 0,
+            total_output_pairs: 0,
         };
         engine.open_channel();
         engine
@@ -815,13 +913,13 @@ impl WdspTxEngine {
         unsafe {
             OpenChannel(
                 self.channel_id,
-                WDSP_DSP_SIZE as i32,      // in_size
-                WDSP_DSP_SIZE as i32,      // dsp_size
-                WDSP_AUDIO_RATE_HZ as i32, // input_samplerate (mic = 48 kHz)
-                WDSP_AUDIO_RATE_HZ as i32, // dsp_rate
-                WDSP_AUDIO_RATE_HZ as i32, // output_samplerate (TX IQ = 48 kHz)
-                1,                         // channel_type = TX
-                0,                         // state = stopped (don't run yet)
+                TX_MIC_SAMPLES_PER_DSP_BLOCK as i32, // in_size
+                WDSP_TX_DSP_SIZE as i32,             // dsp_size
+                WDSP_AUDIO_RATE_HZ as i32,           // input_samplerate (mic = 48 kHz)
+                WDSP_TX_DSP_RATE_HZ as i32,          // dsp_rate
+                WDSP_TX_IQ_RATE_HZ as i32,           // output_samplerate (P2 TX IQ = 192 kHz)
+                1,                                   // channel_type = TX
+                0,                                   // state = stopped (don't run yet)
                 0.010,
                 0.025,
                 0.0,
@@ -831,10 +929,18 @@ impl WdspTxEngine {
             SetTXABandpassWindow(self.channel_id, 1);
             SetTXABandpassRun(self.channel_id, 1);
             SetTXACFIRRun(self.channel_id, 1);
-            SetTXAAMSQRun(self.channel_id, 0);
+            SetTXAAMSQThreshold(self.channel_id, self.noise_gate_threshold_db);
+            SetTXAAMSQMutedGain(self.channel_id, -140.0);
+            SetTXAAMSQRun(self.channel_id, self.noise_gate_enabled as i32);
             SetTXAALCAttack(self.channel_id, 1);
             SetTXAALCDecay(self.channel_id, 10);
+            SetTXAALCMaxGain(self.channel_id, 0.0);
             SetTXAALCSt(self.channel_id, 1);
+            SetTXALevelerAttack(self.channel_id, 1);
+            SetTXALevelerDecay(self.channel_id, 500);
+            SetTXALevelerTop(self.channel_id, 8.0);
+            // Match piHPSDR: leveler only runs when CFC is enabled
+            SetTXALevelerSt(self.channel_id, self.cfc_enabled as i32);
             SetTXAPreGenMode(self.channel_id, 0);
             SetTXAPreGenToneMag(self.channel_id, 0.0);
             SetTXAPreGenToneFreq(self.channel_id, 0.0);
@@ -844,6 +950,8 @@ impl WdspTxEngine {
             SetTXAPostGenRun(self.channel_id, 0);
             SetTXAPanelGain1(self.channel_id, panel_gain_for_volume_db(self.mic_gain_db));
             SetTXAEQRun(self.channel_id, 0);
+            TXASetNC(self.channel_id, self.tx_fft_size as i32);
+            TXASetMP(self.channel_id, self.tx_low_latency as i32);
             SetTXABandpassFreqs(
                 self.channel_id,
                 self.filter_low_hz as f64,
@@ -938,6 +1046,31 @@ impl WdspTxEngine {
                 SetTXACFCOMPPrecomp(self.channel_id, self.cfc_precomp_db);
                 SetTXACFCOMPPeqRun(self.channel_id, self.cfc_enabled as i32);
                 SetTXACFCOMPRun(self.channel_id, self.cfc_enabled as i32);
+                // Leveler only runs when CFC is active (matches piHPSDR)
+                SetTXALevelerSt(self.channel_id, self.cfc_enabled as i32);
+            }
+        }
+
+        if model.desired.tx_noise_gate_enabled != self.noise_gate_enabled
+            || (model.desired.tx_noise_gate_threshold_db - self.noise_gate_threshold_db).abs()
+                > f64::EPSILON
+        {
+            self.noise_gate_enabled = model.desired.tx_noise_gate_enabled;
+            self.noise_gate_threshold_db = model.desired.tx_noise_gate_threshold_db;
+            unsafe {
+                SetTXAAMSQThreshold(self.channel_id, self.noise_gate_threshold_db);
+                SetTXAAMSQRun(self.channel_id, self.noise_gate_enabled as i32);
+            }
+        }
+
+        if model.desired.tx_fft_size != self.tx_fft_size
+            || model.desired.tx_low_latency != self.tx_low_latency
+        {
+            self.tx_fft_size = model.desired.tx_fft_size;
+            self.tx_low_latency = model.desired.tx_low_latency;
+            unsafe {
+                TXASetNC(self.channel_id, self.tx_fft_size as i32);
+                TXASetMP(self.channel_id, self.tx_low_latency as i32);
             }
         }
 
@@ -1009,6 +1142,17 @@ impl WdspTxEngine {
         }
     }
 
+    fn clear_tx_buffers(&mut self) {
+        self.pending_mic.clear();
+        self.pending_iq.clear();
+        self.input_buffer.fill(0.0);
+        self.output_buffer.fill(0.0);
+        self.last_input_peak = 0.0;
+        self.last_output_peak = 0.0;
+        self.total_input_samples = 0;
+        self.total_output_pairs = 0;
+    }
+
     /// Enable or disable the TX DSP chain. PTT is a control-plane event for
     /// the remote bridge; never wait for WDSP slew-down on release or the main
     /// loop cannot send the immediate RX-recovery high-priority packet.
@@ -1018,15 +1162,18 @@ impl WdspTxEngine {
         }
         self.tx_active = active;
         if active {
+            self.clear_tx_buffers();
             unsafe {
                 SetChannelState(self.channel_id, 1, 0);
             } // run, no wait
         } else {
-            unsafe {
-                SetChannelState(self.channel_id, 0, 0);
-            } // stop, no wait
-            self.pending_mic.clear();
-            self.pending_iq.clear();
+            // Do not stop the WDSP TX channel here. On the G2 test path,
+            // stopping/restarting the channel after the first MOX cycle can
+            // leave later mic frames producing zero TX IQ until the bridge
+            // process restarts. The TX thread stops RF and DUC packet output
+            // separately; while tx_active is false, no fexchange0 calls run.
+            self.clear_tx_buffers();
+            self.two_tone_enabled = false;
             self.two_tone_started_at = None;
             self.two_tone_second_active = false;
         }
@@ -1039,13 +1186,21 @@ impl WdspTxEngine {
         if !self.tx_active {
             return;
         }
+        let input_peak = samples
+            .iter()
+            .fold(0.0f32, |peak, sample| peak.max(sample.abs()));
+        self.last_input_peak = input_peak;
+        self.total_input_samples = self
+            .total_input_samples
+            .saturating_add(samples.len() as u64);
+
         // Expand mono mic to stereo interleaved [L, R] where L=mic, R=0.0
         for s in samples {
             self.pending_mic.push_back(*s as f64); // I (left = mic)
             self.pending_mic.push_back(0.0); // Q (right = zero)
         }
 
-        let needed = WDSP_DSP_SIZE * 2;
+        let needed = TX_MIC_SAMPLES_PER_DSP_BLOCK * 2;
         while self.pending_mic.len() >= needed {
             for sample in &mut self.input_buffer {
                 *sample = self.pending_mic.pop_front().unwrap_or(0.0);
@@ -1067,9 +1222,39 @@ impl WdspTxEngine {
             }
 
             // Output is interleaved [I, Q] IQ pairs at TX sample rate
+            let mut output_peak = 0.0f32;
             for sample_pair in self.output_buffer.chunks_exact(2) {
-                self.pending_iq.push_back(sample_pair[0] as f32); // I
-                self.pending_iq.push_back(sample_pair[1] as f32); // Q
+                let i_sample = sample_pair[0] as f32;
+                let q_sample = sample_pair[1] as f32;
+                output_peak = output_peak.max(i_sample.abs()).max(q_sample.abs());
+                self.pending_iq.push_back(i_sample); // I
+                self.pending_iq.push_back(q_sample); // Q
+            }
+            self.last_output_peak = output_peak;
+            self.total_output_pairs = self
+                .total_output_pairs
+                .saturating_add(WDSP_TX_OUTPUT_SAMPLES as u64);
+        }
+    }
+
+    pub fn diagnostics(&self) -> TxDspDiagnostics {
+        unsafe {
+            TxDspDiagnostics {
+                input_peak: self.last_input_peak,
+                output_peak: self.last_output_peak,
+                total_input_samples: self.total_input_samples,
+                total_output_pairs: self.total_output_pairs,
+                pending_mic_floats: self.pending_mic.len(),
+                pending_iq_floats: self.pending_iq.len(),
+                mic_peak_db: GetTXAMeter(self.channel_id, TXA_MIC_PK),
+                mic_avg_db: GetTXAMeter(self.channel_id, TXA_MIC_AV),
+                comp_peak_db: GetTXAMeter(self.channel_id, TXA_COMP_PK),
+                comp_avg_db: GetTXAMeter(self.channel_id, TXA_COMP_AV),
+                alc_peak_db: GetTXAMeter(self.channel_id, TXA_ALC_PK),
+                alc_avg_db: GetTXAMeter(self.channel_id, TXA_ALC_AV),
+                alc_gain_db: GetTXAMeter(self.channel_id, TXA_ALC_GAIN),
+                out_peak_db: GetTXAMeter(self.channel_id, TXA_OUT_PK),
+                out_avg_db: GetTXAMeter(self.channel_id, TXA_OUT_AV),
             }
         }
     }
