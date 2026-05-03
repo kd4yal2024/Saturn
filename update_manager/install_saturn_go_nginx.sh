@@ -191,6 +191,10 @@ install_optional_tailscale() {
 
   info "Installing Tailscale package via ${TAILSCALE_INSTALL_URL}"
   curl -fsSL "$TAILSCALE_INSTALL_URL" | sh
+  if ! command -v tailscale >/dev/null 2>&1; then
+    err "Tailscale installer completed but the tailscale CLI is not on PATH."
+    exit 1
+  fi
   ok "Tailscale package installed"
 }
 
@@ -747,7 +751,7 @@ echo " Watchdog: saturn-go-watchdog.timer (${SATURN_WATCHDOG_INTERVAL})"
 echo " Repo root default: ${DEFAULT_REPO_ROOT}"
 if env_flag_enabled "${SATURN_INSTALL_TAILSCALE:-}"; then
   echo " Tailscale: package install requested; setup is operator-driven."
-  echo " Next: sudo tailscale set --hostname=saturn-g2"
+  echo " Next: sudo tailscale set --hostname=<your-saturn-host>"
   echo " Next: sudo tailscale up"
   echo " Next: sudo ${SCRIPTS_DIR}/saturn-go-tailscale-serve.sh (see OPERATIONS_RUNBOOK.md -> Secure Remote Access with Tailscale)"
 fi
