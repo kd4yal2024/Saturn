@@ -4,6 +4,13 @@
 
 `saturn-remote` is the browser frontend for the `saturn-bridge` backend.
 
+It currently ships as two parallel pages against the same backend:
+
+- `/remote` — stable page rendered from `saturn-remote.html`. All UI logic lives inline in the HTML. This is the operator-facing fallback and remains the reference implementation.
+- `/remote-next` — next-generation page rendered from `saturn-remote-next.html` plus the Vite-built IIFE bundle `saturn-remote-next.js`. The HTML loads the bundle via `<script src="/remote-assets/remote-next.js">`; the bundle assigns its API to `globalThis.SaturnRemoteNext`, which the inline page script destructures to reuse extracted helpers (clamps, normalizers, DSP/FFT, app-state, settings, TCI commands). This is where active extraction work lands.
+
+Both pages share the same `saturn-bridge` TCI websocket, the same basic-auth gate, and the same persisted state (`remote_settings.json`, `remote_profiles.json`). Migration intent is to grow `/remote-next` toward feature parity with `/remote` via the `update_manager/remote-web` TypeScript project, then retire the inline `/remote` HTML.
+
 It is intentionally not a browser skin wrapped directly around `p2app`.
 The backend boundary is:
 
@@ -83,9 +90,26 @@ TX control subset:
   immediately and do not wait for microphone capture startup.
 - Browser mic frames are intentionally small so release commands are not
   trapped behind large audio buffers.
-- `saturn-bridge` drains pending websocket frames in bounded batches and stops
-  WDSP TX without waiting for slew-down, allowing the high-priority RX recovery
-  packet to go out immediately.
+- `saturn-bridge` drains pending websocket frames in bounded batches.
+- Browser TX commands feed a dedicated bridge-side TX owner thread. That thread
+  owns WDSP TXA, DUC IQ output, and the P2 high-priority TX bit so stale mic
+  frames cannot re-key the radio after release.
+- PTT-on arms WDSP and DUC setup first. The bridge asserts P2 TX only after it
+  has a complete nonzero DUC IQ packet ready, avoiding a keyed/no-audio RF
+  state. If no usable TX IQ appears within the arm timeout, the TX owner
+  disarms without keying the radio.
+- The TX WDSP channel follows piHPSDR's Protocol 2 shape: 512 mic samples at
+  48 kHz into WDSP, 2048-sample DSP blocks at 96 kHz, explicit `TXASetNC(2048)`,
+  and 192 kHz DUC IQ output to P2_app.
+- PTT-off is authoritative: the bridge stops accepting mic frames for that TX
+  request, clears desired TX state, and sends repeated RX high-priority packets
+  before completing TX teardown.
+- Browser release handling is also fail-closed: pointer/key release, page hide,
+  and window blur all send `trx:false` and stop local mic capture even if the UI
+  already appears to be in RX.
+- RF TX remains disabled by default and requires
+  `SATURN_REMOTE_TX_RF_ENABLED=1` in the bridge environment for controlled
+  testing.
 
 This is the right first-step contract because it keeps the frontend close to the actual radio stream instead of hiding complexity too early.
 

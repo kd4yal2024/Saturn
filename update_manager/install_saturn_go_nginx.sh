@@ -19,6 +19,7 @@ WATCHDOG_TIMER_FILE="/etc/systemd/system/saturn-go-watchdog.timer"
 SUDOERS_FILE="/etc/sudoers.d/saturn-go-maintenance"
 SOURCE_DIR="/home/${SUDO_USER:-$USER}/github/Saturn/update_manager"
 RUST_SRC_DIR="$SOURCE_DIR/rust-server"
+WEB_ASSET_HELPERS="$SOURCE_DIR/scripts/saturn-go-web-assets.sh"
 
 SATURN_ADDR="${SATURN_ADDR:-127.0.0.1:8080}"
 SATURN_MAX_BODY_BYTES="${SATURN_MAX_BODY_BYTES:-2147483648}"
@@ -91,6 +92,11 @@ if [[ ! -f "$RUST_SRC_DIR/Cargo.toml" ]]; then
   err "Rust server source not found: $RUST_SRC_DIR"
   exit 1
 fi
+if [[ ! -f "$WEB_ASSET_HELPERS" ]]; then
+  err "Web asset helper not found: $WEB_ASSET_HELPERS"
+  exit 1
+fi
+source "$WEB_ASSET_HELPERS"
 for extra_script in "${EXTRA_PACKAGED_SCRIPTS[@]}"; do
   if [[ ! -f "$extra_script" ]]; then
     err "Extra packaged script not found: $extra_script"
@@ -234,7 +240,7 @@ export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
 apt-get install -y -qq \
   nginx apache2-utils build-essential pkg-config \
-  curl git rsync \
+  curl git rsync nodejs npm \
   python3 python3-venv python3-psutil \
   ca-certificates
 ok "Dependencies installed"
@@ -245,31 +251,13 @@ info "Preparing runtime directories..."
 mkdir -p "$BIN_DIR" "$SCRIPTS_DIR" "$WATCHDOG_SCRIPT_DIR" "$PRIVILEGED_SCRIPTS_DIR" "$WEB_ROOT" "$SATURN_STATE_DIR" "$SATURN_SNAPSHOT_DIR" "$SATURN_STAGING_DIR"
 ok "Directories ready"
 
-copy_web_asset () {
-  local name="$1"
-  local from_template="$SOURCE_DIR/templates/$name"
-  local from_repo="$SOURCE_DIR/$name"
-  if [[ -f "$from_template" ]]; then
-    cp -f "$from_template" "$WEB_ROOT/$name"
-  elif [[ -f "$from_repo" ]]; then
-    cp -f "$from_repo" "$WEB_ROOT/$name"
-  else
-    err "Missing required web asset: $name"
-    exit 1
-  fi
-}
-
 info "Copying web assets..."
-copy_web_asset "index.html"
-copy_web_asset "monitor.html"
-copy_web_asset "backup.html"
-copy_web_asset "update.html"
-copy_web_asset "saturngo.html"
-copy_web_asset "p23test.html"
-copy_web_asset "fpga.html"
-copy_web_asset "pihpsdr.html"
-copy_web_asset "deskhpsdr.html"
-copy_web_asset "saturn-remote.html"
+saturn_go_build_remote_web_assets "$SOURCE_DIR"
+if ! saturn_go_copy_required_web_assets "$SOURCE_DIR/templates" "$SOURCE_DIR" "$WEB_ROOT"; then
+  err "Missing required web asset in $SOURCE_DIR/templates or $SOURCE_DIR"
+  exit 1
+fi
+saturn_go_copy_optional_web_assets "$SOURCE_DIR/templates" "$SOURCE_DIR" "$WEB_ROOT"
 
 if [[ -f "$SOURCE_DIR/scripts/config.json" ]]; then
   cp -f "$SOURCE_DIR/scripts/config.json" "$WEB_ROOT/config.json"

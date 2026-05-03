@@ -36,6 +36,7 @@ export type TciRadioState = {
   txDrive: number;
   txEnabled: boolean;
   moxRequested: boolean;
+  txPhase: 'rx' | 'armed' | 'keyed';
   audioStreaming: boolean;
   rxEqEnabled: boolean;
   txEqEnabled: boolean;
@@ -50,6 +51,8 @@ export type TciRadioState = {
   txTwoToneLevelDb: number;
   txTwoToneInvertLsb: boolean;
   txTwoToneDelayMs: number;
+  txNoiseGateEnabled: boolean;
+  txNoiseGateThresholdDb: number;
 };
 
 export type TciApplyResult = {

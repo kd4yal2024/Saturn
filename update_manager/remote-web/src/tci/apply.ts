@@ -155,15 +155,35 @@ export function applyTciCommand(command: TciCommand, current: TciRadioState): Tc
   } else if (command.name === 'swr') {
     const value = numericArg(argAt(args, 1) ?? argAt(args, 0));
     if (value != null) next.swr = value;
+  } else if (command.name === 'tx_state' && args.length >= 2) {
+    const phase = String(argAt(args, 1) || '').trim().toLowerCase();
+    if (phase === 'rx' || phase === 'armed' || phase === 'keyed') {
+      const wasTxPhase = next.txPhase;
+      next.txPhase = phase;
+      if (phase === 'rx') {
+        if (wasTxPhase === 'keyed' || next.txEnabled) txReleased = true;
+        next.moxRequested = false;
+        next.txEnabled = false;
+      } else if (phase === 'armed') {
+        next.moxRequested = true;
+      } else if (phase === 'keyed') {
+        next.moxRequested = true;
+        next.txEnabled = true;
+      }
+    }
   } else if (command.name === 'trx' && args.length >= 2) {
     const on = String(argAt(args, 1) || '').trim().toLowerCase() === 'true';
     const wasTxEnabled = next.txEnabled;
     next.txEnabled = on;
     if (on) {
       next.moxRequested = true;
+      if (next.txPhase !== 'keyed') next.txPhase = 'keyed';
     } else {
       if (wasTxEnabled) txReleased = true;
-      next.moxRequested = false;
+      if (wasTxEnabled || !next.moxRequested) {
+        next.moxRequested = false;
+        if (next.txPhase !== 'armed') next.txPhase = 'rx';
+      }
     }
   } else if (command.name === 'tx_filter_band' && args.length >= 3) {
     const fl = numericArg(argAt(args, 1));
@@ -207,6 +227,11 @@ export function applyTciCommand(command: TciCommand, current: TciRadioState): Tc
   } else if (command.name === 'tx_two_tone_delay_ms') {
     const value = numericArg(argAt(args, 1) ?? argAt(args, 0));
     if (value != null) next.txTwoToneDelayMs = clampTwoToneDelayMs(value);
+  } else if (command.name === 'tx_noise_gate') {
+    next.txNoiseGateEnabled = booleanArg(argAt(args, 1) ?? argAt(args, 0)) === true;
+  } else if (command.name === 'tx_noise_gate_threshold') {
+    const value = numericArg(argAt(args, 1) ?? argAt(args, 0));
+    if (value != null) next.txNoiseGateThresholdDb = Math.max(-80, Math.min(0, value));
   } else if (command.name === 'audio_start') {
     next.audioStreaming = true;
   } else if (command.name === 'audio_stop') {

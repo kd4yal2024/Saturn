@@ -55,7 +55,8 @@ Remote entry behavior:
 
 - `http://<host>/remote` should redirect to `https://<host>:8443/remote`.
 - `http://<host>/saturn/remote` should redirect to `https://<host>:8443/remote`.
-- `https://<host>:8443/remote` is the live remote UI.
+- `https://<host>:8443/remote` is the stable remote UI (`saturn-remote.html`).
+- `https://<host>:8443/remote-next` is the next-generation remote UI (`saturn-remote-next.html` + Vite bundle `saturn-remote-next.js`, served via `/remote-assets/remote-next.js`). Both URLs share the same basic-auth credentials, `remote_settings.json`, and `remote_profiles.json` state; `/remote-next` is where active extraction work lands and `/remote` remains the stable fallback.
 - Shared remote settings persist in `/var/lib/saturn-state/remote_settings.json`.
 - Named remote Setup profiles persist in `/var/lib/saturn-state/remote_profiles.json`.
 - The remote `Setup` menu supports profile save/load/delete, startup profile selection, and panadapter/waterfall display presets.
@@ -72,8 +73,9 @@ Remote Setup profile notes:
 - `remote_settings.json` also carries the current DSP and TX test-control preferences used by the remote.
 - `remote_profiles.json` holds the saved profile catalog plus the optional startup profile selection.
 - A startup profile should be applied before opening a live phone session when you want a known panadapter, waterfall, and radio-control baseline.
-- If the Setup menu opens underneath the panadapter after a deploy, confirm the latest `saturn-remote.html` was synced into `/var/lib/saturn-web/`.
-- If USB/LSB signals or the transparent passband box appear on the wrong side of center after a deploy, confirm the latest `saturn-remote.html` was synced into `/var/lib/saturn-web/`.
+- If the Setup menu opens underneath the panadapter after a deploy, confirm the latest `saturn-remote.html` (and, for `/remote-next`, `saturn-remote-next.html` + `saturn-remote-next.js`) was synced into `/var/lib/saturn-web/`.
+- If USB/LSB signals or the transparent passband box appear on the wrong side of center after a deploy, confirm the latest `saturn-remote.html` (and, for `/remote-next`, `saturn-remote-next.html` + `saturn-remote-next.js`) was synced into `/var/lib/saturn-web/`.
+- If `/remote-next` returns 404 on the bundle (`/remote-assets/remote-next.js`), confirm `npm ci && npm run build` succeeded in `update_manager/remote-web` and that `saturn-remote-next.js` is present in `/var/lib/saturn-web/`. The installer and `update-saturn-go.sh` now treat a missing bundle as a hard failure; this check covers manual or pre-promotion deploys.
 - If TX appears stuck after a browser crash or tab close, confirm both `saturn-bridge.service` and `saturn-go.service` are on the latest deployed build with the explicit TX-release path.
 
 ## GitHub Commit and Push
@@ -304,7 +306,7 @@ Typical test sequence:
 Operational notes:
 
 - The script builds from the active repo root selected on Backup / Restore page (`SATURN_ACTIVE_REPO_ROOT`).
-- The deploy payload includes the release binary, all HTML web assets, `config.json`, `themes.json`, and packaged scripts from `update_manager/scripts`.
+- The deploy payload includes the release binary, web assets listed by `scripts/saturn-go-web-assets.sh`, `config.json`, `themes.json`, and packaged scripts from `update_manager/scripts`.
 - Browser-managed extra scripts in `/opt/saturn-go/scripts` are left in place; the self-update only refreshes the repo-managed files.
 - Final stop/copy/start of `saturn-go.service` is dispatched via detached `systemd-run` helper (`saturn-go-self-deploy-<timestamp>`).
 - The web terminal may disconnect when `saturn-go.service` restarts; reload after ~10-20 seconds.

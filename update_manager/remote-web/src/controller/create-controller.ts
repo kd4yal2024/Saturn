@@ -44,6 +44,7 @@ function createInitialRadioState(settings: SettingsState): TciRadioState {
     txDrive: settings.radioPrefs.txDrive,
     txEnabled: false,
     moxRequested: false,
+    txPhase: 'rx',
     audioStreaming: false,
     rxEqEnabled: settings.radioPrefs.rxEqEnabled,
     txEqEnabled: settings.radioPrefs.txEqEnabled,
@@ -58,6 +59,8 @@ function createInitialRadioState(settings: SettingsState): TciRadioState {
     txTwoToneLevelDb: settings.radioPrefs.txTwoToneLevelDb,
     txTwoToneInvertLsb: settings.radioPrefs.txTwoToneInvertLsb,
     txTwoToneDelayMs: settings.radioPrefs.txTwoToneDelayMs,
+    txNoiseGateEnabled: settings.radioPrefs.txNoiseGateEnabled,
+    txNoiseGateThresholdDb: settings.radioPrefs.txNoiseGateThresholdDb,
   };
 }
 

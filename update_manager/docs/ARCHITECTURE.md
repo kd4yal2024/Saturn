@@ -44,9 +44,13 @@ An experimental remote-control backend now also lives in the repo:
   - Dedicated deskHPSDR update terminal workflow (`POST /run` with `update-deskhpsdr.py`).
   - The script clones/pulls `~/github/deskhpsdr` and delegates build/install-dependency behavior to helper scripts from the active Saturn repo root.
 - `saturn-remote.html`
-  - First direct-G2 remote frontend page.
+  - Stable direct-G2 remote frontend page served at `/remote`.
   - Uses DOM for connection/session/radio controls and WebGL2 for high-DPI panadapter and waterfall rendering.
   - Targets `saturn-bridge` as the remote protocol boundary instead of talking to `p2app` directly.
+- `saturn-remote-next.html` + `saturn-remote-next.js`
+  - Next-generation remote UI served at `/remote-next`, sharing the same backend contract as `/remote`.
+  - The page loads the Vite IIFE bundle `saturn-remote-next.js` via `<script src="/remote-assets/remote-next.js">`; the bundle exposes `globalThis.SaturnRemoteNext` for the inline page script.
+  - The bundle is built from the `update_manager/remote-web` TypeScript project (`vite build` -> `dist/saturn-remote-next.js`) by both the installer and `update-saturn-go.sh` self-update.
 - `fpga.html`
   - Dedicated FPGA flash workflow (`POST /run` with `flash_fpga.sh`) plus image discovery (`GET /get_fpga_images`).
 - `backup.html`
@@ -63,7 +67,7 @@ An experimental remote-control backend now also lives in the repo:
 - `/opt/saturn-go/scripts/`
   - Executable maintenance scripts (also target directory for browser-managed custom scripts).
 - `/var/lib/saturn-web/`
-  - Web assets: `index.html`, `update.html`, `saturngo.html`, `pihpsdr.html`, `deskhpsdr.html`, `saturn-remote.html`, `fpga.html`, `backup.html`, `monitor.html`, `config.json`, `themes.json`.
+  - Web assets: `index.html`, `update.html`, `saturngo.html`, `pihpsdr.html`, `deskhpsdr.html`, `saturn-remote.html`, `saturn-remote-next.html`, `saturn-remote-next.js`, `p23test.html`, `fpga.html`, `backup.html`, `monitor.html`, `config.json`, `themes.json`. Optional helper scripts (`saturn-remote-storage.js`, `saturn-remote-session.js`, `saturn-remote-tci.js`, `saturn-remote-transport.js`, `saturn-remote-browser.js`) are also synced when present.
 - `/var/lib/saturn-state/`
   - Mutable state: `repo_root.txt`, `update_policy.json`, `update_state.json`, snapshots, staged worktrees.
 - `/etc/systemd/system/saturn-go.service`
@@ -84,11 +88,13 @@ An experimental remote-control backend now also lives in the repo:
 - `update_manager/saturn-bridge/`
   - standalone direct-G2 bridge source code (currently bootstrap + RX-only ingest).
 - `update_manager/templates/`
-  - UI templates copied to web root during install.
+  - UI templates copied to web root during install (includes `saturn-remote-next.html`).
+- `update_manager/remote-web/`
+  - Vite TypeScript project that builds the `saturn-remote-next.js` IIFE bundle consumed by `/remote-next`.
 - `update_manager/docs/SATURN_REMOTE_ARCHITECTURE.md`
-  - Detailed frontend/rendering contract for `saturn-remote`.
+  - Detailed frontend/rendering contract for `saturn-remote` and `/remote-next`.
 - `update_manager/scripts/`
-  - Runtime scripts copied to `/opt/saturn-go/scripts`.
+  - Runtime scripts copied to `/opt/saturn-go/scripts`. The shared web asset manifest `saturn-go-web-assets.sh` lives here and is sourced by both the installer and `update-saturn-go.sh`.
 
 Browser-managed custom scripts:
 

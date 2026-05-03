@@ -4,6 +4,21 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
 
 ## [Unreleased]
 ### Added
+- New `/remote-next` page served from the Saturn Remote TLS listener as the
+  next-generation Saturn Remote UI, alongside the existing stable `/remote`
+  page. The two pages share the same basic-auth gate, persisted
+  `remote_settings.json` / `remote_profiles.json` state, and `saturn-bridge`
+  TCI websocket; `/remote-next` carries the active extraction work while
+  `/remote` remains the stable fallback.
+- New `update_manager/remote-web` Vite TypeScript project that builds the
+  `saturn-remote-next.js` IIFE bundle consumed by `saturn-remote-next.html` via
+  `<script src="/remote-assets/remote-next.js">` (mapped by
+  `rust-server/src/remote_tls.rs`). The bundle exposes its API as
+  `globalThis.SaturnRemoteNext` for the inline page script.
+- New shared `update_manager/scripts/saturn-go-web-assets.sh` web asset
+  manifest sourced by both `install_saturn_go_nginx.sh` and
+  `update-saturn-go.sh`, so installs and Saturn Go self-updates deploy the
+  same set of HTML/JS assets to `/var/lib/saturn-web/`.
 - Hidden `/p23test` lab and `p23-app-manager.sh` now document and drive the
   converged `p2app` service path directly instead of presenting `P2_app` and
   `P3_app` as separate active deploy targets. Legacy `p3` action arguments are
@@ -63,6 +78,15 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
 - Saturn Go page now includes an `XDMA Doctor` action that runs a classified read-only PCIe/XDMA report through the existing privileged helper lane.
 
 ### Changed
+- `install_saturn_go_nginx.sh` now installs `nodejs` and `npm` as required
+  dependencies and runs `npm ci && npm run build` in
+  `update_manager/remote-web` before staging assets, so a fresh install
+  produces and deploys `saturn-remote-next.js` automatically.
+- `saturn-remote-next.html` and `saturn-remote-next.js` are now treated as
+  required deploy assets in `saturn-go-web-assets.sh`. Installs and Saturn Go
+  self-updates fail loudly if the Vite build does not produce
+  `remote-web/dist/saturn-remote-next.js`, instead of silently shipping a
+  documented `/remote-next` URL with a missing bundle.
 - Saturn Remote TX control now treats PTT as a low-latency control-plane event:
   the browser keys immediately before microphone startup completes, stops
   enqueueing mic frames before sending PTT-off, uses smaller TX mic frames, and

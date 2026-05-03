@@ -2,6 +2,7 @@ import type { DemodMode } from '../radio/passband';
 
 export type LayoutMode = 'desktop' | 'phone';
 export type ThemeMode = 'dark' | 'light';
+export type StreamMode = 'lan' | 'wan';
 export type NoiseReductionMode = 'OFF' | 'NR1' | 'NR2' | 'NR3' | 'NR4';
 export type NoiseBlankerMode = 'OFF' | 'NB1' | 'NB2';
 export type AgcMode = 'OFF' | 'LONG' | 'SLOW' | 'MEDIUM' | 'FAST';
@@ -58,6 +59,10 @@ export type RadioPrefs = {
   txTwoToneLevelDb: number;
   txTwoToneInvertLsb: boolean;
   txTwoToneDelayMs: number;
+  txNoiseGateEnabled: boolean;
+  txNoiseGateThresholdDb: number;
+  txTimeoutEnabled: boolean;
+  txTimeoutSeconds: number;
 };
 
 export type DisplayPrefs = {
@@ -76,16 +81,27 @@ export type DisplayPrefs = {
   showBandEdges: boolean;
 };
 
+export type BandMemoryEntry = {
+  frequency: number;
+  radioPrefs: Partial<RadioPrefs>;
+  displayPrefs: Partial<DisplayPrefs>;
+  displayZoom: number;
+};
+
+export type BandMemory = Record<string, BandMemoryEntry>;
+
 export type ProfileSettings = {
   wsUrl: string;
   displayZoom: number;
   frequencyLock: boolean;
   keepScreenAwake: boolean;
+  streamMode: StreamMode;
   layoutMode: LayoutMode;
   theme: ThemeMode;
   phonePanels: PhonePanels;
   displayPrefs: DisplayPrefs;
   radioPrefs: RadioPrefs;
+  bandMemory: BandMemory;
 };
 
 export type RemoteSettings = ProfileSettings & {
@@ -97,12 +113,14 @@ export type SettingsState = {
   displayZoom: number;
   frequencyLock: boolean;
   keepScreenAwake: boolean;
+  streamMode: StreamMode;
   layoutMode: LayoutMode;
   theme: ThemeMode;
   phonePanels: PhonePanels;
   activeProfile: string;
   radioPrefs: RadioPrefs;
   displayPrefs: DisplayPrefs;
+  bandMemory: BandMemory;
 };
 
 export type WsUrlEnvironment = {

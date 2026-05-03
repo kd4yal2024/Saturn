@@ -379,6 +379,8 @@ Installer behavior (current):
 
 - Deploys Rust backend only (no legacy Go source generation)
 - Removes legacy distro `cargo`/`rustc` packages (if installed) and bootstraps a current Rust toolchain via `rustup` for the build user before compiling (fixes old-Cargo `Cargo.lock` v4 parse errors on Bookworm)
+- Installs `nodejs` and `npm` and runs `npm ci && npm run build` in `update_manager/remote-web` to produce the `saturn-remote-next.js` Vite bundle before staging web assets
+- Uses `update_manager/scripts/saturn-go-web-assets.sh` as the shared web asset manifest for install and self-update deploys (fails fast if any required asset, including `saturn-remote-next.html`/`saturn-remote-next.js`, is missing)
 - Proxies all `/saturn/*` routes through NGINX to the Rust backend
 - Redirects plain HTTP remote entry points such as `/remote` and `/saturn/remote` to `https://<host>:8443/remote`
 - Creates/updates `saturn-go.service` using a non-root service user
@@ -394,7 +396,8 @@ Installer behavior (current):
 
 Remote state notes:
 
-- The live remote UI is served from `https://<host>:8443/remote`.
+- The stable remote UI is served from `https://<host>:8443/remote` (rendered from `saturn-remote.html`).
+- The next-generation remote UI is served from `https://<host>:8443/remote-next` (rendered from `saturn-remote-next.html` plus the `saturn-remote-next.js` Vite bundle loaded via `<script src="/remote-assets/remote-next.js">`). Both pages share the same basic-auth gate, settings/profile state, and `saturn-bridge` TCI websocket; `/remote-next` carries the active extraction work while `/remote` remains the stable fallback.
 - Shared remote settings persist in `/var/lib/saturn-state/remote_settings.json`.
 - Named remote Setup profiles persist in `/var/lib/saturn-state/remote_profiles.json`.
 - The remote `Setup` menu now supports:

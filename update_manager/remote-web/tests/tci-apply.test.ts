@@ -35,9 +35,10 @@ function createState(): TciRadioState {
     meterDbm: null,
     txPower: null,
     swr: null,
-    txDrive: 100,
+    txDrive: 10,
     txEnabled: false,
     moxRequested: false,
+    txPhase: 'rx',
     audioStreaming: false,
     rxEqEnabled: false,
     txEqEnabled: false,
@@ -52,6 +53,8 @@ function createState(): TciRadioState {
     txTwoToneLevelDb: 0,
     txTwoToneInvertLsb: true,
     txTwoToneDelayMs: 0,
+    txNoiseGateEnabled: true,
+    txNoiseGateThresholdDb: -30,
   };
 }
 
@@ -98,6 +101,54 @@ describe('applyTciText', () => {
     expect(result.state.moxRequested).toBe(false);
     expect(result.state.audioStreaming).toBe(true);
     expect(result.state.audioSampleRate).toBe(48000);
+  });
+
+  it('keeps local mox armed when bridge reports not keyed before RF is active', () => {
+    const initial = createState();
+    initial.txEnabled = false;
+    initial.moxRequested = true;
+    const result = applyTciText('trx:0,false;', initial);
+    expect(result.txReleased).toBe(false);
+    expect(result.state.txEnabled).toBe(false);
+    expect(result.state.moxRequested).toBe(true);
+  });
+
+  it('tx_state:armed sets moxRequested and txPhase', () => {
+    const result = applyTciText('tx_state:0,armed;', createState());
+    expect(result.state.txPhase).toBe('armed');
+    expect(result.state.moxRequested).toBe(true);
+    expect(result.state.txEnabled).toBe(false);
+    expect(result.txReleased).toBe(false);
+  });
+
+  it('tx_state:keyed sets txEnabled and moxRequested', () => {
+    const result = applyTciText('tx_state:0,keyed;', createState());
+    expect(result.state.txPhase).toBe('keyed');
+    expect(result.state.moxRequested).toBe(true);
+    expect(result.state.txEnabled).toBe(true);
+    expect(result.txReleased).toBe(false);
+  });
+
+  it('tx_state:rx from keyed triggers txReleased', () => {
+    const initial = createState();
+    initial.txPhase = 'keyed';
+    initial.txEnabled = true;
+    initial.moxRequested = true;
+    const result = applyTciText('tx_state:0,rx;', initial);
+    expect(result.state.txPhase).toBe('rx');
+    expect(result.state.txEnabled).toBe(false);
+    expect(result.state.moxRequested).toBe(false);
+    expect(result.txReleased).toBe(true);
+  });
+
+  it('tx_state:rx from armed clears mox without txReleased', () => {
+    const initial = createState();
+    initial.txPhase = 'armed';
+    initial.moxRequested = true;
+    const result = applyTciText('tx_state:0,rx;', initial);
+    expect(result.state.txPhase).toBe('rx');
+    expect(result.state.moxRequested).toBe(false);
+    expect(result.txReleased).toBe(false);
   });
 
   it('updates eq and two-tone controls', () => {

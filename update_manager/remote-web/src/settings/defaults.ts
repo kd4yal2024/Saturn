@@ -15,8 +15,8 @@ export const DEFAULT_RADIO_PREFS: RadioPrefs = {
   rxAntenna: 1,
   mode: 'USB',
   rxVolumeDb: -10,
-  rxNoiseReductionMode: 'NR2',
-  rxNoiseReductionLevel: 100,
+  rxNoiseReductionMode: 'OFF',
+  rxNoiseReductionLevel: 0,
   rxNbMode: 'OFF',
   rxNbThreshold: 4.95,
   rxAnrTaps: 64,
@@ -32,7 +32,7 @@ export const DEFAULT_RADIO_PREFS: RadioPrefs = {
   agcGain: 80,
   filterLow: 50,
   filterHigh: 3050,
-  txDrive: 100,
+  txDrive: 10,
   txMicGainDb: 0,
   txFilterLow: 50,
   txFilterHigh: 3050,
@@ -50,6 +50,10 @@ export const DEFAULT_RADIO_PREFS: RadioPrefs = {
   txTwoToneLevelDb: 0,
   txTwoToneInvertLsb: true,
   txTwoToneDelayMs: 0,
+  txNoiseGateEnabled: true,
+  txNoiseGateThresholdDb: -30,
+  txTimeoutEnabled: true,
+  txTimeoutSeconds: 180,
 };
 
 export const DEFAULT_DISPLAY_PREFS: DisplayPrefs = {
@@ -74,6 +78,7 @@ export function createDefaultSettingsState(): SettingsState {
     displayZoom: 1,
     frequencyLock: false,
     keepScreenAwake: false,
+    streamMode: 'lan',
     layoutMode: 'desktop',
     theme: 'dark',
     phonePanels: { ...DEFAULT_PHONE_PANELS },
@@ -85,5 +90,6 @@ export function createDefaultSettingsState(): SettingsState {
       cfcBands: DEFAULT_RADIO_PREFS.cfcBands.slice(),
     },
     displayPrefs: { ...DEFAULT_DISPLAY_PREFS },
+    bandMemory: {},
   };
 }

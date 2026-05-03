@@ -5,6 +5,7 @@ import {
   createDefaultSettingsState,
 } from './defaults';
 import {
+  type BandMemory,
   type DeepPartial,
   type DisplayPrefs,
   type PhonePanels,
@@ -12,6 +13,7 @@ import {
   type RadioPrefs,
   type RemoteSettings,
   type SettingsState,
+  type StreamMode,
   type WaterfallPalette,
   type WsUrlEnvironment,
 } from './types';
@@ -19,6 +21,7 @@ import { clampDemodMode } from '../radio/passband';
 
 const ALLOWED_SAMPLE_RATES = [48000, 96000, 192000, 384000] as const;
 const WATERFALL_PALETTES: readonly WaterfallPalette[] = ['classic', 'ember', 'ice', 'forest'];
+const HAM_BAND_LABELS = new Set(['160m', '80m', '60m', '40m', '30m', '20m', '17m', '15m', '12m', '10m', '6m']);
 
 export function safeFiniteNumber(value: unknown, fallback = 0): number {
   const numeric = Number(value);
@@ -28,6 +31,10 @@ export function safeFiniteNumber(value: unknown, fallback = 0): number {
 export function clampSampleRateHz(value: unknown): number {
   const sampleRate = Math.round(Number(value));
   return ALLOWED_SAMPLE_RATES.includes(sampleRate as (typeof ALLOWED_SAMPLE_RATES)[number]) ? sampleRate : 192000;
+}
+
+export function normalizeStreamMode(value: unknown): StreamMode {
+  return String(value || '').trim().toLowerCase() === 'wan' ? 'wan' : 'lan';
 }
 
 export function clampRxAdc(value: unknown): number {
@@ -104,7 +111,7 @@ export function clampFilterHighHz(value: unknown): number {
 }
 
 export function clampTxDriveWatts(value: unknown): number {
-  return Math.max(0, Math.min(100, Math.round(safeFiniteNumber(value, DEFAULT_RADIO_PREFS.txDrive))));
+  return Math.max(1, Math.min(100, Math.round(safeFiniteNumber(value, DEFAULT_RADIO_PREFS.txDrive))));
 }
 
 export function clampTxMicGainDb(value: unknown): number {
@@ -261,6 +268,14 @@ export function normalizeRadioPrefs(input: DeepPartial<RadioPrefs> | null | unde
     txTwoToneLevelDb: clampTwoToneLevelDb(source.txTwoToneLevelDb),
     txTwoToneInvertLsb: source.txTwoToneInvertLsb ?? DEFAULT_RADIO_PREFS.txTwoToneInvertLsb,
     txTwoToneDelayMs: clampTwoToneDelayMs(source.txTwoToneDelayMs),
+    txNoiseGateEnabled: source.txNoiseGateEnabled ?? DEFAULT_RADIO_PREFS.txNoiseGateEnabled,
+    txNoiseGateThresholdDb: Math.max(-80, Math.min(0,
+      Number(source.txNoiseGateThresholdDb) || DEFAULT_RADIO_PREFS.txNoiseGateThresholdDb)),
+    txTimeoutEnabled: source.txTimeoutEnabled ?? DEFAULT_RADIO_PREFS.txTimeoutEnabled,
+    txTimeoutSeconds: Math.max(
+      15,
+      Math.min(600, Math.round(safeFiniteNumber(source.txTimeoutSeconds, DEFAULT_RADIO_PREFS.txTimeoutSeconds))),
+    ),
   };
 }
 
@@ -283,6 +298,23 @@ export function normalizeDisplayPrefs(input: DeepPartial<DisplayPrefs> | null | 
   };
 }
 
+export function normalizeBandMemory(input: unknown): BandMemory {
+  const output: BandMemory = {};
+  if (!input || typeof input !== 'object') return output;
+  const record = input as Record<string, unknown>;
+  for (const [label, raw] of Object.entries(record)) {
+    if (!HAM_BAND_LABELS.has(label) || !raw || typeof raw !== 'object') continue;
+    const entry = raw as Record<string, unknown>;
+    output[label] = {
+      frequency: Math.max(0, Math.round(safeFiniteNumber(entry.frequency, 0))),
+      radioPrefs: normalizeRadioPrefs(entry.radioPrefs as DeepPartial<RadioPrefs> | null | undefined),
+      displayPrefs: normalizeDisplayPrefs(entry.displayPrefs as DeepPartial<DisplayPrefs> | null | undefined),
+      displayZoom: Math.max(1, Math.min(32, Math.round(safeFiniteNumber(entry.displayZoom, 1)))),
+    };
+  }
+  return output;
+}
+
 export function normalizeProfileSettings(
   input: DeepPartial<ProfileSettings> | null | undefined,
   env: WsUrlEnvironment,
@@ -293,11 +325,13 @@ export function normalizeProfileSettings(
     displayZoom: Math.max(1, Math.min(32, Math.round(safeFiniteNumber(source.displayZoom, 1)))),
     frequencyLock: Boolean(source.frequencyLock),
     keepScreenAwake: Boolean(source.keepScreenAwake),
+    streamMode: normalizeStreamMode(source.streamMode),
     layoutMode: source.layoutMode === 'phone' ? 'phone' : 'desktop',
     theme: source.theme === 'light' ? 'light' : 'dark',
     phonePanels: sanitizePhonePanels(source.phonePanels),
     displayPrefs: normalizeDisplayPrefs(source.displayPrefs),
     radioPrefs: normalizeRadioPrefs(source.radioPrefs),
+    bandMemory: normalizeBandMemory(source.bandMemory),
   };
 }
 
@@ -320,11 +354,13 @@ export function settingsStateToProfileSettings(state: SettingsState, env: WsUrlE
     displayZoom: state.displayZoom,
     frequencyLock: state.frequencyLock,
     keepScreenAwake: state.keepScreenAwake,
+    streamMode: state.streamMode,
     layoutMode: state.layoutMode,
     theme: state.theme,
     phonePanels: state.phonePanels,
     displayPrefs: state.displayPrefs,
     radioPrefs: state.radioPrefs,
+    bandMemory: state.bandMemory,
   }, env);
 }
 
@@ -346,6 +382,7 @@ export function applyRemoteSettingsToState(
   next.displayZoom = normalized.displayZoom;
   next.frequencyLock = normalized.frequencyLock;
   next.keepScreenAwake = normalized.keepScreenAwake;
+  next.streamMode = normalized.streamMode;
   next.layoutMode = normalized.layoutMode;
   next.theme = normalized.theme;
   next.phonePanels = { ...normalized.phonePanels };
@@ -357,6 +394,7 @@ export function applyRemoteSettingsToState(
     cfcBands: normalized.radioPrefs.cfcBands.slice(),
   };
   next.displayPrefs = { ...normalized.displayPrefs };
+  next.bandMemory = normalizeBandMemory(normalized.bandMemory);
   Object.assign(state, next);
   return state;
 }

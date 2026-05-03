@@ -2,9 +2,11 @@ import { describe, expect, it } from 'vitest';
 import { createDefaultSettingsState } from '../src/settings/defaults';
 import {
   applyRemoteSettingsToState,
+  normalizeBandMemory,
   normalizeProfileSettings,
   normalizeRadioPrefs,
   normalizeRemoteSettings,
+  normalizeStreamMode,
   normalizeWsUrlPreference,
   sanitizePhonePanels,
   settingsStateToRemoteSettings,
@@ -43,7 +45,7 @@ describe('settings normalization', () => {
       rxNoiseReductionMode: 'emnr',
       rxNbMode: '2',
       agcMode: '4',
-      txDrive: 120,
+      txDrive: 200,
       txMicGainDb: 99,
       rxEqBands: [5, 99, -99],
       cfcBands: [5, 40],
@@ -62,12 +64,20 @@ describe('settings normalization', () => {
     expect(prefs.cfcBands[1]).toBe(20);
   });
 
+  it('normalizes stream mode as an explicit LAN/WAN preference', () => {
+    expect(normalizeStreamMode('wan')).toBe('wan');
+    expect(normalizeStreamMode('WAN')).toBe('wan');
+    expect(normalizeStreamMode('raw')).toBe('lan');
+    expect(normalizeStreamMode(null)).toBe('lan');
+  });
+
   it('normalizes profile and remote settings', () => {
     const profile = normalizeProfileSettings({
       wsUrl: '',
       displayZoom: 99,
       layoutMode: 'phone',
       theme: 'light',
+      streamMode: 'wan',
       phonePanels: { radio: true, setup: false },
     }, browserEnv);
 
@@ -75,6 +85,7 @@ describe('settings normalization', () => {
     expect(profile.displayZoom).toBe(32);
     expect(profile.layoutMode).toBe('phone');
     expect(profile.theme).toBe('light');
+    expect(profile.streamMode).toBe('wan');
     expect(profile.phonePanels.radio).toBe(true);
     expect(profile.phonePanels.setup).toBe(false);
 
@@ -86,28 +97,70 @@ describe('settings normalization', () => {
     expect(remote.wsUrl).toBe('wss://radio.local:8443/tci');
   });
 
+  it('normalizes per-band memory and drops unknown bands', () => {
+    const memory = normalizeBandMemory({
+      '40m': {
+        displayZoom: 12,
+        radioPrefs: {
+          mode: 'LSB',
+          agcMode: 'fast',
+          filterHigh: 2400,
+        },
+        displayPrefs: {
+          waterfallPalette: 'ice',
+          showBandEdges: false,
+        },
+      },
+      bad: {
+        displayZoom: 2,
+      },
+    });
+
+    expect(Object.keys(memory)).toEqual(['40m']);
+    const forty = memory['40m'];
+    expect(forty).toBeDefined();
+    expect(forty?.displayZoom).toBe(12);
+    expect(forty?.radioPrefs.mode).toBe('LSB');
+    expect(forty?.radioPrefs.agcMode).toBe('FAST');
+    expect(forty?.radioPrefs.filterHigh).toBe(2400);
+    expect(forty?.displayPrefs.waterfallPalette).toBe('ice');
+    expect(forty?.displayPrefs.showBandEdges).toBe(false);
+  });
+
   it('applies remote settings into state and round-trips them', () => {
     const state = createDefaultSettingsState();
     applyRemoteSettingsToState({
       activeProfile: 'Portable',
       layoutMode: 'phone',
       displayZoom: 4,
+      streamMode: 'wan',
       phonePanels: { radio: true, tx: false },
       radioPrefs: { mode: 'DIGL', txDrive: 65 },
+      bandMemory: {
+        '20m': {
+          displayZoom: 6,
+          radioPrefs: { mode: 'USB', agcMode: 'SLOW' },
+          displayPrefs: { waterfallPalette: 'ember' },
+        },
+      },
     }, state, browserEnv);
 
     expect(state.activeProfile).toBe('Portable');
     expect(state.layoutMode).toBe('phone');
+    expect(state.streamMode).toBe('wan');
     expect(state.displayZoom).toBe(4);
     expect(state.phonePanels.radio).toBe(true);
     expect(state.phonePanels.tx).toBe(false);
     expect(state.radioPrefs.mode).toBe('DIGL');
     expect(state.radioPrefs.txDrive).toBe(65);
+    expect(state.bandMemory['20m']?.displayZoom).toBe(6);
 
     const remote = settingsStateToRemoteSettings(state, browserEnv);
     expect(remote.activeProfile).toBe('Portable');
     expect(remote.layoutMode).toBe('phone');
+    expect(remote.streamMode).toBe('wan');
     expect(remote.displayZoom).toBe(4);
     expect(remote.radioPrefs.mode).toBe('DIGL');
+    expect(remote.bandMemory['20m']?.radioPrefs.agcMode).toBe('SLOW');
   });
 });

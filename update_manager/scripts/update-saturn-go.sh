@@ -264,6 +264,7 @@ SATURNGO_REF="${SATURN_SATURNGO_POLICY_REF:-main}"
 RUST_DIR="$REPO_ROOT/update_manager/rust-server"
 TEMPLATES_DIR="$REPO_ROOT/update_manager/templates"
 SCRIPTS_SRC_DIR="$REPO_ROOT/update_manager/scripts"
+WEB_ASSET_HELPERS="$SCRIPTS_SRC_DIR/saturn-go-web-assets.sh"
 BUILD_TMP_DIR="$RUST_DIR/.tmp"
 BUILD_TARGET_DIR="$RUST_DIR/target-local"
 
@@ -281,6 +282,8 @@ trap 'rc=$?; if (( rc != 0 )); then write_status "error" "$STATUS_PHASE" "Saturn
 [[ -f "$RUST_DIR/Cargo.toml" ]] || die "Rust server Cargo.toml not found: $RUST_DIR/Cargo.toml"
 [[ -d "$TEMPLATES_DIR" ]] || die "Templates dir not found: $TEMPLATES_DIR"
 [[ -d "$SCRIPTS_SRC_DIR" ]] || die "Scripts dir not found: $SCRIPTS_SRC_DIR"
+[[ -f "$WEB_ASSET_HELPERS" ]] || die "Web asset helper not found: $WEB_ASSET_HELPERS"
+source "$WEB_ASSET_HELPERS"
 [[ -f "$SCRIPTS_SRC_DIR/config.json" ]] || die "Missing config.json in $SCRIPTS_SRC_DIR"
 [[ -f "$SCRIPTS_SRC_DIR/themes.json" ]] || die "Missing themes.json in $SCRIPTS_SRC_DIR"
 for extra_script in "${EXTRA_PACKAGED_SCRIPTS[@]}"; do
@@ -384,7 +387,9 @@ write_status "running" "$STATUS_PHASE" "Preparing staged deploy payload"
 run_cmd mkdir -p "$STAGE_WEB_DIR" "$STAGE_SCRIPTS_DIR" "$STAGE_PRIVILEGED_SCRIPTS_DIR"
 if (( ! DRY_RUN )); then
   cp "$BIN_SRC" "$STAGE_DIR/saturn-go"
-  cp "$TEMPLATES_DIR"/*.html "$STAGE_WEB_DIR/"
+  saturn_go_build_remote_web_assets "$REPO_ROOT/update_manager"
+  saturn_go_copy_required_web_assets "$TEMPLATES_DIR" "$REPO_ROOT/update_manager" "$STAGE_WEB_DIR"
+  saturn_go_copy_optional_web_assets "$TEMPLATES_DIR" "$REPO_ROOT/update_manager" "$STAGE_WEB_DIR"
   cp "$SCRIPTS_SRC_DIR/config.json" "$STAGE_WEB_DIR/config.json"
   cp "$SCRIPTS_SRC_DIR/themes.json" "$STAGE_WEB_DIR/themes.json"
   find "$SCRIPTS_SRC_DIR" -maxdepth 1 -type f -exec cp "{}" "$STAGE_SCRIPTS_DIR/" \;
