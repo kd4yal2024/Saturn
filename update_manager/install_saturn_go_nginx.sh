@@ -36,6 +36,7 @@ SATURN_STAGING_DIR="${SATURN_STAGING_DIR:-${SATURN_STATE_DIR}/repo-staging}"
 SATURN_WATCHDOG_URL="${SATURN_WATCHDOG_URL:-http://${SATURN_ADDR}/healthz}"
 SATURN_WATCHDOG_INTERVAL="${SATURN_WATCHDOG_INTERVAL:-30s}"
 RUSTUP_INIT_URL="${RUSTUP_INIT_URL:-https://sh.rustup.rs}"
+TAILSCALE_INSTALL_URL="${TAILSCALE_INSTALL_URL:-https://tailscale.com/install.sh}"
 
 bold(){ printf "\e[1m%s\e[0m\n" "$*"; }
 ok(){   printf "[OK] %s\n" "$*"; }
@@ -171,6 +172,28 @@ apt_pkg_installed() {
   dpkg-query -W -f='${Status}' "$1" 2>/dev/null | grep -q '^install ok installed$'
 }
 
+env_flag_enabled() {
+  case "${1:-}" in
+    1|true|TRUE|yes|YES|on|ON) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+install_optional_tailscale() {
+  if ! env_flag_enabled "${SATURN_INSTALL_TAILSCALE:-}"; then
+    return 0
+  fi
+
+  if command -v tailscale >/dev/null 2>&1; then
+    ok "Tailscale CLI already installed"
+    return 0
+  fi
+
+  info "Installing Tailscale package via ${TAILSCALE_INSTALL_URL}"
+  curl -fsSL "$TAILSCALE_INSTALL_URL" | sh
+  ok "Tailscale package installed"
+}
+
 remove_legacy_apt_rust() {
   local pkgs=()
   apt_pkg_installed cargo && pkgs+=(cargo)
@@ -246,6 +269,7 @@ apt-get install -y -qq \
 ok "Dependencies installed"
 
 ensure_modern_rust_toolchain
+install_optional_tailscale
 
 info "Preparing runtime directories..."
 mkdir -p "$BIN_DIR" "$SCRIPTS_DIR" "$WATCHDOG_SCRIPT_DIR" "$PRIVILEGED_SCRIPTS_DIR" "$WEB_ROOT" "$SATURN_STATE_DIR" "$SATURN_SNAPSHOT_DIR" "$SATURN_STAGING_DIR"
@@ -721,6 +745,12 @@ echo " Binary:   ${BIN_DIR}/saturn-go"
 echo " Service:  saturn-go.service (user=${SERVICE_USER})"
 echo " Watchdog: saturn-go-watchdog.timer (${SATURN_WATCHDOG_INTERVAL})"
 echo " Repo root default: ${DEFAULT_REPO_ROOT}"
+if env_flag_enabled "${SATURN_INSTALL_TAILSCALE:-}"; then
+  echo " Tailscale: package install requested; setup is operator-driven."
+  echo " Next: sudo tailscale set --hostname=saturn-g2"
+  echo " Next: sudo tailscale up"
+  echo " Next: sudo ${SCRIPTS_DIR}/saturn-go-tailscale-serve.sh (see OPERATIONS_RUNBOOK.md -> Secure Remote Access with Tailscale)"
+fi
 if [[ -n "$generated_password" ]]; then
   echo " Admin user: admin"
   echo " Generated password: ${generated_password}"

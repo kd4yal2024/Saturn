@@ -19,6 +19,10 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
   manifest sourced by both `install_saturn_go_nginx.sh` and
   `update-saturn-go.sh`, so installs and Saturn Go self-updates deploy the
   same set of HTML/JS assets to `/var/lib/saturn-web/`.
+- Optional Tailscale package install mode for `install_saturn_go_nginx.sh`,
+  enabled with `SATURN_INSTALL_TAILSCALE=1`. The installer only installs the
+  package when requested and prints the operator follow-up steps; joining the
+  tailnet and configuring Tailscale Serve remain explicit operator actions.
 - Hidden `/p23test` lab and `p23-app-manager.sh` now document and drive the
   converged `p2app` service path directly instead of presenting `P2_app` and
   `P3_app` as separate active deploy targets. Legacy `p3` action arguments are
