@@ -78,6 +78,34 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
 - Saturn Go page now includes an `XDMA Doctor` action that runs a classified read-only PCIe/XDMA report through the existing privileged helper lane.
 
 ### Changed
+- Saturn Remote TLS listener now fails closed when `SATURN_REMOTE_BASIC_AUTH`
+  is unset or malformed: it refuses to bind on port 8443, logs an `ERROR`
+  with the remediation, and leaves the Saturn Go admin HTTP listener
+  (port 8080, `/saturn/*` via nginx) running so the appliance stays
+  manageable. Set `Environment=SATURN_REMOTE_BASIC_AUTH=username:password`
+  in `saturn-go.service` (typically via the installer-managed drop-in or
+  `systemctl edit saturn-go.service`) to restore `/remote` and
+  `/remote-next`. As a development-only escape hatch, set
+  `SATURN_REMOTE_DEV_INSECURE=1` to start the listener without auth — not
+  for production. Pre-existing deployments running without the env var
+  will see `:8443` stop binding after upgrade until they set it.
+- `install_saturn_go_nginx.sh` now writes
+  `/etc/systemd/system/saturn-go.service.d/10-remote-auth.conf` (mode
+  `0600 root:root`) carrying `SATURN_REMOTE_BASIC_AUTH=admin:<password>`
+  alongside `/etc/nginx/.htpasswd` whenever the installer captures a
+  fresh admin password (interactive prompt, `SATURN_ADMIN_PASSWORD` env,
+  or non-TTY random generation). Reruns that reuse an existing
+  `/etc/nginx/.htpasswd` preserve any pre-existing drop-in unchanged.
+  When the installer has no fresh password and no drop-in exists, it
+  warns the operator with the exact `systemctl edit` recipe needed to
+  align the TLS path with the LAN nginx password.
+- Known gap: `/change_password` (admin password change UI) currently
+  updates only `/etc/nginx/.htpasswd`. The Saturn Remote TLS drop-in must
+  be updated manually (or the installer rerun with `SATURN_ADMIN_PASSWORD`)
+  until `/change_password` is extended to write both targets. The
+  Tailscale helper (`saturn-go-tailscale-serve.sh`) refuses to configure
+  Serve when this misalignment leaves `/remote-next` returning anything
+  other than HTTP 401 to unauthenticated requests.
 - `install_saturn_go_nginx.sh` now installs `nodejs` and `npm` as required
   dependencies and runs `npm ci && npm run build` in
   `update_manager/remote-web` before staging assets, so a fresh install

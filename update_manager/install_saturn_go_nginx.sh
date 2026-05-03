@@ -457,11 +457,36 @@ server {
 NGINX
 
 PASSWORD_MIN_LEN=5
+# Reject newline / CR / tab / NUL: these cannot be safely written to a systemd
+# Environment= line, and allowing them past .htpasswd would leave LAN auth
+# updated while the TLS drop-in is skipped — a split-auth deployment where
+# /saturn/* and /remote* accept different credentials.
+password_has_control_char() {
+  [[ "$1" == *[$'\n\r\t\0']* ]]
+}
+generate_readable_admin_password() {
+  local words=(
+    radio signal meter antenna vfo tuner audio remote beacon
+    filter keyer waterfall spectrum carrier relay shack station
+    gain level drive power field panel band mode
+  )
+  local digits n word_a word_b
+  word_a="${words[$((RANDOM % ${#words[@]}))]}"
+  word_b="${words[$((RANDOM % ${#words[@]}))]}"
+  n="$(od -An -N2 -tu2 /dev/urandom)"
+  digits="$(printf '%04d' "$((n % 10000))")"
+  printf 'saturn-%s-%s-%s' "$word_a" "$word_b" "$digits"
+}
 generated_password=""
 admin_password="${SATURN_ADMIN_PASSWORD:-}"
 if [[ -n "$admin_password" ]]; then
   if [[ ${#admin_password} -lt ${PASSWORD_MIN_LEN} ]]; then
     err "Provided SATURN_ADMIN_PASSWORD is too short (minimum ${PASSWORD_MIN_LEN} characters)."
+    exit 1
+  fi
+  if password_has_control_char "$admin_password"; then
+    err "Provided SATURN_ADMIN_PASSWORD contains a control character (newline/CR/tab/NUL)."
+    err "Use a password without control characters and re-run the installer."
     exit 1
   fi
   info "Setting HTTP basic auth credentials for admin user from SATURN_ADMIN_PASSWORD..."
@@ -483,12 +508,16 @@ elif [[ ! -s "$BASIC_AUTH_FILE" ]]; then
         warn "Password too short. Minimum ${PASSWORD_MIN_LEN} characters."
         continue
       fi
+      if password_has_control_char "$admin_password"; then
+        warn "Password contains a control character (newline/CR/tab/NUL). Try again."
+        continue
+      fi
       break
     done
   else
-    admin_password="$(tr -dc 'A-Za-z0-9@#%^+=_' </dev/urandom | head -c 24)"
+    admin_password="$(generate_readable_admin_password)"
     generated_password="$admin_password"
-    warn "No TTY available; generated random admin password."
+    warn "No TTY available; generated readable admin password."
   fi
 
   printf '%s\n' "$admin_password" | htpasswd -i -c "$BASIC_AUTH_FILE" admin >/dev/null
@@ -497,6 +526,63 @@ elif [[ ! -s "$BASIC_AUTH_FILE" ]]; then
   ok "Basic auth configured"
 else
   info "Reusing existing $BASIC_AUTH_FILE"
+fi
+
+# Saturn Remote TLS listener requires SATURN_REMOTE_BASIC_AUTH in the
+# saturn-go.service environment. We write a systemd drop-in only when this
+# install run captured a fresh plaintext password (either from the operator,
+# from $SATURN_ADMIN_PASSWORD, or generated above). On reruns that reuse an
+# existing /etc/nginx/.htpasswd we have no plaintext, so we preserve any
+# existing drop-in and warn if none is present.
+#
+# Escape rules for systemd Environment="KEY=value":
+#   - %% always (specifier expansion runs even inside quotes)
+#   - \\ and \" inside the quoted form
+#   - newlines / NULs / other control chars are not representable; reject them.
+systemd_env_escape() {
+  local v="$1"
+  v="${v//\\/\\\\}"
+  v="${v//\"/\\\"}"
+  v="${v//%/%%}"
+  printf '%s' "$v"
+}
+REMOTE_AUTH_DROPIN_DIR="/etc/systemd/system/$(basename "$SERVICE_FILE").d"
+REMOTE_AUTH_DROPIN_FILE="$REMOTE_AUTH_DROPIN_DIR/10-remote-auth.conf"
+if [[ -n "${admin_password:-}" ]]; then
+  # admin_password is already validated control-char-free upstream (env-var,
+  # interactive, and generated paths all check before writing .htpasswd), so
+  # this branch can write the drop-in unconditionally and stay aligned with
+  # the LAN nginx password.
+  escaped_password="$(systemd_env_escape "$admin_password")"
+  info "Writing Saturn Remote TLS auth drop-in: $REMOTE_AUTH_DROPIN_FILE"
+  install -d -m 0755 -o root -g root "$REMOTE_AUTH_DROPIN_DIR"
+  (
+    umask 0177
+    cat > "$REMOTE_AUTH_DROPIN_FILE" <<EOF
+# Managed by install_saturn_go_nginx.sh
+# Saturn Remote TLS listener basic-auth credentials. The TLS listener on
+# :8443 (rust-server/src/remote_tls.rs) refuses to bind without this. Keep
+# this aligned with /etc/nginx/.htpasswd so /saturn/* and /remote* accept
+# the same admin password.
+[Service]
+Environment="SATURN_REMOTE_BASIC_AUTH=admin:${escaped_password}"
+EOF
+  )
+  chmod 0600 "$REMOTE_AUTH_DROPIN_FILE"
+  chown root:root "$REMOTE_AUTH_DROPIN_FILE"
+  unset escaped_password
+  ok "Saturn Remote TLS auth drop-in installed"
+elif [[ -f "$REMOTE_AUTH_DROPIN_FILE" ]]; then
+  ok "Preserving existing Saturn Remote TLS auth drop-in: $REMOTE_AUTH_DROPIN_FILE"
+else
+  warn "No fresh admin password and no existing $REMOTE_AUTH_DROPIN_FILE."
+  warn "Saturn Remote TLS listener will refuse to bind on :8443 until SATURN_REMOTE_BASIC_AUTH is set."
+  warn "To align manually with the existing /etc/nginx/.htpasswd password:"
+  warn "  sudo systemctl edit $(basename "$SERVICE_FILE")"
+  warn "  Add under [Service]:"
+  warn "    Environment=\"SATURN_REMOTE_BASIC_AUTH=admin:<your-existing-password>\""
+  warn "  sudo systemctl restart $(basename "$SERVICE_FILE")"
+  warn "Or rerun this installer with SATURN_ADMIN_PASSWORD=<password> to write both."
 fi
 
 rm -f /etc/nginx/sites-enabled/default || true

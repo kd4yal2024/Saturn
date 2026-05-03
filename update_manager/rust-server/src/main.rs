@@ -20,8 +20,9 @@ use crate::pages::{
     saturngo_handler, update_handler,
 };
 use crate::remote_tls::{
-    ensure_self_signed_cert, load_remote_tls_config, remote_basic_auth_configured,
-    remote_bridge_ws_handler, remote_tls_router,
+    dev_insecure_override_set, ensure_self_signed_cert, load_remote_tls_config,
+    remote_basic_auth_configured, remote_bridge_ws_handler, remote_tls_bind_decision,
+    remote_tls_router, RemoteTlsBindDecision,
 };
 use crate::repair::{repair_pack, verify_system_config};
 use crate::state::{
@@ -271,6 +272,8 @@ async fn main() {
         .route("/saturngo_policy", get(get_saturngo_policy))
         .route("/saturngo_policy", post(set_saturngo_policy))
         .route("/saturngo_deploy_status", get(get_saturngo_deploy_status))
+        .route("/bridge_diag", get(get_bridge_diag))
+        .route("/saturn/bridge_diag", get(get_bridge_diag))
         .route("/p23_status", get(get_p23_status))
         .route("/p23_perf", get(get_p23_perf))
         .route("/p23_adc_telemetry", post(set_p23_adc_telemetry))
@@ -354,21 +357,54 @@ async fn main() {
     let http_server = serve_http(listener, app, shutdown_rx.clone());
 
     if let Some((remote_tls_addr, rustls_config, remote_tls_app)) = remote_tls_router {
-        if !remote_basic_auth_configured() {
-            warn!(
-                "Saturn Remote TLS is listening on https://{remote_tls_addr} without {env} configured; remote control is unauthenticated",
-                env = "SATURN_REMOTE_BASIC_AUTH"
-            );
-        }
-        info!("Saturn Remote TLS listening on https://{remote_tls_addr}");
-        let tls_shutdown = shutdown_rx.clone();
-        tokio::spawn(async move {
-            if let Err(err) =
-                serve_remote_tls(remote_tls_addr, rustls_config, remote_tls_app, tls_shutdown).await
-            {
-                error!("Saturn Remote TLS server error: {err}");
+        let auth_configured = remote_basic_auth_configured();
+        let dev_insecure = dev_insecure_override_set();
+        match remote_tls_bind_decision(auth_configured, dev_insecure) {
+            RemoteTlsBindDecision::Refuse => {
+                error!(
+                    "Saturn Remote TLS listener refusing to start: SATURN_REMOTE_BASIC_AUTH is unset or malformed."
+                );
+                error!(
+                    "Set Environment=SATURN_REMOTE_BASIC_AUTH=username:password in saturn-go.service (e.g. via `systemctl edit saturn-go.service`) and restart, or set SATURN_REMOTE_DEV_INSECURE=1 to override (NOT FOR PRODUCTION)."
+                );
+                error!("Saturn Go admin (port 8080) continues to start normally.");
             }
-        });
+            RemoteTlsBindDecision::BindInsecure => {
+                warn!(
+                    "SATURN_REMOTE_DEV_INSECURE=1 — Saturn Remote TLS is starting WITHOUT basic auth on https://{remote_tls_addr}. Do not use in production."
+                );
+                info!("Saturn Remote TLS listening on https://{remote_tls_addr}");
+                let tls_shutdown = shutdown_rx.clone();
+                tokio::spawn(async move {
+                    if let Err(err) = serve_remote_tls(
+                        remote_tls_addr,
+                        rustls_config,
+                        remote_tls_app,
+                        tls_shutdown,
+                    )
+                    .await
+                    {
+                        error!("Saturn Remote TLS server error: {err}");
+                    }
+                });
+            }
+            RemoteTlsBindDecision::Bind => {
+                info!("Saturn Remote TLS listening on https://{remote_tls_addr}");
+                let tls_shutdown = shutdown_rx.clone();
+                tokio::spawn(async move {
+                    if let Err(err) = serve_remote_tls(
+                        remote_tls_addr,
+                        rustls_config,
+                        remote_tls_app,
+                        tls_shutdown,
+                    )
+                    .await
+                    {
+                        error!("Saturn Remote TLS server error: {err}");
+                    }
+                });
+            }
+        }
     }
     http_server.await.expect("server failed");
 
@@ -1111,6 +1147,146 @@ async fn get_saturngo_deploy_status(State(state): State<AppState>) -> Response {
         .into_response(),
         Err(e) => json_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
     }
+}
+
+async fn get_bridge_diag() -> Response {
+    fn strip_journal_prefix(line: &str) -> &str {
+        line.split_once("saturn-bridge")
+            .map(|(_, rest)| {
+                rest.trim_start_matches([
+                    '[', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', ']',
+                ])
+            })
+            .and_then(|rest| rest.split_once(": ").map(|(_, msg)| msg))
+            .unwrap_or(line)
+    }
+
+    fn parse_diag_fields(line: &str) -> BTreeMap<String, serde_json::Value> {
+        let mut fields = BTreeMap::<String, serde_json::Value>::new();
+        let Some((_, rest)) = line.split_once("diag ") else {
+            return fields;
+        };
+        for token in rest.split_whitespace() {
+            let Some((key, value)) = token.split_once('=') else {
+                continue;
+            };
+            let json_value = if value == "-" {
+                serde_json::Value::Null
+            } else if let Ok(v) = value.parse::<i64>() {
+                serde_json::json!(v)
+            } else if let Ok(v) = value.parse::<f64>() {
+                serde_json::json!(v)
+            } else {
+                serde_json::json!(value)
+            };
+            fields.insert(key.to_string(), json_value);
+        }
+        fields
+    }
+
+    async fn command_text(program: &str, args: &[&str]) -> (bool, String) {
+        match Command::new(program).args(args).output().await {
+            Ok(out) => {
+                let mut text = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                if text.is_empty() {
+                    text = output_error_text(&out);
+                }
+                (out.status.success(), text)
+            }
+            Err(e) => (false, format!("error: {e}")),
+        }
+    }
+
+    let service_name = "saturn-bridge.service";
+    let (active_ok, active) = command_text("systemctl", &["is-active", service_name]).await;
+    let (_, enabled) = command_text("systemctl", &["is-enabled", service_name]).await;
+    let (_, main_pid_text) = command_text(
+        "systemctl",
+        &["show", "-p", "MainPID", "--value", service_name],
+    )
+    .await;
+    let (_, environment) = command_text(
+        "systemctl",
+        &["show", "-p", "Environment", "--value", service_name],
+    )
+    .await;
+    let (journal_ok, journal) = command_text(
+        "journalctl",
+        &[
+            "-u",
+            service_name,
+            "-n",
+            "180",
+            "--no-pager",
+            "-o",
+            "short-iso",
+        ],
+    )
+    .await;
+    let main_pid = main_pid_text.trim().parse::<u32>().ok().filter(|v| *v > 0);
+    let running_exe = main_pid.and_then(|pid| {
+        fs::read_link(format!("/proc/{pid}/exe"))
+            .ok()
+            .map(|p| p.display().to_string())
+    });
+
+    let lines: Vec<&str> = journal.lines().collect();
+    let diag_lines: Vec<String> = lines
+        .iter()
+        .filter(|line| line.contains("saturn-bridge: diag "))
+        .rev()
+        .take(20)
+        .map(|line| strip_journal_prefix(line).to_string())
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect();
+    let status_lines: Vec<String> = lines
+        .iter()
+        .filter(|line| {
+            line.contains("saturn-bridge: vfoA=")
+                || line.contains("saturn-bridge: TX ")
+                || line.contains("saturn-bridge: remote TX")
+                || line.contains("saturn-bridge: clamping remote TX")
+        })
+        .rev()
+        .take(20)
+        .map(|line| strip_journal_prefix(line).to_string())
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect();
+    let latest_diag = diag_lines.last().map(|line| {
+        serde_json::json!({
+            "line": line,
+            "fields": parse_diag_fields(line),
+        })
+    });
+    let latest_status = status_lines.last().cloned();
+
+    Json(serde_json::json!({
+        "status": "ok",
+        "bridge": {
+            "service": {
+                "name": service_name,
+                "active": active,
+                "active_ok": active_ok,
+                "enabled": enabled,
+                "main_pid": main_pid_text.trim(),
+                "running_exe": running_exe,
+                "environment": environment,
+            },
+            "journal": {
+                "ok": journal_ok,
+                "source": "journalctl -u saturn-bridge.service -n 180 --no-pager -o short-iso",
+                "latest_diag": latest_diag,
+                "latest_status": latest_status,
+                "diag_lines": diag_lines,
+                "status_lines": status_lines,
+            }
+        }
+    }))
+    .into_response()
 }
 
 async fn get_p23_status(State(state): State<AppState>) -> Response {

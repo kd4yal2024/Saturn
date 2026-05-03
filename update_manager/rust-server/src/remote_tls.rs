@@ -7,9 +7,8 @@ use std::{
 
 use axum::{
     extract::{
-        Path as AxumPath,
         ws::{Message as AxumMessage, WebSocket, WebSocketUpgrade},
-        State,
+        Path as AxumPath, State,
     },
     http::{header, HeaderMap, HeaderValue, StatusCode},
     response::{IntoResponse, Response},
@@ -37,7 +36,45 @@ type RemoteTlsResult<T> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
 const DEFAULT_REMOTE_TLS_ADDR: &str = "0.0.0.0:8443";
 const REMOTE_BASIC_AUTH_ENV: &str = "SATURN_REMOTE_BASIC_AUTH";
+const REMOTE_DEV_INSECURE_ENV: &str = "SATURN_REMOTE_DEV_INSECURE";
 const REMOTE_BASIC_AUTH_CHALLENGE: &str = "Basic realm=\"Saturn Remote\", charset=\"UTF-8\"";
+
+/// Decision for whether the Saturn Remote TLS listener should bind at startup.
+///
+/// Pure function of `(auth_configured, dev_insecure_override)` so the policy is
+/// trivially testable without touching process env. The caller in `main.rs`
+/// reads the env once and passes the booleans in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RemoteTlsBindDecision {
+    /// Saturn Remote auth is configured; bind the TLS listener normally.
+    Bind,
+    /// Auth is missing/malformed but `SATURN_REMOTE_DEV_INSECURE=1` is set.
+    /// Bind the listener with no auth gate (development only).
+    BindInsecure,
+    /// Auth is missing and no override; refuse to bind. Admin HTTP is unaffected.
+    Refuse,
+}
+
+pub fn remote_tls_bind_decision(
+    auth_configured: bool,
+    dev_insecure_override: bool,
+) -> RemoteTlsBindDecision {
+    match (auth_configured, dev_insecure_override) {
+        (true, _) => RemoteTlsBindDecision::Bind,
+        (false, true) => RemoteTlsBindDecision::BindInsecure,
+        (false, false) => RemoteTlsBindDecision::Refuse,
+    }
+}
+
+/// Reads `SATURN_REMOTE_DEV_INSECURE` from process env and returns `true` only
+/// when the value is exactly `1` (with surrounding whitespace tolerated). Any
+/// other value — empty, `0`, `true`, `false` — returns `false`.
+pub fn dev_insecure_override_set() -> bool {
+    match std::env::var(REMOTE_DEV_INSECURE_ENV) {
+        Ok(raw) => raw.trim() == "1",
+        Err(_) => false,
+    }
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct NormalizedAuthority {
@@ -132,6 +169,8 @@ pub fn remote_tls_router(state: AppState) -> Router {
         .route("/remote.html", get(remote_page_handler))
         .route("/saturn-remote", get(remote_page_handler))
         .route("/saturn-remote.html", get(remote_page_handler))
+        .route("/remote-next", get(remote_next_page_handler))
+        .route("/remote-next.html", get(remote_next_page_handler))
         .route("/healthz", get(healthz))
         .route("/remote_settings", get(remote_settings_get_handler))
         .route("/remote_settings", post(remote_settings_post_handler))
@@ -152,10 +191,18 @@ pub fn remote_tls_router(state: AppState) -> Router {
 }
 
 async fn remote_page_handler(headers: HeaderMap, State(state): State<AppState>) -> Response {
+    remote_page_response(headers, state, "saturn-remote.html").await
+}
+
+async fn remote_next_page_handler(headers: HeaderMap, State(state): State<AppState>) -> Response {
+    remote_page_response(headers, state, "saturn-remote-next.html").await
+}
+
+async fn remote_page_response(headers: HeaderMap, state: AppState, page: &str) -> Response {
     if let Err(rejection) = check_remote_basic_auth(&headers) {
         return rejection;
     }
-    let mut resp = serve_page(&state.webroot, "saturn-remote.html").await;
+    let mut resp = serve_page(&state.webroot, page).await;
     // Enable SharedArrayBuffer for AudioWorklet ring-buffer audio pipeline.
     let hdrs = resp.headers_mut();
     hdrs.insert(
@@ -184,6 +231,7 @@ async fn remote_asset_handler(
         "tci.js" => "saturn-remote-tci.js",
         "transport.js" => "saturn-remote-transport.js",
         "browser.js" => "saturn-remote-browser.js",
+        "remote-next.js" => "saturn-remote-next.js",
         _ => return (StatusCode::NOT_FOUND, "asset not found").into_response(),
     };
 
@@ -191,7 +239,10 @@ async fn remote_asset_handler(
         Ok(body) => (
             [
                 (header::CACHE_CONTROL, "no-cache, no-store, must-revalidate"),
-                (header::CONTENT_TYPE, "application/javascript; charset=utf-8"),
+                (
+                    header::CONTENT_TYPE,
+                    "application/javascript; charset=utf-8",
+                ),
             ],
             body,
         )
@@ -202,13 +253,14 @@ async fn remote_asset_handler(
 
 pub async fn remote_bridge_ws_handler(
     headers: HeaderMap,
+    uri: axum::http::Uri,
     ws: WebSocketUpgrade,
     State(state): State<AppState>,
 ) -> Response {
     if let Err(rejection) = check_remote_basic_auth(&headers) {
         return rejection;
     }
-    if let Err(rejection) = check_ws_origin(&headers) {
+    if let Err(rejection) = check_ws_origin(&headers, &uri) {
         return rejection;
     }
     ws.on_upgrade(move |socket| proxy_bridge_socket(socket, state.bridge_ws_url))
@@ -281,7 +333,7 @@ async fn remote_profiles_startup_handler(
 /// Reject WebSocket upgrades whose Origin authority differs from the request
 /// Host authority. This is the browser-facing proxy path, so require an Origin
 /// header and treat host+port mismatches as cross-origin.
-fn check_ws_origin(headers: &HeaderMap) -> Result<(), Response> {
+fn check_ws_origin(headers: &HeaderMap, uri: &axum::http::Uri) -> Result<(), Response> {
     let Some(origin) = headers.get(header::ORIGIN).and_then(|v| v.to_str().ok()) else {
         return Err((StatusCode::FORBIDDEN, "missing Origin header").into_response());
     };
@@ -291,10 +343,17 @@ fn check_ws_origin(headers: &HeaderMap) -> Result<(), Response> {
     }
     let origin_authority = origin_authority_from_url(origin)
         .ok_or_else(|| (StatusCode::FORBIDDEN, "invalid Origin header").into_response())?;
+    // Try Host header first, fall back to URI authority for HTTP/2 which
+    // uses the :authority pseudo-header instead of Host.
     let request_host = headers
         .get(header::HOST)
         .and_then(|v| v.to_str().ok())
         .and_then(|v| authority_from_host_header(v, Some(origin_authority.default_port)))
+        .or_else(|| {
+            uri.authority().and_then(|a| {
+                authority_from_host_header(a.as_str(), Some(origin_authority.default_port))
+            })
+        })
         .ok_or_else(|| (StatusCode::BAD_REQUEST, "missing Host header").into_response())?;
     if origin_authority.authority != request_host {
         return Err((StatusCode::FORBIDDEN, "cross-origin websocket rejected").into_response());
@@ -635,6 +694,68 @@ mod tests {
     }
 
     #[test]
+    fn remote_tls_bind_decision_binds_when_auth_configured() {
+        assert_eq!(
+            remote_tls_bind_decision(true, false),
+            RemoteTlsBindDecision::Bind
+        );
+        assert_eq!(
+            remote_tls_bind_decision(true, true),
+            RemoteTlsBindDecision::Bind
+        );
+    }
+
+    #[test]
+    fn remote_tls_bind_decision_refuses_when_auth_missing_and_no_override() {
+        assert_eq!(
+            remote_tls_bind_decision(false, false),
+            RemoteTlsBindDecision::Refuse
+        );
+    }
+
+    #[test]
+    fn remote_tls_bind_decision_binds_insecure_when_override_set_and_no_auth() {
+        assert_eq!(
+            remote_tls_bind_decision(false, true),
+            RemoteTlsBindDecision::BindInsecure
+        );
+    }
+
+    #[test]
+    fn dev_insecure_override_recognizes_only_one() {
+        // Save+restore env so the test does not bleed into other cases.
+        // SATURN_REMOTE_DEV_INSECURE is intentionally not in OnceLock — each
+        // call reads the current env directly.
+        let prev = std::env::var(REMOTE_DEV_INSECURE_ENV).ok();
+
+        std::env::remove_var(REMOTE_DEV_INSECURE_ENV);
+        assert!(!dev_insecure_override_set(), "unset should be false");
+
+        std::env::set_var(REMOTE_DEV_INSECURE_ENV, "");
+        assert!(!dev_insecure_override_set(), "empty should be false");
+
+        std::env::set_var(REMOTE_DEV_INSECURE_ENV, "0");
+        assert!(!dev_insecure_override_set(), "0 should be false");
+
+        std::env::set_var(REMOTE_DEV_INSECURE_ENV, "true");
+        assert!(!dev_insecure_override_set(), "'true' should be false");
+
+        std::env::set_var(REMOTE_DEV_INSECURE_ENV, "1");
+        assert!(dev_insecure_override_set(), "1 should be true");
+
+        std::env::set_var(REMOTE_DEV_INSECURE_ENV, "  1  ");
+        assert!(dev_insecure_override_set(), "whitespace-padded 1 should be true");
+
+        std::env::set_var(REMOTE_DEV_INSECURE_ENV, "11");
+        assert!(!dev_insecure_override_set(), "11 should be false");
+
+        match prev {
+            Some(v) => std::env::set_var(REMOTE_DEV_INSECURE_ENV, v),
+            None => std::env::remove_var(REMOTE_DEV_INSECURE_ENV),
+        }
+    }
+
+    #[test]
     fn parses_origin_authority_with_explicit_port() {
         assert_eq!(
             origin_authority_from_url("https://radio.local:8443/tci"),
@@ -673,6 +794,10 @@ mod tests {
         );
     }
 
+    fn empty_uri() -> axum::http::Uri {
+        "/tci".parse().unwrap()
+    }
+
     #[test]
     fn check_ws_origin_rejects_cross_origin_port_mismatch() {
         let mut headers = HeaderMap::new();
@@ -681,7 +806,7 @@ mod tests {
             HeaderValue::from_static("https://radio.local:3000"),
         );
         headers.insert(header::HOST, HeaderValue::from_static("radio.local:8443"));
-        assert!(check_ws_origin(&headers).is_err());
+        assert!(check_ws_origin(&headers, &empty_uri()).is_err());
     }
 
     #[test]
@@ -692,14 +817,26 @@ mod tests {
             HeaderValue::from_static("https://radio.local:8443"),
         );
         headers.insert(header::HOST, HeaderValue::from_static("radio.local:8443"));
-        assert!(check_ws_origin(&headers).is_ok());
+        assert!(check_ws_origin(&headers, &empty_uri()).is_ok());
     }
 
     #[test]
     fn check_ws_origin_requires_origin_header() {
         let mut headers = HeaderMap::new();
         headers.insert(header::HOST, HeaderValue::from_static("radio.local:8443"));
-        assert!(check_ws_origin(&headers).is_err());
+        assert!(check_ws_origin(&headers, &empty_uri()).is_err());
+    }
+
+    #[test]
+    fn check_ws_origin_accepts_uri_authority_fallback() {
+        // HTTP/2: no Host header, authority comes from URI
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::ORIGIN,
+            HeaderValue::from_static("https://radio.local:8443"),
+        );
+        let uri: axum::http::Uri = "https://radio.local:8443/tci".parse().unwrap();
+        assert!(check_ws_origin(&headers, &uri).is_ok());
     }
 
     #[tokio::test]
@@ -726,6 +863,79 @@ mod tests {
         );
         let body = to_bytes(res.into_body(), 4096).await.unwrap();
         assert_eq!(body, &b"window.testStorage = true;"[..]);
+    }
+
+    #[tokio::test]
+    async fn remote_page_route_serves_stable_remote_page() {
+        let state = test_state("remote-page");
+        tokio::fs::create_dir_all(&state.webroot).await.unwrap();
+        tokio::fs::write(state.webroot.join("saturn-remote.html"), "stable remote")
+            .await
+            .unwrap();
+
+        let app = remote_tls_router(state);
+        let req = Request::builder()
+            .uri("/remote")
+            .body(Body::empty())
+            .unwrap();
+        let res = app.oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        assert_eq!(
+            res.headers()
+                .get(header::HeaderName::from_static(
+                    "cross-origin-opener-policy"
+                ))
+                .unwrap(),
+            "same-origin"
+        );
+        assert_eq!(
+            res.headers()
+                .get(header::HeaderName::from_static(
+                    "cross-origin-embedder-policy"
+                ))
+                .unwrap(),
+            "credentialless"
+        );
+        let body = to_bytes(res.into_body(), 4096).await.unwrap();
+        assert_eq!(body, &b"stable remote"[..]);
+    }
+
+    #[tokio::test]
+    async fn remote_next_route_serves_dev_remote_page() {
+        let state = test_state("remote-next-page");
+        tokio::fs::create_dir_all(&state.webroot).await.unwrap();
+        tokio::fs::write(state.webroot.join("saturn-remote.html"), "stable remote")
+            .await
+            .unwrap();
+        tokio::fs::write(state.webroot.join("saturn-remote-next.html"), "dev remote")
+            .await
+            .unwrap();
+
+        let app = remote_tls_router(state);
+        let req = Request::builder()
+            .uri("/remote-next")
+            .body(Body::empty())
+            .unwrap();
+        let res = app.oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        assert_eq!(
+            res.headers()
+                .get(header::HeaderName::from_static(
+                    "cross-origin-opener-policy"
+                ))
+                .unwrap(),
+            "same-origin"
+        );
+        assert_eq!(
+            res.headers()
+                .get(header::HeaderName::from_static(
+                    "cross-origin-embedder-policy"
+                ))
+                .unwrap(),
+            "credentialless"
+        );
+        let body = to_bytes(res.into_body(), 4096).await.unwrap();
+        assert_eq!(body, &b"dev remote"[..]);
     }
 
     #[tokio::test]
@@ -830,6 +1040,32 @@ mod tests {
         );
         let body = to_bytes(res.into_body(), 4096).await.unwrap();
         assert_eq!(body, &b"window.testBrowser = true;"[..]);
+    }
+
+    #[tokio::test]
+    async fn remote_asset_route_serves_remote_next_bundle() {
+        let state = test_state("asset-remote-next-bundle");
+        tokio::fs::create_dir_all(&state.webroot).await.unwrap();
+        tokio::fs::write(
+            state.webroot.join("saturn-remote-next.js"),
+            "window.testRemoteNext = true;",
+        )
+        .await
+        .unwrap();
+
+        let app = remote_tls_router(state);
+        let req = Request::builder()
+            .uri("/remote-assets/remote-next.js")
+            .body(Body::empty())
+            .unwrap();
+        let res = app.oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        assert_eq!(
+            res.headers().get(header::CONTENT_TYPE).unwrap(),
+            "application/javascript; charset=utf-8"
+        );
+        let body = to_bytes(res.into_body(), 4096).await.unwrap();
+        assert_eq!(body, &b"window.testRemoteNext = true;"[..]);
     }
 
     #[tokio::test]

@@ -78,6 +78,236 @@ Remote Setup profile notes:
 - If `/remote-next` returns 404 on the bundle (`/remote-assets/remote-next.js`), confirm `npm ci && npm run build` succeeded in `update_manager/remote-web` and that `saturn-remote-next.js` is present in `/var/lib/saturn-web/`. The installer and `update-saturn-go.sh` now treat a missing bundle as a hard failure; this check covers manual or pre-promotion deploys.
 - If TX appears stuck after a browser crash or tab close, confirm both `saturn-bridge.service` and `saturn-go.service` are on the latest deployed build with the explicit TX-release path.
 
+## Secure Remote Access with Tailscale
+
+Tailscale is the recommended way to reach Saturn Remote from outside the LAN. It is **optional** — nothing in Saturn requires it, and the existing LAN entry points keep working unchanged. The deployment described below provides operator-friendly remote access (real Let's Encrypt cert, MagicDNS hostname, no port-forwarding) while preserving every Saturn security control: HTTP basic auth, RF TX opt-in, and loopback-only internal listeners.
+
+### Why Tailscale Serve, not Funnel
+
+Use `tailscale serve` to expose Saturn Remote **only to your tailnet**:
+
+```bash
+sudo tailscale serve --bg --https=443 https+insecure://127.0.0.1:8443
+```
+
+Operator URL after Serve is configured:
+
+```
+https://<saturn-host>.<tailnet>.ts.net/remote-next
+```
+
+Do **not** use `tailscale funnel` for normal operation. Funnel exposes the same listener to the public internet via Tailscale's edge, which puts a radio control surface in front of arbitrary internet traffic. The basic-auth gate is the only line of defense in that configuration, and a single credential leak becomes a worldwide problem instead of a tailnet-scoped one.
+
+### Why `https+insecure://127.0.0.1:8443` (and not `http://127.0.0.1:8080`)
+
+Saturn Go listens on two addresses:
+
+- `127.0.0.1:8080` — internal HTTP listener for `/saturn/*` admin routes proxied via nginx. No basic-auth gate, no `/remote*` routes, no `Cross-Origin-Opener-Policy` / `Cross-Origin-Embedder-Policy` headers.
+- `0.0.0.0:8443` — Saturn Remote TLS listener (`rust-server/src/remote_tls.rs`). Enforces the basic-auth check (`check_remote_basic_auth`), serves `/remote`, `/remote-next`, `/remote-assets/*`, and `/tci`, and emits the COOP/COEP headers that `/remote-next` requires for `SharedArrayBuffer` and `AudioWorklet` to function in the browser.
+
+Tailscale Serve must front the `:8443` listener, not `:8080`. The `https+insecure://` scheme tells Tailscale to skip cert validation against the loopback origin (Saturn's self-signed cert) — the public-facing cert that browsers see is the real Let's Encrypt cert Tailscale provisions for the tailnet hostname. This is the documented Tailscale pattern for fronting a self-signed origin.
+
+A future contributor "simplifying" the mapping to `:8080` would silently strip basic auth and the cross-origin isolation headers and ship a broken `/remote-next` page. The mapping is load-bearing.
+
+### Tailscale URL rule: no port
+
+The operator-facing URL is always:
+
+```
+https://<saturn-host>.<tailnet>.ts.net/remote-next
+```
+
+with **no explicit port**. `tailscale serve --https=443` binds 443 on the tailnet hostname; browsers default to 443 for `https://`, so the port is implicit and omitting it is correct.
+
+The existing nginx config at `/etc/nginx/sites-available/saturn` returns `302 https://$host:8443/remote` for plain-HTTP `/remote` hits. That redirect is **LAN-only behavior**. Over Tailscale it would bounce operators off the Serve port (443) onto port 8443, which is not exposed by the Serve mapping. Document the no-port URL explicitly in any operator-facing setup notes; do not type `:8443` into a tailnet URL bar.
+
+### Hostname hygiene
+
+The tailnet hostname inherits the system hostname when the node first joins. A stock Raspberry Pi OS install gives every Pi the same `raspberrypi` hostname, which collides with every other Pi on the operator's tailnet — first-come wins, the rest get suffixed (`raspberrypi-1`, `raspberrypi-2`, ...).
+
+Before running `tailscale up` for the first time, set a meaningful hostname:
+
+```bash
+sudo tailscale set --hostname=saturn-g2
+```
+
+(`saturn-g2`, `saturn-shack`, `kd4yal-saturn` — anything operator-meaningful and unique within the tailnet.)
+
+If the node is already joined under a generic name, the same command updates the tailnet hostname; the node's URL changes immediately, and stale `<old>.<tailnet>.ts.net` URLs stop resolving.
+
+### Authentication layers
+
+Tailscale does **not** replace Saturn Remote's basic auth — it stacks on top.
+
+- **Tailscale**: gates *who can reach* the listener at all. Only authenticated tailnet members (and their explicitly shared devices) can route traffic to the Pi.
+- **Basic auth in Saturn Remote**: gates *who can use* the listener once reached. The nginx LAN admin path uses `/etc/nginx/.htpasswd`; the Saturn Remote TLS listener uses the `SATURN_REMOTE_BASIC_AUTH=username:password` service environment consumed by `rust-server/src/remote_tls.rs`. Keep both credential paths aligned when changing the admin password. Survives Tailscale account compromise, shared device misuse, and accidental ACL widening.
+- **`SATURN_REMOTE_TX_RF_ENABLED`**: gates *whether RF TX is permitted at all*. Stays opt-in regardless of how the page is reached. A correctly authenticated Tailscale operator with valid basic-auth credentials still cannot key the radio unless this is explicitly set in the bridge environment.
+
+These three controls are independent. Do not collapse them.
+
+#### Live audit finding (2026-05-02)
+
+When the Tailscale helper was first dry-run on the development Pi, it correctly refused to configure Serve because `SATURN_REMOTE_BASIC_AUTH` was **not set** in `saturn-go.service`'s environment, and `https://127.0.0.1:8443/remote-next` was returning HTTP 200 to unauthenticated requests. The TLS remote auth gate was silently fail-open — the listener was reachable on the LAN with no credential check.
+
+This is a fail-open failure mode of `rust-server/src/remote_tls.rs::check_remote_basic_auth`: when `configured_basic_auth_header()` returns `None` (env var absent or malformed), the function returns `Ok(())` and every `/remote*` route serves unauthenticated. Saturn warns at startup but does not refuse to start.
+
+Remediation applied on that Pi:
+
+```bash
+sudo install -d -m 0755 /etc/systemd/system/saturn-go.service.d
+sudo tee /etc/systemd/system/saturn-go.service.d/10-remote-auth.conf >/dev/null <<'EOF'
+[Service]
+Environment=SATURN_REMOTE_BASIC_AUTH=admin:<choose-a-strong-password>
+EOF
+sudo chmod 0600 /etc/systemd/system/saturn-go.service.d/10-remote-auth.conf
+sudo systemctl daemon-reload
+sudo systemctl restart saturn-go.service
+curl -k -sS -o /dev/null -w 'HTTP %{http_code}\n' https://127.0.0.1:8443/remote-next
+# expected: HTTP 401
+curl -k -sS -o /dev/null -w 'HTTP %{http_code}\n' -u admin:<password> https://127.0.0.1:8443/remote-next
+# expected: HTTP 200
+```
+
+Operators inheriting an existing deployment should run the unauthenticated `curl` check above before assuming the basic-auth gate is active. Code-level fail-closed hardening (refuse to start the TLS listener when the env var is absent) is tracked separately and discussed in the next subsection.
+
+After setting `SATURN_REMOTE_BASIC_AUTH`, re-align `/etc/nginx/.htpasswd` to the same password so the LAN admin path (`/saturn/*`) and the TLS remote path (`/remote*`) accept the same credential:
+
+```bash
+sudo htpasswd -B /etc/nginx/.htpasswd admin
+# enter the same password used in SATURN_REMOTE_BASIC_AUTH
+```
+
+#### Fail-closed remote TLS listener (current behavior)
+
+The Saturn Remote TLS listener now fails closed when basic auth is not configured:
+
+- The listener on port 8443 refuses to bind if `SATURN_REMOTE_BASIC_AUTH` is unset or malformed (no `username:password` separator, empty username, or empty password).
+- The Saturn Go admin HTTP listener on port 8080 (`/saturn/*` via nginx) keeps starting normally — Saturn Go remains manageable from the LAN admin path even when the remote TLS gate refuses.
+- Startup emits an `ERROR` log line naming the missing env var and the remediation command, plus a follow-up `ERROR` confirming the admin listener is unaffected.
+
+To temporarily start the TLS listener without basic auth (development only — DO NOT use in production), set:
+
+```bash
+sudo systemctl edit saturn-go.service
+# Add under [Service]:
+#   Environment=SATURN_REMOTE_DEV_INSECURE=1
+sudo systemctl restart saturn-go.service
+```
+
+Saturn logs a warning and binds the listener with no auth gate. The override exists as an escape hatch for dev/lab environments and irregularly-upgraded appliances; long-term we expect operators to set `SATURN_REMOTE_BASIC_AUTH` and never touch the override.
+
+The installer writes `/etc/systemd/system/saturn-go.service.d/10-remote-auth.conf` (mode 0600 root:root) carrying `SATURN_REMOTE_BASIC_AUTH=admin:<password>` whenever a fresh password is captured during install (interactive prompt, `SATURN_ADMIN_PASSWORD` env, or non-TTY random generation). Reruns that reuse an existing `/etc/nginx/.htpasswd` preserve any pre-existing drop-in unchanged. If the installer cannot capture a fresh password and no drop-in exists, it warns the operator with the exact `systemctl edit` recipe to align the TLS path with the LAN nginx password.
+
+**Known gap (current diff)**: the `/change_password` admin endpoint updates only `/etc/nginx/.htpasswd`; the TLS auth drop-in must still be updated manually, or the installer rerun with `SATURN_ADMIN_PASSWORD=<new>` set, until that endpoint is extended to write both targets. The Tailscale helper (`saturn-go-tailscale-serve.sh`) catches the resulting misalignment by refusing to configure Serve when the unauthenticated `curl` check returns anything other than 401.
+
+### Bridge bind audit (known wide-bind on TCI)
+
+Verify what is actually listening before claiming anything is private:
+
+```bash
+sudo ss -ltnp | grep -E "saturn|8080|8443|50001"
+```
+
+Expected on a current deploy:
+
+- `127.0.0.1:8080` — saturn-go internal HTTP. Loopback. Correct.
+- `0.0.0.0:8443` — saturn-go TLS. Wide. Correct (basic-auth gated).
+- `0.0.0.0:50001` — **saturn-bridge TCI listener. Wide. Currently unauthenticated.**
+
+The bridge TCI listener is wide-bound by deployment-time configuration: `/etc/systemd/system/saturn-bridge.service` sets `Environment=SATURN_BRIDGE_TCI_HOST=0.0.0.0`. The repo's `saturn-bridge.service.example` does not set that variable, so the source default of `127.0.0.1` (`saturn-bridge/src/config.rs:36-37`) only applies when the deployed unit doesn't override it.
+
+This is a pre-existing LAN exposure, not a Tailscale regression. On the LAN it lets external TCI clients (Thetis, log4om, etc.) drive the radio over the wire without authentication. **Tailscale amplifies this** because every device on the operator's tailnet — phones, work laptops, devices shared by other tailnet users — inherits the same reach.
+
+Until a hardening pass tightens the bridge bind, operators using Tailscale should:
+
+- Treat tailnet membership as equivalent to LAN access for TCI purposes.
+- Use Tailscale ACLs to restrict the saturn node to specific user/device groups, not the default "everyone in the tailnet" reach.
+- Avoid sharing the Saturn node with guest devices via Tailscale's device-share feature.
+
+A planned future hardening pass will scope the bridge TCI listener (e.g. bind to `tailscale0` only, or require an auth handshake on connect) so this stops being an honor-system control. Tracked separately from this Tailscale rollout.
+
+### Tailscale ACL recommendation
+
+Default Tailscale ACL is `accept: ["*:*"]` — every node can reach every other node on every port. For a radio appliance this is too broad. Recommended baseline (set in the Tailscale admin console):
+
+```jsonc
+{
+  "tagOwners": {
+    "tag:saturn-radio": ["autogroup:admin"]
+  },
+  "acls": [
+    {
+      "action": "accept",
+      "src":    ["autogroup:admin"],
+      "dst":    ["tag:saturn-radio:443"]
+    }
+  ]
+}
+```
+
+Tag the saturn node with `tag:saturn-radio` (`sudo tailscale up --advertise-tags=tag:saturn-radio --reset`), and only allow admin-tagged users to reach port 443 on it. Phones and laptops still have to authenticate; guest devices and shared nodes do not get implicit reach to the radio.
+
+Tag-based ACLs are documented as an operator improvement, not a default — Tailscale's free tier supports them and they are the right model long-term, but the helper script does not enforce them.
+
+### Cert renewal
+
+Tailscale Serve auto-renews the Let's Encrypt cert for the tailnet hostname while the node is online and the tailnet is reachable. Renewal happens roughly 30 days before expiry.
+
+A node that is offline for **more than ~90 days** can come back to an expired cert. Reconnecting to the tailnet and waiting for the next renewal cycle (or running `sudo tailscale cert <hostname>` to force) clears it. For always-on Saturn Pis this is not a real concern; flag it for operators who run portable or seasonal installations.
+
+### Reboot validation
+
+After `tailscale up` and `tailscale serve` have been configured, reboot the Pi and verify:
+
+```bash
+# Daemon comes back automatically.
+systemctl is-enabled tailscaled.service
+systemctl is-active tailscaled.service
+
+# Tailnet connection re-established.
+tailscale status
+
+# Serve mapping is persistent (Tailscale stores it in tailscaled state).
+tailscale serve status
+
+# /remote-next loads from the tailnet URL after cold boot.
+curl -fsI "https://<saturn-host>.<tailnet>.ts.net/remote-next" \
+  -u admin:<password> >/dev/null && echo "remote-next reachable"
+```
+
+All four should pass without operator intervention. If `tailscaled` is not enabled, run `sudo systemctl enable --now tailscaled` so the daemon auto-starts on boot. Serve mapping is persistent in Tailscale's local state and does not need to be re-issued; the daemon coming back is sufficient.
+
+### Client validation matrix
+
+Before declaring a Tailscale rollout production-ready, validate the following clients against `https://<saturn-host>.<tailnet>.ts.net/remote-next`:
+
+- Windows: Chrome, Edge
+- macOS: Safari, Chrome
+- iPadOS: Safari
+- iPhone: Safari
+- Android: Chrome (if available)
+
+For each client, validate:
+
+- Page loads (`/remote-next` HTML + bundle).
+- WSS websocket connects (browser DevTools → Network → WS).
+- RX audio plays without underruns (requires `SharedArrayBuffer`, which requires the COOP/COEP headers from the TLS listener — confirms the `https+insecure://127.0.0.1:8443` mapping is wired correctly).
+- Panadapter and waterfall render.
+- Microphone permission prompt fires on PTT arm.
+- PTT arm → key → unkey cycle does not leave the bridge in TX state (`journalctl -u saturn-bridge.service` should show the explicit TX-release packets after release).
+- Reconnect after sleep / browser backgrounding / Tailscale client sleep restores the WSS without a full page reload.
+
+Any failure on Safari (iPad/iPhone/macOS) is the highest-priority signal — Safari's stricter cross-origin isolation and audio capture rules are where most production surprises live.
+
+### What does not change
+
+- LAN access via `https://<lan-ip>:8443/remote-next` and `https://<lan-ip>:8443/remote` continues to work exactly as before.
+- The nginx admin proxy at `http://<lan-ip>/saturn/` is unaffected.
+- Basic-auth credentials should stay aligned between the LAN nginx path (`/etc/nginx/.htpasswd`) and the Tailscale/Saturn Remote TLS path (`SATURN_REMOTE_BASIC_AUTH`). Current code paths store them differently, so verify both after password changes.
+- Saturn Go self-update, FPGA flash, backup/restore, and all other admin workflows continue to use the LAN nginx path, not the Tailscale URL.
+
+Tailscale is purely an additional access path for `/remote` and `/remote-next`. It does not replace, gate, or alter any other Saturn workflow.
+
 ## GitHub Commit and Push
 
 From the Saturn repo root:
