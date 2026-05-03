@@ -272,6 +272,7 @@ async fn main() {
         .route("/saturngo_policy", get(get_saturngo_policy))
         .route("/saturngo_policy", post(set_saturngo_policy))
         .route("/saturngo_deploy_status", get(get_saturngo_deploy_status))
+        .route("/tailscale_status", get(get_tailscale_status))
         .route("/bridge_diag", get(get_bridge_diag))
         .route("/saturn/bridge_diag", get(get_bridge_diag))
         .route("/p23_status", get(get_p23_status))
@@ -1149,6 +1150,173 @@ async fn get_saturngo_deploy_status(State(state): State<AppState>) -> Response {
     }
 }
 
+async fn command_text(program: &str, args: &[&str]) -> (bool, String) {
+    match Command::new(program).args(args).output().await {
+        Ok(out) => {
+            let mut text = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            if text.is_empty() {
+                text = output_error_text(&out);
+            }
+            (out.status.success(), text)
+        }
+        Err(e) => (false, format!("error: {e}")),
+    }
+}
+
+fn strip_trailing_dns_dot(value: &str) -> String {
+    value.trim().trim_end_matches('.').to_string()
+}
+
+fn tailscale_remote_url(dns_name: &str) -> Option<String> {
+    let dns_name = strip_trailing_dns_dot(dns_name);
+    if dns_name.is_empty() {
+        None
+    } else {
+        Some(format!("https://{dns_name}/remote-next"))
+    }
+}
+
+async fn get_tailscale_status() -> Response {
+    let (version_ok, version_text) = command_text("tailscale", &["version"]).await;
+    let installed = version_ok || !version_text.starts_with("error:");
+    let version = installed
+        .then(|| version_text.lines().next().unwrap_or("").trim().to_string())
+        .filter(|value| !value.is_empty());
+
+    let (active_ok, active) = command_text("systemctl", &["is-active", "tailscaled.service"]).await;
+    let (_, enabled) = command_text("systemctl", &["is-enabled", "tailscaled.service"]).await;
+
+    let mut backend_state = String::new();
+    let mut hostname = String::new();
+    let mut dns_name = String::new();
+    let mut tailnet_name = String::new();
+    let mut tailscale_ips = Vec::<String>::new();
+    let mut status_json = serde_json::Value::Null;
+    let mut status_error = serde_json::Value::Null;
+
+    if installed {
+        let (status_ok, status_text) = command_text("tailscale", &["status", "--json"]).await;
+        if status_ok {
+            match serde_json::from_str::<serde_json::Value>(&status_text) {
+                Ok(value) => {
+                    backend_state = value
+                        .get("BackendState")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    hostname = value
+                        .get("Self")
+                        .and_then(|v| v.get("HostName"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    dns_name = value
+                        .get("Self")
+                        .and_then(|v| v.get("DNSName"))
+                        .and_then(|v| v.as_str())
+                        .map(strip_trailing_dns_dot)
+                        .unwrap_or_default();
+                    tailnet_name = value
+                        .get("CurrentTailnet")
+                        .and_then(|v| v.get("Name"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    if let Some(values) = value
+                        .get("Self")
+                        .and_then(|v| v.get("TailscaleIPs"))
+                        .and_then(|v| v.as_array())
+                    {
+                        tailscale_ips = values
+                            .iter()
+                            .filter_map(|value| value.as_str().map(|s| s.to_string()))
+                            .collect();
+                    }
+                    status_json = value;
+                }
+                Err(e) => {
+                    status_error = serde_json::json!(format!("invalid tailscale status JSON: {e}"));
+                }
+            }
+        } else {
+            status_error = serde_json::json!(status_text);
+        }
+    }
+
+    let mut serve_text = String::new();
+    let mut serve_json = serde_json::Value::Null;
+    let mut serve_error = serde_json::Value::Null;
+    let mut serve_configured = false;
+    if installed {
+        let (serve_ok, raw_serve_text) =
+            command_text("tailscale", &["serve", "status", "--json"]).await;
+        if serve_ok {
+            serve_text = raw_serve_text.clone();
+            serve_configured = !raw_serve_text.trim().is_empty()
+                && raw_serve_text.trim() != "{}"
+                && raw_serve_text.trim() != "null";
+            if let Ok(value) = serde_json::from_str::<serde_json::Value>(&raw_serve_text) {
+                serve_json = value;
+            }
+        } else {
+            serve_error = serde_json::json!(raw_serve_text);
+        }
+    }
+
+    let level = if !installed {
+        "bad"
+    } else if !active_ok || active.trim() != "active" {
+        "warn"
+    } else if backend_state == "Running" {
+        "ok"
+    } else if backend_state.is_empty() {
+        "unknown"
+    } else {
+        "warn"
+    };
+
+    let summary = if !installed {
+        "Tailscale CLI is not installed.".to_string()
+    } else if !active_ok || active.trim() != "active" {
+        format!("tailscaled.service is {}.", active.trim())
+    } else if backend_state == "Running" {
+        "Tailscale is running.".to_string()
+    } else if backend_state.is_empty() {
+        "Tailscale status is unknown.".to_string()
+    } else {
+        format!("Tailscale backend state is {backend_state}.")
+    };
+
+    Json(serde_json::json!({
+        "status": "ok",
+        "level": level,
+        "summary": summary,
+        "installed": installed,
+        "version": version,
+        "service": {
+            "active": active.trim(),
+            "enabled": enabled.trim(),
+        },
+        "tailscale": {
+            "backend_state": backend_state,
+            "hostname": hostname,
+            "dns_name": dns_name,
+            "tailnet": tailnet_name,
+            "ips": tailscale_ips,
+            "raw_status": status_json,
+            "status_error": status_error,
+        },
+        "serve": {
+            "configured": serve_configured,
+            "raw_status": serve_json,
+            "text": serve_text,
+            "error": serve_error,
+        },
+        "remote_url": tailscale_remote_url(&dns_name),
+    }))
+    .into_response()
+}
+
 async fn get_bridge_diag() -> Response {
     fn strip_journal_prefix(line: &str) -> &str {
         line.split_once("saturn-bridge")
@@ -1182,19 +1350,6 @@ async fn get_bridge_diag() -> Response {
             fields.insert(key.to_string(), json_value);
         }
         fields
-    }
-
-    async fn command_text(program: &str, args: &[&str]) -> (bool, String) {
-        match Command::new(program).args(args).output().await {
-            Ok(out) => {
-                let mut text = String::from_utf8_lossy(&out.stdout).trim().to_string();
-                if text.is_empty() {
-                    text = output_error_text(&out);
-                }
-                (out.status.success(), text)
-            }
-            Err(e) => (false, format!("error: {e}")),
-        }
     }
 
     let service_name = "saturn-bridge.service";

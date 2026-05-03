@@ -112,6 +112,17 @@
       </div>
     </div>
 
+    <!-- VPN / Remote Access (compact, read-only) -->
+    <div class="card p-4 mb-6">
+      <div class="flex flex-wrap items-center gap-3">
+        <span class="font-semibold">VPN:</span>
+        <span id="vpn-summary" class="text-sm opacity-90">Loading Tailscale status…</span>
+        <span class="text-sm opacity-75">Host: <span id="vpn-host" class="font-mono">—</span></span>
+        <span class="text-sm opacity-75">URL: <span id="vpn-url" class="font-mono">—</span></span>
+        <button id="vpn-refresh" type="button" class="btn btn-ghost px-3 py-1 text-sm ml-auto">Refresh</button>
+      </div>
+    </div>
+
     <div class="grid grid-cols-1 xl:grid-cols-2 gap-6">
       <div class="card p-5">
         <h2 class="text-xl font-semibold mb-2">Update G2 (Terminal)</h2>
@@ -861,6 +872,28 @@ refreshUpdateStatus();
 loadActiveRepoRoot();
 syncG2ActionButtons();
 fetchBufferedG2RunLog();
+
+/* VPN / Tailscale status (compact, read-only) */
+async function loadVpnStatus(){
+  const sumEl = document.getElementById('vpn-summary');
+  const hostEl = document.getElementById('vpn-host');
+  const urlEl = document.getElementById('vpn-url');
+  try{
+    const r = await fetch('./tailscale_status', { cache:'no-store' });
+    const data = await r.json().catch(()=>({}));
+    if (!r.ok) throw new Error(data.message || ('HTTP ' + r.status));
+    sumEl.textContent = data.summary || 'Tailscale status unavailable.';
+    const ts = data.tailscale || {};
+    hostEl.textContent = ts.dns_name || ts.hostname || (data.installed ? '—' : 'not installed');
+    urlEl.textContent = data.remote_url || '—';
+  }catch(e){
+    sumEl.textContent = 'Failed to load Tailscale status: ' + e.message;
+    hostEl.textContent = '—';
+    urlEl.textContent = '—';
+  }
+}
+document.getElementById('vpn-refresh').addEventListener('click', loadVpnStatus);
+loadVpnStatus();
 </script>
 </body>
 </html>
