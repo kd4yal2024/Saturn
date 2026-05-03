@@ -49,11 +49,17 @@ fn parse_host_from_url(value: &str) -> Option<String> {
     parse_host_from_authority(authority)
 }
 
-fn get_request_host(headers: &HeaderMap) -> Option<String> {
-    headers
+fn get_request_host(req: &Request<Body>) -> Option<String> {
+    req.headers()
         .get(header::HOST)
         .and_then(|v| v.to_str().ok())
         .and_then(parse_host_from_authority)
+        .or_else(|| {
+            req.uri()
+                .authority()
+                .map(|authority| authority.as_str())
+                .and_then(parse_host_from_authority)
+        })
 }
 
 fn get_source_host(headers: &HeaderMap) -> Option<String> {
@@ -88,7 +94,7 @@ pub async fn csrf_protect(
         return json_error(StatusCode::FORBIDDEN, "missing or invalid CSRF header");
     }
 
-    let req_host = match get_request_host(headers) {
+    let req_host = match get_request_host(&req) {
         Some(v) => v,
         None => return json_error(StatusCode::BAD_REQUEST, "missing Host header"),
     };
@@ -271,6 +277,25 @@ mod tests {
             .uri("/test")
             .header("host", "example.com")
             .header("origin", "http://example.com")
+            .header(
+                crate::state::CSRF_HEADER_NAME,
+                crate::state::CSRF_HEADER_VALUE,
+            )
+            .body(Body::empty())
+            .unwrap();
+        let res = app.oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+    }
+
+    /// POST over a request URI with authority should pass even if the Host
+    /// header is absent, which matches some HTTP/2 request shapes.
+    #[tokio::test]
+    async fn test_csrf_post_valid_passes_with_uri_authority() {
+        let app = csrf_router();
+        let req = Request::builder()
+            .method("POST")
+            .uri("https://example.com/test")
+            .header("origin", "https://example.com")
             .header(
                 crate::state::CSRF_HEADER_NAME,
                 crate::state::CSRF_HEADER_VALUE,
