@@ -1,0 +1,399 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Tailscale</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/ansi_up@5.2.1/ansi_up.min.js"></script>
+
+<style>
+  :root{
+    --bg-color:#1f2937;
+    --text-color:#ffffff;
+    --card-bg:rgba(31,41,55,0.85);
+    --border:rgba(255,255,255,0.18);
+    --shadow:rgba(0,0,0,0.35);
+    --primary:#3b82f6;
+    --primary-600:#2563eb;
+    --danger:#ef4444;
+    --ok:#10b981;
+    --input-bg:#111827;
+    --input-text:#ffffff;
+  }
+  body.light{
+    --bg-color:#f9fafb;
+    --text-color:#374151;
+    --card-bg:rgba(255,255,255,0.92);
+    --border:rgba(0,0,0,0.08);
+    --shadow:rgba(0,0,0,0.12);
+    --primary:#2563eb;
+    --primary-600:#1d4ed8;
+    --danger:#dc2626;
+    --ok:#059669;
+    --input-bg:#ffffff;
+    --input-text:#374151;
+  }
+  html,body{height:100%}
+  body{
+    font-family:'Inter', system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+    background: radial-gradient(1000px 600px at 20% -10%, rgba(59,130,246,.25) 0%, transparent 60%),
+                radial-gradient(800px 500px at 100% 0%, rgba(16,185,129,.18) 0%, transparent 55%),
+                var(--bg-color);
+    color:var(--text-color);
+    transition:background .25s ease, color .25s ease;
+  }
+  .card{
+    background:var(--card-bg);
+    border:1px solid var(--border);
+    box-shadow:0 10px 30px var(--shadow);
+    border-radius:16px;
+  }
+  .btn{ border-radius:12px; font-weight:600; transition:transform .15s ease, box-shadow .15s ease, filter .15s ease; }
+  .btn-primary{ background:linear-gradient(135deg, var(--primary), var(--primary-600)); color:#fff; box-shadow:0 6px 18px rgba(59,130,246,.35); }
+  .btn-primary:hover{ transform:translateY(-1px); filter:brightness(1.05) }
+  .btn-danger{ background:linear-gradient(135deg, var(--danger), #b91c1c); color:#fff; box-shadow:0 6px 18px rgba(239,68,68,.35); }
+  .btn-ghost{ background:rgba(255,255,255,.08); border:1px solid var(--border); color:var(--text-color); }
+  .field{ background:var(--input-bg); color:var(--input-text); border:1px solid var(--border); border-radius:10px; padding:0.5rem 0.75rem; }
+  pre{
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+    background:#0a0a0a; color:#fff; border-radius:10px; border:1px solid #333; padding:1rem;
+    max-height:32rem; overflow:auto; white-space:pre-wrap; word-break:break-word;
+  }
+  body.light pre{ background:#f3f4f6; color:#111; border-color:#d1d5db }
+  .title{ font-weight:800; letter-spacing:.2px }
+  .pill{ display:inline-flex; align-items:center; gap:.4rem; padding:.15rem .6rem; border-radius:999px; font-size:.75rem; font-weight:600; border:1px solid var(--border); }
+  .pill-ok{ color:#10b981; border-color:rgba(16,185,129,.45); background:rgba(16,185,129,.12); }
+  .pill-warn{ color:#f59e0b; border-color:rgba(245,158,11,.45); background:rgba(245,158,11,.12); }
+  .pill-bad{ color:#ef4444; border-color:rgba(239,68,68,.45); background:rgba(239,68,68,.12); }
+  .pill-unknown{ color:#9ca3af; border-color:rgba(156,163,175,.45); background:rgba(156,163,175,.12); }
+  .kv{ display:grid; grid-template-columns: minmax(8rem, max-content) 1fr; gap:.5rem 1rem; font-size:.9rem; }
+  .kv dt{ opacity:.7; }
+  .kv dd{ font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; word-break:break-all; }
+</style>
+</head>
+<body class="min-h-screen">
+  <div class="max-w-6xl mx-auto px-4 py-6 sm:py-10">
+    <div class="flex flex-wrap items-center justify-between gap-3 mb-6">
+      <h1 class="title text-3xl sm:text-4xl">Tailscale</h1>
+      <div class="flex items-center gap-3 flex-wrap">
+        <a href="./" class="btn btn-ghost px-4 py-2">G2 Update</a>
+        <a href="./saturngo" class="btn btn-ghost px-4 py-2">Saturn Go</a>
+        <a href="./pihpsdr" class="btn btn-ghost px-4 py-2">piHPSDR Update</a>
+        <a href="./deskhpsdr" class="btn btn-ghost px-4 py-2">deskHPSDR Update</a>
+        <a href="/remote" class="btn btn-ghost px-4 py-2">Saturn Remote</a>
+        <a href="./fpga" class="btn btn-ghost px-4 py-2">FPGA Flash</a>
+        <a href="./backup" class="btn btn-ghost px-4 py-2">Backup / Restore</a>
+        <a href="./custom" class="btn btn-ghost px-4 py-2">Custom Scripts</a>
+        <a href="./monitor" class="btn btn-ghost px-4 py-2">Monitor</a>
+        <a href="./tailscale" class="btn btn-primary px-4 py-2">Tailscale</a>
+        <button id="theme-toggle" class="btn btn-ghost p-2" title="Toggle theme">
+          <svg id="theme-icon" class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+             d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z"/>
+          </svg>
+        </button>
+      </div>
+    </div>
+
+    <div class="card p-5 mb-6">
+      <div class="flex items-center justify-between gap-3 mb-4 flex-wrap">
+        <div class="flex items-center gap-3">
+          <h2 class="text-xl font-semibold">Status</h2>
+          <span id="ts-pill" class="pill pill-unknown">loading…</span>
+        </div>
+        <div class="flex items-center gap-2">
+          <span id="ts-summary" class="text-sm opacity-90">Loading Tailscale status…</span>
+          <button id="ts-refresh" type="button" class="btn btn-ghost px-3 py-1 text-sm">Refresh</button>
+        </div>
+      </div>
+      <dl class="kv">
+        <dt>CLI installed</dt><dd id="ts-installed">—</dd>
+        <dt>Version</dt><dd id="ts-version">—</dd>
+        <dt>tailscaled</dt><dd id="ts-service">—</dd>
+        <dt>Backend state</dt><dd id="ts-backend">—</dd>
+        <dt>Hostname</dt><dd id="ts-hostname">—</dd>
+        <dt>DNS name</dt><dd id="ts-dnsname">—</dd>
+        <dt>Tailnet</dt><dd id="ts-tailnet">—</dd>
+        <dt>Tailscale IPs</dt><dd id="ts-ips">—</dd>
+        <dt>Serve configured</dt><dd id="ts-serve">—</dd>
+        <dt>Saturn Remote URL</dt><dd id="ts-remote-url">—</dd>
+      </dl>
+    </div>
+
+    <div class="grid grid-cols-1 xl:grid-cols-2 gap-6">
+
+      <div class="card p-5">
+        <h2 class="text-xl font-semibold mb-2">1. Install</h2>
+        <p class="text-sm opacity-80 mb-4">
+          Installs the Tailscale package via the official installer
+          (<code>https://tailscale.com/install.sh</code>) and enables
+          <code>tailscaled.service</code>. Skip this step if Tailscale is already installed.
+        </p>
+        <button id="btn-install" type="button" class="btn btn-primary px-4 py-2">Install Tailscale</button>
+      </div>
+
+      <div class="card p-5">
+        <h2 class="text-xl font-semibold mb-2">2. Bring Up / Authenticate</h2>
+        <p class="text-sm opacity-80 mb-4">
+          Run <code>tailscale up</code>. With no auth key, Tailscale will print a one-time login URL
+          in the output below — open it in a browser to add this Pi to your tailnet.
+          With an auth key (recommended for headless setups), it joins automatically.
+        </p>
+        <div class="space-y-3">
+          <div>
+            <label class="block text-sm mb-1">Auth key (optional, <code>tskey-…</code>)</label>
+            <input id="ts-authkey" type="password" autocomplete="off" spellcheck="false"
+                   placeholder="tskey-auth-… (leave blank for browser login)"
+                   class="field w-full"/>
+          </div>
+          <div>
+            <label class="block text-sm mb-1">Hostname on tailnet (optional)</label>
+            <input id="ts-host" type="text" autocomplete="off" spellcheck="false"
+                   placeholder="e.g. saturn-g2 (letters, digits, hyphens; max 63)"
+                   class="field w-full"/>
+            <p class="text-xs opacity-70 mt-1">Leave blank to keep the existing tailnet hostname. Pick a unique name — generic names like <code>raspberrypi</code> collide on tailnets with multiple Pis.</p>
+          </div>
+          <div class="grid grid-cols-2 gap-2 text-sm">
+            <label class="flex items-center gap-2"><input id="ts-ssh" type="checkbox"> Enable Tailscale SSH</label>
+            <label class="flex items-center gap-2"><input id="ts-routes" type="checkbox"> Accept subnet routes</label>
+            <label class="flex items-center gap-2"><input id="ts-dns" type="checkbox"> Accept tailnet DNS</label>
+            <label class="flex items-center gap-2"><input id="ts-reset" type="checkbox"> <span title="Use --reset to drop previously-set flags">Reset flags</span></label>
+          </div>
+          <div>
+            <button id="btn-up" type="button" class="btn btn-primary px-4 py-2">tailscale up</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="card p-5">
+        <h2 class="text-xl font-semibold mb-2">3. Disconnect</h2>
+        <p class="text-sm opacity-80 mb-4">
+          <strong>Down</strong> drops this node from the tailnet but keeps the saved auth, so a later
+          <code>up</code> reconnects without re-login. <strong>Logout</strong> forgets the node key —
+          the next <code>up</code> will require browser login or a new auth key.
+        </p>
+        <div class="flex gap-2 flex-wrap">
+          <button id="btn-down" type="button" class="btn btn-ghost px-4 py-2">tailscale down</button>
+          <button id="btn-logout" type="button" class="btn btn-danger px-4 py-2">tailscale logout</button>
+        </div>
+      </div>
+
+      <div class="card p-5">
+        <h2 class="text-xl font-semibold mb-2">4. Tailscale Serve (Saturn Remote)</h2>
+        <p class="text-sm opacity-80 mb-4">
+          Exposes the Saturn Remote TLS listener (<code>127.0.0.1:8443/remote-next</code>) over
+          your tailnet. <strong>Serve On</strong> runs <code>saturn-go-tailscale-serve.sh</code>,
+          which refuses to configure unless every Saturn safety gate passes (auth, hostname,
+          listener reachability). See <code>docs/OPERATIONS_RUNBOOK.md</code> →
+          <em>Secure Remote Access with Tailscale</em>.
+        </p>
+        <div class="space-y-3">
+          <div>
+            <label class="block text-sm mb-1">HTTPS port (optional, default 443)</label>
+            <input id="ts-port" type="number" min="1" max="65535" placeholder="443"
+                   class="field w-32"/>
+          </div>
+          <div class="flex gap-2 flex-wrap">
+            <button id="btn-serve-on" type="button" class="btn btn-primary px-4 py-2">Serve On</button>
+            <button id="btn-serve-off" type="button" class="btn btn-ghost px-4 py-2">Serve Off</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card p-5 mt-6">
+      <div class="flex items-center justify-between mb-2 flex-wrap gap-2">
+        <h2 class="text-xl font-semibold">Output</h2>
+        <div class="flex gap-2">
+          <span id="ts-running" class="pill pill-unknown hidden">running…</span>
+          <button id="ts-clear" type="button" class="btn btn-ghost px-3 py-1 text-sm">Clear</button>
+        </div>
+      </div>
+      <pre id="ts-output">Ready.</pre>
+    </div>
+  </div>
+
+<script>
+(function themeInit(){
+  const toggle = document.getElementById('theme-toggle');
+  const icon = document.getElementById('theme-icon');
+  function setIcon(light){
+    icon.innerHTML = light
+      ? '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z"/>'
+      : '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z"/>';
+  }
+  const stored = localStorage.getItem('theme');
+  const light = stored === 'light';
+  document.body.classList.toggle('light', light);
+  setIcon(light);
+  toggle.addEventListener('click', ()=>{
+    const isLight = document.body.classList.toggle('light');
+    localStorage.setItem('theme', isLight ? 'light' : 'dark');
+    setIcon(isLight);
+  });
+})();
+
+const ansi_up = new AnsiUp();
+ansi_up.use_classes = false;
+const $ = (id)=>document.getElementById(id);
+const CSRF_HEADER_NAME = 'X-Saturn-CSRF';
+const CSRF_HEADER_VALUE = '1';
+
+const outputEl = $('ts-output');
+const runningEl = $('ts-running');
+let currentRun = null;
+let outputLines = [];
+const MAX_LINES = 2000;
+
+function appendLine(line){
+  outputLines.push(String(line));
+  if (outputLines.length > MAX_LINES) outputLines = outputLines.slice(-MAX_LINES);
+  outputEl.innerHTML = outputLines.map(l => ansi_up.ansi_to_html(l)).join('<br>') + '<br>';
+  outputEl.scrollTop = outputEl.scrollHeight;
+}
+
+function setRunning(on){
+  runningEl.classList.toggle('hidden', !on);
+  for (const id of ['btn-install','btn-up','btn-down','btn-logout','btn-serve-on','btn-serve-off']){
+    const el = $(id); if (el) el.disabled = !!on;
+    if (el) el.classList.toggle('opacity-50', !!on);
+  }
+}
+
+function setPill(level, text){
+  const cls = level === 'ok' ? 'pill-ok'
+            : level === 'warn' ? 'pill-warn'
+            : level === 'bad' ? 'pill-bad'
+            : 'pill-unknown';
+  const pill = $('ts-pill');
+  pill.className = 'pill ' + cls;
+  pill.textContent = text;
+}
+
+async function runHelper(path, body){
+  if (currentRun){
+    appendLine('Another action is in flight; please wait for it to finish.');
+    return;
+  }
+  outputLines = [];
+  appendLine('--- ' + new Date().toISOString() + ' ---');
+  setRunning(true);
+  const ctrl = new AbortController();
+  currentRun = ctrl;
+  try{
+    const headers = { [CSRF_HEADER_NAME]: CSRF_HEADER_VALUE };
+    if (body !== undefined) headers['Content-Type'] = 'application/json';
+    const r = await fetch(path, {
+      method: 'POST',
+      headers,
+      body: body === undefined ? undefined : JSON.stringify(body),
+      signal: ctrl.signal,
+    });
+    if (!r.ok){
+      const text = await r.text().catch(()=> '');
+      appendLine('HTTP ' + r.status + ' ' + r.statusText + (text ? (': ' + text) : ''));
+      return;
+    }
+    const reader = r.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = '';
+    while(true){
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      let idx;
+      while ((idx = buf.indexOf('\n\n')) !== -1){
+        const event = buf.slice(0, idx);
+        buf = buf.slice(idx + 2);
+        for (const line of event.split('\n')){
+          if (line.startsWith('data:')){
+            appendLine(line.slice(5).replace(/^ /, ''));
+          }
+        }
+      }
+    }
+  } catch (e) {
+    if (e.name !== 'AbortError') appendLine('Error: ' + (e.message || e));
+  } finally {
+    setRunning(false);
+    currentRun = null;
+    loadStatus();
+  }
+}
+
+function fmtService(svc){
+  if (!svc) return '—';
+  const a = svc.active || '—';
+  const e = svc.enabled || '—';
+  return `active=${a}, enabled=${e}`;
+}
+
+async function loadStatus(){
+  setPill('unknown', 'loading…');
+  $('ts-summary').textContent = 'Loading Tailscale status…';
+  try{
+    const r = await fetch('./tailscale_status', { cache: 'no-store' });
+    const data = await r.json().catch(()=>({}));
+    if (!r.ok) throw new Error(data.message || ('HTTP ' + r.status));
+    setPill(data.level || 'unknown', data.level || 'unknown');
+    $('ts-summary').textContent = data.summary || '—';
+    $('ts-installed').textContent = data.installed ? 'yes' : 'no';
+    $('ts-version').textContent = data.version || '—';
+    $('ts-service').textContent = fmtService(data.service);
+    const ts = data.tailscale || {};
+    $('ts-backend').textContent = ts.backend_state || '—';
+    $('ts-hostname').textContent = ts.hostname || '—';
+    $('ts-dnsname').textContent = ts.dns_name || '—';
+    $('ts-tailnet').textContent = ts.tailnet || '—';
+    $('ts-ips').textContent = (ts.ips && ts.ips.length) ? ts.ips.join(', ') : '—';
+    const serve = data.serve || {};
+    $('ts-serve').textContent = serve.configured ? 'yes' : 'no';
+    $('ts-remote-url').textContent = data.remote_url || '—';
+
+    // Hide install button if already installed.
+    $('btn-install').classList.toggle('hidden', !!data.installed);
+  } catch (e) {
+    setPill('bad', 'error');
+    $('ts-summary').textContent = 'Failed to load Tailscale status: ' + (e.message || e);
+  }
+}
+
+$('ts-refresh').addEventListener('click', loadStatus);
+$('ts-clear').addEventListener('click', ()=>{ outputLines = []; outputEl.textContent = 'Ready.'; });
+$('btn-install').addEventListener('click', ()=> runHelper('./tailscale/install'));
+$('btn-up').addEventListener('click', ()=>{
+  const body = {
+    auth_key: $('ts-authkey').value.trim() || null,
+    hostname: $('ts-host').value.trim() || null,
+    ssh: $('ts-ssh').checked,
+    accept_routes: $('ts-routes').checked,
+    accept_dns: $('ts-dns').checked,
+    reset: $('ts-reset').checked,
+  };
+  runHelper('./tailscale/up', body);
+});
+$('btn-down').addEventListener('click', ()=>{
+  if (!confirm('Bring this node down (drop from tailnet)?')) return;
+  runHelper('./tailscale/down');
+});
+$('btn-logout').addEventListener('click', ()=>{
+  if (!confirm('Log out from Tailscale? Next "up" will require re-authentication.')) return;
+  runHelper('./tailscale/logout');
+});
+$('btn-serve-on').addEventListener('click', ()=>{
+  const portStr = $('ts-port').value.trim();
+  const body = { enable: true };
+  if (portStr) body.port = Number(portStr);
+  runHelper('./tailscale/serve', body);
+});
+$('btn-serve-off').addEventListener('click', ()=>{
+  if (!confirm('Disable Tailscale Serve for Saturn Remote?')) return;
+  runHelper('./tailscale/serve', { enable: false });
+});
+
+loadStatus();
+</script>
+</body>
+</html>

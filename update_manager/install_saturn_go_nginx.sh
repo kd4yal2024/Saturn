@@ -88,6 +88,8 @@ PRIVILEGED_HELPER_SCRIPTS=(
   "$REPO_SOURCE_DIR/scripts/install-shutdown-waiter-service.sh"
   "$REPO_SOURCE_DIR/scripts/shutdown-waiter.sh"
   "$REPO_SOURCE_DIR/scripts/setup-eth-fallback.sh"
+  "$SOURCE_DIR/scripts/saturn-tailscale.sh"
+  "$SOURCE_DIR/scripts/saturn-go-tailscale-serve.sh"
 )
 if [[ ! -f "$RUST_SRC_DIR/Cargo.toml" ]]; then
   err "Rust server source not found: $RUST_SRC_DIR"
@@ -387,6 +389,10 @@ ${SERVICE_USER} ALL=(root) NOPASSWD: ${PRIVILEGED_SCRIPTS_DIR}/saturn-xdma-docto
 ${SERVICE_USER} ALL=(root) NOPASSWD: ${PRIVILEGED_SCRIPTS_DIR}/saturn-flash-fpga.sh
 ${SERVICE_USER} ALL=(root) NOPASSWD: ${PRIVILEGED_SCRIPTS_DIR}/saturn-flash-fpga.sh *
 ${SERVICE_USER} ALL=(root) NOPASSWD: ${PRIVILEGED_SCRIPTS_DIR}/saturn-xdma-stage-current.sh
+${SERVICE_USER} ALL=(root) NOPASSWD: ${PRIVILEGED_SCRIPTS_DIR}/saturn-tailscale.sh
+${SERVICE_USER} ALL=(root) NOPASSWD: ${PRIVILEGED_SCRIPTS_DIR}/saturn-tailscale.sh *
+${SERVICE_USER} ALL=(root) NOPASSWD: ${PRIVILEGED_SCRIPTS_DIR}/saturn-go-tailscale-serve.sh
+${SERVICE_USER} ALL=(root) NOPASSWD: ${PRIVILEGED_SCRIPTS_DIR}/saturn-go-tailscale-serve.sh *
 EOF
 chmod 0440 "$SUDOERS_FILE"
 if command -v visudo >/dev/null 2>&1; then

@@ -7,6 +7,7 @@ mod pages;
 mod remote_tls;
 mod repair;
 mod state;
+mod tailscale;
 mod update;
 mod util;
 use crate::auth::{change_password, exit_server, kill_process};
@@ -17,7 +18,7 @@ use crate::monitor::{get_system_data, network_test};
 use crate::pages::{
     backup_handler, custom_handler, deskhpsdr_handler, fallback_handler, fpga_handler, healthz,
     monitor_handler, p23test_handler, pihpsdr_handler, remote_handler, root_handler,
-    saturngo_handler, update_handler,
+    saturngo_handler, tailscale_handler, update_handler,
 };
 use crate::remote_tls::{
     dev_insecure_override_set, ensure_self_signed_cert, load_remote_tls_config,
@@ -25,6 +26,9 @@ use crate::remote_tls::{
     remote_tls_router, RemoteTlsBindDecision,
 };
 use crate::repair::{repair_pack, verify_system_config};
+use crate::tailscale::{
+    tailscale_down, tailscale_install, tailscale_logout, tailscale_serve, tailscale_up,
+};
 use crate::state::{
     AppState, CfgEntry, DefaultCustomScript, FlagsQuery, RemoteProfileDeleteRequest,
     RemoteProfileSaveRequest, RemoteProfileStartupRequest, RemoteProfilesFile, RemoteSettings,
@@ -272,7 +276,14 @@ async fn main() {
         .route("/saturngo_policy", get(get_saturngo_policy))
         .route("/saturngo_policy", post(set_saturngo_policy))
         .route("/saturngo_deploy_status", get(get_saturngo_deploy_status))
+        .route("/tailscale", get(tailscale_handler))
+        .route("/tailscale.html", get(tailscale_handler))
         .route("/tailscale_status", get(get_tailscale_status))
+        .route("/tailscale/install", post(tailscale_install))
+        .route("/tailscale/up", post(tailscale_up))
+        .route("/tailscale/down", post(tailscale_down))
+        .route("/tailscale/logout", post(tailscale_logout))
+        .route("/tailscale/serve", post(tailscale_serve))
         .route("/bridge_diag", get(get_bridge_diag))
         .route("/saturn/bridge_diag", get(get_bridge_diag))
         .route("/p23_status", get(get_p23_status))

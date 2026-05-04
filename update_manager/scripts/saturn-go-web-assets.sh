@@ -11,6 +11,7 @@ SATURN_GO_HTML_ASSETS=(
   "fpga.html"
   "pihpsdr.html"
   "deskhpsdr.html"
+  "tailscale.html"
   "saturn-remote.html"
   "saturn-remote-next.html"
   "saturn-remote-next.js"

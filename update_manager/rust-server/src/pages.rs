@@ -47,6 +47,10 @@ pub async fn monitor_handler(State(state): State<AppState>) -> impl IntoResponse
     serve_page(&state.webroot, "monitor.html").await
 }
 
+pub async fn tailscale_handler(State(state): State<AppState>) -> impl IntoResponse {
+    serve_page(&state.webroot, "tailscale.html").await
+}
+
 fn remote_host_without_port(host: &str) -> &str {
     if host.starts_with('[') {
         if let Some(end) = host.find(']') {
@@ -149,6 +153,12 @@ pub fn route_to_page(path: &str) -> Option<&'static str> {
         | "/saturn/monitor"
         | "/saturn/monitor/"
         | "/saturn/monitor.html" => Some("monitor.html"),
+        "/tailscale"
+        | "/tailscale/"
+        | "/tailscale.html"
+        | "/saturn/tailscale"
+        | "/saturn/tailscale/"
+        | "/saturn/tailscale.html" => Some("tailscale.html"),
         _ => None,
     }
 }
