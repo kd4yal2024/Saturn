@@ -70,8 +70,19 @@ fn remote_https_url(host: &str) -> String {
     format!("https://{}:8443/remote", remote_host_without_port(host))
 }
 
+fn remote_next_https_url(host: &str) -> String {
+    format!(
+        "https://{}:8443/remote-next",
+        remote_host_without_port(host)
+    )
+}
+
 pub async fn remote_handler(Host(host): Host) -> impl IntoResponse {
     Redirect::temporary(&remote_https_url(&host))
+}
+
+pub async fn remote_next_handler(Host(host): Host) -> impl IntoResponse {
+    Redirect::temporary(&remote_next_https_url(&host))
 }
 
 pub async fn healthz() -> impl IntoResponse {
@@ -147,6 +158,12 @@ pub fn route_to_page(path: &str) -> Option<&'static str> {
         | "/saturn/saturn-remote"
         | "/saturn/saturn-remote/"
         | "/saturn/saturn-remote.html" => Some("saturn-remote.html"),
+        "/remote-next"
+        | "/remote-next/"
+        | "/remote-next.html"
+        | "/saturn/remote-next"
+        | "/saturn/remote-next/"
+        | "/saturn/remote-next.html" => Some("saturn-remote-next.html"),
         "/monitor"
         | "/monitor/"
         | "/monitor.html"
@@ -171,6 +188,9 @@ pub async fn fallback_handler(
     if let Some(page) = route_to_page(uri.path()) {
         if page == "saturn-remote.html" {
             return Redirect::temporary(&remote_https_url(&host)).into_response();
+        }
+        if page == "saturn-remote-next.html" {
+            return Redirect::temporary(&remote_next_https_url(&host)).into_response();
         }
         return serve_page(&state.webroot, page).await;
     }
@@ -257,6 +277,11 @@ mod tests {
             route_to_page("/saturn/remote.html"),
             Some("saturn-remote.html")
         );
+        assert_eq!(route_to_page("/remote-next"), Some("saturn-remote-next.html"));
+        assert_eq!(
+            route_to_page("/saturn/remote-next.html"),
+            Some("saturn-remote-next.html")
+        );
     }
 
     #[test]
@@ -341,6 +366,26 @@ mod tests {
         assert_eq!(
             res.headers().get(header::LOCATION).unwrap(),
             "https://192.168.0.139:8443/remote"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_fallback_remote_next_alias_redirects_to_tls_remote_next() {
+        let state = test_state();
+        let app = axum::Router::new()
+            .fallback(get(fallback_handler))
+            .with_state(state);
+        let req = Request::builder()
+            .method("GET")
+            .uri("/saturn/remote-next")
+            .header("host", "192.168.0.139:8080")
+            .body(Body::empty())
+            .unwrap();
+        let res = app.oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::TEMPORARY_REDIRECT);
+        assert_eq!(
+            res.headers().get(header::LOCATION).unwrap(),
+            "https://192.168.0.139:8443/remote-next"
         );
     }
 

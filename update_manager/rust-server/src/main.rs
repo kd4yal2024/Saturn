@@ -17,8 +17,8 @@ use crate::middleware::csrf_protect;
 use crate::monitor::{get_system_data, network_test};
 use crate::pages::{
     backup_handler, custom_handler, deskhpsdr_handler, fallback_handler, fpga_handler, healthz,
-    monitor_handler, p23test_handler, pihpsdr_handler, remote_handler, root_handler,
-    saturngo_handler, tailscale_handler, update_handler,
+    monitor_handler, p23test_handler, pihpsdr_handler, remote_handler, remote_next_handler,
+    root_handler, saturngo_handler, tailscale_handler, update_handler,
 };
 use crate::remote_tls::{
     dev_insecure_override_set, ensure_self_signed_cert, load_remote_tls_config,
@@ -249,6 +249,8 @@ async fn main() {
         .route("/deskhpsdr.html", get(deskhpsdr_handler))
         .route("/remote", get(remote_handler))
         .route("/remote.html", get(remote_handler))
+        .route("/remote-next", get(remote_next_handler))
+        .route("/remote-next.html", get(remote_next_handler))
         .route("/saturn-remote", get(remote_handler))
         .route("/saturn-remote.html", get(remote_handler))
         .route("/tci", get(remote_bridge_ws_handler))

@@ -446,6 +446,18 @@ server {
     return 302 https://\$host:8443/remote;
   }
 
+  location = /remote-next {
+    return 302 https://\$host:8443/remote-next;
+  }
+
+  location = /remote-next/ {
+    return 302 https://\$host:8443/remote-next;
+  }
+
+  location = /remote-next.html {
+    return 302 https://\$host:8443/remote-next;
+  }
+
   location = /saturn/remote {
     return 302 https://\$host:8443/remote;
   }
@@ -456,6 +468,18 @@ server {
 
   location = /saturn/remote.html {
     return 302 https://\$host:8443/remote;
+  }
+
+  location = /saturn/remote-next {
+    return 302 https://\$host:8443/remote-next;
+  }
+
+  location = /saturn/remote-next/ {
+    return 302 https://\$host:8443/remote-next;
+  }
+
+  location = /saturn/remote-next.html {
+    return 302 https://\$host:8443/remote-next;
   }
 
   location = /saturn/run {
