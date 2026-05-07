@@ -24,7 +24,7 @@ export const PHONE_PANEL_DEFAULTS: Readonly<PhonePanels> = Object.freeze({
   display: false,
   log: true,
   telemetry: true,
-  tx: true,
+  tx: false,
 });
 
 export interface AppState {

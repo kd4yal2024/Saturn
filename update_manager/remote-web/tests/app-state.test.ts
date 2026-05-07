@@ -10,7 +10,7 @@ describe('PHONE_PANEL_DEFAULTS', () => {
     expect(PHONE_PANEL_DEFAULTS.display).toBe(false);
     expect(PHONE_PANEL_DEFAULTS.log).toBe(true);
     expect(PHONE_PANEL_DEFAULTS.telemetry).toBe(true);
-    expect(PHONE_PANEL_DEFAULTS.tx).toBe(true);
+    expect(PHONE_PANEL_DEFAULTS.tx).toBe(false);
   });
 
   it('is frozen', () => {

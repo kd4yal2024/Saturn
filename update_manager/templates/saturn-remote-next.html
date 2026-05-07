@@ -24,6 +24,12 @@
       --good: #5de8b5;
       --warn: #f6c873;
       --danger: #fb7c74;
+      --saturn-rx: #5ec8e5;
+      --saturn-tx: #f59e0b;
+      --saturn-tx-keyed: #d97706;
+      --saturn-caution: #facc15;
+      --saturn-alarm: #dc2626;
+      --saturn-ok: #22c55e;
       --shadow: rgba(2, 12, 16, 0.45);
       --mono: "IBM Plex Mono", "SFMono-Regular", Consolas, monospace;
       --sans: "Space Grotesk", "Trebuchet MS", "Segoe UI", sans-serif;
@@ -829,6 +835,98 @@
       z-index: 20;
     }
 
+    .operator-state-strip {
+      position: sticky;
+      top: 8px;
+      z-index: 80;
+      display: grid;
+      grid-template-columns: repeat(6, minmax(0, 1fr));
+      gap: 8px;
+      margin: 0 0 14px;
+      padding: 8px;
+      border-radius: 16px;
+      border: 1px solid rgba(94, 200, 229, 0.20);
+      background: rgba(7, 17, 23, 0.88);
+      box-shadow: 0 18px 34px rgba(0, 0, 0, 0.24);
+      backdrop-filter: blur(12px);
+    }
+
+    .operator-pill {
+      min-width: 0;
+      min-height: 42px;
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr);
+      gap: 8px;
+      align-items: center;
+      padding: 8px 10px;
+      border-radius: 12px;
+      border: 1px solid rgba(148, 163, 184, 0.18);
+      background: rgba(255, 255, 255, 0.035);
+      color: var(--theme-status-text);
+    }
+
+    .operator-pill::before {
+      content: "";
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: var(--muted);
+      box-shadow: 0 0 0 4px rgba(148, 163, 184, 0.08);
+    }
+
+    .operator-pill[data-tone="ok"]::before {
+      background: var(--saturn-ok);
+      box-shadow: 0 0 0 4px rgba(34, 197, 94, 0.10), 0 0 14px rgba(34, 197, 94, 0.40);
+    }
+
+    .operator-pill[data-tone="rx"]::before {
+      background: var(--saturn-rx);
+      box-shadow: 0 0 0 4px rgba(94, 200, 229, 0.10), 0 0 14px rgba(94, 200, 229, 0.35);
+    }
+
+    .operator-pill[data-tone="tx"]::before {
+      background: var(--saturn-tx);
+      border-radius: 3px;
+      box-shadow: 0 0 0 4px rgba(245, 158, 11, 0.12), 0 0 16px rgba(245, 158, 11, 0.44);
+    }
+
+    .operator-pill[data-tone="keyed"]::before,
+    .operator-pill[data-tone="alarm"]::before {
+      background: var(--saturn-alarm);
+      border-radius: 2px;
+      box-shadow: 0 0 0 4px rgba(220, 38, 38, 0.14), 0 0 18px rgba(220, 38, 38, 0.48);
+    }
+
+    .operator-pill[data-tone="warn"]::before {
+      background: var(--saturn-caution);
+      clip-path: polygon(50% 0, 100% 100%, 0 100%);
+      box-shadow: none;
+    }
+
+    .operator-pill-label {
+      display: block;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-family: var(--mono);
+      font-size: 9px;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      color: var(--muted);
+    }
+
+    .operator-pill-value {
+      display: block;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      margin-top: 2px;
+      font-family: var(--mono);
+      font-size: 12px;
+      letter-spacing: 0.04em;
+      color: var(--text);
+    }
+
     .strip-grid {
       display: grid;
       grid-template-columns: minmax(0, 1.5fr) minmax(260px, 0.82fr) minmax(360px, 1fr);
@@ -951,6 +1049,58 @@
     .primary-deck .deck-frequency {
       margin: 10px 0 16px;
       font-size: clamp(42px, 4.4vw, 62px);
+    }
+
+    .vfo-readout-row {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      min-width: 0;
+    }
+
+    .vfo-mode-tag {
+      flex: 0 0 auto;
+      align-self: center;
+      padding: 8px 10px;
+      border-radius: 10px;
+      border: 1px solid rgba(94, 200, 229, 0.32);
+      background: rgba(94, 200, 229, 0.08);
+      color: var(--saturn-rx);
+      font-family: var(--mono);
+      font-size: 13px;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+    }
+
+    .vfo-step-affordance {
+      display: inline-grid;
+      grid-template-columns: auto 1fr auto;
+      gap: 8px;
+      align-items: center;
+      width: min(360px, 100%);
+      margin: -6px 0 12px;
+      padding: 7px;
+      border-radius: 12px;
+      border: 1px solid rgba(148, 163, 184, 0.14);
+      background: rgba(255, 255, 255, 0.025);
+    }
+
+    .vfo-step-affordance .btn {
+      min-width: 44px;
+      min-height: 36px;
+      padding: 7px 10px;
+      font-family: var(--mono);
+      font-weight: 700;
+    }
+
+    .vfo-step-label {
+      min-width: 0;
+      text-align: center;
+      font-family: var(--mono);
+      font-size: 10px;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      color: var(--muted);
     }
 
     .secondary-deck .deck-frequency {
@@ -1225,6 +1375,141 @@
       border-color: rgba(255, 80, 80, 0.75);
       background: linear-gradient(135deg, rgba(176, 34, 34, 0.98), rgba(104, 14, 18, 0.98));
       box-shadow: 0 0 30px rgba(255, 60, 60, 0.50), inset 0 0 0 1px rgba(255, 210, 210, 0.14);
+    }
+
+    .tx-zone {
+      display: grid;
+      gap: 10px;
+      margin-bottom: 14px;
+      padding: 12px;
+      border-radius: 18px;
+      border: 1px solid rgba(245, 158, 11, 0.34);
+      background:
+        linear-gradient(135deg, rgba(245, 158, 11, 0.10), rgba(217, 119, 6, 0.035)),
+        rgba(8, 18, 24, 0.74);
+      box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.035), 0 16px 32px rgba(0, 0, 0, 0.18);
+    }
+
+    .tx-zone[data-tx-state="keyed"] {
+      border-color: rgba(217, 119, 6, 0.72);
+      background:
+        linear-gradient(135deg, rgba(217, 119, 6, 0.28), rgba(127, 29, 29, 0.18)),
+        rgba(14, 12, 10, 0.88);
+      box-shadow: 0 0 28px rgba(217, 119, 6, 0.25), inset 0 0 0 1px rgba(255, 220, 175, 0.09);
+    }
+
+    .tx-zone[data-tx-state="armed"] {
+      border-color: rgba(245, 158, 11, 0.62);
+    }
+
+    .tx-zone[data-tx-state="disabled"] {
+      border-color: rgba(148, 163, 184, 0.18);
+      background: rgba(255, 255, 255, 0.025);
+    }
+
+    .tx-zone-head,
+    .tx-zone-footer {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+    }
+
+    .tx-zone-label {
+      font-family: var(--mono);
+      font-size: 10px;
+      letter-spacing: 0.16em;
+      text-transform: uppercase;
+      color: var(--muted);
+    }
+
+    .tx-zone-state {
+      padding: 5px 8px;
+      border-radius: 999px;
+      border: 1px solid rgba(245, 158, 11, 0.28);
+      background: rgba(245, 158, 11, 0.08);
+      color: var(--saturn-tx);
+      font-family: var(--mono);
+      font-size: 10px;
+      letter-spacing: 0.10em;
+      text-transform: uppercase;
+    }
+
+    .tx-zone-frequency {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-family: var(--mono);
+      font-size: 12px;
+      letter-spacing: 0.07em;
+      color: #f8d69b;
+    }
+
+    .tx-ptt-primary {
+      min-height: 62px;
+      border-radius: 16px;
+      border-color: rgba(245, 158, 11, 0.66);
+      background:
+        repeating-linear-gradient(135deg, rgba(245, 158, 11, 0.12) 0 6px, rgba(245, 158, 11, 0.04) 6px 12px),
+        linear-gradient(135deg, rgba(92, 58, 19, 0.98), rgba(36, 26, 16, 0.98));
+      color: #fff3da;
+      box-shadow: 0 14px 28px rgba(99, 61, 15, 0.22);
+    }
+
+    .tx-meter-mini-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 8px;
+    }
+
+    .tx-meter-mini {
+      min-width: 0;
+      padding: 8px;
+      border-radius: 12px;
+      border: 1px solid rgba(148, 163, 184, 0.16);
+      background: rgba(255, 255, 255, 0.035);
+    }
+
+    .tx-meter-mini-label {
+      display: block;
+      margin-bottom: 4px;
+      font-family: var(--mono);
+      font-size: 9px;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      color: var(--muted);
+    }
+
+    .tx-meter-mini-value {
+      display: block;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-family: var(--mono);
+      font-size: 12px;
+      color: var(--text);
+    }
+
+    .tx-mic-dot {
+      display: inline-block;
+      width: 9px;
+      height: 9px;
+      margin-right: 6px;
+      border-radius: 50%;
+      background: var(--muted);
+      vertical-align: -1px;
+    }
+
+    .tx-mic-dot.live {
+      background: var(--saturn-ok);
+      box-shadow: 0 0 12px rgba(34, 197, 94, 0.40);
+    }
+
+    .tx-zone-hint {
+      font-family: var(--mono);
+      font-size: 10px;
+      letter-spacing: 0.05em;
+      color: var(--muted);
     }
 
     .eq-section {
@@ -1630,6 +1915,29 @@
       border-radius: 20px;
     }
 
+    :root[data-layout="phone"] .operator-state-strip {
+      top: 6px;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 7px;
+      padding: 7px;
+      border-radius: 14px;
+    }
+
+    :root[data-layout="phone"] .operator-pill {
+      min-height: 38px;
+      padding: 7px 8px;
+      gap: 7px;
+    }
+
+    :root[data-layout="phone"] .operator-pill-label {
+      font-size: 8px;
+      letter-spacing: 0.12em;
+    }
+
+    :root[data-layout="phone"] .operator-pill-value {
+      font-size: 11px;
+    }
+
     :root[data-layout="phone"] .strip-grid {
       grid-template-columns: 1fr;
       gap: 10px;
@@ -1646,6 +1954,22 @@
       margin: 8px 0 10px;
       letter-spacing: 0.05em;
       font-size: clamp(34px, 10vw, 48px);
+    }
+
+    :root[data-layout="phone"] .vfo-readout-row {
+      align-items: flex-start;
+      gap: 8px;
+    }
+
+    :root[data-layout="phone"] .vfo-mode-tag {
+      padding: 7px 8px;
+      font-size: 11px;
+    }
+
+    :root[data-layout="phone"] .vfo-step-affordance {
+      display: grid;
+      grid-template-columns: 44px minmax(0, 1fr) 44px;
+      margin-top: 0;
     }
 
     :root[data-layout="phone"] .secondary-deck .deck-frequency {
@@ -1862,6 +2186,26 @@
       grid-template-columns: 1fr;
     }
 
+    :root[data-layout="phone"] .tx-zone {
+      gap: 9px;
+      padding: 11px;
+      border-radius: 16px;
+    }
+
+    :root[data-layout="phone"] .tx-ptt-primary {
+      min-height: 66px;
+      font-size: 16px;
+    }
+
+    :root[data-layout="phone"] .tx-meter-mini-grid {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 6px;
+    }
+
+    :root[data-layout="phone"] .tx-meter-mini {
+      padding: 7px;
+    }
+
     :root[data-layout="phone"] .console-log pre {
       min-height: 120px;
       max-height: 160px;
@@ -1976,6 +2320,45 @@
       </div>
     </header>
 
+    <section class="operator-state-strip" aria-label="Operator state">
+      <div class="operator-pill" id="operator-conn-pill" data-tone="warn">
+        <div>
+          <span class="operator-pill-label">Connection</span>
+          <span class="operator-pill-value" id="operator-conn-value">Idle</span>
+        </div>
+      </div>
+      <div class="operator-pill" id="operator-owner-pill" data-tone="rx">
+        <div>
+          <span class="operator-pill-label">Ownership</span>
+          <span class="operator-pill-value" id="operator-owner-value">Operator</span>
+        </div>
+      </div>
+      <div class="operator-pill" id="operator-rxtx-pill" data-tone="rx">
+        <div>
+          <span class="operator-pill-label">RX/TX</span>
+          <span class="operator-pill-value" id="operator-rxtx-value">RX</span>
+        </div>
+      </div>
+      <div class="operator-pill" id="operator-rf-pill" data-tone="warn">
+        <div>
+          <span class="operator-pill-label">RF State</span>
+          <span class="operator-pill-value" id="operator-rf-value">TX gated</span>
+        </div>
+      </div>
+      <div class="operator-pill" id="operator-transport-pill" data-tone="rx">
+        <div>
+          <span class="operator-pill-label">Transport</span>
+          <span class="operator-pill-value" id="operator-transport-value">LAN IQ</span>
+        </div>
+      </div>
+      <div class="operator-pill" id="operator-audio-pill" data-tone="warn">
+        <div>
+          <span class="operator-pill-label">Audio</span>
+          <span class="operator-pill-value" id="operator-audio-value">Stopped</span>
+        </div>
+      </div>
+    </section>
+
     <section class="command-strip panel" data-phone-panel="session">
       <div class="panel-head" data-phone-panel-head>
         <h2 class="panel-title">Session</h2>
@@ -1988,7 +2371,15 @@
               <span class="deck-label">Primary VFO</span>
               <span class="status-chip ghost" id="connection-summary">Idle</span>
             </div>
-            <div class="deck-frequency mono freq-readout" id="dds-readout">14.200.000</div>
+            <div class="vfo-readout-row">
+              <div class="deck-frequency mono freq-readout" id="dds-readout">14.200.000</div>
+              <span class="vfo-mode-tag mono" id="vfo-mode-tag">USB</span>
+            </div>
+            <div class="vfo-step-affordance" aria-label="Quick tune step">
+              <button class="btn ghost" id="vfo-step-down-btn" type="button" aria-label="Tune down 100 Hz">-</button>
+              <div class="vfo-step-label">100 Hz quick step</div>
+              <button class="btn ghost" id="vfo-step-up-btn" type="button" aria-label="Tune up 100 Hz">+</button>
+            </div>
             <div class="deck-subline">
               <span id="path-summary">ADC1 • ANT1 • 192 kHz IQ</span>
               <span>Center frequency / click-to-tune reference</span>
@@ -2626,8 +3017,30 @@
             <div class="panel-meta" id="tx-status-meta">RX</div>
           </div>
           <div class="panel-body">
-            <div class="field-row">
-              <button class="btn ptt-btn" id="ptt-btn" type="button" aria-pressed="false">PTT</button>
+            <div class="tx-zone" id="tx-zone" data-tx-state="disabled">
+              <div class="tx-zone-head">
+                <span class="tx-zone-label">TX Control</span>
+                <span class="tx-zone-state" id="tx-zone-state">RX ready</span>
+              </div>
+              <div class="tx-zone-frequency" id="tx-zone-frequency">TX 14.200.000 USB</div>
+              <button class="btn ptt-btn tx-ptt-primary" id="ptt-btn" type="button" aria-pressed="false">MOX</button>
+              <div class="tx-meter-mini-grid" aria-label="Transmit quick meters">
+                <div class="tx-meter-mini">
+                  <span class="tx-meter-mini-label">Mic</span>
+                  <span class="tx-meter-mini-value"><span class="tx-mic-dot" id="tx-zone-mic-dot"></span><span id="tx-zone-mic-value">Idle</span></span>
+                </div>
+                <div class="tx-meter-mini">
+                  <span class="tx-meter-mini-label">Power</span>
+                  <span class="tx-meter-mini-value" id="tx-zone-power-value">-- W</span>
+                </div>
+                <div class="tx-meter-mini">
+                  <span class="tx-meter-mini-label">SWR</span>
+                  <span class="tx-meter-mini-value" id="tx-zone-swr-value">-- : 1</span>
+                </div>
+              </div>
+              <div class="tx-zone-footer">
+                <span class="tx-zone-hint" id="tx-zone-hint">Connect before transmit</span>
+              </div>
             </div>
             <div class="field-row">
               <div class="range-wrap">
@@ -2759,7 +3172,7 @@
       display: false,
       log: true,
       telemetry: true,
-      tx: true,
+      tx: false,
     });
     const RADIO_PREFS_KEY = "saturn.remote.radioPrefs";
     const FREQ_LOCK_KEY = "saturn.remote.freqLock";
@@ -5030,8 +5443,79 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       if (typeof target.focus === "function") target.focus({ preventScroll: true });
     }
 
+    function setOperatorPill(pillId, valueId, value, tone) {
+      const pill = $(pillId);
+      const valueEl = $(valueId);
+      if (pill) pill.dataset.tone = tone;
+      if (valueEl) valueEl.textContent = value;
+    }
+
+    function updateOperatorStateStrip() {
+      setOperatorPill(
+        "operator-conn-pill",
+        "operator-conn-value",
+        state.connected ? "Connected" : (state.demoMode ? "Preview" : "Idle"),
+        state.connected ? "ok" : "warn"
+      );
+      setOperatorPill("operator-owner-pill", "operator-owner-value", "Operator", "rx");
+
+      const txTone = state.txPhase === "keyed"
+        ? "keyed"
+        : (state.txPhase === "armed" || state.moxRequested ? "tx" : "rx");
+      const txLabel = state.txPhase === "keyed"
+        ? "ON AIR"
+        : (state.txPhase === "armed" || state.moxRequested ? "Armed" : "RX");
+      setOperatorPill("operator-rxtx-pill", "operator-rxtx-value", txLabel, txTone);
+
+      setOperatorPill(
+        "operator-rf-pill",
+        "operator-rf-value",
+        state.moxRequested || state.txEnabled ? "TX path active" : "TX gated",
+        state.moxRequested || state.txEnabled ? "tx" : "warn"
+      );
+
+      const transport = state.streamMode === "wan"
+        ? "WAN IQ"
+        : (window.location.hostname.endsWith(".ts.net") ? "Tailnet" : "LAN IQ");
+      setOperatorPill(
+        "operator-transport-pill",
+        "operator-transport-value",
+        transport,
+        state.streamMode === "wan" ? "warn" : "rx"
+      );
+
+      const audioTone = state.audioStreaming ? (state.audioBackpressureDrops > 0 ? "warn" : "ok") : "warn";
+      const audioLabel = state.audioStreaming
+        ? `${Math.round(state.audioSampleRate / 1000)} kHz · ${state.audioBackpressureDrops} resync`
+        : "Stopped";
+      setOperatorPill("operator-audio-pill", "operator-audio-value", audioLabel, audioTone);
+    }
+
+    function updateTxZone() {
+      const txZone = $("tx-zone");
+      if (!txZone) return;
+      const active = state.moxRequested || state.txEnabled;
+      const txState = state.txPhase === "keyed"
+        ? "keyed"
+        : (state.txPhase === "armed" || state.moxRequested ? "armed" : (state.connected ? "ready" : "disabled"));
+      txZone.dataset.txState = txState;
+      $("tx-zone-state").textContent = state.txPhase === "keyed"
+        ? "ON AIR"
+        : (state.txPhase === "armed" || state.moxRequested ? "TX armed" : (state.connected ? "RX ready" : "Connect first"));
+      $("tx-zone-frequency").textContent = `TX ${formatFrequency(state.vfoB || state.vfoA)} ${state.mode}`;
+      const power = state.txMeterMode === "avg" ? state.txPowerAvg : state.txPowerPeak;
+      $("tx-zone-power-value").textContent = power == null ? "-- W" : `${power.toFixed(1)} W`;
+      $("tx-zone-swr-value").textContent = state.swrVisual == null ? "-- : 1" : `${state.swrVisual.toFixed(2)} : 1`;
+      $("tx-zone-mic-value").textContent = state.micCapturing ? "Live" : (active ? "Starting" : "Idle");
+      $("tx-zone-mic-dot").classList.toggle("live", Boolean(state.micCapturing));
+      $("tx-zone-hint").textContent = state.connected
+        ? (active ? "Tap MOX again or press Esc to unkey" : "MOX toggles transmit; page hide fails closed")
+        : "Connect before transmit";
+    }
+
     function updateUi() {
       normalizeUiState();
+      updateOperatorStateStrip();
       // Don't clobber the VFO input while the operator is typing.
       if (document.activeElement !== $("vfo-a-input")) {
         $("vfo-a-input").value = `${state.vfoA}`;
@@ -5040,6 +5524,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       $("vfo-b-readout").textContent = formatFrequency(state.vfoB);
       updateFrequencyReadout($("operator-center-readout"), state.dds);
       $("mode-readout").textContent = state.mode;
+      $("vfo-mode-tag").textContent = state.mode;
       $("sample-rate-readout").textContent = `IQ ${Math.round(state.sampleRate / 1000)} kHz`;
       $("path-summary").textContent = `${adcLabel(state.rxAdc)} • ${antennaLabel(state.rxAntenna)} • ${Math.round(state.sampleRate / 1000)} kHz IQ`;
       const wakeLockBtn = $("wake-lock-btn");
@@ -5091,6 +5576,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       $("ptt-btn").setAttribute("aria-pressed", moxActive ? "true" : "false");
       $("ptt-btn").textContent = state.txPhase === "keyed" ? "MOX ON" : (state.txPhase === "armed" ? "MOX ARM" : (state.moxRequested ? "MOX ARM" : "MOX"));
       $("tx-status-meta").textContent = state.txPhase === "keyed" ? "TX" : (state.txPhase === "armed" ? "ARM" : (state.moxRequested ? "ARM" : "RX"));
+      updateTxZone();
       $("meter-readout").textContent = state.meterDbmVisual == null ? "-- dBm" : `${state.meterDbmVisual.toFixed(1)} dBm`;
       const txMeterValue = state.txMeterMode === "avg" ? state.txPowerAvg : state.txPowerPeak;
       $("tx-power-readout").textContent = txMeterValue == null ? "-- W" : `${txMeterValue.toFixed(1)} W`;
@@ -5802,6 +6288,12 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       });
       document.addEventListener("visibilitychange", () => {
         if (document.visibilityState === "hidden" && (state.moxRequested || state.txEnabled || state.micCapturing)) {
+          void setPtt(false);
+        }
+      });
+      document.addEventListener("keydown", (event) => {
+        if (event.key === "Escape" && (state.moxRequested || state.txEnabled || state.micCapturing)) {
+          event.preventDefault();
           void setPtt(false);
         }
       });
@@ -6829,6 +7321,12 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         button.addEventListener("click", () => {
           tuneBy(Number(button.dataset.step));
         });
+      });
+      $("vfo-step-down-btn").addEventListener("click", () => {
+        if (!state.frequencyLock) tuneBy(-100);
+      });
+      $("vfo-step-up-btn").addEventListener("click", () => {
+        if (!state.frequencyLock) tuneBy(100);
       });
       bindFrequencyDigitControl($("dds-readout"));
       bindFrequencyDigitControl($("operator-center-readout"));
