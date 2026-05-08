@@ -3999,7 +3999,9 @@
         <div class="shortcut-group">
           <div class="shortcut-group-title">TX Safety</div>
           <div class="shortcut-row"><span class="shortcut-key">MOX</span><span>First tap arms when locked; next tap toggles transmit.</span></div>
+          <div class="shortcut-row"><span class="shortcut-key">Hold Space</span><span>Hold-to-key from the operating canvas. If TX is locked, the first press only arms.</span></div>
           <div class="shortcut-row"><span class="shortcut-key">Esc</span><span>Emergency unkey from anywhere on the page.</span></div>
+          <div class="shortcut-row"><span class="shortcut-key">Window blur</span><span>Keyboard PTT unkeys and requires reconfirm if the browser loses focus.</span></div>
           <div class="shortcut-row"><span class="shortcut-key">Page hide</span><span>Leaving or hiding the page forces an unkey and TX reconfirm.</span></div>
         </div>
         <div class="shortcut-group">
@@ -4262,6 +4264,8 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     state.txDisplaySettleFrames = 0;
     state.phoneWaterfallVisible = false;
     state.vfoTuneStepHz = 100;
+    state.keyboardPttActive = false;
+    state.keyboardPttRequestId = 0;
     let remoteSettingsSaveTimer = null;
     let freqEntryBuffer = "";
     let freqEntryUnit = "mhz";
@@ -5815,6 +5819,59 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         }
         const direction = event.key === "ArrowUp" ? 1 : -1;
         tuneBy(direction * keyboardTuneStepHz(event));
+      });
+    }
+
+    function isKeyboardPttKey(event) {
+      return event.code === "Space" || event.key === " " || event.key === "Spacebar";
+    }
+
+    function clearKeyboardPttTracking() {
+      state.keyboardPttActive = false;
+      state.keyboardPttRequestId += 1;
+    }
+
+    function bindKeyboardPttControls() {
+      document.addEventListener("keydown", (event) => {
+        if (!isKeyboardPttKey(event) || event.repeat) {
+          return;
+        }
+        if (keyboardTuneBlocked(event)) {
+          return;
+        }
+        event.preventDefault();
+        if (state.moxRequested || state.txEnabled || state.micCapturing) {
+          return;
+        }
+        const requestId = state.keyboardPttRequestId + 1;
+        state.keyboardPttRequestId = requestId;
+        state.keyboardPttActive = true;
+        void setPtt(true).then((started) => {
+          if (state.keyboardPttRequestId !== requestId) {
+            return;
+          }
+          if (!started) {
+            state.keyboardPttActive = false;
+          }
+        });
+      });
+
+      document.addEventListener("keyup", (event) => {
+        if (!isKeyboardPttKey(event) || !state.keyboardPttActive) {
+          return;
+        }
+        event.preventDefault();
+        clearKeyboardPttTracking();
+        void setPtt(false);
+      });
+
+      window.addEventListener("blur", () => {
+        if (!state.keyboardPttActive) {
+          return;
+        }
+        clearKeyboardPttTracking();
+        recordOperatorFault("Keyboard PTT focus lost", "warn", false);
+        void setPtt(false, { lockAfter: "keyboard-blur" });
       });
     }
 
@@ -7738,6 +7795,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       if (normalized === "mic-unavailable") return "mic unavailable";
       if (normalized === "mic-device-change") return "mic device changed";
       if (normalized === "page-hidden") return "page hidden";
+      if (normalized === "keyboard-blur") return "keyboard focus lost";
       if (normalized === "operator-lock") return "operator locked";
       if (normalized === "tx-fault") return "TX fault";
       if (normalized === "connect") return "connect first";
@@ -9297,6 +9355,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       bindPttButton();
       bindShortcutHelp();
       bindKeyboardTuneControls();
+      bindKeyboardPttControls();
       $("tx-drive").addEventListener("input", () => {
         state.txDrive = clampTxDriveWatts($("tx-drive").value);
         $("tx-drive-readout").textContent = `${state.txDrive} W`;
