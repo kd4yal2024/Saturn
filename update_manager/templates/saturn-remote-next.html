@@ -922,7 +922,7 @@
       top: 8px;
       z-index: 80;
       display: grid;
-      grid-template-columns: repeat(6, minmax(0, 1fr));
+      grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
       gap: 8px;
       margin: 0 0 14px;
       padding: 8px;
@@ -2647,10 +2647,22 @@
           <span class="operator-pill-value" id="operator-transport-value">LAN IQ</span>
         </div>
       </div>
+      <div class="operator-pill" id="operator-latency-pill" data-tone="warn">
+        <div>
+          <span class="operator-pill-label">Latency</span>
+          <span class="operator-pill-value" id="operator-latency-value">No IQ</span>
+        </div>
+      </div>
       <div class="operator-pill" id="operator-audio-pill" data-tone="warn">
         <div>
           <span class="operator-pill-label">Audio</span>
           <span class="operator-pill-value" id="operator-audio-value">Stopped</span>
+        </div>
+      </div>
+      <div class="operator-pill" id="operator-fault-pill" data-tone="ok">
+        <div>
+          <span class="operator-pill-label">Fault</span>
+          <span class="operator-pill-value" id="operator-fault-value">Clear</span>
         </div>
       </div>
     </section>
@@ -3744,6 +3756,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     const REMOTE_FIXED_RX_ADC = 0;
     const PASSBAND_DRAG_STEP_HZ = 50;
     const PASSBAND_MIN_WIDTH_HZ = 200;
+    const OPERATOR_FAULT_VISIBLE_MS = 60000;
 
     const state = globalThis.SaturnRemoteNext.createAppState();
     state.displayIqSource = "rx";
@@ -3753,6 +3766,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     let freqEntryUnit = "mhz";
     let freqEntryOobConfirmKey = "";
     let passbandDragSession = null;
+    let latestOperatorFault = null;
 
     const FftProcessor = globalThis.SaturnRemoteNext.FftProcessor;
 
@@ -6168,23 +6182,97 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       if (typeof target.focus === "function") target.focus({ preventScroll: true });
     }
 
-    function setOperatorPill(pillId, valueId, value, tone) {
+    function setOperatorPill(pillId, valueId, value, tone, title = "") {
       const pill = $(pillId);
       const valueEl = $(valueId);
-      if (pill) pill.dataset.tone = tone;
+      if (pill) {
+        pill.dataset.tone = tone;
+        pill.title = title || value;
+      }
       if (valueEl) valueEl.textContent = value;
     }
 
+    function recordOperatorFault(label, tone = "warn", refresh = true) {
+      latestOperatorFault = {
+        label: String(label || "Fault").slice(0, 42),
+        tone,
+        at: performance.now(),
+      };
+      if (refresh) {
+        updateOperatorStateStrip();
+      }
+    }
+
+    function tailnetTransportActive() {
+      const host = window.location.hostname || "";
+      return host.endsWith(".ts.net") || host.includes(".ts.net");
+    }
+
+    function audioLeadMs() {
+      if (!state.audioCtx || !state.audioStreaming) {
+        return null;
+      }
+      return Math.round((state.audioNextTime - state.audioCtx.currentTime) * 1000);
+    }
+
+    function latencyStripState(now = performance.now()) {
+      if (state.demoMode && !state.connected) {
+        return { label: "Preview", tone: "rx", title: "Preview mode" };
+      }
+      if (!state.connected) {
+        return { label: "Idle", tone: "warn", title: "Bridge is not connected" };
+      }
+      if (!state.iqStreaming || !state.lastFrameAt) {
+        return { label: "No IQ", tone: "warn", title: "Connected, waiting for IQ frames" };
+      }
+      const ageMs = Math.max(0, Math.round(now - state.lastFrameAt));
+      if (ageMs > 2500) {
+        return { label: `${(ageMs / 1000).toFixed(1)}s IQ`, tone: "alarm", title: "IQ frame freshness is stale" };
+      }
+      if (ageMs > 750) {
+        return { label: `${(ageMs / 1000).toFixed(1)}s IQ`, tone: "warn", title: "IQ frame freshness is degraded" };
+      }
+      return { label: `${ageMs} ms IQ`, tone: "ok", title: "Most recent IQ frame freshness" };
+    }
+
+    function audioStripState() {
+      if (!state.audioStreaming) {
+        return { label: "Stopped", tone: "warn", title: "RX audio is stopped" };
+      }
+      const leadMs = audioLeadMs();
+      const dropCount = state.audioBackpressureDrops + state.rxWorkletDrops;
+      const rate = `${Math.round(state.audioSampleRate / 1000)} kHz`;
+      const mode = state.audioWorkletMode === "sab" ? "SAB" : "MSG";
+      const leadLabel = leadMs == null ? "-- ms" : `${leadMs} ms`;
+      const tone = (dropCount > 0 || leadMs == null || leadMs < -10 || leadMs > 180) ? "warn" : "ok";
+      const label = `${rate} · ${leadLabel}`;
+      const title = `${mode} audio buffer, ${dropCount} resync/drop event(s)`;
+      return { label, tone, title };
+    }
+
+    function faultStripState(now = performance.now()) {
+      if (!latestOperatorFault || now - latestOperatorFault.at > OPERATOR_FAULT_VISIBLE_MS) {
+        return { label: "Clear", tone: "ok", title: "No recent operator-visible faults" };
+      }
+      return {
+        label: latestOperatorFault.label,
+        tone: latestOperatorFault.tone || "warn",
+        title: `${latestOperatorFault.label} (${Math.round((now - latestOperatorFault.at) / 1000)}s ago)`,
+      };
+    }
+
     function updateOperatorStateStrip() {
+      const now = performance.now();
       const active = state.moxRequested || state.txEnabled;
       const ready = normalizeTxReadyState();
       setOperatorPill(
         "operator-conn-pill",
         "operator-conn-value",
-        state.connected ? "Connected" : (state.demoMode ? "Preview" : "Idle"),
-        state.connected ? "ok" : "warn"
+        state.connectPending ? "Connecting" : (state.connected ? "Connected" : (state.demoMode ? "Preview" : "Idle")),
+        state.connected ? "ok" : (state.connectPending || state.demoMode ? "rx" : "warn"),
+        state.wsUrl || "No bridge socket connected"
       );
-      setOperatorPill("operator-owner-pill", "operator-owner-value", "Operator", "rx");
+      setOperatorPill("operator-owner-pill", "operator-owner-value", "Local op", "rx", "Backend viewer/owner roles are not wired yet");
 
       const txTone = state.txPhase === "keyed"
         ? "keyed"
@@ -6192,30 +6280,35 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       const txLabel = state.txPhase === "keyed"
         ? "ON AIR"
         : (state.txPhase === "armed" || state.moxRequested ? "Armed" : "RX");
-      setOperatorPill("operator-rxtx-pill", "operator-rxtx-value", txLabel, txTone);
+      setOperatorPill("operator-rxtx-pill", "operator-rxtx-value", txLabel, txTone, state.txPhase);
 
       setOperatorPill(
         "operator-rf-pill",
         "operator-rf-value",
         active ? "TX path active" : (state.connected ? (ready ? "TX ready" : "TX locked") : "TX gated"),
-        active ? "tx" : (ready ? "ok" : "warn")
+        active ? "tx" : (ready ? "ok" : "warn"),
+        state.connected ? `Reconfirm: ${txLockReasonLabel(state.txLockReason)}` : "Connect before TX"
       );
 
       const transport = state.streamMode === "wan"
         ? "WAN IQ"
-        : (window.location.hostname.endsWith(".ts.net") ? "Tailnet" : "LAN IQ");
+        : (tailnetTransportActive() ? "Tailnet" : "LAN IQ");
       setOperatorPill(
         "operator-transport-pill",
         "operator-transport-value",
         transport,
-        state.streamMode === "wan" ? "warn" : "rx"
+        state.streamMode === "wan" ? "warn" : "rx",
+        `${window.location.protocol}//${window.location.host}`
       );
 
-      const audioTone = state.audioStreaming ? (state.audioBackpressureDrops > 0 ? "warn" : "ok") : "warn";
-      const audioLabel = state.audioStreaming
-        ? `${Math.round(state.audioSampleRate / 1000)} kHz · ${state.audioBackpressureDrops} resync`
-        : "Stopped";
-      setOperatorPill("operator-audio-pill", "operator-audio-value", audioLabel, audioTone);
+      const latency = latencyStripState(now);
+      setOperatorPill("operator-latency-pill", "operator-latency-value", latency.label, latency.tone, latency.title);
+
+      const audio = audioStripState();
+      setOperatorPill("operator-audio-pill", "operator-audio-value", audio.label, audio.tone, audio.title);
+
+      const fault = faultStripState(now);
+      setOperatorPill("operator-fault-pill", "operator-fault-value", fault.label, fault.tone, fault.title);
     }
 
     function updateTxZone() {
@@ -6542,6 +6635,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
           await ctx.resume();
         } catch (error) {
           logEvent(`RX audio resume failed: ${error.message || error}`);
+          recordOperatorFault("RX audio resume failed", "warn");
           updateUi();
           return;
         }
@@ -6558,6 +6652,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
           workletReady = true;
         } catch (err) {
           logEvent(`AudioWorklet registration failed: ${err.message || err}`);
+          recordOperatorFault("RX audio worklet failed", "warn");
         }
       }
 
@@ -6810,6 +6905,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         state.txLockReason = "idle-timeout";
         clearTxReadyTimer();
         logEvent("TX ready window expired; reconfirm required");
+        recordOperatorFault("TX idle lock", "warn", false);
         return false;
       }
       return state.txReadyExpiresAt > now;
@@ -6921,6 +7017,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         if (micCtx.audioWorklet) {
           try { await ensureWorkletRegistered(micCtx); } catch (error) {
             logEvent(`Mic AudioWorklet registration failed: ${error.message || error}`);
+            recordOperatorFault("Mic worklet failed", "warn");
           }
         }
         if (state.pttRequestId !== requestId) {
@@ -6947,6 +7044,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
             txMode = "worklet";
           } catch (error) {
             logEvent(`Mic AudioWorklet start failed: ${error.message || error}`);
+            recordOperatorFault("Mic worklet failed", "warn");
             proc = null;
           }
         }
@@ -6976,6 +7074,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
           micStream.getTracks().forEach((track) => track.stop());
         }
         logEvent(`Mic capture failed: ${describeMicCaptureError(err)}`);
+        recordOperatorFault("Mic capture failed", "alarm");
         return false;
       }
     }
@@ -7039,6 +7138,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       if (active) {
         if (!state.connected || !state.ws || state.ws.readyState !== WebSocket.OPEN) {
           logEvent("Connect before transmitting");
+          recordOperatorFault("Connect before TX", "warn");
           state.moxRequested = false;
           state.txEnabled = false;
           lockTx("connect", false);
@@ -7066,6 +7166,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
               state.txPhase = "rx";
               lockTx("mic-unavailable", false);
               logEvent("PTT cancelled because browser mic audio is unavailable");
+              recordOperatorFault("Mic unavailable", "alarm");
               updateUi();
             }
             return false;
@@ -7125,11 +7226,13 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       });
       window.addEventListener("pagehide", () => {
         if (state.moxRequested || state.txEnabled || state.micCapturing) {
+          recordOperatorFault("Page hidden during TX", "warn", false);
           void setPtt(false, { lockAfter: "page-hidden" });
         }
       });
       document.addEventListener("visibilitychange", () => {
         if (document.visibilityState === "hidden" && (state.moxRequested || state.txEnabled || state.micCapturing)) {
+          recordOperatorFault("Page hidden during TX", "warn", false);
           void setPtt(false, { lockAfter: "page-hidden" });
         }
       });
@@ -7145,12 +7248,14 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
             return;
           }
           logEvent("Mic/audio device changed; TX reconfirm required");
-          if (state.moxRequested || state.txEnabled || state.micCapturing) {
-            void setPtt(false, { lockAfter: "mic-device-change" });
-          } else {
-            lockTx("mic-device-change");
-          }
-        });
+        if (state.moxRequested || state.txEnabled || state.micCapturing) {
+          recordOperatorFault("Mic device changed", "warn", false);
+          void setPtt(false, { lockAfter: "mic-device-change" });
+        } else {
+          recordOperatorFault("Mic device changed", "warn");
+          lockTx("mic-device-change");
+        }
+      });
       }
     }
 
@@ -7182,6 +7287,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         ws = new WebSocket(state.wsUrl);
       } catch (err) {
         logEvent(`Invalid WebSocket URL: ${err.message}`);
+        recordOperatorFault("Invalid bridge URL", "warn");
         state.connectPending = false;
         updateUi();
         return;
@@ -7224,6 +7330,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       };
       ws.onclose = () => {
         if (ws !== state.ws) return;
+        const wasTxActive = state.moxRequested || state.txEnabled || state.micCapturing;
         logEvent("WebSocket closed");
         state.connectPending = false;
         state.connected = false;
@@ -7241,6 +7348,9 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         state.txPowerAvg = null;
         state.swr = null;
         state.swrVisual = null;
+        if (wasTxActive) {
+          recordOperatorFault("Link lost during TX", "alarm", false);
+        }
         lockTx("reconnect", false);
         state.twoTonePttOwned = false;
         stopMicCapture();
@@ -7252,6 +7362,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         if (ws !== state.ws) return;
         state.connectPending = false;
         logEvent("WebSocket error");
+        recordOperatorFault("Bridge socket error", "warn");
         updateUi();
       };
     }
@@ -7418,6 +7529,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         rd = (rd + advance) % cap;
         Atomics.store(ctrl, CTRL_READ_IDX, rd);
         state.rxWorkletDrops += 1;
+        recordOperatorFault("Audio ring resync", "warn");
         if (state.rxWorkletDrops === 1 || state.rxWorkletDrops % 25 === 0) {
           logEvent(`RX worklet ring resynced ${state.rxWorkletDrops} time(s)`);
         }
@@ -7443,6 +7555,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       if (state.audioNextTime > now + 0.12) {
         state.audioBackpressureDrops += 1;
         state.audioNextTime = now + RX_AUDIO_RESYNC_PREROLL_SEC;
+        recordOperatorFault("Audio queue resync", "warn");
         if (state.audioBackpressureDrops === 1 || state.audioBackpressureDrops % 25 === 0) {
           logEvent(`Audio queue resynced ${state.audioBackpressureDrops} time(s)`);
         }
