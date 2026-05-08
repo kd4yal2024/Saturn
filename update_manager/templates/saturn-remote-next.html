@@ -500,6 +500,43 @@
       transform: translateX(-50%);
       opacity: 0.95;
     }
+    .band-plan-region {
+      position: absolute;
+      top: 0;
+      bottom: 0;
+      border-left: 1px solid rgba(94, 200, 229, 0.20);
+      border-right: 1px solid rgba(94, 200, 229, 0.14);
+      background:
+        linear-gradient(180deg, rgba(94, 200, 229, 0.10), rgba(94, 200, 229, 0.02));
+    }
+    .band-plan-region::before {
+      content: attr(data-label);
+      position: absolute;
+      top: 8px;
+      left: 50%;
+      transform: translateX(-50%);
+      padding: 2px 7px;
+      border-radius: 999px;
+      border: 1px solid rgba(94, 200, 229, 0.22);
+      background: rgba(6, 17, 22, 0.72);
+      color: rgba(179, 235, 247, 0.88);
+      font-family: var(--mono);
+      font-size: 10px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      white-space: nowrap;
+    }
+    .band-plan-region.oob {
+      border-color: rgba(220, 38, 38, 0.22);
+      background:
+        repeating-linear-gradient(135deg, rgba(220, 38, 38, 0.13) 0 7px, rgba(220, 38, 38, 0.03) 7px 14px),
+        linear-gradient(180deg, rgba(220, 38, 38, 0.10), rgba(220, 38, 38, 0.02));
+    }
+    .band-plan-region.oob::before {
+      content: "OOB";
+      border-color: rgba(220, 38, 38, 0.26);
+      color: rgba(255, 206, 206, 0.90);
+    }
     .band-edge-marker::before {
       content: attr(data-label);
       position: absolute;
@@ -516,6 +553,26 @@
       letter-spacing: 0.08em;
       white-space: nowrap;
       text-transform: uppercase;
+    }
+    .band-edge-sticky {
+      position: absolute;
+      top: 36px;
+      padding: 2px 7px;
+      border-radius: 999px;
+      border: 1px solid rgba(242, 179, 95, 0.24);
+      background: rgba(11, 24, 31, 0.82);
+      color: rgba(244, 210, 160, 0.94);
+      font-family: var(--mono);
+      font-size: 10px;
+      letter-spacing: 0.08em;
+      white-space: nowrap;
+      text-transform: uppercase;
+    }
+    .band-edge-sticky.left {
+      left: 8px;
+    }
+    .band-edge-sticky.right {
+      right: 8px;
     }
     .shell-no-band-edges .band-edge-layer {
       display: none;
@@ -4837,14 +4894,103 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       return _bandEdgesInView(state.dds, displaySpanHz(), HAM_BAND_EDGES_HZ);
     }
 
+    function displayRangeHz() {
+      const span = displaySpanHz();
+      const center = Number(state.dds) || 0;
+      return {
+        low: center - (span / 2),
+        high: center + (span / 2),
+        span,
+      };
+    }
+
+    function displayPercentForFrequencyHz(hz) {
+      return displayPercentForOffsetHz(hz - state.dds);
+    }
+
+    function clampDisplayPercent(percent) {
+      return Math.max(0, Math.min(100, percent));
+    }
+
+    function visibleBandPlanSegments() {
+      const range = displayRangeHz();
+      return HAM_BAND_EDGES_HZ
+        .filter((band) => band.end >= range.low && band.start <= range.high)
+        .map((band) => {
+          const start = Math.max(band.start, range.low);
+          const end = Math.min(band.end, range.high);
+          const left = clampDisplayPercent(displayPercentForFrequencyHz(start));
+          const right = clampDisplayPercent(displayPercentForFrequencyHz(end));
+          return {
+            band,
+            left,
+            right,
+            truncatedLeft: band.start < range.low,
+            truncatedRight: band.end > range.high,
+          };
+        })
+        .filter((segment) => segment.right - segment.left > 0.05)
+        .sort((a, b) => a.left - b.left);
+    }
+
+    function oobDisplaySegments(bandSegments) {
+      const gaps = [];
+      let cursor = 0;
+      bandSegments.forEach((segment) => {
+        if (segment.left - cursor > 0.05) {
+          gaps.push({ left: cursor, right: segment.left });
+        }
+        cursor = Math.max(cursor, segment.right);
+      });
+      if (100 - cursor > 0.05) {
+        gaps.push({ left: cursor, right: 100 });
+      }
+      return gaps;
+    }
+
+    function appendBandPlanRegion(layer, left, right, label, className = "") {
+      const width = Math.max(0, right - left);
+      if (width <= 0.05) {
+        return;
+      }
+      const region = document.createElement("div");
+      region.className = `band-plan-region${className ? ` ${className}` : ""}`;
+      region.style.left = `${left}%`;
+      region.style.width = `${width}%`;
+      if (label) {
+        region.dataset.label = label;
+      }
+      layer.appendChild(region);
+    }
+
     function renderBandEdges() {
       const markers = bandEdgesInView();
+      const bandSegments = visibleBandPlanSegments();
+      const oobSegments = oobDisplaySegments(bandSegments);
       for (const id of ["spectrum-band-edges", "waterfall-band-edges"]) {
         const layer = $(id);
         if (!layer) continue;
         layer.innerHTML = "";
+        oobSegments.forEach((segment) => {
+          appendBandPlanRegion(layer, segment.left, segment.right, "OOB", "oob");
+        });
+        bandSegments.forEach((segment) => {
+          appendBandPlanRegion(layer, segment.left, segment.right, segment.band.label);
+          if (segment.truncatedLeft) {
+            const sticky = document.createElement("div");
+            sticky.className = "band-edge-sticky left";
+            sticky.textContent = `${segment.band.label} lo \u2190`;
+            layer.appendChild(sticky);
+          }
+          if (segment.truncatedRight) {
+            const sticky = document.createElement("div");
+            sticky.className = "band-edge-sticky right";
+            sticky.textContent = `${segment.band.label} hi \u2192`;
+            layer.appendChild(sticky);
+          }
+        });
         markers.forEach((marker) => {
-          const offsetPercent = displayPercentForOffsetHz(marker.hz - state.dds);
+          const offsetPercent = displayPercentForFrequencyHz(marker.hz);
           if (offsetPercent < 0 || offsetPercent > 100) {
             return;
           }
