@@ -185,6 +185,7 @@ export interface AppState {
   layoutMode: string;
   phonePanels: PhonePanels;
   phoneWaterfallVisible: boolean;
+  vfoTuneStepHz: number;
   frequencyLock: boolean;
   keepScreenAwake: boolean;
   wakeLockSentinel: WakeLockSentinel | null;
@@ -349,6 +350,7 @@ export function createAppState(): AppState {
     layoutMode: 'desktop',
     phonePanels: { ...PHONE_PANEL_DEFAULTS },
     phoneWaterfallVisible: false,
+    vfoTuneStepHz: 100,
     frequencyLock: false,
     keepScreenAwake: false,
     wakeLockSentinel: null,

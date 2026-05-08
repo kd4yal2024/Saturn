@@ -82,6 +82,7 @@ describe('createAppState', () => {
   it('theme defaults to dark', () => expect(createAppState().theme).toBe('dark'));
   it('layoutMode defaults to desktop', () => expect(createAppState().layoutMode).toBe('desktop'));
   it('phoneWaterfallVisible defaults to false', () => expect(createAppState().phoneWaterfallVisible).toBe(false));
+  it('vfoTuneStepHz defaults to 100', () => expect(createAppState().vfoTuneStepHz).toBe(100));
   it('phonePanels is a copy of defaults', () => {
     const s = createAppState();
     expect(s.phonePanels).toEqual({ ...PHONE_PANEL_DEFAULTS });

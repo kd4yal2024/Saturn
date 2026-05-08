@@ -1222,6 +1222,7 @@
     }
 
     .freq-digit {
+      position: relative;
       display: inline-flex;
       align-items: center;
       justify-content: center;
@@ -1232,6 +1233,24 @@
       touch-action: manipulation;
       transition: background 120ms ease, color 120ms ease, transform 120ms ease;
       user-select: none;
+    }
+
+    .freq-digit.active-step {
+      color: var(--saturn-rx);
+      background: rgba(94, 200, 229, 0.10);
+    }
+
+    .freq-digit.active-step::after {
+      content: "";
+      position: absolute;
+      left: 18%;
+      right: 18%;
+      bottom: -0.14em;
+      height: 0.08em;
+      min-height: 3px;
+      border-radius: 999px;
+      background: var(--saturn-rx);
+      box-shadow: 0 0 12px rgba(94, 200, 229, 0.42);
     }
 
     .freq-digit:hover,
@@ -2849,9 +2868,9 @@
               <span class="vfo-mode-tag mono" id="vfo-mode-tag">USB</span>
             </div>
             <div class="vfo-step-affordance" aria-label="Quick tune step">
-              <button class="btn ghost" id="vfo-step-down-btn" type="button" aria-label="Tune down 100 Hz">-</button>
-              <div class="vfo-step-label">100 Hz quick step</div>
-              <button class="btn ghost" id="vfo-step-up-btn" type="button" aria-label="Tune up 100 Hz">+</button>
+              <button class="btn ghost" id="vfo-step-down-btn" type="button" aria-label="Tune down selected step">-</button>
+              <div class="vfo-step-label" id="vfo-step-label">100 Hz quick step</div>
+              <button class="btn ghost" id="vfo-step-up-btn" type="button" aria-label="Tune up selected step">+</button>
             </div>
             <div class="deck-subline">
               <span id="path-summary">ADC1 • ANT1 • 192 kHz IQ</span>
@@ -2864,7 +2883,7 @@
               </div>
               <button class="btn alt freq-entry-launch" id="freq-entry-open-btn" type="button">Keypad</button>
               <div class="deck-note">
-                Tune by keypad, wheel or click the frequency digits, or use the panadapter and step controls.
+                Tap a digit to choose the step. Use +/-, wheel, keypad, or the panadapter to tune.
               </div>
             </div>
           </div>
@@ -3950,6 +3969,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     const REMOTE_SETTINGS_SAVE_DEBOUNCE_MS = 750;
     const PANADAPTER_TUNE_STEP_HZ = 10;
     const PANADAPTER_TUNE_THROTTLE_MS = 80;
+    const VFO_TUNE_STEP_KEY = "saturn.remote.vfoTuneStepHz";
     const TX_DISPLAY_SETTLE_SKIP_FRAMES = 3;
     const TX_DISPLAY_SPAN_HZ = 48000; // match piHPSDR: show ±12 kHz for TX
     const WDSP_TX_IQ_RATE_HZ = 192000; // bridge TX IQ output rate
@@ -3962,6 +3982,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     state.displayIqSource = "rx";
     state.txDisplaySettleFrames = 0;
     state.phoneWaterfallVisible = false;
+    state.vfoTuneStepHz = 100;
     let remoteSettingsSaveTimer = null;
     let freqEntryBuffer = "";
     let freqEntryUnit = "mhz";
@@ -4802,6 +4823,46 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       return localStorage.getItem(PHONE_WATERFALL_KEY) === "1";
     }
 
+    function tuneStepLabel(stepHz) {
+      const step = normalizeVfoTuneStep(stepHz);
+      if (step >= 1000000) return `${step / 1000000} MHz`;
+      if (step >= 1000) return `${step / 1000} kHz`;
+      return `${step} Hz`;
+    }
+
+    function normalizeVfoTuneStep(stepHz) {
+      const numeric = Math.max(1, Math.min(10000000, Number(stepHz) || 100));
+      const exponent = Math.max(0, Math.min(7, Math.round(Math.log10(numeric))));
+      return 10 ** exponent;
+    }
+
+    function loadVfoTuneStep() {
+      return normalizeVfoTuneStep(localStorage.getItem(VFO_TUNE_STEP_KEY));
+    }
+
+    function syncVfoTuneStepUi() {
+      const step = normalizeVfoTuneStep(state.vfoTuneStepHz);
+      state.vfoTuneStepHz = step;
+      const label = tuneStepLabel(step);
+      document.querySelectorAll(".freq-digit").forEach((digit) => {
+        digit.classList.toggle("active-step", Number(digit.dataset.step) === step);
+      });
+      const labelEl = $("vfo-step-label");
+      if (labelEl) labelEl.textContent = `${label} quick step`;
+      const down = $("vfo-step-down-btn");
+      const up = $("vfo-step-up-btn");
+      if (down) down.setAttribute("aria-label", `Tune down ${label}`);
+      if (up) up.setAttribute("aria-label", `Tune up ${label}`);
+    }
+
+    function setVfoTuneStep(stepHz, persist = true) {
+      state.vfoTuneStepHz = normalizeVfoTuneStep(stepHz);
+      if (persist) {
+        localStorage.setItem(VFO_TUNE_STEP_KEY, `${state.vfoTuneStepHz}`);
+      }
+      syncVfoTuneStepUi();
+    }
+
     // ---- Delegate clamp/normalize to Vite bundle ----
     const _next = globalThis.SaturnRemoteNext;
     const {
@@ -5272,8 +5333,12 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     // This prevents updateUi() from destroying an active keyboard-tuning session.
     function updateFrequencyReadout(element, hz) {
       if (!element) return;
-      if (element.contains(document.activeElement)) return;
+      if (element.contains(document.activeElement)) {
+        syncVfoTuneStepUi();
+        return;
+      }
       element.innerHTML = formatFrequencyMarkup(hz);
+      syncVfoTuneStepUi();
     }
 
     function formatFrequencyMarkup(hz) {
@@ -8123,12 +8188,10 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
           openFrequencyEntry();
           return;
         }
-        const rect = digit.getBoundingClientRect();
-        const direction = (event.clientY - rect.top) < (rect.height / 2) ? 1 : -1;
         const step = Number(digit.dataset.step);
         pendingDigitTune = {
           pointerId: event.pointerId,
-          direction,
+          startY: event.clientY,
           step,
           opened: false,
           timer: setTimeout(() => {
@@ -8148,7 +8211,11 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         const tune = pendingDigitTune;
         cancelPendingDigitTune();
         if (!tune.opened) {
-          tuneDigitByStep(tune.step, tune.direction);
+          const deltaY = event.clientY - tune.startY;
+          setVfoTuneStep(tune.step);
+          if (Math.abs(deltaY) >= 10) {
+            tuneDigitByStep(tune.step, deltaY < 0 ? 1 : -1);
+          }
         }
       });
       element.addEventListener("pointercancel", cancelPendingDigitTune);
@@ -8170,7 +8237,9 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
           return;
         }
         event.preventDefault();
-        tuneDigitByStep(Number(digit.dataset.step), event.deltaY < 0 ? 1 : -1);
+        const step = Number(digit.dataset.step);
+        setVfoTuneStep(step);
+        tuneDigitByStep(step, event.deltaY < 0 ? 1 : -1);
       }, { passive: false });
       element.addEventListener("keydown", (event) => {
         const digit = event.target.closest(".freq-digit");
@@ -8182,7 +8251,9 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         }
         if (event.key === "ArrowUp" || event.key === "ArrowDown") {
           event.preventDefault();
-          tuneDigitByStep(Number(digit.dataset.step), event.key === "ArrowUp" ? 1 : -1);
+          const step = Number(digit.dataset.step);
+          setVfoTuneStep(step);
+          tuneDigitByStep(step, event.key === "ArrowUp" ? 1 : -1);
         }
       });
     }
@@ -8653,10 +8724,10 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         });
       });
       $("vfo-step-down-btn").addEventListener("click", () => {
-        if (!state.frequencyLock) tuneBy(-100);
+        if (!state.frequencyLock) tuneBy(-normalizeVfoTuneStep(state.vfoTuneStepHz));
       });
       $("vfo-step-up-btn").addEventListener("click", () => {
-        if (!state.frequencyLock) tuneBy(100);
+        if (!state.frequencyLock) tuneBy(normalizeVfoTuneStep(state.vfoTuneStepHz));
       });
       bindFrequencyDigitControl($("dds-readout"));
       bindFrequencyDigitControl($("operator-center-readout"));
@@ -9131,6 +9202,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
 
     async function init() {
       state.phoneWaterfallVisible = loadPhoneWaterfallVisible();
+      state.vfoTuneStepHz = loadVfoTuneStep();
       applyLayout(preferredLayout(), false, false);
       applyTheme(preferredTheme(), false);
       const persistedSettings = loadPersistedLocalSettings();
