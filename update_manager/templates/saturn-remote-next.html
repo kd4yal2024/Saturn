@@ -1544,6 +1544,119 @@
       margin-top: 12px;
     }
 
+    .shortcut-help-btn {
+      min-width: 44px;
+      padding-inline: 13px;
+      font-family: var(--mono);
+      font-size: 18px;
+      font-weight: 700;
+      line-height: 1;
+    }
+
+    .shortcut-overlay {
+      position: fixed;
+      inset: 0;
+      z-index: 125;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 22px;
+      background: rgba(0, 0, 0, 0.56);
+      backdrop-filter: blur(12px);
+    }
+
+    .shortcut-overlay[hidden] {
+      display: none;
+    }
+
+    .shortcut-sheet {
+      width: min(780px, calc(100vw - 28px));
+      max-height: min(820px, calc(100vh - 40px));
+      overflow: auto;
+      border-radius: 22px;
+      border: 1px solid rgba(94, 200, 229, 0.22);
+      background:
+        linear-gradient(180deg, rgba(13, 29, 36, 0.98), rgba(7, 18, 23, 0.98));
+      box-shadow: 0 28px 70px rgba(0, 0, 0, 0.50);
+      padding: 18px;
+    }
+
+    .shortcut-head {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 14px;
+      margin-bottom: 14px;
+    }
+
+    .shortcut-title {
+      margin: 0;
+      font-size: 18px;
+      line-height: 1.2;
+    }
+
+    .shortcut-subtitle {
+      margin-top: 4px;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.4;
+    }
+
+    .shortcut-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .shortcut-group {
+      border: 1px solid rgba(148, 163, 184, 0.14);
+      border-radius: 16px;
+      background: rgba(255, 255, 255, 0.03);
+      padding: 12px;
+    }
+
+    .shortcut-group-title {
+      margin-bottom: 10px;
+      font-family: var(--mono);
+      font-size: 11px;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: var(--saturn-rx);
+    }
+
+    .shortcut-row {
+      display: grid;
+      grid-template-columns: minmax(106px, auto) minmax(0, 1fr);
+      align-items: start;
+      gap: 12px;
+      padding: 8px 0;
+      border-top: 1px solid rgba(148, 163, 184, 0.10);
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.4;
+    }
+
+    .shortcut-row:first-of-type {
+      border-top: 0;
+      padding-top: 0;
+    }
+
+    .shortcut-key {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 30px;
+      padding: 5px 8px;
+      border-radius: 8px;
+      border: 1px solid rgba(244, 184, 96, 0.30);
+      background: rgba(244, 184, 96, 0.08);
+      color: var(--theme-deck-frequency);
+      font-family: var(--mono);
+      font-size: 12px;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+
     .nr-grid {
       display: grid;
       grid-template-columns: repeat(5, minmax(0, 1fr));
@@ -2491,6 +2604,28 @@
       padding: 16px 14px calc(16px + env(safe-area-inset-bottom));
     }
 
+    :root[data-layout="phone"] .shortcut-overlay {
+      align-items: flex-end;
+      justify-content: center;
+      padding: 10px 10px 0;
+    }
+
+    :root[data-layout="phone"] .shortcut-sheet {
+      width: 100%;
+      max-height: 82vh;
+      border-radius: 22px 22px 0 0;
+      padding: 16px 14px calc(16px + env(safe-area-inset-bottom));
+    }
+
+    :root[data-layout="phone"] .shortcut-grid {
+      grid-template-columns: 1fr;
+    }
+
+    :root[data-layout="phone"] .shortcut-row {
+      grid-template-columns: minmax(82px, auto) minmax(0, 1fr);
+      gap: 10px;
+    }
+
     :root[data-layout="phone"] .frequency-entry-head {
       margin-bottom: 10px;
     }
@@ -2831,6 +2966,7 @@
       <div class="hero-actions">
         <a class="nav-link" href="./">Update</a>
         <a class="nav-link" href="./monitor">Monitor</a>
+        <button class="btn ghost shortcut-help-btn" id="shortcut-help-btn" type="button" aria-label="Show operator controls" title="Show operator controls">?</button>
         <button class="btn ghost" id="layout-btn" type="button">Phone: Off</button>
         <button class="btn ghost" id="theme-btn" type="button">Theme: Dark</button>
       </div>
@@ -3768,6 +3904,50 @@
         <button class="btn ghost" type="button" data-freq-unit="mhz">MHz</button>
         <button class="btn ghost" type="button" data-freq-unit="khz">kHz</button>
         <button class="btn ghost" type="button" data-freq-unit="hz">Hz</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="shortcut-overlay" id="shortcut-overlay" hidden>
+    <div class="shortcut-sheet" role="dialog" aria-modal="true" aria-labelledby="shortcut-title">
+      <div class="shortcut-head">
+        <div>
+          <h2 class="shortcut-title" id="shortcut-title">Operator Controls</h2>
+          <div class="shortcut-subtitle">Keyboard, mouse, and touch controls currently wired on this page.</div>
+        </div>
+        <button class="btn ghost" id="shortcut-close-btn" type="button">Close</button>
+      </div>
+      <div class="shortcut-grid">
+        <div class="shortcut-group">
+          <div class="shortcut-group-title">Frequency</div>
+          <div class="shortcut-row"><span class="shortcut-key">0-9</span><span>Open direct frequency entry from the operating canvas.</span></div>
+          <div class="shortcut-row"><span class="shortcut-key">Enter</span><span>Apply the direct-entry value using the inferred unit.</span></div>
+          <div class="shortcut-row"><span class="shortcut-key">Esc</span><span>Close direct entry. If TX is active, emergency unkey still runs.</span></div>
+          <div class="shortcut-row"><span class="shortcut-key">Tap digit</span><span>Select the VFO tune step shown by the underline.</span></div>
+          <div class="shortcut-row"><span class="shortcut-key">Wheel digit</span><span>Tune the selected digit up or down.</span></div>
+          <div class="shortcut-row"><span class="shortcut-key">Up / Down</span><span>Tune a focused VFO digit by its place value.</span></div>
+        </div>
+        <div class="shortcut-group">
+          <div class="shortcut-group-title">Panadapter</div>
+          <div class="shortcut-row"><span class="shortcut-key">Tap / drag</span><span>QSY the RX frequency across the visible spectrum.</span></div>
+          <div class="shortcut-row"><span class="shortcut-key">Wheel</span><span>Tune in 100 Hz steps while the pointer is over spectrum or waterfall.</span></div>
+          <div class="shortcut-row"><span class="shortcut-key">Shift + wheel</span><span>Tune in 1 kHz steps.</span></div>
+          <div class="shortcut-row"><span class="shortcut-key">Ctrl + wheel</span><span>Zoom the displayed span.</span></div>
+          <div class="shortcut-row"><span class="shortcut-key">Drag edge</span><span>Adjust RX filter low or high cut.</span></div>
+          <div class="shortcut-row"><span class="shortcut-key">Drag passband</span><span>Shift the RX passband within the current filter limits.</span></div>
+        </div>
+        <div class="shortcut-group">
+          <div class="shortcut-group-title">TX Safety</div>
+          <div class="shortcut-row"><span class="shortcut-key">MOX</span><span>First tap arms when locked; next tap toggles transmit.</span></div>
+          <div class="shortcut-row"><span class="shortcut-key">Esc</span><span>Emergency unkey from anywhere on the page.</span></div>
+          <div class="shortcut-row"><span class="shortcut-key">Page hide</span><span>Leaving or hiding the page forces an unkey and TX reconfirm.</span></div>
+        </div>
+        <div class="shortcut-group">
+          <div class="shortcut-group-title">Display</div>
+          <div class="shortcut-row"><span class="shortcut-key">WF</span><span>Toggle the phone waterfall without leaving the panadapter.</span></div>
+          <div class="shortcut-row"><span class="shortcut-key">Freq Lock</span><span>Prevent QSY from digit, keypad, and panadapter controls.</span></div>
+          <div class="shortcut-row"><span class="shortcut-key">?</span><span>Open or close this operator control sheet.</span></div>
+        </div>
       </div>
     </div>
   </div>
@@ -5251,6 +5431,31 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       freqEntryOobConfirmKey = "";
     }
 
+    function shortcutHelpOpen() {
+      const overlay = $("shortcut-overlay");
+      return Boolean(overlay && !overlay.hidden);
+    }
+
+    function openShortcutHelp() {
+      const overlay = $("shortcut-overlay");
+      if (!overlay) {
+        return;
+      }
+      overlay.hidden = false;
+      $("shortcut-close-btn").focus({ preventScroll: true });
+    }
+
+    function closeShortcutHelp() {
+      const overlay = $("shortcut-overlay");
+      if (overlay) {
+        overlay.hidden = true;
+      }
+      const button = $("shortcut-help-btn");
+      if (button) {
+        button.focus({ preventScroll: true });
+      }
+    }
+
     function appendFrequencyEntryKey(key) {
       if (key === "clear") {
         freqEntryBuffer = "";
@@ -5333,6 +5538,9 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         }
         return;
       }
+      if (shortcutHelpOpen()) {
+        return;
+      }
       if (event.altKey || event.ctrlKey || event.metaKey || isFrequencyTextTarget(event.target)) {
         return;
       }
@@ -5367,6 +5575,44 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         button.addEventListener("click", () => recallFrequencyEntryBand(button));
       });
       document.addEventListener("keydown", handleFrequencyEntryKeydown);
+    }
+
+    function bindShortcutHelp() {
+      const button = $("shortcut-help-btn");
+      const closeButton = $("shortcut-close-btn");
+      const overlay = $("shortcut-overlay");
+      if (!button || !closeButton || !overlay) {
+        return;
+      }
+      button.addEventListener("click", openShortcutHelp);
+      closeButton.addEventListener("click", closeShortcutHelp);
+      overlay.addEventListener("pointerdown", (event) => {
+        if (event.target === overlay) {
+          closeShortcutHelp();
+        }
+      });
+      document.addEventListener("keydown", (event) => {
+        const open = shortcutHelpOpen();
+        if (open && event.key === "Escape") {
+          event.preventDefault();
+          closeShortcutHelp();
+          return;
+        }
+        const questionKey = event.key === "?" || (event.key === "/" && event.shiftKey);
+        if (!questionKey || event.altKey || event.ctrlKey || event.metaKey || isFrequencyTextTarget(event.target)) {
+          return;
+        }
+        const freqOverlay = $("freq-entry-overlay");
+        if (freqOverlay && !freqOverlay.hidden) {
+          return;
+        }
+        event.preventDefault();
+        if (open) {
+          closeShortcutHelp();
+        } else {
+          openShortcutHelp();
+        }
+      });
     }
 
     function displaySampleRateHz() {
@@ -8845,6 +9091,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         updateUi();
       });
       bindPttButton();
+      bindShortcutHelp();
       $("tx-drive").addEventListener("input", () => {
         state.txDrive = clampTxDriveWatts($("tx-drive").value);
         $("tx-drive-readout").textContent = `${state.txDrive} W`;
