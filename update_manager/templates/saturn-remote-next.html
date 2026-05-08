@@ -521,15 +521,97 @@
       bottom: 12px;
       left: 45%;
       width: 10%;
-      border: 1px solid rgba(200, 162, 94, 0.65);
-      background: linear-gradient(180deg, rgba(200, 162, 94, 0.18), rgba(200, 162, 94, 0.05));
+      border: 1px solid rgba(94, 200, 229, 0.65);
+      background:
+        repeating-linear-gradient(135deg, rgba(94, 200, 229, 0.12) 0 7px, rgba(94, 200, 229, 0.04) 7px 14px),
+        linear-gradient(180deg, rgba(94, 200, 229, 0.16), rgba(94, 200, 229, 0.05));
       border-radius: 14px;
       pointer-events: none;
       box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.04);
     }
+    .interactive-filter-window {
+      pointer-events: auto;
+      cursor: grab;
+      touch-action: none;
+    }
+    .interactive-filter-window:active {
+      cursor: grabbing;
+    }
     .filter-window.tx-filter-window {
-      border-color: rgba(66, 212, 200, 0.70);
-      background: linear-gradient(180deg, rgba(66, 212, 200, 0.18), rgba(66, 212, 200, 0.06));
+      border-color: rgba(245, 158, 11, 0.78);
+      background:
+        repeating-linear-gradient(135deg, rgba(245, 158, 11, 0.20) 0 7px, rgba(245, 158, 11, 0.06) 7px 14px),
+        linear-gradient(180deg, rgba(245, 158, 11, 0.16), rgba(245, 158, 11, 0.05));
+      cursor: default;
+    }
+    .passband-body {
+      position: absolute;
+      inset: 0;
+      border: 0;
+      background: transparent;
+      cursor: grab;
+    }
+    .passband-handle {
+      position: absolute;
+      top: -1px;
+      bottom: -1px;
+      width: 18px;
+      border: 1px solid rgba(94, 200, 229, 0.86);
+      background: linear-gradient(180deg, rgba(94, 200, 229, 0.44), rgba(13, 29, 36, 0.78));
+      cursor: ew-resize;
+      z-index: 3;
+      padding: 0;
+      touch-action: none;
+    }
+    .passband-handle::before {
+      content: "";
+      position: absolute;
+      top: 16%;
+      bottom: 16%;
+      left: 50%;
+      width: 2px;
+      transform: translateX(-50%);
+      border-radius: 999px;
+      background: rgba(230, 237, 243, 0.82);
+      box-shadow: -4px 0 rgba(230, 237, 243, 0.36), 4px 0 rgba(230, 237, 243, 0.36);
+    }
+    .passband-handle-left {
+      left: 0;
+      transform: translateX(-50%);
+      border-radius: 12px 4px 4px 12px;
+    }
+    .passband-handle-right {
+      right: 0;
+      transform: translateX(50%);
+      border-radius: 4px 12px 12px 4px;
+    }
+    .passband-label {
+      position: absolute;
+      left: 50%;
+      bottom: 8px;
+      transform: translateX(-50%);
+      max-width: calc(100% - 18px);
+      padding: 3px 7px;
+      border-radius: 999px;
+      background: rgba(7, 18, 23, 0.76);
+      border: 1px solid rgba(94, 200, 229, 0.22);
+      color: rgba(230, 237, 243, 0.92);
+      font-family: var(--mono);
+      font-size: 10px;
+      line-height: 1.2;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      pointer-events: none;
+      z-index: 2;
+    }
+    .tx-filter-window .passband-body,
+    .tx-filter-window .passband-handle {
+      display: none;
+    }
+    .tx-filter-window .passband-label {
+      border-color: rgba(245, 158, 11, 0.28);
+      color: rgba(253, 230, 138, 0.96);
     }
     .axis-row {
       display: flex;
@@ -2312,6 +2394,16 @@
       border-radius: 16px;
     }
 
+    :root[data-layout="phone"] .passband-handle {
+      width: 24px;
+    }
+
+    :root[data-layout="phone"] .passband-label {
+      bottom: 6px;
+      max-width: calc(100% - 12px);
+      font-size: 9px;
+    }
+
     :root[data-layout="phone"] .scope-footer {
       grid-template-columns: repeat(2, minmax(0, 1fr));
       gap: 8px;
@@ -3040,7 +3132,12 @@
               <div class="display-grid-overlay"></div>
               <canvas id="spectrum-canvas"></canvas>
               <div class="band-edge-layer" id="spectrum-band-edges"></div>
-              <div class="filter-window" id="filter-window"></div>
+              <div class="filter-window interactive-filter-window" id="filter-window">
+                <div class="passband-body" data-passband-drag="body" role="button" tabindex="0" aria-label="Shift RX passband"></div>
+                <button class="passband-handle passband-handle-left" data-passband-drag="low" type="button" aria-label="Adjust lower RX passband edge"></button>
+                <button class="passband-handle passband-handle-right" data-passband-drag="high" type="button" aria-label="Adjust upper RX passband edge"></button>
+                <div class="passband-label" id="filter-window-label">RX 50-3050 Hz</div>
+              </div>
               <div class="center-line"></div>
             </div>
             <div class="waterfall-shell" id="waterfall-shell">
@@ -3645,6 +3742,8 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     const TX_DISPLAY_SPAN_HZ = 48000; // match piHPSDR: show ±12 kHz for TX
     const WDSP_TX_IQ_RATE_HZ = 192000; // bridge TX IQ output rate
     const REMOTE_FIXED_RX_ADC = 0;
+    const PASSBAND_DRAG_STEP_HZ = 50;
+    const PASSBAND_MIN_WIDTH_HZ = 200;
 
     const state = globalThis.SaturnRemoteNext.createAppState();
     state.displayIqSource = "rx";
@@ -3653,6 +3752,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     let freqEntryBuffer = "";
     let freqEntryUnit = "mhz";
     let freqEntryOobConfirmKey = "";
+    let passbandDragSession = null;
 
     const FftProcessor = globalThis.SaturnRemoteNext.FftProcessor;
 
@@ -5805,12 +5905,143 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       return frequencyFromDisplayPoint(clientX, element) - clickTuneCarrierOffsetHz(state.mode);
     }
 
+    function displayOffsetFromPoint(clientX, element) {
+      return frequencyFromDisplayPoint(clientX, element) - state.dds;
+    }
+
+    function snapPassbandDragHz(value) {
+      return Math.round(Number(value || 0) / PASSBAND_DRAG_STEP_HZ) * PASSBAND_DRAG_STEP_HZ;
+    }
+
     function displayPassbandHz() {
       const txOverlay = txFilterOverlayActive();
       const low = txOverlay ? state.txFilterLow : state.filterLow;
       const high = txOverlay ? state.txFilterHigh : state.filterHigh;
       const passband = signedPassbandFromUiCuts(low, high, state.mode);
       return { startHz: passband.lowHz, endHz: passband.highHz };
+    }
+
+    function currentRxPassbandHz() {
+      const passband = signedPassbandFromUiCuts(state.filterLow, state.filterHigh, state.mode);
+      return { lowHz: passband.lowHz, highHz: passband.highHz };
+    }
+
+    function syncRxFilterControlsFromState() {
+      if ($("filter-low")) {
+        $("filter-low").value = `${state.filterLow}`;
+      }
+      if ($("filter-high")) {
+        $("filter-high").value = `${state.filterHigh}`;
+      }
+      updateFilterReadouts();
+    }
+
+    function applyRxPassbandFromSigned(lowHz, highHz) {
+      let low = snapPassbandDragHz(lowHz);
+      let high = snapPassbandDragHz(highHz);
+      if (low > high) {
+        [low, high] = [high, low];
+      }
+      if (high - low < PASSBAND_MIN_WIDTH_HZ) {
+        const center = (low + high) / 2;
+        low = snapPassbandDragHz(center - PASSBAND_MIN_WIDTH_HZ / 2);
+        high = snapPassbandDragHz(center + PASSBAND_MIN_WIDTH_HZ / 2);
+      }
+      const cuts = uiCutsFromSignedPassband(low, high, state.mode);
+      state.filterLow = clampFilterLowHz(cuts.lowHz);
+      state.filterHigh = Math.max(
+        clampFilterHighHz(state.filterLow + PASSBAND_MIN_WIDTH_HZ),
+        clampFilterHighHz(cuts.highHz)
+      );
+      syncRxFilterControlsFromState();
+    }
+
+    function passbandDragDisabled() {
+      return state.frequencyLock || txFilterOverlayActive();
+    }
+
+    function beginPassbandDrag(role, clientX, element, pointerId) {
+      if (passbandDragDisabled()) {
+        return false;
+      }
+      const passband = currentRxPassbandHz();
+      passbandDragSession = {
+        role,
+        element,
+        pointerId,
+        startX: clientX,
+        startLowHz: passband.lowHz,
+        startHighHz: passband.highHz,
+      };
+      return true;
+    }
+
+    function applyPassbandDrag(clientX, commit = false) {
+      if (!passbandDragSession) {
+        return;
+      }
+      const { role, element, startX, startLowHz, startHighHz } = passbandDragSession;
+      const rect = element.getBoundingClientRect();
+      let low = startLowHz;
+      let high = startHighHz;
+      if (role === "body") {
+        if (isSymmetricPassbandMode(state.mode)) {
+          return;
+        }
+        const deltaHz = rect.width ? snapPassbandDragHz(((clientX - startX) / rect.width) * displaySpanHz()) : 0;
+        low = startLowHz + deltaHz;
+        high = startHighHz + deltaHz;
+      } else {
+        const pointerHz = snapPassbandDragHz(displayOffsetFromPoint(clientX, element));
+        if (isSymmetricPassbandMode(state.mode)) {
+          low = -Math.abs(pointerHz);
+          high = Math.abs(pointerHz);
+        } else if (role === "low") {
+          low = Math.min(pointerHz, startHighHz - PASSBAND_MIN_WIDTH_HZ);
+        } else {
+          high = Math.max(pointerHz, startLowHz + PASSBAND_MIN_WIDTH_HZ);
+        }
+      }
+      applyRxPassbandFromSigned(low, high);
+      if (commit) {
+        saveRadioPrefs();
+        sendRxFilterBand();
+        logEvent(`RX passband set: ${state.filterLow}-${state.filterHigh} Hz`);
+      }
+    }
+
+    function finishPassbandDrag(pointerId, clientX = null) {
+      if (!passbandDragSession || passbandDragSession.pointerId !== pointerId) {
+        return;
+      }
+      if (clientX != null) {
+        applyPassbandDrag(clientX, true);
+      } else {
+        saveRadioPrefs();
+        sendRxFilterBand();
+        logEvent(`RX passband set: ${state.filterLow}-${state.filterHigh} Hz`);
+      }
+      passbandDragSession = null;
+    }
+
+    function adjustPassbandByKeyboard(role, deltaHz) {
+      if (passbandDragDisabled()) {
+        return;
+      }
+      const passband = currentRxPassbandHz();
+      if (role === "body") {
+        if (isSymmetricPassbandMode(state.mode)) {
+          return;
+        }
+        applyRxPassbandFromSigned(passband.lowHz + deltaHz, passband.highHz + deltaHz);
+      } else if (role === "low") {
+        applyRxPassbandFromSigned(passband.lowHz + deltaHz, passband.highHz);
+      } else if (role === "high") {
+        applyRxPassbandFromSigned(passband.lowHz, passband.highHz + deltaHz);
+      }
+      saveRadioPrefs();
+      sendRxFilterBand();
+      logEvent(`RX passband set: ${state.filterLow}-${state.filterHigh} Hz`);
     }
 
     function displayPercentForOffsetHz(offsetHz) {
@@ -5853,12 +6084,23 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       const windowLeft = `${Math.min(clampedLeft, clampedRight)}%`;
       const windowWidth = `${Math.max(1.5, Math.abs(clampedRight - clampedLeft))}%`;
       const txOverlay = txFilterOverlayActive();
+      const label = txOverlay
+        ? `TX ${state.txFilterLow}-${state.txFilterHigh} Hz`
+        : `RX ${state.filterLow}-${state.filterHigh} Hz`;
       for (const element of [$("filter-window"), $("waterfall-filter-window")]) {
         element.style.left = windowLeft;
         element.style.width = windowWidth;
         element.classList.toggle("tx-filter-window", txOverlay);
-        element.title = txOverlay ? "TX filter window" : "RX filter window";
+        element.classList.toggle("filter-drag-disabled", txOverlay);
+        element.title = txOverlay ? "TX filter window" : "Drag RX filter edges or body";
       }
+      const labelElement = $("filter-window-label");
+      if (labelElement) {
+        labelElement.textContent = label;
+      }
+      document.querySelectorAll("[data-passband-drag]").forEach((control) => {
+        control.setAttribute("aria-disabled", txOverlay ? "true" : "false");
+      });
     }
 
     function updateAxes() {
@@ -7568,6 +7810,66 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       });
     }
 
+    function bindPassbandDragControls(windowElement, displayElement) {
+      if (!windowElement || !displayElement) {
+        return;
+      }
+      windowElement.addEventListener("pointerdown", (event) => {
+        const control = event.target.closest("[data-passband-drag]");
+        if (!control || !windowElement.contains(control)) {
+          return;
+        }
+        if (event.pointerType === "mouse" && event.button !== 0) {
+          return;
+        }
+        event.preventDefault();
+        event.stopPropagation();
+        if (!beginPassbandDrag(control.dataset.passbandDrag, event.clientX, displayElement, event.pointerId)) {
+          return;
+        }
+        try { control.setPointerCapture(event.pointerId); } catch {}
+      });
+      windowElement.addEventListener("pointermove", (event) => {
+        if (!passbandDragSession || passbandDragSession.pointerId !== event.pointerId) {
+          return;
+        }
+        event.preventDefault();
+        event.stopPropagation();
+        applyPassbandDrag(event.clientX);
+      });
+      const finish = (event) => {
+        if (!passbandDragSession || passbandDragSession.pointerId !== event.pointerId) {
+          return;
+        }
+        event.preventDefault();
+        event.stopPropagation();
+        finishPassbandDrag(event.pointerId, event.clientX);
+        try { event.target.releasePointerCapture(event.pointerId); } catch {}
+      };
+      windowElement.addEventListener("pointerup", finish);
+      windowElement.addEventListener("pointercancel", (event) => {
+        if (!passbandDragSession || passbandDragSession.pointerId !== event.pointerId) {
+          return;
+        }
+        event.preventDefault();
+        event.stopPropagation();
+        finishPassbandDrag(event.pointerId);
+      });
+      windowElement.addEventListener("keydown", (event) => {
+        const control = event.target.closest("[data-passband-drag]");
+        if (!control || !windowElement.contains(control)) {
+          return;
+        }
+        if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") {
+          return;
+        }
+        event.preventDefault();
+        event.stopPropagation();
+        const step = event.shiftKey ? PASSBAND_DRAG_STEP_HZ * 10 : PASSBAND_DRAG_STEP_HZ;
+        adjustPassbandByKeyboard(control.dataset.passbandDrag, event.key === "ArrowRight" ? step : -step);
+      });
+    }
+
     function initInteractions() {
       $("go-live-btn").addEventListener("click", goLive);
       $("setup-menu-btn").addEventListener("click", (event) => {
@@ -7980,6 +8282,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       });
       bindFrequencyDigitControl($("dds-readout"));
       bindFrequencyDigitControl($("operator-center-readout"));
+      bindPassbandDragControls($("filter-window"), $("spectrum-shell"));
       for (const element of [$("spectrum-shell"), $("waterfall-shell")]) {
         element.addEventListener("pointerdown", (event) => {
           if (state.frequencyLock) return;
