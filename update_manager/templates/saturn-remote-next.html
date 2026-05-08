@@ -1103,6 +1103,12 @@
       color: var(--muted);
     }
 
+    .freq-entry-launch {
+      align-self: flex-end;
+      min-height: 46px;
+      white-space: nowrap;
+    }
+
     .secondary-deck .deck-frequency {
       margin: 18px 0 8px;
       font-size: clamp(30px, 2.8vw, 42px);
@@ -1138,6 +1144,150 @@
       color: var(--muted);
       line-height: 1.45;
       max-width: 240px;
+    }
+
+    .frequency-entry-overlay {
+      position: fixed;
+      inset: 0;
+      z-index: 120;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 22px;
+      background: rgba(0, 0, 0, 0.58);
+      backdrop-filter: blur(12px);
+    }
+
+    .frequency-entry-overlay[hidden] {
+      display: none;
+    }
+
+    .frequency-entry-sheet {
+      width: min(560px, calc(100vw - 28px));
+      max-height: min(760px, calc(100vh - 40px));
+      overflow: auto;
+      border-radius: 22px;
+      border: 1px solid rgba(94, 200, 229, 0.22);
+      background:
+        linear-gradient(180deg, rgba(13, 29, 36, 0.98), rgba(7, 18, 23, 0.98));
+      box-shadow: 0 28px 70px rgba(0, 0, 0, 0.48);
+      padding: 18px;
+    }
+
+    .frequency-entry-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 14px;
+      align-items: flex-start;
+      margin-bottom: 14px;
+    }
+
+    .frequency-entry-title {
+      margin: 0;
+      font-size: 18px;
+      line-height: 1.2;
+    }
+
+    .frequency-entry-subtitle {
+      margin-top: 4px;
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    .frequency-entry-display {
+      width: 100%;
+      min-height: 62px;
+      border-radius: 16px;
+      border: 1px solid rgba(244, 184, 96, 0.28);
+      background: rgba(244, 184, 96, 0.08);
+      color: var(--theme-deck-frequency);
+      font-family: var(--display);
+      font-size: clamp(30px, 8vw, 50px);
+      letter-spacing: 0.05em;
+      line-height: 1;
+      text-align: right;
+      padding: 10px 14px;
+    }
+
+    .frequency-entry-preview {
+      min-height: 28px;
+      margin: 10px 0 12px;
+      border-radius: 12px;
+      border: 1px solid rgba(148, 163, 184, 0.14);
+      background: rgba(255, 255, 255, 0.03);
+      color: var(--muted);
+      font-family: var(--mono);
+      font-size: 12px;
+      line-height: 1.45;
+      padding: 8px 10px;
+    }
+
+    .frequency-entry-preview.warn {
+      border-color: rgba(250, 204, 21, 0.38);
+      background: rgba(250, 204, 21, 0.09);
+      color: var(--saturn-caution);
+    }
+
+    .freq-entry-band-row {
+      display: flex;
+      gap: 8px;
+      overflow-x: auto;
+      padding: 2px 0 10px;
+      scrollbar-width: thin;
+    }
+
+    .freq-entry-band-row .btn {
+      flex: 0 0 auto;
+      min-height: 38px;
+      padding: 8px 11px;
+      font-family: var(--mono);
+      font-size: 12px;
+    }
+
+    .freq-entry-keypad {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 9px;
+    }
+
+    .freq-entry-keypad .btn,
+    .freq-entry-unit-row .btn {
+      display: inline-flex;
+      align-items: center;
+      min-height: 52px;
+      justify-content: center;
+      font-family: var(--mono);
+      font-size: 18px;
+      font-weight: 700;
+    }
+
+    .freq-entry-keypad .btn[data-freq-key="clear"],
+    .freq-entry-keypad .btn[data-freq-key="backspace"] {
+      color: var(--saturn-caution);
+    }
+
+    .freq-entry-keypad .btn[data-freq-key="clear"] {
+      grid-column: 1 / -1;
+    }
+
+    .freq-entry-unit-row {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 9px;
+      margin-top: 10px;
+    }
+
+    .freq-entry-unit-row .btn {
+      border-color: rgba(94, 200, 229, 0.24);
+      background: rgba(94, 200, 229, 0.07);
+      color: var(--saturn-rx);
+    }
+
+    .freq-entry-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 10px;
+      margin-top: 12px;
     }
 
     .nr-grid {
@@ -2034,8 +2184,34 @@
       max-width: none;
     }
 
+    :root[data-layout="phone"] .freq-entry-launch {
+      width: 100%;
+    }
+
     :root[data-layout="phone"] .deck-note {
       max-width: none;
+    }
+
+    :root[data-layout="phone"] .frequency-entry-overlay {
+      align-items: flex-end;
+      justify-content: center;
+      padding: 10px 10px 0;
+    }
+
+    :root[data-layout="phone"] .frequency-entry-sheet {
+      width: 100%;
+      max-height: 74vh;
+      border-radius: 22px 22px 0 0;
+      padding: 16px 14px calc(16px + env(safe-area-inset-bottom));
+    }
+
+    :root[data-layout="phone"] .frequency-entry-head {
+      margin-bottom: 10px;
+    }
+
+    :root[data-layout="phone"] .freq-entry-keypad .btn,
+    :root[data-layout="phone"] .freq-entry-unit-row .btn {
+      min-height: 50px;
     }
 
     :root[data-layout="phone"] .status-ribbon {
@@ -2415,10 +2591,11 @@
             <div class="deck-input-row">
               <div style="flex: 1 1 auto;">
                 <label class="label" for="vfo-a-input">Direct Frequency Entry</label>
-                <input class="field" id="vfo-a-input" inputmode="numeric" />
+                <input class="field" id="vfo-a-input" inputmode="decimal" readonly />
               </div>
+              <button class="btn alt freq-entry-launch" id="freq-entry-open-btn" type="button">Keypad</button>
               <div class="deck-note">
-                Tune by direct entry, wheel or click the frequency digits, or use the panadapter and step controls.
+                Tune by keypad, wheel or click the frequency digits, or use the panadapter and step controls.
               </div>
             </div>
           </div>
@@ -3183,6 +3360,53 @@
     </section>
   </div>
 
+  <div class="frequency-entry-overlay" id="freq-entry-overlay" hidden>
+    <div class="frequency-entry-sheet" role="dialog" aria-modal="true" aria-labelledby="freq-entry-title">
+      <div class="frequency-entry-head">
+        <div>
+          <h2 class="frequency-entry-title" id="freq-entry-title">Frequency Entry</h2>
+          <div class="frequency-entry-subtitle">Press MHz, kHz, or Hz to apply. OOB entries require a second press.</div>
+        </div>
+        <button class="btn ghost" id="freq-entry-cancel-btn" type="button">Cancel</button>
+      </div>
+      <div class="frequency-entry-display mono" id="freq-entry-display" aria-live="polite">14.200</div>
+      <div class="frequency-entry-preview" id="freq-entry-preview">14.200.000 USB -> 20m</div>
+      <div class="freq-entry-band-row" aria-label="Band shortcuts">
+        <button class="btn ghost" type="button" data-freq-band="1840000" data-freq-label="160m">160m</button>
+        <button class="btn ghost" type="button" data-freq-band="3800000" data-freq-label="80m">80m</button>
+        <button class="btn ghost" type="button" data-freq-band="5357500" data-freq-label="60m">60m</button>
+        <button class="btn ghost" type="button" data-freq-band="7200000" data-freq-label="40m">40m</button>
+        <button class="btn ghost" type="button" data-freq-band="10125000" data-freq-label="30m">30m</button>
+        <button class="btn ghost" type="button" data-freq-band="14200000" data-freq-label="20m">20m</button>
+        <button class="btn ghost" type="button" data-freq-band="18120000" data-freq-label="17m">17m</button>
+        <button class="btn ghost" type="button" data-freq-band="21200000" data-freq-label="15m">15m</button>
+        <button class="btn ghost" type="button" data-freq-band="24950000" data-freq-label="12m">12m</button>
+        <button class="btn ghost" type="button" data-freq-band="28400000" data-freq-label="10m">10m</button>
+        <button class="btn ghost" type="button" data-freq-band="50125000" data-freq-label="6m">6m</button>
+      </div>
+      <div class="freq-entry-keypad" aria-label="Numeric keypad">
+        <button class="btn ghost" type="button" data-freq-key="1">1</button>
+        <button class="btn ghost" type="button" data-freq-key="2">2</button>
+        <button class="btn ghost" type="button" data-freq-key="3">3</button>
+        <button class="btn ghost" type="button" data-freq-key="4">4</button>
+        <button class="btn ghost" type="button" data-freq-key="5">5</button>
+        <button class="btn ghost" type="button" data-freq-key="6">6</button>
+        <button class="btn ghost" type="button" data-freq-key="7">7</button>
+        <button class="btn ghost" type="button" data-freq-key="8">8</button>
+        <button class="btn ghost" type="button" data-freq-key="9">9</button>
+        <button class="btn ghost" type="button" data-freq-key=".">.</button>
+        <button class="btn ghost" type="button" data-freq-key="0">0</button>
+        <button class="btn ghost" type="button" data-freq-key="backspace">Del</button>
+        <button class="btn ghost" type="button" data-freq-key="clear">Clear</button>
+      </div>
+      <div class="freq-entry-unit-row" aria-label="Apply frequency unit">
+        <button class="btn ghost" type="button" data-freq-unit="mhz">MHz</button>
+        <button class="btn ghost" type="button" data-freq-unit="khz">kHz</button>
+        <button class="btn ghost" type="button" data-freq-unit="hz">Hz</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Runtime provided by SaturnRemoteNext bundle -->
 
   <script src="/remote-assets/remote-next.js"></script>
@@ -3426,6 +3650,9 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     state.displayIqSource = "rx";
     state.txDisplaySettleFrames = 0;
     let remoteSettingsSaveTimer = null;
+    let freqEntryBuffer = "";
+    let freqEntryUnit = "mhz";
+    let freqEntryOobConfirmKey = "";
 
     const FftProcessor = globalThis.SaturnRemoteNext.FftProcessor;
 
@@ -4461,6 +4688,233 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
 
     function formatFrequency(hz) {
       return formatFrequencyPlain(hz);
+    }
+
+    function normalizeFrequencyEntryText(value) {
+      let text = String(value || "").trim().replace(/,/g, ".").replace(/[^\d.]/g, "");
+      const firstDot = text.indexOf(".");
+      if (firstDot >= 0) {
+        text = text.slice(0, firstDot + 1) + text.slice(firstDot + 1).replace(/\./g, "");
+      }
+      text = text.replace(/^0+(?=\d)/, "");
+      if (text.startsWith(".")) {
+        text = `0${text}`;
+      }
+      return text.slice(0, 14);
+    }
+
+    function frequencyEntrySeedFromHz(hz) {
+      const mhz = Math.max(0, Number(hz) || 0) / 1000000;
+      return mhz.toFixed(6).replace(/0+$/, "").replace(/\.$/, "") || "0";
+    }
+
+    function parseFrequencyEntryHz(unit = freqEntryUnit) {
+      if (!freqEntryBuffer) {
+        return null;
+      }
+      const value = Number(freqEntryBuffer);
+      if (!Number.isFinite(value) || value <= 0) {
+        return null;
+      }
+      const scale = unit === "khz" ? 1000 : (unit === "hz" ? 1 : 1000000);
+      const hz = Math.round(value * scale);
+      return Number.isFinite(hz) && hz > 0 ? hz : null;
+    }
+
+    function frequencyEntryBandForHz(hz) {
+      return HAM_BAND_EDGES_HZ.find((band) => hz >= band.start && hz <= band.end) || null;
+    }
+
+    function frequencyEntryUnitLabel(unit = freqEntryUnit) {
+      if (unit === "khz") return "kHz";
+      if (unit === "hz") return "Hz";
+      return "MHz";
+    }
+
+    function inferFrequencyEntryUnit(text = freqEntryBuffer) {
+      if (String(text).includes(".")) {
+        return "mhz";
+      }
+      const value = Number(text);
+      if (!Number.isFinite(value)) {
+        return "mhz";
+      }
+      if (value >= 1000000) {
+        return "hz";
+      }
+      if (value >= 1000) {
+        return "khz";
+      }
+      return "mhz";
+    }
+
+    function isFrequencyTextTarget(target) {
+      if (!target || !(target instanceof Element)) {
+        return false;
+      }
+      return Boolean(target.closest("input, textarea, select, [contenteditable='true']"));
+    }
+
+    function updateFrequencyEntryPreview(warnText = "") {
+      const display = $("freq-entry-display");
+      const preview = $("freq-entry-preview");
+      if (!display || !preview) {
+        return;
+      }
+      display.textContent = freqEntryBuffer || "0";
+      const hz = parseFrequencyEntryHz(freqEntryUnit);
+      if (!hz) {
+        preview.textContent = "Enter a frequency, then press MHz, kHz, or Hz.";
+        preview.classList.remove("warn");
+        return;
+      }
+      const band = frequencyEntryBandForHz(hz);
+      const bandLabel = band ? band.label : "OOB";
+      preview.textContent = warnText ||
+        `${formatFrequency(hz)} ${state.mode} -> ${bandLabel} using ${frequencyEntryUnitLabel(freqEntryUnit)}`;
+      preview.classList.toggle("warn", !band || Boolean(warnText));
+    }
+
+    function openFrequencyEntry(seed = null) {
+      if (state.frequencyLock) {
+        logEvent("Frequency entry blocked: VFO lock is on");
+        return;
+      }
+      freqEntryBuffer = normalizeFrequencyEntryText(seed == null ? frequencyEntrySeedFromHz(state.vfoA || state.dds) : seed);
+      freqEntryUnit = inferFrequencyEntryUnit(freqEntryBuffer);
+      freqEntryOobConfirmKey = "";
+      updateFrequencyEntryPreview();
+      const overlay = $("freq-entry-overlay");
+      if (overlay) {
+        overlay.hidden = false;
+      }
+      $("vfo-a-input").blur();
+    }
+
+    function closeFrequencyEntry() {
+      const overlay = $("freq-entry-overlay");
+      if (overlay) {
+        overlay.hidden = true;
+      }
+      freqEntryOobConfirmKey = "";
+    }
+
+    function appendFrequencyEntryKey(key) {
+      if (key === "clear") {
+        freqEntryBuffer = "";
+        freqEntryUnit = "mhz";
+        freqEntryOobConfirmKey = "";
+        updateFrequencyEntryPreview();
+        return;
+      }
+      if (key === "backspace") {
+        freqEntryBuffer = freqEntryBuffer.slice(0, -1);
+        freqEntryUnit = inferFrequencyEntryUnit(freqEntryBuffer);
+        freqEntryOobConfirmKey = "";
+        updateFrequencyEntryPreview();
+        return;
+      }
+      if (key === "." && freqEntryBuffer.includes(".")) {
+        return;
+      }
+      freqEntryBuffer = normalizeFrequencyEntryText(`${freqEntryBuffer}${key}`);
+      freqEntryUnit = inferFrequencyEntryUnit(freqEntryBuffer);
+      freqEntryOobConfirmKey = "";
+      updateFrequencyEntryPreview();
+    }
+
+    function commitFrequencyEntry(unit = freqEntryUnit) {
+      freqEntryUnit = unit;
+      const hz = parseFrequencyEntryHz(unit);
+      if (!hz) {
+        updateFrequencyEntryPreview("Enter a valid frequency before applying.");
+        return;
+      }
+      const band = frequencyEntryBandForHz(hz);
+      const oobKey = `${unit}:${hz}`;
+      if (!band && freqEntryOobConfirmKey !== oobKey) {
+        freqEntryOobConfirmKey = oobKey;
+        updateFrequencyEntryPreview(`${formatFrequency(hz)} ${state.mode} is outside the configured band plan. Press ${frequencyEntryUnitLabel(unit)} again to commit.`);
+        return;
+      }
+      setFrequency(hz);
+      logEvent(`VFO set by keypad: ${formatFrequency(hz)}`);
+      closeFrequencyEntry();
+    }
+
+    function recallFrequencyEntryBand(button) {
+      const buttonHz = Number(button.dataset.freqBand);
+      if (!Number.isFinite(buttonHz) || buttonHz <= 0) {
+        return;
+      }
+      const newBandKey = bandKeyForFrequency(buttonHz);
+      const savedEntry = newBandKey ? state.bandMemory[newBandKey] : null;
+      const targetHz = (savedEntry && savedEntry.frequency > 0) ? savedEntry.frequency : buttonHz;
+      rememberCurrentBandSettings();
+      setFrequency(targetHz, true, { rememberBand: false });
+      if (applyBandMemoryForFrequency(targetHz)) {
+        sendCurrentRadioPrefsToBridge();
+      }
+      persistLocalSettingsFallback(currentRemoteSettings());
+      scheduleRemoteSettingsSave();
+      logEvent(`Loaded ${button.dataset.freqLabel || newBandKey || "band"} from keypad`);
+      updateUi();
+      closeFrequencyEntry();
+    }
+
+    function handleFrequencyEntryKeydown(event) {
+      const overlay = $("freq-entry-overlay");
+      const overlayOpen = overlay && !overlay.hidden;
+      if (overlayOpen) {
+        if (/^\d$/.test(event.key) || event.key === ".") {
+          event.preventDefault();
+          appendFrequencyEntryKey(event.key);
+        } else if (event.key === "Backspace") {
+          event.preventDefault();
+          appendFrequencyEntryKey("backspace");
+        } else if (event.key === "Escape") {
+          event.preventDefault();
+          closeFrequencyEntry();
+        } else if (event.key === "Enter") {
+          event.preventDefault();
+          commitFrequencyEntry(freqEntryUnit);
+        }
+        return;
+      }
+      if (event.altKey || event.ctrlKey || event.metaKey || isFrequencyTextTarget(event.target)) {
+        return;
+      }
+      if (/^\d$/.test(event.key)) {
+        event.preventDefault();
+        openFrequencyEntry(event.key);
+      }
+    }
+
+    function bindFrequencyEntrySheet() {
+      $("freq-entry-open-btn").addEventListener("click", () => openFrequencyEntry());
+      $("vfo-a-input").addEventListener("click", () => openFrequencyEntry());
+      $("vfo-a-input").addEventListener("keydown", (event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          openFrequencyEntry();
+        }
+      });
+      $("freq-entry-cancel-btn").addEventListener("click", closeFrequencyEntry);
+      $("freq-entry-overlay").addEventListener("pointerdown", (event) => {
+        if (event.target === $("freq-entry-overlay")) {
+          closeFrequencyEntry();
+        }
+      });
+      document.querySelectorAll("[data-freq-key]").forEach((button) => {
+        button.addEventListener("click", () => appendFrequencyEntryKey(button.dataset.freqKey));
+      });
+      document.querySelectorAll("[data-freq-unit]").forEach((button) => {
+        button.addEventListener("click", () => commitFrequencyEntry(button.dataset.freqUnit));
+      });
+      document.querySelectorAll("[data-freq-band]").forEach((button) => {
+        button.addEventListener("click", () => recallFrequencyEntryBand(button));
+      });
+      document.addEventListener("keydown", handleFrequencyEntryKeydown);
     }
 
     function displaySampleRateHz() {
@@ -5562,7 +6016,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       updateOperatorStateStrip();
       // Don't clobber the VFO input while the operator is typing.
       if (document.activeElement !== $("vfo-a-input")) {
-        $("vfo-a-input").value = `${state.vfoA}`;
+        $("vfo-a-input").value = formatFrequency(state.vfoA);
       }
       updateFrequencyReadout($("dds-readout"), state.dds);
       $("vfo-b-readout").textContent = formatFrequency(state.vfoB);
@@ -7027,6 +7481,13 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     }
 
     function bindFrequencyDigitControl(element) {
+      let pendingDigitTune = null;
+      const cancelPendingDigitTune = () => {
+        if (pendingDigitTune && pendingDigitTune.timer) {
+          clearTimeout(pendingDigitTune.timer);
+        }
+        pendingDigitTune = null;
+      };
       element.addEventListener("pointerdown", (event) => {
         const digit = event.target.closest(".freq-digit");
         if (!digit) {
@@ -7039,9 +7500,47 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
           return;
         }
         event.preventDefault();
+        if (event.detail > 1) {
+          openFrequencyEntry();
+          return;
+        }
         const rect = digit.getBoundingClientRect();
         const direction = (event.clientY - rect.top) < (rect.height / 2) ? 1 : -1;
-        tuneDigitByStep(Number(digit.dataset.step), direction);
+        const step = Number(digit.dataset.step);
+        pendingDigitTune = {
+          pointerId: event.pointerId,
+          direction,
+          step,
+          opened: false,
+          timer: setTimeout(() => {
+            if (pendingDigitTune && pendingDigitTune.pointerId === event.pointerId) {
+              pendingDigitTune.opened = true;
+              openFrequencyEntry();
+            }
+          }, 650),
+        };
+        try { digit.setPointerCapture(event.pointerId); } catch {}
+      });
+      element.addEventListener("pointerup", (event) => {
+        if (!pendingDigitTune || pendingDigitTune.pointerId !== event.pointerId) {
+          return;
+        }
+        event.preventDefault();
+        const tune = pendingDigitTune;
+        cancelPendingDigitTune();
+        if (!tune.opened) {
+          tuneDigitByStep(tune.step, tune.direction);
+        }
+      });
+      element.addEventListener("pointercancel", cancelPendingDigitTune);
+      element.addEventListener("lostpointercapture", cancelPendingDigitTune);
+      element.addEventListener("dblclick", (event) => {
+        const digit = event.target.closest(".freq-digit");
+        if (!digit || state.frequencyLock) {
+          return;
+        }
+        event.preventDefault();
+        openFrequencyEntry();
       });
       element.addEventListener("wheel", (event) => {
         const digit = event.target.closest(".freq-digit");
@@ -7286,18 +7785,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         updateUi();
         sendTci(`rx_antenna:0,${state.rxAntenna};`);
       });
-      $("vfo-a-input").addEventListener("keydown", (event) => {
-        if (event.key === "Enter") {
-          event.preventDefault();
-          $("vfo-a-input").blur();
-        }
-      });
-      $("vfo-a-input").addEventListener("change", () => {
-        const hz = Number($("vfo-a-input").value);
-        if (!Number.isNaN(hz) && hz > 0) {
-          setFrequency(hz);
-        }
-      });
+      bindFrequencyEntrySheet();
       $("rx-volume").addEventListener("input", () => {
         state.rxVolumeDb = clampRxVolumeDb($("rx-volume").value);
         applyRxVolumeGain();
