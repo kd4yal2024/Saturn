@@ -450,6 +450,11 @@
     .waterfall-shell {
       height: 250px;
     }
+
+    .waterfall-toggle-btn {
+      display: none;
+    }
+
     canvas {
       position: absolute;
       inset: 0;
@@ -2538,6 +2543,14 @@
       border-radius: 16px;
     }
 
+    :root[data-layout="phone"][data-phone-waterfall="hidden"] .waterfall-shell {
+      display: none;
+    }
+
+    :root[data-layout="phone"] .waterfall-toggle-btn {
+      display: inline-flex;
+    }
+
     :root[data-layout="phone"] .passband-handle {
       width: 24px;
     }
@@ -3306,6 +3319,7 @@
               <span class="display-pill mono" id="display-resolution">Display: --</span>
               <button class="btn eq-enable-btn" id="wake-lock-btn" type="button" style="font-size:11px;padding:4px 10px;">Stay Awake</button>
               <button class="btn eq-enable-btn" id="freq-lock-btn" type="button" style="font-size:11px;padding:4px 10px;">Freq Lock</button>
+              <button class="btn eq-enable-btn waterfall-toggle-btn" id="waterfall-toggle-btn" type="button" style="font-size:11px;padding:4px 10px;" aria-pressed="false">WF Off</button>
             </div>
           </div>
           <div class="display-zoom">
@@ -3723,6 +3737,7 @@
     const RADIO_PREFS_KEY = "saturn.remote.radioPrefs";
     const FREQ_LOCK_KEY = "saturn.remote.freqLock";
     const WAKE_LOCK_KEY = "saturn.remote.keepScreenAwake";
+    const PHONE_WATERFALL_KEY = "saturn.remote.phoneWaterfall";
     const DISPLAY_PREFS_KEY = "saturn.remote.displayPrefs";
     const ACTIVE_PROFILE_KEY = "saturn.remote.activeProfile";
     const REMOTE_SETTINGS_PATH = "/remote_settings";
@@ -3946,6 +3961,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     const state = globalThis.SaturnRemoteNext.createAppState();
     state.displayIqSource = "rx";
     state.txDisplaySettleFrames = 0;
+    state.phoneWaterfallVisible = false;
     let remoteSettingsSaveTimer = null;
     let freqEntryBuffer = "";
     let freqEntryUnit = "mhz";
@@ -4782,6 +4798,10 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       return localStorage.getItem("saturn.remote.layout") === "phone" ? "phone" : "desktop";
     }
 
+    function loadPhoneWaterfallVisible() {
+      return localStorage.getItem(PHONE_WATERFALL_KEY) === "1";
+    }
+
     // ---- Delegate clamp/normalize to Vite bundle ----
     const _next = globalThis.SaturnRemoteNext;
     const {
@@ -4877,6 +4897,29 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       button.title = isPhone ? "Switch to desktop layout" : "Switch to phone layout";
     }
 
+    function syncPhoneWaterfall() {
+      const visible = state.layoutMode !== "phone" || Boolean(state.phoneWaterfallVisible);
+      document.documentElement.dataset.phoneWaterfall = visible ? "visible" : "hidden";
+      const button = $("waterfall-toggle-btn");
+      if (button) {
+        button.textContent = visible ? "WF On" : "WF Off";
+        button.classList.toggle("active", visible);
+        button.setAttribute("aria-pressed", visible ? "true" : "false");
+        button.title = visible ? "Hide phone waterfall" : "Show phone waterfall";
+      }
+    }
+
+    function togglePhoneWaterfall() {
+      state.phoneWaterfallVisible = !state.phoneWaterfallVisible;
+      localStorage.setItem(PHONE_WATERFALL_KEY, state.phoneWaterfallVisible ? "1" : "0");
+      syncPhoneWaterfall();
+      requestAnimationFrame(() => {
+        spectrumRenderer.resize();
+        waterfallRenderer.resize();
+        updateUi();
+      });
+    }
+
     function syncPhonePanels() {
       document.querySelectorAll("[data-phone-panel]").forEach((panel) => {
         const key = panel.dataset.phonePanel;
@@ -4936,6 +4979,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         scheduleRemoteSettingsSave();
       }
       updateLayoutButton();
+      syncPhoneWaterfall();
       syncPhonePanels();
       if (refresh) {
         requestAnimationFrame(() => {
@@ -8398,6 +8442,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       $("freq-lock-btn").addEventListener("click", () => {
         setFrequencyLock(!state.frequencyLock);
       });
+      $("waterfall-toggle-btn").addEventListener("click", togglePhoneWaterfall);
       $("sample-rate").addEventListener("change", () => {
         state.sampleRate = clampSampleRateHz($("sample-rate").value);
         state.spectrumShiftCarryBins = 0;
@@ -9085,6 +9130,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     // ─────────────────────────────────────────────────────────────────────────
 
     async function init() {
+      state.phoneWaterfallVisible = loadPhoneWaterfallVisible();
       applyLayout(preferredLayout(), false, false);
       applyTheme(preferredTheme(), false);
       const persistedSettings = loadPersistedLocalSettings();

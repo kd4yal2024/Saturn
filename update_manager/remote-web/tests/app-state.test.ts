@@ -81,6 +81,7 @@ describe('createAppState', () => {
   // ── UI defaults ──
   it('theme defaults to dark', () => expect(createAppState().theme).toBe('dark'));
   it('layoutMode defaults to desktop', () => expect(createAppState().layoutMode).toBe('desktop'));
+  it('phoneWaterfallVisible defaults to false', () => expect(createAppState().phoneWaterfallVisible).toBe(false));
   it('phonePanels is a copy of defaults', () => {
     const s = createAppState();
     expect(s.phonePanels).toEqual({ ...PHONE_PANEL_DEFAULTS });
