@@ -95,6 +95,9 @@ export interface AppState {
   txTimeoutSeconds: number;
   txTimeoutTimerId: ReturnType<typeof setTimeout> | null;
   armTimeoutTimerId: ReturnType<typeof setTimeout> | null;
+  txReadyExpiresAt: number;
+  txReadyTimerId: ReturnType<typeof setInterval> | null;
+  txLockReason: string;
 
   // ── EQ / CFC ────────────────────────────────────────────────────────────
   rxEqEnabled: boolean;
@@ -262,6 +265,9 @@ export function createAppState(): AppState {
     txTimeoutSeconds: 180,
     txTimeoutTimerId: null,
     armTimeoutTimerId: null,
+    txReadyExpiresAt: 0,
+    txReadyTimerId: null,
+    txLockReason: 'connect',
 
     rxEqEnabled: false,
     rxEqBands: new Array(11).fill(0),

@@ -1402,9 +1402,37 @@
       border-color: rgba(245, 158, 11, 0.62);
     }
 
+    .tx-zone[data-tx-state="ready"] {
+      border-color: rgba(245, 158, 11, 0.56);
+      background:
+        linear-gradient(135deg, rgba(245, 158, 11, 0.16), rgba(92, 58, 19, 0.06)),
+        rgba(8, 18, 24, 0.80);
+    }
+
+    .tx-zone[data-tx-state="locked"] {
+      border-color: rgba(250, 204, 21, 0.58);
+      background:
+        repeating-linear-gradient(135deg, rgba(250, 204, 21, 0.12) 0 6px, rgba(250, 204, 21, 0.035) 6px 12px),
+        rgba(18, 18, 11, 0.86);
+    }
+
     .tx-zone[data-tx-state="disabled"] {
       border-color: rgba(148, 163, 184, 0.18);
       background: rgba(255, 255, 255, 0.025);
+    }
+
+    .tx-zone[data-tx-state="locked"] .tx-zone-state {
+      border-color: rgba(250, 204, 21, 0.38);
+      background: rgba(250, 204, 21, 0.10);
+      color: var(--saturn-caution);
+    }
+
+    .tx-zone[data-tx-state="locked"] .tx-ptt-primary {
+      border-color: rgba(250, 204, 21, 0.66);
+      background:
+        repeating-linear-gradient(135deg, rgba(250, 204, 21, 0.18) 0 7px, rgba(250, 204, 21, 0.055) 7px 14px),
+        linear-gradient(135deg, rgba(82, 68, 16, 0.98), rgba(32, 29, 14, 0.98));
+      color: #fff7b8;
     }
 
     .tx-zone-head,
@@ -3211,6 +3239,7 @@
     const RX_AUDIO_USE_SAB_RING = false;
     const RX_MSG_QUEUE_MAX_PACKETS = 8;
     const TX_MIC_BLOCK_SAMPLES = 256;
+    const TX_READY_WINDOW_MS = 5 * 60 * 1000;
     const TCI_STREAM_IQ_RX = 0;
     const TCI_STREAM_AUDIO_RX = 1;
     const TCI_STREAM_MIC_TX = 2;
@@ -5451,6 +5480,8 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     }
 
     function updateOperatorStateStrip() {
+      const active = state.moxRequested || state.txEnabled;
+      const ready = normalizeTxReadyState();
       setOperatorPill(
         "operator-conn-pill",
         "operator-conn-value",
@@ -5470,8 +5501,8 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       setOperatorPill(
         "operator-rf-pill",
         "operator-rf-value",
-        state.moxRequested || state.txEnabled ? "TX path active" : "TX gated",
-        state.moxRequested || state.txEnabled ? "tx" : "warn"
+        active ? "TX path active" : (state.connected ? (ready ? "TX ready" : "TX locked") : "TX gated"),
+        active ? "tx" : (ready ? "ok" : "warn")
       );
 
       const transport = state.streamMode === "wan"
@@ -5495,13 +5526,18 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       const txZone = $("tx-zone");
       if (!txZone) return;
       const active = state.moxRequested || state.txEnabled;
+      const ready = normalizeTxReadyState();
+      const remainingMs = txReadyRemainingMs();
       const txState = state.txPhase === "keyed"
         ? "keyed"
-        : (state.txPhase === "armed" || state.moxRequested ? "armed" : (state.connected ? "ready" : "disabled"));
+        : (state.txPhase === "armed" || state.moxRequested ? "armed" : (state.connected ? (ready ? "ready" : "locked") : "disabled"));
       txZone.dataset.txState = txState;
-      $("tx-zone-state").textContent = state.txPhase === "keyed"
+      const stateLabel = state.txPhase === "keyed"
         ? "ON AIR"
-        : (state.txPhase === "armed" || state.moxRequested ? "TX armed" : (state.connected ? "RX ready" : "Connect first"));
+        : (state.txPhase === "armed" || state.moxRequested
+          ? "TX armed"
+          : (state.connected ? (ready ? `TX READY · ${formatDurationClock(remainingMs)}` : "TX LOCKED") : "Connect first"));
+      $("tx-zone-state").textContent = stateLabel;
       $("tx-zone-frequency").textContent = `TX ${formatFrequency(state.vfoB || state.vfoA)} ${state.mode}`;
       const power = state.txMeterMode === "avg" ? state.txPowerAvg : state.txPowerPeak;
       $("tx-zone-power-value").textContent = power == null ? "-- W" : `${power.toFixed(1)} W`;
@@ -5509,8 +5545,16 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       $("tx-zone-mic-value").textContent = state.micCapturing ? "Live" : (active ? "Starting" : "Idle");
       $("tx-zone-mic-dot").classList.toggle("live", Boolean(state.micCapturing));
       $("tx-zone-hint").textContent = state.connected
-        ? (active ? "Tap MOX again or press Esc to unkey" : "MOX toggles transmit; page hide fails closed")
+        ? (active
+          ? "Tap MOX again or press Esc to unkey"
+          : (ready ? "Ready to key; page hide fails closed" : `Tap to arm after ${txLockReasonLabel(state.txLockReason)}`))
         : "Connect before transmit";
+      const ptt = $("ptt-btn");
+      if (ptt) {
+        ptt.textContent = active
+          ? (state.txPhase === "keyed" ? "ON AIR" : "MOX ARM")
+          : (state.connected ? (ready ? "MOX" : "TAP TO ARM") : "CONNECT");
+      }
     }
 
     function updateUi() {
@@ -6034,6 +6078,96 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
 
     // ── TX / PTT ─────────────────────────────────────────────────────────────
 
+    function clearTxReadyTimer() {
+      if (state.txReadyTimerId != null) {
+        clearInterval(state.txReadyTimerId);
+        state.txReadyTimerId = null;
+      }
+    }
+
+    function formatDurationClock(ms) {
+      const totalSeconds = Math.max(0, Math.ceil(ms / 1000));
+      const mins = Math.floor(totalSeconds / 60);
+      const secs = totalSeconds % 60;
+      return `${mins}:${String(secs).padStart(2, "0")}`;
+    }
+
+    function txLockReasonLabel(reason) {
+      const normalized = String(reason || "").trim();
+      if (normalized === "reconnect") return "reconnect";
+      if (normalized === "idle-timeout") return "idle timeout";
+      if (normalized === "mic-unavailable") return "mic unavailable";
+      if (normalized === "mic-device-change") return "mic device changed";
+      if (normalized === "page-hidden") return "page hidden";
+      if (normalized === "operator-lock") return "operator locked";
+      if (normalized === "tx-fault") return "TX fault";
+      if (normalized === "connect") return "connect first";
+      return normalized || "reconfirm";
+    }
+
+    function normalizeTxReadyState(now = performance.now()) {
+      if (state.moxRequested || state.txEnabled) {
+        return true;
+      }
+      if (state.txReadyExpiresAt > 0 && now >= state.txReadyExpiresAt) {
+        state.txReadyExpiresAt = 0;
+        state.txLockReason = "idle-timeout";
+        clearTxReadyTimer();
+        logEvent("TX ready window expired; reconfirm required");
+        return false;
+      }
+      return state.txReadyExpiresAt > now;
+    }
+
+    function scheduleTxReadyTimer() {
+      clearTxReadyTimer();
+      if (state.txReadyExpiresAt <= performance.now()) {
+        return;
+      }
+      state.txReadyTimerId = setInterval(() => {
+        normalizeTxReadyState();
+        updateUi();
+      }, 1000);
+    }
+
+    function lockTx(reason = "operator-lock", refresh = true) {
+      state.txReadyExpiresAt = 0;
+      state.txLockReason = reason;
+      clearTxReadyTimer();
+      if (refresh) {
+        updateUi();
+      }
+    }
+
+    function armTxReady(reason = "operator") {
+      if (!state.connected || !state.ws || state.ws.readyState !== WebSocket.OPEN) {
+        state.txLockReason = "connect";
+        updateUi();
+        return false;
+      }
+      state.txReadyExpiresAt = performance.now() + TX_READY_WINDOW_MS;
+      state.txLockReason = "";
+      scheduleTxReadyTimer();
+      logEvent(`TX ready window armed (${formatDurationClock(TX_READY_WINDOW_MS)})`);
+      updateUi();
+      return true;
+    }
+
+    function extendTxReadyWindow() {
+      if (!state.connected) {
+        lockTx("connect", false);
+        return;
+      }
+      state.txReadyExpiresAt = performance.now() + TX_READY_WINDOW_MS;
+      state.txLockReason = "";
+      scheduleTxReadyTimer();
+    }
+
+    function txReadyRemainingMs() {
+      normalizeTxReadyState();
+      return Math.max(0, state.txReadyExpiresAt - performance.now());
+    }
+
     function buildTxMicFrame(monoSamples) {
       const sampleCount = monoSamples.length;
       const buf = new ArrayBuffer(64 + sampleCount * 4);
@@ -6180,6 +6314,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     async function setPtt(active, options = {}) {
       const useMic = options.useMic !== false;
       if (!active) {
+        const wasActive = state.moxRequested || state.txEnabled || state.micCapturing;
         if (!state.moxRequested && !state.txEnabled && !state.micCapturing) {
           return true;
         }
@@ -6195,6 +6330,11 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         if (state.connected && !state.audioStreaming) {
           void startRxAudio();
         }
+        if (options.lockAfter) {
+          lockTx(options.lockAfter, false);
+        } else if (wasActive) {
+          extendTxReadyWindow();
+        }
         state.twoTonePttOwned = false;
         updateUi();
         return true;
@@ -6205,7 +6345,12 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
           logEvent("Connect before transmitting");
           state.moxRequested = false;
           state.txEnabled = false;
+          lockTx("connect", false);
           updateUi();
+          return false;
+        }
+        if (!normalizeTxReadyState()) {
+          armTxReady("operator");
           return false;
         }
         const requestId = state.pttRequestId + 1;
@@ -6223,6 +6368,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
               state.moxRequested = false;
               state.txEnabled = false;
               state.txPhase = "rx";
+              lockTx("mic-unavailable", false);
               logEvent("PTT cancelled because browser mic audio is unavailable");
               updateUi();
             }
@@ -6283,12 +6429,12 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       });
       window.addEventListener("pagehide", () => {
         if (state.moxRequested || state.txEnabled || state.micCapturing) {
-          void setPtt(false);
+          void setPtt(false, { lockAfter: "page-hidden" });
         }
       });
       document.addEventListener("visibilitychange", () => {
         if (document.visibilityState === "hidden" && (state.moxRequested || state.txEnabled || state.micCapturing)) {
-          void setPtt(false);
+          void setPtt(false, { lockAfter: "page-hidden" });
         }
       });
       document.addEventListener("keydown", (event) => {
@@ -6297,6 +6443,19 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
           void setPtt(false);
         }
       });
+      if (navigator.mediaDevices && typeof navigator.mediaDevices.addEventListener === "function") {
+        navigator.mediaDevices.addEventListener("devicechange", () => {
+          if (!state.connected && !state.txReadyExpiresAt) {
+            return;
+          }
+          logEvent("Mic/audio device changed; TX reconfirm required");
+          if (state.moxRequested || state.txEnabled || state.micCapturing) {
+            void setPtt(false, { lockAfter: "mic-device-change" });
+          } else {
+            lockTx("mic-device-change");
+          }
+        });
+      }
     }
 
     function goLive() {
@@ -6339,6 +6498,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         if (ws !== state.ws) { ws.close(); return; }
         state.connectPending = false;
         state.connected = true;
+        lockTx("reconnect", false);
         resetDisplayHistory();
         logEvent("WebSocket connected");
         requestFullState();
@@ -6385,6 +6545,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         state.txPowerAvg = null;
         state.swr = null;
         state.swrVisual = null;
+        lockTx("reconnect", false);
         state.twoTonePttOwned = false;
         stopMicCapture();
         void stopRxAudio(false);
@@ -6509,6 +6670,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         if (state.connected && !state.audioStreaming) {
           void startRxAudio();
         }
+        extendTxReadyWindow();
       }
       if (previous.txPhase !== state.txPhase) {
         clearTxTimeouts();
