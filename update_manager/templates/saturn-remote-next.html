@@ -1009,6 +1009,123 @@
       color: var(--text);
     }
 
+    .audio-control-strip {
+      margin: 0 0 14px;
+      border-color: rgba(94, 200, 229, 0.18);
+      background:
+        linear-gradient(180deg, rgba(11, 23, 30, 0.92), rgba(7, 15, 21, 0.90)),
+        var(--theme-panel-bg);
+    }
+
+    .audio-control-strip .panel-head {
+      align-items: center;
+    }
+
+    .audio-control-status {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+      gap: 8px;
+      margin-left: auto;
+    }
+
+    .audio-control-grid {
+      display: grid;
+      grid-template-columns: minmax(180px, 0.85fr) minmax(260px, 1.15fr) minmax(260px, 1.15fr) minmax(260px, 1.15fr);
+      gap: 12px;
+      align-items: stretch;
+    }
+
+    .audio-control {
+      min-width: 0;
+      display: grid;
+      gap: 10px;
+      align-content: start;
+      padding: 12px;
+      border-radius: 14px;
+      border: 1px solid rgba(148, 163, 184, 0.13);
+      background: rgba(255, 255, 255, 0.028);
+    }
+
+    .audio-control-title {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      min-height: 22px;
+    }
+
+    .audio-control-title .label {
+      margin: 0;
+    }
+
+    .audio-control input[type=range] {
+      width: 100%;
+    }
+
+    .audio-control .nr-grid {
+      gap: 6px;
+    }
+
+    .audio-health-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+    }
+
+    .audio-health-cell {
+      min-width: 0;
+      padding: 9px 10px;
+      border-radius: 12px;
+      border: 1px solid rgba(94, 200, 229, 0.13);
+      background: rgba(94, 200, 229, 0.045);
+    }
+
+    .audio-health-label {
+      display: block;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-family: var(--mono);
+      font-size: 9px;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--muted);
+    }
+
+    .audio-health-value {
+      display: block;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      margin-top: 3px;
+      font-family: var(--mono);
+      font-size: 12px;
+      color: var(--text);
+    }
+
+    .audio-buffer-meter {
+      grid-column: 1 / -1;
+      height: 9px;
+      overflow: hidden;
+      border-radius: 999px;
+      border: 1px solid rgba(148, 163, 184, 0.16);
+      background: rgba(255, 255, 255, 0.055);
+    }
+
+    .audio-buffer-meter > span {
+      display: block;
+      width: 0%;
+      height: 100%;
+      border-radius: inherit;
+      background: linear-gradient(90deg, var(--saturn-caution), var(--saturn-ok));
+      transition: width 120ms ease, background 120ms ease;
+    }
+
+    .audio-buffer-meter[data-tone="warn"] > span {
+      background: linear-gradient(90deg, var(--saturn-alarm), var(--saturn-caution));
+    }
+
     .strip-grid {
       display: grid;
       grid-template-columns: minmax(0, 1.5fr) minmax(260px, 0.82fr) minmax(360px, 1fr);
@@ -2198,6 +2315,33 @@
       font-size: 11px;
     }
 
+    :root[data-layout="phone"] .audio-control-strip {
+      margin-bottom: 12px;
+    }
+
+    :root[data-layout="phone"] .audio-control-strip .panel-head {
+      align-items: flex-start;
+    }
+
+    :root[data-layout="phone"] .audio-control-status {
+      width: 100%;
+      justify-content: flex-start;
+    }
+
+    :root[data-layout="phone"] .audio-control-grid {
+      grid-template-columns: 1fr;
+      gap: 10px;
+    }
+
+    :root[data-layout="phone"] .audio-control {
+      padding: 11px;
+      border-radius: 14px;
+    }
+
+    :root[data-layout="phone"] .audio-health-grid {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
     :root[data-layout="phone"] .strip-grid {
       grid-template-columns: 1fr;
       gap: 10px;
@@ -2509,6 +2653,10 @@
     }
 
     @media (max-width: 1520px) {
+      .audio-control-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
       .strip-grid {
         grid-template-columns: minmax(0, 1.35fr) minmax(240px, 0.8fr);
       }
@@ -2536,6 +2684,10 @@
       .console-layout {
         grid-template-columns: 1fr;
         display: grid;
+      }
+
+      .audio-control-grid {
+        grid-template-columns: 1fr;
       }
 
       .console-header .hero-actions {
@@ -2920,6 +3072,112 @@
       </div>
     </section>
 
+    <section class="audio-control-strip panel" data-phone-panel="audio">
+      <div class="panel-head" data-phone-panel-head>
+        <div>
+          <h2 class="panel-title">RX Audio</h2>
+          <div class="panel-meta">Volume / AGC / NR / NB / filter</div>
+        </div>
+        <div class="audio-control-status" aria-label="Audio status">
+          <span class="status-chip" id="audio-strip-status">Audio stopped</span>
+          <span class="status-chip ghost" id="audio-buffer-status">Buffer --</span>
+        </div>
+      </div>
+      <div class="panel-body">
+        <div class="audio-control-grid">
+          <div class="audio-control">
+            <div class="audio-control-title">
+              <span class="label">RX Volume</span>
+              <span class="mono small" id="rx-volume-readout">-10.0 dB</span>
+            </div>
+            <input id="rx-volume" type="range" min="-40" max="12" step="0.5" value="-10" />
+            <div class="audio-health-grid">
+              <div class="audio-health-cell">
+                <span class="audio-health-label">Rate</span>
+                <span class="audio-health-value" id="audio-strip-rate">--</span>
+              </div>
+              <div class="audio-health-cell">
+                <span class="audio-health-label">Lead</span>
+                <span class="audio-health-value" id="audio-strip-lead">--</span>
+              </div>
+              <div class="audio-health-cell">
+                <span class="audio-health-label">Resync</span>
+                <span class="audio-health-value" id="audio-strip-drops">0</span>
+              </div>
+              <div class="audio-health-cell">
+                <span class="audio-health-label">Path</span>
+                <span class="audio-health-value" id="audio-strip-path">Idle</span>
+              </div>
+              <div class="audio-buffer-meter" id="audio-buffer-meter" data-tone="warn" aria-hidden="true">
+                <span id="audio-buffer-fill"></span>
+              </div>
+            </div>
+          </div>
+
+          <div class="audio-control">
+            <div class="audio-control-title">
+              <span class="label">AGC / ANF</span>
+              <button class="btn eq-enable-btn" id="rx-anf-btn" type="button" style="font-size:11px;padding:4px 10px;">ANF Off</button>
+            </div>
+            <div class="nr-grid" id="rx-agc-grid">
+              <button class="mode-btn" data-agc-mode="OFF" type="button">Off</button>
+              <button class="mode-btn" data-agc-mode="LONG" type="button">Long</button>
+              <button class="mode-btn" data-agc-mode="SLOW" type="button">Slow</button>
+              <button class="mode-btn active" data-agc-mode="MEDIUM" type="button">Med</button>
+              <button class="mode-btn" data-agc-mode="FAST" type="button">Fast</button>
+            </div>
+            <div class="audio-control-title">
+              <span class="label">AGC Gain</span>
+              <span class="mono small" id="agc-gain-readout">80</span>
+            </div>
+            <input id="agc-gain" type="range" min="0" max="100" step="1" value="80" />
+          </div>
+
+          <div class="audio-control">
+            <div class="audio-control-title">
+              <span class="label">Noise Reduction</span>
+              <span class="mono small" id="rx-nr-readout">Off</span>
+            </div>
+            <div class="nr-grid" id="rx-nr-grid">
+              <button class="mode-btn" data-nr-mode="OFF" type="button">Off</button>
+              <button class="mode-btn" data-nr-mode="NR1" type="button">NR1</button>
+              <button class="mode-btn active" data-nr-mode="NR2" type="button">NR2</button>
+              <button class="mode-btn" data-nr-mode="NR3" type="button">NR3</button>
+              <button class="mode-btn" data-nr-mode="NR4" type="button">NR4</button>
+            </div>
+            <input id="rx-nr-level" type="range" min="0" max="100" step="1" value="100" />
+            <div class="audio-control-title">
+              <span class="label">Noise Blanker</span>
+              <span class="mono small" id="rx-nb-threshold-readout">4.95</span>
+            </div>
+            <div class="nr-grid" id="rx-nb-grid">
+              <button class="mode-btn active" data-nb-mode="OFF" type="button">Off</button>
+              <button class="mode-btn" data-nb-mode="NB1" type="button">NB1</button>
+              <button class="mode-btn" data-nb-mode="NB2" type="button">NB2</button>
+            </div>
+            <input id="rx-nb-threshold" type="range" min="2.5" max="82.5" step="0.05" value="4.95" />
+          </div>
+
+          <div class="audio-control">
+            <div class="audio-control-title">
+              <span class="label">RX Filter</span>
+              <span class="mono small">Passband</span>
+            </div>
+            <div class="audio-control-title">
+              <span class="label">Low Cut</span>
+              <span class="mono small" id="filter-low-readout">50 Hz</span>
+            </div>
+            <input id="filter-low" type="range" min="0" max="300" step="50" value="50" />
+            <div class="audio-control-title">
+              <span class="label">High Cut</span>
+              <span class="mono small" id="filter-high-readout">3050 Hz</span>
+            </div>
+            <input id="filter-high" type="range" min="500" max="6000" step="50" value="3050" />
+          </div>
+        </div>
+      </div>
+    </section>
+
     <section class="layout console-layout">
       <div class="stack left-rail">
         <div class="panel" data-phone-panel="routing">
@@ -3005,7 +3263,7 @@
         <div class="panel" data-phone-panel="demod">
           <div class="panel-head" data-phone-panel-head>
             <h2 class="panel-title">Demod</h2>
-            <div class="panel-meta">Mode / gain / passband</div>
+            <div class="panel-meta">Mode / RX EQ</div>
           </div>
           <div class="panel-body">
             <div class="field-row">
@@ -3020,80 +3278,6 @@
                 <button class="mode-btn" data-mode="DIGL" type="button">DIGL</button>
                 <button class="mode-btn" data-mode="CWU" type="button">CWU</button>
                 <button class="mode-btn" data-mode="CWL" type="button">CWL</button>
-              </div>
-            </div>
-
-            <div class="field-row">
-              <div class="range-wrap">
-                <div class="row spread">
-                  <span class="label" style="margin: 0;">RX Volume</span>
-                  <span class="mono small" id="rx-volume-readout">-10.0 dB</span>
-                </div>
-                <input id="rx-volume" type="range" min="-40" max="12" step="0.5" value="-10" />
-              </div>
-              <div class="range-wrap">
-                <div class="row spread">
-                  <span class="label" style="margin: 0;">Noise Reduction</span>
-                  <span class="mono small" id="rx-nr-readout">Off</span>
-                </div>
-                <div class="nr-grid" id="rx-nr-grid">
-                  <button class="mode-btn" data-nr-mode="OFF" type="button">Off</button>
-                  <button class="mode-btn" data-nr-mode="NR1" type="button">NR1</button>
-                  <button class="mode-btn active" data-nr-mode="NR2" type="button">NR2</button>
-                  <button class="mode-btn" data-nr-mode="NR3" type="button">NR3</button>
-                  <button class="mode-btn" data-nr-mode="NR4" type="button">NR4</button>
-                </div>
-                <input id="rx-nr-level" type="range" min="0" max="100" step="1" value="100" />
-              </div>
-            </div>
-
-            <div class="field-row">
-              <div class="range-wrap">
-                <div class="row spread">
-                  <span class="label" style="margin: 0;">Noise Blanker</span>
-                  <span class="mono small" id="rx-nb-threshold-readout">4.95</span>
-                </div>
-                <div class="nr-grid" id="rx-nb-grid">
-                  <button class="mode-btn active" data-nb-mode="OFF" type="button">Off</button>
-                  <button class="mode-btn" data-nb-mode="NB1" type="button">NB1</button>
-                  <button class="mode-btn" data-nb-mode="NB2" type="button">NB2</button>
-                </div>
-                <input id="rx-nb-threshold" type="range" min="2.5" max="82.5" step="0.05" value="4.95" />
-              </div>
-              <div class="range-wrap">
-                <div class="row spread">
-                  <span class="label" style="margin: 0;">ANF / AGC</span>
-                  <button class="btn eq-enable-btn" id="rx-anf-btn" type="button" style="font-size:11px;padding:4px 10px;">ANF Off</button>
-                </div>
-                <div class="nr-grid" id="rx-agc-grid">
-                  <button class="mode-btn" data-agc-mode="OFF" type="button">Off</button>
-                  <button class="mode-btn" data-agc-mode="LONG" type="button">Long</button>
-                  <button class="mode-btn" data-agc-mode="SLOW" type="button">Slow</button>
-                  <button class="mode-btn active" data-agc-mode="MEDIUM" type="button">Med</button>
-                  <button class="mode-btn" data-agc-mode="FAST" type="button">Fast</button>
-                </div>
-                <div class="row spread" style="margin-top: 10px;">
-                  <span class="label" style="margin: 0;">AGC Gain</span>
-                  <span class="mono small" id="agc-gain-readout">80</span>
-                </div>
-                <input id="agc-gain" type="range" min="0" max="100" step="1" value="80" />
-              </div>
-            </div>
-
-            <div class="field-row">
-              <div class="range-wrap">
-                <div class="row spread">
-                  <span class="label" style="margin: 0;">Filter Low</span>
-                  <span class="mono small" id="filter-low-readout">50 Hz</span>
-                </div>
-                <input id="filter-low" type="range" min="0" max="300" step="50" value="50" />
-              </div>
-              <div class="range-wrap">
-                <div class="row spread">
-                  <span class="label" style="margin: 0;">Filter High</span>
-                  <span class="mono small" id="filter-high-readout">3050 Hz</span>
-                </div>
-                <input id="filter-high" type="range" min="500" max="6000" step="50" value="3050" />
               </div>
             </div>
 
@@ -3527,6 +3711,7 @@
     const DISPLAY_PACKET_HISTORY_MAX = 1024;
     const PHONE_PANEL_DEFAULTS = Object.freeze({
       session: false,
+      audio: false,
       routing: true,
       tuning: false,
       demod: false,
@@ -6250,6 +6435,40 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       return { label, tone, title };
     }
 
+    function updateAudioControlStrip() {
+      const audio = audioStripState();
+      const leadMs = audioLeadMs();
+      const dropCount = state.audioBackpressureDrops + state.rxWorkletDrops;
+      const rateLabel = state.audioStreaming ? `${Math.round(state.audioSampleRate / 1000)} kHz` : "--";
+      const leadLabel = leadMs == null ? "--" : `${leadMs} ms`;
+      const pathLabel = state.audioStreaming
+        ? (state.audioWorkletMode === "sab" ? "SAB" : (state.audioWorkletMode === "msg" ? "MSG" : "Legacy"))
+        : "Idle";
+      const statusEl = $("audio-strip-status");
+      if (statusEl) {
+        statusEl.textContent = state.audioStreaming ? `RX audio ${rateLabel}` : "Audio stopped";
+        statusEl.className = audio.tone === "ok" ? "status-chip" : "status-chip ghost";
+        statusEl.title = audio.title;
+      }
+      const bufferEl = $("audio-buffer-status");
+      if (bufferEl) {
+        bufferEl.textContent = leadMs == null ? "Buffer --" : `Buffer ${leadMs} ms`;
+        bufferEl.className = audio.tone === "ok" ? "status-chip" : "status-chip ghost";
+        bufferEl.title = audio.title;
+      }
+      if ($("audio-strip-rate")) $("audio-strip-rate").textContent = rateLabel;
+      if ($("audio-strip-lead")) $("audio-strip-lead").textContent = leadLabel;
+      if ($("audio-strip-drops")) $("audio-strip-drops").textContent = `${dropCount}`;
+      if ($("audio-strip-path")) $("audio-strip-path").textContent = pathLabel;
+      const meter = $("audio-buffer-meter");
+      const fill = $("audio-buffer-fill");
+      if (meter && fill) {
+        const fillPct = leadMs == null ? 0 : Math.max(0, Math.min(100, Math.round((leadMs / 120) * 100)));
+        meter.dataset.tone = audio.tone === "ok" ? "ok" : "warn";
+        fill.style.width = `${fillPct}%`;
+      }
+    }
+
     function faultStripState(now = performance.now()) {
       if (!latestOperatorFault || now - latestOperatorFault.at > OPERATOR_FAULT_VISIBLE_MS) {
         return { label: "Clear", tone: "ok", title: "No recent operator-visible faults" };
@@ -6306,6 +6525,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
 
       const audio = audioStripState();
       setOperatorPill("operator-audio-pill", "operator-audio-value", audio.label, audio.tone, audio.title);
+      updateAudioControlStrip();
 
       const fault = faultStripState(now);
       setOperatorPill("operator-fault-pill", "operator-fault-value", fault.label, fault.tone, fault.title);

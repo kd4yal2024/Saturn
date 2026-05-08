@@ -7,6 +7,7 @@
 
 export interface PhonePanels {
   session: boolean;
+  audio: boolean;
   routing: boolean;
   tuning: boolean;
   demod: boolean;
@@ -18,6 +19,7 @@ export interface PhonePanels {
 
 export const PHONE_PANEL_DEFAULTS: Readonly<PhonePanels> = Object.freeze({
   session: false,
+  audio: false,
   routing: true,
   tuning: false,
   demod: false,
