@@ -3589,7 +3589,7 @@
             </div>
           </div>
           <div class="display-stack">
-            <div class="spectrum-shell" id="spectrum-shell">
+            <div class="spectrum-shell" id="spectrum-shell" tabindex="0" aria-label="Spectrum panadapter">
               <div class="display-grid-overlay"></div>
               <canvas id="spectrum-canvas"></canvas>
               <div class="band-edge-layer" id="spectrum-band-edges"></div>
@@ -3601,7 +3601,7 @@
               </div>
               <div class="center-line"></div>
             </div>
-            <div class="waterfall-shell" id="waterfall-shell">
+            <div class="waterfall-shell" id="waterfall-shell" tabindex="0" aria-label="Waterfall panadapter">
               <div class="display-grid-overlay"></div>
               <canvas id="waterfall-canvas"></canvas>
               <div class="band-edge-layer" id="waterfall-band-edges"></div>
@@ -3982,7 +3982,10 @@
           <div class="shortcut-row"><span class="shortcut-key">Esc</span><span>Close direct entry. If TX is active, emergency unkey still runs.</span></div>
           <div class="shortcut-row"><span class="shortcut-key">Tap digit</span><span>Select the VFO tune step shown by the underline.</span></div>
           <div class="shortcut-row"><span class="shortcut-key">Wheel digit</span><span>Tune the selected digit up or down.</span></div>
-          <div class="shortcut-row"><span class="shortcut-key">Up / Down</span><span>Tune a focused VFO digit by its place value.</span></div>
+          <div class="shortcut-row"><span class="shortcut-key">Up / Down</span><span>Tune the active VFO step from the operating canvas.</span></div>
+          <div class="shortcut-row"><span class="shortcut-key">Shift + Up/Down</span><span>Tune 10x the active VFO step.</span></div>
+          <div class="shortcut-row"><span class="shortcut-key">Ctrl + Up/Down</span><span>Tune 100x the active VFO step.</span></div>
+          <div class="shortcut-row"><span class="shortcut-key">Alt + Up/Down</span><span>Tune one tenth of the active VFO step, down to 1 Hz.</span></div>
         </div>
         <div class="shortcut-group">
           <div class="shortcut-group-title">Panadapter</div>
@@ -5533,6 +5536,36 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       return Boolean(target.closest("input, textarea, select, [contenteditable='true']"));
     }
 
+    function overlayOpen(id) {
+      const overlay = $(id);
+      return Boolean(overlay && !overlay.hidden);
+    }
+
+    function setupMenuOpen() {
+      const menu = $("setup-menu");
+      return Boolean(menu && !menu.hidden);
+    }
+
+    function keyboardTuneBlocked(event) {
+      if (event.defaultPrevented || overlayOpen("freq-entry-overlay") || shortcutHelpOpen() || setupMenuOpen()) {
+        return true;
+      }
+      const target = event.target;
+      if (!target || !(target instanceof Element)) {
+        return false;
+      }
+      if (isFrequencyTextTarget(target)) {
+        return true;
+      }
+      if (target.closest(".shortcut-sheet, .frequency-entry-sheet, .setup-menu")) {
+        return true;
+      }
+      if (target.closest("button, a, [role='button']")) {
+        return true;
+      }
+      return false;
+    }
+
     function updateFrequencyEntryPreview(warnText = "") {
       const display = $("freq-entry-display");
       const preview = $("freq-entry-preview");
@@ -5578,8 +5611,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     }
 
     function shortcutHelpOpen() {
-      const overlay = $("shortcut-overlay");
-      return Boolean(overlay && !overlay.hidden);
+      return overlayOpen("shortcut-overlay");
     }
 
     function openShortcutHelp() {
@@ -5758,6 +5790,31 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         } else {
           openShortcutHelp();
         }
+      });
+    }
+
+    function keyboardTuneStepHz(event) {
+      const baseStep = normalizeVfoTuneStep(state.vfoTuneStepHz);
+      const multiplier = event.ctrlKey || event.metaKey
+        ? 100
+        : (event.shiftKey ? 10 : (event.altKey ? 0.1 : 1));
+      return Math.max(1, Math.round(baseStep * multiplier));
+    }
+
+    function bindKeyboardTuneControls() {
+      document.addEventListener("keydown", (event) => {
+        if (event.key !== "ArrowUp" && event.key !== "ArrowDown") {
+          return;
+        }
+        if (keyboardTuneBlocked(event)) {
+          return;
+        }
+        event.preventDefault();
+        if (state.frequencyLock) {
+          return;
+        }
+        const direction = event.key === "ArrowUp" ? 1 : -1;
+        tuneBy(direction * keyboardTuneStepHz(event));
       });
     }
 
@@ -9200,6 +9257,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
           if (event.pointerType === "mouse" && event.button !== 0) return;
           event.preventDefault();
           state.panadapterTunePointerId = event.pointerId;
+          element.focus({ preventScroll: true });
           try { element.setPointerCapture(event.pointerId); } catch {}
           applyPanadapterTune(event.clientX, element);
         });
@@ -9238,6 +9296,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       });
       bindPttButton();
       bindShortcutHelp();
+      bindKeyboardTuneControls();
       $("tx-drive").addEventListener("input", () => {
         state.txDrive = clampTxDriveWatts($("tx-drive").value);
         $("tx-drive-readout").textContent = `${state.txDrive} W`;
