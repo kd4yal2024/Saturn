@@ -24,6 +24,7 @@ pub struct BridgeConfig {
     pub tx_fft_size: u32,
     pub tx_low_latency: bool,
     pub remote_tx_100w_drive_byte: u8,
+    pub tx_power_meter_scale: f32,
 }
 
 impl Default for BridgeConfig {
@@ -50,6 +51,7 @@ impl Default for BridgeConfig {
             tx_fft_size: 4096,
             tx_low_latency: true,
             remote_tx_100w_drive_byte: 68,
+            tx_power_meter_scale: 1.0,
         }
     }
 }
@@ -132,6 +134,11 @@ impl BridgeConfig {
                 defaults.remote_tx_100w_drive_byte,
             )
             .clamp(1, u8::MAX),
+            tx_power_meter_scale: parse_env_f32(
+                "SATURN_REMOTE_TX_POWER_METER_SCALE",
+                defaults.tx_power_meter_scale,
+            )
+            .clamp(0.1, 2.0),
         }
     }
 }
@@ -177,6 +184,14 @@ fn parse_env_u64(name: &str, default: u64) -> u64 {
     env::var(name)
         .ok()
         .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(default)
+}
+
+fn parse_env_f32(name: &str, default: f32) -> f32 {
+    env::var(name)
+        .ok()
+        .and_then(|value| value.parse::<f32>().ok())
+        .filter(|value| value.is_finite())
         .unwrap_or(default)
 }
 

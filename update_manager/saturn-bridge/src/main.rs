@@ -80,10 +80,10 @@ fn tci_client_release_grace() -> Duration {
 
 /// Convert a Saturn G2 raw power ADC reading to watts.
 /// Same calibration as the TCI telemetry path.
-fn saturn_adc_to_watts(raw: u16, offset: i32) -> f32 {
+fn saturn_adc_to_watts(raw: u16, offset: i32, scale: f32) -> f32 {
     let corrected = (raw as i32 - offset).max(0) as f32;
     let v = (corrected / 4095.0) * 5.0;
-    (v * v) / 0.12
+    ((v * v) / 0.12) * scale
 }
 
 fn bool01(value: bool) -> u8 {
@@ -156,6 +156,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let remote_tx_max_watts = remote_tx_max_watts();
     let remote_tx_power_trip_watts = remote_tx_power_trip_watts();
     let tci_client_release_grace = tci_client_release_grace();
+    let tx_power_meter_scale = config.tx_power_meter_scale;
     {
         let mut model = radio_model.lock().unwrap();
         model.desired.tx_drive = model.desired.tx_drive.clamp(1, remote_tx_max_watts);
@@ -164,7 +165,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let (tx_event_tx, tx_event_rx) = mpsc::channel();
 
     println!(
-        "saturn-bridge: binding {} -> radio {} | TCI {} | remote TX RF {} | remote TX max target={}W 100W-drive-byte={} power trip={:.1}W | TCI release grace={}ms",
+        "saturn-bridge: binding {} -> radio {} | TCI {} | remote TX RF {} | remote TX max target={}W 100W-drive-byte={} power meter scale={:.4} power trip={:.1}W | TCI release grace={}ms",
         session.client_bind_addr(),
         config.radio_command_addr,
         config.tci_bind_addr,
@@ -175,6 +176,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         },
         remote_tx_max_watts,
         config.remote_tx_100w_drive_byte,
+        tx_power_meter_scale,
         remote_tx_power_trip_watts,
         tci_client_release_grace.as_millis()
     );
@@ -653,7 +655,8 @@ fn main() -> Result<(), Box<dyn Error>> {
             match event {
                 P2Event::HighPriorityFromSdr(packet) => {
                     status_hp_packets = status_hp_packets.saturating_add(1);
-                    let forward_watts = saturn_adc_to_watts(packet.forward_power, 32);
+                    let forward_watts =
+                        saturn_adc_to_watts(packet.forward_power, 32, tx_power_meter_scale);
                     model.apply_high_priority(packet);
                     if remote_tx_rf_enabled
                         && model.desired.tx_enabled
@@ -776,6 +779,13 @@ mod tests {
             parse_remote_tx_power_trip_watts(Some("nan")),
             DEFAULT_REMOTE_TX_POWER_TRIP_WATTS
         );
+    }
+
+    #[test]
+    fn saturn_power_adc_conversion_applies_meter_scale() {
+        let unscaled = saturn_adc_to_watts(1500, 32, 1.0);
+        let scaled = saturn_adc_to_watts(1500, 32, 0.8365);
+        assert!((scaled - (unscaled * 0.8365)).abs() < 0.001);
     }
 
     #[test]

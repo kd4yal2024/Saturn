@@ -138,6 +138,7 @@ pub struct TciFrontend {
     outbound_tx: Arc<Mutex<Option<(u64, SyncSender<OutboundMessage>)>>>,
     client_state: Arc<Mutex<ClientState>>,
     drop_count: Arc<AtomicU64>,
+    tx_power_meter_scale: f32,
     _accept_thread: JoinGuard,
 }
 
@@ -213,6 +214,7 @@ impl TciFrontend {
             outbound_tx,
             client_state,
             drop_count,
+            tx_power_meter_scale: config.tx_power_meter_scale,
             _accept_thread: JoinGuard { handle },
         })
     }
@@ -367,8 +369,10 @@ impl TciFrontend {
             self.send_text(format!("rx_smeter:0,0,{meter_dbm:.1};"));
         }
         if let Some(packet) = model.observed.high_priority.as_ref() {
-            let fwd_watts = saturn_adc_to_watts(packet.forward_power, 32);
-            let rev_watts = saturn_adc_to_watts(packet.reverse_power, 28);
+            let fwd_watts =
+                saturn_adc_to_watts(packet.forward_power, 32, self.tx_power_meter_scale);
+            let rev_watts =
+                saturn_adc_to_watts(packet.reverse_power, 28, self.tx_power_meter_scale);
             self.send_text(format!("tx_power:0,{:.1};", fwd_watts));
             self.send_text(format!(
                 "swr:0,{:.2};",
@@ -1534,10 +1538,10 @@ fn parse_tci_bool(text: &str) -> Option<bool> {
 /// Uses the ANAN-7000/Saturn 100 W PA calibration constants from pihpsdr:
 ///   ADC_REF = 5.0 V, coupling = 0.12 (fwd) / 0.12 (rev), fwd_offset = 32, rev_offset = 28.
 /// Formula: V = ((raw - offset) / 4095) * 5.0;  watts = V² / 0.12
-fn saturn_adc_to_watts(raw: u16, offset: i32) -> f32 {
+fn saturn_adc_to_watts(raw: u16, offset: i32, scale: f32) -> f32 {
     let corrected = (raw as i32 - offset).max(0) as f32;
     let v = (corrected / 4095.0) * 5.0;
-    (v * v) / 0.12
+    ((v * v) / 0.12) * scale
 }
 
 fn calculate_swr_watts(fwd_watts: f32, rev_watts: f32) -> f32 {
