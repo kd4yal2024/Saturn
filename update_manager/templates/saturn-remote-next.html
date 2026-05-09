@@ -2163,6 +2163,38 @@
       color: var(--text);
     }
 
+    .tx-meter-mini-bar {
+      --tx-mini-fill: 0%;
+      position: relative;
+      overflow: hidden;
+      height: 5px;
+      margin-top: 7px;
+      border-radius: 999px;
+      border: 1px solid rgba(148, 163, 184, 0.12);
+      background: rgba(2, 6, 23, 0.45);
+    }
+
+    .tx-meter-mini-bar span {
+      display: block;
+      width: var(--tx-mini-fill);
+      height: 100%;
+      border-radius: inherit;
+      background: rgba(148, 163, 184, 0.46);
+      transition: width 90ms linear, background-color 120ms ease;
+    }
+
+    .tx-meter-mini-bar[data-tone="ok"] span {
+      background: linear-gradient(90deg, rgba(34, 197, 94, 0.82), rgba(94, 200, 229, 0.72));
+    }
+
+    .tx-meter-mini-bar[data-tone="warn"] span {
+      background: linear-gradient(90deg, rgba(250, 204, 21, 0.88), rgba(245, 158, 11, 0.82));
+    }
+
+    .tx-meter-mini-bar[data-tone="alarm"] span {
+      background: linear-gradient(90deg, rgba(245, 158, 11, 0.86), rgba(220, 38, 38, 0.88));
+    }
+
     .tx-mic-dot {
       display: inline-block;
       width: 9px;
@@ -3968,14 +4000,17 @@
                 <div class="tx-meter-mini">
                   <span class="tx-meter-mini-label">Mic</span>
                   <span class="tx-meter-mini-value"><span class="tx-mic-dot" id="tx-zone-mic-dot"></span><span id="tx-zone-mic-value">Idle</span></span>
+                  <div class="tx-meter-mini-bar" id="tx-zone-mic-bar" data-tone="idle" aria-hidden="true"><span></span></div>
                 </div>
                 <div class="tx-meter-mini">
                   <span class="tx-meter-mini-label">Power</span>
                   <span class="tx-meter-mini-value" id="tx-zone-power-value">-- W</span>
+                  <div class="tx-meter-mini-bar" id="tx-zone-power-bar" data-tone="idle" aria-hidden="true"><span></span></div>
                 </div>
                 <div class="tx-meter-mini">
                   <span class="tx-meter-mini-label">SWR</span>
                   <span class="tx-meter-mini-value" id="tx-zone-swr-value">-- : 1</span>
+                  <div class="tx-meter-mini-bar" id="tx-zone-swr-bar" data-tone="idle" aria-hidden="true"><span></span></div>
                 </div>
               </div>
               <div class="tx-zone-footer">
@@ -4258,6 +4293,9 @@
     const RX_MSG_QUEUE_MAX_PACKETS = 8;
     const TX_MIC_BLOCK_SAMPLES = 256;
     const TX_READY_WINDOW_MS = 5 * 60 * 1000;
+    const TX_MIC_LEVEL_STALE_MS = 450;
+    const TX_MIC_LEVEL_ATTACK_PER_SEC = 8;
+    const TX_MIC_LEVEL_RELEASE_PER_SEC = 2.4;
     const TCI_STREAM_IQ_RX = 0;
     const TCI_STREAM_AUDIO_RX = 1;
     const TCI_STREAM_MIC_TX = 2;
@@ -4454,6 +4492,9 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     state.pointerPttActive = false;
     state.pointerPttRequestId = 0;
     state.pointerPttPointerId = null;
+    state.txMicLevel = null;
+    state.txMicLevelVisual = 0;
+    state.txMicLevelAt = 0;
     let remoteSettingsSaveTimer = null;
     let freqEntryBuffer = "";
     let freqEntryUnit = "mhz";
@@ -7371,6 +7412,51 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       return "";
     }
 
+    function setTxMiniMeter(id, percent, tone = "idle", title = "") {
+      const meter = $(id);
+      if (!meter) return;
+      const fill = Math.max(0, Math.min(100, percent || 0));
+      meter.style.setProperty("--tx-mini-fill", `${fill.toFixed(0)}%`);
+      meter.dataset.tone = tone;
+      if (title) meter.title = title;
+    }
+
+    function updateTxMiniMeters() {
+      const micLevel = Math.max(0, Math.min(1, state.txMicLevelVisual || 0));
+      const micTone = !state.micCapturing
+        ? "idle"
+        : (micLevel >= 0.92 ? "alarm" : (micLevel >= 0.72 ? "warn" : (micLevel >= 0.025 ? "ok" : "idle")));
+      setTxMiniMeter(
+        "tx-zone-mic-bar",
+        state.micCapturing ? Math.max(4, micLevel * 100) : 0,
+        micTone,
+        state.micCapturing ? `Mic peak ${(micLevel * 100).toFixed(0)}%` : "Mic capture idle"
+      );
+
+      const power = state.txMeterMode === "avg" ? state.txPowerAvg : state.txPowerPeak;
+      const targetWatts = Math.max(1, Number(state.txDrive) || 1);
+      const powerPercent = power == null ? 0 : (power / targetWatts) * 100;
+      const powerTone = power == null
+        ? "idle"
+        : (power > targetWatts * 1.15 ? "warn" : "ok");
+      setTxMiniMeter(
+        "tx-zone-power-bar",
+        powerPercent,
+        powerTone,
+        power == null ? "No TX power telemetry" : `TX ${power.toFixed(1)} W of ${targetWatts} W target`
+      );
+
+      const swr = state.swrVisual;
+      const swrPercent = swr == null ? 0 : ((Math.max(1, Math.min(3, swr)) - 1) / 2) * 100;
+      const swrTone = swr == null ? "idle" : (swr >= 2 ? "alarm" : (swr >= 1.5 ? "warn" : "ok"));
+      setTxMiniMeter(
+        "tx-zone-swr-bar",
+        swrPercent,
+        swrTone,
+        swr == null ? "No SWR telemetry" : `SWR ${swr.toFixed(2)} : 1`
+      );
+    }
+
     function updateOperatorStateStrip() {
       const now = performance.now();
       const active = state.moxRequested || state.txEnabled;
@@ -7462,8 +7548,12 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       const power = state.txMeterMode === "avg" ? state.txPowerAvg : state.txPowerPeak;
       $("tx-zone-power-value").textContent = power == null ? "-- W" : `${power.toFixed(1)} W`;
       $("tx-zone-swr-value").textContent = state.swrVisual == null ? "-- : 1" : `${state.swrVisual.toFixed(2)} : 1`;
-      $("tx-zone-mic-value").textContent = state.micCapturing ? "Live" : (active ? "Starting" : "Idle");
+      const micLevel = Math.max(0, Math.min(1, state.txMicLevelVisual || 0));
+      $("tx-zone-mic-value").textContent = state.micCapturing
+        ? (micLevel >= 0.92 ? "Clip" : `${(micLevel * 100).toFixed(0)}%`)
+        : (active ? "Starting" : "Idle");
       $("tx-zone-mic-dot").classList.toggle("live", Boolean(state.micCapturing));
+      updateTxMiniMeters();
       $("tx-zone-hint").textContent = state.connected
         ? (active
           ? (source === "ptt" ? "Release PTT or press Esc to unkey" : "Tap MOX again or press Esc to unkey")
@@ -8158,9 +8248,14 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       view.setUint32(20, sampleCount, true);             // sample_count
       view.setUint32(24, TCI_STREAM_MIC_TX, true);        // stream_type = 2 (TX mic)
       view.setUint32(28, 1, true);                       // channels = 1 (mono)
+      let peak = 0;
       for (let i = 0; i < monoSamples.length; i++) {
-        view.setFloat32(64 + i * 4, monoSamples[i], true);
+        const sample = Number(monoSamples[i]) || 0;
+        peak = Math.max(peak, Math.abs(sample));
+        view.setFloat32(64 + i * 4, sample, true);
       }
+      state.txMicLevel = Math.max(0, Math.min(1, peak));
+      state.txMicLevelAt = performance.now();
       return buf;
     }
 
@@ -8281,6 +8376,9 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         state.micStream = null;
       }
       state.micCapturing = false;
+      state.txMicLevel = null;
+      state.txMicLevelVisual = 0;
+      state.txMicLevelAt = 0;
       logEvent("Mic capture stopped");
     }
 
@@ -9097,6 +9195,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         state.txMeterMode === "peak" ? state.txPowerPeak : null
       );
       updateSwrMeter(state.swrVisual);
+      updateTxMiniMeters();
       requestAnimationFrame(animationLoop);
     }
 
@@ -10099,6 +10198,18 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
           dtSec
         );
       }
+
+      const micFresh = state.micCapturing &&
+        state.txMicLevelAt > 0 &&
+        now - state.txMicLevelAt <= TX_MIC_LEVEL_STALE_MS;
+      const micTarget = micFresh ? state.txMicLevel : 0;
+      state.txMicLevelVisual = moveToward(
+        state.txMicLevelVisual,
+        micTarget == null ? 0 : micTarget,
+        TX_MIC_LEVEL_ATTACK_PER_SEC,
+        TX_MIC_LEVEL_RELEASE_PER_SEC,
+        dtSec
+      );
     }
 
     function initTxPwrMeter() {
