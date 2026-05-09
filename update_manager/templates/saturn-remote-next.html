@@ -2080,6 +2080,40 @@
         linear-gradient(135deg, rgba(92, 58, 19, 0.98), rgba(36, 26, 16, 0.98));
       color: #fff3da;
       box-shadow: 0 14px 28px rgba(99, 61, 15, 0.22);
+      touch-action: none;
+      user-select: none;
+    }
+
+    .tx-action-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(82px, 0.42fr);
+      gap: 9px;
+      align-items: stretch;
+    }
+
+    .tx-action-row .tx-ptt-primary {
+      min-height: 66px;
+    }
+
+    .tx-mox-secondary {
+      min-height: 66px;
+      border-radius: 16px;
+      border-color: rgba(148, 163, 184, 0.24);
+      background: rgba(255, 255, 255, 0.035);
+      color: var(--muted);
+      font-family: var(--mono);
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+    }
+
+    .tx-mox-secondary.active {
+      border-color: rgba(245, 158, 11, 0.56);
+      background:
+        repeating-linear-gradient(135deg, rgba(245, 158, 11, 0.12) 0 6px, rgba(245, 158, 11, 0.04) 6px 12px),
+        rgba(77, 48, 16, 0.82);
+      color: #ffe6b8;
     }
 
     .tx-meter-mini-grid {
@@ -3861,7 +3895,10 @@
                 <span class="tx-zone-state" id="tx-zone-state">RX ready</span>
               </div>
               <div class="tx-zone-frequency" id="tx-zone-frequency">TX 14.200.000 USB</div>
-              <button class="btn ptt-btn tx-ptt-primary" id="ptt-btn" type="button" aria-pressed="false">MOX</button>
+              <div class="tx-action-row">
+                <button class="btn ptt-btn tx-ptt-primary" id="ptt-btn" type="button" aria-pressed="false">PTT</button>
+                <button class="btn ghost tx-mox-secondary" id="mox-btn" type="button" aria-pressed="false">MOX</button>
+              </div>
               <div class="tx-meter-mini-grid" aria-label="Transmit quick meters">
                 <div class="tx-meter-mini">
                   <span class="tx-meter-mini-label">Mic</span>
@@ -4077,7 +4114,8 @@
         </div>
         <div class="shortcut-group">
           <div class="shortcut-group-title">TX Safety</div>
-          <div class="shortcut-row"><span class="shortcut-key">MOX</span><span>First tap arms when locked; next tap toggles transmit.</span></div>
+          <div class="shortcut-row"><span class="shortcut-key">Hold PTT</span><span>Mouse or touch hold-to-key; release unkeys. If TX is locked, first press only arms.</span></div>
+          <div class="shortcut-row"><span class="shortcut-key">MOX</span><span>Toggle transmit from the separate MOX control after TX is armed.</span></div>
           <div class="shortcut-row"><span class="shortcut-key">Hold Space</span><span>Hold-to-key from the operating canvas. If TX is locked, the first press only arms.</span></div>
           <div class="shortcut-row"><span class="shortcut-key">Esc</span><span>Emergency unkey from anywhere on the page.</span></div>
           <div class="shortcut-row"><span class="shortcut-key">Window blur</span><span>Keyboard PTT unkeys and requires reconfirm if the browser loses focus.</span></div>
@@ -4345,6 +4383,9 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     state.vfoTuneStepHz = 100;
     state.keyboardPttActive = false;
     state.keyboardPttRequestId = 0;
+    state.pointerPttActive = false;
+    state.pointerPttRequestId = 0;
+    state.pointerPttPointerId = null;
     let remoteSettingsSaveTimer = null;
     let freqEntryBuffer = "";
     let freqEntryUnit = "mhz";
@@ -5910,6 +5951,16 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       state.keyboardPttRequestId += 1;
     }
 
+    function clearPointerPttTracking() {
+      state.pointerPttActive = false;
+      state.pointerPttPointerId = null;
+      state.pointerPttRequestId += 1;
+    }
+
+    function holdPttActive() {
+      return Boolean(state.keyboardPttActive || state.pointerPttActive);
+    }
+
     function bindKeyboardPttControls() {
       document.addEventListener("keydown", (event) => {
         if (!isKeyboardPttKey(event) || event.repeat) {
@@ -5919,7 +5970,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
           return;
         }
         event.preventDefault();
-        if (state.moxRequested || state.txEnabled || state.micCapturing) {
+        if (holdPttActive() || state.moxRequested || state.txEnabled || state.micCapturing) {
           return;
         }
         const requestId = state.keyboardPttRequestId + 1;
@@ -7223,7 +7274,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     }
 
     function txControlSource() {
-      return state.keyboardPttActive ? "ptt" : ((state.moxRequested || state.txEnabled) ? "mox" : "");
+      return holdPttActive() ? "ptt" : ((state.moxRequested || state.txEnabled) ? "mox" : "");
     }
 
     function txControlSourceLabel(source = txControlSource()) {
@@ -7248,9 +7299,10 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       const txTone = state.txPhase === "keyed"
         ? "keyed"
         : (state.txPhase === "armed" || state.moxRequested ? "tx" : "rx");
+      const txSource = txControlSource();
       const txLabel = state.txPhase === "keyed"
-        ? (state.keyboardPttActive ? "PTT ON AIR" : "ON AIR")
-        : (state.txPhase === "armed" || state.moxRequested ? (state.keyboardPttActive ? "PTT armed" : "Armed") : "RX");
+        ? (txSource === "ptt" ? "PTT ON AIR" : "ON AIR")
+        : (state.txPhase === "armed" || state.moxRequested ? (txSource === "ptt" ? "PTT armed" : "Armed") : "RX");
       setOperatorPill("operator-rxtx-pill", "operator-rxtx-value", txLabel, txTone, state.txPhase);
 
       const bandState = vfoBandState();
@@ -7326,14 +7378,31 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       $("tx-zone-mic-dot").classList.toggle("live", Boolean(state.micCapturing));
       $("tx-zone-hint").textContent = state.connected
         ? (active
-          ? (source === "ptt" ? "Release Space or press Esc to unkey" : "Tap MOX again or press Esc to unkey")
-          : (ready ? "Ready to key; page hide fails closed" : `Tap to arm after ${txLockReasonLabel(state.txLockReason)}`))
+          ? (source === "ptt" ? "Release PTT or press Esc to unkey" : "Tap MOX again or press Esc to unkey")
+          : (ready ? "Hold PTT to key, or tap MOX to latch" : `Tap PTT or MOX to arm after ${txLockReasonLabel(state.txLockReason)}`))
         : "Connect before transmit";
       const ptt = $("ptt-btn");
       if (ptt) {
         ptt.textContent = active
-          ? (source === "ptt" ? (state.txPhase === "keyed" ? "PTT ON AIR" : "PTT HOLD") : (state.txPhase === "keyed" ? "MOX ON AIR" : "MOX ARM"))
-          : (state.connected ? (ready ? "MOX" : "TAP TO ARM") : "CONNECT");
+          ? (source === "ptt" ? (state.txPhase === "keyed" ? "PTT ON AIR" : "PTT HOLD") : (state.txPhase === "keyed" ? "ON AIR" : "TX ARM"))
+          : (state.connected ? (ready ? "PTT" : "TAP TO ARM") : "CONNECT");
+        ptt.classList.toggle("active", active && source === "ptt");
+        ptt.setAttribute("aria-pressed", active && source === "ptt" ? "true" : "false");
+      }
+      const mox = $("mox-btn");
+      if (mox) {
+        const moxActive = active && source === "mox";
+        mox.textContent = moxActive ? (state.txPhase === "keyed" ? "MOX ON" : "MOX ARM") : "MOX";
+        mox.classList.toggle("active", moxActive);
+        mox.setAttribute("aria-pressed", moxActive ? "true" : "false");
+      }
+      const txStatusMeta = $("tx-status-meta");
+      if (txStatusMeta) {
+        txStatusMeta.textContent = state.txPhase === "keyed"
+          ? (source === "ptt" ? "PTT" : "TX")
+          : (state.txPhase === "armed" || state.moxRequested
+            ? (source === "ptt" ? "PTT" : "ARM")
+            : "RX");
       }
       const readyMeter = $("tx-ready-meter");
       if (readyMeter) {
@@ -7428,20 +7497,6 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       }
       $("two-tone-btn").textContent = state.twoToneEnabled ? "2-Tone Test ON" : "2-Tone Test Off";
       $("two-tone-btn").classList.toggle("active", state.twoToneEnabled);
-      const moxActive = state.moxRequested || state.txEnabled;
-      $("ptt-btn").classList.toggle("active", moxActive);
-      $("ptt-btn").setAttribute("aria-pressed", moxActive ? "true" : "false");
-      const txSource = txControlSource();
-      $("ptt-btn").textContent = state.txPhase === "keyed"
-        ? (txSource === "ptt" ? "PTT ON AIR" : "MOX ON")
-        : (state.txPhase === "armed" || state.moxRequested
-          ? (txSource === "ptt" ? "PTT HOLD" : "MOX ARM")
-          : "MOX");
-      $("tx-status-meta").textContent = state.txPhase === "keyed"
-        ? (txSource === "ptt" ? "PTT" : "TX")
-        : (state.txPhase === "armed" || state.moxRequested
-          ? (txSource === "ptt" ? "PTT" : "ARM")
-          : "RX");
       updateTxZone();
       $("meter-readout").textContent = state.meterDbmVisual == null ? "-- dBm" : `${state.meterDbmVisual.toFixed(1)} dBm`;
       const txMeterValue = state.txMeterMode === "avg" ? state.txPowerAvg : state.txPowerPeak;
@@ -7924,6 +7979,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       if (normalized === "mic-device-change") return "mic device changed";
       if (normalized === "page-hidden") return "page hidden";
       if (normalized === "keyboard-blur") return "keyboard focus lost";
+      if (normalized === "pointer-blur") return "pointer focus lost";
       if (normalized === "operator-lock") return "operator locked";
       if (normalized === "tx-fault") return "TX fault";
       if (normalized === "connect") return "connect first";
@@ -8145,11 +8201,15 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       if (!active) {
         const wasActive = state.moxRequested || state.txEnabled || state.micCapturing;
         const hadKeyboardPtt = state.keyboardPttActive;
+        const hadPointerPtt = state.pointerPttActive;
         if (hadKeyboardPtt) {
           clearKeyboardPttTracking();
         }
+        if (hadPointerPtt) {
+          clearPointerPttTracking();
+        }
         if (!state.moxRequested && !state.txEnabled && !state.micCapturing) {
-          if (hadKeyboardPtt) updateUi();
+          if (hadKeyboardPtt || hadPointerPtt) updateUi();
           return true;
         }
         clearTxTimeouts();
@@ -8251,16 +8311,82 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     }
 
     function bindPttButton() {
-      const button = $("ptt-btn");
-      if (!button) { return; }
+      const pttButton = $("ptt-btn");
+      const moxButton = $("mox-btn");
+      if (!pttButton || !moxButton) { return; }
 
-      const togglePtt = (event) => {
+      const startPointerPtt = (event) => {
+        if (event.pointerType === "mouse" && event.button !== 0) {
+          return;
+        }
         event.preventDefault();
+        if (holdPttActive() || state.moxRequested || state.txEnabled || state.micCapturing) {
+          return;
+        }
+        const requestId = state.pointerPttRequestId + 1;
+        state.pointerPttRequestId = requestId;
+        state.pointerPttPointerId = event.pointerId;
+        state.pointerPttActive = true;
+        try {
+          pttButton.setPointerCapture(event.pointerId);
+        } catch {}
+        void setPtt(true).then((started) => {
+          if (state.pointerPttRequestId !== requestId) {
+            return;
+          }
+          if (!started) {
+            try {
+              pttButton.releasePointerCapture(event.pointerId);
+            } catch {}
+            clearPointerPttTracking();
+            updateUi();
+          }
+        });
+      };
+
+      const stopPointerPtt = (event) => {
+        if (!state.pointerPttActive || state.pointerPttPointerId !== event.pointerId) {
+          return;
+        }
+        event.preventDefault();
+        try {
+          pttButton.releasePointerCapture(event.pointerId);
+        } catch {}
+        clearPointerPttTracking();
+        void setPtt(false);
+      };
+
+      const toggleMox = (event) => {
+        event.preventDefault();
+        if (holdPttActive()) {
+          return;
+        }
         void setPtt(!state.moxRequested);
       };
 
-      button.addEventListener("click", togglePtt);
-      button.addEventListener("contextmenu", (event) => {
+      pttButton.addEventListener("pointerdown", startPointerPtt);
+      pttButton.addEventListener("pointerup", stopPointerPtt);
+      pttButton.addEventListener("pointercancel", stopPointerPtt);
+      pttButton.addEventListener("pointerleave", (event) => {
+        if (event.pointerType === "mouse") {
+          stopPointerPtt(event);
+        }
+      });
+      pttButton.addEventListener("lostpointercapture", (event) => {
+        if (!state.pointerPttActive || state.pointerPttPointerId !== event.pointerId) {
+          return;
+        }
+        clearPointerPttTracking();
+        void setPtt(false);
+      });
+      pttButton.addEventListener("click", (event) => {
+        event.preventDefault();
+      });
+      pttButton.addEventListener("contextmenu", (event) => {
+        event.preventDefault();
+      });
+      moxButton.addEventListener("click", toggleMox);
+      moxButton.addEventListener("contextmenu", (event) => {
         event.preventDefault();
       });
       window.addEventListener("pagehide", () => {
@@ -8268,6 +8394,13 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
           recordOperatorFault("Page hidden during TX", "warn", false);
           void setPtt(false, { lockAfter: "page-hidden" });
         }
+      });
+      window.addEventListener("blur", () => {
+        if (!state.pointerPttActive) {
+          return;
+        }
+        recordOperatorFault("Pointer PTT focus lost", "warn", false);
+        void setPtt(false, { lockAfter: "pointer-blur" });
       });
       document.addEventListener("visibilitychange", () => {
         if (document.visibilityState === "hidden" && (state.moxRequested || state.txEnabled || state.micCapturing)) {
