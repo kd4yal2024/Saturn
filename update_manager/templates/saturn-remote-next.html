@@ -1956,6 +1956,8 @@
       gap: 10px;
       margin-bottom: 14px;
       padding: 12px;
+      min-width: 0;
+      overflow: hidden;
       border-radius: 18px;
       border: 1px solid rgba(245, 158, 11, 0.34);
       background:
@@ -2011,10 +2013,10 @@
 
     .tx-zone-head,
     .tx-zone-footer {
-      display: flex;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
       align-items: center;
-      justify-content: space-between;
-      gap: 10px;
+      gap: 8px;
     }
 
     .tx-zone-label {
@@ -2050,6 +2052,8 @@
     }
 
     .tx-zone-state {
+      min-width: 0;
+      max-width: 100%;
       padding: 5px 8px;
       border-radius: 999px;
       border: 1px solid rgba(245, 158, 11, 0.28);
@@ -2059,6 +2063,9 @@
       font-size: 10px;
       letter-spacing: 0.10em;
       text-transform: uppercase;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
     }
 
     .tx-zone-frequency {
@@ -2086,9 +2093,10 @@
 
     .tx-action-row {
       display: grid;
-      grid-template-columns: minmax(0, 1fr) minmax(82px, 0.42fr);
-      gap: 9px;
+      grid-template-columns: minmax(0, 1fr) minmax(64px, 0.34fr);
+      gap: 8px;
       align-items: stretch;
+      min-width: 0;
     }
 
     .tx-action-row .tx-ptt-primary {
@@ -2096,7 +2104,9 @@
     }
 
     .tx-mox-secondary {
+      min-width: 0;
       min-height: 66px;
+      padding-inline: 8px;
       border-radius: 16px;
       border-color: rgba(148, 163, 184, 0.24);
       background: rgba(255, 255, 255, 0.035);
@@ -2104,8 +2114,11 @@
       font-family: var(--mono);
       font-size: 12px;
       font-weight: 700;
-      letter-spacing: 0.12em;
+      letter-spacing: 0.08em;
       text-transform: uppercase;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
     }
 
     .tx-mox-secondary.active {
@@ -3029,9 +3042,30 @@
       border-radius: 16px;
     }
 
+    :root[data-layout="phone"] .tx-zone-head,
+    :root[data-layout="phone"] .tx-zone-footer {
+      grid-template-columns: minmax(0, 1fr);
+      align-items: stretch;
+    }
+
+    :root[data-layout="phone"] .tx-zone-state,
+    :root[data-layout="phone"] .tx-lock-button {
+      justify-self: start;
+    }
+
+    :root[data-layout="phone"] .tx-action-row {
+      grid-template-columns: minmax(0, 1fr) minmax(60px, 0.32fr);
+      gap: 7px;
+    }
+
     :root[data-layout="phone"] .tx-ptt-primary {
       min-height: 66px;
       font-size: 16px;
+    }
+
+    :root[data-layout="phone"] .tx-mox-secondary {
+      font-size: 11px;
+      letter-spacing: 0.05em;
     }
 
     :root[data-layout="phone"] .tx-meter-mini-grid {
@@ -7453,7 +7487,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       const lockButton = $("tx-lock-btn");
       if (lockButton) {
         const locked = state.connected && !active && !ready;
-        lockButton.textContent = active ? "Unkey + Lock" : (locked ? "Locked" : "Lock TX");
+        lockButton.textContent = locked ? "Locked" : "Lock TX";
         lockButton.classList.toggle("active", locked);
         lockButton.disabled = !state.connected && !active;
         lockButton.title = active
