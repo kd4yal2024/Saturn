@@ -7412,6 +7412,10 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       return "";
     }
 
+    function bridgeRfDisabled() {
+      return state.remoteTxRfEnabled === false;
+    }
+
     function setTxMiniMeter(id, percent, tone = "idle", title = "") {
       const meter = $(id);
       if (!meter) return;
@@ -7481,15 +7485,23 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
 
       const bandState = vfoBandState();
       const oob = bandState.state === "oob";
-      const rfValue = oob
-        ? (active ? "TX OOB" : "OOB")
-        : (active ? "TX path active" : (state.connected ? (ready ? "TX ready" : "TX locked") : "TX gated"));
-      const rfTone = oob
-        ? (active ? "alarm" : "warn")
-        : (active ? "tx" : (ready ? "ok" : "warn"));
-      const rfTitle = oob
-        ? `${formatFrequency(state.vfoA)} is outside the configured ham band plan`
-        : (state.connected ? `Reconfirm: ${txLockReasonLabel(state.txLockReason)}` : "Connect before TX");
+      const rfDisabled = bridgeRfDisabled();
+      const rfUnknown = state.connected && state.remoteTxRfEnabled == null;
+      const rfValue = rfDisabled
+        ? "RF disabled"
+        : (oob
+          ? (active ? "TX OOB" : "OOB")
+          : (active ? "TX path active" : (state.connected ? (rfUnknown ? "RF unknown" : (ready ? "TX ready" : "TX locked")) : "TX gated")));
+      const rfTone = rfDisabled
+        ? "warn"
+        : (oob
+          ? (active ? "alarm" : "warn")
+          : (active ? "tx" : (ready ? "ok" : "warn")));
+      const rfTitle = rfDisabled
+        ? "Bridge reports SATURN_REMOTE_TX_RF_ENABLED=false"
+        : (oob
+          ? `${formatFrequency(state.vfoA)} is outside the configured ham band plan`
+          : (state.connected ? `Reconfirm: ${txLockReasonLabel(state.txLockReason)}` : "Connect before TX"));
       setOperatorPill(
         "operator-rf-pill",
         "operator-rf-value",
@@ -7528,16 +7540,21 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       const remainingMs = txReadyRemainingMs();
       const source = txControlSource();
       const sourceLabel = txControlSourceLabel(source);
-      const txState = state.txPhase === "keyed"
+      const rfDisabled = bridgeRfDisabled();
+      const txState = rfDisabled
+        ? "disabled"
+        : (state.txPhase === "keyed"
         ? "keyed"
-        : (state.txPhase === "armed" || state.moxRequested ? "armed" : (state.connected ? (ready ? "ready" : "locked") : "disabled"));
+        : (state.txPhase === "armed" || state.moxRequested ? "armed" : (state.connected ? (ready ? "ready" : "locked") : "disabled")));
       txZone.dataset.txState = txState;
       txZone.dataset.txSource = source || "none";
-      const stateLabel = state.txPhase === "keyed"
+      const stateLabel = rfDisabled
+        ? "TX DISABLED"
+        : (state.txPhase === "keyed"
         ? (source === "ptt" ? "PTT ON AIR" : "MOX ON AIR")
         : (state.txPhase === "armed" || state.moxRequested
           ? (source === "ptt" ? "PTT armed" : "MOX armed")
-          : (state.connected ? (ready ? `TX READY · ${formatDurationClock(remainingMs)}` : "TX LOCKED") : "Connect first"));
+          : (state.connected ? (ready ? `TX READY · ${formatDurationClock(remainingMs)}` : "TX LOCKED") : "Connect first")));
       $("tx-zone-state").textContent = stateLabel;
       const sourceEl = $("tx-zone-source");
       if (sourceEl) {
@@ -7554,17 +7571,22 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         : (active ? "Starting" : "Idle");
       $("tx-zone-mic-dot").classList.toggle("live", Boolean(state.micCapturing));
       updateTxMiniMeters();
-      $("tx-zone-hint").textContent = state.connected
+      $("tx-zone-hint").textContent = rfDisabled
+        ? "Bridge RF output is disabled"
+        : (state.connected
         ? (active
           ? (source === "ptt" ? "Release PTT or press Esc to unkey" : "Tap MOX again or press Esc to unkey")
           : (ready ? "Hold PTT to key, or tap MOX to latch" : `Tap PTT or MOX to arm after ${txLockReasonLabel(state.txLockReason)}`))
-        : "Connect before transmit";
+        : "Connect before transmit");
       const ptt = $("ptt-btn");
       if (ptt) {
-        ptt.textContent = active
+        ptt.textContent = rfDisabled
+          ? "TX OFF"
+          : (active
           ? (source === "ptt" ? (state.txPhase === "keyed" ? "PTT ON AIR" : "PTT HOLD") : (state.txPhase === "keyed" ? "ON AIR" : "TX ARM"))
-          : (state.connected ? (ready ? "PTT" : "TAP TO ARM") : "CONNECT");
+          : (state.connected ? (ready ? "PTT" : "TAP TO ARM") : "CONNECT"));
         ptt.classList.toggle("active", active && source === "ptt");
+        ptt.disabled = rfDisabled;
         ptt.setAttribute("aria-pressed", active && source === "ptt" ? "true" : "false");
       }
       const mox = $("mox-btn");
@@ -7572,6 +7594,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         const moxActive = active && source === "mox";
         mox.textContent = moxActive ? (state.txPhase === "keyed" ? "MOX ON" : "MOX ARM") : "MOX";
         mox.classList.toggle("active", moxActive);
+        mox.disabled = rfDisabled;
         mox.setAttribute("aria-pressed", moxActive ? "true" : "false");
       }
       const lockButton = $("tx-lock-btn");
@@ -7579,7 +7602,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         const locked = state.connected && !active && !ready;
         lockButton.textContent = locked ? "Locked" : "Lock TX";
         lockButton.classList.toggle("active", locked);
-        lockButton.disabled = !state.connected && !active;
+        lockButton.disabled = rfDisabled || (!state.connected && !active);
         lockButton.title = active
           ? "Unkey now and require TX reconfirm before the next key"
           : (locked ? `TX locked after ${txLockReasonLabel(state.txLockReason)}` : "Require TX reconfirm before the next key");
@@ -8169,12 +8192,21 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       if (normalized === "keyboard-blur") return "keyboard focus lost";
       if (normalized === "pointer-blur") return "pointer focus lost";
       if (normalized === "operator-lock") return "operator locked";
+      if (normalized === "rf-disabled") return "RF disabled";
       if (normalized === "tx-fault") return "TX fault";
       if (normalized === "connect") return "connect first";
       return normalized || "reconfirm";
     }
 
     function normalizeTxReadyState(now = performance.now()) {
+      if (bridgeRfDisabled()) {
+        if (state.txReadyExpiresAt > 0) {
+          state.txReadyExpiresAt = 0;
+          clearTxReadyTimer();
+        }
+        state.txLockReason = "rf-disabled";
+        return false;
+      }
       if (state.moxRequested || state.txEnabled) {
         return true;
       }
@@ -8210,6 +8242,13 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     }
 
     function armTxReady(reason = "operator") {
+      if (bridgeRfDisabled()) {
+        state.txLockReason = "rf-disabled";
+        logEvent("TX cannot arm because bridge RF output is disabled");
+        recordOperatorFault("RF disabled", "warn", false);
+        updateUi();
+        return false;
+      }
       if (!state.connected || !state.ws || state.ws.readyState !== WebSocket.OPEN) {
         state.txLockReason = "connect";
         updateUi();
@@ -8431,6 +8470,16 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       }
       if (active === state.moxRequested) { return true; }
       if (active) {
+        if (bridgeRfDisabled()) {
+          logEvent("TX blocked because bridge RF output is disabled");
+          recordOperatorFault("RF disabled", "warn");
+          lockTx("rf-disabled", false);
+          state.moxRequested = false;
+          state.txEnabled = false;
+          state.txPhase = "rx";
+          updateUi();
+          return false;
+        }
         if (!state.connected || !state.ws || state.ws.readyState !== WebSocket.OPEN) {
           logEvent("Connect before transmitting");
           recordOperatorFault("Connect before TX", "warn");

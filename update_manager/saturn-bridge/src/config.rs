@@ -25,6 +25,7 @@ pub struct BridgeConfig {
     pub tx_low_latency: bool,
     pub remote_tx_100w_drive_byte: u8,
     pub tx_power_meter_scale: f32,
+    pub remote_tx_rf_enabled: bool,
 }
 
 impl Default for BridgeConfig {
@@ -52,6 +53,7 @@ impl Default for BridgeConfig {
             tx_low_latency: true,
             remote_tx_100w_drive_byte: 68,
             tx_power_meter_scale: 1.0,
+            remote_tx_rf_enabled: false,
         }
     }
 }
@@ -139,6 +141,10 @@ impl BridgeConfig {
                 defaults.tx_power_meter_scale,
             )
             .clamp(0.1, 2.0),
+            remote_tx_rf_enabled: parse_env_bool(
+                "SATURN_REMOTE_TX_RF_ENABLED",
+                defaults.remote_tx_rf_enabled,
+            ),
         }
     }
 }

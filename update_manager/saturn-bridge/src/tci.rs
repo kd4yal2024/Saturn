@@ -139,6 +139,7 @@ pub struct TciFrontend {
     client_state: Arc<Mutex<ClientState>>,
     drop_count: Arc<AtomicU64>,
     tx_power_meter_scale: f32,
+    remote_tx_rf_enabled: bool,
     _accept_thread: JoinGuard,
 }
 
@@ -165,6 +166,7 @@ impl TciFrontend {
         let client_state = Arc::new(Mutex::new(ClientState::default()));
         let active_client_id = Arc::new(AtomicU64::new(0));
         let drop_count = Arc::new(AtomicU64::new(0));
+        let remote_tx_rf_enabled = config.remote_tx_rf_enabled;
 
         let outbound_slot = outbound_tx.clone();
         let client_flags = client_state.clone();
@@ -196,6 +198,7 @@ impl TciFrontend {
                             &client_flags,
                             &latest_client,
                             &radio_model,
+                            remote_tx_rf_enabled,
                         );
                     });
                 }
@@ -215,6 +218,7 @@ impl TciFrontend {
             client_state,
             drop_count,
             tx_power_meter_scale: config.tx_power_meter_scale,
+            remote_tx_rf_enabled,
             _accept_thread: JoinGuard { handle },
         })
     }
@@ -287,6 +291,10 @@ impl TciFrontend {
         self.send_text(format!("rx_agc:0,{};", model.desired.agc_mode));
         self.send_text(format!("rx_agc_gain:0,{:.0};", model.desired.agc_gain));
         self.send_text(format!("tx_drive:0,{};", model.desired.tx_drive));
+        self.send_text(format!(
+            "remote_tx_rf_enabled:0,{};",
+            self.remote_tx_rf_enabled
+        ));
         self.send_text(format!(
             "tx_mic_gain:0,{:.1};",
             model.desired.tx_mic_gain_db
@@ -464,6 +472,7 @@ fn handle_client(
     client_flags: &Arc<Mutex<ClientState>>,
     latest_client: &Arc<AtomicU64>,
     radio_model: &Arc<Mutex<RadioModel>>,
+    remote_tx_rf_enabled: bool,
 ) {
     let _ = stream.set_nonblocking(true);
     match accept_with_config(stream, Some(tci_websocket_config())) {
@@ -479,7 +488,9 @@ fn handle_client(
             }
             reset_client_state(client_flags);
 
-            for message in initial_snapshot_messages(&radio_model.lock().unwrap()) {
+            for message in
+                initial_snapshot_messages(&radio_model.lock().unwrap(), remote_tx_rf_enabled)
+            {
                 let _ = client_tx.send(OutboundMessage::Text(message));
             }
 
@@ -611,7 +622,7 @@ fn clear_active_client(
     }
 }
 
-fn initial_snapshot_messages(model: &RadioModel) -> Vec<String> {
+fn initial_snapshot_messages(model: &RadioModel, remote_tx_rf_enabled: bool) -> Vec<String> {
     vec![
         "ready;".to_string(),
         format!("vfo:0,0,{};", model.desired.vfo_a_hz),
@@ -652,6 +663,7 @@ fn initial_snapshot_messages(model: &RadioModel) -> Vec<String> {
         format!("rx_agc:0,{};", model.desired.agc_mode),
         format!("rx_agc_gain:0,{:.0};", model.desired.agc_gain),
         format!("tx_drive:0,{};", model.desired.tx_drive),
+        format!("remote_tx_rf_enabled:0,{remote_tx_rf_enabled};"),
         format!("tx_mic_gain:0,{:.1};", model.desired.tx_mic_gain_db),
         format!("trx:0,{};", model.desired.tx_enabled),
         format!("tx_state:0,{};", model.desired.tx_phase),
@@ -698,10 +710,7 @@ fn initial_snapshot_messages(model: &RadioModel) -> Vec<String> {
             "tx_two_tone_delay_ms:0,{};",
             model.desired.tx_two_tone_delay_ms
         ),
-        format!(
-            "tx_noise_gate:0,{};",
-            model.desired.tx_noise_gate_enabled
-        ),
+        format!("tx_noise_gate:0,{};", model.desired.tx_noise_gate_enabled),
         format!(
             "tx_noise_gate_threshold:0,{:.1};",
             model.desired.tx_noise_gate_threshold_db
@@ -1342,8 +1351,7 @@ fn parse_tci_command(
             if let Some(thresh_text) = thresh_arg {
                 if let Ok(thresh_db) = thresh_text.trim().parse::<f64>() {
                     let clamped = thresh_db.clamp(-80.0, 0.0);
-                    let _ =
-                        command_tx.send(TciCommand::SetTxNoiseGateThreshold(clamped));
+                    let _ = command_tx.send(TciCommand::SetTxNoiseGateThreshold(clamped));
                 }
             }
         }
@@ -1662,5 +1670,15 @@ mod tests {
         assert_eq!(parse_tci_bool("true"), Some(true));
         assert_eq!(parse_tci_bool("0"), Some(false));
         assert_eq!(parse_tci_bool("bogus"), None);
+    }
+
+    #[test]
+    fn initial_snapshot_includes_remote_tx_rf_state() {
+        let model = RadioModel::new(2, 14_200_000, 0, 192, 24, 2048, true, 4096, true);
+        let disabled = initial_snapshot_messages(&model, false);
+        let enabled = initial_snapshot_messages(&model, true);
+
+        assert!(disabled.contains(&"remote_tx_rf_enabled:0,false;".to_string()));
+        assert!(enabled.contains(&"remote_tx_rf_enabled:0,true;".to_string()));
     }
 }

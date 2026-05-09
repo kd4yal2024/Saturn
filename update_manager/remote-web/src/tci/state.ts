@@ -34,6 +34,7 @@ export type TciRadioState = {
   txPower: number | null;
   swr: number | null;
   txDrive: number;
+  remoteTxRfEnabled: boolean | null;
   txEnabled: boolean;
   moxRequested: boolean;
   txPhase: 'rx' | 'armed' | 'keyed';

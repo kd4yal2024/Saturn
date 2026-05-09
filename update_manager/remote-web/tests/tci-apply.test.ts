@@ -36,6 +36,7 @@ function createState(): TciRadioState {
     txPower: null,
     swr: null,
     txDrive: 10,
+    remoteTxRfEnabled: null,
     txEnabled: false,
     moxRequested: false,
     txPhase: 'rx',
@@ -80,6 +81,14 @@ describe('applyTciText', () => {
     expect(result.state.meterDbm).toBe(-91.2);
     expect(result.state.txPower).toBe(35);
     expect(result.state.swr).toBe(1.8);
+  });
+
+  it('tracks the bridge RF enable gate', () => {
+    const disabled = applyTciText('remote_tx_rf_enabled:0,false;', createState());
+    expect(disabled.state.remoteTxRfEnabled).toBe(false);
+
+    const enabled = applyTciText('tx_rf_enabled:0,true;', disabled.state);
+    expect(enabled.state.remoteTxRfEnabled).toBe(true);
   });
 
   it('converts signed rx/tx passbands into UI cuts', () => {

@@ -26,13 +26,6 @@ const DEFAULT_REMOTE_TX_POWER_TRIP_WATTS: f32 = 110.0;
 const DEFAULT_TCI_CLIENT_RELEASE_GRACE_MS: u64 = 3_000;
 const MAX_TCI_CLIENT_RELEASE_GRACE_MS: u64 = 30_000;
 
-fn remote_tx_rf_enabled() -> bool {
-    matches!(
-        env::var("SATURN_REMOTE_TX_RF_ENABLED").as_deref(),
-        Ok("1") | Ok("true") | Ok("TRUE") | Ok("yes") | Ok("YES")
-    )
-}
-
 fn parse_remote_tx_max_watts(value: Option<&str>) -> u8 {
     value
         .and_then(|value| value.trim().parse::<u8>().ok())
@@ -152,7 +145,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         WdspRxEngine::new(&model)?
     };
     let stop_flag = Arc::new(AtomicBool::new(false));
-    let remote_tx_rf_enabled = remote_tx_rf_enabled();
+    let remote_tx_rf_enabled = config.remote_tx_rf_enabled;
     let remote_tx_max_watts = remote_tx_max_watts();
     let remote_tx_power_trip_watts = remote_tx_power_trip_watts();
     let tci_client_release_grace = tci_client_release_grace();

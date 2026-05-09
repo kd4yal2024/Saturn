@@ -152,6 +152,9 @@ export function applyTciCommand(command: TciCommand, current: TciRadioState): Tc
   } else if (command.name === 'tx_drive') {
     const value = numericArg(argAt(args, 1) ?? trailingArg(args));
     if (value != null) next.txDrive = clampTxDriveWatts(value);
+  } else if (command.name === 'remote_tx_rf_enabled' || command.name === 'tx_rf_enabled') {
+    const enabled = booleanArg(argAt(args, 1) ?? argAt(args, 0) ?? trailingArg(args));
+    if (enabled != null) next.remoteTxRfEnabled = enabled;
   } else if (command.name === 'swr') {
     const value = numericArg(argAt(args, 1) ?? argAt(args, 0));
     if (value != null) next.swr = value;

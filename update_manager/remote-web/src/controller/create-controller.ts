@@ -42,6 +42,7 @@ function createInitialRadioState(settings: SettingsState): TciRadioState {
     txPower: null,
     swr: null,
     txDrive: settings.radioPrefs.txDrive,
+    remoteTxRfEnabled: null,
     txEnabled: false,
     moxRequested: false,
     txPhase: 'rx',

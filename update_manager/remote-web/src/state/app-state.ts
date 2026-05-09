@@ -78,6 +78,7 @@ export interface AppState {
   moxRequested: boolean;
   txPhase: 'rx' | 'armed' | 'keyed';
   txDrive: number;
+  remoteTxRfEnabled: boolean | null;
   txMicGainDb: number;
   txMeterMode: string;
   micStream: MediaStream | null;
@@ -250,6 +251,7 @@ export function createAppState(): AppState {
     moxRequested: false,
     txPhase: 'rx',
     txDrive: 10,
+    remoteTxRfEnabled: null,
     txMicGainDb: 0,
     txMeterMode: 'peak',
     micStream: null,
