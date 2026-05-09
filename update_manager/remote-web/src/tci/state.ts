@@ -33,6 +33,8 @@ export type TciRadioState = {
   meterDbm: number | null;
   txPower: number | null;
   swr: number | null;
+  bridgeRttMs: number | null;
+  bridgeRttAt: number;
   txDrive: number;
   remoteTxRfEnabled: boolean | null;
   txEnabled: boolean;

@@ -45,6 +45,10 @@ pub enum TciCommand {
     SetIqSampleRate(u32),
     SetIqStreaming,
     RequestSmeter,
+    SaturnPing {
+        nonce: String,
+        sent_at: String,
+    },
     SetAudioStreaming(bool),
     SetAudioSampleRate(u32),
     SetAudioFrameSamples(u32),
@@ -391,6 +395,10 @@ impl TciFrontend {
         if drops > 0 {
             self.send_text(format!("rx_drops:{drops};"));
         }
+    }
+
+    pub fn publish_saturn_pong(&self, nonce: &str, sent_at: &str) {
+        self.send_text(format!("saturn_pong:{nonce},{sent_at};"));
     }
 
     pub fn publish_iq_frame(&self, sample_rate_hz: u32, iq_samples: &[f32]) {
@@ -784,6 +792,15 @@ fn parse_tci_command(
             if args.len() >= 2 {
                 if let Ok(freq_hz) = args[1].trim().parse::<u32>() {
                     let _ = command_tx.send(TciCommand::SetIqCenter(freq_hz));
+                }
+            }
+        }
+        "saturn_ping" => {
+            if args.len() >= 2 {
+                let nonce = sanitize_token(args[0], 32);
+                let sent_at = sanitize_token(args[1], 32);
+                if !nonce.is_empty() && !sent_at.is_empty() {
+                    let _ = command_tx.send(TciCommand::SaturnPing { nonce, sent_at });
                 }
             }
         }
@@ -1542,6 +1559,14 @@ fn parse_tci_bool(text: &str) -> Option<bool> {
     }
 }
 
+fn sanitize_token(text: &str, max_len: usize) -> String {
+    text.trim()
+        .chars()
+        .filter(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '-'))
+        .take(max_len)
+        .collect()
+}
+
 /// Convert a Saturn G2 raw power ADC reading to watts.
 /// Uses the ANAN-7000/Saturn 100 W PA calibration constants from pihpsdr:
 ///   ADC_REF = 5.0 V, coupling = 0.12 (fwd) / 0.12 (rev), fwd_offset = 32, rev_offset = 28.
@@ -1670,6 +1695,22 @@ mod tests {
         assert_eq!(parse_tci_bool("true"), Some(true));
         assert_eq!(parse_tci_bool("0"), Some(false));
         assert_eq!(parse_tci_bool("bogus"), None);
+    }
+
+    #[test]
+    fn parses_saturn_ping_command() {
+        let (tx, rx) = mpsc::channel();
+        let client_state = Arc::new(Mutex::new(ClientState::default()));
+
+        parse_tci_command("saturn_ping:probe-1,123.456;", &tx, &client_state);
+
+        match rx.try_recv().unwrap() {
+            TciCommand::SaturnPing { nonce, sent_at } => {
+                assert_eq!(nonce, "probe-1");
+                assert_eq!(sent_at, "123.456");
+            }
+            command => panic!("unexpected command: {command:?}"),
+        }
     }
 
     #[test]

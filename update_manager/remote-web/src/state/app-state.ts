@@ -115,6 +115,10 @@ export interface AppState {
   meterDbm: number | null;
   txPower: number | null;
   swr: number | null;
+  bridgeRttMs: number | null;
+  bridgeRttAt: number;
+  bridgeRttNonce: number;
+  bridgeRttTimerId: ReturnType<typeof setInterval> | null;
   meterDbmVisual: number | null;
   meterDbmPeak: number | null;
   meterDbmPeakAt: number;
@@ -286,6 +290,10 @@ export function createAppState(): AppState {
     meterDbm: null,
     txPower: null,
     swr: null,
+    bridgeRttMs: null,
+    bridgeRttAt: 0,
+    bridgeRttNonce: 0,
+    bridgeRttTimerId: null,
     meterDbmVisual: null,
     meterDbmPeak: null,
     meterDbmPeakAt: 0,

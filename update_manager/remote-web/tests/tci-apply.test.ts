@@ -35,6 +35,8 @@ function createState(): TciRadioState {
     meterDbm: null,
     txPower: null,
     swr: null,
+    bridgeRttMs: null,
+    bridgeRttAt: 0,
     txDrive: 10,
     remoteTxRfEnabled: null,
     txEnabled: false,
@@ -81,6 +83,14 @@ describe('applyTciText', () => {
     expect(result.state.meterDbm).toBe(-91.2);
     expect(result.state.txPower).toBe(35);
     expect(result.state.swr).toBe(1.8);
+  });
+
+  it('tracks bridge RTT from saturn pong replies', () => {
+    const sentAt = Math.max(0, performance.now() - 12);
+    const result = applyTciText(`saturn_pong:probe,${sentAt};`, createState());
+    expect(result.state.bridgeRttMs).not.toBeNull();
+    expect(result.state.bridgeRttMs ?? 0).toBeGreaterThanOrEqual(0);
+    expect(result.state.bridgeRttAt).toBeGreaterThanOrEqual(sentAt);
   });
 
   it('tracks the bridge RF enable gate', () => {

@@ -36,6 +36,11 @@ function parseBandGain(args: readonly string[]): { band: number; gain: number } 
   return { band, gain };
 }
 
+function nowMs(): number {
+  const perf = globalThis.performance;
+  return perf && typeof perf.now === 'function' ? perf.now() : Date.now();
+}
+
 export function applyTciCommand(command: TciCommand, current: TciRadioState): TciApplyResult {
   const next: TciRadioState = {
     ...current,
@@ -158,6 +163,13 @@ export function applyTciCommand(command: TciCommand, current: TciRadioState): Tc
   } else if (command.name === 'swr') {
     const value = numericArg(argAt(args, 1) ?? argAt(args, 0));
     if (value != null) next.swr = value;
+  } else if (command.name === 'saturn_pong') {
+    const sentAt = numericArg(argAt(args, 1) ?? argAt(args, 0));
+    if (sentAt != null) {
+      const receivedAt = nowMs();
+      next.bridgeRttMs = Math.max(0, receivedAt - sentAt);
+      next.bridgeRttAt = receivedAt;
+    }
   } else if (command.name === 'tx_state' && args.length >= 2) {
     const phase = String(argAt(args, 1) || '').trim().toLowerCase();
     if (phase === 'rx' || phase === 'armed' || phase === 'keyed') {

@@ -4296,6 +4296,8 @@
     const TX_MIC_LEVEL_STALE_MS = 450;
     const TX_MIC_LEVEL_ATTACK_PER_SEC = 8;
     const TX_MIC_LEVEL_RELEASE_PER_SEC = 2.4;
+    const BRIDGE_RTT_PING_INTERVAL_MS = 2000;
+    const BRIDGE_RTT_STALE_MS = 6500;
     const TCI_STREAM_IQ_RX = 0;
     const TCI_STREAM_AUDIO_RX = 1;
     const TCI_STREAM_MIC_TX = 2;
@@ -7329,6 +7331,15 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       if (!state.connected) {
         return { label: "Idle", tone: "warn", title: "Bridge is not connected" };
       }
+      if (state.bridgeRttMs != null && now - state.bridgeRttAt <= BRIDGE_RTT_STALE_MS) {
+        const rtt = Math.max(0, Math.round(state.bridgeRttMs));
+        const tone = rtt > 600 ? "alarm" : (rtt > 250 ? "warn" : "ok");
+        const iqAge = state.lastFrameAt ? Math.max(0, Math.round(now - state.lastFrameAt)) : null;
+        const title = iqAge == null
+          ? "Bridge websocket round trip; no IQ frame received yet"
+          : `Bridge websocket round trip; latest IQ frame ${iqAge} ms ago`;
+        return { label: `${rtt} ms RTT`, tone, title };
+      }
       if (!state.iqStreaming || !state.lastFrameAt) {
         return { label: "No IQ", tone: "warn", title: "Connected, waiting for IQ frames" };
       }
@@ -7862,6 +7873,31 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         return;
       }
       state.ws.send(text);
+    }
+
+    function sendBridgeRttPing() {
+      if (!state.connected || !state.ws || state.ws.readyState !== WebSocket.OPEN) {
+        return;
+      }
+      state.bridgeRttNonce = (state.bridgeRttNonce || 0) + 1;
+      sendTci(`saturn_ping:${state.bridgeRttNonce},${performance.now().toFixed(3)};`);
+    }
+
+    function startBridgeRttPings() {
+      stopBridgeRttPings(false);
+      sendBridgeRttPing();
+      state.bridgeRttTimerId = setInterval(sendBridgeRttPing, BRIDGE_RTT_PING_INTERVAL_MS);
+    }
+
+    function stopBridgeRttPings(clearValues = true) {
+      if (state.bridgeRttTimerId) {
+        clearInterval(state.bridgeRttTimerId);
+        state.bridgeRttTimerId = null;
+      }
+      if (clearValues) {
+        state.bridgeRttMs = null;
+        state.bridgeRttAt = 0;
+      }
     }
 
     function sendRxFilterBand() {
@@ -8736,6 +8772,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         resetDisplayHistory();
         logEvent("WebSocket connected");
         requestFullState();
+        startBridgeRttPings();
         window.setTimeout(() => {
           if (ws !== state.ws || !state.connected) {
             return;
@@ -8768,6 +8805,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         state.connected = false;
         state.iqStreaming = false;
         state.ws = null;
+        stopBridgeRttPings();
         resetDisplayHistory();
         state.moxRequested = false;
         state.txEnabled = false;
@@ -8809,6 +8847,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       state.connected = false;
       state.iqStreaming = false;
       state.ws = null;
+      stopBridgeRttPings();
       resetDisplayHistory();
       clearTxTimeouts();
       state.moxRequested = false;

@@ -41,6 +41,8 @@ function createInitialRadioState(settings: SettingsState): TciRadioState {
     meterDbm: null,
     txPower: null,
     swr: null,
+    bridgeRttMs: null,
+    bridgeRttAt: 0,
     txDrive: settings.radioPrefs.txDrive,
     remoteTxRfEnabled: null,
     txEnabled: false,
