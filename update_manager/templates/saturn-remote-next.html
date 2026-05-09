@@ -4116,6 +4116,7 @@
           <div class="shortcut-group-title">TX Safety</div>
           <div class="shortcut-row"><span class="shortcut-key">Hold PTT</span><span>Mouse or touch hold-to-key; release unkeys. If TX is locked, first press only arms.</span></div>
           <div class="shortcut-row"><span class="shortcut-key">MOX</span><span>Toggle transmit from the separate MOX control after TX is armed.</span></div>
+          <div class="shortcut-row"><span class="shortcut-key">Backtick</span><span>Keyboard MOX toggle from the operating canvas, with the same TX-ready gate.</span></div>
           <div class="shortcut-row"><span class="shortcut-key">Hold Space</span><span>Hold-to-key from the operating canvas. If TX is locked, the first press only arms.</span></div>
           <div class="shortcut-row"><span class="shortcut-key">Esc</span><span>Emergency unkey from anywhere on the page.</span></div>
           <div class="shortcut-row"><span class="shortcut-key">Window blur</span><span>Keyboard PTT unkeys and requires reconfirm if the browser loses focus.</span></div>
@@ -5946,6 +5947,10 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       return event.code === "Space" || event.key === " " || event.key === "Spacebar";
     }
 
+    function isKeyboardMoxKey(event) {
+      return event.code === "Backquote" || event.key === "`";
+    }
+
     function clearKeyboardPttTracking() {
       state.keyboardPttActive = false;
       state.keyboardPttRequestId += 1;
@@ -6002,6 +6007,22 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         clearKeyboardPttTracking();
         recordOperatorFault("Keyboard PTT focus lost", "warn", false);
         void setPtt(false, { lockAfter: "keyboard-blur" });
+      });
+    }
+
+    function bindKeyboardMoxControls() {
+      document.addEventListener("keydown", (event) => {
+        if (!isKeyboardMoxKey(event) || event.repeat || event.altKey || event.ctrlKey || event.metaKey) {
+          return;
+        }
+        if (keyboardTuneBlocked(event)) {
+          return;
+        }
+        event.preventDefault();
+        if (holdPttActive()) {
+          return;
+        }
+        void setPtt(!state.moxRequested);
       });
     }
 
@@ -9622,6 +9643,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       bindShortcutHelp();
       bindKeyboardTuneControls();
       bindKeyboardPttControls();
+      bindKeyboardMoxControls();
       $("tx-drive").addEventListener("input", () => {
         state.txDrive = clampTxDriveWatts($("tx-drive").value);
         $("tx-drive-readout").textContent = `${state.txDrive} W`;
