@@ -2025,6 +2025,30 @@
       color: var(--muted);
     }
 
+    .tx-zone-head-main {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      min-width: 0;
+    }
+
+    .tx-zone-source {
+      padding: 3px 7px;
+      border-radius: 999px;
+      border: 1px solid rgba(245, 158, 11, 0.28);
+      background: rgba(245, 158, 11, 0.08);
+      color: rgba(248, 214, 155, 0.92);
+      font-family: var(--mono);
+      font-size: 9px;
+      letter-spacing: 0.10em;
+      text-transform: uppercase;
+      white-space: nowrap;
+    }
+
+    .tx-zone-source[hidden] {
+      display: none;
+    }
+
     .tx-zone-state {
       padding: 5px 8px;
       border-radius: 999px;
@@ -3830,7 +3854,10 @@
           <div class="panel-body">
             <div class="tx-zone" id="tx-zone" data-tx-state="disabled">
               <div class="tx-zone-head">
-                <span class="tx-zone-label">TX Control</span>
+                <span class="tx-zone-head-main">
+                  <span class="tx-zone-label">TX Control</span>
+                  <span class="tx-zone-source" id="tx-zone-source" hidden>MOX</span>
+                </span>
                 <span class="tx-zone-state" id="tx-zone-state">RX ready</span>
               </div>
               <div class="tx-zone-frequency" id="tx-zone-frequency">TX 14.200.000 USB</div>
@@ -7195,6 +7222,16 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       };
     }
 
+    function txControlSource() {
+      return state.keyboardPttActive ? "ptt" : ((state.moxRequested || state.txEnabled) ? "mox" : "");
+    }
+
+    function txControlSourceLabel(source = txControlSource()) {
+      if (source === "ptt") return "PTT Hold";
+      if (source === "mox") return "MOX";
+      return "";
+    }
+
     function updateOperatorStateStrip() {
       const now = performance.now();
       const active = state.moxRequested || state.txEnabled;
@@ -7212,8 +7249,8 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         ? "keyed"
         : (state.txPhase === "armed" || state.moxRequested ? "tx" : "rx");
       const txLabel = state.txPhase === "keyed"
-        ? "ON AIR"
-        : (state.txPhase === "armed" || state.moxRequested ? "Armed" : "RX");
+        ? (state.keyboardPttActive ? "PTT ON AIR" : "ON AIR")
+        : (state.txPhase === "armed" || state.moxRequested ? (state.keyboardPttActive ? "PTT armed" : "Armed") : "RX");
       setOperatorPill("operator-rxtx-pill", "operator-rxtx-value", txLabel, txTone, state.txPhase);
 
       const bandState = vfoBandState();
@@ -7263,16 +7300,24 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       const active = state.moxRequested || state.txEnabled;
       const ready = normalizeTxReadyState();
       const remainingMs = txReadyRemainingMs();
+      const source = txControlSource();
+      const sourceLabel = txControlSourceLabel(source);
       const txState = state.txPhase === "keyed"
         ? "keyed"
         : (state.txPhase === "armed" || state.moxRequested ? "armed" : (state.connected ? (ready ? "ready" : "locked") : "disabled"));
       txZone.dataset.txState = txState;
+      txZone.dataset.txSource = source || "none";
       const stateLabel = state.txPhase === "keyed"
-        ? "ON AIR"
+        ? (source === "ptt" ? "PTT ON AIR" : "MOX ON AIR")
         : (state.txPhase === "armed" || state.moxRequested
-          ? "TX armed"
+          ? (source === "ptt" ? "PTT armed" : "MOX armed")
           : (state.connected ? (ready ? `TX READY · ${formatDurationClock(remainingMs)}` : "TX LOCKED") : "Connect first"));
       $("tx-zone-state").textContent = stateLabel;
+      const sourceEl = $("tx-zone-source");
+      if (sourceEl) {
+        sourceEl.hidden = !source;
+        sourceEl.textContent = sourceLabel;
+      }
       $("tx-zone-frequency").textContent = `TX ${formatFrequency(state.vfoB || state.vfoA)} ${state.mode}`;
       const power = state.txMeterMode === "avg" ? state.txPowerAvg : state.txPowerPeak;
       $("tx-zone-power-value").textContent = power == null ? "-- W" : `${power.toFixed(1)} W`;
@@ -7281,13 +7326,13 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       $("tx-zone-mic-dot").classList.toggle("live", Boolean(state.micCapturing));
       $("tx-zone-hint").textContent = state.connected
         ? (active
-          ? "Tap MOX again or press Esc to unkey"
+          ? (source === "ptt" ? "Release Space or press Esc to unkey" : "Tap MOX again or press Esc to unkey")
           : (ready ? "Ready to key; page hide fails closed" : `Tap to arm after ${txLockReasonLabel(state.txLockReason)}`))
         : "Connect before transmit";
       const ptt = $("ptt-btn");
       if (ptt) {
         ptt.textContent = active
-          ? (state.txPhase === "keyed" ? "ON AIR" : "MOX ARM")
+          ? (source === "ptt" ? (state.txPhase === "keyed" ? "PTT ON AIR" : "PTT HOLD") : (state.txPhase === "keyed" ? "MOX ON AIR" : "MOX ARM"))
           : (state.connected ? (ready ? "MOX" : "TAP TO ARM") : "CONNECT");
       }
       const readyMeter = $("tx-ready-meter");
@@ -7386,8 +7431,17 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       const moxActive = state.moxRequested || state.txEnabled;
       $("ptt-btn").classList.toggle("active", moxActive);
       $("ptt-btn").setAttribute("aria-pressed", moxActive ? "true" : "false");
-      $("ptt-btn").textContent = state.txPhase === "keyed" ? "MOX ON" : (state.txPhase === "armed" ? "MOX ARM" : (state.moxRequested ? "MOX ARM" : "MOX"));
-      $("tx-status-meta").textContent = state.txPhase === "keyed" ? "TX" : (state.txPhase === "armed" ? "ARM" : (state.moxRequested ? "ARM" : "RX"));
+      const txSource = txControlSource();
+      $("ptt-btn").textContent = state.txPhase === "keyed"
+        ? (txSource === "ptt" ? "PTT ON AIR" : "MOX ON")
+        : (state.txPhase === "armed" || state.moxRequested
+          ? (txSource === "ptt" ? "PTT HOLD" : "MOX ARM")
+          : "MOX");
+      $("tx-status-meta").textContent = state.txPhase === "keyed"
+        ? (txSource === "ptt" ? "PTT" : "TX")
+        : (state.txPhase === "armed" || state.moxRequested
+          ? (txSource === "ptt" ? "PTT" : "ARM")
+          : "RX");
       updateTxZone();
       $("meter-readout").textContent = state.meterDbmVisual == null ? "-- dBm" : `${state.meterDbmVisual.toFixed(1)} dBm`;
       const txMeterValue = state.txMeterMode === "avg" ? state.txPowerAvg : state.txPowerPeak;
@@ -8090,7 +8144,12 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       const useMic = options.useMic !== false;
       if (!active) {
         const wasActive = state.moxRequested || state.txEnabled || state.micCapturing;
+        const hadKeyboardPtt = state.keyboardPttActive;
+        if (hadKeyboardPtt) {
+          clearKeyboardPttTracking();
+        }
         if (!state.moxRequested && !state.txEnabled && !state.micCapturing) {
+          if (hadKeyboardPtt) updateUi();
           return true;
         }
         clearTxTimeouts();
