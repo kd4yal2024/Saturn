@@ -2114,6 +2114,54 @@
       color: var(--muted);
     }
 
+    .tx-ready-meter {
+      display: grid;
+      gap: 5px;
+      --tx-ready-progress: 0%;
+    }
+
+    .tx-ready-meter[hidden] {
+      display: none;
+    }
+
+    .tx-ready-track {
+      position: relative;
+      overflow: hidden;
+      height: 7px;
+      border-radius: 999px;
+      border: 1px solid rgba(245, 158, 11, 0.20);
+      background: rgba(255, 255, 255, 0.055);
+    }
+
+    .tx-ready-track span {
+      position: absolute;
+      inset: 0 auto 0 0;
+      width: var(--tx-ready-progress);
+      border-radius: inherit;
+      background: linear-gradient(90deg, rgba(245, 158, 11, 0.42), rgba(250, 204, 21, 0.82));
+      transition: width 180ms linear, background 140ms ease;
+    }
+
+    .tx-ready-meter[data-countdown-tone="warn"] .tx-ready-track span {
+      background: linear-gradient(90deg, rgba(250, 204, 21, 0.48), rgba(250, 204, 21, 0.95));
+    }
+
+    .tx-ready-meter[data-countdown-tone="alarm"] .tx-ready-track span {
+      background: linear-gradient(90deg, rgba(220, 38, 38, 0.58), rgba(250, 204, 21, 0.94));
+    }
+
+    .tx-ready-countdown {
+      font-family: var(--mono);
+      font-size: 10px;
+      letter-spacing: 0.08em;
+      color: rgba(248, 214, 155, 0.92);
+      text-transform: uppercase;
+    }
+
+    .tx-ready-meter[data-countdown-tone="alarm"] .tx-ready-countdown {
+      color: #ffcfcd;
+    }
+
     .eq-section {
       margin-top: 12px;
     }
@@ -3803,6 +3851,10 @@
               </div>
               <div class="tx-zone-footer">
                 <span class="tx-zone-hint" id="tx-zone-hint">Connect before transmit</span>
+              </div>
+              <div class="tx-ready-meter" id="tx-ready-meter" hidden aria-hidden="true">
+                <div class="tx-ready-track" aria-hidden="true"><span id="tx-ready-fill"></span></div>
+                <span class="tx-ready-countdown" id="tx-ready-countdown">Ready window 0:00</span>
               </div>
             </div>
             <div class="field-row">
@@ -7237,6 +7289,28 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         ptt.textContent = active
           ? (state.txPhase === "keyed" ? "ON AIR" : "MOX ARM")
           : (state.connected ? (ready ? "MOX" : "TAP TO ARM") : "CONNECT");
+      }
+      const readyMeter = $("tx-ready-meter");
+      if (readyMeter) {
+        const showCountdown = txState === "ready" && remainingMs > 0;
+        readyMeter.hidden = !showCountdown;
+        readyMeter.setAttribute("aria-hidden", showCountdown ? "false" : "true");
+        if (showCountdown) {
+          const percent = Math.max(0, Math.min(100, (remainingMs / TX_READY_WINDOW_MS) * 100));
+          const tone = remainingMs <= 5000 ? "alarm" : (remainingMs <= 30000 ? "warn" : "ready");
+          readyMeter.style.setProperty("--tx-ready-progress", `${percent}%`);
+          readyMeter.dataset.countdownTone = tone;
+          readyMeter.title = `TX ready window expires in ${formatDurationClock(remainingMs)}`;
+          const label = $("tx-ready-countdown");
+          if (label) {
+            label.textContent = remainingMs <= 5000
+              ? `Reconfirm in ${Math.ceil(remainingMs / 1000)}s`
+              : `Ready window ${formatDurationClock(remainingMs)}`;
+          }
+        } else {
+          readyMeter.style.setProperty("--tx-ready-progress", "0%");
+          readyMeter.dataset.countdownTone = "ready";
+        }
       }
     }
 
