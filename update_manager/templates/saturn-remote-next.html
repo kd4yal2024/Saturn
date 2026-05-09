@@ -2170,6 +2170,37 @@
       font-size: 10px;
       letter-spacing: 0.05em;
       color: var(--muted);
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .tx-lock-button {
+      flex: 0 0 auto;
+      min-height: 30px;
+      padding: 6px 10px;
+      border-radius: 999px;
+      border-color: rgba(148, 163, 184, 0.24);
+      background: rgba(255, 255, 255, 0.035);
+      color: var(--muted);
+      font-family: var(--mono);
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.10em;
+      text-transform: uppercase;
+      white-space: nowrap;
+    }
+
+    .tx-lock-button.active {
+      border-color: rgba(250, 204, 21, 0.44);
+      background: rgba(250, 204, 21, 0.08);
+      color: #fde68a;
+    }
+
+    .tx-lock-button:disabled {
+      opacity: 0.52;
+      cursor: default;
     }
 
     .tx-ready-meter {
@@ -3915,6 +3946,7 @@
               </div>
               <div class="tx-zone-footer">
                 <span class="tx-zone-hint" id="tx-zone-hint">Connect before transmit</span>
+                <button class="btn ghost tx-lock-button" id="tx-lock-btn" type="button">Lock TX</button>
               </div>
               <div class="tx-ready-meter" id="tx-ready-meter" hidden aria-hidden="true">
                 <div class="tx-ready-track" aria-hidden="true"><span id="tx-ready-fill"></span></div>
@@ -4118,6 +4150,7 @@
           <div class="shortcut-row"><span class="shortcut-key">MOX</span><span>Toggle transmit from the separate MOX control after TX is armed.</span></div>
           <div class="shortcut-row"><span class="shortcut-key">Backtick</span><span>Keyboard MOX toggle from the operating canvas, with the same TX-ready gate.</span></div>
           <div class="shortcut-row"><span class="shortcut-key">Hold Space</span><span>Hold-to-key from the operating canvas. If TX is locked, the first press only arms.</span></div>
+          <div class="shortcut-row"><span class="shortcut-key">Lock TX</span><span>Drop any ready or keyed state back to TX locked without leaving the TX zone.</span></div>
           <div class="shortcut-row"><span class="shortcut-key">Esc</span><span>Emergency unkey from anywhere on the page.</span></div>
           <div class="shortcut-row"><span class="shortcut-key">Window blur</span><span>Keyboard PTT unkeys and requires reconfirm if the browser loses focus.</span></div>
           <div class="shortcut-row"><span class="shortcut-key">Page hide</span><span>Leaving or hiding the page forces an unkey and TX reconfirm.</span></div>
@@ -7417,6 +7450,16 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         mox.classList.toggle("active", moxActive);
         mox.setAttribute("aria-pressed", moxActive ? "true" : "false");
       }
+      const lockButton = $("tx-lock-btn");
+      if (lockButton) {
+        const locked = state.connected && !active && !ready;
+        lockButton.textContent = active ? "Unkey + Lock" : (locked ? "Locked" : "Lock TX");
+        lockButton.classList.toggle("active", locked);
+        lockButton.disabled = !state.connected && !active;
+        lockButton.title = active
+          ? "Unkey now and require TX reconfirm before the next key"
+          : (locked ? `TX locked after ${txLockReasonLabel(state.txLockReason)}` : "Require TX reconfirm before the next key");
+      }
       const txStatusMeta = $("tx-status-meta");
       if (txStatusMeta) {
         txStatusMeta.textContent = state.txPhase === "keyed"
@@ -8334,7 +8377,8 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     function bindPttButton() {
       const pttButton = $("ptt-btn");
       const moxButton = $("mox-btn");
-      if (!pttButton || !moxButton) { return; }
+      const lockButton = $("tx-lock-btn");
+      if (!pttButton || !moxButton || !lockButton) { return; }
 
       const startPointerPtt = (event) => {
         if (event.pointerType === "mouse" && event.button !== 0) {
@@ -8385,6 +8429,16 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         void setPtt(!state.moxRequested);
       };
 
+      const lockTxFromButton = (event) => {
+        event.preventDefault();
+        logEvent("TX manually locked by operator");
+        if (state.moxRequested || state.txEnabled || state.micCapturing || holdPttActive()) {
+          void setPtt(false, { lockAfter: "operator-lock" });
+        } else {
+          lockTx("operator-lock");
+        }
+      };
+
       pttButton.addEventListener("pointerdown", startPointerPtt);
       pttButton.addEventListener("pointerup", stopPointerPtt);
       pttButton.addEventListener("pointercancel", stopPointerPtt);
@@ -8408,6 +8462,10 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       });
       moxButton.addEventListener("click", toggleMox);
       moxButton.addEventListener("contextmenu", (event) => {
+        event.preventDefault();
+      });
+      lockButton.addEventListener("click", lockTxFromButton);
+      lockButton.addEventListener("contextmenu", (event) => {
         event.preventDefault();
       });
       window.addEventListener("pagehide", () => {
