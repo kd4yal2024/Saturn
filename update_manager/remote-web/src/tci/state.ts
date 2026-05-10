@@ -35,6 +35,7 @@ export type TciRadioState = {
   swr: number | null;
   bridgeRttMs: number | null;
   bridgeRttAt: number;
+  txFaultReason: string | null;
   txDrive: number;
   remoteTxRfEnabled: boolean | null;
   txEnabled: boolean;
@@ -65,4 +66,5 @@ export type TciApplyResult = {
   sampleRateChanged: boolean;
   rxVolumeChanged: boolean;
   txReleased: boolean;
+  txFault: string | null;
 };

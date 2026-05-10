@@ -8903,6 +8903,12 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
 
       Object.assign(state, next);
 
+      if (events.txFault) {
+        recordOperatorFault(events.txFault, "alarm", false);
+        lockTx("tx-fault", false);
+        logEvent(`Bridge TX fault: ${events.txFault}`);
+      }
+
       if (previous.filterLow !== state.filterLow) {
         $("filter-low").value = `${state.filterLow}`;
       }

@@ -43,6 +43,7 @@ function createInitialRadioState(settings: SettingsState): TciRadioState {
     swr: null,
     bridgeRttMs: null,
     bridgeRttAt: 0,
+    txFaultReason: null,
     txDrive: settings.radioPrefs.txDrive,
     remoteTxRfEnabled: null,
     txEnabled: false,
@@ -127,6 +128,7 @@ export function createRemoteController(env: WsUrlEnvironment): RemoteController 
         sampleRateChanged: applied.sampleRateChanged,
         rxVolumeChanged: applied.rxVolumeChanged,
         txReleased: applied.txReleased,
+        txFault: applied.txFault,
         receivedIqLogMessage: null,
       };
       return { state, events };

@@ -37,6 +37,7 @@ function createState(): TciRadioState {
     swr: null,
     bridgeRttMs: null,
     bridgeRttAt: 0,
+    txFaultReason: null,
     txDrive: 10,
     remoteTxRfEnabled: null,
     txEnabled: false,
@@ -168,6 +169,20 @@ describe('applyTciText', () => {
     expect(result.state.txPhase).toBe('rx');
     expect(result.state.moxRequested).toBe(false);
     expect(result.txReleased).toBe(false);
+  });
+
+  it('tracks bridge TX faults and forces local TX state back to RX', () => {
+    const initial = createState();
+    initial.txPhase = 'keyed';
+    initial.txEnabled = true;
+    initial.moxRequested = true;
+    const result = applyTciText('tx_fault:0,power_trip,126.3,110.0;', initial);
+    expect(result.txFault).toBe('Power trip 126.3 W > 110.0 W');
+    expect(result.state.txFaultReason).toBe('Power trip 126.3 W > 110.0 W');
+    expect(result.state.txPhase).toBe('rx');
+    expect(result.state.txEnabled).toBe(false);
+    expect(result.state.moxRequested).toBe(false);
+    expect(result.txReleased).toBe(true);
   });
 
   it('updates eq and two-tone controls', () => {

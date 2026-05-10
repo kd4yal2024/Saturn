@@ -137,6 +137,10 @@ const MAX_TCI_INBOUND_MESSAGE_BYTES: usize = 256 * 1024;
 const MAX_TCI_INBOUND_FRAME_BYTES: usize = 256 * 1024;
 const MAX_TCI_MIC_FLOAT_SAMPLES: usize = 32_768;
 
+fn tx_power_trip_fault_message(forward_watts: f32, limit_watts: f32) -> String {
+    format!("tx_fault:0,power_trip,{forward_watts:.1},{limit_watts:.1};")
+}
+
 pub struct TciFrontend {
     command_rx: Receiver<TciCommand>,
     outbound_tx: Arc<Mutex<Option<(u64, SyncSender<OutboundMessage>)>>>,
@@ -399,6 +403,10 @@ impl TciFrontend {
 
     pub fn publish_saturn_pong(&self, nonce: &str, sent_at: &str) {
         self.send_text(format!("saturn_pong:{nonce},{sent_at};"));
+    }
+
+    pub fn publish_tx_power_trip(&self, forward_watts: f32, limit_watts: f32) {
+        self.send_text(tx_power_trip_fault_message(forward_watts, limit_watts));
     }
 
     pub fn publish_iq_frame(&self, sample_rate_hz: u32, iq_samples: &[f32]) {
@@ -1711,6 +1719,14 @@ mod tests {
             }
             command => panic!("unexpected command: {command:?}"),
         }
+    }
+
+    #[test]
+    fn formats_tx_power_trip_fault_message() {
+        assert_eq!(
+            tx_power_trip_fault_message(126.34, 110.0),
+            "tx_fault:0,power_trip,126.3,110.0;"
+        );
     }
 
     #[test]

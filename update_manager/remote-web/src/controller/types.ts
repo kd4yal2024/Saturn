@@ -14,6 +14,7 @@ export type RemoteControllerEvents = {
   sampleRateChanged: boolean;
   rxVolumeChanged: boolean;
   txReleased: boolean;
+  txFault: string | null;
   receivedIqLogMessage: string | null;
 };
 

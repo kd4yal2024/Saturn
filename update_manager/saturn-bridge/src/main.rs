@@ -662,6 +662,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                             "saturn-bridge: remote TX power trip {:.1}W > {:.1}W; forcing RX",
                             forward_watts, remote_tx_power_trip_watts
                         );
+                        tci.publish_tx_power_trip(forward_watts, remote_tx_power_trip_watts);
                         tx_requested = false;
                         model.desired.tx_enabled = false;
                         model.desired.tx_phase = TxPhase::Rx;

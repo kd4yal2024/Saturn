@@ -117,6 +117,7 @@ export interface AppState {
   swr: number | null;
   bridgeRttMs: number | null;
   bridgeRttAt: number;
+  txFaultReason: string | null;
   bridgeRttNonce: number;
   bridgeRttTimerId: ReturnType<typeof setInterval> | null;
   meterDbmVisual: number | null;
@@ -292,6 +293,7 @@ export function createAppState(): AppState {
     swr: null,
     bridgeRttMs: null,
     bridgeRttAt: 0,
+    txFaultReason: null,
     bridgeRttNonce: 0,
     bridgeRttTimerId: null,
     meterDbmVisual: null,

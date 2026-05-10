@@ -41,6 +41,23 @@ function nowMs(): number {
   return perf && typeof perf.now === 'function' ? perf.now() : Date.now();
 }
 
+function describeTxFault(args: readonly string[]): string {
+  const reason = String(argAt(args, 1) ?? argAt(args, 0) ?? 'fault')
+    .trim()
+    .toLowerCase();
+  const actualWatts = numericArg(argAt(args, 2));
+  const limitWatts = numericArg(argAt(args, 3));
+
+  if (reason === 'power_trip') {
+    if (actualWatts != null && limitWatts != null) {
+      return `Power trip ${actualWatts.toFixed(1)} W > ${limitWatts.toFixed(1)} W`;
+    }
+    return 'Power trip';
+  }
+
+  return `Bridge fault: ${reason.replace(/[_-]+/g, ' ') || 'TX fault'}`;
+}
+
 export function applyTciCommand(command: TciCommand, current: TciRadioState): TciApplyResult {
   const next: TciRadioState = {
     ...current,
@@ -54,10 +71,11 @@ export function applyTciCommand(command: TciCommand, current: TciRadioState): Tc
   let sampleRateChanged = false;
   let rxVolumeChanged = false;
   let txReleased = false;
+  let txFault: string | null = null;
 
   if (command.name === 'ready') {
     ready = true;
-    return { state: next, ready, displayCenterHzChanged, sampleRateChanged, rxVolumeChanged, txReleased };
+    return { state: next, ready, displayCenterHzChanged, sampleRateChanged, rxVolumeChanged, txReleased, txFault };
   }
 
   const args = command.args;
@@ -170,6 +188,13 @@ export function applyTciCommand(command: TciCommand, current: TciRadioState): Tc
       next.bridgeRttMs = Math.max(0, receivedAt - sentAt);
       next.bridgeRttAt = receivedAt;
     }
+  } else if (command.name === 'tx_fault') {
+    txFault = describeTxFault(args);
+    next.txFaultReason = txFault;
+    if (next.txPhase === 'keyed' || next.txEnabled) txReleased = true;
+    next.moxRequested = false;
+    next.txEnabled = false;
+    next.txPhase = 'rx';
   } else if (command.name === 'tx_state' && args.length >= 2) {
     const phase = String(argAt(args, 1) || '').trim().toLowerCase();
     if (phase === 'rx' || phase === 'armed' || phase === 'keyed') {
@@ -261,7 +286,7 @@ export function applyTciCommand(command: TciCommand, current: TciRadioState): Tc
   next.txFilterLow = clampFilterLowHz(next.txFilterLow);
   next.txFilterHigh = clampFilterHighHz(next.txFilterHigh);
 
-  return { state: next, ready, displayCenterHzChanged, sampleRateChanged, rxVolumeChanged, txReleased };
+  return { state: next, ready, displayCenterHzChanged, sampleRateChanged, rxVolumeChanged, txReleased, txFault };
 }
 
 export function applyTciText(text: string, current: TciRadioState): TciApplyResult {
@@ -277,6 +302,7 @@ export function applyTciText(text: string, current: TciRadioState): TciApplyResu
     sampleRateChanged: false,
     rxVolumeChanged: false,
     txReleased: false,
+    txFault: null,
   };
 
   for (const command of parseTciText(text)) {
@@ -288,6 +314,7 @@ export function applyTciText(text: string, current: TciRadioState): TciApplyResu
       sampleRateChanged: result.sampleRateChanged || applied.sampleRateChanged,
       rxVolumeChanged: result.rxVolumeChanged || applied.rxVolumeChanged,
       txReleased: result.txReleased || applied.txReleased,
+      txFault: applied.txFault ?? result.txFault,
     };
   }
 
