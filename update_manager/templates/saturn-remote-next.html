@@ -4483,6 +4483,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     const PASSBAND_DRAG_STEP_HZ = 50;
     const PASSBAND_MIN_WIDTH_HZ = 200;
     const OPERATOR_FAULT_VISIBLE_MS = 60000;
+    const RX_NB_THRESHOLD_THROTTLE_MS = 120;
 
     const state = globalThis.SaturnRemoteNext.createAppState();
     state.displayIqSource = "rx";
@@ -4503,6 +4504,8 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     let freqEntryOobConfirmKey = "";
     let passbandDragSession = null;
     let latestOperatorFault = null;
+    let rxNbThresholdSendTimer = null;
+    let rxNbThresholdSendPending = false;
 
     const FftProcessor = globalThis.SaturnRemoteNext.FftProcessor;
 
@@ -7879,7 +7882,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         $("display-zoom").value = zoomLevel;
       }
       $("rx-nr-level").disabled = state.rxNoiseReductionMode === "OFF" || state.rxNoiseReductionMode === "NR3";
-      $("rx-nb-threshold").disabled = state.rxNbMode === "OFF";
+      $("rx-nb-threshold").disabled = false;
       document.querySelectorAll("#rx-nr-grid .mode-btn").forEach((button) => {
         button.classList.toggle("active", normalizeNrMode(button.dataset.nrMode) === state.rxNoiseReductionMode);
       });
@@ -7983,6 +7986,37 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
 
     function sendAnfSettings() {
       sendTci(_next.buildAnfCommands(state).join(""));
+    }
+
+    function sendRxNbMode() {
+      sendTci(`rx_nb:0,${state.rxNbMode};`);
+    }
+
+    function sendRxNbThresholdNow() {
+      if (rxNbThresholdSendTimer) {
+        clearTimeout(rxNbThresholdSendTimer);
+        rxNbThresholdSendTimer = null;
+      }
+      rxNbThresholdSendPending = false;
+      sendTci(`rx_nb_threshold:0,${state.rxNbThreshold.toFixed(2)};`);
+    }
+
+    function scheduleRxNbThresholdSend() {
+      rxNbThresholdSendPending = true;
+      if (rxNbThresholdSendTimer) {
+        return;
+      }
+      rxNbThresholdSendTimer = setTimeout(() => {
+        rxNbThresholdSendTimer = null;
+        if (rxNbThresholdSendPending) {
+          sendRxNbThresholdNow();
+        }
+      }, RX_NB_THRESHOLD_THROTTLE_MS);
+    }
+
+    function sendRxNbSettings() {
+      sendRxNbMode();
+      sendRxNbThresholdNow();
     }
 
     function applyAnrPreset(preset) {
@@ -9826,18 +9860,26 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
           state.rxNbMode = normalizeNbMode(button.dataset.nbMode);
           saveRadioPrefs();
           updateUi();
-          sendTci(`rx_nb:0,${state.rxNbMode};`);
-          sendTci(`rx_nb_threshold:0,${state.rxNbThreshold.toFixed(2)};`);
+          sendRxNbSettings();
         });
       });
       $("rx-nb-threshold").addEventListener("input", () => {
+        const shouldEnableNb = state.rxNbMode === "OFF";
         state.rxNbThreshold = clampRxNbThreshold($("rx-nb-threshold").value);
+        if (shouldEnableNb) {
+          state.rxNbMode = "NB1";
+        }
         $("rx-nb-threshold").value = `${state.rxNbThreshold}`;
         $("rx-nb-threshold-readout").textContent = safeFixed(state.rxNbThreshold, 2, "0.00");
         saveRadioPrefs();
+        if (shouldEnableNb) {
+          updateUi();
+          sendRxNbMode();
+        }
+        scheduleRxNbThresholdSend();
       });
       $("rx-nb-threshold").addEventListener("change", () => {
-        sendTci(`rx_nb_threshold:0,${state.rxNbThreshold.toFixed(2)};`);
+        sendRxNbThresholdNow();
       });
       $("rx-anf-btn").addEventListener("click", () => {
         state.anfEnabled = !state.anfEnabled;
