@@ -1,5 +1,5 @@
 import { parseTciText, type TciCommand, booleanArg, numericArg, trailingArg } from './parser';
-import { clampDemodMode, uiCutsFromSignedPassband } from '../radio/passband';
+import { clampDemodMode, decomposeSignedPassbandWithShift, uiCutsFromSignedPassband } from '../radio/passband';
 import {
   clampAgcGain,
   clampDspDelay,
@@ -185,9 +185,10 @@ export function applyTciCommand(command: TciCommand, current: TciRadioState): Tc
     const fl = numericArg(argAt(args, 1));
     const fh = numericArg(argAt(args, 2));
     if (fl != null && fh != null) {
-      const cuts = uiCutsFromSignedPassband(fl, fh, next.mode);
-      next.filterLow = cuts.lowHz;
-      next.filterHigh = cuts.highHz;
+      const filter = decomposeSignedPassbandWithShift(fl, fh, next.mode, next.filterLow);
+      next.filterLow = filter.lowCutHz;
+      next.filterHigh = filter.highCutHz;
+      next.rxFilterShiftHz = filter.shiftHz;
     }
   } else if (command.name === 'rx_smeter') {
     const meter = numericArg(argAt(args, 2) ?? argAt(args, 0));

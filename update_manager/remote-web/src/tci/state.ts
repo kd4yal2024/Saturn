@@ -30,6 +30,7 @@ export type TciRadioState = {
   agcGain: number;
   filterLow: number;
   filterHigh: number;
+  rxFilterShiftHz: number;
   txFilterLow: number;
   txFilterHigh: number;
   meterDbm: number | null;

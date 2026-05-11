@@ -20,14 +20,15 @@ import {
   clampTwoToneLevelDb,
   clampTwoToneDelayMs,
 } from '../settings/normalize';
-import { clampDemodMode, signedPassbandFromUiCuts } from '../radio/passband';
+import { clampDemodMode, shiftedSignedPassbandFromUiCuts, signedPassbandFromUiCuts } from '../radio/passband';
 
 export function buildRxFilterBandCommand(
   filterLow: number,
   filterHigh: number,
   mode: string,
+  filterShiftHz = 0,
 ): string {
-  const pb = signedPassbandFromUiCuts(filterLow, filterHigh, mode);
+  const pb = shiftedSignedPassbandFromUiCuts(filterLow, filterHigh, mode, filterShiftHz);
   return `rx_filter_band:0,${pb.lowHz},${pb.highHz};`;
 }
 

@@ -36,6 +36,7 @@ function createInitialRadioState(settings: SettingsState): TciRadioState {
     agcGain: settings.radioPrefs.agcGain,
     filterLow: settings.radioPrefs.filterLow,
     filterHigh: settings.radioPrefs.filterHigh,
+    rxFilterShiftHz: 0,
     txFilterLow: settings.radioPrefs.txFilterLow,
     txFilterHigh: settings.radioPrefs.txFilterHigh,
     meterDbm: null,

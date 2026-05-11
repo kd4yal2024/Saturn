@@ -70,6 +70,7 @@ export interface AppState {
   // ── Filter ──────────────────────────────────────────────────────────────
   filterLow: number;
   filterHigh: number;
+  rxFilterShiftHz: number;
   txFilterLow: number;
   txFilterHigh: number;
 
@@ -251,6 +252,7 @@ export function createAppState(): AppState {
 
     filterLow: 50,
     filterHigh: 3050,
+    rxFilterShiftHz: 0,
     txFilterLow: 50,
     txFilterHigh: 3050,
 

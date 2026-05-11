@@ -5506,6 +5506,8 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       bandKeyForFrequency,
       normalizeBandMemory: sanitizeBandMemory,
       signedPassbandFromUiCuts,
+      shiftedSignedPassbandFromUiCuts,
+      decomposeSignedPassbandWithShift,
       uiCutsFromSignedPassband,
       clickTuneCarrierOffsetHz: _clickTuneCarrierOffsetHz,
       volumeAmplitudeFromDb,
@@ -6183,6 +6185,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       const cuts = _next.defaultFilterCutsForMode(mode);
       state.filterLow = cuts.rxLow;
       state.filterHigh = cuts.rxHigh;
+      state.rxFilterShiftHz = 0;
       state.txFilterLow = cuts.txLow;
       state.txFilterHigh = cuts.txHigh;
     }
@@ -7021,7 +7024,8 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     }
 
     function clickTuneCarrierOffsetHz(mode = state.mode) {
-      return _clickTuneCarrierOffsetHz(state.filterLow, state.filterHigh, mode);
+      const passband = currentRxPassbandHz();
+      return (passband.lowHz + passband.highHz) / 2;
     }
 
     function tunedFrequencyFromDisplayPoint(clientX, element) {
@@ -7040,12 +7044,19 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       const txOverlay = txFilterOverlayActive();
       const low = txOverlay ? state.txFilterLow : state.filterLow;
       const high = txOverlay ? state.txFilterHigh : state.filterHigh;
-      const passband = signedPassbandFromUiCuts(low, high, state.mode);
+      const passband = txOverlay
+        ? signedPassbandFromUiCuts(low, high, state.mode)
+        : shiftedSignedPassbandFromUiCuts(low, high, state.mode, state.rxFilterShiftHz);
       return { startHz: passband.lowHz, endHz: passband.highHz };
     }
 
     function currentRxPassbandHz() {
-      const passband = signedPassbandFromUiCuts(state.filterLow, state.filterHigh, state.mode);
+      const passband = shiftedSignedPassbandFromUiCuts(
+        state.filterLow,
+        state.filterHigh,
+        state.mode,
+        state.rxFilterShiftHz
+      );
       return { lowHz: passband.lowHz, highHz: passband.highHz };
     }
 
@@ -7070,12 +7081,13 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         low = snapPassbandDragHz(center - PASSBAND_MIN_WIDTH_HZ / 2);
         high = snapPassbandDragHz(center + PASSBAND_MIN_WIDTH_HZ / 2);
       }
-      const cuts = uiCutsFromSignedPassband(low, high, state.mode);
-      state.filterLow = clampFilterLowHz(cuts.lowHz);
+      const filter = decomposeSignedPassbandWithShift(low, high, state.mode, state.filterLow);
+      state.filterLow = filter.lowCutHz;
       state.filterHigh = Math.max(
         clampFilterHighHz(state.filterLow + PASSBAND_MIN_WIDTH_HZ),
-        clampFilterHighHz(cuts.highHz)
+        clampFilterHighHz(filter.highCutHz)
       );
+      state.rxFilterShiftHz = isSymmetricPassbandMode(state.mode) ? 0 : filter.shiftHz;
       syncRxFilterControlsFromState();
     }
 
@@ -7095,6 +7107,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         startX: clientX,
         startLowHz: passband.lowHz,
         startHighHz: passband.highHz,
+        startShiftHz: state.rxFilterShiftHz,
       };
       return true;
     }
@@ -7103,7 +7116,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       if (!passbandDragSession) {
         return;
       }
-      const { role, element, startX, startLowHz, startHighHz } = passbandDragSession;
+      const { role, element, startX, startLowHz, startHighHz, startShiftHz } = passbandDragSession;
       const rect = element.getBoundingClientRect();
       let low = startLowHz;
       let high = startHighHz;
@@ -7112,8 +7125,15 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
           return;
         }
         const deltaHz = rect.width ? snapPassbandDragHz(((clientX - startX) / rect.width) * displaySpanHz()) : 0;
-        low = startLowHz + deltaHz;
-        high = startHighHz + deltaHz;
+        state.rxFilterShiftHz = snapPassbandDragHz((startShiftHz || 0) + deltaHz);
+        syncRxFilterControlsFromState();
+        if (commit) {
+          saveRadioPrefs();
+          sendRxFilterBand();
+          const passband = currentRxPassbandHz();
+          logEvent(`RX passband shifted: ${passband.lowHz}-${passband.highHz} Hz`);
+        }
+        return;
       } else {
         const pointerHz = snapPassbandDragHz(displayOffsetFromPoint(clientX, element));
         if (isSymmetricPassbandMode(state.mode)) {
@@ -7156,7 +7176,8 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         if (isSymmetricPassbandMode(state.mode)) {
           return;
         }
-        applyRxPassbandFromSigned(passband.lowHz + deltaHz, passband.highHz + deltaHz);
+        state.rxFilterShiftHz = snapPassbandDragHz(state.rxFilterShiftHz + deltaHz);
+        syncRxFilterControlsFromState();
       } else if (role === "low") {
         applyRxPassbandFromSigned(passband.lowHz + deltaHz, passband.highHz);
       } else if (role === "high") {
@@ -7164,7 +7185,8 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       }
       saveRadioPrefs();
       sendRxFilterBand();
-      logEvent(`RX passband set: ${state.filterLow}-${state.filterHigh} Hz`);
+      const nextPassband = currentRxPassbandHz();
+      logEvent(`RX passband set: ${nextPassband.lowHz}-${nextPassband.highHz} Hz`);
     }
 
     function displayPercentForOffsetHz(offsetHz) {
@@ -7209,7 +7231,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       const txOverlay = txFilterOverlayActive();
       const label = txOverlay
         ? `TX ${state.txFilterLow}-${state.txFilterHigh} Hz`
-        : `RX ${state.filterLow}-${state.filterHigh} Hz`;
+        : `RX ${passband.startHz}-${passband.endHz} Hz`;
       for (const element of [$("filter-window"), $("waterfall-filter-window")]) {
         element.style.left = windowLeft;
         element.style.width = windowWidth;
@@ -7943,7 +7965,12 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     }
 
     function sendRxFilterBand() {
-      sendTci(_next.buildRxFilterBandCommand(state.filterLow, state.filterHigh, state.mode));
+      sendTci(_next.buildRxFilterBandCommand(
+        state.filterLow,
+        state.filterHigh,
+        state.mode,
+        state.rxFilterShiftHz
+      ));
     }
 
     function sendTxFilterBand() {
@@ -8991,6 +9018,13 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       }
       if (previous.filterHigh !== state.filterHigh) {
         $("filter-high").value = `${state.filterHigh}`;
+      }
+      if (
+        previous.filterLow !== state.filterLow ||
+        previous.filterHigh !== state.filterHigh ||
+        previous.rxFilterShiftHz !== state.rxFilterShiftHz
+      ) {
+        updateFilterReadouts();
       }
       if (previous.txFilterLow !== state.txFilterLow) {
         const txFlEl = $("tx-filter-low");

@@ -21,6 +21,11 @@ describe('buildRxFilterBandCommand', () => {
   it('returns symmetric passband for AM', () => {
     expect(buildRxFilterBandCommand(50, 3050, 'AM')).toBe('rx_filter_band:0,-3050,3050;');
   });
+
+  it('applies rx filter shift for sideband modes', () => {
+    expect(buildRxFilterBandCommand(50, 3050, 'USB', 500)).toBe('rx_filter_band:0,550,3550;');
+    expect(buildRxFilterBandCommand(300, 3000, 'LSB', -200)).toBe('rx_filter_band:0,-3200,-500;');
+  });
 });
 
 describe('buildTxFilterBandCommand', () => {

@@ -44,6 +44,7 @@ describe('createAppState', () => {
   // ── Filter defaults ──
   it('filterLow defaults to 50', () => expect(createAppState().filterLow).toBe(50));
   it('filterHigh defaults to 3050', () => expect(createAppState().filterHigh).toBe(3050));
+  it('rxFilterShiftHz defaults to 0', () => expect(createAppState().rxFilterShiftHz).toBe(0));
 
   // ── TX defaults ──
   it('txEnabled defaults to false', () => expect(createAppState().txEnabled).toBe(false));

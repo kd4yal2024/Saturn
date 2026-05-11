@@ -30,6 +30,7 @@ function createState(): TciRadioState {
     agcGain: 80,
     filterLow: 50,
     filterHigh: 3050,
+    rxFilterShiftHz: 0,
     txFilterLow: 50,
     txFilterHigh: 3050,
     meterDbm: null,
@@ -119,8 +120,16 @@ describe('applyTciText', () => {
     expect(result.state.mode).toBe('LSB');
     expect(result.state.filterLow).toBe(100);
     expect(result.state.filterHigh).toBe(2900);
+    expect(result.state.rxFilterShiftHz).toBe(0);
     expect(result.state.txFilterLow).toBe(300);
     expect(result.state.txFilterHigh).toBe(3000);
+  });
+
+  it('preserves shifted rx passbands separately from UI cut width', () => {
+    const result = applyTciText('rx_filter_band:0,550,3550;', createState());
+    expect(result.state.filterLow).toBe(50);
+    expect(result.state.filterHigh).toBe(3050);
+    expect(result.state.rxFilterShiftHz).toBe(500);
   });
 
   it('tracks tx release and audio streaming changes', () => {

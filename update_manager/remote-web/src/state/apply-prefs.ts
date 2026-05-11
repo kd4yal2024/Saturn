@@ -60,6 +60,7 @@ export interface RadioPrefsTarget {
   agcGain: number;
   filterLow: number;
   filterHigh: number;
+  rxFilterShiftHz?: number;
   txDrive: number;
   txMicGainDb: number;
   txFilterLow: number;
@@ -149,6 +150,7 @@ export function applyRadioPrefsToState(
   state.agcGain = clampAgcGain(prefs.agcGain ?? state.agcGain);
   state.filterLow = clampFilterLowHz(scalarPref(prefs.filterLow, state.filterLow));
   state.filterHigh = clampFilterHighHz(scalarPref(prefs.filterHigh, state.filterHigh));
+  if ('rxFilterShiftHz' in state) state.rxFilterShiftHz = 0;
   state.txDrive = clampTxDriveWatts(prefs.txDrive ?? state.txDrive);
   state.txMicGainDb = clampTxMicGainDb(prefs.txMicGainDb ?? state.txMicGainDb);
   state.txFilterLow = clampFilterLowHz(scalarPref(prefs.txFilterLow, state.txFilterLow));
@@ -233,6 +235,9 @@ export function normalizeAppStateInPlace(state: NormalizableState): void {
   state.displayZoom = Math.max(1, Math.min(32, safeFiniteNumber(state.displayZoom, 1)));
   state.filterLow = clampFilterLowHz(state.filterLow);
   state.filterHigh = clampFilterHighHz(state.filterHigh);
+  if ('rxFilterShiftHz' in state) {
+    state.rxFilterShiftHz = Math.round(safeFiniteNumber(state.rxFilterShiftHz, 0));
+  }
   state.txDrive = clampTxDriveWatts(state.txDrive);
   state.txMicGainDb = clampTxMicGainDb(state.txMicGainDb);
   state.txFilterLow = clampFilterLowHz(state.txFilterLow);

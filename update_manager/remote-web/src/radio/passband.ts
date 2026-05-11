@@ -56,6 +56,69 @@ export function signedPassbandFromUiCuts(lowCutHz: number, highCutHz: number, mo
   return { lowHz: low, highHz: high };
 }
 
+export function shiftedSignedPassbandFromUiCuts(
+  lowCutHz: number,
+  highCutHz: number,
+  mode: string,
+  shiftHz = 0,
+): Passband {
+  const passband = signedPassbandFromUiCuts(lowCutHz, highCutHz, mode);
+  if (isSymmetricPassbandMode(mode)) return passband;
+  const shift = Number.isFinite(Number(shiftHz)) ? Math.round(Number(shiftHz)) : 0;
+  return {
+    lowHz: passband.lowHz + shift,
+    highHz: passband.highHz + shift,
+  };
+}
+
+export function decomposeSignedPassbandWithShift(
+  lowHz: number,
+  highHz: number,
+  mode: string,
+  preferredLowCutHz = 50,
+): { lowCutHz: number; highCutHz: number; shiftHz: number } {
+  if (isSymmetricPassbandMode(mode)) {
+    const cuts = uiCutsFromSignedPassband(lowHz, highHz, mode);
+    return { lowCutHz: cuts.lowHz, highCutHz: cuts.highHz, shiftHz: 0 };
+  }
+
+  let low = Math.round(Number(lowHz));
+  let high = Math.round(Number(highHz));
+  if (!Number.isFinite(low)) low = 50;
+  if (!Number.isFinite(high)) high = 3050;
+  if (low > high) [low, high] = [high, low];
+
+  const width = Math.max(1, Math.min(6000, high - low));
+  if (!isNegativePassbandMode(mode) && low >= 0 && low <= 300 && high >= 500 && high <= 6000) {
+    return { lowCutHz: low, highCutHz: high, shiftHz: 0 };
+  }
+  if (isNegativePassbandMode(mode)) {
+    const zeroShiftLowCut = Math.abs(high);
+    const zeroShiftHighCut = Math.abs(low);
+    if (
+      zeroShiftLowCut >= 0 &&
+      zeroShiftLowCut <= 300 &&
+      zeroShiftHighCut >= 500 &&
+      zeroShiftHighCut <= 6000
+    ) {
+      return { lowCutHz: zeroShiftLowCut, highCutHz: zeroShiftHighCut, shiftHz: 0 };
+    }
+  }
+
+  const maxLowCut = Math.max(0, Math.min(300, 6000 - width));
+  const lowCut = Math.max(0, Math.min(maxLowCut, clampFilterLowHz(preferredLowCutHz)));
+  const highCut = Math.max(lowCut + 1, Math.min(6000, lowCut + width));
+  const shift = isNegativePassbandMode(mode)
+    ? high + lowCut
+    : low - lowCut;
+
+  return {
+    lowCutHz: lowCut,
+    highCutHz: highCut,
+    shiftHz: Number.isFinite(shift) ? Math.round(shift) : 0,
+  };
+}
+
 export function defaultSignedRxPassbandForMode(mode: string): Passband {
   switch (normalizeDemodMode(mode)) {
     case 'LSB':
