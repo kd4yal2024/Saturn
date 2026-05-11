@@ -1,6 +1,8 @@
 import type { DemodMode } from '../radio/passband';
 import type { AgcMode, NoiseBlankerMode, NoiseReductionMode } from '../settings/types';
 
+export type TciClientRole = 'operator' | 'viewer';
+
 export type TciRadioState = {
   mode: DemodMode;
   vfoA: number;
@@ -36,6 +38,8 @@ export type TciRadioState = {
   bridgeRttMs: number | null;
   bridgeRttAt: number;
   txFaultReason: string | null;
+  remoteClientRole: TciClientRole | null;
+  remoteClientId: string | null;
   txDrive: number;
   remoteTxRfEnabled: boolean | null;
   txEnabled: boolean;

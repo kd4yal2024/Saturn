@@ -141,6 +141,10 @@ fn tx_power_trip_fault_message(forward_watts: f32, limit_watts: f32) -> String {
     format!("tx_fault:0,power_trip,{forward_watts:.1},{limit_watts:.1};")
 }
 
+fn remote_client_role_message(client_id: u64) -> String {
+    format!("remote_client_role:0,operator,{client_id};")
+}
+
 pub struct TciFrontend {
     command_rx: Receiver<TciCommand>,
     outbound_tx: Arc<Mutex<Option<(u64, SyncSender<OutboundMessage>)>>>,
@@ -504,9 +508,11 @@ fn handle_client(
             }
             reset_client_state(client_flags);
 
-            for message in
-                initial_snapshot_messages(&radio_model.lock().unwrap(), remote_tx_rf_enabled)
-            {
+            for message in initial_snapshot_messages(
+                &radio_model.lock().unwrap(),
+                remote_tx_rf_enabled,
+                client_id,
+            ) {
                 let _ = client_tx.send(OutboundMessage::Text(message));
             }
 
@@ -638,9 +644,14 @@ fn clear_active_client(
     }
 }
 
-fn initial_snapshot_messages(model: &RadioModel, remote_tx_rf_enabled: bool) -> Vec<String> {
+fn initial_snapshot_messages(
+    model: &RadioModel,
+    remote_tx_rf_enabled: bool,
+    client_id: u64,
+) -> Vec<String> {
     vec![
         "ready;".to_string(),
+        remote_client_role_message(client_id),
         format!("vfo:0,0,{};", model.desired.vfo_a_hz),
         format!("vfo:0,1,{};", model.desired.vfo_b_hz),
         format!("dds:0,{};", model.desired.iq_center_hz),
@@ -1730,12 +1741,22 @@ mod tests {
     }
 
     #[test]
+    fn formats_remote_client_role_message() {
+        assert_eq!(
+            remote_client_role_message(42),
+            "remote_client_role:0,operator,42;"
+        );
+    }
+
+    #[test]
     fn initial_snapshot_includes_remote_tx_rf_state() {
         let model = RadioModel::new(2, 14_200_000, 0, 192, 24, 2048, true, 4096, true);
-        let disabled = initial_snapshot_messages(&model, false);
-        let enabled = initial_snapshot_messages(&model, true);
+        let disabled = initial_snapshot_messages(&model, false, 7);
+        let enabled = initial_snapshot_messages(&model, true, 8);
 
         assert!(disabled.contains(&"remote_tx_rf_enabled:0,false;".to_string()));
         assert!(enabled.contains(&"remote_tx_rf_enabled:0,true;".to_string()));
+        assert!(disabled.contains(&"remote_client_role:0,operator,7;".to_string()));
+        assert!(enabled.contains(&"remote_client_role:0,operator,8;".to_string()));
     }
 }

@@ -48,6 +48,11 @@ describe('createAppState', () => {
   // ── TX defaults ──
   it('txEnabled defaults to false', () => expect(createAppState().txEnabled).toBe(false));
   it('txDrive defaults to a conservative 10 W target', () => expect(createAppState().txDrive).toBe(10));
+  it('remote client role defaults to unknown', () => {
+    const s = createAppState();
+    expect(s.remoteClientRole).toBeNull();
+    expect(s.remoteClientId).toBeNull();
+  });
   it('TX reconfirm gate defaults to locked', () => {
     const s = createAppState();
     expect(s.txReadyExpiresAt).toBe(0);

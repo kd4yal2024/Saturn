@@ -7427,6 +7427,31 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       return state.remoteTxRfEnabled === false;
     }
 
+    function clientRoleBlocksTx() {
+      return state.connected && state.remoteClientRole !== "operator";
+    }
+
+    function clientRoleLockReason() {
+      return state.remoteClientRole === "viewer" ? "viewer" : "role-pending";
+    }
+
+    function ownershipStripState() {
+      if (state.connected) {
+        const id = state.remoteClientId ? ` #${state.remoteClientId}` : "";
+        if (state.remoteClientRole === "operator") {
+          return { label: "Operator", tone: "ok", title: `Bridge assigned operator role${id}` };
+        }
+        if (state.remoteClientRole === "viewer") {
+          return { label: "Viewer", tone: "warn", title: `Bridge assigned viewer role${id}; TX controls are blocked` };
+        }
+        return { label: "Role pending", tone: "warn", title: "Waiting for bridge client role" };
+      }
+      if (state.connectPending) {
+        return { label: "Pending", tone: "rx", title: "Connecting to bridge" };
+      }
+      return { label: "No owner", tone: "warn", title: "No active bridge client" };
+    }
+
     function setTxMiniMeter(id, percent, tone = "idle", title = "") {
       const meter = $(id);
       if (!meter) return;
@@ -7483,7 +7508,8 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         state.connected ? "ok" : (state.connectPending || state.demoMode ? "rx" : "warn"),
         state.wsUrl || "No bridge socket connected"
       );
-      setOperatorPill("operator-owner-pill", "operator-owner-value", "Local op", "rx", "Backend viewer/owner roles are not wired yet");
+      const ownership = ownershipStripState();
+      setOperatorPill("operator-owner-pill", "operator-owner-value", ownership.label, ownership.tone, ownership.title);
 
       const txTone = state.txPhase === "keyed"
         ? "keyed"
@@ -7497,22 +7523,29 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       const bandState = vfoBandState();
       const oob = bandState.state === "oob";
       const rfDisabled = bridgeRfDisabled();
+      const roleBlocked = clientRoleBlocksTx();
       const rfUnknown = state.connected && state.remoteTxRfEnabled == null;
       const rfValue = rfDisabled
         ? "RF disabled"
+        : (roleBlocked
+          ? (state.remoteClientRole === "viewer" ? "View only" : "Role pending")
         : (oob
           ? (active ? "TX OOB" : "OOB")
-          : (active ? "TX path active" : (state.connected ? (rfUnknown ? "RF unknown" : (ready ? "TX ready" : "TX locked")) : "TX gated")));
+          : (active ? "TX path active" : (state.connected ? (rfUnknown ? "RF unknown" : (ready ? "TX ready" : "TX locked")) : "TX gated"))));
       const rfTone = rfDisabled
         ? "warn"
+        : (roleBlocked
+          ? "warn"
         : (oob
           ? (active ? "alarm" : "warn")
-          : (active ? "tx" : (ready ? "ok" : "warn")));
+          : (active ? "tx" : (ready ? "ok" : "warn"))));
       const rfTitle = rfDisabled
         ? "Bridge reports SATURN_REMOTE_TX_RF_ENABLED=false"
+        : (roleBlocked
+          ? (state.remoteClientRole === "viewer" ? "Bridge assigned viewer role" : "Waiting for bridge role before TX")
         : (oob
           ? `${formatFrequency(state.vfoA)} is outside the configured ham band plan`
-          : (state.connected ? `Reconfirm: ${txLockReasonLabel(state.txLockReason)}` : "Connect before TX"));
+          : (state.connected ? `Reconfirm: ${txLockReasonLabel(state.txLockReason)}` : "Connect before TX")));
       setOperatorPill(
         "operator-rf-pill",
         "operator-rf-value",
@@ -7552,20 +7585,25 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       const source = txControlSource();
       const sourceLabel = txControlSourceLabel(source);
       const rfDisabled = bridgeRfDisabled();
+      const roleBlocked = clientRoleBlocksTx();
       const txState = rfDisabled
+        ? "disabled"
+        : (roleBlocked
         ? "disabled"
         : (state.txPhase === "keyed"
         ? "keyed"
-        : (state.txPhase === "armed" || state.moxRequested ? "armed" : (state.connected ? (ready ? "ready" : "locked") : "disabled")));
+        : (state.txPhase === "armed" || state.moxRequested ? "armed" : (state.connected ? (ready ? "ready" : "locked") : "disabled"))));
       txZone.dataset.txState = txState;
       txZone.dataset.txSource = source || "none";
       const stateLabel = rfDisabled
         ? "TX DISABLED"
+        : (roleBlocked
+        ? (state.remoteClientRole === "viewer" ? "VIEW ONLY" : "Role pending")
         : (state.txPhase === "keyed"
         ? (source === "ptt" ? "PTT ON AIR" : "MOX ON AIR")
         : (state.txPhase === "armed" || state.moxRequested
           ? (source === "ptt" ? "PTT armed" : "MOX armed")
-          : (state.connected ? (ready ? `TX READY · ${formatDurationClock(remainingMs)}` : "TX LOCKED") : "Connect first")));
+          : (state.connected ? (ready ? `TX READY · ${formatDurationClock(remainingMs)}` : "TX LOCKED") : "Connect first"))));
       $("tx-zone-state").textContent = stateLabel;
       const sourceEl = $("tx-zone-source");
       if (sourceEl) {
@@ -7584,20 +7622,24 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       updateTxMiniMeters();
       $("tx-zone-hint").textContent = rfDisabled
         ? "Bridge RF output is disabled"
+        : (roleBlocked
+        ? (state.remoteClientRole === "viewer" ? "Viewer role cannot transmit" : "Waiting for bridge operator role")
         : (state.connected
         ? (active
           ? (source === "ptt" ? "Release PTT or press Esc to unkey" : "Tap MOX again or press Esc to unkey")
           : (ready ? "Hold PTT to key, or tap MOX to latch" : `Tap PTT or MOX to arm after ${txLockReasonLabel(state.txLockReason)}`))
-        : "Connect before transmit");
+        : "Connect before transmit"));
       const ptt = $("ptt-btn");
       if (ptt) {
         ptt.textContent = rfDisabled
           ? "TX OFF"
+          : (roleBlocked
+          ? (state.remoteClientRole === "viewer" ? "VIEW" : "WAIT")
           : (active
           ? (source === "ptt" ? (state.txPhase === "keyed" ? "PTT ON AIR" : "PTT HOLD") : (state.txPhase === "keyed" ? "ON AIR" : "TX ARM"))
-          : (state.connected ? (ready ? "PTT" : "TAP TO ARM") : "CONNECT"));
+          : (state.connected ? (ready ? "PTT" : "TAP TO ARM") : "CONNECT")));
         ptt.classList.toggle("active", active && source === "ptt");
-        ptt.disabled = rfDisabled;
+        ptt.disabled = rfDisabled || roleBlocked;
         ptt.setAttribute("aria-pressed", active && source === "ptt" ? "true" : "false");
       }
       const mox = $("mox-btn");
@@ -7605,7 +7647,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         const moxActive = active && source === "mox";
         mox.textContent = moxActive ? (state.txPhase === "keyed" ? "MOX ON" : "MOX ARM") : "MOX";
         mox.classList.toggle("active", moxActive);
-        mox.disabled = rfDisabled;
+        mox.disabled = rfDisabled || roleBlocked;
         mox.setAttribute("aria-pressed", moxActive ? "true" : "false");
       }
       const lockButton = $("tx-lock-btn");
@@ -7613,7 +7655,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         const locked = state.connected && !active && !ready;
         lockButton.textContent = locked ? "Locked" : "Lock TX";
         lockButton.classList.toggle("active", locked);
-        lockButton.disabled = rfDisabled || (!state.connected && !active);
+        lockButton.disabled = rfDisabled || roleBlocked || (!state.connected && !active);
         lockButton.title = active
           ? "Unkey now and require TX reconfirm before the next key"
           : (locked ? `TX locked after ${txLockReasonLabel(state.txLockReason)}` : "Require TX reconfirm before the next key");
@@ -8230,6 +8272,8 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       if (normalized === "operator-lock") return "operator locked";
       if (normalized === "rf-disabled") return "RF disabled";
       if (normalized === "tx-fault") return "TX fault";
+      if (normalized === "viewer") return "viewer only";
+      if (normalized === "role-pending") return "role pending";
       if (normalized === "connect") return "connect first";
       return normalized || "reconfirm";
     }
@@ -8241,6 +8285,14 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
           clearTxReadyTimer();
         }
         state.txLockReason = "rf-disabled";
+        return false;
+      }
+      if (clientRoleBlocksTx()) {
+        if (state.txReadyExpiresAt > 0) {
+          state.txReadyExpiresAt = 0;
+          clearTxReadyTimer();
+        }
+        state.txLockReason = clientRoleLockReason();
         return false;
       }
       if (state.moxRequested || state.txEnabled) {
@@ -8282,6 +8334,14 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         state.txLockReason = "rf-disabled";
         logEvent("TX cannot arm because bridge RF output is disabled");
         recordOperatorFault("RF disabled", "warn", false);
+        updateUi();
+        return false;
+      }
+      if (clientRoleBlocksTx()) {
+        const reason = clientRoleLockReason();
+        state.txLockReason = reason;
+        logEvent(`TX cannot arm because bridge role is ${state.remoteClientRole || "pending"}`);
+        recordOperatorFault(txLockReasonLabel(reason), "warn", false);
         updateUi();
         return false;
       }
@@ -8510,6 +8570,17 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
           logEvent("TX blocked because bridge RF output is disabled");
           recordOperatorFault("RF disabled", "warn");
           lockTx("rf-disabled", false);
+          state.moxRequested = false;
+          state.txEnabled = false;
+          state.txPhase = "rx";
+          updateUi();
+          return false;
+        }
+        if (clientRoleBlocksTx()) {
+          const reason = clientRoleLockReason();
+          logEvent(`TX blocked because bridge role is ${state.remoteClientRole || "pending"}`);
+          recordOperatorFault(txLockReasonLabel(reason), "warn");
+          lockTx(reason, false);
           state.moxRequested = false;
           state.txEnabled = false;
           state.txPhase = "rx";
@@ -8768,6 +8839,8 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         if (ws !== state.ws) { ws.close(); return; }
         state.connectPending = false;
         state.connected = true;
+        state.remoteClientRole = null;
+        state.remoteClientId = null;
         lockTx("reconnect", false);
         resetDisplayHistory();
         logEvent("WebSocket connected");
@@ -8805,6 +8878,8 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         state.connected = false;
         state.iqStreaming = false;
         state.ws = null;
+        state.remoteClientRole = null;
+        state.remoteClientId = null;
         stopBridgeRttPings();
         resetDisplayHistory();
         state.moxRequested = false;
@@ -8847,6 +8922,8 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       state.connected = false;
       state.iqStreaming = false;
       state.ws = null;
+      state.remoteClientRole = null;
+      state.remoteClientId = null;
       stopBridgeRttPings();
       resetDisplayHistory();
       clearTxTimeouts();

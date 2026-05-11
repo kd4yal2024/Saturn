@@ -22,7 +22,7 @@ import {
   normalizeNbMode,
   normalizeNrMode,
 } from '../settings/normalize';
-import type { TciApplyResult, TciRadioState } from './state';
+import type { TciApplyResult, TciClientRole, TciRadioState } from './state';
 
 function argAt(args: readonly string[], index: number): string | undefined {
   return index >= 0 && index < args.length ? args[index] : undefined;
@@ -56,6 +56,29 @@ function describeTxFault(args: readonly string[]): string {
   }
 
   return `Bridge fault: ${reason.replace(/[_-]+/g, ' ') || 'TX fault'}`;
+}
+
+function normalizeClientRole(value: string | undefined): TciClientRole | null {
+  const normalized = String(value ?? '').trim().toLowerCase();
+  if (normalized === 'operator' || normalized === 'owner') return 'operator';
+  if (normalized === 'viewer' || normalized === 'view') return 'viewer';
+  return null;
+}
+
+function parseClientRole(args: readonly string[]): { role: TciClientRole; id: string | null } | null {
+  const firstRole = normalizeClientRole(argAt(args, 0));
+  if (firstRole) {
+    const id = String(argAt(args, 1) ?? '').trim();
+    return { role: firstRole, id: id.length > 0 ? id.slice(0, 32) : null };
+  }
+
+  const secondRole = normalizeClientRole(argAt(args, 1));
+  if (secondRole) {
+    const id = String(argAt(args, 2) ?? '').trim();
+    return { role: secondRole, id: id.length > 0 ? id.slice(0, 32) : null };
+  }
+
+  return null;
 }
 
 export function applyTciCommand(command: TciCommand, current: TciRadioState): TciApplyResult {
@@ -178,6 +201,12 @@ export function applyTciCommand(command: TciCommand, current: TciRadioState): Tc
   } else if (command.name === 'remote_tx_rf_enabled' || command.name === 'tx_rf_enabled') {
     const enabled = booleanArg(argAt(args, 1) ?? argAt(args, 0) ?? trailingArg(args));
     if (enabled != null) next.remoteTxRfEnabled = enabled;
+  } else if (command.name === 'remote_client_role' || command.name === 'client_role') {
+    const parsed = parseClientRole(args);
+    if (parsed) {
+      next.remoteClientRole = parsed.role;
+      next.remoteClientId = parsed.id;
+    }
   } else if (command.name === 'swr') {
     const value = numericArg(argAt(args, 1) ?? argAt(args, 0));
     if (value != null) next.swr = value;

@@ -38,6 +38,8 @@ function createState(): TciRadioState {
     bridgeRttMs: null,
     bridgeRttAt: 0,
     txFaultReason: null,
+    remoteClientRole: null,
+    remoteClientId: null,
     txDrive: 10,
     remoteTxRfEnabled: null,
     txEnabled: false,
@@ -100,6 +102,16 @@ describe('applyTciText', () => {
 
     const enabled = applyTciText('tx_rf_enabled:0,true;', disabled.state);
     expect(enabled.state.remoteTxRfEnabled).toBe(true);
+  });
+
+  it('tracks the backend client role', () => {
+    const operator = applyTciText('remote_client_role:0,operator,42;', createState());
+    expect(operator.state.remoteClientRole).toBe('operator');
+    expect(operator.state.remoteClientId).toBe('42');
+
+    const viewer = applyTciText('client_role:viewer,standby;', operator.state);
+    expect(viewer.state.remoteClientRole).toBe('viewer');
+    expect(viewer.state.remoteClientId).toBe('standby');
   });
 
   it('converts signed rx/tx passbands into UI cuts', () => {

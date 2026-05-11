@@ -118,6 +118,8 @@ export interface AppState {
   bridgeRttMs: number | null;
   bridgeRttAt: number;
   txFaultReason: string | null;
+  remoteClientRole: 'operator' | 'viewer' | null;
+  remoteClientId: string | null;
   bridgeRttNonce: number;
   bridgeRttTimerId: ReturnType<typeof setInterval> | null;
   meterDbmVisual: number | null;
@@ -294,6 +296,8 @@ export function createAppState(): AppState {
     bridgeRttMs: null,
     bridgeRttAt: 0,
     txFaultReason: null,
+    remoteClientRole: null,
+    remoteClientId: null,
     bridgeRttNonce: 0,
     bridgeRttTimerId: null,
     meterDbmVisual: null,
