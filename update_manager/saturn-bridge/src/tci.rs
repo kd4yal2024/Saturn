@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::io;
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -46,6 +47,7 @@ pub enum TciCommand {
     SetIqStreaming,
     RequestSmeter,
     SaturnPing {
+        client_id: u64,
         nonce: String,
         sent_at: String,
     },
@@ -124,7 +126,7 @@ enum OutboundMessage {
     },
 }
 
-#[derive(Default)]
+#[derive(Clone, Debug)]
 struct ClientState {
     iq_stream_enabled: bool,
     audio_stream_enabled: bool,
@@ -132,6 +134,26 @@ struct ClientState {
     audio_frame_float_count: u32,
     audio_channels: u32,
 }
+
+impl Default for ClientState {
+    fn default() -> Self {
+        Self {
+            iq_stream_enabled: false,
+            audio_stream_enabled: false,
+            audio_sample_rate_hz: 48_000,
+            audio_frame_float_count: 2048,
+            audio_channels: 2,
+        }
+    }
+}
+
+#[derive(Clone)]
+struct ClientConnection {
+    sender: SyncSender<OutboundMessage>,
+    state: ClientState,
+}
+
+type ClientRegistry = Arc<Mutex<BTreeMap<u64, ClientConnection>>>;
 
 const MAX_TCI_INBOUND_MESSAGE_BYTES: usize = 256 * 1024;
 const MAX_TCI_INBOUND_FRAME_BYTES: usize = 256 * 1024;
@@ -141,14 +163,28 @@ fn tx_power_trip_fault_message(forward_watts: f32, limit_watts: f32) -> String {
     format!("tx_fault:0,power_trip,{forward_watts:.1},{limit_watts:.1};")
 }
 
-fn remote_client_role_message(client_id: u64) -> String {
-    format!("remote_client_role:0,operator,{client_id};")
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TciClientRole {
+    Operator,
+    Viewer,
+}
+
+impl TciClientRole {
+    fn as_tci(self) -> &'static str {
+        match self {
+            Self::Operator => "operator",
+            Self::Viewer => "viewer",
+        }
+    }
+}
+
+fn remote_client_role_message(client_id: u64, role: TciClientRole) -> String {
+    format!("remote_client_role:0,{},{client_id};", role.as_tci())
 }
 
 pub struct TciFrontend {
     command_rx: Receiver<TciCommand>,
-    outbound_tx: Arc<Mutex<Option<(u64, SyncSender<OutboundMessage>)>>>,
-    client_state: Arc<Mutex<ClientState>>,
+    clients: ClientRegistry,
     drop_count: Arc<AtomicU64>,
     tx_power_meter_scale: f32,
     remote_tx_rf_enabled: bool,
@@ -174,30 +210,27 @@ impl TciFrontend {
         listener.set_nonblocking(true)?;
 
         let (command_tx, command_rx) = mpsc::channel();
-        let outbound_tx = Arc::new(Mutex::new(None));
-        let client_state = Arc::new(Mutex::new(ClientState::default()));
-        let active_client_id = Arc::new(AtomicU64::new(0));
+        let clients = Arc::new(Mutex::new(BTreeMap::new()));
+        let next_client_id = Arc::new(AtomicU64::new(0));
+        let operator_client_id = Arc::new(AtomicU64::new(0));
         let drop_count = Arc::new(AtomicU64::new(0));
         let remote_tx_rf_enabled = config.remote_tx_rf_enabled;
 
-        let outbound_slot = outbound_tx.clone();
-        let client_flags = client_state.clone();
-        let latest_client = active_client_id.clone();
+        let client_registry = clients.clone();
+        let next_client = next_client_id.clone();
+        let operator_client = operator_client_id.clone();
         let radio_model = radio_model.clone();
         let handle = thread::spawn(move || loop {
             match listener.accept() {
                 Ok((stream, addr)) => {
-                    let client_id = latest_client.fetch_add(1, Ordering::SeqCst) + 1;
-                    if client_id > 1 {
-                        println!("saturn-bridge: replacing prior TCI client with {addr}");
-                    } else {
-                        println!("saturn-bridge: TCI client connected from {addr}");
-                    }
+                    let client_id = next_client.fetch_add(1, Ordering::SeqCst) + 1;
+                    println!(
+                        "saturn-bridge: TCI websocket client {client_id} connected from {addr}"
+                    );
 
                     let command_tx = command_tx.clone();
-                    let outbound_slot = outbound_slot.clone();
-                    let client_flags = client_flags.clone();
-                    let latest_client = latest_client.clone();
+                    let clients = client_registry.clone();
+                    let operator_client_id = operator_client.clone();
                     let radio_model = radio_model.clone();
 
                     thread::spawn(move || {
@@ -206,9 +239,8 @@ impl TciFrontend {
                             addr,
                             client_id,
                             &command_tx,
-                            &outbound_slot,
-                            &client_flags,
-                            &latest_client,
+                            &clients,
+                            &operator_client_id,
                             &radio_model,
                             remote_tx_rf_enabled,
                         );
@@ -226,8 +258,7 @@ impl TciFrontend {
 
         Ok(Self {
             command_rx,
-            outbound_tx,
-            client_state,
+            clients,
             drop_count,
             tx_power_meter_scale: config.tx_power_meter_scale,
             remote_tx_rf_enabled,
@@ -240,11 +271,15 @@ impl TciFrontend {
     }
 
     pub fn client_snapshot(&self) -> TciClientSnapshot {
-        let flags = self.client_state.lock().unwrap();
+        let clients = self.clients.lock().unwrap();
         TciClientSnapshot {
-            active: self.outbound_tx.lock().unwrap().is_some(),
-            iq_stream_enabled: flags.iq_stream_enabled,
-            audio_stream_enabled: flags.audio_stream_enabled,
+            active: !clients.is_empty(),
+            iq_stream_enabled: clients
+                .values()
+                .any(|client| client.state.iq_stream_enabled),
+            audio_stream_enabled: clients
+                .values()
+                .any(|client| client.state.audio_stream_enabled),
             outbound_drops: self.drop_count.load(Ordering::Relaxed),
         }
     }
@@ -405,8 +440,8 @@ impl TciFrontend {
         }
     }
 
-    pub fn publish_saturn_pong(&self, nonce: &str, sent_at: &str) {
-        self.send_text(format!("saturn_pong:{nonce},{sent_at};"));
+    pub fn publish_saturn_pong(&self, client_id: u64, nonce: &str, sent_at: &str) {
+        self.send_text_to(client_id, format!("saturn_pong:{nonce},{sent_at};"));
     }
 
     pub fn publish_tx_power_trip(&self, forward_watts: f32, limit_watts: f32) {
@@ -459,20 +494,54 @@ impl TciFrontend {
     }
 
     fn is_iq_stream_enabled(&self) -> bool {
-        self.client_state.lock().unwrap().iq_stream_enabled
+        self.clients
+            .lock()
+            .unwrap()
+            .values()
+            .any(|client| client.state.iq_stream_enabled)
     }
 
     fn is_audio_stream_enabled(&self) -> bool {
-        self.client_state.lock().unwrap().audio_stream_enabled
+        self.clients
+            .lock()
+            .unwrap()
+            .values()
+            .any(|client| client.state.audio_stream_enabled)
     }
 
     fn send_text(&self, text: String) {
         self.send_message(OutboundMessage::Text(text));
     }
 
-    fn send_message(&self, message: OutboundMessage) {
-        if let Some((_, sender)) = self.outbound_tx.lock().unwrap().as_ref().cloned() {
+    fn send_text_to(&self, client_id: u64, text: String) {
+        self.send_message_to(client_id, OutboundMessage::Text(text));
+    }
+
+    fn send_message_to(&self, client_id: u64, message: OutboundMessage) {
+        if let Some(sender) = self
+            .clients
+            .lock()
+            .unwrap()
+            .get(&client_id)
+            .map(|client| client.sender.clone())
+        {
             match sender.try_send(message) {
+                Ok(()) => {}
+                Err(TrySendError::Full(_)) => {
+                    self.drop_count.fetch_add(1, Ordering::Relaxed);
+                }
+                Err(TrySendError::Disconnected(_)) => {}
+            }
+        }
+    }
+
+    fn send_message(&self, message: OutboundMessage) {
+        let clients = self.clients.lock().unwrap();
+        for client in clients.values() {
+            if !client_wants_outbound_message(client, &message) {
+                continue;
+            }
+            match client.sender.try_send(message.clone()) {
                 Ok(()) => {}
                 Err(TrySendError::Full(_)) => {
                     self.drop_count.fetch_add(1, Ordering::Relaxed);
@@ -483,14 +552,23 @@ impl TciFrontend {
     }
 }
 
+fn client_wants_outbound_message(client: &ClientConnection, message: &OutboundMessage) -> bool {
+    match message {
+        OutboundMessage::Text(_) => true,
+        OutboundMessage::IqFrame { .. } | OutboundMessage::TxIqFrame { .. } => {
+            client.state.iq_stream_enabled
+        }
+        OutboundMessage::AudioFrame { .. } => client.state.audio_stream_enabled,
+    }
+}
+
 fn handle_client(
     stream: TcpStream,
     addr: SocketAddr,
     client_id: u64,
     command_tx: &Sender<TciCommand>,
-    outbound_slot: &Arc<Mutex<Option<(u64, SyncSender<OutboundMessage>)>>>,
-    client_flags: &Arc<Mutex<ClientState>>,
-    latest_client: &Arc<AtomicU64>,
+    clients: &ClientRegistry,
+    operator_client_id: &Arc<AtomicU64>,
     radio_model: &Arc<Mutex<RadioModel>>,
     remote_tx_rf_enabled: bool,
 ) {
@@ -498,40 +576,39 @@ fn handle_client(
     match accept_with_config(stream, Some(tci_websocket_config())) {
         Ok(mut websocket) => {
             let (client_tx, client_rx) = mpsc::sync_channel::<OutboundMessage>(256);
-            {
-                let mut slot = outbound_slot.lock().unwrap();
-                if latest_client.load(Ordering::SeqCst) != client_id {
-                    let _ = websocket.close(None);
-                    return;
-                }
-                *slot = Some((client_id, client_tx.clone()));
-            }
-            reset_client_state(client_flags);
+            let (role, first_client, client_count) =
+                register_client(clients, operator_client_id, client_id, client_tx.clone());
+            println!(
+                "saturn-bridge: TCI client {client_id} assigned {} role ({client_count} connected)",
+                role.as_tci()
+            );
 
             for message in initial_snapshot_messages(
                 &radio_model.lock().unwrap(),
                 remote_tx_rf_enabled,
                 client_id,
+                role,
             ) {
                 let _ = client_tx.send(OutboundMessage::Text(message));
             }
 
-            let _ = command_tx.send(TciCommand::ClientConnected);
+            if first_client {
+                let _ = command_tx.send(TciCommand::ClientConnected);
+            }
 
-            let mut superseded = false;
             loop {
-                if latest_client.load(Ordering::SeqCst) != client_id {
-                    superseded = true;
-                    let _ = websocket.close(None);
-                    break;
-                }
-
                 let mut pending_flush = false;
                 let mut client_closed = false;
                 for _ in 0..64 {
                     match websocket.read() {
                         Ok(message) => {
-                            if !handle_incoming_message(message, command_tx, client_flags) {
+                            if !handle_incoming_message(
+                                message,
+                                command_tx,
+                                clients,
+                                operator_client_id,
+                                client_id,
+                            ) {
                                 client_closed = true;
                                 break;
                             }
@@ -598,13 +675,25 @@ fn handle_client(
                 thread::sleep(Duration::from_millis(2));
             }
 
-            clear_active_client(outbound_slot, client_flags, latest_client, client_id);
-            if superseded {
-                println!("saturn-bridge: TCI client {addr} superseded by a newer session");
-            } else {
-                println!("saturn-bridge: TCI client disconnected from {addr}");
+            let disconnect = unregister_client(clients, operator_client_id, client_id);
+            if disconnect.was_operator {
+                let _ = command_tx.send(TciCommand::SetTxEnabled(false));
+            }
+            if let Some(promoted_id) = disconnect.promoted_operator {
+                send_role_to_client(
+                    clients,
+                    promoted_id,
+                    TciClientRole::Operator,
+                    &format!("saturn-bridge: TCI promoted client {promoted_id} to operator"),
+                );
+            }
+            if disconnect.remaining_clients == 0 {
                 let _ = command_tx.send(TciCommand::ClientDisconnected);
             }
+            println!(
+                "saturn-bridge: TCI client {client_id} disconnected from {addr} ({} connected)",
+                disconnect.remaining_clients
+            );
         }
         Err(error) => {
             eprintln!("saturn-bridge: TCI websocket accept failed from {addr}: {error}");
@@ -612,35 +701,80 @@ fn handle_client(
     }
 }
 
-fn reset_client_state(client_flags: &Arc<Mutex<ClientState>>) {
-    let mut flags = client_flags.lock().unwrap();
-    flags.iq_stream_enabled = false;
-    flags.audio_stream_enabled = false;
-    flags.audio_sample_rate_hz = 48_000;
-    flags.audio_frame_float_count = 2048;
-    flags.audio_channels = 2;
+struct ClientDisconnect {
+    was_operator: bool,
+    promoted_operator: Option<u64>,
+    remaining_clients: usize,
 }
 
-fn clear_active_client(
-    outbound_slot: &Arc<Mutex<Option<(u64, SyncSender<OutboundMessage>)>>>,
-    client_flags: &Arc<Mutex<ClientState>>,
-    latest_client: &Arc<AtomicU64>,
+fn register_client(
+    clients: &ClientRegistry,
+    operator_client_id: &Arc<AtomicU64>,
     client_id: u64,
-) {
-    if latest_client.load(Ordering::SeqCst) != client_id {
-        return;
-    }
+    sender: SyncSender<OutboundMessage>,
+) -> (TciClientRole, bool, usize) {
+    let mut clients = clients.lock().unwrap();
+    let first_client = clients.is_empty();
+    clients.insert(
+        client_id,
+        ClientConnection {
+            sender,
+            state: ClientState::default(),
+        },
+    );
 
-    {
-        let mut slot = outbound_slot.lock().unwrap();
-        if slot.as_ref().map(|(active_id, _)| *active_id) == Some(client_id) {
-            *slot = None;
+    let current_operator = operator_client_id.load(Ordering::SeqCst);
+    let role = if current_operator == 0 || !clients.contains_key(&current_operator) {
+        operator_client_id.store(client_id, Ordering::SeqCst);
+        TciClientRole::Operator
+    } else {
+        TciClientRole::Viewer
+    };
+    (role, first_client, clients.len())
+}
+
+fn unregister_client(
+    clients: &ClientRegistry,
+    operator_client_id: &Arc<AtomicU64>,
+    client_id: u64,
+) -> ClientDisconnect {
+    let mut clients = clients.lock().unwrap();
+    clients.remove(&client_id);
+
+    let was_operator = operator_client_id.load(Ordering::SeqCst) == client_id;
+    let mut promoted_operator = None;
+    if was_operator {
+        if let Some((&next_operator, _)) = clients.iter().next() {
+            operator_client_id.store(next_operator, Ordering::SeqCst);
+            promoted_operator = Some(next_operator);
+        } else {
+            operator_client_id.store(0, Ordering::SeqCst);
         }
     }
+
+    ClientDisconnect {
+        was_operator,
+        promoted_operator,
+        remaining_clients: clients.len(),
+    }
+}
+
+fn send_role_to_client(
+    clients: &ClientRegistry,
+    client_id: u64,
+    role: TciClientRole,
+    log_message: &str,
+) {
+    if let Some(sender) = clients
+        .lock()
+        .unwrap()
+        .get(&client_id)
+        .map(|client| client.sender.clone())
     {
-        let mut flags = client_flags.lock().unwrap();
-        flags.iq_stream_enabled = false;
-        flags.audio_stream_enabled = false;
+        let _ = sender.try_send(OutboundMessage::Text(remote_client_role_message(
+            client_id, role,
+        )));
+        println!("{log_message}");
     }
 }
 
@@ -648,10 +782,11 @@ fn initial_snapshot_messages(
     model: &RadioModel,
     remote_tx_rf_enabled: bool,
     client_id: u64,
+    role: TciClientRole,
 ) -> Vec<String> {
     vec![
         "ready;".to_string(),
-        remote_client_role_message(client_id),
+        remote_client_role_message(client_id, role),
         format!("vfo:0,0,{};", model.desired.vfo_a_hz),
         format!("vfo:0,1,{};", model.desired.vfo_b_hz),
         format!("dds:0,{};", model.desired.iq_center_hz),
@@ -755,8 +890,11 @@ fn initial_snapshot_messages(
 fn handle_incoming_message(
     message: Message,
     command_tx: &Sender<TciCommand>,
-    client_state: &Arc<Mutex<ClientState>>,
+    clients: &ClientRegistry,
+    operator_client_id: &Arc<AtomicU64>,
+    client_id: u64,
 ) -> bool {
+    let is_operator = operator_client_id.load(Ordering::SeqCst) == client_id;
     match message {
         Message::Text(text) => {
             for command in text
@@ -764,13 +902,15 @@ fn handle_incoming_message(
                 .map(str::trim)
                 .filter(|part| !part.is_empty())
             {
-                parse_tci_command(command, command_tx, client_state);
+                parse_tci_command(command, command_tx, clients, client_id, is_operator);
             }
             true
         }
         Message::Binary(data) => {
-            if let Some(frame) = parse_tci_mic_frame(&data) {
-                let _ = command_tx.send(TciCommand::MicAudioFrame(frame));
+            if is_operator {
+                if let Some(frame) = parse_tci_mic_frame(&data) {
+                    let _ = command_tx.send(TciCommand::MicAudioFrame(frame));
+                }
             }
             true
         }
@@ -787,14 +927,20 @@ fn handle_incoming_message(
 fn parse_tci_command(
     command: &str,
     command_tx: &Sender<TciCommand>,
-    client_state: &Arc<Mutex<ClientState>>,
+    clients: &ClientRegistry,
+    client_id: u64,
+    allow_control: bool,
 ) {
     let Some((name, rest)) = command.split_once(':') else {
         return;
     };
 
     let args: Vec<&str> = rest.split(',').collect();
-    match name.to_ascii_lowercase().as_str() {
+    let name = name.to_ascii_lowercase();
+    if !allow_control && !viewer_tci_command_allowed(&name) {
+        return;
+    }
+    match name.as_str() {
         "vfo" => {
             if args.len() >= 3 {
                 if let Ok(freq_hz) = args[2].trim().parse::<u32>() {
@@ -819,7 +965,11 @@ fn parse_tci_command(
                 let nonce = sanitize_token(args[0], 32);
                 let sent_at = sanitize_token(args[1], 32);
                 if !nonce.is_empty() && !sent_at.is_empty() {
-                    let _ = command_tx.send(TciCommand::SaturnPing { nonce, sent_at });
+                    let _ = command_tx.send(TciCommand::SaturnPing {
+                        client_id,
+                        nonce,
+                        sent_at,
+                    });
                 }
             }
         }
@@ -987,29 +1137,29 @@ fn parse_tci_command(
             }
         }
         "iq_start" => {
-            client_state.lock().unwrap().iq_stream_enabled = true;
+            set_client_iq_stream_enabled(clients, client_id, true);
             println!("saturn-bridge: TCI iq_start requested");
             let _ = command_tx.send(TciCommand::SetIqStreaming);
         }
         "iq_stop" => {
-            client_state.lock().unwrap().iq_stream_enabled = false;
+            set_client_iq_stream_enabled(clients, client_id, false);
             println!("saturn-bridge: TCI iq_stop requested");
             let _ = command_tx.send(TciCommand::SetIqStreaming);
         }
         "audio_start" => {
-            client_state.lock().unwrap().audio_stream_enabled = true;
+            let audio_enabled = set_client_audio_stream_enabled(clients, client_id, true);
             println!("saturn-bridge: TCI audio_start requested");
-            let _ = command_tx.send(TciCommand::SetAudioStreaming(true));
+            let _ = command_tx.send(TciCommand::SetAudioStreaming(audio_enabled));
         }
         "audio_stop" => {
-            client_state.lock().unwrap().audio_stream_enabled = false;
+            let audio_enabled = set_client_audio_stream_enabled(clients, client_id, false);
             println!("saturn-bridge: TCI audio_stop requested");
-            let _ = command_tx.send(TciCommand::SetAudioStreaming(false));
+            let _ = command_tx.send(TciCommand::SetAudioStreaming(audio_enabled));
         }
         "audio_samplerate" => {
             if let Some(rate_text) = args.first() {
                 if let Ok(rate_hz) = rate_text.trim().parse::<u32>() {
-                    client_state.lock().unwrap().audio_sample_rate_hz = rate_hz;
+                    set_client_audio_sample_rate(clients, client_id, rate_hz);
                     let _ = command_tx.send(TciCommand::SetAudioSampleRate(rate_hz));
                 }
             }
@@ -1017,7 +1167,7 @@ fn parse_tci_command(
         "audio_stream_samples" => {
             if let Some(sample_text) = args.first() {
                 if let Ok(sample_count) = sample_text.trim().parse::<u32>() {
-                    client_state.lock().unwrap().audio_frame_float_count = sample_count;
+                    set_client_audio_frame_float_count(clients, client_id, sample_count);
                     let _ = command_tx.send(TciCommand::SetAudioFrameSamples(sample_count));
                 }
             }
@@ -1025,7 +1175,7 @@ fn parse_tci_command(
         "audio_stream_channels" => {
             if let Some(channel_text) = args.first() {
                 if let Ok(channels) = channel_text.trim().parse::<u32>() {
-                    client_state.lock().unwrap().audio_channels = channels;
+                    set_client_audio_channels(clients, client_id, channels);
                     let _ = command_tx.send(TciCommand::SetAudioChannels(channels));
                 }
             }
@@ -1443,6 +1593,66 @@ fn parse_tci_command(
     }
 }
 
+fn viewer_tci_command_allowed(name: &str) -> bool {
+    matches!(
+        name,
+        "saturn_ping"
+            | "iq_start"
+            | "iq_stop"
+            | "audio_start"
+            | "audio_stop"
+            | "audio_samplerate"
+            | "audio_stream_samples"
+            | "audio_stream_channels"
+            | "audio_stream_sample_type"
+            | "rx_smeter"
+            | "s_meter"
+            | "smeter"
+    )
+}
+
+fn set_client_iq_stream_enabled(clients: &ClientRegistry, client_id: u64, enabled: bool) -> bool {
+    let mut clients = clients.lock().unwrap();
+    if let Some(client) = clients.get_mut(&client_id) {
+        client.state.iq_stream_enabled = enabled;
+    }
+    clients
+        .values()
+        .any(|client| client.state.iq_stream_enabled)
+}
+
+fn set_client_audio_stream_enabled(
+    clients: &ClientRegistry,
+    client_id: u64,
+    enabled: bool,
+) -> bool {
+    let mut clients = clients.lock().unwrap();
+    if let Some(client) = clients.get_mut(&client_id) {
+        client.state.audio_stream_enabled = enabled;
+    }
+    clients
+        .values()
+        .any(|client| client.state.audio_stream_enabled)
+}
+
+fn set_client_audio_sample_rate(clients: &ClientRegistry, client_id: u64, sample_rate_hz: u32) {
+    if let Some(client) = clients.lock().unwrap().get_mut(&client_id) {
+        client.state.audio_sample_rate_hz = sample_rate_hz;
+    }
+}
+
+fn set_client_audio_frame_float_count(clients: &ClientRegistry, client_id: u64, sample_count: u32) {
+    if let Some(client) = clients.lock().unwrap().get_mut(&client_id) {
+        client.state.audio_frame_float_count = sample_count;
+    }
+}
+
+fn set_client_audio_channels(clients: &ClientRegistry, client_id: u64, channels: u32) {
+    if let Some(client) = clients.lock().unwrap().get_mut(&client_id) {
+        client.state.audio_channels = channels;
+    }
+}
+
 /// Parse a TCI binary frame that contains TX mic audio from the client.
 /// Frame layout: 64-byte header + f32 LE samples.
 ///   header[20..24] = sample_count (u32 LE)
@@ -1626,6 +1836,19 @@ fn calculate_swr(forward: u16, reverse: u16) -> f32 {
 mod tests {
     use super::*;
 
+    fn test_client_registry(client_id: u64) -> ClientRegistry {
+        let (sender, _receiver) = mpsc::sync_channel(1);
+        let mut clients = BTreeMap::new();
+        clients.insert(
+            client_id,
+            ClientConnection {
+                sender,
+                state: ClientState::default(),
+            },
+        );
+        Arc::new(Mutex::new(clients))
+    }
+
     #[test]
     fn builds_iq_frame_with_expected_header() {
         let frame = build_tci_iq_frame(0, 192_000, &[0.25, -0.25, 0.5, -0.5]);
@@ -1719,12 +1942,17 @@ mod tests {
     #[test]
     fn parses_saturn_ping_command() {
         let (tx, rx) = mpsc::channel();
-        let client_state = Arc::new(Mutex::new(ClientState::default()));
+        let clients = test_client_registry(7);
 
-        parse_tci_command("saturn_ping:probe-1,123.456;", &tx, &client_state);
+        parse_tci_command("saturn_ping:probe-1,123.456;", &tx, &clients, 7, false);
 
         match rx.try_recv().unwrap() {
-            TciCommand::SaturnPing { nonce, sent_at } => {
+            TciCommand::SaturnPing {
+                client_id,
+                nonce,
+                sent_at,
+            } => {
+                assert_eq!(client_id, 7);
                 assert_eq!(nonce, "probe-1");
                 assert_eq!(sent_at, "123.456");
             }
@@ -1743,20 +1971,66 @@ mod tests {
     #[test]
     fn formats_remote_client_role_message() {
         assert_eq!(
-            remote_client_role_message(42),
+            remote_client_role_message(42, TciClientRole::Operator),
             "remote_client_role:0,operator,42;"
         );
+        assert_eq!(
+            remote_client_role_message(43, TciClientRole::Viewer),
+            "remote_client_role:0,viewer,43;"
+        );
+    }
+
+    #[test]
+    fn viewer_commands_are_limited_to_streaming_and_ping() {
+        let (tx, rx) = mpsc::channel();
+        let clients = test_client_registry(9);
+
+        parse_tci_command("trx:0,true,tci;", &tx, &clients, 9, false);
+        assert!(rx.try_recv().is_err());
+
+        parse_tci_command("iq_start:0;", &tx, &clients, 9, false);
+        assert!(matches!(rx.try_recv(), Ok(TciCommand::SetIqStreaming)));
+        assert!(
+            clients
+                .lock()
+                .unwrap()
+                .get(&9)
+                .unwrap()
+                .state
+                .iq_stream_enabled
+        );
+    }
+
+    #[test]
+    fn operator_disconnect_promotes_oldest_viewer() {
+        let clients = test_client_registry(1);
+        let (sender, _receiver) = mpsc::sync_channel(1);
+        clients.lock().unwrap().insert(
+            2,
+            ClientConnection {
+                sender,
+                state: ClientState::default(),
+            },
+        );
+        let operator_client_id = Arc::new(AtomicU64::new(1));
+
+        let disconnect = unregister_client(&clients, &operator_client_id, 1);
+
+        assert!(disconnect.was_operator);
+        assert_eq!(disconnect.promoted_operator, Some(2));
+        assert_eq!(disconnect.remaining_clients, 1);
+        assert_eq!(operator_client_id.load(Ordering::SeqCst), 2);
     }
 
     #[test]
     fn initial_snapshot_includes_remote_tx_rf_state() {
         let model = RadioModel::new(2, 14_200_000, 0, 192, 24, 2048, true, 4096, true);
-        let disabled = initial_snapshot_messages(&model, false, 7);
-        let enabled = initial_snapshot_messages(&model, true, 8);
+        let disabled = initial_snapshot_messages(&model, false, 7, TciClientRole::Viewer);
+        let enabled = initial_snapshot_messages(&model, true, 8, TciClientRole::Operator);
 
         assert!(disabled.contains(&"remote_tx_rf_enabled:0,false;".to_string()));
         assert!(enabled.contains(&"remote_tx_rf_enabled:0,true;".to_string()));
-        assert!(disabled.contains(&"remote_client_role:0,operator,7;".to_string()));
+        assert!(disabled.contains(&"remote_client_role:0,viewer,7;".to_string()));
         assert!(enabled.contains(&"remote_client_role:0,operator,8;".to_string()));
     }
 }

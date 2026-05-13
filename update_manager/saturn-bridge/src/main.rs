@@ -298,8 +298,12 @@ fn main() -> Result<(), Box<dyn Error>> {
                 }
                 TciCommand::SetIqStreaming => {}
                 TciCommand::RequestSmeter => {}
-                TciCommand::SaturnPing { nonce, sent_at } => {
-                    tci.publish_saturn_pong(&nonce, &sent_at);
+                TciCommand::SaturnPing {
+                    client_id,
+                    nonce,
+                    sent_at,
+                } => {
+                    tci.publish_saturn_pong(client_id, &nonce, &sent_at);
                 }
                 TciCommand::SetAudioStreaming(enabled) => {
                     if enabled {
