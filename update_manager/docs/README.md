@@ -9,6 +9,7 @@ This folder contains the operational and technical documentation for the Rust-ba
 3. `API_REFERENCE.md`
 4. `SCRIPT_CATALOG.md`
 5. `OPERATIONS_RUNBOOK.md`
+6. `SATURN_REMOTE_STATE_STRIP_SPEC.md`
 
 ## Document Guide
 
@@ -30,3 +31,6 @@ This folder contains the operational and technical documentation for the Rust-ba
 - `OPERATIONS_RUNBOOK.md`
   - Build, install, uninstall, daily operations, and troubleshooting.
   - Includes G2 Update page (G2 + Appliance Update), dedicated piHPSDR update flow, dedicated FPGA flash flow, browser-managed custom scripts flow, backup/restore flow, and service checks.
+
+- `SATURN_REMOTE_STATE_STRIP_SPEC.md`
+  - `/remote-next` operator state strip contract: pill order, labels, density rules, escalation rules, and acceptance criteria.
