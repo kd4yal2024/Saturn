@@ -338,10 +338,12 @@ should set state only; normal UI ticks render the strip.
 
 Phase-ready slices:
 
-1. Add phone-density rendering for the current eight-pill strip.
+1. Keep phone-density rendering for the current eight-pill strip within the
+   screenshot validation budget.
 2. Add a read-only state drawer opened from the strip.
 3. Record a bounded recent fault list instead of only the latest fault.
-4. Add screenshot regression checks for phone/tablet/laptop strip layout.
+4. Extend screenshot regression checks beyond the current state-strip geometry
+   pass when the detail drawer ships.
 5. Add backend role support for real multi-client viewer/operator assignment.
 6. Add future WAN transport mode labels after FFT-row/audio-codec transport
    exists.
@@ -353,6 +355,11 @@ Do not combine these with unrelated TX, DSP, or settings changes.
 Before promoting a state-strip change:
 
 - Desktop, tablet, phone portrait, and phone landscape layouts show no overlap.
+- `npm run validate:remote-next-layout` passes and writes the latest reference
+  screenshots to `/tmp/saturn-remote-next-layout`.
+- Mac, iPhone, and iPad Safari remain manual validation targets: Go Live must
+  start audio from a user gesture, touch/hold PTT must release reliably, and
+  screen lock/backgrounding must fail closed.
 - RX/TX, RF disabled, viewer, OOB, stale RTT, stopped audio, and active fault
   states are distinguishable without color.
 - TX remains blocked for RF disabled, viewer, role pending, and reconnect lock.

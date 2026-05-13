@@ -111,10 +111,17 @@ Inline JS destructures bundle functions at load time via
 
 ```bash
 npm install          # install dependencies
-npm test             # run 88 vitest tests
+npm test             # run Vitest tests
 npm run typecheck    # tsc --noEmit
 npm run build        # vite build → dist/saturn-remote-next.js
+npm run validate:remote-next-layout  # headless Chromium state-strip layout check
 ```
+
+`validate:remote-next-layout` uses the current template/CSS with runtime scripts
+stripped, applies representative operator state-strip values, captures phone
+portrait, phone landscape, tablet, and laptop screenshots under
+`/tmp/saturn-remote-next-layout`, and fails on state-strip pill overlap or
+container overflow. It is a Chromium layout gate, not a Safari/iOS substitute.
 
 ## Deploying
 

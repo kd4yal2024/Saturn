@@ -7,7 +7,8 @@
     "build": "vite build",
     "test": "vitest run",
     "smoke:remote-next": "vitest run tests/remote-next-smoke.test.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "validate:remote-next-layout": "node scripts/validate-remote-next-layout.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
