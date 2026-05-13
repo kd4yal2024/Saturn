@@ -12,6 +12,7 @@ This folder contains the operational and technical documentation for the Rust-ba
 6. `SATURN_REMOTE_STATE_STRIP_SPEC.md`
 7. `SATURN_REMOTE_APPLE_SAFARI_VALIDATION.md`
 8. `SATURN_REMOTE_APPLE_SAFARI_RESULTS.md`
+9. `SATURN_REMOTE_SQUELCH_AUDIO_PROFILE_CONTRACT.md`
 
 ## Document Guide
 
@@ -44,3 +45,7 @@ This folder contains the operational and technical documentation for the Rust-ba
 - `SATURN_REMOTE_APPLE_SAFARI_RESULTS.md`
   - Evidence ledger for the real Apple Safari validation rows.
   - Tracks whether Mac Safari, iPhone Safari, and iPad Safari are pending, passed, failed, or blocked.
+
+- `SATURN_REMOTE_SQUELCH_AUDIO_PROFILE_CONTRACT.md`
+  - Pre-implementation bridge/UI contract for RX squelch and quick audio profiles on `/remote-next`.
+  - Defines the first SSB syllabic squelch slice, TCI command shape, WDSP mapping, UI placement, and acceptance criteria.
