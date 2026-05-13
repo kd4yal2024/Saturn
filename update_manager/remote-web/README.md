@@ -119,9 +119,12 @@ npm run validate:remote-next-layout  # headless Chromium state-strip layout chec
 
 `validate:remote-next-layout` uses the current template/CSS with runtime scripts
 stripped, applies representative operator state-strip values, captures phone
-portrait, phone landscape, tablet, and laptop screenshots under
-`/tmp/saturn-remote-next-layout`, and fails on state-strip pill overlap or
-container overflow. It is a Chromium layout gate, not a Safari/iOS substitute.
+portrait, phone portrait drawer, phone landscape, phone landscape drawer,
+tablet, tablet drawer, laptop, and laptop drawer screenshots under
+`/tmp/saturn-remote-next-layout`, and fails on state-strip pill overlap,
+container overflow, drawer sheet overflow, drawer group overlap, drawer text
+overflow, or missing drawer content. It is a Chromium layout gate, not a
+Safari/iOS substitute.
 
 ## Deploying
 

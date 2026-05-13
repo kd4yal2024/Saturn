@@ -105,24 +105,29 @@ A device row passes only if:
 
 ## Result Template
 
-Copy one block per device into `~/Documents/hand-off.md` after testing:
+Record one block per device in `SATURN_REMOTE_APPLE_SAFARI_RESULTS.md` after
+testing, then summarize the pass/fail state in `~/Documents/hand-off.md`:
 
 ```text
 Apple Safari validation result:
 - Device:
+- Hardware:
 - OS / browser:
 - Network path:
 - URL:
 - Date/time:
+- RF-safe setup:
 - Result: PASS / FAIL / BLOCKED
 - Screenshots:
 - Go Live audio:
 - Spectrum/waterfall:
 - State strip layout:
+- Operator State drawer:
 - Touch/keyboard PTT release:
 - Page hide / screen lock fail-closed:
 - Mic permission behavior:
 - Settings persistence:
+- Stay Awake result:
 - Console/log notes:
 - Follow-up fixes:
 ```

@@ -11,6 +11,7 @@ This folder contains the operational and technical documentation for the Rust-ba
 5. `OPERATIONS_RUNBOOK.md`
 6. `SATURN_REMOTE_STATE_STRIP_SPEC.md`
 7. `SATURN_REMOTE_APPLE_SAFARI_VALIDATION.md`
+8. `SATURN_REMOTE_APPLE_SAFARI_RESULTS.md`
 
 ## Document Guide
 
@@ -39,3 +40,7 @@ This folder contains the operational and technical documentation for the Rust-ba
 - `SATURN_REMOTE_APPLE_SAFARI_VALIDATION.md`
   - Manual validation runbook for `/remote-next` on macOS Safari, iPhone Safari, and iPad Safari.
   - Covers `Go Live` audio unlock, touch/hold PTT release, screen lock/background fail-closed behavior, WebGL display checks, and settings persistence.
+
+- `SATURN_REMOTE_APPLE_SAFARI_RESULTS.md`
+  - Evidence ledger for the real Apple Safari validation rows.
+  - Tracks whether Mac Safari, iPhone Safari, and iPad Safari are pending, passed, failed, or blocked.
