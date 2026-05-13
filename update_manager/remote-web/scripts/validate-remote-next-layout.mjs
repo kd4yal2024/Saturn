@@ -23,12 +23,17 @@ const expectedPills = [
   'operator-fault-pill',
 ];
 
-const scenarios = [
+const viewportScenarios = [
   { name: 'phone-portrait', width: 390, height: 844, layout: 'phone' },
   { name: 'phone-landscape', width: 844, height: 390, layout: 'phone' },
   { name: 'tablet', width: 1024, height: 768, layout: 'desktop' },
   { name: 'laptop', width: 1366, height: 768, layout: 'desktop' },
 ];
+
+const scenarios = viewportScenarios.flatMap((scenario) => [
+  { ...scenario, drawerOpen: false },
+  { ...scenario, name: `${scenario.name}-drawer`, drawerOpen: true },
+]);
 
 function requireFile(path, label) {
   if (!existsSync(path)) {
@@ -74,6 +79,55 @@ function validationScript(scenario) {
         scrollHeight: element.scrollHeight
       }));
   }
+  function drawerFailures() {
+    const overlay = document.getElementById("operator-detail-overlay");
+    const sheet = document.querySelector(".operator-detail-sheet");
+    const grid = document.getElementById("operator-detail-grid");
+    const overlayVisible = overlay ? visible(overlay) : false;
+    if (!scenario.drawerOpen) {
+      return {
+        drawerMissing: overlay ? [] : ["operator-detail-overlay"],
+        drawerUnexpectedlyVisible: overlayVisible ? ["operator-detail-overlay"] : [],
+        drawerViewportOverflow: [],
+        drawerContentOverflow: [],
+        drawerGroupOverlaps: [],
+        drawerGroupCount: [],
+        drawerRowCount: []
+      };
+    }
+
+    const sheetRect = sheet ? rectFor(sheet) : null;
+    const groups = Array.from(document.querySelectorAll(".operator-detail-group"));
+    const rows = Array.from(document.querySelectorAll(".operator-detail-row"));
+    const groupBoxes = groups.map((element) => ({ id: element.querySelector(".operator-detail-group-title")?.textContent.trim() || "", rect: rectFor(element), visible: visible(element) }));
+    const groupOverlaps = [];
+    for (let i = 0; i < groupBoxes.length; i += 1) {
+      for (let j = i + 1; j < groupBoxes.length; j += 1) {
+        if (overlap(groupBoxes[i].rect, groupBoxes[j].rect)) {
+          groupOverlaps.push([groupBoxes[i].id, groupBoxes[j].id]);
+        }
+      }
+    }
+
+    return {
+      drawerMissing: [
+        overlay ? "" : "operator-detail-overlay",
+        sheet ? "" : "operator-detail-sheet",
+        grid ? "" : "operator-detail-grid"
+      ].filter(Boolean),
+      drawerHidden: overlayVisible ? [] : ["operator-detail-overlay"],
+      drawerViewportOverflow: sheetRect && (
+        sheetRect.left < -1 ||
+        sheetRect.top < -1 ||
+        sheetRect.right > window.innerWidth + 1 ||
+        sheetRect.bottom > window.innerHeight + 1
+      ) ? ["operator-detail-sheet"] : [],
+      drawerContentOverflow: textOverflow(".operator-detail-title, .operator-detail-subtitle, .operator-detail-group-title, .operator-detail-label, .operator-detail-value, .operator-detail-note"),
+      drawerGroupOverlaps: groupOverlaps,
+      drawerGroupCount: groups.length >= 5 ? [] : [{ expectedAtLeast: 5, actual: groups.length }],
+      drawerRowCount: rows.length >= 22 ? [] : [{ expectedAtLeast: 22, actual: rows.length }]
+    };
+  }
   function runValidation() {
     const strip = document.querySelector(".operator-state-strip");
     const pills = Array.from(document.querySelectorAll(".operator-pill"));
@@ -110,7 +164,8 @@ function validationScript(scenario) {
       stripOverflow,
       viewportOverflow,
       valueOverflow: textOverflow(".operator-pill-value"),
-      layoutMismatch: layout === scenario.layout ? [] : [{ expected: scenario.layout, actual: layout }]
+      layoutMismatch: layout === scenario.layout ? [] : [{ expected: scenario.layout, actual: layout }],
+      ...drawerFailures()
     };
     const ok = Object.values(failures).every((value) => Array.isArray(value) && value.length === 0);
     const report = {
@@ -119,6 +174,13 @@ function validationScript(scenario) {
       layout,
       viewport: { width: window.innerWidth, height: window.innerHeight },
       stripRect,
+      drawer: {
+        open: Boolean(scenario.drawerOpen),
+        overlayRect: document.getElementById("operator-detail-overlay") ? rectFor(document.getElementById("operator-detail-overlay")) : null,
+        sheetRect: document.querySelector(".operator-detail-sheet") ? rectFor(document.querySelector(".operator-detail-sheet")) : null,
+        groupCount: document.querySelectorAll(".operator-detail-group").length,
+        rowCount: document.querySelectorAll(".operator-detail-row").length
+      },
       pills: boxes,
       failures,
       warnings: { labelOverflow: textOverflow(".operator-pill-label") }
@@ -143,6 +205,7 @@ function makeScenarioHtml(template, scenario) {
 (() => {
   document.documentElement.dataset.layout = ${JSON.stringify(scenario.layout)};
   document.documentElement.dataset.phoneWaterfall = "hidden";
+  const drawerOpen = ${JSON.stringify(Boolean(scenario.drawerOpen))};
   const values = {
     "operator-conn": ["ok", "Connected", "Static validation state"],
     "operator-owner": ["warn", "Role pending", "Static validation state"],
@@ -161,6 +224,89 @@ function makeScenarioHtml(template, scenario) {
       pill.title = title;
     }
     if (valueNode) valueNode.textContent = value;
+  }
+  function detailRow(label, value, note, tone = "rx") {
+    const row = document.createElement("div");
+    row.className = "operator-detail-row";
+    row.dataset.tone = tone;
+    const labelNode = document.createElement("div");
+    labelNode.className = "operator-detail-label";
+    labelNode.textContent = label;
+    const valueWrap = document.createElement("div");
+    const valueNode = document.createElement("div");
+    valueNode.className = "operator-detail-value";
+    valueNode.textContent = value;
+    valueWrap.appendChild(valueNode);
+    if (note) {
+      const noteNode = document.createElement("div");
+      noteNode.className = "operator-detail-note";
+      noteNode.textContent = note;
+      valueWrap.appendChild(noteNode);
+    }
+    row.appendChild(labelNode);
+    row.appendChild(valueWrap);
+    return row;
+  }
+  function detailGroup(title, rows) {
+    const section = document.createElement("section");
+    section.className = "operator-detail-group";
+    const titleNode = document.createElement("div");
+    titleNode.className = "operator-detail-group-title";
+    titleNode.textContent = title;
+    section.appendChild(titleNode);
+    rows.forEach((row) => section.appendChild(detailRow(...row)));
+    return section;
+  }
+  if (drawerOpen) {
+    const overlay = document.getElementById("operator-detail-overlay");
+    const subtitle = document.getElementById("operator-detail-subtitle");
+    const grid = document.getElementById("operator-detail-grid");
+    if (overlay) overlay.hidden = false;
+    if (subtitle) subtitle.textContent = "Connected / Role pending / PTT ON AIR";
+    if (grid) {
+      grid.textContent = "";
+      [
+        detailGroup("State Strip", [
+          ["Connection", "Connected", "Static validation state", "ok"],
+          ["Ownership", "Role pending", "Static validation state", "warn"],
+          ["RX/TX", "PTT ON AIR", "Static validation state", "keyed"],
+          ["RF State", "RF disabled", "Static validation state", "alarm"],
+          ["Transport", "Tailnet", "Static validation state", "rx"],
+          ["Latency", "888 ms RTT", "Static validation state", "warn"],
+          ["Audio", "48 ms lead", "Static validation state", "warn"],
+          ["Fault", "Power trip", "Static validation state", "alarm"]
+        ]),
+        detailGroup("Radio", [
+          ["VFO A", "14.200.000", "20m band", "ok"],
+          ["Mode", "USB", "Sample rate 96 kHz", "rx"],
+          ["RX Filter", "50-3050 Hz", "No shift", "rx"],
+          ["Freq Lock", "Off", "QSY controls available", "ok"]
+        ]),
+        detailGroup("Link / Audio", [
+          ["Bridge URL", "wss://saturn-g2.local/tci", "saturn-g2.local", "ok"],
+          ["RTT", "888 ms", "Bridge websocket round trip", "warn"],
+          ["Audio Lead", "48 ms", "0 resync/drop event(s)", "ok"],
+          ["Audio Path", "MSG", "48 kHz RX audio", "rx"]
+        ]),
+        detailGroup("TX Safety", [
+          ["RF Gate", "Disabled", "Bridge blocks RF TX", "warn"],
+          ["Role", "viewer", "Client #2", "warn"],
+          ["TX Ready", "Closed", "Bridge assigned viewer role", "warn"],
+          ["TX Source", "MOX", "keyed", "keyed"],
+          ["Latest Fault", "Power trip", "12s ago", "alarm"]
+        ]),
+        detailGroup("Fault History", [
+          ["Latest", "Power trip", "Just now", "alarm"],
+          ["Fault 2", "Bridge socket error", "8s ago", "warn"],
+          ["Fault 3", "Mic unavailable", "22s ago", "alarm"],
+          ["Fault 4", "Page hidden during TX", "46s ago", "warn"],
+          ["Fault 5", "RF disabled", "1m ago", "warn"],
+          ["Fault 6", "Role pending", "2m ago", "warn"],
+          ["Fault 7", "TX idle timeout", "3m ago", "warn"],
+          ["Fault 8", "Audio queue resync", "4m ago", "warn"]
+        ])
+      ].forEach((group) => grid.appendChild(group));
+    }
   }
 })();
 </script>`;
