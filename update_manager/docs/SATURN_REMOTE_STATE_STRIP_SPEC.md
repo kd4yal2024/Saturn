@@ -253,8 +253,10 @@ Escalation:
 - Warning faults: warn.
 - TX faults, mic unavailable during TX, or link loss during TX: alarm.
 
-Fault is a recent-event surface, not persistent history. Longer fault history
-belongs in a diagnostics drawer or log.
+Fault is a recent-event surface. The pill shows only the latest fresh fault for
+60 seconds, while the Operator State drawer keeps a bounded in-memory page
+session history for recent operator-visible faults. Longer persistent history
+belongs in backend diagnostics or logs.
 
 ## Density Rules
 
@@ -342,7 +344,8 @@ Phase-ready slices:
    screenshot validation budget.
 2. Keep the read-only state drawer aligned with the strip values and TX safety
    state.
-3. Record a bounded recent fault list instead of only the latest fault.
+3. Keep the bounded recent fault list useful without turning the state drawer
+   into a full diagnostics console.
 4. Extend screenshot regression checks to cover the opened detail drawer.
 5. Add backend role support for real multi-client viewer/operator assignment.
 6. Add future WAN transport mode labels after FFT-row/audio-codec transport

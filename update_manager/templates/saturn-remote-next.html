@@ -4662,6 +4662,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     const PASSBAND_DRAG_STEP_HZ = 50;
     const PASSBAND_MIN_WIDTH_HZ = 200;
     const OPERATOR_FAULT_VISIBLE_MS = 60000;
+    const OPERATOR_FAULT_HISTORY_LIMIT = 8;
     const RX_NB_THRESHOLD_THROTTLE_MS = 120;
     const OPERATOR_PILL_DETAILS = Object.freeze([
       { pillId: "operator-conn-pill", valueId: "operator-conn-value", label: "Connection" },
@@ -4693,6 +4694,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     let freqEntryOobConfirmKey = "";
     let passbandDragSession = null;
     let latestOperatorFault = null;
+    let operatorFaultHistory = [];
     let operatorDetailReturnFocus = null;
     let rxNbThresholdSendTimer = null;
     let rxNbThresholdSendPending = false;
@@ -7550,12 +7552,23 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       if (valueEl) valueEl.textContent = value;
     }
 
+    function normalizeOperatorFaultTone(tone) {
+      return tone === "alarm" ? "alarm" : "warn";
+    }
+
     function recordOperatorFault(label, tone = "warn", refresh = true) {
-      latestOperatorFault = {
-        label: String(label || "Fault").slice(0, 42),
-        tone,
+      const text = `${label || "Fault"}`.trim() || "Fault";
+      const entry = {
+        label: text.slice(0, 80),
+        pillLabel: text.slice(0, 42),
+        tone: normalizeOperatorFaultTone(tone),
         at: performance.now(),
       };
+      latestOperatorFault = entry;
+      operatorFaultHistory.unshift(entry);
+      if (operatorFaultHistory.length > OPERATOR_FAULT_HISTORY_LIMIT) {
+        operatorFaultHistory = operatorFaultHistory.slice(0, OPERATOR_FAULT_HISTORY_LIMIT);
+      }
       if (refresh) {
         updateOperatorStateStrip();
       }
@@ -7653,10 +7666,15 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
 
     function faultStripState(now = performance.now()) {
       if (!latestOperatorFault || now - latestOperatorFault.at > OPERATOR_FAULT_VISIBLE_MS) {
-        return { label: "Clear", tone: "ok", title: "No recent operator-visible faults" };
+        const count = operatorFaultHistory.length;
+        return {
+          label: "Clear",
+          tone: "ok",
+          title: count ? `${count} fault event(s) saved in this page session` : "No recent operator-visible faults",
+        };
       }
       return {
-        label: latestOperatorFault.label,
+        label: latestOperatorFault.pillLabel || latestOperatorFault.label,
         tone: latestOperatorFault.tone || "warn",
         title: `${latestOperatorFault.label} (${Math.round((now - latestOperatorFault.at) / 1000)}s ago)`,
       };
@@ -7686,6 +7704,31 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
           pill && pill.dataset ? pill.dataset.tone : "rx"
         );
       });
+    }
+
+    function operatorFaultAgeLabel(fault, now = performance.now()) {
+      const ageMs = Math.max(0, Math.round(now - fault.at));
+      if (ageMs < 1000) {
+        return "Just now";
+      }
+      if (ageMs < 60000) {
+        return `${Math.round(ageMs / 1000)}s ago`;
+      }
+      return `${Math.round(ageMs / 60000)}m ago`;
+    }
+
+    function operatorFaultHistoryItems(now = performance.now()) {
+      if (!operatorFaultHistory.length) {
+        return [
+          operatorDetailItem("History", "Clear", "No operator-visible faults recorded in this page session", "ok"),
+        ];
+      }
+      return operatorFaultHistory.map((fault, index) => operatorDetailItem(
+        index === 0 ? "Latest" : `Fault ${index + 1}`,
+        fault.label,
+        operatorFaultAgeLabel(fault, now),
+        fault.tone || "warn"
+      ));
     }
 
     function operatorDetailGroups(now = performance.now()) {
@@ -7733,6 +7776,10 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
             operatorDetailItem("TX Source", txSource, state.txPhase, state.txPhase === "keyed" ? "keyed" : (state.txPhase === "armed" || state.moxRequested ? "tx" : "rx")),
             operatorDetailItem("Latest Fault", latestOperatorFault ? latestOperatorFault.label : "Clear", latestFaultAge == null ? "No recent operator-visible faults" : `${latestFaultAge}s ago`, latestOperatorFault ? (latestOperatorFault.tone || "warn") : "ok"),
           ],
+        },
+        {
+          title: "Fault History",
+          items: operatorFaultHistoryItems(now),
         },
       ];
     }
