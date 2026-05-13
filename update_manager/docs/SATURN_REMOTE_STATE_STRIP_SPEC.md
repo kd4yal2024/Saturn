@@ -357,9 +357,10 @@ Before promoting a state-strip change:
 - Desktop, tablet, phone portrait, and phone landscape layouts show no overlap.
 - `npm run validate:remote-next-layout` passes and writes the latest reference
   screenshots to `/tmp/saturn-remote-next-layout`.
-- Mac, iPhone, and iPad Safari remain manual validation targets: Go Live must
-  start audio from a user gesture, touch/hold PTT must release reliably, and
-  screen lock/backgrounding must fail closed.
+- Mac, iPhone, and iPad Safari remain manual validation targets under
+  `SATURN_REMOTE_APPLE_SAFARI_VALIDATION.md`: Go Live must start audio from a
+  user gesture, touch/hold PTT must release reliably, and screen
+  lock/backgrounding must fail closed.
 - RX/TX, RF disabled, viewer, OOB, stale RTT, stopped audio, and active fault
   states are distinguishable without color.
 - TX remains blocked for RF disabled, viewer, role pending, and reconnect lock.

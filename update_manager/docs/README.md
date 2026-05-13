@@ -10,6 +10,7 @@ This folder contains the operational and technical documentation for the Rust-ba
 4. `SCRIPT_CATALOG.md`
 5. `OPERATIONS_RUNBOOK.md`
 6. `SATURN_REMOTE_STATE_STRIP_SPEC.md`
+7. `SATURN_REMOTE_APPLE_SAFARI_VALIDATION.md`
 
 ## Document Guide
 
@@ -34,3 +35,7 @@ This folder contains the operational and technical documentation for the Rust-ba
 
 - `SATURN_REMOTE_STATE_STRIP_SPEC.md`
   - `/remote-next` operator state strip contract: pill order, labels, density rules, escalation rules, and acceptance criteria.
+
+- `SATURN_REMOTE_APPLE_SAFARI_VALIDATION.md`
+  - Manual validation runbook for `/remote-next` on macOS Safari, iPhone Safari, and iPad Safari.
+  - Covers `Go Live` audio unlock, touch/hold PTT release, screen lock/background fail-closed behavior, WebGL display checks, and settings persistence.
