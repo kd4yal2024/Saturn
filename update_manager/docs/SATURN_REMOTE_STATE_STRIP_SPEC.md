@@ -340,10 +340,10 @@ Phase-ready slices:
 
 1. Keep phone-density rendering for the current eight-pill strip within the
    screenshot validation budget.
-2. Add a read-only state drawer opened from the strip.
+2. Keep the read-only state drawer aligned with the strip values and TX safety
+   state.
 3. Record a bounded recent fault list instead of only the latest fault.
-4. Extend screenshot regression checks beyond the current state-strip geometry
-   pass when the detail drawer ships.
+4. Extend screenshot regression checks to cover the opened detail drawer.
 5. Add backend role support for real multi-client viewer/operator assignment.
 6. Add future WAN transport mode labels after FFT-row/audio-codec transport
    exists.

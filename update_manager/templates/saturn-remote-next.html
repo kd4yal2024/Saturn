@@ -1007,6 +1007,18 @@
       border: 1px solid rgba(148, 163, 184, 0.18);
       background: rgba(255, 255, 255, 0.035);
       color: var(--theme-status-text);
+      cursor: pointer;
+      touch-action: manipulation;
+    }
+
+    .operator-pill:hover {
+      border-color: rgba(94, 200, 229, 0.34);
+      background: rgba(94, 200, 229, 0.075);
+    }
+
+    .operator-pill:focus-visible {
+      outline: 2px solid rgba(98, 208, 255, 0.70);
+      outline-offset: 2px;
     }
 
     .operator-pill::before {
@@ -1069,6 +1081,138 @@
       font-size: 12px;
       letter-spacing: 0.04em;
       color: var(--text);
+    }
+
+    .operator-detail-overlay {
+      position: fixed;
+      inset: 0;
+      z-index: 126;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 22px;
+      background: rgba(0, 0, 0, 0.56);
+      backdrop-filter: blur(12px);
+    }
+
+    .operator-detail-overlay[hidden] {
+      display: none;
+    }
+
+    .operator-detail-sheet {
+      width: min(880px, calc(100vw - 28px));
+      max-height: min(820px, calc(100vh - 40px));
+      overflow: auto;
+      border-radius: 22px;
+      border: 1px solid rgba(94, 200, 229, 0.22);
+      background:
+        linear-gradient(180deg, rgba(13, 29, 36, 0.98), rgba(7, 18, 23, 0.98));
+      box-shadow: 0 28px 70px rgba(0, 0, 0, 0.50);
+      padding: 18px;
+    }
+
+    .operator-detail-head {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 14px;
+      margin-bottom: 14px;
+    }
+
+    .operator-detail-title {
+      margin: 0;
+      font-size: 18px;
+      line-height: 1.2;
+    }
+
+    .operator-detail-subtitle {
+      margin-top: 4px;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.4;
+    }
+
+    .operator-detail-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .operator-detail-group {
+      min-width: 0;
+      border: 1px solid rgba(148, 163, 184, 0.14);
+      border-radius: 16px;
+      background: rgba(255, 255, 255, 0.03);
+      padding: 12px;
+    }
+
+    .operator-detail-group-title {
+      margin-bottom: 10px;
+      font-family: var(--mono);
+      font-size: 11px;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: var(--saturn-rx);
+    }
+
+    .operator-detail-row {
+      display: grid;
+      grid-template-columns: minmax(96px, 0.42fr) minmax(0, 1fr);
+      gap: 10px;
+      align-items: start;
+      padding: 8px 0;
+      border-top: 1px solid rgba(148, 163, 184, 0.10);
+      font-size: 12px;
+      line-height: 1.4;
+    }
+
+    .operator-detail-row:first-of-type {
+      border-top: 0;
+      padding-top: 0;
+    }
+
+    .operator-detail-label {
+      color: var(--muted);
+      font-family: var(--mono);
+      font-size: 11px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    .operator-detail-value {
+      min-width: 0;
+      color: var(--text);
+      font-family: var(--mono);
+      overflow-wrap: anywhere;
+    }
+
+    .operator-detail-note {
+      margin-top: 3px;
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1.35;
+      overflow-wrap: anywhere;
+    }
+
+    .operator-detail-row[data-tone="ok"] .operator-detail-value {
+      color: var(--saturn-ok);
+    }
+
+    .operator-detail-row[data-tone="rx"] .operator-detail-value {
+      color: var(--saturn-rx);
+    }
+
+    .operator-detail-row[data-tone="tx"] .operator-detail-value,
+    .operator-detail-row[data-tone="keyed"] .operator-detail-value {
+      color: var(--saturn-tx);
+    }
+
+    .operator-detail-row[data-tone="warn"] .operator-detail-value {
+      color: var(--saturn-caution);
+    }
+
+    .operator-detail-row[data-tone="alarm"] .operator-detail-value {
+      color: var(--saturn-alarm);
     }
 
     .audio-control-strip {
@@ -2722,6 +2866,28 @@
       font-size: 11px;
     }
 
+    :root[data-layout="phone"] .operator-detail-overlay {
+      align-items: flex-end;
+      justify-content: center;
+      padding: 10px 10px 0;
+    }
+
+    :root[data-layout="phone"] .operator-detail-sheet {
+      width: 100%;
+      max-height: 82vh;
+      border-radius: 22px 22px 0 0;
+      padding: 16px 14px calc(16px + env(safe-area-inset-bottom));
+    }
+
+    :root[data-layout="phone"] .operator-detail-grid {
+      grid-template-columns: 1fr;
+    }
+
+    :root[data-layout="phone"] .operator-detail-row {
+      grid-template-columns: minmax(86px, 0.38fr) minmax(0, 1fr);
+      gap: 10px;
+    }
+
     :root[data-layout="phone"] .audio-control-strip {
       margin-bottom: 12px;
     }
@@ -3233,49 +3399,49 @@
     </header>
 
     <section class="operator-state-strip" aria-label="Operator state">
-      <div class="operator-pill" id="operator-conn-pill" data-tone="warn">
+      <div class="operator-pill" id="operator-conn-pill" data-tone="warn" role="button" tabindex="0" aria-haspopup="dialog" aria-controls="operator-detail-overlay">
         <div>
           <span class="operator-pill-label">Connection</span>
           <span class="operator-pill-value" id="operator-conn-value">Idle</span>
         </div>
       </div>
-      <div class="operator-pill" id="operator-owner-pill" data-tone="rx">
+      <div class="operator-pill" id="operator-owner-pill" data-tone="rx" role="button" tabindex="0" aria-haspopup="dialog" aria-controls="operator-detail-overlay">
         <div>
           <span class="operator-pill-label">Ownership</span>
           <span class="operator-pill-value" id="operator-owner-value">Operator</span>
         </div>
       </div>
-      <div class="operator-pill" id="operator-rxtx-pill" data-tone="rx">
+      <div class="operator-pill" id="operator-rxtx-pill" data-tone="rx" role="button" tabindex="0" aria-haspopup="dialog" aria-controls="operator-detail-overlay">
         <div>
           <span class="operator-pill-label">RX/TX</span>
           <span class="operator-pill-value" id="operator-rxtx-value">RX</span>
         </div>
       </div>
-      <div class="operator-pill" id="operator-rf-pill" data-tone="warn">
+      <div class="operator-pill" id="operator-rf-pill" data-tone="warn" role="button" tabindex="0" aria-haspopup="dialog" aria-controls="operator-detail-overlay">
         <div>
           <span class="operator-pill-label">RF State</span>
           <span class="operator-pill-value" id="operator-rf-value">TX gated</span>
         </div>
       </div>
-      <div class="operator-pill" id="operator-transport-pill" data-tone="rx">
+      <div class="operator-pill" id="operator-transport-pill" data-tone="rx" role="button" tabindex="0" aria-haspopup="dialog" aria-controls="operator-detail-overlay">
         <div>
           <span class="operator-pill-label">Transport</span>
           <span class="operator-pill-value" id="operator-transport-value">LAN IQ</span>
         </div>
       </div>
-      <div class="operator-pill" id="operator-latency-pill" data-tone="warn">
+      <div class="operator-pill" id="operator-latency-pill" data-tone="warn" role="button" tabindex="0" aria-haspopup="dialog" aria-controls="operator-detail-overlay">
         <div>
           <span class="operator-pill-label">Latency</span>
           <span class="operator-pill-value" id="operator-latency-value">No IQ</span>
         </div>
       </div>
-      <div class="operator-pill" id="operator-audio-pill" data-tone="warn">
+      <div class="operator-pill" id="operator-audio-pill" data-tone="warn" role="button" tabindex="0" aria-haspopup="dialog" aria-controls="operator-detail-overlay">
         <div>
           <span class="operator-pill-label">Audio</span>
           <span class="operator-pill-value" id="operator-audio-value">Stopped</span>
         </div>
       </div>
-      <div class="operator-pill" id="operator-fault-pill" data-tone="ok">
+      <div class="operator-pill" id="operator-fault-pill" data-tone="ok" role="button" tabindex="0" aria-haspopup="dialog" aria-controls="operator-detail-overlay">
         <div>
           <span class="operator-pill-label">Fault</span>
           <span class="operator-pill-value" id="operator-fault-value">Clear</span>
@@ -4182,6 +4348,19 @@
     </div>
   </div>
 
+  <div class="operator-detail-overlay" id="operator-detail-overlay" hidden>
+    <div class="operator-detail-sheet" role="dialog" aria-modal="true" aria-labelledby="operator-detail-title">
+      <div class="operator-detail-head">
+        <div>
+          <h2 class="operator-detail-title" id="operator-detail-title">Operator State</h2>
+          <div class="operator-detail-subtitle" id="operator-detail-subtitle">Snapshot</div>
+        </div>
+        <button class="btn ghost" id="operator-detail-close-btn" type="button">Close</button>
+      </div>
+      <div class="operator-detail-grid" id="operator-detail-grid"></div>
+    </div>
+  </div>
+
   <div class="shortcut-overlay" id="shortcut-overlay" hidden>
     <div class="shortcut-sheet" role="dialog" aria-modal="true" aria-labelledby="shortcut-title">
       <div class="shortcut-head">
@@ -4484,6 +4663,16 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     const PASSBAND_MIN_WIDTH_HZ = 200;
     const OPERATOR_FAULT_VISIBLE_MS = 60000;
     const RX_NB_THRESHOLD_THROTTLE_MS = 120;
+    const OPERATOR_PILL_DETAILS = Object.freeze([
+      { pillId: "operator-conn-pill", valueId: "operator-conn-value", label: "Connection" },
+      { pillId: "operator-owner-pill", valueId: "operator-owner-value", label: "Ownership" },
+      { pillId: "operator-rxtx-pill", valueId: "operator-rxtx-value", label: "RX/TX" },
+      { pillId: "operator-rf-pill", valueId: "operator-rf-value", label: "RF State" },
+      { pillId: "operator-transport-pill", valueId: "operator-transport-value", label: "Transport" },
+      { pillId: "operator-latency-pill", valueId: "operator-latency-value", label: "Latency" },
+      { pillId: "operator-audio-pill", valueId: "operator-audio-value", label: "Audio" },
+      { pillId: "operator-fault-pill", valueId: "operator-fault-value", label: "Fault" },
+    ]);
 
     const state = globalThis.SaturnRemoteNext.createAppState();
     state.displayIqSource = "rx";
@@ -4504,6 +4693,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     let freqEntryOobConfirmKey = "";
     let passbandDragSession = null;
     let latestOperatorFault = null;
+    let operatorDetailReturnFocus = null;
     let rxNbThresholdSendTimer = null;
     let rxNbThresholdSendPending = false;
 
@@ -5787,7 +5977,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     }
 
     function keyboardTuneBlocked(event) {
-      if (event.defaultPrevented || overlayOpen("freq-entry-overlay") || shortcutHelpOpen() || setupMenuOpen()) {
+      if (event.defaultPrevented || overlayOpen("freq-entry-overlay") || shortcutHelpOpen() || operatorStateDetailOpen() || setupMenuOpen()) {
         return true;
       }
       const target = event.target;
@@ -5797,7 +5987,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       if (isFrequencyTextTarget(target)) {
         return true;
       }
-      if (target.closest(".shortcut-sheet, .frequency-entry-sheet, .setup-menu")) {
+      if (target.closest(".shortcut-sheet, .frequency-entry-sheet, .operator-detail-sheet, .setup-menu")) {
         return true;
       }
       if (target.closest("button, a, [role='button']")) {
@@ -5872,6 +6062,37 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       if (button) {
         button.focus({ preventScroll: true });
       }
+    }
+
+    function bindOperatorStateDetail() {
+      const overlay = $("operator-detail-overlay");
+      const closeButton = $("operator-detail-close-btn");
+      if (!overlay || !closeButton) {
+        return;
+      }
+      document.querySelectorAll(".operator-pill").forEach((pill) => {
+        pill.addEventListener("click", () => openOperatorStateDetail(pill));
+        pill.addEventListener("keydown", (event) => {
+          if (event.key !== "Enter" && event.key !== " ") {
+            return;
+          }
+          event.preventDefault();
+          openOperatorStateDetail(pill);
+        });
+      });
+      closeButton.addEventListener("click", closeOperatorStateDetail);
+      overlay.addEventListener("pointerdown", (event) => {
+        if (event.target === overlay) {
+          closeOperatorStateDetail();
+        }
+      });
+      document.addEventListener("keydown", (event) => {
+        if (!operatorStateDetailOpen() || event.key !== "Escape") {
+          return;
+        }
+        event.preventDefault();
+        closeOperatorStateDetail();
+      });
     }
 
     function appendFrequencyEntryKey(key) {
@@ -6022,6 +6243,9 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         }
         const freqOverlay = $("freq-entry-overlay");
         if (freqOverlay && !freqOverlay.hidden) {
+          return;
+        }
+        if (operatorStateDetailOpen()) {
           return;
         }
         event.preventDefault();
@@ -7438,6 +7662,165 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       };
     }
 
+    function operatorStateDetailOpen() {
+      return overlayOpen("operator-detail-overlay");
+    }
+
+    function operatorDetailItem(label, value, detail = "", tone = "rx") {
+      return {
+        label,
+        value: value == null || value === "" ? "--" : String(value),
+        detail: detail == null ? "" : String(detail),
+        tone: tone || "rx",
+      };
+    }
+
+    function operatorPillDetailItems() {
+      return OPERATOR_PILL_DETAILS.map((def) => {
+        const pill = $(def.pillId);
+        const valueEl = $(def.valueId);
+        return operatorDetailItem(
+          def.label,
+          valueEl ? valueEl.textContent : "",
+          pill ? pill.title : "",
+          pill && pill.dataset ? pill.dataset.tone : "rx"
+        );
+      });
+    }
+
+    function operatorDetailGroups(now = performance.now()) {
+      const band = vfoBandState();
+      const readyMs = txReadyRemainingMs();
+      const leadMs = audioLeadMs();
+      const dropCount = state.audioBackpressureDrops + state.rxWorkletDrops;
+      const bridgeRttAge = state.bridgeRttAt ? Math.max(0, Math.round(now - state.bridgeRttAt)) : null;
+      const latestFaultAge = latestOperatorFault ? Math.max(0, Math.round((now - latestOperatorFault.at) / 1000)) : null;
+      const audioPath = state.audioStreaming
+        ? (state.audioWorkletMode === "sab" ? "SAB" : (state.audioWorkletMode === "msg" ? "MSG" : "Legacy"))
+        : "Idle";
+      const txReady = readyMs > 0 ? `${Math.ceil(readyMs / 1000)}s` : "Closed";
+      const rfGate = state.remoteTxRfEnabled == null ? "Unknown" : (state.remoteTxRfEnabled ? "Enabled" : "Disabled");
+      const txSource = txControlSourceLabel() || "None";
+      return [
+        {
+          title: "State Strip",
+          items: operatorPillDetailItems(),
+        },
+        {
+          title: "Radio",
+          items: [
+            operatorDetailItem("VFO A", formatFrequency(state.vfoA), band.band ? `${band.band.label} band` : "Out of band", band.state === "oob" ? "warn" : "ok"),
+            operatorDetailItem("Mode", state.mode, `Sample rate ${Math.round(state.sampleRate / 1000)} kHz`, "rx"),
+            operatorDetailItem("RX Filter", `${state.filterLow}-${state.filterHigh} Hz`, state.rxFilterShiftHz ? `Shift ${state.rxFilterShiftHz} Hz` : "No shift", "rx"),
+            operatorDetailItem("Freq Lock", state.frequencyLock ? "On" : "Off", state.frequencyLock ? "QSY controls blocked" : "QSY controls available", state.frequencyLock ? "warn" : "ok"),
+          ],
+        },
+        {
+          title: "Link / Audio",
+          items: [
+            operatorDetailItem("Bridge URL", state.wsUrl || "Default", window.location.host || "", state.connected ? "ok" : "warn"),
+            operatorDetailItem("RTT", state.bridgeRttMs == null ? "None" : `${Math.round(state.bridgeRttMs)} ms`, bridgeRttAge == null ? "No pong yet" : `${bridgeRttAge} ms old`, state.bridgeRttMs == null ? "warn" : (state.bridgeRttMs > 600 ? "alarm" : (state.bridgeRttMs > 250 ? "warn" : "ok"))),
+            operatorDetailItem("Audio Lead", leadMs == null ? "None" : `${leadMs} ms`, `${dropCount} resync/drop event(s)`, audioStripState().tone),
+            operatorDetailItem("Audio Path", audioPath, state.audioStreaming ? `${Math.round(state.audioSampleRate / 1000)} kHz RX audio` : "Audio stopped", state.audioStreaming ? "rx" : "warn"),
+          ],
+        },
+        {
+          title: "TX Safety",
+          items: [
+            operatorDetailItem("RF Gate", rfGate, state.remoteTxRfEnabled === false ? "Bridge blocks RF TX" : "Bridge RF state", state.remoteTxRfEnabled === false ? "warn" : "ok"),
+            operatorDetailItem("Role", state.remoteClientRole || "Pending", state.remoteClientId ? `Client #${state.remoteClientId}` : "No client id", state.remoteClientRole === "operator" ? "ok" : "warn"),
+            operatorDetailItem("TX Ready", txReady, txLockReasonLabel(state.txLockReason), readyMs > 0 ? "ok" : "warn"),
+            operatorDetailItem("TX Source", txSource, state.txPhase, state.txPhase === "keyed" ? "keyed" : (state.txPhase === "armed" || state.moxRequested ? "tx" : "rx")),
+            operatorDetailItem("Latest Fault", latestOperatorFault ? latestOperatorFault.label : "Clear", latestFaultAge == null ? "No recent operator-visible faults" : `${latestFaultAge}s ago`, latestOperatorFault ? (latestOperatorFault.tone || "warn") : "ok"),
+          ],
+        },
+      ];
+    }
+
+    function renderOperatorDetailItem(item) {
+      const row = document.createElement("div");
+      row.className = "operator-detail-row";
+      row.dataset.tone = item.tone || "rx";
+
+      const label = document.createElement("div");
+      label.className = "operator-detail-label";
+      label.textContent = item.label;
+
+      const valueWrap = document.createElement("div");
+      const value = document.createElement("div");
+      value.className = "operator-detail-value";
+      value.textContent = item.value;
+      valueWrap.appendChild(value);
+
+      if (item.detail) {
+        const note = document.createElement("div");
+        note.className = "operator-detail-note";
+        note.textContent = item.detail;
+        valueWrap.appendChild(note);
+      }
+
+      row.appendChild(label);
+      row.appendChild(valueWrap);
+      return row;
+    }
+
+    function updateOperatorStateDetail() {
+      if (!operatorStateDetailOpen()) {
+        return;
+      }
+      const grid = $("operator-detail-grid");
+      const subtitle = $("operator-detail-subtitle");
+      if (!grid) {
+        return;
+      }
+      const now = performance.now();
+      if (subtitle) {
+        const conn = $("operator-conn-value");
+        const owner = $("operator-owner-value");
+        const rxtx = $("operator-rxtx-value");
+        subtitle.textContent = `${conn ? conn.textContent : "Idle"} / ${owner ? owner.textContent : "No owner"} / ${rxtx ? rxtx.textContent : "RX"}`;
+      }
+      grid.textContent = "";
+      operatorDetailGroups(now).forEach((group) => {
+        const section = document.createElement("section");
+        section.className = "operator-detail-group";
+        const title = document.createElement("div");
+        title.className = "operator-detail-group-title";
+        title.textContent = group.title;
+        section.appendChild(title);
+        group.items.forEach((item) => section.appendChild(renderOperatorDetailItem(item)));
+        grid.appendChild(section);
+      });
+    }
+
+    function openOperatorStateDetail(source = null) {
+      const overlay = $("operator-detail-overlay");
+      if (!overlay) {
+        return;
+      }
+      operatorDetailReturnFocus = source instanceof HTMLElement
+        ? source
+        : (document.activeElement instanceof HTMLElement ? document.activeElement : null);
+      overlay.hidden = false;
+      updateOperatorStateDetail();
+      const closeButton = $("operator-detail-close-btn");
+      if (closeButton) {
+        closeButton.focus({ preventScroll: true });
+      }
+    }
+
+    function closeOperatorStateDetail() {
+      const overlay = $("operator-detail-overlay");
+      if (overlay) {
+        overlay.hidden = true;
+      }
+      const target = operatorDetailReturnFocus;
+      operatorDetailReturnFocus = null;
+      if (target && document.contains(target) && typeof target.focus === "function") {
+        target.focus({ preventScroll: true });
+      }
+    }
+
     function txControlSource() {
       return holdPttActive() ? "ptt" : ((state.moxRequested || state.txEnabled) ? "mox" : "");
     }
@@ -7599,6 +7982,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
 
       const fault = faultStripState(now);
       setOperatorPill("operator-fault-pill", "operator-fault-value", fault.label, fault.tone, fault.title);
+      updateOperatorStateDetail();
     }
 
     function updateTxZone() {
@@ -10078,6 +10462,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         updateUi();
       });
       bindPttButton();
+      bindOperatorStateDetail();
       bindShortcutHelp();
       bindKeyboardTuneControls();
       bindKeyboardPttControls();
