@@ -11,6 +11,7 @@ export type TciBinaryFrameHeader = {
   floatCount: number;
   frameType: number;
   channels: number;
+  sequence: number;
 };
 
 export function parseTciBinaryFrameHeader(buffer: ArrayBuffer): TciBinaryFrameHeader {
@@ -24,6 +25,7 @@ export function parseTciBinaryFrameHeader(buffer: ArrayBuffer): TciBinaryFrameHe
     floatCount: view.getUint32(20, true),
     frameType: view.getUint32(24, true),
     channels: Math.max(1, view.getUint32(28, true) || 2),
+    sequence: view.getUint32(32, true),
   };
 }
 

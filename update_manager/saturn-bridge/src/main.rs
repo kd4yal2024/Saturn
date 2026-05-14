@@ -706,7 +706,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             let elapsed = last_status.elapsed().as_secs_f64().max(0.001);
             let client = tci.client_snapshot();
             println!(
-                "saturn-bridge: diag hp_s={:.1} ddc_s={:.1} rx_audio_frames_s={:.1} rx_audio_samples_s={:.0} tci_mic_frames_s={:.1} tci_mic_samples_s={:.0} client={} iq={} audio={} outbound_drops={} {}",
+                "saturn-bridge: diag hp_s={:.1} ddc_s={:.1} rx_audio_frames_s={:.1} rx_audio_samples_s={:.0} tci_mic_frames_s={:.1} tci_mic_samples_s={:.0} client={} iq={} audio={} outbound_drops={} safety_p99_us={} control_p99_us={} display_replaced_s={} display_dropped_s={} audio_dropped_s={} audio_gaps={} audio_panic={} send_blocked_ms={} out_hwm_bytes={} safety_depth_overflow={} {}",
                 status_hp_packets as f64 / elapsed,
                 status_ddc_packets as f64 / elapsed,
                 status_rx_audio_frames as f64 / elapsed,
@@ -717,8 +717,19 @@ fn main() -> Result<(), Box<dyn Error>> {
                 bool01(client.iq_stream_enabled),
                 bool01(client.audio_stream_enabled),
                 client.outbound_drops,
+                client.safety_enqueue_to_write_p99_us,
+                client.control_enqueue_to_write_p99_us,
+                client.display_replaced_per_sec,
+                client.display_dropped_per_sec,
+                client.audio_dropped_per_sec,
+                client.audio_seq_gap_count,
+                client.audio_panic_drain_count,
+                client.send_blocked_ms,
+                client.outbound_high_watermark_bytes,
+                client.safety_queue_depth_overflow_count,
                 format_tx_diag(latest_tx_diag.as_ref())
             );
+            tci.publish_scheduler_telemetry(&client);
             let model = radio_model.lock().unwrap();
             println!("saturn-bridge: {}", model.status_line());
             last_status = Instant::now();

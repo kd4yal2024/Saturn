@@ -15,6 +15,7 @@ describe('TCI binary frames', () => {
       floatCount: 2,
       frameType: 1,
       channels: 2,
+      sequence: 0,
     });
   });
 

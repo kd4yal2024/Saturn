@@ -118,6 +118,21 @@ export interface AppState {
   swr: number | null;
   bridgeRttMs: number | null;
   bridgeRttAt: number;
+  backpressureSafetyP50Us: number;
+  backpressureSafetyP95Us: number;
+  backpressureSafetyP99Us: number;
+  backpressureControlP50Us: number;
+  backpressureControlP95Us: number;
+  backpressureControlP99Us: number;
+  displayReplacedPerSec: number;
+  displayDroppedPerSec: number;
+  bridgeAudioDroppedPerSec: number;
+  bridgeAudioSeqGapCount: number;
+  audioSeqGapCount: number;
+  audioPanicDrainCount: number;
+  sendBlockedMs: number;
+  outboundHighWatermarkBytes: number;
+  safetyQueueDepthOverflowCount: number;
   txFaultReason: string | null;
   remoteClientRole: 'operator' | 'viewer' | null;
   remoteClientId: string | null;
@@ -170,6 +185,8 @@ export interface AppState {
   audioSources: Set<AudioBufferSourceNode>;
   audioNextTime: number;
   audioBackpressureDrops: number;
+  lastAudioSequence: number | null;
+  lastAudioSeqGapReportAt: number;
   audioWorkletMode: 'sab' | 'msg' | null;
   rxWorkletNode: AudioWorkletNode | null;
   rxRingBuf: SharedArrayBuffer | null;
@@ -297,6 +314,21 @@ export function createAppState(): AppState {
     swr: null,
     bridgeRttMs: null,
     bridgeRttAt: 0,
+    backpressureSafetyP50Us: 0,
+    backpressureSafetyP95Us: 0,
+    backpressureSafetyP99Us: 0,
+    backpressureControlP50Us: 0,
+    backpressureControlP95Us: 0,
+    backpressureControlP99Us: 0,
+    displayReplacedPerSec: 0,
+    displayDroppedPerSec: 0,
+    bridgeAudioDroppedPerSec: 0,
+    bridgeAudioSeqGapCount: 0,
+    audioSeqGapCount: 0,
+    audioPanicDrainCount: 0,
+    sendBlockedMs: 0,
+    outboundHighWatermarkBytes: 0,
+    safetyQueueDepthOverflowCount: 0,
     txFaultReason: null,
     remoteClientRole: null,
     remoteClientId: null,
@@ -346,6 +378,8 @@ export function createAppState(): AppState {
     audioSources: new Set(),
     audioNextTime: 0,
     audioBackpressureDrops: 0,
+    lastAudioSequence: null,
+    lastAudioSeqGapReportAt: 0,
     audioWorkletMode: null,
     rxWorkletNode: null,
     rxRingBuf: null,

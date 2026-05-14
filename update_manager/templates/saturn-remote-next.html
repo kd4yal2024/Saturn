@@ -8575,6 +8575,9 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       state.audioSampleRate = 48000;
       state.audioFramesPlayed = 0;
       state.audioBackpressureDrops = 0;
+      state.lastAudioSequence = null;
+      state.audioSeqGapCount = 0;
+      state.lastAudioSeqGapReportAt = 0;
       sendTci(
         `audio_stream_samples:${RX_AUDIO_FRAME_FLOATS};audio_stream_channels:2;audio_stream_sample_type:float32;audio_samplerate:48000;audio_start:0;rx_volume:0,0,${state.rxVolumeDb.toFixed(1)};`
       );
@@ -8631,6 +8634,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       state.audioStreaming = false;
       state.audioFramesPlayed = 0;
       state.audioNextTime = 0;
+      state.lastAudioSequence = null;
       state.audioWorkletMode = null;
       state.rxWorkletDrops = 0;
       if (state.rxWorkletNode) {
@@ -9626,6 +9630,27 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       state.audioFramesPlayed += 1;
     }
 
+    function recordAudioSequence(frame) {
+      const sequence = Number(frame?.header?.sequence || 0);
+      if (!Number.isFinite(sequence) || sequence <= 0) {
+        return;
+      }
+      if (state.lastAudioSequence != null) {
+        const expected = (state.lastAudioSequence + 1) >>> 0;
+        if (sequence !== expected) {
+          state.audioSeqGapCount = (state.audioSeqGapCount || 0) + 1;
+          state.lastAudioSeqGapReportAt = performance.now();
+          flushRxAudioQueue();
+          recordOperatorFault("Audio sequence gap", "warn");
+          sendTci(`audio_seq_gap_count:0,${state.audioSeqGapCount};`);
+          if (state.audioSeqGapCount === 1 || state.audioSeqGapCount % 10 === 0) {
+            logEvent(`RX audio sequence gap ${state.audioSeqGapCount} (expected ${expected}, got ${sequence})`);
+          }
+        }
+      }
+      state.lastAudioSequence = sequence;
+    }
+
     function handleAudioFrame(buffer) {
       if (!state.audioCtx || !state.audioStreaming) {
         return;
@@ -9642,6 +9667,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       if (!frame) {
         return;
       }
+      recordAudioSequence(frame);
       state.audioSampleRate = frame.header.sampleRate;
 
       if (state.audioWorkletMode === "sab") {

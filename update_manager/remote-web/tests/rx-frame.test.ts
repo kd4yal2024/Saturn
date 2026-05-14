@@ -2,13 +2,20 @@ import { describe, expect, it } from 'vitest';
 import { decodeAudioFrame, decodeIqFrame, decodeRxFrame } from '../src/transport/rx-frame';
 import { TCI_FRAME_HEADER_BYTES } from '../src/transport/tci-frame';
 
-function buildFrame(frameType: number, sampleRate: number, channels: number, floats: number[]): ArrayBuffer {
+function buildFrame(
+  frameType: number,
+  sampleRate: number,
+  channels: number,
+  floats: number[],
+  sequence = 0,
+): ArrayBuffer {
   const buffer = new ArrayBuffer(TCI_FRAME_HEADER_BYTES + floats.length * 4);
   const view = new DataView(buffer);
   view.setUint32(4, sampleRate, true);
   view.setUint32(20, floats.length, true);
   view.setUint32(24, frameType, true);
   view.setUint32(28, channels, true);
+  view.setUint32(32, sequence, true);
   new Float32Array(buffer, TCI_FRAME_HEADER_BYTES, floats.length).set(floats);
   return buffer;
 }
@@ -27,6 +34,7 @@ describe('rx frame decoding', () => {
     const frame = decodeAudioFrame(buffer);
     expect(frame?.kind).toBe('audio');
     expect(frame?.frames).toBe(2);
+    expect(frame?.header.sequence).toBe(0);
     expect(frame?.mirroredMono).toBe(true);
     expect(Array.from(frame?.left || [])).toEqual([0.25, -0.5]);
     expect(Array.from(frame?.right || [])).toEqual([0.25, -0.5]);
@@ -44,5 +52,11 @@ describe('rx frame decoding', () => {
         expect.closeTo(-0.2, 6),
       ]),
     );
+  });
+
+  it('decodes the bridge audio sequence from the header', () => {
+    const buffer = buildFrame(1, 48000, 2, [0.25, 0, -0.5, 0], 19);
+    const frame = decodeAudioFrame(buffer);
+    expect(frame?.header.sequence).toBe(19);
   });
 });

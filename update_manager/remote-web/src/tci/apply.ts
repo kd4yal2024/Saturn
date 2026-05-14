@@ -41,6 +41,12 @@ function nowMs(): number {
   return perf && typeof perf.now === 'function' ? perf.now() : Date.now();
 }
 
+function nonNegativeIntArg(args: readonly string[], index: number): number | null {
+  const value = numericArg(argAt(args, index));
+  if (value == null) return null;
+  return Math.max(0, Math.round(value));
+}
+
 function describeTxFault(args: readonly string[]): string {
   const reason = String(argAt(args, 1) ?? argAt(args, 0) ?? 'fault')
     .trim()
@@ -218,6 +224,25 @@ export function applyTciCommand(command: TciCommand, current: TciRadioState): Tc
       next.bridgeRttMs = Math.max(0, receivedAt - sentAt);
       next.bridgeRttAt = receivedAt;
     }
+  } else if (command.name === 'remote_backpressure') {
+    const offset = args.length >= 15 ? 1 : 0;
+    next.backpressureSafetyP50Us = nonNegativeIntArg(args, offset) ?? next.backpressureSafetyP50Us;
+    next.backpressureSafetyP95Us = nonNegativeIntArg(args, offset + 1) ?? next.backpressureSafetyP95Us;
+    next.backpressureSafetyP99Us = nonNegativeIntArg(args, offset + 2) ?? next.backpressureSafetyP99Us;
+    next.backpressureControlP50Us = nonNegativeIntArg(args, offset + 3) ?? next.backpressureControlP50Us;
+    next.backpressureControlP95Us = nonNegativeIntArg(args, offset + 4) ?? next.backpressureControlP95Us;
+    next.backpressureControlP99Us = nonNegativeIntArg(args, offset + 5) ?? next.backpressureControlP99Us;
+    next.displayReplacedPerSec = nonNegativeIntArg(args, offset + 6) ?? next.displayReplacedPerSec;
+    next.displayDroppedPerSec = nonNegativeIntArg(args, offset + 7) ?? next.displayDroppedPerSec;
+    next.bridgeAudioDroppedPerSec = nonNegativeIntArg(args, offset + 8) ?? next.bridgeAudioDroppedPerSec;
+    next.bridgeAudioSeqGapCount =
+      nonNegativeIntArg(args, offset + 9) ?? next.bridgeAudioSeqGapCount;
+    next.audioPanicDrainCount = nonNegativeIntArg(args, offset + 10) ?? next.audioPanicDrainCount;
+    next.sendBlockedMs = nonNegativeIntArg(args, offset + 11) ?? next.sendBlockedMs;
+    next.outboundHighWatermarkBytes =
+      nonNegativeIntArg(args, offset + 12) ?? next.outboundHighWatermarkBytes;
+    next.safetyQueueDepthOverflowCount =
+      nonNegativeIntArg(args, offset + 13) ?? next.safetyQueueDepthOverflowCount;
   } else if (command.name === 'tx_fault') {
     txFault = describeTxFault(args);
     next.txFaultReason = txFault;

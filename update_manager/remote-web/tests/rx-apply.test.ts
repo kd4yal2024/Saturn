@@ -40,7 +40,7 @@ describe('rx transport apply', () => {
   it('applies iq frames and reports sample-rate changes', () => {
     const frame: IqFrame = {
       kind: 'iq',
-      header: { sampleRate: 384000, floatCount: 4, frameType: 0, channels: 2 },
+      header: { sampleRate: 384000, floatCount: 4, frameType: 0, channels: 2, sequence: 0 },
       iq: new Float32Array([1, 2, 3, 4]),
       samplePairs: 2,
     };
@@ -57,7 +57,7 @@ describe('rx transport apply', () => {
     state.txEnabled = true;
     const frame: IqFrame = {
       kind: 'iq',
-      header: { sampleRate: 192000, floatCount: 4, frameType: 0, channels: 2 },
+      header: { sampleRate: 192000, floatCount: 4, frameType: 0, channels: 2, sequence: 0 },
       iq: new Float32Array([1, 2, 3, 4]),
       samplePairs: 2,
     };
@@ -68,7 +68,7 @@ describe('rx transport apply', () => {
   it('applies audio frames only while rx audio is active', () => {
     const frame: AudioFrame = {
       kind: 'audio',
-      header: { sampleRate: 48000, floatCount: 4, frameType: 1, channels: 2 },
+      header: { sampleRate: 48000, floatCount: 4, frameType: 1, channels: 2, sequence: 0 },
       frames: 2,
       left: new Float32Array([0.1, 0.2]),
       right: new Float32Array([0.1, 0.2]),

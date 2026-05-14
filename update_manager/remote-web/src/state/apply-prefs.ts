@@ -108,6 +108,21 @@ export interface NormalizableState extends RadioPrefsTarget, DisplayPrefsTarget 
   frameRate: number;
   fftWidth: number;
   audioBackpressureDrops: number;
+  backpressureSafetyP50Us?: number;
+  backpressureSafetyP95Us?: number;
+  backpressureSafetyP99Us?: number;
+  backpressureControlP50Us?: number;
+  backpressureControlP95Us?: number;
+  backpressureControlP99Us?: number;
+  audioSeqGapCount?: number;
+  displayReplacedPerSec?: number;
+  displayDroppedPerSec?: number;
+  bridgeAudioDroppedPerSec?: number;
+  bridgeAudioSeqGapCount?: number;
+  audioPanicDrainCount?: number;
+  sendBlockedMs?: number;
+  outboundHighWatermarkBytes?: number;
+  safetyQueueDepthOverflowCount?: number;
 }
 
 function stringPref(value: unknown, fallback: string): string {
@@ -264,6 +279,21 @@ export function normalizeAppStateInPlace(state: NormalizableState): void {
   state.frameRate = Math.max(0, safeFiniteNumber(state.frameRate, 0));
   state.fftWidth = Math.max(0, Math.round(safeFiniteNumber(state.fftWidth, 0)));
   state.audioBackpressureDrops = Math.max(0, Math.round(safeFiniteNumber(state.audioBackpressureDrops, 0)));
+  state.backpressureSafetyP50Us = Math.max(0, Math.round(safeFiniteNumber(state.backpressureSafetyP50Us, 0)));
+  state.backpressureSafetyP95Us = Math.max(0, Math.round(safeFiniteNumber(state.backpressureSafetyP95Us, 0)));
+  state.backpressureSafetyP99Us = Math.max(0, Math.round(safeFiniteNumber(state.backpressureSafetyP99Us, 0)));
+  state.backpressureControlP50Us = Math.max(0, Math.round(safeFiniteNumber(state.backpressureControlP50Us, 0)));
+  state.backpressureControlP95Us = Math.max(0, Math.round(safeFiniteNumber(state.backpressureControlP95Us, 0)));
+  state.backpressureControlP99Us = Math.max(0, Math.round(safeFiniteNumber(state.backpressureControlP99Us, 0)));
+  state.audioSeqGapCount = Math.max(0, Math.round(safeFiniteNumber(state.audioSeqGapCount, 0)));
+  state.displayReplacedPerSec = Math.max(0, Math.round(safeFiniteNumber(state.displayReplacedPerSec, 0)));
+  state.displayDroppedPerSec = Math.max(0, Math.round(safeFiniteNumber(state.displayDroppedPerSec, 0)));
+  state.bridgeAudioDroppedPerSec = Math.max(0, Math.round(safeFiniteNumber(state.bridgeAudioDroppedPerSec, 0)));
+  state.bridgeAudioSeqGapCount = Math.max(0, Math.round(safeFiniteNumber(state.bridgeAudioSeqGapCount, 0)));
+  state.audioPanicDrainCount = Math.max(0, Math.round(safeFiniteNumber(state.audioPanicDrainCount, 0)));
+  state.sendBlockedMs = Math.max(0, Math.round(safeFiniteNumber(state.sendBlockedMs, 0)));
+  state.outboundHighWatermarkBytes = Math.max(0, Math.round(safeFiniteNumber(state.outboundHighWatermarkBytes, 0)));
+  state.safetyQueueDepthOverflowCount = Math.max(0, Math.round(safeFiniteNumber(state.safetyQueueDepthOverflowCount, 0)));
   state.spectrumAutoRange = Boolean(state.spectrumAutoRange);
   state.displayFloorDb = clampDisplayDb(state.displayFloorDb, -200);
   state.displayCeilingDb = clampDisplayDb(state.displayCeilingDb, -120);

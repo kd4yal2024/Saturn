@@ -38,6 +38,21 @@ function createState(): TciRadioState {
     swr: null,
     bridgeRttMs: null,
     bridgeRttAt: 0,
+    backpressureSafetyP50Us: 0,
+    backpressureSafetyP95Us: 0,
+    backpressureSafetyP99Us: 0,
+    backpressureControlP50Us: 0,
+    backpressureControlP95Us: 0,
+    backpressureControlP99Us: 0,
+    displayReplacedPerSec: 0,
+    displayDroppedPerSec: 0,
+    bridgeAudioDroppedPerSec: 0,
+    bridgeAudioSeqGapCount: 0,
+    audioSeqGapCount: 0,
+    audioPanicDrainCount: 0,
+    sendBlockedMs: 0,
+    outboundHighWatermarkBytes: 0,
+    safetyQueueDepthOverflowCount: 0,
     txFaultReason: null,
     remoteClientRole: null,
     remoteClientId: null,
@@ -95,6 +110,24 @@ describe('applyTciText', () => {
     expect(result.state.bridgeRttMs).not.toBeNull();
     expect(result.state.bridgeRttMs ?? 0).toBeGreaterThanOrEqual(0);
     expect(result.state.bridgeRttAt).toBeGreaterThanOrEqual(sentAt);
+  });
+
+  it('tracks bridge backpressure telemetry', () => {
+    const result = applyTciText(
+      'remote_backpressure:0,1,2,3,4,5,6,7,8,9,10,11,12,13000,14;',
+      createState(),
+    );
+    expect(result.state.backpressureSafetyP99Us).toBe(3);
+    expect(result.state.backpressureControlP99Us).toBe(6);
+    expect(result.state.displayReplacedPerSec).toBe(7);
+    expect(result.state.displayDroppedPerSec).toBe(8);
+    expect(result.state.bridgeAudioDroppedPerSec).toBe(9);
+    expect(result.state.bridgeAudioSeqGapCount).toBe(10);
+    expect(result.state.audioSeqGapCount).toBe(0);
+    expect(result.state.audioPanicDrainCount).toBe(11);
+    expect(result.state.sendBlockedMs).toBe(12);
+    expect(result.state.outboundHighWatermarkBytes).toBe(13000);
+    expect(result.state.safetyQueueDepthOverflowCount).toBe(14);
   });
 
   it('tracks the bridge RF enable gate', () => {

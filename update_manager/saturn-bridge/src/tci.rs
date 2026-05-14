@@ -1,11 +1,11 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 use std::io;
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::mpsc::{self, Receiver, Sender, SyncSender, TryRecvError, TrySendError};
+use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use tungstenite::error::Error as WsError;
 use tungstenite::protocol::WebSocketConfig;
@@ -123,7 +123,415 @@ enum OutboundMessage {
         receiver: u32,
         sample_rate: u32,
         audio_samples: Vec<f32>,
+        sequence: u32,
     },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum OutboundClass {
+    Safety,
+    Control,
+    Audio,
+    Display,
+}
+
+impl OutboundClass {
+    fn records_enqueue_to_write_latency(self) -> bool {
+        matches!(self, Self::Safety | Self::Control)
+    }
+
+    fn is_never_drop(self) -> bool {
+        matches!(self, Self::Safety | Self::Control)
+    }
+}
+
+impl OutboundMessage {
+    fn class(&self) -> OutboundClass {
+        match self {
+            Self::Text(text) if is_safety_text_message(text) => OutboundClass::Safety,
+            Self::Text(_) => OutboundClass::Control,
+            Self::AudioFrame { .. } => OutboundClass::Audio,
+            Self::IqFrame { .. } | Self::TxIqFrame { .. } => OutboundClass::Display,
+        }
+    }
+
+    fn estimated_bytes(&self) -> usize {
+        match self {
+            Self::Text(text) => text.len(),
+            Self::IqFrame { iq_samples, .. } | Self::TxIqFrame { iq_samples, .. } => {
+                64 + iq_samples.len() * std::mem::size_of::<f32>()
+            }
+            Self::AudioFrame { audio_samples, .. } => {
+                64 + audio_samples.len() * std::mem::size_of::<f32>()
+            }
+        }
+    }
+
+    fn audio_frame_count(&self) -> usize {
+        match self {
+            Self::AudioFrame { audio_samples, .. } => audio_samples.len() / 2,
+            _ => 0,
+        }
+    }
+
+    fn audio_sample_rate(&self) -> u32 {
+        match self {
+            Self::AudioFrame { sample_rate, .. } => *sample_rate,
+            _ => 0,
+        }
+    }
+
+    fn with_audio_sequence(mut self, sequence: u32) -> Self {
+        if let Self::AudioFrame {
+            sequence: frame_sequence,
+            ..
+        } = &mut self
+        {
+            *frame_sequence = sequence;
+        }
+        self
+    }
+}
+
+fn is_safety_text_message(text: &str) -> bool {
+    text.starts_with("tx_fault:")
+        || text.starts_with("remote_tx_rf_enabled:")
+        || text.starts_with("remote_client_role:")
+}
+
+#[derive(Clone, Debug)]
+struct QueuedOutbound {
+    message: OutboundMessage,
+    class: OutboundClass,
+    enqueued_at: Instant,
+    estimated_bytes: usize,
+    audio_frames: usize,
+}
+
+impl QueuedOutbound {
+    fn new(message: OutboundMessage) -> Self {
+        let class = message.class();
+        let estimated_bytes = message.estimated_bytes();
+        let audio_frames = message.audio_frame_count();
+        Self {
+            message,
+            class,
+            enqueued_at: Instant::now(),
+            estimated_bytes,
+            audio_frames,
+        }
+    }
+}
+
+#[derive(Default, Clone, Debug)]
+struct ClientSchedulerStatsDelta {
+    safety_latencies_us: Vec<u64>,
+    control_latencies_us: Vec<u64>,
+    display_replaced: u64,
+    display_dropped: u64,
+    audio_dropped: u64,
+    audio_panic_drain: u64,
+    send_blocked_ms: u64,
+    outbound_high_watermark_bytes: u64,
+    safety_queue_depth_overflow: u64,
+}
+
+#[derive(Default, Debug)]
+struct ClientSchedulerStatsInner {
+    safety_latencies_us: Vec<u64>,
+    control_latencies_us: Vec<u64>,
+    display_replaced: u64,
+    display_dropped: u64,
+    audio_dropped: u64,
+    audio_panic_drain: u64,
+    send_blocked_ms: u64,
+    outbound_high_watermark_bytes: u64,
+    safety_queue_depth_overflow: u64,
+}
+
+#[derive(Default, Debug)]
+struct ClientSchedulerStats {
+    inner: Mutex<ClientSchedulerStatsInner>,
+}
+
+impl ClientSchedulerStats {
+    fn record_write(&self, class: OutboundClass, latency: Duration) {
+        if !class.records_enqueue_to_write_latency() {
+            return;
+        }
+        let latency_us = latency.as_micros().min(u128::from(u64::MAX)) as u64;
+        let mut inner = self.inner.lock().unwrap();
+        match class {
+            OutboundClass::Safety => inner.safety_latencies_us.push(latency_us),
+            OutboundClass::Control => inner.control_latencies_us.push(latency_us),
+            OutboundClass::Audio | OutboundClass::Display => {}
+        }
+    }
+
+    fn record_display_replaced(&self) {
+        self.inner.lock().unwrap().display_replaced += 1;
+    }
+
+    fn record_display_dropped(&self) {
+        self.inner.lock().unwrap().display_dropped += 1;
+    }
+
+    fn record_audio_dropped(&self, count: u64) {
+        self.inner.lock().unwrap().audio_dropped += count;
+    }
+
+    fn record_audio_panic_drain(&self) {
+        self.inner.lock().unwrap().audio_panic_drain += 1;
+    }
+
+    fn record_send_blocked(&self, duration: Duration) {
+        self.inner.lock().unwrap().send_blocked_ms += duration.as_millis().max(1) as u64;
+    }
+
+    fn record_high_watermark(&self, bytes: usize) {
+        let mut inner = self.inner.lock().unwrap();
+        inner.outbound_high_watermark_bytes = inner.outbound_high_watermark_bytes.max(bytes as u64);
+    }
+
+    fn record_safety_queue_depth_overflow(&self) {
+        self.inner.lock().unwrap().safety_queue_depth_overflow += 1;
+    }
+
+    fn drain(&self) -> ClientSchedulerStatsDelta {
+        let mut inner = self.inner.lock().unwrap();
+        ClientSchedulerStatsDelta {
+            safety_latencies_us: std::mem::take(&mut inner.safety_latencies_us),
+            control_latencies_us: std::mem::take(&mut inner.control_latencies_us),
+            display_replaced: std::mem::take(&mut inner.display_replaced),
+            display_dropped: std::mem::take(&mut inner.display_dropped),
+            audio_dropped: std::mem::take(&mut inner.audio_dropped),
+            audio_panic_drain: std::mem::take(&mut inner.audio_panic_drain),
+            send_blocked_ms: std::mem::take(&mut inner.send_blocked_ms),
+            outbound_high_watermark_bytes: std::mem::take(&mut inner.outbound_high_watermark_bytes),
+            safety_queue_depth_overflow: std::mem::take(&mut inner.safety_queue_depth_overflow),
+        }
+    }
+}
+
+#[derive(Debug)]
+struct OutboundQueues {
+    safety: VecDeque<QueuedOutbound>,
+    control: VecDeque<QueuedOutbound>,
+    audio: VecDeque<QueuedOutbound>,
+    display: Option<QueuedOutbound>,
+    queued_bytes: usize,
+    audio_queued_frames: usize,
+    audio_sequence: u32,
+    writer_started: bool,
+}
+
+impl Default for OutboundQueues {
+    fn default() -> Self {
+        Self {
+            safety: VecDeque::new(),
+            control: VecDeque::new(),
+            audio: VecDeque::new(),
+            display: None,
+            queued_bytes: 0,
+            audio_queued_frames: 0,
+            audio_sequence: 0,
+            writer_started: false,
+        }
+    }
+}
+
+#[derive(Debug)]
+struct ClientOutbound {
+    queues: Mutex<OutboundQueues>,
+    stats: ClientSchedulerStats,
+}
+
+impl ClientOutbound {
+    fn new() -> Arc<Self> {
+        Arc::new(Self {
+            queues: Mutex::new(OutboundQueues::default()),
+            stats: ClientSchedulerStats::default(),
+        })
+    }
+
+    fn mark_writer_started(&self) {
+        self.queues.lock().unwrap().writer_started = true;
+    }
+
+    fn enqueue(&self, message: OutboundMessage) -> u64 {
+        let mut message = message;
+        let class = message.class();
+        let mut dropped = 0;
+        let mut queues = self.queues.lock().unwrap();
+
+        if class == OutboundClass::Audio {
+            queues.audio_sequence = queues.audio_sequence.wrapping_add(1).max(1);
+            message = message.with_audio_sequence(queues.audio_sequence);
+        }
+
+        let item = QueuedOutbound::new(message);
+        match item.class {
+            OutboundClass::Safety => {
+                queues.queued_bytes = queues.queued_bytes.saturating_add(item.estimated_bytes);
+                queues.safety.push_back(item);
+                if queues.writer_started && queues.safety.len() > 1 {
+                    self.stats.record_safety_queue_depth_overflow();
+                    eprintln!(
+                        "saturn-bridge: safety outbound queue depth is {}",
+                        queues.safety.len()
+                    );
+                }
+            }
+            OutboundClass::Control => {
+                queues.queued_bytes = queues.queued_bytes.saturating_add(item.estimated_bytes);
+                queues.control.push_back(item);
+            }
+            OutboundClass::Audio => {
+                dropped += self.enqueue_audio_locked(&mut queues, item);
+            }
+            OutboundClass::Display => {
+                if let Some(old) = queues.display.replace(item) {
+                    queues.queued_bytes = queues.queued_bytes.saturating_sub(old.estimated_bytes);
+                    dropped += 1;
+                    self.stats.record_display_replaced();
+                }
+                if let Some(display) = queues.display.as_ref() {
+                    queues.queued_bytes =
+                        queues.queued_bytes.saturating_add(display.estimated_bytes);
+                }
+            }
+        }
+        self.stats.record_high_watermark(queues.queued_bytes);
+        dropped
+    }
+
+    fn enqueue_audio_locked(&self, queues: &mut OutboundQueues, item: QueuedOutbound) -> u64 {
+        let max_frames = max_audio_queued_frames(item.message.audio_sample_rate());
+        let mut dropped = 0;
+
+        if queues.audio_queued_frames >= max_frames && !queues.audio.is_empty() {
+            dropped += queues.audio.len() as u64;
+            self.stats.record_audio_panic_drain();
+            self.stats.record_audio_dropped(queues.audio.len() as u64);
+            queues.audio.clear();
+            queues.audio_queued_frames = 0;
+            queues.queued_bytes = queued_bytes_without_audio(queues);
+        }
+
+        while queues.audio_queued_frames.saturating_add(item.audio_frames) > max_frames {
+            if let Some(old) = queues.audio.pop_front() {
+                queues.audio_queued_frames =
+                    queues.audio_queued_frames.saturating_sub(old.audio_frames);
+                queues.queued_bytes = queues.queued_bytes.saturating_sub(old.estimated_bytes);
+                dropped += 1;
+                self.stats.record_audio_dropped(1);
+            } else {
+                break;
+            }
+        }
+
+        queues.audio_queued_frames = queues.audio_queued_frames.saturating_add(item.audio_frames);
+        queues.queued_bytes = queues.queued_bytes.saturating_add(item.estimated_bytes);
+        queues.audio.push_back(item);
+        dropped
+    }
+
+    fn next_message(&self, allow_bulk: bool) -> Option<QueuedOutbound> {
+        let mut queues = self.queues.lock().unwrap();
+        let item = if let Some(item) = queues.safety.pop_front() {
+            Some(item)
+        } else if let Some(item) = queues.control.pop_front() {
+            Some(item)
+        } else if allow_bulk {
+            if let Some(item) = queues.audio.pop_front() {
+                queues.audio_queued_frames =
+                    queues.audio_queued_frames.saturating_sub(item.audio_frames);
+                Some(item)
+            } else {
+                queues.display.take()
+            }
+        } else {
+            None
+        };
+        if let Some(item) = item.as_ref() {
+            queues.queued_bytes = queues.queued_bytes.saturating_sub(item.estimated_bytes);
+        }
+        item
+    }
+
+    fn requeue_front(&self, item: QueuedOutbound) {
+        let mut queues = self.queues.lock().unwrap();
+        queues.queued_bytes = queues.queued_bytes.saturating_add(item.estimated_bytes);
+        match item.class {
+            OutboundClass::Safety => queues.safety.push_front(item),
+            OutboundClass::Control => queues.control.push_front(item),
+            OutboundClass::Audio => {
+                queues.audio_queued_frames =
+                    queues.audio_queued_frames.saturating_add(item.audio_frames);
+                queues.audio.push_front(item);
+            }
+            OutboundClass::Display => {
+                if let Some(old) = queues.display.replace(item) {
+                    queues.queued_bytes = queues.queued_bytes.saturating_sub(old.estimated_bytes);
+                    self.stats.record_display_dropped();
+                }
+            }
+        }
+        self.stats.record_high_watermark(queues.queued_bytes);
+    }
+
+    fn record_bulk_send_drop(&self, class: OutboundClass) {
+        match class {
+            OutboundClass::Audio => self.stats.record_audio_dropped(1),
+            OutboundClass::Display => self.stats.record_display_dropped(),
+            OutboundClass::Safety | OutboundClass::Control => {}
+        }
+    }
+
+    fn record_write(&self, class: OutboundClass, latency: Duration) {
+        self.stats.record_write(class, latency);
+    }
+
+    fn record_send_blocked(&self, duration: Duration) {
+        self.stats.record_send_blocked(duration);
+    }
+
+    fn drain_stats(&self) -> ClientSchedulerStatsDelta {
+        self.stats.drain()
+    }
+}
+
+fn max_audio_queued_frames(sample_rate_hz: u32) -> usize {
+    let sample_rate = usize::try_from(sample_rate_hz.max(8_000)).unwrap_or(48_000);
+    (sample_rate / 4).max(1)
+}
+
+fn queued_bytes_without_audio(queues: &OutboundQueues) -> usize {
+    let safety = queues
+        .safety
+        .iter()
+        .map(|item| item.estimated_bytes)
+        .sum::<usize>();
+    let control = queues
+        .control
+        .iter()
+        .map(|item| item.estimated_bytes)
+        .sum::<usize>();
+    let display = queues
+        .display
+        .as_ref()
+        .map(|item| item.estimated_bytes)
+        .unwrap_or(0);
+    safety.saturating_add(control).saturating_add(display)
+}
+
+fn percentile_us(samples: &mut [u64], percentile: usize) -> u64 {
+    if samples.is_empty() {
+        return 0;
+    }
+    samples.sort_unstable();
+    let index = ((samples.len() - 1) * percentile.min(100)).div_ceil(100);
+    samples[index]
 }
 
 #[derive(Clone, Debug)]
@@ -133,6 +541,7 @@ struct ClientState {
     audio_sample_rate_hz: u32,
     audio_frame_float_count: u32,
     audio_channels: u32,
+    audio_seq_gap_count: u64,
 }
 
 impl Default for ClientState {
@@ -143,13 +552,14 @@ impl Default for ClientState {
             audio_sample_rate_hz: 48_000,
             audio_frame_float_count: 2048,
             audio_channels: 2,
+            audio_seq_gap_count: 0,
         }
     }
 }
 
 #[derive(Clone)]
 struct ClientConnection {
-    sender: SyncSender<OutboundMessage>,
+    outbound: Arc<ClientOutbound>,
     state: ClientState,
 }
 
@@ -197,6 +607,20 @@ pub struct TciClientSnapshot {
     pub iq_stream_enabled: bool,
     pub audio_stream_enabled: bool,
     pub outbound_drops: u64,
+    pub safety_enqueue_to_write_p50_us: u64,
+    pub safety_enqueue_to_write_p95_us: u64,
+    pub safety_enqueue_to_write_p99_us: u64,
+    pub control_enqueue_to_write_p50_us: u64,
+    pub control_enqueue_to_write_p95_us: u64,
+    pub control_enqueue_to_write_p99_us: u64,
+    pub display_replaced_per_sec: u64,
+    pub display_dropped_per_sec: u64,
+    pub audio_dropped_per_sec: u64,
+    pub audio_seq_gap_count: u64,
+    pub audio_panic_drain_count: u64,
+    pub send_blocked_ms: u64,
+    pub outbound_high_watermark_bytes: u64,
+    pub safety_queue_depth_overflow_count: u64,
 }
 
 struct JoinGuard {
@@ -219,6 +643,7 @@ impl TciFrontend {
         let client_registry = clients.clone();
         let next_client = next_client_id.clone();
         let operator_client = operator_client_id.clone();
+        let drop_counter = drop_count.clone();
         let radio_model = radio_model.clone();
         let handle = thread::spawn(move || loop {
             match listener.accept() {
@@ -231,6 +656,7 @@ impl TciFrontend {
                     let command_tx = command_tx.clone();
                     let clients = client_registry.clone();
                     let operator_client_id = operator_client.clone();
+                    let drop_count = drop_counter.clone();
                     let radio_model = radio_model.clone();
 
                     thread::spawn(move || {
@@ -242,6 +668,7 @@ impl TciFrontend {
                             &clients,
                             &operator_client_id,
                             &radio_model,
+                            &drop_count,
                             remote_tx_rf_enabled,
                         );
                     });
@@ -272,6 +699,33 @@ impl TciFrontend {
 
     pub fn client_snapshot(&self) -> TciClientSnapshot {
         let clients = self.clients.lock().unwrap();
+        let mut safety_latencies_us = Vec::new();
+        let mut control_latencies_us = Vec::new();
+        let mut display_replaced_per_sec = 0u64;
+        let mut display_dropped_per_sec = 0u64;
+        let mut audio_dropped_per_sec = 0u64;
+        let mut audio_panic_drain_count = 0u64;
+        let mut send_blocked_ms = 0u64;
+        let mut outbound_high_watermark_bytes = 0u64;
+        let mut safety_queue_depth_overflow_count = 0u64;
+
+        for client in clients.values() {
+            let delta = client.outbound.drain_stats();
+            safety_latencies_us.extend(delta.safety_latencies_us);
+            control_latencies_us.extend(delta.control_latencies_us);
+            display_replaced_per_sec =
+                display_replaced_per_sec.saturating_add(delta.display_replaced);
+            display_dropped_per_sec = display_dropped_per_sec.saturating_add(delta.display_dropped);
+            audio_dropped_per_sec = audio_dropped_per_sec.saturating_add(delta.audio_dropped);
+            audio_panic_drain_count =
+                audio_panic_drain_count.saturating_add(delta.audio_panic_drain);
+            send_blocked_ms = send_blocked_ms.saturating_add(delta.send_blocked_ms);
+            outbound_high_watermark_bytes =
+                outbound_high_watermark_bytes.max(delta.outbound_high_watermark_bytes);
+            safety_queue_depth_overflow_count =
+                safety_queue_depth_overflow_count.saturating_add(delta.safety_queue_depth_overflow);
+        }
+
         TciClientSnapshot {
             active: !clients.is_empty(),
             iq_stream_enabled: clients
@@ -281,6 +735,23 @@ impl TciFrontend {
                 .values()
                 .any(|client| client.state.audio_stream_enabled),
             outbound_drops: self.drop_count.load(Ordering::Relaxed),
+            safety_enqueue_to_write_p50_us: percentile_us(&mut safety_latencies_us, 50),
+            safety_enqueue_to_write_p95_us: percentile_us(&mut safety_latencies_us, 95),
+            safety_enqueue_to_write_p99_us: percentile_us(&mut safety_latencies_us, 99),
+            control_enqueue_to_write_p50_us: percentile_us(&mut control_latencies_us, 50),
+            control_enqueue_to_write_p95_us: percentile_us(&mut control_latencies_us, 95),
+            control_enqueue_to_write_p99_us: percentile_us(&mut control_latencies_us, 99),
+            display_replaced_per_sec,
+            display_dropped_per_sec,
+            audio_dropped_per_sec,
+            audio_seq_gap_count: clients
+                .values()
+                .map(|client| client.state.audio_seq_gap_count)
+                .sum(),
+            audio_panic_drain_count,
+            send_blocked_ms,
+            outbound_high_watermark_bytes,
+            safety_queue_depth_overflow_count,
         }
     }
 
@@ -440,6 +911,26 @@ impl TciFrontend {
         }
     }
 
+    pub fn publish_scheduler_telemetry(&self, snapshot: &TciClientSnapshot) {
+        self.send_text(format!(
+            "remote_backpressure:0,{},{},{},{},{},{},{},{},{},{},{},{},{},{};",
+            snapshot.safety_enqueue_to_write_p50_us,
+            snapshot.safety_enqueue_to_write_p95_us,
+            snapshot.safety_enqueue_to_write_p99_us,
+            snapshot.control_enqueue_to_write_p50_us,
+            snapshot.control_enqueue_to_write_p95_us,
+            snapshot.control_enqueue_to_write_p99_us,
+            snapshot.display_replaced_per_sec,
+            snapshot.display_dropped_per_sec,
+            snapshot.audio_dropped_per_sec,
+            snapshot.audio_seq_gap_count,
+            snapshot.audio_panic_drain_count,
+            snapshot.send_blocked_ms,
+            snapshot.outbound_high_watermark_bytes,
+            snapshot.safety_queue_depth_overflow_count
+        ));
+    }
+
     pub fn publish_saturn_pong(&self, client_id: u64, nonce: &str, sent_at: &str) {
         self.send_text_to(client_id, format!("saturn_pong:{nonce},{sent_at};"));
     }
@@ -490,6 +981,7 @@ impl TciFrontend {
             receiver: 0,
             sample_rate: sample_rate_hz,
             audio_samples: audio_samples.to_vec(),
+            sequence: 0,
         });
     }
 
@@ -518,20 +1010,15 @@ impl TciFrontend {
     }
 
     fn send_message_to(&self, client_id: u64, message: OutboundMessage) {
-        if let Some(sender) = self
+        if let Some(outbound) = self
             .clients
             .lock()
             .unwrap()
             .get(&client_id)
-            .map(|client| client.sender.clone())
+            .map(|client| client.outbound.clone())
         {
-            match sender.try_send(message) {
-                Ok(()) => {}
-                Err(TrySendError::Full(_)) => {
-                    self.drop_count.fetch_add(1, Ordering::Relaxed);
-                }
-                Err(TrySendError::Disconnected(_)) => {}
-            }
+            let drops = outbound.enqueue(message);
+            self.drop_count.fetch_add(drops, Ordering::Relaxed);
         }
     }
 
@@ -541,13 +1028,8 @@ impl TciFrontend {
             if !client_wants_outbound_message(client, &message) {
                 continue;
             }
-            match client.sender.try_send(message.clone()) {
-                Ok(()) => {}
-                Err(TrySendError::Full(_)) => {
-                    self.drop_count.fetch_add(1, Ordering::Relaxed);
-                }
-                Err(TrySendError::Disconnected(_)) => {}
-            }
+            let drops = client.outbound.enqueue(message.clone());
+            self.drop_count.fetch_add(drops, Ordering::Relaxed);
         }
     }
 }
@@ -570,14 +1052,15 @@ fn handle_client(
     clients: &ClientRegistry,
     operator_client_id: &Arc<AtomicU64>,
     radio_model: &Arc<Mutex<RadioModel>>,
+    drop_count: &Arc<AtomicU64>,
     remote_tx_rf_enabled: bool,
 ) {
     let _ = stream.set_nonblocking(true);
     match accept_with_config(stream, Some(tci_websocket_config())) {
         Ok(mut websocket) => {
-            let (client_tx, client_rx) = mpsc::sync_channel::<OutboundMessage>(256);
+            let outbound = ClientOutbound::new();
             let (role, first_client, client_count) =
-                register_client(clients, operator_client_id, client_id, client_tx.clone());
+                register_client(clients, operator_client_id, client_id, outbound.clone());
             println!(
                 "saturn-bridge: TCI client {client_id} assigned {} role ({client_count} connected)",
                 role.as_tci()
@@ -589,13 +1072,16 @@ fn handle_client(
                 client_id,
                 role,
             ) {
-                let _ = client_tx.send(OutboundMessage::Text(message));
+                let drops = outbound.enqueue(OutboundMessage::Text(message));
+                drop_count.fetch_add(drops, Ordering::Relaxed);
             }
+            outbound.mark_writer_started();
 
             if first_client {
                 let _ = command_tx.send(TciCommand::ClientConnected);
             }
 
+            let mut bulk_pause_until: Option<Instant> = None;
             loop {
                 let mut pending_flush = false;
                 let mut client_closed = false;
@@ -634,34 +1120,55 @@ fn handle_client(
                 }
 
                 loop {
-                    match client_rx.try_recv() {
-                        Ok(message) => {
-                            match send_outbound(&mut websocket, message) {
-                                Ok(()) => {
-                                    pending_flush = true;
-                                }
-                                Err(WsError::Io(error))
-                                    if error.kind() == io::ErrorKind::WouldBlock =>
-                                {
-                                    pending_flush = true;
-                                    break;
-                                }
-                                Err(error) => {
-                                    eprintln!("saturn-bridge: TCI websocket send error to {addr}: {error}");
-                                    pending_flush = true;
-                                    break;
-                                }
-                            }
+                    let allow_bulk = bulk_pause_until
+                        .map(|until| Instant::now() >= until)
+                        .unwrap_or(true);
+                    let Some(item) = outbound.next_message(allow_bulk) else {
+                        break;
+                    };
+                    match send_outbound(&mut websocket, &item.message) {
+                        Ok(()) => {
+                            outbound.record_write(item.class, item.enqueued_at.elapsed());
+                            pending_flush = true;
                         }
-                        Err(TryRecvError::Empty) => break,
-                        Err(TryRecvError::Disconnected) => break,
+                        Err(WsError::Io(error)) if error.kind() == io::ErrorKind::WouldBlock => {
+                            pending_flush = true;
+                            outbound.record_send_blocked(Duration::from_millis(2));
+                            bulk_pause_until = Some(Instant::now() + Duration::from_millis(10));
+                            if item.class.is_never_drop() {
+                                outbound.requeue_front(item);
+                            } else {
+                                outbound.record_bulk_send_drop(item.class);
+                                drop_count.fetch_add(1, Ordering::Relaxed);
+                            }
+                            break;
+                        }
+                        Err(error) => {
+                            eprintln!("saturn-bridge: TCI websocket send error to {addr}: {error}");
+                            pending_flush = true;
+                            client_closed = true;
+                            break;
+                        }
                     }
+                }
+                if client_closed {
+                    break;
                 }
 
                 if pending_flush {
                     match websocket.flush() {
-                        Ok(()) => {}
-                        Err(WsError::Io(error)) if error.kind() == io::ErrorKind::WouldBlock => {}
+                        Ok(()) => {
+                            if bulk_pause_until
+                                .map(|until| Instant::now() >= until)
+                                .unwrap_or(false)
+                            {
+                                bulk_pause_until = None;
+                            }
+                        }
+                        Err(WsError::Io(error)) if error.kind() == io::ErrorKind::WouldBlock => {
+                            outbound.record_send_blocked(Duration::from_millis(2));
+                            bulk_pause_until = Some(Instant::now() + Duration::from_millis(10));
+                        }
                         Err(WsError::ConnectionClosed) | Err(WsError::AlreadyClosed) => break,
                         Err(error) => {
                             eprintln!(
@@ -711,14 +1218,14 @@ fn register_client(
     clients: &ClientRegistry,
     operator_client_id: &Arc<AtomicU64>,
     client_id: u64,
-    sender: SyncSender<OutboundMessage>,
+    outbound: Arc<ClientOutbound>,
 ) -> (TciClientRole, bool, usize) {
     let mut clients = clients.lock().unwrap();
     let first_client = clients.is_empty();
     clients.insert(
         client_id,
         ClientConnection {
-            sender,
+            outbound,
             state: ClientState::default(),
         },
     );
@@ -765,13 +1272,13 @@ fn send_role_to_client(
     role: TciClientRole,
     log_message: &str,
 ) {
-    if let Some(sender) = clients
+    if let Some(outbound) = clients
         .lock()
         .unwrap()
         .get(&client_id)
-        .map(|client| client.sender.clone())
+        .map(|client| client.outbound.clone())
     {
-        let _ = sender.try_send(OutboundMessage::Text(remote_client_role_message(
+        let _ = outbound.enqueue(OutboundMessage::Text(remote_client_role_message(
             client_id, role,
         )));
         println!("{log_message}");
@@ -1177,6 +1684,18 @@ fn parse_tci_command(
                 if let Ok(channels) = channel_text.trim().parse::<u32>() {
                     set_client_audio_channels(clients, client_id, channels);
                     let _ = command_tx.send(TciCommand::SetAudioChannels(channels));
+                }
+            }
+        }
+        "audio_seq_gap_count" => {
+            let gap_arg = if args.len() >= 2 {
+                args.get(1)
+            } else {
+                args.first()
+            };
+            if let Some(gap_text) = gap_arg {
+                if let Ok(gaps) = gap_text.trim().parse::<u64>() {
+                    set_client_audio_seq_gap_count(clients, client_id, gaps);
                 }
             }
         }
@@ -1604,6 +2123,7 @@ fn viewer_tci_command_allowed(name: &str) -> bool {
             | "audio_samplerate"
             | "audio_stream_samples"
             | "audio_stream_channels"
+            | "audio_seq_gap_count"
             | "audio_stream_sample_type"
             | "rx_smeter"
             | "s_meter"
@@ -1650,6 +2170,12 @@ fn set_client_audio_frame_float_count(clients: &ClientRegistry, client_id: u64, 
 fn set_client_audio_channels(clients: &ClientRegistry, client_id: u64, channels: u32) {
     if let Some(client) = clients.lock().unwrap().get_mut(&client_id) {
         client.state.audio_channels = channels;
+    }
+}
+
+fn set_client_audio_seq_gap_count(clients: &ClientRegistry, client_id: u64, gaps: u64) {
+    if let Some(client) = clients.lock().unwrap().get_mut(&client_id) {
+        client.state.audio_seq_gap_count = gaps;
     }
 }
 
@@ -1705,50 +2231,57 @@ fn tci_websocket_config() -> WebSocketConfig {
 
 fn send_outbound(
     websocket: &mut tungstenite::WebSocket<std::net::TcpStream>,
-    message: OutboundMessage,
+    message: &OutboundMessage,
 ) -> Result<(), WsError> {
     match message {
-        OutboundMessage::Text(text) => websocket.send(Message::Text(text)),
+        OutboundMessage::Text(text) => websocket.send(Message::Text(text.clone())),
         OutboundMessage::IqFrame {
             receiver,
             sample_rate,
             iq_samples,
         } => websocket.send(Message::Binary(build_tci_iq_frame(
-            receiver,
-            sample_rate,
-            &iq_samples,
+            *receiver,
+            *sample_rate,
+            iq_samples,
         ))),
         OutboundMessage::TxIqFrame {
             receiver,
             sample_rate,
             iq_samples,
         } => websocket.send(Message::Binary(build_tci_tx_iq_frame(
-            receiver,
-            sample_rate,
-            &iq_samples,
+            *receiver,
+            *sample_rate,
+            iq_samples,
         ))),
         OutboundMessage::AudioFrame {
             receiver,
             sample_rate,
             audio_samples,
+            sequence,
         } => websocket.send(Message::Binary(build_tci_audio_frame(
-            receiver,
-            sample_rate,
-            &audio_samples,
+            *receiver,
+            *sample_rate,
+            audio_samples,
+            *sequence,
         ))),
     }
 }
 
 fn build_tci_iq_frame(receiver: u32, sample_rate: u32, iq_samples: &[f32]) -> Vec<u8> {
-    build_tci_float_frame(receiver, sample_rate, iq_samples, 0, 2)
+    build_tci_float_frame(receiver, sample_rate, iq_samples, 0, 2, 0)
 }
 
 fn build_tci_tx_iq_frame(receiver: u32, sample_rate: u32, iq_samples: &[f32]) -> Vec<u8> {
-    build_tci_float_frame(receiver, sample_rate, iq_samples, 3, 2)
+    build_tci_float_frame(receiver, sample_rate, iq_samples, 3, 2, 0)
 }
 
-fn build_tci_audio_frame(receiver: u32, sample_rate: u32, audio_samples: &[f32]) -> Vec<u8> {
-    build_tci_float_frame(receiver, sample_rate, audio_samples, 1, 2)
+fn build_tci_audio_frame(
+    receiver: u32,
+    sample_rate: u32,
+    audio_samples: &[f32],
+    sequence: u32,
+) -> Vec<u8> {
+    build_tci_float_frame(receiver, sample_rate, audio_samples, 1, 2, sequence)
 }
 
 fn build_tci_float_frame(
@@ -1757,6 +2290,7 @@ fn build_tci_float_frame(
     samples: &[f32],
     stream_type: u32,
     channels: u32,
+    sequence: u32,
 ) -> Vec<u8> {
     let mut frame = vec![0u8; 64 + samples.len() * 4];
     write_u32_le(&mut frame, 0, receiver);
@@ -1767,6 +2301,7 @@ fn build_tci_float_frame(
     write_u32_le(&mut frame, 20, samples.len() as u32);
     write_u32_le(&mut frame, 24, stream_type);
     write_u32_le(&mut frame, 28, channels);
+    write_u32_le(&mut frame, 32, sequence);
 
     for (index, value) in samples.iter().enumerate() {
         let offset = 64 + index * 4;
@@ -1837,12 +2372,11 @@ mod tests {
     use super::*;
 
     fn test_client_registry(client_id: u64) -> ClientRegistry {
-        let (sender, _receiver) = mpsc::sync_channel(1);
         let mut clients = BTreeMap::new();
         clients.insert(
             client_id,
             ClientConnection {
-                sender,
+                outbound: ClientOutbound::new(),
                 state: ClientState::default(),
             },
         );
@@ -1868,11 +2402,93 @@ mod tests {
 
     #[test]
     fn builds_audio_frame_with_expected_header() {
-        let frame = build_tci_audio_frame(0, 48_000, &[0.25, -0.25, 0.5, -0.5]);
+        let frame = build_tci_audio_frame(0, 48_000, &[0.25, -0.25, 0.5, -0.5], 7);
         assert_eq!(frame.len(), 64 + 16);
         assert_eq!(u32::from_le_bytes(frame[4..8].try_into().unwrap()), 48_000);
         assert_eq!(u32::from_le_bytes(frame[24..28].try_into().unwrap()), 1);
         assert_eq!(u32::from_le_bytes(frame[28..32].try_into().unwrap()), 2);
+        assert_eq!(u32::from_le_bytes(frame[32..36].try_into().unwrap()), 7);
+    }
+
+    #[test]
+    fn outbound_scheduler_prioritizes_safety_and_control_over_display() {
+        let outbound = ClientOutbound::new();
+        outbound.enqueue(OutboundMessage::IqFrame {
+            receiver: 0,
+            sample_rate: 192_000,
+            iq_samples: vec![0.0, 0.0],
+        });
+        outbound.enqueue(OutboundMessage::Text("rx_smeter:0,0,-110.0;".to_string()));
+        outbound.enqueue(OutboundMessage::Text(
+            "tx_fault:0,power_trip,126.3,110.0;".to_string(),
+        ));
+
+        let safety = outbound.next_message(true).unwrap();
+        assert_eq!(safety.class, OutboundClass::Safety);
+        let control = outbound.next_message(true).unwrap();
+        assert_eq!(control.class, OutboundClass::Control);
+        let display = outbound.next_message(true).unwrap();
+        assert_eq!(display.class, OutboundClass::Display);
+    }
+
+    #[test]
+    fn outbound_scheduler_replaces_display_depth_one() {
+        let outbound = ClientOutbound::new();
+        assert_eq!(
+            outbound.enqueue(OutboundMessage::IqFrame {
+                receiver: 0,
+                sample_rate: 48_000,
+                iq_samples: vec![1.0, 2.0],
+            }),
+            0
+        );
+        assert_eq!(
+            outbound.enqueue(OutboundMessage::IqFrame {
+                receiver: 0,
+                sample_rate: 96_000,
+                iq_samples: vec![3.0, 4.0],
+            }),
+            1
+        );
+        let item = outbound.next_message(true).unwrap();
+        match item.message {
+            OutboundMessage::IqFrame { sample_rate, .. } => assert_eq!(sample_rate, 96_000),
+            _ => panic!("expected display frame"),
+        }
+        let delta = outbound.drain_stats();
+        assert_eq!(delta.display_replaced, 1);
+    }
+
+    #[test]
+    fn outbound_scheduler_panic_drains_stale_audio() {
+        let outbound = ClientOutbound::new();
+        let audio = vec![0.0; max_audio_queued_frames(8_000) * 2];
+        assert_eq!(
+            outbound.enqueue(OutboundMessage::AudioFrame {
+                receiver: 0,
+                sample_rate: 8_000,
+                audio_samples: audio.clone(),
+                sequence: 0,
+            }),
+            0
+        );
+        assert_eq!(
+            outbound.enqueue(OutboundMessage::AudioFrame {
+                receiver: 0,
+                sample_rate: 8_000,
+                audio_samples: audio,
+                sequence: 0,
+            }),
+            1
+        );
+        let item = outbound.next_message(true).unwrap();
+        match item.message {
+            OutboundMessage::AudioFrame { sequence, .. } => assert_eq!(sequence, 2),
+            _ => panic!("expected audio frame"),
+        }
+        let delta = outbound.drain_stats();
+        assert_eq!(delta.audio_panic_drain, 1);
+        assert_eq!(delta.audio_dropped, 1);
     }
 
     #[test]
@@ -1999,16 +2615,27 @@ mod tests {
                 .state
                 .iq_stream_enabled
         );
+
+        parse_tci_command("audio_seq_gap_count:0,4", &tx, &clients, 9, false);
+        assert_eq!(
+            clients
+                .lock()
+                .unwrap()
+                .get(&9)
+                .unwrap()
+                .state
+                .audio_seq_gap_count,
+            4
+        );
     }
 
     #[test]
     fn operator_disconnect_promotes_oldest_viewer() {
         let clients = test_client_registry(1);
-        let (sender, _receiver) = mpsc::sync_channel(1);
         clients.lock().unwrap().insert(
             2,
             ClientConnection {
-                sender,
+                outbound: ClientOutbound::new(),
                 state: ClientState::default(),
             },
         );
