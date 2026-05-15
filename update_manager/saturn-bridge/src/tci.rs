@@ -113,6 +113,7 @@ pub enum TciCommand {
 #[derive(Clone, Debug)]
 enum OutboundMessage {
     Text(String),
+    SafetyText(String),
     IqFrame {
         receiver: u32,
         sample_rate: u32,
@@ -153,7 +154,7 @@ impl OutboundClass {
 impl OutboundMessage {
     fn class(&self) -> OutboundClass {
         match self {
-            Self::Text(text) if is_safety_text_message(text) => OutboundClass::Safety,
+            Self::SafetyText(_) => OutboundClass::Safety,
             Self::Text(_) => OutboundClass::Control,
             Self::AudioFrame { .. } => OutboundClass::Audio,
             Self::IqFrame { .. } | Self::TxIqFrame { .. } => OutboundClass::Display,
@@ -162,7 +163,7 @@ impl OutboundMessage {
 
     fn estimated_bytes(&self) -> usize {
         match self {
-            Self::Text(text) => text.len(),
+            Self::Text(text) | Self::SafetyText(text) => text.len(),
             Self::IqFrame { iq_samples, .. } | Self::TxIqFrame { iq_samples, .. } => {
                 64 + iq_samples.len() * std::mem::size_of::<f32>()
             }
@@ -200,12 +201,6 @@ impl OutboundMessage {
         }
         self
     }
-}
-
-fn is_safety_text_message(text: &str) -> bool {
-    text.starts_with("tx_fault:")
-        || text.starts_with("remote_tx_rf_enabled:")
-        || text.starts_with("remote_client_role:")
 }
 
 #[derive(Clone, Debug)]
@@ -1046,7 +1041,7 @@ impl TciFrontend {
     }
 
     pub fn publish_tx_power_trip(&self, forward_watts: f32, limit_watts: f32) {
-        self.send_text(tx_power_trip_fault_message(forward_watts, limit_watts));
+        self.send_safety_text(tx_power_trip_fault_message(forward_watts, limit_watts));
     }
 
     pub fn publish_iq_frame(&self, sample_rate_hz: u32, iq_samples: &[f32]) {
@@ -1160,6 +1155,10 @@ impl TciFrontend {
         self.send_message(OutboundMessage::Text(text));
     }
 
+    fn send_safety_text(&self, text: String) {
+        self.send_message(OutboundMessage::SafetyText(text));
+    }
+
     fn send_text_to(&self, client_id: u64, text: String) {
         self.send_message_to(client_id, OutboundMessage::Text(text));
     }
@@ -1191,7 +1190,7 @@ impl TciFrontend {
 
 fn client_wants_outbound_message(client: &ClientConnection, message: &OutboundMessage) -> bool {
     match message {
-        OutboundMessage::Text(_) => true,
+        OutboundMessage::Text(_) | OutboundMessage::SafetyText(_) => true,
         OutboundMessage::IqFrame { .. } | OutboundMessage::TxIqFrame { .. } => {
             client.state.iq_stream_enabled
         }
@@ -1449,7 +1448,7 @@ fn send_role_to_client(
         .get(&client_id)
         .map(|client| client.outbound.clone())
     {
-        let _ = outbound.enqueue(OutboundMessage::Text(remote_client_role_message(
+        let _ = outbound.enqueue(OutboundMessage::SafetyText(remote_client_role_message(
             client_id, role,
         )));
         println!("{log_message}");
@@ -2425,7 +2424,9 @@ fn send_outbound(
     message: &OutboundMessage,
 ) -> Result<(), WsError> {
     match message {
-        OutboundMessage::Text(text) => websocket.send(Message::Text(text.clone())),
+        OutboundMessage::Text(text) | OutboundMessage::SafetyText(text) => {
+            websocket.send(Message::Text(text.clone()))
+        }
         OutboundMessage::IqFrame {
             receiver,
             sample_rate,
@@ -2623,7 +2624,7 @@ mod tests {
             iq_samples: vec![0.0, 0.0],
         });
         outbound.enqueue(OutboundMessage::Text("rx_smeter:0,0,-110.0;".to_string()));
-        outbound.enqueue(OutboundMessage::Text(
+        outbound.enqueue(OutboundMessage::SafetyText(
             "tx_fault:0,power_trip,126.3,110.0;".to_string(),
         ));
 
@@ -2633,6 +2634,18 @@ mod tests {
         assert_eq!(control.class, OutboundClass::Control);
         let display = outbound.next_message(true).unwrap();
         assert_eq!(display.class, OutboundClass::Display);
+    }
+
+    #[test]
+    fn outbound_scheduler_treats_snapshot_rf_state_as_control() {
+        assert_eq!(
+            OutboundMessage::Text("remote_tx_rf_enabled:0,false;".to_string()).class(),
+            OutboundClass::Control
+        );
+        assert_eq!(
+            OutboundMessage::SafetyText("remote_tx_rf_enabled:0,false;".to_string()).class(),
+            OutboundClass::Safety
+        );
     }
 
     #[test]
