@@ -19,6 +19,22 @@ function makeSource() {
     audioFramesPlayed: s.audioFramesPlayed,
     audioBackpressureDrops: s.audioBackpressureDrops,
     rxWorkletDrops: s.rxWorkletDrops,
+    bridgeRttMs: s.bridgeRttMs,
+    backpressureSafetyP50Us: s.backpressureSafetyP50Us,
+    backpressureSafetyP95Us: s.backpressureSafetyP95Us,
+    backpressureSafetyP99Us: s.backpressureSafetyP99Us,
+    backpressureControlP50Us: s.backpressureControlP50Us,
+    backpressureControlP95Us: s.backpressureControlP95Us,
+    backpressureControlP99Us: s.backpressureControlP99Us,
+    displayReplacedPerSec: s.displayReplacedPerSec,
+    displayDroppedPerSec: s.displayDroppedPerSec,
+    bridgeAudioDroppedPerSec: s.bridgeAudioDroppedPerSec,
+    bridgeAudioSeqGapCount: s.bridgeAudioSeqGapCount,
+    audioSeqGapCount: s.audioSeqGapCount,
+    audioPanicDrainCount: s.audioPanicDrainCount,
+    sendBlockedMs: s.sendBlockedMs,
+    outboundHighWatermarkBytes: s.outboundHighWatermarkBytes,
+    safetyQueueDepthOverflowCount: s.safetyQueueDepthOverflowCount,
     lastFrameAt: s.lastFrameAt,
     lastSpectrumRenderAt: s.lastSpectrumRenderAt,
     waterfallSettleFrames: s.waterfallSettleFrames,
@@ -36,6 +52,10 @@ describe('buildPerfSnapshot', () => {
     expect(snap.displayZoom).toBe(1);
     expect(snap.iqPackets).toBe(0);
     expect(snap.fftWidth).toBe(1024);
+    expect(snap.bridgeRttMs).toBeNull();
+    expect(snap.backpressureSafetyP99Us).toBe(0);
+    expect(snap.backpressureControlP99Us).toBe(0);
+    expect(snap.outboundHighWatermarkBytes).toBe(0);
     expect(snap.iqIdleMs).toBe(1000);
     expect(snap.wallTime).toBeTruthy();
   });
@@ -64,6 +84,18 @@ describe('buildPerfSummary', () => {
     source2.frameRate = 30;
     source2.audioBackpressureDrops = 2;
     source2.rxWorkletDrops = 1;
+    source2.bridgeRttMs = 23;
+    source2.backpressureSafetyP99Us = 4000;
+    source2.backpressureControlP99Us = 9000;
+    source2.displayReplacedPerSec = 5;
+    source2.displayDroppedPerSec = 1;
+    source2.bridgeAudioDroppedPerSec = 2;
+    source2.bridgeAudioSeqGapCount = 3;
+    source2.audioSeqGapCount = 4;
+    source2.audioPanicDrainCount = 1;
+    source2.sendBlockedMs = 8;
+    source2.outboundHighWatermarkBytes = 12000;
+    source2.safetyQueueDepthOverflowCount = 0;
     const s2 = buildPerfSnapshot(source2, 2000);
 
     const summary = buildPerfSummary([s1, s2], s2);
@@ -71,6 +103,18 @@ describe('buildPerfSummary', () => {
     expect(summary.avgFrameRate).toBe(15);
     expect(summary.maxFrameRate).toBe(30);
     expect(summary.minFrameRate).toBe(0);
+    expect(summary.maxBridgeRttMs).toBe(23);
+    expect(summary.maxBackpressureSafetyP99Us).toBe(4000);
+    expect(summary.maxBackpressureControlP99Us).toBe(9000);
+    expect(summary.totalDisplayReplaced).toBe(5);
+    expect(summary.totalDisplayDropped).toBe(1);
+    expect(summary.totalBridgeAudioDropped).toBe(2);
+    expect(summary.finalBridgeAudioSeqGapCount).toBe(3);
+    expect(summary.finalAudioSeqGapCount).toBe(4);
+    expect(summary.totalAudioPanicDrainCount).toBe(1);
+    expect(summary.totalSendBlockedMs).toBe(8);
+    expect(summary.maxOutboundHighWatermarkBytes).toBe(12000);
+    expect(summary.totalSafetyQueueDepthOverflowCount).toBe(0);
     expect(summary.finalAudioBackpressureDrops).toBe(2);
     expect(summary.finalRxWorkletDrops).toBe(1);
     expect(summary.finalSnapshot).toEqual(s2);
