@@ -126,6 +126,7 @@ enum OutboundMessage {
     AudioFrame {
         receiver: u32,
         sample_rate: u32,
+        channels: u32,
         audio_samples: Vec<f32>,
         sequence: u32,
     },
@@ -173,7 +174,11 @@ impl OutboundMessage {
 
     fn audio_frame_count(&self) -> usize {
         match self {
-            Self::AudioFrame { audio_samples, .. } => audio_samples.len() / 2,
+            Self::AudioFrame {
+                audio_samples,
+                channels,
+                ..
+            } => audio_samples.len() / usize::try_from((*channels).max(1)).unwrap_or(2),
             _ => 0,
         }
     }
@@ -522,6 +527,56 @@ fn max_audio_queued_frames(sample_rate_hz: u32) -> usize {
     (sample_rate / 4).max(1)
 }
 
+fn shape_rx_audio_for_transport(
+    samples: &[f32],
+    source_rate_hz: u32,
+    source_channels: u32,
+    target_rate_hz: u32,
+    target_channels: u32,
+) -> (u32, u32, Vec<f32>) {
+    let source_channels = usize::try_from(source_channels.clamp(1, 2)).unwrap_or(2);
+    let target_channels = usize::try_from(target_channels.clamp(1, 2)).unwrap_or(2);
+    let source_rate_hz = source_rate_hz.clamp(8_000, 48_000);
+    let target_rate_hz = target_rate_hz.clamp(8_000, source_rate_hz);
+    let source_frames = samples.len() / source_channels;
+    if source_frames == 0 {
+        return (target_rate_hz, target_channels as u32, Vec::new());
+    }
+
+    if source_rate_hz == target_rate_hz && source_channels == target_channels {
+        return (target_rate_hz, target_channels as u32, samples.to_vec());
+    }
+
+    let target_frames =
+        ((source_frames as u64 * target_rate_hz as u64) / source_rate_hz as u64).max(1) as usize;
+    let mut output = Vec::with_capacity(target_frames * target_channels);
+    for frame in 0..target_frames {
+        let src = (frame as f64 * source_rate_hz as f64) / target_rate_hz as f64;
+        let lo = src.floor() as usize;
+        let hi = (lo + 1).min(source_frames - 1);
+        let frac = (src - lo as f64) as f32;
+        let left_lo = samples[lo * source_channels];
+        let left_hi = samples[hi * source_channels];
+        let left = left_lo + (left_hi - left_lo) * frac;
+        let right = if source_channels > 1 {
+            let right_lo = samples[lo * source_channels + 1];
+            let right_hi = samples[hi * source_channels + 1];
+            right_lo + (right_hi - right_lo) * frac
+        } else {
+            left
+        };
+
+        if target_channels == 1 {
+            output.push((left + right) * 0.5);
+        } else {
+            output.push(left);
+            output.push(right);
+        }
+    }
+
+    (target_rate_hz, target_channels as u32, output)
+}
+
 fn display_frame_interval_for_limit(limit_hz: u16) -> Duration {
     if limit_hz == 0 {
         Duration::ZERO
@@ -635,6 +690,8 @@ pub struct TciFrontend {
     remote_tx_rf_enabled: bool,
     display_frame_interval: Duration,
     last_display_frame_at: Mutex<Option<Instant>>,
+    rx_audio_transport_rate_hz: u32,
+    rx_audio_transport_channels: u32,
     _accept_thread: JoinGuard,
 }
 
@@ -731,6 +788,8 @@ impl TciFrontend {
             remote_tx_rf_enabled,
             display_frame_interval: display_frame_interval_for_limit(config.display_frame_limit_hz),
             last_display_frame_at: Mutex::new(None),
+            rx_audio_transport_rate_hz: config.rx_audio_transport_rate_hz,
+            rx_audio_transport_channels: config.rx_audio_transport_channels.clamp(1, 2),
             _accept_thread: JoinGuard { handle },
         })
     }
@@ -1026,7 +1085,10 @@ impl TciFrontend {
 
     pub fn publish_audio_started(&self, sample_rate_hz: u32) {
         self.send_text("audio_start:0;".to_string());
-        self.send_text(format!("audio_samplerate:{sample_rate_hz};"));
+        self.send_text(format!(
+            "audio_samplerate:{};",
+            self.audio_transport_sample_rate(sample_rate_hz)
+        ));
     }
 
     pub fn publish_audio_stopped(&self) {
@@ -1038,12 +1100,27 @@ impl TciFrontend {
             return;
         }
 
+        let (transport_rate_hz, transport_channels, transport_samples) =
+            shape_rx_audio_for_transport(
+                audio_samples,
+                sample_rate_hz,
+                2,
+                self.audio_transport_sample_rate(sample_rate_hz),
+                self.rx_audio_transport_channels,
+            );
+
         self.send_message(OutboundMessage::AudioFrame {
             receiver: 0,
-            sample_rate: sample_rate_hz,
-            audio_samples: audio_samples.to_vec(),
+            sample_rate: transport_rate_hz,
+            channels: transport_channels,
+            audio_samples: transport_samples,
             sequence: 0,
         });
+    }
+
+    fn audio_transport_sample_rate(&self, source_rate_hz: u32) -> u32 {
+        self.rx_audio_transport_rate_hz
+            .clamp(8_000, source_rate_hz.max(8_000).min(48_000))
     }
 
     fn is_iq_stream_enabled(&self) -> bool {
@@ -2370,11 +2447,13 @@ fn send_outbound(
         OutboundMessage::AudioFrame {
             receiver,
             sample_rate,
+            channels,
             audio_samples,
             sequence,
         } => websocket.send(Message::Binary(build_tci_audio_frame(
             *receiver,
             *sample_rate,
+            *channels,
             audio_samples,
             *sequence,
         ))),
@@ -2392,10 +2471,11 @@ fn build_tci_tx_iq_frame(receiver: u32, sample_rate: u32, iq_samples: &[f32]) ->
 fn build_tci_audio_frame(
     receiver: u32,
     sample_rate: u32,
+    channels: u32,
     audio_samples: &[f32],
     sequence: u32,
 ) -> Vec<u8> {
-    build_tci_float_frame(receiver, sample_rate, audio_samples, 1, 2, sequence)
+    build_tci_float_frame(receiver, sample_rate, audio_samples, 1, channels, sequence)
 }
 
 fn build_tci_float_frame(
@@ -2516,12 +2596,22 @@ mod tests {
 
     #[test]
     fn builds_audio_frame_with_expected_header() {
-        let frame = build_tci_audio_frame(0, 48_000, &[0.25, -0.25, 0.5, -0.5], 7);
+        let frame = build_tci_audio_frame(0, 48_000, 1, &[0.25, -0.25, 0.5, -0.5], 7);
         assert_eq!(frame.len(), 64 + 16);
         assert_eq!(u32::from_le_bytes(frame[4..8].try_into().unwrap()), 48_000);
         assert_eq!(u32::from_le_bytes(frame[24..28].try_into().unwrap()), 1);
-        assert_eq!(u32::from_le_bytes(frame[28..32].try_into().unwrap()), 2);
+        assert_eq!(u32::from_le_bytes(frame[28..32].try_into().unwrap()), 1);
         assert_eq!(u32::from_le_bytes(frame[32..36].try_into().unwrap()), 7);
+    }
+
+    #[test]
+    fn shapes_rx_audio_for_wan_transport() {
+        let input = [1.0, 0.0, 0.0, 0.0, -1.0, 0.0, 0.0, 0.0];
+        let (rate, channels, output) = shape_rx_audio_for_transport(&input, 48_000, 2, 12_000, 1);
+        assert_eq!(rate, 12_000);
+        assert_eq!(channels, 1);
+        assert_eq!(output.len(), 1);
+        assert!((output[0] - 0.5).abs() < 0.001);
     }
 
     #[test]
@@ -2581,6 +2671,7 @@ mod tests {
             outbound.enqueue(OutboundMessage::AudioFrame {
                 receiver: 0,
                 sample_rate: 8_000,
+                channels: 2,
                 audio_samples: audio.clone(),
                 sequence: 0,
             }),
@@ -2590,6 +2681,7 @@ mod tests {
             outbound.enqueue(OutboundMessage::AudioFrame {
                 receiver: 0,
                 sample_rate: 8_000,
+                channels: 2,
                 audio_samples: audio,
                 sequence: 0,
             }),

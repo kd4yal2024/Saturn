@@ -163,7 +163,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let (tx_event_tx, tx_event_rx) = mpsc::channel();
 
     println!(
-        "saturn-bridge: binding {} -> radio {} | TCI {} | remote TX RF {} | remote TX max target={}W 100W-drive-byte={} power meter scale={:.4} power trip={:.1}W | TCI release grace={}ms | display fps cap={} | max client DDC0 rate={}k",
+        "saturn-bridge: binding {} -> radio {} | TCI {} | remote TX RF {} | remote TX max target={}W 100W-drive-byte={} power meter scale={:.4} power trip={:.1}W | TCI release grace={}ms | display fps cap={} | max client DDC0 rate={}k | RX audio transport={}Hz/{}ch",
         session.client_bind_addr(),
         config.radio_command_addr,
         config.tci_bind_addr,
@@ -178,7 +178,9 @@ fn main() -> Result<(), Box<dyn Error>> {
         remote_tx_power_trip_watts,
         tci_client_release_grace.as_millis(),
         config.display_frame_limit_hz,
-        config.max_client_ddc0_sample_rate_khz
+        config.max_client_ddc0_sample_rate_khz,
+        config.rx_audio_transport_rate_hz,
+        config.rx_audio_transport_channels
     );
 
     let hp_thread = session.spawn_high_priority_loop(radio_model.clone(), stop_flag.clone())?;

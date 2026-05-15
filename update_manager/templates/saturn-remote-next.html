@@ -5709,6 +5709,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       adcLabel,
       antennaLabel,
       normalizeStreamMode,
+      prepareAudioForPlayback,
       snapTuneFrequencyHz: _snapTuneFrequencyHz,
       formatFrequencyPlain,
       safeFiniteNumber,
@@ -9669,25 +9670,34 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       }
       recordAudioSequence(frame);
       state.audioSampleRate = frame.header.sampleRate;
+      const sourceRate = Math.max(1, Number(frame.header.sampleRate) || 48000);
+      const targetRate = Math.max(1, Number(state.audioCtx?.sampleRate) || sourceRate);
+      const playback = prepareAudioForPlayback(
+        frame.left,
+        frame.right,
+        frame.frames,
+        sourceRate,
+        targetRate
+      );
 
       if (state.audioWorkletMode === "sab") {
-        if (writeRxAudioFrameToSab(frame.left, frame.right)) {
+        if (writeRxAudioFrameToSab(playback.left, playback.right)) {
           state.audioFramesPlayed += 1;
         }
         return;
       }
       if (state.audioWorkletMode === "msg" && state.rxWorkletNode) {
         state.rxWorkletNode.port.postMessage(
-          { type: "audio", left: frame.left, right: frame.right },
-          [frame.left.buffer, frame.right.buffer]
+          { type: "audio", left: playback.left, right: playback.right },
+          [playback.left.buffer, playback.right.buffer]
         );
         state.audioFramesPlayed += 1;
         return;
       }
 
-      const audioBuffer = state.audioCtx.createBuffer(2, frame.frames, frame.header.sampleRate);
-      audioBuffer.copyToChannel(frame.left, 0);
-      audioBuffer.copyToChannel(frame.right, 1);
+      const audioBuffer = state.audioCtx.createBuffer(2, playback.frames, playback.sampleRate);
+      audioBuffer.copyToChannel(playback.left, 0);
+      audioBuffer.copyToChannel(playback.right, 1);
       scheduleAudioPlayback(audioBuffer);
     }
 

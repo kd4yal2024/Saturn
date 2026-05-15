@@ -28,6 +28,8 @@ pub struct BridgeConfig {
     pub tx_power_meter_scale: f32,
     pub remote_tx_rf_enabled: bool,
     pub display_frame_limit_hz: u16,
+    pub rx_audio_transport_rate_hz: u32,
+    pub rx_audio_transport_channels: u32,
 }
 
 impl Default for BridgeConfig {
@@ -58,6 +60,8 @@ impl Default for BridgeConfig {
             tx_power_meter_scale: 1.0,
             remote_tx_rf_enabled: false,
             display_frame_limit_hz: 30,
+            rx_audio_transport_rate_hz: 48_000,
+            rx_audio_transport_channels: 2,
         }
     }
 }
@@ -163,6 +167,16 @@ impl BridgeConfig {
                 defaults.display_frame_limit_hz,
             )
             .min(120),
+            rx_audio_transport_rate_hz: parse_env_u32(
+                "SATURN_BRIDGE_RX_AUDIO_TRANSPORT_RATE_HZ",
+                defaults.rx_audio_transport_rate_hz,
+            )
+            .clamp(8_000, 48_000),
+            rx_audio_transport_channels: parse_env_u32(
+                "SATURN_BRIDGE_RX_AUDIO_TRANSPORT_CHANNELS",
+                defaults.rx_audio_transport_channels,
+            )
+            .clamp(1, 2),
         }
     }
 }

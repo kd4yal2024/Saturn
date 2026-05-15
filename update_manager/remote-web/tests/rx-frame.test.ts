@@ -59,4 +59,14 @@ describe('rx frame decoding', () => {
     const frame = decodeAudioFrame(buffer);
     expect(frame?.header.sequence).toBe(19);
   });
+
+  it('decodes mono audio frames for low bandwidth transport', () => {
+    const buffer = buildFrame(1, 12000, 1, [0.25, -0.5], 20);
+    const frame = decodeAudioFrame(buffer);
+    expect(frame?.header.sampleRate).toBe(12000);
+    expect(frame?.header.channels).toBe(1);
+    expect(frame?.mirroredMono).toBe(true);
+    expect(Array.from(frame?.left || [])).toEqual([0.25, -0.5]);
+    expect(Array.from(frame?.right || [])).toEqual([0.25, -0.5]);
+  });
 });
