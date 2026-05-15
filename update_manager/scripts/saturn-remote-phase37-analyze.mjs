@@ -115,6 +115,7 @@ function parseHostLog(filePath) {
     maxControlP99Us: maxOf('control_p99_us'),
     totalDisplayReplaced: samples.reduce((sum, sample) => sum + (Number.isFinite(sample.display_replaced_s) ? sample.display_replaced_s : 0), 0),
     totalDisplayDropped: samples.reduce((sum, sample) => sum + (Number.isFinite(sample.display_dropped_s) ? sample.display_dropped_s : 0), 0),
+    totalDisplayRateLimited: samples.reduce((sum, sample) => sum + (Number.isFinite(sample.display_rate_limited_s) ? sample.display_rate_limited_s : 0), 0),
     totalAudioDropped: samples.reduce((sum, sample) => sum + (Number.isFinite(sample.audio_dropped_s) ? sample.audio_dropped_s : 0), 0),
     totalSendBlockedMs: samples.reduce((sum, sample) => sum + (Number.isFinite(sample.send_blocked_ms) ? sample.send_blocked_ms : 0), 0),
     maxOutboundHighWatermarkBytes: maxOf('out_hwm_bytes'),
@@ -294,6 +295,7 @@ function buildReport({ captureDir, files, hostLogs, browserSummaries, sessions }
         sessionBrowserMax(session, 'totalDisplayReplaced'),
         sessionHostMax(session, 'totalDisplayReplaced'),
       ),
+      'Display cap': sessionHostMax(session, 'totalDisplayRateLimited'),
       'Send blocked ms': Math.max(
         sessionBrowserMax(session, 'totalSendBlockedMs'),
         sessionHostMax(session, 'totalSendBlockedMs'),
@@ -338,7 +340,7 @@ function buildReport({ captureDir, files, hostLogs, browserSummaries, sessions }
     '## Session Summary',
     '',
     rows.length
-      ? formatTable(rows, ['Session', 'Browser', 'Host', 'Safety p99 us', 'Control p99 us', 'Display repl', 'Send blocked ms', 'Out HWM bytes', 'TCP outq HWM bytes', 'Status'])
+      ? formatTable(rows, ['Session', 'Browser', 'Host', 'Safety p99 us', 'Control p99 us', 'Display repl', 'Display cap', 'Send blocked ms', 'Out HWM bytes', 'TCP outq HWM bytes', 'Status'])
       : 'No Phase 36 sessions found.',
     '',
     '## IQ Isolation Checks',

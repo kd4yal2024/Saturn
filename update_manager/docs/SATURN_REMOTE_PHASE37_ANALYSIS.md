@@ -52,6 +52,7 @@ The analyzer enforces:
 It also reports, but does not automatically fail:
 
 - Display replacements and drops.
+- Display frames skipped by the bridge FPS cap.
 - Audio drops and panic drains.
 - Browser and bridge audio sequence gaps.
 - Send-blocked milliseconds.

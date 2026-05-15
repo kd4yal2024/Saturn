@@ -158,7 +158,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let (tx_event_tx, tx_event_rx) = mpsc::channel();
 
     println!(
-        "saturn-bridge: binding {} -> radio {} | TCI {} | remote TX RF {} | remote TX max target={}W 100W-drive-byte={} power meter scale={:.4} power trip={:.1}W | TCI release grace={}ms",
+        "saturn-bridge: binding {} -> radio {} | TCI {} | remote TX RF {} | remote TX max target={}W 100W-drive-byte={} power meter scale={:.4} power trip={:.1}W | TCI release grace={}ms | display fps cap={}",
         session.client_bind_addr(),
         config.radio_command_addr,
         config.tci_bind_addr,
@@ -171,7 +171,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         config.remote_tx_100w_drive_byte,
         tx_power_meter_scale,
         remote_tx_power_trip_watts,
-        tci_client_release_grace.as_millis()
+        tci_client_release_grace.as_millis(),
+        config.display_frame_limit_hz
     );
 
     let hp_thread = session.spawn_high_priority_loop(radio_model.clone(), stop_flag.clone())?;
@@ -706,7 +707,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             let elapsed = last_status.elapsed().as_secs_f64().max(0.001);
             let client = tci.client_snapshot();
             println!(
-                "saturn-bridge: diag hp_s={:.1} ddc_s={:.1} rx_audio_frames_s={:.1} rx_audio_samples_s={:.0} tci_mic_frames_s={:.1} tci_mic_samples_s={:.0} client={} iq={} audio={} outbound_drops={} safety_p99_us={} control_p99_us={} display_replaced_s={} display_dropped_s={} audio_dropped_s={} audio_gaps={} audio_panic={} send_blocked_ms={} out_hwm_bytes={} tcp_outq_hwm_bytes={} safety_depth_overflow={} {}",
+                "saturn-bridge: diag hp_s={:.1} ddc_s={:.1} rx_audio_frames_s={:.1} rx_audio_samples_s={:.0} tci_mic_frames_s={:.1} tci_mic_samples_s={:.0} client={} iq={} audio={} outbound_drops={} safety_p99_us={} control_p99_us={} display_replaced_s={} display_dropped_s={} display_rate_limited_s={} audio_dropped_s={} audio_gaps={} audio_panic={} send_blocked_ms={} out_hwm_bytes={} tcp_outq_hwm_bytes={} safety_depth_overflow={} {}",
                 status_hp_packets as f64 / elapsed,
                 status_ddc_packets as f64 / elapsed,
                 status_rx_audio_frames as f64 / elapsed,
@@ -721,6 +722,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 client.control_enqueue_to_write_p99_us,
                 client.display_replaced_per_sec,
                 client.display_dropped_per_sec,
+                client.display_rate_limited_per_sec,
                 client.audio_dropped_per_sec,
                 client.audio_seq_gap_count,
                 client.audio_panic_drain_count,

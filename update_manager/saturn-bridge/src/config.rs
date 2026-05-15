@@ -26,6 +26,7 @@ pub struct BridgeConfig {
     pub remote_tx_100w_drive_byte: u8,
     pub tx_power_meter_scale: f32,
     pub remote_tx_rf_enabled: bool,
+    pub display_frame_limit_hz: u16,
 }
 
 impl Default for BridgeConfig {
@@ -54,6 +55,7 @@ impl Default for BridgeConfig {
             remote_tx_100w_drive_byte: 68,
             tx_power_meter_scale: 1.0,
             remote_tx_rf_enabled: false,
+            display_frame_limit_hz: 30,
         }
     }
 }
@@ -145,6 +147,11 @@ impl BridgeConfig {
                 "SATURN_REMOTE_TX_RF_ENABLED",
                 defaults.remote_tx_rf_enabled,
             ),
+            display_frame_limit_hz: parse_env_u16(
+                "SATURN_BRIDGE_DISPLAY_FRAME_LIMIT_HZ",
+                defaults.display_frame_limit_hz,
+            )
+            .min(120),
         }
     }
 }

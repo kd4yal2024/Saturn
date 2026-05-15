@@ -522,6 +522,14 @@ fn max_audio_queued_frames(sample_rate_hz: u32) -> usize {
     (sample_rate / 4).max(1)
 }
 
+fn display_frame_interval_for_limit(limit_hz: u16) -> Duration {
+    if limit_hz == 0 {
+        Duration::ZERO
+    } else {
+        Duration::from_nanos(1_000_000_000u64 / u64::from(limit_hz))
+    }
+}
+
 fn queued_bytes_without_audio(queues: &OutboundQueues) -> usize {
     let safety = queues
         .safety
@@ -622,8 +630,11 @@ pub struct TciFrontend {
     command_rx: Receiver<TciCommand>,
     clients: ClientRegistry,
     drop_count: Arc<AtomicU64>,
+    display_rate_limited_count: AtomicU64,
     tx_power_meter_scale: f32,
     remote_tx_rf_enabled: bool,
+    display_frame_interval: Duration,
+    last_display_frame_at: Mutex<Option<Instant>>,
     _accept_thread: JoinGuard,
 }
 
@@ -647,6 +658,7 @@ pub struct TciClientSnapshot {
     pub send_blocked_ms: u64,
     pub outbound_high_watermark_bytes: u64,
     pub tcp_outq_high_watermark_bytes: u64,
+    pub display_rate_limited_per_sec: u64,
     pub safety_queue_depth_overflow_count: u64,
 }
 
@@ -714,8 +726,11 @@ impl TciFrontend {
             command_rx,
             clients,
             drop_count,
+            display_rate_limited_count: AtomicU64::new(0),
             tx_power_meter_scale: config.tx_power_meter_scale,
             remote_tx_rf_enabled,
+            display_frame_interval: display_frame_interval_for_limit(config.display_frame_limit_hz),
+            last_display_frame_at: Mutex::new(None),
             _accept_thread: JoinGuard { handle },
         })
     }
@@ -782,6 +797,9 @@ impl TciFrontend {
             send_blocked_ms,
             outbound_high_watermark_bytes,
             tcp_outq_high_watermark_bytes,
+            display_rate_limited_per_sec: self
+                .display_rate_limited_count
+                .swap(0, Ordering::Relaxed),
             safety_queue_depth_overflow_count,
         }
     }
@@ -944,7 +962,7 @@ impl TciFrontend {
 
     pub fn publish_scheduler_telemetry(&self, snapshot: &TciClientSnapshot) {
         self.send_text(format!(
-            "remote_backpressure:0,{},{},{},{},{},{},{},{},{},{},{},{},{},{},{};",
+            "remote_backpressure:0,{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{};",
             snapshot.safety_enqueue_to_write_p50_us,
             snapshot.safety_enqueue_to_write_p95_us,
             snapshot.safety_enqueue_to_write_p99_us,
@@ -959,7 +977,8 @@ impl TciFrontend {
             snapshot.send_blocked_ms,
             snapshot.outbound_high_watermark_bytes,
             snapshot.safety_queue_depth_overflow_count,
-            snapshot.tcp_outq_high_watermark_bytes
+            snapshot.tcp_outq_high_watermark_bytes,
+            snapshot.display_rate_limited_per_sec
         ));
     }
 
@@ -975,6 +994,11 @@ impl TciFrontend {
         if !self.is_iq_stream_enabled() {
             return;
         }
+        if !self.should_publish_display_frame() {
+            self.display_rate_limited_count
+                .fetch_add(1, Ordering::Relaxed);
+            return;
+        }
 
         self.send_message(OutboundMessage::IqFrame {
             receiver: 0,
@@ -985,6 +1009,11 @@ impl TciFrontend {
 
     pub fn publish_tx_iq_frame(&self, sample_rate_hz: u32, iq_samples: &[f32]) {
         if !self.is_iq_stream_enabled() {
+            return;
+        }
+        if !self.should_publish_display_frame() {
+            self.display_rate_limited_count
+                .fetch_add(1, Ordering::Relaxed);
             return;
         }
 
@@ -1023,6 +1052,23 @@ impl TciFrontend {
             .unwrap()
             .values()
             .any(|client| client.state.iq_stream_enabled)
+    }
+
+    fn should_publish_display_frame(&self) -> bool {
+        if self.display_frame_interval.is_zero() {
+            return true;
+        }
+        let now = Instant::now();
+        let mut last = self.last_display_frame_at.lock().unwrap();
+        if last
+            .map(|sent_at| now.duration_since(sent_at) >= self.display_frame_interval)
+            .unwrap_or(true)
+        {
+            *last = Some(now);
+            true
+        } else {
+            false
+        }
     }
 
     fn is_audio_stream_enabled(&self) -> bool {
@@ -2574,6 +2620,19 @@ mod tests {
         outbound.record_tcp_outq_high_watermark(64 * 1024);
         let delta = outbound.drain_stats();
         assert_eq!(delta.tcp_outq_high_watermark_bytes, 96 * 1024);
+    }
+
+    #[test]
+    fn display_frame_interval_supports_limit_and_disable() {
+        assert_eq!(display_frame_interval_for_limit(0), Duration::ZERO);
+        assert_eq!(
+            display_frame_interval_for_limit(25),
+            Duration::from_millis(40)
+        );
+        assert_eq!(
+            display_frame_interval_for_limit(50),
+            Duration::from_millis(20)
+        );
     }
 
     #[test]
