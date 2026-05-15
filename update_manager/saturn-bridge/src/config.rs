@@ -18,6 +18,7 @@ pub struct BridgeConfig {
     pub ddc0_frequency_hz: u32,
     pub ddc0_adc: u8,
     pub ddc0_sample_rate_khz: u16,
+    pub max_client_ddc0_sample_rate_khz: u16,
     pub ddc0_sample_size_bits: u8,
     pub rx_fft_size: u32,
     pub rx_low_latency: bool,
@@ -47,6 +48,7 @@ impl Default for BridgeConfig {
             ddc0_frequency_hz: 14_200_000,
             ddc0_adc: 0,
             ddc0_sample_rate_khz: 192,
+            max_client_ddc0_sample_rate_khz: u16::MAX,
             ddc0_sample_size_bits: 24,
             rx_fft_size: 2048,
             rx_low_latency: true,
@@ -79,6 +81,17 @@ impl BridgeConfig {
         let tci_host =
             env::var("SATURN_BRIDGE_TCI_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
         let tci_port = parse_env_u16("SATURN_BRIDGE_TCI_PORT", defaults.tci_bind_addr.port());
+
+        let max_client_ddc0_sample_rate_khz = parse_env_u16(
+            "SATURN_BRIDGE_MAX_CLIENT_DDC0_SAMPLE_RATE_KHZ",
+            defaults.max_client_ddc0_sample_rate_khz,
+        )
+        .max(48);
+        let ddc0_sample_rate_khz = parse_env_u16(
+            "SATURN_BRIDGE_DDC0_SAMPLE_RATE_KHZ",
+            defaults.ddc0_sample_rate_khz,
+        )
+        .min(max_client_ddc0_sample_rate_khz);
 
         Self {
             radio_command_addr: parse_socket_addr(
@@ -115,10 +128,8 @@ impl BridgeConfig {
                 defaults.ddc0_frequency_hz,
             ),
             ddc0_adc: parse_env_u8("SATURN_BRIDGE_DDC0_ADC", defaults.ddc0_adc).min(2),
-            ddc0_sample_rate_khz: parse_env_u16(
-                "SATURN_BRIDGE_DDC0_SAMPLE_RATE_KHZ",
-                defaults.ddc0_sample_rate_khz,
-            ),
+            ddc0_sample_rate_khz,
+            max_client_ddc0_sample_rate_khz,
             ddc0_sample_size_bits: parse_env_u8(
                 "SATURN_BRIDGE_DDC0_SAMPLE_SIZE_BITS",
                 defaults.ddc0_sample_size_bits,

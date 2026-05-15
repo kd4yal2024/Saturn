@@ -125,6 +125,11 @@ fn format_tx_diag(diag: Option<&TxDiagnostics>) -> String {
     }
 }
 
+fn clamp_client_ddc0_sample_rate_khz(rate_hz: u32, max_rate_khz: u16) -> u16 {
+    let requested_rate_khz = (rate_hz / 1000).clamp(48, u16::MAX as u32) as u16;
+    requested_rate_khz.min(max_rate_khz.max(48))
+}
+
 fn main() -> Result<(), Box<dyn Error>> {
     let config = BridgeConfig::from_env();
     let radio_model = Arc::new(Mutex::new(RadioModel::new(
@@ -158,7 +163,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let (tx_event_tx, tx_event_rx) = mpsc::channel();
 
     println!(
-        "saturn-bridge: binding {} -> radio {} | TCI {} | remote TX RF {} | remote TX max target={}W 100W-drive-byte={} power meter scale={:.4} power trip={:.1}W | TCI release grace={}ms | display fps cap={}",
+        "saturn-bridge: binding {} -> radio {} | TCI {} | remote TX RF {} | remote TX max target={}W 100W-drive-byte={} power meter scale={:.4} power trip={:.1}W | TCI release grace={}ms | display fps cap={} | max client DDC0 rate={}k",
         session.client_bind_addr(),
         config.radio_command_addr,
         config.tci_bind_addr,
@@ -172,7 +177,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         tx_power_meter_scale,
         remote_tx_power_trip_watts,
         tci_client_release_grace.as_millis(),
-        config.display_frame_limit_hz
+        config.display_frame_limit_hz,
+        config.max_client_ddc0_sample_rate_khz
     );
 
     let hp_thread = session.spawn_high_priority_loop(radio_model.clone(), stop_flag.clone())?;
@@ -293,7 +299,17 @@ fn main() -> Result<(), Box<dyn Error>> {
                     }
                 }
                 TciCommand::SetIqSampleRate(rate_hz) => {
-                    let rate_khz = (rate_hz / 1000).clamp(48, u16::MAX as u32) as u16;
+                    let requested_rate_khz = (rate_hz / 1000).clamp(48, u16::MAX as u32) as u16;
+                    let rate_khz = clamp_client_ddc0_sample_rate_khz(
+                        rate_hz,
+                        config.max_client_ddc0_sample_rate_khz,
+                    );
+                    if rate_khz != requested_rate_khz {
+                        eprintln!(
+                            "saturn-bridge: clamped client DDC0 sample rate request {}k -> {}k",
+                            requested_rate_khz, rate_khz
+                        );
+                    }
                     model.desired.ddc0_sample_rate_khz = rate_khz;
                     reconfigure_ddc = true;
                 }
@@ -825,5 +841,14 @@ mod tests {
             parse_tci_client_release_grace(Some("bad")),
             Duration::from_millis(DEFAULT_TCI_CLIENT_RELEASE_GRACE_MS)
         );
+    }
+
+    #[test]
+    fn client_ddc0_sample_rate_respects_low_bandwidth_cap() {
+        assert_eq!(clamp_client_ddc0_sample_rate_khz(192_000, 48), 48);
+        assert_eq!(clamp_client_ddc0_sample_rate_khz(96_000, 48), 48);
+        assert_eq!(clamp_client_ddc0_sample_rate_khz(48_000, 48), 48);
+        assert_eq!(clamp_client_ddc0_sample_rate_khz(96_000, 192), 96);
+        assert_eq!(clamp_client_ddc0_sample_rate_khz(12_000, 48), 48);
     }
 }
