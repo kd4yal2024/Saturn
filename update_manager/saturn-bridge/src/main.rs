@@ -706,7 +706,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             let elapsed = last_status.elapsed().as_secs_f64().max(0.001);
             let client = tci.client_snapshot();
             println!(
-                "saturn-bridge: diag hp_s={:.1} ddc_s={:.1} rx_audio_frames_s={:.1} rx_audio_samples_s={:.0} tci_mic_frames_s={:.1} tci_mic_samples_s={:.0} client={} iq={} audio={} outbound_drops={} safety_p99_us={} control_p99_us={} display_replaced_s={} display_dropped_s={} audio_dropped_s={} audio_gaps={} audio_panic={} send_blocked_ms={} out_hwm_bytes={} safety_depth_overflow={} {}",
+                "saturn-bridge: diag hp_s={:.1} ddc_s={:.1} rx_audio_frames_s={:.1} rx_audio_samples_s={:.0} tci_mic_frames_s={:.1} tci_mic_samples_s={:.0} client={} iq={} audio={} outbound_drops={} safety_p99_us={} control_p99_us={} display_replaced_s={} display_dropped_s={} audio_dropped_s={} audio_gaps={} audio_panic={} send_blocked_ms={} out_hwm_bytes={} tcp_outq_hwm_bytes={} safety_depth_overflow={} {}",
                 status_hp_packets as f64 / elapsed,
                 status_ddc_packets as f64 / elapsed,
                 status_rx_audio_frames as f64 / elapsed,
@@ -726,6 +726,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 client.audio_panic_drain_count,
                 client.send_blocked_ms,
                 client.outbound_high_watermark_bytes,
+                client.tcp_outq_high_watermark_bytes,
                 client.safety_queue_depth_overflow_count,
                 format_tx_diag(latest_tx_diag.as_ref())
             );

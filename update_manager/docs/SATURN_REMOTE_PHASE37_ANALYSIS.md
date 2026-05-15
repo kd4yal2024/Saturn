@@ -56,6 +56,7 @@ It also reports, but does not automatically fail:
 - Browser and bridge audio sequence gaps.
 - Send-blocked milliseconds.
 - Outbound high-watermark bytes.
+- TCP out-queue high-watermark bytes from bridge host logs.
 - Bridge RTT maxima.
 
 ## Threshold Derivation

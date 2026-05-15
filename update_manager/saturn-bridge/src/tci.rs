@@ -1,6 +1,10 @@
 use std::collections::{BTreeMap, VecDeque};
 use std::io;
 use std::net::{SocketAddr, TcpListener, TcpStream};
+#[cfg(target_os = "linux")]
+use std::os::fd::AsRawFd;
+#[cfg(target_os = "linux")]
+use std::os::raw::{c_int, c_ulong};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
@@ -233,6 +237,7 @@ struct ClientSchedulerStatsDelta {
     audio_panic_drain: u64,
     send_blocked_ms: u64,
     outbound_high_watermark_bytes: u64,
+    tcp_outq_high_watermark_bytes: u64,
     safety_queue_depth_overflow: u64,
 }
 
@@ -246,6 +251,7 @@ struct ClientSchedulerStatsInner {
     audio_panic_drain: u64,
     send_blocked_ms: u64,
     outbound_high_watermark_bytes: u64,
+    tcp_outq_high_watermark_bytes: u64,
     safety_queue_depth_overflow: u64,
 }
 
@@ -293,6 +299,11 @@ impl ClientSchedulerStats {
         inner.outbound_high_watermark_bytes = inner.outbound_high_watermark_bytes.max(bytes as u64);
     }
 
+    fn record_tcp_outq_high_watermark(&self, bytes: usize) {
+        let mut inner = self.inner.lock().unwrap();
+        inner.tcp_outq_high_watermark_bytes = inner.tcp_outq_high_watermark_bytes.max(bytes as u64);
+    }
+
     fn record_safety_queue_depth_overflow(&self) {
         self.inner.lock().unwrap().safety_queue_depth_overflow += 1;
     }
@@ -308,6 +319,7 @@ impl ClientSchedulerStats {
             audio_panic_drain: std::mem::take(&mut inner.audio_panic_drain),
             send_blocked_ms: std::mem::take(&mut inner.send_blocked_ms),
             outbound_high_watermark_bytes: std::mem::take(&mut inner.outbound_high_watermark_bytes),
+            tcp_outq_high_watermark_bytes: std::mem::take(&mut inner.tcp_outq_high_watermark_bytes),
             safety_queue_depth_overflow: std::mem::take(&mut inner.safety_queue_depth_overflow),
         }
     }
@@ -496,6 +508,10 @@ impl ClientOutbound {
         self.stats.record_send_blocked(duration);
     }
 
+    fn record_tcp_outq_high_watermark(&self, bytes: usize) {
+        self.stats.record_tcp_outq_high_watermark(bytes);
+    }
+
     fn drain_stats(&self) -> ClientSchedulerStatsDelta {
         self.stats.drain()
     }
@@ -568,6 +584,16 @@ type ClientRegistry = Arc<Mutex<BTreeMap<u64, ClientConnection>>>;
 const MAX_TCI_INBOUND_MESSAGE_BYTES: usize = 256 * 1024;
 const MAX_TCI_INBOUND_FRAME_BYTES: usize = 256 * 1024;
 const MAX_TCI_MIC_FLOAT_SAMPLES: usize = 32_768;
+const BULK_TCP_OUTQ_LIMIT_BYTES: usize = 64 * 1024;
+const BULK_BACKPRESSURE_PAUSE_MS: u64 = 10;
+
+#[cfg(target_os = "linux")]
+const TIOCOUTQ: c_ulong = 0x5411;
+
+#[cfg(target_os = "linux")]
+unsafe extern "C" {
+    fn ioctl(fd: c_int, request: c_ulong, ...) -> c_int;
+}
 
 fn tx_power_trip_fault_message(forward_watts: f32, limit_watts: f32) -> String {
     format!("tx_fault:0,power_trip,{forward_watts:.1},{limit_watts:.1};")
@@ -620,6 +646,7 @@ pub struct TciClientSnapshot {
     pub audio_panic_drain_count: u64,
     pub send_blocked_ms: u64,
     pub outbound_high_watermark_bytes: u64,
+    pub tcp_outq_high_watermark_bytes: u64,
     pub safety_queue_depth_overflow_count: u64,
 }
 
@@ -707,6 +734,7 @@ impl TciFrontend {
         let mut audio_panic_drain_count = 0u64;
         let mut send_blocked_ms = 0u64;
         let mut outbound_high_watermark_bytes = 0u64;
+        let mut tcp_outq_high_watermark_bytes = 0u64;
         let mut safety_queue_depth_overflow_count = 0u64;
 
         for client in clients.values() {
@@ -722,6 +750,8 @@ impl TciFrontend {
             send_blocked_ms = send_blocked_ms.saturating_add(delta.send_blocked_ms);
             outbound_high_watermark_bytes =
                 outbound_high_watermark_bytes.max(delta.outbound_high_watermark_bytes);
+            tcp_outq_high_watermark_bytes =
+                tcp_outq_high_watermark_bytes.max(delta.tcp_outq_high_watermark_bytes);
             safety_queue_depth_overflow_count =
                 safety_queue_depth_overflow_count.saturating_add(delta.safety_queue_depth_overflow);
         }
@@ -751,6 +781,7 @@ impl TciFrontend {
             audio_panic_drain_count,
             send_blocked_ms,
             outbound_high_watermark_bytes,
+            tcp_outq_high_watermark_bytes,
             safety_queue_depth_overflow_count,
         }
     }
@@ -913,7 +944,7 @@ impl TciFrontend {
 
     pub fn publish_scheduler_telemetry(&self, snapshot: &TciClientSnapshot) {
         self.send_text(format!(
-            "remote_backpressure:0,{},{},{},{},{},{},{},{},{},{},{},{},{},{};",
+            "remote_backpressure:0,{},{},{},{},{},{},{},{},{},{},{},{},{},{},{};",
             snapshot.safety_enqueue_to_write_p50_us,
             snapshot.safety_enqueue_to_write_p95_us,
             snapshot.safety_enqueue_to_write_p99_us,
@@ -927,7 +958,8 @@ impl TciFrontend {
             snapshot.audio_panic_drain_count,
             snapshot.send_blocked_ms,
             snapshot.outbound_high_watermark_bytes,
-            snapshot.safety_queue_depth_overflow_count
+            snapshot.safety_queue_depth_overflow_count,
+            snapshot.tcp_outq_high_watermark_bytes
         ));
     }
 
@@ -1120,9 +1152,21 @@ fn handle_client(
                 }
 
                 loop {
-                    let allow_bulk = bulk_pause_until
-                        .map(|until| Instant::now() >= until)
-                        .unwrap_or(true);
+                    let now = Instant::now();
+                    if bulk_pause_until.map(|until| now >= until).unwrap_or(false) {
+                        bulk_pause_until = None;
+                    }
+
+                    let tcp_outq_bytes = tcp_outq_bytes(websocket.get_ref()).unwrap_or(0);
+                    outbound.record_tcp_outq_high_watermark(tcp_outq_bytes);
+                    let tcp_outq_allows_bulk = bulk_allowed_for_tcp_outq(tcp_outq_bytes);
+                    if !tcp_outq_allows_bulk {
+                        outbound.record_send_blocked(Duration::from_millis(2));
+                        bulk_pause_until =
+                            Some(now + Duration::from_millis(BULK_BACKPRESSURE_PAUSE_MS));
+                    }
+
+                    let allow_bulk = bulk_pause_until.is_none() && tcp_outq_allows_bulk;
                     let Some(item) = outbound.next_message(allow_bulk) else {
                         break;
                     };
@@ -1134,7 +1178,9 @@ fn handle_client(
                         Err(WsError::Io(error)) if error.kind() == io::ErrorKind::WouldBlock => {
                             pending_flush = true;
                             outbound.record_send_blocked(Duration::from_millis(2));
-                            bulk_pause_until = Some(Instant::now() + Duration::from_millis(10));
+                            bulk_pause_until = Some(
+                                Instant::now() + Duration::from_millis(BULK_BACKPRESSURE_PAUSE_MS),
+                            );
                             if item.class.is_never_drop() {
                                 outbound.requeue_front(item);
                             } else {
@@ -1167,7 +1213,9 @@ fn handle_client(
                         }
                         Err(WsError::Io(error)) if error.kind() == io::ErrorKind::WouldBlock => {
                             outbound.record_send_blocked(Duration::from_millis(2));
-                            bulk_pause_until = Some(Instant::now() + Duration::from_millis(10));
+                            bulk_pause_until = Some(
+                                Instant::now() + Duration::from_millis(BULK_BACKPRESSURE_PAUSE_MS),
+                            );
                         }
                         Err(WsError::ConnectionClosed) | Err(WsError::AlreadyClosed) => break,
                         Err(error) => {
@@ -2229,6 +2277,26 @@ fn tci_websocket_config() -> WebSocketConfig {
     }
 }
 
+fn bulk_allowed_for_tcp_outq(tcp_outq_bytes: usize) -> bool {
+    tcp_outq_bytes < BULK_TCP_OUTQ_LIMIT_BYTES
+}
+
+#[cfg(target_os = "linux")]
+fn tcp_outq_bytes(stream: &TcpStream) -> io::Result<usize> {
+    let mut bytes: c_int = 0;
+    let result = unsafe { ioctl(stream.as_raw_fd(), TIOCOUTQ, &mut bytes) };
+    if result < 0 {
+        Err(io::Error::last_os_error())
+    } else {
+        Ok(bytes.max(0) as usize)
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn tcp_outq_bytes(_stream: &TcpStream) -> io::Result<usize> {
+    Ok(0)
+}
+
 fn send_outbound(
     websocket: &mut tungstenite::WebSocket<std::net::TcpStream>,
     message: &OutboundMessage,
@@ -2489,6 +2557,23 @@ mod tests {
         let delta = outbound.drain_stats();
         assert_eq!(delta.audio_panic_drain, 1);
         assert_eq!(delta.audio_dropped, 1);
+    }
+
+    #[test]
+    fn bulk_tcp_outq_guard_blocks_bulk_at_limit() {
+        assert!(bulk_allowed_for_tcp_outq(BULK_TCP_OUTQ_LIMIT_BYTES - 1));
+        assert!(!bulk_allowed_for_tcp_outq(BULK_TCP_OUTQ_LIMIT_BYTES));
+        assert!(!bulk_allowed_for_tcp_outq(BULK_TCP_OUTQ_LIMIT_BYTES * 2));
+    }
+
+    #[test]
+    fn outbound_scheduler_tracks_tcp_outq_high_watermark() {
+        let outbound = ClientOutbound::new();
+        outbound.record_tcp_outq_high_watermark(32 * 1024);
+        outbound.record_tcp_outq_high_watermark(96 * 1024);
+        outbound.record_tcp_outq_high_watermark(64 * 1024);
+        let delta = outbound.drain_stats();
+        assert_eq!(delta.tcp_outq_high_watermark_bytes, 96 * 1024);
     }
 
     #[test]

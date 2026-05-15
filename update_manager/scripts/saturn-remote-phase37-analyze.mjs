@@ -118,6 +118,7 @@ function parseHostLog(filePath) {
     totalAudioDropped: samples.reduce((sum, sample) => sum + (Number.isFinite(sample.audio_dropped_s) ? sample.audio_dropped_s : 0), 0),
     totalSendBlockedMs: samples.reduce((sum, sample) => sum + (Number.isFinite(sample.send_blocked_ms) ? sample.send_blocked_ms : 0), 0),
     maxOutboundHighWatermarkBytes: maxOf('out_hwm_bytes'),
+    maxTcpOutqHighWatermarkBytes: maxOf('tcp_outq_hwm_bytes'),
     totalSafetyQueueDepthOverflow: samples.reduce((sum, sample) => sum + (Number.isFinite(sample.safety_depth_overflow) ? sample.safety_depth_overflow : 0), 0),
   };
 }
@@ -301,6 +302,7 @@ function buildReport({ captureDir, files, hostLogs, browserSummaries, sessions }
         sessionBrowserMax(session, 'maxOutboundHighWatermarkBytes'),
         sessionHostMax(session, 'maxOutboundHighWatermarkBytes'),
       ),
+      'TCP outq HWM bytes': sessionHostMax(session, 'maxTcpOutqHighWatermarkBytes'),
       Status: result.failures.length ? 'fail' : result.warnings.length ? 'warn' : 'pass',
     };
   });
@@ -336,7 +338,7 @@ function buildReport({ captureDir, files, hostLogs, browserSummaries, sessions }
     '## Session Summary',
     '',
     rows.length
-      ? formatTable(rows, ['Session', 'Browser', 'Host', 'Safety p99 us', 'Control p99 us', 'Display repl', 'Send blocked ms', 'Out HWM bytes', 'Status'])
+      ? formatTable(rows, ['Session', 'Browser', 'Host', 'Safety p99 us', 'Control p99 us', 'Display repl', 'Send blocked ms', 'Out HWM bytes', 'TCP outq HWM bytes', 'Status'])
       : 'No Phase 36 sessions found.',
     '',
     '## IQ Isolation Checks',
