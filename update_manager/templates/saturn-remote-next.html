@@ -4420,8 +4420,15 @@
     const $ = (id) => document.getElementById(id);
     const DISPLAY_MAX_FFT_SIZE = 262144;
     const DISPLAY_BASE_FFT_SIZE = 4096;
+    const DISPLAY_WAN_FFT_SIZE = 2048;
+    const DISPLAY_PHONE_WAN_FFT_SIZE = 1024;
     const DISPLAY_PACKET_HISTORY_BASE = 48;
     const DISPLAY_PACKET_HISTORY_MAX = 1024;
+    const DISPLAY_WAN_PACKET_HISTORY = 18;
+    const DISPLAY_PHONE_WAN_PACKET_HISTORY = 8;
+    const DISPLAY_BASE_RENDER_INTERVAL_MS = 33;
+    const DISPLAY_WAN_RENDER_INTERVAL_MS = 150;
+    const DISPLAY_PHONE_WAN_RENDER_INTERVAL_MS = 275;
     const PHONE_PANEL_DEFAULTS = Object.freeze({
       session: false,
       audio: false,
@@ -4469,7 +4476,7 @@
     const RX_AUDIO_OVERFLOW_DROP_MS = 250;
     const RX_AUDIO_MOX_RECOVERY_DROP_MS = 180;
     const RX_AUDIO_USE_SAB_RING = false;
-    const RX_MSG_QUEUE_MAX_PACKETS = 8;
+    const RX_MSG_QUEUE_MAX_PACKETS = 4;
     const TX_MIC_BLOCK_SAMPLES = 256;
     const TX_READY_WINDOW_MS = 5 * 60 * 1000;
     const TX_MIC_LEVEL_STALE_MS = 450;
@@ -4678,6 +4685,8 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     const state = globalThis.SaturnRemoteNext.createAppState();
     state.displayIqSource = "rx";
     state.txDisplaySettleFrames = 0;
+    state.iqFrameVersion = 0;
+    state.lastRenderedIqFrameVersion = -1;
     state.phoneWaterfallVisible = false;
     state.vfoTuneStepHz = 100;
     state.keyboardPttActive = false;
@@ -5298,6 +5307,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       state.latestBins = new Float32Array(fftProcessor.size);
       state.fftWidth = state.latestBins.length;
       state.lastSpectrumRenderAt = 0;
+      state.lastRenderedIqFrameVersion = -1;
       state.spectrumShiftCarryBins = 0;
       state.waterfallShiftCarryPixels = 0;
       state.waterfallSettleFrames = 0;
@@ -5306,7 +5316,9 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       resetPeakHoldBins(fftProcessor.size);
       spectrumRenderer.render(state.latestBins, state.displayFloorDb, state.displayCeilingDb);
       waterfallRenderer.clear();
-      waterfallRenderer.render();
+      if (waterfallRenderEnabled()) {
+        waterfallRenderer.render();
+      }
     }
 
     function updateDisplayRange(bins) {
@@ -5760,18 +5772,23 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     }
 
     function syncPhoneWaterfall() {
-      const visible = state.layoutMode !== "phone" || Boolean(state.phoneWaterfallVisible);
+      const wanLite = phoneWanLiteActive();
+      const visible = !wanLite && (state.layoutMode !== "phone" || Boolean(state.phoneWaterfallVisible));
       document.documentElement.dataset.phoneWaterfall = visible ? "visible" : "hidden";
       const button = $("waterfall-toggle-btn");
       if (button) {
-        button.textContent = visible ? "WF On" : "WF Off";
+        button.textContent = wanLite ? "WF Paused" : (visible ? "WF On" : "WF Off");
         button.classList.toggle("active", visible);
+        button.disabled = wanLite;
         button.setAttribute("aria-pressed", visible ? "true" : "false");
-        button.title = visible ? "Hide phone waterfall" : "Show phone waterfall";
+        button.title = wanLite ? "Phone WAN mode pauses waterfall rendering" : (visible ? "Hide phone waterfall" : "Show phone waterfall");
       }
     }
 
     function togglePhoneWaterfall() {
+      if (phoneWanLiteActive()) {
+        return;
+      }
       state.phoneWaterfallVisible = !state.phoneWaterfallVisible;
       localStorage.setItem(PHONE_WATERFALL_KEY, state.phoneWaterfallVisible ? "1" : "0");
       syncPhoneWaterfall();
@@ -7576,8 +7593,66 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     }
 
     function tailnetTransportActive() {
-      const host = window.location.hostname || "";
-      return host.endsWith(".ts.net") || host.includes(".ts.net");
+      const host = (window.location.hostname || "").replace(/^\[|\]$/g, "");
+      if (host.endsWith(".ts.net") || host.includes(".ts.net")) {
+        return true;
+      }
+      const parts = host.split(".").map((part) => Number(part));
+      return parts.length === 4 &&
+        parts.every((part) => Number.isInteger(part) && part >= 0 && part <= 255) &&
+        parts[0] === 100 &&
+        parts[1] >= 64 &&
+        parts[1] <= 127;
+    }
+
+    function phoneWanLiteActive(now = performance.now()) {
+      if (state.layoutMode !== "phone" && !window.matchMedia("(pointer: coarse)").matches) {
+        return false;
+      }
+      const freshRtt = state.bridgeRttMs != null && now - state.bridgeRttAt <= BRIDGE_RTT_STALE_MS;
+      return state.streamMode === "wan" || tailnetTransportActive() || (freshRtt && state.bridgeRttMs > 180);
+    }
+
+    function wanDisplayActive(now = performance.now()) {
+      const freshRtt = state.bridgeRttMs != null && now - state.bridgeRttAt <= BRIDGE_RTT_STALE_MS;
+      return state.streamMode === "wan" || tailnetTransportActive() || (freshRtt && state.bridgeRttMs > 250);
+    }
+
+    function displayRenderIntervalMs(now = performance.now()) {
+      if (phoneWanLiteActive(now)) {
+        return DISPLAY_PHONE_WAN_RENDER_INTERVAL_MS;
+      }
+      if (wanDisplayActive(now)) {
+        return DISPLAY_WAN_RENDER_INTERVAL_MS;
+      }
+      return DISPLAY_BASE_RENDER_INTERVAL_MS;
+    }
+
+    function displayFftTargetSize(now = performance.now()) {
+      if (phoneWanLiteActive(now)) {
+        return DISPLAY_PHONE_WAN_FFT_SIZE;
+      }
+      if (wanDisplayActive(now)) {
+        return DISPLAY_WAN_FFT_SIZE;
+      }
+      return DISPLAY_BASE_FFT_SIZE;
+    }
+
+    function displayPacketHistoryLimit(now = performance.now()) {
+      if (phoneWanLiteActive(now)) {
+        return DISPLAY_PHONE_WAN_PACKET_HISTORY;
+      }
+      if (wanDisplayActive(now)) {
+        return DISPLAY_WAN_PACKET_HISTORY;
+      }
+      return DISPLAY_PACKET_HISTORY_BASE;
+    }
+
+    function waterfallRenderEnabled(now = performance.now()) {
+      if (phoneWanLiteActive(now)) {
+        return false;
+      }
+      return state.layoutMode !== "phone" || Boolean(state.phoneWaterfallVisible);
     }
 
     function audioLeadMs() {
@@ -8010,14 +8085,17 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         rfTitle
       );
 
-      const transport = state.streamMode === "wan"
-        ? "WAN IQ"
-        : (tailnetTransportActive() ? "Tailnet" : "LAN IQ");
+      const phoneWan = phoneWanLiteActive(now);
+      const transport = phoneWan
+        ? "Phone WAN"
+        : (state.streamMode === "wan"
+          ? "WAN IQ"
+          : (tailnetTransportActive() ? "Tailnet" : "LAN IQ"));
       setOperatorPill(
         "operator-transport-pill",
         "operator-transport-value",
         transport,
-        state.streamMode === "wan" ? "warn" : "rx",
+        phoneWan || state.streamMode === "wan" ? "warn" : "rx",
         `${window.location.protocol}//${window.location.host}`
       );
 
@@ -8151,6 +8229,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
 
     function updateUi() {
       normalizeUiState();
+      syncPhoneWaterfall();
       updateOperatorStateStrip();
       // Don't clobber the VFO input while the operator is typing.
       if (document.activeElement !== $("vfo-a-input")) {
@@ -8262,8 +8341,15 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         goLiveBtn.className = "btn primary";
       }
       $("display-resolution").textContent = `Display: ${Math.max(1, Math.round(window.devicePixelRatio || 1))}x DPR`;
+      if (phoneWanLiteActive()) {
+        $("display-resolution").textContent += ` | Phone WAN ${displayFftTargetSize()} FFT`;
+      } else if (wanDisplayActive()) {
+        $("display-resolution").textContent += ` | WAN ${displayFftTargetSize()} FFT`;
+      }
       $("display-resolution").textContent += ` | S ${safeFixed(state.displayFloorDb, 0, "-200")}..${safeFixed(state.displayCeilingDb, 0, "-120")} dB`;
-      $("display-resolution").textContent += ` | W ${safeFixed(state.waterfallFloorDb, 0, "-200")}..${safeFixed(state.waterfallCeilingDb, 0, "-120")} dB`;
+      $("display-resolution").textContent += waterfallRenderEnabled()
+        ? ` | W ${safeFixed(state.waterfallFloorDb, 0, "-200")}..${safeFixed(state.waterfallCeilingDb, 0, "-120")} dB`
+        : " | W paused";
       for (const element of [$("spectrum-shell"), $("waterfall-shell")]) {
         element.style.touchAction = state.frequencyLock ? "pan-y" : "manipulation";
       }
@@ -9727,8 +9813,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       }
     }
 
-    function fftSizeForSamples(value) {
-      const target = DISPLAY_BASE_FFT_SIZE;
+    function fftSizeForSamples(value, target = DISPLAY_BASE_FFT_SIZE) {
       if (value >= target) {
         return target;
       }
@@ -9741,7 +9826,8 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
 
     function appendIqPacket(iq) {
       state.iqPackets.push(new Float32Array(iq));
-      while (state.iqPackets.length > DISPLAY_PACKET_HISTORY_BASE) {
+      const limit = displayPacketHistoryLimit();
+      while (state.iqPackets.length > limit) {
         state.iqPackets.shift();
       }
     }
@@ -9758,7 +9844,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         return null;
       }
 
-      const desiredComplexSamples = DISPLAY_BASE_FFT_SIZE;
+      const desiredComplexSamples = displayFftTargetSize();
       const selected = [];
       let totalFloats = 0;
       for (let i = state.iqPackets.length - 1; i >= 0; i -= 1) {
@@ -9817,6 +9903,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         logEvent(`Received ${sourceKind.toUpperCase()} IQ frame: ${samplePairs} complex samples @ ${Math.round(sampleRate / 1000)} kHz`);
       }
       state.lastFrameAt = performance.now();
+      state.iqFrameVersion = (state.iqFrameVersion || 0) + 1;
       state.frameCounter += 1;
       state.displayCaption = sourceKind === "tx"
         ? `Live TX IQ: ${samplePairs} samples at ${Math.round(sampleRate / 1000)} kHz, display ±${Math.round(TX_DISPLAY_SPAN_HZ / 2000)} kHz`
@@ -9838,12 +9925,16 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       const processedBins = processedDisplayBins(visibleBins);
       updateDisplayRange(processedBins);
       spectrumRenderer.render(processedBins, state.displayFloorDb, state.displayCeilingDb);
-      waterfallRenderer.pushLine(processedBins, state.waterfallFloorDb, state.waterfallCeilingDb, state.waterfallPalette);
-      waterfallRenderer.render();
+      if (waterfallRenderEnabled(now)) {
+        waterfallRenderer.pushLine(processedBins, state.waterfallFloorDb, state.waterfallCeilingDb, state.waterfallPalette);
+        waterfallRenderer.render();
+      }
     }
 
     function animationLoop(now) {
       updateMeterVisualState(now);
+      const phoneWanLite = phoneWanLiteActive(now);
+      const waterfallEnabled = waterfallRenderEnabled(now);
       const txDisplayActive = state.moxRequested || state.txEnabled;
       // Safety: if TX ended but displayIqSource is still "tx", clear it
       // so the RX frame gate in handleBinaryFrame unblocks.
@@ -9856,11 +9947,12 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         state.iqPackets.length !== 0 &&
         (!txDisplayActive || state.displayIqSource === "tx");
       if (canRenderIq) {
-        if (now - state.lastSpectrumRenderAt >= 33) {
+        const hasNewIq = state.iqFrameVersion !== state.lastRenderedIqFrameVersion;
+        if (hasNewIq && now - state.lastSpectrumRenderAt >= displayRenderIntervalMs(now)) {
           const iqWindow = buildRenderIqWindow();
           if (iqWindow && iqWindow.length >= 64) {
             const samplePairs = Math.floor(iqWindow.length / 2);
-            const fftSize = fftSizeForSamples(samplePairs);
+            const fftSize = fftSizeForSamples(samplePairs, displayFftTargetSize(now));
             if (fftSize !== fftProcessor.size) {
               fftProcessor = new FftProcessor(fftSize);
             }
@@ -9869,7 +9961,10 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
             const processedBins = processedDisplayBins(visibleBins);
             updateDisplayRange(processedBins);
             spectrumRenderer.render(processedBins, state.displayFloorDb, state.displayCeilingDb);
-            if (state.waterfallSettleFrames > 0) {
+            if (!waterfallEnabled) {
+              state.waterfallSettleFrames = 0;
+              state.waterfallFrameSkipCounter = 0;
+            } else if (state.waterfallSettleFrames > 0) {
               state.waterfallSettleFrames -= 1;
             } else {
               state.waterfallFrameSkipCounter = (state.waterfallFrameSkipCounter + 1) % clampWaterfallSpeed(state.waterfallSpeed);
@@ -9878,17 +9973,20 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
                 waterfallRenderer.render();
               }
             }
+            state.lastRenderedIqFrameVersion = state.iqFrameVersion;
             state.lastSpectrumRenderAt = now;
           }
         }
       } else if (txDisplayActive) {
-        waterfallRenderer.render();
+        if (waterfallEnabled) {
+          waterfallRenderer.render();
+        }
       } else if (!state.connected && !state.demoMode) {
         renderIdleFrame(now);
       } else if (state.demoMode && now - state.lastFrameAt > 120) {
         state.lastFrameAt = now;
         renderIdleFrame(now);
-      } else {
+      } else if (waterfallEnabled && !phoneWanLite) {
         waterfallRenderer.render();
       }
       $("meter-readout").textContent = state.meterDbmVisual == null ? "-- dBm" : `${state.meterDbmVisual.toFixed(1)} dBm`;
