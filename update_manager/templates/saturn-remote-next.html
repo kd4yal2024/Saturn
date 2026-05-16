@@ -4425,10 +4425,11 @@
     const DISPLAY_PACKET_HISTORY_BASE = 48;
     const DISPLAY_PACKET_HISTORY_MAX = 1024;
     const DISPLAY_WAN_PACKET_HISTORY = 18;
-    const DISPLAY_PHONE_WAN_PACKET_HISTORY = 8;
+    const DISPLAY_PHONE_WAN_PACKET_HISTORY = 10;
     const DISPLAY_BASE_RENDER_INTERVAL_MS = 33;
-    const DISPLAY_WAN_RENDER_INTERVAL_MS = 150;
-    const DISPLAY_PHONE_WAN_RENDER_INTERVAL_MS = 275;
+    const DISPLAY_WAN_RENDER_INTERVAL_MS = 100;
+    const DISPLAY_PHONE_WAN_RENDER_INTERVAL_MS = 100;
+    const DISPLAY_PHONE_WAN_WATERFALL_INTERVAL_MS = 1000;
     const PHONE_PANEL_DEFAULTS = Object.freeze({
       session: false,
       audio: false,
@@ -4476,7 +4477,7 @@
     const RX_AUDIO_OVERFLOW_DROP_MS = 250;
     const RX_AUDIO_MOX_RECOVERY_DROP_MS = 180;
     const RX_AUDIO_USE_SAB_RING = false;
-    const RX_MSG_QUEUE_MAX_PACKETS = 4;
+    const RX_MSG_QUEUE_MAX_PACKETS = 6;
     const TX_MIC_BLOCK_SAMPLES = 256;
     const TX_READY_WINDOW_MS = 5 * 60 * 1000;
     const TX_MIC_LEVEL_STALE_MS = 450;
@@ -4687,6 +4688,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     state.txDisplaySettleFrames = 0;
     state.iqFrameVersion = 0;
     state.lastRenderedIqFrameVersion = -1;
+    state.lastWaterfallLineAt = 0;
     state.phoneWaterfallVisible = false;
     state.vfoTuneStepHz = 100;
     state.keyboardPttActive = false;
@@ -5312,6 +5314,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       state.waterfallShiftCarryPixels = 0;
       state.waterfallSettleFrames = 0;
       state.waterfallFrameSkipCounter = 0;
+      state.lastWaterfallLineAt = 0;
       fftProcessor = new FftProcessor(fftProcessor.size);
       resetPeakHoldBins(fftProcessor.size);
       spectrumRenderer.render(state.latestBins, state.displayFloorDb, state.displayCeilingDb);
@@ -5773,22 +5776,19 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
 
     function syncPhoneWaterfall() {
       const wanLite = phoneWanLiteActive();
-      const visible = !wanLite && (state.layoutMode !== "phone" || Boolean(state.phoneWaterfallVisible));
+      const visible = wanLite || state.layoutMode !== "phone" || Boolean(state.phoneWaterfallVisible);
       document.documentElement.dataset.phoneWaterfall = visible ? "visible" : "hidden";
       const button = $("waterfall-toggle-btn");
       if (button) {
-        button.textContent = wanLite ? "WF Paused" : (visible ? "WF On" : "WF Off");
+        button.textContent = wanLite ? "WF WAN" : (visible ? "WF On" : "WF Off");
         button.classList.toggle("active", visible);
-        button.disabled = wanLite;
+        button.disabled = false;
         button.setAttribute("aria-pressed", visible ? "true" : "false");
-        button.title = wanLite ? "Phone WAN mode pauses waterfall rendering" : (visible ? "Hide phone waterfall" : "Show phone waterfall");
+        button.title = wanLite ? "Phone WAN mode shows a low-rate waterfall" : (visible ? "Hide phone waterfall" : "Show phone waterfall");
       }
     }
 
     function togglePhoneWaterfall() {
-      if (phoneWanLiteActive()) {
-        return;
-      }
       state.phoneWaterfallVisible = !state.phoneWaterfallVisible;
       localStorage.setItem(PHONE_WATERFALL_KEY, state.phoneWaterfallVisible ? "1" : "0");
       syncPhoneWaterfall();
@@ -7650,9 +7650,19 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
 
     function waterfallRenderEnabled(now = performance.now()) {
       if (phoneWanLiteActive(now)) {
-        return false;
+        return true;
       }
       return state.layoutMode !== "phone" || Boolean(state.phoneWaterfallVisible);
+    }
+
+    function shouldPushWaterfallLine(now = performance.now()) {
+      if (!waterfallRenderEnabled(now)) {
+        return false;
+      }
+      if (phoneWanLiteActive(now)) {
+        return now - (state.lastWaterfallLineAt || 0) >= DISPLAY_PHONE_WAN_WATERFALL_INTERVAL_MS;
+      }
+      return true;
     }
 
     function audioLeadMs() {
@@ -8349,7 +8359,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       $("display-resolution").textContent += ` | S ${safeFixed(state.displayFloorDb, 0, "-200")}..${safeFixed(state.displayCeilingDb, 0, "-120")} dB`;
       $("display-resolution").textContent += waterfallRenderEnabled()
         ? ` | W ${safeFixed(state.waterfallFloorDb, 0, "-200")}..${safeFixed(state.waterfallCeilingDb, 0, "-120")} dB`
-        : " | W paused";
+        : " | W hidden";
       for (const element of [$("spectrum-shell"), $("waterfall-shell")]) {
         element.style.touchAction = state.frequencyLock ? "pan-y" : "manipulation";
       }
@@ -9925,9 +9935,10 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       const processedBins = processedDisplayBins(visibleBins);
       updateDisplayRange(processedBins);
       spectrumRenderer.render(processedBins, state.displayFloorDb, state.displayCeilingDb);
-      if (waterfallRenderEnabled(now)) {
+      if (shouldPushWaterfallLine(now)) {
         waterfallRenderer.pushLine(processedBins, state.waterfallFloorDb, state.waterfallCeilingDb, state.waterfallPalette);
         waterfallRenderer.render();
+        state.lastWaterfallLineAt = now;
       }
     }
 
@@ -9964,6 +9975,12 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
             if (!waterfallEnabled) {
               state.waterfallSettleFrames = 0;
               state.waterfallFrameSkipCounter = 0;
+            } else if (phoneWanLite) {
+              if (shouldPushWaterfallLine(now)) {
+                waterfallRenderer.pushLine(processedBins, state.waterfallFloorDb, state.waterfallCeilingDb, state.waterfallPalette);
+                waterfallRenderer.render();
+                state.lastWaterfallLineAt = now;
+              }
             } else if (state.waterfallSettleFrames > 0) {
               state.waterfallSettleFrames -= 1;
             } else {
