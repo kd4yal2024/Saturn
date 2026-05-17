@@ -1912,6 +1912,8 @@
       right: 0;
       z-index: 50;
       width: min(560px, calc(100vw - 40px));
+      max-height: min(720px, calc(100vh - 120px));
+      overflow-y: auto;
       padding: 14px;
       border-radius: 22px;
       border: 1px solid var(--theme-panel-border);
@@ -1965,7 +1967,7 @@
     }
 
     .setup-subnav {
-      grid-template-columns: repeat(2, minmax(0, 1fr));
+      grid-template-columns: repeat(3, minmax(0, 1fr));
     }
 
     .setup-tab-btn {
@@ -3610,6 +3612,7 @@
                         <div class="setup-subnav">
                           <button class="setup-tab-btn active" id="setup-dsp-tab-nr" data-setup-dsp-panel="nr" type="button">NR</button>
                           <button class="setup-tab-btn" id="setup-dsp-tab-anf" data-setup-dsp-panel="anf" type="button">ANF</button>
+                          <button class="setup-tab-btn" id="setup-dsp-tab-eq" data-setup-dsp-panel="eq" type="button">RX EQ</button>
                         </div>
 
                         <div class="setup-subpanel" id="setup-dsp-panel-nr" data-setup-dsp-panel-id="nr">
@@ -3678,6 +3681,16 @@
                             <button class="btn ghost" id="setup-dsp-anf-sharp-btn" type="button">Sharp Carrier Hunt</button>
                           </div>
                         </div>
+
+                        <div class="setup-subpanel" id="setup-dsp-panel-eq" data-setup-dsp-panel-id="eq" hidden>
+                          <div class="eq-section">
+                            <div class="eq-header">
+                              <span class="label" style="margin: 0;">RX 10-Band EQ</span>
+                              <button class="btn eq-enable-btn" id="rx-eq-enable-btn" type="button" style="font-size:11px;padding:4px 10px;">EQ Off</button>
+                            </div>
+                            <div class="eq-grid" id="rx-eq-grid"></div>
+                          </div>
+                        </div>
                       </div>
                     </div>
                     <div class="setup-panel" id="setup-panel-tx" data-setup-panel-id="tx" hidden>
@@ -3693,6 +3706,16 @@
                             <input class="field" id="setup-tx-timeout-seconds" type="number" min="10" max="600" step="1" value="180" />
                             <div class="setup-readout" id="setup-tx-timeout-readout">3:00</div>
                           </div>
+                        </div>
+                      </div>
+                      <div class="setup-section">
+                        <div class="setup-section-title">TX Equalizer</div>
+                        <div class="eq-section">
+                          <div class="eq-header">
+                            <span class="label" style="margin: 0;">TX 10-Band EQ</span>
+                            <button class="btn eq-enable-btn" id="tx-eq-enable-btn" type="button" style="font-size:11px;padding:4px 10px;">EQ Off</button>
+                          </div>
+                          <div class="eq-grid" id="tx-eq-grid"></div>
                         </div>
                       </div>
                     </div>
@@ -3896,7 +3919,7 @@
         <div class="panel" data-phone-panel="demod">
           <div class="panel-head" data-phone-panel-head>
             <h2 class="panel-title">Demod</h2>
-            <div class="panel-meta">Mode / RX EQ</div>
+            <div class="panel-meta">Mode</div>
           </div>
           <div class="panel-body">
             <div class="field-row">
@@ -3912,14 +3935,6 @@
                 <button class="mode-btn" data-mode="CWU" type="button">CWU</button>
                 <button class="mode-btn" data-mode="CWL" type="button">CWL</button>
               </div>
-            </div>
-
-            <div class="eq-section">
-              <div class="eq-header">
-                <span class="label" style="margin: 0;">RX 10-Band EQ</span>
-                <button class="btn eq-enable-btn" id="rx-eq-enable-btn" type="button" style="font-size:11px;padding:4px 10px;">EQ Off</button>
-              </div>
-              <div class="eq-grid" id="rx-eq-grid"></div>
             </div>
           </div>
         </div>
@@ -4234,14 +4249,6 @@
                 </div>
                 <input id="tx-filter-high" type="range" min="500" max="6000" step="50" value="3050" />
               </div>
-            </div>
-
-            <div class="eq-section">
-              <div class="eq-header">
-                <span class="label" style="margin: 0;">TX 10-Band EQ</span>
-                <button class="btn eq-enable-btn" id="tx-eq-enable-btn" type="button" style="font-size:11px;padding:4px 10px;">EQ Off</button>
-              </div>
-              <div class="eq-grid" id="tx-eq-grid"></div>
             </div>
 
             <div class="eq-section" style="margin-top:10px;">
