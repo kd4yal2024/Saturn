@@ -13,6 +13,7 @@ This folder contains the operational and technical documentation for the Rust-ba
 7. `SATURN_REMOTE_APPLE_SAFARI_VALIDATION.md`
 8. `SATURN_REMOTE_APPLE_SAFARI_RESULTS.md`
 9. `SATURN_REMOTE_SQUELCH_AUDIO_PROFILE_CONTRACT.md`
+10. `SATURN_REMOTE_TX_UPLINK_PHASE38_CONTRACT.md`
 
 ## Document Guide
 
@@ -49,3 +50,7 @@ This folder contains the operational and technical documentation for the Rust-ba
 - `SATURN_REMOTE_SQUELCH_AUDIO_PROFILE_CONTRACT.md`
   - Pre-implementation bridge/UI contract for RX squelch and quick audio profiles on `/remote-next`.
   - Defines the first SSB syllabic squelch slice, TCI command shape, WDSP mapping, UI placement, and acceptance criteria.
+
+- `SATURN_REMOTE_TX_UPLINK_PHASE38_CONTRACT.md`
+  - Pre-implementation contract for slow-VPN TX uplink safety on `/remote-next`.
+  - Defines browser `bufferedAmount` guard thresholds, bridge-authoritative `tx_fault:uplink_late`, bidirectional TX mic telemetry, regression tests, and acceptance criteria.
