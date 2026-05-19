@@ -1,9 +1,10 @@
 # Saturn Remote Phase 38 TX Uplink Contract
 
 Created: 2026-05-19
+Implemented: 2026-05-19
 
-Scope: ratified pre-implementation contract for the first slow-VPN TX uplink
-slice. This phase is guard, telemetry, and fail-closed visibility only. It
+Scope: ratified contract and implementation notes for the first slow-VPN TX
+uplink slice. This phase is guard, telemetry, and fail-closed visibility only. It
 does not change mic payload format, sample rate, Opus, WDSP setup, or the
 existing bridge RF-keying safety predicate.
 
@@ -124,6 +125,34 @@ and bridge sides so a VPN TX session can correlate "browser dropped early" vs.
 
 `tx_fault:0,uplink_late,<age_ms>,<limit_ms>;` is immediate safety telemetry,
 not part of the 1 Hz heartbeat.
+
+## Implemented TX-A Runtime
+
+The deployed TX-A runtime keeps the browser mic payload as Float32 at 48 kHz
+but writes `tx_mic_seq` into the existing binary header at bytes `32..36`.
+
+The browser:
+
+- Computes RTT-scaled bufferedAmount thresholds from the current bridge RTT,
+  falling back to `200 ms` when no fresh RTT exists.
+- Marks `tx_uplink_degraded` above the `2x RTT` threshold.
+- Drops mic frames before `WebSocket.send()` above the `4x RTT` threshold.
+- Sends `tx_uplink_stats:0,<degraded>,<last_seq>,<dropped_count>,<buffered_bytes>,<buffered_hwm_bytes>;`
+  at 1 Hz and immediately when degraded state flips.
+
+The bridge:
+
+- Tracks browser-reported dropped mic count and uplink buffer watermarks.
+- Tracks bridge-arrived mic sequence, mic sequence gaps, and current mic age.
+- Publishes `remote_tx_uplink:0,<degraded>,<browser_drops>,<buffered>,<hwm>,<last_arrived_seq>,<seq_gaps>,<mic_age_ms>;`
+  at the same 1 Hz diagnostics cadence as Phase 35.
+- Publishes `tx_fault:0,uplink_late,<age_ms>,250;` and forces RX only while
+  the radio is actually keyed/on-air and mic age has exceeded `250 ms` for
+  `100 ms`.
+
+The `/remote-next` UI parses both messages. Operator State shows TX uplink
+state, browser mic drops, bridge mic gaps, and mic age. Existing bridge-fault
+handling records an alarm and locks TX when `uplink_late` arrives.
 
 ## Required Regression Tests
 

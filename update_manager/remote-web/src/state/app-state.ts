@@ -133,6 +133,16 @@ export interface AppState {
   sendBlockedMs: number;
   outboundHighWatermarkBytes: number;
   safetyQueueDepthOverflowCount: number;
+  txUplinkDegraded: boolean;
+  txMicSeq: number;
+  txMicDroppedCount: number;
+  txUplinkBufferedBytes: number;
+  txUplinkBufferedHwmBytes: number;
+  txUplinkStatsAt: number;
+  txUplinkDegradedAt: number;
+  txMicLastArrivedSeq: number;
+  txMicSeqGapCount: number;
+  txMicAgeMs: number;
   txFaultReason: string | null;
   remoteClientRole: 'operator' | 'viewer' | null;
   remoteClientId: string | null;
@@ -329,6 +339,16 @@ export function createAppState(): AppState {
     sendBlockedMs: 0,
     outboundHighWatermarkBytes: 0,
     safetyQueueDepthOverflowCount: 0,
+    txUplinkDegraded: false,
+    txMicSeq: 0,
+    txMicDroppedCount: 0,
+    txUplinkBufferedBytes: 0,
+    txUplinkBufferedHwmBytes: 0,
+    txUplinkStatsAt: 0,
+    txUplinkDegradedAt: 0,
+    txMicLastArrivedSeq: 0,
+    txMicSeqGapCount: 0,
+    txMicAgeMs: 0,
     txFaultReason: null,
     remoteClientRole: null,
     remoteClientId: null,

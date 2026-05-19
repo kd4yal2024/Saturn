@@ -25,6 +25,8 @@ const DEFAULT_REMOTE_TX_MAX_WATTS: u8 = 100;
 const DEFAULT_REMOTE_TX_POWER_TRIP_WATTS: f32 = 110.0;
 const DEFAULT_TCI_CLIENT_RELEASE_GRACE_MS: u64 = 3_000;
 const MAX_TCI_CLIENT_RELEASE_GRACE_MS: u64 = 30_000;
+const TX_UPLINK_LATE_LIMIT: Duration = Duration::from_millis(250);
+const TX_UPLINK_LATE_SUSTAIN: Duration = Duration::from_millis(100);
 
 fn parse_remote_tx_max_watts(value: Option<&str>) -> u8 {
     value
@@ -84,6 +86,36 @@ fn bool01(value: bool) -> u8 {
         1
     } else {
         0
+    }
+}
+
+fn update_tx_uplink_late_detector(
+    on_air: bool,
+    last_mic_at: Option<Instant>,
+    now: Instant,
+    late_since: &mut Option<Instant>,
+) -> Option<Duration> {
+    if !on_air {
+        *late_since = None;
+        return None;
+    }
+
+    let Some(last_mic_at) = last_mic_at else {
+        *late_since = None;
+        return None;
+    };
+
+    let age = now.saturating_duration_since(last_mic_at);
+    if age <= TX_UPLINK_LATE_LIMIT {
+        *late_since = None;
+        return None;
+    }
+
+    let since = late_since.get_or_insert(now);
+    if now.saturating_duration_since(*since) >= TX_UPLINK_LATE_SUSTAIN {
+        Some(age)
+    } else {
+        None
     }
 }
 
@@ -203,6 +235,9 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut status_tci_mic_samples = 0u64;
     let mut latest_tx_diag: Option<TxDiagnostics> = None;
     let mut controller_release_deadline: Option<Instant> = None;
+    let mut last_operator_mic_at: Option<Instant> = None;
+    let mut tx_uplink_late_since: Option<Instant> = None;
+    let mut tx_uplink_fault_active = false;
     loop {
         let mut did_work = false;
         let mut needs_bootstrap = false;
@@ -370,6 +405,9 @@ fn main() -> Result<(), Box<dyn Error>> {
                 }
                 TciCommand::ClientDisconnected => {
                     tx_requested = false;
+                    last_operator_mic_at = None;
+                    tx_uplink_late_since = None;
+                    tx_uplink_fault_active = false;
                     model.desired.tx_enabled = false;
                     model.desired.tx_phase = TxPhase::Rx;
                     let _ = tx_cmd_tx.send(TxCommand::Disarm);
@@ -401,6 +439,9 @@ fn main() -> Result<(), Box<dyn Error>> {
                                 needs_high_priority = true;
                             }
                             tx_requested = true;
+                            last_operator_mic_at = None;
+                            tx_uplink_late_since = None;
+                            tx_uplink_fault_active = false;
                             model.desired.tx_enabled = false;
                             model.desired.tx_phase = TxPhase::Armed;
                             wdsp.reset_stream_buffers();
@@ -419,6 +460,9 @@ fn main() -> Result<(), Box<dyn Error>> {
                         }
                     } else if tx_requested || model.desired.tx_enabled {
                         tx_requested = false;
+                        last_operator_mic_at = None;
+                        tx_uplink_late_since = None;
+                        tx_uplink_fault_active = false;
                         wdsp.reset_stream_buffers();
                         let _ = tx_cmd_tx.send(TxCommand::Disarm);
                         needs_duc_specific = true;
@@ -573,6 +617,8 @@ fn main() -> Result<(), Box<dyn Error>> {
                     if !tx_requested {
                         continue;
                     }
+                    last_operator_mic_at = Some(Instant::now());
+                    tx_uplink_late_since = None;
                     status_tci_mic_frames = status_tci_mic_frames.saturating_add(1);
                     status_tci_mic_samples =
                         status_tci_mic_samples.saturating_add(frame.samples.len() as u64);
@@ -651,6 +697,9 @@ fn main() -> Result<(), Box<dyn Error>> {
                 }
                 TxEvent::Unkeyed => {
                     tx_requested = false;
+                    last_operator_mic_at = None;
+                    tx_uplink_late_since = None;
+                    tx_uplink_fault_active = false;
                     latest_tx_diag = None;
                     let mut model = radio_model.lock().unwrap();
                     model.desired.tx_phase = TxPhase::Rx;
@@ -687,6 +736,9 @@ fn main() -> Result<(), Box<dyn Error>> {
                         );
                         tci.publish_tx_power_trip(forward_watts, remote_tx_power_trip_watts);
                         tx_requested = false;
+                        last_operator_mic_at = None;
+                        tx_uplink_late_since = None;
+                        tx_uplink_fault_active = false;
                         model.desired.tx_enabled = false;
                         model.desired.tx_phase = TxPhase::Rx;
                         let _ = tx_cmd_tx.send(TxCommand::Disarm);
@@ -721,11 +773,48 @@ fn main() -> Result<(), Box<dyn Error>> {
             }
         }
 
+        {
+            let now = Instant::now();
+            let mut model = radio_model.lock().unwrap();
+            let on_air = model.desired.tx_phase == TxPhase::Keyed || model.desired.tx_enabled;
+            if !on_air {
+                tx_uplink_late_since = None;
+                tx_uplink_fault_active = false;
+            } else if !tx_uplink_fault_active {
+                if let Some(age) = update_tx_uplink_late_detector(
+                    on_air,
+                    last_operator_mic_at,
+                    now,
+                    &mut tx_uplink_late_since,
+                ) {
+                    let age_ms = age.as_millis() as u64;
+                    let limit_ms = TX_UPLINK_LATE_LIMIT.as_millis() as u64;
+                    eprintln!(
+                        "saturn-bridge: TX uplink late {}ms > {}ms for {}ms; forcing RX",
+                        age_ms,
+                        limit_ms,
+                        TX_UPLINK_LATE_SUSTAIN.as_millis()
+                    );
+                    tci.publish_tx_uplink_late(age_ms, limit_ms);
+                    tx_requested = false;
+                    tx_uplink_fault_active = true;
+                    last_operator_mic_at = None;
+                    model.desired.tx_enabled = false;
+                    model.desired.tx_phase = TxPhase::Rx;
+                    let _ = tx_cmd_tx.send(TxCommand::Disarm);
+                    session.send_high_priority(&model)?;
+                    session.send_duc_specific()?;
+                    last_duc_specific = now;
+                    did_work = true;
+                }
+            }
+        }
+
         if last_status.elapsed() >= Duration::from_secs(1) {
             let elapsed = last_status.elapsed().as_secs_f64().max(0.001);
             let client = tci.client_snapshot();
             println!(
-                "saturn-bridge: diag hp_s={:.1} ddc_s={:.1} rx_audio_frames_s={:.1} rx_audio_samples_s={:.0} tci_mic_frames_s={:.1} tci_mic_samples_s={:.0} client={} iq={} audio={} outbound_drops={} safety_p99_us={} control_p99_us={} display_replaced_s={} display_dropped_s={} display_rate_limited_s={} audio_dropped_s={} audio_gaps={} audio_panic={} send_blocked_ms={} out_hwm_bytes={} tcp_outq_hwm_bytes={} safety_depth_overflow={} {}",
+                "saturn-bridge: diag hp_s={:.1} ddc_s={:.1} rx_audio_frames_s={:.1} rx_audio_samples_s={:.0} tci_mic_frames_s={:.1} tci_mic_samples_s={:.0} client={} iq={} audio={} outbound_drops={} safety_p99_us={} control_p99_us={} display_replaced_s={} display_dropped_s={} display_rate_limited_s={} audio_dropped_s={} audio_gaps={} audio_panic={} send_blocked_ms={} out_hwm_bytes={} tcp_outq_hwm_bytes={} safety_depth_overflow={} tx_uplink_degraded={} tx_mic_age_ms={} tx_mic_seq={} tx_mic_seq_gaps={} tx_mic_drops={} tx_uplink_buf={} tx_uplink_hwm={} {}",
                 status_hp_packets as f64 / elapsed,
                 status_ddc_packets as f64 / elapsed,
                 status_rx_audio_frames as f64 / elapsed,
@@ -748,9 +837,17 @@ fn main() -> Result<(), Box<dyn Error>> {
                 client.outbound_high_watermark_bytes,
                 client.tcp_outq_high_watermark_bytes,
                 client.safety_queue_depth_overflow_count,
+                bool01(client.tx_uplink_degraded),
+                client.tx_mic_age_ms,
+                client.tx_mic_last_arrived_seq,
+                client.tx_mic_seq_gap_count,
+                client.tx_mic_browser_dropped_count,
+                client.tx_uplink_buffered_bytes,
+                client.tx_uplink_buffered_high_watermark_bytes,
                 format_tx_diag(latest_tx_diag.as_ref())
             );
             tci.publish_scheduler_telemetry(&client);
+            tci.publish_tx_uplink_telemetry(&client);
             let model = radio_model.lock().unwrap();
             println!("saturn-bridge: {}", model.status_line());
             last_status = Instant::now();
@@ -812,6 +909,36 @@ mod tests {
             parse_remote_tx_power_trip_watts(Some("nan")),
             DEFAULT_REMOTE_TX_POWER_TRIP_WATTS
         );
+    }
+
+    #[test]
+    fn tx_uplink_late_detector_is_scoped_to_on_air_tx() {
+        let now = Instant::now();
+        let stale_mic = Some(now - TX_UPLINK_LATE_LIMIT - TX_UPLINK_LATE_SUSTAIN);
+        let mut late_since = Some(now - TX_UPLINK_LATE_SUSTAIN);
+
+        assert!(update_tx_uplink_late_detector(false, stale_mic, now, &mut late_since).is_none());
+        assert!(late_since.is_none());
+    }
+
+    #[test]
+    fn tx_uplink_late_detector_requires_sustained_breach() {
+        let now = Instant::now();
+        let stale_mic = Some(now - TX_UPLINK_LATE_LIMIT - Duration::from_millis(1));
+        let mut late_since = None;
+
+        assert!(update_tx_uplink_late_detector(true, stale_mic, now, &mut late_since).is_none());
+        let later = now + TX_UPLINK_LATE_SUSTAIN;
+        assert!(update_tx_uplink_late_detector(true, stale_mic, later, &mut late_since).is_some());
+    }
+
+    #[test]
+    fn tx_uplink_late_detector_ignores_missing_first_mic() {
+        let now = Instant::now();
+        let mut late_since = None;
+
+        assert!(update_tx_uplink_late_detector(true, None, now, &mut late_since).is_none());
+        assert!(late_since.is_none());
     }
 
     #[test]

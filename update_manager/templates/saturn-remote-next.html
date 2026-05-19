@@ -4488,6 +4488,7 @@
     const RX_AUDIO_USE_SAB_RING = false;
     const RX_MSG_QUEUE_MAX_PACKETS = 8;
     const TX_MIC_BLOCK_SAMPLES = 256;
+    const TX_UPLINK_STATS_INTERVAL_MS = 1000;
     const TX_READY_WINDOW_MS = 5 * 60 * 1000;
     const TX_MIC_LEVEL_STALE_MS = 450;
     const TX_MIC_LEVEL_ATTACK_PER_SEC = 8;
@@ -7839,6 +7840,11 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       const txReady = readyMs > 0 ? `${Math.ceil(readyMs / 1000)}s` : "Closed";
       const rfGate = state.remoteTxRfEnabled == null ? "Unknown" : (state.remoteTxRfEnabled ? "Enabled" : "Disabled");
       const txSource = txControlSourceLabel() || "None";
+      const txUplinkLate = state.txPhase === "keyed" && state.txMicAgeMs > 250;
+      const txUplinkTone = state.txUplinkDegraded || txUplinkLate ? "warn" : "ok";
+      const txUplinkDetail = state.txMicAgeMs
+        ? `${state.txMicAgeMs} ms age, ${state.txMicDroppedCount || 0} browser drop(s), ${state.txMicSeqGapCount || 0} bridge gap(s)`
+        : `${state.txMicDroppedCount || 0} browser drop(s), ${state.txMicSeqGapCount || 0} bridge gap(s)`;
       return [
         {
           title: "State Strip",
@@ -7869,6 +7875,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
             operatorDetailItem("Role", state.remoteClientRole || "Pending", state.remoteClientId ? `Client #${state.remoteClientId}` : "No client id", state.remoteClientRole === "operator" ? "ok" : "warn"),
             operatorDetailItem("TX Ready", txReady, txLockReasonLabel(state.txLockReason), readyMs > 0 ? "ok" : "warn"),
             operatorDetailItem("TX Source", txSource, state.txPhase, state.txPhase === "keyed" ? "keyed" : (state.txPhase === "armed" || state.moxRequested ? "tx" : "rx")),
+            operatorDetailItem("TX Uplink", state.txUplinkDegraded ? "Degraded" : "Clear", txUplinkDetail, txUplinkTone),
             operatorDetailItem("Latest Fault", latestOperatorFault ? latestOperatorFault.label : "Clear", latestFaultAge == null ? "No recent operator-visible faults" : `${latestFaultAge}s ago`, latestOperatorFault ? (latestOperatorFault.tone || "warn") : "ok"),
           ],
         },
@@ -8975,7 +8982,67 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       return Math.max(0, state.txReadyExpiresAt - performance.now());
     }
 
-    function buildTxMicFrame(monoSamples) {
+    function resetTxUplinkStats(clearDegraded = true) {
+      if (clearDegraded) {
+        state.txUplinkDegraded = false;
+        state.txUplinkDegradedAt = 0;
+      }
+      state.txMicSeq = 0;
+      state.txMicDroppedCount = 0;
+      state.txUplinkBufferedBytes = 0;
+      state.txUplinkBufferedHwmBytes = 0;
+      state.txUplinkStatsAt = 0;
+    }
+
+    function txMicByteRate() {
+      return _next.txMicByteRateBytesPerSecond(48000, 4, TX_MIC_BLOCK_SAMPLES, 64);
+    }
+
+    function sendTxUplinkStats(force = false) {
+      const now = performance.now();
+      if (!force && now - (state.txUplinkStatsAt || 0) < TX_UPLINK_STATS_INTERVAL_MS) {
+        return false;
+      }
+      state.txUplinkStatsAt = now;
+      return sendTci(
+        `tx_uplink_stats:0,${state.txUplinkDegraded ? "true" : "false"},${state.txMicSeq || 0},${state.txMicDroppedCount || 0},${Math.round(state.txUplinkBufferedBytes || 0)},${Math.round(state.txUplinkBufferedHwmBytes || 0)};`
+      );
+    }
+
+    function setTxUplinkDegraded(degraded, decision) {
+      if (state.txUplinkDegraded === degraded) {
+        return;
+      }
+      state.txUplinkDegraded = degraded;
+      state.txUplinkDegradedAt = degraded ? performance.now() : 0;
+      if (degraded) {
+        recordOperatorFault("TX audio late", "warn", false);
+        logEvent(`TX uplink degraded: ${decision.bufferedBytes} bytes queued`);
+      } else {
+        logEvent("TX uplink clear");
+      }
+      sendTxUplinkStats(true);
+      updateUi();
+    }
+
+    function nextTxMicSequence() {
+      state.txMicSeq = ((state.txMicSeq || 0) + 1) >>> 0;
+      if (state.txMicSeq === 0) {
+        state.txMicSeq = 1;
+      }
+      return state.txMicSeq;
+    }
+
+    function recordTxMicPeak(monoSamples) {
+      let peak = 0;
+      for (let i = 0; i < monoSamples.length; i++) {
+        peak = Math.max(peak, Math.abs(Number(monoSamples[i]) || 0));
+      }
+      state.txMicLevel = Math.max(0, Math.min(1, peak));
+      state.txMicLevelAt = performance.now();
+    }
+
+    function buildTxMicFrame(monoSamples, sequence) {
       const sampleCount = monoSamples.length;
       const buf = new ArrayBuffer(64 + sampleCount * 4);
       const view = new DataView(buf);
@@ -8985,6 +9052,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       view.setUint32(20, sampleCount, true);             // sample_count
       view.setUint32(24, TCI_STREAM_MIC_TX, true);        // stream_type = 2 (TX mic)
       view.setUint32(28, 1, true);                       // channels = 1 (mono)
+      view.setUint32(32, sequence >>> 0, true);           // tx_mic_seq
       let peak = 0;
       for (let i = 0; i < monoSamples.length; i++) {
         const sample = Number(monoSamples[i]) || 0;
@@ -8994,6 +9062,26 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       state.txMicLevel = Math.max(0, Math.min(1, peak));
       state.txMicLevelAt = performance.now();
       return buf;
+    }
+
+    function sendTxMicSamples(monoSamples) {
+      if (!state.moxRequested || !state.connected || !state.ws || state.ws.readyState !== WebSocket.OPEN) {
+        return false;
+      }
+      const bufferedBytes = Math.max(0, Math.round(Number(state.ws.bufferedAmount || 0)));
+      const decision = _next.decideTxMicSend(bufferedBytes, state.bridgeRttMs, txMicByteRate());
+      state.txUplinkBufferedBytes = decision.bufferedBytes;
+      state.txUplinkBufferedHwmBytes = Math.max(state.txUplinkBufferedHwmBytes || 0, decision.bufferedBytes);
+      setTxUplinkDegraded(decision.degraded, decision);
+      if (decision.action === "drop") {
+        state.txMicDroppedCount = (state.txMicDroppedCount || 0) + 1;
+        recordTxMicPeak(monoSamples);
+        sendTxUplinkStats(false);
+        return false;
+      }
+      state.ws.send(buildTxMicFrame(monoSamples, nextTxMicSequence()));
+      sendTxUplinkStats(false);
+      return true;
     }
 
     function requestMicrophoneStream(constraints) {
@@ -9024,6 +9112,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
 
     async function startMicCapture(requestId) {
       if (state.micCapturing) { return true; }
+      resetTxUplinkStats(true);
       let micStream = null;
       let micCtx = null;
       try {
@@ -9058,8 +9147,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
               outputChannelCount: [1],
             });
             proc.port.onmessage = (evt) => {
-              if (!state.moxRequested || !state.connected || !state.ws || state.ws.readyState !== WebSocket.OPEN) { return; }
-              state.ws.send(buildTxMicFrame(evt.data.samples));
+              sendTxMicSamples(evt.data.samples);
             };
             txMode = "worklet";
           } catch (error) {
@@ -9072,8 +9160,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
           // ScriptProcessorNode fallback: 256-sample blocks (about 5.3 ms at 48 kHz).
           proc = micCtx.createScriptProcessor(TX_MIC_BLOCK_SAMPLES, 1, 1);
           proc.onaudioprocess = (evt) => {
-            if (!state.moxRequested || !state.connected || !state.ws || state.ws.readyState !== WebSocket.OPEN) { return; }
-            state.ws.send(buildTxMicFrame(evt.inputBuffer.getChannelData(0)));
+            sendTxMicSamples(evt.inputBuffer.getChannelData(0));
           };
         }
         // Route through a silent gain node so capture processing stays active
@@ -9116,6 +9203,9 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       state.txMicLevel = null;
       state.txMicLevelVisual = 0;
       state.txMicLevelAt = 0;
+      state.txUplinkDegraded = false;
+      state.txUplinkDegradedAt = 0;
+      sendTxUplinkStats(true);
       logEvent("Mic capture stopped");
     }
 

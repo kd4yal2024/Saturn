@@ -123,6 +123,16 @@ export interface NormalizableState extends RadioPrefsTarget, DisplayPrefsTarget 
   sendBlockedMs?: number;
   outboundHighWatermarkBytes?: number;
   safetyQueueDepthOverflowCount?: number;
+  txUplinkDegraded?: boolean;
+  txMicSeq?: number;
+  txMicDroppedCount?: number;
+  txUplinkBufferedBytes?: number;
+  txUplinkBufferedHwmBytes?: number;
+  txUplinkStatsAt?: number;
+  txUplinkDegradedAt?: number;
+  txMicLastArrivedSeq?: number;
+  txMicSeqGapCount?: number;
+  txMicAgeMs?: number;
 }
 
 function stringPref(value: unknown, fallback: string): string {
@@ -294,6 +304,16 @@ export function normalizeAppStateInPlace(state: NormalizableState): void {
   state.sendBlockedMs = Math.max(0, Math.round(safeFiniteNumber(state.sendBlockedMs, 0)));
   state.outboundHighWatermarkBytes = Math.max(0, Math.round(safeFiniteNumber(state.outboundHighWatermarkBytes, 0)));
   state.safetyQueueDepthOverflowCount = Math.max(0, Math.round(safeFiniteNumber(state.safetyQueueDepthOverflowCount, 0)));
+  state.txUplinkDegraded = Boolean(state.txUplinkDegraded);
+  state.txMicSeq = Math.max(0, Math.round(safeFiniteNumber(state.txMicSeq, 0)));
+  state.txMicDroppedCount = Math.max(0, Math.round(safeFiniteNumber(state.txMicDroppedCount, 0)));
+  state.txUplinkBufferedBytes = Math.max(0, Math.round(safeFiniteNumber(state.txUplinkBufferedBytes, 0)));
+  state.txUplinkBufferedHwmBytes = Math.max(0, Math.round(safeFiniteNumber(state.txUplinkBufferedHwmBytes, 0)));
+  state.txUplinkStatsAt = Math.max(0, safeFiniteNumber(state.txUplinkStatsAt, 0));
+  state.txUplinkDegradedAt = Math.max(0, safeFiniteNumber(state.txUplinkDegradedAt, 0));
+  state.txMicLastArrivedSeq = Math.max(0, Math.round(safeFiniteNumber(state.txMicLastArrivedSeq, 0)));
+  state.txMicSeqGapCount = Math.max(0, Math.round(safeFiniteNumber(state.txMicSeqGapCount, 0)));
+  state.txMicAgeMs = Math.max(0, Math.round(safeFiniteNumber(state.txMicAgeMs, 0)));
   state.spectrumAutoRange = Boolean(state.spectrumAutoRange);
   state.displayFloorDb = clampDisplayDb(state.displayFloorDb, -200);
   state.displayCeilingDb = clampDisplayDb(state.displayCeilingDb, -120);

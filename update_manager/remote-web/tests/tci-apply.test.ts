@@ -53,6 +53,13 @@ function createState(): TciRadioState {
     sendBlockedMs: 0,
     outboundHighWatermarkBytes: 0,
     safetyQueueDepthOverflowCount: 0,
+    txUplinkDegraded: false,
+    txMicDroppedCount: 0,
+    txUplinkBufferedBytes: 0,
+    txUplinkBufferedHwmBytes: 0,
+    txMicLastArrivedSeq: 0,
+    txMicSeqGapCount: 0,
+    txMicAgeMs: 0,
     txFaultReason: null,
     remoteClientRole: null,
     remoteClientId: null,
@@ -128,6 +135,20 @@ describe('applyTciText', () => {
     expect(result.state.sendBlockedMs).toBe(12);
     expect(result.state.outboundHighWatermarkBytes).toBe(13000);
     expect(result.state.safetyQueueDepthOverflowCount).toBe(14);
+  });
+
+  it('tracks bridge TX uplink telemetry', () => {
+    const result = applyTciText(
+      'remote_tx_uplink:0,true,42,32000,64000,1234,2,180;',
+      createState(),
+    );
+    expect(result.state.txUplinkDegraded).toBe(true);
+    expect(result.state.txMicDroppedCount).toBe(42);
+    expect(result.state.txUplinkBufferedBytes).toBe(32000);
+    expect(result.state.txUplinkBufferedHwmBytes).toBe(64000);
+    expect(result.state.txMicLastArrivedSeq).toBe(1234);
+    expect(result.state.txMicSeqGapCount).toBe(2);
+    expect(result.state.txMicAgeMs).toBe(180);
   });
 
   it('tracks the bridge RF enable gate', () => {
@@ -236,6 +257,18 @@ describe('applyTciText', () => {
     expect(result.state.txPhase).toBe('rx');
     expect(result.state.txEnabled).toBe(false);
     expect(result.state.moxRequested).toBe(false);
+    expect(result.txReleased).toBe(true);
+  });
+
+  it('describes bridge uplink-late TX faults', () => {
+    const initial = createState();
+    initial.txPhase = 'keyed';
+    initial.txEnabled = true;
+    initial.moxRequested = true;
+    const result = applyTciText('tx_fault:0,uplink_late,280,250;', initial);
+    expect(result.txFault).toBe('Uplink late 280 ms > 250 ms');
+    expect(result.state.txFaultReason).toBe('Uplink late 280 ms > 250 ms');
+    expect(result.state.txPhase).toBe('rx');
     expect(result.txReleased).toBe(true);
   });
 

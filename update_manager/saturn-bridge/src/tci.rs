@@ -22,6 +22,7 @@ use crate::radio_model::{AgcMode, DemodMode, NoiseBlankerMode, NoiseReductionMod
 pub struct TciMicFrame {
     pub sample_rate_hz: u32,
     pub channels: u32,
+    pub sequence: u32,
     pub samples: Vec<f32>,
 }
 
@@ -616,6 +617,14 @@ struct ClientState {
     audio_frame_float_count: u32,
     audio_channels: u32,
     audio_seq_gap_count: u64,
+    tx_uplink_degraded: bool,
+    tx_mic_browser_last_seq: u32,
+    tx_mic_browser_dropped_count: u64,
+    tx_uplink_buffered_bytes: u64,
+    tx_uplink_buffered_high_watermark_bytes: u64,
+    tx_mic_last_arrived_seq: u32,
+    tx_mic_seq_gap_count: u64,
+    tx_mic_last_arrived_at: Option<Instant>,
 }
 
 impl Default for ClientState {
@@ -627,6 +636,14 @@ impl Default for ClientState {
             audio_frame_float_count: 2048,
             audio_channels: 2,
             audio_seq_gap_count: 0,
+            tx_uplink_degraded: false,
+            tx_mic_browser_last_seq: 0,
+            tx_mic_browser_dropped_count: 0,
+            tx_uplink_buffered_bytes: 0,
+            tx_uplink_buffered_high_watermark_bytes: 0,
+            tx_mic_last_arrived_seq: 0,
+            tx_mic_seq_gap_count: 0,
+            tx_mic_last_arrived_at: None,
         }
     }
 }
@@ -655,6 +672,10 @@ unsafe extern "C" {
 
 fn tx_power_trip_fault_message(forward_watts: f32, limit_watts: f32) -> String {
     format!("tx_fault:0,power_trip,{forward_watts:.1},{limit_watts:.1};")
+}
+
+fn tx_uplink_late_fault_message(age_ms: u64, limit_ms: u64) -> String {
+    format!("tx_fault:0,uplink_late,{age_ms},{limit_ms};")
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -712,6 +733,13 @@ pub struct TciClientSnapshot {
     pub tcp_outq_high_watermark_bytes: u64,
     pub display_rate_limited_per_sec: u64,
     pub safety_queue_depth_overflow_count: u64,
+    pub tx_uplink_degraded: bool,
+    pub tx_mic_browser_dropped_count: u64,
+    pub tx_uplink_buffered_bytes: u64,
+    pub tx_uplink_buffered_high_watermark_bytes: u64,
+    pub tx_mic_last_arrived_seq: u32,
+    pub tx_mic_seq_gap_count: u64,
+    pub tx_mic_age_ms: u64,
 }
 
 struct JoinGuard {
@@ -795,6 +823,7 @@ impl TciFrontend {
 
     pub fn client_snapshot(&self) -> TciClientSnapshot {
         let clients = self.clients.lock().unwrap();
+        let now = Instant::now();
         let mut safety_latencies_us = Vec::new();
         let mut control_latencies_us = Vec::new();
         let mut display_replaced_per_sec = 0u64;
@@ -855,6 +884,38 @@ impl TciFrontend {
                 .display_rate_limited_count
                 .swap(0, Ordering::Relaxed),
             safety_queue_depth_overflow_count,
+            tx_uplink_degraded: clients
+                .values()
+                .any(|client| client.state.tx_uplink_degraded),
+            tx_mic_browser_dropped_count: clients
+                .values()
+                .map(|client| client.state.tx_mic_browser_dropped_count)
+                .sum(),
+            tx_uplink_buffered_bytes: clients
+                .values()
+                .map(|client| client.state.tx_uplink_buffered_bytes)
+                .max()
+                .unwrap_or(0),
+            tx_uplink_buffered_high_watermark_bytes: clients
+                .values()
+                .map(|client| client.state.tx_uplink_buffered_high_watermark_bytes)
+                .max()
+                .unwrap_or(0),
+            tx_mic_last_arrived_seq: clients
+                .values()
+                .map(|client| client.state.tx_mic_last_arrived_seq)
+                .max()
+                .unwrap_or(0),
+            tx_mic_seq_gap_count: clients
+                .values()
+                .map(|client| client.state.tx_mic_seq_gap_count)
+                .sum(),
+            tx_mic_age_ms: clients
+                .values()
+                .filter_map(|client| client.state.tx_mic_last_arrived_at)
+                .map(|arrived_at| now.saturating_duration_since(arrived_at).as_millis() as u64)
+                .max()
+                .unwrap_or(0),
         }
     }
 
@@ -1036,12 +1097,29 @@ impl TciFrontend {
         ));
     }
 
+    pub fn publish_tx_uplink_telemetry(&self, snapshot: &TciClientSnapshot) {
+        self.send_text(format!(
+            "remote_tx_uplink:0,{},{},{},{},{},{},{};",
+            if snapshot.tx_uplink_degraded { 1 } else { 0 },
+            snapshot.tx_mic_browser_dropped_count,
+            snapshot.tx_uplink_buffered_bytes,
+            snapshot.tx_uplink_buffered_high_watermark_bytes,
+            snapshot.tx_mic_last_arrived_seq,
+            snapshot.tx_mic_seq_gap_count,
+            snapshot.tx_mic_age_ms
+        ));
+    }
+
     pub fn publish_saturn_pong(&self, client_id: u64, nonce: &str, sent_at: &str) {
         self.send_text_to(client_id, format!("saturn_pong:{nonce},{sent_at};"));
     }
 
     pub fn publish_tx_power_trip(&self, forward_watts: f32, limit_watts: f32) {
         self.send_safety_text(tx_power_trip_fault_message(forward_watts, limit_watts));
+    }
+
+    pub fn publish_tx_uplink_late(&self, age_ms: u64, limit_ms: u64) {
+        self.send_safety_text(tx_uplink_late_fault_message(age_ms, limit_ms));
     }
 
     pub fn publish_iq_frame(&self, sample_rate_hz: u32, iq_samples: &[f32]) {
@@ -1586,6 +1664,7 @@ fn handle_incoming_message(
         Message::Binary(data) => {
             if is_operator {
                 if let Some(frame) = parse_tci_mic_frame(&data) {
+                    record_client_tx_mic_frame(clients, client_id, frame.sequence);
                     let _ = command_tx.send(TciCommand::MicAudioFrame(frame));
                 }
             }
@@ -1868,6 +1947,38 @@ fn parse_tci_command(
                     set_client_audio_seq_gap_count(clients, client_id, gaps);
                 }
             }
+        }
+        "tx_uplink_stats" => {
+            let offset = if args.len() >= 6 { 1 } else { 0 };
+            let degraded = args
+                .get(offset)
+                .and_then(|value| parse_tci_bool(value))
+                .unwrap_or(false);
+            let last_seq = args
+                .get(offset + 1)
+                .and_then(|value| value.trim().parse::<u32>().ok())
+                .unwrap_or(0);
+            let dropped_count = args
+                .get(offset + 2)
+                .and_then(|value| value.trim().parse::<u64>().ok())
+                .unwrap_or(0);
+            let buffered_bytes = args
+                .get(offset + 3)
+                .and_then(|value| value.trim().parse::<u64>().ok())
+                .unwrap_or(0);
+            let high_watermark_bytes = args
+                .get(offset + 4)
+                .and_then(|value| value.trim().parse::<u64>().ok())
+                .unwrap_or(buffered_bytes);
+            set_client_tx_uplink_stats(
+                clients,
+                client_id,
+                degraded,
+                last_seq,
+                dropped_count,
+                buffered_bytes,
+                high_watermark_bytes,
+            );
         }
         "audio_stream_sample_type" => {}
         "rx_smeter" | "s_meter" | "smeter" => {
@@ -2349,11 +2460,55 @@ fn set_client_audio_seq_gap_count(clients: &ClientRegistry, client_id: u64, gaps
     }
 }
 
+fn set_client_tx_uplink_stats(
+    clients: &ClientRegistry,
+    client_id: u64,
+    degraded: bool,
+    last_seq: u32,
+    dropped_count: u64,
+    buffered_bytes: u64,
+    high_watermark_bytes: u64,
+) {
+    if let Some(client) = clients.lock().unwrap().get_mut(&client_id) {
+        client.state.tx_uplink_degraded = degraded;
+        client.state.tx_mic_browser_last_seq = last_seq;
+        client.state.tx_mic_browser_dropped_count = dropped_count;
+        client.state.tx_uplink_buffered_bytes = buffered_bytes;
+        client.state.tx_uplink_buffered_high_watermark_bytes =
+            high_watermark_bytes.max(buffered_bytes);
+    }
+}
+
+fn next_wrapped_sequence(sequence: u32) -> u32 {
+    let next = sequence.wrapping_add(1);
+    if next == 0 {
+        1
+    } else {
+        next
+    }
+}
+
+fn record_client_tx_mic_frame(clients: &ClientRegistry, client_id: u64, sequence: u32) {
+    if let Some(client) = clients.lock().unwrap().get_mut(&client_id) {
+        client.state.tx_mic_last_arrived_at = Some(Instant::now());
+        if sequence == 0 {
+            return;
+        }
+        if client.state.tx_mic_last_arrived_seq != 0
+            && sequence != next_wrapped_sequence(client.state.tx_mic_last_arrived_seq)
+        {
+            client.state.tx_mic_seq_gap_count = client.state.tx_mic_seq_gap_count.saturating_add(1);
+        }
+        client.state.tx_mic_last_arrived_seq = sequence;
+    }
+}
+
 /// Parse a TCI binary frame that contains TX mic audio from the client.
 /// Frame layout: 64-byte header + f32 LE samples.
 ///   header[20..24] = sample_count (u32 LE)
 ///   header[24..28] = stream_type  (u32 LE); must be 2 (TX mic)
 ///   header[28..32] = channels     (u32 LE); 1=mono, 2=stereo
+///   header[32..36] = tx_mic_seq   (u32 LE); 0 means legacy/unknown
 ///
 /// stream_type == 1 is intentionally excluded: it is the RX audio type used by
 /// the server→client direction and must not be fed into the TX DSP path.
@@ -2371,6 +2526,7 @@ fn parse_tci_mic_frame(data: &[u8]) -> Option<TciMicFrame> {
         0 | 1 => 1,
         _ => 2,
     };
+    let sequence = u32::from_le_bytes(data[32..36].try_into().ok()?);
     let sample_count = u32::from_le_bytes(data[20..24].try_into().ok()?) as usize;
     if sample_count == 0 || sample_count > MAX_TCI_MIC_FLOAT_SAMPLES {
         return None;
@@ -2387,6 +2543,7 @@ fn parse_tci_mic_frame(data: &[u8]) -> Option<TciMicFrame> {
     Some(TciMicFrame {
         sample_rate_hz,
         channels,
+        sequence,
         samples,
     })
 }
@@ -2757,12 +2914,14 @@ mod tests {
         write_u32_le(&mut frame, 20, 2);
         write_u32_le(&mut frame, 24, 2);
         write_u32_le(&mut frame, 28, 1);
+        write_u32_le(&mut frame, 32, 77);
         frame[64..68].copy_from_slice(&0.25f32.to_le_bytes());
         frame[68..72].copy_from_slice(&(-0.5f32).to_le_bytes());
 
         let parsed = parse_tci_mic_frame(&frame).unwrap();
         assert_eq!(parsed.sample_rate_hz, 48_000);
         assert_eq!(parsed.channels, 1);
+        assert_eq!(parsed.sequence, 77);
         assert_eq!(parsed.samples, vec![0.25, -0.5]);
     }
 
@@ -2781,6 +2940,7 @@ mod tests {
         let parsed = parse_tci_mic_frame(&frame).unwrap();
         assert_eq!(parsed.sample_rate_hz, 48_000);
         assert_eq!(parsed.channels, 2);
+        assert_eq!(parsed.sequence, 0);
         assert_eq!(parsed.samples, vec![0.25, -0.25, 0.5, -0.5]);
     }
 
@@ -2834,6 +2994,14 @@ mod tests {
     }
 
     #[test]
+    fn formats_tx_uplink_late_fault_message() {
+        assert_eq!(
+            tx_uplink_late_fault_message(280, 250),
+            "tx_fault:0,uplink_late,280,250;"
+        );
+    }
+
+    #[test]
     fn formats_remote_client_role_message() {
         assert_eq!(
             remote_client_role_message(42, TciClientRole::Operator),
@@ -2876,6 +3044,59 @@ mod tests {
                 .audio_seq_gap_count,
             4
         );
+
+        parse_tci_command(
+            "tx_uplink_stats:0,true,5,6,7000,9000",
+            &tx,
+            &clients,
+            9,
+            false,
+        );
+        assert!(
+            !clients
+                .lock()
+                .unwrap()
+                .get(&9)
+                .unwrap()
+                .state
+                .tx_uplink_degraded
+        );
+    }
+
+    #[test]
+    fn parses_operator_tx_uplink_stats() {
+        let (tx, _rx) = mpsc::channel();
+        let clients = test_client_registry(9);
+
+        parse_tci_command(
+            "tx_uplink_stats:0,true,5,6,7000,9000",
+            &tx,
+            &clients,
+            9,
+            true,
+        );
+        let clients = clients.lock().unwrap();
+        let state = &clients.get(&9).unwrap().state;
+        assert!(state.tx_uplink_degraded);
+        assert_eq!(state.tx_mic_browser_last_seq, 5);
+        assert_eq!(state.tx_mic_browser_dropped_count, 6);
+        assert_eq!(state.tx_uplink_buffered_bytes, 7000);
+        assert_eq!(state.tx_uplink_buffered_high_watermark_bytes, 9000);
+    }
+
+    #[test]
+    fn records_tx_mic_sequence_gaps() {
+        let clients = test_client_registry(9);
+
+        record_client_tx_mic_frame(&clients, 9, 1);
+        record_client_tx_mic_frame(&clients, 9, 2);
+        record_client_tx_mic_frame(&clients, 9, 4);
+
+        let clients = clients.lock().unwrap();
+        let state = &clients.get(&9).unwrap().state;
+        assert_eq!(state.tx_mic_last_arrived_seq, 4);
+        assert_eq!(state.tx_mic_seq_gap_count, 1);
+        assert!(state.tx_mic_last_arrived_at.is_some());
     }
 
     #[test]

@@ -53,12 +53,21 @@ function describeTxFault(args: readonly string[]): string {
     .toLowerCase();
   const actualWatts = numericArg(argAt(args, 2));
   const limitWatts = numericArg(argAt(args, 3));
+  const actualMs = numericArg(argAt(args, 2));
+  const limitMs = numericArg(argAt(args, 3));
 
   if (reason === 'power_trip') {
     if (actualWatts != null && limitWatts != null) {
       return `Power trip ${actualWatts.toFixed(1)} W > ${limitWatts.toFixed(1)} W`;
     }
     return 'Power trip';
+  }
+
+  if (reason === 'uplink_late') {
+    if (actualMs != null && limitMs != null) {
+      return `Uplink late ${Math.round(actualMs)} ms > ${Math.round(limitMs)} ms`;
+    }
+    return 'Uplink late';
   }
 
   return `Bridge fault: ${reason.replace(/[_-]+/g, ' ') || 'TX fault'}`;
@@ -243,6 +252,18 @@ export function applyTciCommand(command: TciCommand, current: TciRadioState): Tc
       nonNegativeIntArg(args, offset + 12) ?? next.outboundHighWatermarkBytes;
     next.safetyQueueDepthOverflowCount =
       nonNegativeIntArg(args, offset + 13) ?? next.safetyQueueDepthOverflowCount;
+  } else if (command.name === 'remote_tx_uplink') {
+    const offset = args.length >= 8 ? 1 : 0;
+    const degraded = booleanArg(argAt(args, offset));
+    if (degraded != null) next.txUplinkDegraded = degraded;
+    next.txMicDroppedCount = nonNegativeIntArg(args, offset + 1) ?? next.txMicDroppedCount;
+    next.txUplinkBufferedBytes = nonNegativeIntArg(args, offset + 2) ?? next.txUplinkBufferedBytes;
+    next.txUplinkBufferedHwmBytes =
+      nonNegativeIntArg(args, offset + 3) ?? next.txUplinkBufferedHwmBytes;
+    next.txMicLastArrivedSeq =
+      nonNegativeIntArg(args, offset + 4) ?? next.txMicLastArrivedSeq;
+    next.txMicSeqGapCount = nonNegativeIntArg(args, offset + 5) ?? next.txMicSeqGapCount;
+    next.txMicAgeMs = nonNegativeIntArg(args, offset + 6) ?? next.txMicAgeMs;
   } else if (command.name === 'tx_fault') {
     txFault = describeTxFault(args);
     next.txFaultReason = txFault;

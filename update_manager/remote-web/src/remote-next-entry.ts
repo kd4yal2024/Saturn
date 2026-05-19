@@ -42,6 +42,7 @@ import { applyTciText } from './tci/apply';
 import { classifyFrame, decodeRxFrame, decodeIqFrame, decodeAudioFrame } from './transport/rx-frame';
 import { parseTciBinaryFrameHeader } from './transport/tci-frame';
 import { applyIqFrame, applyAudioFrame, fftSizeForSamples, buildRenderIqWindow } from './transport/rx-apply';
+import { decideTxMicSend, txMicByteRateBytesPerSecond, txUplinkBufferedThresholdBytes } from './transport/tx-uplink';
 import { bandKeyForFrequency, effectiveIqSampleRate, HAM_BAND_EDGES_HZ, adcLabel, antennaLabel, normalizeStreamMode, noiseReductionLabel, describeMicCaptureError } from './radio/band';
 import {
   normalizeDemodMode,
@@ -127,6 +128,9 @@ const api = {
   applyAudioFrame,
   fftSizeForSamples,
   buildRenderIqWindow,
+  decideTxMicSend,
+  txMicByteRateBytesPerSecond,
+  txUplinkBufferedThresholdBytes,
 
   // Radio
   bandKeyForFrequency,
@@ -261,6 +265,9 @@ export {
   applyAudioFrame,
   fftSizeForSamples,
   buildRenderIqWindow,
+  decideTxMicSend,
+  txMicByteRateBytesPerSecond,
+  txUplinkBufferedThresholdBytes,
   bandKeyForFrequency,
   effectiveIqSampleRate,
   HAM_BAND_EDGES_HZ,

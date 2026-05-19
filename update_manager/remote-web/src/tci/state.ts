@@ -53,6 +53,13 @@ export type TciRadioState = {
   sendBlockedMs: number;
   outboundHighWatermarkBytes: number;
   safetyQueueDepthOverflowCount: number;
+  txUplinkDegraded: boolean;
+  txMicDroppedCount: number;
+  txUplinkBufferedBytes: number;
+  txUplinkBufferedHwmBytes: number;
+  txMicLastArrivedSeq: number;
+  txMicSeqGapCount: number;
+  txMicAgeMs: number;
   txFaultReason: string | null;
   remoteClientRole: TciClientRole | null;
   remoteClientId: string | null;
