@@ -659,7 +659,10 @@ type ClientRegistry = Arc<Mutex<BTreeMap<u64, ClientConnection>>>;
 
 const MAX_TCI_INBOUND_MESSAGE_BYTES: usize = 256 * 1024;
 const MAX_TCI_INBOUND_FRAME_BYTES: usize = 256 * 1024;
-const MAX_TCI_MIC_FLOAT_SAMPLES: usize = 32_768;
+const MAX_TCI_MIC_SAMPLES: usize = 32_768;
+const TCI_SAMPLE_TYPE_LEGACY_FLOAT32: u32 = 0;
+const TCI_SAMPLE_TYPE_S16: u32 = 1;
+const TCI_SAMPLE_TYPE_FLOAT32: u32 = 3;
 const BULK_TCP_OUTQ_LIMIT_BYTES: usize = 64 * 1024;
 const BULK_BACKPRESSURE_PAUSE_MS: u64 = 10;
 
@@ -2515,7 +2518,8 @@ fn record_client_tx_mic_frame(
 }
 
 /// Parse a TCI binary frame that contains TX mic audio from the client.
-/// Frame layout: 64-byte header + f32 LE samples.
+/// Frame layout: 64-byte header + LE samples.
+///   header[8..12]  = sample_type  (u32 LE); 1=s16, 3=float32, 0=legacy float32
 ///   header[20..24] = sample_count (u32 LE)
 ///   header[24..28] = stream_type  (u32 LE); must be 2 (TX mic)
 ///   header[28..32] = channels     (u32 LE); 1=mono, 2=stereo
@@ -2524,10 +2528,11 @@ fn record_client_tx_mic_frame(
 /// stream_type == 1 is intentionally excluded: it is the RX audio type used by
 /// the server→client direction and must not be fed into the TX DSP path.
 fn parse_tci_mic_frame(data: &[u8]) -> Option<TciMicFrame> {
-    if data.len() < 68 {
-        return None; // need at least header + 1 sample
+    if data.len() < 64 {
+        return None;
     }
     let sample_rate_hz = u32::from_le_bytes(data[4..8].try_into().ok()?);
+    let sample_type = u32::from_le_bytes(data[8..12].try_into().ok()?);
     let stream_type = u32::from_le_bytes(data[24..28].try_into().ok()?);
     if stream_type != 2 {
         return None;
@@ -2539,18 +2544,35 @@ fn parse_tci_mic_frame(data: &[u8]) -> Option<TciMicFrame> {
     };
     let sequence = u32::from_le_bytes(data[32..36].try_into().ok()?);
     let sample_count = u32::from_le_bytes(data[20..24].try_into().ok()?) as usize;
-    if sample_count == 0 || sample_count > MAX_TCI_MIC_FLOAT_SAMPLES {
+    if sample_count == 0 || sample_count > MAX_TCI_MIC_SAMPLES {
         return None;
     }
     let payload = &data[64..];
-    if payload.len() < sample_count * 4 {
-        return None;
-    }
-    let mut samples = Vec::with_capacity(sample_count);
-    for i in 0..sample_count {
-        let bytes: [u8; 4] = payload[i * 4..i * 4 + 4].try_into().ok()?;
-        samples.push(f32::from_le_bytes(bytes));
-    }
+    let samples = match sample_type {
+        TCI_SAMPLE_TYPE_S16 => {
+            if payload.len() < sample_count * 2 {
+                return None;
+            }
+            let mut samples = Vec::with_capacity(sample_count);
+            for i in 0..sample_count {
+                let bytes: [u8; 2] = payload[i * 2..i * 2 + 2].try_into().ok()?;
+                samples.push(i16::from_le_bytes(bytes) as f32 / 32768.0);
+            }
+            samples
+        }
+        TCI_SAMPLE_TYPE_LEGACY_FLOAT32 | TCI_SAMPLE_TYPE_FLOAT32 => {
+            if payload.len() < sample_count * 4 {
+                return None;
+            }
+            let mut samples = Vec::with_capacity(sample_count);
+            for i in 0..sample_count {
+                let bytes: [u8; 4] = payload[i * 4..i * 4 + 4].try_into().ok()?;
+                samples.push(f32::from_le_bytes(bytes));
+            }
+            samples
+        }
+        _ => return None,
+    };
     Some(TciMicFrame {
         sample_rate_hz,
         channels,
@@ -2911,7 +2933,7 @@ mod tests {
 
     #[test]
     fn rejects_oversized_tci_mic_frames() {
-        let sample_count = (MAX_TCI_MIC_FLOAT_SAMPLES + 1) as u32;
+        let sample_count = (MAX_TCI_MIC_SAMPLES + 1) as u32;
         let mut frame = vec![0u8; 64];
         write_u32_le(&mut frame, 20, sample_count);
         write_u32_le(&mut frame, 24, 2);
@@ -2941,6 +2963,7 @@ mod tests {
     fn parses_stereo_tci_mic_frame_with_channel_metadata() {
         let mut frame = vec![0u8; 64 + 16];
         write_u32_le(&mut frame, 4, 48_000);
+        write_u32_le(&mut frame, 8, TCI_SAMPLE_TYPE_FLOAT32);
         write_u32_le(&mut frame, 20, 4);
         write_u32_le(&mut frame, 24, 2);
         write_u32_le(&mut frame, 28, 2);
@@ -2954,6 +2977,42 @@ mod tests {
         assert_eq!(parsed.channels, 2);
         assert_eq!(parsed.sequence, 0);
         assert_eq!(parsed.samples, vec![0.25, -0.25, 0.5, -0.5]);
+    }
+
+    #[test]
+    fn parses_s16_tci_mic_frame_with_channel_metadata() {
+        let mut frame = vec![0u8; 64 + 6];
+        write_u32_le(&mut frame, 4, 48_000);
+        write_u32_le(&mut frame, 8, TCI_SAMPLE_TYPE_S16);
+        write_u32_le(&mut frame, 20, 3);
+        write_u32_le(&mut frame, 24, 2);
+        write_u32_le(&mut frame, 28, 1);
+        write_u32_le(&mut frame, 32, 78);
+        for (index, sample) in [8192i16, -16384, 32767].iter().enumerate() {
+            let offset = 64 + index * 2;
+            frame[offset..offset + 2].copy_from_slice(&sample.to_le_bytes());
+        }
+
+        let parsed = parse_tci_mic_frame(&frame).unwrap();
+        assert_eq!(parsed.sample_rate_hz, 48_000);
+        assert_eq!(parsed.channels, 1);
+        assert_eq!(parsed.sequence, 78);
+        assert_eq!(parsed.samples.len(), 3);
+        assert!((parsed.samples[0] - 0.25).abs() < 0.0001);
+        assert!((parsed.samples[1] + 0.5).abs() < 0.0001);
+        assert!((parsed.samples[2] - 0.9999).abs() < 0.0001);
+    }
+
+    #[test]
+    fn rejects_unknown_tci_mic_sample_type() {
+        let mut frame = vec![0u8; 64 + 4];
+        write_u32_le(&mut frame, 4, 48_000);
+        write_u32_le(&mut frame, 8, 99);
+        write_u32_le(&mut frame, 20, 1);
+        write_u32_le(&mut frame, 24, 2);
+        write_u32_le(&mut frame, 28, 1);
+
+        assert!(parse_tci_mic_frame(&frame).is_none());
     }
 
     #[test]

@@ -163,9 +163,34 @@ Post-review cleanup:
 - `txMicByteRate()` carries the TX-B note that changing Float32 mic frames to
   `s16@48k` changes only the bytes-per-sample parameter.
 
+## Implemented TX-B Runtime
+
+The TX-B runtime changes the browser TX mic payload from `Float32@48k` to
+signed 16-bit PCM at the same 48 kHz sample rate and 256-sample block size. It
+does not add a browser resampler, bridge resampler, Opus, WDSP setup change, or
+RF-keying predicate change.
+
+The browser:
+
+- Writes `sample_type = 1` at binary header bytes `8..12`.
+- Keeps `tx_mic_seq` at binary header bytes `32..36`.
+- Packs mono mic samples as little-endian signed 16-bit values after the
+  existing 64-byte header.
+- Computes bufferedAmount thresholds with `2` bytes per sample. At 48 kHz,
+  256-sample blocks, and a 64-byte frame header, the guarded mic byte rate is
+  about `108 kB/s`.
+
+The bridge:
+
+- Accepts `sample_type = 1` as signed 16-bit PCM and converts samples back to
+  normalized `f32` before the existing TX DSP path.
+- Keeps backward compatibility with legacy `sample_type = 0` Float32 frames
+  and explicit `sample_type = 3` Float32 frames.
+- Rejects unknown TX mic sample types.
+
 ## Required Regression Tests
 
-TX-A is not complete without tests for these cases:
+TX-A/TX-B is not complete without tests for these cases:
 
 - Simulated congested VPN at `200 ms` RTT and about `30 kB/s` budget:
   browser drops mic frames, `tx_mic_dropped_count` climbs, and the bridge does
@@ -185,7 +210,7 @@ TX-A is not complete without tests for these cases:
 ## Acceptance Test
 
 Under simulated VPN congestion at `200 ms` RTT and `30 kB/s` with TX keyed at
-48 kHz Float32 mic, the operator must observe one of two outcomes:
+48 kHz mic, the operator must observe one of two outcomes:
 
 1. Clean enough speech with `tx_mic_dropped_count` climbing, proving the
    browser is dropping before TCP backlog becomes dangerous.
@@ -198,9 +223,9 @@ produces delayed on-air speech, TX-A is not done.
 
 ## Later Phases
 
-TX-B: switch mic payload from `Float32@48k` to `s16@48k`, with no sample-rate
-change and no browser/bridge resampler. This should roughly halve mic uplink
-bandwidth while keeping the signal path simple.
+TX-B: implemented as `s16@48k`, with no sample-rate change and no
+browser/bridge resampler. This roughly halves mic payload width while keeping
+the signal path simple.
 
 TX-C: add Opus only if measured VPN TX sessions still show real
 `tx_fault:uplink_late` events after TX-B. Do not commit to Opus

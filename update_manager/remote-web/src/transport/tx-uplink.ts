@@ -13,7 +13,7 @@ export type TxUplinkDecision = {
 
 export function txMicByteRateBytesPerSecond(
   sampleRateHz = 48_000,
-  bytesPerSample = 4,
+  bytesPerSample = 2,
   blockSamples = 256,
   headerBytes = 64,
 ): number {

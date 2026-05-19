@@ -4488,6 +4488,8 @@
     const RX_AUDIO_USE_SAB_RING = false;
     const RX_MSG_QUEUE_MAX_PACKETS = 8;
     const TX_MIC_BLOCK_SAMPLES = 256;
+    const TX_MIC_BYTES_PER_SAMPLE = 2;
+    const TX_MIC_SAMPLE_TYPE_S16 = 1;
     const TX_UPLINK_STATS_INTERVAL_MS = 1000;
     const TX_READY_WINDOW_MS = 5 * 60 * 1000;
     const TX_MIC_LEVEL_STALE_MS = 450;
@@ -9009,9 +9011,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     }
 
     function txMicByteRate() {
-      // TX-B changes only the mic payload width, so update bytesPerSample here
-      // when Float32 mic frames move to s16@48k.
-      return _next.txMicByteRateBytesPerSecond(48000, 4, TX_MIC_BLOCK_SAMPLES, 64);
+      return _next.txMicByteRateBytesPerSecond(48000, TX_MIC_BYTES_PER_SAMPLE, TX_MIC_BLOCK_SAMPLES, 64);
     }
 
     function sendTxUplinkStats(force = false) {
@@ -9060,11 +9060,11 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
 
     function buildTxMicFrame(monoSamples, sequence) {
       const sampleCount = monoSamples.length;
-      const buf = new ArrayBuffer(64 + sampleCount * 4);
+      const buf = new ArrayBuffer(64 + sampleCount * TX_MIC_BYTES_PER_SAMPLE);
       const view = new DataView(buf);
       view.setUint32(0, 0, true);                        // receiver
       view.setUint32(4, 48000, true);                    // sample_rate
-      view.setUint32(8, 3, true);
+      view.setUint32(8, TX_MIC_SAMPLE_TYPE_S16, true);    // sample_type = s16
       view.setUint32(20, sampleCount, true);             // sample_count
       view.setUint32(24, TCI_STREAM_MIC_TX, true);        // stream_type = 2 (TX mic)
       view.setUint32(28, 1, true);                       // channels = 1 (mono)
@@ -9072,8 +9072,10 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       let peak = 0;
       for (let i = 0; i < monoSamples.length; i++) {
         const sample = Number(monoSamples[i]) || 0;
-        peak = Math.max(peak, Math.abs(sample));
-        view.setFloat32(64 + i * 4, sample, true);
+        const clamped = Math.max(-1, Math.min(1, sample));
+        peak = Math.max(peak, Math.abs(clamped));
+        const pcm = clamped <= -1 ? -32768 : Math.max(-32768, Math.min(32767, Math.round(clamped * 32767)));
+        view.setInt16(64 + i * TX_MIC_BYTES_PER_SAMPLE, pcm, true);
       }
       state.txMicLevel = Math.max(0, Math.min(1, peak));
       state.txMicLevelAt = performance.now();
