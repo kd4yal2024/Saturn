@@ -51,21 +51,19 @@ function describeTxFault(args: readonly string[]): string {
   const reason = String(argAt(args, 1) ?? argAt(args, 0) ?? 'fault')
     .trim()
     .toLowerCase();
-  const actualWatts = numericArg(argAt(args, 2));
-  const limitWatts = numericArg(argAt(args, 3));
-  const actualMs = numericArg(argAt(args, 2));
-  const limitMs = numericArg(argAt(args, 3));
+  const actual = numericArg(argAt(args, 2));
+  const limit = numericArg(argAt(args, 3));
 
   if (reason === 'power_trip') {
-    if (actualWatts != null && limitWatts != null) {
-      return `Power trip ${actualWatts.toFixed(1)} W > ${limitWatts.toFixed(1)} W`;
+    if (actual != null && limit != null) {
+      return `Power trip ${actual.toFixed(1)} W > ${limit.toFixed(1)} W`;
     }
     return 'Power trip';
   }
 
   if (reason === 'uplink_late') {
-    if (actualMs != null && limitMs != null) {
-      return `Uplink late ${Math.round(actualMs)} ms > ${Math.round(limitMs)} ms`;
+    if (actual != null && limit != null) {
+      return `Uplink late ${Math.round(actual)} ms > ${Math.round(limit)} ms`;
     }
     return 'Uplink late';
   }

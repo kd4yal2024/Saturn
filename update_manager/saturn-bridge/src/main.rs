@@ -617,7 +617,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                     if !tx_requested {
                         continue;
                     }
-                    last_operator_mic_at = Some(Instant::now());
+                    last_operator_mic_at = Some(frame.received_at);
                     tx_uplink_late_since = None;
                     status_tci_mic_frames = status_tci_mic_frames.saturating_add(1);
                     status_tci_mic_samples =

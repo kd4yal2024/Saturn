@@ -23,6 +23,7 @@ pub struct TciMicFrame {
     pub sample_rate_hz: u32,
     pub channels: u32,
     pub sequence: u32,
+    pub received_at: Instant,
     pub samples: Vec<f32>,
 }
 
@@ -1664,7 +1665,12 @@ fn handle_incoming_message(
         Message::Binary(data) => {
             if is_operator {
                 if let Some(frame) = parse_tci_mic_frame(&data) {
-                    record_client_tx_mic_frame(clients, client_id, frame.sequence);
+                    record_client_tx_mic_frame(
+                        clients,
+                        client_id,
+                        frame.sequence,
+                        frame.received_at,
+                    );
                     let _ = command_tx.send(TciCommand::MicAudioFrame(frame));
                 }
             }
@@ -2488,9 +2494,14 @@ fn next_wrapped_sequence(sequence: u32) -> u32 {
     }
 }
 
-fn record_client_tx_mic_frame(clients: &ClientRegistry, client_id: u64, sequence: u32) {
+fn record_client_tx_mic_frame(
+    clients: &ClientRegistry,
+    client_id: u64,
+    sequence: u32,
+    received_at: Instant,
+) {
     if let Some(client) = clients.lock().unwrap().get_mut(&client_id) {
-        client.state.tx_mic_last_arrived_at = Some(Instant::now());
+        client.state.tx_mic_last_arrived_at = Some(received_at);
         if sequence == 0 {
             return;
         }
@@ -2544,6 +2555,7 @@ fn parse_tci_mic_frame(data: &[u8]) -> Option<TciMicFrame> {
         sample_rate_hz,
         channels,
         sequence,
+        received_at: Instant::now(),
         samples,
     })
 }
@@ -3088,15 +3100,16 @@ mod tests {
     fn records_tx_mic_sequence_gaps() {
         let clients = test_client_registry(9);
 
-        record_client_tx_mic_frame(&clients, 9, 1);
-        record_client_tx_mic_frame(&clients, 9, 2);
-        record_client_tx_mic_frame(&clients, 9, 4);
+        let arrived_at = Instant::now();
+        record_client_tx_mic_frame(&clients, 9, 1, arrived_at);
+        record_client_tx_mic_frame(&clients, 9, 2, arrived_at);
+        record_client_tx_mic_frame(&clients, 9, 4, arrived_at);
 
         let clients = clients.lock().unwrap();
         let state = &clients.get(&9).unwrap().state;
         assert_eq!(state.tx_mic_last_arrived_seq, 4);
         assert_eq!(state.tx_mic_seq_gap_count, 1);
-        assert!(state.tx_mic_last_arrived_at.is_some());
+        assert_eq!(state.tx_mic_last_arrived_at, Some(arrived_at));
     }
 
     #[test]

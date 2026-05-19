@@ -154,6 +154,15 @@ The `/remote-next` UI parses both messages. Operator State shows TX uplink
 state, browser mic drops, bridge mic gaps, and mic age. Existing bridge-fault
 handling records an alarm and locks TX when `uplink_late` arrives.
 
+Post-review cleanup:
+
+- Bridge TX mic-age telemetry and the bridge safety detector use the same
+  parser-stamped receive timestamp for each mic frame.
+- `uplink_late` bridge faults remove the earlier browser-side `TX audio late`
+  warning from the page-session fault history before recording the alarm fault.
+- `txMicByteRate()` carries the TX-B note that changing Float32 mic frames to
+  `s16@48k` changes only the bytes-per-sample parameter.
+
 ## Required Regression Tests
 
 TX-A is not complete without tests for these cases:

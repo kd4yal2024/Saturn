@@ -7602,6 +7602,20 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       }
     }
 
+    function clearOperatorFault(label, refresh = true) {
+      const text = `${label || ""}`.trim();
+      if (!text || !operatorFaultHistory.length) {
+        return;
+      }
+      operatorFaultHistory = operatorFaultHistory.filter((fault) => fault.label !== text);
+      if (latestOperatorFault && latestOperatorFault.label === text) {
+        latestOperatorFault = operatorFaultHistory[0] || null;
+      }
+      if (refresh) {
+        updateOperatorStateStrip();
+      }
+    }
+
     function tailnetTransportActive() {
       const host = (window.location.hostname || "").replace(/^\[|\]$/g, "");
       if (host.endsWith(".ts.net") || host.includes(".ts.net")) {
@@ -8995,6 +9009,8 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     }
 
     function txMicByteRate() {
+      // TX-B changes only the mic payload width, so update bytesPerSample here
+      // when Float32 mic frames move to s16@48k.
       return _next.txMicByteRateBytesPerSecond(48000, 4, TX_MIC_BLOCK_SAMPLES, 64);
     }
 
@@ -9673,6 +9689,9 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       Object.assign(state, next);
 
       if (events.txFault) {
+        if (events.txFault.toLowerCase().startsWith("uplink late")) {
+          clearOperatorFault("TX audio late", false);
+        }
         recordOperatorFault(events.txFault, "alarm", false);
         lockTx("tx-fault", false);
         logEvent(`Bridge TX fault: ${events.txFault}`);
