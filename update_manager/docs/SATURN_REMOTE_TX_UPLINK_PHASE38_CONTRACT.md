@@ -163,14 +163,30 @@ Post-review cleanup:
 - `txMicByteRate()` carries the TX-B note that changing Float32 mic frames to
   `s16@48k` changes only the bytes-per-sample parameter.
 
-## Implemented TX-B Runtime
+## TX-B Runtime Status
 
-The TX-B runtime changes the browser TX mic payload from `Float32@48k` to
-signed 16-bit PCM at the same 48 kHz sample rate and 256-sample block size. It
-does not add a browser resampler, bridge resampler, Opus, WDSP setup change, or
-RF-keying predicate change.
+TX-B was implemented as a trial to change the browser TX mic payload from
+`Float32@48k` to signed 16-bit PCM at the same 48 kHz sample rate and
+256-sample block size. It did not add a browser resampler, bridge resampler,
+Opus, WDSP setup change, or RF-keying predicate change.
 
-The browser:
+Field testing on 2026-05-21 showed the bridge receiving `trx:0,true,tci;` and
+entering `TX armed`, but `tci_mic_frames_s` remained `0.0`, so the bridge never
+saw fresh mic frames and correctly refused to key RF. The live `/remote-next`
+browser sender was restored to `Float32@48k` while the bridge-side s16 parser
+support remains available but dormant.
+
+The live browser:
+
+- Writes `sample_type = 3` at binary header bytes `8..12`.
+- Keeps `tx_mic_seq` at binary header bytes `32..36`.
+- Packs mono mic samples as little-endian Float32 values after the existing
+  64-byte header.
+- Computes bufferedAmount thresholds with `4` bytes per sample. At 48 kHz,
+  256-sample blocks, and a 64-byte frame header, the guarded mic byte rate is
+  about `204 kB/s`.
+
+The suspended s16 browser trial:
 
 - Writes `sample_type = 1` at binary header bytes `8..12`.
 - Keeps `tx_mic_seq` at binary header bytes `32..36`.
@@ -180,7 +196,7 @@ The browser:
   256-sample blocks, and a 64-byte frame header, the guarded mic byte rate is
   about `108 kB/s`.
 
-The bridge:
+The bridge still:
 
 - Accepts `sample_type = 1` as signed 16-bit PCM and converts samples back to
   normalized `f32` before the existing TX DSP path.
@@ -223,9 +239,10 @@ produces delayed on-air speech, TX-A is not done.
 
 ## Later Phases
 
-TX-B: implemented as `s16@48k`, with no sample-rate change and no
-browser/bridge resampler. This roughly halves mic payload width while keeping
-the signal path simple.
+TX-B: bridge parser support is implemented, but the live browser sender is back
+on `Float32@48k` after the first s16 field test produced no bridge-visible mic
+frames. Next TX-B work should add browser/bridge instrumentation around binary
+mic-frame send/parse before re-enabling s16 live.
 
 TX-C: add Opus only if measured VPN TX sessions still show real
 `tx_fault:uplink_late` events after TX-B. Do not commit to Opus
