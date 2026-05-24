@@ -2,6 +2,13 @@ export const TX_UPLINK_DEFAULT_RTT_MS = 200;
 export const TX_UPLINK_DEGRADED_RTT_FACTOR = 2;
 export const TX_UPLINK_DROP_RTT_FACTOR = 4;
 export const TX_UPLINK_MIN_THRESHOLD_BYTES = 1024;
+// Phase 41 stopgap: absolute hard ceiling on browser WebSocket.bufferedAmount
+// for the TX mic path. Independent of the RTT-scaled thresholds above. Phase
+// 40 evidence showed bufferedAmount can grow to multi-megabytes when the
+// RTT-scaled cap is too generous (Tailscale + main-thread load). Beyond this
+// ceiling the browser is provably losing real-time and no further mic frames
+// help; drop them before send. ~160 ms of f32@48k audio. Cannot be disabled.
+export const TX_UPLINK_HARD_CAP_BYTES = 32_768;
 
 export type TxUplinkDecision = {
   action: 'send' | 'drop';
@@ -9,6 +16,7 @@ export type TxUplinkDecision = {
   bufferedBytes: number;
   degradedThresholdBytes: number;
   dropThresholdBytes: number;
+  hardCapEngaged: boolean;
 };
 
 export function txMicByteRateBytesPerSecond(
@@ -52,11 +60,13 @@ export function decideTxMicSend(
     TX_UPLINK_DROP_RTT_FACTOR,
   );
 
+  const hardCapEngaged = bufferedBytes > TX_UPLINK_HARD_CAP_BYTES;
   return {
-    action: bufferedBytes > dropThresholdBytes ? 'drop' : 'send',
-    degraded: bufferedBytes > degradedThresholdBytes,
+    action: hardCapEngaged || bufferedBytes > dropThresholdBytes ? 'drop' : 'send',
+    degraded: hardCapEngaged || bufferedBytes > degradedThresholdBytes,
     bufferedBytes,
     degradedThresholdBytes,
     dropThresholdBytes,
+    hardCapEngaged,
   };
 }

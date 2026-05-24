@@ -4492,11 +4492,18 @@
     const TX_MIC_BYTES_PER_SAMPLE = 4;
     const TX_MIC_SAMPLE_TYPE_FLOAT32 = 3;
     const TX_UPLINK_STATS_INTERVAL_MS = 1000;
+    const BROWSER_TIMING_MAX_SAMPLES = 4096;
+    const BROWSER_TIMING_EVENT_LOOP_INTERVAL_MS = 100;
     const TX_READY_WINDOW_MS = 5 * 60 * 1000;
     const TX_MIC_LEVEL_STALE_MS = 450;
     const TX_MIC_LEVEL_ATTACK_PER_SEC = 8;
     const TX_MIC_LEVEL_RELEASE_PER_SEC = 2.4;
     const BRIDGE_RTT_PING_INTERVAL_MS = 2000;
+    // Phase 41 stopgap: while TX is requested or keyed, send saturn_ping at
+    // this tighter cadence so the bridge control watchdog (500 ms) has at
+    // least two ping windows of freshness margin. Outside TX, the cadence
+    // returns to the idle value above. See phase 41 frontend contract.
+    const BRIDGE_RTT_PING_INTERVAL_DURING_TX_MS = 200;
     const BRIDGE_RTT_STALE_MS = 6500;
     const TCI_STREAM_IQ_RX = 0;
     const TCI_STREAM_AUDIO_RX = 1;
@@ -4632,6 +4639,7 @@ class SaturnTxProcessor extends AudioWorkletProcessor {
     super();
     this.buf = new Float32Array(${TX_MIC_BLOCK_SAMPLES});
     this.pos = 0;
+    this.sequence = 0;
   }
   process(inputs, outputs) {
     const input = inputs[0];
@@ -4640,7 +4648,12 @@ class SaturnTxProcessor extends AudioWorkletProcessor {
       for (let i = 0; i < mono.length; i++) {
         this.buf[this.pos++] = mono[i];
         if (this.pos >= ${TX_MIC_BLOCK_SAMPLES}) {
-          this.port.postMessage({ samples: this.buf }, [this.buf.buffer]);
+          this.sequence = (this.sequence + 1) >>> 0;
+          this.port.postMessage({
+            samples: this.buf,
+            audioTimeMs: currentTime * 1000,
+            sequence: this.sequence
+          }, [this.buf.buffer]);
           this.buf = new Float32Array(${TX_MIC_BLOCK_SAMPLES});
           this.pos = 0;
         }
@@ -4695,8 +4708,46 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       { pillId: "operator-audio-pill", valueId: "operator-audio-value", label: "Audio" },
       { pillId: "operator-fault-pill", valueId: "operator-fault-value", label: "Fault" },
     ]);
+    const PHASE40_QUERY = new URLSearchParams(window.location.search);
+    const PHASE40_TX_DIAGNOSTIC = PHASE40_QUERY.get("phase40_tx_diagnostic") === "1";
+    const PHASE40_TX_SOURCE_RAW = String(PHASE40_QUERY.get("phase40_tx_source") || "mic").trim().toLowerCase();
+    const PHASE40_TX_SOURCE = ["mic", "tone", "twotone"].includes(PHASE40_TX_SOURCE_RAW)
+      ? PHASE40_TX_SOURCE_RAW
+      : "mic";
+    const PHASE40_TX_LEVEL_DB_RAW = Number(PHASE40_QUERY.get("phase40_tx_level_db") || -20);
+    const PHASE40_TX_LEVEL_DB = Number.isFinite(PHASE40_TX_LEVEL_DB_RAW)
+      ? Math.max(-60, Math.min(-3, PHASE40_TX_LEVEL_DB_RAW))
+      : -20;
+    const PHASE40_DISPLAY_PROFILE_ALIASES = Object.freeze({
+      "a": "A-192k-waterfall",
+      "a-192k-waterfall": "A-192k-waterfall",
+      "192k-waterfall": "A-192k-waterfall",
+      "b": "B-96k-waterfall",
+      "b-96k-waterfall": "B-96k-waterfall",
+      "96k-waterfall": "B-96k-waterfall",
+      "c": "C-48k-waterfall",
+      "c-48k-waterfall": "C-48k-waterfall",
+      "48k-waterfall": "C-48k-waterfall",
+      "d": "D-text-only",
+      "d-text-only": "D-text-only",
+      "text-only": "D-text-only",
+    });
+    const PHASE40_DISPLAY_PROFILES = Object.freeze({
+      "A-192k-waterfall": Object.freeze({ sampleRate: 192000, autoIq: true, autoRxAudio: true }),
+      "B-96k-waterfall": Object.freeze({ sampleRate: 96000, autoIq: true, autoRxAudio: true }),
+      "C-48k-waterfall": Object.freeze({ sampleRate: 48000, autoIq: true, autoRxAudio: true }),
+      "D-text-only": Object.freeze({ sampleRate: 48000, autoIq: false, autoRxAudio: false }),
+    });
+
+    function normalizePhase40DisplayProfile(value) {
+      const key = String(value || "").trim().toLowerCase();
+      return PHASE40_DISPLAY_PROFILE_ALIASES[key] || "";
+    }
+
+    const PHASE40_DISPLAY_PROFILE = normalizePhase40DisplayProfile(PHASE40_QUERY.get("phase40_display_profile"));
 
     const state = globalThis.SaturnRemoteNext.createAppState();
+    state.phase40DisplayProfile = PHASE40_DISPLAY_PROFILE;
     state.displayIqSource = "rx";
     state.txDisplaySettleFrames = 0;
     state.iqFrameVersion = 0;
@@ -4712,6 +4763,34 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     state.txMicLevel = null;
     state.txMicLevelVisual = 0;
     state.txMicLevelAt = 0;
+    state.browserMainLagP95Ms = 0;
+    state.browserMainLagP99Ms = 0;
+    state.browserMainLagMaxMs = 0;
+    state.browserRafIntervalP95Ms = 0;
+    state.browserRafIntervalP99Ms = 0;
+    state.browserRafIntervalMaxMs = 0;
+    state.txWorkletToMainP95Ms = 0;
+    state.txWorkletToMainP99Ms = 0;
+    state.txWorkletToMainMaxMs = 0;
+    state.txMainToSendP95Ms = 0;
+    state.txMainToSendP99Ms = 0;
+    state.txMainToSendMaxMs = 0;
+    state.txWsSendP95Ms = 0;
+    state.txWsSendP99Ms = 0;
+    state.txWsSendMaxMs = 0;
+    state.txTimingFrameCount = 0;
+    state.txTimingDroppedFrameCount = 0;
+    const browserTimingBuckets = {
+      mainLag: [],
+      rafInterval: [],
+      txWorkletToMain: [],
+      txMainToSend: [],
+      txWsSend: [],
+      txFrames: 0,
+      txDroppedFrames: 0,
+    };
+    let browserTimingProbeStarted = false;
+    let browserTimingLastRafAt = 0;
     let remoteSettingsSaveTimer = null;
     let freqEntryBuffer = "";
     let freqEntryUnit = "mhz";
@@ -5337,6 +5416,61 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       }
     }
 
+    function phase40DisplayProfileConfig() {
+      if (!PHASE40_DISPLAY_PROFILE) {
+        return null;
+      }
+      return PHASE40_DISPLAY_PROFILES[PHASE40_DISPLAY_PROFILE] || null;
+    }
+
+    function applyPhase40DisplayProfile(reason = "") {
+      const profile = phase40DisplayProfileConfig();
+      if (!profile) {
+        return false;
+      }
+      state.phase40DisplayProfile = PHASE40_DISPLAY_PROFILE;
+      state.sampleRate = clampSampleRateHz(profile.sampleRate);
+      state.waterfallFrameSkipCounter = 0;
+      state.waterfallSettleFrames = 0;
+      state.waterfallShiftCarryPixels = 0;
+      if ($("sample-rate")) {
+        $("sample-rate").value = `${state.sampleRate}`;
+      }
+      waterfallRenderer.clear();
+      if (state.connected) {
+        sendTci(`iq_samplerate:${state.sampleRate};`);
+        if (!profile.autoIq) {
+          stopIq();
+        }
+        if (!profile.autoRxAudio) {
+          void stopRxAudio();
+        }
+      }
+      if (reason) {
+        logEvent(`Phase 40 display profile ${PHASE40_DISPLAY_PROFILE} applied (${reason})`);
+      }
+      return true;
+    }
+
+    function phase40ShouldAutoStartIq() {
+      const profile = phase40DisplayProfileConfig();
+      return !profile || profile.autoIq;
+    }
+
+    function phase40ShouldAutoStartRxAudio() {
+      const profile = phase40DisplayProfileConfig();
+      return !profile || profile.autoRxAudio;
+    }
+
+    function applyPhase40TxSourceOverrides() {
+      if (!phase40GeneratedTxSourceActive()) {
+        return false;
+      }
+      state.twoToneEnabled = false;
+      state.twoTonePttOwned = false;
+      return true;
+    }
+
     function updateDisplayRange(bins) {
       if (!bins || bins.length === 0) return;
       if (state.spectrumAutoRange) {
@@ -5526,7 +5660,140 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       area.scrollTop = area.scrollHeight;
     }
 
+    function roundedTimingMs(value) {
+      const numeric = Number(value);
+      if (!Number.isFinite(numeric) || numeric <= 0) {
+        return 0;
+      }
+      return Number(Math.min(numeric, 60000).toFixed(2));
+    }
+
+    function recordBrowserTimingSample(bucket, value) {
+      const numeric = Number(value);
+      if (!Number.isFinite(numeric) || numeric < 0) {
+        return;
+      }
+      bucket.push(Math.min(numeric, 60000));
+      if (bucket.length > BROWSER_TIMING_MAX_SAMPLES) {
+        bucket.splice(0, bucket.length - BROWSER_TIMING_MAX_SAMPLES);
+      }
+    }
+
+    function percentileTiming(values, percentile) {
+      if (!values.length) {
+        return 0;
+      }
+      const sorted = values.slice().sort((a, b) => a - b);
+      const rank = Math.ceil((percentile / 100) * sorted.length) - 1;
+      return roundedTimingMs(sorted[Math.max(0, Math.min(sorted.length - 1, rank))]);
+    }
+
+    function timingStats(values) {
+      if (!values.length) {
+        return { p95: 0, p99: 0, max: 0 };
+      }
+      return {
+        p95: percentileTiming(values, 95),
+        p99: percentileTiming(values, 99),
+        max: roundedTimingMs(Math.max(...values)),
+      };
+    }
+
+    function resetTxBrowserTimingStats() {
+      browserTimingBuckets.txWorkletToMain.length = 0;
+      browserTimingBuckets.txMainToSend.length = 0;
+      browserTimingBuckets.txWsSend.length = 0;
+      browserTimingBuckets.txFrames = 0;
+      browserTimingBuckets.txDroppedFrames = 0;
+      state.txWorkletToMainP95Ms = 0;
+      state.txWorkletToMainP99Ms = 0;
+      state.txWorkletToMainMaxMs = 0;
+      state.txMainToSendP95Ms = 0;
+      state.txMainToSendP99Ms = 0;
+      state.txMainToSendMaxMs = 0;
+      state.txWsSendP95Ms = 0;
+      state.txWsSendP99Ms = 0;
+      state.txWsSendMaxMs = 0;
+      state.txTimingFrameCount = 0;
+      state.txTimingDroppedFrameCount = 0;
+    }
+
+    function flushBrowserTimingStats() {
+      const mainLag = timingStats(browserTimingBuckets.mainLag);
+      const rafInterval = timingStats(browserTimingBuckets.rafInterval);
+      const workletToMain = timingStats(browserTimingBuckets.txWorkletToMain);
+      const mainToSend = timingStats(browserTimingBuckets.txMainToSend);
+      const wsSend = timingStats(browserTimingBuckets.txWsSend);
+      state.browserMainLagP95Ms = mainLag.p95;
+      state.browserMainLagP99Ms = mainLag.p99;
+      state.browserMainLagMaxMs = mainLag.max;
+      state.browserRafIntervalP95Ms = rafInterval.p95;
+      state.browserRafIntervalP99Ms = rafInterval.p99;
+      state.browserRafIntervalMaxMs = rafInterval.max;
+      state.txWorkletToMainP95Ms = workletToMain.p95;
+      state.txWorkletToMainP99Ms = workletToMain.p99;
+      state.txWorkletToMainMaxMs = workletToMain.max;
+      state.txMainToSendP95Ms = mainToSend.p95;
+      state.txMainToSendP99Ms = mainToSend.p99;
+      state.txMainToSendMaxMs = mainToSend.max;
+      state.txWsSendP95Ms = wsSend.p95;
+      state.txWsSendP99Ms = wsSend.p99;
+      state.txWsSendMaxMs = wsSend.max;
+      state.txTimingFrameCount = browserTimingBuckets.txFrames;
+      state.txTimingDroppedFrameCount = browserTimingBuckets.txDroppedFrames;
+      browserTimingBuckets.mainLag.length = 0;
+      browserTimingBuckets.rafInterval.length = 0;
+      browserTimingBuckets.txWorkletToMain.length = 0;
+      browserTimingBuckets.txMainToSend.length = 0;
+      browserTimingBuckets.txWsSend.length = 0;
+      browserTimingBuckets.txFrames = 0;
+      browserTimingBuckets.txDroppedFrames = 0;
+    }
+
+    function startBrowserTimingProbes() {
+      if (browserTimingProbeStarted) {
+        return;
+      }
+      browserTimingProbeStarted = true;
+      const probeEventLoopLag = () => {
+        const queuedAt = performance.now();
+        window.setTimeout(() => {
+          recordBrowserTimingSample(browserTimingBuckets.mainLag, performance.now() - queuedAt);
+          window.setTimeout(probeEventLoopLag, BROWSER_TIMING_EVENT_LOOP_INTERVAL_MS);
+        }, 0);
+      };
+      window.setTimeout(probeEventLoopLag, BROWSER_TIMING_EVENT_LOOP_INTERVAL_MS);
+    }
+
+    function recordRafTiming(now) {
+      const timestamp = Number(now);
+      if (!Number.isFinite(timestamp)) {
+        return;
+      }
+      if (browserTimingLastRafAt > 0) {
+        recordBrowserTimingSample(browserTimingBuckets.rafInterval, timestamp - browserTimingLastRafAt);
+      }
+      browserTimingLastRafAt = timestamp;
+    }
+
+    function recordTxBrowserTiming(timing, receivedAt, sendStartedAt, sendEndedAt, dropped) {
+      browserTimingBuckets.txFrames += 1;
+      if (dropped) {
+        browserTimingBuckets.txDroppedFrames += 1;
+      }
+      if (timing && Number.isFinite(Number(timing.workletToMainMs))) {
+        recordBrowserTimingSample(browserTimingBuckets.txWorkletToMain, timing.workletToMainMs);
+      }
+      if (Number.isFinite(receivedAt) && Number.isFinite(sendStartedAt)) {
+        recordBrowserTimingSample(browserTimingBuckets.txMainToSend, sendStartedAt - receivedAt);
+      }
+      if (Number.isFinite(sendStartedAt) && Number.isFinite(sendEndedAt)) {
+        recordBrowserTimingSample(browserTimingBuckets.txWsSend, sendEndedAt - sendStartedAt);
+      }
+    }
+
     function buildPerfSnapshot() {
+      flushBrowserTimingStats();
       return _next.buildPerfSnapshot(state, performance.now());
     }
 
@@ -8001,6 +8268,18 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       return state.remoteTxRfEnabled === false;
     }
 
+    function phase40DiagnosticTxActive() {
+      return PHASE40_TX_DIAGNOSTIC && bridgeRfDisabled();
+    }
+
+    function rfDisabledBlocksTx() {
+      return bridgeRfDisabled() && !phase40DiagnosticTxActive();
+    }
+
+    function phase40GeneratedTxSourceActive() {
+      return PHASE40_TX_DIAGNOSTIC && (PHASE40_TX_SOURCE === "tone" || PHASE40_TX_SOURCE === "twotone");
+    }
+
     function clientRoleBlocksTx() {
       return state.connected && state.remoteClientRole !== "operator";
     }
@@ -8163,8 +8442,10 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       const source = txControlSource();
       const sourceLabel = txControlSourceLabel(source);
       const rfDisabled = bridgeRfDisabled();
+      const phase40Diagnostic = phase40DiagnosticTxActive();
+      const rfBlocked = rfDisabledBlocksTx();
       const roleBlocked = clientRoleBlocksTx();
-      const txState = rfDisabled
+      const txState = rfBlocked
         ? "disabled"
         : (roleBlocked
         ? "disabled"
@@ -8173,7 +8454,11 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         : (state.txPhase === "armed" || state.moxRequested ? "armed" : (state.connected ? (ready ? "ready" : "locked") : "disabled"))));
       txZone.dataset.txState = txState;
       txZone.dataset.txSource = source || "none";
-      const stateLabel = rfDisabled
+      const stateLabel = phase40Diagnostic
+        ? (state.txPhase === "keyed"
+          ? (source === "ptt" ? "PTT DIAG" : "MOX DIAG")
+          : (state.txPhase === "armed" || state.moxRequested ? "TX DIAG armed" : (state.connected ? (ready ? `TX DIAG · ${formatDurationClock(remainingMs)}` : "TX DIAG locked") : "Connect first")))
+        : (rfBlocked
         ? "TX DISABLED"
         : (roleBlocked
         ? (state.remoteClientRole === "viewer" ? "VIEW ONLY" : "Role pending")
@@ -8181,7 +8466,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         ? (source === "ptt" ? "PTT ON AIR" : "MOX ON AIR")
         : (state.txPhase === "armed" || state.moxRequested
           ? (source === "ptt" ? "PTT armed" : "MOX armed")
-          : (state.connected ? (ready ? `TX READY · ${formatDurationClock(remainingMs)}` : "TX LOCKED") : "Connect first"))));
+          : (state.connected ? (ready ? `TX READY · ${formatDurationClock(remainingMs)}` : "TX LOCKED") : "Connect first")))));
       $("tx-zone-state").textContent = stateLabel;
       const sourceEl = $("tx-zone-source");
       if (sourceEl) {
@@ -8198,7 +8483,9 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         : (active ? "Starting" : "Idle");
       $("tx-zone-mic-dot").classList.toggle("live", Boolean(state.micCapturing));
       updateTxMiniMeters();
-      $("tx-zone-hint").textContent = rfDisabled
+      $("tx-zone-hint").textContent = phase40Diagnostic
+        ? "Phase 40 diagnostic: bridge RF output remains disabled"
+        : (rfBlocked
         ? "Bridge RF output is disabled"
         : (roleBlocked
         ? (state.remoteClientRole === "viewer" ? "Viewer role cannot transmit" : "Waiting for bridge operator role")
@@ -8206,26 +8493,32 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         ? (active
           ? (source === "ptt" ? "Release PTT or press Esc to unkey" : "Tap MOX again or press Esc to unkey")
           : (ready ? "Hold PTT to key, or tap MOX to latch" : `Tap PTT or MOX to arm after ${txLockReasonLabel(state.txLockReason)}`))
-        : "Connect before transmit"));
+        : "Connect before transmit")));
       const ptt = $("ptt-btn");
       if (ptt) {
-        ptt.textContent = rfDisabled
+        ptt.textContent = phase40Diagnostic
+          ? (active
+            ? (source === "ptt" ? "PTT DIAG" : "TX DIAG")
+            : (state.connected ? (ready ? "PTT DIAG" : "ARM DIAG") : "CONNECT"))
+          : (rfBlocked
           ? "TX OFF"
           : (roleBlocked
           ? (state.remoteClientRole === "viewer" ? "VIEW" : "WAIT")
           : (active
           ? (source === "ptt" ? (state.txPhase === "keyed" ? "PTT ON AIR" : "PTT HOLD") : (state.txPhase === "keyed" ? "ON AIR" : "TX ARM"))
-          : (state.connected ? (ready ? "PTT" : "TAP TO ARM") : "CONNECT")));
+          : (state.connected ? (ready ? "PTT" : "TAP TO ARM") : "CONNECT"))));
         ptt.classList.toggle("active", active && source === "ptt");
-        ptt.disabled = rfDisabled || roleBlocked;
+        ptt.disabled = rfBlocked || roleBlocked;
         ptt.setAttribute("aria-pressed", active && source === "ptt" ? "true" : "false");
       }
       const mox = $("mox-btn");
       if (mox) {
         const moxActive = active && source === "mox";
-        mox.textContent = moxActive ? (state.txPhase === "keyed" ? "MOX ON" : "MOX ARM") : "MOX";
+        mox.textContent = phase40Diagnostic
+          ? (moxActive ? "MOX DIAG" : "MOX DIAG")
+          : (moxActive ? (state.txPhase === "keyed" ? "MOX ON" : "MOX ARM") : "MOX");
         mox.classList.toggle("active", moxActive);
-        mox.disabled = rfDisabled || roleBlocked;
+        mox.disabled = rfBlocked || roleBlocked;
         mox.setAttribute("aria-pressed", moxActive ? "true" : "false");
       }
       const lockButton = $("tx-lock-btn");
@@ -8233,7 +8526,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         const locked = state.connected && !active && !ready;
         lockButton.textContent = locked ? "Locked" : "Lock TX";
         lockButton.classList.toggle("active", locked);
-        lockButton.disabled = rfDisabled || roleBlocked || (!state.connected && !active);
+        lockButton.disabled = rfBlocked || roleBlocked || (!state.connected && !active);
         lockButton.title = active
           ? "Unkey now and require TX reconfirm before the next key"
           : (locked ? `TX locked after ${txLockReasonLabel(state.txLockReason)}` : "Require TX reconfirm before the next key");
@@ -8511,15 +8804,37 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       sendTci(`saturn_ping:${state.bridgeRttNonce},${performance.now().toFixed(3)};`);
     }
 
+    function nextBridgeRttPingIntervalMs() {
+      // Phase 41 stopgap: tighten cadence whenever the bridge will be
+      // running its TX control watchdog. Matches the on-air gate the
+      // bridge uses (moxRequested OR keyed).
+      const txActive = Boolean(state.moxRequested) || state.txPhase === "keyed";
+      return txActive
+        ? BRIDGE_RTT_PING_INTERVAL_DURING_TX_MS
+        : BRIDGE_RTT_PING_INTERVAL_MS;
+    }
+
+    function scheduleNextBridgeRttPing() {
+      if (state.bridgeRttTimerId) {
+        clearTimeout(state.bridgeRttTimerId);
+        state.bridgeRttTimerId = null;
+      }
+      state.bridgeRttTimerId = setTimeout(() => {
+        state.bridgeRttTimerId = null;
+        sendBridgeRttPing();
+        scheduleNextBridgeRttPing();
+      }, nextBridgeRttPingIntervalMs());
+    }
+
     function startBridgeRttPings() {
       stopBridgeRttPings(false);
       sendBridgeRttPing();
-      state.bridgeRttTimerId = setInterval(sendBridgeRttPing, BRIDGE_RTT_PING_INTERVAL_MS);
+      scheduleNextBridgeRttPing();
     }
 
     function stopBridgeRttPings(clearValues = true) {
       if (state.bridgeRttTimerId) {
-        clearInterval(state.bridgeRttTimerId);
+        clearTimeout(state.bridgeRttTimerId);
         state.bridgeRttTimerId = null;
       }
       if (clearValues) {
@@ -8604,10 +8919,22 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       if (!state.connected) {
         return;
       }
+      applyPhase40TxSourceOverrides();
+      if (phase40GeneratedTxSourceActive()) {
+        sendTci("tx_two_tone:0,false;");
+      }
       sendTci(_next.buildAllRadioPrefsCommands(currentRadioPrefs()).join(""));
     }
 
     function startIq() {
+      const phase40Profile = phase40DisplayProfileConfig();
+      if (phase40Profile && !phase40Profile.autoIq) {
+        state.iqStreaming = false;
+        sendTci("iq_stop:0;");
+        logEvent(`Phase 40 display profile ${PHASE40_DISPLAY_PROFILE}: IQ start blocked`);
+        updateUi();
+        return;
+      }
       state.iqStreaming = true;
       sendTci("iq_start:0;");
       updateUi();
@@ -8620,6 +8947,17 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     }
 
     async function startRxAudio() {
+      const phase40Profile = phase40DisplayProfileConfig();
+      if (phase40Profile && !phase40Profile.autoRxAudio) {
+        if (state.audioStreaming) {
+          await stopRxAudio(true);
+        } else {
+          sendTci("audio_stop:0;");
+          logEvent(`Phase 40 display profile ${PHASE40_DISPLAY_PROFILE}: RX audio start blocked`);
+          updateUi();
+        }
+        return;
+      }
       if (!state.connected) {
         logEvent("Audio start ignored: bridge is not connected");
         return;
@@ -8905,7 +9243,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     }
 
     function normalizeTxReadyState(now = performance.now()) {
-      if (bridgeRfDisabled()) {
+      if (rfDisabledBlocksTx()) {
         if (state.txReadyExpiresAt > 0) {
           state.txReadyExpiresAt = 0;
           clearTxReadyTimer();
@@ -8956,7 +9294,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     }
 
     function armTxReady(reason = "operator") {
-      if (bridgeRfDisabled()) {
+      if (rfDisabledBlocksTx()) {
         state.txLockReason = "rf-disabled";
         logEvent("TX cannot arm because bridge RF output is disabled");
         recordOperatorFault("RF disabled", "warn", false);
@@ -9009,6 +9347,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       state.txUplinkBufferedBytes = 0;
       state.txUplinkBufferedHwmBytes = 0;
       state.txUplinkStatsAt = 0;
+      resetTxBrowserTimingStats();
     }
 
     function txMicByteRate() {
@@ -9082,7 +9421,8 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       return buf;
     }
 
-    function sendTxMicSamples(monoSamples) {
+    function sendTxMicSamples(monoSamples, timing = {}) {
+      const receivedAt = Number.isFinite(timing.receivedAt) ? timing.receivedAt : performance.now();
       if (!state.moxRequested || !state.connected || !state.ws || state.ws.readyState !== WebSocket.OPEN) {
         return false;
       }
@@ -9094,10 +9434,15 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       if (decision.action === "drop") {
         state.txMicDroppedCount = (state.txMicDroppedCount || 0) + 1;
         recordTxMicPeak(monoSamples);
+        recordTxBrowserTiming(timing, receivedAt, null, null, true);
         sendTxUplinkStats(false);
         return false;
       }
-      state.ws.send(buildTxMicFrame(monoSamples, nextTxMicSequence()));
+      const frame = buildTxMicFrame(monoSamples, nextTxMicSequence());
+      const sendStartedAt = performance.now();
+      state.ws.send(frame);
+      const sendEndedAt = performance.now();
+      recordTxBrowserTiming(timing, receivedAt, sendStartedAt, sendEndedAt, false);
       sendTxUplinkStats(false);
       return true;
     }
@@ -9131,12 +9476,15 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     async function startMicCapture(requestId) {
       if (state.micCapturing) { return true; }
       resetTxUplinkStats(true);
+      const generatedTxSource = phase40GeneratedTxSourceActive();
       let micStream = null;
       let micCtx = null;
       try {
-        micStream = await requestMicrophoneStream({
-          audio: { sampleRate: 48000, channelCount: 1, echoCancellation: false, noiseSuppression: false, autoGainControl: false },
-        });
+        if (!generatedTxSource) {
+          micStream = await requestMicrophoneStream({
+            audio: { sampleRate: 48000, channelCount: 1, echoCancellation: false, noiseSuppression: false, autoGainControl: false },
+          });
+        }
         micCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 48000, latencyHint: "interactive" });
         if (micCtx.state === "suspended") {
           await micCtx.resume();
@@ -9149,10 +9497,11 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         }
         if (state.pttRequestId !== requestId) {
           await micCtx.close();
-          micStream.getTracks().forEach((track) => track.stop());
+          if (micStream) {
+            micStream.getTracks().forEach((track) => track.stop());
+          }
           return false;
         }
-        const source = micCtx.createMediaStreamSource(micStream);
         const silentGain = micCtx.createGain();
         silentGain.gain.value = 0;
         let proc = null;
@@ -9165,7 +9514,18 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
               outputChannelCount: [1],
             });
             proc.port.onmessage = (evt) => {
-              sendTxMicSamples(evt.data.samples);
+              const receivedAt = performance.now();
+              const data = evt.data || {};
+              const audioTimeMs = Number(data.audioTimeMs);
+              const workletToMainMs = Number.isFinite(audioTimeMs)
+                ? Math.max(0, micCtx.currentTime * 1000 - audioTimeMs)
+                : null;
+              sendTxMicSamples(data.samples, {
+                receivedAt,
+                workletToMainMs,
+                workletSequence: data.sequence,
+                source: "worklet",
+              });
             };
             txMode = "worklet";
           } catch (error) {
@@ -9178,18 +9538,48 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
           // ScriptProcessorNode fallback: 256-sample blocks (about 5.3 ms at 48 kHz).
           proc = micCtx.createScriptProcessor(TX_MIC_BLOCK_SAMPLES, 1, 1);
           proc.onaudioprocess = (evt) => {
-            sendTxMicSamples(evt.inputBuffer.getChannelData(0));
+            sendTxMicSamples(evt.inputBuffer.getChannelData(0), {
+              receivedAt: performance.now(),
+              workletToMainMs: null,
+              source: "script",
+            });
           };
+        }
+        let source = null;
+        let generatedNodes = null;
+        if (generatedTxSource) {
+          const sourceGain = Math.pow(10, PHASE40_TX_LEVEL_DB / 20);
+          const mix = micCtx.createGain();
+          const gain1 = micCtx.createGain();
+          const gain2 = micCtx.createGain();
+          const osc1 = micCtx.createOscillator();
+          const osc2 = micCtx.createOscillator();
+          osc1.frequency.value = 700;
+          osc2.frequency.value = PHASE40_TX_SOURCE === "tone" ? 700 : 1900;
+          gain1.gain.value = PHASE40_TX_SOURCE === "tone" ? sourceGain : sourceGain / 2;
+          gain2.gain.value = PHASE40_TX_SOURCE === "tone" ? 0 : sourceGain / 2;
+          osc1.connect(gain1).connect(mix);
+          osc2.connect(gain2).connect(mix);
+          source = mix;
+          generatedNodes = { osc1, osc2, gain1, gain2, mix };
+        } else {
+          source = micCtx.createMediaStreamSource(micStream);
         }
         // Route through a silent gain node so capture processing stays active
         // without also playing mic audio through the browser's speakers.
         source.connect(proc);
         proc.connect(silentGain);
         silentGain.connect(micCtx.destination);
+        if (generatedNodes) {
+          generatedNodes.osc1.start();
+          generatedNodes.osc2.start();
+        }
         state.micStream = micStream;
-        state.micNode = { ctx: micCtx, source, proc, silentGain };
+        state.micNode = { ctx: micCtx, source, proc, silentGain, generatedNodes };
         state.micCapturing = true;
-        logEvent(`Mic capture started (${txMode})`);
+        logEvent(generatedTxSource
+          ? `Phase 40 generated TX source started (${PHASE40_TX_SOURCE}, ${PHASE40_TX_LEVEL_DB.toFixed(1)} dBFS, ${txMode})`
+          : `Mic capture started (${txMode})`);
         return true;
       } catch (err) {
         if (micCtx) {
@@ -9207,6 +9597,10 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     function stopMicCapture() {
       if (!state.micCapturing) { return; }
       if (state.micNode) {
+        if (state.micNode.generatedNodes) {
+          try { state.micNode.generatedNodes.osc1.stop(); } catch {}
+          try { state.micNode.generatedNodes.osc2.stop(); } catch {}
+        }
         state.micNode.source.disconnect();
         state.micNode.proc.disconnect();
         state.micNode.silentGain.disconnect();
@@ -9262,7 +9656,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         sendTxShutdownIfPossible(false);
         stopMicCapture();
         recoverRxAfterMox();
-        if (state.connected && !state.audioStreaming) {
+        if (state.connected && !state.audioStreaming && phase40ShouldAutoStartRxAudio()) {
           void startRxAudio();
         }
         if (options.lockAfter) {
@@ -9276,7 +9670,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       }
       if (active === state.moxRequested) { return true; }
       if (active) {
-        if (bridgeRfDisabled()) {
+        if (rfDisabledBlocksTx()) {
           logEvent("TX blocked because bridge RF output is disabled");
           recordOperatorFault("RF disabled", "warn");
           lockTx("rf-disabled", false);
@@ -9313,6 +9707,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         const requestId = state.pttRequestId + 1;
         state.pttRequestId = requestId;
         state.moxRequested = true;
+        applyPhase40TxSourceOverrides();
         muteRxAudioForMox();
         switchDisplayToTxArm();
         updateUi();
@@ -9336,6 +9731,9 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         if (state.pttRequestId !== requestId || !state.connected || !state.ws || state.ws.readyState !== WebSocket.OPEN) {
           return false;
         }
+        if (useMic && phase40GeneratedTxSourceActive()) {
+          sendTci("tx_two_tone:0,false;");
+        }
         sendTci("trx:0,true,tci;");
       }
       updateUi();
@@ -9343,6 +9741,14 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     }
 
     async function setTwoToneEnabled(enabled) {
+      if (enabled && phase40GeneratedTxSourceActive()) {
+        state.twoToneEnabled = false;
+        state.twoTonePttOwned = false;
+        sendTci("tx_two_tone:0,false;");
+        logEvent("Phase 40 generated TX source keeps bridge two-tone disabled");
+        updateUi();
+        return;
+      }
       if (enabled === state.twoToneEnabled) {
         return;
       }
@@ -9527,6 +9933,8 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       updateUi();
       await primeRxAudioContextFromGesture();
       await loadRemoteSettingsFromServer(false);
+      applyPhase40DisplayProfile("connect");
+      applyPhase40TxSourceOverrides();
       state.demoMode = false;
       state.wsUrl = normalizeWsUrlPreference($("ws-url").value.trim());
       $("ws-url").value = state.wsUrl;
@@ -9556,6 +9964,10 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         logEvent("WebSocket connected");
         requestFullState();
         startBridgeRttPings();
+        applyPhase40DisplayProfile("open");
+        if (phase40DisplayProfileConfig()) {
+          sendTci(`iq_samplerate:${state.sampleRate};`);
+        }
         window.setTimeout(() => {
           if (ws !== state.ws || !state.connected) {
             return;
@@ -9566,8 +9978,16 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
             sendTci(`vfo:0,0,${state.vfoA};dds:0,${state.vfoA};`);
           }
         }, REMOTE_PROFILE_APPLY_DELAY_MS);
-        startIq();
-        void startRxAudio();
+        if (phase40ShouldAutoStartIq()) {
+          startIq();
+        } else {
+          logEvent(`Phase 40 display profile ${PHASE40_DISPLAY_PROFILE}: IQ auto-start skipped`);
+        }
+        if (phase40ShouldAutoStartRxAudio()) {
+          void startRxAudio();
+        } else {
+          logEvent(`Phase 40 display profile ${PHASE40_DISPLAY_PROFILE}: RX audio auto-start skipped`);
+        }
         void syncWakeLock(true);
         updateUi();
       };
@@ -9748,7 +10168,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       if (events.txReleased) {
         stopMicCapture();
         recoverRxAfterMox();
-        if (state.connected && !state.audioStreaming) {
+        if (state.connected && !state.audioStreaming && phase40ShouldAutoStartRxAudio()) {
           void startRxAudio();
         }
         extendTxReadyWindow();
@@ -9756,21 +10176,29 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       if (previous.txPhase !== state.txPhase) {
         clearTxTimeouts();
         if (state.txPhase === "armed") {
-          state.armTimeoutTimerId = setTimeout(() => {
-            state.armTimeoutTimerId = null;
-            if (state.txPhase === "armed") {
-              logEvent("Arm timeout — bridge did not key within 5 s, cancelling MOX");
-              void setPtt(false);
-            }
-          }, 5000);
+          if (phase40DiagnosticTxActive()) {
+            logEvent("Phase 40 diagnostic: RF-disabled arm timeout suppressed");
+          } else {
+            state.armTimeoutTimerId = setTimeout(() => {
+              state.armTimeoutTimerId = null;
+              if (state.txPhase === "armed") {
+                logEvent("Arm timeout — bridge did not key within 5 s, cancelling MOX");
+                void setPtt(false);
+              }
+            }, 5000);
+          }
         } else if (state.txPhase === "keyed" && state.txTimeoutEnabled) {
-          state.txTimeoutTimerId = setTimeout(() => {
-            state.txTimeoutTimerId = null;
-            if (state.txPhase === "keyed") {
-              logEvent(`TX timeout — max duration ${state.txTimeoutSeconds} s reached, cancelling MOX`);
-              void setPtt(false);
-            }
-          }, delayMs);
+          if (phase40DiagnosticTxActive()) {
+            logEvent("Phase 40 diagnostic: RF-disabled keyed TX timeout suppressed");
+          } else {
+            state.txTimeoutTimerId = setTimeout(() => {
+              state.txTimeoutTimerId = null;
+              if (state.txPhase === "keyed") {
+                logEvent(`TX timeout — max duration ${state.txTimeoutSeconds} s reached, cancelling MOX`);
+                void setPtt(false);
+              }
+            }, delayMs);
+          }
         }
       }
     }
@@ -10063,6 +10491,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     }
 
     function animationLoop(now) {
+      recordRafTiming(now);
       updateMeterVisualState(now);
       const phoneWanLite = phoneWanLiteActive(now);
       const waterfallEnabled = waterfallRenderEnabled(now);
@@ -11316,6 +11745,8 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       if (await applyStartupProfileIfConfigured()) {
         void saveRemoteSettingsToServer(false);
       }
+      applyPhase40DisplayProfile("init");
+      applyPhase40TxSourceOverrides();
       logEvent("Saturn Remote loaded");
       logEvent("Current bridge target: TCI over WebSocket");
       logEvent(`Display backends: spectrum=${spectrumRenderer.backend}, waterfall=${waterfallRenderer.backend}`);
@@ -11332,6 +11763,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         void releaseWakeLock();
       });
       updateUi();
+      startBrowserTimingProbes();
       setInterval(pulseTelemetry, 250);
       requestAnimationFrame(animationLoop);
     }

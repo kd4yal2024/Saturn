@@ -682,6 +682,10 @@ fn tx_uplink_late_fault_message(age_ms: u64, limit_ms: u64) -> String {
     format!("tx_fault:0,uplink_late,{age_ms},{limit_ms};")
 }
 
+fn tx_control_watchdog_fault_message(silence_ms: u64, limit_ms: u64) -> String {
+    format!("tx_fault:0,control_watchdog,{silence_ms},{limit_ms};")
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum TciClientRole {
     Operator,
@@ -1124,6 +1128,10 @@ impl TciFrontend {
 
     pub fn publish_tx_uplink_late(&self, age_ms: u64, limit_ms: u64) {
         self.send_safety_text(tx_uplink_late_fault_message(age_ms, limit_ms));
+    }
+
+    pub fn publish_tx_control_watchdog(&self, silence_ms: u64, limit_ms: u64) {
+        self.send_safety_text(tx_control_watchdog_fault_message(silence_ms, limit_ms));
     }
 
     pub fn publish_iq_frame(&self, sample_rate_hz: u32, iq_samples: &[f32]) {
@@ -3069,6 +3077,14 @@ mod tests {
         assert_eq!(
             tx_uplink_late_fault_message(280, 250),
             "tx_fault:0,uplink_late,280,250;"
+        );
+    }
+
+    #[test]
+    fn formats_tx_control_watchdog_fault_message() {
+        assert_eq!(
+            tx_control_watchdog_fault_message(620, 500),
+            "tx_fault:0,control_watchdog,620,500;"
         );
     }
 

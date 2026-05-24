@@ -503,7 +503,7 @@ fn build_script_command(script_path: &Path, flags: &[String]) -> Command {
         .map(|ext| ext.eq_ignore_ascii_case("py"))
         .unwrap_or(false);
 
-    if is_python {
+    let mut cmd = if is_python {
         let mut cmd = if let Some(stdbuf) = stdbuf_binary() {
             let mut c = Command::new(stdbuf);
             c.arg("-oL")
@@ -522,10 +522,8 @@ fn build_script_command(script_path: &Path, flags: &[String]) -> Command {
         cmd.env("PYTHONIOENCODING", "UTF-8");
         cmd.env("PYTHONDONTWRITEBYTECODE", "1");
         cmd.env("PYTHONPYCACHEPREFIX", "/var/cache/saturn-python");
-        return cmd;
-    }
-
-    if let Some(stdbuf) = stdbuf_binary() {
+        cmd
+    } else if let Some(stdbuf) = stdbuf_binary() {
         let mut cmd = Command::new(stdbuf);
         cmd.arg("-oL").arg("-eL").arg(script_path).args(flags);
         cmd
@@ -533,7 +531,26 @@ fn build_script_command(script_path: &Path, flags: &[String]) -> Command {
         let mut cmd = Command::new(script_path);
         cmd.args(flags);
         cmd
-    }
+    };
+
+    apply_build_subprocess_env(&mut cmd);
+    cmd
+}
+
+// Saturn-go runs under systemd with a clipped environment. Without an
+// explicit PATH and PKG_CONFIG_PATH, spawned build scripts can fail to
+// find system binaries (cmake, pkg-config) and .pc files that are on
+// disk and work from a normal interactive shell. Set both to the
+// standard Debian/aarch64 defaults for every script we run.
+fn apply_build_subprocess_env(cmd: &mut Command) {
+    cmd.env(
+        "PATH",
+        "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+    );
+    cmd.env(
+        "PKG_CONFIG_PATH",
+        "/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/lib/pkgconfig:/usr/share/pkgconfig",
+    );
 }
 
 type RunLineSink = Arc<dyn Fn(String) + Send + Sync>;

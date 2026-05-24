@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
+  TX_UPLINK_HARD_CAP_BYTES,
   decideTxMicSend,
   txMicByteRateBytesPerSecond,
   txUplinkBufferedThresholdBytes,
@@ -13,11 +14,12 @@ describe('TX uplink guard', () => {
     expect(txUplinkBufferedThresholdBytes(200, byteRate, 4)).toBe(163_200);
   });
 
-  it('marks degraded before it starts dropping mic frames', () => {
+  it('sends and stays clear when bufferedAmount is well below the hard cap', () => {
     const byteRate = txMicByteRateBytesPerSecond(48_000, 4, 256, 64);
-    const decision = decideTxMicSend(90_000, 200, byteRate);
-    expect(decision.degraded).toBe(true);
+    const decision = decideTxMicSend(8_000, 200, byteRate);
     expect(decision.action).toBe('send');
+    expect(decision.degraded).toBe(false);
+    expect(decision.hardCapEngaged).toBe(false);
   });
 
   it('drops before the caller commits bytes to WebSocket.send', () => {
@@ -32,5 +34,25 @@ describe('TX uplink guard', () => {
     expect(decision.degraded).toBe(true);
     expect(decision.action).toBe('drop');
     expect(send).not.toHaveBeenCalled();
+  });
+
+  it('hard cap drops even when the RTT-scaled drop threshold would still send', () => {
+    const byteRate = txMicByteRateBytesPerSecond(48_000, 4, 256, 64);
+    // RTT-scaled drop threshold at 200ms = 163_200 bytes; hard cap = 32_768.
+    // Pick a value above the hard cap but well below the RTT drop threshold
+    // so we prove the hard cap is the active constraint.
+    const decision = decideTxMicSend(TX_UPLINK_HARD_CAP_BYTES + 1, 200, byteRate);
+    expect(decision.hardCapEngaged).toBe(true);
+    expect(decision.action).toBe('drop');
+    expect(decision.degraded).toBe(true);
+  });
+
+  it('hard cap fires independent of RTT (cannot be tuned away)', () => {
+    const byteRate = txMicByteRateBytesPerSecond(48_000, 4, 256, 64);
+    // Even with absurdly large RTT (which would normally widen the cap), the
+    // hard cap remains in force. This is the non-negotiable safety floor.
+    const decision = decideTxMicSend(TX_UPLINK_HARD_CAP_BYTES + 1, 10_000, byteRate);
+    expect(decision.hardCapEngaged).toBe(true);
+    expect(decision.action).toBe('drop');
   });
 });

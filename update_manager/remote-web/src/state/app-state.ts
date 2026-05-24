@@ -234,10 +234,28 @@ export interface AppState {
   applyingBandMemory: boolean;
 
   // ── Performance ─────────────────────────────────────────────────────────
+  phase40DisplayProfile: string;
   perfCaptureEnabled: boolean;
   perfConsoleLogging: boolean;
   perfSnapshots: unknown[];
   perfSnapshotsMax: number;
+  browserMainLagP95Ms: number;
+  browserMainLagP99Ms: number;
+  browserMainLagMaxMs: number;
+  browserRafIntervalP95Ms: number;
+  browserRafIntervalP99Ms: number;
+  browserRafIntervalMaxMs: number;
+  txWorkletToMainP95Ms: number;
+  txWorkletToMainP99Ms: number;
+  txWorkletToMainMaxMs: number;
+  txMainToSendP95Ms: number;
+  txMainToSendP99Ms: number;
+  txMainToSendMaxMs: number;
+  txWsSendP95Ms: number;
+  txWsSendP99Ms: number;
+  txWsSendMaxMs: number;
+  txTimingFrameCount: number;
+  txTimingDroppedFrameCount: number;
 }
 
 /** Create a fresh AppState with all defaults. */
@@ -433,9 +451,27 @@ export function createAppState(): AppState {
     bandMemory: {},
     applyingBandMemory: false,
 
+    phase40DisplayProfile: '',
     perfCaptureEnabled: false,
     perfConsoleLogging: false,
     perfSnapshots: [],
     perfSnapshotsMax: 600,
+    browserMainLagP95Ms: 0,
+    browserMainLagP99Ms: 0,
+    browserMainLagMaxMs: 0,
+    browserRafIntervalP95Ms: 0,
+    browserRafIntervalP99Ms: 0,
+    browserRafIntervalMaxMs: 0,
+    txWorkletToMainP95Ms: 0,
+    txWorkletToMainP99Ms: 0,
+    txWorkletToMainMaxMs: 0,
+    txMainToSendP95Ms: 0,
+    txMainToSendP99Ms: 0,
+    txMainToSendMaxMs: 0,
+    txWsSendP95Ms: 0,
+    txWsSendP99Ms: 0,
+    txWsSendMaxMs: 0,
+    txTimingFrameCount: 0,
+    txTimingDroppedFrameCount: 0,
   };
 }

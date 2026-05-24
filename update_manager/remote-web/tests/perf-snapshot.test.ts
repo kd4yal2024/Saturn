@@ -3,43 +3,7 @@ import { buildPerfSnapshot, buildPerfSummary } from '../src/state/perf-snapshot'
 import { createAppState } from '../src/state/app-state';
 
 function makeSource() {
-  const s = createAppState();
-  return {
-    connected: s.connected,
-    connectPending: s.connectPending,
-    iqStreaming: s.iqStreaming,
-    audioStreaming: s.audioStreaming,
-    sampleRate: s.sampleRate,
-    audioSampleRate: s.audioSampleRate,
-    displayZoom: s.displayZoom,
-    frameRate: s.frameRate,
-    frameCounter: s.frameCounter,
-    iqPackets: s.iqPackets,
-    fftWidth: s.fftWidth,
-    audioFramesPlayed: s.audioFramesPlayed,
-    audioBackpressureDrops: s.audioBackpressureDrops,
-    rxWorkletDrops: s.rxWorkletDrops,
-    bridgeRttMs: s.bridgeRttMs,
-    backpressureSafetyP50Us: s.backpressureSafetyP50Us,
-    backpressureSafetyP95Us: s.backpressureSafetyP95Us,
-    backpressureSafetyP99Us: s.backpressureSafetyP99Us,
-    backpressureControlP50Us: s.backpressureControlP50Us,
-    backpressureControlP95Us: s.backpressureControlP95Us,
-    backpressureControlP99Us: s.backpressureControlP99Us,
-    displayReplacedPerSec: s.displayReplacedPerSec,
-    displayDroppedPerSec: s.displayDroppedPerSec,
-    bridgeAudioDroppedPerSec: s.bridgeAudioDroppedPerSec,
-    bridgeAudioSeqGapCount: s.bridgeAudioSeqGapCount,
-    audioSeqGapCount: s.audioSeqGapCount,
-    audioPanicDrainCount: s.audioPanicDrainCount,
-    sendBlockedMs: s.sendBlockedMs,
-    outboundHighWatermarkBytes: s.outboundHighWatermarkBytes,
-    safetyQueueDepthOverflowCount: s.safetyQueueDepthOverflowCount,
-    lastFrameAt: s.lastFrameAt,
-    lastSpectrumRenderAt: s.lastSpectrumRenderAt,
-    waterfallSettleFrames: s.waterfallSettleFrames,
-    displayCaption: s.displayCaption,
-  };
+  return createAppState();
 }
 
 describe('buildPerfSnapshot', () => {
@@ -56,6 +20,13 @@ describe('buildPerfSnapshot', () => {
     expect(snap.backpressureSafetyP99Us).toBe(0);
     expect(snap.backpressureControlP99Us).toBe(0);
     expect(snap.outboundHighWatermarkBytes).toBe(0);
+    expect(snap.browserMainLagP99Ms).toBe(0);
+    expect(snap.browserRafIntervalP99Ms).toBe(0);
+    expect(snap.txWorkletToMainP99Ms).toBe(0);
+    expect(snap.txMainToSendP99Ms).toBe(0);
+    expect(snap.txWsSendP99Ms).toBe(0);
+    expect(snap.txTimingFrameCount).toBe(0);
+    expect(snap.phase40DisplayProfile).toBe('');
     expect(snap.iqIdleMs).toBe(1000);
     expect(snap.wallTime).toBeTruthy();
   });
@@ -96,6 +67,14 @@ describe('buildPerfSummary', () => {
     source2.sendBlockedMs = 8;
     source2.outboundHighWatermarkBytes = 12000;
     source2.safetyQueueDepthOverflowCount = 0;
+    source2.browserMainLagP99Ms = 18.5;
+    source2.browserRafIntervalP99Ms = 34.25;
+    source2.txWorkletToMainP99Ms = 42.5;
+    source2.txMainToSendP99Ms = 9.75;
+    source2.txWsSendP99Ms = 1.25;
+    source2.txTimingFrameCount = 187;
+    source2.txTimingDroppedFrameCount = 2;
+    source2.phase40DisplayProfile = 'D-text-only';
     const s2 = buildPerfSnapshot(source2, 2000);
 
     const summary = buildPerfSummary([s1, s2], s2);
@@ -117,6 +96,14 @@ describe('buildPerfSummary', () => {
     expect(summary.totalSafetyQueueDepthOverflowCount).toBe(0);
     expect(summary.finalAudioBackpressureDrops).toBe(2);
     expect(summary.finalRxWorkletDrops).toBe(1);
+    expect(summary.maxBrowserMainLagP99Ms).toBe(18.5);
+    expect(summary.maxBrowserRafIntervalP99Ms).toBe(34.25);
+    expect(summary.maxTxWorkletToMainP99Ms).toBe(42.5);
+    expect(summary.maxTxMainToSendP99Ms).toBe(9.75);
+    expect(summary.maxTxWsSendP99Ms).toBe(1.25);
+    expect(summary.totalTxTimingFrames).toBe(187);
+    expect(summary.totalTxTimingDroppedFrames).toBe(2);
+    expect(summary.phase40DisplayProfile).toBe('D-text-only');
     expect(summary.finalSnapshot).toEqual(s2);
   });
 });

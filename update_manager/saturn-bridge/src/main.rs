@@ -27,6 +27,12 @@ const DEFAULT_TCI_CLIENT_RELEASE_GRACE_MS: u64 = 3_000;
 const MAX_TCI_CLIENT_RELEASE_GRACE_MS: u64 = 30_000;
 const TX_UPLINK_LATE_LIMIT: Duration = Duration::from_millis(250);
 const TX_UPLINK_LATE_SUSTAIN: Duration = Duration::from_millis(100);
+// Phase 41 stopgap: bridge force-RX if no operator control message arrives
+// within this window while keyed. Independent safety net for the case where
+// browser PTT-release bytes are stuck behind queued media on the single
+// WebSocket. Tightens to ~200ms in Phase 42 once control runs on its own
+// socket; cannot be disabled.
+const TX_CONTROL_WATCHDOG_LIMIT: Duration = Duration::from_millis(500);
 
 fn parse_remote_tx_max_watts(value: Option<&str>) -> u8 {
     value
@@ -114,6 +120,26 @@ fn update_tx_uplink_late_detector(
     let since = late_since.get_or_insert(now);
     if now.saturating_duration_since(*since) >= TX_UPLINK_LATE_SUSTAIN {
         Some(age)
+    } else {
+        None
+    }
+}
+
+// Phase 41 stopgap: detect prolonged absence of operator control messages
+// while keyed. Returns Some(silence) when the bridge has been keyed and
+// silent of control input for longer than TX_CONTROL_WATCHDOG_LIMIT.
+fn update_tx_control_watchdog(
+    on_air: bool,
+    last_control_at: Option<Instant>,
+    now: Instant,
+) -> Option<Duration> {
+    if !on_air {
+        return None;
+    }
+    let last_control_at = last_control_at?;
+    let silence = now.saturating_duration_since(last_control_at);
+    if silence > TX_CONTROL_WATCHDOG_LIMIT {
+        Some(silence)
     } else {
         None
     }
@@ -238,6 +264,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut last_operator_mic_at: Option<Instant> = None;
     let mut tx_uplink_late_since: Option<Instant> = None;
     let mut tx_uplink_fault_active = false;
+    let mut last_operator_control_at: Option<Instant> = None;
+    let mut tx_control_watchdog_fault_active = false;
     loop {
         let mut did_work = false;
         let mut needs_bootstrap = false;
@@ -250,6 +278,11 @@ fn main() -> Result<(), Box<dyn Error>> {
                 break;
             };
             did_work = true;
+            // Phase 41 stopgap: any non-mic operator command freshens the
+            // control watchdog. ClientDisconnected clears the timestamp below.
+            if !matches!(command, TciCommand::MicAudioFrame(_)) {
+                last_operator_control_at = Some(Instant::now());
+            }
             let mut model = radio_model.lock().unwrap();
             let mut reconfigure_ddc = false;
 
@@ -408,6 +441,8 @@ fn main() -> Result<(), Box<dyn Error>> {
                     last_operator_mic_at = None;
                     tx_uplink_late_since = None;
                     tx_uplink_fault_active = false;
+                    last_operator_control_at = None;
+                    tx_control_watchdog_fault_active = false;
                     model.desired.tx_enabled = false;
                     model.desired.tx_phase = TxPhase::Rx;
                     let _ = tx_cmd_tx.send(TxCommand::Disarm);
@@ -442,6 +477,8 @@ fn main() -> Result<(), Box<dyn Error>> {
                             last_operator_mic_at = None;
                             tx_uplink_late_since = None;
                             tx_uplink_fault_active = false;
+                            last_operator_control_at = Some(Instant::now());
+                            tx_control_watchdog_fault_active = false;
                             model.desired.tx_enabled = false;
                             model.desired.tx_phase = TxPhase::Armed;
                             wdsp.reset_stream_buffers();
@@ -463,6 +500,8 @@ fn main() -> Result<(), Box<dyn Error>> {
                         last_operator_mic_at = None;
                         tx_uplink_late_since = None;
                         tx_uplink_fault_active = false;
+                        last_operator_control_at = None;
+                        tx_control_watchdog_fault_active = false;
                         wdsp.reset_stream_buffers();
                         let _ = tx_cmd_tx.send(TxCommand::Disarm);
                         needs_duc_specific = true;
@@ -555,17 +594,20 @@ fn main() -> Result<(), Box<dyn Error>> {
                     let _ = tx_cmd_tx.send(TxCommand::ModelChanged);
                 }
                 TciCommand::SetTxTwoToneTest(enabled) => {
-                    if enabled && !remote_tx_rf_enabled {
-                        model.desired.two_tone_enabled = false;
-                        eprintln!(
-                            "saturn-bridge: two-tone request refused; RF TX is disabled for safety"
-                        );
-                        continue;
-                    }
+                    // PHASE 40 DIAGNOSTIC ONLY: this local patch permits two-tone
+                    // exercising with SATURN_REMOTE_TX_RF_ENABLED=false. Do not
+                    // merge without an explicit opt-in gate for RF-disabled
+                    // two-tone diagnostics.
                     model.desired.two_tone_enabled = enabled;
                     println!(
                         "saturn-bridge: two-tone test -> {}",
-                        if enabled { "ON (700/1900 Hz)" } else { "OFF" }
+                        if enabled && !remote_tx_rf_enabled {
+                            "ON (700/1900 Hz, RF disabled)"
+                        } else if enabled {
+                            "ON (700/1900 Hz)"
+                        } else {
+                            "OFF"
+                        }
                     );
                     let _ = tx_cmd_tx.send(TxCommand::ModelChanged);
                 }
@@ -700,6 +742,8 @@ fn main() -> Result<(), Box<dyn Error>> {
                     last_operator_mic_at = None;
                     tx_uplink_late_since = None;
                     tx_uplink_fault_active = false;
+                    last_operator_control_at = None;
+                    tx_control_watchdog_fault_active = false;
                     latest_tx_diag = None;
                     let mut model = radio_model.lock().unwrap();
                     model.desired.tx_phase = TxPhase::Rx;
@@ -739,6 +783,8 @@ fn main() -> Result<(), Box<dyn Error>> {
                         last_operator_mic_at = None;
                         tx_uplink_late_since = None;
                         tx_uplink_fault_active = false;
+                        last_operator_control_at = None;
+                        tx_control_watchdog_fault_active = false;
                         model.desired.tx_enabled = false;
                         model.desired.tx_phase = TxPhase::Rx;
                         let _ = tx_cmd_tx.send(TxCommand::Disarm);
@@ -780,6 +826,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             if !on_air {
                 tx_uplink_late_since = None;
                 tx_uplink_fault_active = false;
+                tx_control_watchdog_fault_active = false;
             } else if !tx_uplink_fault_active {
                 if let Some(age) = update_tx_uplink_late_detector(
                     on_air,
@@ -799,6 +846,32 @@ fn main() -> Result<(), Box<dyn Error>> {
                     tx_requested = false;
                     tx_uplink_fault_active = true;
                     last_operator_mic_at = None;
+                    model.desired.tx_enabled = false;
+                    model.desired.tx_phase = TxPhase::Rx;
+                    let _ = tx_cmd_tx.send(TxCommand::Disarm);
+                    session.send_high_priority(&model)?;
+                    session.send_duc_specific()?;
+                    last_duc_specific = now;
+                    did_work = true;
+                }
+            }
+
+            // Phase 41 stopgap: independent of mic freshness. This catches
+            // single-WebSocket media backlog that delays operator release bytes.
+            if on_air && !tx_control_watchdog_fault_active {
+                if let Some(silence) =
+                    update_tx_control_watchdog(on_air, last_operator_control_at, now)
+                {
+                    let silence_ms = silence.as_millis() as u64;
+                    let limit_ms = TX_CONTROL_WATCHDOG_LIMIT.as_millis() as u64;
+                    eprintln!(
+                        "saturn-bridge: TX control watchdog {}ms > {}ms; forcing RX",
+                        silence_ms, limit_ms
+                    );
+                    tci.publish_tx_control_watchdog(silence_ms, limit_ms);
+                    tx_requested = false;
+                    tx_control_watchdog_fault_active = true;
+                    last_operator_control_at = None;
                     model.desired.tx_enabled = false;
                     model.desired.tx_phase = TxPhase::Rx;
                     let _ = tx_cmd_tx.send(TxCommand::Disarm);
@@ -939,6 +1012,29 @@ mod tests {
 
         assert!(update_tx_uplink_late_detector(true, None, now, &mut late_since).is_none());
         assert!(late_since.is_none());
+    }
+
+    #[test]
+    fn tx_control_watchdog_is_scoped_to_on_air_tx() {
+        let now = Instant::now();
+        let stale_control = Some(now - TX_CONTROL_WATCHDOG_LIMIT - Duration::from_millis(1));
+
+        assert!(update_tx_control_watchdog(false, stale_control, now).is_none());
+    }
+
+    #[test]
+    fn tx_control_watchdog_fires_after_limit() {
+        let now = Instant::now();
+        let fresh_control = Some(now - TX_CONTROL_WATCHDOG_LIMIT);
+        let stale_control = Some(now - TX_CONTROL_WATCHDOG_LIMIT - Duration::from_millis(1));
+
+        assert!(update_tx_control_watchdog(true, fresh_control, now).is_none());
+        assert!(update_tx_control_watchdog(true, stale_control, now).is_some());
+    }
+
+    #[test]
+    fn tx_control_watchdog_waits_for_first_control_message() {
+        assert!(update_tx_control_watchdog(true, None, Instant::now()).is_none());
     }
 
     #[test]
