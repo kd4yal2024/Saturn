@@ -8277,7 +8277,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     }
 
     function phase40GeneratedTxSourceActive() {
-      return PHASE40_TX_DIAGNOSTIC && (PHASE40_TX_SOURCE === "tone" || PHASE40_TX_SOURCE === "twotone");
+      return phase40DiagnosticTxActive() && (PHASE40_TX_SOURCE === "tone" || PHASE40_TX_SOURCE === "twotone");
     }
 
     function clientRoleBlocksTx() {
@@ -8824,6 +8824,11 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         sendBridgeRttPing();
         scheduleNextBridgeRttPing();
       }, nextBridgeRttPingIntervalMs());
+    }
+
+    function refreshBridgeControlHeartbeatForTx() {
+      sendBridgeRttPing();
+      scheduleNextBridgeRttPing();
     }
 
     function startBridgeRttPings() {
@@ -9652,6 +9657,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         state.moxRequested = false;
         state.txEnabled = false;
         state.txPhase = "rx";
+        scheduleNextBridgeRttPing();
         updateUi();
         sendTxShutdownIfPossible(false);
         stopMicCapture();
@@ -9707,6 +9713,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         const requestId = state.pttRequestId + 1;
         state.pttRequestId = requestId;
         state.moxRequested = true;
+        refreshBridgeControlHeartbeatForTx();
         applyPhase40TxSourceOverrides();
         muteRxAudioForMox();
         switchDisplayToTxArm();

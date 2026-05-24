@@ -708,6 +708,7 @@ fn remote_client_role_message(client_id: u64, role: TciClientRole) -> String {
 pub struct TciFrontend {
     command_rx: Receiver<TciCommand>,
     clients: ClientRegistry,
+    operator_control_at: Arc<Mutex<Option<Instant>>>,
     drop_count: Arc<AtomicU64>,
     display_rate_limited_count: AtomicU64,
     tx_power_meter_scale: f32,
@@ -764,12 +765,14 @@ impl TciFrontend {
         let clients = Arc::new(Mutex::new(BTreeMap::new()));
         let next_client_id = Arc::new(AtomicU64::new(0));
         let operator_client_id = Arc::new(AtomicU64::new(0));
+        let operator_control_at = Arc::new(Mutex::new(None));
         let drop_count = Arc::new(AtomicU64::new(0));
         let remote_tx_rf_enabled = config.remote_tx_rf_enabled;
 
         let client_registry = clients.clone();
         let next_client = next_client_id.clone();
         let operator_client = operator_client_id.clone();
+        let operator_control = operator_control_at.clone();
         let drop_counter = drop_count.clone();
         let radio_model = radio_model.clone();
         let handle = thread::spawn(move || loop {
@@ -783,6 +786,7 @@ impl TciFrontend {
                     let command_tx = command_tx.clone();
                     let clients = client_registry.clone();
                     let operator_client_id = operator_client.clone();
+                    let operator_control_at = operator_control.clone();
                     let drop_count = drop_counter.clone();
                     let radio_model = radio_model.clone();
 
@@ -794,6 +798,7 @@ impl TciFrontend {
                             &command_tx,
                             &clients,
                             &operator_client_id,
+                            &operator_control_at,
                             &radio_model,
                             &drop_count,
                             remote_tx_rf_enabled,
@@ -813,6 +818,7 @@ impl TciFrontend {
         Ok(Self {
             command_rx,
             clients,
+            operator_control_at,
             drop_count,
             display_rate_limited_count: AtomicU64::new(0),
             tx_power_meter_scale: config.tx_power_meter_scale,
@@ -827,6 +833,10 @@ impl TciFrontend {
 
     pub fn try_recv_command(&self) -> Option<TciCommand> {
         self.command_rx.try_recv().ok()
+    }
+
+    pub fn last_operator_control_at(&self) -> Option<Instant> {
+        *self.operator_control_at.lock().unwrap()
     }
 
     pub fn client_snapshot(&self) -> TciClientSnapshot {
@@ -1295,6 +1305,7 @@ fn handle_client(
     command_tx: &Sender<TciCommand>,
     clients: &ClientRegistry,
     operator_client_id: &Arc<AtomicU64>,
+    operator_control_at: &Arc<Mutex<Option<Instant>>>,
     radio_model: &Arc<Mutex<RadioModel>>,
     drop_count: &Arc<AtomicU64>,
     remote_tx_rf_enabled: bool,
@@ -1337,6 +1348,7 @@ fn handle_client(
                                 command_tx,
                                 clients,
                                 operator_client_id,
+                                operator_control_at,
                                 client_id,
                             ) {
                                 client_closed = true;
@@ -1444,6 +1456,7 @@ fn handle_client(
 
             let disconnect = unregister_client(clients, operator_client_id, client_id);
             if disconnect.was_operator {
+                *operator_control_at.lock().unwrap() = None;
                 let _ = command_tx.send(TciCommand::SetTxEnabled(false));
             }
             if let Some(promoted_id) = disconnect.promoted_operator {
@@ -1659,11 +1672,15 @@ fn handle_incoming_message(
     command_tx: &Sender<TciCommand>,
     clients: &ClientRegistry,
     operator_client_id: &Arc<AtomicU64>,
+    operator_control_at: &Arc<Mutex<Option<Instant>>>,
     client_id: u64,
 ) -> bool {
     let is_operator = operator_client_id.load(Ordering::SeqCst) == client_id;
     match message {
         Message::Text(text) => {
+            if is_operator {
+                *operator_control_at.lock().unwrap() = Some(Instant::now());
+            }
             for command in text
                 .split(';')
                 .map(str::trim)
@@ -3062,6 +3079,63 @@ mod tests {
             }
             command => panic!("unexpected command: {command:?}"),
         }
+    }
+
+    #[test]
+    fn operator_text_updates_control_heartbeat() {
+        let (tx, _rx) = mpsc::channel();
+        let clients = test_client_registry(7);
+        let operator_client_id = Arc::new(AtomicU64::new(7));
+        let operator_control_at = Arc::new(Mutex::new(None));
+
+        assert!(handle_incoming_message(
+            Message::Text("saturn_ping:probe-1,123.456;".into()),
+            &tx,
+            &clients,
+            &operator_client_id,
+            &operator_control_at,
+            7,
+        ));
+
+        assert!(operator_control_at.lock().unwrap().is_some());
+    }
+
+    #[test]
+    fn viewer_text_does_not_update_control_heartbeat() {
+        let (tx, _rx) = mpsc::channel();
+        let clients = test_client_registry(7);
+        let operator_client_id = Arc::new(AtomicU64::new(1));
+        let operator_control_at = Arc::new(Mutex::new(None));
+
+        assert!(handle_incoming_message(
+            Message::Text("saturn_ping:probe-1,123.456;".into()),
+            &tx,
+            &clients,
+            &operator_client_id,
+            &operator_control_at,
+            7,
+        ));
+
+        assert!(operator_control_at.lock().unwrap().is_none());
+    }
+
+    #[test]
+    fn websocket_ping_does_not_update_control_heartbeat() {
+        let (tx, _rx) = mpsc::channel();
+        let clients = test_client_registry(7);
+        let operator_client_id = Arc::new(AtomicU64::new(7));
+        let operator_control_at = Arc::new(Mutex::new(None));
+
+        assert!(handle_incoming_message(
+            Message::Ping(Vec::new().into()),
+            &tx,
+            &clients,
+            &operator_client_id,
+            &operator_control_at,
+            7,
+        ));
+
+        assert!(operator_control_at.lock().unwrap().is_none());
     }
 
     #[test]

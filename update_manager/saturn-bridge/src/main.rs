@@ -209,6 +209,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     };
     let stop_flag = Arc::new(AtomicBool::new(false));
     let remote_tx_rf_enabled = config.remote_tx_rf_enabled;
+    let allow_rf_disabled_two_tone = config.allow_rf_disabled_two_tone;
     let remote_tx_max_watts = remote_tx_max_watts();
     let remote_tx_power_trip_watts = remote_tx_power_trip_watts();
     let tci_client_release_grace = tci_client_release_grace();
@@ -264,7 +265,6 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut last_operator_mic_at: Option<Instant> = None;
     let mut tx_uplink_late_since: Option<Instant> = None;
     let mut tx_uplink_fault_active = false;
-    let mut last_operator_control_at: Option<Instant> = None;
     let mut tx_control_watchdog_fault_active = false;
     loop {
         let mut did_work = false;
@@ -278,11 +278,6 @@ fn main() -> Result<(), Box<dyn Error>> {
                 break;
             };
             did_work = true;
-            // Phase 41 stopgap: any non-mic operator command freshens the
-            // control watchdog. ClientDisconnected clears the timestamp below.
-            if !matches!(command, TciCommand::MicAudioFrame(_)) {
-                last_operator_control_at = Some(Instant::now());
-            }
             let mut model = radio_model.lock().unwrap();
             let mut reconfigure_ddc = false;
 
@@ -441,7 +436,6 @@ fn main() -> Result<(), Box<dyn Error>> {
                     last_operator_mic_at = None;
                     tx_uplink_late_since = None;
                     tx_uplink_fault_active = false;
-                    last_operator_control_at = None;
                     tx_control_watchdog_fault_active = false;
                     model.desired.tx_enabled = false;
                     model.desired.tx_phase = TxPhase::Rx;
@@ -477,7 +471,6 @@ fn main() -> Result<(), Box<dyn Error>> {
                             last_operator_mic_at = None;
                             tx_uplink_late_since = None;
                             tx_uplink_fault_active = false;
-                            last_operator_control_at = Some(Instant::now());
                             tx_control_watchdog_fault_active = false;
                             model.desired.tx_enabled = false;
                             model.desired.tx_phase = TxPhase::Armed;
@@ -500,7 +493,6 @@ fn main() -> Result<(), Box<dyn Error>> {
                         last_operator_mic_at = None;
                         tx_uplink_late_since = None;
                         tx_uplink_fault_active = false;
-                        last_operator_control_at = None;
                         tx_control_watchdog_fault_active = false;
                         wdsp.reset_stream_buffers();
                         let _ = tx_cmd_tx.send(TxCommand::Disarm);
@@ -594,15 +586,18 @@ fn main() -> Result<(), Box<dyn Error>> {
                     let _ = tx_cmd_tx.send(TxCommand::ModelChanged);
                 }
                 TciCommand::SetTxTwoToneTest(enabled) => {
-                    // PHASE 40 DIAGNOSTIC ONLY: this local patch permits two-tone
-                    // exercising with SATURN_REMOTE_TX_RF_ENABLED=false. Do not
-                    // merge without an explicit opt-in gate for RF-disabled
-                    // two-tone diagnostics.
+                    if enabled && !remote_tx_rf_enabled && !allow_rf_disabled_two_tone {
+                        model.desired.two_tone_enabled = false;
+                        eprintln!(
+                            "saturn-bridge: two-tone request refused; RF TX is disabled for safety"
+                        );
+                        continue;
+                    }
                     model.desired.two_tone_enabled = enabled;
                     println!(
                         "saturn-bridge: two-tone test -> {}",
                         if enabled && !remote_tx_rf_enabled {
-                            "ON (700/1900 Hz, RF disabled)"
+                            "ON (700/1900 Hz, RF disabled diagnostic)"
                         } else if enabled {
                             "ON (700/1900 Hz)"
                         } else {
@@ -742,7 +737,6 @@ fn main() -> Result<(), Box<dyn Error>> {
                     last_operator_mic_at = None;
                     tx_uplink_late_since = None;
                     tx_uplink_fault_active = false;
-                    last_operator_control_at = None;
                     tx_control_watchdog_fault_active = false;
                     latest_tx_diag = None;
                     let mut model = radio_model.lock().unwrap();
@@ -783,7 +777,6 @@ fn main() -> Result<(), Box<dyn Error>> {
                         last_operator_mic_at = None;
                         tx_uplink_late_since = None;
                         tx_uplink_fault_active = false;
-                        last_operator_control_at = None;
                         tx_control_watchdog_fault_active = false;
                         model.desired.tx_enabled = false;
                         model.desired.tx_phase = TxPhase::Rx;
@@ -860,7 +853,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             // single-WebSocket media backlog that delays operator release bytes.
             if on_air && !tx_control_watchdog_fault_active {
                 if let Some(silence) =
-                    update_tx_control_watchdog(on_air, last_operator_control_at, now)
+                    update_tx_control_watchdog(on_air, tci.last_operator_control_at(), now)
                 {
                     let silence_ms = silence.as_millis() as u64;
                     let limit_ms = TX_CONTROL_WATCHDOG_LIMIT.as_millis() as u64;
@@ -871,7 +864,6 @@ fn main() -> Result<(), Box<dyn Error>> {
                     tci.publish_tx_control_watchdog(silence_ms, limit_ms);
                     tx_requested = false;
                     tx_control_watchdog_fault_active = true;
-                    last_operator_control_at = None;
                     model.desired.tx_enabled = false;
                     model.desired.tx_phase = TxPhase::Rx;
                     let _ = tx_cmd_tx.send(TxCommand::Disarm);

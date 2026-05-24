@@ -27,6 +27,7 @@ pub struct BridgeConfig {
     pub remote_tx_100w_drive_byte: u8,
     pub tx_power_meter_scale: f32,
     pub remote_tx_rf_enabled: bool,
+    pub allow_rf_disabled_two_tone: bool,
     pub display_frame_limit_hz: u16,
     pub rx_audio_transport_rate_hz: u32,
     pub rx_audio_transport_channels: u32,
@@ -59,6 +60,7 @@ impl Default for BridgeConfig {
             remote_tx_100w_drive_byte: 68,
             tx_power_meter_scale: 1.0,
             remote_tx_rf_enabled: false,
+            allow_rf_disabled_two_tone: false,
             display_frame_limit_hz: 30,
             rx_audio_transport_rate_hz: 48_000,
             rx_audio_transport_channels: 2,
@@ -161,6 +163,10 @@ impl BridgeConfig {
             remote_tx_rf_enabled: parse_env_bool(
                 "SATURN_REMOTE_TX_RF_ENABLED",
                 defaults.remote_tx_rf_enabled,
+            ),
+            allow_rf_disabled_two_tone: parse_env_bool(
+                "SATURN_REMOTE_TWOTONE_RF_DISABLED_OK",
+                defaults.allow_rf_disabled_two_tone,
             ),
             display_frame_limit_hz: parse_env_u16(
                 "SATURN_BRIDGE_DISPLAY_FRAME_LIMIT_HZ",
