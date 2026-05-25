@@ -4488,9 +4488,8 @@
     const RX_AUDIO_USE_SAB_RING = false;
     const RX_MSG_QUEUE_MAX_PACKETS = 8;
     const TX_MIC_BLOCK_SAMPLES = 256;
-    // Keep live TX mic frames on Float32 until the s16 uplink path is field-validated.
-    const TX_MIC_BYTES_PER_SAMPLE = 4;
-    const TX_MIC_SAMPLE_TYPE_FLOAT32 = 3;
+    const TX_MIC_BYTES_PER_SAMPLE = 2;
+    const TX_MIC_SAMPLE_TYPE_S16 = 1;
     const TX_UPLINK_STATS_INTERVAL_MS = 1000;
     const BROWSER_TIMING_MAX_SAMPLES = 4096;
     const BROWSER_TIMING_EVENT_LOOP_INTERVAL_MS = 100;
@@ -9431,7 +9430,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       const view = new DataView(buf);
       view.setUint32(0, 0, true);                        // receiver
       view.setUint32(4, 48000, true);                    // sample_rate
-      view.setUint32(8, TX_MIC_SAMPLE_TYPE_FLOAT32, true);// sample_type = float32
+      view.setUint32(8, TX_MIC_SAMPLE_TYPE_S16, true);    // sample_type = s16
       view.setUint32(20, sampleCount, true);             // sample_count
       view.setUint32(24, TCI_STREAM_MIC_TX, true);        // stream_type = 2 (TX mic)
       view.setUint32(28, 1, true);                       // channels = 1 (mono)
@@ -9441,7 +9440,14 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         const sample = Number(monoSamples[i]) || 0;
         const clamped = Math.max(-1, Math.min(1, sample));
         peak = Math.max(peak, Math.abs(clamped));
-        view.setFloat32(64 + i * TX_MIC_BYTES_PER_SAMPLE, clamped, true);
+        const pcm = clamped < 0
+          ? Math.round(clamped * 32768)
+          : Math.round(clamped * 32767);
+        view.setInt16(
+          64 + i * TX_MIC_BYTES_PER_SAMPLE,
+          Math.max(-32768, Math.min(32767, pcm)),
+          true
+        );
       }
       state.txMicLevel = Math.max(0, Math.min(1, peak));
       state.txMicLevelAt = performance.now();

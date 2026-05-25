@@ -14,6 +14,13 @@ describe('TX uplink guard', () => {
     expect(txUplinkBufferedThresholdBytes(200, byteRate, 4)).toBe(163_200);
   });
 
+  it('derives the lower byte rate used by s16 mic frames', () => {
+    const byteRate = txMicByteRateBytesPerSecond(48_000, 2, 256, 64);
+    expect(byteRate).toBeCloseTo(108_000, 0);
+    expect(txUplinkBufferedThresholdBytes(200, byteRate, 2)).toBe(43_200);
+    expect(txUplinkBufferedThresholdBytes(200, byteRate, 4)).toBe(86_400);
+  });
+
   it('sends and stays clear when bufferedAmount is well below the hard cap', () => {
     const byteRate = txMicByteRateBytesPerSecond(48_000, 4, 256, 64);
     const decision = decideTxMicSend(8_000, 200, byteRate);
@@ -38,7 +45,7 @@ describe('TX uplink guard', () => {
 
   it('hard cap drops even when the RTT-scaled drop threshold would still send', () => {
     const byteRate = txMicByteRateBytesPerSecond(48_000, 4, 256, 64);
-    // RTT-scaled drop threshold at 200ms = 163_200 bytes; hard cap = 32_768.
+    // RTT-scaled drop threshold at 200ms = 163_200 bytes; hard cap is lower.
     // Pick a value above the hard cap but well below the RTT drop threshold
     // so we prove the hard cap is the active constraint.
     const decision = decideTxMicSend(TX_UPLINK_HARD_CAP_BYTES + 1, 200, byteRate);
