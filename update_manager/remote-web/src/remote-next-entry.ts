@@ -53,6 +53,13 @@ import {
   decidePhase42MediaSend,
   PHASE42_MEDIA_BACKLOG_HARD_CAP_BYTES,
 } from './transport/split-sockets';
+import { createPhase42LegacySocketAdapter } from './transport/phase42-adapter';
+import {
+  PHASE42_SPLIT_QUERY_PARAM,
+  PHASE42_SPLIT_STORAGE_KEY,
+  createPhase42SessionId,
+  phase42SplitTransportEnabled,
+} from './transport/transport-mode';
 import { bandKeyForFrequency, effectiveIqSampleRate, HAM_BAND_EDGES_HZ, adcLabel, antennaLabel, normalizeStreamMode, noiseReductionLabel, describeMicCaptureError } from './radio/band';
 import {
   normalizeDemodMode,
@@ -149,6 +156,11 @@ const api = {
   derivePhase42SplitSocketUrls,
   decidePhase42MediaSend,
   PHASE42_MEDIA_BACKLOG_HARD_CAP_BYTES,
+  createPhase42LegacySocketAdapter,
+  PHASE42_SPLIT_QUERY_PARAM,
+  PHASE42_SPLIT_STORAGE_KEY,
+  createPhase42SessionId,
+  phase42SplitTransportEnabled,
 
   // Radio
   bandKeyForFrequency,
@@ -294,6 +306,11 @@ export {
   derivePhase42SplitSocketUrls,
   decidePhase42MediaSend,
   PHASE42_MEDIA_BACKLOG_HARD_CAP_BYTES,
+  createPhase42LegacySocketAdapter,
+  PHASE42_SPLIT_QUERY_PARAM,
+  PHASE42_SPLIT_STORAGE_KEY,
+  createPhase42SessionId,
+  phase42SplitTransportEnabled,
   bandKeyForFrequency,
   effectiveIqSampleRate,
   HAM_BAND_EDGES_HZ,

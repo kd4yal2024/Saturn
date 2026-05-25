@@ -6025,6 +6025,28 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       describeMicCaptureError: _describeMicCaptureError,
     } = _next;
 
+    function phase42SplitTransportEnabled() {
+      return _next.phase42SplitTransportEnabled(
+        window.location.search,
+        localStorage.getItem(_next.PHASE42_SPLIT_STORAGE_KEY)
+      );
+    }
+
+    function createBridgeSocket(baseWsUrl, phase42SessionId = "") {
+      if (!phase42SessionId) {
+        return new WebSocket(baseWsUrl);
+      }
+      return _next.createPhase42LegacySocketAdapter({
+        baseWsUrl,
+        sessionId: phase42SessionId,
+        WebSocketCtor: WebSocket,
+        onProtocolViolation(violation) {
+          logEvent(`Phase 42 ${violation.channel} lane violation: ${violation.reason}`);
+          recordOperatorFault("Bridge lane violation", "warn", false);
+        },
+      });
+    }
+
     function loadPhonePanelState() {
       const fallback = { ...PHONE_PANEL_DEFAULTS };
       const saved = localStorage.getItem("saturn.remote.phonePanels");
@@ -9945,10 +9967,15 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       state.demoMode = false;
       state.wsUrl = normalizeWsUrlPreference($("ws-url").value.trim());
       $("ws-url").value = state.wsUrl;
-      logEvent(`Connecting to ${state.wsUrl}`);
+      const phase42SessionId = phase42SplitTransportEnabled()
+        ? _next.createPhase42SessionId()
+        : "";
+      logEvent(phase42SessionId
+        ? `Connecting to ${state.wsUrl} with Phase 42 split session ${phase42SessionId}`
+        : `Connecting to ${state.wsUrl}`);
       let ws;
       try {
-        ws = new WebSocket(state.wsUrl);
+        ws = createBridgeSocket(state.wsUrl, phase42SessionId);
       } catch (err) {
         logEvent(`Invalid WebSocket URL: ${err.message}`);
         recordOperatorFault("Invalid bridge URL", "warn");
@@ -9968,7 +9995,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         state.remoteClientId = null;
         lockTx("reconnect", false);
         resetDisplayHistory();
-        logEvent("WebSocket connected");
+        logEvent(phase42SessionId ? "Phase 42 split WebSockets connected" : "WebSocket connected");
         requestFullState();
         startBridgeRttPings();
         applyPhase40DisplayProfile("open");
