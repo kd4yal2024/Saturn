@@ -9199,6 +9199,10 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       state.audioNextTime = state.audioCtx ? state.audioCtx.currentTime : 0;
     }
 
+    function setTxMediaPriority(active) {
+      sendTci(`remote_tx_media_priority:0,${active ? "true" : "false"};`);
+    }
+
     function switchDisplayToTxArm() {
       state.displayCaption = state.txEnabled ? "TX spectrum active" : "TX armed - RX panadapter muted";
       state.lastFrameAt = performance.now();
@@ -9688,6 +9692,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         scheduleNextBridgeRttPing();
         updateUi();
         sendTxShutdownIfPossible(false);
+        setTxMediaPriority(false);
         stopMicCapture();
         recoverRxAfterMox();
         if (state.connected && !state.audioStreaming && phase40ShouldAutoStartRxAudio()) {
@@ -9743,6 +9748,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         state.moxRequested = true;
         refreshBridgeControlHeartbeatForTx();
         applyPhase40TxSourceOverrides();
+        setTxMediaPriority(true);
         muteRxAudioForMox();
         switchDisplayToTxArm();
         updateUi();
@@ -9752,6 +9758,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
             if (state.pttRequestId === requestId && state.moxRequested) {
               clearTxTimeouts();
               sendTxShutdownIfPossible(false);
+              setTxMediaPriority(false);
               state.moxRequested = false;
               state.txEnabled = false;
               state.txPhase = "rx";

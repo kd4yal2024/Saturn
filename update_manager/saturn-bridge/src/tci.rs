@@ -654,6 +654,7 @@ struct ClientState {
     tx_mic_last_arrived_seq: u32,
     tx_mic_seq_gap_count: u64,
     tx_mic_last_arrived_at: Option<Instant>,
+    tx_media_priority_active: bool,
     phase42: Option<Phase42ClientMetadata>,
 }
 
@@ -674,6 +675,7 @@ impl Default for ClientState {
             tx_mic_last_arrived_seq: 0,
             tx_mic_seq_gap_count: 0,
             tx_mic_last_arrived_at: None,
+            tx_media_priority_active: false,
             phase42: None,
         }
     }
@@ -981,6 +983,7 @@ pub struct TciClientSnapshot {
     pub tx_mic_last_arrived_seq: u32,
     pub tx_mic_seq_gap_count: u64,
     pub tx_mic_age_ms: u64,
+    pub tx_media_priority_active: bool,
 }
 
 struct JoinGuard {
@@ -1187,6 +1190,9 @@ impl TciFrontend {
                 .map(|arrived_at| now.saturating_duration_since(arrived_at).as_millis() as u64)
                 .max()
                 .unwrap_or(0),
+            tx_media_priority_active: clients
+                .values()
+                .any(|client| client.state.tx_media_priority_active),
         }
     }
 
@@ -1553,11 +1559,18 @@ fn client_wants_outbound_message(client: &ClientConnection, message: &OutboundMe
         OutboundMessage::Text(_) | OutboundMessage::SafetyText(_) => {
             lane != Some(Phase42SocketKind::Media)
         }
-        OutboundMessage::IqFrame { .. } | OutboundMessage::TxIqFrame { .. } => {
+        OutboundMessage::IqFrame { .. } => {
+            lane != Some(Phase42SocketKind::Control)
+                && client.state.iq_stream_enabled
+                && !client.state.tx_media_priority_active
+        }
+        OutboundMessage::TxIqFrame { .. } => {
             lane != Some(Phase42SocketKind::Control) && client.state.iq_stream_enabled
         }
         OutboundMessage::AudioFrame { .. } => {
-            lane != Some(Phase42SocketKind::Control) && client.state.audio_stream_enabled
+            lane != Some(Phase42SocketKind::Control)
+                && client.state.audio_stream_enabled
+                && !client.state.tx_media_priority_active
         }
     }
 }
@@ -2331,6 +2344,18 @@ fn parse_tci_command(
                 high_watermark_bytes,
             );
         }
+        "remote_tx_media_priority" => {
+            let enabled_arg = if args.len() >= 2 {
+                args.get(1)
+            } else {
+                args.first()
+            };
+            if let Some(enabled_text) = enabled_arg {
+                if let Some(enabled) = parse_tci_bool(enabled_text) {
+                    set_client_tx_media_priority_active(clients, client_id, enabled);
+                }
+            }
+        }
         "audio_stream_sample_type" => {}
         "rx_smeter" | "s_meter" | "smeter" => {
             let _ = command_tx.send(TciCommand::RequestSmeter);
@@ -2345,6 +2370,7 @@ fn parse_tci_command(
             if let Some(enabled_text) = enabled_arg {
                 if let Some(enabled) = parse_tci_bool(enabled_text) {
                     println!("saturn-bridge: TCI trx requested -> {}", enabled);
+                    set_client_tx_media_priority_active(clients, client_id, enabled);
                     let _ = command_tx.send(TciCommand::SetTxEnabled(enabled));
                 }
             }
@@ -2774,11 +2800,7 @@ fn phase42_paired_media_client_id(
     clients: &BTreeMap<u64, ClientConnection>,
     control_client_id: u64,
 ) -> Option<u64> {
-    let metadata = clients
-        .get(&control_client_id)?
-        .state
-        .phase42
-        .as_ref()?;
+    let metadata = clients.get(&control_client_id)?.state.phase42.as_ref()?;
     if metadata.lane != Some(Phase42SocketKind::Control) {
         return None;
     }
@@ -2859,6 +2881,18 @@ fn set_client_audio_channels(clients: &ClientRegistry, client_id: u64, channels:
     if let Some(media_id) = phase42_paired_media_client_id(&clients, client_id) {
         if let Some(media) = clients.get_mut(&media_id) {
             media.state.audio_channels = channels;
+        }
+    }
+}
+
+fn set_client_tx_media_priority_active(clients: &ClientRegistry, client_id: u64, active: bool) {
+    let mut clients = clients.lock().unwrap();
+    if let Some(client) = clients.get_mut(&client_id) {
+        client.state.tx_media_priority_active = active;
+    }
+    if let Some(media_id) = phase42_paired_media_client_id(&clients, client_id) {
+        if let Some(media) = clients.get_mut(&media_id) {
+            media.state.tx_media_priority_active = active;
         }
     }
 }
@@ -4218,12 +4252,58 @@ mod tests {
         set_client_audio_channels(&clients, 84, 1);
 
         let snapshot = clients.lock().unwrap();
-        assert_eq!(snapshot.get(&85).unwrap().state.audio_sample_rate_hz, 24_000);
+        assert_eq!(
+            snapshot.get(&85).unwrap().state.audio_sample_rate_hz,
+            24_000
+        );
         assert_eq!(
             snapshot.get(&85).unwrap().state.audio_frame_float_count,
             4096
         );
         assert_eq!(snapshot.get(&85).unwrap().state.audio_channels, 1);
+    }
+
+    #[test]
+    fn phase42_tx_media_priority_suppresses_rx_media_not_tx_iq() {
+        let clients: ClientRegistry = Arc::new(Mutex::new(BTreeMap::new()));
+        insert_phase42_paired_client(
+            &clients,
+            86,
+            "phase-42",
+            Phase42SocketKind::Control,
+            Some(TciClientRole::Operator),
+        );
+        insert_phase42_paired_client(&clients, 87, "phase-42", Phase42SocketKind::Media, None);
+        set_client_iq_stream_enabled(&clients, 86, true);
+        set_client_audio_stream_enabled(&clients, 86, true);
+        set_client_tx_media_priority_active(&clients, 86, true);
+
+        let snapshot = clients.lock().unwrap();
+        assert!(snapshot.get(&86).unwrap().state.tx_media_priority_active);
+        let media = snapshot.get(&87).unwrap();
+        assert!(media.state.tx_media_priority_active);
+
+        let rx_iq = OutboundMessage::IqFrame {
+            receiver: 0,
+            sample_rate: 192_000,
+            iq_samples: vec![0.0, 0.0],
+        };
+        let tx_iq = OutboundMessage::TxIqFrame {
+            receiver: 0,
+            sample_rate: 192_000,
+            iq_samples: vec![0.0, 0.0],
+        };
+        let audio = OutboundMessage::AudioFrame {
+            receiver: 0,
+            sample_rate: 48_000,
+            channels: 1,
+            audio_samples: vec![0.0, 0.0],
+            sequence: 7,
+        };
+
+        assert!(!client_wants_outbound_message(media, &rx_iq));
+        assert!(client_wants_outbound_message(media, &tx_iq));
+        assert!(!client_wants_outbound_message(media, &audio));
     }
 
     #[test]
@@ -4253,8 +4333,7 @@ mod tests {
         assert!(client_wants_outbound_message(&control, &text));
         assert!(!client_wants_outbound_message(&media, &text));
 
-        let safety =
-            OutboundMessage::SafetyText("tx_fault:0,power_trip,126.3,110.0;".into());
+        let safety = OutboundMessage::SafetyText("tx_fault:0,power_trip,126.3,110.0;".into());
         assert!(client_wants_outbound_message(&control, &safety));
         assert!(!client_wants_outbound_message(&media, &safety));
     }
@@ -4416,6 +4495,17 @@ mod tests {
                 .state
                 .tx_uplink_degraded
         );
+
+        parse_tci_command("remote_tx_media_priority:0,true", &tx, &clients, 9, false);
+        assert!(
+            !clients
+                .lock()
+                .unwrap()
+                .get(&9)
+                .unwrap()
+                .state
+                .tx_media_priority_active
+        );
     }
 
     #[test]
@@ -4437,6 +4527,34 @@ mod tests {
         assert_eq!(state.tx_mic_browser_dropped_count, 6);
         assert_eq!(state.tx_uplink_buffered_bytes, 7000);
         assert_eq!(state.tx_uplink_buffered_high_watermark_bytes, 9000);
+    }
+
+    #[test]
+    fn parses_operator_tx_media_priority() {
+        let (tx, _rx) = mpsc::channel();
+        let clients = test_client_registry(9);
+
+        parse_tci_command("remote_tx_media_priority:0,true", &tx, &clients, 9, true);
+        assert!(
+            clients
+                .lock()
+                .unwrap()
+                .get(&9)
+                .unwrap()
+                .state
+                .tx_media_priority_active
+        );
+
+        parse_tci_command("remote_tx_media_priority:0,false", &tx, &clients, 9, true);
+        assert!(
+            !clients
+                .lock()
+                .unwrap()
+                .get(&9)
+                .unwrap()
+                .state
+                .tx_media_priority_active
+        );
     }
 
     #[test]
