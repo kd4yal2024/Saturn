@@ -260,9 +260,7 @@ fn run(
                 }) => {
                     if state != TxState::Idle {
                         let mono = mic_samples_to_mono(samples, channels);
-                        let mic_peak = mono
-                            .iter()
-                            .fold(0.0f32, |p, s| p.max(s.abs()));
+                        let mic_peak = mono.iter().fold(0.0f32, |p, s| p.max(s.abs()));
                         if mic_peak >= TX_KEY_MIC_PEAK_THRESHOLD {
                             let was_none = last_keyable_mic_at.is_none();
                             last_keyable_mic_at = Some(Instant::now());
@@ -794,11 +792,7 @@ mod tests {
             target
         ));
         // Display always publishes regardless of peak — shows noise floor
-        assert!(should_publish_tx_iq_display(
-            0.0,
-            target,
-            target
-        ));
+        assert!(should_publish_tx_iq_display(0.0, target, target));
     }
 
     #[test]

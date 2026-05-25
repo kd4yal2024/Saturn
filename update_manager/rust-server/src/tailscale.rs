@@ -162,13 +162,23 @@ pub async fn tailscale_up(payload: Option<Json<TailscaleUpRequest>>) -> Response
     let req = payload.map(|Json(p)| p).unwrap_or_default();
     let mut args = vec!["up".to_string()];
 
-    if let Some(key) = req.auth_key.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+    if let Some(key) = req
+        .auth_key
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
         if let Err(e) = validate_auth_key(key) {
             return bad_request(e);
         }
         args.push(format!("--auth-key={key}"));
     }
-    if let Some(host) = req.hostname.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+    if let Some(host) = req
+        .hostname
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
         if let Err(e) = validate_hostname(host) {
             return bad_request(e);
         }

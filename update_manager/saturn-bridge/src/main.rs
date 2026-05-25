@@ -387,6 +387,26 @@ fn main() -> Result<(), Box<dyn Error>> {
                 } => {
                     tci.publish_saturn_pong(client_id, &nonce, &sent_at);
                 }
+                TciCommand::Phase42SessionOpen {
+                    client_id,
+                    session_id,
+                    role,
+                } => {
+                    println!(
+                        "saturn-bridge: Phase 42 client {client_id} opened session {session_id} as {:?}",
+                        role
+                    );
+                }
+                TciCommand::Phase42SessionLane {
+                    client_id,
+                    session_id,
+                    lane,
+                } => {
+                    println!(
+                        "saturn-bridge: Phase 42 client {client_id} marked {:?} lane for session {session_id}",
+                        lane
+                    );
+                }
                 TciCommand::SetAudioStreaming(enabled) => {
                     if enabled {
                         wdsp.reset_audio_packetizer();
@@ -879,7 +899,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             let elapsed = last_status.elapsed().as_secs_f64().max(0.001);
             let client = tci.client_snapshot();
             println!(
-                "saturn-bridge: diag hp_s={:.1} ddc_s={:.1} rx_audio_frames_s={:.1} rx_audio_samples_s={:.0} tci_mic_frames_s={:.1} tci_mic_samples_s={:.0} client={} iq={} audio={} outbound_drops={} safety_p99_us={} control_p99_us={} display_replaced_s={} display_dropped_s={} display_rate_limited_s={} audio_dropped_s={} audio_gaps={} audio_panic={} send_blocked_ms={} out_hwm_bytes={} tcp_outq_hwm_bytes={} safety_depth_overflow={} tx_uplink_degraded={} tx_mic_age_ms={} tx_mic_seq={} tx_mic_seq_gaps={} tx_mic_drops={} tx_uplink_buf={} tx_uplink_hwm={} {}",
+                "saturn-bridge: diag hp_s={:.1} ddc_s={:.1} rx_audio_frames_s={:.1} rx_audio_samples_s={:.0} tci_mic_frames_s={:.1} tci_mic_samples_s={:.0} client={} iq={} audio={} phase42_control={} phase42_media={} phase42_paired={} outbound_drops={} safety_p99_us={} control_p99_us={} display_replaced_s={} display_dropped_s={} display_rate_limited_s={} audio_dropped_s={} audio_gaps={} audio_panic={} send_blocked_ms={} out_hwm_bytes={} tcp_outq_hwm_bytes={} safety_depth_overflow={} tx_uplink_degraded={} tx_mic_age_ms={} tx_mic_seq={} tx_mic_seq_gaps={} tx_mic_drops={} tx_uplink_buf={} tx_uplink_hwm={} {}",
                 status_hp_packets as f64 / elapsed,
                 status_ddc_packets as f64 / elapsed,
                 status_rx_audio_frames as f64 / elapsed,
@@ -889,6 +909,9 @@ fn main() -> Result<(), Box<dyn Error>> {
                 bool01(client.active),
                 bool01(client.iq_stream_enabled),
                 bool01(client.audio_stream_enabled),
+                client.phase42_control_clients,
+                client.phase42_media_clients,
+                client.phase42_paired_sessions,
                 client.outbound_drops,
                 client.safety_enqueue_to_write_p99_us,
                 client.control_enqueue_to_write_p99_us,

@@ -43,6 +43,16 @@ import { classifyFrame, decodeRxFrame, decodeIqFrame, decodeAudioFrame } from '.
 import { parseTciBinaryFrameHeader } from './transport/tci-frame';
 import { applyIqFrame, applyAudioFrame, fftSizeForSamples, buildRenderIqWindow } from './transport/rx-apply';
 import { decideTxMicSend, txMicByteRateBytesPerSecond, txUplinkBufferedThresholdBytes } from './transport/tx-uplink';
+import {
+  PHASE42_CONTROL_PATH,
+  PHASE42_MEDIA_PATH,
+  PHASE42_SOCKET_OPEN,
+  buildPhase42SessionOpenMessage,
+  createPhase42SplitSocketClient,
+  derivePhase42SplitSocketUrls,
+  decidePhase42MediaSend,
+  PHASE42_MEDIA_BACKLOG_HARD_CAP_BYTES,
+} from './transport/split-sockets';
 import { bandKeyForFrequency, effectiveIqSampleRate, HAM_BAND_EDGES_HZ, adcLabel, antennaLabel, normalizeStreamMode, noiseReductionLabel, describeMicCaptureError } from './radio/band';
 import {
   normalizeDemodMode,
@@ -131,6 +141,14 @@ const api = {
   decideTxMicSend,
   txMicByteRateBytesPerSecond,
   txUplinkBufferedThresholdBytes,
+  PHASE42_CONTROL_PATH,
+  PHASE42_MEDIA_PATH,
+  PHASE42_SOCKET_OPEN,
+  buildPhase42SessionOpenMessage,
+  createPhase42SplitSocketClient,
+  derivePhase42SplitSocketUrls,
+  decidePhase42MediaSend,
+  PHASE42_MEDIA_BACKLOG_HARD_CAP_BYTES,
 
   // Radio
   bandKeyForFrequency,
@@ -268,6 +286,14 @@ export {
   decideTxMicSend,
   txMicByteRateBytesPerSecond,
   txUplinkBufferedThresholdBytes,
+  PHASE42_CONTROL_PATH,
+  PHASE42_MEDIA_PATH,
+  PHASE42_SOCKET_OPEN,
+  buildPhase42SessionOpenMessage,
+  createPhase42SplitSocketClient,
+  derivePhase42SplitSocketUrls,
+  decidePhase42MediaSend,
+  PHASE42_MEDIA_BACKLOG_HARD_CAP_BYTES,
   bandKeyForFrequency,
   effectiveIqSampleRate,
   HAM_BAND_EDGES_HZ,

@@ -26,9 +26,6 @@ use crate::remote_tls::{
     remote_tls_router, RemoteTlsBindDecision,
 };
 use crate::repair::{repair_pack, verify_system_config};
-use crate::tailscale::{
-    tailscale_down, tailscale_install, tailscale_logout, tailscale_serve, tailscale_up,
-};
 use crate::state::{
     AppState, CfgEntry, DefaultCustomScript, FlagsQuery, RemoteProfileDeleteRequest,
     RemoteProfileSaveRequest, RemoteProfileStartupRequest, RemoteProfilesFile, RemoteSettings,
@@ -38,6 +35,9 @@ use crate::state::{
     MAX_CUSTOM_SCRIPTS_FILE_BYTES, MAX_REMOTE_PROFILES_FILE_BYTES, MAX_REMOTE_SETTINGS_FILE_BYTES,
     MAX_TAR_EXPANSION_FACTOR, P23_ADC_PEAK_TELEMETRY_ENABLE_FILE, P23_ADC_PEAK_TELEMETRY_JSON_FILE,
     P23_APP_PERF_TELEMETRY_JSON_FILE, RUN_LOG_FETCH_MAX_LINES, RUN_LOG_MAX_LINES,
+};
+use crate::tailscale::{
+    tailscale_down, tailscale_install, tailscale_logout, tailscale_serve, tailscale_up,
 };
 use crate::update::{
     begin_update_activity, expected_remote_url, get_repo_root, get_update_policy, list_repo_roots,

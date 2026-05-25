@@ -277,7 +277,10 @@ mod tests {
             route_to_page("/saturn/remote.html"),
             Some("saturn-remote.html")
         );
-        assert_eq!(route_to_page("/remote-next"), Some("saturn-remote-next.html"));
+        assert_eq!(
+            route_to_page("/remote-next"),
+            Some("saturn-remote-next.html")
+        );
         assert_eq!(
             route_to_page("/saturn/remote-next.html"),
             Some("saturn-remote-next.html")

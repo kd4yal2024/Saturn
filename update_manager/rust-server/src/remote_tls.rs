@@ -39,6 +39,40 @@ const REMOTE_BASIC_AUTH_ENV: &str = "SATURN_REMOTE_BASIC_AUTH";
 const REMOTE_DEV_INSECURE_ENV: &str = "SATURN_REMOTE_DEV_INSECURE";
 const REMOTE_BASIC_AUTH_CHALLENGE: &str = "Basic realm=\"Saturn Remote\", charset=\"UTF-8\"";
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum BridgeProxyChannel {
+    Legacy,
+    Control,
+    Media,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum BridgeProxyMessageKind {
+    Text,
+    Binary,
+    Ping,
+    Pong,
+    Close,
+}
+
+impl BridgeProxyChannel {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Legacy => "legacy",
+            Self::Control => "control",
+            Self::Media => "media",
+        }
+    }
+}
+
+fn bridge_proxy_allows_message(channel: BridgeProxyChannel, kind: BridgeProxyMessageKind) -> bool {
+    match (channel, kind) {
+        (BridgeProxyChannel::Control, BridgeProxyMessageKind::Binary) => false,
+        (BridgeProxyChannel::Media, BridgeProxyMessageKind::Text) => false,
+        _ => true,
+    }
+}
+
 /// Decision for whether the Saturn Remote TLS listener should bind at startup.
 ///
 /// Pure function of `(auth_configured, dev_insecure_override)` so the policy is
@@ -185,6 +219,8 @@ pub fn remote_tls_router(state: AppState) -> Router {
             post(remote_profiles_startup_handler),
         )
         .route("/tci", get(remote_bridge_ws_handler))
+        .route("/saturn/control", get(remote_bridge_control_ws_handler))
+        .route("/saturn/media", get(remote_bridge_media_ws_handler))
         .route("/remote-assets/:asset", get(remote_asset_handler))
         .with_state(state.clone())
         .layer(axum::middleware::from_fn_with_state(state, csrf_protect))
@@ -257,13 +293,44 @@ pub async fn remote_bridge_ws_handler(
     ws: WebSocketUpgrade,
     State(state): State<AppState>,
 ) -> Response {
+    remote_bridge_ws_response(headers, uri, ws, state, BridgeProxyChannel::Legacy)
+}
+
+pub async fn remote_bridge_control_ws_handler(
+    headers: HeaderMap,
+    uri: axum::http::Uri,
+    ws: WebSocketUpgrade,
+    State(state): State<AppState>,
+) -> Response {
+    remote_bridge_ws_response(headers, uri, ws, state, BridgeProxyChannel::Control)
+}
+
+pub async fn remote_bridge_media_ws_handler(
+    headers: HeaderMap,
+    uri: axum::http::Uri,
+    ws: WebSocketUpgrade,
+    State(state): State<AppState>,
+) -> Response {
+    remote_bridge_ws_response(headers, uri, ws, state, BridgeProxyChannel::Media)
+}
+
+fn remote_bridge_ws_response(
+    headers: HeaderMap,
+    uri: axum::http::Uri,
+    ws: WebSocketUpgrade,
+    state: AppState,
+    channel: BridgeProxyChannel,
+) -> Response {
     if let Err(rejection) = check_remote_basic_auth(&headers) {
         return rejection;
     }
     if let Err(rejection) = check_ws_origin(&headers, &uri) {
         return rejection;
     }
-    ws.on_upgrade(move |socket| proxy_bridge_socket(socket, state.bridge_ws_url))
+    let phase42_session_id = extract_phase42_session_from_uri(&uri);
+    ws.on_upgrade(move |socket| {
+        proxy_bridge_socket(socket, state.bridge_ws_url, channel, phase42_session_id)
+    })
 }
 
 async fn remote_settings_get_handler(
@@ -471,7 +538,84 @@ fn origin_authority_from_url(value: &str) -> Option<OriginAuthority> {
     })
 }
 
-async fn proxy_bridge_socket(client: WebSocket, bridge_ws_url: String) {
+fn extract_phase42_session_from_uri(uri: &axum::http::Uri) -> Option<String> {
+    let query = uri.query()?;
+    for part in query.split('&') {
+        let (name, value) = part.split_once('=').unwrap_or((part, ""));
+        if name == "session" {
+            let value = decode_query_component(value)?;
+            return sanitize_phase42_session_id(&value);
+        }
+    }
+    None
+}
+
+fn decode_query_component(value: &str) -> Option<String> {
+    let mut decoded = Vec::with_capacity(value.len());
+    let bytes = value.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'+' => {
+                decoded.push(b' ');
+                i += 1;
+            }
+            b'%' => {
+                let hi = bytes.get(i + 1).copied().and_then(hex_value)?;
+                let lo = bytes.get(i + 2).copied().and_then(hex_value)?;
+                decoded.push((hi << 4) | lo);
+                i += 3;
+            }
+            byte => {
+                decoded.push(byte);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8(decoded).ok()
+}
+
+fn hex_value(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
+    }
+}
+
+fn sanitize_phase42_session_id(value: &str) -> Option<String> {
+    let session_id: String = value
+        .trim()
+        .chars()
+        .filter(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '-'))
+        .take(64)
+        .collect();
+    if session_id.is_empty() {
+        None
+    } else {
+        Some(session_id)
+    }
+}
+
+fn phase42_proxy_lane_message(
+    channel: BridgeProxyChannel,
+    session_id: Option<&str>,
+) -> Option<String> {
+    let session_id = sanitize_phase42_session_id(session_id?)?;
+    match channel {
+        BridgeProxyChannel::Legacy => None,
+        BridgeProxyChannel::Control => Some(format!("session_lane:{session_id},control;")),
+        BridgeProxyChannel::Media => Some(format!("session_lane:{session_id},media;")),
+    }
+}
+
+async fn proxy_bridge_socket(
+    client: WebSocket,
+    bridge_ws_url: String,
+    channel: BridgeProxyChannel,
+    phase42_session_id: Option<String>,
+) {
     let (bridge, _) = match connect_async(&bridge_ws_url).await {
         Ok(connection) => connection,
         Err(err) => {
@@ -485,17 +629,42 @@ async fn proxy_bridge_socket(client: WebSocket, bridge_ws_url: String) {
     let (mut client_tx, mut client_rx) = client.split();
     let (mut bridge_tx, mut bridge_rx) = bridge.split();
 
+    if let Some(message) = phase42_proxy_lane_message(channel, phase42_session_id.as_deref()) {
+        if let Err(err) = bridge_tx
+            .send(TungsteniteMessage::Text(message.into()))
+            .await
+        {
+            warn!("remote TLS bridge proxy failed to send Phase 42 lane marker: {err}");
+            let _ = client_tx.send(AxumMessage::Close(None)).await;
+            return;
+        }
+    }
+
     let client_to_bridge = async {
         while let Some(message) = client_rx.next().await {
             let message = message.map_err(|err| format!("client websocket error: {err}"))?;
             match message {
                 AxumMessage::Text(text) => {
+                    if !bridge_proxy_allows_message(channel, BridgeProxyMessageKind::Text) {
+                        warn!(
+                            "remote TLS {} websocket proxy dropped client text frame",
+                            channel.label()
+                        );
+                        continue;
+                    }
                     bridge_tx
                         .send(TungsteniteMessage::Text(text.to_string().into()))
                         .await
                         .map_err(|err| format!("bridge websocket send failed: {err}"))?;
                 }
                 AxumMessage::Binary(bytes) => {
+                    if !bridge_proxy_allows_message(channel, BridgeProxyMessageKind::Binary) {
+                        warn!(
+                            "remote TLS {} websocket proxy dropped client binary frame",
+                            channel.label()
+                        );
+                        continue;
+                    }
                     bridge_tx
                         .send(TungsteniteMessage::Binary(bytes.to_vec().into()))
                         .await
@@ -527,12 +696,26 @@ async fn proxy_bridge_socket(client: WebSocket, bridge_ws_url: String) {
             let message = message.map_err(|err| format!("bridge websocket error: {err}"))?;
             match message {
                 TungsteniteMessage::Text(text) => {
+                    if !bridge_proxy_allows_message(channel, BridgeProxyMessageKind::Text) {
+                        warn!(
+                            "remote TLS {} websocket proxy dropped bridge text frame",
+                            channel.label()
+                        );
+                        continue;
+                    }
                     client_tx
                         .send(AxumMessage::Text(text.to_string().into()))
                         .await
                         .map_err(|err| format!("client websocket send failed: {err}"))?;
                 }
                 TungsteniteMessage::Binary(bytes) => {
+                    if !bridge_proxy_allows_message(channel, BridgeProxyMessageKind::Binary) {
+                        warn!(
+                            "remote TLS {} websocket proxy dropped bridge binary frame",
+                            channel.label()
+                        );
+                        continue;
+                    }
                     client_tx
                         .send(AxumMessage::Binary(bytes.to_vec().into()))
                         .await
@@ -722,6 +905,97 @@ mod tests {
     }
 
     #[test]
+    fn phase42_proxy_channels_enforce_control_media_separation() {
+        assert!(bridge_proxy_allows_message(
+            BridgeProxyChannel::Legacy,
+            BridgeProxyMessageKind::Text
+        ));
+        assert!(bridge_proxy_allows_message(
+            BridgeProxyChannel::Legacy,
+            BridgeProxyMessageKind::Binary
+        ));
+        assert!(bridge_proxy_allows_message(
+            BridgeProxyChannel::Control,
+            BridgeProxyMessageKind::Text
+        ));
+        assert!(!bridge_proxy_allows_message(
+            BridgeProxyChannel::Control,
+            BridgeProxyMessageKind::Binary
+        ));
+        assert!(bridge_proxy_allows_message(
+            BridgeProxyChannel::Media,
+            BridgeProxyMessageKind::Binary
+        ));
+        assert!(!bridge_proxy_allows_message(
+            BridgeProxyChannel::Media,
+            BridgeProxyMessageKind::Text
+        ));
+    }
+
+    #[test]
+    fn phase42_proxy_channels_keep_websocket_control_frames_allowed() {
+        for channel in [
+            BridgeProxyChannel::Legacy,
+            BridgeProxyChannel::Control,
+            BridgeProxyChannel::Media,
+        ] {
+            assert!(bridge_proxy_allows_message(
+                channel,
+                BridgeProxyMessageKind::Ping
+            ));
+            assert!(bridge_proxy_allows_message(
+                channel,
+                BridgeProxyMessageKind::Pong
+            ));
+            assert!(bridge_proxy_allows_message(
+                channel,
+                BridgeProxyMessageKind::Close
+            ));
+        }
+    }
+
+    #[test]
+    fn phase42_proxy_extracts_sanitized_session_from_uri() {
+        let uri: axum::http::Uri = "/saturn/control?x=1&session=phase.42_1-operator"
+            .parse()
+            .unwrap();
+        assert_eq!(
+            extract_phase42_session_from_uri(&uri),
+            Some("phase.42_1-operator".to_string())
+        );
+
+        let encoded_uri: axum::http::Uri =
+            "/saturn/media?session=phase%3A42+operator".parse().unwrap();
+        assert_eq!(
+            extract_phase42_session_from_uri(&encoded_uri),
+            Some("phase42operator".to_string())
+        );
+
+        let invalid_uri: axum::http::Uri = "/saturn/media?session=%zz".parse().unwrap();
+        assert_eq!(extract_phase42_session_from_uri(&invalid_uri), None);
+    }
+
+    #[test]
+    fn phase42_proxy_lane_messages_mark_split_channels() {
+        assert_eq!(
+            phase42_proxy_lane_message(BridgeProxyChannel::Legacy, Some("phase-42")),
+            None
+        );
+        assert_eq!(
+            phase42_proxy_lane_message(BridgeProxyChannel::Control, Some("phase-42")),
+            Some("session_lane:phase-42,control;".to_string())
+        );
+        assert_eq!(
+            phase42_proxy_lane_message(BridgeProxyChannel::Media, Some("phase:42")),
+            Some("session_lane:phase42,media;".to_string())
+        );
+        assert_eq!(
+            phase42_proxy_lane_message(BridgeProxyChannel::Media, Some("   ")),
+            None
+        );
+    }
+
+    #[test]
     fn dev_insecure_override_recognizes_only_one() {
         // Save+restore env so the test does not bleed into other cases.
         // SATURN_REMOTE_DEV_INSECURE is intentionally not in OnceLock — each
@@ -744,7 +1018,10 @@ mod tests {
         assert!(dev_insecure_override_set(), "1 should be true");
 
         std::env::set_var(REMOTE_DEV_INSECURE_ENV, "  1  ");
-        assert!(dev_insecure_override_set(), "whitespace-padded 1 should be true");
+        assert!(
+            dev_insecure_override_set(),
+            "whitespace-padded 1 should be true"
+        );
 
         std::env::set_var(REMOTE_DEV_INSECURE_ENV, "11");
         assert!(!dev_insecure_override_set(), "11 should be false");
