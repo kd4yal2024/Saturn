@@ -492,6 +492,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                             tx_uplink_late_since = None;
                             tx_uplink_fault_active = false;
                             tx_control_watchdog_fault_active = false;
+                            tci.clear_phase42_release_window();
                             model.desired.tx_enabled = false;
                             model.desired.tx_phase = TxPhase::Armed;
                             wdsp.reset_stream_buffers();
@@ -509,6 +510,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                             );
                         }
                     } else if tx_requested || model.desired.tx_enabled {
+                        tci.mark_phase42_released(Instant::now());
                         tx_requested = false;
                         last_operator_mic_at = None;
                         tx_uplink_late_since = None;
@@ -753,6 +755,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                     tci.publish_radio_state(&model);
                 }
                 TxEvent::Unkeyed => {
+                    tci.mark_phase42_released(Instant::now());
                     tx_requested = false;
                     last_operator_mic_at = None;
                     tx_uplink_late_since = None;
@@ -793,6 +796,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                             forward_watts, remote_tx_power_trip_watts
                         );
                         tci.publish_tx_power_trip(forward_watts, remote_tx_power_trip_watts);
+                        tci.mark_phase42_released(Instant::now());
                         tx_requested = false;
                         last_operator_mic_at = None;
                         tx_uplink_late_since = None;
@@ -856,6 +860,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                         TX_UPLINK_LATE_SUSTAIN.as_millis()
                     );
                     tci.publish_tx_uplink_late(age_ms, limit_ms);
+                    tci.mark_phase42_released(now);
                     tx_requested = false;
                     tx_uplink_fault_active = true;
                     last_operator_mic_at = None;
@@ -882,6 +887,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                         silence_ms, limit_ms
                     );
                     tci.publish_tx_control_watchdog(silence_ms, limit_ms);
+                    tci.mark_phase42_released(now);
                     tx_requested = false;
                     tx_control_watchdog_fault_active = true;
                     model.desired.tx_enabled = false;

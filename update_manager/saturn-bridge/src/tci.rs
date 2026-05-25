@@ -625,6 +625,7 @@ struct Phase42ClientMetadata {
     session_id: String,
     lane: Option<Phase42SocketKind>,
     role: Option<TciClientRole>,
+    ignore_media_until: Option<Instant>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -932,6 +933,7 @@ fn parse_phase42_session_lane(command: &str) -> Option<(String, Phase42SocketKin
 pub struct TciFrontend {
     command_rx: Receiver<TciCommand>,
     clients: ClientRegistry,
+    operator_client_id: Arc<AtomicU64>,
     operator_control_at: Arc<Mutex<Option<Instant>>>,
     drop_count: Arc<AtomicU64>,
     display_rate_limited_count: AtomicU64,
@@ -1045,6 +1047,7 @@ impl TciFrontend {
         Ok(Self {
             command_rx,
             clients,
+            operator_client_id,
             operator_control_at,
             drop_count,
             display_rate_limited_count: AtomicU64::new(0),
@@ -1064,6 +1067,20 @@ impl TciFrontend {
 
     pub fn last_operator_control_at(&self) -> Option<Instant> {
         *self.operator_control_at.lock().unwrap()
+    }
+
+    pub fn clear_phase42_release_window(&self) {
+        let operator_client_id = self.operator_client_id.load(Ordering::SeqCst);
+        set_phase42_media_ignore_until(&self.clients, operator_client_id, None);
+    }
+
+    pub fn mark_phase42_released(&self, now: Instant) {
+        let operator_client_id = self.operator_client_id.load(Ordering::SeqCst);
+        set_phase42_media_ignore_until(
+            &self.clients,
+            operator_client_id,
+            Some(now + PHASE42_RELEASE_IGNORE_WINDOW),
+        );
     }
 
     pub fn client_snapshot(&self) -> TciClientSnapshot {
@@ -1926,10 +1943,11 @@ fn handle_incoming_message(
         }
         Message::Binary(data) => {
             if is_operator
-                || phase42_media_client_paired_with_operator(
+                || phase42_media_client_can_supply_mic(
                     clients,
                     current_operator_client_id,
                     client_id,
+                    Instant::now(),
                 )
             {
                 if let Some(frame) = parse_tci_mic_frame(&data) {
@@ -2774,6 +2792,7 @@ fn set_client_phase42_session_open(
             session_id: session_id.clone(),
             lane: None,
             role: None,
+            ignore_media_until: None,
         });
     if metadata.session_id != session_id {
         return false;
@@ -2802,6 +2821,7 @@ fn set_client_phase42_session_lane(
             session_id: session_id.clone(),
             lane: None,
             role: None,
+            ignore_media_until: None,
         });
     if metadata.session_id != session_id {
         return false;
@@ -2825,19 +2845,75 @@ fn phase42_session_pair_for_client(
     phase42_session_pair_in_clients(&clients, &session_id)
 }
 
-fn phase42_media_client_paired_with_operator(
+fn phase42_media_client_can_supply_mic(
     clients: &ClientRegistry,
     operator_client_id: u64,
     media_client_id: u64,
+    now: Instant,
 ) -> bool {
     if operator_client_id == 0 || operator_client_id == media_client_id {
         return false;
     }
-    phase42_session_pair_for_client(clients, media_client_id)
-        .map(|pair| {
-            pair.control_client_id == operator_client_id && pair.media_client_id == media_client_id
-        })
+    let clients = clients.lock().unwrap();
+    let Some(pair) = phase42_session_pair_for_client_in_clients(&clients, media_client_id) else {
+        return false;
+    };
+    if pair.control_client_id != operator_client_id || pair.media_client_id != media_client_id {
+        return false;
+    }
+    !clients
+        .get(&media_client_id)
+        .and_then(|client| client.state.phase42.as_ref())
+        .and_then(|metadata| metadata.ignore_media_until)
+        .map(|until| now < until)
         .unwrap_or(false)
+}
+
+fn phase42_session_pair_for_client_in_clients(
+    clients: &BTreeMap<u64, ClientConnection>,
+    client_id: u64,
+) -> Option<Phase42SessionPair> {
+    let session_id = clients
+        .get(&client_id)?
+        .state
+        .phase42
+        .as_ref()?
+        .session_id
+        .clone();
+    phase42_session_pair_in_clients(clients, &session_id)
+}
+
+fn set_phase42_media_ignore_until(
+    clients: &ClientRegistry,
+    operator_client_id: u64,
+    ignore_until: Option<Instant>,
+) -> u64 {
+    if operator_client_id == 0 {
+        return 0;
+    }
+    let mut clients = clients.lock().unwrap();
+    let Some(operator_session_id) = clients
+        .get(&operator_client_id)
+        .and_then(|client| client.state.phase42.as_ref())
+        .filter(|metadata| metadata.lane == Some(Phase42SocketKind::Control))
+        .map(|metadata| metadata.session_id.clone())
+    else {
+        return 0;
+    };
+
+    let mut updated = 0;
+    for client in clients.values_mut() {
+        let Some(metadata) = client.state.phase42.as_mut() else {
+            continue;
+        };
+        if metadata.session_id == operator_session_id
+            && metadata.lane == Some(Phase42SocketKind::Media)
+        {
+            metadata.ignore_media_until = ignore_until;
+            updated += 1;
+        }
+    }
+    updated
 }
 
 fn phase42_session_pair_in_clients(
@@ -3778,6 +3854,57 @@ mod tests {
             other => panic!("unexpected command: {other:?}"),
         }
         assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn phase42_release_window_blocks_paired_media_mic_binary() {
+        let (tx, rx) = mpsc::channel();
+        let clients = test_client_registry(73);
+        clients.lock().unwrap().insert(
+            74,
+            ClientConnection {
+                outbound: ClientOutbound::new(),
+                state: ClientState::default(),
+            },
+        );
+        let operator_client_id = Arc::new(AtomicU64::new(73));
+        let operator_control_at = Arc::new(Mutex::new(None));
+
+        parse_tci_command("session_lane:phase-42,control;", &tx, &clients, 73, true);
+        parse_tci_command("session_lane:phase-42,media;", &tx, &clients, 74, false);
+        while rx.try_recv().is_ok() {}
+
+        let now = Instant::now();
+        assert_eq!(
+            set_phase42_media_ignore_until(&clients, 73, Some(now + PHASE42_RELEASE_IGNORE_WINDOW)),
+            1
+        );
+        assert!(!phase42_media_client_can_supply_mic(&clients, 73, 74, now));
+        assert!(phase42_media_client_can_supply_mic(
+            &clients,
+            73,
+            74,
+            now + PHASE42_RELEASE_IGNORE_WINDOW + Duration::from_millis(1)
+        ));
+
+        let frame = build_tci_float_frame(0, 48_000, &[0.25, -0.25], 2, 1, 93);
+        assert!(handle_incoming_message(
+            Message::Binary(frame),
+            &tx,
+            &clients,
+            &operator_client_id,
+            &operator_control_at,
+            74,
+        ));
+        assert!(rx.try_recv().is_err());
+
+        assert_eq!(set_phase42_media_ignore_until(&clients, 73, None), 1);
+        assert!(phase42_media_client_can_supply_mic(
+            &clients,
+            73,
+            74,
+            Instant::now()
+        ));
     }
 
     #[test]
