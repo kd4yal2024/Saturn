@@ -122,10 +122,34 @@ describe('Phase 42 legacy socket adapter', () => {
     const [control, media] = sockets;
     const frame = new ArrayBuffer(64);
 
+    control?.open();
+    media?.open();
     control?.receive('ready;');
     media?.receive(frame);
 
     expect(received).toEqual(['ready;', frame]);
+  });
+
+  it('buffers lane messages until the legacy open event has fired', () => {
+    const { sockets, WebSocketCtor } = createFakeCtor();
+    const events: string[] = [];
+    const adapter = createPhase42LegacySocketAdapter({
+      baseWsUrl: 'wss://radio.local:8443/tci',
+      sessionId: 'session-123',
+      WebSocketCtor,
+    });
+    adapter.onopen = () => events.push('open');
+    adapter.onmessage = (event) => events.push(`message:${String(event.data)}`);
+    const [control, media] = sockets;
+
+    control?.open();
+    control?.receive('remote_client_role:0,operator,1;');
+
+    expect(events).toEqual([]);
+
+    media?.open();
+
+    expect(events).toEqual(['open', 'message:remote_client_role:0,operator,1;']);
   });
 
   it('closes the paired lane and emits one legacy close', () => {

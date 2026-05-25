@@ -55,6 +55,7 @@ export function createPhase42LegacySocketAdapter(
   let openEmitted = false;
   let closeRequested = false;
   let closeEmitted = false;
+  const preOpenMessages: Phase42SocketEvent[] = [];
 
   function dispatch(type: Phase42SocketEventType, event: Phase42SocketEvent = {}): void {
     const handler =
@@ -100,7 +101,19 @@ export function createPhase42LegacySocketAdapter(
     ) {
       openEmitted = true;
       dispatch('open', event);
+      while (preOpenMessages.length > 0 && !closeRequested) {
+        const message = preOpenMessages.shift();
+        if (message) dispatch('message', message);
+      }
     }
+  }
+
+  function dispatchMessage(event: Phase42SocketEvent): void {
+    if (!openEmitted) {
+      preOpenMessages.push(event);
+      return;
+    }
+    dispatch('message', event);
   }
 
   function dispatchCloseOnce(event: Phase42SocketEvent): void {
@@ -128,8 +141,8 @@ export function createPhase42LegacySocketAdapter(
     baseWsUrl: options.baseWsUrl,
     sessionId: options.sessionId,
     socketFactory,
-    onControlText: (text) => dispatch('message', { data: text }),
-    onMediaBinary: (buffer) => dispatch('message', { data: buffer }),
+    onControlText: (text) => dispatchMessage({ data: text }),
+    onMediaBinary: (buffer) => dispatchMessage({ data: buffer }),
   };
   if (options.role !== undefined) {
     splitOptions.role = options.role;
