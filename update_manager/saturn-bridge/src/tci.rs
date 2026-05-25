@@ -126,6 +126,7 @@ pub enum TciCommand {
 enum OutboundMessage {
     Text(String),
     SafetyText(String),
+    Close,
     IqFrame {
         receiver: u32,
         sample_rate: u32,
@@ -166,6 +167,7 @@ impl OutboundClass {
 impl OutboundMessage {
     fn class(&self) -> OutboundClass {
         match self {
+            Self::Close => OutboundClass::Safety,
             Self::SafetyText(_) => OutboundClass::Safety,
             Self::Text(_) => OutboundClass::Control,
             Self::AudioFrame { .. } => OutboundClass::Audio,
@@ -175,6 +177,7 @@ impl OutboundMessage {
 
     fn estimated_bytes(&self) -> usize {
         match self {
+            Self::Close => 0,
             Self::Text(text) | Self::SafetyText(text) => text.len(),
             Self::IqFrame { iq_samples, .. } | Self::TxIqFrame { iq_samples, .. } => {
                 64 + iq_samples.len() * std::mem::size_of::<f32>()
@@ -1540,6 +1543,7 @@ impl TciFrontend {
 
 fn client_wants_outbound_message(client: &ClientConnection, message: &OutboundMessage) -> bool {
     match message {
+        OutboundMessage::Close => true,
         OutboundMessage::Text(_) | OutboundMessage::SafetyText(_) => true,
         OutboundMessage::IqFrame { .. } | OutboundMessage::TxIqFrame { .. } => {
             client.state.iq_stream_enabled
@@ -1644,10 +1648,15 @@ fn handle_client(
                     let Some(item) = outbound.next_message(allow_bulk) else {
                         break;
                     };
+                    let closes_client = matches!(&item.message, OutboundMessage::Close);
                     match send_outbound(&mut websocket, &item.message) {
                         Ok(()) => {
                             outbound.record_write(item.class, item.enqueued_at.elapsed());
                             pending_flush = true;
+                            if closes_client {
+                                client_closed = true;
+                                break;
+                            }
                         }
                         Err(WsError::Io(error)) if error.kind() == io::ErrorKind::WouldBlock => {
                             pending_flush = true;
@@ -1712,6 +1721,11 @@ fn handle_client(
             if disconnect.phase42_media_loss_forces_rx {
                 let _ = command_tx.send(TciCommand::SetTxEnabled(false));
             }
+            if let Some(peer_id) = disconnect.phase42_closed_peer {
+                println!(
+                    "saturn-bridge: Phase 42 closed peer media client {peer_id} after control disconnect"
+                );
+            }
             if let Some(promoted_id) = disconnect.promoted_operator {
                 send_role_to_client(
                     clients,
@@ -1737,6 +1751,7 @@ fn handle_client(
 struct ClientDisconnect {
     was_operator: bool,
     phase42_media_loss_forces_rx: bool,
+    phase42_closed_peer: Option<u64>,
     promoted_operator: Option<u64>,
     remaining_clients: usize,
 }
@@ -1776,6 +1791,8 @@ fn unregister_client(
     let current_operator = operator_client_id.load(Ordering::SeqCst);
     let phase42_media_loss_forces_rx =
         phase42_media_client_paired_with_operator_in_clients(&clients, current_operator, client_id);
+    let phase42_closed_peer =
+        queue_phase42_media_peer_close_for_control_in_clients(&clients, client_id);
     clients.remove(&client_id);
 
     let was_operator = current_operator == client_id;
@@ -1795,6 +1812,7 @@ fn unregister_client(
     ClientDisconnect {
         was_operator,
         phase42_media_loss_forces_rx,
+        phase42_closed_peer,
         promoted_operator,
         remaining_clients: clients.len(),
     }
@@ -2895,6 +2913,23 @@ fn phase42_media_client_paired_with_operator_in_clients(
         .unwrap_or(false)
 }
 
+fn queue_phase42_media_peer_close_for_control_in_clients(
+    clients: &BTreeMap<u64, ClientConnection>,
+    control_client_id: u64,
+) -> Option<u64> {
+    let metadata = clients.get(&control_client_id)?.state.phase42.as_ref()?;
+    if metadata.lane != Some(Phase42SocketKind::Control) {
+        return None;
+    }
+    let pair = phase42_session_pair_in_clients(clients, &metadata.session_id)?;
+    if pair.control_client_id != control_client_id {
+        return None;
+    }
+    let media = clients.get(&pair.media_client_id)?;
+    let _ = media.outbound.enqueue(OutboundMessage::Close);
+    Some(pair.media_client_id)
+}
+
 fn client_is_phase42_media(client: &ClientConnection) -> bool {
     client
         .state
@@ -3160,6 +3195,7 @@ fn send_outbound(
     message: &OutboundMessage,
 ) -> Result<(), WsError> {
     match message {
+        OutboundMessage::Close => websocket.send(Message::Close(None)),
         OutboundMessage::Text(text) | OutboundMessage::SafetyText(text) => {
             websocket.send(Message::Text(text.clone()))
         }
@@ -4135,6 +4171,8 @@ mod tests {
 
         assert!(disconnect.was_operator);
         assert_eq!(disconnect.promoted_operator, Some(2));
+        assert_eq!(disconnect.phase42_closed_peer, None);
+        assert!(!disconnect.phase42_media_loss_forces_rx);
         assert_eq!(disconnect.remaining_clients, 1);
         assert_eq!(operator_client_id.load(Ordering::SeqCst), 2);
     }
@@ -4160,9 +4198,37 @@ mod tests {
 
         assert!(!disconnect.was_operator);
         assert!(disconnect.phase42_media_loss_forces_rx);
+        assert_eq!(disconnect.phase42_closed_peer, None);
         assert_eq!(disconnect.promoted_operator, None);
         assert_eq!(disconnect.remaining_clients, 1);
         assert_eq!(operator_client_id.load(Ordering::SeqCst), 91);
+    }
+
+    #[test]
+    fn phase42_control_disconnect_queues_media_peer_close() {
+        let (tx, rx) = mpsc::channel();
+        let clients = test_client_registry(101);
+        clients.lock().unwrap().insert(
+            102,
+            ClientConnection {
+                outbound: ClientOutbound::new(),
+                state: ClientState::default(),
+            },
+        );
+        let operator_client_id = Arc::new(AtomicU64::new(101));
+
+        parse_tci_command("session_lane:phase-42,control;", &tx, &clients, 101, true);
+        parse_tci_command("session_lane:phase-42,media;", &tx, &clients, 102, false);
+        while rx.try_recv().is_ok() {}
+
+        let media_outbound = clients.lock().unwrap().get(&102).unwrap().outbound.clone();
+        let disconnect = unregister_client(&clients, &operator_client_id, 101);
+
+        assert!(disconnect.was_operator);
+        assert_eq!(disconnect.phase42_closed_peer, Some(102));
+        assert_eq!(disconnect.remaining_clients, 1);
+        let close = media_outbound.next_message(false).unwrap();
+        assert!(matches!(close.message, OutboundMessage::Close));
     }
 
     #[test]
@@ -4194,6 +4260,7 @@ mod tests {
 
         assert!(disconnect.was_operator);
         assert!(!disconnect.phase42_media_loss_forces_rx);
+        assert_eq!(disconnect.phase42_closed_peer, None);
         assert_eq!(disconnect.promoted_operator, Some(3));
         assert_eq!(disconnect.remaining_clients, 2);
         assert_eq!(operator_client_id.load(Ordering::SeqCst), 3);
