@@ -1709,6 +1709,9 @@ fn handle_client(
                 *operator_control_at.lock().unwrap() = None;
                 let _ = command_tx.send(TciCommand::SetTxEnabled(false));
             }
+            if disconnect.phase42_media_loss_forces_rx {
+                let _ = command_tx.send(TciCommand::SetTxEnabled(false));
+            }
             if let Some(promoted_id) = disconnect.promoted_operator {
                 send_role_to_client(
                     clients,
@@ -1733,6 +1736,7 @@ fn handle_client(
 
 struct ClientDisconnect {
     was_operator: bool,
+    phase42_media_loss_forces_rx: bool,
     promoted_operator: Option<u64>,
     remaining_clients: usize,
 }
@@ -1769,12 +1773,18 @@ fn unregister_client(
     client_id: u64,
 ) -> ClientDisconnect {
     let mut clients = clients.lock().unwrap();
+    let current_operator = operator_client_id.load(Ordering::SeqCst);
+    let phase42_media_loss_forces_rx =
+        phase42_media_client_paired_with_operator_in_clients(&clients, current_operator, client_id);
     clients.remove(&client_id);
 
-    let was_operator = operator_client_id.load(Ordering::SeqCst) == client_id;
+    let was_operator = current_operator == client_id;
     let mut promoted_operator = None;
     if was_operator {
-        if let Some((&next_operator, _)) = clients.iter().next() {
+        if let Some((&next_operator, _)) = clients
+            .iter()
+            .find(|(_, client)| !client_is_phase42_media(client))
+        {
             operator_client_id.store(next_operator, Ordering::SeqCst);
             promoted_operator = Some(next_operator);
         } else {
@@ -1784,6 +1794,7 @@ fn unregister_client(
 
     ClientDisconnect {
         was_operator,
+        phase42_media_loss_forces_rx,
         promoted_operator,
         remaining_clients: clients.len(),
     }
@@ -2867,6 +2878,30 @@ fn phase42_media_client_can_supply_mic(
         .and_then(|metadata| metadata.ignore_media_until)
         .map(|until| now < until)
         .unwrap_or(false)
+}
+
+fn phase42_media_client_paired_with_operator_in_clients(
+    clients: &BTreeMap<u64, ClientConnection>,
+    operator_client_id: u64,
+    media_client_id: u64,
+) -> bool {
+    if operator_client_id == 0 || operator_client_id == media_client_id {
+        return false;
+    }
+    phase42_session_pair_for_client_in_clients(clients, media_client_id)
+        .map(|pair| {
+            pair.control_client_id == operator_client_id && pair.media_client_id == media_client_id
+        })
+        .unwrap_or(false)
+}
+
+fn client_is_phase42_media(client: &ClientConnection) -> bool {
+    client
+        .state
+        .phase42
+        .as_ref()
+        .and_then(|metadata| metadata.lane)
+        == Some(Phase42SocketKind::Media)
 }
 
 fn phase42_session_pair_for_client_in_clients(
@@ -4102,6 +4137,66 @@ mod tests {
         assert_eq!(disconnect.promoted_operator, Some(2));
         assert_eq!(disconnect.remaining_clients, 1);
         assert_eq!(operator_client_id.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn phase42_media_disconnect_forces_rx_when_paired_with_operator() {
+        let (tx, rx) = mpsc::channel();
+        let clients = test_client_registry(91);
+        clients.lock().unwrap().insert(
+            92,
+            ClientConnection {
+                outbound: ClientOutbound::new(),
+                state: ClientState::default(),
+            },
+        );
+        let operator_client_id = Arc::new(AtomicU64::new(91));
+
+        parse_tci_command("session_lane:phase-42,control;", &tx, &clients, 91, true);
+        parse_tci_command("session_lane:phase-42,media;", &tx, &clients, 92, false);
+        while rx.try_recv().is_ok() {}
+
+        let disconnect = unregister_client(&clients, &operator_client_id, 92);
+
+        assert!(!disconnect.was_operator);
+        assert!(disconnect.phase42_media_loss_forces_rx);
+        assert_eq!(disconnect.promoted_operator, None);
+        assert_eq!(disconnect.remaining_clients, 1);
+        assert_eq!(operator_client_id.load(Ordering::SeqCst), 91);
+    }
+
+    #[test]
+    fn operator_disconnect_does_not_promote_phase42_media_socket() {
+        let (tx, rx) = mpsc::channel();
+        let clients = test_client_registry(1);
+        {
+            let mut clients = clients.lock().unwrap();
+            clients.insert(
+                2,
+                ClientConnection {
+                    outbound: ClientOutbound::new(),
+                    state: ClientState::default(),
+                },
+            );
+            clients.insert(
+                3,
+                ClientConnection {
+                    outbound: ClientOutbound::new(),
+                    state: ClientState::default(),
+                },
+            );
+        }
+        let operator_client_id = Arc::new(AtomicU64::new(1));
+        parse_tci_command("session_lane:phase-42,media;", &tx, &clients, 2, false);
+        while rx.try_recv().is_ok() {}
+
+        let disconnect = unregister_client(&clients, &operator_client_id, 1);
+
+        assert!(disconnect.was_operator);
+        assert!(!disconnect.phase42_media_loss_forces_rx);
+        assert_eq!(disconnect.promoted_operator, Some(3));
+        assert_eq!(disconnect.remaining_clients, 2);
+        assert_eq!(operator_client_id.load(Ordering::SeqCst), 3);
     }
 
     #[test]
