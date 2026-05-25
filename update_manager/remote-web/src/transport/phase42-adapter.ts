@@ -221,10 +221,10 @@ export function createPhase42LegacySocketAdapter(
         return;
       }
       if (data instanceof ArrayBuffer) {
-        const result = client.sendMedia(data);
-        if (result.reason === 'not-open') {
+        if (sockets.media?.readyState !== PHASE42_SOCKET_OPEN) {
           throw new Error('phase42 media socket is not open');
         }
+        sockets.media.send(data);
         return;
       }
       throw new Error('phase42 legacy socket adapter only supports string and ArrayBuffer payloads');

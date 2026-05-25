@@ -5,6 +5,7 @@ import type {
   Phase42SocketEventType,
   Phase42SocketLike,
 } from '../src/transport/split-sockets';
+import { PHASE42_MEDIA_BACKLOG_HARD_CAP_BYTES } from '../src/transport/split-sockets';
 
 class FakeWebSocket implements Phase42SocketLike {
   readonly sent: Array<string | ArrayBuffer> = [];
@@ -107,6 +108,24 @@ describe('Phase 42 legacy socket adapter', () => {
 
     expect(adapter.bufferedAmount).toBe(512);
     expect(control?.sent).toEqual(['session_open:session-123,operator;', 'trx:0,false;']);
+    expect(media?.sent).toEqual([frame]);
+  });
+
+  it('leaves media backpressure drops to the legacy caller', () => {
+    const { sockets, WebSocketCtor } = createFakeCtor();
+    const adapter = createPhase42LegacySocketAdapter({
+      baseWsUrl: 'wss://radio.local:8443/tci',
+      sessionId: 'session-123',
+      WebSocketCtor,
+    });
+    const [, media] = sockets;
+    const frame = new ArrayBuffer(64);
+    media?.open();
+    if (media) media.bufferedAmount = PHASE42_MEDIA_BACKLOG_HARD_CAP_BYTES + 1;
+
+    adapter.send(frame);
+
+    expect(adapter.bufferedAmount).toBe(PHASE42_MEDIA_BACKLOG_HARD_CAP_BYTES + 1);
     expect(media?.sent).toEqual([frame]);
   });
 
