@@ -1542,13 +1542,23 @@ impl TciFrontend {
 }
 
 fn client_wants_outbound_message(client: &ClientConnection, message: &OutboundMessage) -> bool {
+    // Phase 42 lane awareness: text goes only to control-lane clients (or
+    // legacy non-Phase-42 clients); binary RX frames go only to media-lane
+    // clients (or legacy non-Phase-42 clients). Sending text on a media
+    // socket or binary on a control socket would be rejected by the
+    // browser-side adapter as a protocol violation.
+    let lane = client.state.phase42.as_ref().and_then(|m| m.lane);
     match message {
         OutboundMessage::Close => true,
-        OutboundMessage::Text(_) | OutboundMessage::SafetyText(_) => true,
-        OutboundMessage::IqFrame { .. } | OutboundMessage::TxIqFrame { .. } => {
-            client.state.iq_stream_enabled
+        OutboundMessage::Text(_) | OutboundMessage::SafetyText(_) => {
+            lane != Some(Phase42SocketKind::Media)
         }
-        OutboundMessage::AudioFrame { .. } => client.state.audio_stream_enabled,
+        OutboundMessage::IqFrame { .. } | OutboundMessage::TxIqFrame { .. } => {
+            lane != Some(Phase42SocketKind::Control) && client.state.iq_stream_enabled
+        }
+        OutboundMessage::AudioFrame { .. } => {
+            lane != Some(Phase42SocketKind::Control) && client.state.audio_stream_enabled
+        }
     }
 }
 
@@ -2753,10 +2763,44 @@ fn viewer_tci_command_allowed(name: &str) -> bool {
     )
 }
 
+// Phase 42 lane-aware routing helper. Given a control-lane client_id,
+// returns the paired media-lane client_id if both halves of the split
+// session are connected and registered. Used to propagate RX stream-enable
+// state from the control client (which receives iq_start/audio_start text)
+// to the media client (which is the destination for binary RX frames).
+// Returns None for non-Phase-42 clients, unpaired sessions, or when called
+// on a media-lane client.
+fn phase42_paired_media_client_id(
+    clients: &BTreeMap<u64, ClientConnection>,
+    control_client_id: u64,
+) -> Option<u64> {
+    let metadata = clients
+        .get(&control_client_id)?
+        .state
+        .phase42
+        .as_ref()?;
+    if metadata.lane != Some(Phase42SocketKind::Control) {
+        return None;
+    }
+    let pair = phase42_session_pair_in_clients(clients, &metadata.session_id)?;
+    if pair.control_client_id != control_client_id {
+        return None;
+    }
+    Some(pair.media_client_id)
+}
+
 fn set_client_iq_stream_enabled(clients: &ClientRegistry, client_id: u64, enabled: bool) -> bool {
     let mut clients = clients.lock().unwrap();
     if let Some(client) = clients.get_mut(&client_id) {
         client.state.iq_stream_enabled = enabled;
+    }
+    // Phase 42: mirror to the paired media client so binary IQ frames have
+    // a destination on the media lane. client_wants_outbound_message then
+    // routes RX IQ to the media client only.
+    if let Some(media_id) = phase42_paired_media_client_id(&clients, client_id) {
+        if let Some(media) = clients.get_mut(&media_id) {
+            media.state.iq_stream_enabled = enabled;
+        }
     }
     clients
         .values()
@@ -2772,26 +2816,50 @@ fn set_client_audio_stream_enabled(
     if let Some(client) = clients.get_mut(&client_id) {
         client.state.audio_stream_enabled = enabled;
     }
+    // Phase 42: mirror to the paired media client.
+    if let Some(media_id) = phase42_paired_media_client_id(&clients, client_id) {
+        if let Some(media) = clients.get_mut(&media_id) {
+            media.state.audio_stream_enabled = enabled;
+        }
+    }
     clients
         .values()
         .any(|client| client.state.audio_stream_enabled)
 }
 
 fn set_client_audio_sample_rate(clients: &ClientRegistry, client_id: u64, sample_rate_hz: u32) {
-    if let Some(client) = clients.lock().unwrap().get_mut(&client_id) {
+    let mut clients = clients.lock().unwrap();
+    if let Some(client) = clients.get_mut(&client_id) {
         client.state.audio_sample_rate_hz = sample_rate_hz;
+    }
+    if let Some(media_id) = phase42_paired_media_client_id(&clients, client_id) {
+        if let Some(media) = clients.get_mut(&media_id) {
+            media.state.audio_sample_rate_hz = sample_rate_hz;
+        }
     }
 }
 
 fn set_client_audio_frame_float_count(clients: &ClientRegistry, client_id: u64, sample_count: u32) {
-    if let Some(client) = clients.lock().unwrap().get_mut(&client_id) {
+    let mut clients = clients.lock().unwrap();
+    if let Some(client) = clients.get_mut(&client_id) {
         client.state.audio_frame_float_count = sample_count;
+    }
+    if let Some(media_id) = phase42_paired_media_client_id(&clients, client_id) {
+        if let Some(media) = clients.get_mut(&media_id) {
+            media.state.audio_frame_float_count = sample_count;
+        }
     }
 }
 
 fn set_client_audio_channels(clients: &ClientRegistry, client_id: u64, channels: u32) {
-    if let Some(client) = clients.lock().unwrap().get_mut(&client_id) {
+    let mut clients = clients.lock().unwrap();
+    if let Some(client) = clients.get_mut(&client_id) {
         client.state.audio_channels = channels;
+    }
+    if let Some(media_id) = phase42_paired_media_client_id(&clients, client_id) {
+        if let Some(media) = clients.get_mut(&media_id) {
+            media.state.audio_channels = channels;
+        }
     }
 }
 
@@ -4066,6 +4134,238 @@ mod tests {
                 state: Phase42SessionState::Terminated,
             }
         );
+    }
+
+    fn insert_phase42_paired_client(
+        clients: &ClientRegistry,
+        client_id: u64,
+        session_id: &str,
+        lane: Phase42SocketKind,
+        role: Option<TciClientRole>,
+    ) {
+        let mut clients = clients.lock().unwrap();
+        clients.insert(
+            client_id,
+            ClientConnection {
+                outbound: ClientOutbound::new(),
+                state: ClientState {
+                    phase42: Some(Phase42ClientMetadata {
+                        session_id: session_id.to_string(),
+                        lane: Some(lane),
+                        role,
+                        ignore_media_until: None,
+                    }),
+                    ..ClientState::default()
+                },
+            },
+        );
+    }
+
+    #[test]
+    fn phase42_iq_stream_enable_propagates_from_control_to_media() {
+        let clients: ClientRegistry = Arc::new(Mutex::new(BTreeMap::new()));
+        insert_phase42_paired_client(
+            &clients,
+            80,
+            "phase-42",
+            Phase42SocketKind::Control,
+            Some(TciClientRole::Operator),
+        );
+        insert_phase42_paired_client(&clients, 81, "phase-42", Phase42SocketKind::Media, None);
+
+        let any_enabled = set_client_iq_stream_enabled(&clients, 80, true);
+        assert!(any_enabled);
+
+        let snapshot = clients.lock().unwrap();
+        assert!(snapshot.get(&80).unwrap().state.iq_stream_enabled);
+        assert!(snapshot.get(&81).unwrap().state.iq_stream_enabled);
+    }
+
+    #[test]
+    fn phase42_audio_stream_enable_propagates_from_control_to_media() {
+        let clients: ClientRegistry = Arc::new(Mutex::new(BTreeMap::new()));
+        insert_phase42_paired_client(
+            &clients,
+            82,
+            "phase-42",
+            Phase42SocketKind::Control,
+            Some(TciClientRole::Operator),
+        );
+        insert_phase42_paired_client(&clients, 83, "phase-42", Phase42SocketKind::Media, None);
+
+        let any_enabled = set_client_audio_stream_enabled(&clients, 82, true);
+        assert!(any_enabled);
+
+        let snapshot = clients.lock().unwrap();
+        assert!(snapshot.get(&82).unwrap().state.audio_stream_enabled);
+        assert!(snapshot.get(&83).unwrap().state.audio_stream_enabled);
+    }
+
+    #[test]
+    fn phase42_audio_format_state_propagates_from_control_to_media() {
+        let clients: ClientRegistry = Arc::new(Mutex::new(BTreeMap::new()));
+        insert_phase42_paired_client(
+            &clients,
+            84,
+            "phase-42",
+            Phase42SocketKind::Control,
+            Some(TciClientRole::Operator),
+        );
+        insert_phase42_paired_client(&clients, 85, "phase-42", Phase42SocketKind::Media, None);
+
+        set_client_audio_sample_rate(&clients, 84, 24_000);
+        set_client_audio_frame_float_count(&clients, 84, 4096);
+        set_client_audio_channels(&clients, 84, 1);
+
+        let snapshot = clients.lock().unwrap();
+        assert_eq!(snapshot.get(&85).unwrap().state.audio_sample_rate_hz, 24_000);
+        assert_eq!(
+            snapshot.get(&85).unwrap().state.audio_frame_float_count,
+            4096
+        );
+        assert_eq!(snapshot.get(&85).unwrap().state.audio_channels, 1);
+    }
+
+    #[test]
+    fn phase42_outbound_routing_sends_text_to_control_lane_not_media() {
+        let mut control = ClientConnection {
+            outbound: ClientOutbound::new(),
+            state: ClientState::default(),
+        };
+        control.state.phase42 = Some(Phase42ClientMetadata {
+            session_id: "phase-42".into(),
+            lane: Some(Phase42SocketKind::Control),
+            role: Some(TciClientRole::Operator),
+            ignore_media_until: None,
+        });
+        let mut media = ClientConnection {
+            outbound: ClientOutbound::new(),
+            state: ClientState::default(),
+        };
+        media.state.phase42 = Some(Phase42ClientMetadata {
+            session_id: "phase-42".into(),
+            lane: Some(Phase42SocketKind::Media),
+            role: None,
+            ignore_media_until: None,
+        });
+
+        let text = OutboundMessage::Text("rx_smeter:0,0,-110.0;".into());
+        assert!(client_wants_outbound_message(&control, &text));
+        assert!(!client_wants_outbound_message(&media, &text));
+
+        let safety =
+            OutboundMessage::SafetyText("tx_fault:0,power_trip,126.3,110.0;".into());
+        assert!(client_wants_outbound_message(&control, &safety));
+        assert!(!client_wants_outbound_message(&media, &safety));
+    }
+
+    #[test]
+    fn phase42_outbound_routing_sends_iq_to_media_lane_not_control() {
+        let mut control = ClientConnection {
+            outbound: ClientOutbound::new(),
+            state: ClientState::default(),
+        };
+        control.state.phase42 = Some(Phase42ClientMetadata {
+            session_id: "phase-42".into(),
+            lane: Some(Phase42SocketKind::Control),
+            role: Some(TciClientRole::Operator),
+            ignore_media_until: None,
+        });
+        control.state.iq_stream_enabled = true;
+
+        let mut media = ClientConnection {
+            outbound: ClientOutbound::new(),
+            state: ClientState::default(),
+        };
+        media.state.phase42 = Some(Phase42ClientMetadata {
+            session_id: "phase-42".into(),
+            lane: Some(Phase42SocketKind::Media),
+            role: None,
+            ignore_media_until: None,
+        });
+        media.state.iq_stream_enabled = true;
+
+        let iq = OutboundMessage::IqFrame {
+            receiver: 0,
+            sample_rate: 192_000,
+            iq_samples: vec![0.0, 0.0],
+        };
+        assert!(!client_wants_outbound_message(&control, &iq));
+        assert!(client_wants_outbound_message(&media, &iq));
+
+        let tx_iq = OutboundMessage::TxIqFrame {
+            receiver: 0,
+            sample_rate: 192_000,
+            iq_samples: vec![0.0, 0.0],
+        };
+        assert!(!client_wants_outbound_message(&control, &tx_iq));
+        assert!(client_wants_outbound_message(&media, &tx_iq));
+    }
+
+    #[test]
+    fn phase42_outbound_routing_sends_audio_to_media_lane_not_control() {
+        let mut control = ClientConnection {
+            outbound: ClientOutbound::new(),
+            state: ClientState::default(),
+        };
+        control.state.phase42 = Some(Phase42ClientMetadata {
+            session_id: "phase-42".into(),
+            lane: Some(Phase42SocketKind::Control),
+            role: Some(TciClientRole::Operator),
+            ignore_media_until: None,
+        });
+        control.state.audio_stream_enabled = true;
+
+        let mut media = ClientConnection {
+            outbound: ClientOutbound::new(),
+            state: ClientState::default(),
+        };
+        media.state.phase42 = Some(Phase42ClientMetadata {
+            session_id: "phase-42".into(),
+            lane: Some(Phase42SocketKind::Media),
+            role: None,
+            ignore_media_until: None,
+        });
+        media.state.audio_stream_enabled = true;
+
+        let audio = OutboundMessage::AudioFrame {
+            receiver: 0,
+            sample_rate: 48_000,
+            channels: 1,
+            audio_samples: vec![0.0, 0.0],
+            sequence: 7,
+        };
+        assert!(!client_wants_outbound_message(&control, &audio));
+        assert!(client_wants_outbound_message(&media, &audio));
+    }
+
+    #[test]
+    fn legacy_non_phase42_client_receives_text_and_binary() {
+        let mut legacy = ClientConnection {
+            outbound: ClientOutbound::new(),
+            state: ClientState::default(),
+        };
+        // No phase42 metadata — represents a legacy single-socket client.
+        legacy.state.iq_stream_enabled = true;
+        legacy.state.audio_stream_enabled = true;
+
+        let text = OutboundMessage::Text("rx_smeter:0,0,-110.0;".into());
+        let iq = OutboundMessage::IqFrame {
+            receiver: 0,
+            sample_rate: 192_000,
+            iq_samples: vec![0.0, 0.0],
+        };
+        let audio = OutboundMessage::AudioFrame {
+            receiver: 0,
+            sample_rate: 48_000,
+            channels: 1,
+            audio_samples: vec![0.0, 0.0],
+            sequence: 0,
+        };
+
+        assert!(client_wants_outbound_message(&legacy, &text));
+        assert!(client_wants_outbound_message(&legacy, &iq));
+        assert!(client_wants_outbound_message(&legacy, &audio));
     }
 
     #[test]
