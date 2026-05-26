@@ -1565,7 +1565,9 @@ fn client_wants_outbound_message(client: &ClientConnection, message: &OutboundMe
                 && !client.state.tx_media_priority_active
         }
         OutboundMessage::TxIqFrame { .. } => {
-            lane != Some(Phase42SocketKind::Control) && client.state.iq_stream_enabled
+            lane != Some(Phase42SocketKind::Control)
+                && client.state.iq_stream_enabled
+                && !client.state.tx_media_priority_active
         }
         OutboundMessage::AudioFrame { .. } => {
             lane != Some(Phase42SocketKind::Control)
@@ -4264,7 +4266,7 @@ mod tests {
     }
 
     #[test]
-    fn phase42_tx_media_priority_suppresses_rx_media_not_tx_iq() {
+    fn phase42_tx_media_priority_suppresses_media_downlink() {
         let clients: ClientRegistry = Arc::new(Mutex::new(BTreeMap::new()));
         insert_phase42_paired_client(
             &clients,
@@ -4302,7 +4304,7 @@ mod tests {
         };
 
         assert!(!client_wants_outbound_message(media, &rx_iq));
-        assert!(client_wants_outbound_message(media, &tx_iq));
+        assert!(!client_wants_outbound_message(media, &tx_iq));
         assert!(!client_wants_outbound_message(media, &audio));
     }
 
