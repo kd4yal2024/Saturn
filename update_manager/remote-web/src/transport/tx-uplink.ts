@@ -7,7 +7,8 @@ export const TX_UPLINK_MIN_THRESHOLD_BYTES = 1024;
 // 40 evidence showed bufferedAmount can grow to multi-megabytes when the
 // RTT-scaled cap is too generous (Tailscale + main-thread load). Beyond this
 // ceiling the browser is provably losing real-time and no further mic frames
-// help; drop them before send. ~150 ms of s16@48k audio. Cannot be disabled.
+// help; drop them before send. About 160 ms of s16@48k audio with the current
+// 1024-sample TX packets. Cannot be disabled.
 export const TX_UPLINK_HARD_CAP_BYTES = 16_384;
 
 export type TxUplinkDecision = {

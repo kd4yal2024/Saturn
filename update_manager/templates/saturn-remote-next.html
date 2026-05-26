@@ -4424,7 +4424,7 @@
 
   <!-- Runtime provided by SaturnRemoteNext bundle -->
 
-  <script src="/remote-assets/remote-next.js?v=phase42-tx-media-uplink-2b39274"></script>
+  <script src="/remote-assets/remote-next.js?v=phase42-tx-mic-1024"></script>
   <script>
     const $ = (id) => document.getElementById(id);
     const DISPLAY_MAX_FFT_SIZE = 262144;
@@ -4487,7 +4487,7 @@
     const RX_AUDIO_MOX_RECOVERY_DROP_MS = 180;
     const RX_AUDIO_USE_SAB_RING = false;
     const RX_MSG_QUEUE_MAX_PACKETS = 8;
-    const TX_MIC_BLOCK_SAMPLES = 256;
+    const TX_MIC_BLOCK_SAMPLES = 1024;
     const TX_MIC_BYTES_PER_SAMPLE = 2;
     const TX_MIC_SAMPLE_TYPE_S16 = 1;
     const TX_UPLINK_STATS_INTERVAL_MS = 1000;
@@ -9572,7 +9572,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
           }
         }
         if (!proc) {
-          // ScriptProcessorNode fallback: 256-sample blocks (about 5.3 ms at 48 kHz).
+          // ScriptProcessorNode fallback: 1024-sample blocks (about 21.3 ms at 48 kHz).
           proc = micCtx.createScriptProcessor(TX_MIC_BLOCK_SAMPLES, 1, 1);
           proc.onaudioprocess = (evt) => {
             sendTxMicSamples(evt.inputBuffer.getChannelData(0), {

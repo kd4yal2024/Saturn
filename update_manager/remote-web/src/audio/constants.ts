@@ -5,7 +5,7 @@ export const RX_AUDIO_RESYNC_PREROLL_SEC = 0.004;
 export const RX_AUDIO_OVERFLOW_DROP_MS = 250;
 export const RX_AUDIO_MOX_RECOVERY_DROP_MS = 180;
 export const RX_MSG_QUEUE_MAX_PACKETS = 8;
-export const TX_MIC_BLOCK_SAMPLES = 256;
+export const TX_MIC_BLOCK_SAMPLES = 1024;
 
 export const RX_RING_FRAMES = 4096;
 export const RX_RING_CHANNELS = 2;

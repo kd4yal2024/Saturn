@@ -5,6 +5,7 @@ import {
   txMicByteRateBytesPerSecond,
   txUplinkBufferedThresholdBytes,
 } from '../src/transport/tx-uplink';
+import { TX_MIC_BLOCK_SAMPLES } from '../src/audio/constants';
 
 describe('TX uplink guard', () => {
   it('derives RTT-scaled thresholds from the Float32 mic byte rate', () => {
@@ -19,6 +20,13 @@ describe('TX uplink guard', () => {
     expect(byteRate).toBeCloseTo(108_000, 0);
     expect(txUplinkBufferedThresholdBytes(200, byteRate, 2)).toBe(43_200);
     expect(txUplinkBufferedThresholdBytes(200, byteRate, 4)).toBe(86_400);
+  });
+
+  it('derives the current coalesced s16 mic byte rate', () => {
+    const byteRate = txMicByteRateBytesPerSecond(48_000, 2, TX_MIC_BLOCK_SAMPLES, 64);
+    expect(byteRate).toBeCloseTo(99_000, 0);
+    expect(txUplinkBufferedThresholdBytes(200, byteRate, 2)).toBe(39_600);
+    expect(txUplinkBufferedThresholdBytes(200, byteRate, 4)).toBe(79_200);
   });
 
   it('sends and stays clear when bufferedAmount is well below the hard cap', () => {

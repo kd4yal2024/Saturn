@@ -1087,6 +1087,7 @@ impl TciFrontend {
             operator_client_id,
             Some(now + PHASE42_RELEASE_IGNORE_WINDOW),
         );
+        clear_tx_media_priority_active(&self.clients);
     }
 
     pub fn client_snapshot(&self) -> TciClientSnapshot {
@@ -2899,6 +2900,12 @@ fn set_client_tx_media_priority_active(clients: &ClientRegistry, client_id: u64,
     }
 }
 
+fn clear_tx_media_priority_active(clients: &ClientRegistry) {
+    for client in clients.lock().unwrap().values_mut() {
+        client.state.tx_media_priority_active = false;
+    }
+}
+
 fn set_client_audio_seq_gap_count(clients: &ClientRegistry, client_id: u64, gaps: u64) {
     if let Some(client) = clients.lock().unwrap().get_mut(&client_id) {
         client.state.audio_seq_gap_count = gaps;
@@ -4306,6 +4313,26 @@ mod tests {
         assert!(!client_wants_outbound_message(media, &rx_iq));
         assert!(!client_wants_outbound_message(media, &tx_iq));
         assert!(!client_wants_outbound_message(media, &audio));
+    }
+
+    #[test]
+    fn phase42_clear_tx_media_priority_clears_control_and_media() {
+        let clients: ClientRegistry = Arc::new(Mutex::new(BTreeMap::new()));
+        insert_phase42_paired_client(
+            &clients,
+            88,
+            "phase-42",
+            Phase42SocketKind::Control,
+            Some(TciClientRole::Operator),
+        );
+        insert_phase42_paired_client(&clients, 89, "phase-42", Phase42SocketKind::Media, None);
+
+        set_client_tx_media_priority_active(&clients, 88, true);
+        clear_tx_media_priority_active(&clients);
+
+        let snapshot = clients.lock().unwrap();
+        assert!(!snapshot.get(&88).unwrap().state.tx_media_priority_active);
+        assert!(!snapshot.get(&89).unwrap().state.tx_media_priority_active);
     }
 
     #[test]
