@@ -69,7 +69,7 @@
 #include "GanymedePAControl.h"
 #include "frontpanelhandler.h"
 
-#define P2APPVERSION 46
+#define P2APPVERSION 47
 #define FWREQUIREDMAJORVERSION 1                  // major version that is required. Only altered if programming interface changes. 
 //
 // the Firmware version is a protection to make sure that if a p2app update is required by the new firmware,
@@ -77,6 +77,8 @@
 //
 //------------------------------------------------------------------------------------------
 // VERSION History
+// V47, 27/05/2026. reduced PA drive level for V3 H/W to same as V2 H/W so that Puresignal works OK
+//                  (cherry-picked from laurencebarker/Saturn 4b0b76f).
 // V46, 19/03/2026. optional SCHED_RR/FIFO + CPU affinity tuning for speaker/DUC threads via SATURN_P3_RT_AUDIO_* env vars.
 // V45, 16/03/2026. encodes ADC1/ADC2 peak amplitudes into the high priority status message.
 // V44, 31/01/2026.  Support for Thetis "push" CAT commands for Ganymede, g2v2 indicators & Aries instead of polling
@@ -184,7 +186,9 @@ static void SyncSignalExitRequest(void)
 #define VCONSTTXAMPLSCALEFACTOR_13 0x0002000  // 18 bit scale value - set to 1/32 of full scale FWV13+
 #define VCONSTTXAMPLSCALEFACTOR_17 0x0002000  // 18 bit scale value - set to 1/32 of full scale FWV17+
 //#define VCONSTTXAMPLSCALEFACTOR_17 0x0002800  // 18 bit scale value - set to 1/32 of full scale FWV17+
-#define VCONSTTXAMPLSCALEFACTOR_PCBV3 0x0002A00  // 18 bit scale value - set to 1/32 of full scale for PCB V3
+//#define VCONSTTXAMPLSCALEFACTOR_PCBV3 0x0002A00  // 18 bit scale value - was 5/64 of full scale for PCB V3
+#define VCONSTTXAMPLSCALEFACTOR_PCBV3 0x0002000    // 18 bit scale value - set to 1/32 of full scale for PCB V3
+                                                  // V47: reverted to V2 level for Puresignal compatibility (Laurence Barker)
 
 struct ThreadSocketData SocketData[VPORTTABLESIZE] =
 {
