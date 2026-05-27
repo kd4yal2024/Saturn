@@ -840,6 +840,12 @@ fn main() -> Result<(), Box<dyn Error>> {
             let now = Instant::now();
             let mut model = radio_model.lock().unwrap();
             let on_air = model.desired.tx_phase == TxPhase::Keyed || model.desired.tx_enabled;
+            // Phase 42: bridge owns the authoritative TX state. Mirror it
+            // into the TCI frontend so client_wants_outbound_message can
+            // suppress RX media on the media lane while on-air. Replaces
+            // the previous per-client tx_media_priority flag which could
+            // get stuck on if a TX-end path didn't explicitly clear it.
+            tci.set_tx_on_air(on_air);
             if !on_air {
                 tx_uplink_late_since = None;
                 tx_uplink_fault_active = false;

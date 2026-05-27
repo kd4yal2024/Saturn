@@ -5,7 +5,7 @@ use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::os::fd::AsRawFd;
 #[cfg(target_os = "linux")]
 use std::os::raw::{c_int, c_ulong};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -654,7 +654,6 @@ struct ClientState {
     tx_mic_last_arrived_seq: u32,
     tx_mic_seq_gap_count: u64,
     tx_mic_last_arrived_at: Option<Instant>,
-    tx_media_priority_active: bool,
     phase42: Option<Phase42ClientMetadata>,
 }
 
@@ -675,7 +674,6 @@ impl Default for ClientState {
             tx_mic_last_arrived_seq: 0,
             tx_mic_seq_gap_count: 0,
             tx_mic_last_arrived_at: None,
-            tx_media_priority_active: false,
             phase42: None,
         }
     }
@@ -942,6 +940,12 @@ pub struct TciFrontend {
     operator_control_at: Arc<Mutex<Option<Instant>>>,
     drop_count: Arc<AtomicU64>,
     display_rate_limited_count: AtomicU64,
+    // Phase 42 TX media priority: derived from the bridge's authoritative
+    // TX state, not from a browser command. While on-air, RX binary frames
+    // are suppressed on the media lane so uplink mic owns the media TCP
+    // send buffer. Cleared automatically when on-air returns to false,
+    // eliminating the stuck-flag class of bug. Single source of truth.
+    tx_on_air: AtomicBool,
     tx_power_meter_scale: f32,
     remote_tx_rf_enabled: bool,
     display_frame_interval: Duration,
@@ -1057,6 +1061,7 @@ impl TciFrontend {
             operator_control_at,
             drop_count,
             display_rate_limited_count: AtomicU64::new(0),
+            tx_on_air: AtomicBool::new(false),
             tx_power_meter_scale: config.tx_power_meter_scale,
             remote_tx_rf_enabled,
             display_frame_interval: display_frame_interval_for_limit(config.display_frame_limit_hz),
@@ -1069,6 +1074,20 @@ impl TciFrontend {
 
     pub fn try_recv_command(&self) -> Option<TciCommand> {
         self.command_rx.try_recv().ok()
+    }
+
+    /// Phase 42: set the bridge's authoritative TX-on-air state. Called from
+    /// the main loop alongside the existing on_air computation. While true,
+    /// RX binary frames (IqFrame, TxIqFrame, AudioFrame) are suppressed on
+    /// the media lane so uplink mic owns the media TCP send buffer. The
+    /// flag cannot drift out of sync with the bridge's actual TX state
+    /// because there is no separate flag to forget to clear.
+    pub fn set_tx_on_air(&self, on_air: bool) {
+        self.tx_on_air.store(on_air, Ordering::Relaxed);
+    }
+
+    pub fn tx_on_air(&self) -> bool {
+        self.tx_on_air.load(Ordering::Relaxed)
     }
 
     pub fn last_operator_control_at(&self) -> Option<Instant> {
@@ -1087,7 +1106,12 @@ impl TciFrontend {
             operator_client_id,
             Some(now + PHASE42_RELEASE_IGNORE_WINDOW),
         );
-        clear_tx_media_priority_active(&self.clients);
+        // Source-of-truth release: bridge clears its on-air flag here so the
+        // next send_message call lifts RX media suppression on the media lane.
+        // Replaces the previous per-client clear_tx_media_priority_active; the
+        // stuck-flag class of bug cannot recur because there is no per-client
+        // flag to drift out of sync.
+        self.set_tx_on_air(false);
     }
 
     pub fn client_snapshot(&self) -> TciClientSnapshot {
@@ -1191,9 +1215,7 @@ impl TciFrontend {
                 .map(|arrived_at| now.saturating_duration_since(arrived_at).as_millis() as u64)
                 .max()
                 .unwrap_or(0),
-            tx_media_priority_active: clients
-                .values()
-                .any(|client| client.state.tx_media_priority_active),
+            tx_media_priority_active: self.tx_on_air.load(Ordering::Relaxed),
         }
     }
 
@@ -1537,9 +1559,10 @@ impl TciFrontend {
     }
 
     fn send_message(&self, message: OutboundMessage) {
+        let tx_on_air = self.tx_on_air.load(Ordering::Relaxed);
         let clients = self.clients.lock().unwrap();
         for client in clients.values() {
-            if !client_wants_outbound_message(client, &message) {
+            if !client_wants_outbound_message(client, &message, tx_on_air) {
                 continue;
             }
             let drops = client.outbound.enqueue(message.clone());
@@ -1548,32 +1571,36 @@ impl TciFrontend {
     }
 }
 
-fn client_wants_outbound_message(client: &ClientConnection, message: &OutboundMessage) -> bool {
+fn client_wants_outbound_message(
+    client: &ClientConnection,
+    message: &OutboundMessage,
+    tx_on_air: bool,
+) -> bool {
     // Phase 42 lane awareness: text goes only to control-lane clients (or
     // legacy non-Phase-42 clients); binary RX frames go only to media-lane
     // clients (or legacy non-Phase-42 clients). Sending text on a media
     // socket or binary on a control socket would be rejected by the
     // browser-side adapter as a protocol violation.
+    //
+    // While the bridge is on-air, binary RX (IQ + audio) is additionally
+    // suppressed on the media lane to give uplink mic frames sole ownership
+    // of the media TCP send buffer. tx_on_air is the bridge's authoritative
+    // TX state; when it returns to false the suppression lifts automatically.
     let lane = client.state.phase42.as_ref().and_then(|m| m.lane);
     match message {
         OutboundMessage::Close => true,
         OutboundMessage::Text(_) | OutboundMessage::SafetyText(_) => {
             lane != Some(Phase42SocketKind::Media)
         }
-        OutboundMessage::IqFrame { .. } => {
+        OutboundMessage::IqFrame { .. } | OutboundMessage::TxIqFrame { .. } => {
             lane != Some(Phase42SocketKind::Control)
                 && client.state.iq_stream_enabled
-                && !client.state.tx_media_priority_active
-        }
-        OutboundMessage::TxIqFrame { .. } => {
-            lane != Some(Phase42SocketKind::Control)
-                && client.state.iq_stream_enabled
-                && !client.state.tx_media_priority_active
+                && !tx_on_air
         }
         OutboundMessage::AudioFrame { .. } => {
             lane != Some(Phase42SocketKind::Control)
                 && client.state.audio_stream_enabled
-                && !client.state.tx_media_priority_active
+                && !tx_on_air
         }
     }
 }
@@ -2348,16 +2375,11 @@ fn parse_tci_command(
             );
         }
         "remote_tx_media_priority" => {
-            let enabled_arg = if args.len() >= 2 {
-                args.get(1)
-            } else {
-                args.first()
-            };
-            if let Some(enabled_text) = enabled_arg {
-                if let Some(enabled) = parse_tci_bool(enabled_text) {
-                    set_client_tx_media_priority_active(clients, client_id, enabled);
-                }
-            }
+            // Phase 42: TX media priority is now derived from the bridge's
+            // authoritative on-air state, not from this browser command.
+            // Accept and ignore for backward compatibility with older
+            // clients; no side effect.
+            let _ = args;
         }
         "audio_stream_sample_type" => {}
         "rx_smeter" | "s_meter" | "smeter" => {
@@ -2365,6 +2387,10 @@ fn parse_tci_command(
         }
         "trx" => {
             // trx:0,true or trx:0,true,tci — PTT on/off
+            // Phase 42: no longer sets a per-client tx_media_priority flag.
+            // The bridge derives on-air state from its own model and main.rs
+            // calls tci.set_tx_on_air(...) accordingly. This eliminates the
+            // stuck-flag bug class.
             let enabled_arg = if args.len() >= 2 {
                 args.get(1)
             } else {
@@ -2373,7 +2399,6 @@ fn parse_tci_command(
             if let Some(enabled_text) = enabled_arg {
                 if let Some(enabled) = parse_tci_bool(enabled_text) {
                     println!("saturn-bridge: TCI trx requested -> {}", enabled);
-                    set_client_tx_media_priority_active(clients, client_id, enabled);
                     let _ = command_tx.send(TciCommand::SetTxEnabled(enabled));
                 }
             }
@@ -2885,24 +2910,6 @@ fn set_client_audio_channels(clients: &ClientRegistry, client_id: u64, channels:
         if let Some(media) = clients.get_mut(&media_id) {
             media.state.audio_channels = channels;
         }
-    }
-}
-
-fn set_client_tx_media_priority_active(clients: &ClientRegistry, client_id: u64, active: bool) {
-    let mut clients = clients.lock().unwrap();
-    if let Some(client) = clients.get_mut(&client_id) {
-        client.state.tx_media_priority_active = active;
-    }
-    if let Some(media_id) = phase42_paired_media_client_id(&clients, client_id) {
-        if let Some(media) = clients.get_mut(&media_id) {
-            media.state.tx_media_priority_active = active;
-        }
-    }
-}
-
-fn clear_tx_media_priority_active(clients: &ClientRegistry) {
-    for client in clients.lock().unwrap().values_mut() {
-        client.state.tx_media_priority_active = false;
     }
 }
 
@@ -4273,7 +4280,7 @@ mod tests {
     }
 
     #[test]
-    fn phase42_tx_media_priority_suppresses_media_downlink() {
+    fn phase42_tx_on_air_suppresses_media_downlink() {
         let clients: ClientRegistry = Arc::new(Mutex::new(BTreeMap::new()));
         insert_phase42_paired_client(
             &clients,
@@ -4285,12 +4292,9 @@ mod tests {
         insert_phase42_paired_client(&clients, 87, "phase-42", Phase42SocketKind::Media, None);
         set_client_iq_stream_enabled(&clients, 86, true);
         set_client_audio_stream_enabled(&clients, 86, true);
-        set_client_tx_media_priority_active(&clients, 86, true);
 
         let snapshot = clients.lock().unwrap();
-        assert!(snapshot.get(&86).unwrap().state.tx_media_priority_active);
         let media = snapshot.get(&87).unwrap();
-        assert!(media.state.tx_media_priority_active);
 
         let rx_iq = OutboundMessage::IqFrame {
             receiver: 0,
@@ -4310,29 +4314,15 @@ mod tests {
             sequence: 7,
         };
 
-        assert!(!client_wants_outbound_message(media, &rx_iq));
-        assert!(!client_wants_outbound_message(media, &tx_iq));
-        assert!(!client_wants_outbound_message(media, &audio));
-    }
+        // While on-air: all three binary variants are suppressed on the media lane.
+        assert!(!client_wants_outbound_message(media, &rx_iq, true));
+        assert!(!client_wants_outbound_message(media, &tx_iq, true));
+        assert!(!client_wants_outbound_message(media, &audio, true));
 
-    #[test]
-    fn phase42_clear_tx_media_priority_clears_control_and_media() {
-        let clients: ClientRegistry = Arc::new(Mutex::new(BTreeMap::new()));
-        insert_phase42_paired_client(
-            &clients,
-            88,
-            "phase-42",
-            Phase42SocketKind::Control,
-            Some(TciClientRole::Operator),
-        );
-        insert_phase42_paired_client(&clients, 89, "phase-42", Phase42SocketKind::Media, None);
-
-        set_client_tx_media_priority_active(&clients, 88, true);
-        clear_tx_media_priority_active(&clients);
-
-        let snapshot = clients.lock().unwrap();
-        assert!(!snapshot.get(&88).unwrap().state.tx_media_priority_active);
-        assert!(!snapshot.get(&89).unwrap().state.tx_media_priority_active);
+        // Off-air: media lane receives binary as normal.
+        assert!(client_wants_outbound_message(media, &rx_iq, false));
+        assert!(client_wants_outbound_message(media, &tx_iq, false));
+        assert!(client_wants_outbound_message(media, &audio, false));
     }
 
     #[test]
@@ -4359,12 +4349,12 @@ mod tests {
         });
 
         let text = OutboundMessage::Text("rx_smeter:0,0,-110.0;".into());
-        assert!(client_wants_outbound_message(&control, &text));
-        assert!(!client_wants_outbound_message(&media, &text));
+        assert!(client_wants_outbound_message(&control, &text, false));
+        assert!(!client_wants_outbound_message(&media, &text, false));
 
         let safety = OutboundMessage::SafetyText("tx_fault:0,power_trip,126.3,110.0;".into());
-        assert!(client_wants_outbound_message(&control, &safety));
-        assert!(!client_wants_outbound_message(&media, &safety));
+        assert!(client_wants_outbound_message(&control, &safety, false));
+        assert!(!client_wants_outbound_message(&media, &safety, false));
     }
 
     #[test]
@@ -4398,16 +4388,16 @@ mod tests {
             sample_rate: 192_000,
             iq_samples: vec![0.0, 0.0],
         };
-        assert!(!client_wants_outbound_message(&control, &iq));
-        assert!(client_wants_outbound_message(&media, &iq));
+        assert!(!client_wants_outbound_message(&control, &iq, false));
+        assert!(client_wants_outbound_message(&media, &iq, false));
 
         let tx_iq = OutboundMessage::TxIqFrame {
             receiver: 0,
             sample_rate: 192_000,
             iq_samples: vec![0.0, 0.0],
         };
-        assert!(!client_wants_outbound_message(&control, &tx_iq));
-        assert!(client_wants_outbound_message(&media, &tx_iq));
+        assert!(!client_wants_outbound_message(&control, &tx_iq, false));
+        assert!(client_wants_outbound_message(&media, &tx_iq, false));
     }
 
     #[test]
@@ -4443,8 +4433,8 @@ mod tests {
             audio_samples: vec![0.0, 0.0],
             sequence: 7,
         };
-        assert!(!client_wants_outbound_message(&control, &audio));
-        assert!(client_wants_outbound_message(&media, &audio));
+        assert!(!client_wants_outbound_message(&control, &audio, false));
+        assert!(client_wants_outbound_message(&media, &audio, false));
     }
 
     #[test]
@@ -4471,9 +4461,9 @@ mod tests {
             sequence: 0,
         };
 
-        assert!(client_wants_outbound_message(&legacy, &text));
-        assert!(client_wants_outbound_message(&legacy, &iq));
-        assert!(client_wants_outbound_message(&legacy, &audio));
+        assert!(client_wants_outbound_message(&legacy, &text, false));
+        assert!(client_wants_outbound_message(&legacy, &iq, false));
+        assert!(client_wants_outbound_message(&legacy, &audio, false));
     }
 
     #[test]
@@ -4525,16 +4515,10 @@ mod tests {
                 .tx_uplink_degraded
         );
 
+        // Viewer cannot toggle TX media priority — this command is a no-op
+        // on the bridge after Phase 42 source-of-truth refactor, but the
+        // viewer filter must still drop it.
         parse_tci_command("remote_tx_media_priority:0,true", &tx, &clients, 9, false);
-        assert!(
-            !clients
-                .lock()
-                .unwrap()
-                .get(&9)
-                .unwrap()
-                .state
-                .tx_media_priority_active
-        );
     }
 
     #[test]
@@ -4559,31 +4543,18 @@ mod tests {
     }
 
     #[test]
-    fn parses_operator_tx_media_priority() {
+    fn remote_tx_media_priority_is_a_noop_after_phase42_refactor() {
+        // After Phase 42 refactor, TX media priority is derived from the
+        // bridge's on-air state, not from this browser command. The command
+        // is accepted (no parse error) but has no side effect. Older
+        // browsers may still send it; this test asserts forward compat.
         let (tx, _rx) = mpsc::channel();
         let clients = test_client_registry(9);
 
         parse_tci_command("remote_tx_media_priority:0,true", &tx, &clients, 9, true);
-        assert!(
-            clients
-                .lock()
-                .unwrap()
-                .get(&9)
-                .unwrap()
-                .state
-                .tx_media_priority_active
-        );
-
         parse_tci_command("remote_tx_media_priority:0,false", &tx, &clients, 9, true);
-        assert!(
-            !clients
-                .lock()
-                .unwrap()
-                .get(&9)
-                .unwrap()
-                .state
-                .tx_media_priority_active
-        );
+        // No assertion on per-client field — that field no longer exists.
+        // Test passes if parse_tci_command does not panic on the command.
     }
 
     #[test]
