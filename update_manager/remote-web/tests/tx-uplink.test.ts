@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   TX_UPLINK_HARD_CAP_BYTES,
+  TX_UPLINK_SOFT_CAP_BYTES,
   decideTxMicSend,
   txMicByteRateBytesPerSecond,
   txUplinkBufferedThresholdBytes,
@@ -51,12 +52,23 @@ describe('TX uplink guard', () => {
     expect(send).not.toHaveBeenCalled();
   });
 
+  it('soft cap reports degraded without dropping mic frames', () => {
+    const byteRate = txMicByteRateBytesPerSecond(48_000, 4, 256, 64);
+    const decision = decideTxMicSend(TX_UPLINK_SOFT_CAP_BYTES + 1, 200, byteRate);
+
+    expect(decision.softCapEngaged).toBe(true);
+    expect(decision.hardCapEngaged).toBe(false);
+    expect(decision.degraded).toBe(true);
+    expect(decision.action).toBe('send');
+  });
+
   it('hard cap drops even when the RTT-scaled drop threshold would still send', () => {
     const byteRate = txMicByteRateBytesPerSecond(48_000, 4, 256, 64);
     // RTT-scaled drop threshold at 200ms = 163_200 bytes; hard cap is lower.
     // Pick a value above the hard cap but well below the RTT drop threshold
     // so we prove the hard cap is the active constraint.
     const decision = decideTxMicSend(TX_UPLINK_HARD_CAP_BYTES + 1, 200, byteRate);
+    expect(decision.softCapEngaged).toBe(true);
     expect(decision.hardCapEngaged).toBe(true);
     expect(decision.action).toBe('drop');
     expect(decision.degraded).toBe(true);

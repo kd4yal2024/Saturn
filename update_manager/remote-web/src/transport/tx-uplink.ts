@@ -2,14 +2,13 @@ export const TX_UPLINK_DEFAULT_RTT_MS = 200;
 export const TX_UPLINK_DEGRADED_RTT_FACTOR = 2;
 export const TX_UPLINK_DROP_RTT_FACTOR = 4;
 export const TX_UPLINK_MIN_THRESHOLD_BYTES = 1024;
-// Phase 41 stopgap: absolute hard ceiling on browser WebSocket.bufferedAmount
-// for the TX mic path. Independent of the RTT-scaled thresholds above. Phase
-// 40 evidence showed bufferedAmount can grow to multi-megabytes when the
-// RTT-scaled cap is too generous (Tailscale + main-thread load). Beyond this
-// ceiling the browser is provably losing real-time and no further mic frames
-// help; drop them before send. About 160 ms of s16@48k audio with the current
-// 1024-sample TX packets. Cannot be disabled.
-export const TX_UPLINK_HARD_CAP_BYTES = 16_384;
+// Phase 41 stopgap: absolute ceilings on browser WebSocket.bufferedAmount for
+// the TX mic path. Keep 16 KB as an early degraded warning, but allow one more
+// jitter window before dropping real mic frames. The Phase 42 control lane
+// release path still owns RF-off and flushes late media, so a small extra TX
+// audio buffer is preferable to chopping PCM on cell/VPN links.
+export const TX_UPLINK_SOFT_CAP_BYTES = 16_384;
+export const TX_UPLINK_HARD_CAP_BYTES = 32_768;
 
 export type TxUplinkDecision = {
   action: 'send' | 'drop';
@@ -17,6 +16,7 @@ export type TxUplinkDecision = {
   bufferedBytes: number;
   degradedThresholdBytes: number;
   dropThresholdBytes: number;
+  softCapEngaged: boolean;
   hardCapEngaged: boolean;
 };
 
@@ -61,13 +61,15 @@ export function decideTxMicSend(
     TX_UPLINK_DROP_RTT_FACTOR,
   );
 
+  const softCapEngaged = bufferedBytes > TX_UPLINK_SOFT_CAP_BYTES;
   const hardCapEngaged = bufferedBytes > TX_UPLINK_HARD_CAP_BYTES;
   return {
     action: hardCapEngaged || bufferedBytes > dropThresholdBytes ? 'drop' : 'send',
-    degraded: hardCapEngaged || bufferedBytes > degradedThresholdBytes,
+    degraded: softCapEngaged || hardCapEngaged || bufferedBytes > degradedThresholdBytes,
     bufferedBytes,
     degradedThresholdBytes,
     dropThresholdBytes,
+    softCapEngaged,
     hardCapEngaged,
   };
 }
