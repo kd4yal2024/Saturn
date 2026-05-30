@@ -941,11 +941,11 @@ pub struct TciFrontend {
     drop_count: Arc<AtomicU64>,
     display_rate_limited_count: AtomicU64,
     // Phase 42 TX media priority: derived from the bridge's authoritative
-    // TX state, not from a browser command. While on-air, RX binary frames
-    // are suppressed on the media lane so uplink mic owns the media TCP
-    // send buffer. Cleared automatically when on-air returns to false,
+    // TX intent/armed/keyed state, not from a browser command. While active,
+    // RX binary frames are suppressed on the media lane so uplink mic owns the
+    // media TCP send buffer. Cleared automatically when TX returns to RX,
     // eliminating the stuck-flag class of bug. Single source of truth.
-    tx_on_air: AtomicBool,
+    tx_media_priority_active: AtomicBool,
     tx_power_meter_scale: f32,
     remote_tx_rf_enabled: bool,
     display_frame_interval: Duration,
@@ -1061,7 +1061,7 @@ impl TciFrontend {
             operator_control_at,
             drop_count,
             display_rate_limited_count: AtomicU64::new(0),
-            tx_on_air: AtomicBool::new(false),
+            tx_media_priority_active: AtomicBool::new(false),
             tx_power_meter_scale: config.tx_power_meter_scale,
             remote_tx_rf_enabled,
             display_frame_interval: display_frame_interval_for_limit(config.display_frame_limit_hz),
@@ -1076,18 +1076,19 @@ impl TciFrontend {
         self.command_rx.try_recv().ok()
     }
 
-    /// Phase 42: set the bridge's authoritative TX-on-air state. Called from
-    /// the main loop alongside the existing on_air computation. While true,
+    /// Phase 42: set the bridge's authoritative TX media-priority state.
+    /// Called from the main loop from TX intent/armed/keyed state. While true,
     /// RX binary frames (IqFrame, TxIqFrame, AudioFrame) are suppressed on
-    /// the media lane so uplink mic owns the media TCP send buffer. The
-    /// flag cannot drift out of sync with the bridge's actual TX state
-    /// because there is no separate flag to forget to clear.
-    pub fn set_tx_on_air(&self, on_air: bool) {
-        self.tx_on_air.store(on_air, Ordering::Relaxed);
+    /// the media lane so uplink mic owns the media TCP send buffer. The flag
+    /// cannot drift out of sync because there is no browser-owned state to
+    /// forget to clear.
+    pub fn set_tx_media_priority_active(&self, active: bool) {
+        self.tx_media_priority_active
+            .store(active, Ordering::Relaxed);
     }
 
-    pub fn tx_on_air(&self) -> bool {
-        self.tx_on_air.load(Ordering::Relaxed)
+    pub fn tx_media_priority_active(&self) -> bool {
+        self.tx_media_priority_active.load(Ordering::Relaxed)
     }
 
     pub fn last_operator_control_at(&self) -> Option<Instant> {
@@ -1106,12 +1107,12 @@ impl TciFrontend {
             operator_client_id,
             Some(now + PHASE42_RELEASE_IGNORE_WINDOW),
         );
-        // Source-of-truth release: bridge clears its on-air flag here so the
+        // Source-of-truth release: bridge clears media priority here so the
         // next send_message call lifts RX media suppression on the media lane.
         // Replaces the previous per-client clear_tx_media_priority_active; the
         // stuck-flag class of bug cannot recur because there is no per-client
         // flag to drift out of sync.
-        self.set_tx_on_air(false);
+        self.set_tx_media_priority_active(false);
     }
 
     pub fn client_snapshot(&self) -> TciClientSnapshot {
@@ -1215,7 +1216,7 @@ impl TciFrontend {
                 .map(|arrived_at| now.saturating_duration_since(arrived_at).as_millis() as u64)
                 .max()
                 .unwrap_or(0),
-            tx_media_priority_active: self.tx_on_air.load(Ordering::Relaxed),
+            tx_media_priority_active: self.tx_media_priority_active(),
         }
     }
 
@@ -1559,10 +1560,10 @@ impl TciFrontend {
     }
 
     fn send_message(&self, message: OutboundMessage) {
-        let tx_on_air = self.tx_on_air.load(Ordering::Relaxed);
+        let tx_media_priority_active = self.tx_media_priority_active();
         let clients = self.clients.lock().unwrap();
         for client in clients.values() {
-            if !client_wants_outbound_message(client, &message, tx_on_air) {
+            if !client_wants_outbound_message(client, &message, tx_media_priority_active) {
                 continue;
             }
             let drops = client.outbound.enqueue(message.clone());
@@ -1574,7 +1575,7 @@ impl TciFrontend {
 fn client_wants_outbound_message(
     client: &ClientConnection,
     message: &OutboundMessage,
-    tx_on_air: bool,
+    tx_media_priority_active: bool,
 ) -> bool {
     // Phase 42 lane awareness: text goes only to control-lane clients (or
     // legacy non-Phase-42 clients); binary RX frames go only to media-lane
@@ -1582,10 +1583,10 @@ fn client_wants_outbound_message(
     // socket or binary on a control socket would be rejected by the
     // browser-side adapter as a protocol violation.
     //
-    // While the bridge is on-air, binary RX (IQ + audio) is additionally
-    // suppressed on the media lane to give uplink mic frames sole ownership
-    // of the media TCP send buffer. tx_on_air is the bridge's authoritative
-    // TX state; when it returns to false the suppression lifts automatically.
+    // While TX media priority is active, binary RX (IQ + audio) is additionally
+    // suppressed on the media lane to give uplink mic frames sole ownership of
+    // the media TCP send buffer. The bridge derives this from TX intent/armed/
+    // keyed state; when it returns to false the suppression lifts automatically.
     let lane = client.state.phase42.as_ref().and_then(|m| m.lane);
     match message {
         OutboundMessage::Close => true,
@@ -1595,12 +1596,12 @@ fn client_wants_outbound_message(
         OutboundMessage::IqFrame { .. } | OutboundMessage::TxIqFrame { .. } => {
             lane != Some(Phase42SocketKind::Control)
                 && client.state.iq_stream_enabled
-                && !tx_on_air
+                && !tx_media_priority_active
         }
         OutboundMessage::AudioFrame { .. } => {
             lane != Some(Phase42SocketKind::Control)
                 && client.state.audio_stream_enabled
-                && !tx_on_air
+                && !tx_media_priority_active
         }
     }
 }
@@ -2388,9 +2389,9 @@ fn parse_tci_command(
         "trx" => {
             // trx:0,true or trx:0,true,tci — PTT on/off
             // Phase 42: no longer sets a per-client tx_media_priority flag.
-            // The bridge derives on-air state from its own model and main.rs
-            // calls tci.set_tx_on_air(...) accordingly. This eliminates the
-            // stuck-flag bug class.
+            // The bridge derives media priority from its own model and main.rs
+            // calls tci.set_tx_media_priority_active(...) accordingly. This
+            // eliminates the stuck-flag bug class.
             let enabled_arg = if args.len() >= 2 {
                 args.get(1)
             } else {
@@ -4280,7 +4281,7 @@ mod tests {
     }
 
     #[test]
-    fn phase42_tx_on_air_suppresses_media_downlink() {
+    fn phase42_tx_media_priority_suppresses_media_downlink() {
         let clients: ClientRegistry = Arc::new(Mutex::new(BTreeMap::new()));
         insert_phase42_paired_client(
             &clients,

@@ -95,6 +95,10 @@ fn bool01(value: bool) -> u8 {
     }
 }
 
+fn tx_media_priority_active(tx_requested: bool, model: &RadioModel) -> bool {
+    tx_requested || model.desired.tx_phase != TxPhase::Rx || model.desired.tx_enabled
+}
+
 fn update_tx_uplink_late_detector(
     on_air: bool,
     last_mic_at: Option<Instant>,
@@ -495,6 +499,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                             tci.clear_phase42_release_window();
                             model.desired.tx_enabled = false;
                             model.desired.tx_phase = TxPhase::Armed;
+                            tci.set_tx_media_priority_active(true);
                             wdsp.reset_stream_buffers();
                             let _ = tx_cmd_tx.send(TxCommand::Arm {
                                 rf_enabled: remote_tx_rf_enabled,
@@ -840,12 +845,13 @@ fn main() -> Result<(), Box<dyn Error>> {
             let now = Instant::now();
             let mut model = radio_model.lock().unwrap();
             let on_air = model.desired.tx_phase == TxPhase::Keyed || model.desired.tx_enabled;
-            // Phase 42: bridge owns the authoritative TX state. Mirror it
-            // into the TCI frontend so client_wants_outbound_message can
-            // suppress RX media on the media lane while on-air. Replaces
-            // the previous per-client tx_media_priority flag which could
-            // get stuck on if a TX-end path didn't explicitly clear it.
-            tci.set_tx_on_air(on_air);
+            let tx_media_priority = tx_media_priority_active(tx_requested, &model);
+            // Phase 42: bridge owns the authoritative TX media-priority state.
+            // Suppress RX media as soon as TX is requested/armed, before RF is
+            // keyed, so mic prefill is not starved on constrained VPN links.
+            // This keeps the no-sticky-browser-flag architecture from the
+            // tx-on-air refactor while covering the armed/prefill window.
+            tci.set_tx_media_priority_active(tx_media_priority);
             if !on_air {
                 tx_uplink_late_since = None;
                 tx_uplink_fault_active = false;
@@ -1020,6 +1026,25 @@ mod tests {
 
         assert!(update_tx_uplink_late_detector(false, stale_mic, now, &mut late_since).is_none());
         assert!(late_since.is_none());
+    }
+
+    #[test]
+    fn tx_media_priority_covers_requested_and_armed_before_on_air() {
+        let mut model = RadioModel::new(0, 14_200_000, 0, 192, 24, 2048, false, 2048, false);
+
+        assert!(!tx_media_priority_active(false, &model));
+
+        assert!(tx_media_priority_active(true, &model));
+
+        model.desired.tx_phase = TxPhase::Armed;
+        assert!(tx_media_priority_active(false, &model));
+
+        model.desired.tx_phase = TxPhase::Keyed;
+        assert!(tx_media_priority_active(false, &model));
+
+        model.desired.tx_phase = TxPhase::Rx;
+        model.desired.tx_enabled = true;
+        assert!(tx_media_priority_active(false, &model));
     }
 
     #[test]
