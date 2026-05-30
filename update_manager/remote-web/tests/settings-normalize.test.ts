@@ -20,6 +20,10 @@ const browserEnv = {
 };
 
 describe('settings normalization', () => {
+  it('defaults TX mic gain to a phone-safe -6 dB', () => {
+    expect(createDefaultSettingsState().radioPrefs.txMicGainDb).toBe(-6);
+  });
+
   it('sanitizes phone panel state', () => {
     expect(sanitizePhonePanels({ radio: true, tx: false, nope: true })).toEqual({
       radio: true,

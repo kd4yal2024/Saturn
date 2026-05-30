@@ -4229,9 +4229,9 @@
               <div class="range-wrap">
                 <div class="row spread">
                   <span class="label" style="margin: 0;">Mic Gain</span>
-                  <span class="mono small" id="tx-mic-gain-readout">0.0 dB</span>
+                  <span class="mono small" id="tx-mic-gain-readout">-6.0 dB</span>
                 </div>
-                <input id="tx-mic-gain" type="range" min="-20" max="20" step="0.5" value="0" />
+                <input id="tx-mic-gain" type="range" min="-20" max="20" step="0.5" value="-6" />
               </div>
             </div>
 
@@ -4424,7 +4424,7 @@
 
   <!-- Runtime provided by SaturnRemoteNext bundle -->
 
-  <script src="/remote-assets/remote-next.js?v=phase42-tx-uplink-softcap"></script>
+  <script src="/remote-assets/remote-next.js?v=phase42-tx-mic-defaults"></script>
   <script>
     const $ = (id) => document.getElementById(id);
     const DISPLAY_MAX_FFT_SIZE = 262144;

@@ -306,7 +306,7 @@ export function createAppState(): AppState {
     txPhase: 'rx',
     txDrive: 10,
     remoteTxRfEnabled: null,
-    txMicGainDb: 0,
+    txMicGainDb: -6,
     txMeterMode: 'peak',
     micStream: null,
     micNode: null,
