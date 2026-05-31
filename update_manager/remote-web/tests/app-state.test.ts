@@ -54,7 +54,7 @@ describe('createAppState', () => {
   // ── TX defaults ──
   it('txEnabled defaults to false', () => expect(createAppState().txEnabled).toBe(false));
   it('txDrive defaults to a conservative 10 W target', () => expect(createAppState().txDrive).toBe(10));
-  it('txMicGainDb defaults to a phone-safe -6 dB', () => expect(createAppState().txMicGainDb).toBe(-6));
+  it('txMicGainDb defaults to a phone-safe -12 dB', () => expect(createAppState().txMicGainDb).toBe(-12));
   it('remote client role defaults to unknown', () => {
     const s = createAppState();
     expect(s.remoteClientRole).toBeNull();
