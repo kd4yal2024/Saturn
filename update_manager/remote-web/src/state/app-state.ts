@@ -298,8 +298,8 @@ export function createAppState(): AppState {
     filterLow: 50,
     filterHigh: 3050,
     rxFilterShiftHz: 0,
-    txFilterLow: 50,
-    txFilterHigh: 3050,
+    txFilterLow: 250,
+    txFilterHigh: 3000,
 
     txEnabled: false,
     moxRequested: false,

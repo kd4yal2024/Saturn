@@ -45,6 +45,11 @@ describe('createAppState', () => {
   it('filterLow defaults to 50', () => expect(createAppState().filterLow).toBe(50));
   it('filterHigh defaults to 3050', () => expect(createAppState().filterHigh).toBe(3050));
   it('rxFilterShiftHz defaults to 0', () => expect(createAppState().rxFilterShiftHz).toBe(0));
+  it('tx voice filter defaults to 250-3000 Hz', () => {
+    const s = createAppState();
+    expect(s.txFilterLow).toBe(250);
+    expect(s.txFilterHigh).toBe(3000);
+  });
 
   // ── TX defaults ──
   it('txEnabled defaults to false', () => expect(createAppState().txEnabled).toBe(false));

@@ -159,7 +159,7 @@ export function defaultSignedTxPassbandForMode(mode: string): Passband {
       return { lowHz: 0, highHz: 3000 };
     case 'USB':
     default:
-      return { lowHz: 50, highHz: 3050 };
+      return { lowHz: 250, highHz: 3000 };
   }
 }
 

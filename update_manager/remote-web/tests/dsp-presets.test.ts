@@ -56,7 +56,7 @@ describe('defaultSignedRxPassbandForMode', () => {
 
 describe('defaultSignedTxPassbandForMode', () => {
   it('returns USB tx defaults', () => {
-    expect(defaultSignedTxPassbandForMode('USB')).toEqual({ lowHz: 50, highHz: 3050 });
+    expect(defaultSignedTxPassbandForMode('USB')).toEqual({ lowHz: 250, highHz: 3000 });
   });
 
   it('returns DIGL tx defaults', () => {
@@ -69,8 +69,8 @@ describe('defaultFilterCutsForMode', () => {
     const cuts = defaultFilterCutsForMode('USB');
     expect(cuts.rxLow).toBe(50);
     expect(cuts.rxHigh).toBe(3050);
-    expect(cuts.txLow).toBe(50);
-    expect(cuts.txHigh).toBe(3050);
+    expect(cuts.txLow).toBe(250);
+    expect(cuts.txHigh).toBe(3000);
   });
 
   it('returns UI cuts for LSB', () => {

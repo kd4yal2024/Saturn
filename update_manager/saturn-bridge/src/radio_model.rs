@@ -60,7 +60,7 @@ impl DemodMode {
     pub fn default_filter_band(self) -> (i32, i32) {
         match self {
             Self::Lsb | Self::DigL => (-3000, -300),
-            Self::Usb | Self::Unknown => (50, 3050),
+            Self::Usb | Self::Unknown => (250, 3000),
             Self::DigU => (300, 3000),
             Self::Cwl => (-800, -200),
             Self::Cwu => (200, 800),
