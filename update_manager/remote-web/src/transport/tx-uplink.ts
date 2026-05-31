@@ -3,12 +3,13 @@ export const TX_UPLINK_DEGRADED_RTT_FACTOR = 2;
 export const TX_UPLINK_DROP_RTT_FACTOR = 4;
 export const TX_UPLINK_MIN_THRESHOLD_BYTES = 1024;
 // Phase 41 stopgap: absolute ceilings on browser WebSocket.bufferedAmount for
-// the TX mic path. Keep 16 KB as an early degraded warning, but allow one more
-// jitter window before dropping real mic frames. The Phase 42 control lane
-// release path still owns RF-off and flushes late media, so a small extra TX
-// audio buffer is preferable to chopping PCM on cell/VPN links.
-export const TX_UPLINK_SOFT_CAP_BYTES = 16_384;
-export const TX_UPLINK_HARD_CAP_BYTES = 32_768;
+// the TX mic path. Cell/VPN links can have low bridge RTT but bursty upstream
+// scheduling, so the RTT-scaled thresholds are telemetry only; real mic frames
+// are dropped only at the absolute hard cap. Phase 42's control lane still owns
+// RF-off and flushes late media, so bounded buffering is preferable to chopping
+// PCM on slow links until Phase 44 Opus lands.
+export const TX_UPLINK_SOFT_CAP_BYTES = 32_768;
+export const TX_UPLINK_HARD_CAP_BYTES = 65_536;
 
 export type TxUplinkDecision = {
   action: 'send' | 'drop';
@@ -64,8 +65,8 @@ export function decideTxMicSend(
   const softCapEngaged = bufferedBytes > TX_UPLINK_SOFT_CAP_BYTES;
   const hardCapEngaged = bufferedBytes > TX_UPLINK_HARD_CAP_BYTES;
   return {
-    action: hardCapEngaged || bufferedBytes > dropThresholdBytes ? 'drop' : 'send',
-    degraded: softCapEngaged || hardCapEngaged || bufferedBytes > degradedThresholdBytes,
+    action: hardCapEngaged ? 'drop' : 'send',
+    degraded: softCapEngaged || hardCapEngaged,
     bufferedBytes,
     degradedThresholdBytes,
     dropThresholdBytes,

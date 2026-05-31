@@ -4424,7 +4424,7 @@
 
   <!-- Runtime provided by SaturnRemoteNext bundle -->
 
-  <script src="/remote-assets/remote-next.js?v=phase42-tx-voice-passband"></script>
+  <script src="/remote-assets/remote-next.js?v=phase42-tx-uplink-wan-defaults"></script>
   <script>
     const $ = (id) => document.getElementById(id);
     const DISPLAY_MAX_FFT_SIZE = 262144;
@@ -9372,7 +9372,6 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         state.txUplinkDegraded = false;
         state.txUplinkDegradedAt = 0;
       }
-      state.txMicSeq = 0;
       state.txMicDroppedCount = 0;
       state.txUplinkBufferedBytes = 0;
       state.txUplinkBufferedHwmBytes = 0;

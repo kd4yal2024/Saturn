@@ -62,6 +62,17 @@ describe('TX uplink guard', () => {
     expect(decision.action).toBe('send');
   });
 
+  it('does not let low RTT undercut the absolute PCM drop cap', () => {
+    const byteRate = txMicByteRateBytesPerSecond(48_000, 2, TX_MIC_BLOCK_SAMPLES, 64);
+    const decision = decideTxMicSend(16_896, 40, byteRate);
+
+    expect(decision.dropThresholdBytes).toBeLessThan(16_896);
+    expect(decision.softCapEngaged).toBe(false);
+    expect(decision.hardCapEngaged).toBe(false);
+    expect(decision.degraded).toBe(false);
+    expect(decision.action).toBe('send');
+  });
+
   it('hard cap drops even when the RTT-scaled drop threshold would still send', () => {
     const byteRate = txMicByteRateBytesPerSecond(48_000, 4, 256, 64);
     // RTT-scaled drop threshold at 200ms = 163_200 bytes; hard cap is lower.
