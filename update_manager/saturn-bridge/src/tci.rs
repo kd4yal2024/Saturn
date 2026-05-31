@@ -1091,6 +1091,11 @@ impl TciFrontend {
         self.tx_media_priority_active.load(Ordering::Relaxed)
     }
 
+    pub fn has_phase42_paired_session(&self) -> bool {
+        let clients = self.clients.lock().unwrap();
+        phase42_paired_session_count(&clients) > 0
+    }
+
     pub fn last_operator_control_at(&self) -> Option<Instant> {
         *self.operator_control_at.lock().unwrap()
     }

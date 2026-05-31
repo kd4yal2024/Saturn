@@ -30,9 +30,14 @@ const TX_UPLINK_LATE_SUSTAIN: Duration = Duration::from_millis(100);
 // Phase 41 stopgap: bridge force-RX if no operator control message arrives
 // within this window while keyed. Independent safety net for the case where
 // browser PTT-release bytes are stuck behind queued media on the single
-// WebSocket. Tightens to ~200ms in Phase 42 once control runs on its own
-// socket; cannot be disabled.
+// WebSocket. Paired Phase 42 split sessions use a wider limit because release
+// and disconnect are already isolated on the control lane; cannot be disabled.
 const TX_CONTROL_WATCHDOG_LIMIT: Duration = Duration::from_millis(500);
+// Phase 42 paired control/media sessions have an independent control socket,
+// so a delayed mobile-browser heartbeat is less dangerous than it was on the
+// old single media/control socket. Keep the watchdog, but avoid false RX faults
+// from phone/Tailscale timer jitter while mic frames still flow on media.
+const TX_CONTROL_WATCHDOG_PHASE42_LIMIT: Duration = Duration::from_millis(1500);
 
 fn parse_remote_tx_max_watts(value: Option<&str>) -> u8 {
     value
@@ -131,21 +136,30 @@ fn update_tx_uplink_late_detector(
 
 // Phase 41 stopgap: detect prolonged absence of operator control messages
 // while keyed. Returns Some(silence) when the bridge has been keyed and
-// silent of control input for longer than TX_CONTROL_WATCHDOG_LIMIT.
+// silent of control input for longer than the supplied watchdog limit.
 fn update_tx_control_watchdog(
     on_air: bool,
     last_control_at: Option<Instant>,
     now: Instant,
+    limit: Duration,
 ) -> Option<Duration> {
     if !on_air {
         return None;
     }
     let last_control_at = last_control_at?;
     let silence = now.saturating_duration_since(last_control_at);
-    if silence > TX_CONTROL_WATCHDOG_LIMIT {
+    if silence > limit {
         Some(silence)
     } else {
         None
+    }
+}
+
+fn tx_control_watchdog_limit(phase42_paired: bool) -> Duration {
+    if phase42_paired {
+        TX_CONTROL_WATCHDOG_PHASE42_LIMIT
+    } else {
+        TX_CONTROL_WATCHDOG_LIMIT
     }
 }
 
@@ -889,11 +903,16 @@ fn main() -> Result<(), Box<dyn Error>> {
             // Phase 41 stopgap: independent of mic freshness. This catches
             // single-WebSocket media backlog that delays operator release bytes.
             if on_air && !tx_control_watchdog_fault_active {
-                if let Some(silence) =
-                    update_tx_control_watchdog(on_air, tci.last_operator_control_at(), now)
-                {
+                let control_watchdog_limit =
+                    tx_control_watchdog_limit(tci.has_phase42_paired_session());
+                if let Some(silence) = update_tx_control_watchdog(
+                    on_air,
+                    tci.last_operator_control_at(),
+                    now,
+                    control_watchdog_limit,
+                ) {
                     let silence_ms = silence.as_millis() as u64;
-                    let limit_ms = TX_CONTROL_WATCHDOG_LIMIT.as_millis() as u64;
+                    let limit_ms = control_watchdog_limit.as_millis() as u64;
                     eprintln!(
                         "saturn-bridge: TX control watchdog {}ms > {}ms; forcing RX",
                         silence_ms, limit_ms
@@ -1072,7 +1091,10 @@ mod tests {
         let now = Instant::now();
         let stale_control = Some(now - TX_CONTROL_WATCHDOG_LIMIT - Duration::from_millis(1));
 
-        assert!(update_tx_control_watchdog(false, stale_control, now).is_none());
+        assert!(
+            update_tx_control_watchdog(false, stale_control, now, TX_CONTROL_WATCHDOG_LIMIT)
+                .is_none()
+        );
     }
 
     #[test]
@@ -1081,13 +1103,58 @@ mod tests {
         let fresh_control = Some(now - TX_CONTROL_WATCHDOG_LIMIT);
         let stale_control = Some(now - TX_CONTROL_WATCHDOG_LIMIT - Duration::from_millis(1));
 
-        assert!(update_tx_control_watchdog(true, fresh_control, now).is_none());
-        assert!(update_tx_control_watchdog(true, stale_control, now).is_some());
+        assert!(
+            update_tx_control_watchdog(true, fresh_control, now, TX_CONTROL_WATCHDOG_LIMIT)
+                .is_none()
+        );
+        assert!(
+            update_tx_control_watchdog(true, stale_control, now, TX_CONTROL_WATCHDOG_LIMIT)
+                .is_some()
+        );
     }
 
     #[test]
     fn tx_control_watchdog_waits_for_first_control_message() {
-        assert!(update_tx_control_watchdog(true, None, Instant::now()).is_none());
+        assert!(
+            update_tx_control_watchdog(true, None, Instant::now(), TX_CONTROL_WATCHDOG_LIMIT)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn tx_control_watchdog_uses_wider_phase42_limit() {
+        assert_eq!(tx_control_watchdog_limit(false), TX_CONTROL_WATCHDOG_LIMIT);
+        assert_eq!(
+            tx_control_watchdog_limit(true),
+            TX_CONTROL_WATCHDOG_PHASE42_LIMIT
+        );
+
+        let now = Instant::now();
+        let legacy_stale_control = Some(now - TX_CONTROL_WATCHDOG_LIMIT - Duration::from_millis(1));
+        let phase42_stale_control =
+            Some(now - TX_CONTROL_WATCHDOG_PHASE42_LIMIT - Duration::from_millis(1));
+
+        assert!(update_tx_control_watchdog(
+            true,
+            legacy_stale_control,
+            now,
+            TX_CONTROL_WATCHDOG_LIMIT
+        )
+        .is_some());
+        assert!(update_tx_control_watchdog(
+            true,
+            legacy_stale_control,
+            now,
+            TX_CONTROL_WATCHDOG_PHASE42_LIMIT
+        )
+        .is_none());
+        assert!(update_tx_control_watchdog(
+            true,
+            phase42_stale_control,
+            now,
+            TX_CONTROL_WATCHDOG_PHASE42_LIMIT
+        )
+        .is_some());
     }
 
     #[test]
