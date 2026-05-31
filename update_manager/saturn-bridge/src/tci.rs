@@ -2400,6 +2400,9 @@ fn parse_tci_command(
             if let Some(enabled_text) = enabled_arg {
                 if let Some(enabled) = parse_tci_bool(enabled_text) {
                     println!("saturn-bridge: TCI trx requested -> {}", enabled);
+                    if enabled {
+                        reset_client_tx_uplink_attempt(clients, client_id);
+                    }
                     let _ = command_tx.send(TciCommand::SetTxEnabled(enabled));
                 }
             }
@@ -3184,6 +3187,19 @@ fn set_client_tx_uplink_stats(
         client.state.tx_uplink_buffered_bytes = buffered_bytes;
         client.state.tx_uplink_buffered_high_watermark_bytes =
             high_watermark_bytes.max(buffered_bytes);
+    }
+}
+
+fn reset_client_tx_uplink_attempt(clients: &ClientRegistry, client_id: u64) {
+    if let Some(client) = clients.lock().unwrap().get_mut(&client_id) {
+        client.state.tx_uplink_degraded = false;
+        client.state.tx_mic_browser_last_seq = 0;
+        client.state.tx_mic_browser_dropped_count = 0;
+        client.state.tx_uplink_buffered_bytes = 0;
+        client.state.tx_uplink_buffered_high_watermark_bytes = 0;
+        client.state.tx_mic_last_arrived_seq = 0;
+        client.state.tx_mic_seq_gap_count = 0;
+        client.state.tx_mic_last_arrived_at = None;
     }
 }
 
@@ -4572,6 +4588,49 @@ mod tests {
         assert_eq!(state.tx_mic_last_arrived_seq, 4);
         assert_eq!(state.tx_mic_seq_gap_count, 1);
         assert_eq!(state.tx_mic_last_arrived_at, Some(arrived_at));
+    }
+
+    #[test]
+    fn trx_true_resets_tx_uplink_attempt_telemetry() {
+        let (tx, rx) = mpsc::channel();
+        let clients = test_client_registry(9);
+
+        parse_tci_command(
+            "tx_uplink_stats:0,true,12,3,4096,8192",
+            &tx,
+            &clients,
+            9,
+            true,
+        );
+        let arrived_at = Instant::now();
+        record_client_tx_mic_frame(&clients, 9, 10, arrived_at);
+        record_client_tx_mic_frame(&clients, 9, 12, arrived_at);
+
+        {
+            let clients = clients.lock().unwrap();
+            let state = &clients.get(&9).unwrap().state;
+            assert!(state.tx_uplink_degraded);
+            assert_eq!(state.tx_mic_browser_dropped_count, 3);
+            assert_eq!(state.tx_mic_seq_gap_count, 1);
+            assert_eq!(state.tx_mic_last_arrived_seq, 12);
+        }
+
+        parse_tci_command("trx:0,true,tci;", &tx, &clients, 9, true);
+        assert!(matches!(rx.try_recv(), Ok(TciCommand::SetTxEnabled(true))));
+
+        let first_frame_at = arrived_at + Duration::from_millis(20);
+        record_client_tx_mic_frame(&clients, 9, 50, first_frame_at);
+
+        let clients = clients.lock().unwrap();
+        let state = &clients.get(&9).unwrap().state;
+        assert!(!state.tx_uplink_degraded);
+        assert_eq!(state.tx_mic_browser_last_seq, 0);
+        assert_eq!(state.tx_mic_browser_dropped_count, 0);
+        assert_eq!(state.tx_uplink_buffered_bytes, 0);
+        assert_eq!(state.tx_uplink_buffered_high_watermark_bytes, 0);
+        assert_eq!(state.tx_mic_last_arrived_seq, 50);
+        assert_eq!(state.tx_mic_seq_gap_count, 0);
+        assert_eq!(state.tx_mic_last_arrived_at, Some(first_frame_at));
     }
 
     #[test]
