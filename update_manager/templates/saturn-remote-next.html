@@ -8144,8 +8144,11 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       const rfGate = state.remoteTxRfEnabled == null ? "Unknown" : (state.remoteTxRfEnabled ? "Enabled" : "Disabled");
       const txSource = txControlSourceLabel() || "None";
       const txCodec = state.txCodecAccepted || state.txCodecRequested || "pcm";
+      const txCodecDetected = Array.isArray(state.txCodecDetectedCaps) && state.txCodecDetectedCaps.length
+        ? state.txCodecDetectedCaps.join(", ")
+        : "pcm";
       const txCodecDetail = state.txCodecAccepted
-        ? "Bridge accepted"
+        ? `Bridge accepted; browser detects ${txCodecDetected}`
         : (state.txCodecRejectReason ? `Rejected: ${state.txCodecRejectReason}` : "Waiting for bridge accept");
       const txUplinkLate = state.txPhase === "keyed" && state.txMicAgeMs > 250;
       const txUplinkTone = state.txUplinkDegraded || txUplinkLate ? "warn" : "ok";
@@ -8834,6 +8837,25 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       state.txCodecNegotiatedAt = 0;
       state.txCodecRejectReason = null;
       sendTci(_next.buildTxCodecCapsCommand(["pcm"]));
+    }
+
+    async function refreshTxCodecCapabilities() {
+      try {
+        const detection = await _next.detectTxCodecCapabilities();
+        state.txCodecDetectedCaps = detection.detected;
+        state.txCodecAdvertisedCaps = detection.advertised;
+        state.txCodecWebCodecsAudioEncoder = detection.webCodecsAudioEncoder;
+        state.txCodecDetectionAt = performance.now();
+        logEvent(`TX codec browser caps: detected ${detection.detected.join(", ")}; advertising ${detection.advertised.join(", ")}`);
+        scheduleUiRefresh();
+      } catch (err) {
+        state.txCodecDetectedCaps = ["pcm"];
+        state.txCodecAdvertisedCaps = ["pcm"];
+        state.txCodecWebCodecsAudioEncoder = false;
+        state.txCodecDetectionAt = performance.now();
+        logEvent(`TX codec browser cap detection failed: ${err?.message || err}`);
+        scheduleUiRefresh();
+      }
     }
 
     function nextBridgeRttPingIntervalMs() {
@@ -9999,6 +10021,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         logEvent(phase42SessionId ? "Phase 42 split WebSockets connected" : "WebSocket connected");
         requestFullState();
         sendTxCodecCaps();
+        void refreshTxCodecCapabilities();
         startBridgeRttPings();
         applyPhase40DisplayProfile("open");
         if (phase40DisplayProfileConfig()) {

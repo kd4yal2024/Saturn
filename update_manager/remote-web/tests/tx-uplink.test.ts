@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   TX_MIC_BYTES_PER_SAMPLE_S16,
+  TX_MIC_CODEC_OPUS_NB,
+  TX_MIC_CODEC_OPUS_WB,
   TX_MIC_CODEC_PCM,
   TX_MIC_FRAME_HEADER_BYTES,
   TX_MIC_SAMPLE_RATE_HZ,
@@ -10,6 +12,7 @@ import {
   TX_UPLINK_SOFT_CAP_BYTES,
   buildTxMicPcmS16Frame,
   decideTxMicSend,
+  detectTxCodecCapabilities,
   txMicByteRateBytesPerSecond,
   txUplinkBufferedThresholdBytes,
 } from '../src/transport/tx-uplink';
@@ -119,5 +122,40 @@ describe('TX uplink guard', () => {
     expect(view.getInt16(TX_MIC_FRAME_HEADER_BYTES, true)).toBe(8192);
     expect(view.getInt16(TX_MIC_FRAME_HEADER_BYTES + 2, true)).toBe(-16384);
     expect(view.getInt16(TX_MIC_FRAME_HEADER_BYTES + 4, true)).toBe(32767);
+  });
+
+  it('defines reserved Phase 44 Opus codec ids without using them yet', () => {
+    expect(TX_MIC_CODEC_PCM).toBe(0);
+    expect(TX_MIC_CODEC_OPUS_NB).toBe(1);
+    expect(TX_MIC_CODEC_OPUS_WB).toBe(2);
+  });
+
+  it('detects PCM-only TX codec support when WebCodecs AudioEncoder is unavailable', async () => {
+    const detection = await detectTxCodecCapabilities({});
+    expect(detection.detected).toEqual(['pcm']);
+    expect(detection.advertised).toEqual(['pcm']);
+    expect(detection.webCodecsAudioEncoder).toBe(false);
+    expect(detection.opusNb).toBe(false);
+    expect(detection.opusWb).toBe(false);
+  });
+
+  it('detects browser Opus support while still advertising PCM for this scaffold', async () => {
+    const calls: Record<string, unknown>[] = [];
+    const detection = await detectTxCodecCapabilities({
+      AudioEncoder: {
+        isConfigSupported: vi.fn(async (config: Record<string, unknown>) => {
+          calls.push(config);
+          return { supported: config.codec === 'opus' };
+        }),
+      },
+    });
+
+    expect(calls).toHaveLength(2);
+    expect(calls.map((config) => config.sampleRate)).toEqual([16_000, 48_000]);
+    expect(detection.detected).toEqual(['pcm', 'opus_nb', 'opus_wb']);
+    expect(detection.advertised).toEqual(['pcm']);
+    expect(detection.webCodecsAudioEncoder).toBe(true);
+    expect(detection.opusNb).toBe(true);
+    expect(detection.opusWb).toBe(true);
   });
 });

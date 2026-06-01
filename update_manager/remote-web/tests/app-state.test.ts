@@ -61,6 +61,10 @@ describe('createAppState', () => {
     expect(s.txCodecAccepted).toBeNull();
     expect(s.txCodecNegotiatedAt).toBe(0);
     expect(s.txCodecRejectReason).toBeNull();
+    expect(s.txCodecDetectedCaps).toEqual(['pcm']);
+    expect(s.txCodecAdvertisedCaps).toEqual(['pcm']);
+    expect(s.txCodecWebCodecsAudioEncoder).toBe(false);
+    expect(s.txCodecDetectionAt).toBe(0);
   });
   it('remote client role defaults to unknown', () => {
     const s = createAppState();

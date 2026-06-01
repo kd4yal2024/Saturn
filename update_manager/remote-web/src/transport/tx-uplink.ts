@@ -16,6 +16,80 @@ export const TX_MIC_SAMPLE_TYPE_S16 = 1;
 export const TX_MIC_BYTES_PER_SAMPLE_S16 = 2;
 export const TX_MIC_STREAM_TYPE = 2;
 export const TX_MIC_CODEC_PCM = 0;
+export const TX_MIC_CODEC_OPUS_NB = 1;
+export const TX_MIC_CODEC_OPUS_WB = 2;
+
+export type TxCodecCapability = 'pcm' | 'opus_nb' | 'opus_wb';
+
+export type TxCodecCapabilityDetection = {
+  detected: TxCodecCapability[];
+  advertised: TxCodecCapability[];
+  webCodecsAudioEncoder: boolean;
+  opusNb: boolean;
+  opusWb: boolean;
+};
+
+type AudioEncoderConstructorLike = {
+  isConfigSupported?: (config: Record<string, unknown>) => Promise<{ supported?: boolean }>;
+};
+
+async function audioEncoderSupports(
+  encoder: AudioEncoderConstructorLike,
+  config: Record<string, unknown>,
+): Promise<boolean> {
+  if (typeof encoder.isConfigSupported !== 'function') {
+    return false;
+  }
+  try {
+    const result = await encoder.isConfigSupported(config);
+    return result?.supported === true;
+  } catch {
+    return false;
+  }
+}
+
+export async function detectTxCodecCapabilities(scope: unknown = globalThis): Promise<TxCodecCapabilityDetection> {
+  const encoder = (scope as { AudioEncoder?: AudioEncoderConstructorLike } | null | undefined)?.AudioEncoder;
+  const detected: TxCodecCapability[] = ['pcm'];
+
+  if (!encoder || typeof encoder.isConfigSupported !== 'function') {
+    return {
+      detected,
+      advertised: ['pcm'],
+      webCodecsAudioEncoder: false,
+      opusNb: false,
+      opusWb: false,
+    };
+  }
+
+  const [opusNb, opusWb] = await Promise.all([
+    audioEncoderSupports(encoder, {
+      codec: 'opus',
+      sampleRate: 16_000,
+      numberOfChannels: 1,
+      bitrate: 16_000,
+    }),
+    audioEncoderSupports(encoder, {
+      codec: 'opus',
+      sampleRate: 48_000,
+      numberOfChannels: 1,
+      bitrate: 24_000,
+    }),
+  ]);
+
+  if (opusNb) detected.push('opus_nb');
+  if (opusWb) detected.push('opus_wb');
+
+  return {
+    detected,
+    // Keep Phase 44 source behavior unchanged until the bridge Opus decoder,
+    // stale-frame drops, release flush, and codec-specific hard caps land.
+    advertised: ['pcm'],
+    webCodecsAudioEncoder: true,
+    opusNb,
+    opusWb,
+  };
+}
 
 export type TxUplinkDecision = {
   action: 'send' | 'drop';

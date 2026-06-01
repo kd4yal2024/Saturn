@@ -148,6 +148,10 @@ export interface AppState {
   txCodecAccepted: 'pcm' | 'opus_nb' | 'opus_wb' | null;
   txCodecNegotiatedAt: number;
   txCodecRejectReason: string | null;
+  txCodecDetectedCaps: Array<'pcm' | 'opus_nb' | 'opus_wb'>;
+  txCodecAdvertisedCaps: Array<'pcm' | 'opus_nb' | 'opus_wb'>;
+  txCodecWebCodecsAudioEncoder: boolean;
+  txCodecDetectionAt: number;
   remoteClientRole: 'operator' | 'viewer' | null;
   remoteClientId: string | null;
   bridgeRttNonce: number;
@@ -376,6 +380,10 @@ export function createAppState(): AppState {
     txCodecAccepted: null,
     txCodecNegotiatedAt: 0,
     txCodecRejectReason: null,
+    txCodecDetectedCaps: ['pcm'],
+    txCodecAdvertisedCaps: ['pcm'],
+    txCodecWebCodecsAudioEncoder: false,
+    txCodecDetectionAt: 0,
     remoteClientRole: null,
     remoteClientId: null,
     bridgeRttNonce: 0,

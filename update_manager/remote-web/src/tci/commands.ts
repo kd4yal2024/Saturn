@@ -21,8 +21,7 @@ import {
   clampTwoToneDelayMs,
 } from '../settings/normalize';
 import { clampDemodMode, shiftedSignedPassbandFromUiCuts, signedPassbandFromUiCuts } from '../radio/passband';
-
-export type TxCodecCapability = 'pcm' | 'opus_nb' | 'opus_wb';
+import type { TxCodecCapability } from '../transport/tx-uplink';
 
 export function buildRxFilterBandCommand(
   filterLow: number,

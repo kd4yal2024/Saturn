@@ -2,6 +2,7 @@ mod config;
 mod p2;
 mod radio_model;
 mod tci;
+mod tx_codec;
 mod tx_thread;
 mod wdsp;
 
