@@ -25,7 +25,10 @@ const DEFAULT_REMOTE_TX_MAX_WATTS: u8 = 100;
 const DEFAULT_REMOTE_TX_POWER_TRIP_WATTS: f32 = 110.0;
 const DEFAULT_TCI_CLIENT_RELEASE_GRACE_MS: u64 = 3_000;
 const MAX_TCI_CLIENT_RELEASE_GRACE_MS: u64 = 30_000;
-const TX_UPLINK_LATE_LIMIT: Duration = Duration::from_millis(250);
+// Match the TX mic-recency gate: short phone/VPN scheduler stalls can briefly
+// exceed 250 ms even while the transmission remains intelligible, but a mic path
+// that stays stale past this window is no longer safe to keep keyed.
+const TX_UPLINK_LATE_LIMIT: Duration = Duration::from_millis(500);
 const TX_UPLINK_LATE_SUSTAIN: Duration = Duration::from_millis(100);
 // Phase 41 stopgap: bridge force-RX if no operator control message arrives
 // within this window while keyed. Independent safety net for the case where
