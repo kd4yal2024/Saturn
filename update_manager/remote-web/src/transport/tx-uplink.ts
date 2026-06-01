@@ -84,8 +84,8 @@ export async function detectTxCodecCapabilities(scope: unknown = globalThis): Pr
 
   return {
     detected,
-    // Keep Phase 44 source behavior unchanged until the bridge Opus decoder,
-    // stale-frame drops, release flush, and codec-specific hard caps land.
+    // Keep Phase 44 source behavior unchanged until the bridge Opus backend
+    // and force-RX/fallback acceptance tests are ready.
     advertised: ['pcm'],
     webCodecsAudioEncoder: true,
     opusNb,
