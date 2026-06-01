@@ -61,6 +61,10 @@ function createState(): TciRadioState {
     txMicSeqGapCount: 0,
     txMicAgeMs: 0,
     txFaultReason: null,
+    txCodecRequested: 'pcm',
+    txCodecAccepted: null,
+    txCodecNegotiatedAt: 0,
+    txCodecRejectReason: null,
     remoteClientRole: null,
     remoteClientId: null,
     txDrive: 10,
@@ -149,6 +153,20 @@ describe('applyTciText', () => {
     expect(result.state.txMicLastArrivedSeq).toBe(1234);
     expect(result.state.txMicSeqGapCount).toBe(2);
     expect(result.state.txMicAgeMs).toBe(180);
+  });
+
+  it('tracks Phase 44 TX codec negotiation replies', () => {
+    const accepted = applyTciText('tx_codec_accept:0,pcm;', createState());
+    expect(accepted.state.txCodecRequested).toBe('pcm');
+    expect(accepted.state.txCodecAccepted).toBe('pcm');
+    expect(accepted.state.txCodecNegotiatedAt).toBeGreaterThan(0);
+    expect(accepted.state.txCodecRejectReason).toBeNull();
+
+    const rejected = applyTciText('tx_codec_reject:0,opus_wb,unsupported;', accepted.state);
+    expect(rejected.state.txCodecRequested).toBe('opus_wb');
+    expect(rejected.state.txCodecAccepted).toBeNull();
+    expect(rejected.state.txCodecNegotiatedAt).toBe(0);
+    expect(rejected.state.txCodecRejectReason).toBe('unsupported');
   });
 
   it('tracks the bridge RF enable gate', () => {

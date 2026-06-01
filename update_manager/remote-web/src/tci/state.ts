@@ -2,6 +2,7 @@ import type { DemodMode } from '../radio/passband';
 import type { AgcMode, NoiseBlankerMode, NoiseReductionMode } from '../settings/types';
 
 export type TciClientRole = 'operator' | 'viewer';
+export type TxCodecName = 'pcm' | 'opus_nb' | 'opus_wb';
 
 export type TciRadioState = {
   mode: DemodMode;
@@ -61,6 +62,10 @@ export type TciRadioState = {
   txMicSeqGapCount: number;
   txMicAgeMs: number;
   txFaultReason: string | null;
+  txCodecRequested: TxCodecName;
+  txCodecAccepted: TxCodecName | null;
+  txCodecNegotiatedAt: number;
+  txCodecRejectReason: string | null;
   remoteClientRole: TciClientRole | null;
   remoteClientId: string | null;
   txDrive: number;

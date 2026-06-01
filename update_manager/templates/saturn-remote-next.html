@@ -8143,6 +8143,10 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       const txReady = readyMs > 0 ? `${Math.ceil(readyMs / 1000)}s` : "Closed";
       const rfGate = state.remoteTxRfEnabled == null ? "Unknown" : (state.remoteTxRfEnabled ? "Enabled" : "Disabled");
       const txSource = txControlSourceLabel() || "None";
+      const txCodec = state.txCodecAccepted || state.txCodecRequested || "pcm";
+      const txCodecDetail = state.txCodecAccepted
+        ? "Bridge accepted"
+        : (state.txCodecRejectReason ? `Rejected: ${state.txCodecRejectReason}` : "Waiting for bridge accept");
       const txUplinkLate = state.txPhase === "keyed" && state.txMicAgeMs > 250;
       const txUplinkTone = state.txUplinkDegraded || txUplinkLate ? "warn" : "ok";
       const txUplinkDetail = state.txMicAgeMs
@@ -8178,6 +8182,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
             operatorDetailItem("Role", state.remoteClientRole || "Pending", state.remoteClientId ? `Client #${state.remoteClientId}` : "No client id", state.remoteClientRole === "operator" ? "ok" : "warn"),
             operatorDetailItem("TX Ready", txReady, txLockReasonLabel(state.txLockReason), readyMs > 0 ? "ok" : "warn"),
             operatorDetailItem("TX Source", txSource, state.txPhase, state.txPhase === "keyed" ? "keyed" : (state.txPhase === "armed" || state.moxRequested ? "tx" : "rx")),
+            operatorDetailItem("TX Codec", txCodec.toUpperCase(), txCodecDetail, state.txCodecAccepted ? "ok" : "warn"),
             operatorDetailItem("TX Uplink", state.txUplinkDegraded ? "Degraded" : "Clear", txUplinkDetail, txUplinkTone),
             operatorDetailItem("Latest Fault", latestOperatorFault ? latestOperatorFault.label : "Clear", latestFaultAge == null ? "No recent operator-visible faults" : `${latestFaultAge}s ago`, latestOperatorFault ? (latestOperatorFault.tone || "warn") : "ok"),
           ],
@@ -8821,6 +8826,14 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       }
       state.bridgeRttNonce = (state.bridgeRttNonce || 0) + 1;
       sendTci(`saturn_ping:${state.bridgeRttNonce},${performance.now().toFixed(3)};`);
+    }
+
+    function sendTxCodecCaps() {
+      state.txCodecRequested = "pcm";
+      state.txCodecAccepted = null;
+      state.txCodecNegotiatedAt = 0;
+      state.txCodecRejectReason = null;
+      sendTci(_next.buildTxCodecCapsCommand(["pcm"]));
     }
 
     function nextBridgeRttPingIntervalMs() {
@@ -9985,6 +9998,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         resetDisplayHistory();
         logEvent(phase42SessionId ? "Phase 42 split WebSockets connected" : "WebSocket connected");
         requestFullState();
+        sendTxCodecCaps();
         startBridgeRttPings();
         applyPhase40DisplayProfile("open");
         if (phase40DisplayProfileConfig()) {

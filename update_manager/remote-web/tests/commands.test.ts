@@ -6,6 +6,7 @@ import {
   buildAnfCommands,
   buildTwoToneCommands,
   buildAllRadioPrefsCommands,
+  buildTxCodecCapsCommand,
 } from '../src/tci/commands';
 import { normalizeRadioPrefs } from '../src/settings/normalize';
 
@@ -31,6 +32,16 @@ describe('buildRxFilterBandCommand', () => {
 describe('buildTxFilterBandCommand', () => {
   it('returns tx filter for USB', () => {
     expect(buildTxFilterBandCommand(100, 2900, 'USB')).toBe('tx_filter_band:0,100,2900;');
+  });
+});
+
+describe('buildTxCodecCapsCommand', () => {
+  it('advertises PCM by default for the Phase 44 scaffold', () => {
+    expect(buildTxCodecCapsCommand()).toBe('tx_codec_caps:0,pcm;');
+  });
+
+  it('deduplicates known codec capabilities', () => {
+    expect(buildTxCodecCapsCommand(['pcm', 'opus_wb', 'pcm'])).toBe('tx_codec_caps:0,pcm,opus_wb;');
   });
 });
 

@@ -55,6 +55,13 @@ describe('createAppState', () => {
   it('txEnabled defaults to false', () => expect(createAppState().txEnabled).toBe(false));
   it('txDrive defaults to a conservative 10 W target', () => expect(createAppState().txDrive).toBe(10));
   it('txMicGainDb defaults to a phone-safe -12 dB', () => expect(createAppState().txMicGainDb).toBe(-12));
+  it('TX codec negotiation starts on PCM with no accepted bridge reply', () => {
+    const s = createAppState();
+    expect(s.txCodecRequested).toBe('pcm');
+    expect(s.txCodecAccepted).toBeNull();
+    expect(s.txCodecNegotiatedAt).toBe(0);
+    expect(s.txCodecRejectReason).toBeNull();
+  });
   it('remote client role defaults to unknown', () => {
     const s = createAppState();
     expect(s.remoteClientRole).toBeNull();

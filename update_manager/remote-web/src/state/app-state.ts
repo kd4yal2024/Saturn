@@ -144,6 +144,10 @@ export interface AppState {
   txMicSeqGapCount: number;
   txMicAgeMs: number;
   txFaultReason: string | null;
+  txCodecRequested: 'pcm' | 'opus_nb' | 'opus_wb';
+  txCodecAccepted: 'pcm' | 'opus_nb' | 'opus_wb' | null;
+  txCodecNegotiatedAt: number;
+  txCodecRejectReason: string | null;
   remoteClientRole: 'operator' | 'viewer' | null;
   remoteClientId: string | null;
   bridgeRttNonce: number;
@@ -368,6 +372,10 @@ export function createAppState(): AppState {
     txMicSeqGapCount: 0,
     txMicAgeMs: 0,
     txFaultReason: null,
+    txCodecRequested: 'pcm',
+    txCodecAccepted: null,
+    txCodecNegotiatedAt: 0,
+    txCodecRejectReason: null,
     remoteClientRole: null,
     remoteClientId: null,
     bridgeRttNonce: 0,

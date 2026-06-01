@@ -22,7 +22,7 @@ import {
   normalizeNbMode,
   normalizeNrMode,
 } from '../settings/normalize';
-import type { TciApplyResult, TciClientRole, TciRadioState } from './state';
+import type { TciApplyResult, TciClientRole, TciRadioState, TxCodecName } from './state';
 
 function argAt(args: readonly string[], index: number): string | undefined {
   return index >= 0 && index < args.length ? args[index] : undefined;
@@ -76,6 +76,18 @@ function normalizeClientRole(value: string | undefined): TciClientRole | null {
   if (normalized === 'operator' || normalized === 'owner') return 'operator';
   if (normalized === 'viewer' || normalized === 'view') return 'viewer';
   return null;
+}
+
+function normalizeTxCodecName(value: string | undefined): TxCodecName | null {
+  const normalized = String(value ?? '').trim().toLowerCase().replace(/-/g, '_');
+  if (normalized === '0' || normalized === 'pcm' || normalized === 's16') return 'pcm';
+  if (normalized === '1' || normalized === 'opus_nb' || normalized === 'opus_narrowband') return 'opus_nb';
+  if (normalized === '2' || normalized === 'opus_wb' || normalized === 'opus_wideband') return 'opus_wb';
+  return null;
+}
+
+function txCodecArgOffset(args: readonly string[]): number {
+  return String(argAt(args, 0) ?? '').trim() === '0' ? 1 : 0;
 }
 
 function parseClientRole(args: readonly string[]): { role: TciClientRole; id: string | null } | null {
@@ -262,6 +274,21 @@ export function applyTciCommand(command: TciCommand, current: TciRadioState): Tc
       nonNegativeIntArg(args, offset + 4) ?? next.txMicLastArrivedSeq;
     next.txMicSeqGapCount = nonNegativeIntArg(args, offset + 5) ?? next.txMicSeqGapCount;
     next.txMicAgeMs = nonNegativeIntArg(args, offset + 6) ?? next.txMicAgeMs;
+  } else if (command.name === 'tx_codec_accept') {
+    const codec = normalizeTxCodecName(argAt(args, txCodecArgOffset(args)));
+    if (codec) {
+      next.txCodecAccepted = codec;
+      next.txCodecRequested = codec;
+      next.txCodecNegotiatedAt = nowMs();
+      next.txCodecRejectReason = null;
+    }
+  } else if (command.name === 'tx_codec_reject') {
+    const offset = txCodecArgOffset(args);
+    const codec = normalizeTxCodecName(argAt(args, offset));
+    next.txCodecAccepted = null;
+    if (codec) next.txCodecRequested = codec;
+    next.txCodecNegotiatedAt = 0;
+    next.txCodecRejectReason = String(argAt(args, offset + 1) ?? 'rejected').trim() || 'rejected';
   } else if (command.name === 'tx_fault') {
     txFault = describeTxFault(args);
     next.txFaultReason = txFault;

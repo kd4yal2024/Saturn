@@ -98,6 +98,7 @@ import {
   buildAnfCommands,
   buildTwoToneCommands,
   buildAllRadioPrefsCommands,
+  buildTxCodecCapsCommand,
 } from './tci/commands';
 import { resampleChannel, prepareAudioForPlayback, ringBufferFreeFrames } from './audio/resample';
 import * as AudioConstants from './audio/constants';
@@ -145,6 +146,7 @@ const api = {
   buildAnfCommands,
   buildTwoToneCommands,
   buildAllRadioPrefsCommands,
+  buildTxCodecCapsCommand,
 
   // Transport
   decodeRxFrame,

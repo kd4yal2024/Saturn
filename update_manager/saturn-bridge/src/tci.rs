@@ -638,6 +638,46 @@ struct Phase42SessionPair {
     media_client_id: u64,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum TxMicCodec {
+    Pcm,
+    OpusNb,
+    OpusWb,
+}
+
+impl TxMicCodec {
+    fn from_tci(value: &str) -> Option<Self> {
+        match value
+            .trim()
+            .trim_end_matches(';')
+            .to_ascii_lowercase()
+            .replace('-', "_")
+            .as_str()
+        {
+            "0" | "pcm" | "s16" => Some(Self::Pcm),
+            "1" | "opus_nb" | "opus_narrowband" => Some(Self::OpusNb),
+            "2" | "opus_wb" | "opus_wideband" => Some(Self::OpusWb),
+            _ => None,
+        }
+    }
+
+    fn as_tci(self) -> &'static str {
+        match self {
+            Self::Pcm => "pcm",
+            Self::OpusNb => "opus_nb",
+            Self::OpusWb => "opus_wb",
+        }
+    }
+
+    fn id(self) -> u32 {
+        match self {
+            Self::Pcm => TCI_MIC_CODEC_PCM,
+            Self::OpusNb => TCI_MIC_CODEC_OPUS_NB,
+            Self::OpusWb => TCI_MIC_CODEC_OPUS_WB,
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 struct ClientState {
     iq_stream_enabled: bool,
@@ -654,6 +694,9 @@ struct ClientState {
     tx_mic_last_arrived_seq: u32,
     tx_mic_seq_gap_count: u64,
     tx_mic_last_arrived_at: Option<Instant>,
+    tx_codec_caps: BTreeSet<TxMicCodec>,
+    tx_codec_active: TxMicCodec,
+    tx_codec_negotiated_at: Option<Instant>,
     phase42: Option<Phase42ClientMetadata>,
 }
 
@@ -674,6 +717,9 @@ impl Default for ClientState {
             tx_mic_last_arrived_seq: 0,
             tx_mic_seq_gap_count: 0,
             tx_mic_last_arrived_at: None,
+            tx_codec_caps: BTreeSet::from([TxMicCodec::Pcm]),
+            tx_codec_active: TxMicCodec::Pcm,
+            tx_codec_negotiated_at: None,
             phase42: None,
         }
     }
@@ -694,6 +740,8 @@ const TCI_SAMPLE_TYPE_LEGACY_FLOAT32: u32 = 0;
 const TCI_SAMPLE_TYPE_S16: u32 = 1;
 const TCI_SAMPLE_TYPE_FLOAT32: u32 = 3;
 const TCI_MIC_CODEC_PCM: u32 = 0;
+const TCI_MIC_CODEC_OPUS_NB: u32 = 1;
+const TCI_MIC_CODEC_OPUS_WB: u32 = 2;
 const BULK_TCP_OUTQ_LIMIT_BYTES: usize = 64 * 1024;
 const BULK_BACKPRESSURE_PAUSE_MS: u64 = 10;
 
@@ -2381,6 +2429,20 @@ fn parse_tci_command(
                 high_watermark_bytes,
             );
         }
+        "tx_codec_caps" => {
+            let caps = parse_tx_codec_caps_args(&args);
+            let selected = set_client_tx_codec_caps(clients, client_id, caps.clone());
+            if let Some(codec) = selected {
+                send_text_to_client(clients, client_id, tx_codec_accept_message(codec));
+            } else {
+                let requested = caps.iter().next().copied().unwrap_or(TxMicCodec::Pcm);
+                send_text_to_client(
+                    clients,
+                    client_id,
+                    tx_codec_reject_message(requested, "unsupported"),
+                );
+            }
+        }
         "remote_tx_media_priority" => {
             // Phase 42: TX media priority is now derived from the bridge's
             // authoritative on-air state, not from this browser command.
@@ -3196,6 +3258,69 @@ fn set_client_tx_uplink_stats(
     }
 }
 
+fn parse_tx_codec_caps_args(args: &[&str]) -> BTreeSet<TxMicCodec> {
+    let offset = if args
+        .first()
+        .map(|value| value.trim() == "0")
+        .unwrap_or(false)
+    {
+        1
+    } else {
+        0
+    };
+    args.iter()
+        .skip(offset)
+        .filter_map(|value| TxMicCodec::from_tci(value))
+        .collect()
+}
+
+fn select_tx_codec(caps: &BTreeSet<TxMicCodec>) -> Option<TxMicCodec> {
+    // Phase 44.1B scaffold: the bridge can negotiate the codec path, but only
+    // PCM is enabled until the Opus decoder and safety gates land.
+    caps.contains(&TxMicCodec::Pcm).then_some(TxMicCodec::Pcm)
+}
+
+fn tx_codec_accept_message(codec: TxMicCodec) -> String {
+    format!("tx_codec_accept:0,{};", codec.as_tci())
+}
+
+fn tx_codec_reject_message(codec: TxMicCodec, reason: &str) -> String {
+    format!(
+        "tx_codec_reject:0,{},{};",
+        codec.as_tci(),
+        sanitize_token(reason, 48)
+    )
+}
+
+fn set_client_tx_codec_caps(
+    clients: &ClientRegistry,
+    client_id: u64,
+    caps: BTreeSet<TxMicCodec>,
+) -> Option<TxMicCodec> {
+    let selected = select_tx_codec(&caps);
+    if let Some(client) = clients.lock().unwrap().get_mut(&client_id) {
+        client.state.tx_codec_caps = caps;
+        if let Some(codec) = selected {
+            client.state.tx_codec_active = codec;
+            client.state.tx_codec_negotiated_at = Some(Instant::now());
+        } else {
+            client.state.tx_codec_negotiated_at = None;
+        }
+    }
+    selected
+}
+
+fn send_text_to_client(clients: &ClientRegistry, client_id: u64, text: String) {
+    if let Some(outbound) = clients
+        .lock()
+        .unwrap()
+        .get(&client_id)
+        .map(|client| client.outbound.clone())
+    {
+        let _ = outbound.enqueue(OutboundMessage::Text(text));
+    }
+}
+
 fn reset_client_tx_uplink_attempt(clients: &ClientRegistry, client_id: u64) {
     if let Some(client) = clients.lock().unwrap().get_mut(&client_id) {
         client.state.tx_uplink_degraded = false;
@@ -3267,7 +3392,7 @@ fn parse_tci_mic_frame(data: &[u8]) -> Option<TciMicFrame> {
     };
     let sequence = u32::from_le_bytes(data[32..36].try_into().ok()?);
     let codec_id = u32::from_le_bytes(data[36..40].try_into().ok()?);
-    if codec_id != TCI_MIC_CODEC_PCM {
+    if codec_id != TxMicCodec::Pcm.id() {
         return None;
     }
     let declared_payload_bytes = u32::from_le_bytes(data[40..44].try_into().ok()?) as usize;
@@ -3851,6 +3976,54 @@ mod tests {
                 assert_eq!(sent_at, "123.456");
             }
             command => panic!("unexpected command: {command:?}"),
+        }
+    }
+
+    #[test]
+    fn phase44_tx_codec_caps_accepts_pcm_scaffold() {
+        let (tx, rx) = mpsc::channel();
+        let clients = test_client_registry(7);
+
+        parse_tci_command("tx_codec_caps:0,pcm;", &tx, &clients, 7, true);
+
+        assert!(rx.try_recv().is_err());
+        let outbound = {
+            let clients = clients.lock().unwrap();
+            let client = clients.get(&7).unwrap();
+            assert!(client.state.tx_codec_caps.contains(&TxMicCodec::Pcm));
+            assert_eq!(client.state.tx_codec_active, TxMicCodec::Pcm);
+            assert!(client.state.tx_codec_negotiated_at.is_some());
+            client.outbound.clone()
+        };
+        let queued = outbound.next_message(true).unwrap();
+        match queued.message {
+            OutboundMessage::Text(text) => assert_eq!(text, "tx_codec_accept:0,pcm;"),
+            other => panic!("unexpected outbound: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn phase44_tx_codec_caps_rejects_non_pcm_until_decoder_exists() {
+        let (tx, rx) = mpsc::channel();
+        let clients = test_client_registry(7);
+
+        parse_tci_command("tx_codec_caps:0,opus_wb;", &tx, &clients, 7, true);
+
+        assert!(rx.try_recv().is_err());
+        let outbound = {
+            let clients = clients.lock().unwrap();
+            let client = clients.get(&7).unwrap();
+            assert!(client.state.tx_codec_caps.contains(&TxMicCodec::OpusWb));
+            assert_eq!(client.state.tx_codec_active, TxMicCodec::Pcm);
+            assert!(client.state.tx_codec_negotiated_at.is_none());
+            client.outbound.clone()
+        };
+        let queued = outbound.next_message(true).unwrap();
+        match queued.message {
+            OutboundMessage::Text(text) => {
+                assert_eq!(text, "tx_codec_reject:0,opus_wb,unsupported;")
+            }
+            other => panic!("unexpected outbound: {other:?}"),
         }
     }
 

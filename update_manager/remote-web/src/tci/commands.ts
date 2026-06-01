@@ -22,6 +22,8 @@ import {
 } from '../settings/normalize';
 import { clampDemodMode, shiftedSignedPassbandFromUiCuts, signedPassbandFromUiCuts } from '../radio/passband';
 
+export type TxCodecCapability = 'pcm' | 'opus_nb' | 'opus_wb';
+
 export function buildRxFilterBandCommand(
   filterLow: number,
   filterHigh: number,
@@ -39,6 +41,13 @@ export function buildTxFilterBandCommand(
 ): string {
   const pb = signedPassbandFromUiCuts(txFilterLow, txFilterHigh, mode);
   return `tx_filter_band:0,${pb.lowHz},${pb.highHz};`;
+}
+
+export function buildTxCodecCapsCommand(codecs: readonly TxCodecCapability[] = ['pcm']): string {
+  const allowed = new Set<TxCodecCapability>(['pcm', 'opus_nb', 'opus_wb']);
+  const unique = codecs.filter((codec, index) => allowed.has(codec) && codecs.indexOf(codec) === index);
+  const advertised = unique.length > 0 ? unique : ['pcm'];
+  return `tx_codec_caps:0,${advertised.join(',')};`;
 }
 
 export function buildAnrCommands(prefs: Pick<RadioPrefs, 'rxAnrTaps' | 'rxAnrDelay' | 'rxAnrGain' | 'rxAnrLeakage'>): string[] {
