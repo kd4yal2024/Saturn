@@ -7,16 +7,25 @@ import {
 } from '../src/transport/transport-mode';
 
 describe('Phase 42 transport mode helpers', () => {
-  it('requires an explicit query or persisted opt-in', () => {
-    expect(phase42SplitTransportEnabled('')).toBe(false);
+  it('enables split transport by default', () => {
+    expect(phase42SplitTransportEnabled('')).toBe(true);
     expect(phase42SplitTransportEnabled('', '1')).toBe(true);
     expect(phase42SplitTransportEnabled(`?${PHASE42_SPLIT_QUERY_PARAM}=1`)).toBe(true);
     expect(phase42SplitTransportEnabled(`?${PHASE42_SPLIT_QUERY_PARAM}=true`)).toBe(true);
   });
 
-  it('lets the query string override persisted opt-in', () => {
+  it('lets the query string disable split transport for fallback testing', () => {
+    expect(phase42SplitTransportEnabled(`?${PHASE42_SPLIT_QUERY_PARAM}=0`)).toBe(false);
+    expect(phase42SplitTransportEnabled(`?${PHASE42_SPLIT_QUERY_PARAM}=false`)).toBe(false);
+    expect(phase42SplitTransportEnabled(`?${PHASE42_SPLIT_QUERY_PARAM}=legacy`)).toBe(false);
     expect(phase42SplitTransportEnabled(`?${PHASE42_SPLIT_QUERY_PARAM}=0`, '1')).toBe(false);
     expect(phase42SplitTransportEnabled(`?${PHASE42_SPLIT_QUERY_PARAM}=off`, 'yes')).toBe(false);
+  });
+
+  it('lets persisted local storage disable split transport', () => {
+    expect(phase42SplitTransportEnabled('', '0')).toBe(false);
+    expect(phase42SplitTransportEnabled('', 'off')).toBe(false);
+    expect(phase42SplitTransportEnabled('', 'legacy')).toBe(false);
   });
 
   it('documents the local storage key consumed by the template', () => {

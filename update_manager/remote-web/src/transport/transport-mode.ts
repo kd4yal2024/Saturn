@@ -1,10 +1,15 @@
 const PHASE42_TRUE_VALUES = new Set(['1', 'true', 'on', 'yes']);
+const PHASE42_FALSE_VALUES = new Set(['0', 'false', 'off', 'no', 'legacy']);
 
 export const PHASE42_SPLIT_QUERY_PARAM = 'phase42_split';
 export const PHASE42_SPLIT_STORAGE_KEY = 'saturn.phase42.splitTransport';
 
 function phase42Truthy(value: string | null | undefined): boolean {
   return PHASE42_TRUE_VALUES.has(String(value ?? '').trim().toLowerCase());
+}
+
+function phase42ExplicitlyDisabled(value: string | null | undefined): boolean {
+  return PHASE42_FALSE_VALUES.has(String(value ?? '').trim().toLowerCase());
 }
 
 export function phase42SplitTransportEnabled(
@@ -14,9 +19,12 @@ export function phase42SplitTransportEnabled(
   const params = new URLSearchParams(search);
   const queryValue = params.get(PHASE42_SPLIT_QUERY_PARAM);
   if (queryValue !== null) {
-    return phase42Truthy(queryValue);
+    return !phase42ExplicitlyDisabled(queryValue);
   }
-  return phase42Truthy(storedValue);
+  if (storedValue !== undefined && storedValue !== null) {
+    return phase42Truthy(storedValue) || !phase42ExplicitlyDisabled(storedValue);
+  }
+  return true;
 }
 
 export function createPhase42SessionId(
