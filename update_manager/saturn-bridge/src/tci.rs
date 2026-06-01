@@ -693,6 +693,7 @@ const MAX_TCI_MIC_SAMPLES: usize = 32_768;
 const TCI_SAMPLE_TYPE_LEGACY_FLOAT32: u32 = 0;
 const TCI_SAMPLE_TYPE_S16: u32 = 1;
 const TCI_SAMPLE_TYPE_FLOAT32: u32 = 3;
+const TCI_MIC_CODEC_PCM: u32 = 0;
 const BULK_TCP_OUTQ_LIMIT_BYTES: usize = 64 * 1024;
 const BULK_BACKPRESSURE_PAUSE_MS: u64 = 10;
 
@@ -3244,6 +3245,8 @@ fn record_client_tx_mic_frame(
 ///   header[24..28] = stream_type  (u32 LE); must be 2 (TX mic)
 ///   header[28..32] = channels     (u32 LE); 1=mono, 2=stereo
 ///   header[32..36] = tx_mic_seq   (u32 LE); 0 means legacy/unknown
+///   header[36..40] = codec_id     (u32 LE); 0=PCM, reserved for Phase 44 Opus
+///   header[40..44] = payload_bytes (u32 LE); 0 means legacy/full payload
 ///
 /// stream_type == 1 is intentionally excluded: it is the RX audio type used by
 /// the server→client direction and must not be fed into the TX DSP path.
@@ -3263,14 +3266,31 @@ fn parse_tci_mic_frame(data: &[u8]) -> Option<TciMicFrame> {
         _ => 2,
     };
     let sequence = u32::from_le_bytes(data[32..36].try_into().ok()?);
+    let codec_id = u32::from_le_bytes(data[36..40].try_into().ok()?);
+    if codec_id != TCI_MIC_CODEC_PCM {
+        return None;
+    }
+    let declared_payload_bytes = u32::from_le_bytes(data[40..44].try_into().ok()?) as usize;
     let sample_count = u32::from_le_bytes(data[20..24].try_into().ok()?) as usize;
     if sample_count == 0 || sample_count > MAX_TCI_MIC_SAMPLES {
         return None;
     }
-    let payload = &data[64..];
+    let raw_payload = &data[64..];
+    if declared_payload_bytes > raw_payload.len() {
+        return None;
+    }
+    let payload = if declared_payload_bytes == 0 {
+        raw_payload
+    } else {
+        &raw_payload[..declared_payload_bytes]
+    };
     let samples = match sample_type {
         TCI_SAMPLE_TYPE_S16 => {
-            if payload.len() < sample_count * 2 {
+            let expected_payload_bytes = sample_count * 2;
+            if declared_payload_bytes != 0 && declared_payload_bytes != expected_payload_bytes {
+                return None;
+            }
+            if payload.len() < expected_payload_bytes {
                 return None;
             }
             let mut samples = Vec::with_capacity(sample_count);
@@ -3281,7 +3301,11 @@ fn parse_tci_mic_frame(data: &[u8]) -> Option<TciMicFrame> {
             samples
         }
         TCI_SAMPLE_TYPE_LEGACY_FLOAT32 | TCI_SAMPLE_TYPE_FLOAT32 => {
-            if payload.len() < sample_count * 4 {
+            let expected_payload_bytes = sample_count * 4;
+            if declared_payload_bytes != 0 && declared_payload_bytes != expected_payload_bytes {
+                return None;
+            }
+            if payload.len() < expected_payload_bytes {
                 return None;
             }
             let mut samples = Vec::with_capacity(sample_count);
@@ -3722,6 +3746,59 @@ mod tests {
         assert!((parsed.samples[0] - 0.25).abs() < 0.0001);
         assert!((parsed.samples[1] + 0.5).abs() < 0.0001);
         assert!((parsed.samples[2] - 0.9999).abs() < 0.0001);
+    }
+
+    #[test]
+    fn parses_phase44_pcm_tci_mic_frame_with_codec_header() {
+        let mut frame = vec![0u8; 64 + 4];
+        write_u32_le(&mut frame, 4, 48_000);
+        write_u32_le(&mut frame, 8, TCI_SAMPLE_TYPE_S16);
+        write_u32_le(&mut frame, 20, 2);
+        write_u32_le(&mut frame, 24, 2);
+        write_u32_le(&mut frame, 28, 1);
+        write_u32_le(&mut frame, 32, 79);
+        write_u32_le(&mut frame, 36, TCI_MIC_CODEC_PCM);
+        write_u32_le(&mut frame, 40, 4);
+        for (index, sample) in [8192i16, -16384].iter().enumerate() {
+            let offset = 64 + index * 2;
+            frame[offset..offset + 2].copy_from_slice(&sample.to_le_bytes());
+        }
+
+        let parsed = parse_tci_mic_frame(&frame).unwrap();
+        assert_eq!(parsed.sample_rate_hz, 48_000);
+        assert_eq!(parsed.channels, 1);
+        assert_eq!(parsed.sequence, 79);
+        assert_eq!(parsed.samples.len(), 2);
+        assert!((parsed.samples[0] - 0.25).abs() < 0.0001);
+        assert!((parsed.samples[1] + 0.5).abs() < 0.0001);
+    }
+
+    #[test]
+    fn rejects_phase44_mic_frame_with_unsupported_codec() {
+        let mut frame = vec![0u8; 64 + 2];
+        write_u32_le(&mut frame, 4, 48_000);
+        write_u32_le(&mut frame, 8, TCI_SAMPLE_TYPE_S16);
+        write_u32_le(&mut frame, 20, 1);
+        write_u32_le(&mut frame, 24, 2);
+        write_u32_le(&mut frame, 28, 1);
+        write_u32_le(&mut frame, 36, 2);
+        write_u32_le(&mut frame, 40, 2);
+
+        assert!(parse_tci_mic_frame(&frame).is_none());
+    }
+
+    #[test]
+    fn rejects_phase44_pcm_mic_frame_with_payload_size_mismatch() {
+        let mut frame = vec![0u8; 64 + 4];
+        write_u32_le(&mut frame, 4, 48_000);
+        write_u32_le(&mut frame, 8, TCI_SAMPLE_TYPE_S16);
+        write_u32_le(&mut frame, 20, 2);
+        write_u32_le(&mut frame, 24, 2);
+        write_u32_le(&mut frame, 28, 1);
+        write_u32_le(&mut frame, 36, TCI_MIC_CODEC_PCM);
+        write_u32_le(&mut frame, 40, 2);
+
+        assert!(parse_tci_mic_frame(&frame).is_none());
     }
 
     #[test]

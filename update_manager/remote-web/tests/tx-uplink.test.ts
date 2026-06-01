@@ -1,7 +1,14 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
+  TX_MIC_BYTES_PER_SAMPLE_S16,
+  TX_MIC_CODEC_PCM,
+  TX_MIC_FRAME_HEADER_BYTES,
+  TX_MIC_SAMPLE_RATE_HZ,
+  TX_MIC_SAMPLE_TYPE_S16,
+  TX_MIC_STREAM_TYPE,
   TX_UPLINK_HARD_CAP_BYTES,
   TX_UPLINK_SOFT_CAP_BYTES,
+  buildTxMicPcmS16Frame,
   decideTxMicSend,
   txMicByteRateBytesPerSecond,
   txUplinkBufferedThresholdBytes,
@@ -92,5 +99,25 @@ describe('TX uplink guard', () => {
     const decision = decideTxMicSend(TX_UPLINK_HARD_CAP_BYTES + 1, 10_000, byteRate);
     expect(decision.hardCapEngaged).toBe(true);
     expect(decision.action).toBe('drop');
+  });
+
+  it('builds PCM mic frames with Phase 44 codec header fields', () => {
+    const { frame, peak, payloadBytes } = buildTxMicPcmS16Frame([0.25, -0.5, 2], 123);
+    const view = new DataView(frame);
+
+    expect(frame.byteLength).toBe(TX_MIC_FRAME_HEADER_BYTES + 3 * TX_MIC_BYTES_PER_SAMPLE_S16);
+    expect(payloadBytes).toBe(3 * TX_MIC_BYTES_PER_SAMPLE_S16);
+    expect(peak).toBe(1);
+    expect(view.getUint32(4, true)).toBe(TX_MIC_SAMPLE_RATE_HZ);
+    expect(view.getUint32(8, true)).toBe(TX_MIC_SAMPLE_TYPE_S16);
+    expect(view.getUint32(20, true)).toBe(3);
+    expect(view.getUint32(24, true)).toBe(TX_MIC_STREAM_TYPE);
+    expect(view.getUint32(28, true)).toBe(1);
+    expect(view.getUint32(32, true)).toBe(123);
+    expect(view.getUint32(36, true)).toBe(TX_MIC_CODEC_PCM);
+    expect(view.getUint32(40, true)).toBe(payloadBytes);
+    expect(view.getInt16(TX_MIC_FRAME_HEADER_BYTES, true)).toBe(8192);
+    expect(view.getInt16(TX_MIC_FRAME_HEADER_BYTES + 2, true)).toBe(-16384);
+    expect(view.getInt16(TX_MIC_FRAME_HEADER_BYTES + 4, true)).toBe(32767);
   });
 });

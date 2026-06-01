@@ -4489,7 +4489,6 @@
     const RX_MSG_QUEUE_MAX_PACKETS = 8;
     const TX_MIC_BLOCK_SAMPLES = 1024;
     const TX_MIC_BYTES_PER_SAMPLE = 2;
-    const TX_MIC_SAMPLE_TYPE_S16 = 1;
     const TX_UPLINK_STATS_INTERVAL_MS = 1000;
     const BROWSER_TIMING_MAX_SAMPLES = 4096;
     const BROWSER_TIMING_EVENT_LOOP_INTERVAL_MS = 100;
@@ -4506,7 +4505,6 @@
     const BRIDGE_RTT_STALE_MS = 6500;
     const TCI_STREAM_IQ_RX = 0;
     const TCI_STREAM_AUDIO_RX = 1;
-    const TCI_STREAM_MIC_TX = 2;
     const TCI_STREAM_IQ_TX = 3;
 
     // AudioWorklet ring-buffer constants.
@@ -9428,33 +9426,11 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     }
 
     function buildTxMicFrame(monoSamples, sequence) {
-      const sampleCount = monoSamples.length;
-      const buf = new ArrayBuffer(64 + sampleCount * TX_MIC_BYTES_PER_SAMPLE);
-      const view = new DataView(buf);
-      view.setUint32(0, 0, true);                        // receiver
-      view.setUint32(4, 48000, true);                    // sample_rate
-      view.setUint32(8, TX_MIC_SAMPLE_TYPE_S16, true);    // sample_type = s16
-      view.setUint32(20, sampleCount, true);             // sample_count
-      view.setUint32(24, TCI_STREAM_MIC_TX, true);        // stream_type = 2 (TX mic)
-      view.setUint32(28, 1, true);                       // channels = 1 (mono)
-      view.setUint32(32, sequence >>> 0, true);           // tx_mic_seq
-      let peak = 0;
-      for (let i = 0; i < monoSamples.length; i++) {
-        const sample = Number(monoSamples[i]) || 0;
-        const clamped = Math.max(-1, Math.min(1, sample));
-        peak = Math.max(peak, Math.abs(clamped));
-        const pcm = clamped < 0
-          ? Math.round(clamped * 32768)
-          : Math.round(clamped * 32767);
-        view.setInt16(
-          64 + i * TX_MIC_BYTES_PER_SAMPLE,
-          Math.max(-32768, Math.min(32767, pcm)),
-          true
-        );
-      }
+      const built = _next.buildTxMicPcmS16Frame(monoSamples, sequence);
+      const peak = built.peak;
       state.txMicLevel = Math.max(0, Math.min(1, peak));
       state.txMicLevelAt = performance.now();
-      return buf;
+      return built.frame;
     }
 
     function sendTxMicSamples(monoSamples, timing = {}) {

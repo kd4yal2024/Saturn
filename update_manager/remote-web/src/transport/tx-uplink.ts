@@ -10,6 +10,12 @@ export const TX_UPLINK_MIN_THRESHOLD_BYTES = 1024;
 // PCM on slow links until Phase 44 Opus lands.
 export const TX_UPLINK_SOFT_CAP_BYTES = 32_768;
 export const TX_UPLINK_HARD_CAP_BYTES = 65_536;
+export const TX_MIC_FRAME_HEADER_BYTES = 64;
+export const TX_MIC_SAMPLE_RATE_HZ = 48_000;
+export const TX_MIC_SAMPLE_TYPE_S16 = 1;
+export const TX_MIC_BYTES_PER_SAMPLE_S16 = 2;
+export const TX_MIC_STREAM_TYPE = 2;
+export const TX_MIC_CODEC_PCM = 0;
 
 export type TxUplinkDecision = {
   action: 'send' | 'drop';
@@ -31,6 +37,47 @@ export function txMicByteRateBytesPerSecond(
   const payloadBytesPerSecond = sampleRate * Math.max(1, bytesPerSample);
   const framesPerSecond = sampleRate / Math.max(1, blockSamples);
   return payloadBytesPerSecond + framesPerSecond * Math.max(0, headerBytes);
+}
+
+export type TxMicPcmFrame = {
+  frame: ArrayBuffer;
+  peak: number;
+  payloadBytes: number;
+};
+
+export function buildTxMicPcmS16Frame(
+  monoSamples: ArrayLike<number>,
+  sequence: number,
+  sampleRateHz = TX_MIC_SAMPLE_RATE_HZ,
+): TxMicPcmFrame {
+  const sampleCount = Math.max(0, Math.floor(Number(monoSamples.length) || 0));
+  const payloadBytes = sampleCount * TX_MIC_BYTES_PER_SAMPLE_S16;
+  const frame = new ArrayBuffer(TX_MIC_FRAME_HEADER_BYTES + payloadBytes);
+  const view = new DataView(frame);
+  view.setUint32(0, 0, true);
+  view.setUint32(4, Math.max(1, Math.round(Number(sampleRateHz) || TX_MIC_SAMPLE_RATE_HZ)), true);
+  view.setUint32(8, TX_MIC_SAMPLE_TYPE_S16, true);
+  view.setUint32(20, sampleCount, true);
+  view.setUint32(24, TX_MIC_STREAM_TYPE, true);
+  view.setUint32(28, 1, true);
+  view.setUint32(32, sequence >>> 0, true);
+  view.setUint32(36, TX_MIC_CODEC_PCM, true);
+  view.setUint32(40, payloadBytes >>> 0, true);
+
+  let peak = 0;
+  for (let i = 0; i < sampleCount; i += 1) {
+    const sample = Number(monoSamples[i]) || 0;
+    const clamped = Math.max(-1, Math.min(1, sample));
+    peak = Math.max(peak, Math.abs(clamped));
+    const pcm = clamped < 0 ? Math.round(clamped * 32768) : Math.round(clamped * 32767);
+    view.setInt16(
+      TX_MIC_FRAME_HEADER_BYTES + i * TX_MIC_BYTES_PER_SAMPLE_S16,
+      Math.max(-32768, Math.min(32767, pcm)),
+      true,
+    );
+  }
+
+  return { frame, peak, payloadBytes };
 }
 
 export function txUplinkBufferedThresholdBytes(

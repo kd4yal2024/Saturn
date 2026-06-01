@@ -42,7 +42,18 @@ import { applyTciText } from './tci/apply';
 import { classifyFrame, decodeRxFrame, decodeIqFrame, decodeAudioFrame } from './transport/rx-frame';
 import { parseTciBinaryFrameHeader } from './transport/tci-frame';
 import { applyIqFrame, applyAudioFrame, fftSizeForSamples, buildRenderIqWindow } from './transport/rx-apply';
-import { decideTxMicSend, txMicByteRateBytesPerSecond, txUplinkBufferedThresholdBytes } from './transport/tx-uplink';
+import {
+  buildTxMicPcmS16Frame,
+  decideTxMicSend,
+  txMicByteRateBytesPerSecond,
+  txUplinkBufferedThresholdBytes,
+  TX_MIC_BYTES_PER_SAMPLE_S16,
+  TX_MIC_CODEC_PCM,
+  TX_MIC_FRAME_HEADER_BYTES,
+  TX_MIC_SAMPLE_RATE_HZ,
+  TX_MIC_SAMPLE_TYPE_S16,
+  TX_MIC_STREAM_TYPE,
+} from './transport/tx-uplink';
 import {
   PHASE42_CONTROL_PATH,
   PHASE42_MEDIA_PATH,
@@ -145,9 +156,16 @@ const api = {
   applyAudioFrame,
   fftSizeForSamples,
   buildRenderIqWindow,
+  buildTxMicPcmS16Frame,
   decideTxMicSend,
   txMicByteRateBytesPerSecond,
   txUplinkBufferedThresholdBytes,
+  TX_MIC_BYTES_PER_SAMPLE_S16,
+  TX_MIC_CODEC_PCM,
+  TX_MIC_FRAME_HEADER_BYTES,
+  TX_MIC_SAMPLE_RATE_HZ,
+  TX_MIC_SAMPLE_TYPE_S16,
+  TX_MIC_STREAM_TYPE,
   PHASE42_CONTROL_PATH,
   PHASE42_MEDIA_PATH,
   PHASE42_SOCKET_OPEN,
@@ -295,9 +313,16 @@ export {
   applyAudioFrame,
   fftSizeForSamples,
   buildRenderIqWindow,
+  buildTxMicPcmS16Frame,
   decideTxMicSend,
   txMicByteRateBytesPerSecond,
   txUplinkBufferedThresholdBytes,
+  TX_MIC_BYTES_PER_SAMPLE_S16,
+  TX_MIC_CODEC_PCM,
+  TX_MIC_FRAME_HEADER_BYTES,
+  TX_MIC_SAMPLE_RATE_HZ,
+  TX_MIC_SAMPLE_TYPE_S16,
+  TX_MIC_STREAM_TYPE,
   PHASE42_CONTROL_PATH,
   PHASE42_MEDIA_PATH,
   PHASE42_SOCKET_OPEN,
