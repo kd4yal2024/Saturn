@@ -9,12 +9,15 @@ import {
   TX_MIC_SAMPLE_TYPE_S16,
   TX_MIC_STREAM_TYPE,
   TX_UPLINK_HARD_CAP_BYTES,
+  TX_UPLINK_OPUS_HARD_CAP_BYTES,
+  TX_UPLINK_PCM_HARD_CAP_BYTES,
   TX_UPLINK_SOFT_CAP_BYTES,
   buildTxMicPcmS16Frame,
   decideTxMicSend,
   detectTxCodecCapabilities,
   txMicByteRateBytesPerSecond,
   txUplinkBufferedThresholdBytes,
+  txUplinkHardCapBytesForCodec,
 } from '../src/transport/tx-uplink';
 import { TX_MIC_BLOCK_SAMPLES } from '../src/audio/constants';
 
@@ -100,6 +103,27 @@ describe('TX uplink guard', () => {
     // Even with absurdly large RTT (which would normally widen the cap), the
     // hard cap remains in force. This is the non-negotiable safety floor.
     const decision = decideTxMicSend(TX_UPLINK_HARD_CAP_BYTES + 1, 10_000, byteRate);
+    expect(decision.hardCapEngaged).toBe(true);
+    expect(decision.action).toBe('drop');
+  });
+
+  it('keeps the tuned PCM hard cap as the default Phase 44 guard', () => {
+    const byteRate = txMicByteRateBytesPerSecond(48_000, 2, TX_MIC_BLOCK_SAMPLES, 64);
+    const decision = decideTxMicSend(TX_UPLINK_PCM_HARD_CAP_BYTES, 200, byteRate);
+
+    expect(TX_UPLINK_HARD_CAP_BYTES).toBe(TX_UPLINK_PCM_HARD_CAP_BYTES);
+    expect(decision.hardCapBytes).toBe(TX_UPLINK_PCM_HARD_CAP_BYTES);
+    expect(decision.action).toBe('send');
+  });
+
+  it('selects a much smaller time-equivalent hard cap for Opus codecs', () => {
+    const byteRate = txMicByteRateBytesPerSecond(48_000, 2, TX_MIC_BLOCK_SAMPLES, 64);
+    const decision = decideTxMicSend(TX_UPLINK_OPUS_HARD_CAP_BYTES + 1, 200, byteRate, 'opus_wb');
+
+    expect(txUplinkHardCapBytesForCodec('pcm')).toBe(TX_UPLINK_PCM_HARD_CAP_BYTES);
+    expect(txUplinkHardCapBytesForCodec(TX_MIC_CODEC_OPUS_NB)).toBe(TX_UPLINK_OPUS_HARD_CAP_BYTES);
+    expect(txUplinkHardCapBytesForCodec('opus_wb')).toBe(TX_UPLINK_OPUS_HARD_CAP_BYTES);
+    expect(decision.hardCapBytes).toBe(TX_UPLINK_OPUS_HARD_CAP_BYTES);
     expect(decision.hardCapEngaged).toBe(true);
     expect(decision.action).toBe('drop');
   });

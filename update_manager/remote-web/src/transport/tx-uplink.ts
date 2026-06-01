@@ -9,7 +9,9 @@ export const TX_UPLINK_MIN_THRESHOLD_BYTES = 1024;
 // RF-off and flushes late media, so bounded buffering is preferable to chopping
 // PCM on slow links until Phase 44 Opus lands.
 export const TX_UPLINK_SOFT_CAP_BYTES = 32_768;
-export const TX_UPLINK_HARD_CAP_BYTES = 65_536;
+export const TX_UPLINK_PCM_HARD_CAP_BYTES = 65_536;
+export const TX_UPLINK_OPUS_HARD_CAP_BYTES = 512;
+export const TX_UPLINK_HARD_CAP_BYTES = TX_UPLINK_PCM_HARD_CAP_BYTES;
 export const TX_MIC_FRAME_HEADER_BYTES = 64;
 export const TX_MIC_SAMPLE_RATE_HZ = 48_000;
 export const TX_MIC_SAMPLE_TYPE_S16 = 1;
@@ -97,9 +99,23 @@ export type TxUplinkDecision = {
   bufferedBytes: number;
   degradedThresholdBytes: number;
   dropThresholdBytes: number;
+  hardCapBytes: number;
   softCapEngaged: boolean;
   hardCapEngaged: boolean;
 };
+
+export function txUplinkHardCapBytesForCodec(codec: TxCodecCapability | number | null | undefined): number {
+  if (codec === TX_MIC_CODEC_OPUS_NB || codec === TX_MIC_CODEC_OPUS_WB) {
+    return TX_UPLINK_OPUS_HARD_CAP_BYTES;
+  }
+  if (typeof codec === 'string') {
+    const normalized = codec.trim().toLowerCase();
+    if (normalized === 'opus_nb' || normalized === 'opus_wb') {
+      return TX_UPLINK_OPUS_HARD_CAP_BYTES;
+    }
+  }
+  return TX_UPLINK_PCM_HARD_CAP_BYTES;
+}
 
 export function txMicByteRateBytesPerSecond(
   sampleRateHz = 48_000,
@@ -170,8 +186,10 @@ export function decideTxMicSend(
   bufferedAmountBytes: number,
   rttMs: number | null | undefined,
   micByteRateBytesPerSecond: number,
+  codec: TxCodecCapability | number | null | undefined = 'pcm',
 ): TxUplinkDecision {
   const bufferedBytes = Math.max(0, Math.round(Number.isFinite(bufferedAmountBytes) ? bufferedAmountBytes : 0));
+  const hardCapBytes = txUplinkHardCapBytesForCodec(codec);
   const degradedThresholdBytes = txUplinkBufferedThresholdBytes(
     rttMs,
     micByteRateBytesPerSecond,
@@ -183,14 +201,15 @@ export function decideTxMicSend(
     TX_UPLINK_DROP_RTT_FACTOR,
   );
 
-  const softCapEngaged = bufferedBytes > TX_UPLINK_SOFT_CAP_BYTES;
-  const hardCapEngaged = bufferedBytes > TX_UPLINK_HARD_CAP_BYTES;
+  const softCapEngaged = bufferedBytes > Math.min(TX_UPLINK_SOFT_CAP_BYTES, hardCapBytes);
+  const hardCapEngaged = bufferedBytes > hardCapBytes;
   return {
     action: hardCapEngaged ? 'drop' : 'send',
     degraded: softCapEngaged || hardCapEngaged,
     bufferedBytes,
     degradedThresholdBytes,
     dropThresholdBytes,
+    hardCapBytes,
     softCapEngaged,
     hardCapEngaged,
   };

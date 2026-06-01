@@ -17,7 +17,7 @@ use tungstenite::{accept_with_config, Message};
 
 use crate::config::BridgeConfig;
 use crate::radio_model::{AgcMode, DemodMode, NoiseBlankerMode, NoiseReductionMode, RadioModel};
-use crate::tx_codec::{TxCodecDecoder, TxMicCodec};
+use crate::tx_codec::{tx_codec_frame_is_stale, TxCodecDecoder, TxDecodeError, TxMicCodec};
 
 #[derive(Clone, Debug)]
 pub struct TciMicFrame {
@@ -658,6 +658,9 @@ struct ClientState {
     tx_codec_caps: BTreeSet<TxMicCodec>,
     tx_codec_active: TxMicCodec,
     tx_codec_negotiated_at: Option<Instant>,
+    tx_codec_decode_error_count: u64,
+    tx_codec_stale_drop_count: u64,
+    tx_codec_release_flush_count: u64,
     phase42: Option<Phase42ClientMetadata>,
 }
 
@@ -681,6 +684,9 @@ impl Default for ClientState {
             tx_codec_caps: BTreeSet::from([TxMicCodec::Pcm]),
             tx_codec_active: TxMicCodec::Pcm,
             tx_codec_negotiated_at: None,
+            tx_codec_decode_error_count: 0,
+            tx_codec_stale_drop_count: 0,
+            tx_codec_release_flush_count: 0,
             phase42: None,
         }
     }
@@ -992,6 +998,9 @@ pub struct TciClientSnapshot {
     pub tx_mic_seq_gap_count: u64,
     pub tx_mic_age_ms: u64,
     pub tx_media_priority_active: bool,
+    pub tx_codec_decode_error_count: u64,
+    pub tx_codec_stale_drop_count: u64,
+    pub tx_codec_release_flush_count: u64,
 }
 
 struct JoinGuard {
@@ -1111,6 +1120,7 @@ impl TciFrontend {
 
     pub fn mark_phase42_released(&self, now: Instant) {
         let operator_client_id = self.operator_client_id.load(Ordering::SeqCst);
+        flush_client_tx_codec_decode_queue(&self.clients, operator_client_id);
         set_phase42_media_ignore_until(
             &self.clients,
             operator_client_id,
@@ -1226,6 +1236,18 @@ impl TciFrontend {
                 .max()
                 .unwrap_or(0),
             tx_media_priority_active: self.tx_media_priority_active(),
+            tx_codec_decode_error_count: clients
+                .values()
+                .map(|client| client.state.tx_codec_decode_error_count)
+                .sum(),
+            tx_codec_stale_drop_count: clients
+                .values()
+                .map(|client| client.state.tx_codec_stale_drop_count)
+                .sum(),
+            tx_codec_release_flush_count: clients
+                .values()
+                .map(|client| client.state.tx_codec_release_flush_count)
+                .sum(),
         }
     }
 
@@ -1409,14 +1431,17 @@ impl TciFrontend {
 
     pub fn publish_tx_uplink_telemetry(&self, snapshot: &TciClientSnapshot) {
         self.send_text(format!(
-            "remote_tx_uplink:0,{},{},{},{},{},{},{};",
+            "remote_tx_uplink:0,{},{},{},{},{},{},{},{},{},{};",
             if snapshot.tx_uplink_degraded { 1 } else { 0 },
             snapshot.tx_mic_browser_dropped_count,
             snapshot.tx_uplink_buffered_bytes,
             snapshot.tx_uplink_buffered_high_watermark_bytes,
             snapshot.tx_mic_last_arrived_seq,
             snapshot.tx_mic_seq_gap_count,
-            snapshot.tx_mic_age_ms
+            snapshot.tx_mic_age_ms,
+            snapshot.tx_codec_decode_error_count,
+            snapshot.tx_codec_stale_drop_count,
+            snapshot.tx_codec_release_flush_count
         ));
     }
 
@@ -2042,14 +2067,22 @@ fn handle_incoming_message(
                     Instant::now(),
                 )
             {
-                if let Some(frame) = parse_tci_mic_frame(&data) {
-                    record_client_tx_mic_frame(
-                        clients,
-                        client_id,
-                        frame.sequence,
-                        frame.received_at,
-                    );
-                    let _ = command_tx.send(TciCommand::MicAudioFrame(frame));
+                match parse_tci_mic_frame_result(&data) {
+                    Ok(frame) => {
+                        if tx_codec_frame_is_stale(frame.received_at, Instant::now()) {
+                            record_client_tx_codec_stale_drop(clients, client_id);
+                            return true;
+                        }
+                        record_client_tx_mic_frame(
+                            clients,
+                            client_id,
+                            frame.sequence,
+                            frame.received_at,
+                        );
+                        let _ = command_tx.send(TciCommand::MicAudioFrame(frame));
+                    }
+                    Err(TciMicFrameParseError::NotMicFrame) => {}
+                    Err(_) => record_client_tx_codec_decode_error(clients, client_id),
                 }
             }
             true
@@ -3289,6 +3322,35 @@ fn reset_client_tx_uplink_attempt(clients: &ClientRegistry, client_id: u64) {
     }
 }
 
+fn record_client_tx_codec_decode_error(clients: &ClientRegistry, client_id: u64) {
+    if let Some(client) = clients.lock().unwrap().get_mut(&client_id) {
+        client.state.tx_codec_decode_error_count =
+            client.state.tx_codec_decode_error_count.saturating_add(1);
+    }
+}
+
+fn record_client_tx_codec_stale_drop(clients: &ClientRegistry, client_id: u64) {
+    if let Some(client) = clients.lock().unwrap().get_mut(&client_id) {
+        client.state.tx_codec_stale_drop_count =
+            client.state.tx_codec_stale_drop_count.saturating_add(1);
+    }
+}
+
+fn flush_client_tx_codec_decode_queue(clients: &ClientRegistry, operator_client_id: u64) -> bool {
+    if operator_client_id == 0 {
+        return false;
+    }
+    let mut clients = clients.lock().unwrap();
+    let Some(operator) = clients.get_mut(&operator_client_id) else {
+        return false;
+    };
+    operator.state.tx_codec_release_flush_count = operator
+        .state
+        .tx_codec_release_flush_count
+        .saturating_add(1);
+    true
+}
+
 fn next_wrapped_sequence(sequence: u32) -> u32 {
     let next = sequence.wrapping_add(1);
     if next == 0 {
@@ -3330,32 +3392,77 @@ fn record_client_tx_mic_frame(
 ///
 /// stream_type == 1 is intentionally excluded: it is the RX audio type used by
 /// the server→client direction and must not be fed into the TX DSP path.
+#[cfg(test)]
 fn parse_tci_mic_frame(data: &[u8]) -> Option<TciMicFrame> {
+    parse_tci_mic_frame_result(data).ok()
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum TciMicFrameParseError {
+    NotMicFrame,
+    Malformed,
+    UnsupportedCodec,
+    Decode(TxDecodeError),
+}
+
+fn parse_tci_mic_frame_result(data: &[u8]) -> Result<TciMicFrame, TciMicFrameParseError> {
     if data.len() < 64 {
-        return None;
+        return Err(TciMicFrameParseError::Malformed);
     }
-    let sample_rate_hz = u32::from_le_bytes(data[4..8].try_into().ok()?);
-    let sample_type = u32::from_le_bytes(data[8..12].try_into().ok()?);
-    let stream_type = u32::from_le_bytes(data[24..28].try_into().ok()?);
+    let sample_rate_hz = u32::from_le_bytes(
+        data[4..8]
+            .try_into()
+            .map_err(|_| TciMicFrameParseError::Malformed)?,
+    );
+    let sample_type = u32::from_le_bytes(
+        data[8..12]
+            .try_into()
+            .map_err(|_| TciMicFrameParseError::Malformed)?,
+    );
+    let stream_type = u32::from_le_bytes(
+        data[24..28]
+            .try_into()
+            .map_err(|_| TciMicFrameParseError::Malformed)?,
+    );
     if stream_type != 2 {
-        return None;
+        return Err(TciMicFrameParseError::NotMicFrame);
     }
-    let raw_channels = u32::from_le_bytes(data[28..32].try_into().ok()?);
+    let raw_channels = u32::from_le_bytes(
+        data[28..32]
+            .try_into()
+            .map_err(|_| TciMicFrameParseError::Malformed)?,
+    );
     let channels = match raw_channels {
         0 | 1 => 1,
         _ => 2,
     };
-    let sequence = u32::from_le_bytes(data[32..36].try_into().ok()?);
-    let codec_id = u32::from_le_bytes(data[36..40].try_into().ok()?);
-    let codec = TxMicCodec::from_id(codec_id)?;
-    let declared_payload_bytes = u32::from_le_bytes(data[40..44].try_into().ok()?) as usize;
-    let sample_count = u32::from_le_bytes(data[20..24].try_into().ok()?) as usize;
+    let sequence = u32::from_le_bytes(
+        data[32..36]
+            .try_into()
+            .map_err(|_| TciMicFrameParseError::Malformed)?,
+    );
+    let codec_id = u32::from_le_bytes(
+        data[36..40]
+            .try_into()
+            .map_err(|_| TciMicFrameParseError::Malformed)?,
+    );
+    let codec = TxMicCodec::from_id(codec_id).ok_or(TciMicFrameParseError::UnsupportedCodec)?;
+    let declared_payload_bytes = u32::from_le_bytes(
+        data[40..44]
+            .try_into()
+            .map_err(|_| TciMicFrameParseError::Malformed)?,
+    ) as usize;
+    let sample_count = u32::from_le_bytes(
+        data[20..24]
+            .try_into()
+            .map_err(|_| TciMicFrameParseError::Malformed)?,
+    ) as usize;
     if sample_count == 0 || sample_count > MAX_TCI_MIC_SAMPLES {
-        return None;
+        return Err(TciMicFrameParseError::Malformed);
     }
     let raw_payload = &data[64..];
     if declared_payload_bytes > raw_payload.len() {
-        return None;
+        return Err(TciMicFrameParseError::Malformed);
     }
     let payload = if declared_payload_bytes == 0 {
         raw_payload
@@ -3364,8 +3471,8 @@ fn parse_tci_mic_frame(data: &[u8]) -> Option<TciMicFrame> {
     };
     let samples = TxCodecDecoder::new(codec)
         .decode(sample_type, sample_count, payload, declared_payload_bytes)
-        .ok()?;
-    Some(TciMicFrame {
+        .map_err(TciMicFrameParseError::Decode)?;
+    Ok(TciMicFrame {
         sample_rate_hz,
         channels,
         sequence,
@@ -4736,6 +4843,45 @@ mod tests {
         assert_eq!(state.tx_mic_browser_dropped_count, 6);
         assert_eq!(state.tx_uplink_buffered_bytes, 7000);
         assert_eq!(state.tx_uplink_buffered_high_watermark_bytes, 9000);
+    }
+
+    #[test]
+    fn tracks_tx_codec_safety_counters_in_client_snapshot() {
+        let clients = test_client_registry(9);
+
+        record_client_tx_codec_decode_error(&clients, 9);
+        record_client_tx_codec_decode_error(&clients, 9);
+        record_client_tx_codec_stale_drop(&clients, 9);
+        assert!(flush_client_tx_codec_decode_queue(&clients, 9));
+
+        let clients = clients.lock().unwrap();
+        let state = &clients.get(&9).unwrap().state;
+        assert_eq!(state.tx_codec_decode_error_count, 2);
+        assert_eq!(state.tx_codec_stale_drop_count, 1);
+        assert_eq!(state.tx_codec_release_flush_count, 1);
+    }
+
+    #[test]
+    fn classifies_phase44_parser_decode_errors_for_telemetry() {
+        let mut frame = vec![0u8; 64 + 4];
+        write_u32_le(&mut frame, 4, 48_000);
+        write_u32_le(&mut frame, 8, TX_SAMPLE_TYPE_S16);
+        write_u32_le(&mut frame, 20, 2);
+        write_u32_le(&mut frame, 24, 2);
+        write_u32_le(&mut frame, 28, 1);
+        write_u32_le(&mut frame, 36, TX_MIC_CODEC_PCM_ID);
+        write_u32_le(&mut frame, 40, 2);
+
+        assert_eq!(
+            parse_tci_mic_frame_result(&frame).unwrap_err(),
+            TciMicFrameParseError::Decode(TxDecodeError::PayloadSizeMismatch)
+        );
+
+        write_u32_le(&mut frame, 24, 1);
+        assert_eq!(
+            parse_tci_mic_frame_result(&frame).unwrap_err(),
+            TciMicFrameParseError::NotMicFrame
+        );
     }
 
     #[test]

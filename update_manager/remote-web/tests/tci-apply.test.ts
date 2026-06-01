@@ -61,6 +61,9 @@ function createState(): TciRadioState {
     txMicSeqGapCount: 0,
     txMicAgeMs: 0,
     txFaultReason: null,
+    txCodecDecodeErrorCount: 0,
+    txCodecStaleDropCount: 0,
+    txCodecReleaseFlushCount: 0,
     txCodecRequested: 'pcm',
     txCodecAccepted: null,
     txCodecNegotiatedAt: 0,
@@ -143,7 +146,7 @@ describe('applyTciText', () => {
 
   it('tracks bridge TX uplink telemetry', () => {
     const result = applyTciText(
-      'remote_tx_uplink:0,true,42,32000,64000,1234,2,180;',
+      'remote_tx_uplink:0,true,42,32000,64000,1234,2,180,3,4,5;',
       createState(),
     );
     expect(result.state.txUplinkDegraded).toBe(true);
@@ -153,6 +156,21 @@ describe('applyTciText', () => {
     expect(result.state.txMicLastArrivedSeq).toBe(1234);
     expect(result.state.txMicSeqGapCount).toBe(2);
     expect(result.state.txMicAgeMs).toBe(180);
+    expect(result.state.txCodecDecodeErrorCount).toBe(3);
+    expect(result.state.txCodecStaleDropCount).toBe(4);
+    expect(result.state.txCodecReleaseFlushCount).toBe(5);
+  });
+
+  it('keeps legacy bridge TX uplink telemetry compatible', () => {
+    const result = applyTciText(
+      'remote_tx_uplink:0,true,42,32000,64000,1234,2,180;',
+      createState(),
+    );
+
+    expect(result.state.txMicAgeMs).toBe(180);
+    expect(result.state.txCodecDecodeErrorCount).toBe(0);
+    expect(result.state.txCodecStaleDropCount).toBe(0);
+    expect(result.state.txCodecReleaseFlushCount).toBe(0);
   });
 
   it('tracks Phase 44 TX codec negotiation replies', () => {

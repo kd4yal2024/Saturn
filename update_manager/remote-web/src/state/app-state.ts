@@ -144,6 +144,9 @@ export interface AppState {
   txMicSeqGapCount: number;
   txMicAgeMs: number;
   txFaultReason: string | null;
+  txCodecDecodeErrorCount: number;
+  txCodecStaleDropCount: number;
+  txCodecReleaseFlushCount: number;
   txCodecRequested: 'pcm' | 'opus_nb' | 'opus_wb';
   txCodecAccepted: 'pcm' | 'opus_nb' | 'opus_wb' | null;
   txCodecNegotiatedAt: number;
@@ -376,6 +379,9 @@ export function createAppState(): AppState {
     txMicSeqGapCount: 0,
     txMicAgeMs: 0,
     txFaultReason: null,
+    txCodecDecodeErrorCount: 0,
+    txCodecStaleDropCount: 0,
+    txCodecReleaseFlushCount: 0,
     txCodecRequested: 'pcm',
     txCodecAccepted: null,
     txCodecNegotiatedAt: 0,

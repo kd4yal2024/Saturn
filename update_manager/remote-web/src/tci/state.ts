@@ -62,6 +62,9 @@ export type TciRadioState = {
   txMicSeqGapCount: number;
   txMicAgeMs: number;
   txFaultReason: string | null;
+  txCodecDecodeErrorCount: number;
+  txCodecStaleDropCount: number;
+  txCodecReleaseFlushCount: number;
   txCodecRequested: TxCodecName;
   txCodecAccepted: TxCodecName | null;
   txCodecNegotiatedAt: number;

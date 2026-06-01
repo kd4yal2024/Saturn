@@ -1,3 +1,5 @@
+use std::time::{Duration, Instant};
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum TxMicCodec {
     Pcm,
@@ -20,6 +22,7 @@ pub const TX_MIC_CODEC_OPUS_WB_ID: u32 = 2;
 pub const TX_SAMPLE_TYPE_LEGACY_FLOAT32: u32 = 0;
 pub const TX_SAMPLE_TYPE_S16: u32 = 1;
 pub const TX_SAMPLE_TYPE_FLOAT32: u32 = 3;
+pub const TX_CODEC_STALE_FRAME_MAX_AGE: Duration = Duration::from_millis(150);
 
 impl TxMicCodec {
     pub fn from_tci(value: &str) -> Option<Self> {
@@ -53,6 +56,10 @@ impl TxMicCodec {
             Self::OpusWb => "opus_wb",
         }
     }
+}
+
+pub fn tx_codec_frame_is_stale(received_at: Instant, now: Instant) -> bool {
+    now.saturating_duration_since(received_at) > TX_CODEC_STALE_FRAME_MAX_AGE
 }
 
 #[derive(Clone, Debug)]
@@ -179,5 +186,18 @@ mod tests {
             TxCodecDecoder::new(TxMicCodec::OpusWb).decode(TX_SAMPLE_TYPE_S16, 3, &[0; 6], 6),
             Err(TxDecodeError::UnsupportedCodec)
         );
+    }
+
+    #[test]
+    fn classifies_stale_decoded_frames_by_consume_age() {
+        let received_at = Instant::now();
+        assert!(!tx_codec_frame_is_stale(
+            received_at,
+            received_at + Duration::from_millis(150)
+        ));
+        assert!(tx_codec_frame_is_stale(
+            received_at,
+            received_at + Duration::from_millis(151)
+        ));
     }
 }

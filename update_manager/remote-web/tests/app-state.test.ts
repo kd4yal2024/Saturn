@@ -61,6 +61,9 @@ describe('createAppState', () => {
     expect(s.txCodecAccepted).toBeNull();
     expect(s.txCodecNegotiatedAt).toBe(0);
     expect(s.txCodecRejectReason).toBeNull();
+    expect(s.txCodecDecodeErrorCount).toBe(0);
+    expect(s.txCodecStaleDropCount).toBe(0);
+    expect(s.txCodecReleaseFlushCount).toBe(0);
     expect(s.txCodecDetectedCaps).toEqual(['pcm']);
     expect(s.txCodecAdvertisedCaps).toEqual(['pcm']);
     expect(s.txCodecWebCodecsAudioEncoder).toBe(false);

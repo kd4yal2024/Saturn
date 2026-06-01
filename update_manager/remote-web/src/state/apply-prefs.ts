@@ -133,6 +133,9 @@ export interface NormalizableState extends RadioPrefsTarget, DisplayPrefsTarget 
   txMicLastArrivedSeq?: number;
   txMicSeqGapCount?: number;
   txMicAgeMs?: number;
+  txCodecDecodeErrorCount?: number;
+  txCodecStaleDropCount?: number;
+  txCodecReleaseFlushCount?: number;
 }
 
 function stringPref(value: unknown, fallback: string): string {
@@ -314,6 +317,9 @@ export function normalizeAppStateInPlace(state: NormalizableState): void {
   state.txMicLastArrivedSeq = Math.max(0, Math.round(safeFiniteNumber(state.txMicLastArrivedSeq, 0)));
   state.txMicSeqGapCount = Math.max(0, Math.round(safeFiniteNumber(state.txMicSeqGapCount, 0)));
   state.txMicAgeMs = Math.max(0, Math.round(safeFiniteNumber(state.txMicAgeMs, 0)));
+  state.txCodecDecodeErrorCount = Math.max(0, Math.round(safeFiniteNumber(state.txCodecDecodeErrorCount, 0)));
+  state.txCodecStaleDropCount = Math.max(0, Math.round(safeFiniteNumber(state.txCodecStaleDropCount, 0)));
+  state.txCodecReleaseFlushCount = Math.max(0, Math.round(safeFiniteNumber(state.txCodecReleaseFlushCount, 0)));
   state.spectrumAutoRange = Boolean(state.spectrumAutoRange);
   state.displayFloorDb = clampDisplayDb(state.displayFloorDb, -200);
   state.displayCeilingDb = clampDisplayDb(state.displayCeilingDb, -120);

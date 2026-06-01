@@ -8147,9 +8147,15 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       const txCodecDetected = Array.isArray(state.txCodecDetectedCaps) && state.txCodecDetectedCaps.length
         ? state.txCodecDetectedCaps.join(", ")
         : "pcm";
-      const txCodecDetail = state.txCodecAccepted
+      const txCodecCounters = [
+        state.txCodecDecodeErrorCount ? `decode errors ${state.txCodecDecodeErrorCount}` : "",
+        state.txCodecStaleDropCount ? `stale drops ${state.txCodecStaleDropCount}` : "",
+        state.txCodecReleaseFlushCount ? `release flushes ${state.txCodecReleaseFlushCount}` : "",
+      ].filter(Boolean).join("; ");
+      const txCodecDetailBase = state.txCodecAccepted
         ? `Bridge accepted; browser detects ${txCodecDetected}`
         : (state.txCodecRejectReason ? `Rejected: ${state.txCodecRejectReason}` : "Waiting for bridge accept");
+      const txCodecDetail = txCodecCounters ? `${txCodecDetailBase}; ${txCodecCounters}` : txCodecDetailBase;
       const txUplinkLate = state.txPhase === "keyed" && state.txMicAgeMs > 250;
       const txUplinkTone = state.txUplinkDegraded || txUplinkLate ? "warn" : "ok";
       const txUplinkDetail = state.txMicAgeMs
@@ -9474,7 +9480,12 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         return false;
       }
       const bufferedBytes = Math.max(0, Math.round(Number(state.ws.bufferedAmount || 0)));
-      const decision = _next.decideTxMicSend(bufferedBytes, state.bridgeRttMs, txMicByteRate());
+      const decision = _next.decideTxMicSend(
+        bufferedBytes,
+        state.bridgeRttMs,
+        txMicByteRate(),
+        state.txCodecAccepted || "pcm"
+      );
       state.txUplinkBufferedBytes = decision.bufferedBytes;
       state.txUplinkBufferedHwmBytes = Math.max(state.txUplinkBufferedHwmBytes || 0, decision.bufferedBytes);
       setTxUplinkDegraded(decision.degraded, decision);

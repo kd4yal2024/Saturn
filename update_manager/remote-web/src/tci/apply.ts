@@ -263,7 +263,7 @@ export function applyTciCommand(command: TciCommand, current: TciRadioState): Tc
     next.safetyQueueDepthOverflowCount =
       nonNegativeIntArg(args, offset + 13) ?? next.safetyQueueDepthOverflowCount;
   } else if (command.name === 'remote_tx_uplink') {
-    const offset = args.length >= 8 ? 1 : 0;
+    const offset = String(argAt(args, 0) ?? '').trim() === '0' ? 1 : 0;
     const degraded = booleanArg(argAt(args, offset));
     if (degraded != null) next.txUplinkDegraded = degraded;
     next.txMicDroppedCount = nonNegativeIntArg(args, offset + 1) ?? next.txMicDroppedCount;
@@ -274,6 +274,12 @@ export function applyTciCommand(command: TciCommand, current: TciRadioState): Tc
       nonNegativeIntArg(args, offset + 4) ?? next.txMicLastArrivedSeq;
     next.txMicSeqGapCount = nonNegativeIntArg(args, offset + 5) ?? next.txMicSeqGapCount;
     next.txMicAgeMs = nonNegativeIntArg(args, offset + 6) ?? next.txMicAgeMs;
+    next.txCodecDecodeErrorCount =
+      nonNegativeIntArg(args, offset + 7) ?? next.txCodecDecodeErrorCount;
+    next.txCodecStaleDropCount =
+      nonNegativeIntArg(args, offset + 8) ?? next.txCodecStaleDropCount;
+    next.txCodecReleaseFlushCount =
+      nonNegativeIntArg(args, offset + 9) ?? next.txCodecReleaseFlushCount;
   } else if (command.name === 'tx_codec_accept') {
     const codec = normalizeTxCodecName(argAt(args, txCodecArgOffset(args)));
     if (codec) {
