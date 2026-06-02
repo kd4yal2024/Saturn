@@ -38,12 +38,72 @@ export type TxOpusEncoderStatus =
       state: 'unavailable';
       reason: 'audio_encoder_missing' | 'encoder_backend_missing';
       profile: TxOpusProfile;
+    }
+  | {
+      state: 'ready';
+      profile: TxOpusProfile;
+      producer: TxOpusFrameProducer;
+      config: TxOpusAudioEncoderConfig;
     };
 
 export type TxMicOpusFrame = {
   frame: ArrayBuffer;
   payloadBytes: number;
   codecId: number;
+  decodedSampleCount: number;
+};
+
+export type TxOpusAudioEncoderConfig = {
+  codec: 'opus';
+  sampleRate: number;
+  numberOfChannels: 1;
+  bitrate: number;
+  opus: {
+    frameDuration: number;
+    useinbandfec: boolean;
+    usedtx: boolean;
+  };
+};
+
+export type TxOpusEncodedAudioChunkLike = {
+  byteLength: number;
+  duration?: number | null;
+  copyTo(destination: Uint8Array): void;
+};
+
+export type TxOpusAudioEncoderLike = {
+  configure(config: TxOpusAudioEncoderConfig): void;
+  encode(audioData: unknown): void;
+  flush?: () => Promise<void>;
+  close?: () => void;
+};
+
+export type TxOpusAudioEncoderInit = {
+  output: (chunk: TxOpusEncodedAudioChunkLike) => void;
+  error: (error: unknown) => void;
+};
+
+export type TxOpusAudioEncoderConstructorLike = new (
+  init: TxOpusAudioEncoderInit,
+) => TxOpusAudioEncoderLike;
+
+export type TxOpusFrameProducerOptions = {
+  enabled?: boolean;
+  scope?: unknown;
+  onFrame?: (frame: TxMicOpusFrame, metadata: TxOpusFrameMetadata) => void;
+  onError?: (error: unknown) => void;
+};
+
+export type TxOpusFrameMetadata = {
+  codec: TxOpusCodec;
+  sequence: number;
+  payloadBytes: number;
+  decodedSampleCount: number;
+  chunkDurationUs: number | null;
+};
+
+type PendingEncode = {
+  sequence: number;
   decodedSampleCount: number;
 };
 
@@ -76,6 +136,20 @@ export function txOpusProfileForCodec(codec: TxOpusCodec): TxOpusProfile {
   };
 }
 
+export function txOpusAudioEncoderConfig(profile: TxOpusProfile): TxOpusAudioEncoderConfig {
+  return {
+    codec: 'opus',
+    sampleRate: profile.sampleRateHz,
+    numberOfChannels: 1,
+    bitrate: profile.bitrateBps,
+    opus: {
+      frameDuration: profile.frameDurationUs,
+      useinbandfec: profile.fecEnabled,
+      usedtx: profile.dtxEnabled,
+    },
+  };
+}
+
 export function createTxOpusEncoderSkeleton(
   codec: TxOpusCodec,
   scope: unknown = globalThis,
@@ -89,6 +163,118 @@ export function createTxOpusEncoderSkeleton(
     return { state: 'unavailable', reason: 'audio_encoder_missing', profile };
   }
   return { state: 'unavailable', reason: 'encoder_backend_missing', profile };
+}
+
+export class TxOpusFrameProducer {
+  private readonly profile: TxOpusProfile;
+  private readonly encoder: TxOpusAudioEncoderLike;
+  private readonly onFrame: (frame: TxMicOpusFrame, metadata: TxOpusFrameMetadata) => void;
+  private readonly onError: (error: unknown) => void;
+  private readonly pending: PendingEncode[] = [];
+
+  constructor(
+    profile: TxOpusProfile,
+    encoder: TxOpusAudioEncoderLike,
+    onFrame: (frame: TxMicOpusFrame, metadata: TxOpusFrameMetadata) => void,
+    onError: (error: unknown) => void,
+  ) {
+    this.profile = profile;
+    this.encoder = encoder;
+    this.onFrame = onFrame;
+    this.onError = onError;
+  }
+
+  encode(audioData: unknown, sequence: number, decodedSampleCount = this.profile.decodedFrameSamples): void {
+    this.pending.push({
+      sequence: sequence >>> 0,
+      decodedSampleCount: Math.max(1, Math.floor(Number(decodedSampleCount) || this.profile.decodedFrameSamples)),
+    });
+    try {
+      this.encoder.encode(audioData);
+    } catch (error) {
+      this.pending.pop();
+      this.onError(error);
+    }
+  }
+
+  async flush(): Promise<void> {
+    if (typeof this.encoder.flush === 'function') {
+      await this.encoder.flush();
+    }
+  }
+
+  close(): void {
+    this.pending.length = 0;
+    if (typeof this.encoder.close === 'function') {
+      this.encoder.close();
+    }
+  }
+
+  handleEncodedChunk(chunk: TxOpusEncodedAudioChunkLike): void {
+    const pending = this.pending.shift() ?? {
+      sequence: 0,
+      decodedSampleCount: this.profile.decodedFrameSamples,
+    };
+    const byteLength = Math.max(0, Math.floor(Number(chunk.byteLength) || 0));
+    const payload = new Uint8Array(byteLength);
+    try {
+      chunk.copyTo(payload);
+    } catch (error) {
+      this.onError(error);
+      return;
+    }
+    const built = buildTxMicOpusFrame(
+      payload,
+      pending.sequence,
+      this.profile.codec,
+      pending.decodedSampleCount,
+    );
+    this.onFrame(built, {
+      codec: this.profile.codec,
+      sequence: pending.sequence,
+      payloadBytes: built.payloadBytes,
+      decodedSampleCount: built.decodedSampleCount,
+      chunkDurationUs: Number.isFinite(chunk.duration ?? NaN) ? Math.max(0, Number(chunk.duration)) : null,
+    });
+  }
+}
+
+export function createTxOpusFrameProducer(
+  codec: TxOpusCodec,
+  options: TxOpusFrameProducerOptions = {},
+): TxOpusEncoderStatus {
+  const profile = txOpusProfileForCodec(codec);
+  if (options.enabled !== true) {
+    return { state: 'disabled', reason: 'runtime_disabled', profile };
+  }
+  const Encoder = (options.scope as { AudioEncoder?: TxOpusAudioEncoderConstructorLike } | null | undefined)
+    ?.AudioEncoder;
+  if (!Encoder) {
+    return { state: 'unavailable', reason: 'audio_encoder_missing', profile };
+  }
+
+  const config = txOpusAudioEncoderConfig(profile);
+  let producer: TxOpusFrameProducer | null = null;
+  let encoder: TxOpusAudioEncoderLike;
+  try {
+    encoder = new Encoder({
+      output: (chunk) => producer?.handleEncodedChunk(chunk),
+      error: (error) => {
+        options.onError?.(error);
+      },
+    });
+    encoder.configure(config);
+  } catch (error) {
+    options.onError?.(error);
+    return { state: 'unavailable', reason: 'encoder_backend_missing', profile };
+  }
+  producer = new TxOpusFrameProducer(
+    profile,
+    encoder,
+    options.onFrame ?? (() => {}),
+    options.onError ?? (() => {}),
+  );
+  return { state: 'ready', profile, producer, config };
 }
 
 export function buildTxMicOpusFrame(

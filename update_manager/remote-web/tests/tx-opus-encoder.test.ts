@@ -5,6 +5,11 @@ import {
   TX_OPUS_FRAME_DURATION_US,
   buildTxMicOpusFrame,
   createTxOpusEncoderSkeleton,
+  createTxOpusFrameProducer,
+  type TxOpusAudioEncoderConfig,
+  type TxOpusAudioEncoderInit,
+  type TxOpusEncodedAudioChunkLike,
+  type TxMicOpusFrame,
   txOpusProfileForCodec,
 } from '../src/audio/tx-opus-encoder';
 import {
@@ -45,9 +50,31 @@ describe('Phase 44 TX Opus encoder skeleton', () => {
     });
 
     expect(TX_OPUS_ENCODER_RUNTIME_ENABLED).toBe(false);
-    expect(status.state).toBe('disabled');
+    if (status.state !== 'disabled') {
+      throw new Error(`expected disabled skeleton, got ${status.state}`);
+    }
     expect(status.reason).toBe('runtime_disabled');
     expect(status.profile.codec).toBe('opus_wb');
+  });
+
+  it('does not construct a browser Opus producer unless explicitly enabled', () => {
+    let constructed = 0;
+    class DisabledEncoder {
+      constructor() {
+        constructed += 1;
+      }
+    }
+
+    const status = createTxOpusFrameProducer('opus_wb', {
+      enabled: false,
+      scope: { AudioEncoder: DisabledEncoder },
+    });
+
+    if (status.state !== 'disabled') {
+      throw new Error(`expected disabled producer, got ${status.state}`);
+    }
+    expect(status.reason).toBe('runtime_disabled');
+    expect(constructed).toBe(0);
   });
 
   it('builds future Opus mic frames without enabling the sender path', () => {
@@ -83,5 +110,81 @@ describe('Phase 44 TX Opus encoder skeleton', () => {
     expect(view.getUint32(4, true)).toBe(16_000);
     expect(view.getUint32(20, true)).toBe(960);
     expect(view.getUint32(36, true)).toBe(TX_MIC_CODEC_OPUS_NB);
+  });
+
+  it('wraps a WebCodecs Opus chunk in a Phase 44 mic frame when explicitly enabled', () => {
+    const frames: Array<{ frame: TxMicOpusFrame; sequence: number; payloadBytes: number }> = [];
+    const errors: unknown[] = [];
+    let configured: TxOpusAudioEncoderConfig | null = null;
+
+    class FakeAudioEncoder {
+      private readonly init: TxOpusAudioEncoderInit;
+
+      constructor(init: TxOpusAudioEncoderInit) {
+        this.init = init;
+      }
+
+      configure(config: TxOpusAudioEncoderConfig) {
+        configured = config;
+      }
+
+      encode(audioData: unknown) {
+        const bytes = (audioData as { encodedBytes: number[] }).encodedBytes;
+        const chunk: TxOpusEncodedAudioChunkLike = {
+          byteLength: bytes.length,
+          duration: TX_OPUS_FRAME_DURATION_US,
+          copyTo(destination: Uint8Array) {
+            bytes.forEach((value, index) => {
+              destination[index] = value;
+            });
+          },
+        };
+        this.init.output(chunk);
+      }
+    }
+
+    const status = createTxOpusFrameProducer('opus_wb', {
+      enabled: true,
+      scope: { AudioEncoder: FakeAudioEncoder },
+      onFrame: (frame, metadata) => {
+        frames.push({ frame, sequence: metadata.sequence, payloadBytes: metadata.payloadBytes });
+      },
+      onError: (error) => errors.push(error),
+    });
+
+    if (status.state !== 'ready') {
+      throw new Error(`expected ready producer, got ${status.state}`);
+    }
+
+    expect(configured).toEqual({
+      codec: 'opus',
+      sampleRate: 48_000,
+      numberOfChannels: 1,
+      bitrate: 24_000,
+      opus: {
+        frameDuration: TX_OPUS_FRAME_DURATION_US,
+        useinbandfec: true,
+        usedtx: false,
+      },
+    });
+
+    status.producer.encode({ encodedBytes: [4, 5, 6, 7] }, 123);
+
+    expect(errors).toEqual([]);
+    expect(frames).toHaveLength(1);
+    const produced = frames[0];
+    if (!produced) {
+      throw new Error('expected one produced Opus frame');
+    }
+    expect(produced.sequence).toBe(123);
+    expect(produced.payloadBytes).toBe(4);
+    const view = new DataView(produced.frame.frame);
+    expect(view.getUint32(4, true)).toBe(48_000);
+    expect(view.getUint32(20, true)).toBe(960);
+    expect(view.getUint32(32, true)).toBe(123);
+    expect(view.getUint32(36, true)).toBe(TX_MIC_CODEC_OPUS_WB);
+    expect(view.getUint32(40, true)).toBe(4);
+    expect(view.getUint8(TX_MIC_FRAME_HEADER_BYTES)).toBe(4);
+    expect(view.getUint8(TX_MIC_FRAME_HEADER_BYTES + 3)).toBe(7);
   });
 });

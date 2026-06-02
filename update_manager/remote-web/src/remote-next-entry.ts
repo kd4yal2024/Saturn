@@ -63,6 +63,7 @@ import {
   TX_OPUS_FRAME_DURATION_US,
   buildTxMicOpusFrame,
   createTxOpusEncoderSkeleton,
+  createTxOpusFrameProducer,
   txOpusProfileForCodec,
 } from './audio/tx-opus-encoder';
 import {
@@ -174,6 +175,7 @@ const api = {
   decideTxMicSend,
   detectTxCodecCapabilities,
   createTxOpusEncoderSkeleton,
+  createTxOpusFrameProducer,
   txOpusProfileForCodec,
   txMicByteRateBytesPerSecond,
   txUplinkBufferedThresholdBytes,
@@ -342,6 +344,7 @@ export {
   txUplinkBufferedThresholdBytes,
   txUplinkHardCapBytesForCodec,
   createTxOpusEncoderSkeleton,
+  createTxOpusFrameProducer,
   txOpusProfileForCodec,
   TX_OPUS_ENCODER_RUNTIME_ENABLED,
   TX_OPUS_FRAME_DURATION_US,
