@@ -11,8 +11,11 @@ export const TX_OPUS_ENCODER_RUNTIME_ENABLED = false;
 export const TX_OPUS_FRAME_DURATION_US = 20_000;
 export const TX_OPUS_NB_SAMPLE_RATE_HZ = 16_000;
 export const TX_OPUS_WB_SAMPLE_RATE_HZ = 48_000;
+export const TX_OPUS_DECODE_OUTPUT_SAMPLE_RATE_HZ = 48_000;
 export const TX_OPUS_NB_BITRATE_BPS = 16_000;
 export const TX_OPUS_WB_BITRATE_BPS = 24_000;
+export const TX_OPUS_DECODE_OUTPUT_FRAME_SAMPLES =
+  (TX_OPUS_DECODE_OUTPUT_SAMPLE_RATE_HZ * TX_OPUS_FRAME_DURATION_US) / 1_000_000;
 
 export type TxOpusCodec = Extract<TxCodecCapability, 'opus_nb' | 'opus_wb'>;
 
@@ -20,9 +23,11 @@ export type TxOpusProfile = {
   codec: TxOpusCodec;
   codecId: number;
   sampleRateHz: number;
+  decodeOutputSampleRateHz: number;
   bitrateBps: number;
   frameDurationUs: number;
   frameSamples: number;
+  decodedFrameSamples: number;
   fecEnabled: boolean;
   dtxEnabled: boolean;
 };
@@ -48,9 +53,11 @@ export function txOpusProfileForCodec(codec: TxOpusCodec): TxOpusProfile {
       codec,
       codecId: TX_MIC_CODEC_OPUS_NB,
       sampleRateHz: TX_OPUS_NB_SAMPLE_RATE_HZ,
+      decodeOutputSampleRateHz: TX_OPUS_DECODE_OUTPUT_SAMPLE_RATE_HZ,
       bitrateBps: TX_OPUS_NB_BITRATE_BPS,
       frameDurationUs: TX_OPUS_FRAME_DURATION_US,
       frameSamples: (TX_OPUS_NB_SAMPLE_RATE_HZ * TX_OPUS_FRAME_DURATION_US) / 1_000_000,
+      decodedFrameSamples: TX_OPUS_DECODE_OUTPUT_FRAME_SAMPLES,
       fecEnabled: true,
       dtxEnabled: false,
     };
@@ -59,9 +66,11 @@ export function txOpusProfileForCodec(codec: TxOpusCodec): TxOpusProfile {
     codec,
     codecId: TX_MIC_CODEC_OPUS_WB,
     sampleRateHz: TX_OPUS_WB_SAMPLE_RATE_HZ,
+    decodeOutputSampleRateHz: TX_OPUS_DECODE_OUTPUT_SAMPLE_RATE_HZ,
     bitrateBps: TX_OPUS_WB_BITRATE_BPS,
     frameDurationUs: TX_OPUS_FRAME_DURATION_US,
     frameSamples: (TX_OPUS_WB_SAMPLE_RATE_HZ * TX_OPUS_FRAME_DURATION_US) / 1_000_000,
+    decodedFrameSamples: TX_OPUS_DECODE_OUTPUT_FRAME_SAMPLES,
     fecEnabled: true,
     dtxEnabled: false,
   };
@@ -90,7 +99,10 @@ export function buildTxMicOpusFrame(
 ): TxMicOpusFrame {
   const profile = txOpusProfileForCodec(codec);
   const payloadBytes = Math.max(0, Math.floor(Number(payload.length) || 0));
-  const sampleCount = Math.max(1, Math.floor(Number(decodedSampleCount) || profile.frameSamples));
+  const sampleCount = Math.max(
+    1,
+    Math.floor(Number(decodedSampleCount) || profile.decodedFrameSamples),
+  );
   const frame = new ArrayBuffer(TX_MIC_FRAME_HEADER_BYTES + payloadBytes);
   const view = new DataView(frame);
   view.setUint32(0, 0, true);

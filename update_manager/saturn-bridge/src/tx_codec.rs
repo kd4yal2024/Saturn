@@ -1,3 +1,6 @@
+use std::ffi::CString;
+use std::fmt;
+use std::os::raw::{c_char, c_int, c_uchar, c_void};
 use std::time::{Duration, Instant};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -10,10 +13,14 @@ pub enum TxMicCodec {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TxDecodeError {
     CodecDisabled,
+    OpusBackendUnavailable,
+    OpusDecoderCreateFailed,
+    OpusDecodeFailed,
     UnsupportedCodec,
     UnsupportedSampleType,
     PayloadSizeMismatch,
     PayloadTooShort,
+    SampleCountMismatch,
 }
 
 pub const TX_MIC_CODEC_PCM_ID: u32 = 0;
@@ -27,8 +34,11 @@ pub const TX_CODEC_STALE_FRAME_MAX_AGE: Duration = Duration::from_millis(150);
 pub const TX_OPUS_FRAME_MS: u32 = 20;
 pub const TX_OPUS_NB_SAMPLE_RATE_HZ: u32 = 16_000;
 pub const TX_OPUS_WB_SAMPLE_RATE_HZ: u32 = 48_000;
+pub const TX_OPUS_DECODE_OUTPUT_SAMPLE_RATE_HZ: u32 = 48_000;
 pub const TX_OPUS_NB_BITRATE_BPS: u32 = 16_000;
 pub const TX_OPUS_WB_BITRATE_BPS: u32 = 24_000;
+pub const TX_OPUS_DECODE_OUTPUT_FRAME_SAMPLES: usize =
+    (TX_OPUS_DECODE_OUTPUT_SAMPLE_RATE_HZ as usize * TX_OPUS_FRAME_MS as usize) / 1000;
 
 impl TxMicCodec {
     pub fn from_tci(value: &str) -> Option<Self> {
@@ -84,10 +94,12 @@ impl Default for TxCodecRuntimeFlags {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct TxOpusDecoderConfig {
     pub codec: TxMicCodec,
-    pub sample_rate_hz: u32,
+    pub encoder_sample_rate_hz: u32,
+    pub decode_output_sample_rate_hz: u32,
     pub bitrate_bps: u32,
     pub frame_ms: u32,
-    pub frame_samples: usize,
+    pub encoder_frame_samples: usize,
+    pub decode_output_frame_samples: usize,
     pub fec_enabled: bool,
     pub dtx_enabled: bool,
 }
@@ -97,21 +109,27 @@ impl TxOpusDecoderConfig {
         match codec {
             TxMicCodec::OpusNb => Some(Self {
                 codec,
-                sample_rate_hz: TX_OPUS_NB_SAMPLE_RATE_HZ,
+                encoder_sample_rate_hz: TX_OPUS_NB_SAMPLE_RATE_HZ,
+                decode_output_sample_rate_hz: TX_OPUS_DECODE_OUTPUT_SAMPLE_RATE_HZ,
                 bitrate_bps: TX_OPUS_NB_BITRATE_BPS,
                 frame_ms: TX_OPUS_FRAME_MS,
-                frame_samples: (TX_OPUS_NB_SAMPLE_RATE_HZ as usize * TX_OPUS_FRAME_MS as usize)
+                encoder_frame_samples: (TX_OPUS_NB_SAMPLE_RATE_HZ as usize
+                    * TX_OPUS_FRAME_MS as usize)
                     / 1000,
+                decode_output_frame_samples: TX_OPUS_DECODE_OUTPUT_FRAME_SAMPLES,
                 fec_enabled: true,
                 dtx_enabled: false,
             }),
             TxMicCodec::OpusWb => Some(Self {
                 codec,
-                sample_rate_hz: TX_OPUS_WB_SAMPLE_RATE_HZ,
+                encoder_sample_rate_hz: TX_OPUS_WB_SAMPLE_RATE_HZ,
+                decode_output_sample_rate_hz: TX_OPUS_DECODE_OUTPUT_SAMPLE_RATE_HZ,
                 bitrate_bps: TX_OPUS_WB_BITRATE_BPS,
                 frame_ms: TX_OPUS_FRAME_MS,
-                frame_samples: (TX_OPUS_WB_SAMPLE_RATE_HZ as usize * TX_OPUS_FRAME_MS as usize)
+                encoder_frame_samples: (TX_OPUS_WB_SAMPLE_RATE_HZ as usize
+                    * TX_OPUS_FRAME_MS as usize)
                     / 1000,
+                decode_output_frame_samples: TX_OPUS_DECODE_OUTPUT_FRAME_SAMPLES,
                 fec_enabled: true,
                 dtx_enabled: false,
             }),
@@ -120,21 +138,187 @@ impl TxOpusDecoderConfig {
     }
 }
 
-#[derive(Clone, Debug)]
-pub struct TxOpusDecoder;
+struct OpusDynamicLibrary {
+    handle: *mut c_void,
+    opus_decoder_create:
+        unsafe extern "C" fn(fs: i32, channels: c_int, error: *mut c_int) -> *mut c_void,
+    opus_decoder_destroy: unsafe extern "C" fn(st: *mut c_void),
+    opus_decode_float: unsafe extern "C" fn(
+        st: *mut c_void,
+        data: *const c_uchar,
+        len: i32,
+        pcm: *mut f32,
+        frame_size: c_int,
+        decode_fec: c_int,
+    ) -> c_int,
+}
+
+impl OpusDynamicLibrary {
+    fn load() -> Result<Self, TxDecodeError> {
+        let path =
+            CString::new("libopus.so.0").map_err(|_| TxDecodeError::OpusBackendUnavailable)?;
+        let handle = unsafe { dlopen(path.as_ptr(), RTLD_NOW) };
+        if handle.is_null() {
+            return Err(TxDecodeError::OpusBackendUnavailable);
+        }
+
+        let opus_decoder_create = match unsafe { load_symbol(handle, "opus_decoder_create") } {
+            Ok(symbol) => symbol,
+            Err(err) => {
+                unsafe { dlclose(handle) };
+                return Err(err);
+            }
+        };
+        let opus_decoder_destroy = match unsafe { load_symbol(handle, "opus_decoder_destroy") } {
+            Ok(symbol) => symbol,
+            Err(err) => {
+                unsafe { dlclose(handle) };
+                return Err(err);
+            }
+        };
+        let opus_decode_float = match unsafe { load_symbol(handle, "opus_decode_float") } {
+            Ok(symbol) => symbol,
+            Err(err) => {
+                unsafe { dlclose(handle) };
+                return Err(err);
+            }
+        };
+
+        Ok(Self {
+            handle,
+            opus_decoder_create,
+            opus_decoder_destroy,
+            opus_decode_float,
+        })
+    }
+}
+
+impl Drop for OpusDynamicLibrary {
+    fn drop(&mut self) {
+        if !self.handle.is_null() {
+            unsafe { dlclose(self.handle) };
+        }
+    }
+}
+
+struct OpusDynamicDecoder {
+    library: OpusDynamicLibrary,
+    decoder: *mut c_void,
+}
+
+impl OpusDynamicDecoder {
+    fn new(output_sample_rate_hz: u32) -> Result<Self, TxDecodeError> {
+        let library = OpusDynamicLibrary::load()?;
+        let mut error: c_int = 0;
+        let decoder =
+            unsafe { (library.opus_decoder_create)(output_sample_rate_hz as i32, 1, &mut error) };
+        if decoder.is_null() || error != 0 {
+            return Err(TxDecodeError::OpusDecoderCreateFailed);
+        }
+        Ok(Self { library, decoder })
+    }
+
+    fn decode_float(&mut self, payload: &[u8], output: &mut [f32]) -> Result<usize, TxDecodeError> {
+        if payload.is_empty() {
+            return Err(TxDecodeError::PayloadTooShort);
+        }
+        let decoded = unsafe {
+            (self.library.opus_decode_float)(
+                self.decoder,
+                payload.as_ptr(),
+                payload.len() as i32,
+                output.as_mut_ptr(),
+                output.len() as c_int,
+                0,
+            )
+        };
+        if decoded < 0 {
+            return Err(TxDecodeError::OpusDecodeFailed);
+        }
+        Ok(decoded as usize)
+    }
+}
+
+impl Drop for OpusDynamicDecoder {
+    fn drop(&mut self) {
+        if !self.decoder.is_null() {
+            unsafe { (self.library.opus_decoder_destroy)(self.decoder) };
+        }
+    }
+}
+
+pub struct TxOpusDecoder {
+    config: TxOpusDecoderConfig,
+    backend: OpusDynamicDecoder,
+}
+
+impl fmt::Debug for TxOpusDecoder {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("TxOpusDecoder")
+            .field("config", &self.config)
+            .field("backend", &"libopus.so.0")
+            .finish()
+    }
+}
 
 impl TxOpusDecoder {
     pub fn new(
-        _config: TxOpusDecoderConfig,
+        config: TxOpusDecoderConfig,
         flags: TxCodecRuntimeFlags,
     ) -> Result<Self, TxDecodeError> {
         if !flags.opus_decode_enabled {
             return Err(TxDecodeError::CodecDisabled);
         }
-        // The real libopus backend is intentionally not wired in this
-        // scaffold. Keeping construction gated prevents accidental TX payload
-        // changes before force-RX/fallback acceptance tests exist.
-        Err(TxDecodeError::UnsupportedCodec)
+        Ok(Self {
+            backend: OpusDynamicDecoder::new(config.decode_output_sample_rate_hz)?,
+            config,
+        })
+    }
+
+    pub fn decode(
+        &mut self,
+        sample_type: u32,
+        sample_count: usize,
+        payload: &[u8],
+        declared_payload_bytes: usize,
+    ) -> Result<Vec<f32>, TxDecodeError> {
+        if sample_type != TX_SAMPLE_TYPE_S16 {
+            return Err(TxDecodeError::UnsupportedSampleType);
+        }
+        if sample_count != self.config.decode_output_frame_samples {
+            return Err(TxDecodeError::SampleCountMismatch);
+        }
+        let payload_bytes = if declared_payload_bytes == 0 {
+            payload.len()
+        } else {
+            declared_payload_bytes
+        };
+        if payload_bytes == 0 {
+            return Err(TxDecodeError::PayloadTooShort);
+        }
+        if payload_bytes > payload.len() {
+            return Err(TxDecodeError::PayloadTooShort);
+        }
+
+        let mut output = vec![0.0f32; self.config.decode_output_frame_samples];
+        let decoded_samples = self
+            .backend
+            .decode_float(&payload[..payload_bytes], &mut output)?;
+        if decoded_samples != self.config.decode_output_frame_samples {
+            return Err(TxDecodeError::SampleCountMismatch);
+        }
+        output.truncate(decoded_samples);
+        Ok(output)
+    }
+
+    #[cfg(test)]
+    fn output_sample_rate_hz(&self) -> u32 {
+        self.config.decode_output_sample_rate_hz
+    }
+
+    #[cfg(test)]
+    fn output_frame_samples(&self) -> usize {
+        self.config.decode_output_frame_samples
     }
 }
 
@@ -168,12 +352,28 @@ impl TxCodecDecoder {
                 let Some(config) = TxOpusDecoderConfig::for_codec(self.codec) else {
                     return Err(TxDecodeError::UnsupportedCodec);
                 };
-                let _ = (sample_type, sample_count, payload, declared_payload_bytes);
-                TxOpusDecoder::new(config, self.flags)
-                    .and_then(|_| Err(TxDecodeError::UnsupportedCodec))
+                let mut decoder = TxOpusDecoder::new(config, self.flags)?;
+                decoder.decode(sample_type, sample_count, payload, declared_payload_bytes)
             }
         }
     }
+}
+
+const RTLD_NOW: c_int = 2;
+
+unsafe extern "C" {
+    fn dlopen(filename: *const c_char, flags: c_int) -> *mut c_void;
+    fn dlsym(handle: *mut c_void, symbol: *const c_char) -> *mut c_void;
+    fn dlclose(handle: *mut c_void) -> c_int;
+}
+
+unsafe fn load_symbol<T: Copy>(handle: *mut c_void, symbol: &str) -> Result<T, TxDecodeError> {
+    let name = CString::new(symbol).map_err(|_| TxDecodeError::OpusBackendUnavailable)?;
+    let ptr = dlsym(handle, name.as_ptr());
+    if ptr.is_null() {
+        return Err(TxDecodeError::OpusBackendUnavailable);
+    }
+    Ok(std::mem::transmute_copy::<*mut c_void, T>(&ptr))
 }
 
 fn expected_pcm_payload_bytes(
@@ -279,33 +479,55 @@ mod tests {
     #[test]
     fn opus_profiles_match_phase44_defaults() {
         let nb = TxOpusDecoderConfig::for_codec(TxMicCodec::OpusNb).unwrap();
-        assert_eq!(nb.sample_rate_hz, 16_000);
+        assert_eq!(nb.encoder_sample_rate_hz, 16_000);
+        assert_eq!(nb.decode_output_sample_rate_hz, 48_000);
         assert_eq!(nb.bitrate_bps, 16_000);
         assert_eq!(nb.frame_ms, 20);
-        assert_eq!(nb.frame_samples, 320);
+        assert_eq!(nb.encoder_frame_samples, 320);
+        assert_eq!(nb.decode_output_frame_samples, 960);
         assert!(nb.fec_enabled);
         assert!(!nb.dtx_enabled);
 
         let wb = TxOpusDecoderConfig::for_codec(TxMicCodec::OpusWb).unwrap();
-        assert_eq!(wb.sample_rate_hz, 48_000);
+        assert_eq!(wb.encoder_sample_rate_hz, 48_000);
+        assert_eq!(wb.decode_output_sample_rate_hz, 48_000);
         assert_eq!(wb.bitrate_bps, 24_000);
-        assert_eq!(wb.frame_samples, 960);
+        assert_eq!(wb.encoder_frame_samples, 960);
+        assert_eq!(wb.decode_output_frame_samples, 960);
         assert!(TxOpusDecoderConfig::for_codec(TxMicCodec::Pcm).is_none());
     }
 
     #[test]
-    fn opus_decoder_backend_is_not_wired_even_when_flagged_on() {
+    fn opus_decoder_backend_is_gated_and_reports_output_invariant() {
         let config = TxOpusDecoderConfig::for_codec(TxMicCodec::OpusWb).unwrap();
-        assert_eq!(
-            TxOpusDecoder::new(
-                config,
-                TxCodecRuntimeFlags {
-                    opus_decode_enabled: true
-                }
-            )
-            .unwrap_err(),
-            TxDecodeError::UnsupportedCodec
+        let decoder = TxOpusDecoder::new(
+            config,
+            TxCodecRuntimeFlags {
+                opus_decode_enabled: true,
+            },
         );
+        match decoder {
+            Ok(decoder) => {
+                assert_eq!(decoder.output_sample_rate_hz(), 48_000);
+                assert_eq!(decoder.output_frame_samples(), 960);
+            }
+            Err(TxDecodeError::OpusBackendUnavailable) => {}
+            Err(err) => panic!("unexpected Opus backend result: {err:?}"),
+        }
+    }
+
+    #[test]
+    fn opus_decoder_rejects_wrong_output_sample_count_before_backend_decode() {
+        let decoder = TxCodecDecoder::new_with_flags(
+            TxMicCodec::OpusWb,
+            TxCodecRuntimeFlags {
+                opus_decode_enabled: true,
+            },
+        );
+        let result = decoder.decode(TX_SAMPLE_TYPE_S16, 320, &[0xff, 0xff], 2);
+        if result != Err(TxDecodeError::OpusBackendUnavailable) {
+            assert_eq!(result, Err(TxDecodeError::SampleCountMismatch));
+        }
     }
 
     #[test]

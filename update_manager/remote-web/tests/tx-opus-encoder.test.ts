@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   TX_OPUS_ENCODER_RUNTIME_ENABLED,
+  TX_OPUS_DECODE_OUTPUT_SAMPLE_RATE_HZ,
   TX_OPUS_FRAME_DURATION_US,
   buildTxMicOpusFrame,
   createTxOpusEncoderSkeleton,
@@ -19,17 +20,21 @@ describe('Phase 44 TX Opus encoder skeleton', () => {
     const nb = txOpusProfileForCodec('opus_nb');
     expect(nb.codecId).toBe(TX_MIC_CODEC_OPUS_NB);
     expect(nb.sampleRateHz).toBe(16_000);
+    expect(nb.decodeOutputSampleRateHz).toBe(TX_OPUS_DECODE_OUTPUT_SAMPLE_RATE_HZ);
     expect(nb.bitrateBps).toBe(16_000);
     expect(nb.frameDurationUs).toBe(TX_OPUS_FRAME_DURATION_US);
     expect(nb.frameSamples).toBe(320);
+    expect(nb.decodedFrameSamples).toBe(960);
     expect(nb.fecEnabled).toBe(true);
     expect(nb.dtxEnabled).toBe(false);
 
     const wb = txOpusProfileForCodec('opus_wb');
     expect(wb.codecId).toBe(TX_MIC_CODEC_OPUS_WB);
     expect(wb.sampleRateHz).toBe(48_000);
+    expect(wb.decodeOutputSampleRateHz).toBe(TX_OPUS_DECODE_OUTPUT_SAMPLE_RATE_HZ);
     expect(wb.bitrateBps).toBe(24_000);
     expect(wb.frameSamples).toBe(960);
+    expect(wb.decodedFrameSamples).toBe(960);
     expect(wb.fecEnabled).toBe(true);
     expect(wb.dtxEnabled).toBe(false);
   });
@@ -68,5 +73,15 @@ describe('Phase 44 TX Opus encoder skeleton', () => {
     expect(view.getUint8(TX_MIC_FRAME_HEADER_BYTES)).toBe(1);
     expect(view.getUint8(TX_MIC_FRAME_HEADER_BYTES + 1)).toBe(2);
     expect(view.getUint8(TX_MIC_FRAME_HEADER_BYTES + 2)).toBe(255);
+  });
+
+  it('uses 48 kHz decoded sample count for narrowband Opus mic headers', () => {
+    const { frame, decodedSampleCount } = buildTxMicOpusFrame([7, 8, 9], 88, 'opus_nb');
+    const view = new DataView(frame);
+
+    expect(decodedSampleCount).toBe(960);
+    expect(view.getUint32(4, true)).toBe(16_000);
+    expect(view.getUint32(20, true)).toBe(960);
+    expect(view.getUint32(36, true)).toBe(TX_MIC_CODEC_OPUS_NB);
   });
 });
