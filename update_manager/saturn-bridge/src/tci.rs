@@ -658,7 +658,11 @@ struct ClientState {
     tx_codec_caps: BTreeSet<TxMicCodec>,
     tx_codec_active: TxMicCodec,
     tx_codec_negotiated_at: Option<Instant>,
+    tx_codec_decoder: Arc<Mutex<TxCodecDecoder>>,
+    tx_codec_degraded: bool,
     tx_codec_decode_error_count: u64,
+    tx_codec_decode_error_window_started_at: Option<Instant>,
+    tx_codec_decode_error_window_count: u64,
     tx_codec_stale_drop_count: u64,
     tx_codec_release_flush_count: u64,
     phase42: Option<Phase42ClientMetadata>,
@@ -684,7 +688,11 @@ impl Default for ClientState {
             tx_codec_caps: BTreeSet::from([TxMicCodec::Pcm]),
             tx_codec_active: TxMicCodec::Pcm,
             tx_codec_negotiated_at: None,
+            tx_codec_decoder: Arc::new(Mutex::new(TxCodecDecoder::new(TxMicCodec::Pcm))),
+            tx_codec_degraded: false,
             tx_codec_decode_error_count: 0,
+            tx_codec_decode_error_window_started_at: None,
+            tx_codec_decode_error_window_count: 0,
             tx_codec_stale_drop_count: 0,
             tx_codec_release_flush_count: 0,
             phase42: None,
@@ -705,6 +713,8 @@ const MAX_TCI_INBOUND_FRAME_BYTES: usize = 256 * 1024;
 const MAX_TCI_MIC_SAMPLES: usize = 32_768;
 const BULK_TCP_OUTQ_LIMIT_BYTES: usize = 64 * 1024;
 const BULK_BACKPRESSURE_PAUSE_MS: u64 = 10;
+const TX_CODEC_DECODE_ERROR_FORCE_RX_LIMIT: u64 = 10;
+const TX_CODEC_DECODE_ERROR_WINDOW: Duration = Duration::from_secs(1);
 
 #[cfg(target_os = "linux")]
 const TIOCOUTQ: c_ulong = 0x5411;
@@ -724,6 +734,10 @@ fn tx_uplink_late_fault_message(age_ms: u64, limit_ms: u64) -> String {
 
 fn tx_control_watchdog_fault_message(silence_ms: u64, limit_ms: u64) -> String {
     format!("tx_fault:0,control_watchdog,{silence_ms},{limit_ms};")
+}
+
+fn tx_codec_decode_fault_message(count: u64, limit: u64) -> String {
+    format!("tx_fault:0,codec_decode,count={count},limit={limit};")
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -2067,7 +2081,7 @@ fn handle_incoming_message(
                     Instant::now(),
                 )
             {
-                match parse_tci_mic_frame_result(&data) {
+                match parse_tci_mic_frame_result_for_client(clients, client_id, &data) {
                     Ok(frame) => {
                         if tx_codec_frame_is_stale(frame.received_at, Instant::now()) {
                             record_client_tx_codec_stale_drop(clients, client_id);
@@ -2082,7 +2096,17 @@ fn handle_incoming_message(
                         let _ = command_tx.send(TciCommand::MicAudioFrame(frame));
                     }
                     Err(TciMicFrameParseError::NotMicFrame) => {}
-                    Err(_) => record_client_tx_codec_decode_error(clients, client_id),
+                    Err(_) => {
+                        let action = record_client_tx_codec_decode_error(clients, client_id);
+                        if action.force_rx {
+                            send_safety_text_to_client_or_control(
+                                clients,
+                                client_id,
+                                tx_codec_decode_fault_message(action.count, action.limit),
+                            );
+                            let _ = command_tx.send(TciCommand::SetTxEnabled(false));
+                        }
+                    }
                 }
             }
             true
@@ -3280,19 +3304,42 @@ fn tx_codec_reject_message(codec: TxMicCodec, reason: &str) -> String {
     )
 }
 
+fn reset_client_tx_codec_state(
+    client: &mut ClientConnection,
+    caps: BTreeSet<TxMicCodec>,
+    selected: Option<TxMicCodec>,
+    now: Instant,
+) {
+    client.state.tx_codec_caps = caps;
+    client.state.tx_codec_decode_error_window_started_at = None;
+    client.state.tx_codec_decode_error_window_count = 0;
+    if let Some(codec) = selected {
+        client.state.tx_codec_active = codec;
+        client.state.tx_codec_negotiated_at = Some(now);
+        client.state.tx_codec_decoder = Arc::new(Mutex::new(TxCodecDecoder::new(codec)));
+        client.state.tx_codec_degraded = false;
+    } else {
+        client.state.tx_codec_negotiated_at = None;
+    }
+}
+
 fn set_client_tx_codec_caps(
     clients: &ClientRegistry,
     client_id: u64,
     caps: BTreeSet<TxMicCodec>,
 ) -> Option<TxMicCodec> {
     let selected = select_tx_codec(&caps);
-    if let Some(client) = clients.lock().unwrap().get_mut(&client_id) {
-        client.state.tx_codec_caps = caps;
-        if let Some(codec) = selected {
-            client.state.tx_codec_active = codec;
-            client.state.tx_codec_negotiated_at = Some(Instant::now());
-        } else {
-            client.state.tx_codec_negotiated_at = None;
+    let now = Instant::now();
+    let mut clients = clients.lock().unwrap();
+    if let Some(client) = clients.get_mut(&client_id) {
+        reset_client_tx_codec_state(client, caps.clone(), selected, now);
+    }
+    // Phase 42: codec negotiation happens on the control lane, but TX mic
+    // binary frames arrive on the paired media lane. Mirror the accepted state
+    // so the media client owns the decoder that will actually consume frames.
+    if let Some(media_id) = phase42_paired_media_client_id(&clients, client_id) {
+        if let Some(media) = clients.get_mut(&media_id) {
+            reset_client_tx_codec_state(media, caps, selected, now);
         }
     }
     selected
@@ -3309,6 +3356,27 @@ fn send_text_to_client(clients: &ClientRegistry, client_id: u64, text: String) {
     }
 }
 
+fn send_safety_text_to_client_or_control(clients: &ClientRegistry, client_id: u64, text: String) {
+    let outbound = {
+        let clients = clients.lock().unwrap();
+        let target_client_id = clients
+            .get(&client_id)
+            .and_then(|client| client.state.phase42.as_ref())
+            .filter(|metadata| metadata.lane == Some(Phase42SocketKind::Media))
+            .and_then(|metadata| {
+                phase42_session_pair_in_clients(&clients, &metadata.session_id)
+                    .map(|pair| pair.control_client_id)
+            })
+            .unwrap_or(client_id);
+        clients
+            .get(&target_client_id)
+            .map(|client| client.outbound.clone())
+    };
+    if let Some(outbound) = outbound {
+        let _ = outbound.enqueue(OutboundMessage::SafetyText(text));
+    }
+}
+
 fn reset_client_tx_uplink_attempt(clients: &ClientRegistry, client_id: u64) {
     if let Some(client) = clients.lock().unwrap().get_mut(&client_id) {
         client.state.tx_uplink_degraded = false;
@@ -3319,13 +3387,61 @@ fn reset_client_tx_uplink_attempt(clients: &ClientRegistry, client_id: u64) {
         client.state.tx_mic_last_arrived_seq = 0;
         client.state.tx_mic_seq_gap_count = 0;
         client.state.tx_mic_last_arrived_at = None;
+        client.state.tx_codec_decode_error_window_started_at = None;
+        client.state.tx_codec_decode_error_window_count = 0;
     }
 }
 
-fn record_client_tx_codec_decode_error(clients: &ClientRegistry, client_id: u64) {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct TxCodecDecodeFaultAction {
+    force_rx: bool,
+    count: u64,
+    limit: u64,
+}
+
+fn record_client_tx_codec_decode_error(
+    clients: &ClientRegistry,
+    client_id: u64,
+) -> TxCodecDecodeFaultAction {
+    record_client_tx_codec_decode_error_at(clients, client_id, Instant::now())
+}
+
+fn record_client_tx_codec_decode_error_at(
+    clients: &ClientRegistry,
+    client_id: u64,
+    now: Instant,
+) -> TxCodecDecodeFaultAction {
+    let limit = TX_CODEC_DECODE_ERROR_FORCE_RX_LIMIT;
+    let mut count = 0;
+    let mut force_rx = false;
     if let Some(client) = clients.lock().unwrap().get_mut(&client_id) {
         client.state.tx_codec_decode_error_count =
             client.state.tx_codec_decode_error_count.saturating_add(1);
+        let reset_window = client
+            .state
+            .tx_codec_decode_error_window_started_at
+            .map(|started_at| {
+                now.saturating_duration_since(started_at) > TX_CODEC_DECODE_ERROR_WINDOW
+            })
+            .unwrap_or(true);
+        if reset_window {
+            client.state.tx_codec_decode_error_window_started_at = Some(now);
+            client.state.tx_codec_decode_error_window_count = 0;
+        }
+        client.state.tx_codec_decode_error_window_count = client
+            .state
+            .tx_codec_decode_error_window_count
+            .saturating_add(1);
+        count = client.state.tx_codec_decode_error_window_count;
+        if count >= limit && !client.state.tx_codec_degraded {
+            client.state.tx_codec_degraded = true;
+            force_rx = true;
+        }
+    }
+    TxCodecDecodeFaultAction {
+        force_rx,
+        count,
+        limit,
     }
 }
 
@@ -3405,7 +3521,18 @@ enum TciMicFrameParseError {
     Decode(TxDecodeError),
 }
 
-fn parse_tci_mic_frame_result(data: &[u8]) -> Result<TciMicFrame, TciMicFrameParseError> {
+struct TciMicFrameParts<'a> {
+    sample_rate_hz: u32,
+    sample_type: u32,
+    channels: u32,
+    sequence: u32,
+    codec: TxMicCodec,
+    sample_count: usize,
+    payload: &'a [u8],
+    declared_payload_bytes: usize,
+}
+
+fn parse_tci_mic_frame_parts(data: &[u8]) -> Result<TciMicFrameParts<'_>, TciMicFrameParseError> {
     if data.len() < 64 {
         return Err(TciMicFrameParseError::Malformed);
     }
@@ -3469,16 +3596,67 @@ fn parse_tci_mic_frame_result(data: &[u8]) -> Result<TciMicFrame, TciMicFramePar
     } else {
         &raw_payload[..declared_payload_bytes]
     };
-    let samples = TxCodecDecoder::new(codec)
-        .decode(sample_type, sample_count, payload, declared_payload_bytes)
-        .map_err(TciMicFrameParseError::Decode)?;
-    Ok(TciMicFrame {
+    Ok(TciMicFrameParts {
         sample_rate_hz,
+        sample_type,
         channels,
         sequence,
+        codec,
+        sample_count,
+        payload,
+        declared_payload_bytes,
+    })
+}
+
+fn decode_tci_mic_frame_parts(
+    parts: TciMicFrameParts<'_>,
+    decoder: &mut TxCodecDecoder,
+) -> Result<TciMicFrame, TciMicFrameParseError> {
+    if decoder.codec() != parts.codec {
+        return Err(TciMicFrameParseError::Decode(TxDecodeError::CodecMismatch));
+    }
+    let samples = decoder
+        .decode(
+            parts.sample_type,
+            parts.sample_count,
+            parts.payload,
+            parts.declared_payload_bytes,
+        )
+        .map_err(TciMicFrameParseError::Decode)?;
+    Ok(TciMicFrame {
+        sample_rate_hz: parts.sample_rate_hz,
+        channels: parts.channels,
+        sequence: parts.sequence,
         received_at: Instant::now(),
         samples,
     })
+}
+
+#[cfg(test)]
+fn parse_tci_mic_frame_result(data: &[u8]) -> Result<TciMicFrame, TciMicFrameParseError> {
+    let parts = parse_tci_mic_frame_parts(data)?;
+    let mut decoder = TxCodecDecoder::new(parts.codec);
+    decode_tci_mic_frame_parts(parts, &mut decoder)
+}
+
+fn parse_tci_mic_frame_result_for_client(
+    clients: &ClientRegistry,
+    client_id: u64,
+    data: &[u8],
+) -> Result<TciMicFrame, TciMicFrameParseError> {
+    let parts = parse_tci_mic_frame_parts(data)?;
+    let decoder = {
+        let clients = clients.lock().unwrap();
+        let Some(client) = clients.get(&client_id) else {
+            return Err(TciMicFrameParseError::Malformed);
+        };
+        if client.state.tx_codec_active != parts.codec {
+            return Err(TciMicFrameParseError::Decode(TxDecodeError::CodecMismatch));
+        }
+        client.state.tx_codec_decoder.clone()
+    };
+    let mut decoder = decoder.lock().unwrap();
+    decode_tci_mic_frame_parts(parts, &mut decoder)
 }
 
 fn tci_websocket_config() -> WebSocketConfig {
@@ -4034,6 +4212,36 @@ mod tests {
     }
 
     #[test]
+    fn phase44_tx_codec_caps_mirror_from_control_to_paired_media() {
+        let (tx, rx) = mpsc::channel();
+        let clients = test_client_registry(73);
+        clients.lock().unwrap().insert(
+            74,
+            ClientConnection {
+                outbound: ClientOutbound::new(),
+                state: ClientState::default(),
+            },
+        );
+
+        parse_tci_command("session_lane:phase-44,control;", &tx, &clients, 73, true);
+        parse_tci_command("session_lane:phase-44,media;", &tx, &clients, 74, false);
+        while rx.try_recv().is_ok() {}
+
+        parse_tci_command("tx_codec_caps:0,pcm;", &tx, &clients, 73, true);
+
+        let clients = clients.lock().unwrap();
+        let control = clients.get(&73).unwrap();
+        let media = clients.get(&74).unwrap();
+        assert_eq!(control.state.tx_codec_active, TxMicCodec::Pcm);
+        assert_eq!(media.state.tx_codec_active, TxMicCodec::Pcm);
+        assert!(media.state.tx_codec_negotiated_at.is_some());
+        assert_eq!(
+            media.state.tx_codec_decoder.lock().unwrap().codec(),
+            TxMicCodec::Pcm
+        );
+    }
+
+    #[test]
     fn phase44_tx_codec_caps_rejects_non_pcm_until_decoder_exists() {
         let (tx, rx) = mpsc::channel();
         let clients = test_client_registry(7);
@@ -4397,6 +4605,71 @@ mod tests {
             74,
             Instant::now()
         ));
+    }
+
+    #[test]
+    fn phase44_media_decode_errors_force_rx_and_report_on_control_lane() {
+        let (tx, rx) = mpsc::channel();
+        let clients = test_client_registry(73);
+        clients.lock().unwrap().insert(
+            74,
+            ClientConnection {
+                outbound: ClientOutbound::new(),
+                state: ClientState::default(),
+            },
+        );
+        let operator_client_id = Arc::new(AtomicU64::new(73));
+        let operator_control_at = Arc::new(Mutex::new(None));
+
+        parse_tci_command("session_lane:phase-44,control;", &tx, &clients, 73, true);
+        parse_tci_command("session_lane:phase-44,media;", &tx, &clients, 74, false);
+        while rx.try_recv().is_ok() {}
+
+        let mut frame = vec![0u8; 64 + 4];
+        write_u32_le(&mut frame, 4, 48_000);
+        write_u32_le(&mut frame, 8, TX_SAMPLE_TYPE_S16);
+        write_u32_le(&mut frame, 20, 2);
+        write_u32_le(&mut frame, 24, 2);
+        write_u32_le(&mut frame, 28, 1);
+        write_u32_le(&mut frame, 36, TX_MIC_CODEC_PCM_ID);
+        write_u32_le(&mut frame, 40, 2);
+
+        for _ in 0..TX_CODEC_DECODE_ERROR_FORCE_RX_LIMIT {
+            assert!(handle_incoming_message(
+                Message::Binary(frame.clone()),
+                &tx,
+                &clients,
+                &operator_client_id,
+                &operator_control_at,
+                74,
+            ));
+        }
+
+        assert!(matches!(rx.try_recv(), Ok(TciCommand::SetTxEnabled(false))));
+        assert!(rx.try_recv().is_err());
+
+        let (control_outbound, media_outbound) = {
+            let clients = clients.lock().unwrap();
+            let media = clients.get(&74).unwrap();
+            assert_eq!(
+                media.state.tx_codec_decode_error_count,
+                TX_CODEC_DECODE_ERROR_FORCE_RX_LIMIT
+            );
+            assert!(media.state.tx_codec_degraded);
+            (
+                clients.get(&73).unwrap().outbound.clone(),
+                media.outbound.clone(),
+            )
+        };
+
+        let fault = control_outbound.next_message(true).unwrap();
+        match fault.message {
+            OutboundMessage::SafetyText(text) => {
+                assert_eq!(text, "tx_fault:0,codec_decode,count=10,limit=10;")
+            }
+            other => panic!("unexpected outbound: {other:?}"),
+        }
+        assert!(media_outbound.next_message(true).is_none());
     }
 
     #[test]

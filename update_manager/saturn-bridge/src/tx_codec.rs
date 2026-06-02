@@ -12,6 +12,7 @@ pub enum TxMicCodec {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TxDecodeError {
+    CodecMismatch,
     CodecDisabled,
     OpusBackendUnavailable,
     OpusDecoderCreateFailed,
@@ -153,6 +154,8 @@ struct OpusDynamicLibrary {
     ) -> c_int,
 }
 
+unsafe impl Send for OpusDynamicLibrary {}
+
 impl OpusDynamicLibrary {
     fn load() -> Result<Self, TxDecodeError> {
         let path =
@@ -205,6 +208,8 @@ struct OpusDynamicDecoder {
     library: OpusDynamicLibrary,
     decoder: *mut c_void,
 }
+
+unsafe impl Send for OpusDynamicDecoder {}
 
 impl OpusDynamicDecoder {
     fn new(output_sample_rate_hz: u32) -> Result<Self, TxDecodeError> {
@@ -322,10 +327,20 @@ impl TxOpusDecoder {
     }
 }
 
-#[derive(Clone, Debug)]
 pub struct TxCodecDecoder {
     codec: TxMicCodec,
     flags: TxCodecRuntimeFlags,
+    opus: Option<TxOpusDecoder>,
+}
+
+impl fmt::Debug for TxCodecDecoder {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("TxCodecDecoder")
+            .field("codec", &self.codec)
+            .field("flags", &self.flags)
+            .field("opus", &self.opus.as_ref().map(|_| "initialized"))
+            .finish()
+    }
 }
 
 impl TxCodecDecoder {
@@ -334,11 +349,19 @@ impl TxCodecDecoder {
     }
 
     pub fn new_with_flags(codec: TxMicCodec, flags: TxCodecRuntimeFlags) -> Self {
-        Self { codec, flags }
+        Self {
+            codec,
+            flags,
+            opus: None,
+        }
+    }
+
+    pub fn codec(&self) -> TxMicCodec {
+        self.codec
     }
 
     pub fn decode(
-        &self,
+        &mut self,
         sample_type: u32,
         sample_count: usize,
         payload: &[u8],
@@ -352,8 +375,13 @@ impl TxCodecDecoder {
                 let Some(config) = TxOpusDecoderConfig::for_codec(self.codec) else {
                     return Err(TxDecodeError::UnsupportedCodec);
                 };
-                let mut decoder = TxOpusDecoder::new(config, self.flags)?;
-                decoder.decode(sample_type, sample_count, payload, declared_payload_bytes)
+                if self.opus.is_none() {
+                    self.opus = Some(TxOpusDecoder::new(config, self.flags)?);
+                }
+                self.opus
+                    .as_mut()
+                    .ok_or(TxDecodeError::OpusDecoderCreateFailed)?
+                    .decode(sample_type, sample_count, payload, declared_payload_bytes)
             }
         }
     }
@@ -441,7 +469,8 @@ mod tests {
     #[test]
     fn pcm_decoder_passes_through_s16_samples() {
         let payload = [0x00, 0x20, 0x00, 0xc0, 0xff, 0x7f];
-        let samples = TxCodecDecoder::new(TxMicCodec::Pcm)
+        let mut decoder = TxCodecDecoder::new(TxMicCodec::Pcm);
+        let samples = decoder
             .decode(TX_SAMPLE_TYPE_S16, 3, &payload, payload.len())
             .unwrap();
         assert_eq!(samples, vec![0.25, -0.5, 32767.0 / 32768.0]);
@@ -450,7 +479,8 @@ mod tests {
     #[test]
     fn pcm_decoder_passes_through_float32_samples() {
         let payload = [0.25f32.to_le_bytes(), (-0.5f32).to_le_bytes()].concat();
-        let samples = TxCodecDecoder::new(TxMicCodec::Pcm)
+        let mut decoder = TxCodecDecoder::new(TxMicCodec::Pcm);
+        let samples = decoder
             .decode(TX_SAMPLE_TYPE_FLOAT32, 2, &payload, payload.len())
             .unwrap();
         assert_eq!(samples, vec![0.25, -0.5]);
@@ -458,20 +488,22 @@ mod tests {
 
     #[test]
     fn pcm_decoder_rejects_bad_payload_lengths() {
+        let mut decoder = TxCodecDecoder::new(TxMicCodec::Pcm);
         assert_eq!(
-            TxCodecDecoder::new(TxMicCodec::Pcm).decode(TX_SAMPLE_TYPE_S16, 3, &[0; 6], 4),
+            decoder.decode(TX_SAMPLE_TYPE_S16, 3, &[0; 6], 4),
             Err(TxDecodeError::PayloadSizeMismatch)
         );
         assert_eq!(
-            TxCodecDecoder::new(TxMicCodec::Pcm).decode(TX_SAMPLE_TYPE_S16, 3, &[0; 4], 0),
+            decoder.decode(TX_SAMPLE_TYPE_S16, 3, &[0; 4], 0),
             Err(TxDecodeError::PayloadTooShort)
         );
     }
 
     #[test]
     fn opus_decoder_is_not_enabled_yet() {
+        let mut decoder = TxCodecDecoder::new(TxMicCodec::OpusWb);
         assert_eq!(
-            TxCodecDecoder::new(TxMicCodec::OpusWb).decode(TX_SAMPLE_TYPE_S16, 3, &[0; 6], 6),
+            decoder.decode(TX_SAMPLE_TYPE_S16, 3, &[0; 6], 6),
             Err(TxDecodeError::CodecDisabled)
         );
     }
@@ -518,7 +550,7 @@ mod tests {
 
     #[test]
     fn opus_decoder_rejects_wrong_output_sample_count_before_backend_decode() {
-        let decoder = TxCodecDecoder::new_with_flags(
+        let mut decoder = TxCodecDecoder::new_with_flags(
             TxMicCodec::OpusWb,
             TxCodecRuntimeFlags {
                 opus_decode_enabled: true,
