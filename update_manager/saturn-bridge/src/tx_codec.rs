@@ -344,6 +344,7 @@ impl fmt::Debug for TxCodecDecoder {
 }
 
 impl TxCodecDecoder {
+    #[cfg(test)]
     pub fn new(codec: TxMicCodec) -> Self {
         Self::new_with_flags(codec, TxCodecRuntimeFlags::default())
     }
@@ -559,6 +560,43 @@ mod tests {
         let result = decoder.decode(TX_SAMPLE_TYPE_S16, 320, &[0xff, 0xff], 2);
         if result != Err(TxDecodeError::OpusBackendUnavailable) {
             assert_eq!(result, Err(TxDecodeError::SampleCountMismatch));
+        }
+    }
+
+    #[test]
+    fn opus_decoder_decodes_real_wideband_packet_when_enabled() {
+        // 20 ms mono Opus packet generated locally with ffmpeg/libopus from a
+        // 1 kHz sine at 48 kHz, 24 kbps, VOIP application, VBR off.
+        let payload = [
+            0x78, 0x82, 0x88, 0x8e, 0x19, 0xf8, 0x0e, 0x09, 0x82, 0x91, 0x57, 0x70, 0x44, 0xff,
+            0x1c, 0x9d, 0x5f, 0xe8, 0x6a, 0xd3, 0x3a, 0x01, 0x26, 0x5d, 0x01, 0xa0, 0x3a, 0x9f,
+            0x2e, 0x7c, 0x79, 0xdc, 0x7b, 0x82, 0xf0, 0x21, 0x95, 0x56, 0xc2, 0xe5, 0xc1, 0xe2,
+            0x9d, 0x67, 0x7b, 0x9a, 0xc6, 0x24, 0xf9, 0x83, 0x72, 0xa9, 0x43, 0xc3, 0x54, 0x5e,
+            0x98, 0xfd, 0xa0, 0x5e,
+        ];
+        let mut decoder = TxCodecDecoder::new_with_flags(
+            TxMicCodec::OpusWb,
+            TxCodecRuntimeFlags {
+                opus_decode_enabled: true,
+            },
+        );
+        match decoder.decode(
+            TX_SAMPLE_TYPE_S16,
+            TX_OPUS_DECODE_OUTPUT_FRAME_SAMPLES,
+            &payload,
+            payload.len(),
+        ) {
+            Ok(samples) => {
+                assert_eq!(samples.len(), TX_OPUS_DECODE_OUTPUT_FRAME_SAMPLES);
+                assert!(samples.iter().all(|sample| sample.is_finite()));
+                let peak = samples
+                    .iter()
+                    .map(|sample| sample.abs())
+                    .fold(0.0f32, f32::max);
+                assert!(peak > 0.001);
+            }
+            Err(TxDecodeError::OpusBackendUnavailable) => {}
+            Err(err) => panic!("unexpected Opus fixture decode result: {err:?}"),
         }
     }
 

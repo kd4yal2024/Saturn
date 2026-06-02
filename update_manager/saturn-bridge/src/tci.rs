@@ -17,7 +17,9 @@ use tungstenite::{accept_with_config, Message};
 
 use crate::config::BridgeConfig;
 use crate::radio_model::{AgcMode, DemodMode, NoiseBlankerMode, NoiseReductionMode, RadioModel};
-use crate::tx_codec::{tx_codec_frame_is_stale, TxCodecDecoder, TxDecodeError, TxMicCodec};
+use crate::tx_codec::{
+    tx_codec_frame_is_stale, TxCodecDecoder, TxCodecRuntimeFlags, TxDecodeError, TxMicCodec,
+};
 
 #[derive(Clone, Debug)]
 pub struct TciMicFrame {
@@ -658,6 +660,7 @@ struct ClientState {
     tx_codec_caps: BTreeSet<TxMicCodec>,
     tx_codec_active: TxMicCodec,
     tx_codec_negotiated_at: Option<Instant>,
+    tx_codec_runtime_flags: TxCodecRuntimeFlags,
     tx_codec_decoder: Arc<Mutex<TxCodecDecoder>>,
     tx_codec_degraded: bool,
     tx_codec_decode_error_count: u64,
@@ -670,6 +673,12 @@ struct ClientState {
 
 impl Default for ClientState {
     fn default() -> Self {
+        Self::with_tx_codec_runtime_flags(TxCodecRuntimeFlags::default())
+    }
+}
+
+impl ClientState {
+    fn with_tx_codec_runtime_flags(tx_codec_runtime_flags: TxCodecRuntimeFlags) -> Self {
         Self {
             iq_stream_enabled: false,
             audio_stream_enabled: false,
@@ -688,7 +697,11 @@ impl Default for ClientState {
             tx_codec_caps: BTreeSet::from([TxMicCodec::Pcm]),
             tx_codec_active: TxMicCodec::Pcm,
             tx_codec_negotiated_at: None,
-            tx_codec_decoder: Arc::new(Mutex::new(TxCodecDecoder::new(TxMicCodec::Pcm))),
+            tx_codec_runtime_flags,
+            tx_codec_decoder: Arc::new(Mutex::new(TxCodecDecoder::new_with_flags(
+                TxMicCodec::Pcm,
+                tx_codec_runtime_flags,
+            ))),
             tx_codec_degraded: false,
             tx_codec_decode_error_count: 0,
             tx_codec_decode_error_window_started_at: None,
@@ -1034,6 +1047,9 @@ impl TciFrontend {
         let operator_control_at = Arc::new(Mutex::new(None));
         let drop_count = Arc::new(AtomicU64::new(0));
         let remote_tx_rf_enabled = config.remote_tx_rf_enabled;
+        let tx_codec_runtime_flags = TxCodecRuntimeFlags {
+            opus_decode_enabled: config.tx_opus_decode_enabled,
+        };
 
         let client_registry = clients.clone();
         let next_client = next_client_id.clone();
@@ -1055,6 +1071,7 @@ impl TciFrontend {
                     let operator_control_at = operator_control.clone();
                     let drop_count = drop_counter.clone();
                     let radio_model = radio_model.clone();
+                    let tx_codec_runtime_flags = tx_codec_runtime_flags;
 
                     thread::spawn(move || {
                         handle_client(
@@ -1068,6 +1085,7 @@ impl TciFrontend {
                             &radio_model,
                             &drop_count,
                             remote_tx_rf_enabled,
+                            tx_codec_runtime_flags,
                         );
                     });
                 }
@@ -1665,13 +1683,19 @@ fn handle_client(
     radio_model: &Arc<Mutex<RadioModel>>,
     drop_count: &Arc<AtomicU64>,
     remote_tx_rf_enabled: bool,
+    tx_codec_runtime_flags: TxCodecRuntimeFlags,
 ) {
     let _ = stream.set_nonblocking(true);
     match accept_with_config(stream, Some(tci_websocket_config())) {
         Ok(mut websocket) => {
             let outbound = ClientOutbound::new();
-            let (role, first_client, client_count) =
-                register_client(clients, operator_client_id, client_id, outbound.clone());
+            let (role, first_client, client_count) = register_client(
+                clients,
+                operator_client_id,
+                client_id,
+                outbound.clone(),
+                tx_codec_runtime_flags,
+            );
             println!(
                 "saturn-bridge: TCI client {client_id} assigned {} role ({client_count} connected)",
                 role.as_tci()
@@ -1863,6 +1887,7 @@ fn register_client(
     operator_client_id: &Arc<AtomicU64>,
     client_id: u64,
     outbound: Arc<ClientOutbound>,
+    tx_codec_runtime_flags: TxCodecRuntimeFlags,
 ) -> (TciClientRole, bool, usize) {
     let mut clients = clients.lock().unwrap();
     let first_client = clients.is_empty();
@@ -1870,7 +1895,7 @@ fn register_client(
         client_id,
         ClientConnection {
             outbound,
-            state: ClientState::default(),
+            state: ClientState::with_tx_codec_runtime_flags(tx_codec_runtime_flags),
         },
     );
 
@@ -3286,9 +3311,15 @@ fn parse_tx_codec_caps_args(args: &[&str]) -> BTreeSet<TxMicCodec> {
         .collect()
 }
 
-fn select_tx_codec(caps: &BTreeSet<TxMicCodec>) -> Option<TxMicCodec> {
-    // Phase 44.1B scaffold: the bridge can negotiate the codec path, but only
-    // PCM is enabled until the Opus decoder and safety gates land.
+fn select_tx_codec(caps: &BTreeSet<TxMicCodec>, flags: TxCodecRuntimeFlags) -> Option<TxMicCodec> {
+    if flags.opus_decode_enabled {
+        if caps.contains(&TxMicCodec::OpusWb) {
+            return Some(TxMicCodec::OpusWb);
+        }
+        if caps.contains(&TxMicCodec::OpusNb) {
+            return Some(TxMicCodec::OpusNb);
+        }
+    }
     caps.contains(&TxMicCodec::Pcm).then_some(TxMicCodec::Pcm)
 }
 
@@ -3316,7 +3347,10 @@ fn reset_client_tx_codec_state(
     if let Some(codec) = selected {
         client.state.tx_codec_active = codec;
         client.state.tx_codec_negotiated_at = Some(now);
-        client.state.tx_codec_decoder = Arc::new(Mutex::new(TxCodecDecoder::new(codec)));
+        client.state.tx_codec_decoder = Arc::new(Mutex::new(TxCodecDecoder::new_with_flags(
+            codec,
+            client.state.tx_codec_runtime_flags,
+        )));
         client.state.tx_codec_degraded = false;
     } else {
         client.state.tx_codec_negotiated_at = None;
@@ -3328,9 +3362,13 @@ fn set_client_tx_codec_caps(
     client_id: u64,
     caps: BTreeSet<TxMicCodec>,
 ) -> Option<TxMicCodec> {
-    let selected = select_tx_codec(&caps);
-    let now = Instant::now();
     let mut clients = clients.lock().unwrap();
+    let flags = clients
+        .get(&client_id)
+        .map(|client| client.state.tx_codec_runtime_flags)
+        .unwrap_or_default();
+    let selected = select_tx_codec(&caps, flags);
+    let now = Instant::now();
     if let Some(client) = clients.get_mut(&client_id) {
         reset_client_tx_codec_state(client, caps.clone(), selected, now);
     }
@@ -4262,6 +4300,43 @@ mod tests {
             OutboundMessage::Text(text) => {
                 assert_eq!(text, "tx_codec_reject:0,opus_wb,unsupported;")
             }
+            other => panic!("unexpected outbound: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn phase44_tx_codec_caps_accepts_opus_only_when_runtime_flag_enabled() {
+        let (tx, rx) = mpsc::channel();
+        let mut clients_map = BTreeMap::new();
+        clients_map.insert(
+            7,
+            ClientConnection {
+                outbound: ClientOutbound::new(),
+                state: ClientState::with_tx_codec_runtime_flags(TxCodecRuntimeFlags {
+                    opus_decode_enabled: true,
+                }),
+            },
+        );
+        let clients = Arc::new(Mutex::new(clients_map));
+
+        parse_tci_command("tx_codec_caps:0,opus_wb,pcm;", &tx, &clients, 7, true);
+
+        assert!(rx.try_recv().is_err());
+        let outbound = {
+            let clients = clients.lock().unwrap();
+            let client = clients.get(&7).unwrap();
+            assert!(client.state.tx_codec_caps.contains(&TxMicCodec::OpusWb));
+            assert_eq!(client.state.tx_codec_active, TxMicCodec::OpusWb);
+            assert!(client.state.tx_codec_negotiated_at.is_some());
+            assert_eq!(
+                client.state.tx_codec_decoder.lock().unwrap().codec(),
+                TxMicCodec::OpusWb
+            );
+            client.outbound.clone()
+        };
+        let queued = outbound.next_message(true).unwrap();
+        match queued.message {
+            OutboundMessage::Text(text) => assert_eq!(text, "tx_codec_accept:0,opus_wb;"),
             other => panic!("unexpected outbound: {other:?}"),
         }
     }

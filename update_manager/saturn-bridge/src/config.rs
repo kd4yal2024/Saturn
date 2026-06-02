@@ -31,6 +31,7 @@ pub struct BridgeConfig {
     pub display_frame_limit_hz: u16,
     pub rx_audio_transport_rate_hz: u32,
     pub rx_audio_transport_channels: u32,
+    pub tx_opus_decode_enabled: bool,
 }
 
 impl Default for BridgeConfig {
@@ -64,6 +65,7 @@ impl Default for BridgeConfig {
             display_frame_limit_hz: 30,
             rx_audio_transport_rate_hz: 48_000,
             rx_audio_transport_channels: 2,
+            tx_opus_decode_enabled: false,
         }
     }
 }
@@ -183,6 +185,10 @@ impl BridgeConfig {
                 defaults.rx_audio_transport_channels,
             )
             .clamp(1, 2),
+            tx_opus_decode_enabled: parse_env_bool(
+                "SATURN_BRIDGE_TX_OPUS_DECODE_ENABLED",
+                defaults.tx_opus_decode_enabled,
+            ),
         }
     }
 }
