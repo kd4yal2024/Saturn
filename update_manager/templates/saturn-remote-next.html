@@ -4742,9 +4742,26 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     }
 
     const PHASE40_DISPLAY_PROFILE = normalizePhase40DisplayProfile(PHASE40_QUERY.get("phase40_display_profile"));
+    function safeLocalStorageGet(key) {
+      try {
+        return localStorage.getItem(key);
+      } catch {
+        return null;
+      }
+    }
+    const PHASE44_TX_OPUS_OVERRIDE = _next.txOpusRuntimeOverrideEnabled(
+      window.location.search,
+      safeLocalStorageGet(_next.TX_OPUS_OVERRIDE_STORAGE_KEY)
+    );
 
     const state = globalThis.SaturnRemoteNext.createAppState();
     state.phase40DisplayProfile = PHASE40_DISPLAY_PROFILE;
+    state.txOpusOverrideEnabled = PHASE44_TX_OPUS_OVERRIDE;
+    state.txOpusProducer = null;
+    state.txOpusProducerCodec = null;
+    state.txOpusPendingTimings = new Map();
+    state.txOpusSampleCarry = new Float32Array(0);
+    state.txOpusFallbackReason = "";
     state.displayIqSource = "rx";
     state.txDisplaySettleFrames = 0;
     state.iqFrameVersion = 0;
@@ -8147,14 +8164,17 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       const txCodecDetected = Array.isArray(state.txCodecDetectedCaps) && state.txCodecDetectedCaps.length
         ? state.txCodecDetectedCaps.join(", ")
         : "pcm";
+      const txCodecAdvertised = Array.isArray(state.txCodecAdvertisedCaps) && state.txCodecAdvertisedCaps.length
+        ? state.txCodecAdvertisedCaps.join(", ")
+        : "pcm";
       const txCodecCounters = [
         state.txCodecDecodeErrorCount ? `decode errors ${state.txCodecDecodeErrorCount}` : "",
         state.txCodecStaleDropCount ? `stale drops ${state.txCodecStaleDropCount}` : "",
         state.txCodecReleaseFlushCount ? `release flushes ${state.txCodecReleaseFlushCount}` : "",
       ].filter(Boolean).join("; ");
       const txCodecDetailBase = state.txCodecAccepted
-        ? `Bridge accepted; browser detects ${txCodecDetected}`
-        : (state.txCodecRejectReason ? `Rejected: ${state.txCodecRejectReason}` : "Waiting for bridge accept");
+        ? `Bridge accepted; browser detects ${txCodecDetected}; advertising ${txCodecAdvertised}`
+        : (state.txCodecRejectReason ? `Rejected: ${state.txCodecRejectReason}` : `Waiting for bridge accept; advertising ${txCodecAdvertised}`);
       const txCodecDetail = txCodecCounters ? `${txCodecDetailBase}; ${txCodecCounters}` : txCodecDetailBase;
       const txUplinkLate = state.txPhase === "keyed" && state.txMicAgeMs > 250;
       const txUplinkTone = state.txUplinkDegraded || txUplinkLate ? "warn" : "ok";
@@ -8838,21 +8858,32 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     }
 
     function sendTxCodecCaps() {
-      state.txCodecRequested = "pcm";
+      const advertised = Array.isArray(state.txCodecAdvertisedCaps) && state.txCodecAdvertisedCaps.length
+        ? state.txCodecAdvertisedCaps
+        : ["pcm"];
+      state.txCodecRequested = advertised.includes("opus_wb")
+        ? "opus_wb"
+        : (advertised.includes("opus_nb") ? "opus_nb" : "pcm");
       state.txCodecAccepted = null;
       state.txCodecNegotiatedAt = 0;
       state.txCodecRejectReason = null;
-      sendTci(_next.buildTxCodecCapsCommand(["pcm"]));
+      sendTci(_next.buildTxCodecCapsCommand(advertised));
     }
 
     async function refreshTxCodecCapabilities() {
       try {
-        const detection = await _next.detectTxCodecCapabilities();
+        const previousAdvertised = (state.txCodecAdvertisedCaps || ["pcm"]).join(",");
+        const detection = await _next.detectTxCodecCapabilities(globalThis, {
+          advertiseOpus: state.txOpusOverrideEnabled === true,
+        });
         state.txCodecDetectedCaps = detection.detected;
         state.txCodecAdvertisedCaps = detection.advertised;
         state.txCodecWebCodecsAudioEncoder = detection.webCodecsAudioEncoder;
         state.txCodecDetectionAt = performance.now();
         logEvent(`TX codec browser caps: detected ${detection.detected.join(", ")}; advertising ${detection.advertised.join(", ")}`);
+        if (state.connected && previousAdvertised !== detection.advertised.join(",")) {
+          sendTxCodecCaps();
+        }
         scheduleUiRefresh();
       } catch (err) {
         state.txCodecDetectedCaps = ["pcm"];
@@ -9474,17 +9505,134 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       return built.frame;
     }
 
+    function resetTxOpusProducer(reason = "") {
+      if (state.txOpusProducer) {
+        try { state.txOpusProducer.close(); } catch {}
+      }
+      state.txOpusProducer = null;
+      state.txOpusProducerCodec = null;
+      state.txOpusSampleCarry = new Float32Array(0);
+      if (state.txOpusPendingTimings && typeof state.txOpusPendingTimings.clear === "function") {
+        state.txOpusPendingTimings.clear();
+      }
+      if (reason) {
+        state.txOpusFallbackReason = reason;
+      }
+    }
+
+    function handleTxOpusFailure(reason, error = null) {
+      const detail = error && (error.message || error.name || String(error));
+      const message = detail ? `${reason}: ${detail}` : reason;
+      state.txOpusFallbackReason = message;
+      resetTxOpusProducer(message);
+      logEvent(`TX Opus encoder unavailable: ${message}`);
+      recordOperatorFault("TX Opus encoder failed", "alarm", false);
+      void setPtt(false, { lockAfter: "tx-fault" });
+      updateUi();
+    }
+
+    function sendEncodedTxOpusFrame(frame, metadata) {
+      const pending = state.txOpusPendingTimings?.get(metadata.sequence);
+      if (!pending) {
+        return;
+      }
+      if (state.txOpusPendingTimings) {
+        state.txOpusPendingTimings.delete(metadata.sequence);
+      }
+      if (!state.moxRequested || !state.connected || !state.ws || state.ws.readyState !== WebSocket.OPEN) {
+        return;
+      }
+      const sendStartedAt = performance.now();
+      state.ws.send(frame.frame);
+      const sendEndedAt = performance.now();
+      recordTxBrowserTiming(pending.timing || {}, pending.receivedAt || sendStartedAt, sendStartedAt, sendEndedAt, false);
+      sendTxUplinkStats(false);
+    }
+
+    function ensureTxOpusProducer(codec) {
+      if (state.txOpusProducer && state.txOpusProducerCodec === codec) {
+        return state.txOpusProducer;
+      }
+      resetTxOpusProducer();
+      const status = _next.createTxOpusFrameProducer(codec, {
+        enabled: state.txOpusOverrideEnabled === true,
+        scope: globalThis,
+        onFrame: sendEncodedTxOpusFrame,
+        onError: (error) => handleTxOpusFailure("encoder error", error),
+      });
+      if (status.state !== "ready") {
+        handleTxOpusFailure(status.reason || "encoder unavailable");
+        return null;
+      }
+      state.txOpusProducer = status.producer;
+      state.txOpusProducerCodec = codec;
+      logEvent(`TX Opus producer ready (${codec})`);
+      return state.txOpusProducer;
+    }
+
+    function takeTxOpusSampleFrames(monoSamples, frameSamples) {
+      const inputCount = Math.max(0, Math.floor(Number(monoSamples.length) || 0));
+      const carry = state.txOpusSampleCarry || new Float32Array(0);
+      const combined = new Float32Array(carry.length + inputCount);
+      combined.set(carry, 0);
+      for (let i = 0; i < inputCount; i += 1) {
+        const sample = Number(monoSamples[i]) || 0;
+        combined[carry.length + i] = Math.max(-1, Math.min(1, sample));
+      }
+      const frames = [];
+      let offset = 0;
+      while (offset + frameSamples <= combined.length) {
+        frames.push(combined.slice(offset, offset + frameSamples));
+        offset += frameSamples;
+      }
+      state.txOpusSampleCarry = combined.slice(offset);
+      return frames;
+    }
+
+    function sendTxOpusMicSamples(monoSamples, timing, receivedAt, codec) {
+      const producer = ensureTxOpusProducer(codec);
+      if (!producer) {
+        return false;
+      }
+      recordTxMicPeak(monoSamples);
+      const profile = _next.txOpusProfileForCodec(codec);
+      const frames = takeTxOpusSampleFrames(monoSamples, profile.frameSamples);
+      for (const samples of frames) {
+        const sequence = nextTxMicSequence();
+        const audioStatus = _next.createTxOpusAudioDataFromFloat32(samples, codec, {
+          scope: globalThis,
+          sourceSampleRateHz: 48000,
+          sequence,
+        });
+        if (audioStatus.state !== "ready") {
+          handleTxOpusFailure(audioStatus.reason || "audio data unavailable");
+          return false;
+        }
+        state.txOpusPendingTimings.set(sequence, { timing, receivedAt });
+        try {
+          producer.encode(audioStatus.audioData, sequence, audioStatus.decodedSampleCount);
+        } finally {
+          try { audioStatus.audioData.close?.(); } catch {}
+        }
+      }
+      return true;
+    }
+
     function sendTxMicSamples(monoSamples, timing = {}) {
       const receivedAt = Number.isFinite(timing.receivedAt) ? timing.receivedAt : performance.now();
       if (!state.moxRequested || !state.connected || !state.ws || state.ws.readyState !== WebSocket.OPEN) {
         return false;
       }
+      const opusCodec = _next.txOpusCodecForAccepted(
+        state.txCodecAccepted,
+        state.txOpusOverrideEnabled === true
+      );
       const bufferedBytes = Math.max(0, Math.round(Number(state.ws.bufferedAmount || 0)));
       const decision = _next.decideTxMicSend(
         bufferedBytes,
         state.bridgeRttMs,
         txMicByteRate(),
-        state.txCodecAccepted || "pcm"
+        opusCodec || "pcm"
       );
       state.txUplinkBufferedBytes = decision.bufferedBytes;
       state.txUplinkBufferedHwmBytes = Math.max(state.txUplinkBufferedHwmBytes || 0, decision.bufferedBytes);
@@ -9495,6 +9643,9 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         recordTxBrowserTiming(timing, receivedAt, null, null, true);
         sendTxUplinkStats(false);
         return false;
+      }
+      if (opusCodec) {
+        return sendTxOpusMicSamples(monoSamples, timing, receivedAt, opusCodec);
       }
       const frame = buildTxMicFrame(monoSamples, nextTxMicSequence());
       const sendStartedAt = performance.now();
@@ -9654,6 +9805,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
 
     function stopMicCapture() {
       if (!state.micCapturing) { return; }
+      resetTxOpusProducer();
       if (state.micNode) {
         if (state.micNode.generatedNodes) {
           try { state.micNode.generatedNodes.osc1.stop(); } catch {}

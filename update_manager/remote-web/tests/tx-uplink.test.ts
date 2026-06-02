@@ -182,4 +182,19 @@ describe('TX uplink guard', () => {
     expect(detection.opusNb).toBe(true);
     expect(detection.opusWb).toBe(true);
   });
+
+  it('advertises detected Opus codecs only when explicitly requested', async () => {
+    const scope = {
+      AudioEncoder: {
+        isConfigSupported: vi.fn(async (config: Record<string, unknown>) => {
+          return { supported: config.codec === 'opus' };
+        }),
+      },
+    };
+
+    const detection = await detectTxCodecCapabilities(scope, { advertiseOpus: true });
+
+    expect(detection.detected).toEqual(['pcm', 'opus_nb', 'opus_wb']);
+    expect(detection.advertised).toEqual(['pcm', 'opus_wb']);
+  });
 });

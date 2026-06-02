@@ -16,6 +16,10 @@ export const TX_OPUS_NB_BITRATE_BPS = 16_000;
 export const TX_OPUS_WB_BITRATE_BPS = 24_000;
 export const TX_OPUS_DECODE_OUTPUT_FRAME_SAMPLES =
   (TX_OPUS_DECODE_OUTPUT_SAMPLE_RATE_HZ * TX_OPUS_FRAME_DURATION_US) / 1_000_000;
+export const TX_OPUS_OVERRIDE_QUERY_PARAM = 'phase44_tx_opus';
+export const TX_OPUS_OVERRIDE_STORAGE_KEY = 'saturn.phase44.txOpus';
+
+const TX_OPUS_OVERRIDE_TRUE_VALUES = new Set(['1', 'true', 'on', 'yes', 'opus']);
 
 export type TxOpusCodec = Extract<TxCodecCapability, 'opus_nb' | 'opus_wb'>;
 
@@ -52,6 +56,42 @@ export type TxMicOpusFrame = {
   codecId: number;
   decodedSampleCount: number;
 };
+
+export type TxOpusAudioDataInit = {
+  format: 'f32';
+  sampleRate: number;
+  numberOfFrames: number;
+  numberOfChannels: 1;
+  timestamp: number;
+  data: Float32Array;
+};
+
+export type TxOpusAudioDataLike = {
+  close?: () => void;
+};
+
+export type TxOpusAudioDataConstructorLike = new (
+  init: TxOpusAudioDataInit,
+) => TxOpusAudioDataLike;
+
+export type TxOpusAudioDataStatus =
+  | {
+      state: 'ready';
+      profile: TxOpusProfile;
+      audioData: TxOpusAudioDataLike;
+      decodedSampleCount: number;
+      timestampUs: number;
+    }
+  | {
+      state: 'unavailable';
+      reason:
+        | 'audio_data_missing'
+        | 'sample_rate_mismatch'
+        | 'empty_audio'
+        | 'frame_sample_count_mismatch'
+        | 'audio_data_error';
+      profile: TxOpusProfile;
+    };
 
 export type TxOpusAudioEncoderConfig = {
   codec: 'opus';
@@ -107,6 +147,30 @@ type PendingEncode = {
   decodedSampleCount: number;
 };
 
+export function txOpusRuntimeOverrideEnabled(
+  search: string,
+  storedValue: string | null | undefined = undefined,
+): boolean {
+  const params = new URLSearchParams(search);
+  const queryValue = params.get(TX_OPUS_OVERRIDE_QUERY_PARAM);
+  if (queryValue !== null) {
+    return TX_OPUS_OVERRIDE_TRUE_VALUES.has(queryValue.trim().toLowerCase());
+  }
+  if (storedValue !== undefined && storedValue !== null) {
+    return TX_OPUS_OVERRIDE_TRUE_VALUES.has(storedValue.trim().toLowerCase());
+  }
+  return false;
+}
+
+export function txOpusCodecForAccepted(
+  acceptedCodec: TxCodecCapability | null | undefined,
+  overrideEnabled: boolean,
+): TxOpusCodec | null {
+  if (!overrideEnabled) return null;
+  if (acceptedCodec === 'opus_wb' || acceptedCodec === 'opus_nb') return acceptedCodec;
+  return null;
+}
+
 export function txOpusProfileForCodec(codec: TxOpusCodec): TxOpusProfile {
   if (codec === 'opus_nb') {
     return {
@@ -148,6 +212,66 @@ export function txOpusAudioEncoderConfig(profile: TxOpusProfile): TxOpusAudioEnc
       usedtx: profile.dtxEnabled,
     },
   };
+}
+
+export function createTxOpusAudioDataFromFloat32(
+  monoSamples: ArrayLike<number>,
+  codec: TxOpusCodec,
+  options: {
+    scope?: unknown;
+    sourceSampleRateHz?: number;
+    timestampUs?: number;
+    sequence?: number;
+  } = {},
+): TxOpusAudioDataStatus {
+  const profile = txOpusProfileForCodec(codec);
+  const sourceSampleRateHz = Math.max(1, Math.round(Number(options.sourceSampleRateHz) || TX_OPUS_WB_SAMPLE_RATE_HZ));
+  if (sourceSampleRateHz !== profile.sampleRateHz) {
+    return { state: 'unavailable', reason: 'sample_rate_mismatch', profile };
+  }
+  const sampleCount = Math.max(0, Math.floor(Number(monoSamples.length) || 0));
+  if (sampleCount <= 0) {
+    return { state: 'unavailable', reason: 'empty_audio', profile };
+  }
+  if (sampleCount !== profile.frameSamples) {
+    return { state: 'unavailable', reason: 'frame_sample_count_mismatch', profile };
+  }
+  const AudioData = (options.scope as { AudioData?: TxOpusAudioDataConstructorLike } | null | undefined)?.AudioData;
+  if (!AudioData) {
+    return { state: 'unavailable', reason: 'audio_data_missing', profile };
+  }
+
+  const data = new Float32Array(sampleCount);
+  for (let i = 0; i < sampleCount; i += 1) {
+    const sample = Number(monoSamples[i]) || 0;
+    data[i] = Math.max(-1, Math.min(1, sample));
+  }
+  const timestampUs = Math.max(
+    0,
+    Math.floor(
+      Number.isFinite(options.timestampUs ?? NaN)
+        ? Number(options.timestampUs)
+        : (Math.max(0, Math.floor(Number(options.sequence) || 0)) * profile.frameDurationUs),
+    ),
+  );
+  try {
+    return {
+      state: 'ready',
+      profile,
+      audioData: new AudioData({
+        format: 'f32',
+        sampleRate: profile.sampleRateHz,
+        numberOfFrames: sampleCount,
+        numberOfChannels: 1,
+        timestamp: timestampUs,
+        data,
+      }),
+      decodedSampleCount: profile.decodedFrameSamples,
+      timestampUs,
+    };
+  } catch {
+    return { state: 'unavailable', reason: 'audio_data_error', profile };
+  }
 }
 
 export function createTxOpusEncoderSkeleton(

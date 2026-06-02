@@ -4,13 +4,16 @@ import {
   TX_OPUS_DECODE_OUTPUT_SAMPLE_RATE_HZ,
   TX_OPUS_FRAME_DURATION_US,
   buildTxMicOpusFrame,
+  createTxOpusAudioDataFromFloat32,
   createTxOpusEncoderSkeleton,
   createTxOpusFrameProducer,
   type TxOpusAudioEncoderConfig,
   type TxOpusAudioEncoderInit,
   type TxOpusEncodedAudioChunkLike,
   type TxMicOpusFrame,
+  txOpusCodecForAccepted,
   txOpusProfileForCodec,
+  txOpusRuntimeOverrideEnabled,
 } from '../src/audio/tx-opus-encoder';
 import {
   TX_MIC_CODEC_OPUS_NB,
@@ -21,6 +24,17 @@ import {
 } from '../src/transport/tx-uplink';
 
 describe('Phase 44 TX Opus encoder skeleton', () => {
+  it('requires an explicit query or storage override before selecting Opus', () => {
+    expect(txOpusRuntimeOverrideEnabled('')).toBe(false);
+    expect(txOpusRuntimeOverrideEnabled('?phase44_tx_opus=0', '1')).toBe(false);
+    expect(txOpusRuntimeOverrideEnabled('?phase44_tx_opus=1')).toBe(true);
+    expect(txOpusRuntimeOverrideEnabled('', 'on')).toBe(true);
+
+    expect(txOpusCodecForAccepted('opus_wb', false)).toBeNull();
+    expect(txOpusCodecForAccepted('pcm', true)).toBeNull();
+    expect(txOpusCodecForAccepted('opus_wb', true)).toBe('opus_wb');
+  });
+
   it('defines narrowband and wideband Opus profiles with DTX disabled', () => {
     const nb = txOpusProfileForCodec('opus_nb');
     expect(nb.codecId).toBe(TX_MIC_CODEC_OPUS_NB);
@@ -186,5 +200,72 @@ describe('Phase 44 TX Opus encoder skeleton', () => {
     expect(view.getUint32(40, true)).toBe(4);
     expect(view.getUint8(TX_MIC_FRAME_HEADER_BYTES)).toBe(4);
     expect(view.getUint8(TX_MIC_FRAME_HEADER_BYTES + 3)).toBe(7);
+  });
+
+  it('builds AudioData for 48 kHz wideband Opus input and clamps samples', () => {
+    let initSeen: unknown = null;
+    class FakeAudioData {
+      constructor(init: unknown) {
+        initSeen = init;
+      }
+    }
+
+    const samples = new Float32Array(960);
+    samples[0] = 2;
+    samples[1] = -2;
+    samples[2] = 0.25;
+    const status = createTxOpusAudioDataFromFloat32(samples, 'opus_wb', {
+      scope: { AudioData: FakeAudioData },
+      sourceSampleRateHz: 48_000,
+      timestampUs: 42_000,
+    });
+
+    if (status.state !== 'ready') {
+      throw new Error(`expected AudioData, got ${status.state}`);
+    }
+    expect(status.decodedSampleCount).toBe(960);
+    expect(status.timestampUs).toBe(42_000);
+    expect(initSeen).toMatchObject({
+      format: 'f32',
+      sampleRate: 48_000,
+      numberOfFrames: 960,
+      numberOfChannels: 1,
+      timestamp: 42_000,
+    });
+    const data = (initSeen as { data: Float32Array }).data;
+    expect(data[0]).toBe(1);
+    expect(data[1]).toBe(-1);
+    expect(data[2]).toBe(0.25);
+    expect(data[959]).toBe(0);
+  });
+
+  it('rejects non-20 ms wideband AudioData frame sizes', () => {
+    const status = createTxOpusAudioDataFromFloat32(new Float32Array(1024), 'opus_wb', {
+      scope: {
+        AudioData: class FakeAudioData {},
+      },
+      sourceSampleRateHz: 48_000,
+    });
+
+    expect(status.state).toBe('unavailable');
+    if (status.state !== 'unavailable') {
+      throw new Error('expected frame size mismatch to be unavailable');
+    }
+    expect(status.reason).toBe('frame_sample_count_mismatch');
+  });
+
+  it('does not feed 48 kHz mic blocks to the narrowband encoder without a resampler', () => {
+    const status = createTxOpusAudioDataFromFloat32([0.1, 0.2], 'opus_nb', {
+      scope: {
+        AudioData: class FakeAudioData {},
+      },
+      sourceSampleRateHz: 48_000,
+    });
+
+    expect(status.state).toBe('unavailable');
+    if (status.state !== 'unavailable') {
+      throw new Error('expected narrowband mismatch to be unavailable');
+    }
+    expect(status.reason).toBe('sample_rate_mismatch');
   });
 });

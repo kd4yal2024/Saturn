@@ -31,6 +31,10 @@ export type TxCodecCapabilityDetection = {
   opusWb: boolean;
 };
 
+export type TxCodecCapabilityDetectionOptions = {
+  advertiseOpus?: boolean;
+};
+
 type AudioEncoderConstructorLike = {
   isConfigSupported?: (config: Record<string, unknown>) => Promise<{ supported?: boolean }>;
 };
@@ -50,7 +54,10 @@ async function audioEncoderSupports(
   }
 }
 
-export async function detectTxCodecCapabilities(scope: unknown = globalThis): Promise<TxCodecCapabilityDetection> {
+export async function detectTxCodecCapabilities(
+  scope: unknown = globalThis,
+  options: TxCodecCapabilityDetectionOptions = {},
+): Promise<TxCodecCapabilityDetection> {
   const encoder = (scope as { AudioEncoder?: AudioEncoderConstructorLike } | null | undefined)?.AudioEncoder;
   const detected: TxCodecCapability[] = ['pcm'];
 
@@ -85,8 +92,12 @@ export async function detectTxCodecCapabilities(scope: unknown = globalThis): Pr
   return {
     detected,
     // Keep Phase 44 source behavior unchanged until the bridge Opus backend
-    // and force-RX/fallback acceptance tests are ready.
-    advertised: ['pcm'],
+    // and browser/bridge force-RX/fallback acceptance tests are ready.
+    // The first browser integration gate only supports wideband from the
+    // 48 kHz mic path; narrowband needs an explicit browser-side resampler.
+    advertised: options.advertiseOpus === true
+      ? detected.filter((codec) => codec !== 'opus_nb')
+      : ['pcm'],
     webCodecsAudioEncoder: true,
     opusNb,
     opusWb,
