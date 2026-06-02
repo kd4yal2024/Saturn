@@ -3872,7 +3872,10 @@ fn calculate_swr(forward: u16, reverse: u16) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tx_codec::{TX_MIC_CODEC_PCM_ID, TX_SAMPLE_TYPE_FLOAT32, TX_SAMPLE_TYPE_S16};
+    use crate::tx_codec::{
+        TX_MIC_CODEC_OPUS_WB_ID, TX_MIC_CODEC_PCM_ID, TX_OPUS_DECODE_OUTPUT_FRAME_SAMPLES,
+        TX_OPUS_WB_TEST_PACKET, TX_SAMPLE_TYPE_FLOAT32, TX_SAMPLE_TYPE_S16,
+    };
 
     fn test_client_registry(client_id: u64) -> ClientRegistry {
         let mut clients = BTreeMap::new();
@@ -4745,6 +4748,81 @@ mod tests {
             other => panic!("unexpected outbound: {other:?}"),
         }
         assert!(media_outbound.next_message(true).is_none());
+    }
+
+    #[test]
+    fn phase44_media_lane_decodes_opus_mic_frame_when_runtime_flag_enabled() {
+        let (tx, rx) = mpsc::channel();
+        let mut clients_map = BTreeMap::new();
+        clients_map.insert(
+            73,
+            ClientConnection {
+                outbound: ClientOutbound::new(),
+                state: ClientState::with_tx_codec_runtime_flags(TxCodecRuntimeFlags {
+                    opus_decode_enabled: true,
+                }),
+            },
+        );
+        clients_map.insert(
+            74,
+            ClientConnection {
+                outbound: ClientOutbound::new(),
+                state: ClientState::with_tx_codec_runtime_flags(TxCodecRuntimeFlags {
+                    opus_decode_enabled: true,
+                }),
+            },
+        );
+        let clients = Arc::new(Mutex::new(clients_map));
+        let operator_client_id = Arc::new(AtomicU64::new(73));
+        let operator_control_at = Arc::new(Mutex::new(None));
+
+        parse_tci_command("session_lane:phase-44,control;", &tx, &clients, 73, true);
+        parse_tci_command("session_lane:phase-44,media;", &tx, &clients, 74, false);
+        while rx.try_recv().is_ok() {}
+        parse_tci_command("tx_codec_caps:0,opus_wb,pcm;", &tx, &clients, 73, true);
+
+        let mut frame = vec![0u8; 64 + TX_OPUS_WB_TEST_PACKET.len()];
+        write_u32_le(&mut frame, 4, 48_000);
+        write_u32_le(&mut frame, 8, TX_SAMPLE_TYPE_S16);
+        write_u32_le(&mut frame, 20, TX_OPUS_DECODE_OUTPUT_FRAME_SAMPLES as u32);
+        write_u32_le(&mut frame, 24, 2);
+        write_u32_le(&mut frame, 28, 1);
+        write_u32_le(&mut frame, 32, 120);
+        write_u32_le(&mut frame, 36, TX_MIC_CODEC_OPUS_WB_ID);
+        write_u32_le(&mut frame, 40, TX_OPUS_WB_TEST_PACKET.len() as u32);
+        frame[64..].copy_from_slice(&TX_OPUS_WB_TEST_PACKET);
+
+        assert!(handle_incoming_message(
+            Message::Binary(frame),
+            &tx,
+            &clients,
+            &operator_client_id,
+            &operator_control_at,
+            74,
+        ));
+
+        match rx.try_recv().unwrap() {
+            TciCommand::MicAudioFrame(frame) => {
+                assert_eq!(frame.sample_rate_hz, 48_000);
+                assert_eq!(frame.channels, 1);
+                assert_eq!(frame.sequence, 120);
+                assert_eq!(frame.samples.len(), TX_OPUS_DECODE_OUTPUT_FRAME_SAMPLES);
+                assert!(frame.samples.iter().all(|sample| sample.is_finite()));
+                let peak = frame
+                    .samples
+                    .iter()
+                    .map(|sample| sample.abs())
+                    .fold(0.0f32, f32::max);
+                assert!(peak > 0.001);
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+        assert!(rx.try_recv().is_err());
+
+        let clients = clients.lock().unwrap();
+        let media = clients.get(&74).unwrap();
+        assert_eq!(media.state.tx_codec_decode_error_count, 0);
+        assert!(!media.state.tx_codec_degraded);
     }
 
     #[test]
