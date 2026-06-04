@@ -2469,6 +2469,10 @@ fn parse_tci_command(
         "tx_codec_caps" => {
             let caps = parse_tx_codec_caps_args(&args);
             let selected = set_client_tx_codec_caps(clients, client_id, caps.clone());
+            println!(
+                "saturn-bridge: TCI client {client_id} tx_codec_caps={:?} selected={:?}",
+                caps, selected
+            );
             if let Some(codec) = selected {
                 send_text_to_client(clients, client_id, tx_codec_accept_message(codec));
             } else {
