@@ -3392,6 +3392,9 @@
         </div>
       </div>
       <div class="hero-actions">
+        <span class="status-chip ghost" id="static-wsdiag-marker">Diag loading</span>
+        <button class="btn ghost" id="static-wsdiag-btn" type="button">WS Probe</button>
+        <button class="btn ghost" id="static-wsdiag-copy-btn" type="button">Copy Diag</button>
         <a class="nav-link" href="./monitor">Monitor</a>
         <button class="btn ghost shortcut-help-btn" id="shortcut-help-btn" type="button" aria-label="Show operator controls" title="Show operator controls">?</button>
         <button class="btn ghost" id="layout-btn" type="button">Phone: Off</button>
@@ -4423,7 +4426,153 @@
 
   <!-- Runtime provided by SaturnRemoteNext bundle -->
 
-  <script src="/remote-assets/remote-next.js?v=phase44-opus-lab-0fe3569"></script>
+  <script>
+    (() => {
+      const DIAG_VERSION = "wsdiag20";
+      window.saturnDiagLastError = "";
+      window.saturnDiagText = "";
+      window.addEventListener("error", (event) => {
+        window.saturnDiagLastError = `${event.message || "script error"} @${event.lineno || "?"}:${event.colno || "?"}`;
+        if (typeof window.saturnSetWsDiag === "function") {
+          window.saturnSetWsDiag(`JS error: ${window.saturnDiagLastError}`);
+        }
+      });
+      window.addEventListener("unhandledrejection", (event) => {
+        const reason = event.reason;
+        window.saturnDiagLastError = `promise: ${reason?.message || reason || "rejected"}`;
+        if (typeof window.saturnSetWsDiag === "function") {
+          window.saturnSetWsDiag(`JS error: ${window.saturnDiagLastError}`);
+        }
+      });
+      function sameOriginWsUrl() {
+        const scheme = window.location.protocol === "https:" ? "wss" : "ws";
+        return `${scheme}://${window.location.host}/tci`;
+      }
+      function forceSameOriginWs() {
+        return new URLSearchParams(window.location.search).get("force_same_origin_ws") === "1";
+      }
+      function setDiag(text) {
+        window.saturnDiagText = String(text || "");
+        const marker = document.getElementById("static-wsdiag-marker");
+        if (marker) {
+          marker.textContent = window.saturnDiagText;
+          marker.title = window.saturnDiagText;
+        }
+      }
+      async function copyDiagText() {
+        const text = typeof window.saturnGetDiagText === "function"
+          ? window.saturnGetDiagText()
+          : (window.saturnDiagText || document.getElementById("static-wsdiag-marker")?.textContent || "");
+        try {
+          await navigator.clipboard.writeText(text);
+          setDiag(`Copied: ${text}`);
+        } catch (_) {
+          window.prompt("Copy diagnostic text", text);
+        }
+      }
+      window.saturnSetWsDiag = setDiag;
+      document.addEventListener("DOMContentLoaded", () => {
+        setDiag(`Diag ${DIAG_VERSION} loaded`);
+        document.getElementById("static-wsdiag-copy-btn")?.addEventListener("click", () => {
+          void copyDiagText();
+        });
+        const input = document.getElementById("ws-url");
+        if (input && forceSameOriginWs()) {
+          input.value = sameOriginWsUrl();
+        }
+        const button = document.getElementById("static-wsdiag-btn");
+        if (!button) {
+          return;
+        }
+        button.addEventListener("click", () => {
+          const target = forceSameOriginWs()
+            ? sameOriginWsUrl()
+            : ((input?.value || "").trim() || sameOriginWsUrl());
+          setDiag(`WS probe connecting ${target}`);
+          let probe;
+          try {
+            probe = new WebSocket(target);
+            probe.binaryType = "arraybuffer";
+            window.saturnWsDiagProbe = probe;
+          } catch (err) {
+            setDiag(`WS probe create failed: ${err?.message || err}`);
+            return;
+          }
+          let textCount = 0;
+          let binaryCount = 0;
+          let handedOff = false;
+          function handOffToClient() {
+            if (handedOff) {
+              return;
+            }
+            if (typeof window.saturnConnectBridgeDiagnostic !== "function") {
+              const bundle = window.SaturnRemoteNext ? "yes" : "no";
+              const err = window.saturnDiagLastError || "none";
+              setDiag(`WS probe OPEN text=${textCount} binary=${binaryCount}; app hook missing bundle=${bundle} err=${err}`);
+              return;
+            }
+            handedOff = true;
+            setDiag(`WS probe OPEN text=${textCount} binary=${binaryCount}; handing to client`);
+            Promise.resolve(window.saturnConnectBridgeDiagnostic()).catch((err) => {
+              handedOff = false;
+              setDiag(`WS probe handoff failed: ${err?.message || err}`);
+            });
+          }
+          probe.onopen = () => {
+            setDiag("WS probe OPEN");
+            try {
+              probe.send("iq_samplerate:48000;iq_start:0;");
+              setDiag("WS probe OPEN sent iq_start");
+            } catch (err) {
+              setDiag(`WS probe OPEN send failed: ${err?.message || err}`);
+            }
+          };
+          probe.onmessage = (event) => {
+            if (typeof event.data === "string") {
+              textCount += 1;
+              setDiag(`WS probe OPEN text=${textCount} binary=${binaryCount}`);
+              if (typeof window.saturnAdoptWsDiagText === "function") {
+                try {
+                  window.saturnAdoptWsDiagText(event.data, probe);
+                } catch (err) {
+                  setDiag(`WS probe text adopt failed: ${err?.message || err}`);
+                }
+              }
+            } else {
+              binaryCount += 1;
+              setDiag(`WS probe OPEN text=${textCount} binary=${binaryCount}`);
+              if (typeof window.saturnAdoptWsDiagFrame === "function") {
+                try {
+                  window.saturnAdoptWsDiagFrame(event.data, probe);
+                } catch (err) {
+                  setDiag(`WS probe binary adopt failed: ${err?.message || err}`);
+                }
+              }
+            }
+            if (!handedOff && binaryCount > 0) {
+              window.setTimeout(handOffToClient, 0);
+            }
+          };
+          probe.onerror = () => {
+            setDiag(`WS probe ERROR state=${probe.readyState}`);
+          };
+          probe.onclose = (event) => {
+            setDiag(`WS probe CLOSE code=${event.code} clean=${event.wasClean}`);
+          };
+          window.setTimeout(() => {
+            if (probe.readyState === WebSocket.CONNECTING) {
+              setDiag("WS probe still CONNECTING after 3s");
+            }
+          }, 3000);
+        });
+      });
+    })();
+  </script>
+  <script
+    src="/remote-assets/remote-next.js?v=phase44-opus-lab-wsdiag20"
+    onload="window.saturnRemoteBundleLoaded=true"
+    onerror="window.saturnRemoteBundleError=true; window.saturnDiagLastError='remote-next.js failed to load'; window.saturnSetWsDiag && window.saturnSetWsDiag('JS error: remote-next.js failed to load')"
+  ></script>
   <script>
     const $ = (id) => document.getElementById(id);
     const DISPLAY_MAX_FFT_SIZE = 262144;
@@ -4492,9 +4641,11 @@
     const BROWSER_TIMING_MAX_SAMPLES = 4096;
     const BROWSER_TIMING_EVENT_LOOP_INTERVAL_MS = 100;
     const TX_READY_WINDOW_MS = 5 * 60 * 1000;
+    const TX_LOCAL_REQUEST_PERMIT_MS = 8000;
     const TX_MIC_LEVEL_STALE_MS = 450;
     const TX_MIC_LEVEL_ATTACK_PER_SEC = 8;
     const TX_MIC_LEVEL_RELEASE_PER_SEC = 2.4;
+    const TX_MIC_CAPTURE_MONITOR_GAIN = 1e-8;
     const BRIDGE_RTT_PING_INTERVAL_MS = 2000;
     // Phase 41 stopgap: while TX is requested or keyed, send saturn_ping at
     // this tighter cadence so the bridge control watchdog (500 ms) has at
@@ -4741,6 +4892,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     }
 
     const PHASE40_DISPLAY_PROFILE = normalizePhase40DisplayProfile(PHASE40_QUERY.get("phase40_display_profile"));
+    const _next = globalThis.SaturnRemoteNext;
     function safeLocalStorageGet(key) {
       try {
         return localStorage.getItem(key);
@@ -4748,10 +4900,16 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         return null;
       }
     }
-    const PHASE44_TX_OPUS_OVERRIDE = _next.txOpusRuntimeOverrideEnabled(
-      window.location.search,
-      safeLocalStorageGet(_next.TX_OPUS_OVERRIDE_STORAGE_KEY)
-    );
+    const PHASE44_TX_OPUS_OVERRIDE_KEY = _next.TX_OPUS_OVERRIDE_STORAGE_KEY || "saturn.phase44.txOpus";
+    const PHASE44_TX_OPUS_OVERRIDE = typeof _next.txOpusRuntimeOverrideEnabled === "function"
+      ? _next.txOpusRuntimeOverrideEnabled(
+          window.location.search,
+          safeLocalStorageGet(PHASE44_TX_OPUS_OVERRIDE_KEY)
+        )
+      : (
+          new URLSearchParams(window.location.search).get("phase44_tx_opus") === "1" ||
+          safeLocalStorageGet(PHASE44_TX_OPUS_OVERRIDE_KEY) === "1"
+        );
 
     const state = globalThis.SaturnRemoteNext.createAppState();
     state.phase40DisplayProfile = PHASE40_DISPLAY_PROFILE;
@@ -4761,11 +4919,17 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     state.txOpusPendingTimings = new Map();
     state.txOpusSampleCarry = new Float32Array(0);
     state.txOpusFallbackReason = "";
+    state.txLocalRequestActive = false;
+    state.txLocalRequestId = 0;
+    state.txLocalRequestPermitExpiresAt = 0;
+    state.txMicAttemptLogCount = 0;
     state.displayIqSource = "rx";
     state.txDisplaySettleFrames = 0;
     state.iqFrameVersion = 0;
     state.lastRenderedIqFrameVersion = -1;
     state.lastWaterfallLineAt = 0;
+    state.wsDiagBinaryFrames = 0;
+    state.wsDiagLastMarkerAt = 0;
     state.phoneWaterfallVisible = false;
     state.vfoTuneStepHz = 100;
     state.keyboardPttActive = false;
@@ -5970,7 +6134,6 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     }
 
     // ---- Delegate clamp/normalize to Vite bundle ----
-    const _next = globalThis.SaturnRemoteNext;
     const {
       sanitizePhonePanels,
       normalizeNrMode,
@@ -6045,14 +6208,44 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       );
     }
 
+    function forceLegacyWsDiagnosticEnabled() {
+      return new URLSearchParams(window.location.search).get("force_legacy_ws") === "1";
+    }
+
+    function txTransportProfileLabel() {
+      if (forceLegacyWsDiagnosticEnabled()) {
+        return "legacy diagnostic";
+      }
+      return phase42SplitTransportEnabled() ? "phase42 split" : "legacy";
+    }
+
     function createBridgeSocket(baseWsUrl, phase42SessionId = "") {
       if (!phase42SessionId) {
         return new WebSocket(baseWsUrl);
       }
+      if (typeof _next.createPhase42LegacySocketAdapter !== "function") {
+        throw new Error("Phase 42 split adapter is not available in remote-next.js");
+      }
+      class Phase42DiagnosticWebSocket extends WebSocket {
+        constructor(url) {
+          super(url);
+          const lane = String(url).includes("/saturn/media") ? "media" : "control";
+          logEvent(`Phase 42 ${lane} lane connecting: ${url}`);
+          this.addEventListener("open", () => {
+            logEvent(`Phase 42 ${lane} lane open`);
+          });
+          this.addEventListener("error", () => {
+            logEvent(`Phase 42 ${lane} lane error state=${this.readyState}`);
+          });
+          this.addEventListener("close", (event) => {
+            logEvent(`Phase 42 ${lane} lane closed code=${event.code} clean=${event.wasClean}${event.reason ? ` reason=${event.reason}` : ""}`);
+          });
+        }
+      }
       return _next.createPhase42LegacySocketAdapter({
         baseWsUrl,
         sessionId: phase42SessionId,
-        WebSocketCtor: WebSocket,
+        WebSocketCtor: Phase42DiagnosticWebSocket,
         onProtocolViolation(violation) {
           logEvent(`Phase 42 ${violation.channel} lane violation: ${violation.reason}`);
           recordOperatorFault("Bridge lane violation", "warn", false);
@@ -8856,6 +9049,48 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       sendTci(`saturn_ping:${state.bridgeRttNonce},${performance.now().toFixed(3)};`);
     }
 
+    function buildTxCodecCapsCommandCompat(codecs = ["pcm"]) {
+      if (typeof _next.buildTxCodecCapsCommand === "function") {
+        return _next.buildTxCodecCapsCommand(codecs);
+      }
+      const allowed = new Set(["pcm", "opus_nb", "opus_wb"]);
+      const advertised = [];
+      for (const codec of Array.isArray(codecs) ? codecs : ["pcm"]) {
+        if (allowed.has(codec) && !advertised.includes(codec)) {
+          advertised.push(codec);
+        }
+      }
+      if (!advertised.includes("pcm")) {
+        advertised.unshift("pcm");
+      }
+      return `tx_codec_caps:0,${advertised.join(",")};`;
+    }
+
+    async function detectTxCodecCapabilitiesCompat() {
+      if (typeof _next.detectTxCodecCapabilities === "function") {
+        return _next.detectTxCodecCapabilities(globalThis, {
+          advertiseOpus: state.txOpusOverrideEnabled === true,
+        });
+      }
+      return {
+        detected: ["pcm"],
+        advertised: ["pcm"],
+        webCodecsAudioEncoder: false,
+      };
+    }
+
+    function txCodecBrowserRuntimeSummary(detection = {}) {
+      const encoder = globalThis.AudioEncoder;
+      return [
+        `override=${state.txOpusOverrideEnabled ? 1 : 0}`,
+        `AudioEncoder=${typeof encoder}`,
+        `isConfigSupported=${encoder && typeof encoder.isConfigSupported === "function" ? 1 : 0}`,
+        `webCodecs=${detection.webCodecsAudioEncoder ? 1 : 0}`,
+        `opusNb=${detection.opusNb ? 1 : 0}`,
+        `opusWb=${detection.opusWb ? 1 : 0}`,
+      ].join(" ");
+    }
+
     function sendTxCodecCaps() {
       const advertised = Array.isArray(state.txCodecAdvertisedCaps) && state.txCodecAdvertisedCaps.length
         ? state.txCodecAdvertisedCaps
@@ -8866,20 +9101,20 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       state.txCodecAccepted = null;
       state.txCodecNegotiatedAt = 0;
       state.txCodecRejectReason = null;
-      sendTci(_next.buildTxCodecCapsCommand(advertised));
+      sendTci(buildTxCodecCapsCommandCompat(advertised));
     }
 
     async function refreshTxCodecCapabilities() {
       try {
         const previousAdvertised = (state.txCodecAdvertisedCaps || ["pcm"]).join(",");
-        const detection = await _next.detectTxCodecCapabilities(globalThis, {
-          advertiseOpus: state.txOpusOverrideEnabled === true,
-        });
+        const detection = await detectTxCodecCapabilitiesCompat();
         state.txCodecDetectedCaps = detection.detected;
         state.txCodecAdvertisedCaps = detection.advertised;
         state.txCodecWebCodecsAudioEncoder = detection.webCodecsAudioEncoder;
         state.txCodecDetectionAt = performance.now();
         logEvent(`TX codec browser caps: detected ${detection.detected.join(", ")}; advertising ${detection.advertised.join(", ")}`);
+        logEvent(`TX codec browser runtime: ${txCodecBrowserRuntimeSummary(detection)}`);
+        updateWsDiagMarker(`TX codec caps ${txCodecBrowserRuntimeSummary(detection)} advertised=${detection.advertised.join(",")}`);
         if (state.connected && previousAdvertised !== detection.advertised.join(",")) {
           sendTxCodecCaps();
         }
@@ -8898,7 +9133,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       // Phase 41 stopgap: tighten cadence whenever the bridge will be
       // running its TX control watchdog. Matches the on-air gate the
       // bridge uses (moxRequested OR keyed).
-      const txActive = Boolean(state.moxRequested) || state.txPhase === "keyed";
+      const txActive = txMicSendAllowed();
       return txActive
         ? BRIDGE_RTT_PING_INTERVAL_DURING_TX_MS
         : BRIDGE_RTT_PING_INTERVAL_MS;
@@ -9034,6 +9269,46 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       sendTci("iq_start:0;");
       updateUi();
     }
+
+    function updateWsDiagMarker(text, minIntervalMs = 0) {
+      const now = performance.now();
+      if (minIntervalMs > 0 && now - (state.wsDiagLastMarkerAt || 0) < minIntervalMs) {
+        return;
+      }
+      state.wsDiagLastMarkerAt = now;
+      if (typeof window.saturnSetWsDiag === "function") {
+        window.saturnSetWsDiag(text);
+      }
+    }
+
+    window.saturnGetDiagText = () => {
+      const marker = window.saturnDiagText || document.getElementById("static-wsdiag-marker")?.textContent || "";
+      const detected = Array.isArray(state.txCodecDetectedCaps) && state.txCodecDetectedCaps.length
+        ? state.txCodecDetectedCaps.join(",")
+        : "pcm";
+      const advertised = Array.isArray(state.txCodecAdvertisedCaps) && state.txCodecAdvertisedCaps.length
+        ? state.txCodecAdvertisedCaps.join(",")
+        : "pcm";
+      const wsReady = state.ws ? state.ws.readyState : "none";
+      return [
+        `marker=${marker}`,
+        `connected=${state.connected ? 1 : 0}`,
+        `wsReady=${wsReady}`,
+        `wsUrl=${state.wsUrl || ""}`,
+        `phase42Split=${phase42SplitTransportEnabled() ? 1 : 0}`,
+        `opusOverride=${state.txOpusOverrideEnabled ? 1 : 0}`,
+        `AudioEncoder=${typeof globalThis.AudioEncoder}`,
+        `isConfigSupported=${globalThis.AudioEncoder && typeof globalThis.AudioEncoder.isConfigSupported === "function" ? 1 : 0}`,
+        `audioEncoder=${state.txCodecWebCodecsAudioEncoder ? 1 : 0}`,
+        `detected=${detected}`,
+        `advertised=${advertised}`,
+        `requested=${state.txCodecRequested || ""}`,
+        `accepted=${state.txCodecAccepted || ""}`,
+        `txMicSeq=${state.txMicSeq || 0}`,
+        `txMicDrops=${state.txMicDroppedCount || 0}`,
+        `lastError=${window.saturnDiagLastError || ""}`,
+      ].join(" | ");
+    };
 
     function stopIq() {
       state.iqStreaming = false;
@@ -9446,10 +9721,18 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       state.txUplinkBufferedHwmBytes = 0;
       state.txUplinkStatsAt = 0;
       resetTxBrowserTimingStats();
+      state.txMicFirstFrameLogged = false;
+      state.txMicSendDebugLogged = false;
+      state.txMicAttemptLogCount = 0;
     }
 
     function txMicByteRate() {
-      return _next.txMicByteRateBytesPerSecond(48000, TX_MIC_BYTES_PER_SAMPLE, TX_MIC_BLOCK_SAMPLES, 64);
+      if (typeof _next.txMicByteRateBytesPerSecond === "function") {
+        return _next.txMicByteRateBytesPerSecond(48000, TX_MIC_BYTES_PER_SAMPLE, TX_MIC_BLOCK_SAMPLES, 64);
+      }
+      const payloadBytesPerSecond = 48000 * TX_MIC_BYTES_PER_SAMPLE;
+      const framesPerSecond = 48000 / Math.max(1, TX_MIC_BLOCK_SAMPLES);
+      return payloadBytesPerSecond + framesPerSecond * 64;
     }
 
     function sendTxUplinkStats(force = false) {
@@ -9497,11 +9780,43 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     }
 
     function buildTxMicFrame(monoSamples, sequence) {
-      const built = _next.buildTxMicPcmS16Frame(monoSamples, sequence);
+      const built = buildTxMicPcmS16FrameCompat(monoSamples, sequence);
       const peak = built.peak;
       state.txMicLevel = Math.max(0, Math.min(1, peak));
       state.txMicLevelAt = performance.now();
       return built.frame;
+    }
+
+    function buildTxMicPcmS16FrameCompat(monoSamples, sequence) {
+      if (typeof _next.buildTxMicPcmS16Frame === "function") {
+        return _next.buildTxMicPcmS16Frame(monoSamples, sequence);
+      }
+      const sampleCount = Math.max(0, Math.floor(Number(monoSamples?.length) || 0));
+      const headerBytes = 64;
+      const bytesPerSample = 2;
+      const payloadBytes = sampleCount * bytesPerSample;
+      const frame = new ArrayBuffer(headerBytes + payloadBytes);
+      const view = new DataView(frame);
+      view.setUint32(0, 0, true);
+      view.setUint32(4, 48000, true);
+      view.setUint32(8, 1, true);
+      view.setUint32(20, sampleCount, true);
+      view.setUint32(24, 2, true);
+      view.setUint32(28, 1, true);
+      view.setUint32(32, sequence >>> 0, true);
+      view.setUint32(36, 0, true);
+      view.setUint32(40, payloadBytes >>> 0, true);
+
+      let peak = 0;
+      for (let i = 0; i < sampleCount; i += 1) {
+        const sample = Number(monoSamples[i]) || 0;
+        const clamped = Math.max(-1, Math.min(1, sample));
+        peak = Math.max(peak, Math.abs(clamped));
+        const pcm = clamped < 0 ? Math.round(clamped * 32768) : Math.round(clamped * 32767);
+        view.setInt16(headerBytes + i * bytesPerSample, Math.max(-32768, Math.min(32767, pcm)), true);
+      }
+
+      return { frame, peak, payloadBytes };
     }
 
     function resetTxOpusProducer(reason = "") {
@@ -9538,7 +9853,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       if (state.txOpusPendingTimings) {
         state.txOpusPendingTimings.delete(metadata.sequence);
       }
-      if (!state.moxRequested || !state.connected || !state.ws || state.ws.readyState !== WebSocket.OPEN) {
+      if (!txMicSendAllowed() || !state.connected || !state.ws || state.ws.readyState !== WebSocket.OPEN) {
         return;
       }
       const sendStartedAt = performance.now();
@@ -9588,6 +9903,80 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       return frames;
     }
 
+    function txMicSendAllowed() {
+      const localPermit = state.txLocalRequestActive === true &&
+        Number(state.txLocalRequestPermitExpiresAt || 0) > performance.now();
+      return Boolean(
+        state.moxRequested ||
+        state.txEnabled ||
+        state.txPhase === "armed" ||
+        state.txPhase === "keyed" ||
+        state.micCapturing ||
+        localPermit
+      );
+    }
+
+    function txReceiveSuppressionActive() {
+      return Boolean(
+        state.moxRequested ||
+        state.txEnabled ||
+        state.txPhase === "armed" ||
+        state.txPhase === "keyed"
+      );
+    }
+
+    function txOpusCodecForAcceptedCompat(accepted, overrideEnabled) {
+      if (typeof _next.txOpusCodecForAccepted === "function") {
+        return _next.txOpusCodecForAccepted(accepted, overrideEnabled);
+      }
+      const codec = String(accepted || "").trim().toLowerCase();
+      if (overrideEnabled !== true) {
+        return null;
+      }
+      if ((codec === "opus_nb" || codec === "opus_wb") &&
+        typeof _next.createTxOpusFrameProducer === "function" &&
+        typeof _next.createTxOpusAudioDataFromFloat32 === "function" &&
+        typeof _next.txOpusProfileForCodec === "function") {
+        return codec;
+      }
+      return null;
+    }
+
+    function decideTxMicSendCompat(bufferedBytes, rttMs, byteRate, codec) {
+      if (!codec || codec === "pcm") {
+        const hardCapBytes = forceLegacyWsDiagnosticEnabled() ? 8448 : 6336;
+        const degradedThresholdBytes = forceLegacyWsDiagnosticEnabled() ? 4224 : 2112;
+        const normalizedBuffered = Math.max(0, Math.round(Number(bufferedBytes) || 0));
+        const degraded = normalizedBuffered > degradedThresholdBytes;
+        return {
+          action: normalizedBuffered > hardCapBytes ? "drop" : "send",
+          degraded,
+          bufferedBytes: normalizedBuffered,
+          degradedThresholdBytes,
+          dropThresholdBytes: hardCapBytes,
+          hardCapBytes,
+          softCapEngaged: degraded,
+          hardCapEngaged: normalizedBuffered > hardCapBytes,
+        };
+      }
+      if (typeof _next.decideTxMicSend === "function") {
+        return _next.decideTxMicSend(bufferedBytes, rttMs, byteRate, codec);
+      }
+      const hardCapBytes = codec === "opus_nb" || codec === "opus_wb" ? 512 : 65536;
+      const normalizedBuffered = Math.max(0, Math.round(Number(bufferedBytes) || 0));
+      const degraded = normalizedBuffered > Math.min(32768, hardCapBytes);
+      return {
+        action: normalizedBuffered > hardCapBytes ? "drop" : "send",
+        degraded,
+        bufferedBytes: normalizedBuffered,
+        degradedThresholdBytes: 1024,
+        dropThresholdBytes: hardCapBytes,
+        hardCapBytes,
+        softCapEngaged: degraded,
+        hardCapEngaged: normalizedBuffered > hardCapBytes,
+      };
+    }
+
     function sendTxOpusMicSamples(monoSamples, timing, receivedAt, codec) {
       const producer = ensureTxOpusProducer(codec);
       if (!producer) {
@@ -9619,15 +10008,32 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
 
     function sendTxMicSamples(monoSamples, timing = {}) {
       const receivedAt = Number.isFinite(timing.receivedAt) ? timing.receivedAt : performance.now();
-      if (!state.moxRequested || !state.connected || !state.ws || state.ws.readyState !== WebSocket.OPEN) {
+      const txActive = txMicSendAllowed();
+      const attemptLogIndex = state.txMicAttemptLogCount || 0;
+      const shouldTraceAttempt = attemptLogIndex < 5;
+      state.txMicAttemptLogCount = attemptLogIndex + 1;
+      if (shouldTraceAttempt) {
+        const readyState = state.ws ? state.ws.readyState : "none";
+        const localPermitMs = Math.max(0, Math.round(Number(state.txLocalRequestPermitExpiresAt || 0) - performance.now()));
+        const sampleCount = monoSamples && Number.isFinite(Number(monoSamples.length)) ? Math.round(Number(monoSamples.length)) : 0;
+        logEvent(`TX mic send attempt ${attemptLogIndex + 1}: samples=${sampleCount} active=${txActive ? 1 : 0} local=${state.txLocalRequestActive ? 1 : 0}/${localPermitMs}ms mic=${state.micCapturing ? 1 : 0} mox=${state.moxRequested ? 1 : 0} tx=${state.txEnabled ? 1 : 0} phase=${state.txPhase || "?"} connected=${state.connected ? 1 : 0} ws=${readyState}`);
+      }
+      if (!txActive || !state.connected || !state.ws || state.ws.readyState !== WebSocket.OPEN) {
+        if (!state.txMicSendDebugLogged || shouldTraceAttempt) {
+          state.txMicSendDebugLogged = true;
+          const readyState = state.ws ? state.ws.readyState : "none";
+          const localPermitMs = Math.max(0, Math.round(Number(state.txLocalRequestPermitExpiresAt || 0) - performance.now()));
+          logEvent(`TX mic send blocked: active=${txActive ? 1 : 0} local=${state.txLocalRequestActive ? 1 : 0}/${localPermitMs}ms mox=${state.moxRequested ? 1 : 0} tx=${state.txEnabled ? 1 : 0} phase=${state.txPhase || "?"} connected=${state.connected ? 1 : 0} ws=${readyState}`);
+          updateWsDiagMarker(`TX mic blocked active=${txActive ? 1 : 0} phase=${state.txPhase || "?"} ws=${readyState}`);
+        }
         return false;
       }
-      const opusCodec = _next.txOpusCodecForAccepted(
+      const opusCodec = txOpusCodecForAcceptedCompat(
         state.txCodecAccepted,
         state.txOpusOverrideEnabled === true
       );
       const bufferedBytes = Math.max(0, Math.round(Number(state.ws.bufferedAmount || 0)));
-      const decision = _next.decideTxMicSend(
+      const decision = decideTxMicSendCompat(
         bufferedBytes,
         state.bridgeRttMs,
         txMicByteRate(),
@@ -9638,6 +10044,11 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       setTxUplinkDegraded(decision.degraded, decision);
       if (decision.action === "drop") {
         state.txMicDroppedCount = (state.txMicDroppedCount || 0) + 1;
+        if (!state.txMicSendDebugLogged || shouldTraceAttempt) {
+          state.txMicSendDebugLogged = true;
+          logEvent(`TX mic frame dropped before send: buffered=${decision.bufferedBytes} hardCap=${decision.hardCapBytes}`);
+          updateWsDiagMarker(`TX mic dropped buffered=${decision.bufferedBytes}`);
+        }
         recordTxMicPeak(monoSamples);
         recordTxBrowserTiming(timing, receivedAt, null, null, true);
         sendTxUplinkStats(false);
@@ -9646,10 +10057,17 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       if (opusCodec) {
         return sendTxOpusMicSamples(monoSamples, timing, receivedAt, opusCodec);
       }
-      const frame = buildTxMicFrame(monoSamples, nextTxMicSequence());
+      const sequence = nextTxMicSequence();
+      const frame = buildTxMicFrame(monoSamples, sequence);
       const sendStartedAt = performance.now();
       state.ws.send(frame);
       const sendEndedAt = performance.now();
+      if (!state.txMicSendDebugLogged || shouldTraceAttempt) {
+        state.txMicSendDebugLogged = true;
+        const localPermitMs = Math.max(0, Math.round(Number(state.txLocalRequestPermitExpiresAt || 0) - performance.now()));
+        logEvent(`TX mic PCM frame sent: seq=${sequence} bytes=${frame.byteLength} local=${state.txLocalRequestActive ? 1 : 0}/${localPermitMs}ms phase=${state.txPhase || "?"} buffered=${Math.round(Number(state.ws.bufferedAmount || 0))}`);
+        updateWsDiagMarker(`TX mic PCM sent seq=${sequence} bytes=${frame.byteLength}`);
+      }
       recordTxBrowserTiming(timing, receivedAt, sendStartedAt, sendEndedAt, false);
       sendTxUplinkStats(false);
       return true;
@@ -9711,7 +10129,9 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
           return false;
         }
         const silentGain = micCtx.createGain();
-        silentGain.gain.value = 0;
+        // Keep the capture graph effectively silent while avoiding mobile
+        // browser optimizations that stop pulling an exact-zero output path.
+        silentGain.gain.value = TX_MIC_CAPTURE_MONITOR_GAIN;
         let proc = null;
         let txMode = "legacy";
         if (micCtx.audioWorklet) {
@@ -9724,16 +10144,28 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
             proc.port.onmessage = (evt) => {
               const receivedAt = performance.now();
               const data = evt.data || {};
+              if (!state.txMicFirstFrameLogged) {
+                const sampleCount = data.samples && Number.isFinite(data.samples.length) ? data.samples.length : 0;
+                state.txMicFirstFrameLogged = true;
+                logEvent(`TX mic worklet frame received: ${sampleCount} samples`);
+                updateWsDiagMarker(`TX mic worklet frame samples=${sampleCount}`);
+              }
               const audioTimeMs = Number(data.audioTimeMs);
               const workletToMainMs = Number.isFinite(audioTimeMs)
                 ? Math.max(0, micCtx.currentTime * 1000 - audioTimeMs)
                 : null;
-              sendTxMicSamples(data.samples, {
-                receivedAt,
-                workletToMainMs,
-                workletSequence: data.sequence,
-                source: "worklet",
-              });
+              try {
+                sendTxMicSamples(data.samples, {
+                  receivedAt,
+                  workletToMainMs,
+                  workletSequence: data.sequence,
+                  source: "worklet",
+                });
+              } catch (err) {
+                const detail = err?.message || err?.name || String(err);
+                logEvent(`TX mic send exception: ${detail}`);
+                updateWsDiagMarker(`TX mic send exception: ${detail}`);
+              }
             };
             txMode = "worklet";
           } catch (error) {
@@ -9861,6 +10293,8 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         state.moxRequested = false;
         state.txEnabled = false;
         state.txPhase = "rx";
+        state.txLocalRequestActive = false;
+        state.txLocalRequestPermitExpiresAt = 0;
         scheduleNextBridgeRttPing();
         updateUi();
         sendTxShutdownIfPossible(false);
@@ -9918,6 +10352,9 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         const requestId = state.pttRequestId + 1;
         state.pttRequestId = requestId;
         state.moxRequested = true;
+        state.txLocalRequestActive = true;
+        state.txLocalRequestId = requestId;
+        state.txLocalRequestPermitExpiresAt = performance.now() + TX_LOCAL_REQUEST_PERMIT_MS;
         refreshBridgeControlHeartbeatForTx();
         applyPhase40TxSourceOverrides();
         setTxMediaPriority(true);
@@ -9934,6 +10371,8 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
               state.moxRequested = false;
               state.txEnabled = false;
               state.txPhase = "rx";
+              state.txLocalRequestActive = false;
+              state.txLocalRequestPermitExpiresAt = 0;
               lockTx("mic-unavailable", false);
               logEvent("PTT cancelled because browser mic audio is unavailable");
               recordOperatorFault("Mic unavailable", "alarm");
@@ -10140,27 +10579,82 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     }
 
     async function connectBridge() {
-      if (state.connectPending || (state.ws && state.ws.readyState <= WebSocket.OPEN)) {
+      const forceLegacyWs = forceLegacyWsDiagnosticEnabled();
+      if (forceLegacyWs && (state.connectPending || (state.ws && state.ws.readyState <= WebSocket.OPEN))) {
+        logEvent("Connect diagnostic: resetting stale pending/socket before connect");
+        state.connectPending = false;
+        state.connected = false;
+        if (state.ws) {
+          try {
+            state.ws.close(1000, "diagnostic reconnect");
+          } catch (_) {
+            // Best effort only.
+          }
+          state.ws = null;
+        }
+      } else if (state.connectPending || (state.ws && state.ws.readyState <= WebSocket.OPEN)) {
+        logEvent("Connect diagnostic: connect ignored because socket is already pending/live");
         return;
+      }
+      let reuseProbeSocket = null;
+      if (window.saturnWsDiagProbe && window.saturnWsDiagProbe.readyState <= WebSocket.OPEN) {
+        if (window.saturnWsDiagProbe.readyState === WebSocket.OPEN) {
+          reuseProbeSocket = window.saturnWsDiagProbe;
+          window.saturnWsDiagProbe = null;
+          logEvent("Connect diagnostic: reusing open WS probe for normal connect");
+        } else {
+          try {
+            window.saturnWsDiagProbe.close(1000, "normal connect");
+          } catch (_) {
+            // Best effort only; stale diagnostic sockets should not block normal connect.
+          }
+          window.saturnWsDiagProbe = null;
+          logEvent("Connect diagnostic: closed WS probe before normal connect");
+        }
       }
       state.connectPending = true;
       updateUi();
-      await primeRxAudioContextFromGesture();
-      await loadRemoteSettingsFromServer(false);
+      const rawWsUrl = $("ws-url").value.trim();
+      state.wsUrl = normalizeWsUrlPreference(rawWsUrl);
+      $("ws-url").value = state.wsUrl;
+      logEvent(`Connect diagnostic: clicked forceLegacy=${forceLegacyWs ? "1" : "0"}`);
+      logEvent(`Connect diagnostic: raw=${rawWsUrl || "(blank)"}`);
+      logEvent(`Connect diagnostic: normalized=${state.wsUrl}`);
+      logEvent(`TX transport profile: ${txTransportProfileLabel()}`);
+      if (forceLegacyWs) {
+        logEvent("Connect diagnostic: skipping audio prime and settings load");
+      } else {
+        try {
+          await primeRxAudioContextFromGesture();
+        } catch (err) {
+          logEvent(`Connect diagnostic: audio prime failed: ${err?.message || err}`);
+        }
+        try {
+          await loadRemoteSettingsFromServer(false);
+        } catch (err) {
+          logEvent(`Connect diagnostic: settings load failed: ${err?.message || err}`);
+        }
+      }
       applyPhase40DisplayProfile("connect");
       applyPhase40TxSourceOverrides();
       state.demoMode = false;
       state.wsUrl = normalizeWsUrlPreference($("ws-url").value.trim());
       $("ws-url").value = state.wsUrl;
-      const phase42SessionId = phase42SplitTransportEnabled()
+      const phase42SessionId = !forceLegacyWs && phase42SplitTransportEnabled()
         ? _next.createPhase42SessionId()
         : "";
+      if (forceLegacyWs) {
+        logEvent("WebSocket diagnostic: forcing legacy /tci socket");
+        logEvent("TX audio note: legacy diagnostic mode is for socket isolation only; use phase42_split=1 for TX audio testing");
+      }
+      logEvent(`WebSocket diagnostic: page=${window.location.href}`);
+      logEvent(`WebSocket diagnostic: target=${state.wsUrl}`);
       logEvent(phase42SessionId
         ? `Connecting to ${state.wsUrl} with Phase 42 split session ${phase42SessionId}`
         : `Connecting to ${state.wsUrl}`);
       let ws;
       try {
-        ws = createBridgeSocket(state.wsUrl, phase42SessionId);
+        ws = reuseProbeSocket || createBridgeSocket(state.wsUrl, phase42SessionId);
       } catch (err) {
         logEvent(`Invalid WebSocket URL: ${err.message}`);
         recordOperatorFault("Invalid bridge URL", "warn");
@@ -10172,6 +10666,11 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       ws.binaryType = "arraybuffer";
       // Assign state.ws before callbacks so the staleness guard can reference it.
       state.ws = ws;
+      window.setTimeout(() => {
+        if (ws === state.ws && ws.readyState === WebSocket.CONNECTING) {
+          logEvent("WebSocket diagnostic: still CONNECTING after 3s");
+        }
+      }, 3000);
       ws.onopen = () => {
         if (ws !== state.ws) { ws.close(); return; }
         state.connectPending = false;
@@ -10181,6 +10680,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         lockTx("reconnect", false);
         resetDisplayHistory();
         logEvent(phase42SessionId ? "Phase 42 split WebSockets connected" : "WebSocket connected");
+        logEvent(`TX transport active: ${phase42SessionId ? "phase42 split" : (forceLegacyWs ? "legacy diagnostic" : "legacy")}`);
         requestFullState();
         sendTxCodecCaps();
         void refreshTxCodecCapabilities();
@@ -10221,10 +10721,10 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
           handleBinaryFrame(classified.buffer);
         }
       };
-      ws.onclose = () => {
+      ws.onclose = (event) => {
         if (ws !== state.ws) return;
         const wasTxActive = state.moxRequested || state.txEnabled || state.micCapturing;
-        logEvent("WebSocket closed");
+        logEvent(`WebSocket closed code=${event.code} clean=${event.wasClean}${event.reason ? ` reason=${event.reason}` : ""}`);
         state.connectPending = false;
         state.connected = false;
         state.iqStreaming = false;
@@ -10254,14 +10754,23 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         void releaseWakeLock();
         updateUi();
       };
-      ws.onerror = () => {
+      ws.onerror = (event) => {
         if (ws !== state.ws) return;
         state.connectPending = false;
-        logEvent("WebSocket error");
+        logEvent(`WebSocket error readyState=${ws.readyState}`);
         recordOperatorFault("Bridge socket error", "warn");
         updateUi();
       };
+      if (ws.readyState === WebSocket.OPEN) {
+        window.setTimeout(() => {
+          if (ws === state.ws && !state.connected && typeof ws.onopen === "function") {
+            logEvent("Connect diagnostic: activating reused open WebSocket");
+            ws.onopen();
+          }
+        }, 0);
+      }
     }
+    window.saturnConnectBridgeDiagnostic = connectBridge;
 
     async function disconnectBridge() {
       state.connectPending = false;
@@ -10332,6 +10841,8 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       Object.assign(state, next);
 
       if (events.txFault) {
+        state.txLocalRequestActive = false;
+        state.txLocalRequestPermitExpiresAt = 0;
         if (events.txFault.toLowerCase().startsWith("uplink late")) {
           clearOperatorFault("TX audio late", false);
         }
@@ -10387,6 +10898,8 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         applyRxVolumeGain();
       }
       if (events.txReleased) {
+        state.txLocalRequestActive = false;
+        state.txLocalRequestPermitExpiresAt = 0;
         stopMicCapture();
         recoverRxAfterMox();
         if (state.connected && !state.audioStreaming && phase40ShouldAutoStartRxAudio()) {
@@ -10521,7 +11034,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       if (!state.audioCtx || !state.audioStreaming) {
         return;
       }
-      if (state.moxRequested || state.txEnabled) {
+      if (txReceiveSuppressionActive()) {
         flushRxAudioQueue();
         return;
       }
@@ -10567,16 +11080,26 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     }
 
     function handleBinaryFrame(buffer) {
-      if (!(buffer instanceof ArrayBuffer) || buffer.byteLength < 64) {
+      if (!(buffer instanceof ArrayBuffer)) {
+        updateWsDiagMarker("App ignored binary: not ArrayBuffer", 1000);
+        return;
+      }
+      if (buffer.byteLength < 64) {
+        updateWsDiagMarker(`App ignored binary: short bytes=${buffer.byteLength}`, 1000);
         return;
       }
       const view = new DataView(buffer);
       const frameType = view.getUint32(24, true);
+      const sampleRate = view.getUint32(4, true);
+      const floatCount = view.getUint32(20, true);
+      state.wsDiagBinaryFrames = (state.wsDiagBinaryFrames || 0) + 1;
       if (frameType === TCI_STREAM_AUDIO_RX) {
+        updateWsDiagMarker(`App audio frame bytes=${buffer.byteLength}`, 1000);
         handleAudioFrame(buffer);
         return;
       }
       if (frameType === TCI_STREAM_IQ_TX) {
+        updateWsDiagMarker(`App TX IQ bytes=${buffer.byteLength} floats=${floatCount}`, 500);
         handleIqFrame(buffer, "tx");
         return;
       }
@@ -10585,12 +11108,50 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         // displaying TX frames.  This prevents rate-bouncing during
         // the armed→keyed and keyed→rx transitions when both frame
         // types briefly interleave.
-        if (state.moxRequested || state.txEnabled || state.displayIqSource === "tx") {
+        if (txReceiveSuppressionActive()) {
           return;
         }
+        updateWsDiagMarker(`App RX IQ bytes=${buffer.byteLength} floats=${floatCount} rate=${sampleRate}`, 500);
         handleIqFrame(buffer, "rx");
+        return;
       }
+      updateWsDiagMarker(`App ignored binary: type=${frameType} bytes=${buffer.byteLength}`, 1000);
     }
+
+    function adoptWsDiagSocket(socket) {
+      if (!socket || socket.readyState !== WebSocket.OPEN) {
+        return false;
+      }
+      if (state.ws !== socket) {
+        state.ws = socket;
+        state.connectPending = false;
+        state.connected = true;
+        state.iqStreaming = true;
+        state.demoMode = false;
+        lockTx("reconnect", false);
+        updateWsDiagMarker("WS probe adopted by app display path");
+        logEvent("WS diagnostic probe adopted by app display path");
+        updateUi();
+      }
+      return true;
+    }
+
+    window.saturnAdoptWsDiagText = (text, socket) => {
+      if (!adoptWsDiagSocket(socket)) {
+        return false;
+      }
+      handleTciText(text);
+      return true;
+    };
+
+    window.saturnAdoptWsDiagFrame = (buffer, socket) => {
+      if (!adoptWsDiagSocket(socket)) {
+        return false;
+      }
+      state.iqStreaming = true;
+      handleBinaryFrame(buffer);
+      return true;
+    };
 
     function fftSizeForSamples(value, target = DISPLAY_BASE_FFT_SIZE) {
       if (value >= target) {
@@ -10716,7 +11277,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       updateMeterVisualState(now);
       const phoneWanLite = phoneWanLiteActive(now);
       const waterfallEnabled = waterfallRenderEnabled(now);
-      const txDisplayActive = state.moxRequested || state.txEnabled;
+      const txDisplayActive = txReceiveSuppressionActive();
       // Safety: if TX ended but displayIqSource is still "tx", clear it
       // so the RX frame gate in handleBinaryFrame unblocks.
       if (!txDisplayActive && state.displayIqSource === "tx") {

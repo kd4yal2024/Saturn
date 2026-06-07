@@ -1,8 +1,10 @@
 use std::{
     collections::BTreeSet,
+    io::Read,
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
     path::{Path, PathBuf},
     sync::OnceLock,
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 use axum::{
@@ -38,6 +40,7 @@ const DEFAULT_REMOTE_TLS_ADDR: &str = "0.0.0.0:8443";
 const REMOTE_BASIC_AUTH_ENV: &str = "SATURN_REMOTE_BASIC_AUTH";
 const REMOTE_DEV_INSECURE_ENV: &str = "SATURN_REMOTE_DEV_INSECURE";
 const REMOTE_BASIC_AUTH_CHALLENGE: &str = "Basic realm=\"Saturn Remote\", charset=\"UTF-8\"";
+const REMOTE_AUTH_COOKIE_NAME: &str = "saturn_remote_auth";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum BridgeProxyChannel {
@@ -235,10 +238,11 @@ async fn remote_next_page_handler(headers: HeaderMap, State(state): State<AppSta
 }
 
 async fn remote_page_response(headers: HeaderMap, state: AppState, page: &str) -> Response {
-    if let Err(rejection) = check_remote_basic_auth(&headers) {
+    if let Err(rejection) = check_remote_auth(&headers) {
         return rejection;
     }
     let mut resp = serve_page(&state.webroot, page).await;
+    attach_remote_auth_cookie(&mut resp);
     // Enable SharedArrayBuffer for AudioWorklet ring-buffer audio pipeline.
     let hdrs = resp.headers_mut();
     hdrs.insert(
@@ -257,7 +261,7 @@ async fn remote_asset_handler(
     AxumPath(asset): AxumPath<String>,
     State(state): State<AppState>,
 ) -> Response {
-    if let Err(rejection) = check_remote_basic_auth(&headers) {
+    if let Err(rejection) = check_remote_auth(&headers) {
         return rejection;
     }
 
@@ -321,11 +325,32 @@ fn remote_bridge_ws_response(
     state: AppState,
     channel: BridgeProxyChannel,
 ) -> Response {
-    if let Err(rejection) = check_remote_basic_auth(&headers) {
+    if let Err(rejection) = check_ws_origin(&headers, &uri) {
+        warn!(
+            "remote TLS {} websocket rejected by origin check: host={:?} origin={:?} uri={uri}",
+            channel.label(),
+            header_value_for_log(&headers, header::HOST),
+            header_value_for_log(&headers, header::ORIGIN),
+        );
         return rejection;
     }
-    if let Err(rejection) = check_ws_origin(&headers, &uri) {
-        return rejection;
+    match remote_auth_source(&headers) {
+        Some(source) => {
+            info!(
+                "remote TLS {} websocket accepted via {source} auth: host={:?} origin={:?} uri={uri}",
+                channel.label(),
+                header_value_for_log(&headers, header::HOST),
+                header_value_for_log(&headers, header::ORIGIN),
+            );
+        }
+        None => {
+            warn!(
+                "remote TLS {} websocket accepted via same-origin fallback: host={:?} origin={:?} uri={uri}",
+                channel.label(),
+                header_value_for_log(&headers, header::HOST),
+                header_value_for_log(&headers, header::ORIGIN),
+            );
+        }
     }
     let phase42_session_id = extract_phase42_session_from_uri(&uri);
     ws.on_upgrade(move |socket| {
@@ -337,7 +362,7 @@ async fn remote_settings_get_handler(
     headers: HeaderMap,
     State(state): State<AppState>,
 ) -> Response {
-    if let Err(rejection) = check_remote_basic_auth(&headers) {
+    if let Err(rejection) = check_remote_auth(&headers) {
         return rejection;
     }
     get_remote_settings(State(state)).await
@@ -348,7 +373,7 @@ async fn remote_settings_post_handler(
     State(state): State<AppState>,
     Json(settings): Json<RemoteSettings>,
 ) -> Response {
-    if let Err(rejection) = check_remote_basic_auth(&headers) {
+    if let Err(rejection) = check_remote_auth(&headers) {
         return rejection;
     }
     set_remote_settings(State(state), Json(settings)).await
@@ -358,7 +383,7 @@ async fn remote_profiles_get_handler(
     headers: HeaderMap,
     State(state): State<AppState>,
 ) -> Response {
-    if let Err(rejection) = check_remote_basic_auth(&headers) {
+    if let Err(rejection) = check_remote_auth(&headers) {
         return rejection;
     }
     get_remote_profiles(State(state)).await
@@ -369,7 +394,7 @@ async fn remote_profiles_save_handler(
     State(state): State<AppState>,
     Json(request): Json<RemoteProfileSaveRequest>,
 ) -> Response {
-    if let Err(rejection) = check_remote_basic_auth(&headers) {
+    if let Err(rejection) = check_remote_auth(&headers) {
         return rejection;
     }
     save_remote_profile(State(state), Json(request)).await
@@ -380,7 +405,7 @@ async fn remote_profiles_delete_handler(
     State(state): State<AppState>,
     Json(request): Json<RemoteProfileDeleteRequest>,
 ) -> Response {
-    if let Err(rejection) = check_remote_basic_auth(&headers) {
+    if let Err(rejection) = check_remote_auth(&headers) {
         return rejection;
     }
     delete_remote_profile(State(state), Json(request)).await
@@ -391,7 +416,7 @@ async fn remote_profiles_startup_handler(
     State(state): State<AppState>,
     Json(request): Json<RemoteProfileStartupRequest>,
 ) -> Response {
-    if let Err(rejection) = check_remote_basic_auth(&headers) {
+    if let Err(rejection) = check_remote_auth(&headers) {
         return rejection;
     }
     set_remote_profile_startup(State(state), Json(request)).await
@@ -448,6 +473,67 @@ fn check_remote_basic_auth(headers: &HeaderMap) -> Result<(), Response> {
     Err(response)
 }
 
+fn check_remote_auth(headers: &HeaderMap) -> Result<(), Response> {
+    if remote_auth_source(headers).is_some() {
+        return Ok(());
+    }
+    check_remote_basic_auth(headers)
+}
+
+fn remote_auth_source(headers: &HeaderMap) -> Option<&'static str> {
+    let Some(expected) = configured_basic_auth_header() else {
+        return Some("disabled");
+    };
+    let actual = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .map(str::trim);
+    if actual == Some(expected) {
+        return Some("basic");
+    }
+    if remote_auth_cookie_matches(headers) {
+        return Some("cookie");
+    }
+    None
+}
+
+fn header_value_for_log(headers: &HeaderMap, name: header::HeaderName) -> Option<String> {
+    headers
+        .get(name)
+        .and_then(|value| value.to_str().ok())
+        .map(|value| value.chars().take(160).collect())
+}
+
+fn attach_remote_auth_cookie(response: &mut Response) {
+    if configured_basic_auth_header().is_none() {
+        return;
+    }
+    let value = format!(
+        "{REMOTE_AUTH_COOKIE_NAME}={}; Path=/; Secure; HttpOnly; SameSite=Strict",
+        remote_auth_cookie_value()
+    );
+    if let Ok(value) = HeaderValue::from_str(&value) {
+        response.headers_mut().insert(header::SET_COOKIE, value);
+    }
+}
+
+fn remote_auth_cookie_matches(headers: &HeaderMap) -> bool {
+    if configured_basic_auth_header().is_none() {
+        return false;
+    }
+    let expected = remote_auth_cookie_value();
+    headers
+        .get_all(header::COOKIE)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .any(|header| {
+            header.split(';').any(|part| {
+                let (name, value) = part.trim().split_once('=').unwrap_or(("", ""));
+                name == REMOTE_AUTH_COOKIE_NAME && value == expected
+            })
+        })
+}
+
 fn configured_basic_auth_header() -> Option<&'static str> {
     static AUTH_HEADER: OnceLock<Option<String>> = OnceLock::new();
     AUTH_HEADER
@@ -459,6 +545,32 @@ fn configured_basic_auth_header() -> Option<&'static str> {
             Err(_) => None,
         })
         .as_deref()
+}
+
+fn remote_auth_cookie_value() -> &'static str {
+    static COOKIE_VALUE: OnceLock<String> = OnceLock::new();
+    COOKIE_VALUE
+        .get_or_init(|| {
+            let mut bytes = [0u8; 32];
+            if std::fs::File::open("/dev/urandom")
+                .and_then(|mut file| file.read_exact(&mut bytes))
+                .is_err()
+            {
+                let now = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .map(|duration| duration.as_nanos())
+                    .unwrap_or_default();
+                let fallback = format!(
+                    "{}:{}:{}",
+                    std::process::id(),
+                    now,
+                    configured_basic_auth_header().unwrap_or("")
+                );
+                return BASE64.encode(fallback.as_bytes());
+            }
+            BASE64.encode(bytes)
+        })
+        .as_str()
 }
 
 pub fn remote_basic_auth_configured() -> bool {
