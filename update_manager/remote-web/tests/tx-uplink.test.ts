@@ -118,11 +118,14 @@ describe('TX uplink guard', () => {
 
   it('selects a much smaller time-equivalent hard cap for Opus codecs', () => {
     const byteRate = txMicByteRateBytesPerSecond(48_000, 2, TX_MIC_BLOCK_SAMPLES, 64);
+    const observedAndroidTailnetBurst = decideTxMicSend(700, 200, byteRate, 'opus_wb');
     const decision = decideTxMicSend(TX_UPLINK_OPUS_HARD_CAP_BYTES + 1, 200, byteRate, 'opus_wb');
 
     expect(txUplinkHardCapBytesForCodec('pcm')).toBe(TX_UPLINK_PCM_HARD_CAP_BYTES);
     expect(txUplinkHardCapBytesForCodec(TX_MIC_CODEC_OPUS_NB)).toBe(TX_UPLINK_OPUS_HARD_CAP_BYTES);
     expect(txUplinkHardCapBytesForCodec('opus_wb')).toBe(TX_UPLINK_OPUS_HARD_CAP_BYTES);
+    expect(observedAndroidTailnetBurst.action).toBe('send');
+    expect(observedAndroidTailnetBurst.hardCapEngaged).toBe(false);
     expect(decision.hardCapBytes).toBe(TX_UPLINK_OPUS_HARD_CAP_BYTES);
     expect(decision.hardCapEngaged).toBe(true);
     expect(decision.action).toBe('drop');

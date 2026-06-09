@@ -56,7 +56,8 @@ Remote entry behavior:
 - `http://<host>/remote` should redirect to `https://<host>:8443/remote`.
 - `http://<host>/saturn/remote` should redirect to `https://<host>:8443/remote`.
 - `https://<host>:8443/remote` is the stable remote UI (`saturn-remote.html`).
-- `https://<host>:8443/remote-next` is the next-generation remote UI (`saturn-remote-next.html` + Vite bundle `saturn-remote-next.js`, served via `/remote-assets/remote-next.js`). Both URLs share the same basic-auth credentials, `remote_settings.json`, and `remote_profiles.json` state; `/remote-next` is where active extraction work lands and `/remote` remains the stable fallback.
+- `https://<host>:8443/remote-next?phase42_split=1&phase44_tx_opus=1` is the current Saturn Remote checkpoint/default operator URL: Phase 42 split control/media sockets plus the guarded Phase 44 Opus TX path. It serves `saturn-remote-next.html` + Vite bundle `saturn-remote-next.js` via `/remote-assets/remote-next.js`.
+- `https://<host>:8443/remote-next` still serves the next-generation remote UI as a fallback entry point, and `/remote` remains the stable remote UI (`saturn-remote.html`). Both remote UIs share the same basic-auth credentials, `remote_settings.json`, and `remote_profiles.json` state.
 - Shared remote settings persist in `/var/lib/saturn-state/remote_settings.json`.
 - Named remote Setup profiles persist in `/var/lib/saturn-state/remote_profiles.json`.
 - The remote `Setup` menu supports profile save/load/delete, startup profile selection, and panadapter/waterfall display presets.

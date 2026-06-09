@@ -99,7 +99,12 @@ export type TxOpusAudioEncoderConfig = {
   numberOfChannels: 1;
   bitrate: number;
   opus: {
+    format: 'opus';
+    signal: 'voice';
+    application: 'voip';
     frameDuration: number;
+    complexity: number;
+    packetlossperc: number;
     useinbandfec: boolean;
     usedtx: boolean;
   };
@@ -207,7 +212,12 @@ export function txOpusAudioEncoderConfig(profile: TxOpusProfile): TxOpusAudioEnc
     numberOfChannels: 1,
     bitrate: profile.bitrateBps,
     opus: {
+      format: 'opus',
+      signal: 'voice',
+      application: 'voip',
       frameDuration: profile.frameDurationUs,
+      complexity: 5,
+      packetlossperc: profile.fecEnabled ? 5 : 0,
       useinbandfec: profile.fecEnabled,
       usedtx: profile.dtxEnabled,
     },

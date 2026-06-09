@@ -3394,7 +3394,7 @@
       <div class="hero-actions">
         <span class="status-chip ghost" id="static-wsdiag-marker">Diag loading</span>
         <button class="btn ghost" id="static-wsdiag-btn" type="button">WS Probe</button>
-        <button class="btn ghost" id="static-wsdiag-copy-btn" type="button">Copy Diag</button>
+        <button class="btn ghost" id="static-wsdiag-copy-btn" type="button">Copy Log</button>
         <a class="nav-link" href="./monitor">Monitor</a>
         <button class="btn ghost shortcut-help-btn" id="shortcut-help-btn" type="button" aria-label="Show operator controls" title="Show operator controls">?</button>
         <button class="btn ghost" id="layout-btn" type="button">Phone: Off</button>
@@ -4428,7 +4428,7 @@
 
   <script>
     (() => {
-      const DIAG_VERSION = "wsdiag20";
+      const DIAG_VERSION = "bridgeprefill240-clean5";
       window.saturnDiagLastError = "";
       window.saturnDiagText = "";
       window.addEventListener("error", (event) => {
@@ -4465,7 +4465,7 @@
           : (window.saturnDiagText || document.getElementById("static-wsdiag-marker")?.textContent || "");
         try {
           await navigator.clipboard.writeText(text);
-          setDiag(`Copied: ${text}`);
+          setDiag("Copied operator log");
         } catch (_) {
           window.prompt("Copy diagnostic text", text);
         }
@@ -4569,7 +4569,7 @@
     })();
   </script>
   <script
-    src="/remote-assets/remote-next.js?v=phase44-opus-lab-wsdiag20"
+    src="/remote-assets/remote-next.js?v=phase44-opus-bridgeprefill240-clean5"
     onload="window.saturnRemoteBundleLoaded=true"
     onerror="window.saturnRemoteBundleError=true; window.saturnDiagLastError='remote-next.js failed to load'; window.saturnSetWsDiag && window.saturnSetWsDiag('JS error: remote-next.js failed to load')"
   ></script>
@@ -4845,6 +4845,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     const OPERATOR_FAULT_VISIBLE_MS = 60000;
     const OPERATOR_FAULT_HISTORY_LIMIT = 8;
     const RX_NB_THRESHOLD_THROTTLE_MS = 120;
+    const TX_UPLINK_VISIBLE_LOG_INTERVAL_MS = 2500;
     const OPERATOR_PILL_DETAILS = Object.freeze([
       { pillId: "operator-conn-pill", valueId: "operator-conn-value", label: "Connection" },
       { pillId: "operator-owner-pill", valueId: "operator-owner-value", label: "Ownership" },
@@ -4892,7 +4893,26 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     }
 
     const PHASE40_DISPLAY_PROFILE = normalizePhase40DisplayProfile(PHASE40_QUERY.get("phase40_display_profile"));
-    const _next = globalThis.SaturnRemoteNext;
+    function saturnRemoteNextApi() {
+      const direct = globalThis.SaturnRemoteNext;
+      const bundle = globalThis.SaturnRemoteNextBundle;
+      if (direct && typeof direct.createAppState === "function") {
+        return direct;
+      }
+      if (bundle?.SaturnRemoteNext && typeof bundle.SaturnRemoteNext.createAppState === "function") {
+        return bundle.SaturnRemoteNext;
+      }
+      if (bundle && typeof bundle.createAppState === "function") {
+        return bundle;
+      }
+      return direct || bundle?.SaturnRemoteNext || bundle || {};
+    }
+    const _next = saturnRemoteNextApi();
+    globalThis.saturnRemoteNextApiDebug = {
+      directKeys: Object.keys(globalThis.SaturnRemoteNext || {}).slice(0, 24),
+      bundleKeys: Object.keys(globalThis.SaturnRemoteNextBundle || {}).slice(0, 24),
+      apiKeys: Object.keys(_next || {}).slice(0, 24),
+    };
     function safeLocalStorageGet(key) {
       try {
         return localStorage.getItem(key);
@@ -4910,8 +4930,9 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
           new URLSearchParams(window.location.search).get("phase44_tx_opus") === "1" ||
           safeLocalStorageGet(PHASE44_TX_OPUS_OVERRIDE_KEY) === "1"
         );
+    const PHASE44_TX_OPUS_VOICE_EQ = new URLSearchParams(window.location.search).get("phase44_tx_voice_eq") !== "0";
 
-    const state = globalThis.SaturnRemoteNext.createAppState();
+    const state = _next.createAppState();
     state.phase40DisplayProfile = PHASE40_DISPLAY_PROFILE;
     state.txOpusOverrideEnabled = PHASE44_TX_OPUS_OVERRIDE;
     state.txOpusProducer = null;
@@ -4928,6 +4949,8 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     state.iqFrameVersion = 0;
     state.lastRenderedIqFrameVersion = -1;
     state.lastWaterfallLineAt = 0;
+    state.rxMediaResumeLastAt = 0;
+    state.rxMediaResumeRetryToken = 0;
     state.wsDiagBinaryFrames = 0;
     state.wsDiagLastMarkerAt = 0;
     state.phoneWaterfallVisible = false;
@@ -5830,11 +5853,15 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       const area = $("event-log");
       const lines = area.textContent ? area.textContent.trimEnd().split("\n") : [];
       lines.push(`[${stamp}] ${message}`);
-      while (lines.length > 90) {
+      while (lines.length > 180) {
         lines.shift();
       }
       area.textContent = lines.join("\n");
       area.scrollTop = area.scrollHeight;
+    }
+
+    function eventLogText() {
+      return $("event-log")?.textContent?.trim() || "";
     }
 
     function roundedTimingMs(value) {
@@ -6083,6 +6110,16 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     function defaultWsUrl() {
       const saved = localStorage.getItem("saturn.remote.wsUrl");
       return normalizeWsUrlPreference(saved);
+    }
+
+    function ensureBridgeWsUrl() {
+      const input = $("ws-url");
+      const raw = input?.value || state.wsUrl || "";
+      state.wsUrl = normalizeWsUrlPreference(raw);
+      if (input) {
+        input.value = state.wsUrl;
+      }
+      return state.wsUrl;
     }
 
     function preferredLayout() {
@@ -6679,6 +6716,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       if (applyBandMemoryForFrequency(targetHz)) {
         sendCurrentRadioPrefsToBridge();
       }
+      resumeRxMediaAfterBandChange("band recall");
       persistLocalSettingsFallback(currentRemoteSettings());
       scheduleRemoteSettingsSave();
       logEvent(`Loaded ${button.dataset.freqLabel || newBandKey || "band"} from keypad`);
@@ -6948,7 +6986,9 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     function currentRadioPrefs() {
       const prefs = _next.radioPrefsFromState(state);
       prefs.rxAdc = REMOTE_FIXED_RX_ADC;
-      return prefs;
+      return state.txOpusOverrideEnabled === true
+        ? phase44OpusLabCleanRadioPrefs(prefs)
+        : prefs;
     }
 
     function currentDisplayPrefs() {
@@ -6995,10 +7035,146 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
 
     const BAND_MEMORY_KEY = "saturn.remote.bandMemory";
 
+    function phase44OpusLabZeroBands() {
+      return [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+    }
+
+    function phase44OpusLabDesiredTxEqBands() {
+      if (!PHASE44_TX_OPUS_VOICE_EQ) {
+        return phase44OpusLabZeroBands();
+      }
+      // 32, 63, 125, 250, 500, 1k, 2k, 4k, 8k, 16k.
+      return [0, 0, 0, 0, -1, 0, 1, 2, 1, 0, 0];
+    }
+
+    function phase44OpusLabCleanRadioPrefs(prefs) {
+      if (!prefs || typeof prefs !== "object") {
+        return prefs;
+      }
+      return {
+        ...prefs,
+        txEqEnabled: PHASE44_TX_OPUS_VOICE_EQ,
+        txEqBands: phase44OpusLabDesiredTxEqBands(),
+        cfcEnabled: false,
+        cfcPrecomp: 0,
+        cfcBands: phase44OpusLabZeroBands(),
+        txNoiseGateEnabled: false,
+        txNoiseGateThresholdDb: -30,
+      };
+    }
+
+    function phase44OpusLabBandsAreFlat(bands) {
+      if (!Array.isArray(bands)) return true;
+      for (let i = 1; i <= 10; i += 1) {
+        if (Math.abs(Number(bands[i]) || 0) > 0.001) {
+          return false;
+        }
+      }
+      return true;
+    }
+
+    function phase44OpusLabBandsMatch(actual, expected) {
+      if (!Array.isArray(actual)) return false;
+      for (let i = 1; i <= 10; i += 1) {
+        if (Math.abs((Number(actual[i]) || 0) - (Number(expected[i]) || 0)) > 0.001) {
+          return false;
+        }
+      }
+      return true;
+    }
+
+    function applyPhase44OpusLabCleanTxAudio(reason = "") {
+      if (state.txOpusOverrideEnabled !== true) {
+        return false;
+      }
+      const desiredTxEqBands = phase44OpusLabDesiredTxEqBands();
+      const changed = Boolean(
+        state.txEqEnabled !== PHASE44_TX_OPUS_VOICE_EQ ||
+        state.cfcEnabled ||
+        state.txNoiseGateEnabled ||
+        Number(state.txNoiseGateThresholdDb) !== -30 ||
+        Math.abs(Number(state.cfcPrecomp) || 0) > 0.001 ||
+        !phase44OpusLabBandsMatch(state.txEqBands, desiredTxEqBands) ||
+        !phase44OpusLabBandsAreFlat(state.cfcBands)
+      );
+      state.txEqEnabled = PHASE44_TX_OPUS_VOICE_EQ;
+      state.txEqBands = sanitizeEqBands(desiredTxEqBands);
+      state.cfcEnabled = false;
+      state.cfcPrecomp = 0;
+      state.cfcBands = sanitizeCfcBands(phase44OpusLabZeroBands());
+      state.txNoiseGateEnabled = false;
+      state.txNoiseGateThresholdDb = -30;
+      if (changed && reason) {
+        const now = performance.now();
+        if (now - (state.txOpusCleanProfileLastLogAt || 0) > 5000) {
+          state.txOpusCleanProfileLastLogAt = now;
+          logEvent(`Phase 44 Opus lab TX voice profile restored after ${reason}`);
+        }
+      }
+      return changed;
+    }
+
+    function sendPhase44OpusLabCleanTxAudioToBridge() {
+      if (!state.connected || !state.ws || state.ws.readyState !== WebSocket.OPEN) {
+        return false;
+      }
+      const now = performance.now();
+      if (now - (state.txOpusCleanProfileLastSentAt || 0) < 1000) {
+        return false;
+      }
+      state.txOpusCleanProfileLastSentAt = now;
+      const commands = [
+        "tx_noise_gate:0,false;",
+        "tx_noise_gate_threshold:0,-30.0;",
+        `tx_eq_enable:0,${PHASE44_TX_OPUS_VOICE_EQ};`,
+        "tx_cfc_enable:0,false;",
+        "tx_cfc_precomp:0,0.0;",
+      ];
+      const txEqBands = phase44OpusLabDesiredTxEqBands();
+      for (let i = 1; i <= 10; i += 1) {
+        commands.push(`tx_eq_band:0,${i},${Number(txEqBands[i] || 0).toFixed(0)};`);
+        commands.push(`tx_cfc_band:0,${i},0.0;`);
+      }
+      sendTci(commands.join(""));
+      return true;
+    }
+
+    function scrubPhase44OpusLabBandMemory() {
+      if (state.txOpusOverrideEnabled !== true || !state.bandMemory || typeof state.bandMemory !== "object") {
+        return false;
+      }
+      let changed = false;
+      Object.values(state.bandMemory).forEach((entry) => {
+        if (!entry || typeof entry !== "object") {
+          return;
+        }
+        const prefs = entry.radioPrefs;
+        if (!prefs || typeof prefs !== "object") {
+          return;
+        }
+        const dirty = Boolean(
+          prefs.txEqEnabled ||
+          prefs.cfcEnabled ||
+          prefs.txNoiseGateEnabled ||
+          Number(prefs.txNoiseGateThresholdDb) !== -30 ||
+          Math.abs(Number(prefs.cfcPrecomp) || 0) > 0.001 ||
+          !phase44OpusLabBandsMatch(prefs.txEqBands, phase44OpusLabDesiredTxEqBands()) ||
+          !phase44OpusLabBandsAreFlat(prefs.cfcBands)
+        );
+        if (dirty) {
+          entry.radioPrefs = phase44OpusLabCleanRadioPrefs(prefs);
+          changed = true;
+        }
+      });
+      return changed;
+    }
+
     function currentBandMemoryEntry() {
       return {
         frequency: state.vfoA || state.dds,
-        radioPrefs: currentRadioPrefs(),
+        radioPrefs: state.txOpusOverrideEnabled === true
+          ? phase44OpusLabCleanRadioPrefs(currentRadioPrefs())
+          : currentRadioPrefs(),
         displayPrefs: currentDisplayPrefs(),
         displayZoom: Math.max(1, Math.min(32, Number(state.displayZoom) || 1)),
       };
@@ -7020,6 +7196,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       state.applyingBandMemory = true;
       try {
         applyRadioPrefsObject(memory.radioPrefs);
+        applyPhase44OpusLabCleanTxAudio("band memory");
         applyDisplayPrefsObject(memory.displayPrefs);
         if (Number.isFinite(Number(memory.displayZoom))) {
           state.displayZoom = Math.max(1, Math.min(32, Number(memory.displayZoom)));
@@ -7082,6 +7259,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         return false;
       }
       applyRadioPrefsObject(settings.radioPrefs && typeof settings.radioPrefs === "object" ? settings.radioPrefs : settings);
+      applyPhase44OpusLabCleanTxAudio("remote settings");
       applyDisplayPrefsObject(settings.displayPrefs);
       if (settings.wsUrl != null) {
         state.wsUrl = normalizeWsUrlPreference(settings.wsUrl);
@@ -7108,9 +7286,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         state.phonePanels = sanitizePhonePanels(settings.phonePanels, state.phonePanels);
         syncPhonePanels();
       }
-      if ($("ws-url")) {
-        $("ws-url").value = state.wsUrl || defaultWsUrl();
-      }
+      ensureBridgeWsUrl();
       if ($("display-zoom")) {
         $("display-zoom").value = `${state.displayZoom}`;
       }
@@ -9066,17 +9242,131 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       return `tx_codec_caps:0,${advertised.join(",")};`;
     }
 
+    function opusEncoderProbeConfigs(sampleRate, bitrate) {
+      const base = {
+        codec: "opus",
+        sampleRate,
+        numberOfChannels: 1,
+        bitrate,
+      };
+      return [
+        {
+          label: "minimal",
+          config: base,
+        },
+        {
+          label: "full-voice-opus-fec",
+          config: {
+            ...base,
+            opus: {
+              format: "opus",
+              signal: "voice",
+              application: "voip",
+              frameDuration: 20000,
+              complexity: 5,
+              packetlossperc: 5,
+              useinbandfec: true,
+              usedtx: false,
+            },
+          },
+        },
+        {
+          label: "full-voice-opus-no-fec",
+          config: {
+            ...base,
+            opus: {
+              format: "opus",
+              signal: "voice",
+              application: "voip",
+              frameDuration: 20000,
+              complexity: 5,
+              packetlossperc: 0,
+              useinbandfec: false,
+              usedtx: false,
+            },
+          },
+        },
+        {
+          label: "full-audio-opus",
+          config: {
+            ...base,
+            opus: {
+              format: "opus",
+              signal: "auto",
+              application: "audio",
+              frameDuration: 20000,
+              usedtx: false,
+            },
+          },
+        },
+      ];
+    }
+
+    async function probeAudioEncoderConfig(encoder, config) {
+      try {
+        const result = await encoder.isConfigSupported(config);
+        return { supported: result?.supported === true };
+      } catch (err) {
+        return { supported: false, error: err?.name || err?.message || "exception" };
+      }
+    }
+
+    async function detectInlineOpusEncoderSupport(encoder, sampleRate, bitrate) {
+      const rejected = [];
+      for (const probe of opusEncoderProbeConfigs(sampleRate, bitrate)) {
+        const result = await probeAudioEncoderConfig(encoder, probe.config);
+        if (result.supported) {
+          return { supported: true, probe: `inline-${probe.label}` };
+        }
+        rejected.push(result.error ? `${probe.label}:${result.error}` : probe.label);
+      }
+      return { supported: false, probe: `inline-rejected(${rejected.join("|")})` };
+    }
+
+    async function detectTxCodecCapabilitiesInline() {
+      const encoder = globalThis.AudioEncoder;
+      const detected = ["pcm"];
+      if (!encoder || typeof encoder.isConfigSupported !== "function") {
+        return {
+          detected,
+          advertised: ["pcm"],
+          webCodecsAudioEncoder: false,
+          opusNb: false,
+          opusWb: false,
+          opusNbProbe: "inline-no-audioencoder",
+          opusWbProbe: "inline-no-audioencoder",
+        };
+      }
+      const [opusNbResult, opusWbResult] = await Promise.all([
+        detectInlineOpusEncoderSupport(encoder, 16000, 16000),
+        detectInlineOpusEncoderSupport(encoder, 48000, 24000),
+      ]);
+      if (opusNbResult.supported) {
+        detected.push("opus_nb");
+      }
+      if (opusWbResult.supported) {
+        detected.push("opus_wb");
+      }
+      return {
+        detected,
+        advertised: state.txOpusOverrideEnabled === true
+          ? detected.filter((codec) => codec !== "opus_nb")
+          : ["pcm"],
+        webCodecsAudioEncoder: true,
+        opusNb: opusNbResult.supported,
+        opusWb: opusWbResult.supported,
+        opusNbProbe: opusNbResult.probe,
+        opusWbProbe: opusWbResult.probe,
+      };
+    }
+
     async function detectTxCodecCapabilitiesCompat() {
       if (typeof _next.detectTxCodecCapabilities === "function") {
         return _next.detectTxCodecCapabilities(globalThis, {
           advertiseOpus: state.txOpusOverrideEnabled === true,
         });
       }
-      return {
-        detected: ["pcm"],
-        advertised: ["pcm"],
-        webCodecsAudioEncoder: false,
-      };
+      return detectTxCodecCapabilitiesInline();
     }
 
     function txCodecBrowserRuntimeSummary(detection = {}) {
@@ -9088,6 +9378,8 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         `webCodecs=${detection.webCodecsAudioEncoder ? 1 : 0}`,
         `opusNb=${detection.opusNb ? 1 : 0}`,
         `opusWb=${detection.opusWb ? 1 : 0}`,
+        `nbProbe=${detection.opusNbProbe || "?"}`,
+        `wbProbe=${detection.opusWbProbe || "?"}`,
       ].join(" ");
     }
 
@@ -9256,6 +9548,10 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       sendTci(_next.buildAllRadioPrefsCommands(currentRadioPrefs()).join(""));
     }
 
+    function rxAudioStartCommand() {
+      return `audio_stream_samples:${RX_AUDIO_FRAME_FLOATS};audio_stream_channels:2;audio_stream_sample_type:float32;audio_samplerate:48000;audio_start:0;rx_volume:0,0,${state.rxVolumeDb.toFixed(1)};`;
+    }
+
     function startIq() {
       const phase40Profile = phase40DisplayProfileConfig();
       if (phase40Profile && !phase40Profile.autoIq) {
@@ -9270,6 +9566,53 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       updateUi();
     }
 
+    function resumeRxMediaAfterBandChange(reason = "band change") {
+      if (!state.connected) {
+        return;
+      }
+      resetDisplayHistory();
+      if (phase40ShouldAutoStartIq()) {
+        state.iqStreaming = true;
+        sendTci(`iq_samplerate:${state.sampleRate};iq_start:0;`);
+      }
+      if (phase40ShouldAutoStartRxAudio()) {
+        if (state.audioStreaming) {
+          sendTci(rxAudioStartCommand());
+        } else {
+          void startRxAudio();
+        }
+      }
+      logEvent(`RX media resume requested after ${reason}`);
+      updateUi();
+    }
+
+    function rxIqFresh(maxAgeMs = 1500) {
+      return Boolean(state.lastFrameAt && performance.now() - state.lastFrameAt <= maxAgeMs);
+    }
+
+    function requestRxMediaResume(reason, minIntervalMs = 1000) {
+      const now = performance.now();
+      if (now - (state.rxMediaResumeLastAt || 0) < minIntervalMs) {
+        return false;
+      }
+      state.rxMediaResumeLastAt = now;
+      resumeRxMediaAfterBandChange(reason);
+      return true;
+    }
+
+    function scheduleRxMediaStartupResume(reason = "connect") {
+      const token = (state.rxMediaResumeRetryToken || 0) + 1;
+      state.rxMediaResumeRetryToken = token;
+      [300, 1200, 3000].forEach((delayMs) => {
+        window.setTimeout(() => {
+          if (state.rxMediaResumeRetryToken !== token || !state.connected || rxIqFresh()) {
+            return;
+          }
+          requestRxMediaResume(`${reason} startup`, 500);
+        }, delayMs);
+      });
+    }
+
     function updateWsDiagMarker(text, minIntervalMs = 0) {
       const now = performance.now();
       if (minIntervalMs > 0 && now - (state.wsDiagLastMarkerAt || 0) < minIntervalMs) {
@@ -9281,7 +9624,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       }
     }
 
-    window.saturnGetDiagText = () => {
+    function buildOperatorLogExportText() {
       const marker = window.saturnDiagText || document.getElementById("static-wsdiag-marker")?.textContent || "";
       const detected = Array.isArray(state.txCodecDetectedCaps) && state.txCodecDetectedCaps.length
         ? state.txCodecDetectedCaps.join(",")
@@ -9290,7 +9633,18 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         ? state.txCodecAdvertisedCaps.join(",")
         : "pcm";
       const wsReady = state.ws ? state.ws.readyState : "none";
-      return [
+      const nonzeroBands = (bands) => Array.isArray(bands)
+        ? bands
+            .map((value, index) => {
+              const gain = Number(value) || 0;
+              return index > 0 && Math.abs(gain) > 0.05 ? `${index}:${gain.toFixed(1)}` : "";
+            })
+            .filter(Boolean)
+            .join(",") || "flat"
+        : "";
+      const summary = [
+        "Saturn Remote operator log",
+        `page=${window.location.href}`,
         `marker=${marker}`,
         `connected=${state.connected ? 1 : 0}`,
         `wsReady=${wsReady}`,
@@ -9304,11 +9658,29 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         `advertised=${advertised}`,
         `requested=${state.txCodecRequested || ""}`,
         `accepted=${state.txCodecAccepted || ""}`,
+        `txDrive=${state.txDrive}`,
+        `txMicGainDb=${Number(state.txMicGainDb || 0).toFixed(1)}`,
+        `txFilter=${state.txFilterLow}-${state.txFilterHigh}`,
+        `txNoiseGateEnabled=${state.txNoiseGateEnabled ? 1 : 0}`,
+        `txNoiseGateThresholdDb=${Number(state.txNoiseGateThresholdDb || 0).toFixed(1)}`,
+        `txEqEnabled=${state.txEqEnabled ? 1 : 0}`,
+        `txEqBands=${nonzeroBands(state.txEqBands)}`,
+        `cfcEnabled=${state.cfcEnabled ? 1 : 0}`,
+        `cfcPrecomp=${Number(state.cfcPrecomp || 0).toFixed(1)}`,
+        `cfcBands=${nonzeroBands(state.cfcBands)}`,
         `txMicSeq=${state.txMicSeq || 0}`,
         `txMicDrops=${state.txMicDroppedCount || 0}`,
+        `txUplinkHwm=${Math.round(state.txUplinkBufferedHwmBytes || 0)}`,
+        `iqStreaming=${state.iqStreaming ? 1 : 0}`,
+        `audioStreaming=${state.audioStreaming ? 1 : 0}`,
+        `lastIqAgeMs=${state.lastFrameAt ? Math.round(performance.now() - state.lastFrameAt) : 0}`,
         `lastError=${window.saturnDiagLastError || ""}`,
-      ].join(" | ");
-    };
+      ];
+      const log = eventLogText();
+      return `${summary.join("\n")}\n\nLive client trace\n${log || "(empty)"}`;
+    }
+
+    window.saturnGetDiagText = buildOperatorLogExportText;
 
     function stopIq() {
       state.iqStreaming = false;
@@ -9416,9 +9788,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       state.lastAudioSequence = null;
       state.audioSeqGapCount = 0;
       state.lastAudioSeqGapReportAt = 0;
-      sendTci(
-        `audio_stream_samples:${RX_AUDIO_FRAME_FLOATS};audio_stream_channels:2;audio_stream_sample_type:float32;audio_samplerate:48000;audio_start:0;rx_volume:0,0,${state.rxVolumeDb.toFixed(1)};`
-      );
+      sendTci(rxAudioStartCommand());
       logEvent("RX audio requested");
       updateUi();
     }
@@ -9747,15 +10117,22 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     }
 
     function setTxUplinkDegraded(degraded, decision) {
-      if (state.txUplinkDegraded === degraded) {
+      const now = performance.now();
+      const changed = state.txUplinkDegraded !== degraded;
+      state.txUplinkDegraded = degraded;
+      state.txUplinkDegradedAt = degraded ? now : 0;
+      if (!changed) {
         return;
       }
-      state.txUplinkDegraded = degraded;
-      state.txUplinkDegradedAt = degraded ? performance.now() : 0;
+      const shouldLog = now - (state.txUplinkVisibleLogAt || 0) >= TX_UPLINK_VISIBLE_LOG_INTERVAL_MS;
       if (degraded) {
         recordOperatorFault("TX audio late", "warn", false);
-        logEvent(`TX uplink degraded: ${decision.bufferedBytes} bytes queued`);
-      } else {
+        if (shouldLog) {
+          state.txUplinkVisibleLogAt = now;
+          logEvent(`TX uplink degraded: ${decision.bufferedBytes} bytes queued`);
+        }
+      } else if (shouldLog) {
+        state.txUplinkVisibleLogAt = now;
         logEvent("TX uplink clear");
       }
       sendTxUplinkStats(true);
@@ -9819,16 +10196,20 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       return { frame, peak, payloadBytes };
     }
 
+    function clearTxOpusRuntimeBuffers() {
+      state.txOpusSampleCarry = new Float32Array(0);
+      if (state.txOpusPendingTimings && typeof state.txOpusPendingTimings.clear === "function") {
+        state.txOpusPendingTimings.clear();
+      }
+    }
+
     function resetTxOpusProducer(reason = "") {
       if (state.txOpusProducer) {
         try { state.txOpusProducer.close(); } catch {}
       }
       state.txOpusProducer = null;
       state.txOpusProducerCodec = null;
-      state.txOpusSampleCarry = new Float32Array(0);
-      if (state.txOpusPendingTimings && typeof state.txOpusPendingTimings.clear === "function") {
-        state.txOpusPendingTimings.clear();
-      }
+      clearTxOpusRuntimeBuffers();
       if (reason) {
         state.txOpusFallbackReason = reason;
       }
@@ -9854,6 +10235,17 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         state.txOpusPendingTimings.delete(metadata.sequence);
       }
       if (!txMicSendAllowed() || !state.connected || !state.ws || state.ws.readyState !== WebSocket.OPEN) {
+        return;
+      }
+      const bufferedBytes = Math.max(0, Math.round(Number(state.ws.bufferedAmount || 0)));
+      const decision = decideTxMicSendCompat(bufferedBytes, state.bridgeRttMs, txMicByteRate(), metadata.codec || state.txCodecAccepted || "opus_wb");
+      state.txUplinkBufferedBytes = decision.bufferedBytes;
+      state.txUplinkBufferedHwmBytes = Math.max(state.txUplinkBufferedHwmBytes || 0, decision.bufferedBytes);
+      setTxUplinkDegraded(decision.degraded, decision);
+      if (decision.action === "drop") {
+        state.txMicDroppedCount = (state.txMicDroppedCount || 0) + 1;
+        recordTxBrowserTiming(pending.timing || {}, pending.receivedAt || performance.now(), null, null, true);
+        sendTxUplinkStats(false);
         return;
       }
       const sendStartedAt = performance.now();
@@ -9883,6 +10275,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       logEvent(`TX Opus producer ready (${codec})`);
       return state.txOpusProducer;
     }
+
 
     function takeTxOpusSampleFrames(monoSamples, frameSamples) {
       const inputCount = Math.max(0, Math.floor(Number(monoSamples.length) || 0));
@@ -9962,7 +10355,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       if (typeof _next.decideTxMicSend === "function") {
         return _next.decideTxMicSend(bufferedBytes, rttMs, byteRate, codec);
       }
-      const hardCapBytes = codec === "opus_nb" || codec === "opus_wb" ? 512 : 65536;
+      const hardCapBytes = codec === "opus_nb" || codec === "opus_wb" ? 4096 : 65536;
       const normalizedBuffered = Math.max(0, Math.round(Number(bufferedBytes) || 0));
       const degraded = normalizedBuffered > Math.min(32768, hardCapBytes);
       return {
@@ -10615,7 +11008,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       state.connectPending = true;
       updateUi();
       const rawWsUrl = $("ws-url").value.trim();
-      state.wsUrl = normalizeWsUrlPreference(rawWsUrl);
+      state.wsUrl = normalizeWsUrlPreference(rawWsUrl || state.wsUrl);
       $("ws-url").value = state.wsUrl;
       logEvent(`Connect diagnostic: clicked forceLegacy=${forceLegacyWs ? "1" : "0"}`);
       logEvent(`Connect diagnostic: raw=${rawWsUrl || "(blank)"}`);
@@ -10638,8 +11031,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       applyPhase40DisplayProfile("connect");
       applyPhase40TxSourceOverrides();
       state.demoMode = false;
-      state.wsUrl = normalizeWsUrlPreference($("ws-url").value.trim());
-      $("ws-url").value = state.wsUrl;
+      ensureBridgeWsUrl();
       const phase42SessionId = !forceLegacyWs && phase42SplitTransportEnabled()
         ? _next.createPhase42SessionId()
         : "";
@@ -10709,6 +11101,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         } else {
           logEvent(`Phase 40 display profile ${PHASE40_DISPLAY_PROFILE}: RX audio auto-start skipped`);
         }
+        scheduleRxMediaStartupResume("connect");
         void syncWakeLock(true);
         updateUi();
       };
@@ -10750,6 +11143,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         lockTx("reconnect", false);
         state.twoTonePttOwned = false;
         stopMicCapture();
+        resetTxOpusProducer("socket closed");
         void stopRxAudio(false);
         void releaseWakeLock();
         updateUi();
@@ -10801,6 +11195,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       state.swrVisual = null;
       state.twoTonePttOwned = false;
       stopMicCapture();
+      resetTxOpusProducer("disconnect");
       void stopRxAudio(false);
       await releaseWakeLock();
       updateUi();
@@ -10839,6 +11234,15 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       }
 
       Object.assign(state, next);
+      if (events.ready) {
+        scheduleRxMediaStartupResume("bridge ready");
+      }
+      if (applyPhase44OpusLabCleanTxAudio("bridge state")) {
+        if (sendPhase44OpusLabCleanTxAudioToBridge()) {
+          persistLocalSettingsFallback(currentRemoteSettings());
+          scheduleRemoteSettingsSave();
+        }
+      }
 
       if (events.txFault) {
         state.txLocalRequestActive = false;
@@ -11368,6 +11772,9 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       }
       if (state.connected && now - state.lastFrameAt > 2500) {
         state.displayCaption = "Connected, waiting for fresh IQ frames";
+        if (!state.moxRequested && !state.txEnabled && !state.micCapturing && phase40ShouldAutoStartIq()) {
+          requestRxMediaResume("stale IQ", 5000);
+        }
       }
     }
 
@@ -11928,6 +12335,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
           if (applyBandMemoryForFrequency(targetHz)) {
             sendCurrentRadioPrefsToBridge();
           }
+          resumeRxMediaAfterBandChange("band button");
           persistLocalSettingsFallback(currentRemoteSettings());
           scheduleRemoteSettingsSave();
           updateUi();
@@ -12472,12 +12880,18 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       }
       try {
         const savedBandMemory = localStorage.getItem(BAND_MEMORY_KEY);
-        if (savedBandMemory) state.bandMemory = sanitizeBandMemory(JSON.parse(savedBandMemory));
+        if (savedBandMemory) {
+          state.bandMemory = sanitizeBandMemory(JSON.parse(savedBandMemory));
+          if (scrubPhase44OpusLabBandMemory()) {
+            localStorage.setItem(BAND_MEMORY_KEY, JSON.stringify(state.bandMemory));
+            logEvent("Phase 44 Opus lab scrubbed local band-memory TX processing");
+          }
+        }
       } catch (e) { console.warn("band memory load failed", e); }
       if (!state.wsUrl) {
         state.wsUrl = defaultWsUrl();
       }
-      $("ws-url").value = state.wsUrl;
+      ensureBridgeWsUrl();
       $("sample-rate").value = `${state.sampleRate}`;
       $("rx-adc").value = `${state.rxAdc}`;
       $("rx-antenna").value = `${state.rxAntenna}`;
@@ -12531,6 +12945,12 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       applyPhase40TxSourceOverrides();
       logEvent("Saturn Remote loaded (Phase 44 Opus lab client)");
       logEvent("Current bridge target: TCI over WebSocket");
+      logEvent(
+        `Bundle diagnostic: detect=${typeof _next.detectTxCodecCapabilities} ` +
+        `buildTxCaps=${typeof _next.buildTxCodecCapsCommand} ` +
+        `opusProducer=${typeof _next.createTxOpusFrameProducer} ` +
+        `opusCodec=${typeof _next.txOpusCodecForAccepted}`
+      );
       logEvent(`Display backends: spectrum=${spectrumRenderer.backend}, waterfall=${waterfallRenderer.backend}`);
       initAnalogMeters();
       initInteractions();

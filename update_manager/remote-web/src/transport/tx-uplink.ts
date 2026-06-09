@@ -10,7 +10,7 @@ export const TX_UPLINK_MIN_THRESHOLD_BYTES = 1024;
 // PCM on slow links until Phase 44 Opus lands.
 export const TX_UPLINK_SOFT_CAP_BYTES = 32_768;
 export const TX_UPLINK_PCM_HARD_CAP_BYTES = 65_536;
-export const TX_UPLINK_OPUS_HARD_CAP_BYTES = 512;
+export const TX_UPLINK_OPUS_HARD_CAP_BYTES = 4_096;
 export const TX_UPLINK_HARD_CAP_BYTES = TX_UPLINK_PCM_HARD_CAP_BYTES;
 export const TX_MIC_FRAME_HEADER_BYTES = 64;
 export const TX_MIC_SAMPLE_RATE_HZ = 48_000;
@@ -29,6 +29,8 @@ export type TxCodecCapabilityDetection = {
   webCodecsAudioEncoder: boolean;
   opusNb: boolean;
   opusWb: boolean;
+  opusNbProbe: string;
+  opusWbProbe: string;
 };
 
 export type TxCodecCapabilityDetectionOptions = {
@@ -42,16 +44,100 @@ type AudioEncoderConstructorLike = {
 async function audioEncoderSupports(
   encoder: AudioEncoderConstructorLike,
   config: Record<string, unknown>,
-): Promise<boolean> {
+): Promise<{ supported: boolean; error?: string }> {
   if (typeof encoder.isConfigSupported !== 'function') {
-    return false;
+    return { supported: false, error: 'missing_isConfigSupported' };
   }
   try {
     const result = await encoder.isConfigSupported(config);
-    return result?.supported === true;
-  } catch {
-    return false;
+    return { supported: result?.supported === true };
+  } catch (error) {
+    return {
+      supported: false,
+      error: error instanceof Error ? error.name || error.message : 'exception',
+    };
   }
+}
+
+type OpusProbe = {
+  label: string;
+  config: Record<string, unknown>;
+};
+
+function opusEncoderProbes(sampleRate: number, bitrate: number): OpusProbe[] {
+  const base = {
+    codec: 'opus',
+    sampleRate,
+    numberOfChannels: 1,
+    bitrate,
+  };
+  return [
+    {
+      label: 'minimal',
+      config: base,
+    },
+    {
+      label: 'full-voice-opus-fec',
+      config: {
+        ...base,
+        opus: {
+          format: 'opus',
+          signal: 'voice',
+          application: 'voip',
+          frameDuration: 20_000,
+          complexity: 5,
+          packetlossperc: 5,
+          useinbandfec: true,
+          usedtx: false,
+        },
+      },
+    },
+    {
+      label: 'full-voice-opus-no-fec',
+      config: {
+        ...base,
+        opus: {
+          format: 'opus',
+          signal: 'voice',
+          application: 'voip',
+          frameDuration: 20_000,
+          complexity: 5,
+          packetlossperc: 0,
+          useinbandfec: false,
+          usedtx: false,
+        },
+      },
+    },
+    {
+      label: 'full-audio-opus',
+      config: {
+        ...base,
+        opus: {
+          format: 'opus',
+          signal: 'auto',
+          application: 'audio',
+          frameDuration: 20_000,
+          usedtx: false,
+        },
+      },
+    },
+  ];
+}
+
+async function detectOpusEncoderSupport(
+  encoder: AudioEncoderConstructorLike,
+  sampleRate: number,
+  bitrate: number,
+): Promise<{ supported: boolean; probe: string }> {
+  const rejected: string[] = [];
+  for (const probe of opusEncoderProbes(sampleRate, bitrate)) {
+    const result = await audioEncoderSupports(encoder, probe.config);
+    if (result.supported) {
+      return { supported: true, probe: probe.label };
+    }
+    rejected.push(result.error ? `${probe.label}:${result.error}` : probe.label);
+  }
+  return { supported: false, probe: `rejected(${rejected.join('|')})` };
 }
 
 export async function detectTxCodecCapabilities(
@@ -68,23 +154,17 @@ export async function detectTxCodecCapabilities(
       webCodecsAudioEncoder: false,
       opusNb: false,
       opusWb: false,
+      opusNbProbe: 'no-audioencoder',
+      opusWbProbe: 'no-audioencoder',
     };
   }
 
-  const [opusNb, opusWb] = await Promise.all([
-    audioEncoderSupports(encoder, {
-      codec: 'opus',
-      sampleRate: 16_000,
-      numberOfChannels: 1,
-      bitrate: 16_000,
-    }),
-    audioEncoderSupports(encoder, {
-      codec: 'opus',
-      sampleRate: 48_000,
-      numberOfChannels: 1,
-      bitrate: 24_000,
-    }),
+  const [opusNbResult, opusWbResult] = await Promise.all([
+    detectOpusEncoderSupport(encoder, 16_000, 16_000),
+    detectOpusEncoderSupport(encoder, 48_000, 24_000),
   ]);
+  const opusNb = opusNbResult.supported;
+  const opusWb = opusWbResult.supported;
 
   if (opusNb) detected.push('opus_nb');
   if (opusWb) detected.push('opus_wb');
@@ -101,6 +181,8 @@ export async function detectTxCodecCapabilities(
     webCodecsAudioEncoder: true,
     opusNb,
     opusWb,
+    opusNbProbe: opusNbResult.probe,
+    opusWbProbe: opusWbResult.probe,
   };
 }
 

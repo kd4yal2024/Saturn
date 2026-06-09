@@ -145,7 +145,12 @@ describe('Phase 44 disabled-by-default Opus acceptance harness', () => {
       numberOfChannels: 1,
       bitrate: 24_000,
       opus: {
+        format: 'opus',
+        signal: 'voice',
+        application: 'voip',
         frameDuration: TX_OPUS_FRAME_DURATION_US,
+        complexity: 5,
+        packetlossperc: 5,
         useinbandfec: true,
         usedtx: false,
       },

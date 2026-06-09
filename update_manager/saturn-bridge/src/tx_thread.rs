@@ -32,7 +32,9 @@ const MIN_TX_WATCHDOG: Duration = Duration::from_secs(3);
 const MAX_TX_WATCHDOG: Duration = Duration::from_secs(180);
 const MAX_DUC_PACKETS_PER_LOOP: usize = 8;
 const TX_MIC_INPUT_QUEUE_MAX_SAMPLES: usize = 48_000;
-const TX_MIC_PREFILL_SAMPLES: usize = 2_048;
+const DEFAULT_TX_MIC_PREFILL_SAMPLES: usize = 2_048;
+const MIN_TX_MIC_PREFILL_MS: u64 = 20;
+const MAX_TX_MIC_PREFILL_MS: u64 = 250;
 const TX_ACTIVE_IDLE_SLEEP: Duration = Duration::from_micros(250);
 
 fn duc_iq_packet_period() -> Duration {
@@ -183,10 +185,14 @@ fn run(
     let mut keyed_at: Option<Instant> = None;
     let mut last_keyable_mic_at: Option<Instant> = None;
     let tx_watchdog = tx_watchdog_duration();
+    let tx_mic_prefill_samples = tx_mic_prefill_samples();
+    let tx_mic_prefill_ms = tx_mic_prefill_samples as f64 / 48.0;
 
     println!(
-        "saturn-bridge: TX thread started; watchdog={}s",
-        tx_watchdog.as_secs()
+        "saturn-bridge: TX thread started; watchdog={}s mic_prefill={} samples ({:.1}ms)",
+        tx_watchdog.as_secs(),
+        tx_mic_prefill_samples,
+        tx_mic_prefill_ms
     );
 
     while !stop_flag.load(Ordering::Relaxed) {
@@ -363,7 +369,7 @@ fn run(
         if state == TxState::Armed || state == TxState::Keyed {
             let now = Instant::now();
             if !two_tone && !mic_output_started {
-                if pending_mic_samples.len() >= TX_MIC_PREFILL_SAMPLES {
+                if pending_mic_samples.len() >= tx_mic_prefill_samples {
                     mic_output_started = true;
                     next_mic_dsp_at = now;
                 }
@@ -667,6 +673,22 @@ fn tx_watchdog_duration() -> Duration {
         .unwrap_or(DEFAULT_TX_WATCHDOG)
 }
 
+fn tx_mic_prefill_samples() -> usize {
+    let prefill_ms = env::var("SATURN_BRIDGE_TX_MIC_PREFILL_MS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok());
+    tx_mic_prefill_samples_for_ms(prefill_ms)
+}
+
+fn tx_mic_prefill_samples_for_ms(prefill_ms: Option<u64>) -> usize {
+    prefill_ms
+        .map(|ms| {
+            let clamped = ms.clamp(MIN_TX_MIC_PREFILL_MS, MAX_TX_MIC_PREFILL_MS);
+            ((clamped * 48_000).div_ceil(1_000)) as usize
+        })
+        .unwrap_or(DEFAULT_TX_MIC_PREFILL_SAMPLES)
+}
+
 fn mic_samples_to_mono(samples: Vec<f32>, channels: u32) -> Vec<f32> {
     if channels <= 1 {
         return samples;
@@ -764,6 +786,17 @@ mod tests {
 
         // IQ above threshold + both — key
         assert!(can_key_rf(true, iq_hi, true, true));
+    }
+
+    #[test]
+    fn tx_mic_prefill_samples_are_env_tunable_and_clamped() {
+        assert_eq!(
+            tx_mic_prefill_samples_for_ms(None),
+            DEFAULT_TX_MIC_PREFILL_SAMPLES
+        );
+        assert_eq!(tx_mic_prefill_samples_for_ms(Some(240)), 11_520);
+        assert_eq!(tx_mic_prefill_samples_for_ms(Some(1)), 960);
+        assert_eq!(tx_mic_prefill_samples_for_ms(Some(1_000)), 12_000);
     }
 
     #[test]

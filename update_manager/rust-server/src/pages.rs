@@ -72,7 +72,7 @@ fn remote_https_url(host: &str) -> String {
 
 fn remote_next_https_url(host: &str) -> String {
     format!(
-        "https://{}:8443/remote-next",
+        "https://{}:8443/remote-next?phase42_split=1&phase44_tx_opus=1",
         remote_host_without_port(host)
     )
 }
@@ -388,7 +388,7 @@ mod tests {
         assert_eq!(res.status(), StatusCode::TEMPORARY_REDIRECT);
         assert_eq!(
             res.headers().get(header::LOCATION).unwrap(),
-            "https://192.168.0.139:8443/remote-next"
+            "https://192.168.0.139:8443/remote-next?phase42_split=1&phase44_tx_opus=1"
         );
     }
 

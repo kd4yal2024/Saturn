@@ -1202,7 +1202,9 @@ fn tailscale_remote_url(dns_name: &str) -> Option<String> {
     if dns_name.is_empty() {
         None
     } else {
-        Some(format!("https://{dns_name}/remote-next"))
+        Some(format!(
+            "https://{dns_name}/remote-next?phase42_split=1&phase44_tx_opus=1"
+        ))
     }
 }
 
