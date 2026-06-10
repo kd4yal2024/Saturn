@@ -4428,7 +4428,7 @@
 
   <script>
     (() => {
-      const DIAG_VERSION = "bridgeprefill240-gateeq2";
+      const DIAG_VERSION = "bridgeprefill240-essbeq1";
       window.saturnDiagLastError = "";
       window.saturnDiagText = "";
       window.addEventListener("error", (event) => {
@@ -4569,7 +4569,7 @@
     })();
   </script>
   <script
-    src="/remote-assets/remote-next.js?v=phase44-opus-bridgeprefill240-gateeq2"
+    src="/remote-assets/remote-next.js?v=phase44-opus-bridgeprefill240-essbeq1"
     onload="window.saturnRemoteBundleLoaded=true"
     onerror="window.saturnRemoteBundleError=true; window.saturnDiagLastError='remote-next.js failed to load'; window.saturnSetWsDiag && window.saturnSetWsDiag('JS error: remote-next.js failed to load')"
   ></script>
@@ -7048,12 +7048,16 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       return [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
     }
 
+    function phase44OpusLabPreviousTxEqBands() {
+      return [0, 0, 0, 0, -1, 0, 1, 2, 1, 0, 0];
+    }
+
     function phase44OpusLabDesiredTxEqBands() {
       if (!PHASE44_TX_OPUS_VOICE_EQ) {
         return phase44OpusLabZeroBands();
       }
       // 32, 63, 125, 250, 500, 1k, 2k, 4k, 8k, 16k.
-      return [0, 0, 0, 0, -1, 0, 1, 2, 1, 0, 0];
+      return [0, 0, 0, 1, 2, 1, -1, 1, 3, 1, 0];
     }
 
     function phase44OpusLabClampNoiseGateThreshold(value) {
@@ -7114,11 +7118,20 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         Number(state.txNoiseGateThresholdDb) !== PHASE44_TX_OPUS_NOISE_GATE_THRESHOLD_DB ||
         state.cfcEnabled ||
         Math.abs(Number(state.cfcPrecomp) || 0) > 0.001 ||
-        (PHASE44_TX_OPUS_VOICE_EQ && phase44OpusLabBandsAreFlat(state.txEqBands)) ||
+        (PHASE44_TX_OPUS_VOICE_EQ && (
+          phase44OpusLabBandsAreFlat(state.txEqBands) ||
+          phase44OpusLabBandsMatch(state.txEqBands, phase44OpusLabPreviousTxEqBands())
+        )) ||
         !phase44OpusLabBandsAreFlat(state.cfcBands)
       );
       state.txEqEnabled = PHASE44_TX_OPUS_VOICE_EQ;
-      if (PHASE44_TX_OPUS_VOICE_EQ && phase44OpusLabBandsAreFlat(state.txEqBands)) {
+      if (
+        PHASE44_TX_OPUS_VOICE_EQ &&
+        (
+          phase44OpusLabBandsAreFlat(state.txEqBands) ||
+          phase44OpusLabBandsMatch(state.txEqBands, phase44OpusLabPreviousTxEqBands())
+        )
+      ) {
         state.txEqBands = sanitizeEqBands(desiredTxEqBands);
       } else {
         state.txEqBands = sanitizeEqBands(state.txEqBands);
