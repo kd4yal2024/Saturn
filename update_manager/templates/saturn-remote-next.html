@@ -4428,7 +4428,7 @@
 
   <script>
     (() => {
-      const DIAG_VERSION = "bridgeprefill240-moxfirst1";
+      const DIAG_VERSION = "bridgeprefill240-gateoff1";
       window.saturnDiagLastError = "";
       window.saturnDiagText = "";
       window.addEventListener("error", (event) => {
@@ -4569,7 +4569,7 @@
     })();
   </script>
   <script
-    src="/remote-assets/remote-next.js?v=phase44-opus-bridgeprefill240-moxfirst1"
+    src="/remote-assets/remote-next.js?v=phase44-opus-bridgeprefill240-gateoff1"
     onload="window.saturnRemoteBundleLoaded=true"
     onerror="window.saturnRemoteBundleError=true; window.saturnDiagLastError='remote-next.js failed to load'; window.saturnSetWsDiag && window.saturnSetWsDiag('JS error: remote-next.js failed to load')"
   ></script>
@@ -4922,7 +4922,10 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     }
     const PHASE44_TX_OPUS_OVERRIDE_KEY = _next.TX_OPUS_OVERRIDE_STORAGE_KEY || "saturn.phase44.txOpus";
     const PHASE44_QUERY_PARAMS = new URLSearchParams(window.location.search);
-    const PHASE44_TX_OPUS_NOISE_GATE_QUERY_DB = Number(PHASE44_QUERY_PARAMS.get("phase44_tx_noise_gate_db"));
+    const PHASE44_TX_OPUS_NOISE_GATE_QUERY_RAW = PHASE44_QUERY_PARAMS.get("phase44_tx_noise_gate_db");
+    const PHASE44_TX_OPUS_NOISE_GATE_QUERY_DB = PHASE44_TX_OPUS_NOISE_GATE_QUERY_RAW === null
+      ? NaN
+      : Number(PHASE44_TX_OPUS_NOISE_GATE_QUERY_RAW);
     const PHASE44_TX_OPUS_OVERRIDE = typeof _next.txOpusRuntimeOverrideEnabled === "function"
       ? _next.txOpusRuntimeOverrideEnabled(
           window.location.search,
@@ -4933,7 +4936,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
           safeLocalStorageGet(PHASE44_TX_OPUS_OVERRIDE_KEY) === "1"
         );
     const PHASE44_TX_OPUS_VOICE_EQ = PHASE44_QUERY_PARAMS.get("phase44_tx_voice_eq") !== "0";
-    const PHASE44_TX_OPUS_NOISE_GATE = PHASE44_QUERY_PARAMS.get("phase44_tx_noise_gate") !== "0";
+    const PHASE44_TX_OPUS_NOISE_GATE = PHASE44_QUERY_PARAMS.get("phase44_tx_noise_gate") === "1";
     const PHASE44_TX_OPUS_NOISE_GATE_THRESHOLD_DB = Math.max(
       -80,
       Math.min(0, Number.isFinite(PHASE44_TX_OPUS_NOISE_GATE_QUERY_DB) ? PHASE44_TX_OPUS_NOISE_GATE_QUERY_DB : -50)
