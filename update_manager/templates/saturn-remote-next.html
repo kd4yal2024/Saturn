@@ -4428,7 +4428,7 @@
 
   <script>
     (() => {
-      const DIAG_VERSION = "bridgeprefill240-gateeq1";
+      const DIAG_VERSION = "bridgeprefill240-gateeq2";
       window.saturnDiagLastError = "";
       window.saturnDiagText = "";
       window.addEventListener("error", (event) => {
@@ -4569,7 +4569,7 @@
     })();
   </script>
   <script
-    src="/remote-assets/remote-next.js?v=phase44-opus-bridgeprefill240-gateeq1"
+    src="/remote-assets/remote-next.js?v=phase44-opus-bridgeprefill240-gateeq2"
     onload="window.saturnRemoteBundleLoaded=true"
     onerror="window.saturnRemoteBundleError=true; window.saturnDiagLastError='remote-next.js failed to load'; window.saturnSetWsDiag && window.saturnSetWsDiag('JS error: remote-next.js failed to load')"
   ></script>
@@ -7104,7 +7104,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       if (state.txOpusOverrideEnabled !== true) {
         return false;
       }
-      if (state.txOpusProcessingUserEdited && state.txOpusProcessingDefaultsApplied) {
+      if (state.txOpusProcessingUserEdited) {
         return applyPhase44OpusLabCfcGuard(reason);
       }
       const desiredTxEqBands = phase44OpusLabDesiredTxEqBands();
@@ -12470,6 +12470,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         $("tx-noise-gate-threshold").disabled = !state.txNoiseGateEnabled;
         saveRadioPrefs();
         sendTci(`tx_noise_gate:0,${state.txNoiseGateEnabled};`);
+        logEvent(`TX Noise Gate ${state.txNoiseGateEnabled ? "ON" : "OFF"} sent`);
       });
       $("tx-noise-gate-threshold").addEventListener("input", () => {
         state.txOpusProcessingUserEdited = true;
@@ -12479,6 +12480,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       $("tx-noise-gate-threshold").addEventListener("change", () => {
         saveRadioPrefs();
         sendTci(`tx_noise_gate_threshold:0,${state.txNoiseGateThresholdDb.toFixed(1)};`);
+        logEvent(`TX Noise Gate threshold ${state.txNoiseGateThresholdDb.toFixed(1)} dB sent`);
       });
       $("tx-filter-low").addEventListener("input", () => {
         state.txFilterLow = clampFilterLowHz($("tx-filter-low").value);
