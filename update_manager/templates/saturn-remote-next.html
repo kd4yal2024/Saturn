@@ -4428,7 +4428,7 @@
 
   <script>
     (() => {
-      const DIAG_VERSION = "bridgeprefill240-essbeq1";
+      const DIAG_VERSION = "bridgeprefill240-essbeq2";
       window.saturnDiagLastError = "";
       window.saturnDiagText = "";
       window.addEventListener("error", (event) => {
@@ -4569,7 +4569,7 @@
     })();
   </script>
   <script
-    src="/remote-assets/remote-next.js?v=phase44-opus-bridgeprefill240-essbeq1"
+    src="/remote-assets/remote-next.js?v=phase44-opus-bridgeprefill240-essbeq2"
     onload="window.saturnRemoteBundleLoaded=true"
     onerror="window.saturnRemoteBundleError=true; window.saturnDiagLastError='remote-next.js failed to load'; window.saturnSetWsDiag && window.saturnSetWsDiag('JS error: remote-next.js failed to load')"
   ></script>
@@ -7104,6 +7104,21 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       return true;
     }
 
+    function phase44OpusLabBandsNeedDefault(bands) {
+      if (phase44OpusLabBandsAreFlat(bands)) return true;
+      if (phase44OpusLabBandsMatch(bands, phase44OpusLabPreviousTxEqBands())) return true;
+      let nonzero = 0;
+      let highBoosts = 0;
+      let totalAbs = 0;
+      for (let i = 1; i <= 10; i += 1) {
+        const gain = Number(bands?.[i]) || 0;
+        if (Math.abs(gain) > 0.001) nonzero += 1;
+        if (Math.abs(gain) >= 10) highBoosts += 1;
+        totalAbs += Math.abs(gain);
+      }
+      return highBoosts >= 2 || (nonzero >= 8 && totalAbs >= 45);
+    }
+
     function applyPhase44OpusLabTxProcessingDefaults(reason = "") {
       if (state.txOpusOverrideEnabled !== true) {
         return false;
@@ -7118,20 +7133,11 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         Number(state.txNoiseGateThresholdDb) !== PHASE44_TX_OPUS_NOISE_GATE_THRESHOLD_DB ||
         state.cfcEnabled ||
         Math.abs(Number(state.cfcPrecomp) || 0) > 0.001 ||
-        (PHASE44_TX_OPUS_VOICE_EQ && (
-          phase44OpusLabBandsAreFlat(state.txEqBands) ||
-          phase44OpusLabBandsMatch(state.txEqBands, phase44OpusLabPreviousTxEqBands())
-        )) ||
+        (PHASE44_TX_OPUS_VOICE_EQ && phase44OpusLabBandsNeedDefault(state.txEqBands)) ||
         !phase44OpusLabBandsAreFlat(state.cfcBands)
       );
       state.txEqEnabled = PHASE44_TX_OPUS_VOICE_EQ;
-      if (
-        PHASE44_TX_OPUS_VOICE_EQ &&
-        (
-          phase44OpusLabBandsAreFlat(state.txEqBands) ||
-          phase44OpusLabBandsMatch(state.txEqBands, phase44OpusLabPreviousTxEqBands())
-        )
-      ) {
+      if (PHASE44_TX_OPUS_VOICE_EQ && phase44OpusLabBandsNeedDefault(state.txEqBands)) {
         state.txEqBands = sanitizeEqBands(desiredTxEqBands);
       } else {
         state.txEqBands = sanitizeEqBands(state.txEqBands);
@@ -11293,7 +11299,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       if (events.ready) {
         scheduleRxMediaStartupResume("bridge ready");
       }
-      if (applyPhase44OpusLabCfcGuard("bridge state")) {
+      if (applyPhase44OpusLabTxProcessingDefaults("bridge state")) {
         if (sendPhase44OpusLabCleanTxAudioToBridge()) {
           persistLocalSettingsFallback(currentRemoteSettings());
           scheduleRemoteSettingsSave();
