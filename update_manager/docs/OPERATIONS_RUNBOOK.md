@@ -56,7 +56,7 @@ Remote entry behavior:
 - `http://<host>/remote` should redirect to `https://<host>:8443/remote`.
 - `http://<host>/saturn/remote` should redirect to `https://<host>:8443/remote`.
 - `https://<host>:8443/remote` is the stable remote UI (`saturn-remote.html`).
-- `https://<host>:8443/remote-next?phase42_split=1&phase44_tx_opus=1&client_bust=bridgeprefill240-essbeq3` is the current Saturn Remote checkpoint/default operator URL: Phase 42 split control/media sockets plus the guarded Phase 44 Opus TX path. It serves `saturn-remote-next.html` + Vite bundle `saturn-remote-next.js` via `/remote-assets/remote-next.js`.
+- `https://<host>:8443/remote-next?phase42_split=1&phase44_tx_opus=1&client_bust=bridgeprefill240-moxfirst1` is the current Saturn Remote checkpoint/default operator URL: Phase 42 split control/media sockets plus the guarded Phase 44 Opus TX path. It serves `saturn-remote-next.html` + Vite bundle `saturn-remote-next.js` via `/remote-assets/remote-next.js`.
 - `https://<host>:8443/remote-next` still serves the next-generation remote UI as a fallback entry point, and `/remote` remains the stable remote UI (`saturn-remote.html`). Both remote UIs share the same basic-auth credentials, `remote_settings.json`, and `remote_profiles.json` state.
 - The current Phase 44 Opus TX processing checkpoint keeps CFC off, but restores Noise Gate and TX EQ as active operator controls. The default Opus profile starts Noise Gate on at `-50 dB` and TX EQ on with the ESSB-lite curve `3:+1,4:+2,5:+1,6:-1,7:+1,8:+3,9:+1`.
 - Shared remote settings persist in `/var/lib/saturn-state/remote_settings.json`.

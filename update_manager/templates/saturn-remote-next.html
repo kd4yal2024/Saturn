@@ -4428,7 +4428,7 @@
 
   <script>
     (() => {
-      const DIAG_VERSION = "bridgeprefill240-essbeq3";
+      const DIAG_VERSION = "bridgeprefill240-moxfirst1";
       window.saturnDiagLastError = "";
       window.saturnDiagText = "";
       window.addEventListener("error", (event) => {
@@ -4569,7 +4569,7 @@
     })();
   </script>
   <script
-    src="/remote-assets/remote-next.js?v=phase44-opus-bridgeprefill240-essbeq3"
+    src="/remote-assets/remote-next.js?v=phase44-opus-bridgeprefill240-moxfirst1"
     onload="window.saturnRemoteBundleLoaded=true"
     onerror="window.saturnRemoteBundleError=true; window.saturnDiagLastError='remote-next.js failed to load'; window.saturnSetWsDiag && window.saturnSetWsDiag('JS error: remote-next.js failed to load')"
   ></script>
@@ -10826,6 +10826,11 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         muteRxAudioForMox();
         switchDisplayToTxArm();
         updateUi();
+        if (useMic && phase40GeneratedTxSourceActive()) {
+          sendTci("tx_two_tone:0,false;");
+        }
+        sendTci("trx:0,true,tci;");
+        logEvent("TX MOX command sent");
         if (useMic) {
           const started = await startMicCapture(requestId);
           if (!started || state.pttRequestId !== requestId) {
@@ -10849,10 +10854,6 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         if (state.pttRequestId !== requestId || !state.connected || !state.ws || state.ws.readyState !== WebSocket.OPEN) {
           return false;
         }
-        if (useMic && phase40GeneratedTxSourceActive()) {
-          sendTci("tx_two_tone:0,false;");
-        }
-        sendTci("trx:0,true,tci;");
       }
       updateUi();
       return true;
