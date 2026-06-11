@@ -4428,7 +4428,7 @@
 
   <script>
     (() => {
-      const DIAG_VERSION = "bridgeprefill240-gateoff1";
+      const DIAG_VERSION = "bridgeprefill240-gateoff2";
       window.saturnDiagLastError = "";
       window.saturnDiagText = "";
       window.addEventListener("error", (event) => {
@@ -4569,7 +4569,7 @@
     })();
   </script>
   <script
-    src="/remote-assets/remote-next.js?v=phase44-opus-bridgeprefill240-gateoff1"
+    src="/remote-assets/remote-next.js?v=phase44-opus-bridgeprefill240-gateoff2"
     onload="window.saturnRemoteBundleLoaded=true"
     onerror="window.saturnRemoteBundleError=true; window.saturnDiagLastError='remote-next.js failed to load'; window.saturnSetWsDiag && window.saturnSetWsDiag('JS error: remote-next.js failed to load')"
   ></script>
@@ -5874,6 +5874,35 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
 
     function eventLogText() {
       return $("event-log")?.textContent?.trim() || "";
+    }
+
+    function compactOperatorTrace(logText) {
+      const rawLines = String(logText || "")
+        .split("\n")
+        .map((line) => line.trim())
+        .filter(Boolean);
+      let filteredCount = 0;
+      const keep = [];
+      const noisyPatterns = [
+        /\] TX mic send attempt \d+:/,
+        /\] TX uplink clear$/,
+        /\] TX uplink degraded:/,
+        /\] Phase 44 Opus lab TX Gate\/EQ profile restored after bridge state$/,
+        /\] RX media resume requested after stale IQ$/,
+        /\] Received RX IQ frame:/
+      ];
+      rawLines.forEach((line) => {
+        if (noisyPatterns.some((pattern) => pattern.test(line))) {
+          filteredCount += 1;
+          return;
+        }
+        keep.push(line);
+      });
+      const recent = keep.slice(-90);
+      if (filteredCount > 0) {
+        recent.unshift(`[trace compacted: ${filteredCount} repeated status line${filteredCount === 1 ? "" : "s"} omitted]`);
+      }
+      return recent.join("\n");
     }
 
     function roundedTimingMs(value) {
@@ -9751,8 +9780,8 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         `lastIqAgeMs=${state.lastFrameAt ? Math.round(performance.now() - state.lastFrameAt) : 0}`,
         `lastError=${window.saturnDiagLastError || ""}`,
       ];
-      const log = eventLogText();
-      return `${summary.join("\n")}\n\nLive client trace\n${log || "(empty)"}`;
+      const log = compactOperatorTrace(eventLogText());
+      return `${summary.join("\n")}\n\nLive client trace (email compact)\n${log || "(empty)"}`;
     }
 
     window.saturnGetDiagText = buildOperatorLogExportText;
