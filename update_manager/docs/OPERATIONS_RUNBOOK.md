@@ -60,6 +60,7 @@ Remote entry behavior:
 - `https://<host>:8443/remote-next` still serves the next-generation remote UI as a fallback entry point, and `/remote` remains the stable remote UI (`saturn-remote.html`). Both remote UIs share the same basic-auth credentials, `remote_settings.json`, and `remote_profiles.json` state.
 - The current Phase 44 Opus TX processing checkpoint keeps CFC off, leaves Noise Gate available as an operator control but off by default, and keeps TX EQ on with the ESSB-lite curve `3:+1,4:+2,5:+1,6:-1,7:+1,8:+3,9:+1`. Noise Gate can be explicitly forced on for testing with `phase44_tx_noise_gate=1` and a guarded threshold such as `phase44_tx_noise_gate_db=-50`.
 - Field validation on 2026-06-11 confirmed `bridgeprefill240-gateoff1` transmitted clear Opus wideband TX audio from Chrome Android with `accepted=opus_wb`, `txNoiseGateEnabled=0`, `txMicDrops=0`, and `txUplinkHwm=854`.
+- Field validation on 2026-06-11 also found the wider TX filter `50-4150` sounded good with `bridgeprefill240-gateoff2`; copy-log evidence showed `accepted=opus_wb`, `txMicDrops=0`, and `txUplinkHwm=637`.
 - Shared remote settings persist in `/var/lib/saturn-state/remote_settings.json`.
 - Named remote Setup profiles persist in `/var/lib/saturn-state/remote_profiles.json`.
 - The remote `Setup` menu supports profile save/load/delete, startup profile selection, and panadapter/waterfall display presets.
