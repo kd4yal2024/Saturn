@@ -4428,7 +4428,7 @@
 
   <script>
     (() => {
-      const DIAG_VERSION = "bridgeprefill240-cfcessb1";
+      const DIAG_VERSION = "bridgeprefill240-cfcessb2";
       window.saturnDiagLastError = "";
       window.saturnDiagText = "";
       window.addEventListener("error", (event) => {
@@ -4963,6 +4963,9 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     state.txOpusProcessingUserEdited = false;
     state.txOpusCfcUserEdited = false;
     state.txOpusProcessingDefaultsApplied = false;
+    state.txCodecDecodeFaultCount = 0;
+    state.txCodecForcePcmThisSession = false;
+    state.txCodecFallbackReason = "";
     state.txLocalRequestActive = false;
     state.txLocalRequestId = 0;
     state.txLocalRequestPermitExpiresAt = 0;
@@ -9524,10 +9527,15 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       ].join(" ");
     }
 
+    function effectiveTxCodecAdvertisedCaps(caps = state.txCodecAdvertisedCaps) {
+      if (state.txCodecForcePcmThisSession) {
+        return ["pcm"];
+      }
+      return Array.isArray(caps) && caps.length ? caps : ["pcm"];
+    }
+
     function sendTxCodecCaps() {
-      const advertised = Array.isArray(state.txCodecAdvertisedCaps) && state.txCodecAdvertisedCaps.length
-        ? state.txCodecAdvertisedCaps
-        : ["pcm"];
+      const advertised = effectiveTxCodecAdvertisedCaps();
       state.txCodecRequested = advertised.includes("opus_wb")
         ? "opus_wb"
         : (advertised.includes("opus_nb") ? "opus_nb" : "pcm");
@@ -9542,13 +9550,16 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         const previousAdvertised = (state.txCodecAdvertisedCaps || ["pcm"]).join(",");
         const detection = await detectTxCodecCapabilitiesCompat();
         state.txCodecDetectedCaps = detection.detected;
-        state.txCodecAdvertisedCaps = detection.advertised;
+        state.txCodecAdvertisedCaps = effectiveTxCodecAdvertisedCaps(detection.advertised);
         state.txCodecWebCodecsAudioEncoder = detection.webCodecsAudioEncoder;
         state.txCodecDetectionAt = performance.now();
-        logEvent(`TX codec browser caps: detected ${detection.detected.join(", ")}; advertising ${detection.advertised.join(", ")}`);
+        logEvent(`TX codec browser caps: detected ${detection.detected.join(", ")}; advertising ${state.txCodecAdvertisedCaps.join(", ")}`);
+        if (state.txCodecForcePcmThisSession) {
+          logEvent(`TX codec recovery: forced PCM for this page session (${state.txCodecFallbackReason || "codec decode"})`);
+        }
         logEvent(`TX codec browser runtime: ${txCodecBrowserRuntimeSummary(detection)}`);
-        updateWsDiagMarker(`TX codec caps ${txCodecBrowserRuntimeSummary(detection)} advertised=${detection.advertised.join(",")}`);
-        if (state.connected && previousAdvertised !== detection.advertised.join(",")) {
+        updateWsDiagMarker(`TX codec caps ${txCodecBrowserRuntimeSummary(detection)} advertised=${state.txCodecAdvertisedCaps.join(",")}`);
+        if (state.connected && previousAdvertised !== state.txCodecAdvertisedCaps.join(",")) {
           sendTxCodecCaps();
         }
         scheduleUiRefresh();
@@ -9799,6 +9810,9 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         `advertised=${advertised}`,
         `requested=${state.txCodecRequested || ""}`,
         `accepted=${state.txCodecAccepted || ""}`,
+        `codecDecodeFaults=${Number(state.txCodecDecodeFaultCount || 0)}`,
+        `codecPcmFallback=${state.txCodecForcePcmThisSession ? 1 : 0}`,
+        `codecFallbackReason=${state.txCodecFallbackReason || ""}`,
         `txDrive=${state.txDrive}`,
         `txMicGainDb=${Number(state.txMicGainDb || 0).toFixed(1)}`,
         `txFilter=${state.txFilterLow}-${state.txFilterHigh}`,
@@ -10364,6 +10378,25 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       logEvent(`TX Opus encoder unavailable: ${message}`);
       recordOperatorFault("TX Opus encoder failed", "alarm", false);
       void setPtt(false, { lockAfter: "tx-fault" });
+      updateUi();
+    }
+
+    function handleTxCodecDecodeFault(reason = "") {
+      state.txCodecDecodeFaultCount = (Number(state.txCodecDecodeFaultCount) || 0) + 1;
+      resetTxOpusProducer("bridge codec decode fault");
+      if (state.txCodecDecodeFaultCount >= 2) {
+        state.txCodecForcePcmThisSession = true;
+        state.txCodecFallbackReason = reason || "bridge codec decode fault";
+        state.txCodecAdvertisedCaps = ["pcm"];
+        logEvent("TX codec recovery: repeated Opus decode fault; falling back to PCM for this page session");
+        updateWsDiagMarker("TX codec recovery: PCM fallback active");
+      } else {
+        logEvent("TX codec recovery: Opus decode fault; resetting encoder and renegotiating once");
+        updateWsDiagMarker("TX codec recovery: resetting Opus");
+      }
+      if (state.connected && state.ws && state.ws.readyState === WebSocket.OPEN) {
+        sendTxCodecCaps();
+      }
       updateUi();
     }
 
@@ -11390,6 +11423,9 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       if (events.txFault) {
         state.txLocalRequestActive = false;
         state.txLocalRequestPermitExpiresAt = 0;
+        if (events.txFault.toLowerCase().includes("codec decode")) {
+          handleTxCodecDecodeFault(events.txFault);
+        }
         if (events.txFault.toLowerCase().startsWith("uplink late")) {
           clearOperatorFault("TX audio late", false);
         }
