@@ -2,6 +2,12 @@
 
 All notable changes to `linuxdriver/xdma` are documented in this file.
 
+## 2026-06-15
+
+### Fixed
+- Replaced legacy `EXTRA_CFLAGS` usage with Kbuild-supported `ccflags-y` so XDMA rebuilds survive newer Raspberry Pi/Trixie kernel header behavior.
+- Updated `scripts/fix-xdma.sh` to pass one-off recovery build flags via `KCFLAGS` instead of `EXTRA_CFLAGS`.
+
 ## 2026-03-18
 
 ### Fixed

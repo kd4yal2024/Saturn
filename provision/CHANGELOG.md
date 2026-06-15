@@ -19,6 +19,9 @@ All notable changes to provisioning assets are documented in this file.
   - updated the `SATURN_ADMIN_PASSWORD=` comment to document the intended admin/admin first-login default used by provisioning
   - invalid `SATURN_CLOCK_SYNC_WAIT_SECONDS` values now emit an explicit bootstrap warning before falling back to the default `180` second wait
 
+- `../linuxdriver/xdma/Makefile` and `../scripts/fix-xdma.sh`
+  - replaced legacy `EXTRA_CFLAGS` usage with `ccflags-y`/`KCFLAGS` so first-boot provisioning and later kernel-update recovery builds keep working on newer Raspberry Pi/Trixie kernels
+
 - `../scripts/update-desktop-apps.sh`
   - desktop/theme icons are now installed before launcher generation, so `.desktop` files never point at a theme icon name that failed to stage silently
   - icon install failures are now fatal instead of being swallowed as best-effort behavior

@@ -236,7 +236,7 @@ build_and_install_for_kernel(){
 
   info "Building xdma.ko for ${krel}…"
   run_make_as_build_user -C "${kbuild}" M="${driver_dir}" \
-    EXTRA_CFLAGS="-I${xdma_inc} -Wno-empty-body -Wno-missing-prototypes -Wno-missing-declarations" \
+    KCFLAGS="-I${xdma_inc} -Wno-empty-body -Wno-missing-prototypes -Wno-missing-declarations" \
     KBUILD_VERBOSE=0 \
     modules
 
