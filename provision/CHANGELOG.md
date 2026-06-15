@@ -16,6 +16,7 @@ All notable changes to provisioning assets are documented in this file.
   - provisioning can now also stage a separate standalone Desktop shortcut for a dedicated piHPSDR installer UI after the update-manager install step
 
 - `cloud-init/user-data.example.yaml`
+  - updated the `SATURN_ADMIN_PASSWORD=` comment to document the intended admin/admin first-login default used by provisioning
   - invalid `SATURN_CLOCK_SYNC_WAIT_SECONDS` values now emit an explicit bootstrap warning before falling back to the default `180` second wait
 
 - `../scripts/update-desktop-apps.sh`

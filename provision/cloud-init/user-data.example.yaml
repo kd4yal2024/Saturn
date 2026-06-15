@@ -62,7 +62,7 @@ write_files:
       # SATURN_FLASH_CONFIRM=FLASH
 
       # Optional: set explicit admin password for Update Manager basic auth.
-      # If empty in non-interactive mode, installer generates a random password and prints it in logs.
+      # Blank keeps the provisioning default admin/admin login for first access.
       SATURN_ADMIN_PASSWORD=
 
       # Re-run on every boot only if explicitly requested.

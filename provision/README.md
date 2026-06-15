@@ -469,6 +469,7 @@ From `user-data.example.yaml`:
 - `SATURN_FLASH_FPGA=0` (safety default)
 - `SATURN_APT_LOCK_TIMEOUT_SECONDS=120`
 - `SATURN_APT_LOCK_RETRY_INTERVAL_SECONDS=3`
+- `SATURN_ADMIN_PASSWORD=admin` effective default (the example leaves it blank, and provisioning keeps the admin/admin first-login path)
 
 Important safety settings for flashing:
 
