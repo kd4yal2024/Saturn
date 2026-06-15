@@ -4428,7 +4428,7 @@
 
   <script>
     (() => {
-      const DIAG_VERSION = "bridgeprefill240-cfcessb2";
+      const DIAG_VERSION = "bridgeprefill240-cfcessb3";
       window.saturnDiagLastError = "";
       window.saturnDiagText = "";
       window.addEventListener("error", (event) => {
@@ -4946,7 +4946,9 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
           safeLocalStorageGet(PHASE44_TX_OPUS_OVERRIDE_KEY) === "1"
         );
     const PHASE44_TX_OPUS_VOICE_EQ = PHASE44_QUERY_PARAMS.get("phase44_tx_voice_eq") !== "0";
-    const PHASE44_TX_OPUS_NOISE_GATE = PHASE44_QUERY_PARAMS.get("phase44_tx_noise_gate") === "1";
+    const PHASE44_TX_OPUS_NOISE_GATE_QUERY = `${PHASE44_QUERY_PARAMS.get("phase44_tx_noise_gate") || ""}`.trim().toLowerCase();
+    const PHASE44_TX_OPUS_NOISE_GATE_QUERY_SET = PHASE44_QUERY_PARAMS.has("phase44_tx_noise_gate");
+    const PHASE44_TX_OPUS_NOISE_GATE = ["1", "true", "on", "yes"].includes(PHASE44_TX_OPUS_NOISE_GATE_QUERY);
     const PHASE44_TX_OPUS_NOISE_GATE_THRESHOLD_DB = Math.max(
       -80,
       Math.min(0, Number.isFinite(PHASE44_TX_OPUS_NOISE_GATE_QUERY_DB) ? PHASE44_TX_OPUS_NOISE_GATE_QUERY_DB : -50)
@@ -5901,7 +5903,8 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         /\] TX mic send attempt \d+:/,
         /\] TX uplink clear$/,
         /\] TX uplink degraded:/,
-        /\] Phase 44 Opus lab TX Gate\/EQ profile restored after bridge state$/,
+        /\] Phase 44 Opus lab TX Gate\/EQ(?:\/CFC)? profile restored after bridge state$/,
+        /\] Phase 44 Opus lab ESSB CFC baseline restored after bridge state$/,
         /\] RX media resume requested after stale IQ$/,
         /\] Received RX IQ frame:/
       ];
@@ -7127,6 +7130,20 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       );
     }
 
+    function phase44OpusLabDesiredNoiseGateEnabled() {
+      if (PHASE44_TX_OPUS_NOISE_GATE_QUERY_SET) {
+        return PHASE44_TX_OPUS_NOISE_GATE;
+      }
+      return Boolean(state.txNoiseGateEnabled);
+    }
+
+    function phase44OpusLabDesiredNoiseGateThresholdDb() {
+      if (Number.isFinite(PHASE44_TX_OPUS_NOISE_GATE_QUERY_DB)) {
+        return PHASE44_TX_OPUS_NOISE_GATE_THRESHOLD_DB;
+      }
+      return phase44OpusLabClampNoiseGateThreshold(state.txNoiseGateThresholdDb);
+    }
+
     function phase44OpusLabCleanRadioPrefs(prefs) {
       if (!prefs || typeof prefs !== "object") {
         return prefs;
@@ -7188,10 +7205,12 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       const desiredTxEqBands = phase44OpusLabDesiredTxEqBands();
       const desiredCfcPrecomp = phase44OpusLabDesiredCfcPrecomp();
       const desiredCfcBands = phase44OpusLabDesiredCfcBands();
+      const desiredNoiseGateEnabled = phase44OpusLabDesiredNoiseGateEnabled();
+      const desiredNoiseGateThresholdDb = phase44OpusLabDesiredNoiseGateThresholdDb();
       const changed = Boolean(
         state.txEqEnabled !== PHASE44_TX_OPUS_VOICE_EQ ||
-        state.txNoiseGateEnabled !== PHASE44_TX_OPUS_NOISE_GATE ||
-        Number(state.txNoiseGateThresholdDb) !== PHASE44_TX_OPUS_NOISE_GATE_THRESHOLD_DB ||
+        state.txNoiseGateEnabled !== desiredNoiseGateEnabled ||
+        Number(state.txNoiseGateThresholdDb) !== desiredNoiseGateThresholdDb ||
         state.cfcEnabled !== PHASE44_TX_OPUS_CFC ||
         Math.abs((Number(state.cfcPrecomp) || 0) - desiredCfcPrecomp) > 0.001 ||
         (PHASE44_TX_OPUS_VOICE_EQ && phase44OpusLabBandsNeedDefault(state.txEqBands)) ||
@@ -7206,8 +7225,8 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       state.cfcEnabled = PHASE44_TX_OPUS_CFC;
       state.cfcPrecomp = desiredCfcPrecomp;
       state.cfcBands = sanitizeCfcBands(desiredCfcBands);
-      state.txNoiseGateEnabled = PHASE44_TX_OPUS_NOISE_GATE;
-      state.txNoiseGateThresholdDb = PHASE44_TX_OPUS_NOISE_GATE_THRESHOLD_DB;
+      state.txNoiseGateEnabled = desiredNoiseGateEnabled;
+      state.txNoiseGateThresholdDb = desiredNoiseGateThresholdDb;
       state.txOpusProcessingDefaultsApplied = true;
       if (changed && reason) {
         const now = performance.now();
