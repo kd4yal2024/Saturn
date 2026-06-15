@@ -37,6 +37,7 @@ SATURN_WATCHDOG_URL="${SATURN_WATCHDOG_URL:-http://${SATURN_ADDR}/healthz}"
 SATURN_WATCHDOG_INTERVAL="${SATURN_WATCHDOG_INTERVAL:-30s}"
 RUSTUP_INIT_URL="${RUSTUP_INIT_URL:-https://sh.rustup.rs}"
 TAILSCALE_INSTALL_URL="${TAILSCALE_INSTALL_URL:-https://tailscale.com/install.sh}"
+SATURN_REMOTE_NEXT_DEFAULT_QUERY="${SATURN_REMOTE_NEXT_DEFAULT_QUERY:-phase42_split=1&phase44_tx_opus=1&phase44_tx_cfc=1&client_bust=bridgeprefill240-cfcessb3}"
 
 bold(){ printf "\e[1m%s\e[0m\n" "$*"; }
 ok(){   printf "[OK] %s\n" "$*"; }
@@ -447,15 +448,15 @@ server {
   }
 
   location = /remote-next {
-    return 302 https://\$host:8443/remote-next;
+    return 302 https://\$host:8443/remote-next?${SATURN_REMOTE_NEXT_DEFAULT_QUERY};
   }
 
   location = /remote-next/ {
-    return 302 https://\$host:8443/remote-next;
+    return 302 https://\$host:8443/remote-next?${SATURN_REMOTE_NEXT_DEFAULT_QUERY};
   }
 
   location = /remote-next.html {
-    return 302 https://\$host:8443/remote-next;
+    return 302 https://\$host:8443/remote-next?${SATURN_REMOTE_NEXT_DEFAULT_QUERY};
   }
 
   location = /saturn/remote {
@@ -471,15 +472,15 @@ server {
   }
 
   location = /saturn/remote-next {
-    return 302 https://\$host:8443/remote-next;
+    return 302 https://\$host:8443/remote-next?${SATURN_REMOTE_NEXT_DEFAULT_QUERY};
   }
 
   location = /saturn/remote-next/ {
-    return 302 https://\$host:8443/remote-next;
+    return 302 https://\$host:8443/remote-next?${SATURN_REMOTE_NEXT_DEFAULT_QUERY};
   }
 
   location = /saturn/remote-next.html {
-    return 302 https://\$host:8443/remote-next;
+    return 302 https://\$host:8443/remote-next?${SATURN_REMOTE_NEXT_DEFAULT_QUERY};
   }
 
   location = /saturn/run {

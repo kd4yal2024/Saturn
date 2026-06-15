@@ -21,6 +21,10 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
   are now the documented beta path. Field validation showed clear Chrome
   Android TX audio with `accepted=opus_wb`, `codecDecodeFaults=0`,
   `codecPcmFallback=0`, and `txMicDrops=0`.
+- Fresh Nginx installs now redirect `/remote-next` and `/saturn/remote-next`
+  to the current beta query string by default
+  (`phase42_split=1&phase44_tx_opus=1&phase44_tx_cfc=1&client_bust=bridgeprefill240-cfcessb3`),
+  with `SATURN_REMOTE_NEXT_DEFAULT_QUERY` available as an installer override.
 - New shared `update_manager/scripts/saturn-go-web-assets.sh` web asset
   manifest sourced by both `install_saturn_go_nginx.sh` and
   `update-saturn-go.sh`, so installs and Saturn Go self-updates deploy the
