@@ -1203,7 +1203,7 @@ fn tailscale_remote_url(dns_name: &str) -> Option<String> {
         None
     } else {
         Some(format!(
-            "https://{dns_name}/remote-next?phase42_split=1&phase44_tx_opus=1"
+            "https://{dns_name}/remote-next?phase42_split=1&phase44_tx_opus=1&phase44_tx_cfc=1&client_bust=bridgeprefill240-cfcessb3"
         ))
     }
 }

@@ -15,6 +15,12 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
   `<script src="/remote-assets/remote-next.js">` (mapped by
   `rust-server/src/remote_tls.rs`). The bundle exposes its API as
   `globalThis.SaturnRemoteNext` for the inline page script.
+- Saturn Remote beta checkpoint for `/remote-next`: Phase 42 split
+  control/media WebSockets, Phase 44 Opus wideband TX, the conservative ESSB
+  CFC baseline, the ESSB-lite TX EQ curve, and operator-controlled Noise Gate
+  are now the documented beta path. Field validation showed clear Chrome
+  Android TX audio with `accepted=opus_wb`, `codecDecodeFaults=0`,
+  `codecPcmFallback=0`, and `txMicDrops=0`.
 - New shared `update_manager/scripts/saturn-go-web-assets.sh` web asset
   manifest sourced by both `install_saturn_go_nginx.sh` and
   `update-saturn-go.sh`, so installs and Saturn Go self-updates deploy the
@@ -124,6 +130,10 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
   enqueueing mic frames before sending PTT-off, uses smaller TX mic frames, and
   the bridge no longer blocks the main loop waiting for WDSP TX slew-down on
   release.
+- Saturn Remote entry points now send operators to the current beta
+  `/remote-next?phase42_split=1&phase44_tx_opus=1&phase44_tx_cfc=1`
+  checkpoint with cache marker `bridgeprefill240-cfcessb3`, instead of the
+  older Opus-only gate-off test URL.
 - `update-G2.py` and `update-saturn-go.sh` now verify that configured policy
   repos/refs are publicly reachable over HTTPS before pulling, use the
   validated policy URL directly instead of rewriting the local git remote, and
