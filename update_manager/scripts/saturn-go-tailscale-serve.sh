@@ -21,6 +21,7 @@ set -euo pipefail
 SATURN_TLS_HOST="${SATURN_TLS_HOST:-127.0.0.1}"
 SATURN_TLS_PORT="${SATURN_TLS_PORT:-8443}"
 SATURN_TLS_PATH="${SATURN_TLS_PATH:-/remote-next}"
+SATURN_REMOTE_QUERY="${SATURN_REMOTE_QUERY:-phase42_split=1&phase44_tx_opus=1&phase44_tx_cfc=1&client_bust=bridgeprefill240-cfcessb3}"
 SATURN_SERVICE="${SATURN_SERVICE:-saturn-go.service}"
 SERVE_HTTPS_PORT="${SERVE_HTTPS_PORT:-443}"
 GENERIC_HOSTNAME_RE='^raspberrypi(-[0-9]+)?$'
@@ -46,6 +47,7 @@ No flags are accepted in this version. To override defaults, set:
   SATURN_TLS_HOST   (default 127.0.0.1)
   SATURN_TLS_PORT   (default 8443)
   SATURN_TLS_PATH   (default /remote-next)
+  SATURN_REMOTE_QUERY (default current Saturn Remote beta query flags)
   SATURN_SERVICE    (default saturn-go.service)
   SERVE_HTTPS_PORT  (default 443)
 EOF
@@ -317,6 +319,14 @@ configure_serve() {
   ok "tailscale serve configured"
 }
 
+saturn_remote_public_path() {
+  if [[ -n "$SATURN_REMOTE_QUERY" ]]; then
+    printf '%s?%s' "$SATURN_TLS_PATH" "$SATURN_REMOTE_QUERY"
+  else
+    printf '%s' "$SATURN_TLS_PATH"
+  fi
+}
+
 print_serve_status() {
   bold "[serve status]"
   tailscale serve status 2>&1 | sed 's/^/  /' || true
@@ -333,7 +343,7 @@ print_final_url() {
     return
   fi
   bold "Saturn Remote URL (over Tailscale):"
-  printf "  https://%s%s\n" "$dns_name" "$SATURN_TLS_PATH"
+  printf "  https://%s%s\n" "$dns_name" "$(saturn_remote_public_path)"
   echo
   info "Authenticate with the SATURN_REMOTE_BASIC_AUTH credentials configured in $SATURN_SERVICE."
   info "RF TX is opt-in via SATURN_REMOTE_TX_RF_ENABLED in saturn-bridge.service environment."
