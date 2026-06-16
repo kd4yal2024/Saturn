@@ -876,6 +876,22 @@ syncG2ActionButtons();
 fetchBufferedG2RunLog();
 
 /* VPN / Tailscale status (compact, read-only) */
+const SATURN_REMOTE_DEFAULT_QUERY = 'phase42_split=1&phase44_tx_opus=1&phase44_tx_cfc=1&client_bust=bridgeprefill240-cfcessb3';
+
+function normalizedSaturnRemoteUrl(rawUrl){
+  if (!rawUrl) return '';
+  try {
+    const url = new URL(rawUrl, window.location.href);
+    const defaults = new URLSearchParams(SATURN_REMOTE_DEFAULT_QUERY);
+    for (const [key, value] of defaults.entries()) {
+      if (!url.searchParams.has(key)) url.searchParams.set(key, value);
+    }
+    return url.href;
+  } catch (_) {
+    return rawUrl;
+  }
+}
+
 async function loadVpnStatus(){
   const sumEl = document.getElementById('vpn-summary');
   const hostEl = document.getElementById('vpn-host');
@@ -887,7 +903,7 @@ async function loadVpnStatus(){
     sumEl.textContent = data.summary || 'Tailscale status unavailable.';
     const ts = data.tailscale || {};
     hostEl.textContent = ts.dns_name || ts.hostname || (data.installed ? '—' : 'not installed');
-    urlEl.textContent = data.remote_url || '—';
+    urlEl.textContent = normalizedSaturnRemoteUrl(data.remote_url) || '—';
   }catch(e){
     sumEl.textContent = 'Failed to load Tailscale status: ' + e.message;
     hostEl.textContent = '—';

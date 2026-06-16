@@ -240,6 +240,7 @@ ansi_up.use_classes = false;
 const $ = (id)=>document.getElementById(id);
 const CSRF_HEADER_NAME = 'X-Saturn-CSRF';
 const CSRF_HEADER_VALUE = '1';
+const SATURN_REMOTE_DEFAULT_QUERY = 'phase42_split=1&phase44_tx_opus=1&phase44_tx_cfc=1&client_bust=bridgeprefill240-cfcessb3';
 
 const outputEl = $('ts-output');
 const runningEl = $('ts-running');
@@ -270,6 +271,20 @@ function setPill(level, text){
   const pill = $('ts-pill');
   pill.className = 'pill ' + cls;
   pill.textContent = text;
+}
+
+function normalizedSaturnRemoteUrl(rawUrl){
+  if (!rawUrl) return '';
+  try {
+    const url = new URL(rawUrl, window.location.href);
+    const defaults = new URLSearchParams(SATURN_REMOTE_DEFAULT_QUERY);
+    for (const [key, value] of defaults.entries()) {
+      if (!url.searchParams.has(key)) url.searchParams.set(key, value);
+    }
+    return url.href;
+  } catch (_) {
+    return rawUrl;
+  }
 }
 
 async function runHelper(path, body){
@@ -350,7 +365,7 @@ async function loadStatus(){
     $('ts-ips').textContent = (ts.ips && ts.ips.length) ? ts.ips.join(', ') : '—';
     const serve = data.serve || {};
     $('ts-serve').textContent = serve.configured ? 'yes' : 'no';
-    $('ts-remote-url').textContent = data.remote_url || '—';
+    $('ts-remote-url').textContent = normalizedSaturnRemoteUrl(data.remote_url) || '—';
 
     // Hide install button if already installed.
     $('btn-install').classList.toggle('hidden', !!data.installed);
