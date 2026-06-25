@@ -221,7 +221,10 @@ If a script entry does not define `version`, `/get_versions` now returns
     running kernel without restarting `p2app.service`
 - The page runs `/opt/saturn-go/scripts/update-saturn-go.sh` to:
   - update the repo (optional)
-  - rebuild the Rust backend (`cargo build --release`)
+  - verify/activate the 2 GiB Saturn Go build swapfile
+  - rebuild the Rust backend with guarded Pi defaults
+    (`CARGO_BUILD_JOBS=1`, `cargo build --release -j1`, `nice -n 15`,
+    `ionice -c3`)
   - sync deployed web assets (`*.html`, `config.json`, `themes.json`)
   - sync packaged scripts into `/opt/saturn-go/scripts` without removing browser-managed extras
   - refresh trusted helper copies in `/usr/local/lib/saturn-go/scripts` and rewrite the narrow sudoers policy
@@ -318,13 +321,18 @@ Build from the repository:
 ```bash
 cd /home/pi/github/Saturn/update_manager/rust-server
 cargo check
-cargo build --release
+SATURN_SATURNGO_BUILD_SWAP_FILE=/home/pi/saturn-build.swap \
+  /home/pi/github/Saturn/update_manager/scripts/saturn-go-build-preflight.sh ensure-swap
+CARGO_BUILD_JOBS=1 \
+TMPDIR=/home/pi/github/Saturn/update_manager/rust-server/.tmp \
+CARGO_TARGET_DIR=/home/pi/github/Saturn/update_manager/rust-server/target-local \
+  nice -n 15 ionice -c3 cargo build --release -j1
 ```
 
 Quick manual redeploy:
 
 ```bash
-sudo cp target/release/saturn-go /opt/saturn-go/bin/saturn-go
+sudo cp target-local/release/saturn-go /opt/saturn-go/bin/saturn-go
 sudo cp ../templates/*.html /var/lib/saturn-web/
 sudo cp ../scripts/config.json ../scripts/themes.json /var/lib/saturn-web/
 sudo cp ../scripts/* /opt/saturn-go/scripts/

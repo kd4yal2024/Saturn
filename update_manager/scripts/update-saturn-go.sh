@@ -196,6 +196,51 @@ resolve_cargo_bin(){
   die "Required command not found: cargo (checked PATH and $build_home/.cargo/bin)"
 }
 
+active_swap_bytes(){
+  local path="$1"
+  swapon --show=NAME,SIZE --bytes --noheadings 2>/dev/null \
+    | awk -v target="$path" '$1 == target { print $2; found=1; exit } END { if (!found) print 0 }'
+}
+
+ensure_build_swap(){
+  local min_bytes active_bytes helper
+  min_bytes=$(( BUILD_SWAP_MIB * 1024 * 1024 ))
+  if (( min_bytes > 1048576 )); then
+    min_bytes=$(( min_bytes - 1048576 ))
+  fi
+  active_bytes="$(active_swap_bytes "$BUILD_SWAP_FILE")"
+
+  if (( active_bytes >= min_bytes )); then
+    info "Build swap active: $BUILD_SWAP_FILE ($(( active_bytes / 1024 / 1024 )) MiB)"
+    return 0
+  fi
+
+  if (( DRY_RUN )); then
+    info "[dry-run] ensure build swap: $BUILD_SWAP_FILE (${BUILD_SWAP_MIB} MiB)"
+    return 0
+  fi
+
+  if (( EUID == 0 )); then
+    helper="$BUILD_PREFLIGHT_HELPER"
+    [[ -x "$helper" ]] || die "Build preflight helper is not executable: $helper"
+    "$helper" ensure-swap
+  elif [[ -x "$DEPLOY_BUILD_PREFLIGHT_HELPER" ]]; then
+    run_cmd sudo -n "$DEPLOY_BUILD_PREFLIGHT_HELPER" ensure-swap
+  else
+    die "Build swap is not active and the privileged helper is not installed: $DEPLOY_BUILD_PREFLIGHT_HELPER"
+  fi
+
+  active_bytes="$(active_swap_bytes "$BUILD_SWAP_FILE")"
+  if (( active_bytes < min_bytes )); then
+    die "Build swap is still not active at ${BUILD_SWAP_MIB} MiB: $BUILD_SWAP_FILE"
+  fi
+}
+
+cargo_build_prefix_display(){
+  printf 'CARGO_BUILD_JOBS=%s TMPDIR=%s CARGO_TARGET_DIR=%s nice -n %s ionice -c %s' \
+    "$BUILD_JOBS" "$BUILD_TMP_DIR" "$BUILD_TARGET_DIR" "$BUILD_NICE" "$BUILD_IONICE_CLASS"
+}
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --skip-git) SKIP_GIT=1; shift ;;
@@ -248,6 +293,7 @@ EXTRA_PACKAGED_SCRIPTS=(
   "$REPO_ROOT/scripts/setup-eth-fallback.sh"
 )
 PRIVILEGED_HELPER_SCRIPTS=(
+  "$REPO_ROOT/update_manager/scripts/saturn-go-build-preflight.sh"
   "$REPO_ROOT/scripts/saturn-flash-fpga.sh"
   "$REPO_ROOT/scripts/saturn-xdma-doctor.sh"
   "$REPO_ROOT/scripts/saturn-xdma-stage-current.sh"
@@ -267,6 +313,12 @@ SCRIPTS_SRC_DIR="$REPO_ROOT/update_manager/scripts"
 WEB_ASSET_HELPERS="$SCRIPTS_SRC_DIR/saturn-go-web-assets.sh"
 BUILD_TMP_DIR="$RUST_DIR/.tmp"
 BUILD_TARGET_DIR="$RUST_DIR/target-local"
+BUILD_PREFLIGHT_HELPER="$SCRIPTS_SRC_DIR/saturn-go-build-preflight.sh"
+BUILD_SWAP_FILE="${SATURN_SATURNGO_BUILD_SWAP_FILE:-/home/pi/saturn-build.swap}"
+BUILD_SWAP_MIB="${SATURN_SATURNGO_BUILD_SWAP_MIB:-2048}"
+BUILD_JOBS="${SATURN_SATURNGO_BUILD_JOBS:-1}"
+BUILD_NICE="${SATURN_SATURNGO_BUILD_NICE:-15}"
+BUILD_IONICE_CLASS="${SATURN_SATURNGO_BUILD_IONICE_CLASS:-3}"
 
 SERVICE_NAME="${SATURN_SATURNGO_SERVICE_NAME:-saturn-go.service}"
 DEPLOY_RUN_USER="${SATURN_SATURNGO_RUN_USER:-$(id -un)}"
@@ -274,6 +326,7 @@ DEPLOY_BIN="${SATURN_SATURNGO_BIN_DEST:-/opt/saturn-go/bin/saturn-go}"
 DEPLOY_WEBROOT="${SATURN_SATURNGO_WEBROOT:-/var/lib/saturn-web}"
 DEPLOY_SCRIPTS_DIR="${SATURN_SATURNGO_SCRIPTS_DIR:-/opt/saturn-go/scripts}"
 DEPLOY_PRIVILEGED_SCRIPTS_DIR="${SATURN_SATURNGO_PRIVILEGED_SCRIPTS_DIR:-/usr/local/lib/saturn-go/scripts}"
+DEPLOY_BUILD_PREFLIGHT_HELPER="$DEPLOY_PRIVILEGED_SCRIPTS_DIR/saturn-go-build-preflight.sh"
 DEPLOY_SUDOERS_FILE="${SATURN_SATURNGO_SUDOERS_FILE:-/etc/sudoers.d/saturn-go-maintenance}"
 STATUS_FILE="${SATURN_SATURNGO_DEPLOY_STATUS_FILE:-/var/lib/saturn-state/saturngo_deploy_status.json}"
 
@@ -283,6 +336,7 @@ trap 'rc=$?; if (( rc != 0 )); then write_status "error" "$STATUS_PHASE" "Saturn
 [[ -d "$TEMPLATES_DIR" ]] || die "Templates dir not found: $TEMPLATES_DIR"
 [[ -d "$SCRIPTS_SRC_DIR" ]] || die "Scripts dir not found: $SCRIPTS_SRC_DIR"
 [[ -f "$WEB_ASSET_HELPERS" ]] || die "Web asset helper not found: $WEB_ASSET_HELPERS"
+[[ -f "$BUILD_PREFLIGHT_HELPER" ]] || die "Build preflight helper not found: $BUILD_PREFLIGHT_HELPER"
 source "$WEB_ASSET_HELPERS"
 [[ -f "$SCRIPTS_SRC_DIR/config.json" ]] || die "Missing config.json in $SCRIPTS_SRC_DIR"
 [[ -f "$SCRIPTS_SRC_DIR/themes.json" ]] || die "Missing themes.json in $SCRIPTS_SRC_DIR"
@@ -340,15 +394,18 @@ if (( ! SKIP_BUILD )); then
   STATUS_PHASE="build"
   write_status "running" "$STATUS_PHASE" "Building saturn-go release binary"
   info "Building saturn-go release binary..."
+  ensure_build_swap
+  info "Build settings: $(cargo_build_prefix_display) $CARGO_BIN build --release -j$BUILD_JOBS"
   run_cmd mkdir -p "$BUILD_TMP_DIR" "$BUILD_TARGET_DIR"
   if (( DRY_RUN )); then
-    info "[dry-run] TMPDIR=$BUILD_TMP_DIR CARGO_TARGET_DIR=$BUILD_TARGET_DIR $CARGO_BIN build --release -j1 (cwd=$RUST_DIR)"
+    info "[dry-run] $(cargo_build_prefix_display) $CARGO_BIN build --release -j$BUILD_JOBS (cwd=$RUST_DIR)"
   else
     (
       cd "$RUST_DIR"
+      export CARGO_BUILD_JOBS="$BUILD_JOBS"
       TMPDIR="$BUILD_TMP_DIR" \
       CARGO_TARGET_DIR="$BUILD_TARGET_DIR" \
-      "$CARGO_BIN" build --release -j1
+      nice -n "$BUILD_NICE" ionice -c "$BUILD_IONICE_CLASS" "$CARGO_BIN" build --release -j "$BUILD_JOBS"
     )
   fi
 else
@@ -499,6 +556,9 @@ ${DEPLOY_RUN_USER} ALL=(root) NOPASSWD: ${DEPLOY_PRIVILEGED_SCRIPTS_DIR}/saturn-
 ${DEPLOY_RUN_USER} ALL=(root) NOPASSWD: ${DEPLOY_PRIVILEGED_SCRIPTS_DIR}/saturn-flash-fpga.sh
 ${DEPLOY_RUN_USER} ALL=(root) NOPASSWD: ${DEPLOY_PRIVILEGED_SCRIPTS_DIR}/saturn-flash-fpga.sh *
 ${DEPLOY_RUN_USER} ALL=(root) NOPASSWD: ${DEPLOY_PRIVILEGED_SCRIPTS_DIR}/saturn-xdma-stage-current.sh
+${DEPLOY_RUN_USER} ALL=(root) NOPASSWD: ${DEPLOY_PRIVILEGED_SCRIPTS_DIR}/saturn-go-build-preflight.sh
+${DEPLOY_RUN_USER} ALL=(root) NOPASSWD: ${DEPLOY_PRIVILEGED_SCRIPTS_DIR}/saturn-go-build-preflight.sh ensure-swap
+${DEPLOY_RUN_USER} ALL=(root) NOPASSWD: ${DEPLOY_PRIVILEGED_SCRIPTS_DIR}/saturn-go-build-preflight.sh status
 SUDOERS
 chmod 0440 "$DEPLOY_SUDOERS_FILE"
 if command -v visudo >/dev/null 2>&1; then

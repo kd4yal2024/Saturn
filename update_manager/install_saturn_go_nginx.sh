@@ -20,6 +20,7 @@ SUDOERS_FILE="/etc/sudoers.d/saturn-go-maintenance"
 SOURCE_DIR="/home/${SUDO_USER:-$USER}/github/Saturn/update_manager"
 RUST_SRC_DIR="$SOURCE_DIR/rust-server"
 WEB_ASSET_HELPERS="$SOURCE_DIR/scripts/saturn-go-web-assets.sh"
+BUILD_PREFLIGHT_HELPER="$SOURCE_DIR/scripts/saturn-go-build-preflight.sh"
 
 SATURN_ADDR="${SATURN_ADDR:-127.0.0.1:8080}"
 SATURN_MAX_BODY_BYTES="${SATURN_MAX_BODY_BYTES:-2147483648}"
@@ -82,6 +83,7 @@ EXTRA_PACKAGED_SCRIPTS=(
   "$REPO_SOURCE_DIR/scripts/setup-eth-fallback.sh"
 )
 PRIVILEGED_HELPER_SCRIPTS=(
+  "$SOURCE_DIR/scripts/saturn-go-build-preflight.sh"
   "$REPO_SOURCE_DIR/scripts/saturn-flash-fpga.sh"
   "$REPO_SOURCE_DIR/scripts/saturn-xdma-doctor.sh"
   "$REPO_SOURCE_DIR/scripts/saturn-xdma-stage-current.sh"
@@ -98,6 +100,10 @@ if [[ ! -f "$RUST_SRC_DIR/Cargo.toml" ]]; then
 fi
 if [[ ! -f "$WEB_ASSET_HELPERS" ]]; then
   err "Web asset helper not found: $WEB_ASSET_HELPERS"
+  exit 1
+fi
+if [[ ! -f "$BUILD_PREFLIGHT_HELPER" ]]; then
+  err "Build preflight helper not found: $BUILD_PREFLIGHT_HELPER"
   exit 1
 fi
 source "$WEB_ASSET_HELPERS"
@@ -160,6 +166,11 @@ RUSTUP_RUSTC_BIN="$RUSTUP_BIN_DIR/rustc"
 RUSTUP_CMD_BIN="$RUSTUP_BIN_DIR/rustup"
 RUST_BUILD_TMP_DIR="$RUST_SRC_DIR/.tmp"
 RUST_BUILD_TARGET_DIR="$RUST_SRC_DIR/target-local"
+RUST_BUILD_SWAP_FILE="${SATURN_SATURNGO_BUILD_SWAP_FILE:-/home/pi/saturn-build.swap}"
+RUST_BUILD_SWAP_MIB="${SATURN_SATURNGO_BUILD_SWAP_MIB:-2048}"
+RUST_BUILD_JOBS="${SATURN_SATURNGO_BUILD_JOBS:-1}"
+RUST_BUILD_NICE="${SATURN_SATURNGO_BUILD_NICE:-15}"
+RUST_BUILD_IONICE_CLASS="${SATURN_SATURNGO_BUILD_IONICE_CLASS:-3}"
 
 run_as_build_user() {
   local cmd="$1"
@@ -390,6 +401,9 @@ ${SERVICE_USER} ALL=(root) NOPASSWD: ${PRIVILEGED_SCRIPTS_DIR}/saturn-xdma-docto
 ${SERVICE_USER} ALL=(root) NOPASSWD: ${PRIVILEGED_SCRIPTS_DIR}/saturn-flash-fpga.sh
 ${SERVICE_USER} ALL=(root) NOPASSWD: ${PRIVILEGED_SCRIPTS_DIR}/saturn-flash-fpga.sh *
 ${SERVICE_USER} ALL=(root) NOPASSWD: ${PRIVILEGED_SCRIPTS_DIR}/saturn-xdma-stage-current.sh
+${SERVICE_USER} ALL=(root) NOPASSWD: ${PRIVILEGED_SCRIPTS_DIR}/saturn-go-build-preflight.sh
+${SERVICE_USER} ALL=(root) NOPASSWD: ${PRIVILEGED_SCRIPTS_DIR}/saturn-go-build-preflight.sh ensure-swap
+${SERVICE_USER} ALL=(root) NOPASSWD: ${PRIVILEGED_SCRIPTS_DIR}/saturn-go-build-preflight.sh status
 ${SERVICE_USER} ALL=(root) NOPASSWD: ${PRIVILEGED_SCRIPTS_DIR}/saturn-tailscale.sh
 ${SERVICE_USER} ALL=(root) NOPASSWD: ${PRIVILEGED_SCRIPTS_DIR}/saturn-tailscale.sh *
 ${SERVICE_USER} ALL=(root) NOPASSWD: ${PRIVILEGED_SCRIPTS_DIR}/saturn-go-tailscale-serve.sh
@@ -402,10 +416,14 @@ fi
 ok "Sudoers policy installed at $SUDOERS_FILE"
 
 info "Building Rust server..."
+SATURN_SATURNGO_BUILD_SWAP_FILE="$RUST_BUILD_SWAP_FILE" \
+SATURN_SATURNGO_BUILD_SWAP_MIB="$RUST_BUILD_SWAP_MIB" \
+  "$BUILD_PREFLIGHT_HELPER" ensure-swap
+info "Rust build settings: CARGO_BUILD_JOBS=$RUST_BUILD_JOBS TMPDIR=$RUST_BUILD_TMP_DIR CARGO_TARGET_DIR=$RUST_BUILD_TARGET_DIR nice -n $RUST_BUILD_NICE ionice -c $RUST_BUILD_IONICE_CLASS"
 mkdir -p "$RUST_BUILD_TMP_DIR" "$RUST_BUILD_TARGET_DIR"
 chown -R "$BUILD_USER:$BUILD_GROUP" "$RUST_BUILD_TMP_DIR" "$RUST_BUILD_TARGET_DIR"
 pushd "$RUST_SRC_DIR" >/dev/null
-run_as_build_user "cd \"$RUST_SRC_DIR\" && TMPDIR=\"$RUST_BUILD_TMP_DIR\" CARGO_TARGET_DIR=\"$RUST_BUILD_TARGET_DIR\" \"$RUSTUP_CARGO_BIN\" build --release -j1"
+run_as_build_user "cd \"$RUST_SRC_DIR\" && CARGO_BUILD_JOBS=\"$RUST_BUILD_JOBS\" TMPDIR=\"$RUST_BUILD_TMP_DIR\" CARGO_TARGET_DIR=\"$RUST_BUILD_TARGET_DIR\" nice -n \"$RUST_BUILD_NICE\" ionice -c \"$RUST_BUILD_IONICE_CLASS\" \"$RUSTUP_CARGO_BIN\" build --release -j \"$RUST_BUILD_JOBS\""
 cp -f "$RUST_BUILD_TARGET_DIR/release/saturn-go" "$BIN_DIR/saturn-go"
 popd >/dev/null
 chmod 0755 "$BIN_DIR/saturn-go"

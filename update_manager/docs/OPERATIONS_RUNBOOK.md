@@ -544,6 +544,19 @@ Typical test sequence:
 Operational notes:
 
 - The script builds from the active repo root selected on Backup / Restore page (`SATURN_ACTIVE_REPO_ROOT`).
+- Before compiling, the script verifies/activates a protected build swapfile
+  (`/home/pi/saturn-build.swap`, 2 GiB by default) through
+  `saturn-go-build-preflight.sh`.
+- Saturn Go Rust builds run with the guarded defaults
+  `CARGO_BUILD_JOBS=1`, `cargo build --release -j1`, `nice -n 15`, and
+  `ionice -c3`; override with `SATURN_SATURNGO_BUILD_JOBS`,
+  `SATURN_SATURNGO_BUILD_NICE`, `SATURN_SATURNGO_BUILD_IONICE_CLASS`,
+  `SATURN_SATURNGO_BUILD_SWAP_FILE`, and
+  `SATURN_SATURNGO_BUILD_SWAP_MIB` only when intentionally testing.
+- Validated on a CM4 Saturn G2 on 2026-06-25 with
+  `update-saturn-go.sh --skip-git --skip-deploy --verbose`; the guarded build
+  completed successfully in 7m 14s with the 2 GiB build swap active and no
+  service restart.
 - The deploy payload includes the release binary, web assets listed by `scripts/saturn-go-web-assets.sh`, `config.json`, `themes.json`, and packaged scripts from `update_manager/scripts`.
 - Browser-managed extra scripts in `/opt/saturn-go/scripts` are left in place; the self-update only refreshes the repo-managed files.
 - Final stop/copy/start of `saturn-go.service` is dispatched via detached `systemd-run` helper (`saturn-go-self-deploy-<timestamp>`).
