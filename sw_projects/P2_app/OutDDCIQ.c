@@ -31,6 +31,7 @@
 #include "../common/hwaccess.h"
 #include "../common/debugaids.h"
 #include "../common/p23_perf_telemetry.h"
+#include "../common/byteio.h"
 
 
 
@@ -442,10 +443,10 @@ void *OutgoingDDCIQ(void *arg)
                     while (((IQHeadPtr[DDC] - BatchReadPtr) > VIQBYTESPERFRAME) && (BatchCount < VMAXSENDMSGS))
                     {
                         uint8_t* PacketPtr = SendBuffer[BatchCount];
-                        *(uint32_t*)PacketPtr = htonl(BatchSequence++);               // add sequence count
+                        wr_be_u32(PacketPtr, BatchSequence++);                        // add sequence count
                         memset(PacketPtr + 4, 0, 8);                                          // clear the timestamp data
-                        *(uint16_t*)(PacketPtr + 12) = htons(24);                             // bits per sample
-                        *(uint32_t*)(PacketPtr + 14) = htons(VIQSAMPLESPERFRAME);             // I/Q samples for this frame (legacy wire compatibility)
+                        wr_be_u16(PacketPtr + 12, 24);                                        // bits per sample
+                        wr_be_u16(PacketPtr + 14, VIQSAMPLESPERFRAME);                        // I/Q samples for this frame
                         memcpy(PacketPtr + 16, BatchReadPtr, VIQBYTESPERFRAME);
                         BatchReadPtr += VIQBYTESPERFRAME;
 

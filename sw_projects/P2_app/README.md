@@ -1021,6 +1021,41 @@ Why:
 - That can launch threads with invalid/unbound socket state and produce undefined startup/runtime behavior.
 - Failing fast keeps thread lifecycle and socket ownership state coherent from process start.
 
+### 41. Wideband bounds guard and DDC packet header byte-order hardening
+
+Changed files:
+- `Outwideband.c`
+- `OutDDCIQ.c`
+
+What changed:
+- Added validation for wideband sample count and packet count before storing
+  general-packet wideband parameters.
+- Wideband enable bits are masked to the two Saturn ADC lanes.
+- Malformed wideband requests that would exceed the 1500-byte UDP packet payload
+  or the DMA read buffer now fail closed by disabling wideband output for that
+  update.
+- Replaced unaligned pointer-cast packet header writes in outgoing DDC I/Q
+  batching with the shared `byteio.h` big-endian helpers.
+- The DDC I/Q frame sample-count field is written as the intended 16-bit field.
+
+Why:
+- General-packet wideband fields come from the client and are used later to
+  drive DMA reads and UDP packet copies.
+- Without validating the requested shape, a malformed client packet could make
+  the wideband worker copy past the UDP packet buffer or read past the DMA
+  buffer.
+- The previous DDC I/Q packet writer used unaligned typed stores and wrote a
+  16-bit value through a 32-bit pointer. Using byte helpers keeps the wire
+  layout explicit and avoids alignment-sensitive behavior.
+
+Verification:
+- `git diff --check`
+- `make -C /home/pi/github/Saturn/sw_projects/P2_app -j1`
+- `make -C /home/pi/github/Saturn/sw_projects/P2_app cppcheck`
+- Deployed to `/opt/saturn-go/p23-apps/p2app` with a timestamped backup and
+  restarted `p2app.service`.
+- Confirmed `/p23_status` and `/p23_perf` returned `ok` after restart.
+
 ## File List Changed In This Hardening Pass
 
 - `AriesATU.c`

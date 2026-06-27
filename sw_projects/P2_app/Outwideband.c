@@ -42,6 +42,9 @@
 #define VWBPACKETSIZE 1500                          // packet size is a variable, sp make max for UDP
 #define VWBSAMPLESPERFRAME 512                      // total wideband ADC samples in one WB packet
 #define VWBBYTESPERFRAME 2*VWBSAMPLESPERFRAME       // total bytes in one outgoing frame
+#define VWBPACKETOVERHEADBYTES 4                    // sequence counter
+#define VWBMAXPAYLOADBYTES (VWBPACKETSIZE - VWBPACKETOVERHEADBYTES)
+#define VWBFRAMEOFFSETBYTES 32                      // skip FPGA frame metadata before sample payload
 #define VSTARTUPDELAY 100                           // 100 messages (~100ms) before reporting under or overflows
 #define VNUMWBADC 2                                 // number of ADC that WB data can be collected for
 
@@ -66,6 +69,28 @@ uint8_t StoredSampleSize;                                       // sample resolu
 uint8_t StoredRate;                                             // update rate in ms
 uint8_t StoredPacketCount;                                      // packets to be transferred out
 static pthread_mutex_t g_wideband_params_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+
+static bool WidebandParamsFitBuffers(uint16_t SampleCount, uint8_t PacketCount)
+{
+    uint32_t SampleBytes;
+    uint32_t TotalPayloadBytes;
+    uint32_t RequiredDMABytes;
+
+    if((SampleCount == 0) || (PacketCount == 0))
+        return false;
+
+    SampleBytes = (uint32_t)SampleCount * 2U;
+    if(SampleBytes > VWBMAXPAYLOADBYTES)
+        return false;
+
+    TotalPayloadBytes = (uint32_t)PacketCount * SampleBytes;
+    RequiredDMABytes = VWBFRAMEOFFSETBYTES + TotalPayloadBytes;
+    if(RequiredDMABytes > VDMABUFFERSIZE)
+        return false;
+
+    return true;
+}
 
 
 
@@ -130,13 +155,24 @@ void FreeWBDynamicMemory(void)
 void SetWidebandParams(uint8_t Enables, uint16_t SampleCount, uint8_t SampleSize, uint8_t Rate, uint8_t PacketCount)
 {
     bool ParamsChanged;
+    uint8_t SanitizedEnables = Enables & 0x03;
+
+    if((SanitizedEnables != 0) && !WidebandParamsFitBuffers(SampleCount, PacketCount))
+    {
+        printf("Invalid WB data ignored: Enables=%u, Sample/pkt=%u, Samplesize=%u, Rate=%u, PktCount=%u\n",
+               (unsigned int)Enables, (unsigned int)SampleCount, (unsigned int)SampleSize,
+               (unsigned int)Rate, (unsigned int)PacketCount);
+        SanitizedEnables = 0;
+        SampleCount = 0;
+        PacketCount = 0;
+    }
 
     pthread_mutex_lock(&g_wideband_params_mutex);
-    if((Enables != StoredEnables) || (SampleCount != StoredSamplePerPktCount) || (SampleSize != StoredSampleSize)
+    if((SanitizedEnables != StoredEnables) || (SampleCount != StoredSamplePerPktCount) || (SampleSize != StoredSampleSize)
        || (Rate != StoredRate) || (PacketCount != StoredPacketCount))
         WBParamsChanged = true;
 
-    StoredEnables = Enables;                            // enable bits for ADC1 (bit0) & 2 (bit1)
+    StoredEnables = SanitizedEnables;                   // enable bits for ADC1 (bit0) & 2 (bit1)
     StoredSamplePerPktCount = SampleCount;                    // samples per packet count
     StoredSampleSize = SampleSize;                      // sample resolution in bits (typ 16)
     StoredRate = Rate;                                  // update rate in ms
@@ -146,7 +182,7 @@ void SetWidebandParams(uint8_t Enables, uint16_t SampleCount, uint8_t SampleSize
     pthread_mutex_unlock(&g_wideband_params_mutex);
 
     if(ParamsChanged)
-        printf("New WB data: Enables=%d, Sample/pkt = %d, Samplesize=%d, Rate=%d, PktCount=%d\n", Enables, SampleCount, SampleSize, Rate, PacketCount);
+        printf("New WB data: Enables=%d, Sample/pkt = %d, Samplesize=%d, Rate=%d, PktCount=%d\n", SanitizedEnables, SampleCount, SampleSize, Rate, PacketCount);
 }
 
 
@@ -330,7 +366,9 @@ void *OutgoingWidebandSamples(void *arg)
                 SetWidebandSampleCount(SampleWordCount);
                 SetWidebandUpdateRate(LocalRate);
                 SetWidebandEnable((bool)(LocalEnables&1), (bool)(LocalEnables&2), false);
-                printf("Setting WB IP: WordCount = %d, Rate = %d, ADC1 = %d, ADC2=%d\n", SampleWordCount, LocalRate, (LocalEnables&1), (LocalEnables&2));
+                printf("Setting WB IP: WordCount = %u, Rate = %u, ADC1 = %u, ADC2=%u\n",
+                       (unsigned int)SampleWordCount, (unsigned int)LocalRate,
+                       (unsigned int)(LocalEnables & 1), (unsigned int)(LocalEnables & 2));
             }
 //
 // then if enabled:
