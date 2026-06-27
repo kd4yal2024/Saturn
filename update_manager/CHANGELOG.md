@@ -92,6 +92,14 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
 - Saturn Go page now includes an `XDMA Doctor` action that runs a classified read-only PCIe/XDMA report through the existing privileged helper lane.
 
 ### Changed
+- `update-deskhpsdr.py` v1.1 now compacts routine apt/debconf/autoremove
+  chatter in verbose web output, while keeping the raw build log intact.
+  Its build helper no longer reinstalls the PulseAudio daemon on
+  `pipewire-pulse` systems and now applies the Saturn libgpiod v2 patch only
+  for older upstream deskHPSDR checkouts that still contain the legacy
+  `src/gpio.c` path. Current upstream checkouts, where direct Raspberry Pi
+  GPIO support has been removed, build with `SATURN=ON` and skip the obsolete
+  patch.
 - Saturn Remote TLS listener now fails closed when `SATURN_REMOTE_BASIC_AUTH`
   is unset or malformed: it refuses to bind on port 8443, logs an `ERROR`
   with the remediation, and leaves the Saturn Go admin HTTP listener

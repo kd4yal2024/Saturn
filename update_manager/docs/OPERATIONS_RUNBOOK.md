@@ -631,8 +631,9 @@ Safety/usage notes:
 - If `~/github/deskhpsdr` does not exist and `--skip-git` is not selected, the updater clones the upstream deskHPSDR repo before the build step.
 - If the checkout already exists and `--skip-git` is not selected, the updater pulls `origin/<current-branch>` with `--ff-only` and auto-stashes local changes first when needed.
 - The build step resolves helper scripts from the active Saturn repo root and then runs `scripts/deskhpsdr-test-build-on-current-image.sh --repo ~/github/deskhpsdr`.
-- Before building, the helper applies `scripts/patches/deskhpsdr-libgpiod-v2.patch` with `git apply` when the checkout still needs the local Saturn compatibility fix; if the patch is already present, the helper continues without error.
-- The helper now builds `deskHPSDR` with `GPIO=ON` and `SATURN=ON`, so Trixie/libgpiod v2 GPIO support is retained during update-manager driven builds.
+- Before building older deskHPSDR checkouts that still include `src/gpio.c`, the helper applies `scripts/patches/deskhpsdr-libgpiod-v2.patch` with `git apply` when the checkout still needs the local Saturn compatibility fix; if the patch is already present, the helper continues without error.
+- Current upstream deskHPSDR removed the direct Raspberry Pi GPIO source path. For those checkouts, the helper skips the obsolete patch and builds `deskHPSDR` with `SATURN=ON` for the native G2/XDMA path.
+- The helper keeps PulseAudio client libraries for build compatibility but prefers `pipewire-pulse` at runtime and removes the redundant `pulseaudio` daemon package when PipeWire Pulse is installed.
 - `--no-install-deps`, `--no-clean`, and `--no-desktop-shortcut` map directly to the helper-script build flow.
 - In non-interactive web execution, backup prompts are skipped unless `-y` is selected.
 - On a fresh image, do not select `--skip-git`; otherwise the run fails because there is no local deskHPSDR checkout to build.

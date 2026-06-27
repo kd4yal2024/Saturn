@@ -10,6 +10,7 @@ JOBS="${JOBS:-$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 2)}"
 INSTALL_DEPS=0
 RUN_CLEAN=1
 CREATE_DESKTOP_SHORTCUT=1
+LEGACY_GPIO_AVAILABLE=0
 
 usage() {
   cat <<'EOF'
@@ -66,6 +67,25 @@ apply_saturn_patch() {
   echo "Local Saturn patch could not be applied cleanly: ${patch_name}" >&2
   git -C "${repo_dir}" apply --check "${patch_file}" || true
   exit 1
+}
+
+package_installed() {
+  dpkg-query -W -f='${Status}\n' "$1" 2>/dev/null | grep -q "install ok installed"
+}
+
+detect_legacy_gpio_support() {
+  if [[ -f "${REPO_DIR}/src/gpio.c" ]] && grep -q "GPIOD_VERSION" "${REPO_DIR}/Makefile"; then
+    LEGACY_GPIO_AVAILABLE=1
+  else
+    LEGACY_GPIO_AVAILABLE=0
+  fi
+}
+
+remove_redundant_pulseaudio_daemon() {
+  if package_installed pipewire-pulse && package_installed pulseaudio; then
+    echo "pipewire-pulse found; removing redundant pulseaudio daemon package"
+    sudo env DEBIAN_FRONTEND=noninteractive apt-get --yes remove pulseaudio
+  fi
 }
 
 create_desktop_shortcut() {
@@ -168,6 +188,8 @@ if [[ ! -f "${REPO_DIR}/Makefile" ]]; then
   exit 1
 fi
 
+detect_legacy_gpio_support
+
 if [[ -r /etc/os-release ]]; then
   # shellcheck disable=SC1091
   . /etc/os-release
@@ -222,9 +244,7 @@ DEBIAN_PACKAGES=(
   libcurl4-openssl-dev
   libusb-1.0-0-dev
   libi2c-dev
-  libgpiod-dev
   libpulse-dev
-  pulseaudio
   libpcap-dev
   libjson-c-dev
   gnome-themes-extra
@@ -237,21 +257,30 @@ DEBIAN_PACKAGES=(
   libxml2-dev
 )
 
+if [[ ${LEGACY_GPIO_AVAILABLE} -eq 1 ]]; then
+  DEBIAN_PACKAGES+=(libgpiod-dev)
+fi
+
+if ! package_installed pipewire-pulse && ! package_installed pulseaudio; then
+  DEBIAN_PACKAGES+=(pipewire-pulse)
+fi
+
 missing_packages=()
 for pkg in "${DEBIAN_PACKAGES[@]}"; do
-  if ! dpkg-query -W -f='${Status}\n' "$pkg" 2>/dev/null | grep -q "install ok installed"; then
+  if ! package_installed "$pkg"; then
     missing_packages+=("$pkg")
   fi
 done
 
 if [[ ${INSTALL_DEPS} -eq 1 ]]; then
   echo "Installing deskHPSDR prerequisites for ${PRETTY_NAME:-Debian-based image}..."
-  sudo apt-get update
+  sudo env DEBIAN_FRONTEND=noninteractive apt-get update
   if [[ ${#missing_packages[@]} -gt 0 ]]; then
-    sudo apt-get --yes install "${missing_packages[@]}"
+    sudo env DEBIAN_FRONTEND=noninteractive apt-get --yes install "${missing_packages[@]}"
   else
     echo "All listed Debian packages are already installed."
   fi
+  remove_redundant_pulseaudio_daemon
 fi
 
 webkit_version="$(pkg-config --modversion webkit2gtk-4.1 2>/dev/null || pkg-config --modversion webkit2gtk-4.0 2>/dev/null || true)"
@@ -265,7 +294,11 @@ echo "  image:          ${PRETTY_NAME:-unknown}"
 echo "  codename:       ${VERSION_CODENAME:-unknown}"
 echo "  jobs:           ${JOBS}"
 echo "  SATURN:         ON"
-echo "  GPIO:           ON"
+if [[ ${LEGACY_GPIO_AVAILABLE} -eq 1 ]]; then
+  echo "  Pi GPIO:        legacy source present; patch/build enabled"
+else
+  echo "  Pi GPIO:        upstream removed legacy source; patch/build skipped"
+fi
 echo "  WebKitGTK:      ${webkit_version:-missing}"
 echo "  GTK3:           ${gtk_version:-missing}"
 echo "  fftw3:          ${fftw3_version:-missing}"
@@ -289,17 +322,24 @@ mkdir -p "${LOG_DIR}"
 STAMP="$(date +%Y%m%d-%H%M%S)"
 BUILD_LOG="${LOG_DIR}/deskhpsdr-build-${STAMP}.log"
 
-apply_saturn_patch "${REPO_DIR}" "${DESKHPSDR_GPIO_PATCH}"
+if [[ ${LEGACY_GPIO_AVAILABLE} -eq 1 ]]; then
+  apply_saturn_patch "${REPO_DIR}" "${DESKHPSDR_GPIO_PATCH}"
+else
+  echo "Skipping Saturn libgpiod patch; upstream checkout has no src/gpio.c legacy GPIO path."
+fi
 
 MAKE_ARGS=(
   -C "${REPO_DIR}"
   "SATURN=ON"
-  "GPIO=ON"
   "SOAPYSDR=OFF"
   "AUDIO=PULSE"
   "ATU=OFF"
   "COPYMODE=OFF"
 )
+
+if [[ ${LEGACY_GPIO_AVAILABLE} -eq 1 ]]; then
+  MAKE_ARGS+=("GPIO=ON")
+fi
 
 {
   echo "=== $(date -Is) make probe start ==="

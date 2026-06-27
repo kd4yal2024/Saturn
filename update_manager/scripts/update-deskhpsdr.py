@@ -68,7 +68,7 @@ def guard_repo_tree_python_execution():
 
 
 SCRIPT_NAME = "deskHPSDR Update"
-SCRIPT_VERSION = "1.0"
+SCRIPT_VERSION = "1.1"
 SCRIPT_START_TIME = datetime.now()
 TIMESTAMP = SCRIPT_START_TIME.strftime("%Y%m%d-%H%M%S")
 DESKHPSDR_DIR = Path.home() / "github" / "deskhpsdr"
@@ -148,6 +148,65 @@ def print_build_output(msg):
     logging.info(msg)
 
 
+class DependencyOutputFilter:
+    """Compact routine apt/debconf chatter while preserving build/install signal."""
+
+    def __init__(self):
+        self.in_autoremove_block = False
+        self.suppressed = 0
+        self.saw_autoremove_notice = False
+
+    def filter(self, line):
+        text = line.strip()
+        if not text:
+            return None
+
+        if self.in_autoremove_block:
+            self.suppressed += 1
+            if text.startswith("Use 'sudo apt autoremove'"):
+                self.in_autoremove_block = False
+            return None
+
+        if text.startswith("The following packages were automatically installed and are no longer required"):
+            self.in_autoremove_block = True
+            self.saw_autoremove_notice = True
+            self.suppressed += 1
+            return None
+
+        if text.startswith("debconf:"):
+            self.suppressed += 1
+            return None
+
+        if text.startswith("WARNING: apt does not have a stable CLI interface"):
+            self.suppressed += 1
+            return None
+
+        if text in (
+            "Reading package lists...",
+            "Building dependency tree...",
+            "Reading state information...",
+        ):
+            self.suppressed += 1
+            return None
+
+        if re.fullmatch(
+            r"0 upgraded, 0 newly installed, 0 to remove and \d+ not upgraded\.",
+            text,
+        ):
+            self.suppressed += 1
+            return None
+
+        return text
+
+
+def dependency_env():
+    env = os.environ.copy()
+    env["DEBIAN_FRONTEND"] = "noninteractive"
+    env["APT_LISTCHANGES_FRONTEND"] = "none"
+    env["NEEDRESTART_MODE"] = "a"
+    return env
+
+
 def progress_bar(pid, msg, total_steps):
     _ = total_steps
     if args.dry_run:
@@ -215,7 +274,7 @@ def init_logging(verbose=False):
         banner_text = "deskHPSDR\n"
     banner = f"""
 {Colors.RED}{banner_text.rstrip()}{Colors.END}
-{Colors.BLUE}{'Update Manager v1.0'.center(cols-2)}{Colors.END}\n\n"""
+{Colors.BLUE}{f'Update Manager v{SCRIPT_VERSION}'.center(cols-2)}{Colors.END}\n\n"""
     print(banner)
     print_info(f"Started: {SCRIPT_START_TIME}")
     print_info(f"Log: {log_file}")
@@ -564,6 +623,11 @@ def run_command(cmd, label, log_name):
         return
 
     if args.verbose:
+        output_filter = (
+            DependencyOutputFilter()
+            if log_name == "deskhpsdr_build_output"
+            else None
+        )
         with log_path.open("w", encoding="utf-8") as f:
             process = subprocess.Popen(
                 cmd,
@@ -572,15 +636,27 @@ def run_command(cmd, label, log_name):
                 text=True,
                 encoding="utf-8",
                 errors="replace",
+                env=dependency_env(),
             )
             if process.stdout is None:
                 print_error(f"{label} failed: no output stream")
             for raw_line in process.stdout:
+                f.write(raw_line)
                 line = raw_line.rstrip("\n")
+                if output_filter is not None:
+                    line = output_filter.filter(line)
+                elif not line.strip():
+                    line = None
                 if line:
                     print_build_output(line)
-                f.write(raw_line)
             return_code = process.wait()
+        if output_filter is not None:
+            if output_filter.suppressed:
+                print_info(
+                    f"Compacted dependency output: suppressed {output_filter.suppressed} routine apt/debconf lines"
+                )
+            if output_filter.saw_autoremove_notice:
+                print_warning("APT reports auto-removable packages; not running autoremove automatically")
     else:
         with log_path.open("w", encoding="utf-8") as f:
             process = subprocess.Popen(
@@ -590,6 +666,7 @@ def run_command(cmd, label, log_name):
                 text=True,
                 encoding="utf-8",
                 errors="replace",
+                env=dependency_env(),
             )
             return_code = progress_bar(process, label, 50)
 
