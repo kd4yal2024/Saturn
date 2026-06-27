@@ -29,6 +29,7 @@
 #define XVC_BAR_TDI_REG		0x8
 #define XVC_BAR_TDO_REG		0xC
 #define XVC_BAR_CTRL_REG	0x10
+#define XVC_MAX_BYTES		(1024U * 1024U)
 
 #ifdef __REG_DEBUG__
 /* SECTION: Function definitions */
@@ -122,6 +123,7 @@ static long xvc_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 	/* anything not copied ? */
 	if (rv) {
 		pr_info("copy_from_user xvc_obj failed: %d.\n", rv);
+		rv = -EFAULT;
 		goto cleanup;
 	}
 
@@ -134,9 +136,13 @@ static long xvc_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 	}
 
 	total_bits = xvc_obj.length;
+	if (!total_bits || total_bits > XVC_MAX_BYTES * 8) {
+		pr_info("Invalid XVC length %u bits.\n", total_bits);
+		return -EINVAL;
+	}
 	total_bytes = (total_bits + 7) >> 3;
 
-	buffer = kmalloc(total_bytes * 3, GFP_KERNEL);
+	buffer = kcalloc(3, total_bytes, GFP_KERNEL);
 	if (!buffer) {
 		pr_info("OOM %u, op 0x%x, len %u bits, %u bytes.\n",
 			3 * total_bytes, opcode, total_bits, total_bytes);
@@ -152,6 +158,7 @@ static long xvc_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 			total_bytes);
 	if (rv) {
 		pr_info("copy tmfs_buf failed: %d/%u.\n", rv, total_bytes);
+		rv = -EFAULT;
 		goto cleanup;
 	}
 	rv = copy_from_user((void *)tdi_buf,
@@ -159,6 +166,7 @@ static long xvc_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 			total_bytes);
 	if (rv) {
 		pr_info("copy tdi_buf failed: %d/%u.\n", rv, total_bytes);
+		rv = -EFAULT;
 		goto cleanup;
 	}
 
@@ -208,15 +216,20 @@ static long xvc_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 		tdi_buf = tmp;
 	}
 
-	rv = copy_to_user(xvc_obj.tdo_buf, (const void *)tdo_buf, total_bytes);
-	if (rv)
-		pr_info("copy back tdo_buf failed: %d/%u.\n", rv, total_bytes);
-
 unlock:
 #if HAS_MMIOWB
 	mmiowb();
 #endif
 	spin_unlock(&xcdev->lock);
+
+	if (rv < 0)
+		goto cleanup;
+
+	rv = copy_to_user(xvc_obj.tdo_buf, (const void *)tdo_buf, total_bytes);
+	if (rv) {
+		pr_info("copy back tdo_buf failed: %d/%u.\n", rv, total_bytes);
+		rv = -EFAULT;
+	}
 
 cleanup:
 	kfree(buffer);

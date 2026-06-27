@@ -165,6 +165,7 @@ static int probe_one(struct pci_dev *pdev, const struct pci_device_id *id)
 		rv = -EINVAL;
 		goto err_out;
 	}
+	xpdev->xdev = hndl;
 
 	if (xpdev->user_max > MAX_USER_IRQ) {
 		pr_err("Maximum users limit reached\n");
@@ -213,8 +214,6 @@ static int probe_one(struct pci_dev *pdev, const struct pci_device_id *id)
 		dev_name(&pdev->dev), xdev->idx, pdev, xpdev, xdev,
 		xpdev->user_max, xpdev->h2c_channel_max,
 		xpdev->c2h_channel_max);
-
-	xpdev->xdev = hndl;
 
 	rv = xpdev_create_interfaces(xpdev);
 	if (rv)

@@ -18,16 +18,18 @@
  */
 #define pr_fmt(fmt)	KBUILD_MODNAME ":%s: " fmt, __func__
 
+#include <linux/slab.h>
+
 #include "libxdma_api.h"
 #include "xdma_cdev.h"
 
 #define write_register(v, mem, off) iowrite32(v, mem)
+#define BYPASS_MAX_COPY_BYTES (1024U * 1024U)
 
-static int copy_desc_data(struct xdma_transfer *transfer, char __user *buf,
+static int copy_desc_data(struct xdma_transfer *transfer, char *buf,
 		size_t *buf_offset, size_t buf_size)
 {
 	int i;
-	int copy_err;
 	int rc = 0;
 
 	if (!buf) {
@@ -43,17 +45,9 @@ static int copy_desc_data(struct xdma_transfer *transfer, char __user *buf,
 	/* Fill user buffer with descriptor data */
 	for (i = 0; i < transfer->desc_num; i++) {
 		if (*buf_offset + sizeof(struct xdma_desc) <= buf_size) {
-			copy_err = copy_to_user(&buf[*buf_offset],
-				transfer->desc_virt + i,
+			memcpy(&buf[*buf_offset], transfer->desc_virt + i,
 				sizeof(struct xdma_desc));
-
-			if (copy_err) {
-				dbg_sg("Copy to user buffer failed\n");
-				*buf_offset = buf_size;
-				rc = -EINVAL;
-			} else {
-				*buf_offset += sizeof(struct xdma_desc);
-			}
+			*buf_offset += sizeof(struct xdma_desc);
 		} else {
 			rc = -ENOMEM;
 		}
@@ -72,6 +66,7 @@ static ssize_t char_bypass_read(struct file *file, char __user *buf,
 	struct list_head *idx;
 	size_t buf_offset = 0;
 	int rc = 0;
+	char *kbuf;
 
 	rc = xcdev_check(__func__, xcdev, 1);
 	if (rc < 0)
@@ -96,22 +91,40 @@ static ssize_t char_bypass_read(struct file *file, char __user *buf,
 		return -ENODEV;
 	}
 
+	if (!count)
+		return 0;
+
+	if (count > BYPASS_MAX_COPY_BYTES)
+		return -EINVAL;
+
+	kbuf = kzalloc(count, GFP_KERNEL);
+	if (!kbuf)
+		return -ENOMEM;
+
 	spin_lock(&engine->lock);
 
 	if (!list_empty(&engine->transfer_list)) {
 		list_for_each(idx, &engine->transfer_list) {
 			transfer = list_entry(idx, struct xdma_transfer, entry);
 
-			rc = copy_desc_data(transfer, buf, &buf_offset, count);
+			rc = copy_desc_data(transfer, kbuf, &buf_offset, count);
+			if (rc < 0)
+				break;
 		}
 	}
 
 	spin_unlock(&engine->lock);
 
 	if (rc < 0)
-		return rc;
+		goto out;
+
+	if (copy_to_user(buf, kbuf, buf_offset))
+		rc = -EFAULT;
 	else
-		return buf_offset;
+		rc = buf_offset;
+out:
+	kfree(kbuf);
+	return rc;
 }
 
 static ssize_t char_bypass_write(struct file *file, const char __user *buf,
@@ -125,7 +138,7 @@ static ssize_t char_bypass_write(struct file *file, const char __user *buf,
 	void __iomem *bypass_addr;
 	size_t buf_offset = 0;
 	int rc = 0;
-	int copy_err;
+	char *kbuf;
 
 	rc = xcdev_check(__func__, xcdev, 1);
 	if (rc < 0)
@@ -148,6 +161,21 @@ static ssize_t char_bypass_write(struct file *file, const char __user *buf,
 		return -ENODEV;
 	}
 
+	if (!count)
+		return 0;
+
+	if (count > BYPASS_MAX_COPY_BYTES)
+		return -EINVAL;
+
+	kbuf = kmalloc(count, GFP_KERNEL);
+	if (!kbuf)
+		return -ENOMEM;
+
+	if (copy_from_user(kbuf, buf, count)) {
+		kfree(kbuf);
+		return -EFAULT;
+	}
+
 	dbg_sg("In %s()\n", __func__);
 
 	spin_lock(&engine->lock);
@@ -155,25 +183,19 @@ static ssize_t char_bypass_write(struct file *file, const char __user *buf,
 	/* Write descriptor data to the bypass BAR */
 	bypass_addr = xdev->bar[xdev->bypass_bar_idx];
 	bypass_addr = (void __iomem *)(
-			(u32 __iomem *)bypass_addr + engine->bypass_offset
-			);
+				(u32 __iomem *)bypass_addr + engine->bypass_offset
+				);
 	while (buf_offset < count) {
-		copy_err = copy_from_user(&desc_data, &buf[buf_offset],
-			sizeof(u32));
-		if (!copy_err) {
-			write_register(desc_data, bypass_addr,
-					bypass_addr - engine->bypass_offset);
-			buf_offset += sizeof(u32);
-			rc = buf_offset;
-		} else {
-			dbg_sg("Error reading data from userspace buffer\n");
-			rc = -EINVAL;
-			break;
-		}
+		memcpy(&desc_data, &kbuf[buf_offset], sizeof(u32));
+		write_register(desc_data, bypass_addr,
+				bypass_addr - engine->bypass_offset);
+		buf_offset += sizeof(u32);
+		rc = buf_offset;
 	}
 
 	spin_unlock(&engine->lock);
 
+	kfree(kbuf);
 
 	return rc;
 }

@@ -19,6 +19,8 @@
 
 #define pr_fmt(fmt)     KBUILD_MODNAME ":%s: " fmt, __func__
 
+#include <linux/err.h>
+
 #include "xdma_cdev.h"
 
 static struct class *g_xdma_class;
@@ -235,9 +237,12 @@ static int create_sys_device(struct xdma_cdev *xcdev, enum cdev_type type)
 		xcdev->cdevno, NULL, devnode_names[type], xdev->idx,
 		last_param);
 
-	if (!xcdev->sys_device) {
+	if (IS_ERR_OR_NULL(xcdev->sys_device)) {
+		int rv = xcdev->sys_device ? PTR_ERR(xcdev->sys_device) : -ENODEV;
+
 		pr_err("device_create(%s) failed\n", devnode_names[type]);
-		return -1;
+		xcdev->sys_device = NULL;
+		return rv;
 	}
 
 	return 0;

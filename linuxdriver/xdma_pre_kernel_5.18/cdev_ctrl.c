@@ -30,6 +30,25 @@
 #define xlx_access_ok(X, Y, Z) access_ok(X, Y, Z)
 #endif
 
+static bool ctrl_bar_range_valid(struct xdma_dev *xdev,
+		struct xdma_cdev *xcdev, loff_t pos, size_t len)
+{
+	resource_size_t bar_len;
+
+	if (!xdev || !xdev->pdev || !xcdev || pos < 0)
+		return false;
+
+	if (xcdev->bar < 0 || xcdev->bar >= XDMA_BAR_NUM ||
+			!xdev->bar[xcdev->bar])
+		return false;
+
+	bar_len = pci_resource_len(xdev->pdev, xcdev->bar);
+	if (!bar_len || len > bar_len)
+		return false;
+
+	return (u64)pos <= bar_len - len;
+}
+
 /*
  * character device file operations for control bus (through control bridge)
  */
@@ -50,6 +69,10 @@ static ssize_t char_ctrl_read(struct file *fp, char __user *buf, size_t count,
 	/* only 32-bit aligned and 32-bit multiples */
 	if (*pos & 3)
 		return -EPROTO;
+	if (count < sizeof(w))
+		return -EINVAL;
+	if (!ctrl_bar_range_valid(xdev, xcdev, *pos, sizeof(w)))
+		return -EINVAL;
 	/* first address is BAR base plus file position offset */
 	reg = xdev->bar[xcdev->bar] + *pos;
 	//w = read_register(reg);
@@ -58,7 +81,7 @@ static ssize_t char_ctrl_read(struct file *fp, char __user *buf, size_t count,
 			__func__, reg, (long)count, (int)*pos, w);
 	rv = copy_to_user(buf, &w, 4);
 	if (rv)
-		dbg_sg("Copy to userspace failed but continuing\n");
+		return -EFAULT;
 
 	*pos += 4;
 	return 4;
@@ -81,12 +104,16 @@ static ssize_t char_ctrl_write(struct file *file, const char __user *buf,
 	/* only 32-bit aligned and 32-bit multiples */
 	if (*pos & 3)
 		return -EPROTO;
+	if (count < sizeof(w))
+		return -EINVAL;
+	if (!ctrl_bar_range_valid(xdev, xcdev, *pos, sizeof(w)))
+		return -EINVAL;
 
 	/* first address is BAR base plus file position offset */
 	reg = xdev->bar[xcdev->bar] + *pos;
 	rv = copy_from_user(&w, buf, 4);
 	if (rv)
-		pr_info("copy from user failed %d/4, but continuing.\n", rv);
+		return -EFAULT;
 
 	dbg_sg("%s(0x%08x @%p, count=%ld, pos=%d)\n",
 			__func__, w, reg, (long)count, (int)*pos);
@@ -200,6 +227,7 @@ int bridge_mmap(struct file *file, struct vm_area_struct *vma)
 	uint64_t phys;				// LVB 21/2/2021: must be 64 bit
 	uint64_t vsize;				// LVB 21/2/2021: must be 64 bit
 	uint64_t psize;				// LVB 21/2/2021: must be 64 bit
+	resource_size_t bar_len;
 	int rv;
 
 	rv = xcdev_check(__func__, xcdev, 0);
@@ -207,13 +235,16 @@ int bridge_mmap(struct file *file, struct vm_area_struct *vma)
 		return rv;
 	xdev = xcdev->xdev;
 
-	off = vma->vm_pgoff << PAGE_SHIFT;
+	off = (uint64_t)vma->vm_pgoff << PAGE_SHIFT;
+	vsize = vma->vm_end - vma->vm_start;
+	bar_len = pci_resource_len(xdev->pdev, xcdev->bar);
+	if (!bar_len || off >= bar_len || vsize > bar_len - off)
+		return -EINVAL;
+
 	/* BAR physical address */
 	phys = pci_resource_start(xdev->pdev, xcdev->bar) + off;
-	vsize = vma->vm_end - vma->vm_start;
 	/* complete resource */
-	psize = pci_resource_end(xdev->pdev, xcdev->bar) -
-		pci_resource_start(xdev->pdev, xcdev->bar) + 1 - off;
+	psize = bar_len - off;
 
 	dbg_sg("mmap(): xcdev = 0x%08lx\n", (unsigned long)xcdev);
 	dbg_sg("mmap(): cdev->bar = %d\n", xcdev->bar);
