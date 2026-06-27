@@ -31,6 +31,7 @@
 #include "../common/hwaccess.h"
 #include "../common/debugaids.h"
 #include "../common/p23_perf_telemetry.h"
+#include "../common/byteio.h"
 
 
 //
@@ -41,7 +42,8 @@
 
 #define VWBPACKETSIZE 1500                          // packet size is a variable, sp make max for UDP
 #define VWBSAMPLESPERFRAME 512                      // total wideband ADC samples in one WB packet
-#define VWBBYTESPERFRAME 2*VWBSAMPLESPERFRAME       // total bytes in one outgoing frame
+#define VWBBYTESPERSAMPLE 2                         // current wideband samples are 16-bit
+#define VWBBYTESPERFRAME (VWBBYTESPERSAMPLE*VWBSAMPLESPERFRAME)       // total bytes in one outgoing frame
 #define VWBPACKETOVERHEADBYTES 4                    // sequence counter
 #define VWBMAXPAYLOADBYTES (VWBPACKETSIZE - VWBPACKETOVERHEADBYTES)
 #define VWBFRAMEOFFSETBYTES 32                      // skip FPGA frame metadata before sample payload
@@ -80,7 +82,7 @@ static bool WidebandParamsFitBuffers(uint16_t SampleCount, uint8_t PacketCount)
     if((SampleCount == 0) || (PacketCount == 0))
         return false;
 
-    SampleBytes = (uint32_t)SampleCount * 2U;
+    SampleBytes = (uint32_t)SampleCount * VWBBYTESPERSAMPLE;
     if(SampleBytes > VWBMAXPAYLOADBYTES)
         return false;
 
@@ -182,7 +184,9 @@ void SetWidebandParams(uint8_t Enables, uint16_t SampleCount, uint8_t SampleSize
     pthread_mutex_unlock(&g_wideband_params_mutex);
 
     if(ParamsChanged)
-        printf("New WB data: Enables=%d, Sample/pkt = %d, Samplesize=%d, Rate=%d, PktCount=%d\n", SanitizedEnables, SampleCount, SampleSize, Rate, PacketCount);
+        printf("New WB data: Enables=%u raw=%u, Sample/pkt = %u, Samplesize=%u, Rate=%u, PktCount=%u\n",
+               (unsigned int)SanitizedEnables, (unsigned int)Enables, (unsigned int)SampleCount,
+               (unsigned int)SampleSize, (unsigned int)Rate, (unsigned int)PacketCount);
 }
 
 
@@ -253,6 +257,7 @@ void *OutgoingWidebandSamples(void *arg)
     bool LocalParamsChanged;
     uint8_t LocalEnables;
     uint16_t LocalSamplePerPktCount;
+    uint8_t LocalSampleSize;
     uint8_t LocalRate;
     uint8_t LocalPacketCount;
     uint32_t SampleWordCount;                                   // no of 64 bit words required
@@ -350,9 +355,21 @@ void *OutgoingWidebandSamples(void *arg)
                 WBParamsChanged = false;
             LocalEnables = StoredEnables;
             LocalSamplePerPktCount = StoredSamplePerPktCount;
+            LocalSampleSize = StoredSampleSize;
             LocalRate = StoredRate;
             LocalPacketCount = StoredPacketCount;
             pthread_mutex_unlock(&g_wideband_params_mutex);
+
+            if((LocalEnables != 0) && !WidebandParamsFitBuffers(LocalSamplePerPktCount, LocalPacketCount))
+            {
+                printf("Invalid WB runtime snapshot disabled: Enables=%u, Sample/pkt=%u, Samplesize=%u, Rate=%u, PktCount=%u\n",
+                       (unsigned int)LocalEnables, (unsigned int)LocalSamplePerPktCount,
+                       (unsigned int)LocalSampleSize, (unsigned int)LocalRate, (unsigned int)LocalPacketCount);
+                LocalParamsChanged = true;
+                LocalEnables = 0;
+                LocalSamplePerPktCount = 0;
+                LocalPacketCount = 0;
+            }
 //
 // if parameters have changed, halt then re-load configuration (strategy step 3)
 // (this will also work from a cold start)
@@ -398,14 +415,15 @@ void *OutgoingWidebandSamples(void *arg)
                     for(PacketCounter = 0; PacketCounter < LocalPacketCount; PacketCounter++)
                     {
                         int Error;
+                        uint32_t PacketPayloadBytes = (uint32_t)LocalSamplePerPktCount * VWBBYTESPERSAMPLE;
 
-                        *(uint32_t*)WBUDPBuffer[ADC] = htonl(SequenceCounter[ADC]++);     // add sequence count
+                        wr_be_u32(WBUDPBuffer[ADC], SequenceCounter[ADC]++);     // add sequence count
                         //
                         // now add I/Q data & send outgoing packet
                         //
-                        StartAddress = (PacketCounter * LocalSamplePerPktCount * 2) + 32;   // byte address; inset 4 words into recording
-                        memcpy(WBUDPBuffer[ADC] + 4, WBDMAReadBuffer + StartAddress, LocalSamplePerPktCount * 2);
-                        iovecinst[ADC].iov_len = LocalSamplePerPktCount * 2 + 4;           // P2 data dependent
+                        StartAddress = (PacketCounter * PacketPayloadBytes) + VWBFRAMEOFFSETBYTES;   // byte address; inset 4 words into recording
+                        memcpy(WBUDPBuffer[ADC] + VWBPACKETOVERHEADBYTES, WBDMAReadBuffer + StartAddress, PacketPayloadBytes);
+                        iovecinst[ADC].iov_len = PacketPayloadBytes + VWBPACKETOVERHEADBYTES;           // P2 data dependent
 
                         Socketfd = GetThreadSocketFD(ThreadData + ADC);
                         Error = sendmsg(Socketfd, &datagram[ADC], 0);

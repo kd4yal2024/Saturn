@@ -1056,6 +1056,29 @@ Verification:
   restarted `p2app.service`.
 - Confirmed `/p23_status` and `/p23_perf` returned `ok` after restart.
 
+### 42. Wideband packet writer follow-up cleanup
+
+Changed file:
+- `Outwideband.c`
+
+What changed:
+- Replaced the wideband UDP sequence-counter pointer cast with `wr_be_u32(...)`
+  from `byteio.h`.
+- Reused `VWBFRAMEOFFSETBYTES` in the packetization loop instead of hardcoding
+  the `32`-byte FPGA frame metadata offset.
+- Added a runtime guard before packetization so any future path that bypasses
+  `SetWidebandParams(...)` still fails closed before DMA-buffer or UDP-payload
+  copies.
+- Wideband diagnostics now show both sanitized enable bits and raw client
+  enable bits when parameters change.
+
+Why:
+- Keeps wideband packet writing consistent with the DDC I/Q byte-order
+  hardening.
+- Keeps the safety invariant close to the consumer as a defense-in-depth guard.
+- `SampleSize` remains stored and reported for protocol compatibility, but the
+  current wideband sender still uses the existing fixed 2-byte sample path.
+
 ## File List Changed In This Hardening Pass
 
 - `AriesATU.c`
