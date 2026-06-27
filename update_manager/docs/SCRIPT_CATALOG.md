@@ -9,7 +9,7 @@ Defined in `config.json` and surfaced by `/get_scripts`.
 | Script | Version | Purpose | Typical Flags |
 |---|---|---|---|
 | `update-G2.py` | `2.14` | Update Saturn repository and related components with backup options and privilege-aware behavior. | `--skip-git`, `-y`, `-n`, `--dry-run`, `--verbose` |
-| `update-pihpsdr.py` | `1.10` | Update/build piHPSDR repository with backup options. | `--skip-git`, `-y`, `-n`, `--no-gpio`, `--dry-run`, `--verbose` |
+| `update-pihpsdr.py` | `1.11` | Update/build piHPSDR repository with backup options. | `--skip-git`, `-y`, `-n`, `--no-gpio`, `--dry-run`, `--verbose` |
 | `update-deskhpsdr.py` | `1.0` | Clone/update/build deskHPSDR with backup options and helper-script-driven build/install-dependency behavior, including the local libgpiod v2 compatibility patch flow. | `--skip-git`, `-y`, `-n`, `--no-install-deps`, `--no-clean`, `--no-desktop-shortcut`, `--dry-run`, `--verbose` |
 | `log_cleaner.sh` | `3.00` | Find and optionally delete `*.log` files under home directory. | `--delete-all`, `--no-recursive`, `--dry-run` |
 | `restore-backup.sh` | `3.10` | Restore Saturn or piHPSDR from backup directories with list/latest/explicit selection support. | `--saturn`, `--pihpsdr`, `--latest`, `--list`, `--backup-dir`, `--backup-name`, `--dry-run`, `--verbose`, `--json` |

@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 # update-pihpsdr.py - piHPSDR Update Script
 # Automates cloning, updating, and building the pihpsdr repository
-# Version: 1.10
+# Version: 1.11
 # Written by: Jerry DeLong KD4YAL
 # Changes: Removed --show-compile flag, merged into --verbose, fixed make process output to display in CLI,
-#          changed make output color to white in CLI with --verbose, updated version to 1.10
+#          changed make output color to white in CLI with --verbose, compacted noisy dependency output,
+#          updated version to 1.11
 # Dependencies: psutil (version 7.0.0) in ~/venv, optional pyfiglet, urllib.error
 # Usage: python3 /opt/saturn-go/scripts/update-pihpsdr.py
 
@@ -71,7 +72,7 @@ def guard_repo_tree_python_execution():
 
 # Script metadata
 SCRIPT_NAME = "piHPSDR Update"
-SCRIPT_VERSION = "1.10"
+SCRIPT_VERSION = "1.11"
 SCRIPT_START_TIME = datetime.now()
 TIMESTAMP = SCRIPT_START_TIME.strftime('%Y%m%d-%H%M%S')
 PIHPSDR_DIR = Path.home() / "github" / "pihpsdr"
@@ -143,6 +144,77 @@ def print_build_output(msg):
     print(msg)
     logging.info(msg)
 
+class DependencyOutputFilter:
+    """Compact routine apt/debconf chatter while preserving build/install signal."""
+    def __init__(self):
+        self.in_autoremove_block = False
+        self.suppressed = 0
+        self.saw_autoremove_notice = False
+
+    def filter(self, line):
+        text = line.strip()
+        if not text:
+            return None
+
+        if self.in_autoremove_block:
+            self.suppressed += 1
+            if text.startswith("Use 'sudo apt autoremove'"):
+                self.in_autoremove_block = False
+            return None
+
+        if text.startswith("The following packages were automatically installed and are no longer required"):
+            self.in_autoremove_block = True
+            self.saw_autoremove_notice = True
+            self.suppressed += 1
+            return None
+
+        if text.startswith("debconf:"):
+            self.suppressed += 1
+            return None
+
+        if text.startswith("WARNING: apt does not have a stable CLI interface"):
+            self.suppressed += 1
+            return None
+
+        if text in (
+            "Reading package lists...",
+            "Building dependency tree...",
+            "Reading state information...",
+        ):
+            self.suppressed += 1
+            return None
+
+        if re.fullmatch(
+            r"0 upgraded, 0 newly installed, 0 to remove and \d+ not upgraded\.",
+            text,
+        ):
+            self.suppressed += 1
+            return None
+
+        if text == "rm: cannot remove 'SoapySDR': No such file or directory":
+            self.suppressed += 1
+            return None
+
+        return text
+
+def dependency_env():
+    env = os.environ.copy()
+    env["DEBIAN_FRONTEND"] = "noninteractive"
+    env["APT_LISTCHANGES_FRONTEND"] = "none"
+    env["NEEDRESTART_MODE"] = "a"
+    return env
+
+def stream_process_output(process, output_filter=None):
+    for raw_line in process.stdout:
+        line = raw_line.rstrip("\n")
+        if output_filter is not None:
+            line = output_filter.filter(line)
+        elif not line.strip():
+            line = None
+        if line:
+            print_build_output(line)
+    return process.wait()
+
 def progress_bar(pid, msg, total_steps):
     if args.dry_run:
         print_info(f"[Dry Run] Simulating progress for: {msg}")
@@ -208,7 +280,7 @@ def init_logging(verbose=False):
         pihpsdr_ascii = "piHPSDR\n"
     banner = f"""
 {Colors.RED}{pihpsdr_ascii.rstrip()}{Colors.END}
-{Colors.BLUE}{'Update Manager v1.10'.center(cols-2)}{Colors.END}\n\n"""
+{Colors.BLUE}{f'Update Manager v{SCRIPT_VERSION}'.center(cols-2)}{Colors.END}\n\n"""
     logging.debug(f"Banner raw output: {repr(banner)}")
     print(banner)
     print_info(f"Started: {SCRIPT_START_TIME}")
@@ -474,18 +546,34 @@ def build_pihpsdr():
                 try:
                     if not args.dry_run:
                         if args.verbose:
-                            process = subprocess.Popen(["bash", str(libinstall_script)], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, universal_newlines=True)
-                            while process.poll() is None:
-                                line = process.stdout.readline().strip()
-                                if line:
-                                    print_build_output(line)
-                            return_code = process.wait()
+                            output_filter = DependencyOutputFilter()
+                            process = subprocess.Popen(
+                                ["bash", str(libinstall_script)],
+                                stdout=subprocess.PIPE,
+                                stderr=subprocess.STDOUT,
+                                text=True,
+                                universal_newlines=True,
+                                env=dependency_env(),
+                            )
+                            return_code = stream_process_output(process, output_filter)
+                            if output_filter.suppressed:
+                                print_info(
+                                    f"Compacted dependency output: suppressed {output_filter.suppressed} routine apt/debconf lines"
+                                )
+                            if output_filter.saw_autoremove_notice:
+                                print_warning("APT reports auto-removable packages; not running autoremove automatically")
                             if return_code != 0:
                                 print_error(f"Dependency installation failed: Check log for details")
                         else:
                             libinstall_log = temp_log_path("libinstall_output")
                             with libinstall_log.open("w") as f:
-                                process = subprocess.Popen(["bash", str(libinstall_script)], stdout=f, stderr=f, text=True)
+                                process = subprocess.Popen(
+                                    ["bash", str(libinstall_script)],
+                                    stdout=f,
+                                    stderr=f,
+                                    text=True,
+                                    env=dependency_env(),
+                                )
                                 return_code = progress_bar(process, "Installing dependencies", 50)
                                 if return_code != 0:
                                     error_output = libinstall_log.read_text(errors="replace").strip()

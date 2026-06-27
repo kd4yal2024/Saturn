@@ -305,6 +305,7 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
 - G2 terminal runner now passes Appliance Update policy repo/remote/ref into `update-G2.py`, and `update-G2.py` now applies that policy by setting the git remote URL before pulling.
 - `update-G2.py` and `update-pihpsdr.py` now refuse execution when run from inside the Saturn repo tree, preventing accidental repo-local Python runs.
 - `update-pihpsdr.py`: prevented startup crash on non-UTF-8 (`latin-1`) stdout/stderr/log streams by adding per-stream Unicode fallback output and explicit UTF-8 log file writes.
+- `update-pihpsdr.py`: verbose dependency installation now runs apt/debconf in noninteractive mode and compacts routine apt autoremove/debconf noise instead of flooding the piHPSDR terminal log.
 - `update-saturn-go.sh`: fixed `--dry-run` staging-helper generation error when the staged directory is intentionally not created.
 - `update-saturn-go.sh`: fixed detached root-helper status-file error handling/JSON quoting so `/saturngo_deploy_status` always returns valid JSON after deploy completion.
 - `p23-app-manager.sh`: dry-run deploy/switch no longer writes a temp override file (avoids failing when `/tmp` is full).

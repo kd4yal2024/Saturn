@@ -15,7 +15,7 @@
     "directory": "/opt/saturn-go/scripts",
     "category": "Update Scripts",
     "flags": ["--skip-git", "-y", "-n", "--no-gpio", "--dry-run", "--verbose"],
-    "version": "1.10"
+    "version": "1.11"
   },
   {
     "filename": "update-deskhpsdr.py",
