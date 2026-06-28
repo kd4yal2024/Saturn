@@ -286,6 +286,11 @@ REPO_ROOT="${SATURN_ACTIVE_REPO_ROOT:-${SATURN_REPO_ROOT:-}}"
 [[ -n "$REPO_ROOT" ]] || die "SATURN_ACTIVE_REPO_ROOT is not set"
 [[ -d "$REPO_ROOT/.git" ]] || die "Repo root is not a git checkout: $REPO_ROOT"
 [[ -d "$REPO_ROOT/update_manager" ]] || die "Repo root does not contain update_manager/: $REPO_ROOT"
+XDMA_FIX_SCRIPT_SRC="$REPO_ROOT/scripts/fix-xdma.sh"
+XDMA_POSTINST_HELPER_SRC="$REPO_ROOT/scripts/saturn-xdma-kernel-postinst.sh"
+XDMA_FIX_SCRIPT_INSTALL="${SATURN_XDMA_FIX_SCRIPT_INSTALL:-/usr/local/bin/saturn-fix-xdma.sh}"
+XDMA_POSTINST_HELPER_INSTALL="${SATURN_XDMA_POSTINST_HELPER_INSTALL:-/usr/local/bin/saturn-xdma-kernel-postinst.sh}"
+XDMA_POSTINST_HOOK_PATH="${SATURN_XDMA_POSTINST_HOOK_PATH:-/etc/kernel/postinst.d/saturn-xdma}"
 EXTRA_PACKAGED_SCRIPTS=(
   "$REPO_ROOT/scripts/fix-LED-power-button.sh"
   "$REPO_ROOT/scripts/install-shutdown-waiter-service.sh"
@@ -297,6 +302,8 @@ PRIVILEGED_HELPER_SCRIPTS=(
   "$REPO_ROOT/scripts/saturn-flash-fpga.sh"
   "$REPO_ROOT/scripts/saturn-xdma-doctor.sh"
   "$REPO_ROOT/scripts/saturn-xdma-stage-current.sh"
+  "$XDMA_FIX_SCRIPT_SRC"
+  "$XDMA_POSTINST_HELPER_SRC"
   "$REPO_ROOT/scripts/fix-LED-power-button.sh"
   "$REPO_ROOT/scripts/install-shutdown-waiter-service.sh"
   "$REPO_ROOT/scripts/shutdown-waiter.sh"
@@ -463,7 +470,7 @@ if (( ! DRY_RUN )); then
   find "$STAGE_PRIVILEGED_SCRIPTS_DIR" -maxdepth 1 -type f -print0 | xargs -0 -r chmod 755
   find "$STAGE_WEB_DIR" -maxdepth 1 -type f -print0 | xargs -0 -r chmod 644
 else
-  info "[dry-run] stage binary, web assets, packaged scripts, and privileged helpers under $STAGE_DIR"
+  info "[dry-run] stage binary, web assets, packaged scripts, privileged helpers, and XDMA postinst hook under $STAGE_DIR"
 fi
 
 # Copy web assets immediately so the UI updates even before the service restart.
@@ -483,6 +490,9 @@ SERVICE_NAME="$(printf '%s' "$SERVICE_NAME")"
 DEPLOY_RUN_USER="$(printf '%s' "$DEPLOY_RUN_USER")"
 DEPLOY_PRIVILEGED_SCRIPTS_DIR="$(printf '%s' "$DEPLOY_PRIVILEGED_SCRIPTS_DIR")"
 DEPLOY_SUDOERS_FILE="$(printf '%s' "$DEPLOY_SUDOERS_FILE")"
+XDMA_FIX_SCRIPT_INSTALL="$(printf '%s' "$XDMA_FIX_SCRIPT_INSTALL")"
+XDMA_POSTINST_HELPER_INSTALL="$(printf '%s' "$XDMA_POSTINST_HELPER_INSTALL")"
+XDMA_POSTINST_HOOK_PATH="$(printf '%s' "$XDMA_POSTINST_HOOK_PATH")"
 STARTED_AT="$(printf '%s' "$RUN_STARTED_AT")"
 json_escape(){
   local s="\${1-}"
@@ -543,6 +553,28 @@ for src in "$STAGE_PRIVILEGED_SCRIPTS_DIR/"*; do
   [[ -f "\$src" ]] || continue
   install -m 0755 -o root -g root "\$src" "$DEPLOY_PRIVILEGED_SCRIPTS_DIR/\$(basename "\$src")"
 done
+[[ -f "$STAGE_PRIVILEGED_SCRIPTS_DIR/fix-xdma.sh" ]] || { echo "Missing staged XDMA helper: $STAGE_PRIVILEGED_SCRIPTS_DIR/fix-xdma.sh" >&2; exit 1; }
+[[ -f "$STAGE_PRIVILEGED_SCRIPTS_DIR/saturn-xdma-kernel-postinst.sh" ]] || { echo "Missing staged XDMA postinst helper: $STAGE_PRIVILEGED_SCRIPTS_DIR/saturn-xdma-kernel-postinst.sh" >&2; exit 1; }
+install -D -m 0755 -o root -g root "$STAGE_PRIVILEGED_SCRIPTS_DIR/fix-xdma.sh" "\$XDMA_FIX_SCRIPT_INSTALL"
+install -D -m 0755 -o root -g root "$STAGE_PRIVILEGED_SCRIPTS_DIR/saturn-xdma-kernel-postinst.sh" "\$XDMA_POSTINST_HELPER_INSTALL"
+TMP_XDMA_HOOK="\$(mktemp)"
+cat >"\$TMP_XDMA_HOOK" <<HOOK
+#!/bin/sh
+set -eu
+HELPER="${XDMA_POSTINST_HELPER_INSTALL}"
+if [ -x "\$HELPER" ]; then
+  "\$HELPER" "\$@" || true
+fi
+exit 0
+HOOK
+if [[ ! -f "\$XDMA_POSTINST_HOOK_PATH" ]] || ! cmp -s "\$TMP_XDMA_HOOK" "\$XDMA_POSTINST_HOOK_PATH"; then
+  install -D -m 0755 -o root -g root "\$TMP_XDMA_HOOK" "\$XDMA_POSTINST_HOOK_PATH"
+fi
+rm -f "\$TMP_XDMA_HOOK"
+[[ -x "\$XDMA_FIX_SCRIPT_INSTALL" ]] || { echo "Installed XDMA fix helper is not executable: \$XDMA_FIX_SCRIPT_INSTALL" >&2; exit 1; }
+[[ -x "\$XDMA_POSTINST_HELPER_INSTALL" ]] || { echo "Installed XDMA postinst helper is not executable: \$XDMA_POSTINST_HELPER_INSTALL" >&2; exit 1; }
+[[ -x "\$XDMA_POSTINST_HOOK_PATH" ]] || { echo "Installed XDMA postinst hook is not executable: \$XDMA_POSTINST_HOOK_PATH" >&2; exit 1; }
+grep -Fq "\$XDMA_POSTINST_HELPER_INSTALL" "\$XDMA_POSTINST_HOOK_PATH" || { echo "XDMA postinst hook does not reference helper: \$XDMA_POSTINST_HELPER_INSTALL" >&2; exit 1; }
 cat >"$DEPLOY_SUDOERS_FILE" <<SUDOERS
 # Managed by update-saturn-go.sh
 Defaults:${DEPLOY_RUN_USER} secure_path="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
