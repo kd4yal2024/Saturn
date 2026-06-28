@@ -9,11 +9,13 @@ This folder contains the operational and technical documentation for the Rust-ba
 3. `API_REFERENCE.md`
 4. `SCRIPT_CATALOG.md`
 5. `OPERATIONS_RUNBOOK.md`
-6. `SATURN_REMOTE_STATE_STRIP_SPEC.md`
-7. `SATURN_REMOTE_APPLE_SAFARI_VALIDATION.md`
-8. `SATURN_REMOTE_APPLE_SAFARI_RESULTS.md`
-9. `SATURN_REMOTE_SQUELCH_AUDIO_PROFILE_CONTRACT.md`
-10. `SATURN_REMOTE_TX_UPLINK_PHASE38_CONTRACT.md`
+6. `RUST_SUPPLY_CHAIN.md`
+7. `XDMA_RELEASE_POLICY.md`
+8. `SATURN_REMOTE_STATE_STRIP_SPEC.md`
+9. `SATURN_REMOTE_APPLE_SAFARI_VALIDATION.md`
+10. `SATURN_REMOTE_APPLE_SAFARI_RESULTS.md`
+11. `SATURN_REMOTE_SQUELCH_AUDIO_PROFILE_CONTRACT.md`
+12. `SATURN_REMOTE_TX_UPLINK_PHASE38_CONTRACT.md`
 
 ## Document Guide
 
@@ -35,6 +37,13 @@ This folder contains the operational and technical documentation for the Rust-ba
 - `OPERATIONS_RUNBOOK.md`
   - Build, install, uninstall, daily operations, and troubleshooting.
   - Includes G2 Update page (G2 + Appliance Update), dedicated piHPSDR update flow, dedicated FPGA flash flow, browser-managed custom scripts flow, backup/restore flow, and service checks.
+
+- `RUST_SUPPLY_CHAIN.md`
+  - Rust dependency policy for `saturn-go` and `saturn-bridge`.
+  - Documents `cargo audit`, `cargo deny`, lockfile, and pinning expectations.
+
+- `XDMA_RELEASE_POLICY.md`
+  - DKMS package versioning, manual postinst-hook takeover, and rollback policy.
 
 - `SATURN_REMOTE_STATE_STRIP_SPEC.md`
   - `/remote-next` operator state strip contract: pill order, labels, density rules, escalation rules, and acceptance criteria.

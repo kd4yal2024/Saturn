@@ -11,6 +11,8 @@ service names still use `saturn-go` for compatibility with existing installs.
 - Backend endpoint reference: `docs/API_REFERENCE.md`
 - Script inventory and usage map: `docs/SCRIPT_CATALOG.md`
 - Build/install/operate/troubleshoot runbook: `docs/OPERATIONS_RUNBOOK.md`
+- Rust supply-chain policy: `docs/RUST_SUPPLY_CHAIN.md`
+- XDMA DKMS release policy: `docs/XDMA_RELEASE_POLICY.md`
 - Docs index: `docs/README.md`
 
 ## Features

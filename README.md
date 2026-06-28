@@ -111,6 +111,7 @@ Native and kernel components are still primarily build/runtime validated:
 make -C sw_projects/P2_app
 make -C sw_projects/P3_app
 make -C linuxdriver/xdma
+sudo bash scripts/install-xdma-dkms.sh --dry-run
 ```
 
 The GitHub Actions workflow under `.github/workflows/ci.yml` is the first
@@ -119,6 +120,13 @@ baseline CI gate for these checks.
 ## XDMA Driver Policy
 
 The supported XDMA driver is `linuxdriver/xdma`.
+
+For field recovery, `scripts/fix-xdma.sh` remains the direct rebuild/install
+helper. For beta systems moving to standard kernel upgrade handling,
+`scripts/install-xdma-dkms.sh` stages the same supported source as a DKMS
+package named `saturn-xdma`. A successful DKMS install disables the legacy
+manual kernel postinst hook to avoid duplicate XDMA rebuilds during kernel
+package updates.
 
 The old `linuxdriver/xdma_pre_kernel_5.18` source tree has been retired for beta
 because it drifted behind the active hardened driver. If an old-kernel recovery

@@ -2,6 +2,20 @@
 
 All notable changes to `linuxdriver/xdma` are documented in this file.
 
+## 2026-06-28
+
+### Added
+- Added a DKMS package template at `linuxdriver/dkms/dkms.conf`.
+- Added `scripts/install-xdma-dkms.sh` to stage the supported XDMA source under
+  `/usr/src/saturn-xdma-2020.1.8-saturn`, register it with DKMS, and build the
+  module for a selected kernel.
+- The DKMS installer disables the legacy manual kernel postinst hook by default
+  after DKMS takes over, and supports `--uninstall` for rollback.
+
+### Changed
+- The DKMS installer refuses to reuse an already registered package/version
+  unless `--force` is used or the caller bumps `SATURN_XDMA_DKMS_VERSION`.
+
 ## 2026-06-15
 
 ### Fixed

@@ -37,6 +37,42 @@ jobs:
         run: cargo test --locked
         working-directory: ${{ matrix.crate }}
 
+  rust-supply-chain:
+    name: Rust supply chain
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache supply-chain tools
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/cargo-audit
+            ~/.cargo/bin/cargo-deny
+          key: ${{ runner.os }}-cargo-supply-chain-tools-v1
+
+      - name: Install supply-chain tools
+        run: |
+          command -v cargo-audit >/dev/null 2>&1 || cargo install cargo-audit --locked
+          command -v cargo-deny >/dev/null 2>&1 || cargo install cargo-deny --locked
+
+      - name: Audit and check dependency policy
+        run: |
+          for crate in update_manager/rust-server update_manager/saturn-bridge; do
+            echo "::group::${crate}"
+            (
+              cd "$crate"
+              cargo audit --deny warnings
+              cargo deny --config ../deny.toml check advisories bans sources
+            )
+            echo "::endgroup::"
+          done
+
+
   remote-web:
     name: Remote web
     runs-on: ubuntu-latest
@@ -79,6 +115,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y \
             build-essential \
+            dkms \
             linux-headers-$(uname -r) \
             libi2c-dev \
             libgpiod-dev \
@@ -96,3 +133,7 @@ jobs:
         run: make clean all
         working-directory: linuxdriver/xdma
 
+      - name: Check XDMA DKMS packaging
+        run: |
+          bash -n scripts/install-xdma-dkms.sh
+          scripts/install-xdma-dkms.sh --dry-run --kernel "$(uname -r)"

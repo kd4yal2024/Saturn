@@ -696,7 +696,7 @@ ensure_packages() {
   log "Installing build/runtime dependencies"
   apt_install \
     git rsync curl wget ca-certificates sudo \
-    build-essential pkg-config gcc g++ make \
+    build-essential pkg-config gcc g++ make dkms \
     python3 python3-venv python3-pip python3-psutil \
     gpiod libgpiod-dev libi2c-dev libgtk-3-dev libglib2.0-bin lxterminal \
     libasound2-dev libpulse-dev libusb-1.0-0-dev libcurl4-openssl-dev \

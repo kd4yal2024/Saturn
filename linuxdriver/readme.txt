@@ -79,6 +79,9 @@ Directory and file description:
  - include/: This directory contains all include files that are needed for
 	compiling driver.
 
+ - dkms/: This directory contains the Saturn XDMA DKMS package template used by
+       scripts/install-xdma-dkms.sh.
+
  - tests/: This directory contains example application software to exercise the
 	provided kernel module driver and Xilinx PCIe DMA IP. This directory
 	also contains the following scripts and directories.
@@ -128,6 +131,19 @@ Usage:
     This script installs matching headers when needed, rebuilds the driver for
     the running kernel, and if a newer kernel of the same Raspberry Pi flavor
     is already installed, also stages XDMA for that next kernel before reboot.
+
+  - DKMS-managed install path:
+        sudo bash /home/pi/github/Saturn/scripts/install-xdma-dkms.sh --force
+
+    This stages the supported xdma/ source plus include/ headers under
+    /usr/src/saturn-xdma-2020.1.8-saturn, registers it with DKMS, and builds
+    xdma.ko for the selected kernel. Use this path for systems where future
+    kernel package installs should trigger standard DKMS rebuilds. A successful
+    DKMS install disables /etc/kernel/postinst.d/saturn-xdma to avoid duplicate
+    manual and DKMS rebuilds on kernel package updates.
+
+    To remove the DKMS package and staged source:
+        sudo bash /home/pi/github/Saturn/scripts/install-xdma-dkms.sh --uninstall
 
   - get the kernel headers so the kernel module can compile: 
     (note if this fails you will need to use an older OS release, or rebuild the kernel 
