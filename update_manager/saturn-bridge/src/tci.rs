@@ -17,6 +17,7 @@ use tungstenite::{accept_with_config, Message};
 
 use crate::config::BridgeConfig;
 use crate::radio_model::{AgcMode, DemodMode, NoiseBlankerMode, NoiseReductionMode, RadioModel};
+use crate::sync_ext::MutexExt;
 use crate::tx_codec::{
     tx_codec_frame_is_stale, TxCodecDecoder, TxCodecRuntimeFlags, TxDecodeError, TxMicCodec,
 };
@@ -284,7 +285,7 @@ impl ClientSchedulerStats {
             return;
         }
         let latency_us = latency.as_micros().min(u128::from(u64::MAX)) as u64;
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = self.inner.lock_unpoisoned();
         match class {
             OutboundClass::Safety => inner.safety_latencies_us.push(latency_us),
             OutboundClass::Control => inner.control_latencies_us.push(latency_us),
@@ -293,41 +294,41 @@ impl ClientSchedulerStats {
     }
 
     fn record_display_replaced(&self) {
-        self.inner.lock().unwrap().display_replaced += 1;
+        self.inner.lock_unpoisoned().display_replaced += 1;
     }
 
     fn record_display_dropped(&self) {
-        self.inner.lock().unwrap().display_dropped += 1;
+        self.inner.lock_unpoisoned().display_dropped += 1;
     }
 
     fn record_audio_dropped(&self, count: u64) {
-        self.inner.lock().unwrap().audio_dropped += count;
+        self.inner.lock_unpoisoned().audio_dropped += count;
     }
 
     fn record_audio_panic_drain(&self) {
-        self.inner.lock().unwrap().audio_panic_drain += 1;
+        self.inner.lock_unpoisoned().audio_panic_drain += 1;
     }
 
     fn record_send_blocked(&self, duration: Duration) {
-        self.inner.lock().unwrap().send_blocked_ms += duration.as_millis().max(1) as u64;
+        self.inner.lock_unpoisoned().send_blocked_ms += duration.as_millis().max(1) as u64;
     }
 
     fn record_high_watermark(&self, bytes: usize) {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = self.inner.lock_unpoisoned();
         inner.outbound_high_watermark_bytes = inner.outbound_high_watermark_bytes.max(bytes as u64);
     }
 
     fn record_tcp_outq_high_watermark(&self, bytes: usize) {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = self.inner.lock_unpoisoned();
         inner.tcp_outq_high_watermark_bytes = inner.tcp_outq_high_watermark_bytes.max(bytes as u64);
     }
 
     fn record_safety_queue_depth_overflow(&self) {
-        self.inner.lock().unwrap().safety_queue_depth_overflow += 1;
+        self.inner.lock_unpoisoned().safety_queue_depth_overflow += 1;
     }
 
     fn drain(&self) -> ClientSchedulerStatsDelta {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = self.inner.lock_unpoisoned();
         ClientSchedulerStatsDelta {
             safety_latencies_us: std::mem::take(&mut inner.safety_latencies_us),
             control_latencies_us: std::mem::take(&mut inner.control_latencies_us),
@@ -385,14 +386,14 @@ impl ClientOutbound {
     }
 
     fn mark_writer_started(&self) {
-        self.queues.lock().unwrap().writer_started = true;
+        self.queues.lock_unpoisoned().writer_started = true;
     }
 
     fn enqueue(&self, message: OutboundMessage) -> u64 {
         let mut message = message;
         let class = message.class();
         let mut dropped = 0;
-        let mut queues = self.queues.lock().unwrap();
+        let mut queues = self.queues.lock_unpoisoned();
 
         if class == OutboundClass::Audio {
             queues.audio_sequence = queues.audio_sequence.wrapping_add(1).max(1);
@@ -467,7 +468,7 @@ impl ClientOutbound {
     }
 
     fn next_message(&self, allow_bulk: bool) -> Option<QueuedOutbound> {
-        let mut queues = self.queues.lock().unwrap();
+        let mut queues = self.queues.lock_unpoisoned();
         let item = if let Some(item) = queues.safety.pop_front() {
             Some(item)
         } else if let Some(item) = queues.control.pop_front() {
@@ -490,7 +491,7 @@ impl ClientOutbound {
     }
 
     fn requeue_front(&self, item: QueuedOutbound) {
-        let mut queues = self.queues.lock().unwrap();
+        let mut queues = self.queues.lock_unpoisoned();
         queues.queued_bytes = queues.queued_bytes.saturating_add(item.estimated_bytes);
         match item.class {
             OutboundClass::Safety => queues.safety.push_front(item),
@@ -1137,12 +1138,12 @@ impl TciFrontend {
     }
 
     pub fn has_phase42_paired_session(&self) -> bool {
-        let clients = self.clients.lock().unwrap();
+        let clients = self.clients.lock_unpoisoned();
         phase42_paired_session_count(&clients) > 0
     }
 
     pub fn last_operator_control_at(&self) -> Option<Instant> {
-        *self.operator_control_at.lock().unwrap()
+        *self.operator_control_at.lock_unpoisoned()
     }
 
     pub fn clear_phase42_release_window(&self) {
@@ -1167,7 +1168,7 @@ impl TciFrontend {
     }
 
     pub fn client_snapshot(&self) -> TciClientSnapshot {
-        let clients = self.clients.lock().unwrap();
+        let clients = self.clients.lock_unpoisoned();
         let now = Instant::now();
         let mut safety_latencies_us = Vec::new();
         let mut control_latencies_us = Vec::new();
@@ -1580,7 +1581,7 @@ impl TciFrontend {
             return true;
         }
         let now = Instant::now();
-        let mut last = self.last_display_frame_at.lock().unwrap();
+        let mut last = self.last_display_frame_at.lock_unpoisoned();
         if last
             .map(|sent_at| now.duration_since(sent_at) >= self.display_frame_interval)
             .unwrap_or(true)
@@ -1627,7 +1628,7 @@ impl TciFrontend {
 
     fn send_message(&self, message: OutboundMessage) {
         let tx_media_priority_active = self.tx_media_priority_active();
-        let clients = self.clients.lock().unwrap();
+        let clients = self.clients.lock_unpoisoned();
         for client in clients.values() {
             if !client_wants_outbound_message(client, &message, tx_media_priority_active) {
                 continue;
@@ -1702,7 +1703,7 @@ fn handle_client(
             );
 
             for message in initial_snapshot_messages(
-                &radio_model.lock().unwrap(),
+                &radio_model.lock_unpoisoned(),
                 remote_tx_rf_enabled,
                 client_id,
                 role,
@@ -1841,7 +1842,7 @@ fn handle_client(
 
             let disconnect = unregister_client(clients, operator_client_id, client_id);
             if disconnect.was_operator {
-                *operator_control_at.lock().unwrap() = None;
+                *operator_control_at.lock_unpoisoned() = None;
                 let _ = command_tx.send(TciCommand::SetTxEnabled(false));
             }
             if disconnect.phase42_media_loss_forces_rx {
@@ -1889,7 +1890,7 @@ fn register_client(
     outbound: Arc<ClientOutbound>,
     tx_codec_runtime_flags: TxCodecRuntimeFlags,
 ) -> (TciClientRole, bool, usize) {
-    let mut clients = clients.lock().unwrap();
+    let mut clients = clients.lock_unpoisoned();
     let first_client = clients.is_empty();
     clients.insert(
         client_id,
@@ -1914,7 +1915,7 @@ fn unregister_client(
     operator_client_id: &Arc<AtomicU64>,
     client_id: u64,
 ) -> ClientDisconnect {
-    let mut clients = clients.lock().unwrap();
+    let mut clients = clients.lock_unpoisoned();
     let current_operator = operator_client_id.load(Ordering::SeqCst);
     let phase42_media_loss_forces_rx =
         phase42_media_client_paired_with_operator_in_clients(&clients, current_operator, client_id);
@@ -2086,7 +2087,7 @@ fn handle_incoming_message(
     match message {
         Message::Text(text) => {
             if is_operator {
-                *operator_control_at.lock().unwrap() = Some(Instant::now());
+                *operator_control_at.lock_unpoisoned() = Some(Instant::now());
             }
             for command in text
                 .split(';')
@@ -2953,7 +2954,7 @@ fn phase42_paired_media_client_id(
 }
 
 fn set_client_iq_stream_enabled(clients: &ClientRegistry, client_id: u64, enabled: bool) -> bool {
-    let mut clients = clients.lock().unwrap();
+    let mut clients = clients.lock_unpoisoned();
     if let Some(client) = clients.get_mut(&client_id) {
         client.state.iq_stream_enabled = enabled;
     }
@@ -2975,7 +2976,7 @@ fn set_client_audio_stream_enabled(
     client_id: u64,
     enabled: bool,
 ) -> bool {
-    let mut clients = clients.lock().unwrap();
+    let mut clients = clients.lock_unpoisoned();
     if let Some(client) = clients.get_mut(&client_id) {
         client.state.audio_stream_enabled = enabled;
     }
@@ -2991,7 +2992,7 @@ fn set_client_audio_stream_enabled(
 }
 
 fn set_client_audio_sample_rate(clients: &ClientRegistry, client_id: u64, sample_rate_hz: u32) {
-    let mut clients = clients.lock().unwrap();
+    let mut clients = clients.lock_unpoisoned();
     if let Some(client) = clients.get_mut(&client_id) {
         client.state.audio_sample_rate_hz = sample_rate_hz;
     }
@@ -3003,7 +3004,7 @@ fn set_client_audio_sample_rate(clients: &ClientRegistry, client_id: u64, sample
 }
 
 fn set_client_audio_frame_float_count(clients: &ClientRegistry, client_id: u64, sample_count: u32) {
-    let mut clients = clients.lock().unwrap();
+    let mut clients = clients.lock_unpoisoned();
     if let Some(client) = clients.get_mut(&client_id) {
         client.state.audio_frame_float_count = sample_count;
     }
@@ -3015,7 +3016,7 @@ fn set_client_audio_frame_float_count(clients: &ClientRegistry, client_id: u64, 
 }
 
 fn set_client_audio_channels(clients: &ClientRegistry, client_id: u64, channels: u32) {
-    let mut clients = clients.lock().unwrap();
+    let mut clients = clients.lock_unpoisoned();
     if let Some(client) = clients.get_mut(&client_id) {
         client.state.audio_channels = channels;
     }
@@ -3027,7 +3028,7 @@ fn set_client_audio_channels(clients: &ClientRegistry, client_id: u64, channels:
 }
 
 fn set_client_audio_seq_gap_count(clients: &ClientRegistry, client_id: u64, gaps: u64) {
-    if let Some(client) = clients.lock().unwrap().get_mut(&client_id) {
+    if let Some(client) = clients.lock_unpoisoned().get_mut(&client_id) {
         client.state.audio_seq_gap_count = gaps;
     }
 }
@@ -3041,7 +3042,7 @@ fn set_client_phase42_session_open(
     let Some(session_id) = normalize_phase42_session_id(session_id) else {
         return false;
     };
-    let mut clients = clients.lock().unwrap();
+    let mut clients = clients.lock_unpoisoned();
     let Some(client) = clients.get_mut(&client_id) else {
         return false;
     };
@@ -3070,7 +3071,7 @@ fn set_client_phase42_session_lane(
     let Some(session_id) = normalize_phase42_session_id(session_id) else {
         return false;
     };
-    let mut clients = clients.lock().unwrap();
+    let mut clients = clients.lock_unpoisoned();
     let Some(client) = clients.get_mut(&client_id) else {
         return false;
     };
@@ -3094,7 +3095,7 @@ fn phase42_session_pair_for_client(
     clients: &ClientRegistry,
     client_id: u64,
 ) -> Option<Phase42SessionPair> {
-    let clients = clients.lock().unwrap();
+    let clients = clients.lock_unpoisoned();
     let session_id = clients
         .get(&client_id)?
         .state
@@ -3114,7 +3115,7 @@ fn phase42_media_client_can_supply_mic(
     if operator_client_id == 0 || operator_client_id == media_client_id {
         return false;
     }
-    let clients = clients.lock().unwrap();
+    let clients = clients.lock_unpoisoned();
     let Some(pair) = phase42_session_pair_for_client_in_clients(&clients, media_client_id) else {
         return false;
     };
@@ -3192,7 +3193,7 @@ fn set_phase42_media_ignore_until(
     if operator_client_id == 0 {
         return 0;
     }
-    let mut clients = clients.lock().unwrap();
+    let mut clients = clients.lock_unpoisoned();
     let Some(operator_session_id) = clients
         .get(&operator_client_id)
         .and_then(|client| client.state.phase42.as_ref())
@@ -3289,7 +3290,7 @@ fn set_client_tx_uplink_stats(
     buffered_bytes: u64,
     high_watermark_bytes: u64,
 ) {
-    if let Some(client) = clients.lock().unwrap().get_mut(&client_id) {
+    if let Some(client) = clients.lock_unpoisoned().get_mut(&client_id) {
         client.state.tx_uplink_degraded = degraded;
         client.state.tx_mic_browser_last_seq = last_seq;
         client.state.tx_mic_browser_dropped_count = dropped_count;
@@ -3366,7 +3367,7 @@ fn set_client_tx_codec_caps(
     client_id: u64,
     caps: BTreeSet<TxMicCodec>,
 ) -> Option<TxMicCodec> {
-    let mut clients = clients.lock().unwrap();
+    let mut clients = clients.lock_unpoisoned();
     let flags = clients
         .get(&client_id)
         .map(|client| client.state.tx_codec_runtime_flags)
@@ -3400,7 +3401,7 @@ fn send_text_to_client(clients: &ClientRegistry, client_id: u64, text: String) {
 
 fn send_safety_text_to_client_or_control(clients: &ClientRegistry, client_id: u64, text: String) {
     let outbound = {
-        let clients = clients.lock().unwrap();
+        let clients = clients.lock_unpoisoned();
         let target_client_id = clients
             .get(&client_id)
             .and_then(|client| client.state.phase42.as_ref())
@@ -3420,7 +3421,7 @@ fn send_safety_text_to_client_or_control(clients: &ClientRegistry, client_id: u6
 }
 
 fn reset_client_tx_uplink_attempt(clients: &ClientRegistry, client_id: u64) {
-    if let Some(client) = clients.lock().unwrap().get_mut(&client_id) {
+    if let Some(client) = clients.lock_unpoisoned().get_mut(&client_id) {
         client.state.tx_uplink_degraded = false;
         client.state.tx_mic_browser_last_seq = 0;
         client.state.tx_mic_browser_dropped_count = 0;
@@ -3456,7 +3457,7 @@ fn record_client_tx_codec_decode_error_at(
     let limit = TX_CODEC_DECODE_ERROR_FORCE_RX_LIMIT;
     let mut count = 0;
     let mut force_rx = false;
-    if let Some(client) = clients.lock().unwrap().get_mut(&client_id) {
+    if let Some(client) = clients.lock_unpoisoned().get_mut(&client_id) {
         client.state.tx_codec_decode_error_count =
             client.state.tx_codec_decode_error_count.saturating_add(1);
         let reset_window = client
@@ -3488,7 +3489,7 @@ fn record_client_tx_codec_decode_error_at(
 }
 
 fn record_client_tx_codec_stale_drop(clients: &ClientRegistry, client_id: u64) {
-    if let Some(client) = clients.lock().unwrap().get_mut(&client_id) {
+    if let Some(client) = clients.lock_unpoisoned().get_mut(&client_id) {
         client.state.tx_codec_stale_drop_count =
             client.state.tx_codec_stale_drop_count.saturating_add(1);
     }
@@ -3498,7 +3499,7 @@ fn flush_client_tx_codec_decode_queue(clients: &ClientRegistry, operator_client_
     if operator_client_id == 0 {
         return false;
     }
-    let mut clients = clients.lock().unwrap();
+    let mut clients = clients.lock_unpoisoned();
     let Some(operator) = clients.get_mut(&operator_client_id) else {
         return false;
     };
@@ -3524,7 +3525,7 @@ fn record_client_tx_mic_frame(
     sequence: u32,
     received_at: Instant,
 ) {
-    if let Some(client) = clients.lock().unwrap().get_mut(&client_id) {
+    if let Some(client) = clients.lock_unpoisoned().get_mut(&client_id) {
         client.state.tx_mic_last_arrived_at = Some(received_at);
         if sequence == 0 {
             return;
@@ -3688,7 +3689,7 @@ fn parse_tci_mic_frame_result_for_client(
 ) -> Result<TciMicFrame, TciMicFrameParseError> {
     let parts = parse_tci_mic_frame_parts(data)?;
     let decoder = {
-        let clients = clients.lock().unwrap();
+        let clients = clients.lock_unpoisoned();
         let Some(client) = clients.get(&client_id) else {
             return Err(TciMicFrameParseError::Malformed);
         };
@@ -3697,7 +3698,7 @@ fn parse_tci_mic_frame_result_for_client(
         }
         client.state.tx_codec_decoder.clone()
     };
-    let mut decoder = decoder.lock().unwrap();
+    let mut decoder = decoder.lock_unpoisoned();
     decode_tci_mic_frame_parts(parts, &mut decoder)
 }
 
@@ -4242,7 +4243,7 @@ mod tests {
 
         assert!(rx.try_recv().is_err());
         let outbound = {
-            let clients = clients.lock().unwrap();
+            let clients = clients.lock_unpoisoned();
             let client = clients.get(&7).unwrap();
             assert!(client.state.tx_codec_caps.contains(&TxMicCodec::Pcm));
             assert_eq!(client.state.tx_codec_active, TxMicCodec::Pcm);
@@ -4260,7 +4261,7 @@ mod tests {
     fn phase44_tx_codec_caps_mirror_from_control_to_paired_media() {
         let (tx, rx) = mpsc::channel();
         let clients = test_client_registry(73);
-        clients.lock().unwrap().insert(
+        clients.lock_unpoisoned().insert(
             74,
             ClientConnection {
                 outbound: ClientOutbound::new(),
@@ -4274,14 +4275,14 @@ mod tests {
 
         parse_tci_command("tx_codec_caps:0,pcm;", &tx, &clients, 73, true);
 
-        let clients = clients.lock().unwrap();
+        let clients = clients.lock_unpoisoned();
         let control = clients.get(&73).unwrap();
         let media = clients.get(&74).unwrap();
         assert_eq!(control.state.tx_codec_active, TxMicCodec::Pcm);
         assert_eq!(media.state.tx_codec_active, TxMicCodec::Pcm);
         assert!(media.state.tx_codec_negotiated_at.is_some());
         assert_eq!(
-            media.state.tx_codec_decoder.lock().unwrap().codec(),
+            media.state.tx_codec_decoder.lock_unpoisoned().codec(),
             TxMicCodec::Pcm
         );
     }
@@ -4295,7 +4296,7 @@ mod tests {
 
         assert!(rx.try_recv().is_err());
         let outbound = {
-            let clients = clients.lock().unwrap();
+            let clients = clients.lock_unpoisoned();
             let client = clients.get(&7).unwrap();
             assert!(client.state.tx_codec_caps.contains(&TxMicCodec::OpusWb));
             assert_eq!(client.state.tx_codec_active, TxMicCodec::Pcm);
@@ -4330,13 +4331,13 @@ mod tests {
 
         assert!(rx.try_recv().is_err());
         let outbound = {
-            let clients = clients.lock().unwrap();
+            let clients = clients.lock_unpoisoned();
             let client = clients.get(&7).unwrap();
             assert!(client.state.tx_codec_caps.contains(&TxMicCodec::OpusWb));
             assert_eq!(client.state.tx_codec_active, TxMicCodec::OpusWb);
             assert!(client.state.tx_codec_negotiated_at.is_some());
             assert_eq!(
-                client.state.tx_codec_decoder.lock().unwrap().codec(),
+                client.state.tx_codec_decoder.lock_unpoisoned().codec(),
                 TxMicCodec::OpusWb
             );
             client.outbound.clone()
@@ -4364,7 +4365,7 @@ mod tests {
             7,
         ));
 
-        assert!(operator_control_at.lock().unwrap().is_some());
+        assert!(operator_control_at.lock_unpoisoned().is_some());
     }
 
     #[test]
@@ -4383,7 +4384,7 @@ mod tests {
             7,
         ));
 
-        assert!(operator_control_at.lock().unwrap().is_none());
+        assert!(operator_control_at.lock_unpoisoned().is_none());
     }
 
     #[test]
@@ -4402,7 +4403,7 @@ mod tests {
             7,
         ));
 
-        assert!(operator_control_at.lock().unwrap().is_none());
+        assert!(operator_control_at.lock_unpoisoned().is_none());
     }
 
     #[test]
@@ -4524,7 +4525,7 @@ mod tests {
         parse_tci_command("session_open:phase-42,viewer;", &tx, &clients, 52, false);
 
         {
-            let clients = clients.lock().unwrap();
+            let clients = clients.lock_unpoisoned();
             let phase42 = clients.get(&52).unwrap().state.phase42.as_ref().unwrap();
             assert_eq!(phase42.session_id, "phase-42");
             assert_eq!(phase42.lane, Some(Phase42SocketKind::Media));
@@ -4547,7 +4548,7 @@ mod tests {
             false,
         );
         assert!(rx.try_recv().is_err());
-        let clients = clients.lock().unwrap();
+        let clients = clients.lock_unpoisoned();
         let phase42 = clients.get(&52).unwrap().state.phase42.as_ref().unwrap();
         assert_eq!(phase42.session_id, "phase-42");
         assert_eq!(phase42.lane, Some(Phase42SocketKind::Media));
@@ -4557,7 +4558,7 @@ mod tests {
     fn phase42_pairing_status_derives_from_client_metadata() {
         let (tx, rx) = mpsc::channel();
         let clients = test_client_registry(61);
-        clients.lock().unwrap().insert(
+        clients.lock_unpoisoned().insert(
             62,
             ClientConnection {
                 outbound: ClientOutbound::new(),
@@ -4578,7 +4579,7 @@ mod tests {
             })
         );
         {
-            let clients = clients.lock().unwrap();
+            let clients = clients.lock_unpoisoned();
             assert_eq!(
                 phase42_lane_client_count(&clients, Phase42SocketKind::Control),
                 1
@@ -4604,7 +4605,7 @@ mod tests {
     fn phase42_paired_media_socket_can_supply_mic_binary() {
         let (tx, rx) = mpsc::channel();
         let clients = test_client_registry(71);
-        clients.lock().unwrap().insert(
+        clients.lock_unpoisoned().insert(
             72,
             ClientConnection {
                 outbound: ClientOutbound::new(),
@@ -4642,7 +4643,7 @@ mod tests {
     fn phase42_release_window_blocks_paired_media_mic_binary() {
         let (tx, rx) = mpsc::channel();
         let clients = test_client_registry(73);
-        clients.lock().unwrap().insert(
+        clients.lock_unpoisoned().insert(
             74,
             ClientConnection {
                 outbound: ClientOutbound::new(),
@@ -4693,7 +4694,7 @@ mod tests {
     fn phase44_media_decode_errors_force_rx_and_report_on_control_lane() {
         let (tx, rx) = mpsc::channel();
         let clients = test_client_registry(73);
-        clients.lock().unwrap().insert(
+        clients.lock_unpoisoned().insert(
             74,
             ClientConnection {
                 outbound: ClientOutbound::new(),
@@ -4731,7 +4732,7 @@ mod tests {
         assert!(rx.try_recv().is_err());
 
         let (control_outbound, media_outbound) = {
-            let clients = clients.lock().unwrap();
+            let clients = clients.lock_unpoisoned();
             let media = clients.get(&74).unwrap();
             assert_eq!(
                 media.state.tx_codec_decode_error_count,
@@ -4823,7 +4824,7 @@ mod tests {
         }
         assert!(rx.try_recv().is_err());
 
-        let clients = clients.lock().unwrap();
+        let clients = clients.lock_unpoisoned();
         let media = clients.get(&74).unwrap();
         assert_eq!(media.state.tx_codec_decode_error_count, 0);
         assert!(!media.state.tx_codec_degraded);
@@ -4926,7 +4927,7 @@ mod tests {
         lane: Phase42SocketKind,
         role: Option<TciClientRole>,
     ) {
-        let mut clients = clients.lock().unwrap();
+        let mut clients = clients.lock_unpoisoned();
         clients.insert(
             client_id,
             ClientConnection {
@@ -4959,7 +4960,7 @@ mod tests {
         let any_enabled = set_client_iq_stream_enabled(&clients, 80, true);
         assert!(any_enabled);
 
-        let snapshot = clients.lock().unwrap();
+        let snapshot = clients.lock_unpoisoned();
         assert!(snapshot.get(&80).unwrap().state.iq_stream_enabled);
         assert!(snapshot.get(&81).unwrap().state.iq_stream_enabled);
     }
@@ -4979,7 +4980,7 @@ mod tests {
         let any_enabled = set_client_audio_stream_enabled(&clients, 82, true);
         assert!(any_enabled);
 
-        let snapshot = clients.lock().unwrap();
+        let snapshot = clients.lock_unpoisoned();
         assert!(snapshot.get(&82).unwrap().state.audio_stream_enabled);
         assert!(snapshot.get(&83).unwrap().state.audio_stream_enabled);
     }
@@ -5000,7 +5001,7 @@ mod tests {
         set_client_audio_frame_float_count(&clients, 84, 4096);
         set_client_audio_channels(&clients, 84, 1);
 
-        let snapshot = clients.lock().unwrap();
+        let snapshot = clients.lock_unpoisoned();
         assert_eq!(
             snapshot.get(&85).unwrap().state.audio_sample_rate_hz,
             24_000
@@ -5026,7 +5027,7 @@ mod tests {
         set_client_iq_stream_enabled(&clients, 86, true);
         set_client_audio_stream_enabled(&clients, 86, true);
 
-        let snapshot = clients.lock().unwrap();
+        let snapshot = clients.lock_unpoisoned();
         let media = snapshot.get(&87).unwrap();
 
         let rx_iq = OutboundMessage::IqFrame {
@@ -5266,7 +5267,7 @@ mod tests {
             9,
             true,
         );
-        let clients = clients.lock().unwrap();
+        let clients = clients.lock_unpoisoned();
         let state = &clients.get(&9).unwrap().state;
         assert!(state.tx_uplink_degraded);
         assert_eq!(state.tx_mic_browser_last_seq, 5);
@@ -5284,7 +5285,7 @@ mod tests {
         record_client_tx_codec_stale_drop(&clients, 9);
         assert!(flush_client_tx_codec_decode_queue(&clients, 9));
 
-        let clients = clients.lock().unwrap();
+        let clients = clients.lock_unpoisoned();
         let state = &clients.get(&9).unwrap().state;
         assert_eq!(state.tx_codec_decode_error_count, 2);
         assert_eq!(state.tx_codec_stale_drop_count, 1);
@@ -5338,7 +5339,7 @@ mod tests {
         record_client_tx_mic_frame(&clients, 9, 2, arrived_at);
         record_client_tx_mic_frame(&clients, 9, 4, arrived_at);
 
-        let clients = clients.lock().unwrap();
+        let clients = clients.lock_unpoisoned();
         let state = &clients.get(&9).unwrap().state;
         assert_eq!(state.tx_mic_last_arrived_seq, 4);
         assert_eq!(state.tx_mic_seq_gap_count, 1);
@@ -5362,7 +5363,7 @@ mod tests {
         record_client_tx_mic_frame(&clients, 9, 12, arrived_at);
 
         {
-            let clients = clients.lock().unwrap();
+            let clients = clients.lock_unpoisoned();
             let state = &clients.get(&9).unwrap().state;
             assert!(state.tx_uplink_degraded);
             assert_eq!(state.tx_mic_browser_dropped_count, 3);
@@ -5376,7 +5377,7 @@ mod tests {
         let first_frame_at = arrived_at + Duration::from_millis(20);
         record_client_tx_mic_frame(&clients, 9, 50, first_frame_at);
 
-        let clients = clients.lock().unwrap();
+        let clients = clients.lock_unpoisoned();
         let state = &clients.get(&9).unwrap().state;
         assert!(!state.tx_uplink_degraded);
         assert_eq!(state.tx_mic_browser_last_seq, 0);
@@ -5391,7 +5392,7 @@ mod tests {
     #[test]
     fn operator_disconnect_promotes_oldest_viewer() {
         let clients = test_client_registry(1);
-        clients.lock().unwrap().insert(
+        clients.lock_unpoisoned().insert(
             2,
             ClientConnection {
                 outbound: ClientOutbound::new(),
@@ -5414,7 +5415,7 @@ mod tests {
     fn phase42_media_disconnect_forces_rx_when_paired_with_operator() {
         let (tx, rx) = mpsc::channel();
         let clients = test_client_registry(91);
-        clients.lock().unwrap().insert(
+        clients.lock_unpoisoned().insert(
             92,
             ClientConnection {
                 outbound: ClientOutbound::new(),
@@ -5441,7 +5442,7 @@ mod tests {
     fn phase42_control_disconnect_queues_media_peer_close() {
         let (tx, rx) = mpsc::channel();
         let clients = test_client_registry(101);
-        clients.lock().unwrap().insert(
+        clients.lock_unpoisoned().insert(
             102,
             ClientConnection {
                 outbound: ClientOutbound::new(),
@@ -5454,7 +5455,12 @@ mod tests {
         parse_tci_command("session_lane:phase-42,media;", &tx, &clients, 102, false);
         while rx.try_recv().is_ok() {}
 
-        let media_outbound = clients.lock().unwrap().get(&102).unwrap().outbound.clone();
+        let media_outbound = clients
+            .lock_unpoisoned()
+            .get(&102)
+            .unwrap()
+            .outbound
+            .clone();
         let disconnect = unregister_client(&clients, &operator_client_id, 101);
 
         assert!(disconnect.was_operator);
@@ -5469,7 +5475,7 @@ mod tests {
         let (tx, rx) = mpsc::channel();
         let clients = test_client_registry(1);
         {
-            let mut clients = clients.lock().unwrap();
+            let mut clients = clients.lock_unpoisoned();
             clients.insert(
                 2,
                 ClientConnection {

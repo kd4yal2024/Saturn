@@ -14,6 +14,7 @@ use crate::p2::packets::{
 };
 use crate::p2::ports::{P2PortMap, COMMAND_DISCOVERY_PORT};
 use crate::radio_model::RadioModel;
+use crate::sync_ext::MutexExt;
 
 const ALEX_TX_RELAY_BIT: u16 = 0x0800;
 
@@ -87,7 +88,7 @@ impl P2Session {
         )?;
 
         let ddc_setup = {
-            let model = radio_model.lock().unwrap();
+            let model = radio_model.lock_unpoisoned();
             DdcSetup {
                 enable_mask: 1u16 << model.desired.rx_ddc_index,
                 ddc_index: model.desired.rx_ddc_index,
@@ -119,7 +120,7 @@ impl P2Session {
             let mut prev_tx = false;
             while !stop_flag.load(Ordering::Relaxed) {
                 let state = {
-                    let model = radio_model.lock().unwrap();
+                    let model = radio_model.lock_unpoisoned();
                     build_high_priority_state(&model, tx_100w_drive_byte)
                 };
 
@@ -241,7 +242,7 @@ impl P2Session {
                         && size == crate::p2::packets::DISCOVERY_REPLY_SIZE =>
                 {
                     if let Some(reply) = parse_discovery_reply(&buffer[..size]) {
-                        radio_model.lock().unwrap().apply_discovery(reply.clone());
+                        radio_model.lock_unpoisoned().apply_discovery(reply.clone());
                         return Ok(Some(reply));
                     }
                 }

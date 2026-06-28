@@ -1,6 +1,7 @@
 mod config;
 mod p2;
 mod radio_model;
+mod sync_ext;
 mod tci;
 mod tx_codec;
 mod tx_thread;
@@ -17,6 +18,7 @@ use std::time::{Duration, Instant};
 use config::BridgeConfig;
 use p2::session::{P2Event, P2Session};
 use radio_model::{RadioModel, TxPhase};
+use sync_ext::MutexExt;
 use tci::{TciCommand, TciFrontend};
 use tx_thread::{TxCommand, TxDiagnostics, TxEvent};
 use wdsp::WdspRxEngine;
@@ -226,7 +228,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let session = Arc::new(P2Session::bind(config.clone())?);
     let tci = TciFrontend::bind(&config, radio_model.clone())?;
     let mut wdsp = {
-        let model = radio_model.lock().unwrap();
+        let model = radio_model.lock_unpoisoned();
         WdspRxEngine::new(&model)?
     };
     let stop_flag = Arc::new(AtomicBool::new(false));
@@ -237,7 +239,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let tci_client_release_grace = tci_client_release_grace();
     let tx_power_meter_scale = config.tx_power_meter_scale;
     {
-        let mut model = radio_model.lock().unwrap();
+        let mut model = radio_model.lock_unpoisoned();
         model.desired.tx_drive = model.desired.tx_drive.clamp(1, remote_tx_max_watts);
     }
     let (tx_cmd_tx, tx_cmd_rx) = mpsc::channel();
@@ -300,7 +302,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 break;
             };
             did_work = true;
-            let mut model = radio_model.lock().unwrap();
+            let mut model = radio_model.lock_unpoisoned();
             let mut reconfigure_ddc = false;
 
             match command {
@@ -742,12 +744,12 @@ fn main() -> Result<(), Box<dyn Error>> {
             did_work = true;
         }
         if needs_high_priority {
-            let model = radio_model.lock().unwrap();
+            let model = radio_model.lock_unpoisoned();
             session.send_high_priority(&model)?;
             did_work = true;
         }
 
-        let running = { radio_model.lock().unwrap().desired.running };
+        let running = { radio_model.lock_unpoisoned().desired.running };
         if running && last_duc_specific.elapsed() >= config.high_priority_period {
             session.send_duc_specific()?;
             last_duc_specific = Instant::now();
@@ -757,7 +759,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         if let Some(deadline) = controller_release_deadline {
             if Instant::now() >= deadline {
                 controller_release_deadline = None;
-                let mut model = radio_model.lock().unwrap();
+                let mut model = radio_model.lock_unpoisoned();
                 if model.desired.running {
                     model.desired.running = false;
                     session.send_stop()?;
@@ -773,7 +775,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             did_work = true;
             match event {
                 TxEvent::Keyed => {
-                    let mut model = radio_model.lock().unwrap();
+                    let mut model = radio_model.lock_unpoisoned();
                     model.desired.tx_phase = TxPhase::Keyed;
                     tci.publish_radio_state(&model);
                 }
@@ -785,7 +787,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                     tx_uplink_fault_active = false;
                     tx_control_watchdog_fault_active = false;
                     latest_tx_diag = None;
-                    let mut model = radio_model.lock().unwrap();
+                    let mut model = radio_model.lock_unpoisoned();
                     model.desired.tx_phase = TxPhase::Rx;
                     tci.publish_radio_state(&model);
                 }
@@ -803,7 +805,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
         if let Some(event) = session.recv_event()? {
             did_work = true;
-            let mut model = radio_model.lock().unwrap();
+            let mut model = radio_model.lock_unpoisoned();
             match event {
                 P2Event::HighPriorityFromSdr(packet) => {
                     status_hp_packets = status_hp_packets.saturating_add(1);
@@ -861,7 +863,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
         {
             let now = Instant::now();
-            let mut model = radio_model.lock().unwrap();
+            let mut model = radio_model.lock_unpoisoned();
             let on_air = model.desired.tx_phase == TxPhase::Keyed || model.desired.tx_enabled;
             let tx_media_priority = tx_media_priority_active(tx_requested, &model);
             // Phase 42: bridge owns the authoritative TX media-priority state.
@@ -981,7 +983,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             );
             tci.publish_scheduler_telemetry(&client);
             tci.publish_tx_uplink_telemetry(&client);
-            let model = radio_model.lock().unwrap();
+            let model = radio_model.lock_unpoisoned();
             println!("saturn-bridge: {}", model.status_line());
             last_status = Instant::now();
             status_hp_packets = 0;

@@ -8,6 +8,7 @@ use std::time::{Duration, Instant};
 
 use crate::p2::session::P2Session;
 use crate::radio_model::RadioModel;
+use crate::sync_ext::MutexExt;
 use crate::wdsp::{
     WdspTxEngine, DUC_IQ_SAMPLES_PER_PACKET, TX_MIC_SAMPLES_PER_DSP_BLOCK, WDSP_TX_IQ_RATE_HZ,
 };
@@ -150,7 +151,7 @@ fn run(
     stop_flag: Arc<AtomicBool>,
 ) {
     let mut wdsp_tx = {
-        let model = radio_model.lock().unwrap();
+        let model = radio_model.lock_unpoisoned();
         WdspTxEngine::new(&model)
     };
 
@@ -212,7 +213,7 @@ fn run(
                         last_zero_iq_log_at = now;
                         wdsp_tx.set_active(true);
                         {
-                            let model = radio_model.lock().unwrap();
+                            let model = radio_model.lock_unpoisoned();
                             wdsp_tx.sync_model(&model);
                             two_tone = model.desired.two_tone_enabled;
                         }
@@ -323,7 +324,7 @@ fn run(
                     }
                 }
                 Ok(TxCommand::ModelChanged) => {
-                    let model = radio_model.lock().unwrap();
+                    let model = radio_model.lock_unpoisoned();
                     wdsp_tx.sync_model(&model);
                     two_tone = model.desired.two_tone_enabled;
                     did_work = true;
@@ -505,7 +506,7 @@ fn run(
                     // First keyable mic+IQ packet — key the radio.
                     let diag = wdsp_tx.diagnostics();
                     {
-                        let mut model = radio_model.lock().unwrap();
+                        let mut model = radio_model.lock_unpoisoned();
                         model.desired.tx_enabled = true;
                         if let Err(e) = session.send_high_priority(&model) {
                             eprintln!("saturn-bridge: TX thread: HP send error on key: {e}");
@@ -714,7 +715,7 @@ fn do_unkey(
         // Send burst of tx=false high-priority packets for reliability.
         for i in 0..TX_UNKEY_BURST_COUNT {
             {
-                let mut model = radio_model.lock().unwrap();
+                let mut model = radio_model.lock_unpoisoned();
                 model.desired.tx_enabled = false;
                 if let Err(e) = session.send_high_priority(&model) {
                     eprintln!("saturn-bridge: TX thread: HP error on unkey burst {i}: {e}");
@@ -730,7 +731,7 @@ fn do_unkey(
         println!("saturn-bridge: TX state -> OFF");
     } else if prev_state == TxState::Armed {
         {
-            let mut model = radio_model.lock().unwrap();
+            let mut model = radio_model.lock_unpoisoned();
             model.desired.tx_enabled = false;
             if let Err(e) = session.send_high_priority(&model) {
                 eprintln!("saturn-bridge: TX thread: HP error on disarm: {e}");
