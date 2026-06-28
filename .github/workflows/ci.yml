@@ -1,0 +1,98 @@
+name: Saturn CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: saturn-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  rust:
+    name: Rust services
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        crate:
+          - update_manager/rust-server
+          - update_manager/saturn-bridge
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - name: Format check
+        run: cargo fmt -- --check
+        working-directory: ${{ matrix.crate }}
+
+      - name: Test
+        run: cargo test --locked
+        working-directory: ${{ matrix.crate }}
+
+  remote-web:
+    name: Remote web
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: update_manager/remote-web/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+        working-directory: update_manager/remote-web
+
+      - name: Typecheck
+        run: npm run typecheck
+        working-directory: update_manager/remote-web
+
+      - name: Test
+        run: npm test
+        working-directory: update_manager/remote-web
+
+      - name: Build
+        run: npm run build
+        working-directory: update_manager/remote-web
+
+  native:
+    name: Native apps and XDMA
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            linux-headers-$(uname -r) \
+            libi2c-dev \
+            libgpiod-dev \
+            pkg-config
+
+      - name: Build P2 app
+        run: make clean all
+        working-directory: sw_projects/P2_app
+
+      - name: Build P3 app
+        run: make clean all
+        working-directory: sw_projects/P3_app
+
+      - name: Build XDMA module
+        run: make clean all
+        working-directory: linuxdriver/xdma
+

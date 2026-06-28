@@ -53,7 +53,10 @@ to the linux kernel introduced at V5.18. See:
 
 https://community.element14.com/technologies/fpga-group/b/blog/posts/installing-xilinx-vivado-on-ubuntu
 (The Xilinx distribution as at April 2023 has not been edited to include this!)
-The driver suitable for pre-kernel 5.18 is in folder xdma_pre_kernel_5.18
+	The old pre-kernel-5.18 driver tree has been retired for Saturn beta
+	releases. Use xdma/ as the supported hardened driver. If a legacy kernel
+	recovery case needs the old source, recover it from git history and
+	backport the active-tree safety fixes before shipping it.
 
 Thank you to Rick Koch N1GP for improving my fix!
 
@@ -70,8 +73,8 @@ Directory and file description:
  - xdma/: This directory contains the Xilinx PCIe DMA kernel module
        driver files.
 
- - xdma_pre_kernel_5.18/: This directory contains the Xilinx PCIe DMA kernel module
-       driver files for earlier OS releases
+ - xdma_pre_kernel_5.18/: Retired marker only. The stale legacy source was
+       removed from supported beta builds; use git history for recovery cases.
 
  - include/: This directory contains all include files that are needed for
 	compiling driver.

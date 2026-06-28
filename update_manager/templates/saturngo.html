@@ -134,7 +134,7 @@
 
         <div class="mt-5 pt-5 border-t border-white/10">
           <h3 class="text-lg font-semibold mb-2">XDMA Doctor</h3>
-          <p class="text-sm opacity-80 mb-3">Runs the read-only Saturn XDMA doctor through the web manager's privileged helper path and shows the classified stage plus key PCIe/XDMA details. If the doctor reports that XDMA is loaded but not staged for the running kernel, use <code>Stage Running Kernel</code> to pre-stage <code>xdma.ko</code> without restarting <code>p2app.service</code>.</p>
+          <p class="text-sm opacity-80 mb-3">Runs the read-only Saturn XDMA doctor through the web manager's privileged helper path and shows the classified stage plus key PCIe/XDMA details, including the kernel post-install hook used to pre-stage XDMA after kernel updates. If the doctor reports that XDMA is loaded but not staged for the running kernel, use <code>Stage Running Kernel</code> to pre-stage <code>xdma.ko</code> without restarting <code>p2app.service</code>.</p>
           <div id="saturngo-xdma-status-card" class="status-panel status-panel-unknown mb-3">
             <div class="flex flex-wrap items-center gap-3">
               <span id="saturngo-xdma-badge" class="status-pill status-unknown">Unknown</span>
@@ -146,6 +146,7 @@
               <div><span class="opacity-70">Module:</span> <span id="saturngo-xdma-module" class="font-mono">unknown</span></div>
               <div><span class="opacity-70">Nodes:</span> <span id="saturngo-xdma-nodes">unknown</span></div>
               <div><span class="opacity-70">Service:</span> <span id="saturngo-xdma-service">unknown</span></div>
+              <div><span class="opacity-70">Postinst:</span> <span id="saturngo-xdma-postinst">unknown</span></div>
             </div>
           </div>
           <div class="flex flex-wrap gap-3 items-center mb-3">
@@ -348,6 +349,13 @@ function parseXdmaDoctorOutput(lines){
     'service_exists',
     'service_active_state',
     'service_sub_state',
+    'postinst_hook_path',
+    'postinst_hook_exists',
+    'postinst_hook_executable',
+    'postinst_helper_path',
+    'postinst_helper_exists',
+    'postinst_helper_executable',
+    'postinst_hook_references_helper',
   ]);
   let inBlock = false;
 
@@ -396,6 +404,7 @@ function renderXdmaStatus(){
   const module = $('saturngo-xdma-module');
   const nodes = $('saturngo-xdma-nodes');
   const service = $('saturngo-xdma-service');
+  const postinst = $('saturngo-xdma-postinst');
   const level = xdmaStatusLevel(xdmaStatus);
 
   card.className = `status-panel status-panel-${level} mb-3`;
@@ -410,6 +419,7 @@ function renderXdmaStatus(){
     module.textContent = 'unknown';
     nodes.textContent = 'unknown';
     service.textContent = 'unknown';
+    postinst.textContent = 'unknown';
     return;
   }
 
@@ -440,6 +450,24 @@ function renderXdmaStatus(){
     service.textContent = `${String(xdmaStatus.service_active_state || 'unknown')}/${String(xdmaStatus.service_sub_state || 'unknown')}`;
   } else {
     service.textContent = 'not checked';
+  }
+
+  const hookExists = String(xdmaStatus.postinst_hook_exists || '').trim().toLowerCase() === 'true';
+  const hookExec = String(xdmaStatus.postinst_hook_executable || '').trim().toLowerCase() === 'true';
+  const helperExists = String(xdmaStatus.postinst_helper_exists || '').trim().toLowerCase() === 'true';
+  const helperExec = String(xdmaStatus.postinst_helper_executable || '').trim().toLowerCase() === 'true';
+  const hookReferencesHelper = String(xdmaStatus.postinst_hook_references_helper || '').trim().toLowerCase() === 'true';
+  const hookPath = String(xdmaStatus.postinst_hook_path || '').trim();
+  if (hookExists && hookExec && helperExists && helperExec && hookReferencesHelper){
+    postinst.textContent = `installed (${hookPath || 'hook ready'})`;
+  } else {
+    const missing = [];
+    if (!hookExists) missing.push('hook missing');
+    else if (!hookExec) missing.push('hook not executable');
+    if (!helperExists) missing.push('helper missing');
+    else if (!helperExec) missing.push('helper not executable');
+    if (hookExists && helperExists && !hookReferencesHelper) missing.push('helper mismatch');
+    postinst.textContent = missing.join(', ') || 'not ready';
   }
 }
 function updateXdmaStatusFromOutput(){

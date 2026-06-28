@@ -7,6 +7,8 @@ SATURN_XDMA_MODULE="${SATURN_XDMA_MODULE:-xdma}"
 SATURN_XDMA_DEVICE_NODE="${SATURN_XDMA_DEVICE_NODE:-/dev/xdma0_user}"
 SATURN_XDMA_UDEV_NODE="${SATURN_XDMA_UDEV_NODE:-/dev/xdma/card0/user}"
 SATURN_XDMA_SERVICE="${SATURN_XDMA_SERVICE:-p2app.service}"
+SATURN_XDMA_POSTINST_HOOK="${SATURN_XDMA_POSTINST_HOOK:-/etc/kernel/postinst.d/saturn-xdma}"
+SATURN_XDMA_POSTINST_HELPER="${SATURN_XDMA_POSTINST_HELPER:-/usr/local/bin/saturn-xdma-kernel-postinst.sh}"
 
 TRY_MODPROBE=0
 JSON_OUTPUT=0
@@ -258,6 +260,22 @@ detect_service_state() {
   fi
 }
 
+detect_postinst_state() {
+  POSTINST_HOOK_EXISTS=0
+  POSTINST_HOOK_EXECUTABLE=0
+  POSTINST_HELPER_EXISTS=0
+  POSTINST_HELPER_EXECUTABLE=0
+  POSTINST_HOOK_REFERENCES_HELPER=0
+
+  [[ -e "$SATURN_XDMA_POSTINST_HOOK" ]] && POSTINST_HOOK_EXISTS=1
+  [[ -x "$SATURN_XDMA_POSTINST_HOOK" ]] && POSTINST_HOOK_EXECUTABLE=1
+  [[ -e "$SATURN_XDMA_POSTINST_HELPER" ]] && POSTINST_HELPER_EXISTS=1
+  [[ -x "$SATURN_XDMA_POSTINST_HELPER" ]] && POSTINST_HELPER_EXECUTABLE=1
+  if [[ -r "$SATURN_XDMA_POSTINST_HOOK" ]] && grep -Fq "$SATURN_XDMA_POSTINST_HELPER" "$SATURN_XDMA_POSTINST_HOOK"; then
+    POSTINST_HOOK_REFERENCES_HELPER=1
+  fi
+}
+
 determine_stage() {
   if [[ "${#ENDPOINT_PATHS[@]}" -eq 0 ]]; then
     STAGE="PCIE_ENDPOINT_MISSING"
@@ -323,6 +341,13 @@ print_human_output() {
   printf 'service_exists=%s\n' "$( [[ "$SERVICE_EXISTS" -eq 1 ]] && printf true || printf false )"
   printf 'service_active_state=%s\n' "$SERVICE_ACTIVE_STATE"
   printf 'service_sub_state=%s\n' "$SERVICE_SUB_STATE"
+  printf 'postinst_hook_path=%s\n' "$SATURN_XDMA_POSTINST_HOOK"
+  printf 'postinst_hook_exists=%s\n' "$( [[ "$POSTINST_HOOK_EXISTS" -eq 1 ]] && printf true || printf false )"
+  printf 'postinst_hook_executable=%s\n' "$( [[ "$POSTINST_HOOK_EXECUTABLE" -eq 1 ]] && printf true || printf false )"
+  printf 'postinst_helper_path=%s\n' "$SATURN_XDMA_POSTINST_HELPER"
+  printf 'postinst_helper_exists=%s\n' "$( [[ "$POSTINST_HELPER_EXISTS" -eq 1 ]] && printf true || printf false )"
+  printf 'postinst_helper_executable=%s\n' "$( [[ "$POSTINST_HELPER_EXECUTABLE" -eq 1 ]] && printf true || printf false )"
+  printf 'postinst_hook_references_helper=%s\n' "$( [[ "$POSTINST_HOOK_REFERENCES_HELPER" -eq 1 ]] && printf true || printf false )"
   printf 'modprobe_attempted=%s\n' "$( [[ "$MODPROBE_ATTEMPTED" -eq 1 ]] && printf true || printf false )"
   printf 'modprobe_exit_code=%s\n' "$MODPROBE_EXIT_CODE"
 
@@ -352,6 +377,8 @@ print_human_output() {
 print_json_output() {
   local endpoint_present_text module_installed_text module_loaded_text bound_to_xdma_text
   local devnode_exists_text udev_symlink_exists_text service_exists_text service_running_text modprobe_attempted_text
+  local postinst_hook_exists_text postinst_hook_executable_text postinst_helper_exists_text
+  local postinst_helper_executable_text postinst_hook_references_helper_text
 
   endpoint_present_text=false
   module_installed_text=false
@@ -362,6 +389,11 @@ print_json_output() {
   service_exists_text=false
   service_running_text=false
   modprobe_attempted_text=false
+  postinst_hook_exists_text=false
+  postinst_hook_executable_text=false
+  postinst_helper_exists_text=false
+  postinst_helper_executable_text=false
+  postinst_hook_references_helper_text=false
 
   [[ "${#ENDPOINT_PATHS[@]}" -gt 0 ]] && endpoint_present_text=true
   [[ "$MODULE_INSTALLED_FOR_KERNEL" -eq 1 ]] && module_installed_text=true
@@ -372,14 +404,22 @@ print_json_output() {
   [[ "$SERVICE_EXISTS" -eq 1 ]] && service_exists_text=true
   [[ "$SERVICE_RUNNING" -eq 1 ]] && service_running_text=true
   [[ "$MODPROBE_ATTEMPTED" -eq 1 ]] && modprobe_attempted_text=true
+  [[ "$POSTINST_HOOK_EXISTS" -eq 1 ]] && postinst_hook_exists_text=true
+  [[ "$POSTINST_HOOK_EXECUTABLE" -eq 1 ]] && postinst_hook_executable_text=true
+  [[ "$POSTINST_HELPER_EXISTS" -eq 1 ]] && postinst_helper_exists_text=true
+  [[ "$POSTINST_HELPER_EXECUTABLE" -eq 1 ]] && postinst_helper_executable_text=true
+  [[ "$POSTINST_HOOK_REFERENCES_HELPER" -eq 1 ]] && postinst_hook_references_helper_text=true
 
   ENDPOINT_BDFS_TEXT="$(printf '%s\n' "${ENDPOINT_BDFS[@]:-}")"
   ENDPOINT_DRIVERS_TEXT="$(printf '%s\n' "${ENDPOINT_DRIVERS[@]:-}")"
 
   export STAGE STAGE_SUMMARY ADVISORY ADVISORY_SUMMARY RUNNING_KERNEL MODULE_PATH SERVICE_ACTIVE_STATE SERVICE_SUB_STATE
   export SATURN_XDMA_DEVICE_NODE SATURN_XDMA_UDEV_NODE SATURN_XDMA_SERVICE
+  export SATURN_XDMA_POSTINST_HOOK SATURN_XDMA_POSTINST_HELPER
   export endpoint_present_text module_installed_text module_loaded_text bound_to_xdma_text
   export devnode_exists_text udev_symlink_exists_text service_exists_text service_running_text modprobe_attempted_text
+  export postinst_hook_exists_text postinst_hook_executable_text postinst_helper_exists_text
+  export postinst_helper_executable_text postinst_hook_references_helper_text
   export MODPROBE_EXIT_CODE ENDPOINT_BDFS_TEXT ENDPOINT_DRIVERS_TEXT
   export MODPROBE_OUTPUT_FILE LSPCI_NN_FILE LSPCI_K_FILE LSMOD_FILE KERNEL_LOG_FILE P2APP_STATUS_FILE
 
@@ -422,6 +462,13 @@ data = {
     "service_running": os.environ.get("service_running_text") == "true",
     "service_active_state": os.environ.get("SERVICE_ACTIVE_STATE", ""),
     "service_sub_state": os.environ.get("SERVICE_SUB_STATE", ""),
+    "postinst_hook_path": os.environ.get("SATURN_XDMA_POSTINST_HOOK", ""),
+    "postinst_hook_exists": os.environ.get("postinst_hook_exists_text") == "true",
+    "postinst_hook_executable": os.environ.get("postinst_hook_executable_text") == "true",
+    "postinst_helper_path": os.environ.get("SATURN_XDMA_POSTINST_HELPER", ""),
+    "postinst_helper_exists": os.environ.get("postinst_helper_exists_text") == "true",
+    "postinst_helper_executable": os.environ.get("postinst_helper_executable_text") == "true",
+    "postinst_hook_references_helper": os.environ.get("postinst_hook_references_helper_text") == "true",
     "modprobe_attempted": os.environ.get("modprobe_attempted_text") == "true",
     "modprobe_exit_code": int(os.environ.get("MODPROBE_EXIT_CODE", "0") or "0"),
     "modprobe_output": read_file(os.environ.get("MODPROBE_OUTPUT_FILE", "")),
@@ -443,6 +490,7 @@ collect_matching_endpoints
 detect_module_state
 detect_binding_state
 detect_service_state
+detect_postinst_state
 collect_supporting_output
 determine_stage
 determine_advisory

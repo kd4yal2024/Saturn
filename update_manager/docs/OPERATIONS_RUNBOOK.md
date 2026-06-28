@@ -83,7 +83,7 @@ Remote Setup profile notes:
 - A startup profile should be applied before opening a live phone session when you want a known panadapter, waterfall, and radio-control baseline.
 - If the Setup menu opens underneath the panadapter after a deploy, confirm the latest `saturn-remote.html` (and, for `/remote-next`, `saturn-remote-next.html` + `saturn-remote-next.js`) was synced into `/var/lib/saturn-web/`.
 - If USB/LSB signals or the transparent passband box appear on the wrong side of center after a deploy, confirm the latest `saturn-remote.html` (and, for `/remote-next`, `saturn-remote-next.html` + `saturn-remote-next.js`) was synced into `/var/lib/saturn-web/`.
-- If `/remote-next` returns 404 on the bundle (`/remote-assets/remote-next.js`), confirm `npm ci && npm run build` succeeded in `update_manager/remote-web` and that `saturn-remote-next.js` is present in `/var/lib/saturn-web/`. The installer and `update-saturn-go.sh` now treat a missing bundle as a hard failure; this check covers manual or pre-promotion deploys.
+- If `/remote-next` returns 404 on the bundle (`/remote-assets/remote-next.js`), confirm lockfile-only `npm ci && npm run build` succeeded in `update_manager/remote-web` and that `saturn-remote-next.js` plus `saturn-remote-next.js.sha256` are present in `/var/lib/saturn-web/`. The installer and `update-saturn-go.sh` now treat a missing bundle or checksum mismatch as a hard failure; this check covers manual or pre-promotion deploys.
 - If TX appears stuck after a browser crash or tab close, confirm both `saturn-bridge.service` and `saturn-go.service` are on the latest deployed build with the explicit TX-release path.
 
 ## Secure Remote Access with Tailscale

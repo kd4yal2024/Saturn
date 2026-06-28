@@ -228,6 +228,9 @@ If a script entry does not define `version`, `/get_versions` now returns
   - sync deployed web assets (`*.html`, `config.json`, `themes.json`)
   - sync packaged scripts into `/opt/saturn-go/scripts` without removing browser-managed extras
   - refresh trusted helper copies in `/usr/local/lib/saturn-go/scripts` and rewrite the narrow sudoers policy
+  - install `/usr/local/bin/saturn-fix-xdma.sh`,
+    `/usr/local/bin/saturn-xdma-kernel-postinst.sh`, and
+    `/etc/kernel/postinst.d/saturn-xdma` for future kernel package installs
   - dispatch a detached root helper to stop/copy/start `saturn-go.service`
 - When a Saturn Go policy repo URL is provided, `update-saturn-go.sh` now
   verifies that the repo/ref is publicly reachable over HTTPS and fetches
@@ -387,8 +390,9 @@ Installer behavior (current):
 
 - Deploys Rust backend only (no legacy Go source generation)
 - Removes legacy distro `cargo`/`rustc` packages (if installed) and bootstraps a current Rust toolchain via `rustup` for the build user before compiling (fixes old-Cargo `Cargo.lock` v4 parse errors on Bookworm)
-- Installs `nodejs` and `npm` and runs `npm ci && npm run build` in `update_manager/remote-web` to produce the `saturn-remote-next.js` Vite bundle before staging web assets
+- Installs `nodejs` and `npm` and runs lockfile-only `npm ci && npm run build` in `update_manager/remote-web` to produce the `saturn-remote-next.js` Vite bundle before staging web assets
 - Uses `update_manager/scripts/saturn-go-web-assets.sh` as the shared web asset manifest for install and self-update deploys (fails fast if any required asset, including `saturn-remote-next.html`/`saturn-remote-next.js`, is missing)
+- Copies `saturn-remote-next.js` only from the Vite `dist/` output and verifies the deployed bundle with `saturn-remote-next.js.sha256`, preventing stale template/root files from shadowing a fresh build
 - Proxies all `/saturn/*` routes through NGINX to the Rust backend
 - Redirects plain HTTP remote entry points such as `/remote` and `/saturn/remote` to `https://<host>:8443/remote`
 - Creates/updates `saturn-go.service` using a non-root service user

@@ -21,6 +21,9 @@ SOURCE_DIR="/home/${SUDO_USER:-$USER}/github/Saturn/update_manager"
 RUST_SRC_DIR="$SOURCE_DIR/rust-server"
 WEB_ASSET_HELPERS="$SOURCE_DIR/scripts/saturn-go-web-assets.sh"
 BUILD_PREFLIGHT_HELPER="$SOURCE_DIR/scripts/saturn-go-build-preflight.sh"
+XDMA_FIX_SCRIPT_INSTALL="/usr/local/bin/saturn-fix-xdma.sh"
+XDMA_POSTINST_HELPER_INSTALL="/usr/local/bin/saturn-xdma-kernel-postinst.sh"
+XDMA_POSTINST_HOOK_PATH="/etc/kernel/postinst.d/saturn-xdma"
 
 SATURN_ADDR="${SATURN_ADDR:-127.0.0.1:8080}"
 SATURN_MAX_BODY_BYTES="${SATURN_MAX_BODY_BYTES:-2147483648}"
@@ -76,6 +79,8 @@ if [[ ! -d "$SOURCE_DIR" ]]; then
   exit 1
 fi
 REPO_SOURCE_DIR="$(cd "$SOURCE_DIR/.." && pwd)"
+XDMA_FIX_SCRIPT_SRC="$REPO_SOURCE_DIR/scripts/fix-xdma.sh"
+XDMA_POSTINST_HELPER_SRC="$REPO_SOURCE_DIR/scripts/saturn-xdma-kernel-postinst.sh"
 EXTRA_PACKAGED_SCRIPTS=(
   "$REPO_SOURCE_DIR/scripts/fix-LED-power-button.sh"
   "$REPO_SOURCE_DIR/scripts/install-shutdown-waiter-service.sh"
@@ -87,6 +92,8 @@ PRIVILEGED_HELPER_SCRIPTS=(
   "$REPO_SOURCE_DIR/scripts/saturn-flash-fpga.sh"
   "$REPO_SOURCE_DIR/scripts/saturn-xdma-doctor.sh"
   "$REPO_SOURCE_DIR/scripts/saturn-xdma-stage-current.sh"
+  "$XDMA_FIX_SCRIPT_SRC"
+  "$XDMA_POSTINST_HELPER_SRC"
   "$REPO_SOURCE_DIR/scripts/fix-LED-power-button.sh"
   "$REPO_SOURCE_DIR/scripts/install-shutdown-waiter-service.sh"
   "$REPO_SOURCE_DIR/scripts/shutdown-waiter.sh"
@@ -180,6 +187,33 @@ run_as_build_user() {
   else
     runuser -u "$BUILD_USER" -- bash -lc "$shell_cmd"
   fi
+}
+
+install_xdma_kernel_postinst_hook() {
+  local tmp_hook
+
+  info "Installing XDMA kernel postinst helpers..."
+  install -D -m 0755 -o root -g root "$XDMA_FIX_SCRIPT_SRC" "$XDMA_FIX_SCRIPT_INSTALL"
+  install -D -m 0755 -o root -g root "$XDMA_POSTINST_HELPER_SRC" "$XDMA_POSTINST_HELPER_INSTALL"
+
+  tmp_hook="$(mktemp)"
+  cat >"$tmp_hook" <<EOF
+#!/bin/sh
+set -eu
+HELPER="${XDMA_POSTINST_HELPER_INSTALL}"
+if [ -x "\$HELPER" ]; then
+  "\$HELPER" "\$@" || true
+fi
+exit 0
+EOF
+
+  if [[ ! -f "$XDMA_POSTINST_HOOK_PATH" ]] || ! cmp -s "$tmp_hook" "$XDMA_POSTINST_HOOK_PATH"; then
+    install -D -m 0755 -o root -g root "$tmp_hook" "$XDMA_POSTINST_HOOK_PATH"
+    ok "XDMA kernel postinst hook installed at $XDMA_POSTINST_HOOK_PATH"
+  else
+    ok "XDMA kernel postinst hook already current"
+  fi
+  rm -f "$tmp_hook"
 }
 
 apt_pkg_installed() {
@@ -300,6 +334,10 @@ if ! saturn_go_copy_required_web_assets "$SOURCE_DIR/templates" "$SOURCE_DIR" "$
   exit 1
 fi
 saturn_go_copy_optional_web_assets "$SOURCE_DIR/templates" "$SOURCE_DIR" "$WEB_ROOT"
+if ! saturn_go_verify_remote_web_bundle "$WEB_ROOT"; then
+  err "Deployed remote-web bundle checksum verification failed"
+  exit 1
+fi
 
 if [[ -f "$SOURCE_DIR/scripts/config.json" ]]; then
   cp -f "$SOURCE_DIR/scripts/config.json" "$WEB_ROOT/config.json"
@@ -353,6 +391,7 @@ info "Installing privileged helper scripts..."
 for src in "${PRIVILEGED_HELPER_SCRIPTS[@]}"; do
   install -m 0755 -o root -g root "$src" "$PRIVILEGED_SCRIPTS_DIR/$(basename "$src")"
 done
+install_xdma_kernel_postinst_hook
 
 cat >"$WATCHDOG_SCRIPT_PATH" <<'WATCHDOG'
 #!/usr/bin/env bash

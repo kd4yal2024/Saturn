@@ -19,7 +19,7 @@ UI usage notes:
 - `index.html` (Custom Scripts page) intentionally excludes `update-G2.py` from the dropdown.
 - `update.html` (G2 Update page) is the dedicated UI for running `update-G2.py` with live SSE terminal output.
 - `saturngo.html` is the dedicated UI for running `update-saturn-go.sh` (separate Saturn Go repo policy + self-redeploy workflow).
-- `saturngo.html` also exposes an `XDMA Doctor` button that runs `xdma-doctor.sh` through the same `/run` terminal path.
+- `saturngo.html` also exposes an `XDMA Doctor` button that runs `xdma-doctor.sh` through the same `/run` terminal path and reports PCIe/XDMA/module/service state plus the kernel post-install hook used for future kernel staging.
 - `saturngo.html` also exposes a `Stage Running Kernel` button that runs `xdma-stage-current.sh` through the same `/run` terminal path.
 - `p23test.html` is a hidden/experimental UI for testing the converged `p2app` build/deploy/restart workflow using `p23-app-manager.sh` (not linked in main navigation).
 - `index.html` (Custom Scripts page) intentionally excludes `update-pihpsdr.py` from the dropdown.
