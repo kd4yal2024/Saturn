@@ -17,6 +17,7 @@ use crate::state::{
     DEFAULT_UPDATE_HEALTH_RETRIES, DEFAULT_UPDATE_HEALTH_TIMEOUT_SECS,
     DEFAULT_UPDATE_KEEP_SNAPSHOTS, HEALTH_CHECK_RETRY_INTERVAL_SECS,
 };
+use crate::sync_ext::MutexExt;
 use crate::util::{
     current_repo_root, is_safe_ref_name, is_safe_repo_part, json_error, list_repo_root_candidates,
     output_error_text, validate_saturn_repo_root,
@@ -146,16 +147,16 @@ fn update_activity_slot() -> &'static Mutex<Option<UpdateActivity>> {
 // --- Job management ---
 
 fn get_appliance_update_job() -> Option<ApplianceUpdateJob> {
-    appliance_update_slot().lock().unwrap().clone()
+    appliance_update_slot().lock_unpoisoned().clone()
 }
 
 fn set_appliance_update_job(job: ApplianceUpdateJob) {
-    let mut guard = appliance_update_slot().lock().unwrap();
+    let mut guard = appliance_update_slot().lock_unpoisoned();
     *guard = Some(job);
 }
 
 fn update_appliance_update_job(id: &str, f: impl FnOnce(&mut ApplianceUpdateJob)) {
-    let mut guard = appliance_update_slot().lock().unwrap();
+    let mut guard = appliance_update_slot().lock_unpoisoned();
     if let Some(job) = guard.as_mut() {
         if job.id == id {
             f(job);
@@ -189,7 +190,7 @@ pub fn begin_update_activity(
     kind: &str,
     detail: impl Into<String>,
 ) -> Result<UpdateActivityGuard, String> {
-    let mut guard = update_activity_slot().lock().unwrap();
+    let mut guard = update_activity_slot().lock_unpoisoned();
     if let Some(active) = guard.as_ref() {
         let suffix = if active.detail.is_empty() {
             String::new()
@@ -216,7 +217,7 @@ pub fn begin_update_activity(
 }
 
 fn release_update_activity(id: &str) {
-    let mut guard = update_activity_slot().lock().unwrap();
+    let mut guard = update_activity_slot().lock_unpoisoned();
     if guard.as_ref().map(|a| a.id.as_str()) == Some(id) {
         *guard = None;
     }

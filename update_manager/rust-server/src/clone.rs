@@ -12,6 +12,7 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 
 use crate::state::{PiImageStatusQuery, MAX_COMPLETED_JOBS};
+use crate::sync_ext::MutexExt;
 use crate::util::{json_error, output_error_text};
 
 #[derive(Debug, Clone, Serialize)]
@@ -32,7 +33,7 @@ fn clone_jobs_map() -> &'static Mutex<std::collections::HashMap<String, PiCloneJ
 }
 
 fn set_clone_job(job: PiCloneJob) {
-    let mut map = clone_jobs_map().lock().unwrap();
+    let mut map = clone_jobs_map().lock_unpoisoned();
     map.insert(job.id.clone(), job);
     prune_completed_clone_jobs(&mut map);
 }
@@ -52,14 +53,14 @@ fn prune_completed_clone_jobs(map: &mut std::collections::HashMap<String, PiClon
 }
 
 fn update_clone_job(id: &str, f: impl FnOnce(&mut PiCloneJob)) {
-    let mut map = clone_jobs_map().lock().unwrap();
+    let mut map = clone_jobs_map().lock_unpoisoned();
     if let Some(j) = map.get_mut(id) {
         f(j);
     }
 }
 
 fn get_clone_job(id: &str) -> Option<PiCloneJob> {
-    let map = clone_jobs_map().lock().unwrap();
+    let map = clone_jobs_map().lock_unpoisoned();
     map.get(id).cloned()
 }
 

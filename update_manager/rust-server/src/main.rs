@@ -7,6 +7,7 @@ mod pages;
 mod remote_tls;
 mod repair;
 mod state;
+mod sync_ext;
 mod tailscale;
 mod update;
 mod util;
@@ -36,6 +37,7 @@ use crate::state::{
     MAX_TAR_EXPANSION_FACTOR, P23_ADC_PEAK_TELEMETRY_ENABLE_FILE, P23_ADC_PEAK_TELEMETRY_JSON_FILE,
     P23_APP_PERF_TELEMETRY_JSON_FILE, RUN_LOG_FETCH_MAX_LINES, RUN_LOG_MAX_LINES,
 };
+use crate::sync_ext::MutexExt;
 use crate::tailscale::{
     tailscale_down, tailscale_install, tailscale_logout, tailscale_serve, tailscale_up,
 };
@@ -846,14 +848,13 @@ fn begin_script_run_log(script: &str, flags: &[String]) -> (String, String) {
         lines: vec![start_line.clone()],
     };
     script_run_log_slot()
-        .lock()
-        .unwrap()
+        .lock_unpoisoned()
         .insert(script.to_string(), entry);
     (run_id, start_line)
 }
 
 fn append_script_run_log_line(script: &str, run_id: &str, line: String) {
-    let mut guard = script_run_log_slot().lock().unwrap();
+    let mut guard = script_run_log_slot().lock_unpoisoned();
     let Some(run) = guard.get_mut(script) else {
         return;
     };
@@ -869,7 +870,7 @@ fn append_script_run_log_line(script: &str, run_id: &str, line: String) {
 }
 
 fn finish_script_run_log(script: &str, run_id: &str, status: &str) {
-    let mut guard = script_run_log_slot().lock().unwrap();
+    let mut guard = script_run_log_slot().lock_unpoisoned();
     let Some(run) = guard.get_mut(script) else {
         return;
     };
@@ -3264,7 +3265,7 @@ async fn get_run_log(Query(q): Query<RunLogQuery>) -> Response {
     let from = q.from.unwrap_or(0);
     let limit = q.limit.unwrap_or(300).clamp(1, RUN_LOG_FETCH_MAX_LINES);
 
-    let guard = script_run_log_slot().lock().unwrap();
+    let guard = script_run_log_slot().lock_unpoisoned();
     let Some(run) = guard.get(&script) else {
         return Json(serde_json::json!({
             "script": script,

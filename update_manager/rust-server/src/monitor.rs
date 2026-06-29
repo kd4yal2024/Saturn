@@ -13,6 +13,8 @@ use sysinfo::{Disks, Networks, System};
 use tokio::process::Command;
 use tracing::error;
 
+use crate::sync_ext::MutexExt;
+
 #[derive(Deserialize, Default)]
 pub struct ProcQuery {
     proc_sort: Option<String>,
@@ -357,7 +359,7 @@ fn calc_rate(kind: &str, a: u64, b: u64) -> (u64, u64) {
     static LAST: OnceLock<Mutex<std::collections::HashMap<String, (u64, u64, u128)>>> =
         OnceLock::new();
     let map = LAST.get_or_init(|| Mutex::new(std::collections::HashMap::new()));
-    let mut guard = map.lock().unwrap();
+    let mut guard = map.lock_unpoisoned();
 
     let now_ms = SystemTime::now()
         .duration_since(UNIX_EPOCH)

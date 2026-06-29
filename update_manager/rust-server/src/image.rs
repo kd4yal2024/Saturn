@@ -14,6 +14,7 @@ use tokio::process::Command;
 use tokio_util::io::ReaderStream;
 
 use crate::state::{PiImageStatusQuery, MAX_COMPLETED_JOBS};
+use crate::sync_ext::MutexExt;
 use crate::util::json_error;
 
 #[derive(Debug, Clone, Serialize)]
@@ -37,7 +38,7 @@ fn jobs_map() -> &'static Mutex<std::collections::HashMap<String, PiImageJob>> {
 }
 
 fn set_job(job: PiImageJob) {
-    let mut map = jobs_map().lock().unwrap();
+    let mut map = jobs_map().lock_unpoisoned();
     map.insert(job.id.clone(), job);
     prune_completed_image_jobs(&mut map);
 }
@@ -57,14 +58,14 @@ fn prune_completed_image_jobs(map: &mut std::collections::HashMap<String, PiImag
 }
 
 fn update_job(id: &str, f: impl FnOnce(&mut PiImageJob)) {
-    let mut map = jobs_map().lock().unwrap();
+    let mut map = jobs_map().lock_unpoisoned();
     if let Some(j) = map.get_mut(id) {
         f(j);
     }
 }
 
 fn get_job(id: &str) -> Option<PiImageJob> {
-    let map = jobs_map().lock().unwrap();
+    let map = jobs_map().lock_unpoisoned();
     map.get(id).cloned()
 }
 
