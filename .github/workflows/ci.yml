@@ -29,10 +29,15 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          components: rustfmt
+          components: rustfmt, clippy
 
       - name: Format check
         run: cargo fmt -- --check
+        working-directory: ${{ matrix.crate }}
+
+      - name: Clippy correctness check
+        if: ${{ matrix.crate == 'update_manager/rust-server' }}
+        run: cargo clippy --locked --no-deps -- -D clippy::correctness -D clippy::suspicious
         working-directory: ${{ matrix.crate }}
 
       - name: Test
