@@ -140,6 +140,10 @@ jobs:
         run: make clean all
         working-directory: sw_projects/P2_app
 
+      - name: Build P1 app
+        run: make clean all
+        working-directory: sw_projects/P1_app
+
       - name: Build P3 app
         run: make clean all
         working-directory: sw_projects/P3_app

@@ -42,6 +42,7 @@
 #include "../common/saturnregisters.h"              // register I/O for Saturn
 #include "../common/codecwrite.h"                   // codec register I/O for Saturn
 #include "../common/version.h"                      // version I/O for Saturn
+#include "../common/byteio.h"                       // safe unaligned packet byte I/O
 
 
 int receivers = 1;                          // number of requested DDC (1-8)
@@ -53,9 +54,20 @@ struct sockaddr_in addr_ep6;                // destination address for outgoing 
 
 int enable_thread = 0;                      // true if outgoing data thread enabled
 int active_thread = 0;                      // true if outgoing thread is running
+static bool P1CWKeysReversed = false;
+static uint8_t P1CWKeyerSpeed = 20;
+static uint8_t P1CWKeyerMode = 0;
+static uint8_t P1CWKeyerWeight = 50;
+static bool P1CWKeyerSpacing = false;
 
 void process_incoming_CandC(uint8_t *frame);
 void *SendOutgoingPacketData(void *arg);
+
+static void ApplyP1CWKeyerConfig(void)
+{
+  SetCWIambicKeyer(P1CWKeyerSpeed, P1CWKeyerWeight, P1CWKeysReversed,
+                   (bool)(P1CWKeyerMode & 1), P1CWKeyerSpacing, true, false);
+}
 
 
 #define SDRBOARDID 1                    // Hermes
@@ -84,18 +96,32 @@ int main(void)
   struct iovec iovecinst;                                             // iovcnt buffer - 1 for each outgoing buffer
   struct msghdr datagram;                                           // multiple incoming message header
   struct timeval tv;
-  struct timespec ts;
+  TVersionInfoSnapshot VersionInfo;
+  uint16_t PCBVersion;
   int yes = 1;
 
 
 //
 // setup Orion hardware
 //
-  OpenXDMADriver();
-  CodecInitialise();
+  if(!OpenXDMADriver(false))
+  {
+    printf("unable to continue without XDMA register access\n");
+    return EXIT_FAILURE;
+  }
+  GetVersionInfoSnapshot(&VersionInfo);
+  PrintVersionInfo();
+  PCBVersion = GetPCBVersionNumber();
+  SetSpkrMute(true);
+  usleep(10000);
+  CodecInitialise(PCBVersion);
   InitialiseDACAttenROMs();
-  InitialiseCWKeyerRamp();
+  InitialiseCWKeyerRamp(false, 5000);
   SetCWSidetoneEnabled(true);
+  SetTXProtocol(false);
+  SetTXModulationSource(eIQData);
+  SetByteSwapping(true);
+  SetSpkrMute(false);
   
 
 
@@ -251,7 +277,7 @@ void process_incoming_CandC(uint8_t *frame)
     C2 = frame[2];                                    // C&C byte
     C3 = frame[3];                                    // C&C byte
     C4 = frame[4];                                    // C&C byte
-    data32 = ntohl(*(uint32_t*)(frame + 1));          // C1-C4 as 32 bits
+    data32 = rd_be_u32(frame + 1);                    // C1-C4 as 32 bits
 
 //
 // check MOX
@@ -279,7 +305,6 @@ void process_incoming_CandC(uint8_t *frame)
             SetAlexRXOut((bool)(C3 >> 7));
             SetAlexTXAnt(C4 & 3);
             SetDuplex((bool)((C4 >> 2) & 1));
-            SetNumP1DDC((C4 >> 3) & 7);
             EnablePPSStamp((bool)((C4 >> 6) & 1));
             // skip mercury frequency
             break;
@@ -289,7 +314,7 @@ void process_incoming_CandC(uint8_t *frame)
         // TX frequency (Hz)
         case 2:
         case 3:
-            SetDUCFrequency(0, data32, false);
+            SetDUCFrequency(data32, false);
             break;
 
 
@@ -354,7 +379,7 @@ void process_incoming_CandC(uint8_t *frame)
         // Alex RX1 filters; Alex disable T / R relay; Alex TX filters; set apollo bits
     case 18:
     case 19:
-        SetTXDriveLevel(0, C1);
+        SetTXDriveLevel(C1);
         SetMicBoost((bool)(C2 & 1));
         SetMicLineInput((bool)((C2 >> 1) & 1));
         SetApolloBits((bool)((C2 >> 2) & 1), (bool)((C2 >> 3) & 1), (bool)((C2 >> 4) & 1));
@@ -372,7 +397,7 @@ void process_incoming_CandC(uint8_t *frame)
         SetCodecLineInGain(C2 & 0b00011111);
         // Check P1 code: do I need C2 bits 7-5?
         // check P1 code: do I need C3 bits?
-        SetADCAttenuator(eADC1, C4&0b00011111, (bool)((C4 >> 5) & 1));
+        SetADCAttenuator(eADC1, C4&0b00011111, true, false);
         break;
 
 
@@ -380,13 +405,15 @@ void process_incoming_CandC(uint8_t *frame)
     // ADC2 atten; ADC3 atten; CW keys reversed; keyer speed, keyer mode, keyer weight, keyer spacing
     case 22:
     case 23:
-        SetADCAttenuator(eADC2, C1 & 0b00011111, (bool)((C1 >> 5) & 1));
+        SetADCAttenuator(eADC2, C1 & 0b00011111, true, false);
         // ignore ADC3 data
-        SetCWKeyerReversed((bool)((C2 >> 6) & 1));
-        SetCWKeyerSpeed(C3 & 0b00111111);
-        SetCWKeyerMode((C3 >> 6) & 3);
-        SetCWKeyerWeight(C4 & 0b01111111);              // what is keyer weight
-        SetCWKeyerSpacing((bool)((C4 >> 7) & 1));
+        P1CWKeysReversed = (bool)((C2 >> 6) & 1);
+        P1CWKeyerSpeed = C3 & 0b00111111;
+        P1CWKeyerMode = (C3 >> 6) & 3;
+        P1CWKeyerWeight = C4 & 0b01111111;
+        P1CWKeyerSpacing = (bool)((C4 >> 7) & 1);
+        ApplyP1CWKeyerConfig();
+        break;
     case 24:
     case 25:
     case 26:
@@ -405,7 +432,8 @@ void process_incoming_CandC(uint8_t *frame)
         SetDDCADC(5, C2 & 3);
         SetDDCADC(6, (C2 >> 2) & 3);
         SetDDCADC(7, (C2 >> 4) & 3);
-        SetADCAttenDuringTX(C3&0b00011111);
+        SetADCAttenuator(eADC1, C3&0b00011111, false, true);
+        SetADCAttenuator(eADC2, C3&0b00011111, false, true);
       break;
 
 
@@ -413,7 +441,7 @@ void process_incoming_CandC(uint8_t *frame)
     // CW enable; CW sidetone volume; CW PTT delay
     case 30:
     case 31:
-        EnableCW((bool)(C1 & 1));
+        EnableCW((bool)(C1 & 1), false);
         SetCWSidetoneVol(C2);
         SetCWPTTDelay(C3);
         break;
@@ -528,6 +556,7 @@ void AddOutgoingCandCBytes(uint8_t* Ptr)
 //
 void *SendOutgoingPacketData(void *arg)
 {
+  (void)arg;
 //
 // memory buffers
 //
@@ -560,8 +589,9 @@ void *SendOutgoingPacketData(void *arg)
 // initialise. Create memory buffers and open DMA file devices
 //
   OutgoingCandCStep = 0;                                  // initialise C&C output
-  printf("starting up outgoing thread\n");
-	posix_memalign((void **)&IQReadBuffer, VALIGNMENT, IQBufferSize);
+	printf("starting up outgoing thread\n");
+	if(posix_memalign((void **)&IQReadBuffer, VALIGNMENT, IQBufferSize) != 0)
+    IQReadBuffer = NULL;
 	if(!IQReadBuffer)
 	{
 		printf("I/Q read buffer allocation failed\n");
@@ -573,7 +603,8 @@ void *SendOutgoingPacketData(void *arg)
   memset(IQReadBuffer, 0, IQBufferSize);
 
 
-	posix_memalign((void **)&MicBuffer, VALIGNMENT, MicBufferSize);
+	if(posix_memalign((void **)&MicBuffer, VALIGNMENT, MicBufferSize) != 0)
+    MicBuffer = NULL;
 	if(!MicBuffer)
 	{
 		printf("Mic sample buffer allocation failed\n");
@@ -637,7 +668,7 @@ void *SendOutgoingPacketData(void *arg)
     //
     while((IQHeadPtr - IQReadPtr)>VIQBYTESPERMETISFRAME)
     {
-      *(uint32_t *)(UDPBuffer  + 4) = htonl(SequenceCounter++);     // add sequence count
+      wr_be_u32(UDPBuffer + 4, SequenceCounter++);                  // add sequence count
       for(USBFrame=0; USBFrame < 2; USBFrame++)
       {
         USBFramePtr = UDPBuffer + 8 + 512*USBFrame;                 // point to start of USB frame
@@ -708,4 +739,3 @@ void *SendOutgoingPacketData(void *arg)
   free(MicBuffer);
   return NULL;
 }
-
