@@ -70,7 +70,7 @@ write_status(){
   }
 }
 EOF
-  chmod 666 "$STATUS_FILE" >/dev/null 2>&1 || true
+  chmod 0640 "$STATUS_FILE" >/dev/null 2>&1 || true
 }
 
 run_cmd(){
@@ -494,6 +494,8 @@ XDMA_FIX_SCRIPT_INSTALL="$(printf '%s' "$XDMA_FIX_SCRIPT_INSTALL")"
 XDMA_POSTINST_HELPER_INSTALL="$(printf '%s' "$XDMA_POSTINST_HELPER_INSTALL")"
 XDMA_POSTINST_HOOK_PATH="$(printf '%s' "$XDMA_POSTINST_HOOK_PATH")"
 STARTED_AT="$(printf '%s' "$RUN_STARTED_AT")"
+SCRIPT_UID="\$(id -u "$DEPLOY_RUN_USER")"
+SCRIPT_GID="\$(id -g "$DEPLOY_RUN_USER")"
 json_escape(){
   local s="\${1-}"
   s="\${s//\\\\/\\\\\\\\}"
@@ -526,12 +528,11 @@ write_status(){
   "service_name": "\$(json_escape "\$SERVICE_NAME")"
 }
 JSON
-  chmod 666 "\$STATUS_FILE" >/dev/null 2>&1 || true
+  chown "\$SCRIPT_UID:\$SCRIPT_GID" "\$STATUS_FILE" >/dev/null 2>&1 || true
+  chmod 0640 "\$STATUS_FILE" >/dev/null 2>&1 || true
 }
 trap 'rc=\$?; write_status "error" "root-deploy" "Root deploy helper failed" 1 "\$rc"; exit "\$rc"' ERR
 write_status "running" "root-deploy" "Root deploy helper started"
-SCRIPT_UID="\$(id -u "$DEPLOY_RUN_USER")"
-SCRIPT_GID="\$(id -g "$DEPLOY_RUN_USER")"
 install -d -m 0755 "$DEPLOY_WEBROOT"
 install -d -m 0775 -o "\$SCRIPT_UID" -g "\$SCRIPT_GID" "$DEPLOY_SCRIPTS_DIR"
 install -d -m 0755 -o root -g root "$DEPLOY_PRIVILEGED_SCRIPTS_DIR"
