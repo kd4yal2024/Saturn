@@ -16,7 +16,7 @@ Run these for each Rust crate:
 ```bash
 cargo fmt -- --check
 cargo audit --deny warnings
-cargo deny --config ../deny.toml check advisories bans sources
+cargo deny check --config ../deny.toml advisories bans sources
 cargo test --locked
 ```
 
