@@ -79,6 +79,14 @@ require_root() {
   exec sudo -n "$target" --enabled-default "$DEFAULT_ENABLED" --saturn-user "$SATURN_USER"
 }
 
+validate_args() {
+  case "$DEFAULT_ENABLED" in
+    auto|true|false) ;;
+    *) die "invalid --enabled-default: $DEFAULT_ENABLED" ;;
+  esac
+  [[ "$SATURN_USER" =~ ^[a-z_][a-z0-9_-]{0,31}$ ]] || die "invalid --saturn-user: $SATURN_USER"
+}
+
 write_unit_file() {
   cat > "$UNIT_PATH" <<'EOF'
 [Unit]
@@ -131,6 +139,7 @@ remove_legacy_autostart_entry() {
 
 main() {
   parse_args "$@"
+  validate_args
   require_root
   [[ -f "$SRC_SCRIPT" ]] || die "missing script: $SRC_SCRIPT"
 

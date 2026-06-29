@@ -22,6 +22,7 @@ SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}"
 EARLY_DEFAULT="${EARLY_DEFAULT:-1}"
 
 log(){ echo "$1" | systemd-cat -t fix-LED-power-button; }
+die(){ echo "$1" >&2; exit 1; }
 has_tty(){ [[ -t 0 || -t 1 ]]; }
 
 parse_args() {
@@ -57,6 +58,8 @@ EOF
 }
 
 parse_args "$@"
+[[ "$SERVICE_NAME" =~ ^[a-zA-Z0-9][a-zA-Z0-9_.-]*\.service$ ]] || die "Invalid service name: $SERVICE_NAME"
+[[ "$EARLY_DEFAULT" =~ ^[01]$ ]] || die "Invalid --early-default value: $EARLY_DEFAULT"
 SCRIPT_ARGS=(--service-name "$SERVICE_NAME" --early-default "$EARLY_DEFAULT")
 
 require_root() {

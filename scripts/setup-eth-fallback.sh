@@ -89,6 +89,7 @@ SCRIPT_SELF="$(readlink -f "${BASH_SOURCE[0]:-$0}" 2>/dev/null || printf '%s\n' 
 SCRIPT_ARGS=("$@")
 PRIVILEGED_SCRIPT_PATH="${SATURN_PRIVILEGED_SCRIPT_PATH:-/usr/local/lib/saturn-go/scripts/$(basename "$SCRIPT_SELF")}"
 INTERFACE="${1:-eth0}"
+[[ "$INTERFACE" =~ ^[a-zA-Z][a-zA-Z0-9_-]{0,14}$ ]] || die "Invalid interface name: $INTERFACE"
 
 CON_DIR="/etc/NetworkManager/system-connections"
 DHCP_CON="${INTERFACE}-dhcp"
