@@ -4,6 +4,7 @@ use axum::{
 };
 use regex::RegexBuilder;
 use serde::Deserialize;
+use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 use std::sync::{Mutex, OnceLock};
@@ -11,7 +12,6 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use sysinfo::{Disks, Networks, System};
 use tokio::process::Command;
 use tracing::error;
-use users::get_user_by_uid;
 
 #[derive(Deserialize, Default)]
 pub struct ProcQuery {
@@ -374,6 +374,26 @@ fn calc_rate(kind: &str, a: u64, b: u64) -> (u64, u64) {
     (ra, rb)
 }
 
+fn read_passwd_user_map() -> HashMap<u32, String> {
+    let Ok(contents) = fs::read_to_string("/etc/passwd") else {
+        return HashMap::new();
+    };
+
+    contents
+        .lines()
+        .filter_map(|line| {
+            if line.is_empty() || line.starts_with('#') {
+                return None;
+            }
+            let mut fields = line.split(':');
+            let name = fields.next()?;
+            fields.next()?;
+            let uid = fields.next()?.parse::<u32>().ok()?;
+            Some((uid, name.to_string()))
+        })
+        .collect()
+}
+
 #[derive(Debug)]
 struct ProcInfo {
     pid: i32,
@@ -388,13 +408,13 @@ struct ProcInfo {
 
 fn list_procs_sysinfo(sys: &System, total_mem_kb: f64, q: &ProcQuery) -> Vec<serde_json::Value> {
     let mut out: Vec<ProcInfo> = Vec::new();
+    let passwd_users = read_passwd_user_map();
     for (pid, proc_) in sys.processes() {
         let pid_i32 = pid.as_u32() as i32;
         let user = proc_
             .user_id()
             .and_then(|u| u.to_string().parse::<u32>().ok())
-            .and_then(|uid| get_user_by_uid(uid))
-            .and_then(|u| u.name().to_str().map(|s| s.to_string()))
+            .and_then(|uid| passwd_users.get(&uid).cloned())
             .unwrap_or_else(|| "unknown".to_string());
         let cmd = if !proc_.cmd().is_empty() {
             proc_.cmd().join(" ")

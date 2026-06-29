@@ -3703,11 +3703,9 @@ fn parse_tci_mic_frame_result_for_client(
 }
 
 fn tci_websocket_config() -> WebSocketConfig {
-    WebSocketConfig {
-        max_message_size: Some(MAX_TCI_INBOUND_MESSAGE_BYTES),
-        max_frame_size: Some(MAX_TCI_INBOUND_FRAME_BYTES),
-        ..WebSocketConfig::default()
-    }
+    WebSocketConfig::default()
+        .max_message_size(Some(MAX_TCI_INBOUND_MESSAGE_BYTES))
+        .max_frame_size(Some(MAX_TCI_INBOUND_FRAME_BYTES))
 }
 
 fn bulk_allowed_for_tcp_outq(tcp_outq_bytes: usize) -> bool {
@@ -3737,39 +3735,32 @@ fn send_outbound(
     match message {
         OutboundMessage::Close => websocket.send(Message::Close(None)),
         OutboundMessage::Text(text) | OutboundMessage::SafetyText(text) => {
-            websocket.send(Message::Text(text.clone()))
+            websocket.send(Message::Text(text.clone().into()))
         }
         OutboundMessage::IqFrame {
             receiver,
             sample_rate,
             iq_samples,
-        } => websocket.send(Message::Binary(build_tci_iq_frame(
-            *receiver,
-            *sample_rate,
-            iq_samples,
-        ))),
+        } => websocket.send(Message::Binary(
+            build_tci_iq_frame(*receiver, *sample_rate, iq_samples).into(),
+        )),
         OutboundMessage::TxIqFrame {
             receiver,
             sample_rate,
             iq_samples,
-        } => websocket.send(Message::Binary(build_tci_tx_iq_frame(
-            *receiver,
-            *sample_rate,
-            iq_samples,
-        ))),
+        } => websocket.send(Message::Binary(
+            build_tci_tx_iq_frame(*receiver, *sample_rate, iq_samples).into(),
+        )),
         OutboundMessage::AudioFrame {
             receiver,
             sample_rate,
             channels,
             audio_samples,
             sequence,
-        } => websocket.send(Message::Binary(build_tci_audio_frame(
-            *receiver,
-            *sample_rate,
-            *channels,
-            audio_samples,
-            *sequence,
-        ))),
+        } => websocket.send(Message::Binary(
+            build_tci_audio_frame(*receiver, *sample_rate, *channels, audio_samples, *sequence)
+                .into(),
+        )),
     }
 }
 
@@ -4621,7 +4612,7 @@ mod tests {
 
         let frame = build_tci_float_frame(0, 48_000, &[0.25, -0.25], 2, 1, 91);
         assert!(handle_incoming_message(
-            Message::Binary(frame),
+            Message::Binary(frame.into()),
             &tx,
             &clients,
             &operator_client_id,
@@ -4672,7 +4663,7 @@ mod tests {
 
         let frame = build_tci_float_frame(0, 48_000, &[0.25, -0.25], 2, 1, 93);
         assert!(handle_incoming_message(
-            Message::Binary(frame),
+            Message::Binary(frame.into()),
             &tx,
             &clients,
             &operator_client_id,
@@ -4719,7 +4710,7 @@ mod tests {
 
         for _ in 0..TX_CODEC_DECODE_ERROR_FORCE_RX_LIMIT {
             assert!(handle_incoming_message(
-                Message::Binary(frame.clone()),
+                Message::Binary(frame.clone().into()),
                 &tx,
                 &clients,
                 &operator_client_id,
@@ -4798,7 +4789,7 @@ mod tests {
         frame[64..].copy_from_slice(&TX_OPUS_WB_TEST_PACKET);
 
         assert!(handle_incoming_message(
-            Message::Binary(frame),
+            Message::Binary(frame.into()),
             &tx,
             &clients,
             &operator_client_id,
@@ -4842,7 +4833,7 @@ mod tests {
 
         let frame = build_tci_float_frame(0, 48_000, &[0.25, -0.25], 2, 1, 92);
         assert!(handle_incoming_message(
-            Message::Binary(frame),
+            Message::Binary(frame.into()),
             &tx,
             &clients,
             &operator_client_id,

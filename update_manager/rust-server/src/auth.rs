@@ -198,7 +198,7 @@ mod tests {
     use tower::ServiceExt;
 
     fn kill_router() -> axum::Router {
-        axum::Router::new().route("/kill_process/:pid", post(kill_process))
+        axum::Router::new().route("/kill_process/{pid}", post(kill_process))
     }
 
     // --- change_password validation ---

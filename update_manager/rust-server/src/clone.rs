@@ -10,7 +10,6 @@ use std::path::Path;
 use std::sync::{Mutex, OnceLock};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
-use users::get_current_uid;
 
 use crate::state::{PiImageStatusQuery, MAX_COMPLETED_JOBS};
 use crate::util::{json_error, output_error_text};
@@ -166,11 +165,25 @@ fn classify_clone_stderr_line(line: &str) -> String {
     }
 }
 
+fn current_process_is_root() -> bool {
+    fs::read_to_string("/proc/self/status")
+        .ok()
+        .and_then(|status| {
+            status.lines().find_map(|line| {
+                if !line.starts_with("Uid:") {
+                    return None;
+                }
+                line.split_whitespace().nth(1).map(|uid| uid == "0")
+            })
+        })
+        .unwrap_or(false)
+}
+
 pub async fn run_privileged_output(
     program: &str,
     args: &[&str],
 ) -> Result<std::process::Output, std::io::Error> {
-    let mut cmd = if get_current_uid() == 0 {
+    let mut cmd = if current_process_is_root() {
         Command::new(program)
     } else {
         let mut c = Command::new("sudo");

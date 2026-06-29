@@ -1,6 +1,6 @@
 use axum::{
-    extract::{Host, State},
-    http::{header, StatusCode},
+    extract::State,
+    http::{header, HeaderMap, StatusCode},
     response::{Html, IntoResponse, Redirect, Response},
 };
 use std::path::Path;
@@ -77,12 +77,19 @@ fn remote_next_https_url(host: &str) -> String {
     )
 }
 
-pub async fn remote_handler(Host(host): Host) -> impl IntoResponse {
-    Redirect::temporary(&remote_https_url(&host))
+fn request_host(headers: &HeaderMap) -> &str {
+    headers
+        .get(header::HOST)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("localhost")
 }
 
-pub async fn remote_next_handler(Host(host): Host) -> impl IntoResponse {
-    Redirect::temporary(&remote_next_https_url(&host))
+pub async fn remote_handler(headers: HeaderMap) -> impl IntoResponse {
+    Redirect::temporary(&remote_https_url(request_host(&headers)))
+}
+
+pub async fn remote_next_handler(headers: HeaderMap) -> impl IntoResponse {
+    Redirect::temporary(&remote_next_https_url(request_host(&headers)))
 }
 
 pub async fn healthz() -> impl IntoResponse {
@@ -182,15 +189,16 @@ pub fn route_to_page(path: &str) -> Option<&'static str> {
 
 pub async fn fallback_handler(
     State(state): State<AppState>,
-    Host(host): Host,
+    headers: HeaderMap,
     axum::extract::OriginalUri(uri): axum::extract::OriginalUri,
 ) -> impl IntoResponse {
+    let host = request_host(&headers);
     if let Some(page) = route_to_page(uri.path()) {
         if page == "saturn-remote.html" {
-            return Redirect::temporary(&remote_https_url(&host)).into_response();
+            return Redirect::temporary(&remote_https_url(host)).into_response();
         }
         if page == "saturn-remote-next.html" {
-            return Redirect::temporary(&remote_next_https_url(&host)).into_response();
+            return Redirect::temporary(&remote_next_https_url(host)).into_response();
         }
         return serve_page(&state.webroot, page).await;
     }

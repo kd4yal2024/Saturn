@@ -224,7 +224,7 @@ pub fn remote_tls_router(state: AppState) -> Router {
         .route("/tci", get(remote_bridge_ws_handler))
         .route("/saturn/control", get(remote_bridge_control_ws_handler))
         .route("/saturn/media", get(remote_bridge_media_ws_handler))
-        .route("/remote-assets/:asset", get(remote_asset_handler))
+        .route("/remote-assets/{asset}", get(remote_asset_handler))
         .with_state(state.clone())
         .layer(axum::middleware::from_fn_with_state(state, csrf_protect))
 }

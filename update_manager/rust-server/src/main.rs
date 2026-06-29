@@ -318,7 +318,7 @@ async fn main() {
         .route("/exit", post(exit_server))
         .route("/get_system_data", get(get_system_data))
         .route("/network_test", get(network_test))
-        .route("/kill_process/:pid", post(kill_process))
+        .route("/kill_process/{pid}", post(kill_process))
         .fallback(get(fallback_handler))
         .with_state(state.clone())
         .layer(axum::middleware::from_fn_with_state(

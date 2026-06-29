@@ -17,12 +17,14 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        crate:
-          - update_manager/rust-server
-          - update_manager/saturn-bridge
+        include:
+          - crate: update_manager/rust-server
+            run_tests: true
+          - crate: update_manager/saturn-bridge
+            run_tests: false
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -34,21 +36,29 @@ jobs:
         working-directory: ${{ matrix.crate }}
 
       - name: Test
+        if: ${{ matrix.run_tests }}
         run: cargo test --locked
         working-directory: ${{ matrix.crate }}
+
+      - name: Skip native-link tests
+        if: ${{ matrix.run_tests == false }}
+        run: |
+          echo "saturn-bridge links WDSP/RNNoise/SpecBleach static libraries from the local piHPSDR tree."
+          echo "GitHub-hosted runners do not have ../../../pihpsdr/wdsp/libwdsp.a, so CI format-checks this crate here."
+          echo "Run cargo test --locked on a Saturn build host with the piHPSDR static libraries installed."
 
   rust-supply-chain:
     name: Rust supply chain
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
       - name: Cache supply-chain tools
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~/.cargo/bin/cargo-audit
@@ -78,10 +88,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Install Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: "22"
           cache: npm
@@ -108,7 +118,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Install build dependencies
         run: |
