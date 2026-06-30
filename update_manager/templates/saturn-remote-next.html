@@ -2442,6 +2442,87 @@
       color: #ffcfcd;
     }
 
+    .tx-advanced-card {
+      margin-top: 6px;
+      margin-bottom: 16px;
+      border: 1px solid rgba(98, 208, 255, 0.13);
+      border-radius: 16px;
+      background: rgba(255, 255, 255, 0.026);
+      overflow: hidden;
+    }
+
+    .tx-advanced-card summary {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(80px, auto) auto;
+      gap: 10px;
+      align-items: center;
+      min-height: 46px;
+      padding: 10px 12px;
+      cursor: pointer;
+      list-style: none;
+      user-select: none;
+    }
+
+    .tx-advanced-card summary::-webkit-details-marker {
+      display: none;
+    }
+
+    .tx-advanced-title {
+      display: block;
+      font-family: var(--mono);
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--text);
+    }
+
+    .tx-advanced-subtitle,
+    .tx-advanced-status {
+      display: block;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-family: var(--mono);
+      font-size: 10px;
+      letter-spacing: 0.04em;
+      color: var(--muted);
+    }
+
+    .tx-advanced-status {
+      max-width: 170px;
+      text-align: right;
+    }
+
+    .tx-advanced-card summary::after {
+      content: "Show";
+      justify-self: end;
+      padding: 4px 8px;
+      border-radius: 999px;
+      border: 1px solid rgba(148, 163, 184, 0.18);
+      color: rgba(230, 237, 243, 0.78);
+      font-family: var(--mono);
+      font-size: 9px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    .tx-advanced-card[open] summary::after {
+      content: "Hide";
+    }
+
+    .tx-advanced-body {
+      padding: 0 12px 12px;
+    }
+
+    .tx-advanced-body .field-row:last-child {
+      margin-bottom: 0;
+    }
+
+    :root[data-theme="light"] .tx-advanced-card {
+      background: rgba(255, 255, 255, 0.42);
+    }
+
     .eq-section {
       margin-top: 12px;
     }
@@ -3201,13 +3282,17 @@
       margin-bottom: 12px;
     }
 
+    :root[data-layout="phone"] .tx-advanced-card summary {
+      grid-template-columns: minmax(0, 1fr) auto;
+    }
+
+    :root[data-layout="phone"] .tx-advanced-status {
+      display: none;
+    }
+
     :root[data-layout="phone"] #mode-grid,
     :root[data-layout="phone"] #band-grid {
       grid-template-columns: repeat(2, minmax(0, 1fr));
-    }
-
-    :root[data-layout="phone"] #tune-grid {
-      grid-template-columns: repeat(3, minmax(0, 1fr));
     }
 
     :root[data-layout="phone"] #rx-nr-grid {
@@ -3896,26 +3981,13 @@
 
         <div class="panel" data-phone-panel="tuning">
           <div class="panel-head" data-phone-panel-head>
-            <h2 class="panel-title">Tuning</h2>
-            <div class="panel-meta">Recall / nudge / jump</div>
+            <h2 class="panel-title">Bands</h2>
+            <div class="panel-meta">Band recall</div>
           </div>
           <div class="panel-body">
             <div class="field-row">
               <div>
-                <label class="label">Tune Step</label>
-                <div class="band-grid" id="tune-grid">
-                  <button class="band-btn" data-step="-1000" type="button">-1 kHz</button>
-                  <button class="band-btn" data-step="-100" type="button">-100 Hz</button>
-                  <button class="band-btn" data-step="-10" type="button">-10 Hz</button>
-                  <button class="band-btn" data-step="10" type="button">+10 Hz</button>
-                  <button class="band-btn" data-step="100" type="button">+100 Hz</button>
-                  <button class="band-btn" data-step="1000" type="button">+1 kHz</button>
-                </div>
-              </div>
-            </div>
-            <div class="field-row">
-              <div>
-                <label class="label">Band Recall</label>
+                <label class="label">Band</label>
                 <div class="band-grid" id="band-grid">
                   <button class="band-btn" data-band="1840000" type="button">160m</button>
                   <button class="band-btn" data-band="3800000" type="button">80m</button>
@@ -4237,75 +4309,86 @@
               </div>
             </div>
 
-            <div class="field-row">
-              <div class="range-wrap">
-                <div class="row spread">
-                  <span class="label" style="margin: 0;">Noise Gate</span>
-                  <label class="mono small"><input id="tx-noise-gate-enabled" type="checkbox" checked /> <span id="tx-noise-gate-label">ON</span></label>
+            <details class="tx-advanced-card" id="tx-advanced-card">
+              <summary>
+                <span>
+                  <span class="tx-advanced-title">TX Setup</span>
+                  <span class="tx-advanced-subtitle">Noise gate, TX filter, and 2-tone test</span>
+                </span>
+                <span class="tx-advanced-status" id="tx-advanced-status">Gate ON | 50-3050 Hz</span>
+              </summary>
+              <div class="tx-advanced-body">
+                <div class="field-row">
+                  <div class="range-wrap">
+                    <div class="row spread">
+                      <span class="label" style="margin: 0;">Noise Gate</span>
+                      <label class="mono small"><input id="tx-noise-gate-enabled" type="checkbox" checked /> <span id="tx-noise-gate-label">ON</span></label>
+                    </div>
+                    <div class="row spread">
+                      <span class="label small" style="margin: 0;">Threshold</span>
+                      <span class="mono small" id="tx-noise-gate-threshold-readout">-30 dB</span>
+                    </div>
+                    <input id="tx-noise-gate-threshold" type="range" min="-80" max="0" step="1" value="-30" />
+                  </div>
                 </div>
-                <div class="row spread">
-                  <span class="label small" style="margin: 0;">Threshold</span>
-                  <span class="mono small" id="tx-noise-gate-threshold-readout">-30 dB</span>
-                </div>
-                <input id="tx-noise-gate-threshold" type="range" min="-80" max="0" step="1" value="-30" />
-              </div>
-            </div>
 
-            <div class="field-row">
-              <div class="range-wrap">
-                <div class="row spread">
-                  <span class="label" style="margin: 0;">TX Filter Low</span>
-                  <span class="mono small" id="tx-filter-low-readout">50 Hz</span>
+                <div class="field-row">
+                  <div class="range-wrap">
+                    <div class="row spread">
+                      <span class="label" style="margin: 0;">TX Filter Low</span>
+                      <span class="mono small" id="tx-filter-low-readout">50 Hz</span>
+                    </div>
+                    <input id="tx-filter-low" type="range" min="0" max="300" step="50" value="50" />
+                  </div>
+                  <div class="range-wrap">
+                    <div class="row spread">
+                      <span class="label" style="margin: 0;">TX Filter High</span>
+                      <span class="mono small" id="tx-filter-high-readout">3050 Hz</span>
+                    </div>
+                    <input id="tx-filter-high" type="range" min="500" max="6000" step="50" value="3050" />
+                  </div>
                 </div>
-                <input id="tx-filter-low" type="range" min="0" max="300" step="50" value="50" />
-              </div>
-              <div class="range-wrap">
-                <div class="row spread">
-                  <span class="label" style="margin: 0;">TX Filter High</span>
-                  <span class="mono small" id="tx-filter-high-readout">3050 Hz</span>
-                </div>
-                <input id="tx-filter-high" type="range" min="500" max="6000" step="50" value="3050" />
-              </div>
-            </div>
 
-            <div style="margin-top:10px;">
-              <button class="btn" id="two-tone-btn" type="button" style="width:100%;font-size:12px;">2-Tone Test Off</button>
-            </div>
-            <div class="field-row" style="margin-top:10px;">
-              <div class="range-wrap">
-                <div class="row spread">
-                  <span class="label" style="margin:0;">2-Tone F1</span>
-                  <span class="mono small" id="two-tone-freq1-readout">700 Hz</span>
+                <div style="margin-top:10px;">
+                  <button class="btn" id="two-tone-btn" type="button" style="width:100%;font-size:12px;">2-Tone Test Off</button>
                 </div>
-                <input id="two-tone-freq1" type="range" min="50" max="2500" step="10" value="700" />
-              </div>
-              <div class="range-wrap">
-                <div class="row spread">
-                  <span class="label" style="margin:0;">2-Tone F2</span>
-                  <span class="mono small" id="two-tone-freq2-readout">1900 Hz</span>
+                <div class="field-row" style="margin-top:10px;">
+                  <div class="range-wrap">
+                    <div class="row spread">
+                      <span class="label" style="margin:0;">2-Tone F1</span>
+                      <span class="mono small" id="two-tone-freq1-readout">700 Hz</span>
+                    </div>
+                    <input id="two-tone-freq1" type="range" min="50" max="2500" step="10" value="700" />
+                  </div>
+                  <div class="range-wrap">
+                    <div class="row spread">
+                      <span class="label" style="margin:0;">2-Tone F2</span>
+                      <span class="mono small" id="two-tone-freq2-readout">1900 Hz</span>
+                    </div>
+                    <input id="two-tone-freq2" type="range" min="100" max="4000" step="10" value="1900" />
+                  </div>
                 </div>
-                <input id="two-tone-freq2" type="range" min="100" max="4000" step="10" value="1900" />
-              </div>
-            </div>
-            <div class="field-row">
-              <div class="range-wrap">
-                <div class="row spread">
-                  <span class="label" style="margin:0;">2-Tone Level</span>
-                  <span class="mono small" id="two-tone-level-readout">0.0 dB</span>
+                <div class="field-row">
+                  <div class="range-wrap">
+                    <div class="row spread">
+                      <span class="label" style="margin:0;">2-Tone Level</span>
+                      <span class="mono small" id="two-tone-level-readout">0.0 dB</span>
+                    </div>
+                    <input id="two-tone-level" type="range" min="-40" max="0" step="0.5" value="0" />
+                  </div>
+                  <div class="range-wrap">
+                    <div class="row spread">
+                      <span class="label" style="margin:0;">Tone 2 Delay</span>
+                      <span class="mono small" id="two-tone-delay-readout">0 ms</span>
+                    </div>
+                    <input id="two-tone-delay" type="range" min="0" max="1000" step="10" value="0" />
+                  </div>
                 </div>
-                <input id="two-tone-level" type="range" min="-40" max="0" step="0.5" value="0" />
-              </div>
-              <div class="range-wrap">
-                <div class="row spread">
-                  <span class="label" style="margin:0;">Tone 2 Delay</span>
-                  <span class="mono small" id="two-tone-delay-readout">0 ms</span>
+                <div class="field-row">
+                  <label class="toggle-field"><span>Invert On LSB/DIGL/CWL</span><input id="two-tone-invert-lsb" type="checkbox" checked /></label>
                 </div>
-                <input id="two-tone-delay" type="range" min="0" max="1000" step="10" value="0" />
               </div>
-            </div>
-            <div class="field-row">
-              <label class="toggle-field"><span>Invert On LSB/DIGL/CWL</span><input id="two-tone-invert-lsb" type="checkbox" checked /></label>
-            </div>
+            </details>
           </div>
         </div>
       </div>
@@ -8403,6 +8486,10 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       };
       const target = $(targets[mode]);
       if (!target) return;
+      if (mode === "gate") {
+        const advancedCard = $("tx-advanced-card");
+        if (advancedCard) advancedCard.open = true;
+      }
       target.scrollIntoView({ behavior: "smooth", block: "center" });
       if (typeof target.focus === "function") target.focus({ preventScroll: true });
     }
@@ -9201,6 +9288,10 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       $("tx-mic-gain-readout").textContent = `${safeFixed(state.txMicGainDb, 1, "0.0")} dB`;
       $("tx-filter-low-readout").textContent = `${state.txFilterLow} Hz`;
       $("tx-filter-high-readout").textContent = `${state.txFilterHigh} Hz`;
+      const txAdvancedStatus = $("tx-advanced-status");
+      if (txAdvancedStatus) {
+        txAdvancedStatus.textContent = `Gate ${state.txNoiseGateEnabled ? "ON" : "OFF"} | ${state.txFilterLow}-${state.txFilterHigh} Hz | 2T ${state.twoToneEnabled ? "ON" : "OFF"}`;
+      }
       $("rx-eq-enable-btn").textContent = state.rxEqEnabled ? "EQ On" : "EQ Off";
       $("rx-eq-enable-btn").classList.toggle("active", state.rxEqEnabled);
       $("tx-eq-enable-btn").textContent = state.txEqEnabled ? "EQ On" : "EQ Off";
@@ -12537,11 +12628,6 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
           persistLocalSettingsFallback(currentRemoteSettings());
           scheduleRemoteSettingsSave();
           updateUi();
-        });
-      });
-      document.querySelectorAll("#tune-grid .band-btn").forEach((button) => {
-        button.addEventListener("click", () => {
-          tuneBy(Number(button.dataset.step));
         });
       });
       $("vfo-step-down-btn").addEventListener("click", () => {

@@ -10,10 +10,10 @@ use std::{
 use axum::{
     extract::{
         ws::{Message as AxumMessage, WebSocket, WebSocketUpgrade},
-        Path as AxumPath, State,
+        OriginalUri, Path as AxumPath, State,
     },
     http::{header, HeaderMap, HeaderValue, StatusCode},
-    response::{IntoResponse, Response},
+    response::{IntoResponse, Redirect, Response},
     routing::{get, post},
     Json, Router,
 };
@@ -26,7 +26,7 @@ use tracing::{error, info, warn};
 use crate::{
     delete_remote_profile, get_remote_profiles, get_remote_settings,
     middleware::csrf_protect,
-    pages::{healthz, serve_page},
+    pages::{healthz, serve_page, REMOTE_NEXT_DEFAULT_QUERY},
     save_remote_profile, set_remote_profile_startup, set_remote_settings,
     state::{
         AppState, RemoteProfileDeleteRequest, RemoteProfileSaveRequest,
@@ -233,7 +233,20 @@ async fn remote_page_handler(headers: HeaderMap, State(state): State<AppState>) 
     remote_page_response(headers, state, "saturn-remote.html").await
 }
 
-async fn remote_next_page_handler(headers: HeaderMap, State(state): State<AppState>) -> Response {
+async fn remote_next_page_handler(
+    headers: HeaderMap,
+    OriginalUri(uri): OriginalUri,
+    State(state): State<AppState>,
+) -> Response {
+    if uri.query().is_none_or(str::is_empty) {
+        if let Err(rejection) = check_remote_auth(&headers) {
+            return rejection;
+        }
+        let mut resp = Redirect::temporary(&format!("/remote-next?{REMOTE_NEXT_DEFAULT_QUERY}"))
+            .into_response();
+        attach_remote_auth_cookie(&mut resp);
+        return resp;
+    }
     remote_page_response(headers, state, "saturn-remote-next.html").await
 }
 
@@ -1290,7 +1303,23 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn remote_next_route_serves_dev_remote_page() {
+    async fn remote_next_route_redirects_to_default_query_when_missing() {
+        let state = test_state("remote-next-default-redirect");
+        let app = remote_tls_router(state);
+        let req = Request::builder()
+            .uri("/remote-next")
+            .body(Body::empty())
+            .unwrap();
+        let res = app.oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::TEMPORARY_REDIRECT);
+        assert_eq!(
+            res.headers().get(header::LOCATION).unwrap(),
+            "/remote-next?phase42_split=1&phase44_tx_opus=1&phase44_tx_cfc=1&client_bust=bridgeprefill240-cfcessb3"
+        );
+    }
+
+    #[tokio::test]
+    async fn remote_next_route_serves_dev_remote_page_when_query_present() {
         let state = test_state("remote-next-page");
         tokio::fs::create_dir_all(&state.webroot).await.unwrap();
         tokio::fs::write(state.webroot.join("saturn-remote.html"), "stable remote")
@@ -1302,7 +1331,7 @@ mod tests {
 
         let app = remote_tls_router(state);
         let req = Request::builder()
-            .uri("/remote-next")
+            .uri("/remote-next?phase42_split=1&phase44_tx_opus=1&phase44_tx_cfc=1&client_bust=bridgeprefill240-cfcessb3")
             .body(Body::empty())
             .unwrap();
         let res = app.oneshot(req).await.unwrap();

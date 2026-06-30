@@ -70,10 +70,14 @@ fn remote_https_url(host: &str) -> String {
     format!("https://{}:8443/remote", remote_host_without_port(host))
 }
 
+pub const REMOTE_NEXT_DEFAULT_QUERY: &str =
+    "phase42_split=1&phase44_tx_opus=1&phase44_tx_cfc=1&client_bust=bridgeprefill240-cfcessb3";
+
 fn remote_next_https_url(host: &str) -> String {
     format!(
-        "https://{}:8443/remote-next?phase42_split=1&phase44_tx_opus=1&phase44_tx_cfc=1&client_bust=bridgeprefill240-cfcessb3",
-        remote_host_without_port(host)
+        "https://{}:8443/remote-next?{}",
+        remote_host_without_port(host),
+        REMOTE_NEXT_DEFAULT_QUERY
     )
 }
 

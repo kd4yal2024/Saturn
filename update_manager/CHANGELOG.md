@@ -92,6 +92,11 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
 - Saturn Go page now includes an `XDMA Doctor` action that runs a classified read-only PCIe/XDMA report through the existing privileged helper lane.
 
 ### Changed
+- Saturn Remote TLS now treats plain `/remote-next` and `/remote-next.html`
+  as default-beta entry points and redirects them to
+  `/remote-next?phase42_split=1&phase44_tx_opus=1&phase44_tx_cfc=1&client_bust=bridgeprefill240-cfcessb3`.
+  Requests that already include a query string still serve the page directly,
+  so explicit test flags and cache-bust URLs continue to work.
 - `update-deskhpsdr.py` v1.1 now compacts routine apt/debconf/autoremove
   chatter in verbose web output, while keeping the raw build log intact.
   Its build helper no longer reinstalls the PulseAudio daemon on
