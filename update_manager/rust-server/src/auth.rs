@@ -15,21 +15,16 @@ pub struct PasswordForm {
     new_password: String,
 }
 
-async fn run_htpasswd(
-    new_password: &str,
-    use_sudo: bool,
-) -> Result<std::process::Output, std::io::Error> {
-    let mut cmd = if use_sudo {
-        let mut c = Command::new("sudo");
-        c.arg("-n").arg("htpasswd");
-        c
-    } else {
-        Command::new("htpasswd")
-    };
+/// Privileged helper that updates BOTH auth backends together (nginx
+/// htpasswd + the Saturn Remote TLS drop-in) so they cannot drift, then
+/// schedules a deferred saturn-go restart to apply the TLS-side change.
+const PASSWORD_HELPER: &str = "/usr/local/lib/saturn-go/scripts/saturn-admin-password.sh";
 
-    cmd.arg("-i")
-        .arg("/etc/nginx/.htpasswd")
-        .arg("admin")
+async fn run_password_helper(new_password: &str) -> Result<std::process::Output, std::io::Error> {
+    let mut cmd = Command::new("sudo");
+    cmd.arg("-n")
+        .arg(PASSWORD_HELPER)
+        .arg("set")
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
@@ -48,31 +43,29 @@ pub async fn change_password(
     if form.new_password.len() < 5 {
         return Json(serde_json::json!({ "status":"error", "message":"min length 5" }));
     }
+    if form.new_password.chars().any(char::is_control) {
+        return Json(serde_json::json!({
+            "status":"error",
+            "message":"password must not contain control characters"
+        }));
+    }
 
-    match run_htpasswd(&form.new_password, false).await {
-        Ok(out) if out.status.success() => {
-            return Json(serde_json::json!({ "status":"success" }));
-        }
-        Ok(_out) => {
-            // Common case in service mode: no write permission for /etc/nginx/.htpasswd.
-            // Retry with non-interactive sudo (works with sudoers NOPASSWD).
-        }
-        Err(_e) => {
-            // Retry below; covers command permission/path issues where sudo may still work.
-        }
-    };
-
-    match run_htpasswd(&form.new_password, true).await {
-        Ok(out) if out.status.success() => Json(serde_json::json!({ "status":"success" })),
+    match run_password_helper(&form.new_password).await {
+        Ok(out) if out.status.success() => Json(serde_json::json!({
+            "status":"success",
+            "message":"Password updated for LAN and remote. Remote (TLS) sessions reconnect in a few seconds."
+        })),
         Ok(out) => {
             let detail = output_error_text(&out);
             let msg = if detail.contains("a password is required")
                 || detail.contains("no tty present")
                 || detail.contains("is not allowed to execute")
+                || detail.contains("command not found")
+                || detail.contains("No such file")
             {
-                "Password change requires sudo permission for htpasswd (configure NOPASSWD for this command).".to_string()
+                "Password change requires the saturn-admin-password.sh helper and its sudoers entry (rerun the Saturn Go installer or update).".to_string()
             } else {
-                format!("htpasswd failed: {detail}")
+                format!("password helper failed: {detail}")
             };
             Json(serde_json::json!({ "status":"error", "message": msg }))
         }

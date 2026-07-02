@@ -227,15 +227,16 @@
       <form id="password-form" class="space-y-3">
         <div>
           <label class="block text-sm mb-1" for="new-password">New Password</label>
-          <input id="new-password" type="password" minlength="5" required class="field w-full px-3 py-2"/>
+          <input id="new-password" type="text" minlength="5" required autocomplete="new-password" spellcheck="false" class="field w-full px-3 py-2 text-lg"/>
         </div>
-        <div>
-          <label class="block text-sm mb-1" for="confirm-password">Confirm Password</label>
-          <input id="confirm-password" type="password" minlength="5" required class="field w-full px-3 py-2"/>
+        <div class="flex items-center justify-between gap-3">
+          <label class="flex items-center gap-2 text-sm"><input id="password-visible" type="checkbox" checked/> Show password</label>
+          <button class="btn btn-ghost px-3 py-1 text-sm" type="button" id="password-generate">Generate for me</button>
         </div>
-        <p id="password-error" class="text-red-400 text-sm hidden">Passwords do not match or are too short.</p>
+        <p class="text-xs opacity-70">Minimum 5 characters, no other rules — a few simple words work well. The same password is used for this page and the remote (https) page.</p>
+        <p id="password-error" class="text-red-400 text-sm hidden">Password is too short (minimum 5 characters).</p>
         <div class="flex justify-end gap-3 pt-2">
-          <button class="btn btn-primary px-4 py-2" type="submit">Submit</button>
+          <button class="btn btn-primary px-4 py-2" type="submit">Save Password</button>
           <button class="btn btn-ghost px-4 py-2" type="button" id="password-cancel">Cancel</button>
         </div>
       </form>
@@ -711,10 +712,26 @@ $('change-password-btn').addEventListener('click', ()=>{
 $('password-cancel').addEventListener('click', ()=>{
   $('password-modal').classList.add('hidden'); document.body.style.overflow='';
 });
+$('password-visible').addEventListener('change', ()=>{
+  $('new-password').type = $('password-visible').checked ? 'text' : 'password';
+});
+$('password-generate').addEventListener('click', ()=>{
+  const words = ['antenna','beacon','carrier','dipole','echo','falcon','granite','harbor',
+    'relay','sierra','tango','uplink','vector','watt','yagi','zephyr','copper','ember',
+    'garnet','helix','indigo','jasper','lumen','marble','onyx','prism','summit','topaz',
+    'violet','walnut','zenith','amber','cedar','dune','flint','grove','island','kestrel',
+    'mesa','nova','otter','pebble','ridge','slate','valley','willow'];
+  const rand = (n) => { const b = new Uint32Array(1); crypto.getRandomValues(b); return b[0] % n; };
+  const pick = () => words[rand(words.length)];
+  const num = 10 + rand(90);
+  $('new-password').value = `${pick()}-${pick()}-${pick()}-${pick()}-${num}`;
+  $('password-visible').checked = true;
+  $('new-password').type = 'text';
+});
 $('password-form').addEventListener('submit', async (e)=>{
   e.preventDefault();
-  const a = $('new-password').value, b = $('confirm-password').value;
-  if (a.length<5 || a!==b){ $('password-error').classList.remove('hidden'); return; }
+  const a = $('new-password').value;
+  if (a.length<5){ $('password-error').classList.remove('hidden'); return; }
   $('password-error').classList.add('hidden');
   $('password-modal').classList.add('hidden'); document.body.style.overflow='';
   try{
@@ -723,7 +740,7 @@ $('password-form').addEventListener('submit', async (e)=>{
       body:`new_password=${encodeURIComponent(a)}`
     });
     const data = await readJsonOrHelpfulError(r, 'Change password API');
-    if (data.status==='success') append('\x1b[32mPassword changed successfully\x1b[0m');
+    if (data.status==='success') append(`\x1b[32m${data.message||'Password changed successfully'}\x1b[0m`);
     else throw new Error(data.message||'Unknown error');
   }catch(e){ append(`\x1b[31mChange password failed: ${e.message}\x1b[0m`); }
 });

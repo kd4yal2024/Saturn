@@ -89,6 +89,7 @@ EXTRA_PACKAGED_SCRIPTS=(
 )
 PRIVILEGED_HELPER_SCRIPTS=(
   "$SOURCE_DIR/scripts/saturn-go-build-preflight.sh"
+  "$REPO_SOURCE_DIR/scripts/saturn-admin-password.sh"
   "$REPO_SOURCE_DIR/scripts/saturn-flash-fpga.sh"
   "$REPO_SOURCE_DIR/scripts/saturn-xdma-doctor.sh"
   "$REPO_SOURCE_DIR/scripts/saturn-xdma-stage-current.sh"
@@ -440,6 +441,8 @@ ${SERVICE_USER} ALL=(root) NOPASSWD: ${PRIVILEGED_SCRIPTS_DIR}/saturn-xdma-docto
 ${SERVICE_USER} ALL=(root) NOPASSWD: ${PRIVILEGED_SCRIPTS_DIR}/saturn-flash-fpga.sh
 ${SERVICE_USER} ALL=(root) NOPASSWD: ${PRIVILEGED_SCRIPTS_DIR}/saturn-flash-fpga.sh *
 ${SERVICE_USER} ALL=(root) NOPASSWD: ${PRIVILEGED_SCRIPTS_DIR}/saturn-xdma-stage-current.sh
+${SERVICE_USER} ALL=(root) NOPASSWD: ${PRIVILEGED_SCRIPTS_DIR}/saturn-admin-password.sh set
+${SERVICE_USER} ALL=(root) NOPASSWD: ${PRIVILEGED_SCRIPTS_DIR}/saturn-admin-password.sh status
 ${SERVICE_USER} ALL=(root) NOPASSWD: ${PRIVILEGED_SCRIPTS_DIR}/saturn-go-build-preflight.sh
 ${SERVICE_USER} ALL=(root) NOPASSWD: ${PRIVILEGED_SCRIPTS_DIR}/saturn-go-build-preflight.sh ensure-swap
 ${SERVICE_USER} ALL=(root) NOPASSWD: ${PRIVILEGED_SCRIPTS_DIR}/saturn-go-build-preflight.sh status

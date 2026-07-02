@@ -148,7 +148,7 @@ If the node is already joined under a generic name, the same command updates the
 Tailscale does **not** replace Saturn Remote's basic auth — it stacks on top.
 
 - **Tailscale**: gates *who can reach* the listener at all. Only authenticated tailnet members (and their explicitly shared devices) can route traffic to the Pi.
-- **Basic auth in Saturn Remote**: gates *who can use* the listener once reached. The nginx LAN admin path uses `/etc/nginx/.htpasswd`; the Saturn Remote TLS listener uses the `SATURN_REMOTE_BASIC_AUTH=username:password` service environment consumed by `rust-server/src/remote_tls.rs`. Keep both credential paths aligned when changing the admin password. Survives Tailscale account compromise, shared device misuse, and accidental ACL widening.
+- **Basic auth in Saturn Remote**: gates *who can use* the listener once reached. The nginx LAN admin path uses `/etc/nginx/.htpasswd`; the Saturn Remote TLS listener uses the `SATURN_REMOTE_BASIC_AUTH=username:password` service environment consumed by `rust-server/src/remote_tls.rs`. Both credential paths are kept aligned by `saturn-admin-password.sh` (used by the UI change-password flow and console `reset`); never edit one side by hand. Survives Tailscale account compromise, shared device misuse, and accidental ACL widening.
 - **`SATURN_REMOTE_TX_RF_ENABLED`**: gates *whether RF TX is permitted at all*. Stays opt-in regardless of how the page is reached. A correctly authenticated Tailscale operator with valid basic-auth credentials still cannot key the radio unless this is explicitly set in the bridge environment.
 
 These three controls are independent. Do not collapse them.
@@ -178,11 +178,11 @@ curl -k -sS -o /dev/null -w 'HTTP %{http_code}\n' -u admin:<password> https://12
 
 Operators inheriting an existing deployment should run the unauthenticated `curl` check above before assuming the basic-auth gate is active. Code-level fail-closed hardening (refuse to start the TLS listener when the env var is absent) is tracked separately and discussed in the next subsection.
 
-After setting `SATURN_REMOTE_BASIC_AUTH`, re-align `/etc/nginx/.htpasswd` to the same password so the LAN admin path (`/saturn/*`) and the TLS remote path (`/remote*`) accept the same credential:
+The manual drop-in recipe above is the historical remediation from that audit. On current installs, set or re-align the credential with the password helper instead — it updates `/etc/nginx/.htpasswd` and the TLS drop-in together so the LAN admin path (`/saturn/*`) and the TLS remote path (`/remote*`) cannot drift:
 
 ```bash
-sudo htpasswd -B /etc/nginx/.htpasswd admin
-# enter the same password used in SATURN_REMOTE_BASIC_AUTH
+printf '%s\n' 'new-password' | sudo /usr/local/lib/saturn-go/scripts/saturn-admin-password.sh set --restart now
+sudo /usr/local/lib/saturn-go/scripts/saturn-admin-password.sh status   # expect sync_state=in_sync
 ```
 
 #### Fail-closed remote TLS listener (current behavior)
@@ -206,7 +206,14 @@ Saturn logs a warning and binds the listener with no auth gate. The override exi
 
 The installer writes `/etc/systemd/system/saturn-go.service.d/10-remote-auth.conf` (mode 0600 root:root) carrying `SATURN_REMOTE_BASIC_AUTH=admin:<password>` whenever a fresh password is captured during install (interactive prompt, `SATURN_ADMIN_PASSWORD` env, or non-TTY random generation). Reruns that reuse an existing `/etc/nginx/.htpasswd` preserve any pre-existing drop-in unchanged. If the installer cannot capture a fresh password and no drop-in exists, it warns the operator with the exact `systemctl edit` recipe to align the TLS path with the LAN nginx password.
 
-**Known gap (current diff)**: the `/change_password` admin endpoint updates only `/etc/nginx/.htpasswd`; the TLS auth drop-in must still be updated manually, or the installer rerun with `SATURN_ADMIN_PASSWORD=<new>` set, until that endpoint is extended to write both targets. The Tailscale helper (`saturn-go-tailscale-serve.sh`) catches the resulting misalignment by refusing to configure Serve when the unauthenticated `curl` check returns anything other than 401.
+The `/change_password` admin endpoint calls the privileged `saturn-admin-password.sh set` helper, which updates `/etc/nginx/.htpasswd` **and** the TLS auth drop-in together, then schedules a deferred `saturn-go` restart (~2s) so the TLS listener picks up the new credential. The two backends cannot drift through normal use. To audit or recover:
+
+```bash
+sudo /usr/local/lib/saturn-go/scripts/saturn-admin-password.sh status   # sync_state=in_sync expected
+sudo /usr/local/lib/saturn-go/scripts/saturn-admin-password.sh reset    # console recovery: prints a fresh passphrase
+```
+
+`reset` is deliberately console-only (physical access is the trust anchor); there is no remote reset path. The Tailscale helper (`saturn-go-tailscale-serve.sh`) additionally refuses to configure Serve when the unauthenticated `curl` check returns anything other than 401.
 
 ### Bridge bind audit (known wide-bind on TCI)
 
@@ -311,7 +318,7 @@ Any failure on Safari (iPad/iPhone/macOS) is the highest-priority signal — Saf
 
 - LAN access via `https://<lan-ip>:8443/remote-next` and `https://<lan-ip>:8443/remote` continues to work exactly as before.
 - The nginx admin proxy at `http://<lan-ip>/saturn/` is unaffected.
-- Basic-auth credentials should stay aligned between the LAN nginx path (`/etc/nginx/.htpasswd`) and the Tailscale/Saturn Remote TLS path (`SATURN_REMOTE_BASIC_AUTH`). Current code paths store them differently, so verify both after password changes.
+- Basic-auth credentials stay aligned between the LAN nginx path (`/etc/nginx/.htpasswd`) and the Tailscale/Saturn Remote TLS path (`SATURN_REMOTE_BASIC_AUTH`): password changes go through `saturn-admin-password.sh`, which updates both together. Verify any time with `sudo /usr/local/lib/saturn-go/scripts/saturn-admin-password.sh status`.
 - Saturn Go self-update, FPGA flash, backup/restore, and all other admin workflows continue to use the LAN nginx path, not the Tailscale URL.
 
 Tailscale is purely an additional access path for `/remote` and `/remote-next`. It does not replace, gate, or alter any other Saturn workflow.
@@ -675,9 +682,9 @@ Safety/usage notes:
 
 ### Password Change
 
-`POST /change_password` updates `/etc/nginx/.htpasswd` for user `admin`.
+`POST /change_password` pipes the new password over stdin to `sudo -n saturn-admin-password.sh set`, which updates `/etc/nginx/.htpasswd` **and** the `SATURN_REMOTE_BASIC_AUTH` drop-in together, then schedules a deferred `saturn-go` restart. Audit alignment with `sudo /usr/local/lib/saturn-go/scripts/saturn-admin-password.sh status`; recover a forgotten password from the console with `... reset` (see "Authentication layers" above).
 
-If direct write is denied, backend retries with `sudo -n`. Ensure service user has sudoers permission for `htpasswd` if this route should work non-interactively.
+The installer grants the service user sudoers entries for exactly `saturn-admin-password.sh set` and `status`; no direct `htpasswd` permission is needed.
 
 ### Monitor and Process Control
 

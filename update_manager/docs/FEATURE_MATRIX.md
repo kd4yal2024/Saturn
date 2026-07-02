@@ -33,7 +33,7 @@ The Saturn Remote frontend currently ships in two parallel forms against the sam
 | Clone SD card to removable/USB device (+ quick wipe) | `backup.html` | `GET /pi_devices`, `POST /pi_wipe_target`, `POST /pi_clone_start`, `GET /pi_clone_status`, `POST /pi_clone_cancel` | `wipefs`, optional `sgdisk --zap-all`, `dd` (quick metadata wipe), `clone_pi_to_device.sh` | In-memory clone job state |
 | Repair pack export | `backup.html` | `GET /repair_pack` | `tar -czf -` over key runtime files | Generated manifest in `/tmp` |
 | Runtime/config verification | `backup.html` | `GET /verify_system_config` | Filesystem checks + `systemctl is-active` | N/A |
-| Password change in UI | `index.html` | `POST /change_password` | `htpasswd -i` (direct or `sudo -n`) | `/etc/nginx/.htpasswd` |
+| Password change in UI | `index.html` | `POST /change_password` | `sudo -n saturn-admin-password.sh set` (stdin) | `/etc/nginx/.htpasswd` + `saturn-go.service.d/10-remote-auth.conf` |
 | Service self-health watchdog | Not directly in UI | `GET /healthz` consumed by watchdog | `/usr/local/lib/saturn-go/saturn-health-watchdog.sh`, systemd timer/service | `saturn-go-watchdog.*` units |
 | System monitor dashboard | `monitor.html` | `GET /get_system_data`, `GET /network_test`, `POST /kill_process/:pid` | `/proc`, sysfs, `curl`, `kill` | N/A |
 | FPGA image discovery for flash UI | `fpga.html` | `GET /get_fpga_images` | Directory scan for `.bin` files | `SATURN_FPGA_DIR` or repo paths |

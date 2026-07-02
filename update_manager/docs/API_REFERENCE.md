@@ -256,9 +256,13 @@ Update-activity behavior for `/run`:
 
 Behavior:
 
-- enforces minimum length 5
-- tries direct `htpasswd -i`
-- retries with `sudo -n htpasswd -i` for service deployments
+- enforces minimum length 5 and rejects control characters
+- runs `sudo -n saturn-admin-password.sh set` with the password on stdin
+- the helper updates `/etc/nginx/.htpasswd` and the TLS auth drop-in
+  together (all-or-nothing with rollback), then schedules a deferred
+  `saturn-go` restart (~2s) so the TLS listener picks up the change
+- success response includes a `message` telling the user remote sessions
+  reconnect in a few seconds
 
 ## Pi Image Workflow
 

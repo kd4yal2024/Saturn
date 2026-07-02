@@ -299,6 +299,7 @@ EXTRA_PACKAGED_SCRIPTS=(
 )
 PRIVILEGED_HELPER_SCRIPTS=(
   "$REPO_ROOT/update_manager/scripts/saturn-go-build-preflight.sh"
+  "$REPO_ROOT/scripts/saturn-admin-password.sh"
   "$REPO_ROOT/scripts/saturn-flash-fpga.sh"
   "$REPO_ROOT/scripts/saturn-xdma-doctor.sh"
   "$REPO_ROOT/scripts/saturn-xdma-stage-current.sh"
@@ -308,6 +309,8 @@ PRIVILEGED_HELPER_SCRIPTS=(
   "$REPO_ROOT/scripts/install-shutdown-waiter-service.sh"
   "$REPO_ROOT/scripts/shutdown-waiter.sh"
   "$REPO_ROOT/scripts/setup-eth-fallback.sh"
+  "$REPO_ROOT/update_manager/scripts/saturn-tailscale.sh"
+  "$REPO_ROOT/update_manager/scripts/saturn-go-tailscale-serve.sh"
 )
 
 SATURNGO_URL="${SATURN_SATURNGO_POLICY_URL:-}"
@@ -590,9 +593,15 @@ ${DEPLOY_RUN_USER} ALL=(root) NOPASSWD: ${DEPLOY_PRIVILEGED_SCRIPTS_DIR}/saturn-
 ${DEPLOY_RUN_USER} ALL=(root) NOPASSWD: ${DEPLOY_PRIVILEGED_SCRIPTS_DIR}/saturn-flash-fpga.sh
 ${DEPLOY_RUN_USER} ALL=(root) NOPASSWD: ${DEPLOY_PRIVILEGED_SCRIPTS_DIR}/saturn-flash-fpga.sh *
 ${DEPLOY_RUN_USER} ALL=(root) NOPASSWD: ${DEPLOY_PRIVILEGED_SCRIPTS_DIR}/saturn-xdma-stage-current.sh
+${DEPLOY_RUN_USER} ALL=(root) NOPASSWD: ${DEPLOY_PRIVILEGED_SCRIPTS_DIR}/saturn-admin-password.sh set
+${DEPLOY_RUN_USER} ALL=(root) NOPASSWD: ${DEPLOY_PRIVILEGED_SCRIPTS_DIR}/saturn-admin-password.sh status
 ${DEPLOY_RUN_USER} ALL=(root) NOPASSWD: ${DEPLOY_PRIVILEGED_SCRIPTS_DIR}/saturn-go-build-preflight.sh
 ${DEPLOY_RUN_USER} ALL=(root) NOPASSWD: ${DEPLOY_PRIVILEGED_SCRIPTS_DIR}/saturn-go-build-preflight.sh ensure-swap
 ${DEPLOY_RUN_USER} ALL=(root) NOPASSWD: ${DEPLOY_PRIVILEGED_SCRIPTS_DIR}/saturn-go-build-preflight.sh status
+${DEPLOY_RUN_USER} ALL=(root) NOPASSWD: ${DEPLOY_PRIVILEGED_SCRIPTS_DIR}/saturn-tailscale.sh
+${DEPLOY_RUN_USER} ALL=(root) NOPASSWD: ${DEPLOY_PRIVILEGED_SCRIPTS_DIR}/saturn-tailscale.sh *
+${DEPLOY_RUN_USER} ALL=(root) NOPASSWD: ${DEPLOY_PRIVILEGED_SCRIPTS_DIR}/saturn-go-tailscale-serve.sh
+${DEPLOY_RUN_USER} ALL=(root) NOPASSWD: ${DEPLOY_PRIVILEGED_SCRIPTS_DIR}/saturn-go-tailscale-serve.sh *
 SUDOERS
 chmod 0440 "$DEPLOY_SUDOERS_FILE"
 if command -v visudo >/dev/null 2>&1; then

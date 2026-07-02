@@ -206,11 +206,16 @@ If a script entry does not define `version`, `/get_versions` now returns
 
 ### Change Password
 
-`/change_password` updates `/etc/nginx/.htpasswd` for `admin`.
+`/change_password` calls the privileged `saturn-admin-password.sh set` helper
+via `sudo -n` (password piped over stdin).
 
-- First tries `htpasswd` directly
-- Then retries with `sudo -n htpasswd` for service-mode deployments
-- Returns explicit guidance when sudo permissions are missing
+- The helper updates `/etc/nginx/.htpasswd` **and** the Saturn Remote TLS
+  auth drop-in (`10-remote-auth.conf`) together, all-or-nothing, so LAN and
+  remote passwords cannot drift
+- A deferred `saturn-go` restart (~2s) applies the TLS-side change
+- Returns explicit guidance when the helper or its sudoers entry is missing
+- Console recovery: `sudo saturn-admin-password.sh reset` prints a fresh
+  generated passphrase (see `docs/ADMIN_AUTH_SIMPLIFICATION.md`)
 
 ### Saturn Go Self-Update (`update-saturn-go.sh`)
 
@@ -488,8 +493,10 @@ Default URL:
   - `cargo` and `systemd-run` may print normal informational lines to stderr
   - check the progress terminal output and `Last Deploy Status` panel before treating as failure
 - Change Password fails:
-  - Ensure `htpasswd` exists and service user can update
-    `/etc/nginx/.htpasswd` (directly or via allowed `sudo -n`)
+  - Ensure `/usr/local/lib/saturn-go/scripts/saturn-admin-password.sh` exists and
+    the service user's sudoers policy allows `set`/`status` (rerun the installer
+    if missing); `htpasswd` comes from `apache2-utils`
+  - Diagnose with `sudo /usr/local/lib/saturn-go/scripts/saturn-admin-password.sh status`
 - Versions panel is blank or `unknown`:
   - Verify `version` keys in `/var/lib/saturn-web/config.json`
 - Clone target dropdown is empty:

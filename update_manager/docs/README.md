@@ -10,12 +10,13 @@ This folder contains the operational and technical documentation for the Rust-ba
 4. `SCRIPT_CATALOG.md`
 5. `OPERATIONS_RUNBOOK.md`
 6. `RUST_SUPPLY_CHAIN.md`
-7. `XDMA_RELEASE_POLICY.md`
-8. `SATURN_REMOTE_STATE_STRIP_SPEC.md`
-9. `SATURN_REMOTE_APPLE_SAFARI_VALIDATION.md`
-10. `SATURN_REMOTE_APPLE_SAFARI_RESULTS.md`
-11. `SATURN_REMOTE_SQUELCH_AUDIO_PROFILE_CONTRACT.md`
-12. `SATURN_REMOTE_TX_UPLINK_PHASE38_CONTRACT.md`
+7. `ADMIN_AUTH_SIMPLIFICATION.md`
+8. `XDMA_RELEASE_POLICY.md`
+9. `SATURN_REMOTE_STATE_STRIP_SPEC.md`
+10. `SATURN_REMOTE_APPLE_SAFARI_VALIDATION.md`
+11. `SATURN_REMOTE_APPLE_SAFARI_RESULTS.md`
+12. `SATURN_REMOTE_SQUELCH_AUDIO_PROFILE_CONTRACT.md`
+13. `SATURN_REMOTE_TX_UPLINK_PHASE38_CONTRACT.md`
 
 ## Document Guide
 
@@ -41,6 +42,11 @@ This folder contains the operational and technical documentation for the Rust-ba
 - `RUST_SUPPLY_CHAIN.md`
   - Rust dependency policy for `saturn-go` and `saturn-bridge`.
   - Documents `cargo audit`, `cargo deny`, lockfile, and pinning expectations.
+
+- `ADMIN_AUTH_SIMPLIFICATION.md`
+  - Admin password design for the ham-operator audience: single source of truth
+    (`saturn-admin-password.sh`), console-only reset, and the phased plan for
+    remember-this-device cookies and passwordless Tailscale identity auth.
 
 - `XDMA_RELEASE_POLICY.md`
   - DKMS package versioning, manual postinst-hook takeover, and rollback policy.
