@@ -1953,8 +1953,7 @@ fn send_role_to_client(
     log_message: &str,
 ) {
     if let Some(outbound) = clients
-        .lock()
-        .unwrap()
+        .lock_unpoisoned()
         .get(&client_id)
         .map(|client| client.outbound.clone())
     {
@@ -1963,6 +1962,53 @@ fn send_role_to_client(
         )));
         println!("{log_message}");
     }
+}
+
+fn reconcile_phase42_operator_role(
+    clients: &ClientRegistry,
+    operator_client_id: &Arc<AtomicU64>,
+    changed_client_id: u64,
+) {
+    let current_operator = operator_client_id.load(Ordering::SeqCst);
+    let outcome = (|| {
+        let clients = clients.lock_unpoisoned();
+        let changed_metadata = clients.get(&changed_client_id)?.state.phase42.as_ref()?;
+        let pair = phase42_session_pair_in_clients(&clients, &changed_metadata.session_id)?;
+        let control = clients.get(&pair.control_client_id)?;
+        let control_metadata = control.state.phase42.as_ref()?;
+        if control_metadata.role != Some(TciClientRole::Operator)
+            || current_operator == pair.control_client_id
+        {
+            return None;
+        }
+
+        let current_operator_missing =
+            current_operator == 0 || !clients.contains_key(&current_operator);
+        let current_operator_is_paired_media = current_operator == pair.media_client_id;
+        if !current_operator_missing && !current_operator_is_paired_media {
+            return None;
+        }
+
+        Some((
+            pair.session_id,
+            pair.control_client_id,
+            current_operator,
+            control.outbound.clone(),
+        ))
+    })();
+
+    let Some((session_id, control_client_id, previous_operator, control_outbound)) = outcome else {
+        return;
+    };
+
+    operator_client_id.store(control_client_id, Ordering::SeqCst);
+    let _ = control_outbound.enqueue(OutboundMessage::SafetyText(remote_client_role_message(
+        control_client_id,
+        TciClientRole::Operator,
+    )));
+    println!(
+        "saturn-bridge: Phase 42 session {session_id} moved operator role from client {previous_operator} to control client {control_client_id}"
+    );
 }
 
 fn initial_snapshot_messages(
@@ -2086,15 +2132,23 @@ fn handle_incoming_message(
     let is_operator = current_operator_client_id == client_id;
     match message {
         Message::Text(text) => {
-            if is_operator {
-                *operator_control_at.lock_unpoisoned() = Some(Instant::now());
-            }
+            let received_at = Instant::now();
             for command in text
                 .split(';')
                 .map(str::trim)
                 .filter(|part| !part.is_empty())
             {
-                parse_tci_command(command, command_tx, clients, client_id, is_operator);
+                parse_tci_command_with_roles(
+                    command,
+                    command_tx,
+                    clients,
+                    client_id,
+                    operator_client_id.load(Ordering::SeqCst) == client_id,
+                    Some(operator_client_id),
+                );
+            }
+            if operator_client_id.load(Ordering::SeqCst) == client_id {
+                *operator_control_at.lock_unpoisoned() = Some(received_at);
             }
             true
         }
@@ -2154,6 +2208,17 @@ fn parse_tci_command(
     client_id: u64,
     allow_control: bool,
 ) {
+    parse_tci_command_with_roles(command, command_tx, clients, client_id, allow_control, None);
+}
+
+fn parse_tci_command_with_roles(
+    command: &str,
+    command_tx: &Sender<TciCommand>,
+    clients: &ClientRegistry,
+    client_id: u64,
+    allow_control: bool,
+    operator_client_id: Option<&Arc<AtomicU64>>,
+) {
     let Some((name, rest)) = command.split_once(':') else {
         return;
     };
@@ -2162,6 +2227,9 @@ fn parse_tci_command(
     let name = name.to_ascii_lowercase();
     if let Some((session_id, role)) = parse_phase42_session_open(command) {
         if set_client_phase42_session_open(clients, client_id, &session_id, role) {
+            if let Some(operator_client_id) = operator_client_id {
+                reconcile_phase42_operator_role(clients, operator_client_id, client_id);
+            }
             let _ = command_tx.send(TciCommand::Phase42SessionOpen {
                 client_id,
                 session_id,
@@ -2172,6 +2240,9 @@ fn parse_tci_command(
     }
     if let Some((session_id, lane)) = parse_phase42_session_lane(command) {
         if set_client_phase42_session_lane(clients, client_id, &session_id, lane) {
+            if let Some(operator_client_id) = operator_client_id {
+                reconcile_phase42_operator_role(clients, operator_client_id, client_id);
+            }
             let _ = command_tx.send(TciCommand::Phase42SessionLane {
                 client_id,
                 session_id,
@@ -4590,6 +4661,69 @@ mod tests {
             Ok(TciCommand::Phase42SessionLane { client_id: 62, .. })
         ));
         assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn phase42_control_lane_reclaims_operator_from_media_lane() {
+        let (tx, rx) = mpsc::channel();
+        let clients = test_client_registry(17);
+        clients.lock_unpoisoned().insert(
+            18,
+            ClientConnection {
+                outbound: ClientOutbound::new(),
+                state: ClientState::default(),
+            },
+        );
+        let operator_client_id = Arc::new(AtomicU64::new(18));
+
+        parse_tci_command_with_roles(
+            "session_lane:phase-42,media;",
+            &tx,
+            &clients,
+            18,
+            true,
+            Some(&operator_client_id),
+        );
+        parse_tci_command_with_roles(
+            "session_lane:phase-42,control;",
+            &tx,
+            &clients,
+            17,
+            false,
+            Some(&operator_client_id),
+        );
+        parse_tci_command_with_roles(
+            "session_open:phase-42,operator;",
+            &tx,
+            &clients,
+            17,
+            false,
+            Some(&operator_client_id),
+        );
+        while rx.try_recv().is_ok() {}
+
+        assert_eq!(operator_client_id.load(Ordering::SeqCst), 17);
+        assert!(phase42_media_client_can_supply_mic(
+            &clients,
+            17,
+            18,
+            Instant::now()
+        ));
+
+        let (control_outbound, media_outbound) = {
+            let clients = clients.lock_unpoisoned();
+            (
+                clients.get(&17).unwrap().outbound.clone(),
+                clients.get(&18).unwrap().outbound.clone(),
+            )
+        };
+        assert!(media_outbound.next_message(true).is_none());
+        match control_outbound.next_message(true).unwrap().message {
+            OutboundMessage::SafetyText(text) => {
+                assert_eq!(text, "remote_client_role:0,operator,17;")
+            }
+            other => panic!("unexpected control outbound: {other:?}"),
+        }
     }
 
     #[test]
