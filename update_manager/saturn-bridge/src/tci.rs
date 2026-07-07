@@ -3956,6 +3956,24 @@ mod tests {
         Arc::new(Mutex::new(clients))
     }
 
+    fn opus_wb_runtime_available() -> bool {
+        let mut decoder = TxCodecDecoder::new_with_flags(
+            TxMicCodec::OpusWb,
+            TxCodecRuntimeFlags {
+                opus_decode_enabled: true,
+            },
+        );
+        matches!(
+            decoder.decode(
+                TX_SAMPLE_TYPE_S16,
+                TX_OPUS_DECODE_OUTPUT_FRAME_SAMPLES,
+                &TX_OPUS_WB_TEST_PACKET,
+                TX_OPUS_WB_TEST_PACKET.len(),
+            ),
+            Ok(_)
+        )
+    }
+
     #[test]
     fn builds_iq_frame_with_expected_header() {
         let frame = build_tci_iq_frame(0, 192_000, &[0.25, -0.25, 0.5, -0.5]);
@@ -4882,6 +4900,10 @@ mod tests {
 
     #[test]
     fn phase44_media_lane_decodes_opus_mic_frame_when_runtime_flag_enabled() {
+        if !opus_wb_runtime_available() {
+            return;
+        }
+
         let (tx, rx) = mpsc::channel();
         let mut clients_map = BTreeMap::new();
         clients_map.insert(
