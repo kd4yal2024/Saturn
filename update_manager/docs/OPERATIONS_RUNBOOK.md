@@ -686,6 +686,8 @@ Safety/usage notes:
 
 The installer grants the service user sudoers entries for exactly `saturn-admin-password.sh set` and `status`; no direct `htpasswd` permission is needed.
 
+Browsers that authenticated to the TLS listener (`/remote*`) hold a long-lived "remember this device" cookie, so operators type the password roughly once per browser. Changing the password invalidates every remembered device at the next request after the saturn-go restart; repeated wrong-password attempts from one IP are answered with growing delays (capped at 10s, forgotten after 15 minutes).
+
 ### Monitor and Process Control
 
 - `monitor.html` polls `/get_system_data` every 1 second.

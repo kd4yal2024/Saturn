@@ -70,7 +70,7 @@ use chrono::Local;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeMap,
-    fs,
+    fs, io,
     net::SocketAddr,
     os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
@@ -96,6 +96,10 @@ async fn main() {
     tracing_subscriber::fmt().with_env_filter("info").init();
 
     let addr = std::env::var("SATURN_ADDR").unwrap_or_else(|_| "127.0.0.1:8080".to_string());
+    if let Err(message) = validate_saturn_bind_addr(&addr) {
+        error!("{message}");
+        std::process::exit(1);
+    }
     let webroot =
         std::env::var("SATURN_WEBROOT").unwrap_or_else(|_| "/var/lib/saturn-web".to_string());
     let config_path = std::env::var("SATURN_CONFIG")
@@ -428,6 +432,30 @@ async fn main() {
     info!("Saturn server shut down");
 }
 
+fn validate_saturn_bind_addr(addr: &str) -> Result<(), String> {
+    if parse_boolish(std::env::var("SATURN_ALLOW_NON_LOOPBACK_ADDR").ok()) {
+        return Ok(());
+    }
+    if bind_addr_is_loopback(addr) {
+        return Ok(());
+    }
+    Err(format!(
+        "refusing non-loopback SATURN_ADDR={addr}; set SATURN_ALLOW_NON_LOOPBACK_ADDR=1 only if the backend has its own auth boundary"
+    ))
+}
+
+fn bind_addr_is_loopback(addr: &str) -> bool {
+    if let Ok(socket_addr) = addr.parse::<SocketAddr>() {
+        return socket_addr.ip().is_loopback();
+    }
+
+    let Some((host, _port)) = addr.rsplit_once(':') else {
+        return false;
+    };
+    let host = host.trim_start_matches('[').trim_end_matches(']');
+    host.eq_ignore_ascii_case("localhost") || host == "::1" || host.starts_with("127.")
+}
+
 async fn shutdown_signal() {
     let ctrl_c = async {
         tokio::signal::ctrl_c()
@@ -474,7 +502,7 @@ async fn serve_remote_tls(
 
     axum_server::bind_rustls(addr, rustls_config)
         .handle(handle)
-        .serve(app.into_make_service())
+        .serve(app.into_make_service_with_connect_info::<SocketAddr>())
         .await
 }
 
@@ -2621,6 +2649,58 @@ async fn available_bytes_at(path: &str) -> Option<u64> {
         .ok()
 }
 
+fn secure_tmp_path(prefix: &str, attempt: u32) -> PathBuf {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0);
+    PathBuf::from(format!(
+        "/tmp/{prefix}-{nanos}-{}-{attempt}",
+        std::process::id()
+    ))
+}
+
+fn create_secure_temp_upload_file() -> io::Result<(PathBuf, tokio::fs::File)> {
+    for attempt in 0..64 {
+        let path = secure_tmp_path("saturn-upload", attempt);
+        match fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create_new(true)
+            .open(&path)
+        {
+            Ok(file) => {
+                file.set_permissions(fs::Permissions::from_mode(0o600))?;
+                return Ok((path, tokio::fs::File::from_std(file)));
+            }
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error),
+        }
+    }
+    Err(io::Error::new(
+        io::ErrorKind::AlreadyExists,
+        "could not allocate unique Saturn upload temp file",
+    ))
+}
+
+fn create_secure_temp_extract_dir() -> io::Result<PathBuf> {
+    for attempt in 0..64 {
+        let path = secure_tmp_path("saturn-restore", attempt);
+        match fs::create_dir(&path) {
+            Ok(()) => {
+                fs::set_permissions(&path, fs::Permissions::from_mode(0o700))?;
+                return Ok(path);
+            }
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error),
+        }
+    }
+    Err(io::Error::new(
+        io::ErrorKind::AlreadyExists,
+        "could not allocate unique Saturn restore temp directory",
+    ))
+}
+
 async fn restore_backup_by_kind(state: &AppState, req: G2RestoreReq, kind: &str) -> Response {
     let (prefix, target_label) = match kind {
         "saturn" => ("saturn-backup-", "saturn"),
@@ -2760,11 +2840,7 @@ async fn restore_full(
             continue;
         }
 
-        let ts = Local::now().format("%Y%m%d-%H%M%S").to_string();
-        let tmp_name = format!("/tmp/saturn-upload-{ts}-{}", std::process::id());
-        let path = PathBuf::from(tmp_name);
-        let mut file = tokio::fs::File::create(&path)
-            .await
+        let (path, mut file) = create_secure_temp_upload_file()
             .map_err(|e| json_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
 
         let mut field = field;
@@ -2878,10 +2954,7 @@ async fn restore_full(
         }
     }
 
-    let ts = Local::now().format("%Y%m%d-%H%M%S").to_string();
-    let extract_dir = PathBuf::from(format!("/tmp/saturn-restore-{ts}-{}", std::process::id()));
-    tokio::fs::create_dir_all(&extract_dir)
-        .await
+    let extract_dir = create_secure_temp_extract_dir()
         .map_err(|e| json_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
 
     let status = Command::new("tar")
@@ -2944,6 +3017,20 @@ async fn restore_full(
     tokio::fs::create_dir_all(&repo_root)
         .await
         .map_err(|e| json_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    if let Some(avail) = available_bytes_at(repo_root.to_string_lossy().as_ref()).await {
+        if uncompressed_bytes > avail {
+            let _ = tokio::fs::remove_file(&upload_path).await;
+            let _ = tokio::fs::remove_dir_all(&extract_dir).await;
+            return Err(json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &format!(
+                    "insufficient space in repo target: need {} MB, have {} MB",
+                    uncompressed_bytes / 1024 / 1024,
+                    avail / 1024 / 1024
+                ),
+            ));
+        }
+    }
 
     let rsync_status = Command::new("rsync")
         .arg("-a")
@@ -3528,4 +3615,21 @@ async fn parse_multipart(mut multipart: Multipart) -> Result<(String, Vec<String
 
 async fn no_content() -> impl IntoResponse {
     StatusCode::NO_CONTENT
+}
+
+#[cfg(test)]
+mod tests {
+    use super::bind_addr_is_loopback;
+
+    #[test]
+    fn bind_addr_loopback_guard_accepts_only_local_hosts() {
+        assert!(bind_addr_is_loopback("127.0.0.1:8080"));
+        assert!(bind_addr_is_loopback("127.42.0.1:8080"));
+        assert!(bind_addr_is_loopback("[::1]:8080"));
+        assert!(bind_addr_is_loopback("localhost:8080"));
+
+        assert!(!bind_addr_is_loopback("0.0.0.0:8080"));
+        assert!(!bind_addr_is_loopback("192.168.0.139:8080"));
+        assert!(!bind_addr_is_loopback("[::]:8080"));
+    }
 }

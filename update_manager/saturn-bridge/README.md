@@ -106,6 +106,10 @@ cargo build --release
 Requires `libwdsp.a`, `librnnoise.a`, and `libspecbleach.a` in the pihpsdr
 build tree (see `build.rs`).
 
+CI can run parser/control tests without the piHPSDR tree by setting
+`SATURN_BRIDGE_STUB_NATIVE=1`. That mode links a local native stub and is not a
+runtime or release build mode.
+
 ## Deploy
 
 ```bash

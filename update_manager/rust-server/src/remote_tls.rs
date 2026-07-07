@@ -1,25 +1,28 @@
 use std::{
-    collections::BTreeSet,
-    io::Read,
+    collections::{BTreeSet, HashMap},
+    io::{Read, Write},
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
     path::{Path, PathBuf},
-    sync::OnceLock,
-    time::{SystemTime, UNIX_EPOCH},
+    sync::{Mutex, OnceLock},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use axum::{
     extract::{
         ws::{Message as AxumMessage, WebSocket, WebSocketUpgrade},
-        OriginalUri, Path as AxumPath, State,
+        ConnectInfo, OriginalUri, Path as AxumPath, Request, State,
     },
     http::{header, HeaderMap, HeaderValue, StatusCode},
+    middleware::Next,
     response::{IntoResponse, Redirect, Response},
     routing::{get, post},
     Json, Router,
 };
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use futures_util::{SinkExt, StreamExt};
+use hmac::{Hmac, Mac};
 use rcgen::{CertificateParams, DistinguishedName, DnType, IsCa, KeyPair, SanType};
+use sha2::Sha256;
 use tokio_tungstenite::{connect_async, tungstenite::Message as TungsteniteMessage};
 use tracing::{error, info, warn};
 
@@ -41,6 +44,18 @@ const REMOTE_BASIC_AUTH_ENV: &str = "SATURN_REMOTE_BASIC_AUTH";
 const REMOTE_DEV_INSECURE_ENV: &str = "SATURN_REMOTE_DEV_INSECURE";
 const REMOTE_BASIC_AUTH_CHALLENGE: &str = "Basic realm=\"Saturn Remote\", charset=\"UTF-8\"";
 const REMOTE_AUTH_COOKIE_NAME: &str = "saturn_remote_auth";
+// "Remember this device": one password entry per browser per password. The
+// cookie token is HMAC(persisted secret, current credential), so it survives
+// restarts but every remembered device is signed out by a password change.
+const REMOTE_AUTH_COOKIE_MAX_AGE_SECS: u64 = 365 * 24 * 60 * 60;
+const REMOTE_AUTH_COOKIE_SECRET_FILE: &str = "remote-tls/cookie.secret";
+const DEFAULT_STATE_DIR: &str = "/var/lib/saturn-state";
+// Failed-credential tarpit: wrong Authorization guesses from one IP earn a
+// growing delay. Two free failures keep it invisible to a fat-fingered human.
+const TARPIT_FREE_FAILURES: u32 = 2;
+const TARPIT_MAX_DELAY: Duration = Duration::from_secs(10);
+const TARPIT_FORGET_AFTER: Duration = Duration::from_secs(15 * 60);
+const TARPIT_MAX_ENTRIES: usize = 4096;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum BridgeProxyChannel {
@@ -227,6 +242,7 @@ pub fn remote_tls_router(state: AppState) -> Router {
         .route("/remote-assets/{asset}", get(remote_asset_handler))
         .with_state(state.clone())
         .layer(axum::middleware::from_fn_with_state(state, csrf_protect))
+        .layer(axum::middleware::from_fn(remote_auth_tarpit))
 }
 
 async fn remote_page_handler(headers: HeaderMap, State(state): State<AppState>) -> Response {
@@ -347,24 +363,23 @@ fn remote_bridge_ws_response(
         );
         return rejection;
     }
-    match remote_auth_source(&headers) {
-        Some(source) => {
-            info!(
-                "remote TLS {} websocket accepted via {source} auth: host={:?} origin={:?} uri={uri}",
-                channel.label(),
-                header_value_for_log(&headers, header::HOST),
-                header_value_for_log(&headers, header::ORIGIN),
-            );
-        }
-        None => {
-            warn!(
-                "remote TLS {} websocket accepted via same-origin fallback: host={:?} origin={:?} uri={uri}",
-                channel.label(),
-                header_value_for_log(&headers, header::HOST),
-                header_value_for_log(&headers, header::ORIGIN),
-            );
-        }
-    }
+    let Some(source) = remote_auth_source(&headers) else {
+        warn!(
+            "remote TLS {} websocket rejected by auth check: host={:?} origin={:?} uri={uri}",
+            channel.label(),
+            header_value_for_log(&headers, header::HOST),
+            header_value_for_log(&headers, header::ORIGIN),
+        );
+        return check_remote_basic_auth(&headers).err().unwrap_or_else(|| {
+            (StatusCode::UNAUTHORIZED, "authentication required").into_response()
+        });
+    };
+    info!(
+        "remote TLS {} websocket accepted via {source} auth: host={:?} origin={:?} uri={uri}",
+        channel.label(),
+        header_value_for_log(&headers, header::HOST),
+        header_value_for_log(&headers, header::ORIGIN),
+    );
     let phase42_session_id = extract_phase42_session_from_uri(&uri);
     ws.on_upgrade(move |socket| {
         proxy_bridge_socket(socket, state.bridge_ws_url, channel, phase42_session_id)
@@ -474,7 +489,7 @@ fn check_remote_basic_auth(headers: &HeaderMap) -> Result<(), Response> {
         .get(header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
         .map(str::trim);
-    if actual == Some(expected) {
+    if actual.is_some_and(|a| ct_eq(a.as_bytes(), expected.as_bytes())) {
         return Ok(());
     }
 
@@ -501,7 +516,7 @@ fn remote_auth_source(headers: &HeaderMap) -> Option<&'static str> {
         .get(header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
         .map(str::trim);
-    if actual == Some(expected) {
+    if actual.is_some_and(|a| ct_eq(a.as_bytes(), expected.as_bytes())) {
         return Some("basic");
     }
     if remote_auth_cookie_matches(headers) {
@@ -522,7 +537,8 @@ fn attach_remote_auth_cookie(response: &mut Response) {
         return;
     }
     let value = format!(
-        "{REMOTE_AUTH_COOKIE_NAME}={}; Path=/; Secure; HttpOnly; SameSite=Strict",
+        "{REMOTE_AUTH_COOKIE_NAME}={}; Path=/; Max-Age={REMOTE_AUTH_COOKIE_MAX_AGE_SECS}; \
+         Secure; HttpOnly; SameSite=Strict",
         remote_auth_cookie_value()
     );
     if let Ok(value) = HeaderValue::from_str(&value) {
@@ -542,7 +558,7 @@ fn remote_auth_cookie_matches(headers: &HeaderMap) -> bool {
         .any(|header| {
             header.split(';').any(|part| {
                 let (name, value) = part.trim().split_once('=').unwrap_or(("", ""));
-                name == REMOTE_AUTH_COOKIE_NAME && value == expected
+                name == REMOTE_AUTH_COOKIE_NAME && ct_eq(value.as_bytes(), expected.as_bytes())
             })
         })
 }
@@ -564,26 +580,202 @@ fn remote_auth_cookie_value() -> &'static str {
     static COOKIE_VALUE: OnceLock<String> = OnceLock::new();
     COOKIE_VALUE
         .get_or_init(|| {
-            let mut bytes = [0u8; 32];
-            if std::fs::File::open("/dev/urandom")
-                .and_then(|mut file| file.read_exact(&mut bytes))
-                .is_err()
+            if let (Some(secret), Some(credential)) =
+                (persisted_cookie_secret(), configured_basic_auth_header())
             {
-                let now = SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .map(|duration| duration.as_nanos())
-                    .unwrap_or_default();
-                let fallback = format!(
-                    "{}:{}:{}",
-                    std::process::id(),
-                    now,
-                    configured_basic_auth_header().unwrap_or("")
-                );
-                return BASE64.encode(fallback.as_bytes());
+                return derive_cookie_token(&secret, credential);
             }
-            BASE64.encode(bytes)
+            warn!(
+                "remote auth cookie falling back to a per-process token; \
+                 remembered devices will not survive a saturn-go restart"
+            );
+            per_process_cookie_token()
         })
         .as_str()
+}
+
+/// Deterministic remember-device token: stable across restarts for the same
+/// (secret, credential) pair, different as soon as the password changes.
+fn derive_cookie_token(secret: &[u8], credential: &str) -> String {
+    let mut mac =
+        Hmac::<Sha256>::new_from_slice(secret).expect("HMAC-SHA256 accepts keys of any length");
+    mac.update(b"saturn-remote-auth-cookie-v1:");
+    mac.update(credential.as_bytes());
+    BASE64.encode(mac.finalize().into_bytes())
+}
+
+/// Random 32-byte secret persisted under the state dir (0600). Created on
+/// first use; returns None if it can neither be read nor created.
+fn persisted_cookie_secret() -> Option<[u8; 32]> {
+    let state_dir =
+        std::env::var("SATURN_STATE_DIR").unwrap_or_else(|_| DEFAULT_STATE_DIR.to_string());
+    let path = Path::new(&state_dir).join(REMOTE_AUTH_COOKIE_SECRET_FILE);
+
+    if let Ok(bytes) = std::fs::read(&path) {
+        if bytes.len() >= 32 {
+            let mut secret = [0u8; 32];
+            secret.copy_from_slice(&bytes[..32]);
+            return Some(secret);
+        }
+        warn!(
+            "cookie secret {} is malformed; regenerating",
+            path.display()
+        );
+    }
+
+    let mut secret = [0u8; 32];
+    std::fs::File::open("/dev/urandom")
+        .and_then(|mut file| file.read_exact(&mut secret))
+        .ok()?;
+    if let Some(parent) = path.parent() {
+        if let Err(err) = std::fs::create_dir_all(parent) {
+            warn!("cannot create {}: {err}", parent.display());
+            return None;
+        }
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        use std::os::unix::fs::PermissionsExt;
+        let write_result = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(true)
+            .write(true)
+            .mode(0o600)
+            .open(&path)
+            .and_then(|mut file| file.write_all(&secret));
+        if let Err(err) = write_result {
+            warn!("cannot persist cookie secret {}: {err}", path.display());
+            return None;
+        }
+        let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
+    }
+    #[cfg(not(unix))]
+    {
+        if let Err(err) = std::fs::write(&path, secret) {
+            warn!("cannot persist cookie secret {}: {err}", path.display());
+            return None;
+        }
+    }
+    info!("generated remote auth cookie secret at {}", path.display());
+    Some(secret)
+}
+
+fn per_process_cookie_token() -> String {
+    let mut bytes = [0u8; 32];
+    if std::fs::File::open("/dev/urandom")
+        .and_then(|mut file| file.read_exact(&mut bytes))
+        .is_err()
+    {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or_default();
+        let fallback = format!(
+            "{}:{}:{}",
+            std::process::id(),
+            now,
+            configured_basic_auth_header().unwrap_or("")
+        );
+        return BASE64.encode(fallback.as_bytes());
+    }
+    BASE64.encode(bytes)
+}
+
+/// Constant-time equality for credential material.
+fn ct_eq(a: &[u8], b: &[u8]) -> bool {
+    let mut diff = a.len() ^ b.len();
+    for i in 0..a.len().max(b.len()) {
+        let left = a.get(i).copied().unwrap_or(0);
+        let right = b.get(i).copied().unwrap_or(0);
+        diff |= usize::from(left ^ right);
+    }
+    diff == 0
+}
+
+struct AuthFailureState {
+    consecutive: u32,
+    last: Instant,
+    blocked_until: Instant,
+}
+
+fn auth_failure_registry() -> &'static Mutex<HashMap<IpAddr, AuthFailureState>> {
+    static REGISTRY: OnceLock<Mutex<HashMap<IpAddr, AuthFailureState>>> = OnceLock::new();
+    REGISTRY.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn tarpit_delay(consecutive: u32) -> Duration {
+    if consecutive <= TARPIT_FREE_FAILURES {
+        return Duration::ZERO;
+    }
+    let exponent = (consecutive - TARPIT_FREE_FAILURES - 1).min(6);
+    Duration::from_secs(1u64 << exponent).min(TARPIT_MAX_DELAY)
+}
+
+/// Slow repeated wrong-credential guesses per source IP. Only requests that
+/// carried an Authorization header and got a 401 count as failures — a bare
+/// first visit answered with the auth challenge stays instant. Requests
+/// without ConnectInfo (unit tests) bypass the tarpit.
+async fn remote_auth_tarpit(req: Request, next: Next) -> Response {
+    let ip = req
+        .extensions()
+        .get::<ConnectInfo<SocketAddr>>()
+        .map(|info| info.0.ip());
+    let guessed = req.headers().contains_key(header::AUTHORIZATION);
+    let authenticated = guessed && remote_auth_source(req.headers()).is_some();
+
+    if let (Some(ip), true, false) = (ip, guessed, authenticated) {
+        let wait = {
+            let registry = auth_failure_registry().lock().unwrap();
+            registry
+                .get(&ip)
+                .map(|s| s.blocked_until.saturating_duration_since(Instant::now()))
+                .unwrap_or(Duration::ZERO)
+        };
+        if !wait.is_zero() {
+            tokio::time::sleep(wait).await;
+        }
+    }
+
+    let response = next.run(req).await;
+
+    if let (Some(ip), true) = (ip, guessed) {
+        if response.status() == StatusCode::UNAUTHORIZED {
+            let delay = {
+                let mut registry = auth_failure_registry().lock().unwrap();
+                if registry.len() >= TARPIT_MAX_ENTRIES {
+                    registry.retain(|_, s| s.last.elapsed() < TARPIT_FORGET_AFTER);
+                    if registry.len() >= TARPIT_MAX_ENTRIES {
+                        registry.clear();
+                    }
+                }
+                let now = Instant::now();
+                let entry = registry.entry(ip).or_insert(AuthFailureState {
+                    consecutive: 0,
+                    last: now,
+                    blocked_until: now,
+                });
+                if entry.last.elapsed() >= TARPIT_FORGET_AFTER {
+                    entry.consecutive = 0;
+                }
+                entry.consecutive = entry.consecutive.saturating_add(1);
+                entry.last = now;
+                let delay = tarpit_delay(entry.consecutive);
+                entry.blocked_until = now + delay;
+                if entry.consecutive == TARPIT_FREE_FAILURES + 1 {
+                    warn!("repeated basic-auth failures from {ip}; tarpitting responses");
+                }
+                delay
+            };
+            if !delay.is_zero() {
+                tokio::time::sleep(delay).await;
+            }
+        } else if authenticated {
+            auth_failure_registry().lock().unwrap().remove(&ip);
+        }
+    }
+
+    response
 }
 
 pub fn remote_basic_auth_configured() -> bool {
@@ -999,6 +1191,43 @@ mod tests {
     fn rejects_malformed_basic_auth_spec() {
         assert_eq!(build_basic_auth_header("missing-delimiter"), None);
         assert_eq!(build_basic_auth_header(""), None);
+    }
+
+    #[test]
+    fn cookie_token_is_stable_for_same_secret_and_credential() {
+        let secret = [7u8; 32];
+        assert_eq!(
+            derive_cookie_token(&secret, "Basic YWRtaW46b2xk"),
+            derive_cookie_token(&secret, "Basic YWRtaW46b2xk")
+        );
+    }
+
+    #[test]
+    fn cookie_token_changes_with_credential_or_secret() {
+        let secret = [7u8; 32];
+        let token = derive_cookie_token(&secret, "Basic YWRtaW46b2xk");
+        assert_ne!(token, derive_cookie_token(&secret, "Basic YWRtaW46bmV3"));
+        assert_ne!(token, derive_cookie_token(&[8u8; 32], "Basic YWRtaW46b2xk"));
+    }
+
+    #[test]
+    fn tarpit_delay_is_free_then_doubles_then_caps() {
+        assert_eq!(tarpit_delay(1), Duration::ZERO);
+        assert_eq!(tarpit_delay(2), Duration::ZERO);
+        assert_eq!(tarpit_delay(3), Duration::from_secs(1));
+        assert_eq!(tarpit_delay(4), Duration::from_secs(2));
+        assert_eq!(tarpit_delay(5), Duration::from_secs(4));
+        assert_eq!(tarpit_delay(6), Duration::from_secs(8));
+        assert_eq!(tarpit_delay(7), TARPIT_MAX_DELAY);
+        assert_eq!(tarpit_delay(u32::MAX), TARPIT_MAX_DELAY);
+    }
+
+    #[test]
+    fn ct_eq_matches_only_identical_bytes() {
+        assert!(ct_eq(b"same", b"same"));
+        assert!(!ct_eq(b"same", b"sane"));
+        assert!(!ct_eq(b"short", b"longer"));
+        assert!(ct_eq(b"", b""));
     }
 
     #[test]

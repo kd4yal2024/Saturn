@@ -1,7 +1,17 @@
 use std::env;
 use std::path::PathBuf;
+use std::process::Command;
 
 fn main() {
+    println!("cargo:rerun-if-env-changed=SATURN_BRIDGE_STUB_NATIVE");
+    if env::var("SATURN_BRIDGE_STUB_NATIVE")
+        .map(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes" | "YES"))
+        .unwrap_or(false)
+    {
+        build_stub_native();
+        return;
+    }
+
     let manifest_dir =
         PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR not set"));
     let wdsp_dir = manifest_dir.join("../../../pihpsdr/wdsp");
@@ -51,4 +61,44 @@ fn main() {
     println!("cargo:rustc-link-lib=fftw3f");
     println!("cargo:rustc-link-lib=m");
     println!("cargo:rustc-link-lib=pthread");
+}
+
+fn build_stub_native() {
+    let manifest_dir =
+        PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR not set"));
+    let out_dir = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR not set"));
+    let source = manifest_dir.join("native-stubs/wdsp_stub.c");
+    let object = out_dir.join("wdsp_stub.o");
+    let archive = out_dir.join("libsaturn_bridge_wdsp_stub.a");
+    let cc = env::var("CC").unwrap_or_else(|_| "cc".to_string());
+    let ar = env::var("AR").unwrap_or_else(|_| "ar".to_string());
+
+    println!("cargo:rerun-if-changed={}", source.display());
+
+    let cc_status = Command::new(&cc)
+        .arg("-std=c99")
+        .arg("-Wall")
+        .arg("-Wextra")
+        .arg("-c")
+        .arg(&source)
+        .arg("-o")
+        .arg(&object)
+        .status()
+        .unwrap_or_else(|error| panic!("failed to run {cc}: {error}"));
+    if !cc_status.success() {
+        panic!("failed to compile native stub {}", source.display());
+    }
+
+    let ar_status = Command::new(&ar)
+        .arg("crs")
+        .arg(&archive)
+        .arg(&object)
+        .status()
+        .unwrap_or_else(|error| panic!("failed to run {ar}: {error}"));
+    if !ar_status.success() {
+        panic!("failed to archive native stub {}", archive.display());
+    }
+
+    println!("cargo:rustc-link-search=native={}", out_dir.display());
+    println!("cargo:rustc-link-lib=static=saturn_bridge_wdsp_stub");
 }

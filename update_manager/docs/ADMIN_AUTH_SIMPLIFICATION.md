@@ -56,12 +56,25 @@ carries its own htpasswd/drop-in write logic for first provisioning, since it
 runs before the helper is installed. Follow-up: converge the installer on the
 repo copy of `saturn-admin-password.sh` so there is exactly one writer.
 
-## Phase 2 — make password entry rare (planned)
+## Phase 2 — make password entry rare (implemented)
 
-- "Remember this device" cookie on the TLS listener (~365 days, secure,
-  HttpOnly) so a password is typed roughly once per browser.
-- Small per-IP delay on repeated basic-auth failures on :8443 (invisible to
-  legitimate users; blunts scanners in the port-forward case).
+- "Remember this device" cookie on the TLS listener (`remote_tls.rs`):
+  `saturn_remote_auth`, Max-Age 365 days, Secure, HttpOnly, SameSite=Strict.
+  The token is `HMAC-SHA256(secret, current credential)` where the secret is
+  32 random bytes persisted at `$SATURN_STATE_DIR/remote-tls/cookie.secret`
+  (0600), so remembered devices survive saturn-go restarts and reboots, but a
+  password change (which restarts saturn-go with a new credential) signs out
+  every remembered device at once. If the secret cannot be persisted, the
+  token falls back to the old per-process random value (session-only) with a
+  warning. Credential and cookie comparisons are constant-time.
+- Per-IP tarpit on repeated basic-auth failures on :8443: only requests that
+  *carried* an Authorization header and got a 401 count (a first visit
+  answered with the challenge stays instant). The first 2 failures per IP are
+  free — a human mistyping never notices — then delays grow 1s → 2s → 4s →
+  8s, capped at 10s, and are forgotten after 15 minutes of quiet. State is
+  in-memory and bounded (4096 IPs). Behind `tailscale serve` all requests
+  share the loopback source IP; that's acceptable because tailnet users are
+  already authenticated and Phase 3 removes the password there entirely.
 
 ## Phase 3 — passwordless over Tailscale (planned)
 

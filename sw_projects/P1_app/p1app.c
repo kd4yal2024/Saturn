@@ -241,7 +241,7 @@ int main(void)
         //
         // create outgoing packet thread
         //
-        if(pthread_create(&thread, NULL, SendOutgoingPacketData, NULL) < 0)
+        if(pthread_create(&thread, NULL, SendOutgoingPacketData, NULL) != 0)
         {
           perror("pthread_create");
           return EXIT_FAILURE;
