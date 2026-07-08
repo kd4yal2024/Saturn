@@ -229,16 +229,27 @@ unsafe extern "C" {
     fn GetTXAMeter(channel: i32, mt: i32) -> f64;
 
     // DEXP — downward expander / noise gate (operates on mic input buffer)
+    #[allow(dead_code)]
     fn SetDEXPRun(id: i32, run: i32);
+    #[allow(dead_code)]
     fn SetDEXPDetectorTau(id: i32, tau: f64);
+    #[allow(dead_code)]
     fn SetDEXPAttackTime(id: i32, time: f64);
+    #[allow(dead_code)]
     fn SetDEXPReleaseTime(id: i32, time: f64);
+    #[allow(dead_code)]
     fn SetDEXPHoldTime(id: i32, time: f64);
+    #[allow(dead_code)]
     fn SetDEXPExpansionRatio(id: i32, ratio: f64);
+    #[allow(dead_code)]
     fn SetDEXPHysteresisRatio(id: i32, ratio: f64);
+    #[allow(dead_code)]
     fn SetDEXPAttackThreshold(id: i32, thresh: f64);
+    #[allow(dead_code)]
     fn SetDEXPLowCut(id: i32, lowcut: f64);
+    #[allow(dead_code)]
     fn SetDEXPHighCut(id: i32, highcut: f64);
+    #[allow(dead_code)]
     fn SetDEXPRunSideChannelFilter(id: i32, run: i32);
 }
 

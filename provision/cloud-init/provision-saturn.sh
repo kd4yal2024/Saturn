@@ -31,6 +31,9 @@ SATURN_REPO_BRANCH="${SATURN_REPO_BRANCH:-main}"
 SATURN_REPO_DIR="${SATURN_REPO_DIR:-}"
 
 SATURN_INSTALL_UPDATE_MANAGER="${SATURN_INSTALL_UPDATE_MANAGER:-1}"
+SATURN_INSTALL_PIHPSDR="${SATURN_INSTALL_PIHPSDR:-1}"
+SATURN_INSTALL_SATURN_BRIDGE="${SATURN_INSTALL_SATURN_BRIDGE:-1}"
+SATURN_REQUIRE_SATURN_BRIDGE="${SATURN_REQUIRE_SATURN_BRIDGE:-1}"
 SATURN_INSTALL_P2APP_CONTROL="${SATURN_INSTALL_P2APP_CONTROL:-1}"
 SATURN_INSTALL_UDEV_RULES="${SATURN_INSTALL_UDEV_RULES:-1}"
 SATURN_INSTALL_SHUTDOWN_WAITER="${SATURN_INSTALL_SHUTDOWN_WAITER:-1}"
@@ -700,6 +703,7 @@ ensure_packages() {
     python3 python3-venv python3-pip python3-psutil \
     gpiod libgpiod-dev libi2c-dev libgtk-3-dev libglib2.0-bin lxterminal \
     libasound2-dev libpulse-dev libusb-1.0-0-dev libcurl4-openssl-dev \
+    libfftw3-dev \
     desktop-file-utils xdg-user-dirs
 
   if bool_true "$SATURN_INSTALL_P2APP_CONTROL"; then
@@ -1459,6 +1463,48 @@ install_update_manager() {
     SUDO_USER="$SATURN_USER" \
     SATURN_SERVICE_USER="$SATURN_USER" \
     SATURN_ADMIN_PASSWORD="$SATURN_ADMIN_PASSWORD" \
+    SATURN_INSTALL_BRIDGE=0 \
+    SATURN_REQUIRE_BRIDGE=0 \
+    bash "$script"
+}
+
+install_pihpsdr_runtime() {
+  local saturn_home="$1"
+  local script="/opt/saturn-go/scripts/update-pihpsdr.py"
+
+  [[ -f "$script" ]] || die "Installed piHPSDR updater not found: $script"
+  log "Installing piHPSDR runtime and native DSP libraries required by Saturn Remote"
+  env \
+    HOME="$saturn_home" \
+    SUDO_USER="$SATURN_USER" \
+    PYTHONDONTWRITEBYTECODE=1 \
+    /usr/bin/python3 "$script" -y --verbose
+
+  if [[ -d "$saturn_home/github/pihpsdr" ]]; then
+    chown -R "$SATURN_USER:$SATURN_USER" "$saturn_home/github/pihpsdr" || true
+  fi
+
+  [[ -f "$saturn_home/github/pihpsdr/wdsp/libwdsp.a" ]] || die "piHPSDR build did not produce wdsp/libwdsp.a"
+  [[ -f "$saturn_home/github/pihpsdr/rnnoise/librnnoise.a" ]] || die "piHPSDR build did not produce rnnoise/librnnoise.a"
+  [[ -f "$saturn_home/github/pihpsdr/libspecbleach/libspecbleach.a" ]] || die "piHPSDR build did not produce libspecbleach/libspecbleach.a"
+}
+
+install_saturn_bridge_runtime() {
+  local saturn_home="$1"
+  local script="$SATURN_REPO_DIR/update_manager/scripts/install-saturn-bridge.sh"
+
+  [[ -x "$script" ]] || die "Saturn Bridge installer not found/executable: $script"
+  log "Installing Saturn Bridge backend for Saturn Remote"
+  env \
+    HOME="$saturn_home" \
+    SUDO_USER="$SATURN_USER" \
+    SATURN_USER="$SATURN_USER" \
+    SATURN_REPO_ROOT="$SATURN_REPO_DIR" \
+    SATURN_PIHPSDR_DIR="$saturn_home/github/pihpsdr" \
+    SATURN_BRIDGE_SOURCE_DIR="$SATURN_REPO_DIR/update_manager/saturn-bridge" \
+    SATURN_GO_ROOT="/opt/saturn-go" \
+    SATURN_BRIDGE_RF_TX_ENABLED="${SATURN_BRIDGE_RF_TX_ENABLED:-0}" \
+    SATURN_BRIDGE_TX_OPUS_DECODE_ENABLED="${SATURN_BRIDGE_TX_OPUS_DECODE_ENABLED:-1}" \
     bash "$script"
 }
 
@@ -1662,6 +1708,18 @@ main() {
     set_ui_stage "Installing Saturn update manager"
     ensure_update_manager_admin_password
     install_update_manager "$saturn_home"
+    if bool_true "$SATURN_INSTALL_PIHPSDR"; then
+      set_ui_stage "Installing piHPSDR DSP dependencies"
+      install_pihpsdr_runtime "$saturn_home"
+    fi
+    if bool_true "$SATURN_INSTALL_SATURN_BRIDGE"; then
+      set_ui_stage "Installing Saturn Remote bridge"
+      if bool_true "$SATURN_REQUIRE_SATURN_BRIDGE"; then
+        install_saturn_bridge_runtime "$saturn_home"
+      elif ! ( install_saturn_bridge_runtime "$saturn_home" ); then
+        log "WARN: Saturn Bridge install failed and SATURN_REQUIRE_SATURN_BRIDGE=0; continuing provisioning."
+      fi
+    fi
     set_ui_stage "Installing standalone piHPSDR shortcut"
     install_pihpsdr_installer_shortcut "$saturn_home"
   fi

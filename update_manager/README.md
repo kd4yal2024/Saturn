@@ -399,6 +399,7 @@ Installer behavior (current):
 - Removes legacy distro `cargo`/`rustc` packages (if installed) and bootstraps a current Rust toolchain via `rustup` for the build user before compiling (fixes old-Cargo `Cargo.lock` v4 parse errors on Bookworm)
 - Installs `nodejs` and `npm` and runs lockfile-only `npm ci && npm run build` in `update_manager/remote-web` to produce the `saturn-remote-next.js` Vite bundle before staging web assets
 - Uses `update_manager/scripts/saturn-go-web-assets.sh` as the shared web asset manifest for install and self-update deploys (fails fast if any required asset, including `saturn-remote-next.html`/`saturn-remote-next.js`, is missing)
+- Checks Saturn Remote bridge prerequisites during install. `/remote` and `/remote-next` require `saturn-bridge.service`, the piHPSDR static DSP libraries (`libwdsp.a`, `librnnoise.a`, `libspecbleach.a`), and `libfftw3-dev`.
 - Copies `saturn-remote-next.js` only from the Vite `dist/` output and verifies the deployed bundle with `saturn-remote-next.js.sha256`, preventing stale template/root files from shadowing a fresh build
 - Proxies all `/saturn/*` routes through NGINX to the Rust backend
 - Redirects plain HTTP remote entry points such as `/remote` and `/saturn/remote` to `https://<host>:8443/remote`
@@ -483,6 +484,9 @@ Default URL:
 - `SATURN_ADMIN_PASSWORD` (optional non-interactive initial admin password)
 - `SATURN_SERVICE_USER` (installer override for service user)
 - `SATURN_SERVICE_GROUP` (installer override for service group)
+- `SATURN_INSTALL_BRIDGE=1` builds/installs `saturn-bridge.service` after Saturn Go when piHPSDR native libraries are present
+- `SATURN_REQUIRE_BRIDGE=1` turns missing Saturn Remote bridge prerequisites into an installer failure
+- `SATURN_PIHPSDR_DIR` points the bridge preflight/build at a non-default piHPSDR checkout
 
 ## Troubleshooting
 

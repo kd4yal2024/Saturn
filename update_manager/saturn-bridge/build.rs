@@ -14,10 +14,14 @@ fn main() {
 
     let manifest_dir =
         PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR not set"));
-    let wdsp_dir = manifest_dir.join("../../../pihpsdr/wdsp");
+    println!("cargo:rerun-if-env-changed=SATURN_PIHPSDR_DIR");
+    let pihpsdr_dir = env::var("SATURN_PIHPSDR_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| manifest_dir.join("../../../pihpsdr"));
+    let wdsp_dir = pihpsdr_dir.join("wdsp");
     let libwdsp = wdsp_dir.join("libwdsp.a");
-    let rnnoise_dir = manifest_dir.join("../../../pihpsdr/rnnoise");
-    let specbleach_dir = manifest_dir.join("../../../pihpsdr/libspecbleach");
+    let rnnoise_dir = pihpsdr_dir.join("rnnoise");
+    let specbleach_dir = pihpsdr_dir.join("libspecbleach");
 
     if !libwdsp.exists() {
         panic!("WDSP static library not found at {}", libwdsp.display());

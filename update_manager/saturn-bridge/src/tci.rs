@@ -783,6 +783,7 @@ pub enum Phase42SocketKind {
 }
 
 impl Phase42SocketKind {
+    #[cfg(test)]
     fn as_tci(self) -> &'static str {
         match self {
             Self::Control => "control",
@@ -803,9 +804,11 @@ fn remote_client_role_message(client_id: u64, role: TciClientRole) -> String {
     format!("remote_client_role:0,{},{client_id};", role.as_tci())
 }
 
+#[cfg(test)]
 const PHASE42_SESSION_PAIRING_TIMEOUT: Duration = Duration::from_secs(30);
 const PHASE42_RELEASE_IGNORE_WINDOW: Duration = Duration::from_millis(250);
 
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Phase42SessionState {
     WaitingMedia,
@@ -814,6 +817,7 @@ enum Phase42SessionState {
     Terminated,
 }
 
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Phase42MediaFrameAction {
     Accept,
@@ -821,6 +825,7 @@ enum Phase42MediaFrameAction {
     DropReleaseWindow,
 }
 
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Phase42DisconnectAction {
     force_rx: bool,
@@ -828,6 +833,7 @@ struct Phase42DisconnectAction {
     state: Phase42SessionState,
 }
 
+#[cfg(test)]
 #[derive(Clone, Debug)]
 struct Phase42SplitSession {
     session_id: String,
@@ -839,6 +845,7 @@ struct Phase42SplitSession {
     release_window_drops: u64,
 }
 
+#[cfg(test)]
 impl Phase42SplitSession {
     fn new_control(session_id: &str, now: Instant) -> Option<Self> {
         let session_id = normalize_phase42_session_id(session_id)?;
@@ -937,6 +944,7 @@ fn normalize_phase42_session_id(value: &str) -> Option<String> {
     }
 }
 
+#[cfg(test)]
 fn phase42_session_paired_message(session_id: &str) -> String {
     format!(
         "session_paired:{};",
@@ -2201,6 +2209,7 @@ fn handle_incoming_message(
     }
 }
 
+#[cfg(test)]
 fn parse_tci_command(
     command: &str,
     command_tx: &Sender<TciCommand>,
@@ -3162,6 +3171,7 @@ fn set_client_phase42_session_lane(
     true
 }
 
+#[cfg(test)]
 fn phase42_session_pair_for_client(
     clients: &ClientRegistry,
     client_id: u64,

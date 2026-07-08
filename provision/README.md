@@ -40,6 +40,7 @@ This directory contains provisioning assets for cloud-init based setup of a Satu
 - installs a root-owned provisioning power helper so the desktop UI can request reboot reliably at the end of first-boot setup
 - optionally installs `p2app-control` tray control (AppIndicator-based)
 - optionally installs Update Manager
+- installs piHPSDR native DSP libraries and Saturn Bridge by default so Saturn Remote `/remote` and `/remote-next` have a running backend on `127.0.0.1:50001`
 - optionally flashes FPGA (disabled by default)
 
 Completion and logs:
@@ -81,6 +82,9 @@ Environment controls:
 - `SATURN_CLEAN_TMP_AFTER_PROVISION=1|0` (default: `1`)
 - `SATURN_APT_LOCK_TIMEOUT_SECONDS` (default: `120`)
 - `SATURN_APT_LOCK_RETRY_INTERVAL_SECONDS` (default: `3`)
+- `SATURN_INSTALL_PIHPSDR=1|0` (default: `1`)
+- `SATURN_INSTALL_SATURN_BRIDGE=1|0` (default: `1`)
+- `SATURN_REQUIRE_SATURN_BRIDGE=1|0` (default: `1`; when enabled, provisioning fails instead of silently completing without the Remote backend)
 - `SATURN_DETECT_FRONT_PANEL=1|0` (default: `1`)
 - `SATURN_FRONT_PANEL_STATE_FILE` (default: `/var/lib/saturn-provision/front-panel-type`)
 - `SATURN_FORCE_SYSTEM_ROLE=local_saturn|remotehead_candidate|unknown` (optional conservative support override)

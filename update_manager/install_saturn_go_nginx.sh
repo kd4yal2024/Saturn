@@ -24,6 +24,7 @@ BUILD_PREFLIGHT_HELPER="$SOURCE_DIR/scripts/saturn-go-build-preflight.sh"
 XDMA_FIX_SCRIPT_INSTALL="/usr/local/bin/saturn-fix-xdma.sh"
 XDMA_POSTINST_HELPER_INSTALL="/usr/local/bin/saturn-xdma-kernel-postinst.sh"
 XDMA_POSTINST_HOOK_PATH="/etc/kernel/postinst.d/saturn-xdma"
+SATURN_BRIDGE_INSTALLER_NAME="install-saturn-bridge.sh"
 
 SATURN_ADDR="${SATURN_ADDR:-127.0.0.1:8080}"
 SATURN_MAX_BODY_BYTES="${SATURN_MAX_BODY_BYTES:-2147483648}"
@@ -42,6 +43,9 @@ SATURN_WATCHDOG_INTERVAL="${SATURN_WATCHDOG_INTERVAL:-30s}"
 RUSTUP_INIT_URL="${RUSTUP_INIT_URL:-https://sh.rustup.rs}"
 TAILSCALE_INSTALL_URL="${TAILSCALE_INSTALL_URL:-https://tailscale.com/install.sh}"
 SATURN_REMOTE_NEXT_DEFAULT_QUERY="${SATURN_REMOTE_NEXT_DEFAULT_QUERY:-phase42_split=1&phase44_tx_opus=1&phase44_tx_cfc=1&client_bust=bridgeprefill240-cfcessb3}"
+SATURN_INSTALL_BRIDGE="${SATURN_INSTALL_BRIDGE:-0}"
+SATURN_REQUIRE_BRIDGE="${SATURN_REQUIRE_BRIDGE:-0}"
+SATURN_PIHPSDR_DIR="${SATURN_PIHPSDR_DIR:-/home/${SUDO_USER:-$USER}/github/pihpsdr}"
 
 bold(){ printf "\e[1m%s\e[0m\n" "$*"; }
 ok(){   printf "[OK] %s\n" "$*"; }
@@ -89,6 +93,7 @@ EXTRA_PACKAGED_SCRIPTS=(
 )
 PRIVILEGED_HELPER_SCRIPTS=(
   "$SOURCE_DIR/scripts/saturn-go-build-preflight.sh"
+  "$SOURCE_DIR/scripts/$SATURN_BRIDGE_INSTALLER_NAME"
   "$REPO_SOURCE_DIR/scripts/saturn-admin-password.sh"
   "$REPO_SOURCE_DIR/scripts/saturn-flash-fpga.sh"
   "$REPO_SOURCE_DIR/scripts/saturn-xdma-doctor.sh"
@@ -247,6 +252,59 @@ install_optional_tailscale() {
   ok "Tailscale package installed"
 }
 
+bridge_requested() {
+  env_flag_enabled "$SATURN_INSTALL_BRIDGE" || env_flag_enabled "$SATURN_REQUIRE_BRIDGE"
+}
+
+saturn_remote_bridge_preflight() {
+  local bridge_dir="$SOURCE_DIR/saturn-bridge"
+  local bridge_installer="$SOURCE_DIR/scripts/$SATURN_BRIDGE_INSTALLER_NAME"
+  local missing=()
+
+  info "Checking Saturn Remote bridge prerequisites..."
+  [[ -f "$bridge_dir/Cargo.toml" ]] || missing+=("$bridge_dir/Cargo.toml")
+  [[ -x "$bridge_installer" ]] || missing+=("$bridge_installer")
+  command -v "$RUSTUP_CARGO_BIN" >/dev/null 2>&1 || [[ -x "$RUSTUP_CARGO_BIN" ]] || missing+=("$RUSTUP_CARGO_BIN")
+  apt_pkg_installed libfftw3-dev || missing+=("apt:libfftw3-dev")
+  [[ -f "$SATURN_PIHPSDR_DIR/wdsp/libwdsp.a" ]] || missing+=("$SATURN_PIHPSDR_DIR/wdsp/libwdsp.a")
+  [[ -f "$SATURN_PIHPSDR_DIR/rnnoise/librnnoise.a" ]] || missing+=("$SATURN_PIHPSDR_DIR/rnnoise/librnnoise.a")
+  [[ -f "$SATURN_PIHPSDR_DIR/libspecbleach/libspecbleach.a" ]] || missing+=("$SATURN_PIHPSDR_DIR/libspecbleach/libspecbleach.a")
+
+  if (( ${#missing[@]} == 0 )); then
+    ok "Saturn Remote bridge prerequisites present"
+    return 0
+  fi
+
+  warn "Saturn Remote bridge prerequisites are missing:"
+  printf '  - %s\n' "${missing[@]}" >&2
+  warn "Remote pages can load, but /remote and /remote-next will not work until saturn-bridge is installed."
+  warn "Install/build piHPSDR first, then run: sudo SATURN_INSTALL_BRIDGE=1 bash update_manager/install_saturn_go_nginx.sh"
+
+  if env_flag_enabled "$SATURN_REQUIRE_BRIDGE"; then
+    err "SATURN_REQUIRE_BRIDGE=1 and Saturn Remote bridge prerequisites are missing."
+    exit 1
+  fi
+  return 1
+}
+
+install_saturn_bridge_if_requested() {
+  bridge_requested || return 0
+  saturn_remote_bridge_preflight
+
+  info "Installing Saturn Remote bridge..."
+  env \
+    SATURN_USER="$SERVICE_USER" \
+    SATURN_REPO_ROOT="$REPO_SOURCE_DIR" \
+    SATURN_PIHPSDR_DIR="$SATURN_PIHPSDR_DIR" \
+    SATURN_BRIDGE_SOURCE_DIR="$SOURCE_DIR/saturn-bridge" \
+    SATURN_GO_ROOT="$SATURN_ROOT" \
+    SATURN_BRIDGE_BIN="$BIN_DIR/saturn-bridge" \
+    SATURN_BRIDGE_RF_TX_ENABLED="${SATURN_BRIDGE_RF_TX_ENABLED:-0}" \
+    SATURN_BRIDGE_TX_OPUS_DECODE_ENABLED="${SATURN_BRIDGE_TX_OPUS_DECODE_ENABLED:-1}" \
+    bash "$SOURCE_DIR/scripts/$SATURN_BRIDGE_INSTALLER_NAME"
+  ok "Saturn Remote bridge installed"
+}
+
 remove_legacy_apt_rust() {
   local pkgs=()
   apt_pkg_installed cargo && pkgs+=(cargo)
@@ -316,6 +374,7 @@ export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
 apt-get install -y -qq \
   nginx apache2-utils build-essential pkg-config \
+  libfftw3-dev \
   curl git rsync nodejs npm \
   python3 python3-venv python3-psutil \
   ca-certificates
@@ -323,6 +382,7 @@ ok "Dependencies installed"
 
 ensure_modern_rust_toolchain
 install_optional_tailscale
+saturn_remote_bridge_preflight || true
 
 info "Preparing runtime directories..."
 mkdir -p "$BIN_DIR" "$SCRIPTS_DIR" "$WATCHDOG_SCRIPT_DIR" "$PRIVILEGED_SCRIPTS_DIR" "$WEB_ROOT" "$SATURN_STATE_DIR" "$SATURN_SNAPSHOT_DIR" "$SATURN_STAGING_DIR"
@@ -446,6 +506,8 @@ ${SERVICE_USER} ALL=(root) NOPASSWD: ${PRIVILEGED_SCRIPTS_DIR}/saturn-admin-pass
 ${SERVICE_USER} ALL=(root) NOPASSWD: ${PRIVILEGED_SCRIPTS_DIR}/saturn-go-build-preflight.sh
 ${SERVICE_USER} ALL=(root) NOPASSWD: ${PRIVILEGED_SCRIPTS_DIR}/saturn-go-build-preflight.sh ensure-swap
 ${SERVICE_USER} ALL=(root) NOPASSWD: ${PRIVILEGED_SCRIPTS_DIR}/saturn-go-build-preflight.sh status
+${SERVICE_USER} ALL=(root) NOPASSWD: ${PRIVILEGED_SCRIPTS_DIR}/${SATURN_BRIDGE_INSTALLER_NAME}
+${SERVICE_USER} ALL=(root) NOPASSWD: ${PRIVILEGED_SCRIPTS_DIR}/${SATURN_BRIDGE_INSTALLER_NAME} *
 ${SERVICE_USER} ALL=(root) NOPASSWD: ${PRIVILEGED_SCRIPTS_DIR}/saturn-tailscale.sh
 ${SERVICE_USER} ALL=(root) NOPASSWD: ${PRIVILEGED_SCRIPTS_DIR}/saturn-tailscale.sh *
 ${SERVICE_USER} ALL=(root) NOPASSWD: ${PRIVILEGED_SCRIPTS_DIR}/saturn-go-tailscale-serve.sh
@@ -813,6 +875,8 @@ else
   systemctl start saturn-go-watchdog.timer
 fi
 ok "Service and watchdog enabled and restarted"
+
+install_saturn_bridge_if_requested
 
 info "Waiting for backend health endpoint..."
 healthy=0
