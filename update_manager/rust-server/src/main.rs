@@ -48,8 +48,8 @@ use crate::update::{
 };
 use crate::util::{
     backup_home_dir, current_repo_root, is_safe_backup_name_with_prefix,
-    is_safe_custom_script_filename, is_safe_repo_part, is_safe_script_name, is_saturn_repo_root, json_error,
-    output_error_text, parse_boolish, pihpsdr_repo_root, sanitize_custom_flags,
+    is_safe_custom_script_filename, is_safe_repo_part, is_safe_script_name, is_saturn_repo_root,
+    json_error, output_error_text, parse_boolish, pihpsdr_repo_root, sanitize_custom_flags,
     validate_pihpsdr_repo_root, validate_saturn_repo_root,
 };
 
@@ -963,10 +963,7 @@ async fn infer_saturngo_policy_repo_from_active_remote(
     parse_github_owner_repo(&remote)
 }
 
-async fn normalize_saturngo_update_policy(
-    policy: UpdatePolicy,
-    state: &AppState,
-) -> UpdatePolicy {
+async fn normalize_saturngo_update_policy(policy: UpdatePolicy, state: &AppState) -> UpdatePolicy {
     let mut normalized = normalize_update_policy(policy, state);
     if !update_policy_repo_configured(&normalized) {
         if let Some((owner, repo)) = infer_saturngo_policy_repo_from_active_remote(state).await {
