@@ -4,7 +4,7 @@
 # Build apps and install/repair .desktop launchers (repo + generated).
 #
 # Key behaviors:
-# - If OS codename is "trixie", run patch-trixie-gpiod.sh BEFORE compiling P2App.
+# - On Trixie, P2App builds against the in-tree libgpiod v2 source.
 # - Recursively copies all *.desktop under $SATURN_ROOT/desktop (follows symlinks)
 #   into:
 #     - ~/.local/share/applications
@@ -57,30 +57,10 @@ get_codename() {
   printf '%s\n' "$codename"
 }
 
-find_patch_script() {
-  local exact="$SATURN_ROOT/scripts/patch-trixie-gpiod.sh"
-  if [[ -f "$exact" ]]; then
-    printf '%s\n' "$exact"; return 0
-  fi
-  local hit
-  hit="$(find "$SATURN_ROOT/scripts" -maxdepth 2 -type f \( -iname 'patch-trixie-gpiod.sh' -o -iname '*gpiod*patch*.sh' \) -print -quit 2>/dev/null || true)"
-  [[ -n "$hit" ]] && printf '%s\n' "$hit" || return 1
-}
-
 maybe_patch_trixie_for_p2app() {
   local codename; codename="$(get_codename)"
   if [[ "${codename,,}" == "trixie" ]]; then
-    hr; echo; log "OS codename '${codename}' detected → applying gpiod v2 patch before building P2App"; echo; hr
-    local patch
-    if patch="$(find_patch_script)"; then
-      log "Found patch script: $patch"
-      chmod +x "$patch" 2>/dev/null || true
-      ( cd "$(dirname "$patch")" || exit 0; bash "$patch" ) \
-        && log "gpiod v2 patch completed" \
-        || log "WARN: patch script returned non-zero (continuing)"
-    else
-      log "WARN: No gpiod patch script found under $SATURN_ROOT/scripts"
-    fi
+    hr; echo; log "OS codename '${codename}' detected; P2App will use the in-tree libgpiod v2 implementation"; echo; hr
   else
     log "OS codename '${codename:-unknown}' → skipping P2App gpiod patch"
   fi

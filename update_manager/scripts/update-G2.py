@@ -39,6 +39,10 @@ DEFAULT_SATURN_DIR = os.path.join(HOME, "github", "Saturn")
 SATURN_DIR = os.environ.get("SATURN_REPO_ROOT") or os.environ.get("SATURN_DIR") or DEFAULT_SATURN_DIR
 SATURN_DIR = os.path.abspath(SATURN_DIR)
 RUNTIME_SCRIPTS_DIR = os.environ.get("SATURN_RUNTIME_SCRIPTS_DIR", "/opt/saturn-go/scripts")
+PRIVILEGED_UDEV_HELPER = os.environ.get(
+    "SATURN_PRIVILEGED_UDEV_HELPER",
+    "/usr/local/lib/saturn-go/scripts/install-udev-rules-on-current-image.sh",
+)
 POLICY_OWNER = os.environ.get("SATURN_UPDATE_POLICY_OWNER", "").strip()
 POLICY_REPO = os.environ.get("SATURN_UPDATE_POLICY_REPO", "").strip()
 POLICY_REMOTE = os.environ.get("SATURN_UPDATE_POLICY_REMOTE", "origin").strip() or "origin"
@@ -639,7 +643,19 @@ def install_udev_rules():
         warn("No udev install script: rules/install-rules.sh")
         return
     if args.dry_run:
-        info(f"[Dry Run] Would run (sudo) {script}")
+        helper = PRIVILEGED_UDEV_HELPER if os.path.isfile(PRIVILEGED_UDEV_HELPER) else script
+        info(f"[Dry Run] Would run (sudo) {helper}")
+        return
+    if os.path.isfile(PRIVILEGED_UDEV_HELPER):
+        sudo_cmd = sudo_prefix("Installing udev rules", optional=True)
+        if sudo_cmd is None:
+            warn(
+                "Saturn Go udev helper is installed, but passwordless sudo is not available. "
+                "Reinstall Saturn Go to refresh /etc/sudoers.d/saturn-go-maintenance."
+            )
+            return
+        run(sudo_cmd + [PRIVILEGED_UDEV_HELPER, "--repo", SATURN_DIR], live=True, cwd=SATURN_DIR)
+        ok("Rules installed")
         return
     sudo_cmd = sudo_prefix("Installing udev rules", optional=True)
     if sudo_cmd is None:
