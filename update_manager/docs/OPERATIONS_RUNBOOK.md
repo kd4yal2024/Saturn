@@ -149,7 +149,7 @@ Tailscale does **not** replace Saturn Remote's basic auth — it stacks on top.
 
 - **Tailscale**: gates *who can reach* the listener at all. Only authenticated tailnet members (and their explicitly shared devices) can route traffic to the Pi.
 - **Basic auth in Saturn Remote**: gates *who can use* the listener once reached. The nginx LAN admin path uses `/etc/nginx/.htpasswd`; the Saturn Remote TLS listener uses the `SATURN_REMOTE_BASIC_AUTH=username:password` service environment consumed by `rust-server/src/remote_tls.rs`. Both credential paths are kept aligned by `saturn-admin-password.sh` (used by the UI change-password flow and console `reset`); never edit one side by hand. Survives Tailscale account compromise, shared device misuse, and accidental ACL widening.
-- **`SATURN_REMOTE_TX_RF_ENABLED`**: gates *whether RF TX is permitted at all*. Stays opt-in regardless of how the page is reached. A correctly authenticated Tailscale operator with valid basic-auth credentials still cannot key the radio unless this is explicitly set in the bridge environment.
+- **`SATURN_REMOTE_TX_RF_ENABLED`**: gates *whether RF TX is permitted at all*. The bridge installer enables it by default for Saturn Remote operation. Set it to `0` in the bridge environment to disable RF TX without changing authentication, Tailscale exposure, or the browser PTT controls.
 
 These three controls are independent. Do not collapse them.
 

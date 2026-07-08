@@ -107,9 +107,9 @@ TX control subset:
 - Browser release handling is also fail-closed: pointer/key release, page hide,
   and window blur all send `trx:false` and stop local mic capture even if the UI
   already appears to be in RX.
-- RF TX remains disabled by default and requires
-  `SATURN_REMOTE_TX_RF_ENABLED=1` in the bridge environment for controlled
-  testing.
+- RF TX is enabled by default in the bridge environment for Saturn Remote
+  operation. Operators can set `SATURN_REMOTE_TX_RF_ENABLED=0` to disable RF TX
+  without changing the browser, auth, or Tailscale controls.
 
 This is the right first-step contract because it keeps the frontend close to the actual radio stream instead of hiding complexity too early.
 

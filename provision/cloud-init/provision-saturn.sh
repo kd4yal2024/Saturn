@@ -1503,7 +1503,7 @@ install_saturn_bridge_runtime() {
     SATURN_PIHPSDR_DIR="$saturn_home/github/pihpsdr" \
     SATURN_BRIDGE_SOURCE_DIR="$SATURN_REPO_DIR/update_manager/saturn-bridge" \
     SATURN_GO_ROOT="/opt/saturn-go" \
-    SATURN_BRIDGE_RF_TX_ENABLED="${SATURN_BRIDGE_RF_TX_ENABLED:-0}" \
+    SATURN_BRIDGE_RF_TX_ENABLED="${SATURN_BRIDGE_RF_TX_ENABLED:-1}" \
     SATURN_BRIDGE_TX_OPUS_DECODE_ENABLED="${SATURN_BRIDGE_TX_OPUS_DECODE_ENABLED:-1}" \
     bash "$script"
 }

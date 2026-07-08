@@ -346,7 +346,7 @@ print_final_url() {
   printf "  https://%s%s\n" "$dns_name" "$(saturn_remote_public_path)"
   echo
   info "Authenticate with the SATURN_REMOTE_BASIC_AUTH credentials configured in $SATURN_SERVICE."
-  info "RF TX is opt-in via SATURN_REMOTE_TX_RF_ENABLED in saturn-bridge.service environment."
+  info "RF TX is enabled by default in saturn-bridge.service; SATURN_REMOTE_TX_RF_ENABLED can disable it."
   info "Tailscale Serve does NOT change either of those controls."
 }
 
