@@ -564,7 +564,7 @@ done
 install -D -m 0755 -o root -g root "$STAGE_PRIVILEGED_SCRIPTS_DIR/fix-xdma.sh" "\$XDMA_FIX_SCRIPT_INSTALL"
 install -D -m 0755 -o root -g root "$STAGE_PRIVILEGED_SCRIPTS_DIR/saturn-xdma-kernel-postinst.sh" "\$XDMA_POSTINST_HELPER_INSTALL"
 TMP_XDMA_HOOK="\$(mktemp)"
-cat >"\$TMP_XDMA_HOOK" <<HOOK
+cat >"\$TMP_XDMA_HOOK" <<'HOOK'
 #!/bin/sh
 set -eu
 HELPER="${XDMA_POSTINST_HELPER_INSTALL}"
