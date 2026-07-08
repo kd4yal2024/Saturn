@@ -32,6 +32,7 @@ saturn_go_build_remote_web_assets() {
   local dist_dir="$remote_web_dir/dist"
   local bundle_path="$remote_web_dir/dist/saturn-remote-next.js"
   local checksum_path="$bundle_path.sha256"
+  local build_uid build_user
 
   if [[ ! -f "$remote_web_dir/package.json" ]]; then
     echo "[ERR] remote-web project not found: $remote_web_dir" >&2
@@ -49,12 +50,41 @@ saturn_go_build_remote_web_assets() {
     echo "[ERR] sha256sum is required to verify $bundle_path" >&2
     return 1
   fi
+  build_uid="$(stat -c '%u' "$remote_web_dir" 2>/dev/null || printf '0')"
+  build_user="$(getent passwd "$build_uid" | cut -d: -f1 || true)"
+  if [[ "$(id -u)" -eq 0 && -n "$build_user" && "$build_uid" != "0" ]]; then
+    if [[ -d "$remote_web_dir/node_modules" ]] && ! runuser -u "$build_user" -- test -w "$remote_web_dir/node_modules"; then
+      echo "[ERR] remote-web node_modules is not writable by $build_user: $remote_web_dir/node_modules" >&2
+      echo "[ERR] Fix ownership, for example: sudo chown -R $build_user:$build_user '$remote_web_dir/node_modules' '$dist_dir'" >&2
+      return 1
+    fi
+    if [[ -d "$dist_dir" ]] && ! runuser -u "$build_user" -- test -w "$dist_dir"; then
+      echo "[ERR] remote-web dist is not writable by $build_user: $dist_dir" >&2
+      echo "[ERR] Fix ownership, for example: sudo chown -R $build_user:$build_user '$remote_web_dir/node_modules' '$dist_dir'" >&2
+      return 1
+    fi
+  else
+    if [[ -d "$remote_web_dir/node_modules" && ! -w "$remote_web_dir/node_modules" ]]; then
+      echo "[ERR] remote-web node_modules is not writable by $(id -un): $remote_web_dir/node_modules" >&2
+      echo "[ERR] Fix ownership, for example: sudo chown -R $(id -un):$(id -gn) '$remote_web_dir/node_modules' '$dist_dir'" >&2
+      return 1
+    fi
+    if [[ -d "$dist_dir" && ! -w "$dist_dir" ]]; then
+      echo "[ERR] remote-web dist is not writable by $(id -un): $dist_dir" >&2
+      echo "[ERR] Fix ownership, for example: sudo chown -R $(id -un):$(id -gn) '$remote_web_dir/node_modules' '$dist_dir'" >&2
+      return 1
+    fi
+  fi
 
-  (
-    cd "$remote_web_dir"
-    npm ci
-    npm run build
-  ) || return 1
+  if [[ "$(id -u)" -eq 0 && -n "$build_user" && "$build_uid" != "0" ]]; then
+    runuser -u "$build_user" -- sh -c 'cd "$1" && npm ci && npm run build' sh "$remote_web_dir"
+  else
+    (
+      cd "$remote_web_dir"
+      npm ci
+      npm run build
+    )
+  fi || return 1
 
   if [[ ! -s "$bundle_path" ]]; then
     echo "[ERR] remote-web build did not produce $bundle_path" >&2
