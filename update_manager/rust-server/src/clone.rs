@@ -13,7 +13,10 @@ use tokio::process::Command;
 
 use crate::state::{PiImageStatusQuery, MAX_COMPLETED_JOBS};
 use crate::sync_ext::MutexExt;
-use crate::util::{json_error, output_error_text};
+use crate::util::json_error;
+
+const PRIVILEGED_PI_CLONE_HELPER: &str = "/usr/local/lib/saturn-go/scripts/clone_pi_to_device.sh";
+const PRIVILEGED_PI_WIPE_HELPER: &str = "/usr/local/lib/saturn-go/scripts/saturn-pi-wipe-target.sh";
 
 #[derive(Debug, Clone, Serialize)]
 pub struct PiCloneJob {
@@ -166,37 +169,6 @@ fn classify_clone_stderr_line(line: &str) -> String {
     }
 }
 
-fn current_process_is_root() -> bool {
-    fs::read_to_string("/proc/self/status")
-        .ok()
-        .and_then(|status| {
-            status.lines().find_map(|line| {
-                if !line.starts_with("Uid:") {
-                    return None;
-                }
-                line.split_whitespace().nth(1).map(|uid| uid == "0")
-            })
-        })
-        .unwrap_or(false)
-}
-
-pub async fn run_privileged_output(
-    program: &str,
-    args: &[&str],
-) -> Result<std::process::Output, std::io::Error> {
-    let mut cmd = if current_process_is_root() {
-        Command::new(program)
-    } else {
-        let mut c = Command::new("sudo");
-        c.arg("-n").arg(program);
-        c
-    };
-    cmd.args(args)
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped());
-    cmd.output().await
-}
-
 pub async fn pi_clone_start(
     axum::extract::Json(req): axum::extract::Json<PiCloneStartReq>,
 ) -> Response {
@@ -239,7 +211,8 @@ pub async fn pi_clone_start(
     set_clone_job(job.clone());
 
     tokio::spawn(async move {
-        let mut cmd = Command::new("/opt/saturn-go/scripts/clone_pi_to_device.sh");
+        let mut cmd = Command::new("sudo");
+        cmd.arg("-n").arg(PRIVILEGED_PI_CLONE_HELPER);
         cmd.arg("--target").arg(&target);
         if verify_compare {
             cmd.arg("--verify-compare");
@@ -372,16 +345,10 @@ pub async fn pi_wipe_target(
         return json_error(StatusCode::BAD_REQUEST, "target device is not removable");
     }
 
-    let mut log: Vec<String> = Vec::new();
-    log.push(format!("Target: {target}"));
-
-    let lsblk_out = match Command::new("lsblk")
-        .arg("-ln")
-        .arg("-o")
-        .arg("PATH,TYPE")
+    let out = match Command::new("sudo")
+        .arg("-n")
+        .arg(PRIVILEGED_PI_WIPE_HELPER)
         .arg(&target)
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
         .output()
         .await
     {
@@ -389,168 +356,23 @@ pub async fn pi_wipe_target(
         Err(e) => {
             return json_error(
                 StatusCode::INTERNAL_SERVER_ERROR,
-                &format!("lsblk failed: {e}"),
+                &format!("wipe helper failed: {e}"),
             )
         }
     };
-    if !lsblk_out.status.success() {
+    if !out.status.success() {
+        let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
+        let stdout = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        let msg = if stderr.is_empty() { stdout } else { stderr };
         return json_error(
             StatusCode::INTERNAL_SERVER_ERROR,
-            &format!("lsblk failed: {}", output_error_text(&lsblk_out)),
+            &format!("wipe helper failed: {msg}"),
         );
     }
-    let lsblk_text = String::from_utf8_lossy(&lsblk_out.stdout);
-    for line in lsblk_text.lines() {
-        let mut parts = line.split_whitespace();
-        let path = match parts.next() {
-            Some(v) => v,
-            None => continue,
-        };
-        let kind = match parts.next() {
-            Some(v) => v,
-            None => continue,
-        };
-        if kind != "part" {
-            continue;
-        }
-        let out = match run_privileged_output("umount", &[path]).await {
-            Ok(out) => out,
-            Err(e) => {
-                return json_error(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    &format!("umount failed for {path}: {e}"),
-                )
-            }
-        };
-        if out.status.success() {
-            log.push(format!("Unmounted {path}"));
-        } else {
-            let msg = output_error_text(&out);
-            log.push(format!("Unmount {path}: {msg}"));
-        }
-    }
-
-    let wipefs_out = match run_privileged_output("wipefs", &["-af", &target]).await {
-        Ok(out) => out,
-        Err(e) => {
-            return json_error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                &format!("wipefs failed: {e}"),
-            )
-        }
-    };
-    if !wipefs_out.status.success() {
-        return json_error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            &format!("wipefs failed: {}", output_error_text(&wipefs_out)),
-        );
-    }
-    let wipefs_msg = output_error_text(&wipefs_out);
-    if wipefs_msg.is_empty() {
-        log.push("wipefs: signatures cleared".to_string());
-    } else {
-        log.push(format!("wipefs: {wipefs_msg}"));
-    }
-
-    match run_privileged_output("sgdisk", &["--zap-all", &target]).await {
-        Ok(out) if out.status.success() => log.push("sgdisk: GPT/MBR metadata zapped".to_string()),
-        Ok(out) => log.push(format!("sgdisk: {}", output_error_text(&out))),
-        Err(e) => log.push(format!("sgdisk: skipped ({e})")),
-    }
-
-    let size_out = match run_privileged_output("blockdev", &["--getsize64", &target]).await {
-        Ok(out) => out,
-        Err(e) => {
-            return json_error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                &format!("blockdev failed: {e}"),
-            )
-        }
-    };
-    if !size_out.status.success() {
-        return json_error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            &format!("blockdev failed: {}", output_error_text(&size_out)),
-        );
-    }
-    let size_bytes = String::from_utf8_lossy(&size_out.stdout)
-        .trim()
-        .parse::<u64>()
-        .unwrap_or(0);
-    if size_bytes == 0 {
-        return json_error(StatusCode::INTERNAL_SERVER_ERROR, "target size is zero");
-    }
-    log.push(format!("Size: {size_bytes} bytes"));
-
-    let dd_head_out = match run_privileged_output(
-        "dd",
-        &[
-            "if=/dev/zero",
-            &format!("of={target}"),
-            "bs=1M",
-            "count=16",
-            "conv=fsync",
-            "status=none",
-        ],
-    )
-    .await
-    {
-        Ok(out) => out,
-        Err(e) => {
-            return json_error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                &format!("dd head wipe failed: {e}"),
-            )
-        }
-    };
-    if !dd_head_out.status.success() {
-        return json_error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            &format!("dd head wipe failed: {}", output_error_text(&dd_head_out)),
-        );
-    }
-    log.push("Zeroed first 16 MiB".to_string());
-
-    let mib: u64 = 1024 * 1024;
-    let size_mib = size_bytes / mib;
-    if size_mib > 16 {
-        let seek_mib = size_mib - 16;
-        let seek_arg = format!("seek={seek_mib}");
-        let of_arg = format!("of={target}");
-        let dd_tail_out = match run_privileged_output(
-            "dd",
-            &[
-                "if=/dev/zero",
-                &of_arg,
-                "bs=1M",
-                "count=16",
-                &seek_arg,
-                "conv=fsync",
-                "status=none",
-            ],
-        )
-        .await
-        {
-            Ok(out) => out,
-            Err(e) => {
-                return json_error(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    &format!("dd tail wipe failed: {e}"),
-                )
-            }
-        };
-        if !dd_tail_out.status.success() {
-            return json_error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                &format!("dd tail wipe failed: {}", output_error_text(&dd_tail_out)),
-            );
-        }
-        log.push("Zeroed last 16 MiB".to_string());
-    }
-
-    let _ = run_privileged_output("sync", &[]).await;
-    let _ = run_privileged_output("partprobe", &[&target]).await;
-    let _ = run_privileged_output("udevadm", &["settle"]).await;
+    let log: Vec<String> = String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .map(|line| line.to_string())
+        .collect();
 
     Json(serde_json::json!({
         "status": "ok",

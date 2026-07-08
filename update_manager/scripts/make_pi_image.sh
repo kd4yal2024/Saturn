@@ -116,5 +116,9 @@ if $COMPRESS; then
   fi
 fi
 
+if [[ "$(id -u)" -eq 0 && -n "${SUDO_UID:-}" && -n "${SUDO_GID:-}" ]]; then
+  chown "${SUDO_UID}:${SUDO_GID}" "$OUT_IMG" 2>/dev/null || true
+fi
+
 progress 100
 info "Done: ${OUT_IMG}"

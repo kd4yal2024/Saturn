@@ -299,6 +299,9 @@ EXTRA_PACKAGED_SCRIPTS=(
 )
 PRIVILEGED_HELPER_SCRIPTS=(
   "$REPO_ROOT/update_manager/scripts/saturn-go-build-preflight.sh"
+  "$REPO_ROOT/update_manager/scripts/make_pi_image.sh"
+  "$REPO_ROOT/update_manager/scripts/clone_pi_to_device.sh"
+  "$REPO_ROOT/update_manager/scripts/saturn-pi-wipe-target.sh"
   "$REPO_ROOT/scripts/saturn-admin-password.sh"
   "$REPO_ROOT/scripts/saturn-flash-fpga.sh"
   "$REPO_ROOT/scripts/saturn-xdma-doctor.sh"
@@ -594,6 +597,12 @@ ${DEPLOY_RUN_USER} ALL=(root) NOPASSWD: ${DEPLOY_PRIVILEGED_SCRIPTS_DIR}/saturn-
 ${DEPLOY_RUN_USER} ALL=(root) NOPASSWD: ${DEPLOY_PRIVILEGED_SCRIPTS_DIR}/saturn-xdma-doctor.sh *
 ${DEPLOY_RUN_USER} ALL=(root) NOPASSWD: ${DEPLOY_PRIVILEGED_SCRIPTS_DIR}/saturn-flash-fpga.sh
 ${DEPLOY_RUN_USER} ALL=(root) NOPASSWD: ${DEPLOY_PRIVILEGED_SCRIPTS_DIR}/saturn-flash-fpga.sh *
+${DEPLOY_RUN_USER} ALL=(root) NOPASSWD: ${DEPLOY_PRIVILEGED_SCRIPTS_DIR}/make_pi_image.sh
+${DEPLOY_RUN_USER} ALL=(root) NOPASSWD: ${DEPLOY_PRIVILEGED_SCRIPTS_DIR}/make_pi_image.sh *
+${DEPLOY_RUN_USER} ALL=(root) NOPASSWD: ${DEPLOY_PRIVILEGED_SCRIPTS_DIR}/clone_pi_to_device.sh
+${DEPLOY_RUN_USER} ALL=(root) NOPASSWD: ${DEPLOY_PRIVILEGED_SCRIPTS_DIR}/clone_pi_to_device.sh *
+${DEPLOY_RUN_USER} ALL=(root) NOPASSWD: ${DEPLOY_PRIVILEGED_SCRIPTS_DIR}/saturn-pi-wipe-target.sh
+${DEPLOY_RUN_USER} ALL=(root) NOPASSWD: ${DEPLOY_PRIVILEGED_SCRIPTS_DIR}/saturn-pi-wipe-target.sh *
 ${DEPLOY_RUN_USER} ALL=(root) NOPASSWD: ${DEPLOY_PRIVILEGED_SCRIPTS_DIR}/saturn-xdma-stage-current.sh
 ${DEPLOY_RUN_USER} ALL=(root) NOPASSWD: ${DEPLOY_PRIVILEGED_SCRIPTS_DIR}/install-udev-rules-on-current-image.sh
 ${DEPLOY_RUN_USER} ALL=(root) NOPASSWD: ${DEPLOY_PRIVILEGED_SCRIPTS_DIR}/install-udev-rules-on-current-image.sh *

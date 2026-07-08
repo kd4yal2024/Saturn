@@ -17,6 +17,8 @@ use crate::state::{PiImageStatusQuery, MAX_COMPLETED_JOBS};
 use crate::sync_ext::MutexExt;
 use crate::util::json_error;
 
+const PRIVILEGED_PI_IMAGE_HELPER: &str = "/usr/local/lib/saturn-go/scripts/make_pi_image.sh";
+
 #[derive(Debug, Clone, Serialize)]
 pub struct PiImageJob {
     id: String,
@@ -116,7 +118,8 @@ pub async fn pi_image_start(
     set_job(job.clone());
 
     tokio::spawn(async move {
-        let mut cmd = Command::new("/opt/saturn-go/scripts/make_pi_image.sh");
+        let mut cmd = Command::new("sudo");
+        cmd.arg("-n").arg(PRIVILEGED_PI_IMAGE_HELPER);
         cmd.arg("--out-dir").arg(&out_dir);
         if !shrink {
             cmd.arg("--no-shrink");
