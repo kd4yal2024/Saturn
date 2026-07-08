@@ -48,7 +48,7 @@ use crate::update::{
 };
 use crate::util::{
     backup_home_dir, current_repo_root, is_safe_backup_name_with_prefix,
-    is_safe_custom_script_filename, is_safe_script_name, is_saturn_repo_root, json_error,
+    is_safe_custom_script_filename, is_safe_repo_part, is_safe_script_name, is_saturn_repo_root, json_error,
     output_error_text, parse_boolish, pihpsdr_repo_root, sanitize_custom_flags,
     validate_pihpsdr_repo_root, validate_saturn_repo_root,
 };
@@ -921,12 +921,69 @@ fn has_flag(flags: &[String], wanted: &str) -> bool {
     flags.iter().any(|flag| flag == wanted)
 }
 
+fn parse_github_owner_repo(remote_url: &str) -> Option<(String, String)> {
+    let trimmed = remote_url.trim();
+    let path = if let Some(path) = trimmed.strip_prefix("git@github.com:") {
+        path
+    } else if let Some(path) = trimmed.strip_prefix("https://github.com/") {
+        path
+    } else if let Some(path) = trimmed.strip_prefix("http://github.com/") {
+        path
+    } else {
+        return None;
+    };
+
+    let mut parts = path.trim_end_matches(".git").splitn(3, '/');
+    let owner = parts.next()?.trim();
+    let repo = parts.next()?.trim();
+    if parts.next().is_some() || !is_safe_repo_part(owner) || !is_safe_repo_part(repo) {
+        return None;
+    }
+    Some((owner.to_string(), repo.to_string()))
+}
+
+async fn infer_saturngo_policy_repo_from_active_remote(
+    state: &AppState,
+) -> Option<(String, String)> {
+    let repo_root = current_repo_root(state);
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(&repo_root)
+        .arg("remote")
+        .arg("get-url")
+        .arg("origin")
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .output()
+        .await
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let remote = String::from_utf8_lossy(&output.stdout);
+    parse_github_owner_repo(&remote)
+}
+
+async fn normalize_saturngo_update_policy(
+    policy: UpdatePolicy,
+    state: &AppState,
+) -> UpdatePolicy {
+    let mut normalized = normalize_update_policy(policy, state);
+    if !update_policy_repo_configured(&normalized) {
+        if let Some((owner, repo)) = infer_saturngo_policy_repo_from_active_remote(state).await {
+            normalized.owner = owner;
+            normalized.repo = repo;
+            normalized.repo_url_configured = true;
+        }
+    }
+    normalized
+}
+
 async fn load_saturngo_update_policy(state: &AppState) -> Result<UpdatePolicy, String> {
     let policy = match tokio::fs::read_to_string(&state.saturngo_update_policy_file).await {
         Ok(data) => serde_json::from_str::<UpdatePolicy>(&data).unwrap_or_default(),
         Err(_) => UpdatePolicy::default(),
     };
-    let normalized = normalize_update_policy(policy, state);
+    let normalized = normalize_saturngo_update_policy(policy, state).await;
     if let Err(e) = save_saturngo_update_policy(state, normalized.clone()).await {
         error!("failed to persist saturngo update policy: {e}");
     }
@@ -937,7 +994,7 @@ async fn save_saturngo_update_policy(
     state: &AppState,
     policy: UpdatePolicy,
 ) -> Result<UpdatePolicy, String> {
-    let normalized = normalize_update_policy(policy, state);
+    let normalized = normalize_saturngo_update_policy(policy, state).await;
     if let Some(parent) = state.saturngo_update_policy_file.parent() {
         tokio::fs::create_dir_all(parent)
             .await
