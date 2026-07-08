@@ -6,6 +6,8 @@ SCRIPT_DIR="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)"
 REPO_DIR="${SCRIPT_DIR}"
 PATCH_DIR="${SCRIPT_DIR}/patches"
 DESKHPSDR_GPIO_PATCH="${PATCH_DIR}/deskhpsdr-libgpiod-v2.patch"
+DEPS_HELPER_NAME="deskhpsdr-install-deps-on-current-image.sh"
+PRIVILEGED_DEPS_HELPER="/usr/local/lib/saturn-go/scripts/${DEPS_HELPER_NAME}"
 JOBS="${JOBS:-$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 2)}"
 INSTALL_DEPS=0
 RUN_CLEAN=1
@@ -81,10 +83,24 @@ detect_legacy_gpio_support() {
   fi
 }
 
-remove_redundant_pulseaudio_daemon() {
-  if package_installed pipewire-pulse && package_installed pulseaudio; then
-    echo "pipewire-pulse found; removing redundant pulseaudio daemon package"
-    sudo env DEBIAN_FRONTEND=noninteractive apt-get --yes remove pulseaudio
+install_debian_prerequisites() {
+  local helper
+
+  if [[ -x "${PRIVILEGED_DEPS_HELPER}" ]]; then
+    helper="${PRIVILEGED_DEPS_HELPER}"
+  elif [[ -x "${SCRIPT_DIR}/${DEPS_HELPER_NAME}" ]]; then
+    helper="${SCRIPT_DIR}/${DEPS_HELPER_NAME}"
+  else
+    echo "deskHPSDR dependency helper not found: ${PRIVILEGED_DEPS_HELPER}" >&2
+    echo "Reinstall Saturn Go so the privileged helper and sudoers policy are provisioned." >&2
+    exit 1
+  fi
+
+  echo "Installing deskHPSDR prerequisites for ${PRETTY_NAME:-Debian-based image}..."
+  if [[ ${EUID:-$(id -u)} -eq 0 ]]; then
+    "${helper}" --repo "${REPO_DIR}"
+  else
+    sudo -n "${helper}" --repo "${REPO_DIR}"
   fi
 }
 
@@ -273,14 +289,14 @@ for pkg in "${DEBIAN_PACKAGES[@]}"; do
 done
 
 if [[ ${INSTALL_DEPS} -eq 1 ]]; then
-  echo "Installing deskHPSDR prerequisites for ${PRETTY_NAME:-Debian-based image}..."
-  sudo env DEBIAN_FRONTEND=noninteractive apt-get update
-  if [[ ${#missing_packages[@]} -gt 0 ]]; then
-    sudo env DEBIAN_FRONTEND=noninteractive apt-get --yes install "${missing_packages[@]}"
-  else
-    echo "All listed Debian packages are already installed."
-  fi
-  remove_redundant_pulseaudio_daemon
+  install_debian_prerequisites
+
+  missing_packages=()
+  for pkg in "${DEBIAN_PACKAGES[@]}"; do
+    if ! package_installed "$pkg"; then
+      missing_packages+=("$pkg")
+    fi
+  done
 fi
 
 webkit_version="$(pkg-config --modversion webkit2gtk-4.1 2>/dev/null || pkg-config --modversion webkit2gtk-4.0 2>/dev/null || true)"

@@ -77,6 +77,7 @@ BACKUP_DIR = Path.home() / f"deskhpsdr-backup-{TIMESTAMP}"
 REPO_URL = "https://github.com/dl1bz/deskhpsdr.git"
 DEFAULT_BRANCH = "master"
 TMP_DIR = Path("/tmp") / f"deskhpsdr-update-{TIMESTAMP}-{os.getpid()}"
+PRIVILEGED_DEPS_HELPER = Path("/usr/local/lib/saturn-go/scripts/deskhpsdr-install-deps-on-current-image.sh")
 
 
 def get_term_size():
@@ -324,6 +325,32 @@ def resolve_saturn_script(script_name):
     return script_path
 
 
+def check_privileged_deps_helper():
+    if args.no_install_deps:
+        return
+
+    if not PRIVILEGED_DEPS_HELPER.is_file():
+        print_error(
+            f"deskHPSDR dependency helper is not installed: {PRIVILEGED_DEPS_HELPER}. "
+            "Reinstall Saturn Go to refresh the privileged helper set."
+        )
+
+    cmd = ["sudo", "-n", str(PRIVILEGED_DEPS_HELPER), "--check-only"]
+    result = subprocess.run(cmd, text=True, capture_output=True)
+    if result.returncode != 0:
+        output = "\n".join(part.strip() for part in (result.stdout, result.stderr) if part.strip())
+        if output:
+            print_warning(output)
+        print_error(
+            "deskHPSDR dependency helper is not callable through passwordless sudo. "
+            "Reinstall Saturn Go to refresh /etc/sudoers.d/saturn-go-maintenance."
+        )
+
+    for line in result.stdout.splitlines():
+        if line.strip():
+            print_info(line.strip())
+
+
 def check_requirements():
     debug_print("Checking requirements")
     print_header("System Check")
@@ -342,6 +369,7 @@ def check_requirements():
     install_script = resolve_saturn_script("deskhpsdr-install-on-current-image.sh")
     print_success(f"Build helper: {build_script}")
     print_success(f"Install helper: {install_script}")
+    check_privileged_deps_helper()
 
     try:
         free_space = psutil.disk_usage(str(Path.home())).free / 1024**3

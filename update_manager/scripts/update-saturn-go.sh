@@ -303,6 +303,7 @@ PRIVILEGED_HELPER_SCRIPTS=(
   "$REPO_ROOT/scripts/saturn-flash-fpga.sh"
   "$REPO_ROOT/scripts/saturn-xdma-doctor.sh"
   "$REPO_ROOT/scripts/saturn-xdma-stage-current.sh"
+  "$REPO_ROOT/scripts/deskhpsdr-install-deps-on-current-image.sh"
   "$XDMA_FIX_SCRIPT_SRC"
   "$XDMA_POSTINST_HELPER_SRC"
   "$REPO_ROOT/scripts/fix-LED-power-button.sh"
@@ -593,6 +594,8 @@ ${DEPLOY_RUN_USER} ALL=(root) NOPASSWD: ${DEPLOY_PRIVILEGED_SCRIPTS_DIR}/saturn-
 ${DEPLOY_RUN_USER} ALL=(root) NOPASSWD: ${DEPLOY_PRIVILEGED_SCRIPTS_DIR}/saturn-flash-fpga.sh
 ${DEPLOY_RUN_USER} ALL=(root) NOPASSWD: ${DEPLOY_PRIVILEGED_SCRIPTS_DIR}/saturn-flash-fpga.sh *
 ${DEPLOY_RUN_USER} ALL=(root) NOPASSWD: ${DEPLOY_PRIVILEGED_SCRIPTS_DIR}/saturn-xdma-stage-current.sh
+${DEPLOY_RUN_USER} ALL=(root) NOPASSWD: ${DEPLOY_PRIVILEGED_SCRIPTS_DIR}/deskhpsdr-install-deps-on-current-image.sh
+${DEPLOY_RUN_USER} ALL=(root) NOPASSWD: ${DEPLOY_PRIVILEGED_SCRIPTS_DIR}/deskhpsdr-install-deps-on-current-image.sh *
 ${DEPLOY_RUN_USER} ALL=(root) NOPASSWD: ${DEPLOY_PRIVILEGED_SCRIPTS_DIR}/saturn-admin-password.sh set
 ${DEPLOY_RUN_USER} ALL=(root) NOPASSWD: ${DEPLOY_PRIVILEGED_SCRIPTS_DIR}/saturn-admin-password.sh status
 ${DEPLOY_RUN_USER} ALL=(root) NOPASSWD: ${DEPLOY_PRIVILEGED_SCRIPTS_DIR}/saturn-go-build-preflight.sh

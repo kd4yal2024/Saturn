@@ -271,6 +271,10 @@ via `sudo -n` (password piped over stdin).
 - If the checkout already exists and `--skip-git` is not selected, the updater pulls `origin/<current-branch>` using `--ff-only` and auto-stashes local changes first when needed.
 - The build step delegates to the active Saturn repo-root helper script:
   - `scripts/deskhpsdr-test-build-on-current-image.sh --repo ~/github/deskhpsdr`
+- When dependency installation is enabled, the build helper installs Debian
+  prerequisites through the provisioned privileged helper
+  `/usr/local/lib/saturn-go/scripts/deskhpsdr-install-deps-on-current-image.sh`
+  using passwordless `sudo -n`; the updater checks this helper before building.
 - The helper script now applies `scripts/patches/deskhpsdr-libgpiod-v2.patch` with `git apply` when needed and treats an already-applied patch as success.
 - The helper build probe now forces `GPIO=ON` and `SATURN=ON`, which keeps the Trixie/libgpiod v2 compatibility fix active in web-driven updates.
 - UI run options map to script flags:
