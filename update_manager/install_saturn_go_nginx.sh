@@ -515,6 +515,7 @@ ${SERVICE_USER} ALL=(root) NOPASSWD: ${PRIVILEGED_SCRIPTS_DIR}/saturn-tailscale.
 ${SERVICE_USER} ALL=(root) NOPASSWD: ${PRIVILEGED_SCRIPTS_DIR}/saturn-tailscale.sh *
 ${SERVICE_USER} ALL=(root) NOPASSWD: ${PRIVILEGED_SCRIPTS_DIR}/saturn-go-tailscale-serve.sh
 ${SERVICE_USER} ALL=(root) NOPASSWD: ${PRIVILEGED_SCRIPTS_DIR}/saturn-go-tailscale-serve.sh *
+${SERVICE_USER} ALL=(root) NOPASSWD: /usr/bin/systemd-run --unit saturn-go-self-deploy-* --collect --no-block /bin/bash ${SATURN_STAGING_DIR}/*/deploy-root-helper.sh
 EOF
 chmod 0440 "$SUDOERS_FILE"
 if command -v visudo >/dev/null 2>&1; then
