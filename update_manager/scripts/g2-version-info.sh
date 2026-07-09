@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SCRIPT_VERSION="1.4"
+SCRIPT_VERSION="1.6"
 PERF_URL="${SATURN_LOCAL_P23_PERF_URL:-http://127.0.0.1:8080/p23_perf}"
 CURRENT_TARGET="$(readlink -f /opt/saturn-go/p23-apps/current 2>/dev/null || true)"
 REPO_ROOT="${SATURN_ACTIVE_REPO_ROOT:-${SATURN_REPO_ROOT:-/home/pi/github/Saturn}}"
@@ -16,6 +16,24 @@ trap cleanup EXIT
 
 say() {
   printf '%s\n' "$*"
+}
+
+detect_script_path() {
+  local rel="$1"
+  for base in "${REPO_ROOT}" "/usr/local/lib/saturn-go" "/opt/saturn-go" "/home/pi/github/Saturn"; do
+    [[ -n "${base}" ]] || continue
+    if [[ -x "${base}/${rel}" ]]; then
+      printf '%s\n' "${base}/${rel}"
+      return 0
+    fi
+  done
+  return 1
+}
+
+kv_value() {
+  local key="$1"
+  local text="$2"
+  awk -F= -v k="$key" '$1 == k {print substr($0, length(k) + 2); exit}' <<<"${text}"
 }
 
 say "Saturn App / Firmware Info"
@@ -80,6 +98,47 @@ active_app_fallback = os.environ.get("ACTIVE_APP_FALLBACK", "unknown")
 app_version_fallback = os.environ.get("APP_VERSION_FALLBACK", "")
 binary_modified = os.environ.get("BINARY_MODIFIED", "")
 
+def classify_saturn_hardware(fpga):
+    if not fpga.get("available"):
+        return {
+            "system_role": "unknown",
+            "fpga_xdma": "not reported",
+            "radio_pcb": "unknown",
+            "codec": "unknown",
+            "puresignal": "unknown",
+        }
+
+    product = str(fpga.get("product") or "").strip().lower()
+    try:
+        product_version = int(fpga.get("product_version"))
+    except Exception:
+        product_version = None
+
+    if product == "saturn" and product_version is not None:
+        if product_version >= 3:
+            return {
+                "system_role": "local_saturn_g2",
+                "fpga_xdma": "present",
+                "radio_pcb": f"G2 PCB V{product_version}+",
+                "codec": "TLV320AIC3204",
+                "puresignal": "V3 level chain; default SetPk 0.8031",
+            }
+        return {
+            "system_role": "local_saturn_g2",
+            "fpga_xdma": "present",
+            "radio_pcb": f"G2 PCB V{product_version}",
+            "codec": "TLV320AIC23B",
+            "puresignal": "legacy Saturn level chain; default SetPk 0.6121",
+        }
+
+    return {
+        "system_role": "unknown_local_fpga",
+        "fpga_xdma": "present",
+        "radio_pcb": "unknown",
+        "codec": "unknown",
+        "puresignal": "unknown",
+    }
+
 try:
     with open(path, "r", encoding="utf-8") as handle:
         data = json.load(handle)
@@ -137,6 +196,13 @@ if fpga.get("available"):
             print(f"  Die Temp (runtime): {float(fpga.get('die_temp_c')):.1f}C")
         except Exception:
             pass
+classification = classify_saturn_hardware(fpga)
+print("Hardware classification")
+print(f"  System role: {classification['system_role']}")
+print(f"  FPGA/XDMA: {classification['fpga_xdma']}")
+print(f"  Radio PCB: {classification['radio_pcb']}")
+print(f"  Codec family: {classification['codec']}")
+print(f"  PureSignal class: {classification['puresignal']}")
 PY
 else
   if [[ -n "${PERF_FETCH_STATUS}" ]]; then
@@ -154,6 +220,43 @@ else
   if [[ -n "${BINARY_MODIFIED}" ]]; then
     say "  Binary modified: ${BINARY_MODIFIED}"
   fi
+  say "Hardware classification"
+  say "  System role: unknown"
+  say "  FPGA/XDMA: not reported"
+  say "  Radio PCB: unknown"
+  say "  Codec family: unknown"
+  say "  PureSignal class: unknown"
+fi
+
+say
+say "Platform / panel detection"
+FRONT_PANEL_SCRIPT="$(detect_script_path "scripts/detect-front-panel.sh" || true)"
+LCD_PROFILE_SCRIPT="$(detect_script_path "scripts/detect-lcd-profile.sh" || true)"
+FRONT_PANEL_TYPE="unknown"
+LCD_INFO=""
+
+if [[ -n "${FRONT_PANEL_SCRIPT}" ]]; then
+  FRONT_PANEL_TYPE="$("${FRONT_PANEL_SCRIPT}" --post-udev 2>/dev/null || printf 'unknown\n')"
+  FRONT_PANEL_TYPE="${FRONT_PANEL_TYPE:-unknown}"
+else
+  FRONT_PANEL_TYPE="detector unavailable"
+fi
+
+if [[ -n "${LCD_PROFILE_SCRIPT}" ]]; then
+  LCD_INFO="$("${LCD_PROFILE_SCRIPT}" 2>/dev/null || true)"
+fi
+
+say "  Front panel: ${FRONT_PANEL_TYPE}"
+if [[ -n "${LCD_INFO}" ]]; then
+  say "  Compute module: $(kv_value "module_family" "${LCD_INFO}")"
+  say "  Storage variant: $(kv_value "storage_variant" "${LCD_INFO}")"
+  say "  Platform vendor: $(kv_value "platform_vendor" "${LCD_INFO}")"
+  say "  LCD size: $(kv_value "size" "${LCD_INFO}") ($(kv_value "size_source" "${LCD_INFO}"))"
+  say "  LCD profile: $(kv_value "profile" "${LCD_INFO}")"
+  say "  UART overlay: $(kv_value "recommended_uart_overlay" "${LCD_INFO}")"
+  say "  Panel overlay: $(kv_value "recommended_panel_overlay" "${LCD_INFO}")"
+else
+  say "  LCD/profile detector: unavailable"
 fi
 
 say
