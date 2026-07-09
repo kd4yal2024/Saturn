@@ -422,6 +422,129 @@ def create_backup():
         return True
     return False
 
+SATURN_PIHPSDR_PATCH_MARKER = "SATURN_PS_SETPK_PCBV3"
+
+def patch_file_replace(path, old, new):
+    content = path.read_text()
+    if new in content:
+        return False
+    if old not in content:
+        raise ValueError(f"expected text not found in {path}")
+    path.write_text(content.replace(old, new, 1))
+    return True
+
+def revert_file_replace(path, patched, original):
+    content = path.read_text()
+    if patched not in content:
+        return False
+    path.write_text(content.replace(patched, original, 1))
+    return True
+
+def revert_saturn_pihpsdr_v3_patch():
+    """Remove our generated Saturn V3 patch before pulling upstream."""
+    if not PIHPSDR_DIR.exists():
+        return
+    transmitter = PIHPSDR_DIR / "src" / "transmitter.c"
+    saturnmain = PIHPSDR_DIR / "src" / "saturnmain.c"
+    if not transmitter.exists() or not saturnmain.exists():
+        return
+
+    try:
+        transmitter_content = transmitter.read_text()
+        if SATURN_PIHPSDR_PATCH_MARKER in transmitter_content:
+            patched_include = '#include "saturndrivers.h"\n#include "sintab.h"'
+            original_include = '#include "sintab.h"'
+            patched_defs = """#define SATURN_PS_SETPK_LEGACY 0.6121
+#define SATURN_PS_SETPK_PCBV3 0.8031
+
+static bool saturn_uses_pcbv3_puresignal_level(void) {
+  return device == NEW_DEVICE_SATURN && Saturn_PCB_Version >= 3;
+}
+"""
+            patched_default = """      tx->ps_setpk = saturn_uses_pcbv3_puresignal_level()
+                     ? SATURN_PS_SETPK_PCBV3
+                     : SATURN_PS_SETPK_LEGACY;"""
+            original_default = "      tx->ps_setpk = 0.6121;"
+            patched_migration = """  if (saturn_uses_pcbv3_puresignal_level() && fabs(tx->ps_setpk - SATURN_PS_SETPK_LEGACY) < 0.00005) {
+    tx->ps_setpk = SATURN_PS_SETPK_PCBV3;
+  }
+"""
+            transmitter_content = transmitter_content.replace(patched_include, original_include, 1)
+            transmitter_content = transmitter_content.replace(patched_defs, "", 1)
+            transmitter_content = transmitter_content.replace(patched_default, original_default, 1)
+            transmitter_content = transmitter_content.replace(patched_migration, "", 1)
+            transmitter.write_text(transmitter_content)
+
+        patched_scale = """//#define VCONSTTXAMPLSCALEFACTOR_PCBV3 0x0002A00  // 18 bit scale value - was 5/64 of full scale for PCB V3
+#define VCONSTTXAMPLSCALEFACTOR_PCBV3 0x0002000  // V3 reverted to V2 level for PureSignal compatibility"""
+        original_scale = "#define VCONSTTXAMPLSCALEFACTOR_PCBV3 0x0002A00  // 18 bit scale value - set to 1/32 of full scale for PCB V3"
+        revert_file_replace(saturnmain, patched_scale, original_scale)
+    except Exception as e:
+        print_warning(f"Could not remove previous Saturn piHPSDR V3 patch before git update: {e}")
+
+def apply_saturn_pihpsdr_v3_patch():
+    """Apply Saturn V3 PureSignal defaults to upstream piHPSDR checkout."""
+    if args.dry_run:
+        print_info("[Dry Run] Would apply Saturn V3 PureSignal piHPSDR patch")
+        return
+
+    transmitter = PIHPSDR_DIR / "src" / "transmitter.c"
+    saturnmain = PIHPSDR_DIR / "src" / "saturnmain.c"
+    if not transmitter.exists() or not saturnmain.exists():
+        print_warning("Skipping Saturn V3 PureSignal patch; piHPSDR source files not found")
+        return
+
+    changed = False
+    try:
+        changed |= patch_file_replace(
+            saturnmain,
+            "#define VCONSTTXAMPLSCALEFACTOR_PCBV3 0x0002A00  // 18 bit scale value - set to 1/32 of full scale for PCB V3",
+            """//#define VCONSTTXAMPLSCALEFACTOR_PCBV3 0x0002A00  // 18 bit scale value - was 5/64 of full scale for PCB V3
+#define VCONSTTXAMPLSCALEFACTOR_PCBV3 0x0002000  // V3 reverted to V2 level for PureSignal compatibility""",
+        )
+        changed |= patch_file_replace(
+            transmitter,
+            '#include "receiver.h"\n#include "sintab.h"',
+            '#include "receiver.h"\n#include "saturndrivers.h"\n#include "sintab.h"',
+        )
+        changed |= patch_file_replace(
+            transmitter,
+            "#define min(x,y) (x<y?x:y)\n#define max(x,y) (x<y?y:x)\n",
+            """#define min(x,y) (x<y?x:y)
+#define max(x,y) (x<y?y:x)
+
+#define SATURN_PS_SETPK_LEGACY 0.6121
+#define SATURN_PS_SETPK_PCBV3 0.8031
+
+static bool saturn_uses_pcbv3_puresignal_level(void) {
+  return device == NEW_DEVICE_SATURN && Saturn_PCB_Version >= 3;
+}
+""",
+        )
+        changed |= patch_file_replace(
+            transmitter,
+            "      tx->ps_setpk = 0.6121;",
+            """      tx->ps_setpk = saturn_uses_pcbv3_puresignal_level()
+                     ? SATURN_PS_SETPK_PCBV3
+                     : SATURN_PS_SETPK_LEGACY;""",
+        )
+        changed |= patch_file_replace(
+            transmitter,
+            "  tx_restore_state(tx);\n",
+            """  tx_restore_state(tx);
+  if (saturn_uses_pcbv3_puresignal_level() && fabs(tx->ps_setpk - SATURN_PS_SETPK_LEGACY) < 0.00005) {
+    tx->ps_setpk = SATURN_PS_SETPK_PCBV3;
+  }
+""",
+        )
+    except Exception as e:
+        print_error(f"Failed to apply Saturn V3 PureSignal piHPSDR patch: {e}")
+
+    if changed:
+        print_success("Applied Saturn V3 PureSignal piHPSDR patch")
+    else:
+        print_info("Saturn V3 PureSignal piHPSDR patch already present")
+
 # Update Git repository
 def update_git():
     if args.skip_git:
@@ -437,6 +560,7 @@ def update_git():
     if PIHPSDR_DIR.exists():
         try:
             os.chdir(PIHPSDR_DIR)
+            revert_saturn_pihpsdr_v3_patch()
             current_commit = subprocess.check_output(["git", "rev-parse", "--short", "HEAD"], text=True).strip()
             print_info(f"Commit: {current_commit}")
             if subprocess.run(["git", "diff-index", "--quiet", "HEAD", "--"]).returncode != 0:
@@ -508,6 +632,7 @@ def update_git():
                     time.sleep(2)
                 else:
                     print_error(f"Git clone failed after {max_attempts} attempts: {e.output.strip()}")
+    apply_saturn_pihpsdr_v3_patch()
 
 # Build piHPSDR
 def build_pihpsdr():

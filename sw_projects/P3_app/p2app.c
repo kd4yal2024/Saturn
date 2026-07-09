@@ -184,7 +184,9 @@ static void SyncSignalExitRequest(void)
 #define VCONSTTXAMPLSCALEFACTOR_13 0x0002000  // 18 bit scale value - set to 1/32 of full scale FWV13+
 #define VCONSTTXAMPLSCALEFACTOR_17 0x0002000  // 18 bit scale value - set to 1/32 of full scale FWV17+
 //#define VCONSTTXAMPLSCALEFACTOR_17 0x0002800  // 18 bit scale value - set to 1/32 of full scale FWV17+
-#define VCONSTTXAMPLSCALEFACTOR_PCBV3 0x0002A00  // 18 bit scale value - set to 1/32 of full scale for PCB V3
+//#define VCONSTTXAMPLSCALEFACTOR_PCBV3 0x0002A00  // 18 bit scale value - was 5/64 of full scale for PCB V3
+#define VCONSTTXAMPLSCALEFACTOR_PCBV3 0x0002000    // 18 bit scale value - set to 1/32 of full scale for PCB V3
+                                                  // V47: reverted to V2 level for Puresignal compatibility (Laurence Barker)
 
 struct ThreadSocketData SocketData[VPORTTABLESIZE] =
 {
