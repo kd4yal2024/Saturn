@@ -1,7 +1,9 @@
 use std::collections::VecDeque;
 use std::error::Error;
+#[cfg(wdsp_has_rnnr_sbnr)]
 use std::ffi::c_char;
 use std::fmt;
+#[cfg(wdsp_has_rnnr_sbnr)]
 use std::sync::Once;
 use std::time::{Duration, Instant};
 
@@ -31,7 +33,9 @@ const WDSP_NR2_GAIN_METHOD: i32 = 2;
 const WDSP_NR2_NPE_METHOD: i32 = 0;
 const WDSP_NR2_TRAIN_ZETA_THRESH: f64 = -0.5;
 const WDSP_NR2_TRAIN_T2: f64 = 0.2;
+#[allow(dead_code)]
 const WDSP_NR4_WHITENING_FACTOR: f32 = 0.0;
+#[allow(dead_code)]
 const WDSP_NR4_NOISE_SCALING_TYPE: i32 = 0;
 
 // NoiseBlanker defaults (from pihpsdr receiver.c)
@@ -57,6 +61,7 @@ const TXA_ALC_GAIN: i32 = 14;
 const TXA_OUT_PK: i32 = 15;
 const TXA_OUT_AV: i32 = 16;
 
+#[cfg(wdsp_has_rnnr_sbnr)]
 static LOAD_RNNR_MODEL: Once = Once::new();
 
 unsafe extern "C" {
@@ -155,16 +160,27 @@ unsafe extern "C" {
     fn SetRXAEMNRpost2Factor(channel: i32, factor: f64);
     fn SetRXAEMNRpost2Rate(channel: i32, tc: f64);
     fn SetRXAEMNRpost2Taper(channel: i32, taper: i32);
+    #[cfg(wdsp_has_rnnr_sbnr)]
     fn SetRXARNNRRun(channel: i32, run: i32);
+    #[cfg(wdsp_has_rnnr_sbnr)]
     fn RNNRloadModel(file_path: *const c_char);
+    #[cfg(wdsp_has_rnnr_sbnr)]
     fn SetRXARNNRPosition(channel: i32, position: i32);
+    #[cfg(wdsp_has_rnnr_sbnr)]
     fn SetRXASBNRRun(channel: i32, run: i32);
+    #[cfg(wdsp_has_rnnr_sbnr)]
     fn SetRXASBNRreductionAmount(channel: i32, amount: f32);
+    #[cfg(wdsp_has_rnnr_sbnr)]
     fn SetRXASBNRsmoothingFactor(channel: i32, factor: f32);
+    #[cfg(wdsp_has_rnnr_sbnr)]
     fn SetRXASBNRwhiteningFactor(channel: i32, factor: f32);
+    #[cfg(wdsp_has_rnnr_sbnr)]
     fn SetRXASBNRnoiseRescale(channel: i32, factor: f32);
+    #[cfg(wdsp_has_rnnr_sbnr)]
     fn SetRXASBNRpostFilterThreshold(channel: i32, threshold: f32);
+    #[cfg(wdsp_has_rnnr_sbnr)]
     fn SetRXASBNRnoiseScalingType(channel: i32, noise_scaling_type: i32);
+    #[cfg(wdsp_has_rnnr_sbnr)]
     fn SetRXASBNRPosition(channel: i32, position: i32);
 
     // AGC
@@ -551,6 +567,7 @@ impl WdspRxEngine {
             }
         }
 
+        #[cfg(wdsp_has_rnnr_sbnr)]
         LOAD_RNNR_MODEL.call_once(|| unsafe {
             RNNRloadModel(std::ptr::null());
         });
@@ -747,6 +764,12 @@ impl WdspRxEngine {
 
     fn apply_noise_reduction(&self) {
         let level = self.noise_reduction_level.clamp(0.0, 100.0);
+        let emnr_active = matches!(self.noise_reduction_mode, NoiseReductionMode::Nr2)
+            || (!cfg!(wdsp_has_rnnr_sbnr)
+                && matches!(
+                    self.noise_reduction_mode,
+                    NoiseReductionMode::Nr3 | NoiseReductionMode::Nr4
+                ));
         unsafe {
             SetRXAANRVals(
                 self.channel_id,
@@ -771,33 +794,29 @@ impl WdspRxEngine {
             SetRXAEMNRpost2Nlevel(self.channel_id, nr2_nlevel_for_level(level));
             SetRXAEMNRpost2Factor(self.channel_id, nr2_factor_for_level(level));
             SetRXAEMNRpost2Rate(self.channel_id, nr2_rate_for_level(level));
-            SetRXAEMNRpost2Run(
-                self.channel_id,
-                (matches!(self.noise_reduction_mode, NoiseReductionMode::Nr2) && level >= 1.0)
-                    as i32,
-            );
-            SetRXAEMNRRun(
-                self.channel_id,
-                matches!(self.noise_reduction_mode, NoiseReductionMode::Nr2) as i32,
-            );
+            SetRXAEMNRpost2Run(self.channel_id, (emnr_active && level >= 1.0) as i32);
+            SetRXAEMNRRun(self.channel_id, emnr_active as i32);
 
-            SetRXARNNRPosition(self.channel_id, WDSP_NR_POSITION_POST_AGC);
-            SetRXARNNRRun(
-                self.channel_id,
-                matches!(self.noise_reduction_mode, NoiseReductionMode::Nr3) as i32,
-            );
+            #[cfg(wdsp_has_rnnr_sbnr)]
+            {
+                SetRXARNNRPosition(self.channel_id, WDSP_NR_POSITION_POST_AGC);
+                SetRXARNNRRun(
+                    self.channel_id,
+                    matches!(self.noise_reduction_mode, NoiseReductionMode::Nr3) as i32,
+                );
 
-            SetRXASBNRreductionAmount(self.channel_id, nr4_reduction_amount_for_level(level));
-            SetRXASBNRsmoothingFactor(self.channel_id, nr4_smoothing_factor_for_level(level));
-            SetRXASBNRwhiteningFactor(self.channel_id, WDSP_NR4_WHITENING_FACTOR);
-            SetRXASBNRnoiseRescale(self.channel_id, nr4_noise_rescale_for_level(level));
-            SetRXASBNRpostFilterThreshold(self.channel_id, nr4_post_threshold_for_level(level));
-            SetRXASBNRnoiseScalingType(self.channel_id, WDSP_NR4_NOISE_SCALING_TYPE);
-            SetRXASBNRPosition(self.channel_id, WDSP_NR_POSITION_POST_AGC);
-            SetRXASBNRRun(
-                self.channel_id,
-                matches!(self.noise_reduction_mode, NoiseReductionMode::Nr4) as i32,
-            );
+                SetRXASBNRreductionAmount(self.channel_id, nr4_reduction_amount_for_level(level));
+                SetRXASBNRsmoothingFactor(self.channel_id, nr4_smoothing_factor_for_level(level));
+                SetRXASBNRwhiteningFactor(self.channel_id, WDSP_NR4_WHITENING_FACTOR);
+                SetRXASBNRnoiseRescale(self.channel_id, nr4_noise_rescale_for_level(level));
+                SetRXASBNRpostFilterThreshold(self.channel_id, nr4_post_threshold_for_level(level));
+                SetRXASBNRnoiseScalingType(self.channel_id, WDSP_NR4_NOISE_SCALING_TYPE);
+                SetRXASBNRPosition(self.channel_id, WDSP_NR_POSITION_POST_AGC);
+                SetRXASBNRRun(
+                    self.channel_id,
+                    matches!(self.noise_reduction_mode, NoiseReductionMode::Nr4) as i32,
+                );
+            }
         }
     }
 }
@@ -1347,18 +1366,22 @@ fn nr2_taper_for_level(level_percent: f64) -> i32 {
     (4.0 + level_percent.clamp(0.0, 100.0) * 0.16).round() as i32
 }
 
+#[allow(dead_code)]
 fn nr4_reduction_amount_for_level(level_percent: f64) -> f32 {
     (level_percent.clamp(0.0, 100.0) * 0.2) as f32
 }
 
+#[allow(dead_code)]
 fn nr4_smoothing_factor_for_level(level_percent: f64) -> f32 {
     (level_percent.clamp(0.0, 100.0) * 0.4) as f32
 }
 
+#[allow(dead_code)]
 fn nr4_noise_rescale_for_level(level_percent: f64) -> f32 {
     (level_percent.clamp(0.0, 100.0) * 0.04) as f32
 }
 
+#[allow(dead_code)]
 fn nr4_post_threshold_for_level(level_percent: f64) -> f32 {
     (-10.0 + level_percent.clamp(0.0, 100.0) * 0.14) as f32
 }

@@ -4,6 +4,7 @@ use std::process::Command;
 
 fn main() {
     println!("cargo:rerun-if-env-changed=SATURN_BRIDGE_STUB_NATIVE");
+    println!("cargo:rustc-check-cfg=cfg(wdsp_has_rnnr_sbnr)");
     if env::var("SATURN_BRIDGE_STUB_NATIVE")
         .map(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes" | "YES"))
         .unwrap_or(false)
@@ -14,6 +15,12 @@ fn main() {
 
     let manifest_dir =
         PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR not set"));
+    println!("cargo:rerun-if-env-changed=SATURN_WDSP_DIR");
+    if let Ok(wdsp_dir) = env::var("SATURN_WDSP_DIR") {
+        link_wdsp_dir(PathBuf::from(wdsp_dir));
+        return;
+    }
+
     println!("cargo:rerun-if-env-changed=SATURN_PIHPSDR_DIR");
     let pihpsdr_dir = env::var("SATURN_PIHPSDR_DIR")
         .map(PathBuf::from)
@@ -22,6 +29,10 @@ fn main() {
     let libwdsp = wdsp_dir.join("libwdsp.a");
     let rnnoise_dir = pihpsdr_dir.join("rnnoise");
     let specbleach_dir = pihpsdr_dir.join("libspecbleach");
+
+    if wdsp_has_rnnr_sbnr(&libwdsp) {
+        println!("cargo:rustc-cfg=wdsp_has_rnnr_sbnr");
+    }
 
     if !libwdsp.exists() {
         panic!("WDSP static library not found at {}", libwdsp.display());
@@ -65,6 +76,47 @@ fn main() {
     println!("cargo:rustc-link-lib=fftw3f");
     println!("cargo:rustc-link-lib=m");
     println!("cargo:rustc-link-lib=pthread");
+}
+
+fn link_wdsp_dir(wdsp_dir: PathBuf) {
+    let libwdsp = wdsp_dir.join("libwdsp.a");
+    if !libwdsp.exists() {
+        panic!("WDSP static library not found at {}", libwdsp.display());
+    }
+
+    if wdsp_has_rnnr_sbnr(&libwdsp) {
+        println!("cargo:rustc-cfg=wdsp_has_rnnr_sbnr");
+    }
+
+    println!("cargo:rerun-if-changed={}", libwdsp.display());
+    println!(
+        "cargo:rerun-if-changed={}",
+        wdsp_dir.join("comm.h").display()
+    );
+    println!("cargo:rustc-link-search=native={}", wdsp_dir.display());
+    println!("cargo:rustc-link-lib=static=wdsp");
+    println!("cargo:rustc-link-lib=fftw3");
+    println!("cargo:rustc-link-lib=fftw3f");
+    println!("cargo:rustc-link-lib=m");
+    println!("cargo:rustc-link-lib=pthread");
+}
+
+fn wdsp_has_rnnr_sbnr(libwdsp: &PathBuf) -> bool {
+    let Ok(output) = Command::new("nm")
+        .arg("-g")
+        .arg("--defined-only")
+        .arg(libwdsp)
+        .output()
+    else {
+        return false;
+    };
+    if !output.status.success() {
+        return false;
+    }
+    let symbols = String::from_utf8_lossy(&output.stdout);
+    symbols.contains(" RNNRloadModel\n")
+        && symbols.contains(" SetRXARNNRRun\n")
+        && symbols.contains(" SetRXASBNRRun\n")
 }
 
 fn build_stub_native() {
