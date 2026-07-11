@@ -16,8 +16,9 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use config::BridgeConfig;
+use p2::packets::split_puresignal_samples;
 use p2::session::{P2Event, P2Session};
-use radio_model::{RadioModel, TxPhase};
+use radio_model::{DemodMode, PureSignalState, RadioModel, TxPhase};
 use sync_ext::MutexExt;
 use tci::{TciCommand, TciFrontend};
 use tx_thread::{TxCommand, TxDiagnostics, TxEvent};
@@ -286,6 +287,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut status_tci_mic_samples = 0u64;
     let mut latest_tx_diag: Option<TxDiagnostics> = None;
     let mut controller_release_deadline: Option<Instant> = None;
+    let mut controller_owned = false;
     let mut last_operator_mic_at: Option<Instant> = None;
     let mut tx_uplink_late_since: Option<Instant> = None;
     let mut tx_uplink_fault_active = false;
@@ -321,7 +323,23 @@ fn main() -> Result<(), Box<dyn Error>> {
                     needs_high_priority = true;
                 }
                 TciCommand::SetMode(mode) => {
+                    let mode = if mode == DemodMode::Wfm
+                        && (!wdsp::wbfm_supported() || config.max_client_ddc0_sample_rate_khz < 192)
+                    {
+                        eprintln!(
+                            "saturn-bridge: WFM requested but unavailable (wdsp={} max_ddc={}k); using FM",
+                            wdsp::wbfm_supported(),
+                            config.max_client_ddc0_sample_rate_khz
+                        );
+                        DemodMode::Fm
+                    } else {
+                        mode
+                    };
                     model.desired.mode = mode;
+                    if mode == DemodMode::Wfm && model.desired.ddc0_sample_rate_khz != 192 {
+                        model.desired.ddc0_sample_rate_khz = 192;
+                        reconfigure_ddc = true;
+                    }
                     let (rx_low_hz, rx_high_hz) = mode.default_filter_band();
                     model.desired.filter_low_hz = rx_low_hz;
                     model.desired.filter_high_hz = rx_high_hz;
@@ -368,6 +386,18 @@ fn main() -> Result<(), Box<dyn Error>> {
                 TciCommand::SetRxNoiseReductionLevel(level) => {
                     model.desired.rx_noise_reduction_level = level.clamp(0.0, 100.0);
                 }
+                TciCommand::SetRxNr2GainMethod(method) => {
+                    model.desired.rx_nr2_gain_method = method;
+                }
+                TciCommand::SetRxNr2NpeMethod(method) => {
+                    model.desired.rx_nr2_npe_method = method;
+                }
+                TciCommand::SetRxNr2PostFilterEnabled(enabled) => {
+                    model.desired.rx_nr2_post_filter_enabled = enabled;
+                }
+                TciCommand::SetRxWbfmDeemphasis(deemphasis) => {
+                    model.desired.rx_wbfm_deemphasis = deemphasis;
+                }
                 TciCommand::SetRxAnrVals {
                     taps,
                     delay,
@@ -389,10 +419,14 @@ fn main() -> Result<(), Box<dyn Error>> {
                 }
                 TciCommand::SetIqSampleRate(rate_hz) => {
                     let requested_rate_khz = (rate_hz / 1000).clamp(48, u16::MAX as u32) as u16;
-                    let rate_khz = clamp_client_ddc0_sample_rate_khz(
-                        rate_hz,
-                        config.max_client_ddc0_sample_rate_khz,
-                    );
+                    let rate_khz = if model.desired.mode == DemodMode::Wfm {
+                        192
+                    } else {
+                        clamp_client_ddc0_sample_rate_khz(
+                            rate_hz,
+                            config.max_client_ddc0_sample_rate_khz,
+                        )
+                    };
                     if rate_khz != requested_rate_khz {
                         eprintln!(
                             "saturn-bridge: clamped client DDC0 sample rate request {}k -> {}k",
@@ -470,10 +504,15 @@ fn main() -> Result<(), Box<dyn Error>> {
                 }
                 TciCommand::ClientConnected => {
                     controller_release_deadline = None;
-                    model.desired.running = true;
-                    needs_bootstrap = true;
-                    needs_duc_specific = true;
-                    println!("saturn-bridge: TCI client active — taking P2 controller role");
+                    if controller_owned {
+                        println!("saturn-bridge: TCI client active — retaining P2 controller role");
+                    } else {
+                        model.desired.running = false;
+                        needs_bootstrap = true;
+                        println!(
+                            "saturn-bridge: TCI client active — requesting P2 controller role"
+                        );
+                    }
                 }
                 TciCommand::ClientDisconnected => {
                     tx_requested = false;
@@ -487,7 +526,12 @@ fn main() -> Result<(), Box<dyn Error>> {
                     needs_duc_specific = true;
                     needs_high_priority = true;
                     model.desired.two_tone_enabled = false;
-                    if tci_client_release_grace.is_zero() {
+                    if !controller_owned {
+                        model.desired.running = false;
+                        println!(
+                            "saturn-bridge: no TCI clients — no P2 controller role to release"
+                        );
+                    } else if tci_client_release_grace.is_zero() {
                         model.desired.running = false;
                         needs_stop = true;
                         println!("saturn-bridge: no TCI clients — releasing P2 controller role");
@@ -501,7 +545,15 @@ fn main() -> Result<(), Box<dyn Error>> {
                     }
                 }
                 TciCommand::SetTxEnabled(enabled) => {
-                    if enabled {
+                    if enabled && !controller_owned {
+                        eprintln!("saturn-bridge: refusing TX without P2 controller ownership");
+                        model.desired.tx_enabled = false;
+                        model.desired.tx_phase = TxPhase::Rx;
+                    } else if enabled && model.desired.mode == DemodMode::Wfm {
+                        eprintln!("saturn-bridge: refusing TX while WFM receive mode is active");
+                        model.desired.tx_enabled = false;
+                        model.desired.tx_phase = TxPhase::Rx;
+                    } else if enabled {
                         if !tx_requested {
                             if model.desired.tx_drive > remote_tx_max_watts {
                                 eprintln!(
@@ -632,6 +684,60 @@ fn main() -> Result<(), Box<dyn Error>> {
                     model.desired.cfc_bands[band - 1] = gain_db.clamp(0.0, 20.0);
                     let _ = tx_cmd_tx.send(TxCommand::ModelChanged);
                 }
+                TciCommand::SetTxPhaseRotatorEnabled(enabled) => {
+                    model.desired.tx_phase_rotator_enabled = enabled;
+                    let _ = tx_cmd_tx.send(TxCommand::ModelChanged);
+                }
+                TciCommand::SetTxPhaseRotatorAuto(enabled) => {
+                    model.desired.tx_phase_rotator_auto = enabled;
+                    let _ = tx_cmd_tx.send(TxCommand::ModelChanged);
+                }
+                TciCommand::SetTxPhaseRotatorCorner(corner_hz) => {
+                    model.desired.tx_phase_rotator_corner_hz = corner_hz.clamp(50.0, 2000.0);
+                    let _ = tx_cmd_tx.send(TxCommand::ModelChanged);
+                }
+                TciCommand::SetPureSignalEnabled(enabled) => {
+                    if tx_requested || model.desired.tx_phase != TxPhase::Rx {
+                        eprintln!(
+                            "saturn-bridge: refusing PureSignal enable change while TX is armed"
+                        );
+                    } else {
+                        model.desired.pure_signal_enabled = enabled;
+                        model.observed.pure_signal_state = if enabled {
+                            PureSignalState::Waiting
+                        } else {
+                            PureSignalState::Off
+                        };
+                        model.observed.pure_signal_correcting = false;
+                        needs_duc_specific = true;
+                        needs_high_priority = true;
+                        let _ = tx_cmd_tx.send(TxCommand::ModelChanged);
+                    }
+                }
+                TciCommand::SetPureSignalAutoAttenuate(enabled) => {
+                    if tx_requested || model.desired.tx_phase != TxPhase::Rx {
+                        eprintln!(
+                            "saturn-bridge: refusing PureSignal auto-attenuation change while TX is armed"
+                        );
+                    } else {
+                        model.desired.pure_signal_auto_attenuate = enabled;
+                    }
+                }
+                TciCommand::SetPureSignalAttenuation(attenuation_db) => {
+                    if tx_requested || model.desired.tx_phase != TxPhase::Rx {
+                        eprintln!(
+                            "saturn-bridge: refusing PureSignal attenuation change while TX is armed"
+                        );
+                    } else {
+                        model.desired.pure_signal_attenuation_db = attenuation_db.min(31);
+                        needs_duc_specific = true;
+                    }
+                }
+                TciCommand::ResetPureSignal => {
+                    if model.desired.pure_signal_enabled {
+                        let _ = tx_cmd_tx.send(TxCommand::PureSignalReset);
+                    }
+                }
                 TciCommand::SetTxTwoToneTest(enabled) => {
                     if enabled && !remote_tx_rf_enabled && !allow_rf_disabled_two_tone {
                         model.desired.two_tone_enabled = false;
@@ -714,7 +820,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 }
             }
 
-            if reconfigure_ddc {
+            if reconfigure_ddc && controller_owned {
                 session.configure_rx_ddc(
                     model.desired.rx_ddc_index,
                     model.desired.ddc0_sample_rate_khz,
@@ -723,27 +829,41 @@ fn main() -> Result<(), Box<dyn Error>> {
                 )?;
             }
             wdsp.sync_model(&model)?;
+            model.observed.rx_wbfm_stereo_detected = wdsp.wbfm_stereo_detected();
             tci.publish_radio_state(&model);
-        }
-
-        if needs_duc_specific {
-            session.send_duc_specific()?;
-            last_duc_specific = Instant::now();
-            did_work = true;
         }
 
         // bootstrap() acquires the radio_model lock internally, so it must be called
         // after the command loop has released it, never while holding it.
-        if needs_bootstrap {
-            session.bootstrap(&radio_model)?;
+        if needs_bootstrap && !controller_owned {
+            if session.bootstrap(&radio_model)? {
+                controller_owned = true;
+                let mut model = radio_model.lock_unpoisoned();
+                model.desired.running = true;
+                session.send_high_priority(&model)?;
+                last_duc_specific = Instant::now();
+                println!("saturn-bridge: P2 controller role acquired");
+            } else {
+                let mut model = radio_model.lock_unpoisoned();
+                model.desired.running = false;
+                model.desired.tx_enabled = false;
+                model.desired.tx_phase = TxPhase::Rx;
+                let _ = tx_cmd_tx.send(TxCommand::Disarm);
+            }
+            did_work = true;
+        }
+        if needs_duc_specific && controller_owned {
+            let model = radio_model.lock_unpoisoned();
+            session.send_duc_specific(&model)?;
             last_duc_specific = Instant::now();
             did_work = true;
         }
-        if needs_stop {
+        if needs_stop && controller_owned {
             session.send_stop()?;
+            controller_owned = false;
             did_work = true;
         }
-        if needs_high_priority {
+        if needs_high_priority && controller_owned {
             let model = radio_model.lock_unpoisoned();
             session.send_high_priority(&model)?;
             did_work = true;
@@ -751,7 +871,8 @@ fn main() -> Result<(), Box<dyn Error>> {
 
         let running = { radio_model.lock_unpoisoned().desired.running };
         if running && last_duc_specific.elapsed() >= config.high_priority_period {
-            session.send_duc_specific()?;
+            let model = radio_model.lock_unpoisoned();
+            session.send_duc_specific(&model)?;
             last_duc_specific = Instant::now();
             did_work = true;
         }
@@ -763,6 +884,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 if model.desired.running {
                     model.desired.running = false;
                     session.send_stop()?;
+                    controller_owned = false;
                     println!(
                         "saturn-bridge: TCI release grace expired — releasing P2 controller role"
                     );
@@ -777,6 +899,10 @@ fn main() -> Result<(), Box<dyn Error>> {
                 TxEvent::Keyed => {
                     let mut model = radio_model.lock_unpoisoned();
                     model.desired.tx_phase = TxPhase::Keyed;
+                    if model.desired.pure_signal_enabled {
+                        model.observed.pure_signal_state = PureSignalState::Waiting;
+                        model.observed.pure_signal_correcting = false;
+                    }
                     tci.publish_radio_state(&model);
                 }
                 TxEvent::Unkeyed => {
@@ -789,6 +915,12 @@ fn main() -> Result<(), Box<dyn Error>> {
                     latest_tx_diag = None;
                     let mut model = radio_model.lock_unpoisoned();
                     model.desired.tx_phase = TxPhase::Rx;
+                    model.observed.pure_signal_state = if model.desired.pure_signal_enabled {
+                        PureSignalState::Waiting
+                    } else {
+                        PureSignalState::Off
+                    };
+                    model.observed.pure_signal_correcting = false;
                     tci.publish_radio_state(&model);
                 }
                 TxEvent::TxIqFrame {
@@ -799,6 +931,18 @@ fn main() -> Result<(), Box<dyn Error>> {
                 }
                 TxEvent::Diagnostics(diag) => {
                     latest_tx_diag = Some(diag);
+                }
+                TxEvent::PureSignalStatus(status) => {
+                    let mut model = radio_model.lock_unpoisoned();
+                    model.observed.pure_signal_state = status.state;
+                    model.observed.pure_signal_feedback_level = status.feedback_level;
+                    model.observed.pure_signal_calibration_count = status.calibration_count;
+                    model.observed.pure_signal_correcting = status.correcting;
+                    model.observed.pure_signal_max_tx = status.max_tx;
+                    model.observed.pure_signal_feedback_packets = status.feedback_packets;
+                    model.observed.pure_signal_feedback_gaps = status.feedback_gaps;
+                    model.desired.pure_signal_attenuation_db = status.attenuation_db;
+                    tci.publish_puresignal_status(&model);
                 }
             }
         }
@@ -831,32 +975,44 @@ fn main() -> Result<(), Box<dyn Error>> {
                         model.desired.tx_phase = TxPhase::Rx;
                         let _ = tx_cmd_tx.send(TxCommand::Disarm);
                         session.send_high_priority(&model)?;
-                        session.send_duc_specific()?;
+                        session.send_duc_specific(&model)?;
                     }
                     tci.publish_telemetry(&model);
                 }
                 P2Event::DdcIq(frame) => {
-                    if frame.ddc_index != model.desired.rx_ddc_index {
-                        continue;
-                    }
-                    status_ddc_packets = status_ddc_packets.saturating_add(1);
-                    let sample_rate_hz = model.desired.ddc0_sample_rate_khz as u32 * 1000;
-                    tci.publish_iq_frame(sample_rate_hz, &frame.iq_samples);
-                    // Keep display IQ live during MOX, but do not drive RX WDSP
-                    // audio/AGC with local TX energy; that makes unkey recovery
-                    // feel slow, especially with SLOW/LONG AGC.
-                    if !tx_requested && !model.desired.tx_enabled {
-                        for audio_frame in wdsp.push_iq(&frame.iq_samples) {
-                            status_rx_audio_frames = status_rx_audio_frames.saturating_add(1);
-                            status_rx_audio_samples =
-                                status_rx_audio_samples.saturating_add(audio_frame.len() as u64);
-                            tci.publish_audio_frame(wdsp.audio_sample_rate_hz(), &audio_frame);
+                    if frame.ddc_index == 0
+                        && model.desired.pure_signal_enabled
+                        && (tx_requested || model.desired.tx_enabled)
+                    {
+                        if let Some(samples) = split_puresignal_samples(&frame) {
+                            let _ = tx_cmd_tx.send(TxCommand::PureSignalFeedback {
+                                sequence: frame.sequence,
+                                tx_reference: samples.tx_reference,
+                                rx_feedback: samples.rx_feedback,
+                                received_at: Instant::now(),
+                            });
                         }
+                    } else if frame.ddc_index == model.desired.rx_ddc_index {
+                        status_ddc_packets = status_ddc_packets.saturating_add(1);
+                        let sample_rate_hz = model.desired.ddc0_sample_rate_khz as u32 * 1000;
+                        tci.publish_iq_frame(sample_rate_hz, &frame.iq_samples);
+                        // Keep display IQ live during MOX, but do not drive RX WDSP
+                        // audio/AGC with local TX energy; that makes unkey recovery
+                        // feel slow, especially with SLOW/LONG AGC.
+                        if !tx_requested && !model.desired.tx_enabled {
+                            for audio_frame in wdsp.push_iq(&frame.iq_samples) {
+                                status_rx_audio_frames = status_rx_audio_frames.saturating_add(1);
+                                status_rx_audio_samples = status_rx_audio_samples
+                                    .saturating_add(audio_frame.len() as u64);
+                                tci.publish_audio_frame(wdsp.audio_sample_rate_hz(), &audio_frame);
+                            }
+                        }
+                        if let Some(dbm) = wdsp.smeter_dbm() {
+                            model.observed.ddc0_meter_dbm = Some(dbm);
+                        }
+                        model.observed.rx_wbfm_stereo_detected = wdsp.wbfm_stereo_detected();
+                        model.apply_ddc_frame(frame);
                     }
-                    if let Some(dbm) = wdsp.smeter_dbm() {
-                        model.observed.ddc0_meter_dbm = Some(dbm);
-                    }
-                    model.apply_ddc_frame(frame);
                 }
             }
         }
@@ -900,7 +1056,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                     model.desired.tx_phase = TxPhase::Rx;
                     let _ = tx_cmd_tx.send(TxCommand::Disarm);
                     session.send_high_priority(&model)?;
-                    session.send_duc_specific()?;
+                    session.send_duc_specific(&model)?;
                     last_duc_specific = now;
                     did_work = true;
                 }
@@ -931,7 +1087,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                     model.desired.tx_phase = TxPhase::Rx;
                     let _ = tx_cmd_tx.send(TxCommand::Disarm);
                     session.send_high_priority(&model)?;
-                    session.send_duc_specific()?;
+                    session.send_duc_specific(&model)?;
                     last_duc_specific = now;
                     did_work = true;
                 }

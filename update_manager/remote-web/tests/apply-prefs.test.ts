@@ -44,6 +44,26 @@ describe('applyRadioPrefsToState', () => {
     applyRadioPrefsToState({ rxEqBands: bands }, state);
     expect(state.rxEqBands).toHaveLength(11);
   });
+
+  it('applies WDSP 2.00 NR2 and phase-rotator preferences', () => {
+    const state = createAppState();
+    applyRadioPrefsToState({
+      rxNr2GainMethod: 'trained',
+      rxNr2NpeMethod: 'nstat',
+      rxNr2PostFilterEnabled: false,
+      rxWbfmDeemphasis: '50us',
+      txPhaseRotatorEnabled: true,
+      txPhaseRotatorAuto: true,
+      txPhaseRotatorCornerHz: 2500,
+    }, state);
+    expect(state.rxNr2GainMethod).toBe('TRAINED');
+    expect(state.rxNr2NpeMethod).toBe('NSTAT');
+    expect(state.rxNr2PostFilterEnabled).toBe(false);
+    expect(state.rxWbfmDeemphasis).toBe('EU_50US');
+    expect(state.txPhaseRotatorEnabled).toBe(true);
+    expect(state.txPhaseRotatorAuto).toBe(true);
+    expect(state.txPhaseRotatorCornerHz).toBe(2000);
+  });
 });
 
 describe('applyDisplayPrefsToState', () => {

@@ -16,6 +16,12 @@ use crate::p2::ports::{P2PortMap, COMMAND_DISCOVERY_PORT};
 use crate::radio_model::RadioModel;
 use crate::sync_ext::MutexExt;
 
+const DISCOVERY_STATE_IDLE: u8 = 2;
+
+fn discovery_allows_controller(reply: &DiscoveryReply) -> bool {
+    reply.state_code == DISCOVERY_STATE_IDLE
+}
+
 const ALEX_TX_RELAY_BIT: u16 = 0x0800;
 
 #[derive(Debug)]
@@ -66,20 +72,64 @@ impl P2Session {
         );
         self.send_packet(
             self.target_addr(self.config.port_map.ddc_specific),
-            &build_ddc_specific_packet(DdcSetup {
-                enable_mask: 1u16 << effective_ddc,
-                ddc_index,
-                adc: effective_adc,
-                sample_rate_khz,
-                sample_size_bits,
-            }),
+            &build_ddc_specific_packet(
+                1u16 << effective_ddc,
+                &[DdcSetup {
+                    ddc_index,
+                    adc: effective_adc,
+                    sample_rate_khz,
+                    sample_size_bits,
+                }],
+                false,
+            ),
         )?;
         Ok(())
     }
 
-    pub fn bootstrap(&self, radio_model: &Arc<Mutex<RadioModel>>) -> io::Result<()> {
+    pub fn configure_puresignal_feedback(&self) -> io::Result<()> {
+        println!(
+            "saturn-bridge: configure PureSignal DDC0=ADC0 feedback DDC1=TX-DAC reference rate=192k"
+        );
+        self.send_packet(
+            self.target_addr(self.config.port_map.ddc_specific),
+            &build_ddc_specific_packet(
+                1,
+                &[
+                    DdcSetup {
+                        ddc_index: 0,
+                        adc: 0,
+                        sample_rate_khz: 192,
+                        sample_size_bits: 24,
+                    },
+                    DdcSetup {
+                        ddc_index: 1,
+                        adc: 2,
+                        sample_rate_khz: 192,
+                        sample_size_bits: 24,
+                    },
+                ],
+                true,
+            ),
+        )?;
+        Ok(())
+    }
+
+    pub fn bootstrap(&self, radio_model: &Arc<Mutex<RadioModel>>) -> io::Result<bool> {
         if self.config.enable_discovery {
-            let _ = self.try_discover(radio_model)?;
+            match self.try_discover(radio_model)? {
+                Some(reply) if discovery_allows_controller(&reply) => {}
+                Some(reply) => {
+                    eprintln!(
+                        "saturn-bridge: P2 controller request refused; discovery state {} is not idle",
+                        reply.state_code
+                    );
+                    return Ok(false);
+                }
+                None => {
+                    eprintln!("saturn-bridge: P2 controller request refused; no discovery reply");
+                    return Ok(false);
+                }
+            }
         }
 
         self.send_packet(
@@ -90,7 +140,6 @@ impl P2Session {
         let ddc_setup = {
             let model = radio_model.lock_unpoisoned();
             DdcSetup {
-                enable_mask: 1u16 << model.desired.rx_ddc_index,
                 ddc_index: model.desired.rx_ddc_index,
                 adc: model.desired.ddc0_adc,
                 sample_rate_khz: model.desired.ddc0_sample_rate_khz,
@@ -99,10 +148,13 @@ impl P2Session {
         };
         self.send_packet(
             self.target_addr(self.config.port_map.ddc_specific),
-            &build_ddc_specific_packet(ddc_setup),
+            &build_ddc_specific_packet(1u16 << ddc_setup.ddc_index, &[ddc_setup], false),
         )?;
-        self.send_duc_specific()?;
-        Ok(())
+        {
+            let model = radio_model.lock_unpoisoned();
+            self.send_duc_specific(&model)?;
+        }
+        Ok(true)
     }
 
     pub fn spawn_high_priority_loop(
@@ -211,10 +263,15 @@ impl P2Session {
         Ok(())
     }
 
-    pub fn send_duc_specific(&self) -> io::Result<()> {
+    pub fn send_duc_specific(&self, model: &RadioModel) -> io::Result<()> {
         let target = self.target_addr(self.config.port_map.duc_specific);
         let seq = self.duc_specific_sequence.fetch_add(1, Ordering::Relaxed);
-        let packet = build_duc_specific_packet(seq);
+        let adc0_attenuation = if model.desired.pure_signal_enabled {
+            model.desired.pure_signal_attenuation_db.min(31)
+        } else {
+            31
+        };
+        let packet = build_duc_specific_packet(seq, 31, adc0_attenuation);
         self.send_packet(target, &packet)?;
         Ok(())
     }
@@ -278,6 +335,11 @@ fn build_ddc_phase_array(model: &RadioModel) -> [u32; 10] {
     let mut phase_words = [0u32; 10];
     phase_words[usize::from(model.desired.rx_ddc_index)] =
         frequency_to_phase_word(model.desired.iq_center_hz);
+    if model.desired.tx_enabled && model.desired.pure_signal_enabled {
+        let tx_phase = frequency_to_phase_word(model.desired.tx_frequency_hz);
+        phase_words[0] = tx_phase;
+        phase_words[1] = tx_phase;
+    }
     phase_words
 }
 
@@ -337,7 +399,11 @@ fn build_high_priority_state(model: &RadioModel, drive_byte_at_100w: u8) -> High
         ),
         alex_rx2_filter_word: build_alex_rx_filter_word(model.desired.iq_center_hz),
         alex_rx1_filter_word: build_alex_rx_filter_word(model.desired.iq_center_hz),
-        rx2_attenuation_db: 0,
+        rx2_attenuation_db: if model.desired.tx_enabled && model.desired.pure_signal_enabled {
+            model.desired.pure_signal_attenuation_db.min(31)
+        } else {
+            0
+        },
         rx1_attenuation_db: 0,
     }
 }
@@ -410,6 +476,21 @@ mod tests {
     use crate::radio_model::RadioModel;
 
     #[test]
+    fn discovery_only_allows_idle_radio_ownership() {
+        let mut reply = DiscoveryReply {
+            state_code: 2,
+            mac_address: [0; 6],
+            device_code: 10,
+            protocol_version: 0,
+            p2app_version: 0,
+        };
+        assert!(discovery_allows_controller(&reply));
+
+        reply.state_code = 3;
+        assert!(!discovery_allows_controller(&reply));
+    }
+
+    #[test]
     fn active_rx_ddc_uses_selected_slot_and_delta_phase() {
         let mut model = RadioModel::new(2, 14_200_000, 0, 192, 24, 2048, true, 4096, true);
         model.desired.rx_ddc_index = 2;
@@ -470,5 +551,21 @@ mod tests {
         let state = build_high_priority_state(&model, 68);
 
         assert_eq!(state.tx_drive, 46);
+    }
+
+    #[test]
+    fn puresignal_tx_tunes_synchronized_feedback_ddcs() {
+        let mut model = RadioModel::new(2, 14_200_000, 0, 192, 24, 2048, true, 4096, true);
+        model.desired.tx_frequency_hz = 7_150_000;
+        model.desired.tx_enabled = true;
+        model.desired.pure_signal_enabled = true;
+        model.desired.pure_signal_attenuation_db = 12;
+
+        let state = build_high_priority_state(&model, 68);
+        let tx_phase = frequency_to_phase_word(7_150_000);
+
+        assert_eq!(state.ddc_phase_words[0], tx_phase);
+        assert_eq!(state.ddc_phase_words[1], tx_phase);
+        assert_eq!(state.rx2_attenuation_db, 12);
     }
 }

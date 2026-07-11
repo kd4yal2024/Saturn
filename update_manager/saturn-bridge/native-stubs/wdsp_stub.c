@@ -43,6 +43,14 @@ STUB_VOID_I32_I32(SetRXAPanelRun)
 STUB_VOID_I32_I32(SetRXAPanelSelect)
 STUB_VOID_I32_I32(SetRXAPanelCopy)
 STUB_VOID_I32_F64(SetRXAPanelGain1)
+void SetRXAWBFMdmph(int32_t channel, int32_t dmph_run,
+                    int32_t dmph_continent) {
+  (void)channel; (void)dmph_run; (void)dmph_continent;
+}
+int32_t GetRXAWBFMStereoIndicator(int32_t channel) {
+  (void)channel;
+  return 0;
+}
 
 void create_anbEXT(int32_t id, int32_t run, int32_t buffsize, double samplerate,
                    double tau, double hangtime, double advtime, double backtau,
@@ -142,6 +150,9 @@ STUB_VOID_I32_I32(SetTXAPanelRun)
 STUB_VOID_I32_I32(SetTXAPanelSelect)
 STUB_VOID_I32_F64(SetTXAPanelGain1)
 STUB_VOID_I32_I32(SetTXAPostGenRun)
+STUB_VOID_I32_I32(SetTXAPHROTRun)
+STUB_VOID_I32_F64(SetTXAPHROTCorner)
+STUB_VOID_I32_I32(SetTXAPHROTAutoMode)
 
 STUB_VOID_I32_I32(SetRXAEQRun)
 void SetRXAGrphEQ10(int32_t channel, int32_t *rxeq) { (void)channel; (void)rxeq; }
@@ -168,6 +179,30 @@ void SetTXAPostGenTTFreq(int32_t channel, double freq1, double freq2) {
 STUB_VOID_I32_I32(TXASetNC)
 STUB_VOID_I32_I32(TXASetMP)
 double GetTXAMeter(int32_t channel, int32_t mt) { (void)channel; (void)mt; return 0.0; }
+
+void pscc(int32_t channel, int32_t size, double *tx, double *rx) {
+  (void)channel; (void)size; (void)tx; (void)rx;
+}
+STUB_VOID_I32_I32(SetPSMox)
+void GetPSInfo(int32_t channel, int32_t *info) {
+  (void)channel;
+  if (info) {
+    for (int i = 0; i < 16; i++) info[i] = 0;
+  }
+}
+void SetPSControl(int32_t channel, int32_t reset, int32_t mancal,
+                  int32_t automode, int32_t turnon) {
+  (void)channel; (void)reset; (void)mancal; (void)automode; (void)turnon;
+}
+STUB_VOID_I32_F64(SetPSLoopDelay)
+STUB_VOID_I32_F64(SetPSMoxDelay)
+double SetPSTXDelay(int32_t channel, double delay) { (void)channel; return delay; }
+STUB_VOID_I32_F64(SetPSHWPeak)
+void GetPSMaxTX(int32_t channel, double *max_tx) {
+  (void)channel;
+  if (max_tx) *max_tx = 0.0;
+}
+STUB_VOID_I32_I32(SetPSFeedbackRate)
 
 STUB_VOID_I32_I32(SetDEXPRun)
 STUB_VOID_I32_F64(SetDEXPDetectorTau)

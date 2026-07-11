@@ -17,6 +17,10 @@ describe('radioPrefsFromState', () => {
     expect(prefs.rxEqBands).toHaveLength(11);
     expect(prefs.txEqBands).toHaveLength(11);
     expect(prefs.cfcBands).toHaveLength(11);
+    expect(prefs.rxNr2GainMethod).toBe('GAMMA');
+    expect(prefs.rxNr2NpeMethod).toBe('OSMS');
+    expect(prefs.rxWbfmDeemphasis).toBe('NA_75US');
+    expect(prefs.txPhaseRotatorCornerHz).toBe(338);
   });
 
   it('clamps out-of-range values', () => {

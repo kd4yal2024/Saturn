@@ -53,6 +53,12 @@ export interface AppState {
   rxVolumeDb: number;
   rxNoiseReductionMode: string;
   rxNoiseReductionLevel: number;
+  rxNr2GainMethod: string;
+  rxNr2NpeMethod: string;
+  rxNr2PostFilterEnabled: boolean;
+  rxWbfmSupported: boolean;
+  rxWbfmDeemphasis: string;
+  rxWbfmStereoDetected: boolean;
   rxNbMode: string;
   rxNbThreshold: number;
   rxAnrTaps: number;
@@ -111,6 +117,19 @@ export interface AppState {
   cfcEnabled: boolean;
   cfcPrecomp: number;
   cfcBands: number[];
+  txPhaseRotatorEnabled: boolean;
+  txPhaseRotatorAuto: boolean;
+  txPhaseRotatorCornerHz: number;
+  pureSignalEnabled: boolean;
+  pureSignalAutoAttenuate: boolean;
+  pureSignalAttenuationDb: number;
+  pureSignalState: 'off' | 'waiting' | 'calibrating' | 'correcting' | 'fault';
+  pureSignalFeedbackLevel: number;
+  pureSignalCalibrationCount: number;
+  pureSignalCorrecting: boolean;
+  pureSignalMaxTx: number;
+  pureSignalFeedbackPackets: number;
+  pureSignalFeedbackGaps: number;
 
   // ── Meters ──────────────────────────────────────────────────────────────
   meterDbm: number | null;
@@ -292,6 +311,12 @@ export function createAppState(): AppState {
     rxVolumeDb: -10.0,
     rxNoiseReductionMode: 'NR2',
     rxNoiseReductionLevel: 100,
+    rxNr2GainMethod: 'GAMMA',
+    rxNr2NpeMethod: 'OSMS',
+    rxNr2PostFilterEnabled: true,
+    rxWbfmSupported: false,
+    rxWbfmDeemphasis: 'NA_75US',
+    rxWbfmStereoDetected: false,
     rxNbMode: 'OFF',
     rxNbThreshold: 4.95,
     rxAnrTaps: 64,
@@ -347,6 +372,19 @@ export function createAppState(): AppState {
     cfcEnabled: false,
     cfcPrecomp: 0.0,
     cfcBands: new Array(11).fill(0.0),
+    txPhaseRotatorEnabled: false,
+    txPhaseRotatorAuto: false,
+    txPhaseRotatorCornerHz: 338,
+    pureSignalEnabled: false,
+    pureSignalAutoAttenuate: true,
+    pureSignalAttenuationDb: 0,
+    pureSignalState: 'off',
+    pureSignalFeedbackLevel: 0,
+    pureSignalCalibrationCount: 0,
+    pureSignalCorrecting: false,
+    pureSignalMaxTx: 0,
+    pureSignalFeedbackPackets: 0,
+    pureSignalFeedbackGaps: 0,
 
     meterDbm: null,
     txPower: null,

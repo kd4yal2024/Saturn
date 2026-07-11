@@ -11,6 +11,11 @@ import {
   clampRxAdc,
   clampRxAntenna,
   clampRxNoiseReductionLevel,
+  normalizeNr2GainMethod,
+  normalizeNr2NpeMethod,
+  normalizeWbfmDeemphasis,
+  clampTxPhaseRotatorCornerHz,
+  clampPureSignalAttenuationDb,
   clampRxNbThreshold,
   clampRxVolumeDb,
   clampSampleRateHz,
@@ -170,6 +175,18 @@ export function applyTciCommand(command: TciCommand, current: TciRadioState): Tc
   } else if (command.name === 'rx_nr_level' || command.name === 'nr_level') {
     const level = numericArg(argAt(args, 1) ?? trailingArg(args));
     if (level != null) next.rxNoiseReductionLevel = clampRxNoiseReductionLevel(level);
+  } else if (command.name === 'rx_nr2_gain_method') {
+    next.rxNr2GainMethod = normalizeNr2GainMethod(argAt(args, 1) ?? trailingArg(args));
+  } else if (command.name === 'rx_nr2_npe_method') {
+    next.rxNr2NpeMethod = normalizeNr2NpeMethod(argAt(args, 1) ?? trailingArg(args));
+  } else if (command.name === 'rx_nr2_post_filter') {
+    next.rxNr2PostFilterEnabled = booleanArg(argAt(args, 1) ?? trailingArg(args)) === true;
+  } else if (command.name === 'rx_wbfm_supported') {
+    next.rxWbfmSupported = booleanArg(argAt(args, 1) ?? trailingArg(args)) === true;
+  } else if (command.name === 'rx_wbfm_deemphasis') {
+    next.rxWbfmDeemphasis = normalizeWbfmDeemphasis(argAt(args, 1) ?? trailingArg(args));
+  } else if (command.name === 'rx_wbfm_stereo') {
+    next.rxWbfmStereoDetected = booleanArg(argAt(args, 1) ?? trailingArg(args)) === true;
   } else if (command.name === 'rx_nb') {
     next.rxNbMode = normalizeNbMode(argAt(args, 1) ?? trailingArg(args));
   } else if (command.name === 'rx_nb_threshold') {
@@ -355,6 +372,42 @@ export function applyTciCommand(command: TciCommand, current: TciRadioState): Tc
   } else if (command.name === 'tx_cfc_precomp') {
     const value = numericArg(argAt(args, 1) ?? argAt(args, 0));
     if (value != null) next.cfcPrecomp = value;
+  } else if (command.name === 'tx_phase_rotator') {
+    next.txPhaseRotatorEnabled = booleanArg(argAt(args, 1) ?? trailingArg(args)) === true;
+  } else if (command.name === 'tx_phase_rotator_auto') {
+    next.txPhaseRotatorAuto = booleanArg(argAt(args, 1) ?? trailingArg(args)) === true;
+  } else if (command.name === 'tx_phase_rotator_corner') {
+    const cornerHz = numericArg(argAt(args, 1) ?? trailingArg(args));
+    if (cornerHz != null) next.txPhaseRotatorCornerHz = clampTxPhaseRotatorCornerHz(cornerHz);
+  } else if (command.name === 'tx_puresignal') {
+    next.pureSignalEnabled = booleanArg(argAt(args, 1) ?? trailingArg(args)) === true;
+  } else if (command.name === 'tx_puresignal_auto_attenuate') {
+    next.pureSignalAutoAttenuate = booleanArg(argAt(args, 1) ?? trailingArg(args)) === true;
+  } else if (command.name === 'tx_puresignal_attenuation') {
+    const attenuation = numericArg(argAt(args, 1) ?? trailingArg(args));
+    if (attenuation != null) next.pureSignalAttenuationDb = clampPureSignalAttenuationDb(attenuation);
+  } else if (command.name === 'tx_puresignal_state') {
+    const state = `${argAt(args, 1) ?? trailingArg(args) ?? ''}`.trim().toLowerCase();
+    if (state === 'off' || state === 'waiting' || state === 'calibrating' || state === 'correcting' || state === 'fault') {
+      next.pureSignalState = state;
+    }
+  } else if (command.name === 'tx_puresignal_feedback') {
+    const value = numericArg(argAt(args, 1) ?? trailingArg(args));
+    if (value != null) next.pureSignalFeedbackLevel = Math.round(value);
+  } else if (command.name === 'tx_puresignal_calibration_count') {
+    const value = numericArg(argAt(args, 1) ?? trailingArg(args));
+    if (value != null) next.pureSignalCalibrationCount = Math.max(0, Math.round(value));
+  } else if (command.name === 'tx_puresignal_correcting') {
+    next.pureSignalCorrecting = booleanArg(argAt(args, 1) ?? trailingArg(args)) === true;
+  } else if (command.name === 'tx_puresignal_max_tx') {
+    const value = numericArg(argAt(args, 1) ?? trailingArg(args));
+    if (value != null) next.pureSignalMaxTx = Math.max(0, value);
+  } else if (command.name === 'tx_puresignal_feedback_packets') {
+    const value = numericArg(argAt(args, 1) ?? trailingArg(args));
+    if (value != null) next.pureSignalFeedbackPackets = Math.max(0, Math.round(value));
+  } else if (command.name === 'tx_puresignal_feedback_gaps') {
+    const value = numericArg(argAt(args, 1) ?? trailingArg(args));
+    if (value != null) next.pureSignalFeedbackGaps = Math.max(0, Math.round(value));
   } else if (command.name === 'tx_cfc_band' && args.length >= 3) {
     const parsed = parseBandGain(args);
     if (parsed) next.cfcBands[parsed.band] = Math.max(0, Math.min(20, parsed.gain));

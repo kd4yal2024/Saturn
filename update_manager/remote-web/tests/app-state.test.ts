@@ -40,6 +40,18 @@ describe('createAppState', () => {
   it('rxVolumeDb defaults to -10', () => expect(createAppState().rxVolumeDb).toBe(-10));
   it('agcMode defaults to MEDIUM', () => expect(createAppState().agcMode).toBe('MEDIUM'));
   it('agcGain defaults to 80', () => expect(createAppState().agcGain).toBe(80));
+  it('NR2 defaults to Gamma, OSMS, and post filtering', () => {
+    const s = createAppState();
+    expect(s.rxNr2GainMethod).toBe('GAMMA');
+    expect(s.rxNr2NpeMethod).toBe('OSMS');
+    expect(s.rxNr2PostFilterEnabled).toBe(true);
+  });
+  it('WFM starts capability-gated with North American de-emphasis', () => {
+    const s = createAppState();
+    expect(s.rxWbfmSupported).toBe(false);
+    expect(s.rxWbfmDeemphasis).toBe('NA_75US');
+    expect(s.rxWbfmStereoDetected).toBe(false);
+  });
 
   // ── Filter defaults ──
   it('filterLow defaults to 50', () => expect(createAppState().filterLow).toBe(50));
@@ -55,6 +67,20 @@ describe('createAppState', () => {
   it('txEnabled defaults to false', () => expect(createAppState().txEnabled).toBe(false));
   it('txDrive defaults to a conservative 10 W target', () => expect(createAppState().txDrive).toBe(10));
   it('txMicGainDb defaults to a phone-safe -12 dB', () => expect(createAppState().txMicGainDb).toBe(-12));
+  it('phase rotator starts disabled at the WDSP default corner', () => {
+    const s = createAppState();
+    expect(s.txPhaseRotatorEnabled).toBe(false);
+    expect(s.txPhaseRotatorAuto).toBe(false);
+    expect(s.txPhaseRotatorCornerHz).toBe(338);
+  });
+  it('PureSignal starts bypassed with automatic attenuation armed', () => {
+    const s = createAppState();
+    expect(s.pureSignalEnabled).toBe(false);
+    expect(s.pureSignalAutoAttenuate).toBe(true);
+    expect(s.pureSignalAttenuationDb).toBe(0);
+    expect(s.pureSignalState).toBe('off');
+    expect(s.pureSignalCorrecting).toBe(false);
+  });
   it('TX codec negotiation starts on PCM with no accepted bridge reply', () => {
     const s = createAppState();
     expect(s.txCodecRequested).toBe('pcm');

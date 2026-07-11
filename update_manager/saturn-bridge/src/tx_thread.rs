@@ -7,7 +7,7 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use crate::p2::session::P2Session;
-use crate::radio_model::RadioModel;
+use crate::radio_model::{PureSignalState, RadioModel};
 use crate::sync_ext::MutexExt;
 use crate::wdsp::{
     WdspTxEngine, DUC_IQ_SAMPLES_PER_PACKET, TX_MIC_SAMPLES_PER_DSP_BLOCK, WDSP_TX_IQ_RATE_HZ,
@@ -32,11 +32,14 @@ const DEFAULT_TX_WATCHDOG: Duration = Duration::from_secs(180);
 const MIN_TX_WATCHDOG: Duration = Duration::from_secs(3);
 const MAX_TX_WATCHDOG: Duration = Duration::from_secs(180);
 const MAX_DUC_PACKETS_PER_LOOP: usize = 8;
+const MAX_TX_COMMANDS_PER_LOOP: usize = 128;
 const TX_MIC_INPUT_QUEUE_MAX_SAMPLES: usize = 48_000;
 const DEFAULT_TX_MIC_PREFILL_SAMPLES: usize = 2_048;
 const MIN_TX_MIC_PREFILL_MS: u64 = 20;
 const MAX_TX_MIC_PREFILL_MS: u64 = 250;
 const TX_ACTIVE_IDLE_SLEEP: Duration = Duration::from_micros(250);
+const PURE_SIGNAL_FEEDBACK_TIMEOUT: Duration = Duration::from_millis(250);
+const PURE_SIGNAL_STATUS_PERIOD: Duration = Duration::from_millis(100);
 
 fn duc_iq_packet_period() -> Duration {
     Duration::from_secs_f64(DUC_IQ_SAMPLES_PER_PACKET as f64 / WDSP_TX_IQ_RATE_HZ as f64)
@@ -55,7 +58,9 @@ fn can_key_rf(rf_enabled: bool, iq_peak: f32, mic_recent: bool, two_tone: bool) 
 
 pub enum TxCommand {
     /// PTT pressed — arm WDSP TX channel, wait for DUC IQ before keying.
-    Arm { rf_enabled: bool },
+    Arm {
+        rf_enabled: bool,
+    },
     /// PTT released — unkey, send stop burst, deactivate WDSP.
     Disarm,
     /// Mic audio samples from TCI client.
@@ -64,6 +69,13 @@ pub enum TxCommand {
         channels: u32,
         sample_rate_hz: u32,
     },
+    PureSignalFeedback {
+        sequence: u32,
+        tx_reference: Vec<f64>,
+        rx_feedback: Vec<f64>,
+        received_at: Instant,
+    },
+    PureSignalReset,
     /// TX-relevant model parameters changed — re-sync WDSP TX DSP chain.
     ModelChanged,
     /// Shut down the TX thread.
@@ -82,6 +94,19 @@ pub enum TxEvent {
     },
     /// Compact TX timing/level diagnostics for bridge status logging.
     Diagnostics(TxDiagnostics),
+    PureSignalStatus(PureSignalStatus),
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct PureSignalStatus {
+    pub state: PureSignalState,
+    pub feedback_level: i32,
+    pub calibration_count: i32,
+    pub correcting: bool,
+    pub max_tx: f64,
+    pub feedback_packets: u64,
+    pub feedback_gaps: u64,
+    pub attenuation_db: u8,
 }
 
 #[derive(Clone, Debug)]
@@ -185,6 +210,13 @@ fn run(
     let mut first_keyable_iq_at: Option<Instant> = None;
     let mut keyed_at: Option<Instant> = None;
     let mut last_keyable_mic_at: Option<Instant> = None;
+    let mut pure_signal_last_sequence: Option<u32> = None;
+    let mut pure_signal_last_feedback_at: Option<Instant> = None;
+    let mut pure_signal_feedback_packets = 0u64;
+    let mut pure_signal_feedback_gaps = 0u64;
+    let mut pure_signal_last_calibration_count = 0i32;
+    let mut pure_signal_fault_active = false;
+    let mut pure_signal_last_status_at = Instant::now();
     let tx_watchdog = tx_watchdog_duration();
     let tx_mic_prefill_samples = tx_mic_prefill_samples();
     let tx_mic_prefill_ms = tx_mic_prefill_samples as f64 / 48.0;
@@ -199,8 +231,9 @@ fn run(
     while !stop_flag.load(Ordering::Relaxed) {
         let mut did_work = false;
 
-        // Drain all pending commands (non-blocking).
-        loop {
+        // Bound command draining so synchronized feedback traffic cannot starve
+        // the fixed-cadence DUC IQ producer.
+        for _ in 0..MAX_TX_COMMANDS_PER_LOOP {
             match cmd_rx.try_recv() {
                 Ok(TxCommand::Arm {
                     rf_enabled: arm_rf_enabled,
@@ -216,9 +249,9 @@ fn run(
                             let model = radio_model.lock_unpoisoned();
                             wdsp_tx.sync_model(&model);
                             two_tone = model.desired.two_tone_enabled;
-                        }
-                        if let Err(e) = session.send_duc_specific() {
-                            eprintln!("saturn-bridge: TX thread: duc_specific error: {e}");
+                            if let Err(e) = session.send_duc_specific(&model) {
+                                eprintln!("saturn-bridge: TX thread: duc_specific error: {e}");
+                            }
                         }
                         last_mic_audio_at = now;
                         next_mic_dsp_at = now;
@@ -240,6 +273,12 @@ fn run(
                         first_keyable_iq_at = None;
                         keyed_at = None;
                         last_keyable_mic_at = None;
+                        pure_signal_last_sequence = None;
+                        pure_signal_last_feedback_at = None;
+                        pure_signal_feedback_packets = 0;
+                        pure_signal_feedback_gaps = 0;
+                        pure_signal_last_calibration_count = 0;
+                        pure_signal_fault_active = false;
                         println!(
                             "saturn-bridge: TX armed; waiting for mic audio + nonzero DUC IQ{}",
                             if rf_enabled { "" } else { " (RF disabled)" }
@@ -323,6 +362,76 @@ fn run(
                         did_work = true;
                     }
                 }
+                Ok(TxCommand::PureSignalFeedback {
+                    sequence,
+                    tx_reference,
+                    rx_feedback,
+                    received_at,
+                }) => {
+                    if state == TxState::Keyed {
+                        if let Some(expected) =
+                            pure_signal_last_sequence.map(|value| value.wrapping_add(1))
+                        {
+                            pure_signal_feedback_gaps = pure_signal_feedback_gaps
+                                .saturating_add(puresignal_sequence_gap(expected, sequence));
+                        }
+                        pure_signal_last_sequence = Some(sequence);
+                        pure_signal_last_feedback_at = Some(received_at);
+                        pure_signal_feedback_packets =
+                            pure_signal_feedback_packets.saturating_add(1);
+
+                        if pure_signal_fault_active {
+                            pure_signal_fault_active = false;
+                            wdsp_tx.reset_puresignal();
+                            wdsp_tx.set_puresignal_mox(true);
+                        }
+
+                        if let Some(diag) =
+                            wdsp_tx.push_puresignal_feedback(&tx_reference, &rx_feedback)
+                        {
+                            let mut model = radio_model.lock_unpoisoned();
+                            if diag.calibration_count != pure_signal_last_calibration_count {
+                                pure_signal_last_calibration_count = diag.calibration_count;
+                                if model.desired.pure_signal_auto_attenuate {
+                                    let adjusted = puresignal_auto_attenuation(
+                                        diag.feedback_level,
+                                        model.desired.pure_signal_attenuation_db,
+                                    );
+                                    if adjusted != model.desired.pure_signal_attenuation_db {
+                                        model.desired.pure_signal_attenuation_db = adjusted;
+                                        wdsp_tx.reset_puresignal();
+                                        if let Err(error) = session.send_duc_specific(&model) {
+                                            eprintln!(
+                                                "saturn-bridge: PureSignal attenuation update failed: {error}"
+                                            );
+                                        }
+                                    }
+                                }
+                            }
+                            if pure_signal_last_status_at.elapsed() >= PURE_SIGNAL_STATUS_PERIOD {
+                                let _ =
+                                    event_tx.send(TxEvent::PureSignalStatus(PureSignalStatus {
+                                        state: diag.state,
+                                        feedback_level: diag.feedback_level,
+                                        calibration_count: diag.calibration_count,
+                                        correcting: diag.correcting,
+                                        max_tx: diag.max_tx,
+                                        feedback_packets: pure_signal_feedback_packets,
+                                        feedback_gaps: pure_signal_feedback_gaps,
+                                        attenuation_db: model.desired.pure_signal_attenuation_db,
+                                    }));
+                                pure_signal_last_status_at = Instant::now();
+                            }
+                        }
+                        did_work = true;
+                    }
+                }
+                Ok(TxCommand::PureSignalReset) => {
+                    wdsp_tx.reset_puresignal();
+                    pure_signal_last_calibration_count = 0;
+                    pure_signal_fault_active = false;
+                    did_work = true;
+                }
                 Ok(TxCommand::ModelChanged) => {
                     let model = radio_model.lock_unpoisoned();
                     wdsp_tx.sync_model(&model);
@@ -343,6 +452,35 @@ fn run(
                     }
                     println!("saturn-bridge: TX thread: command channel closed");
                     return;
+                }
+            }
+        }
+
+        if state == TxState::Keyed && !pure_signal_fault_active {
+            let model = radio_model.lock_unpoisoned();
+            if model.desired.pure_signal_enabled {
+                let feedback_stale = pure_signal_last_feedback_at
+                    .map(|received_at| received_at.elapsed() > PURE_SIGNAL_FEEDBACK_TIMEOUT)
+                    .unwrap_or_else(|| {
+                        keyed_at
+                            .map(|started_at| started_at.elapsed() > PURE_SIGNAL_FEEDBACK_TIMEOUT)
+                            .unwrap_or(false)
+                    });
+                if feedback_stale {
+                    pure_signal_fault_active = true;
+                    wdsp_tx.set_puresignal_mox(false);
+                    wdsp_tx.reset_puresignal();
+                    let _ = event_tx.send(TxEvent::PureSignalStatus(PureSignalStatus {
+                        state: PureSignalState::Fault,
+                        feedback_level: 0,
+                        calibration_count: pure_signal_last_calibration_count,
+                        correcting: false,
+                        max_tx: 0.0,
+                        feedback_packets: pure_signal_feedback_packets,
+                        feedback_gaps: pure_signal_feedback_gaps,
+                        attenuation_db: model.desired.pure_signal_attenuation_db,
+                    }));
+                    eprintln!("saturn-bridge: PureSignal feedback timeout; correction bypassed");
                 }
             }
         }
@@ -507,6 +645,21 @@ fn run(
                     let diag = wdsp_tx.diagnostics();
                     {
                         let mut model = radio_model.lock_unpoisoned();
+                        if model.desired.pure_signal_enabled {
+                            if let Err(e) = session.configure_puresignal_feedback() {
+                                eprintln!(
+                                    "saturn-bridge: PureSignal feedback configuration failed: {e}"
+                                );
+                                continue;
+                            }
+                            if let Err(e) = session.send_duc_specific(&model) {
+                                eprintln!(
+                                    "saturn-bridge: PureSignal TX-specific configuration failed: {e}"
+                                );
+                                continue;
+                            }
+                            wdsp_tx.set_puresignal_mox(true);
+                        }
                         model.desired.tx_enabled = true;
                         if let Err(e) = session.send_high_priority(&model) {
                             eprintln!("saturn-bridge: TX thread: HP send error on key: {e}");
@@ -690,6 +843,30 @@ fn tx_mic_prefill_samples_for_ms(prefill_ms: Option<u64>) -> usize {
         .unwrap_or(DEFAULT_TX_MIC_PREFILL_SAMPLES)
 }
 
+fn puresignal_auto_attenuation(feedback_level: i32, current_db: u8) -> u8 {
+    if (140..=165).contains(&feedback_level) {
+        return current_db.min(31);
+    }
+    let delta = if feedback_level > 275 {
+        15
+    } else if feedback_level < 25 {
+        -15
+    } else {
+        (20.0 * (f64::from(feedback_level) / 152.293).log10()).round() as i32
+    };
+    (i32::from(current_db) + delta).clamp(0, 31) as u8
+}
+
+fn puresignal_sequence_gap(expected: u32, received: u32) -> u64 {
+    let forward = received.wrapping_sub(expected);
+    if forward < (1u32 << 31) {
+        forward as u64
+    } else {
+        // Reordered or duplicate UDP traffic is not a forward packet loss.
+        0
+    }
+}
+
 fn mic_samples_to_mono(samples: Vec<f32>, channels: u32) -> Vec<f32> {
     if channels <= 1 {
         return samples;
@@ -709,6 +886,7 @@ fn do_unkey(
     event_tx: &Sender<TxEvent>,
     prev_state: TxState,
 ) {
+    wdsp_tx.set_puresignal_mox(false);
     wdsp_tx.set_active(false);
 
     if prev_state == TxState::Keyed {
@@ -741,7 +919,16 @@ fn do_unkey(
         let _ = event_tx.send(TxEvent::Unkeyed);
     }
 
-    if let Err(e) = session.send_duc_specific() {
+    let model = radio_model.lock_unpoisoned();
+    if let Err(e) = session.configure_rx_ddc(
+        model.desired.rx_ddc_index,
+        model.desired.ddc0_sample_rate_khz,
+        model.desired.ddc0_sample_size_bits,
+        model.desired.ddc0_adc,
+    ) {
+        eprintln!("saturn-bridge: TX thread: RX DDC restore error on unkey: {e}");
+    }
+    if let Err(e) = session.send_duc_specific(&model) {
         eprintln!("saturn-bridge: TX thread: DUC specific error on unkey: {e}");
     }
 }
@@ -787,6 +974,23 @@ mod tests {
 
         // IQ above threshold + both — key
         assert!(can_key_rf(true, iq_hi, true, true));
+    }
+
+    #[test]
+    fn puresignal_auto_attenuation_tracks_feedback_target_window() {
+        assert_eq!(puresignal_auto_attenuation(152, 10), 10);
+        assert_eq!(puresignal_auto_attenuation(300, 10), 25);
+        assert_eq!(puresignal_auto_attenuation(10, 20), 5);
+        assert_eq!(puresignal_auto_attenuation(300, 25), 31);
+        assert_eq!(puresignal_auto_attenuation(10, 5), 0);
+    }
+
+    #[test]
+    fn puresignal_gap_counter_handles_wrap_and_reordering() {
+        assert_eq!(puresignal_sequence_gap(10, 12), 2);
+        assert_eq!(puresignal_sequence_gap(u32::MAX, 0), 1);
+        assert_eq!(puresignal_sequence_gap(10, 9), 0);
+        assert_eq!(puresignal_sequence_gap(10, 10), 0);
     }
 
     #[test]

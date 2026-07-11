@@ -3464,17 +3464,604 @@
       }
     }
   </style>
+  <style id="saturn-operator-layout-v2">
+    :root {
+      --bg-0: #111416;
+      --bg-1: #171a1c;
+      --bg-2: #1b1f21;
+      --bg-3: #222729;
+      --card: #1b1f21;
+      --line: rgba(206, 216, 219, 0.13);
+      --line-strong: rgba(206, 216, 219, 0.24);
+      --text: #edf2f2;
+      --muted: #9ca8a8;
+      --accent: #42d4c8;
+      --accent-warm: #e0a83a;
+      --theme-body-bg: #111416;
+      --theme-command-bg: #181c1e;
+      --theme-command-border: rgba(206, 216, 219, 0.16);
+      --theme-command-shadow: none;
+      --theme-panel-bg: #191d1f;
+      --theme-panel-border: rgba(206, 216, 219, 0.14);
+      --theme-panel-shadow: none;
+      --theme-panel-title: #edf2f2;
+      --theme-panel-meta: #8f9b9b;
+      --theme-field-bg: #111416;
+      --theme-field-border: rgba(206, 216, 219, 0.20);
+      --theme-metric-bg: #15191b;
+      --theme-status-bg: rgba(66, 212, 200, 0.06);
+      --theme-status-ghost-bg: rgba(255, 255, 255, 0.025);
+      --theme-status-border: rgba(206, 216, 219, 0.16);
+      --theme-status-text: #dce4e4;
+    }
+
+    :root[data-theme="light"] {
+      --bg-0: #e8edef;
+      --bg-1: #dce3e5;
+      --bg-2: #f8fafb;
+      --bg-3: #eef2f3;
+      --card: #f8fafb;
+      --line: rgba(35, 49, 52, 0.15);
+      --line-strong: rgba(35, 49, 52, 0.26);
+      --text: #182124;
+      --muted: #627073;
+      --accent: #007f79;
+      --accent-warm: #9b6800;
+      --good: #147a55;
+      --warn: #a96d00;
+      --danger: #b93f3b;
+      --theme-body-bg: #e8edef;
+      --theme-command-bg: #f8fafb;
+      --theme-command-border: rgba(35, 49, 52, 0.18);
+      --theme-command-shadow: none;
+      --theme-panel-bg: #f8fafb;
+      --theme-panel-border: rgba(35, 49, 52, 0.16);
+      --theme-panel-shadow: none;
+      --theme-panel-title: #182124;
+      --theme-panel-meta: #677578;
+      --theme-field-bg: #ffffff;
+      --theme-field-border: rgba(35, 49, 52, 0.22);
+      --theme-metric-bg: #eef2f3;
+      --theme-status-bg: rgba(0, 127, 121, 0.07);
+      --theme-status-ghost-bg: rgba(24, 33, 36, 0.035);
+      --theme-status-border: rgba(35, 49, 52, 0.18);
+      --theme-status-text: #263235;
+      --theme-deck-frequency: #152124;
+      --theme-deck-label: #647174;
+    }
+
+    body,
+    :root[data-theme="light"] body {
+      background: var(--theme-body-bg);
+    }
+
+    body::before {
+      background:
+        linear-gradient(90deg, rgba(143, 159, 162, 0.035) 1px, transparent 1px),
+        linear-gradient(180deg, rgba(143, 159, 162, 0.03) 1px, transparent 1px);
+      background-size: 40px 40px;
+      mask-image: none;
+    }
+
+    .console-page,
+    .console-page * {
+      letter-spacing: 0;
+    }
+
+    .page.console-page {
+      display: grid;
+      grid-template-columns: minmax(210px, 240px) minmax(0, 1fr) minmax(280px, 320px);
+      grid-template-areas:
+        "header header header"
+        "state state state"
+        "command command command"
+        "left stage audio"
+        "left stage right";
+      gap: 8px 10px;
+      align-items: start;
+      max-width: 1920px;
+      padding: 10px 12px 20px;
+    }
+
+    .console-header {
+      grid-area: header;
+      min-height: 40px;
+      margin: 0;
+      padding: 0 2px 7px;
+      gap: 12px;
+    }
+
+    .console-header > div:first-child {
+      display: flex;
+      align-items: baseline;
+      gap: 10px;
+      min-width: 0;
+    }
+
+    .console-header .kicker {
+      margin: 0;
+      font-size: 10px;
+      white-space: nowrap;
+    }
+
+    .console-header h1 {
+      margin: 0;
+      font-size: 22px;
+      line-height: 1;
+      text-transform: none;
+    }
+
+    .console-header .subtitle,
+    #static-wsdiag-marker,
+    #static-wsdiag-btn,
+    #static-wsdiag-copy-btn,
+    .deck-note,
+    .setup-meta {
+      display: none;
+    }
+
+    .console-header .hero-actions {
+      gap: 6px;
+      flex-wrap: nowrap;
+    }
+
+    .console-header .btn,
+    .console-header .nav-link {
+      min-height: 30px;
+      padding: 6px 9px;
+      border-radius: 5px;
+      font-size: 11px;
+    }
+
+    .operator-state-strip {
+      grid-area: state;
+      position: sticky;
+      top: 4px;
+      grid-template-columns: repeat(8, minmax(0, 1fr));
+      gap: 4px;
+      margin: 0;
+      padding: 4px;
+      border-radius: 6px;
+      background: rgba(17, 20, 22, 0.94);
+      box-shadow: none;
+    }
+
+    :root[data-theme="light"] .operator-state-strip {
+      background: rgba(248, 250, 251, 0.96);
+      border-color: rgba(35, 49, 52, 0.18);
+    }
+
+    .operator-pill {
+      min-height: 34px;
+      gap: 6px;
+      padding: 5px 7px;
+      border-radius: 4px;
+    }
+
+    .operator-pill::before {
+      width: 7px;
+      height: 7px;
+      box-shadow: none;
+    }
+
+    .operator-pill-label {
+      font-size: 8px;
+    }
+
+    .operator-pill-value {
+      font-size: 10px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .command-strip {
+      grid-area: command;
+      margin: 0;
+      border-radius: 6px;
+      overflow: visible;
+    }
+
+    .command-strip > .panel-head,
+    .secondary-deck {
+      display: none;
+    }
+
+    .command-strip > .panel-body {
+      padding: 7px;
+    }
+
+    .strip-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 8px;
+      align-items: stretch;
+    }
+
+    .vfo-deck.primary-deck {
+      display: grid;
+      grid-template-columns: minmax(270px, 1fr) 190px minmax(180px, 240px);
+      grid-template-areas:
+        "readout step input"
+        "sub sub input";
+      gap: 4px 12px;
+      min-height: 82px;
+      padding: 7px 10px;
+      border: 0;
+      border-radius: 4px;
+      background: var(--theme-field-bg);
+      box-shadow: none;
+    }
+
+    .primary-deck .deck-top {
+      display: none;
+    }
+
+    .primary-deck .vfo-readout-row {
+      grid-area: readout;
+      align-self: center;
+      gap: 9px;
+    }
+
+    .primary-deck .deck-frequency {
+      font-size: 38px;
+      line-height: 1;
+    }
+
+    .primary-deck .vfo-step-affordance {
+      grid-area: step;
+      align-self: center;
+      min-height: 36px;
+      padding: 3px;
+      border-radius: 5px;
+    }
+
+    .primary-deck .vfo-step-affordance .btn {
+      width: 34px;
+      min-height: 30px;
+      border-radius: 4px;
+    }
+
+    .primary-deck .deck-subline {
+      grid-area: sub;
+      min-height: 16px;
+      font-size: 10px;
+    }
+
+    .primary-deck .deck-subline span:last-child {
+      display: none;
+    }
+
+    .primary-deck .deck-input-row {
+      grid-area: input;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 6px;
+      align-items: end;
+      margin: 0;
+    }
+
+    .primary-deck .deck-input-row .label {
+      font-size: 9px;
+    }
+
+    .primary-deck .deck-input-row .field,
+    .primary-deck .freq-entry-launch {
+      min-height: 36px;
+      border-radius: 4px;
+    }
+
+    .control-cluster {
+      min-width: 190px;
+      gap: 6px;
+      align-content: stretch;
+    }
+
+    .launch-grid {
+      grid-template-columns: repeat(2, minmax(88px, 1fr));
+      height: 100%;
+      gap: 6px;
+    }
+
+    .launch-grid > .btn,
+    .launch-grid .setup-anchor > .btn {
+      min-height: 100%;
+      border-radius: 4px;
+    }
+
+    .console-layout {
+      display: contents;
+    }
+
+    .left-rail {
+      grid-area: left;
+    }
+
+    .console-stage {
+      grid-area: stage;
+    }
+
+    .right-rail {
+      grid-area: right;
+    }
+
+    .audio-control-strip {
+      grid-area: audio;
+      margin: 0;
+    }
+
+    .left-rail,
+    .right-rail,
+    .console-stage {
+      gap: 8px;
+    }
+
+    .panel,
+    .display-card,
+    .scope-frame,
+    .audio-control-strip,
+    .tx-zone,
+    .metric,
+    .vfo-deck,
+    .status-chip,
+    .field,
+    .btn,
+    .mode-btn,
+    .band-btn {
+      border-radius: 6px;
+    }
+
+    .panel {
+      background: var(--theme-panel-bg);
+      box-shadow: none;
+    }
+
+    .panel-head {
+      min-height: 34px;
+      padding: 7px 9px;
+    }
+
+    .panel-title {
+      font-size: 11px;
+    }
+
+    .panel-title::before {
+      width: 5px;
+      height: 5px;
+      margin-right: 6px;
+      box-shadow: none;
+    }
+
+    .panel-meta {
+      font-size: 9px;
+    }
+
+    .panel-body {
+      padding: 8px 9px 9px;
+    }
+
+    .left-rail .field-row {
+      gap: 7px;
+      margin-bottom: 8px;
+    }
+
+    .mode-grid,
+    .band-grid {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 4px;
+    }
+
+    .mode-btn,
+    .band-btn {
+      min-height: 32px;
+      padding: 6px 5px;
+      background: transparent;
+    }
+
+    .mode-btn.active,
+    .band-btn.active {
+      background: rgba(0, 127, 121, 0.24);
+      box-shadow: inset 0 0 0 1px rgba(66, 212, 200, 0.18);
+    }
+
+    .mode-btn:disabled,
+    .band-btn:disabled {
+      opacity: 0.38;
+      cursor: not-allowed;
+    }
+
+    .wbfm-controls {
+      margin-top: 8px;
+      padding-top: 8px;
+      border-top: 1px solid var(--line);
+    }
+
+    .wbfm-status-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      margin-bottom: 7px;
+    }
+
+    #wbfm-stereo-badge.active,
+    #wbfm-stereo-pill.active {
+      border-color: rgba(34, 197, 94, 0.55);
+      color: var(--good);
+      background: rgba(34, 197, 94, 0.10);
+    }
+
+    .audio-control-strip > .panel-head {
+      padding: 7px 9px;
+    }
+
+    .audio-control-strip .panel-meta {
+      display: none;
+    }
+
+    .audio-control-strip > .panel-body {
+      padding: 0 9px 5px;
+    }
+
+    .audio-control-grid {
+      grid-template-columns: 1fr;
+      gap: 0;
+    }
+
+    .audio-control {
+      min-width: 0;
+      padding: 9px 0;
+      border: 0;
+      border-bottom: 1px solid var(--line);
+      border-radius: 0;
+      background: transparent;
+      box-shadow: none;
+    }
+
+    .audio-control:last-child {
+      border-bottom: 0;
+    }
+
+    .audio-control .nr-grid {
+      gap: 3px;
+    }
+
+    .display-card.scope-frame {
+      border-radius: 6px;
+      background: #080b0c;
+      box-shadow: none;
+    }
+
+    .display-head {
+      padding: 8px 10px;
+    }
+
+    .spectrum-shell {
+      height: clamp(310px, 43vh, 520px);
+    }
+
+    .waterfall-shell {
+      height: clamp(170px, 25vh, 280px);
+    }
+
+    .scope-footer {
+      gap: 4px;
+      padding: 6px 8px 8px;
+    }
+
+    .scope-stat {
+      min-height: 42px;
+      border-radius: 4px;
+    }
+
+    .setup-menu {
+      border-radius: 6px;
+    }
+
+    @media (max-width: 1200px) {
+      .page.console-page {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+
+      .console-header { order: 1; }
+      .operator-state-strip { order: 2; }
+      .command-strip { order: 3; }
+      .console-layout {
+        order: 4;
+        display: grid;
+        grid-template-columns: minmax(210px, 250px) minmax(0, 1fr);
+        gap: 8px;
+      }
+      .console-stage { grid-column: 2; grid-row: 1 / span 2; }
+      .left-rail { grid-column: 1; grid-row: 1; }
+      .right-rail { grid-column: 1; grid-row: 2; }
+      .audio-control-strip { order: 5; }
+      .audio-control-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 0 12px;
+      }
+    }
+
+    @media (max-width: 780px) {
+      .page.console-page {
+        padding: 8px;
+      }
+
+      .console-header {
+        align-items: flex-start;
+      }
+
+      .console-header > div:first-child {
+        align-items: flex-start;
+        flex-direction: column;
+        gap: 2px;
+      }
+
+      .console-header h1 {
+        font-size: 20px;
+      }
+
+      .console-header .hero-actions {
+        flex-wrap: wrap;
+        justify-content: flex-end;
+      }
+
+      .operator-state-strip {
+        display: grid;
+        grid-auto-flow: column;
+        grid-auto-columns: 132px;
+        grid-template-columns: none;
+        overflow-x: auto;
+        overscroll-behavior-inline: contain;
+      }
+
+      .strip-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .vfo-deck.primary-deck {
+        grid-template-columns: 1fr auto;
+        grid-template-areas:
+          "readout readout"
+          "step input"
+          "sub sub";
+      }
+
+      .primary-deck .deck-frequency {
+        font-size: 30px;
+      }
+
+      .control-cluster {
+        min-width: 0;
+      }
+
+      .launch-grid > .btn,
+      .launch-grid .setup-anchor > .btn {
+        min-height: 42px;
+      }
+
+      .console-layout {
+        display: flex;
+        flex-direction: column;
+      }
+
+      .console-stage { order: 1; }
+      .left-rail { order: 2; }
+      .right-rail { order: 3; }
+      .audio-control-grid { grid-template-columns: 1fr; }
+      .spectrum-shell { height: 290px; }
+      .waterfall-shell { height: 180px; }
+    }
+  </style>
 </head>
 <body>
   <div class="page console-page">
     <header class="console-header">
       <div>
-        <div class="kicker">Saturn Remote / Operator Console</div>
+        <div class="kicker">Saturn G2</div>
         <h1>Saturn Remote</h1>
-        <div class="subtitle">
-          A denser browser console for G2 receive work: persistent frequency deck, center-first panadapter,
-          compact control rails, and a cleaner operator hierarchy than the current “dashboard card” pattern.
-        </div>
       </div>
       <div class="hero-actions">
         <span class="status-chip ghost" id="static-wsdiag-marker">Diag loading</span>
@@ -3721,6 +4308,29 @@
                           </div>
                           <div class="setup-inline-fields">
                             <div class="setup-row">
+                              <label class="label" for="setup-dsp-nr2-gain-method">NR2 Gain</label>
+                              <select class="field" id="setup-dsp-nr2-gain-method">
+                                <option value="GAUSSIAN">Gaussian</option>
+                                <option value="GAUSSIAN_LOG">Gaussian Log</option>
+                                <option value="GAMMA">Gamma</option>
+                                <option value="TRAINED">Trained</option>
+                              </select>
+                            </div>
+                            <div class="setup-row">
+                              <label class="label" for="setup-dsp-nr2-npe-method">NR2 Noise Estimate</label>
+                              <select class="field" id="setup-dsp-nr2-npe-method">
+                                <option value="OSMS">OSMS</option>
+                                <option value="MMSE">MMSE</option>
+                                <option value="NSTAT">NSTAT</option>
+                              </select>
+                            </div>
+                          </div>
+                          <label class="toggle-field">
+                            <span>NR2 Post Filter</span>
+                            <input id="setup-dsp-nr2-post-filter" type="checkbox" checked />
+                          </label>
+                          <div class="setup-inline-fields">
+                            <div class="setup-row">
                               <label class="label" for="setup-dsp-anr-taps">ANR Taps</label>
                               <input class="field" id="setup-dsp-anr-taps" type="number" min="1" max="128" step="1" value="64" />
                             </div>
@@ -3792,6 +4402,84 @@
                             <label class="label" for="setup-tx-timeout-seconds">Max TX Duration (seconds)</label>
                             <input class="field" id="setup-tx-timeout-seconds" type="number" min="10" max="600" step="1" value="180" />
                             <div class="setup-readout" id="setup-tx-timeout-readout">3:00</div>
+                          </div>
+                        </div>
+                      </div>
+                      <div class="setup-section">
+                        <div class="setup-section-title">WDSP 2.00 Phase Rotator</div>
+                        <label class="toggle-field">
+                          <span>Phase Rotator</span>
+                          <input id="setup-tx-phase-rotator-enabled" type="checkbox" />
+                        </label>
+                        <label class="toggle-field">
+                          <span>Auto Corner</span>
+                          <input id="setup-tx-phase-rotator-auto" type="checkbox" />
+                        </label>
+                        <div class="setup-row">
+                          <label class="label" for="setup-tx-phase-rotator-corner">Corner Frequency</label>
+                          <input id="setup-tx-phase-rotator-corner" type="range" min="50" max="2000" step="1" value="338" />
+                          <div class="setup-readout" id="setup-tx-phase-rotator-corner-readout">338 Hz</div>
+                        </div>
+                      </div>
+                      <div class="setup-section" id="setup-tx-two-tone-section">
+                        <div class="setup-section-title">Two-Tone Test</div>
+                        <div class="setup-button-row" style="grid-template-columns: minmax(0, 1fr);">
+                          <button class="btn" id="two-tone-btn" type="button">2-Tone Test Off</button>
+                        </div>
+                        <div class="setup-inline-fields">
+                          <div class="setup-row">
+                            <label class="label" for="two-tone-freq1">Tone 1 Frequency</label>
+                            <input id="two-tone-freq1" type="range" min="50" max="2500" step="10" value="700" />
+                            <div class="setup-readout" id="two-tone-freq1-readout">700 Hz</div>
+                          </div>
+                          <div class="setup-row">
+                            <label class="label" for="two-tone-freq2">Tone 2 Frequency</label>
+                            <input id="two-tone-freq2" type="range" min="100" max="4000" step="10" value="1900" />
+                            <div class="setup-readout" id="two-tone-freq2-readout">1900 Hz</div>
+                          </div>
+                          <div class="setup-row">
+                            <label class="label" for="two-tone-level">Tone Level</label>
+                            <input id="two-tone-level" type="range" min="-40" max="0" step="0.5" value="0" />
+                            <div class="setup-readout" id="two-tone-level-readout">0.0 dB</div>
+                          </div>
+                          <div class="setup-row">
+                            <label class="label" for="two-tone-delay">Tone 2 Delay</label>
+                            <input id="two-tone-delay" type="range" min="0" max="1000" step="10" value="0" />
+                            <div class="setup-readout" id="two-tone-delay-readout">0 ms</div>
+                          </div>
+                        </div>
+                        <label class="toggle-field"><span>Invert On LSB/DIGL/CWL</span><input id="two-tone-invert-lsb" type="checkbox" checked /></label>
+                      </div>
+                      <div class="setup-section" id="setup-tx-puresignal-section">
+                        <div class="setup-section-title">PureSignal</div>
+                        <div class="setup-inline-fields">
+                          <label class="toggle-field"><span>PureSignal</span><input id="setup-tx-puresignal-enabled" type="checkbox" /></label>
+                          <label class="toggle-field"><span>Auto Attenuation</span><input id="setup-tx-puresignal-auto-attenuate" type="checkbox" checked /></label>
+                        </div>
+                        <div class="setup-row">
+                          <label class="label" for="setup-tx-puresignal-attenuation">Feedback Attenuation</label>
+                          <input id="setup-tx-puresignal-attenuation" type="range" min="0" max="31" step="1" value="0" />
+                          <div class="setup-readout" id="setup-tx-puresignal-attenuation-readout">0 dB</div>
+                        </div>
+                        <div class="setup-button-row" style="grid-template-columns: minmax(0, 1fr);">
+                          <button class="btn ghost" id="setup-tx-puresignal-reset" type="button">Reset Calibration</button>
+                        </div>
+                        <div class="setup-inline-fields">
+                          <div class="setup-row">
+                            <span class="label">State</span>
+                            <div class="setup-readout" id="setup-tx-puresignal-state">Off</div>
+                          </div>
+                          <div class="setup-row">
+                            <span class="label">Feedback</span>
+                            <div class="setup-readout" id="setup-tx-puresignal-feedback">0</div>
+                          </div>
+                          <div class="setup-row">
+                            <span class="label">Calibrations</span>
+                            <div class="setup-readout" id="setup-tx-puresignal-calibrations">0</div>
+                          </div>
+                          <div class="setup-row">
+                            <span class="label">Correction</span>
+                            <div class="setup-readout" id="setup-tx-puresignal-correcting">Bypassed</div>
                           </div>
                         </div>
                       </div>
@@ -3999,6 +4687,7 @@
                   <button class="band-btn" data-band="24940000" type="button">12m</button>
                   <button class="band-btn" data-band="28400000" type="button">10m</button>
                   <button class="band-btn" data-band="50150000" type="button">6m</button>
+                  <button class="band-btn" data-band="99500000" data-mode="WFM" type="button">FM</button>
                 </div>
               </div>
             </div>
@@ -4019,11 +4708,24 @@
                 <button class="mode-btn" data-mode="AM" type="button">AM</button>
                 <button class="mode-btn warm" data-mode="SAM" type="button">SAM</button>
                 <button class="mode-btn" data-mode="FM" type="button">FM</button>
+                <button class="mode-btn" id="wfm-mode-btn" data-mode="WFM" type="button" disabled>WFM</button>
                 <button class="mode-btn" data-mode="DIGU" type="button">DIGU</button>
                 <button class="mode-btn" data-mode="DIGL" type="button">DIGL</button>
                 <button class="mode-btn" data-mode="CWU" type="button">CWU</button>
                 <button class="mode-btn" data-mode="CWL" type="button">CWL</button>
               </div>
+            </div>
+            <div class="wbfm-controls" id="wbfm-controls" hidden>
+              <div class="wbfm-status-row">
+                <span class="label">FM Broadcast</span>
+                <span class="status-chip ghost" id="wbfm-stereo-badge">Mono</span>
+              </div>
+              <label class="label" for="wbfm-deemphasis">De-emphasis</label>
+              <select class="field" id="wbfm-deemphasis">
+                <option value="NA_75US">North America 75 us</option>
+                <option value="EU_50US">Europe 50 us</option>
+                <option value="OFF">Off</option>
+              </select>
             </div>
           </div>
         </div>
@@ -4039,6 +4741,7 @@
             </div>
             <div class="display-pill-row">
               <span class="display-pill mono" id="mode-readout">USB</span>
+              <span class="display-pill mono" id="wbfm-stereo-pill" hidden>FM Mono</span>
               <span class="display-pill mono" id="sample-rate-readout">192 kHz</span>
               <span class="display-pill mono" id="display-resolution">Display: --</span>
               <button class="btn eq-enable-btn" id="wake-lock-btn" type="button" style="font-size:11px;padding:4px 10px;">Stay Awake</button>
@@ -4313,7 +5016,7 @@
               <summary>
                 <span>
                   <span class="tx-advanced-title">TX Setup</span>
-                  <span class="tx-advanced-subtitle">Noise gate, TX filter, and 2-tone test</span>
+                  <span class="tx-advanced-subtitle">Noise gate and TX filter</span>
                 </span>
                 <span class="tx-advanced-status" id="tx-advanced-status">Gate ON | 50-3050 Hz</span>
               </summary>
@@ -4349,44 +5052,6 @@
                   </div>
                 </div>
 
-                <div style="margin-top:10px;">
-                  <button class="btn" id="two-tone-btn" type="button" style="width:100%;font-size:12px;">2-Tone Test Off</button>
-                </div>
-                <div class="field-row" style="margin-top:10px;">
-                  <div class="range-wrap">
-                    <div class="row spread">
-                      <span class="label" style="margin:0;">2-Tone F1</span>
-                      <span class="mono small" id="two-tone-freq1-readout">700 Hz</span>
-                    </div>
-                    <input id="two-tone-freq1" type="range" min="50" max="2500" step="10" value="700" />
-                  </div>
-                  <div class="range-wrap">
-                    <div class="row spread">
-                      <span class="label" style="margin:0;">2-Tone F2</span>
-                      <span class="mono small" id="two-tone-freq2-readout">1900 Hz</span>
-                    </div>
-                    <input id="two-tone-freq2" type="range" min="100" max="4000" step="10" value="1900" />
-                  </div>
-                </div>
-                <div class="field-row">
-                  <div class="range-wrap">
-                    <div class="row spread">
-                      <span class="label" style="margin:0;">2-Tone Level</span>
-                      <span class="mono small" id="two-tone-level-readout">0.0 dB</span>
-                    </div>
-                    <input id="two-tone-level" type="range" min="-40" max="0" step="0.5" value="0" />
-                  </div>
-                  <div class="range-wrap">
-                    <div class="row spread">
-                      <span class="label" style="margin:0;">Tone 2 Delay</span>
-                      <span class="mono small" id="two-tone-delay-readout">0 ms</span>
-                    </div>
-                    <input id="two-tone-delay" type="range" min="0" max="1000" step="10" value="0" />
-                  </div>
-                </div>
-                <div class="field-row">
-                  <label class="toggle-field"><span>Invert On LSB/DIGL/CWL</span><input id="two-tone-invert-lsb" type="checkbox" checked /></label>
-                </div>
               </div>
             </details>
           </div>
@@ -4418,6 +5083,7 @@
         <button class="btn ghost" type="button" data-freq-band="24950000" data-freq-label="12m">12m</button>
         <button class="btn ghost" type="button" data-freq-band="28400000" data-freq-label="10m">10m</button>
         <button class="btn ghost" type="button" data-freq-band="50125000" data-freq-label="6m">6m</button>
+        <button class="btn ghost" type="button" data-freq-band="99500000" data-freq-label="FM" data-freq-mode="WFM">FM</button>
       </div>
       <div class="freq-entry-keypad" aria-label="Numeric keypad">
         <button class="btn ghost" type="button" data-freq-key="1">1</button>
@@ -4695,7 +5361,7 @@
     const CSRF_HEADER_NAME = "X-Saturn-CSRF";
     const CSRF_HEADER_VALUE = "1";
     const ALLOWED_SAMPLE_RATES = Object.freeze([48000, 96000, 192000, 384000]);
-    const ALLOWED_DEMOD_MODES = Object.freeze(["USB", "LSB", "AM", "SAM", "FM", "DIGU", "DIGL", "CWU", "CWL"]);
+    const ALLOWED_DEMOD_MODES = Object.freeze(["USB", "LSB", "AM", "SAM", "FM", "WFM", "DIGU", "DIGL", "CWU", "CWL"]);
     const WATERFALL_PALETTES = Object.freeze(["classic", "ember", "ice", "forest"]);
     const HAM_BAND_EDGES_HZ = Object.freeze([
       { start: 1800000, end: 2000000, label: "160m" },
@@ -4709,6 +5375,7 @@
       { start: 24890000, end: 24990000, label: "12m" },
       { start: 28000000, end: 29700000, label: "10m" },
       { start: 50000000, end: 54000000, label: "6m" },
+      { start: 88000000, end: 108000000, label: "FM" },
     ]);
     const RX_AUDIO_FRAME_FLOATS = 2048;
     const RX_AUDIO_START_PREROLL_SEC = 0.008;
@@ -5112,6 +5779,10 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     let operatorDetailReturnFocus = null;
     let rxNbThresholdSendTimer = null;
     let rxNbThresholdSendPending = false;
+    let pureSignalOperatorLogTimer = null;
+    let pureSignalOperatorLogReasons = new Set();
+    let pureSignalOperatorTelemetryLastAt = 0;
+    let pureSignalFeedbackGapFaultActive = false;
 
     const FftProcessor = globalThis.SaturnRemoteNext.FftProcessor;
 
@@ -5975,6 +6646,96 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       return $("event-log")?.textContent?.trim() || "";
     }
 
+    function pureSignalTelemetrySummary(value = state) {
+      const maxTx = Number(value.pureSignalMaxTx);
+      return [
+        `state=${value.pureSignalState || "off"}`,
+        `feedback=${Math.round(Number(value.pureSignalFeedbackLevel) || 0)}`,
+        `attenuation=${clampPureSignalAttenuationDb(value.pureSignalAttenuationDb)}dB`,
+        `calibrations=${Math.max(0, Math.round(Number(value.pureSignalCalibrationCount) || 0))}`,
+        `correcting=${value.pureSignalCorrecting ? 1 : 0}`,
+        `maxTx=${Number.isFinite(maxTx) ? maxTx.toFixed(4) : "0.0000"}`,
+        `packets=${Math.max(0, Math.round(Number(value.pureSignalFeedbackPackets) || 0))}`,
+        `gaps=${Math.max(0, Math.round(Number(value.pureSignalFeedbackGaps) || 0))}`,
+      ].join(" ");
+    }
+
+    function flushPureSignalOperatorTelemetry() {
+      pureSignalOperatorLogTimer = null;
+      if (!pureSignalOperatorLogReasons.size) return;
+      const reasons = Array.from(pureSignalOperatorLogReasons).join(", ");
+      pureSignalOperatorLogReasons.clear();
+      pureSignalOperatorTelemetryLastAt = performance.now();
+      logEvent(`PureSignal ${reasons}: ${pureSignalTelemetrySummary()}`);
+    }
+
+    function queuePureSignalOperatorTelemetry(reason) {
+      pureSignalOperatorLogReasons.add(reason);
+      if (pureSignalOperatorLogTimer) return;
+      pureSignalOperatorLogTimer = window.setTimeout(flushPureSignalOperatorTelemetry, 100);
+    }
+
+    function syncPureSignalOperatorTelemetry(previous, next) {
+      if (previous.pureSignalEnabled !== next.pureSignalEnabled) {
+        queuePureSignalOperatorTelemetry(next.pureSignalEnabled ? "enabled" : "disabled");
+      }
+      if (previous.pureSignalAutoAttenuate !== next.pureSignalAutoAttenuate) {
+        queuePureSignalOperatorTelemetry(
+          `auto attenuation ${next.pureSignalAutoAttenuate ? "on" : "off"}`
+        );
+      }
+      if (previous.pureSignalState !== next.pureSignalState) {
+        queuePureSignalOperatorTelemetry(
+          `state ${previous.pureSignalState || "off"}->${next.pureSignalState || "off"}`
+        );
+        if (next.pureSignalState === "fault") {
+          recordOperatorFault("PureSignal feedback fault", "warn", false);
+        } else if (previous.pureSignalState === "fault") {
+          clearOperatorFault("PureSignal feedback fault", false);
+        }
+      }
+      if (previous.pureSignalAttenuationDb !== next.pureSignalAttenuationDb) {
+        queuePureSignalOperatorTelemetry(
+          `attenuation ${clampPureSignalAttenuationDb(previous.pureSignalAttenuationDb)}->${clampPureSignalAttenuationDb(next.pureSignalAttenuationDb)}dB`
+        );
+      }
+      if (previous.pureSignalCalibrationCount !== next.pureSignalCalibrationCount) {
+        queuePureSignalOperatorTelemetry(
+          `calibration ${Math.max(0, Number(previous.pureSignalCalibrationCount) || 0)}->${Math.max(0, Number(next.pureSignalCalibrationCount) || 0)}`
+        );
+      }
+      if (previous.pureSignalCorrecting !== next.pureSignalCorrecting) {
+        queuePureSignalOperatorTelemetry(
+          next.pureSignalCorrecting ? "correction engaged" : "correction bypassed"
+        );
+      }
+
+      const previousGaps = Math.max(0, Number(previous.pureSignalFeedbackGaps) || 0);
+      const nextGaps = Math.max(0, Number(next.pureSignalFeedbackGaps) || 0);
+      if (nextGaps > previousGaps) {
+        queuePureSignalOperatorTelemetry(`feedback gaps +${Math.round(nextGaps - previousGaps)}`);
+        if (!pureSignalFeedbackGapFaultActive) {
+          pureSignalFeedbackGapFaultActive = true;
+          recordOperatorFault("PureSignal feedback gaps", "warn", false);
+        }
+      } else if (nextGaps === 0 && pureSignalFeedbackGapFaultActive) {
+        pureSignalFeedbackGapFaultActive = false;
+        clearOperatorFault("PureSignal feedback gaps", false);
+      }
+
+      const feedbackAdvanced = next.pureSignalFeedbackPackets !== previous.pureSignalFeedbackPackets;
+      const active = next.pureSignalEnabled &&
+        (next.txPhase !== "rx" || next.moxRequested || next.txEnabled) &&
+        Number(next.pureSignalFeedbackPackets) > 0;
+      if (
+        active &&
+        feedbackAdvanced &&
+        performance.now() - pureSignalOperatorTelemetryLastAt >= 5000
+      ) {
+        queuePureSignalOperatorTelemetry("telemetry sample");
+      }
+    }
+
     function compactOperatorTrace(logText) {
       const rawLines = String(logText || "")
         .split("\n")
@@ -6317,8 +7078,13 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       normalizeNrMode,
       normalizeNbMode,
       normalizeAgcMode,
+      normalizeNr2GainMethod,
+      normalizeNr2NpeMethod,
+      normalizeWbfmDeemphasis,
       clampRxVolumeDb,
       clampRxNoiseReductionLevel,
+      clampTxPhaseRotatorCornerHz,
+      clampPureSignalAttenuationDb,
       clampRxNbThreshold,
       clampAgcGain,
       clampDspTapCount,
@@ -6853,8 +7619,10 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       const savedEntry = newBandKey ? state.bandMemory[newBandKey] : null;
       const targetHz = (savedEntry && savedEntry.frequency > 0) ? savedEntry.frequency : buttonHz;
       rememberCurrentBandSettings();
+      const requestedMode = button.dataset.freqMode;
+      const modeChanged = requestedMode ? selectReceiveMode(requestedMode) : false;
       setFrequency(targetHz, true, { rememberBand: false });
-      if (applyBandMemoryForFrequency(targetHz)) {
+      if (applyBandMemoryForFrequency(targetHz) || modeChanged) {
         sendCurrentRadioPrefsToBridge();
       }
       resumeRxMediaAfterBandChange("band recall");
@@ -7122,6 +7890,20 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       state.rxFilterShiftHz = 0;
       state.txFilterLow = cuts.txLow;
       state.txFilterHigh = cuts.txHigh;
+    }
+
+    function selectReceiveMode(mode) {
+      const normalized = normalizeDemodMode(mode);
+      if (normalized === "WFM" && !state.rxWbfmSupported) {
+        logEvent("WFM is unavailable in the connected WDSP build");
+        return false;
+      }
+      state.mode = normalized;
+      if (normalized === "WFM") {
+        state.sampleRate = 192000;
+      }
+      applyModeDefaultFilters(normalized);
+      return true;
     }
 
     function currentRadioPrefs() {
@@ -7675,6 +8457,9 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       if ($("display-waterfall-speed-readout")) $("display-waterfall-speed-readout").textContent = `${prefs.waterfallSpeed}x`;
       setValue("setup-dsp-nr-mode", radio.rxNoiseReductionMode);
       setValue("setup-dsp-nr-level", radio.rxNoiseReductionLevel);
+      setValue("setup-dsp-nr2-gain-method", radio.rxNr2GainMethod);
+      setValue("setup-dsp-nr2-npe-method", radio.rxNr2NpeMethod);
+      setChecked("setup-dsp-nr2-post-filter", radio.rxNr2PostFilterEnabled);
       setValue("setup-dsp-anr-taps", radio.rxAnrTaps);
       setValue("setup-dsp-anr-delay", radio.rxAnrDelay);
       setValue("setup-dsp-anr-gain", safeFixed(radio.rxAnrGain, 6, "0.000200"));
@@ -7687,8 +8472,12 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       if ($("setup-dsp-nr-level-readout")) {
         $("setup-dsp-nr-level-readout").textContent = `${radio.rxNoiseReductionLevel}%`;
       }
-      const nrLevelDisabled = radio.rxNoiseReductionMode === "OFF" || radio.rxNoiseReductionMode === "NR3";
+      const nrLevelDisabled = radio.rxNoiseReductionMode === "OFF";
       if ($("setup-dsp-nr-level")) $("setup-dsp-nr-level").disabled = nrLevelDisabled;
+      const nr2FieldsDisabled = radio.rxNoiseReductionMode !== "NR2";
+      ["setup-dsp-nr2-gain-method", "setup-dsp-nr2-npe-method", "setup-dsp-nr2-post-filter"].forEach((id) => {
+        if ($(id)) $(id).disabled = nr2FieldsDisabled;
+      });
       const anrFieldsDisabled = radio.rxNoiseReductionMode !== "NR1";
       ["setup-dsp-anr-taps", "setup-dsp-anr-delay", "setup-dsp-anr-gain", "setup-dsp-anr-leakage",
         "setup-dsp-anr-thetis-btn", "setup-dsp-anr-wide-btn"].forEach((id) => {
@@ -7696,6 +8485,53 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       });
       setChecked("setup-tx-timeout-enabled", state.txTimeoutEnabled);
       setValue("setup-tx-timeout-seconds", state.txTimeoutSeconds);
+      setChecked("setup-tx-phase-rotator-enabled", radio.txPhaseRotatorEnabled);
+      setChecked("setup-tx-phase-rotator-auto", radio.txPhaseRotatorAuto);
+      setValue("setup-tx-phase-rotator-corner", radio.txPhaseRotatorCornerHz);
+      if ($("setup-tx-phase-rotator-corner-readout")) {
+        $("setup-tx-phase-rotator-corner-readout").textContent = `${radio.txPhaseRotatorCornerHz} Hz`;
+      }
+      const phaseRotatorModeDisabled = radio.mode === "DIGU" || radio.mode === "DIGL";
+      if ($("setup-tx-phase-rotator-enabled")) {
+        $("setup-tx-phase-rotator-enabled").disabled = phaseRotatorModeDisabled;
+      }
+      if ($("setup-tx-phase-rotator-auto")) {
+        $("setup-tx-phase-rotator-auto").disabled = phaseRotatorModeDisabled || !radio.txPhaseRotatorEnabled;
+      }
+      if ($("setup-tx-phase-rotator-corner")) {
+        $("setup-tx-phase-rotator-corner").disabled = phaseRotatorModeDisabled || !radio.txPhaseRotatorEnabled;
+      }
+      setChecked("setup-tx-puresignal-enabled", radio.pureSignalEnabled);
+      setChecked("setup-tx-puresignal-auto-attenuate", radio.pureSignalAutoAttenuate);
+      setValue("setup-tx-puresignal-attenuation", radio.pureSignalAttenuationDb);
+      if ($("setup-tx-puresignal-attenuation-readout")) {
+        $("setup-tx-puresignal-attenuation-readout").textContent = `${radio.pureSignalAttenuationDb} dB`;
+      }
+      if ($("setup-tx-puresignal-state")) {
+        $("setup-tx-puresignal-state").textContent = `${state.pureSignalState || "off"}`.toUpperCase();
+      }
+      if ($("setup-tx-puresignal-feedback")) {
+        $("setup-tx-puresignal-feedback").textContent = `${state.pureSignalFeedbackLevel || 0}`;
+      }
+      if ($("setup-tx-puresignal-calibrations")) {
+        $("setup-tx-puresignal-calibrations").textContent = `${state.pureSignalCalibrationCount || 0}`;
+      }
+      if ($("setup-tx-puresignal-correcting")) {
+        $("setup-tx-puresignal-correcting").textContent = state.pureSignalCorrecting ? "Correcting" : "Bypassed";
+      }
+      const pureSignalTxBusy = state.txPhase !== "rx" || state.moxRequested || state.txEnabled;
+      if ($("setup-tx-puresignal-enabled")) {
+        $("setup-tx-puresignal-enabled").disabled = pureSignalTxBusy;
+      }
+      if ($("setup-tx-puresignal-auto-attenuate")) {
+        $("setup-tx-puresignal-auto-attenuate").disabled = pureSignalTxBusy || !radio.pureSignalEnabled;
+      }
+      if ($("setup-tx-puresignal-attenuation")) {
+        $("setup-tx-puresignal-attenuation").disabled = pureSignalTxBusy || !radio.pureSignalEnabled || radio.pureSignalAutoAttenuate;
+      }
+      if ($("setup-tx-puresignal-reset")) {
+        $("setup-tx-puresignal-reset").disabled = !state.connected || !radio.pureSignalEnabled;
+      }
       if ($("setup-tx-timeout-seconds")) $("setup-tx-timeout-seconds").disabled = !state.txTimeoutEnabled;
       if ($("setup-tx-timeout-readout")) {
         const mins = Math.floor(state.txTimeoutSeconds / 60);
@@ -8269,7 +9105,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     }
 
     function passbandDragDisabled() {
-      return state.frequencyLock || txFilterOverlayActive();
+      return state.frequencyLock || state.mode === "WFM" || txFilterOverlayActive();
     }
 
     function beginPassbandDrag(role, clientX, element, pointerId) {
@@ -8944,7 +9780,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     }
 
     function rfDisabledBlocksTx() {
-      return bridgeRfDisabled() && !phase40DiagnosticTxActive();
+      return state.mode === "WFM" || (bridgeRfDisabled() && !phase40DiagnosticTxActive());
     }
 
     function phase40GeneratedTxSourceActive() {
@@ -9046,30 +9882,37 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
 
       const bandState = vfoBandState();
       const oob = bandState.state === "oob";
+      const wfmRxOnly = state.mode === "WFM";
       const rfDisabled = bridgeRfDisabled();
       const roleBlocked = clientRoleBlocksTx();
       const rfUnknown = state.connected && state.remoteTxRfEnabled == null;
-      const rfValue = rfDisabled
+      const rfValue = wfmRxOnly
+        ? "WFM RX only"
+        : (rfDisabled
         ? "RF disabled"
         : (roleBlocked
           ? (state.remoteClientRole === "viewer" ? "View only" : "Role pending")
         : (oob
           ? (active ? "TX OOB" : "OOB")
-          : (active ? "TX path active" : (state.connected ? (rfUnknown ? "RF unknown" : (ready ? "TX ready" : "TX locked")) : "TX gated"))));
-      const rfTone = rfDisabled
+          : (active ? "TX path active" : (state.connected ? (rfUnknown ? "RF unknown" : (ready ? "TX ready" : "TX locked")) : "TX gated")))));
+      const rfTone = wfmRxOnly
+        ? "rx"
+        : (rfDisabled
         ? "warn"
         : (roleBlocked
           ? "warn"
         : (oob
           ? (active ? "alarm" : "warn")
-          : (active ? "tx" : (ready ? "ok" : "warn"))));
-      const rfTitle = rfDisabled
+          : (active ? "tx" : (ready ? "ok" : "warn")))));
+      const rfTitle = wfmRxOnly
+        ? "FM broadcast stereo is receive-only"
+        : (rfDisabled
         ? "Bridge reports SATURN_REMOTE_TX_RF_ENABLED=false"
         : (roleBlocked
           ? (state.remoteClientRole === "viewer" ? "Bridge assigned viewer role" : "Waiting for bridge role before TX")
         : (oob
           ? `${formatFrequency(state.vfoA)} is outside the configured ham band plan`
-          : (state.connected ? `Reconfirm: ${txLockReasonLabel(state.txLockReason)}` : "Connect before TX")));
+          : (state.connected ? `Reconfirm: ${txLockReasonLabel(state.txLockReason)}` : "Connect before TX"))));
       setOperatorPill(
         "operator-rf-pill",
         "operator-rf-value",
@@ -9113,6 +9956,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       const source = txControlSource();
       const sourceLabel = txControlSourceLabel(source);
       const rfDisabled = bridgeRfDisabled();
+      const wfmRxOnly = state.mode === "WFM";
       const phase40Diagnostic = phase40DiagnosticTxActive();
       const rfBlocked = rfDisabledBlocksTx();
       const roleBlocked = clientRoleBlocksTx();
@@ -9125,7 +9969,9 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         : (state.txPhase === "armed" || state.moxRequested ? "armed" : (state.connected ? (ready ? "ready" : "locked") : "disabled"))));
       txZone.dataset.txState = txState;
       txZone.dataset.txSource = source || "none";
-      const stateLabel = phase40Diagnostic
+      const stateLabel = wfmRxOnly
+        ? "WFM RX ONLY"
+        : (phase40Diagnostic
         ? (state.txPhase === "keyed"
           ? (source === "ptt" ? "PTT DIAG" : "MOX DIAG")
           : (state.txPhase === "armed" || state.moxRequested ? "TX DIAG armed" : (state.connected ? (ready ? `TX DIAG · ${formatDurationClock(remainingMs)}` : "TX DIAG locked") : "Connect first")))
@@ -9137,7 +9983,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         ? (source === "ptt" ? "PTT ON AIR" : "MOX ON AIR")
         : (state.txPhase === "armed" || state.moxRequested
           ? (source === "ptt" ? "PTT armed" : "MOX armed")
-          : (state.connected ? (ready ? `TX READY · ${formatDurationClock(remainingMs)}` : "TX LOCKED") : "Connect first")))));
+          : (state.connected ? (ready ? `TX READY · ${formatDurationClock(remainingMs)}` : "TX LOCKED") : "Connect first"))))));
       $("tx-zone-state").textContent = stateLabel;
       const sourceEl = $("tx-zone-source");
       if (sourceEl) {
@@ -9154,7 +10000,9 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         : (active ? "Starting" : "Idle");
       $("tx-zone-mic-dot").classList.toggle("live", Boolean(state.micCapturing));
       updateTxMiniMeters();
-      $("tx-zone-hint").textContent = phase40Diagnostic
+      $("tx-zone-hint").textContent = wfmRxOnly
+        ? "FM broadcast stereo is receive-only"
+        : (phase40Diagnostic
         ? "Phase 40 diagnostic: bridge RF output remains disabled"
         : (rfBlocked
         ? "Bridge RF output is disabled"
@@ -9164,10 +10012,12 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         ? (active
           ? (source === "ptt" ? "Release PTT or press Esc to unkey" : "Tap MOX again or press Esc to unkey")
           : (ready ? "Hold PTT to key, or tap MOX to latch" : `Tap PTT or MOX to arm after ${txLockReasonLabel(state.txLockReason)}`))
-        : "Connect before transmit")));
+        : "Connect before transmit"))));
       const ptt = $("ptt-btn");
       if (ptt) {
-        ptt.textContent = phase40Diagnostic
+        ptt.textContent = wfmRxOnly
+          ? "RX ONLY"
+          : (phase40Diagnostic
           ? (active
             ? (source === "ptt" ? "PTT DIAG" : "TX DIAG")
             : (state.connected ? (ready ? "PTT DIAG" : "ARM DIAG") : "CONNECT"))
@@ -9177,7 +10027,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
           ? (state.remoteClientRole === "viewer" ? "VIEW" : "WAIT")
           : (active
           ? (source === "ptt" ? (state.txPhase === "keyed" ? "PTT ON AIR" : "PTT HOLD") : (state.txPhase === "keyed" ? "ON AIR" : "TX ARM"))
-          : (state.connected ? (ready ? "PTT" : "TAP TO ARM") : "CONNECT"))));
+          : (state.connected ? (ready ? "PTT" : "TAP TO ARM") : "CONNECT")))));
         ptt.classList.toggle("active", active && source === "ptt");
         ptt.disabled = rfBlocked || roleBlocked;
         ptt.setAttribute("aria-pressed", active && source === "ptt" ? "true" : "false");
@@ -9247,6 +10097,25 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       updateFrequencyReadout($("operator-center-readout"), state.dds);
       $("mode-readout").textContent = state.mode;
       $("vfo-mode-tag").textContent = state.mode;
+      const wfmActive = state.mode === "WFM";
+      const wfmControls = $("wbfm-controls");
+      if (wfmControls) wfmControls.hidden = !wfmActive;
+      const wfmStereoText = state.rxWbfmStereoDetected ? "Stereo" : "Mono";
+      const wfmBadge = $("wbfm-stereo-badge");
+      if (wfmBadge) {
+        wfmBadge.textContent = wfmStereoText;
+        wfmBadge.classList.toggle("active", state.rxWbfmStereoDetected);
+      }
+      const wfmPill = $("wbfm-stereo-pill");
+      if (wfmPill) {
+        wfmPill.hidden = !wfmActive;
+        wfmPill.textContent = `FM ${wfmStereoText}`;
+        wfmPill.classList.toggle("active", state.rxWbfmStereoDetected);
+      }
+      const wfmDeemphasis = $("wbfm-deemphasis");
+      if (wfmDeemphasis && wfmDeemphasis.value !== state.rxWbfmDeemphasis) {
+        wfmDeemphasis.value = state.rxWbfmDeemphasis;
+      }
       const bandState = vfoBandState();
       const bandTag = $("vfo-band-tag");
       if (bandTag) {
@@ -9282,15 +10151,15 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       $("rx-anf-btn").classList.toggle("active", state.anfEnabled);
       $("agc-gain-readout").textContent = `${state.agcGain}`;
       $("zoom-readout").textContent = `${safeFixed(state.displayZoom, 1, "1.0")}x`;
-      $("filter-low-readout").textContent = `${state.filterLow} Hz`;
-      $("filter-high-readout").textContent = `${state.filterHigh} Hz`;
+      $("filter-low-readout").textContent = wfmActive ? "Fixed" : `${state.filterLow} Hz`;
+      $("filter-high-readout").textContent = wfmActive ? "180 kHz RF" : `${state.filterHigh} Hz`;
       $("tx-drive-readout").textContent = `${state.txDrive} W`;
       $("tx-mic-gain-readout").textContent = `${safeFixed(state.txMicGainDb, 1, "0.0")} dB`;
       $("tx-filter-low-readout").textContent = `${state.txFilterLow} Hz`;
       $("tx-filter-high-readout").textContent = `${state.txFilterHigh} Hz`;
       const txAdvancedStatus = $("tx-advanced-status");
       if (txAdvancedStatus) {
-        txAdvancedStatus.textContent = `Gate ${state.txNoiseGateEnabled ? "ON" : "OFF"} | ${state.txFilterLow}-${state.txFilterHigh} Hz | 2T ${state.twoToneEnabled ? "ON" : "OFF"}`;
+        txAdvancedStatus.textContent = `Gate ${state.txNoiseGateEnabled ? "ON" : "OFF"} | ${state.txFilterLow}-${state.txFilterHigh} Hz`;
       }
       $("rx-eq-enable-btn").textContent = state.rxEqEnabled ? "EQ On" : "EQ Off";
       $("rx-eq-enable-btn").classList.toggle("active", state.rxEqEnabled);
@@ -9306,8 +10175,13 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         if (slider) slider.value = `${state.cfcBands[i]}`;
         if (valEl) valEl.textContent = safeFixed(state.cfcBands[i], 1, "0.0");
       }
-      $("two-tone-btn").textContent = state.twoToneEnabled ? "2-Tone Test ON" : "2-Tone Test Off";
-      $("two-tone-btn").classList.toggle("active", state.twoToneEnabled);
+      const twoToneButton = $("two-tone-btn");
+      twoToneButton.textContent = state.twoToneEnabled ? "2-Tone Test ON" : "2-Tone Test Off";
+      twoToneButton.classList.toggle("active", state.twoToneEnabled);
+      twoToneButton.disabled = !state.twoToneEnabled && (
+        !state.connected || rfDisabledBlocksTx() || clientRoleBlocksTx()
+      );
+      twoToneButton.title = state.twoToneEnabled ? "Stop two-tone test" : "Start two-tone test";
       updateTxZone();
       $("meter-readout").textContent = state.meterDbmVisual == null ? "-- dBm" : `${state.meterDbmVisual.toFixed(1)} dBm`;
       const txMeterValue = state.txMeterMode === "avg" ? state.txPowerAvg : state.txPowerPeak;
@@ -9374,10 +10248,15 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     function syncActiveButtons() {
       document.querySelectorAll("#mode-grid .mode-btn").forEach((button) => {
         button.classList.toggle("active", button.dataset.mode === state.mode);
+        if (button.dataset.mode === "WFM") {
+          button.disabled = !state.rxWbfmSupported;
+          button.title = state.rxWbfmSupported ? "FM broadcast stereo" : "Requires WDSP 2.00 WFM support";
+        }
       });
       document.querySelectorAll("#band-grid .band-btn").forEach((button) => {
         const target = Number(button.dataset.band);
         button.classList.toggle("active", Math.abs(target - state.vfoA) < 20000);
+        if (button.dataset.mode === "WFM") button.disabled = !state.rxWbfmSupported;
       });
       const sampleRate = `${state.sampleRate}`;
       if ($("sample-rate").value !== sampleRate) {
@@ -9386,6 +10265,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
           $("sample-rate").value = sampleRate;
         }
       }
+      $("sample-rate").disabled = state.mode === "WFM";
       const rxAdc = `${state.rxAdc}`;
       if ($("rx-adc").value !== rxAdc) {
         $("rx-adc").value = rxAdc;
@@ -9410,16 +10290,24 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       if ($("display-zoom").value !== zoomLevel) {
         $("display-zoom").value = zoomLevel;
       }
-      $("rx-nr-level").disabled = state.rxNoiseReductionMode === "OFF" || state.rxNoiseReductionMode === "NR3";
-      $("rx-nb-threshold").disabled = false;
+      const wfmActive = state.mode === "WFM";
+      $("rx-nr-level").disabled = wfmActive || state.rxNoiseReductionMode === "OFF" || state.rxNoiseReductionMode === "NR3";
+      $("rx-nb-threshold").disabled = wfmActive;
+      $("agc-gain").disabled = wfmActive;
+      $("filter-low").disabled = wfmActive;
+      $("filter-high").disabled = wfmActive;
+      $("rx-anf-btn").disabled = wfmActive;
       document.querySelectorAll("#rx-nr-grid .mode-btn").forEach((button) => {
         button.classList.toggle("active", normalizeNrMode(button.dataset.nrMode) === state.rxNoiseReductionMode);
+        button.disabled = wfmActive;
       });
       document.querySelectorAll("#rx-nb-grid .mode-btn").forEach((button) => {
         button.classList.toggle("active", normalizeNbMode(button.dataset.nbMode) === state.rxNbMode);
+        button.disabled = wfmActive;
       });
       document.querySelectorAll("#rx-agc-grid .mode-btn").forEach((button) => {
         button.classList.toggle("active", normalizeAgcMode(button.dataset.agcMode) === state.agcMode);
+        button.disabled = wfmActive;
       });
       const agcGain = `${state.agcGain}`;
       if ($("agc-gain").value !== agcGain) {
@@ -9933,6 +10821,16 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         `cfcEnabled=${state.cfcEnabled ? 1 : 0}`,
         `cfcPrecomp=${Number(state.cfcPrecomp || 0).toFixed(1)}`,
         `cfcBands=${nonzeroBands(state.cfcBands)}`,
+        `pureSignalEnabled=${state.pureSignalEnabled ? 1 : 0}`,
+        `pureSignalAutoAttenuate=${state.pureSignalAutoAttenuate ? 1 : 0}`,
+        `pureSignalState=${state.pureSignalState || "off"}`,
+        `pureSignalFeedbackLevel=${Math.round(Number(state.pureSignalFeedbackLevel) || 0)}`,
+        `pureSignalAttenuationDb=${clampPureSignalAttenuationDb(state.pureSignalAttenuationDb)}`,
+        `pureSignalCalibrationCount=${Math.max(0, Math.round(Number(state.pureSignalCalibrationCount) || 0))}`,
+        `pureSignalCorrecting=${state.pureSignalCorrecting ? 1 : 0}`,
+        `pureSignalMaxTx=${Number(state.pureSignalMaxTx || 0).toFixed(4)}`,
+        `pureSignalFeedbackPackets=${Math.max(0, Math.round(Number(state.pureSignalFeedbackPackets) || 0))}`,
+        `pureSignalFeedbackGaps=${Math.max(0, Math.round(Number(state.pureSignalFeedbackGaps) || 0))}`,
         `txMicSeq=${state.txMicSeq || 0}`,
         `txMicDrops=${state.txMicDroppedCount || 0}`,
         `txUplinkHwm=${Math.round(state.txUplinkBufferedHwmBytes || 0)}`,
@@ -11520,6 +12418,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       }
 
       Object.assign(state, next);
+      syncPureSignalOperatorTelemetry(previous, state);
       if (events.ready) {
         scheduleRxMediaStartupResume("bridge ready");
       }
@@ -12265,6 +13164,26 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       $("setup-dsp-nr-level").addEventListener("change", () => {
         sendTci(`rx_nr_level:0,${state.rxNoiseReductionLevel};`);
       });
+      $("setup-dsp-nr2-gain-method").addEventListener("change", () => {
+        state.rxNr2GainMethod = normalizeNr2GainMethod($("setup-dsp-nr2-gain-method").value);
+        saveRadioPrefs();
+        sendTci(`rx_nr2_gain_method:0,${state.rxNr2GainMethod};`);
+      });
+      $("setup-dsp-nr2-npe-method").addEventListener("change", () => {
+        state.rxNr2NpeMethod = normalizeNr2NpeMethod($("setup-dsp-nr2-npe-method").value);
+        saveRadioPrefs();
+        sendTci(`rx_nr2_npe_method:0,${state.rxNr2NpeMethod};`);
+      });
+      $("setup-dsp-nr2-post-filter").addEventListener("change", () => {
+        state.rxNr2PostFilterEnabled = Boolean($("setup-dsp-nr2-post-filter").checked);
+        saveRadioPrefs();
+        sendTci(`rx_nr2_post_filter:0,${state.rxNr2PostFilterEnabled};`);
+      });
+      $("wbfm-deemphasis").addEventListener("change", () => {
+        state.rxWbfmDeemphasis = normalizeWbfmDeemphasis($("wbfm-deemphasis").value);
+        saveRadioPrefs();
+        sendTci(`rx_wbfm_deemphasis:0,${state.rxWbfmDeemphasis};`);
+      });
       const bindDspNumberField = (id, assign, commit) => {
         $(id).addEventListener("change", () => {
           assign($(id).value);
@@ -12320,6 +13239,50 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         state.txTimeoutSeconds = Math.max(10, Math.min(600, Math.round(Number($("setup-tx-timeout-seconds").value) || 180)));
         saveRadioPrefs();
         updateUi();
+      });
+      $("setup-tx-phase-rotator-enabled").addEventListener("change", () => {
+        state.txPhaseRotatorEnabled = Boolean($("setup-tx-phase-rotator-enabled").checked);
+        saveRadioPrefs();
+        updateUi();
+        sendTci(`tx_phase_rotator:0,${state.txPhaseRotatorEnabled};`);
+      });
+      $("setup-tx-phase-rotator-auto").addEventListener("change", () => {
+        state.txPhaseRotatorAuto = Boolean($("setup-tx-phase-rotator-auto").checked);
+        saveRadioPrefs();
+        sendTci(`tx_phase_rotator_auto:0,${state.txPhaseRotatorAuto};`);
+      });
+      $("setup-tx-phase-rotator-corner").addEventListener("input", () => {
+        state.txPhaseRotatorCornerHz = clampTxPhaseRotatorCornerHz($("setup-tx-phase-rotator-corner").value);
+        $("setup-tx-phase-rotator-corner-readout").textContent = `${state.txPhaseRotatorCornerHz} Hz`;
+      });
+      $("setup-tx-phase-rotator-corner").addEventListener("change", () => {
+        saveRadioPrefs();
+        sendTci(`tx_phase_rotator_corner:0,${state.txPhaseRotatorCornerHz};`);
+      });
+      $("setup-tx-puresignal-enabled").addEventListener("change", () => {
+        state.pureSignalEnabled = Boolean($("setup-tx-puresignal-enabled").checked);
+        saveRadioPrefs();
+        sendTci(`tx_puresignal:0,${state.pureSignalEnabled};`);
+        updateUi();
+      });
+      $("setup-tx-puresignal-auto-attenuate").addEventListener("change", () => {
+        state.pureSignalAutoAttenuate = Boolean($("setup-tx-puresignal-auto-attenuate").checked);
+        saveRadioPrefs();
+        sendTci(`tx_puresignal_auto_attenuate:0,${state.pureSignalAutoAttenuate};`);
+        updateUi();
+      });
+      $("setup-tx-puresignal-attenuation").addEventListener("input", () => {
+        state.pureSignalAttenuationDb = clampPureSignalAttenuationDb(
+          $("setup-tx-puresignal-attenuation").value
+        );
+        $("setup-tx-puresignal-attenuation-readout").textContent = `${state.pureSignalAttenuationDb} dB`;
+      });
+      $("setup-tx-puresignal-attenuation").addEventListener("change", () => {
+        saveRadioPrefs();
+        sendTci(`tx_puresignal_attenuation:0,${state.pureSignalAttenuationDb};`);
+      });
+      $("setup-tx-puresignal-reset").addEventListener("click", () => {
+        sendTci("tx_puresignal_reset:0;");
       });
       $("setup-profile-load-btn").addEventListener("click", () => {
         const name = $("setup-profile-select").value;
@@ -12604,10 +13567,10 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       });
       document.querySelectorAll("#mode-grid .mode-btn").forEach((button) => {
         button.addEventListener("click", () => {
-          state.mode = button.dataset.mode;
-          applyModeDefaultFilters(state.mode);
+          if (!selectReceiveMode(button.dataset.mode)) return;
           saveRadioPrefs();
           updateUi();
+          if (state.mode === "WFM") sendTci("iq_samplerate:192000;");
           sendTci(`modulation:0,${state.mode};`);
           sendRxFilterBand();
           sendTxFilterBand();
@@ -12620,8 +13583,10 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
           const savedEntry = newBandKey ? state.bandMemory[newBandKey] : null;
           const targetHz = (savedEntry && savedEntry.frequency > 0) ? savedEntry.frequency : buttonHz;
           rememberCurrentBandSettings();
+          const requestedMode = button.dataset.mode;
+          const modeChanged = requestedMode ? selectReceiveMode(requestedMode) : false;
           setFrequency(targetHz, true, { rememberBand: false });
-          if (applyBandMemoryForFrequency(targetHz)) {
+          if (applyBandMemoryForFrequency(targetHz) || modeChanged) {
             sendCurrentRadioPrefsToBridge();
           }
           resumeRxMediaAfterBandChange("band button");

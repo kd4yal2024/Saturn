@@ -21,7 +21,7 @@ import { clampDemodMode } from '../radio/passband';
 
 const ALLOWED_SAMPLE_RATES = [48000, 96000, 192000, 384000] as const;
 const WATERFALL_PALETTES: readonly WaterfallPalette[] = ['classic', 'ember', 'ice', 'forest'];
-const HAM_BAND_LABELS = new Set(['160m', '80m', '60m', '40m', '30m', '20m', '17m', '15m', '12m', '10m', '6m']);
+const HAM_BAND_LABELS = new Set(['160m', '80m', '60m', '40m', '30m', '20m', '17m', '15m', '12m', '10m', '6m', 'FM']);
 
 export function safeFiniteNumber(value: unknown, fallback = 0): number {
   const numeric = Number(value);
@@ -60,6 +60,36 @@ export function normalizeNrMode(value: unknown): RadioPrefs['rxNoiseReductionMod
 
 export function clampRxNoiseReductionLevel(value: unknown): number {
   return Math.max(0, Math.min(100, Math.round(safeFiniteNumber(value, DEFAULT_RADIO_PREFS.rxNoiseReductionLevel))));
+}
+
+export function normalizeNr2GainMethod(value: unknown): RadioPrefs['rxNr2GainMethod'] {
+  const text = String(value || '').trim().toUpperCase();
+  if (['GAUSSIAN', 'GAUSSIAN_LINEAR', '0'].includes(text)) return 'GAUSSIAN';
+  if (['GAUSSIAN_LOG', 'LOG', '1'].includes(text)) return 'GAUSSIAN_LOG';
+  if (['TRAINED', '3'].includes(text)) return 'TRAINED';
+  return 'GAMMA';
+}
+
+export function normalizeNr2NpeMethod(value: unknown): RadioPrefs['rxNr2NpeMethod'] {
+  const text = String(value || '').trim().toUpperCase();
+  if (['MMSE', '1'].includes(text)) return 'MMSE';
+  if (['NSTAT', '2'].includes(text)) return 'NSTAT';
+  return 'OSMS';
+}
+
+export function normalizeWbfmDeemphasis(value: unknown): RadioPrefs['rxWbfmDeemphasis'] {
+  const text = String(value || '').trim().toUpperCase();
+  if (['OFF', 'NONE', '0'].includes(text)) return 'OFF';
+  if (['EU', 'EUROPE', 'EU_50US', '50US', '2'].includes(text)) return 'EU_50US';
+  return 'NA_75US';
+}
+
+export function clampTxPhaseRotatorCornerHz(value: unknown): number {
+  return Math.max(50, Math.min(2000, Math.round(safeFiniteNumber(value, 338))));
+}
+
+export function clampPureSignalAttenuationDb(value: unknown): number {
+  return Math.max(0, Math.min(31, Math.round(safeFiniteNumber(value, 0))));
 }
 
 export function normalizeNbMode(value: unknown): RadioPrefs['rxNbMode'] {
@@ -235,6 +265,10 @@ export function normalizeRadioPrefs(input: DeepPartial<RadioPrefs> | null | unde
     rxVolumeDb: clampRxVolumeDb(source.rxVolumeDb),
     rxNoiseReductionMode: normalizeNrMode(source.rxNoiseReductionMode),
     rxNoiseReductionLevel: clampRxNoiseReductionLevel(source.rxNoiseReductionLevel),
+    rxNr2GainMethod: normalizeNr2GainMethod(source.rxNr2GainMethod),
+    rxNr2NpeMethod: normalizeNr2NpeMethod(source.rxNr2NpeMethod),
+    rxNr2PostFilterEnabled: source.rxNr2PostFilterEnabled !== false,
+    rxWbfmDeemphasis: normalizeWbfmDeemphasis(source.rxWbfmDeemphasis),
     rxNbMode: normalizeNbMode(source.rxNbMode),
     rxNbThreshold: clampRxNbThreshold(source.rxNbThreshold),
     rxAnrTaps: clampDspTapCount(source.rxAnrTaps),
@@ -261,6 +295,12 @@ export function normalizeRadioPrefs(input: DeepPartial<RadioPrefs> | null | unde
     cfcEnabled: Boolean(source.cfcEnabled),
     cfcPrecomp: safeFiniteNumber(source.cfcPrecomp, 0),
     cfcBands: sanitizeCfcBands(source.cfcBands, DEFAULT_RADIO_PREFS.cfcBands),
+    txPhaseRotatorEnabled: Boolean(source.txPhaseRotatorEnabled),
+    txPhaseRotatorAuto: Boolean(source.txPhaseRotatorAuto),
+    txPhaseRotatorCornerHz: clampTxPhaseRotatorCornerHz(source.txPhaseRotatorCornerHz),
+    pureSignalEnabled: Boolean(source.pureSignalEnabled),
+    pureSignalAutoAttenuate: source.pureSignalAutoAttenuate ?? DEFAULT_RADIO_PREFS.pureSignalAutoAttenuate,
+    pureSignalAttenuationDb: clampPureSignalAttenuationDb(source.pureSignalAttenuationDb),
     txMeterMode: normalizeTxMeterMode(source.txMeterMode),
     twoToneEnabled: Boolean(source.twoToneEnabled),
     txTwoToneFreq1: clampTwoToneFreqHz(source.txTwoToneFreq1, DEFAULT_RADIO_PREFS.txTwoToneFreq1),

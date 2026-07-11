@@ -16,6 +16,7 @@ export const HAM_BAND_EDGES_HZ: readonly BandEdge[] = Object.freeze([
   { start: 24890000, end: 24990000, label: '12m' },
   { start: 28000000, end: 29700000, label: '10m' },
   { start: 50000000, end: 54000000, label: '6m' },
+  { start: 88000000, end: 108000000, label: 'FM' },
 ]);
 
 export function bandKeyForFrequency(hz: number): string {

@@ -6,6 +6,11 @@ import {
   clampRxVolumeDb,
   normalizeNrMode,
   clampRxNoiseReductionLevel,
+  normalizeNr2GainMethod,
+  normalizeNr2NpeMethod,
+  normalizeWbfmDeemphasis,
+  clampTxPhaseRotatorCornerHz,
+  clampPureSignalAttenuationDb,
   normalizeNbMode,
   clampRxNbThreshold,
   clampDspTapCount,
@@ -102,6 +107,10 @@ export function buildAllRadioPrefsCommands(prefs: RadioPrefs): string[] {
     `rx_volume:0,0,${clampRxVolumeDb(prefs.rxVolumeDb).toFixed(1)};`,
     `rx_nr_mode:0,${normalizeNrMode(prefs.rxNoiseReductionMode)};`,
     `rx_nr_level:0,${clampRxNoiseReductionLevel(prefs.rxNoiseReductionLevel)};`,
+    `rx_nr2_gain_method:0,${normalizeNr2GainMethod(prefs.rxNr2GainMethod)};`,
+    `rx_nr2_npe_method:0,${normalizeNr2NpeMethod(prefs.rxNr2NpeMethod)};`,
+    `rx_nr2_post_filter:0,${Boolean(prefs.rxNr2PostFilterEnabled)};`,
+    `rx_wbfm_deemphasis:0,${normalizeWbfmDeemphasis(prefs.rxWbfmDeemphasis)};`,
     `rx_nb:0,${normalizeNbMode(prefs.rxNbMode)};`,
     `rx_nb_threshold:0,${clampRxNbThreshold(prefs.rxNbThreshold).toFixed(2)};`,
     ...buildAnrCommands(prefs),
@@ -124,6 +133,12 @@ export function buildAllRadioPrefsCommands(prefs: RadioPrefs): string[] {
 
   cmds.push(`tx_cfc_enable:0,${Boolean(prefs.cfcEnabled)};`);
   cmds.push(`tx_cfc_precomp:0,${(Number(prefs.cfcPrecomp) || 0).toFixed(1)};`);
+  cmds.push(`tx_phase_rotator:0,${Boolean(prefs.txPhaseRotatorEnabled)};`);
+  cmds.push(`tx_phase_rotator_auto:0,${Boolean(prefs.txPhaseRotatorAuto)};`);
+  cmds.push(`tx_phase_rotator_corner:0,${clampTxPhaseRotatorCornerHz(prefs.txPhaseRotatorCornerHz)};`);
+  cmds.push(`tx_puresignal:0,${Boolean(prefs.pureSignalEnabled)};`);
+  cmds.push(`tx_puresignal_auto_attenuate:0,${Boolean(prefs.pureSignalAutoAttenuate)};`);
+  cmds.push(`tx_puresignal_attenuation:0,${clampPureSignalAttenuationDb(prefs.pureSignalAttenuationDb)};`);
   cmds.push(...buildTwoToneCommands(prefs));
   cmds.push(`tx_two_tone:0,${Boolean(prefs.twoToneEnabled)};`);
 

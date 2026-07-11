@@ -16,7 +16,10 @@ use tungstenite::protocol::WebSocketConfig;
 use tungstenite::{accept_with_config, Message};
 
 use crate::config::BridgeConfig;
-use crate::radio_model::{AgcMode, DemodMode, NoiseBlankerMode, NoiseReductionMode, RadioModel};
+use crate::radio_model::{
+    AgcMode, DemodMode, NoiseBlankerMode, NoiseReductionMode, Nr2GainMethod, Nr2NpeMethod,
+    RadioModel, WbfmDeemphasis,
+};
 use crate::sync_ext::MutexExt;
 use crate::tx_codec::{
     tx_codec_frame_is_stale, TxCodecDecoder, TxCodecRuntimeFlags, TxDecodeError, TxMicCodec,
@@ -47,6 +50,10 @@ pub enum TciCommand {
     SetRxNoiseReductionMode(NoiseReductionMode),
     SetRxNoiseReductionEnabled(bool),
     SetRxNoiseReductionLevel(f64),
+    SetRxNr2GainMethod(Nr2GainMethod),
+    SetRxNr2NpeMethod(Nr2NpeMethod),
+    SetRxNr2PostFilterEnabled(bool),
+    SetRxWbfmDeemphasis(WbfmDeemphasis),
     SetRxAnrVals {
         taps: Option<i32>,
         delay: Option<i32>,
@@ -109,6 +116,13 @@ pub enum TciCommand {
         band: usize,
         gain_db: f64,
     },
+    SetTxPhaseRotatorEnabled(bool),
+    SetTxPhaseRotatorAuto(bool),
+    SetTxPhaseRotatorCorner(f64),
+    SetPureSignalEnabled(bool),
+    SetPureSignalAutoAttenuate(bool),
+    SetPureSignalAttenuation(u8),
+    ResetPureSignal,
     SetTxTwoToneTest(bool),
     SetTxTwoToneFreq1(f64),
     SetTxTwoToneFreq2(f64),
@@ -1320,6 +1334,30 @@ impl TciFrontend {
             model.desired.rx_noise_reduction_level
         ));
         self.send_text(format!(
+            "rx_nr2_gain_method:0,{};",
+            model.desired.rx_nr2_gain_method
+        ));
+        self.send_text(format!(
+            "rx_nr2_npe_method:0,{};",
+            model.desired.rx_nr2_npe_method
+        ));
+        self.send_text(format!(
+            "rx_nr2_post_filter:0,{};",
+            model.desired.rx_nr2_post_filter_enabled
+        ));
+        self.send_text(format!(
+            "rx_wbfm_supported:0,{};",
+            crate::wdsp::wbfm_supported()
+        ));
+        self.send_text(format!(
+            "rx_wbfm_deemphasis:0,{};",
+            model.desired.rx_wbfm_deemphasis
+        ));
+        self.send_text(format!(
+            "rx_wbfm_stereo:0,{};",
+            model.observed.rx_wbfm_stereo_detected
+        ));
+        self.send_text(format!(
             "rx_filter_band:0,{},{};",
             model.desired.filter_low_hz, model.desired.filter_high_hz
         ));
@@ -1384,6 +1422,58 @@ impl TciFrontend {
                 model.desired.cfc_bands[i]
             ));
         }
+        self.send_text(format!(
+            "tx_phase_rotator:0,{};",
+            model.desired.tx_phase_rotator_enabled
+        ));
+        self.send_text(format!(
+            "tx_phase_rotator_auto:0,{};",
+            model.desired.tx_phase_rotator_auto
+        ));
+        self.send_text(format!(
+            "tx_phase_rotator_corner:0,{:.0};",
+            model.desired.tx_phase_rotator_corner_hz
+        ));
+        self.send_text(format!(
+            "tx_puresignal:0,{};",
+            model.desired.pure_signal_enabled
+        ));
+        self.send_text(format!(
+            "tx_puresignal_auto_attenuate:0,{};",
+            model.desired.pure_signal_auto_attenuate
+        ));
+        self.send_text(format!(
+            "tx_puresignal_attenuation:0,{};",
+            model.desired.pure_signal_attenuation_db
+        ));
+        self.send_text(format!(
+            "tx_puresignal_state:0,{};",
+            model.observed.pure_signal_state
+        ));
+        self.send_text(format!(
+            "tx_puresignal_feedback:0,{};",
+            model.observed.pure_signal_feedback_level
+        ));
+        self.send_text(format!(
+            "tx_puresignal_calibration_count:0,{};",
+            model.observed.pure_signal_calibration_count
+        ));
+        self.send_text(format!(
+            "tx_puresignal_correcting:0,{};",
+            model.observed.pure_signal_correcting
+        ));
+        self.send_text(format!(
+            "tx_puresignal_max_tx:0,{:.4};",
+            model.observed.pure_signal_max_tx
+        ));
+        self.send_text(format!(
+            "tx_puresignal_feedback_packets:0,{};",
+            model.observed.pure_signal_feedback_packets
+        ));
+        self.send_text(format!(
+            "tx_puresignal_feedback_gaps:0,{};",
+            model.observed.pure_signal_feedback_gaps
+        ));
         self.send_text(format!("tx_two_tone:0,{};", model.desired.two_tone_enabled));
         self.send_text(format!(
             "tx_two_tone_freq1:0,{:.0};",
@@ -1427,7 +1517,46 @@ impl TciFrontend {
         self.publish_telemetry(model);
     }
 
+    pub fn publish_puresignal_status(&self, model: &RadioModel) {
+        self.send_text(format!(
+            "tx_puresignal_attenuation:0,{};",
+            model.desired.pure_signal_attenuation_db
+        ));
+        self.send_text(format!(
+            "tx_puresignal_state:0,{};",
+            model.observed.pure_signal_state
+        ));
+        self.send_text(format!(
+            "tx_puresignal_feedback:0,{};",
+            model.observed.pure_signal_feedback_level
+        ));
+        self.send_text(format!(
+            "tx_puresignal_calibration_count:0,{};",
+            model.observed.pure_signal_calibration_count
+        ));
+        self.send_text(format!(
+            "tx_puresignal_correcting:0,{};",
+            model.observed.pure_signal_correcting
+        ));
+        self.send_text(format!(
+            "tx_puresignal_max_tx:0,{:.4};",
+            model.observed.pure_signal_max_tx
+        ));
+        self.send_text(format!(
+            "tx_puresignal_feedback_packets:0,{};",
+            model.observed.pure_signal_feedback_packets
+        ));
+        self.send_text(format!(
+            "tx_puresignal_feedback_gaps:0,{};",
+            model.observed.pure_signal_feedback_gaps
+        ));
+    }
+
     pub fn publish_telemetry(&self, model: &RadioModel) {
+        self.send_text(format!(
+            "rx_wbfm_stereo:0,{};",
+            model.observed.rx_wbfm_stereo_detected
+        ));
         if let Some(meter_dbm) = model.observed.ddc0_meter_dbm {
             self.send_text(format!("rx_smeter:0,0,{meter_dbm:.1};"));
         }
@@ -2048,6 +2177,18 @@ fn initial_snapshot_messages(
             "rx_nr_level:0,{:.0};",
             model.desired.rx_noise_reduction_level
         ),
+        format!("rx_nr2_gain_method:0,{};", model.desired.rx_nr2_gain_method),
+        format!("rx_nr2_npe_method:0,{};", model.desired.rx_nr2_npe_method),
+        format!(
+            "rx_nr2_post_filter:0,{};",
+            model.desired.rx_nr2_post_filter_enabled
+        ),
+        format!("rx_wbfm_supported:0,{};", crate::wdsp::wbfm_supported()),
+        format!("rx_wbfm_deemphasis:0,{};", model.desired.rx_wbfm_deemphasis),
+        format!(
+            "rx_wbfm_stereo:0,{};",
+            model.observed.rx_wbfm_stereo_detected
+        ),
         format!(
             "rx_filter_band:0,{},{};",
             model.desired.filter_low_hz, model.desired.filter_high_hz
@@ -2092,6 +2233,55 @@ fn initial_snapshot_messages(
         (0..10usize).map(|i| format!("tx_cfc_band:0,{},{:.1};", i + 1, model.desired.cfc_bands[i])),
     )
     .chain([
+        format!(
+            "tx_phase_rotator:0,{};",
+            model.desired.tx_phase_rotator_enabled
+        ),
+        format!(
+            "tx_phase_rotator_auto:0,{};",
+            model.desired.tx_phase_rotator_auto
+        ),
+        format!(
+            "tx_phase_rotator_corner:0,{:.0};",
+            model.desired.tx_phase_rotator_corner_hz
+        ),
+        format!("tx_puresignal:0,{};", model.desired.pure_signal_enabled),
+        format!(
+            "tx_puresignal_auto_attenuate:0,{};",
+            model.desired.pure_signal_auto_attenuate
+        ),
+        format!(
+            "tx_puresignal_attenuation:0,{};",
+            model.desired.pure_signal_attenuation_db
+        ),
+        format!(
+            "tx_puresignal_state:0,{};",
+            model.observed.pure_signal_state
+        ),
+        format!(
+            "tx_puresignal_feedback:0,{};",
+            model.observed.pure_signal_feedback_level
+        ),
+        format!(
+            "tx_puresignal_calibration_count:0,{};",
+            model.observed.pure_signal_calibration_count
+        ),
+        format!(
+            "tx_puresignal_correcting:0,{};",
+            model.observed.pure_signal_correcting
+        ),
+        format!(
+            "tx_puresignal_max_tx:0,{:.4};",
+            model.observed.pure_signal_max_tx
+        ),
+        format!(
+            "tx_puresignal_feedback_packets:0,{};",
+            model.observed.pure_signal_feedback_packets
+        ),
+        format!(
+            "tx_puresignal_feedback_gaps:0,{};",
+            model.observed.pure_signal_feedback_gaps
+        ),
         format!("tx_two_tone:0,{};", model.desired.two_tone_enabled),
         format!(
             "tx_two_tone_freq1:0,{:.0};",
@@ -2358,6 +2548,54 @@ fn parse_tci_command_with_roles(
                 if let Ok(level) = level_text.trim().parse::<f64>() {
                     let _ = command_tx.send(TciCommand::SetRxNoiseReductionLevel(level));
                 }
+            }
+        }
+        "rx_nr2_gain_method" => {
+            let method_arg = if args.len() >= 2 {
+                args.get(1)
+            } else {
+                args.first()
+            };
+            if let Some(method_text) = method_arg {
+                let _ = command_tx.send(TciCommand::SetRxNr2GainMethod(Nr2GainMethod::from_tci(
+                    method_text,
+                )));
+            }
+        }
+        "rx_nr2_npe_method" => {
+            let method_arg = if args.len() >= 2 {
+                args.get(1)
+            } else {
+                args.first()
+            };
+            if let Some(method_text) = method_arg {
+                let _ = command_tx.send(TciCommand::SetRxNr2NpeMethod(Nr2NpeMethod::from_tci(
+                    method_text,
+                )));
+            }
+        }
+        "rx_nr2_post_filter" => {
+            let enabled_arg = if args.len() >= 2 {
+                args.get(1)
+            } else {
+                args.first()
+            };
+            if let Some(enabled_text) = enabled_arg {
+                if let Some(enabled) = parse_tci_bool(enabled_text) {
+                    let _ = command_tx.send(TciCommand::SetRxNr2PostFilterEnabled(enabled));
+                }
+            }
+        }
+        "rx_wbfm_deemphasis" => {
+            let deemphasis_arg = if args.len() >= 2 {
+                args.get(1)
+            } else {
+                args.first()
+            };
+            if let Some(deemphasis_text) = deemphasis_arg {
+                let _ = command_tx.send(TciCommand::SetRxWbfmDeemphasis(WbfmDeemphasis::from_tci(
+                    deemphasis_text,
+                )));
             }
         }
         "rx_anr_taps" => {
@@ -2842,6 +3080,82 @@ fn parse_tci_command_with_roles(
                     }
                 }
             }
+        }
+        "tx_phase_rotator" => {
+            let enabled_arg = if args.len() >= 2 {
+                args.get(1)
+            } else {
+                args.first()
+            };
+            if let Some(enabled_text) = enabled_arg {
+                if let Some(enabled) = parse_tci_bool(enabled_text) {
+                    let _ = command_tx.send(TciCommand::SetTxPhaseRotatorEnabled(enabled));
+                }
+            }
+        }
+        "tx_phase_rotator_auto" => {
+            let enabled_arg = if args.len() >= 2 {
+                args.get(1)
+            } else {
+                args.first()
+            };
+            if let Some(enabled_text) = enabled_arg {
+                if let Some(enabled) = parse_tci_bool(enabled_text) {
+                    let _ = command_tx.send(TciCommand::SetTxPhaseRotatorAuto(enabled));
+                }
+            }
+        }
+        "tx_phase_rotator_corner" => {
+            let corner_arg = if args.len() >= 2 {
+                args.get(1)
+            } else {
+                args.first()
+            };
+            if let Some(corner_text) = corner_arg {
+                if let Ok(corner_hz) = corner_text.trim().parse::<f64>() {
+                    let _ = command_tx.send(TciCommand::SetTxPhaseRotatorCorner(corner_hz));
+                }
+            }
+        }
+        "tx_puresignal" => {
+            let enabled_arg = if args.len() >= 2 {
+                args.get(1)
+            } else {
+                args.first()
+            };
+            if let Some(enabled_text) = enabled_arg {
+                if let Some(enabled) = parse_tci_bool(enabled_text) {
+                    let _ = command_tx.send(TciCommand::SetPureSignalEnabled(enabled));
+                }
+            }
+        }
+        "tx_puresignal_auto_attenuate" => {
+            let enabled_arg = if args.len() >= 2 {
+                args.get(1)
+            } else {
+                args.first()
+            };
+            if let Some(enabled_text) = enabled_arg {
+                if let Some(enabled) = parse_tci_bool(enabled_text) {
+                    let _ = command_tx.send(TciCommand::SetPureSignalAutoAttenuate(enabled));
+                }
+            }
+        }
+        "tx_puresignal_attenuation" => {
+            let attenuation_arg = if args.len() >= 2 {
+                args.get(1)
+            } else {
+                args.first()
+            };
+            if let Some(attenuation_text) = attenuation_arg {
+                if let Ok(attenuation) = attenuation_text.trim().parse::<u8>() {
+                    let _ =
+                        command_tx.send(TciCommand::SetPureSignalAttenuation(attenuation.min(31)));
+                }
+            }
+        }
+        "tx_puresignal_reset" => {
+            let _ = command_tx.send(TciCommand::ResetPureSignal);
         }
         "tx_two_tone" => {
             let enabled_arg = if args.len() >= 2 {
@@ -4322,6 +4636,87 @@ mod tests {
             }
             command => panic!("unexpected command: {command:?}"),
         }
+    }
+
+    #[test]
+    fn parses_wdsp2_nr2_wbfm_and_phase_rotator_commands() {
+        let (tx, rx) = mpsc::channel();
+        let clients = test_client_registry(7);
+
+        for command in [
+            "rx_nr2_gain_method:0,TRAINED",
+            "rx_nr2_npe_method:0,NSTAT",
+            "rx_nr2_post_filter:0,false",
+            "rx_wbfm_deemphasis:0,EU_50US",
+            "modulation:0,WFM",
+            "tx_phase_rotator:0,true",
+            "tx_phase_rotator_auto:0,true",
+            "tx_phase_rotator_corner:0,425",
+        ] {
+            parse_tci_command(command, &tx, &clients, 7, true);
+        }
+
+        assert!(matches!(
+            rx.recv().unwrap(),
+            TciCommand::SetRxNr2GainMethod(Nr2GainMethod::Trained)
+        ));
+        assert!(matches!(
+            rx.recv().unwrap(),
+            TciCommand::SetRxNr2NpeMethod(Nr2NpeMethod::Nstat)
+        ));
+        assert!(matches!(
+            rx.recv().unwrap(),
+            TciCommand::SetRxNr2PostFilterEnabled(false)
+        ));
+        assert!(matches!(
+            rx.recv().unwrap(),
+            TciCommand::SetRxWbfmDeemphasis(WbfmDeemphasis::Europe)
+        ));
+        assert!(matches!(
+            rx.recv().unwrap(),
+            TciCommand::SetMode(DemodMode::Wfm)
+        ));
+        assert!(matches!(
+            rx.recv().unwrap(),
+            TciCommand::SetTxPhaseRotatorEnabled(true)
+        ));
+        assert!(matches!(
+            rx.recv().unwrap(),
+            TciCommand::SetTxPhaseRotatorAuto(true)
+        ));
+        assert!(matches!(
+            rx.recv().unwrap(),
+            TciCommand::SetTxPhaseRotatorCorner(value) if value == 425.0
+        ));
+    }
+
+    #[test]
+    fn parses_puresignal_control_commands() {
+        let (tx, rx) = mpsc::channel();
+        let clients = test_client_registry(7);
+
+        for command in [
+            "tx_puresignal:0,true",
+            "tx_puresignal_auto_attenuate:0,false",
+            "tx_puresignal_attenuation:0,12",
+            "tx_puresignal_reset:0",
+        ] {
+            parse_tci_command(command, &tx, &clients, 7, true);
+        }
+
+        assert!(matches!(
+            rx.recv().unwrap(),
+            TciCommand::SetPureSignalEnabled(true)
+        ));
+        assert!(matches!(
+            rx.recv().unwrap(),
+            TciCommand::SetPureSignalAutoAttenuate(false)
+        ));
+        assert!(matches!(
+            rx.recv().unwrap(),
+            TciCommand::SetPureSignalAttenuation(12)
+        ));
+        assert!(matches!(rx.recv().unwrap(), TciCommand::ResetPureSignal));
     }
 
     #[test]
