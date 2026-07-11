@@ -1,12 +1,13 @@
 [Unit]
-Description=Saturn Bridge
-After=network.target p2app.service
-Wants=p2app.service
+Description=Saturn Bridge (WDSP 2.00)
+After=network-online.target p2app.service
+Wants=network-online.target p2app.service
 
 [Service]
 Type=simple
 User=pi
-WorkingDirectory=/home/pi/github/Saturn/update_manager/saturn-bridge
+Group=pi
+WorkingDirectory=/opt/saturn-go
 ExecStart=/opt/saturn-go/bin/saturn-bridge
 Restart=on-failure
 RestartSec=2
@@ -18,6 +19,11 @@ Environment=SATURN_BRIDGE_RADIO_HOST=127.0.0.1
 Environment=SATURN_BRIDGE_RADIO_PORT=1024
 Environment=SATURN_BRIDGE_CLIENT_HOST=127.0.0.1
 Environment=SATURN_BRIDGE_CLIENT_PORT=12000
+Environment=SATURN_BRIDGE_TCI_HOST=127.0.0.1
+Environment=SATURN_BRIDGE_TCI_PORT=50001
+Environment=SATURN_BRIDGE_MAX_CLIENT_DDC0_SAMPLE_RATE_KHZ=192
+Environment=SATURN_BRIDGE_TX_OPUS_DECODE_ENABLED=1
+Environment=SATURN_REMOTE_TX_RF_ENABLED=1
 
 [Install]
 WantedBy=multi-user.target

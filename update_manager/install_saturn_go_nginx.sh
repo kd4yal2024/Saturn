@@ -43,9 +43,14 @@ SATURN_WATCHDOG_INTERVAL="${SATURN_WATCHDOG_INTERVAL:-30s}"
 RUSTUP_INIT_URL="${RUSTUP_INIT_URL:-https://sh.rustup.rs}"
 TAILSCALE_INSTALL_URL="${TAILSCALE_INSTALL_URL:-https://tailscale.com/install.sh}"
 SATURN_REMOTE_NEXT_DEFAULT_QUERY="${SATURN_REMOTE_NEXT_DEFAULT_QUERY:-phase42_split=1&phase44_tx_opus=1&phase44_tx_cfc=1&client_bust=bridgeprefill240-cfcessb3}"
-SATURN_INSTALL_BRIDGE="${SATURN_INSTALL_BRIDGE:-0}"
-SATURN_REQUIRE_BRIDGE="${SATURN_REQUIRE_BRIDGE:-0}"
+SATURN_INSTALL_BRIDGE="${SATURN_INSTALL_BRIDGE:-1}"
+SATURN_REQUIRE_BRIDGE="${SATURN_REQUIRE_BRIDGE:-$SATURN_INSTALL_BRIDGE}"
+SATURN_BRIDGE_WDSP_FLAVOR="${SATURN_BRIDGE_WDSP_FLAVOR:-wdsp2}"
 SATURN_PIHPSDR_DIR="${SATURN_PIHPSDR_DIR:-/home/${SUDO_USER:-$USER}/github/pihpsdr}"
+SATURN_WDSP2_REPO_URL="${SATURN_WDSP2_REPO_URL:-https://github.com/TAPR/OpenHPSDR-wdsp.git}"
+SATURN_WDSP2_REF="${SATURN_WDSP2_REF:-584e8aca5ba1c4c6bc66fc0cc164ce567c8ba1e3}"
+SATURN_PIHPSDR_PORT_REPO_URL="${SATURN_PIHPSDR_PORT_REPO_URL:-https://github.com/dl1ycf/pihpsdr.git}"
+SATURN_PIHPSDR_PORT_REF="${SATURN_PIHPSDR_PORT_REF:-974acbac07fe7dd3e24f28f3956a9ffb3a1ebaf1}"
 
 bold(){ printf "\e[1m%s\e[0m\n" "$*"; }
 ok(){   printf "[OK] %s\n" "$*"; }
@@ -266,14 +271,20 @@ saturn_remote_bridge_preflight() {
   local bridge_installer="$SOURCE_DIR/scripts/$SATURN_BRIDGE_INSTALLER_NAME"
   local missing=()
 
+  if ! bridge_requested; then
+    info "Saturn Remote bridge installation explicitly disabled"
+    return 0
+  fi
+
   info "Checking Saturn Remote bridge prerequisites..."
   [[ -f "$bridge_dir/Cargo.toml" ]] || missing+=("$bridge_dir/Cargo.toml")
+  [[ -x "$bridge_dir/scripts/build-wdsp2-linux-arm.sh" ]] || missing+=("$bridge_dir/scripts/build-wdsp2-linux-arm.sh")
   [[ -x "$bridge_installer" ]] || missing+=("$bridge_installer")
   command -v "$RUSTUP_CARGO_BIN" >/dev/null 2>&1 || [[ -x "$RUSTUP_CARGO_BIN" ]] || missing+=("$RUSTUP_CARGO_BIN")
   apt_pkg_installed libfftw3-dev || missing+=("apt:libfftw3-dev")
-  [[ -f "$SATURN_PIHPSDR_DIR/wdsp/libwdsp.a" ]] || missing+=("$SATURN_PIHPSDR_DIR/wdsp/libwdsp.a")
-  [[ -f "$SATURN_PIHPSDR_DIR/rnnoise/librnnoise.a" ]] || missing+=("$SATURN_PIHPSDR_DIR/rnnoise/librnnoise.a")
-  [[ -f "$SATURN_PIHPSDR_DIR/libspecbleach/libspecbleach.a" ]] || missing+=("$SATURN_PIHPSDR_DIR/libspecbleach/libspecbleach.a")
+  command -v git >/dev/null 2>&1 || missing+=("git")
+  command -v python3 >/dev/null 2>&1 || missing+=("python3")
+  command -v nm >/dev/null 2>&1 || missing+=("binutils:nm")
 
   if (( ${#missing[@]} == 0 )); then
     ok "Saturn Remote bridge prerequisites present"
@@ -283,7 +294,7 @@ saturn_remote_bridge_preflight() {
   warn "Saturn Remote bridge prerequisites are missing:"
   printf '  - %s\n' "${missing[@]}" >&2
   warn "Remote pages can load, but /remote and /remote-next will not work until saturn-bridge is installed."
-  warn "Install/build piHPSDR first, then run: sudo SATURN_INSTALL_BRIDGE=1 bash update_manager/install_saturn_go_nginx.sh"
+  warn "The installer provisions pinned WDSP 2.00 and Linux-port sources; no piHPSDR build or cloud-init step is required."
 
   if env_flag_enabled "$SATURN_REQUIRE_BRIDGE"; then
     err "SATURN_REQUIRE_BRIDGE=1 and Saturn Remote bridge prerequisites are missing."
@@ -304,6 +315,11 @@ install_saturn_bridge_if_requested() {
     SATURN_BRIDGE_SOURCE_DIR="$SOURCE_DIR/saturn-bridge" \
     SATURN_GO_ROOT="$SATURN_ROOT" \
     SATURN_BRIDGE_BIN="$BIN_DIR/saturn-bridge" \
+    SATURN_BRIDGE_WDSP_FLAVOR="$SATURN_BRIDGE_WDSP_FLAVOR" \
+    SATURN_WDSP2_REPO_URL="$SATURN_WDSP2_REPO_URL" \
+    SATURN_WDSP2_REF="$SATURN_WDSP2_REF" \
+    SATURN_PIHPSDR_PORT_REPO_URL="$SATURN_PIHPSDR_PORT_REPO_URL" \
+    SATURN_PIHPSDR_PORT_REF="$SATURN_PIHPSDR_PORT_REF" \
     SATURN_BRIDGE_RF_TX_ENABLED="${SATURN_BRIDGE_RF_TX_ENABLED:-1}" \
     SATURN_BRIDGE_TX_OPUS_DECODE_ENABLED="${SATURN_BRIDGE_TX_OPUS_DECODE_ENABLED:-1}" \
     bash "$SOURCE_DIR/scripts/$SATURN_BRIDGE_INSTALLER_NAME"
@@ -378,7 +394,7 @@ check_tmp_space_preflight
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
 apt-get install -y -qq \
-  nginx apache2-utils build-essential pkg-config \
+  nginx apache2-utils build-essential binutils pkg-config \
   libfftw3-dev \
   curl git rsync nodejs npm \
   python3 python3-venv python3-psutil \

@@ -6,6 +6,7 @@ describe('bandKeyForFrequency', () => {
     expect(bandKeyForFrequency(7150000)).toBe('40m');
     expect(bandKeyForFrequency(14200000)).toBe('20m');
     expect(bandKeyForFrequency(1900000)).toBe('160m');
+    expect(bandKeyForFrequency(99_500_000)).toBe('FM');
   });
 
   it('returns empty string for out-of-band frequency', () => {

@@ -10,11 +10,14 @@ RX and TX, and exposes a TCI WebSocket frontend to browser clients.
 - Owns one downstream Protocol 2 UDP session to `p2app`
 - Ingests DDC IQ streams and high-priority status packets
 - Full WDSP RX DSP channel (channel 0):
-  - All demodulation modes: USB, LSB, CWU, CWL, AM, SAM, FM, DIGU, DIGL
+  - All demodulation modes: USB, LSB, CWU, CWL, AM, SAM, FM, WFM, DIGU, DIGL
   - Full AGC: OFF, LONG, SLOW, MEDIUM, FAST with per-mode time constants
   - Noise Blanker 1 (NB1 — preemptive EXTANB): threshold-controlled impulse blanking
   - Noise Blanker 2 (NB2 — interpolating EXTNOB): zero/sample-and-hold modes
-  - Noise Reduction: NR1 (ANR), NR2 (EMNR), NR3 (RNNR), NR4 (SBNR)
+  - Noise Reduction: NR1 (ANR), NR2 (EMNR), and compatibility handling for
+    NR3/NR4 when WDSP 2.00 is built without piHPSDR RNNR/SBNR extensions
+  - WDSP 2.00 NR2 gain, noise-estimator, and psychoacoustic post-filter controls
+  - WFM stereo at a 192 kHz DSP rate with stereo-lock and 50/75 us de-emphasis
   - Auto Notch Filter (ANF)
   - Calibrated S-meter via `GetRXAMeter(RXA_S_AV)`
   - 48 kHz stereo audio output (both channels from panel copy mode)
@@ -24,13 +27,18 @@ RX and TX, and exposes a TCI WebSocket frontend to browser clients.
   - Bandpass filter, ALC, CFIR mic conditioning
   - Adjustable mic gain via `SetTXAPanelGain1`
   - PTT-controlled channel state with slew-down on release
+  - WDSP 2.00 phase rotator with manual/automatic corner control
+  - Configurable two-tone generator for controlled TX tests
+  - PureSignal 3.0 synchronized TX-reference/PA-feedback calibration and
+    correction with automatic feedback attenuation and fault telemetry
 - DUC IQ packets: 240 samples × 6 bytes signed 24-bit big-endian (1444 bytes)
   sent to `p2app` port 1029
 - Mic audio received from TCI client as binary audio frames (stream_type 1 or 2)
 
 ### TCI Frontend
 - WebSocket server, default `127.0.0.1:50001`
-- Single active client (newest connection wins)
+- Split control/media sessions, explicit operator/viewer roles, and controller
+  ownership arbitration
 - Intended browser path is the Saturn Go same-origin proxy (`/tci`); expose
   raw `:50001` only when you explicitly need direct access and trust the LAN.
 - **Commands received from client:**
@@ -100,11 +108,15 @@ p2app / radio firmware
 ## Build
 
 ```bash
-cargo build --release
+SATURN_BRIDGE_BUILD_ONLY=1 \
+SATURN_BRIDGE_OUTPUT_BIN=/tmp/saturn-bridge \
+bash ../scripts/install-saturn-bridge.sh
 ```
 
-Requires `libwdsp.a`, `librnnoise.a`, and `libspecbleach.a` in the pihpsdr
-build tree (see `build.rs`).
+The installer provisions pinned sparse upstream checkouts, builds the patched
+WDSP 2.00 Linux/ARM archive, verifies WFM/phase-rotator/PureSignal symbols, and
+links the bridge against that archive. No cloud-init or prebuilt piHPSDR tree
+is required. See `WDSP2_SPIKE.md` for source pins and overrides.
 
 CI can run parser/control tests without the piHPSDR tree by setting
 `SATURN_BRIDGE_STUB_NATIVE=1`. That mode links a local native stub and is not a
@@ -113,11 +125,13 @@ runtime or release build mode.
 ## Deploy
 
 ```bash
-sudo cp target/release/saturn-bridge /opt/saturn-go/bin/saturn-bridge
-sudo systemctl restart saturn-bridge
+cd /home/pi/github/Saturn
+sudo bash update_manager/install_saturn_go_nginx.sh
 ```
 
-A ready-to-install systemd unit is in `saturn-bridge.service.example`.
+Fresh installs build Saturn Go, Remote UI assets, WDSP 2.00, and Saturn Bridge
+as one operation. `update-saturn-go.sh` also stages a matching bridge binary
+with the web assets and backend before its detached deployment helper runs.
 
 ## Environment Variables
 
@@ -137,8 +151,8 @@ A ready-to-install systemd unit is in `saturn-bridge.service.example`.
 | `SATURN_BRIDGE_DDC0_SAMPLE_RATE_KHZ` | `192` | IQ sample rate kHz |
 | `SATURN_BRIDGE_DDC0_SAMPLE_SIZE_BITS` | `24` | IQ sample bit depth |
 
-## Next Steps
+## Remaining Work
 
-1. Multi-client roles and arbitration
-2. Proxied/authenticated remote access through Saturn Go and nginx
-3. TX audio monitoring / sidetone
+1. CESSB coordinated compressor/filter/level transition
+2. TX audio monitoring / sidetone
+3. Per-radio PureSignal delay calibration workflow

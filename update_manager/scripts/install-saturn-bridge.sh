@@ -3,7 +3,6 @@ set -Eeuo pipefail
 
 SATURN_USER="${SATURN_USER:-${SUDO_USER:-pi}}"
 SATURN_REPO_ROOT="${SATURN_REPO_ROOT:-/home/${SATURN_USER}/github/Saturn}"
-SATURN_PIHPSDR_DIR="${SATURN_PIHPSDR_DIR:-/home/${SATURN_USER}/github/pihpsdr}"
 SATURN_BRIDGE_SOURCE_DIR="${SATURN_BRIDGE_SOURCE_DIR:-${SATURN_REPO_ROOT}/update_manager/saturn-bridge}"
 SATURN_GO_ROOT="${SATURN_GO_ROOT:-/opt/saturn-go}"
 SATURN_BRIDGE_BIN="${SATURN_BRIDGE_BIN:-${SATURN_GO_ROOT}/bin/saturn-bridge}"
@@ -13,9 +12,36 @@ SATURN_BRIDGE_CARGO_TARGET_DIR="${SATURN_BRIDGE_CARGO_TARGET_DIR:-${SATURN_BRIDG
 SATURN_BRIDGE_RF_TX_ENABLED="${SATURN_BRIDGE_RF_TX_ENABLED:-1}"
 SATURN_BRIDGE_TX_OPUS_DECODE_ENABLED="${SATURN_BRIDGE_TX_OPUS_DECODE_ENABLED:-1}"
 SATURN_BRIDGE_MAX_CLIENT_DDC0_SAMPLE_RATE_KHZ="${SATURN_BRIDGE_MAX_CLIENT_DDC0_SAMPLE_RATE_KHZ:-192}"
+SATURN_BRIDGE_BUILD_ONLY="${SATURN_BRIDGE_BUILD_ONLY:-0}"
+SATURN_BRIDGE_OUTPUT_BIN="${SATURN_BRIDGE_OUTPUT_BIN:-}"
+SATURN_BRIDGE_WDSP_FLAVOR="${SATURN_BRIDGE_WDSP_FLAVOR:-wdsp2}"
+
+# These commits are part of the Saturn Bridge native build contract. Updating
+# either pin requires rebuilding and re-running the WDSP/bridge test matrix.
+SATURN_WDSP2_REPO_URL="${SATURN_WDSP2_REPO_URL:-https://github.com/TAPR/OpenHPSDR-wdsp.git}"
+SATURN_WDSP2_REF="${SATURN_WDSP2_REF:-584e8aca5ba1c4c6bc66fc0cc164ce567c8ba1e3}"
+SATURN_PIHPSDR_PORT_REPO_URL="${SATURN_PIHPSDR_PORT_REPO_URL:-https://github.com/dl1ycf/pihpsdr.git}"
+SATURN_PIHPSDR_PORT_REF="${SATURN_PIHPSDR_PORT_REF:-974acbac07fe7dd3e24f28f3956a9ffb3a1ebaf1}"
+SATURN_BRIDGE_NATIVE_SOURCE_ROOT="${SATURN_BRIDGE_NATIVE_SOURCE_ROOT:-${SATURN_BRIDGE_CARGO_TARGET_DIR}/native-src}"
+SATURN_WDSP2_REPO_DIR="${SATURN_WDSP2_REPO_DIR:-${SATURN_BRIDGE_NATIVE_SOURCE_ROOT}/OpenHPSDR-wdsp}"
+SATURN_PIHPSDR_PORT_REPO_DIR="${SATURN_PIHPSDR_PORT_REPO_DIR:-${SATURN_BRIDGE_NATIVE_SOURCE_ROOT}/pihpsdr}"
+SATURN_WDSP2_SOURCE_DIR="${SATURN_WDSP2_SOURCE_DIR:-${SATURN_WDSP2_REPO_DIR}/wdsp 2.00/Source}"
+SATURN_PIHPSDR_WDSP_DIR="${SATURN_PIHPSDR_WDSP_DIR:-${SATURN_PIHPSDR_PORT_REPO_DIR}/wdsp}"
+SATURN_WDSP2_BUILD_DIR="${SATURN_WDSP2_BUILD_DIR:-${SATURN_BRIDGE_CARGO_TARGET_DIR}/wdsp2-linux-arm}"
+
+# Legacy opt-in only. The default installer does not need a prebuilt piHPSDR
+# checkout and always uses the pinned WDSP 2.00 path above.
+SATURN_PIHPSDR_DIR="${SATURN_PIHPSDR_DIR:-/home/${SATURN_USER}/github/pihpsdr}"
 
 log(){ printf '[install-saturn-bridge] %s\n' "$*"; }
 die(){ printf '[install-saturn-bridge] ERROR: %s\n' "$*" >&2; exit 1; }
+
+flag_enabled() {
+  case "${1:-}" in
+    1|true|TRUE|yes|YES|on|ON) return 0 ;;
+    *) return 1 ;;
+  esac
+}
 
 need_root() {
   [[ ${EUID:-$(id -u)} -eq 0 ]] || die "Run as root."
@@ -29,6 +55,10 @@ need_dir() {
   [[ -d "$1" ]] || die "$2 not found: $1"
 }
 
+need_cmd() {
+  command -v "$1" >/dev/null 2>&1 || die "Required command not found: $1"
+}
+
 apt_pkg_installed() {
   dpkg-query -W -f='${Status}' "$1" 2>/dev/null | grep -q '^install ok installed$'
 }
@@ -36,7 +66,7 @@ apt_pkg_installed() {
 ensure_apt_packages() {
   local missing=()
   local pkg
-  for pkg in build-essential pkg-config libfftw3-dev ca-certificates; do
+  for pkg in build-essential binutils pkg-config libfftw3-dev ca-certificates git python3; do
     apt_pkg_installed "$pkg" || missing+=("$pkg")
   done
   if (( ${#missing[@]} == 0 )); then
@@ -58,55 +88,186 @@ bridge_build_user() {
 }
 
 run_as_bridge_user() {
-  local build_user build_home cargo_home rustup_home path_prefix cmd arg
+  local build_user build_home cargo_home rustup_home path_prefix
   build_user="$(bridge_build_user)"
   build_home="$(getent passwd "$build_user" | cut -d: -f6)"
-  [[ -n "$build_home" && -d "$build_home" ]] || die "Cannot resolve home for bridge build user: $build_user"
+  [[ -n "$build_home" && -d "$build_home" ]] || die "Cannot resolve home for build user: $build_user"
   cargo_home="${CARGO_HOME:-${build_home}/.cargo}"
   rustup_home="${RUSTUP_HOME:-${build_home}/.rustup}"
   path_prefix="${cargo_home}/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
-  printf -v cmd 'cd %q && HOME=%q CARGO_HOME=%q RUSTUP_HOME=%q PATH=%q CARGO_TARGET_DIR=%q SATURN_PIHPSDR_DIR=%q cargo' \
-    "$SATURN_BRIDGE_SOURCE_DIR" "$build_home" "$cargo_home" "$rustup_home" "$path_prefix" "$SATURN_BRIDGE_CARGO_TARGET_DIR" "$SATURN_PIHPSDR_DIR"
-  for arg in "$@"; do
-    printf -v cmd '%s %q' "$cmd" "$arg"
-  done
-  if [[ "$build_user" == "root" ]]; then
-    bash -lc "$cmd"
+
+  if [[ "$(id -u)" -eq "$(id -u "$build_user")" ]]; then
+    env HOME="$build_home" CARGO_HOME="$cargo_home" RUSTUP_HOME="$rustup_home" PATH="$path_prefix" "$@"
+  elif [[ "$(id -u)" -eq 0 ]]; then
+    runuser -u "$build_user" -- env \
+      HOME="$build_home" CARGO_HOME="$cargo_home" RUSTUP_HOME="$rustup_home" PATH="$path_prefix" "$@"
   else
-    runuser -u "$build_user" -- bash -lc "$cmd"
+    die "Cannot run build as $build_user from user $(id -un)"
   fi
 }
 
-verify_native_inputs() {
+ensure_build_directories() {
+  local build_user build_group
+  build_user="$(bridge_build_user)"
+  build_group="$(id -gn "$build_user")"
+  if [[ "$(id -u)" -eq 0 ]]; then
+    install -d -m 0755 -o "$build_user" -g "$build_group" \
+      "$SATURN_BRIDGE_CARGO_TARGET_DIR" "$SATURN_BRIDGE_NATIVE_SOURCE_ROOT"
+  else
+    mkdir -p "$SATURN_BRIDGE_CARGO_TARGET_DIR" "$SATURN_BRIDGE_NATIVE_SOURCE_ROOT"
+  fi
+}
+
+ensure_pinned_sparse_checkout() {
+  local url="$1"
+  local ref="$2"
+  local dest="$3"
+  shift 3
+  local current=""
+  local expected=""
+
+  if [[ -d "$dest/.git" ]]; then
+    current="$(git -C "$dest" rev-parse HEAD 2>/dev/null || true)"
+    if [[ "$current" == "$ref" ]]; then
+      log "Pinned native source ready: $dest @ $ref"
+      return 0
+    fi
+  elif [[ -e "$dest" ]]; then
+    die "Native source cache exists but is not a git checkout: $dest"
+  fi
+
+  log "Provisioning pinned native source: $url @ $ref"
+  if [[ ! -d "$dest/.git" ]]; then
+    run_as_bridge_user git init -q "$dest"
+    run_as_bridge_user git -C "$dest" remote add origin "$url"
+  else
+    run_as_bridge_user git -C "$dest" remote set-url origin "$url"
+  fi
+  run_as_bridge_user git -C "$dest" sparse-checkout init --no-cone
+  run_as_bridge_user git -C "$dest" sparse-checkout set --no-cone "$@"
+  run_as_bridge_user git -C "$dest" fetch --depth 1 origin "$ref"
+  expected="$(git -C "$dest" rev-parse FETCH_HEAD 2>/dev/null || true)"
+  [[ -n "$expected" ]] || die "Could not resolve pinned source ref for $dest: $ref"
+  run_as_bridge_user git -C "$dest" checkout -q --detach FETCH_HEAD
+  current="$(git -C "$dest" rev-parse HEAD 2>/dev/null || true)"
+  [[ "$current" == "$expected" ]] || die "Pinned checkout mismatch for $dest: expected $expected, got ${current:-unknown}"
+}
+
+prepare_wdsp2_sources() {
+  ensure_pinned_sparse_checkout \
+    "$SATURN_WDSP2_REPO_URL" "$SATURN_WDSP2_REF" "$SATURN_WDSP2_REPO_DIR" \
+    '/wdsp 2.00/Source/'
+  ensure_pinned_sparse_checkout \
+    "$SATURN_PIHPSDR_PORT_REPO_URL" "$SATURN_PIHPSDR_PORT_REF" "$SATURN_PIHPSDR_PORT_REPO_DIR" \
+    '/wdsp/linux_port.c' '/wdsp/linux_port.h'
+
+  need_dir "$SATURN_WDSP2_SOURCE_DIR" "WDSP 2.00 source directory"
+  need_file "$SATURN_PIHPSDR_WDSP_DIR/linux_port.c" "piHPSDR Linux port source"
+  need_file "$SATURN_PIHPSDR_WDSP_DIR/linux_port.h" "piHPSDR Linux port header"
+}
+
+verify_wdsp2_archive() {
+  local archive="$SATURN_WDSP2_BUILD_DIR/libwdsp.a"
+  local symbols
+  need_file "$archive" "WDSP 2.00 archive"
+  symbols="$(nm -g --defined-only "$archive")"
+  local symbol
+  for symbol in \
+    SetRXAWBFMdmph GetRXAWBFMStereoIndicator \
+    SetTXAPHROTAutoMode SetTXAPHROTRun \
+    pscc SetPSMox SetPSControl GetPSInfo SetPSFeedbackRate
+  do
+    grep -Eq "[[:space:]]${symbol}$" <<<"$symbols" || die "WDSP 2.00 archive is missing required symbol: $symbol"
+  done
+  log "WDSP 2.00 archive symbol verification passed."
+}
+
+build_wdsp2() {
+  local helper="$SATURN_BRIDGE_SOURCE_DIR/scripts/build-wdsp2-linux-arm.sh"
+  need_file "$helper" "WDSP 2.00 Linux/ARM build helper"
+  [[ -x "$helper" ]] || die "WDSP 2.00 build helper is not executable: $helper"
+  prepare_wdsp2_sources
+  log "Building pinned WDSP 2.00 Linux/ARM archive"
+  run_as_bridge_user env \
+    WDSP2_SOURCE_DIR="$SATURN_WDSP2_SOURCE_DIR" \
+    PIHPSDR_WDSP_DIR="$SATURN_PIHPSDR_WDSP_DIR" \
+    WDSP2_BUILD_DIR="$SATURN_WDSP2_BUILD_DIR" \
+    bash "$helper"
+  verify_wdsp2_archive
+}
+
+verify_bridge_inputs() {
   need_dir "$SATURN_BRIDGE_SOURCE_DIR" "saturn-bridge source directory"
-  need_file "${SATURN_BRIDGE_SOURCE_DIR}/Cargo.toml" "saturn-bridge Cargo manifest"
-  need_dir "$SATURN_PIHPSDR_DIR" "piHPSDR checkout"
-  need_file "${SATURN_PIHPSDR_DIR}/wdsp/libwdsp.a" "WDSP static library"
-  need_file "${SATURN_PIHPSDR_DIR}/rnnoise/librnnoise.a" "rnnoise static library"
-  need_file "${SATURN_PIHPSDR_DIR}/libspecbleach/libspecbleach.a" "specbleach static library"
+  need_file "$SATURN_BRIDGE_SOURCE_DIR/Cargo.toml" "saturn-bridge Cargo manifest"
+  need_cmd git
+  need_cmd nm
+  need_cmd pkg-config
+  need_cmd python3
+  pkg-config --exists fftw3 || die "fftw3 development package is required"
 }
 
 build_bridge() {
-  local cargo_bin
-  cargo_bin="$(getent passwd "$(bridge_build_user)" | cut -d: -f6)/.cargo/bin/cargo"
-  [[ -x "$cargo_bin" || -x /usr/bin/cargo || -x /usr/local/bin/cargo ]] || die "cargo not found for bridge build. Run Saturn Go installer first."
-
-  log "Building saturn-bridge (${SATURN_BRIDGE_BUILD_PROFILE})"
+  local cargo_args=(build)
+  local native_env=()
   if [[ "$SATURN_BRIDGE_BUILD_PROFILE" == "release" ]]; then
-    run_as_bridge_user build --release
-  else
-    run_as_bridge_user build
+    cargo_args+=(--release)
   fi
+
+  case "$SATURN_BRIDGE_WDSP_FLAVOR" in
+    wdsp2|2.00)
+      build_wdsp2
+      native_env+=(SATURN_WDSP_DIR="$SATURN_WDSP2_BUILD_DIR")
+      ;;
+    pihpsdr|legacy)
+      need_file "$SATURN_PIHPSDR_DIR/wdsp/libwdsp.a" "piHPSDR WDSP archive"
+      need_file "$SATURN_PIHPSDR_DIR/rnnoise/librnnoise.a" "piHPSDR rnnoise archive"
+      need_file "$SATURN_PIHPSDR_DIR/libspecbleach/libspecbleach.a" "piHPSDR specbleach archive"
+      native_env+=(SATURN_PIHPSDR_DIR="$SATURN_PIHPSDR_DIR")
+      ;;
+    *)
+      die "Unsupported SATURN_BRIDGE_WDSP_FLAVOR: $SATURN_BRIDGE_WDSP_FLAVOR"
+      ;;
+  esac
+
+  log "Building saturn-bridge ($SATURN_BRIDGE_BUILD_PROFILE, WDSP=$SATURN_BRIDGE_WDSP_FLAVOR)"
+  run_as_bridge_user env \
+    CARGO_TARGET_DIR="$SATURN_BRIDGE_CARGO_TARGET_DIR" \
+    "${native_env[@]}" \
+    cargo "${cargo_args[@]}" --manifest-path "$SATURN_BRIDGE_SOURCE_DIR/Cargo.toml"
+}
+
+built_bridge_path() {
+  if [[ "$SATURN_BRIDGE_BUILD_PROFILE" == "release" ]]; then
+    printf '%s/release/saturn-bridge\n' "$SATURN_BRIDGE_CARGO_TARGET_DIR"
+  else
+    printf '%s/debug/saturn-bridge\n' "$SATURN_BRIDGE_CARGO_TARGET_DIR"
+  fi
+}
+
+verify_built_bridge() {
+  local built_bin
+  built_bin="$(built_bridge_path)"
+  need_file "$built_bin" "built saturn-bridge binary"
+  if [[ "$SATURN_BRIDGE_WDSP_FLAVOR" == "wdsp2" || "$SATURN_BRIDGE_WDSP_FLAVOR" == "2.00" ]]; then
+    local symbol symbols
+    symbols="$(nm -a "$built_bin")"
+    for symbol in SetRXAWBFMdmph SetTXAPHROTAutoMode pscc SetPSControl; do
+      grep -Eq "[[:space:]]${symbol}$" <<<"$symbols" || die "Built bridge is missing WDSP 2.00 symbol: $symbol"
+    done
+  fi
+}
+
+copy_build_only_output() {
+  local built_bin
+  built_bin="$(built_bridge_path)"
+  [[ -n "$SATURN_BRIDGE_OUTPUT_BIN" ]] || die "SATURN_BRIDGE_OUTPUT_BIN is required in build-only mode"
+  install -D -m 0755 "$built_bin" "$SATURN_BRIDGE_OUTPUT_BIN"
+  log "Staged bridge binary: $SATURN_BRIDGE_OUTPUT_BIN"
 }
 
 install_binary() {
   local built_bin
-  if [[ "$SATURN_BRIDGE_BUILD_PROFILE" == "release" ]]; then
-    built_bin="${SATURN_BRIDGE_CARGO_TARGET_DIR}/release/saturn-bridge"
-  else
-    built_bin="${SATURN_BRIDGE_CARGO_TARGET_DIR}/debug/saturn-bridge"
-  fi
-  need_file "$built_bin" "built saturn-bridge binary"
+  built_bin="$(built_bridge_path)"
   install -d -m 0755 "$(dirname "$SATURN_BRIDGE_BIN")"
   install -m 0755 -o root -g root "$built_bin" "$SATURN_BRIDGE_BIN"
   log "Installed bridge binary: $SATURN_BRIDGE_BIN"
@@ -118,7 +279,7 @@ install_service() {
   service_group="$(id -gn "$service_user")"
   cat >"$SATURN_BRIDGE_SERVICE" <<EOF
 [Unit]
-Description=Saturn Bridge
+Description=Saturn Bridge (WDSP 2.00)
 After=network-online.target p2app.service
 Wants=network-online.target p2app.service
 
@@ -126,7 +287,7 @@ Wants=network-online.target p2app.service
 Type=simple
 User=${service_user}
 Group=${service_group}
-WorkingDirectory=${SATURN_BRIDGE_SOURCE_DIR}
+WorkingDirectory=${SATURN_GO_ROOT}
 ExecStart=${SATURN_BRIDGE_BIN}
 Restart=on-failure
 RestartSec=2
@@ -154,22 +315,35 @@ EOF
 }
 
 verify_runtime() {
-  if ! systemctl is-active --quiet "$(basename "$SATURN_BRIDGE_SERVICE")"; then
-    systemctl --no-pager status "$(basename "$SATURN_BRIDGE_SERVICE")" || true
-    die "saturn-bridge service is not active after install."
+  local service_name
+  service_name="$(basename "$SATURN_BRIDGE_SERVICE")"
+  if ! systemctl is-active --quiet "$service_name"; then
+    systemctl --no-pager status "$service_name" || true
+    die "saturn-bridge service is not active after install"
   fi
   if command -v ss >/dev/null 2>&1 && ! ss -ltn | grep -q ':50001 '; then
-    systemctl --no-pager status "$(basename "$SATURN_BRIDGE_SERVICE")" || true
-    die "saturn-bridge is active but TCI socket 127.0.0.1:50001 is not listening."
+    systemctl --no-pager status "$service_name" || true
+    die "saturn-bridge is active but TCI port 127.0.0.1:50001 is not listening"
   fi
   log "saturn-bridge runtime check passed."
 }
 
 main() {
+  if flag_enabled "$SATURN_BRIDGE_BUILD_ONLY"; then
+    verify_bridge_inputs
+    ensure_build_directories
+    build_bridge
+    verify_built_bridge
+    copy_build_only_output
+    return 0
+  fi
+
   need_root
   ensure_apt_packages
-  verify_native_inputs
+  verify_bridge_inputs
+  ensure_build_directories
   build_bridge
+  verify_built_bridge
   install_binary
   install_service
   verify_runtime

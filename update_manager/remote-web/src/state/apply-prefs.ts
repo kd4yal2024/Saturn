@@ -12,6 +12,11 @@ import {
   clampRxVolumeDb,
   normalizeNrMode,
   clampRxNoiseReductionLevel,
+  normalizeNr2GainMethod,
+  normalizeNr2NpeMethod,
+  normalizeWbfmDeemphasis,
+  clampTxPhaseRotatorCornerHz,
+  clampPureSignalAttenuationDb,
   normalizeNbMode,
   clampRxNbThreshold,
   normalizeAgcMode,
@@ -45,6 +50,10 @@ export interface RadioPrefsTarget {
   rxVolumeDb: number;
   rxNoiseReductionMode: string;
   rxNoiseReductionLevel: number;
+  rxNr2GainMethod: string;
+  rxNr2NpeMethod: string;
+  rxNr2PostFilterEnabled: boolean;
+  rxWbfmDeemphasis: string;
   rxNbMode: string;
   rxNbThreshold: number;
   rxAnrTaps: number;
@@ -72,6 +81,12 @@ export interface RadioPrefsTarget {
   cfcEnabled: boolean;
   cfcPrecomp: number;
   cfcBands: number[];
+  txPhaseRotatorEnabled: boolean;
+  txPhaseRotatorAuto: boolean;
+  txPhaseRotatorCornerHz: number;
+  pureSignalEnabled: boolean;
+  pureSignalAutoAttenuate: boolean;
+  pureSignalAttenuationDb: number;
   txMeterMode: string;
   twoToneEnabled: boolean;
   txTwoToneFreq1: number;
@@ -163,6 +178,10 @@ export function applyRadioPrefsToState(
   state.rxVolumeDb = clampRxVolumeDb(prefs.rxVolumeDb ?? state.rxVolumeDb);
   state.rxNoiseReductionMode = normalizeNrMode(prefs.rxNoiseReductionMode ?? state.rxNoiseReductionMode);
   state.rxNoiseReductionLevel = clampRxNoiseReductionLevel(prefs.rxNoiseReductionLevel ?? state.rxNoiseReductionLevel);
+  state.rxNr2GainMethod = normalizeNr2GainMethod(prefs.rxNr2GainMethod ?? state.rxNr2GainMethod);
+  state.rxNr2NpeMethod = normalizeNr2NpeMethod(prefs.rxNr2NpeMethod ?? state.rxNr2NpeMethod);
+  state.rxNr2PostFilterEnabled = Boolean(prefs.rxNr2PostFilterEnabled ?? state.rxNr2PostFilterEnabled);
+  state.rxWbfmDeemphasis = normalizeWbfmDeemphasis(prefs.rxWbfmDeemphasis ?? state.rxWbfmDeemphasis);
   state.rxNbMode = normalizeNbMode(prefs.rxNbMode ?? state.rxNbMode);
   state.rxNbThreshold = clampRxNbThreshold(prefs.rxNbThreshold ?? state.rxNbThreshold);
   state.rxAnrTaps = clampDspTapCount(prefs.rxAnrTaps ?? state.rxAnrTaps);
@@ -190,6 +209,18 @@ export function applyRadioPrefsToState(
   state.cfcEnabled = Boolean(prefs.cfcEnabled ?? state.cfcEnabled);
   state.cfcPrecomp = Number(prefs.cfcPrecomp ?? state.cfcPrecomp) || 0;
   state.cfcBands = sanitizeCfcBands(prefs.cfcBands as number[] | undefined, state.cfcBands);
+  state.txPhaseRotatorEnabled = Boolean(prefs.txPhaseRotatorEnabled ?? state.txPhaseRotatorEnabled);
+  state.txPhaseRotatorAuto = Boolean(prefs.txPhaseRotatorAuto ?? state.txPhaseRotatorAuto);
+  state.txPhaseRotatorCornerHz = clampTxPhaseRotatorCornerHz(
+    prefs.txPhaseRotatorCornerHz ?? state.txPhaseRotatorCornerHz,
+  );
+  state.pureSignalEnabled = Boolean(prefs.pureSignalEnabled ?? state.pureSignalEnabled);
+  state.pureSignalAutoAttenuate = Boolean(
+    prefs.pureSignalAutoAttenuate ?? state.pureSignalAutoAttenuate,
+  );
+  state.pureSignalAttenuationDb = clampPureSignalAttenuationDb(
+    prefs.pureSignalAttenuationDb ?? state.pureSignalAttenuationDb,
+  );
   state.txMeterMode = normalizeTxMeterMode(prefs.txMeterMode ?? state.txMeterMode);
   state.twoToneEnabled = Boolean(prefs.twoToneEnabled ?? state.twoToneEnabled);
   state.txTwoToneFreq1 = clampTwoToneFreqHz(prefs.txTwoToneFreq1 ?? state.txTwoToneFreq1, 700);
@@ -247,6 +278,10 @@ export function normalizeAppStateInPlace(state: NormalizableState): void {
   state.rxVolumeDb = clampRxVolumeDb(state.rxVolumeDb);
   state.rxNoiseReductionMode = normalizeNrMode(state.rxNoiseReductionMode);
   state.rxNoiseReductionLevel = clampRxNoiseReductionLevel(state.rxNoiseReductionLevel);
+  state.rxNr2GainMethod = normalizeNr2GainMethod(state.rxNr2GainMethod);
+  state.rxNr2NpeMethod = normalizeNr2NpeMethod(state.rxNr2NpeMethod);
+  state.rxNr2PostFilterEnabled = Boolean(state.rxNr2PostFilterEnabled);
+  state.rxWbfmDeemphasis = normalizeWbfmDeemphasis(state.rxWbfmDeemphasis);
   state.rxNbMode = normalizeNbMode(state.rxNbMode);
   state.rxNbThreshold = clampRxNbThreshold(state.rxNbThreshold);
   state.rxAnrTaps = clampDspTapCount(state.rxAnrTaps);
@@ -268,6 +303,12 @@ export function normalizeAppStateInPlace(state: NormalizableState): void {
   }
   state.txDrive = clampTxDriveWatts(state.txDrive);
   state.txMicGainDb = clampTxMicGainDb(state.txMicGainDb);
+  state.txPhaseRotatorEnabled = Boolean(state.txPhaseRotatorEnabled);
+  state.txPhaseRotatorAuto = Boolean(state.txPhaseRotatorAuto);
+  state.txPhaseRotatorCornerHz = clampTxPhaseRotatorCornerHz(state.txPhaseRotatorCornerHz);
+  state.pureSignalEnabled = Boolean(state.pureSignalEnabled);
+  state.pureSignalAutoAttenuate = Boolean(state.pureSignalAutoAttenuate);
+  state.pureSignalAttenuationDb = clampPureSignalAttenuationDb(state.pureSignalAttenuationDb);
   state.txFilterLow = clampFilterLowHz(state.txFilterLow);
   state.txFilterHigh = clampFilterHighHz(state.txFilterHigh);
   state.rxEqBands = sanitizeEqBands(state.rxEqBands);

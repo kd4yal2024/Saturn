@@ -1,14 +1,14 @@
-export type DemodMode = 'USB' | 'LSB' | 'AM' | 'SAM' | 'FM' | 'DIGU' | 'DIGL' | 'CWU' | 'CWL';
+export type DemodMode = 'USB' | 'LSB' | 'AM' | 'SAM' | 'FM' | 'WFM' | 'DIGU' | 'DIGL' | 'CWU' | 'CWL';
 
 export type Passband = {
   lowHz: number;
   highHz: number;
 };
 
-export const DEMOD_MODES: readonly DemodMode[] = ['USB', 'LSB', 'AM', 'SAM', 'FM', 'DIGU', 'DIGL', 'CWU', 'CWL'];
+export const DEMOD_MODES: readonly DemodMode[] = ['USB', 'LSB', 'AM', 'SAM', 'FM', 'WFM', 'DIGU', 'DIGL', 'CWU', 'CWL'];
 
 const NEGATIVE_PASSBAND_MODES = new Set<DemodMode>(['LSB', 'DIGL', 'CWL']);
-const SYMMETRIC_PASSBAND_MODES = new Set<DemodMode>(['AM', 'SAM', 'FM']);
+const SYMMETRIC_PASSBAND_MODES = new Set<DemodMode>(['AM', 'SAM', 'FM', 'WFM']);
 
 export function normalizeDemodMode(value: string | undefined | null): DemodMode {
   const normalized = String(value || '').trim().toUpperCase();
@@ -41,6 +41,7 @@ export function clampFilterHighHz(value: number | string): number {
 
 export function signedPassbandFromUiCuts(lowCutHz: number, highCutHz: number, mode: string): Passband {
   const normalized = normalizeDemodMode(mode);
+  if (normalized === 'WFM') return { lowHz: -90_000, highHz: 90_000 };
   const low = clampFilterLowHz(lowCutHz);
   const high = Math.max(low + 1, clampFilterHighHz(highCutHz));
 
@@ -77,6 +78,9 @@ export function decomposeSignedPassbandWithShift(
   mode: string,
   preferredLowCutHz = 50,
 ): { lowCutHz: number; highCutHz: number; shiftHz: number } {
+  if (normalizeDemodMode(mode) === 'WFM') {
+    return { lowCutHz: 0, highCutHz: 90_000, shiftHz: 0 };
+  }
   if (isSymmetricPassbandMode(mode)) {
     const cuts = uiCutsFromSignedPassband(lowHz, highHz, mode);
     return { lowCutHz: cuts.lowHz, highCutHz: cuts.highHz, shiftHz: 0 };
@@ -133,6 +137,8 @@ export function defaultSignedRxPassbandForMode(mode: string): Passband {
       return { lowHz: -4000, highHz: 4000 };
     case 'FM':
       return { lowHz: -6000, highHz: 6000 };
+    case 'WFM':
+      return { lowHz: -90_000, highHz: 90_000 };
     case 'DIGU':
       return { lowHz: 300, highHz: 3000 };
     case 'USB':
@@ -150,6 +156,7 @@ export function defaultSignedTxPassbandForMode(mode: string): Passband {
     case 'AM':
     case 'SAM':
     case 'FM':
+    case 'WFM':
       return { lowHz: -3000, highHz: 3000 };
     case 'CWL':
       return { lowHz: -800, highHz: -200 };
@@ -176,7 +183,7 @@ export function uiCutsFromSignedPassband(lowHz: number, highHz: number, mode: st
 
   if (SYMMETRIC_PASSBAND_MODES.has(normalized)) {
     const edge = Math.max(Math.abs(lowHz), Math.abs(highHz));
-    return { lowHz: 0, highHz: clampFilterHighHz(edge) };
+    return { lowHz: 0, highHz: normalized === 'WFM' ? 90_000 : clampFilterHighHz(edge) };
   }
 
   if (NEGATIVE_PASSBAND_MODES.has(normalized)) {

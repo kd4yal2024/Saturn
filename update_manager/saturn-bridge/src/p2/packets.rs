@@ -13,7 +13,6 @@ pub const DUC_IQ_SAMPLES: usize = 240;
 
 #[derive(Clone, Copy, Debug)]
 pub struct DdcSetup {
-    pub enable_mask: u16,
     pub ddc_index: u8,
     pub adc: u8,
     pub sample_rate_khz: u16,
@@ -77,6 +76,32 @@ pub struct DdcIqFrame {
     pub approx_meter_dbm: f32,
 }
 
+#[derive(Clone, Debug)]
+pub struct PureSignalSamples {
+    pub tx_reference: Vec<f64>,
+    pub rx_feedback: Vec<f64>,
+}
+
+pub fn split_puresignal_samples(frame: &DdcIqFrame) -> Option<PureSignalSamples> {
+    if frame.ddc_index != 0 || frame.sample_count < 2 || !frame.sample_count.is_multiple_of(2) {
+        return None;
+    }
+
+    let pair_count = frame.sample_count as usize / 2;
+    let mut tx_reference = Vec::with_capacity(pair_count * 2);
+    let mut rx_feedback = Vec::with_capacity(pair_count * 2);
+    for synchronized_pair in frame.iq_samples.chunks_exact(4) {
+        rx_feedback.push(synchronized_pair[0] as f64);
+        rx_feedback.push(synchronized_pair[1] as f64);
+        tx_reference.push(synchronized_pair[2] as f64);
+        tx_reference.push(synchronized_pair[3] as f64);
+    }
+    Some(PureSignalSamples {
+        tx_reference,
+        rx_feedback,
+    })
+}
+
 pub fn build_discovery_request() -> [u8; DISCOVERY_PACKET_SIZE] {
     let mut packet = [0u8; DISCOVERY_PACKET_SIZE];
     packet[4] = 2;
@@ -104,13 +129,19 @@ pub fn build_general_packet(port_map: &P2PortMap) -> [u8; GENERAL_PACKET_SIZE] {
     packet
 }
 
-pub fn build_duc_specific_packet(sequence: u32) -> [u8; DUC_SPECIFIC_PACKET_SIZE] {
+pub fn build_duc_specific_packet(
+    sequence: u32,
+    adc1_tx_attenuation_db: u8,
+    adc0_tx_attenuation_db: u8,
+) -> [u8; DUC_SPECIFIC_PACKET_SIZE] {
     let mut packet = [0u8; DUC_SPECIFIC_PACKET_SIZE];
     write_u32_be(&mut packet, 0, sequence);
     packet[4] = 1; // 1 DUC stream enabled
                    // Match piHPSDR's safe Saturn/P2 defaults for the TX-specific path.
                    // Byte 50 bit 2 must be set to keep Orion mic-PTT disabled.
     packet[50] = 0x04;
+    packet[58] = adc1_tx_attenuation_db.min(31);
+    packet[59] = adc0_tx_attenuation_db.min(31);
     packet
 }
 
@@ -130,14 +161,23 @@ pub fn build_duc_iq_packet(sequence: u32, iq_samples: &[f32]) -> [u8; DUC_IQ_PAC
     packet
 }
 
-pub fn build_ddc_specific_packet(setup: DdcSetup) -> [u8; DDC_SPECIFIC_PACKET_SIZE] {
+pub fn build_ddc_specific_packet(
+    enable_mask: u16,
+    setups: &[DdcSetup],
+    sync_ddc1_to_ddc0: bool,
+) -> [u8; DDC_SPECIFIC_PACKET_SIZE] {
     let mut packet = [0u8; DDC_SPECIFIC_PACKET_SIZE];
     packet[4] = 2;
-    write_u16_le(&mut packet, 7, setup.enable_mask);
-    let offset = 17 + usize::from(setup.ddc_index.min(9)) * 6;
-    packet[offset] = setup.adc.min(2);
-    write_u16_be(&mut packet, offset + 1, setup.sample_rate_khz);
-    packet[offset + 5] = setup.sample_size_bits;
+    write_u16_le(&mut packet, 7, enable_mask);
+    for setup in setups {
+        let offset = 17 + usize::from(setup.ddc_index.min(9)) * 6;
+        packet[offset] = setup.adc.min(2);
+        write_u16_be(&mut packet, offset + 1, setup.sample_rate_khz);
+        packet[offset + 5] = setup.sample_size_bits;
+    }
+    if sync_ddc1_to_ddc0 {
+        packet[1363] = 0x02;
+    }
     packet
 }
 
@@ -362,14 +402,39 @@ mod tests {
     }
 
     #[test]
+    fn puresignal_split_deinterleaves_feedback_and_tx_reference() {
+        let frame = DdcIqFrame {
+            ddc_index: 0,
+            sequence: 9,
+            bits_per_sample: 24,
+            sample_count: 4,
+            payload_len: 24,
+            iq_samples: vec![0.1, 0.2, 0.3, 0.4, -0.1, -0.2, -0.3, -0.4],
+            approx_meter_dbm: -10.0,
+        };
+        let samples = split_puresignal_samples(&frame).expect("PureSignal pair");
+        assert_eq!(
+            samples.rx_feedback,
+            vec![0.1f32 as f64, 0.2f32 as f64, -0.1f32 as f64, -0.2f32 as f64]
+        );
+        assert_eq!(
+            samples.tx_reference,
+            vec![0.3f32 as f64, 0.4f32 as f64, -0.3f32 as f64, -0.4f32 as f64]
+        );
+    }
+
+    #[test]
     fn ddc_specific_packet_sets_adc_and_rate() {
-        let packet = build_ddc_specific_packet(DdcSetup {
-            enable_mask: 1 << 2,
-            ddc_index: 2,
-            adc: 1,
-            sample_rate_khz: 48,
-            sample_size_bits: 24,
-        });
+        let packet = build_ddc_specific_packet(
+            1 << 2,
+            &[DdcSetup {
+                ddc_index: 2,
+                adc: 1,
+                sample_rate_khz: 48,
+                sample_size_bits: 24,
+            }],
+            false,
+        );
         assert_eq!(packet[4], 2);
         assert_eq!(read_u16_le(&packet, 7), 1 << 2);
         assert_eq!(read_u16_be(&packet, 30), 48);
@@ -378,10 +443,40 @@ mod tests {
     }
 
     #[test]
+    fn ddc_specific_packet_configures_synchronized_puresignal_pair() {
+        let packet = build_ddc_specific_packet(
+            1,
+            &[
+                DdcSetup {
+                    ddc_index: 0,
+                    adc: 0,
+                    sample_rate_khz: 192,
+                    sample_size_bits: 24,
+                },
+                DdcSetup {
+                    ddc_index: 1,
+                    adc: 2,
+                    sample_rate_khz: 192,
+                    sample_size_bits: 24,
+                },
+            ],
+            true,
+        );
+        assert_eq!(read_u16_le(&packet, 7), 1);
+        assert_eq!(packet[17], 0);
+        assert_eq!(packet[23], 2);
+        assert_eq!(read_u16_be(&packet, 18), 192);
+        assert_eq!(read_u16_be(&packet, 24), 192);
+        assert_eq!(packet[1363], 0x02);
+    }
+
+    #[test]
     fn duc_specific_packet_uses_safe_tx_defaults() {
-        let packet = build_duc_specific_packet(7);
+        let packet = build_duc_specific_packet(7, 31, 12);
         assert_eq!(read_u32_be(&packet, 0), 7);
         assert_eq!(packet[4], 1);
         assert_eq!(packet[50] & 0x04, 0x04);
+        assert_eq!(packet[58], 31);
+        assert_eq!(packet[59], 12);
     }
 }

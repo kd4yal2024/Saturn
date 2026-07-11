@@ -5,12 +5,13 @@ set -euo pipefail
 # Rebuild and redeploy Saturn Update Manager (saturn-go) from the active Saturn repo.
 # Intended to be run from the web UI via /run (SSE terminal output).
 
-SCRIPT_VERSION="1.1.0"
+SCRIPT_VERSION="1.2.0"
 SCRIPT_NAME="$(basename "$0")"
 
 SKIP_GIT=0
 SKIP_BUILD=0
 SKIP_DEPLOY=0
+STAGE_ONLY=0
 DRY_RUN=0
 VERBOSE=0
 STATUS_PHASE="init"
@@ -19,6 +20,12 @@ progress(){ echo "Progress: $1%"; }
 info(){ echo "$@"; }
 warn(){ echo "WARN: $*" >&2; }
 die(){ echo "ERR: $*" >&2; exit 1; }
+flag_enabled(){
+  case "${1:-}" in
+    1|true|TRUE|yes|YES|on|ON) return 0 ;;
+    *) return 1 ;;
+  esac
+}
 json_bool(){ (( $1 )) && printf 'true' || printf 'false'; }
 json_escape(){
   local s="${1-}"
@@ -66,7 +73,8 @@ write_status(){
     "dry_run": $(json_bool "$DRY_RUN"),
     "skip_git": $(json_bool "$SKIP_GIT"),
     "skip_build": $(json_bool "$SKIP_BUILD"),
-    "skip_deploy": $(json_bool "$SKIP_DEPLOY")
+    "skip_deploy": $(json_bool "$SKIP_DEPLOY"),
+    "stage_only": $(json_bool "$STAGE_ONLY")
   }
 }
 EOF
@@ -246,6 +254,7 @@ while [[ $# -gt 0 ]]; do
     --skip-git) SKIP_GIT=1; shift ;;
     --skip-build) SKIP_BUILD=1; shift ;;
     --skip-deploy) SKIP_DEPLOY=1; shift ;;
+    --stage-only) STAGE_ONLY=1; shift ;;
     --dry-run) DRY_RUN=1; shift ;;
     --verbose) VERBOSE=1; shift ;;
     -h|--help)
@@ -254,6 +263,7 @@ Usage: update-saturn-go.sh [flags]
   --skip-git       Skip git fetch/reset
   --skip-build     Skip cargo build --release
   --skip-deploy    Skip template/binary deployment dispatch
+  --stage-only     Build and validate a staged payload without installing it
   --dry-run        Print actions only
   --verbose        Echo executed commands
 EOF
@@ -264,6 +274,10 @@ EOF
       ;;
   esac
 done
+
+if (( SKIP_DEPLOY && STAGE_ONLY )); then
+  die "--skip-deploy and --stage-only are mutually exclusive"
+fi
 
 progress 2
 info "Saturn Go self-update ${SCRIPT_VERSION}"
@@ -299,6 +313,7 @@ EXTRA_PACKAGED_SCRIPTS=(
 )
 PRIVILEGED_HELPER_SCRIPTS=(
   "$REPO_ROOT/update_manager/scripts/saturn-go-build-preflight.sh"
+  "$REPO_ROOT/update_manager/scripts/install-saturn-bridge.sh"
   "$REPO_ROOT/update_manager/scripts/make_pi_image.sh"
   "$REPO_ROOT/update_manager/scripts/clone_pi_to_device.sh"
   "$REPO_ROOT/update_manager/scripts/saturn-pi-wipe-target.sh"
@@ -334,10 +349,21 @@ BUILD_SWAP_MIB="${SATURN_SATURNGO_BUILD_SWAP_MIB:-2048}"
 BUILD_JOBS="${SATURN_SATURNGO_BUILD_JOBS:-1}"
 BUILD_NICE="${SATURN_SATURNGO_BUILD_NICE:-15}"
 BUILD_IONICE_CLASS="${SATURN_SATURNGO_BUILD_IONICE_CLASS:-3}"
+BUILD_BRIDGE="${SATURN_SATURNGO_BUILD_BRIDGE:-1}"
+BRIDGE_SOURCE_DIR="$REPO_ROOT/update_manager/saturn-bridge"
+BRIDGE_INSTALLER="$REPO_ROOT/update_manager/scripts/install-saturn-bridge.sh"
+BRIDGE_BUILD_OUTPUT="$BRIDGE_SOURCE_DIR/target-local/staged/saturn-bridge"
+BRIDGE_WDSP_FLAVOR="${SATURN_BRIDGE_WDSP_FLAVOR:-wdsp2}"
 
 SERVICE_NAME="${SATURN_SATURNGO_SERVICE_NAME:-saturn-go.service}"
 DEPLOY_RUN_USER="${SATURN_SATURNGO_RUN_USER:-$(id -un)}"
+DEPLOY_RUN_GROUP="$(id -gn "$DEPLOY_RUN_USER")"
 DEPLOY_BIN="${SATURN_SATURNGO_BIN_DEST:-/opt/saturn-go/bin/saturn-go}"
+DEPLOY_ROOT_DEFAULT="$(dirname "$(dirname "$DEPLOY_BIN")")"
+DEPLOY_ROOT="${SATURN_SATURNGO_ROOT:-$DEPLOY_ROOT_DEFAULT}"
+DEPLOY_BRIDGE_BIN="${SATURN_SATURNGO_BRIDGE_BIN_DEST:-/opt/saturn-go/bin/saturn-bridge}"
+DEPLOY_BRIDGE_SERVICE="${SATURN_SATURNGO_BRIDGE_SERVICE:-saturn-bridge.service}"
+DEPLOY_BRIDGE_SERVICE_FILE="${SATURN_SATURNGO_BRIDGE_SERVICE_FILE:-/etc/systemd/system/saturn-bridge.service}"
 DEPLOY_WEBROOT="${SATURN_SATURNGO_WEBROOT:-/var/lib/saturn-web}"
 DEPLOY_SCRIPTS_DIR="${SATURN_SATURNGO_SCRIPTS_DIR:-/opt/saturn-go/scripts}"
 DEPLOY_PRIVILEGED_SCRIPTS_DIR="${SATURN_SATURNGO_PRIVILEGED_SCRIPTS_DIR:-/usr/local/lib/saturn-go/scripts}"
@@ -352,6 +378,8 @@ trap 'rc=$?; if (( rc != 0 )); then write_status "error" "$STATUS_PHASE" "Saturn
 [[ -d "$SCRIPTS_SRC_DIR" ]] || die "Scripts dir not found: $SCRIPTS_SRC_DIR"
 [[ -f "$WEB_ASSET_HELPERS" ]] || die "Web asset helper not found: $WEB_ASSET_HELPERS"
 [[ -f "$BUILD_PREFLIGHT_HELPER" ]] || die "Build preflight helper not found: $BUILD_PREFLIGHT_HELPER"
+[[ -f "$BRIDGE_SOURCE_DIR/Cargo.toml" ]] || die "Saturn Bridge Cargo.toml not found: $BRIDGE_SOURCE_DIR/Cargo.toml"
+[[ -x "$BRIDGE_INSTALLER" ]] || die "Saturn Bridge installer not executable: $BRIDGE_INSTALLER"
 source "$WEB_ASSET_HELPERS"
 [[ -f "$SCRIPTS_SRC_DIR/config.json" ]] || die "Missing config.json in $SCRIPTS_SRC_DIR"
 [[ -f "$SCRIPTS_SRC_DIR/themes.json" ]] || die "Missing themes.json in $SCRIPTS_SRC_DIR"
@@ -423,6 +451,22 @@ if (( ! SKIP_BUILD )); then
       nice -n "$BUILD_NICE" ionice -c "$BUILD_IONICE_CLASS" "$CARGO_BIN" build --release -j "$BUILD_JOBS"
     )
   fi
+  if flag_enabled "$BUILD_BRIDGE"; then
+    info "Building Saturn Bridge with pinned WDSP 2.00 for staged deployment..."
+    if (( DRY_RUN )); then
+      info "[dry-run] SATURN_BRIDGE_BUILD_ONLY=1 $BRIDGE_INSTALLER"
+    else
+      SATURN_USER="$BUILD_USER" \
+      SATURN_REPO_ROOT="$REPO_ROOT" \
+      SATURN_BRIDGE_SOURCE_DIR="$BRIDGE_SOURCE_DIR" \
+      SATURN_BRIDGE_BUILD_ONLY=1 \
+      SATURN_BRIDGE_OUTPUT_BIN="$BRIDGE_BUILD_OUTPUT" \
+      SATURN_BRIDGE_WDSP_FLAVOR="$BRIDGE_WDSP_FLAVOR" \
+        bash "$BRIDGE_INSTALLER"
+    fi
+  else
+    info "Saturn Bridge build explicitly disabled (SATURN_SATURNGO_BUILD_BRIDGE=$BUILD_BRIDGE)"
+  fi
 else
   STATUS_PHASE="build"
   write_status "running" "$STATUS_PHASE" "Skipping build"
@@ -432,6 +476,9 @@ fi
 BIN_SRC="$BUILD_TARGET_DIR/release/saturn-go"
 if (( ! DRY_RUN )) && (( ! SKIP_BUILD )) && [[ ! -x "$BIN_SRC" ]]; then
   die "Built binary not found: $BIN_SRC"
+fi
+if (( ! DRY_RUN )) && flag_enabled "$BUILD_BRIDGE" && [[ ! -x "$BRIDGE_BUILD_OUTPUT" ]]; then
+  die "Built Saturn Bridge not found: $BRIDGE_BUILD_OUTPUT"
 fi
 
 progress 65
@@ -459,6 +506,40 @@ write_status "running" "$STATUS_PHASE" "Preparing staged deploy payload"
 run_cmd mkdir -p "$STAGE_WEB_DIR" "$STAGE_SCRIPTS_DIR" "$STAGE_PRIVILEGED_SCRIPTS_DIR"
 if (( ! DRY_RUN )); then
   cp "$BIN_SRC" "$STAGE_DIR/saturn-go"
+  if flag_enabled "$BUILD_BRIDGE"; then
+    cp "$BRIDGE_BUILD_OUTPUT" "$STAGE_DIR/saturn-bridge"
+    cat >"$STAGE_DIR/saturn-bridge.service" <<EOF
+[Unit]
+Description=Saturn Bridge (WDSP 2.00)
+After=network-online.target p2app.service
+Wants=network-online.target p2app.service
+
+[Service]
+Type=simple
+User=${DEPLOY_RUN_USER}
+Group=${DEPLOY_RUN_GROUP}
+WorkingDirectory=${DEPLOY_ROOT}
+ExecStart=${DEPLOY_BRIDGE_BIN}
+Restart=on-failure
+RestartSec=2
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+Environment=SATURN_BRIDGE_RADIO_HOST=127.0.0.1
+Environment=SATURN_BRIDGE_RADIO_PORT=1024
+Environment=SATURN_BRIDGE_CLIENT_HOST=127.0.0.1
+Environment=SATURN_BRIDGE_CLIENT_PORT=12000
+Environment=SATURN_BRIDGE_TCI_HOST=127.0.0.1
+Environment=SATURN_BRIDGE_TCI_PORT=50001
+Environment=SATURN_BRIDGE_MAX_CLIENT_DDC0_SAMPLE_RATE_KHZ=192
+Environment=SATURN_BRIDGE_TX_OPUS_DECODE_ENABLED=1
+Environment=SATURN_REMOTE_TX_RF_ENABLED=1
+
+[Install]
+WantedBy=multi-user.target
+EOF
+  fi
   saturn_go_build_remote_web_assets "$REPO_ROOT/update_manager"
   saturn_go_copy_required_web_assets "$TEMPLATES_DIR" "$REPO_ROOT/update_manager" "$STAGE_WEB_DIR"
   saturn_go_copy_optional_web_assets "$TEMPLATES_DIR" "$REPO_ROOT/update_manager" "$STAGE_WEB_DIR"
@@ -473,31 +554,33 @@ if (( ! DRY_RUN )); then
     cp "$privileged_script" "$STAGE_PRIVILEGED_SCRIPTS_DIR/"
   done
   chmod 755 "$STAGE_DIR/saturn-go"
+  if [[ -f "$STAGE_DIR/saturn-bridge" ]]; then
+    chmod 755 "$STAGE_DIR/saturn-bridge"
+    chmod 644 "$STAGE_DIR/saturn-bridge.service"
+  fi
   find "$STAGE_SCRIPTS_DIR" -maxdepth 1 -type f \( -name '*.sh' -o -name '*.py' \) -print0 | xargs -0 -r chmod 755
   find "$STAGE_SCRIPTS_DIR" -maxdepth 1 -type f ! \( -name '*.sh' -o -name '*.py' \) -print0 | xargs -0 -r chmod 644
   find "$STAGE_PRIVILEGED_SCRIPTS_DIR" -maxdepth 1 -type f -print0 | xargs -0 -r chmod 755
   find "$STAGE_WEB_DIR" -maxdepth 1 -type f -print0 | xargs -0 -r chmod 644
 else
-  info "[dry-run] stage binary, web assets, packaged scripts, privileged helpers, and XDMA postinst hook under $STAGE_DIR"
+  info "[dry-run] stage Saturn Go/Bridge binaries, web assets, packaged scripts, privileged helpers, and XDMA postinst hook under $STAGE_DIR"
 fi
-
-# Copy web assets immediately so the UI updates even before the service restart.
-info "Deploying web assets..."
-STATUS_PHASE="deploy"
-write_status "running" "$STATUS_PHASE" "Copying web assets to webroot"
-run_cmd sudo -n cp "$STAGE_WEB_DIR/"* "$DEPLOY_WEBROOT/"
 
 HELPER="$STAGE_DIR/deploy-root-helper.sh"
 if (( ! DRY_RUN )); then
   cat > "$HELPER" <<EOF
 #!/usr/bin/env bash
-set -euo pipefail
+set -Eeuo pipefail
 STATUS_FILE="$(printf '%s' "$STATUS_FILE")"
 UNIT_NAME="$(printf '%s' "$UNIT_NAME")"
 SERVICE_NAME="$(printf '%s' "$SERVICE_NAME")"
 DEPLOY_RUN_USER="$(printf '%s' "$DEPLOY_RUN_USER")"
 DEPLOY_PRIVILEGED_SCRIPTS_DIR="$(printf '%s' "$DEPLOY_PRIVILEGED_SCRIPTS_DIR")"
 DEPLOY_SUDOERS_FILE="$(printf '%s' "$DEPLOY_SUDOERS_FILE")"
+DEPLOY_BIN="$(printf '%s' "$DEPLOY_BIN")"
+DEPLOY_BRIDGE_BIN="$(printf '%s' "$DEPLOY_BRIDGE_BIN")"
+DEPLOY_BRIDGE_SERVICE="$(printf '%s' "$DEPLOY_BRIDGE_SERVICE")"
+DEPLOY_BRIDGE_SERVICE_FILE="$(printf '%s' "$DEPLOY_BRIDGE_SERVICE_FILE")"
 XDMA_FIX_SCRIPT_INSTALL="$(printf '%s' "$XDMA_FIX_SCRIPT_INSTALL")"
 XDMA_POSTINST_HELPER_INSTALL="$(printf '%s' "$XDMA_POSTINST_HELPER_INSTALL")"
 XDMA_POSTINST_HOOK_PATH="$(printf '%s' "$XDMA_POSTINST_HOOK_PATH")"
@@ -539,13 +622,70 @@ JSON
   chown "\$SCRIPT_UID:\$SCRIPT_GID" "\$STATUS_FILE" >/dev/null 2>&1 || true
   chmod 0640 "\$STATUS_FILE" >/dev/null 2>&1 || true
 }
-trap 'rc=\$?; write_status "error" "root-deploy" "Root deploy helper failed" 1 "\$rc"; exit "\$rc"' ERR
+SATURN_GO_WAS_ACTIVE=0
+SATURN_GO_REPLACED=0
+BRIDGE_WAS_ACTIVE=0
+BRIDGE_REPLACED=0
+BRIDGE_UNIT_REPLACED=0
+on_error(){
+  local rc="\$?"
+  trap - ERR
+  set +e
+  systemctl stop "\$DEPLOY_BRIDGE_SERVICE" >/dev/null 2>&1 || true
+  if (( BRIDGE_REPLACED )) && [[ -f "\${DEPLOY_BRIDGE_BIN}.previous" ]]; then
+    install -m 0755 -o root -g root "\${DEPLOY_BRIDGE_BIN}.previous" "\$DEPLOY_BRIDGE_BIN"
+  fi
+  if (( BRIDGE_UNIT_REPLACED )) && [[ -f "\${DEPLOY_BRIDGE_SERVICE_FILE}.previous" ]]; then
+    install -m 0644 -o root -g root "\${DEPLOY_BRIDGE_SERVICE_FILE}.previous" "\$DEPLOY_BRIDGE_SERVICE_FILE"
+    systemctl daemon-reload
+  fi
+  if (( BRIDGE_WAS_ACTIVE )); then
+    systemctl start "\$DEPLOY_BRIDGE_SERVICE"
+  fi
+  systemctl stop "$SERVICE_NAME" >/dev/null 2>&1 || true
+  if (( SATURN_GO_REPLACED )) && [[ -f "\${DEPLOY_BIN}.previous" ]]; then
+    install -m 0755 -o root -g root "\${DEPLOY_BIN}.previous" "\$DEPLOY_BIN"
+  fi
+  if (( SATURN_GO_WAS_ACTIVE )); then
+    systemctl start "$SERVICE_NAME"
+  fi
+  write_status "error" "root-deploy" "Root deploy helper failed; previous service binaries restored" 1 "\$rc"
+  exit "\$rc"
+}
+trap on_error ERR
 write_status "running" "root-deploy" "Root deploy helper started"
 install -d -m 0755 "$DEPLOY_WEBROOT"
 install -d -m 0775 -o "\$SCRIPT_UID" -g "\$SCRIPT_GID" "$DEPLOY_SCRIPTS_DIR"
 install -d -m 0755 -o root -g root "$DEPLOY_PRIVILEGED_SCRIPTS_DIR"
+if systemctl is-active --quiet "$SERVICE_NAME"; then
+  SATURN_GO_WAS_ACTIVE=1
+fi
 systemctl stop "$SERVICE_NAME"
-install -m 0755 "$STAGE_DIR/saturn-go" "$DEPLOY_BIN"
+BRIDGE_STAGED=0
+if [[ -f "$STAGE_DIR/saturn-bridge" ]]; then
+  BRIDGE_STAGED=1
+  if systemctl is-active --quiet "\$DEPLOY_BRIDGE_SERVICE"; then
+    BRIDGE_WAS_ACTIVE=1
+  fi
+  systemctl stop "\$DEPLOY_BRIDGE_SERVICE" >/dev/null 2>&1 || true
+  if [[ -f "\$DEPLOY_BRIDGE_BIN" ]]; then
+    install -m 0755 "\$DEPLOY_BRIDGE_BIN" "\${DEPLOY_BRIDGE_BIN}.previous"
+  fi
+fi
+if [[ -f "\$DEPLOY_BIN" ]]; then
+  install -m 0755 "\$DEPLOY_BIN" "\${DEPLOY_BIN}.previous"
+fi
+install -m 0755 "$STAGE_DIR/saturn-go" "\$DEPLOY_BIN"
+SATURN_GO_REPLACED=1
+if (( BRIDGE_STAGED )); then
+  if [[ -f "\$DEPLOY_BRIDGE_SERVICE_FILE" ]]; then
+    install -m 0644 "\$DEPLOY_BRIDGE_SERVICE_FILE" "\${DEPLOY_BRIDGE_SERVICE_FILE}.previous"
+  fi
+  install -m 0755 -o root -g root "$STAGE_DIR/saturn-bridge" "\$DEPLOY_BRIDGE_BIN"
+  BRIDGE_REPLACED=1
+  install -m 0644 -o root -g root "$STAGE_DIR/saturn-bridge.service" "\$DEPLOY_BRIDGE_SERVICE_FILE"
+  BRIDGE_UNIT_REPLACED=1
+fi
 for src in "$STAGE_WEB_DIR/"*; do
   [[ -f "\$src" ]] || continue
   install -m 0644 "\$src" "$DEPLOY_WEBROOT/\$(basename "\$src")"
@@ -613,6 +753,8 @@ ${DEPLOY_RUN_USER} ALL=(root) NOPASSWD: ${DEPLOY_PRIVILEGED_SCRIPTS_DIR}/saturn-
 ${DEPLOY_RUN_USER} ALL=(root) NOPASSWD: ${DEPLOY_PRIVILEGED_SCRIPTS_DIR}/saturn-go-build-preflight.sh
 ${DEPLOY_RUN_USER} ALL=(root) NOPASSWD: ${DEPLOY_PRIVILEGED_SCRIPTS_DIR}/saturn-go-build-preflight.sh ensure-swap
 ${DEPLOY_RUN_USER} ALL=(root) NOPASSWD: ${DEPLOY_PRIVILEGED_SCRIPTS_DIR}/saturn-go-build-preflight.sh status
+${DEPLOY_RUN_USER} ALL=(root) NOPASSWD: ${DEPLOY_PRIVILEGED_SCRIPTS_DIR}/install-saturn-bridge.sh
+${DEPLOY_RUN_USER} ALL=(root) NOPASSWD: ${DEPLOY_PRIVILEGED_SCRIPTS_DIR}/install-saturn-bridge.sh *
 ${DEPLOY_RUN_USER} ALL=(root) NOPASSWD: ${DEPLOY_PRIVILEGED_SCRIPTS_DIR}/saturn-tailscale.sh
 ${DEPLOY_RUN_USER} ALL=(root) NOPASSWD: ${DEPLOY_PRIVILEGED_SCRIPTS_DIR}/saturn-tailscale.sh *
 ${DEPLOY_RUN_USER} ALL=(root) NOPASSWD: ${DEPLOY_PRIVILEGED_SCRIPTS_DIR}/saturn-go-tailscale-serve.sh
@@ -623,10 +765,33 @@ chmod 0440 "$DEPLOY_SUDOERS_FILE"
 if command -v visudo >/dev/null 2>&1; then
   visudo -cf "$DEPLOY_SUDOERS_FILE" >/dev/null
 fi
+if (( BRIDGE_STAGED )); then
+  systemctl daemon-reload
+  systemctl enable "\$DEPLOY_BRIDGE_SERVICE" >/dev/null
+  systemctl start "\$DEPLOY_BRIDGE_SERVICE"
+  systemctl is-active --quiet "\$DEPLOY_BRIDGE_SERVICE"
+  for _ in {1..20}; do
+    if ss -ltn | grep -q ':50001 '; then
+      break
+    fi
+    sleep 1
+  done
+  ss -ltn | grep -q ':50001 '
+fi
 systemctl start "$SERVICE_NAME"
 write_status "success" "root-deploy" "Root deploy helper completed" 1 0
 EOF
   chmod 755 "$HELPER"
+  bash -n "$HELPER"
+fi
+
+if (( STAGE_ONLY )); then
+  STATUS_PHASE="stage"
+  write_status "success" "$STATUS_PHASE" "Staged payload validated; deployment skipped" 1 0
+  info "Staged payload validated: $STAGE_DIR"
+  progress 100
+  info "Done"
+  exit 0
 fi
 
 progress 85

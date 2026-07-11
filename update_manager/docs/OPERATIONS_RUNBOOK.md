@@ -27,14 +27,24 @@ Installer actions include:
 - removes legacy distro `cargo`/`rustc` packages (if present)
 - bootstraps/updates a current stable Rust toolchain via `rustup` for the build user, then validates Cargo can read the repo lockfile
 - builds and deploys Rust binary to `/opt/saturn-go/bin/saturn-go`
+- provisions exact pinned WDSP 2.00 and piHPSDR Linux-port source commits in an
+  installer-owned sparse cache, then builds and installs
+  `/opt/saturn-go/bin/saturn-bridge`
 - copies web assets to `/var/lib/saturn-web`
 - copies scripts to `/opt/saturn-go/scripts`
 - grants service-user ownership of `/opt/saturn-go/scripts` so browser-managed custom script edits can persist
 - installs root-owned privileged helper copies to `/usr/local/lib/saturn-go/scripts`
 - rewrites `/etc/sudoers.d/saturn-go-maintenance` for those privileged helper paths
 - writes NGINX config for `/saturn/*` and SSE route `/saturn/run`
-- writes `saturn-go.service`, watchdog service, and watchdog timer
+- writes `saturn-go.service`, `saturn-bridge.service`, watchdog service, and
+  watchdog timer
 - waits for backend health at `/healthz`
+
+The normal installer does not require cloud-init to clone DSP sources, build
+piHPSDR, or create the bridge service. Set `SATURN_INSTALL_BRIDGE=0` only for an
+intentional backend-only installation. The default is fail-closed: Remote UI
+assets are not considered a complete install if their matching bridge cannot
+be built.
 
 ## Update Existing Deployment
 
@@ -46,6 +56,52 @@ sudo bash update_manager/install_saturn_go_nginx.sh
 ```
 
 Installer is designed to refresh service, web assets, scripts, and config.
+Saturn Go self-update also builds the bridge in build-only mode, stages the
+binary and service unit with the UI bundle, and deploys them together. Set
+`SATURN_SATURNGO_BUILD_BRIDGE=0` only when intentionally retaining an older
+bridge.
+
+Validate the complete payload without changing running services:
+
+```bash
+SATURN_ACTIVE_REPO_ROOT=/home/pi/github/Saturn \
+  bash update_manager/scripts/update-saturn-go.sh --skip-git --stage-only --verbose
+```
+
+This builds Saturn Go, Saturn Bridge against the pinned WDSP 2.00 sources, and
+the Remote UI bundle, then checks the generated deployment helper. During a
+real update, a failed service startup or bridge TCI listener check restores the
+previous service binaries.
+
+### WDSP 2.00 / PureSignal Post-Install Check
+
+Verify the deployed bridge and UI are from the same installation:
+
+```bash
+systemctl --no-pager status saturn-bridge.service
+nm -a /opt/saturn-go/bin/saturn-bridge \
+  | grep -E 'SetRXAWBFMdmph|SetTXAPHROTAutoMode|SetPSControl|pscc'
+sha256sum -c /var/lib/saturn-web/saturn-remote-next.js.sha256
+```
+
+For the first PureSignal test, close Thetis and other Protocol 2 controllers,
+use a 50-ohm dummy load, start at 5 W or less, enable automatic feedback
+attenuation, and use the 700/1900 Hz two-tone generator. Expected healthy
+telemetry is feedback near 140-165, `correcting=1`, stable attenuation, and zero
+feedback gaps. Stop immediately on ADC overload, a feedback fault, or an
+unexpected power reading.
+
+The bridge installer keeps Cargo/native source caches under
+`update_manager/saturn-bridge/target-local`. Saturn Go self-update saves the
+previous deployed bridge as `/opt/saturn-go/bin/saturn-bridge.previous` before
+replacement. To roll that binary back:
+
+```bash
+sudo systemctl stop saturn-bridge.service
+sudo install -m 0755 /opt/saturn-go/bin/saturn-bridge.previous \
+  /opt/saturn-go/bin/saturn-bridge
+sudo systemctl start saturn-bridge.service
+```
 
 If an older install attempt failed with a Cargo lockfile parse error (for example
 `lock file version '4'` on Bookworm using distro `cargo`), rerun the installer.

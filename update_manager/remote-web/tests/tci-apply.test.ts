@@ -15,6 +15,12 @@ function createState(): TciRadioState {
     rxVolumeDb: -10,
     rxNoiseReductionMode: 'NR2',
     rxNoiseReductionLevel: 100,
+    rxNr2GainMethod: 'GAMMA',
+    rxNr2NpeMethod: 'OSMS',
+    rxNr2PostFilterEnabled: true,
+    rxWbfmSupported: false,
+    rxWbfmDeemphasis: 'NA_75US',
+    rxWbfmStereoDetected: false,
     rxNbMode: 'OFF',
     rxNbThreshold: 4.95,
     rxAnrTaps: 64,
@@ -83,6 +89,19 @@ function createState(): TciRadioState {
     cfcEnabled: false,
     cfcPrecomp: 0,
     cfcBands: new Array(11).fill(0),
+    txPhaseRotatorEnabled: false,
+    txPhaseRotatorAuto: false,
+    txPhaseRotatorCornerHz: 338,
+    pureSignalEnabled: false,
+    pureSignalAutoAttenuate: true,
+    pureSignalAttenuationDb: 0,
+    pureSignalState: 'off',
+    pureSignalFeedbackLevel: 0,
+    pureSignalCalibrationCount: 0,
+    pureSignalCorrecting: false,
+    pureSignalMaxTx: 0,
+    pureSignalFeedbackPackets: 0,
+    pureSignalFeedbackGaps: 0,
     twoToneEnabled: false,
     txTwoToneFreq1: 700,
     txTwoToneFreq2: 1900,
@@ -116,6 +135,52 @@ describe('applyTciText', () => {
     expect(result.state.meterDbm).toBe(-91.2);
     expect(result.state.txPower).toBe(35);
     expect(result.state.swr).toBe(1.8);
+  });
+
+  it('applies WDSP 2.00 NR2 and phase-rotator state', () => {
+    const result = applyTciText(
+      'rx_nr2_gain_method:0,TRAINED;rx_nr2_npe_method:0,NSTAT;rx_nr2_post_filter:0,false;' +
+      'tx_phase_rotator:0,true;tx_phase_rotator_auto:0,true;tx_phase_rotator_corner:0,425;',
+      createState(),
+    );
+    expect(result.state.rxNr2GainMethod).toBe('TRAINED');
+    expect(result.state.rxNr2NpeMethod).toBe('NSTAT');
+    expect(result.state.rxNr2PostFilterEnabled).toBe(false);
+    expect(result.state.txPhaseRotatorEnabled).toBe(true);
+    expect(result.state.txPhaseRotatorAuto).toBe(true);
+    expect(result.state.txPhaseRotatorCornerHz).toBe(425);
+  });
+
+  it('applies WDSP 2.00 WFM capability, de-emphasis, and stereo lock', () => {
+    const result = applyTciText(
+      'rx_wbfm_supported:0,true;rx_wbfm_deemphasis:0,EU_50US;rx_wbfm_stereo:0,true;modulation:0,WFM;',
+      createState(),
+    );
+    expect(result.state.rxWbfmSupported).toBe(true);
+    expect(result.state.rxWbfmDeemphasis).toBe('EU_50US');
+    expect(result.state.rxWbfmStereoDetected).toBe(true);
+    expect(result.state.mode).toBe('WFM');
+  });
+
+  it('applies PureSignal controls and calibration telemetry', () => {
+    const result = applyTciText(
+      'tx_puresignal:0,true;tx_puresignal_auto_attenuate:0,true;' +
+      'tx_puresignal_attenuation:0,12;tx_puresignal_state:0,correcting;' +
+      'tx_puresignal_feedback:0,153;tx_puresignal_calibration_count:0,4;' +
+      'tx_puresignal_correcting:0,true;tx_puresignal_max_tx:0,0.83;' +
+      'tx_puresignal_feedback_packets:0,900;tx_puresignal_feedback_gaps:0,2;',
+      createState(),
+    );
+    expect(result.state.pureSignalEnabled).toBe(true);
+    expect(result.state.pureSignalAutoAttenuate).toBe(true);
+    expect(result.state.pureSignalAttenuationDb).toBe(12);
+    expect(result.state.pureSignalState).toBe('correcting');
+    expect(result.state.pureSignalFeedbackLevel).toBe(153);
+    expect(result.state.pureSignalCalibrationCount).toBe(4);
+    expect(result.state.pureSignalCorrecting).toBe(true);
+    expect(result.state.pureSignalMaxTx).toBe(0.83);
+    expect(result.state.pureSignalFeedbackPackets).toBe(900);
+    expect(result.state.pureSignalFeedbackGaps).toBe(2);
   });
 
   it('tracks bridge RTT from saturn pong replies', () => {

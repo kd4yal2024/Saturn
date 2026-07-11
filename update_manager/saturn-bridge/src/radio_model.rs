@@ -12,6 +12,7 @@ pub enum DemodMode {
     Am,
     Sam,
     Fm,
+    Wfm,
     DigU,
     DigL,
     Unknown,
@@ -33,6 +34,7 @@ impl fmt::Display for DemodMode {
             Self::Am => "AM",
             Self::Sam => "SAM",
             Self::Fm => "FM",
+            Self::Wfm => "WFM",
             Self::DigU => "DIGU",
             Self::DigL => "DIGL",
             Self::Unknown => "UNKNOWN",
@@ -51,6 +53,7 @@ impl DemodMode {
             "AM" => Self::Am,
             "SAM" => Self::Sam,
             "FM" | "NFM" => Self::Fm,
+            "WFM" | "WBFM" | "FM_STEREO" => Self::Wfm,
             "DIGU" => Self::DigU,
             "DIGL" => Self::DigL,
             _ => Self::Unknown,
@@ -66,6 +69,7 @@ impl DemodMode {
             Self::Cwu => (200, 800),
             Self::Am | Self::Sam => (-4000, 4000),
             Self::Fm => (-6000, 6000),
+            Self::Wfm => (-90_000, 90_000),
         }
     }
 
@@ -78,7 +82,44 @@ impl DemodMode {
             Self::Cwl => (-800, -200),
             Self::Cwu => (200, 800),
             Self::Am | Self::Sam => (-3000, 3000),
-            Self::Fm => (-3000, 3000),
+            Self::Fm | Self::Wfm => (-3000, 3000),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum WbfmDeemphasis {
+    Off,
+    #[default]
+    NorthAmerica,
+    Europe,
+}
+
+impl fmt::Display for WbfmDeemphasis {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::Off => "OFF",
+            Self::NorthAmerica => "NA_75US",
+            Self::Europe => "EU_50US",
+        })
+    }
+}
+
+impl WbfmDeemphasis {
+    pub fn from_tci(text: &str) -> Self {
+        match text.trim().to_ascii_uppercase().as_str() {
+            "0" | "OFF" | "NONE" => Self::Off,
+            "2" | "EU" | "EUROPE" | "EU_50US" | "50US" => Self::Europe,
+            _ => Self::NorthAmerica,
+        }
+    }
+
+    #[cfg(wdsp_has_wbfm)]
+    pub fn wdsp_values(self) -> (i32, i32) {
+        match self {
+            Self::Off => (0, 0),
+            Self::NorthAmerica => (1, 0),
+            Self::Europe => (1, 1),
         }
     }
 }
@@ -120,6 +161,82 @@ impl NoiseReductionMode {
             "3" | "NR3" | "RNNR" => Self::Nr3,
             "4" | "NR4" | "SBNR" => Self::Nr4,
             _ => Self::Off,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum Nr2GainMethod {
+    Gaussian,
+    GaussianLog,
+    #[default]
+    Gamma,
+    Trained,
+}
+
+impl fmt::Display for Nr2GainMethod {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::Gaussian => "GAUSSIAN",
+            Self::GaussianLog => "GAUSSIAN_LOG",
+            Self::Gamma => "GAMMA",
+            Self::Trained => "TRAINED",
+        })
+    }
+}
+
+impl Nr2GainMethod {
+    pub fn from_tci(text: &str) -> Self {
+        match text.trim().to_ascii_uppercase().as_str() {
+            "0" | "GAUSSIAN" | "GAUSSIAN_LINEAR" => Self::Gaussian,
+            "1" | "GAUSSIAN_LOG" | "LOG" => Self::GaussianLog,
+            "3" | "TRAINED" => Self::Trained,
+            _ => Self::Gamma,
+        }
+    }
+
+    pub fn wdsp_value(self) -> i32 {
+        match self {
+            Self::Gaussian => 0,
+            Self::GaussianLog => 1,
+            Self::Gamma => 2,
+            Self::Trained => 3,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum Nr2NpeMethod {
+    #[default]
+    Osms,
+    Mmse,
+    Nstat,
+}
+
+impl fmt::Display for Nr2NpeMethod {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::Osms => "OSMS",
+            Self::Mmse => "MMSE",
+            Self::Nstat => "NSTAT",
+        })
+    }
+}
+
+impl Nr2NpeMethod {
+    pub fn from_tci(text: &str) -> Self {
+        match text.trim().to_ascii_uppercase().as_str() {
+            "1" | "MMSE" => Self::Mmse,
+            "2" | "NSTAT" => Self::Nstat,
+            _ => Self::Osms,
+        }
+    }
+
+    pub fn wdsp_value(self) -> i32 {
+        match self {
+            Self::Osms => 0,
+            Self::Mmse => 1,
+            Self::Nstat => 2,
         }
     }
 }
@@ -228,6 +345,28 @@ impl fmt::Display for TxPhase {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum PureSignalState {
+    #[default]
+    Off,
+    Waiting,
+    Calibrating,
+    Correcting,
+    Fault,
+}
+
+impl fmt::Display for PureSignalState {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Off => write!(f, "off"),
+            Self::Waiting => write!(f, "waiting"),
+            Self::Calibrating => write!(f, "calibrating"),
+            Self::Correcting => write!(f, "correcting"),
+            Self::Fault => write!(f, "fault"),
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct DesiredRadioState {
     pub running: bool,
@@ -244,6 +383,10 @@ pub struct DesiredRadioState {
     pub rx_volume_db: f64,
     pub rx_noise_reduction_mode: NoiseReductionMode,
     pub rx_noise_reduction_level: f64,
+    pub rx_nr2_gain_method: Nr2GainMethod,
+    pub rx_nr2_npe_method: Nr2NpeMethod,
+    pub rx_nr2_post_filter_enabled: bool,
+    pub rx_wbfm_deemphasis: WbfmDeemphasis,
     pub nb_mode: NoiseBlankerMode,
     pub nb_threshold: f64,
     pub rx_anr_taps: i32,
@@ -274,6 +417,12 @@ pub struct DesiredRadioState {
     pub cfc_enabled: bool,
     pub cfc_precomp_db: f64,
     pub cfc_bands: [f64; 10],
+    pub tx_phase_rotator_enabled: bool,
+    pub tx_phase_rotator_auto: bool,
+    pub tx_phase_rotator_corner_hz: f64,
+    pub pure_signal_enabled: bool,
+    pub pure_signal_auto_attenuate: bool,
+    pub pure_signal_attenuation_db: u8,
     pub two_tone_enabled: bool,
     pub tx_two_tone_freq1_hz: f64,
     pub tx_two_tone_freq2_hz: f64,
@@ -296,6 +445,14 @@ pub struct ObservedRadioState {
     pub ddc0_packets: u64,
     pub high_priority_packets: u64,
     pub ddc0_meter_dbm: Option<f32>,
+    pub rx_wbfm_stereo_detected: bool,
+    pub pure_signal_state: PureSignalState,
+    pub pure_signal_feedback_level: i32,
+    pub pure_signal_calibration_count: i32,
+    pub pure_signal_correcting: bool,
+    pub pure_signal_max_tx: f64,
+    pub pure_signal_feedback_packets: u64,
+    pub pure_signal_feedback_gaps: u64,
 }
 
 #[derive(Clone, Debug)]
@@ -335,6 +492,10 @@ impl RadioModel {
                 rx_volume_db: -10.0,
                 rx_noise_reduction_mode: NoiseReductionMode::Off,
                 rx_noise_reduction_level: 0.0,
+                rx_nr2_gain_method: Nr2GainMethod::Gamma,
+                rx_nr2_npe_method: Nr2NpeMethod::Osms,
+                rx_nr2_post_filter_enabled: true,
+                rx_wbfm_deemphasis: WbfmDeemphasis::NorthAmerica,
                 nb_mode: NoiseBlankerMode::Off,
                 nb_threshold: 4.95,
                 rx_anr_taps: 64,
@@ -363,6 +524,12 @@ impl RadioModel {
                 cfc_enabled: false,
                 cfc_precomp_db: 0.0,
                 cfc_bands: [0.0f64; 10],
+                tx_phase_rotator_enabled: false,
+                tx_phase_rotator_auto: false,
+                tx_phase_rotator_corner_hz: 338.0,
+                pure_signal_enabled: false,
+                pure_signal_auto_attenuate: true,
+                pure_signal_attenuation_db: 0,
                 two_tone_enabled: false,
                 tx_two_tone_freq1_hz: 700.0,
                 tx_two_tone_freq2_hz: 1900.0,

@@ -27,6 +27,10 @@ describe('buildRxFilterBandCommand', () => {
     expect(buildRxFilterBandCommand(50, 3050, 'USB', 500)).toBe('rx_filter_band:0,550,3550;');
     expect(buildRxFilterBandCommand(300, 3000, 'LSB', -200)).toBe('rx_filter_band:0,-3200,-500;');
   });
+
+  it('uses the fixed broadcast channel width for WFM', () => {
+    expect(buildRxFilterBandCommand(50, 3050, 'WFM')).toBe('rx_filter_band:0,-90000,90000;');
+  });
 });
 
 describe('buildTxFilterBandCommand', () => {
@@ -87,6 +91,16 @@ describe('buildAllRadioPrefsCommands', () => {
     expect(cmds.some((c) => c.startsWith('tx_filter_band:'))).toBe(true);
     expect(cmds.some((c) => c.startsWith('rx_eq_band:'))).toBe(true);
     expect(cmds.some((c) => c.startsWith('tx_cfc_band:'))).toBe(true);
+    expect(cmds).toContain('rx_nr2_gain_method:0,GAMMA;');
+    expect(cmds).toContain('rx_nr2_npe_method:0,OSMS;');
+    expect(cmds).toContain('rx_nr2_post_filter:0,true;');
+    expect(cmds).toContain('rx_wbfm_deemphasis:0,NA_75US;');
+    expect(cmds).toContain('tx_phase_rotator:0,false;');
+    expect(cmds).toContain('tx_phase_rotator_auto:0,false;');
+    expect(cmds).toContain('tx_phase_rotator_corner:0,338;');
+    expect(cmds).toContain('tx_puresignal:0,false;');
+    expect(cmds).toContain('tx_puresignal_auto_attenuate:0,true;');
+    expect(cmds).toContain('tx_puresignal_attenuation:0,0;');
     expect(cmds.some((c) => c.startsWith('tx_two_tone:'))).toBe(true);
   });
 

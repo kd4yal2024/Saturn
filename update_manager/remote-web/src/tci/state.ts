@@ -1,5 +1,12 @@
 import type { DemodMode } from '../radio/passband';
-import type { AgcMode, NoiseBlankerMode, NoiseReductionMode } from '../settings/types';
+import type {
+  AgcMode,
+  NoiseBlankerMode,
+  NoiseReductionMode,
+  Nr2GainMethod,
+  Nr2NpeMethod,
+  WbfmDeemphasis,
+} from '../settings/types';
 
 export type TciClientRole = 'operator' | 'viewer';
 export type TxCodecName = 'pcm' | 'opus_nb' | 'opus_wb';
@@ -16,6 +23,12 @@ export type TciRadioState = {
   rxVolumeDb: number;
   rxNoiseReductionMode: NoiseReductionMode;
   rxNoiseReductionLevel: number;
+  rxNr2GainMethod: Nr2GainMethod;
+  rxNr2NpeMethod: Nr2NpeMethod;
+  rxNr2PostFilterEnabled: boolean;
+  rxWbfmSupported: boolean;
+  rxWbfmDeemphasis: WbfmDeemphasis;
+  rxWbfmStereoDetected: boolean;
   rxNbMode: NoiseBlankerMode;
   rxNbThreshold: number;
   rxAnrTaps: number;
@@ -84,6 +97,19 @@ export type TciRadioState = {
   cfcEnabled: boolean;
   cfcPrecomp: number;
   cfcBands: number[];
+  txPhaseRotatorEnabled: boolean;
+  txPhaseRotatorAuto: boolean;
+  txPhaseRotatorCornerHz: number;
+  pureSignalEnabled: boolean;
+  pureSignalAutoAttenuate: boolean;
+  pureSignalAttenuationDb: number;
+  pureSignalState: 'off' | 'waiting' | 'calibrating' | 'correcting' | 'fault';
+  pureSignalFeedbackLevel: number;
+  pureSignalCalibrationCount: number;
+  pureSignalCorrecting: boolean;
+  pureSignalMaxTx: number;
+  pureSignalFeedbackPackets: number;
+  pureSignalFeedbackGaps: number;
   twoToneEnabled: boolean;
   txTwoToneFreq1: number;
   txTwoToneFreq2: number;

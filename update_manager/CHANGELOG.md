@@ -4,6 +4,29 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
 
 ## [Unreleased]
 ### Added
+- Reproducible non-cloud-init Saturn Bridge deployment: the Saturn Go installer
+  now enables the bridge by default, provisions sparse upstream sources at
+  pinned commits, builds/verifies WDSP 2.00 and the bridge, and installs the
+  service with the matching Remote UI assets. Saturn Go self-update now stages
+  the bridge binary and unit alongside the backend and web bundle.
+- Saturn Bridge PureSignal 3.0 support using synchronized 192 kHz DDC0 ADC
+  feedback and DDC1 TX-DAC reference samples, WDSP automatic calibration and
+  correction, automatic/manual feedback attenuation, feedback-loss bypass,
+  and live state telemetry in Saturn Remote Setup -> TX. Saturn Remote's
+  Operator Log now records coalesced calibration/state/attenuation events,
+  periodic active feedback samples, packet-gap faults, and a complete
+  PureSignal snapshot in copied log exports.
+- Saturn Remote WDSP 2.00 controls for NR2 gain/noise-estimation methods,
+  psychoacoustic post filtering, and the TX phase rotator with manual or
+  automatic corner-frequency operation. The bridge persists and publishes the
+  new TCI state, disables phase rotation in coherent digital modes, and
+  feature-detects the WDSP 2.00 auto optimizer for legacy-library compatibility.
+- WDSP 2.00 wideband FM stereo reception with a 192 kHz RX DSP path, stereo
+  lock indication, selectable North American 75 us or European 50 us
+  de-emphasis, FM broadcast band memory, and receive-only safeguards. The
+  Remote UI also has a denser operator layout that keeps the spectrum,
+  waterfall, VFO, and primary receive controls visible together on desktop
+  while preserving a spectrum-first phone layout.
 - New `/remote-next` page served from the Saturn Remote TLS listener as the
   next-generation Saturn Remote UI, alongside the existing stable `/remote`
   page. The two pages share the same basic-auth gate, persisted

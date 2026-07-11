@@ -403,7 +403,10 @@ Installer behavior (current):
 - Removes legacy distro `cargo`/`rustc` packages (if installed) and bootstraps a current Rust toolchain via `rustup` for the build user before compiling (fixes old-Cargo `Cargo.lock` v4 parse errors on Bookworm)
 - Installs `nodejs` and `npm` and runs lockfile-only `npm ci && npm run build` in `update_manager/remote-web` to produce the `saturn-remote-next.js` Vite bundle before staging web assets
 - Uses `update_manager/scripts/saturn-go-web-assets.sh` as the shared web asset manifest for install and self-update deploys (fails fast if any required asset, including `saturn-remote-next.html`/`saturn-remote-next.js`, is missing)
-- Checks Saturn Remote bridge prerequisites during install. `/remote` and `/remote-next` require `saturn-bridge.service`, the piHPSDR static DSP libraries (`libwdsp.a`, `librnnoise.a`, `libspecbleach.a`), and `libfftw3-dev`.
+- Builds and installs `saturn-bridge.service` by default. The bridge installer
+  provisions pinned sparse WDSP 2.00 and piHPSDR Linux-port sources, builds the
+  native archive, verifies WFM/phase-rotator/PureSignal symbols, and links the
+  bridge without a prebuilt piHPSDR tree or cloud-init provisioning.
 - Copies `saturn-remote-next.js` only from the Vite `dist/` output and verifies the deployed bundle with `saturn-remote-next.js.sha256`, preventing stale template/root files from shadowing a fresh build
 - Proxies all `/saturn/*` routes through NGINX to the Rust backend
 - Redirects plain HTTP remote entry points such as `/remote` and `/saturn/remote` to `https://<host>:8443/remote`
@@ -417,6 +420,13 @@ Installer behavior (current):
   narrow set of privileged maintenance helpers non-interactively
 - Installs matching root-owned privileged helper copies under `/usr/local/lib/saturn-go/scripts`
 - Installs root-owned watchdog script at `/usr/local/lib/saturn-go/saturn-health-watchdog.sh` (outside writable custom script path)
+- Saturn Go self-update builds and stages a matching WDSP 2.00 bridge binary,
+  service unit, Remote UI HTML, bundle, and checksum before dispatching the
+  detached root deployment helper.
+- Run `update_manager/scripts/update-saturn-go.sh --skip-git --stage-only` to
+  build and validate that complete payload without changing running services.
+  A real deployment keeps the previous Saturn Go and bridge binaries and
+  restores them if service startup or the bridge TCI health check fails.
 
 Remote state notes:
 
@@ -488,9 +498,19 @@ Default URL:
 - `SATURN_ADMIN_PASSWORD` (optional non-interactive initial admin password)
 - `SATURN_SERVICE_USER` (installer override for service user)
 - `SATURN_SERVICE_GROUP` (installer override for service group)
-- `SATURN_INSTALL_BRIDGE=1` builds/installs `saturn-bridge.service` after Saturn Go when piHPSDR native libraries are present
-- `SATURN_REQUIRE_BRIDGE=1` turns missing Saturn Remote bridge prerequisites into an installer failure
-- `SATURN_PIHPSDR_DIR` points the bridge preflight/build at a non-default piHPSDR checkout
+- `SATURN_INSTALL_BRIDGE` defaults to `1`; set it to `0` to opt out of building
+  and installing `saturn-bridge.service`
+- `SATURN_REQUIRE_BRIDGE` defaults to `SATURN_INSTALL_BRIDGE`; when enabled,
+  native source/build failures fail the full installation
+- `SATURN_BRIDGE_WDSP_FLAVOR` defaults to `wdsp2`; `pihpsdr` is the explicit
+  legacy-library mode
+- `SATURN_WDSP2_REPO_URL` / `SATURN_WDSP2_REF` override the pinned TAPR WDSP
+  source (default ref `584e8aca5ba1c4c6bc66fc0cc164ce567c8ba1e3`)
+- `SATURN_PIHPSDR_PORT_REPO_URL` / `SATURN_PIHPSDR_PORT_REF` override the pinned
+  Linux port shim source (default ref `974acbac07fe7dd3e24f28f3956a9ffb3a1ebaf1`)
+- `SATURN_SATURNGO_BUILD_BRIDGE` defaults to `1` for Saturn Go self-update;
+  set it to `0` only when intentionally retaining the installed bridge
+- `SATURN_PIHPSDR_DIR` is used only by the explicit `pihpsdr` legacy mode
 
 ## Troubleshooting
 

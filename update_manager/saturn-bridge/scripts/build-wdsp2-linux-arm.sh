@@ -4,8 +4,9 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BRIDGE_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
-WDSP2_SOURCE_DIR="${WDSP2_SOURCE_DIR:-/home/pi/github/OpenHPSDR-wdsp/wdsp 2.00/Source}"
-PIHPSDR_WDSP_DIR="${PIHPSDR_WDSP_DIR:-/home/pi/github/pihpsdr/wdsp}"
+NATIVE_SOURCE_ROOT="${SATURN_BRIDGE_NATIVE_SOURCE_ROOT:-${BRIDGE_DIR}/target/native-src}"
+WDSP2_SOURCE_DIR="${WDSP2_SOURCE_DIR:-${NATIVE_SOURCE_ROOT}/OpenHPSDR-wdsp/wdsp 2.00/Source}"
+PIHPSDR_WDSP_DIR="${PIHPSDR_WDSP_DIR:-${NATIVE_SOURCE_ROOT}/pihpsdr/wdsp}"
 BUILD_DIR="${WDSP2_BUILD_DIR:-${BRIDGE_DIR}/target/wdsp2-linux-arm}"
 
 if [[ ! -d "${WDSP2_SOURCE_DIR}" ]]; then
@@ -97,6 +98,36 @@ linux_port_h.write_text(text)
 
 linux_port_c = root / "linux_port.c"
 text = linux_port_c.read_text()
+old_wait_for_single_object = (
+    "int LinuxWaitForSingleObject(sem_t *sem,int ms) {\n"
+    "\tint result=0;\n"
+    "\tif(ms==INFINITE) {\n"
+    "\t\t// wait for the lock\n"
+    "\t\tresult=sem_wait(sem);\n"
+    "\t} else {\n"
+    "\t\tfor (int i = 0; i < ms; i++) {\n"
+    "\t\t  result=sem_trywait(sem);\n"
+    "\t\t  if (result == 0) break;\n"
+    "\t\t  Sleep(1);\n"
+    "\t\t}\n"
+    "\t}\n\n"
+    "\treturn result;\n"
+    "}\n"
+)
+new_wait_for_single_object = (
+    "int LinuxWaitForSingleObject(sem_t *sem,int ms) {\n"
+    "\tif (ms == INFINITE) return sem_wait(sem);\n\n"
+    "\tint result = sem_trywait(sem);\n"
+    "\tfor (int elapsed = 0; result != 0 && elapsed < ms; elapsed++) {\n"
+    "\t\tSleep(1);\n"
+    "\t\tresult = sem_trywait(sem);\n"
+    "\t}\n"
+    "\treturn result;\n"
+    "}\n"
+)
+if old_wait_for_single_object not in text:
+    raise RuntimeError("piHPSDR LinuxWaitForSingleObject implementation changed")
+text = text.replace(old_wait_for_single_object, new_wait_for_single_object, 1)
 text = text.replace(
     "#if defined(linux) || defined(__APPLE__)\n\n",
     "#if defined(linux) || defined(__APPLE__)\n\n"
@@ -136,6 +167,28 @@ linux_port_c.write_text(text)
 snoop = root / "snoop.c"
 if snoop.exists():
     snoop.write_text(snoop.read_text().replace("void xsnoop(channel)\n", "void xsnoop(int channel)\n"))
+
+wbfm = root / "wbfm.c"
+text = wbfm.read_text()
+old_dmph_update = (
+    "\t\ta->dmph = dmph_run;\n"
+    "\t\ta->dmph_type = dmph_continent;\n"
+    "\t\tLeaveCriticalSection(&ch[channel].csDSP);\n"
+)
+new_dmph_update = (
+    "\t\ta->dmph = dmph_run;\n"
+    "\t\ta->dmph_type = dmph_continent;\n"
+    "\t\ta->dmphL->run = dmph_run;\n"
+    "\t\ta->dmphR->run = dmph_run;\n"
+    "\t\ta->dmphL->tau = dmph_continent ? 50.0e-6 : 75.0e-6;\n"
+    "\t\ta->dmphR->tau = dmph_continent ? 50.0e-6 : 75.0e-6;\n"
+    "\t\tcalc_dmph(a->dmphL);\n"
+    "\t\tcalc_dmph(a->dmphR);\n"
+    "\t\tLeaveCriticalSection(&ch[channel].csDSP);\n"
+)
+if old_dmph_update not in text:
+    raise RuntimeError("WDSP 2.00 SetRXAWBFMdmph implementation changed")
+wbfm.write_text(text.replace(old_dmph_update, new_dmph_update, 1))
 PY
 
 cd "${BUILD_DIR}"

@@ -6,6 +6,11 @@ import {
   clampRxVolumeDb,
   normalizeNrMode,
   clampRxNoiseReductionLevel,
+  normalizeNr2GainMethod,
+  normalizeNr2NpeMethod,
+  normalizeWbfmDeemphasis,
+  clampTxPhaseRotatorCornerHz,
+  clampPureSignalAttenuationDb,
   normalizeNbMode,
   clampRxNbThreshold,
   clampDspTapCount,
@@ -39,6 +44,10 @@ export interface RadioPrefsSource {
   rxVolumeDb: number;
   rxNoiseReductionMode: string;
   rxNoiseReductionLevel: number;
+  rxNr2GainMethod: string;
+  rxNr2NpeMethod: string;
+  rxNr2PostFilterEnabled: boolean;
+  rxWbfmDeemphasis: string;
   rxNbMode: string;
   rxNbThreshold: number;
   rxAnrTaps: number;
@@ -65,6 +74,12 @@ export interface RadioPrefsSource {
   cfcEnabled: boolean;
   cfcPrecomp: number;
   cfcBands: number[];
+  txPhaseRotatorEnabled: boolean;
+  txPhaseRotatorAuto: boolean;
+  txPhaseRotatorCornerHz: number;
+  pureSignalEnabled: boolean;
+  pureSignalAutoAttenuate: boolean;
+  pureSignalAttenuationDb: number;
   txMeterMode: string;
   twoToneEnabled: boolean;
   txTwoToneFreq1: number;
@@ -103,6 +118,10 @@ export function radioPrefsFromState(s: RadioPrefsSource): RadioPrefs {
     rxVolumeDb: clampRxVolumeDb(s.rxVolumeDb),
     rxNoiseReductionMode: normalizeNrMode(s.rxNoiseReductionMode),
     rxNoiseReductionLevel: clampRxNoiseReductionLevel(s.rxNoiseReductionLevel),
+    rxNr2GainMethod: normalizeNr2GainMethod(s.rxNr2GainMethod),
+    rxNr2NpeMethod: normalizeNr2NpeMethod(s.rxNr2NpeMethod),
+    rxNr2PostFilterEnabled: Boolean(s.rxNr2PostFilterEnabled),
+    rxWbfmDeemphasis: normalizeWbfmDeemphasis(s.rxWbfmDeemphasis),
     rxNbMode: normalizeNbMode(s.rxNbMode),
     rxNbThreshold: clampRxNbThreshold(s.rxNbThreshold),
     rxAnrTaps: clampDspTapCount(s.rxAnrTaps),
@@ -129,6 +148,12 @@ export function radioPrefsFromState(s: RadioPrefsSource): RadioPrefs {
     cfcEnabled: Boolean(s.cfcEnabled),
     cfcPrecomp: Number(s.cfcPrecomp) || 0,
     cfcBands: sanitizeCfcBands(s.cfcBands),
+    txPhaseRotatorEnabled: Boolean(s.txPhaseRotatorEnabled),
+    txPhaseRotatorAuto: Boolean(s.txPhaseRotatorAuto),
+    txPhaseRotatorCornerHz: clampTxPhaseRotatorCornerHz(s.txPhaseRotatorCornerHz),
+    pureSignalEnabled: Boolean(s.pureSignalEnabled),
+    pureSignalAutoAttenuate: Boolean(s.pureSignalAutoAttenuate),
+    pureSignalAttenuationDb: clampPureSignalAttenuationDb(s.pureSignalAttenuationDb),
     txMeterMode: normalizeTxMeterMode(s.txMeterMode),
     twoToneEnabled: Boolean(s.twoToneEnabled),
     txTwoToneFreq1: clampTwoToneFreqHz(s.txTwoToneFreq1, 700),

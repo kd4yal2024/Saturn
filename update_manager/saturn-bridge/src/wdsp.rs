@@ -7,7 +7,10 @@ use std::fmt;
 use std::sync::Once;
 use std::time::{Duration, Instant};
 
-use crate::radio_model::{AgcMode, DemodMode, NoiseBlankerMode, NoiseReductionMode, RadioModel};
+use crate::radio_model::{
+    AgcMode, DemodMode, NoiseBlankerMode, NoiseReductionMode, Nr2GainMethod, Nr2NpeMethod,
+    PureSignalState, RadioModel, WbfmDeemphasis,
+};
 
 const WDSP_RX_CHANNEL: i32 = 0;
 const WDSP_TX_CHANNEL: i32 = 1;
@@ -19,6 +22,8 @@ const WDSP_TX_DSP_RATE_HZ: u32 = 96_000;
 pub const WDSP_TX_IQ_RATE_HZ: u32 = 192_000;
 const WDSP_TX_OUTPUT_SAMPLES: usize =
     TX_MIC_SAMPLES_PER_DSP_BLOCK * (WDSP_TX_IQ_RATE_HZ as usize / WDSP_AUDIO_RATE_HZ as usize);
+const WDSP_PS_FEEDBACK_BLOCK_SAMPLES: usize = 1024;
+const WDSP_PS_SATURN_HW_PEAK: f64 = 0.6121;
 const WDSP_AUDIO_FRAME_FLOATS: usize = 512;
 const WDSP_ANR_TAPS: i32 = 64;
 const WDSP_ANR_DELAY: i32 = 16;
@@ -29,8 +34,6 @@ const WDSP_ANF_DELAY: i32 = 16;
 const WDSP_ANF_GAIN: f64 = 0.00012;
 const WDSP_ANF_LEAKAGE: f64 = 0.00008;
 const WDSP_NR_POSITION_POST_AGC: i32 = 1;
-const WDSP_NR2_GAIN_METHOD: i32 = 2;
-const WDSP_NR2_NPE_METHOD: i32 = 0;
 const WDSP_NR2_TRAIN_ZETA_THRESH: f64 = -0.5;
 const WDSP_NR2_TRAIN_T2: f64 = 0.2;
 #[allow(dead_code)]
@@ -96,6 +99,10 @@ unsafe extern "C" {
     fn SetRXAPanelSelect(channel: i32, select: i32);
     fn SetRXAPanelCopy(channel: i32, copy: i32);
     fn SetRXAPanelGain1(channel: i32, gain: f64);
+    #[cfg(wdsp_has_wbfm)]
+    fn SetRXAWBFMdmph(channel: i32, dmph_run: i32, dmph_continent: i32);
+    #[cfg(wdsp_has_wbfm)]
+    fn GetRXAWBFMStereoIndicator(channel: i32) -> i32;
 
     // Noise Blanker 1 (preemptive) — must call create_anbEXT before Set* functions
     #[allow(improper_ctypes)]
@@ -221,6 +228,10 @@ unsafe extern "C" {
     fn SetTXAPanelSelect(channel: i32, select: i32);
     fn SetTXAPanelGain1(channel: i32, gain: f64);
     fn SetTXAPostGenRun(channel: i32, run: i32);
+    fn SetTXAPHROTRun(channel: i32, run: i32);
+    fn SetTXAPHROTCorner(channel: i32, corner_hz: f64);
+    #[cfg(wdsp_has_phrot_auto)]
+    fn SetTXAPHROTAutoMode(channel: i32, auto_mode: i32);
 
     // Graphic EQ (10-band) — RX and TX
     fn SetRXAEQRun(channel: i32, run: i32);
@@ -243,6 +254,18 @@ unsafe extern "C" {
     fn TXASetNC(channel: i32, nc: i32);
     fn TXASetMP(channel: i32, mp: i32);
     fn GetTXAMeter(channel: i32, mt: i32) -> f64;
+
+    // PureSignal calibration and correction
+    fn pscc(channel: i32, size: i32, tx: *mut f64, rx: *mut f64);
+    fn SetPSMox(channel: i32, mox: i32);
+    fn GetPSInfo(channel: i32, info: *mut i32);
+    fn SetPSControl(channel: i32, reset: i32, mancal: i32, automode: i32, turnon: i32);
+    fn SetPSLoopDelay(channel: i32, delay: f64);
+    fn SetPSMoxDelay(channel: i32, delay: f64);
+    fn SetPSTXDelay(channel: i32, delay: f64) -> f64;
+    fn SetPSHWPeak(channel: i32, peak: f64);
+    fn GetPSMaxTX(channel: i32, max_tx: *mut f64);
+    fn SetPSFeedbackRate(channel: i32, rate: i32);
 
     // DEXP — downward expander / noise gate (operates on mic input buffer)
     #[allow(dead_code)]
@@ -291,10 +314,16 @@ impl Error for WdspError {}
 pub struct WdspRxEngine {
     channel_id: i32,
     input_sample_rate_hz: u32,
+    dsp_sample_rate_hz: u32,
     mode: DemodMode,
     volume_db: f64,
     noise_reduction_mode: NoiseReductionMode,
     noise_reduction_level: f64,
+    nr2_gain_method: Nr2GainMethod,
+    nr2_npe_method: Nr2NpeMethod,
+    nr2_post_filter_enabled: bool,
+    wbfm_deemphasis: WbfmDeemphasis,
+    wbfm_stereo_detected: bool,
     nb_mode: NoiseBlankerMode,
     nb_threshold: f64,
     anf_enabled: bool,
@@ -330,10 +359,16 @@ impl WdspRxEngine {
         let mut engine = Self {
             channel_id: WDSP_RX_CHANNEL,
             input_sample_rate_hz: 0,
+            dsp_sample_rate_hz: 0,
             mode: DemodMode::Unknown,
             volume_db: -10.0,
             noise_reduction_mode: NoiseReductionMode::Off,
             noise_reduction_level: 100.0,
+            nr2_gain_method: Nr2GainMethod::Gamma,
+            nr2_npe_method: Nr2NpeMethod::Osms,
+            nr2_post_filter_enabled: true,
+            wbfm_deemphasis: WbfmDeemphasis::NorthAmerica,
+            wbfm_stereo_detected: false,
             nb_mode: NoiseBlankerMode::Off,
             nb_threshold: 4.95,
             anf_enabled: false,
@@ -371,18 +406,30 @@ impl WdspRxEngine {
         self.last_meter_dbm
     }
 
+    pub fn wbfm_stereo_detected(&self) -> bool {
+        self.wbfm_stereo_detected
+    }
+
     pub fn sync_model(&mut self, model: &RadioModel) -> Result<(), WdspError> {
-        if model.desired.ddc0_sample_rate_khz as u32 * 1000 != self.input_sample_rate_hz {
+        if model.desired.ddc0_sample_rate_khz as u32 * 1000 != self.input_sample_rate_hz
+            || rx_dsp_rate_for_mode(model.desired.mode) != self.dsp_sample_rate_hz
+        {
             self.reconfigure(model)?;
             return Ok(());
         }
 
         if model.desired.mode != self.mode {
             self.mode = model.desired.mode;
+            self.wbfm_stereo_detected = false;
             unsafe {
                 SetRXAMode(self.channel_id, wdsp_mode(self.mode));
             }
             self.apply_agc();
+        }
+
+        if model.desired.rx_wbfm_deemphasis != self.wbfm_deemphasis {
+            self.wbfm_deemphasis = model.desired.rx_wbfm_deemphasis;
+            self.apply_wbfm_deemphasis();
         }
 
         if (model.desired.rx_volume_db - self.volume_db).abs() > f64::EPSILON {
@@ -395,6 +442,9 @@ impl WdspRxEngine {
         if model.desired.rx_noise_reduction_mode != self.noise_reduction_mode
             || (model.desired.rx_noise_reduction_level - self.noise_reduction_level).abs()
                 > f64::EPSILON
+            || model.desired.rx_nr2_gain_method != self.nr2_gain_method
+            || model.desired.rx_nr2_npe_method != self.nr2_npe_method
+            || model.desired.rx_nr2_post_filter_enabled != self.nr2_post_filter_enabled
             || model.desired.rx_anr_taps != self.anr_taps
             || model.desired.rx_anr_delay != self.anr_delay
             || (model.desired.rx_anr_gain - self.anr_gain).abs() > f64::EPSILON
@@ -402,6 +452,9 @@ impl WdspRxEngine {
         {
             self.noise_reduction_mode = model.desired.rx_noise_reduction_mode;
             self.noise_reduction_level = model.desired.rx_noise_reduction_level;
+            self.nr2_gain_method = model.desired.rx_nr2_gain_method;
+            self.nr2_npe_method = model.desired.rx_nr2_npe_method;
+            self.nr2_post_filter_enabled = model.desired.rx_nr2_post_filter_enabled;
             self.anr_taps = model.desired.rx_anr_taps;
             self.anr_delay = model.desired.rx_anr_delay;
             self.anr_gain = model.desired.rx_anr_gain;
@@ -510,11 +563,32 @@ impl WdspRxEngine {
 
             self.last_meter_dbm = Some(unsafe { GetRXAMeter(self.channel_id, RXA_S_AV) } as f32);
 
-            // HF radio is mono — always duplicate the left channel to both outputs.
-            for sample_pair in self.output_buffer.chunks_exact(2) {
-                let mono = (sample_pair[0] as f32).clamp(-1.0, 1.0);
-                self.pending_audio.push_back(mono);
-                self.pending_audio.push_back(mono);
+            #[cfg(wdsp_has_wbfm)]
+            {
+                self.wbfm_stereo_detected = self.mode == DemodMode::Wfm
+                    && unsafe { GetRXAWBFMStereoIndicator(self.channel_id) != 0 };
+            }
+            #[cfg(not(wdsp_has_wbfm))]
+            {
+                self.wbfm_stereo_detected = false;
+            }
+
+            if self.mode == DemodMode::Wfm && wbfm_supported() {
+                // RXA WBFM outputs true L/R audio and bypasses the panel gain block.
+                let gain = panel_gain_for_volume_db(self.volume_db) as f32;
+                for sample_pair in self.output_buffer.chunks_exact(2) {
+                    self.pending_audio
+                        .push_back((sample_pair[0] as f32 * gain).clamp(-1.0, 1.0));
+                    self.pending_audio
+                        .push_back((sample_pair[1] as f32 * gain).clamp(-1.0, 1.0));
+                }
+            } else {
+                // Voice modes are mono; duplicate the left channel for browser stereo audio.
+                for sample_pair in self.output_buffer.chunks_exact(2) {
+                    let mono = (sample_pair[0] as f32).clamp(-1.0, 1.0);
+                    self.pending_audio.push_back(mono);
+                    self.pending_audio.push_back(mono);
+                }
             }
 
             while self.pending_audio.len() >= self.frame_float_count {
@@ -555,8 +629,15 @@ impl WdspRxEngine {
 
     fn reconfigure(&mut self, model: &RadioModel) -> Result<(), WdspError> {
         let input_sample_rate_hz = model.desired.ddc0_sample_rate_khz as u32 * 1000;
-        let ratio = input_sample_rate_hz / WDSP_AUDIO_RATE_HZ;
-        if ratio == 0 || input_sample_rate_hz % WDSP_AUDIO_RATE_HZ != 0 || !ratio.is_power_of_two()
+        let dsp_sample_rate_hz = rx_dsp_rate_for_mode(model.desired.mode);
+        let input_ratio = input_sample_rate_hz / dsp_sample_rate_hz;
+        let output_ratio = dsp_sample_rate_hz / WDSP_AUDIO_RATE_HZ;
+        if input_ratio == 0
+            || input_sample_rate_hz % dsp_sample_rate_hz != 0
+            || !input_ratio.is_power_of_two()
+            || output_ratio == 0
+            || dsp_sample_rate_hz % WDSP_AUDIO_RATE_HZ != 0
+            || !output_ratio.is_power_of_two()
         {
             return Err(WdspError::UnsupportedInputSampleRate(input_sample_rate_hz));
         }
@@ -573,12 +654,18 @@ impl WdspRxEngine {
         });
 
         self.input_sample_rate_hz = input_sample_rate_hz;
+        self.dsp_sample_rate_hz = dsp_sample_rate_hz;
         self.rx_fft_size = model.desired.rx_fft_size;
         self.rx_low_latency = model.desired.rx_low_latency;
         self.mode = model.desired.mode;
         self.volume_db = model.desired.rx_volume_db;
         self.noise_reduction_mode = model.desired.rx_noise_reduction_mode;
         self.noise_reduction_level = model.desired.rx_noise_reduction_level;
+        self.nr2_gain_method = model.desired.rx_nr2_gain_method;
+        self.nr2_npe_method = model.desired.rx_nr2_npe_method;
+        self.nr2_post_filter_enabled = model.desired.rx_nr2_post_filter_enabled;
+        self.wbfm_deemphasis = model.desired.rx_wbfm_deemphasis;
+        self.wbfm_stereo_detected = false;
         self.nb_mode = model.desired.nb_mode;
         self.nb_threshold = model.desired.nb_threshold;
         self.anf_enabled = model.desired.anf_enabled;
@@ -594,8 +681,8 @@ impl WdspRxEngine {
         self.anr_leakage = model.desired.rx_anr_leakage;
         self.filter_low_hz = model.desired.filter_low_hz;
         self.filter_high_hz = model.desired.filter_high_hz;
-        self.input_complex_samples = (ratio as usize) * WDSP_DSP_SIZE;
-        self.output_audio_frames = self.input_complex_samples / ratio as usize;
+        self.input_complex_samples = (input_ratio as usize) * WDSP_DSP_SIZE;
+        self.output_audio_frames = WDSP_DSP_SIZE / output_ratio as usize;
         self.input_buffer = vec![0.0; self.input_complex_samples * 2];
         self.output_buffer = vec![0.0; self.output_audio_frames * 2];
         self.pending_iq.clear();
@@ -607,7 +694,7 @@ impl WdspRxEngine {
                 self.input_complex_samples as i32,
                 WDSP_DSP_SIZE as i32,
                 self.input_sample_rate_hz as i32,
-                WDSP_AUDIO_RATE_HZ as i32,
+                self.dsp_sample_rate_hz as i32,
                 WDSP_AUDIO_RATE_HZ as i32,
                 0,
                 1,
@@ -671,10 +758,21 @@ impl WdspRxEngine {
             SetRXAEQRun(self.channel_id, 0);
         }
         self.apply_agc();
+        self.apply_wbfm_deemphasis();
         self.apply_noise_blanker();
         self.apply_anf();
         self.apply_noise_reduction();
         Ok(())
+    }
+
+    fn apply_wbfm_deemphasis(&self) {
+        #[cfg(wdsp_has_wbfm)]
+        if self.mode == DemodMode::Wfm {
+            let (run, continent) = self.wbfm_deemphasis.wdsp_values();
+            unsafe {
+                SetRXAWBFMdmph(self.channel_id, run, continent);
+            }
+        }
     }
 
     fn apply_agc(&self) {
@@ -726,6 +824,7 @@ impl WdspRxEngine {
 
     fn apply_noise_blanker(&self) {
         let threshold = self.nb_threshold;
+        let allowed = self.mode != DemodMode::Wfm;
         unsafe {
             SetEXTANBTau(self.channel_id, NB_TAU);
             SetEXTANBHangtime(self.channel_id, NB_HANGTIME);
@@ -733,7 +832,7 @@ impl WdspRxEngine {
             SetEXTANBThreshold(self.channel_id, threshold);
             SetEXTANBRun(
                 self.channel_id,
-                (self.nb_mode == NoiseBlankerMode::Nb1) as i32,
+                (allowed && self.nb_mode == NoiseBlankerMode::Nb1) as i32,
             );
 
             SetEXTNOBMode(self.channel_id, 0); // zero mode
@@ -743,7 +842,7 @@ impl WdspRxEngine {
             SetEXTNOBThreshold(self.channel_id, threshold);
             SetEXTNOBRun(
                 self.channel_id,
-                (self.nb_mode == NoiseBlankerMode::Nb2) as i32,
+                (allowed && self.nb_mode == NoiseBlankerMode::Nb2) as i32,
             );
         }
     }
@@ -757,19 +856,24 @@ impl WdspRxEngine {
                 self.anf_gain,
                 self.anf_leakage,
             );
-            SetRXAANFRun(self.channel_id, self.anf_enabled as i32);
+            SetRXAANFRun(
+                self.channel_id,
+                (self.mode != DemodMode::Wfm && self.anf_enabled) as i32,
+            );
             SetRXAANFPosition(self.channel_id, WDSP_NR_POSITION_POST_AGC);
         }
     }
 
     fn apply_noise_reduction(&self) {
         let level = self.noise_reduction_level.clamp(0.0, 100.0);
-        let emnr_active = matches!(self.noise_reduction_mode, NoiseReductionMode::Nr2)
-            || (!cfg!(wdsp_has_rnnr_sbnr)
-                && matches!(
-                    self.noise_reduction_mode,
-                    NoiseReductionMode::Nr3 | NoiseReductionMode::Nr4
-                ));
+        let allowed = self.mode != DemodMode::Wfm;
+        let emnr_active = allowed
+            && (matches!(self.noise_reduction_mode, NoiseReductionMode::Nr2)
+                || (!cfg!(wdsp_has_rnnr_sbnr)
+                    && matches!(
+                        self.noise_reduction_mode,
+                        NoiseReductionMode::Nr3 | NoiseReductionMode::Nr4
+                    )));
         unsafe {
             SetRXAANRVals(
                 self.channel_id,
@@ -781,12 +885,12 @@ impl WdspRxEngine {
             SetRXAANRPosition(self.channel_id, WDSP_NR_POSITION_POST_AGC);
             SetRXAANRRun(
                 self.channel_id,
-                matches!(self.noise_reduction_mode, NoiseReductionMode::Nr1) as i32,
+                (allowed && matches!(self.noise_reduction_mode, NoiseReductionMode::Nr1)) as i32,
             );
 
             SetRXAEMNRPosition(self.channel_id, WDSP_NR_POSITION_POST_AGC);
-            SetRXAEMNRgainMethod(self.channel_id, WDSP_NR2_GAIN_METHOD);
-            SetRXAEMNRnpeMethod(self.channel_id, WDSP_NR2_NPE_METHOD);
+            SetRXAEMNRgainMethod(self.channel_id, self.nr2_gain_method.wdsp_value());
+            SetRXAEMNRnpeMethod(self.channel_id, self.nr2_npe_method.wdsp_value());
             SetRXAEMNRtrainZetaThresh(self.channel_id, WDSP_NR2_TRAIN_ZETA_THRESH);
             SetRXAEMNRtrainT2(self.channel_id, WDSP_NR2_TRAIN_T2);
             SetRXAEMNRaeRun(self.channel_id, 1);
@@ -794,7 +898,10 @@ impl WdspRxEngine {
             SetRXAEMNRpost2Nlevel(self.channel_id, nr2_nlevel_for_level(level));
             SetRXAEMNRpost2Factor(self.channel_id, nr2_factor_for_level(level));
             SetRXAEMNRpost2Rate(self.channel_id, nr2_rate_for_level(level));
-            SetRXAEMNRpost2Run(self.channel_id, (emnr_active && level >= 1.0) as i32);
+            SetRXAEMNRpost2Run(
+                self.channel_id,
+                (emnr_active && self.nr2_post_filter_enabled && level >= 1.0) as i32,
+            );
             SetRXAEMNRRun(self.channel_id, emnr_active as i32);
 
             #[cfg(wdsp_has_rnnr_sbnr)]
@@ -802,7 +909,8 @@ impl WdspRxEngine {
                 SetRXARNNRPosition(self.channel_id, WDSP_NR_POSITION_POST_AGC);
                 SetRXARNNRRun(
                     self.channel_id,
-                    matches!(self.noise_reduction_mode, NoiseReductionMode::Nr3) as i32,
+                    (allowed && matches!(self.noise_reduction_mode, NoiseReductionMode::Nr3))
+                        as i32,
                 );
 
                 SetRXASBNRreductionAmount(self.channel_id, nr4_reduction_amount_for_level(level));
@@ -814,7 +922,8 @@ impl WdspRxEngine {
                 SetRXASBNRPosition(self.channel_id, WDSP_NR_POSITION_POST_AGC);
                 SetRXASBNRRun(
                     self.channel_id,
-                    matches!(self.noise_reduction_mode, NoiseReductionMode::Nr4) as i32,
+                    (allowed && matches!(self.noise_reduction_mode, NoiseReductionMode::Nr4))
+                        as i32,
                 );
             }
         }
@@ -863,6 +972,13 @@ pub struct WdspTxEngine {
     cfc_enabled: bool,
     cfc_precomp_db: f64,
     cfc_bands: [f64; 10],
+    phase_rotator_enabled: bool,
+    phase_rotator_auto: bool,
+    phase_rotator_corner_hz: f64,
+    pure_signal_enabled: bool,
+    pure_signal_auto_calibrate: bool,
+    pure_signal_tx_reference: VecDeque<f64>,
+    pure_signal_rx_feedback: VecDeque<f64>,
     two_tone_enabled: bool,
     two_tone_freq1_hz: f64,
     two_tone_freq2_hz: f64,
@@ -898,6 +1014,15 @@ pub struct TxDspDiagnostics {
     pub out_avg_db: f64,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub struct PureSignalDiagnostics {
+    pub state: PureSignalState,
+    pub feedback_level: i32,
+    pub calibration_count: i32,
+    pub correcting: bool,
+    pub max_tx: f64,
+}
+
 impl WdspTxEngine {
     pub fn new(model: &RadioModel) -> Self {
         let mut engine = Self {
@@ -920,6 +1045,14 @@ impl WdspTxEngine {
             cfc_enabled: false,
             cfc_precomp_db: 0.0,
             cfc_bands: [0.0f64; 10],
+            phase_rotator_enabled: model.desired.tx_phase_rotator_enabled
+                && tx_phase_rotator_supported(model.desired.mode),
+            phase_rotator_auto: model.desired.tx_phase_rotator_auto,
+            phase_rotator_corner_hz: model.desired.tx_phase_rotator_corner_hz,
+            pure_signal_enabled: model.desired.pure_signal_enabled,
+            pure_signal_auto_calibrate: true,
+            pure_signal_tx_reference: VecDeque::new(),
+            pure_signal_rx_feedback: VecDeque::new(),
             two_tone_enabled: false,
             two_tone_freq1_hz: model.desired.tx_two_tone_freq1_hz,
             two_tone_freq2_hz: model.desired.tx_two_tone_freq2_hz,
@@ -979,6 +1112,10 @@ impl WdspTxEngine {
             SetTXAPanelSelect(self.channel_id, 2); // use mic I channel (left)
             SetTXAPostGenRun(self.channel_id, 0);
             SetTXAPanelGain1(self.channel_id, panel_gain_for_volume_db(self.mic_gain_db));
+            SetTXAPHROTCorner(self.channel_id, self.phase_rotator_corner_hz);
+            #[cfg(wdsp_has_phrot_auto)]
+            SetTXAPHROTAutoMode(self.channel_id, self.phase_rotator_auto as i32);
+            SetTXAPHROTRun(self.channel_id, self.phase_rotator_enabled as i32);
             SetTXAEQRun(self.channel_id, 0);
             TXASetNC(self.channel_id, self.tx_fft_size as i32);
             TXASetMP(self.channel_id, self.tx_low_latency as i32);
@@ -987,7 +1124,7 @@ impl WdspTxEngine {
                 self.filter_low_hz as f64,
                 self.filter_high_hz as f64,
             );
-            SetTXAMode(self.channel_id, wdsp_mode(self.mode));
+            SetTXAMode(self.channel_id, wdsp_tx_mode(self.mode));
 
             // CFC — initialize with flat profile, disabled
             let gains = [0.0f64; 10];
@@ -1014,14 +1151,23 @@ impl WdspTxEngine {
             );
             SetTXAPostGenTTFreq(self.channel_id, 700.0, 1900.0);
             SetTXAPostGenRun(self.channel_id, 0);
+
+            SetPSFeedbackRate(self.channel_id, WDSP_TX_IQ_RATE_HZ as i32);
+            SetPSHWPeak(self.channel_id, WDSP_PS_SATURN_HW_PEAK);
+            SetPSMoxDelay(self.channel_id, 0.2);
+            SetPSTXDelay(self.channel_id, 150.0e-9);
+            SetPSLoopDelay(self.channel_id, 0.0);
+            SetPSMox(self.channel_id, 0);
+            SetPSControl(self.channel_id, 1, 0, 0, 0);
         }
+        self.apply_pure_signal_enabled(self.pure_signal_enabled);
     }
 
     pub fn sync_model(&mut self, model: &RadioModel) {
         if model.desired.mode != self.mode {
             self.mode = model.desired.mode;
             unsafe {
-                SetTXAMode(self.channel_id, wdsp_mode(self.mode));
+                SetTXAMode(self.channel_id, wdsp_tx_mode(self.mode));
             }
         }
 
@@ -1079,6 +1225,28 @@ impl WdspTxEngine {
                 // Leveler only runs when CFC is active (matches piHPSDR)
                 SetTXALevelerSt(self.channel_id, self.cfc_enabled as i32);
             }
+        }
+
+        let phase_rotator_enabled = model.desired.tx_phase_rotator_enabled
+            && tx_phase_rotator_supported(model.desired.mode);
+        if phase_rotator_enabled != self.phase_rotator_enabled
+            || model.desired.tx_phase_rotator_auto != self.phase_rotator_auto
+            || (model.desired.tx_phase_rotator_corner_hz - self.phase_rotator_corner_hz).abs()
+                > f64::EPSILON
+        {
+            self.phase_rotator_enabled = phase_rotator_enabled;
+            self.phase_rotator_auto = model.desired.tx_phase_rotator_auto;
+            self.phase_rotator_corner_hz = model.desired.tx_phase_rotator_corner_hz;
+            unsafe {
+                SetTXAPHROTCorner(self.channel_id, self.phase_rotator_corner_hz);
+                #[cfg(wdsp_has_phrot_auto)]
+                SetTXAPHROTAutoMode(self.channel_id, self.phase_rotator_auto as i32);
+                SetTXAPHROTRun(self.channel_id, self.phase_rotator_enabled as i32);
+            }
+        }
+
+        if model.desired.pure_signal_enabled != self.pure_signal_enabled {
+            self.apply_pure_signal_enabled(model.desired.pure_signal_enabled);
         }
 
         if model.desired.tx_noise_gate_enabled != self.noise_gate_enabled
@@ -1209,6 +1377,133 @@ impl WdspTxEngine {
         }
     }
 
+    fn feed_puresignal_reset_blocks(&mut self) {
+        let mut tx = vec![0.0f64; WDSP_PS_FEEDBACK_BLOCK_SAMPLES * 2];
+        let mut rx = vec![0.0f64; WDSP_PS_FEEDBACK_BLOCK_SAMPLES * 2];
+        for _ in 0..7 {
+            unsafe {
+                pscc(
+                    self.channel_id,
+                    WDSP_PS_FEEDBACK_BLOCK_SAMPLES as i32,
+                    tx.as_mut_ptr(),
+                    rx.as_mut_ptr(),
+                );
+            }
+        }
+    }
+
+    fn apply_pure_signal_enabled(&mut self, enabled: bool) {
+        self.pure_signal_enabled = enabled;
+        self.pure_signal_tx_reference.clear();
+        self.pure_signal_rx_feedback.clear();
+        unsafe {
+            SetPSMox(self.channel_id, 0);
+            SetPSControl(self.channel_id, 1, 0, 0, 0);
+        }
+        self.feed_puresignal_reset_blocks();
+        if enabled {
+            unsafe {
+                SetPSControl(
+                    self.channel_id,
+                    0,
+                    (!self.pure_signal_auto_calibrate) as i32,
+                    self.pure_signal_auto_calibrate as i32,
+                    0,
+                );
+            }
+        }
+    }
+
+    pub fn set_puresignal_mox(&mut self, active: bool) {
+        unsafe {
+            SetPSMox(self.channel_id, (self.pure_signal_enabled && active) as i32);
+        }
+    }
+
+    pub fn reset_puresignal(&mut self) {
+        if !self.pure_signal_enabled {
+            return;
+        }
+        unsafe {
+            SetPSControl(self.channel_id, 1, 0, 0, 0);
+        }
+        self.feed_puresignal_reset_blocks();
+        unsafe {
+            SetPSControl(
+                self.channel_id,
+                0,
+                (!self.pure_signal_auto_calibrate) as i32,
+                self.pure_signal_auto_calibrate as i32,
+                0,
+            );
+        }
+    }
+
+    pub fn push_puresignal_feedback(
+        &mut self,
+        tx_reference: &[f64],
+        rx_feedback: &[f64],
+    ) -> Option<PureSignalDiagnostics> {
+        if !self.pure_signal_enabled {
+            return None;
+        }
+        let float_count = tx_reference.len().min(rx_feedback.len()) & !1;
+        self.pure_signal_tx_reference
+            .extend(tx_reference[..float_count].iter().copied());
+        self.pure_signal_rx_feedback
+            .extend(rx_feedback[..float_count].iter().copied());
+
+        let block_floats = WDSP_PS_FEEDBACK_BLOCK_SAMPLES * 2;
+        let mut processed = false;
+        while self.pure_signal_tx_reference.len() >= block_floats
+            && self.pure_signal_rx_feedback.len() >= block_floats
+        {
+            let mut tx = Vec::with_capacity(block_floats);
+            let mut rx = Vec::with_capacity(block_floats);
+            for _ in 0..block_floats {
+                tx.push(self.pure_signal_tx_reference.pop_front().unwrap_or(0.0));
+                rx.push(self.pure_signal_rx_feedback.pop_front().unwrap_or(0.0));
+            }
+            unsafe {
+                pscc(
+                    self.channel_id,
+                    WDSP_PS_FEEDBACK_BLOCK_SAMPLES as i32,
+                    tx.as_mut_ptr(),
+                    rx.as_mut_ptr(),
+                );
+            }
+            processed = true;
+        }
+
+        processed.then(|| self.puresignal_diagnostics())
+    }
+
+    pub fn puresignal_diagnostics(&self) -> PureSignalDiagnostics {
+        let mut info = [0i32; 16];
+        let mut max_tx = 0.0f64;
+        unsafe {
+            GetPSInfo(self.channel_id, info.as_mut_ptr());
+            GetPSMaxTX(self.channel_id, &mut max_tx);
+        }
+        let correcting = info[14] != 0;
+        let state = if !self.pure_signal_enabled {
+            PureSignalState::Off
+        } else if correcting {
+            PureSignalState::Correcting
+        } else if matches!(info[15], 2..=7) {
+            PureSignalState::Calibrating
+        } else {
+            PureSignalState::Waiting
+        };
+        PureSignalDiagnostics {
+            state,
+            feedback_level: info[4],
+            calibration_count: info[5],
+            correcting,
+            max_tx,
+        }
+    }
+
     /// Push mono mic audio samples (f32, normalized ±1.0) through the TX DSP
     /// chain. IQ output is accumulated in `self.pending_iq`; callers should
     /// drain it in 240-sample (DUC_IQ_SAMPLES_PER_PACKET) batches.
@@ -1333,12 +1628,43 @@ pub fn wdsp_mode(mode: DemodMode) -> i32 {
         DemodMode::Cwl => 3,
         DemodMode::Cwu => 4,
         DemodMode::Fm => 5,
+        DemodMode::Wfm => {
+            if wbfm_supported() {
+                12
+            } else {
+                5
+            }
+        }
         DemodMode::Am => 6,
         DemodMode::DigU => 7,
         DemodMode::DigL => 9,
         DemodMode::Sam => 10,
         DemodMode::Unknown => 1,
     }
+}
+
+pub const fn wbfm_supported() -> bool {
+    cfg!(wdsp_has_wbfm)
+}
+
+fn rx_dsp_rate_for_mode(mode: DemodMode) -> u32 {
+    if mode == DemodMode::Wfm && wbfm_supported() {
+        192_000
+    } else {
+        WDSP_AUDIO_RATE_HZ
+    }
+}
+
+fn wdsp_tx_mode(mode: DemodMode) -> i32 {
+    if mode == DemodMode::Wfm {
+        5
+    } else {
+        wdsp_mode(mode)
+    }
+}
+
+fn tx_phase_rotator_supported(mode: DemodMode) -> bool {
+    !matches!(mode, DemodMode::DigU | DemodMode::DigL)
 }
 
 fn panel_gain_for_volume_db(volume_db: f64) -> f64 {
@@ -1391,7 +1717,9 @@ mod tests {
     use super::{
         nr2_factor_for_level, nr2_nlevel_for_level, nr2_rate_for_level, nr2_taper_for_level,
         nr4_post_threshold_for_level, nr4_reduction_amount_for_level, panel_gain_for_volume_db,
+        rx_dsp_rate_for_mode, wbfm_supported, wdsp_mode, WdspTxEngine, WDSP_AUDIO_RATE_HZ,
     };
+    use crate::radio_model::{DemodMode, PureSignalState, RadioModel};
 
     #[test]
     fn nr2_level_scale_matches_midpoint_defaults() {
@@ -1411,5 +1739,34 @@ mod tests {
     fn panel_gain_supports_positive_monitor_gain() {
         assert!((panel_gain_for_volume_db(0.0) - 1.0).abs() < 1.0e-12);
         assert!(panel_gain_for_volume_db(12.0) > 3.9);
+    }
+
+    #[test]
+    fn wbfm_uses_mode_twelve_and_192k_dsp_when_supported() {
+        let expected_mode = if wbfm_supported() { 12 } else { 5 };
+        let expected_rate = if wbfm_supported() {
+            192_000
+        } else {
+            WDSP_AUDIO_RATE_HZ
+        };
+        assert_eq!(wdsp_mode(DemodMode::Wfm), expected_mode);
+        assert_eq!(rx_dsp_rate_for_mode(DemodMode::Wfm), expected_rate);
+    }
+
+    #[test]
+    fn puresignal_feedback_block_reaches_calibration_engine() {
+        let mut model = RadioModel::new(2, 14_200_000, 0, 192, 24, 2048, true, 4096, true);
+        model.desired.pure_signal_enabled = true;
+        let mut engine = WdspTxEngine::new(&model);
+        engine.set_puresignal_mox(true);
+
+        let tx_reference = vec![0.05f64; 2048];
+        let rx_feedback = vec![0.04f64; 2048];
+        let status = engine
+            .push_puresignal_feedback(&tx_reference, &rx_feedback)
+            .expect("complete PureSignal block");
+
+        assert_ne!(status.state, PureSignalState::Off);
+        engine.set_puresignal_mox(false);
     }
 }

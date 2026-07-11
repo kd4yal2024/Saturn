@@ -31,6 +31,7 @@ if [[ ${EUID:-$(id -u)} -ne 0 ]]; then
 fi
 
 SYSTEMD_SERVICE="/etc/systemd/system/saturn-go.service"
+BRIDGE_SERVICE="/etc/systemd/system/saturn-bridge.service"
 WATCHDOG_SERVICE="/etc/systemd/system/saturn-go-watchdog.service"
 WATCHDOG_TIMER="/etc/systemd/system/saturn-go-watchdog.timer"
 NGINX_SITE_AVAILABLE="/etc/nginx/sites-available/saturn"
@@ -73,6 +74,11 @@ if systemctl list-unit-files | grep -Fq "saturn-go.service"; then
   run_cmd systemctl stop saturn-go.service || true
   run_cmd systemctl disable saturn-go.service || true
 fi
+if systemctl list-unit-files | grep -Fq "saturn-bridge.service"; then
+  echo "[INFO] Stopping and disabling saturn-bridge.service"
+  run_cmd systemctl stop saturn-bridge.service || true
+  run_cmd systemctl disable saturn-bridge.service || true
+fi
 if systemctl list-unit-files | grep -Fq "saturn-go-watchdog.timer"; then
   echo "[INFO] Stopping and disabling saturn-go-watchdog.timer"
   run_cmd systemctl stop saturn-go-watchdog.timer || true
@@ -99,6 +105,10 @@ fi
 if [[ -f "$SYSTEMD_SERVICE" ]]; then
   echo "[INFO] Removing unit file: $SYSTEMD_SERVICE"
   run_cmd rm -f "$SYSTEMD_SERVICE"
+fi
+if [[ -f "$BRIDGE_SERVICE" ]]; then
+  echo "[INFO] Removing bridge unit file: $BRIDGE_SERVICE"
+  run_cmd rm -f "$BRIDGE_SERVICE"
 fi
 if [[ -f "$WATCHDOG_SERVICE" ]]; then
   echo "[INFO] Removing watchdog unit file: $WATCHDOG_SERVICE"
@@ -196,6 +206,7 @@ fi
 echo
 echo "[SUMMARY]"
 echo " Service disabled/removed: saturn-go.service"
+echo " Bridge disabled/removed: saturn-bridge.service"
 echo " Watchdog disabled/removed: saturn-go-watchdog.service + saturn-go-watchdog.timer"
 echo " NGINX site removed: $NGINX_SITE_AVAILABLE"
 echo " NGINX SSE map removed: $NGINX_SSE_MAP"

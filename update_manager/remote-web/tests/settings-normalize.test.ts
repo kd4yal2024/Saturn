@@ -47,12 +47,22 @@ describe('settings normalization', () => {
       rxAntenna: -1,
       mode: 'bad',
       rxNoiseReductionMode: 'emnr',
+      rxNr2GainMethod: 'trained',
+      rxNr2NpeMethod: 'nstat',
+      rxNr2PostFilterEnabled: false,
+      rxWbfmDeemphasis: 'europe',
       rxNbMode: '2',
       agcMode: '4',
       txDrive: 200,
       txMicGainDb: 99,
       rxEqBands: [5, 99, -99],
       cfcBands: [5, 40],
+      txPhaseRotatorEnabled: true,
+      txPhaseRotatorAuto: true,
+      txPhaseRotatorCornerHz: 9000,
+      pureSignalEnabled: true,
+      pureSignalAutoAttenuate: false,
+      pureSignalAttenuationDb: 99,
     } as any);
 
     expect(prefs.sampleRate).toBe(192000);
@@ -60,12 +70,22 @@ describe('settings normalization', () => {
     expect(prefs.rxAntenna).toBe(1);
     expect(prefs.mode).toBe('USB');
     expect(prefs.rxNoiseReductionMode).toBe('NR2');
+    expect(prefs.rxNr2GainMethod).toBe('TRAINED');
+    expect(prefs.rxNr2NpeMethod).toBe('NSTAT');
+    expect(prefs.rxNr2PostFilterEnabled).toBe(false);
+    expect(prefs.rxWbfmDeemphasis).toBe('EU_50US');
     expect(prefs.rxNbMode).toBe('NB2');
     expect(prefs.agcMode).toBe('FAST');
     expect(prefs.txDrive).toBe(100);
     expect(prefs.txMicGainDb).toBe(20);
     expect(prefs.rxEqBands[1]).toBe(20);
     expect(prefs.cfcBands[1]).toBe(20);
+    expect(prefs.txPhaseRotatorEnabled).toBe(true);
+    expect(prefs.txPhaseRotatorAuto).toBe(true);
+    expect(prefs.txPhaseRotatorCornerHz).toBe(2000);
+    expect(prefs.pureSignalEnabled).toBe(true);
+    expect(prefs.pureSignalAutoAttenuate).toBe(false);
+    expect(prefs.pureSignalAttenuationDb).toBe(31);
   });
 
   it('normalizes stream mode as an explicit LAN/WAN preference', () => {
@@ -129,6 +149,18 @@ describe('settings normalization', () => {
     expect(forty?.radioPrefs.filterHigh).toBe(2400);
     expect(forty?.displayPrefs.waterfallPalette).toBe('ice');
     expect(forty?.displayPrefs.showBandEdges).toBe(false);
+  });
+
+  it('retains FM broadcast band memory', () => {
+    const memory = normalizeBandMemory({
+      FM: {
+        frequency: 99_500_000,
+        radioPrefs: { mode: 'WFM', rxWbfmDeemphasis: 'NA_75US' },
+      },
+    });
+    expect(memory.FM?.frequency).toBe(99_500_000);
+    expect(memory.FM?.radioPrefs.mode).toBe('WFM');
+    expect(memory.FM?.radioPrefs.rxWbfmDeemphasis).toBe('NA_75US');
   });
 
   it('applies remote settings into state and round-trips them', () => {

@@ -52,6 +52,10 @@ describe('defaultSignedRxPassbandForMode', () => {
     expect(pb.lowHz).toBeLessThan(0);
     expect(pb.highHz).toBeGreaterThan(0);
   });
+
+  it('returns the full FM broadcast channel for WFM', () => {
+    expect(defaultSignedRxPassbandForMode('WFM')).toEqual({ lowHz: -90_000, highHz: 90_000 });
+  });
 });
 
 describe('defaultSignedTxPassbandForMode', () => {

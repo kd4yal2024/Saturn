@@ -27,6 +27,12 @@ describe('passband helpers', () => {
     expect(uiCutsFromSignedPassband(-5000, 5000, 'AM')).toEqual({ lowHz: 0, highHz: 5000 });
   });
 
+  it('uses the fixed 180 kHz WFM channel width', () => {
+    expect(normalizeDemodMode('wfm')).toBe('WFM');
+    expect(signedPassbandFromUiCuts(50, 3050, 'WFM')).toEqual({ lowHz: -90_000, highHz: 90_000 });
+    expect(uiCutsFromSignedPassband(-90_000, 90_000, 'WFM')).toEqual({ lowHz: 0, highHz: 90_000 });
+  });
+
   it('applies signed RX filter shift without changing filter width', () => {
     expect(shiftedSignedPassbandFromUiCuts(50, 3050, 'USB', 500)).toEqual({ lowHz: 550, highHz: 3550 });
     expect(decomposeSignedPassbandWithShift(550, 3550, 'USB', 50)).toEqual({
