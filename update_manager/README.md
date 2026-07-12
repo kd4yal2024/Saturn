@@ -504,6 +504,7 @@ Default URL:
 - `SATURN_CONFIG` (default `$SATURN_WEBROOT/config.json`)
 - `SATURN_SCRIPTS_DIR` (default `/opt/saturn-go/scripts`)
 - `SATURN_REPO_ROOT` (default `$HOME/github/Saturn`)
+- `SATURN_LOG_DIR` (default `$HOME/saturn-logs`; installer-owned by the service user)
 - `SATURN_STATE_DIR` (installer default `/var/lib/saturn-state`)
 - `SATURN_REPO_ROOT_FILE` (default `$SATURN_STATE_DIR/repo_root.txt`)
 - `SATURN_MAX_BODY_BYTES` (default `2147483648`)

@@ -27,6 +27,7 @@ import argparse
 import subprocess
 import logging
 import re
+import tempfile
 from datetime import datetime
 
 # -----------------------------
@@ -34,6 +35,7 @@ from datetime import datetime
 # -----------------------------
 sys.dont_write_bytecode = True
 
+SCRIPT_VERSION = "2.15"
 HOME = os.path.expanduser("~")
 DEFAULT_SATURN_DIR = os.path.join(HOME, "github", "Saturn")
 SATURN_DIR = os.environ.get("SATURN_REPO_ROOT") or os.environ.get("SATURN_DIR") or DEFAULT_SATURN_DIR
@@ -48,9 +50,9 @@ POLICY_REPO = os.environ.get("SATURN_UPDATE_POLICY_REPO", "").strip()
 POLICY_REMOTE = os.environ.get("SATURN_UPDATE_POLICY_REMOTE", "origin").strip() or "origin"
 POLICY_REF = os.environ.get("SATURN_UPDATE_POLICY_REF", "").strip()
 POLICY_URL = os.environ.get("SATURN_UPDATE_POLICY_URL", "").strip()
-LOG_DIR = os.path.join(HOME, "saturn-logs")
-os.makedirs(LOG_DIR, exist_ok=True)
-LOG_FILE = os.path.join(LOG_DIR, f"saturn-update-{datetime.now().strftime('%Y%m%d-%H%M%S')}.log")
+RUN_TIMESTAMP = datetime.now().strftime('%Y%m%d-%H%M%S')
+LOG_DIR = os.environ.get("SATURN_LOG_DIR", os.path.join(HOME, "saturn-logs"))
+LOG_FILE = os.path.join(LOG_DIR, f"saturn-update-{RUN_TIMESTAMP}.log")
 BACKUP_DIR = os.path.join(HOME, f"saturn-backup-{datetime.now().strftime('%Y%m%d-%H%M%S')}")
 WEB_MANAGER_CHANGED = False
 
@@ -273,13 +275,45 @@ class Tee:
     def fileno(self):
         raise OSError("No fileno for Tee")
 
+def open_log_destination():
+    global LOG_DIR, LOG_FILE
+    primary_dir = LOG_DIR
+    try:
+        os.makedirs(primary_dir, mode=0o755, exist_ok=True)
+        logfile = open(LOG_FILE, "a", buffering=1, encoding="utf-8")
+        return logfile, None
+    except OSError as primary_error:
+        try:
+            fallback_dir = tempfile.mkdtemp(prefix=f"saturn-logs-{os.getuid()}-")
+            LOG_DIR = fallback_dir
+            LOG_FILE = os.path.join(LOG_DIR, f"saturn-update-{RUN_TIMESTAMP}.log")
+            logfile = open(LOG_FILE, "a", buffering=1, encoding="utf-8")
+            return logfile, (
+                f"Preferred log directory is not writable: {primary_dir} "
+                f"({primary_error}). Using temporary log: {LOG_FILE}"
+            )
+        except OSError as fallback_error:
+            LOG_FILE = "unavailable (file logging disabled)"
+            return None, (
+                f"File logging disabled: preferred directory {primary_dir} failed "
+                f"({primary_error}); temporary fallback also failed ({fallback_error})."
+            )
+
 def init_logging():
+    logfile, log_warning = open_log_destination()
+    log_stream = logfile if logfile is not None else sys.__stderr__
     logging.basicConfig(level=logging.DEBUG if args.debug else logging.INFO,
                         format="%(asctime)s [%(levelname)s] %(message)s",
-                        handlers=[logging.FileHandler(LOG_FILE)])
-    logfile = open(LOG_FILE, "a", buffering=1)
-    sys.stdout = Tee(sys.__stdout__, logfile)
-    sys.stderr = Tee(sys.__stderr__, logfile)
+                        handlers=[logging.StreamHandler(log_stream)])
+    tee_targets_out = [sys.__stdout__]
+    tee_targets_err = [sys.__stderr__]
+    if logfile is not None:
+        tee_targets_out.append(logfile)
+        tee_targets_err.append(logfile)
+    sys.stdout = Tee(*tee_targets_out)
+    sys.stderr = Tee(*tee_targets_err)
+    if log_warning:
+        warn(log_warning)
 
     # Banner (no tput clear; safe for headless)
     cols, _ = term_size()
@@ -291,7 +325,7 @@ def init_logging():
             banner = "G2 Saturn"
     else:
         banner = "G2 Saturn"
-    print(f"\n{C.RED}{banner}{C.END}\n{C.BLU}{'Update Manager v2.14'.center(cols)}{C.END}\n")
+    print(f"\n{C.RED}{banner}{C.END}\n{C.BLU}{f'Update Manager v{SCRIPT_VERSION}'.center(cols)}{C.END}\n")
 
 # -----------------------------
 # CLI
@@ -727,7 +761,7 @@ def important_notes():
 
 def footer():
     cols, _ = term_size()
-    print(f"\n{C.CYA}{'═'*5} {'SATURN UPDATE v2.14 Done'} {'═'*5}{C.END}")
+    print(f"\n{C.CYA}{'═'*5} {f'SATURN UPDATE v{SCRIPT_VERSION} Done'} {'═'*5}{C.END}")
     # Simple system stats (best-effort)
     try:
         # CPU rough — parse top

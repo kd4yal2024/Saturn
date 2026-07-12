@@ -187,6 +187,7 @@ if [[ -z "$SERVICE_HOME" || ! -d "$SERVICE_HOME" ]]; then
   err "Cannot resolve home directory for $SERVICE_USER"
   exit 1
 fi
+SATURN_LOG_DIR="${SATURN_LOG_DIR:-$SERVICE_HOME/saturn-logs}"
 DEFAULT_REPO_ROOT="${SATURN_REPO_ROOT:-$SERVICE_HOME/github/Saturn}"
 
 if [[ -n "${SUDO_USER:-}" && "${SUDO_USER}" != "root" ]] && id -u "${SUDO_USER}" >/dev/null 2>&1; then
@@ -433,6 +434,11 @@ saturn_remote_bridge_preflight || true
 
 info "Preparing runtime directories..."
 mkdir -p "$BIN_DIR" "$SCRIPTS_DIR" "$WATCHDOG_SCRIPT_DIR" "$PRIVILEGED_SCRIPTS_DIR" "$WEB_ROOT" "$SATURN_STATE_DIR" "$SATURN_SNAPSHOT_DIR" "$SATURN_STAGING_DIR"
+if [[ -L "$SATURN_LOG_DIR" ]]; then
+  err "Refusing symlinked Saturn log directory: $SATURN_LOG_DIR"
+  exit 1
+fi
+install -d -m 0755 -o "$SERVICE_USER" -g "$SERVICE_GROUP" "$SATURN_LOG_DIR"
 ok "Directories ready"
 
 info "Copying web assets..."
@@ -881,6 +887,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 Environment=HOME=${SERVICE_HOME}
+Environment=SATURN_LOG_DIR=${SATURN_LOG_DIR}
 Environment=PATH=${SERVICE_HOME}/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 Environment=CARGO_HOME=${SERVICE_HOME}/.cargo
 Environment=RUSTUP_HOME=${SERVICE_HOME}/.rustup

@@ -765,6 +765,7 @@ Service environment commonly used in deployment:
 - `SATURN_WEBROOT` (default `/var/lib/saturn-web`)
 - `SATURN_CONFIG` (default `$SATURN_WEBROOT/config.json`)
 - `SATURN_SCRIPTS_DIR` (default `/opt/saturn-go/scripts`)
+- `SATURN_LOG_DIR` (default `$HOME/saturn-logs`; installer-owned by the service user)
 - `SATURN_STATE_DIR` (default `/var/lib/saturn-state`)
 - `SATURN_REPO_ROOT_FILE` (default `$SATURN_STATE_DIR/repo_root.txt`)
 - `SATURN_UPDATE_POLICY_FILE` (default `$SATURN_STATE_DIR/update_policy.json`)
@@ -783,6 +784,20 @@ Service environment commonly used in deployment:
 - `SATURN_WATCHDOG_INTERVAL` (default `30s`)
 
 ## Troubleshooting
+
+### Update G2 Cannot Write `saturn-logs`
+
+If Update G2 exits before starting with `PermissionError` for a path under
+`/home/pi/saturn-logs`, repair the standard appliance directory and retry:
+
+```bash
+sudo install -d -m 0755 -o pi -g pi /home/pi/saturn-logs
+```
+
+Current installers perform this repair automatically for the configured Saturn
+Go service user. The Python updater also warns and continues with a private
+temporary log if the preferred directory becomes unwritable; the terminal
+output reports the fallback path.
 
 ### UI Loads, API Calls Fail
 

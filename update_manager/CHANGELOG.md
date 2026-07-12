@@ -4,6 +4,10 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
 
 ## [Unreleased]
 ### Added
+- Update G2 logging now survives an unwritable `~/saturn-logs` directory by
+  warning and using a private temporary log. The installer repairs the primary
+  log directory ownership for the configured Saturn Go service user and passes
+  the resolved path to the service environment.
 - Saturn Go now has a shared offline appliance shell across Overview, Monitor,
   update, FPGA, backup, application-update, Tailscale, and custom-script pages.
   It provides grouped sidebar navigation, an accessible mobile drawer, common

@@ -6,7 +6,7 @@
     "directory": "/opt/saturn-go/scripts",
     "category": "Update Scripts",
     "flags": ["--skip-git", "-y", "-n", "--dry-run", "--verbose"],
-    "version": "2.14"
+    "version": "2.15"
   },
   {
     "filename": "update-pihpsdr.py",
