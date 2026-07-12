@@ -23,13 +23,15 @@ app, and exposes maintenance plus remote operation through Saturn Go.
   and `p2app-control` service integration.
 - `scripts/` - host maintenance helpers, XDMA doctor/staging scripts, shutdown
   waiter, LCD/front-panel helpers, and update utilities.
-- `provision/` - cloud-init provisioning for fresh Saturn systems.
+- `scripts/install-saturn-appliance.sh` - complete installer for fresh or existing systems.
+- `provision/` - legacy cloud-init wrapper for image-based first boot.
 - `update_manager/` - Saturn Go web manager, Saturn Bridge, remote web client,
   install/update scripts, web templates, and detailed docs.
 
 ## Recommended Entry Points
 
-- Provision a new system: [`provision/README.md`](provision/README.md)
+- Install a new system: `sudo scripts/install-saturn-appliance.sh`
+- Legacy cloud-init flow: [`provision/README.md`](provision/README.md)
 - Saturn Go architecture and operation:
   [`update_manager/README.md`](update_manager/README.md)
 - Detailed Saturn Go docs:
@@ -43,16 +45,18 @@ app, and exposes maintenance plus remote operation through Saturn Go.
 
 ## Provisioning
 
-The provisioning flow is designed for a Pi-based Saturn appliance. It installs
+The appliance installer is designed for a Pi-based Saturn system. It installs
 packages, kernel headers, XDMA support, Saturn apps/tools, Update Manager,
-front-panel/LCD helpers, shutdown waiter, udev rules, and optional FPGA flashing.
+udev rules, the dedicated P2 runtime, Saturn Go, and Saturn Bridge with WDSP 2.00.
 
-Typical provisioning starts from the cloud-init examples in:
+Run it from a checked-out repository; cloud-init is not required:
 
-```text
-provision/cloud-init/user-data.example.yaml
-provision/cloud-init/meta-data.example.yaml
+```bash
+sudo scripts/install-saturn-appliance.sh
 ```
+
+The cloud-init examples remain available for image factories and invoke the
+same supported WDSP 2.00 bridge path.
 
 FPGA flashing is disabled by default and requires an explicit confirmation
 variable when enabled.
@@ -109,6 +113,8 @@ Native and kernel components are still primarily build/runtime validated:
 
 ```bash
 make -C sw_projects/P2_app
+make -C sw_projects/P2_app test-controller-lease
+make -C sw_projects/P2_app cppcheck-ci
 make -C sw_projects/P3_app
 make -C linuxdriver/xdma
 sudo bash scripts/install-xdma-dkms.sh --dry-run
@@ -126,7 +132,9 @@ helper. For beta systems moving to standard kernel upgrade handling,
 `scripts/install-xdma-dkms.sh` stages the same supported source as a DKMS
 package named `saturn-xdma`. A successful DKMS install disables the legacy
 manual kernel postinst hook to avoid duplicate XDMA rebuilds during kernel
-package updates.
+package updates. DKMS versions are derived from the driver source; older
+versions remain registered until an operator explicitly enables pruning after
+the replacement is installed.
 
 The old `linuxdriver/xdma_pre_kernel_5.18` source tree has been retired for beta
 because it drifted behind the active hardened driver. If an old-kernel recovery

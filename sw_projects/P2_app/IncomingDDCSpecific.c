@@ -28,6 +28,7 @@
 #include "../common/byteio.h"
 #include "../common/p23_perf_telemetry.h"
 #include "OutDDCIQ.h"
+#include "controller_lease.h"
 #include <pthread.h>
 #include <syscall.h>
 
@@ -90,6 +91,8 @@ void *IncomingDDCSpecific(void *arg)                    // listener thread
     }
     if(size == VDDCSPECIFICSIZE)
     {
+      if(!ControllerLeaseMatches(&addr_from))
+        continue;
       atomic_store(&NewMessageReceived, true);
       printf("DDC specific packet received\n");
       // get ADC details:

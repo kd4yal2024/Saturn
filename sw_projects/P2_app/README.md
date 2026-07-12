@@ -4,7 +4,28 @@ This document records the code-safety, concurrency, and runtime-hardening
 changes that were originally staged in `P3_app` and are now carried by the
 converged hardened `P2_app` implementation.
 
-Latest update: 2026-03-25
+Latest update: 2026-07-11
+
+## Controller Ownership And Service Runtime (2026-07-11)
+
+Protocol 2 now leases command ownership to the IPv4 source that sends the
+accepted general packet. High-priority, DDC-specific, DUC-specific, speaker,
+and TX I/Q packets from other addresses are ignored. The lease is released by
+the owning client's `run=0` packet or by the existing one-second inactivity
+timeout. This prevents Thetis and Saturn Bridge from interleaving attenuator,
+filter, VFO, and run-state commands against the same radio process.
+
+The managed service installs `p2app` as a root-owned executable at
+`/opt/saturn-radio/bin/p2app` and runs it as the non-login `saturn-radio`
+account. XDMA udev nodes are assigned to the matching group. The source-tree
+binary is build output only and is never a service `ExecStart` target.
+
+Verification:
+
+```bash
+make test-controller-lease
+make cppcheck-ci
+```
 
 ## Related Protocol Documentation
 

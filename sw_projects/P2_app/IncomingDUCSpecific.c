@@ -29,6 +29,7 @@
 #include "../common/byteio.h"
 #include <pthread.h>
 #include <syscall.h>
+#include "controller_lease.h"
 
 
 
@@ -91,6 +92,8 @@ void *IncomingDUCSpecific(void *arg)                    // listener thread
       }
       if(size == VDUCSPECIFICSIZE)
       {
+          if(!ControllerLeaseMatches(&addr_from))
+              continue;
           atomic_store(&NewMessageReceived, true);
           printf("DUC packet received\n");
 // iambic settings
@@ -140,7 +143,6 @@ void *IncomingDUCSpecific(void *arg)                    // listener thread
     atomic_store(&ThreadData->Active, false);     // indicate it is closed
     return NULL;
 }
-
 
 
 

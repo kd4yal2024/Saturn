@@ -300,39 +300,12 @@ REPO_ROOT="${SATURN_ACTIVE_REPO_ROOT:-${SATURN_REPO_ROOT:-}}"
 [[ -n "$REPO_ROOT" ]] || die "SATURN_ACTIVE_REPO_ROOT is not set"
 [[ -d "$REPO_ROOT/.git" ]] || die "Repo root is not a git checkout: $REPO_ROOT"
 [[ -d "$REPO_ROOT/update_manager" ]] || die "Repo root does not contain update_manager/: $REPO_ROOT"
-XDMA_FIX_SCRIPT_SRC="$REPO_ROOT/scripts/fix-xdma.sh"
-XDMA_POSTINST_HELPER_SRC="$REPO_ROOT/scripts/saturn-xdma-kernel-postinst.sh"
-XDMA_FIX_SCRIPT_INSTALL="${SATURN_XDMA_FIX_SCRIPT_INSTALL:-/usr/local/bin/saturn-fix-xdma.sh}"
-XDMA_POSTINST_HELPER_INSTALL="${SATURN_XDMA_POSTINST_HELPER_INSTALL:-/usr/local/bin/saturn-xdma-kernel-postinst.sh}"
-XDMA_POSTINST_HOOK_PATH="${SATURN_XDMA_POSTINST_HOOK_PATH:-/etc/kernel/postinst.d/saturn-xdma}"
 EXTRA_PACKAGED_SCRIPTS=(
   "$REPO_ROOT/scripts/fix-LED-power-button.sh"
   "$REPO_ROOT/scripts/install-shutdown-waiter-service.sh"
   "$REPO_ROOT/scripts/shutdown-waiter.sh"
   "$REPO_ROOT/scripts/setup-eth-fallback.sh"
 )
-PRIVILEGED_HELPER_SCRIPTS=(
-  "$REPO_ROOT/update_manager/scripts/saturn-go-build-preflight.sh"
-  "$REPO_ROOT/update_manager/scripts/install-saturn-bridge.sh"
-  "$REPO_ROOT/update_manager/scripts/make_pi_image.sh"
-  "$REPO_ROOT/update_manager/scripts/clone_pi_to_device.sh"
-  "$REPO_ROOT/update_manager/scripts/saturn-pi-wipe-target.sh"
-  "$REPO_ROOT/scripts/saturn-admin-password.sh"
-  "$REPO_ROOT/scripts/saturn-flash-fpga.sh"
-  "$REPO_ROOT/scripts/saturn-xdma-doctor.sh"
-  "$REPO_ROOT/scripts/saturn-xdma-stage-current.sh"
-  "$REPO_ROOT/scripts/install-udev-rules-on-current-image.sh"
-  "$REPO_ROOT/scripts/deskhpsdr-install-deps-on-current-image.sh"
-  "$XDMA_FIX_SCRIPT_SRC"
-  "$XDMA_POSTINST_HELPER_SRC"
-  "$REPO_ROOT/scripts/fix-LED-power-button.sh"
-  "$REPO_ROOT/scripts/install-shutdown-waiter-service.sh"
-  "$REPO_ROOT/scripts/shutdown-waiter.sh"
-  "$REPO_ROOT/scripts/setup-eth-fallback.sh"
-  "$REPO_ROOT/update_manager/scripts/saturn-tailscale.sh"
-  "$REPO_ROOT/update_manager/scripts/saturn-go-tailscale-serve.sh"
-)
-
 SATURNGO_URL="${SATURN_SATURNGO_POLICY_URL:-}"
 SATURNGO_REMOTE="${SATURN_SATURNGO_POLICY_REMOTE:-origin}"
 SATURNGO_REF="${SATURN_SATURNGO_POLICY_REF:-main}"
@@ -357,18 +330,12 @@ BRIDGE_WDSP_FLAVOR="${SATURN_BRIDGE_WDSP_FLAVOR:-wdsp2}"
 
 SERVICE_NAME="${SATURN_SATURNGO_SERVICE_NAME:-saturn-go.service}"
 DEPLOY_RUN_USER="${SATURN_SATURNGO_RUN_USER:-$(id -un)}"
-DEPLOY_RUN_GROUP="$(id -gn "$DEPLOY_RUN_USER")"
 DEPLOY_BIN="${SATURN_SATURNGO_BIN_DEST:-/opt/saturn-go/bin/saturn-go}"
-DEPLOY_ROOT_DEFAULT="$(dirname "$(dirname "$DEPLOY_BIN")")"
-DEPLOY_ROOT="${SATURN_SATURNGO_ROOT:-$DEPLOY_ROOT_DEFAULT}"
 DEPLOY_BRIDGE_BIN="${SATURN_SATURNGO_BRIDGE_BIN_DEST:-/opt/saturn-go/bin/saturn-bridge}"
-DEPLOY_BRIDGE_SERVICE="${SATURN_SATURNGO_BRIDGE_SERVICE:-saturn-bridge.service}"
-DEPLOY_BRIDGE_SERVICE_FILE="${SATURN_SATURNGO_BRIDGE_SERVICE_FILE:-/etc/systemd/system/saturn-bridge.service}"
-DEPLOY_WEBROOT="${SATURN_SATURNGO_WEBROOT:-/var/lib/saturn-web}"
-DEPLOY_SCRIPTS_DIR="${SATURN_SATURNGO_SCRIPTS_DIR:-/opt/saturn-go/scripts}"
 DEPLOY_PRIVILEGED_SCRIPTS_DIR="${SATURN_SATURNGO_PRIVILEGED_SCRIPTS_DIR:-/usr/local/lib/saturn-go/scripts}"
 DEPLOY_BUILD_PREFLIGHT_HELPER="$DEPLOY_PRIVILEGED_SCRIPTS_DIR/saturn-go-build-preflight.sh"
-DEPLOY_SUDOERS_FILE="${SATURN_SATURNGO_SUDOERS_FILE:-/etc/sudoers.d/saturn-go-maintenance}"
+DEPLOY_ROOT_BROKER_SRC="$REPO_ROOT/update_manager/scripts/saturn-go-deploy-root.sh"
+DEPLOY_ROOT_BROKER="${SATURN_SATURNGO_DEPLOY_BROKER:-$DEPLOY_PRIVILEGED_SCRIPTS_DIR/saturn-go-deploy-root.sh}"
 STATUS_FILE="${SATURN_SATURNGO_DEPLOY_STATUS_FILE:-/var/lib/saturn-state/saturngo_deploy_status.json}"
 
 trap 'rc=$?; if (( rc != 0 )); then write_status "error" "$STATUS_PHASE" "Saturn Go self-update failed" 1 "$rc"; fi' EXIT
@@ -380,14 +347,12 @@ trap 'rc=$?; if (( rc != 0 )); then write_status "error" "$STATUS_PHASE" "Saturn
 [[ -f "$BUILD_PREFLIGHT_HELPER" ]] || die "Build preflight helper not found: $BUILD_PREFLIGHT_HELPER"
 [[ -f "$BRIDGE_SOURCE_DIR/Cargo.toml" ]] || die "Saturn Bridge Cargo.toml not found: $BRIDGE_SOURCE_DIR/Cargo.toml"
 [[ -x "$BRIDGE_INSTALLER" ]] || die "Saturn Bridge installer not executable: $BRIDGE_INSTALLER"
+[[ -x "$DEPLOY_ROOT_BROKER_SRC" ]] || die "Saturn Go deploy broker not executable: $DEPLOY_ROOT_BROKER_SRC"
 source "$WEB_ASSET_HELPERS"
 [[ -f "$SCRIPTS_SRC_DIR/config.json" ]] || die "Missing config.json in $SCRIPTS_SRC_DIR"
 [[ -f "$SCRIPTS_SRC_DIR/themes.json" ]] || die "Missing themes.json in $SCRIPTS_SRC_DIR"
 for extra_script in "${EXTRA_PACKAGED_SCRIPTS[@]}"; do
   [[ -f "$extra_script" ]] || die "Extra packaged script not found: $extra_script"
-done
-for privileged_script in "${PRIVILEGED_HELPER_SCRIPTS[@]}"; do
-  [[ -f "$privileged_script" ]] || die "Privileged helper script not found: $privileged_script"
 done
 
 write_status "running" "init" "Starting Saturn Go self-update"
@@ -497,48 +462,17 @@ STAMP="$(date +%Y%m%d%H%M%S)"
 STAGE_DIR="$STAGE_BASE/$STAMP"
 STAGE_WEB_DIR="$STAGE_DIR/webroot"
 STAGE_SCRIPTS_DIR="$STAGE_DIR/scripts"
-STAGE_PRIVILEGED_SCRIPTS_DIR="$STAGE_DIR/privileged-scripts"
 UNIT_NAME="saturn-go-self-deploy-${STAMP}"
 
 info "Preparing staged deploy payload..."
 STATUS_PHASE="stage"
 write_status "running" "$STATUS_PHASE" "Preparing staged deploy payload"
-run_cmd mkdir -p "$STAGE_WEB_DIR" "$STAGE_SCRIPTS_DIR" "$STAGE_PRIVILEGED_SCRIPTS_DIR"
+run_cmd mkdir -p "$STAGE_WEB_DIR" "$STAGE_SCRIPTS_DIR"
 if (( ! DRY_RUN )); then
+  chmod 0755 "$STAGE_DIR" "$STAGE_WEB_DIR" "$STAGE_SCRIPTS_DIR"
   cp "$BIN_SRC" "$STAGE_DIR/saturn-go"
   if flag_enabled "$BUILD_BRIDGE"; then
     cp "$BRIDGE_BUILD_OUTPUT" "$STAGE_DIR/saturn-bridge"
-    cat >"$STAGE_DIR/saturn-bridge.service" <<EOF
-[Unit]
-Description=Saturn Bridge (WDSP 2.00)
-After=network-online.target p2app.service
-Wants=network-online.target p2app.service
-
-[Service]
-Type=simple
-User=${DEPLOY_RUN_USER}
-Group=${DEPLOY_RUN_GROUP}
-WorkingDirectory=${DEPLOY_ROOT}
-ExecStart=${DEPLOY_BRIDGE_BIN}
-Restart=on-failure
-RestartSec=2
-NoNewPrivileges=yes
-PrivateTmp=yes
-ProtectSystem=strict
-RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
-Environment=SATURN_BRIDGE_RADIO_HOST=127.0.0.1
-Environment=SATURN_BRIDGE_RADIO_PORT=1024
-Environment=SATURN_BRIDGE_CLIENT_HOST=127.0.0.1
-Environment=SATURN_BRIDGE_CLIENT_PORT=12000
-Environment=SATURN_BRIDGE_TCI_HOST=127.0.0.1
-Environment=SATURN_BRIDGE_TCI_PORT=50001
-Environment=SATURN_BRIDGE_MAX_CLIENT_DDC0_SAMPLE_RATE_KHZ=192
-Environment=SATURN_BRIDGE_TX_OPUS_DECODE_ENABLED=1
-Environment=SATURN_REMOTE_TX_RF_ENABLED=1
-
-[Install]
-WantedBy=multi-user.target
-EOF
   fi
   saturn_go_build_remote_web_assets "$REPO_ROOT/update_manager"
   saturn_go_copy_required_web_assets "$TEMPLATES_DIR" "$REPO_ROOT/update_manager" "$STAGE_WEB_DIR"
@@ -546,243 +480,32 @@ EOF
   saturn_go_verify_remote_web_bundle "$STAGE_WEB_DIR"
   cp "$SCRIPTS_SRC_DIR/config.json" "$STAGE_WEB_DIR/config.json"
   cp "$SCRIPTS_SRC_DIR/themes.json" "$STAGE_WEB_DIR/themes.json"
-  find "$SCRIPTS_SRC_DIR" -maxdepth 1 -type f -exec cp "{}" "$STAGE_SCRIPTS_DIR/" \;
+  find "$SCRIPTS_SRC_DIR" -maxdepth 1 -type f ! -name '.*' -exec cp "{}" "$STAGE_SCRIPTS_DIR/" \;
   for extra_script in "${EXTRA_PACKAGED_SCRIPTS[@]}"; do
     cp "$extra_script" "$STAGE_SCRIPTS_DIR/"
-  done
-  for privileged_script in "${PRIVILEGED_HELPER_SCRIPTS[@]}"; do
-    cp "$privileged_script" "$STAGE_PRIVILEGED_SCRIPTS_DIR/"
   done
   chmod 755 "$STAGE_DIR/saturn-go"
   if [[ -f "$STAGE_DIR/saturn-bridge" ]]; then
     chmod 755 "$STAGE_DIR/saturn-bridge"
-    chmod 644 "$STAGE_DIR/saturn-bridge.service"
   fi
   find "$STAGE_SCRIPTS_DIR" -maxdepth 1 -type f \( -name '*.sh' -o -name '*.py' \) -print0 | xargs -0 -r chmod 755
   find "$STAGE_SCRIPTS_DIR" -maxdepth 1 -type f ! \( -name '*.sh' -o -name '*.py' \) -print0 | xargs -0 -r chmod 644
-  find "$STAGE_PRIVILEGED_SCRIPTS_DIR" -maxdepth 1 -type f -print0 | xargs -0 -r chmod 755
   find "$STAGE_WEB_DIR" -maxdepth 1 -type f -print0 | xargs -0 -r chmod 644
 else
-  info "[dry-run] stage Saturn Go/Bridge binaries, web assets, packaged scripts, privileged helpers, and XDMA postinst hook under $STAGE_DIR"
+  info "[dry-run] stage Saturn Go/Bridge binaries, web assets, and unprivileged packaged scripts under $STAGE_DIR"
 fi
 
-HELPER="$STAGE_DIR/deploy-root-helper.sh"
 if (( ! DRY_RUN )); then
-  cat > "$HELPER" <<EOF
-#!/usr/bin/env bash
-set -Eeuo pipefail
-STATUS_FILE="$(printf '%s' "$STATUS_FILE")"
-UNIT_NAME="$(printf '%s' "$UNIT_NAME")"
-SERVICE_NAME="$(printf '%s' "$SERVICE_NAME")"
-DEPLOY_RUN_USER="$(printf '%s' "$DEPLOY_RUN_USER")"
-DEPLOY_PRIVILEGED_SCRIPTS_DIR="$(printf '%s' "$DEPLOY_PRIVILEGED_SCRIPTS_DIR")"
-DEPLOY_SUDOERS_FILE="$(printf '%s' "$DEPLOY_SUDOERS_FILE")"
-DEPLOY_BIN="$(printf '%s' "$DEPLOY_BIN")"
-DEPLOY_BRIDGE_BIN="$(printf '%s' "$DEPLOY_BRIDGE_BIN")"
-DEPLOY_BRIDGE_SERVICE="$(printf '%s' "$DEPLOY_BRIDGE_SERVICE")"
-DEPLOY_BRIDGE_SERVICE_FILE="$(printf '%s' "$DEPLOY_BRIDGE_SERVICE_FILE")"
-XDMA_FIX_SCRIPT_INSTALL="$(printf '%s' "$XDMA_FIX_SCRIPT_INSTALL")"
-XDMA_POSTINST_HELPER_INSTALL="$(printf '%s' "$XDMA_POSTINST_HELPER_INSTALL")"
-XDMA_POSTINST_HOOK_PATH="$(printf '%s' "$XDMA_POSTINST_HOOK_PATH")"
-STARTED_AT="$(printf '%s' "$RUN_STARTED_AT")"
-SCRIPT_UID="\$(id -u "$DEPLOY_RUN_USER")"
-SCRIPT_GID="\$(id -g "$DEPLOY_RUN_USER")"
-json_escape(){
-  local s="\${1-}"
-  s="\${s//\\\\/\\\\\\\\}"
-  s="\${s//\\\"/\\\\\\\"}"
-  printf '%s' "\$s"
-}
-write_status(){
-  local status="\$1"
-  local phase="\$2"
-  local message="\$3"
-  local finished="\${4:-0}"
-  local exit_code="\${5:-null}"
-  local now finished_at
-  now="\$(date -Is)"
-  finished_at='null'
-  if (( finished )); then
-    finished_at="\"\$(json_escape "\$now")\""
-  fi
-  mkdir -p "\$(dirname "\$STATUS_FILE")" >/dev/null 2>&1 || true
-  cat > "\$STATUS_FILE" <<JSON
-{
-  "status": "\$(json_escape "\$status")",
-  "phase": "\$(json_escape "\$phase")",
-  "message": "\$(json_escape "\$message")",
-  "updated_at": "\$(json_escape "\$now")",
-  "started_at": "\$(json_escape "\$STARTED_AT")",
-  "finished_at": \$finished_at,
-  "exit_code": \$exit_code,
-  "unit_name": "\$(json_escape "\$UNIT_NAME")",
-  "service_name": "\$(json_escape "\$SERVICE_NAME")"
-}
-JSON
-  chown "\$SCRIPT_UID:\$SCRIPT_GID" "\$STATUS_FILE" >/dev/null 2>&1 || true
-  chmod 0640 "\$STATUS_FILE" >/dev/null 2>&1 || true
-}
-SATURN_GO_WAS_ACTIVE=0
-SATURN_GO_REPLACED=0
-BRIDGE_WAS_ACTIVE=0
-BRIDGE_REPLACED=0
-BRIDGE_UNIT_REPLACED=0
-on_error(){
-  local rc="\$?"
-  trap - ERR
-  set +e
-  systemctl stop "\$DEPLOY_BRIDGE_SERVICE" >/dev/null 2>&1 || true
-  if (( BRIDGE_REPLACED )) && [[ -f "\${DEPLOY_BRIDGE_BIN}.previous" ]]; then
-    install -m 0755 -o root -g root "\${DEPLOY_BRIDGE_BIN}.previous" "\$DEPLOY_BRIDGE_BIN"
-  fi
-  if (( BRIDGE_UNIT_REPLACED )) && [[ -f "\${DEPLOY_BRIDGE_SERVICE_FILE}.previous" ]]; then
-    install -m 0644 -o root -g root "\${DEPLOY_BRIDGE_SERVICE_FILE}.previous" "\$DEPLOY_BRIDGE_SERVICE_FILE"
-    systemctl daemon-reload
-  fi
-  if (( BRIDGE_WAS_ACTIVE )); then
-    systemctl start "\$DEPLOY_BRIDGE_SERVICE"
-  fi
-  systemctl stop "$SERVICE_NAME" >/dev/null 2>&1 || true
-  if (( SATURN_GO_REPLACED )) && [[ -f "\${DEPLOY_BIN}.previous" ]]; then
-    install -m 0755 -o root -g root "\${DEPLOY_BIN}.previous" "\$DEPLOY_BIN"
-  fi
-  if (( SATURN_GO_WAS_ACTIVE )); then
-    systemctl start "$SERVICE_NAME"
-  fi
-  write_status "error" "root-deploy" "Root deploy helper failed; previous service binaries restored" 1 "\$rc"
-  exit "\$rc"
-}
-trap on_error ERR
-write_status "running" "root-deploy" "Root deploy helper started"
-install -d -m 0755 "$DEPLOY_WEBROOT"
-install -d -m 0775 -o "\$SCRIPT_UID" -g "\$SCRIPT_GID" "$DEPLOY_SCRIPTS_DIR"
-install -d -m 0755 -o root -g root "$DEPLOY_PRIVILEGED_SCRIPTS_DIR"
-if systemctl is-active --quiet "$SERVICE_NAME"; then
-  SATURN_GO_WAS_ACTIVE=1
-fi
-systemctl stop "$SERVICE_NAME"
-BRIDGE_STAGED=0
-if [[ -f "$STAGE_DIR/saturn-bridge" ]]; then
-  BRIDGE_STAGED=1
-  if systemctl is-active --quiet "\$DEPLOY_BRIDGE_SERVICE"; then
-    BRIDGE_WAS_ACTIVE=1
-  fi
-  systemctl stop "\$DEPLOY_BRIDGE_SERVICE" >/dev/null 2>&1 || true
-  if [[ -f "\$DEPLOY_BRIDGE_BIN" ]]; then
-    install -m 0755 "\$DEPLOY_BRIDGE_BIN" "\${DEPLOY_BRIDGE_BIN}.previous"
-  fi
-fi
-if [[ -f "\$DEPLOY_BIN" ]]; then
-  install -m 0755 "\$DEPLOY_BIN" "\${DEPLOY_BIN}.previous"
-fi
-install -m 0755 "$STAGE_DIR/saturn-go" "\$DEPLOY_BIN"
-SATURN_GO_REPLACED=1
-if (( BRIDGE_STAGED )); then
-  if [[ -f "\$DEPLOY_BRIDGE_SERVICE_FILE" ]]; then
-    install -m 0644 "\$DEPLOY_BRIDGE_SERVICE_FILE" "\${DEPLOY_BRIDGE_SERVICE_FILE}.previous"
-  fi
-  install -m 0755 -o root -g root "$STAGE_DIR/saturn-bridge" "\$DEPLOY_BRIDGE_BIN"
-  BRIDGE_REPLACED=1
-  install -m 0644 -o root -g root "$STAGE_DIR/saturn-bridge.service" "\$DEPLOY_BRIDGE_SERVICE_FILE"
-  BRIDGE_UNIT_REPLACED=1
-fi
-for src in "$STAGE_WEB_DIR/"*; do
-  [[ -f "\$src" ]] || continue
-  install -m 0644 "\$src" "$DEPLOY_WEBROOT/\$(basename "\$src")"
-done
-for src in "$STAGE_SCRIPTS_DIR/"*; do
-  [[ -f "\$src" ]] || continue
-  mode=0644
-  case "\$src" in
-    *.sh|*.py) mode=0755 ;;
-  esac
-  install -m "\$mode" -o "\$SCRIPT_UID" -g "\$SCRIPT_GID" "\$src" "$DEPLOY_SCRIPTS_DIR/\$(basename "\$src")"
-done
-for src in "$STAGE_PRIVILEGED_SCRIPTS_DIR/"*; do
-  [[ -f "\$src" ]] || continue
-  install -m 0755 -o root -g root "\$src" "$DEPLOY_PRIVILEGED_SCRIPTS_DIR/\$(basename "\$src")"
-done
-[[ -f "$STAGE_PRIVILEGED_SCRIPTS_DIR/fix-xdma.sh" ]] || { echo "Missing staged XDMA helper: $STAGE_PRIVILEGED_SCRIPTS_DIR/fix-xdma.sh" >&2; exit 1; }
-[[ -f "$STAGE_PRIVILEGED_SCRIPTS_DIR/saturn-xdma-kernel-postinst.sh" ]] || { echo "Missing staged XDMA postinst helper: $STAGE_PRIVILEGED_SCRIPTS_DIR/saturn-xdma-kernel-postinst.sh" >&2; exit 1; }
-install -D -m 0755 -o root -g root "$STAGE_PRIVILEGED_SCRIPTS_DIR/fix-xdma.sh" "\$XDMA_FIX_SCRIPT_INSTALL"
-install -D -m 0755 -o root -g root "$STAGE_PRIVILEGED_SCRIPTS_DIR/saturn-xdma-kernel-postinst.sh" "\$XDMA_POSTINST_HELPER_INSTALL"
-TMP_XDMA_HOOK="\$(mktemp)"
-cat >"\$TMP_XDMA_HOOK" <<'HOOK'
-#!/bin/sh
-set -eu
-HELPER="${XDMA_POSTINST_HELPER_INSTALL}"
-if [ -x "\$HELPER" ]; then
-  "\$HELPER" "\$@" || true
-fi
-exit 0
-HOOK
-if [[ ! -f "\$XDMA_POSTINST_HOOK_PATH" ]] || ! cmp -s "\$TMP_XDMA_HOOK" "\$XDMA_POSTINST_HOOK_PATH"; then
-  install -D -m 0755 -o root -g root "\$TMP_XDMA_HOOK" "\$XDMA_POSTINST_HOOK_PATH"
-fi
-rm -f "\$TMP_XDMA_HOOK"
-[[ -x "\$XDMA_FIX_SCRIPT_INSTALL" ]] || { echo "Installed XDMA fix helper is not executable: \$XDMA_FIX_SCRIPT_INSTALL" >&2; exit 1; }
-[[ -x "\$XDMA_POSTINST_HELPER_INSTALL" ]] || { echo "Installed XDMA postinst helper is not executable: \$XDMA_POSTINST_HELPER_INSTALL" >&2; exit 1; }
-[[ -x "\$XDMA_POSTINST_HOOK_PATH" ]] || { echo "Installed XDMA postinst hook is not executable: \$XDMA_POSTINST_HOOK_PATH" >&2; exit 1; }
-grep -Fq "\$XDMA_POSTINST_HELPER_INSTALL" "\$XDMA_POSTINST_HOOK_PATH" || { echo "XDMA postinst hook does not reference helper: \$XDMA_POSTINST_HELPER_INSTALL" >&2; exit 1; }
-cat >"$DEPLOY_SUDOERS_FILE" <<SUDOERS
-# Managed by update-saturn-go.sh
-Defaults:${DEPLOY_RUN_USER} secure_path="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
-${DEPLOY_RUN_USER} ALL=(root) NOPASSWD: ${DEPLOY_PRIVILEGED_SCRIPTS_DIR}/install-shutdown-waiter-service.sh
-${DEPLOY_RUN_USER} ALL=(root) NOPASSWD: ${DEPLOY_PRIVILEGED_SCRIPTS_DIR}/install-shutdown-waiter-service.sh *
-${DEPLOY_RUN_USER} ALL=(root) NOPASSWD: ${DEPLOY_PRIVILEGED_SCRIPTS_DIR}/setup-eth-fallback.sh
-${DEPLOY_RUN_USER} ALL=(root) NOPASSWD: ${DEPLOY_PRIVILEGED_SCRIPTS_DIR}/setup-eth-fallback.sh *
-${DEPLOY_RUN_USER} ALL=(root) NOPASSWD: ${DEPLOY_PRIVILEGED_SCRIPTS_DIR}/fix-LED-power-button.sh
-${DEPLOY_RUN_USER} ALL=(root) NOPASSWD: ${DEPLOY_PRIVILEGED_SCRIPTS_DIR}/fix-LED-power-button.sh *
-${DEPLOY_RUN_USER} ALL=(root) NOPASSWD: ${DEPLOY_PRIVILEGED_SCRIPTS_DIR}/saturn-xdma-doctor.sh
-${DEPLOY_RUN_USER} ALL=(root) NOPASSWD: ${DEPLOY_PRIVILEGED_SCRIPTS_DIR}/saturn-xdma-doctor.sh *
-${DEPLOY_RUN_USER} ALL=(root) NOPASSWD: ${DEPLOY_PRIVILEGED_SCRIPTS_DIR}/saturn-flash-fpga.sh
-${DEPLOY_RUN_USER} ALL=(root) NOPASSWD: ${DEPLOY_PRIVILEGED_SCRIPTS_DIR}/saturn-flash-fpga.sh *
-${DEPLOY_RUN_USER} ALL=(root) NOPASSWD: ${DEPLOY_PRIVILEGED_SCRIPTS_DIR}/make_pi_image.sh
-${DEPLOY_RUN_USER} ALL=(root) NOPASSWD: ${DEPLOY_PRIVILEGED_SCRIPTS_DIR}/make_pi_image.sh *
-${DEPLOY_RUN_USER} ALL=(root) NOPASSWD: ${DEPLOY_PRIVILEGED_SCRIPTS_DIR}/clone_pi_to_device.sh
-${DEPLOY_RUN_USER} ALL=(root) NOPASSWD: ${DEPLOY_PRIVILEGED_SCRIPTS_DIR}/clone_pi_to_device.sh *
-${DEPLOY_RUN_USER} ALL=(root) NOPASSWD: ${DEPLOY_PRIVILEGED_SCRIPTS_DIR}/saturn-pi-wipe-target.sh
-${DEPLOY_RUN_USER} ALL=(root) NOPASSWD: ${DEPLOY_PRIVILEGED_SCRIPTS_DIR}/saturn-pi-wipe-target.sh *
-${DEPLOY_RUN_USER} ALL=(root) NOPASSWD: ${DEPLOY_PRIVILEGED_SCRIPTS_DIR}/saturn-xdma-stage-current.sh
-${DEPLOY_RUN_USER} ALL=(root) NOPASSWD: ${DEPLOY_PRIVILEGED_SCRIPTS_DIR}/install-udev-rules-on-current-image.sh
-${DEPLOY_RUN_USER} ALL=(root) NOPASSWD: ${DEPLOY_PRIVILEGED_SCRIPTS_DIR}/install-udev-rules-on-current-image.sh *
-${DEPLOY_RUN_USER} ALL=(root) NOPASSWD: ${DEPLOY_PRIVILEGED_SCRIPTS_DIR}/deskhpsdr-install-deps-on-current-image.sh
-${DEPLOY_RUN_USER} ALL=(root) NOPASSWD: ${DEPLOY_PRIVILEGED_SCRIPTS_DIR}/deskhpsdr-install-deps-on-current-image.sh *
-${DEPLOY_RUN_USER} ALL=(root) NOPASSWD: ${DEPLOY_PRIVILEGED_SCRIPTS_DIR}/saturn-admin-password.sh set
-${DEPLOY_RUN_USER} ALL=(root) NOPASSWD: ${DEPLOY_PRIVILEGED_SCRIPTS_DIR}/saturn-admin-password.sh status
-${DEPLOY_RUN_USER} ALL=(root) NOPASSWD: ${DEPLOY_PRIVILEGED_SCRIPTS_DIR}/saturn-go-build-preflight.sh
-${DEPLOY_RUN_USER} ALL=(root) NOPASSWD: ${DEPLOY_PRIVILEGED_SCRIPTS_DIR}/saturn-go-build-preflight.sh ensure-swap
-${DEPLOY_RUN_USER} ALL=(root) NOPASSWD: ${DEPLOY_PRIVILEGED_SCRIPTS_DIR}/saturn-go-build-preflight.sh status
-${DEPLOY_RUN_USER} ALL=(root) NOPASSWD: ${DEPLOY_PRIVILEGED_SCRIPTS_DIR}/install-saturn-bridge.sh
-${DEPLOY_RUN_USER} ALL=(root) NOPASSWD: ${DEPLOY_PRIVILEGED_SCRIPTS_DIR}/install-saturn-bridge.sh *
-${DEPLOY_RUN_USER} ALL=(root) NOPASSWD: ${DEPLOY_PRIVILEGED_SCRIPTS_DIR}/saturn-tailscale.sh
-${DEPLOY_RUN_USER} ALL=(root) NOPASSWD: ${DEPLOY_PRIVILEGED_SCRIPTS_DIR}/saturn-tailscale.sh *
-${DEPLOY_RUN_USER} ALL=(root) NOPASSWD: ${DEPLOY_PRIVILEGED_SCRIPTS_DIR}/saturn-go-tailscale-serve.sh
-${DEPLOY_RUN_USER} ALL=(root) NOPASSWD: ${DEPLOY_PRIVILEGED_SCRIPTS_DIR}/saturn-go-tailscale-serve.sh *
-${DEPLOY_RUN_USER} ALL=(root) NOPASSWD: /usr/bin/systemd-run --unit saturn-go-self-deploy-* --collect --no-block /bin/bash ${SATURN_STAGING_DIR:-/var/lib/saturn-state/repo-staging}/*/deploy-root-helper.sh
-SUDOERS
-chmod 0440 "$DEPLOY_SUDOERS_FILE"
-if command -v visudo >/dev/null 2>&1; then
-  visudo -cf "$DEPLOY_SUDOERS_FILE" >/dev/null
-fi
-if (( BRIDGE_STAGED )); then
-  systemctl daemon-reload
-  systemctl enable "\$DEPLOY_BRIDGE_SERVICE" >/dev/null
-  systemctl start "\$DEPLOY_BRIDGE_SERVICE"
-  systemctl is-active --quiet "\$DEPLOY_BRIDGE_SERVICE"
-  for _ in {1..20}; do
-    if ss -ltn | grep -q ':50001 '; then
-      break
-    fi
-    sleep 1
-  done
-  ss -ltn | grep -q ':50001 '
-fi
-systemctl start "$SERVICE_NAME"
-write_status "success" "root-deploy" "Root deploy helper completed" 1 0
-EOF
-  chmod 755 "$HELPER"
-  bash -n "$HELPER"
+  # Privileged helpers and service units are never part of a self-update
+  # payload. The fixed root-owned broker supplies those trusted definitions.
+  (
+    cd "$STAGE_DIR"
+    find . -type f ! -name SHA256SUMS -printf '%P\0' \
+      | sort -z \
+      | xargs -0 -r sha256sum > SHA256SUMS
+  )
+  chmod 0644 "$STAGE_DIR/SHA256SUMS"
+  bash "$DEPLOY_ROOT_BROKER_SRC" --validate "$STAGE_DIR"
 fi
 
 if (( STAGE_ONLY )); then
@@ -799,10 +522,11 @@ info "Dispatching detached root deploy helper via systemd-run..."
 STATUS_PHASE="dispatch"
 if (( DRY_RUN )); then
   write_status "success" "$STATUS_PHASE" "Dry-run completed; deploy helper not executed" 1 0
-  info "[dry-run] sudo -n systemd-run --unit $UNIT_NAME --collect --no-block /bin/bash $HELPER"
+  info "[dry-run] sudo -n systemd-run --unit $UNIT_NAME --collect --no-block $DEPLOY_ROOT_BROKER $STAGE_DIR"
 else
   write_status "running" "$STATUS_PHASE" "Dispatching detached root deploy helper"
-  run_cmd sudo -n systemd-run --unit "$UNIT_NAME" --collect --no-block /bin/bash "$HELPER"
+  [[ -x "$DEPLOY_ROOT_BROKER" ]] || die "Installed root deploy broker is missing; rerun install_saturn_go_nginx.sh: $DEPLOY_ROOT_BROKER"
+  run_cmd sudo -n systemd-run --unit "$UNIT_NAME" --collect --no-block "$DEPLOY_ROOT_BROKER" "$STAGE_DIR"
   write_status "dispatched" "$STATUS_PHASE" "Deploy helper dispatched; service restart in progress"
 fi
 

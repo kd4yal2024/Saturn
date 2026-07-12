@@ -33,6 +33,7 @@
 #include "../common/p23_perf_telemetry.h"
 #include <pthread.h>
 #include <syscall.h>
+#include "controller_lease.h"
 
 
 
@@ -511,6 +512,7 @@ void *IncomingDUCIQ(void *arg)                          // listener thread
     uint8_t ConvertedFrame[VDMATRANSFERSIZE];
     struct iovec IovecList[VDUCMAXRECVBATCHFRAMES];
     struct mmsghdr DatagramList[VDUCMAXRECVBATCHFRAMES];
+    struct sockaddr_in SourceAddresses[VDUCMAXRECVBATCHFRAMES];
     unsigned int MsgIndex = 0;
     int Received = 0;
     uint32_t Cntr = 0;
@@ -536,12 +538,15 @@ void *IncomingDUCIQ(void *arg)                          // listener thread
     ApplyCriticalAudioThreadRuntime("DUC I/Q ingress");
 
     memset(DatagramList, 0, sizeof(DatagramList));
+    memset(SourceAddresses, 0, sizeof(SourceAddresses));
     for (MsgIndex = 0; MsgIndex < VDUCMAXRECVBATCHFRAMES; MsgIndex++)
     {
         IovecList[MsgIndex].iov_base = UDPInBuffers[MsgIndex];
         IovecList[MsgIndex].iov_len = VDUCIQSIZE;
         DatagramList[MsgIndex].msg_hdr.msg_iov = &IovecList[MsgIndex];
         DatagramList[MsgIndex].msg_hdr.msg_iovlen = 1;
+        DatagramList[MsgIndex].msg_hdr.msg_name = &SourceAddresses[MsgIndex];
+        DatagramList[MsgIndex].msg_hdr.msg_namelen = sizeof(SourceAddresses[MsgIndex]);
     }
 
     if (pthread_create(&WriterThread, NULL, DUCIQDMAWriter, Context) != 0)
@@ -603,6 +608,8 @@ void *IncomingDUCIQ(void *arg)                          // listener thread
                 uint64_t ArrivalNs = 0;
 
                 if(DatagramList[MsgIndex].msg_len != VDUCIQSIZE)
+                    continue;
+                if(!ControllerLeaseMatches(&SourceAddresses[MsgIndex]))
                     continue;
                 atomic_store(&NewMessageReceived, true);
                 P23PerfTelemetryCounterAdd(eP23PerfCounterDUCPackets, 1U);

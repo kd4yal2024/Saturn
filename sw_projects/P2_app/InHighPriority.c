@@ -17,6 +17,7 @@
 #include <stdint.h>
 #include "../common/saturntypes.h"
 #include "InHighPriority.h"
+#include "controller_lease.h"
 #include <errno.h>
 #include <stdlib.h>
 #include <stddef.h>
@@ -132,6 +133,8 @@ void *IncomingHighPriority(void *arg)                   // listener thread
     if(size == VHIGHPRIOTIYTOSDRSIZE)
     {
       bool WasActive;
+      if(!ControllerLeaseMatches(&addr_from))
+        continue;
       atomic_store(&NewMessageReceived, true);
       LongWord = rd_be_u32(UDPInBuffer);
       if(!HighPriorityStreamLogged)
@@ -166,6 +169,7 @@ void *IncomingHighPriority(void *arg)                   // listener thread
           ResetStartupTraceFlags();
         }
         atomic_store(&StartBitReceived, false);
+        ControllerLeaseRelease(&addr_from);
       }
       //
       // set TX or not TX

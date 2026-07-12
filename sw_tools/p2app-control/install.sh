@@ -12,7 +12,11 @@ XDMA_REG_DEV="/dev/xdma0_user"
 P2APP_START_TIMEOUT_SECONDS="${P2APP_START_TIMEOUT_SECONDS:-30}"
 
 P2APP_DIR="${REPO_ROOT}/sw_projects/P2_app"
-P2APP_BIN="${P2APP_DIR}/p2app"
+P2APP_SOURCE_BIN="${P2APP_DIR}/p2app"
+P2APP_RUNTIME_ROOT="${P2APP_RUNTIME_ROOT:-/opt/saturn-radio}"
+P2APP_BIN="${P2APP_RUNTIME_ROOT}/bin/p2app"
+P2APP_SERVICE_USER="${P2APP_SERVICE_USER:-saturn-radio}"
+P2APP_SERVICE_GROUP="${P2APP_SERVICE_GROUP:-saturn-radio}"
 XDMA_DOCTOR_LOCAL="${REPO_ROOT}/scripts/saturn-xdma-doctor.sh"
 XDMA_DOCTOR_INSTALL="/usr/local/bin/saturn-xdma-doctor.sh"
 XDMA_READY_LOCAL="${REPO_ROOT}/scripts/saturn-xdma-ready.sh"
@@ -68,6 +72,23 @@ service_is_running() {
   active_state="$(sudo systemctl show -p ActiveState --value "${UNIT_NAME}" 2>/dev/null || true)"
   sub_state="$(sudo systemctl show -p SubState --value "${UNIT_NAME}" 2>/dev/null || true)"
   [[ "${active_state}" == "active" && "${sub_state}" == "running" ]]
+}
+
+ensure_radio_service_account() {
+  if ! getent group "$P2APP_SERVICE_GROUP" >/dev/null 2>&1; then
+    sudo groupadd --system "$P2APP_SERVICE_GROUP"
+  fi
+  if ! id -u "$P2APP_SERVICE_USER" >/dev/null 2>&1; then
+    sudo useradd --system --gid "$P2APP_SERVICE_GROUP" \
+      --home-dir /nonexistent --no-create-home --shell /usr/sbin/nologin \
+      "$P2APP_SERVICE_USER"
+  fi
+  local group
+  for group in i2c gpio dialout; do
+    if getent group "$group" >/dev/null 2>&1; then
+      sudo usermod -a -G "$group" "$P2APP_SERVICE_USER"
+    fi
+  done
 }
 
 wait_for_service_running() {
@@ -137,9 +158,15 @@ sudo install -D -m 0755 "${FIX_XDMA_LOCAL}" "${FIX_XDMA_INSTALL}"
 sudo install -D -m 0755 "${XDMA_POSTINST_LOCAL}" "${XDMA_POSTINST_INSTALL}"
 sudo install -D -m 0755 "${APP_INFO_LOCAL}" "${APP_INFO_INSTALL}"
 
-echo "[*] Ensuring kernel postinst hook exists/updated -> ${XDMA_POSTINST_HOOK_PATH}"
-TMP_POSTINST_HOOK="$(mktemp)"
-cat > "$TMP_POSTINST_HOOK" <<EOF1
+if command -v dkms >/dev/null 2>&1 && [[ -n "$(dkms status -m saturn-xdma 2>/dev/null || true)" ]]; then
+  echo "[*] DKMS manages Saturn XDMA; leaving the legacy kernel postinst hook disabled"
+  if [[ -e "${XDMA_POSTINST_HOOK_PATH}" || -L "${XDMA_POSTINST_HOOK_PATH}" ]]; then
+    sudo mv -f "${XDMA_POSTINST_HOOK_PATH}" "${XDMA_POSTINST_HOOK_PATH}.disabled-by-dkms"
+  fi
+else
+  echo "[*] Ensuring kernel postinst hook exists/updated -> ${XDMA_POSTINST_HOOK_PATH}"
+  TMP_POSTINST_HOOK="$(mktemp)"
+  cat > "$TMP_POSTINST_HOOK" <<EOF1
 #!/bin/sh
 set -eu
 HELPER="${XDMA_POSTINST_INSTALL}"
@@ -149,21 +176,27 @@ fi
 exit 0
 EOF1
 
-if [[ ! -f "${XDMA_POSTINST_HOOK_PATH}" ]] || ! sudo cmp -s "$TMP_POSTINST_HOOK" "$XDMA_POSTINST_HOOK_PATH"; then
-  echo "    -> writing kernel postinst hook"
-  sudo install -D -m 0755 "$TMP_POSTINST_HOOK" "$XDMA_POSTINST_HOOK_PATH"
-else
-  echo "    -> kernel postinst hook already matches (no change)"
+  if [[ ! -f "${XDMA_POSTINST_HOOK_PATH}" ]] || ! sudo cmp -s "$TMP_POSTINST_HOOK" "$XDMA_POSTINST_HOOK_PATH"; then
+    echo "    -> writing kernel postinst hook"
+    sudo install -D -m 0755 "$TMP_POSTINST_HOOK" "$XDMA_POSTINST_HOOK_PATH"
+  else
+    echo "    -> kernel postinst hook already matches (no change)"
+  fi
+  rm -f "$TMP_POSTINST_HOOK"
 fi
-rm -f "$TMP_POSTINST_HOOK"
 
 echo "[*] Ensuring systemd unit exists/updated -> ${UNIT_PATH}"
 
-if [[ ! -x "${P2APP_BIN}" ]]; then
+if [[ ! -x "${P2APP_SOURCE_BIN}" ]]; then
   echo "[!] ERROR: Expected P2_app binary not found or not executable:"
-  echo "    ${P2APP_BIN}"
+  echo "    ${P2APP_SOURCE_BIN}"
   exit 1
 fi
+
+echo "[*] Installing root-owned p2app runtime -> ${P2APP_BIN}"
+ensure_radio_service_account
+sudo install -d -m 0755 -o root -g root "${P2APP_RUNTIME_ROOT}/bin"
+sudo install -m 0755 -o root -g root "${P2APP_SOURCE_BIN}" "${P2APP_BIN}"
 
 echo "[*] Ensuring XDMA readiness unit exists/updated -> ${XDMA_READY_UNIT_PATH}"
 TMP_XDMA_READY_UNIT="$(mktemp)"
@@ -202,10 +235,10 @@ Requires=${XDMA_READY_UNIT_NAME}
 Documentation=https://github.com/kd4yal2024/Saturn
 
 [Service]
-WorkingDirectory=${P2APP_DIR}
+WorkingDirectory=${P2APP_RUNTIME_ROOT}
 ExecStart=${P2APP_BIN} -s -p
-User=root
-Group=root
+User=${P2APP_SERVICE_USER}
+Group=${P2APP_SERVICE_GROUP}
 Restart=always
 RestartSec=5
 TimeoutStopSec=30
@@ -215,6 +248,23 @@ StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=p2app
 LimitNOFILE=4096
+UMask=0027
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RestrictNamespaces=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CapabilityBoundingSet=CAP_SYS_NICE
+AmbientCapabilities=CAP_SYS_NICE
 
 [Install]
 WantedBy=multi-user.target

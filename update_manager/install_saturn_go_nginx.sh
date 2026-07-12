@@ -25,6 +25,9 @@ XDMA_FIX_SCRIPT_INSTALL="/usr/local/bin/saturn-fix-xdma.sh"
 XDMA_POSTINST_HELPER_INSTALL="/usr/local/bin/saturn-xdma-kernel-postinst.sh"
 XDMA_POSTINST_HOOK_PATH="/etc/kernel/postinst.d/saturn-xdma"
 SATURN_BRIDGE_INSTALLER_NAME="install-saturn-bridge.sh"
+SATURN_GO_DEPLOY_BROKER_NAME="saturn-go-deploy-root.sh"
+SATURN_GO_DEPLOY_BROKER="$PRIVILEGED_SCRIPTS_DIR/$SATURN_GO_DEPLOY_BROKER_NAME"
+SATURN_GO_DEPLOY_CONFIG="/etc/default/saturn-go-deploy"
 
 SATURN_ADDR="${SATURN_ADDR:-127.0.0.1:8080}"
 SATURN_MAX_BODY_BYTES="${SATURN_MAX_BODY_BYTES:-2147483648}"
@@ -41,7 +44,9 @@ SATURN_STAGING_DIR="${SATURN_STAGING_DIR:-${SATURN_STATE_DIR}/repo-staging}"
 SATURN_WATCHDOG_URL="${SATURN_WATCHDOG_URL:-http://${SATURN_ADDR}/healthz}"
 SATURN_WATCHDOG_INTERVAL="${SATURN_WATCHDOG_INTERVAL:-30s}"
 RUSTUP_INIT_URL="${RUSTUP_INIT_URL:-https://sh.rustup.rs}"
+RUSTUP_INIT_SHA256="${RUSTUP_INIT_SHA256:-6c30b75a75b28a96fd913a037c8581b580080b6ee9b8169a3c0feb1af7fe8caf}"
 TAILSCALE_INSTALL_URL="${TAILSCALE_INSTALL_URL:-https://tailscale.com/install.sh}"
+TAILSCALE_INSTALL_SHA256="${TAILSCALE_INSTALL_SHA256:-ada2fe9d54df0d3e5a77879470bda195b2c53d27ecd73aba6de270c795725625}"
 SATURN_REMOTE_NEXT_DEFAULT_QUERY="${SATURN_REMOTE_NEXT_DEFAULT_QUERY:-phase42_split=1&phase44_tx_opus=1&phase44_tx_cfc=1&client_bust=bridgeprefill240-cfcessb3}"
 SATURN_INSTALL_BRIDGE="${SATURN_INSTALL_BRIDGE:-1}"
 SATURN_REQUIRE_BRIDGE="${SATURN_REQUIRE_BRIDGE:-$SATURN_INSTALL_BRIDGE}"
@@ -57,6 +62,17 @@ ok(){   printf "[OK] %s\n" "$*"; }
 info(){ printf "[INFO] %s\n" "$*"; }
 warn(){ printf "[WARN] %s\n" "$*"; }
 err(){  printf "[ERR] %s\n" "$*" >&2; }
+
+download_verified() {
+  local url="$1" expected="$2" dest="$3" actual
+  curl --proto '=https' --tlsv1.2 -fsSL "$url" -o "$dest"
+  actual="$(sha256sum "$dest" | awk '{print $1}')"
+  [[ "$actual" == "$expected" ]] || {
+    rm -f "$dest"
+    err "Checksum mismatch for $url (expected $expected, got $actual)"
+    return 1
+  }
+}
 
 check_tmp_space_preflight() {
   local warn_pct="${SATURN_TMP_WARN_PCT:-90}"
@@ -98,6 +114,7 @@ EXTRA_PACKAGED_SCRIPTS=(
 )
 PRIVILEGED_HELPER_SCRIPTS=(
   "$SOURCE_DIR/scripts/saturn-go-build-preflight.sh"
+  "$SOURCE_DIR/scripts/$SATURN_GO_DEPLOY_BROKER_NAME"
   "$SOURCE_DIR/scripts/$SATURN_BRIDGE_INSTALLER_NAME"
   "$SOURCE_DIR/scripts/make_pi_image.sh"
   "$SOURCE_DIR/scripts/clone_pi_to_device.sh"
@@ -253,8 +270,12 @@ install_optional_tailscale() {
     return 0
   fi
 
-  info "Installing Tailscale package via ${TAILSCALE_INSTALL_URL}"
-  curl -fsSL "$TAILSCALE_INSTALL_URL" | sh
+  local installer
+  installer="$(mktemp)"
+  info "Installing checksum-pinned Tailscale package via ${TAILSCALE_INSTALL_URL}"
+  download_verified "$TAILSCALE_INSTALL_URL" "$TAILSCALE_INSTALL_SHA256" "$installer"
+  sh "$installer"
+  rm -f "$installer"
   if ! command -v tailscale >/dev/null 2>&1; then
     err "Tailscale installer completed but the tailscale CLI is not on PATH."
     exit 1
@@ -360,8 +381,13 @@ ensure_modern_rust_toolchain() {
   remove_legacy_apt_rust
 
   if [[ ! -x "$RUSTUP_CARGO_BIN" || ! -x "$RUSTUP_RUSTC_BIN" || ! -x "$RUSTUP_CMD_BIN" ]]; then
+    local rustup_installer
+    rustup_installer="$(mktemp)"
     info "Installing rustup toolchain for build user '$BUILD_USER'..."
-    run_as_build_user "curl --proto '=https' --tlsv1.2 -sSf \"$RUSTUP_INIT_URL\" | sh -s -- -y --profile minimal --default-toolchain stable"
+    download_verified "$RUSTUP_INIT_URL" "$RUSTUP_INIT_SHA256" "$rustup_installer"
+    chmod 0644 "$rustup_installer"
+    run_as_build_user "sh \"$rustup_installer\" -y --profile minimal --default-toolchain stable"
+    rm -f "$rustup_installer"
   else
     info "rustup already installed for build user '$BUILD_USER'; updating stable toolchain..."
     run_as_build_user "\"$RUSTUP_CMD_BIN\" self update >/dev/null 2>&1 || true"
@@ -508,6 +534,28 @@ find "$SATURN_STATE_DIR" -type f -print0 | xargs -0 -r chmod 0640
 ok "Permissions set"
 
 info "Writing sudoers policy for privileged helper scripts..."
+install -d -m 0755 /etc/default
+cat >"$SATURN_GO_DEPLOY_CONFIG" <<EOF
+# Managed by install_saturn_go_nginx.sh. This file must remain root-owned.
+RUN_USER="$SERVICE_USER"
+RUN_GROUP="$SERVICE_GROUP"
+SATURN_GO_HEALTH_URL="http://${SATURN_ADDR}/healthz"
+STAGING_ROOT="$SATURN_STAGING_DIR"
+STATUS_FILE="$SATURN_SATURNGO_DEPLOY_STATUS_FILE"
+SATURN_ROOT="$SATURN_ROOT"
+SATURN_GO_BIN="$BIN_DIR/saturn-go"
+SATURN_GO_SERVICE="saturn-go.service"
+BRIDGE_BIN="$BIN_DIR/saturn-bridge"
+BRIDGE_SERVICE="saturn-bridge.service"
+BRIDGE_SERVICE_FILE="/etc/systemd/system/saturn-bridge.service"
+WEB_ROOT="$WEB_ROOT"
+SCRIPTS_DIR="$SCRIPTS_DIR"
+BRIDGE_MAX_RATE_KHZ="${SATURN_BRIDGE_MAX_CLIENT_DDC0_SAMPLE_RATE_KHZ:-192}"
+BRIDGE_OPUS_ENABLED="${SATURN_BRIDGE_TX_OPUS_DECODE_ENABLED:-1}"
+BRIDGE_RF_TX_ENABLED="${SATURN_BRIDGE_RF_TX_ENABLED:-1}"
+EOF
+chown root:root "$SATURN_GO_DEPLOY_CONFIG"
+chmod 0644 "$SATURN_GO_DEPLOY_CONFIG"
 cat >"$SUDOERS_FILE" <<EOF
 # Managed by install_saturn_go_nginx.sh
 Defaults:${SERVICE_USER} secure_path="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
@@ -543,7 +591,7 @@ ${SERVICE_USER} ALL=(root) NOPASSWD: ${PRIVILEGED_SCRIPTS_DIR}/saturn-tailscale.
 ${SERVICE_USER} ALL=(root) NOPASSWD: ${PRIVILEGED_SCRIPTS_DIR}/saturn-tailscale.sh *
 ${SERVICE_USER} ALL=(root) NOPASSWD: ${PRIVILEGED_SCRIPTS_DIR}/saturn-go-tailscale-serve.sh
 ${SERVICE_USER} ALL=(root) NOPASSWD: ${PRIVILEGED_SCRIPTS_DIR}/saturn-go-tailscale-serve.sh *
-${SERVICE_USER} ALL=(root) NOPASSWD: /usr/bin/systemd-run --unit saturn-go-self-deploy-* --collect --no-block /bin/bash ${SATURN_STAGING_DIR}/*/deploy-root-helper.sh
+${SERVICE_USER} ALL=(root) NOPASSWD: /usr/bin/systemd-run --unit saturn-go-self-deploy-* --collect --no-block ${SATURN_GO_DEPLOY_BROKER} ${SATURN_STAGING_DIR}/*
 EOF
 chmod 0440 "$SUDOERS_FILE"
 if command -v visudo >/dev/null 2>&1; then

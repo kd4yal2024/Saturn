@@ -66,6 +66,9 @@ fi
 
 echo "Installing Saturn udev rules from: $repo_root"
 install -d -m 0755 "$dest_dir"
+if ! getent group saturn-radio >/dev/null 2>&1; then
+  groupadd --system saturn-radio
+fi
 install -m 0644 "$serial_rules" "$dest_dir/$(basename "$serial_rules")"
 
 if [[ -f "$xdma_rules" ]]; then

@@ -68,6 +68,7 @@
 #include "AriesATU.h"
 #include "GanymedePAControl.h"
 #include "frontpanelhandler.h"
+#include "controller_lease.h"
 
 #define P2APPVERSION 47
 #define FWREQUIREDMAJORVERSION 1                  // major version that is required. Only altered if programming interface changes. 
@@ -1052,6 +1053,7 @@ void* CheckForActivity(__attribute__((unused)) void *arg)
       EnableCW(false, false);
       atomic_store(&ReplyAddressSet, false);
       atomic_store(&StartBitReceived, false);
+      ControllerLeaseClear();
       if(PreviouslyActiveState)
       {
         printf("Reverted to Inactive State after no activity\n");
@@ -1756,7 +1758,6 @@ int main(int argc, char *argv[])
     CmdByte = UDPInBuffer[4];
     if(size==VDISCOVERYSIZE)  
     {
-      atomic_store(&NewMessageReceived, true);
       switch(CmdByte)
       {
         //
@@ -1766,6 +1767,12 @@ int main(int argc, char *argv[])
           //
           // get "from" MAC address and port; this is where the data goes back to
           //
+          if(!ControllerLeaseClaim(&addr_from))
+          {
+            printf("Ignoring general packet from non-controller source\n");
+            break;
+          }
+          atomic_store(&NewMessageReceived, true);
           pthread_mutex_lock(&g_reply_addr_mutex);
           memset(&reply_addr, 0, sizeof(reply_addr));
           reply_addr.sin_family = AF_INET;

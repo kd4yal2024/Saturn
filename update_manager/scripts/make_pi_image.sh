@@ -10,6 +10,8 @@ OUT_DIR="${HOME}"
 NO_SHRINK=false
 COMPRESS=false
 SUDO=""
+PISHRINK_REF="${PISHRINK_REF:-5f358d03eed4b7334657ee93867826a2b42f112a}"
+PISHRINK_SHA256="${PISHRINK_SHA256:-71026f0c02ac099e588a3eb8f70760c1b680aa8ea3acde61a0141fbaeb68c777}"
 
 progress(){ echo "Progress: $1%"; }
 info(){ echo "$@"; }
@@ -80,10 +82,18 @@ progress 15
 
 # Ensure pishrink exists
 if ! command -v pishrink >/dev/null 2>&1; then
-  info "Installing PiShrink..."
-  wget -q https://raw.githubusercontent.com/Drewsif/PiShrink/master/pishrink.sh -O /tmp/pishrink.sh
-  chmod +x /tmp/pishrink.sh
-  sudo mv /tmp/pishrink.sh /usr/local/bin/pishrink
+  info "Installing checksum-pinned PiShrink..."
+  pishrink_tmp="$(mktemp)"
+  curl --proto '=https' --tlsv1.2 -fsSL \
+    "https://raw.githubusercontent.com/Drewsif/PiShrink/${PISHRINK_REF}/pishrink.sh" \
+    -o "$pishrink_tmp"
+  pishrink_actual="$(sha256sum "$pishrink_tmp" | awk '{print $1}')"
+  if [[ "$pishrink_actual" != "$PISHRINK_SHA256" ]]; then
+    rm -f "$pishrink_tmp"
+    err "PiShrink checksum mismatch (expected $PISHRINK_SHA256, got $pishrink_actual)"
+  fi
+  $SUDO install -m 0755 "$pishrink_tmp" /usr/local/bin/pishrink
+  rm -f "$pishrink_tmp"
 fi
 
 progress 20

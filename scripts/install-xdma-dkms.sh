@@ -4,13 +4,14 @@
 set -euo pipefail
 
 PACKAGE_NAME="${SATURN_XDMA_DKMS_NAME:-saturn-xdma}"
-PACKAGE_VERSION="${SATURN_XDMA_DKMS_VERSION:-2020.1.8-saturn}"
+PACKAGE_VERSION="${SATURN_XDMA_DKMS_VERSION:-}"
 TARGET_KERNEL="${SATURN_XDMA_DKMS_KERNEL:-$(uname -r)}"
 MANUAL_POSTINST_HOOK="${SATURN_XDMA_MANUAL_POSTINST_HOOK:-/etc/kernel/postinst.d/saturn-xdma}"
 DRY_RUN=0
 FORCE=0
 UNINSTALL=0
 KEEP_MANUAL_POSTINST=0
+PRUNE_OLD="${SATURN_XDMA_PRUNE_OLD:-0}"
 
 info(){ printf '[INFO] %s\n' "$*"; }
 ok(){ printf '[ OK ] %s\n' "$*"; }
@@ -78,7 +79,24 @@ uninstall_dkms(){
     run rm -rf "$SRC_ROOT"
   fi
   run depmod "$TARGET_KERNEL"
-  ok "DKMS package removed. The legacy manual postinst hook was not restored."
+  local disabled_hook="${MANUAL_POSTINST_HOOK}.disabled-by-dkms"
+  if [[ ! -e "$MANUAL_POSTINST_HOOK" && -e "$disabled_hook" ]]; then
+    run mv "$disabled_hook" "$MANUAL_POSTINST_HOOK"
+    ok "Restored legacy manual postinst hook: $MANUAL_POSTINST_HOOK"
+  fi
+  ok "DKMS package removed."
+}
+
+prune_old_versions(){
+  local status version
+  [[ "$PRUNE_OLD" == "1" ]] || return 0
+  while IFS= read -r status; do
+    version="$(sed -n "s#^${PACKAGE_NAME}/\([^,]*\),.*#\1#p" <<<"$status")"
+    [[ -n "$version" && "$version" != "$PACKAGE_VERSION" ]] || continue
+    warn "Pruning older verified DKMS version: ${PACKAGE_NAME}/${version}"
+    run dkms remove -m "$PACKAGE_NAME" -v "$version" --all
+    [[ -d "/usr/src/${PACKAGE_NAME}-${version}" ]] && run rm -rf "/usr/src/${PACKAGE_NAME}-${version}"
+  done < <(dkms status -m "$PACKAGE_NAME" 2>/dev/null || true)
 }
 
 usage(){
@@ -88,7 +106,7 @@ Usage:
 
 Options:
   --kernel <release>   Build/install for the selected kernel (default: uname -r)
-  --force              Remove any existing DKMS registration for this version first
+  --force              Rebuild this version for the selected kernel
   --uninstall          Remove this DKMS package/version and its /usr/src source
   --keep-manual-postinst
                        Keep /etc/kernel/postinst.d/saturn-xdma active after install
@@ -102,8 +120,9 @@ kernel package update.
 
 Environment:
   SATURN_XDMA_DKMS_NAME       Package name (default: saturn-xdma)
-  SATURN_XDMA_DKMS_VERSION    Package version (default: 2020.1.8-saturn)
+  SATURN_XDMA_DKMS_VERSION    Package version (default: source-derived)
   SATURN_XDMA_DKMS_KERNEL     Target kernel release
+  SATURN_XDMA_PRUNE_OLD       Set to 1 to prune older versions after success
   SATURN_XDMA_MANUAL_POSTINST_HOOK
                                 Legacy manual kernel hook path override
   SATURN_REPO_DIR             Saturn repo root override
@@ -157,8 +176,15 @@ fi
 DRIVER_DIR="$REPO_ROOT/linuxdriver/xdma"
 INCLUDE_DIR="$REPO_ROOT/linuxdriver/include"
 DKMS_TEMPLATE="$REPO_ROOT/linuxdriver/dkms/dkms.conf"
+if [[ -z "$PACKAGE_VERSION" ]]; then
+  SOURCE_REV="$({ find "$DRIVER_DIR" "$INCLUDE_DIR" -type f \
+    \( -name '*.c' -o -name '*.h' -o -name Makefile -o -name dkms.conf \) -print0; \
+    printf '%s\0' "$DKMS_TEMPLATE"; } | sort -z | xargs -0 sha256sum | sha256sum | cut -c1-12)"
+  PACKAGE_VERSION="2020.1.8-saturn.${SOURCE_REV}"
+fi
 SRC_ROOT="/usr/src/${PACKAGE_NAME}-${PACKAGE_VERSION}"
 SRC_STAGE="${SRC_ROOT}.stage.$$"
+trap '[[ -n "${SRC_STAGE:-}" && -d "${SRC_STAGE:-}" ]] && rm -rf "$SRC_STAGE"' EXIT
 
 [[ -f "$DRIVER_DIR/Makefile" ]] || die "XDMA driver source not found: $DRIVER_DIR"
 [[ -f "$INCLUDE_DIR/libxdma_api.h" ]] || die "XDMA include source not found: $INCLUDE_DIR/libxdma_api.h"
@@ -177,11 +203,27 @@ fi
 
 if dkms_registered; then
   if [[ "$FORCE" -eq 1 ]]; then
-    warn "Removing existing DKMS registration for ${PACKAGE_NAME}/${PACKAGE_VERSION}"
-    run dkms remove -m "$PACKAGE_NAME" -v "$PACKAGE_VERSION" --all
-  else
-    die "DKMS package is already registered. Rerun with --force or bump SATURN_XDMA_DKMS_VERSION."
+    if dkms status -m "$PACKAGE_NAME" -v "$PACKAGE_VERSION" -k "$TARGET_KERNEL" 2>/dev/null | grep -q 'installed'; then
+      die "Refusing to remove an installed module before a replacement is healthy; use a new source-derived version"
+    fi
+    warn "Removing only ${TARGET_KERNEL} from existing ${PACKAGE_NAME}/${PACKAGE_VERSION} registration"
+    run dkms remove -m "$PACKAGE_NAME" -v "$PACKAGE_VERSION" -k "$TARGET_KERNEL"
+  elif dkms status -m "$PACKAGE_NAME" -v "$PACKAGE_VERSION" -k "$TARGET_KERNEL" 2>/dev/null | grep -q 'installed'; then
+    ok "DKMS package is already installed for ${TARGET_KERNEL}."
+    disable_manual_postinst_hook
+    exit 0
   fi
+
+  [[ -d "$SRC_ROOT" ]] || die "Registered DKMS source is missing: $SRC_ROOT"
+  run dkms build -m "$PACKAGE_NAME" -v "$PACKAGE_VERSION" -k "$TARGET_KERNEL"
+  run dkms install -m "$PACKAGE_NAME" -v "$PACKAGE_VERSION" -k "$TARGET_KERNEL"
+  run depmod "$TARGET_KERNEL"
+  dkms status -m "$PACKAGE_NAME" -v "$PACKAGE_VERSION" -k "$TARGET_KERNEL" | grep -q 'installed' || \
+    die "DKMS did not report an installed module for ${TARGET_KERNEL}"
+  disable_manual_postinst_hook
+  prune_old_versions
+  ok "DKMS-managed XDMA installed for ${TARGET_KERNEL}."
+  exit 0
 fi
 
 if [[ "$DRY_RUN" -eq 1 ]]; then
@@ -210,7 +252,12 @@ run dkms add -m "$PACKAGE_NAME" -v "$PACKAGE_VERSION"
 run dkms build -m "$PACKAGE_NAME" -v "$PACKAGE_VERSION" -k "$TARGET_KERNEL"
 run dkms install -m "$PACKAGE_NAME" -v "$PACKAGE_VERSION" -k "$TARGET_KERNEL"
 run depmod "$TARGET_KERNEL"
+if [[ "$DRY_RUN" -ne 1 ]]; then
+  dkms status -m "$PACKAGE_NAME" -v "$PACKAGE_VERSION" -k "$TARGET_KERNEL" | grep -q 'installed' || \
+    die "DKMS did not report an installed module for ${TARGET_KERNEL}"
+fi
 disable_manual_postinst_hook
+prune_old_versions
 
 ok "DKMS-managed XDMA installed for ${TARGET_KERNEL}."
 ok "Future kernel installs can rebuild with: dkms autoinstall -m ${PACKAGE_NAME}/${PACKAGE_VERSION}"

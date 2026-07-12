@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # fix-xdma.sh
-# Version: 2.4
+# Version: 2.5
 # Rebuild & (re)install XDMA kernel module for the running kernel and, when
 # present, pre-stage it for the newest installed kernel. Stop/start
 # p2app.service, verify it's running, and emit a structured XDMA diagnosis.
@@ -17,12 +17,26 @@ SERVICE_NAME="p2app.service"
 STAGE_ONLY=0
 TARGET_KERNELS=()
 LOCK_FD=""
+ROLLBACK_DIR=""
+TRANSACTION_ACTIVE=0
+WAS_ACTIVE=0
+XDMA_WAS_LOADED=0
 
 RED=$'\033[0;31m'; GRN=$'\033[0;32m'; YLW=$'\033[0;33m'; CYA=$'\033[0;36m'; NC=$'\033[0m'
 info(){ printf "${CYA}[INFO]${NC} %s\n" "$*"; }
 ok()  { printf "${GRN}[ OK ]${NC} %s\n" "$*"; }
 warn(){ printf "${YLW}[WARN]${NC} %s\n" "$*"; }
-die(){ printf "${RED}[ERR ] %s${NC}\n" "$*" >&2; exit 1; }
+die(){
+  local rc=1
+  printf "${RED}[ERR ] %s${NC}\n" "$*" >&2
+  if (( TRANSACTION_ACTIVE )); then
+    trap - ERR
+    restore_live_module "$(uname -r)"
+    [[ -n "$ROLLBACK_DIR" ]] && rm -rf "$ROLLBACK_DIR"
+    TRANSACTION_ACTIVE=0
+  fi
+  exit "$rc"
+}
 have(){ command -v "$1" >/dev/null 2>&1; }
 
 usage(){
@@ -227,7 +241,7 @@ target_kernels(){
   fi
 }
 
-build_and_install_for_kernel(){
+build_for_kernel(){
   local krel="$1" driver_dir="$2" xdma_inc="$3" kbuild
   kbuild="$(build_dir_for_kernel "$krel")"
 
@@ -240,7 +254,11 @@ build_and_install_for_kernel(){
     KBUILD_VERBOSE=0 \
     modules
 
-  backup_existing_module "${krel}"
+}
+
+install_built_for_kernel(){
+  local krel="$1" driver_dir="$2" kbuild
+  kbuild="$(build_dir_for_kernel "$krel")"
 
   info "Installing module for ${krel}…"
   run_make -C "${kbuild}" M="${driver_dir}" DEPMOD=/bin/true modules_install
@@ -250,39 +268,23 @@ build_and_install_for_kernel(){
   depmod "${krel}"
 }
 
+build_and_install_for_kernel(){
+  local krel="$1" driver_dir="$2" xdma_inc="$3"
+  build_for_kernel "$krel" "$driver_dir" "$xdma_inc"
+  install_built_for_kernel "$krel" "$driver_dir"
+}
+
 # Emits logs to STDERR, returns include dir on STDOUT
 ensure_xdma_header(){
   local driver_dir="$1"
   local sys_inc_dir="/usr/local/include/xdma"
   local sys_hdr="${sys_inc_dir}/libxdma_api.h"
+  local repo_hdr
+  repo_hdr="$(dirname "$driver_dir")/include/libxdma_api.h"
+  [[ -f "$repo_hdr" ]] || die "Pinned repository header is missing: $repo_hdr"
   mkdir -p "$sys_inc_dir"
-
-  if [[ -f "$sys_hdr" ]]; then
-    ok "Found header: ${sys_hdr}" >&2; printf "%s" "$sys_inc_dir"; return 0
-  fi
-
-  # Search repo
-  local root found=""; root="$(dirname "$driver_dir")"
-  while IFS= read -r p; do found="$p"; break; done < <(find "$root" -maxdepth 5 -type f -name libxdma_api.h 2>/dev/null | head -n1)
-  if [[ -n "$found" ]]; then
-    info "Staging libxdma_api.h from ${found}" >&2
-    cp -f "$found" "$sys_hdr"; ok "Header staged at ${sys_hdr}" >&2
-    printf "%s" "$sys_inc_dir"; return 0
-  fi
-
-  # Fetch
-  info "libxdma_api.h not found locally; attempting download…" >&2
-  local url1="https://raw.githubusercontent.com/Xilinx/dma_ip_drivers/master/XDMA/linux-kernel/include/libxdma_api.h"
-  local url2="https://gitlab.esss.lu.se/icshwi/dma_ip_drivers/-/raw/master/XDMA/linux-kernel/include/libxdma_api.h?inline=false"
-  if have curl; then
-    curl -fsSL "$url1" -o "$sys_hdr" || curl -fsSL "$url2" -o "$sys_hdr" || die "Failed to download libxdma_api.h"
-  elif have wget; then
-    wget -q -O "$sys_hdr" "$url1" || wget -q -O "$sys_hdr" "$url2" || die "Failed to download libxdma_api.h"
-  else
-    apt-get update -y && apt-get install -y curl || die "Could not install curl"
-    curl -fsSL "$url1" -o "$sys_hdr" || curl -fsSL "$url2" -o "$sys_hdr" || die "Failed to download libxdma_api.h"
-  fi
-  ok "Header downloaded to ${sys_hdr}" >&2
+  install -m 0644 -o root -g root "$repo_hdr" "$sys_hdr"
+  ok "Staged repository header: ${repo_hdr}" >&2
   printf "%s" "$sys_inc_dir"
 }
 
@@ -345,24 +347,6 @@ run_xdma_doctor(){
   "$doctor_script" "$@" || true
 }
 
-backup_existing_module(){
-  local krel="$1" moddir stamp
-  moddir="$(module_updates_dir_for_kernel "$krel")"
-  stamp="$(date +%Y%m%d-%H%M%S)"
-
-  [[ -d "$moddir" ]] || return 0
-
-  if [[ -f "${moddir}/xdma.ko.xz" ]]; then
-    cp -a "${moddir}/xdma.ko.xz" "${moddir}/xdma.ko.xz.bak-${stamp}"
-    ok "Backed up ${moddir}/xdma.ko.xz"
-  fi
-
-  if [[ -f "${moddir}/xdma.ko" ]]; then
-    cp -a "${moddir}/xdma.ko" "${moddir}/xdma.ko.bak-${stamp}"
-    ok "Backed up ${moddir}/xdma.ko"
-  fi
-}
-
 normalize_installed_module_owner(){
   local krel="$1" moddir
   moddir="$(module_updates_dir_for_kernel "$krel")"
@@ -378,6 +362,53 @@ normalize_installed_module_owner(){
   fi
 }
 
+snapshot_live_module(){
+  local krel="$1" module
+  ROLLBACK_DIR="$(mktemp -d /var/tmp/saturn-xdma-rollback.XXXXXX)"
+  chmod 0700 "$ROLLBACK_DIR"
+  while IFS= read -r -d '' module; do
+    cp -a --parents "$module" "$ROLLBACK_DIR"
+  done < <(find "/lib/modules/$krel" -xdev -type f \
+    \( -name 'xdma.ko' -o -name 'xdma.ko.xz' -o -name 'xdma.ko.zst' -o -name 'xdma.ko.gz' \) -print0)
+  lsmod | awk '{print $1}' | grep -qx xdma && XDMA_WAS_LOADED=1 || XDMA_WAS_LOADED=0
+  TRANSACTION_ACTIVE=1
+  info "Saved live XDMA state in ${ROLLBACK_DIR}."
+}
+
+restore_live_module(){
+  local krel="$1"
+  set +e
+  systemctl stop "$SERVICE_NAME" >/dev/null 2>&1 || true
+  modprobe -r xdma >/dev/null 2>&1 || true
+  find "/lib/modules/$krel" -xdev -type f \
+    \( -name 'xdma.ko' -o -name 'xdma.ko.xz' -o -name 'xdma.ko.zst' -o -name 'xdma.ko.gz' \) -delete
+  if [[ -d "$ROLLBACK_DIR/lib" ]]; then
+    cp -a "$ROLLBACK_DIR/lib/." /lib/
+  fi
+  depmod "$krel" >/dev/null 2>&1 || true
+  (( XDMA_WAS_LOADED )) && modprobe xdma >/dev/null 2>&1 || true
+  (( WAS_ACTIVE )) && systemctl start "$SERVICE_NAME" >/dev/null 2>&1 || true
+}
+
+rollback_on_error(){
+  local rc="$?" krel
+  trap - ERR
+  krel="$(uname -r)"
+  if (( TRANSACTION_ACTIVE )); then
+    warn "XDMA update failed; restoring the previous module and service state."
+    restore_live_module "$krel"
+  fi
+  [[ -n "$ROLLBACK_DIR" ]] && rm -rf "$ROLLBACK_DIR"
+  exit "$rc"
+}
+
+commit_live_module(){
+  TRANSACTION_ACTIVE=0
+  trap - ERR
+  [[ -n "$ROLLBACK_DIR" ]] && rm -rf "$ROLLBACK_DIR"
+  ROLLBACK_DIR=""
+}
+
 service_exists(){ systemctl list-unit-files --type=service | awk '{print $1}' | grep -qx "$SERVICE_NAME"; }
 service_active(){ systemctl is-active --quiet "$SERVICE_NAME"; }
 
@@ -385,8 +416,8 @@ stop_service_if_running(){
   if service_exists; then
     if service_active; then
       info "Stopping ${SERVICE_NAME}…"
-      systemctl stop "$SERVICE_NAME" || die "Failed to stop ${SERVICE_NAME}"
       WAS_ACTIVE=1
+      systemctl stop "$SERVICE_NAME" || die "Failed to stop ${SERVICE_NAME}"
     else
       WAS_ACTIVE=0
       warn "${SERVICE_NAME} is not active."
@@ -402,11 +433,8 @@ start_service_and_verify(){
     info "Starting ${SERVICE_NAME}…"
     systemctl start "$SERVICE_NAME" || die "Failed to start ${SERVICE_NAME}"
   else
-    # If it wasn't active before but the unit exists, still start it (you asked to restart)
-    if service_exists; then
-      info "Starting ${SERVICE_NAME} (was not active before)…"
-      systemctl start "$SERVICE_NAME" || die "Failed to start ${SERVICE_NAME}"
-    fi
+    info "Leaving ${SERVICE_NAME} inactive because it was inactive before repair."
+    return 0
   fi
 
   if service_exists; then
@@ -455,6 +483,7 @@ main(){
   fi
 
   local driver_dir running_krel
+  local -a kernels=()
   driver_dir="$(resolve_driver_dir)"
   running_krel="$(uname -r)"
   BUILD_USER="$(resolve_build_user)"
@@ -470,21 +499,36 @@ main(){
   info "Using include dir: ${xdma_inc}"
 
   local krel
-  while IFS= read -r krel; do
+  mapfile -t kernels < <(target_kernels)
+  for krel in "${kernels[@]}"; do
     [[ -n "$krel" ]] || continue
     ensure_headers "$krel"
-  done < <(target_kernels)
+  done
 
   if (( STAGE_ONLY )); then
     info "Stage-only mode: building/staging XDMA without touching the live module or service."
     cd "${driver_dir}"
-    while IFS= read -r krel; do
+    for krel in "${kernels[@]}"; do
       [[ -n "$krel" ]] || continue
       build_and_install_for_kernel "$krel" "${driver_dir}" "${xdma_inc}"
-    done < <(target_kernels)
+    done
     ok "XDMA staged for kernel(s): ${TARGET_KERNELS[*]}"
     return 0
   fi
+
+  # Pre-stage non-running kernels without interrupting the active radio. Build
+  # the running-kernel artifact last so it remains ready for the short swap.
+  cd "${driver_dir}"
+  for krel in "${kernels[@]}"; do
+    [[ -n "$krel" && "$krel" != "$running_krel" ]] || continue
+    build_and_install_for_kernel "$krel" "${driver_dir}" "${xdma_inc}"
+  done
+  build_for_kernel "$running_krel" "${driver_dir}" "${xdma_inc}"
+
+  # Snapshot before touching the active module. The ERR trap restores module
+  # files, loaded state, and service state if any later operation fails.
+  snapshot_live_module "$running_krel"
+  trap rollback_on_error ERR
 
   # 1) Stop service (so it releases /dev/xdma*)
   WAS_ACTIVE=0
@@ -493,18 +537,15 @@ main(){
   # 2) Try to unload the module now that p2app is stopped
   unload_xdma_if_loaded
 
-  # 3) Build & install
-  cd "${driver_dir}"
-  while IFS= read -r krel; do
-    [[ -n "$krel" ]] || continue
-    build_and_install_for_kernel "$krel" "${driver_dir}" "${xdma_inc}"
-  done < <(target_kernels)
+  # 3) Install the already-built running-kernel artifact.
+  install_built_for_kernel "$running_krel" "${driver_dir}"
 
   # 4) Reload module
   reload_xdma_module
 
   # 5) Start service and verify
   start_service_and_verify
+  commit_live_module
 
   # 6) Emit structured diagnosis so repair ends with a classified state.
   run_xdma_doctor

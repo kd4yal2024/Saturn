@@ -134,7 +134,37 @@ jobs:
             linux-headers-$(uname -r) \
             libi2c-dev \
             libgpiod-dev \
-            pkg-config
+            pkg-config \
+            cppcheck \
+            shellcheck
+
+      - name: Check provisioning shell
+        run: |
+          shellcheck \
+            scripts/install-saturn-appliance.sh \
+            scripts/fix-xdma.sh \
+            scripts/install-xdma-dkms.sh \
+            update_manager/scripts/saturn-go-deploy-root.sh \
+            update_manager/scripts/saturn-tailscale.sh
+          bash -n \
+            scripts/install-saturn-appliance.sh \
+            scripts/fix-xdma.sh \
+            scripts/install-xdma-dkms.sh \
+            update_manager/scripts/saturn-go-deploy-root.sh \
+            update_manager/scripts/update-saturn-go.sh \
+            update_manager/install_saturn_go_nginx.sh \
+            sw_tools/p2app-control/install.sh
+
+      - name: Test deployment broker policy
+        run: tests/test-saturn-go-deploy-broker.sh
+
+      - name: Test P2 controller lease
+        run: make test-controller-lease-asan
+        working-directory: sw_projects/P2_app
+
+      - name: P2 static analysis
+        run: make cppcheck-ci
+        working-directory: sw_projects/P2_app
 
       - name: Build P2 app
         run: make clean all
@@ -156,3 +186,6 @@ jobs:
         run: |
           bash -n scripts/install-xdma-dkms.sh
           scripts/install-xdma-dkms.sh --dry-run --kernel "$(uname -r)"
+
+      - name: Check direct appliance installer
+        run: scripts/install-saturn-appliance.sh --dry-run --skip-packages --skip-driver --skip-p2 --skip-saturn-go

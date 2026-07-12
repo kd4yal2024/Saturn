@@ -18,7 +18,7 @@ TARGET = p2app
 VPATH=.:../common
 GIT_DATE := $(wordlist 2,5, $(shell git log -1 --format=%cd --date=rfc))
 
-BASE_SRCS = p2app.c hwaccess.c saturnregisters.c codecwrite.c saturndrivers.c version.c generalpacket.c IncomingDDCSpecific.c IncomingDUCSpecific.c InHighPriority.c InDUCIQ.c InSpkrAudio.c OutMicAudio.c OutDDCIQ.c OutHighPriority.c debugaids.c auxadc.c cathandler.c frontpanelhandler.c catmessages.c LDGATU.c g2v2panel.c i2cdriver.c andromedacatmessages.c Outwideband.c serialport.c AriesATU.c GanymedePAControl.c p23_perf_telemetry.c
+BASE_SRCS = p2app.c controller_lease.c hwaccess.c saturnregisters.c codecwrite.c saturndrivers.c version.c generalpacket.c IncomingDDCSpecific.c IncomingDUCSpecific.c InHighPriority.c InDUCIQ.c InSpkrAudio.c OutMicAudio.c OutDDCIQ.c OutHighPriority.c debugaids.c auxadc.c cathandler.c frontpanelhandler.c catmessages.c LDGATU.c g2v2panel.c i2cdriver.c andromedacatmessages.c Outwideband.c serialport.c AriesATU.c GanymedePAControl.c p23_perf_telemetry.c
 
 # for cppcheck
 CPP_OPTIONS= --inline-suppr --enable=all --suppress=unmatchedSuppression
@@ -91,8 +91,25 @@ $(TARGET): $(OBJS)
 cppcheck:
 	cppcheck $(CPP_OPTIONS) $(BASE_SRCS) $(G2PANEL_SRC)
 
+cppcheck-ci:
+	cppcheck --error-exitcode=1 --inline-suppr --enable=performance,portability \
+		-D__linux__ --suppress=missingIncludeSystem --suppress=unusedFunction \
+		--suppress=normalCheckLevelMaxBranches \
+		$(BASE_SRCS) $(G2PANEL_SRC)
+
+test-controller-lease:
+	$(CC) $(CFLAGS) -I. tests/controller_lease_test.c controller_lease.c -lpthread -o tests/controller_lease_test
+	./tests/controller_lease_test
+	rm -f tests/controller_lease_test
+
+test-controller-lease-asan:
+	$(CC) $(CFLAGS) -fsanitize=address,undefined -fno-omit-frame-pointer -I. \
+		tests/controller_lease_test.c controller_lease.c -lpthread -o tests/controller_lease_test
+	ASAN_OPTIONS=detect_leaks=1 ./tests/controller_lease_test
+	rm -f tests/controller_lease_test
+
 clean:
-	rm -rf $(TARGET) *.o *.d *.bin
+	rm -rf $(TARGET) *.o *.d *.bin tests/controller_lease_test
 
 smoke-shutdown: all
 	bash ./tools/shutdown_smoke.sh ./$(TARGET)

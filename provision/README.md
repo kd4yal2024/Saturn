@@ -1,6 +1,8 @@
 # Saturn Provisioning
 
-This directory contains provisioning assets for cloud-init based setup of a Saturn system.
+This directory contains the legacy cloud-init wrapper for Saturn setup. New or
+existing systems should use `scripts/install-saturn-appliance.sh`; it installs
+the same radio, driver, and web runtime without cloud-init.
 
 ## Current Layout
 
@@ -40,7 +42,7 @@ This directory contains provisioning assets for cloud-init based setup of a Satu
 - installs a root-owned provisioning power helper so the desktop UI can request reboot reliably at the end of first-boot setup
 - optionally installs `p2app-control` tray control (AppIndicator-based)
 - optionally installs Update Manager
-- installs piHPSDR native DSP libraries and Saturn Bridge by default so Saturn Remote `/remote` and `/remote-next` have a running backend on `127.0.0.1:50001`
+- installs Saturn Bridge with its pinned WDSP 2.00 source by default; piHPSDR is an optional desktop application and is no longer a bridge prerequisite
 - optionally flashes FPGA (disabled by default)
 
 Completion and logs:
@@ -82,7 +84,7 @@ Environment controls:
 - `SATURN_CLEAN_TMP_AFTER_PROVISION=1|0` (default: `1`)
 - `SATURN_APT_LOCK_TIMEOUT_SECONDS` (default: `120`)
 - `SATURN_APT_LOCK_RETRY_INTERVAL_SECONDS` (default: `3`)
-- `SATURN_INSTALL_PIHPSDR=1|0` (default: `1`)
+- `SATURN_INSTALL_PIHPSDR=1|0` (default: `0`; optional desktop application)
 - `SATURN_INSTALL_SATURN_BRIDGE=1|0` (default: `1`)
 - `SATURN_REQUIRE_SATURN_BRIDGE=1|0` (default: `1`; when enabled, provisioning fails instead of silently completing without the Remote backend)
 - `SATURN_DETECT_FRONT_PANEL=1|0` (default: `1`)

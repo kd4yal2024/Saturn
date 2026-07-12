@@ -68,6 +68,9 @@ echo ""
 echo "##############################################################"
 
 install -d -m 0755 "$DEST_DIR"
+if ! getent group saturn-radio >/dev/null 2>&1; then
+    groupadd --system saturn-radio
+fi
 
 for src in "${rule_files[@]}"; do
     base=$(basename "$src")

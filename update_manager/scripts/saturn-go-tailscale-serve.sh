@@ -101,7 +101,7 @@ check_tailscale_installed() {
     err "tailscale CLI not found"
     cat >&2 <<EOF
 Install Tailscale before running this script:
-  curl -fsSL https://tailscale.com/install.sh | sh
+  sudo /usr/local/lib/saturn-go/scripts/saturn-tailscale.sh install
 or on Debian/Ubuntu:
   sudo apt-get install -y tailscale
 

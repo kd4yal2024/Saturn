@@ -20,6 +20,7 @@ PRIVILEGED_SCRIPT_PATH="${SATURN_PRIVILEGED_SCRIPT_PATH:-/usr/local/lib/saturn-g
 SERVICE_NAME="${SERVICE_NAME:-gpio15-setup.service}"
 SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}"
 EARLY_DEFAULT="${EARLY_DEFAULT:-1}"
+RASPBERRYPI_UTILS_REF="${RASPBERRYPI_UTILS_REF:-5edd399260b5081f9c1c96fc7f369b920d6732d1}"
 
 log(){ echo "$1" | systemd-cat -t fix-LED-power-button; }
 die(){ echo "$1" >&2; exit 1; }
@@ -108,7 +109,10 @@ ensure_pinctrl() {
   apt-get install -y --no-install-recommends git cmake build-essential device-tree-compiler libfdt-dev
   tmpdir="$(mktemp -d)"
   trap 'rm -rf "$tmpdir"' EXIT
-  git clone --depth=1 https://github.com/raspberrypi/utils "$tmpdir/utils"
+  git init -q "$tmpdir/utils"
+  git -C "$tmpdir/utils" remote add origin https://github.com/raspberrypi/utils.git
+  git -C "$tmpdir/utils" fetch --depth=1 origin "$RASPBERRYPI_UTILS_REF"
+  git -C "$tmpdir/utils" checkout -q --detach FETCH_HEAD
   ( cd "$tmpdir/utils/pinctrl" && cmake . && make -j"$(nproc)" && make install )
   hash -r
   if ! command -v pinctrl >/dev/null 2>&1; then

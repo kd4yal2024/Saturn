@@ -22,6 +22,7 @@ set -euo pipefail
 PRIVILEGED_DIR="${SATURN_PRIVILEGED_DIR:-/usr/local/lib/saturn-go/scripts}"
 SERVE_HELPER="${SATURN_SERVE_HELPER:-${PRIVILEGED_DIR}/saturn-go-tailscale-serve.sh}"
 TAILSCALE_INSTALL_URL="${TAILSCALE_INSTALL_URL:-https://tailscale.com/install.sh}"
+TAILSCALE_INSTALL_SHA256="${TAILSCALE_INSTALL_SHA256:-ada2fe9d54df0d3e5a77879470bda195b2c53d27ecd73aba6de270c795725625}"
 
 # Allow-list patterns. Reject anything that does not match exactly.
 HOSTNAME_RE='^[A-Za-z0-9][A-Za-z0-9-]{0,62}$'
@@ -72,8 +73,19 @@ cmd_install() {
     err "curl is required to fetch the Tailscale installer."
     exit 1
   fi
-  info "Fetching Tailscale installer from ${TAILSCALE_INSTALL_URL}"
-  curl -fsSL "${TAILSCALE_INSTALL_URL}" | sh
+  local installer actual
+  installer="$(mktemp)"
+  trap 'rm -f "${installer:-}"' EXIT
+  info "Fetching checksum-pinned Tailscale installer from ${TAILSCALE_INSTALL_URL}"
+  curl --proto '=https' --tlsv1.2 -fsSL "${TAILSCALE_INSTALL_URL}" -o "$installer"
+  actual="$(sha256sum "$installer" | awk '{print $1}')"
+  if [[ "$actual" != "$TAILSCALE_INSTALL_SHA256" ]]; then
+    err "Tailscale installer checksum mismatch (expected $TAILSCALE_INSTALL_SHA256, got $actual)"
+    exit 1
+  fi
+  sh "$installer"
+  rm -f "$installer"
+  trap - EXIT
   if ! command -v tailscale >/dev/null 2>&1; then
     err "Installer ran but tailscale CLI is not on PATH."
     exit 1

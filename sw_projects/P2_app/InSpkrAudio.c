@@ -28,6 +28,7 @@
 #include <sys/socket.h>
 #include <time.h>
 #include <syscall.h>
+#include "controller_lease.h"
 #include "../common/saturnregisters.h"
 #include "../common/saturndrivers.h"
 #include "../common/hwaccess.h"
@@ -224,6 +225,7 @@ void *IncomingSpkrAudio(void *arg)                      // listener thread
     uint64_t QueueArrivalNs[VSPKSOFTQUEUEFRAMES];
     struct iovec IovecList[VSPKMAXRECVBATCHFRAMES];
     struct mmsghdr DatagramList[VSPKMAXRECVBATCHFRAMES];
+    struct sockaddr_in SourceAddresses[VSPKMAXRECVBATCHFRAMES];
     unsigned int MsgIndex = 0;
     unsigned int FrameIndex = 0;
     int Received = 0;
@@ -267,6 +269,7 @@ void *IncomingSpkrAudio(void *arg)                      // listener thread
     ApplyCriticalAudioThreadRuntime("Speaker audio");
 
     memset(DatagramList, 0, sizeof(DatagramList));
+    memset(SourceAddresses, 0, sizeof(SourceAddresses));
     memset(QueueArrivalNs, 0, sizeof(QueueArrivalNs));
     for (MsgIndex = 0; MsgIndex < VSPKMAXRECVBATCHFRAMES; MsgIndex++)
     {
@@ -274,6 +277,8 @@ void *IncomingSpkrAudio(void *arg)                      // listener thread
         IovecList[MsgIndex].iov_len = VSPEAKERAUDIOSIZE;
         DatagramList[MsgIndex].msg_hdr.msg_iov = &IovecList[MsgIndex];
         DatagramList[MsgIndex].msg_hdr.msg_iovlen = 1;
+        DatagramList[MsgIndex].msg_hdr.msg_name = &SourceAddresses[MsgIndex];
+        DatagramList[MsgIndex].msg_hdr.msg_namelen = sizeof(SourceAddresses[MsgIndex]);
     }
 
     //
@@ -426,6 +431,8 @@ void *IncomingSpkrAudio(void *arg)                      // listener thread
                 uint64_t PacketArrivalNs = 0;
 
                 if(DatagramList[MsgIndex].msg_len != VSPEAKERAUDIOSIZE)
+                    continue;
+                if(!ControllerLeaseMatches(&SourceAddresses[MsgIndex]))
                     continue;
                 if(QueueCount >= VSPKSOFTQUEUEFRAMES)
                     break;
