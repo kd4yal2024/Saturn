@@ -6,6 +6,7 @@
 #include <stdatomic.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -558,6 +559,18 @@ void P23PerfTelemetryMaybeWrite(void)
   fprintf(File, "}\n");
 
   if (fclose(File) != 0)
+  {
+    remove(TempPath);
+    return;
+  }
+  /*
+   * p2app runs under the dedicated saturn-radio account with UMask=0027,
+   * while Saturn Go reads this non-sensitive snapshot as its own service
+   * user. Set the publication mode explicitly before the atomic rename so
+   * the dashboard can consume the counters without weakening the service
+   * unit's default umask.
+   */
+  if (chmod(TempPath, 0644) != 0)
   {
     remove(TempPath);
     return;

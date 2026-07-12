@@ -151,6 +151,50 @@ static void set_status(UiState *ui, const std::string &message)
     gtk_label_set_text(GTK_LABEL(ui->status_label), message.c_str());
 }
 
+static int provisioning_stage_index(const std::string &message)
+{
+    static const std::vector<std::string> stages = {
+        "Resolving Saturn user account",
+        "Installing desktop provisioning UI prerequisites",
+        "Installing desktop power helper",
+        "Preparing desktop provisioning UI autostart",
+        "Launching desktop provisioning interface",
+        "Installing build/runtime dependencies",
+        "Configuring USB boot and input tuning",
+        "Configuring I2C, SSH, and VNC",
+        "Detecting front panel",
+        "Installing udev rules",
+        "Resolving hardware role",
+        "Applying LCD boot profile",
+        "Installing developer desktop tools",
+        "Syncing Saturn repository",
+        "Enabling Python repo guard",
+        "Preparing Python virtual environment",
+        "Building Saturn applications and tools",
+        "Installing desktop launchers",
+        "Installing shutdown waiter service",
+        "Configuring power-switch LED",
+        "Building and installing XDMA module",
+        "Installing p2app-control service",
+        "Installing Saturn update manager",
+        "Installing piHPSDR DSP dependencies",
+        "Installing Saturn Remote bridge",
+        "Installing standalone piHPSDR shortcut",
+        "Flashing FPGA image",
+        "Finalizing provisioning state",
+        "Cleaning temporary files",
+    };
+
+    for (gsize index = 0; index < stages.size(); ++index)
+    {
+        if (message == stages[index])
+        {
+            return static_cast<int>(index);
+        }
+    }
+    return -1;
+}
+
 static bool try_command_sync(gchar **argv, std::string *error_text)
 {
     GError *error = nullptr;
@@ -290,20 +334,7 @@ static gboolean on_tick(gpointer user_data)
 
     const gint64 now_us = g_get_monotonic_time();
     const guint64 elapsed = static_cast<guint64>((now_us - ui->start_us) / G_USEC_PER_SEC);
-    const guint64 remaining = (elapsed >= ui->timeout_seconds) ? 0 : (ui->timeout_seconds - elapsed);
-
     std::string timer_text = "Elapsed: " + format_duration(elapsed);
-    if (!ui->finished)
-    {
-        if (remaining > 0)
-        {
-            timer_text += "   ETA: " + format_duration(remaining);
-        }
-        else
-        {
-            timer_text += "   Over ETA";
-        }
-    }
     gtk_label_set_text(GTK_LABEL(ui->timer_label), timer_text.c_str());
 
     std::string status_state;
@@ -336,14 +367,24 @@ static gboolean on_tick(gpointer user_data)
         }
         else
         {
-            gtk_progress_bar_pulse(GTK_PROGRESS_BAR(ui->progress_bar));
             if (has_status && !status_message.empty())
             {
                 set_status(ui, status_message);
+                const int stage_index = provisioning_stage_index(status_message);
+                if (stage_index >= 0)
+                {
+                    constexpr int stage_count = 29;
+                    const double fraction = static_cast<double>(stage_index + 1) / stage_count;
+                    gtk_progress_bar_set_fraction(GTK_PROGRESS_BAR(ui->progress_bar), fraction);
+                    const std::string progress_text = "Stage " + std::to_string(stage_index + 1) +
+                                                      " of " + std::to_string(stage_count);
+                    gtk_progress_bar_set_text(GTK_PROGRESS_BAR(ui->progress_bar), progress_text.c_str());
+                }
             }
             else
             {
                 set_status(ui, "Provisioning is in progress...");
+                gtk_progress_bar_pulse(GTK_PROGRESS_BAR(ui->progress_bar));
             }
         }
     }
@@ -357,11 +398,6 @@ static gboolean on_tick(gpointer user_data)
         gtk_widget_set_sensitive(ui->close_button, TRUE);
         gtk_progress_bar_set_text(GTK_PROGRESS_BAR(ui->progress_bar), "Done");
     }
-    else
-    {
-        gtk_progress_bar_set_text(GTK_PROGRESS_BAR(ui->progress_bar), "Working...");
-    }
-
     return G_SOURCE_CONTINUE;
 }
 

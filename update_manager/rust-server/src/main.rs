@@ -2235,10 +2235,21 @@ async fn get_p23_perf(State(_state): State<AppState>) -> Response {
         let current_target_abs = fs::canonicalize(&current_link)
             .ok()
             .map(|p| p.display().to_string());
+        let service_cmdline = main_pid.and_then(cmdline_for_pid);
+        let inferred_app = service_cmdline.as_ref().and_then(|parts| {
+            parts.first().and_then(|binary| {
+                let name = Path::new(binary).file_name()?.to_str()?;
+                match name {
+                    "p2app" => Some("p2".to_string()),
+                    "p3app" => Some("p3".to_string()),
+                    _ => None,
+                }
+            })
+        });
         let selected_app = match current_target_abs.as_deref() {
-            Some(v) if v == deploy_p2.display().to_string() => Some("p2"),
-            Some(v) if v == deploy_p3.display().to_string() => Some("p3"),
-            _ => None,
+            Some(v) if v == deploy_p2.display().to_string() => Some("p2".to_string()),
+            Some(v) if v == deploy_p3.display().to_string() => Some("p3".to_string()),
+            _ => inferred_app,
         };
 
         let override_contents = fs::read_to_string(&override_file).ok();
@@ -2271,17 +2282,36 @@ async fn get_p23_perf(State(_state): State<AppState>) -> Response {
             .as_ref()
             .and_then(|meta| meta.get("mode"))
             .and_then(|v| v.as_str())
-            .map(str::to_string);
-        let panel = panel_mode.clone().or_else(|| {
-            saturn_meta
-                .as_ref()
-                .and_then(|meta| meta.get("panel"))
-                .and_then(|v| v.as_str())
-                .map(str::to_string)
-        });
-        let selected = selected_app.unwrap_or("unknown");
+            .map(str::to_string)
+            .or_else(|| selected_app.as_ref().map(|_| "service-default".to_string()));
+        let panel = panel_mode
+            .clone()
+            .or_else(|| {
+                saturn_meta
+                    .as_ref()
+                    .and_then(|meta| meta.get("panel"))
+                    .and_then(|v| v.as_str())
+                    .map(str::to_string)
+            })
+            .or_else(|| {
+                service_cmdline.as_ref().map(|parts| {
+                    if parts.iter().any(|arg| arg == "-p") {
+                        "enabled".to_string()
+                    } else {
+                        "off".to_string()
+                    }
+                })
+            });
+        let selected = selected_app.as_deref().unwrap_or("unknown");
         let mode_key = mode.clone().unwrap_or_else(|| "n/a".to_string());
         let panel_key = panel.clone().unwrap_or_else(|| "n/a".to_string());
+        let source = if current_target_abs.is_some() {
+            "deployment-slot"
+        } else if selected_app.is_some() {
+            "service-cmdline"
+        } else {
+            "unknown"
+        };
 
         serde_json::json!({
             "selected_app": selected_app,
@@ -2290,6 +2320,8 @@ async fn get_p23_perf(State(_state): State<AppState>) -> Response {
             "startup_mode": mode,
             "panel_mode": panel,
             "saturn_meta": saturn_meta,
+            "source": source,
+            "service_cmdline": service_cmdline,
             "service_main_pid": main_pid,
             "workload_key": format!("{selected}|mode={mode_key}|panel={panel_key}"),
         })
@@ -2302,9 +2334,15 @@ async fn get_p23_perf(State(_state): State<AppState>) -> Response {
             .as_ref()
             .and_then(|m| m.modified().ok())
             .map(|t| chrono::DateTime::<Local>::from(t).to_rfc3339());
-        let current = fs::read_to_string(&snapshot)
-            .ok()
-            .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok());
+        let snapshot_text = fs::read_to_string(&snapshot);
+        let read_error = snapshot_text.as_ref().err().map(ToString::to_string);
+        let (current, parse_error) = match snapshot_text {
+            Ok(text) => match serde_json::from_str::<serde_json::Value>(&text) {
+                Ok(value) => (Some(value), None),
+                Err(error) => (None, Some(error.to_string())),
+            },
+            Err(_) => (None, None),
+        };
         let snapshot_pid = current
             .as_ref()
             .and_then(|v| v.get("pid"))
@@ -2327,6 +2365,9 @@ async fn get_p23_perf(State(_state): State<AppState>) -> Response {
         serde_json::json!({
             "snapshot_file": snapshot.display().to_string(),
             "snapshot_exists": snapshot.exists(),
+            "snapshot_readable": read_error.is_none() && current.is_some(),
+            "read_error": read_error,
+            "parse_error": parse_error,
             "modified": modified,
             "pid_matches_service": pid_matches_service,
             "snapshot_pid": snapshot_pid,

@@ -141,7 +141,7 @@ kernel_flavor(){
 latest_installed_kernel(){
   local flavor="${1:-}"
   find /lib/modules -mindepth 1 -maxdepth 1 -type d -printf '%f\n' 2>/dev/null | \
-    { if [[ -n "$flavor" ]]; then grep -F "+rpt-${flavor}$"; else cat; fi; } | \
+    { if [[ -n "$flavor" ]]; then grep -F "+rpt-${flavor}" || true; else cat; fi; } | \
     sort -V | tail -n1
 }
 

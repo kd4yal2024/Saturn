@@ -4,6 +4,11 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
 
 ## [Unreleased]
 ### Added
+- The hidden `/p23test` performance dashboard now has a persistent service,
+  app-telemetry, and workload-identity health strip plus grouped system, radio,
+  and baseline sections. Telemetry read/parse failures are reported directly,
+  and a directly installed `p2app.service` workload is identified from its
+  running command line when no deployment-slot symlink exists.
 - Reproducible non-cloud-init Saturn Bridge deployment: the Saturn Go installer
   now enables the bridge by default, provisions sparse upstream sources at
   pinned commits, builds/verifies WDSP 2.00 and the bridge, and installs the

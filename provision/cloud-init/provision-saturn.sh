@@ -432,7 +432,7 @@ EOF
 
 launch_desktop_ui() {
   local saturn_home="$1"
-  local display xauth user_uid runtime_dir dbus_address ui_cmd_escaped
+  local display xauth user_uid runtime_dir dbus_address wayland_display ui_cmd_escaped
   local -a ui_cmd
 
   [[ "$SATURN_UI_STARTED" -eq 0 ]] || return 0
@@ -467,12 +467,16 @@ launch_desktop_ui() {
   user_uid="$(id -u "$SATURN_USER" 2>/dev/null || true)"
   runtime_dir="${XDG_RUNTIME_DIR:-/run/user/${user_uid}}"
   dbus_address="${DBUS_SESSION_BUS_ADDRESS:-unix:path=${runtime_dir}/bus}"
+  wayland_display="${WAYLAND_DISPLAY:-}"
+  if [[ -z "$wayland_display" && -S "${runtime_dir}/wayland-0" ]]; then
+    wayland_display="wayland-0"
+  fi
   printf -v ui_cmd_escaped '%q ' "${ui_cmd[@]}"
 
-  if run_as_user "$saturn_home" env DISPLAY="$display" XAUTHORITY="$xauth" XDG_RUNTIME_DIR="$runtime_dir" DBUS_SESSION_BUS_ADDRESS="$dbus_address" \
-    bash -lc "if pgrep -x saturn-provision-ui >/dev/null 2>&1; then exit 0; fi; nohup ${ui_cmd_escaped} >/tmp/saturn-provision-ui.log 2>&1 < /dev/null &"; then
+  if run_as_user "$saturn_home" env DISPLAY="$display" XAUTHORITY="$xauth" WAYLAND_DISPLAY="$wayland_display" XDG_RUNTIME_DIR="$runtime_dir" DBUS_SESSION_BUS_ADDRESS="$dbus_address" \
+    bash -lc "if pgrep -u \"\$(id -u)\" -f '^$SATURN_UI_BINARY( |\$)' >/dev/null 2>&1; then exit 0; fi; nohup ${ui_cmd_escaped} >/tmp/saturn-provision-ui.log 2>&1 < /dev/null & ui_pid=\$!; sleep 1; kill -0 \"\$ui_pid\""; then
     SATURN_UI_STARTED=1
-    log "Desktop provisioning UI launched (detached, DISPLAY=$display)."
+    log "Desktop provisioning UI launched (detached, DISPLAY=$display, WAYLAND_DISPLAY=${wayland_display:-none})."
   else
     log "WARN: Failed to launch desktop provisioning UI."
   fi
@@ -658,9 +662,14 @@ apt_run() {
   attempt=1
   while true; do
     output="$(
-      set +e
-      apt-get "$@" 2>&1
-      rc=$?
+      # Keep an expected apt failure in a conditional context so the inherited
+      # ERR trap does not terminate this subshell before apt_run can inspect
+      # the diagnostic and retry transient lock contention.
+      if apt-get "$@" 2>&1; then
+        rc=0
+      else
+        rc=$?
+      fi
       printf '\n__SATURN_APT_EXIT_CODE__=%s\n' "$rc"
     )"
     rc="${output##*__SATURN_APT_EXIT_CODE__=}"
@@ -1104,7 +1113,8 @@ install_p2app_control() {
   if [[ -x "$script" ]]; then
     assert_not_repo_python_script "$script"
     log "Installing p2app-control and p2app.service"
-    env HOME="$saturn_home" SUDO_USER="$SATURN_USER" SATURN_USER="$SATURN_USER" bash "$script"
+    env HOME="$saturn_home" SUDO_USER="$SATURN_USER" SATURN_USER="$SATURN_USER" \
+      SATURN_FRONT_PANEL_TYPE="$SATURN_FRONT_PANEL_TYPE" bash "$script"
   else
     log "WARN: Missing p2app-control installer: $script"
   fi

@@ -64,11 +64,16 @@ Location in repo:
 - Waits up to `P2APP_START_TIMEOUT_SECONDS` seconds (default `30`) for the
   service to reach `active/running` during install
 
-The service runs `P2_app` as root using the repo build:
+The service runs `P2_app` under the dedicated `saturn-radio` account using the
+repo build:
 - Working directory:
   - `/home/pi/github/Saturn/sw_projects/P2_app`
-- ExecStart:
-  - `/home/pi/github/Saturn/sw_projects/P2_app/p2app -s -p`
+- ExecStart is selected from the provisioned front-panel type:
+  - `G2V1` / `G2V2`: `/home/pi/github/Saturn/sw_projects/P2_app/p2app -s -p`
+  - `NONE`: `/home/pi/github/Saturn/sw_projects/P2_app/p2app -s`
+- `P2APP_ENABLE_CONTROL_PANEL=0|1` overrides automatic selection when running
+  `install.sh` directly. Unknown or missing state keeps the legacy `-p`
+  behavior.
 
 ### Scoped privilege rules (no password prompts)
 To allow the desktop user to control `p2app.service` without password prompts,

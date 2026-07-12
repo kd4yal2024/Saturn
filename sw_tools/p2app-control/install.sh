@@ -47,6 +47,8 @@ AUTOSTART_DIR="${HOME}/.config/autostart"
 AUTOSTART_NAME="P2_app-Control-tray.desktop"
 AUTOSTART_FILE="${AUTOSTART_DIR}/${AUTOSTART_NAME}"
 ENABLE_TRAY_AUTOSTART="${ENABLE_TRAY_AUTOSTART:-1}"
+FRONT_PANEL_STATE_FILE="${SATURN_FRONT_PANEL_STATE_FILE:-/var/lib/saturn-provision/front-panel-type}"
+P2APP_ENABLE_CONTROL_PANEL="${P2APP_ENABLE_CONTROL_PANEL:-auto}"
 
 POLKIT_RULE="/etc/polkit-1/rules.d/49-p2app.rules"
 SUDOERS_RULE="/etc/sudoers.d/49-p2app-control"
@@ -56,6 +58,27 @@ CONTROL_USER="${SUDO_USER:-${SATURN_USER:-${USER:-pi}}}"
 if [[ -z "${CONTROL_USER}" || "${CONTROL_USER}" == "root" ]]; then
   CONTROL_USER="${SATURN_USER:-pi}"
 fi
+
+if [[ "$P2APP_ENABLE_CONTROL_PANEL" == "auto" ]]; then
+  front_panel_type="${SATURN_FRONT_PANEL_TYPE:-}"
+  if [[ -z "$front_panel_type" && -f "$FRONT_PANEL_STATE_FILE" ]]; then
+    front_panel_type="$(tr -d '[:space:]' < "$FRONT_PANEL_STATE_FILE" 2>/dev/null || true)"
+  fi
+  case "$front_panel_type" in
+    G2V1|G2V2) P2APP_ENABLE_CONTROL_PANEL=1 ;;
+    NONE) P2APP_ENABLE_CONTROL_PANEL=0 ;;
+    *) P2APP_ENABLE_CONTROL_PANEL=1 ;;
+  esac
+fi
+
+P2APP_EXEC_ARGS="-s"
+P2APP_PANEL_MODE="off"
+case "$P2APP_ENABLE_CONTROL_PANEL" in
+  1|true|TRUE|yes|YES|on|ON)
+    P2APP_EXEC_ARGS="-s -p"
+    P2APP_PANEL_MODE="enabled"
+    ;;
+esac
 
 TMP_XDMA_READY_UNIT=""
 TMP_UNIT=""
@@ -236,7 +259,7 @@ Documentation=https://github.com/kd4yal2024/Saturn
 
 [Service]
 WorkingDirectory=${P2APP_RUNTIME_ROOT}
-ExecStart=${P2APP_BIN} -s -p
+ExecStart=${P2APP_BIN} ${P2APP_EXEC_ARGS}
 User=${P2APP_SERVICE_USER}
 Group=${P2APP_SERVICE_GROUP}
 Restart=always
@@ -244,6 +267,9 @@ RestartSec=5
 TimeoutStopSec=30
 Environment=LD_LIBRARY_PATH=/usr/local/lib:/usr/lib
 Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+Environment=SATURN_P23_SELECTED_APP=p2
+Environment=SATURN_P23_STARTUP_MODE=service-default
+Environment=SATURN_FRONT_PANEL_MODE=${P2APP_PANEL_MODE}
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=p2app

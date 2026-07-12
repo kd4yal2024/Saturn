@@ -149,6 +149,35 @@
       gap: 10px;
       margin-top: 12px;
     }
+    .metric-section {
+      grid-column: 1 / -1;
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 12px;
+      margin-top: 8px;
+      padding: 8px 2px 2px;
+      border-bottom: 1px solid var(--line);
+    }
+    .metric-section-title { font-size: 14px; font-weight: 700; color: var(--text); }
+    .metric-section-sub { font-size: 12px; color: var(--muted); text-align: right; }
+    .health-strip {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 10px;
+      margin-top: 14px;
+    }
+    .health-item {
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 10px 12px;
+      background: rgba(255,255,255,0.025);
+    }
+    .health-item.good { border-color: rgba(110,231,183,0.38); }
+    .health-item.warn { border-color: rgba(253,230,138,0.48); }
+    .health-item.crit { border-color: rgba(252,165,165,0.52); }
+    .health-label { color: var(--muted); font-size: 10px; letter-spacing: .09em; text-transform: uppercase; }
+    .health-value { margin-top: 4px; font-size: 14px; font-weight: 700; overflow-wrap: anywhere; }
     .metric {
       border: 1px solid rgba(255,255,255,0.08);
       background: rgba(255,255,255,0.035);
@@ -241,6 +270,9 @@
       .overview-grid { grid-template-columns: 1fr; }
       .dashboard-grid { grid-template-columns: 1fr; }
       .wrap { padding: 14px; }
+      .health-strip { grid-template-columns: 1fr; }
+      .metric-section { display: block; }
+      .metric-section-sub { margin-top: 3px; text-align: left; }
     }
   </style>
 </head>
@@ -397,6 +429,11 @@
             <h2 style="margin:4px 0 0 0; font-size: 24px;">Performance (p2app Service)</h2>
           </div>
           <div class="chip">Baseline auto-resets on workload changes</div>
+        </div>
+        <div id="p23-telemetry-health" class="health-strip" aria-live="polite">
+          <div class="health-item"><div class="health-label">Service</div><div class="health-value">Waiting...</div></div>
+          <div class="health-item"><div class="health-label">App Telemetry</div><div class="health-value">Waiting...</div></div>
+          <div class="health-item"><div class="health-label">Workload Identity</div><div class="health-value">Waiting...</div></div>
         </div>
         <div id="p23-perf-dashboard" class="dashboard-grid" style="margin-top:14px;">
           <div class="metric"><div class="metric-label">Loading</div><div class="metric-value">Waiting...</div></div>
@@ -644,6 +681,27 @@ function setPerfAlertVisual(level){
 }
 function setPerfDashboardHtml(html){
   $('p23-perf-dashboard').innerHTML = html || '';
+}
+function healthItem(label, value, level='good'){
+  return `<div class="health-item ${escapeHtml(level)}"><div class="health-label">${escapeHtml(label)}</div><div class="health-value">${escapeHtml(value)}</div></div>`;
+}
+function setTelemetryHealth(perf){
+  const el = $('p23-telemetry-health');
+  if (!el) return;
+  const servicePid = Number(perf?.service?.main_pid) || 0;
+  const telemetry = perf?.app_telemetry || {};
+  const workload = perf?.workload || {};
+  const telemetryError = telemetry?.read_error || telemetry?.parse_error || '';
+  const telemetryValue = telemetry?.pid_matches_service
+    ? `Live · PID ${telemetry.snapshot_pid}`
+    : (telemetryError ? `Unavailable · ${telemetryError}` : (telemetry?.snapshot_exists ? 'Snapshot is stale' : 'Waiting for snapshot'));
+  const telemetryLevel = telemetry?.pid_matches_service ? 'good' : (telemetryError ? 'crit' : 'warn');
+  const workloadValue = `${String(workload?.selected_app || 'unknown').toUpperCase()} · ${workload?.startup_mode || 'n/a'} · panel ${workload?.panel_mode || 'n/a'}`;
+  el.innerHTML = [
+    healthItem('Service', servicePid ? `Running · PID ${servicePid}` : 'Not running', servicePid ? 'good' : 'crit'),
+    healthItem('App Telemetry', telemetryValue, telemetryLevel),
+    healthItem('Workload Identity', workloadValue, workload?.selected_app ? 'good' : 'warn'),
+  ].join('');
 }
 function setPerfRawText(text){
   $('p23-perf-raw').textContent = text || '';
@@ -1071,6 +1129,9 @@ function metricCard(label, value, sub=''){
     </div>
   `;
 }
+function metricSection(title, sub=''){
+  return `<div class="metric-section"><div class="metric-section-title">${escapeHtml(title)}</div><div class="metric-section-sub">${escapeHtml(sub)}</div></div>`;
+}
 function bridgeField(fields, key){
   const value = fields?.[key];
   if (value === null || typeof value === 'undefined') return null;
@@ -1273,6 +1334,8 @@ function perfCounters(perf){
     startupMode: perf?.workload?.startup_mode || null,
     panelMode: perf?.workload?.panel_mode || null,
     appTelemetryPresent: !!telemetry?.snapshot_exists,
+    appTelemetryReadable: !!telemetry?.snapshot_readable,
+    appTelemetryError: telemetry?.read_error || telemetry?.parse_error || null,
     appPidMatchesService: !!telemetry?.pid_matches_service,
     appAgeSeconds: Number(telemetry?.age_seconds),
     appTimestampMs: (Number(appCurrent?.timestamp_epoch) || 0) * 1000,
@@ -1478,8 +1541,13 @@ function computePerfAlerts(d, baseline){
   const alerts = [];
   let level = 'ok';
   if (d.appTelemetryPresent && !d.appPidMatchesService){
-    alerts.push('WARN app telemetry snapshot does not match current service PID');
-    level = perfSeverityMax(level, 'warn');
+    if (d.appTelemetryError){
+      alerts.push(`CRIT app telemetry unavailable: ${d.appTelemetryError}`);
+      level = perfSeverityMax(level, 'crit');
+    } else {
+      alerts.push('WARN app telemetry snapshot does not match current service PID');
+      level = perfSeverityMax(level, 'warn');
+    }
   }
   if (Number.isFinite(d.appAgeSeconds) && d.appAgeSeconds > 5){
     alerts.push(`WARN app telemetry age ${fmtNum(d.appAgeSeconds)} s`);
@@ -1568,11 +1636,14 @@ function renderPerfDashboard(d, perf, alertState, baseline){
     `Spkr ${fmtInt(d.fifoSpkrUnderDelta)}`,
   ].join(' | ');
   return [
+    metricSection('System path', 'Scheduler, memory, network, and PCIe/XDMA efficiency'),
     metricCard('CPU', `${fmtNum(d.cpuPctCore)}%`, `per-core | runtime ${fmtNum(d.runtimeMsPerSec)} ms/s | load ${fmtNum(d.load1)}/${fmtNum(d.load5)}/${fmtNum(d.load15)}`),
     metricCard('Scheduler Wait', `${fmtNum(d.schedDelayMsPerSec)} ms/s`, `context ${fmtNum(d.ctxPerSec)} /s | faults ${fmtNum(d.minfltPerSec)} / ${fmtNum(d.majfltPerSec)} /s`),
     metricCard('Memory', `${fmtNum(d.rssMb)} MiB`, `threads ${fmtInt(d.threads)} | FDs ${fmtInt(d.fdCount)} | system used ${fmtNum(memPct)}%`),
     metricCard('eth0', `${fmtNum(d.ethRxMbps)} Mb/s RX`, `TX ${fmtNum(d.ethTxMbps)} Mb/s | RX ${fmtNum(d.ethRxPps)} pkt/s | TX ${fmtNum(d.ethTxPps)} pkt/s`),
     metricCard('XDMA', `${fmtNum(d.xdmaIrqPerSec)} IRQ/s`, `PCIe ${d.xdmaPcieLinkSpeed || 'n/a'} x${d.xdmaPcieLinkWidth || 'n/a'} | ${fmtNum(d.xdmaIrqPerMiB)} IRQ/MiB`),
+    metricCard('I/O Proxy', `${fmtNum(d.charTotalMiBs)} MiB/s`, `read ${fmtNum(d.charReadKBs)} KiB/s | write ${fmtNum(d.charWriteKBs)} KiB/s | source ${(perf?.process?.io?.source || 'n/a')}`),
+    metricSection('Radio workload', 'Identity, runtime features, packet flow, and DMA counters'),
     metricCard('Workload', `${workloadIdentity} / ${d.startupMode || 'n/a'} / ${d.panelMode || 'n/a'}`, `${workloadSubPrefix}DDC ${enabledCount} enabled, ${interleavedCount} interleaved | WB ${wbState}`),
     metricCard('Service Runtime', formatAudioRtSummary(serviceRuntime), formatAudioRtSubtext(serviceRuntime)),
     metricCard('App Telemetry', d.appPidMatchesService ? 'live' : 'host-only', `uptime ${fmtInt(app?.uptime_sec)} s | features ${featureBits} | ${app?.state?.tx_mode ? 'TX' : 'RX'} | ${pureSignalState}`),
@@ -1580,8 +1651,8 @@ function renderPerfDashboard(d, perf, alertState, baseline){
     metricCard('App Ingest Rate', `${fmtNum(d.ducPps)} DUC pkt/s`, `Spkr ${fmtNum(d.spkrPps)} pkt/s | DDC DMA ${fmtNum(d.ddcDmaMiBs)} MiB/s | WB DMA ${fmtNum(d.wbDmaMiBs)} MiB/s`),
     metricCard('DMA Write Rate', `${fmtNum(d.ducDmaMiBs)} MiB/s DUC`, `Spkr ${fmtNum(d.spkrDmaKiBs)} KiB/s | Mic DMA ${fmtNum(d.micDmaKiBs)} KiB/s`),
     metricCard('Event Deltas', errorBurst, fifoBurst),
+    metricSection('Baseline and alerts', 'Comparison history resets whenever workload identity changes'),
     metricCard('Baseline', `${fmtInt(baseline.samples)} samples`, `CPU avg ${baselineFmt(baseline.cpuPctCore, '%')} | XDMA avg ${baselineFmt(baseline.xdmaIrqPerSec, ' /s')} | age ${fmtNum(baselineAgeSec)} s`),
-    metricCard('I/O Proxy', `${fmtNum(d.charTotalMiBs)} MiB/s`, `read ${fmtNum(d.charReadKBs)} KiB/s | write ${fmtNum(d.charWriteKBs)} KiB/s | source ${(perf?.process?.io?.source || 'n/a')}`),
     metricCard('Alerts', alertState.alerts.length ? alertState.alerts[0] : 'none', alertState.alerts.slice(1).join(' | ') || 'within current thresholds'),
     metricCard('Errors / Drops', `RX err ${fmtInt(d.ethRxErrDelta)} drop ${fmtInt(d.ethRxDropDelta)}`, `TX err ${fmtInt(d.ethTxErrDelta)} drop ${fmtInt(d.ethTxDropDelta)} | XDMA lines ${(d.xdmaInterruptLines || []).map(x => `${x.irq}:${x.count}`).join(', ') || 'n/a'}`),
   ].join('');
@@ -1605,6 +1676,7 @@ async function loadP23Perf(){
       setPerfSummary('p2app.service main process is not running.', true);
       setPerfDashboardHtml(metricCard('Service', 'not running', 'start or switch the service to collect samples'));
       setPerfRawText(JSON.stringify({ perf }, null, 2));
+      setTelemetryHealth(perf);
       return;
     }
     if (!perfBaseline) perfBaseline = newPerfBaseline();
@@ -1622,6 +1694,7 @@ async function loadP23Perf(){
     latestP23Perf = perf;
     latestDerivedPerf = d;
     latestPerfAlertState = alertState;
+    setTelemetryHealth(perf);
     baselinePush(perfBaseline.cpuPctCore, d.cpuPctCore);
     baselinePush(perfBaseline.rssMb, d.rssMb);
     baselinePush(perfBaseline.schedDelayMsPerSec, d.schedDelayMsPerSec);

@@ -5,6 +5,15 @@ All notable changes from the hardened app convergence pass are documented here.
 This changelog originated under `P3_app` and now follows the converged
 `P2_app` implementation.
 
+## [2026-07-12] Cross-Service Performance Telemetry
+
+### Fixed
+
+- Performance snapshots in `/dev/shm/saturn_p23_perf_stats.json` are now
+  published mode `0644`, allowing Saturn Go to read the non-sensitive counters
+  when `p2app.service` runs as `saturn-radio` with its restrictive service
+  umask.
+
 ## [2026-04-07] Socket Binding Safety Follow-up
 
 ### Changed
