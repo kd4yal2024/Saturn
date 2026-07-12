@@ -292,12 +292,16 @@ via `sudo -n` (password piped over stdin).
 - Uses `/opt/saturn-go/scripts/p23-app-manager.sh` via `/run`.
 - Status panel polls `GET /p23_status`.
 - Performance panel polls `GET /p23_perf` and combines host metrics with workload tags and app-emitted counters for:
-  - `p2app.service` main process CPU/RSS/scheduler wait/context switches/page faults
+  - `p2app.service` main process CPU/RSS/context switches/page faults
   - `eth0` throughput/packet rate/errors+drops
   - XDMA interrupt rate (`/proc/interrupts`) and PCIe link speed/width (`/sys/class/xdma/...`)
-- current workload shape (runtime app identity, binary family, startup mode, panel mode, DDC enable/interleave state, wideband mode)
-- app packet/DMA/error counters for high-priority, DDC, wideband, mic, DUC, and speaker paths
-- Performance panel includes a workload-first dashboard layout plus threshold highlighting/alerts for CPU, scheduler wait, XDMA interrupt spikes/drops, and stale app telemetry.
+  - current workload shape (runtime app identity, binary family, startup mode, panel mode, DDC enable/interleave state, wideband mode)
+  - app packet/DMA/error counters for high-priority, DDC, wideband, mic, DUC, and speaker paths
+  - DDC/DUC/speaker DMA operation rates and average transfer size
+  - DUC/speaker queue depth, FIFO depth, queue age, write/underrun mode, and active-gap state
+  - FPGA firmware, clock/fallback state, FPGA die temperature, Pi SoC temperature, and CPU frequency
+- Performance panel uses an appliance-style layout with primary CPU/DDC/DUC/XDMA KPIs, compact Radio Data Path, System Health, and Reliability sections, plus explicit active, idle, degraded, and fault states. Idle radios display as healthy/waiting and are excluded from XDMA-drop comparisons.
+- Per-task scheduler runtime is retained in raw diagnostics but omitted from the primary UI when it is not reasonably comparable to `/proc/<pid>/stat` CPU time on the running kernel.
 - Performance panel includes a `Capture Snapshot` action that packages:
   - the current `/p23_perf` payload
   - the page's derived runtime counters
@@ -310,17 +314,19 @@ via `sudo -n` (password piped over stdin).
   `/p23_perf` now reports `process.io.source = "eth0_netdev_proxy"` and uses
   `eth0` RX/TX byte counters as the char-I/O proxy source so the hidden P23
   `IRQ/MiB` metric remains available.
-- Performance baseline resets automatically when the running `p2app.service` workload identity changes, so old and new restart samples are not mixed together.
+- Performance baseline resets automatically when the running `p2app.service` workload identity or active/idle radio state changes, so unrelated samples are not mixed together.
 - Status/performance panes are always reloaded fresh and are no longer restored from browser session storage.
 - Restart/deploy actions support startup profiles (`panel`, `panel-debug`, `headless`) and front-panel mode overrides (`auto`, `g2`, `g2v2`, `prefer-g2`, `prefer-g2v2`, `off`), written as `SATURN_FRONT_PANEL_MODE` in the systemd drop-in.
 - Status/dashboard views also report the effective service runtime environment seen by `p2app.service`, including optional `SATURN_P3_RT_AUDIO_ENABLE`, `SATURN_P3_RT_AUDIO_POLICY`, `SATURN_P3_RT_AUDIO_PRIORITY`, and `SATURN_P3_RT_AUDIO_CPUS`.
 - `/p23test` includes a `Restore Unit Default` action for clearing the Saturn override and returning `p2app.service` to the base unit launch path.
 - `/p23test` includes an optional ADC peak telemetry panel:
   - toggle via `POST /p23_adc_telemetry`
-  - state/snapshot reported by `GET /p23_status`
+  - explicit `disabled`, `waiting_for_radio`, `live`, `stale`, `stale_process`, `unreadable`, and `invalid` state reported by `GET /p23_status`
   - latest snapshot stored in `/dev/shm/saturn_p23_adc_peak_telemetry.json`
+  - publisher runs only while the Protocol 2 outgoing high-priority path is active and atomically publishes mode `0644` for cross-service reads
+  - UI reports raw peaks, calculated dBFS, overflow bits, age, and service-PID match
   - uses `/dev/shm` and overwrites a single file, so it does not create persistent disk churn
-  - disabling telemetry stops updates but retains the last snapshot until a later enabled run overwrites it or it is removed manually
+  - disabling telemetry stops updates and requests removal of the latest snapshot
 - Recommended snapshot timing when comparing `p2app` builds or driver changes:
   - `2 minutes` for a quick smoke test after a build/deploy change
   - `10-15 minutes` for a normal baseline capture under a steady workload

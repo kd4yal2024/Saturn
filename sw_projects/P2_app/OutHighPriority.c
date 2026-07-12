@@ -92,6 +92,15 @@ static void MaybeWriteADCPeakTelemetry(const char *AppName, uint16_t ADC1Peak, u
     return;
   }
 
+  /* Saturn Go reads this non-sensitive snapshot under a different service
+   * account. p2app.service uses UMask=0027, so publish an explicit mode before
+   * the atomic rename instead of inheriting a cross-service-unreadable file. */
+  if (chmod(TempPath, 0644) != 0)
+  {
+    remove(TempPath);
+    return;
+  }
+
   if (rename(TempPath, ADC_PEAK_TELEMETRY_JSON_FILE) != 0)
   {
     remove(TempPath);

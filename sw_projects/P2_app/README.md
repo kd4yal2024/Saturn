@@ -86,6 +86,15 @@ message period. The existing ADC overflow bits in status byte `5` are unchanged.
 This feature depends on FPGA firmware version `27` or newer. On older FPGA
 builds, the peak fields remain `0`.
 
+The hidden `/saturn/p23test.html` lab can also enable a once-per-second ADC peak
+snapshot at `/dev/shm/saturn_p23_adc_peak_telemetry.json`. Snapshot publication
+only runs while a Protocol 2 client has started the radio's outgoing
+high-priority path. The file is atomically replaced with mode `0644` so the
+Saturn Go service can read it when `p2app.service` runs as `saturn-radio` with
+`UMask=0027`. The UI converts the raw unsigned 16-bit peak values to dBFS and
+distinguishes disabled, waiting-for-radio, live, stale, unreadable, and invalid
+states.
+
 ## Datapath Performance Passes (2026-03-12)
 
 Follow-up runtime work targeted the hot DMA/network paths after the earlier CAT
@@ -119,9 +128,11 @@ How to validate:
 
 - Compare before/after `p2app` workload snapshots on `/saturn/p23test.html` using:
   - CPU (per-core)
-  - scheduler wait
+  - scheduler wait (when kernel scheduler statistics are available)
   - XDMA IRQ `/s`
   - XDMA `IRQ/MiB`
+  - DDC/DUC DMA operations per second and average KiB per operation
+  - queue age/depth and FIFO error deltas
 - Keep workload and client/radio mode constant between comparisons.
 
 ## CAT GUID Safety and Runtime Robustness (2026-03-11)

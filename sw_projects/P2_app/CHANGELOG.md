@@ -13,6 +13,8 @@ This changelog originated under `P3_app` and now follows the converged
   published mode `0644`, allowing Saturn Go to read the non-sensitive counters
   when `p2app.service` runs as `saturn-radio` with its restrictive service
   umask.
+- Optional ADC peak snapshots now use the same explicit cross-service-readable
+  publication mode instead of inheriting the service umask.
 
 ## [2026-04-07] Socket Binding Safety Follow-up
 

@@ -1560,18 +1560,74 @@ async fn get_bridge_diag() -> Response {
 }
 
 async fn get_p23_status(State(state): State<AppState>) -> Response {
-    fn adc_peak_telemetry_info() -> serde_json::Value {
+    fn adc_peak_telemetry_info(service_main_pid: Option<u32>) -> serde_json::Value {
         let control = PathBuf::from(P23_ADC_PEAK_TELEMETRY_ENABLE_FILE);
         let snapshot = PathBuf::from(P23_ADC_PEAK_TELEMETRY_JSON_FILE);
-        let current = fs::read_to_string(&snapshot)
-            .ok()
-            .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok());
+        let enabled = control.exists();
+        let metadata = fs::metadata(&snapshot).ok();
+        let snapshot_exists = metadata.is_some();
+        let modified = metadata
+            .as_ref()
+            .and_then(|m| m.modified().ok())
+            .map(|t| chrono::DateTime::<Local>::from(t).to_rfc3339());
+        let (current, read_error, parse_error) = if snapshot_exists {
+            match fs::read_to_string(&snapshot) {
+                Ok(text) => match serde_json::from_str::<serde_json::Value>(&text) {
+                    Ok(value) => (Some(value), None, None),
+                    Err(error) => (None, None, Some(error.to_string())),
+                },
+                Err(error) => (None, Some(error.to_string()), None),
+            }
+        } else {
+            (None, None, None)
+        };
+        let snapshot_pid = current
+            .as_ref()
+            .and_then(|value| value.get("pid"))
+            .and_then(|value| value.as_u64())
+            .and_then(|value| u32::try_from(value).ok());
+        let pid_matches_service = matches!(
+            (snapshot_pid, service_main_pid),
+            (Some(snapshot_pid), Some(service_pid)) if snapshot_pid == service_pid
+        );
+        let snapshot_timestamp = current
+            .as_ref()
+            .and_then(|value| value.get("timestamp_epoch"))
+            .and_then(|value| value.as_u64());
+        let now_epoch = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_secs())
+            .unwrap_or(0);
+        let age_seconds = snapshot_timestamp.map(|timestamp| now_epoch.saturating_sub(timestamp));
+        let state = if !enabled {
+            "disabled"
+        } else if !snapshot_exists {
+            "waiting_for_radio"
+        } else if read_error.is_some() {
+            "unreadable"
+        } else if parse_error.is_some() {
+            "invalid"
+        } else if !pid_matches_service {
+            "stale_process"
+        } else if age_seconds.is_some_and(|age| age > 5) {
+            "stale"
+        } else {
+            "live"
+        };
 
         serde_json::json!({
-            "enabled": control.exists(),
+            "state": state,
+            "enabled": enabled,
             "control_file": control.display().to_string(),
             "snapshot_file": snapshot.display().to_string(),
-            "snapshot_exists": snapshot.exists(),
+            "snapshot_exists": snapshot_exists,
+            "snapshot_readable": current.is_some() && read_error.is_none() && parse_error.is_none(),
+            "modified": modified,
+            "age_seconds": age_seconds,
+            "snapshot_pid": snapshot_pid,
+            "pid_matches_service": pid_matches_service,
+            "read_error": read_error,
+            "parse_error": parse_error,
             "current": current,
         })
     }
@@ -1793,7 +1849,7 @@ async fn get_p23_status(State(state): State<AppState>) -> Response {
                     "cpus": rt_cpus,
                 }
             },
-            "adc_peak_telemetry": adc_peak_telemetry_info(),
+            "adc_peak_telemetry": adc_peak_telemetry_info(main_pid),
         }
     }))
     .into_response()
@@ -2391,6 +2447,17 @@ async fn get_p23_perf(State(_state): State<AppState>) -> Response {
         parse_system_cpu().unwrap_or((0, 0, 0));
     let (mem_total_bytes, mem_available_bytes) = parse_meminfo();
     let (load_1, load_5, load_15) = parse_loadavg();
+    let soc_temp_c = read_trimmed("/sys/class/thermal/thermal_zone0/temp")
+        .and_then(|value| value.parse::<f64>().ok())
+        .map(|value| value / 1000.0);
+    let cpu_frequency_mhz = read_trimmed("/sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq")
+        .or_else(|| read_trimmed("/sys/devices/system/cpu/cpu0/cpufreq/cpuinfo_cur_freq"))
+        .and_then(|value| value.parse::<f64>().ok())
+        .map(|value| value / 1000.0);
+    let cpu_frequency_max_mhz =
+        read_trimmed("/sys/devices/system/cpu/cpu0/cpufreq/scaling_max_freq")
+            .and_then(|value| value.parse::<f64>().ok())
+            .map(|value| value / 1000.0);
 
     let eth0 = parse_netdev_interface("eth0");
     let wlan0 = parse_netdev_interface("wlan0");
@@ -2456,6 +2523,11 @@ async fn get_p23_perf(State(_state): State<AppState>) -> Response {
                     "one": load_1,
                     "five": load_5,
                     "fifteen": load_15,
+                },
+                "hardware": {
+                    "soc_temp_c": soc_temp_c,
+                    "cpu_frequency_mhz": cpu_frequency_mhz,
+                    "cpu_frequency_max_mhz": cpu_frequency_max_mhz,
                 }
             },
             "network": {

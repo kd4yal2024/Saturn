@@ -4,11 +4,17 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
 
 ## [Unreleased]
 ### Added
-- The hidden `/p23test` performance dashboard now has a persistent service,
-  app-telemetry, and workload-identity health strip plus grouped system, radio,
-  and baseline sections. Telemetry read/parse failures are reported directly,
-  and a directly installed `p2app.service` workload is identified from its
-  running command line when no deployment-slot symlink exists.
+- The hidden `/p23test` performance dashboard now has an appliance-style,
+  activity-aware layout with primary CPU/DDC/DUC/XDMA KPIs, compact radio,
+  system, and reliability sections, and explicit active, idle, degraded, and
+  fault states. Idle radios display as healthy and waiting instead of showing
+  misleading zero-rate KPIs or XDMA-drop alerts. Telemetry read/parse failures
+  are reported directly, including explicit disabled, waiting, live, stale,
+  unreadable, and invalid states for optional ADC peak telemetry. The dashboard
+  also surfaces ADC dBFS, DMA operation efficiency, queue context, FPGA/SoC
+  temperature, CPU frequency, clock state, and fallback-image state. A directly
+  installed `p2app.service` workload is identified from its running command
+  line when no deployment-slot symlink exists.
 - Reproducible non-cloud-init Saturn Bridge deployment: the Saturn Go installer
   now enables the bridge by default, provisions sparse upstream sources at
   pinned commits, builds/verifies WDSP 2.00 and the bridge, and installs the
