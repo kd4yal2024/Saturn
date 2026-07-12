@@ -49,6 +49,7 @@
     }
     .wrap { max-width: 1400px; margin: 0 auto; padding: 22px; }
     .card {
+      min-width: 0;
       background: linear-gradient(180deg, rgba(18,33,49,0.98), rgba(11,23,35,0.98));
       border: 1px solid var(--line);
       border-radius: 18px;
@@ -72,10 +73,12 @@
     }
     .main-grid {
       display: grid;
-      grid-template-columns: 0.68fr 1.32fr;
+      grid-template-columns: minmax(0, 0.68fr) minmax(0, 1.32fr);
       gap: 16px;
       align-items: start;
     }
+    .main-grid > * { min-width: 0; }
+    .bridge-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     .overview-grid {
       display: grid;
       grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -330,9 +333,14 @@
     }
     body.light summary { color: #1e293b; }
     .term {
+      min-width: 0;
+      max-width: 100%;
       min-height: 340px;
       max-height: 620px;
       overflow:auto;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      word-break: break-word;
       background:#050a11;
       border-radius:12px;
       padding:12px;
@@ -464,7 +472,7 @@
       </div>
     </div>
 
-    <div class="tab-row" role="tablist" aria-label="Service Lab views">
+    <div class="tab-row" role="tablist" aria-label="Radio telemetry diagnostic views">
       <button id="tab-p23" class="btn tab-btn" role="tab" aria-controls="panel-p23" aria-selected="true">p2app Service</button>
       <button id="tab-bridge" class="btn tab-btn" role="tab" aria-controls="panel-bridge" aria-selected="false">Bridge Diagnostics</button>
     </div>
@@ -588,7 +596,7 @@
     </div>
 
     <div id="panel-bridge" class="lab-panel" role="tabpanel" aria-labelledby="tab-bridge" hidden>
-      <div class="main-grid">
+      <div class="main-grid bridge-grid">
         <div class="card">
           <div class="row space">
             <div>

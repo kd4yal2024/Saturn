@@ -142,7 +142,7 @@ Remote Setup profile notes:
 - If `/remote-next` returns 404 on the bundle (`/remote-assets/remote-next.js`), confirm lockfile-only `npm ci && npm run build` succeeded in `update_manager/remote-web` and that `saturn-remote-next.js` plus `saturn-remote-next.js.sha256` are present in `/var/lib/saturn-web/`. The installer and `update-saturn-go.sh` now treat a missing bundle or checksum mismatch as a hard failure; this check covers manual or pre-promotion deploys.
 - If TX appears stuck after a browser crash or tab close, confirm both `saturn-bridge.service` and `saturn-go.service` are on the latest deployed build with the explicit TX-release path.
 
-## Secure Remote Access with Tailscale
+## Secure Remote Access with Tailscale VPN
 
 Tailscale is the recommended way to reach Saturn Remote from outside the LAN. It is **optional** — nothing in Saturn requires it, and the existing LAN entry points keep working unchanged. The deployment described below provides operator-friendly remote access (real Let's Encrypt cert, MagicDNS hostname, no port-forwarding) while preserving every Saturn security control: HTTP basic auth, RF TX opt-in, and loopback-only internal listeners.
 
@@ -471,6 +471,7 @@ curl -fsS "http://127.0.0.1:8080/run_log?script=update-G2.py&from=0&limit=20"
 - `/saturn/deskhpsdr` opens dedicated deskHPSDR update page.
 - `/saturn/fpga` opens dedicated FPGA flash page.
 - `/saturn/backup` opens Backup / Restore.
+- `/saturn/tailscale` opens Tailscale VPN configuration and status.
 - `/saturn/custom` (and `/saturn/index`) opens Custom Scripts page.
 - Navigation is grouped as primary operator views (Overview, Monitor, Radio
   Telemetry, Saturn Remote), Maintenance, Applications, and System.

@@ -50,8 +50,8 @@ Backend also enforces same-host checks when `Origin` or `Referer` is present.
 | `/deskhpsdr.html` | `GET` | No | Serve `deskhpsdr.html` (deskHPSDR update terminal). |
 | `/monitor` | `GET` | No | Serve `monitor.html`. |
 | `/monitor.html` | `GET` | No | Serve `monitor.html`. |
-| `/tailscale` | `GET` | No | Serve `tailscale.html`. |
-| `/tailscale.html` | `GET` | No | Serve `tailscale.html`. |
+| `/tailscale` | `GET` | No | Serve the Tailscale VPN page (`tailscale.html`). |
+| `/tailscale.html` | `GET` | No | Serve the Tailscale VPN page (`tailscale.html`). |
 | `/remote`, `/remote.html`, `/saturn-remote`, `/saturn-remote.html` | `GET` | No | Redirect to the stable Saturn Remote TLS page on port 8443. |
 | `/remote-next`, `/remote-next.html` | `GET` | No | Redirect to the next-generation Saturn Remote TLS page on port 8443 with the default feature query. |
 | fallback mapped page paths | `GET` | No | Supports `/saturn`, `/saturn/custom`, `/saturn/backup`, `/saturn/update`, `/saturn/saturngo`, `/saturn/telemetry`, `/saturn/fpga`, `/saturn/pihpsdr`, `/saturn/deskhpsdr`, `/saturn/monitor`, etc. |
@@ -159,7 +159,7 @@ Notes:
 Remote settings and profiles use camelCase JSON fields. Profile names are
 limited to 64 ASCII letters, digits, spaces, hyphens, underscores, or periods.
 
-## Tailscale
+## Tailscale VPN
 
 | Route | Method | CSRF | Request | Success Response |
 |---|---|---|---|---|

@@ -24,6 +24,9 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
   existing `/p23test` routes remain available for compatibility.
 - Shared management-page headers and both Saturn Remote variants now use the
   same compact `Saturn G2` title eyebrow for consistent appliance branding.
+- The system navigation and page heading now identify Tailscale as `Tailscale
+  VPN`. Radio Telemetry Bridge Diagnostics now constrains both grid columns and
+  wraps long journal/JSON lines so the service summary remains readable.
 - The Radio Telemetry performance dashboard now has an appliance-style,
   activity-aware layout with primary CPU/DDC/DUC/XDMA KPIs, compact radio,
   system, and reliability sections, and explicit active, idle, degraded, and

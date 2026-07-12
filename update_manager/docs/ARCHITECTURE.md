@@ -65,7 +65,7 @@ The Saturn Remote real-time backend also lives in the repo:
   - Combines live `p2app`, FPGA, network, and XDMA telemetry with advanced build/deploy/restart and override controls.
   - Legacy `/p23test` routes remain available for compatibility.
 - `tailscale.html`
-  - Tailscale status, enrollment, service, and Saturn Remote access controls.
+  - Tailscale VPN status, enrollment, service, and Saturn Remote access controls.
 
 All HTTP management pages use the shared offline appliance shell under
 `templates/assets/`, which supplies grouped navigation, responsive behavior,

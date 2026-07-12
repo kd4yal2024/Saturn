@@ -32,7 +32,7 @@
       label: 'System',
       items: [
         { key: 'backup', label: 'Backup / Restore', href: './backup' },
-        { key: 'tailscale', label: 'Tailscale', href: './tailscale' },
+        { key: 'tailscale', label: 'Tailscale VPN', href: './tailscale' },
         { key: 'custom', label: 'Custom Scripts', href: './custom' }
       ]
     }

@@ -37,6 +37,7 @@ The Saturn Remote frontend currently ships in two parallel forms against the sam
 | Password change in UI | `index.html` | `POST /change_password` | `sudo -n saturn-admin-password.sh set` (stdin) | `/etc/nginx/.htpasswd` + `saturn-go.service.d/10-remote-auth.conf` |
 | Service self-health watchdog | Not directly in UI | `GET /healthz` consumed by watchdog | `/usr/local/lib/saturn-go/saturn-health-watchdog.sh`, systemd timer/service | `saturn-go-watchdog.*` units |
 | System monitor dashboard | `monitor.html` | `GET /get_system_data`, `GET /network_test`, `POST /kill_process/{pid}` | `/proc`, sysfs, `curl`, `kill` | N/A |
+| Tailscale VPN enrollment, status, and Remote Serve controls | `tailscale.html` | `GET /tailscale_status`; `POST /tailscale/install`, `/tailscale/up`, `/tailscale/down`, `/tailscale/logout`, `/tailscale/serve` | Root-owned `saturn-tailscale.sh` helper via `sudo -n` | `tailscaled.service` state and Tailscale Serve configuration |
 | FPGA image discovery for flash UI | `fpga.html` | `GET /get_fpga_images` | Directory scan for `.bin` files | `SATURN_FPGA_DIR` or repo paths |
 | Legacy backup prompt response hook | `index.html` (modal) | `POST /backup_response` | No-op backend endpoint | N/A |
 | Controlled backend shutdown | `index.html` Exit button | `POST /exit` | `std::process::exit(0)` | N/A |
