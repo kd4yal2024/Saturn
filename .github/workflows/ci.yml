@@ -188,4 +188,4 @@ jobs:
           scripts/install-xdma-dkms.sh --dry-run --kernel "$(uname -r)"
 
       - name: Check direct appliance installer
-        run: scripts/install-saturn-appliance.sh --dry-run --skip-packages --skip-driver --skip-p2 --skip-saturn-go
+        run: scripts/install-saturn-appliance.sh --dry-run --user "$(id -un)" --skip-packages --skip-driver --skip-p2 --skip-saturn-go
