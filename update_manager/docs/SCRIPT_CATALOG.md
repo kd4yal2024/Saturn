@@ -21,7 +21,7 @@ UI usage notes:
 - `saturngo.html` is the dedicated UI for running `update-saturn-go.sh` (separate Saturn Go repo policy + self-redeploy workflow).
 - `saturngo.html` also exposes an `XDMA Doctor` button that runs `xdma-doctor.sh` through the same `/run` terminal path and reports PCIe/XDMA/module/service state plus the kernel post-install hook used for future kernel staging.
 - `saturngo.html` also exposes a `Stage Running Kernel` button that runs `xdma-stage-current.sh` through the same `/run` terminal path.
-- `p23test.html` is a hidden/experimental UI for testing the converged `p2app` build/deploy/restart workflow using `p23-app-manager.sh` (not linked in main navigation).
+- `p23test.html` is presented as Radio Telemetry & Diagnostics in the main navigation. It combines live radio/performance data with advanced converged `p2app` build/deploy/restart controls using `p23-app-manager.sh`.
 - `index.html` (Custom Scripts page) intentionally excludes `update-pihpsdr.py` from the dropdown.
 - `pihpsdr.html` is the dedicated UI for running `update-pihpsdr.py` with live SSE terminal output.
 - `index.html` (Custom Scripts page) intentionally excludes `update-deskhpsdr.py` from the dropdown.
@@ -65,7 +65,7 @@ Not all utilities are directly wired into current UI buttons, but are included i
 | `update-saturn-go.sh` | Rebuild/redeploy `saturn-go` from the active Saturn repo root (used by `saturngo.html`). | `--verbose`, `--dry-run`, `--skip-git`, `--skip-build`, `--skip-deploy` |
 | `xdma-doctor.sh` | Run the classified Saturn XDMA doctor through the privileged helper path (used by `saturngo.html`); helper emits an advisory when XDMA is loaded but not staged for the running kernel. | passthrough (`--json`, `--stage-only`, `--skip-service-check` if needed) |
 | `xdma-stage-current.sh` | Pre-stage XDMA for the running kernel through a narrow privileged helper without restarting `p2app.service`; helper re-execs through a transient systemd unit when launched from Saturn Go so `/lib/modules` stays writable. | none |
-| `p23-app-manager.sh` | Experimental helper to build/deploy/restart/revert the converged `p2app` service path (used by hidden `p23test.html`), with startup-profile and front-panel-mode override support. Legacy `p3` arguments are accepted but mapped to the same converged binary. | `--status`, `--build [p2|p3]`, `--deploy [p2|p3]`, `--restart [p2|p3]`, `--switch [p2|p3]`, `--revert`, `--mode panel|headless|panel-debug`, `--panel auto|g2|g2v2|prefer-g2|prefer-g2v2|off`, `--dry-run`, `--verbose`, `--no-restart`, `--no-clean` |
+| `p23-app-manager.sh` | Advanced helper to build/deploy/restart/revert the converged `p2app` service path (used by the Radio Telemetry page), with startup-profile and front-panel-mode override support. Legacy `p3` arguments are accepted but mapped to the same converged binary. | `--status`, `--build [p2\|p3]`, `--deploy [p2\|p3]`, `--restart [p2\|p3]`, `--switch [p2\|p3]`, `--revert`, `--mode panel\|headless\|panel-debug`, `--panel auto\|g2\|g2v2\|prefer-g2\|prefer-g2v2\|off`, `--dry-run`, `--verbose`, `--no-restart`, `--no-clean` |
 | `qemu_pi_boot.sh` | Boot Raspberry Pi image in QEMU by extracting kernel/DTB and launching `qemu-system-aarch64`. | `--img`, `--work-dir`, `--memory`, `--cpus`, `--machine`, `--extra-append`, `--dry-run` |
 | `log_cleaner.sh` | Local log cleanup helper. | see above |
 
@@ -100,6 +100,6 @@ Not all utilities are directly wired into current UI buttons, but are included i
 - `scripts/deskhpsdr-test-build-on-current-image.sh` applies `scripts/patches/deskhpsdr-libgpiod-v2.patch` only for older deskHPSDR checkouts that still include the legacy `src/gpio.c` path, and accepts an already-applied patch as success.
 - For current upstream deskHPSDR checkouts where direct Raspberry Pi GPIO support has been removed, the helper skips the obsolete patch and builds with `SATURN=ON` only for the G2/XDMA path.
 - The deskHPSDR helper keeps `libpulse-dev` for building Pulse audio support but prefers `pipewire-pulse` at runtime and removes the redundant `pulseaudio` daemon package when PipeWire Pulse is installed.
-- `p23-app-manager.sh` is an experimental local test/deploy helper; it modifies a systemd drop-in override for `p2app.service` rather than editing the base unit file directly.
+- `p23-app-manager.sh` is an advanced local test/deploy helper; it modifies a systemd drop-in override for `p2app.service` rather than editing the base unit file directly.
 - `p23-app-manager.sh` writes `Environment=SATURN_FRONT_PANEL_MODE=...` into the generated override for forced/assisted panel detection testing and tags the override with a `# saturn-p23 mode=... panel=...` comment that the status API parses.
 - `p23-app-manager.sh` now drives only the converged `P2_app` source tree and deployed `p2app` binary; old `p3` arguments remain compatibility aliases.

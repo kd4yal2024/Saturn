@@ -12,11 +12,12 @@ This folder contains the operational and technical documentation for the Rust-ba
 6. `RUST_SUPPLY_CHAIN.md`
 7. `ADMIN_AUTH_SIMPLIFICATION.md`
 8. `XDMA_RELEASE_POLICY.md`
-9. `SATURN_REMOTE_STATE_STRIP_SPEC.md`
-10. `SATURN_REMOTE_APPLE_SAFARI_VALIDATION.md`
-11. `SATURN_REMOTE_APPLE_SAFARI_RESULTS.md`
-12. `SATURN_REMOTE_SQUELCH_AUDIO_PROFILE_CONTRACT.md`
-13. `SATURN_REMOTE_TX_UPLINK_PHASE38_CONTRACT.md`
+9. `SATURN_REMOTE_ARCHITECTURE.md`
+10. `SATURN_REMOTE_STATE_STRIP_SPEC.md`
+11. `SATURN_REMOTE_APPLE_SAFARI_VALIDATION.md`
+12. `SATURN_REMOTE_APPLE_SAFARI_RESULTS.md`
+13. `SATURN_REMOTE_SQUELCH_AUDIO_PROFILE_CONTRACT.md`
+14. `SATURN_REMOTE_TX_UPLINK_PHASE38_CONTRACT.md`
 
 ## Document Guide
 
@@ -37,7 +38,9 @@ This folder contains the operational and technical documentation for the Rust-ba
 
 - `OPERATIONS_RUNBOOK.md`
   - Build, install, uninstall, daily operations, and troubleshooting.
-  - Includes G2 Update page (G2 + Appliance Update), dedicated piHPSDR update flow, dedicated FPGA flash flow, browser-managed custom scripts flow, backup/restore flow, and service checks.
+  - Includes the Overview and Radio Telemetry operator views, G2 Update page
+    (G2 + Appliance Update), dedicated application/FPGA update flows,
+    browser-managed custom scripts, backup/restore, and service checks.
 
 - `RUST_SUPPLY_CHAIN.md`
   - Rust dependency policy for `saturn-go` and `saturn-bridge`.
@@ -50,6 +53,10 @@ This folder contains the operational and technical documentation for the Rust-ba
 
 - `XDMA_RELEASE_POLICY.md`
   - DKMS package versioning, manual postinst-hook takeover, and rollback policy.
+
+- `SATURN_REMOTE_ARCHITECTURE.md`
+  - Browser, TLS, bridge, TCI, audio, panadapter, and waterfall architecture
+    for the Saturn Remote operator console.
 
 - `SATURN_REMOTE_STATE_STRIP_SPEC.md`
   - `/remote-next` operator state strip contract: pill order, labels, density rules, escalation rules, and acceptance criteria.
@@ -69,3 +76,10 @@ This folder contains the operational and technical documentation for the Rust-ba
 - `SATURN_REMOTE_TX_UPLINK_PHASE38_CONTRACT.md`
   - Pre-implementation contract for slow-VPN TX uplink safety on `/remote-next`.
   - Defines browser `bufferedAmount` guard thresholds, bridge-authoritative `tx_fault:uplink_late`, bidirectional TX mic telemetry, regression tests, and acceptance criteria.
+
+## Engineering History
+
+- `SATURN_REMOTE_PHASE36_MEASUREMENT.md`
+  - Measurement notes and evidence from the Phase 36 Remote performance work.
+- `SATURN_REMOTE_PHASE37_ANALYSIS.md`
+  - Analysis and decisions from the Phase 37 Remote transport work.

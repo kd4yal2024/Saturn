@@ -463,14 +463,17 @@ curl -fsS "http://127.0.0.1:8080/run_log?script=update-G2.py&from=0&limit=20"
 
 - `/saturn/` opens the Saturn Go Overview dashboard; G2 Update remains at
   `/saturn/update`.
+- `/saturn/monitor` opens real-time system monitoring.
+- `/saturn/telemetry` opens Radio Telemetry & Diagnostics.
+- `/saturn/remote-next` redirects to the Saturn Remote TLS operator console.
 - `/saturn/saturngo` opens dedicated Saturn Go self-update page.
 - `/saturn/pihpsdr` opens dedicated piHPSDR update page.
 - `/saturn/deskhpsdr` opens dedicated deskHPSDR update page.
 - `/saturn/fpga` opens dedicated FPGA flash page.
 - `/saturn/backup` opens Backup / Restore.
 - `/saturn/custom` (and `/saturn/index`) opens Custom Scripts page.
-- `/saturn/monitor` opens Monitor.
-- Navigation order in current UI: `G2 Update` -> `Saturn Go` -> `piHPSDR Update` -> `deskHPSDR Update` -> `FPGA Flash` -> `Backup / Restore` -> `Custom Scripts` -> `Monitor`.
+- Navigation is grouped as primary operator views (Overview, Monitor, Radio
+  Telemetry, Saturn Remote), Maintenance, Applications, and System.
 
 ### Repo Root Management
 
@@ -627,10 +630,12 @@ Operational notes:
 - The web terminal may disconnect when `saturn-go.service` restarts; reload after ~10-20 seconds.
 - Some successful lines may still be prefixed `ERR:` in the terminal because `cargo` and `systemd-run` emit informational output on stderr.
 
-### p2app Service Lab (Hidden / Experimental)
+### Radio Telemetry & Diagnostics
 
-- Open `/saturn/p23test` directly (it is intentionally not linked in navigation).
-- This page is intended for testing the converged `p2app` build/deploy/restart path and override behavior.
+- Open Radio Telemetry from the primary navigation or browse to
+  `/saturn/telemetry` (`/saturn/p23test` remains a legacy alias).
+- This page combines live radio/performance telemetry with advanced controls
+  for testing the converged `p2app` build/deploy/restart path and override behavior.
 - It runs `p23-app-manager.sh` via `/run` and resumes terminal output using `/run_log`.
 
 Capabilities:
@@ -672,7 +677,7 @@ Safety/usage notes:
 - Non-dry-run deploy/restart/revert actions require browser confirmation
 - Web mode requires `sudo -n` permission for install/symlink/systemctl steps
 - `No restart` updates symlink/override without restarting `p2app.service`
-- If a restart or override change leaves the local panel UI unusable but networking still works (e.g. Thetis continues to connect), use `/saturn/p23test` from another device and run `Restore Unit Default`
+- If a restart or override change leaves the local panel UI unusable but networking still works (e.g. Thetis continues to connect), use `/saturn/telemetry` from another device and run `Restore Unit Default`.
 - Reasonable snapshot capture times:
   - `2 minutes` for post-change smoke checks
   - `10-15 minutes` for steady-state baseline comparisons

@@ -9,13 +9,13 @@ Saturn Update Manager is deployed as a small appliance-style web stack:
 3. Backend launches shell/Python scripts for maintenance tasks.
 4. Systemd keeps the backend running and uses a watchdog timer for health-based restart.
 
-An experimental remote-control backend now also lives in the repo:
+The Saturn Remote real-time backend also lives in the repo:
 
 - `saturn-bridge`
   - separate from `saturn-go`
-  - intended to become the direct G2 remote/session bridge
+  - provides the direct G2 remote/session bridge used by Saturn Remote
   - owns the downstream Protocol 2 client role to `p2app`
-  - is the planned home for TCI, WDSP integration, and multi-client arbitration
+  - provides the TCI/WebSocket boundary and native WDSP integration
 
 ## Request Flow
 
@@ -27,12 +27,15 @@ An experimental remote-control backend now also lives in the repo:
 
 ## UI Page Responsibilities
 
+- `overview.html`
+  - Default landing page (`/`) for appliance, radio, network, service, and last-deployment health with quick workflow links.
+  - Uses an isolated system-rate sampling scope so its polling does not alter Monitor chart baselines.
 - `index.html`
   - Custom Scripts page (browser-managed script catalog + runner) and password change.
   - `update-G2.py`, `update-pihpsdr.py`, `update-deskhpsdr.py`, and `restore-backup.sh` are intentionally hidden from this page dropdown.
   - Supports browser file upload for custom script content and includes backend-seeded default custom cleanup scripts.
 - `update.html`
-  - Default landing page (`/`) that combines:
+  - G2 Update page that combines:
     - Update G2 terminal workflow (`POST /run` with `update-G2.py`)
     - Appliance Update policy/start/status/rollback controls (repo URL + branch/ref + healthcheck inputs in current UI).
     - G2 run button is gated by valid Appliance repo URL input.
@@ -57,6 +60,16 @@ An experimental remote-control backend now also lives in the repo:
   - Repo-root selection, full backup/restore, repair pack, Pi image workflow, and SD clone workflow.
 - `monitor.html`
   - Real-time system monitoring and process controls.
+- `p23test.html`
+  - Radio Telemetry & Diagnostics page served canonically at `/telemetry`.
+  - Combines live `p2app`, FPGA, network, and XDMA telemetry with advanced build/deploy/restart and override controls.
+  - Legacy `/p23test` routes remain available for compatibility.
+- `tailscale.html`
+  - Tailscale status, enrollment, service, and Saturn Remote access controls.
+
+All HTTP management pages use the shared offline appliance shell under
+`templates/assets/`, which supplies grouped navigation, responsive behavior,
+design tokens, local fonts, and vendored browser libraries.
 
 ## Runtime Layout
 
@@ -67,7 +80,10 @@ An experimental remote-control backend now also lives in the repo:
 - `/opt/saturn-go/scripts/`
   - Executable maintenance scripts (also target directory for browser-managed custom scripts).
 - `/var/lib/saturn-web/`
-  - Web assets: `index.html`, `update.html`, `saturngo.html`, `pihpsdr.html`, `deskhpsdr.html`, `saturn-remote.html`, `saturn-remote-next.html`, `saturn-remote-next.js`, `p23test.html`, `fpga.html`, `backup.html`, `monitor.html`, `config.json`, `themes.json`. Optional helper scripts (`saturn-remote-storage.js`, `saturn-remote-session.js`, `saturn-remote-tci.js`, `saturn-remote-transport.js`, `saturn-remote-browser.js`) are also synced when present.
+  - Web assets include `overview.html`, management/telemetry/application HTML
+    pages, Saturn Remote HTML and bundle files, `assets/` (shared shell, local
+    fonts, and vendored libraries), `config.json`, and `themes.json`. Optional
+    Saturn Remote helper scripts are also synced when present.
 - `/var/lib/saturn-state/`
   - Mutable state: `repo_root.txt`, `update_policy.json`, `update_state.json`, snapshots, staged worktrees.
 - `/etc/systemd/system/saturn-go.service`
@@ -86,9 +102,10 @@ An experimental remote-control backend now also lives in the repo:
 - `update_manager/rust-server/`
   - Rust backend source code.
 - `update_manager/saturn-bridge/`
-  - standalone direct-G2 bridge source code (currently bootstrap + RX-only ingest).
+  - Standalone direct-G2 bridge source code and native WDSP integration.
 - `update_manager/templates/`
-  - UI templates copied to web root during install (includes `saturn-remote-next.html`).
+  - UI templates copied to web root during install, including the shared
+    offline shell in `templates/assets/` and both Saturn Remote pages.
 - `update_manager/remote-web/`
   - Vite TypeScript project that builds the `saturn-remote-next.js` IIFE bundle consumed by `/remote-next`.
 - `update_manager/docs/SATURN_REMOTE_ARCHITECTURE.md`

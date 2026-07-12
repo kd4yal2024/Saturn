@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>p2app Service Lab</title>
+  <title>Saturn G2 Radio Telemetry</title>
   <script src="./assets/vendor/ansi_up.min.js"></script>
   <style>
     :root {
@@ -99,12 +99,15 @@
     .row { display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
     .row.space { justify-content: space-between; }
     .btn {
+      display: inline-flex;
+      align-items: center;
       border:1px solid rgba(255,255,255,0.18);
       background: rgba(255,255,255,0.06);
       color:#fff;
       border-radius:12px;
       padding:10px 12px;
       cursor:pointer;
+      text-decoration:none;
       transition: background 120ms ease, border-color 120ms ease, transform 120ms ease;
     }
     .btn:hover { background: rgba(255,255,255,0.1); border-color: rgba(255,255,255,0.24); transform: translateY(-1px); }
@@ -389,12 +392,13 @@
     <div class="card hero">
       <div class="row space">
         <div>
-          <div class="section-kicker">p2app Service Lab</div>
-          <h1 style="margin:4px 0 6px 0; font-size: 30px;">P23 Service &amp; Performance</h1>
-          <div class="muted">Operate the converged <code>p2app.service</code> path and inspect the live radio, network, and XDMA workload.</div>
+          <div class="section-kicker">Saturn G2</div>
+          <h1 style="margin:4px 0 6px 0; font-size: 30px;">Radio Telemetry &amp; Diagnostics</h1>
+          <div class="muted">Live p2app, FPGA, network, XDMA, and performance data with advanced service-lab controls.</div>
         </div>
         <div class="row">
-          <div class="chip">URL: /saturn/p23test</div>
+          <div class="chip">URL: /saturn/telemetry</div>
+          <a class="btn" href="./">Saturn Go</a>
           <button id="theme-toggle" class="btn icon" title="Toggle theme" aria-label="Toggle theme">
             <svg id="theme-icon" width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"

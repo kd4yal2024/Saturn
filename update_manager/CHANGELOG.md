@@ -19,7 +19,12 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
 - Saturn Remote stable and next-generation pages now use the same locally
   hosted Inter font and provide working Saturn Go/Monitor navigation back to
   the HTTP management console, including IPv6 host handling.
-- The hidden `/p23test` performance dashboard now has an appliance-style,
+- The former hidden P23 service lab is now presented as Radio Telemetry &
+  Diagnostics, linked from the primary navigation at `/telemetry`, while the
+  existing `/p23test` routes remain available for compatibility.
+- Shared management-page headers and both Saturn Remote variants now use the
+  same compact `Saturn G2` title eyebrow for consistent appliance branding.
+- The Radio Telemetry performance dashboard now has an appliance-style,
   activity-aware layout with primary CPU/DDC/DUC/XDMA KPIs, compact radio,
   system, and reliability sections, and explicit active, idle, degraded, and
   fault states. Idle radios display as healthy and waiting instead of showing

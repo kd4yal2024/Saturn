@@ -251,6 +251,8 @@ async fn main() {
         .route("/saturn-go.html", get(saturngo_handler))
         .route("/p23test", get(p23test_handler))
         .route("/p23test.html", get(p23test_handler))
+        .route("/telemetry", get(p23test_handler))
+        .route("/telemetry.html", get(p23test_handler))
         .route("/fpga", get(fpga_handler))
         .route("/fpga.html", get(fpga_handler))
         .route("/pihpsdr", get(pihpsdr_handler))

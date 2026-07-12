@@ -147,7 +147,13 @@ pub fn route_to_page(path: &str) -> Option<&'static str> {
         | "/saturn/saturn-go"
         | "/saturn/saturn-go/"
         | "/saturn/saturn-go.html" => Some("saturngo.html"),
-        "/p23test"
+        "/telemetry"
+        | "/telemetry/"
+        | "/telemetry.html"
+        | "/saturn/telemetry"
+        | "/saturn/telemetry/"
+        | "/saturn/telemetry.html"
+        | "/p23test"
         | "/p23test/"
         | "/p23test.html"
         | "/saturn/p23test"
@@ -342,6 +348,9 @@ mod tests {
         );
         assert_eq!(route_to_page("/update"), Some("update.html"));
         assert_eq!(route_to_page("/update.html"), Some("update.html"));
+        assert_eq!(route_to_page("/telemetry"), Some("p23test.html"));
+        assert_eq!(route_to_page("/saturn/telemetry"), Some("p23test.html"));
+        assert_eq!(route_to_page("/p23test"), Some("p23test.html"));
     }
 
     #[test]

@@ -200,6 +200,15 @@ body.light .saturn-nav-link:hover{ background:rgba(15,23,42,.05); }
   margin-bottom:1.25rem;
   flex-wrap:wrap;
 }
+.saturn-topbar-kicker{
+  margin-bottom:.18rem;
+  color:var(--primary);
+  font-size:.7rem;
+  font-weight:800;
+  letter-spacing:.14em;
+  line-height:1;
+  text-transform:uppercase;
+}
 .saturn-topbar-title h1{ font-weight:800; font-size:1.6rem; letter-spacing:.2px; margin:0; }
 .saturn-topbar-title p{ margin:.15rem 0 0; font-size:.85rem; opacity:.7; }
 .saturn-topbar-actions{ display:flex; align-items:center; gap:.5rem; }

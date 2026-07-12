@@ -52,8 +52,9 @@ service names still use `saturn-go` for compatibility with existing installs.
 - Dedicated Backup / Restore page (`backup.html`) for repo-root management, backup/restore, Pi imaging, clone, and repair tools
 - The shared appliance shell provides grouped desktop sidebar navigation, a
   mobile drawer, common dark/light theming, consistent controls/status tokens,
-  and local browser assets. Navigation groups Overview, Monitor, Saturn Remote,
-  maintenance, applications, and system tools.
+  compact Saturn G2 page-title branding, and local browser assets. Navigation
+  groups Overview, Monitor, Radio Telemetry, Saturn Remote, maintenance,
+  applications, and system tools.
 - Tailwind compatibility runtime, Chart.js, ansi_up, and Inter are vendored
   under `templates/assets/`; maintenance and Remote pages do not require public
   CDNs to render or operate.
@@ -126,7 +127,7 @@ Script definitions come from `config.json` plus browser-managed custom entries i
 - Overview page: `/` (also `/overview`, `/overview.html`)
 - G2 Update page: `/update` (also `/update.html`)
 - Saturn Go page: `/saturngo` (also `/saturngo.html`, `/saturn-go`, `/saturn-go.html`)
-- Experimental `p2app` service lab page (hidden, no nav link): `/p23test` (also `/p23test.html`)
+- Radio Telemetry & Diagnostics page: `/telemetry` (legacy `/p23test` aliases remain available)
 - piHPSDR update page: `/pihpsdr` (also `/pihpsdr.html`)
 - deskHPSDR update page: `/deskhpsdr` (also `/deskhpsdr.html`)
 - FPGA flash page: `/fpga` (also `/fpga.html`)
@@ -140,8 +141,8 @@ Script definitions come from `config.json` plus browser-managed custom entries i
 - Get Saturn Go self-update policy: `GET /saturngo_policy`
 - Set Saturn Go self-update policy: `POST /saturngo_policy`
 - Get Saturn Go deploy status: `GET /saturngo_deploy_status`
-- Get hidden `p2app` service-lab status (service/source/deploy/symlink/override): `GET /p23_status`
-- Get hidden `p2app` service-lab performance snapshot (host metrics + workload tags + optional app telemetry): `GET /p23_perf`
+- Get Radio Telemetry service-lab status (service/source/deploy/symlink/override): `GET /p23_status`
+- Get Radio Telemetry performance snapshot (host metrics + workload tags + optional app telemetry): `GET /p23_perf`
 - Start transactional update: `POST /update_start` with JSON `{ "channel":"stable|beta|custom", "custom_ref":"..." }`
 - Get update status + last state: `GET /update_status`
 - Roll back to previous repo root: `POST /update_rollback`
@@ -297,9 +298,10 @@ via `sudo -n` (password piped over stdin).
 - The updater resolves helper scripts from the active backend repo root (`SATURN_REPO_ROOT` / `SATURN_ACTIVE_REPO_ROOT`), so it stays aligned with the currently selected Saturn checkout.
 - On a fresh image, do not select `--skip-git`; otherwise the updater will fail because there is no local `~/github/deskhpsdr` checkout to build.
 
-### p2app Service Lab (Hidden)
+### Radio Telemetry & Diagnostics
 
-- Hidden page `/p23test` provides an experimental terminal workflow for:
+- The primary-navigation page `/telemetry` provides live radio/performance
+  telemetry and an advanced terminal workflow for:
   - building the converged `P2_app`
   - deploying the managed `p2app` binary under `/opt/saturn-go/p23-apps`
   - refreshing `p2app.service` override metadata, current symlink, and restart behavior
@@ -327,14 +329,14 @@ via `sudo -n` (password piped over stdin).
 - `fifo_duc_under_events` and `fifo_speaker_under_events` now represent underrun episodes rather than repeated observations of the same active underflow bit during polling recovery, so cumulative totals are more meaningful across long runs.
 - When `/proc/<pid>/io` is unreadable for the active `p2app.service` process,
   `/p23_perf` now reports `process.io.source = "eth0_netdev_proxy"` and uses
-  `eth0` RX/TX byte counters as the char-I/O proxy source so the hidden P23
+  `eth0` RX/TX byte counters as the char-I/O proxy source so the Radio Telemetry
   `IRQ/MiB` metric remains available.
 - Performance baseline resets automatically when the running `p2app.service` workload identity or active/idle radio state changes, so unrelated samples are not mixed together.
 - Status/performance panes are always reloaded fresh and are no longer restored from browser session storage.
 - Restart/deploy actions support startup profiles (`panel`, `panel-debug`, `headless`) and front-panel mode overrides (`auto`, `g2`, `g2v2`, `prefer-g2`, `prefer-g2v2`, `off`), written as `SATURN_FRONT_PANEL_MODE` in the systemd drop-in.
 - Status/dashboard views also report the effective service runtime environment seen by `p2app.service`, including optional `SATURN_P3_RT_AUDIO_ENABLE`, `SATURN_P3_RT_AUDIO_POLICY`, `SATURN_P3_RT_AUDIO_PRIORITY`, and `SATURN_P3_RT_AUDIO_CPUS`.
-- `/p23test` includes a `Restore Unit Default` action for clearing the Saturn override and returning `p2app.service` to the base unit launch path.
-- `/p23test` includes an optional ADC peak telemetry panel:
+- `/telemetry` includes a `Restore Unit Default` action for clearing the Saturn override and returning `p2app.service` to the base unit launch path.
+- `/telemetry` includes an optional ADC peak telemetry panel:
   - toggle via `POST /p23_adc_telemetry`
   - explicit `disabled`, `waiting_for_radio`, `live`, `stale`, `stale_process`, `unreadable`, and `invalid` state reported by `GET /p23_status`
   - latest snapshot stored in `/dev/shm/saturn_p23_adc_peak_telemetry.json`
@@ -347,7 +349,8 @@ via `sudo -n` (password piped over stdin).
   - `10-15 minutes` for a normal baseline capture under a steady workload
   - `30-60 minutes` for longer stability/jitter investigations
   - `5 minutes` each for mode transitions such as idle RX, active RX, TX, and reconnect recovery
-- Intended for local testing; it is not linked from the main navigation.
+- Advanced build/deploy controls are intended for local service testing; the
+  page itself is linked from the main navigation for telemetry and diagnostics.
 
 ## Build and Deploy (Rust Server)
 

@@ -9,6 +9,7 @@
       items: [
         { key: 'overview', label: 'Overview', href: './' },
         { key: 'monitor', label: 'Monitor', href: './monitor' },
+        { key: 'telemetry', label: 'Radio Telemetry', href: './telemetry' },
         { key: 'remote', label: 'Saturn Remote', href: './remote-next' }
       ]
     },
@@ -152,6 +153,7 @@
     topbar.appendChild(hamburger);
 
     var titleWrap = el('div', { class: 'saturn-topbar-title' });
+    titleWrap.appendChild(el('div', { class: 'saturn-topbar-kicker' }, 'Saturn G2'));
     titleWrap.appendChild(el('h1', {}, opts.title || ''));
     if (opts.subtitle) titleWrap.appendChild(el('p', {}, opts.subtitle));
     topbar.appendChild(titleWrap);
