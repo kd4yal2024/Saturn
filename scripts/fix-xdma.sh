@@ -141,7 +141,7 @@ kernel_flavor(){
 latest_installed_kernel(){
   local flavor="${1:-}"
   find /lib/modules -mindepth 1 -maxdepth 1 -type d -printf '%f\n' 2>/dev/null | \
-    { [[ -n "$flavor" ]] && grep -F "+rpt-${flavor}$" || cat; } | \
+    { if [[ -n "$flavor" ]]; then grep -F "+rpt-${flavor}$"; else cat; fi; } | \
     sort -V | tail -n1
 }
 
@@ -370,7 +370,11 @@ snapshot_live_module(){
     cp -a --parents "$module" "$ROLLBACK_DIR"
   done < <(find "/lib/modules/$krel" -xdev -type f \
     \( -name 'xdma.ko' -o -name 'xdma.ko.xz' -o -name 'xdma.ko.zst' -o -name 'xdma.ko.gz' \) -print0)
-  lsmod | awk '{print $1}' | grep -qx xdma && XDMA_WAS_LOADED=1 || XDMA_WAS_LOADED=0
+  if lsmod | awk '{print $1}' | grep -qx xdma; then
+    XDMA_WAS_LOADED=1
+  else
+    XDMA_WAS_LOADED=0
+  fi
   TRANSACTION_ACTIVE=1
   info "Saved live XDMA state in ${ROLLBACK_DIR}."
 }
@@ -386,8 +390,12 @@ restore_live_module(){
     cp -a "$ROLLBACK_DIR/lib/." /lib/
   fi
   depmod "$krel" >/dev/null 2>&1 || true
-  (( XDMA_WAS_LOADED )) && modprobe xdma >/dev/null 2>&1 || true
-  (( WAS_ACTIVE )) && systemctl start "$SERVICE_NAME" >/dev/null 2>&1 || true
+  if (( XDMA_WAS_LOADED )); then
+    modprobe xdma >/dev/null 2>&1 || true
+  fi
+  if (( WAS_ACTIVE )); then
+    systemctl start "$SERVICE_NAME" >/dev/null 2>&1 || true
+  fi
 }
 
 rollback_on_error(){

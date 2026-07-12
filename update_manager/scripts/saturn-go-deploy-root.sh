@@ -170,8 +170,12 @@ restore_payload(){
     fi
   done
   systemctl daemon-reload >/dev/null 2>&1 || true
-  (( BRIDGE_WAS_ACTIVE )) && systemctl start "$BRIDGE_SERVICE" >/dev/null 2>&1 || true
-  (( SATURN_GO_WAS_ACTIVE )) && systemctl start "$SATURN_GO_SERVICE" >/dev/null 2>&1 || true
+  if (( BRIDGE_WAS_ACTIVE )); then
+    systemctl start "$BRIDGE_SERVICE" >/dev/null 2>&1 || true
+  fi
+  if (( SATURN_GO_WAS_ACTIVE )); then
+    systemctl start "$SATURN_GO_SERVICE" >/dev/null 2>&1 || true
+  fi
 }
 
 on_error(){
@@ -250,8 +254,12 @@ chown -R root:root "$SNAPSHOT_DIR"
 STAGE_DIR="$(validate_stage "$SNAPSHOT_DIR" 0)"
 BACKUP_DIR="$(mktemp -d /var/lib/saturn-state/root-deploy-rollback.XXXXXX)"
 chmod 0700 "$BACKUP_DIR"
-systemctl is-active --quiet "$SATURN_GO_SERVICE" && SATURN_GO_WAS_ACTIVE=1 || true
-systemctl is-active --quiet "$BRIDGE_SERVICE" && BRIDGE_WAS_ACTIVE=1 || true
+if systemctl is-active --quiet "$SATURN_GO_SERVICE"; then
+  SATURN_GO_WAS_ACTIVE=1
+fi
+if systemctl is-active --quiet "$BRIDGE_SERVICE"; then
+  BRIDGE_WAS_ACTIVE=1
+fi
 trap on_error ERR
 write_status "running" "Installing validated Saturn Go payload" "null"
 
