@@ -17,9 +17,10 @@ use crate::image::{pi_image_cancel, pi_image_download, pi_image_start, pi_image_
 use crate::middleware::csrf_protect;
 use crate::monitor::{get_system_data, network_test};
 use crate::pages::{
-    backup_handler, custom_handler, deskhpsdr_handler, fallback_handler, fpga_handler, healthz,
-    monitor_handler, p23test_handler, pihpsdr_handler, remote_handler, remote_next_handler,
-    root_handler, saturngo_handler, tailscale_handler, update_handler,
+    asset_handler, backup_handler, custom_handler, deskhpsdr_handler, fallback_handler,
+    fpga_handler, healthz, monitor_handler, overview_handler, p23test_handler, pihpsdr_handler,
+    remote_handler, remote_next_handler, root_handler, saturngo_handler, tailscale_handler,
+    update_handler,
 };
 use crate::remote_tls::{
     dev_insecure_override_set, ensure_self_signed_cert, load_remote_tls_config,
@@ -232,7 +233,10 @@ async fn main() {
     }
 
     let app = Router::new()
+        .route("/assets/{*path}", get(asset_handler))
         .route("/", get(root_handler))
+        .route("/overview", get(overview_handler))
+        .route("/overview.html", get(overview_handler))
         .route("/custom", get(custom_handler))
         .route("/custom.html", get(custom_handler))
         .route("/index", get(custom_handler))

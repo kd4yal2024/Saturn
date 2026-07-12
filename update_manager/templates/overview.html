@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Saturn Go Overview</title>
+<link rel="stylesheet" href="./assets/css/saturn-ui.css">
+<script src="./assets/vendor/tailwind.js"></script>
+<script src="./assets/js/saturn-shell.js"></script>
+</head>
+<body class="min-h-screen">
+  <div class="max-w-6xl mx-auto px-4 py-6 sm:py-10">
+    <div id="saturn-shell-mount" class="mb-6"></div>
+    <script>
+      SaturnShell.mount({
+        active: 'overview',
+        title: 'Overview',
+        subtitle: 'Current appliance health, radio state, and maintenance shortcuts.'
+      });
+    </script>
+
+    <section class="overview-status-grid mb-6" aria-label="Appliance status" aria-live="polite">
+      <article class="card overview-status-card">
+        <div>
+          <div class="overview-kicker">System</div>
+          <div id="overview-system-value" class="overview-value">Loading…</div>
+        </div>
+        <div id="overview-system-detail" class="overview-detail">Reading CPU, memory, storage, and temperature.</div>
+      </article>
+      <article class="card overview-status-card">
+        <div>
+          <div class="overview-kicker">Radio</div>
+          <div id="overview-radio-value" class="overview-value">Loading…</div>
+        </div>
+        <div id="overview-radio-detail" class="overview-detail">Reading p2app and FPGA telemetry.</div>
+      </article>
+      <article class="card overview-status-card">
+        <div>
+          <div class="overview-kicker">Network</div>
+          <div id="overview-network-value" class="overview-value">Loading…</div>
+        </div>
+        <div id="overview-network-detail" class="overview-detail">Reading interface activity and remote access.</div>
+      </article>
+      <article class="card overview-status-card">
+        <div>
+          <div class="overview-kicker">Last Saturn Go Deploy</div>
+          <div id="overview-deploy-value" class="overview-value">Loading…</div>
+        </div>
+        <div id="overview-deploy-detail" class="overview-detail">Reading the last deployment result.</div>
+      </article>
+    </section>
+
+    <div class="overview-section-grid">
+      <section class="card p-5" aria-labelledby="overview-services-title">
+        <div class="flex items-center justify-between gap-3 mb-2">
+          <div>
+            <h2 id="overview-services-title" class="text-xl font-semibold">Appliance Services</h2>
+            <p class="text-sm opacity-70 mt-1">Live status from the manager, radio service, and browser bridge.</p>
+          </div>
+          <button id="overview-refresh" class="btn btn-ghost px-3 py-2 text-sm" type="button">Refresh</button>
+        </div>
+        <div class="overview-service-list">
+          <div class="overview-service-row">
+            <div><div class="overview-service-name">Saturn Go</div><div id="service-saturngo-detail" class="overview-service-detail">Web manager backend</div></div>
+            <span id="service-saturngo" class="status-pill status-unknown">Loading</span>
+          </div>
+          <div class="overview-service-row">
+            <div><div class="overview-service-name">p2app</div><div id="service-p2app-detail" class="overview-service-detail">Protocol 2 radio service</div></div>
+            <span id="service-p2app" class="status-pill status-unknown">Loading</span>
+          </div>
+          <div class="overview-service-row">
+            <div><div class="overview-service-name">Saturn Bridge</div><div id="service-bridge-detail" class="overview-service-detail">Remote browser bridge</div></div>
+            <span id="service-bridge" class="status-pill status-unknown">Loading</span>
+          </div>
+          <div class="overview-service-row">
+            <div><div class="overview-service-name">Tailscale</div><div id="service-tailscale-detail" class="overview-service-detail">Optional remote access</div></div>
+            <span id="service-tailscale" class="status-pill status-unknown">Loading</span>
+          </div>
+        </div>
+        <div id="overview-updated" class="overview-refresh-note mt-3">Waiting for the first refresh.</div>
+      </section>
+
+      <section class="card p-5" aria-labelledby="overview-actions-title">
+        <h2 id="overview-actions-title" class="text-xl font-semibold">Quick Access</h2>
+        <p class="text-sm opacity-70 mt-1 mb-4">Open the most common operator and maintenance workflows.</p>
+        <div class="overview-link-grid">
+          <a class="overview-link" href="./remote-next"><strong>Saturn Remote</strong><span>Operate the radio</span></a>
+          <a class="overview-link" href="./monitor"><strong>Monitor</strong><span>System charts and processes</span></a>
+          <a class="overview-link" href="./update"><strong>G2 Update</strong><span>Firmware and appliance updates</span></a>
+          <a class="overview-link" href="./saturngo"><strong>Saturn Go</strong><span>Manager deployment and XDMA</span></a>
+          <a class="overview-link" href="./fpga"><strong>FPGA Flash</strong><span>Firmware image management</span></a>
+          <a class="overview-link" href="./backup"><strong>Backup / Restore</strong><span>Snapshots and recovery</span></a>
+        </div>
+      </section>
+    </div>
+  </div>
+
+<script>
+const $ = (id)=>document.getElementById(id);
+let overviewRefreshInFlight = false;
+
+function fmtRate(bytesPerSecond){
+  const value = Number(bytesPerSecond);
+  if (!Number.isFinite(value) || value <= 0) return '0 B/s';
+  if (value < 1024) return `${value.toFixed(0)} B/s`;
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KiB/s`;
+  return `${(value / 1024 / 1024).toFixed(1)} MiB/s`;
+}
+
+function fmtNumber(value, digits=1, suffix='', fallback='n/a'){
+  const number = Number(value);
+  return Number.isFinite(number) ? `${number.toFixed(digits)}${suffix}` : fallback;
+}
+
+function fmtDuration(seconds){
+  let value = Math.max(0, Number(seconds) || 0);
+  const days = Math.floor(value / 86400);
+  value -= days * 86400;
+  const hours = Math.floor(value / 3600);
+  const minutes = Math.floor((value % 3600) / 60);
+  return days ? `${days}d ${hours}h` : (hours ? `${hours}h ${minutes}m` : `${minutes}m`);
+}
+
+async function fetchJson(path){
+  const response = await fetch(path, { cache:'no-store' });
+  const body = await response.json().catch(()=>({}));
+  if (!response.ok) throw new Error(body.message || `HTTP ${response.status}`);
+  return body;
+}
+
+function setService(id, level, label, detail){
+  const badge = $(`service-${id}`);
+  const detailEl = $(`service-${id}-detail`);
+  badge.className = `status-pill status-${level}`;
+  badge.textContent = label;
+  detailEl.textContent = detail;
+}
+
+function resultValue(result){
+  return result.status === 'fulfilled' ? result.value : null;
+}
+
+async function refreshOverview(){
+  if (overviewRefreshInFlight) return;
+  overviewRefreshInFlight = true;
+  $('overview-refresh').disabled = true;
+  try{
+    const results = await Promise.allSettled([
+      fetchJson('./get_system_data?proc_top=1&proc_page_size=1&rate_scope=overview'),
+      fetchJson('./p23_status'),
+      fetchJson('./p23_perf'),
+      fetchJson('./bridge_diag'),
+      fetchJson('./tailscale_status'),
+      fetchJson('./saturngo_deploy_status'),
+      fetchJson('./healthz'),
+    ]);
+    const system = resultValue(results[0]);
+    const p23Status = resultValue(results[1])?.p23 || null;
+    const perf = resultValue(results[2])?.perf || null;
+    const bridge = resultValue(results[3])?.bridge || null;
+    const tailscale = resultValue(results[4]);
+    const deploy = resultValue(results[5])?.deploy || null;
+    const backendOk = results[6].status === 'fulfilled';
+
+    if (system){
+      const cpu = Array.isArray(system.cpu) ? system.cpu : [];
+      const cpuAvg = cpu.length ? cpu.reduce((sum,value)=>sum + (Number(value) || 0), 0) / cpu.length : 0;
+      $('overview-system-value').textContent = `${cpuAvg.toFixed(1)}% CPU`;
+      $('overview-system-detail').textContent = `${fmtNumber(system.memory?.percent, 1, '%')} memory · ${fmtNumber(system.disk?.percent, 1, '%')} disk · ${fmtNumber(system.temperature?.cpu_c, 1, ' °C')} · uptime ${fmtDuration(system.uptime?.seconds)}`;
+      $('overview-network-value').textContent = `↓ ${fmtRate(system.network?.rx_bps)}`;
+      $('overview-network-detail').textContent = `↑ ${fmtRate(system.network?.tx_bps)} · ${tailscale?.summary || 'Tailscale status unavailable'}`;
+    } else {
+      $('overview-system-value').textContent = 'Unavailable';
+      $('overview-system-detail').textContent = 'System metrics could not be loaded.';
+      $('overview-network-value').textContent = 'Unavailable';
+      $('overview-network-detail').textContent = 'Network metrics could not be loaded.';
+    }
+
+    const radioService = String(p23Status?.service?.active || 'unknown');
+    const app = perf?.app_telemetry?.current || {};
+    const appState = app?.state || {};
+    const radioLabel = radioService !== 'active' ? 'Service Offline' : (appState?.sdr_active ? (appState?.tx_mode ? 'Transmitting' : 'Receiving') : 'Ready · Idle');
+    $('overview-radio-value').textContent = radioLabel;
+    const fpgaDetail = app?.fpga?.available
+      ? `FPGA ${app?.fpga?.firmware_version ?? 'n/a'} · ${fmtNumber(app?.fpga?.die_temp_c, 1, ' °C')}`
+      : 'FPGA telemetry unavailable';
+    $('overview-radio-detail').textContent = radioService === 'active'
+      ? `P2 PID ${p23Status?.service?.main_pid || 'n/a'} · ${fpgaDetail} · panel ${perf?.workload?.panel_mode || 'n/a'}`
+      : `p2app.service is ${radioService}`;
+
+    if (deploy){
+      const deployStatus = String(deploy.status || 'unknown');
+      $('overview-deploy-value').textContent = deployStatus.charAt(0).toUpperCase() + deployStatus.slice(1);
+      $('overview-deploy-detail').textContent = `${deploy.phase || 'unknown phase'} · ${deploy.updated_at || 'no timestamp'}${deploy.message ? ` · ${deploy.message}` : ''}`;
+    } else {
+      $('overview-deploy-value').textContent = 'No status';
+      $('overview-deploy-detail').textContent = 'No Saturn Go deployment record is available.';
+    }
+
+    setService('saturngo', backendOk ? 'ok' : 'bad', backendOk ? 'Healthy' : 'Unavailable', backendOk ? 'Web manager backend responding' : 'Health endpoint unavailable');
+    setService('p2app', radioService === 'active' ? 'ok' : 'bad', radioService === 'active' ? 'Running' : radioService, `PID ${p23Status?.service?.main_pid || 'n/a'} · enabled ${p23Status?.service?.enabled || 'unknown'}`);
+    const bridgeActive = String(bridge?.service?.active || 'unknown');
+    setService('bridge', bridgeActive === 'active' ? 'ok' : (bridge ? 'warn' : 'bad'), bridgeActive === 'active' ? 'Running' : bridgeActive, `PID ${bridge?.service?.main_pid || 'n/a'} · enabled ${bridge?.service?.enabled || 'unknown'}`);
+    const tailLevel = tailscale?.level === 'ok' ? 'ok' : (tailscale?.installed ? 'warn' : 'unknown');
+    setService('tailscale', tailLevel, tailscale?.level || 'Optional', tailscale?.summary || 'Not configured');
+    $('overview-updated').textContent = `Updated ${new Date().toLocaleTimeString()} · refreshes every 10 seconds`;
+  } finally {
+    overviewRefreshInFlight = false;
+    $('overview-refresh').disabled = false;
+  }
+}
+
+$('overview-refresh').addEventListener('click', refreshOverview);
+refreshOverview();
+setInterval(refreshOverview, 10000);
+</script>
+</body>
+</html>

@@ -4,10 +4,14 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Saturn Remote</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Oxanium:wght@400;500;600;700&family=Space+Grotesk:wght@400;500;700&display=swap" rel="stylesheet">
   <style>
+    @font-face {
+      font-family: "Inter";
+      font-style: normal;
+      font-weight: 400 800;
+      font-display: swap;
+      src: url("/remote-assets/inter.woff2") format("woff2");
+    }
     :root {
       color-scheme: dark;
       --bg-0: #071217;
@@ -25,8 +29,8 @@
       --warn: #f6c873;
       --danger: #fb7c74;
       --shadow: rgba(2, 12, 16, 0.45);
-      --mono: "IBM Plex Mono", "SFMono-Regular", Consolas, monospace;
-      --sans: "Space Grotesk", "Trebuchet MS", "Segoe UI", sans-serif;
+      --mono: ui-monospace, "SFMono-Regular", Consolas, monospace;
+      --sans: "Inter", "Segoe UI", system-ui, sans-serif;
     }
     * { box-sizing: border-box; }
     html, body { min-height: 100%; }
@@ -583,7 +587,7 @@
       --accent: #71c6ff;
       --accent-warm: #f2b35f;
       --shadow: rgba(0, 0, 0, 0.42);
-      --display: "Oxanium", "Space Grotesk", sans-serif;
+      --display: "Inter", "Segoe UI", system-ui, sans-serif;
       --theme-body-bg:
         radial-gradient(circle at top left, rgba(113, 198, 255, 0.11), transparent 22%),
         radial-gradient(circle at top right, rgba(242, 179, 95, 0.12), transparent 20%),
@@ -1881,12 +1885,22 @@
         </div>
       </div>
       <div class="hero-actions">
-        <a class="nav-link" href="./">Update</a>
-        <a class="nav-link" href="./monitor">Monitor</a>
+        <a class="nav-link" id="saturn-manage-home" href="#" title="Open the Saturn Go management UI">Saturn Go</a>
+        <a class="nav-link" id="saturn-manage-monitor" href="#" title="Open system monitoring">Monitor</a>
         <button class="btn ghost" id="layout-btn" type="button">Phone: Off</button>
         <button class="btn ghost" id="theme-btn" type="button">Theme: Dark</button>
       </div>
     </header>
+
+    <script>
+      (function wireSaturnManagementLinks(){
+        var host = window.location.hostname || 'localhost';
+        if (host.indexOf(':') !== -1 && host.charAt(0) !== '[') host = '[' + host + ']';
+        var base = 'http://' + host + '/saturn/';
+        document.getElementById('saturn-manage-home').href = base;
+        document.getElementById('saturn-manage-monitor').href = base + 'monitor';
+      })();
+    </script>
 
     <section class="command-strip panel" data-phone-panel="session">
       <div class="panel-head" data-phone-panel-head>

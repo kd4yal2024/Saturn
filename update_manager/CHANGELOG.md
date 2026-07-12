@@ -4,6 +4,21 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
 
 ## [Unreleased]
 ### Added
+- Saturn Go now has a shared offline appliance shell across Overview, Monitor,
+  update, FPGA, backup, application-update, Tailscale, and custom-script pages.
+  It provides grouped sidebar navigation, an accessible mobile drawer, common
+  theme/design tokens, consistent controls/status styling, and locally served
+  Inter, Tailwind, Chart.js, and ansi_up assets. Prefix-safe asset/navigation
+  URLs work through production's `/saturn/` proxy as well as direct backend
+  routes.
+- A new Overview landing page summarizes system utilization, radio/FPGA state,
+  network/Tailscale activity, service health, and the last Saturn Go deployment
+  with quick access to the main operator and maintenance workflows. Overview
+  rate sampling uses an isolated backend scope so it does not disturb Monitor
+  chart rates.
+- Saturn Remote stable and next-generation pages now use the same locally
+  hosted Inter font and provide working Saturn Go/Monitor navigation back to
+  the HTTP management console, including IPv6 host handling.
 - The hidden `/p23test` performance dashboard now has an appliance-style,
   activity-aware layout with primary CPU/DDC/DUC/XDMA KPIs, compact radio,
   system, and reliability sections, and explicit active, idle, degraded, and

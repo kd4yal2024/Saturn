@@ -28,7 +28,9 @@ service names still use `saturn-go` for compatibility with existing installs.
 - Runtime repo-root switching via API/UI (`/list_repo_roots`, `/set_repo_root`)
 - Startup repo-root selection canonicalizes configured and saved paths before
   Saturn repo validation
-- G2 Update is the default landing page (`/`, `update.html`) with Appliance Update policy/start/rollback
+- Overview is the default landing page (`/`, `overview.html`) with live system,
+  radio, network, deployment, p2app, bridge, and Tailscale status plus quick
+  links to common workflows
 - Appliance Update policy panel (right side on desktop, below G2 terminal on narrow screens) stores GitHub repo URL + branch/ref + health-check values used by both Appliance Update and Run Update G2
 - Appliance Update health policy also supports retry count and initial startup
   delay so a good staged switch is less likely to roll back on a slow first
@@ -48,7 +50,13 @@ service names still use `saturn-go` for compatibility with existing installs.
   - `fix-LED-power-button.sh`
   - `setup-eth-fallback.sh`
 - Dedicated Backup / Restore page (`backup.html`) for repo-root management, backup/restore, Pi imaging, clone, and repair tools
-- Navigation/page names in current UI are: `G2 Update`, `Saturn Go`, `piHPSDR Update`, `deskHPSDR Update`, `FPGA Flash`, `Backup / Restore`, `Custom Scripts`, `Monitor`
+- The shared appliance shell provides grouped desktop sidebar navigation, a
+  mobile drawer, common dark/light theming, consistent controls/status tokens,
+  and local browser assets. Navigation groups Overview, Monitor, Saturn Remote,
+  maintenance, applications, and system tools.
+- Tailwind compatibility runtime, Chart.js, ansi_up, and Inter are vendored
+  under `templates/assets/`; maintenance and Remote pages do not require public
+  CDNs to render or operate.
 - Pi image creation workflow with progress, validation, cancel, and download
 - SD-to-removable/USB-device cloning workflow with auto-detected targets, optional quick target wipe, progress, and cancel
 - Repair Pack download and system config verification tools
@@ -102,6 +110,12 @@ update_manager/templates/        # HTML templates copied to web root
 update_manager/scripts/          # script and UI config assets
 ```
 
+Shared UI assets are stored under `update_manager/templates/assets/` and
+deployed to `/var/lib/saturn-web/assets/`. Maintenance pages use prefix-safe
+relative URLs so both direct backend routes and the production `/saturn/`
+Nginx prefix work offline. See `templates/assets/README.md` for pinned versions
+and third-party licenses.
+
 ## Script Metadata and Versions
 
 Script definitions come from `config.json` plus browser-managed custom entries in `custom_scripts.json`.
@@ -109,6 +123,7 @@ Script definitions come from `config.json` plus browser-managed custom entries i
 - UI script list: `/get_scripts`
 - Flag list: `/get_flags`
 - Version list ("Show versions above"): `/get_versions`
+- Overview page: `/` (also `/overview`, `/overview.html`)
 - G2 Update page: `/update` (also `/update.html`)
 - Saturn Go page: `/saturngo` (also `/saturngo.html`, `/saturn-go`, `/saturn-go.html`)
 - Experimental `p2app` service lab page (hidden, no nav link): `/p23test` (also `/p23test.html`)

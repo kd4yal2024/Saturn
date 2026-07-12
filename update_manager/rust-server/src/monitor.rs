@@ -24,9 +24,16 @@ pub struct ProcQuery {
     proc_top: Option<usize>,
     proc_page: Option<usize>,
     proc_page_size: Option<usize>,
+    rate_scope: Option<String>,
 }
 
 pub async fn get_system_data(Query(q): Query<ProcQuery>) -> impl IntoResponse {
+    // Keep overview polling from advancing the Monitor page's rate baseline.
+    // Only fixed scopes are accepted so callers cannot grow the global rate map.
+    let rate_scope = match q.rate_scope.as_deref() {
+        Some("overview") => "overview",
+        _ => "monitor",
+    };
     let cpu = match read_per_core_cpu().await {
         Ok(v) => v,
         Err(e) => {
@@ -56,7 +63,8 @@ pub async fn get_system_data(Query(q): Query<ProcQuery>) -> impl IntoResponse {
     disks.refresh();
     let (d_total_gb, d_used_gb, d_percent) = pick_root_disk(&disks);
     let (d_read_bytes, d_write_bytes) = read_disk_io_totals();
-    let (d_read_bps, d_write_bps) = calc_rate("disk", d_read_bytes, d_write_bytes);
+    let (d_read_bps, d_write_bps) =
+        calc_rate(&format!("disk:{rate_scope}"), d_read_bytes, d_write_bytes);
 
     let mut networks = Networks::new_with_refreshed_list();
     networks.refresh();
@@ -68,7 +76,7 @@ pub async fn get_system_data(Query(q): Query<ProcQuery>) -> impl IntoResponse {
             recv = precv;
         }
     }
-    let (tx_bps, rx_bps) = calc_rate("net", sent, recv);
+    let (tx_bps, rx_bps) = calc_rate(&format!("net:{rate_scope}"), sent, recv);
 
     let procs = list_procs_sysinfo(&sys, total_mem_kb, &q);
     let load = sysinfo::System::load_average();

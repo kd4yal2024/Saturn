@@ -4,9 +4,10 @@
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
 <title>Monitor</title>
-<script src="https://cdn.tailwindcss.com"></script>
-<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="./assets/css/saturn-ui.css">
+<script src="./assets/vendor/tailwind.js"></script>
+<script src="./assets/vendor/chart.js"></script>
+<script src="./assets/js/saturn-shell.js"></script>
 <style>
   :root{
     --bg:#1f2937; --fg:#ffffff; --glass:rgba(255,255,255,0.08); --line:rgba(255,255,255,0.2);
@@ -38,30 +39,14 @@
 </head>
 <body class="min-h-screen p-4 lg:p-6">
   <div class="max-w-6xl mx-auto">
-    <div class="flex items-center justify-between mb-6">
-      <div>
-        <h1 class="text-3xl font-extrabold">Monitor</h1>
-        <p class="opacity-80">Realtime system performance</p>
-      </div>
-      <div class="flex items-center gap-3">
-        <a href="./" class="px-3 py-2 rounded-lg bg-white/10 border border-white/20 hover:bg-white/20">G2 Update</a>
-        <a href="./saturngo" class="px-3 py-2 rounded-lg bg-white/10 border border-white/20 hover:bg-white/20">Saturn Go</a>
-        <a href="./pihpsdr" class="px-3 py-2 rounded-lg bg-white/10 border border-white/20 hover:bg-white/20">piHPSDR Update</a>
-        <a href="./deskhpsdr" class="px-3 py-2 rounded-lg bg-white/10 border border-white/20 hover:bg-white/20">deskHPSDR Update</a>
-        <a href="/remote-next?phase42_split=1&amp;phase44_tx_opus=1&amp;phase44_tx_cfc=1&amp;client_bust=bridgeprefill240-cfcessb3" class="px-3 py-2 rounded-lg bg-white/10 border border-white/20 hover:bg-white/20">Saturn Remote</a>
-        <a href="./fpga" class="px-3 py-2 rounded-lg bg-white/10 border border-white/20 hover:bg-white/20">FPGA Flash</a>
-        <a href="./backup" class="px-3 py-2 rounded-lg bg-white/10 border border-white/20 hover:bg-white/20">Backup / Restore</a>
-        <a href="./custom" class="px-3 py-2 rounded-lg bg-white/10 border border-white/20 hover:bg-white/20">Custom Scripts</a>
-        <a href="./monitor" class="px-3 py-2 rounded-lg bg-white/10 border border-white/20 hover:bg-white/20">Monitor</a>
-        <a href="./tailscale" class="px-3 py-2 rounded-lg bg-white/10 border border-white/20 hover:bg-white/20">Tailscale</a>
-        <button id="theme-toggle" class="px-3 py-2 rounded-lg bg-white/10 border border-white/20" title="Toggle theme">
-          <svg id="theme-icon" class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
-             d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z"/>
-          </svg>
-        </button>
-      </div>
-    </div>
+    <div id="saturn-shell-mount" class="mb-6"></div>
+    <script>
+      SaturnShell.mount({
+        active: 'monitor',
+        title: 'Monitor',
+        subtitle: 'Realtime system performance'
+      });
+    </script>
 
     <!-- Top stats -->
     <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4 mb-6">
@@ -144,25 +129,6 @@
   </div>
 
 <script>
-/* Theme button */
-(function(){
-  const btn = document.getElementById('theme-toggle');
-  const icon = document.getElementById('theme-icon');
-  const stored = localStorage.getItem('theme');
-  const light = stored==='light';
-  document.body.classList.toggle('light', light);
-  icon.innerHTML = light
-    ? '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z"/>'
-    : '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z"/>';
-  btn.addEventListener('click', ()=>{
-    const isLight = document.body.classList.toggle('light');
-    localStorage.setItem('theme', isLight ? 'light':'dark');
-    icon.innerHTML = isLight
-      ? '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z"/>'
-      : '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z"/>';
-  });
-})();
-
 /* Monitor logic */
 const GET_SYSTEM_DATA = './get_system_data';
 const $ = (id)=>document.getElementById(id);

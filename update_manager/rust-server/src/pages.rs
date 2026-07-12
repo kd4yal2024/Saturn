@@ -8,7 +8,11 @@ use std::path::Path;
 use crate::state::AppState;
 
 pub async fn root_handler(State(state): State<AppState>) -> impl IntoResponse {
-    serve_page(&state.webroot, "update.html").await
+    serve_page(&state.webroot, "overview.html").await
+}
+
+pub async fn overview_handler(State(state): State<AppState>) -> impl IntoResponse {
+    serve_page(&state.webroot, "overview.html").await
 }
 
 pub async fn custom_handler(State(state): State<AppState>) -> impl IntoResponse {
@@ -102,7 +106,13 @@ pub async fn healthz() -> impl IntoResponse {
 
 pub fn route_to_page(path: &str) -> Option<&'static str> {
     match path {
-        "/" | "/saturn" | "/saturn/" => Some("update.html"),
+        "/" | "/saturn" | "/saturn/" => Some("overview.html"),
+        "/overview"
+        | "/overview/"
+        | "/overview.html"
+        | "/saturn/overview"
+        | "/saturn/overview/"
+        | "/saturn/overview.html" => Some("overview.html"),
         "/custom"
         | "/custom/"
         | "/custom.html"
@@ -197,6 +207,15 @@ pub async fn fallback_handler(
     axum::extract::OriginalUri(uri): axum::extract::OriginalUri,
 ) -> impl IntoResponse {
     let host = request_host(&headers);
+    let path = uri.path();
+    if path.len() > 1 && path != "/saturn/" && path.ends_with('/') {
+        let canonical_path = path.trim_end_matches('/');
+        let canonical = match uri.query() {
+            Some(query) => format!("{canonical_path}?{query}"),
+            None => canonical_path.to_string(),
+        };
+        return Redirect::permanent(&canonical).into_response();
+    }
     if let Some(page) = route_to_page(uri.path()) {
         if page == "saturn-remote.html" {
             return Redirect::temporary(&remote_https_url(host)).into_response();
@@ -217,6 +236,62 @@ pub async fn serve_page(webroot: &Path, page: &str) -> Response {
             Html(body),
         )
             .into_response(),
+        Err(_) => (StatusCode::NOT_FOUND, "page not found").into_response(),
+    }
+}
+
+/// Rejects any path with a `..`, empty, or otherwise non-literal component so
+/// `/assets/{*path}` can never escape `webroot/assets`.
+pub fn is_safe_asset_path(path: &str) -> bool {
+    !path.is_empty()
+        && Path::new(path)
+            .components()
+            .all(|c| matches!(c, std::path::Component::Normal(_)))
+}
+
+fn asset_content_type(path: &str) -> &'static str {
+    let ext = Path::new(path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    match ext.as_str() {
+        "css" => "text/css; charset=utf-8",
+        "js" => "text/javascript; charset=utf-8",
+        "woff2" => "font/woff2",
+        "woff" => "font/woff",
+        "ttf" => "font/ttf",
+        "svg" => "image/svg+xml",
+        "png" => "image/png",
+        "ico" => "image/x-icon",
+        "json" => "application/json",
+        _ => "application/octet-stream",
+    }
+}
+
+pub async fn asset_handler(
+    State(state): State<AppState>,
+    axum::extract::Path(path): axum::extract::Path<String>,
+) -> Response {
+    if !is_safe_asset_path(&path) {
+        return (StatusCode::NOT_FOUND, "page not found").into_response();
+    }
+    let asset_path = state.webroot.join("assets").join(&path);
+    match tokio::fs::read(&asset_path).await {
+        Ok(bytes) => {
+            let content_type = asset_content_type(&path);
+            // Asset filenames are stable rather than content-hashed, so every
+            // class of asset must revalidate after an appliance update.
+            let cache_control = "no-cache, no-store, must-revalidate";
+            (
+                [
+                    (header::CONTENT_TYPE, content_type),
+                    (header::CACHE_CONTROL, cache_control),
+                ],
+                bytes,
+            )
+                .into_response()
+        }
         Err(_) => (StatusCode::NOT_FOUND, "page not found").into_response(),
     }
 }
@@ -257,9 +332,14 @@ mod tests {
     // --- route_to_page ---
 
     #[test]
-    fn test_root_routes_to_update() {
-        assert_eq!(route_to_page("/"), Some("update.html"));
-        assert_eq!(route_to_page("/saturn"), Some("update.html"));
+    fn test_root_routes_to_overview() {
+        assert_eq!(route_to_page("/"), Some("overview.html"));
+        assert_eq!(route_to_page("/saturn"), Some("overview.html"));
+        assert_eq!(route_to_page("/overview"), Some("overview.html"));
+        assert_eq!(
+            route_to_page("/saturn/overview.html"),
+            Some("overview.html")
+        );
         assert_eq!(route_to_page("/update"), Some("update.html"));
         assert_eq!(route_to_page("/update.html"), Some("update.html"));
     }
@@ -323,6 +403,26 @@ mod tests {
             .unwrap();
         let res = app.oneshot(req).await.unwrap();
         assert_eq!(res.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn test_fallback_redirects_trailing_slash_to_canonical_page() {
+        let state = test_state();
+        let app = axum::Router::new()
+            .fallback(get(fallback_handler))
+            .with_state(state);
+        let req = Request::builder()
+            .method("GET")
+            .uri("/saturn/monitor/?view=cpu")
+            .header("host", "127.0.0.1:8080")
+            .body(Body::empty())
+            .unwrap();
+        let res = app.oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::PERMANENT_REDIRECT);
+        assert_eq!(
+            res.headers().get(header::LOCATION).unwrap(),
+            "/saturn/monitor?view=cpu"
+        );
     }
 
     /// A request for a known route alias whose HTML file does not exist on disk
@@ -402,6 +502,71 @@ mod tests {
             res.headers().get(header::LOCATION).unwrap(),
             "https://192.168.0.139:8443/remote-next?phase42_split=1&phase44_tx_opus=1&phase44_tx_cfc=1&client_bust=bridgeprefill240-cfcessb3"
         );
+    }
+
+    // --- asset_handler / is_safe_asset_path ---
+
+    #[test]
+    fn test_safe_asset_path_rejects_traversal() {
+        assert!(!is_safe_asset_path("../../etc/passwd"));
+        assert!(!is_safe_asset_path("css/../../../etc/passwd"));
+        assert!(!is_safe_asset_path(""));
+        assert!(!is_safe_asset_path("/etc/passwd"));
+    }
+
+    #[test]
+    fn test_safe_asset_path_accepts_normal_paths() {
+        assert!(is_safe_asset_path("css/saturn-ui.css"));
+        assert!(is_safe_asset_path("js/saturn-shell.js"));
+        assert!(is_safe_asset_path("vendor/tailwind.js"));
+    }
+
+    #[tokio::test]
+    async fn test_asset_handler_serves_existing_file_with_content_type() {
+        let state = test_state();
+        let assets_dir = state.webroot.join("assets/css");
+        tokio::fs::create_dir_all(&assets_dir).await.unwrap();
+        tokio::fs::write(assets_dir.join("saturn-ui.css"), b"body{color:red}")
+            .await
+            .unwrap();
+
+        let app = axum::Router::new()
+            .route("/assets/{*path}", get(asset_handler))
+            .with_state(state.clone());
+        let req = Request::builder()
+            .method("GET")
+            .uri("/assets/css/saturn-ui.css")
+            .body(Body::empty())
+            .unwrap();
+        let res = app.oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        assert_eq!(
+            res.headers().get(header::CONTENT_TYPE).unwrap(),
+            "text/css; charset=utf-8"
+        );
+        assert_eq!(
+            res.headers().get(header::CACHE_CONTROL).unwrap(),
+            "no-cache, no-store, must-revalidate"
+        );
+
+        tokio::fs::remove_dir_all(state.webroot.join("assets"))
+            .await
+            .ok();
+    }
+
+    #[tokio::test]
+    async fn test_asset_handler_rejects_traversal_with_404() {
+        let state = test_state();
+        let app = axum::Router::new()
+            .route("/assets/{*path}", get(asset_handler))
+            .with_state(state);
+        let req = Request::builder()
+            .method("GET")
+            .uri("/assets/..%2f..%2fetc%2fpasswd")
+            .body(Body::empty())
+            .unwrap();
+        let res = app.oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::NOT_FOUND);
     }
 
     /// healthz must return 200 regardless of filesystem state.

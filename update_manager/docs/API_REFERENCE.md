@@ -22,7 +22,9 @@ Backend also enforces same-host checks when `Origin` or `Referer` is present.
 
 | Route | Method | CSRF | Description |
 |---|---|---|---|
-| `/` | `GET` | No | Serve `update.html` (G2 Update landing page). |
+| `/` | `GET` | No | Serve `overview.html` (Saturn Go Overview landing page). |
+| `/overview` | `GET` | No | Serve `overview.html`. |
+| `/overview.html` | `GET` | No | Serve `overview.html`. |
 | `/custom` | `GET` | No | Serve `index.html` (Custom Scripts page). |
 | `/custom.html` | `GET` | No | Serve `index.html` (Custom Scripts page). |
 | `/index` | `GET` | No | Serve `index.html` (Custom Scripts page). |

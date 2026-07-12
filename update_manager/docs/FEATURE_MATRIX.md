@@ -6,6 +6,7 @@ The Saturn Remote frontend currently ships in two parallel forms against the sam
 
 | Capability | UI | API Endpoints | Scripts / Commands | State / Files |
 |---|---|---|---|---|
+| Appliance overview and shared offline shell | `overview.html`, `templates/assets/` | `GET /`, `GET /overview`, `GET /assets/{*path}` | Local Inter/Tailwind/Chart.js/ansi_up assets; Nginx `/saturn/` proxy | Browser theme preference |
 | Browser-managed custom script runner with live output | `index.html` (`/custom`) | `POST /run`, `GET /run_log` | `/opt/saturn-go/scripts/*` launched by backend | `custom_scripts.json`, in-memory run-log buffer |
 | Custom script catalog management (add/update/delete + upload) | `index.html` (`/custom`) | `GET/POST /custom_scripts`, `POST /custom_scripts_delete` | Optional script file write/remove in scripts dir | `custom_scripts.json`, `/opt/saturn-go/scripts` |
 | Backend-seeded default custom maintenance scripts | `index.html` (`/custom`) | `GET /custom_scripts` | `cleanup-saturn-logs.sh`, `cleanup-saturn-backups.sh` | `custom_scripts.json`, `/opt/saturn-go/scripts` |

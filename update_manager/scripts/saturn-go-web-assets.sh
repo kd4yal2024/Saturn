@@ -2,6 +2,7 @@
 # Shared Saturn Go web asset manifest and copy helpers.
 
 SATURN_GO_HTML_ASSETS=(
+  "overview.html"
   "index.html"
   "monitor.html"
   "backup.html"
@@ -171,4 +172,21 @@ saturn_go_copy_optional_web_assets() {
   for name in "${SATURN_GO_OPTIONAL_TEMPLATE_ASSETS[@]}"; do
     saturn_go_copy_template_asset "$templates_dir" "$repo_dir" "$dest_dir" "$name" || true
   done
+}
+
+# Shared appliance-shell assets (saturn-ui.css, saturn-shell.js, vendored
+# CDN libraries, self-hosted fonts) live in templates/assets/ and are copied
+# as a directory tree to dest_dir/assets/.
+saturn_go_copy_shared_assets() {
+  local templates_dir="$1"
+  local dest_dir="$2"
+  local src_dir="$templates_dir/assets"
+
+  if [[ ! -d "$src_dir" ]]; then
+    echo "[ERR] shared web assets directory not found: $src_dir" >&2
+    return 1
+  fi
+
+  mkdir -p "$dest_dir/assets"
+  cp -rf "$src_dir/." "$dest_dir/assets/"
 }

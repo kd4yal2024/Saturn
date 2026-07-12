@@ -4,10 +4,14 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Saturn Remote</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Oxanium:wght@400;500;600;700&family=Space+Grotesk:wght@400;500;700&display=swap" rel="stylesheet">
   <style>
+    @font-face {
+      font-family: "Inter";
+      font-style: normal;
+      font-weight: 400 800;
+      font-display: swap;
+      src: url("/remote-assets/inter.woff2") format("woff2");
+    }
     :root {
       color-scheme: dark;
       --bg-0: #071217;
@@ -31,8 +35,8 @@
       --saturn-alarm: #dc2626;
       --saturn-ok: #22c55e;
       --shadow: rgba(2, 12, 16, 0.45);
-      --mono: "IBM Plex Mono", "SFMono-Regular", Consolas, monospace;
-      --sans: "Space Grotesk", "Trebuchet MS", "Segoe UI", sans-serif;
+      --mono: ui-monospace, "SFMono-Regular", Consolas, monospace;
+      --sans: "Inter", "Segoe UI", system-ui, sans-serif;
     }
     * { box-sizing: border-box; }
     html, body { min-height: 100%; }
@@ -775,7 +779,7 @@
       --accent: #42d4c8;
       --accent-warm: #c8a25e;
       --shadow: rgba(0, 0, 0, 0.36);
-      --display: "Oxanium", "Space Grotesk", sans-serif;
+      --display: "Inter", "Segoe UI", system-ui, sans-serif;
       --theme-body-bg:
         radial-gradient(circle at 16% 0%, rgba(66, 212, 200, 0.10), transparent 24%),
         radial-gradient(circle at 92% 4%, rgba(200, 162, 94, 0.10), transparent 24%),
@@ -4010,11 +4014,14 @@
 
       .operator-state-strip {
         display: grid;
-        grid-auto-flow: column;
-        grid-auto-columns: 132px;
-        grid-template-columns: none;
-        overflow-x: auto;
-        overscroll-behavior-inline: contain;
+        grid-auto-flow: row;
+        grid-auto-columns: auto;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        overflow-x: visible;
+      }
+
+      .operator-pill > div {
+        min-width: 0;
       }
 
       .strip-grid {
@@ -4067,12 +4074,23 @@
         <span class="status-chip ghost" id="static-wsdiag-marker">Diag loading</span>
         <button class="btn ghost" id="static-wsdiag-btn" type="button">WS Probe</button>
         <button class="btn ghost" id="static-wsdiag-copy-btn" type="button">Copy Log</button>
-        <a class="nav-link" href="./monitor">Monitor</a>
+        <a class="nav-link" id="saturn-manage-home" href="#" title="Open the Saturn Go management UI">Saturn Go</a>
+        <a class="nav-link" id="saturn-manage-monitor" href="#" title="Open system monitoring">Monitor</a>
         <button class="btn ghost shortcut-help-btn" id="shortcut-help-btn" type="button" aria-label="Show operator controls" title="Show operator controls">?</button>
         <button class="btn ghost" id="layout-btn" type="button">Phone: Off</button>
         <button class="btn ghost" id="theme-btn" type="button">Theme: Dark</button>
       </div>
     </header>
+
+    <script>
+      (function wireSaturnManagementLinks(){
+        var host = window.location.hostname || 'localhost';
+        if (host.indexOf(':') !== -1 && host.charAt(0) !== '[') host = '[' + host + ']';
+        var base = 'http://' + host + '/saturn/';
+        document.getElementById('saturn-manage-home').href = base;
+        document.getElementById('saturn-manage-monitor').href = base + 'monitor';
+      })();
+    </script>
 
     <section class="operator-state-strip" aria-label="Operator state">
       <div class="operator-pill" id="operator-conn-pill" data-tone="warn" role="button" tabindex="0" aria-haspopup="dialog" aria-controls="operator-detail-overlay">

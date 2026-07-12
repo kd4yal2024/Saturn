@@ -461,7 +461,8 @@ curl -fsS "http://127.0.0.1:8080/run_log?script=update-G2.py&from=0&limit=20"
 
 ### Navigation Layout
 
-- `/saturn/` opens G2 Update (default landing page).
+- `/saturn/` opens the Saturn Go Overview dashboard; G2 Update remains at
+  `/saturn/update`.
 - `/saturn/saturngo` opens dedicated Saturn Go self-update page.
 - `/saturn/pihpsdr` opens dedicated piHPSDR update page.
 - `/saturn/deskhpsdr` opens dedicated deskHPSDR update page.

@@ -294,13 +294,32 @@ async fn remote_asset_handler(
         return rejection;
     }
 
-    let filename = match asset.as_str() {
-        "storage.js" => "saturn-remote-storage.js",
-        "session.js" => "saturn-remote-session.js",
-        "tci.js" => "saturn-remote-tci.js",
-        "transport.js" => "saturn-remote-transport.js",
-        "browser.js" => "saturn-remote-browser.js",
-        "remote-next.js" => "saturn-remote-next.js",
+    let (filename, content_type) = match asset.as_str() {
+        "storage.js" => (
+            "saturn-remote-storage.js",
+            "application/javascript; charset=utf-8",
+        ),
+        "session.js" => (
+            "saturn-remote-session.js",
+            "application/javascript; charset=utf-8",
+        ),
+        "tci.js" => (
+            "saturn-remote-tci.js",
+            "application/javascript; charset=utf-8",
+        ),
+        "transport.js" => (
+            "saturn-remote-transport.js",
+            "application/javascript; charset=utf-8",
+        ),
+        "browser.js" => (
+            "saturn-remote-browser.js",
+            "application/javascript; charset=utf-8",
+        ),
+        "remote-next.js" => (
+            "saturn-remote-next.js",
+            "application/javascript; charset=utf-8",
+        ),
+        "inter.woff2" => ("assets/fonts/inter-latin-var.woff2", "font/woff2"),
         _ => return (StatusCode::NOT_FOUND, "asset not found").into_response(),
     };
 
@@ -308,10 +327,7 @@ async fn remote_asset_handler(
         Ok(body) => (
             [
                 (header::CACHE_CONTROL, "no-cache, no-store, must-revalidate"),
-                (
-                    header::CONTENT_TYPE,
-                    "application/javascript; charset=utf-8",
-                ),
+                (header::CONTENT_TYPE, content_type),
             ],
             body,
         )
@@ -1494,6 +1510,30 @@ mod tests {
         );
         let body = to_bytes(res.into_body(), 4096).await.unwrap();
         assert_eq!(body, &b"window.testStorage = true;"[..]);
+    }
+
+    #[tokio::test]
+    async fn remote_asset_route_serves_local_inter_font() {
+        let state = test_state("asset-font");
+        let font_dir = state.webroot.join("assets/fonts");
+        tokio::fs::create_dir_all(&font_dir).await.unwrap();
+        tokio::fs::write(font_dir.join("inter-latin-var.woff2"), b"font-data")
+            .await
+            .unwrap();
+
+        let app = remote_tls_router(state);
+        let req = Request::builder()
+            .uri("/remote-assets/inter.woff2")
+            .body(Body::empty())
+            .unwrap();
+        let res = app.oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        assert_eq!(
+            res.headers().get(header::CONTENT_TYPE).unwrap(),
+            "font/woff2"
+        );
+        let body = to_bytes(res.into_body(), 4096).await.unwrap();
+        assert_eq!(body, &b"font-data"[..]);
     }
 
     #[tokio::test]
