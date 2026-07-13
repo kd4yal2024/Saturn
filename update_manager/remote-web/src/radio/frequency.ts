@@ -1,5 +1,8 @@
 export const MIN_FREQUENCY_HZ = 0;
-export const MAX_FREQUENCY_HZ = 64_000_000;
+// Saturn's 122.88 MHz ADC clock permits direct sampling through its first
+// Nyquist zone. Keep the browser controls aligned with the bridge-side
+// frequency clamp so the 88-108 MHz FM broadcast band remains reachable.
+export const MAX_FREQUENCY_HZ = 122_880_000;
 
 export function clampFrequencyHz(value: number): number {
   if (!Number.isFinite(value)) return MIN_FREQUENCY_HZ;
