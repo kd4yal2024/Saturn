@@ -1123,6 +1123,14 @@
       margin-bottom: 14px;
     }
 
+    .operator-detail-actions {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
     .operator-detail-title {
       margin: 0;
       font-size: 18px;
@@ -5133,7 +5141,10 @@
           <h2 class="operator-detail-title" id="operator-detail-title">Operator State</h2>
           <div class="operator-detail-subtitle" id="operator-detail-subtitle">Snapshot</div>
         </div>
-        <button class="btn ghost" id="operator-detail-close-btn" type="button">Close</button>
+        <div class="operator-detail-actions">
+          <button class="btn alt" id="operator-detail-copy-rx-btn" type="button">Copy RX Latency</button>
+          <button class="btn ghost" id="operator-detail-close-btn" type="button">Close</button>
+        </div>
       </div>
       <div class="operator-detail-grid" id="operator-detail-grid"></div>
     </div>
@@ -5195,7 +5206,7 @@
 
   <script>
     (() => {
-      const DIAG_VERSION = "bridgeprefill240-cfcessb3";
+      const DIAG_VERSION = "bridgeprefill240-cfcessb3-rxcopy1";
       window.saturnDiagLastError = "";
       window.saturnDiagText = "";
       window.addEventListener("error", (event) => {
@@ -5336,7 +5347,7 @@
     })();
   </script>
   <script
-    src="/remote-assets/remote-next.js?v=phase44-opus-bridgeprefill240-cfcessb3"
+    src="/remote-assets/remote-next.js?v=phase44-opus-bridgeprefill240-cfcessb3-rxcopy1"
     onload="window.saturnRemoteBundleLoaded=true"
     onerror="window.saturnRemoteBundleError=true; window.saturnDiagLastError='remote-next.js failed to load'; window.saturnSetWsDiag && window.saturnSetWsDiag('JS error: remote-next.js failed to load')"
   ></script>
@@ -7608,6 +7619,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     function bindOperatorStateDetail() {
       const overlay = $("operator-detail-overlay");
       const closeButton = $("operator-detail-close-btn");
+      const copyRxButton = $("operator-detail-copy-rx-btn");
       if (!overlay || !closeButton) {
         return;
       }
@@ -7622,6 +7634,9 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         });
       });
       closeButton.addEventListener("click", closeOperatorStateDetail);
+      copyRxButton?.addEventListener("click", () => {
+        void copyRxLatencyDiagnostic();
+      });
       overlay.addEventListener("pointerdown", (event) => {
         if (event.target === overlay) {
           closeOperatorStateDetail();
@@ -9793,6 +9808,67 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         },
       ];
     }
+
+    function rxLatencyDiagnosticText(now = performance.now()) {
+      const audioQueueMs = audioLeadMs();
+      const audioAge = metricAgeMs(state.lastAudioFrameAt, now);
+      const iqAge = metricAgeMs(state.lastFrameAt, now);
+      const recoveryMs = state.connectionLossStartedAt
+        ? Math.max(0, now - state.connectionLossStartedAt)
+        : state.connectionRecoveryMs;
+      const audioDropEvents = state.audioBackpressureDrops + state.rxWorkletDrops;
+      return _next.formatRxLatencyDiagnostic({
+        capturedAtIso: new Date().toISOString(),
+        connection: state.connected ? "Connected" : (state.connectPending ? "Connecting" : "Disconnected"),
+        bridgeUrl: state.wsUrl || window.location.host || "Default",
+        networkProfile: networkProfileLabel(now),
+        audioProfile: audioProfileLabel(),
+        bridgeRttMs: state.bridgeRttMs,
+        jitterP50Ms: state.rxAudioJitterP50Ms,
+        jitterP95Ms: state.rxAudioJitterP95Ms,
+        jitterP99Ms: state.rxAudioJitterP99Ms,
+        jitterSampleCount: state.rxAudioJitterSamples.length,
+        audioQueueMs,
+        workletUnderruns: state.rxWorkletUnderruns,
+        workletOverflows: state.rxWorkletOverflows,
+        audioDropEvents,
+        audioContextBaseLatencyMs: state.audioContextBaseLatencyMs,
+        audioContextOutputLatencyMs: state.audioContextOutputLatencyMs,
+        audioFrameAgeMs: audioAge,
+        iqFrameAgeMs: iqAge,
+        bridgeBacklogBytes: state.bridgeOutboundQueuedBytes,
+        browserBacklogBytes: state.wsMediaBacklogBytes,
+        bridgeHighWaterBytes: state.outboundHighWatermarkBytes,
+        tcpHighWaterBytes: state.bridgeTcpOutqHighWatermarkBytes,
+        connectionRecoveryMs: recoveryMs,
+        connectionLossCount: state.connectionLossCount,
+        audioSequenceGaps: state.audioSeqGapCount,
+      });
+    }
+
+    async function copyRxLatencyDiagnostic() {
+      const text = rxLatencyDiagnosticText();
+      const button = $("operator-detail-copy-rx-btn");
+      try {
+        if (!navigator.clipboard || typeof navigator.clipboard.writeText !== "function") {
+          throw new Error("Clipboard API unavailable");
+        }
+        await navigator.clipboard.writeText(text);
+        if (button) {
+          button.textContent = "Copied";
+          window.setTimeout(() => {
+            if (button) button.textContent = "Copy RX Latency";
+          }, 1600);
+        }
+        logEvent("Copied RX latency diagnostics");
+      } catch (_) {
+        window.prompt("Copy RX latency diagnostics", text);
+      }
+      return text;
+    }
+
+    window.saturnGetRxLatencyText = rxLatencyDiagnosticText;
+    window.saturnCopyRxLatency = copyRxLatencyDiagnostic;
 
     function renderOperatorDetailItem(item) {
       const row = document.createElement("div");

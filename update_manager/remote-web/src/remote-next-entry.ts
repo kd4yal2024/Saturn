@@ -125,6 +125,7 @@ import {
 import { resampleChannel, prepareAudioForPlayback, ringBufferFreeFrames } from './audio/resample';
 import {
   audioFramesToMilliseconds,
+  formatRxLatencyDiagnostic,
   percentileMs,
   rxAudioArrivalJitterMs,
   summarizeRxAudioJitter,
@@ -303,6 +304,7 @@ const api = {
   prepareAudioForPlayback,
   ringBufferFreeFrames,
   audioFramesToMilliseconds,
+  formatRxLatencyDiagnostic,
   percentileMs,
   rxAudioArrivalJitterMs,
   summarizeRxAudioJitter,
@@ -477,6 +479,7 @@ export {
   prepareAudioForPlayback,
   ringBufferFreeFrames,
   audioFramesToMilliseconds,
+  formatRxLatencyDiagnostic,
   percentileMs,
   rxAudioArrivalJitterMs,
   summarizeRxAudioJitter,

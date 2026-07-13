@@ -5,6 +5,34 @@ export type RxJitterPercentiles = {
   sampleCount: number;
 };
 
+export type RxLatencyDiagnostic = {
+  capturedAtIso: string;
+  connection: string;
+  bridgeUrl: string;
+  networkProfile: string;
+  audioProfile: string;
+  bridgeRttMs: number | null;
+  jitterP50Ms: number;
+  jitterP95Ms: number;
+  jitterP99Ms: number;
+  jitterSampleCount: number;
+  audioQueueMs: number | null;
+  workletUnderruns: number;
+  workletOverflows: number;
+  audioDropEvents: number;
+  audioContextBaseLatencyMs: number | null;
+  audioContextOutputLatencyMs: number | null;
+  audioFrameAgeMs: number | null;
+  iqFrameAgeMs: number | null;
+  bridgeBacklogBytes: number;
+  browserBacklogBytes: number;
+  bridgeHighWaterBytes: number;
+  tcpHighWaterBytes: number;
+  connectionRecoveryMs: number | null;
+  connectionLossCount: number;
+  audioSequenceGaps: number;
+};
+
 function finiteNonNegative(value: number): number {
   return Number.isFinite(value) ? Math.max(0, value) : 0;
 }
@@ -57,4 +85,37 @@ export function audioFramesToMilliseconds(frames: number, sampleRate: number): n
     return 0;
   }
   return (frames / sampleRate) * 1000;
+}
+
+function diagnosticNumber(value: number, digits = 1): string {
+  return finiteNonNegative(value).toFixed(digits);
+}
+
+function diagnosticMilliseconds(value: number | null): string {
+  return value == null || !Number.isFinite(value) ? 'unavailable' : `${diagnosticNumber(value)} ms`;
+}
+
+function diagnosticBytes(value: number): string {
+  return `${Math.round(finiteNonNegative(value))} B`;
+}
+
+export function formatRxLatencyDiagnostic(value: RxLatencyDiagnostic): string {
+  return [
+    'Saturn Remote RX Latency',
+    `Captured: ${value.capturedAtIso || 'unknown'}`,
+    `Connection: ${value.connection || 'unknown'}`,
+    `Bridge: ${value.bridgeUrl || 'default'}`,
+    `Profiles: ${value.networkProfile || 'unknown'} / ${value.audioProfile || 'unknown'}`,
+    `Bridge RTT: ${diagnosticMilliseconds(value.bridgeRttMs)}`,
+    `Packet jitter p50/p95/p99: ${diagnosticNumber(value.jitterP50Ms)} / ${diagnosticNumber(value.jitterP95Ms)} / ${diagnosticNumber(value.jitterP99Ms)} ms (${Math.max(0, Math.round(value.jitterSampleCount || 0))} samples)`,
+    `Audio queue: ${diagnosticMilliseconds(value.audioQueueMs)}`,
+    `Worklet underruns/overflows: ${Math.max(0, Math.round(value.workletUnderruns || 0))} / ${Math.max(0, Math.round(value.workletOverflows || 0))}`,
+    `Audio drop/resync events: ${Math.max(0, Math.round(value.audioDropEvents || 0))}`,
+    `AudioContext base/output: ${diagnosticMilliseconds(value.audioContextBaseLatencyMs)} / ${diagnosticMilliseconds(value.audioContextOutputLatencyMs)}`,
+    `Frame age audio/IQ: ${diagnosticMilliseconds(value.audioFrameAgeMs)} / ${diagnosticMilliseconds(value.iqFrameAgeMs)}`,
+    `Media backlog bridge/browser: ${diagnosticBytes(value.bridgeBacklogBytes)} / ${diagnosticBytes(value.browserBacklogBytes)}`,
+    `Backlog high-water bridge/TCP: ${diagnosticBytes(value.bridgeHighWaterBytes)} / ${diagnosticBytes(value.tcpHighWaterBytes)}`,
+    `Recovery/losses: ${diagnosticMilliseconds(value.connectionRecoveryMs)} / ${Math.max(0, Math.round(value.connectionLossCount || 0))}`,
+    `Audio sequence gaps: ${Math.max(0, Math.round(value.audioSequenceGaps || 0))}`,
+  ].join('\n');
 }
