@@ -87,6 +87,7 @@ import {
   PHASE42_MEDIA_BACKLOG_HARD_CAP_BYTES,
 } from './transport/split-sockets';
 import { createPhase42LegacySocketAdapter } from './transport/phase42-adapter';
+import { createReconnectSupervisor, reconnectDelayMs } from './transport/reconnect-supervisor';
 import {
   PHASE42_SPLIT_QUERY_PARAM,
   PHASE42_SPLIT_STORAGE_KEY,
@@ -217,6 +218,8 @@ const api = {
   PHASE42_SOCKET_OPEN,
   buildPhase42SessionOpenMessage,
   createPhase42SplitSocketClient,
+  createReconnectSupervisor,
+  reconnectDelayMs,
   derivePhase42SplitSocketUrls,
   decidePhase42MediaSend,
   PHASE42_MEDIA_BACKLOG_HARD_CAP_BYTES,
@@ -398,6 +401,8 @@ export {
   PHASE42_SOCKET_OPEN,
   buildPhase42SessionOpenMessage,
   createPhase42SplitSocketClient,
+  createReconnectSupervisor,
+  reconnectDelayMs,
   derivePhase42SplitSocketUrls,
   decidePhase42MediaSend,
   PHASE42_MEDIA_BACKLOG_HARD_CAP_BYTES,

@@ -60,6 +60,9 @@ describe('RX audio telemetry', () => {
       connectionRecoveryMs: null,
       connectionLossCount: 0,
       audioSequenceGaps: 1,
+      reconnectPhase: 'online',
+      reconnectAttempt: 0,
+      reconnectReason: '',
     });
 
     expect(text).toContain('Saturn Remote RX Latency');
@@ -68,5 +71,6 @@ describe('RX audio telemetry', () => {
     expect(text).toContain('Worklet underruns/overflows: 3 / 1');
     expect(text).toContain('AudioContext base/output: 10.0 ms / unavailable');
     expect(text).toContain('Media backlog bridge/browser: 4096 B / 0 B');
+    expect(text).toContain('Reconnect: online | attempt 0');
   });
 });

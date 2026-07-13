@@ -207,7 +207,7 @@ function makeScenarioHtml(template, scenario) {
   document.documentElement.dataset.phoneWaterfall = "hidden";
   const drawerOpen = ${JSON.stringify(Boolean(scenario.drawerOpen))};
   const values = {
-    "operator-conn": ["ok", "Connected", "Static validation state"],
+    "operator-conn": ["warn", "Reconnecting 12", "Static validation state"],
     "operator-owner": ["warn", "Role pending", "Static validation state"],
     "operator-rxtx": ["keyed", "PTT ON AIR", "Static validation state"],
     "operator-rf": ["alarm", "RF disabled", "Static validation state"],

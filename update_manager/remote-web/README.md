@@ -27,9 +27,9 @@ template because they are tightly coupled to the live page.
 | `tests/` | Vitest unit, integration, smoke, and Phase 44 acceptance coverage |
 | `scripts/validate-remote-next-layout.mjs` | Headless Chromium responsive-layout gate |
 
-As validated on 2026-07-12, the suite contains 31 test files and 301 passing
-tests. The production bundle is approximately 88.04 kB (24.30 kB gzip), with a
-separate source map generated for diagnostics.
+The automated suite covers unit, transport, controller, smoke, responsive
+layout, TX-safety, and reconnection behavior. The production bundle is emitted
+with a separate source map for diagnostics.
 
 ## Commands
 
@@ -111,6 +111,21 @@ saturn-remote-next.html  <--->  /remote-assets + /tci  <--->  TCI + WDSP + G2
 Saturn Go provides TLS/authentication, Remote assets, persisted settings and
 profiles, and the WebSocket proxy. `saturn-bridge` owns the real-time TCI,
 Protocol 2, audio/DSP, and radio-session boundary.
+
+## Automatic Reconnection
+
+`/remote-next` treats the Phase 42 control and media sockets as one supervised
+session. If either lane fails, the paired lane closes and the browser retries
+with exponential backoff and jitter. A connection is not considered recovered
+until the bridge sends its TCI `ready` message; both socket-connect and
+bridge-ready watchdogs prevent a half-open session from hanging indefinitely.
+
+The supervisor pauses while the browser reports that the network is offline,
+retries immediately when connectivity returns, and cancels all pending work
+after **Go Offline**. After bridge readiness it restores the previous IQ and RX
+audio choices, frequency, sample rate, and radio preferences. Transmit remains
+fail-closed: MOX, PTT, microphone capture, and TX readiness are never restored
+automatically.
 
 ## Future Refactoring
 

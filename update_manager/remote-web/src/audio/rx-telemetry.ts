@@ -31,6 +31,9 @@ export type RxLatencyDiagnostic = {
   connectionRecoveryMs: number | null;
   connectionLossCount: number;
   audioSequenceGaps: number;
+  reconnectPhase?: string;
+  reconnectAttempt?: number;
+  reconnectReason?: string;
 };
 
 function finiteNonNegative(value: number): number {
@@ -100,7 +103,7 @@ function diagnosticBytes(value: number): string {
 }
 
 export function formatRxLatencyDiagnostic(value: RxLatencyDiagnostic): string {
-  return [
+  const lines = [
     'Saturn Remote RX Latency',
     `Captured: ${value.capturedAtIso || 'unknown'}`,
     `Connection: ${value.connection || 'unknown'}`,
@@ -117,5 +120,10 @@ export function formatRxLatencyDiagnostic(value: RxLatencyDiagnostic): string {
     `Backlog high-water bridge/TCP: ${diagnosticBytes(value.bridgeHighWaterBytes)} / ${diagnosticBytes(value.tcpHighWaterBytes)}`,
     `Recovery/losses: ${diagnosticMilliseconds(value.connectionRecoveryMs)} / ${Math.max(0, Math.round(value.connectionLossCount || 0))}`,
     `Audio sequence gaps: ${Math.max(0, Math.round(value.audioSequenceGaps || 0))}`,
-  ].join('\n');
+  ];
+  if (value.reconnectPhase) {
+    const reason = value.reconnectReason ? ` | ${value.reconnectReason}` : '';
+    lines.push(`Reconnect: ${value.reconnectPhase} | attempt ${Math.max(0, Math.round(value.reconnectAttempt || 0))}${reason}`);
+  }
+  return lines.join('\n');
 }

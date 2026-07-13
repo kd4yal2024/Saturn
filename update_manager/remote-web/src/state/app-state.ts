@@ -34,7 +34,9 @@ export interface AppState {
   ws: WebSocket | null;
   wsUrl: string;
   connected: boolean;
+  bridgeReady: boolean;
   connectPending: boolean;
+  connectionGeneration: number;
   iqStreaming: boolean;
   audioStreaming: boolean;
   demoMode: boolean;
@@ -320,7 +322,9 @@ export function createAppState(): AppState {
     ws: null,
     wsUrl: '',
     connected: false,
+    bridgeReady: false,
     connectPending: false,
+    connectionGeneration: 0,
     iqStreaming: false,
     audioStreaming: false,
     demoMode: false,

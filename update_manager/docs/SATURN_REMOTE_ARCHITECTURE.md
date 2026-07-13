@@ -134,7 +134,8 @@ Expected direction:
 - FFT row transport for panadapter/waterfall
 - compressed receive audio
 - explicit TX session ownership
-- reconnect policy and buffering
+- supervised split-lane reconnection with bounded exponential backoff, browser
+  online/offline handling, bridge-ready gating, and RX-only session replay
 - authenticated and proxied WebSocket path
 
 That keeps the browser UI responsive and cuts bandwidth substantially.

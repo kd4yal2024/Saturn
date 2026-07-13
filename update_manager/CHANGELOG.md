@@ -4,6 +4,14 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
 
 ## [Unreleased]
 ### Added
+- Saturn Remote `/remote-next` now automatically recovers from bridge restarts,
+  split control/media lane failures, and browser network interruptions. A
+  single session supervisor uses bounded exponential backoff with jitter,
+  socket-connect and bridge-ready watchdogs, stale-attempt rejection, and
+  browser online/offline awareness. Recovery replays frequency, preferences,
+  IQ, and RX audio only after the bridge reports ready, while TX/PTT/microphone
+  state remains fail-closed. Connection status, retry attempts, reasons, and
+  recovery timing are visible in Operator State and copied RX diagnostics.
 - Update G2 logging now survives an unwritable `~/saturn-logs` directory by
   warning and using a private temporary log. The installer repairs the primary
   log directory ownership for the configured Saturn Go service user and passes

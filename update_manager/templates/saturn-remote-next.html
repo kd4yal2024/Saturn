@@ -5206,7 +5206,7 @@
 
   <script>
     (() => {
-      const DIAG_VERSION = "bridgeprefill240-cfcessb3-rxcopy1";
+      const DIAG_VERSION = "bridgeprefill240-cfcessb3-reconnect1";
       window.saturnDiagLastError = "";
       window.saturnDiagText = "";
       window.addEventListener("error", (event) => {
@@ -5347,7 +5347,7 @@
     })();
   </script>
   <script
-    src="/remote-assets/remote-next.js?v=phase44-opus-bridgeprefill240-cfcessb3-rxcopy1"
+    src="/remote-assets/remote-next.js?v=phase44-opus-bridgeprefill240-cfcessb3-reconnect1"
     onload="window.saturnRemoteBundleLoaded=true"
     onerror="window.saturnRemoteBundleError=true; window.saturnDiagLastError='remote-next.js failed to load'; window.saturnSetWsDiag && window.saturnSetWsDiag('JS error: remote-next.js failed to load')"
   ></script>
@@ -5818,6 +5818,48 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     state.pointerPttActive = false;
     state.pointerPttRequestId = 0;
     state.pointerPttPointerId = null;
+
+    let reconnectSnapshot = {
+      active: false,
+      phase: "idle",
+      attempt: 0,
+      nextRetryAt: null,
+      lastReason: "",
+      generation: 0,
+    };
+    let reconnectRxPlan = null;
+    let reconnectSettingsPrepared = false;
+
+    function closeSocketForReconnect(reason) {
+      const socket = state.ws;
+      if (!socket || socket.readyState >= WebSocket.CLOSING) {
+        return;
+      }
+      try {
+        socket.close(4000, String(reason || "reconnect").slice(0, 120));
+      } catch (_) {
+        socket.close();
+      }
+    }
+
+    const reconnectSupervisor = _next.createReconnectSupervisor({
+      connect(generation) {
+        void connectBridge(generation);
+      },
+      closeSocket: closeSocketForReconnect,
+      onChange(snapshot) {
+        const previousPhase = reconnectSnapshot.phase;
+        reconnectSnapshot = snapshot;
+        if (snapshot.active && snapshot.phase !== previousPhase) {
+          const detail = snapshot.lastReason ? ` (${snapshot.lastReason})` : "";
+          logEvent(`Connection supervisor: ${snapshot.phase}${detail}`);
+        }
+        updateUi();
+      },
+      now: () => performance.now(),
+      connectTimeoutMs: 10000,
+      readyTimeoutMs: 10000,
+    });
     state.txMicLevel = null;
     state.txMicLevelVisual = 0;
     state.txMicLevelAt = 0;
@@ -9734,6 +9776,10 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       const recoveryMs = state.connectionLossStartedAt
         ? Math.max(0, now - state.connectionLossStartedAt)
         : state.connectionRecoveryMs;
+      const reconnectState = reconnectConnectionState(now);
+      const reconnectDetail = reconnectSnapshot.nextRetryAt == null
+        ? (reconnectSnapshot.lastReason || "No retry pending")
+        : `${Math.max(0, Math.ceil((reconnectSnapshot.nextRetryAt - now) / 1000))}s until attempt ${reconnectSnapshot.attempt + 1}; ${reconnectSnapshot.lastReason || "link lost"}`;
       const latestFaultAge = latestOperatorFault ? Math.max(0, Math.round((now - latestOperatorFault.at) / 1000)) : null;
       const audioPath = state.audioStreaming
         ? (state.audioWorkletMode === "sab" ? "SAB" : (state.audioWorkletMode === "msg" ? "MSG" : "Legacy"))
@@ -9780,6 +9826,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
           title: "RX Latency",
           items: [
             operatorDetailItem("Bridge URL", state.wsUrl || "Default", window.location.host || "", state.connected ? "ok" : "warn"),
+            operatorDetailItem("Auto Reconnect", reconnectState.label, reconnectDetail, reconnectSnapshot.phase === "online" ? "ok" : (reconnectSnapshot.active ? "warn" : "rx")),
             operatorDetailItem("RTT", state.bridgeRttMs == null ? "None" : `${Math.round(state.bridgeRttMs)} ms`, bridgeRttAge == null ? "No pong yet" : `${bridgeRttAge} ms old`, state.bridgeRttMs == null ? "warn" : (state.bridgeRttMs > 600 ? "alarm" : (state.bridgeRttMs > 250 ? "warn" : "ok"))),
             operatorDetailItem("Packet Jitter", `${state.rxAudioJitterP50Ms.toFixed(1)} / ${state.rxAudioJitterP95Ms.toFixed(1)} / ${state.rxAudioJitterP99Ms.toFixed(1)} ms`, `p50 / p95 / p99 from ${state.rxAudioJitterSamples.length} packet interval(s)`, state.rxAudioJitterP99Ms > 40 ? "warn" : "ok"),
             operatorDetailItem("Audio Queue", leadMs == null ? "None" : `${leadMs} ms`, `${state.rxWorkletUnderruns} underrun(s), ${dropCount} overflow/resync/drop event(s)`, audioStripState().tone),
@@ -9819,7 +9866,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       const audioDropEvents = state.audioBackpressureDrops + state.rxWorkletDrops;
       return _next.formatRxLatencyDiagnostic({
         capturedAtIso: new Date().toISOString(),
-        connection: state.connected ? "Connected" : (state.connectPending ? "Connecting" : "Disconnected"),
+        connection: reconnectConnectionState(now).label,
         bridgeUrl: state.wsUrl || window.location.host || "Default",
         networkProfile: networkProfileLabel(now),
         audioProfile: audioProfileLabel(),
@@ -9843,6 +9890,9 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         connectionRecoveryMs: recoveryMs,
         connectionLossCount: state.connectionLossCount,
         audioSequenceGaps: state.audioSeqGapCount,
+        reconnectPhase: reconnectSnapshot.phase,
+        reconnectAttempt: reconnectSnapshot.attempt,
+        reconnectReason: reconnectSnapshot.lastReason,
       });
     }
 
@@ -9981,15 +10031,19 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     }
 
     function clientRoleBlocksTx() {
-      return state.connected && state.remoteClientRole !== "operator";
+      return state.connected && (!state.bridgeReady || state.remoteClientRole !== "operator");
     }
 
     function clientRoleLockReason() {
+      if (!state.bridgeReady) return "bridge-sync";
       return state.remoteClientRole === "viewer" ? "viewer" : "role-pending";
     }
 
     function ownershipStripState() {
       if (state.connected) {
+        if (!state.bridgeReady) {
+          return { label: "Pending", tone: "rx", title: "Waiting for the bridge ready signal" };
+        }
         const id = state.remoteClientId ? ` #${state.remoteClientId}` : "";
         if (state.remoteClientRole === "operator") {
           return { label: "Operator", tone: "ok", title: `Bridge assigned operator role${id}` };
@@ -9999,10 +10053,50 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         }
         return { label: "Role pending", tone: "warn", title: "Waiting for bridge client role" };
       }
-      if (state.connectPending) {
-        return { label: "Pending", tone: "rx", title: "Connecting to bridge" };
+      if (state.connectPending || reconnectSnapshot.active) {
+        return { label: "Pending", tone: "rx", title: reconnectConnectionTitle() };
       }
       return { label: "No owner", tone: "warn", title: "No active bridge client" };
+    }
+
+    function reconnectConnectionState(now = performance.now()) {
+      if (state.connected && state.bridgeReady) {
+        return { label: "Connected", tone: "ok", title: state.wsUrl || "Bridge ready" };
+      }
+      if (state.connected || reconnectSnapshot.phase === "awaiting-ready") {
+        return { label: "Syncing", tone: "rx", title: "Socket connected; waiting for bridge readiness" };
+      }
+      if (reconnectSnapshot.phase === "offline") {
+        return { label: "Offline", tone: "warn", title: "Browser network is offline; reconnection is paused" };
+      }
+      if (reconnectSnapshot.phase === "waiting") {
+        const remainingMs = reconnectSnapshot.nextRetryAt == null
+          ? 0
+          : Math.max(0, reconnectSnapshot.nextRetryAt - now);
+        return {
+          label: `Retry ${Math.max(1, Math.ceil(remainingMs / 1000))}s`,
+          tone: "warn",
+          title: `Automatic reconnect attempt ${reconnectSnapshot.attempt + 1}; ${reconnectSnapshot.lastReason || "link lost"}`,
+        };
+      }
+      if (reconnectSnapshot.phase === "connecting" || state.connectPending) {
+        return {
+          label: state.connectionLossStartedAt
+            ? `Reconnecting ${Math.max(1, reconnectSnapshot.attempt)}`
+            : "Connecting",
+          tone: "rx",
+          title: reconnectConnectionTitle(),
+        };
+      }
+      if (state.demoMode) {
+        return { label: "Preview", tone: "rx", title: "Preview mode" };
+      }
+      return { label: "Idle", tone: "warn", title: "No bridge socket connected" };
+    }
+
+    function reconnectConnectionTitle() {
+      const reason = reconnectSnapshot.lastReason ? `; ${reconnectSnapshot.lastReason}` : "";
+      return `${state.wsUrl || "Bridge connection"}${reason}`;
     }
 
     function setTxMiniMeter(id, percent, tone = "idle", title = "") {
@@ -10054,12 +10148,13 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       const now = performance.now();
       const active = state.moxRequested || state.txEnabled;
       const ready = normalizeTxReadyState();
+      const connection = reconnectConnectionState(now);
       setOperatorPill(
         "operator-conn-pill",
         "operator-conn-value",
-        state.connectPending ? "Connecting" : (state.connected ? "Connected" : (state.demoMode ? "Preview" : "Idle")),
-        state.connected ? "ok" : (state.connectPending || state.demoMode ? "rx" : "warn"),
-        state.wsUrl || "No bridge socket connected"
+        connection.label,
+        connection.tone,
+        connection.title
       );
       const ownership = ownershipStripState();
       setOperatorPill("operator-owner-pill", "operator-owner-value", ownership.label, ownership.tone, ownership.title);
@@ -10401,18 +10496,21 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       $("fft-readout").textContent = `${state.fftWidth}`;
       $("audio-drop-readout").textContent = `${state.audioBackpressureDrops}`;
       $("display-caption").textContent = state.displayCaption;
-      $("connection-summary").textContent = state.connected ? `Live on ${state.wsUrl}` : (state.demoMode ? "Preview mode" : "Idle");
+      const connection = reconnectConnectionState();
+      $("connection-summary").textContent = state.connected && state.bridgeReady
+        ? `Live on ${state.wsUrl}`
+        : connection.label;
       $("stream-label").textContent = state.iqStreaming ? "IQ running" : "IQ stopped";
       $("audio-label").textContent = state.audioStreaming ? `Audio ${Math.round(state.audioSampleRate / 1000)} kHz` : "Audio stopped";
-      $("conn-label").textContent = state.connected ? "Connected" : (state.demoMode ? "Preview" : "Disconnected");
+      $("conn-label").textContent = connection.label;
       const connDot = $("conn-dot");
-      connDot.className = "dot " + (state.connected ? "live" : (state.demoMode ? "warn" : "dead"));
+      connDot.className = "dot " + (state.connected && state.bridgeReady ? "live" : (reconnectSnapshot.active || state.demoMode ? "warn" : "dead"));
       const goLiveBtn = $("go-live-btn");
-      if (state.connected) {
+      if (state.connected && state.bridgeReady) {
         goLiveBtn.textContent = "Go Offline";
         goLiveBtn.className = "btn ghost";
-      } else if (state.connectPending || (state.ws && state.ws.readyState === WebSocket.CONNECTING)) {
-        goLiveBtn.textContent = "Connecting…";
+      } else if (reconnectSnapshot.active) {
+        goLiveBtn.textContent = reconnectSnapshot.phase === "waiting" ? "Cancel Retry" : "Cancel Connect";
         goLiveBtn.className = "btn ghost";
       } else {
         goLiveBtn.textContent = "Go Live";
@@ -10880,15 +10978,15 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       sendTci(_next.buildTwoToneCommands(state).join(""));
     }
 
-    function sendCurrentRadioPrefsToBridge() {
-      if (!state.connected) {
+    function sendCurrentRadioPrefsToBridge(prefs = currentRadioPrefs()) {
+      if (!state.connected || !state.bridgeReady) {
         return;
       }
       applyPhase40TxSourceOverrides();
       if (phase40GeneratedTxSourceActive()) {
         sendTci("tx_two_tone:0,false;");
       }
-      sendTci(_next.buildAllRadioPrefsCommands(currentRadioPrefs()).join(""));
+      sendTci(_next.buildAllRadioPrefsCommands(prefs).join(""));
     }
 
     function rxAudioStartCommand() {
@@ -10896,6 +10994,10 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     }
 
     function startIq() {
+      if (!state.connected || !state.bridgeReady) {
+        logEvent("IQ start deferred: bridge is not ready");
+        return;
+      }
       const phase40Profile = phase40DisplayProfileConfig();
       if (phase40Profile && !phase40Profile.autoIq) {
         state.iqStreaming = false;
@@ -10910,7 +11012,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     }
 
     function resumeRxMediaAfterBandChange(reason = "band change") {
-      if (!state.connected) {
+      if (!state.connected || !state.bridgeReady) {
         return;
       }
       resetDisplayHistory();
@@ -10956,6 +11058,50 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       });
     }
 
+    function restoreRxSessionAfterReady(connectionGeneration) {
+      const plan = reconnectRxPlan;
+      reconnectRxPlan = null;
+      const restoreIq = plan ? plan.iq : phase40ShouldAutoStartIq();
+      const restoreAudio = plan ? plan.audio : phase40ShouldAutoStartRxAudio();
+      const restorePrefs = plan?.radioPrefs || currentRadioPrefs();
+      restorePrefs.twoToneEnabled = false;
+      const restoreVfoA = plan?.vfoA || state.vfoA;
+      const restoreSampleRate = plan?.sampleRate || state.sampleRate;
+      window.setTimeout(() => {
+        if (
+          !state.connected ||
+          !state.bridgeReady ||
+          state.connectionGeneration !== connectionGeneration ||
+          reconnectSnapshot.phase !== "online"
+        ) {
+          return;
+        }
+        state.vfoA = restoreVfoA;
+        state.dds = restoreVfoA;
+        state.sampleRate = restoreSampleRate;
+        sendCurrentRadioPrefsToBridge(restorePrefs);
+        if (restoreVfoA > 0) {
+          sendTci(`vfo:0,0,${restoreVfoA};dds:0,${restoreVfoA};`);
+        }
+        sendTci(`iq_samplerate:${restoreSampleRate};`);
+        if (restoreIq) {
+          startIq();
+          scheduleRxMediaStartupResume("reconnect");
+        } else {
+          state.iqStreaming = false;
+          logEvent("Automatic reconnect preserved stopped IQ state");
+        }
+        if (restoreAudio) {
+          void startRxAudio();
+        } else {
+          state.audioStreaming = false;
+          logEvent("Automatic reconnect preserved stopped RX audio state");
+        }
+        logEvent(`RX session restored after bridge ready (IQ=${restoreIq ? "on" : "off"}, audio=${restoreAudio ? "on" : "off"})`);
+        updateUi();
+      }, REMOTE_PROFILE_APPLY_DELAY_MS);
+    }
+
     function updateWsDiagMarker(text, minIntervalMs = 0) {
       const now = performance.now();
       if (minIntervalMs > 0 && now - (state.wsDiagLastMarkerAt || 0) < minIntervalMs) {
@@ -10990,6 +11136,11 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         `page=${window.location.href}`,
         `marker=${marker}`,
         `connected=${state.connected ? 1 : 0}`,
+        `bridgeReady=${state.bridgeReady ? 1 : 0}`,
+        `reconnectActive=${reconnectSnapshot.active ? 1 : 0}`,
+        `reconnectPhase=${reconnectSnapshot.phase}`,
+        `reconnectAttempt=${reconnectSnapshot.attempt}`,
+        `reconnectReason=${reconnectSnapshot.lastReason || ""}`,
         `wsReady=${wsReady}`,
         `wsUrl=${state.wsUrl || ""}`,
         `phase42Split=${phase42SplitTransportEnabled() ? 1 : 0}`,
@@ -11093,8 +11244,8 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         }
         return;
       }
-      if (!state.connected) {
-        logEvent("Audio start ignored: bridge is not connected");
+      if (!state.connected || !state.bridgeReady) {
+        logEvent("Audio start deferred: bridge is not ready");
         return;
       }
       let ctx = state.audioCtx;
@@ -11239,7 +11390,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       }
     }
 
-    async function stopRxAudio(notifyBridge = true) {
+    async function stopRxAudio(notifyBridge = true, closeContext = true) {
       if (notifyBridge) {
         sendTci("audio_stop:0;");
       }
@@ -11264,7 +11415,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         state.audioGainNode.disconnect();
         state.audioGainNode = null;
       }
-      if (state.audioCtx) {
+      if (state.audioCtx && closeContext) {
         await state.audioCtx.close();
         state.audioCtx = null;
       }
@@ -11388,6 +11539,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       if (normalized === "tx-fault") return "TX fault";
       if (normalized === "viewer") return "viewer only";
       if (normalized === "role-pending") return "role pending";
+      if (normalized === "bridge-sync") return "bridge syncing";
       if (normalized === "connect") return "connect first";
       return normalized || "reconfirm";
     }
@@ -12389,15 +12541,24 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     function goLive() {
       const isConnectingOrLive = state.connected ||
         state.connectPending ||
+        reconnectSnapshot.active ||
         (state.ws && state.ws.readyState === WebSocket.CONNECTING);
       if (isConnectingOrLive) {
         void disconnectBridge();
       } else {
-        void connectBridge();
+        beginBridgeSession();
       }
     }
 
-    async function connectBridge() {
+    function beginBridgeSession() {
+      reconnectRxPlan = null;
+      reconnectSettingsPrepared = false;
+      state.intentionalDisconnect = false;
+      reconnectSupervisor.setOnline(navigator.onLine !== false);
+      reconnectSupervisor.start();
+    }
+
+    async function connectBridge(connectionGeneration) {
       const forceLegacyWs = forceLegacyWsDiagnosticEnabled();
       if (forceLegacyWs && (state.connectPending || (state.ws && state.ws.readyState <= WebSocket.OPEN))) {
         logEvent("Connect diagnostic: resetting stale pending/socket before connect");
@@ -12432,6 +12593,8 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         }
       }
       state.intentionalDisconnect = false;
+      state.bridgeReady = false;
+      state.connectionGeneration = connectionGeneration;
       state.connectionAttemptStartedAt = performance.now();
       state.connectPending = true;
       updateUi();
@@ -12444,7 +12607,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       logEvent(`TX transport profile: ${txTransportProfileLabel()}`);
       if (forceLegacyWs) {
         logEvent("Connect diagnostic: skipping audio prime and settings load");
-      } else {
+      } else if (!reconnectSettingsPrepared) {
         try {
           await primeRxAudioContextFromGesture();
         } catch (err) {
@@ -12455,6 +12618,16 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         } catch (err) {
           logEvent(`Connect diagnostic: settings load failed: ${err?.message || err}`);
         }
+        reconnectSettingsPrepared = true;
+      }
+      if (
+        !reconnectSnapshot.active ||
+        connectionGeneration !== reconnectSnapshot.generation ||
+        reconnectSnapshot.phase !== "connecting"
+      ) {
+        state.connectPending = false;
+        updateUi();
+        return;
       }
       applyPhase40DisplayProfile("connect");
       applyPhase40TxSourceOverrides();
@@ -12479,6 +12652,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         logEvent(`Invalid WebSocket URL: ${err.message}`);
         recordOperatorFault("Invalid bridge URL", "warn");
         state.connectPending = false;
+        reconnectSupervisor.attemptFailed(`invalid WebSocket URL: ${err.message}`);
         updateUi();
         return;
       }
@@ -12492,19 +12666,18 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         }
       }, 3000);
       ws.onopen = () => {
-        if (ws !== state.ws) { ws.close(); return; }
+        if (ws !== state.ws || !reconnectSupervisor.socketOpened(connectionGeneration)) {
+          ws.close();
+          return;
+        }
         const openedAt = performance.now();
         state.connectionOpenMs = state.connectionAttemptStartedAt
           ? Math.max(0, openedAt - state.connectionAttemptStartedAt)
           : null;
         state.connectionAttemptStartedAt = 0;
-        if (state.connectionLossStartedAt) {
-          state.connectionRecoveryMs = Math.max(0, openedAt - state.connectionLossStartedAt);
-          state.connectionRecoveredAt = openedAt;
-          state.connectionLossStartedAt = 0;
-        }
         state.connectPending = false;
         state.connected = true;
+        state.bridgeReady = false;
         state.remoteClientRole = null;
         state.remoteClientId = null;
         lockTx("reconnect", false);
@@ -12516,31 +12689,6 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         sendPhase44OpusLabTxAudioToBridgeOnce("socket open");
         void refreshTxCodecCapabilities();
         startBridgeRttPings();
-        applyPhase40DisplayProfile("open");
-        if (phase40DisplayProfileConfig()) {
-          sendTci(`iq_samplerate:${state.sampleRate};`);
-        }
-        window.setTimeout(() => {
-          if (ws !== state.ws || !state.connected) {
-            return;
-          }
-          sendCurrentRadioPrefsToBridge();
-          // Re-send persisted frequency so it isn't lost on reconnect
-          if (state.vfoA > 0) {
-            sendTci(`vfo:0,0,${state.vfoA};dds:0,${state.vfoA};`);
-          }
-        }, REMOTE_PROFILE_APPLY_DELAY_MS);
-        if (phase40ShouldAutoStartIq()) {
-          startIq();
-        } else {
-          logEvent(`Phase 40 display profile ${PHASE40_DISPLAY_PROFILE}: IQ auto-start skipped`);
-        }
-        if (phase40ShouldAutoStartRxAudio()) {
-          void startRxAudio();
-        } else {
-          logEvent(`Phase 40 display profile ${PHASE40_DISPLAY_PROFILE}: RX audio auto-start skipped`);
-        }
-        scheduleRxMediaStartupResume("connect");
         void syncWakeLock(true);
         updateUi();
       };
@@ -12557,9 +12705,22 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         if (ws !== state.ws) return;
         const closedAt = performance.now();
         const wasTxActive = state.moxRequested || state.txEnabled || state.micCapturing;
+        const unexpectedDisconnect = !state.intentionalDisconnect && reconnectSnapshot.active;
+        if (unexpectedDisconnect && state.bridgeReady && !reconnectRxPlan) {
+          const radioPrefs = currentRadioPrefs();
+          radioPrefs.twoToneEnabled = false;
+          reconnectRxPlan = {
+            iq: Boolean(state.iqStreaming),
+            audio: Boolean(state.audioStreaming),
+            vfoA: state.vfoA,
+            sampleRate: state.sampleRate,
+            radioPrefs,
+          };
+        }
         logEvent(`WebSocket closed code=${event.code} clean=${event.wasClean}${event.reason ? ` reason=${event.reason}` : ""}`);
         state.connectPending = false;
         state.connected = false;
+        state.bridgeReady = false;
         state.iqStreaming = false;
         state.ws = null;
         state.wsMediaBacklogBytes = 0;
@@ -12588,10 +12749,14 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         }
         lockTx("reconnect", false);
         state.twoTonePttOwned = false;
+        state.twoToneEnabled = false;
         stopMicCapture();
         resetTxOpusProducer("socket closed");
-        void stopRxAudio(false);
+        void stopRxAudio(false, false);
         void releaseWakeLock();
+        if (unexpectedDisconnect) {
+          reconnectSupervisor.socketClosed(event.reason || `socket closed (${event.code})`);
+        }
         updateUi();
       };
       ws.onerror = (event) => {
@@ -12610,10 +12775,13 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         }, 0);
       }
     }
-    window.saturnConnectBridgeDiagnostic = connectBridge;
+    window.saturnConnectBridgeDiagnostic = beginBridgeSession;
 
     async function disconnectBridge() {
       state.intentionalDisconnect = true;
+      reconnectSupervisor.stop("manual disconnect");
+      reconnectRxPlan = null;
+      state.twoToneEnabled = false;
       state.connectionLossStartedAt = 0;
       state.connectPending = false;
       await saveRemoteSettingsToServer(false);
@@ -12622,6 +12790,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         state.ws.close();
       }
       state.connected = false;
+      state.bridgeReady = false;
       state.iqStreaming = false;
       state.ws = null;
       state.wsMediaBacklogBytes = 0;
@@ -12672,9 +12841,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     }
 
     function syncTciUiSideEffects(previous, next, events) {
-      if (events.ready) {
-        logEvent("Bridge reported ready");
-      }
+      const readinessAccepted = events.ready && reconnectSupervisor.bridgeReady(state.connectionGeneration);
       if (events.displayCenterHzChanged) {
         shiftDisplayForCenterChange(next.dds);
       }
@@ -12685,7 +12852,17 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       Object.assign(state, next);
       syncPureSignalOperatorTelemetry(previous, state);
       if (events.ready) {
-        scheduleRxMediaStartupResume("bridge ready");
+        state.bridgeReady = true;
+        logEvent(readinessAccepted ? "Bridge reported ready; RX session recovery starting" : "Bridge reported ready");
+      }
+      if (readinessAccepted) {
+        const readyAt = performance.now();
+        if (state.connectionLossStartedAt) {
+          state.connectionRecoveryMs = Math.max(0, readyAt - state.connectionLossStartedAt);
+          state.connectionRecoveredAt = readyAt;
+          state.connectionLossStartedAt = 0;
+        }
+        restoreRxSessionAfterReady(state.connectionGeneration);
       }
       if (applyPhase44OpusLabCfcGuard("bridge state")) {
         if (sendPhase44OpusLabCleanTxAudioToBridge()) {
@@ -13241,12 +13418,12 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         if (state.perfCaptureEnabled) {
           recordPerfSnapshot();
         }
-        if (state.connected) {
+        if (state.connected && state.bridgeReady) {
           sendTci("rx_smeter:0,0;");
         }
         updateUi();
       }
-      if (state.connected && now - state.lastFrameAt > 2500) {
+      if (state.connected && state.bridgeReady && now - state.lastFrameAt > 2500) {
         state.displayCaption = "Connected, waiting for fresh IQ frames";
         if (!state.moxRequested && !state.txEnabled && !state.micCapturing && phase40ShouldAutoStartIq()) {
           requestRxMediaResume("stale IQ", 5000);
@@ -14509,6 +14686,17 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       initInteractions();
       document.addEventListener("visibilitychange", () => {
         void syncWakeLock(false);
+        if (document.visibilityState === "visible") {
+          reconnectSupervisor.retryNow("page visible");
+        }
+      });
+      window.addEventListener("offline", () => {
+        logEvent("Browser network offline; automatic reconnect paused");
+        reconnectSupervisor.setOnline(false);
+      });
+      window.addEventListener("online", () => {
+        logEvent("Browser network online; reconnecting now");
+        reconnectSupervisor.setOnline(true);
       });
       window.addEventListener("pagehide", () => {
         if (state.moxRequested || state.txEnabled || state.twoToneEnabled) {

@@ -28,6 +28,8 @@ describe('createAppState', () => {
   // ── Connection defaults ──
   it('ws defaults to null', () => expect(createAppState().ws).toBeNull());
   it('connected defaults to false', () => expect(createAppState().connected).toBe(false));
+  it('bridge readiness defaults to false', () => expect(createAppState().bridgeReady).toBe(false));
+  it('connection generation defaults to zero', () => expect(createAppState().connectionGeneration).toBe(0));
   it('demoMode defaults to false', () => expect(createAppState().demoMode).toBe(false));
 
   // ── Radio defaults ──
