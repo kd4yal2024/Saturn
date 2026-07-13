@@ -68,7 +68,7 @@ def guard_repo_tree_python_execution():
 
 
 SCRIPT_NAME = "deskHPSDR Update"
-SCRIPT_VERSION = "1.1"
+SCRIPT_VERSION = "1.2"
 SCRIPT_START_TIME = datetime.now()
 TIMESTAMP = SCRIPT_START_TIME.strftime("%Y%m%d-%H%M%S")
 DESKHPSDR_DIR = Path.home() / "github" / "deskhpsdr"
@@ -194,6 +194,14 @@ class DependencyOutputFilter:
             r"0 upgraded, 0 newly installed, 0 to remove and \d+ not upgraded\.",
             text,
         ):
+            self.suppressed += 1
+            return None
+
+        if re.fullmatch(r"\(Reading database \.\.\. \d+%.*", text):
+            self.suppressed += 1
+            return None
+
+        if re.fullmatch(r"\d+K \.{5,}.*", text):
             self.suppressed += 1
             return None
 

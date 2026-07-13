@@ -95,6 +95,7 @@ DEBIAN_PACKAGES=(
   git
   cmake
   autoconf
+  perl
   autopoint
   gettext
   automake

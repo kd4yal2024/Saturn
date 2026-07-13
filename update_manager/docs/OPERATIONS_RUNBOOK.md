@@ -691,6 +691,8 @@ Safety/usage notes:
 - Run `update-pihpsdr.py` from `/saturn/pihpsdr`.
 - This page mirrors the dedicated terminal workflow (flags + SSE output) used by Update G2.
 - In non-interactive web execution, backup prompts are skipped unless `-y` is selected.
+- Installed build dependencies are reused. If packages are missing and privileged installation is unavailable to the web service, the updater stops once with a clear error instead of repeatedly attempting interactive `sudo` prompts.
+- The updater applies Saturn's WDSP 2.00 Linux compatibility after each pull (and with `--skip-git`) so the renamed PureSignal `doPSCorrChange` worker and opaque Linux event handles build correctly.
 - Output can be resumed from backend run logs (`/run_log`) after navigating away and back.
 - On systems exposing non-UTF-8 stdout/stderr (for example `latin-1`), the updater now degrades unsupported status symbols instead of crashing; mirrored log files are written as UTF-8.
 
@@ -705,6 +707,8 @@ Safety/usage notes:
 - Current upstream deskHPSDR removed the direct Raspberry Pi GPIO source path. For those checkouts, the helper skips the obsolete patch and builds `deskHPSDR` with `SATURN=ON` for the native G2/XDMA path.
 - The helper keeps PulseAudio client libraries for build compatibility but prefers `pipewire-pulse` at runtime and removes the redundant `pulseaudio` daemon package when PipeWire Pulse is installed.
 - `--no-install-deps`, `--no-clean`, and `--no-desktop-shortcut` map directly to the helper-script build flow.
+- After the privileged prerequisite helper verifies the Debian packages, the build helper suppresses deskHPSDR's redundant internal `sudo apt-get` calls while it prepares the repo-local WDSP libraries. Other `sudo` commands retain their normal behavior.
+- If a first build is interrupted, rerun with `--skip-git --no-install-deps --no-clean` to reuse the checkout, installed packages, prepared WDSP libraries, and completed object files.
 - In non-interactive web execution, backup prompts are skipped unless `-y` is selected.
 - On a fresh image, do not select `--skip-git`; otherwise the run fails because there is no local deskHPSDR checkout to build.
 - Output can be resumed from backend run logs (`/run_log`) after navigating away and back.

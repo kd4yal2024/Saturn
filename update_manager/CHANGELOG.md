@@ -380,6 +380,9 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
 - `update-G2.py` and `update-pihpsdr.py` now refuse execution when run from inside the Saturn repo tree, preventing accidental repo-local Python runs.
 - `update-pihpsdr.py`: prevented startup crash on non-UTF-8 (`latin-1`) stdout/stderr/log streams by adding per-stream Unicode fallback output and explicit UTF-8 log file writes.
 - `update-pihpsdr.py`: verbose dependency installation now runs apt/debconf in noninteractive mode and compacts routine apt autoremove/debconf noise instead of flooding the piHPSDR terminal log.
+- `update-pihpsdr.py` v1.12: added automatic WDSP 2.00 Linux compatibility for the renamed PureSignal `doPSCorrChange` worker and opaque event handles, plus a dependency preflight that reuses installed libraries without launching the privileged upstream installer on every web update.
+- `update-deskhpsdr.py` v1.2: hardened clean-image builds by suppressing upstream's redundant interactive `sudo apt-get` calls after Saturn's privileged prerequisite check, compacting package/download progress, and documenting resumable no-clean recovery.
+- Saturn Go watchdog now requires three consecutive 10-second health-check failures before restarting the backend, preventing a single missed check during CPU-heavy radio builds from terminating an otherwise healthy update job.
 - `update-saturn-go.sh`: fixed `--dry-run` staging-helper generation error when the staged directory is intentionally not created.
 - `update-saturn-go.sh`: fixed detached root-helper status-file error handling/JSON quoting so `/saturngo_deploy_status` always returns valid JSON after deploy completion.
 - `p23-app-manager.sh`: dry-run deploy/switch no longer writes a temp override file (avoids failing when `/tmp` is full).

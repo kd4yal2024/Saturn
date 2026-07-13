@@ -517,12 +517,32 @@ set -euo pipefail
 
 url="${SATURN_WATCHDOG_URL:-http://127.0.0.1:8080/healthz}"
 service="${SATURN_WATCHDOG_SERVICE:-saturn-go.service}"
-timeout="${SATURN_WATCHDOG_TIMEOUT:-4}"
+timeout="${SATURN_WATCHDOG_TIMEOUT:-10}"
+failure_limit="${SATURN_WATCHDOG_FAILURE_LIMIT:-3}"
+failure_file="${SATURN_WATCHDOG_FAILURE_FILE:-/run/saturn-go-watchdog.failures}"
 
-if ! curl -fsS --max-time "$timeout" "$url" >/dev/null 2>&1; then
-  logger -t saturn-watchdog "health check failed for $url; restarting $service"
-  systemctl restart "$service" || true
+if curl -fsS --max-time "$timeout" "$url" >/dev/null 2>&1; then
+  rm -f "$failure_file"
+  exit 0
 fi
+
+failures=1
+if [[ -r "$failure_file" ]]; then
+  previous="$(cat "$failure_file" 2>/dev/null || true)"
+  if [[ "$previous" =~ ^[0-9]+$ ]]; then
+    failures=$((previous + 1))
+  fi
+fi
+printf '%s\n' "$failures" >"$failure_file"
+
+if (( failures < failure_limit )); then
+  logger -t saturn-watchdog "health check failed for $url ($failures/$failure_limit); deferring restart"
+  exit 0
+fi
+
+rm -f "$failure_file"
+logger -t saturn-watchdog "health check failed for $url ($failures/$failure_limit); restarting $service"
+systemctl restart "$service" || true
 WATCHDOG
 ok "Scripts synced (added=$added_scripts updated=$updated_scripts kept=$kept_scripts; custom scripts preserved)"
 
@@ -937,7 +957,8 @@ Wants=network-online.target
 Type=oneshot
 Environment=SATURN_WATCHDOG_URL=${SATURN_WATCHDOG_URL}
 Environment=SATURN_WATCHDOG_SERVICE=saturn-go.service
-Environment=SATURN_WATCHDOG_TIMEOUT=4
+Environment=SATURN_WATCHDOG_TIMEOUT=10
+Environment=SATURN_WATCHDOG_FAILURE_LIMIT=3
 ExecStart=${WATCHDOG_SCRIPT_PATH}
 WATCHDOG_SERVICE
 

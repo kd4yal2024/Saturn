@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 # update-pihpsdr.py - piHPSDR Update Script
 # Automates cloning, updating, and building the pihpsdr repository
-# Version: 1.11
+# Version: 1.12
 # Written by: Jerry DeLong KD4YAL
 # Changes: Removed --show-compile flag, merged into --verbose, fixed make process output to display in CLI,
 #          changed make output color to white in CLI with --verbose, compacted noisy dependency output,
-#          updated version to 1.11
+#          added WDSP 2.00 Linux compatibility and dependency preflight
 # Dependencies: psutil (version 7.0.0) in ~/venv, optional pyfiglet, urllib.error
 # Usage: python3 /opt/saturn-go/scripts/update-pihpsdr.py
 
@@ -72,7 +72,7 @@ def guard_repo_tree_python_execution():
 
 # Script metadata
 SCRIPT_NAME = "piHPSDR Update"
-SCRIPT_VERSION = "1.11"
+SCRIPT_VERSION = "1.12"
 SCRIPT_START_TIME = datetime.now()
 TIMESTAMP = SCRIPT_START_TIME.strftime('%Y%m%d-%H%M%S')
 PIHPSDR_DIR = Path.home() / "github" / "pihpsdr"
@@ -423,6 +423,36 @@ def create_backup():
     return False
 
 SATURN_PIHPSDR_PATCH_MARKER = "SATURN_PS_SETPK_PCBV3"
+SATURN_WDSP2_COMPAT_MARKER = "SATURN_WDSP2_THREAD_NAME_COMPAT"
+
+WDSP2_BROKEN_THREAD_NAME_BLOCK = """\t} else\tif (start_address == &doPSCalcCorrection
+\t\t\t || start_address == &doPSTurnoff
+\t\t || start_address == &PSSaveCorrection
+\t\t || start_address == &PSRestoreCorrection) {
+\t  snprintf(tname, sizeof(tname), "PURESIGNAL");"""
+
+WDSP2_COMPAT_THREAD_NAME_BLOCK = """\t} else if (start_address == &doPSCorrChange) { // SATURN_WDSP2_THREAD_NAME_COMPAT
+\t  snprintf(tname, sizeof(tname), "PURESIGNAL");"""
+
+WDSP2_UPSTREAM_THREAD_NAME_BLOCK = """\t} else if (start_address == &doPSCorrChange) {
+\t  snprintf(tname, sizeof(tname), "PURESIGNAL");"""
+
+WDSP2_BROKEN_HANDLE_TYPE = "#define HANDLE int *"
+WDSP2_COMPAT_HANDLE_TYPE = "#define HANDLE void * // SATURN_WDSP2_HANDLE_COMPAT"
+WDSP2_UPSTREAM_HANDLE_TYPE = "#define HANDLE void *"
+
+WDSP2_BROKEN_WAIT_DECL = "int LinuxWaitForMultipleObjects(int num, sem_t **sem, int waitall, int ms);"
+WDSP2_COMPAT_WAIT_DECL = "int LinuxWaitForMultipleObjects(int num, void **sem, int waitall, int ms); // SATURN_WDSP2_WAIT_COMPAT"
+WDSP2_UPSTREAM_WAIT_DECL = "int LinuxWaitForMultipleObjects(int num, void **sem, int waitall, int ms);"
+WDSP2_BROKEN_WAIT_IMPL = """int LinuxWaitForMultipleObjects(int num, sem_t **sem, int waitall, int ms) {
+  if (!waitall && ms == INFINITE) {"""
+WDSP2_COMPAT_WAIT_IMPL = """int LinuxWaitForMultipleObjects(int num, void **sem, int waitall, int ms) { // SATURN_WDSP2_WAIT_COMPAT
+  if (!waitall && ms == INFINITE) {"""
+WDSP2_UPSTREAM_WAIT_IMPL = """int LinuxWaitForMultipleObjects(int num, void **sem, int waitall, int ms) {
+  if (!waitall && ms == INFINITE) {"""
+WDSP2_BROKEN_WAIT_CALL = "if (sem_trywait(sem[i]) == 0) { return i; }"
+WDSP2_COMPAT_WAIT_CALL = "if (sem_trywait((sem_t *)sem[i]) == 0) { return i; } // SATURN_WDSP2_WAIT_COMPAT"
+WDSP2_UPSTREAM_WAIT_CALL = "if (sem_trywait((sem_t *)sem[i]) == 0) { return i; }"
 
 def patch_file_replace(path, old, new):
     content = path.read_text()
@@ -481,6 +511,130 @@ static bool saturn_uses_pcbv3_puresignal_level(void) {
         revert_file_replace(saturnmain, patched_scale, original_scale)
     except Exception as e:
         print_warning(f"Could not remove previous Saturn piHPSDR V3 patch before git update: {e}")
+
+def revert_saturn_wdsp2_linux_compatibility():
+    """Remove only Saturn's marked WDSP2 Linux patches before git pull."""
+    linux_port = PIHPSDR_DIR / "wdsp" / "linux_port.c"
+    linux_header = PIHPSDR_DIR / "wdsp" / "linux_port.h"
+    try:
+        if linux_port.exists():
+            revert_file_replace(
+                linux_port,
+                WDSP2_COMPAT_THREAD_NAME_BLOCK,
+                WDSP2_BROKEN_THREAD_NAME_BLOCK,
+            )
+            revert_file_replace(
+                linux_port,
+                WDSP2_COMPAT_WAIT_IMPL,
+                WDSP2_BROKEN_WAIT_IMPL,
+            )
+            revert_file_replace(
+                linux_port,
+                WDSP2_COMPAT_WAIT_CALL,
+                WDSP2_BROKEN_WAIT_CALL,
+            )
+        if linux_header.exists():
+            revert_file_replace(
+                linux_header,
+                WDSP2_COMPAT_HANDLE_TYPE,
+                WDSP2_BROKEN_HANDLE_TYPE,
+            )
+            revert_file_replace(
+                linux_header,
+                WDSP2_COMPAT_WAIT_DECL,
+                WDSP2_BROKEN_WAIT_DECL,
+            )
+    except Exception as e:
+        print_warning(f"Could not remove previous WDSP2 compatibility patch: {e}")
+
+def apply_saturn_wdsp2_linux_compatibility():
+    """Apply piHPSDR's missing WDSP2 Linux-port compatibility updates."""
+    if args.dry_run:
+        print_info("[Dry Run] Would apply WDSP2 Linux compatibility")
+        return
+
+    linux_port = PIHPSDR_DIR / "wdsp" / "linux_port.c"
+    linux_header = PIHPSDR_DIR / "wdsp" / "linux_port.h"
+    if not linux_port.exists() or not linux_header.exists():
+        print_warning("Skipping WDSP2 compatibility; Linux port sources not found")
+        return
+
+    try:
+        changed = False
+        content = linux_port.read_text()
+        if (
+            WDSP2_COMPAT_THREAD_NAME_BLOCK not in content
+            and WDSP2_UPSTREAM_THREAD_NAME_BLOCK not in content
+        ):
+            if WDSP2_BROKEN_THREAD_NAME_BLOCK in content:
+                changed |= patch_file_replace(
+                    linux_port,
+                    WDSP2_BROKEN_THREAD_NAME_BLOCK,
+                    WDSP2_COMPAT_THREAD_NAME_BLOCK,
+                )
+            else:
+                print_warning("WDSP2 thread-name code changed upstream; no thread patch applied")
+
+        content = linux_port.read_text()
+        wait_impl_present = (
+            WDSP2_COMPAT_WAIT_IMPL in content
+            or WDSP2_UPSTREAM_WAIT_IMPL in content
+        )
+        wait_call_present = (
+            WDSP2_COMPAT_WAIT_CALL in content
+            or WDSP2_UPSTREAM_WAIT_CALL in content
+        )
+        if not wait_impl_present or not wait_call_present:
+            if WDSP2_BROKEN_WAIT_IMPL in content and WDSP2_BROKEN_WAIT_CALL in content:
+                changed |= patch_file_replace(
+                    linux_port,
+                    WDSP2_BROKEN_WAIT_IMPL,
+                    WDSP2_COMPAT_WAIT_IMPL,
+                )
+                changed |= patch_file_replace(
+                    linux_port,
+                    WDSP2_BROKEN_WAIT_CALL,
+                    WDSP2_COMPAT_WAIT_CALL,
+                )
+            else:
+                print_warning("WDSP2 multi-wait code changed upstream; no wait patch applied")
+
+        header_content = linux_header.read_text()
+        if (
+            WDSP2_COMPAT_HANDLE_TYPE not in header_content
+            and WDSP2_UPSTREAM_HANDLE_TYPE not in header_content
+        ):
+            if WDSP2_BROKEN_HANDLE_TYPE in header_content:
+                changed |= patch_file_replace(
+                    linux_header,
+                    WDSP2_BROKEN_HANDLE_TYPE,
+                    WDSP2_COMPAT_HANDLE_TYPE,
+                )
+            else:
+                print_warning("WDSP2 HANDLE type changed upstream; no handle patch applied")
+
+        header_content = linux_header.read_text()
+        if (
+            WDSP2_COMPAT_WAIT_DECL not in header_content
+            and WDSP2_UPSTREAM_WAIT_DECL not in header_content
+        ):
+            if WDSP2_BROKEN_WAIT_DECL in header_content:
+                changed |= patch_file_replace(
+                    linux_header,
+                    WDSP2_BROKEN_WAIT_DECL,
+                    WDSP2_COMPAT_WAIT_DECL,
+                )
+            else:
+                print_warning("WDSP2 multi-wait declaration changed upstream; no declaration patch applied")
+
+        if changed:
+            print_success("Applied WDSP2 Linux compatibility")
+        elif "SATURN_WDSP2_" in content or "SATURN_WDSP2_" in header_content:
+            print_info("WDSP2 Linux compatibility already present")
+        else:
+            print_info("WDSP2 Linux compatibility is fixed upstream")
+    except Exception as e:
+        print_error(f"Failed to apply WDSP2 Linux compatibility: {e}")
 
 def apply_saturn_pihpsdr_v3_patch():
     """Apply Saturn V3 PureSignal defaults to upstream piHPSDR checkout."""
@@ -560,6 +714,7 @@ def update_git():
     if PIHPSDR_DIR.exists():
         try:
             os.chdir(PIHPSDR_DIR)
+            revert_saturn_wdsp2_linux_compatibility()
             revert_saturn_pihpsdr_v3_patch()
             current_commit = subprocess.check_output(["git", "rev-parse", "--short", "HEAD"], text=True).strip()
             print_info(f"Commit: {current_commit}")
@@ -632,9 +787,105 @@ def update_git():
                     time.sleep(2)
                 else:
                     print_error(f"Git clone failed after {max_attempts} attempts: {e.output.strip()}")
-    apply_saturn_pihpsdr_v3_patch()
-
 # Build piHPSDR
+PIHPSDR_BUILD_PKG_CONFIG_MODULES = (
+    "fftw3",
+    "fftw3f",
+    "libgpiod",
+    "alsa",
+    "libpulse",
+    "libpulse-simple",
+    "libpulse-mainloop-glib",
+    "miniupnpc",
+    "libwebsockets",
+    "zlib",
+    "opus",
+    "sqlite3",
+    "libcurl",
+    "gtk+-3.0",
+    "openssl",
+)
+
+def missing_build_dependencies():
+    """Return required pkg-config modules not available to the build."""
+    if shutil.which("pkg-config") is None:
+        return ["pkg-config"]
+    return [
+        module
+        for module in PIHPSDR_BUILD_PKG_CONFIG_MODULES
+        if subprocess.run(
+            ["pkg-config", "--exists", module],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        ).returncode != 0
+    ]
+
+def can_run_privileged_dependency_installer():
+    if os.geteuid() == 0:
+        return True
+    # init_logging wraps stdout/stderr in Tee, so inspect the original streams.
+    if sys.__stdin__.isatty() and sys.__stdout__.isatty():
+        return True
+    return subprocess.run(
+        ["sudo", "-n", "true"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    ).returncode == 0
+
+def install_build_dependencies():
+    missing = missing_build_dependencies()
+    if not missing:
+        print_success("Build dependencies already installed")
+        return
+
+    print_build_output(f"Missing pkg-config modules: {', '.join(missing)}")
+    libinstall_script = PIHPSDR_DIR / "LINUX" / "libinstall.sh"
+    if not libinstall_script.exists():
+        print_error(f"No libinstall.sh script found at {libinstall_script}")
+    if args.dry_run:
+        print_info(f"[Dry Run] Would run {libinstall_script}")
+        return
+    if not can_run_privileged_dependency_installer():
+        print_error("Missing dependencies require an interactive terminal or passwordless sudo")
+
+    output_filter = DependencyOutputFilter() if args.verbose else None
+    if args.verbose:
+        process = subprocess.Popen(
+            ["bash", str(libinstall_script)],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            universal_newlines=True,
+            env=dependency_env(),
+        )
+        return_code = stream_process_output(process, output_filter)
+        if output_filter.suppressed:
+            print_info(
+                f"Compacted dependency output: suppressed {output_filter.suppressed} routine apt/debconf lines"
+            )
+        if output_filter.saw_autoremove_notice:
+            print_warning("APT reports auto-removable packages; not running autoremove automatically")
+    else:
+        libinstall_log = temp_log_path("libinstall_output")
+        with libinstall_log.open("w") as log_file:
+            process = subprocess.Popen(
+                ["bash", str(libinstall_script)],
+                stdout=log_file,
+                stderr=log_file,
+                text=True,
+                env=dependency_env(),
+            )
+            return_code = progress_bar(process, "Installing dependencies", 50)
+        if return_code != 0:
+            print_error(f"Dependency installation failed; see {libinstall_log}")
+
+    remaining = missing_build_dependencies()
+    if return_code != 0 or remaining:
+        if remaining:
+            print_build_output(f"Still missing: {', '.join(remaining)}")
+        print_error("Dependency installation did not complete successfully")
+    print_success("Dependencies installed")
+
 def build_pihpsdr():
     debug_print("Building piHPSDR")
     print_header("piHPSDR Build")
@@ -664,57 +915,7 @@ def build_pihpsdr():
         print_success("Build cleaned")
 
         print(f"{Colors.CYAN}⚡ Installing dependencies...{Colors.END}")
-        libinstall_script = PIHPSDR_DIR / "LINUX" / "libinstall.sh"
-        if libinstall_script.exists():
-            max_attempts = 3
-            for attempt in range(1, max_attempts + 1):
-                try:
-                    if not args.dry_run:
-                        if args.verbose:
-                            output_filter = DependencyOutputFilter()
-                            process = subprocess.Popen(
-                                ["bash", str(libinstall_script)],
-                                stdout=subprocess.PIPE,
-                                stderr=subprocess.STDOUT,
-                                text=True,
-                                universal_newlines=True,
-                                env=dependency_env(),
-                            )
-                            return_code = stream_process_output(process, output_filter)
-                            if output_filter.suppressed:
-                                print_info(
-                                    f"Compacted dependency output: suppressed {output_filter.suppressed} routine apt/debconf lines"
-                                )
-                            if output_filter.saw_autoremove_notice:
-                                print_warning("APT reports auto-removable packages; not running autoremove automatically")
-                            if return_code != 0:
-                                print_error(f"Dependency installation failed: Check log for details")
-                        else:
-                            libinstall_log = temp_log_path("libinstall_output")
-                            with libinstall_log.open("w") as f:
-                                process = subprocess.Popen(
-                                    ["bash", str(libinstall_script)],
-                                    stdout=f,
-                                    stderr=f,
-                                    text=True,
-                                    env=dependency_env(),
-                                )
-                                return_code = progress_bar(process, "Installing dependencies", 50)
-                                if return_code != 0:
-                                    error_output = libinstall_log.read_text(errors="replace").strip()
-                                    print_error(f"Dependency installation failed: {error_output}")
-                    else:
-                        print_info(f"[Dry Run] Simulating {libinstall_script}")
-                    print_success("Dependencies installed")
-                    break
-                except (subprocess.CalledProcessError, urllib.error.URLError) as e:
-                    if attempt < max_attempts:
-                        print_warning(f"Dependency installation failed (attempt {attempt}/{max_attempts}): {str(e)}. Retrying...")
-                        time.sleep(2)
-                    else:
-                        print_error(f"Dependency installation failed after {max_attempts} attempts: {str(e)}")
-        else:
-            print_error(f"No libinstall.sh script found at {libinstall_script}")
+        install_build_dependencies()
 
         print(f"{Colors.CYAN}⚡ Building piHPSDR...{Colors.END}")
         if args.no_gpio:
@@ -835,6 +1036,8 @@ def main():
     if PIHPSDR_DIR.exists():
         BACKUP_CREATED = create_backup()
     update_git()
+    apply_saturn_pihpsdr_v3_patch()
+    apply_saturn_wdsp2_linux_compatibility()
     build_pihpsdr()
     print_summary_report(start_time, BACKUP_CREATED)
     print_header(f"{SCRIPT_NAME} v{SCRIPT_VERSION} Done")

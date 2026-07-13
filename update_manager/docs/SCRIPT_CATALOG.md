@@ -9,8 +9,8 @@ Defined in `config.json` and surfaced by `/get_scripts`.
 | Script | Version | Purpose | Typical Flags |
 |---|---|---|---|
 | `update-G2.py` | `2.15` | Update Saturn repository and related components with backup options and privilege-aware behavior, including resilient per-user log handling. | `--skip-git`, `-y`, `-n`, `--dry-run`, `--verbose` |
-| `update-pihpsdr.py` | `1.11` | Update/build piHPSDR repository with backup options. | `--skip-git`, `-y`, `-n`, `--no-gpio`, `--dry-run`, `--verbose` |
-| `update-deskhpsdr.py` | `1.1` | Clone/update/build deskHPSDR with backup options and helper-script-driven build/install-dependency behavior, including conditional legacy libgpiod patch handling. | `--skip-git`, `-y`, `-n`, `--no-install-deps`, `--no-clean`, `--no-desktop-shortcut`, `--dry-run`, `--verbose` |
+| `update-pihpsdr.py` | `1.12` | Update/build piHPSDR with dependency preflight and current WDSP 2.00 Linux compatibility. | `--skip-git`, `-y`, `-n`, `--no-gpio`, `--dry-run`, `--verbose` |
+| `update-deskhpsdr.py` | `1.2` | Clone/update/build deskHPSDR with privileged prerequisite preflight, repo-local WDSP library preparation, resumable no-clean builds, and conditional legacy libgpiod patch handling. | `--skip-git`, `-y`, `-n`, `--no-install-deps`, `--no-clean`, `--no-desktop-shortcut`, `--dry-run`, `--verbose` |
 | `log_cleaner.sh` | `3.00` | Find and optionally delete `*.log` files under home directory. | `--delete-all`, `--no-recursive`, `--dry-run` |
 | `restore-backup.sh` | `3.10` | Restore Saturn or piHPSDR from backup directories with list/latest/explicit selection support. | `--saturn`, `--pihpsdr`, `--latest`, `--list`, `--backup-dir`, `--backup-name`, `--dry-run`, `--verbose`, `--json` |
 

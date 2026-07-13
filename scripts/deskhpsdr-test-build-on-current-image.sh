@@ -13,6 +13,7 @@ INSTALL_DEPS=0
 RUN_CLEAN=1
 CREATE_DESKTOP_SHORTCUT=1
 LEGACY_GPIO_AVAILABLE=0
+SUDO_SHIM_DIR=""
 
 usage() {
   cat <<'EOF'
@@ -160,6 +161,25 @@ EOF
   echo "  shortcut:${link_file}"
 }
 
+prepare_verified_deps_sudo_shim() {
+  SUDO_SHIM_DIR="$(mktemp -d /tmp/saturn-deskhpsdr-sudo.XXXXXX)"
+  cat >"${SUDO_SHIM_DIR}/sudo" <<'EOF'
+#!/bin/sh
+if [ "${1:-}" = "apt-get" ]; then
+  echo "[saturn-deskhpsdr] Debian prerequisites already verified; skipping upstream sudo $*"
+  exit 0
+fi
+exec /usr/bin/sudo "$@"
+EOF
+  chmod 0755 "${SUDO_SHIM_DIR}/sudo"
+}
+
+cleanup_sudo_shim() {
+  if [[ -n "${SUDO_SHIM_DIR}" && -d "${SUDO_SHIM_DIR}" ]]; then
+    rm -rf -- "${SUDO_SHIM_DIR}"
+  fi
+}
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --repo)
@@ -240,6 +260,7 @@ DEBIAN_PACKAGES=(
   git
   cmake
   autoconf
+  perl
   autopoint
   gettext
   automake
@@ -324,6 +345,10 @@ if [[ ${#missing_packages[@]} -gt 0 ]]; then
   echo
   echo "Missing Debian packages detected:"
   printf '  - %s\n' "${missing_packages[@]}"
+  if [[ ${INSTALL_DEPS} -eq 0 ]]; then
+    echo "Rerun with --install-deps, or install the listed packages before building." >&2
+    exit 3
+  fi
 fi
 
 if [[ -z "${webkit_version}" ]]; then
@@ -352,6 +377,14 @@ MAKE_ARGS=(
   "ATU=OFF"
   "COPYMODE=OFF"
 )
+
+# Upstream update_libs.sh unconditionally repeats sudo apt-get calls before
+# building its repo-local WDSP libraries. At this point our package preflight
+# has verified the complete prerequisite set, so suppress only those redundant
+# apt calls while allowing any other sudo invocation to retain normal behavior.
+prepare_verified_deps_sudo_shim
+trap cleanup_sudo_shim EXIT
+export PATH="${SUDO_SHIM_DIR}:${PATH}"
 
 if [[ ${LEGACY_GPIO_AVAILABLE} -eq 1 ]]; then
   MAKE_ARGS+=("GPIO=ON")
