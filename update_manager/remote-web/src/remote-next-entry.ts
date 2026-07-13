@@ -123,6 +123,12 @@ import {
   buildTxCodecCapsCommand,
 } from './tci/commands';
 import { resampleChannel, prepareAudioForPlayback, ringBufferFreeFrames } from './audio/resample';
+import {
+  audioFramesToMilliseconds,
+  percentileMs,
+  rxAudioArrivalJitterMs,
+  summarizeRxAudioJitter,
+} from './audio/rx-telemetry';
 import * as AudioConstants from './audio/constants';
 import { volumeAmplitudeFromDb } from './audio/constants';
 import { FftProcessor } from './dsp/fft';
@@ -296,6 +302,10 @@ const api = {
   resampleChannel,
   prepareAudioForPlayback,
   ringBufferFreeFrames,
+  audioFramesToMilliseconds,
+  percentileMs,
+  rxAudioArrivalJitterMs,
+  summarizeRxAudioJitter,
   AudioConstants,
 
   // DSP
@@ -466,6 +476,10 @@ export {
   resampleChannel,
   prepareAudioForPlayback,
   ringBufferFreeFrames,
+  audioFramesToMilliseconds,
+  percentileMs,
+  rxAudioArrivalJitterMs,
+  summarizeRxAudioJitter,
   AudioConstants,
   FftProcessor,
   displaySpanHz,

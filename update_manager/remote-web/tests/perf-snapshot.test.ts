@@ -13,6 +13,9 @@ describe('buildPerfSnapshot', () => {
     expect(snap.connected).toBe(false);
     expect(snap.sampleRate).toBe(192000);
     expect(snap.audioSampleRate).toBe(48000);
+    expect(snap.audioChannels).toBe(2);
+    expect(snap.networkProfile).toBe('lan');
+    expect(snap.audioProfile).toContain('48 kHz stereo');
     expect(snap.displayZoom).toBe(1);
     expect(snap.iqPackets).toBe(0);
     expect(snap.fftWidth).toBe(1024);
@@ -28,6 +31,9 @@ describe('buildPerfSnapshot', () => {
     expect(snap.txTimingFrameCount).toBe(0);
     expect(snap.phase40DisplayProfile).toBe('');
     expect(snap.iqIdleMs).toBe(1000);
+    expect(snap.audioIdleMs).toBe(1000);
+    expect(snap.rxAudioJitterP99Ms).toBe(0);
+    expect(snap.rxWorkletQueuedMs).toBe(0);
     expect(snap.wallTime).toBeTruthy();
   });
 
@@ -55,6 +61,16 @@ describe('buildPerfSummary', () => {
     source2.frameRate = 30;
     source2.audioBackpressureDrops = 2;
     source2.rxWorkletDrops = 1;
+    source2.rxWorkletQueuedMs = 24;
+    source2.rxWorkletUnderruns = 2;
+    source2.rxWorkletOverflows = 1;
+    source2.audioContextBaseLatencyMs = 5.5;
+    source2.audioContextOutputLatencyMs = 11.25;
+    source2.lastAudioFrameAt = 1980;
+    source2.rxAudioJitterSamples = [1, 2, 12.5];
+    source2.rxAudioJitterP50Ms = 2;
+    source2.rxAudioJitterP95Ms = 12.5;
+    source2.rxAudioJitterP99Ms = 12.5;
     source2.bridgeRttMs = 23;
     source2.backpressureSafetyP99Us = 4000;
     source2.backpressureControlP99Us = 9000;
@@ -66,6 +82,11 @@ describe('buildPerfSummary', () => {
     source2.audioPanicDrainCount = 1;
     source2.sendBlockedMs = 8;
     source2.outboundHighWatermarkBytes = 12000;
+    source2.bridgeOutboundQueuedBytes = 4096;
+    source2.bridgeTcpOutqHighWatermarkBytes = 8192;
+    source2.wsMediaBacklogBytes = 512;
+    source2.connectionLossCount = 1;
+    source2.connectionRecoveryMs = 900;
     source2.safetyQueueDepthOverflowCount = 0;
     source2.browserMainLagP99Ms = 18.5;
     source2.browserRafIntervalP99Ms = 34.25;
@@ -96,6 +117,13 @@ describe('buildPerfSummary', () => {
     expect(summary.totalSafetyQueueDepthOverflowCount).toBe(0);
     expect(summary.finalAudioBackpressureDrops).toBe(2);
     expect(summary.finalRxWorkletDrops).toBe(1);
+    expect(summary.finalRxWorkletUnderruns).toBe(2);
+    expect(summary.finalRxWorkletOverflows).toBe(1);
+    expect(summary.maxRxWorkletQueuedMs).toBe(24);
+    expect(summary.maxRxAudioJitterP99Ms).toBe(12.5);
+    expect(summary.maxWsMediaBacklogBytes).toBe(512);
+    expect(summary.maxBridgeOutboundQueuedBytes).toBe(4096);
+    expect(summary.maxConnectionRecoveryMs).toBe(900);
     expect(summary.maxBrowserMainLagP99Ms).toBe(18.5);
     expect(summary.maxBrowserRafIntervalP99Ms).toBe(34.25);
     expect(summary.maxTxWorkletToMainP99Ms).toBe(42.5);

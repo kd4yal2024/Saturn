@@ -58,6 +58,9 @@ function createState(): TciRadioState {
     audioPanicDrainCount: 0,
     sendBlockedMs: 0,
     outboundHighWatermarkBytes: 0,
+    bridgeOutboundQueuedBytes: 0,
+    bridgeTcpOutqHighWatermarkBytes: 0,
+    displayRateLimitedPerSec: 0,
     safetyQueueDepthOverflowCount: 0,
     txUplinkDegraded: false,
     txMicDroppedCount: 0,
@@ -193,7 +196,7 @@ describe('applyTciText', () => {
 
   it('tracks bridge backpressure telemetry', () => {
     const result = applyTciText(
-      'remote_backpressure:0,1,2,3,4,5,6,7,8,9,10,11,12,13000,14;',
+      'remote_backpressure:0,1,2,3,4,5,6,7,8,9,10,11,12,13000,14,15000,16,17000;',
       createState(),
     );
     expect(result.state.backpressureSafetyP99Us).toBe(3);
@@ -207,6 +210,9 @@ describe('applyTciText', () => {
     expect(result.state.sendBlockedMs).toBe(12);
     expect(result.state.outboundHighWatermarkBytes).toBe(13000);
     expect(result.state.safetyQueueDepthOverflowCount).toBe(14);
+    expect(result.state.bridgeTcpOutqHighWatermarkBytes).toBe(15000);
+    expect(result.state.displayRateLimitedPerSec).toBe(16);
+    expect(result.state.bridgeOutboundQueuedBytes).toBe(17000);
   });
 
   it('tracks bridge TX uplink telemetry', () => {

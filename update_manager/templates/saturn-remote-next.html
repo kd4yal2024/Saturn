@@ -5449,6 +5449,11 @@ class SaturnRxProcessor extends AudioWorkletProcessor {
     this.msgQueueMax = ${RX_MSG_QUEUE_MAX_PACKETS};
     this.msgOffset = 0;
     this.useSab    = false;
+    this.started = false;
+    this.inUnderrun = false;
+    this.underruns = 0;
+    this.overflows = 0;
+    this.telemetryFrames = 0;
     this.port.onmessage = (e) => this._onMessage(e.data);
   }
 
@@ -5460,8 +5465,14 @@ class SaturnRxProcessor extends AudioWorkletProcessor {
       this.ringLen = this.ringF32.length;
       this.useSab  = true;
     } else if (msg.type === 'audio') {
+      this.started = true;
       this.msgQueue.push({ left: msg.left, right: msg.right, offset: 0 });
-      while (this.msgQueue.length > this.msgQueueMax) { this.msgQueue.shift(); }
+      while (this.msgQueue.length > this.msgQueueMax) {
+        this.msgQueue.shift();
+        this.overflows += 1;
+      }
+    } else if (msg.type === 'stream-start') {
+      this.started = true;
     } else if (msg.type === 'gain') {
       this._msgGain = msg.value;
     } else if (msg.type === 'mute') {
@@ -5484,7 +5495,43 @@ class SaturnRxProcessor extends AudioWorkletProcessor {
     } else {
       this._processMsg(outL, outR, len);
     }
+    this._publishTelemetry(len);
     return true;
+  }
+
+  _setUnderrun(active) {
+    if (active && this.started && !this.inUnderrun) {
+      this.underruns += 1;
+    }
+    this.inUnderrun = active;
+  }
+
+  _queuedFrames() {
+    if (this.useSab && this.ctrlU32 && this.ringLen > 0) {
+      const cap = this.ringLen >>> 1;
+      const rd = Atomics.load(this.ctrlU32, ${CTRL_READ_IDX});
+      const wr = Atomics.load(this.ctrlU32, ${CTRL_WRITE_IDX});
+      return wr >= rd ? wr - rd : cap - rd + wr;
+    }
+    let frames = 0;
+    for (const pkt of this.msgQueue) {
+      frames += Math.max(0, pkt.left.length - pkt.offset);
+    }
+    return frames;
+  }
+
+  _publishTelemetry(renderedFrames) {
+    this.telemetryFrames += renderedFrames;
+    if (this.telemetryFrames < sampleRate / 4) return;
+    this.telemetryFrames = 0;
+    const queuedFrames = this._queuedFrames();
+    this.port.postMessage({
+      type: 'telemetry',
+      queuedFrames,
+      queuedMs: (queuedFrames / sampleRate) * 1000,
+      underruns: this.underruns,
+      overflows: this.overflows
+    });
   }
 
   _processSab(outL, outR, len) {
@@ -5505,8 +5552,11 @@ class SaturnRxProcessor extends AudioWorkletProcessor {
       // underrun: output silence
       outL.fill(0);
       outR.fill(0);
+      this._setUnderrun(true);
       return;
     }
+
+    this._setUnderrun(false);
 
     for (let i = 0; i < len; i++) {
       const idx = rd * 2;
@@ -5545,6 +5595,7 @@ class SaturnRxProcessor extends AudioWorkletProcessor {
       outL[i] = 0;
       outR[i] = 0;
     }
+    this._setUnderrun(written < len);
   }
 }
 registerProcessor('saturn-rx-player', SaturnRxProcessor);
@@ -9471,7 +9522,37 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       if (!state.audioCtx || !state.audioStreaming) {
         return null;
       }
+      if (state.audioWorkletMode) {
+        return state.rxWorkletTelemetryAt
+          ? Math.max(0, Math.round(state.rxWorkletQueuedMs))
+          : null;
+      }
       return Math.round((state.audioNextTime - state.audioCtx.currentTime) * 1000);
+    }
+
+    function networkProfileLabel(now = performance.now()) {
+      if (phoneWanLiteActive(now)) return "Phone WAN";
+      if (state.streamMode === "wan") return "WAN";
+      if (tailnetTransportActive()) return "Tailscale VPN";
+      return "LAN";
+    }
+
+    function audioProfileLabel() {
+      const rate = `${Math.round(state.audioSampleRate / 1000)} kHz`;
+      const channels = state.audioChannels === 1 ? "mono" : "stereo";
+      const path = state.audioWorkletMode === "sab"
+        ? "SAB"
+        : (state.audioWorkletMode === "msg" ? "Worklet" : "Legacy");
+      return `PCM F32 ${rate} ${channels} / ${path}`;
+    }
+
+    function browserOutputLatencyMs() {
+      if (state.audioContextOutputLatencyMs != null) return state.audioContextOutputLatencyMs;
+      return state.audioContextBaseLatencyMs;
+    }
+
+    function metricAgeMs(timestamp, now = performance.now()) {
+      return timestamp ? Math.max(0, Math.round(now - timestamp)) : null;
     }
 
     function latencyStripState(now = performance.now()) {
@@ -9485,9 +9566,15 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         const rtt = Math.max(0, Math.round(state.bridgeRttMs));
         const tone = rtt > 600 ? "alarm" : (rtt > 250 ? "warn" : "ok");
         const iqAge = state.lastFrameAt ? Math.max(0, Math.round(now - state.lastFrameAt)) : null;
-        const title = iqAge == null
-          ? "Bridge websocket round trip; no IQ frame received yet"
-          : `Bridge websocket round trip; latest IQ frame ${iqAge} ms ago`;
+        const queueMs = audioLeadMs();
+        const outputMs = browserOutputLatencyMs();
+        const title = [
+          `Bridge RTT ${rtt} ms`,
+          `jitter p99 ${state.rxAudioJitterP99Ms.toFixed(1)} ms`,
+          queueMs == null ? "audio queue unavailable" : `audio queue ${queueMs} ms`,
+          outputMs == null ? "browser output unavailable" : `browser output ${outputMs.toFixed(1)} ms`,
+          iqAge == null ? "no IQ frame yet" : `IQ age ${iqAge} ms`,
+        ].join("; ");
         return { label: `${rtt} ms RTT`, tone, title };
       }
       if (!state.iqStreaming || !state.lastFrameAt) {
@@ -9508,20 +9595,20 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         return { label: "Stopped", tone: "warn", title: "RX audio is stopped" };
       }
       const leadMs = audioLeadMs();
-      const dropCount = state.audioBackpressureDrops + state.rxWorkletDrops;
+      const dropCount = state.audioBackpressureDrops + state.rxWorkletDrops + state.rxWorkletOverflows;
       const rate = `${Math.round(state.audioSampleRate / 1000)} kHz`;
       const mode = state.audioWorkletMode === "sab" ? "SAB" : "MSG";
       const leadLabel = leadMs == null ? "-- ms" : `${leadMs} ms`;
-      const tone = (dropCount > 0 || leadMs == null || leadMs < -10 || leadMs > 180) ? "warn" : "ok";
+      const tone = (dropCount > 0 || state.rxWorkletUnderruns > 0 || leadMs == null || leadMs < -10 || leadMs > 180) ? "warn" : "ok";
       const label = `${rate} · ${leadLabel}`;
-      const title = `${mode} audio buffer, ${dropCount} resync/drop event(s)`;
+      const title = `${mode} audio buffer, ${state.rxWorkletUnderruns} underrun(s), ${dropCount} overflow/resync/drop event(s)`;
       return { label, tone, title };
     }
 
     function updateAudioControlStrip() {
       const audio = audioStripState();
       const leadMs = audioLeadMs();
-      const dropCount = state.audioBackpressureDrops + state.rxWorkletDrops;
+      const dropCount = state.audioBackpressureDrops + state.rxWorkletDrops + state.rxWorkletOverflows;
       const rateLabel = state.audioStreaming ? `${Math.round(state.audioSampleRate / 1000)} kHz` : "--";
       const leadLabel = leadMs == null ? "--" : `${leadMs} ms`;
       const pathLabel = state.audioStreaming
@@ -9623,8 +9710,15 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       const band = vfoBandState();
       const readyMs = txReadyRemainingMs();
       const leadMs = audioLeadMs();
-      const dropCount = state.audioBackpressureDrops + state.rxWorkletDrops;
+      const dropCount = state.audioBackpressureDrops + state.rxWorkletDrops + state.rxWorkletOverflows;
       const bridgeRttAge = state.bridgeRttAt ? Math.max(0, Math.round(now - state.bridgeRttAt)) : null;
+      const audioAge = metricAgeMs(state.lastAudioFrameAt, now);
+      const iqAge = metricAgeMs(state.lastFrameAt, now);
+      const baseLatency = state.audioContextBaseLatencyMs;
+      const outputLatency = state.audioContextOutputLatencyMs;
+      const recoveryMs = state.connectionLossStartedAt
+        ? Math.max(0, now - state.connectionLossStartedAt)
+        : state.connectionRecoveryMs;
       const latestFaultAge = latestOperatorFault ? Math.max(0, Math.round((now - latestOperatorFault.at) / 1000)) : null;
       const audioPath = state.audioStreaming
         ? (state.audioWorkletMode === "sab" ? "SAB" : (state.audioWorkletMode === "msg" ? "MSG" : "Legacy"))
@@ -9668,12 +9762,17 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
           ],
         },
         {
-          title: "Link / Audio",
+          title: "RX Latency",
           items: [
             operatorDetailItem("Bridge URL", state.wsUrl || "Default", window.location.host || "", state.connected ? "ok" : "warn"),
             operatorDetailItem("RTT", state.bridgeRttMs == null ? "None" : `${Math.round(state.bridgeRttMs)} ms`, bridgeRttAge == null ? "No pong yet" : `${bridgeRttAge} ms old`, state.bridgeRttMs == null ? "warn" : (state.bridgeRttMs > 600 ? "alarm" : (state.bridgeRttMs > 250 ? "warn" : "ok"))),
-            operatorDetailItem("Audio Lead", leadMs == null ? "None" : `${leadMs} ms`, `${dropCount} resync/drop event(s)`, audioStripState().tone),
-            operatorDetailItem("Audio Path", audioPath, state.audioStreaming ? `${Math.round(state.audioSampleRate / 1000)} kHz RX audio` : "Audio stopped", state.audioStreaming ? "rx" : "warn"),
+            operatorDetailItem("Packet Jitter", `${state.rxAudioJitterP50Ms.toFixed(1)} / ${state.rxAudioJitterP95Ms.toFixed(1)} / ${state.rxAudioJitterP99Ms.toFixed(1)} ms`, `p50 / p95 / p99 from ${state.rxAudioJitterSamples.length} packet interval(s)`, state.rxAudioJitterP99Ms > 40 ? "warn" : "ok"),
+            operatorDetailItem("Audio Queue", leadMs == null ? "None" : `${leadMs} ms`, `${state.rxWorkletUnderruns} underrun(s), ${dropCount} overflow/resync/drop event(s)`, audioStripState().tone),
+            operatorDetailItem("AudioContext", baseLatency == null ? "Unavailable" : `${baseLatency.toFixed(1)} ms base`, outputLatency == null ? "Output latency not reported by this browser" : `${outputLatency.toFixed(1)} ms output`, baseLatency == null && outputLatency == null ? "warn" : "ok"),
+            operatorDetailItem("Frame Age", `Audio ${audioAge == null ? "--" : `${audioAge} ms`} / IQ ${iqAge == null ? "--" : `${iqAge} ms`}`, "Time since the most recent browser frame arrival", audioAge != null && audioAge > 1000 ? "warn" : "ok"),
+            operatorDetailItem("Media Backlog", `Bridge ${state.bridgeOutboundQueuedBytes} B / browser ${state.wsMediaBacklogBytes} B`, `Bridge high-water ${state.outboundHighWatermarkBytes} B; TCP outq high-water ${state.bridgeTcpOutqHighWatermarkBytes} B`, state.bridgeOutboundQueuedBytes > 32768 || state.wsMediaBacklogBytes > 32768 ? "warn" : "ok"),
+            operatorDetailItem("Recovery", recoveryMs == null ? "None" : `${Math.round(recoveryMs)} ms`, state.connectionLossStartedAt ? "Connection is currently down" : `${state.connectionLossCount} unexpected loss event(s)`, state.connectionLossStartedAt ? "warn" : "ok"),
+            operatorDetailItem("Profiles", `${networkProfileLabel(now)} / ${audioProfileLabel()}`, `Display ${Math.round(state.sampleRate / 1000)} kHz; ${audioPath} audio path`, "rx"),
           ],
         },
         {
@@ -10869,6 +10968,43 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       updateUi();
     }
 
+    function refreshAudioContextLatency() {
+      const ctx = state.audioCtx;
+      if (!ctx) {
+        state.audioContextBaseLatencyMs = null;
+        state.audioContextOutputLatencyMs = null;
+        return;
+      }
+      const base = Number(ctx.baseLatency);
+      const output = Number(ctx.outputLatency);
+      state.audioContextBaseLatencyMs = Number.isFinite(base) && base >= 0 ? base * 1000 : null;
+      state.audioContextOutputLatencyMs = Number.isFinite(output) && output >= 0 ? output * 1000 : null;
+    }
+
+    function resetRxLatencyTelemetry() {
+      state.lastAudioFrameAt = 0;
+      state.lastAudioArrivalAt = 0;
+      state.lastAudioPacketDurationMs = 0;
+      state.rxAudioJitterSamples = [];
+      state.rxAudioJitterP50Ms = 0;
+      state.rxAudioJitterP95Ms = 0;
+      state.rxAudioJitterP99Ms = 0;
+      state.rxAudioJitterSummaryAt = 0;
+      state.rxWorkletQueuedMs = 0;
+      state.rxWorkletUnderruns = 0;
+      state.rxWorkletOverflows = 0;
+      state.rxWorkletTelemetryAt = 0;
+    }
+
+    function refreshRxAudioJitterSummary(now = performance.now()) {
+      if (now - (state.rxAudioJitterSummaryAt || 0) < 250) return;
+      const summary = _next.summarizeRxAudioJitter(state.rxAudioJitterSamples || []);
+      state.rxAudioJitterP50Ms = summary.p50Ms;
+      state.rxAudioJitterP95Ms = summary.p95Ms;
+      state.rxAudioJitterP99Ms = summary.p99Ms;
+      state.rxAudioJitterSummaryAt = now;
+    }
+
     async function startRxAudio() {
       const phase40Profile = phase40DisplayProfileConfig();
       if (phase40Profile && !phase40Profile.autoRxAudio) {
@@ -10890,6 +11026,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         ctx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 48000, latencyHint: "interactive" });
         state.audioCtx = ctx;
       }
+      refreshAudioContextLatency();
       if (ctx.state === "suspended") {
         try {
           await ctx.resume();
@@ -10924,6 +11061,14 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         });
         node.connect(ctx.destination);
         state.rxWorkletNode = node;
+        node.port.onmessage = (event) => {
+          const data = event.data || {};
+          if (data.type !== "telemetry" || node !== state.rxWorkletNode) return;
+          state.rxWorkletQueuedMs = Math.max(0, Number(data.queuedMs) || 0);
+          state.rxWorkletUnderruns = Math.max(0, Math.round(Number(data.underruns) || 0));
+          state.rxWorkletOverflows = Math.max(0, Math.round(Number(data.overflows) || 0));
+          state.rxWorkletTelemetryAt = performance.now();
+        };
 
         // Try SharedArrayBuffer ring buffer (disabled by default — postMessage is more stable)
         if (RX_AUDIO_USE_SAB_RING && typeof SharedArrayBuffer !== "undefined") {
@@ -10966,6 +11111,8 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       state.audioSampleRate = 48000;
       state.audioFramesPlayed = 0;
       state.audioBackpressureDrops = 0;
+      state.audioChannels = 2;
+      resetRxLatencyTelemetry();
       state.lastAudioSequence = null;
       state.audioSeqGapCount = 0;
       state.lastAudioSeqGapReportAt = 0;
@@ -10998,6 +11145,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       try {
         const ctx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 48000, latencyHint: "interactive" });
         state.audioCtx = ctx;
+        refreshAudioContextLatency();
         if (ctx.state === "suspended") {
           await ctx.resume();
         }
@@ -11044,6 +11192,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         await state.audioCtx.close();
         state.audioCtx = null;
       }
+      refreshAudioContextLatency();
       updateUi();
     }
 
@@ -12206,6 +12355,8 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
           logEvent("Connect diagnostic: closed WS probe before normal connect");
         }
       }
+      state.intentionalDisconnect = false;
+      state.connectionAttemptStartedAt = performance.now();
       state.connectPending = true;
       updateUi();
       const rawWsUrl = $("ws-url").value.trim();
@@ -12266,6 +12417,16 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       }, 3000);
       ws.onopen = () => {
         if (ws !== state.ws) { ws.close(); return; }
+        const openedAt = performance.now();
+        state.connectionOpenMs = state.connectionAttemptStartedAt
+          ? Math.max(0, openedAt - state.connectionAttemptStartedAt)
+          : null;
+        state.connectionAttemptStartedAt = 0;
+        if (state.connectionLossStartedAt) {
+          state.connectionRecoveryMs = Math.max(0, openedAt - state.connectionLossStartedAt);
+          state.connectionRecoveredAt = openedAt;
+          state.connectionLossStartedAt = 0;
+        }
         state.connectPending = false;
         state.connected = true;
         state.remoteClientRole = null;
@@ -12318,12 +12479,19 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       };
       ws.onclose = (event) => {
         if (ws !== state.ws) return;
+        const closedAt = performance.now();
         const wasTxActive = state.moxRequested || state.txEnabled || state.micCapturing;
         logEvent(`WebSocket closed code=${event.code} clean=${event.wasClean}${event.reason ? ` reason=${event.reason}` : ""}`);
         state.connectPending = false;
         state.connected = false;
         state.iqStreaming = false;
         state.ws = null;
+        state.wsMediaBacklogBytes = 0;
+        if (!state.intentionalDisconnect && !state.connectionLossStartedAt) {
+          state.connectionLossStartedAt = closedAt;
+          state.connectionLossCount += 1;
+        }
+        state.intentionalDisconnect = false;
         state.remoteClientRole = null;
         state.remoteClientId = null;
         stopBridgeRttPings();
@@ -12369,6 +12537,8 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     window.saturnConnectBridgeDiagnostic = connectBridge;
 
     async function disconnectBridge() {
+      state.intentionalDisconnect = true;
+      state.connectionLossStartedAt = 0;
       state.connectPending = false;
       await saveRemoteSettingsToServer(false);
       sendTxShutdownIfPossible(true);
@@ -12378,6 +12548,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       state.connected = false;
       state.iqStreaming = false;
       state.ws = null;
+      state.wsMediaBacklogBytes = 0;
       state.remoteClientRole = null;
       state.remoteClientId = null;
       stopBridgeRttPings();
@@ -12587,6 +12758,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         wr = (wr + 1) % cap;
       }
       Atomics.store(ctrl, CTRL_WRITE_IDX, wr);
+      state.rxWorkletNode?.port.postMessage({ type: "stream-start" });
       return true;
     }
 
@@ -12656,9 +12828,26 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       if (!frame) {
         return;
       }
+      const arrivedAt = performance.now();
+      const sourceRate = Math.max(1, Number(frame.header.sampleRate) || 48000);
+      const packetDurationMs = _next.audioFramesToMilliseconds(frame.frames, sourceRate);
+      const expectedDurationMs = state.lastAudioPacketDurationMs || packetDurationMs;
+      const jitterMs = _next.rxAudioArrivalJitterMs(
+        arrivedAt,
+        state.lastAudioArrivalAt,
+        expectedDurationMs
+      );
+      if (jitterMs != null) {
+        state.rxAudioJitterSamples.push(jitterMs);
+        while (state.rxAudioJitterSamples.length > 512) state.rxAudioJitterSamples.shift();
+      }
+      state.lastAudioArrivalAt = arrivedAt;
+      state.lastAudioFrameAt = arrivedAt;
+      state.lastAudioPacketDurationMs = packetDurationMs;
+      refreshRxAudioJitterSummary(arrivedAt);
       recordAudioSequence(frame);
       state.audioSampleRate = frame.header.sampleRate;
-      const sourceRate = Math.max(1, Number(frame.header.sampleRate) || 48000);
+      state.audioChannels = Math.max(1, Number(frame.header.channels) || 1);
       const targetRate = Math.max(1, Number(state.audioCtx?.sampleRate) || sourceRate);
       const playback = prepareAudioForPlayback(
         frame.left,
@@ -12963,6 +13152,11 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
 
     function pulseTelemetry() {
       const now = performance.now();
+      state.wsMediaBacklogBytes = state.ws
+        ? Math.max(0, Math.round(Number(state.ws.bufferedAmount) || 0))
+        : 0;
+      refreshAudioContextLatency();
+      refreshRxAudioJitterSummary(now);
       const elapsed = now - state.lastSummaryAt;
       if (elapsed >= 1000) {
         state.frameRate = state.frameCounter * (1000 / Math.max(1, elapsed));

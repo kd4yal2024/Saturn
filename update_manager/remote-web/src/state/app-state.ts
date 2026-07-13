@@ -38,6 +38,14 @@ export interface AppState {
   iqStreaming: boolean;
   audioStreaming: boolean;
   demoMode: boolean;
+  intentionalDisconnect: boolean;
+  connectionAttemptStartedAt: number;
+  connectionOpenMs: number | null;
+  connectionLossStartedAt: number;
+  connectionLossCount: number;
+  connectionRecoveryMs: number | null;
+  connectionRecoveredAt: number;
+  wsMediaBacklogBytes: number;
 
   // ── Radio ───────────────────────────────────────────────────────────────
   mode: string;
@@ -151,6 +159,9 @@ export interface AppState {
   audioPanicDrainCount: number;
   sendBlockedMs: number;
   outboundHighWatermarkBytes: number;
+  bridgeOutboundQueuedBytes: number;
+  bridgeTcpOutqHighWatermarkBytes: number;
+  displayRateLimitedPerSec: number;
   safetyQueueDepthOverflowCount: number;
   txUplinkDegraded: boolean;
   txMicSeq: number;
@@ -220,6 +231,7 @@ export interface AppState {
   // ── Audio ───────────────────────────────────────────────────────────────
   audioFramesPlayed: number;
   audioSampleRate: number;
+  audioChannels: number;
   audioCtx: AudioContext | null;
   audioGainNode: GainNode | null;
   audioSources: Set<AudioBufferSourceNode>;
@@ -235,6 +247,20 @@ export interface AppState {
   rxCtrlU32: Uint32Array | null;
   rxCtrlF32: Float32Array | null;
   rxWorkletDrops: number;
+  rxWorkletQueuedMs: number;
+  rxWorkletUnderruns: number;
+  rxWorkletOverflows: number;
+  rxWorkletTelemetryAt: number;
+  audioContextBaseLatencyMs: number | null;
+  audioContextOutputLatencyMs: number | null;
+  lastAudioFrameAt: number;
+  lastAudioArrivalAt: number;
+  lastAudioPacketDurationMs: number;
+  rxAudioJitterSamples: number[];
+  rxAudioJitterP50Ms: number;
+  rxAudioJitterP95Ms: number;
+  rxAudioJitterP99Ms: number;
+  rxAudioJitterSummaryAt: number;
 
   // ── Frame Stats ─────────────────────────────────────────────────────────
   lastFrameAt: number;
@@ -298,6 +324,14 @@ export function createAppState(): AppState {
     iqStreaming: false,
     audioStreaming: false,
     demoMode: false,
+    intentionalDisconnect: false,
+    connectionAttemptStartedAt: 0,
+    connectionOpenMs: null,
+    connectionLossStartedAt: 0,
+    connectionLossCount: 0,
+    connectionRecoveryMs: null,
+    connectionRecoveredAt: 0,
+    wsMediaBacklogBytes: 0,
 
     mode: 'USB',
     vfoA: 14200000,
@@ -405,6 +439,9 @@ export function createAppState(): AppState {
     audioPanicDrainCount: 0,
     sendBlockedMs: 0,
     outboundHighWatermarkBytes: 0,
+    bridgeOutboundQueuedBytes: 0,
+    bridgeTcpOutqHighWatermarkBytes: 0,
+    displayRateLimitedPerSec: 0,
     safetyQueueDepthOverflowCount: 0,
     txUplinkDegraded: false,
     txMicSeq: 0,
@@ -471,6 +508,7 @@ export function createAppState(): AppState {
 
     audioFramesPlayed: 0,
     audioSampleRate: 48000,
+    audioChannels: 2,
     audioCtx: null,
     audioGainNode: null,
     audioSources: new Set(),
@@ -486,6 +524,20 @@ export function createAppState(): AppState {
     rxCtrlU32: null,
     rxCtrlF32: null,
     rxWorkletDrops: 0,
+    rxWorkletQueuedMs: 0,
+    rxWorkletUnderruns: 0,
+    rxWorkletOverflows: 0,
+    rxWorkletTelemetryAt: 0,
+    audioContextBaseLatencyMs: null,
+    audioContextOutputLatencyMs: null,
+    lastAudioFrameAt: 0,
+    lastAudioArrivalAt: 0,
+    lastAudioPacketDurationMs: 0,
+    rxAudioJitterSamples: [],
+    rxAudioJitterP50Ms: 0,
+    rxAudioJitterP95Ms: 0,
+    rxAudioJitterP99Ms: 0,
+    rxAudioJitterSummaryAt: 0,
 
     lastFrameAt: 0,
     frameCounter: 0,

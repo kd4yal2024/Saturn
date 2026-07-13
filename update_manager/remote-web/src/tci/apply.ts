@@ -279,6 +279,12 @@ export function applyTciCommand(command: TciCommand, current: TciRadioState): Tc
       nonNegativeIntArg(args, offset + 12) ?? next.outboundHighWatermarkBytes;
     next.safetyQueueDepthOverflowCount =
       nonNegativeIntArg(args, offset + 13) ?? next.safetyQueueDepthOverflowCount;
+    next.bridgeTcpOutqHighWatermarkBytes =
+      nonNegativeIntArg(args, offset + 14) ?? next.bridgeTcpOutqHighWatermarkBytes;
+    next.displayRateLimitedPerSec =
+      nonNegativeIntArg(args, offset + 15) ?? next.displayRateLimitedPerSec;
+    next.bridgeOutboundQueuedBytes =
+      nonNegativeIntArg(args, offset + 16) ?? next.bridgeOutboundQueuedBytes;
   } else if (command.name === 'remote_tx_uplink') {
     const offset = String(argAt(args, 0) ?? '').trim() === '0' ? 1 : 0;
     const degraded = booleanArg(argAt(args, offset));

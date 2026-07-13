@@ -548,6 +548,10 @@ impl ClientOutbound {
     fn drain_stats(&self) -> ClientSchedulerStatsDelta {
         self.stats.drain()
     }
+
+    fn queued_bytes(&self) -> u64 {
+        self.queues.lock_unpoisoned().queued_bytes as u64
+    }
 }
 
 fn max_audio_queued_frames(sample_rate_hz: u32) -> usize {
@@ -1034,6 +1038,7 @@ pub struct TciClientSnapshot {
     pub audio_panic_drain_count: u64,
     pub send_blocked_ms: u64,
     pub outbound_high_watermark_bytes: u64,
+    pub outbound_queued_bytes: u64,
     pub tcp_outq_high_watermark_bytes: u64,
     pub display_rate_limited_per_sec: u64,
     pub safety_queue_depth_overflow_count: u64,
@@ -1200,6 +1205,7 @@ impl TciFrontend {
         let mut audio_panic_drain_count = 0u64;
         let mut send_blocked_ms = 0u64;
         let mut outbound_high_watermark_bytes = 0u64;
+        let mut outbound_queued_bytes = 0u64;
         let mut tcp_outq_high_watermark_bytes = 0u64;
         let mut safety_queue_depth_overflow_count = 0u64;
 
@@ -1216,6 +1222,7 @@ impl TciFrontend {
             send_blocked_ms = send_blocked_ms.saturating_add(delta.send_blocked_ms);
             outbound_high_watermark_bytes =
                 outbound_high_watermark_bytes.max(delta.outbound_high_watermark_bytes);
+            outbound_queued_bytes = outbound_queued_bytes.max(client.outbound.queued_bytes());
             tcp_outq_high_watermark_bytes =
                 tcp_outq_high_watermark_bytes.max(delta.tcp_outq_high_watermark_bytes);
             safety_queue_depth_overflow_count =
@@ -1247,6 +1254,7 @@ impl TciFrontend {
             audio_panic_drain_count,
             send_blocked_ms,
             outbound_high_watermark_bytes,
+            outbound_queued_bytes,
             tcp_outq_high_watermark_bytes,
             display_rate_limited_per_sec: self
                 .display_rate_limited_count
@@ -1579,7 +1587,7 @@ impl TciFrontend {
 
     pub fn publish_scheduler_telemetry(&self, snapshot: &TciClientSnapshot) {
         self.send_text(format!(
-            "remote_backpressure:0,{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{};",
+            "remote_backpressure:0,{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{};",
             snapshot.safety_enqueue_to_write_p50_us,
             snapshot.safety_enqueue_to_write_p95_us,
             snapshot.safety_enqueue_to_write_p99_us,
@@ -1595,7 +1603,8 @@ impl TciFrontend {
             snapshot.outbound_high_watermark_bytes,
             snapshot.safety_queue_depth_overflow_count,
             snapshot.tcp_outq_high_watermark_bytes,
-            snapshot.display_rate_limited_per_sec
+            snapshot.display_rate_limited_per_sec,
+            snapshot.outbound_queued_bytes
         ));
     }
 

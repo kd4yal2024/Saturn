@@ -66,6 +66,9 @@ export type TciRadioState = {
   audioPanicDrainCount: number;
   sendBlockedMs: number;
   outboundHighWatermarkBytes: number;
+  bridgeOutboundQueuedBytes: number;
+  bridgeTcpOutqHighWatermarkBytes: number;
+  displayRateLimitedPerSec: number;
   safetyQueueDepthOverflowCount: number;
   txUplinkDegraded: boolean;
   txMicDroppedCount: number;
