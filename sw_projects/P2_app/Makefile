@@ -9,6 +9,8 @@ CFLAGS = -Wall -Wextra -Wno-unused-function -O2 -g -D_GNU_SOURCE \
 DEPFLAGS = -MMD -MP
 LDFLAGS = -lm -lpthread
 .DEFAULT_GOAL := all
+.PHONY: all clean cppcheck cppcheck-ci test test-controller-lease \
+        test-controller-lease-asan test-protocol2-control smoke-shutdown
 
 # NOTE (2026-01): keep "local" libs here. libgpiod link flags are added below
 #                 via pkg-config (with a safe fallback).
@@ -18,7 +20,7 @@ TARGET = p2app
 VPATH=.:../common
 GIT_DATE := $(wordlist 2,5, $(shell git log -1 --format=%cd --date=rfc))
 
-BASE_SRCS = p2app.c controller_lease.c hwaccess.c saturnregisters.c codecwrite.c saturndrivers.c version.c generalpacket.c IncomingDDCSpecific.c IncomingDUCSpecific.c InHighPriority.c InDUCIQ.c InSpkrAudio.c OutMicAudio.c OutDDCIQ.c OutHighPriority.c debugaids.c auxadc.c cathandler.c frontpanelhandler.c catmessages.c LDGATU.c g2v2panel.c i2cdriver.c andromedacatmessages.c Outwideband.c serialport.c AriesATU.c GanymedePAControl.c p23_perf_telemetry.c
+BASE_SRCS = p2app.c controller_lease.c protocol2_control.c hwaccess.c saturnregisters.c codecwrite.c saturndrivers.c version.c generalpacket.c IncomingDDCSpecific.c IncomingDUCSpecific.c InHighPriority.c InDUCIQ.c InSpkrAudio.c OutMicAudio.c OutDDCIQ.c OutHighPriority.c debugaids.c auxadc.c cathandler.c frontpanelhandler.c catmessages.c LDGATU.c g2v2panel.c i2cdriver.c andromedacatmessages.c Outwideband.c serialport.c AriesATU.c GanymedePAControl.c p23_perf_telemetry.c
 
 # for cppcheck
 CPP_OPTIONS= --inline-suppr --enable=all --suppress=unmatchedSuppression
@@ -108,8 +110,15 @@ test-controller-lease-asan:
 	ASAN_OPTIONS=detect_leaks=1 ./tests/controller_lease_test
 	rm -f tests/controller_lease_test
 
+test-protocol2-control:
+	$(CC) $(CFLAGS) -I. tests/protocol2_control_test.c protocol2_control.c -o tests/protocol2_control_test
+	./tests/protocol2_control_test
+	rm -f tests/protocol2_control_test
+
+test: test-controller-lease test-protocol2-control
+
 clean:
-	rm -rf $(TARGET) *.o *.d *.bin tests/controller_lease_test
+	rm -rf $(TARGET) *.o *.d *.bin tests/controller_lease_test tests/protocol2_control_test
 
 smoke-shutdown: all
 	bash ./tools/shutdown_smoke.sh ./$(TARGET)

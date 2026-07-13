@@ -34,6 +34,7 @@
 #include <pthread.h>
 #include <syscall.h>
 #include "controller_lease.h"
+#include "protocol2_control.h"
 
 
 
@@ -519,8 +520,7 @@ void *IncomingDUCIQ(void *arg)                          // listener thread
     uint8_t *SrcPtr = NULL;
     uint8_t *DestPtr = NULL;
     bool PrevSDRActive = false;
-    bool SequenceValid = false;
-    uint32_t ExpectedSequence = 0;
+    TP2SequenceTracker SequenceTracker = {0};
 
     ThreadData = (struct ThreadSocketData *)arg;
     Context = calloc(1, sizeof(*Context));
@@ -575,15 +575,13 @@ void *IncomingDUCIQ(void *arg)                          // listener thread
             }
             atomic_fetch_and(&ThreadData->Cmdid, ~((uint_fast32_t)VBITCHANGEPORT));
             DUCQueueReset(Context);
-            SequenceValid = false;
-            ExpectedSequence = 0;
+            P2SequenceReset(&SequenceTracker);
         }
 
         if(SDRActiveNow != PrevSDRActive)
         {
             DUCQueueReset(Context);
-            SequenceValid = false;
-            ExpectedSequence = 0;
+            P2SequenceReset(&SequenceTracker);
         }
         PrevSDRActive = SDRActiveNow;
 
@@ -603,27 +601,27 @@ void *IncomingDUCIQ(void *arg)                          // listener thread
             for(MsgIndex = 0; MsgIndex < (unsigned int)Received; MsgIndex++)
             {
                 uint32_t PacketSequence = 0;
-                uint32_t SequenceDelta = 0;
-                uint32_t DroppedFrames = 0;
+                uint32_t MissingFrames = 0;
+                uint32_t QueueDroppedFrames = 0;
                 uint64_t ArrivalNs = 0;
 
                 if(DatagramList[MsgIndex].msg_len != VDUCIQSIZE)
                     continue;
+                if((DatagramList[MsgIndex].msg_hdr.msg_flags & MSG_TRUNC) != 0)
+                    continue;
                 if(!ControllerLeaseMatches(&SourceAddresses[MsgIndex]))
+                    continue;
+                PacketSequence = rd_be_u32(UDPInBuffers[MsgIndex]);
+                if(!P2SequenceAccept(&SequenceTracker, PacketSequence, &MissingFrames))
                     continue;
                 atomic_store(&NewMessageReceived, true);
                 P23PerfTelemetryCounterAdd(eP23PerfCounterDUCPackets, 1U);
                 P23PerfTelemetryCounterAdd(eP23PerfCounterDUCBytes, VDUCIQSIZE);
-                PacketSequence = rd_be_u32(UDPInBuffers[MsgIndex]);
-                if(SequenceValid && (PacketSequence != ExpectedSequence))
+                if(MissingFrames != 0U)
                 {
-                    SequenceDelta = PacketSequence - ExpectedSequence;
                     P23PerfTelemetryCounterAdd(eP23PerfCounterDUCGapEvents, 1U);
-                    if((SequenceDelta > 0U) && (SequenceDelta <= 0x7fffffffU))
-                        P23PerfTelemetryCounterAdd(eP23PerfCounterDUCGapDroppedFrames, SequenceDelta);
+                    P23PerfTelemetryCounterAdd(eP23PerfCounterDUCGapDroppedFrames, MissingFrames);
                 }
-                SequenceValid = true;
-                ExpectedSequence = PacketSequence + 1U;
 
                 ArrivalNs = GetMonotonicTimeNs();
                 SrcPtr = (uint8_t *) (UDPInBuffers[MsgIndex] + 4);
@@ -638,11 +636,11 @@ void *IncomingDUCIQ(void *arg)                          // listener thread
                     *DestPtr++ = *(SrcPtr+2);
                     SrcPtr += 6;                                        // point at next source sample
                 }
-                DroppedFrames = DUCQueuePushFrame(Context, ConvertedFrame, ArrivalNs);
-                if(DroppedFrames != 0U)
+                QueueDroppedFrames = DUCQueuePushFrame(Context, ConvertedFrame, ArrivalNs);
+                if(QueueDroppedFrames != 0U)
                 {
                     P23PerfTelemetryCounterAdd(eP23PerfCounterDUCQueueDropEvents, 1U);
-                    P23PerfTelemetryCounterAdd(eP23PerfCounterDUCQueueDroppedFrames, DroppedFrames);
+                    P23PerfTelemetryCounterAdd(eP23PerfCounterDUCQueueDroppedFrames, QueueDroppedFrames);
                 }
             }
         }

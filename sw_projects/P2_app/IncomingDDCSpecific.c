@@ -89,12 +89,15 @@ void *IncomingDDCSpecific(void *arg)                    // listener thread
       atomic_store(&ThreadError, true);
       break;
     }
+    if((datagram.msg_flags & MSG_TRUNC) != 0)
+      continue;
     if(size == VDDCSPECIFICSIZE)
     {
       if(!ControllerLeaseMatches(&addr_from))
         continue;
       atomic_store(&NewMessageReceived, true);
-      printf("DDC specific packet received\n");
+      if(UseDebug)
+        printf("DDC specific packet received\n");
       // get ADC details:
       Byte1 = *(uint8_t*)(UDPInBuffer+4);                   // get ADC count
       SetADCCount(Byte1);

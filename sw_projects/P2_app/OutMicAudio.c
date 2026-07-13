@@ -30,6 +30,7 @@
 #include "../common/saturndrivers.h"
 #include "../common/hwaccess.h"
 #include "../common/p23_perf_telemetry.h"
+#include "../common/byteio.h"
 
 
 #define VMICSAMPLESPERFRAME 64
@@ -66,6 +67,7 @@ void *OutgoingMicSamples(void *arg)
     bool InitError = false;
     int Error;
     int Socketfd;
+    int DMAReadFDToClose;
 
 //
 // variables for DMA buffer 
@@ -149,6 +151,17 @@ void *OutgoingMicSamples(void *arg)
             // Port rebinding is handled centrally by the p2app control plane.
             usleep(100);
         }
+        if(atomic_load(&ExitRequested))
+            break;
+
+        // The codec FIFO continues to receive samples while the network stream
+        // is inactive. Reset it on every activation so a new controller cannot
+        // receive stale microphone audio from the previous session.
+        sem_wait(&MicWBDMAMutex);
+        ResetDMAStreamFIFO(eMicCodecDMA);
+        sem_post(&MicWBDMAMutex);
+        if(!atomic_load(&SDRActive))
+            continue;
     //
     // if we get here, run has been initiated
     // initialise outgoing data packet
@@ -188,7 +201,7 @@ void *OutgoingMicSamples(void *arg)
 // this isn't a problem as we can send the data on without the code becoming blocked.
 //            if((StartupCount == 0) && FIFOUnderflow)
 //                printf("Codec Mic FIFO Underflowed, depth now = %d\n", Current);
-            while ((Depth < (VMICSAMPLESPERFRAME/4)) && !atomic_load(&ExitRequested))			        // 16 locations = 64 samples
+            while ((Depth < (VMICSAMPLESPERFRAME/4)) && atomic_load(&SDRActive) && !atomic_load(&ExitRequested))			        // 16 locations = 64 samples
             {
                 usleep(1000);								        // 1ms wait
                 Depth = ReadFIFOMonitorChannel(eMicCodecDMA, &FIFOOverflow, &FIFOOverThreshold, &FIFOUnderflow, &Current);				// read the FIFO Depth register
@@ -204,7 +217,7 @@ void *OutgoingMicSamples(void *arg)
 //                if((StartupCount == 0) && FIFOUnderflow)
 //                    printf("Codec Mic FIFO Underflowed, depth now = %d\n", Current);
             }
-            if(atomic_load(&ExitRequested))
+            if(!atomic_load(&SDRActive) || atomic_load(&ExitRequested))
                 break;
 
             // DMA shared with wideband samples, so get semaphore granting access
@@ -230,7 +243,7 @@ void *OutgoingMicSamples(void *arg)
                 break;
 
             // create the packet into UDPBuffer
-            *(uint32_t*)UDPBuffer = htonl(SequenceCounter++);        // add sequence count
+            wr_be_u32(UDPBuffer, SequenceCounter++);                 // add sequence count
             memcpy(UDPBuffer+4, MicBasePtr, VDMATRANSFERSIZE);       // copy in mic samples
             Socketfd = GetThreadSocketFD(ThreadData);
             Error = sendmsg(Socketfd, &datagram, 0);
@@ -259,6 +272,9 @@ void *OutgoingMicSamples(void *arg)
       atomic_store(&ThreadError, true);
 
     printf("shutting down outgoing mic data thread\n");
+    DMAReadFDToClose = atomic_exchange(&DMAReadfile_fd, -1);
+    if(DMAReadFDToClose >= 0)
+      close(DMAReadFDToClose);
     free(MicReadBuffer);
     CloseThreadSocketIfOwned(ThreadData);
     atomic_store(&ThreadData->Active, false);     // signal closed

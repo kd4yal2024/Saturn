@@ -90,12 +90,15 @@ void *IncomingDUCSpecific(void *arg)                    // listener thread
           atomic_store(&ThreadError, true);
           break;
       }
+      if((datagram.msg_flags & MSG_TRUNC) != 0)
+          continue;
       if(size == VDUCSPECIFICSIZE)
       {
           if(!ControllerLeaseMatches(&addr_from))
               continue;
           atomic_store(&NewMessageReceived, true);
-          printf("DUC packet received\n");
+          if(UseDebug)
+              printf("DUC packet received\n");
 // iambic settings
           IambicSpeed = *(uint8_t*)(UDPInBuffer+9);               // keyer speed
           IambicWeight = *(uint8_t*)(UDPInBuffer+10);             // keyer weight
@@ -143,6 +146,5 @@ void *IncomingDUCSpecific(void *arg)                    // listener thread
     atomic_store(&ThreadData->Active, false);     // indicate it is closed
     return NULL;
 }
-
 
 

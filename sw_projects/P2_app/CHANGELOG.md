@@ -5,6 +5,40 @@ All notable changes from the hardened app convergence pass are documented here.
 This changelog originated under `P3_app` and now follows the converged
 `P2_app` implementation.
 
+## [2026-07-13] RF State And Protocol 2 Session Hardening
+
+### Fixed
+
+- A `run=0` high-priority frame can no longer reassert MOX from bit 1 after the
+  stop path has disabled TX and unkeyed the radio. Transmit now additionally
+  requires a completed active-session handshake.
+- Shutdown now writes the safe RF state before worker joins and again after all
+  workers finish, before the RF GPIO semaphore is destroyed.
+- High-priority, DUC-IQ, and speaker streams now reject duplicate/backward
+  sequence numbers and preserve forward-gap accounting across 32-bit wrap.
+- The one-second activity watchdog now consumes its activity flag atomically,
+  closing the lost-packet window between a separate load and clear.
+- RX DDC and microphone activation now resets FPGA FIFO and staging state, so
+  samples and DMA residue cannot cross a controller-session boundary.
+- Exact-size DDC payloads are emitted immediately instead of being retained
+  until a later sample arrives.
+- Mic, DUC, and speaker FIFO telemetry now reports scaled sample counts rather
+  than raw FIFO locations.
+- Added truncation and wideband DMA bounds checks, guarded malformed DDC9
+  interleave metadata, and made high-rate DDC/DUC keepalive logs debug-only.
+
+### Added
+
+- Added reusable Protocol 2 run-state, sequence, and FIFO scaling helpers with
+  focused regression coverage under `make test-protocol2-control`.
+
+### Verified
+
+- `make test`
+- `make -j2`
+- `make cppcheck-ci`
+- UBSan and strict warning/conversion checks for the new helper/test module.
+
 ## [2026-07-12] Cross-Service Performance Telemetry
 
 ### Fixed

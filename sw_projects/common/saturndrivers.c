@@ -190,6 +190,14 @@ uint32_t AnalyseDDCHeader(uint32_t Header, uint32_t* DDCCounts)
 		}
 		else									// interleaved
 		{
+			// An interleave marker consumes this DDC and the following DDC.
+			// DDC9 has no following slot; reject that malformed hardware header
+			// instead of writing one element beyond DDCCounts[VNUMDDC].
+			if((DDC + 1U) >= VNUMDDC)
+			{
+				DDCCounts[DDC] = 0;
+				break;
+			}
 			Header = Header >> 3;
 			Rate = Header & 7;					// next 3 bits
 			Count = 2*DDCSampleCounts[Rate];

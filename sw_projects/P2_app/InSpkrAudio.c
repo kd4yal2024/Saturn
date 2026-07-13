@@ -29,6 +29,7 @@
 #include <time.h>
 #include <syscall.h>
 #include "controller_lease.h"
+#include "protocol2_control.h"
 #include "../common/saturnregisters.h"
 #include "../common/saturndrivers.h"
 #include "../common/hwaccess.h"
@@ -257,8 +258,7 @@ void *IncomingSpkrAudio(void *arg)                      // listener thread
     uint64_t LastPacketNs = 0;
     uint64_t NowNs = 0;
     bool GapMuteActive = false;
-    bool SequenceValid = false;
-    uint32_t ExpectedSequence = 0;
+    TP2SequenceTracker SequenceTracker = {0};
     struct timespec ReceiveTimeout;
     struct timespec *ReceiveTimeoutPtr = NULL;
 
@@ -342,8 +342,7 @@ void *IncomingSpkrAudio(void *arg)                      // listener thread
             LastObservedFIFOFrames = 0;
             LastPacketNs = 0;
             GapMuteActive = false;
-            SequenceValid = false;
-            ExpectedSequence = 0;
+            P2SequenceReset(&SequenceTracker);
             memset(QueueArrivalNs, 0, sizeof(QueueArrivalNs));
         }
         else if(!SDRActiveNow)
@@ -357,8 +356,7 @@ void *IncomingSpkrAudio(void *arg)                      // listener thread
             LastObservedFIFOFrames = 0;
             LastPacketNs = 0;
             GapMuteActive = false;
-            SequenceValid = false;
-            ExpectedSequence = 0;
+            P2SequenceReset(&SequenceTracker);
             memset(QueueArrivalNs, 0, sizeof(QueueArrivalNs));
         }
         PrevSDRActive = SDRActiveNow;
@@ -423,7 +421,6 @@ void *IncomingSpkrAudio(void *arg)                      // listener thread
             {
                 uint32_t QueueTail = 0;
                 uint32_t PacketSequence = 0;
-                uint32_t SequenceDelta = 0;
                 uint32_t MissingFrames = 0;
                 uint32_t InsertedFrames = 0;
                 uint32_t SilenceFrames = 0;
@@ -432,10 +429,15 @@ void *IncomingSpkrAudio(void *arg)                      // listener thread
 
                 if(DatagramList[MsgIndex].msg_len != VSPEAKERAUDIOSIZE)
                     continue;
+                if((DatagramList[MsgIndex].msg_hdr.msg_flags & MSG_TRUNC) != 0)
+                    continue;
                 if(!ControllerLeaseMatches(&SourceAddresses[MsgIndex]))
                     continue;
                 if(QueueCount >= VSPKSOFTQUEUEFRAMES)
                     break;
+                PacketSequence = rd_be_u32(UDPInBuffers[MsgIndex]);
+                if(!P2SequenceAccept(&SequenceTracker, PacketSequence, &MissingFrames))
+                    continue;
                 if(StartupCount != 0)                                   // decrement startup message count
                     StartupCount--;
                 if(StartupGraceCount != 0U)
@@ -444,37 +446,31 @@ void *IncomingSpkrAudio(void *arg)                      // listener thread
                 P23PerfTelemetryCounterAdd(eP23PerfCounterSpkrPackets, 1U);
                 P23PerfTelemetryCounterAdd(eP23PerfCounterSpkrBytes, VSPEAKERAUDIOSIZE);
                 RegVal += 1;            //debug
-                PacketSequence = rd_be_u32(UDPInBuffers[MsgIndex]);
                 PacketArrivalNs = GetMonotonicTimeNs();
-                if(SequenceValid && (PacketSequence != ExpectedSequence))
+                if(MissingFrames != 0U)
                 {
-                    SequenceDelta = PacketSequence - ExpectedSequence;
                     P23PerfTelemetryCounterAdd(eP23PerfCounterSpkrGapEvents, 1U);
                     PrefillActive = true;
 
-                    if((SequenceDelta > 0U) && (SequenceDelta <= 0x7fffffffU))
+                    FreeFrames = VSPKSOFTQUEUEFRAMES - QueueCount;
+                    if(FreeFrames > 0U)
+                        FreeFrames--;
+                    SilenceFrames = (MissingFrames < FreeFrames) ? MissingFrames : FreeFrames;
+                    if(SilenceFrames > VSPKMAXSEQUENCEGAPSILENCE)
+                        SilenceFrames = VSPKMAXSEQUENCEGAPSILENCE;
+                    while(SilenceFrames != 0U)
                     {
-                        MissingFrames = SequenceDelta;
-                        if(MissingFrames > VSPKMAXSEQUENCEGAPSILENCE)
-                            MissingFrames = VSPKMAXSEQUENCEGAPSILENCE;
-                        FreeFrames = VSPKSOFTQUEUEFRAMES - QueueCount;
-                        if(FreeFrames > 0U)
-                            FreeFrames--;
-                        SilenceFrames = (MissingFrames < FreeFrames) ? MissingFrames : FreeFrames;
-                        while(SilenceFrames != 0U)
-                        {
-                            QueueTail = (QueueHead + QueueCount) % VSPKSOFTQUEUEFRAMES;
-                            memset(QueueBuffers[QueueTail], 0, VDMATRANSFERSIZE);
-                            QueueArrivalNs[QueueTail] = PacketArrivalNs;
-                            QueueCount++;
-                            SilenceFrames--;
-                            InsertedFrames++;
-                        }
-                        if(InsertedFrames != 0U)
-                            P23PerfTelemetryCounterAdd(eP23PerfCounterSpkrSilenceFrames, InsertedFrames);
-                        if(SequenceDelta > InsertedFrames)
-                            P23PerfTelemetryCounterAdd(eP23PerfCounterSpkrGapDroppedFrames, (uint64_t)(SequenceDelta - InsertedFrames));
+                        QueueTail = (QueueHead + QueueCount) % VSPKSOFTQUEUEFRAMES;
+                        memset(QueueBuffers[QueueTail], 0, VDMATRANSFERSIZE);
+                        QueueArrivalNs[QueueTail] = PacketArrivalNs;
+                        QueueCount++;
+                        SilenceFrames--;
+                        InsertedFrames++;
                     }
+                    if(InsertedFrames != 0U)
+                        P23PerfTelemetryCounterAdd(eP23PerfCounterSpkrSilenceFrames, InsertedFrames);
+                    if(MissingFrames > InsertedFrames)
+                        P23PerfTelemetryCounterAdd(eP23PerfCounterSpkrGapDroppedFrames, (uint64_t)(MissingFrames - InsertedFrames));
                 }
                 QueueTail = (QueueHead + QueueCount) % VSPKSOFTQUEUEFRAMES;
                 memcpy(QueueBuffers[QueueTail], UDPInBuffers[MsgIndex] + 4, VDMATRANSFERSIZE);     // store speaker samples in the software reserve
@@ -482,8 +478,6 @@ void *IncomingSpkrAudio(void *arg)                      // listener thread
                 LastPacketNs = PacketArrivalNs;
                 QueueCount++;
                 GapMuteActive = false;
-                SequenceValid = true;
-                ExpectedSequence = PacketSequence + 1U;
             }
         }
         else if(SDRActiveNow && (LastPacketNs != 0) && (QueueCount == 0U))

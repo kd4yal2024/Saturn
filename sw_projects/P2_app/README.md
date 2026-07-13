@@ -4,7 +4,36 @@ This document records the code-safety, concurrency, and runtime-hardening
 changes that were originally staged in `P3_app` and are now carried by the
 converged hardened `P2_app` implementation.
 
-Latest update: 2026-07-11
+Latest update: 2026-07-13
+
+## RF State, Sequence, And Session Boundary Hardening (2026-07-13)
+
+- `run=0` now unkeys MOX, disables TX, releases the controller lease, and stops
+  processing that high-priority datagram. A stop packet can no longer reassert
+  MOX from its transmit bit.
+- Transmit is asserted only when both the packet requests `run + transmit` and
+  the startup handshake has made the SDR active.
+- High-priority, DUC-IQ, and speaker streams reject duplicate and backward UDP
+  sequence numbers while retaining forward-gap telemetry and wraparound.
+- RX DDC and microphone FIFOs are reset at controller activation. DDC DMA
+  residue and per-DDC staging pointers are also reset so a reconnect cannot
+  receive samples from the preceding session.
+- The activity watchdog consumes its packet flag with one atomic exchange,
+  removing the load/store window that could erase a newly arrived packet.
+- Shutdown unkeys RF before joining workers and repeats the safe-state write
+  after all workers have joined, before destroying the RF GPIO semaphore.
+- Exact DDC frames are now sent with `>=` framing checks; microphone, DUC, and
+  speaker FIFO telemetry is converted from FIFO locations to sample counts.
+- Oversized/truncated packet and DMA-count guards were added, while repetitive
+  DDC/DUC keepalive logging is now debug-only.
+
+Verification:
+
+```bash
+make test
+make
+make cppcheck-ci
+```
 
 ## Controller Ownership And Service Runtime (2026-07-11)
 
@@ -29,8 +58,6 @@ make cppcheck-ci
 
 ## Related Protocol Documentation
 
-- Repo-level Protocol 2 compatibility note:
-  [`../../docs/protocol2/Saturn_vs_openHPSDR_v4.4.md`](../../docs/protocol2/Saturn_vs_openHPSDR_v4.4.md)
 - Packet-capture regression checklist:
   [`Thetis_P2_Compatibility_Regression_Checklist.md`](./Thetis_P2_Compatibility_Regression_Checklist.md)
 

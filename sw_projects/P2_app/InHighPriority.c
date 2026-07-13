@@ -18,6 +18,7 @@
 #include "../common/saturntypes.h"
 #include "InHighPriority.h"
 #include "controller_lease.h"
+#include "protocol2_control.h"
 #include <errno.h>
 #include <stdlib.h>
 #include <stddef.h>
@@ -49,12 +50,13 @@ void *IncomingHighPriority(void *arg)                   // listener thread
   struct iovec iovecinst;                               // iovcnt buffer - 1 for each outgoing buffer
   struct msghdr datagram;                               // multiple incoming message header
   int size;                                             // UDP datagram length
-  bool RunBit;                                          // true if "run" bit set
   uint8_t Byte, Byte2;                                  // received dat being decoded
   uint32_t LongWord;
+  uint32_t MissingPackets;
   uint16_t Word;
   int i;                                                // counter
   bool HighPriorityStreamLogged = false;
+  TP2SequenceTracker SequenceTracker = {0};
   ESoftwareID FPGASWID;                                 // preprod/release etc
   unsigned int FPGAVersion;                             // firmware version
 
@@ -133,18 +135,30 @@ void *IncomingHighPriority(void *arg)                   // listener thread
     if(size == VHIGHPRIOTIYTOSDRSIZE)
     {
       bool WasActive;
+      bool TransmitActive;
+      TP2RunState RunState;
       if(!ControllerLeaseMatches(&addr_from))
         continue;
-      atomic_store(&NewMessageReceived, true);
+
+      // StartBitReceived is cleared on run=0 and by the inactivity watchdog.
+      // The next accepted controller session therefore gets a fresh sequence
+      // epoch even if the new client starts again at sequence zero.
+      if(!atomic_load(&StartBitReceived))
+        P2SequenceReset(&SequenceTracker);
       LongWord = rd_be_u32(UDPInBuffer);
+      if(!P2SequenceAccept(&SequenceTracker, LongWord, &MissingPackets))
+        continue;
+      atomic_store(&NewMessageReceived, true);
+      if((MissingPackets != 0U) && UseDebug)
+        printf("High priority sequence gap: missing %u packet(s)\n", MissingPackets);
       if(!HighPriorityStreamLogged)
       {
         printf("STARTUP: High priority packet stream detected\n");
         HighPriorityStreamLogged = true;
       }
       Byte = (uint8_t)(UDPInBuffer[4]);
-      RunBit = (bool)(Byte&1);
-      if(RunBit)
+      RunState = P2DecodeRunState(Byte);
+      if(RunState.Run)
       {
         atomic_store(&StartBitReceived, true);
         MarkStartupRunBitSeen();
@@ -170,12 +184,17 @@ void *IncomingHighPriority(void *arg)                   // listener thread
         }
         atomic_store(&StartBitReceived, false);
         ControllerLeaseRelease(&addr_from);
+        P2SequenceReset(&SequenceTracker);
+        continue;
       }
       //
-      // set TX or not TX
+      // Set TX only after the full startup handshake is active. This prevents
+      // an early or malformed run packet from asserting the physical MOX GPIO
+      // before the reply address and stream state are established.
       //
-      atomic_store(&IsTXMode, (bool)(Byte&2));
-      SetMOX(atomic_load(&IsTXMode));
+      TransmitActive = RunState.Transmit && atomic_load(&SDRActive);
+      atomic_store(&IsTXMode, TransmitActive);
+      SetMOX(TransmitActive);
 
 //
 // now properly decode DDC frequencies

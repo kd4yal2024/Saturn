@@ -283,6 +283,19 @@ void FreeDynamicMemory(void)
     }
 }
 
+static void ResetDDCSessionBuffers(void)
+{
+    uint32_t DDC;
+
+    DMAReadPtr = DMABasePtr;
+    DMAHeadPtr = DMABasePtr;
+    for(DDC = 0; DDC < VNUMDDC; DDC++)
+    {
+        IQReadPtr[DDC] = IQBasePtr[DDC];
+        IQHeadPtr[DDC] = IQBasePtr[DDC];
+    }
+}
+
 
 //
 //
@@ -398,6 +411,23 @@ void *OutgoingDDCIQ(void *arg)
             // Port rebinding is handled centrally by the p2app control plane.
             usleep(100);
         }
+        if(atomic_load(&ExitRequested))
+            break;
+
+        // Every controller activation starts from an empty FPGA FIFO and empty
+        // ARM-side decode buffers. Without this boundary, samples accumulated
+        // while inactive can be emitted to the next controller with sequence 0.
+        SetRXDDCEnabled(false);
+        usleep(1000);
+        ResetDMAStreamFIFO(eRXDDCDMA);
+        ResetDDCSessionBuffers();
+        PrevRateWord = 0xFFFFFFFFU;
+        FrameLength = 0U;
+        DMATransferSize = VDMATRANSFERSIZE;
+        memset(DDCCounts, 0, sizeof(DDCCounts));
+        if(!atomic_load(&SDRActive))
+            continue;
+
         printf("starting outgoing DDC data\n");
         StartupCount = VSTARTUPDELAY;
         //
@@ -434,13 +464,13 @@ void *OutgoingDDCIQ(void *arg)
         //
             for (DDC = 0; DDC < VNUMDDC; DDC++)
             {
-                while ((IQHeadPtr[DDC] - IQReadPtr[DDC]) > VIQBYTESPERFRAME)
+                while ((IQHeadPtr[DDC] - IQReadPtr[DDC]) >= VIQBYTESPERFRAME)
                 {
                     unsigned int BatchCount = 0;
                     unsigned char* BatchReadPtr = IQReadPtr[DDC];
                     uint32_t BatchSequence = SequenceCounter[DDC];
 
-                    while (((IQHeadPtr[DDC] - BatchReadPtr) > VIQBYTESPERFRAME) && (BatchCount < VMAXSENDMSGS))
+                    while (((IQHeadPtr[DDC] - BatchReadPtr) >= VIQBYTESPERFRAME) && (BatchCount < VMAXSENDMSGS))
                     {
                         uint8_t* PacketPtr = SendBuffer[BatchCount];
                         wr_be_u32(PacketPtr, BatchSequence++);                        // add sequence count
@@ -551,7 +581,7 @@ void *OutgoingDDCIQ(void *arg)
 //            if((StartupCount == 0) && FIFOUnderflow)
 //                 printf("RX DDC FIFO Underflowed, depth now = %d\n", Current);
             //		printf("read: depth = %d\n", Depth);
-            while((Depth < (DMATransferSize/8U)) && !atomic_load(&ExitRequested))			// 8 bytes per location
+            while((Depth < (DMATransferSize/8U)) && atomic_load(&SDRActive) && !atomic_load(&ExitRequested))			// 8 bytes per location
             {
                 usleep(500);								// 1ms wait
                 Depth = ReadFIFOMonitorChannel(eRXDDCDMA, &FIFOOverflow, &FIFOOverThreshold, &FIFOUnderflow, &Current);				// read the FIFO Depth register
@@ -567,7 +597,7 @@ void *OutgoingDDCIQ(void *arg)
 //                if((StartupCount == 0) && FIFOUnderflow)
 //                    printf("RX DDC FIFO Underflowed, depth now = %d\n", Current);
              }
-            if(atomic_load(&ExitRequested))
+            if(!atomic_load(&SDRActive) || atomic_load(&ExitRequested))
                 break;
 //            printf("DDC DMA read %d bytes from destination to base\n", DMATransferSize);
             if(Depth > 4096)
@@ -697,7 +727,12 @@ void *OutgoingDDCIQ(void *arg)
                     DMAHeadPtr = DMABasePtr;
                 }
             }
-        }     // end of while(!InitError) loop
+        }     // end of active-session loop
+
+        SetRXDDCEnabled(false);
+        usleep(1000);
+        ResetDMAStreamFIFO(eRXDDCDMA);
+        ResetDDCSessionBuffers();
     }
 
 //
@@ -707,6 +742,7 @@ cleanup:
     if(InitError)
         atomic_store(&ThreadError, true);
     printf("shutting down DDC outgoing thread\n");
+    SetRXDDCEnabled(false);
     if(IQReadfile_fd >= 0)
         close(IQReadfile_fd);
     for (DDC = 0; DDC < VNUMDDC; DDC++)

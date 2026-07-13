@@ -204,6 +204,13 @@ uint32_t ReadFIFOContent()
     WordCount = GetWidebandStatus(&ADC1, &ADC2);
     if(WordCount != 0)
     {
+        if(WordCount > (WBDMABufferSize / 8U))
+        {
+            printf("Wideband FIFO word count %u exceeds DMA buffer capacity %u\n",
+                   (unsigned int)WordCount, (unsigned int)(WBDMABufferSize / 8U));
+            atomic_store(&ThreadError, true);
+            return 0;
+        }
         int LocalDMAReadFD = atomic_load(&DMAReadfile_fd);
         if(LocalDMAReadFD < 0)
             return 0;
@@ -379,6 +386,11 @@ void *OutgoingWidebandSamples(void *arg)
                 SetWidebandEnable(false, false, false);                 // turn off data collection
                 usleep(150);                                            // wait for any current write to end
                 ReadFIFOContent();                                      // then empty the FIFO discarding data
+                if(atomic_load(&ThreadError))
+                {
+                    InitError = true;
+                    break;
+                }
                 SampleWordCount = ((LocalSamplePerPktCount * LocalPacketCount) / 4) + 8;    // no. 64 bit words; over-read by 8 words
                 SetWidebandSampleCount(SampleWordCount);
                 SetWidebandUpdateRate(LocalRate);
@@ -401,6 +413,11 @@ void *OutgoingWidebandSamples(void *arg)
                 if(ADC1 || ADC2)                                        // if data available for either
                 {
                     SampleWordCount = ReadFIFOContent();                // then read FIFO till empty
+                    if(atomic_load(&ThreadError))
+                    {
+                        InitError = true;
+                        break;
+                    }
 //                    printf("WB data available, ADC sample count = %d\n", SampleWordCount);
                     SetWidebandEnable((bool)(LocalEnables&1), (bool)(LocalEnables&2), true);  // re-enable record
                     //

@@ -31,6 +31,7 @@
 #include "../common/saturnregisters.h"
 #include "../common/saturndrivers.h"
 #include "../common/byteio.h"
+#include "protocol2_control.h"
 #include "../common/auxadc.h"
 #include "../common/p23_perf_telemetry.h"
 #include "LDGATU.h"
@@ -258,24 +259,20 @@ void *OutgoingHighPriority(void *arg)
         FIFOOverflows |= 0b00000001;
 
       ReadFIFOMonitorChannel(eMicCodecDMA, &FIFOOverflow, &FIFOOverThreshold, &FIFOUnderflow, &FIFOCount);				// read the mic FIFO Depth register
-
-      Word = Word*4;                                            // 4 samples per FIFO location
-      MicFIFOSamples = FIFOCount;
-      wr_be_u16(UDPBuffer+33, FIFOCount);                       // mic samples
+      MicFIFOSamples = P2ScaleFifoSamples(FIFOCount, 4U, 1U);   // 4 samples per FIFO location
+      wr_be_u16(UDPBuffer+33, (uint16_t)MicFIFOSamples);        // mic samples
       if(FIFOOverThreshold)
         FIFOOverflows |= 0b00000010;
 
       ReadFIFOMonitorChannel(eTXDUCDMA, &FIFOOverflow, &FIFOOverThreshold, &FIFOUnderflow, &FIFOCount);				// read the DUC FIFO Depth register
-      Word = (Word*4)/3;                                        // 4/3 samples per FIFO location
-      DUCFIFOSamples = FIFOCount;
-      wr_be_u16(UDPBuffer+35, FIFOCount);                       // DUC samples
+      DUCFIFOSamples = P2ScaleFifoSamples(FIFOCount, 4U, 3U);   // 4/3 samples per FIFO location
+      wr_be_u16(UDPBuffer+35, (uint16_t)DUCFIFOSamples);        // DUC samples
       if(FIFOUnderflow)
         FIFOOverflows |= 0b00000100;
 
       ReadFIFOMonitorChannel(eSpkCodecDMA, &FIFOOverflow, &FIFOOverThreshold, &FIFOUnderflow, &FIFOCount);				// read the speaker FIFO Depth register
-      Word = Word*2;                                            // 2 samples per FIFO location
-      SpeakerFIFOSamples = FIFOCount;
-      wr_be_u16(UDPBuffer+37, FIFOCount);                       // speaker samples
+      SpeakerFIFOSamples = P2ScaleFifoSamples(FIFOCount, 2U, 1U); // 2 samples per FIFO location
+      wr_be_u16(UDPBuffer+37, (uint16_t)SpeakerFIFOSamples);    // speaker samples
       if(FIFOUnderflow)
         FIFOOverflows |= 0b00001000;
 

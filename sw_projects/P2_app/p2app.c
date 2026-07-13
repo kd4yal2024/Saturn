@@ -70,7 +70,7 @@
 #include "frontpanelhandler.h"
 #include "controller_lease.h"
 
-#define P2APPVERSION 47
+#define P2APPVERSION 48
 #define FWREQUIREDMAJORVERSION 1                  // major version that is required. Only altered if programming interface changes. 
 //
 // the Firmware version is a protection to make sure that if a p2app update is required by the new firmware,
@@ -78,6 +78,8 @@
 //
 //------------------------------------------------------------------------------------------
 // VERSION History
+// V48, 13/07/2026. hardened RF stop/shutdown state, UDP sequence handling, watchdog activity,
+//                  stream session resets, FIFO telemetry scaling, and packet bounds checks.
 // V47, 27/05/2026. reduced PA drive level for V3 H/W to same as V2 H/W so that Puresignal works OK
 //                  (cherry-picked from laurencebarker/Saturn 4b0b76f).
 // V46, 19/03/2026. optional SCHED_RR/FIFO + CPU affinity tuning for speaker/DUC threads via SATURN_P3_RT_AUDIO_* env vars.
@@ -961,12 +963,26 @@ int MakeSocket(struct ThreadSocketData* Ptr, int DDCid)
   //
   // set 1ms timeout, and re-use any recently open ports
   //
-  setsockopt(Socketfd, SOL_SOCKET, SO_REUSEADDR, (void *)&yes , sizeof(yes));
-  setsockopt(Socketfd, SOL_SOCKET, SO_RCVBUF, (void *)&ReceiveBufferSize, sizeof(ReceiveBufferSize));
-  setsockopt(Socketfd, SOL_SOCKET, SO_SNDBUF, (void *)&SendBufferSize, sizeof(SendBufferSize));
+  if(setsockopt(Socketfd, SOL_SOCKET, SO_REUSEADDR, (void *)&yes, sizeof(yes)) != 0)
+  {
+    perror("setsockopt SO_REUSEADDR");
+    close(Socketfd);
+    atomic_store(&Ptr->Socketid, 0);
+    return EXIT_FAILURE;
+  }
+  if(setsockopt(Socketfd, SOL_SOCKET, SO_RCVBUF, (void *)&ReceiveBufferSize, sizeof(ReceiveBufferSize)) != 0)
+    perror("setsockopt SO_RCVBUF");
+  if(setsockopt(Socketfd, SOL_SOCKET, SO_SNDBUF, (void *)&SendBufferSize, sizeof(SendBufferSize)) != 0)
+    perror("setsockopt SO_SNDBUF");
   ReadTimeout.tv_sec = 0;
   ReadTimeout.tv_usec = 1000;
-  setsockopt(Socketfd, SOL_SOCKET, SO_RCVTIMEO, (void *)&ReadTimeout , sizeof(ReadTimeout));
+  if(setsockopt(Socketfd, SOL_SOCKET, SO_RCVTIMEO, (void *)&ReadTimeout, sizeof(ReadTimeout)) != 0)
+  {
+    perror("setsockopt SO_RCVTIMEO");
+    close(Socketfd);
+    atomic_store(&Ptr->Socketid, 0);
+    return EXIT_FAILURE;
+  }
 
   //
   // bind application to the specified port
@@ -1038,13 +1054,18 @@ void* CheckForExitCommand(__attribute__((unused)) void *arg)
 //
 void* CheckForActivity(__attribute__((unused)) void *arg)
 {
+  bool MessageReceived;
   bool PreviouslyActiveState;               
   printf("Started check for activity thread, pid=%ld\n", syscall(SYS_gettid));
   while(!atomic_load(&ExitRequested))
   {
     sleep(1);                                   // wait for 1 second
     PreviouslyActiveState = atomic_load(&SDRActive);          // see if active on entry
-    if (!atomic_load(&NewMessageReceived) && atomic_load(&HW_Timer_Enable)) // if no messages received,
+    // Consume the activity indication atomically. A packet arriving after this
+    // exchange remains set for the next interval instead of being erased by a
+    // separate unconditional store at the bottom of the loop.
+    MessageReceived = atomic_exchange(&NewMessageReceived, false);
+    if (!MessageReceived && atomic_load(&HW_Timer_Enable)) // if no messages received,
     {
       atomic_store(&SDRActive, false);          // set back to inactive
       atomic_store(&IsTXMode, false);
@@ -1060,7 +1081,6 @@ void* CheckForActivity(__attribute__((unused)) void *arg)
         ResetStartupTraceFlags();
       }
     }
-    atomic_store(&NewMessageReceived, false);
   }
   return NULL;
 }
@@ -1077,6 +1097,13 @@ void Shutdown()
   int i;
 
   atomic_store(&ExitRequested, true);
+  // Put the RF hardware in a safe state while the GPIO semaphore is still
+  // valid, before waiting for any worker thread to finish.
+  atomic_store(&SDRActive, false);
+  atomic_store(&IsTXMode, false);
+  SetMOX(false);
+  SetTXEnable(false);
+  EnableCW(false, false);
   if(CheckForExitThreadStarted)
   {
     pthread_join(CheckForExitThread, NULL);
@@ -1144,15 +1171,20 @@ void Shutdown()
   if(UseGanymede)
     ShutdownGanymedeHandler();
 
+  // A worker may have been between its ExitRequested check and a GPIO write
+  // when shutdown began. Re-assert the safe RF state after every worker has
+  // joined, while the GPIO semaphore is still valid.
+  atomic_store(&IsTXMode, false);
+  SetMOX(false);
+  SetTXEnable(false);
+  EnableCW(false, false);
+
   close(atomic_load(&SocketData[0].Socketid));            // close incoming data socket
   sem_destroy(&DDCInSelMutex);
   sem_destroy(&DDCResetFIFOMutex);
   sem_destroy(&RFGPIOMutex);
   sem_destroy(&CodecRegMutex);
   sem_destroy(&MicWBDMAMutex);                            // for DMA
-  SetMOX(false);
-  SetTXEnable(false);
-  EnableCW(false, false);
 }
 
 
