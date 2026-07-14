@@ -24,31 +24,32 @@ describe('reconnect supervisor', () => {
     vi.useFakeTimers();
     const connect = vi.fn();
     const closeSocket = vi.fn();
-    let snapshot: ReconnectSnapshot | null = null;
+    const snapshots: ReconnectSnapshot[] = [];
+    const latestSnapshot = (): ReconnectSnapshot | undefined => snapshots.at(-1);
     const supervisor = createReconnectSupervisor({
       connect,
       closeSocket,
-      onChange: (value) => { snapshot = value; },
+      onChange: (value) => { snapshots.push(value); },
       now: () => Date.now(),
       random: () => 0.5,
     });
 
     supervisor.start();
     expect(connect).toHaveBeenCalledWith(1);
-    expect(snapshot?.phase).toBe('connecting');
+    expect(latestSnapshot()?.phase).toBe('connecting');
 
     expect(supervisor.socketOpened(1)).toBe(true);
-    expect(snapshot?.phase).toBe('awaiting-ready');
+    expect(latestSnapshot()?.phase).toBe('awaiting-ready');
     expect(supervisor.bridgeReady(1)).toBe(true);
-    expect(snapshot?.phase).toBe('online');
-    expect(snapshot?.attempt).toBe(0);
+    expect(latestSnapshot()?.phase).toBe('online');
+    expect(latestSnapshot()?.attempt).toBe(0);
 
     supervisor.socketClosed('bridge restart');
-    expect(snapshot?.phase).toBe('waiting');
-    expect(snapshot?.nextRetryAt).toBe(Date.now() + 1000);
+    expect(latestSnapshot()?.phase).toBe('waiting');
+    expect(latestSnapshot()?.nextRetryAt).toBe(Date.now() + 1000);
     vi.advanceTimersByTime(1000);
     expect(connect).toHaveBeenLastCalledWith(2);
-    expect(snapshot?.attempt).toBe(1);
+    expect(latestSnapshot()?.attempt).toBe(1);
     vi.useRealTimers();
   });
 
