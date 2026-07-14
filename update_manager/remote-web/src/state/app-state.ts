@@ -292,7 +292,7 @@ export interface AppState {
   applyingBandMemory: boolean;
 
   // ── Performance ─────────────────────────────────────────────────────────
-  phase40DisplayProfile: string;
+  displayProfile: string;
   perfCaptureEnabled: boolean;
   perfConsoleLogging: boolean;
   perfSnapshots: unknown[];
@@ -567,7 +567,7 @@ export function createAppState(): AppState {
     bandMemory: {},
     applyingBandMemory: false,
 
-    phase40DisplayProfile: '',
+    displayProfile: '',
     perfCaptureEnabled: false,
     perfConsoleLogging: false,
     perfSnapshots: [],

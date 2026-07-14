@@ -29,7 +29,7 @@ describe('buildPerfSnapshot', () => {
     expect(snap.txMainToSendP99Ms).toBe(0);
     expect(snap.txWsSendP99Ms).toBe(0);
     expect(snap.txTimingFrameCount).toBe(0);
-    expect(snap.phase40DisplayProfile).toBe('');
+    expect(snap.displayProfile).toBe('');
     expect(snap.iqIdleMs).toBe(1000);
     expect(snap.audioIdleMs).toBe(1000);
     expect(snap.rxAudioJitterP99Ms).toBe(0);
@@ -95,7 +95,7 @@ describe('buildPerfSummary', () => {
     source2.txWsSendP99Ms = 1.25;
     source2.txTimingFrameCount = 187;
     source2.txTimingDroppedFrameCount = 2;
-    source2.phase40DisplayProfile = 'D-text-only';
+    source2.displayProfile = 'D-text-only';
     const s2 = buildPerfSnapshot(source2, 2000);
 
     const summary = buildPerfSummary([s1, s2], s2);
@@ -131,7 +131,7 @@ describe('buildPerfSummary', () => {
     expect(summary.maxTxWsSendP99Ms).toBe(1.25);
     expect(summary.totalTxTimingFrames).toBe(187);
     expect(summary.totalTxTimingDroppedFrames).toBe(2);
-    expect(summary.phase40DisplayProfile).toBe('D-text-only');
+    expect(summary.displayProfile).toBe('D-text-only');
     expect(summary.finalSnapshot).toEqual(s2);
   });
 });

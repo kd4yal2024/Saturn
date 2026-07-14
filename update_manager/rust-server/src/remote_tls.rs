@@ -396,9 +396,9 @@ fn remote_bridge_ws_response(
         header_value_for_log(&headers, header::HOST),
         header_value_for_log(&headers, header::ORIGIN),
     );
-    let phase42_session_id = extract_phase42_session_from_uri(&uri);
+    let split_session_id = extract_split_session_from_uri(&uri);
     ws.on_upgrade(move |socket| {
-        proxy_bridge_socket(socket, state.bridge_ws_url, channel, phase42_session_id)
+        proxy_bridge_socket(socket, state.bridge_ws_url, channel, split_session_id)
     })
 }
 
@@ -871,13 +871,13 @@ fn origin_authority_from_url(value: &str) -> Option<OriginAuthority> {
     })
 }
 
-fn extract_phase42_session_from_uri(uri: &axum::http::Uri) -> Option<String> {
+fn extract_split_session_from_uri(uri: &axum::http::Uri) -> Option<String> {
     let query = uri.query()?;
     for part in query.split('&') {
         let (name, value) = part.split_once('=').unwrap_or((part, ""));
         if name == "session" {
             let value = decode_query_component(value)?;
-            return sanitize_phase42_session_id(&value);
+            return sanitize_split_session_id(&value);
         }
     }
     None
@@ -917,7 +917,7 @@ fn hex_value(byte: u8) -> Option<u8> {
     }
 }
 
-fn sanitize_phase42_session_id(value: &str) -> Option<String> {
+fn sanitize_split_session_id(value: &str) -> Option<String> {
     let session_id: String = value
         .trim()
         .chars()
@@ -931,11 +931,11 @@ fn sanitize_phase42_session_id(value: &str) -> Option<String> {
     }
 }
 
-fn phase42_proxy_lane_message(
+fn split_proxy_lane_message(
     channel: BridgeProxyChannel,
     session_id: Option<&str>,
 ) -> Option<String> {
-    let session_id = sanitize_phase42_session_id(session_id?)?;
+    let session_id = sanitize_split_session_id(session_id?)?;
     match channel {
         BridgeProxyChannel::Legacy => None,
         BridgeProxyChannel::Control => Some(format!("session_lane:{session_id},control;")),
@@ -947,7 +947,7 @@ async fn proxy_bridge_socket(
     client: WebSocket,
     bridge_ws_url: String,
     channel: BridgeProxyChannel,
-    phase42_session_id: Option<String>,
+    split_session_id: Option<String>,
 ) {
     let (bridge, _) = match connect_async(&bridge_ws_url).await {
         Ok(connection) => connection,
@@ -962,7 +962,7 @@ async fn proxy_bridge_socket(
     let (mut client_tx, mut client_rx) = client.split();
     let (mut bridge_tx, mut bridge_rx) = bridge.split();
 
-    if let Some(message) = phase42_proxy_lane_message(channel, phase42_session_id.as_deref()) {
+    if let Some(message) = split_proxy_lane_message(channel, split_session_id.as_deref()) {
         if let Err(err) = bridge_tx
             .send(TungsteniteMessage::Text(message.into()))
             .await
@@ -1275,7 +1275,7 @@ mod tests {
     }
 
     #[test]
-    fn phase42_proxy_channels_enforce_control_media_separation() {
+    fn split_proxy_channels_enforce_control_media_separation() {
         assert!(bridge_proxy_allows_message(
             BridgeProxyChannel::Legacy,
             BridgeProxyMessageKind::Text
@@ -1303,7 +1303,7 @@ mod tests {
     }
 
     #[test]
-    fn phase42_proxy_channels_keep_websocket_control_frames_allowed() {
+    fn split_proxy_channels_keep_websocket_control_frames_allowed() {
         for channel in [
             BridgeProxyChannel::Legacy,
             BridgeProxyChannel::Control,
@@ -1325,42 +1325,42 @@ mod tests {
     }
 
     #[test]
-    fn phase42_proxy_extracts_sanitized_session_from_uri() {
+    fn split_proxy_extracts_sanitized_session_from_uri() {
         let uri: axum::http::Uri = "/saturn/control?x=1&session=phase.42_1-operator"
             .parse()
             .unwrap();
         assert_eq!(
-            extract_phase42_session_from_uri(&uri),
+            extract_split_session_from_uri(&uri),
             Some("phase.42_1-operator".to_string())
         );
 
         let encoded_uri: axum::http::Uri =
             "/saturn/media?session=phase%3A42+operator".parse().unwrap();
         assert_eq!(
-            extract_phase42_session_from_uri(&encoded_uri),
-            Some("phase42operator".to_string())
+            extract_split_session_from_uri(&encoded_uri),
+            Some("splitoperator".to_string())
         );
 
         let invalid_uri: axum::http::Uri = "/saturn/media?session=%zz".parse().unwrap();
-        assert_eq!(extract_phase42_session_from_uri(&invalid_uri), None);
+        assert_eq!(extract_split_session_from_uri(&invalid_uri), None);
     }
 
     #[test]
-    fn phase42_proxy_lane_messages_mark_split_channels() {
+    fn split_proxy_lane_messages_mark_split_channels() {
         assert_eq!(
-            phase42_proxy_lane_message(BridgeProxyChannel::Legacy, Some("phase-42")),
+            split_proxy_lane_message(BridgeProxyChannel::Legacy, Some("phase-42")),
             None
         );
         assert_eq!(
-            phase42_proxy_lane_message(BridgeProxyChannel::Control, Some("phase-42")),
+            split_proxy_lane_message(BridgeProxyChannel::Control, Some("phase-42")),
             Some("session_lane:phase-42,control;".to_string())
         );
         assert_eq!(
-            phase42_proxy_lane_message(BridgeProxyChannel::Media, Some("phase:42")),
-            Some("session_lane:phase42,media;".to_string())
+            split_proxy_lane_message(BridgeProxyChannel::Media, Some("phase:42")),
+            Some("session_lane:split,media;".to_string())
         );
         assert_eq!(
-            phase42_proxy_lane_message(BridgeProxyChannel::Media, Some("   ")),
+            split_proxy_lane_message(BridgeProxyChannel::Media, Some("   ")),
             None
         );
     }

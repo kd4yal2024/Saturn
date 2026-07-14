@@ -1,22 +1,22 @@
 import { describe, expect, it, vi } from 'vitest';
-import { createPhase42LegacySocketAdapter } from '../src/transport/phase42-adapter';
+import { createLegacySocketAdapter } from '../src/transport/legacy-socket-adapter';
 import type {
-  Phase42SocketEvent,
-  Phase42SocketEventType,
-  Phase42SocketLike,
+  SplitSocketEvent,
+  SplitSocketEventType,
+  SplitSocketLike,
 } from '../src/transport/split-sockets';
-import { PHASE42_MEDIA_BACKLOG_HARD_CAP_BYTES } from '../src/transport/split-sockets';
+import { SPLIT_MEDIA_BACKLOG_HARD_CAP_BYTES } from '../src/transport/split-sockets';
 
-class FakeWebSocket implements Phase42SocketLike {
+class FakeWebSocket implements SplitSocketLike {
   readonly sent: Array<string | ArrayBuffer> = [];
-  readonly listeners = new Map<Phase42SocketEventType, Array<(event: Phase42SocketEvent) => void>>();
+  readonly listeners = new Map<SplitSocketEventType, Array<(event: SplitSocketEvent) => void>>();
   readyState = 0;
   bufferedAmount = 0;
   binaryType?: BinaryType;
 
   constructor(readonly url: string) {}
 
-  addEventListener(type: Phase42SocketEventType, listener: (event: Phase42SocketEvent) => void): void {
+  addEventListener(type: SplitSocketEventType, listener: (event: SplitSocketEvent) => void): void {
     const listeners = this.listeners.get(type) ?? [];
     listeners.push(listener);
     this.listeners.set(type, listeners);
@@ -45,7 +45,7 @@ class FakeWebSocket implements Phase42SocketLike {
     this.dispatch('error', {});
   }
 
-  private dispatch(type: Phase42SocketEventType, event: Phase42SocketEvent): void {
+  private dispatch(type: SplitSocketEventType, event: SplitSocketEvent): void {
     for (const listener of this.listeners.get(type) ?? []) {
       listener(event);
     }
@@ -67,7 +67,7 @@ describe('Phase 42 legacy socket adapter', () => {
   it('opens as a legacy socket only after both lanes are open', () => {
     const { sockets, WebSocketCtor } = createFakeCtor();
     const onopen = vi.fn();
-    const adapter = createPhase42LegacySocketAdapter({
+    const adapter = createLegacySocketAdapter({
       baseWsUrl: 'wss://radio.local:8443/tci',
       sessionId: 'session-123',
       WebSocketCtor,
@@ -92,7 +92,7 @@ describe('Phase 42 legacy socket adapter', () => {
 
   it('routes legacy text sends to control and binary sends to media', () => {
     const { sockets, WebSocketCtor } = createFakeCtor();
-    const adapter = createPhase42LegacySocketAdapter({
+    const adapter = createLegacySocketAdapter({
       baseWsUrl: 'wss://radio.local:8443/tci',
       sessionId: 'session-123',
       WebSocketCtor,
@@ -113,7 +113,7 @@ describe('Phase 42 legacy socket adapter', () => {
 
   it('leaves media backpressure drops to the legacy caller', () => {
     const { sockets, WebSocketCtor } = createFakeCtor();
-    const adapter = createPhase42LegacySocketAdapter({
+    const adapter = createLegacySocketAdapter({
       baseWsUrl: 'wss://radio.local:8443/tci',
       sessionId: 'session-123',
       WebSocketCtor,
@@ -121,18 +121,18 @@ describe('Phase 42 legacy socket adapter', () => {
     const [, media] = sockets;
     const frame = new ArrayBuffer(64);
     media?.open();
-    if (media) media.bufferedAmount = PHASE42_MEDIA_BACKLOG_HARD_CAP_BYTES + 1;
+    if (media) media.bufferedAmount = SPLIT_MEDIA_BACKLOG_HARD_CAP_BYTES + 1;
 
     adapter.send(frame);
 
-    expect(adapter.bufferedAmount).toBe(PHASE42_MEDIA_BACKLOG_HARD_CAP_BYTES + 1);
+    expect(adapter.bufferedAmount).toBe(SPLIT_MEDIA_BACKLOG_HARD_CAP_BYTES + 1);
     expect(media?.sent).toEqual([frame]);
   });
 
   it('dispatches control text and media binary as legacy messages', () => {
     const { sockets, WebSocketCtor } = createFakeCtor();
     const received: unknown[] = [];
-    const adapter = createPhase42LegacySocketAdapter({
+    const adapter = createLegacySocketAdapter({
       baseWsUrl: 'wss://radio.local:8443/tci',
       sessionId: 'session-123',
       WebSocketCtor,
@@ -152,7 +152,7 @@ describe('Phase 42 legacy socket adapter', () => {
   it('buffers lane messages until the legacy open event has fired', () => {
     const { sockets, WebSocketCtor } = createFakeCtor();
     const events: string[] = [];
-    const adapter = createPhase42LegacySocketAdapter({
+    const adapter = createLegacySocketAdapter({
       baseWsUrl: 'wss://radio.local:8443/tci',
       sessionId: 'session-123',
       WebSocketCtor,
@@ -174,7 +174,7 @@ describe('Phase 42 legacy socket adapter', () => {
   it('closes the paired lane and emits one legacy close', () => {
     const { sockets, WebSocketCtor } = createFakeCtor();
     const onclose = vi.fn();
-    const adapter = createPhase42LegacySocketAdapter({
+    const adapter = createLegacySocketAdapter({
       baseWsUrl: 'wss://radio.local:8443/tci',
       sessionId: 'session-123',
       WebSocketCtor,
@@ -195,7 +195,7 @@ describe('Phase 42 legacy socket adapter', () => {
     const { sockets, WebSocketCtor } = createFakeCtor();
     const onProtocolViolation = vi.fn();
     const onmessage = vi.fn();
-    const adapter = createPhase42LegacySocketAdapter({
+    const adapter = createLegacySocketAdapter({
       baseWsUrl: 'wss://radio.local:8443/tci',
       sessionId: 'session-123',
       WebSocketCtor,

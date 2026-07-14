@@ -5347,7 +5347,7 @@
     })();
   </script>
   <script
-    src="/remote-assets/remote-next.js?v=phase44-opus-bridgeprefill240-cfcessb3-reconnect1"
+    src="/remote-assets/remote-next.js?v=arch-cleanup-1"
     onload="window.saturnRemoteBundleLoaded=true"
     onerror="window.saturnRemoteBundleError=true; window.saturnDiagLastError='remote-next.js failed to load'; window.saturnSetWsDiag && window.saturnSetWsDiag('JS error: remote-next.js failed to load')"
   ></script>
@@ -5686,17 +5686,17 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       { pillId: "operator-audio-pill", valueId: "operator-audio-value", label: "Audio" },
       { pillId: "operator-fault-pill", valueId: "operator-fault-value", label: "Fault" },
     ]);
-    const PHASE40_QUERY = new URLSearchParams(window.location.search);
-    const PHASE40_TX_DIAGNOSTIC = PHASE40_QUERY.get("phase40_tx_diagnostic") === "1";
-    const PHASE40_TX_SOURCE_RAW = String(PHASE40_QUERY.get("phase40_tx_source") || "mic").trim().toLowerCase();
-    const PHASE40_TX_SOURCE = ["mic", "tone", "twotone"].includes(PHASE40_TX_SOURCE_RAW)
-      ? PHASE40_TX_SOURCE_RAW
+    const PAGE_QUERY = new URLSearchParams(window.location.search);
+    const TX_DIAGNOSTIC = PAGE_QUERY.get("phase40_tx_diagnostic") === "1";
+    const TX_DIAG_SOURCE_RAW = String(PAGE_QUERY.get("phase40_tx_source") || "mic").trim().toLowerCase();
+    const TX_DIAG_SOURCE = ["mic", "tone", "twotone"].includes(TX_DIAG_SOURCE_RAW)
+      ? TX_DIAG_SOURCE_RAW
       : "mic";
-    const PHASE40_TX_LEVEL_DB_RAW = Number(PHASE40_QUERY.get("phase40_tx_level_db") || -20);
-    const PHASE40_TX_LEVEL_DB = Number.isFinite(PHASE40_TX_LEVEL_DB_RAW)
-      ? Math.max(-60, Math.min(-3, PHASE40_TX_LEVEL_DB_RAW))
+    const TX_DIAG_LEVEL_DB_RAW = Number(PAGE_QUERY.get("phase40_tx_level_db") || -20);
+    const TX_DIAG_LEVEL_DB = Number.isFinite(TX_DIAG_LEVEL_DB_RAW)
+      ? Math.max(-60, Math.min(-3, TX_DIAG_LEVEL_DB_RAW))
       : -20;
-    const PHASE40_DISPLAY_PROFILE_ALIASES = Object.freeze({
+    const DISPLAY_PROFILE_LABEL_ALIASES = Object.freeze({
       "a": "A-192k-waterfall",
       "a-192k-waterfall": "A-192k-waterfall",
       "192k-waterfall": "A-192k-waterfall",
@@ -5710,19 +5710,19 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       "d-text-only": "D-text-only",
       "text-only": "D-text-only",
     });
-    const PHASE40_DISPLAY_PROFILES = Object.freeze({
+    const DISPLAY_PROFILE_LABELS = Object.freeze({
       "A-192k-waterfall": Object.freeze({ sampleRate: 192000, autoIq: true, autoRxAudio: true }),
       "B-96k-waterfall": Object.freeze({ sampleRate: 96000, autoIq: true, autoRxAudio: true }),
       "C-48k-waterfall": Object.freeze({ sampleRate: 48000, autoIq: true, autoRxAudio: true }),
       "D-text-only": Object.freeze({ sampleRate: 48000, autoIq: false, autoRxAudio: false }),
     });
 
-    function normalizePhase40DisplayProfile(value) {
+    function normalizeDisplayProfile(value) {
       const key = String(value || "").trim().toLowerCase();
-      return PHASE40_DISPLAY_PROFILE_ALIASES[key] || "";
+      return DISPLAY_PROFILE_LABEL_ALIASES[key] || "";
     }
 
-    const PHASE40_DISPLAY_PROFILE = normalizePhase40DisplayProfile(PHASE40_QUERY.get("phase40_display_profile"));
+    const DISPLAY_PROFILE_LABEL = normalizeDisplayProfile(PAGE_QUERY.get("phase40_display_profile"));
     function saturnRemoteNextApi() {
       const direct = globalThis.SaturnRemoteNext;
       const bundle = globalThis.SaturnRemoteNextBundle;
@@ -5750,43 +5750,43 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         return null;
       }
     }
-    const PHASE44_TX_OPUS_OVERRIDE_KEY = _next.TX_OPUS_OVERRIDE_STORAGE_KEY || "saturn.phase44.txOpus";
-    const PHASE44_QUERY_PARAMS = new URLSearchParams(window.location.search);
-    const PHASE44_TX_OPUS_NOISE_GATE_QUERY_RAW = PHASE44_QUERY_PARAMS.get("phase44_tx_noise_gate_db");
-    const PHASE44_TX_OPUS_NOISE_GATE_QUERY_DB = PHASE44_TX_OPUS_NOISE_GATE_QUERY_RAW === null
+    const TX_OPUS_OVERRIDE_KEY = _next.TX_OPUS_OVERRIDE_STORAGE_KEY || "saturn.phase44.txOpus";
+    const TX_OPUS_QUERY_PARAMS = new URLSearchParams(window.location.search);
+    const TX_OPUS_NOISE_GATE_QUERY_RAW = TX_OPUS_QUERY_PARAMS.get("phase44_tx_noise_gate_db");
+    const TX_OPUS_NOISE_GATE_QUERY_DB = TX_OPUS_NOISE_GATE_QUERY_RAW === null
       ? NaN
-      : Number(PHASE44_TX_OPUS_NOISE_GATE_QUERY_RAW);
-    const PHASE44_TX_OPUS_CFC_QUERY = `${PHASE44_QUERY_PARAMS.get("phase44_tx_cfc") || ""}`.trim().toLowerCase();
-    const PHASE44_TX_OPUS_CFC = ["1", "true", "on", "essb", "warm"].includes(PHASE44_TX_OPUS_CFC_QUERY);
-    const PHASE44_TX_OPUS_CFC_PRECOMP_QUERY_RAW = PHASE44_QUERY_PARAMS.get("phase44_tx_cfc_precomp_db");
-    const PHASE44_TX_OPUS_CFC_PRECOMP_QUERY_DB = PHASE44_TX_OPUS_CFC_PRECOMP_QUERY_RAW === null
+      : Number(TX_OPUS_NOISE_GATE_QUERY_RAW);
+    const TX_OPUS_CFC_QUERY = `${TX_OPUS_QUERY_PARAMS.get("phase44_tx_cfc") || ""}`.trim().toLowerCase();
+    const TX_OPUS_CFC = ["1", "true", "on", "essb", "warm"].includes(TX_OPUS_CFC_QUERY);
+    const TX_OPUS_CFC_PRECOMP_QUERY_RAW = TX_OPUS_QUERY_PARAMS.get("phase44_tx_cfc_precomp_db");
+    const TX_OPUS_CFC_PRECOMP_QUERY_DB = TX_OPUS_CFC_PRECOMP_QUERY_RAW === null
       ? NaN
-      : Number(PHASE44_TX_OPUS_CFC_PRECOMP_QUERY_RAW);
-    const PHASE44_TX_OPUS_CFC_PRECOMP_DB = Math.max(
+      : Number(TX_OPUS_CFC_PRECOMP_QUERY_RAW);
+    const TX_OPUS_CFC_PRECOMP_DB = Math.max(
       0,
-      Math.min(4, Number.isFinite(PHASE44_TX_OPUS_CFC_PRECOMP_QUERY_DB) ? PHASE44_TX_OPUS_CFC_PRECOMP_QUERY_DB : 1)
+      Math.min(4, Number.isFinite(TX_OPUS_CFC_PRECOMP_QUERY_DB) ? TX_OPUS_CFC_PRECOMP_QUERY_DB : 1)
     );
-    const PHASE44_TX_OPUS_OVERRIDE = typeof _next.txOpusRuntimeOverrideEnabled === "function"
+    const TX_OPUS_OVERRIDE = typeof _next.txOpusRuntimeOverrideEnabled === "function"
       ? _next.txOpusRuntimeOverrideEnabled(
           window.location.search,
-          safeLocalStorageGet(PHASE44_TX_OPUS_OVERRIDE_KEY)
+          safeLocalStorageGet(TX_OPUS_OVERRIDE_KEY)
         )
       : (
-          PHASE44_QUERY_PARAMS.get("phase44_tx_opus") === "1" ||
-          safeLocalStorageGet(PHASE44_TX_OPUS_OVERRIDE_KEY) === "1"
+          TX_OPUS_QUERY_PARAMS.get("phase44_tx_opus") === "1" ||
+          safeLocalStorageGet(TX_OPUS_OVERRIDE_KEY) === "1"
         );
-    const PHASE44_TX_OPUS_VOICE_EQ = PHASE44_QUERY_PARAMS.get("phase44_tx_voice_eq") !== "0";
-    const PHASE44_TX_OPUS_NOISE_GATE_QUERY = `${PHASE44_QUERY_PARAMS.get("phase44_tx_noise_gate") || ""}`.trim().toLowerCase();
-    const PHASE44_TX_OPUS_NOISE_GATE_QUERY_SET = PHASE44_QUERY_PARAMS.has("phase44_tx_noise_gate");
-    const PHASE44_TX_OPUS_NOISE_GATE = ["1", "true", "on", "yes"].includes(PHASE44_TX_OPUS_NOISE_GATE_QUERY);
-    const PHASE44_TX_OPUS_NOISE_GATE_THRESHOLD_DB = Math.max(
+    const TX_OPUS_VOICE_EQ = TX_OPUS_QUERY_PARAMS.get("phase44_tx_voice_eq") !== "0";
+    const TX_OPUS_NOISE_GATE_QUERY = `${TX_OPUS_QUERY_PARAMS.get("phase44_tx_noise_gate") || ""}`.trim().toLowerCase();
+    const TX_OPUS_NOISE_GATE_QUERY_SET = TX_OPUS_QUERY_PARAMS.has("phase44_tx_noise_gate");
+    const TX_OPUS_NOISE_GATE = ["1", "true", "on", "yes"].includes(TX_OPUS_NOISE_GATE_QUERY);
+    const TX_OPUS_NOISE_GATE_THRESHOLD_DB = Math.max(
       -80,
-      Math.min(0, Number.isFinite(PHASE44_TX_OPUS_NOISE_GATE_QUERY_DB) ? PHASE44_TX_OPUS_NOISE_GATE_QUERY_DB : -50)
+      Math.min(0, Number.isFinite(TX_OPUS_NOISE_GATE_QUERY_DB) ? TX_OPUS_NOISE_GATE_QUERY_DB : -50)
     );
 
     const state = _next.createAppState();
-    state.phase40DisplayProfile = PHASE40_DISPLAY_PROFILE;
-    state.txOpusOverrideEnabled = PHASE44_TX_OPUS_OVERRIDE;
+    state.displayProfile = DISPLAY_PROFILE_LABEL;
+    state.txOpusOverrideEnabled = TX_OPUS_OVERRIDE;
     state.txOpusProducer = null;
     state.txOpusProducerCodec = null;
     state.txOpusPendingTimings = new Map();
@@ -6520,19 +6520,19 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       }
     }
 
-    function phase40DisplayProfileConfig() {
-      if (!PHASE40_DISPLAY_PROFILE) {
+    function displayProfileConfig() {
+      if (!DISPLAY_PROFILE_LABEL) {
         return null;
       }
-      return PHASE40_DISPLAY_PROFILES[PHASE40_DISPLAY_PROFILE] || null;
+      return DISPLAY_PROFILE_LABELS[DISPLAY_PROFILE_LABEL] || null;
     }
 
-    function applyPhase40DisplayProfile(reason = "") {
-      const profile = phase40DisplayProfileConfig();
+    function applyDisplayProfile(reason = "") {
+      const profile = displayProfileConfig();
       if (!profile) {
         return false;
       }
-      state.phase40DisplayProfile = PHASE40_DISPLAY_PROFILE;
+      state.displayProfile = DISPLAY_PROFILE_LABEL;
       state.sampleRate = clampSampleRateHz(profile.sampleRate);
       state.waterfallFrameSkipCounter = 0;
       state.waterfallSettleFrames = 0;
@@ -6551,23 +6551,23 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         }
       }
       if (reason) {
-        logEvent(`Phase 40 display profile ${PHASE40_DISPLAY_PROFILE} applied (${reason})`);
+        logEvent(`Phase 40 display profile ${DISPLAY_PROFILE_LABEL} applied (${reason})`);
       }
       return true;
     }
 
-    function phase40ShouldAutoStartIq() {
-      const profile = phase40DisplayProfileConfig();
+    function shouldAutoStartIq() {
+      const profile = displayProfileConfig();
       return !profile || profile.autoIq;
     }
 
-    function phase40ShouldAutoStartRxAudio() {
-      const profile = phase40DisplayProfileConfig();
+    function shouldAutoStartRxAudio() {
+      const profile = displayProfileConfig();
       return !profile || profile.autoRxAudio;
     }
 
-    function applyPhase40TxSourceOverrides() {
-      if (!phase40GeneratedTxSourceActive()) {
+    function applyTxSourceOverrides() {
+      if (!generatedTxSourceActive()) {
         return false;
       }
       state.twoToneEnabled = false;
@@ -7267,10 +7267,10 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       describeMicCaptureError: _describeMicCaptureError,
     } = _next;
 
-    function phase42SplitTransportEnabled() {
-      return _next.phase42SplitTransportEnabled(
+    function splitTransportEnabled() {
+      return _next.splitTransportEnabled(
         window.location.search,
-        localStorage.getItem(_next.PHASE42_SPLIT_STORAGE_KEY)
+        localStorage.getItem(_next.SPLIT_TRANSPORT_STORAGE_KEY)
       );
     }
 
@@ -7282,17 +7282,17 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       if (forceLegacyWsDiagnosticEnabled()) {
         return "legacy diagnostic";
       }
-      return phase42SplitTransportEnabled() ? "phase42 split" : "legacy";
+      return splitTransportEnabled() ? "split split" : "legacy";
     }
 
-    function createBridgeSocket(baseWsUrl, phase42SessionId = "") {
-      if (!phase42SessionId) {
+    function createBridgeSocket(baseWsUrl, splitSessionId = "") {
+      if (!splitSessionId) {
         return new WebSocket(baseWsUrl);
       }
-      if (typeof _next.createPhase42LegacySocketAdapter !== "function") {
+      if (typeof _next.createLegacySocketAdapter !== "function") {
         throw new Error("Phase 42 split adapter is not available in remote-next.js");
       }
-      class Phase42DiagnosticWebSocket extends WebSocket {
+      class SplitDiagnosticWebSocket extends WebSocket {
         constructor(url) {
           super(url);
           const lane = String(url).includes("/saturn/media") ? "media" : "control";
@@ -7308,10 +7308,10 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
           });
         }
       }
-      return _next.createPhase42LegacySocketAdapter({
+      return _next.createLegacySocketAdapter({
         baseWsUrl,
-        sessionId: phase42SessionId,
-        WebSocketCtor: Phase42DiagnosticWebSocket,
+        sessionId: splitSessionId,
+        WebSocketCtor: SplitDiagnosticWebSocket,
         onProtocolViolation(violation) {
           logEvent(`Phase 42 ${violation.channel} lane violation: ${violation.reason}`);
           recordOperatorFault("Bridge lane violation", "warn", false);
@@ -8036,7 +8036,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       const prefs = _next.radioPrefsFromState(state);
       prefs.rxAdc = REMOTE_FIXED_RX_ADC;
       return state.txOpusOverrideEnabled === true
-        ? phase44OpusLabCleanRadioPrefs(prefs)
+        ? tx-opusOpusLabCleanRadioPrefs(prefs)
         : prefs;
     }
 
@@ -8084,58 +8084,58 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
 
     const BAND_MEMORY_KEY = "saturn.remote.bandMemory";
 
-    function phase44OpusLabZeroBands() {
+    function tx-opusOpusLabZeroBands() {
       return [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
     }
 
-    function phase44OpusLabPreviousTxEqBands() {
+    function tx-opusOpusLabPreviousTxEqBands() {
       return [0, 0, 0, 0, -1, 0, 1, 2, 1, 0, 0];
     }
 
-    function phase44OpusLabDesiredTxEqBands() {
-      if (!PHASE44_TX_OPUS_VOICE_EQ) {
-        return phase44OpusLabZeroBands();
+    function tx-opusOpusLabDesiredTxEqBands() {
+      if (!TX_OPUS_VOICE_EQ) {
+        return tx-opusOpusLabZeroBands();
       }
       // 32, 63, 125, 250, 500, 1k, 2k, 4k, 8k, 16k.
       return [0, 0, 0, 1, 2, 1, -1, 1, 3, 1, 0];
     }
 
-    function phase44OpusLabDesiredCfcPrecomp() {
-      return PHASE44_TX_OPUS_CFC ? PHASE44_TX_OPUS_CFC_PRECOMP_DB : 0;
+    function tx-opusOpusLabDesiredCfcPrecomp() {
+      return TX_OPUS_CFC ? TX_OPUS_CFC_PRECOMP_DB : 0;
     }
 
-    function phase44OpusLabDesiredCfcBands() {
-      if (!PHASE44_TX_OPUS_CFC) {
-        return phase44OpusLabZeroBands();
+    function tx-opusOpusLabDesiredCfcBands() {
+      if (!TX_OPUS_CFC) {
+        return tx-opusOpusLabZeroBands();
       }
       // 50, 100, 200, 500, 1k, 1.5k, 2.5k, 3k, 5k, 8k.
       // Gentle ESSB baseline: low-end warmth, warm mids, no high-band CFC lift.
       return [0, 0.5, 1.5, 2.0, 2.0, 1.0, 0.5, 0, 0, 0, 0];
     }
 
-    function phase44OpusLabClampNoiseGateThreshold(value) {
+    function tx-opusOpusLabClampNoiseGateThreshold(value) {
       const numeric = Number(value);
       return Math.max(
         -80,
-        Math.min(0, Number.isFinite(numeric) ? numeric : PHASE44_TX_OPUS_NOISE_GATE_THRESHOLD_DB)
+        Math.min(0, Number.isFinite(numeric) ? numeric : TX_OPUS_NOISE_GATE_THRESHOLD_DB)
       );
     }
 
-    function phase44OpusLabDesiredNoiseGateEnabled() {
-      if (PHASE44_TX_OPUS_NOISE_GATE_QUERY_SET) {
-        return PHASE44_TX_OPUS_NOISE_GATE;
+    function tx-opusOpusLabDesiredNoiseGateEnabled() {
+      if (TX_OPUS_NOISE_GATE_QUERY_SET) {
+        return TX_OPUS_NOISE_GATE;
       }
       return Boolean(state.txNoiseGateEnabled);
     }
 
-    function phase44OpusLabDesiredNoiseGateThresholdDb() {
-      if (Number.isFinite(PHASE44_TX_OPUS_NOISE_GATE_QUERY_DB)) {
-        return PHASE44_TX_OPUS_NOISE_GATE_THRESHOLD_DB;
+    function tx-opusOpusLabDesiredNoiseGateThresholdDb() {
+      if (Number.isFinite(TX_OPUS_NOISE_GATE_QUERY_DB)) {
+        return TX_OPUS_NOISE_GATE_THRESHOLD_DB;
       }
-      return phase44OpusLabClampNoiseGateThreshold(state.txNoiseGateThresholdDb);
+      return tx-opusOpusLabClampNoiseGateThreshold(state.txNoiseGateThresholdDb);
     }
 
-    function phase44OpusLabCleanRadioPrefs(prefs) {
+    function tx-opusOpusLabCleanRadioPrefs(prefs) {
       if (!prefs || typeof prefs !== "object") {
         return prefs;
       }
@@ -8143,15 +8143,15 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         ...prefs,
         txEqEnabled: Boolean(prefs.txEqEnabled),
         txEqBands: sanitizeEqBands(prefs.txEqBands),
-        cfcEnabled: PHASE44_TX_OPUS_CFC,
-        cfcPrecomp: phase44OpusLabDesiredCfcPrecomp(),
-        cfcBands: phase44OpusLabDesiredCfcBands(),
+        cfcEnabled: TX_OPUS_CFC,
+        cfcPrecomp: tx-opusOpusLabDesiredCfcPrecomp(),
+        cfcBands: tx-opusOpusLabDesiredCfcBands(),
         txNoiseGateEnabled: Boolean(prefs.txNoiseGateEnabled),
-        txNoiseGateThresholdDb: phase44OpusLabClampNoiseGateThreshold(prefs.txNoiseGateThresholdDb),
+        txNoiseGateThresholdDb: tx-opusOpusLabClampNoiseGateThreshold(prefs.txNoiseGateThresholdDb),
       };
     }
 
-    function phase44OpusLabBandsAreFlat(bands) {
+    function tx-opusOpusLabBandsAreFlat(bands) {
       if (!Array.isArray(bands)) return true;
       for (let i = 1; i <= 10; i += 1) {
         if (Math.abs(Number(bands[i]) || 0) > 0.001) {
@@ -8161,7 +8161,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       return true;
     }
 
-    function phase44OpusLabBandsMatch(actual, expected) {
+    function tx-opusOpusLabBandsMatch(actual, expected) {
       if (!Array.isArray(actual)) return false;
       for (let i = 1; i <= 10; i += 1) {
         if (Math.abs((Number(actual[i]) || 0) - (Number(expected[i]) || 0)) > 0.001) {
@@ -8171,9 +8171,9 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       return true;
     }
 
-    function phase44OpusLabBandsNeedDefault(bands) {
-      if (phase44OpusLabBandsAreFlat(bands)) return true;
-      if (phase44OpusLabBandsMatch(bands, phase44OpusLabPreviousTxEqBands())) return true;
+    function tx-opusOpusLabBandsNeedDefault(bands) {
+      if (tx-opusOpusLabBandsAreFlat(bands)) return true;
+      if (tx-opusOpusLabBandsMatch(bands, tx-opusOpusLabPreviousTxEqBands())) return true;
       let nonzero = 0;
       let highBoosts = 0;
       let totalAbs = 0;
@@ -8186,34 +8186,34 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       return highBoosts >= 2 || (nonzero >= 8 && totalAbs >= 45);
     }
 
-    function applyPhase44OpusLabTxProcessingDefaults(reason = "") {
+    function applyTxOpusLabTxProcessingDefaults(reason = "") {
       if (state.txOpusOverrideEnabled !== true) {
         return false;
       }
       if (state.txOpusProcessingUserEdited) {
-        return applyPhase44OpusLabCfcGuard(reason);
+        return applyTxOpusLabCfcGuard(reason);
       }
-      const desiredTxEqBands = phase44OpusLabDesiredTxEqBands();
-      const desiredCfcPrecomp = phase44OpusLabDesiredCfcPrecomp();
-      const desiredCfcBands = phase44OpusLabDesiredCfcBands();
-      const desiredNoiseGateEnabled = phase44OpusLabDesiredNoiseGateEnabled();
-      const desiredNoiseGateThresholdDb = phase44OpusLabDesiredNoiseGateThresholdDb();
+      const desiredTxEqBands = tx-opusOpusLabDesiredTxEqBands();
+      const desiredCfcPrecomp = tx-opusOpusLabDesiredCfcPrecomp();
+      const desiredCfcBands = tx-opusOpusLabDesiredCfcBands();
+      const desiredNoiseGateEnabled = tx-opusOpusLabDesiredNoiseGateEnabled();
+      const desiredNoiseGateThresholdDb = tx-opusOpusLabDesiredNoiseGateThresholdDb();
       const changed = Boolean(
-        state.txEqEnabled !== PHASE44_TX_OPUS_VOICE_EQ ||
+        state.txEqEnabled !== TX_OPUS_VOICE_EQ ||
         state.txNoiseGateEnabled !== desiredNoiseGateEnabled ||
         Number(state.txNoiseGateThresholdDb) !== desiredNoiseGateThresholdDb ||
-        state.cfcEnabled !== PHASE44_TX_OPUS_CFC ||
+        state.cfcEnabled !== TX_OPUS_CFC ||
         Math.abs((Number(state.cfcPrecomp) || 0) - desiredCfcPrecomp) > 0.001 ||
-        (PHASE44_TX_OPUS_VOICE_EQ && phase44OpusLabBandsNeedDefault(state.txEqBands)) ||
-        !phase44OpusLabBandsMatch(state.cfcBands, desiredCfcBands)
+        (TX_OPUS_VOICE_EQ && tx-opusOpusLabBandsNeedDefault(state.txEqBands)) ||
+        !tx-opusOpusLabBandsMatch(state.cfcBands, desiredCfcBands)
       );
-      state.txEqEnabled = PHASE44_TX_OPUS_VOICE_EQ;
-      if (PHASE44_TX_OPUS_VOICE_EQ && phase44OpusLabBandsNeedDefault(state.txEqBands)) {
+      state.txEqEnabled = TX_OPUS_VOICE_EQ;
+      if (TX_OPUS_VOICE_EQ && tx-opusOpusLabBandsNeedDefault(state.txEqBands)) {
         state.txEqBands = sanitizeEqBands(desiredTxEqBands);
       } else {
         state.txEqBands = sanitizeEqBands(state.txEqBands);
       }
-      state.cfcEnabled = PHASE44_TX_OPUS_CFC;
+      state.cfcEnabled = TX_OPUS_CFC;
       state.cfcPrecomp = desiredCfcPrecomp;
       state.cfcBands = sanitizeCfcBands(desiredCfcBands);
       state.txNoiseGateEnabled = desiredNoiseGateEnabled;
@@ -8223,34 +8223,34 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         const now = performance.now();
         if (now - (state.txOpusCleanProfileLastLogAt || 0) > 5000) {
           state.txOpusCleanProfileLastLogAt = now;
-          logEvent(`Phase 44 Opus lab TX Gate/EQ${PHASE44_TX_OPUS_CFC ? "/CFC" : ""} profile restored after ${reason}`);
+          logEvent(`Phase 44 Opus lab TX Gate/EQ${TX_OPUS_CFC ? "/CFC" : ""} profile restored after ${reason}`);
         }
       }
       return changed;
     }
 
-    function applyPhase44OpusLabCfcGuard(reason = "") {
+    function applyTxOpusLabCfcGuard(reason = "") {
       if (state.txOpusOverrideEnabled !== true) {
         return false;
       }
-      if (PHASE44_TX_OPUS_CFC && state.txOpusCfcUserEdited) {
+      if (TX_OPUS_CFC && state.txOpusCfcUserEdited) {
         return false;
       }
-      const desiredCfcPrecomp = phase44OpusLabDesiredCfcPrecomp();
-      const desiredCfcBands = phase44OpusLabDesiredCfcBands();
+      const desiredCfcPrecomp = tx-opusOpusLabDesiredCfcPrecomp();
+      const desiredCfcBands = tx-opusOpusLabDesiredCfcBands();
       const changed = Boolean(
-        state.cfcEnabled !== PHASE44_TX_OPUS_CFC ||
+        state.cfcEnabled !== TX_OPUS_CFC ||
         Math.abs((Number(state.cfcPrecomp) || 0) - desiredCfcPrecomp) > 0.001 ||
-        !phase44OpusLabBandsMatch(state.cfcBands, desiredCfcBands)
+        !tx-opusOpusLabBandsMatch(state.cfcBands, desiredCfcBands)
       );
-      state.cfcEnabled = PHASE44_TX_OPUS_CFC;
+      state.cfcEnabled = TX_OPUS_CFC;
       state.cfcPrecomp = desiredCfcPrecomp;
       state.cfcBands = sanitizeCfcBands(desiredCfcBands);
       if (changed && reason) {
         const now = performance.now();
         if (now - (state.txOpusCleanProfileLastLogAt || 0) > 5000) {
           state.txOpusCleanProfileLastLogAt = now;
-          logEvent(PHASE44_TX_OPUS_CFC
+          logEvent(TX_OPUS_CFC
             ? `Phase 44 Opus lab ESSB CFC baseline restored after ${reason}`
             : `Phase 44 Opus lab CFC guard restored after ${reason}`);
         }
@@ -8258,7 +8258,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       return changed;
     }
 
-    function sendPhase44OpusLabCleanTxAudioToBridge() {
+    function sendTxOpusLabCleanTxAudioToBridge() {
       if (!state.connected || !state.ws || state.ws.readyState !== WebSocket.OPEN) {
         return false;
       }
@@ -8271,7 +8271,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       const cfcBands = sanitizeCfcBands(state.cfcBands);
       const commands = [
         `tx_noise_gate:0,${Boolean(state.txNoiseGateEnabled)};`,
-        `tx_noise_gate_threshold:0,${phase44OpusLabClampNoiseGateThreshold(state.txNoiseGateThresholdDb).toFixed(1)};`,
+        `tx_noise_gate_threshold:0,${tx-opusOpusLabClampNoiseGateThreshold(state.txNoiseGateThresholdDb).toFixed(1)};`,
         `tx_eq_enable:0,${Boolean(state.txEqEnabled)};`,
         `tx_cfc_enable:0,${Boolean(state.cfcEnabled)};`,
         `tx_cfc_precomp:0,${cfcPrecomp.toFixed(1)};`,
@@ -8285,22 +8285,22 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       return true;
     }
 
-    function sendPhase44OpusLabTxAudioToBridgeOnce(reason = "") {
-      if (applyPhase44OpusLabTxProcessingDefaults(reason)) {
+    function sendTxOpusLabTxAudioToBridgeOnce(reason = "") {
+      if (applyTxOpusLabTxProcessingDefaults(reason)) {
         persistLocalSettingsFallback(currentRemoteSettings());
         scheduleRemoteSettingsSave();
       }
-      if (sendPhase44OpusLabCleanTxAudioToBridge() && reason) {
-        logEvent(`Phase 44 Opus lab TX Gate/EQ${PHASE44_TX_OPUS_CFC ? "/CFC" : ""} sent after ${reason}`);
+      if (sendTxOpusLabCleanTxAudioToBridge() && reason) {
+        logEvent(`Phase 44 Opus lab TX Gate/EQ${TX_OPUS_CFC ? "/CFC" : ""} sent after ${reason}`);
       }
     }
 
-    function scrubPhase44OpusLabBandMemory() {
+    function scrubTxOpusLabBandMemory() {
       if (state.txOpusOverrideEnabled !== true || !state.bandMemory || typeof state.bandMemory !== "object") {
         return false;
       }
-      const desiredCfcPrecomp = phase44OpusLabDesiredCfcPrecomp();
-      const desiredCfcBands = phase44OpusLabDesiredCfcBands();
+      const desiredCfcPrecomp = tx-opusOpusLabDesiredCfcPrecomp();
+      const desiredCfcBands = tx-opusOpusLabDesiredCfcBands();
       let changed = false;
       Object.values(state.bandMemory).forEach((entry) => {
         if (!entry || typeof entry !== "object") {
@@ -8311,12 +8311,12 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
           return;
         }
         const dirty = Boolean(
-          Boolean(prefs.cfcEnabled) !== PHASE44_TX_OPUS_CFC ||
+          Boolean(prefs.cfcEnabled) !== TX_OPUS_CFC ||
           Math.abs((Number(prefs.cfcPrecomp) || 0) - desiredCfcPrecomp) > 0.001 ||
-          !phase44OpusLabBandsMatch(prefs.cfcBands, desiredCfcBands)
+          !tx-opusOpusLabBandsMatch(prefs.cfcBands, desiredCfcBands)
         );
         if (dirty) {
-          entry.radioPrefs = phase44OpusLabCleanRadioPrefs(prefs);
+          entry.radioPrefs = tx-opusOpusLabCleanRadioPrefs(prefs);
           changed = true;
         }
       });
@@ -8327,7 +8327,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       return {
         frequency: state.vfoA || state.dds,
         radioPrefs: state.txOpusOverrideEnabled === true
-          ? phase44OpusLabCleanRadioPrefs(currentRadioPrefs())
+          ? tx-opusOpusLabCleanRadioPrefs(currentRadioPrefs())
           : currentRadioPrefs(),
         displayPrefs: currentDisplayPrefs(),
         displayZoom: Math.max(1, Math.min(32, Number(state.displayZoom) || 1)),
@@ -8350,7 +8350,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       state.applyingBandMemory = true;
       try {
         applyRadioPrefsObject(memory.radioPrefs);
-        applyPhase44OpusLabTxProcessingDefaults("band memory");
+        applyTxOpusLabTxProcessingDefaults("band memory");
         applyDisplayPrefsObject(memory.displayPrefs);
         if (Number.isFinite(Number(memory.displayZoom))) {
           state.displayZoom = Math.max(1, Math.min(32, Number(memory.displayZoom)));
@@ -8413,7 +8413,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         return false;
       }
       applyRadioPrefsObject(settings.radioPrefs && typeof settings.radioPrefs === "object" ? settings.radioPrefs : settings);
-      applyPhase44OpusLabTxProcessingDefaults("remote settings");
+      applyTxOpusLabTxProcessingDefaults("remote settings");
       applyDisplayPrefsObject(settings.displayPrefs);
       if (settings.wsUrl != null) {
         state.wsUrl = normalizeWsUrlPreference(settings.wsUrl);
@@ -10018,16 +10018,16 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       return state.remoteTxRfEnabled === false;
     }
 
-    function phase40DiagnosticTxActive() {
-      return PHASE40_TX_DIAGNOSTIC && bridgeRfDisabled();
+    function txDiagnosticTxActive() {
+      return TX_DIAGNOSTIC && bridgeRfDisabled();
     }
 
     function rfDisabledBlocksTx() {
-      return state.mode === "WFM" || (bridgeRfDisabled() && !phase40DiagnosticTxActive());
+      return state.mode === "WFM" || (bridgeRfDisabled() && !txDiagnosticTxActive());
     }
 
-    function phase40GeneratedTxSourceActive() {
-      return phase40DiagnosticTxActive() && (PHASE40_TX_SOURCE === "tone" || PHASE40_TX_SOURCE === "twotone");
+    function generatedTxSourceActive() {
+      return txDiagnosticTxActive() && (TX_DIAG_SOURCE === "tone" || TX_DIAG_SOURCE === "twotone");
     }
 
     function clientRoleBlocksTx() {
@@ -10245,7 +10245,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       const sourceLabel = txControlSourceLabel(source);
       const rfDisabled = bridgeRfDisabled();
       const wfmRxOnly = state.mode === "WFM";
-      const phase40Diagnostic = phase40DiagnosticTxActive();
+      const txDiagnostic = txDiagnosticTxActive();
       const rfBlocked = rfDisabledBlocksTx();
       const roleBlocked = clientRoleBlocksTx();
       const txState = rfBlocked
@@ -10259,7 +10259,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       txZone.dataset.txSource = source || "none";
       const stateLabel = wfmRxOnly
         ? "WFM RX ONLY"
-        : (phase40Diagnostic
+        : (txDiagnostic
         ? (state.txPhase === "keyed"
           ? (source === "ptt" ? "PTT DIAG" : "MOX DIAG")
           : (state.txPhase === "armed" || state.moxRequested ? "TX DIAG armed" : (state.connected ? (ready ? `TX DIAG · ${formatDurationClock(remainingMs)}` : "TX DIAG locked") : "Connect first")))
@@ -10290,7 +10290,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       updateTxMiniMeters();
       $("tx-zone-hint").textContent = wfmRxOnly
         ? "FM broadcast stereo is receive-only"
-        : (phase40Diagnostic
+        : (txDiagnostic
         ? "Phase 40 diagnostic: bridge RF output remains disabled"
         : (rfBlocked
         ? "Bridge RF output is disabled"
@@ -10305,7 +10305,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       if (ptt) {
         ptt.textContent = wfmRxOnly
           ? "RX ONLY"
-          : (phase40Diagnostic
+          : (txDiagnostic
           ? (active
             ? (source === "ptt" ? "PTT DIAG" : "TX DIAG")
             : (state.connected ? (ready ? "PTT DIAG" : "ARM DIAG") : "CONNECT"))
@@ -10323,7 +10323,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       const mox = $("mox-btn");
       if (mox) {
         const moxActive = active && source === "mox";
-        mox.textContent = phase40Diagnostic
+        mox.textContent = txDiagnostic
           ? (moxActive ? "MOX DIAG" : "MOX DIAG")
           : (moxActive ? (state.txPhase === "keyed" ? "MOX ON" : "MOX ARM") : "MOX");
         mox.classList.toggle("active", moxActive);
@@ -10982,8 +10982,8 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       if (!state.connected || !state.bridgeReady) {
         return;
       }
-      applyPhase40TxSourceOverrides();
-      if (phase40GeneratedTxSourceActive()) {
+      applyTxSourceOverrides();
+      if (generatedTxSourceActive()) {
         sendTci("tx_two_tone:0,false;");
       }
       sendTci(_next.buildAllRadioPrefsCommands(prefs).join(""));
@@ -10998,11 +10998,11 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         logEvent("IQ start deferred: bridge is not ready");
         return;
       }
-      const phase40Profile = phase40DisplayProfileConfig();
-      if (phase40Profile && !phase40Profile.autoIq) {
+      const displayProfileCfg = displayProfileConfig();
+      if (displayProfileCfg && !displayProfileCfg.autoIq) {
         state.iqStreaming = false;
         sendTci("iq_stop:0;");
-        logEvent(`Phase 40 display profile ${PHASE40_DISPLAY_PROFILE}: IQ start blocked`);
+        logEvent(`Phase 40 display profile ${DISPLAY_PROFILE_LABEL}: IQ start blocked`);
         updateUi();
         return;
       }
@@ -11016,11 +11016,11 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         return;
       }
       resetDisplayHistory();
-      if (phase40ShouldAutoStartIq()) {
+      if (shouldAutoStartIq()) {
         state.iqStreaming = true;
         sendTci(`iq_samplerate:${state.sampleRate};iq_start:0;`);
       }
-      if (phase40ShouldAutoStartRxAudio()) {
+      if (shouldAutoStartRxAudio()) {
         if (state.audioStreaming) {
           sendTci(rxAudioStartCommand());
         } else {
@@ -11061,8 +11061,8 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     function restoreRxSessionAfterReady(connectionGeneration) {
       const plan = reconnectRxPlan;
       reconnectRxPlan = null;
-      const restoreIq = plan ? plan.iq : phase40ShouldAutoStartIq();
-      const restoreAudio = plan ? plan.audio : phase40ShouldAutoStartRxAudio();
+      const restoreIq = plan ? plan.iq : shouldAutoStartIq();
+      const restoreAudio = plan ? plan.audio : shouldAutoStartRxAudio();
       const restorePrefs = plan?.radioPrefs || currentRadioPrefs();
       restorePrefs.twoToneEnabled = false;
       const restoreVfoA = plan?.vfoA || state.vfoA;
@@ -11143,7 +11143,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         `reconnectReason=${reconnectSnapshot.lastReason || ""}`,
         `wsReady=${wsReady}`,
         `wsUrl=${state.wsUrl || ""}`,
-        `phase42Split=${phase42SplitTransportEnabled() ? 1 : 0}`,
+        `splitSplit=${splitTransportEnabled() ? 1 : 0}`,
         `opusOverride=${state.txOpusOverrideEnabled ? 1 : 0}`,
         `AudioEncoder=${typeof globalThis.AudioEncoder}`,
         `isConfigSupported=${globalThis.AudioEncoder && typeof globalThis.AudioEncoder.isConfigSupported === "function" ? 1 : 0}`,
@@ -11233,13 +11233,13 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     }
 
     async function startRxAudio() {
-      const phase40Profile = phase40DisplayProfileConfig();
-      if (phase40Profile && !phase40Profile.autoRxAudio) {
+      const displayProfileCfg = displayProfileConfig();
+      if (displayProfileCfg && !displayProfileCfg.autoRxAudio) {
         if (state.audioStreaming) {
           await stopRxAudio(true);
         } else {
           sendTci("audio_stop:0;");
-          logEvent(`Phase 40 display profile ${PHASE40_DISPLAY_PROFILE}: RX audio start blocked`);
+          logEvent(`Phase 40 display profile ${DISPLAY_PROFILE_LABEL}: RX audio start blocked`);
           updateUi();
         }
         return;
@@ -12072,7 +12072,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     async function startMicCapture(requestId) {
       if (state.micCapturing) { return true; }
       resetTxUplinkStats(true);
-      const generatedTxSource = phase40GeneratedTxSourceActive();
+      const generatedTxSource = generatedTxSourceActive();
       let micStream = null;
       let micCtx = null;
       try {
@@ -12158,16 +12158,16 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         let source = null;
         let generatedNodes = null;
         if (generatedTxSource) {
-          const sourceGain = Math.pow(10, PHASE40_TX_LEVEL_DB / 20);
+          const sourceGain = Math.pow(10, TX_DIAG_LEVEL_DB / 20);
           const mix = micCtx.createGain();
           const gain1 = micCtx.createGain();
           const gain2 = micCtx.createGain();
           const osc1 = micCtx.createOscillator();
           const osc2 = micCtx.createOscillator();
           osc1.frequency.value = 700;
-          osc2.frequency.value = PHASE40_TX_SOURCE === "tone" ? 700 : 1900;
-          gain1.gain.value = PHASE40_TX_SOURCE === "tone" ? sourceGain : sourceGain / 2;
-          gain2.gain.value = PHASE40_TX_SOURCE === "tone" ? 0 : sourceGain / 2;
+          osc2.frequency.value = TX_DIAG_SOURCE === "tone" ? 700 : 1900;
+          gain1.gain.value = TX_DIAG_SOURCE === "tone" ? sourceGain : sourceGain / 2;
+          gain2.gain.value = TX_DIAG_SOURCE === "tone" ? 0 : sourceGain / 2;
           osc1.connect(gain1).connect(mix);
           osc2.connect(gain2).connect(mix);
           source = mix;
@@ -12188,7 +12188,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         state.micNode = { ctx: micCtx, source, proc, silentGain, generatedNodes };
         state.micCapturing = true;
         logEvent(generatedTxSource
-          ? `Phase 40 generated TX source started (${PHASE40_TX_SOURCE}, ${PHASE40_TX_LEVEL_DB.toFixed(1)} dBFS, ${txMode})`
+          ? `Phase 40 generated TX source started (${TX_DIAG_SOURCE}, ${TX_DIAG_LEVEL_DB.toFixed(1)} dBFS, ${txMode})`
           : `Mic capture started (${txMode})`);
         return true;
       } catch (err) {
@@ -12271,7 +12271,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         setTxMediaPriority(false);
         stopMicCapture();
         recoverRxAfterMox();
-        if (state.connected && !state.audioStreaming && phase40ShouldAutoStartRxAudio()) {
+        if (state.connected && !state.audioStreaming && shouldAutoStartRxAudio()) {
           void startRxAudio();
         }
         if (options.lockAfter) {
@@ -12326,12 +12326,12 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         state.txLocalRequestId = requestId;
         state.txLocalRequestPermitExpiresAt = performance.now() + TX_LOCAL_REQUEST_PERMIT_MS;
         refreshBridgeControlHeartbeatForTx();
-        applyPhase40TxSourceOverrides();
+        applyTxSourceOverrides();
         setTxMediaPriority(true);
         muteRxAudioForMox();
         switchDisplayToTxArm();
         updateUi();
-        if (useMic && phase40GeneratedTxSourceActive()) {
+        if (useMic && generatedTxSourceActive()) {
           sendTci("tx_two_tone:0,false;");
         }
         sendTci("trx:0,true,tci;");
@@ -12365,7 +12365,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     }
 
     async function setTwoToneEnabled(enabled) {
-      if (enabled && phase40GeneratedTxSourceActive()) {
+      if (enabled && generatedTxSourceActive()) {
         state.twoToneEnabled = false;
         state.twoTonePttOwned = false;
         sendTci("tx_two_tone:0,false;");
@@ -12629,12 +12629,12 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         updateUi();
         return;
       }
-      applyPhase40DisplayProfile("connect");
-      applyPhase40TxSourceOverrides();
+      applyDisplayProfile("connect");
+      applyTxSourceOverrides();
       state.demoMode = false;
       ensureBridgeWsUrl();
-      const phase42SessionId = !forceLegacyWs && phase42SplitTransportEnabled()
-        ? _next.createPhase42SessionId()
+      const splitSessionId = !forceLegacyWs && splitTransportEnabled()
+        ? _next.createSplitSessionId()
         : "";
       if (forceLegacyWs) {
         logEvent("WebSocket diagnostic: forcing legacy /tci socket");
@@ -12642,12 +12642,12 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       }
       logEvent(`WebSocket diagnostic: page=${window.location.href}`);
       logEvent(`WebSocket diagnostic: target=${state.wsUrl}`);
-      logEvent(phase42SessionId
-        ? `Connecting to ${state.wsUrl} with Phase 42 split session ${phase42SessionId}`
+      logEvent(splitSessionId
+        ? `Connecting to ${state.wsUrl} with Phase 42 split session ${splitSessionId}`
         : `Connecting to ${state.wsUrl}`);
       let ws;
       try {
-        ws = reuseProbeSocket || createBridgeSocket(state.wsUrl, phase42SessionId);
+        ws = reuseProbeSocket || createBridgeSocket(state.wsUrl, splitSessionId);
       } catch (err) {
         logEvent(`Invalid WebSocket URL: ${err.message}`);
         recordOperatorFault("Invalid bridge URL", "warn");
@@ -12682,11 +12682,11 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         state.remoteClientId = null;
         lockTx("reconnect", false);
         resetDisplayHistory();
-        logEvent(phase42SessionId ? "Phase 42 split WebSockets connected" : "WebSocket connected");
-        logEvent(`TX transport active: ${phase42SessionId ? "phase42 split" : (forceLegacyWs ? "legacy diagnostic" : "legacy")}`);
+        logEvent(splitSessionId ? "Phase 42 split WebSockets connected" : "WebSocket connected");
+        logEvent(`TX transport active: ${splitSessionId ? "split split" : (forceLegacyWs ? "legacy diagnostic" : "legacy")}`);
         requestFullState();
         sendTxCodecCaps();
-        sendPhase44OpusLabTxAudioToBridgeOnce("socket open");
+        sendTxOpusLabTxAudioToBridgeOnce("socket open");
         void refreshTxCodecCapabilities();
         startBridgeRttPings();
         void syncWakeLock(true);
@@ -12864,8 +12864,8 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         }
         restoreRxSessionAfterReady(state.connectionGeneration);
       }
-      if (applyPhase44OpusLabCfcGuard("bridge state")) {
-        if (sendPhase44OpusLabCleanTxAudioToBridge()) {
+      if (applyTxOpusLabCfcGuard("bridge state")) {
+        if (sendTxOpusLabCleanTxAudioToBridge()) {
           persistLocalSettingsFallback(currentRemoteSettings());
           scheduleRemoteSettingsSave();
         }
@@ -12936,7 +12936,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         state.txLocalRequestPermitExpiresAt = 0;
         stopMicCapture();
         recoverRxAfterMox();
-        if (state.connected && !state.audioStreaming && phase40ShouldAutoStartRxAudio()) {
+        if (state.connected && !state.audioStreaming && shouldAutoStartRxAudio()) {
           void startRxAudio();
         }
         extendTxReadyWindow();
@@ -12944,7 +12944,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       if (previous.txPhase !== state.txPhase) {
         clearTxTimeouts();
         if (state.txPhase === "armed") {
-          if (phase40DiagnosticTxActive()) {
+          if (txDiagnosticTxActive()) {
             logEvent("Phase 40 diagnostic: RF-disabled arm timeout suppressed");
           } else {
             state.armTimeoutTimerId = setTimeout(() => {
@@ -12956,7 +12956,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
             }, 5000);
           }
         } else if (state.txPhase === "keyed" && state.txTimeoutEnabled) {
-          if (phase40DiagnosticTxActive()) {
+          if (txDiagnosticTxActive()) {
             logEvent("Phase 40 diagnostic: RF-disabled keyed TX timeout suppressed");
           } else {
             state.txTimeoutTimerId = setTimeout(() => {
@@ -13425,7 +13425,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       }
       if (state.connected && state.bridgeReady && now - state.lastFrameAt > 2500) {
         state.displayCaption = "Connected, waiting for fresh IQ frames";
-        if (!state.moxRequested && !state.txEnabled && !state.micCapturing && phase40ShouldAutoStartIq()) {
+        if (!state.moxRequested && !state.txEnabled && !state.micCapturing && shouldAutoStartIq()) {
           requestRxMediaResume("stale IQ", 5000);
         }
       }
@@ -14145,7 +14145,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       });
       $("tx-noise-gate-threshold").addEventListener("input", () => {
         state.txOpusProcessingUserEdited = true;
-        state.txNoiseGateThresholdDb = phase44OpusLabClampNoiseGateThreshold($("tx-noise-gate-threshold").value);
+        state.txNoiseGateThresholdDb = tx-opusOpusLabClampNoiseGateThreshold($("tx-noise-gate-threshold").value);
         $("tx-noise-gate-threshold-readout").textContent = `${state.txNoiseGateThresholdDb} dB`;
       });
       $("tx-noise-gate-threshold").addEventListener("change", () => {
@@ -14608,7 +14608,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         const savedBandMemory = localStorage.getItem(BAND_MEMORY_KEY);
         if (savedBandMemory) {
           state.bandMemory = sanitizeBandMemory(JSON.parse(savedBandMemory));
-          if (scrubPhase44OpusLabBandMemory()) {
+          if (scrubTxOpusLabBandMemory()) {
             localStorage.setItem(BAND_MEMORY_KEY, JSON.stringify(state.bandMemory));
             logEvent("Phase 44 Opus lab scrubbed local band-memory CFC processing");
           }
@@ -14667,12 +14667,12 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       if (await applyStartupProfileIfConfigured()) {
         void saveRemoteSettingsToServer(false);
       }
-      if (applyPhase44OpusLabTxProcessingDefaults("startup")) {
+      if (applyTxOpusLabTxProcessingDefaults("startup")) {
         persistLocalSettingsFallback(currentRemoteSettings());
         void saveRemoteSettingsToServer(false);
       }
-      applyPhase40DisplayProfile("init");
-      applyPhase40TxSourceOverrides();
+      applyDisplayProfile("init");
+      applyTxSourceOverrides();
       logEvent("Saturn Remote loaded (Phase 44 Opus lab client)");
       logEvent("Current bridge target: TCI over WebSocket");
       logEvent(

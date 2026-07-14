@@ -68,15 +68,15 @@ pub enum TciCommand {
         nonce: String,
         sent_at: String,
     },
-    Phase42SessionOpen {
+    SplitSessionOpen {
         client_id: u64,
         session_id: String,
         role: TciClientRole,
     },
-    Phase42SessionLane {
+    SplitSessionLane {
         client_id: u64,
         session_id: String,
-        lane: Phase42SocketKind,
+        lane: SplitSocketKind,
     },
     SetAudioStreaming(bool),
     SetAudioSampleRate(u32),
@@ -646,15 +646,15 @@ fn percentile_us(samples: &mut [u64], percentile: usize) -> u64 {
 }
 
 #[derive(Clone, Debug)]
-struct Phase42ClientMetadata {
+struct SplitClientMetadata {
     session_id: String,
-    lane: Option<Phase42SocketKind>,
+    lane: Option<SplitSocketKind>,
     role: Option<TciClientRole>,
     ignore_media_until: Option<Instant>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-struct Phase42SessionPair {
+struct SplitSessionPair {
     session_id: String,
     control_client_id: u64,
     media_client_id: u64,
@@ -687,7 +687,7 @@ struct ClientState {
     tx_codec_decode_error_window_count: u64,
     tx_codec_stale_drop_count: u64,
     tx_codec_release_flush_count: u64,
-    phase42: Option<Phase42ClientMetadata>,
+    split: Option<SplitClientMetadata>,
 }
 
 impl Default for ClientState {
@@ -727,7 +727,7 @@ impl ClientState {
             tx_codec_decode_error_window_count: 0,
             tx_codec_stale_drop_count: 0,
             tx_codec_release_flush_count: 0,
-            phase42: None,
+            split: None,
         }
     }
 }
@@ -795,12 +795,12 @@ impl TciClientRole {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Phase42SocketKind {
+pub enum SplitSocketKind {
     Control,
     Media,
 }
 
-impl Phase42SocketKind {
+impl SplitSocketKind {
     #[cfg(test)]
     fn as_tci(self) -> &'static str {
         match self {
@@ -823,12 +823,12 @@ fn remote_client_role_message(client_id: u64, role: TciClientRole) -> String {
 }
 
 #[cfg(test)]
-const PHASE42_SESSION_PAIRING_TIMEOUT: Duration = Duration::from_secs(30);
-const PHASE42_RELEASE_IGNORE_WINDOW: Duration = Duration::from_millis(250);
+const SPLIT_SESSION_PAIRING_TIMEOUT: Duration = Duration::from_secs(30);
+const SPLIT_RELEASE_IGNORE_WINDOW: Duration = Duration::from_millis(250);
 
 #[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Phase42SessionState {
+enum SplitSessionState {
     WaitingMedia,
     Paired,
     Keyed,
@@ -837,7 +837,7 @@ enum Phase42SessionState {
 
 #[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Phase42MediaFrameAction {
+enum SplitMediaFrameAction {
     Accept,
     DropNotKeyed,
     DropReleaseWindow,
@@ -845,17 +845,17 @@ enum Phase42MediaFrameAction {
 
 #[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct Phase42DisconnectAction {
+struct SplitDisconnectAction {
     force_rx: bool,
     close_peer_socket: bool,
-    state: Phase42SessionState,
+    state: SplitSessionState,
 }
 
 #[cfg(test)]
 #[derive(Clone, Debug)]
-struct Phase42SplitSession {
+struct SplitSession {
     session_id: String,
-    state: Phase42SessionState,
+    state: SplitSessionState,
     control_connected: bool,
     media_connected: bool,
     created_at: Instant,
@@ -864,12 +864,12 @@ struct Phase42SplitSession {
 }
 
 #[cfg(test)]
-impl Phase42SplitSession {
+impl SplitSession {
     fn new_control(session_id: &str, now: Instant) -> Option<Self> {
-        let session_id = normalize_phase42_session_id(session_id)?;
+        let session_id = normalize_split_session_id(session_id)?;
         Some(Self {
             session_id,
-            state: Phase42SessionState::WaitingMedia,
+            state: SplitSessionState::WaitingMedia,
             control_connected: true,
             media_connected: false,
             created_at: now,
@@ -879,73 +879,73 @@ impl Phase42SplitSession {
     }
 
     fn connect_media(&mut self) -> Option<String> {
-        if self.state == Phase42SessionState::Terminated {
+        if self.state == SplitSessionState::Terminated {
             return None;
         }
         self.media_connected = true;
         if self.control_connected {
-            self.state = Phase42SessionState::Paired;
-            return Some(phase42_session_paired_message(&self.session_id));
+            self.state = SplitSessionState::Paired;
+            return Some(split_session_paired_message(&self.session_id));
         }
         None
     }
 
     fn pairing_timed_out(&self, now: Instant) -> bool {
-        self.state == Phase42SessionState::WaitingMedia
-            && now.saturating_duration_since(self.created_at) >= PHASE42_SESSION_PAIRING_TIMEOUT
+        self.state == SplitSessionState::WaitingMedia
+            && now.saturating_duration_since(self.created_at) >= SPLIT_SESSION_PAIRING_TIMEOUT
     }
 
     fn key(&mut self) -> bool {
-        if self.state != Phase42SessionState::Paired {
+        if self.state != SplitSessionState::Paired {
             return false;
         }
-        self.state = Phase42SessionState::Keyed;
+        self.state = SplitSessionState::Keyed;
         true
     }
 
     fn release(&mut self, now: Instant) -> bool {
-        if self.state != Phase42SessionState::Keyed {
+        if self.state != SplitSessionState::Keyed {
             return false;
         }
-        self.state = Phase42SessionState::Paired;
-        self.ignore_media_until = Some(now + PHASE42_RELEASE_IGNORE_WINDOW);
+        self.state = SplitSessionState::Paired;
+        self.ignore_media_until = Some(now + SPLIT_RELEASE_IGNORE_WINDOW);
         true
     }
 
-    fn media_frame_action(&mut self, now: Instant) -> Phase42MediaFrameAction {
+    fn media_frame_action(&mut self, now: Instant) -> SplitMediaFrameAction {
         if self
             .ignore_media_until
             .map(|until| now < until)
             .unwrap_or(false)
         {
             self.release_window_drops = self.release_window_drops.saturating_add(1);
-            return Phase42MediaFrameAction::DropReleaseWindow;
+            return SplitMediaFrameAction::DropReleaseWindow;
         }
-        if self.state == Phase42SessionState::Keyed && self.media_connected {
-            Phase42MediaFrameAction::Accept
+        if self.state == SplitSessionState::Keyed && self.media_connected {
+            SplitMediaFrameAction::Accept
         } else {
-            Phase42MediaFrameAction::DropNotKeyed
+            SplitMediaFrameAction::DropNotKeyed
         }
     }
 
-    fn disconnect_control(&mut self) -> Phase42DisconnectAction {
+    fn disconnect_control(&mut self) -> SplitDisconnectAction {
         self.control_connected = false;
         self.media_connected = false;
-        self.state = Phase42SessionState::Terminated;
-        Phase42DisconnectAction {
+        self.state = SplitSessionState::Terminated;
+        SplitDisconnectAction {
             force_rx: true,
             close_peer_socket: true,
             state: self.state,
         }
     }
 
-    fn disconnect_media(&mut self) -> Phase42DisconnectAction {
+    fn disconnect_media(&mut self) -> SplitDisconnectAction {
         self.media_connected = false;
-        let was_keyed = self.state == Phase42SessionState::Keyed;
-        if self.state != Phase42SessionState::Terminated {
-            self.state = Phase42SessionState::WaitingMedia;
+        let was_keyed = self.state == SplitSessionState::Keyed;
+        if self.state != SplitSessionState::Terminated {
+            self.state = SplitSessionState::WaitingMedia;
         }
-        Phase42DisconnectAction {
+        SplitDisconnectAction {
             force_rx: was_keyed,
             close_peer_socket: false,
             state: self.state,
@@ -953,7 +953,7 @@ impl Phase42SplitSession {
     }
 }
 
-fn normalize_phase42_session_id(value: &str) -> Option<String> {
+fn normalize_split_session_id(value: &str) -> Option<String> {
     let session_id = sanitize_token(value, 64);
     if session_id.is_empty() {
         None
@@ -963,21 +963,21 @@ fn normalize_phase42_session_id(value: &str) -> Option<String> {
 }
 
 #[cfg(test)]
-fn phase42_session_paired_message(session_id: &str) -> String {
+fn split_session_paired_message(session_id: &str) -> String {
     format!(
         "session_paired:{};",
-        normalize_phase42_session_id(session_id).unwrap_or_default()
+        normalize_split_session_id(session_id).unwrap_or_default()
     )
 }
 
-fn parse_phase42_session_open(command: &str) -> Option<(String, TciClientRole)> {
+fn parse_split_session_open(command: &str) -> Option<(String, TciClientRole)> {
     let command = command.trim().trim_end_matches(';');
     let (name, rest) = command.split_once(':')?;
     if !name.eq_ignore_ascii_case("session_open") {
         return None;
     }
     let mut args = rest.split(',');
-    let session_id = normalize_phase42_session_id(args.next().unwrap_or_default())?;
+    let session_id = normalize_split_session_id(args.next().unwrap_or_default())?;
     let role = args
         .next()
         .map(TciClientRole::from_tci)
@@ -985,15 +985,15 @@ fn parse_phase42_session_open(command: &str) -> Option<(String, TciClientRole)> 
     Some((session_id, role))
 }
 
-fn parse_phase42_session_lane(command: &str) -> Option<(String, Phase42SocketKind)> {
+fn parse_split_session_lane(command: &str) -> Option<(String, SplitSocketKind)> {
     let command = command.trim().trim_end_matches(';');
     let (name, rest) = command.split_once(':')?;
     if !name.eq_ignore_ascii_case("session_lane") {
         return None;
     }
     let mut args = rest.split(',');
-    let session_id = normalize_phase42_session_id(args.next().unwrap_or_default())?;
-    let lane = Phase42SocketKind::from_tci(args.next()?)?;
+    let session_id = normalize_split_session_id(args.next().unwrap_or_default())?;
+    let lane = SplitSocketKind::from_tci(args.next()?)?;
     Some((session_id, lane))
 }
 
@@ -1042,9 +1042,9 @@ pub struct TciClientSnapshot {
     pub tcp_outq_high_watermark_bytes: u64,
     pub display_rate_limited_per_sec: u64,
     pub safety_queue_depth_overflow_count: u64,
-    pub phase42_control_clients: u64,
-    pub phase42_media_clients: u64,
-    pub phase42_paired_sessions: u64,
+    pub split_control_clients: u64,
+    pub split_media_clients: u64,
+    pub split_paired_sessions: u64,
     pub tx_uplink_degraded: bool,
     pub tx_mic_browser_dropped_count: u64,
     pub tx_uplink_buffered_bytes: u64,
@@ -1164,27 +1164,27 @@ impl TciFrontend {
         self.tx_media_priority_active.load(Ordering::Relaxed)
     }
 
-    pub fn has_phase42_paired_session(&self) -> bool {
+    pub fn has_split_paired_session(&self) -> bool {
         let clients = self.clients.lock_unpoisoned();
-        phase42_paired_session_count(&clients) > 0
+        split_paired_session_count(&clients) > 0
     }
 
     pub fn last_operator_control_at(&self) -> Option<Instant> {
         *self.operator_control_at.lock_unpoisoned()
     }
 
-    pub fn clear_phase42_release_window(&self) {
+    pub fn clear_split_release_window(&self) {
         let operator_client_id = self.operator_client_id.load(Ordering::SeqCst);
-        set_phase42_media_ignore_until(&self.clients, operator_client_id, None);
+        set_split_media_ignore_until(&self.clients, operator_client_id, None);
     }
 
-    pub fn mark_phase42_released(&self, now: Instant) {
+    pub fn mark_split_released(&self, now: Instant) {
         let operator_client_id = self.operator_client_id.load(Ordering::SeqCst);
         flush_client_tx_codec_decode_queue(&self.clients, operator_client_id);
-        set_phase42_media_ignore_until(
+        set_split_media_ignore_until(
             &self.clients,
             operator_client_id,
-            Some(now + PHASE42_RELEASE_IGNORE_WINDOW),
+            Some(now + SPLIT_RELEASE_IGNORE_WINDOW),
         );
         // Source-of-truth release: bridge clears media priority here so the
         // next send_message call lifts RX media suppression on the media lane.
@@ -1260,12 +1260,12 @@ impl TciFrontend {
                 .display_rate_limited_count
                 .swap(0, Ordering::Relaxed),
             safety_queue_depth_overflow_count,
-            phase42_control_clients: phase42_lane_client_count(
+            split_control_clients: split_lane_client_count(
                 &clients,
-                Phase42SocketKind::Control,
+                SplitSocketKind::Control,
             ),
-            phase42_media_clients: phase42_lane_client_count(&clients, Phase42SocketKind::Media),
-            phase42_paired_sessions: phase42_paired_session_count(&clients),
+            split_media_clients: split_lane_client_count(&clients, SplitSocketKind::Media),
+            split_paired_sessions: split_paired_session_count(&clients),
             tx_uplink_degraded: clients
                 .values()
                 .any(|client| client.state.tx_uplink_degraded),
@@ -1800,19 +1800,19 @@ fn client_wants_outbound_message(
     // suppressed on the media lane to give uplink mic frames sole ownership of
     // the media TCP send buffer. The bridge derives this from TX intent/armed/
     // keyed state; when it returns to false the suppression lifts automatically.
-    let lane = client.state.phase42.as_ref().and_then(|m| m.lane);
+    let lane = client.state.split.as_ref().and_then(|m| m.lane);
     match message {
         OutboundMessage::Close => true,
         OutboundMessage::Text(_) | OutboundMessage::SafetyText(_) => {
-            lane != Some(Phase42SocketKind::Media)
+            lane != Some(SplitSocketKind::Media)
         }
         OutboundMessage::IqFrame { .. } | OutboundMessage::TxIqFrame { .. } => {
-            lane != Some(Phase42SocketKind::Control)
+            lane != Some(SplitSocketKind::Control)
                 && client.state.iq_stream_enabled
                 && !tx_media_priority_active
         }
         OutboundMessage::AudioFrame { .. } => {
-            lane != Some(Phase42SocketKind::Control)
+            lane != Some(SplitSocketKind::Control)
                 && client.state.audio_stream_enabled
                 && !tx_media_priority_active
         }
@@ -1991,10 +1991,10 @@ fn handle_client(
                 *operator_control_at.lock_unpoisoned() = None;
                 let _ = command_tx.send(TciCommand::SetTxEnabled(false));
             }
-            if disconnect.phase42_media_loss_forces_rx {
+            if disconnect.split_media_loss_forces_rx {
                 let _ = command_tx.send(TciCommand::SetTxEnabled(false));
             }
-            if let Some(peer_id) = disconnect.phase42_closed_peer {
+            if let Some(peer_id) = disconnect.split_closed_peer {
                 println!(
                     "saturn-bridge: Phase 42 closed peer media client {peer_id} after control disconnect"
                 );
@@ -2023,8 +2023,8 @@ fn handle_client(
 
 struct ClientDisconnect {
     was_operator: bool,
-    phase42_media_loss_forces_rx: bool,
-    phase42_closed_peer: Option<u64>,
+    split_media_loss_forces_rx: bool,
+    split_closed_peer: Option<u64>,
     promoted_operator: Option<u64>,
     remaining_clients: usize,
 }
@@ -2063,10 +2063,10 @@ fn unregister_client(
 ) -> ClientDisconnect {
     let mut clients = clients.lock_unpoisoned();
     let current_operator = operator_client_id.load(Ordering::SeqCst);
-    let phase42_media_loss_forces_rx =
-        phase42_media_client_paired_with_operator_in_clients(&clients, current_operator, client_id);
-    let phase42_closed_peer =
-        queue_phase42_media_peer_close_for_control_in_clients(&clients, client_id);
+    let split_media_loss_forces_rx =
+        split_media_client_paired_with_operator_in_clients(&clients, current_operator, client_id);
+    let split_closed_peer =
+        queue_split_media_peer_close_for_control_in_clients(&clients, client_id);
     clients.remove(&client_id);
 
     let was_operator = current_operator == client_id;
@@ -2074,7 +2074,7 @@ fn unregister_client(
     if was_operator {
         if let Some((&next_operator, _)) = clients
             .iter()
-            .find(|(_, client)| !client_is_phase42_media(client))
+            .find(|(_, client)| !client_is_split_media(client))
         {
             operator_client_id.store(next_operator, Ordering::SeqCst);
             promoted_operator = Some(next_operator);
@@ -2085,8 +2085,8 @@ fn unregister_client(
 
     ClientDisconnect {
         was_operator,
-        phase42_media_loss_forces_rx,
-        phase42_closed_peer,
+        split_media_loss_forces_rx,
+        split_closed_peer,
         promoted_operator,
         remaining_clients: clients.len(),
     }
@@ -2110,7 +2110,7 @@ fn send_role_to_client(
     }
 }
 
-fn reconcile_phase42_operator_role(
+fn reconcile_split_operator_role(
     clients: &ClientRegistry,
     operator_client_id: &Arc<AtomicU64>,
     changed_client_id: u64,
@@ -2118,10 +2118,10 @@ fn reconcile_phase42_operator_role(
     let current_operator = operator_client_id.load(Ordering::SeqCst);
     let outcome = (|| {
         let clients = clients.lock_unpoisoned();
-        let changed_metadata = clients.get(&changed_client_id)?.state.phase42.as_ref()?;
-        let pair = phase42_session_pair_in_clients(&clients, &changed_metadata.session_id)?;
+        let changed_metadata = clients.get(&changed_client_id)?.state.split.as_ref()?;
+        let pair = split_session_pair_in_clients(&clients, &changed_metadata.session_id)?;
         let control = clients.get(&pair.control_client_id)?;
-        let control_metadata = control.state.phase42.as_ref()?;
+        let control_metadata = control.state.split.as_ref()?;
         if control_metadata.role != Some(TciClientRole::Operator)
             || current_operator == pair.control_client_id
         {
@@ -2361,7 +2361,7 @@ fn handle_incoming_message(
         }
         Message::Binary(data) => {
             if is_operator
-                || phase42_media_client_can_supply_mic(
+                || split_media_client_can_supply_mic(
                     clients,
                     current_operator_client_id,
                     client_id,
@@ -2433,12 +2433,12 @@ fn parse_tci_command_with_roles(
 
     let args: Vec<&str> = rest.split(',').collect();
     let name = name.to_ascii_lowercase();
-    if let Some((session_id, role)) = parse_phase42_session_open(command) {
-        if set_client_phase42_session_open(clients, client_id, &session_id, role) {
+    if let Some((session_id, role)) = parse_split_session_open(command) {
+        if set_client_split_session_open(clients, client_id, &session_id, role) {
             if let Some(operator_client_id) = operator_client_id {
-                reconcile_phase42_operator_role(clients, operator_client_id, client_id);
+                reconcile_split_operator_role(clients, operator_client_id, client_id);
             }
-            let _ = command_tx.send(TciCommand::Phase42SessionOpen {
+            let _ = command_tx.send(TciCommand::SplitSessionOpen {
                 client_id,
                 session_id,
                 role,
@@ -2446,12 +2446,12 @@ fn parse_tci_command_with_roles(
         }
         return;
     }
-    if let Some((session_id, lane)) = parse_phase42_session_lane(command) {
-        if set_client_phase42_session_lane(clients, client_id, &session_id, lane) {
+    if let Some((session_id, lane)) = parse_split_session_lane(command) {
+        if set_client_split_session_lane(clients, client_id, &session_id, lane) {
             if let Some(operator_client_id) = operator_client_id {
-                reconcile_phase42_operator_role(clients, operator_client_id, client_id);
+                reconcile_split_operator_role(clients, operator_client_id, client_id);
             }
-            let _ = command_tx.send(TciCommand::Phase42SessionLane {
+            let _ = command_tx.send(TciCommand::SplitSessionLane {
                 client_id,
                 session_id,
                 lane,
@@ -3341,15 +3341,15 @@ fn viewer_tci_command_allowed(name: &str) -> bool {
 // to the media client (which is the destination for binary RX frames).
 // Returns None for non-Phase-42 clients, unpaired sessions, or when called
 // on a media-lane client.
-fn phase42_paired_media_client_id(
+fn split_paired_media_client_id(
     clients: &BTreeMap<u64, ClientConnection>,
     control_client_id: u64,
 ) -> Option<u64> {
-    let metadata = clients.get(&control_client_id)?.state.phase42.as_ref()?;
-    if metadata.lane != Some(Phase42SocketKind::Control) {
+    let metadata = clients.get(&control_client_id)?.state.split.as_ref()?;
+    if metadata.lane != Some(SplitSocketKind::Control) {
         return None;
     }
-    let pair = phase42_session_pair_in_clients(clients, &metadata.session_id)?;
+    let pair = split_session_pair_in_clients(clients, &metadata.session_id)?;
     if pair.control_client_id != control_client_id {
         return None;
     }
@@ -3364,7 +3364,7 @@ fn set_client_iq_stream_enabled(clients: &ClientRegistry, client_id: u64, enable
     // Phase 42: mirror to the paired media client so binary IQ frames have
     // a destination on the media lane. client_wants_outbound_message then
     // routes RX IQ to the media client only.
-    if let Some(media_id) = phase42_paired_media_client_id(&clients, client_id) {
+    if let Some(media_id) = split_paired_media_client_id(&clients, client_id) {
         if let Some(media) = clients.get_mut(&media_id) {
             media.state.iq_stream_enabled = enabled;
         }
@@ -3384,7 +3384,7 @@ fn set_client_audio_stream_enabled(
         client.state.audio_stream_enabled = enabled;
     }
     // Phase 42: mirror to the paired media client.
-    if let Some(media_id) = phase42_paired_media_client_id(&clients, client_id) {
+    if let Some(media_id) = split_paired_media_client_id(&clients, client_id) {
         if let Some(media) = clients.get_mut(&media_id) {
             media.state.audio_stream_enabled = enabled;
         }
@@ -3399,7 +3399,7 @@ fn set_client_audio_sample_rate(clients: &ClientRegistry, client_id: u64, sample
     if let Some(client) = clients.get_mut(&client_id) {
         client.state.audio_sample_rate_hz = sample_rate_hz;
     }
-    if let Some(media_id) = phase42_paired_media_client_id(&clients, client_id) {
+    if let Some(media_id) = split_paired_media_client_id(&clients, client_id) {
         if let Some(media) = clients.get_mut(&media_id) {
             media.state.audio_sample_rate_hz = sample_rate_hz;
         }
@@ -3411,7 +3411,7 @@ fn set_client_audio_frame_float_count(clients: &ClientRegistry, client_id: u64, 
     if let Some(client) = clients.get_mut(&client_id) {
         client.state.audio_frame_float_count = sample_count;
     }
-    if let Some(media_id) = phase42_paired_media_client_id(&clients, client_id) {
+    if let Some(media_id) = split_paired_media_client_id(&clients, client_id) {
         if let Some(media) = clients.get_mut(&media_id) {
             media.state.audio_frame_float_count = sample_count;
         }
@@ -3423,7 +3423,7 @@ fn set_client_audio_channels(clients: &ClientRegistry, client_id: u64, channels:
     if let Some(client) = clients.get_mut(&client_id) {
         client.state.audio_channels = channels;
     }
-    if let Some(media_id) = phase42_paired_media_client_id(&clients, client_id) {
+    if let Some(media_id) = split_paired_media_client_id(&clients, client_id) {
         if let Some(media) = clients.get_mut(&media_id) {
             media.state.audio_channels = channels;
         }
@@ -3436,13 +3436,13 @@ fn set_client_audio_seq_gap_count(clients: &ClientRegistry, client_id: u64, gaps
     }
 }
 
-fn set_client_phase42_session_open(
+fn set_client_split_session_open(
     clients: &ClientRegistry,
     client_id: u64,
     session_id: &str,
     role: TciClientRole,
 ) -> bool {
-    let Some(session_id) = normalize_phase42_session_id(session_id) else {
+    let Some(session_id) = normalize_split_session_id(session_id) else {
         return false;
     };
     let mut clients = clients.lock_unpoisoned();
@@ -3451,8 +3451,8 @@ fn set_client_phase42_session_open(
     };
     let metadata = client
         .state
-        .phase42
-        .get_or_insert_with(|| Phase42ClientMetadata {
+        .split
+        .get_or_insert_with(|| SplitClientMetadata {
             session_id: session_id.clone(),
             lane: None,
             role: None,
@@ -3465,13 +3465,13 @@ fn set_client_phase42_session_open(
     true
 }
 
-fn set_client_phase42_session_lane(
+fn set_client_split_session_lane(
     clients: &ClientRegistry,
     client_id: u64,
     session_id: &str,
-    lane: Phase42SocketKind,
+    lane: SplitSocketKind,
 ) -> bool {
-    let Some(session_id) = normalize_phase42_session_id(session_id) else {
+    let Some(session_id) = normalize_split_session_id(session_id) else {
         return false;
     };
     let mut clients = clients.lock_unpoisoned();
@@ -3480,8 +3480,8 @@ fn set_client_phase42_session_lane(
     };
     let metadata = client
         .state
-        .phase42
-        .get_or_insert_with(|| Phase42ClientMetadata {
+        .split
+        .get_or_insert_with(|| SplitClientMetadata {
             session_id: session_id.clone(),
             lane: None,
             role: None,
@@ -3495,22 +3495,22 @@ fn set_client_phase42_session_lane(
 }
 
 #[cfg(test)]
-fn phase42_session_pair_for_client(
+fn split_session_pair_for_client(
     clients: &ClientRegistry,
     client_id: u64,
-) -> Option<Phase42SessionPair> {
+) -> Option<SplitSessionPair> {
     let clients = clients.lock_unpoisoned();
     let session_id = clients
         .get(&client_id)?
         .state
-        .phase42
+        .split
         .as_ref()?
         .session_id
         .clone();
-    phase42_session_pair_in_clients(&clients, &session_id)
+    split_session_pair_in_clients(&clients, &session_id)
 }
 
-fn phase42_media_client_can_supply_mic(
+fn split_media_client_can_supply_mic(
     clients: &ClientRegistry,
     operator_client_id: u64,
     media_client_id: u64,
@@ -3520,7 +3520,7 @@ fn phase42_media_client_can_supply_mic(
         return false;
     }
     let clients = clients.lock_unpoisoned();
-    let Some(pair) = phase42_session_pair_for_client_in_clients(&clients, media_client_id) else {
+    let Some(pair) = split_session_pair_for_client_in_clients(&clients, media_client_id) else {
         return false;
     };
     if pair.control_client_id != operator_client_id || pair.media_client_id != media_client_id {
@@ -3528,13 +3528,13 @@ fn phase42_media_client_can_supply_mic(
     }
     !clients
         .get(&media_client_id)
-        .and_then(|client| client.state.phase42.as_ref())
+        .and_then(|client| client.state.split.as_ref())
         .and_then(|metadata| metadata.ignore_media_until)
         .map(|until| now < until)
         .unwrap_or(false)
 }
 
-fn phase42_media_client_paired_with_operator_in_clients(
+fn split_media_client_paired_with_operator_in_clients(
     clients: &BTreeMap<u64, ClientConnection>,
     operator_client_id: u64,
     media_client_id: u64,
@@ -3542,22 +3542,22 @@ fn phase42_media_client_paired_with_operator_in_clients(
     if operator_client_id == 0 || operator_client_id == media_client_id {
         return false;
     }
-    phase42_session_pair_for_client_in_clients(clients, media_client_id)
+    split_session_pair_for_client_in_clients(clients, media_client_id)
         .map(|pair| {
             pair.control_client_id == operator_client_id && pair.media_client_id == media_client_id
         })
         .unwrap_or(false)
 }
 
-fn queue_phase42_media_peer_close_for_control_in_clients(
+fn queue_split_media_peer_close_for_control_in_clients(
     clients: &BTreeMap<u64, ClientConnection>,
     control_client_id: u64,
 ) -> Option<u64> {
-    let metadata = clients.get(&control_client_id)?.state.phase42.as_ref()?;
-    if metadata.lane != Some(Phase42SocketKind::Control) {
+    let metadata = clients.get(&control_client_id)?.state.split.as_ref()?;
+    if metadata.lane != Some(SplitSocketKind::Control) {
         return None;
     }
-    let pair = phase42_session_pair_in_clients(clients, &metadata.session_id)?;
+    let pair = split_session_pair_in_clients(clients, &metadata.session_id)?;
     if pair.control_client_id != control_client_id {
         return None;
     }
@@ -3566,30 +3566,30 @@ fn queue_phase42_media_peer_close_for_control_in_clients(
     Some(pair.media_client_id)
 }
 
-fn client_is_phase42_media(client: &ClientConnection) -> bool {
+fn client_is_split_media(client: &ClientConnection) -> bool {
     client
         .state
-        .phase42
+        .split
         .as_ref()
         .and_then(|metadata| metadata.lane)
-        == Some(Phase42SocketKind::Media)
+        == Some(SplitSocketKind::Media)
 }
 
-fn phase42_session_pair_for_client_in_clients(
+fn split_session_pair_for_client_in_clients(
     clients: &BTreeMap<u64, ClientConnection>,
     client_id: u64,
-) -> Option<Phase42SessionPair> {
+) -> Option<SplitSessionPair> {
     let session_id = clients
         .get(&client_id)?
         .state
-        .phase42
+        .split
         .as_ref()?
         .session_id
         .clone();
-    phase42_session_pair_in_clients(clients, &session_id)
+    split_session_pair_in_clients(clients, &session_id)
 }
 
-fn set_phase42_media_ignore_until(
+fn set_split_media_ignore_until(
     clients: &ClientRegistry,
     operator_client_id: u64,
     ignore_until: Option<Instant>,
@@ -3600,8 +3600,8 @@ fn set_phase42_media_ignore_until(
     let mut clients = clients.lock_unpoisoned();
     let Some(operator_session_id) = clients
         .get(&operator_client_id)
-        .and_then(|client| client.state.phase42.as_ref())
-        .filter(|metadata| metadata.lane == Some(Phase42SocketKind::Control))
+        .and_then(|client| client.state.split.as_ref())
+        .filter(|metadata| metadata.lane == Some(SplitSocketKind::Control))
         .map(|metadata| metadata.session_id.clone())
     else {
         return 0;
@@ -3609,11 +3609,11 @@ fn set_phase42_media_ignore_until(
 
     let mut updated = 0;
     for client in clients.values_mut() {
-        let Some(metadata) = client.state.phase42.as_mut() else {
+        let Some(metadata) = client.state.split.as_mut() else {
             continue;
         };
         if metadata.session_id == operator_session_id
-            && metadata.lane == Some(Phase42SocketKind::Media)
+            && metadata.lane == Some(SplitSocketKind::Media)
         {
             metadata.ignore_media_until = ignore_until;
             updated += 1;
@@ -3622,42 +3622,42 @@ fn set_phase42_media_ignore_until(
     updated
 }
 
-fn phase42_session_pair_in_clients(
+fn split_session_pair_in_clients(
     clients: &BTreeMap<u64, ClientConnection>,
     session_id: &str,
-) -> Option<Phase42SessionPair> {
+) -> Option<SplitSessionPair> {
     let mut control_client_id = None;
     let mut media_client_id = None;
     for (&client_id, client) in clients {
-        let Some(metadata) = client.state.phase42.as_ref() else {
+        let Some(metadata) = client.state.split.as_ref() else {
             continue;
         };
         if metadata.session_id != session_id {
             continue;
         }
         match metadata.lane {
-            Some(Phase42SocketKind::Control) => control_client_id.get_or_insert(client_id),
-            Some(Phase42SocketKind::Media) => media_client_id.get_or_insert(client_id),
+            Some(SplitSocketKind::Control) => control_client_id.get_or_insert(client_id),
+            Some(SplitSocketKind::Media) => media_client_id.get_or_insert(client_id),
             None => continue,
         };
     }
-    Some(Phase42SessionPair {
+    Some(SplitSessionPair {
         session_id: session_id.to_string(),
         control_client_id: control_client_id?,
         media_client_id: media_client_id?,
     })
 }
 
-fn phase42_lane_client_count(
+fn split_lane_client_count(
     clients: &BTreeMap<u64, ClientConnection>,
-    lane: Phase42SocketKind,
+    lane: SplitSocketKind,
 ) -> u64 {
     clients
         .values()
         .filter(|client| {
             client
                 .state
-                .phase42
+                .split
                 .as_ref()
                 .and_then(|metadata| metadata.lane)
                 == Some(lane)
@@ -3665,18 +3665,18 @@ fn phase42_lane_client_count(
         .count() as u64
 }
 
-fn phase42_paired_session_count(clients: &BTreeMap<u64, ClientConnection>) -> u64 {
+fn split_paired_session_count(clients: &BTreeMap<u64, ClientConnection>) -> u64 {
     let mut control_sessions = BTreeSet::new();
     let mut media_sessions = BTreeSet::new();
     for client in clients.values() {
-        let Some(metadata) = client.state.phase42.as_ref() else {
+        let Some(metadata) = client.state.split.as_ref() else {
             continue;
         };
         match metadata.lane {
-            Some(Phase42SocketKind::Control) => {
+            Some(SplitSocketKind::Control) => {
                 control_sessions.insert(metadata.session_id.clone());
             }
-            Some(Phase42SocketKind::Media) => {
+            Some(SplitSocketKind::Media) => {
                 media_sessions.insert(metadata.session_id.clone());
             }
             None => {}
@@ -3784,7 +3784,7 @@ fn set_client_tx_codec_caps(
     // Phase 42: codec negotiation happens on the control lane, but TX mic
     // binary frames arrive on the paired media lane. Mirror the accepted state
     // so the media client owns the decoder that will actually consume frames.
-    if let Some(media_id) = phase42_paired_media_client_id(&clients, client_id) {
+    if let Some(media_id) = split_paired_media_client_id(&clients, client_id) {
         if let Some(media) = clients.get_mut(&media_id) {
             reset_client_tx_codec_state(media, caps, selected, now);
         }
@@ -3808,10 +3808,10 @@ fn send_safety_text_to_client_or_control(clients: &ClientRegistry, client_id: u6
         let clients = clients.lock_unpoisoned();
         let target_client_id = clients
             .get(&client_id)
-            .and_then(|client| client.state.phase42.as_ref())
-            .filter(|metadata| metadata.lane == Some(Phase42SocketKind::Media))
+            .and_then(|client| client.state.split.as_ref())
+            .filter(|metadata| metadata.lane == Some(SplitSocketKind::Media))
             .and_then(|metadata| {
-                phase42_session_pair_in_clients(&clients, &metadata.session_id)
+                split_session_pair_in_clients(&clients, &metadata.session_id)
                     .map(|pair| pair.control_client_id)
             })
             .unwrap_or(client_id);
@@ -4542,7 +4542,7 @@ mod tests {
     }
 
     #[test]
-    fn parses_phase44_pcm_tci_mic_frame_with_codec_header() {
+    fn parses_pcm_tci_mic_frame_with_codec_header() {
         let mut frame = vec![0u8; 64 + 4];
         write_u32_le(&mut frame, 4, 48_000);
         write_u32_le(&mut frame, 8, TX_SAMPLE_TYPE_S16);
@@ -4567,7 +4567,7 @@ mod tests {
     }
 
     #[test]
-    fn rejects_phase44_mic_frame_with_unsupported_codec() {
+    fn rejects_mic_frame_with_unsupported_codec() {
         let mut frame = vec![0u8; 64 + 2];
         write_u32_le(&mut frame, 4, 48_000);
         write_u32_le(&mut frame, 8, TX_SAMPLE_TYPE_S16);
@@ -4581,7 +4581,7 @@ mod tests {
     }
 
     #[test]
-    fn rejects_phase44_pcm_mic_frame_with_payload_size_mismatch() {
+    fn rejects_pcm_mic_frame_with_payload_size_mismatch() {
         let mut frame = vec![0u8; 64 + 4];
         write_u32_le(&mut frame, 4, 48_000);
         write_u32_le(&mut frame, 8, TX_SAMPLE_TYPE_S16);
@@ -4729,7 +4729,7 @@ mod tests {
     }
 
     #[test]
-    fn phase44_tx_codec_caps_accepts_pcm_scaffold() {
+    fn tx_codec_caps_accepts_pcm_scaffold() {
         let (tx, rx) = mpsc::channel();
         let clients = test_client_registry(7);
 
@@ -4752,7 +4752,7 @@ mod tests {
     }
 
     #[test]
-    fn phase44_tx_codec_caps_mirror_from_control_to_paired_media() {
+    fn tx_codec_caps_mirror_from_control_to_paired_media() {
         let (tx, rx) = mpsc::channel();
         let clients = test_client_registry(73);
         clients.lock_unpoisoned().insert(
@@ -4782,7 +4782,7 @@ mod tests {
     }
 
     #[test]
-    fn phase44_tx_codec_caps_rejects_non_pcm_until_decoder_exists() {
+    fn tx_codec_caps_rejects_non_pcm_until_decoder_exists() {
         let (tx, rx) = mpsc::channel();
         let clients = test_client_registry(7);
 
@@ -4807,7 +4807,7 @@ mod tests {
     }
 
     #[test]
-    fn phase44_tx_codec_caps_accepts_opus_only_when_runtime_flag_enabled() {
+    fn tx_codec_caps_accepts_opus_only_when_runtime_flag_enabled() {
         let (tx, rx) = mpsc::channel();
         let mut clients_map = BTreeMap::new();
         clients_map.insert(
@@ -4937,65 +4937,65 @@ mod tests {
     }
 
     #[test]
-    fn phase42_parses_session_open_and_paired_message() {
+    fn split_parses_session_open_and_paired_message() {
         assert_eq!(
-            parse_phase42_session_open("session_open:phase-42,viewer;"),
+            parse_split_session_open("session_open:phase-42,viewer;"),
             Some(("phase-42".to_string(), TciClientRole::Viewer))
         );
         assert_eq!(
-            parse_phase42_session_open("session_open:operator.1;"),
+            parse_split_session_open("session_open:operator.1;"),
             Some(("operator.1".to_string(), TciClientRole::Operator))
         );
-        assert_eq!(parse_phase42_session_open("saturn_ping:1,2;"), None);
+        assert_eq!(parse_split_session_open("saturn_ping:1,2;"), None);
         assert_eq!(
-            phase42_session_paired_message("phase-42"),
+            split_session_paired_message("phase-42"),
             "session_paired:phase-42;"
         );
     }
 
     #[test]
-    fn phase42_parses_proxy_lane_marker() {
+    fn split_parses_proxy_lane_marker() {
         assert_eq!(
-            parse_phase42_session_lane("session_lane:phase-42,control;"),
-            Some(("phase-42".to_string(), Phase42SocketKind::Control))
+            parse_split_session_lane("session_lane:phase-42,control;"),
+            Some(("phase-42".to_string(), SplitSocketKind::Control))
         );
         assert_eq!(
-            parse_phase42_session_lane("session_lane:phase%3A42,media;"),
-            Some(("phase3A42".to_string(), Phase42SocketKind::Media))
+            parse_split_session_lane("session_lane:phase%3A42,media;"),
+            Some(("phase3A42".to_string(), SplitSocketKind::Media))
         );
-        assert_eq!(Phase42SocketKind::Control.as_tci(), "control");
+        assert_eq!(SplitSocketKind::Control.as_tci(), "control");
         assert_eq!(
-            parse_phase42_session_lane("session_lane:phase-42,data;"),
+            parse_split_session_lane("session_lane:phase-42,data;"),
             None
         );
         assert_eq!(
-            parse_phase42_session_lane("session_open:phase-42,operator;"),
+            parse_split_session_lane("session_open:phase-42,operator;"),
             None
         );
     }
 
     #[test]
-    fn phase42_metadata_commands_cross_viewer_filter() {
+    fn split_metadata_commands_cross_viewer_filter() {
         let (tx, rx) = mpsc::channel();
         let clients = test_client_registry(51);
 
         parse_tci_command("session_lane:phase-42,media;", &tx, &clients, 51, false);
         match rx.try_recv().unwrap() {
-            TciCommand::Phase42SessionLane {
+            TciCommand::SplitSessionLane {
                 client_id,
                 session_id,
                 lane,
             } => {
                 assert_eq!(client_id, 51);
                 assert_eq!(session_id, "phase-42");
-                assert_eq!(lane, Phase42SocketKind::Media);
+                assert_eq!(lane, SplitSocketKind::Media);
             }
             other => panic!("unexpected command: {other:?}"),
         }
 
         parse_tci_command("session_open:phase-42,viewer;", &tx, &clients, 51, false);
         match rx.try_recv().unwrap() {
-            TciCommand::Phase42SessionOpen {
+            TciCommand::SplitSessionOpen {
                 client_id,
                 session_id,
                 role,
@@ -5011,7 +5011,7 @@ mod tests {
     }
 
     #[test]
-    fn phase42_metadata_updates_client_state_and_rejects_mismatch() {
+    fn split_metadata_updates_client_state_and_rejects_mismatch() {
         let (tx, rx) = mpsc::channel();
         let clients = test_client_registry(52);
 
@@ -5020,18 +5020,18 @@ mod tests {
 
         {
             let clients = clients.lock_unpoisoned();
-            let phase42 = clients.get(&52).unwrap().state.phase42.as_ref().unwrap();
-            assert_eq!(phase42.session_id, "phase-42");
-            assert_eq!(phase42.lane, Some(Phase42SocketKind::Media));
-            assert_eq!(phase42.role, Some(TciClientRole::Viewer));
+            let split = clients.get(&52).unwrap().state.split.as_ref().unwrap();
+            assert_eq!(split.session_id, "phase-42");
+            assert_eq!(split.lane, Some(SplitSocketKind::Media));
+            assert_eq!(split.role, Some(TciClientRole::Viewer));
         }
         assert!(matches!(
             rx.try_recv(),
-            Ok(TciCommand::Phase42SessionLane { .. })
+            Ok(TciCommand::SplitSessionLane { .. })
         ));
         assert!(matches!(
             rx.try_recv(),
-            Ok(TciCommand::Phase42SessionOpen { .. })
+            Ok(TciCommand::SplitSessionOpen { .. })
         ));
 
         parse_tci_command(
@@ -5043,13 +5043,13 @@ mod tests {
         );
         assert!(rx.try_recv().is_err());
         let clients = clients.lock_unpoisoned();
-        let phase42 = clients.get(&52).unwrap().state.phase42.as_ref().unwrap();
-        assert_eq!(phase42.session_id, "phase-42");
-        assert_eq!(phase42.lane, Some(Phase42SocketKind::Media));
+        let split = clients.get(&52).unwrap().state.split.as_ref().unwrap();
+        assert_eq!(split.session_id, "phase-42");
+        assert_eq!(split.lane, Some(SplitSocketKind::Media));
     }
 
     #[test]
-    fn phase42_pairing_status_derives_from_client_metadata() {
+    fn split_pairing_status_derives_from_client_metadata() {
         let (tx, rx) = mpsc::channel();
         let clients = test_client_registry(61);
         clients.lock_unpoisoned().insert(
@@ -5061,12 +5061,12 @@ mod tests {
         );
 
         parse_tci_command("session_lane:phase-42,control;", &tx, &clients, 61, true);
-        assert_eq!(phase42_session_pair_for_client(&clients, 61), None);
+        assert_eq!(split_session_pair_for_client(&clients, 61), None);
 
         parse_tci_command("session_lane:phase-42,media;", &tx, &clients, 62, false);
         assert_eq!(
-            phase42_session_pair_for_client(&clients, 62),
-            Some(Phase42SessionPair {
+            split_session_pair_for_client(&clients, 62),
+            Some(SplitSessionPair {
                 session_id: "phase-42".to_string(),
                 control_client_id: 61,
                 media_client_id: 62,
@@ -5075,28 +5075,28 @@ mod tests {
         {
             let clients = clients.lock_unpoisoned();
             assert_eq!(
-                phase42_lane_client_count(&clients, Phase42SocketKind::Control),
+                split_lane_client_count(&clients, SplitSocketKind::Control),
                 1
             );
             assert_eq!(
-                phase42_lane_client_count(&clients, Phase42SocketKind::Media),
+                split_lane_client_count(&clients, SplitSocketKind::Media),
                 1
             );
-            assert_eq!(phase42_paired_session_count(&clients), 1);
+            assert_eq!(split_paired_session_count(&clients), 1);
         }
         assert!(matches!(
             rx.try_recv(),
-            Ok(TciCommand::Phase42SessionLane { client_id: 61, .. })
+            Ok(TciCommand::SplitSessionLane { client_id: 61, .. })
         ));
         assert!(matches!(
             rx.try_recv(),
-            Ok(TciCommand::Phase42SessionLane { client_id: 62, .. })
+            Ok(TciCommand::SplitSessionLane { client_id: 62, .. })
         ));
         assert!(rx.try_recv().is_err());
     }
 
     #[test]
-    fn phase42_control_lane_reclaims_operator_from_media_lane() {
+    fn split_control_lane_reclaims_operator_from_media_lane() {
         let (tx, rx) = mpsc::channel();
         let clients = test_client_registry(17);
         clients.lock_unpoisoned().insert(
@@ -5135,7 +5135,7 @@ mod tests {
         while rx.try_recv().is_ok() {}
 
         assert_eq!(operator_client_id.load(Ordering::SeqCst), 17);
-        assert!(phase42_media_client_can_supply_mic(
+        assert!(split_media_client_can_supply_mic(
             &clients,
             17,
             18,
@@ -5159,7 +5159,7 @@ mod tests {
     }
 
     #[test]
-    fn phase42_paired_media_socket_can_supply_mic_binary() {
+    fn split_paired_media_socket_can_supply_mic_binary() {
         let (tx, rx) = mpsc::channel();
         let clients = test_client_registry(71);
         clients.lock_unpoisoned().insert(
@@ -5197,7 +5197,7 @@ mod tests {
     }
 
     #[test]
-    fn phase42_release_window_blocks_paired_media_mic_binary() {
+    fn split_release_window_blocks_paired_media_mic_binary() {
         let (tx, rx) = mpsc::channel();
         let clients = test_client_registry(73);
         clients.lock_unpoisoned().insert(
@@ -5216,15 +5216,15 @@ mod tests {
 
         let now = Instant::now();
         assert_eq!(
-            set_phase42_media_ignore_until(&clients, 73, Some(now + PHASE42_RELEASE_IGNORE_WINDOW)),
+            set_split_media_ignore_until(&clients, 73, Some(now + SPLIT_RELEASE_IGNORE_WINDOW)),
             1
         );
-        assert!(!phase42_media_client_can_supply_mic(&clients, 73, 74, now));
-        assert!(phase42_media_client_can_supply_mic(
+        assert!(!split_media_client_can_supply_mic(&clients, 73, 74, now));
+        assert!(split_media_client_can_supply_mic(
             &clients,
             73,
             74,
-            now + PHASE42_RELEASE_IGNORE_WINDOW + Duration::from_millis(1)
+            now + SPLIT_RELEASE_IGNORE_WINDOW + Duration::from_millis(1)
         ));
 
         let frame = build_tci_float_frame(0, 48_000, &[0.25, -0.25], 2, 1, 93);
@@ -5238,8 +5238,8 @@ mod tests {
         ));
         assert!(rx.try_recv().is_err());
 
-        assert_eq!(set_phase42_media_ignore_until(&clients, 73, None), 1);
-        assert!(phase42_media_client_can_supply_mic(
+        assert_eq!(set_split_media_ignore_until(&clients, 73, None), 1);
+        assert!(split_media_client_can_supply_mic(
             &clients,
             73,
             74,
@@ -5248,7 +5248,7 @@ mod tests {
     }
 
     #[test]
-    fn phase44_media_decode_errors_force_rx_and_report_on_control_lane() {
+    fn media_decode_errors_force_rx_and_report_on_control_lane() {
         let (tx, rx) = mpsc::channel();
         let clients = test_client_registry(73);
         clients.lock_unpoisoned().insert(
@@ -5313,7 +5313,7 @@ mod tests {
     }
 
     #[test]
-    fn phase44_media_lane_decodes_opus_mic_frame_when_runtime_flag_enabled() {
+    fn media_lane_decodes_opus_mic_frame_when_runtime_flag_enabled() {
         if !opus_wb_runtime_available() {
             return;
         }
@@ -5392,7 +5392,7 @@ mod tests {
     }
 
     #[test]
-    fn phase42_unpaired_media_socket_cannot_supply_mic_binary() {
+    fn split_unpaired_media_socket_cannot_supply_mic_binary() {
         let (tx, rx) = mpsc::channel();
         let clients = test_client_registry(81);
         let operator_client_id = Arc::new(AtomicU64::new(80));
@@ -5414,11 +5414,11 @@ mod tests {
     }
 
     #[test]
-    fn phase42_session_pairs_after_control_and_media_connect() {
+    fn split_session_pairs_after_control_and_media_connect() {
         let now = Instant::now();
-        let mut session = Phase42SplitSession::new_control("phase-42", now).unwrap();
+        let mut session = SplitSession::new_control("phase-42", now).unwrap();
 
-        assert_eq!(session.state, Phase42SessionState::WaitingMedia);
+        assert_eq!(session.state, SplitSessionState::WaitingMedia);
         assert!(!session.pairing_timed_out(now + Duration::from_secs(29)));
         assert!(session.pairing_timed_out(now + Duration::from_secs(30)));
 
@@ -5426,66 +5426,66 @@ mod tests {
             session.connect_media(),
             Some("session_paired:phase-42;".to_string())
         );
-        assert_eq!(session.state, Phase42SessionState::Paired);
+        assert_eq!(session.state, SplitSessionState::Paired);
     }
 
     #[test]
-    fn phase42_release_opens_media_ignore_window() {
+    fn split_release_opens_media_ignore_window() {
         let now = Instant::now();
-        let mut session = Phase42SplitSession::new_control("phase-42", now).unwrap();
+        let mut session = SplitSession::new_control("phase-42", now).unwrap();
         session.connect_media();
         assert!(session.key());
         assert_eq!(
             session.media_frame_action(now + Duration::from_millis(10)),
-            Phase42MediaFrameAction::Accept
+            SplitMediaFrameAction::Accept
         );
 
         assert!(session.release(now + Duration::from_millis(20)));
-        assert_eq!(session.state, Phase42SessionState::Paired);
+        assert_eq!(session.state, SplitSessionState::Paired);
         assert_eq!(
             session.media_frame_action(now + Duration::from_millis(30)),
-            Phase42MediaFrameAction::DropReleaseWindow
+            SplitMediaFrameAction::DropReleaseWindow
         );
         assert_eq!(session.release_window_drops, 1);
         assert_eq!(
             session.media_frame_action(now + Duration::from_millis(300)),
-            Phase42MediaFrameAction::DropNotKeyed
+            SplitMediaFrameAction::DropNotKeyed
         );
     }
 
     #[test]
-    fn phase42_disconnects_force_rx_at_safety_boundaries() {
+    fn split_disconnects_force_rx_at_safety_boundaries() {
         let now = Instant::now();
-        let mut media_loss = Phase42SplitSession::new_control("phase-42", now).unwrap();
+        let mut media_loss = SplitSession::new_control("phase-42", now).unwrap();
         media_loss.connect_media();
         media_loss.key();
         assert_eq!(
             media_loss.disconnect_media(),
-            Phase42DisconnectAction {
+            SplitDisconnectAction {
                 force_rx: true,
                 close_peer_socket: false,
-                state: Phase42SessionState::WaitingMedia,
+                state: SplitSessionState::WaitingMedia,
             }
         );
 
-        let mut control_loss = Phase42SplitSession::new_control("phase-43", now).unwrap();
+        let mut control_loss = SplitSession::new_control("phase-43", now).unwrap();
         control_loss.connect_media();
         control_loss.key();
         assert_eq!(
             control_loss.disconnect_control(),
-            Phase42DisconnectAction {
+            SplitDisconnectAction {
                 force_rx: true,
                 close_peer_socket: true,
-                state: Phase42SessionState::Terminated,
+                state: SplitSessionState::Terminated,
             }
         );
     }
 
-    fn insert_phase42_paired_client(
+    fn insert_split_paired_client(
         clients: &ClientRegistry,
         client_id: u64,
         session_id: &str,
-        lane: Phase42SocketKind,
+        lane: SplitSocketKind,
         role: Option<TciClientRole>,
     ) {
         let mut clients = clients.lock_unpoisoned();
@@ -5494,7 +5494,7 @@ mod tests {
             ClientConnection {
                 outbound: ClientOutbound::new(),
                 state: ClientState {
-                    phase42: Some(Phase42ClientMetadata {
+                    split: Some(SplitClientMetadata {
                         session_id: session_id.to_string(),
                         lane: Some(lane),
                         role,
@@ -5507,16 +5507,16 @@ mod tests {
     }
 
     #[test]
-    fn phase42_iq_stream_enable_propagates_from_control_to_media() {
+    fn split_iq_stream_enable_propagates_from_control_to_media() {
         let clients: ClientRegistry = Arc::new(Mutex::new(BTreeMap::new()));
-        insert_phase42_paired_client(
+        insert_split_paired_client(
             &clients,
             80,
             "phase-42",
-            Phase42SocketKind::Control,
+            SplitSocketKind::Control,
             Some(TciClientRole::Operator),
         );
-        insert_phase42_paired_client(&clients, 81, "phase-42", Phase42SocketKind::Media, None);
+        insert_split_paired_client(&clients, 81, "phase-42", SplitSocketKind::Media, None);
 
         let any_enabled = set_client_iq_stream_enabled(&clients, 80, true);
         assert!(any_enabled);
@@ -5527,16 +5527,16 @@ mod tests {
     }
 
     #[test]
-    fn phase42_audio_stream_enable_propagates_from_control_to_media() {
+    fn split_audio_stream_enable_propagates_from_control_to_media() {
         let clients: ClientRegistry = Arc::new(Mutex::new(BTreeMap::new()));
-        insert_phase42_paired_client(
+        insert_split_paired_client(
             &clients,
             82,
             "phase-42",
-            Phase42SocketKind::Control,
+            SplitSocketKind::Control,
             Some(TciClientRole::Operator),
         );
-        insert_phase42_paired_client(&clients, 83, "phase-42", Phase42SocketKind::Media, None);
+        insert_split_paired_client(&clients, 83, "phase-42", SplitSocketKind::Media, None);
 
         let any_enabled = set_client_audio_stream_enabled(&clients, 82, true);
         assert!(any_enabled);
@@ -5547,16 +5547,16 @@ mod tests {
     }
 
     #[test]
-    fn phase42_audio_format_state_propagates_from_control_to_media() {
+    fn split_audio_format_state_propagates_from_control_to_media() {
         let clients: ClientRegistry = Arc::new(Mutex::new(BTreeMap::new()));
-        insert_phase42_paired_client(
+        insert_split_paired_client(
             &clients,
             84,
             "phase-42",
-            Phase42SocketKind::Control,
+            SplitSocketKind::Control,
             Some(TciClientRole::Operator),
         );
-        insert_phase42_paired_client(&clients, 85, "phase-42", Phase42SocketKind::Media, None);
+        insert_split_paired_client(&clients, 85, "phase-42", SplitSocketKind::Media, None);
 
         set_client_audio_sample_rate(&clients, 84, 24_000);
         set_client_audio_frame_float_count(&clients, 84, 4096);
@@ -5575,16 +5575,16 @@ mod tests {
     }
 
     #[test]
-    fn phase42_tx_media_priority_suppresses_media_downlink() {
+    fn split_tx_media_priority_suppresses_media_downlink() {
         let clients: ClientRegistry = Arc::new(Mutex::new(BTreeMap::new()));
-        insert_phase42_paired_client(
+        insert_split_paired_client(
             &clients,
             86,
             "phase-42",
-            Phase42SocketKind::Control,
+            SplitSocketKind::Control,
             Some(TciClientRole::Operator),
         );
-        insert_phase42_paired_client(&clients, 87, "phase-42", Phase42SocketKind::Media, None);
+        insert_split_paired_client(&clients, 87, "phase-42", SplitSocketKind::Media, None);
         set_client_iq_stream_enabled(&clients, 86, true);
         set_client_audio_stream_enabled(&clients, 86, true);
 
@@ -5621,14 +5621,14 @@ mod tests {
     }
 
     #[test]
-    fn phase42_outbound_routing_sends_text_to_control_lane_not_media() {
+    fn split_outbound_routing_sends_text_to_control_lane_not_media() {
         let mut control = ClientConnection {
             outbound: ClientOutbound::new(),
             state: ClientState::default(),
         };
-        control.state.phase42 = Some(Phase42ClientMetadata {
+        control.state.split = Some(SplitClientMetadata {
             session_id: "phase-42".into(),
-            lane: Some(Phase42SocketKind::Control),
+            lane: Some(SplitSocketKind::Control),
             role: Some(TciClientRole::Operator),
             ignore_media_until: None,
         });
@@ -5636,9 +5636,9 @@ mod tests {
             outbound: ClientOutbound::new(),
             state: ClientState::default(),
         };
-        media.state.phase42 = Some(Phase42ClientMetadata {
+        media.state.split = Some(SplitClientMetadata {
             session_id: "phase-42".into(),
-            lane: Some(Phase42SocketKind::Media),
+            lane: Some(SplitSocketKind::Media),
             role: None,
             ignore_media_until: None,
         });
@@ -5653,14 +5653,14 @@ mod tests {
     }
 
     #[test]
-    fn phase42_outbound_routing_sends_iq_to_media_lane_not_control() {
+    fn split_outbound_routing_sends_iq_to_media_lane_not_control() {
         let mut control = ClientConnection {
             outbound: ClientOutbound::new(),
             state: ClientState::default(),
         };
-        control.state.phase42 = Some(Phase42ClientMetadata {
+        control.state.split = Some(SplitClientMetadata {
             session_id: "phase-42".into(),
-            lane: Some(Phase42SocketKind::Control),
+            lane: Some(SplitSocketKind::Control),
             role: Some(TciClientRole::Operator),
             ignore_media_until: None,
         });
@@ -5670,9 +5670,9 @@ mod tests {
             outbound: ClientOutbound::new(),
             state: ClientState::default(),
         };
-        media.state.phase42 = Some(Phase42ClientMetadata {
+        media.state.split = Some(SplitClientMetadata {
             session_id: "phase-42".into(),
-            lane: Some(Phase42SocketKind::Media),
+            lane: Some(SplitSocketKind::Media),
             role: None,
             ignore_media_until: None,
         });
@@ -5696,14 +5696,14 @@ mod tests {
     }
 
     #[test]
-    fn phase42_outbound_routing_sends_audio_to_media_lane_not_control() {
+    fn split_outbound_routing_sends_audio_to_media_lane_not_control() {
         let mut control = ClientConnection {
             outbound: ClientOutbound::new(),
             state: ClientState::default(),
         };
-        control.state.phase42 = Some(Phase42ClientMetadata {
+        control.state.split = Some(SplitClientMetadata {
             session_id: "phase-42".into(),
-            lane: Some(Phase42SocketKind::Control),
+            lane: Some(SplitSocketKind::Control),
             role: Some(TciClientRole::Operator),
             ignore_media_until: None,
         });
@@ -5713,9 +5713,9 @@ mod tests {
             outbound: ClientOutbound::new(),
             state: ClientState::default(),
         };
-        media.state.phase42 = Some(Phase42ClientMetadata {
+        media.state.split = Some(SplitClientMetadata {
             session_id: "phase-42".into(),
-            lane: Some(Phase42SocketKind::Media),
+            lane: Some(SplitSocketKind::Media),
             role: None,
             ignore_media_until: None,
         });
@@ -5733,12 +5733,12 @@ mod tests {
     }
 
     #[test]
-    fn legacy_non_phase42_client_receives_text_and_binary() {
+    fn legacy_non_split_client_receives_text_and_binary() {
         let mut legacy = ClientConnection {
             outbound: ClientOutbound::new(),
             state: ClientState::default(),
         };
-        // No phase42 metadata — represents a legacy single-socket client.
+        // No split metadata — represents a legacy single-socket client.
         legacy.state.iq_stream_enabled = true;
         legacy.state.audio_stream_enabled = true;
 
@@ -5854,7 +5854,7 @@ mod tests {
     }
 
     #[test]
-    fn classifies_phase44_parser_decode_errors_for_telemetry() {
+    fn classifies_parser_decode_errors_for_telemetry() {
         let mut frame = vec![0u8; 64 + 4];
         write_u32_le(&mut frame, 4, 48_000);
         write_u32_le(&mut frame, 8, TX_SAMPLE_TYPE_S16);
@@ -5877,7 +5877,7 @@ mod tests {
     }
 
     #[test]
-    fn remote_tx_media_priority_is_a_noop_after_phase42_refactor() {
+    fn remote_tx_media_priority_is_a_noop_after_split_refactor() {
         // After Phase 42 refactor, TX media priority is derived from the
         // bridge's on-air state, not from this browser command. The command
         // is accepted (no parse error) but has no side effect. Older
@@ -5966,14 +5966,14 @@ mod tests {
 
         assert!(disconnect.was_operator);
         assert_eq!(disconnect.promoted_operator, Some(2));
-        assert_eq!(disconnect.phase42_closed_peer, None);
-        assert!(!disconnect.phase42_media_loss_forces_rx);
+        assert_eq!(disconnect.split_closed_peer, None);
+        assert!(!disconnect.split_media_loss_forces_rx);
         assert_eq!(disconnect.remaining_clients, 1);
         assert_eq!(operator_client_id.load(Ordering::SeqCst), 2);
     }
 
     #[test]
-    fn phase42_media_disconnect_forces_rx_when_paired_with_operator() {
+    fn split_media_disconnect_forces_rx_when_paired_with_operator() {
         let (tx, rx) = mpsc::channel();
         let clients = test_client_registry(91);
         clients.lock_unpoisoned().insert(
@@ -5992,15 +5992,15 @@ mod tests {
         let disconnect = unregister_client(&clients, &operator_client_id, 92);
 
         assert!(!disconnect.was_operator);
-        assert!(disconnect.phase42_media_loss_forces_rx);
-        assert_eq!(disconnect.phase42_closed_peer, None);
+        assert!(disconnect.split_media_loss_forces_rx);
+        assert_eq!(disconnect.split_closed_peer, None);
         assert_eq!(disconnect.promoted_operator, None);
         assert_eq!(disconnect.remaining_clients, 1);
         assert_eq!(operator_client_id.load(Ordering::SeqCst), 91);
     }
 
     #[test]
-    fn phase42_control_disconnect_queues_media_peer_close() {
+    fn split_control_disconnect_queues_media_peer_close() {
         let (tx, rx) = mpsc::channel();
         let clients = test_client_registry(101);
         clients.lock_unpoisoned().insert(
@@ -6025,14 +6025,14 @@ mod tests {
         let disconnect = unregister_client(&clients, &operator_client_id, 101);
 
         assert!(disconnect.was_operator);
-        assert_eq!(disconnect.phase42_closed_peer, Some(102));
+        assert_eq!(disconnect.split_closed_peer, Some(102));
         assert_eq!(disconnect.remaining_clients, 1);
         let close = media_outbound.next_message(false).unwrap();
         assert!(matches!(close.message, OutboundMessage::Close));
     }
 
     #[test]
-    fn operator_disconnect_does_not_promote_phase42_media_socket() {
+    fn operator_disconnect_does_not_promote_split_media_socket() {
         let (tx, rx) = mpsc::channel();
         let clients = test_client_registry(1);
         {
@@ -6059,8 +6059,8 @@ mod tests {
         let disconnect = unregister_client(&clients, &operator_client_id, 1);
 
         assert!(disconnect.was_operator);
-        assert!(!disconnect.phase42_media_loss_forces_rx);
-        assert_eq!(disconnect.phase42_closed_peer, None);
+        assert!(!disconnect.split_media_loss_forces_rx);
+        assert_eq!(disconnect.split_closed_peer, None);
         assert_eq!(disconnect.promoted_operator, Some(3));
         assert_eq!(disconnect.remaining_clients, 2);
         assert_eq!(operator_client_id.load(Ordering::SeqCst), 3);

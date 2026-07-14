@@ -518,7 +518,7 @@ mod tests {
     }
 
     #[test]
-    fn opus_profiles_match_phase44_defaults() {
+    fn opus_profiles_match_defaults() {
         let nb = TxOpusDecoderConfig::for_codec(TxMicCodec::OpusNb).unwrap();
         assert_eq!(nb.encoder_sample_rate_hz, 16_000);
         assert_eq!(nb.decode_output_sample_rate_hz, 48_000);

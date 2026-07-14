@@ -54,7 +54,7 @@ export interface PerfSnapshotSource {
   lastSpectrumRenderAt: number;
   waterfallSettleFrames: number;
   displayCaption: string;
-  phase40DisplayProfile?: string;
+  displayProfile?: string;
   browserMainLagP95Ms: number;
   browserMainLagP99Ms: number;
   browserMainLagMaxMs: number;
@@ -132,7 +132,7 @@ export interface PerfSnapshot {
   spectrumLatencyMs: number;
   waterfallSettleFrames: number;
   displayCaption: string;
-  phase40DisplayProfile: string;
+  displayProfile: string;
   browserMainLagP95Ms: number;
   browserMainLagP99Ms: number;
   browserMainLagMaxMs: number;
@@ -188,7 +188,7 @@ export interface PerfSummary {
   maxTxWsSendP99Ms: number;
   totalTxTimingFrames: number;
   totalTxTimingDroppedFrames: number;
-  phase40DisplayProfile: string;
+  displayProfile: string;
   finalSnapshot: PerfSnapshot;
 }
 
@@ -270,7 +270,7 @@ export function buildPerfSnapshot(s: PerfSnapshotSource, nowMs: number): PerfSna
     spectrumLatencyMs: Math.max(0, Math.round(nowMs - (Number(s.lastSpectrumRenderAt) || 0))),
     waterfallSettleFrames: Math.round(Number(s.waterfallSettleFrames) || 0),
     displayCaption: `${s.displayCaption || ''}`,
-    phase40DisplayProfile: `${s.phase40DisplayProfile || ''}`,
+    displayProfile: `${s.displayProfile || ''}`,
     browserMainLagP95Ms: nonNegativeDecimal(s.browserMainLagP95Ms),
     browserMainLagP99Ms: nonNegativeDecimal(s.browserMainLagP99Ms),
     browserMainLagMaxMs: nonNegativeDecimal(s.browserMainLagMaxMs),
@@ -361,8 +361,8 @@ export function buildPerfSummary(snapshots: PerfSnapshot[], currentSnapshot: Per
     maxTxWsSendP99Ms: txWsSendP99.length ? Math.max(...txWsSendP99) : 0,
     totalTxTimingFrames: sum(samples.map((s) => Number(s.txTimingFrameCount) || 0)),
     totalTxTimingDroppedFrames: sum(samples.map((s) => Number(s.txTimingDroppedFrameCount) || 0)),
-    phase40DisplayProfile:
-      samples[samples.length - 1]?.phase40DisplayProfile || currentSnapshot.phase40DisplayProfile || '',
+    displayProfile:
+      samples[samples.length - 1]?.displayProfile || currentSnapshot.displayProfile || '',
     finalSnapshot: samples[samples.length - 1] || currentSnapshot,
   };
 }

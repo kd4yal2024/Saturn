@@ -1,63 +1,63 @@
 import {
-  PHASE42_SOCKET_OPEN,
-  type Phase42ProtocolViolation,
-  type Phase42SessionRole,
-  type Phase42SocketEvent,
-  type Phase42SocketEventType,
-  type Phase42SocketLike,
-  type Phase42SocketRole,
-  type Phase42SplitSocketClientOptions,
-  type Phase42SplitSocketClient,
+  SPLIT_SOCKET_OPEN,
+  type SplitProtocolViolation,
+  type SplitSessionRole,
+  type SplitSocketEvent,
+  type SplitSocketEventType,
+  type SplitSocketLike,
+  type SplitSocketRole,
+  type SplitSocketClientOptions,
+  type SplitSocketClient,
   type SplitSocketUrls,
-  createPhase42SplitSocketClient,
+  createSplitSocketClient,
 } from './split-sockets';
 
 const SOCKET_CONNECTING = 0;
 const SOCKET_CLOSING = 2;
 const SOCKET_CLOSED = 3;
 
-type Phase42AdapterEventHandler = (event: Phase42SocketEvent) => void;
-type Phase42WebSocketCtor = new (url: string) => Phase42SocketLike;
+type LegacyAdapterEventHandler = (event: SplitSocketEvent) => void;
+type SplitWebSocketCtor = new (url: string) => SplitSocketLike;
 
-export type Phase42LegacySocketAdapterOptions = {
+export type LegacySocketAdapterOptions = {
   baseWsUrl: string;
   sessionId: string;
-  WebSocketCtor: Phase42WebSocketCtor;
-  role?: Phase42SessionRole;
-  onProtocolViolation?: (violation: Phase42ProtocolViolation) => void;
+  WebSocketCtor: SplitWebSocketCtor;
+  role?: SplitSessionRole;
+  onProtocolViolation?: (violation: SplitProtocolViolation) => void;
 };
 
-export type Phase42LegacySocketAdapter = Phase42SocketLike & {
-  readonly client: Phase42SplitSocketClient;
+export type LegacySocketAdapter = SplitSocketLike & {
+  readonly client: SplitSocketClient;
   readonly urls: SplitSocketUrls;
-  onopen: Phase42AdapterEventHandler | null;
-  onmessage: Phase42AdapterEventHandler | null;
-  onclose: Phase42AdapterEventHandler | null;
-  onerror: Phase42AdapterEventHandler | null;
-  removeEventListener(type: Phase42SocketEventType, listener: Phase42AdapterEventHandler): void;
+  onopen: LegacyAdapterEventHandler | null;
+  onmessage: LegacyAdapterEventHandler | null;
+  onclose: LegacyAdapterEventHandler | null;
+  onerror: LegacyAdapterEventHandler | null;
+  removeEventListener(type: SplitSocketEventType, listener: LegacyAdapterEventHandler): void;
 };
 
-export function createPhase42LegacySocketAdapter(
-  options: Phase42LegacySocketAdapterOptions,
-): Phase42LegacySocketAdapter {
-  const sockets: Partial<Record<Phase42SocketRole, Phase42SocketLike>> = {};
-  const listeners: { [K in Phase42SocketEventType]: Set<Phase42AdapterEventHandler> } = {
+export function createLegacySocketAdapter(
+  options: LegacySocketAdapterOptions,
+): LegacySocketAdapter {
+  const sockets: Partial<Record<SplitSocketRole, SplitSocketLike>> = {};
+  const listeners: { [K in SplitSocketEventType]: Set<LegacyAdapterEventHandler> } = {
     open: new Set(),
     message: new Set(),
     close: new Set(),
     error: new Set(),
   };
   let adapterBinaryType: BinaryType = 'arraybuffer';
-  let onopen: Phase42AdapterEventHandler | null = null;
-  let onmessage: Phase42AdapterEventHandler | null = null;
-  let onclose: Phase42AdapterEventHandler | null = null;
-  let onerror: Phase42AdapterEventHandler | null = null;
+  let onopen: LegacyAdapterEventHandler | null = null;
+  let onmessage: LegacyAdapterEventHandler | null = null;
+  let onclose: LegacyAdapterEventHandler | null = null;
+  let onerror: LegacyAdapterEventHandler | null = null;
   let openEmitted = false;
   let closeRequested = false;
   let closeEmitted = false;
-  const preOpenMessages: Phase42SocketEvent[] = [];
+  const preOpenMessages: SplitSocketEvent[] = [];
 
-  function dispatch(type: Phase42SocketEventType, event: Phase42SocketEvent = {}): void {
+  function dispatch(type: SplitSocketEventType, event: SplitSocketEvent = {}): void {
     const handler =
       type === 'open' ? onopen :
       type === 'message' ? onmessage :
@@ -69,7 +69,7 @@ export function createPhase42LegacySocketAdapter(
     }
   }
 
-  function closeSocket(socket: Phase42SocketLike | undefined): void {
+  function closeSocket(socket: SplitSocketLike | undefined): void {
     if (socket && socket.readyState < SOCKET_CLOSING) {
       socket.close();
     }
@@ -80,8 +80,8 @@ export function createPhase42LegacySocketAdapter(
     if (closeRequested) return SOCKET_CLOSING;
     const controlState = sockets.control?.readyState;
     const mediaState = sockets.media?.readyState;
-    if (controlState === PHASE42_SOCKET_OPEN && mediaState === PHASE42_SOCKET_OPEN) {
-      return PHASE42_SOCKET_OPEN;
+    if (controlState === SPLIT_SOCKET_OPEN && mediaState === SPLIT_SOCKET_OPEN) {
+      return SPLIT_SOCKET_OPEN;
     }
     if (controlState === SOCKET_CLOSED || mediaState === SOCKET_CLOSED) {
       return SOCKET_CLOSED;
@@ -92,12 +92,12 @@ export function createPhase42LegacySocketAdapter(
     return SOCKET_CONNECTING;
   }
 
-  function maybeDispatchOpen(event: Phase42SocketEvent): void {
+  function maybeDispatchOpen(event: SplitSocketEvent): void {
     if (
       !openEmitted &&
       !closeRequested &&
-      sockets.control?.readyState === PHASE42_SOCKET_OPEN &&
-      sockets.media?.readyState === PHASE42_SOCKET_OPEN
+      sockets.control?.readyState === SPLIT_SOCKET_OPEN &&
+      sockets.media?.readyState === SPLIT_SOCKET_OPEN
     ) {
       openEmitted = true;
       dispatch('open', event);
@@ -108,7 +108,7 @@ export function createPhase42LegacySocketAdapter(
     }
   }
 
-  function dispatchMessage(event: Phase42SocketEvent): void {
+  function dispatchMessage(event: SplitSocketEvent): void {
     if (!openEmitted) {
       preOpenMessages.push(event);
       return;
@@ -116,7 +116,7 @@ export function createPhase42LegacySocketAdapter(
     dispatch('message', event);
   }
 
-  function dispatchCloseOnce(event: Phase42SocketEvent): void {
+  function dispatchCloseOnce(event: SplitSocketEvent): void {
     if (closeEmitted) return;
     closeRequested = true;
     closeEmitted = true;
@@ -125,7 +125,7 @@ export function createPhase42LegacySocketAdapter(
     dispatch('close', event);
   }
 
-  function socketFactory(url: string, role: Phase42SocketRole): Phase42SocketLike {
+  function socketFactory(url: string, role: SplitSocketRole): SplitSocketLike {
     const socket = new options.WebSocketCtor(url);
     sockets[role] = socket;
     if (role === 'media') {
@@ -137,7 +137,7 @@ export function createPhase42LegacySocketAdapter(
     return socket;
   }
 
-  const splitOptions: Phase42SplitSocketClientOptions = {
+  const splitOptions: SplitSocketClientOptions = {
     baseWsUrl: options.baseWsUrl,
     sessionId: options.sessionId,
     socketFactory,
@@ -150,7 +150,7 @@ export function createPhase42LegacySocketAdapter(
   if (options.onProtocolViolation !== undefined) {
     splitOptions.onProtocolViolation = options.onProtocolViolation;
   }
-  const client = createPhase42SplitSocketClient(splitOptions);
+  const client = createSplitSocketClient(splitOptions);
 
   return {
     get client() {
@@ -177,25 +177,25 @@ export function createPhase42LegacySocketAdapter(
     get onopen() {
       return onopen;
     },
-    set onopen(handler: Phase42AdapterEventHandler | null) {
+    set onopen(handler: LegacyAdapterEventHandler | null) {
       onopen = handler;
     },
     get onmessage() {
       return onmessage;
     },
-    set onmessage(handler: Phase42AdapterEventHandler | null) {
+    set onmessage(handler: LegacyAdapterEventHandler | null) {
       onmessage = handler;
     },
     get onclose() {
       return onclose;
     },
-    set onclose(handler: Phase42AdapterEventHandler | null) {
+    set onclose(handler: LegacyAdapterEventHandler | null) {
       onclose = handler;
     },
     get onerror() {
       return onerror;
     },
-    set onerror(handler: Phase42AdapterEventHandler | null) {
+    set onerror(handler: LegacyAdapterEventHandler | null) {
       onerror = handler;
     },
     addEventListener(type, listener) {
@@ -216,18 +216,18 @@ export function createPhase42LegacySocketAdapter(
       if (typeof data === 'string') {
         const result = client.sendControl(data);
         if (result.action === 'drop') {
-          throw new Error('phase42 control socket is not open');
+          throw new Error('split control socket is not open');
         }
         return;
       }
       if (data instanceof ArrayBuffer) {
-        if (sockets.media?.readyState !== PHASE42_SOCKET_OPEN) {
-          throw new Error('phase42 media socket is not open');
+        if (sockets.media?.readyState !== SPLIT_SOCKET_OPEN) {
+          throw new Error('split media socket is not open');
         }
         sockets.media.send(data);
         return;
       }
-      throw new Error('phase42 legacy socket adapter only supports string and ArrayBuffer payloads');
+      throw new Error('split legacy socket adapter only supports string and ArrayBuffer payloads');
     },
   };
 }

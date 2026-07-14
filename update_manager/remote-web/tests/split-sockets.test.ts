@@ -1,25 +1,25 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
-  PHASE42_MEDIA_BACKLOG_HARD_CAP_BYTES,
-  type Phase42ProtocolViolation,
-  type Phase42SocketEvent,
-  type Phase42SocketEventType,
-  type Phase42SocketLike,
-  type Phase42SocketRole,
-  buildPhase42SessionOpenMessage,
-  createPhase42SplitSocketClient,
-  decidePhase42MediaSend,
-  derivePhase42SplitSocketUrls,
+  SPLIT_MEDIA_BACKLOG_HARD_CAP_BYTES,
+  type SplitProtocolViolation,
+  type SplitSocketEvent,
+  type SplitSocketEventType,
+  type SplitSocketLike,
+  type SplitSocketRole,
+  buildSplitSessionOpenMessage,
+  createSplitSocketClient,
+  decideSplitMediaSend,
+  deriveSplitSocketUrls,
 } from '../src/transport/split-sockets';
 
-class FakeSocket implements Phase42SocketLike {
+class FakeSocket implements SplitSocketLike {
   readonly sent: Array<string | ArrayBuffer> = [];
-  readonly listeners = new Map<Phase42SocketEventType, Array<(event: Phase42SocketEvent) => void>>();
+  readonly listeners = new Map<SplitSocketEventType, Array<(event: SplitSocketEvent) => void>>();
   readyState = 0;
   bufferedAmount = 0;
   binaryType?: BinaryType;
 
-  addEventListener(type: Phase42SocketEventType, listener: (event: Phase42SocketEvent) => void): void {
+  addEventListener(type: SplitSocketEventType, listener: (event: SplitSocketEvent) => void): void {
     const listeners = this.listeners.get(type) ?? [];
     listeners.push(listener);
     this.listeners.set(type, listeners);
@@ -43,7 +43,7 @@ class FakeSocket implements Phase42SocketLike {
     this.dispatch('message', { data });
   }
 
-  private dispatch(type: Phase42SocketEventType, event: Phase42SocketEvent): void {
+  private dispatch(type: SplitSocketEventType, event: SplitSocketEvent): void {
     for (const listener of this.listeners.get(type) ?? []) {
       listener(event);
     }
@@ -55,14 +55,14 @@ function createFakePair() {
     control: new FakeSocket(),
     media: new FakeSocket(),
   };
-  const urls: Record<Phase42SocketRole, string> = {
+  const urls: Record<SplitSocketRole, string> = {
     control: '',
     media: '',
   };
   return {
     sockets,
     urls,
-    factory(url: string, role: Phase42SocketRole): FakeSocket {
+    factory(url: string, role: SplitSocketRole): FakeSocket {
       urls[role] = url;
       return sockets[role];
     },
@@ -71,39 +71,39 @@ function createFakePair() {
 
 describe('Phase 42 split socket transport helpers', () => {
   it('derives independent control and media URLs from the legacy TCI URL', () => {
-    const urls = derivePhase42SplitSocketUrls('wss://radio.local:8443/tci?old=1', 'session-123');
+    const urls = deriveSplitSocketUrls('wss://radio.local:8443/tci?old=1', 'session-123');
 
     expect(urls.controlUrl).toBe('wss://radio.local:8443/saturn/control?session=session-123');
     expect(urls.mediaUrl).toBe('wss://radio.local:8443/saturn/media?session=session-123');
   });
 
   it('encodes the session id and refuses empty ids', () => {
-    const urls = derivePhase42SplitSocketUrls('ws://127.0.0.1:50001/tci', 'phase 42');
+    const urls = deriveSplitSocketUrls('ws://127.0.0.1:50001/tci', 'phase 42');
 
     expect(urls.controlUrl).toBe('ws://127.0.0.1:50001/saturn/control?session=phase+42');
     expect(urls.mediaUrl).toBe('ws://127.0.0.1:50001/saturn/media?session=phase+42');
-    expect(() => derivePhase42SplitSocketUrls('ws://127.0.0.1:50001/tci', '  ')).toThrow(
+    expect(() => deriveSplitSocketUrls('ws://127.0.0.1:50001/tci', '  ')).toThrow(
       /session id is required/,
     );
   });
 
   it('builds the control-plane session open message', () => {
-    expect(buildPhase42SessionOpenMessage('session-123')).toBe('session_open:session-123,operator;');
-    expect(buildPhase42SessionOpenMessage('session-123', 'viewer')).toBe('session_open:session-123,viewer;');
-    expect(() => buildPhase42SessionOpenMessage('bad,session')).toThrow(/TCI delimiters/);
+    expect(buildSplitSessionOpenMessage('session-123')).toBe('session_open:session-123,operator;');
+    expect(buildSplitSessionOpenMessage('session-123', 'viewer')).toBe('session_open:session-123,viewer;');
+    expect(() => buildSplitSessionOpenMessage('bad,session')).toThrow(/TCI delimiters/);
   });
 
   it('sends below the media backlog cap', () => {
-    const decision = decidePhase42MediaSend(PHASE42_MEDIA_BACKLOG_HARD_CAP_BYTES);
+    const decision = decideSplitMediaSend(SPLIT_MEDIA_BACKLOG_HARD_CAP_BYTES);
 
     expect(decision.action).toBe('send');
     expect(decision.degraded).toBe(false);
-    expect(decision.hardCapBytes).toBe(PHASE42_MEDIA_BACKLOG_HARD_CAP_BYTES);
+    expect(decision.hardCapBytes).toBe(SPLIT_MEDIA_BACKLOG_HARD_CAP_BYTES);
   });
 
   it('drops before committing media bytes above the cap', () => {
     const send = vi.fn();
-    const decision = decidePhase42MediaSend(PHASE42_MEDIA_BACKLOG_HARD_CAP_BYTES + 1);
+    const decision = decideSplitMediaSend(SPLIT_MEDIA_BACKLOG_HARD_CAP_BYTES + 1);
 
     if (decision.action === 'send') {
       send(new ArrayBuffer(64));
@@ -116,7 +116,7 @@ describe('Phase 42 split socket transport helpers', () => {
 
   it('opens paired sockets and announces the session on the control lane', () => {
     const pair = createFakePair();
-    const client = createPhase42SplitSocketClient({
+    const client = createSplitSocketClient({
       baseWsUrl: 'wss://radio.local:8443/tci',
       sessionId: 'session-123',
       socketFactory: pair.factory,
@@ -138,8 +138,8 @@ describe('Phase 42 split socket transport helpers', () => {
     const pair = createFakePair();
     const controlText: string[] = [];
     const mediaFrames: ArrayBuffer[] = [];
-    const violations: Phase42ProtocolViolation[] = [];
-    createPhase42SplitSocketClient({
+    const violations: SplitProtocolViolation[] = [];
+    createSplitSocketClient({
       baseWsUrl: 'wss://radio.local:8443/tci',
       sessionId: 'session-123',
       socketFactory: pair.factory,
@@ -172,7 +172,7 @@ describe('Phase 42 split socket transport helpers', () => {
 
   it('sends control text and media frames on separate open sockets', () => {
     const pair = createFakePair();
-    const client = createPhase42SplitSocketClient({
+    const client = createSplitSocketClient({
       baseWsUrl: 'wss://radio.local:8443/tci',
       sessionId: 'session-123',
       socketFactory: pair.factory,
@@ -186,7 +186,7 @@ describe('Phase 42 split socket transport helpers', () => {
       action: 'send',
       degraded: false,
       bufferedBytes: 0,
-      hardCapBytes: PHASE42_MEDIA_BACKLOG_HARD_CAP_BYTES,
+      hardCapBytes: SPLIT_MEDIA_BACKLOG_HARD_CAP_BYTES,
       sent: true,
       reason: 'sent',
     });
@@ -197,13 +197,13 @@ describe('Phase 42 split socket transport helpers', () => {
 
   it('drops media frames above the hard cap before committing bytes', () => {
     const pair = createFakePair();
-    const client = createPhase42SplitSocketClient({
+    const client = createSplitSocketClient({
       baseWsUrl: 'wss://radio.local:8443/tci',
       sessionId: 'session-123',
       socketFactory: pair.factory,
     });
     pair.sockets.media.open();
-    pair.sockets.media.bufferedAmount = PHASE42_MEDIA_BACKLOG_HARD_CAP_BYTES + 1;
+    pair.sockets.media.bufferedAmount = SPLIT_MEDIA_BACKLOG_HARD_CAP_BYTES + 1;
 
     const decision = client.sendMedia(new ArrayBuffer(64));
 

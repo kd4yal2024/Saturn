@@ -44,7 +44,7 @@ const TX_CONTROL_WATCHDOG_LIMIT: Duration = Duration::from_millis(500);
 // so a delayed mobile-browser heartbeat is less dangerous than it was on the
 // old single media/control socket. Keep the watchdog, but avoid false RX faults
 // from phone/Tailscale timer jitter while mic frames still flow on media.
-const TX_CONTROL_WATCHDOG_PHASE42_LIMIT: Duration = Duration::from_millis(1500);
+const TX_CONTROL_WATCHDOG_SPLIT_LIMIT: Duration = Duration::from_millis(1500);
 
 fn parse_remote_tx_max_watts(value: Option<&str>) -> u8 {
     value
@@ -162,9 +162,9 @@ fn update_tx_control_watchdog(
     }
 }
 
-fn tx_control_watchdog_limit(phase42_paired: bool) -> Duration {
-    if phase42_paired {
-        TX_CONTROL_WATCHDOG_PHASE42_LIMIT
+fn tx_control_watchdog_limit(split_paired: bool) -> Duration {
+    if split_paired {
+        TX_CONTROL_WATCHDOG_SPLIT_LIMIT
     } else {
         TX_CONTROL_WATCHDOG_LIMIT
     }
@@ -445,7 +445,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 } => {
                     tci.publish_saturn_pong(client_id, &nonce, &sent_at);
                 }
-                TciCommand::Phase42SessionOpen {
+                TciCommand::SplitSessionOpen {
                     client_id,
                     session_id,
                     role,
@@ -455,7 +455,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                         role
                     );
                 }
-                TciCommand::Phase42SessionLane {
+                TciCommand::SplitSessionLane {
                     client_id,
                     session_id,
                     lane,
@@ -568,7 +568,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                             tx_uplink_late_since = None;
                             tx_uplink_fault_active = false;
                             tx_control_watchdog_fault_active = false;
-                            tci.clear_phase42_release_window();
+                            tci.clear_split_release_window();
                             model.desired.tx_enabled = false;
                             model.desired.tx_phase = TxPhase::Armed;
                             tci.set_tx_media_priority_active(true);
@@ -587,7 +587,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                             );
                         }
                     } else if tx_requested || model.desired.tx_enabled {
-                        tci.mark_phase42_released(Instant::now());
+                        tci.mark_split_released(Instant::now());
                         tx_requested = false;
                         last_operator_mic_at = None;
                         tx_uplink_late_since = None;
@@ -906,7 +906,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                     tci.publish_radio_state(&model);
                 }
                 TxEvent::Unkeyed => {
-                    tci.mark_phase42_released(Instant::now());
+                    tci.mark_split_released(Instant::now());
                     tx_requested = false;
                     last_operator_mic_at = None;
                     tx_uplink_late_since = None;
@@ -965,7 +965,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                             forward_watts, remote_tx_power_trip_watts
                         );
                         tci.publish_tx_power_trip(forward_watts, remote_tx_power_trip_watts);
-                        tci.mark_phase42_released(Instant::now());
+                        tci.mark_split_released(Instant::now());
                         tx_requested = false;
                         last_operator_mic_at = None;
                         tx_uplink_late_since = None;
@@ -1048,7 +1048,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                         TX_UPLINK_LATE_SUSTAIN.as_millis()
                     );
                     tci.publish_tx_uplink_late(age_ms, limit_ms);
-                    tci.mark_phase42_released(now);
+                    tci.mark_split_released(now);
                     tx_requested = false;
                     tx_uplink_fault_active = true;
                     last_operator_mic_at = None;
@@ -1066,7 +1066,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             // single-WebSocket media backlog that delays operator release bytes.
             if on_air && !tx_control_watchdog_fault_active {
                 let control_watchdog_limit =
-                    tx_control_watchdog_limit(tci.has_phase42_paired_session());
+                    tx_control_watchdog_limit(tci.has_split_paired_session());
                 if let Some(silence) = update_tx_control_watchdog(
                     on_air,
                     tci.last_operator_control_at(),
@@ -1080,7 +1080,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                         silence_ms, limit_ms
                     );
                     tci.publish_tx_control_watchdog(silence_ms, limit_ms);
-                    tci.mark_phase42_released(now);
+                    tci.mark_split_released(now);
                     tx_requested = false;
                     tx_control_watchdog_fault_active = true;
                     model.desired.tx_enabled = false;
@@ -1098,7 +1098,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             let elapsed = last_status.elapsed().as_secs_f64().max(0.001);
             let client = tci.client_snapshot();
             println!(
-                "saturn-bridge: diag hp_s={:.1} ddc_s={:.1} rx_audio_frames_s={:.1} rx_audio_samples_s={:.0} tci_mic_frames_s={:.1} tci_mic_samples_s={:.0} client={} iq={} audio={} phase42_control={} phase42_media={} phase42_paired={} outbound_drops={} safety_p99_us={} control_p99_us={} display_replaced_s={} display_dropped_s={} display_rate_limited_s={} audio_dropped_s={} audio_gaps={} audio_panic={} send_blocked_ms={} out_hwm_bytes={} tcp_outq_hwm_bytes={} safety_depth_overflow={} tx_media_priority={} tx_uplink_degraded={} tx_mic_age_ms={} tx_mic_seq={} tx_mic_seq_gaps={} tx_mic_drops={} tx_uplink_buf={} tx_uplink_hwm={} tx_codec_decode_errors={} tx_codec_stale_drops={} tx_codec_release_flushes={} {}",
+                "saturn-bridge: diag hp_s={:.1} ddc_s={:.1} rx_audio_frames_s={:.1} rx_audio_samples_s={:.0} tci_mic_frames_s={:.1} tci_mic_samples_s={:.0} client={} iq={} audio={} split_control={} split_media={} split_paired={} outbound_drops={} safety_p99_us={} control_p99_us={} display_replaced_s={} display_dropped_s={} display_rate_limited_s={} audio_dropped_s={} audio_gaps={} audio_panic={} send_blocked_ms={} out_hwm_bytes={} tcp_outq_hwm_bytes={} safety_depth_overflow={} tx_media_priority={} tx_uplink_degraded={} tx_mic_age_ms={} tx_mic_seq={} tx_mic_seq_gaps={} tx_mic_drops={} tx_uplink_buf={} tx_uplink_hwm={} tx_codec_decode_errors={} tx_codec_stale_drops={} tx_codec_release_flushes={} {}",
                 status_hp_packets as f64 / elapsed,
                 status_ddc_packets as f64 / elapsed,
                 status_rx_audio_frames as f64 / elapsed,
@@ -1108,9 +1108,9 @@ fn main() -> Result<(), Box<dyn Error>> {
                 bool01(client.active),
                 bool01(client.iq_stream_enabled),
                 bool01(client.audio_stream_enabled),
-                client.phase42_control_clients,
-                client.phase42_media_clients,
-                client.phase42_paired_sessions,
+                client.split_control_clients,
+                client.split_media_clients,
+                client.split_paired_sessions,
                 client.outbound_drops,
                 client.safety_enqueue_to_write_p99_us,
                 client.control_enqueue_to_write_p99_us,
@@ -1287,17 +1287,17 @@ mod tests {
     }
 
     #[test]
-    fn tx_control_watchdog_uses_wider_phase42_limit() {
+    fn tx_control_watchdog_uses_wider_split_limit() {
         assert_eq!(tx_control_watchdog_limit(false), TX_CONTROL_WATCHDOG_LIMIT);
         assert_eq!(
             tx_control_watchdog_limit(true),
-            TX_CONTROL_WATCHDOG_PHASE42_LIMIT
+            TX_CONTROL_WATCHDOG_SPLIT_LIMIT
         );
 
         let now = Instant::now();
         let legacy_stale_control = Some(now - TX_CONTROL_WATCHDOG_LIMIT - Duration::from_millis(1));
-        let phase42_stale_control =
-            Some(now - TX_CONTROL_WATCHDOG_PHASE42_LIMIT - Duration::from_millis(1));
+        let split_stale_control =
+            Some(now - TX_CONTROL_WATCHDOG_SPLIT_LIMIT - Duration::from_millis(1));
 
         assert!(update_tx_control_watchdog(
             true,
@@ -1310,14 +1310,14 @@ mod tests {
             true,
             legacy_stale_control,
             now,
-            TX_CONTROL_WATCHDOG_PHASE42_LIMIT
+            TX_CONTROL_WATCHDOG_SPLIT_LIMIT
         )
         .is_none());
         assert!(update_tx_control_watchdog(
             true,
-            phase42_stale_control,
+            split_stale_control,
             now,
-            TX_CONTROL_WATCHDOG_PHASE42_LIMIT
+            TX_CONTROL_WATCHDOG_SPLIT_LIMIT
         )
         .is_some());
     }
