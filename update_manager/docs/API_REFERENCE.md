@@ -52,7 +52,7 @@ Backend also enforces same-host checks when `Origin` or `Referer` is present.
 | `/monitor.html` | `GET` | No | Serve `monitor.html`. |
 | `/tailscale` | `GET` | No | Serve the Tailscale VPN page (`tailscale.html`). |
 | `/tailscale.html` | `GET` | No | Serve the Tailscale VPN page (`tailscale.html`). |
-| `/remote`, `/remote.html`, `/saturn-remote`, `/saturn-remote.html` | `GET` | No | Redirect to the stable Saturn Remote TLS page on port 8443. |
+| `/remote`, `/remote.html`, `/saturn-remote`, `/saturn-remote.html` | `GET` | No | Redirect to the Saturn Remote TLS page (`/remote-next`) on port 8443 with the default feature query. |
 | `/remote-next`, `/remote-next.html` | `GET` | No | Redirect to the next-generation Saturn Remote TLS page on port 8443 with the default feature query. |
 | fallback mapped page paths | `GET` | No | Supports `/saturn`, `/saturn/custom`, `/saturn/backup`, `/saturn/update`, `/saturn/saturngo`, `/saturn/telemetry`, `/saturn/fpga`, `/saturn/pihpsdr`, `/saturn/deskhpsdr`, `/saturn/monitor`, etc. |
 

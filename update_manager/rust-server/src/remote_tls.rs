@@ -216,11 +216,11 @@ pub async fn ensure_self_signed_cert(cert_path: &Path, key_path: &Path) -> Remot
 
 pub fn remote_tls_router(state: AppState) -> Router {
     Router::new()
-        .route("/", get(remote_page_handler))
-        .route("/remote", get(remote_page_handler))
-        .route("/remote.html", get(remote_page_handler))
-        .route("/saturn-remote", get(remote_page_handler))
-        .route("/saturn-remote.html", get(remote_page_handler))
+        .route("/", get(legacy_remote_redirect_handler))
+        .route("/remote", get(legacy_remote_redirect_handler))
+        .route("/remote.html", get(legacy_remote_redirect_handler))
+        .route("/saturn-remote", get(legacy_remote_redirect_handler))
+        .route("/saturn-remote.html", get(legacy_remote_redirect_handler))
         .route("/remote-next", get(remote_next_page_handler))
         .route("/remote-next.html", get(remote_next_page_handler))
         .route("/healthz", get(healthz))
@@ -245,8 +245,10 @@ pub fn remote_tls_router(state: AppState) -> Router {
         .layer(axum::middleware::from_fn(remote_auth_tarpit))
 }
 
-async fn remote_page_handler(headers: HeaderMap, State(state): State<AppState>) -> Response {
-    remote_page_response(headers, state, "saturn-remote.html").await
+async fn legacy_remote_redirect_handler() -> Response {
+    // The legacy inline /remote page is retired; /remote-next is the only
+    // remote UI. It applies auth and the default query itself.
+    Redirect::temporary("/remote-next").into_response()
 }
 
 async fn remote_next_page_handler(
@@ -295,26 +297,6 @@ async fn remote_asset_handler(
     }
 
     let (filename, content_type) = match asset.as_str() {
-        "storage.js" => (
-            "saturn-remote-storage.js",
-            "application/javascript; charset=utf-8",
-        ),
-        "session.js" => (
-            "saturn-remote-session.js",
-            "application/javascript; charset=utf-8",
-        ),
-        "tci.js" => (
-            "saturn-remote-tci.js",
-            "application/javascript; charset=utf-8",
-        ),
-        "transport.js" => (
-            "saturn-remote-transport.js",
-            "application/javascript; charset=utf-8",
-        ),
-        "browser.js" => (
-            "saturn-remote-browser.js",
-            "application/javascript; charset=utf-8",
-        ),
         "remote-next.js" => (
             "saturn-remote-next.js",
             "application/javascript; charset=utf-8",
@@ -1487,29 +1469,25 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn remote_asset_route_serves_known_asset() {
-        let state = test_state("asset-ok");
+    async fn remote_asset_route_rejects_retired_legacy_assets() {
+        let state = test_state("asset-legacy-retired");
         tokio::fs::create_dir_all(&state.webroot).await.unwrap();
-        tokio::fs::write(
-            state.webroot.join("saturn-remote-storage.js"),
-            "window.testStorage = true;",
-        )
-        .await
-        .unwrap();
 
         let app = remote_tls_router(state);
-        let req = Request::builder()
-            .uri("/remote-assets/storage.js")
-            .body(Body::empty())
-            .unwrap();
-        let res = app.oneshot(req).await.unwrap();
-        assert_eq!(res.status(), StatusCode::OK);
-        assert_eq!(
-            res.headers().get(header::CONTENT_TYPE).unwrap(),
-            "application/javascript; charset=utf-8"
-        );
-        let body = to_bytes(res.into_body(), 4096).await.unwrap();
-        assert_eq!(body, &b"window.testStorage = true;"[..]);
+        for asset in [
+            "storage.js",
+            "session.js",
+            "tci.js",
+            "transport.js",
+            "browser.js",
+        ] {
+            let req = Request::builder()
+                .uri(format!("/remote-assets/{asset}"))
+                .body(Body::empty())
+                .unwrap();
+            let res = app.clone().oneshot(req).await.unwrap();
+            assert_eq!(res.status(), StatusCode::NOT_FOUND, "asset {asset}");
+        }
     }
 
     #[tokio::test]
@@ -1537,38 +1515,19 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn remote_page_route_serves_stable_remote_page() {
-        let state = test_state("remote-page");
-        tokio::fs::create_dir_all(&state.webroot).await.unwrap();
-        tokio::fs::write(state.webroot.join("saturn-remote.html"), "stable remote")
-            .await
-            .unwrap();
-
+    async fn legacy_remote_routes_redirect_to_remote_next() {
+        let state = test_state("legacy-remote-redirect");
         let app = remote_tls_router(state);
-        let req = Request::builder()
-            .uri("/remote")
-            .body(Body::empty())
-            .unwrap();
-        let res = app.oneshot(req).await.unwrap();
-        assert_eq!(res.status(), StatusCode::OK);
-        assert_eq!(
-            res.headers()
-                .get(header::HeaderName::from_static(
-                    "cross-origin-opener-policy"
-                ))
-                .unwrap(),
-            "same-origin"
-        );
-        assert_eq!(
-            res.headers()
-                .get(header::HeaderName::from_static(
-                    "cross-origin-embedder-policy"
-                ))
-                .unwrap(),
-            "credentialless"
-        );
-        let body = to_bytes(res.into_body(), 4096).await.unwrap();
-        assert_eq!(body, &b"stable remote"[..]);
+        for path in ["/", "/remote", "/remote.html", "/saturn-remote", "/saturn-remote.html"] {
+            let req = Request::builder().uri(path).body(Body::empty()).unwrap();
+            let res = app.clone().oneshot(req).await.unwrap();
+            assert_eq!(res.status(), StatusCode::TEMPORARY_REDIRECT, "path {path}");
+            assert_eq!(
+                res.headers().get(header::LOCATION).unwrap(),
+                "/remote-next",
+                "path {path}"
+            );
+        }
     }
 
     #[tokio::test]
@@ -1591,9 +1550,6 @@ mod tests {
     async fn remote_next_route_serves_dev_remote_page_when_query_present() {
         let state = test_state("remote-next-page");
         tokio::fs::create_dir_all(&state.webroot).await.unwrap();
-        tokio::fs::write(state.webroot.join("saturn-remote.html"), "stable remote")
-            .await
-            .unwrap();
         tokio::fs::write(state.webroot.join("saturn-remote-next.html"), "dev remote")
             .await
             .unwrap();
@@ -1623,110 +1579,6 @@ mod tests {
         );
         let body = to_bytes(res.into_body(), 4096).await.unwrap();
         assert_eq!(body, &b"dev remote"[..]);
-    }
-
-    #[tokio::test]
-    async fn remote_asset_route_serves_session_asset() {
-        let state = test_state("asset-session");
-        tokio::fs::create_dir_all(&state.webroot).await.unwrap();
-        tokio::fs::write(
-            state.webroot.join("saturn-remote-session.js"),
-            "window.testSession = true;",
-        )
-        .await
-        .unwrap();
-
-        let app = remote_tls_router(state);
-        let req = Request::builder()
-            .uri("/remote-assets/session.js")
-            .body(Body::empty())
-            .unwrap();
-        let res = app.oneshot(req).await.unwrap();
-        assert_eq!(res.status(), StatusCode::OK);
-        assert_eq!(
-            res.headers().get(header::CONTENT_TYPE).unwrap(),
-            "application/javascript; charset=utf-8"
-        );
-        let body = to_bytes(res.into_body(), 4096).await.unwrap();
-        assert_eq!(body, &b"window.testSession = true;"[..]);
-    }
-
-    #[tokio::test]
-    async fn remote_asset_route_serves_tci_asset() {
-        let state = test_state("asset-tci");
-        tokio::fs::create_dir_all(&state.webroot).await.unwrap();
-        tokio::fs::write(
-            state.webroot.join("saturn-remote-tci.js"),
-            "window.testTci = true;",
-        )
-        .await
-        .unwrap();
-
-        let app = remote_tls_router(state);
-        let req = Request::builder()
-            .uri("/remote-assets/tci.js")
-            .body(Body::empty())
-            .unwrap();
-        let res = app.oneshot(req).await.unwrap();
-        assert_eq!(res.status(), StatusCode::OK);
-        assert_eq!(
-            res.headers().get(header::CONTENT_TYPE).unwrap(),
-            "application/javascript; charset=utf-8"
-        );
-        let body = to_bytes(res.into_body(), 4096).await.unwrap();
-        assert_eq!(body, &b"window.testTci = true;"[..]);
-    }
-
-    #[tokio::test]
-    async fn remote_asset_route_serves_transport_asset() {
-        let state = test_state("asset-transport");
-        tokio::fs::create_dir_all(&state.webroot).await.unwrap();
-        tokio::fs::write(
-            state.webroot.join("saturn-remote-transport.js"),
-            "window.testTransport = true;",
-        )
-        .await
-        .unwrap();
-
-        let app = remote_tls_router(state);
-        let req = Request::builder()
-            .uri("/remote-assets/transport.js")
-            .body(Body::empty())
-            .unwrap();
-        let res = app.oneshot(req).await.unwrap();
-        assert_eq!(res.status(), StatusCode::OK);
-        assert_eq!(
-            res.headers().get(header::CONTENT_TYPE).unwrap(),
-            "application/javascript; charset=utf-8"
-        );
-        let body = to_bytes(res.into_body(), 4096).await.unwrap();
-        assert_eq!(body, &b"window.testTransport = true;"[..]);
-    }
-
-    #[tokio::test]
-    async fn remote_asset_route_serves_browser_asset() {
-        let state = test_state("asset-browser");
-        tokio::fs::create_dir_all(&state.webroot).await.unwrap();
-        tokio::fs::write(
-            state.webroot.join("saturn-remote-browser.js"),
-            "window.testBrowser = true;",
-        )
-        .await
-        .unwrap();
-
-        let app = remote_tls_router(state);
-        let req = Request::builder()
-            .uri("/remote-assets/browser.js")
-            .body(Body::empty())
-            .unwrap();
-        let res = app.oneshot(req).await.unwrap();
-        assert_eq!(res.status(), StatusCode::OK);
-        assert_eq!(
-            res.headers().get(header::CONTENT_TYPE).unwrap(),
-            "application/javascript; charset=utf-8"
-        );
-        let body = to_bytes(res.into_body(), 4096).await.unwrap();
-        assert_eq!(body, &b"window.testBrowser = true;"[..]);
     }
 
     #[tokio::test]

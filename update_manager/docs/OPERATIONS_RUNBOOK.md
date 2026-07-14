@@ -109,11 +109,11 @@ Current installer versions self-bootstrap a newer Rust toolchain via `rustup`.
 
 Remote entry behavior:
 
-- `http://<host>/remote` should redirect to `https://<host>:8443/remote`.
-- `http://<host>/saturn/remote` should redirect to `https://<host>:8443/remote`.
-- `https://<host>:8443/remote` is the stable remote UI (`saturn-remote.html`).
+- `http://<host>/remote` should redirect to `https://<host>:8443/remote-next` (with the default feature query).
+- `http://<host>/saturn/remote` should redirect the same way.
+- `https://<host>:8443/remote` and the TLS root `/` redirect to `/remote-next`; the legacy inline page was retired on 2026-07-14.
 - `https://<host>:8443/remote-next?phase42_split=1&phase44_tx_opus=1&phase44_tx_cfc=1&client_bust=bridgeprefill240-cfcessb3` is the current Saturn Remote checkpoint/default operator URL: Phase 42 split control/media sockets plus the guarded Phase 44 Opus TX path and the conservative ESSB CFC baseline. It serves `saturn-remote-next.html` + Vite bundle `saturn-remote-next.js` via `/remote-assets/remote-next.js`.
-- `https://<host>:8443/remote-next` still serves the next-generation remote UI as a fallback entry point, and `/remote` remains the stable remote UI (`saturn-remote.html`). Both remote UIs share the same basic-auth credentials, `remote_settings.json`, and `remote_profiles.json` state.
+- `https://<host>:8443/remote-next` without a query redirects to the default feature query. It is the only remote UI; basic-auth credentials, `remote_settings.json`, and `remote_profiles.json` state are unchanged from the legacy page.
 - The current Phase 44 Opus TX processing checkpoint leaves Noise Gate available as an operator control but off by default, keeps TX EQ on with the ESSB-lite curve `3:+1,4:+2,5:+1,6:-1,7:+1,8:+3,9:+1`, and enables the conservative ESSB CFC baseline only when `phase44_tx_cfc=1` is present. Noise Gate can be explicitly started on for testing with `phase44_tx_noise_gate=1` and a guarded threshold such as `phase44_tx_noise_gate_db=-50`; once loaded, the operator Noise Gate toggle is allowed to persist instead of being repeatedly reset by the Phase 44 restore path.
 - Field validation on 2026-06-11 confirmed `bridgeprefill240-gateoff1` transmitted clear Opus wideband TX audio from Chrome Android with `accepted=opus_wb`, `txNoiseGateEnabled=0`, `txMicDrops=0`, and `txUplinkHwm=854`.
 - Field validation on 2026-06-11 also found the wider TX filter `50-4150` sounded good with `bridgeprefill240-gateoff2`; copy-log evidence showed `accepted=opus_wb`, `txMicDrops=0`, and `txUplinkHwm=637`.
@@ -137,8 +137,8 @@ Remote Setup profile notes:
 - `remote_settings.json` also carries the current DSP and TX test-control preferences used by the remote.
 - `remote_profiles.json` holds the saved profile catalog plus the optional startup profile selection.
 - A startup profile should be applied before opening a live phone session when you want a known panadapter, waterfall, and radio-control baseline.
-- If the Setup menu opens underneath the panadapter after a deploy, confirm the latest `saturn-remote.html` (and, for `/remote-next`, `saturn-remote-next.html` + `saturn-remote-next.js`) was synced into `/var/lib/saturn-web/`.
-- If USB/LSB signals or the transparent passband box appear on the wrong side of center after a deploy, confirm the latest `saturn-remote.html` (and, for `/remote-next`, `saturn-remote-next.html` + `saturn-remote-next.js`) was synced into `/var/lib/saturn-web/`.
+- If the Setup menu opens underneath the panadapter after a deploy, confirm the latest `saturn-remote-next.html` + `saturn-remote-next.js` were synced into `/var/lib/saturn-web/`.
+- If USB/LSB signals or the transparent passband box appear on the wrong side of center after a deploy, confirm the latest `saturn-remote-next.html` + `saturn-remote-next.js` were synced into `/var/lib/saturn-web/`.
 - If `/remote-next` returns 404 on the bundle (`/remote-assets/remote-next.js`), confirm lockfile-only `npm ci && npm run build` succeeded in `update_manager/remote-web` and that `saturn-remote-next.js` plus `saturn-remote-next.js.sha256` are present in `/var/lib/saturn-web/`. The installer and `update-saturn-go.sh` now treat a missing bundle or checksum mismatch as a hard failure; this check covers manual or pre-promotion deploys.
 - If TX appears stuck after a browser crash or tab close, confirm both `saturn-bridge.service` and `saturn-go.service` are on the latest deployed build with the explicit TX-release path.
 

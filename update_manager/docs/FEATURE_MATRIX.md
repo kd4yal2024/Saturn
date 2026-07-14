@@ -2,7 +2,7 @@
 
 This matrix maps current capabilities to the implementation points in UI, backend API, scripts, and persisted state.
 
-The Saturn Remote frontend currently ships in two parallel forms against the same `saturn-bridge` backend: `/remote` (stable, rendered from `saturn-remote.html`) and `/remote-next` (next-generation, rendered from `saturn-remote-next.html` + the Vite IIFE bundle `saturn-remote-next.js`). Both share basic auth, `remote_settings.json`, `remote_profiles.json`, and the TCI websocket. Capability rows below that name `saturn-remote.html` apply to the `/remote` page; the `/remote-next` page is in active extraction and trends toward feature parity, with current scope tracked in `update_manager/remote-web/README.md`.
+The Saturn Remote frontend ships as `/remote-next` (rendered from `saturn-remote-next.html` + the Vite IIFE bundle `saturn-remote-next.js`) against the `saturn-bridge` backend, using basic auth, `remote_settings.json`, `remote_profiles.json`, and the TCI websocket. The legacy `/remote` page (`saturn-remote.html`) was retired on 2026-07-14 and its paths redirect to `/remote-next`; capability rows below that still name `saturn-remote.html` are historical and describe behavior now owned by `/remote-next`. Current frontend scope is tracked in `update_manager/remote-web/README.md`.
 
 | Capability | UI | API Endpoints | Scripts / Commands | State / Files |
 |---|---|---|---|---|

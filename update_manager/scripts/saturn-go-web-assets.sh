@@ -13,18 +13,9 @@ SATURN_GO_HTML_ASSETS=(
   "pihpsdr.html"
   "deskhpsdr.html"
   "tailscale.html"
-  "saturn-remote.html"
   "saturn-remote-next.html"
   "saturn-remote-next.js"
   "saturn-remote-next.js.sha256"
-)
-
-SATURN_GO_OPTIONAL_TEMPLATE_ASSETS=(
-  "saturn-remote-storage.js"
-  "saturn-remote-session.js"
-  "saturn-remote-tci.js"
-  "saturn-remote-transport.js"
-  "saturn-remote-browser.js"
 )
 
 saturn_go_build_remote_web_assets() {
@@ -160,17 +151,6 @@ saturn_go_copy_required_web_assets() {
 
   for name in "${SATURN_GO_HTML_ASSETS[@]}"; do
     saturn_go_copy_template_asset "$templates_dir" "$repo_dir" "$dest_dir" "$name" || return 1
-  done
-}
-
-saturn_go_copy_optional_web_assets() {
-  local templates_dir="$1"
-  local repo_dir="$2"
-  local dest_dir="$3"
-  local name
-
-  for name in "${SATURN_GO_OPTIONAL_TEMPLATE_ASSETS[@]}"; do
-    saturn_go_copy_template_asset "$templates_dir" "$repo_dir" "$dest_dir" "$name" || true
   done
 }
 

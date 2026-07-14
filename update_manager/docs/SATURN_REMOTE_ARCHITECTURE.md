@@ -4,12 +4,11 @@
 
 `saturn-remote` is the browser frontend for the `saturn-bridge` backend.
 
-It currently ships as two parallel pages against the same backend:
+It ships as a single page:
 
-- `/remote` — stable page rendered from `saturn-remote.html`. All UI logic lives inline in the HTML. This is the operator-facing fallback and remains the reference implementation.
-- `/remote-next` — next-generation page rendered from `saturn-remote-next.html` plus the Vite-built IIFE bundle `saturn-remote-next.js`. The HTML loads the bundle via `<script src="/remote-assets/remote-next.js">`; the bundle assigns its API to `globalThis.SaturnRemoteNext`, which the inline page script destructures to reuse extracted helpers (clamps, normalizers, DSP/FFT, app-state, settings, TCI commands). This is where active extraction work lands.
+- `/remote-next` — rendered from `saturn-remote-next.html` plus the Vite-built IIFE bundle `saturn-remote-next.js`. The HTML loads the bundle via `<script src="/remote-assets/remote-next.js">`; the bundle assigns its API to `globalThis.SaturnRemoteNext`, which the inline page script destructures to reuse extracted helpers (clamps, normalizers, DSP/FFT, app-state, settings, TCI commands).
 
-Both pages share the same `saturn-bridge` TCI websocket, the same basic-auth gate, and the same persisted state (`remote_settings.json`, `remote_profiles.json`). Migration intent is to grow `/remote-next` toward feature parity with `/remote` via the `update_manager/remote-web` TypeScript project, then retire the inline `/remote` HTML.
+The legacy inline `/remote` page (`saturn-remote.html` and its `saturn-remote-*.js` modules) was retired on 2026-07-14; `/remote`, `/saturn-remote`, and the TLS root `/` now redirect to `/remote-next`. Auth (basic-auth gate), the `saturn-bridge` TCI websocket, and persisted state (`remote_settings.json`, `remote_profiles.json`) are unchanged. Ongoing migration work now targets narrowing the template/bundle seam inside `/remote-next` itself.
 
 It is intentionally not a browser skin wrapped directly around `p2app`.
 The backend boundary is:

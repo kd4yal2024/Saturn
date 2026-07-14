@@ -74,7 +74,7 @@ RX and TX, and exposes a TCI WebSocket frontend to browser clients.
 ## Architecture
 
 ```
-Browser (saturn-remote.html)
+Browser (saturn-remote-next.html + saturn-remote-next.js)
         │  WebSocket /tci (same-origin proxy)
         ▼
 saturn-go / remote TLS proxy

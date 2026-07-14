@@ -447,7 +447,6 @@ if ! saturn_go_copy_required_web_assets "$SOURCE_DIR/templates" "$SOURCE_DIR" "$
   err "Missing required web asset in $SOURCE_DIR/templates or $SOURCE_DIR"
   exit 1
 fi
-saturn_go_copy_optional_web_assets "$SOURCE_DIR/templates" "$SOURCE_DIR" "$WEB_ROOT"
 if ! saturn_go_copy_shared_assets "$SOURCE_DIR/templates" "$WEB_ROOT"; then
   err "Missing shared web assets in $SOURCE_DIR/templates/assets"
   exit 1

@@ -70,10 +70,6 @@ fn remote_host_without_port(host: &str) -> &str {
     }
 }
 
-fn remote_https_url(host: &str) -> String {
-    format!("https://{}:8443/remote", remote_host_without_port(host))
-}
-
 pub const REMOTE_NEXT_DEFAULT_QUERY: &str =
     "phase42_split=1&phase44_tx_opus=1&phase44_tx_cfc=1&client_bust=bridgeprefill240-cfcessb3";
 
@@ -90,10 +86,6 @@ fn request_host(headers: &HeaderMap) -> &str {
         .get(header::HOST)
         .and_then(|value| value.to_str().ok())
         .unwrap_or("localhost")
-}
-
-pub async fn remote_handler(headers: HeaderMap) -> impl IntoResponse {
-    Redirect::temporary(&remote_https_url(request_host(&headers)))
 }
 
 pub async fn remote_next_handler(headers: HeaderMap) -> impl IntoResponse {
@@ -184,8 +176,8 @@ pub fn route_to_page(path: &str) -> Option<&'static str> {
         | "/saturn/remote.html"
         | "/saturn/saturn-remote"
         | "/saturn/saturn-remote/"
-        | "/saturn/saturn-remote.html" => Some("saturn-remote.html"),
-        "/remote-next"
+        | "/saturn/saturn-remote.html"
+        | "/remote-next"
         | "/remote-next/"
         | "/remote-next.html"
         | "/saturn/remote-next"
@@ -223,9 +215,6 @@ pub async fn fallback_handler(
         return Redirect::permanent(&canonical).into_response();
     }
     if let Some(page) = route_to_page(uri.path()) {
-        if page == "saturn-remote.html" {
-            return Redirect::temporary(&remote_https_url(host)).into_response();
-        }
         if page == "saturn-remote-next.html" {
             return Redirect::temporary(&remote_next_https_url(host)).into_response();
         }
@@ -372,11 +361,14 @@ mod tests {
 
     #[test]
     fn test_remote_aliases() {
-        assert_eq!(route_to_page("/remote"), Some("saturn-remote.html"));
-        assert_eq!(route_to_page("/saturn-remote"), Some("saturn-remote.html"));
+        assert_eq!(route_to_page("/remote"), Some("saturn-remote-next.html"));
+        assert_eq!(
+            route_to_page("/saturn-remote"),
+            Some("saturn-remote-next.html")
+        );
         assert_eq!(
             route_to_page("/saturn/remote.html"),
-            Some("saturn-remote.html")
+            Some("saturn-remote-next.html")
         );
         assert_eq!(
             route_to_page("/remote-next"),
@@ -454,10 +446,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_remote_handler_redirects_to_tls_remote() {
+    async fn test_remote_handler_redirects_to_tls_remote_next() {
         let state = test_state();
         let app = axum::Router::new()
-            .route("/remote", get(remote_handler))
+            .route("/remote", get(remote_next_handler))
             .with_state(state);
         let req = Request::builder()
             .method("GET")
@@ -469,12 +461,12 @@ mod tests {
         assert_eq!(res.status(), StatusCode::TEMPORARY_REDIRECT);
         assert_eq!(
             res.headers().get(header::LOCATION).unwrap(),
-            "https://192.168.0.139:8443/remote"
+            &format!("https://192.168.0.139:8443/remote-next?{REMOTE_NEXT_DEFAULT_QUERY}")
         );
     }
 
     #[tokio::test]
-    async fn test_fallback_remote_alias_redirects_to_tls_remote() {
+    async fn test_fallback_remote_alias_redirects_to_tls_remote_next() {
         let state = test_state();
         let app = axum::Router::new()
             .fallback(get(fallback_handler))
@@ -489,7 +481,7 @@ mod tests {
         assert_eq!(res.status(), StatusCode::TEMPORARY_REDIRECT);
         assert_eq!(
             res.headers().get(header::LOCATION).unwrap(),
-            "https://192.168.0.139:8443/remote"
+            &format!("https://192.168.0.139:8443/remote-next?{REMOTE_NEXT_DEFAULT_QUERY}")
         );
     }
 

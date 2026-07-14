@@ -476,7 +476,6 @@ if (( ! DRY_RUN )); then
   fi
   saturn_go_build_remote_web_assets "$REPO_ROOT/update_manager"
   saturn_go_copy_required_web_assets "$TEMPLATES_DIR" "$REPO_ROOT/update_manager" "$STAGE_WEB_DIR"
-  saturn_go_copy_optional_web_assets "$TEMPLATES_DIR" "$REPO_ROOT/update_manager" "$STAGE_WEB_DIR"
   saturn_go_copy_shared_assets "$TEMPLATES_DIR" "$STAGE_WEB_DIR"
   saturn_go_verify_remote_web_bundle "$STAGE_WEB_DIR"
   cp "$SCRIPTS_SRC_DIR/config.json" "$STAGE_WEB_DIR/config.json"

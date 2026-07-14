@@ -46,12 +46,10 @@ The Saturn Remote real-time backend also lives in the repo:
 - `deskhpsdr.html`
   - Dedicated deskHPSDR update terminal workflow (`POST /run` with `update-deskhpsdr.py`).
   - The script clones/pulls `~/github/deskhpsdr` and delegates build/install-dependency behavior to helper scripts from the active Saturn repo root.
-- `saturn-remote.html`
-  - Stable direct-G2 remote frontend page served at `/remote`.
+- `saturn-remote-next.html` + `saturn-remote-next.js`
+  - The Saturn Remote UI, served at `/remote-next` (legacy `/remote` paths redirect here since 2026-07-14).
   - Uses DOM for connection/session/radio controls and WebGL2 for high-DPI panadapter and waterfall rendering.
   - Targets `saturn-bridge` as the remote protocol boundary instead of talking to `p2app` directly.
-- `saturn-remote-next.html` + `saturn-remote-next.js`
-  - Next-generation remote UI served at `/remote-next`, sharing the same backend contract as `/remote`.
   - The page loads the Vite IIFE bundle `saturn-remote-next.js` via `<script src="/remote-assets/remote-next.js">`; the bundle exposes `globalThis.SaturnRemoteNext` for the inline page script.
   - The bundle is built from the `update_manager/remote-web` TypeScript project (`vite build` -> `dist/saturn-remote-next.js`) by both the installer and `update-saturn-go.sh` self-update.
 - `fpga.html`
