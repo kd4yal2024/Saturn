@@ -19,9 +19,9 @@ use std::time::{Duration, Instant};
 use config::BridgeConfig;
 use p2::session::P2Session;
 use radio_model::{DemodMode, PureSignalState, RadioModel, TxPhase};
+use rx_thread::{RxCommand, RxEvent, RxStats};
 use sync_ext::MutexExt;
 use tci::{TciCommand, TciFrontend};
-use rx_thread::{RxCommand, RxEvent, RxStats};
 use tx_thread::{TxCommand, TxDiagnostics, TxEvent};
 use wdsp::{normalize_audio_frame_float_count, WdspRxEngine, WDSP_AUDIO_RATE_HZ};
 
@@ -498,7 +498,8 @@ fn main() -> Result<(), Box<dyn Error>> {
                     tci.publish_audio_started(WDSP_AUDIO_RATE_HZ);
                 }
                 TciCommand::SetAudioFrameSamples(sample_count) => {
-                    let normalized = normalize_audio_frame_float_count(sample_count as usize) as u32;
+                    let normalized =
+                        normalize_audio_frame_float_count(sample_count as usize) as u32;
                     let _ = rx_cmd_tx.send(RxCommand::SetAudioFrameFloatCount(normalized as usize));
                     if sample_count != normalized {
                         eprintln!(
@@ -711,7 +712,8 @@ fn main() -> Result<(), Box<dyn Error>> {
                     let _ = tx_cmd_tx.send(TxCommand::ModelChanged);
                 }
                 TciCommand::SetPureSignalEnabled(enabled) => {
-                    if tx_requested.load(Ordering::Relaxed) || model.desired.tx_phase != TxPhase::Rx {
+                    if tx_requested.load(Ordering::Relaxed) || model.desired.tx_phase != TxPhase::Rx
+                    {
                         eprintln!(
                             "saturn-bridge: refusing PureSignal enable change while TX is armed"
                         );
@@ -729,7 +731,8 @@ fn main() -> Result<(), Box<dyn Error>> {
                     }
                 }
                 TciCommand::SetPureSignalAutoAttenuate(enabled) => {
-                    if tx_requested.load(Ordering::Relaxed) || model.desired.tx_phase != TxPhase::Rx {
+                    if tx_requested.load(Ordering::Relaxed) || model.desired.tx_phase != TxPhase::Rx
+                    {
                         eprintln!(
                             "saturn-bridge: refusing PureSignal auto-attenuation change while TX is armed"
                         );
@@ -738,7 +741,8 @@ fn main() -> Result<(), Box<dyn Error>> {
                     }
                 }
                 TciCommand::SetPureSignalAttenuation(attenuation_db) => {
-                    if tx_requested.load(Ordering::Relaxed) || model.desired.tx_phase != TxPhase::Rx {
+                    if tx_requested.load(Ordering::Relaxed) || model.desired.tx_phase != TxPhase::Rx
+                    {
                         eprintln!(
                             "saturn-bridge: refusing PureSignal attenuation change while TX is armed"
                         );
