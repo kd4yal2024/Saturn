@@ -63,7 +63,9 @@ bool CATDebugPrint = false;                 // true if to print generated CAT me
 #define VOPSTRSIZE (VCATCMDPREFIXSIZE + VCATMAXPAYLOADSIZE + VCATCMDTERMINATORSIZE)
 #define VCATPARSESTRINGMAX 63               // max parsed CAT parameter bytes
 #define VCATCONNECT_TIMEOUT_MS 750          // keep startup retries responsive instead of blocking for OS TCP timeout
-#define VCATCONNECT_RETRY_DELAY_US 200000   // short backoff between CAT connect attempts
+#define VCATCONNECT_RETRY_DELAY_US 200000   // initial backoff between CAT connect attempts
+#define VCATCONNECT_RETRY_MAX_US 5000000    // backoff cap while the client's CAT server stays unreachable
+#define VCATCONNECT_POLL_SLICE_US 100000    // backoff sleep slice so shutdown/port changes stay responsive
 //
 // CAT output buffer
 //
@@ -756,6 +758,7 @@ void* CATHandlerThread(__attribute__((unused)) void *arg)
     unsigned int TXMessageLength;
     int SendError = 0;
     int ConnectFailureCount = 0;
+    unsigned int RetryDelayUs = VCATCONNECT_RETRY_DELAY_US;
 
 //    bool DebugMessageSent = false;
     atomic_store(&CATThreadRunning, true);
@@ -781,7 +784,11 @@ void* CATHandlerThread(__attribute__((unused)) void *arg)
       ActiveCATPort = atomic_load(&CATPort);
       if(ActiveCATPort == 0)
         break;
-      printf("Creating CAT socket on port %d, pid=%ld\n", ActiveCATPort, syscall(SYS_gettid));
+      // Log the create/connect pair once per failure streak, not per attempt:
+      // a client that advertises a CAT port without a reachable server (LCD-only
+      // G2, firewalled Thetis PC) would otherwise flood the journal forever.
+      if(ConnectFailureCount == 0)
+        printf("Creating CAT socket on port %d, pid=%ld\n", ActiveCATPort, syscall(SYS_gettid));
       struct timeval ReadTimeout;                                       // read timeout
       int yes = 1;
       if((CATSocketid = socket(AF_INET, SOCK_STREAM, 0)) < 0)
@@ -810,21 +817,46 @@ void* CATHandlerThread(__attribute__((unused)) void *arg)
       pthread_mutex_unlock(&g_reply_addr_mutex);
       addr_cat.sin_family = AF_INET;
       addr_cat.sin_port = htons((uint16_t)ActiveCATPort);
-      printf("Connecting CAT socket to port %d\n", ActiveCATPort);
+      if(ConnectFailureCount == 0)
+        printf("Connecting CAT socket to port %d\n", ActiveCATPort);
 
       if(ConnectSocketWithTimeout(CATSocketid, &addr_cat, VCATCONNECT_TIMEOUT_MS) < 0)
       {
-          if((ConnectFailureCount++ % 10) == 0)
+          ConnectFailureCount++;
+          if((ConnectFailureCount % 10) == 1)
+          {
             perror("CAT connect");
+            printf("CAT connect to port %d: %d attempts failed, retrying with backoff\n",
+                   ActiveCATPort, ConnectFailureCount);
+          }
           close(CATSocketid);
           atomic_store(&CATPortAssigned, false);
           atomic_store(&ThreadActive, false);
           if(!atomic_load(&SDRActive) || atomic_load(&SignalThreadEnd) || (ActiveCATPort != atomic_load(&CATPort)))
             break;
-          usleep(VCATCONNECT_RETRY_DELAY_US);
+          // Retry forever so a client whose CAT server appears later (panel user
+          // enabling Thetis's TCP server or fixing a firewall rule) connects
+          // without a radio restart, but back off to spare the journal and the
+          // network. Sleep in slices so shutdown and port changes stay prompt.
+          {
+            unsigned int Slept = 0;
+            while((Slept < RetryDelayUs) && atomic_load(&SDRActive) &&
+                  !atomic_load(&SignalThreadEnd) && (ActiveCATPort == atomic_load(&CATPort)))
+            {
+              usleep(VCATCONNECT_POLL_SLICE_US);
+              Slept += VCATCONNECT_POLL_SLICE_US;
+            }
+          }
+          if(RetryDelayUs < VCATCONNECT_RETRY_MAX_US)
+          {
+            RetryDelayUs *= 2U;
+            if(RetryDelayUs > VCATCONNECT_RETRY_MAX_US)
+              RetryDelayUs = VCATCONNECT_RETRY_MAX_US;
+          }
           continue;
       }
       ConnectFailureCount = 0;
+      RetryDelayUs = VCATCONNECT_RETRY_DELAY_US;
       atomic_store(&ThreadActive, true);
       atomic_store(&CATPortAssigned, true);
 

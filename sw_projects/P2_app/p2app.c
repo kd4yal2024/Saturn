@@ -70,7 +70,7 @@
 #include "frontpanelhandler.h"
 #include "controller_lease.h"
 
-#define P2APPVERSION 49
+#define P2APPVERSION 50
 #define FWREQUIREDMAJORVERSION 1                  // major version that is required. Only altered if programming interface changes.
 //
 // the Firmware version is a protection to make sure that if a p2app update is required by the new firmware,
@@ -78,6 +78,9 @@
 //
 //------------------------------------------------------------------------------------------
 // VERSION History
+// V50, 14/07/2026. exponential backoff and throttled logging for unreachable CAT servers.
+//                  Retries continue indefinitely so panel-equipped G2s connect as soon as the
+//                  client's TCP CAT server becomes reachable, without radio restart.
 // V49, 14/07/2026. accept repeated high-priority control sequence numbers: Thetis sends every
 //                  control packet with sequence zero, so V48's duplicate rejection discarded
 //                  all frequency/drive/run updates after the first packet of a session.

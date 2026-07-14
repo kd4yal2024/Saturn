@@ -5,6 +5,20 @@ All notable changes from the hardened app convergence pass are documented here.
 This changelog originated under `P3_app` and now follows the converged
 `P2_app` implementation.
 
+## [2026-07-14] CAT Connect Backoff And Log Throttling
+
+### Fixed
+
+- When a client advertises a CAT port whose TCP server is unreachable (an
+  LCD-only G2 with the Thetis TCP CAT option enabled, or a firewalled client
+  PC), the CAT thread logged two lines per attempt at a 200 ms retry rate,
+  flooding the journal indefinitely. Connect retries now use exponential
+  backoff (200 ms doubling to a 5 s cap) with create/connect logged once per
+  failure streak and a progress line every tenth attempt. Retries continue
+  indefinitely, so a panel-equipped G2 still connects the moment the client's
+  CAT server becomes reachable, with no radio restart. The backoff sleeps in
+  100 ms slices so shutdown and CAT port changes remain prompt.
+
 ## [2026-07-14] Fix Thetis Frequency Changes Dropped By Sequence Hardening
 
 ### Fixed
