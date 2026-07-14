@@ -18,6 +18,13 @@ use crate::sync_ext::MutexExt;
 
 const DISCOVERY_STATE_IDLE: u8 = 2;
 
+/// Socket read timeout; bounds RX-thread latency for stop/discovery checks.
+const RECV_TIMEOUT: Duration = Duration::from_millis(20);
+/// Wait after claiming discovery exclusivity so an RX-thread `recv_from`
+/// already blocking inside the kernel (up to `RECV_TIMEOUT`) returns before
+/// the discovery request goes out and its reply can arrive.
+const DISCOVERY_SETTLE: Duration = Duration::from_millis(25);
+
 fn discovery_allows_controller(reply: &DiscoveryReply) -> bool {
     reply.state_code == DISCOVERY_STATE_IDLE
 }
@@ -35,17 +42,35 @@ pub struct P2Session {
     socket: UdpSocket,
     duc_iq_sequence: AtomicU32,
     duc_specific_sequence: AtomicU32,
+    /// True while a discovery exchange owns the receive side of the shared
+    /// socket. The RX thread must yield (skip `recv_event`) while set, or it
+    /// would steal the discovery reply, whose source port `decode_event`
+    /// does not recognize.
+    discovery_exclusive: AtomicBool,
+}
+
+/// Clears `discovery_exclusive` on every exit path of a discovery exchange.
+struct DiscoveryExclusiveGuard<'a>(&'a AtomicBool);
+
+impl Drop for DiscoveryExclusiveGuard<'_> {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::Release);
+    }
 }
 
 impl P2Session {
     pub fn bind(config: BridgeConfig) -> io::Result<Self> {
         let socket = UdpSocket::bind(config.client_bind_addr)?;
-        socket.set_nonblocking(true)?;
+        // Blocking with a short timeout: the RX thread parks in the kernel
+        // until a packet arrives instead of polling, and still notices the
+        // stop flag / discovery yield within one timeout period.
+        socket.set_read_timeout(Some(RECV_TIMEOUT))?;
         Ok(Self {
             config,
             socket,
             duc_iq_sequence: AtomicU32::new(0),
             duc_specific_sequence: AtomicU32::new(0),
+            discovery_exclusive: AtomicBool::new(false),
         })
     }
 
@@ -284,10 +309,17 @@ impl P2Session {
         self.socket.send_to(packet, target)
     }
 
+    pub fn discovery_exclusive_active(&self) -> bool {
+        self.discovery_exclusive.load(Ordering::Acquire)
+    }
+
     fn try_discover(
         &self,
         radio_model: &Arc<Mutex<RadioModel>>,
     ) -> io::Result<Option<DiscoveryReply>> {
+        self.discovery_exclusive.store(true, Ordering::Release);
+        let _exclusive = DiscoveryExclusiveGuard(&self.discovery_exclusive);
+        thread::sleep(DISCOVERY_SETTLE);
         self.send_packet(self.config.radio_command_addr, &build_discovery_request())?;
         let deadline = Instant::now() + self.config.discovery_timeout;
         let mut buffer = [0u8; 2048];

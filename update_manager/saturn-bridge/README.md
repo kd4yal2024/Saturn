@@ -83,9 +83,15 @@ saturn-go / remote TLS proxy
 saturn-bridge
   ├── TciFrontend    — WebSocket accept + message routing
   ├── RadioModel     — desired vs observed state
-  ├── WdspRxEngine   — WDSP channel 0 RX DSP
-  ├── WdspTxEngine   — WDSP channel 1 TX DSP
+  ├── WdspRxEngine   — WDSP channel 0 RX DSP (owned by the saturn-rx thread)
+  ├── WdspTxEngine   — WDSP channel 1 TX DSP (owned by the saturn-tx thread)
   └── P2Session      — UDP client to p2app
+
+Threads: the main thread is the control plane (TCI commands, model
+reconciliation, TX safety watchdogs). The saturn-rx thread blocks on the
+P2 socket, runs RX DSP, and publishes IQ/audio frames directly to TCI
+clients; high-priority status packets are forwarded to the main thread.
+The saturn-tx thread owns the TX DSP chain and DUC IQ pacing.
         │  UDP (Protocol 2)
         ▼
 p2app / radio firmware

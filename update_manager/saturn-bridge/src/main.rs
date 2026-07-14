@@ -1,6 +1,7 @@
 mod config;
 mod p2;
 mod radio_model;
+mod rx_thread;
 mod sync_ext;
 mod tci;
 mod tx_codec;
@@ -16,13 +17,13 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use config::BridgeConfig;
-use p2::packets::split_puresignal_samples;
-use p2::session::{P2Event, P2Session};
+use p2::session::P2Session;
 use radio_model::{DemodMode, PureSignalState, RadioModel, TxPhase};
 use sync_ext::MutexExt;
 use tci::{TciCommand, TciFrontend};
+use rx_thread::{RxCommand, RxEvent, RxStats};
 use tx_thread::{TxCommand, TxDiagnostics, TxEvent};
-use wdsp::WdspRxEngine;
+use wdsp::{normalize_audio_frame_float_count, WdspRxEngine, WDSP_AUDIO_RATE_HZ};
 
 const MAX_TCI_COMMANDS_PER_LOOP: usize = 128;
 const DEFAULT_REMOTE_TX_MAX_WATTS: u8 = 100;
@@ -227,8 +228,9 @@ fn main() -> Result<(), Box<dyn Error>> {
         config.tx_low_latency,
     )));
     let session = Arc::new(P2Session::bind(config.clone())?);
-    let tci = TciFrontend::bind(&config, radio_model.clone())?;
-    let mut wdsp = {
+    let (tci, tci_command_rx) = TciFrontend::bind(&config, radio_model.clone())?;
+    let tci = Arc::new(tci);
+    let wdsp = {
         let model = radio_model.lock_unpoisoned();
         WdspRxEngine::new(&model)?
     };
@@ -245,6 +247,10 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
     let (tx_cmd_tx, tx_cmd_rx) = mpsc::channel();
     let (tx_event_tx, tx_event_rx) = mpsc::channel();
+    let (rx_cmd_tx, rx_cmd_rx) = mpsc::channel();
+    let (rx_event_tx, rx_event_rx) = mpsc::channel();
+    let rx_stats = Arc::new(RxStats::default());
+    let tx_requested = Arc::new(AtomicBool::new(false));
 
     println!(
         "saturn-bridge: binding {} -> radio {} | TCI {} | remote TX RF {} | remote TX max target={}W 100W-drive-byte={} power meter scale={:.4} power trip={:.1}W | TCI release grace={}ms | display fps cap={} | max client DDC0 rate={}k | RX audio transport={}Hz/{}ch",
@@ -275,14 +281,22 @@ fn main() -> Result<(), Box<dyn Error>> {
         tx_event_tx,
         stop_flag.clone(),
     );
+    let rx_thread = rx_thread::spawn(
+        session.clone(),
+        radio_model.clone(),
+        tci.clone(),
+        wdsp,
+        rx_cmd_rx,
+        rx_event_tx,
+        tx_cmd_tx.clone(),
+        tx_requested.clone(),
+        rx_stats.clone(),
+        stop_flag.clone(),
+    );
 
     let mut last_status = Instant::now();
     let mut last_duc_specific = Instant::now();
-    let mut tx_requested = false;
     let mut status_hp_packets = 0u64;
-    let mut status_ddc_packets = 0u64;
-    let mut status_rx_audio_frames = 0u64;
-    let mut status_rx_audio_samples = 0u64;
     let mut status_tci_mic_frames = 0u64;
     let mut status_tci_mic_samples = 0u64;
     let mut latest_tx_diag: Option<TxDiagnostics> = None;
@@ -300,7 +314,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         let mut needs_high_priority = false;
 
         for _ in 0..MAX_TCI_COMMANDS_PER_LOOP {
-            let Some(command) = tci.try_recv_command() else {
+            let Ok(command) = tci_command_rx.try_recv() else {
                 break;
             };
             did_work = true;
@@ -467,25 +481,25 @@ fn main() -> Result<(), Box<dyn Error>> {
                 }
                 TciCommand::SetAudioStreaming(enabled) => {
                     if enabled {
-                        wdsp.reset_audio_packetizer();
-                        tci.publish_audio_started(wdsp.audio_sample_rate_hz());
+                        let _ = rx_cmd_tx.send(RxCommand::ResetAudioPacketizer);
+                        tci.publish_audio_started(WDSP_AUDIO_RATE_HZ);
                     } else {
                         tci.publish_audio_stopped();
                     }
                 }
                 TciCommand::SetAudioSampleRate(rate_hz) => {
-                    if rate_hz != wdsp.audio_sample_rate_hz() {
+                    if rate_hz != WDSP_AUDIO_RATE_HZ {
                         eprintln!(
                             "saturn-bridge: requested audio sample rate {} Hz, using {} Hz",
-                            rate_hz,
-                            wdsp.audio_sample_rate_hz()
+                            rate_hz, WDSP_AUDIO_RATE_HZ
                         );
                     }
-                    wdsp.reset_audio_packetizer();
-                    tci.publish_audio_started(wdsp.audio_sample_rate_hz());
+                    let _ = rx_cmd_tx.send(RxCommand::ResetAudioPacketizer);
+                    tci.publish_audio_started(WDSP_AUDIO_RATE_HZ);
                 }
                 TciCommand::SetAudioFrameSamples(sample_count) => {
-                    let normalized = wdsp.set_audio_frame_float_count(sample_count as usize) as u32;
+                    let normalized = normalize_audio_frame_float_count(sample_count as usize) as u32;
+                    let _ = rx_cmd_tx.send(RxCommand::SetAudioFrameFloatCount(normalized as usize));
                     if sample_count != normalized {
                         eprintln!(
                             "saturn-bridge: requested audio frame size {} float32 samples, using {}",
@@ -515,7 +529,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                     }
                 }
                 TciCommand::ClientDisconnected => {
-                    tx_requested = false;
+                    tx_requested.store(false, Ordering::Relaxed);
                     last_operator_mic_at = None;
                     tx_uplink_late_since = None;
                     tx_uplink_fault_active = false;
@@ -554,7 +568,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                         model.desired.tx_enabled = false;
                         model.desired.tx_phase = TxPhase::Rx;
                     } else if enabled {
-                        if !tx_requested {
+                        if !tx_requested.load(Ordering::Relaxed) {
                             if model.desired.tx_drive > remote_tx_max_watts {
                                 eprintln!(
                                     "saturn-bridge: clamping remote TX target {}W -> {}W before arm",
@@ -563,7 +577,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                                 model.desired.tx_drive = remote_tx_max_watts;
                                 needs_high_priority = true;
                             }
-                            tx_requested = true;
+                            tx_requested.store(true, Ordering::Relaxed);
                             last_operator_mic_at = None;
                             tx_uplink_late_since = None;
                             tx_uplink_fault_active = false;
@@ -572,7 +586,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                             model.desired.tx_enabled = false;
                             model.desired.tx_phase = TxPhase::Armed;
                             tci.set_tx_media_priority_active(true);
-                            wdsp.reset_stream_buffers();
+                            let _ = rx_cmd_tx.send(RxCommand::ResetStreamBuffers);
                             let _ = tx_cmd_tx.send(TxCommand::Arm {
                                 rf_enabled: remote_tx_rf_enabled,
                             });
@@ -586,14 +600,14 @@ fn main() -> Result<(), Box<dyn Error>> {
                                 }
                             );
                         }
-                    } else if tx_requested || model.desired.tx_enabled {
+                    } else if tx_requested.load(Ordering::Relaxed) || model.desired.tx_enabled {
                         tci.mark_split_released(Instant::now());
-                        tx_requested = false;
+                        tx_requested.store(false, Ordering::Relaxed);
                         last_operator_mic_at = None;
                         tx_uplink_late_since = None;
                         tx_uplink_fault_active = false;
                         tx_control_watchdog_fault_active = false;
-                        wdsp.reset_stream_buffers();
+                        let _ = rx_cmd_tx.send(RxCommand::ResetStreamBuffers);
                         let _ = tx_cmd_tx.send(TxCommand::Disarm);
                         needs_duc_specific = true;
                         reconfigure_ddc = true;
@@ -697,7 +711,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                     let _ = tx_cmd_tx.send(TxCommand::ModelChanged);
                 }
                 TciCommand::SetPureSignalEnabled(enabled) => {
-                    if tx_requested || model.desired.tx_phase != TxPhase::Rx {
+                    if tx_requested.load(Ordering::Relaxed) || model.desired.tx_phase != TxPhase::Rx {
                         eprintln!(
                             "saturn-bridge: refusing PureSignal enable change while TX is armed"
                         );
@@ -715,7 +729,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                     }
                 }
                 TciCommand::SetPureSignalAutoAttenuate(enabled) => {
-                    if tx_requested || model.desired.tx_phase != TxPhase::Rx {
+                    if tx_requested.load(Ordering::Relaxed) || model.desired.tx_phase != TxPhase::Rx {
                         eprintln!(
                             "saturn-bridge: refusing PureSignal auto-attenuation change while TX is armed"
                         );
@@ -724,7 +738,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                     }
                 }
                 TciCommand::SetPureSignalAttenuation(attenuation_db) => {
-                    if tx_requested || model.desired.tx_phase != TxPhase::Rx {
+                    if tx_requested.load(Ordering::Relaxed) || model.desired.tx_phase != TxPhase::Rx {
                         eprintln!(
                             "saturn-bridge: refusing PureSignal attenuation change while TX is armed"
                         );
@@ -804,7 +818,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                     let _ = tx_cmd_tx.send(TxCommand::ModelChanged);
                 }
                 TciCommand::MicAudioFrame(frame) => {
-                    if !tx_requested {
+                    if !tx_requested.load(Ordering::Relaxed) {
                         continue;
                     }
                     last_operator_mic_at = Some(frame.received_at);
@@ -828,8 +842,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                     model.desired.ddc0_adc,
                 )?;
             }
-            wdsp.sync_model(&model)?;
-            model.observed.rx_wbfm_stereo_detected = wdsp.wbfm_stereo_detected();
+            let _ = rx_cmd_tx.send(RxCommand::ModelChanged);
             tci.publish_radio_state(&model);
         }
 
@@ -907,7 +920,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 }
                 TxEvent::Unkeyed => {
                     tci.mark_split_released(Instant::now());
-                    tx_requested = false;
+                    tx_requested.store(false, Ordering::Relaxed);
                     last_operator_mic_at = None;
                     tx_uplink_late_since = None;
                     tx_uplink_fault_active = false;
@@ -947,14 +960,14 @@ fn main() -> Result<(), Box<dyn Error>> {
             }
         }
 
-        if let Some(event) = session.recv_event()? {
+        while let Ok(event) = rx_event_rx.try_recv() {
             did_work = true;
-            let mut model = radio_model.lock_unpoisoned();
             match event {
-                P2Event::HighPriorityFromSdr(packet) => {
+                RxEvent::HighPriority(packet) => {
                     status_hp_packets = status_hp_packets.saturating_add(1);
                     let forward_watts =
                         saturn_adc_to_watts(packet.forward_power, 32, tx_power_meter_scale);
+                    let mut model = radio_model.lock_unpoisoned();
                     model.apply_high_priority(packet);
                     if remote_tx_rf_enabled
                         && model.desired.tx_enabled
@@ -966,7 +979,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                         );
                         tci.publish_tx_power_trip(forward_watts, remote_tx_power_trip_watts);
                         tci.mark_split_released(Instant::now());
-                        tx_requested = false;
+                        tx_requested.store(false, Ordering::Relaxed);
                         last_operator_mic_at = None;
                         tx_uplink_late_since = None;
                         tx_uplink_fault_active = false;
@@ -979,40 +992,8 @@ fn main() -> Result<(), Box<dyn Error>> {
                     }
                     tci.publish_telemetry(&model);
                 }
-                P2Event::DdcIq(frame) => {
-                    if frame.ddc_index == 0
-                        && model.desired.pure_signal_enabled
-                        && (tx_requested || model.desired.tx_enabled)
-                    {
-                        if let Some(samples) = split_puresignal_samples(&frame) {
-                            let _ = tx_cmd_tx.send(TxCommand::PureSignalFeedback {
-                                sequence: frame.sequence,
-                                tx_reference: samples.tx_reference,
-                                rx_feedback: samples.rx_feedback,
-                                received_at: Instant::now(),
-                            });
-                        }
-                    } else if frame.ddc_index == model.desired.rx_ddc_index {
-                        status_ddc_packets = status_ddc_packets.saturating_add(1);
-                        let sample_rate_hz = model.desired.ddc0_sample_rate_khz as u32 * 1000;
-                        tci.publish_iq_frame(sample_rate_hz, &frame.iq_samples);
-                        // Keep display IQ live during MOX, but do not drive RX WDSP
-                        // audio/AGC with local TX energy; that makes unkey recovery
-                        // feel slow, especially with SLOW/LONG AGC.
-                        if !tx_requested && !model.desired.tx_enabled {
-                            for audio_frame in wdsp.push_iq(&frame.iq_samples) {
-                                status_rx_audio_frames = status_rx_audio_frames.saturating_add(1);
-                                status_rx_audio_samples = status_rx_audio_samples
-                                    .saturating_add(audio_frame.len() as u64);
-                                tci.publish_audio_frame(wdsp.audio_sample_rate_hz(), &audio_frame);
-                            }
-                        }
-                        if let Some(dbm) = wdsp.smeter_dbm() {
-                            model.observed.ddc0_meter_dbm = Some(dbm);
-                        }
-                        model.observed.rx_wbfm_stereo_detected = wdsp.wbfm_stereo_detected();
-                        model.apply_ddc_frame(frame);
-                    }
+                RxEvent::Fatal(message) => {
+                    return Err(message.into());
                 }
             }
         }
@@ -1021,7 +1002,8 @@ fn main() -> Result<(), Box<dyn Error>> {
             let now = Instant::now();
             let mut model = radio_model.lock_unpoisoned();
             let on_air = model.desired.tx_phase == TxPhase::Keyed || model.desired.tx_enabled;
-            let tx_media_priority = tx_media_priority_active(tx_requested, &model);
+            let tx_media_priority =
+                tx_media_priority_active(tx_requested.load(Ordering::Relaxed), &model);
             // Phase 42: bridge owns the authoritative TX media-priority state.
             // Suppress RX media as soon as TX is requested/armed, before RF is
             // keyed, so mic prefill is not starved on constrained VPN links.
@@ -1049,7 +1031,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                     );
                     tci.publish_tx_uplink_late(age_ms, limit_ms);
                     tci.mark_split_released(now);
-                    tx_requested = false;
+                    tx_requested.store(false, Ordering::Relaxed);
                     tx_uplink_fault_active = true;
                     last_operator_mic_at = None;
                     model.desired.tx_enabled = false;
@@ -1081,7 +1063,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                     );
                     tci.publish_tx_control_watchdog(silence_ms, limit_ms);
                     tci.mark_split_released(now);
-                    tx_requested = false;
+                    tx_requested.store(false, Ordering::Relaxed);
                     tx_control_watchdog_fault_active = true;
                     model.desired.tx_enabled = false;
                     model.desired.tx_phase = TxPhase::Rx;
@@ -1100,9 +1082,9 @@ fn main() -> Result<(), Box<dyn Error>> {
             println!(
                 "saturn-bridge: diag hp_s={:.1} ddc_s={:.1} rx_audio_frames_s={:.1} rx_audio_samples_s={:.0} tci_mic_frames_s={:.1} tci_mic_samples_s={:.0} client={} iq={} audio={} split_control={} split_media={} split_paired={} outbound_drops={} safety_p99_us={} control_p99_us={} display_replaced_s={} display_dropped_s={} display_rate_limited_s={} audio_dropped_s={} audio_gaps={} audio_panic={} send_blocked_ms={} out_hwm_bytes={} tcp_outq_hwm_bytes={} safety_depth_overflow={} tx_media_priority={} tx_uplink_degraded={} tx_mic_age_ms={} tx_mic_seq={} tx_mic_seq_gaps={} tx_mic_drops={} tx_uplink_buf={} tx_uplink_hwm={} tx_codec_decode_errors={} tx_codec_stale_drops={} tx_codec_release_flushes={} {}",
                 status_hp_packets as f64 / elapsed,
-                status_ddc_packets as f64 / elapsed,
-                status_rx_audio_frames as f64 / elapsed,
-                status_rx_audio_samples as f64 / elapsed,
+                rx_stats.ddc_packets.swap(0, Ordering::Relaxed) as f64 / elapsed,
+                rx_stats.audio_frames.swap(0, Ordering::Relaxed) as f64 / elapsed,
+                rx_stats.audio_samples.swap(0, Ordering::Relaxed) as f64 / elapsed,
                 status_tci_mic_frames as f64 / elapsed,
                 status_tci_mic_samples as f64 / elapsed,
                 bool01(client.active),
@@ -1143,9 +1125,6 @@ fn main() -> Result<(), Box<dyn Error>> {
             println!("saturn-bridge: {}", model.status_line());
             last_status = Instant::now();
             status_hp_packets = 0;
-            status_ddc_packets = 0;
-            status_rx_audio_frames = 0;
-            status_rx_audio_samples = 0;
             status_tci_mic_frames = 0;
             status_tci_mic_samples = 0;
             did_work = true;
@@ -1167,6 +1146,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         .map_err(|_| "high-priority thread panicked")?;
     hp_result?;
     tx_thread.join().map_err(|_| "TX thread panicked")?;
+    rx_thread.join().map_err(|_| "RX thread panicked")?;
     thread::sleep(Duration::from_millis(10));
     Ok(())
 }

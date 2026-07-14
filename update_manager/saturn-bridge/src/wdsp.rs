@@ -14,7 +14,7 @@ use crate::radio_model::{
 
 const WDSP_RX_CHANNEL: i32 = 0;
 const WDSP_TX_CHANNEL: i32 = 1;
-const WDSP_AUDIO_RATE_HZ: u32 = 48_000;
+pub const WDSP_AUDIO_RATE_HZ: u32 = 48_000;
 const WDSP_DSP_SIZE: usize = 64;
 pub const TX_MIC_SAMPLES_PER_DSP_BLOCK: usize = 512;
 const WDSP_TX_DSP_SIZE: usize = 2048;
@@ -310,6 +310,12 @@ impl fmt::Display for WdspError {
 impl Error for WdspError {}
 
 // ── RX Engine ────────────────────────────────────────────────────────────────
+
+/// Clamp a requested audio frame size (in float32 samples) to the packetizer's
+/// supported range, forced even for whole stereo sample pairs.
+pub fn normalize_audio_frame_float_count(frame_float_count: usize) -> usize {
+    frame_float_count.clamp(256, 8192) & !1usize
+}
 
 pub struct WdspRxEngine {
     channel_id: i32,
@@ -608,7 +614,7 @@ impl WdspRxEngine {
     }
 
     pub fn set_audio_frame_float_count(&mut self, frame_float_count: usize) -> usize {
-        let normalized = frame_float_count.clamp(256, 8192) & !1usize;
+        let normalized = normalize_audio_frame_float_count(frame_float_count);
         if normalized != self.frame_float_count {
             self.frame_float_count = normalized;
             self.pending_audio.clear();
@@ -1715,9 +1721,10 @@ fn nr4_post_threshold_for_level(level_percent: f64) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::{
-        nr2_factor_for_level, nr2_nlevel_for_level, nr2_rate_for_level, nr2_taper_for_level,
-        nr4_post_threshold_for_level, nr4_reduction_amount_for_level, panel_gain_for_volume_db,
-        rx_dsp_rate_for_mode, wbfm_supported, wdsp_mode, WdspTxEngine, WDSP_AUDIO_RATE_HZ,
+        normalize_audio_frame_float_count, nr2_factor_for_level, nr2_nlevel_for_level,
+        nr2_rate_for_level, nr2_taper_for_level, nr4_post_threshold_for_level,
+        nr4_reduction_amount_for_level, panel_gain_for_volume_db, rx_dsp_rate_for_mode,
+        wbfm_supported, wdsp_mode, WdspTxEngine, WDSP_AUDIO_RATE_HZ,
     };
     use crate::radio_model::{DemodMode, PureSignalState, RadioModel};
 
@@ -1751,6 +1758,15 @@ mod tests {
         };
         assert_eq!(wdsp_mode(DemodMode::Wfm), expected_mode);
         assert_eq!(rx_dsp_rate_for_mode(DemodMode::Wfm), expected_rate);
+    }
+
+    #[test]
+    fn audio_frame_float_count_normalization_clamps_and_evens() {
+        assert_eq!(normalize_audio_frame_float_count(0), 256);
+        assert_eq!(normalize_audio_frame_float_count(256), 256);
+        assert_eq!(normalize_audio_frame_float_count(511), 510);
+        assert_eq!(normalize_audio_frame_float_count(512), 512);
+        assert_eq!(normalize_audio_frame_float_count(100_000), 8192);
     }
 
     #[test]

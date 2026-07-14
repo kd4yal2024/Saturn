@@ -998,7 +998,6 @@ fn parse_split_session_lane(command: &str) -> Option<(String, SplitSocketKind)> 
 }
 
 pub struct TciFrontend {
-    command_rx: Receiver<TciCommand>,
     clients: ClientRegistry,
     operator_client_id: Arc<AtomicU64>,
     operator_control_at: Arc<Mutex<Option<Instant>>>,
@@ -1064,7 +1063,13 @@ struct JoinGuard {
 }
 
 impl TciFrontend {
-    pub fn bind(config: &BridgeConfig, radio_model: Arc<Mutex<RadioModel>>) -> io::Result<Self> {
+    /// Returns the frontend plus the command stream fed by client threads.
+    /// The receiver stays outside the frontend so the frontend itself is
+    /// `Sync` and can be shared with the RX thread behind an `Arc`.
+    pub fn bind(
+        config: &BridgeConfig,
+        radio_model: Arc<Mutex<RadioModel>>,
+    ) -> io::Result<(Self, Receiver<TciCommand>)> {
         let listener = TcpListener::bind(config.tci_bind_addr)?;
         listener.set_nonblocking(true)?;
 
@@ -1127,8 +1132,7 @@ impl TciFrontend {
             }
         });
 
-        Ok(Self {
-            command_rx,
+        let frontend = Self {
             clients,
             operator_client_id,
             operator_control_at,
@@ -1142,11 +1146,8 @@ impl TciFrontend {
             rx_audio_transport_rate_hz: config.rx_audio_transport_rate_hz,
             rx_audio_transport_channels: config.rx_audio_transport_channels.clamp(1, 2),
             _accept_thread: JoinGuard { handle },
-        })
-    }
-
-    pub fn try_recv_command(&self) -> Option<TciCommand> {
-        self.command_rx.try_recv().ok()
+        };
+        Ok((frontend, command_rx))
     }
 
     /// Phase 42: set the bridge's authoritative TX media-priority state.
