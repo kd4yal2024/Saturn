@@ -146,7 +146,10 @@ void *IncomingHighPriority(void *arg)                   // listener thread
       if(!atomic_load(&StartBitReceived))
         P2SequenceReset(&SequenceTracker);
       LongWord = rd_be_u32(UDPInBuffer);
-      if(!P2SequenceAccept(&SequenceTracker, LongWord, &MissingPackets))
+      // Control-packet rule, not the data-stream rule: Thetis sends every
+      // high-priority control packet with sequence zero, so repeated sequence
+      // numbers carry fresh state (frequency, drive, run) and must be applied.
+      if(!P2ControlSequenceAccept(&SequenceTracker, LongWord, &MissingPackets))
         continue;
       atomic_store(&NewMessageReceived, true);
       if((MissingPackets != 0U) && UseDebug)

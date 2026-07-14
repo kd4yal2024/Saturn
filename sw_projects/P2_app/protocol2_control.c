@@ -46,6 +46,39 @@ bool P2SequenceAccept(TP2SequenceTracker *Tracker, uint32_t Sequence, uint32_t *
     return true;
 }
 
+bool P2ControlSequenceAccept(TP2SequenceTracker *Tracker, uint32_t Sequence, uint32_t *MissingPackets)
+{
+    uint32_t Delta;
+
+    if(MissingPackets != NULL)
+        *MissingPackets = 0U;
+    if(Tracker == NULL)
+        return false;
+
+    if(!Tracker->Valid)
+    {
+        Tracker->Valid = true;
+        Tracker->LastAccepted = Sequence;
+        return true;
+    }
+
+    // Control packets are idempotent state snapshots, and Thetis transmits
+    // every high-priority and DDC/DUC-specific control packet with sequence
+    // zero. A repeated sequence number is therefore current state that must
+    // be applied, not a replayed datagram. Only a strictly backward sequence
+    // (a genuinely stale packet from a client that does increment) is dropped.
+    Delta = Sequence - Tracker->LastAccepted;
+    if(Delta == 0U)
+        return true;
+    if(Delta > 0x7fffffffU)
+        return false;
+
+    Tracker->LastAccepted = Sequence;
+    if(MissingPackets != NULL)
+        *MissingPackets = Delta - 1U;
+    return true;
+}
+
 uint16_t P2ScaleFifoSamples(uint32_t Locations, uint32_t SamplesPerGroup, uint32_t LocationsPerGroup)
 {
     uint64_t Samples;

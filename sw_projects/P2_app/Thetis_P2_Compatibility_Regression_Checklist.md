@@ -23,6 +23,11 @@ Treat these as regressions unless intentionally changed and documented:
 - Packet cadence/timing patterns (especially high-priority and DDC IQ streams)
 - Startup order (`discovery -> general/control -> specific/high-priority -> streaming`)
 - Key field semantics in high-priority/general packets (run bit, ports, CAT port, drive/Alex fields)
+- Thetis sends every high-priority and DDC-specific CONTROL packet with sequence
+  number zero (only its data streams increment). Control packets must never be
+  gated on duplicate sequence numbers; doing so freezes frequency/drive/run
+  updates after the first packet (root cause of the 2026-07 "cannot change
+  frequency" regression)
 
 ## Important Length Note (Wireshark)
 

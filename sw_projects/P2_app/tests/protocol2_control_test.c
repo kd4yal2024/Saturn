@@ -56,6 +56,35 @@ static void test_sequence_wrap_and_reset(void)
     assert(Missing == 0U);
 }
 
+static void test_control_sequence_accepts_thetis_constant_zero(void)
+{
+    TP2SequenceTracker Tracker = {0};
+    uint32_t Missing = 99U;
+    int i;
+
+    // Thetis sends every high-priority control packet with sequence zero.
+    // Each one carries fresh state (frequency, drive, run) and every one
+    // must be accepted, forever, not just the first.
+    for(i = 0; i < 1000; i++)
+    {
+        assert(P2ControlSequenceAccept(&Tracker, 0U, &Missing));
+        assert(Missing == 0U);
+    }
+
+    // A client that does increment still gets gap accounting and
+    // strictly-backward rejection.
+    assert(P2ControlSequenceAccept(&Tracker, 5U, &Missing));
+    assert(Missing == 4U);
+    assert(P2ControlSequenceAccept(&Tracker, 5U, &Missing));
+    assert(Missing == 0U);
+    assert(!P2ControlSequenceAccept(&Tracker, 4U, &Missing));
+    assert(P2ControlSequenceAccept(&Tracker, 6U, &Missing));
+
+    P2SequenceReset(&Tracker);
+    assert(P2ControlSequenceAccept(&Tracker, 0U, &Missing));
+    assert(P2ControlSequenceAccept(&Tracker, 0U, &Missing));
+}
+
 static void test_fifo_sample_scaling(void)
 {
     assert(P2ScaleFifoSamples(16U, 4U, 1U) == 64U);
@@ -70,6 +99,7 @@ int main(void)
     test_run_state_requires_run_for_transmit();
     test_sequence_acceptance_and_gaps();
     test_sequence_wrap_and_reset();
+    test_control_sequence_accepts_thetis_constant_zero();
     test_fifo_sample_scaling();
     printf("protocol2 control tests passed\n");
     return 0;

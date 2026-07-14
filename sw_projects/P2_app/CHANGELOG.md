@@ -5,6 +5,27 @@ All notable changes from the hardened app convergence pass are documented here.
 This changelog originated under `P3_app` and now follows the converged
 `P2_app` implementation.
 
+## [2026-07-14] Fix Thetis Frequency Changes Dropped By Sequence Hardening
+
+### Fixed
+
+- Thetis transmits every high-priority control packet with sequence number
+  zero (verified by packet capture: 185/185 packets, while its speaker and
+  DUC-IQ data streams increment normally). The V48 duplicate-sequence
+  rejection therefore accepted only the first control packet of a session and
+  silently discarded every later one, so frequency, drive, and run updates
+  never reached the hardware. The high-priority handler now uses a
+  control-packet rule (`P2ControlSequenceAccept`): repeated sequence numbers
+  are fresh state and are applied; only strictly backward sequences are
+  dropped. The stricter data-stream rule remains on the speaker and DUC-IQ
+  paths, whose sequences do increment.
+
+### Added
+
+- Regression test asserting one thousand consecutive zero-sequence control
+  packets are all accepted, alongside gap accounting and backward rejection
+  for incrementing clients.
+
 ## [2026-07-13] RF State And Protocol 2 Session Hardening
 
 ### Fixed

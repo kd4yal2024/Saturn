@@ -70,14 +70,17 @@
 #include "frontpanelhandler.h"
 #include "controller_lease.h"
 
-#define P2APPVERSION 48
-#define FWREQUIREDMAJORVERSION 1                  // major version that is required. Only altered if programming interface changes. 
+#define P2APPVERSION 49
+#define FWREQUIREDMAJORVERSION 1                  // major version that is required. Only altered if programming interface changes.
 //
 // the Firmware version is a protection to make sure that if a p2app update is required by the new firmware,
 // it won't work with an old version. This means p2app will always need to be updated if the firmware is updated to new major version.
 //
 //------------------------------------------------------------------------------------------
 // VERSION History
+// V49, 14/07/2026. accept repeated high-priority control sequence numbers: Thetis sends every
+//                  control packet with sequence zero, so V48's duplicate rejection discarded
+//                  all frequency/drive/run updates after the first packet of a session.
 // V48, 13/07/2026. hardened RF stop/shutdown state, UDP sequence handling, watchdog activity,
 //                  stream session resets, FIFO telemetry scaling, and packet bounds checks.
 // V47, 27/05/2026. reduced PA drive level for V3 H/W to same as V2 H/W so that Puresignal works OK
