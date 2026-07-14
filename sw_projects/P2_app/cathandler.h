@@ -89,6 +89,11 @@ void MakeCATMessageString(int Device, ECATCommands Cmd, const char* Param);
 void SetupCATPort(int Port);
 
 //
+// true while the CAT handler owns a port, whether connected or still retrying
+//
+bool CATHandlerActive(void);
+
+//
 // function to shut down CAT handler
 // only returns when shutdown is complete
 //

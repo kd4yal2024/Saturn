@@ -232,7 +232,7 @@ void *IncomingHighPriority(void *arg)                   // listener thread
       Word = rd_be_u16(UDPInBuffer+1398);
       if(Word != 0)
         SetupCATPort(Word);
-      else if (Word == 0 && atomic_load(&CATPortAssigned))
+      else if (CATHandlerActive())
         ShutdownCATHandler();
       //
       // transverter, speaker mute, open collector, user outputs

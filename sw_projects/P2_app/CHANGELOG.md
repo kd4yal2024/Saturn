@@ -18,6 +18,11 @@ This changelog originated under `P3_app` and now follows the converged
   indefinitely, so a panel-equipped G2 still connects the moment the client's
   CAT server becomes reachable, with no radio restart. The backoff sleeps in
   100 ms slices so shutdown and CAT port changes remain prompt.
+- A client that stops advertising its CAT port now also stops a handler that
+  never managed to connect. The shutdown gate previously required a completed
+  connection (`CATPortAssigned`), so a never-reachable CAT server kept the
+  retry loop alive until the session ended; it now keys on port ownership
+  (`CATHandlerActive`). Panel/ATU modules still use the connected-state flag.
 
 ## [2026-07-14] Fix Thetis Frequency Changes Dropped By Sequence Hardening
 

@@ -1038,6 +1038,18 @@ void SetupCATPort(int Port)
 // only returns when shutdown of CAT handler and the keepalive is complete
 // signal thread to shut down, then wait
 //
+//
+// true while the CAT handler owns a port, whether connected or still retrying.
+// Distinct from CATPortAssigned, which is only true after a successful connect:
+// a client that stops advertising its CAT port must also stop a handler that
+// never managed to connect (e.g. the advertised server was firewalled).
+//
+bool CATHandlerActive(void)
+{
+    return atomic_load(&CATPort) != 0;
+}
+
+
 void ShutdownCATHandler(void)
 {
     atomic_store(&SignalThreadEnd, true);
