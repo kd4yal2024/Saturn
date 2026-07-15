@@ -1563,7 +1563,13 @@ mod tests {
     async fn legacy_remote_routes_redirect_to_remote_next() {
         let state = test_state("legacy-remote-redirect");
         let app = remote_tls_router(state);
-        for path in ["/", "/remote", "/remote.html", "/saturn-remote", "/saturn-remote.html"] {
+        for path in [
+            "/",
+            "/remote",
+            "/remote.html",
+            "/saturn-remote",
+            "/saturn-remote.html",
+        ] {
             let req = Request::builder().uri(path).body(Body::empty()).unwrap();
             let res = app.clone().oneshot(req).await.unwrap();
             assert_eq!(res.status(), StatusCode::TEMPORARY_REDIRECT, "path {path}");
