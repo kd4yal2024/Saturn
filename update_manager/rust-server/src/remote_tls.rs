@@ -1362,7 +1362,7 @@ mod tests {
         );
 
         let encoded_uri: axum::http::Uri =
-            "/saturn/media?session=phase%3A42+operator".parse().unwrap();
+            "/saturn/media?session=split%3A+operator".parse().unwrap();
         assert_eq!(
             extract_split_session_from_uri(&encoded_uri),
             Some("splitoperator".to_string())
@@ -1383,7 +1383,7 @@ mod tests {
             Some("session_lane:phase-42,control;".to_string())
         );
         assert_eq!(
-            split_proxy_lane_message(BridgeProxyChannel::Media, Some("phase:42")),
+            split_proxy_lane_message(BridgeProxyChannel::Media, Some("split:")),
             Some("session_lane:split,media;".to_string())
         );
         assert_eq!(
