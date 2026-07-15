@@ -9,8 +9,10 @@
 // A failure in the first direction is a broken page; a failure in the second
 // is dead surface creeping back in. Either fails the build.
 
-import { readFileSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
@@ -98,7 +100,33 @@ function bundleApiNames(entrySource) {
   return seen;
 }
 
-const used = templateUsedNames(readFileSync(templatePath, 'utf8'));
+// A syntax error anywhere in an inline block kills that whole block in the
+// browser — the page loads but never wires its handlers. Parse every block
+// with `node --check` so that failure mode is caught before deploy.
+function checkInlineScriptsParse(template) {
+  const blocks = [...template.matchAll(/<script(?![^>]*\bsrc=)[^>]*>([\s\S]*?)<\/script>/g)];
+  const workDir = mkdtempSync(join(tmpdir(), 'seam-parse-'));
+  try {
+    blocks.forEach((match, index) => {
+      const file = join(workDir, `inline-${index}.js`);
+      writeFileSync(file, match[1]);
+      const result = spawnSync(process.execPath, ['--check', file], { encoding: 'utf8' });
+      if (result.status !== 0) {
+        console.error(`template inline script block ${index} does not parse:`);
+        console.error(result.stderr.trim());
+        console.error('\ncheck-template-seam: FAILED');
+        process.exit(1);
+      }
+    });
+  } finally {
+    rmSync(workDir, { recursive: true, force: true });
+  }
+  return blocks.length;
+}
+
+const templateSource = readFileSync(templatePath, 'utf8');
+const inlineBlockCount = checkInlineScriptsParse(templateSource);
+const used = templateUsedNames(templateSource);
 const exported = bundleApiNames(readFileSync(entryPath, 'utf8'));
 
 const missingFromApi = [...used].filter((name) => !exported.has(name)).sort();
@@ -120,5 +148,6 @@ if (missingFromApi.length > 0 || unusedByTemplate.length > 0) {
 }
 
 console.log(
-  `check-template-seam: OK — ${exported.size} api entries, all referenced by the template`,
+  `check-template-seam: OK — ${exported.size} api entries, all referenced by the template; ` +
+    `${inlineBlockCount} inline script blocks parse`,
 );

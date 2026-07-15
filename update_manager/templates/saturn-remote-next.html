@@ -8036,7 +8036,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       const prefs = _next.radioPrefsFromState(state);
       prefs.rxAdc = REMOTE_FIXED_RX_ADC;
       return state.txOpusOverrideEnabled === true
-        ? tx-opusOpusLabCleanRadioPrefs(prefs)
+        ? txOpusLabCleanRadioPrefs(prefs)
         : prefs;
     }
 
@@ -8084,36 +8084,36 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
 
     const BAND_MEMORY_KEY = "saturn.remote.bandMemory";
 
-    function tx-opusOpusLabZeroBands() {
+    function txOpusLabZeroBands() {
       return [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
     }
 
-    function tx-opusOpusLabPreviousTxEqBands() {
+    function txOpusLabPreviousTxEqBands() {
       return [0, 0, 0, 0, -1, 0, 1, 2, 1, 0, 0];
     }
 
-    function tx-opusOpusLabDesiredTxEqBands() {
+    function txOpusLabDesiredTxEqBands() {
       if (!TX_OPUS_VOICE_EQ) {
-        return tx-opusOpusLabZeroBands();
+        return txOpusLabZeroBands();
       }
       // 32, 63, 125, 250, 500, 1k, 2k, 4k, 8k, 16k.
       return [0, 0, 0, 1, 2, 1, -1, 1, 3, 1, 0];
     }
 
-    function tx-opusOpusLabDesiredCfcPrecomp() {
+    function txOpusLabDesiredCfcPrecomp() {
       return TX_OPUS_CFC ? TX_OPUS_CFC_PRECOMP_DB : 0;
     }
 
-    function tx-opusOpusLabDesiredCfcBands() {
+    function txOpusLabDesiredCfcBands() {
       if (!TX_OPUS_CFC) {
-        return tx-opusOpusLabZeroBands();
+        return txOpusLabZeroBands();
       }
       // 50, 100, 200, 500, 1k, 1.5k, 2.5k, 3k, 5k, 8k.
       // Gentle ESSB baseline: low-end warmth, warm mids, no high-band CFC lift.
       return [0, 0.5, 1.5, 2.0, 2.0, 1.0, 0.5, 0, 0, 0, 0];
     }
 
-    function tx-opusOpusLabClampNoiseGateThreshold(value) {
+    function txOpusLabClampNoiseGateThreshold(value) {
       const numeric = Number(value);
       return Math.max(
         -80,
@@ -8121,21 +8121,21 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       );
     }
 
-    function tx-opusOpusLabDesiredNoiseGateEnabled() {
+    function txOpusLabDesiredNoiseGateEnabled() {
       if (TX_OPUS_NOISE_GATE_QUERY_SET) {
         return TX_OPUS_NOISE_GATE;
       }
       return Boolean(state.txNoiseGateEnabled);
     }
 
-    function tx-opusOpusLabDesiredNoiseGateThresholdDb() {
+    function txOpusLabDesiredNoiseGateThresholdDb() {
       if (Number.isFinite(TX_OPUS_NOISE_GATE_QUERY_DB)) {
         return TX_OPUS_NOISE_GATE_THRESHOLD_DB;
       }
-      return tx-opusOpusLabClampNoiseGateThreshold(state.txNoiseGateThresholdDb);
+      return txOpusLabClampNoiseGateThreshold(state.txNoiseGateThresholdDb);
     }
 
-    function tx-opusOpusLabCleanRadioPrefs(prefs) {
+    function txOpusLabCleanRadioPrefs(prefs) {
       if (!prefs || typeof prefs !== "object") {
         return prefs;
       }
@@ -8144,14 +8144,14 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         txEqEnabled: Boolean(prefs.txEqEnabled),
         txEqBands: sanitizeEqBands(prefs.txEqBands),
         cfcEnabled: TX_OPUS_CFC,
-        cfcPrecomp: tx-opusOpusLabDesiredCfcPrecomp(),
-        cfcBands: tx-opusOpusLabDesiredCfcBands(),
+        cfcPrecomp: txOpusLabDesiredCfcPrecomp(),
+        cfcBands: txOpusLabDesiredCfcBands(),
         txNoiseGateEnabled: Boolean(prefs.txNoiseGateEnabled),
-        txNoiseGateThresholdDb: tx-opusOpusLabClampNoiseGateThreshold(prefs.txNoiseGateThresholdDb),
+        txNoiseGateThresholdDb: txOpusLabClampNoiseGateThreshold(prefs.txNoiseGateThresholdDb),
       };
     }
 
-    function tx-opusOpusLabBandsAreFlat(bands) {
+    function txOpusLabBandsAreFlat(bands) {
       if (!Array.isArray(bands)) return true;
       for (let i = 1; i <= 10; i += 1) {
         if (Math.abs(Number(bands[i]) || 0) > 0.001) {
@@ -8161,7 +8161,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       return true;
     }
 
-    function tx-opusOpusLabBandsMatch(actual, expected) {
+    function txOpusLabBandsMatch(actual, expected) {
       if (!Array.isArray(actual)) return false;
       for (let i = 1; i <= 10; i += 1) {
         if (Math.abs((Number(actual[i]) || 0) - (Number(expected[i]) || 0)) > 0.001) {
@@ -8171,9 +8171,9 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       return true;
     }
 
-    function tx-opusOpusLabBandsNeedDefault(bands) {
-      if (tx-opusOpusLabBandsAreFlat(bands)) return true;
-      if (tx-opusOpusLabBandsMatch(bands, tx-opusOpusLabPreviousTxEqBands())) return true;
+    function txOpusLabBandsNeedDefault(bands) {
+      if (txOpusLabBandsAreFlat(bands)) return true;
+      if (txOpusLabBandsMatch(bands, txOpusLabPreviousTxEqBands())) return true;
       let nonzero = 0;
       let highBoosts = 0;
       let totalAbs = 0;
@@ -8193,22 +8193,22 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       if (state.txOpusProcessingUserEdited) {
         return applyTxOpusLabCfcGuard(reason);
       }
-      const desiredTxEqBands = tx-opusOpusLabDesiredTxEqBands();
-      const desiredCfcPrecomp = tx-opusOpusLabDesiredCfcPrecomp();
-      const desiredCfcBands = tx-opusOpusLabDesiredCfcBands();
-      const desiredNoiseGateEnabled = tx-opusOpusLabDesiredNoiseGateEnabled();
-      const desiredNoiseGateThresholdDb = tx-opusOpusLabDesiredNoiseGateThresholdDb();
+      const desiredTxEqBands = txOpusLabDesiredTxEqBands();
+      const desiredCfcPrecomp = txOpusLabDesiredCfcPrecomp();
+      const desiredCfcBands = txOpusLabDesiredCfcBands();
+      const desiredNoiseGateEnabled = txOpusLabDesiredNoiseGateEnabled();
+      const desiredNoiseGateThresholdDb = txOpusLabDesiredNoiseGateThresholdDb();
       const changed = Boolean(
         state.txEqEnabled !== TX_OPUS_VOICE_EQ ||
         state.txNoiseGateEnabled !== desiredNoiseGateEnabled ||
         Number(state.txNoiseGateThresholdDb) !== desiredNoiseGateThresholdDb ||
         state.cfcEnabled !== TX_OPUS_CFC ||
         Math.abs((Number(state.cfcPrecomp) || 0) - desiredCfcPrecomp) > 0.001 ||
-        (TX_OPUS_VOICE_EQ && tx-opusOpusLabBandsNeedDefault(state.txEqBands)) ||
-        !tx-opusOpusLabBandsMatch(state.cfcBands, desiredCfcBands)
+        (TX_OPUS_VOICE_EQ && txOpusLabBandsNeedDefault(state.txEqBands)) ||
+        !txOpusLabBandsMatch(state.cfcBands, desiredCfcBands)
       );
       state.txEqEnabled = TX_OPUS_VOICE_EQ;
-      if (TX_OPUS_VOICE_EQ && tx-opusOpusLabBandsNeedDefault(state.txEqBands)) {
+      if (TX_OPUS_VOICE_EQ && txOpusLabBandsNeedDefault(state.txEqBands)) {
         state.txEqBands = sanitizeEqBands(desiredTxEqBands);
       } else {
         state.txEqBands = sanitizeEqBands(state.txEqBands);
@@ -8236,12 +8236,12 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       if (TX_OPUS_CFC && state.txOpusCfcUserEdited) {
         return false;
       }
-      const desiredCfcPrecomp = tx-opusOpusLabDesiredCfcPrecomp();
-      const desiredCfcBands = tx-opusOpusLabDesiredCfcBands();
+      const desiredCfcPrecomp = txOpusLabDesiredCfcPrecomp();
+      const desiredCfcBands = txOpusLabDesiredCfcBands();
       const changed = Boolean(
         state.cfcEnabled !== TX_OPUS_CFC ||
         Math.abs((Number(state.cfcPrecomp) || 0) - desiredCfcPrecomp) > 0.001 ||
-        !tx-opusOpusLabBandsMatch(state.cfcBands, desiredCfcBands)
+        !txOpusLabBandsMatch(state.cfcBands, desiredCfcBands)
       );
       state.cfcEnabled = TX_OPUS_CFC;
       state.cfcPrecomp = desiredCfcPrecomp;
@@ -8271,7 +8271,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       const cfcBands = sanitizeCfcBands(state.cfcBands);
       const commands = [
         `tx_noise_gate:0,${Boolean(state.txNoiseGateEnabled)};`,
-        `tx_noise_gate_threshold:0,${tx-opusOpusLabClampNoiseGateThreshold(state.txNoiseGateThresholdDb).toFixed(1)};`,
+        `tx_noise_gate_threshold:0,${txOpusLabClampNoiseGateThreshold(state.txNoiseGateThresholdDb).toFixed(1)};`,
         `tx_eq_enable:0,${Boolean(state.txEqEnabled)};`,
         `tx_cfc_enable:0,${Boolean(state.cfcEnabled)};`,
         `tx_cfc_precomp:0,${cfcPrecomp.toFixed(1)};`,
@@ -8299,8 +8299,8 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       if (state.txOpusOverrideEnabled !== true || !state.bandMemory || typeof state.bandMemory !== "object") {
         return false;
       }
-      const desiredCfcPrecomp = tx-opusOpusLabDesiredCfcPrecomp();
-      const desiredCfcBands = tx-opusOpusLabDesiredCfcBands();
+      const desiredCfcPrecomp = txOpusLabDesiredCfcPrecomp();
+      const desiredCfcBands = txOpusLabDesiredCfcBands();
       let changed = false;
       Object.values(state.bandMemory).forEach((entry) => {
         if (!entry || typeof entry !== "object") {
@@ -8313,10 +8313,10 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         const dirty = Boolean(
           Boolean(prefs.cfcEnabled) !== TX_OPUS_CFC ||
           Math.abs((Number(prefs.cfcPrecomp) || 0) - desiredCfcPrecomp) > 0.001 ||
-          !tx-opusOpusLabBandsMatch(prefs.cfcBands, desiredCfcBands)
+          !txOpusLabBandsMatch(prefs.cfcBands, desiredCfcBands)
         );
         if (dirty) {
-          entry.radioPrefs = tx-opusOpusLabCleanRadioPrefs(prefs);
+          entry.radioPrefs = txOpusLabCleanRadioPrefs(prefs);
           changed = true;
         }
       });
@@ -8327,7 +8327,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       return {
         frequency: state.vfoA || state.dds,
         radioPrefs: state.txOpusOverrideEnabled === true
-          ? tx-opusOpusLabCleanRadioPrefs(currentRadioPrefs())
+          ? txOpusLabCleanRadioPrefs(currentRadioPrefs())
           : currentRadioPrefs(),
         displayPrefs: currentDisplayPrefs(),
         displayZoom: Math.max(1, Math.min(32, Number(state.displayZoom) || 1)),
@@ -14145,7 +14145,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       });
       $("tx-noise-gate-threshold").addEventListener("input", () => {
         state.txOpusProcessingUserEdited = true;
-        state.txNoiseGateThresholdDb = tx-opusOpusLabClampNoiseGateThreshold($("tx-noise-gate-threshold").value);
+        state.txNoiseGateThresholdDb = txOpusLabClampNoiseGateThreshold($("tx-noise-gate-threshold").value);
         $("tx-noise-gate-threshold-readout").textContent = `${state.txNoiseGateThresholdDb} dB`;
       });
       $("tx-noise-gate-threshold").addEventListener("change", () => {
