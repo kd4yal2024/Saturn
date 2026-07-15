@@ -34,7 +34,7 @@ pub async fn get_system_data(Query(q): Query<ProcQuery>) -> impl IntoResponse {
         Some("overview") => "overview",
         _ => "monitor",
     };
-    let cpu = match read_per_core_cpu().await {
+    let cpu = match read_per_core_cpu(rate_scope).await {
         Ok(v) => v,
         Err(e) => {
             error!("cpu read error: {e}");
@@ -170,31 +170,89 @@ pub async fn network_test() -> impl IntoResponse {
     }
 }
 
-async fn read_per_core_cpu() -> Result<Vec<f64>, String> {
-    let a = read_proc_stat().await?;
-    tokio::time::sleep(Duration::from_millis(120)).await;
-    let b = read_proc_stat().await?;
-    if a.len() != b.len() || a.is_empty() {
+struct CpuBaseline {
+    snaps: Vec<CpuSnap>,
+    at_ms: u128,
+    last_result: Vec<f64>,
+}
+
+/// Below this interval, polls reuse the previous result instead of dividing
+/// near-zero counter deltas.
+const CPU_RATE_MIN_INTERVAL_MS: u128 = 250;
+
+fn per_core_busy_percent(a: &[CpuSnap], b: &[CpuSnap]) -> Vec<f64> {
+    a.iter()
+        .zip(b.iter())
+        .map(|(sa, sb)| {
+            let d_idle = sb.idle.saturating_sub(sa.idle) as f64;
+            let d_total = sb.total.saturating_sub(sa.total) as f64;
+            if d_total > 0.0 {
+                ((1.0 - d_idle / d_total) * 100.0).clamp(0.0, 100.0)
+            } else {
+                0.0
+            }
+        })
+        .collect()
+}
+
+// Like calc_rate, busy% is measured against the previous poll of the same
+// scope, so the window is the page's whole refresh period instead of a 120ms
+// in-request snapshot — which on this bursty radio workload was a dice roll,
+// and measured the server's own request handling. Only the whitelisted
+// rate_scope values reach this, so the map cannot grow unbounded.
+async fn read_per_core_cpu(rate_scope: &str) -> Result<Vec<f64>, String> {
+    static BASELINE: OnceLock<Mutex<HashMap<String, CpuBaseline>>> = OnceLock::new();
+    let map = BASELINE.get_or_init(|| Mutex::new(HashMap::new()));
+
+    let now_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+    let current = read_proc_stat().await?;
+    if current.is_empty() {
         return Ok(vec![0.0]);
     }
 
-    let mut out = Vec::with_capacity(a.len());
-    for (sa, sb) in a.iter().zip(b.iter()) {
-        let d_idle = (sb.idle - sa.idle) as f64;
-        let d_total = (sb.total - sa.total) as f64;
-        let mut p = if d_total > 0.0 {
-            (1.0 - d_idle / d_total) * 100.0
-        } else {
-            0.0
-        };
-        if p < 0.0 {
-            p = 0.0;
-        } else if p > 100.0 {
-            p = 100.0;
+    // Scope: the guard must not be held across an await point.
+    {
+        let mut guard = map.lock_unpoisoned();
+        if let Some(base) = guard.get_mut(rate_scope) {
+            if base.snaps.len() == current.len() {
+                if now_ms.saturating_sub(base.at_ms) < CPU_RATE_MIN_INTERVAL_MS {
+                    return Ok(base.last_result.clone());
+                }
+                let result = per_core_busy_percent(&base.snaps, &current);
+                *base = CpuBaseline {
+                    snaps: current,
+                    at_ms: now_ms,
+                    last_result: result.clone(),
+                };
+                return Ok(result);
+            }
         }
-        out.push(p);
     }
-    Ok(out)
+
+    // First poll for this scope (or a core-count change): fall back to one
+    // short in-request window to have something to report.
+    tokio::time::sleep(Duration::from_millis(120)).await;
+    let second = read_proc_stat().await?;
+    if second.len() != current.len() {
+        return Ok(vec![0.0]);
+    }
+    let result = per_core_busy_percent(&current, &second);
+    let at_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+    map.lock_unpoisoned().insert(
+        rate_scope.to_string(),
+        CpuBaseline {
+            snaps: second,
+            at_ms,
+            last_result: result.clone(),
+        },
+    );
+    Ok(result)
 }
 
 #[derive(Clone, Copy)]
@@ -525,6 +583,59 @@ fn list_procs_sysinfo(sys: &System, total_mem_kb: f64, q: &ProcQuery) -> Vec<ser
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // --- per-core CPU ---
+
+    #[test]
+    fn test_per_core_busy_percent_computes_and_clamps() {
+        let a = [
+            CpuSnap {
+                idle: 100,
+                total: 200,
+            },
+            CpuSnap {
+                idle: 100,
+                total: 200,
+            },
+        ];
+        let b = [
+            CpuSnap {
+                idle: 150,
+                total: 300,
+            },
+            // Idle went backwards (counter quirk): clamps to 100% busy.
+            CpuSnap {
+                idle: 90,
+                total: 300,
+            },
+        ];
+        let busy = per_core_busy_percent(&a, &b);
+        assert_eq!(busy.len(), 2);
+        assert!((busy[0] - 50.0).abs() < 1e-9);
+        assert!((busy[1] - 100.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn test_per_core_busy_percent_zero_delta_reports_zero() {
+        let snap = [CpuSnap {
+            idle: 100,
+            total: 200,
+        }];
+        assert_eq!(per_core_busy_percent(&snap, &snap), vec![0.0]);
+    }
+
+    #[tokio::test]
+    async fn test_read_per_core_cpu_reuses_result_within_min_interval() {
+        // Unique scope so the shared baseline map cannot collide with other
+        // tests or scopes.
+        let scope = "test-scope-min-interval";
+        let first = read_per_core_cpu(scope).await.unwrap();
+        let second = read_per_core_cpu(scope).await.unwrap();
+        assert!(!first.is_empty());
+        // The second poll lands well inside CPU_RATE_MIN_INTERVAL_MS and must
+        // return the cached result unchanged.
+        assert_eq!(first, second);
+    }
 
     // --- base_device_name ---
 
