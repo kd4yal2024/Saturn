@@ -1380,6 +1380,75 @@ fn split_outbound_routing_sends_text_to_control_lane_not_media() {
 }
 
 #[test]
+fn lane_hint_for_request_path_maps_proxy_paths() {
+    assert_eq!(
+        lane_hint_for_request_path("/control"),
+        Some(SplitSocketKind::Control)
+    );
+    assert_eq!(
+        lane_hint_for_request_path("/media"),
+        Some(SplitSocketKind::Media)
+    );
+    assert_eq!(lane_hint_for_request_path("/"), None);
+    assert_eq!(lane_hint_for_request_path(""), None);
+    assert_eq!(lane_hint_for_request_path("/tci"), None);
+    assert_eq!(lane_hint_for_request_path("/media/"), None);
+}
+
+#[test]
+fn connect_lane_hint_filters_outbound_before_session_lane_declaration() {
+    let text = OutboundMessage::Text("rx_smeter:0,0,-110.0;".into());
+    let safety = OutboundMessage::SafetyText("tx_fault:0,power_trip,126.3,110.0;".into());
+    let rx_iq = OutboundMessage::IqFrame {
+        receiver: 0,
+        sample_rate: 192_000,
+        iq_samples: vec![0.0, 0.0],
+    };
+
+    // Media-path client without any in-band declaration yet: no text ever,
+    // binary is available once streams are enabled.
+    let mut media = ClientConnection {
+        outbound: ClientOutbound::new(),
+        state: ClientState::default(),
+    };
+    media.state.connect_lane_hint = Some(SplitSocketKind::Media);
+    media.state.iq_stream_enabled = true;
+    assert!(!client_wants_outbound_message(&media, &text, false));
+    assert!(!client_wants_outbound_message(&media, &safety, false));
+    assert!(client_wants_outbound_message(&media, &rx_iq, false));
+
+    // Control-path client: text flows, binary RX never does.
+    let mut control = ClientConnection {
+        outbound: ClientOutbound::new(),
+        state: ClientState::default(),
+    };
+    control.state.connect_lane_hint = Some(SplitSocketKind::Control);
+    control.state.iq_stream_enabled = true;
+    assert!(client_wants_outbound_message(&control, &text, false));
+    assert!(!client_wants_outbound_message(&control, &rx_iq, false));
+
+    // Legacy path ("/"): both kinds flow as before.
+    let mut legacy = ClientConnection {
+        outbound: ClientOutbound::new(),
+        state: ClientState::default(),
+    };
+    legacy.state.iq_stream_enabled = true;
+    assert!(client_wants_outbound_message(&legacy, &text, false));
+    assert!(client_wants_outbound_message(&legacy, &rx_iq, false));
+
+    // Once the in-band declaration lands it agrees with the hint and the
+    // filtering stays the same.
+    media.state.split = Some(SplitClientMetadata {
+        session_id: "phase-42".into(),
+        lane: Some(SplitSocketKind::Media),
+        role: None,
+        ignore_media_until: None,
+    });
+    assert!(!client_wants_outbound_message(&media, &text, false));
+    assert!(client_wants_outbound_message(&media, &rx_iq, false));
+}
+
+#[test]
 fn split_outbound_routing_sends_iq_to_media_lane_not_control() {
     let mut control = ClientConnection {
         outbound: ClientOutbound::new(),

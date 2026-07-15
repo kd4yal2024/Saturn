@@ -12,6 +12,8 @@ The legacy inline `/remote` page (`saturn-remote.html` and its `saturn-remote-*.
 
 The template/bundle seam is the flat api object in `remote-web/src/remote-next-entry.ts`. It is kept exact — no unused exports, no unresolved template references — by `remote-web/scripts/check-template-seam.mjs` (`npm run check:seam`, enforced in CI).
 
+The Saturn Go proxy dials the bridge with lane-declaring websocket paths (`/control`, `/media`), so the bridge filters each split socket to its lane from the moment of connect — media sockets never receive the text state snapshot. The in-band `session_lane` command remains the pairing mechanism and the fallback for direct `:50001` clients.
+
 It is intentionally not a browser skin wrapped directly around `p2app`.
 The backend boundary is:
 

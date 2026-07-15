@@ -925,13 +925,25 @@ fn split_proxy_lane_message(
     }
 }
 
+/// The bridge pre-declares the split lane from the request path, so the
+/// snapshot and broadcast text never touch a media socket. Legacy /tci
+/// keeps the bare URL and the bridge's any-lane behavior.
+fn bridge_dial_url(base: &str, channel: BridgeProxyChannel) -> String {
+    let base = base.trim_end_matches('/');
+    match channel {
+        BridgeProxyChannel::Legacy => base.to_string(),
+        BridgeProxyChannel::Control => format!("{base}/control"),
+        BridgeProxyChannel::Media => format!("{base}/media"),
+    }
+}
+
 async fn proxy_bridge_socket(
     client: WebSocket,
     bridge_ws_url: String,
     channel: BridgeProxyChannel,
     split_session_id: Option<String>,
 ) {
-    let (bridge, _) = match connect_async(&bridge_ws_url).await {
+    let (bridge, _) = match connect_async(bridge_dial_url(&bridge_ws_url, channel)).await {
         Ok(connection) => connection,
         Err(err) => {
             error!("remote TLS bridge proxy connect failed: {err}");
@@ -943,6 +955,20 @@ async fn proxy_bridge_socket(
 
     let (mut client_tx, mut client_rx) = client.split();
     let (mut bridge_tx, mut bridge_rx) = bridge.split();
+
+    // Frames on the wrong lane are dropped; warn once per connection per
+    // source and summarize the totals when the proxy ends.
+    let dropped_from_client = std::sync::atomic::AtomicU64::new(0);
+    let dropped_from_bridge = std::sync::atomic::AtomicU64::new(0);
+    let count_drop = |counter: &std::sync::atomic::AtomicU64, source: &str, kind: &str| {
+        if counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed) == 0 {
+            warn!(
+                "remote TLS {} websocket proxy dropping {source} {kind} frames \
+                 (warning once; totals logged at close)",
+                channel.label()
+            );
+        }
+    };
 
     if let Some(message) = split_proxy_lane_message(channel, split_session_id.as_deref()) {
         if let Err(err) = bridge_tx
@@ -961,10 +987,7 @@ async fn proxy_bridge_socket(
             match message {
                 AxumMessage::Text(text) => {
                     if !bridge_proxy_allows_message(channel, BridgeProxyMessageKind::Text) {
-                        warn!(
-                            "remote TLS {} websocket proxy dropped client text frame",
-                            channel.label()
-                        );
+                        count_drop(&dropped_from_client, "client", "text");
                         continue;
                     }
                     bridge_tx
@@ -974,10 +997,7 @@ async fn proxy_bridge_socket(
                 }
                 AxumMessage::Binary(bytes) => {
                     if !bridge_proxy_allows_message(channel, BridgeProxyMessageKind::Binary) {
-                        warn!(
-                            "remote TLS {} websocket proxy dropped client binary frame",
-                            channel.label()
-                        );
+                        count_drop(&dropped_from_client, "client", "binary");
                         continue;
                     }
                     bridge_tx
@@ -1012,10 +1032,7 @@ async fn proxy_bridge_socket(
             match message {
                 TungsteniteMessage::Text(text) => {
                     if !bridge_proxy_allows_message(channel, BridgeProxyMessageKind::Text) {
-                        warn!(
-                            "remote TLS {} websocket proxy dropped bridge text frame",
-                            channel.label()
-                        );
+                        count_drop(&dropped_from_bridge, "bridge", "text");
                         continue;
                     }
                     client_tx
@@ -1025,10 +1042,7 @@ async fn proxy_bridge_socket(
                 }
                 TungsteniteMessage::Binary(bytes) => {
                     if !bridge_proxy_allows_message(channel, BridgeProxyMessageKind::Binary) {
-                        warn!(
-                            "remote TLS {} websocket proxy dropped bridge binary frame",
-                            channel.label()
-                        );
+                        count_drop(&dropped_from_bridge, "bridge", "binary");
                         continue;
                     }
                     client_tx
@@ -1062,6 +1076,16 @@ async fn proxy_bridge_socket(
         result = client_to_bridge => result,
         result = bridge_to_client => result,
     };
+
+    let from_client = dropped_from_client.load(std::sync::atomic::Ordering::Relaxed);
+    let from_bridge = dropped_from_bridge.load(std::sync::atomic::Ordering::Relaxed);
+    if from_client > 0 || from_bridge > 0 {
+        warn!(
+            "remote TLS {} websocket proxy dropped mismatched frames: {from_client} from client, \
+             {from_bridge} from bridge",
+            channel.label()
+        );
+    }
 
     if let Err(err) = result {
         warn!("remote TLS websocket proxy ended with error: {err}");
@@ -1148,6 +1172,27 @@ mod tests {
         http::{Request, StatusCode},
     };
     use tower::ServiceExt;
+
+    #[test]
+    fn bridge_dial_url_declares_lane_by_path() {
+        let base = "ws://127.0.0.1:50001";
+        assert_eq!(
+            bridge_dial_url(base, BridgeProxyChannel::Legacy),
+            "ws://127.0.0.1:50001"
+        );
+        assert_eq!(
+            bridge_dial_url(base, BridgeProxyChannel::Control),
+            "ws://127.0.0.1:50001/control"
+        );
+        assert_eq!(
+            bridge_dial_url(base, BridgeProxyChannel::Media),
+            "ws://127.0.0.1:50001/media"
+        );
+        assert_eq!(
+            bridge_dial_url("ws://127.0.0.1:50001/", BridgeProxyChannel::Media),
+            "ws://127.0.0.1:50001/media"
+        );
+    }
 
     fn test_state(name: &str) -> AppState {
         let pid = std::process::id();

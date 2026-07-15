@@ -8,8 +8,9 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use tungstenite::error::Error as WsError;
+use tungstenite::handshake::server::{Request, Response};
 use tungstenite::protocol::WebSocketConfig;
-use tungstenite::{accept_with_config, Message};
+use tungstenite::{accept_hdr_with_config, Message};
 
 use crate::radio_model::{NoiseReductionMode, RadioModel};
 use crate::sync_ext::MutexExt;
@@ -45,6 +46,11 @@ pub(crate) struct ClientState {
     pub(crate) tx_codec_stale_drop_count: u64,
     pub(crate) tx_codec_release_flush_count: u64,
     pub(crate) split: Option<SplitClientMetadata>,
+    /// Lane declared by the websocket request path (`/control`, `/media`) at
+    /// connect time, before the in-band `session_lane` command arrives. The
+    /// same-origin proxy dials with these paths; direct clients use `/` and
+    /// stay on the legacy any-lane behavior.
+    pub(crate) connect_lane_hint: Option<SplitSocketKind>,
 }
 
 impl Default for ClientState {
@@ -85,7 +91,16 @@ impl ClientState {
             tx_codec_stale_drop_count: 0,
             tx_codec_release_flush_count: 0,
             split: None,
+            connect_lane_hint: None,
         }
+    }
+}
+
+pub(crate) fn lane_hint_for_request_path(path: &str) -> Option<SplitSocketKind> {
+    match path {
+        "/control" => Some(SplitSocketKind::Control),
+        "/media" => Some(SplitSocketKind::Media),
+        _ => None,
     }
 }
 
@@ -119,7 +134,16 @@ pub(crate) fn handle_client(
     tx_codec_runtime_flags: TxCodecRuntimeFlags,
 ) {
     let _ = stream.set_nonblocking(true);
-    match accept_with_config(stream, Some(tci_websocket_config())) {
+    let mut connect_lane_hint = None;
+    let accept_result = accept_hdr_with_config(
+        stream,
+        |request: &Request, response: Response| {
+            connect_lane_hint = lane_hint_for_request_path(request.uri().path());
+            Ok(response)
+        },
+        Some(tci_websocket_config()),
+    );
+    match accept_result {
         Ok(mut websocket) => {
             let outbound = ClientOutbound::new();
             let (role, first_client, client_count) = register_client(
@@ -128,20 +152,30 @@ pub(crate) fn handle_client(
                 client_id,
                 outbound.clone(),
                 tx_codec_runtime_flags,
+                connect_lane_hint,
             );
             println!(
-                "saturn-bridge: TCI client {client_id} assigned {} role ({client_count} connected)",
-                role.as_tci()
+                "saturn-bridge: TCI client {client_id} assigned {} role ({client_count} connected){}",
+                role.as_tci(),
+                match connect_lane_hint {
+                    Some(SplitSocketKind::Control) => " [control path]",
+                    Some(SplitSocketKind::Media) => " [media path]",
+                    None => "",
+                }
             );
 
-            for message in initial_snapshot_messages(
-                &radio_model.lock_unpoisoned(),
-                remote_tx_rf_enabled,
-                client_id,
-                role,
-            ) {
-                let drops = outbound.enqueue(OutboundMessage::Text(message));
-                drop_count.fetch_add(drops, Ordering::Relaxed);
+            // A media-lane socket must never carry text; the paired control
+            // socket receives the snapshot instead.
+            if connect_lane_hint != Some(SplitSocketKind::Media) {
+                for message in initial_snapshot_messages(
+                    &radio_model.lock_unpoisoned(),
+                    remote_tx_rf_enabled,
+                    client_id,
+                    role,
+                ) {
+                    let drops = outbound.enqueue(OutboundMessage::Text(message));
+                    drop_count.fetch_add(drops, Ordering::Relaxed);
+                }
             }
             outbound.mark_writer_started();
 
@@ -321,16 +355,13 @@ pub(crate) fn register_client(
     client_id: u64,
     outbound: Arc<ClientOutbound>,
     tx_codec_runtime_flags: TxCodecRuntimeFlags,
+    connect_lane_hint: Option<SplitSocketKind>,
 ) -> (TciClientRole, bool, usize) {
     let mut clients = clients.lock_unpoisoned();
     let first_client = clients.is_empty();
-    clients.insert(
-        client_id,
-        ClientConnection {
-            outbound,
-            state: ClientState::with_tx_codec_runtime_flags(tx_codec_runtime_flags),
-        },
-    );
+    let mut state = ClientState::with_tx_codec_runtime_flags(tx_codec_runtime_flags);
+    state.connect_lane_hint = connect_lane_hint;
+    clients.insert(client_id, ClientConnection { outbound, state });
 
     let current_operator = operator_client_id.load(Ordering::SeqCst);
     let role = if current_operator == 0 || !clients.contains_key(&current_operator) {

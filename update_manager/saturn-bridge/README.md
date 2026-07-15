@@ -39,6 +39,11 @@ RX and TX, and exposes a TCI WebSocket frontend to browser clients.
 - WebSocket server, default `127.0.0.1:50001`
 - Split control/media sessions, explicit operator/viewer roles, and controller
   ownership arbitration
+- The websocket request path pre-declares the split lane: `/control` and
+  `/media` (used by the Saturn Go proxy) filter outbound traffic to that
+  lane from the moment of connect, and `/media` connects skip the text state
+  snapshot entirely. Any other path (e.g. `/`) keeps the legacy any-lane
+  behavior; the in-band `session_lane` command still performs pairing.
 - Intended browser path is the Saturn Go same-origin proxy (`/tci`); expose
   raw `:50001` only when you explicitly need direct access and trust the LAN.
 - **Commands received from client:**

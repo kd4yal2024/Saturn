@@ -551,7 +551,16 @@ pub(crate) fn client_wants_outbound_message(
     // suppressed on the media lane to give uplink mic frames sole ownership of
     // the media TCP send buffer. The bridge derives this from TX intent/armed/
     // keyed state; when it returns to false the suppression lifts automatically.
-    let lane = client.state.split.as_ref().and_then(|m| m.lane);
+    //
+    // Before the in-band session_lane command arrives, the lane declared by
+    // the websocket request path (connect_lane_hint) applies, so broadcasts
+    // never race the declaration onto the wrong lane.
+    let lane = client
+        .state
+        .split
+        .as_ref()
+        .and_then(|m| m.lane)
+        .or(client.state.connect_lane_hint);
     match message {
         OutboundMessage::Close => true,
         OutboundMessage::Text(_) | OutboundMessage::SafetyText(_) => {
