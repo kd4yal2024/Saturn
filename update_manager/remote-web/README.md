@@ -6,6 +6,12 @@ This directory contains the TypeScript runtime extracted from
 `/remote-assets/remote-next.js`, and the HTML consumes it through
 `globalThis.SaturnRemoteNext`.
 
+That seam is a flat api object in `src/remote-next-entry.ts`, kept exact in
+both directions by `npm run check:seam` (also a CI step): every name the
+template references must exist in the api object, and every api entry must be
+referenced by the template. When template work adds or drops an api name,
+update the api object in the same change.
+
 The bundle is required by `/remote-next`. DOM layout, WebGL spectrum/waterfall
 rendering, AudioWorklet setup, and some browser event wiring remain in the HTML
 template because they are tightly coupled to the live page.
@@ -25,6 +31,7 @@ template because they are tightly coupled to the live page.
 | `src/transport/` | RX frames, split sockets, transport selection, Phase 42 adaptation, and TX uplink |
 | `src/ui/` | Operator-display calculations such as meter math |
 | `tests/` | Vitest unit, integration, smoke, and Phase 44 acceptance coverage |
+| `scripts/check-template-seam.mjs` | Static template/bundle seam gate (CI) |
 | `scripts/validate-remote-next-layout.mjs` | Headless Chromium responsive-layout gate |
 
 The automated suite covers unit, transport, controller, smoke, responsive
@@ -39,6 +46,7 @@ Run commands from `update_manager/remote-web`:
 npm ci
 npm test
 npm run typecheck
+npm run check:seam
 npm run build
 npm run validate:remote-next-layout
 ```

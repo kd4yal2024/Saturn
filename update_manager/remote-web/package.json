@@ -8,6 +8,7 @@
     "test": "vitest run",
     "smoke:remote-next": "vitest run tests/remote-next-smoke.test.ts",
     "typecheck": "tsc --noEmit",
+    "check:seam": "node scripts/check-template-seam.mjs",
     "validate:remote-next-layout": "node scripts/validate-remote-next-layout.mjs"
   },
   "devDependencies": {

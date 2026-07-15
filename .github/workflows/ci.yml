@@ -110,6 +110,10 @@ jobs:
         run: npm run typecheck
         working-directory: update_manager/remote-web
 
+      - name: Check template/bundle seam
+        run: npm run check:seam
+        working-directory: update_manager/remote-web
+
       - name: Test
         run: npm test
         working-directory: update_manager/remote-web

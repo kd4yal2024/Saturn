@@ -10,6 +10,8 @@ It ships as a single page:
 
 The legacy inline `/remote` page (`saturn-remote.html` and its `saturn-remote-*.js` modules) was retired on 2026-07-14; `/remote`, `/saturn-remote`, and the TLS root `/` now redirect to `/remote-next`. Auth (basic-auth gate), the `saturn-bridge` TCI websocket, and persisted state (`remote_settings.json`, `remote_profiles.json`) are unchanged. Ongoing migration work now targets narrowing the template/bundle seam inside `/remote-next` itself.
 
+The template/bundle seam is the flat api object in `remote-web/src/remote-next-entry.ts`. It is kept exact — no unused exports, no unresolved template references — by `remote-web/scripts/check-template-seam.mjs` (`npm run check:seam`, enforced in CI).
+
 It is intentionally not a browser skin wrapped directly around `p2app`.
 The backend boundary is:
 
