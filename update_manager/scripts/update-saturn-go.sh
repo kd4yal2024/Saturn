@@ -5,7 +5,7 @@ set -euo pipefail
 # Rebuild and redeploy Saturn Update Manager (saturn-go) from the active Saturn repo.
 # Intended to be run from the web UI via /run (SSE terminal output).
 
-SCRIPT_VERSION="1.2.0"
+SCRIPT_VERSION="1.2.1"
 SCRIPT_NAME="$(basename "$0")"
 
 SKIP_GIT=0
@@ -476,7 +476,9 @@ if (( ! DRY_RUN )); then
   fi
   saturn_go_build_remote_web_assets "$REPO_ROOT/update_manager"
   saturn_go_copy_required_web_assets "$TEMPLATES_DIR" "$REPO_ROOT/update_manager" "$STAGE_WEB_DIR"
-  saturn_go_copy_shared_assets "$TEMPLATES_DIR" "$STAGE_WEB_DIR"
+  # The deploy broker only accepts flat regular files in webroot/ — the
+  # templates/assets/ directory tree cannot ride a self-update payload.
+  # Shared assets are delivered by install_saturn_go_nginx.sh instead.
   saturn_go_verify_remote_web_bundle "$STAGE_WEB_DIR"
   cp "$SCRIPTS_SRC_DIR/config.json" "$STAGE_WEB_DIR/config.json"
   cp "$SCRIPTS_SRC_DIR/themes.json" "$STAGE_WEB_DIR/themes.json"
