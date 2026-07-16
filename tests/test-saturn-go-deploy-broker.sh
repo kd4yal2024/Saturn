@@ -3,6 +3,7 @@ set -Eeuo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BROKER="$REPO_ROOT/update_manager/scripts/saturn-go-deploy-root.sh"
+INSTALLER="$REPO_ROOT/update_manager/install_saturn_go_nginx.sh"
 TMP_ROOT="$(mktemp -d)"
 trap 'rm -rf "$TMP_ROOT"' EXIT
 export SATURN_GO_DEPLOY_CONFIG="$TMP_ROOT/nonexistent-deploy-config"
@@ -63,5 +64,32 @@ printf '#!/bin/sh\nexit 0\n' >"$stage/deploy-root-helper.sh"
 chmod 0755 "$stage/deploy-root-helper.sh"
 (cd "$stage" && sha256sum deploy-root-helper.sh >>SHA256SUMS)
 expect_rejected "$stage" "staged executable helper"
+
+# The root broker owns migration of persisted Nginx sites. Exercise its pure
+# rewrite helper against both legacy and already-canonical redirect lines.
+# shellcheck disable=SC1090
+source "$BROKER"
+nginx_source="$TMP_ROOT/nginx-source"
+nginx_normalized="$TMP_ROOT/nginx-normalized"
+cat >"$nginx_source" <<'EOF'
+return 302 https://$host:8443/remote-next?phase42_split=1&phase44_tx_opus=1&phase44_tx_cfc=1;
+return 302 https://$host:8443/remote-next?transport=split&tx_opus=1&tx_cfc=1;
+return 302 https://$host:8443/remote-next;
+return 302 https://$host:8443/remote;
+EOF
+normalize_nginx_remote_redirects_file "$nginx_source" "$nginx_normalized"
+expected_nginx="$TMP_ROOT/nginx-expected"
+cat >"$expected_nginx" <<'EOF'
+return 302 https://$host:8443/remote-next;
+return 302 https://$host:8443/remote-next;
+return 302 https://$host:8443/remote-next;
+return 302 https://$host:8443/remote;
+EOF
+cmp "$expected_nginx" "$nginx_normalized"
+
+if grep -Eq 'return 302 .*remote-next\?' "$INSTALLER"; then
+  printf 'fresh installer still emits query-bearing remote-next redirects\n' >&2
+  exit 1
+fi
 
 printf 'deploy broker tests passed\n'

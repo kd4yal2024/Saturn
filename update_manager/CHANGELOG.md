@@ -91,9 +91,8 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
   Android TX audio with `accepted=opus_wb`, `codecDecodeFaults=0`,
   `codecPcmFallback=0`, and `txMicDrops=0`.
 - Fresh Nginx installs now redirect `/remote-next` and `/saturn/remote-next`
-  to the current beta query string by default
-  (`phase42_split=1&phase44_tx_opus=1&phase44_tx_cfc=1&client_bust=bridgeprefill240-cfcessb3`),
-  with `SATURN_REMOTE_NEXT_DEFAULT_QUERY` available as an installer override.
+  to the queryless TLS entry point. The Rust TLS listener owns the current
+  stable feature defaults, avoiding a second stale redirect configuration.
 - New shared `update_manager/scripts/saturn-go-web-assets.sh` web asset
   manifest sourced by both `install_saturn_go_nginx.sh` and
   `update-saturn-go.sh`, so installs and Saturn Go self-updates deploy the
@@ -167,6 +166,8 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
   runtime messages use feature names instead of development phase numbers.
   Existing `phase40_*`, `phase42_*`, and `phase44_*` bookmarks and browser
   storage remain compatible and are silently canonicalized to stable names.
+  Saturn Go self-deploys also migrate persisted Nginx redirects to the
+  queryless entry point and validate/reload Nginx transactionally.
 - `update-deskhpsdr.py` v1.1 now compacts routine apt/debconf/autoremove
   chatter in verbose web output, while keeping the raw build log intact.
   Its build helper no longer reinstalls the PulseAudio daemon on

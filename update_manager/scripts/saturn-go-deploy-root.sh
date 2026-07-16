@@ -22,13 +22,6 @@ mode, and checksum checks without changing the system.
 EOF
 }
 
-if [[ "${1:-}" == "--validate" ]]; then
-  VALIDATE_ONLY=1
-  shift
-fi
-[[ $# -eq 1 ]] || { usage >&2; exit 2; }
-STAGE_INPUT="$1"
-
 RUN_USER="pi"
 RUN_GROUP="pi"
 STAGING_ROOT="/var/lib/saturn-state/repo-staging"
@@ -41,6 +34,8 @@ BRIDGE_SERVICE="saturn-bridge.service"
 BRIDGE_SERVICE_FILE="/etc/systemd/system/saturn-bridge.service"
 WEB_ROOT="/var/lib/saturn-web"
 SCRIPTS_DIR="/opt/saturn-go/scripts"
+NGINX_SITE="/etc/nginx/sites-available/saturn"
+NGINX_SERVICE="nginx.service"
 BRIDGE_MAX_RATE_KHZ="192"
 BRIDGE_OPUS_ENABLED="1"
 BRIDGE_RF_TX_ENABLED="1"
@@ -150,6 +145,7 @@ BACKUP_DIR=""
 SNAPSHOT_DIR=""
 SATURN_GO_WAS_ACTIVE=0
 BRIDGE_WAS_ACTIVE=0
+NGINX_CONFIG_CHANGED=0
 
 cleanup_temporary_state(){
   if [[ -n "$BACKUP_DIR" && -d "$BACKUP_DIR" ]]; then
@@ -159,7 +155,6 @@ cleanup_temporary_state(){
     rm -rf "$SNAPSHOT_DIR"
   fi
 }
-trap cleanup_temporary_state EXIT
 
 backup_destination(){
   local dest="$1" key="$2" existed=0
@@ -177,6 +172,36 @@ install_payload_file(){
   local src="$1" dest="$2" mode="$3" owner="$4" group="$5" key="$6"
   backup_destination "$dest" "$key"
   install -D -m "$mode" -o "$owner" -g "$group" "$src" "$dest"
+}
+
+normalize_nginx_remote_redirects_file(){
+  local src="$1" dest="$2"
+  sed -E 's#return 302 https://\$host:8443/remote-next\?[^;]+;#return 302 https://$host:8443/remote-next;#g' \
+    "$src" >"$dest"
+}
+
+refresh_nginx_remote_redirects(){
+  local candidate
+  [[ -n "$NGINX_SITE" && -e "$NGINX_SITE" ]] || return 0
+  [[ -f "$NGINX_SITE" && ! -L "$NGINX_SITE" ]] || \
+    die "nginx site is not a regular file: $NGINX_SITE"
+
+  candidate="$BACKUP_DIR/nginx-site.candidate"
+  normalize_nginx_remote_redirects_file "$NGINX_SITE" "$candidate"
+  if cmp -s "$candidate" "$NGINX_SITE"; then
+    rm -f "$candidate"
+    return 0
+  fi
+
+  command -v nginx >/dev/null 2>&1 || die "nginx command not found while migrating $NGINX_SITE"
+  install_payload_file "$candidate" "$NGINX_SITE" 0644 root root nginx/sites-available/saturn
+  rm -f "$candidate"
+  NGINX_CONFIG_CHANGED=1
+  nginx -t
+  if systemctl is-active --quiet "$NGINX_SERVICE"; then
+    systemctl reload "$NGINX_SERVICE"
+  fi
+  info "normalized Saturn Remote redirects in $NGINX_SITE"
 }
 
 restore_payload(){
@@ -198,6 +223,11 @@ restore_payload(){
   fi
   if (( SATURN_GO_WAS_ACTIVE )); then
     systemctl start "$SATURN_GO_SERVICE" >/dev/null 2>&1 || true
+  fi
+  if (( NGINX_CONFIG_CHANGED )) && command -v nginx >/dev/null 2>&1 && nginx -t >/dev/null 2>&1; then
+    if systemctl is-active --quiet "$NGINX_SERVICE"; then
+      systemctl reload "$NGINX_SERVICE" >/dev/null 2>&1 || true
+    fi
   fi
 }
 
@@ -257,6 +287,19 @@ listener_owned_by_service(){
   [[ "$pid" =~ ^[1-9][0-9]*$ ]] || return 1
   ss -ltnp "sport = :$port" 2>/dev/null | grep -Fq "pid=$pid,"
 }
+
+if [[ "${BASH_SOURCE[0]}" != "$0" ]]; then
+  return 0
+fi
+
+if [[ "${1:-}" == "--validate" ]]; then
+  VALIDATE_ONLY=1
+  shift
+fi
+[[ $# -eq 1 ]] || { usage >&2; exit 2; }
+STAGE_INPUT="$1"
+
+trap cleanup_temporary_state EXIT
 
 load_root_config
 STAGE_DIR="$(validate_stage "$STAGE_INPUT" "$(( ! VALIDATE_ONLY ))")"
@@ -331,6 +374,8 @@ for _ in {1..20}; do
   sleep 1
 done
 curl -fsS --max-time 2 "$SATURN_GO_HEALTH_URL" >/dev/null
+
+refresh_nginx_remote_redirects
 
 trap - ERR
 write_status "success" "Validated payload installed" "0"

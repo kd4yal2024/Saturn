@@ -47,7 +47,6 @@ RUSTUP_INIT_URL="${RUSTUP_INIT_URL:-https://sh.rustup.rs}"
 RUSTUP_INIT_SHA256="${RUSTUP_INIT_SHA256:-6c30b75a75b28a96fd913a037c8581b580080b6ee9b8169a3c0feb1af7fe8caf}"
 TAILSCALE_INSTALL_URL="${TAILSCALE_INSTALL_URL:-https://tailscale.com/install.sh}"
 TAILSCALE_INSTALL_SHA256="${TAILSCALE_INSTALL_SHA256:-ada2fe9d54df0d3e5a77879470bda195b2c53d27ecd73aba6de270c795725625}"
-SATURN_REMOTE_NEXT_DEFAULT_QUERY="${SATURN_REMOTE_NEXT_DEFAULT_QUERY:-transport=split&tx_opus=1&tx_cfc=1}"
 SATURN_INSTALL_BRIDGE="${SATURN_INSTALL_BRIDGE:-1}"
 SATURN_REQUIRE_BRIDGE="${SATURN_REQUIRE_BRIDGE:-$SATURN_INSTALL_BRIDGE}"
 SATURN_BRIDGE_WDSP_FLAVOR="${SATURN_BRIDGE_WDSP_FLAVOR:-wdsp2}"
@@ -683,15 +682,15 @@ server {
   }
 
   location = /remote-next {
-    return 302 https://\$host:8443/remote-next?${SATURN_REMOTE_NEXT_DEFAULT_QUERY};
+    return 302 https://\$host:8443/remote-next;
   }
 
   location = /remote-next/ {
-    return 302 https://\$host:8443/remote-next?${SATURN_REMOTE_NEXT_DEFAULT_QUERY};
+    return 302 https://\$host:8443/remote-next;
   }
 
   location = /remote-next.html {
-    return 302 https://\$host:8443/remote-next?${SATURN_REMOTE_NEXT_DEFAULT_QUERY};
+    return 302 https://\$host:8443/remote-next;
   }
 
   location = /saturn/remote {
@@ -707,15 +706,15 @@ server {
   }
 
   location = /saturn/remote-next {
-    return 302 https://\$host:8443/remote-next?${SATURN_REMOTE_NEXT_DEFAULT_QUERY};
+    return 302 https://\$host:8443/remote-next;
   }
 
   location = /saturn/remote-next/ {
-    return 302 https://\$host:8443/remote-next?${SATURN_REMOTE_NEXT_DEFAULT_QUERY};
+    return 302 https://\$host:8443/remote-next;
   }
 
   location = /saturn/remote-next.html {
-    return 302 https://\$host:8443/remote-next?${SATURN_REMOTE_NEXT_DEFAULT_QUERY};
+    return 302 https://\$host:8443/remote-next;
   }
 
   location = /saturn/run {
