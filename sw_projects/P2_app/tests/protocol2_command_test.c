@@ -37,6 +37,18 @@ typedef struct
     TP2DDCConfig DDC[P2_SATURN_HARDWARE_DDC_COUNT];
 } TMockDDCActions;
 
+typedef struct
+{
+    unsigned int ActionCount;
+    unsigned int CWActionCount;
+    unsigned int MicActionCount;
+    unsigned int AttenuationActionCount;
+    TP2DUCCWConfig CW;
+    TP2DUCMicConfig Mic;
+    uint8_t TXAttenuation[P2_SATURN_ADC_COUNT];
+    uint8_t TXAttenuationADCOrder[P2_SATURN_ADC_COUNT];
+} TMockDUCActions;
+
 static void write_be_u16(uint8_t *Destination, uint16_t Value)
 {
     Destination[0] = (uint8_t)(Value >> 8);
@@ -120,6 +132,28 @@ static void set_ddc_wire_config(uint8_t Packet[P2_DDC_SPECIFIC_PACKET_SIZE],
     Packet[Offset] = (uint8_t)Source;
     write_be_u16(Packet + Offset + 1U, SampleRate);
     Packet[Offset + 5U] = SampleSize;
+}
+
+static void make_duc_specific_packet(uint8_t Packet[P2_DUC_SPECIFIC_PACKET_SIZE])
+{
+    memset(Packet, 0, P2_DUC_SPECIFIC_PACKET_SIZE);
+    write_be_u32(Packet, 0x90a0b0c0U);
+    Packet[4] = P2_SATURN_DAC_COUNT;
+    Packet[5] = 0xffU;
+    Packet[6] = 127U;
+    write_be_u16(Packet + 7, 700U);
+    Packet[9] = 60U;
+    Packet[10] = 50U;
+    write_be_u16(Packet + 11, 300U);
+    Packet[13] = 8U;
+    write_be_u16(Packet + 14, 192U);
+    Packet[16] = 24U;
+    Packet[17] = 9U;
+    Packet[50] = 0x3bU;
+    Packet[51] = 31U;
+    Packet[57] = 31U;
+    Packet[58] = 17U;
+    Packet[59] = 5U;
 }
 
 static void mock_set_port(void *Context, EP2GeneralPort Kind, uint8_t Index, uint16_t Port)
@@ -231,6 +265,45 @@ static const TP2DDCActionSink MockDDCSink = {
     .SetADCOptions = mock_set_adc_options,
     .SetDDCConfig = mock_set_ddc_config,
     .CommitDDCConfig = mock_commit_ddc_config,
+};
+
+static void mock_set_cw_config(void *Context, const TP2DUCCWConfig *Config)
+{
+    TMockDUCActions *Mock = Context;
+    assert(Mock != NULL);
+    assert(Config != NULL);
+    Mock->ActionCount++;
+    Mock->CWActionCount++;
+    Mock->CW = *Config;
+}
+
+static void mock_set_mic_config(void *Context, const TP2DUCMicConfig *Config)
+{
+    TMockDUCActions *Mock = Context;
+    assert(Mock != NULL);
+    assert(Config != NULL);
+    Mock->ActionCount++;
+    Mock->MicActionCount++;
+    Mock->Mic = *Config;
+}
+
+static void mock_set_tx_attenuation(void *Context, uint8_t ADCIndex,
+                                    uint8_t Attenuation)
+{
+    TMockDUCActions *Mock = Context;
+    assert(Mock != NULL);
+    assert(ADCIndex < P2_SATURN_ADC_COUNT);
+    assert(Mock->AttenuationActionCount < P2_SATURN_ADC_COUNT);
+    Mock->TXAttenuationADCOrder[Mock->AttenuationActionCount] = ADCIndex;
+    Mock->ActionCount++;
+    Mock->AttenuationActionCount++;
+    Mock->TXAttenuation[ADCIndex] = Attenuation;
+}
+
+static const TP2DUCActionSink MockDUCSink = {
+    .SetCWConfig = mock_set_cw_config,
+    .SetMicConfig = mock_set_mic_config,
+    .SetTXAttenuation = mock_set_tx_attenuation,
 };
 
 static void test_general_packet_decodes_all_fields(void)
@@ -542,6 +615,219 @@ static void test_incomplete_ddc_sink_and_forged_command_are_rejected(void)
     assert(!P2ApplyDDCSpecificCommand(&Command, NULL, &Mock));
 }
 
+static void test_duc_specific_packet_decodes_all_hardware_fields(void)
+{
+    uint8_t Packet[P2_DUC_SPECIFIC_PACKET_SIZE];
+    TP2DUCSpecificCommand Command;
+
+    make_duc_specific_packet(Packet);
+    assert(P2DecodeDUCSpecificCommand(Packet, sizeof(Packet), &Command));
+    assert(Command.Sequence == 0x90a0b0c0U);
+    assert(Command.DACCount == P2_SATURN_DAC_COUNT);
+    assert(Command.DUCSampleRate == 192U);
+    assert(Command.DUCSampleSize == 24U);
+    assert(Command.DUCPhaseShiftDegrees == 0U);
+    assert(Command.CW.EEREnabled);
+    assert(Command.CW.CWEnabled);
+    assert(Command.CW.ReverseKeys);
+    assert(Command.CW.IambicEnabled);
+    assert(Command.CW.SidetoneEnabled);
+    assert(Command.CW.ModeB);
+    assert(Command.CW.StrictSpacing);
+    assert(Command.CW.BreakIn);
+    assert(Command.CW.SidetoneLevel == 127U);
+    assert(Command.CW.SidetoneFrequencyHz == 700U);
+    assert(Command.CW.KeyerSpeedWPM == 60U);
+    assert(Command.CW.KeyerWeight == 50U);
+    assert(Command.CW.HangDelayMs == 300U);
+    assert(Command.CW.RFDelayMs == 8U);
+    assert(Command.CW.RampPeriodMs == 9U);
+    assert(Command.Mic.LineIn);
+    assert(Command.Mic.MicBoost);
+    assert(Command.Mic.MicPTTEnabled);
+    assert(Command.Mic.MicPTTOnTip);
+    assert(Command.Mic.MicBiasEnabled);
+    assert(Command.Mic.BalancedMicInput);
+    assert(Command.Mic.LineInGain == 31U);
+    assert(Command.TXAttenuation[0] == 5U);
+    assert(Command.TXAttenuation[1] == 17U);
+    assert(Command.TXAttenuation[2] == 31U);
+
+    Packet[50] |= 0x04U;
+    assert(P2DecodeDUCSpecificCommand(Packet, sizeof(Packet), &Command));
+    assert(!Command.Mic.MicPTTEnabled);
+}
+
+static void test_duc_specific_command_applies_through_mock_boundary(void)
+{
+    uint8_t Packet[P2_DUC_SPECIFIC_PACKET_SIZE];
+    TMockDUCActions Mock = {0};
+
+    make_duc_specific_packet(Packet);
+    assert(P2DecodeAndApplyDUCSpecificCommand(Packet, sizeof(Packet),
+                                               &MockDUCSink, &Mock));
+    assert(Mock.ActionCount == 4U);
+    assert(Mock.CWActionCount == 1U);
+    assert(Mock.MicActionCount == 1U);
+    assert(Mock.AttenuationActionCount == P2_SATURN_ADC_COUNT);
+    assert(Mock.CW.CWEnabled && Mock.CW.BreakIn);
+    assert(Mock.CW.SidetoneFrequencyHz == 700U);
+    assert(Mock.Mic.LineIn && Mock.Mic.BalancedMicInput);
+    assert(Mock.TXAttenuation[0] == 5U);
+    assert(Mock.TXAttenuation[1] == 17U);
+    assert(Mock.TXAttenuationADCOrder[0] == 1U);
+    assert(Mock.TXAttenuationADCOrder[1] == 0U);
+}
+
+static void test_sparse_zeus_duc_shape_remains_compatible(void)
+{
+    uint8_t Packet[P2_DUC_SPECIFIC_PACKET_SIZE] = {0};
+    TP2DUCSpecificCommand Command;
+
+    write_be_u32(Packet, 7U);
+    Packet[4] = P2_SATURN_DAC_COUNT;
+    write_be_u16(Packet + 14, 48U);
+    Packet[57] = 17U;
+    Packet[58] = 17U;
+    Packet[59] = 17U;
+    assert(P2DecodeDUCSpecificCommand(Packet, sizeof(Packet), &Command));
+    assert(!Command.CW.CWEnabled);
+    assert(Command.DUCSampleRate == 48U);
+    assert(Command.DUCSampleSize == 0U);
+    assert(Command.CW.KeyerWeight == 0U);
+    assert(Command.CW.RampPeriodMs == 0U);
+    assert(!Command.Mic.LineIn);
+    assert(Command.Mic.MicPTTEnabled);
+    assert(Command.TXAttenuation[0] == 17U);
+    assert(Command.TXAttenuation[1] == 17U);
+    assert(Command.TXAttenuation[2] == 17U);
+
+    // Some legacy clients leave the currently-unused DAC-count byte at zero.
+    Packet[4] = 0U;
+    assert(P2DecodeDUCSpecificCommand(Packet, sizeof(Packet), &Command));
+}
+
+static void test_malformed_duc_packets_never_reach_actions(void)
+{
+    uint8_t Packet[P2_DUC_SPECIFIC_PACKET_SIZE + 1U];
+    TP2DUCSpecificCommand Command;
+    TMockDUCActions Mock = {0};
+    size_t Index;
+
+    make_duc_specific_packet(Packet);
+    assert(!P2DecodeAndApplyDUCSpecificCommand(NULL, P2_DUC_SPECIFIC_PACKET_SIZE,
+                                                &MockDUCSink, &Mock));
+    assert(!P2DecodeAndApplyDUCSpecificCommand(Packet, P2_DUC_SPECIFIC_PACKET_SIZE - 1U,
+                                                &MockDUCSink, &Mock));
+    assert(!P2DecodeAndApplyDUCSpecificCommand(Packet, P2_DUC_SPECIFIC_PACKET_SIZE + 1U,
+                                                &MockDUCSink, &Mock));
+
+    Packet[4] = P2_SATURN_DAC_COUNT + 1U;
+    memset(&Command, 0xa5, sizeof(Command));
+    assert(!P2DecodeDUCSpecificCommand(Packet, P2_DUC_SPECIFIC_PACKET_SIZE, &Command));
+    for(Index = 0U; Index < sizeof(Command); Index++)
+        assert(((const uint8_t *)&Command)[Index] == 0U);
+
+    make_duc_specific_packet(Packet);
+    Packet[6] = 128U;
+    assert(!P2DecodeAndApplyDUCSpecificCommand(Packet, P2_DUC_SPECIFIC_PACKET_SIZE,
+                                                &MockDUCSink, &Mock));
+
+    make_duc_specific_packet(Packet);
+    Packet[9] = 61U;
+    assert(!P2DecodeAndApplyDUCSpecificCommand(Packet, P2_DUC_SPECIFIC_PACKET_SIZE,
+                                                &MockDUCSink, &Mock));
+
+    make_duc_specific_packet(Packet);
+    write_be_u16(Packet + 11, 1024U);
+    assert(!P2DecodeAndApplyDUCSpecificCommand(Packet, P2_DUC_SPECIFIC_PACKET_SIZE,
+                                                &MockDUCSink, &Mock));
+
+    make_duc_specific_packet(Packet);
+    Packet[10] = 32U;
+    assert(!P2DecodeAndApplyDUCSpecificCommand(Packet, P2_DUC_SPECIFIC_PACKET_SIZE,
+                                                &MockDUCSink, &Mock));
+
+    make_duc_specific_packet(Packet);
+    Packet[10] = 0U;
+    assert(!P2DecodeAndApplyDUCSpecificCommand(Packet, P2_DUC_SPECIFIC_PACKET_SIZE,
+                                                &MockDUCSink, &Mock));
+
+    make_duc_specific_packet(Packet);
+    Packet[10] = 67U;
+    assert(!P2DecodeAndApplyDUCSpecificCommand(Packet, P2_DUC_SPECIFIC_PACKET_SIZE,
+                                                &MockDUCSink, &Mock));
+
+    make_duc_specific_packet(Packet);
+    write_be_u16(Packet + 14, 44U);
+    assert(!P2DecodeAndApplyDUCSpecificCommand(Packet, P2_DUC_SPECIFIC_PACKET_SIZE,
+                                                &MockDUCSink, &Mock));
+
+    make_duc_specific_packet(Packet);
+    Packet[16] = 16U;
+    assert(!P2DecodeAndApplyDUCSpecificCommand(Packet, P2_DUC_SPECIFIC_PACKET_SIZE,
+                                                &MockDUCSink, &Mock));
+
+    make_duc_specific_packet(Packet);
+    Packet[17] = 4U;
+    assert(!P2DecodeAndApplyDUCSpecificCommand(Packet, P2_DUC_SPECIFIC_PACKET_SIZE,
+                                                &MockDUCSink, &Mock));
+
+    make_duc_specific_packet(Packet);
+    Packet[17] = 11U;
+    assert(!P2DecodeAndApplyDUCSpecificCommand(Packet, P2_DUC_SPECIFIC_PACKET_SIZE,
+                                                &MockDUCSink, &Mock));
+
+    make_duc_specific_packet(Packet);
+    write_be_u16(Packet + 26, 360U);
+    assert(!P2DecodeAndApplyDUCSpecificCommand(Packet, P2_DUC_SPECIFIC_PACKET_SIZE,
+                                                &MockDUCSink, &Mock));
+
+    make_duc_specific_packet(Packet);
+    Packet[50] |= 0x40U;
+    assert(!P2DecodeAndApplyDUCSpecificCommand(Packet, P2_DUC_SPECIFIC_PACKET_SIZE,
+                                                &MockDUCSink, &Mock));
+
+    make_duc_specific_packet(Packet);
+    Packet[51] = 32U;
+    assert(!P2DecodeAndApplyDUCSpecificCommand(Packet, P2_DUC_SPECIFIC_PACKET_SIZE,
+                                                &MockDUCSink, &Mock));
+
+    for(Index = 57U; Index <= 59U; Index++)
+    {
+        make_duc_specific_packet(Packet);
+        Packet[Index] = 32U;
+        assert(!P2DecodeAndApplyDUCSpecificCommand(Packet, P2_DUC_SPECIFIC_PACKET_SIZE,
+                                                    &MockDUCSink, &Mock));
+    }
+    assert(Mock.ActionCount == 0U);
+}
+
+static void test_incomplete_duc_sink_and_forged_command_are_rejected(void)
+{
+    uint8_t Packet[P2_DUC_SPECIFIC_PACKET_SIZE];
+    TP2DUCSpecificCommand Command;
+    TP2DUCActionSink IncompleteSink = MockDUCSink;
+    TMockDUCActions Mock = {0};
+
+    make_duc_specific_packet(Packet);
+    assert(P2DecodeDUCSpecificCommand(Packet, sizeof(Packet), &Command));
+    IncompleteSink.SetMicConfig = NULL;
+    assert(!P2ApplyDUCSpecificCommand(&Command, &IncompleteSink, &Mock));
+    assert(Mock.ActionCount == 0U);
+
+    Command.Mic.LineInGain = 32U;
+    assert(!P2ApplyDUCSpecificCommand(&Command, &MockDUCSink, &Mock));
+    assert(Mock.ActionCount == 0U);
+
+    assert(P2DecodeDUCSpecificCommand(Packet, sizeof(Packet), &Command));
+    Command.TXAttenuation[2] = 32U;
+    assert(!P2ApplyDUCSpecificCommand(&Command, &MockDUCSink, &Mock));
+    assert(Mock.ActionCount == 0U);
+    assert(!P2ApplyDUCSpecificCommand(NULL, &MockDUCSink, &Mock));
+    assert(!P2ApplyDUCSpecificCommand(&Command, NULL, &Mock));
+}
+
 int main(void)
 {
     test_general_packet_decodes_all_fields();
@@ -556,6 +842,11 @@ int main(void)
     test_all_legacy_ddc_interleave_combinations_decode();
     test_malformed_ddc_packets_never_reach_actions();
     test_incomplete_ddc_sink_and_forged_command_are_rejected();
+    test_duc_specific_packet_decodes_all_hardware_fields();
+    test_duc_specific_command_applies_through_mock_boundary();
+    test_sparse_zeus_duc_shape_remains_compatible();
+    test_malformed_duc_packets_never_reach_actions();
+    test_incomplete_duc_sink_and_forged_command_are_rejected();
     puts("protocol2 command boundary tests passed");
     return 0;
 }

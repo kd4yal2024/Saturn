@@ -13,6 +13,10 @@
 #define P2_DDC_SPECIFIC_PACKET_SIZE 1444U
 #define P2_PROTOCOL2_WIRE_ADC_COUNT 8U
 #define P2_SATURN_ADC_COUNT 2U
+#define P2_DUC_SPECIFIC_PACKET_SIZE 60U
+#define P2_PROTOCOL2_WIRE_DAC_COUNT 4U
+#define P2_SATURN_DAC_COUNT 1U
+#define P2_PROTOCOL2_TX_ATTENUATOR_COUNT 3U
 
 typedef enum
 {
@@ -109,6 +113,58 @@ typedef struct
     void (*CommitDDCConfig)(void *Context);
 } TP2DDCActionSink;
 
+typedef struct
+{
+    bool EEREnabled;
+    bool CWEnabled;
+    bool ReverseKeys;
+    bool IambicEnabled;
+    bool SidetoneEnabled;
+    bool ModeB;
+    bool StrictSpacing;
+    bool BreakIn;
+    uint8_t SidetoneLevel;
+    uint16_t SidetoneFrequencyHz;
+    uint8_t KeyerSpeedWPM;
+    uint8_t KeyerWeight;
+    uint16_t HangDelayMs;
+    uint8_t RFDelayMs;
+    uint8_t RampPeriodMs;
+} TP2DUCCWConfig;
+
+typedef struct
+{
+    bool LineIn;
+    bool MicBoost;
+    bool MicPTTEnabled;
+    bool MicPTTOnTip;
+    bool MicBiasEnabled;
+    bool BalancedMicInput;
+    uint8_t LineInGain;
+} TP2DUCMicConfig;
+
+typedef struct
+{
+    uint32_t Sequence;
+    uint8_t DACCount;
+    uint16_t DUCSampleRate;
+    uint8_t DUCSampleSize;
+    uint16_t DUCPhaseShiftDegrees;
+    TP2DUCCWConfig CW;
+    TP2DUCMicConfig Mic;
+    uint8_t TXAttenuation[P2_PROTOCOL2_TX_ATTENUATOR_COUNT];
+} TP2DUCSpecificCommand;
+
+// Domain-level boundary for a validated transmit/DUC-specific command. Only
+// Saturn's implemented ADC attenuators are applied; all three Protocol 2 wire
+// attenuation fields are nevertheless decoded and validated first.
+typedef struct
+{
+    void (*SetCWConfig)(void *Context, const TP2DUCCWConfig *Config);
+    void (*SetMicConfig)(void *Context, const TP2DUCMicConfig *Config);
+    void (*SetTXAttenuation)(void *Context, uint8_t ADCIndex, uint8_t Attenuation);
+} TP2DUCActionSink;
+
 bool P2DecodeGeneralCommand(const uint8_t *Packet, size_t PacketLength,
                             TP2GeneralCommand *Command);
 bool P2ApplyGeneralCommand(const TP2GeneralCommand *Command,
@@ -122,5 +178,12 @@ bool P2ApplyDDCSpecificCommand(const TP2DDCSpecificCommand *Command,
                                const TP2DDCActionSink *Sink, void *Context);
 bool P2DecodeAndApplyDDCSpecificCommand(const uint8_t *Packet, size_t PacketLength,
                                         const TP2DDCActionSink *Sink, void *Context);
+
+bool P2DecodeDUCSpecificCommand(const uint8_t *Packet, size_t PacketLength,
+                                TP2DUCSpecificCommand *Command);
+bool P2ApplyDUCSpecificCommand(const TP2DUCSpecificCommand *Command,
+                               const TP2DUCActionSink *Sink, void *Context);
+bool P2DecodeAndApplyDUCSpecificCommand(const uint8_t *Packet, size_t PacketLength,
+                                        const TP2DUCActionSink *Sink, void *Context);
 
 #endif

@@ -26,12 +26,57 @@
 #include <stdio.h>
 #include <string.h>
 #include "../common/saturnregisters.h"
-#include "../common/byteio.h"
 #include <pthread.h>
 #include <syscall.h>
 #include "controller_lease.h"
+#include "protocol2_command.h"
 
+_Static_assert(P2_DUC_SPECIFIC_PACKET_SIZE == VDUCSPECIFICSIZE,
+               "Protocol 2 DUC packet size must match the listener buffer");
+_Static_assert(P2_SATURN_ADC_COUNT == 2U,
+               "DUC attenuation mapping expects Saturn's two ADCs");
 
+static void ApplyCWConfig(void *Context, const TP2DUCCWConfig *Config)
+{
+    (void)Context;
+    SetCWIambicKeyer(Config->KeyerSpeedWPM, Config->KeyerWeight,
+                    Config->ReverseKeys, Config->ModeB, Config->StrictSpacing,
+                    Config->IambicEnabled, Config->BreakIn);
+    SetCWSidetoneEnabled(Config->SidetoneEnabled);
+    EnableCW(Config->CWEnabled, Config->BreakIn);
+    SetCWSidetoneVol(Config->SidetoneLevel);
+    SetCWSidetoneFrequency(Config->SidetoneFrequencyHz);
+    SetCWPTTDelay(Config->RFDelayMs);
+    SetCWHangTime(Config->HangDelayMs);
+    if(Config->RampPeriodMs != 0U)
+        InitialiseCWKeyerRamp(true, (uint32_t)Config->RampPeriodMs * 1000U);
+}
+
+static void ApplyMicConfig(void *Context, const TP2DUCMicConfig *Config)
+{
+    (void)Context;
+    // The codec requires source selection before boost and line-gain changes.
+    SetMicLineInput(Config->LineIn);
+    SetMicBoost(Config->MicBoost);
+    SetOrionMicOptions(Config->MicPTTOnTip, Config->MicBiasEnabled,
+                       Config->MicPTTEnabled);
+    SetBalancedMicInput(Config->BalancedMicInput);
+    SetCodecLineInGain(Config->LineInGain);
+}
+
+static void ApplyTXAttenuation(void *Context, uint8_t ADCIndex, uint8_t Attenuation)
+{
+    const EADCSelect ADC = (ADCIndex == 0U) ? eADC1 : eADC2;
+
+    (void)Context;
+    SetADCAttenuator(ADC, Attenuation, false, true);
+}
+
+static const TP2DUCActionSink DUCActionSink = {
+    .SetCWConfig = ApplyCWConfig,
+    .SetMicConfig = ApplyMicConfig,
+    .SetTXAttenuation = ApplyTXAttenuation,
+};
 
 //
 // listener thread for incoming DUC specific packets
@@ -44,15 +89,7 @@ void *IncomingDUCSpecific(void *arg)                    // listener thread
     struct iovec iovecinst;                               // iovcnt buffer - 1 for each outgoing buffer
     struct msghdr datagram;                               // multiple incoming message header
     int size;                                             // UDP datagram length
-    uint8_t Byte;
-    uint16_t SidetoneFreq;                                // freq for audio sidetone
-    uint8_t IambicSpeed;                                  // WPM
-    uint8_t IambicWeight;                                 //
-    uint8_t SidetoneVolume;
-    uint8_t CWRFDelay;
-    uint16_t CWHangDelay;
-    uint8_t CWRampTime;
-    uint32_t CWRampTime_us;
+    TP2DUCSpecificCommand Command;
 
     ThreadData = (struct ThreadSocketData *)arg;
     atomic_store(&ThreadData->Active, true);
@@ -94,48 +131,15 @@ void *IncomingDUCSpecific(void *arg)                    // listener thread
           continue;
       if(size == VDUCSPECIFICSIZE)
       {
+          if(!P2DecodeDUCSpecificCommand(UDPInBuffer, (size_t)size, &Command))
+              continue;
           if(!ControllerLeaseMatches(&addr_from))
+              continue;
+          if(!P2ApplyDUCSpecificCommand(&Command, &DUCActionSink, NULL))
               continue;
           atomic_store(&NewMessageReceived, true);
           if(UseDebug)
               printf("DUC packet received\n");
-// iambic settings
-          IambicSpeed = *(uint8_t*)(UDPInBuffer+9);               // keyer speed
-          IambicWeight = *(uint8_t*)(UDPInBuffer+10);             // keyer weight
-          Byte = *(uint8_t*)(UDPInBuffer+5);                      // keyer bool bits
-          SetCWIambicKeyer(IambicSpeed, IambicWeight, (bool)((Byte >> 2)&1), (bool)((Byte >> 5)&1), 
-                          (bool)((Byte >> 6)&1), (bool)((Byte >> 3)&1), (bool)((Byte >> 7)&1));
-// general CW settings
-          SetCWSidetoneEnabled((bool)((Byte >> 4)&1));
-          EnableCW((bool)((Byte >> 1)&1), (bool)((Byte >> 7)&1));   // CW enabled bit, breakin bit
-          SidetoneVolume = *(uint8_t*)(UDPInBuffer+6);            // keyer speed
-          SidetoneFreq = rd_be_u16(UDPInBuffer+7);                // get frequency
-          SetCWSidetoneVol(SidetoneVolume);
-          SetCWSidetoneFrequency(SidetoneFreq);
-          CWRFDelay = *(uint8_t*)(UDPInBuffer+13);                // delay before CW on
-          CWHangDelay = rd_be_u16(UDPInBuffer+11);                // delay before CW off
-          SetCWPTTDelay(CWRFDelay);
-          SetCWHangTime(CWHangDelay);
-          CWRampTime = *(uint8_t*)(UDPInBuffer+17);               // ramp transition time
-          if(CWRampTime != 0)                                     // if ramp period supported by client app
-          {
-              CWRampTime_us = 1000 * CWRampTime;
-              InitialiseCWKeyerRamp(true, CWRampTime_us);         // create required ramp, P2
-          }
-
-// mic and line in options
-// changed order, so mic/line selection is made before gain setting
-          Byte = *(uint8_t*)(UDPInBuffer+50);                     // mic/line options
-          SetMicLineInput((bool)(Byte&1));
-          SetMicBoost((bool)((Byte >> 1)&1));
-          SetOrionMicOptions((bool)((Byte >> 3)&1), (bool)((Byte >> 4)&1), (bool)((~Byte >> 2)&1));          
-          SetBalancedMicInput((bool)((Byte >> 5)&1));
-          Byte = *(uint8_t*)(UDPInBuffer+51);                     // line in gain
-          SetCodecLineInGain(Byte);
-          Byte = *(uint8_t*)(UDPInBuffer+58);                     // ADC1 att on TX
-          SetADCAttenuator(eADC2, Byte, false, true);
-          Byte = *(uint8_t*)(UDPInBuffer+59);                     // ADC1 att on TX
-          SetADCAttenuator(eADC1, Byte, false, true);
       }
     }
 //
@@ -146,5 +150,4 @@ void *IncomingDUCSpecific(void *arg)                    // listener thread
     atomic_store(&ThreadData->Active, false);     // indicate it is closed
     return NULL;
 }
-
 

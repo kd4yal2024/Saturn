@@ -11,6 +11,20 @@
 #define P2_DDC_SYNC_BASE_OFFSET 1363U
 #define P2_DDC_SYNC_STRIDE 2U
 #define P2_DDC_INTERLEAVE_PAIR_COUNT 4U
+#define P2_DUC_MODE_OFFSET 5U
+#define P2_DUC_MIC_OPTIONS_OFFSET 50U
+#define P2_DUC_TX_ATTENUATION_BASE_OFFSET 57U
+#define P2_DUC_SIDETONE_LEVEL_MAX 127U
+#define P2_DUC_KEYER_SPEED_MAX 60U
+#define P2_DUC_KEYER_WEIGHT_MIN 33U
+#define P2_DUC_KEYER_WEIGHT_MAX 66U
+#define P2_DUC_RAMP_PERIOD_MIN_MS 5U
+#define P2_DUC_RAMP_PERIOD_MAX_MS 10U
+#define P2_DUC_HANG_DELAY_MAX_MS 1023U
+#define P2_DUC_LINE_IN_GAIN_MAX 31U
+#define P2_DUC_TX_ATTENUATION_MAX 31U
+#define P2_DUC_MIC_OPTIONS_MASK 0x3fU
+#define P2_DUC_PHASE_SHIFT_MAX_DEGREES 359U
 
 _Static_assert((P2_PROTOCOL2_WIRE_DDC_COUNT % 8U) == 0U,
                "Protocol 2 DDC enable bitmap must contain whole bytes");
@@ -20,6 +34,10 @@ _Static_assert(P2_SATURN_ADVERTISED_DDC_COUNT == P2_SATURN_HARDWARE_DDC_COUNT,
                "Saturn discovery must advertise the tested hardware DDC count");
 _Static_assert(P2_SATURN_ADC_COUNT <= P2_PROTOCOL2_WIRE_ADC_COUNT,
                "Saturn ADC count cannot exceed the Protocol 2 wire maximum");
+_Static_assert(P2_SATURN_DAC_COUNT <= P2_PROTOCOL2_WIRE_DAC_COUNT,
+               "Saturn DAC count cannot exceed the Protocol 2 wire maximum");
+_Static_assert(P2_SATURN_ADC_COUNT <= P2_PROTOCOL2_TX_ATTENUATOR_COUNT,
+               "Saturn ADC count cannot exceed DUC attenuation fields");
 
 static bool IncrementingPortRangeFits(uint16_t BasePort, uint8_t PortCount)
 {
@@ -144,7 +162,7 @@ bool P2DecodeAndApplyGeneralCommand(const uint8_t *Packet, size_t PacketLength,
     return P2ApplyGeneralCommand(&Command, Sink, Context);
 }
 
-static bool DDCEnabledSampleRateIsSupported(uint16_t SampleRate)
+static bool Protocol2SampleRateIsSupported(uint16_t SampleRate)
 {
     return (SampleRate == 48U) || (SampleRate == 96U) || (SampleRate == 192U) ||
            (SampleRate == 384U) || (SampleRate == 768U) || (SampleRate == 1536U);
@@ -160,7 +178,7 @@ static bool DDCConfigIsValid(const TP2DDCConfig *Config, uint8_t DDCIndex)
         return false;
     if(!Config->Enabled)
         return !Config->Interleaved;
-    return DDCEnabledSampleRateIsSupported(Config->SampleRate) &&
+    return Protocol2SampleRateIsSupported(Config->SampleRate) &&
            (Config->SampleSize == 24U);
 }
 
@@ -297,4 +315,145 @@ bool P2DecodeAndApplyDDCSpecificCommand(const uint8_t *Packet, size_t PacketLeng
     if(!P2DecodeDDCSpecificCommand(Packet, PacketLength, &Command))
         return false;
     return P2ApplyDDCSpecificCommand(&Command, Sink, Context);
+}
+
+static bool DUCCWConfigIsValid(const TP2DUCCWConfig *Config)
+{
+    if((Config == NULL) || (Config->SidetoneLevel > P2_DUC_SIDETONE_LEVEL_MAX) ||
+       (Config->KeyerSpeedWPM > P2_DUC_KEYER_SPEED_MAX) ||
+       (Config->HangDelayMs > P2_DUC_HANG_DELAY_MAX_MS))
+        return false;
+    if(Config->CWEnabled && (Config->KeyerWeight == 0U))
+        return false;
+    if((Config->KeyerWeight != 0U) &&
+       ((Config->KeyerWeight < P2_DUC_KEYER_WEIGHT_MIN) ||
+        (Config->KeyerWeight > P2_DUC_KEYER_WEIGHT_MAX)))
+        return false;
+    return (Config->RampPeriodMs == 0U) ||
+           ((Config->RampPeriodMs >= P2_DUC_RAMP_PERIOD_MIN_MS) &&
+            (Config->RampPeriodMs <= P2_DUC_RAMP_PERIOD_MAX_MS));
+}
+
+static bool DUCMicConfigIsValid(const TP2DUCMicConfig *Config)
+{
+    return (Config != NULL) && (Config->LineInGain <= P2_DUC_LINE_IN_GAIN_MAX);
+}
+
+static bool DUCSpecificCommandIsValid(const TP2DUCSpecificCommand *Command)
+{
+    uint8_t Index;
+
+    if((Command == NULL) || (Command->DACCount > P2_SATURN_DAC_COUNT) ||
+       ((Command->DUCSampleRate != 0U) &&
+        !Protocol2SampleRateIsSupported(Command->DUCSampleRate)) ||
+       ((Command->DUCSampleSize != 0U) && (Command->DUCSampleSize != 24U)) ||
+       (Command->DUCPhaseShiftDegrees > P2_DUC_PHASE_SHIFT_MAX_DEGREES) ||
+       !DUCCWConfigIsValid(&Command->CW) || !DUCMicConfigIsValid(&Command->Mic))
+        return false;
+    for(Index = 0U; Index < P2_PROTOCOL2_TX_ATTENUATOR_COUNT; Index++)
+    {
+        if(Command->TXAttenuation[Index] > P2_DUC_TX_ATTENUATION_MAX)
+            return false;
+    }
+    return true;
+}
+
+bool P2DecodeDUCSpecificCommand(const uint8_t *Packet, size_t PacketLength,
+                                TP2DUCSpecificCommand *Command)
+{
+    uint8_t Index;
+    uint8_t MicOptions;
+    uint8_t Mode;
+
+    if(Command == NULL)
+        return false;
+    memset(Command, 0, sizeof(*Command));
+    if((Packet == NULL) || (PacketLength != P2_DUC_SPECIFIC_PACKET_SIZE))
+        return false;
+
+    MicOptions = Packet[P2_DUC_MIC_OPTIONS_OFFSET];
+    if((MicOptions & (uint8_t)~P2_DUC_MIC_OPTIONS_MASK) != 0U)
+        return false;
+
+    Command->Sequence = rd_be_u32(Packet);
+    Command->DACCount = Packet[4];
+    Mode = Packet[P2_DUC_MODE_OFFSET];
+    Command->CW.EEREnabled = (Mode & 0x01U) != 0U;
+    Command->CW.CWEnabled = (Mode & 0x02U) != 0U;
+    Command->CW.ReverseKeys = (Mode & 0x04U) != 0U;
+    Command->CW.IambicEnabled = (Mode & 0x08U) != 0U;
+    Command->CW.SidetoneEnabled = (Mode & 0x10U) != 0U;
+    Command->CW.ModeB = (Mode & 0x20U) != 0U;
+    Command->CW.StrictSpacing = (Mode & 0x40U) != 0U;
+    Command->CW.BreakIn = (Mode & 0x80U) != 0U;
+    Command->CW.SidetoneLevel = Packet[6];
+    Command->CW.SidetoneFrequencyHz = rd_be_u16(Packet + 7);
+    Command->CW.KeyerSpeedWPM = Packet[9];
+    Command->CW.KeyerWeight = Packet[10];
+    Command->CW.HangDelayMs = rd_be_u16(Packet + 11);
+    Command->CW.RFDelayMs = Packet[13];
+    Command->DUCSampleRate = rd_be_u16(Packet + 14);
+    Command->DUCSampleSize = Packet[16];
+    Command->CW.RampPeriodMs = Packet[17];
+    Command->DUCPhaseShiftDegrees = rd_be_u16(Packet + 26);
+
+    Command->Mic.LineIn = (MicOptions & 0x01U) != 0U;
+    Command->Mic.MicBoost = (MicOptions & 0x02U) != 0U;
+    Command->Mic.MicPTTEnabled = (MicOptions & 0x04U) == 0U;
+    Command->Mic.MicPTTOnTip = (MicOptions & 0x08U) != 0U;
+    Command->Mic.MicBiasEnabled = (MicOptions & 0x10U) != 0U;
+    Command->Mic.BalancedMicInput = (MicOptions & 0x20U) != 0U;
+    Command->Mic.LineInGain = Packet[51];
+
+    // Store attenuation by Protocol 2 ADC index: byte 59 is ADC0, byte 58 is
+    // ADC1, and byte 57 is ADC2. Saturn applies ADC0 and ADC1 only.
+    for(Index = 0U; Index < P2_PROTOCOL2_TX_ATTENUATOR_COUNT; Index++)
+    {
+        Command->TXAttenuation[Index] =
+            Packet[P2_DUC_TX_ATTENUATION_BASE_OFFSET +
+                   (P2_PROTOCOL2_TX_ATTENUATOR_COUNT - 1U - Index)];
+    }
+
+    if(!DUCSpecificCommandIsValid(Command))
+    {
+        memset(Command, 0, sizeof(*Command));
+        return false;
+    }
+    return true;
+}
+
+static bool DUCActionSinkIsComplete(const TP2DUCActionSink *Sink)
+{
+    return (Sink != NULL) && (Sink->SetCWConfig != NULL) &&
+           (Sink->SetMicConfig != NULL) && (Sink->SetTXAttenuation != NULL);
+}
+
+bool P2ApplyDUCSpecificCommand(const TP2DUCSpecificCommand *Command,
+                               const TP2DUCActionSink *Sink, void *Context)
+{
+    uint8_t Index;
+
+    if(!DUCSpecificCommandIsValid(Command) || !DUCActionSinkIsComplete(Sink))
+        return false;
+
+    Sink->SetCWConfig(Context, &Command->CW);
+    Sink->SetMicConfig(Context, &Command->Mic);
+    // Preserve the listener's established wire order: Protocol ADC1 (Saturn
+    // eADC2/reference) is updated before Protocol ADC0 (Saturn eADC1/feedback).
+    for(Index = P2_SATURN_ADC_COUNT; Index > 0U; Index--)
+    {
+        const uint8_t ADCIndex = (uint8_t)(Index - 1U);
+        Sink->SetTXAttenuation(Context, ADCIndex, Command->TXAttenuation[ADCIndex]);
+    }
+    return true;
+}
+
+bool P2DecodeAndApplyDUCSpecificCommand(const uint8_t *Packet, size_t PacketLength,
+                                        const TP2DUCActionSink *Sink, void *Context)
+{
+    TP2DUCSpecificCommand Command;
+
+    if(!P2DecodeDUCSpecificCommand(Packet, PacketLength, &Command))
+        return false;
+    return P2ApplyDUCSpecificCommand(&Command, Sink, Context);
 }
