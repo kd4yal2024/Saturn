@@ -6,8 +6,13 @@
 #include <stdint.h>
 
 #define P2_GENERAL_PACKET_SIZE 60U
-#define P2_GENERAL_DDC_COUNT 10U
+#define P2_PROTOCOL2_WIRE_DDC_COUNT 80U
+#define P2_SATURN_HARDWARE_DDC_COUNT 10U
+#define P2_SATURN_ADVERTISED_DDC_COUNT 10U
 #define P2_GENERAL_WIDEBAND_COUNT 2U
+#define P2_DDC_SPECIFIC_PACKET_SIZE 1444U
+#define P2_PROTOCOL2_WIRE_ADC_COUNT 8U
+#define P2_SATURN_ADC_COUNT 2U
 
 typedef enum
 {
@@ -67,11 +72,55 @@ typedef struct
                             uint8_t AlexEnableBits);
 } TP2GeneralActionSink;
 
+typedef enum
+{
+    eP2DDCSourceADC1 = 0,
+    eP2DDCSourceADC2,
+    eP2DDCSourceTXSamples,
+    eP2DDCSourceCount
+} EP2DDCSource;
+
+typedef struct
+{
+    bool Enabled;
+    bool Interleaved;
+    EP2DDCSource Source;
+    uint16_t SampleRate;
+    uint8_t SampleSize;
+} TP2DDCConfig;
+
+typedef struct
+{
+    uint32_t Sequence;
+    uint8_t ADCCount;
+    bool ADCDither[P2_SATURN_ADC_COUNT];
+    bool ADCRandom[P2_SATURN_ADC_COUNT];
+    uint16_t EnableMask;
+    TP2DDCConfig DDC[P2_SATURN_HARDWARE_DDC_COUNT];
+} TP2DDCSpecificCommand;
+
+// Domain-level boundary for a validated receive/DDC-specific command. The
+// concrete sink performs the register and stream-reconfiguration operations.
+typedef struct
+{
+    void (*SetADCCount)(void *Context, uint8_t Count);
+    void (*SetADCOptions)(void *Context, uint8_t ADCIndex, bool Dither, bool Random);
+    void (*SetDDCConfig)(void *Context, uint8_t DDCIndex, const TP2DDCConfig *Config);
+    void (*CommitDDCConfig)(void *Context);
+} TP2DDCActionSink;
+
 bool P2DecodeGeneralCommand(const uint8_t *Packet, size_t PacketLength,
                             TP2GeneralCommand *Command);
 bool P2ApplyGeneralCommand(const TP2GeneralCommand *Command,
                            const TP2GeneralActionSink *Sink, void *Context);
 bool P2DecodeAndApplyGeneralCommand(const uint8_t *Packet, size_t PacketLength,
                                     const TP2GeneralActionSink *Sink, void *Context);
+
+bool P2DecodeDDCSpecificCommand(const uint8_t *Packet, size_t PacketLength,
+                                TP2DDCSpecificCommand *Command);
+bool P2ApplyDDCSpecificCommand(const TP2DDCSpecificCommand *Command,
+                               const TP2DDCActionSink *Sink, void *Context);
+bool P2DecodeAndApplyDDCSpecificCommand(const uint8_t *Packet, size_t PacketLength,
+                                        const TP2DDCActionSink *Sink, void *Context);
 
 #endif

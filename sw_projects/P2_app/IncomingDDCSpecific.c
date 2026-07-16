@@ -25,13 +25,61 @@
 #include <stdio.h>
 #include <string.h>
 #include "../common/saturnregisters.h"
-#include "../common/byteio.h"
 #include "../common/p23_perf_telemetry.h"
 #include "OutDDCIQ.h"
 #include "controller_lease.h"
 #include <pthread.h>
 #include <syscall.h>
 
+_Static_assert(P2_SATURN_HARDWARE_DDC_COUNT == VNUMDDC,
+               "Protocol 2 DDC command count must match Saturn hardware");
+
+static void ApplyDDCCount(void *Context, uint8_t Count)
+{
+  (void)Context;
+  SetADCCount(Count);
+}
+
+static void ApplyADCOptions(void *Context, uint8_t ADCIndex, bool Dither, bool Random)
+{
+  (void)Context;
+  SetADCOptions((ADCIndex == 0U) ? eADC1 : eADC2, false, Dither, Random);
+}
+
+static void ApplyDDCConfig(void *Context, uint8_t DDCIndex, const TP2DDCConfig *Config)
+{
+  EADCSelect ADC;
+
+  (void)Context;
+  switch(Config->Source)
+  {
+    case eP2DDCSourceADC1: ADC = eADC1; break;
+    case eP2DDCSourceADC2: ADC = eADC2; break;
+    case eP2DDCSourceTXSamples: ADC = eTXSamples; break;
+    case eP2DDCSourceCount:
+    default: return;
+  }
+
+  SetDDCSampleSize(DDCIndex, Config->SampleSize);
+  SetDDCADC(DDCIndex, ADC);
+  SetP2SampleRate(DDCIndex, Config->Enabled, Config->SampleRate, Config->Interleaved);
+  P23PerfTelemetrySetDDCConfig(DDCIndex, Config->Enabled,
+                              Config->Interleaved, Config->SampleRate);
+}
+
+static void CommitDDCConfig(void *Context)
+{
+  (void)Context;
+  if(WriteP2DDCRateRegister())
+    HandlerCheckDDCSettings();
+}
+
+static const TP2DDCActionSink DDCActionSink = {
+  .SetADCCount = ApplyDDCCount,
+  .SetADCOptions = ApplyADCOptions,
+  .SetDDCConfig = ApplyDDCConfig,
+  .CommitDDCConfig = CommitDDCConfig,
+};
 
 
 
@@ -46,12 +94,7 @@ void *IncomingDDCSpecific(void *arg)                    // listener thread
   struct iovec iovecinst;                               // iovcnt buffer - 1 for each outgoing buffer
   struct msghdr datagram;                               // multiple incoming message header
   int size;                                             // UDP datagram length
-  uint8_t Byte1, Byte2;                                 // received data
-  bool Dither, Random;                                  // ADC bits
-  bool Enabled, Interleaved;                            // DDC settings
-  uint16_t Word, Word2;                                 // 16 bit read value
-  int i;                                                // counter
-  EADCSelect ADC = eADC1;                               // ADC to use for a DDC
+  TP2DDCSpecificCommand Command;
 
   ThreadData = (struct ThreadSocketData *)arg;
   atomic_store(&ThreadData->Active, true);
@@ -93,117 +136,15 @@ void *IncomingDDCSpecific(void *arg)                    // listener thread
       continue;
     if(size == VDDCSPECIFICSIZE)
     {
+      if(!P2DecodeDDCSpecificCommand(UDPInBuffer, (size_t)size, &Command))
+        continue;
       if(!ControllerLeaseMatches(&addr_from))
+        continue;
+      if(!P2ApplyDDCSpecificCommand(&Command, &DDCActionSink, NULL))
         continue;
       atomic_store(&NewMessageReceived, true);
       if(UseDebug)
         printf("DDC specific packet received\n");
-      // get ADC details:
-      Byte1 = *(uint8_t*)(UDPInBuffer+4);                   // get ADC count
-      SetADCCount(Byte1);
-      Byte1 = *(uint8_t*)(UDPInBuffer+5);                   // get ADC Dither bits
-      Byte2 = *(uint8_t*)(UDPInBuffer+6);                   // get ADC Random bits
-      Dither  = (bool)(Byte1&1);
-      Random  = (bool)(Byte2&1);
-      SetADCOptions(eADC1, false, Dither, Random);          // ADC1 settings
-      Byte1 = Byte1 >> 1;                                   // move onto ADC bits
-      Byte2 = Byte2 >> 1;
-      Dither  = (bool)(Byte1&1);
-      Random  = (bool)(Byte2&1);
-      SetADCOptions(eADC2, false, Dither, Random);          // ADC2 settings
-      
-      //
-      // main settings for each DDC
-      // reuse "dither" for interleaved with next;
-      // reuse "random" for DDC enabled.
-      // be aware an interleaved "odd" DDC will usually be set to disabled, and we need to revert this!
-      //
-      Word = rd_le_u16(UDPInBuffer + 7);                   // get DDC enables 15:0 (Thetis/P2 compatibility)
-      for(i=0; i<VNUMDDC; i++)
-      {
-        Enabled = (bool)(Word & 1);                        // get enable state
-        Byte1 = *(uint8_t*)(UDPInBuffer+i*6+17);          // get ADC for this DDC
-        Word2 = rd_be_u16(UDPInBuffer+i*6+18);            // get sample rate for this DDC
-        Byte2 = *(uint8_t*)(UDPInBuffer+i*6+22);          // get sample size for this DDC
-        SetDDCSampleSize(i, Byte2);
-        if(Byte1 == 0)
-          ADC = eADC1;
-        else if(Byte1 == 1)
-          ADC = eADC2;
-        else if(Byte1 == 2)
-          ADC = eTXSamples;
-        SetDDCADC(i, ADC);
-
-        Interleaved = false;                                 // assume no synch
-        // finally DDC synchronisation: my implementation it seems isn't what the spec intended!
-        // check: is DDC1 programmed to sync with DDC0;
-        // check: is DDC3 programmed to sync with DDC2;
-        // check: is DDC5 programmed to sync with DDC4;
-        // check: is DDC7 programmed to sync with DDC6;
-        // check: if DDC1 synch to DDC0, enable it;
-        // check: if DDC3 synch to DDC2, enable it;
-        // check: if DDC5 synch to DDC4, enable it;
-        // check: if DDC7 synch to DDC6, enable it;
-        // (reuse the Dither variable)
-        switch(i)
-        {
-            case 0:
-                Byte1 = *(uint8_t*)(UDPInBuffer + 1363);          // get DDC0 synch
-                if (Byte1 == 0b00000010)
-                    Interleaved = true;                                // set interleave
-                break;
-
-            case 1: 
-                Byte1 = *(uint8_t*)(UDPInBuffer + 1363);          // get DDC0 synch
-                if (Byte1 == 0b00000010)                          // if synch to DDC1
-                    Enabled = true;                                // enable DDC1
-                break;
-
-            case 2:
-                Byte1 = *(uint8_t*)(UDPInBuffer + 1365);          // get DDC2 synch
-                if (Byte1 == 0b00001000)
-                    Interleaved = true;                                // set interleave
-                break;
-
-            case 3:
-                Byte1 = *(uint8_t*)(UDPInBuffer + 1365);          // get DDC2 synch
-                if (Byte1 == 0b00001000)                          // if synch to DDC3
-                    Enabled = true;                                // enable DDC3
-                break;
-
-            case 4:
-                Byte1 = *(uint8_t*)(UDPInBuffer + 1367);          // get DDC4 synch
-                if (Byte1 == 0b00100000)
-                    Interleaved = true;                                // set interleave
-                break;
-        
-            case 5:
-                Byte1 = *(uint8_t*)(UDPInBuffer + 1367);          // get DDC4 synch
-                if (Byte1 == 0b00100000)                          // if synch to DDC5
-                    Enabled = true;                                // enable DDC5
-                break;
-
-            case 6:
-                Byte1 = *(uint8_t*)(UDPInBuffer + 1369);          // get DDC6 synch
-                if (Byte1 == 0b10000000)
-                    Interleaved = true;                                // set interleave
-                break;
-
-            case 7:
-                Byte1 = *(uint8_t*)(UDPInBuffer + 1369);          // get DDC6 synch
-                if (Byte1 == 0b10000000)                          // if synch to DDC7
-                    Enabled = true;                                // enable DDC7
-                break;
-
-        }
-        SetP2SampleRate(i, Enabled, Word2, Interleaved);
-        P23PerfTelemetrySetDDCConfig((unsigned int)i, Enabled, Interleaved, Word2);
-        Word = Word >> 1;                                 // move onto next DDC enabled bit
-      }
-      // now set register, and see if any changes made; reuse Dither again
-      Dither = WriteP2DDCRateRegister();
-      if (Dither)
-        HandlerCheckDDCSettings();
     }
   }
 //

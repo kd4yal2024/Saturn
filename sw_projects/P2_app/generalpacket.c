@@ -24,7 +24,7 @@
 
 atomic_bool HW_Timer_Enable = true;
 
-_Static_assert(P2_GENERAL_DDC_COUNT == VNUMDDC,
+_Static_assert(P2_SATURN_HARDWARE_DDC_COUNT == VNUMDDC,
                "Protocol 2 general command DDC count must match Saturn hardware");
 
 static void ApplyGeneralPort(void *Context, EP2GeneralPort Kind, uint8_t Index, uint16_t Port)

@@ -1219,7 +1219,7 @@ int main(int argc, char *argv[])
     43,                                           // protocol version 4.3
     20,                                           // this SDR firmware version. >17 to enable QSK
     0,0,0,0,0,0,                                  // Mercury, Metis, Penny version numbers
-    4,                                            // 4DDC
+    P2_SATURN_ADVERTISED_DDC_COUNT,               // tested Saturn DDC count
     1,                                            // phase word
     0,                                            // endian mode
     0,0,                                          // beta version, reserved byte (total 25 useful bytes)

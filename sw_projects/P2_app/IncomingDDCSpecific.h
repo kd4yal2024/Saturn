@@ -20,9 +20,10 @@
 
 #include <stdint.h>
 #include "../common/saturntypes.h"
+#include "protocol2_command.h"
 
 
-#define VDDCSPECIFICSIZE 1444           // DDC specific packet size in bytes
+#define VDDCSPECIFICSIZE P2_DDC_SPECIFIC_PACKET_SIZE
 
 
 //
