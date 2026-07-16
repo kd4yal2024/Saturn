@@ -7,6 +7,8 @@ All notable changes to provisioning assets are documented in this file.
 ### Changed
 
 - `cloud-init/provision-saturn.sh`
+  - now installs piHPSDR native build dependencies whenever the default standalone installer is enabled, preventing the desktop and web runners from failing because they cannot prompt for sudo
+  - includes `SATURN_PIHPSDR_INSTALLER_ENABLED` in provisioning contract hashes so changing the installer setting reruns the affected phases
   - `ensure_ui_packages()` now installs `sudo` so the later desktop power-helper `visudo` validation path is satisfied in the current call order
   - `resolve_system_role()` now validates the stored front-panel state and ignores unexpected values instead of silently propagating them into role resolution
   - now writes `/var/lib/saturn-provision/profile.env` as a factual machine-readable provisioning summary

@@ -45,6 +45,7 @@ installation sequence.
 - optionally installs `p2app-control` tray control (AppIndicator-based)
 - optionally installs Update Manager
 - installs Saturn Bridge with its pinned WDSP 2.00 source by default; piHPSDR is an optional desktop application and is no longer a bridge prerequisite
+- installs piHPSDR native build dependencies by default for the standalone desktop and Update Manager installers
 - optionally flashes FPGA (disabled by default)
 - resumes completed package, build, DKMS, P2, and Saturn Go phases after an interruption when the install contract is unchanged
 - performs hardware verification on radios or software-only verification for image factories
@@ -145,6 +146,7 @@ Environment controls:
 Notes:
 
 - This shortcut is created only after the Saturn Update Manager install step has deployed `update-pihpsdr.py` under `/opt/saturn-go/scripts/`.
+- Because the standalone installer is enabled by default, provisioning also installs the piHPSDR native build dependencies; the unprivileged installer does not need an interactive sudo prompt.
 - The standalone installer is not auto-launched; it is meant to be user-invoked from the Desktop.
 - When no explicit icon override is set, provisioning reuses the existing piHPSDR icon when present (`piHPSDR_logo.png` or the current `pihpsdr.desktop` icon path).
 - Closing the window while an install is still running leaves the Desktop shortcut in place so the user can reopen the installer and continue watching progress.

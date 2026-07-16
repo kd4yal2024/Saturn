@@ -734,7 +734,12 @@ ensure_packages() {
     apt_install libayatana-appindicator3-dev ayatana-indicator-application
   fi
 
-  if bool_true "$SATURN_INSTALL_PIHPSDR"; then
+  # The automatic desktop install, standalone installer, and Update Manager
+  # all build piHPSDR locally. Install their native build dependencies up front
+  # so the unprivileged GUI/web runners never need an interactive sudo prompt.
+  if bool_true "$SATURN_INSTALL_PIHPSDR" \
+    || bool_true "$SATURN_PIHPSDR_INSTALLER_ENABLED" \
+    || bool_true "$SATURN_INSTALL_UPDATE_MANAGER"; then
     apt_install \
       libminiupnpc-dev libwebsockets-dev zlib1g-dev libopus-dev \
       libsqlite3-dev libssl-dev
@@ -1858,6 +1863,7 @@ installer_contract_hash() {
       "bridge=$SATURN_INSTALL_SATURN_BRIDGE" \
       "bridge_verify=${SATURN_BRIDGE_VERIFY_RUNTIME:-1}" \
       "pihpsdr=$SATURN_INSTALL_PIHPSDR" \
+      "pihpsdr_installer=$SATURN_PIHPSDR_INSTALLER_ENABLED" \
       "udev=$SATURN_INSTALL_UDEV_RULES" \
       "shutdown_waiter=$SATURN_INSTALL_SHUTDOWN_WAITER" \
       "developer_tools=$SATURN_INSTALL_DEVELOPER_TOOLS" \
@@ -1896,6 +1902,7 @@ phase_contract_hash() {
       "bridge=$SATURN_INSTALL_SATURN_BRIDGE" \
       "bridge_verify=${SATURN_BRIDGE_VERIFY_RUNTIME:-1}" \
       "pihpsdr=$SATURN_INSTALL_PIHPSDR" \
+      "pihpsdr_installer=$SATURN_PIHPSDR_INSTALLER_ENABLED" \
       "cloud_init=$SATURN_INSTALL_CLOUD_INIT" \
       "i2c=$SATURN_ENABLE_I2C" \
       "ssh=$SATURN_ENABLE_SSH" \

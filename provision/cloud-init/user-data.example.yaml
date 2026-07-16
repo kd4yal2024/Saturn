@@ -28,6 +28,8 @@ write_files:
       # Feature toggles
       SATURN_INSTALL_UPDATE_MANAGER=1
       SATURN_INSTALL_PIHPSDR=0
+      # Installs the standalone piHPSDR UI and its build dependencies.
+      SATURN_PIHPSDR_INSTALLER_ENABLED=1
       SATURN_INSTALL_SATURN_BRIDGE=1
       SATURN_REQUIRE_SATURN_BRIDGE=1
       SATURN_INSTALL_P2APP_CONTROL=1

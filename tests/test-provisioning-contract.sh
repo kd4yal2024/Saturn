@@ -9,6 +9,10 @@ trap 'rm -rf "$TMP_DIR"' EXIT
 output="$("$REPO_ROOT/install.sh" --dry-run --user "$TEST_USER")"
 grep -Fq 'profile: appliance' <<<"$output"
 grep -Fq 'packages=1 driver=1 p2=1 saturn-go=1 verify=hardware' <<<"$output"
+grep -Fq 'pihpsdr-installer=1' <<<"$output"
+
+output="$(SATURN_PIHPSDR_INSTALLER_ENABLED=0 "$REPO_ROOT/install.sh" --dry-run --user "$TEST_USER")"
+grep -Fq 'pihpsdr-installer=0' <<<"$output"
 
 output="$("$REPO_ROOT/install.sh" --dry-run --user "$TEST_USER" --profile image-factory --skip-packages)"
 grep -Fq 'profile: image-factory' <<<"$output"
