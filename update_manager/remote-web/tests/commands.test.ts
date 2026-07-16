@@ -40,7 +40,7 @@ describe('buildTxFilterBandCommand', () => {
 });
 
 describe('buildTxCodecCapsCommand', () => {
-  it('advertises PCM by default for the Phase 44 scaffold', () => {
+  it('advertises PCM by default for the Opus scaffold', () => {
     expect(buildTxCodecCapsCommand()).toBe('tx_codec_caps:0,pcm;');
   });
 

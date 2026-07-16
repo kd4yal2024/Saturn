@@ -1,8 +1,9 @@
 # Saturn Provisioning
 
-This directory contains the legacy cloud-init wrapper for Saturn setup. New or
-existing systems should use `scripts/install-saturn-appliance.sh`; it installs
-the same radio, driver, and web runtime without cloud-init.
+This directory contains the shared provisioning engine and the thin cloud-init
+bootstrap for Saturn setup. Manual and cloud-init installs both enter through
+the repository's `install.sh`; cloud-init does not maintain a second appliance
+installation sequence.
 
 ## Current Layout
 
@@ -19,7 +20,7 @@ the same radio, driver, and web runtime without cloud-init.
 - installs required apt packages
 - retries transient apt lock conflicts during package index/install operations instead of failing immediately
 - installs matching Raspberry Pi kernel headers when available in apt sources
-- installs desktop developer tools when available in apt sources:
+- with the `desktop` profile, installs developer tools when available:
   - Visual Studio Code (`code`)
   - Git Cola (`git-cola`)
 - installs VS Code extensions for `SATURN_USER` when `code` is available:
@@ -31,12 +32,13 @@ the same radio, driver, and web runtime without cloud-init.
 - ensures cordless input tuning in boot cmdline:
   - `usbhid.mousepoll=0`
 - can apply a managed LCD boot profile for CM4/CM5 + Waveshare 7"/8" combos (`SATURN_LCD_PROFILE`)
-- clones or updates `kd4yal2024/Saturn` (default branch `main`)
+- uses the exact repository checkout selected by `install.sh`; cloud-init
+  fetches the requested `SATURN_REPO_REF` once before invoking it
 - builds Saturn apps and tools (including `sw_tools`)
 - installs desktop launchers (deprecated `P2app.desktop` is removed and not reinstalled)
-- optionally builds/installs XDMA
-- leaves `/home/pi/github/Saturn/scripts/fix-xdma.sh` available for later XDMA rebuilds after kernel updates
-- optional `p2app-control` install also adds a kernel post-install hook so future kernel upgrades can pre-stage XDMA automatically
+- installs the supported XDMA source through DKMS
+- leaves `scripts/fix-xdma.sh` in the selected checkout for field recovery
+- keeps the legacy XDMA kernel post-install hook disabled whenever DKMS is registered
 - optionally installs udev rules
 - configures the power-switch/front-panel LED helper so BCM15 is driven red during normal operation and white on shutdown
 - installs a root-owned provisioning power helper so the desktop UI can request reboot reliably at the end of first-boot setup
@@ -44,6 +46,8 @@ the same radio, driver, and web runtime without cloud-init.
 - optionally installs Update Manager
 - installs Saturn Bridge with its pinned WDSP 2.00 source by default; piHPSDR is an optional desktop application and is no longer a bridge prerequisite
 - optionally flashes FPGA (disabled by default)
+- resumes completed package, build, DKMS, P2, and Saturn Go phases after an interruption when the install contract is unchanged
+- performs hardware verification on radios or software-only verification for image factories
 
 Completion and logs:
 
@@ -54,6 +58,11 @@ Completion and logs:
 - log file: `/var/log/saturn-provision.log`
 - live status file (desktop UI): `/var/lib/saturn-provision/ui-status`
 - completion state now also records:
+  - `installer_version`
+  - `install_contract`
+  - `install_profile`
+  - `verification_mode`
+  - `repo_ref`
   - `hardware_model`
   - `hardware_platform_vendor`
   - `hardware_module_family`
@@ -222,8 +231,8 @@ Notes:
 - `CM5 + 7"` is currently explicit/manual-only in `SATURN_LCD_PROFILE=auto`
   - explicit profiles `cm5-7`, `cm5-7-g2-single-dsi`, and `cm5-7-g2-dual-dsi` are still available for Saturn LCD Setup and manual testing
   - auto mode now refuses to pick a CM5 7-inch profile until that path is validated under Trixie
-- Safe dry-run example (no boot config changes):
-  - `sudo SATURN_FORCE_REPROVISION=1 SATURN_LCD_PROFILE=auto SATURN_LCD_DETECT_ONLY=1 /home/pi/github/Saturn/provision/cloud-init/provision-saturn.sh`
+- Safe LCD detection rerun (no LCD boot-config changes):
+  - `cd /path/to/Saturn && sudo SATURN_LCD_PROFILE=auto SATURN_LCD_DETECT_ONLY=1 ./install.sh --force`
 
 ## Saturn LCD Setup Desktop Tool
 
@@ -261,38 +270,42 @@ Backups created by the tool are stored next to `config.txt` as:
 CLI examples:
 
 - list backups:
-  - `/home/pi/github/Saturn/scripts/saturn-lcd-helper.sh backups`
+  - `scripts/saturn-lcd-helper.sh backups`
 - restore latest backup:
-  - `sudo /home/pi/github/Saturn/scripts/saturn-lcd-helper.sh restore-latest`
+  - `sudo scripts/saturn-lcd-helper.sh restore-latest`
 
-## Standalone Execution
+## Manual Installation
 
-You can run `provision-saturn.sh` directly without cloud-init.
+Install Debian/Raspberry Pi OS Trixie arm64, clone the repository anywhere, and
+run the canonical entry point:
 
 Requirements:
 
-- run as root (`sudo`)
+- run the installer as root (`sudo`)
 - target user exists (`SATURN_USER`, default `pi`)
 - network access for apt and git operations
 - writable boot files (`/boot/firmware/...` or `/boot/...`) for LCD/USB/cmdline updates
 
-From inside the Saturn repo:
-
-- `sudo ./provision/cloud-init/provision-saturn.sh`
-
-Or by absolute path:
-
-- `sudo /home/pi/github/Saturn/provision/cloud-init/provision-saturn.sh`
+```bash
+sudo apt-get update
+sudo apt-get install -y git
+git clone https://github.com/kd4yal2024/Saturn.git
+cd Saturn
+sudo ./install.sh
+```
 
 With example overrides:
 
-- `sudo SATURN_USER=pi SATURN_REPO_BRANCH=main SATURN_FORCE_REPROVISION=1 /home/pi/github/Saturn/provision/cloud-init/provision-saturn.sh`
+- `sudo ./install.sh --profile desktop`
+- `sudo ./install.sh --profile image-factory`
+- `sudo ./install.sh --force`
 
 Behavior notes:
 
-- script is idempotent by state marker (`/var/lib/saturn-provision/complete`)
-- set `SATURN_FORCE_REPROVISION=1` to force a full rerun
-- if `SATURN_USER` does not exist yet, script waits and retries every `SATURN_USER_RETRY_SECONDS` (default `30`)
+- the completion marker is `/var/lib/saturn-provision/complete`
+- expensive phases resume from `/var/lib/saturn-provision/phases/`
+- `--force` performs an intentional full rerun
+- user lookup is bounded and fails with a clear error instead of waiting forever
 - when already provisioned and not forced, UI status is `SKIPPED` (not `SUCCESS`)
 
 ## Raspberry Pi Imager Workflow (End-to-End)
@@ -315,7 +328,7 @@ From this repo:
 Copy and customize as needed:
 
 - set `SATURN_USER` to the actual login user that will exist on the target image
-- keep `SATURN_REPO_URL` and `SATURN_REPO_BRANCH` as needed
+- set `SATURN_REPO_REF` to a release tag or tested commit for a reproducible image
 - review feature toggles (`SATURN_INSTALL_*`, `SATURN_REBUILD_XDMA`, `SATURN_BUILD_OPTIONAL_TOOLS`, `SATURN_ENABLE_*`, `SATURN_LCD_*`)
 - leave FPGA flashing off by default unless intentionally enabled
 - on current Raspberry Pi OS cloud-init images, preserve the login-user creation in the active `user-data`
@@ -349,10 +362,10 @@ On first boot, cloud-init processes `user-data` and executes:
 - writes `/etc/default/saturn-provision`
 - writes `/usr/local/sbin/saturn-cloudinit-bootstrap.sh`
 - logs early bootstrap work to `/var/log/saturn-cloudinit-bootstrap.log`
-- ensures `~/github/Saturn` exists for `SATURN_USER`
-- clones or updates `kd4yal2024/Saturn`
+- initializes the configured Saturn checkout for `SATURN_USER`
+- fetches and checks out `SATURN_REPO_REF` exactly once
 - runs:
-  - `bash "$SATURN_HOME/github/Saturn/provision/cloud-init/provision-saturn.sh"`
+  - `bash "$SATURN_REPO_DIR/install.sh" --profile appliance --non-interactive`
 
 Bootstrap behavior before the main Saturn script now is:
 
@@ -384,25 +397,21 @@ Then `provision-saturn.sh` performs:
     - `CM4 + G2V1/G2V2` -> `cm4-7-g2-single-dsi`
   - on `CM5 + 7"` systems, `SATURN_LCD_PROFILE=auto` now warns and requires an explicit profile instead of pretending the path is validated
 - kernel header checks/install (for XDMA build path)
-- Saturn repo sync and build of apps/tools
+- build of apps/tools from the bootstrap-selected checkout
 - desktop launcher install
-- optional XDMA build/install/load
-  - later kernel package upgrades can be handled by rerunning:
-    - `sudo bash /home/pi/github/Saturn/scripts/fix-xdma.sh`
-  - that helper rebuilds for the running kernel and, when a newer same-flavor kernel is already installed, also pre-stages XDMA for that next boot
-  - the helper now builds in the repo as `SATURN_USER` and reserves root only for module install/reload, which avoids leaving kernel build outputs owned by root or other mapped IDs in `linuxdriver/xdma`
-  - beta images can also register the same supported driver source with DKMS:
-    - `sudo bash /home/pi/github/Saturn/scripts/install-xdma-dkms.sh --force`
-  - a successful DKMS install disables `/etc/kernel/postinst.d/saturn-xdma` so
-    the legacy manual hook and DKMS do not both rebuild XDMA during kernel
-    package updates
+- XDMA DKMS build/install/load
+  - DKMS rebuilds the supported driver for installed kernels
+  - a successful install disables `/etc/kernel/postinst.d/saturn-xdma` so the
+    legacy hook and DKMS never both own the same kernel update
+  - `scripts/fix-xdma.sh` remains a field-recovery tool, not the normal lifecycle owner
 - optional p2app-control install
   - installs tray autostart (`~/.config/autostart/P2_app-Control-tray.desktop`)
   - requires `libayatana-appindicator3-dev` and `ayatana-indicator-application`
   - installs `/usr/local/bin/saturn-xdma-doctor.sh` as the supported XDMA diagnostic helper
   - installs `/usr/local/bin/saturn-xdma-ready.sh` plus `saturn-xdma-ready.service` as the dedicated XDMA readiness gate
   - installs `/usr/local/bin/saturn-fix-xdma.sh` and `/usr/local/bin/saturn-xdma-kernel-postinst.sh`
-  - installs `/etc/kernel/postinst.d/saturn-xdma` so future kernel package installs pre-stage `xdma.ko` without unloading the live module or restarting `p2app.service`
+  - leaves `/etc/kernel/postinst.d/saturn-xdma` disabled when DKMS is registered
+  - installs the trusted production P2 deploy helper with service verification and rollback
   - generated `p2app.service` now depends on `saturn-xdma-ready.service` instead of owning the XDMA readiness loop directly
   - installer now waits for `p2app.service` to reach `active/running`
   - if the XDMA kernel module is loaded but `/dev/xdma0_user` is still missing, provisioning logs the condition and continues instead of failing the whole run at the `p2app-control` step
@@ -428,17 +437,18 @@ If Update Manager is enabled, also verify service status:
 
 ### 7. Re-run behavior
 
-- Provisioning is idempotent by state marker:
-  - if `/var/lib/saturn-provision/complete` exists, script exits cleanly
+- Provisioning is idempotent by an install-contract marker:
+  - it exits cleanly only when the host schema, repository commit, kernel,
+    profile, user/path, and material feature options still match
+  - a changed contract reuses only compatible completed phase checkpoints
 - To force a full rerun, set:
-  - `SATURN_FORCE_REPROVISION=1`
-  in `/etc/default/saturn-provision`, then run the script again as root
+  - `sudo ./install.sh --force`
 
 ## Cloud-Init Inputs
 
 `cloud-init/user-data.example.yaml` writes `/etc/default/saturn-provision` and executes:
 
-- `bash "$SATURN_HOME/github/Saturn/provision/cloud-init/provision-saturn.sh"`
+- `bash "$SATURN_REPO_DIR/install.sh" --profile appliance --non-interactive`
 - via `/usr/local/sbin/saturn-cloudinit-bootstrap.sh`, which records early bootstrap activity in `/var/log/saturn-cloudinit-bootstrap.log`
 
 Cloud-init bootstrap behavior in the example config:
@@ -463,6 +473,7 @@ From `user-data.example.yaml`:
 - `SATURN_CLOCK_SYNC_WAIT_SECONDS=180`
 - `SATURN_CLOCK_SYNC_POLL_SECONDS=5`
 - `SATURN_INSTALL_UPDATE_MANAGER=1`
+- `SATURN_INSTALL_CLOUD_INIT=0` (automatically `1` for the `image-factory` profile)
 - `SATURN_INSTALL_P2APP_CONTROL=1`
 - `SATURN_INSTALL_UDEV_RULES=1`
 - `SATURN_INSTALL_SHUTDOWN_WAITER=1`
@@ -480,7 +491,8 @@ From `user-data.example.yaml`:
 - `SATURN_FLASH_FPGA=0` (safety default)
 - `SATURN_APT_LOCK_TIMEOUT_SECONDS=120`
 - `SATURN_APT_LOCK_RETRY_INTERVAL_SECONDS=3`
-- `SATURN_ADMIN_PASSWORD=admin` effective default (the example leaves it blank, and provisioning keeps the admin/admin first-login path)
+- `SATURN_ADMIN_PASSWORD=` generates a unique five-character initial password
+- newly supplied passwords must be exactly five characters; existing longer credentials are preserved during upgrades
 
 Important safety settings for flashing:
 
@@ -505,8 +517,19 @@ Provisioning is configured to keep the repo clean of Python cache artifacts:
 - Network access is required on first boot for apt and git operations.
 - On first boot without an RTC, provisioning now waits for network time before bootstrap apt/git activity instead of hitting repository signature checks with a stale clock.
 - `cloud-init` user-data is root-owned; read it with `sudo cat /var/lib/cloud/instance/user-data.txt`.
-- Provisioning now waits and retries every `SATURN_USER_RETRY_SECONDS` (default `30`) until `SATURN_USER` exists.
+- Provisioning retries user lookup for a bounded period and then fails clearly.
 - Early clone/bootstrap failures are logged to `/var/log/saturn-cloudinit-bootstrap.log`.
 - `P1_app` is intentionally skipped in provisioning (legacy target not required for current images).
-- Before capturing/cloning a reusable image, run `sudo cloud-init clean --logs` so first-boot provisioning re-runs on cloned targets.
+- Before capturing a reusable fully provisioned image, run
+  `sudo scripts/seal-saturn-image.sh --confirm SEAL`. It removes machine, SSH,
+  Tailscale, Saturn Remote TLS/cookie, and admin identity and powers the source
+  off. It also erases builder login hashes, SSH/client credentials, and
+  provisioning logs and operator-specific Remote profiles/settings. Each clone
+  creates a unique hostname (unless customized), five-character Saturn Go login,
+  and new TLS certificate on its first boot. A Linux password supplied by
+  Raspberry Pi Imager or cloud-init is preserved; an otherwise locked local
+  account is unlocked with the generated five-character value.
+- When customizing a sealed image in Raspberry Pi Imager, keep the provisioned
+  Saturn username unchanged. The installed service units are deliberately tied
+  to that account; network and password customization remain supported.
 - Keep `meta-data` `instance-id` unique per image/seed when possible.

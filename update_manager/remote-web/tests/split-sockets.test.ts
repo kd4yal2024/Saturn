@@ -69,7 +69,7 @@ function createFakePair() {
   };
 }
 
-describe('Phase 42 split socket transport helpers', () => {
+describe('split socket transport helpers', () => {
   it('derives independent control and media URLs from the legacy TCI URL', () => {
     const urls = deriveSplitSocketUrls('wss://radio.local:8443/tci?old=1', 'session-123');
 

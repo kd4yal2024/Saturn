@@ -298,7 +298,7 @@ Update-activity behavior for `/run`:
 
 Behavior:
 
-- enforces minimum length 5 and rejects control characters
+- requires exactly 5 characters for newly set passwords and rejects control characters
 - runs `sudo -n saturn-admin-password.sh set` with the password on stdin
 - the helper updates `/etc/nginx/.htpasswd` and the TLS auth drop-in
   together (all-or-nothing with rollback), then schedules a deferred

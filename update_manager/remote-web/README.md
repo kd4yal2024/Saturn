@@ -28,9 +28,9 @@ template because they are tightly coupled to the live page.
 | `src/settings/` | Defaults, normalization, and preference types |
 | `src/state/` | Application state, preference application/export, and performance snapshots |
 | `src/tci/` | TCI parsing, command generation, state, and message application |
-| `src/transport/` | RX frames, split sockets, transport selection, Phase 42 adaptation, and TX uplink |
+| `src/transport/` | RX frames, split sockets, transport selection, compatibility adaptation, and TX uplink |
 | `src/ui/` | Operator-display calculations such as meter math |
-| `tests/` | Vitest unit, integration, smoke, and Phase 44 acceptance coverage |
+| `tests/` | Vitest unit, integration, smoke, and Opus acceptance coverage |
 | `scripts/check-template-seam.mjs` | Static template/bundle seam gate (CI) |
 | `scripts/validate-remote-next-layout.mjs` | Headless Chromium responsive-layout gate |
 
@@ -122,7 +122,7 @@ Protocol 2, audio/DSP, and radio-session boundary.
 
 ## Automatic Reconnection
 
-`/remote-next` treats the Phase 42 control and media sockets as one supervised
+`/remote-next` treats the split control and media sockets as one supervised
 session. If either lane fails, the paired lane closes and the browser retries
 with exponential backoff and jitter. A connection is not considered recovered
 until the bridge sends its TCI `ready` message; both socket-connect and

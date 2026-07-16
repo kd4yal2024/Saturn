@@ -31,7 +31,7 @@ pub struct TciFrontend {
     operator_control_at: Arc<Mutex<Option<Instant>>>,
     drop_count: Arc<AtomicU64>,
     display_rate_limited_count: AtomicU64,
-    // Phase 42 TX media priority: derived from the bridge's authoritative
+    // TX media priority is derived from the bridge's authoritative
     // TX intent/armed/keyed state, not from a browser command. While active,
     // RX binary frames are suppressed on the media lane so uplink mic owns the
     // media TCP send buffer. Cleared automatically when TX returns to RX,
@@ -178,7 +178,7 @@ impl TciFrontend {
         Ok((frontend, command_rx))
     }
 
-    /// Phase 42: set the bridge's authoritative TX media-priority state.
+    /// Set the bridge's authoritative TX media-priority state.
     /// Called from the main loop from TX intent/armed/keyed state. While true,
     /// RX binary frames (IqFrame, TxIqFrame, AudioFrame) are suppressed on
     /// the media lane so uplink mic owns the media TCP send buffer. The flag

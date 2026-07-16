@@ -4,6 +4,28 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
 
 ## [Unreleased]
 ### Added
+- Unified provisioning entry point (`./install.sh`) shared by manual Trixie
+  installs and the cloud-init bootstrap. The appliance engine now supports
+  appliance/desktop/image-factory profiles, bounded user discovery, exact-ref
+  bootstrap checkout, resumable expensive phases, versioned host state, and
+  separate software/hardware verification.
+- Golden-image sealing and first-boot personalization. A sealed clone receives
+  unique machine/SSH, hostname, and Saturn Remote TLS identity plus a unique
+  five-character Saturn Go login instead of inheriting credentials,
+  certificates, cookies, login hashes, builder keys/logs, or Tailscale state
+  from the source image. First boot preserves a Linux password supplied by
+  image customization and only assigns the generated value when the local
+  account remains locked.
+- Production Protocol 2 test/build/deploy workflow with a root-owned fixed-path
+  broker, service health verification, and automatic binary rollback.
+- Newly set Saturn administrator passwords are exactly five characters with no
+  composition rules. Existing longer credentials remain active during upgrades.
+- Initial installation and later password changes now use the same
+  transactional credential helper, so nginx and Saturn Remote auth are never
+  written by separate provisioning implementations.
+- XDMA installation now has one lifecycle owner: canonical provisioning uses
+  DKMS and all nested installers keep the legacy kernel post-install hook
+  disabled whenever the DKMS package is registered.
 - Saturn Remote `/remote-next` now automatically recovers from bridge restarts,
   split control/media lane failures, and browser network interruptions. A
   single session supervisor uses bounded exponential backoff with jitter,
@@ -91,9 +113,8 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
   Android TX audio with `accepted=opus_wb`, `codecDecodeFaults=0`,
   `codecPcmFallback=0`, and `txMicDrops=0`.
 - Fresh Nginx installs now redirect `/remote-next` and `/saturn/remote-next`
-  to the current beta query string by default
-  (`phase42_split=1&phase44_tx_opus=1&phase44_tx_cfc=1&client_bust=bridgeprefill240-cfcessb3`),
-  with `SATURN_REMOTE_NEXT_DEFAULT_QUERY` available as an installer override.
+  to the queryless TLS entry point. The Rust TLS listener owns the current
+  stable feature defaults, avoiding a second stale redirect configuration.
 - New shared `update_manager/scripts/saturn-go-web-assets.sh` web asset
   manifest sourced by both `install_saturn_go_nginx.sh` and
   `update-saturn-go.sh`, so installs and Saturn Go self-updates deploy the
@@ -162,10 +183,13 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
 
 ### Changed
 - Saturn Remote TLS now treats plain `/remote-next` and `/remote-next.html`
-  as default-beta entry points and redirects them to
-  `/remote-next?phase42_split=1&phase44_tx_opus=1&phase44_tx_cfc=1&client_bust=bridgeprefill240-cfcessb3`.
-  Requests that already include a query string still serve the page directly,
-  so explicit test flags and cache-bust URLs continue to work.
+  as default operator entry points and redirects them to
+  `/remote-next?transport=split&tx_opus=1&tx_cfc=1`. Operator logs and bridge
+  runtime messages use feature names instead of development phase numbers.
+  Existing `phase40_*`, `phase42_*`, and `phase44_*` bookmarks and browser
+  storage remain compatible and are silently canonicalized to stable names.
+  Saturn Go self-deploys also migrate persisted Nginx redirects to the
+  queryless entry point and validate/reload Nginx transactionally.
 - `update-deskhpsdr.py` v1.1 now compacts routine apt/debconf/autoremove
   chatter in verbose web output, while keeping the raw build log intact.
   Its build helper no longer reinstalls the PulseAudio daemon on

@@ -107,7 +107,7 @@ describe('TX uplink guard', () => {
     expect(decision.action).toBe('drop');
   });
 
-  it('keeps the tuned PCM hard cap as the default Phase 44 guard', () => {
+  it('keeps the tuned PCM hard cap as the default guard', () => {
     const byteRate = txMicByteRateBytesPerSecond(48_000, 2, TX_MIC_BLOCK_SAMPLES, 64);
     const decision = decideTxMicSend(TX_UPLINK_PCM_HARD_CAP_BYTES, 200, byteRate);
 
@@ -131,7 +131,7 @@ describe('TX uplink guard', () => {
     expect(decision.action).toBe('drop');
   });
 
-  it('builds PCM mic frames with Phase 44 codec header fields', () => {
+  it('builds PCM mic frames with codec header fields', () => {
     const { frame, peak, payloadBytes } = buildTxMicPcmS16Frame([0.25, -0.5, 2], 123);
     const view = new DataView(frame);
 
@@ -151,7 +151,7 @@ describe('TX uplink guard', () => {
     expect(view.getInt16(TX_MIC_FRAME_HEADER_BYTES + 4, true)).toBe(32767);
   });
 
-  it('defines reserved Phase 44 Opus codec ids without using them yet', () => {
+  it('defines reserved Opus codec ids without using them yet', () => {
     expect(TX_MIC_CODEC_PCM).toBe(0);
     expect(TX_MIC_CODEC_OPUS_NB).toBe(1);
     expect(TX_MIC_CODEC_OPUS_WB).toBe(2);

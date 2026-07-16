@@ -764,7 +764,7 @@ syncG2ActionButtons();
 fetchBufferedG2RunLog();
 
 /* VPN / Tailscale status (compact, read-only) */
-const SATURN_REMOTE_DEFAULT_QUERY = 'phase42_split=1&phase44_tx_opus=1&phase44_tx_cfc=1&client_bust=bridgeprefill240-cfcessb3';
+const SATURN_REMOTE_DEFAULT_QUERY = 'transport=split&tx_opus=1&tx_cfc=1';
 
 function normalizedSaturnRemoteUrl(rawUrl){
   if (!rawUrl) return '';

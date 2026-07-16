@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# shellcheck source=../../scripts/saturn-lcd-lib.sh
+# shellcheck disable=SC1091
 source "${SCRIPT_DIR}/../../scripts/saturn-lcd-lib.sh"
 
 # Preserve explicit environment overrides so /etc/default does not clobber them.
@@ -25,20 +25,27 @@ done
 unset _saturn_name _saturn_value
 
 SATURN_USER="${SATURN_USER:-pi}"
+SATURN_GROUP="${SATURN_GROUP:-}"
 SATURN_USER_RETRY_SECONDS="${SATURN_USER_RETRY_SECONDS:-30}"
 SATURN_REPO_URL="${SATURN_REPO_URL:-https://github.com/kd4yal2024/Saturn.git}"
 SATURN_REPO_BRANCH="${SATURN_REPO_BRANCH:-main}"
 SATURN_REPO_DIR="${SATURN_REPO_DIR:-}"
+SATURN_REPO_SYNC="${SATURN_REPO_SYNC:-1}"
+SATURN_INSTALL_PROFILE="${SATURN_INSTALL_PROFILE:-appliance}"
 
+SATURN_INSTALL_PACKAGES="${SATURN_INSTALL_PACKAGES:-1}"
 SATURN_INSTALL_UPDATE_MANAGER="${SATURN_INSTALL_UPDATE_MANAGER:-1}"
 SATURN_INSTALL_PIHPSDR="${SATURN_INSTALL_PIHPSDR:-0}"
 SATURN_INSTALL_SATURN_BRIDGE="${SATURN_INSTALL_SATURN_BRIDGE:-1}"
 SATURN_REQUIRE_SATURN_BRIDGE="${SATURN_REQUIRE_SATURN_BRIDGE:-1}"
 SATURN_INSTALL_P2APP_CONTROL="${SATURN_INSTALL_P2APP_CONTROL:-1}"
+SATURN_RUN_P2_TESTS="${SATURN_RUN_P2_TESTS:-1}"
 SATURN_INSTALL_UDEV_RULES="${SATURN_INSTALL_UDEV_RULES:-1}"
 SATURN_INSTALL_SHUTDOWN_WAITER="${SATURN_INSTALL_SHUTDOWN_WAITER:-1}"
 SATURN_REBUILD_XDMA="${SATURN_REBUILD_XDMA:-1}"
 SATURN_BUILD_OPTIONAL_TOOLS="${SATURN_BUILD_OPTIONAL_TOOLS:-1}"
+SATURN_INSTALL_DEVELOPER_TOOLS="${SATURN_INSTALL_DEVELOPER_TOOLS:-1}"
+SATURN_INSTALL_CLOUD_INIT="${SATURN_INSTALL_CLOUD_INIT:-0}"
 SATURN_DETECT_FRONT_PANEL="${SATURN_DETECT_FRONT_PANEL:-1}"
 SATURN_SHUTDOWN_WAITER_ENABLED_DEFAULT="${SATURN_SHUTDOWN_WAITER_ENABLED_DEFAULT:-auto}"
 SATURN_FORCE_SYSTEM_ROLE="${SATURN_FORCE_SYSTEM_ROLE:-}"
@@ -48,7 +55,12 @@ SATURN_FLASH_IMAGE="${SATURN_FLASH_IMAGE:-latest}"
 SATURN_FLASH_FALLBACK="${SATURN_FLASH_FALLBACK:-0}"
 SATURN_FLASH_CONFIRM="${SATURN_FLASH_CONFIRM:-}"
 
-SATURN_ADMIN_PASSWORD="${SATURN_ADMIN_PASSWORD:-admin}"
+SATURN_ADMIN_PASSWORD="${SATURN_ADMIN_PASSWORD:-}"
+SATURN_ADMIN_PASSWORD_LEN=5
+SATURN_NONINTERACTIVE="${SATURN_NONINTERACTIVE:-0}"
+SATURN_VERIFY_MODE="${SATURN_VERIFY_MODE:-hardware}"
+SATURN_RESUME="${SATURN_RESUME:-1}"
+SATURN_HOST_SCHEMA_VERSION=2
 SATURN_FORCE_REPROVISION="${SATURN_FORCE_REPROVISION:-0}"
 SATURN_STATE_DIR="${SATURN_STATE_DIR:-/var/lib/saturn-provision}"
 SATURN_LOG_FILE="${SATURN_LOG_FILE:-/var/log/saturn-provision.log}"
@@ -84,7 +96,7 @@ SATURN_LCD_DETECT_ONLY="${SATURN_LCD_DETECT_ONLY:-0}"
 SATURN_APT_LOCK_TIMEOUT_SECONDS="${SATURN_APT_LOCK_TIMEOUT_SECONDS:-120}"
 SATURN_APT_LOCK_RETRY_INTERVAL_SECONDS="${SATURN_APT_LOCK_RETRY_INTERVAL_SECONDS:-3}"
 
-apt_updated=0
+apt_updated="${SATURN_APT_ALREADY_UPDATED:-0}"
 SATURN_UI_STARTED=0
 SATURN_UI_AUTOSTART_INSTALLED=0
 PYTHON_GUARD_DIR=""
@@ -299,7 +311,7 @@ install_desktop_ui_autostart() {
     show_log_flag="0"
   fi
 
-  install -d -m 0755 -o "$SATURN_USER" -g "$SATURN_USER" "$autostart_dir"
+  install -d -m 0755 -o "$SATURN_USER" -g "$SATURN_GROUP" "$autostart_dir"
 
   cat > "$SATURN_UI_LAUNCHER" <<EOF
 #!/usr/bin/env bash
@@ -334,7 +346,7 @@ Exec=$SATURN_UI_LAUNCHER
 Terminal=false
 X-GNOME-Autostart-enabled=true
 EOF
-  chown "$SATURN_USER:$SATURN_USER" "$desktop_file"
+  chown "$SATURN_USER:$SATURN_GROUP" "$desktop_file"
   chmod 0644 "$desktop_file"
   SATURN_UI_AUTOSTART_INSTALLED=1
   log "Installed desktop autostart for $SATURN_USER: $desktop_file"
@@ -413,7 +425,7 @@ EOF
 
   desktop_dir="${saturn_home}/Desktop"
   desktop_file="${desktop_dir}/${SATURN_PIHPSDR_INSTALLER_SHORTCUT_NAME}"
-  install -d -m 0755 -o "$SATURN_USER" -g "$SATURN_USER" "$desktop_dir"
+  install -d -m 0755 -o "$SATURN_USER" -g "$SATURN_GROUP" "$desktop_dir"
   cat > "$desktop_file" <<EOF
 [Desktop Entry]
 Type=Application
@@ -425,7 +437,7 @@ Terminal=false
 StartupNotify=true
 ${icon_line}
 EOF
-  chown "$SATURN_USER:$SATURN_USER" "$desktop_file"
+  chown "$SATURN_USER:$SATURN_GROUP" "$desktop_file"
   chmod 0755 "$desktop_file"
   log "Installed standalone piHPSDR installer shortcut for $SATURN_USER: $desktop_file"
 }
@@ -523,13 +535,13 @@ handle_error() {
 }
 
 generate_password() {
-  local charset='ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789@#%^+=_'
+  local charset='abcdefghjkmnpqrstuvwxyz23456789'
   local charset_len="${#charset}"
   local password=""
   local hex idx
 
   # Avoid pipelines here: with `set -o pipefail`, `tr | head` can fail on SIGPIPE.
-  while [[ ${#password} -lt 24 ]]; do
+  while [[ ${#password} -lt $SATURN_ADMIN_PASSWORD_LEN ]]; do
     hex="$(od -An -N1 -tx1 /dev/urandom)"
     hex="${hex//[[:space:]]/}"
     [[ -n "$hex" ]] || continue
@@ -551,11 +563,15 @@ ensure_root() {
 }
 
 ensure_user() {
-  local saturn_home=""
-  local retry_seconds
+  local saturn_home="" elapsed=0
+  local retry_seconds max_wait_seconds
   retry_seconds="${SATURN_USER_RETRY_SECONDS:-30}"
+  max_wait_seconds="${SATURN_USER_MAX_WAIT_SECONDS:-600}"
   if ! [[ "$retry_seconds" =~ ^[0-9]+$ ]] || (( retry_seconds < 1 )); then
     retry_seconds=30
+  fi
+  if ! [[ "$max_wait_seconds" =~ ^[0-9]+$ ]] || (( max_wait_seconds < 1 )); then
+    max_wait_seconds=600
   fi
   while true; do
     if id -u "$SATURN_USER" >/dev/null 2>&1; then
@@ -568,7 +584,11 @@ ensure_user() {
     else
       log "User '$SATURN_USER' not present yet; retrying in ${retry_seconds}s."
     fi
+    if (( elapsed + retry_seconds >= max_wait_seconds )); then
+      die "User '$SATURN_USER' was not available after ${max_wait_seconds}s. Set SATURN_USER to an existing login user."
+    fi
     sleep "$retry_seconds"
+    elapsed=$((elapsed + retry_seconds))
   done
 }
 
@@ -695,11 +715,6 @@ apt_run() {
   done
 }
 
-ensure_ui_packages() {
-  log "Installing desktop provisioning UI prerequisites"
-  apt_install g++ pkg-config libgtk-3-dev sudo
-}
-
 ensure_packages() {
   local running_krel running_meta_pkg
   running_krel="$(uname -r)"
@@ -711,7 +726,7 @@ ensure_packages() {
     build-essential pkg-config gcc g++ make dkms \
     python3 python3-venv python3-pip python3-psutil \
     gpiod libgpiod-dev libi2c-dev libgtk-3-dev libglib2.0-bin lxterminal \
-    libasound2-dev libpulse-dev libusb-1.0-0-dev libcurl4-openssl-dev \
+    libasound2-dev libpulse-dev libopus0 libusb-1.0-0-dev libcurl4-openssl-dev \
     libfftw3-dev \
     desktop-file-utils xdg-user-dirs
 
@@ -719,8 +734,18 @@ ensure_packages() {
     apt_install libayatana-appindicator3-dev ayatana-indicator-application
   fi
 
+  if bool_true "$SATURN_INSTALL_PIHPSDR"; then
+    apt_install \
+      libminiupnpc-dev libwebsockets-dev zlib1g-dev libopus-dev \
+      libsqlite3-dev libssl-dev
+  fi
+
   if bool_true "$SATURN_INSTALL_UPDATE_MANAGER"; then
-    apt_install nginx apache2-utils
+    apt_install nginx apache2-utils nodejs npm binutils
+  fi
+
+  if bool_true "$SATURN_INSTALL_CLOUD_INIT"; then
+    apt_install cloud-init
   fi
 
   if bool_true "$SATURN_ENABLE_I2C"; then
@@ -745,6 +770,15 @@ ensure_packages() {
     fi
   fi
 
+  if ! command -v pinctrl >/dev/null 2>&1; then
+    if apt-cache show raspi-utils >/dev/null 2>&1; then
+      apt_install raspi-utils
+    fi
+    if ! command -v pinctrl >/dev/null 2>&1; then
+      apt_install cmake device-tree-compiler libfdt-dev
+    fi
+  fi
+
   if apt-cache show "linux-headers-${running_krel}" >/dev/null 2>&1; then
     apt_install "linux-headers-${running_krel}"
   elif apt-cache show "${running_meta_pkg}" >/dev/null 2>&1; then
@@ -754,31 +788,6 @@ ensure_packages() {
   else
     log "WARN: No known Raspberry Pi kernel header package found in apt sources."
   fi
-}
-
-ensure_kernel_headers() {
-  local krel build_dir meta_pkg
-  krel="$(uname -r)"
-  build_dir="/lib/modules/${krel}/build"
-  meta_pkg="linux-headers-$(kernel_flavor "$krel")"
-  if [[ -d "$build_dir" ]]; then
-    log "Kernel headers already present for $krel"
-    return
-  fi
-
-  log "Installing kernel headers for $krel"
-  apt_update_once
-  export DEBIAN_FRONTEND=noninteractive
-  if apt-cache show "linux-headers-${krel}" >/dev/null 2>&1; then
-    apt-get install -y --no-install-recommends "linux-headers-${krel}"
-  elif apt-cache show "${meta_pkg}" >/dev/null 2>&1; then
-    apt-get install -y --no-install-recommends "${meta_pkg}"
-  elif apt-cache show raspberrypi-kernel-headers >/dev/null 2>&1; then
-    apt-get install -y --no-install-recommends raspberrypi-kernel-headers
-  else
-    die "No suitable kernel header package found for $krel"
-  fi
-  [[ -d "$build_dir" ]] || die "Kernel headers still missing at $build_dir"
 }
 
 enable_service_if_available() {
@@ -858,6 +867,12 @@ install_vscode_extensions() {
 
 install_desktop_dev_tools() {
   local saturn_home="$1"
+
+  if ! bool_true "$SATURN_INSTALL_PACKAGES"; then
+    log "Skipping developer-package installation (SATURN_INSTALL_PACKAGES=0)"
+    install_vscode_extensions "$saturn_home"
+    return 0
+  fi
 
   apt_update_once
   export DEBIAN_FRONTEND=noninteractive
@@ -967,9 +982,13 @@ ensure_repo() {
   fi
   repo_parent="$(dirname "$SATURN_REPO_DIR")"
 
-  install -d -m 0755 -o "$SATURN_USER" -g "$SATURN_USER" "$repo_parent"
+  install -d -m 0755 -o "$SATURN_USER" -g "$SATURN_GROUP" "$repo_parent"
 
   if [[ -d "${SATURN_REPO_DIR}/.git" ]]; then
+    if ! bool_true "$SATURN_REPO_SYNC"; then
+      log "Using existing repository without fetching: $SATURN_REPO_DIR"
+      return 0
+    fi
     log "Updating repo at $SATURN_REPO_DIR -> ${SATURN_REPO_BRANCH}"
     run_as_user "$saturn_home" git -C "$SATURN_REPO_DIR" fetch --depth 1 origin "$SATURN_REPO_BRANCH"
     run_as_user "$saturn_home" git -C "$SATURN_REPO_DIR" checkout -B "$SATURN_REPO_BRANCH" "origin/${SATURN_REPO_BRANCH}"
@@ -1013,7 +1032,15 @@ build_saturn_apps() {
   local saturn_home="$1"
   local nproc="$2"
 
-  build_dir "$saturn_home" "P2_app"      "$SATURN_REPO_DIR/sw_projects/P2_app" "$nproc" 1
+  if bool_true "$SATURN_INSTALL_P2APP_CONTROL"; then
+    if bool_true "$SATURN_RUN_P2_TESTS"; then
+      log "Running Protocol 2 tests before installation"
+      run_as_user "$saturn_home" make -C "$SATURN_REPO_DIR/sw_projects/P2_app" test
+    fi
+    build_dir "$saturn_home" "P2_app" "$SATURN_REPO_DIR/sw_projects/P2_app" "$nproc" 1
+  else
+    log "Skipping P2_app build (SATURN_INSTALL_P2APP_CONTROL=0)"
+  fi
   log "Skipping P1_app build (not required in provisioning flow)."
   build_dir "$saturn_home" "audiotest"   "$SATURN_REPO_DIR/sw_projects/audiotest" "$nproc" 1
   build_dir "$saturn_home" "biascheck"   "$SATURN_REPO_DIR/sw_projects/biascheck" "$nproc" 1
@@ -1035,22 +1062,25 @@ build_saturn_apps() {
 
 build_and_install_xdma() {
   local saturn_home="$1"
-  local fix_script="$SATURN_REPO_DIR/scripts/fix-xdma.sh"
+  local install_script="$SATURN_REPO_DIR/scripts/install-xdma-dkms.sh"
 
-  [[ -x "$fix_script" ]] || die "XDMA rebuild helper not found/executable: $fix_script"
-  assert_not_repo_python_script "$fix_script"
+  [[ -x "$install_script" ]] || die "XDMA DKMS installer not found/executable: $install_script"
+  assert_not_repo_python_script "$install_script"
 
-  log "Building and installing XDMA kernel module via fix-xdma.sh"
+  log "Building and installing XDMA kernel module through DKMS"
   env \
     HOME="$saturn_home" \
     SUDO_USER="$SATURN_USER" \
     SATURN_USER="$SATURN_USER" \
     SATURN_REPO_DIR="$SATURN_REPO_DIR" \
-    bash "$fix_script"
+    bash "$install_script"
 
   install -d -m 0755 /etc/modules-load.d
   printf 'xdma\n' > /etc/modules-load.d/xdma.conf
-  log "XDMA module installed, loaded, and configured for boot"
+  modprobe xdma
+  udevadm control --reload-rules
+  udevadm trigger --subsystem-match=xdma || true
+  log "DKMS-managed XDMA module installed, loaded, and configured for boot"
 }
 
 install_desktop_shortcuts() {
@@ -1076,7 +1106,11 @@ install_udev_rules() {
   fi
   if [[ -n "$script" ]]; then
     assert_not_repo_python_script "$script"
-    log "Installing udev rules${SATURN_FRONT_PANEL_TYPE:+ for front panel '$SATURN_FRONT_PANEL_TYPE'}"
+    if [[ -n "$SATURN_FRONT_PANEL_TYPE" ]]; then
+      log "Installing udev rules for front panel '$SATURN_FRONT_PANEL_TYPE'"
+    else
+      log "Installing udev rules"
+    fi
     SATURN_FRONT_PANEL_TYPE="$SATURN_FRONT_PANEL_TYPE" bash "$script"
   else
     log "WARN: Missing udev script (checked SATURN_REPO_DIR='${SATURN_REPO_DIR:-}' and SCRIPT_DIR='$SCRIPT_DIR')"
@@ -1099,7 +1133,7 @@ install_led_power_button_fix() {
   local script="$SATURN_REPO_DIR/scripts/fix-LED-power-button.sh"
   if [[ -x "$script" ]]; then
     log "Configuring power-switch LED and shutdown color state"
-    if ! bash "$script"; then
+    if ! SATURN_INSTALL_PACKAGES=0 bash "$script"; then
       log "WARN: LED/power-button repair helper failed: $script"
     fi
   else
@@ -1472,6 +1506,11 @@ install_update_manager() {
     HOME="$saturn_home" \
     SUDO_USER="$SATURN_USER" \
     SATURN_SERVICE_USER="$SATURN_USER" \
+    SATURN_SERVICE_GROUP="$(id -gn "$SATURN_USER")" \
+    SATURN_REPO_ROOT="$SATURN_REPO_DIR" \
+    SATURN_UPDATE_MANAGER_SOURCE_DIR="$SATURN_REPO_DIR/update_manager" \
+    SATURN_INSTALL_PACKAGES=0 \
+    SATURN_INSTALL_LEGACY_XDMA_HOOK=0 \
     SATURN_ADMIN_PASSWORD="$SATURN_ADMIN_PASSWORD" \
     SATURN_INSTALL_BRIDGE=0 \
     SATURN_REQUIRE_BRIDGE=0 \
@@ -1491,7 +1530,7 @@ install_pihpsdr_runtime() {
     /usr/bin/python3 "$script" -y --verbose
 
   if [[ -d "$saturn_home/github/pihpsdr" ]]; then
-    chown -R "$SATURN_USER:$SATURN_USER" "$saturn_home/github/pihpsdr" || true
+    chown -R "$SATURN_USER:$SATURN_GROUP" "$saturn_home/github/pihpsdr" || true
   fi
 
   [[ -f "$saturn_home/github/pihpsdr/wdsp/libwdsp.a" ]] || die "piHPSDR build did not produce wdsp/libwdsp.a"
@@ -1513,19 +1552,21 @@ install_saturn_bridge_runtime() {
     SATURN_BRIDGE_WDSP_FLAVOR=wdsp2 \
     SATURN_BRIDGE_SOURCE_DIR="$SATURN_REPO_DIR/update_manager/saturn-bridge" \
     SATURN_GO_ROOT="/opt/saturn-go" \
+    SATURN_INSTALL_PACKAGES=0 \
     SATURN_BRIDGE_RF_TX_ENABLED="${SATURN_BRIDGE_RF_TX_ENABLED:-1}" \
     SATURN_BRIDGE_TX_OPUS_DECODE_ENABLED="${SATURN_BRIDGE_TX_OPUS_DECODE_ENABLED:-1}" \
     bash "$script"
 }
 
 ensure_update_manager_admin_password() {
-  local password_file
+  local password_file password_helper status_output
   local current_umask
+  local prompted_password generated_password=0
   password_file="${SATURN_UPDATE_MANAGER_PASSWORD_FILE:-$UPDATE_MANAGER_PASSWORD_FILE_DEFAULT}"
 
   if [[ -n "$SATURN_ADMIN_PASSWORD" ]]; then
-    if [[ ${#SATURN_ADMIN_PASSWORD} -lt 5 ]]; then
-      die "SATURN_ADMIN_PASSWORD must be at least 5 characters."
+    if [[ ${#SATURN_ADMIN_PASSWORD} -ne $SATURN_ADMIN_PASSWORD_LEN ]]; then
+      die "SATURN_ADMIN_PASSWORD must be exactly ${SATURN_ADMIN_PASSWORD_LEN} characters."
     fi
     install -d -m 0755 "$(dirname "$password_file")"
     current_umask="$(umask)"
@@ -1538,23 +1579,60 @@ ensure_update_manager_admin_password() {
     return 0
   fi
 
-  if [[ -s "$password_file" ]]; then
-    SATURN_ADMIN_PASSWORD="$(head -n 1 "$password_file")"
-    if [[ ${#SATURN_ADMIN_PASSWORD} -lt 5 ]]; then
-      die "Existing update-manager password file is invalid (too short): $password_file"
+  # An upgrade may have a valid existing htpasswd/drop-in but no recoverable
+  # plaintext. Do not reset that credential merely to satisfy provisioning.
+  # The nested Saturn Go installer will reuse both existing auth backends.
+  password_helper="$SATURN_REPO_DIR/scripts/saturn-admin-password.sh"
+  if [[ -s /etc/nginx/.htpasswd \
+      && -s /etc/systemd/system/saturn-go.service.d/10-remote-auth.conf \
+      && -x "$password_helper" ]]; then
+    status_output="$("$password_helper" status 2>/dev/null || true)"
+    if grep -q '^sync_state=in_sync$' <<<"$status_output"; then
+      SATURN_ADMIN_PASSWORD=""
+      log "Reusing synchronized Saturn Go credentials without changing the password."
+      return 0
     fi
-    log "Reusing existing update-manager admin password from $password_file."
-    return 0
+    log "Existing Saturn Go credential backends are not synchronized; selecting a replacement password."
+  fi
+  if [[ -s /etc/nginx/.htpasswd ]]; then
+    log "Existing nginx credentials are missing the Saturn Remote counterpart; a new five-character password will repair both backends."
   fi
 
-  SATURN_ADMIN_PASSWORD="$(generate_password)"
+  if [[ -s "$password_file" ]]; then
+    SATURN_ADMIN_PASSWORD="$(head -n 1 "$password_file")"
+    if [[ ${#SATURN_ADMIN_PASSWORD} -ne $SATURN_ADMIN_PASSWORD_LEN ]]; then
+      log "Ignoring an inactive legacy password file that is not exactly ${SATURN_ADMIN_PASSWORD_LEN} characters."
+      SATURN_ADMIN_PASSWORD=""
+    else
+      log "Reusing existing update-manager admin password from $password_file."
+      return 0
+    fi
+  fi
+
+  if ! bool_true "$SATURN_NONINTERACTIVE" && [[ -t 0 ]]; then
+    printf 'Choose a five-character Saturn password, or press Enter to generate one: ' >&2
+    IFS= read -r prompted_password
+    if [[ -n "$prompted_password" ]]; then
+      if [[ ${#prompted_password} -ne $SATURN_ADMIN_PASSWORD_LEN ]]; then
+        die "The Saturn password must be exactly ${SATURN_ADMIN_PASSWORD_LEN} characters."
+      fi
+      SATURN_ADMIN_PASSWORD="$prompted_password"
+    fi
+  fi
+  if [[ -z "$SATURN_ADMIN_PASSWORD" ]]; then
+    SATURN_ADMIN_PASSWORD="$(generate_password)"
+    generated_password=1
+  fi
   install -d -m 0755 "$(dirname "$password_file")"
   current_umask="$(umask)"
   umask 077
   printf '%s\n' "$SATURN_ADMIN_PASSWORD" >"$password_file"
   umask "$current_umask"
   chmod 0600 "$password_file"
-  log "Generated update-manager admin password and stored at $password_file (root-only)."
+  log "Stored initial update-manager admin password at $password_file (root-only)."
+  if (( generated_password )); then
+    log "Generated a device-specific Saturn Go password; retrieve it from $password_file as root."
+  fi
 }
 
 maybe_flash_fpga() {
@@ -1596,10 +1674,135 @@ cleanup_tmp_artifacts() {
     -exec rm -rf {} + 2>/dev/null || true
 }
 
+verify_install() {
+  local mode="${SATURN_VERIFY_MODE:-hardware}"
+  local failed=0
+
+  case "$mode" in
+    none)
+      log "Install verification disabled (SATURN_VERIFY_MODE=none)."
+      return 0
+      ;;
+    software|hardware) ;;
+    *) die "Unknown SATURN_VERIFY_MODE '$mode' (use software, hardware, or none)." ;;
+  esac
+
+  verify_file() {
+    local path="$1" label="$2"
+    if [[ ! -e "$path" ]]; then
+      log "VERIFY FAIL: $label is missing: $path"
+      failed=1
+    fi
+  }
+  verify_enabled() {
+    local unit="$1"
+    if ! systemctl is-enabled --quiet "$unit"; then
+      log "VERIFY FAIL: $unit is not enabled"
+      failed=1
+    fi
+  }
+
+  if bool_true "$SATURN_REBUILD_XDMA"; then
+    if ! command -v dkms >/dev/null 2>&1 \
+        || ! dkms status -m saturn-xdma 2>/dev/null | grep -F "$(uname -r)" | grep -q 'installed'; then
+      log "VERIFY FAIL: DKMS does not report Saturn XDMA installed for $(uname -r)"
+      failed=1
+    fi
+    if [[ -e /etc/kernel/postinst.d/saturn-xdma || -L /etc/kernel/postinst.d/saturn-xdma ]]; then
+      log "VERIFY FAIL: legacy XDMA post-install hook is active alongside DKMS"
+      failed=1
+    fi
+  fi
+
+  if bool_true "$SATURN_INSTALL_CLOUD_INIT" \
+      && ! command -v cloud-init >/dev/null 2>&1; then
+    log "VERIFY FAIL: cloud-init is required by the image-factory profile"
+    failed=1
+  fi
+
+  if bool_true "$SATURN_INSTALL_P2APP_CONTROL"; then
+    verify_file /opt/saturn-radio/bin/p2app "production P2 binary"
+    verify_file /etc/systemd/system/p2app.service "P2 systemd unit"
+    verify_file /usr/local/lib/saturn-go/scripts/saturn-p2-deploy.sh "trusted P2 deploy helper"
+    verify_enabled p2app.service
+    if [[ -x /opt/saturn-radio/bin/p2app ]] \
+        && [[ "$(stat -c '%U:%G' /opt/saturn-radio/bin/p2app)" != root:root ]]; then
+      log "VERIFY FAIL: production P2 binary is not root-owned"
+      failed=1
+    fi
+  fi
+
+  if bool_true "$SATURN_INSTALL_UPDATE_MANAGER"; then
+    verify_file /opt/saturn-go/bin/saturn-go "Saturn Go binary"
+    verify_file /etc/systemd/system/saturn-go.service "Saturn Go systemd unit"
+    verify_file /etc/nginx/.htpasswd "Saturn Go authentication file"
+    verify_file /etc/sudoers.d/saturn-go-maintenance "Saturn Go sudoers policy"
+    verify_enabled saturn-go.service
+    if ! nginx -t >/dev/null 2>&1; then
+      log "VERIFY FAIL: nginx configuration test failed"
+      failed=1
+    fi
+    if command -v visudo >/dev/null 2>&1 \
+        && ! visudo -cf /etc/sudoers.d/saturn-go-maintenance >/dev/null 2>&1; then
+      log "VERIFY FAIL: Saturn Go sudoers policy is invalid"
+      failed=1
+    fi
+    if [[ ! -x /usr/local/lib/saturn-go/scripts/saturn-admin-password.sh ]] \
+        || ! /usr/local/lib/saturn-go/scripts/saturn-admin-password.sh status \
+          | grep -q '^sync_state=in_sync$'; then
+      log "VERIFY FAIL: nginx and Saturn Remote credentials are not synchronized"
+      failed=1
+    fi
+  fi
+
+  if bool_true "$SATURN_INSTALL_SATURN_BRIDGE"; then
+    verify_file /opt/saturn-go/bin/saturn-bridge "Saturn Bridge binary"
+    verify_file /etc/systemd/system/saturn-bridge.service "Saturn Bridge systemd unit"
+    verify_enabled saturn-bridge.service
+  fi
+
+  if [[ "$mode" == hardware ]]; then
+    if bool_true "$SATURN_REBUILD_XDMA" \
+        && [[ ! -c /dev/xdma0_user && ! -c /dev/xdma/card0/user ]]; then
+      log "VERIFY FAIL: XDMA user device is unavailable"
+      failed=1
+    fi
+    if bool_true "$SATURN_INSTALL_P2APP_CONTROL" \
+        && ! systemctl is-active --quiet p2app.service; then
+      log "VERIFY FAIL: p2app.service is not active"
+      failed=1
+    fi
+    if bool_true "$SATURN_INSTALL_UPDATE_MANAGER"; then
+      systemctl is-active --quiet saturn-go.service || {
+        log "VERIFY FAIL: saturn-go.service is not active"
+        failed=1
+      }
+      curl -fsS --max-time 3 http://127.0.0.1:8080/healthz >/dev/null || {
+        log "VERIFY FAIL: Saturn Go health endpoint failed"
+        failed=1
+      }
+    fi
+    if bool_true "$SATURN_INSTALL_SATURN_BRIDGE"; then
+      systemctl is-active --quiet saturn-bridge.service || {
+        log "VERIFY FAIL: saturn-bridge.service is not active"
+        failed=1
+      }
+      if command -v ss >/dev/null 2>&1 && ! ss -ltn | grep -q ':50001 '; then
+        log "VERIFY FAIL: Saturn Bridge TCI listener is unavailable"
+        failed=1
+      fi
+    fi
+  fi
+
+  (( failed == 0 )) || die "$mode installation verification failed"
+  log "$mode installation verification passed"
+}
+
 write_completion_state() {
   local saturn_home="$1"
-  local commit hardware_model hardware_platform_vendor hardware_module_family hardware_storage_variant
+  local commit contract hardware_model hardware_platform_vendor hardware_module_family hardware_storage_variant
   commit="$(run_as_user "$saturn_home" git -C "$SATURN_REPO_DIR" rev-parse --short HEAD 2>/dev/null || true)"
+  contract="$(installer_contract_hash)"
   hardware_model="$(read_device_tree_model 2>/dev/null || true)"
   hardware_platform_vendor="$(detect_platform_vendor 2>/dev/null || true)"
   hardware_module_family="$(detect_module_family 2>/dev/null || true)"
@@ -1607,9 +1810,14 @@ write_completion_state() {
   install -d -m 0755 "$SATURN_STATE_DIR"
   cat > "${SATURN_STATE_DIR}/complete" <<EOF
 completed_at=$(date --iso-8601=seconds)
+installer_version=${SATURN_HOST_SCHEMA_VERSION}
+install_contract=${contract}
+install_profile=${SATURN_INSTALL_PROFILE}
+verification_mode=${SATURN_VERIFY_MODE}
 saturn_user=${SATURN_USER}
 repo_url=${SATURN_REPO_URL}
 repo_branch=${SATURN_REPO_BRANCH}
+repo_ref=${SATURN_REPO_REF:-${SATURN_REPO_BRANCH}}
 repo_dir=${SATURN_REPO_DIR}
 repo_commit=${commit:-unknown}
 hardware_model=${hardware_model:-unknown}
@@ -1619,11 +1827,174 @@ hardware_storage_variant=${hardware_storage_variant:-unknown}
 front_panel_type=${SATURN_FRONT_PANEL_TYPE:-unknown}
 xdma_present=${SATURN_XDMA_PRESENT:-unknown}
 system_role=${SATURN_SYSTEM_ROLE:-unknown}
+xdma_policy=dkms
 EOF
+  cat > /etc/saturn-release <<EOF
+host_schema=${SATURN_HOST_SCHEMA_VERSION}
+repo_commit=${commit:-unknown}
+install_profile=${SATURN_INSTALL_PROFILE}
+installed_at=$(date --iso-8601=seconds)
+EOF
+  chmod 0644 /etc/saturn-release
+}
+
+installer_contract_hash() {
+  local commit
+  commit="$(git -C "$SATURN_REPO_DIR" rev-parse HEAD 2>/dev/null || printf unknown)"
+  {
+    printf '%s\n' \
+      "installer=$SATURN_HOST_SCHEMA_VERSION" \
+      "commit=$commit" \
+      "kernel=$(uname -r)" \
+      "user=$SATURN_USER" \
+      "group=$SATURN_GROUP" \
+      "repo_dir=$SATURN_REPO_DIR" \
+      "profile=$SATURN_INSTALL_PROFILE" \
+      "packages=$SATURN_INSTALL_PACKAGES" \
+      "driver=$SATURN_REBUILD_XDMA" \
+      "p2=$SATURN_INSTALL_P2APP_CONTROL" \
+      "p2_tests=$SATURN_RUN_P2_TESTS" \
+      "go=$SATURN_INSTALL_UPDATE_MANAGER" \
+      "bridge=$SATURN_INSTALL_SATURN_BRIDGE" \
+      "bridge_verify=${SATURN_BRIDGE_VERIFY_RUNTIME:-1}" \
+      "pihpsdr=$SATURN_INSTALL_PIHPSDR" \
+      "udev=$SATURN_INSTALL_UDEV_RULES" \
+      "shutdown_waiter=$SATURN_INSTALL_SHUTDOWN_WAITER" \
+      "developer_tools=$SATURN_INSTALL_DEVELOPER_TOOLS" \
+      "cloud_init=$SATURN_INSTALL_CLOUD_INIT" \
+      "optional_tools=$SATURN_BUILD_OPTIONAL_TOOLS" \
+      "i2c=$SATURN_ENABLE_I2C" \
+      "ssh=$SATURN_ENABLE_SSH" \
+      "vnc=$SATURN_ENABLE_VNC" \
+      "lcd=$SATURN_LCD_PROFILE" \
+      "front_panel_detect=$SATURN_DETECT_FRONT_PANEL" \
+      "forced_role=$SATURN_FORCE_SYSTEM_ROLE" \
+      "flash=$SATURN_FLASH_FPGA" \
+      "flash_image=$SATURN_FLASH_IMAGE" \
+      "flash_fallback=$SATURN_FLASH_FALLBACK" \
+      "verify=$SATURN_VERIFY_MODE"
+  } | sha256sum | awk '{print substr($1,1,16)}'
+}
+
+phase_contract_hash() {
+  local commit
+  commit="$(git -C "$SATURN_REPO_DIR" rev-parse HEAD 2>/dev/null || printf unknown)"
+  {
+    printf '%s\n' \
+      "installer=$SATURN_HOST_SCHEMA_VERSION" \
+      "commit=$commit" \
+      "kernel=$(uname -r)" \
+      "user=$SATURN_USER" \
+      "group=$SATURN_GROUP" \
+      "repo_dir=$SATURN_REPO_DIR" \
+      "profile=$SATURN_INSTALL_PROFILE" \
+      "packages=$SATURN_INSTALL_PACKAGES" \
+      "driver=$SATURN_REBUILD_XDMA" \
+      "p2=$SATURN_INSTALL_P2APP_CONTROL" \
+      "p2_tests=$SATURN_RUN_P2_TESTS" \
+      "go=$SATURN_INSTALL_UPDATE_MANAGER" \
+      "bridge=$SATURN_INSTALL_SATURN_BRIDGE" \
+      "bridge_verify=${SATURN_BRIDGE_VERIFY_RUNTIME:-1}" \
+      "pihpsdr=$SATURN_INSTALL_PIHPSDR" \
+      "cloud_init=$SATURN_INSTALL_CLOUD_INIT" \
+      "i2c=$SATURN_ENABLE_I2C" \
+      "ssh=$SATURN_ENABLE_SSH" \
+      "vnc=$SATURN_ENABLE_VNC" \
+      "optional_tools=$SATURN_BUILD_OPTIONAL_TOOLS"
+  } | sha256sum | awk '{print substr($1,1,16)}'
+}
+
+prepare_phase_state() {
+  local contract
+  contract="$(phase_contract_hash)"
+  SATURN_PHASE_RUN_DIR="${SATURN_STATE_DIR}/phases/${contract}"
+  if bool_true "$SATURN_FORCE_REPROVISION"; then
+    rm -rf "$SATURN_PHASE_RUN_DIR"
+  fi
+  install -d -m 0755 "$SATURN_PHASE_RUN_DIR"
+  export SATURN_PHASE_RUN_DIR
+}
+
+run_phase() {
+  local name="$1" label="$2"
+  shift 2
+  local marker="${SATURN_PHASE_RUN_DIR}/${name}.complete"
+  local current="${SATURN_STATE_DIR}/current-phase"
+
+  if bool_true "$SATURN_RESUME" && [[ -f "$marker" ]]; then
+    log "Resume: phase '$name' already completed; skipping."
+    return 0
+  fi
+
+  set_ui_stage "$label"
+  printf '%s|%s\n' "$name" "$(date --iso-8601=seconds)" >"$current"
+  "$@"
+  printf 'completed_at=%s\n' "$(date --iso-8601=seconds)" >"$marker"
+  rm -f "$current"
+}
+
+phase_packages() {
+  if bool_true "$SATURN_INSTALL_PACKAGES"; then
+    ensure_packages
+  else
+    log "Skipping package installation (SATURN_INSTALL_PACKAGES=0)"
+  fi
+}
+
+phase_repository() {
+  local saturn_home="$1"
+  ensure_repo "$saturn_home"
+}
+
+phase_build() {
+  local saturn_home="$1" nproc="$2"
+  enable_python_repo_guard
+  prepare_python_env "$saturn_home"
+  build_saturn_apps "$saturn_home" "$nproc"
+}
+
+phase_driver() {
+  local saturn_home="$1"
+  if bool_true "$SATURN_REBUILD_XDMA"; then
+    build_and_install_xdma "$saturn_home"
+  else
+    log "Skipping XDMA installation (SATURN_REBUILD_XDMA=0)"
+  fi
+}
+
+phase_p2() {
+  local saturn_home="$1"
+  if bool_true "$SATURN_INSTALL_P2APP_CONTROL"; then
+    install_p2app_control "$saturn_home"
+  else
+    log "Skipping Protocol 2 runtime installation"
+  fi
+}
+
+phase_saturn_go() {
+  local saturn_home="$1"
+  if ! bool_true "$SATURN_INSTALL_UPDATE_MANAGER"; then
+    log "Skipping Saturn Go installation"
+    return 0
+  fi
+
+  ensure_update_manager_admin_password
+  install_update_manager "$saturn_home"
+  if bool_true "$SATURN_INSTALL_PIHPSDR"; then
+    install_pihpsdr_runtime "$saturn_home"
+  fi
+  if bool_true "$SATURN_INSTALL_SATURN_BRIDGE"; then
+    if bool_true "$SATURN_REQUIRE_SATURN_BRIDGE"; then
+      install_saturn_bridge_runtime "$saturn_home"
+    elif ! ( install_saturn_bridge_runtime "$saturn_home" ); then
+      log "WARN: Saturn Bridge install failed and SATURN_REQUIRE_SATURN_BRIDGE=0; continuing provisioning."
+    fi
+  fi
+  install_pihpsdr_installer_shortcut "$saturn_home"
 }
 
 main() {
-  local log_dir
+  local log_dir saturn_home nproc installed_contract current_contract
   ensure_root
   ensure_tmp_permissions
   log_dir="$(dirname "$SATURN_LOG_FILE")"
@@ -1636,34 +2007,45 @@ main() {
   trap cleanup_python_guard EXIT
   trap 'handle_error "$LINENO" "${BASH_COMMAND}"' ERR
 
-  if [[ -f "${SATURN_STATE_DIR}/complete" ]] && ! bool_true "$SATURN_FORCE_REPROVISION"; then
-    local existing_home
-    existing_home="$(getent passwd "$SATURN_USER" | cut -d: -f6 || true)"
-    if [[ -n "$existing_home" ]]; then
-      remove_desktop_ui_autostart "$existing_home"
-    fi
-    write_ui_status "SKIPPED" "Already provisioned. No provisioning run was executed."
-    log "Provisioning already completed. Set SATURN_FORCE_REPROVISION=1 to run again."
-    exit 0
-  fi
-
-  local saturn_home nproc
   set_ui_stage "Resolving Saturn user account"
   saturn_home="$(ensure_user)"
+  if [[ -z "$SATURN_GROUP" ]]; then
+    SATURN_GROUP="$(id -gn "$SATURN_USER")"
+  fi
+  getent group "$SATURN_GROUP" >/dev/null || die "group does not exist: $SATURN_GROUP"
+  if [[ -z "$SATURN_REPO_DIR" ]]; then
+    SATURN_REPO_DIR="${saturn_home}/github/Saturn"
+  fi
+  export SATURN_GROUP SATURN_REPO_DIR
   nproc="$(nproc 2>/dev/null || echo 1)"
 
-  set_ui_stage "Installing desktop provisioning UI prerequisites"
-  ensure_ui_packages
-  set_ui_stage "Installing desktop power helper"
-  install_desktop_ui_power_helper
+  current_contract="$(installer_contract_hash)"
+  if [[ -f "${SATURN_STATE_DIR}/complete" ]] && ! bool_true "$SATURN_FORCE_REPROVISION"; then
+    installed_contract="$(awk -F= '$1 == "install_contract" {print $2; exit}' "${SATURN_STATE_DIR}/complete")"
+    if [[ -n "$installed_contract" && "$installed_contract" == "$current_contract" ]]; then
+      remove_desktop_ui_autostart "$saturn_home"
+      write_ui_status "SKIPPED" "This installer contract is already applied."
+      log "This Saturn installer contract is already applied; no provisioning run is needed."
+      exit 0
+    fi
+    log "Installed contract differs from the current host/repository/options; applying it now."
+  fi
+
+  prepare_phase_state
+
+  run_phase packages "Installing build/runtime dependencies" phase_packages
+  if desktop_ui_enabled; then
+    set_ui_stage "Installing desktop power helper"
+    install_desktop_ui_power_helper
+  else
+    log "Skipping desktop provisioning power helper (desktop UI disabled)"
+  fi
   set_ui_stage "Preparing desktop provisioning UI autostart"
   install_desktop_ui_autostart "$saturn_home"
   set_ui_stage "Launching desktop provisioning interface"
   launch_desktop_ui "$saturn_home"
 
   log "Starting Saturn provisioning for user '$SATURN_USER' (home: $saturn_home)"
-  set_ui_stage "Installing build/runtime dependencies"
-  ensure_packages
   set_ui_stage "Configuring USB boot and input tuning"
   configure_usb_boot_tweaks
   set_ui_stage "Configuring I2C, SSH, and VNC"
@@ -1683,20 +2065,16 @@ main() {
   resolve_system_role
   set_ui_stage "Applying LCD boot profile"
   configure_lcd_profile
-  set_ui_stage "Installing developer desktop tools"
-  install_desktop_dev_tools "$saturn_home"
+  if bool_true "$SATURN_INSTALL_DEVELOPER_TOOLS"; then
+    set_ui_stage "Installing developer desktop tools"
+    install_desktop_dev_tools "$saturn_home"
+  fi
   if [[ "$SATURN_UI_STARTED" -eq 0 ]]; then
     launch_desktop_ui "$saturn_home"
   fi
 
-  set_ui_stage "Syncing Saturn repository"
-  ensure_repo "$saturn_home"
-  set_ui_stage "Enabling Python repo guard"
-  enable_python_repo_guard
-  set_ui_stage "Preparing Python virtual environment"
-  prepare_python_env "$saturn_home"
-  set_ui_stage "Building Saturn applications and tools"
-  build_saturn_apps "$saturn_home" "$nproc"
+  run_phase repository "Preparing Saturn repository" phase_repository "$saturn_home"
+  run_phase build "Building Saturn applications and tools" phase_build "$saturn_home" "$nproc"
   set_ui_stage "Installing desktop launchers"
   install_desktop_shortcuts "$saturn_home"
   if bool_true "$SATURN_INSTALL_SHUTDOWN_WAITER"; then
@@ -1706,38 +2084,16 @@ main() {
   set_ui_stage "Configuring power-switch LED"
   install_led_power_button_fix
 
-  if bool_true "$SATURN_REBUILD_XDMA"; then
-    set_ui_stage "Building and installing XDMA module"
-    build_and_install_xdma "$saturn_home"
-  fi
-  if bool_true "$SATURN_INSTALL_P2APP_CONTROL"; then
-    set_ui_stage "Installing p2app-control service"
-    install_p2app_control "$saturn_home"
-  fi
-  if bool_true "$SATURN_INSTALL_UPDATE_MANAGER"; then
-    set_ui_stage "Installing Saturn update manager"
-    ensure_update_manager_admin_password
-    install_update_manager "$saturn_home"
-    if bool_true "$SATURN_INSTALL_PIHPSDR"; then
-      set_ui_stage "Installing piHPSDR DSP dependencies"
-      install_pihpsdr_runtime "$saturn_home"
-    fi
-    if bool_true "$SATURN_INSTALL_SATURN_BRIDGE"; then
-      set_ui_stage "Installing Saturn Remote bridge"
-      if bool_true "$SATURN_REQUIRE_SATURN_BRIDGE"; then
-        install_saturn_bridge_runtime "$saturn_home"
-      elif ! ( install_saturn_bridge_runtime "$saturn_home" ); then
-        log "WARN: Saturn Bridge install failed and SATURN_REQUIRE_SATURN_BRIDGE=0; continuing provisioning."
-      fi
-    fi
-    set_ui_stage "Installing standalone piHPSDR shortcut"
-    install_pihpsdr_installer_shortcut "$saturn_home"
-  fi
+  run_phase driver "Installing DKMS-managed XDMA module" phase_driver "$saturn_home"
+  run_phase p2 "Installing Protocol 2 runtime" phase_p2 "$saturn_home"
+  run_phase saturn-go "Installing Saturn Go and Saturn Bridge" phase_saturn_go "$saturn_home"
   if bool_true "$SATURN_FLASH_FPGA"; then
     set_ui_stage "Flashing FPGA image"
     maybe_flash_fpga
   fi
 
+  set_ui_stage "Verifying installed appliance"
+  verify_install
   set_ui_stage "Finalizing provisioning state"
   cleanup_python_artifacts_in_repo
   write_profile_env_state

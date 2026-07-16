@@ -129,7 +129,13 @@ EOF
 }
 
 remove_legacy_autostart_entry() {
-  local autostart_dir="/home/${SATURN_USER}/.config/autostart"
+  local saturn_home autostart_dir
+  saturn_home="$(getent passwd "$SATURN_USER" | cut -d: -f6 || true)"
+  [[ -n "$saturn_home" ]] || {
+    log "No home directory found for $SATURN_USER; legacy autostart cleanup skipped"
+    return 0
+  }
+  autostart_dir="${saturn_home}/.config/autostart"
   local legacy_entry="${autostart_dir}/g2-shutdown.desktop"
   if [[ -f "$legacy_entry" ]]; then
     rm -f "$legacy_entry"

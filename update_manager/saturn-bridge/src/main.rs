@@ -35,13 +35,13 @@ const MAX_TCI_CLIENT_RELEASE_GRACE_MS: u64 = 30_000;
 // that stays stale past this window is no longer safe to keep keyed.
 const TX_UPLINK_LATE_LIMIT: Duration = Duration::from_millis(500);
 const TX_UPLINK_LATE_SUSTAIN: Duration = Duration::from_millis(100);
-// Phase 41 stopgap: bridge force-RX if no operator control message arrives
+// Bridge force-RX if no operator control message arrives
 // within this window while keyed. Independent safety net for the case where
 // browser PTT-release bytes are stuck behind queued media on the single
-// WebSocket. Paired Phase 42 split sessions use a wider limit because release
+// WebSocket. Paired split sessions use a wider limit because release
 // and disconnect are already isolated on the control lane; cannot be disabled.
 const TX_CONTROL_WATCHDOG_LIMIT: Duration = Duration::from_millis(500);
-// Phase 42 paired control/media sessions have an independent control socket,
+// Paired control/media sessions have an independent control socket,
 // so a delayed mobile-browser heartbeat is less dangerous than it was on the
 // old single media/control socket. Keep the watchdog, but avoid false RX faults
 // from phone/Tailscale timer jitter while mic frames still flow on media.
@@ -142,7 +142,7 @@ fn update_tx_uplink_late_detector(
     }
 }
 
-// Phase 41 stopgap: detect prolonged absence of operator control messages
+// Detect prolonged absence of operator control messages
 // while keyed. Returns Some(silence) when the bridge has been keyed and
 // silent of control input for longer than the supplied watchdog limit.
 fn update_tx_control_watchdog(
@@ -465,7 +465,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                     role,
                 } => {
                     println!(
-                        "saturn-bridge: Phase 42 client {client_id} opened session {session_id} as {:?}",
+                        "saturn-bridge: split client {client_id} opened session {session_id} as {:?}",
                         role
                     );
                 }
@@ -475,7 +475,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                     lane,
                 } => {
                     println!(
-                        "saturn-bridge: Phase 42 client {client_id} marked {:?} lane for session {session_id}",
+                        "saturn-bridge: split client {client_id} marked {:?} lane for session {session_id}",
                         lane
                     );
                 }
@@ -1008,7 +1008,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             let on_air = model.desired.tx_phase == TxPhase::Keyed || model.desired.tx_enabled;
             let tx_media_priority =
                 tx_media_priority_active(tx_requested.load(Ordering::Relaxed), &model);
-            // Phase 42: bridge owns the authoritative TX media-priority state.
+            // The bridge owns the authoritative TX media-priority state.
             // Suppress RX media as soon as TX is requested/armed, before RF is
             // keyed, so mic prefill is not starved on constrained VPN links.
             // This keeps the no-sticky-browser-flag architecture from the
@@ -1048,7 +1048,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 }
             }
 
-            // Phase 41 stopgap: independent of mic freshness. This catches
+            // Independent of mic freshness. This catches
             // single-WebSocket media backlog that delays operator release bytes.
             if on_air && !tx_control_watchdog_fault_active {
                 let control_watchdog_limit =

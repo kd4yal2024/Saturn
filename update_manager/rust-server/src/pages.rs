@@ -70,8 +70,7 @@ fn remote_host_without_port(host: &str) -> &str {
     }
 }
 
-pub const REMOTE_NEXT_DEFAULT_QUERY: &str =
-    "phase42_split=1&phase44_tx_opus=1&phase44_tx_cfc=1&client_bust=bridgeprefill240-cfcessb3";
+pub const REMOTE_NEXT_DEFAULT_QUERY: &str = "transport=split&tx_opus=1&tx_cfc=1";
 
 fn remote_next_https_url(host: &str) -> String {
     format!(
@@ -501,7 +500,7 @@ mod tests {
         assert_eq!(res.status(), StatusCode::TEMPORARY_REDIRECT);
         assert_eq!(
             res.headers().get(header::LOCATION).unwrap(),
-            "https://192.168.0.139:8443/remote-next?phase42_split=1&phase44_tx_opus=1&phase44_tx_cfc=1&client_bust=bridgeprefill240-cfcessb3"
+            "https://192.168.0.139:8443/remote-next?transport=split&tx_opus=1&tx_cfc=1"
         );
     }
 

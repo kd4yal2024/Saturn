@@ -16,8 +16,10 @@ export const TX_OPUS_NB_BITRATE_BPS = 16_000;
 export const TX_OPUS_WB_BITRATE_BPS = 24_000;
 export const TX_OPUS_DECODE_OUTPUT_FRAME_SAMPLES =
   (TX_OPUS_DECODE_OUTPUT_SAMPLE_RATE_HZ * TX_OPUS_FRAME_DURATION_US) / 1_000_000;
-export const TX_OPUS_OVERRIDE_QUERY_PARAM = 'phase44_tx_opus';
-export const TX_OPUS_OVERRIDE_STORAGE_KEY = 'saturn.phase44.txOpus';
+export const TX_OPUS_OVERRIDE_QUERY_PARAM = 'tx_opus';
+export const TX_OPUS_OVERRIDE_LEGACY_QUERY_PARAM = 'phase44_tx_opus';
+export const TX_OPUS_OVERRIDE_STORAGE_KEY = 'saturn.remote.txOpus';
+export const TX_OPUS_OVERRIDE_LEGACY_STORAGE_KEY = 'saturn.phase44.txOpus';
 
 const TX_OPUS_OVERRIDE_TRUE_VALUES = new Set(['1', 'true', 'on', 'yes', 'opus']);
 
@@ -157,7 +159,9 @@ export function txOpusRuntimeOverrideEnabled(
   storedValue: string | null | undefined = undefined,
 ): boolean {
   const params = new URLSearchParams(search);
-  const queryValue = params.get(TX_OPUS_OVERRIDE_QUERY_PARAM);
+  const queryValue = params.has(TX_OPUS_OVERRIDE_QUERY_PARAM)
+    ? params.get(TX_OPUS_OVERRIDE_QUERY_PARAM)
+    : params.get(TX_OPUS_OVERRIDE_LEGACY_QUERY_PARAM);
   if (queryValue !== null) {
     return TX_OPUS_OVERRIDE_TRUE_VALUES.has(queryValue.trim().toLowerCase());
   }

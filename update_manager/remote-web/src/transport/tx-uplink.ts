@@ -2,12 +2,12 @@ export const TX_UPLINK_DEFAULT_RTT_MS = 200;
 export const TX_UPLINK_DEGRADED_RTT_FACTOR = 2;
 export const TX_UPLINK_DROP_RTT_FACTOR = 4;
 export const TX_UPLINK_MIN_THRESHOLD_BYTES = 1024;
-// Phase 41 stopgap: absolute ceilings on browser WebSocket.bufferedAmount for
+// Absolute ceilings on browser WebSocket.bufferedAmount for
 // the TX mic path. Cell/VPN links can have low bridge RTT but bursty upstream
 // scheduling, so the RTT-scaled thresholds are telemetry only; real mic frames
-// are dropped only at the absolute hard cap. Phase 42's control lane still owns
+// are dropped only at the absolute hard cap. The split control lane still owns
 // RF-off and flushes late media, so bounded buffering is preferable to chopping
-// PCM on slow links until Phase 44 Opus lands.
+// PCM fallback on slow links when Opus is unavailable.
 export const TX_UPLINK_SOFT_CAP_BYTES = 32_768;
 export const TX_UPLINK_PCM_HARD_CAP_BYTES = 65_536;
 export const TX_UPLINK_OPUS_HARD_CAP_BYTES = 4_096;
@@ -171,7 +171,7 @@ export async function detectTxCodecCapabilities(
 
   return {
     detected,
-    // Keep Phase 44 source behavior unchanged until the bridge Opus backend
+    // Keep source behavior unchanged until the bridge Opus backend
     // and browser/bridge force-RX/fallback acceptance tests are ready.
     // The first browser integration gate only supports wideband from the
     // 48 kHz mic path; narrowband needs an explicit browser-side resampler.

@@ -18,7 +18,7 @@ cargo build --release
 
 ```bash
 cd /home/pi/github/Saturn
-sudo bash update_manager/install_saturn_go_nginx.sh
+sudo ./install.sh
 ```
 
 Installer actions include:
@@ -48,14 +48,17 @@ be built.
 
 ## Update Existing Deployment
 
-After pulling repo changes, run installer again:
+After pulling changes that modify host configuration, trusted helpers, sudoers,
+nginx, driver policy, or systemd units, apply the canonical installer contract:
 
 ```bash
 cd /home/pi/github/Saturn
-sudo bash update_manager/install_saturn_go_nginx.sh
+sudo ./install.sh
 ```
 
-Installer is designed to refresh service, web assets, scripts, and config.
+The installer resumes matching completed phases and reapplies the full contract
+when the repository commit or host schema changes. Use `--force` only for an
+intentional complete reprovision.
 Saturn Go self-update also builds the bridge in build-only mode, stages the
 binary and service unit with the UI bundle, and deploys them together. Set
 `SATURN_SATURNGO_BUILD_BRIDGE=0` only when intentionally retaining an older
@@ -112,15 +115,15 @@ Remote entry behavior:
 - `http://<host>/remote` should redirect to `https://<host>:8443/remote-next` (with the default feature query).
 - `http://<host>/saturn/remote` should redirect the same way.
 - `https://<host>:8443/remote` and the TLS root `/` redirect to `/remote-next`; the legacy inline page was retired on 2026-07-14.
-- `https://<host>:8443/remote-next?phase42_split=1&phase44_tx_opus=1&phase44_tx_cfc=1&client_bust=bridgeprefill240-cfcessb3` is the current Saturn Remote checkpoint/default operator URL: Phase 42 split control/media sockets plus the guarded Phase 44 Opus TX path and the conservative ESSB CFC baseline. It serves `saturn-remote-next.html` + Vite bundle `saturn-remote-next.js` via `/remote-assets/remote-next.js`.
+- `https://<host>:8443/remote-next?transport=split&tx_opus=1&tx_cfc=1` is the current Saturn Remote default operator URL: split control/media sockets plus the guarded Opus TX path and conservative ESSB CFC baseline. It serves `saturn-remote-next.html` + Vite bundle `saturn-remote-next.js` via `/remote-assets/remote-next.js`. Older `phase42_*` and `phase44_*` flags remain accepted as compatibility aliases.
 - `https://<host>:8443/remote-next` without a query redirects to the default feature query. It is the only remote UI; basic-auth credentials, `remote_settings.json`, and `remote_profiles.json` state are unchanged from the legacy page.
-- The current Phase 44 Opus TX processing checkpoint leaves Noise Gate available as an operator control but off by default, keeps TX EQ on with the ESSB-lite curve `3:+1,4:+2,5:+1,6:-1,7:+1,8:+3,9:+1`, and enables the conservative ESSB CFC baseline only when `phase44_tx_cfc=1` is present. Noise Gate can be explicitly started on for testing with `phase44_tx_noise_gate=1` and a guarded threshold such as `phase44_tx_noise_gate_db=-50`; once loaded, the operator Noise Gate toggle is allowed to persist instead of being repeatedly reset by the Phase 44 restore path.
+- The current Opus TX processing profile leaves Noise Gate available as an operator control but off by default, keeps TX EQ on with the ESSB-lite curve `3:+1,4:+2,5:+1,6:-1,7:+1,8:+3,9:+1`, and enables the conservative ESSB CFC baseline only when `tx_cfc=1` is present. Noise Gate can be explicitly started on for testing with `tx_noise_gate=1` and a guarded threshold such as `tx_noise_gate_db=-50`; once loaded, the operator Noise Gate toggle is allowed to persist instead of being repeatedly reset by the TX audio restore path.
 - Field validation on 2026-06-11 confirmed `bridgeprefill240-gateoff1` transmitted clear Opus wideband TX audio from Chrome Android with `accepted=opus_wb`, `txNoiseGateEnabled=0`, `txMicDrops=0`, and `txUplinkHwm=854`.
 - Field validation on 2026-06-11 also found the wider TX filter `50-4150` sounded good with `bridgeprefill240-gateoff2`; copy-log evidence showed `accepted=opus_wb`, `txMicDrops=0`, and `txUplinkHwm=637`.
-- `https://<host>:8443/remote-next?phase42_split=1&phase44_tx_opus=1&phase44_tx_cfc=1&client_bust=bridgeprefill240-cfcessb3` enables the opt-in ESSB CFC baseline. The baseline keeps CFC conservative: precomp `1.0 dB`, CFC bands `50:+0.5, 100:+1.5, 200:+2.0, 500:+2.0, 1k:+1.0, 1.5k:+0.5`, and no CFC lift above 1.5 kHz. This is intended to add bottom-end warmth and warm mids without the older high-gain CFC profile that caused choppy TX audio. Optional `phase44_tx_cfc_precomp_db=<0..4>` can tune precomp for tests.
+- `https://<host>:8443/remote-next?transport=split&tx_opus=1&tx_cfc=1` enables the opt-in ESSB CFC baseline. The baseline keeps CFC conservative: precomp `1.0 dB`, CFC bands `50:+0.5, 100:+1.5, 200:+2.0, 500:+2.0, 1k:+1.0, 1.5k:+0.5`, and no CFC lift above 1.5 kHz. This is intended to add bottom-end warmth and warm mids without the older high-gain CFC profile that caused choppy TX audio. Optional `tx_cfc_precomp_db=<0..4>` can tune precomp for tests.
 - Field validation on 2026-06-12 confirmed `bridgeprefill240-cfcessb2` held clear Opus wideband TX audio with CFC enabled: `accepted=opus_wb`, `codecDecodeFaults=0`, `codecPcmFallback=0`, `txMicDrops=15`, and `txUplinkHwm=4192` during a longer Chrome Android TX. The small browser drop count came from the Opus uplink hard cap and was not reported audible.
 - Additional field validation confirmed the same CFC profile with cleaner short-run counters: `accepted=opus_wb`, `codecDecodeFaults=0`, `codecPcmFallback=0`, `txMicDrops=0`, `txUplinkHwm=596`, `iqStreaming=1`, and `audioStreaming=1`; operator report was "TX Audio is clear, working really well."
-- Noise Gate validation confirmed the operator toggle and threshold controls persist under the Phase 44 restore path: `txNoiseGateEnabled=1`, `txNoiseGateThresholdDb=-35.0`, `accepted=opus_wb`, `codecDecodeFaults=0`, `codecPcmFallback=0`, `txMicDrops=0`, `txUplinkHwm=3318`, and the operator reported "Noise Gate working fine."
+- Noise Gate validation confirmed the operator toggle and threshold controls persist under the TX audio restore path: `txNoiseGateEnabled=1`, `txNoiseGateThresholdDb=-35.0`, `accepted=opus_wb`, `codecDecodeFaults=0`, `codecPcmFallback=0`, `txMicDrops=0`, `txUplinkHwm=3318`, and the operator reported "Noise Gate working fine."
 - Shared remote settings persist in `/var/lib/saturn-state/remote_settings.json`.
 - Named remote Setup profiles persist in `/var/lib/saturn-state/remote_profiles.json`.
 - The remote `Setup` menu supports profile save/load/delete, startup profile selection, and panadapter/waterfall display presets.
@@ -221,7 +224,7 @@ Remediation applied on that Pi:
 sudo install -d -m 0755 /etc/systemd/system/saturn-go.service.d
 sudo tee /etc/systemd/system/saturn-go.service.d/10-remote-auth.conf >/dev/null <<'EOF'
 [Service]
-Environment=SATURN_REMOTE_BASIC_AUTH=admin:<choose-a-strong-password>
+Environment=SATURN_REMOTE_BASIC_AUTH=admin:<choose-five-characters>
 EOF
 sudo chmod 0600 /etc/systemd/system/saturn-go.service.d/10-remote-auth.conf
 sudo systemctl daemon-reload
@@ -237,7 +240,7 @@ Operators inheriting an existing deployment should run the unauthenticated `curl
 The manual drop-in recipe above is the historical remediation from that audit. On current installs, set or re-align the credential with the password helper instead — it updates `/etc/nginx/.htpasswd` and the TLS drop-in together so the LAN admin path (`/saturn/*`) and the TLS remote path (`/remote*`) cannot drift:
 
 ```bash
-printf '%s\n' 'new-password' | sudo /usr/local/lib/saturn-go/scripts/saturn-admin-password.sh set --restart now
+printf '%s\n' 'abc12' | sudo /usr/local/lib/saturn-go/scripts/saturn-admin-password.sh set --restart now
 sudo /usr/local/lib/saturn-go/scripts/saturn-admin-password.sh status   # expect sync_state=in_sync
 ```
 
@@ -260,13 +263,13 @@ sudo systemctl restart saturn-go.service
 
 Saturn logs a warning and binds the listener with no auth gate. The override exists as an escape hatch for dev/lab environments and irregularly-upgraded appliances; long-term we expect operators to set `SATURN_REMOTE_BASIC_AUTH` and never touch the override.
 
-The installer writes `/etc/systemd/system/saturn-go.service.d/10-remote-auth.conf` (mode 0600 root:root) carrying `SATURN_REMOTE_BASIC_AUTH=admin:<password>` whenever a fresh password is captured during install (interactive prompt, `SATURN_ADMIN_PASSWORD` env, or non-TTY random generation). Reruns that reuse an existing `/etc/nginx/.htpasswd` preserve any pre-existing drop-in unchanged. If the installer cannot capture a fresh password and no drop-in exists, it warns the operator with the exact `systemctl edit` recipe to align the TLS path with the LAN nginx password.
+The installer writes `/etc/systemd/system/saturn-go.service.d/10-remote-auth.conf` (mode 0600 root:root) carrying `SATURN_REMOTE_BASIC_AUTH=admin:<password>` whenever a fresh password is captured during install (interactive prompt, `SATURN_ADMIN_PASSWORD` env, or non-TTY generation). Reruns preserve an existing credential only when both nginx and Saturn Remote backends are present. An incomplete legacy state is repaired by selecting or generating a new five-character password; the installer never leaves the two backends knowingly out of sync.
 
 The `/change_password` admin endpoint calls the privileged `saturn-admin-password.sh set` helper, which updates `/etc/nginx/.htpasswd` **and** the TLS auth drop-in together, then schedules a deferred `saturn-go` restart (~2s) so the TLS listener picks up the new credential. The two backends cannot drift through normal use. To audit or recover:
 
 ```bash
 sudo /usr/local/lib/saturn-go/scripts/saturn-admin-password.sh status   # sync_state=in_sync expected
-sudo /usr/local/lib/saturn-go/scripts/saturn-admin-password.sh reset    # console recovery: prints a fresh passphrase
+sudo /usr/local/lib/saturn-go/scripts/saturn-admin-password.sh reset    # console recovery: prints a fresh five-character password
 ```
 
 `reset` is deliberately console-only (physical access is the trust anchor); there is no remote reset path. The Tailscale helper (`saturn-go-tailscale-serve.sh`) additionally refuses to configure Serve when the unauthenticated `curl` check returns anything other than 401.

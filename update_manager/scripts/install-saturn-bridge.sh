@@ -2,7 +2,9 @@
 set -Eeuo pipefail
 
 SATURN_USER="${SATURN_USER:-${SUDO_USER:-pi}}"
-SATURN_REPO_ROOT="${SATURN_REPO_ROOT:-/home/${SATURN_USER}/github/Saturn}"
+SATURN_USER_HOME="${SATURN_USER_HOME:-$(getent passwd "$SATURN_USER" 2>/dev/null | cut -d: -f6 || true)}"
+SATURN_USER_HOME="${SATURN_USER_HOME:-/home/${SATURN_USER}}"
+SATURN_REPO_ROOT="${SATURN_REPO_ROOT:-${SATURN_USER_HOME}/github/Saturn}"
 SATURN_BRIDGE_SOURCE_DIR="${SATURN_BRIDGE_SOURCE_DIR:-${SATURN_REPO_ROOT}/update_manager/saturn-bridge}"
 SATURN_GO_ROOT="${SATURN_GO_ROOT:-/opt/saturn-go}"
 SATURN_BRIDGE_BIN="${SATURN_BRIDGE_BIN:-${SATURN_GO_ROOT}/bin/saturn-bridge}"
@@ -15,6 +17,8 @@ SATURN_BRIDGE_MAX_CLIENT_DDC0_SAMPLE_RATE_KHZ="${SATURN_BRIDGE_MAX_CLIENT_DDC0_S
 SATURN_BRIDGE_BUILD_ONLY="${SATURN_BRIDGE_BUILD_ONLY:-0}"
 SATURN_BRIDGE_OUTPUT_BIN="${SATURN_BRIDGE_OUTPUT_BIN:-}"
 SATURN_BRIDGE_WDSP_FLAVOR="${SATURN_BRIDGE_WDSP_FLAVOR:-wdsp2}"
+SATURN_INSTALL_PACKAGES="${SATURN_INSTALL_PACKAGES:-1}"
+SATURN_BRIDGE_VERIFY_RUNTIME="${SATURN_BRIDGE_VERIFY_RUNTIME:-1}"
 
 # These commits are part of the Saturn Bridge native build contract. Updating
 # either pin requires rebuilding and re-running the WDSP/bridge test matrix.
@@ -31,7 +35,7 @@ SATURN_WDSP2_BUILD_DIR="${SATURN_WDSP2_BUILD_DIR:-${SATURN_BRIDGE_CARGO_TARGET_D
 
 # Legacy opt-in only. The default installer does not need a prebuilt piHPSDR
 # checkout and always uses the pinned WDSP 2.00 path above.
-SATURN_PIHPSDR_DIR="${SATURN_PIHPSDR_DIR:-/home/${SATURN_USER}/github/pihpsdr}"
+SATURN_PIHPSDR_DIR="${SATURN_PIHPSDR_DIR:-${SATURN_USER_HOME}/github/pihpsdr}"
 
 log(){ printf '[install-saturn-bridge] %s\n' "$*"; }
 die(){ printf '[install-saturn-bridge] ERROR: %s\n' "$*" >&2; exit 1; }
@@ -66,12 +70,15 @@ apt_pkg_installed() {
 ensure_apt_packages() {
   local missing=()
   local pkg
-  for pkg in build-essential binutils pkg-config libfftw3-dev ca-certificates git python3; do
+  for pkg in build-essential binutils pkg-config libfftw3-dev libopus0 ca-certificates git python3; do
     apt_pkg_installed "$pkg" || missing+=("$pkg")
   done
   if (( ${#missing[@]} == 0 )); then
     log "Bridge system dependencies already installed."
     return 0
+  fi
+  if ! flag_enabled "$SATURN_INSTALL_PACKAGES"; then
+    die "Missing bridge system dependencies while SATURN_INSTALL_PACKAGES=0: ${missing[*]}"
   fi
   log "Installing bridge system dependencies: ${missing[*]}"
   export DEBIAN_FRONTEND=noninteractive
@@ -294,6 +301,9 @@ RestartSec=2
 NoNewPrivileges=yes
 PrivateTmp=yes
 ProtectSystem=strict
+ProtectHome=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 Environment=SATURN_BRIDGE_RADIO_HOST=127.0.0.1
 Environment=SATURN_BRIDGE_RADIO_PORT=1024
@@ -346,7 +356,11 @@ main() {
   verify_built_bridge
   install_binary
   install_service
-  verify_runtime
+  if flag_enabled "$SATURN_BRIDGE_VERIFY_RUNTIME"; then
+    verify_runtime
+  else
+    log "Skipping live bridge verification (SATURN_BRIDGE_VERIFY_RUNTIME=0)"
+  fi
 }
 
 main "$@"

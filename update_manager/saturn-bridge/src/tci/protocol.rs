@@ -551,7 +551,7 @@ pub(crate) fn parse_tci_command_with_roles(
             }
         }
         "remote_tx_media_priority" => {
-            // Phase 42: TX media priority is now derived from the bridge's
+            // TX media priority is derived from the bridge's
             // authoritative on-air state, not from this browser command.
             // Accept and ignore for backward compatibility with older
             // clients; no side effect.
@@ -563,7 +563,7 @@ pub(crate) fn parse_tci_command_with_roles(
         }
         "trx" => {
             // trx:0,true or trx:0,true,tci — PTT on/off
-            // Phase 42: no longer sets a per-client tx_media_priority flag.
+            // This no longer sets a per-client tx_media_priority flag.
             // The bridge derives media priority from its own model and main.rs
             // calls tci.set_tx_media_priority_active(...) accordingly. This
             // eliminates the stuck-flag bug class.
@@ -1122,7 +1122,7 @@ pub(crate) fn tx_codec_reject_message(codec: TxMicCodec, reason: &str) -> String
 ///   header[24..28] = stream_type  (u32 LE); must be 2 (TX mic)
 ///   header[28..32] = channels     (u32 LE); 1=mono, 2=stereo
 ///   header[32..36] = tx_mic_seq   (u32 LE); 0 means legacy/unknown
-///   header[36..40] = codec_id     (u32 LE); 0=PCM, reserved for Phase 44 Opus
+///   header[36..40] = codec_id     (u32 LE); 0=PCM, other values select Opus
 ///   header[40..44] = payload_bytes (u32 LE); 0 means legacy/full payload
 ///
 /// stream_type == 1 is intentionally excluded: it is the RX audio type used by

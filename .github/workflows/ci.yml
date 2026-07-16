@@ -140,24 +140,65 @@ jobs:
             libgpiod-dev \
             pkg-config \
             cppcheck \
-            shellcheck
+            shellcheck \
+            cloud-init \
+            apache2-utils
 
       - name: Check provisioning shell
         run: |
           shellcheck \
+            install.sh \
             scripts/install-saturn-appliance.sh \
+            scripts/update-p2app.sh \
+            scripts/saturn-p2-deploy.sh \
+            scripts/saturn-first-boot.sh \
+            scripts/seal-saturn-image.sh \
+            scripts/saturn-admin-password.sh \
+            scripts/install-shutdown-waiter-service.sh \
+            scripts/fix-LED-power-button.sh \
             scripts/fix-xdma.sh \
             scripts/install-xdma-dkms.sh \
+            provision/cloud-init/provision-saturn.sh \
+            update_manager/install_saturn_go_nginx.sh \
+            update_manager/scripts/install-saturn-bridge.sh \
+            update_manager/scripts/update-saturn-go.sh \
+            update_manager/scripts/saturn-go-build-preflight.sh \
             update_manager/scripts/saturn-go-deploy-root.sh \
-            update_manager/scripts/saturn-tailscale.sh
+            update_manager/scripts/saturn-tailscale.sh \
+            sw_tools/p2app-control/install.sh \
+            tests/test-admin-password-policy.sh \
+            tests/test-provisioning-contract.sh \
+            tests/test-saturn-p2-deploy.sh
           bash -n \
+            install.sh \
             scripts/install-saturn-appliance.sh \
+            scripts/update-p2app.sh \
+            scripts/saturn-p2-deploy.sh \
+            scripts/saturn-first-boot.sh \
+            scripts/seal-saturn-image.sh \
+            scripts/saturn-admin-password.sh \
+            scripts/install-shutdown-waiter-service.sh \
+            scripts/fix-LED-power-button.sh \
             scripts/fix-xdma.sh \
             scripts/install-xdma-dkms.sh \
+            provision/cloud-init/provision-saturn.sh \
+            update_manager/scripts/install-saturn-bridge.sh \
             update_manager/scripts/saturn-go-deploy-root.sh \
             update_manager/scripts/update-saturn-go.sh \
             update_manager/install_saturn_go_nginx.sh \
             sw_tools/p2app-control/install.sh
+
+      - name: Validate cloud-init configuration
+        run: cloud-init schema --config-file provision/cloud-init/user-data.example.yaml
+
+      - name: Test unified provisioning contract
+        run: tests/test-provisioning-contract.sh
+
+      - name: Test five-character admin password policy
+        run: tests/test-admin-password-policy.sh
+
+      - name: Test production P2 deployment rollback
+        run: tests/test-saturn-p2-deploy.sh
 
       - name: Test deployment broker policy
         run: tests/test-saturn-go-deploy-broker.sh
@@ -194,6 +235,15 @@ jobs:
         run: |
           bash -n scripts/install-xdma-dkms.sh
           scripts/install-xdma-dkms.sh --dry-run --kernel "$(uname -r)"
+          kernelver="$(uname -r)"
+          source linuxdriver/dkms/dkms.conf
+          (
+            cd linuxdriver
+            bash -c "$CLEAN"
+            dkms_make="${MAKE[0]/#make/make -j2 KERNELRELEASE=$kernelver}"
+            bash -c "$dkms_make"
+            test -s xdma/xdma.ko
+          )
 
       - name: Check direct appliance installer
-        run: scripts/install-saturn-appliance.sh --dry-run --user "$(id -un)" --skip-packages --skip-driver --skip-p2 --skip-saturn-go
+        run: ./install.sh --dry-run --user "$(id -un)" --profile appliance
