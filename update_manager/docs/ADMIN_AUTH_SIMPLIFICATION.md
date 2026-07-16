@@ -7,10 +7,11 @@ simple enough to survive that audience while staying sound for the one case
 where strength matters (an operator who port-forwards the TLS listener to the
 open internet).
 
-Guiding rules (aligned with NIST 800-63B):
+Guiding rules for the Saturn appliance audience:
 
-- Length over complexity. Minimum 5 characters; **no** composition rules, no
-  forced rotation, no lockout spirals.
+- Exactly 5 characters; **no** composition rules, forced rotation, or lockout
+  spirals. Existing longer credentials remain valid until the operator changes
+  or resets them.
 - One password, one source of truth. The user should never learn that two
   auth backends exist.
 - Physical access is the trust anchor. Recovery happens at the console or the
@@ -24,7 +25,7 @@ Guiding rules (aligned with NIST 800-63B):
 |---|---|---|
 | Home LAN (nginx :80, `/saturn/*`) | guests on the wifi | keep casual hands off TX and admin actions |
 | Tailscale (TLS :8443 via Serve) | nobody — tailnet is already authenticated | redundant; Phase 3 removes it here |
-| Port-forwarded WAN (TLS :8443) | internet scanners | real defense; generated passphrases + failure delay |
+| Port-forwarded WAN (TLS :8443) | internet scanners | five-character password plus failure delay; direct port forwarding is discouraged |
 
 ## Phase 1 — one password everywhere (implemented)
 
@@ -34,7 +35,7 @@ Guiding rules (aligned with NIST 800-63B):
     `10-remote-auth.conf` drop-in (systemd-escaped), then schedules a
     deferred `saturn-go` restart (~2s) so the calling HTTP handler can finish
     its response before the TLS listener restarts.
-  - `reset` — console recovery: generates a `word-word-word-NN` passphrase,
+  - `reset` — console recovery: generates a five-character readable password,
     applies it via `set`, prints it. Root/console only; not in sudoers.
   - `status` — reports backend presence and `sync_state` by verifying the
     drop-in plaintext against the htpasswd hash (`htpasswd -vi`; no
@@ -45,16 +46,14 @@ Guiding rules (aligned with NIST 800-63B):
 - `/change_password` (rust-server `auth.rs`) now calls the helper via
   `sudo -n`; sudoers grants exactly `set` and `status` (no wildcard).
 - Saturn Go UI: single password field, visible by default with a hide
-  toggle, "Generate for me" passphrase button, no confirm-twice field.
-- Generated passphrases use 4 words + 2 digits from CSPRNG sources
-  (`/dev/urandom` in the helper, `crypto.getRandomValues()` in the UI) —
-  strong enough for online guessing against the TLS listener, and Phase 2's
-  failure delay raises that bar further.
+  toggle, "Generate for me" five-character button, no confirm-twice field.
+- Generated passwords use five lowercase letters/digits from a reduced,
+  non-ambiguous alphabet and CSPRNG sources (`/dev/urandom` in the helper,
+  `crypto.getRandomValues()` in the UI).
 
-Known duplication (accepted for Phase 1): `install_saturn_go_nginx.sh` still
-carries its own htpasswd/drop-in write logic for first provisioning, since it
-runs before the helper is installed. Follow-up: converge the installer on the
-repo copy of `saturn-admin-password.sh` so there is exactly one writer.
+The full and Saturn-Go-only installers both call the repository copy of
+`saturn-admin-password.sh` for first provisioning. Password changes, recovery,
+and installation therefore share one transactional writer for both backends.
 
 ## Phase 2 — make password entry rare (implemented)
 
@@ -87,5 +86,5 @@ repo copy of `saturn-admin-password.sh` so there is exactly one writer.
 ## Explicitly rejected
 
 - Passkeys/WebAuthn (recovery burden for this audience), TOTP/2FA, password
-  expiry, complexity meters, shared default credentials (unattended installs
-  keep generating device-unique random passwords).
+  expiry, complexity meters, and shared default credentials (unattended
+  installs generate a device-unique five-character password).

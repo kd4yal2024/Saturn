@@ -18,7 +18,7 @@ cargo build --release
 
 ```bash
 cd /home/pi/github/Saturn
-sudo bash update_manager/install_saturn_go_nginx.sh
+sudo ./install.sh
 ```
 
 Installer actions include:
@@ -48,14 +48,17 @@ be built.
 
 ## Update Existing Deployment
 
-After pulling repo changes, run installer again:
+After pulling changes that modify host configuration, trusted helpers, sudoers,
+nginx, driver policy, or systemd units, apply the canonical installer contract:
 
 ```bash
 cd /home/pi/github/Saturn
-sudo bash update_manager/install_saturn_go_nginx.sh
+sudo ./install.sh
 ```
 
-Installer is designed to refresh service, web assets, scripts, and config.
+The installer resumes matching completed phases and reapplies the full contract
+when the repository commit or host schema changes. Use `--force` only for an
+intentional complete reprovision.
 Saturn Go self-update also builds the bridge in build-only mode, stages the
 binary and service unit with the UI bundle, and deploys them together. Set
 `SATURN_SATURNGO_BUILD_BRIDGE=0` only when intentionally retaining an older
@@ -221,7 +224,7 @@ Remediation applied on that Pi:
 sudo install -d -m 0755 /etc/systemd/system/saturn-go.service.d
 sudo tee /etc/systemd/system/saturn-go.service.d/10-remote-auth.conf >/dev/null <<'EOF'
 [Service]
-Environment=SATURN_REMOTE_BASIC_AUTH=admin:<choose-a-strong-password>
+Environment=SATURN_REMOTE_BASIC_AUTH=admin:<choose-five-characters>
 EOF
 sudo chmod 0600 /etc/systemd/system/saturn-go.service.d/10-remote-auth.conf
 sudo systemctl daemon-reload
@@ -237,7 +240,7 @@ Operators inheriting an existing deployment should run the unauthenticated `curl
 The manual drop-in recipe above is the historical remediation from that audit. On current installs, set or re-align the credential with the password helper instead — it updates `/etc/nginx/.htpasswd` and the TLS drop-in together so the LAN admin path (`/saturn/*`) and the TLS remote path (`/remote*`) cannot drift:
 
 ```bash
-printf '%s\n' 'new-password' | sudo /usr/local/lib/saturn-go/scripts/saturn-admin-password.sh set --restart now
+printf '%s\n' 'abc12' | sudo /usr/local/lib/saturn-go/scripts/saturn-admin-password.sh set --restart now
 sudo /usr/local/lib/saturn-go/scripts/saturn-admin-password.sh status   # expect sync_state=in_sync
 ```
 
@@ -260,13 +263,13 @@ sudo systemctl restart saturn-go.service
 
 Saturn logs a warning and binds the listener with no auth gate. The override exists as an escape hatch for dev/lab environments and irregularly-upgraded appliances; long-term we expect operators to set `SATURN_REMOTE_BASIC_AUTH` and never touch the override.
 
-The installer writes `/etc/systemd/system/saturn-go.service.d/10-remote-auth.conf` (mode 0600 root:root) carrying `SATURN_REMOTE_BASIC_AUTH=admin:<password>` whenever a fresh password is captured during install (interactive prompt, `SATURN_ADMIN_PASSWORD` env, or non-TTY random generation). Reruns that reuse an existing `/etc/nginx/.htpasswd` preserve any pre-existing drop-in unchanged. If the installer cannot capture a fresh password and no drop-in exists, it warns the operator with the exact `systemctl edit` recipe to align the TLS path with the LAN nginx password.
+The installer writes `/etc/systemd/system/saturn-go.service.d/10-remote-auth.conf` (mode 0600 root:root) carrying `SATURN_REMOTE_BASIC_AUTH=admin:<password>` whenever a fresh password is captured during install (interactive prompt, `SATURN_ADMIN_PASSWORD` env, or non-TTY generation). Reruns preserve an existing credential only when both nginx and Saturn Remote backends are present. An incomplete legacy state is repaired by selecting or generating a new five-character password; the installer never leaves the two backends knowingly out of sync.
 
 The `/change_password` admin endpoint calls the privileged `saturn-admin-password.sh set` helper, which updates `/etc/nginx/.htpasswd` **and** the TLS auth drop-in together, then schedules a deferred `saturn-go` restart (~2s) so the TLS listener picks up the new credential. The two backends cannot drift through normal use. To audit or recover:
 
 ```bash
 sudo /usr/local/lib/saturn-go/scripts/saturn-admin-password.sh status   # sync_state=in_sync expected
-sudo /usr/local/lib/saturn-go/scripts/saturn-admin-password.sh reset    # console recovery: prints a fresh passphrase
+sudo /usr/local/lib/saturn-go/scripts/saturn-admin-password.sh reset    # console recovery: prints a fresh five-character password
 ```
 
 `reset` is deliberately console-only (physical access is the trust anchor); there is no remote reset path. The Tailscale helper (`saturn-go-tailscale-serve.sh`) additionally refuses to configure Serve when the unauthenticated `curl` check returns anything other than 401.

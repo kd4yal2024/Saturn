@@ -4,6 +4,28 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
 
 ## [Unreleased]
 ### Added
+- Unified provisioning entry point (`./install.sh`) shared by manual Trixie
+  installs and the cloud-init bootstrap. The appliance engine now supports
+  appliance/desktop/image-factory profiles, bounded user discovery, exact-ref
+  bootstrap checkout, resumable expensive phases, versioned host state, and
+  separate software/hardware verification.
+- Golden-image sealing and first-boot personalization. A sealed clone receives
+  unique machine/SSH, hostname, and Saturn Remote TLS identity plus a unique
+  five-character Saturn Go login instead of inheriting credentials,
+  certificates, cookies, login hashes, builder keys/logs, or Tailscale state
+  from the source image. First boot preserves a Linux password supplied by
+  image customization and only assigns the generated value when the local
+  account remains locked.
+- Production Protocol 2 test/build/deploy workflow with a root-owned fixed-path
+  broker, service health verification, and automatic binary rollback.
+- Newly set Saturn administrator passwords are exactly five characters with no
+  composition rules. Existing longer credentials remain active during upgrades.
+- Initial installation and later password changes now use the same
+  transactional credential helper, so nginx and Saturn Remote auth are never
+  written by separate provisioning implementations.
+- XDMA installation now has one lifecycle owner: canonical provisioning uses
+  DKMS and all nested installers keep the legacy kernel post-install hook
+  disabled whenever the DKMS package is registered.
 - Saturn Remote `/remote-next` now automatically recovers from bridge restarts,
   split control/media lane failures, and browser network interruptions. A
   single session supervisor uses bounded exponential backoff with jitter,

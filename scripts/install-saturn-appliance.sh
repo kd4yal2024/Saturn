@@ -1,151 +1,165 @@
 #!/usr/bin/env bash
-# Install a complete Saturn radio appliance from an existing repository checkout.
+# Canonical Saturn appliance installer for both manual and cloud-init installs.
 
 set -Eeuo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="${SATURN_REPO_DIR:-$(cd "$SCRIPT_DIR/.." && pwd)}"
+PROVISIONER="$REPO_ROOT/provision/cloud-init/provision-saturn.sh"
 SATURN_USER="${SATURN_USER:-${SUDO_USER:-pi}}"
+PROFILE="${SATURN_INSTALL_PROFILE:-appliance}"
 DRY_RUN=0
-INSTALL_PACKAGES=1
-INSTALL_DRIVER=1
-INSTALL_P2=1
-INSTALL_GO=1
-VERIFY=1
+NONINTERACTIVE="${SATURN_NONINTERACTIVE:-0}"
+FORCE_REPROVISION="${SATURN_FORCE_REPROVISION:-0}"
+INSTALL_PACKAGES="${SATURN_INSTALL_PACKAGES:-1}"
+INSTALL_DRIVER="${SATURN_REBUILD_XDMA:-1}"
+INSTALL_P2="${SATURN_INSTALL_P2APP_CONTROL:-1}"
+INSTALL_GO="${SATURN_INSTALL_UPDATE_MANAGER:-1}"
+VERIFY_EXPLICIT=0
+[[ -v SATURN_VERIFY_MODE ]] && VERIFY_EXPLICIT=1
+VERIFY_MODE="${SATURN_VERIFY_MODE:-hardware}"
 
-info(){ printf '[saturn-appliance] %s\n' "$*"; }
-die(){ printf '[saturn-appliance] ERROR: %s\n' "$*" >&2; exit 1; }
-run(){
-  if (( DRY_RUN )); then
-    printf '[dry-run]'
-    printf ' %q' "$@"
-    printf '\n'
-  else
-    "$@"
+info(){ printf '[saturn-install] %s\n' "$*"; }
+warn(){ printf '[saturn-install] WARN: %s\n' "$*" >&2; }
+die(){ printf '[saturn-install] ERROR: %s\n' "$*" >&2; exit 1; }
+
+bool_true(){
+  case "${1:-0}" in
+    1|true|TRUE|yes|YES|on|ON) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+default_env(){
+  local name="$1" value="$2"
+  if [[ ! -v "$name" ]]; then
+    printf -v "$name" '%s' "$value"
   fi
+  export "${name?}"
 }
 
 usage(){
   cat <<'EOF'
-Usage: sudo scripts/install-saturn-appliance.sh [options]
+Usage: sudo ./install.sh [options]
+
+The default appliance profile auto-detects Saturn hardware and installs the
+radio runtime, XDMA through DKMS, P2, Saturn Go, and Saturn Bridge.
 
 Options:
-  --user <name>       Runtime/build user (default: SUDO_USER or pi)
-  --skip-packages     Do not install apt dependencies
-  --skip-driver       Do not install/load XDMA through DKMS
-  --skip-p2           Do not build/install p2app.service
-  --skip-saturn-go    Do not install Saturn Go and Saturn Bridge
-  --skip-verify       Do not run final service/device checks
-  --dry-run           Print operations without changing the system
-  -h, --help          Show this help
+  --user <name>          Runtime/build user (default: SUDO_USER or pi)
+  --profile <name>       appliance (default), desktop, or image-factory
+                         (software verification plus image-sealing tools)
+  --non-interactive      Never prompt; generate a five-character initial password
+  --force                Re-run all provisioning phases after a completed install
+  --verify <mode>        hardware (default), software, or none
+  --skip-packages        Require existing dependencies; do not run apt
+  --skip-driver          Do not install/load XDMA through DKMS
+  --skip-p2              Do not build/install p2app.service
+  --skip-saturn-go       Do not install Saturn Go or Saturn Bridge
+  --skip-verify          Alias for --verify none
+  --dry-run              Print the resolved install contract without changing the host
+  -h, --help             Show this help
+
+Password policy: newly set passwords are exactly five characters with no
+composition rules. Existing credentials are retained during upgrades.
 EOF
 }
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --user) [[ $# -ge 2 ]] || die "--user requires a value"; SATURN_USER="$2"; shift 2 ;;
+    --profile) [[ $# -ge 2 ]] || die "--profile requires a value"; PROFILE="$2"; shift 2 ;;
+    --non-interactive) NONINTERACTIVE=1; shift ;;
+    --force) FORCE_REPROVISION=1; shift ;;
+    --verify) [[ $# -ge 2 ]] || die "--verify requires a mode"; VERIFY_MODE="$2"; VERIFY_EXPLICIT=1; shift 2 ;;
     --skip-packages) INSTALL_PACKAGES=0; shift ;;
     --skip-driver) INSTALL_DRIVER=0; shift ;;
     --skip-p2) INSTALL_P2=0; shift ;;
     --skip-saturn-go) INSTALL_GO=0; shift ;;
-    --skip-verify) VERIFY=0; shift ;;
+    --skip-verify) VERIFY_MODE=none; VERIFY_EXPLICIT=1; shift ;;
     --dry-run) DRY_RUN=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *) die "unknown option: $1" ;;
   esac
 done
 
-(( DRY_RUN || EUID == 0 )) || die "run as root, or use --dry-run"
-getent passwd "$SATURN_USER" >/dev/null || die "user does not exist: $SATURN_USER"
+case "$PROFILE" in
+  appliance)
+    default_env SATURN_INSTALL_DEVELOPER_TOOLS 0
+    default_env SATURN_INSTALL_PIHPSDR 0
+    default_env SATURN_DESKTOP_UI auto
+    default_env SATURN_BUILD_OPTIONAL_TOOLS 1
+    ;;
+  desktop)
+    default_env SATURN_INSTALL_DEVELOPER_TOOLS 1
+    default_env SATURN_INSTALL_PIHPSDR 1
+    default_env SATURN_DESKTOP_UI auto
+    default_env SATURN_BUILD_OPTIONAL_TOOLS 1
+    ;;
+  image-factory)
+    default_env SATURN_INSTALL_DEVELOPER_TOOLS 0
+    default_env SATURN_INSTALL_PIHPSDR 0
+    default_env SATURN_DESKTOP_UI 0
+    default_env SATURN_BUILD_OPTIONAL_TOOLS 1
+    default_env SATURN_BRIDGE_VERIFY_RUNTIME 0
+    default_env SATURN_INSTALL_CLOUD_INIT 1
+    if (( ! VERIFY_EXPLICIT )) && [[ "$VERIFY_MODE" == hardware ]]; then
+      VERIFY_MODE=software
+    fi
+    ;;
+  *) die "unsupported profile '$PROFILE' (use appliance, desktop, or image-factory)" ;;
+  esac
+
+case "$VERIFY_MODE" in
+  hardware|software|none) ;;
+  *) die "unsupported verification mode '$VERIFY_MODE'" ;;
+esac
+
 [[ -f "$REPO_ROOT/sw_projects/P2_app/Makefile" ]] || die "invalid Saturn checkout: $REPO_ROOT"
+[[ -x "$PROVISIONER" ]] || die "shared provisioner not found or executable: $PROVISIONER"
+getent passwd "$SATURN_USER" >/dev/null || die "user does not exist: $SATURN_USER"
 SATURN_HOME="$(getent passwd "$SATURN_USER" | cut -d: -f6)"
+SATURN_GROUP="$(id -gn "$SATURN_USER")"
+[[ -n "$SATURN_HOME" && -d "$SATURN_HOME" ]] || die "home directory is unavailable for $SATURN_USER"
 
-install_packages(){
-  local krel meta
-  krel="$(uname -r)"
-  meta="linux-headers-${krel#*+rpt-}"
-  run apt-get update
-  run env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-    ca-certificates curl git rsync sudo nginx apache2-utils \
-    build-essential dkms pkg-config libgpiod-dev libi2c-dev \
-    libgtk-3-dev libayatana-appindicator3-dev libasound2-dev \
-    libfftw3-dev libcurl4-openssl-dev python3
-  if (( DRY_RUN )); then
-    run apt-get install -y "linux-headers-$krel"
-  elif apt-cache show "linux-headers-$krel" >/dev/null 2>&1; then
-    apt-get install -y --no-install-recommends "linux-headers-$krel"
-  elif apt-cache show "$meta" >/dev/null 2>&1; then
-    apt-get install -y --no-install-recommends "$meta"
-  elif apt-cache show raspberrypi-kernel-headers >/dev/null 2>&1; then
-    apt-get install -y --no-install-recommends raspberrypi-kernel-headers
-  else
-    die "no matching kernel-header package is available for $krel"
+if (( ! DRY_RUN )); then
+  (( EUID == 0 )) || die "run as root (sudo), or use --dry-run"
+  command -v apt-get >/dev/null 2>&1 || die "apt-get is required; install on Debian 13 (Trixie)"
+  command -v systemctl >/dev/null 2>&1 || die "systemd is required"
+  architecture="$(dpkg --print-architecture 2>/dev/null || uname -m)"
+  [[ "$architecture" == arm64 || "$architecture" == aarch64 ]] || \
+    die "unsupported architecture '$architecture'; Saturn appliance installs require arm64"
+  if [[ -r /etc/os-release ]]; then
+    # shellcheck disable=SC1091
+    source /etc/os-release
+    if [[ "${VERSION_CODENAME:-}" != trixie ]] && ! bool_true "${SATURN_ALLOW_UNSUPPORTED_OS:-0}"; then
+      die "unsupported OS '${PRETTY_NAME:-unknown}'; use Debian/Raspberry Pi OS Trixie or set SATURN_ALLOW_UNSUPPORTED_OS=1"
+    fi
   fi
-}
+fi
 
-run_as_saturn_user(){
-  if (( DRY_RUN )); then
-    run runuser -u "$SATURN_USER" -- env HOME="$SATURN_HOME" "$@"
-  else
-    runuser -u "$SATURN_USER" -- env HOME="$SATURN_HOME" "$@"
-  fi
-}
-
-install_driver(){
-  run env SATURN_REPO_DIR="$REPO_ROOT" bash "$REPO_ROOT/scripts/install-xdma-dkms.sh"
-  run install -d -m 0755 /etc/modules-load.d
-  if (( DRY_RUN )); then
-    info "[dry-run] write xdma to /etc/modules-load.d/xdma.conf"
-  else
-    printf 'xdma\n' >/etc/modules-load.d/xdma.conf
-  fi
-  run modprobe xdma
-  run udevadm control --reload-rules
-  run udevadm trigger --subsystem-match=xdma
-}
-
-install_p2(){
-  run_as_saturn_user make -C "$REPO_ROOT/sw_projects/P2_app" -j"$(nproc)"
-  run env HOME="$SATURN_HOME" SUDO_USER="$SATURN_USER" SATURN_USER="$SATURN_USER" \
-    bash "$REPO_ROOT/sw_tools/p2app-control/install.sh"
-}
-
-install_saturn_go(){
-  run env HOME="$SATURN_HOME" SUDO_USER="$SATURN_USER" SATURN_SERVICE_USER="$SATURN_USER" \
-    SATURN_BRIDGE_WDSP_FLAVOR=wdsp2 SATURN_INSTALL_BRIDGE=1 SATURN_REQUIRE_BRIDGE=1 \
-    bash "$REPO_ROOT/update_manager/install_saturn_go_nginx.sh"
-}
-
-verify_install(){
-  if (( INSTALL_DRIVER )); then
-    [[ -c /dev/xdma0_user || -c /dev/xdma/card0/user ]] || die "XDMA user device is missing"
-  fi
-  if (( INSTALL_P2 )); then
-    [[ "$(stat -c '%U:%G' /opt/saturn-radio/bin/p2app)" == "root:root" ]] || \
-      die "p2app runtime is not root-owned"
-    [[ "$(systemctl show -p User --value p2app.service)" == "saturn-radio" ]] || \
-      die "p2app.service is not using the dedicated account"
-    systemctl is-active --quiet p2app.service || die "p2app.service is not active"
-  fi
-  if (( INSTALL_GO )); then
-    systemctl is-active --quiet saturn-bridge.service || die "saturn-bridge.service is not active"
-    systemctl is-active --quiet saturn-go.service || die "saturn-go.service is not active"
-    curl -fsS --max-time 3 http://127.0.0.1:8080/healthz >/dev/null || \
-      die "Saturn Go health check failed"
-  fi
-  info "verification passed"
-}
+export SATURN_USER SATURN_GROUP
+export SATURN_REPO_DIR="$REPO_ROOT"
+export SATURN_REPO_SYNC=0
+export SATURN_INSTALL_PROFILE="$PROFILE"
+export SATURN_NONINTERACTIVE="$NONINTERACTIVE"
+export SATURN_FORCE_REPROVISION="$FORCE_REPROVISION"
+export SATURN_INSTALL_PACKAGES="$INSTALL_PACKAGES"
+export SATURN_REBUILD_XDMA="$INSTALL_DRIVER"
+export SATURN_INSTALL_P2APP_CONTROL="$INSTALL_P2"
+export SATURN_INSTALL_UPDATE_MANAGER="$INSTALL_GO"
+export SATURN_INSTALL_SATURN_BRIDGE="$INSTALL_GO"
+export SATURN_REQUIRE_SATURN_BRIDGE="$INSTALL_GO"
+export SATURN_VERIFY_MODE="$VERIFY_MODE"
 
 info "repository: $REPO_ROOT"
-info "runtime user: $SATURN_USER"
-(( INSTALL_PACKAGES )) && install_packages
-run bash "$REPO_ROOT/rules/install-rules.sh"
-(( INSTALL_DRIVER )) && install_driver
-(( INSTALL_P2 )) && install_p2
-(( INSTALL_GO )) && install_saturn_go
-if (( VERIFY && ! DRY_RUN )); then
-  verify_install
-elif (( VERIFY )); then
-  info "[dry-run] verify XDMA device, ownership, service users, services, and health endpoint"
+info "runtime user: $SATURN_USER ($SATURN_GROUP)"
+info "profile: $PROFILE"
+info "packages=$INSTALL_PACKAGES driver=$INSTALL_DRIVER p2=$INSTALL_P2 saturn-go=$INSTALL_GO verify=$VERIFY_MODE"
+
+if (( DRY_RUN )); then
+  info "dry-run: would execute shared provisioner: $PROVISIONER"
+  exit 0
 fi
-info "installation complete"
+
+exec bash "$PROVISIONER"

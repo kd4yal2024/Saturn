@@ -21,10 +21,17 @@ SERVICE_NAME="${SERVICE_NAME:-gpio15-setup.service}"
 SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}"
 EARLY_DEFAULT="${EARLY_DEFAULT:-1}"
 RASPBERRYPI_UTILS_REF="${RASPBERRYPI_UTILS_REF:-5edd399260b5081f9c1c96fc7f369b920d6732d1}"
+SATURN_INSTALL_PACKAGES="${SATURN_INSTALL_PACKAGES:-1}"
 
 log(){ echo "$1" | systemd-cat -t fix-LED-power-button; }
 die(){ echo "$1" >&2; exit 1; }
 has_tty(){ [[ -t 0 || -t 1 ]]; }
+flag_enabled(){
+  case "${1:-0}" in
+    1|true|TRUE|yes|YES|on|ON) return 0 ;;
+    *) return 1 ;;
+  esac
+}
 
 parse_args() {
   while [[ $# -gt 0 ]]; do
@@ -105,8 +112,20 @@ ensure_pinctrl() {
     return 0
   fi
   log "pinctrl missing; building from raspberrypi/utils (this takes a minute)"
-  apt-get update -y
-  apt-get install -y --no-install-recommends git cmake build-essential device-tree-compiler libfdt-dev
+  if flag_enabled "$SATURN_INSTALL_PACKAGES"; then
+    apt-get update -y
+    apt-get install -y --no-install-recommends git cmake build-essential device-tree-compiler libfdt-dev
+  else
+    local missing=()
+    command -v git >/dev/null 2>&1 || missing+=(git)
+    command -v cmake >/dev/null 2>&1 || missing+=(cmake)
+    command -v make >/dev/null 2>&1 || missing+=(build-essential)
+    command -v dtc >/dev/null 2>&1 || missing+=(device-tree-compiler)
+    dpkg-query -W -f='${Status}' libfdt-dev 2>/dev/null | grep -q '^install ok installed$' \
+      || missing+=(libfdt-dev)
+    (( ${#missing[@]} == 0 )) || \
+      die "Missing pinctrl build dependencies while SATURN_INSTALL_PACKAGES=0: ${missing[*]}"
+  fi
   tmpdir="$(mktemp -d)"
   trap 'rm -rf "$tmpdir"' EXIT
   git init -q "$tmpdir/utils"

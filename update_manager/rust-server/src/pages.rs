@@ -70,8 +70,7 @@ fn remote_host_without_port(host: &str) -> &str {
     }
 }
 
-pub const REMOTE_NEXT_DEFAULT_QUERY: &str =
-    "transport=split&tx_opus=1&tx_cfc=1";
+pub const REMOTE_NEXT_DEFAULT_QUERY: &str = "transport=split&tx_opus=1&tx_cfc=1";
 
 fn remote_next_https_url(host: &str) -> String {
     format!(

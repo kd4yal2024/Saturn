@@ -6,7 +6,6 @@ set -euo pipefail
 # Intended to be run from the web UI via /run (SSE terminal output).
 
 SCRIPT_VERSION="1.2.1"
-SCRIPT_NAME="$(basename "$0")"
 
 SKIP_GIT=0
 SKIP_BUILD=0
@@ -159,7 +158,8 @@ need_cmd(){
 
 resolve_user_home(){
   local user="${1:-$(id -un)}"
-  if [[ -n "${HOME:-}" && "${HOME}" != "/" && -d "${HOME}" ]]; then
+  if [[ "$user" == "$(id -un)" \
+      && -n "${HOME:-}" && "${HOME}" != "/" && -d "${HOME}" ]]; then
     printf '%s\n' "$HOME"
     return 0
   fi
@@ -231,7 +231,9 @@ ensure_build_swap(){
   if (( EUID == 0 )); then
     helper="$BUILD_PREFLIGHT_HELPER"
     [[ -x "$helper" ]] || die "Build preflight helper is not executable: $helper"
-    "$helper" ensure-swap
+    SATURN_SATURNGO_BUILD_SWAP_FILE="$BUILD_SWAP_FILE" \
+    SATURN_SATURNGO_BUILD_SWAP_MIB="$BUILD_SWAP_MIB" \
+      "$helper" ensure-swap
   elif [[ -x "$DEPLOY_BUILD_PREFLIGHT_HELPER" ]]; then
     run_cmd sudo -n "$DEPLOY_BUILD_PREFLIGHT_HELPER" ensure-swap
   else
@@ -293,7 +295,8 @@ fi
 export CARGO_HOME="${CARGO_HOME:-$BUILD_HOME/.cargo}"
 export RUSTUP_HOME="${RUSTUP_HOME:-$BUILD_HOME/.rustup}"
 CARGO_BIN="$(resolve_cargo_bin)"
-export PATH="$(dirname "$CARGO_BIN"):$PATH"
+CARGO_BIN_DIR="$(dirname "$CARGO_BIN")"
+export PATH="$CARGO_BIN_DIR:$PATH"
 
 RUN_STARTED_AT="$(date -Is)"
 REPO_ROOT="${SATURN_ACTIVE_REPO_ROOT:-${SATURN_REPO_ROOT:-}}"
@@ -317,7 +320,7 @@ WEB_ASSET_HELPERS="$SCRIPTS_SRC_DIR/saturn-go-web-assets.sh"
 BUILD_TMP_DIR="$RUST_DIR/.tmp"
 BUILD_TARGET_DIR="$RUST_DIR/target-local"
 BUILD_PREFLIGHT_HELPER="$SCRIPTS_SRC_DIR/saturn-go-build-preflight.sh"
-BUILD_SWAP_FILE="${SATURN_SATURNGO_BUILD_SWAP_FILE:-/home/pi/saturn-build.swap}"
+BUILD_SWAP_FILE="${SATURN_SATURNGO_BUILD_SWAP_FILE:-$BUILD_HOME/saturn-build.swap}"
 BUILD_SWAP_MIB="${SATURN_SATURNGO_BUILD_SWAP_MIB:-2048}"
 BUILD_JOBS="${SATURN_SATURNGO_BUILD_JOBS:-1}"
 BUILD_NICE="${SATURN_SATURNGO_BUILD_NICE:-15}"
@@ -329,9 +332,6 @@ BRIDGE_BUILD_OUTPUT="$BRIDGE_SOURCE_DIR/target-local/staged/saturn-bridge"
 BRIDGE_WDSP_FLAVOR="${SATURN_BRIDGE_WDSP_FLAVOR:-wdsp2}"
 
 SERVICE_NAME="${SATURN_SATURNGO_SERVICE_NAME:-saturn-go.service}"
-DEPLOY_RUN_USER="${SATURN_SATURNGO_RUN_USER:-$(id -un)}"
-DEPLOY_BIN="${SATURN_SATURNGO_BIN_DEST:-/opt/saturn-go/bin/saturn-go}"
-DEPLOY_BRIDGE_BIN="${SATURN_SATURNGO_BRIDGE_BIN_DEST:-/opt/saturn-go/bin/saturn-bridge}"
 DEPLOY_PRIVILEGED_SCRIPTS_DIR="${SATURN_SATURNGO_PRIVILEGED_SCRIPTS_DIR:-/usr/local/lib/saturn-go/scripts}"
 DEPLOY_BUILD_PREFLIGHT_HELPER="$DEPLOY_PRIVILEGED_SCRIPTS_DIR/saturn-go-build-preflight.sh"
 DEPLOY_ROOT_BROKER_SRC="$REPO_ROOT/update_manager/scripts/saturn-go-deploy-root.sh"
@@ -348,6 +348,7 @@ trap 'rc=$?; if (( rc != 0 )); then write_status "error" "$STATUS_PHASE" "Saturn
 [[ -f "$BRIDGE_SOURCE_DIR/Cargo.toml" ]] || die "Saturn Bridge Cargo.toml not found: $BRIDGE_SOURCE_DIR/Cargo.toml"
 [[ -x "$BRIDGE_INSTALLER" ]] || die "Saturn Bridge installer not executable: $BRIDGE_INSTALLER"
 [[ -x "$DEPLOY_ROOT_BROKER_SRC" ]] || die "Saturn Go deploy broker not executable: $DEPLOY_ROOT_BROKER_SRC"
+# shellcheck disable=SC1090
 source "$WEB_ASSET_HELPERS"
 [[ -f "$SCRIPTS_SRC_DIR/config.json" ]] || die "Missing config.json in $SCRIPTS_SRC_DIR"
 [[ -f "$SCRIPTS_SRC_DIR/themes.json" ]] || die "Missing themes.json in $SCRIPTS_SRC_DIR"
@@ -501,6 +502,8 @@ if (( ! DRY_RUN )); then
   # payload. The fixed root-owned broker supplies those trusted definitions.
   (
     cd "$STAGE_DIR"
+    # SHA256SUMS is explicitly excluded from the input set.
+    # shellcheck disable=SC2094
     find . -type f ! -name SHA256SUMS -printf '%P\0' \
       | sort -z \
       | xargs -0 -r sha256sum > SHA256SUMS

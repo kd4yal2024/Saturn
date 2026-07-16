@@ -230,8 +230,10 @@ via `sudo -n` (password piped over stdin).
   remote passwords cannot drift
 - A deferred `saturn-go` restart (~2s) applies the TLS-side change
 - Returns explicit guidance when the helper or its sudoers entry is missing
+- Newly set passwords are exactly five characters with no composition rules;
+  existing longer credentials remain valid until changed
 - Console recovery: `sudo saturn-admin-password.sh reset` prints a fresh
-  generated passphrase (see `docs/ADMIN_AUTH_SIMPLIFICATION.md`)
+  generated five-character password (see `docs/ADMIN_AUTH_SIMPLIFICATION.md`)
 
 ### Saturn Go Self-Update (`update-saturn-go.sh`)
 
@@ -250,10 +252,11 @@ via `sudo -n` (password piped over stdin).
     `ionice -c3`)
   - sync deployed web assets (`*.html`, `config.json`, `themes.json`)
   - sync packaged scripts into `/opt/saturn-go/scripts` without removing browser-managed extras
-  - refresh trusted helper copies in `/usr/local/lib/saturn-go/scripts` and rewrite the narrow sudoers policy
-  - install `/usr/local/bin/saturn-fix-xdma.sh`,
-    `/usr/local/bin/saturn-xdma-kernel-postinst.sh`, and
-    `/etc/kernel/postinst.d/saturn-xdma` for future kernel package installs
+  - use the already installed trusted deployment broker; privileged helpers,
+    sudoers, nginx, and host service policy are refreshed only by `sudo ./install.sh`
+  - retain `/usr/local/bin/saturn-fix-xdma.sh` and
+    `/usr/local/bin/saturn-xdma-kernel-postinst.sh` for diagnostics/recovery;
+    the legacy hook stays disabled when DKMS owns XDMA
   - dispatch a detached root helper to stop/copy/start `saturn-go.service`
 - When a Saturn Go policy repo URL is provided, `update-saturn-go.sh` now
   verifies that the repo/ref is publicly reachable over HTTPS and fetches
@@ -408,23 +411,31 @@ Notes:
 
 ## Installation
 
-Installer (deploy paths, service, web assets, scripts):
+For a complete appliance install, use the canonical repository entry point:
 
 ```bash
-cd /home/pi/github/Saturn
-sudo bash update_manager/install_saturn_go_nginx.sh
+cd /path/to/Saturn
+sudo ./install.sh
 ```
+
+`update_manager/install_saturn_go_nginx.sh` remains the advanced Saturn-Go-only
+component installer used internally by that flow.
 
 Auth bootstrap:
 
-- If `SATURN_ADMIN_PASSWORD` is set, installer uses it for `admin`
-- Otherwise installer prompts for a password when run interactively
-- In non-interactive mode, installer generates a random password and prints it once
+- If `SATURN_ADMIN_PASSWORD` is set, it must be exactly five characters
+- Otherwise an interactive install accepts one five-character password
+- In non-interactive mode, the installer generates a five-character password
+- Existing credentials, including longer legacy credentials, are preserved on upgrades
 
 Installer behavior (current):
 
 - Deploys Rust backend only (no legacy Go source generation)
-- Removes legacy distro `cargo`/`rustc` packages (if installed) and bootstraps a current Rust toolchain via `rustup` for the build user before compiling (fixes old-Cargo `Cargo.lock` v4 parse errors on Bookworm)
+- When package management is enabled, removes legacy distro `cargo`/`rustc`
+  packages (if installed), then bootstraps a current Rust toolchain via
+  `rustup` for the build user before compiling. With
+  `SATURN_INSTALL_PACKAGES=0`, apt state is left untouched and the explicit
+  user rustup toolchain is still used.
 - Installs `nodejs` and `npm` and runs lockfile-only `npm ci && npm run build` in `update_manager/remote-web` to produce the `saturn-remote-next.js` Vite bundle before staging web assets
 - Uses `update_manager/scripts/saturn-go-web-assets.sh` as the shared web asset manifest for install and self-update deploys (fails fast if any required asset, including `saturn-remote-next.html`/`saturn-remote-next.js`, is missing)
 - Builds and installs `saturn-bridge.service` by default. The bridge installer
@@ -521,6 +532,12 @@ Default URL:
 - `SATURN_WATCHDOG_URL` (installer default `http://$SATURN_ADDR/healthz`)
 - `SATURN_WATCHDOG_INTERVAL` (installer default `30s`)
 - `SATURN_ADMIN_PASSWORD` (optional non-interactive initial admin password)
+- `SATURN_INSTALL_PACKAGES` (`1` by default; canonical provisioning sets `0`
+  after installing the shared package manifest once)
+- `SATURN_INSTALL_LEGACY_XDMA_HOOK` (`1` for standalone compatibility;
+  canonical DKMS provisioning sets `0`)
+- `SATURN_UPDATE_MANAGER_SOURCE_DIR` (component source override; defaults to
+  the directory containing the installer)
 - `SATURN_SERVICE_USER` (installer override for service user)
 - `SATURN_SERVICE_GROUP` (installer override for service group)
 - `SATURN_INSTALL_BRIDGE` defaults to `1`; set it to `0` to opt out of building

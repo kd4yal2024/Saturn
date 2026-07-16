@@ -176,6 +176,8 @@ install_payload_file(){
 
 normalize_nginx_remote_redirects_file(){
   local src="$1" dest="$2"
+  # Both $host strings are literal nginx syntax.
+  # shellcheck disable=SC2016
   sed -E 's#return 302 https://\$host:8443/remote-next\?[^;]+;#return 302 https://$host:8443/remote-next;#g' \
     "$src" >"$dest"
 }

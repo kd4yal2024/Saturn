@@ -10,6 +10,7 @@ XDMA_READY_UNIT_NAME="saturn-xdma-ready.service"
 XDMA_READY_UNIT_PATH="/etc/systemd/system/${XDMA_READY_UNIT_NAME}"
 XDMA_REG_DEV="/dev/xdma0_user"
 P2APP_START_TIMEOUT_SECONDS="${P2APP_START_TIMEOUT_SECONDS:-30}"
+P2APP_STABLE_SECONDS="${P2APP_STABLE_SECONDS:-2}"
 
 P2APP_DIR="${REPO_ROOT}/sw_projects/P2_app"
 P2APP_SOURCE_BIN="${P2APP_DIR}/p2app"
@@ -28,6 +29,9 @@ XDMA_POSTINST_INSTALL="/usr/local/bin/saturn-xdma-kernel-postinst.sh"
 XDMA_POSTINST_HOOK_PATH="/etc/kernel/postinst.d/saturn-xdma"
 APP_INFO_LOCAL="${REPO_ROOT}/update_manager/scripts/g2-version-info.sh"
 APP_INFO_INSTALL="/usr/local/bin/saturn-g2-version-info.sh"
+P2_DEPLOY_LOCAL="${REPO_ROOT}/scripts/saturn-p2-deploy.sh"
+P2_DEPLOY_INSTALL="/usr/local/lib/saturn-go/scripts/saturn-p2-deploy.sh"
+P2_DEPLOY_CONFIG="/etc/default/saturn-p2-deploy"
 
 BIN_LOCAL="${HERE}/p2app-control"
 BIN_INSTALL="/usr/local/bin/p2app-control"
@@ -86,7 +90,8 @@ TMP_RULE=""
 TMP_SUDOERS=""
 TMP_AUTOSTART=""
 TMP_POSTINST_HOOK=""
-trap 'rm -f "$TMP_XDMA_READY_UNIT" "$TMP_UNIT" "$TMP_RULE" "$TMP_SUDOERS" "$TMP_AUTOSTART" "$TMP_POSTINST_HOOK" 2>/dev/null || true' EXIT
+TMP_P2_DEPLOY_CONFIG=""
+trap 'rm -f "$TMP_XDMA_READY_UNIT" "$TMP_UNIT" "$TMP_RULE" "$TMP_SUDOERS" "$TMP_AUTOSTART" "$TMP_POSTINST_HOOK" "$TMP_P2_DEPLOY_CONFIG" 2>/dev/null || true' EXIT
 
 echo "[*] Repo root: ${REPO_ROOT}"
 
@@ -173,6 +178,11 @@ if [[ ! -x "${APP_INFO_LOCAL}" ]]; then
   echo "    ${APP_INFO_LOCAL}"
   exit 1
 fi
+if [[ ! -x "${P2_DEPLOY_LOCAL}" ]]; then
+  echo "[!] ERROR: P2 deploy helper not found or not executable:"
+  echo "    ${P2_DEPLOY_LOCAL}"
+  exit 1
+fi
 
 echo "[*] Installing XDMA support helpers"
 sudo install -D -m 0755 "${XDMA_DOCTOR_LOCAL}" "${XDMA_DOCTOR_INSTALL}"
@@ -180,6 +190,18 @@ sudo install -D -m 0755 "${XDMA_READY_LOCAL}" "${XDMA_READY_INSTALL}"
 sudo install -D -m 0755 "${FIX_XDMA_LOCAL}" "${FIX_XDMA_INSTALL}"
 sudo install -D -m 0755 "${XDMA_POSTINST_LOCAL}" "${XDMA_POSTINST_INSTALL}"
 sudo install -D -m 0755 "${APP_INFO_LOCAL}" "${APP_INFO_INSTALL}"
+sudo install -D -m 0755 "${P2_DEPLOY_LOCAL}" "${P2_DEPLOY_INSTALL}"
+
+TMP_P2_DEPLOY_CONFIG="$(mktemp)"
+{
+  printf 'P2APP_SOURCE_BIN=%q\n' "$P2APP_SOURCE_BIN"
+  printf 'P2APP_RUNTIME_BIN=%q\n' "$P2APP_BIN"
+  printf 'P2APP_SERVICE=%q\n' "$UNIT_NAME"
+  printf 'P2APP_BUILD_USER=%q\n' "$CONTROL_USER"
+  printf 'P2APP_START_TIMEOUT_SECONDS=%q\n' "$P2APP_START_TIMEOUT_SECONDS"
+  printf 'P2APP_STABLE_SECONDS=%q\n' "$P2APP_STABLE_SECONDS"
+} >"$TMP_P2_DEPLOY_CONFIG"
+sudo install -D -m 0644 -o root -g root "$TMP_P2_DEPLOY_CONFIG" "$P2_DEPLOY_CONFIG"
 
 if command -v dkms >/dev/null 2>&1 && [[ -n "$(dkms status -m saturn-xdma 2>/dev/null || true)" ]]; then
   echo "[*] DKMS manages Saturn XDMA; leaving the legacy kernel postinst hook disabled"
@@ -339,6 +361,7 @@ ${CONTROL_USER} ALL=(root) NOPASSWD: ${SYSTEMCTL_BIN} restart ${UNIT_NAME}
 ${CONTROL_USER} ALL=(root) NOPASSWD: ${SYSTEMCTL_BIN} enable ${UNIT_NAME}
 ${CONTROL_USER} ALL=(root) NOPASSWD: ${SYSTEMCTL_BIN} disable ${UNIT_NAME}
 ${CONTROL_USER} ALL=(root) NOPASSWD: ${APP_INFO_INSTALL}
+${CONTROL_USER} ALL=(root) NOPASSWD: ${P2_DEPLOY_INSTALL} ""
 EOF4
 
 if command -v visudo >/dev/null 2>&1; then
@@ -402,7 +425,8 @@ X-GNOME-Autostart-enabled=true
 EOF5
   install -m 0644 "$TMP_AUTOSTART" "$AUTOSTART_FILE"
   if [[ ${EUID:-$UID} -eq 0 && -n "$TARGET_USER" ]] && id -u "$TARGET_USER" >/dev/null 2>&1; then
-    chown "$TARGET_USER:$TARGET_USER" "$AUTOSTART_DIR" "$AUTOSTART_FILE" || true
+    TARGET_GROUP="$(id -gn "$TARGET_USER")"
+    chown "$TARGET_USER:$TARGET_GROUP" "$AUTOSTART_DIR" "$AUTOSTART_FILE" || true
   fi
   rm -f "$TMP_AUTOSTART"
 else
@@ -410,8 +434,9 @@ else
   rm -f "$AUTOSTART_FILE"
 fi
 
-command -v update-desktop-database >/dev/null 2>&1 && \
+if command -v update-desktop-database >/dev/null 2>&1; then
   update-desktop-database "${HOME}/.local/share/applications" >/dev/null 2>&1 || true
+fi
 
 echo
 echo "[✓] Done."
@@ -423,6 +448,7 @@ echo "    XDMA gate:${XDMA_READY_INSTALL}"
 echo "    Fix XDMA: ${FIX_XDMA_INSTALL}"
 echo "    Postinst: ${XDMA_POSTINST_INSTALL}"
 echo "    App Info: ${APP_INFO_INSTALL}"
+echo "    P2 Deploy:${P2_DEPLOY_INSTALL}"
 echo "    Desktop:  (legacy shortcut removed)"
 if [[ "$ENABLE_TRAY_AUTOSTART" == "1" ]]; then
   echo "    Autostart:${AUTOSTART_FILE}"

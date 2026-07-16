@@ -5,7 +5,15 @@ set -euo pipefail
 # The command is intentionally narrow so it can be installed as a privileged
 # helper and allowed through sudoers for web-driven self-updates.
 
-SWAP_FILE="${SATURN_SATURNGO_BUILD_SWAP_FILE:-/home/pi/saturn-build.swap}"
+default_swap_file(){
+  local build_user build_home
+  build_user="${SATURN_SATURNGO_BUILD_USER:-${SUDO_USER:-$(id -un)}}"
+  build_home="$(getent passwd "$build_user" 2>/dev/null | cut -d: -f6 || true)"
+  [[ -n "$build_home" && -d "$build_home" ]] || build_home=/var/tmp
+  printf '%s/saturn-build.swap\n' "$build_home"
+}
+
+SWAP_FILE="${SATURN_SATURNGO_BUILD_SWAP_FILE:-$(default_swap_file)}"
 SWAP_MIB="${SATURN_SATURNGO_BUILD_SWAP_MIB:-2048}"
 
 log(){ printf '[saturn-go-build-preflight] %s\n' "$*"; }
@@ -109,7 +117,7 @@ Commands:
   status        Report whether the build swapfile is active
 
 Environment:
-  SATURN_SATURNGO_BUILD_SWAP_FILE  default: /home/pi/saturn-build.swap
+  SATURN_SATURNGO_BUILD_SWAP_FILE  default: <build-user-home>/saturn-build.swap
   SATURN_SATURNGO_BUILD_SWAP_MIB   default: 2048
 EOF
 }

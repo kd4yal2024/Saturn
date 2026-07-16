@@ -19,7 +19,7 @@ UI usage notes:
 - `index.html` (Custom Scripts page) intentionally excludes `update-G2.py` from the dropdown.
 - `update.html` (G2 Update page) is the dedicated UI for running `update-G2.py` with live SSE terminal output.
 - `saturngo.html` is the dedicated UI for running `update-saturn-go.sh` (separate Saturn Go repo policy + self-redeploy workflow).
-- `saturngo.html` also exposes an `XDMA Doctor` button that runs `xdma-doctor.sh` through the same `/run` terminal path and reports PCIe/XDMA/module/service state plus the kernel post-install hook used for future kernel staging.
+- `saturngo.html` also exposes an `XDMA Doctor` button that runs `xdma-doctor.sh` through the same `/run` terminal path and reports PCIe/XDMA/module/service state plus whether DKMS or the legacy recovery hook owns kernel updates.
 - `saturngo.html` also exposes a `Stage Running Kernel` button that runs `xdma-stage-current.sh` through the same `/run` terminal path.
 - `p23test.html` is presented as Radio Telemetry & Diagnostics in the main navigation. It combines live radio/performance data with advanced converged `p2app` build/deploy/restart controls using `p23-app-manager.sh`.
 - `index.html` (Custom Scripts page) intentionally excludes `update-pihpsdr.py` from the dropdown.
@@ -63,6 +63,10 @@ Not all utilities are directly wired into current UI buttons, but are included i
 | `install-shutdown-waiter-service.sh` | Install or refresh `saturn-shutdown-waiter.service` and its default config. Used by Update G2. | `--enabled-default <mode>`, `--saturn-user <user>` |
 | `shutdown-waiter.sh` | Runtime shutdown-waiter payload installed by `install-shutdown-waiter-service.sh`. | none |
 | `update-saturn-go.sh` | Rebuild/redeploy `saturn-go` from the active Saturn repo root (used by `saturngo.html`). | `--verbose`, `--dry-run`, `--skip-git`, `--skip-build`, `--skip-deploy` |
+| `update-p2app.sh` | Run the Protocol 2 tests, build the active checkout, and hand production deployment to the trusted root broker with verification and rollback. | `SATURN_P2_BUILD_JOBS`, `SATURN_P2_SKIP_TESTS` |
+| `saturn-p2-deploy.sh` | Root-owned no-argument P2 production deployment broker; source/runtime paths come from root-owned `/etc/default/saturn-p2-deploy`. | none |
+| `seal-saturn-image.sh` | Remove cloned machine/SSH/Tailscale/auth identity and arm first-boot personalization before golden-image capture. | `--confirm SEAL`, `--no-poweroff`, `--keep-build-cache` |
+| `saturn-first-boot.sh` | One-shot golden-image clone personalization that generates a hostname (unless customized), SSH keys, and a unique five-character Saturn Go login, preserves an image-customized Linux password (or unlocks a still-locked account), and runs before Saturn Go creates a new Remote TLS identity. | none |
 | `xdma-doctor.sh` | Run the classified Saturn XDMA doctor through the privileged helper path (used by `saturngo.html`); helper emits an advisory when XDMA is loaded but not staged for the running kernel. | passthrough (`--json`, `--stage-only`, `--skip-service-check` if needed) |
 | `xdma-stage-current.sh` | Pre-stage XDMA for the running kernel through a narrow privileged helper without restarting `p2app.service`; helper re-execs through a transient systemd unit when launched from Saturn Go so `/lib/modules` stays writable. | none |
 | `p23-app-manager.sh` | Advanced helper to build/deploy/restart/revert the converged `p2app` service path (used by the Radio Telemetry page), with startup-profile and front-panel-mode override support. Legacy `p3` arguments are accepted but mapped to the same converged binary. | `--status`, `--build [p2\|p3]`, `--deploy [p2\|p3]`, `--restart [p2\|p3]`, `--switch [p2\|p3]`, `--revert`, `--mode panel\|headless\|panel-debug`, `--panel auto\|g2\|g2v2\|prefer-g2\|prefer-g2v2\|off`, `--dry-run`, `--verbose`, `--no-restart`, `--no-clean` |

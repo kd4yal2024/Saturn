@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+INSTALLER_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SATURN_ROOT="/opt/saturn-go"
 BIN_DIR="$SATURN_ROOT/bin"
 SCRIPTS_DIR="$SATURN_ROOT/scripts"
@@ -17,7 +18,7 @@ WATCHDOG_SCRIPT_PATH="$WATCHDOG_SCRIPT_DIR/$WATCHDOG_SCRIPT_NAME"
 WATCHDOG_SERVICE_FILE="/etc/systemd/system/saturn-go-watchdog.service"
 WATCHDOG_TIMER_FILE="/etc/systemd/system/saturn-go-watchdog.timer"
 SUDOERS_FILE="/etc/sudoers.d/saturn-go-maintenance"
-SOURCE_DIR="/home/${SUDO_USER:-$USER}/github/Saturn/update_manager"
+SOURCE_DIR="${SATURN_UPDATE_MANAGER_SOURCE_DIR:-$INSTALLER_DIR}"
 RUST_SRC_DIR="$SOURCE_DIR/rust-server"
 WEB_ASSET_HELPERS="$SOURCE_DIR/scripts/saturn-go-web-assets.sh"
 BUILD_PREFLIGHT_HELPER="$SOURCE_DIR/scripts/saturn-go-build-preflight.sh"
@@ -43,6 +44,8 @@ SATURN_SNAPSHOT_DIR="${SATURN_SNAPSHOT_DIR:-${SATURN_STATE_DIR}/snapshots}"
 SATURN_STAGING_DIR="${SATURN_STAGING_DIR:-${SATURN_STATE_DIR}/repo-staging}"
 SATURN_WATCHDOG_URL="${SATURN_WATCHDOG_URL:-http://${SATURN_ADDR}/healthz}"
 SATURN_WATCHDOG_INTERVAL="${SATURN_WATCHDOG_INTERVAL:-30s}"
+SATURN_INSTALL_PACKAGES="${SATURN_INSTALL_PACKAGES:-1}"
+SATURN_INSTALL_LEGACY_XDMA_HOOK="${SATURN_INSTALL_LEGACY_XDMA_HOOK:-1}"
 RUSTUP_INIT_URL="${RUSTUP_INIT_URL:-https://sh.rustup.rs}"
 RUSTUP_INIT_SHA256="${RUSTUP_INIT_SHA256:-6c30b75a75b28a96fd913a037c8581b580080b6ee9b8169a3c0feb1af7fe8caf}"
 TAILSCALE_INSTALL_URL="${TAILSCALE_INSTALL_URL:-https://tailscale.com/install.sh}"
@@ -50,7 +53,6 @@ TAILSCALE_INSTALL_SHA256="${TAILSCALE_INSTALL_SHA256:-ada2fe9d54df0d3e5a77879470
 SATURN_INSTALL_BRIDGE="${SATURN_INSTALL_BRIDGE:-1}"
 SATURN_REQUIRE_BRIDGE="${SATURN_REQUIRE_BRIDGE:-$SATURN_INSTALL_BRIDGE}"
 SATURN_BRIDGE_WDSP_FLAVOR="${SATURN_BRIDGE_WDSP_FLAVOR:-wdsp2}"
-SATURN_PIHPSDR_DIR="${SATURN_PIHPSDR_DIR:-/home/${SUDO_USER:-$USER}/github/pihpsdr}"
 SATURN_WDSP2_REPO_URL="${SATURN_WDSP2_REPO_URL:-https://github.com/TAPR/OpenHPSDR-wdsp.git}"
 SATURN_WDSP2_REF="${SATURN_WDSP2_REF:-584e8aca5ba1c4c6bc66fc0cc164ce567c8ba1e3}"
 SATURN_PIHPSDR_PORT_REPO_URL="${SATURN_PIHPSDR_PORT_REPO_URL:-https://github.com/dl1ycf/pihpsdr.git}"
@@ -61,6 +63,14 @@ ok(){   printf "[OK] %s\n" "$*"; }
 info(){ printf "[INFO] %s\n" "$*"; }
 warn(){ printf "[WARN] %s\n" "$*"; }
 err(){  printf "[ERR] %s\n" "$*" >&2; }
+
+systemd_env_escape(){
+  local value="$1"
+  value="${value//\\/\\\\}"
+  value="${value//\"/\\\"}"
+  value="${value//%/%%}"
+  printf '%s' "$value"
+}
 
 download_verified() {
   local url="$1" expected="$2" dest="$3" actual
@@ -105,6 +115,7 @@ fi
 REPO_SOURCE_DIR="$(cd "$SOURCE_DIR/.." && pwd)"
 XDMA_FIX_SCRIPT_SRC="$REPO_SOURCE_DIR/scripts/fix-xdma.sh"
 XDMA_POSTINST_HELPER_SRC="$REPO_SOURCE_DIR/scripts/saturn-xdma-kernel-postinst.sh"
+ADMIN_PASSWORD_HELPER_SRC="$REPO_SOURCE_DIR/scripts/saturn-admin-password.sh"
 EXTRA_PACKAGED_SCRIPTS=(
   "$REPO_SOURCE_DIR/scripts/fix-LED-power-button.sh"
   "$REPO_SOURCE_DIR/scripts/install-shutdown-waiter-service.sh"
@@ -118,7 +129,7 @@ PRIVILEGED_HELPER_SCRIPTS=(
   "$SOURCE_DIR/scripts/make_pi_image.sh"
   "$SOURCE_DIR/scripts/clone_pi_to_device.sh"
   "$SOURCE_DIR/scripts/saturn-pi-wipe-target.sh"
-  "$REPO_SOURCE_DIR/scripts/saturn-admin-password.sh"
+  "$ADMIN_PASSWORD_HELPER_SRC"
   "$REPO_SOURCE_DIR/scripts/saturn-flash-fpga.sh"
   "$REPO_SOURCE_DIR/scripts/saturn-xdma-doctor.sh"
   "$REPO_SOURCE_DIR/scripts/saturn-xdma-stage-current.sh"
@@ -145,6 +156,7 @@ if [[ ! -f "$BUILD_PREFLIGHT_HELPER" ]]; then
   err "Build preflight helper not found: $BUILD_PREFLIGHT_HELPER"
   exit 1
 fi
+# shellcheck disable=SC1090
 source "$WEB_ASSET_HELPERS"
 for extra_script in "${EXTRA_PACKAGED_SCRIPTS[@]}"; do
   if [[ ! -f "$extra_script" ]]; then
@@ -170,7 +182,7 @@ else
   err "Set SATURN_SERVICE_USER to a valid non-root user."
   exit 1
 fi
-SERVICE_GROUP="${SATURN_SERVICE_GROUP:-$SERVICE_USER}"
+SERVICE_GROUP="${SATURN_SERVICE_GROUP:-$(id -gn "$SERVICE_USER" 2>/dev/null || true)}"
 
 if ! id -u "$SERVICE_USER" >/dev/null 2>&1; then
   err "Service user does not exist: $SERVICE_USER"
@@ -188,6 +200,7 @@ if [[ -z "$SERVICE_HOME" || ! -d "$SERVICE_HOME" ]]; then
 fi
 SATURN_LOG_DIR="${SATURN_LOG_DIR:-$SERVICE_HOME/saturn-logs}"
 DEFAULT_REPO_ROOT="${SATURN_REPO_ROOT:-$SERVICE_HOME/github/Saturn}"
+SATURN_PIHPSDR_DIR="${SATURN_PIHPSDR_DIR:-$SERVICE_HOME/github/pihpsdr}"
 
 if [[ -n "${SUDO_USER:-}" && "${SUDO_USER}" != "root" ]] && id -u "${SUDO_USER}" >/dev/null 2>&1; then
   BUILD_USER="${SUDO_USER}"
@@ -206,7 +219,7 @@ RUSTUP_RUSTC_BIN="$RUSTUP_BIN_DIR/rustc"
 RUSTUP_CMD_BIN="$RUSTUP_BIN_DIR/rustup"
 RUST_BUILD_TMP_DIR="$RUST_SRC_DIR/.tmp"
 RUST_BUILD_TARGET_DIR="$RUST_SRC_DIR/target-local"
-RUST_BUILD_SWAP_FILE="${SATURN_SATURNGO_BUILD_SWAP_FILE:-/home/pi/saturn-build.swap}"
+RUST_BUILD_SWAP_FILE="${SATURN_SATURNGO_BUILD_SWAP_FILE:-$BUILD_HOME/saturn-build.swap}"
 RUST_BUILD_SWAP_MIB="${SATURN_SATURNGO_BUILD_SWAP_MIB:-2048}"
 RUST_BUILD_JOBS="${SATURN_SATURNGO_BUILD_JOBS:-1}"
 RUST_BUILD_NICE="${SATURN_SATURNGO_BUILD_NICE:-15}"
@@ -223,11 +236,32 @@ run_as_build_user() {
 }
 
 install_xdma_kernel_postinst_hook() {
-  local tmp_hook
+  local tmp_hook disabled_hook
 
   info "Installing XDMA kernel postinst helpers..."
   install -D -m 0755 -o root -g root "$XDMA_FIX_SCRIPT_SRC" "$XDMA_FIX_SCRIPT_INSTALL"
   install -D -m 0755 -o root -g root "$XDMA_POSTINST_HELPER_SRC" "$XDMA_POSTINST_HELPER_INSTALL"
+
+  # DKMS and the legacy post-install hook must never both own XDMA kernel
+  # updates. The appliance installer uses DKMS, so retain only the helpers
+  # used for diagnostics and remove the legacy hook when DKMS is registered.
+  if command -v dkms >/dev/null 2>&1 \
+      && [[ -n "$(dkms status -m saturn-xdma 2>/dev/null || true)" ]]; then
+    disabled_hook="${XDMA_POSTINST_HOOK_PATH}.disabled-by-dkms"
+    if [[ -e "$XDMA_POSTINST_HOOK_PATH" || -L "$XDMA_POSTINST_HOOK_PATH" ]]; then
+      rm -f "$disabled_hook"
+      mv "$XDMA_POSTINST_HOOK_PATH" "$disabled_hook"
+      ok "Disabled legacy XDMA hook because DKMS manages the driver"
+    else
+      ok "DKMS manages XDMA; legacy kernel post-install hook remains disabled"
+    fi
+    return 0
+  fi
+
+  if ! env_flag_enabled "$SATURN_INSTALL_LEGACY_XDMA_HOOK"; then
+    info "Legacy XDMA kernel post-install hook installation is disabled"
+    return 0
+  fi
 
   tmp_hook="$(mktemp)"
   cat >"$tmp_hook" <<EOF
@@ -251,6 +285,21 @@ EOF
 
 apt_pkg_installed() {
   dpkg-query -W -f='${Status}' "$1" 2>/dev/null | grep -q '^install ok installed$'
+}
+
+require_install_dependencies() {
+  local missing=()
+  local package
+  for package in \
+    nginx apache2-utils build-essential binutils pkg-config libfftw3-dev libopus0 \
+    curl git rsync nodejs npm python3 python3-venv python3-psutil ca-certificates
+  do
+    apt_pkg_installed "$package" || missing+=("$package")
+  done
+  if (( ${#missing[@]} > 0 )); then
+    err "Missing system dependencies while SATURN_INSTALL_PACKAGES=0: ${missing[*]}"
+    exit 1
+  fi
 }
 
 env_flag_enabled() {
@@ -354,6 +403,10 @@ remove_legacy_apt_rust() {
   if [[ ${#pkgs[@]} -eq 0 ]]; then
     return 0
   fi
+  if ! env_flag_enabled "$SATURN_INSTALL_PACKAGES"; then
+    info "Leaving distro Rust packages unchanged (SATURN_INSTALL_PACKAGES=0); the build uses the user rustup toolchain explicitly."
+    return 0
+  fi
   info "Removing distro Rust packages (using rustup-managed toolchain instead): ${pkgs[*]}"
   apt-get purge -y -qq "${pkgs[@]}" || warn "Could not fully purge legacy cargo/rustc packages; continuing"
   apt-get autoremove -y -qq >/dev/null 2>&1 || true
@@ -367,6 +420,8 @@ cargo_lock_preflight() {
     rm -f "$err_file"
     return 0
   fi
+  # Backticks are literal Cargo error text.
+  # shellcheck disable=SC2016
   if grep -q 'lock file version `4`' "$err_file"; then
     rm -f "$err_file"
     return 2
@@ -415,17 +470,22 @@ ensure_modern_rust_toolchain() {
   info "  $(run_as_build_user "\"$RUSTUP_RUSTC_BIN\" --version")"
 }
 
-info "Installing dependencies..."
-check_tmp_space_preflight
-export DEBIAN_FRONTEND=noninteractive
-apt-get update -qq
-apt-get install -y -qq \
-  nginx apache2-utils build-essential binutils pkg-config \
-  libfftw3-dev \
-  curl git rsync nodejs npm \
-  python3 python3-venv python3-psutil \
-  ca-certificates
-ok "Dependencies installed"
+if env_flag_enabled "$SATURN_INSTALL_PACKAGES"; then
+  info "Installing dependencies..."
+  check_tmp_space_preflight
+  export DEBIAN_FRONTEND=noninteractive
+  apt-get update -qq
+  apt-get install -y -qq \
+    nginx apache2-utils build-essential binutils pkg-config \
+    libfftw3-dev libopus0 \
+    curl git rsync nodejs npm \
+    python3 python3-venv python3-psutil \
+    ca-certificates
+  ok "Dependencies installed"
+else
+  info "Skipping dependency installation (SATURN_INSTALL_PACKAGES=0)"
+  require_install_dependencies
+fi
 
 ensure_modern_rust_toolchain
 install_optional_tailscale
@@ -749,60 +809,43 @@ server {
 }
 NGINX
 
-PASSWORD_MIN_LEN=5
-# Reject newline / CR / tab / NUL: these cannot be safely written to a systemd
-# Environment= line, and allowing them past .htpasswd would leave LAN auth
-# updated while the TLS drop-in is skipped — a split-auth deployment where
-# /saturn/* and /remote* accept different credentials.
-password_has_control_char() {
-  [[ "$1" == *[$'\n\r\t\0']* ]]
-}
+PASSWORD_LEN=5
+REMOTE_AUTH_DROPIN_DIR="/etc/systemd/system/$(basename "$SERVICE_FILE").d"
+REMOTE_AUTH_DROPIN_FILE="$REMOTE_AUTH_DROPIN_DIR/10-remote-auth.conf"
 generate_readable_admin_password() {
-  local words=(
-    radio signal meter antenna vfo tuner audio remote beacon
-    filter keyer waterfall spectrum carrier relay shack station
-    gain level drive power field panel band mode
-  )
-  local digits n word_a word_b
-  word_a="${words[$((RANDOM % ${#words[@]}))]}"
-  word_b="${words[$((RANDOM % ${#words[@]}))]}"
-  n="$(od -An -N2 -tu2 /dev/urandom)"
-  digits="$(printf '%04d' "$((n % 10000))")"
-  printf 'saturn-%s-%s-%s' "$word_a" "$word_b" "$digits"
+  local charset='abcdefghjkmnpqrstuvwxyz23456789'
+  local password='' byte index
+  while [[ ${#password} -lt $PASSWORD_LEN ]]; do
+    byte="$(od -An -N1 -tu1 /dev/urandom | tr -d '[:space:]')"
+    [[ -n "$byte" ]] || continue
+    index=$((byte % ${#charset}))
+    password+="${charset:index:1}"
+  done
+  printf '%s' "$password"
 }
 generated_password=""
 admin_password="${SATURN_ADMIN_PASSWORD:-}"
-if [[ -n "$admin_password" ]]; then
-  if [[ ${#admin_password} -lt ${PASSWORD_MIN_LEN} ]]; then
-    err "Provided SATURN_ADMIN_PASSWORD is too short (minimum ${PASSWORD_MIN_LEN} characters)."
-    exit 1
+existing_credentials_in_sync=0
+if [[ -s "$BASIC_AUTH_FILE" && -s "$REMOTE_AUTH_DROPIN_FILE" ]]; then
+  credential_status="$("$ADMIN_PASSWORD_HELPER_SRC" status 2>/dev/null || true)"
+  if grep -q '^sync_state=in_sync$' <<<"$credential_status"; then
+    existing_credentials_in_sync=1
+  else
+    warn "Existing nginx and Saturn Remote credentials are not synchronized; replacing both together."
   fi
-  if password_has_control_char "$admin_password"; then
-    err "Provided SATURN_ADMIN_PASSWORD contains a control character (newline/CR/tab/NUL)."
-    err "Use a password without control characters and re-run the installer."
-    exit 1
-  fi
-  info "Setting HTTP basic auth credentials for admin user from SATURN_ADMIN_PASSWORD..."
-  printf '%s\n' "$admin_password" | htpasswd -i -c "$BASIC_AUTH_FILE" admin >/dev/null
-  chmod 0640 "$BASIC_AUTH_FILE"
-  chown root:www-data "$BASIC_AUTH_FILE"
-  ok "Basic auth configured"
-elif [[ ! -s "$BASIC_AUTH_FILE" ]]; then
+fi
+if [[ -z "$admin_password" && "$existing_credentials_in_sync" -eq 0 ]]; then
   info "Creating HTTP basic auth credentials for admin user..."
   if [[ -t 0 ]]; then
     while true; do
-      read -r -s -p "Enter admin password (min ${PASSWORD_MIN_LEN} chars): " admin_password; echo
+      read -r -s -p "Enter admin password (exactly ${PASSWORD_LEN} characters): " admin_password; echo
       read -r -s -p "Confirm admin password: " admin_password_confirm; echo
       if [[ "$admin_password" != "$admin_password_confirm" ]]; then
         warn "Passwords do not match. Try again."
         continue
       fi
-      if [[ ${#admin_password} -lt ${PASSWORD_MIN_LEN} ]]; then
-        warn "Password too short. Minimum ${PASSWORD_MIN_LEN} characters."
-        continue
-      fi
-      if password_has_control_char "$admin_password"; then
-        warn "Password contains a control character (newline/CR/tab/NUL). Try again."
+      if [[ ${#admin_password} -ne ${PASSWORD_LEN} ]]; then
+        warn "Password must be exactly ${PASSWORD_LEN} characters."
         continue
       fi
       break
@@ -813,69 +856,19 @@ elif [[ ! -s "$BASIC_AUTH_FILE" ]]; then
     warn "No TTY available; generated readable admin password."
   fi
 
-  printf '%s\n' "$admin_password" | htpasswd -i -c "$BASIC_AUTH_FILE" admin >/dev/null
-  chmod 0640 "$BASIC_AUTH_FILE"
-  chown root:www-data "$BASIC_AUTH_FILE"
-  ok "Basic auth configured"
-else
-  info "Reusing existing $BASIC_AUTH_FILE"
 fi
 
-# Saturn Remote TLS listener requires SATURN_REMOTE_BASIC_AUTH in the
-# saturn-go.service environment. We write a systemd drop-in only when this
-# install run captured a fresh plaintext password (either from the operator,
-# from $SATURN_ADMIN_PASSWORD, or generated above). On reruns that reuse an
-# existing /etc/nginx/.htpasswd we have no plaintext, so we preserve any
-# existing drop-in and warn if none is present.
-#
-# Escape rules for systemd Environment="KEY=value":
-#   - %% always (specifier expansion runs even inside quotes)
-#   - \\ and \" inside the quoted form
-#   - newlines / NULs / other control chars are not representable; reject them.
-systemd_env_escape() {
-  local v="$1"
-  v="${v//\\/\\\\}"
-  v="${v//\"/\\\"}"
-  v="${v//%/%%}"
-  printf '%s' "$v"
-}
-REMOTE_AUTH_DROPIN_DIR="/etc/systemd/system/$(basename "$SERVICE_FILE").d"
-REMOTE_AUTH_DROPIN_FILE="$REMOTE_AUTH_DROPIN_DIR/10-remote-auth.conf"
 if [[ -n "${admin_password:-}" ]]; then
-  # admin_password is already validated control-char-free upstream (env-var,
-  # interactive, and generated paths all check before writing .htpasswd), so
-  # this branch can write the drop-in unconditionally and stay aligned with
-  # the LAN nginx password.
-  escaped_password="$(systemd_env_escape "$admin_password")"
-  info "Writing Saturn Remote TLS auth drop-in: $REMOTE_AUTH_DROPIN_FILE"
-  install -d -m 0755 -o root -g root "$REMOTE_AUTH_DROPIN_DIR"
-  (
-    umask 0177
-    cat > "$REMOTE_AUTH_DROPIN_FILE" <<EOF
-# Managed by install_saturn_go_nginx.sh
-# Saturn Remote TLS listener basic-auth credentials. The TLS listener on
-# :8443 (rust-server/src/remote_tls.rs) refuses to bind without this. Keep
-# this aligned with /etc/nginx/.htpasswd so /saturn/* and /remote* accept
-# the same admin password.
-[Service]
-Environment="SATURN_REMOTE_BASIC_AUTH=admin:${escaped_password}"
-EOF
-  )
-  chmod 0600 "$REMOTE_AUTH_DROPIN_FILE"
-  chown root:root "$REMOTE_AUTH_DROPIN_FILE"
-  unset escaped_password
-  ok "Saturn Remote TLS auth drop-in installed"
-elif [[ -f "$REMOTE_AUTH_DROPIN_FILE" ]]; then
-  ok "Preserving existing Saturn Remote TLS auth drop-in: $REMOTE_AUTH_DROPIN_FILE"
+  info "Applying nginx and Saturn Remote credentials through the canonical password helper..."
+  printf '%s\n' "$admin_password" | \
+    SATURN_ADMIN_SKIP_SYSTEMD=1 "$ADMIN_PASSWORD_HELPER_SRC" set --restart none
+  ok "Basic auth and Saturn Remote TLS credentials configured"
+elif [[ "$existing_credentials_in_sync" -eq 1 ]]; then
+  info "Reusing existing synchronized credential backends"
 else
-  warn "No fresh admin password and no existing $REMOTE_AUTH_DROPIN_FILE."
-  warn "Saturn Remote TLS listener will refuse to bind on :8443 until SATURN_REMOTE_BASIC_AUTH is set."
-  warn "To align manually with the existing /etc/nginx/.htpasswd password:"
-  warn "  sudo systemctl edit $(basename "$SERVICE_FILE")"
-  warn "  Add under [Service]:"
-  warn "    Environment=\"SATURN_REMOTE_BASIC_AUTH=admin:<your-existing-password>\""
-  warn "  sudo systemctl restart $(basename "$SERVICE_FILE")"
-  warn "Or rerun this installer with SATURN_ADMIN_PASSWORD=<password> to write both."
+  err "Existing credential state is incomplete; nginx and Saturn Remote cannot be kept synchronized."
+  err "Rerun with SATURN_ADMIN_PASSWORD=<five-characters> to repair both backends."
+  exit 1
 fi
 
 rm -f /etc/nginx/sites-enabled/default || true
@@ -896,6 +889,7 @@ fi
 ok "nginx configured"
 
 info "Writing systemd unit..."
+repo_root_systemd="$(systemd_env_escape "$DEFAULT_REPO_ROOT")"
 cat >"$SERVICE_FILE" <<SERVICE
 [Unit]
 Description=Saturn Update Manager (Rust backend)
@@ -912,7 +906,7 @@ Environment=RUSTUP_HOME=${SERVICE_HOME}/.rustup
 Environment=SATURN_WEBROOT=${WEB_ROOT}
 Environment=SATURN_CONFIG=${WEB_ROOT}/config.json
 Environment=SATURN_ADDR=${SATURN_ADDR}
-Environment=SATURN_REPO_ROOT=${DEFAULT_REPO_ROOT}
+Environment="SATURN_REPO_ROOT=${repo_root_systemd}"
 Environment=SATURN_REPO_ROOT_FILE=${SATURN_REPO_ROOT_FILE}
 Environment=SATURN_STATE_DIR=${SATURN_STATE_DIR}
 Environment=SATURN_UPDATE_POLICY_FILE=${SATURN_UPDATE_POLICY_FILE}

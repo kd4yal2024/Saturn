@@ -558,64 +558,8 @@ def install_libraries():
 
     ok("Libraries installed")
 
-def patch_p2app_cat_compatibility():
-    section("P2App Compatibility")
-    p2_dir = os.path.join(SATURN_DIR, "sw_projects", "P2_app")
-    src = os.path.join(p2_dir, "g2panel_libgpiodv2.c")
-    hdr = os.path.join(p2_dir, "catmessages.h")
-    if not (os.path.isfile(src) and os.path.isfile(hdr)):
-        warn("P2App CAT compatibility check skipped (missing P2_app sources)")
-        return
-
-    try:
-        with open(hdr, "r", encoding="utf-8", errors="replace") as f:
-            hdr_text = f.read()
-    except Exception as e:
-        warn(f"Could not read catmessages.h for compatibility check: {e}")
-        return
-
-    expects_dest = bool(
-        re.search(
-            r"MakeProductVersionCAT\s*\(\s*uint8_t\s+ProductID\s*,\s*uint8_t\s+HWVersion\s*,\s*uint8_t\s+SWVersion\s*,\s*int\s+DestDevice\s*\)",
-            hdr_text,
-        )
-    )
-    if not expects_dest:
-        info("CAT signature does not require DestDevice; no patch needed")
-        return
-
-    try:
-        with open(src, "r", encoding="utf-8", errors="replace") as f:
-            src_text = f.read()
-    except Exception as e:
-        warn(f"Could not read g2panel_libgpiodv2.c for compatibility check: {e}")
-        return
-
-    pattern = (
-        r"MakeProductVersionCAT\s*\(\s*PRODUCTID\s*,\s*HWVERSION\s*,\s*GetP2appVersion\s*\(\s*\)\s*\)\s*;"
-    )
-    replacement = "MakeProductVersionCAT(PRODUCTID, HWVERSION, GetP2appVersion(), DESTTCPCATPORT);"
-    new_text, n = re.subn(pattern, replacement, src_text)
-    if n == 0:
-        if "GetP2appVersion(), DESTTCPCATPORT" in src_text:
-            info("P2App CAT compatibility patch already present")
-        else:
-            warn("No legacy MakeProductVersionCAT call found in g2panel_libgpiodv2.c")
-        return
-
-    if args.dry_run:
-        info(f"[Dry Run] Would patch {src}")
-        return
-
-    try:
-        with open(src, "w", encoding="utf-8") as f:
-            f.write(new_text)
-        ok("Applied P2App CAT compatibility patch for gpiod v2 build")
-    except Exception as e:
-        warn(f"Failed to write compatibility patch to g2panel_libgpiodv2.c: {e}")
-
 def build_p2app():
-    section("p2app Build")
+    section("p2app Test, Build, and Deploy")
     script = os.path.join(SATURN_DIR, "scripts", "update-p2app.sh")
     if not os.path.isfile(script):
         warn("No build script: scripts/update-p2app.sh")
@@ -624,7 +568,7 @@ def build_p2app():
         info(f"[Dry Run] Would run: {script}")
         return
     run(["bash", script], live=True, cwd=os.path.dirname(script))
-    ok("p2app built")
+    ok("p2app deployed and verified")
 
 def build_desktop_apps():
     section("Desktop Apps")
@@ -635,7 +579,9 @@ def build_desktop_apps():
     if args.dry_run:
         info(f"[Dry Run] Would run: {script}")
         return
-    run(["bash", script], live=True, cwd=os.path.dirname(script))
+    desktop_env = os.environ.copy()
+    desktop_env["SATURN_SKIP_P2APP_BUILD"] = "1"
+    run(["bash", script], live=True, cwd=os.path.dirname(script), env=desktop_env)
     ok("Apps built")
 
 def install_shutdown_waiter_service():
@@ -800,7 +746,6 @@ if __name__ == "__main__":
     backup_created = maybe_backup()
     update_git()
     install_libraries()
-    patch_p2app_cat_compatibility()
     build_p2app()
     build_desktop_apps()
     install_shutdown_waiter_service()

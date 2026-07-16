@@ -7,7 +7,7 @@ package_upgrade: false
 
 write_files:
   - path: /etc/default/saturn-provision
-    permissions: "0644"
+    permissions: "0600"
     owner: root:root
     content: |
       # Primary provisioning target
@@ -19,11 +19,15 @@ write_files:
       SATURN_CLOCK_SYNC_WAIT_SECONDS=180
       SATURN_CLOCK_SYNC_POLL_SECONDS=5
       SATURN_REPO_URL=https://github.com/kd4yal2024/Saturn.git
+      # Use a release tag or full tested commit for golden images. "main" is
+      # convenient for development but is not reproducible.
+      SATURN_REPO_REF=main
       SATURN_REPO_BRANCH=main
+      SATURN_INSTALL_PROFILE=appliance
 
       # Feature toggles
       SATURN_INSTALL_UPDATE_MANAGER=1
-      SATURN_INSTALL_PIHPSDR=1
+      SATURN_INSTALL_PIHPSDR=0
       SATURN_INSTALL_SATURN_BRIDGE=1
       SATURN_REQUIRE_SATURN_BRIDGE=1
       SATURN_INSTALL_P2APP_CONTROL=1
@@ -32,6 +36,7 @@ write_files:
       SATURN_SHUTDOWN_WAITER_ENABLED_DEFAULT=auto
       SATURN_REBUILD_XDMA=1
       SATURN_BUILD_OPTIONAL_TOOLS=1
+      SATURN_INSTALL_DEVELOPER_TOOLS=0
       SATURN_ENABLE_I2C=1
       SATURN_ENABLE_SSH=1
       SATURN_ENABLE_VNC=1
@@ -64,8 +69,8 @@ write_files:
       # Required if SATURN_FLASH_FPGA=1:
       # SATURN_FLASH_CONFIRM=FLASH
 
-      # Optional: set explicit admin password for Update Manager basic auth.
-      # Blank keeps the provisioning default admin/admin login for first access.
+      # Optional: set an exact five-character initial password. When blank, the
+      # installer generates and logs a five-character password for this device.
       SATURN_ADMIN_PASSWORD=
 
       # Re-run on every boot only if explicitly requested.
@@ -85,7 +90,15 @@ write_files:
 
       echo "[$(date '+%Y-%m-%d %H:%M:%S')] Saturn cloud-init bootstrap starting"
 
+      if [[ -f /var/lib/saturn-provision/golden-image \
+          && -f /var/lib/saturn-provision/complete ]]; then
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] Fully provisioned golden image detected; skipping appliance reinstall."
+        exit 0
+      fi
+
+      set -a
       source /etc/default/saturn-provision
+      set +a
 
       retry_seconds="${SATURN_USER_RETRY_SECONDS:-30}"
       if ! [[ "$retry_seconds" =~ ^[0-9]+$ ]] || (( retry_seconds < 1 )); then
@@ -171,6 +184,8 @@ write_files:
         export DEBIAN_FRONTEND=noninteractive
         apt-get update
         apt-get install -y --no-install-recommends "${missing[@]}"
+        SATURN_APT_ALREADY_UPDATED=1
+        export SATURN_APT_ALREADY_UPDATED
       }
 
       wait_for_clock_sync
@@ -199,21 +214,34 @@ write_files:
         fi
       fi
 
-      install -d -m 0755 -o "$SATURN_USER" -g "$SATURN_USER" "$SATURN_HOME/github"
+      SATURN_GROUP="$(id -gn "$SATURN_USER")"
+      SATURN_REPO_DIR="${SATURN_REPO_DIR:-$SATURN_HOME/github/Saturn}"
+      SATURN_REPO_REF="${SATURN_REPO_REF:-${SATURN_REPO_BRANCH:-main}}"
+      install -d -m 0755 -o "$SATURN_USER" -g "$SATURN_GROUP" "$(dirname "$SATURN_REPO_DIR")" "$SATURN_REPO_DIR"
 
-      if [[ ! -d "$SATURN_HOME/github/Saturn/.git" ]]; then
-        echo "[$(date '+%Y-%m-%d %H:%M:%S')] Cloning Saturn repo"
-        sudo -u "$SATURN_USER" -H git clone --depth 1 --branch "$SATURN_REPO_BRANCH" "$SATURN_REPO_URL" "$SATURN_HOME/github/Saturn"
+      if [[ ! -d "$SATURN_REPO_DIR/.git" ]]; then
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] Initializing Saturn repository"
+        sudo -u "$SATURN_USER" -H git -C "$SATURN_REPO_DIR" init
+        sudo -u "$SATURN_USER" -H git -C "$SATURN_REPO_DIR" remote add origin "$SATURN_REPO_URL"
+      elif sudo -u "$SATURN_USER" -H git -C "$SATURN_REPO_DIR" remote get-url origin >/dev/null 2>&1; then
+        sudo -u "$SATURN_USER" -H git -C "$SATURN_REPO_DIR" remote set-url origin "$SATURN_REPO_URL"
       else
-        echo "[$(date '+%Y-%m-%d %H:%M:%S')] Updating existing Saturn repo"
-        sudo -u "$SATURN_USER" -H git -C "$SATURN_HOME/github/Saturn" fetch --depth 1 origin "$SATURN_REPO_BRANCH"
-        sudo -u "$SATURN_USER" -H git -C "$SATURN_HOME/github/Saturn" checkout -B "$SATURN_REPO_BRANCH" "origin/$SATURN_REPO_BRANCH"
+        sudo -u "$SATURN_USER" -H git -C "$SATURN_REPO_DIR" remote add origin "$SATURN_REPO_URL"
       fi
 
-      echo "[$(date '+%Y-%m-%d %H:%M:%S')] Launching Saturn provisioning"
-      exec bash "$SATURN_HOME/github/Saturn/provision/cloud-init/provision-saturn.sh"
+      echo "[$(date '+%Y-%m-%d %H:%M:%S')] Fetching Saturn ref $SATURN_REPO_REF"
+      sudo -u "$SATURN_USER" -H git -C "$SATURN_REPO_DIR" fetch --depth 1 origin "$SATURN_REPO_REF"
+      sudo -u "$SATURN_USER" -H git -C "$SATURN_REPO_DIR" checkout --detach FETCH_HEAD
+
+      export SATURN_USER SATURN_GROUP SATURN_REPO_DIR SATURN_REPO_REF
+      export SATURN_REPO_SYNC=0 SATURN_NONINTERACTIVE=1
+      echo "[$(date '+%Y-%m-%d %H:%M:%S')] Launching canonical Saturn installer"
+      exec bash "$SATURN_REPO_DIR/install.sh" \
+        --user "$SATURN_USER" \
+        --profile "${SATURN_INSTALL_PROFILE:-appliance}" \
+        --non-interactive
 
 runcmd:
   - [bash, -lc, "/usr/local/sbin/saturn-cloudinit-bootstrap.sh"]
 
-final_message: "Saturn provisioning complete. Review /var/log/saturn-provision.log and /var/lib/saturn-provision/complete"
+final_message: "Saturn cloud-init bootstrap finished. Review /var/log/saturn-provision.log and /var/lib/saturn-provision/complete for final status."

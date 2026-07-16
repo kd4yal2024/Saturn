@@ -23,15 +23,15 @@ app, and exposes maintenance plus remote operation through Saturn Go.
   and `p2app-control` service integration.
 - `scripts/` - host maintenance helpers, XDMA doctor/staging scripts, shutdown
   waiter, LCD/front-panel helpers, and update utilities.
-- `scripts/install-saturn-appliance.sh` - complete installer for fresh or existing systems.
-- `provision/` - legacy cloud-init wrapper for image-based first boot.
+- `install.sh` - canonical installer entry point for fresh or existing systems.
+- `provision/` - cloud-init bootstrap that calls the same canonical installer.
 - `update_manager/` - Saturn Go web manager, Saturn Bridge, remote web client,
   install/update scripts, web templates, and detailed docs.
 
 ## Recommended Entry Points
 
-- Install a new system: `sudo scripts/install-saturn-appliance.sh`
-- Legacy cloud-init flow: [`provision/README.md`](provision/README.md)
+- Install a new system: `sudo ./install.sh`
+- Cloud-init and image-factory flow: [`provision/README.md`](provision/README.md)
 - Saturn Go architecture and operation:
   [`update_manager/README.md`](update_manager/README.md)
 - Detailed Saturn Go docs:
@@ -49,22 +49,36 @@ The appliance installer is designed for a Pi-based Saturn system. It installs
 packages, kernel headers, XDMA support, Saturn apps/tools, Update Manager,
 udev rules, the dedicated P2 runtime, Saturn Go, and Saturn Bridge with WDSP 2.00.
 
-Run it from a checked-out repository; cloud-init is not required:
+On a fresh Debian/Raspberry Pi OS Trixie arm64 installation:
 
 ```bash
-sudo scripts/install-saturn-appliance.sh
+sudo apt-get update
+sudo apt-get install -y git
+git clone https://github.com/kd4yal2024/Saturn.git
+cd Saturn
+sudo ./install.sh
 ```
 
-The cloud-init examples remain available for image factories and invoke the
-same supported WDSP 2.00 bridge path.
+The checkout can live under any user or directory. The default `appliance`
+profile auto-detects the front panel and LCD, installs only runtime tools, and
+uses hardware verification. Optional profiles are:
+
+- `sudo ./install.sh --profile desktop` for developer tools and piHPSDR
+- `sudo ./install.sh --profile image-factory` for software-only verification
+
+Cloud-init performs only first-boot/bootstrap work, checks out one requested
+ref, and invokes this same installer non-interactively.
 
 FPGA flashing is disabled by default and requires an explicit confirmation
 variable when enabled.
 
-Provisioning and the Saturn Go installer also install the XDMA kernel
-post-install hook at `/etc/kernel/postinst.d/saturn-xdma`. That hook pre-stages
-`xdma.ko` for newly installed kernels without unloading the live module or
-restarting `p2app.service`.
+XDMA is installed through DKMS. The older
+`/etc/kernel/postinst.d/saturn-xdma` hook is automatically disabled whenever
+the DKMS package is registered so kernel updates have one driver owner.
+
+Interrupted installs resume completed package/build/deployment phases when the
+same commit, kernel, and profile are used. Use `sudo ./install.sh --force` when
+an intentional full reprovision is required.
 
 ## Saturn Go And Remote Operation
 
@@ -96,8 +110,10 @@ privileged maintenance helpers. Treat it as an appliance control plane.
 - Tailscale is optional and should stack with Saturn Remote basic auth; it does
   not replace it.
 - RF TX remains opt-in through bridge/service configuration.
-- Beta provisioning may intentionally keep `admin/admin` for first access. That
-  is a beta convenience only and should be changed before untrusted network use.
+- Newly set Saturn passwords are exactly five characters with no composition
+  rules. Existing longer credentials remain valid during upgrades. An
+  unattended install generates a device-specific password and records it in
+  `/var/lib/saturn-provision/update-manager-admin-password` (root-only).
 
 ## Build And Test
 
@@ -120,8 +136,50 @@ make -C linuxdriver/xdma
 sudo bash scripts/install-xdma-dkms.sh --dry-run
 ```
 
+The production Protocol 2 update path runs tests, builds, deploys through a
+trusted root broker, verifies `p2app.service`, and rolls back on failure:
+
+```bash
+scripts/update-p2app.sh
+```
+
+## Golden Image
+
+Install with the image-factory profile and complete bench verification before
+sealing the source image. Close browsers and run the destructive sealing step
+from a local console; it powers the source system off by default:
+
+```bash
+sudo ./install.sh --profile image-factory --verify hardware  # on a G2 bench
+sudo scripts/seal-saturn-image.sh --confirm SEAL
+```
+
+Use the image-factory default (software verification) when preparing the image
+off-hardware; run the explicit hardware verification form above on a G2 bench.
+
+Sealing powers the source system off after removing machine, SSH, Tailscale,
+Saturn Remote TLS/cookie, and administrator identity. Each clone generates a
+unique hostname (unless customized), five-character Saturn Go login, and
+Remote TLS certificate on first boot.
+A Linux password supplied by Raspberry Pi Imager or cloud-init is preserved. If
+the local Saturn account is still locked, first boot unlocks it with the same
+generated value for simple initial access. The file records which case applied
+and lists the separate commands to change each credential. Retrieve it locally
+with:
+
+```bash
+cat /var/lib/saturn-state/initial-login.txt
+```
+
+The sealer removes the builder's Wi-Fi/cloud-init network seed. Configure the
+recipient's network with Raspberry Pi Imager, a new cloud-init seed, or wired
+Ethernet DHCP. Keep the provisioned Saturn username unchanged when customizing
+a sealed image; the installed services intentionally run as that account.
+
 The GitHub Actions workflow under `.github/workflows/ci.yml` is the first
-baseline CI gate for these checks.
+baseline CI gate for these checks. ShellCheck is installed by CI as a
+development-only lint dependency; it is not installed on operator appliances
+by `sudo ./install.sh`.
 
 ## XDMA Driver Policy
 

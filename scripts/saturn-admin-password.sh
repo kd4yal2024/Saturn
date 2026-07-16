@@ -15,7 +15,7 @@
 #       backends. Default --restart deferred schedules the saturn-go restart
 #       ~2s out so a calling HTTP handler can finish its response first.
 #   reset [--restart now|deferred|none]
-#       Console recovery: generate a simple passphrase, apply it to both
+#       Console recovery: generate a simple five-character password, apply it to both
 #       backends, and print it. Physical/console access is the trust anchor;
 #       there is no remote reset path by design.
 #   status
@@ -28,9 +28,10 @@ HTPASSWD_FILE="${SATURN_ADMIN_HTPASSWD_FILE:-/etc/nginx/.htpasswd}"
 SERVICE_NAME="${SATURN_ADMIN_SERVICE:-saturn-go.service}"
 DROPIN_DIR="${SATURN_ADMIN_DROPIN_DIR:-/etc/systemd/system/${SERVICE_NAME}.d}"
 DROPIN_FILE="$DROPIN_DIR/10-remote-auth.conf"
-MIN_LEN="${SATURN_ADMIN_MIN_LEN:-5}"
+PASSWORD_LEN=5
 SKIP_SYSTEMD="${SATURN_ADMIN_SKIP_SYSTEMD:-0}"
 HTPASSWD_OWNER="${SATURN_ADMIN_HTPASSWD_OWNER:-root:www-data}"
+INITIAL_LOGIN_FILE="${SATURN_ADMIN_INITIAL_LOGIN_FILE:-/var/lib/saturn-state/initial-login.txt}"
 
 info(){ printf '[INFO] %s\n' "$*"; }
 ok(){ printf '[ OK ] %s\n' "$*"; }
@@ -49,17 +50,17 @@ Subcommands:
           Remote TLS auth drop-in together. --restart deferred (default),
           now, or none controls the saturn-go restart that applies the
           TLS-side change.
-  reset   Generate a simple passphrase, apply it, and print it. Intended
+  reset   Generate a simple five-character password, apply it, and print it. Intended
           for console recovery when the password is forgotten.
   status  Show backend state and whether both backends hold the same
           password.
 
-Rules: minimum length ${MIN_LEN}; no other composition rules. Control
+Rules: exactly ${PASSWORD_LEN} characters; no composition rules. Control
 characters are rejected because the drop-in is a systemd Environment= line.
 EOF
 }
 
-# Mirror install_saturn_go_nginx.sh systemd_env_escape exactly.
+# Escape values for a quoted systemd Environment= assignment.
 systemd_env_escape(){
   local v="$1"
   v="${v//\\/\\\\}"
@@ -83,7 +84,7 @@ require_root(){
 
 validate_password(){
   local pw="$1"
-  [[ "${#pw}" -ge "$MIN_LEN" ]] || die "Password must be at least ${MIN_LEN} characters."
+  [[ "${#pw}" -eq "$PASSWORD_LEN" ]] || die "Password must be exactly ${PASSWORD_LEN} characters."
   if LC_ALL=C printf '%s' "$pw" | grep -q '[[:cntrl:]]'; then
     die "Password must not contain control characters."
   fi
@@ -147,7 +148,7 @@ dropin_password(){
   local line
   line="$(grep -o "SATURN_REMOTE_BASIC_AUTH=${ADMIN_USER}:.*\"" "$DROPIN_FILE" 2>/dev/null | head -1)" || true
   [[ -n "$line" ]] || return 0
-  line="${line#SATURN_REMOTE_BASIC_AUTH=${ADMIN_USER}:}"
+  line="${line#SATURN_REMOTE_BASIC_AUTH="${ADMIN_USER}":}"
   line="${line%\"}"
   systemd_env_unescape "$line"
 }
@@ -208,6 +209,7 @@ cmd_set(){
   fi
 
   rm -rf "$backup_dir"
+  rm -f "$INITIAL_LOGIN_FILE"
   ok "Admin password set for user '$ADMIN_USER'."
 }
 
@@ -222,15 +224,14 @@ cmd_reset(){
   require_root
   command -v htpasswd >/dev/null 2>&1 || die "htpasswd not found (install apache2-utils)."
 
-  local words=(antenna beacon carrier dipole echo falcon granite harbor
-    ionic junction kilo lattice meteor north orbit pascal quartz relay
-    sierra tango uplink vector watt xray yagi zephyr copper delta ember
-    fable garnet helix indigo jasper krypton lumen marble nickel onyx
-    prism quill rustic summit topaz umber violet walnut zenith amber
-    bravo cedar dune evergreen flint grove harvest island juniper kestrel
-    latch mesa nova otter pebble ridge slate thistle valley willow)
-  local pw
-  pw="$(shuf -e "${words[@]}" -n 4 --random-source=/dev/urandom | paste -sd- -)-$(shuf -i 10-99 -n 1 --random-source=/dev/urandom)"
+  local charset='abcdefghjkmnpqrstuvwxyz23456789'
+  local pw='' byte index
+  while [[ ${#pw} -lt $PASSWORD_LEN ]]; do
+    byte="$(od -An -N1 -tu1 /dev/urandom | tr -d '[:space:]')"
+    [[ -n "$byte" ]] || continue
+    index=$((byte % ${#charset}))
+    pw+="${charset:index:1}"
+  done
 
   printf '%s\n' "$pw" | SATURN_ADMIN_SKIP_SYSTEMD="$SKIP_SYSTEMD" \
     SATURN_ADMIN_USER="$ADMIN_USER" \
