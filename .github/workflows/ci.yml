@@ -235,6 +235,15 @@ jobs:
         run: |
           bash -n scripts/install-xdma-dkms.sh
           scripts/install-xdma-dkms.sh --dry-run --kernel "$(uname -r)"
+          kernelver="$(uname -r)"
+          source linuxdriver/dkms/dkms.conf
+          (
+            cd linuxdriver
+            bash -c "$CLEAN"
+            dkms_make="${MAKE[0]/#make/make -j2 KERNELRELEASE=$kernelver}"
+            bash -c "$dkms_make"
+            test -s xdma/xdma.ko
+          )
 
       - name: Check direct appliance installer
         run: ./install.sh --dry-run --user "$(id -un)" --profile appliance
