@@ -172,13 +172,13 @@ pub async fn network_test() -> impl IntoResponse {
 
 struct CpuBaseline {
     snaps: Vec<CpuSnap>,
-    at_ms: u128,
+    measured_at: Instant,
     last_result: Vec<f64>,
 }
 
 /// Below this interval, polls reuse the previous result instead of dividing
 /// near-zero counter deltas.
-const CPU_RATE_MIN_INTERVAL_MS: u128 = 250;
+const CPU_RATE_MIN_INTERVAL: Duration = Duration::from_millis(250);
 
 fn per_core_busy_percent(a: &[CpuSnap], b: &[CpuSnap]) -> Vec<f64> {
     a.iter()
@@ -204,27 +204,24 @@ async fn read_per_core_cpu(rate_scope: &str) -> Result<Vec<f64>, String> {
     static BASELINE: OnceLock<Mutex<HashMap<String, CpuBaseline>>> = OnceLock::new();
     let map = BASELINE.get_or_init(|| Mutex::new(HashMap::new()));
 
-    let now_ms = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis();
     let current = read_proc_stat().await?;
     if current.is_empty() {
         return Ok(vec![0.0]);
     }
+    let now = Instant::now();
 
     // Scope: the guard must not be held across an await point.
     {
         let mut guard = map.lock_unpoisoned();
         if let Some(base) = guard.get_mut(rate_scope) {
             if base.snaps.len() == current.len() {
-                if now_ms.saturating_sub(base.at_ms) < CPU_RATE_MIN_INTERVAL_MS {
+                if now.saturating_duration_since(base.measured_at) < CPU_RATE_MIN_INTERVAL {
                     return Ok(base.last_result.clone());
                 }
                 let result = per_core_busy_percent(&base.snaps, &current);
                 *base = CpuBaseline {
                     snaps: current,
-                    at_ms: now_ms,
+                    measured_at: now,
                     last_result: result.clone(),
                 };
                 return Ok(result);
@@ -240,15 +237,11 @@ async fn read_per_core_cpu(rate_scope: &str) -> Result<Vec<f64>, String> {
         return Ok(vec![0.0]);
     }
     let result = per_core_busy_percent(&current, &second);
-    let at_ms = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis();
     map.lock_unpoisoned().insert(
         rate_scope.to_string(),
         CpuBaseline {
             snaps: second,
-            at_ms,
+            measured_at: Instant::now(),
             last_result: result.clone(),
         },
     );
@@ -632,7 +625,7 @@ mod tests {
         let first = read_per_core_cpu(scope).await.unwrap();
         let second = read_per_core_cpu(scope).await.unwrap();
         assert!(!first.is_empty());
-        // The second poll lands well inside CPU_RATE_MIN_INTERVAL_MS and must
+        // The second poll lands well inside CPU_RATE_MIN_INTERVAL and must
         // return the cached result unchanged.
         assert_eq!(first, second);
     }

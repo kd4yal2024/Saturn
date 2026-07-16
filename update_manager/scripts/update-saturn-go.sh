@@ -476,9 +476,7 @@ if (( ! DRY_RUN )); then
   fi
   saturn_go_build_remote_web_assets "$REPO_ROOT/update_manager"
   saturn_go_copy_required_web_assets "$TEMPLATES_DIR" "$REPO_ROOT/update_manager" "$STAGE_WEB_DIR"
-  # The deploy broker only accepts flat regular files in webroot/ — the
-  # templates/assets/ directory tree cannot ride a self-update payload.
-  # Shared assets are delivered by install_saturn_go_nginx.sh instead.
+  saturn_go_copy_shared_assets "$TEMPLATES_DIR" "$STAGE_WEB_DIR"
   saturn_go_verify_remote_web_bundle "$STAGE_WEB_DIR"
   cp "$SCRIPTS_SRC_DIR/config.json" "$STAGE_WEB_DIR/config.json"
   cp "$SCRIPTS_SRC_DIR/themes.json" "$STAGE_WEB_DIR/themes.json"
@@ -492,7 +490,8 @@ if (( ! DRY_RUN )); then
   fi
   find "$STAGE_SCRIPTS_DIR" -maxdepth 1 -type f \( -name '*.sh' -o -name '*.py' \) -print0 | xargs -0 -r chmod 755
   find "$STAGE_SCRIPTS_DIR" -maxdepth 1 -type f ! \( -name '*.sh' -o -name '*.py' \) -print0 | xargs -0 -r chmod 644
-  find "$STAGE_WEB_DIR" -maxdepth 1 -type f -print0 | xargs -0 -r chmod 644
+  find "$STAGE_WEB_DIR" -type d -print0 | xargs -0 -r chmod 755
+  find "$STAGE_WEB_DIR" -type f -print0 | xargs -0 -r chmod 644
 else
   info "[dry-run] stage Saturn Go/Bridge binaries, web assets, and unprivileged packaged scripts under $STAGE_DIR"
 fi

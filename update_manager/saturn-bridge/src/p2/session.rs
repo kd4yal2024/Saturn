@@ -20,11 +20,6 @@ const DISCOVERY_STATE_IDLE: u8 = 2;
 
 /// Socket read timeout; bounds RX-thread latency for stop/discovery checks.
 const RECV_TIMEOUT: Duration = Duration::from_millis(20);
-/// Wait after claiming discovery exclusivity so an RX-thread `recv_from`
-/// already blocking inside the kernel (up to `RECV_TIMEOUT`) returns before
-/// the discovery request goes out and its reply can arrive.
-const DISCOVERY_SETTLE: Duration = Duration::from_millis(25);
-
 fn discovery_allows_controller(reply: &DiscoveryReply) -> bool {
     reply.state_code == DISCOVERY_STATE_IDLE
 }
@@ -42,10 +37,13 @@ pub struct P2Session {
     socket: UdpSocket,
     duc_iq_sequence: AtomicU32,
     duc_specific_sequence: AtomicU32,
+    /// Serializes reads from the shared UDP socket. Discovery holds this for
+    /// its complete request/reply exchange, so the RX thread cannot consume a
+    /// discovery reply after observing a stale `discovery_exclusive` value.
+    receive_lock: Mutex<()>,
     /// True while a discovery exchange owns the receive side of the shared
-    /// socket. The RX thread must yield (skip `recv_event`) while set, or it
-    /// would steal the discovery reply, whose source port `decode_event`
-    /// does not recognize.
+    /// socket. This keeps the RX thread from repeatedly contending for
+    /// `receive_lock` while discovery is waiting for a reply.
     discovery_exclusive: AtomicBool,
 }
 
@@ -70,6 +68,7 @@ impl P2Session {
             socket,
             duc_iq_sequence: AtomicU32::new(0),
             duc_specific_sequence: AtomicU32::new(0),
+            receive_lock: Mutex::new(()),
             discovery_exclusive: AtomicBool::new(false),
         })
     }
@@ -233,6 +232,7 @@ impl P2Session {
     }
 
     pub fn recv_event(&self) -> io::Result<Option<P2Event>> {
+        let _receive = self.receive_lock.lock_unpoisoned();
         let mut buffer = [0u8; 2048];
 
         match self.socket.recv_from(&mut buffer) {
@@ -319,7 +319,10 @@ impl P2Session {
     ) -> io::Result<Option<DiscoveryReply>> {
         self.discovery_exclusive.store(true, Ordering::Release);
         let _exclusive = DiscoveryExclusiveGuard(&self.discovery_exclusive);
-        thread::sleep(DISCOVERY_SETTLE);
+        // The flag makes the RX thread yield before its next read. Taking the
+        // mutex then waits for any read that passed the flag check before the
+        // exchange began, providing an explicit handoff with no timing window.
+        let _receive = self.receive_lock.lock_unpoisoned();
         self.send_packet(self.config.radio_command_addr, &build_discovery_request())?;
         let deadline = Instant::now() + self.config.discovery_timeout;
         let mut buffer = [0u8; 2048];

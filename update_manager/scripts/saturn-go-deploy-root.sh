@@ -61,8 +61,18 @@ safe_leaf_name(){
   [[ "$1" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]
 }
 
+safe_relative_path(){
+  local relative="$1" component
+  local -a components=()
+  [[ -n "$relative" && "$relative" != /* && "$relative" != */ ]] || return 1
+  IFS='/' read -r -a components <<<"$relative"
+  for component in "${components[@]}"; do
+    safe_leaf_name "$component" || return 1
+  done
+}
+
 validate_stage(){
-  local stage="$1" enforce_root="$2" run_uid bad path listed expected actual
+  local stage="$1" enforce_root="$2" run_uid bad path relative listed expected actual
   [[ -d "$stage" ]] || die "stage directory not found: $stage"
   stage="$(realpath -e "$stage")"
 
@@ -85,10 +95,23 @@ validate_stage(){
   [[ -d "$stage/scripts" ]] || die "missing scripts payload directory"
   [[ -f "$stage/SHA256SUMS" ]] || die "missing SHA256SUMS payload manifest"
 
-  while IFS= read -r path; do
-    safe_leaf_name "$(basename "$path")" || die "unsafe payload filename: $path"
-    [[ -f "$path" ]] || die "payload entries must be regular files: $path"
-  done < <(find "$stage/webroot" "$stage/scripts" -mindepth 1 -maxdepth 1 -print)
+  while IFS= read -r -d '' path; do
+    relative="${path#"$stage/webroot/"}"
+    safe_relative_path "$relative" || die "unsafe webroot payload path: $path"
+    if [[ "$relative" == "assets" ]]; then
+      [[ -d "$path" ]] || die "webroot/assets must be a directory: $path"
+    elif [[ "$relative" == assets/* ]]; then
+      [[ -d "$path" || -f "$path" ]] || die "asset payload entries must be directories or regular files: $path"
+    else
+      [[ "$relative" != */* && -f "$path" ]] || die "only webroot/assets may contain nested payload entries: $path"
+    fi
+  done < <(find "$stage/webroot" -mindepth 1 -print0)
+
+  while IFS= read -r -d '' path; do
+    relative="${path#"$stage/scripts/"}"
+    safe_leaf_name "$relative" || die "unsafe scripts payload filename: $path"
+    [[ -f "$path" ]] || die "script payload entries must be regular files: $path"
+  done < <(find "$stage/scripts" -mindepth 1 -print0)
 
   while IFS= read -r listed; do
     [[ "$listed" != /* && "$listed" != *".."* ]] || die "unsafe checksum path: $listed"
@@ -277,10 +300,10 @@ if [[ -f "$STAGE_DIR/saturn-bridge" ]]; then
   rm -f "$unit_tmp"
 fi
 
-while IFS= read -r src; do
-  name="$(basename "$src")"
-  install_payload_file "$src" "$WEB_ROOT/$name" 0644 root root "webroot/$name"
-done < <(find "$STAGE_DIR/webroot" -mindepth 1 -maxdepth 1 -type f | sort)
+while IFS= read -r -d '' src; do
+  relative="${src#"$STAGE_DIR/webroot/"}"
+  install_payload_file "$src" "$WEB_ROOT/$relative" 0644 root root "webroot/$relative"
+done < <(find "$STAGE_DIR/webroot" -mindepth 1 -type f -print0 | sort -z)
 
 while IFS= read -r src; do
   name="$(basename "$src")"
