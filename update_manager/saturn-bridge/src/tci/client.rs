@@ -316,7 +316,7 @@ pub(crate) fn handle_client(
             }
             if let Some(peer_id) = disconnect.split_closed_peer {
                 println!(
-                    "saturn-bridge: Phase 42 closed peer media client {peer_id} after control disconnect"
+                    "saturn-bridge: closed split peer media client {peer_id} after control disconnect"
                 );
             }
             if let Some(promoted_id) = disconnect.promoted_operator {
@@ -687,7 +687,7 @@ pub(crate) fn set_client_iq_stream_enabled(
     if let Some(client) = clients.get_mut(&client_id) {
         client.state.iq_stream_enabled = enabled;
     }
-    // Phase 42: mirror to the paired media client so binary IQ frames have
+    // Mirror to the paired media client so binary IQ frames have
     // a destination on the media lane. client_wants_outbound_message then
     // routes RX IQ to the media client only.
     if let Some(media_id) = split_paired_media_client_id(&clients, client_id) {
@@ -709,7 +709,7 @@ pub(crate) fn set_client_audio_stream_enabled(
     if let Some(client) = clients.get_mut(&client_id) {
         client.state.audio_stream_enabled = enabled;
     }
-    // Phase 42: mirror to the paired media client.
+    // Mirror to the paired media client.
     if let Some(media_id) = split_paired_media_client_id(&clients, client_id) {
         if let Some(media) = clients.get_mut(&media_id) {
             media.state.audio_stream_enabled = enabled;
@@ -826,7 +826,7 @@ pub(crate) fn set_client_tx_codec_caps(
     if let Some(client) = clients.get_mut(&client_id) {
         reset_client_tx_codec_state(client, caps.clone(), selected, now);
     }
-    // Phase 42: codec negotiation happens on the control lane, but TX mic
+    // Codec negotiation happens on the control lane, but TX mic
     // binary frames arrive on the paired media lane. Mirror the accepted state
     // so the media client owns the decoder that will actually consume frames.
     if let Some(media_id) = split_paired_media_client_id(&clients, client_id) {

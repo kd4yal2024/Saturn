@@ -541,7 +541,7 @@ pub(crate) fn client_wants_outbound_message(
     message: &OutboundMessage,
     tx_media_priority_active: bool,
 ) -> bool {
-    // Phase 42 lane awareness: text goes only to control-lane clients (or
+    // Lane awareness: text goes only to control-lane clients (or
     // legacy non-Phase-42 clients); binary RX frames go only to media-lane
     // clients (or legacy non-Phase-42 clients). Sending text on a media
     // socket or binary on a control socket would be rejected by the

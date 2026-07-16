@@ -456,7 +456,7 @@ Remote state notes:
 
 - The remote UI is served from `https://<host>:8443/remote-next` (rendered from `saturn-remote-next.html` plus the `saturn-remote-next.js` Vite bundle loaded via `<script src="/remote-assets/remote-next.js">`).
 - The legacy inline `/remote` page was retired on 2026-07-14; `/remote`, `/saturn-remote`, and the TLS root `/` all redirect to `/remote-next`. Basic auth, settings/profile state, and the `saturn-bridge` TCI websocket are unchanged.
-- Current Saturn Remote beta URL: `https://<host>:8443/remote-next?phase42_split=1&phase44_tx_opus=1&phase44_tx_cfc=1&client_bust=bridgeprefill240-cfcessb3`. This enables Phase 42 split transport, Phase 44 Opus wideband TX, and the conservative ESSB CFC profile validated for clear Chrome Android TX audio.
+- Current Saturn Remote URL: `https://<host>:8443/remote-next?transport=split&tx_opus=1&tx_cfc=1`. This enables split transport, Opus wideband TX, and the conservative ESSB CFC profile validated for clear Chrome Android TX audio. Older `phase42_*` and `phase44_*` bookmarks remain accepted as compatibility aliases.
 - Shared remote settings persist in `/var/lib/saturn-state/remote_settings.json`.
 - Named remote Setup profiles persist in `/var/lib/saturn-state/remote_profiles.json`.
 - The remote `Setup` menu now supports:

@@ -81,8 +81,8 @@ Saturn Go is the maintenance web UI and API. It provides:
 - Saturn Remote `/remote` and `/remote-next` entry points
 
 Saturn Remote uses Saturn Bridge as the protocol boundary. The current preferred
-remote operator path is `/remote-next` with Phase 42 split control/media sockets,
-Phase 44 Opus TX, and the conservative ESSB CFC baseline documented in the
+remote operator path is `/remote-next` with split control/media WebSockets,
+Opus TX, and the conservative ESSB CFC baseline documented in the
 Saturn Go runbook.
 
 ## Security Notes

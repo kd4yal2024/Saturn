@@ -1,8 +1,10 @@
-const SPLIT_TRUE_VALUES = new Set(['1', 'true', 'on', 'yes']);
-const SPLIT_FALSE_VALUES = new Set(['0', 'false', 'off', 'no', 'legacy']);
+const SPLIT_TRUE_VALUES = new Set(['1', 'true', 'on', 'yes', 'split']);
+const SPLIT_FALSE_VALUES = new Set(['0', 'false', 'off', 'no', 'legacy', 'single']);
 
-export const SPLIT_TRANSPORT_QUERY_PARAM = 'phase42_split';
-export const SPLIT_TRANSPORT_STORAGE_KEY = 'saturn.phase42.splitTransport';
+export const SPLIT_TRANSPORT_QUERY_PARAM = 'transport';
+export const SPLIT_TRANSPORT_LEGACY_QUERY_PARAM = 'phase42_split';
+export const SPLIT_TRANSPORT_STORAGE_KEY = 'saturn.remote.splitTransport';
+export const SPLIT_TRANSPORT_LEGACY_STORAGE_KEY = 'saturn.phase42.splitTransport';
 
 function splitTruthy(value: string | null | undefined): boolean {
   return SPLIT_TRUE_VALUES.has(String(value ?? '').trim().toLowerCase());
@@ -17,7 +19,9 @@ export function splitTransportEnabled(
   storedValue: string | null | undefined = undefined,
 ): boolean {
   const params = new URLSearchParams(search);
-  const queryValue = params.get(SPLIT_TRANSPORT_QUERY_PARAM);
+  const queryValue = params.has(SPLIT_TRANSPORT_QUERY_PARAM)
+    ? params.get(SPLIT_TRANSPORT_QUERY_PARAM)
+    : params.get(SPLIT_TRANSPORT_LEGACY_QUERY_PARAM);
   if (queryValue !== null) {
     return !splitExplicitlyDisabled(queryValue);
   }

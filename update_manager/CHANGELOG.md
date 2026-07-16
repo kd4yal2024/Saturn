@@ -162,10 +162,11 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
 
 ### Changed
 - Saturn Remote TLS now treats plain `/remote-next` and `/remote-next.html`
-  as default-beta entry points and redirects them to
-  `/remote-next?phase42_split=1&phase44_tx_opus=1&phase44_tx_cfc=1&client_bust=bridgeprefill240-cfcessb3`.
-  Requests that already include a query string still serve the page directly,
-  so explicit test flags and cache-bust URLs continue to work.
+  as default operator entry points and redirects them to
+  `/remote-next?transport=split&tx_opus=1&tx_cfc=1`. Operator logs and bridge
+  runtime messages use feature names instead of development phase numbers.
+  Existing `phase40_*`, `phase42_*`, and `phase44_*` bookmarks and browser
+  storage remain compatible and are silently canonicalized to stable names.
 - `update-deskhpsdr.py` v1.1 now compacts routine apt/debconf/autoremove
   chatter in verbose web output, while keeping the raw build log intact.
   Its build helper no longer reinstalls the PulseAudio daemon on

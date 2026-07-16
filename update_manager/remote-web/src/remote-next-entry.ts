@@ -49,6 +49,7 @@ import {
   txMicByteRateBytesPerSecond,
 } from './transport/tx-uplink';
 import {
+  TX_OPUS_OVERRIDE_LEGACY_STORAGE_KEY,
   TX_OPUS_OVERRIDE_STORAGE_KEY,
   createTxOpusAudioDataFromFloat32,
   createTxOpusFrameProducer,
@@ -60,6 +61,7 @@ import {
 import { createLegacySocketAdapter } from './transport/legacy-socket-adapter';
 import { createReconnectSupervisor } from './transport/reconnect-supervisor';
 import {
+  SPLIT_TRANSPORT_LEGACY_STORAGE_KEY,
   SPLIT_TRANSPORT_STORAGE_KEY,
   createSplitSessionId,
   splitTransportEnabled,
@@ -188,9 +190,11 @@ const api = {
   txOpusProfileForCodec,
   txOpusRuntimeOverrideEnabled,
   txMicByteRateBytesPerSecond,
+  TX_OPUS_OVERRIDE_LEGACY_STORAGE_KEY,
   TX_OPUS_OVERRIDE_STORAGE_KEY,
   createReconnectSupervisor,
   createLegacySocketAdapter,
+  SPLIT_TRANSPORT_LEGACY_STORAGE_KEY,
   SPLIT_TRANSPORT_STORAGE_KEY,
   createSplitSessionId,
   splitTransportEnabled,
@@ -298,4 +302,3 @@ const api = {
 export const SaturnRemoteNext = api;
 
 (globalThis as typeof globalThis & { SaturnRemoteNext?: typeof api }).SaturnRemoteNext = api;
-

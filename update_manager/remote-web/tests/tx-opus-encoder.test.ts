@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   TX_OPUS_ENCODER_RUNTIME_ENABLED,
+  TX_OPUS_OVERRIDE_LEGACY_QUERY_PARAM,
+  TX_OPUS_OVERRIDE_QUERY_PARAM,
   TX_OPUS_DECODE_OUTPUT_SAMPLE_RATE_HZ,
   TX_OPUS_FRAME_DURATION_US,
   buildTxMicOpusFrame,
@@ -23,11 +25,17 @@ import {
   TX_MIC_STREAM_TYPE,
 } from '../src/transport/tx-uplink';
 
-describe('Phase 44 TX Opus encoder skeleton', () => {
+describe('TX Opus encoder', () => {
   it('requires an explicit query or storage override before selecting Opus', () => {
     expect(txOpusRuntimeOverrideEnabled('')).toBe(false);
-    expect(txOpusRuntimeOverrideEnabled('?phase44_tx_opus=0', '1')).toBe(false);
-    expect(txOpusRuntimeOverrideEnabled('?phase44_tx_opus=1')).toBe(true);
+    expect(txOpusRuntimeOverrideEnabled(`?${TX_OPUS_OVERRIDE_QUERY_PARAM}=0`, '1')).toBe(false);
+    expect(txOpusRuntimeOverrideEnabled(`?${TX_OPUS_OVERRIDE_QUERY_PARAM}=1`)).toBe(true);
+    expect(txOpusRuntimeOverrideEnabled(`?${TX_OPUS_OVERRIDE_LEGACY_QUERY_PARAM}=1`)).toBe(true);
+    expect(
+      txOpusRuntimeOverrideEnabled(
+        `?${TX_OPUS_OVERRIDE_QUERY_PARAM}=0&${TX_OPUS_OVERRIDE_LEGACY_QUERY_PARAM}=1`,
+      ),
+    ).toBe(false);
     expect(txOpusRuntimeOverrideEnabled('', 'on')).toBe(true);
 
     expect(txOpusCodecForAccepted('opus_wb', false)).toBeNull();
@@ -126,7 +134,7 @@ describe('Phase 44 TX Opus encoder skeleton', () => {
     expect(view.getUint32(36, true)).toBe(TX_MIC_CODEC_OPUS_NB);
   });
 
-  it('wraps a WebCodecs Opus chunk in a Phase 44 mic frame when explicitly enabled', () => {
+  it('wraps a WebCodecs Opus chunk in a mic frame when explicitly enabled', () => {
     const frames: Array<{ frame: TxMicOpusFrame; sequence: number; payloadBytes: number }> = [];
     const errors: unknown[] = [];
     let configured: TxOpusAudioEncoderConfig | null = null;

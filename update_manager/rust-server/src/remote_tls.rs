@@ -975,7 +975,7 @@ async fn proxy_bridge_socket(
             .send(TungsteniteMessage::Text(message.into()))
             .await
         {
-            warn!("remote TLS bridge proxy failed to send Phase 42 lane marker: {err}");
+            warn!("remote TLS bridge proxy failed to send split-lane marker: {err}");
             let _ = client_tx.send(AxumMessage::Close(None)).await;
             return;
         }
@@ -1593,7 +1593,7 @@ mod tests {
         assert_eq!(res.status(), StatusCode::TEMPORARY_REDIRECT);
         assert_eq!(
             res.headers().get(header::LOCATION).unwrap(),
-            "/remote-next?phase42_split=1&phase44_tx_opus=1&phase44_tx_cfc=1&client_bust=bridgeprefill240-cfcessb3"
+            "/remote-next?transport=split&tx_opus=1&tx_cfc=1"
         );
     }
 
@@ -1607,7 +1607,7 @@ mod tests {
 
         let app = remote_tls_router(state);
         let req = Request::builder()
-            .uri("/remote-next?phase42_split=1&phase44_tx_opus=1&phase44_tx_cfc=1&client_bust=bridgeprefill240-cfcessb3")
+            .uri("/remote-next?transport=split&tx_opus=1&tx_cfc=1")
             .body(Body::empty())
             .unwrap();
         let res = app.oneshot(req).await.unwrap();

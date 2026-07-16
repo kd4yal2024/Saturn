@@ -1607,7 +1607,7 @@ fn viewer_commands_are_limited_to_streaming_and_ping() {
     );
 
     // Viewer cannot toggle TX media priority — this command is a no-op
-    // on the bridge after Phase 42 source-of-truth refactor, but the
+    // on the bridge after the source-of-truth refactor, but the
     // viewer filter must still drop it.
     parse_tci_command("remote_tx_media_priority:0,true", &tx, &clients, 9, false);
 }
@@ -1674,7 +1674,7 @@ fn classifies_parser_decode_errors_for_telemetry() {
 
 #[test]
 fn remote_tx_media_priority_is_a_noop_after_split_refactor() {
-    // After Phase 42 refactor, TX media priority is derived from the
+    // TX media priority is derived from the
     // bridge's on-air state, not from this browser command. The command
     // is accepted (no parse error) but has no side effect. Older
     // browsers may still send it; this test asserts forward compat.

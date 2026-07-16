@@ -24,7 +24,7 @@ import {
   detectTxCodecCapabilities,
 } from '../src/transport/tx-uplink';
 
-describe('Phase 44 disabled-by-default Opus acceptance harness', () => {
+describe('disabled-by-default Opus acceptance harness', () => {
   it('keeps browser TX codec advertising PCM-only without the explicit override', async () => {
     const detection = await detectTxCodecCapabilities({
       AudioEncoder: {
@@ -40,7 +40,7 @@ describe('Phase 44 disabled-by-default Opus acceptance harness', () => {
     expect(buildTxCodecCapsCommand(detection.advertised)).toBe('tx_codec_caps:0,pcm;');
   });
 
-  it('advertises only wideband Opus when the local Phase 44 override is enabled', async () => {
+  it('advertises only wideband Opus when the local override is enabled', async () => {
     const detection = await detectTxCodecCapabilities(
       {
         AudioEncoder: {
@@ -49,7 +49,7 @@ describe('Phase 44 disabled-by-default Opus acceptance harness', () => {
           },
         },
       },
-      { advertiseOpus: txOpusRuntimeOverrideEnabled('?phase44_tx_opus=1') },
+      { advertiseOpus: txOpusRuntimeOverrideEnabled('?tx_opus=1') },
     );
 
     expect(detection.detected).toEqual(['pcm', 'opus_nb', 'opus_wb']);

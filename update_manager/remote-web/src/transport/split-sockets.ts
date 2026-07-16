@@ -74,7 +74,7 @@ export type SplitSocketClient = {
 export function deriveSplitSocketUrls(baseWsUrl: string, sessionId: string): SplitSocketUrls {
   const trimmedSession = sessionId.trim();
   if (!trimmedSession) {
-    throw new Error('split split socket session id is required');
+    throw new Error('split socket session id is required');
   }
 
   const control = new URL(baseWsUrl);
@@ -100,10 +100,10 @@ export function buildSplitSessionOpenMessage(
 ): string {
   const trimmedSession = sessionId.trim();
   if (!trimmedSession) {
-    throw new Error('split split socket session id is required');
+    throw new Error('split socket session id is required');
   }
   if (/[,;]/.test(trimmedSession)) {
-    throw new Error('split split socket session id cannot contain TCI delimiters');
+    throw new Error('split socket session id cannot contain TCI delimiters');
   }
   return `session_open:${trimmedSession},${role};`;
 }

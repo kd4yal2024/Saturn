@@ -291,16 +291,16 @@ pub(crate) fn reconcile_split_operator_role(
         TciClientRole::Operator,
     )));
     println!(
-        "saturn-bridge: Phase 42 session {session_id} moved operator role from client {previous_operator} to control client {control_client_id}"
+        "saturn-bridge: split session {session_id} moved operator role from client {previous_operator} to control client {control_client_id}"
     );
 }
 
-// Phase 42 lane-aware routing helper. Given a control-lane client_id,
+// Lane-aware routing helper. Given a control-lane client_id,
 // returns the paired media-lane client_id if both halves of the split
 // session are connected and registered. Used to propagate RX stream-enable
 // state from the control client (which receives iq_start/audio_start text)
 // to the media client (which is the destination for binary RX frames).
-// Returns None for non-Phase-42 clients, unpaired sessions, or when called
+// Returns None for single-socket clients, unpaired sessions, or when called
 // on a media-lane client.
 pub(crate) fn split_paired_media_client_id(
     clients: &BTreeMap<u64, ClientConnection>,

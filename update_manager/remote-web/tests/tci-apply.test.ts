@@ -244,7 +244,7 @@ describe('applyTciText', () => {
     expect(result.state.txCodecReleaseFlushCount).toBe(0);
   });
 
-  it('tracks Phase 44 TX codec negotiation replies', () => {
+  it('tracks TX codec negotiation replies', () => {
     const accepted = applyTciText('tx_codec_accept:0,pcm;', createState());
     expect(accepted.state.txCodecRequested).toBe('pcm');
     expect(accepted.state.txCodecAccepted).toBe('pcm');

@@ -63,7 +63,7 @@ function createFakeCtor() {
   return { sockets, WebSocketCtor };
 }
 
-describe('Phase 42 legacy socket adapter', () => {
+describe('legacy socket adapter', () => {
   it('opens as a legacy socket only after both lanes are open', () => {
     const { sockets, WebSocketCtor } = createFakeCtor();
     const onopen = vi.fn();
