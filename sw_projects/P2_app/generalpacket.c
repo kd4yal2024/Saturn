@@ -18,93 +18,83 @@
 #include <stddef.h>
 #include <stdio.h>
 #include "generalpacket.h"
-#include "../common/saturnregisters.h"
-#include "../common/byteio.h"
 #include "Outwideband.h"
+#include "../common/saturnregisters.h"
 
 
 atomic_bool HW_Timer_Enable = true;
-uint8_t WidebandEnables;
-uint16_t WidebandSampleCount;
-uint8_t WidebandSampleSize;
-uint8_t WidebandUpdateRate;
-uint8_t WidebandPacketsPerFrame;
 
+_Static_assert(P2_GENERAL_DDC_COUNT == VNUMDDC,
+               "Protocol 2 general command DDC count must match Saturn hardware");
 
-//
-// protocol 2 handler for General Packet to SDR
-// parameter is a pointer to the UDP message buffer.
-// copy port numbers to port table, 
-// then create listener threads for incoming packets & senders foroutgoing
-//
-int HandleGeneralPacket(uint8_t *PacketBuffer)
+static void ApplyGeneralPort(void *Context, EP2GeneralPort Kind, uint8_t Index, uint16_t Port)
 {
-  uint16_t Port;                                  // port number from table
-  int i;
-  uint8_t Byte;
-
-  SetPort(VPORTDDCSPECIFIC, rd_be_u16(PacketBuffer+5));
-  SetPort(VPORTDUCSPECIFIC, rd_be_u16(PacketBuffer+7));
-  SetPort(VPORTHIGHPRIORITYTOSDR, rd_be_u16(PacketBuffer+9));
-  SetPort(VPORTSPKRAUDIO, rd_be_u16(PacketBuffer+13));
-  SetPort(VPORTDUCIQ, rd_be_u16(PacketBuffer+15));
-  SetPort(VPORTHIGHPRIORITYFROMSDR, rd_be_u16(PacketBuffer+11));
-  SetPort(VPORTMICAUDIO, rd_be_u16(PacketBuffer+19));
-
-// DDC ports start at the transferred value then increment
-  Port = rd_be_u16(PacketBuffer+17);            // DDC0
-  for (i=0; i<10; i++)
+  (void)Context;
+  switch(Kind)
   {
-    if(Port==0)
-      SetPort(VPORTDDCIQ0+i, 0);
-    else
-      SetPort(VPORTDDCIQ0+i, Port+i);
-  }  
-
-// similarly, wideband ports start at the transferred value then increment
-  Port = rd_be_u16(PacketBuffer+21);            // Wideband0
-  for (i=0; i<2; i++)
-  {
-    if(Port==0)
-      SetPort(VPORTWIDEBAND0+i, 0);
-    else
-      SetPort(VPORTWIDEBAND0+i, Port+i);
+    case eP2GeneralPortDDCSpecific: SetPort(VPORTDDCSPECIFIC, Port); break;
+    case eP2GeneralPortDUCSpecific: SetPort(VPORTDUCSPECIFIC, Port); break;
+    case eP2GeneralPortHighPriorityToSDR: SetPort(VPORTHIGHPRIORITYTOSDR, Port); break;
+    case eP2GeneralPortSpeakerAudio: SetPort(VPORTSPKRAUDIO, Port); break;
+    case eP2GeneralPortDUCIQ: SetPort(VPORTDUCIQ, Port); break;
+    case eP2GeneralPortHighPriorityFromSDR: SetPort(VPORTHIGHPRIORITYFROMSDR, Port); break;
+    case eP2GeneralPortMicAudio: SetPort(VPORTMICAUDIO, Port); break;
+    case eP2GeneralPortDDCIQ: SetPort(VPORTDDCIQ0 + Index, Port); break;
+    case eP2GeneralPortWideband: SetPort(VPORTWIDEBAND0 + Index, Port); break;
+    case eP2GeneralPortCount: break;
   }
-//
-// now set the other data carried by this packet
-// wideband capture data:
-//
-  WidebandEnables = *(uint8_t*)(PacketBuffer+23);                // get wideband enables
-  WidebandSampleCount = rd_be_u16(PacketBuffer+24);              // wideband sample count
-  WidebandSampleSize = *(uint8_t*)(PacketBuffer+26);             // wideband sample size
-  WidebandUpdateRate = *(uint8_t*)(PacketBuffer+27);             // wideband update rate
-  WidebandPacketsPerFrame = *(uint8_t*)(PacketBuffer+28);        // wideband packets per frame
-  SetWidebandParams(WidebandEnables, WidebandSampleCount, WidebandSampleSize, WidebandUpdateRate, WidebandPacketsPerFrame);
+}
 
-//
-// envelope PWM data:
-//
-  Port = rd_be_u16(PacketBuffer+33);        // PWM min
-  SetMinPWMWidth(Port);
-  Port = rd_be_u16(PacketBuffer+35);        // PWM max
-  SetMaxPWMWidth(Port);
-//
-// various bits
-//
-  Byte = *(uint8_t*)(PacketBuffer+37);                // flag bits
-  EnableTimeStamp((bool)(Byte&1));
-  EnableVITA49((bool)(Byte&2));
-  SetFreqPhaseWord((bool)(Byte&8));
+static void ApplyGeneralWideband(void *Context, uint8_t Enables, uint16_t SampleCount,
+                                 uint8_t SampleSize, uint8_t UpdateRate,
+                                 uint8_t PacketsPerFrame)
+{
+  (void)Context;
+  SetWidebandParams(Enables, SampleCount, SampleSize, UpdateRate, PacketsPerFrame);
+}
 
-  Byte = *(uint8_t*)(PacketBuffer+38);                // enable timeout
-  atomic_store(&HW_Timer_Enable, ((bool)(Byte&1)));
-  
-  Byte = *(uint8_t*)(PacketBuffer+58);                // flag bits
-  SetPAEnabled((bool)(Byte&1));
-  SetApolloEnabled((bool)(Byte&2));
+static void ApplyGeneralPWMWidths(void *Context, uint16_t Minimum, uint16_t Maximum)
+{
+  (void)Context;
+  SetMinPWMWidth(Minimum);
+  SetMaxPWMWidth(Maximum);
+}
 
-  Byte = *(uint8_t*)(PacketBuffer+59);                // Alex enable bits
-  SetAlexEnabled(Byte);
+static void ApplyGeneralProtocolOptions(void *Context, bool TimestampEnabled,
+                                        bool Vita49Enabled, bool FrequencyIsPhaseWord)
+{
+  (void)Context;
+  EnableTimeStamp(TimestampEnabled);
+  EnableVITA49(Vita49Enabled);
+  SetFreqPhaseWord(FrequencyIsPhaseWord);
+}
 
-  return 0;
+static void ApplyGeneralWatchdog(void *Context, bool Enabled)
+{
+  (void)Context;
+  atomic_store(&HW_Timer_Enable, Enabled);
+}
+
+static void ApplyGeneralRadioOptions(void *Context, bool PAEnabled, bool ApolloEnabled,
+                                     uint8_t AlexEnableBits)
+{
+  (void)Context;
+  SetPAEnabled(PAEnabled);
+  SetApolloEnabled(ApolloEnabled);
+  SetAlexEnabled(AlexEnableBits);
+}
+
+static const TP2GeneralActionSink GeneralActionSink = {
+  .SetPort = ApplyGeneralPort,
+  .SetWideband = ApplyGeneralWideband,
+  .SetPWMWidths = ApplyGeneralPWMWidths,
+  .SetProtocolOptions = ApplyGeneralProtocolOptions,
+  .SetWatchdogEnabled = ApplyGeneralWatchdog,
+  .SetRadioOptions = ApplyGeneralRadioOptions,
+};
+
+int HandleGeneralPacket(const uint8_t *PacketBuffer, size_t PacketLength)
+{
+  return P2DecodeAndApplyGeneralCommand(PacketBuffer, PacketLength,
+                                        &GeneralActionSink, NULL) ? 0 : -1;
 }

@@ -10,7 +10,8 @@ DEPFLAGS = -MMD -MP
 LDFLAGS = -lm -lpthread
 .DEFAULT_GOAL := all
 .PHONY: all clean cppcheck cppcheck-ci test test-controller-lease \
-        test-controller-lease-asan test-protocol2-control smoke-shutdown
+        test-controller-lease-asan test-protocol2-control \
+        test-protocol2-command test-protocol2-command-asan smoke-shutdown
 
 # NOTE (2026-01): keep "local" libs here. libgpiod link flags are added below
 #                 via pkg-config (with a safe fallback).
@@ -20,7 +21,7 @@ TARGET = p2app
 VPATH=.:../common
 GIT_DATE := $(wordlist 2,5, $(shell git log -1 --format=%cd --date=rfc))
 
-BASE_SRCS = p2app.c controller_lease.c protocol2_control.c hwaccess.c saturnregisters.c codecwrite.c saturndrivers.c version.c generalpacket.c IncomingDDCSpecific.c IncomingDUCSpecific.c InHighPriority.c InDUCIQ.c InSpkrAudio.c OutMicAudio.c OutDDCIQ.c OutHighPriority.c debugaids.c auxadc.c cathandler.c frontpanelhandler.c catmessages.c LDGATU.c g2v2panel.c i2cdriver.c andromedacatmessages.c Outwideband.c serialport.c AriesATU.c GanymedePAControl.c p23_perf_telemetry.c
+BASE_SRCS = p2app.c controller_lease.c protocol2_control.c protocol2_command.c hwaccess.c saturnregisters.c codecwrite.c saturndrivers.c version.c generalpacket.c IncomingDDCSpecific.c IncomingDUCSpecific.c InHighPriority.c InDUCIQ.c InSpkrAudio.c OutMicAudio.c OutDDCIQ.c OutHighPriority.c debugaids.c auxadc.c cathandler.c frontpanelhandler.c catmessages.c LDGATU.c g2v2panel.c i2cdriver.c andromedacatmessages.c Outwideband.c serialport.c AriesATU.c GanymedePAControl.c p23_perf_telemetry.c
 
 # for cppcheck
 CPP_OPTIONS= --inline-suppr --enable=all --suppress=unmatchedSuppression
@@ -115,10 +116,22 @@ test-protocol2-control:
 	./tests/protocol2_control_test
 	rm -f tests/protocol2_control_test
 
-test: test-controller-lease test-protocol2-control
+test-protocol2-command:
+	$(CC) $(CFLAGS) -I. tests/protocol2_command_test.c protocol2_command.c -o tests/protocol2_command_test
+	./tests/protocol2_command_test
+	rm -f tests/protocol2_command_test
+
+test-protocol2-command-asan:
+	$(CC) $(CFLAGS) -fsanitize=address,undefined -fno-omit-frame-pointer -I. \
+		tests/protocol2_command_test.c protocol2_command.c -o tests/protocol2_command_test_asan
+	ASAN_OPTIONS=detect_leaks=1 ./tests/protocol2_command_test_asan
+	rm -f tests/protocol2_command_test_asan
+
+test: test-controller-lease test-protocol2-control test-protocol2-command
 
 clean:
-	rm -rf $(TARGET) *.o *.d *.bin tests/controller_lease_test tests/protocol2_control_test
+	rm -rf $(TARGET) *.o *.d *.bin tests/controller_lease_test tests/protocol2_control_test \
+		tests/protocol2_command_test tests/protocol2_command_test_asan
 
 smoke-shutdown: all
 	bash ./tools/shutdown_smoke.sh ./$(TARGET)

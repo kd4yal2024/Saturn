@@ -19,8 +19,10 @@
 
 
 #include <stdint.h>
+#include <stddef.h>
 #include <stdatomic.h>
 #include "../common/saturntypes.h"
+#include "protocol2_command.h"
 
 extern atomic_bool HW_Timer_Enable;
 
@@ -30,7 +32,7 @@ extern atomic_bool HW_Timer_Enable;
 // copy port numbers to port table, 
 // then create listener threads for incoming packets & senders foroutgoing
 //
-int HandleGeneralPacket(uint8_t *PacketBuffer);
+int HandleGeneralPacket(const uint8_t *PacketBuffer, size_t PacketLength);
 
 
 

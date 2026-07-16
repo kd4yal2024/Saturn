@@ -188,7 +188,7 @@ static void SyncSignalExitRequest(void)
 
 #define SDRBOARDID 1                        // Hermes
 #define SDRSWVERSION 1                      // version of this software
-#define VDISCOVERYSIZE 60                   // discovery packet
+#define VDISCOVERYSIZE P2_GENERAL_PACKET_SIZE // discovery/general packet
 #define VDISCOVERYREPLYSIZE 60              // reply packet
 #define VWIDEBANDSIZE 1028                  // wideband scalar samples
 #define VCONSTTXAMPLSCALEFACTOR 0x0001FFFF  // 18 bit scale value - set to 1/2 of full scale
@@ -341,11 +341,6 @@ static int ApplyQueuedGeneralPacketIfStable(void)
   g_pending_general_packet_valid = false;
   IsNoOp = g_last_applied_general_packet_valid &&
            (memcmp(g_last_applied_general_packet, LocalPacket, VDISCOVERYSIZE) == 0);
-  if(!IsNoOp)
-  {
-    memcpy(g_last_applied_general_packet, LocalPacket, VDISCOVERYSIZE);
-    g_last_applied_general_packet_valid = true;
-  }
   pthread_mutex_unlock(&g_general_packet_mutex);
 
   if(IsNoOp)
@@ -355,7 +350,13 @@ static int ApplyQueuedGeneralPacketIfStable(void)
     return 0;
   }
 
-  HandleGeneralPacket(LocalPacket);
+  if(HandleGeneralPacket(LocalPacket, sizeof(LocalPacket)) != 0)
+    return -1;
+
+  pthread_mutex_lock(&g_general_packet_mutex);
+  memcpy(g_last_applied_general_packet, LocalPacket, VDISCOVERYSIZE);
+  g_last_applied_general_packet_valid = true;
+  pthread_mutex_unlock(&g_general_packet_mutex);
   MaybeLogStartupEvent(&g_startup_general_applied_logged, "General packet applied");
   atomic_store(&ReplyAddressSet, true);
   return 1;
