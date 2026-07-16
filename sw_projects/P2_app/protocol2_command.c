@@ -25,6 +25,12 @@
 #define P2_DUC_TX_ATTENUATION_MAX 31U
 #define P2_DUC_MIC_OPTIONS_MASK 0x3fU
 #define P2_DUC_PHASE_SHIFT_MAX_DEGREES 359U
+#define P2_HIGH_PRIORITY_FLAGS_ALLOWED_MASK 0x83U
+#define P2_HIGH_PRIORITY_CWX_ALLOWED_MASK 0x07U
+#define P2_HIGH_PRIORITY_DLE_OUTPUTS_ALLOWED_MASK 0x07U
+#define P2_HIGH_PRIORITY_USER_OUTPUTS_ALLOWED_MASK 0x0fU
+#define P2_HIGH_PRIORITY_MERCURY_ATTENUATOR_ALLOWED_MASK 0x0fU
+#define P2_HIGH_PRIORITY_RX_ATTENUATION_MAX 31U
 
 _Static_assert((P2_PROTOCOL2_WIRE_DDC_COUNT % 8U) == 0U,
                "Protocol 2 DDC enable bitmap must contain whole bytes");
@@ -38,6 +44,8 @@ _Static_assert(P2_SATURN_DAC_COUNT <= P2_PROTOCOL2_WIRE_DAC_COUNT,
                "Saturn DAC count cannot exceed the Protocol 2 wire maximum");
 _Static_assert(P2_SATURN_ADC_COUNT <= P2_PROTOCOL2_TX_ATTENUATOR_COUNT,
                "Saturn ADC count cannot exceed DUC attenuation fields");
+_Static_assert(P2_SATURN_ADC_COUNT == 2U,
+               "High-priority attenuation decoding expects Saturn's two ADCs");
 
 static bool IncrementingPortRangeFits(uint16_t BasePort, uint8_t PortCount)
 {
@@ -456,4 +464,159 @@ bool P2DecodeAndApplyDUCSpecificCommand(const uint8_t *Packet, size_t PacketLeng
     if(!P2DecodeDUCSpecificCommand(Packet, PacketLength, &Command))
         return false;
     return P2ApplyDUCSpecificCommand(&Command, Sink, Context);
+}
+
+static bool HighPriorityCommandIsValid(const TP2HighPriorityCommand *Command)
+{
+    uint8_t Index;
+
+    if((Command == NULL) || (Command->Transmit && !Command->Run) ||
+       (Command->Outputs.OpenCollectorBits > 0x7fU) ||
+       (Command->Outputs.UserOutputBits >
+        P2_HIGH_PRIORITY_USER_OUTPUTS_ALLOWED_MASK) ||
+       (Command->Outputs.MercuryAttenuatorBits >
+        P2_HIGH_PRIORITY_MERCURY_ATTENUATOR_ALLOWED_MASK))
+        return false;
+    for(Index = 0U; Index < P2_SATURN_ADC_COUNT; Index++)
+    {
+        if(Command->RXAttenuation[Index] > P2_HIGH_PRIORITY_RX_ATTENUATION_MAX)
+            return false;
+    }
+    return true;
+}
+
+bool P2DecodeHighPriorityCommand(const uint8_t *Packet, size_t PacketLength,
+                                 TP2HighPriorityCommand *Command)
+{
+    uint8_t CWX;
+    uint8_t DLEOutputs;
+    uint8_t Flags;
+    uint8_t Index;
+
+    if(Command == NULL)
+        return false;
+    memset(Command, 0, sizeof(*Command));
+    if((Packet == NULL) || (PacketLength != P2_HIGH_PRIORITY_PACKET_SIZE))
+        return false;
+
+    Flags = Packet[4];
+    CWX = Packet[5];
+    DLEOutputs = Packet[1400];
+    if(((Flags & (uint8_t)~P2_HIGH_PRIORITY_FLAGS_ALLOWED_MASK) != 0U) ||
+       ((CWX & (uint8_t)~P2_HIGH_PRIORITY_CWX_ALLOWED_MASK) != 0U) ||
+       (Packet[6] != 0U) || (Packet[7] != 0U) || (Packet[8] != 0U) ||
+       ((DLEOutputs & (uint8_t)~P2_HIGH_PRIORITY_DLE_OUTPUTS_ALLOWED_MASK) != 0U) ||
+       ((Packet[1401] & 0x01U) != 0U) ||
+       ((Packet[1402] & (uint8_t)~P2_HIGH_PRIORITY_USER_OUTPUTS_ALLOWED_MASK) != 0U) ||
+       ((Packet[1403] &
+         (uint8_t)~P2_HIGH_PRIORITY_MERCURY_ATTENUATOR_ALLOWED_MASK) != 0U) ||
+       (Packet[1442] > P2_HIGH_PRIORITY_RX_ATTENUATION_MAX) ||
+       (Packet[1443] > P2_HIGH_PRIORITY_RX_ATTENUATION_MAX))
+        return false;
+
+    Command->Sequence = rd_be_u32(Packet);
+    Command->Run = (Flags & 0x01U) != 0U;
+    Command->Transmit = Command->Run && ((Flags & 0x02U) != 0U);
+    Command->PureSignal = (Flags & 0x80U) != 0U;
+    Command->CWX.Enabled = (CWX & 0x01U) != 0U;
+    Command->CWX.Dot = (CWX & 0x02U) != 0U;
+    Command->CWX.Dash = (CWX & 0x04U) != 0U;
+
+    for(Index = 0U; Index < P2_SATURN_HARDWARE_DDC_COUNT; Index++)
+        Command->DDCFrequency[Index] = rd_be_u32(Packet + 9U + ((size_t)Index * 4U));
+    Command->DUCFrequency = rd_be_u32(Packet + 329);
+    Command->DriveLevel = Packet[345];
+    Command->ClientControlWord = rd_be_u16(Packet + 1396);
+    Command->CATPort = rd_be_u16(Packet + 1398);
+    Command->Outputs.TransverterEnabled = (DLEOutputs & 0x01U) != 0U;
+    Command->Outputs.SpeakerMuted = (DLEOutputs & 0x02U) != 0U;
+    Command->Outputs.AutoTuneEnabled = (DLEOutputs & 0x04U) != 0U;
+    Command->Outputs.OpenCollectorBits = Packet[1401] >> 1;
+    Command->Outputs.UserOutputBits = Packet[1402];
+    Command->Outputs.MercuryAttenuatorBits = Packet[1403];
+    Command->Alex.Alex1TXWord = rd_be_u16(Packet + 1428);
+    Command->Alex.Alex1RXWord = rd_be_u16(Packet + 1430);
+    Command->Alex.Alex0TXWord = rd_be_u16(Packet + 1432);
+    Command->Alex.Alex0RXWord = rd_be_u16(Packet + 1434);
+    // Store by Protocol ADC index: byte 1443 is ADC0 and byte 1442 is ADC1.
+    Command->RXAttenuation[0] = Packet[1443];
+    Command->RXAttenuation[1] = Packet[1442];
+
+    if(!HighPriorityCommandIsValid(Command))
+    {
+        memset(Command, 0, sizeof(*Command));
+        return false;
+    }
+    return true;
+}
+
+static bool HighPriorityPolicyIsValid(const TP2HighPriorityCommand *Command,
+                                      const TP2HighPrioritySessionPolicy *Policy)
+{
+    if((Command == NULL) || (Policy == NULL))
+        return false;
+    if(!Command->Run)
+    {
+        return Policy->UpdateTXEnable && !Policy->TXEnabled &&
+               !Policy->TransmitActive && Policy->DisableCW &&
+               !Policy->ApplyPayload;
+    }
+    if(!Policy->ApplyPayload || Policy->DisableCW ||
+       (Policy->UpdateTXEnable != Policy->TXEnabled) ||
+       (Policy->TransmitActive && !Command->Transmit))
+        return false;
+    return true;
+}
+
+static bool HighPriorityActionSinkIsComplete(const TP2HighPriorityActionSink *Sink)
+{
+    return (Sink != NULL) && (Sink->SetTXEnabled != NULL) &&
+           (Sink->SetMOX != NULL) && (Sink->DisableCW != NULL) &&
+           (Sink->SetDDCFrequency != NULL) && (Sink->SetDUCConfig != NULL) &&
+           (Sink->SetClientControl != NULL) && (Sink->SetCATPort != NULL) &&
+           (Sink->SetOutputs != NULL) && (Sink->SetAlexConfig != NULL) &&
+           (Sink->SetRXAttenuation != NULL) && (Sink->SetCWXConfig != NULL);
+}
+
+bool P2ApplyHighPriorityCommand(const TP2HighPriorityCommand *Command,
+                                const TP2HighPrioritySessionPolicy *Policy,
+                                const TP2HighPriorityActionSink *Sink, void *Context)
+{
+    uint8_t Index;
+
+    if(!HighPriorityCommandIsValid(Command) ||
+       !HighPriorityPolicyIsValid(Command, Policy) ||
+       !HighPriorityActionSinkIsComplete(Sink))
+        return false;
+
+    if(Policy->UpdateTXEnable)
+        Sink->SetTXEnabled(Context, Policy->TXEnabled);
+    Sink->SetMOX(Context, Policy->TransmitActive);
+    if(Policy->DisableCW)
+        Sink->DisableCW(Context);
+    if(!Policy->ApplyPayload)
+        return true;
+
+    for(Index = 0U; Index < P2_SATURN_HARDWARE_DDC_COUNT; Index++)
+        Sink->SetDDCFrequency(Context, Index, Command->DDCFrequency[Index]);
+    Sink->SetDUCConfig(Context, Command->DUCFrequency, Command->DriveLevel);
+    Sink->SetClientControl(Context, Command->ClientControlWord);
+    Sink->SetCATPort(Context, Command->CATPort);
+    Sink->SetOutputs(Context, &Command->Outputs);
+    Sink->SetAlexConfig(Context, &Command->Alex);
+    for(Index = 0U; Index < P2_SATURN_ADC_COUNT; Index++)
+        Sink->SetRXAttenuation(Context, Index, Command->RXAttenuation[Index]);
+    Sink->SetCWXConfig(Context, &Command->CWX);
+    return true;
+}
+
+bool P2DecodeAndApplyHighPriorityCommand(const uint8_t *Packet, size_t PacketLength,
+                                         const TP2HighPrioritySessionPolicy *Policy,
+                                         const TP2HighPriorityActionSink *Sink, void *Context)
+{
+    TP2HighPriorityCommand Command;
+
+    if(!P2DecodeHighPriorityCommand(Packet, PacketLength, &Command))
+        return false;
+    return P2ApplyHighPriorityCommand(&Command, Policy, Sink, Context);
 }

@@ -11,7 +11,8 @@ LDFLAGS = -lm -lpthread
 .DEFAULT_GOAL := all
 .PHONY: all clean cppcheck cppcheck-ci test test-controller-lease \
         test-controller-lease-asan test-protocol2-control \
-        test-protocol2-command test-protocol2-command-asan smoke-shutdown
+        test-protocol2-command test-protocol2-command-asan \
+        test-protocol2-high-priority test-protocol2-high-priority-asan smoke-shutdown
 
 # NOTE (2026-01): keep "local" libs here. libgpiod link flags are added below
 #                 via pkg-config (with a safe fallback).
@@ -127,11 +128,24 @@ test-protocol2-command-asan:
 	ASAN_OPTIONS=detect_leaks=1 ./tests/protocol2_command_test_asan
 	rm -f tests/protocol2_command_test_asan
 
-test: test-controller-lease test-protocol2-control test-protocol2-command
+test-protocol2-high-priority:
+	$(CC) $(CFLAGS) -I. tests/protocol2_high_priority_test.c protocol2_command.c -o tests/protocol2_high_priority_test
+	./tests/protocol2_high_priority_test
+	rm -f tests/protocol2_high_priority_test
+
+test-protocol2-high-priority-asan:
+	$(CC) $(CFLAGS) -fsanitize=address,undefined -fno-omit-frame-pointer -I. \
+		tests/protocol2_high_priority_test.c protocol2_command.c -o tests/protocol2_high_priority_test_asan
+	ASAN_OPTIONS=detect_leaks=1 ./tests/protocol2_high_priority_test_asan
+	rm -f tests/protocol2_high_priority_test_asan
+
+test: test-controller-lease test-protocol2-control test-protocol2-command \
+	test-protocol2-high-priority
 
 clean:
 	rm -rf $(TARGET) *.o *.d *.bin tests/controller_lease_test tests/protocol2_control_test \
-		tests/protocol2_command_test tests/protocol2_command_test_asan
+		tests/protocol2_command_test tests/protocol2_command_test_asan \
+		tests/protocol2_high_priority_test tests/protocol2_high_priority_test_asan
 
 smoke-shutdown: all
 	bash ./tools/shutdown_smoke.sh ./$(TARGET)

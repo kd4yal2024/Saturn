@@ -167,7 +167,7 @@ jobs:
         working-directory: sw_projects/P2_app
 
       - name: Test P2 command boundary
-        run: make test-protocol2-control test-protocol2-command-asan
+        run: make test-protocol2-control test-protocol2-command-asan test-protocol2-high-priority-asan
         working-directory: sw_projects/P2_app
 
       - name: P2 static analysis

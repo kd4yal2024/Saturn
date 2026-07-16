@@ -17,6 +17,7 @@
 #define P2_PROTOCOL2_WIRE_DAC_COUNT 4U
 #define P2_SATURN_DAC_COUNT 1U
 #define P2_PROTOCOL2_TX_ATTENUATOR_COUNT 3U
+#define P2_HIGH_PRIORITY_PACKET_SIZE 1444U
 
 typedef enum
 {
@@ -165,6 +166,75 @@ typedef struct
     void (*SetTXAttenuation)(void *Context, uint8_t ADCIndex, uint8_t Attenuation);
 } TP2DUCActionSink;
 
+typedef struct
+{
+    bool Enabled;
+    bool Dot;
+    bool Dash;
+} TP2HighPriorityCWXConfig;
+
+typedef struct
+{
+    bool TransverterEnabled;
+    bool SpeakerMuted;
+    bool AutoTuneEnabled;
+    uint8_t OpenCollectorBits;
+    uint8_t UserOutputBits;
+    uint8_t MercuryAttenuatorBits;
+} TP2HighPriorityOutputConfig;
+
+typedef struct
+{
+    uint16_t Alex1TXWord;
+    uint16_t Alex1RXWord;
+    uint16_t Alex0TXWord;
+    uint16_t Alex0RXWord;
+} TP2HighPriorityAlexConfig;
+
+typedef struct
+{
+    uint32_t Sequence;
+    bool Run;
+    bool Transmit;
+    bool PureSignal;
+    TP2HighPriorityCWXConfig CWX;
+    uint32_t DDCFrequency[P2_SATURN_HARDWARE_DDC_COUNT];
+    uint32_t DUCFrequency;
+    uint8_t DriveLevel;
+    uint16_t ClientControlWord;
+    uint16_t CATPort;
+    TP2HighPriorityOutputConfig Outputs;
+    TP2HighPriorityAlexConfig Alex;
+    uint8_t RXAttenuation[P2_SATURN_ADC_COUNT];
+} TP2HighPriorityCommand;
+
+// Session policy is resolved only after controller and sequence checks. It
+// keeps startup-handshake decisions separate from both wire decoding and the
+// concrete Saturn register implementation.
+typedef struct
+{
+    bool UpdateTXEnable;
+    bool TXEnabled;
+    bool TransmitActive;
+    bool DisableCW;
+    bool ApplyPayload;
+} TP2HighPrioritySessionPolicy;
+
+typedef struct
+{
+    void (*SetTXEnabled)(void *Context, bool Enabled);
+    void (*SetMOX)(void *Context, bool Enabled);
+    void (*DisableCW)(void *Context);
+    void (*SetDDCFrequency)(void *Context, uint8_t DDCIndex, uint32_t Frequency);
+    void (*SetDUCConfig)(void *Context, uint32_t Frequency, uint8_t DriveLevel);
+    void (*SetClientControl)(void *Context, uint16_t ClientControlWord);
+    void (*SetCATPort)(void *Context, uint16_t Port);
+    void (*SetOutputs)(void *Context, const TP2HighPriorityOutputConfig *Config);
+    void (*SetAlexConfig)(void *Context, const TP2HighPriorityAlexConfig *Config);
+    void (*SetRXAttenuation)(void *Context, uint8_t ADCIndex, uint8_t Attenuation);
+    void (*SetCWXConfig)(void *Context, const TP2HighPriorityCWXConfig *Config);
+} TP2HighPriorityActionSink;
+
 bool P2DecodeGeneralCommand(const uint8_t *Packet, size_t PacketLength,
                             TP2GeneralCommand *Command);
 bool P2ApplyGeneralCommand(const TP2GeneralCommand *Command,
@@ -185,5 +255,14 @@ bool P2ApplyDUCSpecificCommand(const TP2DUCSpecificCommand *Command,
                                const TP2DUCActionSink *Sink, void *Context);
 bool P2DecodeAndApplyDUCSpecificCommand(const uint8_t *Packet, size_t PacketLength,
                                         const TP2DUCActionSink *Sink, void *Context);
+
+bool P2DecodeHighPriorityCommand(const uint8_t *Packet, size_t PacketLength,
+                                 TP2HighPriorityCommand *Command);
+bool P2ApplyHighPriorityCommand(const TP2HighPriorityCommand *Command,
+                                const TP2HighPrioritySessionPolicy *Policy,
+                                const TP2HighPriorityActionSink *Sink, void *Context);
+bool P2DecodeAndApplyHighPriorityCommand(const uint8_t *Packet, size_t PacketLength,
+                                         const TP2HighPrioritySessionPolicy *Policy,
+                                         const TP2HighPriorityActionSink *Sink, void *Context);
 
 #endif

@@ -18,6 +18,7 @@
 #include "../common/saturntypes.h"
 #include "InHighPriority.h"
 #include "controller_lease.h"
+#include "protocol2_command.h"
 #include "protocol2_control.h"
 #include <errno.h>
 #include <stdlib.h>
@@ -28,7 +29,6 @@
 #include "../common/saturnregisters.h"
 #include "../common/hwaccess.h"                   // low level access
 #include "../common/version.h"
-#include "../common/byteio.h"
 #include "cathandler.h"
 #include "AriesATU.h"
 #include <pthread.h>
@@ -37,6 +37,138 @@
 
 extern uint32_t LODebugDDC1Frequency;                   // -x debug mode: LO frequency for DDC1
 extern bool InterleavedDDCDebugMode;                    // true if interleaved DDC for debug are allowed
+
+_Static_assert(P2_HIGH_PRIORITY_PACKET_SIZE == VHIGHPRIOTIYTOSDRSIZE,
+               "Protocol 2 high-priority size must match the listener buffer");
+_Static_assert(P2_SATURN_ADC_COUNT == 2U,
+               "High-priority attenuation mapping expects Saturn's two ADCs");
+
+typedef struct
+{
+  unsigned int FPGAVersion;
+} TP2HighPriorityActionContext;
+
+static void ApplyTXEnabled(void *Context, bool Enabled)
+{
+  (void)Context;
+  SetTXEnable(Enabled);
+}
+
+static void ApplyMOX(void *Context, bool Enabled)
+{
+  (void)Context;
+  SetMOX(Enabled);
+}
+
+static void ApplyDisableCW(void *Context)
+{
+  (void)Context;
+  EnableCW(false, false);
+}
+
+static void ApplyDDCFrequency(void *Context, uint8_t DDCIndex, uint32_t Frequency)
+{
+  (void)Context;
+  if(InterleavedDDCDebugMode && (DDCIndex == 1U))
+    SetDDCFrequency(1, LODebugDDC1Frequency, false);
+  else
+    SetDDCFrequency(DDCIndex, Frequency, true);
+}
+
+static void ApplyDUCConfig(void *Context, uint32_t Frequency, uint8_t DriveLevel)
+{
+  (void)Context;
+  SetDUCFrequency(Frequency, true);
+  SetAriesTXFrequency(Frequency);
+  SetTXDriveLevel(DriveLevel);
+}
+
+static void ApplyClientControl(void *Context, uint16_t ClientControlWord)
+{
+  (void)Context;
+  SetClientControlWord(ClientControlWord);
+}
+
+static void ApplyCATPort(void *Context, uint16_t Port)
+{
+  (void)Context;
+  if(Port != 0U)
+    SetupCATPort(Port);
+  else if(CATHandlerActive())
+    ShutdownCATHandler();
+}
+
+static void ApplyOutputs(void *Context, const TP2HighPriorityOutputConfig *Config)
+{
+  (void)Context;
+  SetXvtrEnable(Config->TransverterEnabled);
+  SetSpkrMute(Config->SpeakerMuted);
+  SetOpenCollectorOutputs(Config->OpenCollectorBits);
+  SetUserOutputBits(Config->UserOutputBits);
+}
+
+static void ApplyAlexConfig(void *Context, const TP2HighPriorityAlexConfig *Config)
+{
+  TP2HighPriorityActionContext *ActionContext = Context;
+  uint16_t TXAntennaBits;
+  uint16_t Word;
+
+  TXAntennaBits = (Config->Alex1TXWord >> 8) & 0x0007U;
+  if((ActionContext->FPGAVersion >= 12U) && (TXAntennaBits != 0U))
+  {
+    Word = Config->Alex1TXWord;
+    SetAriesAlexTXWord(Word);
+    if(atomic_load(&AriesATUActive))
+      Word = (Word & 0xF8FFU) | 0x0100U;
+    AlexManualTXFilters(Word, true);
+
+    Word = Config->Alex0TXWord;
+    SetAriesAlexRXWord(Word);
+    if(atomic_load(&AriesATUActive))
+      Word = (Word & 0xF8FFU) | 0x0100U;
+    AlexManualTXFilters(Word, false);
+  }
+  else if(ActionContext->FPGAVersion >= 12U)
+  {
+    AlexManualTXFilters(Config->Alex0TXWord, true);
+    AlexManualTXFilters(Config->Alex0TXWord, false);
+  }
+  else
+  {
+    AlexManualTXFilters(Config->Alex0TXWord, false);
+  }
+
+  AlexManualRXFilters(Config->Alex1RXWord, 2);
+  AlexManualRXFilters(Config->Alex0RXWord, 0);
+}
+
+static void ApplyRXAttenuation(void *Context, uint8_t ADCIndex, uint8_t Attenuation)
+{
+  const EADCSelect ADC = (ADCIndex == 0U) ? eADC1 : eADC2;
+
+  (void)Context;
+  SetADCAttenuator(ADC, Attenuation, true, false);
+}
+
+static void ApplyCWXConfig(void *Context, const TP2HighPriorityCWXConfig *Config)
+{
+  (void)Context;
+  SetCWXBits(Config->Enabled, Config->Dash, Config->Dot);
+}
+
+static const TP2HighPriorityActionSink HighPriorityActionSink = {
+  .SetTXEnabled = ApplyTXEnabled,
+  .SetMOX = ApplyMOX,
+  .DisableCW = ApplyDisableCW,
+  .SetDDCFrequency = ApplyDDCFrequency,
+  .SetDUCConfig = ApplyDUCConfig,
+  .SetClientControl = ApplyClientControl,
+  .SetCATPort = ApplyCATPort,
+  .SetOutputs = ApplyOutputs,
+  .SetAlexConfig = ApplyAlexConfig,
+  .SetRXAttenuation = ApplyRXAttenuation,
+  .SetCWXConfig = ApplyCWXConfig,
+};
 
 
 //
@@ -50,21 +182,19 @@ void *IncomingHighPriority(void *arg)                   // listener thread
   struct iovec iovecinst;                               // iovcnt buffer - 1 for each outgoing buffer
   struct msghdr datagram;                               // multiple incoming message header
   int size;                                             // UDP datagram length
-  uint8_t Byte, Byte2;                                  // received dat being decoded
-  uint32_t LongWord;
   uint32_t MissingPackets;
-  uint16_t Word;
-  int i;                                                // counter
   bool HighPriorityStreamLogged = false;
   TP2SequenceTracker SequenceTracker = {0};
+  TP2HighPriorityCommand Command;
+  TP2HighPrioritySessionPolicy Policy;
+  TP2HighPriorityActionContext ActionContext;
   ESoftwareID FPGASWID;                                 // preprod/release etc
-  unsigned int FPGAVersion;                             // firmware version
 
 
   ThreadData = (struct ThreadSocketData *)arg;
   atomic_store(&ThreadData->Active, true);
   printf("spinning up high priority incoming thread with port %u, pid=%ld\n", (unsigned int)atomic_load(&ThreadData->Portid), syscall(SYS_gettid));
-  FPGAVersion = GetFirmwareVersion(&FPGASWID);          // get version of FPGA code
+  ActionContext.FPGAVersion = GetFirmwareVersion(&FPGASWID);
 
   //
   // main processing loop
@@ -134,9 +264,11 @@ void *IncomingHighPriority(void *arg)                   // listener thread
     //
     if(size == VHIGHPRIOTIYTOSDRSIZE)
     {
+      bool HandshakeReady;
       bool WasActive;
-      bool TransmitActive;
-      TP2RunState RunState;
+
+      if(!P2DecodeHighPriorityCommand(UDPInBuffer, (size_t)size, &Command))
+        continue;
       if(!ControllerLeaseMatches(&addr_from))
         continue;
 
@@ -145,12 +277,32 @@ void *IncomingHighPriority(void *arg)                   // listener thread
       // epoch even if the new client starts again at sequence zero.
       if(!atomic_load(&StartBitReceived))
         P2SequenceReset(&SequenceTracker);
-      LongWord = rd_be_u32(UDPInBuffer);
       // Control-packet rule, not the data-stream rule: Thetis sends every
       // high-priority control packet with sequence zero, so repeated sequence
       // numbers carry fresh state (frequency, drive, run) and must be applied.
-      if(!P2ControlSequenceAccept(&SequenceTracker, LongWord, &MissingPackets))
+      if(!P2ControlSequenceAccept(&SequenceTracker, Command.Sequence, &MissingPackets))
         continue;
+
+      memset(&Policy, 0, sizeof(Policy));
+      WasActive = atomic_load(&SDRActive);
+      HandshakeReady = atomic_load(&ReplyAddressSet);
+      if(Command.Run)
+      {
+        Policy.UpdateTXEnable = HandshakeReady;
+        Policy.TXEnabled = HandshakeReady;
+        Policy.TransmitActive = Command.Transmit && (WasActive || HandshakeReady);
+        Policy.ApplyPayload = true;
+      }
+      else
+      {
+        Policy.UpdateTXEnable = true;
+        Policy.DisableCW = true;
+      }
+
+      if(!P2ApplyHighPriorityCommand(&Command, &Policy, &HighPriorityActionSink,
+                                     &ActionContext))
+        continue;
+
       atomic_store(&NewMessageReceived, true);
       if((MissingPackets != 0U) && UseDebug)
         printf("High priority sequence gap: missing %u packet(s)\n", MissingPackets);
@@ -159,27 +311,22 @@ void *IncomingHighPriority(void *arg)                   // listener thread
         printf("STARTUP: High priority packet stream detected\n");
         HighPriorityStreamLogged = true;
       }
-      Byte = (uint8_t)(UDPInBuffer[4]);
-      RunState = P2DecodeRunState(Byte);
-      if(RunState.Run)
+
+      if(Command.Run)
       {
         atomic_store(&StartBitReceived, true);
         MarkStartupRunBitSeen();
-        if(atomic_load(&ReplyAddressSet) && atomic_load(&StartBitReceived))
+        if(HandshakeReady)
         {
-          atomic_store(&SDRActive, true);                         // only set active if we have replay address too
-          SetTXEnable(true);
+          atomic_store(&SDRActive, true);
           MarkStartupHandshakeComplete();
         }
+        atomic_store(&IsTXMode, Policy.TransmitActive);
       }
       else
       {
-        WasActive = atomic_load(&SDRActive);
-        atomic_store(&SDRActive, false);                         // set state of whole app
-        SetTXEnable(false);
+        atomic_store(&SDRActive, false);
         atomic_store(&IsTXMode, false);
-        SetMOX(false);
-        EnableCW(false, false);
         if(WasActive)
         {
           printf("set to inactive by client app\n");
@@ -188,125 +335,7 @@ void *IncomingHighPriority(void *arg)                   // listener thread
         atomic_store(&StartBitReceived, false);
         ControllerLeaseRelease(&addr_from);
         P2SequenceReset(&SequenceTracker);
-        continue;
       }
-      //
-      // Set TX only after the full startup handshake is active. This prevents
-      // an early or malformed run packet from asserting the physical MOX GPIO
-      // before the reply address and stream state are established.
-      //
-      TransmitActive = RunState.Transmit && atomic_load(&SDRActive);
-      atomic_store(&IsTXMode, TransmitActive);
-      SetMOX(TransmitActive);
-
-//
-// now properly decode DDC frequencies
-//
-      for (i=0; i<VNUMDDC; i++)
-      {
-        LongWord = rd_be_u32(UDPInBuffer+i*4+9);
-        if(InterleavedDDCDebugMode && (i==1))
-          SetDDCFrequency(1, LODebugDDC1Frequency, false);      // set debug DDC frequency - note Hz not phase
-        else
-          SetDDCFrequency(i, LongWord, true);                   // temporarily set above
-      }
-      //
-      // DUC frequency & drive level
-      //
-      LongWord = rd_be_u32(UDPInBuffer+329);
-      SetDUCFrequency(LongWord, true);
-      SetAriesTXFrequency(LongWord);
-      Byte = (uint8_t)(UDPInBuffer[345]);
-      SetTXDriveLevel(Byte);
-      //
-      // bytes 1396:1397 = ClientControl. Zero remains a no-op for now, but
-      // parsing/storing the word keeps Saturn aligned with later Protocol 4.4
-      // cleanup without shifting the CAT port field.
-      //
-      Word = rd_be_u16(UDPInBuffer+1396);
-      SetClientControlWord(Word);
-      //
-      // create CAT port (if set)
-      // shut down CAT port if not set and the CAT thread is active
-      //
-      Word = rd_be_u16(UDPInBuffer+1398);
-      if(Word != 0)
-        SetupCATPort(Word);
-      else if (CATHandlerActive())
-        ShutdownCATHandler();
-      //
-      // transverter, speaker mute, open collector, user outputs
-      // open collector data is in bits 7:1; move to 6:0
-      //
-      Byte = (uint8_t)(UDPInBuffer[1400]);
-      SetXvtrEnable((bool)(Byte&1));
-      SetSpkrMute((bool)((Byte>>1)&1));
-      Byte = (uint8_t)(UDPInBuffer[1401]);
-      SetOpenCollectorOutputs(Byte >> 1);
-      Byte = (uint8_t)(UDPInBuffer[1402]);
-      SetUserOutputBits(Byte);
-      //
-      // Alex
-      // behaviour needs to be FPGA version specific: at V12, separate register added for Alex TX antennas
-      // if new FPGA version: we write the word with TX ANT (byte 1428) to a new register, and the "old" word to original register
-      // if we don't have a new TX ant bit set, just write "old" word data (byte 1432) to both registers
-      // this is to allow safe operation with legacy client apps
-      // 1st read bytes and see if a TX ant bit is set
-      // Aries will only work with newer FPGA and client app support
-      //
-      Word = rd_be_u16(UDPInBuffer+1428);
-      //printf("Alex 1 TX word = 0x%x\n", Word);
-      Word = (Word >> 8) & 0x0007;                          // new data TX ant bits. if not set, must be legacy client app
-      
-      if((FPGAVersion >= 12) && (Word != 0))                // if new firmware && client app supports it
-      {
-        //printf("new FPGA code, new client data\n");
-        Word = rd_be_u16(UDPInBuffer+1428);                 // copy word with TX ant settings to filt/TXant register
-        SetAriesAlexTXWord(Word);
-        if(atomic_load(&AriesATUActive))                    // if Aries active, set TX antenna to 1
-          Word = (Word & 0xF8FF) | 0x0100;
-        AlexManualTXFilters(Word, true);
-        Word = rd_be_u16(UDPInBuffer+1432);                 // copy word with RX ant settings to filt/RXant register
-        //printf("Alex 0 TX word = 0x%x\n", Word);
-        SetAriesAlexRXWord(Word);
-        if(atomic_load(&AriesATUActive))                    // if Aries active, set RX antenna to 1
-          Word = (Word & 0xF8FF) | 0x0100;
-        AlexManualTXFilters(Word, false);
-      }
-      else if(FPGAVersion >= 12)                            // new hardware but no client app support
-      {
-        //printf("new FPGA code, new client data\n");
-        Word = rd_be_u16(UDPInBuffer+1432);                 // copy word with TX/RX ant settings to both registers
-        AlexManualTXFilters(Word, true);
-        AlexManualTXFilters(Word, false);
-      }
-      else                                                  // old FPGA hardware
-      {
-        //printf("old FPGA code\n");
-        Word = rd_be_u16(UDPInBuffer+1432);                 // copy word with TX/RX ant settings to original register
-        AlexManualTXFilters(Word, false);
-      }
-
-      // RX filters
-      Word = rd_be_u16(UDPInBuffer+1430);
-      AlexManualRXFilters(Word, 2);
-      //printf("Alex 1 RX word = 0x%x\n", Word);
-      Word = rd_be_u16(UDPInBuffer+1434);
-      AlexManualRXFilters(Word, 0);
-      //printf("Alex 0 RX word = 0x%x\n", Word);
-      //
-      // RX atten during TX and RX
-      // this should be just on RX now, because TX settings are in the DUC specific packet bytes 58&59
-      //
-      Byte2 = (uint8_t)(UDPInBuffer[1442]);     // RX2 atten
-      Byte = (uint8_t)(UDPInBuffer[1443]);      // RX1 atten
-      SetADCAttenuator(eADC1, Byte, true, false);
-      SetADCAttenuator(eADC2, Byte2, true, false);
-      //
-      // CWX bits
-      //
-      Byte = (uint8_t)(UDPInBuffer[5]);      // CWX
-      SetCWXBits((bool)(Byte & 1), (bool)((Byte>>2) & 1), (bool)((Byte>>1) & 1));    // enabled, dash, dot
     }
   }
 //
