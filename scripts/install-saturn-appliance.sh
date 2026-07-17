@@ -61,8 +61,9 @@ Options:
   --dry-run              Print the resolved install contract without changing the host
   -h, --help             Show this help
 
-Password policy: newly set passwords are exactly five characters with no
-composition rules. Existing credentials are retained during upgrades.
+Password policy: newly set passwords are at least five characters with no
+composition rules. Generated passwords remain five characters. Existing
+credentials are retained during upgrades.
 EOF
 }
 

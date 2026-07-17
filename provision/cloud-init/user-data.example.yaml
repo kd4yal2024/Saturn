@@ -45,7 +45,8 @@ write_files:
 
       # LCD boot profile (managed block appended to config.txt; existing HDMI lines are preserved)
       # Valid: none | cm4-7 | cm4-7-custom-jd | cm4-7-g2-single-dsi | cm4-8 | cm5-7 | cm5-7-g2-single-dsi | cm5-7-g2-dual-dsi | cm5-8 | auto
-      # Note: auto currently requires an explicit/manual choice for CM5 + 7" paths.
+      # Note: auto preserves recognized existing CM5 + 7" configs, but a fresh
+      # unrecognized CM5 + 7" path requires an explicit/manual choice.
       SATURN_LCD_PROFILE=auto
       # Optional override when auto mode cannot infer size (values: 7 or 8)
       # SATURN_LCD_SIZE_INCH=8
@@ -57,7 +58,9 @@ write_files:
       # SATURN_LCD_DETECT_ONLY=0
 
       # Optional desktop provisioning UI (C++/GTK)
-      # auto = launch when desktop/X11 is available
+      # auto = launch when a usable desktop display is discoverable; otherwise
+      #        provisioning continues headlessly; autostart can show status if
+      #        a desktop login occurs before provisioning completes
       # 1    = force launch attempt
       # 0    = disable
       SATURN_DESKTOP_UI=auto
@@ -71,11 +74,14 @@ write_files:
       # Required if SATURN_FLASH_FPGA=1:
       # SATURN_FLASH_CONFIRM=FLASH
 
-      # Optional: set an exact five-character initial password. When blank, the
-      # installer generates and logs a five-character password for this device.
+      # Optional: set an initial password of at least five characters. When blank, the
+      # installer generates a device-specific value and stores it root-only at
+      # /var/lib/saturn-provision/update-manager-admin-password. The general
+      # provisioning log reports that path, not the plaintext password.
       SATURN_ADMIN_PASSWORD=
 
-      # Re-run on every boot only if explicitly requested.
+      # Force a full rerun whenever this bootstrap/installer is invoked.
+      # cloud-init runcmd itself still runs only once per cloud-init instance-id.
       SATURN_FORCE_REPROVISION=0
 
       # Detect front-panel hardware during provisioning and record G2V1/G2V2/NONE.

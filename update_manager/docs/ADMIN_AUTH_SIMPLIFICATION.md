@@ -9,9 +9,9 @@ open internet).
 
 Guiding rules for the Saturn appliance audience:
 
-- Exactly 5 characters; **no** composition rules, forced rotation, or lockout
-  spirals. Existing longer credentials remain valid until the operator changes
-  or resets them.
+- At least 5 characters; **no** composition rules, forced rotation, or lockout
+  spirals. Generated/recovery passwords remain five characters for ease of
+  initial entry, while operators may choose longer values.
 - One password, one source of truth. The user should never learn that two
   auth backends exist.
 - Physical access is the trust anchor. Recovery happens at the console or the
@@ -25,7 +25,7 @@ Guiding rules for the Saturn appliance audience:
 |---|---|---|
 | Home LAN (nginx :80, `/saturn/*`) | guests on the wifi | keep casual hands off TX and admin actions |
 | Tailscale (TLS :8443 via Serve) | nobody — tailnet is already authenticated | redundant; Phase 3 removes it here |
-| Port-forwarded WAN (TLS :8443) | internet scanners | five-character password plus failure delay; direct port forwarding is discouraged |
+| Port-forwarded WAN (TLS :8443) | internet scanners | operator password plus failure delay; direct port forwarding is discouraged |
 
 ## Phase 1 — one password everywhere (implemented)
 

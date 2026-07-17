@@ -28,7 +28,8 @@ HTPASSWD_FILE="${SATURN_ADMIN_HTPASSWD_FILE:-/etc/nginx/.htpasswd}"
 SERVICE_NAME="${SATURN_ADMIN_SERVICE:-saturn-go.service}"
 DROPIN_DIR="${SATURN_ADMIN_DROPIN_DIR:-/etc/systemd/system/${SERVICE_NAME}.d}"
 DROPIN_FILE="$DROPIN_DIR/10-remote-auth.conf"
-PASSWORD_LEN=5
+PASSWORD_MIN_LEN=5
+GENERATED_PASSWORD_LEN=5
 SKIP_SYSTEMD="${SATURN_ADMIN_SKIP_SYSTEMD:-0}"
 HTPASSWD_OWNER="${SATURN_ADMIN_HTPASSWD_OWNER:-root:www-data}"
 INITIAL_LOGIN_FILE="${SATURN_ADMIN_INITIAL_LOGIN_FILE:-/var/lib/saturn-state/initial-login.txt}"
@@ -55,7 +56,7 @@ Subcommands:
   status  Show backend state and whether both backends hold the same
           password.
 
-Rules: exactly ${PASSWORD_LEN} characters; no composition rules. Control
+Rules: at least ${PASSWORD_MIN_LEN} characters; no composition rules. Control
 characters are rejected because the drop-in is a systemd Environment= line.
 EOF
 }
@@ -84,8 +85,8 @@ require_root(){
 
 validate_password(){
   local pw="$1"
-  [[ "${#pw}" -eq "$PASSWORD_LEN" ]] || die "Password must be exactly ${PASSWORD_LEN} characters."
-  if LC_ALL=C printf '%s' "$pw" | grep -q '[[:cntrl:]]'; then
+  [[ "${#pw}" -ge "$PASSWORD_MIN_LEN" ]] || die "Password must be at least ${PASSWORD_MIN_LEN} characters."
+  if [[ "$pw" == *[[:cntrl:]]* ]]; then
     die "Password must not contain control characters."
   fi
 }
@@ -226,7 +227,7 @@ cmd_reset(){
 
   local charset='abcdefghjkmnpqrstuvwxyz23456789'
   local pw='' byte index
-  while [[ ${#pw} -lt $PASSWORD_LEN ]]; do
+  while [[ ${#pw} -lt $GENERATED_PASSWORD_LEN ]]; do
     byte="$(od -An -N1 -tu1 /dev/urandom | tr -d '[:space:]')"
     [[ -n "$byte" ]] || continue
     index=$((byte % ${#charset}))
@@ -243,7 +244,7 @@ cmd_reset(){
   printf '\n'
   ok "New admin password (user '$ADMIN_USER'):"
   printf '\n    %s\n\n' "$pw"
-  info "Write this down. Change it any time from the Saturn Go page."
+  info "Write this down. Change it in Saturn Go: System -> Custom Scripts -> Change Password."
 }
 
 cmd_status(){
@@ -284,4 +285,6 @@ main(){
   esac
 }
 
-main "$@"
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  main "$@"
+fi

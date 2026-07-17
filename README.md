@@ -52,16 +52,32 @@ udev rules, the dedicated P2 runtime, Saturn Go, and Saturn Bridge with WDSP 2.0
 On a fresh Debian/Raspberry Pi OS Trixie arm64 installation:
 
 ```bash
+cd ~
 sudo apt-get update
 sudo apt-get install -y git
+mkdir -p github
+cd github
 git clone https://github.com/kd4yal2024/Saturn.git
 cd Saturn
-sudo ./install.sh
+./install.sh --dry-run --user "$USER"
+sudo ./install.sh --user "$USER"
 ```
 
-The checkout can live under any user or directory. The default `appliance`
-profile auto-detects the front panel and LCD, installs only runtime tools, and
-uses hardware verification. Optional profiles are:
+Run `git clone` as the normal user from a writable directory. A first install
+can take 30-60 minutes and needs stable power/network plus several gigabytes of
+free space. Late in an interactive run, provisioning asks for the Saturn web
+password: enter at least five characters, or press Enter to generate a
+five-character value. This is separate from the Linux password. Unattended
+installs generate it automatically; retrieve it locally with:
+
+```bash
+sudo cat /var/lib/saturn-provision/update-manager-admin-password
+```
+
+The checkout can otherwise live under any normal-user-owned directory. The
+default `appliance` profile auto-detects the front panel and LCD, omits the
+optional desktop developer/piHPSDR bundle, and uses hardware verification.
+Optional profiles are:
 
 - `sudo ./install.sh --profile desktop` for developer tools and piHPSDR
 - `sudo ./install.sh --profile image-factory` for software-only verification
@@ -79,6 +95,12 @@ the DKMS package is registered so kernel updates have one driver owner.
 Interrupted installs resume completed package/build/deployment phases when the
 same commit, kernel, and profile are used. Use `sudo ./install.sh --force` when
 an intentional full reprovision is required.
+
+Reboot after the final success message, then verify the XDMA devices, P2,
+Saturn Go, Saturn Bridge, and web UI. `Front panel: NONE` is a valid result for
+systems using a separate Waveshare LCD without a Saturn front panel. The full
+operator checklist, cloud-init flow, LCD expectations, and failure recovery
+commands are in [`provision/README.md`](provision/README.md).
 
 ## Saturn Go And Remote Operation
 
@@ -110,8 +132,9 @@ privileged maintenance helpers. Treat it as an appliance control plane.
 - Tailscale is optional and should stack with Saturn Remote basic auth; it does
   not replace it.
 - RF TX remains opt-in through bridge/service configuration.
-- Newly set Saturn passwords are exactly five characters with no composition
-  rules. Existing longer credentials remain valid during upgrades. An
+- Newly set Saturn passwords are at least five characters with no composition
+  rules; generated passwords are five characters. Existing credentials remain
+  valid during upgrades. An
   unattended install generates a device-specific password and records it in
   `/var/lib/saturn-provision/update-manager-admin-password` (root-only).
 

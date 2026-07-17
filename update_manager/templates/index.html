@@ -139,14 +139,14 @@
       <form id="password-form" class="space-y-3">
         <div>
           <label class="block text-sm mb-1" for="new-password">New Password</label>
-          <input id="new-password" type="text" minlength="5" maxlength="5" required autocomplete="new-password" spellcheck="false" class="field w-full px-3 py-2 text-lg"/>
+          <input id="new-password" type="text" minlength="5" required autocomplete="new-password" spellcheck="false" class="field w-full px-3 py-2 text-lg"/>
         </div>
         <div class="flex items-center justify-between gap-3">
           <label class="flex items-center gap-2 text-sm"><input id="password-visible" type="checkbox" checked/> Show password</label>
           <button class="btn btn-ghost px-3 py-1 text-sm" type="button" id="password-generate">Generate for me</button>
         </div>
-        <p class="text-xs opacity-70">Exactly 5 characters, with no composition rules. The same password is used for this page and the remote (https) page.</p>
-        <p id="password-error" class="text-red-400 text-sm hidden">Password must be exactly 5 characters.</p>
+        <p class="text-xs opacity-70">At least 5 characters, with no composition rules. The same password is used for this page and the remote (https) page.</p>
+        <p id="password-error" class="text-red-400 text-sm hidden">Password must be at least 5 characters.</p>
         <div class="flex justify-end gap-3 pt-2">
           <button class="btn btn-primary px-4 py-2" type="submit">Save Password</button>
           <button class="btn btn-ghost px-4 py-2" type="button" id="password-cancel">Cancel</button>
@@ -606,7 +606,7 @@ $('password-generate').addEventListener('click', ()=>{
 $('password-form').addEventListener('submit', async (e)=>{
   e.preventDefault();
   const a = $('new-password').value;
-  if (Array.from(a).length !== 5){ $('password-error').classList.remove('hidden'); return; }
+  if (Array.from(a).length < 5){ $('password-error').classList.remove('hidden'); return; }
   $('password-error').classList.add('hidden');
   $('password-modal').classList.add('hidden'); document.body.style.overflow='';
   try{

@@ -7,11 +7,115 @@ installation sequence.
 
 ## Current Layout
 
+- `../install.sh` (public canonical entry point)
+- `../scripts/install-saturn-appliance.sh` (profile/CLI wrapper)
 - `cloud-init/user-data.example.yaml`
 - `cloud-init/meta-data.example.yaml`
 - `cloud-init/provision-saturn.sh`
+- `cloud-init/pihpsdr-installer-run.sh`
+- `cloud-init/pihpsdr-installer-ui.cpp`
 - `cloud-init/saturn-provision-powerctl.sh`
 - `cloud-init/saturn-provision-ui.cpp`
+- `LCD_DECISION_MATRIX.md`
+
+## Supported Target and Installation Modes
+
+The supported appliance target is Debian 13 / Raspberry Pi OS Trixie on
+`arm64`/`aarch64`, with `apt`, systemd, and a normal non-root login user. The
+canonical installer rejects other architectures and OS codenames. Setting
+`SATURN_ALLOW_UNSUPPORTED_OS=1` bypasses only the codename check; it does not
+make another distribution supported.
+
+Choose the profile that matches where the install is running:
+
+| Profile | Intended use | Optional desktop developer bundle | Builds piHPSDR during provisioning | Desktop provisioning UI | Default verification |
+| --- | --- | --- | --- | --- | --- |
+| `appliance` | A Saturn/G2 connected to its FPGA/XDMA hardware | No | No; a separate installer remains available | `auto` | `hardware` |
+| `desktop` | An interactive development/operator workstation attached to Saturn hardware | Yes, when packages are available | Yes | `auto` | `hardware` |
+| `image-factory` | Building a reusable image away from radio hardware | No | No | Off | `software` |
+
+The `appliance` profile is the default. Hardware verification expects a real
+XDMA device, a running P2 service, a healthy Saturn Go service, and a running
+Saturn Bridge listener. It will fail by design on an off-hardware image. Use
+`image-factory` or explicitly select `--verify software` for that case.
+
+Verification modes are deliberate deployment choices:
+
+- `hardware` checks installed artifacts/units plus the live XDMA character
+  device, active P2/Saturn Go/Bridge services, Saturn Go `/healthz`, and the
+  Bridge TCP listener on port 50001.
+- `software` checks DKMS registration, installed artifacts/configuration, and
+  enabled units but skips live hardware and active-runtime requirements.
+- `none` skips final verification and should be reserved for diagnosis or a
+  deliberately partial install; it is not proof of a working appliance.
+
+## What the End User Should Expect
+
+A first install is not a small package update. It can download hundreds of
+packages, prepare a Python virtual environment, install a Rust toolchain, and
+compile native, kernel, Rust, and web components. Plan for a stable network,
+several gigabytes of free space, continuous power, and roughly 30-60 minutes;
+slow storage or first-time Rust downloads can take longer. The installer does
+not currently enforce a whole-filesystem free-space minimum.
+
+During a normal first run:
+
+1. The wrapper validates the profile, target user, architecture, OS, and basic host tools.
+2. Packages and matching kernel headers are installed non-interactively.
+3. The optional GTK status window is built and launched if a desktop session is available.
+4. USB, I2C, SSH, VNC, front-panel, system-role, and LCD configuration is applied.
+5. The repository/Python environment is prepared, Saturn applications and
+   tools are tested/built, and desktop launchers are installed.
+6. The shutdown waiter and red-running/white-shutdown power LED behavior are configured.
+7. XDMA is built through DKMS, loaded, and configured for future boots.
+8. The P2 runtime and control tool are installed and started.
+9. Saturn Go, nginx, synchronized admin/Remote credentials, Saturn Bridge, and
+   the optional piHPSDR runtime/installer shortcut are installed; FPGA flashing
+   follows only when explicitly enabled and confirmed.
+10. Verification runs, completion/profile files are written, temporary files
+    are cleaned, and a reboot is recommended.
+
+Compiler output is intentionally verbose. Warnings from optional tools do not
+necessarily mean provisioning failed; the authoritative result is the final
+`Saturn provisioning completed successfully` message and
+`/var/lib/saturn-provision/complete`. Any required command failure sets the UI
+state to `FAILED`, records the failing line/command, and exits nonzero.
+
+### Password and login behavior
+
+The Linux login password and the Saturn web password are separate credentials.
+On a new interactive install, the terminal prompts late in the Saturn Go phase:
+
+```text
+Choose a Saturn password (at least five characters), or press Enter to generate one:
+```
+
+The value must contain at least five characters. Pressing Enter, using
+`--non-interactive`, or running through cloud-init generates a device-specific
+value. It is not printed into the general provisioning log; retrieve it locally
+as root:
+
+```bash
+sudo cat /var/lib/saturn-provision/update-manager-admin-password
+```
+
+The username is `admin`. The same managed credential is applied to nginx's
+Saturn Go login and the Saturn Remote TLS listener. A rerun preserves existing
+synchronized credentials instead of resetting them. The root-only plaintext
+file is an initial/recovery convenience and may not exist on older upgraded
+systems whose credential is already synchronized.
+
+### Reboot expectation
+
+Reboot after a successful first install before operating the radio. Boot
+configuration, LCD overlays, early LED state, kernel module loading, user group
+membership, autostart launchers, and enabled services are most accurately
+tested after a fresh boot. The GTK window offers `Reboot Now`; a terminal-only
+install can use:
+
+```bash
+sudo systemctl reboot
+```
 
 ## What It Does
 
@@ -43,6 +147,11 @@ installation sequence.
 - configures the power-switch/front-panel LED helper so BCM15 is driven red during normal operation and white on shutdown
 - installs a root-owned provisioning power helper so the desktop UI can request reboot reliably at the end of first-boot setup
 - optionally installs `p2app-control` tray control (AppIndicator-based)
+- when the detected front-panel state is `NONE`, installs P2 with panel mode
+  off; the radio runtime remains installed and supported
+- installs the shutdown waiter in `auto` mode: detected G2V1 hardware uses its
+  own I2C/front-panel shutdown path, while other/no-panel configurations use
+  the guarded GPIO26 waiter
 - optionally installs Update Manager
 - installs Saturn Bridge with its pinned WDSP 2.00 source by default; piHPSDR is an optional desktop application and is no longer a bridge prerequisite
 - installs piHPSDR native build dependencies by default for the standalone desktop and Update Manager installers
@@ -77,17 +186,18 @@ Completion and logs:
 It can show:
 
 - current provisioning stage
-- elapsed time and ETA countdown
+- elapsed time (the installer does not calculate an ETA)
 - toggleable live log panel
 - final success/failure state
 
 Environment controls:
 
 - `SATURN_DESKTOP_UI=auto|1|0` (default: `auto`)
-  - `auto`: launches UI only when an X11 display is available
+  - `auto`: launches when a usable desktop display can be discovered
   - `1`: force attempt to launch UI
   - `0`: disable UI
-- `SATURN_UI_TIMEOUT_SECONDS` (default: `2700`)
+- `SATURN_UI_TIMEOUT_SECONDS` (default: `2700`; compatibility setting passed
+  to the UI, not an installer deadline or ETA)
 - `SATURN_UI_SHOW_LOG_DEFAULT=1|0` (default: `0`)
 - `SATURN_UI_BINARY` (default: `/usr/local/bin/saturn-provision-ui`)
 - `SATURN_UI_STATUS_FILE` (default: `/var/lib/saturn-provision/ui-status`)
@@ -104,11 +214,18 @@ Environment controls:
 
 Notes:
 
-- Cloud-init boots without a desktop session in many images; in that case `auto` mode will skip UI and continue normal provisioning.
-- Provisioning now installs desktop UI prerequisites early (`g++`, `pkg-config`, `libgtk-3-dev`) and attempts to launch the UI near the start of the run.
+- Cloud-init boots without a desktop session in many images; in that case
+  provisioning continues in the log and terminal. The autostart entry can show
+  the UI if a desktop login occurs while provisioning is still active; a
+  successful headless run removes the entry, so it does not display a stale
+  completion window at a later login.
+- On a fresh OS, the package-install phase runs before GTK prerequisites exist.
+  The UI is built and launched immediately after that phase, so watch the
+  terminal or log for the initial package output.
 - Provisioning now installs a per-user autostart entry at `~/.config/autostart/saturn-provision-ui.desktop` for `SATURN_USER` (default `pi`), so the widget appears when that desktop session starts.
 - Provisioning also installs `/usr/local/sbin/saturn-provision-powerctl` plus a restricted sudoers entry so the UI `Reboot Now` action does not depend on an interactive polkit prompt or TTY-bound `systemctl` authorization.
-- Once launched, the provisioning UI remains open after completion until the user clicks `Close`.
+- Once launched, the provisioning UI remains open after completion until the
+  user clicks `Close` or chooses `Reboot Now`.
 - On successful provisioning completion, that autostart entry is removed automatically to avoid launching on every future desktop login.
 - On successful provisioning completion, temporary Saturn artifacts under `/tmp` are cleaned by default (`SATURN_CLEAN_TMP_AFTER_PROVISION=1`).
 - For interactive desktop runs, preserve display environment when escalating, for example:
@@ -178,8 +295,12 @@ Profile mapping:
 Notes:
 
 - The managed block is delimited by `# BEGIN SATURN LCD PROFILE` and `# END SATURN LCD PROFILE`.
-- Re-running provisioning replaces only that managed block.
+- Re-running provisioning replaces that managed block. Before writing it, the
+  helper also removes matching Waveshare DSI panel overlay lines outside the
+  block so duplicate/competing panel overlays are not left active.
 - Existing HDMI lines outside the managed block are left untouched.
+- `SATURN_LCD_PROFILE=none` is a no-op. It does not remove a managed LCD block
+  left by an earlier run; use Saturn LCD Setup to change or recover a profile.
 - Display profile changes generally require reboot to take effect.
 - LCD/profile detection logic is centralized in `scripts/saturn-lcd-lib.sh` so provisioning, CLI detection, and the GTK setup tool resolve profiles the same way.
 - Hardware classification now reads `/proc/device-tree/model` and reports:
@@ -191,6 +312,10 @@ Notes:
 - Auto mode preserves Laurence-style single-DSI 7-inch configs when it finds `dtoverlay=vc4-kms-dsi-waveshare-panel,7_0_inchC,i2c0` paired with `dtoverlay=uart3` or `dtoverlay=uart2-pi5`.
 - Auto mode preserves an existing dual-overlay CM5 7" G2 config when it finds both `dsi1/i2c0` and `dsi0/i2c1` overlay lines already present.
 - Auto mode resolves in this order: `SATURN_LCD_SIZE_INCH` -> existing Waveshare overlay in `config.txt` -> I2C probe (`i2c-10`/`i2c-0` implies 7", `i2c-1` implies 8") -> `SATURN_LCD_AUTO_DEFAULT_SIZE_INCH`.
+- Provisioning sets `SATURN_LCD_AUTO_DEFAULT_SIZE_INCH=7`, so a fresh CM4 with
+  no conclusive overlay or I2C response falls back to the generic 7-inch
+  profile. Set an explicit profile or size before installation when that is
+  not the attached display.
 - `SATURN_LCD_PROFILE=auto` currently applies Raspberry Pi CM4/CM5 overlay rules only; on non-Raspberry-Pi platforms such as Radxa it will log the detected model/vendor and require an explicit profile.
 - After `cm` and size are known, the 7-inch front-panel tiebreaker now separates G2 variants:
   - `CM4 + G2V1/G2V2` -> `${cm}-7-g2-single-dsi`
@@ -199,6 +324,10 @@ Notes:
   - state file values are `G2V1`, `G2V2`, or `NONE`
   - `ZZZS08...` is currently treated as `G2V2`-class hardware for LCD/provisioning purposes
   - a future `RemoteHead` concept should be modeled separately as a system role, not as a front-panel type
+- `NONE` is the expected front-panel result when no Saturn front panel is
+  installed. It does not mean an independently installed Waveshare LCD is
+  missing or unsupported. Existing recognized 7-inch overlay configuration is
+  preserved independently of the front-panel result.
 - provisioning now also records a conservative `system_role` result:
   - `local_saturn` when XDMA is present
   - `remotehead_candidate` when the current heuristic sees `CM5 + G2V2 + no XDMA`
@@ -230,11 +359,16 @@ Notes:
 - `expected_display_type` is the front-panel/system-role expectation and may differ from a user-installed display
 - `configured_display_type` reflects the actual configured LCD/profile result written or preserved in boot config
 - that `system_role` state is reporting-only for now; it does not auto-apply role-specific boot behavior yet
-- `CM5 + 7"` is currently explicit/manual-only in `SATURN_LCD_PROFILE=auto`
+- A fresh/unrecognized `CM5 + 7"` configuration is currently explicit/manual-only in `SATURN_LCD_PROFILE=auto`
   - explicit profiles `cm5-7`, `cm5-7-g2-single-dsi`, and `cm5-7-g2-dual-dsi` are still available for Saturn LCD Setup and manual testing
-  - auto mode now refuses to pick a CM5 7-inch profile until that path is validated under Trixie
-- Safe LCD detection rerun (no LCD boot-config changes):
-  - `cd /path/to/Saturn && sudo SATURN_LCD_PROFILE=auto SATURN_LCD_DETECT_ONLY=1 ./install.sh --force`
+  - auto mode preserves a recognized existing CM5 7-inch managed, single-DSI,
+    or dual-DSI profile, but refuses to invent one when no recognized config
+    exists
+- Lightweight detection that does not run provisioning or change boot config:
+  - `cd /path/to/Saturn && sudo scripts/detect-lcd-profile.sh`
+- `SATURN_LCD_DETECT_ONLY=1` prevents LCD writes only. Using it with
+  `./install.sh --force` still reruns every other provisioning phase and is not
+  a lightweight LCD detector.
 
 ## Saturn LCD Setup Desktop Tool
 
@@ -278,37 +412,143 @@ CLI examples:
 
 ## Manual Installation
 
-Install Debian/Raspberry Pi OS Trixie arm64, clone the repository anywhere, and
-run the canonical entry point:
+Start with a 64-bit Debian 13 or Raspberry Pi OS Trixie installation. The
+installer must run on the Saturn itself, not on the computer used to SSH into
+it.
 
 Requirements:
 
-- run the installer as root (`sudo`)
-- target user exists (`SATURN_USER`, default `pi`)
-- network access for apt and git operations
-- writable boot files (`/boot/firmware/...` or `/boot/...`) for LCD/USB/cmdline updates
+- an `arm64`/`aarch64` host using systemd and `apt`
+- a normal non-root runtime user with a home directory
+- root access through `sudo`
+- stable Internet access and power for package, Git, Rust, and npm downloads
+- several gigabytes of free space
+- writable boot files (`/boot/firmware/...` or `/boot/...`) for LCD, USB, and
+  kernel-command-line changes
+- Saturn/FPGA hardware present when using the default hardware verification
+
+Before starting, decide whether to choose the Saturn web password or let the
+installer generate it. The prompt accepts **five or more characters**; a
+shorter new value stops provisioning. Pressing Enter generates a
+five-character value. This does not change the Linux login password.
 
 ```bash
+cd ~
 sudo apt-get update
 sudo apt-get install -y git
+mkdir -p github
+cd github
 git clone https://github.com/kd4yal2024/Saturn.git
 cd Saturn
-sudo ./install.sh
+./install.sh --dry-run --user "$USER"
+sudo ./install.sh --user "$USER"
 ```
 
-With example overrides:
+Clone as the normal user, not with `sudo`, so updates and builds remain
+user-owned. Also clone from the home directory (or another writable directory):
+running `git clone` while in `/var`, `/var/log`, or `/` normally fails with
+`Permission denied`.
+
+The dry run prints the resolved repository, user, profile, feature choices, and
+verification mode without changing the host. Remove it only after confirming
+those values. If the runtime account is actually `pi`, `sudo ./install.sh`
+selects it automatically; `--user` is clearer on systems with another account.
+
+### Installer options
+
+| Option | Effect |
+| --- | --- |
+| `--user NAME` | Runtime/build account; defaults to `SUDO_USER`, then `pi` |
+| `--profile appliance\|desktop\|image-factory` | Select the defaults described above |
+| `--non-interactive` | Never prompt and generate the five-character Saturn password |
+| `--force` | Ignore a matching completion record and rerun all phases for the current contract |
+| `--verify hardware\|software\|none` | Select final verification strength |
+| `--skip-packages` | Do not run apt; all dependencies must already exist |
+| `--skip-driver` | Do not install or load XDMA through DKMS |
+| `--skip-p2` | Do not build/install `p2app.service` |
+| `--skip-saturn-go` | Do not install Saturn Go or Saturn Bridge |
+| `--skip-verify` | Alias for `--verify none` |
+| `--dry-run` | Print the resolved install contract without changing the host |
+
+Examples:
 
 - `sudo ./install.sh --profile desktop`
 - `sudo ./install.sh --profile image-factory`
-- `sudo ./install.sh --force`
+- `sudo SATURN_LCD_PROFILE=none ./install.sh` when intentionally leaving boot
+  LCD configuration untouched
+- `sudo SATURN_LCD_PROFILE=cm4-8 ./install.sh` when the automatic choice is not
+  appropriate
 
-Behavior notes:
+Do not use skip flags merely to work around a failure. They deliberately omit
+parts of the appliance and can also make hardware verification fail. The
+normal recovery action is to fix the reported cause and rerun the same command.
 
-- the completion marker is `/var/lib/saturn-provision/complete`
-- expensive phases resume from `/var/lib/saturn-provision/phases/`
-- `--force` performs an intentional full rerun
-- user lookup is bounded and fails with a clear error instead of waiting forever
-- when already provisioned and not forced, UI status is `SKIPPED` (not `SUCCESS`)
+### Interruption, rerun, and update behavior
+
+- A matching completed install exits successfully as `SKIPPED`; it does not
+  rebuild an already completed appliance.
+- A failed install records checkpoints under
+  `/var/lib/saturn-provision/phases/`. Rerunning the same command resumes
+  completed expensive phases and reruns the failed phase from its beginning.
+- The completion contract includes the installer schema, repository commit,
+  kernel, profile, runtime user/path, verification mode, and material feature
+  options. A changed contract reruns affected work and reuses only compatible
+  checkpoints.
+- `--force` bypasses the completion record and clears phase checkpoints for the
+  current contract. It is intended for a deliberate full reprovision, not the
+  first response to a normal failure.
+- The installer uses the exact local checkout. It does not fetch or switch the
+  manual installation behind the operator's back. Update the checkout
+  intentionally before running it when a newer revision is wanted.
+- Provisioning does not uninstall older manually installed software or restore
+  arbitrary local boot/service changes. Back up a production system before a
+  major migration.
+
+### Successful-install checklist
+
+After the final success message:
+
+1. Record the Saturn credential path and reboot:
+
+   ```bash
+   sudo cat /var/lib/saturn-provision/update-manager-admin-password
+   sudo systemctl reboot
+   ```
+
+2. After reconnecting, confirm the recorded profile and completion contract:
+
+   ```bash
+   sudo cat /var/lib/saturn-provision/complete
+   sudo cat /var/lib/saturn-provision/profile.env
+   sudo cat /var/lib/saturn-provision/front-panel-type
+   ```
+
+3. On a hardware appliance, check the driver, services, devices, and web health:
+
+   ```bash
+   sudo dkms status -m saturn-xdma
+   sudo systemctl --no-pager --full status saturn-xdma-ready.service p2app.service saturn-go.service saturn-bridge.service
+   ls -l /dev/xdma0_user /dev/xdma/card0/user 2>/dev/null
+   curl -fsS http://127.0.0.1:8080/healthz
+   ```
+
+4. From another LAN computer, open `http://<saturn-ip>/saturn/` and sign in as
+   `admin`. Saturn Remote is available at
+   `https://<saturn-ip>:8443/remote-next`; a newly generated local certificate
+   may require an initial browser trust exception.
+
+5. To change the Saturn password in the current UI, open **System → Custom
+   Scripts**, scroll to the output card, and select **Change Password**. The
+   control requires at least five characters and updates both the
+   nginx Saturn Go login and Saturn Remote credential together. The deferred
+   Saturn Go restart can end the current session, so sign in again with the new
+   value. This location is easy to overlook; it is the current location, not a
+   recommendation about future UI organization.
+
+6. Verify the installed LCD after reboot. A saved front-panel value of `NONE`
+   and a missing `g2-front-9600` serial alias are normal when no Saturn front
+   panel is fitted; they do not indicate a problem with a separate Waveshare
+   LCD.
 
 ## Raspberry Pi Imager Workflow (End-to-End)
 
@@ -316,9 +556,13 @@ This section describes the complete workflow for building an SD card with Raspbe
 
 ### 1. Choose an OS image that supports cloud-init
 
-- This provisioning flow depends on cloud-init.
-- Use an image that has cloud-init enabled (for example Ubuntu Server images in Raspberry Pi Imager, or a custom image where cloud-init is installed and active).
-- If cloud-init is not active on the image, provisioning will not auto-run.
+- Use a 64-bit Debian 13 or Raspberry Pi OS Trixie image with cloud-init
+  installed and enabled. Both conditions matter: an Ubuntu cloud-init image is
+  not a supported Saturn appliance target merely because it includes
+  cloud-init.
+- Confirm that the image uses systemd, `apt`, and the `arm64` architecture.
+- If cloud-init is absent or disabled, use the manual workflow; placing seed
+  files on the boot partition alone will not make provisioning run.
 
 ### 2. Prepare cloud-init inputs from this repo
 
@@ -331,6 +575,9 @@ Copy and customize as needed:
 
 - set `SATURN_USER` to the actual login user that will exist on the target image
 - set `SATURN_REPO_REF` to a release tag or tested commit for a reproducible image
+- leave `SATURN_ADMIN_PASSWORD` blank to generate a unique five-character
+  value, or set at least five characters; it is the Saturn `admin` web credential, not the
+  Linux account password
 - review feature toggles (`SATURN_INSTALL_*`, `SATURN_REBUILD_XDMA`, `SATURN_BUILD_OPTIONAL_TOOLS`, `SATURN_ENABLE_*`, `SATURN_LCD_*`)
 - leave FPGA flashing off by default unless intentionally enabled
 - on current Raspberry Pi OS cloud-init images, preserve the login-user creation in the active `user-data`
@@ -357,6 +604,11 @@ Depending on image behavior:
   - `provision/cloud-init/user-data.example.yaml`
   - `provision/cloud-init/meta-data.example.yaml`
 
+Raspberry Pi Imager behavior varies by image. Verify the actual `user-data`
+written to the card instead of assuming Imager merged its user/network settings
+with this example. The final file must contain both the required login-user
+creation and the Saturn `write_files`/`runcmd` content.
+
 ### 5. First boot execution flow
 
 On first boot, cloud-init processes `user-data` and executes:
@@ -367,13 +619,15 @@ On first boot, cloud-init processes `user-data` and executes:
 - initializes the configured Saturn checkout for `SATURN_USER`
 - fetches and checks out `SATURN_REPO_REF` exactly once
 - runs:
-  - `bash "$SATURN_REPO_DIR/install.sh" --profile appliance --non-interactive`
+  - `bash "$SATURN_REPO_DIR/install.sh" --user "$SATURN_USER" --profile "$SATURN_INSTALL_PROFILE" --non-interactive`
 
 Bootstrap behavior before the main Saturn script now is:
 
 - waits for system clock synchronization before first apt/git activity
 - installs bootstrap prerequisites itself after the clock is sane
 - retries while waiting for `SATURN_USER` to exist
+- makes 20 attempts at `SATURN_USER_RETRY_SECONDS` intervals (about ten minutes
+  with the default 30-second interval)
 - if the configured `SATURN_USER` never appears, falls back to the first normal `/home/*` login user when one exists
 - fails with an explicit bootstrap log message instead of silently stopping before Saturn logging begins
 
@@ -392,6 +646,8 @@ Then `provision-saturn.sh` performs:
   - detects G2V2-class panel hardware by `ZZZS05...` or `ZZZS08...` CAT response
   - records `G2V1`, `G2V2`, or `NONE` in `/var/lib/saturn-provision/front-panel-type`
   - also includes `front_panel_type=...` in `/var/lib/saturn-provision/complete`
+  - `NONE` and a missing front-panel serial alias are expected when no Saturn
+    front panel is fitted; LCD detection/configuration still runs independently
 - udev serial rule installation now receives the detected front-panel type for logging/state, but currently installs the standard `61-g2-serial.rules` file unless explicitly overridden
 - LCD boot profile apply
   - uses the shared logic from `scripts/saturn-lcd-lib.sh`
@@ -417,25 +673,42 @@ Then `provision-saturn.sh` performs:
   - generated `p2app.service` now depends on `saturn-xdma-ready.service` instead of owning the XDMA readiness loop directly
   - installer now waits for `p2app.service` to reach `active/running`
   - if the XDMA kernel module is loaded but `/dev/xdma0_user` is still missing, provisioning logs the condition and continues instead of failing the whole run at the `p2app-control` step
+  - final `hardware` verification will still fail if the required XDMA device
+    never appears; the earlier continuation keeps the diagnosis attached to the
+    correct hardware/driver verification step
   - if a panel does not render the tray icon, run `/usr/local/bin/p2app-control --window` as fallback
 - optional Update Manager install
+- Saturn Go/nginx/Remote credential setup; cloud-init never prompts and writes
+  the generated value root-only to
+  `/var/lib/saturn-provision/update-manager-admin-password`
+- Saturn Bridge install and health/listener verification
+- shutdown-button waiter and BCM15 red-running/white-shutdown LED configuration
 - optional FPGA flash (only if explicitly enabled and confirmed)
-- completion marker write
+- profile/completion marker write only after the selected verification succeeds
 
 ### 6. Verify completion
 
-After boot completes, verify:
+`cloud-init`'s final message means its command returned; the Saturn completion
+file is the authoritative success signal. After the first boot, verify:
 
+- `cloud-init status --wait`
 - `sudo tail -n 200 /var/log/saturn-cloudinit-bootstrap.log`
 - `sudo cat /var/lib/saturn-provision/complete`
+- `sudo cat /var/lib/saturn-provision/profile.env`
 - `sudo cat /var/lib/saturn-provision/front-panel-type`
 - `sudo tail -n 200 /var/log/saturn-provision.log`
-- `sudo systemctl status p2app.service --no-pager`
-- `ls -l /dev/xdma0_user /dev/xdma/card0 2>/dev/null`
+- `sudo dkms status -m saturn-xdma`
+- `sudo systemctl status saturn-xdma-ready.service p2app.service --no-pager`
+- `ls -l /dev/xdma0_user /dev/xdma/card0/user 2>/dev/null`
 
 If Update Manager is enabled, also verify service status:
 
-- `sudo systemctl status saturn-go.service --no-pager`
+- `sudo systemctl status saturn-go.service saturn-bridge.service --no-pager`
+- `curl -fsS http://127.0.0.1:8080/healthz`
+
+Retrieve the generated password with `sudo cat
+/var/lib/saturn-provision/update-manager-admin-password`, then reboot once and
+repeat the hardware/service checks.
 
 ### 7. Re-run behavior
 
@@ -443,15 +716,31 @@ If Update Manager is enabled, also verify service status:
   - it exits cleanly only when the host schema, repository commit, kernel,
     profile, user/path, and material feature options still match
   - a changed contract reuses only compatible completed phase checkpoints
-- To force a full rerun, set:
-  - `sudo ./install.sh --force`
+- A failed first boot does not cause cloud-init `runcmd` to run on every later
+  boot. After correcting the cause, rerun the canonical installer from the
+  checkout:
+  - `cd /home/<user>/github/Saturn && sudo ./install.sh --user <user> --profile appliance --non-interactive`
+- To intentionally discard reusable phase checkpoints for the current
+  contract, add `--force`.
+- `SATURN_FORCE_REPROVISION=1` forces a full run when the bootstrap/installer
+  is invoked; it does not change cloud-init's once-per-instance execution.
+- Keep the `meta-data` `instance-id` unique for each new seed/image instance.
+  Changing it on an already deployed appliance causes cloud-init to treat the
+  seed as a new instance and should be done only deliberately.
 
 ## Cloud-Init Inputs
 
-`cloud-init/user-data.example.yaml` writes `/etc/default/saturn-provision` and executes:
+`cloud-init/user-data.example.yaml` writes `/etc/default/saturn-provision` and
+installs `/usr/local/sbin/saturn-cloudinit-bootstrap.sh`. The `runcmd` invokes
+that helper once for the cloud-init instance. After resolving the user, it
+fetches `SATURN_REPO_REF` at depth one, checks out the fetched commit detached,
+and executes:
 
-- `bash "$SATURN_REPO_DIR/install.sh" --profile appliance --non-interactive`
-- via `/usr/local/sbin/saturn-cloudinit-bootstrap.sh`, which records early bootstrap activity in `/var/log/saturn-cloudinit-bootstrap.log`
+- `bash "$SATURN_REPO_DIR/install.sh" --user "$SATURN_USER" --profile "$SATURN_INSTALL_PROFILE" --non-interactive`
+
+Early bootstrap activity is recorded in
+`/var/log/saturn-cloudinit-bootstrap.log`; the canonical install records its
+work separately in `/var/log/saturn-provision.log`.
 
 Cloud-init bootstrap behavior in the example config:
 
@@ -468,39 +757,111 @@ This keeps Saturn responsible for the first meaningful apt activity, avoids a re
 
 ## Important Defaults
 
-From `user-data.example.yaml`:
+These are the effective defaults in the example appliance seed and canonical
+installer. Explicit `SATURN_*` variables supplied to the process take
+precedence over `/etc/default/saturn-provision`.
 
 - `SATURN_USER=pi`
+- `SATURN_REPO_REF=main` (convenient but not reproducible; use a tested tag or
+  full commit for production images)
+- `SATURN_INSTALL_PROFILE=appliance`
 - `SATURN_USER_RETRY_SECONDS=30`
 - `SATURN_CLOCK_SYNC_WAIT_SECONDS=180`
 - `SATURN_CLOCK_SYNC_POLL_SECONDS=5`
+- `SATURN_INSTALL_PACKAGES=1`
 - `SATURN_INSTALL_UPDATE_MANAGER=1`
+- `SATURN_INSTALL_PIHPSDR=0` (`desktop` profile changes this to `1`)
+- `SATURN_PIHPSDR_INSTALLER_ENABLED=1`
+- `SATURN_INSTALL_SATURN_BRIDGE=1`
+- `SATURN_REQUIRE_SATURN_BRIDGE=1`
 - `SATURN_INSTALL_CLOUD_INIT=0` (automatically `1` for the `image-factory` profile)
 - `SATURN_INSTALL_P2APP_CONTROL=1`
+- `SATURN_RUN_P2_TESTS=1`
 - `SATURN_INSTALL_UDEV_RULES=1`
 - `SATURN_INSTALL_SHUTDOWN_WAITER=1`
 - `SATURN_SHUTDOWN_WAITER_ENABLED_DEFAULT=auto`
 - `SATURN_REBUILD_XDMA=1`
 - `SATURN_BUILD_OPTIONAL_TOOLS=1`
+- `SATURN_INSTALL_DEVELOPER_TOOLS=0` in the appliance example
 - `SATURN_DETECT_FRONT_PANEL=1`
 - `SATURN_ENABLE_I2C=1`
 - `SATURN_ENABLE_SSH=1`
 - `SATURN_ENABLE_VNC=1`
 - `SATURN_LCD_PROFILE=auto`
+- `SATURN_LCD_AUTO_DEFAULT_SIZE_INCH=7`
 - `SATURN_DESKTOP_UI=auto`
-- `SATURN_UI_TIMEOUT_SECONDS=2700`
+- `SATURN_UI_TIMEOUT_SECONDS=2700` (not an install timeout)
 - `SATURN_UI_SHOW_LOG_DEFAULT=0`
+- `SATURN_CLEAN_TMP_AFTER_PROVISION=1`
+- `SATURN_RESUME=1`
+- `SATURN_VERIFY_MODE=hardware` (`image-factory` defaults to `software`)
+- `SATURN_FORCE_REPROVISION=0`
 - `SATURN_FLASH_FPGA=0` (safety default)
 - `SATURN_APT_LOCK_TIMEOUT_SECONDS=120`
 - `SATURN_APT_LOCK_RETRY_INTERVAL_SECONDS=3`
 - `SATURN_ADMIN_PASSWORD=` generates a unique five-character initial password
-- newly supplied passwords must be exactly five characters; existing longer credentials are preserved during upgrades
+- newly supplied passwords must contain at least five characters, with no
+  composition rules; generated passwords contain five characters and existing
+  synchronized credentials are preserved during upgrades
 
 Important safety settings for flashing:
 
 - `SATURN_FLASH_FPGA=0` keeps flashing disabled by default
 - If set to `1`, `SATURN_FLASH_CONFIRM` is required
 - Optional fallback flashing is controlled by `SATURN_FLASH_FALLBACK`
+
+## Failure Diagnosis and Recovery
+
+Start with the final error and the saved phase; do not delete the checkout or
+manually reinstall every dependency. These commands are read-only:
+
+```bash
+sudo cat /var/lib/saturn-provision/current-phase 2>/dev/null
+sudo cat /var/lib/saturn-provision/ui-status 2>/dev/null
+sudo tail -n 200 /var/log/saturn-cloudinit-bootstrap.log 2>/dev/null
+sudo tail -n 300 /var/log/saturn-provision.log
+sudo journalctl -u saturn-xdma-ready -u p2app -u saturn-go -u saturn-bridge -n 150 --no-pager
+```
+
+For XDMA/DKMS failures, inspect both registration and the compiler's actual
+error:
+
+```bash
+uname -r
+sudo dkms status -m saturn-xdma
+sudo find /var/lib/dkms/saturn-xdma -type f -name make.log -print
+sudo find /var/lib/dkms/saturn-xdma -type f -name make.log -exec tail -n 200 {} \;
+```
+
+`The kernel is built without module signing facility` is normally
+informational on this Raspberry Pi kernel; a later `Bad return status` and the
+contents of `make.log` determine whether the build failed.
+
+Common interpretations:
+
+- `install.sh: No such file or directory` means the selected Git ref does not
+  contain the canonical installer. Check `SATURN_REPO_REF` and the checkout
+  before rerunning.
+- `could not create work tree dir ... Permission denied` means `git clone` was
+  started in an unwritable directory. Change to the login user's home and
+  clone there.
+- `Front panel: NONE` or a missing
+  `/dev/serial/by-id/g2-front-9600` is normal when the appliance has no Saturn
+  front panel.
+- A CM5 7-inch auto-selection warning means no recognized existing profile was
+  safe to preserve. Select one with Saturn LCD Setup; do not guess from the
+  front-panel result.
+- No GTK window during early package installation or headless cloud-init is
+  normal. Follow the log with `sudo tail -f /var/log/saturn-provision.log`.
+  (`tail -f FILE` is the command; `cat tail -f FILE` is not.)
+- A password-length failure occurs before Saturn Go deployment when a newly
+  supplied value is shorter than five characters. Rerun and enter at least five
+  characters, press Enter to generate one, or leave
+  `SATURN_ADMIN_PASSWORD=` blank for unattended provisioning.
+
+After fixing the cause, rerun the same canonical install command without
+`--force`; resumable checkpoints avoid repeating completed expensive phases.
+Use `--force` only when a complete from-scratch reprovision is intentional.
 
 ## Repo-Clean Safety Guard
 

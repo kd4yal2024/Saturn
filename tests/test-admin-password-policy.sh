@@ -3,12 +3,30 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 HELPER="$REPO_ROOT/scripts/saturn-admin-password.sh"
+
+validate_password(){
+  local password="$1"
+  bash -c 'source "$1"; validate_password "$2"' _ "$HELPER" "$password"
+}
+
+validate_password abc12
+validate_password abc123
+if validate_password ab12 >/dev/null 2>&1; then
+  printf 'four-character password was incorrectly accepted\n' >&2
+  exit 1
+fi
+if validate_password $'abc12\n' >/dev/null 2>&1; then
+  printf 'password containing a control character was incorrectly accepted\n' >&2
+  exit 1
+fi
+
 if ! sudo -n true >/dev/null 2>&1; then
   if [[ "${CI:-}" == true ]]; then
     printf 'password-policy test requires passwordless sudo in CI\n' >&2
     exit 1
   fi
-  printf 'SKIP: password-policy test requires passwordless sudo\n'
+  printf 'password validation tests passed\n'
+  printf 'SKIP: backend integration requires passwordless sudo\n'
   exit 0
 fi
 TMP_DIR="$(mktemp -d)"
@@ -27,6 +45,10 @@ run_helper(){
 
 run_helper abc12 >/dev/null
 printf '%s\n' abc12 | sudo -n htpasswd -vi "$TMP_DIR/htpasswd" admin >/dev/null
+
+run_helper abc123 >/dev/null
+printf '%s\n' abc123 | sudo -n htpasswd -vi "$TMP_DIR/htpasswd" admin >/dev/null
+
 status_output="$(sudo -n env \
   SATURN_ADMIN_HTPASSWD_FILE="$TMP_DIR/htpasswd" \
   SATURN_ADMIN_DROPIN_DIR="$TMP_DIR/dropin" \
@@ -37,9 +59,4 @@ if run_helper ab12 >/dev/null 2>&1; then
   printf 'four-character password was incorrectly accepted\n' >&2
   exit 1
 fi
-if run_helper abc123 >/dev/null 2>&1; then
-  printf 'six-character password was incorrectly accepted\n' >&2
-  exit 1
-fi
-
 printf 'admin password policy tests passed\n'

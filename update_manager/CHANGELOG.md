@@ -18,8 +18,9 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
   account remains locked.
 - Production Protocol 2 test/build/deploy workflow with a root-owned fixed-path
   broker, service health verification, and automatic binary rollback.
-- Newly set Saturn administrator passwords are exactly five characters with no
-  composition rules. Existing longer credentials remain active during upgrades.
+- Newly set Saturn administrator passwords are at least five characters with no
+  composition rules. Generated passwords remain five characters, and existing
+  synchronized credentials remain active during upgrades.
 - Initial installation and later password changes now use the same
   transactional credential helper, so nginx and Saturn Remote auth are never
   written by separate provisioning implementations.

@@ -7,6 +7,7 @@ All notable changes to provisioning assets are documented in this file.
 ### Changed
 
 - `cloud-init/provision-saturn.sh`
+  - user-supplied Saturn administrator passwords now accept any value of at least five characters; unattended/generated passwords remain five characters
   - now installs piHPSDR native build dependencies whenever the default standalone installer is enabled, preventing the desktop and web runners from failing because they cannot prompt for sudo
   - includes `SATURN_PIHPSDR_INSTALLER_ENABLED` in provisioning contract hashes so changing the installer setting reruns the affected phases
   - `ensure_ui_packages()` now installs `sudo` so the later desktop power-helper `visudo` validation path is satisfied in the current call order
@@ -18,7 +19,7 @@ All notable changes to provisioning assets are documented in this file.
   - provisioning can now also stage a separate standalone Desktop shortcut for a dedicated piHPSDR installer UI after the update-manager install step
 
 - `cloud-init/user-data.example.yaml`
-  - updated the `SATURN_ADMIN_PASSWORD=` comment to document the intended admin/admin first-login default used by provisioning
+  - updated the `SATURN_ADMIN_PASSWORD=` comment to document the five-character minimum, unattended generation, and the root-only recovery-file path without claiming the plaintext is written to the general log
   - invalid `SATURN_CLOCK_SYNC_WAIT_SECONDS` values now emit an explicit bootstrap warning before falling back to the default `180` second wait
 
 - `../linuxdriver/xdma/Makefile` and `../scripts/fix-xdma.sh`
@@ -113,10 +114,21 @@ All notable changes to provisioning assets are documented in this file.
 - `cloud-init/saturn-provision-ui.cpp`
   - reboot requests now verify the real helper exit status instead of treating command spawn success as proof that reboot authorization worked
   - the UI now prefers the installed `saturn-provision-powerctl` helper and reports a visible failure message when reboot could not be requested
+  - `--timeout-seconds` help now states that the retained setting does not enforce an installer deadline
 
 ### Documentation
 
+- `../README.md`
+  - expanded the fresh-install quick start with a normal-user-owned checkout, dry run, minimum-five-character password prompt plus five-character generation/recovery behavior, reboot expectation, and the valid no-front-panel case
+
 - `README.md`
+  - audited the complete manual and cloud-init operator journey against the canonical installer, including supported OS/architecture, profiles, time/space/power expectations, the minimum-five-character password policy, reboot, post-boot verification, resume semantics, and failure recovery
+  - added explicit no-front-panel expectations so `NONE` is not confused with failure to detect an independently installed Waveshare LCD
+  - corrected desktop UI expectations: the initial package phase can precede the UI, elapsed time is shown without an ETA, and the compatibility timeout setting is not an installer deadline
+  - clarified LCD auto-detection precedence, the effective 7-inch fallback, preservation of recognized existing configs, fresh CM5 7-inch refusal, and the difference between lightweight detection and a forced provisioning rerun
+
+- `../update_manager/README.md` and `../update_manager/docs/OPERATIONS_RUNBOOK.md`
+  - documented that the current Change Password control is under System -> Custom Scripts and that it synchronizes the Saturn Go and Saturn Remote credentials
   - documented that provisioning now configures the BCM15 power-switch/front-panel LED helper
   - documented the root-owned provisioning power helper used by the desktop UI reboot action
   - documented the new `/var/lib/saturn-provision/profile.env` factual provisioning summary and its first exported fields

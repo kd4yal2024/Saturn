@@ -58,12 +58,21 @@ That means the explicit `CM5 7"` profiles remain available for manual testing, b
 
 - `CM4 + G2V1/G2V2` -> `cm4-7-g2-single-dsi`
 - `CM5 + 7"` -> explicit/manual-only for now
+- `NONE` -> no G2-specific tiebreaker; this is expected when an independent
+  Waveshare LCD is installed without a Saturn front panel
 
 ## Notes
 
 - Auto LCD classification now records the raw `/proc/device-tree/model` plus a best-effort `platform_vendor`, `module_family`, and `storage_variant`.
 - `SATURN_LCD_PROFILE=auto` is currently limited to Raspberry Pi CM4/CM5 overlay selection. Non-Raspberry-Pi platforms should use an explicit profile until they have their own validated matrix.
 - `SATURN_LCD_PROFILE=auto` now refuses unresolved `CM5 + 7"` combinations and requires an explicit profile until that path is validated.
+- A recognized existing managed, single-DSI, or dual-DSI profile is preserved
+  before fresh auto-selection rules run, including recognized CM5 7-inch
+  configurations.
+- Provisioning's effective ambiguous-size fallback is 7 inches. On a fresh CM4
+  with no recognized overlay/I2C response this yields `cm4-7`; set
+  `SATURN_LCD_SIZE_INCH` or an explicit profile before provisioning when that
+  is not the attached display.
 - Keep only one Waveshare DSI panel overlay active in `config.txt`, except for the CM5 Saturn G2 dual-DSI field profile above.
 - Saturn auto-detect now preserves explicit managed profile ids from the `# Saturn managed LCD profile: ...` comment when present in the managed block.
 - Saturn also preserves Laurence-style single-DSI configs when it sees `dtoverlay=vc4-kms-dsi-waveshare-panel,7_0_inchC,i2c0` paired with the expected UART overlay.
@@ -72,3 +81,6 @@ That means the explicit `CM5 7"` profiles remain available for manual testing, b
 - Auto-detection script:
   - `scripts/detect-lcd-profile.sh`
   - Supports `--json` and `--emit-config` for automation pipelines.
+  - This script is the lightweight, read-only choice. By contrast,
+    `SATURN_LCD_DETECT_ONLY=1 ./install.sh --force` suppresses LCD writes but
+    still reruns the other provisioning phases.

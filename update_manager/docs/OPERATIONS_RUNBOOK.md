@@ -752,6 +752,9 @@ Safety/usage notes:
 
 ### Password Change
 
+The current browser control is on **System → Custom Scripts**, in the output
+card near the bottom of the page. Select **Change Password** there.
+
 `POST /change_password` pipes the new password over stdin to `sudo -n saturn-admin-password.sh set`, which updates `/etc/nginx/.htpasswd` **and** the `SATURN_REMOTE_BASIC_AUTH` drop-in together, then schedules a deferred `saturn-go` restart. Audit alignment with `sudo /usr/local/lib/saturn-go/scripts/saturn-admin-password.sh status`; recover a forgotten password from the console with `... reset` (see "Authentication layers" above).
 
 The installer grants the service user sudoers entries for exactly `saturn-admin-password.sh set` and `status`; no direct `htpasswd` permission is needed.

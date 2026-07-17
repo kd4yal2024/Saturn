@@ -222,6 +222,11 @@ If a script entry does not define `version`, `/get_versions` now returns
 
 ### Change Password
 
+In the current Saturn Go UI, open **System → Custom Scripts**, scroll to the
+output card, and select **Change Password**. This placement is easy to miss;
+the API and synchronized credential behavior below are independent of the page
+on which the control is displayed.
+
 `/change_password` calls the privileged `saturn-admin-password.sh set` helper
 via `sudo -n` (password piped over stdin).
 
@@ -230,8 +235,8 @@ via `sudo -n` (password piped over stdin).
   remote passwords cannot drift
 - A deferred `saturn-go` restart (~2s) applies the TLS-side change
 - Returns explicit guidance when the helper or its sudoers entry is missing
-- Newly set passwords are exactly five characters with no composition rules;
-  existing longer credentials remain valid until changed
+- Newly set passwords are at least five characters with no composition rules;
+  generated passwords remain five characters
 - Console recovery: `sudo saturn-admin-password.sh reset` prints a fresh
   generated five-character password (see `docs/ADMIN_AUTH_SIMPLIFICATION.md`)
 
@@ -423,10 +428,10 @@ component installer used internally by that flow.
 
 Auth bootstrap:
 
-- If `SATURN_ADMIN_PASSWORD` is set, it must be exactly five characters
-- Otherwise an interactive install accepts one five-character password
+- If `SATURN_ADMIN_PASSWORD` is set, it must contain at least five characters
+- Otherwise an interactive install accepts any password of at least five characters
 - In non-interactive mode, the installer generates a five-character password
-- Existing credentials, including longer legacy credentials, are preserved on upgrades
+- Existing synchronized credentials are preserved on upgrades
 
 Installer behavior (current):
 

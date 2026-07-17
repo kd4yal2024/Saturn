@@ -56,7 +56,7 @@ SATURN_FLASH_FALLBACK="${SATURN_FLASH_FALLBACK:-0}"
 SATURN_FLASH_CONFIRM="${SATURN_FLASH_CONFIRM:-}"
 
 SATURN_ADMIN_PASSWORD="${SATURN_ADMIN_PASSWORD:-}"
-SATURN_ADMIN_PASSWORD_LEN=5
+SATURN_ADMIN_PASSWORD_MIN_LEN=5
 SATURN_NONINTERACTIVE="${SATURN_NONINTERACTIVE:-0}"
 SATURN_VERIFY_MODE="${SATURN_VERIFY_MODE:-hardware}"
 SATURN_RESUME="${SATURN_RESUME:-1}"
@@ -541,7 +541,7 @@ generate_password() {
   local hex idx
 
   # Avoid pipelines here: with `set -o pipefail`, `tr | head` can fail on SIGPIPE.
-  while [[ ${#password} -lt $SATURN_ADMIN_PASSWORD_LEN ]]; do
+  while [[ ${#password} -lt $SATURN_ADMIN_PASSWORD_MIN_LEN ]]; do
     hex="$(od -An -N1 -tx1 /dev/urandom)"
     hex="${hex//[[:space:]]/}"
     [[ -n "$hex" ]] || continue
@@ -1570,8 +1570,8 @@ ensure_update_manager_admin_password() {
   password_file="${SATURN_UPDATE_MANAGER_PASSWORD_FILE:-$UPDATE_MANAGER_PASSWORD_FILE_DEFAULT}"
 
   if [[ -n "$SATURN_ADMIN_PASSWORD" ]]; then
-    if [[ ${#SATURN_ADMIN_PASSWORD} -ne $SATURN_ADMIN_PASSWORD_LEN ]]; then
-      die "SATURN_ADMIN_PASSWORD must be exactly ${SATURN_ADMIN_PASSWORD_LEN} characters."
+    if [[ ${#SATURN_ADMIN_PASSWORD} -lt $SATURN_ADMIN_PASSWORD_MIN_LEN ]]; then
+      die "SATURN_ADMIN_PASSWORD must be at least ${SATURN_ADMIN_PASSWORD_MIN_LEN} characters."
     fi
     install -d -m 0755 "$(dirname "$password_file")"
     current_umask="$(umask)"
@@ -1605,8 +1605,8 @@ ensure_update_manager_admin_password() {
 
   if [[ -s "$password_file" ]]; then
     SATURN_ADMIN_PASSWORD="$(head -n 1 "$password_file")"
-    if [[ ${#SATURN_ADMIN_PASSWORD} -ne $SATURN_ADMIN_PASSWORD_LEN ]]; then
-      log "Ignoring an inactive legacy password file that is not exactly ${SATURN_ADMIN_PASSWORD_LEN} characters."
+    if [[ ${#SATURN_ADMIN_PASSWORD} -lt $SATURN_ADMIN_PASSWORD_MIN_LEN ]]; then
+      log "Ignoring an inactive legacy password file shorter than ${SATURN_ADMIN_PASSWORD_MIN_LEN} characters."
       SATURN_ADMIN_PASSWORD=""
     else
       log "Reusing existing update-manager admin password from $password_file."
@@ -1615,11 +1615,11 @@ ensure_update_manager_admin_password() {
   fi
 
   if ! bool_true "$SATURN_NONINTERACTIVE" && [[ -t 0 ]]; then
-    printf 'Choose a five-character Saturn password, or press Enter to generate one: ' >&2
+    printf 'Choose a Saturn password (at least five characters), or press Enter to generate one: ' >&2
     IFS= read -r prompted_password
     if [[ -n "$prompted_password" ]]; then
-      if [[ ${#prompted_password} -ne $SATURN_ADMIN_PASSWORD_LEN ]]; then
-        die "The Saturn password must be exactly ${SATURN_ADMIN_PASSWORD_LEN} characters."
+      if [[ ${#prompted_password} -lt $SATURN_ADMIN_PASSWORD_MIN_LEN ]]; then
+        die "The Saturn password must be at least ${SATURN_ADMIN_PASSWORD_MIN_LEN} characters."
       fi
       SATURN_ADMIN_PASSWORD="$prompted_password"
     fi

@@ -421,7 +421,7 @@ int main(int argc, char **argv)
         {"log-file", 0, 0, G_OPTION_ARG_FILENAME, &arg_log, "Provision log file", "PATH"},
         {"completion-file", 0, 0, G_OPTION_ARG_FILENAME, &arg_completion, "Provision completion marker", "PATH"},
         {"status-file", 0, 0, G_OPTION_ARG_FILENAME, &arg_status, "Provision status file", "PATH"},
-        {"timeout-seconds", 0, 0, G_OPTION_ARG_INT, &arg_timeout, "Expected provision duration in seconds", "SECONDS"},
+        {"timeout-seconds", 0, 0, G_OPTION_ARG_INT, &arg_timeout, "Compatibility setting; does not enforce an installer deadline", "SECONDS"},
         {"show-log", 0, 0, G_OPTION_ARG_NONE, &arg_show_log, "Show live log panel on startup", nullptr},
         {nullptr, 0, 0, G_OPTION_ARG_NONE, nullptr, nullptr, nullptr}};
 

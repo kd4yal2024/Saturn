@@ -19,7 +19,17 @@ pub struct PasswordForm {
 /// htpasswd + the Saturn Remote TLS drop-in) so they cannot drift, then
 /// schedules a deferred saturn-go restart to apply the TLS-side change.
 const PASSWORD_HELPER: &str = "/usr/local/lib/saturn-go/scripts/saturn-admin-password.sh";
-const PASSWORD_LEN: usize = 5;
+const PASSWORD_MIN_LEN: usize = 5;
+
+fn validate_new_password(new_password: &str) -> Result<(), &'static str> {
+    if new_password.chars().count() < PASSWORD_MIN_LEN {
+        return Err("password must be at least 5 characters");
+    }
+    if new_password.chars().any(char::is_control) {
+        return Err("password must not contain control characters");
+    }
+    Ok(())
+}
 
 async fn run_password_helper(new_password: &str) -> Result<std::process::Output, std::io::Error> {
     let mut cmd = Command::new("sudo");
@@ -41,16 +51,10 @@ async fn run_password_helper(new_password: &str) -> Result<std::process::Output,
 pub async fn change_password(
     axum::extract::Form(form): axum::extract::Form<PasswordForm>,
 ) -> impl IntoResponse {
-    if form.new_password.chars().count() != PASSWORD_LEN {
+    if let Err(message) = validate_new_password(&form.new_password) {
         return Json(serde_json::json!({
             "status":"error",
-            "message":"password must be exactly 5 characters"
-        }));
-    }
-    if form.new_password.chars().any(char::is_control) {
-        return Json(serde_json::json!({
-            "status":"error",
-            "message":"password must not contain control characters"
+            "message": message
         }));
     }
 
@@ -200,7 +204,7 @@ mod tests {
 
     // --- change_password validation ---
 
-    /// Passwords that are not exactly 5 characters must be rejected before any
+    /// Passwords shorter than 5 characters must be rejected before any
     /// helper call is made (no external process needed for this path).
     #[tokio::test]
     async fn test_change_password_rejects_short() {
@@ -216,24 +220,21 @@ mod tests {
         let body = axum::body::to_bytes(res.into_body(), 4096).await.unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["status"], "error");
-        assert!(json["message"].as_str().unwrap().contains("exactly 5"));
+        assert!(json["message"].as_str().unwrap().contains("at least 5"));
     }
 
-    #[tokio::test]
-    async fn test_change_password_rejects_long() {
-        let app = axum::Router::new().route("/change_password", post(change_password));
-        let req = Request::builder()
-            .method("POST")
-            .uri("/change_password")
-            .header("content-type", "application/x-www-form-urlencoded")
-            .body(Body::from("new_password=abcdef"))
-            .unwrap();
-        let res = app.oneshot(req).await.unwrap();
-        assert_eq!(res.status(), StatusCode::OK);
-        let body = axum::body::to_bytes(res.into_body(), 4096).await.unwrap();
-        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(json["status"], "error");
-        assert!(json["message"].as_str().unwrap().contains("exactly 5"));
+    #[test]
+    fn test_change_password_accepts_minimum_and_longer_values() {
+        assert!(validate_new_password("abc12").is_ok());
+        assert!(validate_new_password("a-longer-password").is_ok());
+    }
+
+    #[test]
+    fn test_change_password_rejects_control_characters() {
+        assert_eq!(
+            validate_new_password("abc12\n"),
+            Err("password must not contain control characters")
+        );
     }
 
     // --- kill_process validation ---

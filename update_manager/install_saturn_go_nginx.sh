@@ -809,13 +809,14 @@ server {
 }
 NGINX
 
-PASSWORD_LEN=5
+PASSWORD_MIN_LEN=5
+GENERATED_PASSWORD_LEN=5
 REMOTE_AUTH_DROPIN_DIR="/etc/systemd/system/$(basename "$SERVICE_FILE").d"
 REMOTE_AUTH_DROPIN_FILE="$REMOTE_AUTH_DROPIN_DIR/10-remote-auth.conf"
 generate_readable_admin_password() {
   local charset='abcdefghjkmnpqrstuvwxyz23456789'
   local password='' byte index
-  while [[ ${#password} -lt $PASSWORD_LEN ]]; do
+  while [[ ${#password} -lt $GENERATED_PASSWORD_LEN ]]; do
     byte="$(od -An -N1 -tu1 /dev/urandom | tr -d '[:space:]')"
     [[ -n "$byte" ]] || continue
     index=$((byte % ${#charset}))
@@ -838,14 +839,14 @@ if [[ -z "$admin_password" && "$existing_credentials_in_sync" -eq 0 ]]; then
   info "Creating HTTP basic auth credentials for admin user..."
   if [[ -t 0 ]]; then
     while true; do
-      read -r -s -p "Enter admin password (exactly ${PASSWORD_LEN} characters): " admin_password; echo
+      read -r -s -p "Enter admin password (at least ${PASSWORD_MIN_LEN} characters): " admin_password; echo
       read -r -s -p "Confirm admin password: " admin_password_confirm; echo
       if [[ "$admin_password" != "$admin_password_confirm" ]]; then
         warn "Passwords do not match. Try again."
         continue
       fi
-      if [[ ${#admin_password} -ne ${PASSWORD_LEN} ]]; then
-        warn "Password must be exactly ${PASSWORD_LEN} characters."
+      if [[ ${#admin_password} -lt ${PASSWORD_MIN_LEN} ]]; then
+        warn "Password must be at least ${PASSWORD_MIN_LEN} characters."
         continue
       fi
       break
@@ -867,7 +868,7 @@ elif [[ "$existing_credentials_in_sync" -eq 1 ]]; then
   info "Reusing existing synchronized credential backends"
 else
   err "Existing credential state is incomplete; nginx and Saturn Remote cannot be kept synchronized."
-  err "Rerun with SATURN_ADMIN_PASSWORD=<five-characters> to repair both backends."
+  err "Rerun with SATURN_ADMIN_PASSWORD=<at-least-five-characters> to repair both backends."
   exit 1
 fi
 
