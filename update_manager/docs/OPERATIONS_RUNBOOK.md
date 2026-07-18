@@ -707,9 +707,14 @@ Safety/usage notes:
 - If the checkout already exists and `--skip-git` is not selected, the updater pulls `origin/<current-branch>` with `--ff-only` and auto-stashes local changes first when needed.
 - The build step resolves helper scripts from the active Saturn repo root and then runs `scripts/deskhpsdr-test-build-on-current-image.sh --repo ~/github/deskhpsdr`.
 - Before building older deskHPSDR checkouts that still include `src/gpio.c`, the helper applies `scripts/patches/deskhpsdr-libgpiod-v2.patch` with `git apply` when the checkout still needs the local Saturn compatibility fix; if the patch is already present, the helper continues without error.
+- The helper also applies `scripts/patches/deskhpsdr-active-receiver-init.patch`
+  on every supported checkout. This prevents a null `active_receiver` crash
+  when **Connect** starts Saturn XDMA before receiver construction finishes.
 - Current upstream deskHPSDR removed the direct Raspberry Pi GPIO source path. For those checkouts, the helper skips the obsolete patch and builds `deskHPSDR` with `SATURN=ON` for the native G2/XDMA path.
 - The helper keeps PulseAudio client libraries for build compatibility but prefers `pipewire-pulse` at runtime and removes the redundant `pulseaudio` daemon package when PipeWire Pulse is installed.
 - `--no-install-deps`, `--no-clean`, and `--no-desktop-shortcut` map directly to the helper-script build flow.
+- Unless `--no-desktop-shortcut` is selected, the helper installs direct
+  `Type=Application` launchers in the application menu and on the Desktop.
 - After the privileged prerequisite helper verifies the Debian packages, the build helper suppresses deskHPSDR's redundant internal `sudo apt-get` calls while it prepares the repo-local WDSP libraries. Other `sudo` commands retain their normal behavior.
 - If a first build is interrupted, rerun with `--skip-git --no-install-deps --no-clean` to reuse the checkout, installed packages, prepared WDSP libraries, and completed object files.
 - In non-interactive web execution, backup prompts are skipped unless `-y` is selected.

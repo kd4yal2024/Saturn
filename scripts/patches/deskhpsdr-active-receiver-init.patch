@@ -1,0 +1,19 @@
+diff --git a/src/new_protocol.c b/src/new_protocol.c
+--- a/src/new_protocol.c
++++ b/src/new_protocol.c
+@@ -963,6 +963,15 @@ static void new_protocol_high_priority(void) {
+   if (data_socket == -1 && !have_saturn_xdma) {
+     return;
+   }
++  /*
++   * Receiver construction schedules a high-priority update before
++   * radio_create_visual() assigns active_receiver. The update is repeated
++   * after initialization, so skip this premature call instead of
++   * dereferencing a null receiver through vfo_get_tx_vfo().
++   */
++  if (active_receiver == NULL) {
++    return;
++  }
+   pthread_mutex_lock(&hi_prio_mutex);
+   memset(high_priority_buffer_to_radio, 0, sizeof(high_priority_buffer_to_radio));
+   //
