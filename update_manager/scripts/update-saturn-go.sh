@@ -399,6 +399,12 @@ fi
 
 progress 30
 
+BUILD_COMMIT="$(git -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null || true)"
+[[ "$BUILD_COMMIT" =~ ^[0-9a-fA-F]{40}$ ]] \
+  || die "Could not resolve a full Git commit for the staged Saturn Go release: ${BUILD_COMMIT:-unknown}"
+BUILD_COMMIT="${BUILD_COMMIT,,}"
+info "Release commit: $BUILD_COMMIT"
+
 if (( ! SKIP_BUILD )); then
   STATUS_PHASE="build"
   write_status "running" "$STATUS_PHASE" "Building saturn-go release binary"
@@ -412,6 +418,7 @@ if (( ! SKIP_BUILD )); then
     (
       cd "$RUST_DIR"
       export CARGO_BUILD_JOBS="$BUILD_JOBS"
+      export SATURN_BUILD_COMMIT="$BUILD_COMMIT"
       TMPDIR="$BUILD_TMP_DIR" \
       CARGO_TARGET_DIR="$BUILD_TARGET_DIR" \
       nice -n "$BUILD_NICE" ionice -c "$BUILD_IONICE_CLASS" "$CARGO_BIN" build --release -j "$BUILD_JOBS"
@@ -472,6 +479,7 @@ run_cmd mkdir -p "$STAGE_WEB_DIR" "$STAGE_SCRIPTS_DIR"
 if (( ! DRY_RUN )); then
   chmod 0755 "$STAGE_DIR" "$STAGE_WEB_DIR" "$STAGE_SCRIPTS_DIR"
   cp "$BIN_SRC" "$STAGE_DIR/saturn-go"
+  printf '%s\n' "$BUILD_COMMIT" >"$STAGE_DIR/RELEASE_COMMIT"
   if flag_enabled "$BUILD_BRIDGE"; then
     cp "$BRIDGE_BUILD_OUTPUT" "$STAGE_DIR/saturn-bridge"
   fi
@@ -486,6 +494,7 @@ if (( ! DRY_RUN )); then
     cp "$extra_script" "$STAGE_SCRIPTS_DIR/"
   done
   chmod 755 "$STAGE_DIR/saturn-go"
+  chmod 644 "$STAGE_DIR/RELEASE_COMMIT"
   if [[ -f "$STAGE_DIR/saturn-bridge" ]]; then
     chmod 755 "$STAGE_DIR/saturn-bridge"
   fi

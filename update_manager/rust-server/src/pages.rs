@@ -91,10 +91,6 @@ pub async fn remote_next_handler(headers: HeaderMap) -> impl IntoResponse {
     Redirect::temporary(&remote_next_https_url(request_host(&headers)))
 }
 
-pub async fn healthz() -> impl IntoResponse {
-    StatusCode::OK
-}
-
 pub fn route_to_page(path: &str) -> Option<&'static str> {
     match path {
         "/" | "/saturn" | "/saturn/" => Some("overview.html"),
@@ -567,21 +563,5 @@ mod tests {
             .unwrap();
         let res = app.oneshot(req).await.unwrap();
         assert_eq!(res.status(), StatusCode::NOT_FOUND);
-    }
-
-    /// healthz must return 200 regardless of filesystem state.
-    #[tokio::test]
-    async fn test_healthz_returns_200() {
-        let state = test_state();
-        let app = axum::Router::new()
-            .route("/healthz", get(healthz))
-            .with_state(state);
-        let req = Request::builder()
-            .method("GET")
-            .uri("/healthz")
-            .body(Body::empty())
-            .unwrap();
-        let res = app.oneshot(req).await.unwrap();
-        assert_eq!(res.status(), StatusCode::OK);
     }
 }

@@ -4,6 +4,14 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
 
 ## [Unreleased]
 ### Added
+- Split Saturn Go health reporting into `/livez` process liveness and
+  structured `/readyz` dependency/release readiness. Rust builds embed their
+  full Git commit; staged Saturn Go payloads carry the same identity, and the
+  root deployment broker verifies that exact commit after restart before
+  accepting a deployment. `/healthz` remains a temporary liveness alias.
+- The Overview page now reports Saturn Go readiness, the running commit, and
+  any failed required readiness components. The watchdog uses liveness while
+  installation and deployment use target-aware readiness.
 - Unified provisioning entry point (`./install.sh`) shared by manual Trixie
   installs and the cloud-init bootstrap. The appliance engine now supports
   appliance/desktop/image-factory profiles, bounded user discovery, exact-ref

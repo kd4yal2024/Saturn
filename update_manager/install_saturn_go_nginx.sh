@@ -42,7 +42,7 @@ SATURN_SATURNGO_DEPLOY_STATUS_FILE="${SATURN_SATURNGO_DEPLOY_STATUS_FILE:-${SATU
 SATURN_UPDATE_STATE_FILE="${SATURN_UPDATE_STATE_FILE:-${SATURN_STATE_DIR}/update_state.json}"
 SATURN_SNAPSHOT_DIR="${SATURN_SNAPSHOT_DIR:-${SATURN_STATE_DIR}/snapshots}"
 SATURN_STAGING_DIR="${SATURN_STAGING_DIR:-${SATURN_STATE_DIR}/repo-staging}"
-SATURN_WATCHDOG_URL="${SATURN_WATCHDOG_URL:-http://${SATURN_ADDR}/healthz}"
+SATURN_WATCHDOG_URL="${SATURN_WATCHDOG_URL:-http://${SATURN_ADDR}/livez}"
 SATURN_WATCHDOG_INTERVAL="${SATURN_WATCHDOG_INTERVAL:-30s}"
 SATURN_INSTALL_PACKAGES="${SATURN_INSTALL_PACKAGES:-1}"
 SATURN_INSTALL_LEGACY_XDMA_HOOK="${SATURN_INSTALL_LEGACY_XDMA_HOOK:-1}"
@@ -577,7 +577,7 @@ cat >"$WATCHDOG_SCRIPT_PATH" <<'WATCHDOG'
 #!/usr/bin/env bash
 set -euo pipefail
 
-url="${SATURN_WATCHDOG_URL:-http://127.0.0.1:8080/healthz}"
+url="${SATURN_WATCHDOG_URL:-http://127.0.0.1:8080/livez}"
 service="${SATURN_WATCHDOG_SERVICE:-saturn-go.service}"
 timeout="${SATURN_WATCHDOG_TIMEOUT:-10}"
 failure_limit="${SATURN_WATCHDOG_FAILURE_LIMIT:-3}"
@@ -631,7 +631,7 @@ cat >"$SATURN_GO_DEPLOY_CONFIG" <<EOF
 # Managed by install_saturn_go_nginx.sh. This file must remain root-owned.
 RUN_USER="$SERVICE_USER"
 RUN_GROUP="$SERVICE_GROUP"
-SATURN_GO_HEALTH_URL="http://${SATURN_ADDR}/healthz"
+SATURN_GO_HEALTH_URL="http://${SATURN_ADDR}/readyz"
 STAGING_ROOT="$SATURN_STAGING_DIR"
 STATUS_FILE="$SATURN_SATURNGO_DEPLOY_STATUS_FILE"
 SATURN_ROOT="$SATURN_ROOT"
@@ -686,6 +686,12 @@ fi
 ok "Sudoers policy installed at $SUDOERS_FILE"
 
 info "Building Rust server..."
+RUST_BUILD_COMMIT="$(git -C "$REPO_SOURCE_DIR" rev-parse HEAD 2>/dev/null || true)"
+if [[ ! "$RUST_BUILD_COMMIT" =~ ^[0-9a-fA-F]{40}$ ]]; then
+  err "Could not resolve a full Git commit for the Saturn Go build: ${RUST_BUILD_COMMIT:-unknown}"
+  exit 1
+fi
+RUST_BUILD_COMMIT="${RUST_BUILD_COMMIT,,}"
 SATURN_SATURNGO_BUILD_SWAP_FILE="$RUST_BUILD_SWAP_FILE" \
 SATURN_SATURNGO_BUILD_SWAP_MIB="$RUST_BUILD_SWAP_MIB" \
   "$BUILD_PREFLIGHT_HELPER" ensure-swap
@@ -693,7 +699,7 @@ info "Rust build settings: CARGO_BUILD_JOBS=$RUST_BUILD_JOBS TMPDIR=$RUST_BUILD_
 mkdir -p "$RUST_BUILD_TMP_DIR" "$RUST_BUILD_TARGET_DIR"
 chown -R "$BUILD_USER:$BUILD_GROUP" "$RUST_BUILD_TMP_DIR" "$RUST_BUILD_TARGET_DIR"
 pushd "$RUST_SRC_DIR" >/dev/null
-run_as_build_user "cd \"$RUST_SRC_DIR\" && CARGO_BUILD_JOBS=\"$RUST_BUILD_JOBS\" TMPDIR=\"$RUST_BUILD_TMP_DIR\" CARGO_TARGET_DIR=\"$RUST_BUILD_TARGET_DIR\" nice -n \"$RUST_BUILD_NICE\" ionice -c \"$RUST_BUILD_IONICE_CLASS\" \"$RUSTUP_CARGO_BIN\" build --release -j \"$RUST_BUILD_JOBS\""
+run_as_build_user "cd \"$RUST_SRC_DIR\" && SATURN_BUILD_COMMIT=\"$RUST_BUILD_COMMIT\" CARGO_BUILD_JOBS=\"$RUST_BUILD_JOBS\" TMPDIR=\"$RUST_BUILD_TMP_DIR\" CARGO_TARGET_DIR=\"$RUST_BUILD_TARGET_DIR\" nice -n \"$RUST_BUILD_NICE\" ionice -c \"$RUST_BUILD_IONICE_CLASS\" \"$RUSTUP_CARGO_BIN\" build --release -j \"$RUST_BUILD_JOBS\""
 cp -f "$RUST_BUILD_TARGET_DIR/release/saturn-go" "$BIN_DIR/saturn-go"
 popd >/dev/null
 chmod 0755 "$BIN_DIR/saturn-go"
@@ -985,18 +991,18 @@ ok "Service and watchdog enabled and restarted"
 
 install_saturn_bridge_if_requested
 
-info "Waiting for backend health endpoint..."
+info "Waiting for target-aware backend readiness endpoint..."
 healthy=0
 for _ in {1..40}; do
-  if curl -fsS "http://${SATURN_ADDR}/healthz" >/dev/null 2>&1; then
+  if curl -fsS "http://${SATURN_ADDR}/readyz?expected_commit=${RUST_BUILD_COMMIT}" >/dev/null 2>&1; then
     healthy=1
-    ok "Backend is healthy"
+    ok "Backend is ready at commit ${RUST_BUILD_COMMIT}"
     break
   fi
   sleep 0.25
 done
 if [[ $healthy -ne 1 ]]; then
-  err "Backend health check failed at http://${SATURN_ADDR}/healthz"
+  err "Backend readiness check failed for commit ${RUST_BUILD_COMMIT} at http://${SATURN_ADDR}/readyz"
   echo "[INFO] saturn-go.service status:"
   systemctl --no-pager --full status saturn-go.service || true
   echo "[INFO] Recent saturn-go.service logs:"

@@ -1782,8 +1782,8 @@ verify_install() {
         log "VERIFY FAIL: saturn-go.service is not active"
         failed=1
       }
-      curl -fsS --max-time 3 http://127.0.0.1:8080/healthz >/dev/null || {
-        log "VERIFY FAIL: Saturn Go health endpoint failed"
+      curl -fsS --max-time 3 http://127.0.0.1:8080/readyz >/dev/null || {
+        log "VERIFY FAIL: Saturn Go readiness endpoint failed"
         failed=1
       }
     fi

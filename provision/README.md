@@ -42,7 +42,7 @@ Saturn Bridge listener. It will fail by design on an off-hardware image. Use
 Verification modes are deliberate deployment choices:
 
 - `hardware` checks installed artifacts/units plus the live XDMA character
-  device, active P2/Saturn Go/Bridge services, Saturn Go `/healthz`, and the
+  device, active P2/Saturn Go/Bridge services, Saturn Go `/readyz`, and the
   Bridge TCP listener on port 50001.
 - `software` checks DKMS registration, installed artifacts/configuration, and
   enabled units but skips live hardware and active-runtime requirements.
@@ -529,7 +529,7 @@ After the final success message:
    sudo dkms status -m saturn-xdma
    sudo systemctl --no-pager --full status saturn-xdma-ready.service p2app.service saturn-go.service saturn-bridge.service
    ls -l /dev/xdma0_user /dev/xdma/card0/user 2>/dev/null
-   curl -fsS http://127.0.0.1:8080/healthz
+   curl -fsS http://127.0.0.1:8080/readyz
    ```
 
 4. From another LAN computer, open `http://<saturn-ip>/saturn/` and sign in as
@@ -704,7 +704,7 @@ file is the authoritative success signal. After the first boot, verify:
 If Update Manager is enabled, also verify service status:
 
 - `sudo systemctl status saturn-go.service saturn-bridge.service --no-pager`
-- `curl -fsS http://127.0.0.1:8080/healthz`
+- `curl -fsS http://127.0.0.1:8080/readyz`
 
 Retrieve the generated password with `sudo cat
 /var/lib/saturn-provision/update-manager-admin-password`, then reboot once and

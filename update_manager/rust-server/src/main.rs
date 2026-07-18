@@ -1,4 +1,5 @@
 mod auth;
+mod health;
 mod middleware;
 mod monitor;
 mod pages;
@@ -10,11 +11,12 @@ mod tailscale;
 mod update;
 mod util;
 use crate::auth::{change_password, exit_server, kill_process};
+use crate::health::{healthz, livez, readyz};
 use crate::middleware::csrf_protect;
 use crate::monitor::{get_system_data, network_test};
 use crate::pages::{
     asset_handler, backup_handler, custom_handler, deskhpsdr_handler, fallback_handler,
-    fpga_handler, healthz, monitor_handler, overview_handler, p23test_handler, pihpsdr_handler,
+    fpga_handler, monitor_handler, overview_handler, p23test_handler, pihpsdr_handler,
     remote_next_handler, root_handler, saturngo_handler, tailscale_handler, update_handler,
 };
 use crate::remote_tls::{
@@ -263,6 +265,8 @@ async fn main() {
         .route("/tci", get(remote_bridge_ws_handler))
         .route("/monitor", get(monitor_handler))
         .route("/monitor.html", get(monitor_handler))
+        .route("/livez", get(livez))
+        .route("/readyz", get(readyz))
         .route("/healthz", get(healthz))
         .route("/get_versions", get(get_versions))
         .route("/get_scripts", get(get_scripts))

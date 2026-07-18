@@ -38,7 +38,8 @@ Installer actions include:
 - writes NGINX config for `/saturn/*` and SSE route `/saturn/run`
 - writes `saturn-go.service`, `saturn-bridge.service`, watchdog service, and
   watchdog timer
-- waits for backend health at `/healthz`
+- waits for target-aware backend readiness at `/readyz`, including the exact
+  full Git commit embedded in the newly built binary
 
 The normal installer does not require cloud-init to clone DSP sources, build
 piHPSDR, or create the bridge service. Set `SATURN_INSTALL_BRIDGE=0` only for an
@@ -454,7 +455,8 @@ sudo systemctl reload nginx
 Through NGINX (authenticated session in browser) or locally against backend:
 
 ```bash
-curl -fsS http://127.0.0.1:8080/healthz
+curl -fsS http://127.0.0.1:8080/livez
+curl -fsS http://127.0.0.1:8080/readyz | jq .
 curl -fsS http://127.0.0.1:8080/update_status
 curl -fsS http://127.0.0.1:8080/list_repo_roots
 curl -fsS "http://127.0.0.1:8080/run_log?script=update-G2.py&from=0&limit=20"
@@ -821,8 +823,16 @@ Service environment commonly used in deployment:
 - `SATURN_MAX_BODY_BYTES` (default `2147483648`)
 - `SATURN_RESTORE_MAX_UPLOAD_BYTES` (default `2147483648`)
 - `SATURN_NGINX_CLIENT_MAX_BODY_SIZE` (installer default `2G`)
-- `SATURN_WATCHDOG_URL` (default `http://$SATURN_ADDR/healthz`)
+- `SATURN_WATCHDOG_URL` (default `http://$SATURN_ADDR/livez`)
 - `SATURN_WATCHDOG_INTERVAL` (default `30s`)
+
+`/livez` proves only that the Saturn Go process can answer requests. `/readyz`
+checks the embedded release commit, mandatory state writability, configuration,
+free disk space, and Saturn Bridge reachability while reporting P2 and XDMA
+separately. Deployment uses
+`/readyz?expected_commit=<full-40-character-commit>` so an old process cannot
+validate a new staged release. `/healthz` remains a temporary compatibility
+alias for `/livez` and should not be used for deployment validation.
 
 ## Troubleshooting
 

@@ -39,7 +39,7 @@ NGINX_SERVICE="nginx.service"
 BRIDGE_MAX_RATE_KHZ="192"
 BRIDGE_OPUS_ENABLED="1"
 BRIDGE_RF_TX_ENABLED="1"
-SATURN_GO_HEALTH_URL="http://127.0.0.1:8080/healthz"
+SATURN_GO_HEALTH_URL="http://127.0.0.1:8080/readyz"
 
 load_root_config(){
   [[ -f "$CONFIG_FILE" ]] || return 0
@@ -66,6 +66,11 @@ safe_relative_path(){
   done
 }
 
+target_ready_url(){
+  local base_url="$1" expected_commit="$2"
+  printf '%s?expected_commit=%s\n' "${base_url%%\?*}" "$expected_commit"
+}
+
 validate_stage(){
   local stage="$1" enforce_root="$2" run_uid bad path relative listed expected actual
   [[ -d "$stage" ]] || die "stage directory not found: $stage"
@@ -86,6 +91,11 @@ validate_stage(){
   [[ -z "$bad" ]] || die "group/world-writable stage entry rejected: $bad"
 
   [[ -f "$stage/saturn-go" && -x "$stage/saturn-go" ]] || die "missing executable saturn-go payload"
+  [[ -f "$stage/RELEASE_COMMIT" ]] || die "missing RELEASE_COMMIT payload identity"
+  local release_commit
+  release_commit="$(tr -d '\r\n' <"$stage/RELEASE_COMMIT")"
+  [[ "$release_commit" =~ ^[0-9a-f]{40}$ ]] \
+    || die "RELEASE_COMMIT must contain one lowercase full Git commit"
   [[ -d "$stage/webroot" ]] || die "missing webroot payload directory"
   [[ -d "$stage/scripts" ]] || die "missing scripts payload directory"
   [[ -f "$stage/SHA256SUMS" ]] || die "missing SHA256SUMS payload manifest"
@@ -111,7 +121,7 @@ validate_stage(){
   while IFS= read -r listed; do
     [[ "$listed" != /* && "$listed" != *".."* ]] || die "unsafe checksum path: $listed"
     case "$listed" in
-      saturn-go|saturn-bridge|webroot/*|scripts/*) ;;
+      RELEASE_COMMIT|saturn-go|saturn-bridge|webroot/*|scripts/*) ;;
       *) die "checksum manifest names an unsupported payload path: $listed" ;;
     esac
   done < <(awk '{ sub(/^\*/, "", $2); print $2 }' "$stage/SHA256SUMS")
@@ -320,6 +330,8 @@ chmod 0700 "$SNAPSHOT_DIR"
 cp -a --no-dereference "$STAGE_DIR/." "$SNAPSHOT_DIR/"
 chown -R root:root "$SNAPSHOT_DIR"
 STAGE_DIR="$(validate_stage "$SNAPSHOT_DIR" 0)"
+EXPECTED_COMMIT="$(tr -d '\r\n' <"$STAGE_DIR/RELEASE_COMMIT")"
+TARGET_READY_URL="$(target_ready_url "$SATURN_GO_HEALTH_URL" "$EXPECTED_COMMIT")"
 BACKUP_DIR="$(mktemp -d /var/lib/saturn-state/root-deploy-rollback.XXXXXX)"
 chmod 0700 "$BACKUP_DIR"
 if systemctl is-active --quiet "$SATURN_GO_SERVICE"; then
@@ -372,10 +384,10 @@ fi
 systemctl start "$SATURN_GO_SERVICE"
 systemctl is-active --quiet "$SATURN_GO_SERVICE"
 for _ in {1..20}; do
-  curl -fsS --max-time 2 "$SATURN_GO_HEALTH_URL" >/dev/null 2>&1 && break
+  curl -fsS --max-time 2 "$TARGET_READY_URL" >/dev/null 2>&1 && break
   sleep 1
 done
-curl -fsS --max-time 2 "$SATURN_GO_HEALTH_URL" >/dev/null
+curl -fsS --max-time 2 "$TARGET_READY_URL" >/dev/null
 
 refresh_nginx_remote_redirects
 

@@ -113,9 +113,9 @@ Acceptance criteria:
 
 ### REM-0101: Split liveness from readiness
 
-- [ ] Add `/livez` for process liveness.
-- [ ] Add `/readyz` with structured component results.
-- [ ] Preserve `/healthz` temporarily as a compatibility alias with a documented removal plan.
+- [x] Add `/livez` for process liveness.
+- [x] Add `/readyz` with structured component results.
+- [x] Preserve `/healthz` temporarily as a compatibility alias with a documented removal plan.
 
 Minimum readiness checks:
 
@@ -136,10 +136,16 @@ Acceptance criteria:
 
 ### REM-0102: Use readiness consistently
 
-- [ ] Installer verifies `/readyz` rather than unconditional `/healthz`.
+- [x] Installer verifies `/readyz` rather than unconditional `/healthz`.
 - [ ] Deployment and rollback require the expected commit from `/readyz`.
-- [ ] Watchdog distinguishes process death from dependency/readiness failure.
-- [ ] Saturn Go overview displays readiness and installed commit.
+- [x] Watchdog distinguishes process death from dependency/readiness failure.
+- [x] Saturn Go overview displays readiness and installed commit.
+
+The Saturn Go root deployment broker now requires the staged full commit from
+`/readyz` and rolls back a wrong binary. The remaining unchecked deployment
+item is the legacy appliance source-worktree updater in `update.rs`; it will be
+replaced by the versioned Deployment model in Milestone 2 rather than being
+given another source-root health workaround.
 
 Acceptance criteria:
 

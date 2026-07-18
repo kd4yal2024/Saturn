@@ -7,7 +7,7 @@ Saturn Update Manager is deployed as a small appliance-style web stack:
 1. NGINX handles HTTP entry, Basic Auth, and reverse proxy.
 2. Rust backend (`saturn-go`, Axum) serves pages and API endpoints.
 3. Backend launches shell/Python scripts for maintenance tasks.
-4. Systemd keeps the backend running and uses a watchdog timer for health-based restart.
+4. Systemd keeps the backend running and uses `/livez` for process-liveness restart decisions.
 
 The Saturn Remote real-time backend also lives in the repo:
 
@@ -89,7 +89,7 @@ design tokens, local fonts, and vendored browser libraries.
   - Main backend service.
 - `/etc/systemd/system/saturn-go-watchdog.service`
 - `/etc/systemd/system/saturn-go-watchdog.timer`
-  - Periodic health check and restart logic.
+  - Periodic process-liveness check and restart logic.
 - `/usr/local/lib/saturn-go/saturn-health-watchdog.sh`
   - Root-owned watchdog script executed by the watchdog service unit.
 - `/etc/nginx/sites-available/saturn`
@@ -157,6 +157,23 @@ See `SATURN_REMOTE_ARCHITECTURE.md` for the concrete bridge/display contract.
 - Transactional update worktrees are stored in `repo-staging/`.
 - A process-local update activity lock coordinates mutually exclusive update operations (appliance update, appliance rollback, and Update G2 runs).
 - Process-local per-script run-log buffers (in memory) back `/run_log` resume behavior for terminal pages.
+
+## Health Model
+
+- `GET /livez` reports process liveness and the full Git commit embedded in the
+  running binary. The systemd watchdog uses this endpoint so a temporary radio
+  or bridge dependency failure does not create a restart loop.
+- `GET /readyz` returns structured required and optional component results.
+  Release identity, state writability, configuration parsing, free disk space,
+  and Saturn Bridge reachability are required. P2 and XDMA are reported
+  separately so absent hardware does not roll back an otherwise valid
+  application deployment.
+- The installer and Saturn Go root deployment broker call
+  `/readyz?expected_commit=<full-sha>`. A still-running old binary or a staged
+  binary built from the wrong commit therefore cannot validate the target.
+- `GET /healthz` is a temporary compatibility alias for `/livez`; it is not a
+  deployment readiness signal and is scheduled for removal after the 2026
+  transition.
 
 ## Security Model
 

@@ -12,19 +12,22 @@ make_stage(){
   local stage="$1"
   install -d -m 0755 "$stage/webroot/assets/css" "$stage/scripts"
   printf '#!/bin/sh\nexit 0\n' >"$stage/saturn-go"
+  printf '0123456789abcdef0123456789abcdef01234567\n' >"$stage/RELEASE_COMMIT"
   printf '<!doctype html>\n' >"$stage/webroot/index.html"
   printf 'body { color: #fff; }\n' >"$stage/webroot/assets/css/saturn-ui.css"
   printf '#!/bin/sh\nexit 0\n' >"$stage/scripts/status.sh"
   chmod 0755 "$stage/saturn-go" "$stage/scripts/status.sh"
-  chmod 0644 "$stage/webroot/index.html" "$stage/webroot/assets/css/saturn-ui.css"
+  chmod 0644 "$stage/RELEASE_COMMIT" "$stage/webroot/index.html" "$stage/webroot/assets/css/saturn-ui.css"
   refresh_manifest "$stage"
 }
 
 refresh_manifest(){
-  local stage="$1"
+  local stage="$1" manifest_tmp
+  manifest_tmp="$(mktemp "$TMP_ROOT/manifest.XXXXXX")"
   rm -f "$stage/SHA256SUMS"
   (cd "$stage" && find . -type f ! -name SHA256SUMS -printf '%P\0' | \
-    sort -z | xargs -0 sha256sum >SHA256SUMS)
+    sort -z | xargs -0 sha256sum) >"$manifest_tmp"
+  mv "$manifest_tmp" "$stage/SHA256SUMS"
   chmod 0644 "$stage/SHA256SUMS"
 }
 
@@ -39,6 +42,12 @@ expect_rejected(){
 stage="$TMP_ROOT/valid"
 make_stage "$stage"
 "$BROKER" --validate "$stage" >/dev/null
+
+printf 'not-a-full-commit\n' >"$stage/RELEASE_COMMIT"
+refresh_manifest "$stage"
+expect_rejected "$stage" "invalid release commit"
+printf '0123456789abcdef0123456789abcdef01234567\n' >"$stage/RELEASE_COMMIT"
+refresh_manifest "$stage"
 
 chmod 0775 "$stage"
 expect_rejected "$stage" "group-writable stage directory"
@@ -69,6 +78,13 @@ expect_rejected "$stage" "staged executable helper"
 # rewrite helper against both legacy and already-canonical redirect lines.
 # shellcheck disable=SC1090
 source "$BROKER"
+expected_commit='0123456789abcdef0123456789abcdef01234567'
+expected_ready_url="http://127.0.0.1:8080/readyz?expected_commit=$expected_commit"
+actual_ready_url="$(target_ready_url 'http://127.0.0.1:8080/readyz?ignored=1' "$expected_commit")"
+[[ "$actual_ready_url" == "$expected_ready_url" ]] || {
+  printf 'target readiness URL does not bind the staged commit\n' >&2
+  exit 1
+}
 nginx_source="$TMP_ROOT/nginx-source"
 nginx_normalized="$TMP_ROOT/nginx-normalized"
 cat >"$nginx_source" <<'EOF'

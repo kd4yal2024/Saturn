@@ -60,7 +60,9 @@ Backend also enforces same-host checks when `Origin` or `Referer` is present.
 
 | Route | Method | CSRF | Request | Success Response |
 |---|---|---|---|---|
-| `/healthz` | `GET` | No | none | `200 OK` |
+| `/livez` | `GET` | No | none | `200` JSON with process status and embedded full Git commit |
+| `/readyz` | `GET` | No | optional `?expected_commit=<40-hex-sha>` | `200` structured component results when required checks pass; `503` with the same structure when not ready |
+| `/healthz` | `GET` | No | none | Compatibility alias for `/livez`; deprecated after the 2026 release transition |
 | `/get_scripts` | `GET` | No | none | `{ "scripts": { "Category": [...] }, "warnings": [] }` |
 | `/get_flags` | `GET` | No | `?script=<filename>` | `{ "flags": ["--flag", ...] }` |
 | `/get_versions` | `GET` | No | none | `{ "versions": { "script": "version\|unknown" } }` |
@@ -68,6 +70,13 @@ Backend also enforces same-host checks when `Origin` or `Referer` is present.
 | `/custom_scripts` | `POST` | Yes | JSON `{ "filename","name","description","flags","content" }` | `{ "status":"ok", "script": {...} }` |
 | `/custom_scripts_delete` | `POST` | Yes | JSON `{ "filename", "delete_file": bool }` | `{ "status":"ok" }` |
 | `/get_fpga_images` | `GET` | No | none | `{ "dir", "images", "latest_image", "checked", "warning" }` (searches `SATURN_FPGA_DIR`, active repo-root `FPGA/`, and common repo paths for `.bin` images) |
+
+`/readyz` requires the running binary's embedded full Git commit to match the
+expected commit. The installer and root deployment broker always supply the
+staged commit explicitly. State writability, configuration parsing, free disk
+space, and the Saturn Bridge listener are required checks. P2 and XDMA state
+are reported but do not block an application deployment unless
+`SATURN_READY_REQUIRE_P2` is enabled.
 
 ## Repo Root Management
 

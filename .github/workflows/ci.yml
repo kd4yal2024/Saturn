@@ -170,6 +170,7 @@ jobs:
             tests/test-disk-imaging-disabled.sh \
             tests/test-provisioning-contract.sh \
             tests/test-rust-low-memory-build.sh \
+            tests/test-saturn-go-deploy-broker.sh \
             tests/test-saturn-p2-deploy.sh
           bash -n \
             install.sh \
@@ -189,7 +190,8 @@ jobs:
             update_manager/scripts/update-saturn-go.sh \
             update_manager/install_saturn_go_nginx.sh \
             sw_tools/p2app-control/install.sh \
-            tests/test-rust-low-memory-build.sh
+            tests/test-rust-low-memory-build.sh \
+            tests/test-saturn-go-deploy-broker.sh
 
       - name: Validate cloud-init configuration
         run: cloud-init schema --config-file provision/cloud-init/user-data.example.yaml

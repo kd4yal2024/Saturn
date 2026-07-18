@@ -6,7 +6,7 @@ The Saturn Remote frontend ships as `/remote-next` (rendered from `saturn-remote
 
 | Capability | UI | API Endpoints | Scripts / Commands | State / Files |
 |---|---|---|---|---|
-| Appliance overview and shared offline shell | `overview.html`, `templates/assets/` | `GET /`, `GET /overview`, `GET /assets/{*path}` | Local Inter/Tailwind/Chart.js/ansi_up assets; Nginx `/saturn/` proxy | Browser theme preference |
+| Appliance overview and shared offline shell | `overview.html`, `templates/assets/` | `GET /`, `GET /overview`, `GET /readyz`, `GET /assets/{*path}` | Local Inter/Tailwind/Chart.js/ansi_up assets; Nginx `/saturn/` proxy | Browser theme preference |
 | Browser-managed custom script runner with live output | `index.html` (`/custom`) | `POST /run`, `GET /run_log` | `/opt/saturn-go/scripts/*` launched by backend | `custom_scripts.json`, in-memory run-log buffer |
 | Custom script catalog management (add/update/delete + upload) | `index.html` (`/custom`) | `GET/POST /custom_scripts`, `POST /custom_scripts_delete` | Optional script file write/remove in scripts dir | `custom_scripts.json`, `/opt/saturn-go/scripts` |
 | Backend-seeded default custom maintenance scripts | `index.html` (`/custom`) | `GET /custom_scripts` | `cleanup-saturn-logs.sh`, `cleanup-saturn-backups.sh` | `custom_scripts.json`, `/opt/saturn-go/scripts` |
@@ -34,7 +34,7 @@ The Saturn Remote frontend ships as `/remote-next` (rendered from `saturn-remote
 | Repair pack export | `backup.html` | `GET /repair_pack` | `tar -czf -` over key runtime files | Generated manifest in `/tmp` |
 | Runtime/config verification | `backup.html` | `GET /verify_system_config` | Filesystem checks + `systemctl is-active` | N/A |
 | Password change in UI | `index.html` | `POST /change_password` | `sudo -n saturn-admin-password.sh set` (stdin) | `/etc/nginx/.htpasswd` + `saturn-go.service.d/10-remote-auth.conf` |
-| Service self-health watchdog | Not directly in UI | `GET /healthz` consumed by watchdog | `/usr/local/lib/saturn-go/saturn-health-watchdog.sh`, systemd timer/service | `saturn-go-watchdog.*` units |
+| Service liveness/readiness | Overview displays target-aware readiness and the embedded commit; watchdog is not directly in UI | `GET /livez` for watchdog process liveness, `GET /readyz` for dependencies and release identity, compatibility `GET /healthz` alias | `/usr/local/lib/saturn-go/saturn-health-watchdog.sh`, systemd timer/service; deployment broker supplies expected commit | `saturn-go-watchdog.*` units |
 | System monitor dashboard | `monitor.html` | `GET /get_system_data`, `GET /network_test`, `POST /kill_process/{pid}` | `/proc`, sysfs, `curl`, `kill` | N/A |
 | Tailscale VPN enrollment, status, and Remote Serve controls | `tailscale.html` | `GET /tailscale_status`; `POST /tailscale/install`, `/tailscale/up`, `/tailscale/down`, `/tailscale/logout`, `/tailscale/serve` | Root-owned `saturn-tailscale.sh` helper via `sudo -n` | `tailscaled.service` state and Tailscale Serve configuration |
 | FPGA image discovery for flash UI | `fpga.html` | `GET /get_fpga_images` | Directory scan for `.bin` files | `SATURN_FPGA_DIR` or repo paths |

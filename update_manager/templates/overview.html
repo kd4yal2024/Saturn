@@ -128,6 +128,12 @@ async function fetchJson(path){
   return body;
 }
 
+async function fetchStatusJson(path){
+  const response = await fetch(path, { cache:'no-store' });
+  const body = await response.json().catch(()=>({}));
+  return body;
+}
+
 function setService(id, level, label, detail){
   const badge = $(`service-${id}`);
   const detailEl = $(`service-${id}-detail`);
@@ -152,7 +158,7 @@ async function refreshOverview(){
       fetchJson('./bridge_diag'),
       fetchJson('./tailscale_status'),
       fetchJson('./saturngo_deploy_status'),
-      fetchJson('./healthz'),
+      fetchStatusJson('./readyz'),
     ]);
     const system = resultValue(results[0]);
     const p23Status = resultValue(results[1])?.p23 || null;
@@ -160,7 +166,9 @@ async function refreshOverview(){
     const bridge = resultValue(results[3])?.bridge || null;
     const tailscale = resultValue(results[4]);
     const deploy = resultValue(results[5])?.deploy || null;
-    const backendOk = results[6].status === 'fulfilled';
+    const readiness = resultValue(results[6]);
+    const backendReachable = Boolean(readiness);
+    const backendReady = readiness?.ready === true;
 
     if (system){
       const cpu = Array.isArray(system.cpu) ? system.cpu : [];
@@ -197,7 +205,19 @@ async function refreshOverview(){
       $('overview-deploy-detail').textContent = 'No Saturn Go deployment record is available.';
     }
 
-    setService('saturngo', backendOk ? 'ok' : 'bad', backendOk ? 'Healthy' : 'Unavailable', backendOk ? 'Web manager backend responding' : 'Health endpoint unavailable');
+    const buildCommit = String(readiness?.build_commit || 'unknown');
+    const shortCommit = buildCommit.length === 40 ? buildCommit.slice(0, 12) : buildCommit;
+    const failedComponents = readiness?.components
+      ? Object.entries(readiness.components)
+          .filter(([,component])=>component?.required && component?.status !== 'ok')
+          .map(([name])=>name)
+      : [];
+    const backendDetail = backendReady
+      ? `Ready · commit ${shortCommit}`
+      : (backendReachable
+          ? `Not ready · commit ${shortCommit}${failedComponents.length ? ` · failed ${failedComponents.join(', ')}` : ''}`
+          : 'Readiness endpoint unavailable');
+    setService('saturngo', backendReady ? 'ok' : (backendReachable ? 'warn' : 'bad'), backendReady ? 'Ready' : (backendReachable ? 'Not Ready' : 'Unavailable'), backendDetail);
     setService('p2app', radioService === 'active' ? 'ok' : 'bad', radioService === 'active' ? 'Running' : radioService, `PID ${p23Status?.service?.main_pid || 'n/a'} · enabled ${p23Status?.service?.enabled || 'unknown'}`);
     const bridgeActive = String(bridge?.service?.active || 'unknown');
     setService('bridge', bridgeActive === 'active' ? 'ok' : (bridge ? 'warn' : 'bad'), bridgeActive === 'active' ? 'Running' : bridgeActive, `PID ${bridge?.service?.main_pid || 'n/a'} · enabled ${bridge?.service?.enabled || 'unknown'}`);

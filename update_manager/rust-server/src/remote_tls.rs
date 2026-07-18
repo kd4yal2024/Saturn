@@ -28,8 +28,9 @@ use tracing::{error, info, warn};
 
 use crate::{
     delete_remote_profile, get_remote_profiles, get_remote_settings,
+    health::{healthz, livez, readyz},
     middleware::csrf_protect,
-    pages::{healthz, serve_page, REMOTE_NEXT_DEFAULT_QUERY},
+    pages::{serve_page, REMOTE_NEXT_DEFAULT_QUERY},
     save_remote_profile, set_remote_profile_startup, set_remote_settings,
     state::{
         AppState, RemoteProfileDeleteRequest, RemoteProfileSaveRequest,
@@ -223,6 +224,8 @@ pub fn remote_tls_router(state: AppState) -> Router {
         .route("/saturn-remote.html", get(legacy_remote_redirect_handler))
         .route("/remote-next", get(remote_next_page_handler))
         .route("/remote-next.html", get(remote_next_page_handler))
+        .route("/livez", get(livez))
+        .route("/readyz", get(readyz))
         .route("/healthz", get(healthz))
         .route("/remote_settings", get(remote_settings_get_handler))
         .route("/remote_settings", post(remote_settings_post_handler))

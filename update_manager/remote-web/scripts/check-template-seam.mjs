@@ -10,14 +10,15 @@
 // is dead surface creeping back in. Either fails the build.
 
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const remoteWebRoot = resolve(scriptDir, '..');
-const templatePath = resolve(remoteWebRoot, '../templates/saturn-remote-next.html');
+const templatesDir = resolve(remoteWebRoot, '../templates');
+const templatePath = resolve(templatesDir, 'saturn-remote-next.html');
 const entryPath = resolve(remoteWebRoot, 'src/remote-next-entry.ts');
 
 const IDENTIFIER = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
@@ -103,7 +104,7 @@ function bundleApiNames(entrySource) {
 // A syntax error anywhere in an inline block kills that whole block in the
 // browser — the page loads but never wires its handlers. Parse every block
 // with `node --check` so that failure mode is caught before deploy.
-function checkInlineScriptsParse(template) {
+function checkInlineScriptsParse(template, label) {
   const blocks = [...template.matchAll(/<script(?![^>]*\bsrc=)[^>]*>([\s\S]*?)<\/script>/g)];
   const workDir = mkdtempSync(join(tmpdir(), 'seam-parse-'));
   try {
@@ -112,7 +113,7 @@ function checkInlineScriptsParse(template) {
       writeFileSync(file, match[1]);
       const result = spawnSync(process.execPath, ['--check', file], { encoding: 'utf8' });
       if (result.status !== 0) {
-        console.error(`template inline script block ${index} does not parse:`);
+        console.error(`${label} inline script block ${index} does not parse:`);
         console.error(result.stderr.trim());
         console.error('\ncheck-template-seam: FAILED');
         process.exit(1);
@@ -125,7 +126,12 @@ function checkInlineScriptsParse(template) {
 }
 
 const templateSource = readFileSync(templatePath, 'utf8');
-const inlineBlockCount = checkInlineScriptsParse(templateSource);
+let inlineBlockCount = 0;
+let templateCount = 0;
+for (const name of readdirSync(templatesDir).filter((name) => name.endsWith('.html')).sort()) {
+  inlineBlockCount += checkInlineScriptsParse(readFileSync(resolve(templatesDir, name), 'utf8'), name);
+  templateCount += 1;
+}
 const used = templateUsedNames(templateSource);
 const exported = bundleApiNames(readFileSync(entryPath, 'utf8'));
 
@@ -149,5 +155,5 @@ if (missingFromApi.length > 0 || unusedByTemplate.length > 0) {
 
 console.log(
   `check-template-seam: OK — ${exported.size} api entries, all referenced by the template; ` +
-    `${inlineBlockCount} inline script blocks parse`,
+    `${inlineBlockCount} inline script blocks parse across ${templateCount} templates`,
 );
