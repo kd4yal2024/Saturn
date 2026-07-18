@@ -65,6 +65,7 @@ Not all utilities are directly wired into current UI buttons, but are included i
 | `install-shutdown-waiter-service.sh` | Install or refresh `saturn-shutdown-waiter.service` and its default config. Used by Update G2. | `--enabled-default <mode>`, `--saturn-user <user>` |
 | `shutdown-waiter.sh` | Runtime shutdown-waiter payload installed by `install-shutdown-waiter-service.sh`. | none |
 | `saturn-release-build.sh` | Build and validate one complete inactive application release from an exact clean commit; never activates or restarts services. | `--output-root DIR`, `--dry-run` |
+| `saturn-release-install-root.sh` | Root-owned broker that revalidates and installs a completed bundle into `/opt/saturn/releases/<full-commit>` without changing the active release or restarting services. | `--validate BUNDLE`, `BUNDLE` |
 | `saturn-release-manifest.py` | Create or validate the v1 application release manifest and exact SHA-256 inventory. | `create ...`, `validate ...` |
 | `update-saturn-go.sh` | Rebuild/redeploy `saturn-go` from the active Saturn repo root (used by `saturngo.html`). | `--verbose`, `--dry-run`, `--skip-git`, `--skip-build`, `--skip-deploy` |
 | `update-p2app.sh` | Run the Protocol 2 tests, build the active checkout, and hand production deployment to the trusted root broker with verification and rollback. | `SATURN_P2_BUILD_JOBS`, `SATURN_P2_SKIP_TESTS` |

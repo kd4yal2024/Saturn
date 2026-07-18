@@ -26,6 +26,10 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
   policy, structured release manifest, and exact payload checksum validation.
   Release construction runs the normal non-hardware gates and never changes
   the active release pointer.
+- Added the root-owned immutable release installer. It revalidates staged
+  manifests and hashes, rejects unsafe entries and mismatched architectures,
+  copies through a private sibling directory, installs root-owned releases at
+  `/opt/saturn/releases/<full-commit>`, and never activates or restarts them.
 - Unified provisioning entry point (`./install.sh`) shared by manual Trixie
   installs and the cloud-init bootstrap. The appliance engine now supports
   appliance/desktop/image-factory profiles, bounded user discovery, exact-ref

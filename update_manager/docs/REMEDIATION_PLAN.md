@@ -187,6 +187,11 @@ Acceptance criteria:
 
 ### REM-0202: Install into an immutable versioned directory
 
+Implementation is in progress. The root-owned installer, trusted policy
+installation, atomic sibling-directory copy, idempotence, tamper rejection,
+and non-root fixture tests are complete. The checklist remains open until a
+real release bundle is installed and ownership-verified on the appliance.
+
 - [ ] Install the release into `/opt/saturn/releases/<full-commit>`.
 - [ ] Ensure installed release files are not writable by the Saturn Go service user.
 - [ ] Keep mutable settings, credentials, jobs, and logs outside release directories.

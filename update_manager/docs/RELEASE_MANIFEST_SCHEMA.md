@@ -2,8 +2,9 @@
 
 Milestone 2 application releases are built as complete inactive directories.
 The release builder does not install files, switch `/opt/saturn/current`, or
-restart services. A later root-owned deployment transaction validates and
-activates the completed directory.
+restart services. A separate root-owned installer copies a validated bundle
+into its immutable versioned location. A later deployment transaction will
+activate an installed directory.
 
 ## Bundle layout
 
@@ -74,3 +75,30 @@ The default output is:
 
 A failure removes only the temporary build directory. It never changes the
 active release pointer.
+
+## Inactive installation contract
+
+The canonical installer provisions trusted copies of the manifest validator,
+component policy, and `saturn-release-install-root.sh` below
+`/usr/local/lib/saturn-go`. To install a completed bundle without activating
+it, run the root-owned helper with the bundle directory:
+
+```bash
+sudo /usr/local/lib/saturn-go/scripts/saturn-release-install-root.sh \
+  /var/lib/saturn-state/release-staging/<full-commit>
+```
+
+The bundle must be a direct child of the configured staging root, be owned by
+the configured build user, match its full-commit directory name and host
+architecture, contain only regular non-writable files/directories, and pass
+the trusted manifest/component-policy validator. The helper copies into a
+private sibling directory, changes production ownership to `root:root`,
+revalidates the installed copy, flushes it, and then renames it to:
+
+```text
+/opt/saturn/releases/<full-commit>/
+```
+
+An existing valid identical release is accepted idempotently. An invalid
+existing destination fails closed. This operation never creates or changes
+`/opt/saturn/current` and never restarts a service.

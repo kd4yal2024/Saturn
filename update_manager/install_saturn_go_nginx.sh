@@ -29,6 +29,11 @@ SATURN_BRIDGE_INSTALLER_NAME="install-saturn-bridge.sh"
 SATURN_GO_DEPLOY_BROKER_NAME="saturn-go-deploy-root.sh"
 SATURN_GO_DEPLOY_BROKER="$PRIVILEGED_SCRIPTS_DIR/$SATURN_GO_DEPLOY_BROKER_NAME"
 SATURN_GO_DEPLOY_CONFIG="/etc/default/saturn-go-deploy"
+SATURN_RELEASE_INSTALLER_NAME="saturn-release-install-root.sh"
+SATURN_RELEASE_INSTALL_CONFIG="/etc/default/saturn-release-install"
+SATURN_RELEASE_POLICY_DIR="$WATCHDOG_SCRIPT_DIR/release"
+SATURN_RELEASE_MANIFEST_TOOL_NAME="saturn-release-manifest.py"
+SATURN_RELEASE_COMPONENTS_NAME="components-v1.json"
 
 SATURN_ADDR="${SATURN_ADDR:-127.0.0.1:8080}"
 SATURN_MAX_BODY_BYTES="${SATURN_MAX_BODY_BYTES:-2147483648}"
@@ -42,6 +47,8 @@ SATURN_SATURNGO_DEPLOY_STATUS_FILE="${SATURN_SATURNGO_DEPLOY_STATUS_FILE:-${SATU
 SATURN_UPDATE_STATE_FILE="${SATURN_UPDATE_STATE_FILE:-${SATURN_STATE_DIR}/update_state.json}"
 SATURN_SNAPSHOT_DIR="${SATURN_SNAPSHOT_DIR:-${SATURN_STATE_DIR}/snapshots}"
 SATURN_STAGING_DIR="${SATURN_STAGING_DIR:-${SATURN_STATE_DIR}/repo-staging}"
+SATURN_RELEASE_STAGING_DIR="${SATURN_RELEASE_STAGING_DIR:-${SATURN_STATE_DIR}/release-staging}"
+SATURN_RELEASES_ROOT="${SATURN_RELEASES_ROOT:-/opt/saturn/releases}"
 SATURN_WATCHDOG_URL="${SATURN_WATCHDOG_URL:-http://${SATURN_ADDR}/livez}"
 SATURN_WATCHDOG_INTERVAL="${SATURN_WATCHDOG_INTERVAL:-30s}"
 SATURN_INSTALL_PACKAGES="${SATURN_INSTALL_PACKAGES:-1}"
@@ -127,6 +134,7 @@ EXTRA_PACKAGED_SCRIPTS=(
 PRIVILEGED_HELPER_SCRIPTS=(
   "$SOURCE_DIR/scripts/saturn-go-build-preflight.sh"
   "$SOURCE_DIR/scripts/$SATURN_GO_DEPLOY_BROKER_NAME"
+  "$SOURCE_DIR/scripts/$SATURN_RELEASE_INSTALLER_NAME"
   "$SOURCE_DIR/scripts/$SATURN_BRIDGE_INSTALLER_NAME"
   "$ADMIN_PASSWORD_HELPER_SRC"
   "$REPO_SOURCE_DIR/scripts/saturn-flash-fpga.sh"
@@ -163,6 +171,14 @@ for extra_script in "${EXTRA_PACKAGED_SCRIPTS[@]}"; do
     exit 1
   fi
 done
+if [[ ! -f "$SOURCE_DIR/scripts/$SATURN_RELEASE_MANIFEST_TOOL_NAME" ]]; then
+  err "Release manifest validator not found: $SOURCE_DIR/scripts/$SATURN_RELEASE_MANIFEST_TOOL_NAME"
+  exit 1
+fi
+if [[ ! -f "$SOURCE_DIR/release/$SATURN_RELEASE_COMPONENTS_NAME" ]]; then
+  err "Release component policy not found: $SOURCE_DIR/release/$SATURN_RELEASE_COMPONENTS_NAME"
+  exit 1
+fi
 for privileged_script in "${PRIVILEGED_HELPER_SCRIPTS[@]}"; do
   if [[ ! -f "$privileged_script" ]]; then
     err "Privileged helper script not found: $privileged_script"
@@ -491,7 +507,8 @@ install_optional_tailscale
 saturn_remote_bridge_preflight || true
 
 info "Preparing runtime directories..."
-mkdir -p "$BIN_DIR" "$SCRIPTS_DIR" "$WATCHDOG_SCRIPT_DIR" "$PRIVILEGED_SCRIPTS_DIR" "$WEB_ROOT" "$SATURN_STATE_DIR" "$SATURN_SNAPSHOT_DIR" "$SATURN_STAGING_DIR"
+mkdir -p "$BIN_DIR" "$SCRIPTS_DIR" "$WATCHDOG_SCRIPT_DIR" "$PRIVILEGED_SCRIPTS_DIR" "$WEB_ROOT" "$SATURN_STATE_DIR" "$SATURN_SNAPSHOT_DIR" "$SATURN_STAGING_DIR" "$SATURN_RELEASE_STAGING_DIR"
+install -d -m 0755 -o root -g root "$SATURN_RELEASE_POLICY_DIR" "$SATURN_RELEASES_ROOT"
 if [[ -L "$SATURN_LOG_DIR" ]]; then
   err "Refusing symlinked Saturn log directory: $SATURN_LOG_DIR"
   exit 1
@@ -566,6 +583,12 @@ info "Installing privileged helper scripts..."
 for src in "${PRIVILEGED_HELPER_SCRIPTS[@]}"; do
   install -m 0755 -o root -g root "$src" "$PRIVILEGED_SCRIPTS_DIR/$(basename "$src")"
 done
+install -m 0755 -o root -g root \
+  "$SOURCE_DIR/scripts/$SATURN_RELEASE_MANIFEST_TOOL_NAME" \
+  "$PRIVILEGED_SCRIPTS_DIR/$SATURN_RELEASE_MANIFEST_TOOL_NAME"
+install -m 0644 -o root -g root \
+  "$SOURCE_DIR/release/$SATURN_RELEASE_COMPONENTS_NAME" \
+  "$SATURN_RELEASE_POLICY_DIR/$SATURN_RELEASE_COMPONENTS_NAME"
 # Whole-disk imaging is intentionally a local-console maintenance function.
 # Remove helpers installed by older Saturn Go releases so the web service no
 # longer retains sudo-capable imaging, clone, or target-wipe entry points.
@@ -619,6 +642,8 @@ find "$SCRIPTS_DIR" -type f \( -name '*.sh' -o -name '*.py' \) -print0 | xargs -
 find "$SCRIPTS_DIR" -type f ! \( -name '*.sh' -o -name '*.py' \) -print0 | xargs -0 -r chmod 0644
 chown root:root "$WATCHDOG_SCRIPT_DIR" "$PRIVILEGED_SCRIPTS_DIR" "$WATCHDOG_SCRIPT_PATH"
 chmod 0755 "$WATCHDOG_SCRIPT_DIR" "$PRIVILEGED_SCRIPTS_DIR" "$WATCHDOG_SCRIPT_PATH"
+chown root:root "$SATURN_RELEASE_POLICY_DIR" "$SATURN_RELEASES_ROOT"
+chmod 0755 "$SATURN_RELEASE_POLICY_DIR" "$SATURN_RELEASES_ROOT"
 find "$PRIVILEGED_SCRIPTS_DIR" -maxdepth 1 -type f -print0 | xargs -0 -r chown root:root
 find "$PRIVILEGED_SCRIPTS_DIR" -maxdepth 1 -type f -print0 | xargs -0 -r chmod 0755
 chown -R "$SERVICE_USER:$SERVICE_GROUP" "$SCRIPTS_DIR"
@@ -650,6 +675,18 @@ BRIDGE_RF_TX_ENABLED="${SATURN_BRIDGE_RF_TX_ENABLED:-1}"
 EOF
 chown root:root "$SATURN_GO_DEPLOY_CONFIG"
 chmod 0644 "$SATURN_GO_DEPLOY_CONFIG"
+cat >"$SATURN_RELEASE_INSTALL_CONFIG" <<EOF
+# Managed by install_saturn_go_nginx.sh. Parsed as data by the root installer.
+RUN_USER="$SERVICE_USER"
+STAGING_ROOT="$SATURN_RELEASE_STAGING_DIR"
+RELEASES_ROOT="$SATURN_RELEASES_ROOT"
+MANIFEST_TOOL="$PRIVILEGED_SCRIPTS_DIR/$SATURN_RELEASE_MANIFEST_TOOL_NAME"
+COMPONENTS_FILE="$SATURN_RELEASE_POLICY_DIR/$SATURN_RELEASE_COMPONENTS_NAME"
+INSTALL_OWNER="root"
+INSTALL_GROUP="root"
+EOF
+chown root:root "$SATURN_RELEASE_INSTALL_CONFIG"
+chmod 0644 "$SATURN_RELEASE_INSTALL_CONFIG"
 cat >"$SUDOERS_FILE" <<EOF
 # Managed by install_saturn_go_nginx.sh
 Defaults:${SERVICE_USER} secure_path="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
