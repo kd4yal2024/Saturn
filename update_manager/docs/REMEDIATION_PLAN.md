@@ -167,16 +167,18 @@ Target layout:
 
 - [x] Run the low-memory build preflight before Rust compilation and require the configured disk-backed build swap on memory-constrained appliances.
 - [x] Use bounded Rust parallelism (`CARGO_BUILD_JOBS=1` by default on the supported Pi appliance).
-- [~] Define the release manifest schema.
-- [~] Build all normal-release components from one exact commit.
-- [~] Record component hashes and build results.
-- [ ] Run non-hardware unit, parser, native boundary, and web-bundle tests before installation.
-- [ ] Fail without changing the active release when any build or test fails.
+- [x] Define the release manifest schema.
+- [x] Build all normal-release components from one exact commit.
+- [x] Record component hashes and build results.
+- [x] Run non-hardware unit, parser, native boundary, and web-bundle tests before installation.
+- [x] Fail without changing the active release when any build or test fails.
 
-Implementation in progress: `update_manager/scripts/saturn-release-build.sh`
-creates the inactive bundle, while `saturn-release-manifest.py` defines and
-validates schema v1. Items remain in progress until a complete clean-commit
-bundle build passes on the appliance.
+Completed on the supported 1 GiB Pi appliance at commit
+`acf99c35d28da89109a595b3839bd8a8ffaa6ff0`. The builder produced and
+independently validated an inactive schema-v1 bundle containing 17 declared
+components, 75 files, and 11 passed build/test gates. The installed appliance
+remained healthy on its prior commit throughout the build and failed assembly
+attempts removed their incomplete staging directories.
 
 Acceptance criteria:
 
