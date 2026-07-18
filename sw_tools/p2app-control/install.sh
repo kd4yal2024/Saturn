@@ -117,6 +117,12 @@ ensure_radio_service_account() {
       sudo usermod -a -G "$group" "$P2APP_SERVICE_USER"
     fi
   done
+  if id -u "$CONTROL_USER" >/dev/null 2>&1 \
+      && ! id -nG "$CONTROL_USER" | tr ' ' '\n' | grep -Fxq "$P2APP_SERVICE_GROUP"; then
+    sudo usermod -a -G "$P2APP_SERVICE_GROUP" "$CONTROL_USER"
+    echo "[*] Added ${CONTROL_USER} to ${P2APP_SERVICE_GROUP} for piHPSDR/deskHPSDR XDMA access"
+    echo "[*] Log out and back in, or reboot, before using an existing desktop launcher"
+  fi
 }
 
 wait_for_service_running() {

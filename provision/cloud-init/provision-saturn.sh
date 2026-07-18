@@ -1116,7 +1116,9 @@ install_udev_rules() {
     else
       log "Installing udev rules"
     fi
-    SATURN_FRONT_PANEL_TYPE="$SATURN_FRONT_PANEL_TYPE" bash "$script"
+    SATURN_USER="$SATURN_USER" \
+      SATURN_FRONT_PANEL_TYPE="$SATURN_FRONT_PANEL_TYPE" \
+      bash "$script"
   else
     log "WARN: Missing udev script (checked SATURN_REPO_DIR='${SATURN_REPO_DIR:-}' and SCRIPT_DIR='$SCRIPT_DIR')"
   fi
@@ -1715,6 +1717,10 @@ verify_install() {
     fi
     if [[ -e /etc/kernel/postinst.d/saturn-xdma || -L /etc/kernel/postinst.d/saturn-xdma ]]; then
       log "VERIFY FAIL: legacy XDMA post-install hook is active alongside DKMS"
+      failed=1
+    fi
+    if ! id -nG "$SATURN_USER" 2>/dev/null | tr ' ' '\n' | grep -Fxq saturn-radio; then
+      log "VERIFY FAIL: $SATURN_USER is not a member of saturn-radio for local XDMA applications"
       failed=1
     fi
   fi

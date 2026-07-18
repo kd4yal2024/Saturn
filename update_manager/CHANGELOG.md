@@ -3,6 +3,12 @@
 All notable changes to the Saturn Update Manager (Rust) are documented here.
 
 ## [Unreleased]
+### Fixed
+- Provisioning and direct udev/P2 installers now add the configured desktop
+  operator to `saturn-radio`. This preserves group-restricted XDMA device
+  permissions while allowing locally launched piHPSDR and deskHPSDR to open
+  `/dev/xdma0_user` after a new login or reboot.
+
 ### Added
 - Unified provisioning entry point (`./install.sh`) shared by manual Trixie
   installs and the cloud-init bootstrap. The appliance engine now supports

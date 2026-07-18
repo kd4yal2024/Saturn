@@ -27,4 +27,12 @@ ln -s "$REPO_ROOT" "$TMP_DIR/Saturn checkout"
 output="$("$TMP_DIR/Saturn checkout/install.sh" --dry-run --user "$TEST_USER")"
 grep -Fq "repository: $TMP_DIR/Saturn checkout" <<<"$output"
 
+# XDMA device nodes are group-restricted. Canonical and manual installers must
+# grant the configured desktop operator access so piHPSDR and deskHPSDR can
+# open /dev/xdma0_user after p2app.service is stopped.
+grep -Fq "SATURN_USER=\"\$SATURN_USER\"" "$REPO_ROOT/provision/cloud-init/provision-saturn.sh"
+grep -Fq "ensure_operator_xdma_access \"\$OPERATOR_USER\"" "$REPO_ROOT/rules/install-rules.sh"
+grep -Fq "ensure_operator_xdma_access \"\$operator_user\"" "$REPO_ROOT/scripts/install-udev-rules-on-current-image.sh"
+grep -Fq "usermod -a -G \"\$P2APP_SERVICE_GROUP\" \"\$CONTROL_USER\"" "$REPO_ROOT/sw_tools/p2app-control/install.sh"
+
 printf 'provisioning contract tests passed\n'

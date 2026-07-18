@@ -39,6 +39,26 @@ repo_root="$(realpath -m "$repo_root")"
 rules_dir="$repo_root/rules"
 xdma_rules_dir="$repo_root/linuxdriver/etc/udev/rules.d"
 dest_dir="/etc/udev/rules.d"
+operator_user="${SATURN_USER:-${SUDO_USER:-}}"
+
+ensure_operator_xdma_access() {
+  local user="$1"
+
+  if [[ -z "$user" || "$user" == "root" ]]; then
+    return 0
+  fi
+  if ! id -u "$user" >/dev/null 2>&1; then
+    echo "ERROR: Saturn operator user does not exist: $user" >&2
+    return 1
+  fi
+  if id -nG "$user" | tr ' ' '\n' | grep -Fxq saturn-radio; then
+    return 0
+  fi
+
+  usermod -a -G saturn-radio "$user"
+  echo "Added $user to saturn-radio for piHPSDR/deskHPSDR XDMA access."
+  echo "Log out and back in, or reboot, before using an existing desktop launcher."
+}
 
 if [[ ! -d "$repo_root/.git" ]] || [[ ! -f "$repo_root/update_manager/scripts/update-G2.py" ]]; then
   echo "ERROR: Not a Saturn repository root: $repo_root" >&2
@@ -69,6 +89,7 @@ install -d -m 0755 "$dest_dir"
 if ! getent group saturn-radio >/dev/null 2>&1; then
   groupadd --system saturn-radio
 fi
+ensure_operator_xdma_access "$operator_user"
 install -m 0644 "$serial_rules" "$dest_dir/$(basename "$serial_rules")"
 
 if [[ -f "$xdma_rules" ]]; then
