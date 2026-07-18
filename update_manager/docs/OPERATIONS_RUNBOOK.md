@@ -639,6 +639,22 @@ Operational notes:
   `SATURN_SATURNGO_BUILD_NICE`, `SATURN_SATURNGO_BUILD_IONICE_CLASS`,
   `SATURN_SATURNGO_BUILD_SWAP_FILE`, and
   `SATURN_SATURNGO_BUILD_SWAP_MIB` only when intentionally testing.
+- The same preflight and one-job default apply when
+  `install-saturn-bridge.sh` is run directly. This closes the standalone
+  bridge-build path that could otherwise let Cargo choose parallel jobs on a
+  1 GiB Pi.
+- The preflight prints RAM and swap capacity before compiling and refuses to
+  create the 2 GiB swapfile unless at least 512 MiB of filesystem space will
+  remain. A failure here is intentional: free disk space before retrying the
+  build instead of risking an out-of-memory kill or a full root filesystem.
+- `ripgrep`, `shellcheck`, `jq`, `rustfmt`, and `clippy` are optional
+  maintainer/CI tools, not Saturn runtime dependencies. Install them on a
+  development appliance with:
+
+  ```bash
+  sudo apt-get install -y ripgrep shellcheck jq
+  /home/pi/.cargo/bin/rustup component add rustfmt clippy
+  ```
 - Validated on a CM4 Saturn G2 on 2026-06-25 with
   `update-saturn-go.sh --skip-git --skip-deploy --verbose`; the guarded build
   completed successfully in 7m 14s with the 2 GiB build swap active and no

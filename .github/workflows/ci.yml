@@ -169,6 +169,7 @@ jobs:
             tests/test-admin-password-policy.sh \
             tests/test-disk-imaging-disabled.sh \
             tests/test-provisioning-contract.sh \
+            tests/test-rust-low-memory-build.sh \
             tests/test-saturn-p2-deploy.sh
           bash -n \
             install.sh \
@@ -187,7 +188,8 @@ jobs:
             update_manager/scripts/saturn-go-deploy-root.sh \
             update_manager/scripts/update-saturn-go.sh \
             update_manager/install_saturn_go_nginx.sh \
-            sw_tools/p2app-control/install.sh
+            sw_tools/p2app-control/install.sh \
+            tests/test-rust-low-memory-build.sh
 
       - name: Validate cloud-init configuration
         run: cloud-init schema --config-file provision/cloud-init/user-data.example.yaml
@@ -200,6 +202,9 @@ jobs:
 
       - name: Test browser disk-imaging disablement
         run: tests/test-disk-imaging-disabled.sh
+
+      - name: Test low-memory Rust build safeguards
+        run: tests/test-rust-low-memory-build.sh
 
       - name: Test production P2 deployment rollback
         run: tests/test-saturn-p2-deploy.sh

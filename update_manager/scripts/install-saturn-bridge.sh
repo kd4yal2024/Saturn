@@ -11,6 +11,14 @@ SATURN_BRIDGE_BIN="${SATURN_BRIDGE_BIN:-${SATURN_GO_ROOT}/bin/saturn-bridge}"
 SATURN_BRIDGE_SERVICE="${SATURN_BRIDGE_SERVICE:-/etc/systemd/system/saturn-bridge.service}"
 SATURN_BRIDGE_BUILD_PROFILE="${SATURN_BRIDGE_BUILD_PROFILE:-release}"
 SATURN_BRIDGE_CARGO_TARGET_DIR="${SATURN_BRIDGE_CARGO_TARGET_DIR:-${SATURN_BRIDGE_SOURCE_DIR}/target-local}"
+SATURN_BRIDGE_BUILD_TMP_DIR="${SATURN_BRIDGE_BUILD_TMP_DIR:-${SATURN_BRIDGE_SOURCE_DIR}/.tmp}"
+SATURN_BRIDGE_BUILD_JOBS="${SATURN_BRIDGE_BUILD_JOBS:-${SATURN_SATURNGO_BUILD_JOBS:-1}}"
+SATURN_BRIDGE_BUILD_NICE="${SATURN_BRIDGE_BUILD_NICE:-${SATURN_SATURNGO_BUILD_NICE:-15}}"
+SATURN_BRIDGE_BUILD_IONICE_CLASS="${SATURN_BRIDGE_BUILD_IONICE_CLASS:-${SATURN_SATURNGO_BUILD_IONICE_CLASS:-3}}"
+SATURN_BRIDGE_BUILD_SWAP_FILE="${SATURN_BRIDGE_BUILD_SWAP_FILE:-${SATURN_SATURNGO_BUILD_SWAP_FILE:-${SATURN_USER_HOME}/saturn-build.swap}}"
+SATURN_BRIDGE_BUILD_SWAP_MIB="${SATURN_BRIDGE_BUILD_SWAP_MIB:-${SATURN_SATURNGO_BUILD_SWAP_MIB:-2048}}"
+SATURN_BRIDGE_BUILD_PREFLIGHT_HELPER="${SATURN_BRIDGE_BUILD_PREFLIGHT_HELPER:-${SATURN_REPO_ROOT}/update_manager/scripts/saturn-go-build-preflight.sh}"
+SATURN_BRIDGE_INSTALLED_PREFLIGHT_HELPER="${SATURN_BRIDGE_INSTALLED_PREFLIGHT_HELPER:-/usr/local/lib/saturn-go/scripts/saturn-go-build-preflight.sh}"
 SATURN_BRIDGE_RF_TX_ENABLED="${SATURN_BRIDGE_RF_TX_ENABLED:-1}"
 SATURN_BRIDGE_TX_OPUS_DECODE_ENABLED="${SATURN_BRIDGE_TX_OPUS_DECODE_ENABLED:-1}"
 SATURN_BRIDGE_MAX_CLIENT_DDC0_SAMPLE_RATE_KHZ="${SATURN_BRIDGE_MAX_CLIENT_DDC0_SAMPLE_RATE_KHZ:-192}"
@@ -61,6 +69,16 @@ need_dir() {
 
 need_cmd() {
   command -v "$1" >/dev/null 2>&1 || die "Required command not found: $1"
+}
+
+require_positive_integer() {
+  local name="$1" value="$2"
+  [[ "$value" =~ ^[1-9][0-9]*$ ]] || die "$name must be a positive integer, got: $value"
+}
+
+require_nonnegative_integer() {
+  local name="$1" value="$2"
+  [[ "$value" =~ ^[0-9]+$ ]] || die "$name must be a non-negative integer, got: $value"
 }
 
 apt_pkg_installed() {
@@ -119,10 +137,46 @@ ensure_build_directories() {
   build_group="$(id -gn "$build_user")"
   if [[ "$(id -u)" -eq 0 ]]; then
     install -d -m 0755 -o "$build_user" -g "$build_group" \
-      "$SATURN_BRIDGE_CARGO_TARGET_DIR" "$SATURN_BRIDGE_NATIVE_SOURCE_ROOT"
+      "$SATURN_BRIDGE_CARGO_TARGET_DIR" "$SATURN_BRIDGE_NATIVE_SOURCE_ROOT" \
+      "$SATURN_BRIDGE_BUILD_TMP_DIR"
   else
-    mkdir -p "$SATURN_BRIDGE_CARGO_TARGET_DIR" "$SATURN_BRIDGE_NATIVE_SOURCE_ROOT"
+    mkdir -p "$SATURN_BRIDGE_CARGO_TARGET_DIR" "$SATURN_BRIDGE_NATIVE_SOURCE_ROOT" \
+      "$SATURN_BRIDGE_BUILD_TMP_DIR"
   fi
+}
+
+ensure_low_memory_build_capacity() {
+  local build_user helper
+  build_user="$(bridge_build_user)"
+  helper="$SATURN_BRIDGE_BUILD_PREFLIGHT_HELPER"
+  require_positive_integer SATURN_BRIDGE_BUILD_JOBS "$SATURN_BRIDGE_BUILD_JOBS"
+  require_positive_integer SATURN_BRIDGE_BUILD_SWAP_MIB "$SATURN_BRIDGE_BUILD_SWAP_MIB"
+  require_nonnegative_integer SATURN_BRIDGE_BUILD_NICE "$SATURN_BRIDGE_BUILD_NICE"
+  [[ "$SATURN_BRIDGE_BUILD_IONICE_CLASS" =~ ^[0-3]$ ]] \
+    || die "SATURN_BRIDGE_BUILD_IONICE_CLASS must be between 0 and 3, got: $SATURN_BRIDGE_BUILD_IONICE_CLASS"
+  need_file "$helper" "Rust build preflight helper"
+
+  if [[ "$(id -u)" -eq 0 ]]; then
+    env \
+      SATURN_SATURNGO_BUILD_USER="$build_user" \
+      SATURN_SATURNGO_BUILD_SWAP_FILE="$SATURN_BRIDGE_BUILD_SWAP_FILE" \
+      SATURN_SATURNGO_BUILD_SWAP_MIB="$SATURN_BRIDGE_BUILD_SWAP_MIB" \
+      bash "$helper" ensure-swap
+  else
+    if ! env \
+      SATURN_SATURNGO_BUILD_USER="$build_user" \
+      SATURN_SATURNGO_BUILD_SWAP_FILE="$SATURN_BRIDGE_BUILD_SWAP_FILE" \
+      SATURN_SATURNGO_BUILD_SWAP_MIB="$SATURN_BRIDGE_BUILD_SWAP_MIB" \
+      bash "$helper" ensure-swap
+    then
+      [[ -x "$SATURN_BRIDGE_INSTALLED_PREFLIGHT_HELPER" ]] \
+        || die "Build swap is inactive and the installed privileged preflight helper is unavailable: $SATURN_BRIDGE_INSTALLED_PREFLIGHT_HELPER"
+      need_cmd sudo
+      sudo -n "$SATURN_BRIDGE_INSTALLED_PREFLIGHT_HELPER" ensure-swap
+    fi
+  fi
+
+  log "Rust build settings: CARGO_BUILD_JOBS=$SATURN_BRIDGE_BUILD_JOBS TMPDIR=$SATURN_BRIDGE_BUILD_TMP_DIR CARGO_TARGET_DIR=$SATURN_BRIDGE_CARGO_TARGET_DIR nice -n $SATURN_BRIDGE_BUILD_NICE ionice -c $SATURN_BRIDGE_BUILD_IONICE_CLASS"
 }
 
 ensure_pinned_sparse_checkout() {
@@ -207,7 +261,9 @@ verify_bridge_inputs() {
   need_dir "$SATURN_BRIDGE_SOURCE_DIR" "saturn-bridge source directory"
   need_file "$SATURN_BRIDGE_SOURCE_DIR/Cargo.toml" "saturn-bridge Cargo manifest"
   need_cmd git
+  need_cmd ionice
   need_cmd nm
+  need_cmd nice
   need_cmd pkg-config
   need_cmd python3
   pkg-config --exists fftw3 || die "fftw3 development package is required"
@@ -238,9 +294,14 @@ build_bridge() {
 
   log "Building saturn-bridge ($SATURN_BRIDGE_BUILD_PROFILE, WDSP=$SATURN_BRIDGE_WDSP_FLAVOR)"
   run_as_bridge_user env \
+    CARGO_BUILD_JOBS="$SATURN_BRIDGE_BUILD_JOBS" \
     CARGO_TARGET_DIR="$SATURN_BRIDGE_CARGO_TARGET_DIR" \
+    TMPDIR="$SATURN_BRIDGE_BUILD_TMP_DIR" \
     "${native_env[@]}" \
-    cargo "${cargo_args[@]}" --manifest-path "$SATURN_BRIDGE_SOURCE_DIR/Cargo.toml"
+    nice -n "$SATURN_BRIDGE_BUILD_NICE" \
+    ionice -c "$SATURN_BRIDGE_BUILD_IONICE_CLASS" \
+    cargo "${cargo_args[@]}" -j "$SATURN_BRIDGE_BUILD_JOBS" \
+      --manifest-path "$SATURN_BRIDGE_SOURCE_DIR/Cargo.toml"
 }
 
 built_bridge_path() {
@@ -342,6 +403,7 @@ main() {
   if flag_enabled "$SATURN_BRIDGE_BUILD_ONLY"; then
     verify_bridge_inputs
     ensure_build_directories
+    ensure_low_memory_build_capacity
     build_bridge
     verify_built_bridge
     copy_build_only_output
@@ -352,6 +414,7 @@ main() {
   ensure_apt_packages
   verify_bridge_inputs
   ensure_build_directories
+  ensure_low_memory_build_capacity
   build_bridge
   verify_built_bridge
   install_binary

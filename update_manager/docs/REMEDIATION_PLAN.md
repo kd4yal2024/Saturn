@@ -159,8 +159,8 @@ Target layout:
 
 ### REM-0201: Define and build a release bundle
 
-- [ ] Run the low-memory build preflight before Rust compilation and require the configured disk-backed build swap on memory-constrained appliances.
-- [ ] Use bounded Rust parallelism (`CARGO_BUILD_JOBS=1` by default on the supported Pi appliance).
+- [x] Run the low-memory build preflight before Rust compilation and require the configured disk-backed build swap on memory-constrained appliances.
+- [x] Use bounded Rust parallelism (`CARGO_BUILD_JOBS=1` by default on the supported Pi appliance).
 - [ ] Define the release manifest schema.
 - [ ] Build all normal-release components from one exact commit.
 - [ ] Record component hashes and build results.
