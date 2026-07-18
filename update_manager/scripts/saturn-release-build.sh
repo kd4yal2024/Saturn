@@ -23,6 +23,7 @@ BRIDGE_INSTALLER="$REPO_ROOT/update_manager/scripts/install-saturn-bridge.sh"
 DRY_RUN=0
 FINAL_DIR=""
 TEMP_STAGE=""
+declare -a TRACKED_BUILD_OUTPUTS=()
 
 log(){ printf '[saturn-release-build] %s\n' "$*"; }
 die(){ printf '[saturn-release-build] ERROR: %s\n' "$*" >&2; exit 1; }
@@ -40,9 +41,15 @@ EOF
 
 cleanup(){
   local rc="$?"
+  local relative
+  set +e
   if (( rc != 0 )) && [[ -n "$TEMP_STAGE" && -d "$TEMP_STAGE" ]]; then
     rm -rf -- "$TEMP_STAGE"
   fi
+  for relative in "${TRACKED_BUILD_OUTPUTS[@]}"; do
+    git -C "$REPO_ROOT" checkout-index -f -- "$relative"
+  done
+  return "$rc"
 }
 trap cleanup EXIT
 
@@ -101,6 +108,24 @@ ensure_clean_exact_source(){
   REPOSITORY_URL="$(git -C "$REPO_ROOT" config --get remote.origin.url 2>/dev/null || printf 'unknown')"
 }
 
+record_tracked_build_outputs(){
+  local source
+  while IFS= read -r source; do
+    if git -C "$REPO_ROOT" ls-files --error-unmatch "$source" >/dev/null 2>&1; then
+      TRACKED_BUILD_OUTPUTS+=("$source")
+    fi
+  done < <(python3 - "$COMPONENTS_FILE" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as handle:
+    descriptor = json.load(handle)
+for component in descriptor["components"]:
+    print(component["source"])
+PY
+  )
+}
+
 ensure_low_memory_capacity(){
   local total_mib
   total_mib="$(awk '$1 == "MemTotal:" { print int($2 / 1024); exit }' /proc/meminfo)"
@@ -133,7 +158,7 @@ run_test_gates(){
   local server_tmp="$REPO_ROOT/update_manager/rust-server/.tmp"
   local server_target="$REPO_ROOT/update_manager/rust-server/target-local"
   local bridge_tmp="$REPO_ROOT/update_manager/saturn-bridge/.tmp"
-  local bridge_target="$REPO_ROOT/update_manager/saturn-bridge/target-local-test"
+  local bridge_target="$REPO_ROOT/update_manager/saturn-bridge/target-local/stub-tests"
   local remote_web="$REPO_ROOT/update_manager/remote-web"
 
   log "Running Rust server tests"
@@ -219,6 +244,7 @@ build_release_components(){
 
 copy_release_payload(){
   local source relative executable destination
+  log "Assembling inactive release payload"
   run mkdir -p "$TEMP_STAGE/bin" "$TEMP_STAGE/webroot" "$TEMP_STAGE/scripts" "$TEMP_STAGE/share/release"
   if (( DRY_RUN )); then
     log "[dry-run] copy declared component binaries, web assets, and maintenance scripts"
@@ -276,6 +302,7 @@ create_manifest(){
     log "[dry-run] create and validate release-manifest.json and SHA256SUMS"
     return 0
   fi
+  log "Creating and validating release manifest"
   python3 "$MANIFEST_TOOL" create \
     --release-root "$TEMP_STAGE" \
     --repo-root "$REPO_ROOT" \
@@ -313,6 +340,7 @@ need_cmd sha256sum
 source "$WEB_ASSET_HELPERS"
 
 ensure_clean_exact_source
+record_tracked_build_outputs
 FINAL_DIR="$OUTPUT_ROOT/$RELEASE_COMMIT"
 log "Source commit: $RELEASE_COMMIT"
 log "Inactive release destination: $FINAL_DIR"
