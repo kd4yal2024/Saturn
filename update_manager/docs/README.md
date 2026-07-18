@@ -12,12 +12,13 @@ This folder contains the operational and technical documentation for the Rust-ba
 6. `RUST_SUPPLY_CHAIN.md`
 7. `ADMIN_AUTH_SIMPLIFICATION.md`
 8. `XDMA_RELEASE_POLICY.md`
-9. `SATURN_REMOTE_ARCHITECTURE.md`
-10. `SATURN_REMOTE_STATE_STRIP_SPEC.md`
-11. `SATURN_REMOTE_APPLE_SAFARI_VALIDATION.md`
-12. `SATURN_REMOTE_APPLE_SAFARI_RESULTS.md`
-13. `SATURN_REMOTE_SQUELCH_AUDIO_PROFILE_CONTRACT.md`
-14. `SATURN_REMOTE_TX_UPLINK_PHASE38_CONTRACT.md`
+9. `REMEDIATION_PLAN.md`
+10. `SATURN_REMOTE_ARCHITECTURE.md`
+11. `SATURN_REMOTE_STATE_STRIP_SPEC.md`
+12. `SATURN_REMOTE_APPLE_SAFARI_VALIDATION.md`
+13. `SATURN_REMOTE_APPLE_SAFARI_RESULTS.md`
+14. `SATURN_REMOTE_SQUELCH_AUDIO_PROFILE_CONTRACT.md`
+15. `SATURN_REMOTE_TX_UPLINK_PHASE38_CONTRACT.md`
 
 ## Document Guide
 
@@ -53,6 +54,10 @@ This folder contains the operational and technical documentation for the Rust-ba
 
 - `XDMA_RELEASE_POLICY.md`
   - DKMS package versioning, manual postinst-hook takeover, and rollback policy.
+
+- `REMEDIATION_PLAN.md`
+  - Trackable reliability milestones, approved appliance-usability decisions,
+    validation gates, and completion evidence.
 
 - `SATURN_REMOTE_ARCHITECTURE.md`
   - Browser, TLS, bridge, TCI, audio, panadapter, and waterfall architecture

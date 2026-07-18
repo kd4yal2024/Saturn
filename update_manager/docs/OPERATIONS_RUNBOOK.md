@@ -147,7 +147,7 @@ Remote Setup profile notes:
 
 ## Secure Remote Access with Tailscale VPN
 
-Tailscale is the recommended way to reach Saturn Remote from outside the LAN. It is **optional** — nothing in Saturn requires it, and the existing LAN entry points keep working unchanged. The deployment described below provides operator-friendly remote access (real Let's Encrypt cert, MagicDNS hostname, no port-forwarding) while preserving every Saturn security control: HTTP basic auth, RF TX opt-in, and loopback-only internal listeners.
+Tailscale is the recommended way to reach Saturn Remote from outside the LAN. It is **optional** — nothing in Saturn requires it, and the existing LAN entry points keep working unchanged. The deployment described below provides operator-friendly remote access (real Let's Encrypt cert, MagicDNS hostname, no port-forwarding) while preserving every Saturn security control: HTTP basic auth, the visible RF TX gate, and loopback-only internal listeners. Direct Internet port forwarding is unsupported.
 
 ### Why Tailscale Serve, not Funnel
 
@@ -507,22 +507,37 @@ Important:
 - upload size is limited by `SATURN_RESTORE_MAX_UPLOAD_BYTES`
 - non-dry-run full restore acquires the shared update lock; concurrent update actions return `409 Conflict`
 
-### Clone SD Card to USB/SD Reader
+### Manual Whole-Disk Imaging
 
-Recommended workflow from `backup.html`:
+Saturn Go intentionally does not create card images, clone cards, enumerate
+clone targets, or wipe removable devices. Perform these destructive operations
+from a local terminal where the operator can inspect the physical device.
 
-1. Click `Refresh` and select the target device (for example `/dev/sdX`).
-2. Optional: click `Wipe Target` to clear partition/signature metadata before cloning.
-3. Click `Start Clone` and monitor progress/status/log output in the clone panel.
+Before every operation, identify the source and target by model, serial number,
+size, transport, and mount points:
 
-Notes:
+```bash
+lsblk -o NAME,PATH,SIZE,MODEL,SERIAL,TRAN,RM,TYPE,MOUNTPOINTS
+```
 
-- `Wipe Target` is a quick pre-clone wipe (metadata/signatures), not a full secure erase.
-- The clone UI progress bar updates from `clone_pi_to_device.sh` progress messages (best results when `pv` is installed).
-- Device detection uses block devices, not mounted filesystems.
-- Use `lsblk` to verify the reader/card is detected; `df` will not show unmounted targets.
-- Some USB readers only enumerate when the SD card is inserted before plugging in.
-- If the dropdown is empty, check `dmesg -w`, `lsusb`, and `lsblk`.
+To create an image of the running `/dev/mmcblk0` on mounted external storage:
+
+```bash
+cd /home/pi/github/Saturn
+sudo ./update_manager/scripts/make_pi_image.sh --out-dir /mnt/usb --compress
+```
+
+To clone to a removable device, replace `/dev/sdX` only after verifying it with
+`lsblk`. The target is completely overwritten:
+
+```bash
+cd /home/pi/github/Saturn
+sudo ./update_manager/scripts/clone_pi_to_device.sh --target /dev/sdX
+```
+
+Do not run either command remotely over an unreliable VPN or SSH connection.
+Prefer powering down and using a separate workstation/card reader when making
+a distribution master image.
 
 ### Appliance Update
 
@@ -748,7 +763,7 @@ Safety/usage notes:
   - repo-root selection
   - full backup/restore
   - repair pack and config verification
-  - Pi image and removable-device clone workflows
+  - a notice directing whole-disk imaging to the local-console procedure
 
 ### Password Change
 

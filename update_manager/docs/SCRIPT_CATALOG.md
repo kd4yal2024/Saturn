@@ -43,14 +43,16 @@ These are created/registered by backend startup when missing and appear in `/cus
 | `fix-LED-power-button.sh` | Install the BCM15 front-panel LED handler for red-on-boot and white-on-shutdown behavior; script self-elevates with `sudo -n` when launched from the web manager. | none |
 | `setup-eth-fallback.sh` | Configure NetworkManager DHCP-to-APIPA fallback for direct Ethernet links; script self-elevates with `sudo -n` when launched from the web manager. | none |
 
-## Backup Page Workflows
+## Local-Console Disk Maintenance
 
-These are invoked by dedicated backup-page API routes.
+These scripts remain available in the repository for an operator working at a
+local terminal. Saturn Go does not install them as privileged web helpers and
+does not expose disk imaging, cloning, or target wiping through API routes.
 
 | Script | Trigger Route(s) | Purpose |
 |---|---|---|
-| `make_pi_image.sh` | `/pi_image_start` (+ status/cancel/download routes) | Create SD image from `/dev/mmcblk0`, optional shrink/compress, return file for download. |
-| `clone_pi_to_device.sh` | `/pi_clone_start` (+ status/cancel routes) | Clone `/dev/mmcblk0` to selected removable target device. |
+| `make_pi_image.sh` | Manual local-console invocation | Create an SD image from `/dev/mmcblk0`, with optional shrink/compression. |
+| `clone_pi_to_device.sh` | Manual local-console invocation | Clone `/dev/mmcblk0` to an explicitly selected removable target device. |
 
 ## Additional Utilities in Repo
 

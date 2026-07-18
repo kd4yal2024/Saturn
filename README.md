@@ -110,7 +110,7 @@ Saturn Go is the maintenance web UI and API. It provides:
 - Saturn Go self-update
 - piHPSDR/deskHPSDR update pages
 - FPGA flash page
-- backup/restore and Pi imaging tools
+- repository/settings backup and restore tools
 - process/system monitor
 - XDMA Doctor
 - Tailscale setup/status helpers
@@ -127,14 +127,20 @@ Saturn is powerful enough to key RF, flash FPGA images, restart services, and ru
 privileged maintenance helpers. Treat it as an appliance control plane.
 
 - Saturn Go is intended to sit behind nginx basic auth on the LAN path.
+- Saturn supports trusted-LAN access and Tailscale for remote access. Direct
+  Internet port forwarding is unsupported.
+- Raw Protocol 2 and raw TCI are trusted-LAN interfaces; normal remote browser
+  access goes through authenticated Saturn Go and its loopback bridge path.
 - Saturn Remote TLS uses a separate `SATURN_REMOTE_BASIC_AUTH` service
   environment and fails closed when that auth is not configured.
 - Tailscale is optional and should stack with Saturn Remote basic auth; it does
   not replace it.
-- RF TX remains opt-in through bridge/service configuration.
-- Newly set Saturn passwords are at least five characters with no composition
-  rules; generated passwords are five characters. Existing credentials remain
-  valid during upgrades. An
+- RF TX is enabled by default for normal Saturn Remote operation. The effective
+  RF gate is shown in the Remote UI and can be disabled through bridge/service
+  configuration.
+- The five-character password minimum and five-character generated password are
+  intentional appliance-usability decisions; longer passwords remain optional.
+  Existing credentials remain valid during upgrades. An
   unattended install generates a device-specific password and records it in
   `/var/lib/saturn-provision/update-manager-admin-password` (root-only).
 

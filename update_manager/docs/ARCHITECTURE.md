@@ -55,7 +55,8 @@ The Saturn Remote real-time backend also lives in the repo:
 - `fpga.html`
   - Dedicated FPGA flash workflow (`POST /run` with `flash_fpga.sh`) plus image discovery (`GET /get_fpga_images`).
 - `backup.html`
-  - Repo-root selection, full backup/restore, repair pack, Pi image workflow, and SD clone workflow.
+  - Repo-root selection, repository backup/restore, repair pack, and configuration verification.
+  - Whole-disk imaging, cloning, and target wiping are intentionally local-console maintenance functions and are not exposed by Saturn Go.
 - `monitor.html`
   - Real-time system monitoring and process controls.
 - `p23test.html`

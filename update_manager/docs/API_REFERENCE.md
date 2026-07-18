@@ -306,32 +306,14 @@ Behavior:
 - success response includes a `message` telling the user remote sessions
   reconnect in a few seconds
 
-## Pi Image Workflow
+## Whole-Disk Imaging Compatibility Routes
 
-| Route | Method | CSRF | Request | Success Response |
-|---|---|---|---|---|
-| `/pi_image_start` | `POST` | Yes | JSON `{ "shrink":bool, "compress":bool, "out_dir":"/path" }` | `{ "job_id":"piimg-..." }` |
-| `/pi_image_status` | `GET` | No | `?job_id=<id>` | job JSON (`running\|done\|error\|cancelled`) |
-| `/pi_image_cancel` | `POST` | Yes | `?job_id=<id>` | `{ "status":"cancelled" }` |
-| `/pi_image_download` | `GET` | No | `?job_id=<id>` | binary file download |
-
-`/pi_image_download` schedules best-effort cleanup of the image file after download starts.
-
-## Clone SD to Removable Device
-
-| Route | Method | CSRF | Request | Success Response |
-|---|---|---|---|---|
-| `/pi_devices` | `GET` | No | none | `{ "devices": [{ "name", "path", "size_bytes", "model" }, ...] }` |
-| `/pi_wipe_target` | `POST` | Yes | JSON `{ "target":"/dev/sdX" }` | `{ "status":"ok", "message":"...", "log":[...] }` |
-| `/pi_clone_start` | `POST` | Yes | JSON `{ "target":"/dev/sdX" }` | `{ "job_id":"piclone-..." }` |
-| `/pi_clone_status` | `GET` | No | `?job_id=<id>` | clone job JSON |
-| `/pi_clone_cancel` | `POST` | Yes | `?job_id=<id>` | `{ "status":"cancelled" }` |
-
-Notes:
-
-- `/pi_devices` enumerates supported clone targets from `/sys/block`, including USB-attached disks/readers that may report `removable=0`.
-- `/pi_wipe_target` and `/pi_clone_start` reject non-`/dev/*` targets, `/dev/mmcblk0`, and unsupported internal/virtual devices.
-- `/pi_wipe_target` is a quick pre-clone metadata wipe (not a full secure erase): best-effort partition unmount, `wipefs`, optional `sgdisk --zap-all`, and zeroing of the first/last 16 MiB.
+Whole-disk image creation, download, cloning, device enumeration, and target
+wiping are intentionally disabled in Saturn Go. Legacy `/pi_image_*`,
+`/pi_clone_*`, `/pi_devices`, and `/pi_wipe_target` routes return HTTP `410 Gone`
+with a JSON message directing the operator to the local-console procedure in
+the Operations Runbook. Repository/settings backup and restore routes are not
+affected.
 
 ## Monitor and Diagnostics
 

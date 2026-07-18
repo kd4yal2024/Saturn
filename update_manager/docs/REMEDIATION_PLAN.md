@@ -34,7 +34,7 @@ These decisions are approved constraints for this remediation effort:
 - `[A]` RF transmission remains enabled by default for normal Saturn Remote operation.
 - `[A]` Remembered-device login may remain valid for one year to avoid recurring password burden.
 - `[x]` The appliance updater will use the **Deployment model**: stage, build, install, activate, restart, verify the target commit, and automatically roll back on failure.
-- `[x]` Browser-controlled SD-card cloning will be disabled. Disk imaging remains a documented manual maintenance function outside Saturn Go.
+- `[x]` Browser-controlled SD-card imaging, cloning, and target wiping will be disabled. Disk imaging remains a documented manual maintenance function outside Saturn Go.
 - `[x]` Normal application deployment will not build or flash FPGA artifacts. FPGA work requires a firmware maintainer and remains an explicit separate operation.
 
 Existing protections that must not regress:
@@ -74,10 +74,10 @@ The following are not silently changed by a normal application deployment:
 
 ### REM-0001: Publish the supported exposure model
 
-- [ ] Document LAN and Tailscale as supported access methods.
-- [ ] State that direct Internet port forwarding is unsupported.
-- [ ] Document that raw Protocol 2 and raw TCI are trusted-LAN interfaces.
-- [ ] Add firewall/Tailscale guidance without requiring enterprise identity systems.
+- [x] Document LAN and Tailscale as supported access methods.
+- [x] State that direct Internet port forwarding is unsupported.
+- [x] Document that raw Protocol 2 and raw TCI are trusted-LAN interfaces.
+- [x] Add firewall/Tailscale guidance without requiring enterprise identity systems.
 
 Acceptance criteria:
 
@@ -86,22 +86,22 @@ Acceptance criteria:
 
 ### REM-0002: Reconcile intentional authentication and RF behavior
 
-- [ ] Document the five-character minimum as an intentional usability decision.
-- [ ] Document RF TX as enabled by default.
-- [ ] Display the effective RF gate prominently in Saturn Remote.
-- [ ] Preserve optional longer passwords and the existing password-change function.
+- [x] Document the five-character minimum as an intentional usability decision.
+- [x] Document RF TX as enabled by default.
+- [x] Display the effective RF gate prominently in Saturn Remote.
+- [x] Preserve optional longer passwords and the existing password-change function.
 
 Acceptance criteria:
 
 - README, architecture, runbook, UI, installer defaults, and tests agree.
 - A clean install clearly tells the operator whether RF transmission is permitted.
 
-### REM-0003: Disable browser SD-card cloning
+### REM-0003: Disable browser whole-disk imaging and cloning
 
-- [ ] Remove or disable clone/wipe controls in Saturn Go.
-- [ ] Reject the corresponding mutating API routes with an explanatory response, or remove them after compatibility review.
-- [ ] Remove unnecessary clone-related sudo permissions after route removal.
-- [ ] Document a manual command-line imaging procedure with device-selection warnings.
+- [x] Remove image/create/download and clone/wipe controls in Saturn Go.
+- [x] Reject the corresponding API routes with an explanatory `410 Gone` response.
+- [x] Remove unnecessary imaging/clone/wipe sudo permissions and clean up legacy installed helpers.
+- [x] Document a manual command-line imaging procedure with device-selection warnings.
 
 Acceptance criteria:
 
@@ -159,6 +159,8 @@ Target layout:
 
 ### REM-0201: Define and build a release bundle
 
+- [ ] Run the low-memory build preflight before Rust compilation and require the configured disk-backed build swap on memory-constrained appliances.
+- [ ] Use bounded Rust parallelism (`CARGO_BUILD_JOBS=1` by default on the supported Pi appliance).
 - [ ] Define the release manifest schema.
 - [ ] Build all normal-release components from one exact commit.
 - [ ] Record component hashes and build results.
@@ -420,6 +422,7 @@ Until a firmware owner defines that policy:
 
 ### Required on a Saturn appliance before release
 
+- [ ] Verify low-memory build preflight, disk-backed swap activation, and single-job Rust compilation on a 1 GiB appliance.
 - [ ] Deploy new release and verify expected commit
 - [ ] Automatically roll back a deliberately broken release
 - [ ] Reboot with the new release active
@@ -464,8 +467,8 @@ Until a firmware owner defines that policy:
 
 This branch is ready to merge only when:
 
-- [ ] Product decisions are reflected consistently in documentation and UI.
-- [ ] Browser SD-card cloning is disabled and the manual alternative is documented.
+- [x] Product decisions are reflected consistently in documentation and UI.
+- [x] Browser SD-card imaging/cloning is disabled and the manual alternative is documented.
 - [ ] Deployment builds and verifies the exact target commit.
 - [ ] Failed deployment automatically restores the previous verified release.
 - [ ] Restore and critical state writes are transaction-safe.
@@ -481,7 +484,7 @@ Update this section as milestones complete.
 
 | Milestone | Commit/PR | Test evidence | Appliance evidence | Status |
 |---|---|---|---|---|
-| 0 — Contract | — | — | — | Not started |
+| 0 — Contract | Milestone 0 implementation commit | Rust 103/103; template seam; password, provisioning, and imaging-disablement contracts | Hardware-independent | Complete |
 | 1 — Health | — | — | — | Not started |
 | 2 — Deployment | — | — | — | Not started |
 | 3 — Restore | — | — | — | Not started |

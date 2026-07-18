@@ -3,9 +3,8 @@
 Saturn's users are amateur radio operators, often 60+, running the appliance on
 a home LAN and sometimes over Tailscale. Password *maintenance* — not password
 *strength* — is the dominant real-world failure mode. This plan makes auth
-simple enough to survive that audience while staying sound for the one case
-where strength matters (an operator who port-forwards the TLS listener to the
-open internet).
+simple enough to survive that audience. Saturn supports trusted-LAN access and
+Tailscale; direct Internet port forwarding is unsupported.
 
 Guiding rules for the Saturn appliance audience:
 
@@ -25,7 +24,7 @@ Guiding rules for the Saturn appliance audience:
 |---|---|---|
 | Home LAN (nginx :80, `/saturn/*`) | guests on the wifi | keep casual hands off TX and admin actions |
 | Tailscale (TLS :8443 via Serve) | nobody — tailnet is already authenticated | redundant; Phase 3 removes it here |
-| Port-forwarded WAN (TLS :8443) | internet scanners | operator password plus failure delay; direct port forwarding is discouraged |
+| Port-forwarded WAN (TLS :8443) | internet scanners | unsupported deployment; remove the port forward and use Tailscale Serve |
 
 ## Phase 1 — one password everywhere (implemented)
 

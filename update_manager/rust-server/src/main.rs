@@ -1,6 +1,4 @@
 mod auth;
-mod clone;
-mod image;
 mod middleware;
 mod monitor;
 mod pages;
@@ -12,8 +10,6 @@ mod tailscale;
 mod update;
 mod util;
 use crate::auth::{change_password, exit_server, kill_process};
-use crate::clone::{pi_clone_cancel, pi_clone_start, pi_clone_status, pi_devices, pi_wipe_target};
-use crate::image::{pi_image_cancel, pi_image_download, pi_image_start, pi_image_status};
 use crate::middleware::csrf_protect;
 use crate::monitor::{get_system_data, network_test};
 use crate::pages::{
@@ -311,15 +307,15 @@ async fn main() {
         .route("/g2_restore", post(g2_restore))
         .route("/pihpsdr_backups", get(pihpsdr_backups))
         .route("/pihpsdr_restore", post(pihpsdr_restore))
-        .route("/pi_image_start", post(pi_image_start))
-        .route("/pi_image_status", get(pi_image_status))
-        .route("/pi_image_cancel", post(pi_image_cancel))
-        .route("/pi_image_download", get(pi_image_download))
-        .route("/pi_devices", get(pi_devices))
-        .route("/pi_wipe_target", post(pi_wipe_target))
-        .route("/pi_clone_start", post(pi_clone_start))
-        .route("/pi_clone_status", get(pi_clone_status))
-        .route("/pi_clone_cancel", post(pi_clone_cancel))
+        .route("/pi_image_start", post(disk_imaging_disabled))
+        .route("/pi_image_status", get(disk_imaging_disabled))
+        .route("/pi_image_cancel", post(disk_imaging_disabled))
+        .route("/pi_image_download", get(disk_imaging_disabled))
+        .route("/pi_devices", get(disk_imaging_disabled))
+        .route("/pi_wipe_target", post(disk_imaging_disabled))
+        .route("/pi_clone_start", post(disk_imaging_disabled))
+        .route("/pi_clone_status", get(disk_imaging_disabled))
+        .route("/pi_clone_cancel", post(disk_imaging_disabled))
         .route("/repair_pack", get(repair_pack))
         .route("/verify_system_config", get(verify_system_config))
         .route("/run", post(run_sse))
@@ -3789,9 +3785,20 @@ async fn no_content() -> impl IntoResponse {
     StatusCode::NO_CONTENT
 }
 
+async fn disk_imaging_disabled() -> Response {
+    (
+        StatusCode::GONE,
+        Json(serde_json::json!({
+            "status": "disabled",
+            "message": "Whole-disk imaging, cloning, and target wiping are disabled in Saturn Go. Use the documented local-console maintenance procedure."
+        })),
+    )
+        .into_response()
+}
+
 #[cfg(test)]
 mod tests {
-    use super::bind_addr_is_loopback;
+    use super::{bind_addr_is_loopback, disk_imaging_disabled};
 
     #[test]
     fn bind_addr_loopback_guard_accepts_only_local_hosts() {
@@ -3803,5 +3810,11 @@ mod tests {
         assert!(!bind_addr_is_loopback("0.0.0.0:8080"));
         assert!(!bind_addr_is_loopback("192.168.0.139:8080"));
         assert!(!bind_addr_is_loopback("[::]:8080"));
+    }
+
+    #[tokio::test]
+    async fn disk_imaging_routes_report_gone() {
+        let response = disk_imaging_disabled().await;
+        assert_eq!(response.status(), axum::http::StatusCode::GONE);
     }
 }

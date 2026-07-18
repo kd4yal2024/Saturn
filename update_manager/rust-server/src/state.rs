@@ -24,7 +24,6 @@ pub const CSRF_HEADER_NAME: &str = "x-saturn-csrf";
 pub const CSRF_HEADER_VALUE: &str = "1";
 pub const RUN_LOG_MAX_LINES: usize = 5000;
 pub const RUN_LOG_FETCH_MAX_LINES: usize = 1000;
-pub const MAX_COMPLETED_JOBS: usize = 20;
 pub const DEFAULT_CUSTOM_SCRIPT_CLEAN_LOGS: &str =
     include_str!("../../scripts/cleanup-saturn-logs.sh");
 pub const DEFAULT_CUSTOM_SCRIPT_CLEAN_BACKUPS: &str =
@@ -86,11 +85,6 @@ pub struct RunLogQuery {
     pub script: Option<String>,
     pub from: Option<usize>,
     pub limit: Option<usize>,
-}
-
-#[derive(Deserialize)]
-pub struct PiImageStatusQuery {
-    pub job_id: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]

@@ -30,8 +30,7 @@ The Saturn Remote frontend ships as `/remote-next` (rendered from `saturn-remote
 | Buffered terminal resume across page switches | `update.html`, `saturngo.html`, `pihpsdr.html`, `deskhpsdr.html`, `index.html` | `GET /run_log` | Offset polling by script + run ID | In-memory per-script run log ring |
 | Pre-update snapshots + retention | `update.html` status panel | Part of update workflow | `tar` snapshot + prune logic | `snapshots/` |
 | G2/appliance mutual exclusion guard | `update.html` conflict feedback | `POST /run` (`update-G2.py` only), `POST /update_start`, `POST /update_rollback` | In-memory activity acquisition/release | Process-local lock slot |
-| Pi image creation and validation | `backup.html` | `POST /pi_image_start`, `GET /pi_image_status`, `POST /pi_image_cancel`, `GET /pi_image_download` | `make_pi_image.sh`, `sha256sum` | In-memory job state; temporary image files |
-| Clone SD card to removable/USB device (+ quick wipe) | `backup.html` | `GET /pi_devices`, `POST /pi_wipe_target`, `POST /pi_clone_start`, `GET /pi_clone_status`, `POST /pi_clone_cancel` | `wipefs`, optional `sgdisk --zap-all`, `dd` (quick metadata wipe), `clone_pi_to_device.sh` | In-memory clone job state |
+| Whole-disk imaging compatibility response | `backup.html` explains local-console policy | Legacy image/clone/device/wipe routes return `410 Gone` | Manual local-console scripts remain in repository | No Saturn Go imaging jobs or privileged imaging helpers |
 | Repair pack export | `backup.html` | `GET /repair_pack` | `tar -czf -` over key runtime files | Generated manifest in `/tmp` |
 | Runtime/config verification | `backup.html` | `GET /verify_system_config` | Filesystem checks + `systemctl is-active` | N/A |
 | Password change in UI | `index.html` | `POST /change_password` | `sudo -n saturn-admin-password.sh set` (stdin) | `/etc/nginx/.htpasswd` + `saturn-go.service.d/10-remote-auth.conf` |
@@ -54,7 +53,7 @@ Compared to a simple script-runner deployment, the following were added as first
 - Transactional appliance update policy, execution, status, and rollback
 - Pre-update snapshots and staging lifecycle management
 - Shared update-activity lock to prevent overlapping G2/appliance update actions
-- Pi image creation and removable-device clone workflows
+- Local-console whole-disk imaging policy; browser imaging and cloning disabled
 - Repair pack generation and install verification tooling
 - CSRF enforcement on all mutating routes
 - Watchdog timer/service for automatic restart after failed health checks

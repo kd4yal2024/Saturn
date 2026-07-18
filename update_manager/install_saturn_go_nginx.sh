@@ -126,9 +126,6 @@ PRIVILEGED_HELPER_SCRIPTS=(
   "$SOURCE_DIR/scripts/saturn-go-build-preflight.sh"
   "$SOURCE_DIR/scripts/$SATURN_GO_DEPLOY_BROKER_NAME"
   "$SOURCE_DIR/scripts/$SATURN_BRIDGE_INSTALLER_NAME"
-  "$SOURCE_DIR/scripts/make_pi_image.sh"
-  "$SOURCE_DIR/scripts/clone_pi_to_device.sh"
-  "$SOURCE_DIR/scripts/saturn-pi-wipe-target.sh"
   "$ADMIN_PASSWORD_HELPER_SRC"
   "$REPO_SOURCE_DIR/scripts/saturn-flash-fpga.sh"
   "$REPO_SOURCE_DIR/scripts/saturn-xdma-doctor.sh"
@@ -567,6 +564,13 @@ info "Installing privileged helper scripts..."
 for src in "${PRIVILEGED_HELPER_SCRIPTS[@]}"; do
   install -m 0755 -o root -g root "$src" "$PRIVILEGED_SCRIPTS_DIR/$(basename "$src")"
 done
+# Whole-disk imaging is intentionally a local-console maintenance function.
+# Remove helpers installed by older Saturn Go releases so the web service no
+# longer retains sudo-capable imaging, clone, or target-wipe entry points.
+rm -f \
+  "$PRIVILEGED_SCRIPTS_DIR/make_pi_image.sh" \
+  "$PRIVILEGED_SCRIPTS_DIR/clone_pi_to_device.sh" \
+  "$PRIVILEGED_SCRIPTS_DIR/saturn-pi-wipe-target.sh"
 install_xdma_kernel_postinst_hook
 
 cat >"$WATCHDOG_SCRIPT_PATH" <<'WATCHDOG'
@@ -657,12 +661,6 @@ ${SERVICE_USER} ALL=(root) NOPASSWD: ${PRIVILEGED_SCRIPTS_DIR}/saturn-xdma-docto
 ${SERVICE_USER} ALL=(root) NOPASSWD: ${PRIVILEGED_SCRIPTS_DIR}/saturn-xdma-doctor.sh *
 ${SERVICE_USER} ALL=(root) NOPASSWD: ${PRIVILEGED_SCRIPTS_DIR}/saturn-flash-fpga.sh
 ${SERVICE_USER} ALL=(root) NOPASSWD: ${PRIVILEGED_SCRIPTS_DIR}/saturn-flash-fpga.sh *
-${SERVICE_USER} ALL=(root) NOPASSWD: ${PRIVILEGED_SCRIPTS_DIR}/make_pi_image.sh
-${SERVICE_USER} ALL=(root) NOPASSWD: ${PRIVILEGED_SCRIPTS_DIR}/make_pi_image.sh *
-${SERVICE_USER} ALL=(root) NOPASSWD: ${PRIVILEGED_SCRIPTS_DIR}/clone_pi_to_device.sh
-${SERVICE_USER} ALL=(root) NOPASSWD: ${PRIVILEGED_SCRIPTS_DIR}/clone_pi_to_device.sh *
-${SERVICE_USER} ALL=(root) NOPASSWD: ${PRIVILEGED_SCRIPTS_DIR}/saturn-pi-wipe-target.sh
-${SERVICE_USER} ALL=(root) NOPASSWD: ${PRIVILEGED_SCRIPTS_DIR}/saturn-pi-wipe-target.sh *
 ${SERVICE_USER} ALL=(root) NOPASSWD: ${PRIVILEGED_SCRIPTS_DIR}/saturn-xdma-stage-current.sh
 ${SERVICE_USER} ALL=(root) NOPASSWD: ${PRIVILEGED_SCRIPTS_DIR}/install-udev-rules-on-current-image.sh
 ${SERVICE_USER} ALL=(root) NOPASSWD: ${PRIVILEGED_SCRIPTS_DIR}/install-udev-rules-on-current-image.sh *
