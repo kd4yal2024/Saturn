@@ -299,7 +299,13 @@ via `sudo -n` (password piped over stdin).
   prerequisites through the provisioned privileged helper
   `/usr/local/lib/saturn-go/scripts/deskhpsdr-install-deps-on-current-image.sh`
   using passwordless `sudo -n`; the updater checks this helper before building.
-- The helper script now applies `scripts/patches/deskhpsdr-libgpiod-v2.patch` with `git apply` when needed and treats an already-applied patch as success.
+- The helper applies `scripts/patches/deskhpsdr-active-receiver-init.patch`
+  to prevent the Saturn XDMA Connect path from scheduling Protocol 2 output
+  before `active_receiver` exists. It also applies the legacy
+  `deskhpsdr-libgpiod-v2.patch` when that older GPIO source path is present;
+  already-applied patches are accepted.
+- Successful builds install direct `Type=Application` launchers under both
+  `~/.local/share/applications` and `~/Desktop`.
 - The helper build probe now forces `GPIO=ON` and `SATURN=ON`, which keeps the Trixie/libgpiod v2 compatibility fix active in web-driven updates.
 - UI run options map to script flags:
   - `--skip-git`, `-y`, `-n`, `--no-install-deps`, `--no-clean`, `--no-desktop-shortcut`, `--dry-run`, `--verbose`

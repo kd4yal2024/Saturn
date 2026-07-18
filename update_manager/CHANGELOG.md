@@ -3,6 +3,12 @@
 All notable changes to the Saturn Update Manager (Rust) are documented here.
 
 ## [Unreleased]
+### Fixed
+- Provisioning and direct udev/P2 installers now add the configured desktop
+  operator to `saturn-radio`. This preserves group-restricted XDMA device
+  permissions while allowing locally launched piHPSDR and deskHPSDR to open
+  `/dev/xdma0_user` after a new login or reboot.
+
 ### Added
 - Split Saturn Go health reporting into `/livez` process liveness and
   structured `/readyz` dependency/release readiness. Rust builds embed their
@@ -401,6 +407,10 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
 - FPGA flash live log polling now serializes in the browser and batches DOM updates to avoid overlapping fetch/render cycles during high-volume `load-FPGA` output.
 
 ### Fixed
+- deskHPSDR builds now apply a startup guard that prevents the Saturn XDMA
+  Connect path from dereferencing `active_receiver` before receiver creation
+  finishes, and the generated Desktop shortcut is now a directly executable
+  application launcher instead of an unreliable filesystem `Type=Link`.
 - Appliance update and rollback health checks no longer fail on the first
   transient timeout by default; the local health probe can now wait and retry
   according to normalized policy values.

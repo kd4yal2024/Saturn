@@ -6,6 +6,7 @@ SCRIPT_DIR="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)"
 REPO_DIR="${SCRIPT_DIR}"
 PATCH_DIR="${SCRIPT_DIR}/patches"
 DESKHPSDR_GPIO_PATCH="${PATCH_DIR}/deskhpsdr-libgpiod-v2.patch"
+DESKHPSDR_STARTUP_PATCH="${PATCH_DIR}/deskhpsdr-active-receiver-init.patch"
 DEPS_HELPER_NAME="deskhpsdr-install-deps-on-current-image.sh"
 PRIVILEGED_DEPS_HELPER="/usr/local/lib/saturn-go/scripts/${DEPS_HELPER_NAME}"
 JOBS="${JOBS:-$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 2)}"
@@ -32,7 +33,7 @@ Options:
 
 Notes:
   - This script probes build compatibility for the current image.
-  - It applies the local Saturn libgpiod v2 compatibility patch before building.
+  - It applies Saturn compatibility and startup-safety patches before building.
   - It forces SATURN=ON and GPIO=ON for the build probe.
   - It does not run "make install".
   - On success it creates a user-level launcher and Desktop shortcut by default.
@@ -145,14 +146,10 @@ StartupNotify=true
 EOF
   chmod 0644 "${app_file}"
 
-  cat > "${link_file}" <<EOF
-[Desktop Entry]
-Type=Link
-Name=deskHPSDR Local
-Icon=${icon_path}
-URL=${app_file}
-EOF
-  chmod 0755 "${link_file}"
+  # Some desktop environments do not follow a Type=Link launcher whose URL is
+  # a raw filesystem path. Install the application launcher itself on the
+  # Desktop so clicking it always starts deskHPSDR.
+  install -m 0755 "${app_file}" "${link_file}"
 
   update-desktop-database "${app_dir}" >/dev/null 2>&1 || :
 
@@ -368,6 +365,8 @@ if [[ ${LEGACY_GPIO_AVAILABLE} -eq 1 ]]; then
 else
   echo "Skipping Saturn libgpiod patch; upstream checkout has no src/gpio.c legacy GPIO path."
 fi
+
+apply_saturn_patch "${REPO_DIR}" "${DESKHPSDR_STARTUP_PATCH}"
 
 MAKE_ARGS=(
   -C "${REPO_DIR}"

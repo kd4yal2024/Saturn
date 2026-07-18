@@ -14,6 +14,7 @@ XDMA_RULES_DIR="$SCRIPT_DIR/../linuxdriver/etc/udev/rules.d"
 DEST_DIR="/etc/udev/rules.d"
 SERIAL_RULES_OVERRIDE="${SATURN_SERIAL_RULES_FILE:-}"
 DEFAULT_SERIAL_RULES_BASENAME="61-g2-serial.rules"
+OPERATOR_USER="${SATURN_USER:-${SUDO_USER:-}}"
 
 if [ "$EUID" -ne 0 ]; then
     echo "ERROR: This script must be run as root. Please run it with sudo."
@@ -22,6 +23,25 @@ fi
 
 declare -a rule_files=()
 serial_rules_file=""
+
+ensure_operator_xdma_access() {
+    local operator_user="$1"
+
+    if [ -z "$operator_user" ] || [ "$operator_user" = "root" ]; then
+        return 0
+    fi
+    if ! id -u "$operator_user" >/dev/null 2>&1; then
+        echo "ERROR: Saturn operator user does not exist: $operator_user" >&2
+        return 1
+    fi
+    if id -nG "$operator_user" | tr ' ' '\n' | grep -Fxq saturn-radio; then
+        return 0
+    fi
+
+    usermod -a -G saturn-radio "$operator_user"
+    echo "Added $operator_user to saturn-radio for piHPSDR/deskHPSDR XDMA access."
+    echo "Log out and back in, or reboot, before using an existing desktop launcher."
+}
 
 resolve_serial_rules_file() {
     if [ -n "$SERIAL_RULES_OVERRIDE" ]; then
@@ -71,6 +91,7 @@ install -d -m 0755 "$DEST_DIR"
 if ! getent group saturn-radio >/dev/null 2>&1; then
     groupadd --system saturn-radio
 fi
+ensure_operator_xdma_access "$OPERATOR_USER"
 
 for src in "${rule_files[@]}"; do
     base=$(basename "$src")

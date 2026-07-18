@@ -106,6 +106,10 @@ Not all utilities are directly wired into current UI buttons, but are included i
 - `update-saturn-go.sh --skip-git` now works from the active repo root even if no separate Saturn Go repo policy URL is configured, which is what allows the post-G2 self-update chain to reuse the repo that `update-G2.py` just updated.
 - `update-deskhpsdr.py` resolves helper scripts from the active repo root, clones/pulls `~/github/deskhpsdr` unless `--skip-git` is selected, and then delegates the build to `scripts/deskhpsdr-test-build-on-current-image.sh`.
 - `scripts/deskhpsdr-test-build-on-current-image.sh` applies `scripts/patches/deskhpsdr-libgpiod-v2.patch` only for older deskHPSDR checkouts that still include the legacy `src/gpio.c` path, and accepts an already-applied patch as success.
+- The same helper always applies
+  `scripts/patches/deskhpsdr-active-receiver-init.patch` to prevent the Saturn
+  XDMA Connect initialization crash, and installs a direct Desktop application
+  launcher after a successful build.
 - For current upstream deskHPSDR checkouts where direct Raspberry Pi GPIO support has been removed, the helper skips the obsolete patch and builds with `SATURN=ON` only for the G2/XDMA path.
 - The deskHPSDR helper keeps `libpulse-dev` for building Pulse audio support but prefers `pipewire-pulse` at runtime and removes the redundant `pulseaudio` daemon package when PipeWire Pulse is installed.
 - `p23-app-manager.sh` is an advanced local test/deploy helper; it modifies a systemd drop-in override for `p2app.service` rather than editing the base unit file directly.

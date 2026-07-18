@@ -169,6 +169,7 @@ jobs:
             sw_tools/p2app-control/install.sh \
             tests/test-admin-password-policy.sh \
             tests/test-disk-imaging-disabled.sh \
+            tests/test-deskhpsdr-integration.sh \
             tests/test-provisioning-contract.sh \
             tests/test-rust-low-memory-build.sh \
             tests/test-saturn-release-manifest.sh \
@@ -216,6 +217,9 @@ jobs:
 
       - name: Test application release manifest
         run: tests/test-saturn-release-manifest.sh
+
+      - name: Test deskHPSDR integration patches
+        run: tests/test-deskhpsdr-integration.sh
 
       - name: Test production P2 deployment rollback
         run: tests/test-saturn-p2-deploy.sh
