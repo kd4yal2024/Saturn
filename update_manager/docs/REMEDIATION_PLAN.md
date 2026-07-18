@@ -187,15 +187,23 @@ Acceptance criteria:
 
 ### REM-0202: Install into an immutable versioned directory
 
-Implementation is in progress. The root-owned installer, trusted policy
-installation, atomic sibling-directory copy, idempotence, tamper rejection,
-and non-root fixture tests are complete. The checklist remains open until a
-real release bundle is installed and ownership-verified on the appliance.
+Completed on the supported appliance with inactive release
+`0a8bb84a54f1a50a0be50ffaabc70cc4c410859d`. The complete manifest-validated
+bundle was installed at `/opt/saturn/releases/<full-commit>` as `root:root`;
+no entry is group/world writable and every directory is mode `0755`.
+`/opt/saturn/current` remained absent, no service restart occurred during the
+inactive install, and `/readyz` continued to report the expected commit with
+Saturn Go, Saturn Bridge, P2, state, disk, and XDMA checks healthy.
 
-- [ ] Install the release into `/opt/saturn/releases/<full-commit>`.
-- [ ] Ensure installed release files are not writable by the Saturn Go service user.
-- [ ] Keep mutable settings, credentials, jobs, and logs outside release directories.
-- [ ] Validate ownership, permissions, manifest, and required files before activation.
+Appliance validation exposed and fixed two permission-boundary defects: the
+canonical installer no longer rewrites completed staging payload modes, and
+the builder/manifest/installer now normalize and reject writable or
+non-traversable release content.
+
+- [x] Install the release into `/opt/saturn/releases/<full-commit>`.
+- [x] Ensure installed release files are not writable by the Saturn Go service user.
+- [x] Keep mutable settings, credentials, jobs, and logs outside release directories.
+- [x] Validate ownership, permissions, manifest, and required files before activation.
 
 Acceptance criteria:
 
