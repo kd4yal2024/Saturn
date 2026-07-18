@@ -163,6 +163,7 @@ jobs:
             update_manager/scripts/install-saturn-bridge.sh \
             update_manager/scripts/update-saturn-go.sh \
             update_manager/scripts/saturn-go-build-preflight.sh \
+            update_manager/scripts/saturn-release-build.sh \
             update_manager/scripts/saturn-go-deploy-root.sh \
             update_manager/scripts/saturn-tailscale.sh \
             sw_tools/p2app-control/install.sh \
@@ -170,6 +171,7 @@ jobs:
             tests/test-disk-imaging-disabled.sh \
             tests/test-provisioning-contract.sh \
             tests/test-rust-low-memory-build.sh \
+            tests/test-saturn-release-manifest.sh \
             tests/test-saturn-go-deploy-broker.sh \
             tests/test-saturn-p2-deploy.sh \
             tests/test-xdma-dkms-idempotency.sh
@@ -187,11 +189,13 @@ jobs:
             scripts/install-xdma-dkms.sh \
             provision/cloud-init/provision-saturn.sh \
             update_manager/scripts/install-saturn-bridge.sh \
+            update_manager/scripts/saturn-release-build.sh \
             update_manager/scripts/saturn-go-deploy-root.sh \
             update_manager/scripts/update-saturn-go.sh \
             update_manager/install_saturn_go_nginx.sh \
             sw_tools/p2app-control/install.sh \
             tests/test-rust-low-memory-build.sh \
+            tests/test-saturn-release-manifest.sh \
             tests/test-saturn-go-deploy-broker.sh \
             tests/test-xdma-dkms-idempotency.sh
 
@@ -209,6 +213,9 @@ jobs:
 
       - name: Test low-memory Rust build safeguards
         run: tests/test-rust-low-memory-build.sh
+
+      - name: Test application release manifest
+        run: tests/test-saturn-release-manifest.sh
 
       - name: Test production P2 deployment rollback
         run: tests/test-saturn-p2-deploy.sh

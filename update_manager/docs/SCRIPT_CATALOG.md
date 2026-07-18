@@ -64,6 +64,8 @@ Not all utilities are directly wired into current UI buttons, but are included i
 | `g2-version-info.sh` | Read-only helper for G2 Update page that reports active binary family, live runtime app identity/version from `/p23_perf` when available, and current or retained `p2app.service` startup banner lines for FPGA firmware/date-code/temp when those lines exist in the journal. | none |
 | `install-shutdown-waiter-service.sh` | Install or refresh `saturn-shutdown-waiter.service` and its default config. Used by Update G2. | `--enabled-default <mode>`, `--saturn-user <user>` |
 | `shutdown-waiter.sh` | Runtime shutdown-waiter payload installed by `install-shutdown-waiter-service.sh`. | none |
+| `saturn-release-build.sh` | Build and validate one complete inactive application release from an exact clean commit; never activates or restarts services. | `--output-root DIR`, `--dry-run` |
+| `saturn-release-manifest.py` | Create or validate the v1 application release manifest and exact SHA-256 inventory. | `create ...`, `validate ...` |
 | `update-saturn-go.sh` | Rebuild/redeploy `saturn-go` from the active Saturn repo root (used by `saturngo.html`). | `--verbose`, `--dry-run`, `--skip-git`, `--skip-build`, `--skip-deploy` |
 | `update-p2app.sh` | Run the Protocol 2 tests, build the active checkout, and hand production deployment to the trusted root broker with verification and rollback. | `SATURN_P2_BUILD_JOBS`, `SATURN_P2_SKIP_TESTS` |
 | `saturn-p2-deploy.sh` | Root-owned no-argument P2 production deployment broker; source/runtime paths come from root-owned `/etc/default/saturn-p2-deploy`. | none |

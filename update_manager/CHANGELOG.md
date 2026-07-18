@@ -16,6 +16,10 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
   Saturn Bridge has been installed, then verifies the exact target commit. This
   prevents a clean appliance install from failing merely because Bridge is
   intentionally installed in the following orchestration step.
+- Added the Milestone 2 inactive application-release builder, v1 component
+  policy, structured release manifest, and exact payload checksum validation.
+  Release construction runs the normal non-hardware gates and never changes
+  the active release pointer.
 - Unified provisioning entry point (`./install.sh`) shared by manual Trixie
   installs and the cloud-init bootstrap. The appliance engine now supports
   appliance/desktop/image-factory profiles, bounded user discovery, exact-ref

@@ -1,0 +1,163 @@
+{
+  "schema_version": 1,
+  "required_build_results": [
+    "rust-server-tests",
+    "bridge-stub-tests",
+    "remote-web-typecheck",
+    "remote-web-template-seam",
+    "remote-web-tests",
+    "remote-web-production-bundle",
+    "protocol2-boundary-tests",
+    "saturn-go-release-build",
+    "saturn-bridge-release-build",
+    "native-release-build",
+    "release-manifest-validation"
+  ],
+  "components": [
+    {
+      "name": "saturn-go",
+      "source": "update_manager/rust-server/target-local/release/saturn-go",
+      "path": "bin/saturn-go",
+      "role": "management-service",
+      "executable": true,
+      "version_source": {
+        "type": "cargo",
+        "path": "update_manager/rust-server/Cargo.toml"
+      }
+    },
+    {
+      "name": "saturn-bridge",
+      "source": "update_manager/saturn-bridge/target-local/staged/saturn-bridge",
+      "path": "bin/saturn-bridge",
+      "role": "radio-bridge-service",
+      "executable": true,
+      "version_source": {
+        "type": "cargo",
+        "path": "update_manager/saturn-bridge/Cargo.toml"
+      }
+    },
+    {
+      "name": "p2app",
+      "source": "sw_projects/P2_app/p2app",
+      "path": "bin/p2app",
+      "role": "radio-service",
+      "executable": true,
+      "version_source": { "type": "source_commit" }
+    },
+    {
+      "name": "remote-web",
+      "source": "update_manager/remote-web/dist/saturn-remote-next.js",
+      "path": "webroot/saturn-remote-next.js",
+      "role": "browser-bundle",
+      "executable": false,
+      "version_source": {
+        "type": "npm",
+        "path": "update_manager/remote-web/package.json"
+      }
+    },
+    {
+      "name": "audiotest",
+      "source": "sw_projects/audiotest/audiotest",
+      "path": "bin/audiotest",
+      "role": "radio-diagnostic",
+      "executable": true,
+      "version_source": { "type": "source_commit" }
+    },
+    {
+      "name": "biascheck",
+      "source": "sw_projects/biascheck/biascheck",
+      "path": "bin/biascheck",
+      "role": "radio-diagnostic",
+      "executable": true,
+      "version_source": { "type": "source_commit" }
+    },
+    {
+      "name": "codectest",
+      "source": "sw_projects/codectest/codectest",
+      "path": "bin/codectest",
+      "role": "radio-diagnostic",
+      "executable": true,
+      "version_source": { "type": "source_commit" }
+    },
+    {
+      "name": "axi-rw",
+      "source": "sw_tools/axi_rw/axi_rw",
+      "path": "bin/axi_rw",
+      "role": "radio-diagnostic",
+      "executable": true,
+      "version_source": { "type": "source_commit" }
+    },
+    {
+      "name": "fpga-version",
+      "source": "sw_tools/FPGAVersion/FPGAVersion",
+      "path": "bin/FPGAVersion",
+      "role": "read-only-hardware-diagnostic",
+      "executable": true,
+      "version_source": { "type": "source_commit" }
+    },
+    {
+      "name": "iq-dma-test",
+      "source": "sw_tools/IQdmatest/dmatest",
+      "path": "bin/dmatest",
+      "role": "radio-diagnostic",
+      "executable": true,
+      "version_source": { "type": "source_commit" }
+    },
+    {
+      "name": "codecwrite",
+      "source": "sw_tools/codecwrite/codecwrite",
+      "path": "bin/codecwrite",
+      "role": "radio-maintenance",
+      "executable": true,
+      "version_source": { "type": "source_commit" }
+    },
+    {
+      "name": "spiadcread",
+      "source": "sw_tools/spiadcread/spiadcread",
+      "path": "bin/spiadcread",
+      "role": "read-only-hardware-diagnostic",
+      "executable": true,
+      "version_source": { "type": "source_commit" }
+    },
+    {
+      "name": "xdma-reg-rw",
+      "source": "linuxdriver/tools/reg_rw",
+      "path": "bin/reg_rw",
+      "role": "xdma-user-tool",
+      "executable": true,
+      "version_source": { "type": "source_commit" }
+    },
+    {
+      "name": "xdma-userio-rw",
+      "source": "linuxdriver/tools/userio_rw",
+      "path": "bin/userio_rw",
+      "role": "xdma-user-tool",
+      "executable": true,
+      "version_source": { "type": "source_commit" }
+    },
+    {
+      "name": "xdma-dma-to-device",
+      "source": "linuxdriver/tools/dma_to_device",
+      "path": "bin/dma_to_device",
+      "role": "xdma-user-tool",
+      "executable": true,
+      "version_source": { "type": "source_commit" }
+    },
+    {
+      "name": "xdma-dma-from-device",
+      "source": "linuxdriver/tools/dma_from_device",
+      "path": "bin/dma_from_device",
+      "role": "xdma-user-tool",
+      "executable": true,
+      "version_source": { "type": "source_commit" }
+    },
+    {
+      "name": "xdma-performance",
+      "source": "linuxdriver/tools/performance",
+      "path": "bin/performance",
+      "role": "xdma-user-tool",
+      "executable": true,
+      "version_source": { "type": "source_commit" }
+    }
+  ]
+}
