@@ -190,6 +190,10 @@ run_test_gates(){
       npm run check:seam
       npm test
       npm run build
+      (
+        cd dist
+        sha256sum saturn-remote-next.js >saturn-remote-next.js.sha256
+      )
     )
   fi
 
