@@ -301,6 +301,16 @@ PY
   install -m 0644 "$COMPONENTS_FILE" "$TEMP_STAGE/share/release/components-v1.json"
 }
 
+normalize_release_permissions(){
+  log "Normalizing inactive release permissions"
+  if (( DRY_RUN )); then
+    log "[dry-run] remove group/world write bits from the complete release payload"
+    return 0
+  fi
+  find "$TEMP_STAGE" -type d -exec chmod 0755 {} +
+  find "$TEMP_STAGE" -type f -exec chmod go-w {} +
+}
+
 create_manifest(){
   if (( DRY_RUN )); then
     log "[dry-run] create and validate release-manifest.json and SHA256SUMS"
@@ -362,6 +372,7 @@ ensure_low_memory_capacity
 run_test_gates
 build_release_components
 copy_release_payload
+normalize_release_permissions
 create_manifest
 
 if (( DRY_RUN )); then

@@ -38,7 +38,7 @@ PY
 }
 
 mkdir -p "$RELEASE_ROOT/share/release"
-cp "$COMPONENTS" "$RELEASE_ROOT/share/release/components-v1.json"
+install -m 0644 "$COMPONENTS" "$RELEASE_ROOT/share/release/components-v1.json"
 
 while IFS=$'\t' read -r relative executable; do
   mkdir -p "$RELEASE_ROOT/$(dirname "$relative")"
@@ -76,6 +76,14 @@ create_fixture_manifest >/dev/null
 python3 "$TOOL" validate \
   --release-root "$RELEASE_ROOT" \
   --components "$COMPONENTS" >/dev/null
+
+chmod 0664 "$RELEASE_ROOT/webroot/saturn-remote-next.js"
+if create_fixture_manifest >/dev/null 2>&1; then
+  printf 'group-writable release payload unexpectedly created a manifest\n' >&2
+  exit 1
+fi
+chmod 0644 "$RELEASE_ROOT/webroot/saturn-remote-next.js"
+create_fixture_manifest >/dev/null
 
 python3 - "$RELEASE_ROOT/release-manifest.json" "$COMMIT" <<'PY'
 import json

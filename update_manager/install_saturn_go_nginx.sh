@@ -648,8 +648,13 @@ find "$PRIVILEGED_SCRIPTS_DIR" -maxdepth 1 -type f -print0 | xargs -0 -r chown r
 find "$PRIVILEGED_SCRIPTS_DIR" -maxdepth 1 -type f -print0 | xargs -0 -r chmod 0755
 chown -R "$SERVICE_USER:$SERVICE_GROUP" "$SCRIPTS_DIR"
 chown -R "$SERVICE_USER:$SERVICE_GROUP" "$SATURN_STATE_DIR"
-find "$SATURN_STATE_DIR" -type d -print0 | xargs -0 -r chmod 0750
-find "$SATURN_STATE_DIR" -type f -print0 | xargs -0 -r chmod 0640
+# Completed release bundles carry manifest-declared executable modes. Keep the
+# staging root private, but never rewrite payload modes after validation.
+find "$SATURN_STATE_DIR" -path "$SATURN_RELEASE_STAGING_DIR" -prune -o -type d -print0 \
+  | xargs -0 -r chmod 0750
+find "$SATURN_STATE_DIR" -path "$SATURN_RELEASE_STAGING_DIR" -prune -o -type f -print0 \
+  | xargs -0 -r chmod 0640
+chmod 0750 "$SATURN_RELEASE_STAGING_DIR"
 ok "Permissions set"
 
 info "Writing sudoers policy for privileged helper scripts..."

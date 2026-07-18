@@ -173,6 +173,8 @@ def required_build_results(path: Path) -> set[str]:
 
 def file_record(relative: str, path: Path) -> dict[str, Any]:
     mode = stat.S_IMODE(path.stat().st_mode)
+    if mode & 0o022:
+        fail(f"group/world-writable release file rejected: {relative}")
     return {
         "path": relative,
         "sha256": sha256_file(path),
