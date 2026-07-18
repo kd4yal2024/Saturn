@@ -34,6 +34,8 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
   when the canonical installer hardens mutable Saturn state permissions.
 - Normalize bundle permissions before manifest creation and reject any
   group/world-writable payload directly in manifest creation and validation.
+- Require every immutable release directory to use mode `0755` so services can
+  read root-owned releases without making them writable.
 - Unified provisioning entry point (`./install.sh`) shared by manual Trixie
   installs and the cloud-init bootstrap. The appliance engine now supports
   appliance/desktop/image-factory profiles, bounded user discovery, exact-ref

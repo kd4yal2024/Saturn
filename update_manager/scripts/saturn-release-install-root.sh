@@ -100,6 +100,8 @@ validate_payload_shape(){
   [[ -z "$bad" ]] || die "non-regular release entry rejected: $bad"
   bad="$(find "$root" -xdev -perm /022 -print -quit)"
   [[ -z "$bad" ]] || die "group/world-writable release entry rejected: $bad"
+  bad="$(find "$root" -xdev -type d ! -perm 0755 -print -quit)"
+  [[ -z "$bad" ]] || die "release directory must use mode 0755: $bad"
 }
 
 validate_source_bundle(){
