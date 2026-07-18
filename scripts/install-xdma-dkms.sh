@@ -12,6 +12,7 @@ FORCE=0
 UNINSTALL=0
 KEEP_MANUAL_POSTINST=0
 PRUNE_OLD="${SATURN_XDMA_PRUNE_OLD:-0}"
+PRINT_SOURCE_VERSION=0
 
 info(){ printf '[INFO] %s\n' "$*"; }
 ok(){ printf '[ OK ] %s\n' "$*"; }
@@ -45,6 +46,66 @@ copy_driver_sources(){
 
 dkms_registered(){
   [[ -n "$(dkms status -m "$PACKAGE_NAME" -v "$PACKAGE_VERSION" 2>/dev/null || true)" ]]
+}
+
+file_digest(){
+  sha256sum "$1" | awk '{print $1}'
+}
+
+driver_payload_revision(){
+  local driver_dir="$1" include_dir="$2" src relative digest
+  {
+    while IFS= read -r -d '' src; do
+      if [[ "$src" == "$driver_dir/"* ]]; then
+        relative="xdma/${src#"$driver_dir/"}"
+      else
+        relative="include/${src#"$include_dir/"}"
+      fi
+      digest="$(file_digest "$src")"
+      printf '%s\0%s\0' "$relative" "$digest"
+    done < <(
+      find "$driver_dir" "$include_dir" -type f \
+        \( -name '*.c' -o -name '*.h' -o -name Makefile \) \
+        ! -name '*.mod.c' -print0 | sort -z
+    )
+  } | sha256sum | awk '{print $1}'
+}
+
+source_revision(){
+  local payload_digest template_digest
+  payload_digest="$(driver_payload_revision "$DRIVER_DIR" "$INCLUDE_DIR")"
+  template_digest="$(file_digest "$DKMS_TEMPLATE")"
+  printf 'payload\0%s\0dkms.conf\0%s\0' "$payload_digest" "$template_digest" \
+    | sha256sum | cut -c1-12
+}
+
+equivalent_installed_version(){
+  local wanted status version installed_root installed_digest
+  wanted="$(driver_payload_revision "$DRIVER_DIR" "$INCLUDE_DIR")"
+  while IFS= read -r status; do
+    [[ "$status" == *", ${TARGET_KERNEL},"* && "$status" == *": installed"* ]] || continue
+    version="$(sed -n "s#^${PACKAGE_NAME}/\([^,]*\),.*#\1#p" <<<"$status")"
+    [[ -n "$version" ]] || continue
+    installed_root="/usr/src/${PACKAGE_NAME}-${version}"
+    [[ -d "$installed_root/xdma" && -d "$installed_root/include" ]] || continue
+    installed_digest="$(driver_payload_revision "$installed_root/xdma" "$installed_root/include")"
+    if [[ "$installed_digest" == "$wanted" ]]; then
+      printf '%s\n' "$version"
+      return 0
+    fi
+  done < <(dkms status -m "$PACKAGE_NAME" 2>/dev/null || true)
+  return 1
+}
+
+install_dkms_for_kernel(){
+  local -a command=(dkms install -m "$PACKAGE_NAME" -v "$PACKAGE_VERSION" -k "$TARGET_KERNEL")
+  if dkms status -m "$PACKAGE_NAME" 2>/dev/null \
+      | grep -F ", ${TARGET_KERNEL}," \
+      | grep -q ': installed'; then
+    warn "Replacing the previously installed XDMA package only after the new module built successfully"
+    command+=(--force)
+  fi
+  run "${command[@]}"
 }
 
 disable_manual_postinst_hook(){
@@ -111,6 +172,8 @@ Options:
   --keep-manual-postinst
                        Keep /etc/kernel/postinst.d/saturn-xdma active after install
   --dry-run            Print actions without changing the system
+  --print-source-version
+                       Print the stable source-derived DKMS version and exit
   -h, --help           Show this help
 
 By default, a successful DKMS install disables the legacy manual kernel
@@ -152,6 +215,10 @@ while [[ $# -gt 0 ]]; do
       DRY_RUN=1
       shift
       ;;
+    --print-source-version)
+      PRINT_SOURCE_VERSION=1
+      shift
+      ;;
     -h|--help)
       usage
       exit 0
@@ -162,7 +229,7 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-if [[ "$DRY_RUN" -ne 1 && "$(id -u)" -ne 0 ]]; then
+if [[ "$DRY_RUN" -ne 1 && "$PRINT_SOURCE_VERSION" -ne 1 && "$(id -u)" -ne 0 ]]; then
   die "Run as root, or use --dry-run for inspection."
 fi
 
@@ -177,9 +244,7 @@ DRIVER_DIR="$REPO_ROOT/linuxdriver/xdma"
 INCLUDE_DIR="$REPO_ROOT/linuxdriver/include"
 DKMS_TEMPLATE="$REPO_ROOT/linuxdriver/dkms/dkms.conf"
 if [[ -z "$PACKAGE_VERSION" ]]; then
-  SOURCE_REV="$({ find "$DRIVER_DIR" "$INCLUDE_DIR" -type f \
-    \( -name '*.c' -o -name '*.h' -o -name Makefile -o -name dkms.conf \) -print0; \
-    printf '%s\0' "$DKMS_TEMPLATE"; } | sort -z | xargs -0 sha256sum | sha256sum | cut -c1-12)"
+  SOURCE_REV="$(source_revision)"
   PACKAGE_VERSION="2020.1.8-saturn.${SOURCE_REV}"
 fi
 SRC_ROOT="/usr/src/${PACKAGE_NAME}-${PACKAGE_VERSION}"
@@ -189,6 +254,11 @@ trap '[[ -n "${SRC_STAGE:-}" && -d "${SRC_STAGE:-}" ]] && rm -rf "$SRC_STAGE"' E
 [[ -f "$DRIVER_DIR/Makefile" ]] || die "XDMA driver source not found: $DRIVER_DIR"
 [[ -f "$INCLUDE_DIR/libxdma_api.h" ]] || die "XDMA include source not found: $INCLUDE_DIR/libxdma_api.h"
 [[ -f "$DKMS_TEMPLATE" ]] || die "DKMS template not found: $DKMS_TEMPLATE"
+
+if [[ "$PRINT_SOURCE_VERSION" -eq 1 ]]; then
+  printf '%s\n' "$PACKAGE_VERSION"
+  exit 0
+fi
 command -v dkms >/dev/null 2>&1 || die "dkms is not installed. Install the dkms package first."
 
 info "Repo root: $REPO_ROOT"
@@ -198,6 +268,13 @@ info "Source root: $SRC_ROOT"
 
 if [[ "$UNINSTALL" -eq 1 ]]; then
   uninstall_dkms
+  exit 0
+fi
+
+if equivalent_version="$(equivalent_installed_version)" \
+    && [[ "$equivalent_version" != "$PACKAGE_VERSION" ]]; then
+  ok "Equivalent XDMA source is already installed for ${TARGET_KERNEL}: ${PACKAGE_NAME}/${equivalent_version}"
+  disable_manual_postinst_hook
   exit 0
 fi
 
@@ -216,7 +293,7 @@ if dkms_registered; then
 
   [[ -d "$SRC_ROOT" ]] || die "Registered DKMS source is missing: $SRC_ROOT"
   run dkms build -m "$PACKAGE_NAME" -v "$PACKAGE_VERSION" -k "$TARGET_KERNEL"
-  run dkms install -m "$PACKAGE_NAME" -v "$PACKAGE_VERSION" -k "$TARGET_KERNEL"
+  install_dkms_for_kernel
   run depmod "$TARGET_KERNEL"
   dkms status -m "$PACKAGE_NAME" -v "$PACKAGE_VERSION" -k "$TARGET_KERNEL" | grep -q 'installed' || \
     die "DKMS did not report an installed module for ${TARGET_KERNEL}"
@@ -250,7 +327,7 @@ fi
 
 run dkms add -m "$PACKAGE_NAME" -v "$PACKAGE_VERSION"
 run dkms build -m "$PACKAGE_NAME" -v "$PACKAGE_VERSION" -k "$TARGET_KERNEL"
-run dkms install -m "$PACKAGE_NAME" -v "$PACKAGE_VERSION" -k "$TARGET_KERNEL"
+install_dkms_for_kernel
 run depmod "$TARGET_KERNEL"
 if [[ "$DRY_RUN" -ne 1 ]]; then
   dkms status -m "$PACKAGE_NAME" -v "$PACKAGE_VERSION" -k "$TARGET_KERNEL" | grep -q 'installed' || \

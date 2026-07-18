@@ -2,6 +2,19 @@
 
 All notable changes to `linuxdriver/xdma` are documented in this file.
 
+## 2026-07-18
+
+### Fixed
+- Made the source-derived DKMS package version independent of the repository
+  checkout path and ignored generated `xdma.mod.c` metadata, preventing normal
+  rebuilds from inventing a different package version for unchanged source.
+- Provisioning reruns now reuse an installed DKMS package when its staged XDMA
+  source is byte-equivalent. When the driver source really changes, the new
+  module is built successfully before DKMS is allowed to replace the older
+  installed package.
+- Added a regression contract covering generated metadata, relocated
+  checkouts, and real source changes.
+
 ## 2026-06-28
 
 ### Added
