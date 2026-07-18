@@ -52,6 +52,8 @@ TAILSCALE_INSTALL_URL="${TAILSCALE_INSTALL_URL:-https://tailscale.com/install.sh
 TAILSCALE_INSTALL_SHA256="${TAILSCALE_INSTALL_SHA256:-ada2fe9d54df0d3e5a77879470bda195b2c53d27ecd73aba6de270c795725625}"
 SATURN_INSTALL_BRIDGE="${SATURN_INSTALL_BRIDGE:-1}"
 SATURN_REQUIRE_BRIDGE="${SATURN_REQUIRE_BRIDGE:-$SATURN_INSTALL_BRIDGE}"
+SATURN_READY_REQUIRE_BRIDGE="${SATURN_READY_REQUIRE_BRIDGE:-$SATURN_REQUIRE_BRIDGE}"
+SATURN_DEFER_FINAL_READINESS="${SATURN_DEFER_FINAL_READINESS:-0}"
 SATURN_BRIDGE_WDSP_FLAVOR="${SATURN_BRIDGE_WDSP_FLAVOR:-wdsp2}"
 SATURN_WDSP2_REPO_URL="${SATURN_WDSP2_REPO_URL:-https://github.com/TAPR/OpenHPSDR-wdsp.git}"
 SATURN_WDSP2_REF="${SATURN_WDSP2_REF:-584e8aca5ba1c4c6bc66fc0cc164ce567c8ba1e3}"
@@ -922,6 +924,7 @@ Environment=SATURN_SNAPSHOT_DIR=${SATURN_SNAPSHOT_DIR}
 Environment=SATURN_STAGING_DIR=${SATURN_STAGING_DIR}
 Environment=SATURN_MAX_BODY_BYTES=${SATURN_MAX_BODY_BYTES}
 Environment=SATURN_RESTORE_MAX_UPLOAD_BYTES=${SATURN_RESTORE_MAX_UPLOAD_BYTES}
+Environment=SATURN_READY_REQUIRE_BRIDGE=${SATURN_READY_REQUIRE_BRIDGE}
 Environment=PYTHONUNBUFFERED=1
 ExecStart=${BIN_DIR}/saturn-go
 WorkingDirectory=${SATURN_ROOT}
@@ -991,23 +994,27 @@ ok "Service and watchdog enabled and restarted"
 
 install_saturn_bridge_if_requested
 
-info "Waiting for target-aware backend readiness endpoint..."
-healthy=0
-for _ in {1..40}; do
-  if curl -fsS "http://${SATURN_ADDR}/readyz?expected_commit=${RUST_BUILD_COMMIT}" >/dev/null 2>&1; then
-    healthy=1
-    ok "Backend is ready at commit ${RUST_BUILD_COMMIT}"
-    break
+if env_flag_enabled "$SATURN_DEFER_FINAL_READINESS"; then
+  info "Deferring target-aware readiness to the canonical provisioning orchestrator"
+else
+  info "Waiting for target-aware backend readiness endpoint..."
+  healthy=0
+  for _ in {1..40}; do
+    if curl -fsS "http://${SATURN_ADDR}/readyz?expected_commit=${RUST_BUILD_COMMIT}" >/dev/null 2>&1; then
+      healthy=1
+      ok "Backend is ready at commit ${RUST_BUILD_COMMIT}"
+      break
+    fi
+    sleep 0.25
+  done
+  if [[ $healthy -ne 1 ]]; then
+    err "Backend readiness check failed for commit ${RUST_BUILD_COMMIT} at http://${SATURN_ADDR}/readyz"
+    echo "[INFO] saturn-go.service status:"
+    systemctl --no-pager --full status saturn-go.service || true
+    echo "[INFO] Recent saturn-go.service logs:"
+    journalctl -u saturn-go.service -n 40 --no-pager || true
+    exit 1
   fi
-  sleep 0.25
-done
-if [[ $healthy -ne 1 ]]; then
-  err "Backend readiness check failed for commit ${RUST_BUILD_COMMIT} at http://${SATURN_ADDR}/readyz"
-  echo "[INFO] saturn-go.service status:"
-  systemctl --no-pager --full status saturn-go.service || true
-  echo "[INFO] Recent saturn-go.service logs:"
-  journalctl -u saturn-go.service -n 40 --no-pager || true
-  exit 1
 fi
 
 bold "[SUMMARY]"

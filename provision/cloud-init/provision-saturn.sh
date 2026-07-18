@@ -1519,6 +1519,8 @@ install_update_manager() {
     SATURN_ADMIN_PASSWORD="$SATURN_ADMIN_PASSWORD" \
     SATURN_INSTALL_BRIDGE=0 \
     SATURN_REQUIRE_BRIDGE=0 \
+    SATURN_READY_REQUIRE_BRIDGE="$SATURN_REQUIRE_SATURN_BRIDGE" \
+    SATURN_DEFER_FINAL_READINESS=1 \
     bash "$script"
 }
 
@@ -1561,6 +1563,30 @@ install_saturn_bridge_runtime() {
     SATURN_BRIDGE_RF_TX_ENABLED="${SATURN_BRIDGE_RF_TX_ENABLED:-1}" \
     SATURN_BRIDGE_TX_OPUS_DECODE_ENABLED="${SATURN_BRIDGE_TX_OPUS_DECODE_ENABLED:-1}" \
     bash "$script"
+}
+
+verify_saturn_go_target_readiness() {
+  local expected_commit ready_url healthy=0
+  expected_commit="$(git -C "$SATURN_REPO_DIR" rev-parse HEAD 2>/dev/null || true)"
+  [[ "$expected_commit" =~ ^[0-9a-fA-F]{40}$ ]] \
+    || die "Could not resolve the full Saturn commit for final readiness verification"
+  expected_commit="${expected_commit,,}"
+  ready_url="http://127.0.0.1:8080/readyz?expected_commit=${expected_commit}"
+
+  log "Verifying target-aware Saturn Go readiness after dependent services are installed"
+  for _ in {1..40}; do
+    if curl -fsS --max-time 3 "$ready_url" >/dev/null 2>&1; then
+      healthy=1
+      break
+    fi
+    sleep 0.25
+  done
+  if (( healthy == 0 )); then
+    systemctl --no-pager --full status saturn-go.service saturn-bridge.service || true
+    journalctl -u saturn-go.service -n 40 --no-pager || true
+    die "Saturn Go readiness failed for commit ${expected_commit} after dependency installation"
+  fi
+  log "Saturn Go is ready at commit ${expected_commit}"
 }
 
 ensure_update_manager_admin_password() {
@@ -1997,6 +2023,7 @@ phase_saturn_go() {
       log "WARN: Saturn Bridge install failed and SATURN_REQUIRE_SATURN_BRIDGE=0; continuing provisioning."
     fi
   fi
+  verify_saturn_go_target_readiness
   install_pihpsdr_installer_shortcut "$saturn_home"
 }
 

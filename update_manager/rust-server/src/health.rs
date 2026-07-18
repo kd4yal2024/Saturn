@@ -363,10 +363,18 @@ fn ready_connect_timeout() -> Result<Duration, String> {
     Ok(Duration::from_millis(milliseconds.max(1)))
 }
 
+fn bridge_required(value: Option<String>) -> bool {
+    match value {
+        Some(value) => parse_boolish(Some(value)),
+        None => true,
+    }
+}
+
 async fn bridge_component(state: &AppState) -> HealthComponent {
+    let required = bridge_required(std::env::var("SATURN_READY_REQUIRE_BRIDGE").ok());
     let Some((host, port)) = bridge_authority(&state.bridge_ws_url) else {
         return HealthComponent::error(
-            true,
+            required,
             "bridge WebSocket URL is invalid",
             json!({ "url": state.bridge_ws_url }),
         );
@@ -374,22 +382,22 @@ async fn bridge_component(state: &AppState) -> HealthComponent {
     let connect_timeout = match ready_connect_timeout() {
         Ok(value) => value,
         Err(error) => {
-            return HealthComponent::error(true, error, json!({ "host": host, "port": port }))
+            return HealthComponent::error(required, error, json!({ "host": host, "port": port }))
         }
     };
     match timeout(connect_timeout, TcpStream::connect((host.as_str(), port))).await {
         Ok(Ok(_stream)) => HealthComponent::ok(
-            true,
+            required,
             "Saturn Bridge TCP listener is reachable",
             json!({ "host": host, "port": port }),
         ),
         Ok(Err(error)) => HealthComponent::error(
-            true,
+            required,
             format!("Saturn Bridge TCP listener is unavailable: {error}"),
             json!({ "host": host, "port": port }),
         ),
         Err(_) => HealthComponent::error(
-            true,
+            required,
             "Saturn Bridge TCP connection timed out",
             json!({ "host": host, "port": port, "timeoutMs": connect_timeout.as_millis() }),
         ),
@@ -532,6 +540,15 @@ mod tests {
             Some(("localhost".to_string(), 80))
         );
         assert_eq!(bridge_authority("http://127.0.0.1:50001"), None);
+    }
+
+    #[test]
+    fn bridge_is_required_by_default_and_can_be_explicitly_optional() {
+        assert!(bridge_required(None));
+        assert!(bridge_required(Some("1".to_string())));
+        assert!(bridge_required(Some("true".to_string())));
+        assert!(!bridge_required(Some("0".to_string())));
+        assert!(!bridge_required(Some("false".to_string())));
     }
 
     #[test]

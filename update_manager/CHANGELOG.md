@@ -12,6 +12,10 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
 - The Overview page now reports Saturn Go readiness, the running commit, and
   any failed required readiness components. The watchdog uses liveness while
   installation and deployment use target-aware readiness.
+- Canonical provisioning now defers its nested Saturn Go readiness probe until
+  Saturn Bridge has been installed, then verifies the exact target commit. This
+  prevents a clean appliance install from failing merely because Bridge is
+  intentionally installed in the following orchestration step.
 - Unified provisioning entry point (`./install.sh`) shared by manual Trixie
   installs and the cloud-init bootstrap. The appliance engine now supports
   appliance/desktop/image-factory profiles, bounded user discovery, exact-ref

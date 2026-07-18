@@ -171,6 +171,11 @@ See `SATURN_REMOTE_ARCHITECTURE.md` for the concrete bridge/display contract.
 - The installer and Saturn Go root deployment broker call
   `/readyz?expected_commit=<full-sha>`. A still-running old binary or a staged
   binary built from the wrong commit therefore cannot validate the target.
+- Canonical appliance provisioning intentionally installs the manager and
+  Bridge in separate steps. The nested manager install defers its final probe;
+  the provisioning orchestrator performs the exact-commit `/readyz` check only
+  after Bridge installation. Standalone manager installation continues to
+  verify readiness before it returns.
 - `GET /healthz` is a temporary compatibility alias for `/livez`; it is not a
   deployment readiness signal and is scheduled for removal after the 2026
   transition.
