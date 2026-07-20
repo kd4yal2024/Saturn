@@ -1504,6 +1504,10 @@ write_profile_env_state() {
 install_update_manager() {
   local saturn_home="$1"
   local script="$SATURN_REPO_DIR/update_manager/install_saturn_go_nginx.sh"
+  local p2app_panel_enabled=0
+  case "${SATURN_FRONT_PANEL_TYPE:-}" in
+    G2V1|G2V2) p2app_panel_enabled=1 ;;
+  esac
   if [[ ! -x "$script" ]]; then
     die "Update manager installer not found/executable: $script"
   fi
@@ -1522,6 +1526,7 @@ install_update_manager() {
     SATURN_INSTALL_BRIDGE=0 \
     SATURN_REQUIRE_BRIDGE=0 \
     SATURN_READY_REQUIRE_BRIDGE="$SATURN_REQUIRE_SATURN_BRIDGE" \
+    SATURN_P2APP_PANEL_ENABLED="$p2app_panel_enabled" \
     SATURN_DEFER_FINAL_READINESS=1 \
     bash "$script"
 }

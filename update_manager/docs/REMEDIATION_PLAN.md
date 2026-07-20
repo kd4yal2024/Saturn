@@ -187,8 +187,8 @@ Acceptance criteria:
 
 ### REM-0202: Install into an immutable versioned directory
 
-Completed on the supported appliance with inactive release
-`0a8bb84a54f1a50a0be50ffaabc70cc4c410859d`. The complete manifest-validated
+Completed on the supported appliance and revalidated with inactive release
+`3aed204a78d5360fd03610e7f9ad2323afeeef41`. The complete manifest-validated
 bundle was installed at `/opt/saturn/releases/<full-commit>` as `root:root`;
 no entry is group/world writable and every directory is mode `0755`.
 `/opt/saturn/current` remained absent, no service restart occurred during the
@@ -212,16 +212,26 @@ Acceptance criteria:
 
 ### REM-0203: Atomically activate and verify a release
 
-- [ ] Persist a prepared deployment transaction before activation.
-- [ ] Atomically change `/opt/saturn/current` on the same filesystem.
-- [ ] Restart only affected services in a defined order.
-- [ ] Require `/readyz` to return the target full commit.
-- [ ] Mark deployment committed only after readiness succeeds.
+The code-only activation transaction is implemented and covered by an
+isolated fixture test. It writes an atomic prepared transaction, installs
+stable-pointer systemd overrides, atomically switches `/opt/saturn/current`,
+uses dependency-aware stop/start ordering, and commits only after `/readyz`
+accepts the exact target commit. Production activation remains deliberately
+disabled in root-owned configuration until REM-0204 automatic rollback is
+implemented and tested; no live service or active pointer was changed while
+implementing this item.
+
+- [x] Persist a prepared deployment transaction before activation.
+- [x] Atomically change `/opt/saturn/current` on the same filesystem.
+- [x] Restart only affected services in a defined order.
+- [x] Require `/readyz` to return the target full commit.
+- [x] Mark deployment committed only after readiness succeeds.
 
 Acceptance criteria:
 
 - Activation exposes either the complete old release or complete new release.
 - No mixed-release file set is possible.
+- Live appliance acceptance is deferred until REM-0204 supplies automatic rollback.
 
 ### REM-0204: Automatically roll back failed activation
 

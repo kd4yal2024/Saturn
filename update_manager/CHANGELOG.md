@@ -36,6 +36,12 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
   group/world-writable payload directly in manifest creation and validation.
 - Require every immutable release directory to use mode `0755` so services can
   read root-owned releases without making them writable.
+- Added the REM-0203 root-owned release activation transaction. It persists a
+  prepared transaction, atomically changes the stable release pointer, wires
+  Saturn Go, Bridge, and P2 through systemd drop-ins, restarts them in defined
+  dependency order, and commits only after exact-commit readiness succeeds.
+  Production activation remains disabled by default until automatic rollback
+  is completed in REM-0204.
 - Unified provisioning entry point (`./install.sh`) shared by manual Trixie
   installs and the cloud-init bootstrap. The appliance engine now supports
   appliance/desktop/image-factory profiles, bounded user discovery, exact-ref

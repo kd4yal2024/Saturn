@@ -172,17 +172,17 @@ grep -Fq 'SATURN_RELEASES_ROOT="${SATURN_RELEASES_ROOT:-/opt/saturn/releases}"' 
   "$REPO_ROOT/update_manager/install_saturn_go_nginx.sh"
 grep -Fq 'INSTALL_OWNER="root"' "$REPO_ROOT/update_manager/install_saturn_go_nginx.sh"
 grep -Fq 'INSTALL_GROUP="root"' "$REPO_ROOT/update_manager/install_saturn_go_nginx.sh"
-if grep -Eq 'NOPASSWD:.*(saturn-release-install-root|SATURN_RELEASE_INSTALL)' \
+if grep -Eq 'NOPASSWD:.*(saturn-release-(install|activate)-root|SATURN_RELEASE_(INSTALL|ACTIVATE))' \
   "$REPO_ROOT/update_manager/install_saturn_go_nginx.sh"; then
-  printf 'release installer unexpectedly exposed through a repository sudoers file\n' >&2
+  printf 'release lifecycle broker unexpectedly exposed through a repository sudoers file\n' >&2
   exit 1
 fi
 # These are intentionally literal installer expressions.
 # shellcheck disable=SC2016
-grep -Fq 'find "$SATURN_STATE_DIR" -path "$SATURN_RELEASE_STAGING_DIR" -prune -o -type d' \
+grep -Fq 'find "$SATURN_STATE_DIR" \( -path "$SATURN_RELEASE_STAGING_DIR" -o -path "$SATURN_DEPLOYMENT_STATE_DIR" \) -prune -o -type d' \
   "$REPO_ROOT/update_manager/install_saturn_go_nginx.sh"
 # shellcheck disable=SC2016
-grep -Fq 'find "$SATURN_STATE_DIR" -path "$SATURN_RELEASE_STAGING_DIR" -prune -o -type f' \
+grep -Fq 'find "$SATURN_STATE_DIR" \( -path "$SATURN_RELEASE_STAGING_DIR" -o -path "$SATURN_DEPLOYMENT_STATE_DIR" \) -prune -o -type f' \
   "$REPO_ROOT/update_manager/install_saturn_go_nginx.sh"
 
 if find "$INSTALLED" -type f -name saturn-go ! -perm 0755 -print -quit | grep -q .; then

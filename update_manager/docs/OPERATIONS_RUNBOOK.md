@@ -60,6 +60,27 @@ sudo ./install.sh
 The installer resumes matching completed phases and reapplies the full contract
 when the repository commit or host schema changes. Use `--force` only for an
 intentional complete reprovision.
+
+### Versioned release activation status
+
+Milestone 2 can build and install complete inactive releases under
+`/opt/saturn/releases/<full-commit>`. REM-0203 also installs a root-owned
+activation broker, but production activation is intentionally disabled until
+REM-0204 automatic rollback has been implemented and appliance-tested.
+
+An operator may validate an installed release without changing the active
+pointer or restarting anything:
+
+```bash
+sudo /usr/local/lib/saturn-go/scripts/saturn-release-activate-root.sh \
+  --validate <full-commit>
+```
+
+Do not set `ACTIVATION_ENABLED=1` in
+`/etc/default/saturn-release-activate` during REM-0203. A normal installer run
+keeps it disabled. The current legacy deployment remains active until the
+rollback milestone is complete and a live activation is explicitly approved.
+
 Saturn Go self-update also builds the bridge in build-only mode, stages the
 binary and service unit with the UI bundle, and deploys them together. Set
 `SATURN_SATURNGO_BUILD_BRIDGE=0` only when intentionally retaining an older

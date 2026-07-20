@@ -31,6 +31,8 @@ SATURN_GO_DEPLOY_BROKER="$PRIVILEGED_SCRIPTS_DIR/$SATURN_GO_DEPLOY_BROKER_NAME"
 SATURN_GO_DEPLOY_CONFIG="/etc/default/saturn-go-deploy"
 SATURN_RELEASE_INSTALLER_NAME="saturn-release-install-root.sh"
 SATURN_RELEASE_INSTALL_CONFIG="/etc/default/saturn-release-install"
+SATURN_RELEASE_ACTIVATOR_NAME="saturn-release-activate-root.sh"
+SATURN_RELEASE_ACTIVATE_CONFIG="/etc/default/saturn-release-activate"
 SATURN_RELEASE_POLICY_DIR="$WATCHDOG_SCRIPT_DIR/release"
 SATURN_RELEASE_MANIFEST_TOOL_NAME="saturn-release-manifest.py"
 SATURN_RELEASE_COMPONENTS_NAME="components-v1.json"
@@ -49,6 +51,10 @@ SATURN_SNAPSHOT_DIR="${SATURN_SNAPSHOT_DIR:-${SATURN_STATE_DIR}/snapshots}"
 SATURN_STAGING_DIR="${SATURN_STAGING_DIR:-${SATURN_STATE_DIR}/repo-staging}"
 SATURN_RELEASE_STAGING_DIR="${SATURN_RELEASE_STAGING_DIR:-${SATURN_STATE_DIR}/release-staging}"
 SATURN_RELEASES_ROOT="${SATURN_RELEASES_ROOT:-/opt/saturn/releases}"
+SATURN_RELEASE_CURRENT_LINK="${SATURN_RELEASE_CURRENT_LINK:-/opt/saturn/current}"
+SATURN_RELEASE_TRANSACTION_FILE="${SATURN_RELEASE_TRANSACTION_FILE:-${SATURN_STATE_DIR}/deployments/current.json}"
+SATURN_DEPLOYMENT_STATE_DIR="$(dirname "$SATURN_RELEASE_TRANSACTION_FILE")"
+SATURN_RELEASE_ACTIVATION_ENABLED="${SATURN_RELEASE_ACTIVATION_ENABLED:-0}"
 SATURN_WATCHDOG_URL="${SATURN_WATCHDOG_URL:-http://${SATURN_ADDR}/livez}"
 SATURN_WATCHDOG_INTERVAL="${SATURN_WATCHDOG_INTERVAL:-30s}"
 SATURN_INSTALL_PACKAGES="${SATURN_INSTALL_PACKAGES:-1}"
@@ -135,6 +141,7 @@ PRIVILEGED_HELPER_SCRIPTS=(
   "$SOURCE_DIR/scripts/saturn-go-build-preflight.sh"
   "$SOURCE_DIR/scripts/$SATURN_GO_DEPLOY_BROKER_NAME"
   "$SOURCE_DIR/scripts/$SATURN_RELEASE_INSTALLER_NAME"
+  "$SOURCE_DIR/scripts/$SATURN_RELEASE_ACTIVATOR_NAME"
   "$SOURCE_DIR/scripts/$SATURN_BRIDGE_INSTALLER_NAME"
   "$ADMIN_PASSWORD_HELPER_SRC"
   "$REPO_SOURCE_DIR/scripts/saturn-flash-fpga.sh"
@@ -647,12 +654,19 @@ chmod 0755 "$SATURN_RELEASE_POLICY_DIR" "$SATURN_RELEASES_ROOT"
 find "$PRIVILEGED_SCRIPTS_DIR" -maxdepth 1 -type f -print0 | xargs -0 -r chown root:root
 find "$PRIVILEGED_SCRIPTS_DIR" -maxdepth 1 -type f -print0 | xargs -0 -r chmod 0755
 chown -R "$SERVICE_USER:$SERVICE_GROUP" "$SCRIPTS_DIR"
-chown -R "$SERVICE_USER:$SERVICE_GROUP" "$SATURN_STATE_DIR"
+chown "$SERVICE_USER:$SERVICE_GROUP" "$SATURN_STATE_DIR"
+find "$SATURN_STATE_DIR" -mindepth 1 -path "$SATURN_DEPLOYMENT_STATE_DIR" -prune -o \
+  -exec chown "$SERVICE_USER:$SERVICE_GROUP" {} +
+install -d -m 0750 -o root -g "$SERVICE_GROUP" "$SATURN_DEPLOYMENT_STATE_DIR"
+if [[ -f "$SATURN_RELEASE_TRANSACTION_FILE" && ! -L "$SATURN_RELEASE_TRANSACTION_FILE" ]]; then
+  chown root:"$SERVICE_GROUP" "$SATURN_RELEASE_TRANSACTION_FILE"
+  chmod 0640 "$SATURN_RELEASE_TRANSACTION_FILE"
+fi
 # Completed release bundles carry manifest-declared executable modes. Keep the
 # staging root private, but never rewrite payload modes after validation.
-find "$SATURN_STATE_DIR" -path "$SATURN_RELEASE_STAGING_DIR" -prune -o -type d -print0 \
+find "$SATURN_STATE_DIR" \( -path "$SATURN_RELEASE_STAGING_DIR" -o -path "$SATURN_DEPLOYMENT_STATE_DIR" \) -prune -o -type d -print0 \
   | xargs -0 -r chmod 0750
-find "$SATURN_STATE_DIR" -path "$SATURN_RELEASE_STAGING_DIR" -prune -o -type f -print0 \
+find "$SATURN_STATE_DIR" \( -path "$SATURN_RELEASE_STAGING_DIR" -o -path "$SATURN_DEPLOYMENT_STATE_DIR" \) -prune -o -type f -print0 \
   | xargs -0 -r chmod 0640
 chmod 0750 "$SATURN_RELEASE_STAGING_DIR"
 ok "Permissions set"
@@ -692,6 +706,28 @@ INSTALL_GROUP="root"
 EOF
 chown root:root "$SATURN_RELEASE_INSTALL_CONFIG"
 chmod 0644 "$SATURN_RELEASE_INSTALL_CONFIG"
+cat >"$SATURN_RELEASE_ACTIVATE_CONFIG" <<EOF
+# Managed by install_saturn_go_nginx.sh. Parsed as data by the root activator.
+# Keep disabled until REM-0204 automatic rollback has been implemented and tested.
+ACTIVATION_ENABLED="$SATURN_RELEASE_ACTIVATION_ENABLED"
+SATURN_ROOT="$(dirname "$SATURN_RELEASES_ROOT")"
+RELEASES_ROOT="$SATURN_RELEASES_ROOT"
+CURRENT_LINK="$SATURN_RELEASE_CURRENT_LINK"
+TRANSACTION_FILE="$SATURN_RELEASE_TRANSACTION_FILE"
+LOCK_FILE="/run/lock/saturn-release-activate.lock"
+MANIFEST_TOOL="$PRIVILEGED_SCRIPTS_DIR/$SATURN_RELEASE_MANIFEST_TOOL_NAME"
+COMPONENTS_FILE="$SATURN_RELEASE_POLICY_DIR/$SATURN_RELEASE_COMPONENTS_NAME"
+SYSTEMD_ROOT="/etc/systemd/system"
+SATURN_GO_SERVICE="saturn-go.service"
+BRIDGE_SERVICE="saturn-bridge.service"
+P2APP_SERVICE="p2app.service"
+SATURN_GO_READY_URL="http://${SATURN_ADDR}/readyz"
+READY_TIMEOUT_SECONDS="30"
+P2APP_PANEL_ENABLED="${SATURN_P2APP_PANEL_ENABLED:-0}"
+TRANSACTION_GROUP="$SERVICE_GROUP"
+EOF
+chown root:root "$SATURN_RELEASE_ACTIVATE_CONFIG"
+chmod 0644 "$SATURN_RELEASE_ACTIVATE_CONFIG"
 cat >"$SUDOERS_FILE" <<EOF
 # Managed by install_saturn_go_nginx.sh
 Defaults:${SERVICE_USER} secure_path="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
