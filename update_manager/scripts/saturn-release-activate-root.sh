@@ -4,9 +4,9 @@ set -Eeuo pipefail
 # Atomically select one already-installed Saturn application release and
 # restart only the services that consume the versioned application payload.
 #
-# Production activation is intentionally disabled by default until REM-0204
-# automatic rollback is implemented and appliance-tested. Validation remains
-# available while activation is disabled.
+# Production activation is intentionally disabled by default until the
+# rollback transaction is appliance-tested and an operator explicitly enables
+# it. Validation remains available while activation is disabled.
 
 CONFIG_FILE="${SATURN_RELEASE_ACTIVATE_CONFIG:-/etc/default/saturn-release-activate}"
 VALIDATE_ONLY=0
@@ -32,14 +32,24 @@ TARGET_COMMIT=""
 TARGET_RELEASE=""
 PREVIOUS_COMMIT=""
 PREVIOUS_RELEASE=""
+PREVIOUS_READY_COMMIT=""
 TRANSACTION_PREPARED=0
 TEMP_POINTER=""
+ROLLBACK_DIR=""
+ACTIVATION_FAILURE_PHASE=""
+ACTIVATION_FAILURE_COMMAND=""
+ACTIVATION_FAILURE_STATUS=""
+ROLLBACK_STATUS=""
+ROLLBACK_MESSAGE=""
 SATURN_GO_DROPIN=""
 BRIDGE_DROPIN=""
 P2APP_DROPIN=""
 SATURN_GO_DROPIN_EXISTED=0
 BRIDGE_DROPIN_EXISTED=0
 P2APP_DROPIN_EXISTED=0
+SATURN_GO_WAS_ACTIVE=0
+BRIDGE_WAS_ACTIVE=0
+P2APP_WAS_ACTIVE=0
 
 log(){ printf '[saturn-release-activate] %s\n' "$*"; }
 die(){ printf '[saturn-release-activate] ERROR: %s\n' "$*" >&2; return 1; }
@@ -257,7 +267,11 @@ write_transaction(){
     "$CURRENT_LINK" "$SATURN_GO_SERVICE" "$BRIDGE_SERVICE" "$P2APP_SERVICE" \
     "$SATURN_GO_DROPIN" "$SATURN_GO_DROPIN_EXISTED" \
     "$BRIDGE_DROPIN" "$BRIDGE_DROPIN_EXISTED" \
-    "$P2APP_DROPIN" "$P2APP_DROPIN_EXISTED" "$TRANSACTION_GID" <<'PY'
+    "$P2APP_DROPIN" "$P2APP_DROPIN_EXISTED" "$TRANSACTION_GID" \
+    "$PREVIOUS_READY_COMMIT" "$ROLLBACK_DIR" \
+    "$SATURN_GO_WAS_ACTIVE" "$BRIDGE_WAS_ACTIVE" "$P2APP_WAS_ACTIVE" \
+    "$ACTIVATION_FAILURE_PHASE" "$ACTIVATION_FAILURE_COMMAND" \
+    "$ACTIVATION_FAILURE_STATUS" "$ROLLBACK_STATUS" "$ROLLBACK_MESSAGE" <<'PY'
 import json
 import os
 import sys
@@ -272,6 +286,10 @@ from pathlib import Path
     bridge_dropin, bridge_dropin_existed,
     p2app_dropin, p2app_dropin_existed,
     transaction_gid,
+    previous_ready_commit, rollback_directory,
+    saturn_go_was_active, bridge_was_active, p2app_was_active,
+    failure_phase, failure_command, failure_status,
+    rollback_status, rollback_message,
 ) = sys.argv[1:]
 path = Path(path_text)
 path.parent.mkdir(parents=True, exist_ok=True)
@@ -290,23 +308,33 @@ if mode == "prepare":
         "target_release": target_release,
         "previous_commit": previous_commit or None,
         "previous_release": previous_release or None,
+        "previous_ready_commit": previous_ready_commit,
         "current_link": current_link,
+        "rollback_directory": rollback_directory,
         "services": {
             "stop_order": [saturn_go, bridge, p2app],
             "start_order": [p2app, bridge, saturn_go],
+            "previously_active": {
+                saturn_go: saturn_go_was_active == "1",
+                bridge: bridge_was_active == "1",
+                p2app: p2app_was_active == "1",
+            },
         },
         "service_dropins": {
             saturn_go: {
                 "path": saturn_go_dropin,
                 "previously_existed": saturn_go_dropin_existed == "1",
+                "backup": f"{rollback_directory}/{saturn_go}.conf" if saturn_go_dropin_existed == "1" else None,
             },
             bridge: {
                 "path": bridge_dropin,
                 "previously_existed": bridge_dropin_existed == "1",
+                "backup": f"{rollback_directory}/{bridge}.conf" if bridge_dropin_existed == "1" else None,
             },
             p2app: {
                 "path": p2app_dropin,
                 "previously_existed": p2app_dropin_existed == "1",
+                "backup": f"{rollback_directory}/{p2app}.conf" if p2app_dropin_existed == "1" else None,
             },
         },
     }
@@ -316,6 +344,18 @@ value.update({
     "message": message,
     "updated_at": now,
 })
+if failure_phase or failure_command:
+    value["activation_failure"] = {
+        "phase": failure_phase,
+        "command": failure_command,
+        "exit_status": int(failure_status),
+    }
+if rollback_status:
+    value["rollback"] = {
+        "status": rollback_status,
+        "message": rollback_message,
+        "updated_at": now,
+    }
 fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
 try:
     with os.fdopen(fd, "w", encoding="utf-8") as handle:
@@ -361,6 +401,71 @@ atomic_install_text(){
   sync -f "$directory"
 }
 
+atomic_install_file(){
+  local source="$1" destination="$2" directory temporary
+  if [[ ! -f "$source" || -L "$source" ]]; then
+    printf '[saturn-release-activate] ERROR: rollback source is not a regular file: %s\n' "$source" >&2
+    return 1
+  fi
+  directory="$(dirname "$destination")"
+  install -d -m 0755 "$directory" || return 1
+  temporary="$(mktemp "$directory/.50-saturn-release.XXXXXX")" || return 1
+  install -m 0644 "$source" "$temporary" || {
+    rm -f -- "$temporary"
+    return 1
+  }
+  if (( EUID == 0 )); then
+    chown root:root "$temporary" || {
+      rm -f -- "$temporary"
+      return 1
+    }
+  fi
+  sync -f "$temporary" || {
+    rm -f -- "$temporary"
+    return 1
+  }
+  mv -Tf "$temporary" "$destination" || {
+    rm -f -- "$temporary"
+    return 1
+  }
+  sync -f "$directory" || return 1
+}
+
+snapshot_dropin(){
+  local source="$1" existed="$2" backup="$3" owner mode
+  [[ "$existed" == "1" ]] || return 0
+  [[ -f "$source" && ! -L "$source" ]] || die "existing service drop-in is unsafe: $source"
+  if (( EUID == 0 )); then
+    owner="$(stat -c '%u' "$source")"
+    mode="$(stat -c '%a' "$source")"
+    [[ "$owner" == "0" ]] || die "existing service drop-in is not root-owned: $source"
+    (( (8#$mode & 8#022) == 0 )) || die "existing service drop-in is group/world writable: $source"
+  fi
+  install -m 0644 "$source" "$backup"
+  if (( EUID == 0 )); then
+    chown root:"$TRANSACTION_GROUP" "$backup"
+  fi
+}
+
+prepare_rollback_snapshot(){
+  local parent
+  parent="$(dirname "$TRANSACTION_FILE")"
+  ROLLBACK_DIR="$parent/rollback-current"
+  [[ "$ROLLBACK_DIR" != "/" ]] || die "unsafe rollback directory"
+  rm -rf -- "$ROLLBACK_DIR"
+  if (( EUID == 0 )); then
+    install -d -m 0750 -o root -g "$TRANSACTION_GROUP" "$ROLLBACK_DIR"
+  else
+    install -d -m 0750 "$ROLLBACK_DIR"
+  fi
+  [[ ! -L "$ROLLBACK_DIR" ]] || die "rollback directory must not be a symbolic link: $ROLLBACK_DIR"
+  snapshot_dropin "$SATURN_GO_DROPIN" "$SATURN_GO_DROPIN_EXISTED" "$ROLLBACK_DIR/$SATURN_GO_SERVICE.conf"
+  snapshot_dropin "$BRIDGE_DROPIN" "$BRIDGE_DROPIN_EXISTED" "$ROLLBACK_DIR/$BRIDGE_SERVICE.conf"
+  snapshot_dropin "$P2APP_DROPIN" "$P2APP_DROPIN_EXISTED" "$ROLLBACK_DIR/$P2APP_SERVICE.conf"
+  sync -f "$ROLLBACK_DIR"
+  sync -f "$parent"
+}
+
 install_release_dropins(){
   local current p2_args
   current="$(systemd_escape_path "$CURRENT_LINK")"
@@ -385,51 +490,224 @@ WorkingDirectory=$current
 "
 }
 
-switch_current_pointer(){
-  local parent attempt
+atomic_switch_pointer(){
+  local release="$1" parent attempt
   parent="$(dirname "$CURRENT_LINK")"
-  [[ "$(stat -c '%d' "$parent")" == "$(stat -c '%d' "$TARGET_RELEASE")" ]] \
-    || die "current pointer and target release must be on the same filesystem"
+  if [[ ! -d "$release" || -L "$release" ]]; then
+    printf '[saturn-release-activate] ERROR: release pointer target is invalid: %s\n' "$release" >&2
+    return 1
+  fi
+  if [[ "$(stat -c '%d' "$parent")" != "$(stat -c '%d' "$release")" ]]; then
+    printf '[saturn-release-activate] ERROR: current pointer and target release must be on the same filesystem\n' >&2
+    return 1
+  fi
+  if [[ -e "$CURRENT_LINK" && ! -L "$CURRENT_LINK" ]]; then
+    printf '[saturn-release-activate] ERROR: current release pointer cannot replace a real filesystem entry: %s\n' "$CURRENT_LINK" >&2
+    return 1
+  fi
   for attempt in {1..20}; do
     TEMP_POINTER="$parent/.current.$$.${RANDOM}.${attempt}"
-    if ln -s "$TARGET_RELEASE" "$TEMP_POINTER" 2>/dev/null; then
+    if ln -s "$release" "$TEMP_POINTER" 2>/dev/null; then
       break
     fi
     TEMP_POINTER=""
   done
-  [[ -n "$TEMP_POINTER" && -L "$TEMP_POINTER" ]] \
-    || die "could not create temporary release pointer in $parent"
-  mv -Tf "$TEMP_POINTER" "$CURRENT_LINK"
+  if [[ -z "$TEMP_POINTER" || ! -L "$TEMP_POINTER" ]]; then
+    printf '[saturn-release-activate] ERROR: could not create temporary release pointer in %s\n' "$parent" >&2
+    return 1
+  fi
+  if ! mv -Tf "$TEMP_POINTER" "$CURRENT_LINK"; then
+    rm -f -- "$TEMP_POINTER"
+    TEMP_POINTER=""
+    return 1
+  fi
   TEMP_POINTER=""
-  [[ "$(realpath -e "$CURRENT_LINK")" == "$TARGET_RELEASE" ]] \
-    || die "active release pointer did not resolve to the target release"
-  sync -f "$parent"
+  if [[ "$(realpath -e "$CURRENT_LINK")" != "$release" ]]; then
+    printf '[saturn-release-activate] ERROR: active release pointer did not resolve to target\n' >&2
+    return 1
+  fi
+  sync -f "$parent" || return 1
 }
 
-wait_for_ready(){
-  local elapsed=0 url
-  url="${SATURN_GO_READY_URL%%\?*}?expected_commit=$TARGET_COMMIT"
+remove_current_pointer(){
+  local parent
+  parent="$(dirname "$CURRENT_LINK")"
+  if [[ -e "$CURRENT_LINK" && ! -L "$CURRENT_LINK" ]]; then
+    printf '[saturn-release-activate] ERROR: current release pointer is not removable: %s\n' "$CURRENT_LINK" >&2
+    return 1
+  fi
+  rm -f -- "$CURRENT_LINK" || return 1
+  sync -f "$parent" || return 1
+}
+
+ready_response_matches(){
+  local response="$1" expected="$2"
+  python3 - "$expected" "$response" <<'PY'
+import json
+import sys
+expected = sys.argv[1]
+try:
+    value = json.loads(sys.argv[2])
+except json.JSONDecodeError:
+    raise SystemExit(1)
+if value.get("ready") is not True:
+    raise SystemExit(1)
+if value.get("build_commit") != expected:
+    raise SystemExit(1)
+if value.get("expected_commit") != expected:
+    raise SystemExit(1)
+PY
+}
+
+probe_running_commit(){
+  local response commit
+  response="$(curl -fsS --max-time 2 "${SATURN_GO_READY_URL%%\?*}")" || return 1
+  commit="$(python3 - "$response" <<'PY'
+import json
+import re
+import sys
+try:
+    value = json.loads(sys.argv[1])
+except json.JSONDecodeError:
+    raise SystemExit(1)
+commit = value.get("build_commit", "")
+if value.get("ready") is not True or not re.fullmatch(r"[0-9a-f]{40}", commit):
+    raise SystemExit(1)
+print(commit)
+PY
+)" || return 1
+  printf '%s\n' "$commit"
+}
+
+wait_for_commit(){
+  local expected="$1" elapsed=0 url response
+  url="${SATURN_GO_READY_URL%%\?*}?expected_commit=$expected"
   while (( elapsed < READY_TIMEOUT_SECONDS )); do
-    if curl -fsS --max-time 2 "$url" >/dev/null 2>&1; then
-      return 0
+    if response="$(curl -fsS --max-time 2 "$url" 2>/dev/null)"; then
+      if ready_response_matches "$response" "$expected"; then
+        return 0
+      fi
     fi
     sleep 1
     elapsed=$((elapsed + 1))
   done
-  curl -fsS --max-time 2 "$url" >/dev/null
+  response="$(curl -fsS --max-time 2 "$url")"
+  ready_response_matches "$response" "$expected"
+}
+
+restore_dropin(){
+  local destination="$1" existed="$2" backup="$3"
+  if [[ "$existed" == "1" ]]; then
+    atomic_install_file "$backup" "$destination"
+  else
+    if [[ -e "$destination" && ! -f "$destination" ]]; then
+      printf '[saturn-release-activate] ERROR: generated service drop-in became unsafe: %s\n' "$destination" >&2
+      return 1
+    fi
+    rm -f -- "$destination" || return 1
+  fi
+}
+
+verify_restored_dropin(){
+  local destination="$1" existed="$2" backup="$3"
+  if [[ "$existed" == "1" ]]; then
+    [[ -f "$destination" && ! -L "$destination" ]] || return 1
+    cmp -s "$backup" "$destination"
+  else
+    [[ ! -e "$destination" && ! -L "$destination" ]]
+  fi
+}
+
+stop_affected_services(){
+  local rc=0
+  systemctl stop "$SATURN_GO_SERVICE" || rc=1
+  systemctl stop "$BRIDGE_SERVICE" || rc=1
+  systemctl stop "$P2APP_SERVICE" || rc=1
+  return "$rc"
+}
+
+restore_previous_services(){
+  local rc=0
+  if [[ "$P2APP_WAS_ACTIVE" == "1" ]]; then
+    systemctl start "$P2APP_SERVICE" || rc=1
+    systemctl is-active --quiet "$P2APP_SERVICE" || rc=1
+  fi
+  if [[ "$BRIDGE_WAS_ACTIVE" == "1" ]]; then
+    systemctl start "$BRIDGE_SERVICE" || rc=1
+    systemctl is-active --quiet "$BRIDGE_SERVICE" || rc=1
+  fi
+  if [[ "$SATURN_GO_WAS_ACTIVE" == "1" ]]; then
+    systemctl start "$SATURN_GO_SERVICE" || rc=1
+    systemctl is-active --quiet "$SATURN_GO_SERVICE" || rc=1
+  fi
+  return "$rc"
+}
+
+rollback_activation(){
+  local rc=0
+  set +e
+  ROLLBACK_STATUS="running"
+  ROLLBACK_MESSAGE="Restoring the prior release and service configuration"
+  write_transaction "rolling_back" "rollback" "$ROLLBACK_MESSAGE" || rc=1
+  stop_affected_services || rc=1
+
+  if [[ -n "$PREVIOUS_RELEASE" ]]; then
+    atomic_switch_pointer "$PREVIOUS_RELEASE" || rc=1
+    [[ "$(realpath -e "$CURRENT_LINK" 2>/dev/null)" == "$PREVIOUS_RELEASE" ]] || rc=1
+  else
+    remove_current_pointer || rc=1
+    [[ ! -e "$CURRENT_LINK" && ! -L "$CURRENT_LINK" ]] || rc=1
+  fi
+  restore_dropin "$SATURN_GO_DROPIN" "$SATURN_GO_DROPIN_EXISTED" \
+    "$ROLLBACK_DIR/$SATURN_GO_SERVICE.conf" || rc=1
+  restore_dropin "$BRIDGE_DROPIN" "$BRIDGE_DROPIN_EXISTED" \
+    "$ROLLBACK_DIR/$BRIDGE_SERVICE.conf" || rc=1
+  restore_dropin "$P2APP_DROPIN" "$P2APP_DROPIN_EXISTED" \
+    "$ROLLBACK_DIR/$P2APP_SERVICE.conf" || rc=1
+  verify_restored_dropin "$SATURN_GO_DROPIN" "$SATURN_GO_DROPIN_EXISTED" \
+    "$ROLLBACK_DIR/$SATURN_GO_SERVICE.conf" || rc=1
+  verify_restored_dropin "$BRIDGE_DROPIN" "$BRIDGE_DROPIN_EXISTED" \
+    "$ROLLBACK_DIR/$BRIDGE_SERVICE.conf" || rc=1
+  verify_restored_dropin "$P2APP_DROPIN" "$P2APP_DROPIN_EXISTED" \
+    "$ROLLBACK_DIR/$P2APP_SERVICE.conf" || rc=1
+  systemctl daemon-reload || rc=1
+  restore_previous_services || rc=1
+  if [[ "$SATURN_GO_WAS_ACTIVE" == "1" ]]; then
+    wait_for_commit "$PREVIOUS_READY_COMMIT" || rc=1
+  fi
+
+  if (( rc == 0 )); then
+    ROLLBACK_STATUS="succeeded"
+    ROLLBACK_MESSAGE="Previous release and services restored after activation failure"
+    write_transaction "rolled_back" "rollback-complete" "$ROLLBACK_MESSAGE" || rc=1
+  fi
+  if (( rc != 0 )); then
+    ROLLBACK_STATUS="failed"
+    ROLLBACK_MESSAGE="Automatic rollback did not fully restore the previous release"
+    write_transaction "rollback_failed" "rollback-failed" "$ROLLBACK_MESSAGE" || true
+  fi
+  set -e
+  return "$rc"
 }
 
 mark_failed(){
-  local rc="$?" command="${BASH_COMMAND:-unknown command}"
+  local activation_rc="$?" command="${BASH_COMMAND:-unknown command}" rollback_rc=0
   trap - ERR
   if [[ -n "$TEMP_POINTER" && -L "$TEMP_POINTER" ]]; then
     rm -f -- "$TEMP_POINTER"
   fi
   if (( TRANSACTION_PREPARED )); then
-    write_transaction "failed" "$PHASE" "Activation failed before commit: $command" || true
+    ACTIVATION_FAILURE_PHASE="$PHASE"
+    ACTIVATION_FAILURE_COMMAND="$command"
+    ACTIVATION_FAILURE_STATUS="$activation_rc"
+    rollback_activation || rollback_rc=$?
   fi
-  log "activation failed during $PHASE; automatic rollback is not enabled until REM-0204"
-  exit "$rc"
+  if (( rollback_rc == 0 )); then
+    log "activation failed during $PHASE; automatic rollback succeeded"
+    exit "$activation_rc"
+  fi
+  log "activation failed during $PHASE and automatic rollback was incomplete"
+  exit 70
 }
 
 if [[ "${BASH_SOURCE[0]}" != "$0" ]]; then
@@ -444,6 +722,7 @@ fi
 TARGET_COMMIT="$1"
 
 need_cmd curl
+need_cmd cmp
 need_cmd cut
 need_cmd find
 need_cmd flock
@@ -467,21 +746,35 @@ if (( VALIDATE_ONLY )); then
 fi
 
 [[ "$ACTIVATION_ENABLED" == "1" ]] \
-  || die "activation is disabled; REM-0204 automatic rollback must be completed before production enablement"
+  || die "activation is disabled by root-owned policy; enable only for an approved appliance rollback test"
 prepare_transaction_directory
 existing_status="$(transaction_status)"
 case "$existing_status" in
-  ""|committed) ;;
+  ""|committed|rolled_back) ;;
   *) die "unresolved deployment transaction has status '$existing_status': $TRANSACTION_FILE" ;;
 esac
 IFS=$'\t' read -r PREVIOUS_COMMIT PREVIOUS_RELEASE < <(current_release_identity)
 [[ "$PREVIOUS_COMMIT" != "$TARGET_COMMIT" ]] || die "release is already active: $TARGET_COMMIT"
+if systemctl is-active --quiet "$SATURN_GO_SERVICE"; then SATURN_GO_WAS_ACTIVE=1; fi
+if systemctl is-active --quiet "$BRIDGE_SERVICE"; then BRIDGE_WAS_ACTIVE=1; fi
+if systemctl is-active --quiet "$P2APP_SERVICE"; then P2APP_WAS_ACTIVE=1; fi
+[[ "$SATURN_GO_WAS_ACTIVE" == "1" ]] \
+  || die "cannot activate from an unhealthy baseline: $SATURN_GO_SERVICE is not active"
+PREVIOUS_READY_COMMIT="$(probe_running_commit)" \
+  || die "cannot resolve the currently ready Saturn Go commit"
+if [[ -n "$PREVIOUS_COMMIT" ]]; then
+  [[ "$PREVIOUS_READY_COMMIT" == "$PREVIOUS_COMMIT" ]] \
+    || die "active pointer and running commit disagree: $PREVIOUS_COMMIT != $PREVIOUS_READY_COMMIT"
+  [[ "$(validate_release "$PREVIOUS_COMMIT")" == "$PREVIOUS_RELEASE" ]] \
+    || die "previous active release failed validation"
+fi
 SATURN_GO_DROPIN="$SYSTEMD_ROOT/$SATURN_GO_SERVICE.d/50-saturn-release.conf"
 BRIDGE_DROPIN="$SYSTEMD_ROOT/$BRIDGE_SERVICE.d/50-saturn-release.conf"
 P2APP_DROPIN="$SYSTEMD_ROOT/$P2APP_SERVICE.d/50-saturn-release.conf"
 [[ -e "$SATURN_GO_DROPIN" || -L "$SATURN_GO_DROPIN" ]] && SATURN_GO_DROPIN_EXISTED=1
 [[ -e "$BRIDGE_DROPIN" || -L "$BRIDGE_DROPIN" ]] && BRIDGE_DROPIN_EXISTED=1
 [[ -e "$P2APP_DROPIN" || -L "$P2APP_DROPIN" ]] && P2APP_DROPIN_EXISTED=1
+prepare_rollback_snapshot
 
 PHASE="prepare"
 write_transaction "prepared" "$PHASE" "Validated target and persisted deployment intent" prepare
@@ -495,7 +788,7 @@ systemctl daemon-reload
 
 PHASE="pointer-switch"
 write_transaction "activating" "$PHASE" "Atomically switching the active release pointer"
-switch_current_pointer
+atomic_switch_pointer "$TARGET_RELEASE"
 
 PHASE="service-stop"
 write_transaction "activating" "$PHASE" "Stopping affected services in dependency order"
@@ -514,7 +807,9 @@ systemctl is-active --quiet "$SATURN_GO_SERVICE"
 
 PHASE="readiness"
 write_transaction "verifying" "$PHASE" "Waiting for target-aware readiness"
-wait_for_ready
+if ! wait_for_commit "$TARGET_COMMIT"; then
+  false
+fi
 
 PHASE="commit"
 write_transaction "committed" "$PHASE" "Target release is active and ready"

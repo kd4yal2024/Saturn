@@ -65,8 +65,10 @@ intentional complete reprovision.
 
 Milestone 2 can build and install complete inactive releases under
 `/opt/saturn/releases/<full-commit>`. REM-0203 also installs a root-owned
-activation broker, but production activation is intentionally disabled until
-REM-0204 automatic rollback has been implemented and appliance-tested.
+activation broker. REM-0204 adds automatic restoration of the prior pointer,
+systemd drop-ins, service activity, and exact-commit readiness when activation
+fails. Production activation is still intentionally disabled until this
+transaction passes a separately approved live appliance rollback test.
 
 An operator may validate an installed release without changing the active
 pointer or restarting anything:
@@ -77,9 +79,16 @@ sudo /usr/local/lib/saturn-go/scripts/saturn-release-activate-root.sh \
 ```
 
 Do not set `ACTIVATION_ENABLED=1` in
-`/etc/default/saturn-release-activate` during REM-0203. A normal installer run
-keeps it disabled. The current legacy deployment remains active until the
-rollback milestone is complete and a live activation is explicitly approved.
+`/etc/default/saturn-release-activate` during normal installation. The
+installer keeps it disabled. The current legacy deployment remains active
+until a live activation and deliberate rollback test are explicitly approved.
+
+The durable transaction record is
+`/var/lib/saturn-state/deployments/current.json`. A successful recovery records
+`status: rolled_back`; an incomplete recovery records
+`status: rollback_failed` and prevents another activation until an operator
+resolves it. The rollback snapshot is stored beside that record under
+`rollback-current/`. Activation never prunes installed immutable releases.
 
 Saturn Go self-update also builds the bridge in build-only mode, stages the
 binary and service unit with the UI bundle, and deploys them together. Set

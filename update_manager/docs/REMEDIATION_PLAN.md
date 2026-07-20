@@ -217,9 +217,9 @@ isolated fixture test. It writes an atomic prepared transaction, installs
 stable-pointer systemd overrides, atomically switches `/opt/saturn/current`,
 uses dependency-aware stop/start ordering, and commits only after `/readyz`
 accepts the exact target commit. Production activation remains deliberately
-disabled in root-owned configuration until REM-0204 automatic rollback is
-implemented and tested; no live service or active pointer was changed while
-implementing this item.
+disabled in root-owned configuration until the REM-0204 rollback transaction
+passes a separately approved live appliance test; no live service or active
+pointer was changed while implementing this item.
 
 - [x] Persist a prepared deployment transaction before activation.
 - [x] Atomically change `/opt/saturn/current` on the same filesystem.
@@ -231,19 +231,36 @@ Acceptance criteria:
 
 - Activation exposes either the complete old release or complete new release.
 - No mixed-release file set is possible.
-- Live appliance acceptance is deferred until REM-0204 supplies automatic rollback.
+- Live appliance acceptance is deferred until the REM-0204 implementation is
+  installed and exercised in a separately approved rollback test.
 
 ### REM-0204: Automatically roll back failed activation
 
-- [ ] Retain the prior active-release pointer until commit.
-- [ ] Switch back and restart services when activation or readiness fails.
-- [ ] Persist the failure reason and rollback result.
-- [ ] Keep at least the current release and two prior verified releases, subject to disk-space policy.
+The code-only rollback transaction is implemented and covered by isolated
+failure-injection tests. Before activation it records the prior pointer, exact
+ready commit, service activity, and byte-for-byte copies of existing systemd
+drop-ins. Any post-prepare failure stops affected services, atomically restores
+the old pointer (or the original legacy no-pointer state), restores the prior
+drop-ins, restarts only services that were previously active, and verifies the
+old exact commit before recording success. A rollback that cannot be fully
+verified is recorded as `rollback_failed` and blocks another transaction.
+
+The activator performs no release pruning, so the active release and every
+installed prior release remain available. Disk-aware pruning may be added
+later, but it must never remove the active release or the two newest prior
+verified releases.
+
+- [x] Retain the prior active-release pointer identity and configuration snapshot until commit.
+- [x] Switch back and restart services when activation or readiness fails.
+- [x] Persist the failure reason and rollback result.
+- [x] Keep at least the current release and two prior verified releases, subject to disk-space policy.
 
 Acceptance criteria:
 
 - Wrong commit, startup failure, readiness timeout, and invalid configuration all restore the prior verified release.
 - The operator can see the failed target and rollback reason after Saturn Go restarts.
+- Isolated acceptance tests pass. Production activation remains disabled until
+  an explicitly approved live appliance rollback test is completed.
 
 ### REM-0205: Define state compatibility
 

@@ -40,8 +40,13 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
   prepared transaction, atomically changes the stable release pointer, wires
   Saturn Go, Bridge, and P2 through systemd drop-ins, restarts them in defined
   dependency order, and commits only after exact-commit readiness succeeds.
-  Production activation remains disabled by default until automatic rollback
-  is completed in REM-0204.
+  Production activation remains disabled by default pending a separately
+  approved live appliance test.
+- Added REM-0204 automatic activation rollback. The transaction snapshots the
+  prior pointer, exact ready commit, service activity, and systemd overrides;
+  failures restore and restart the prior deployment and require its exact
+  commit to become ready. Durable state distinguishes `rolled_back` from
+  `rollback_failed`, and activation never prunes installed releases.
 - Unified provisioning entry point (`./install.sh`) shared by manual Trixie
   installs and the cloud-init bootstrap. The appliance engine now supports
   appliance/desktop/image-factory profiles, bounded user discovery, exact-ref

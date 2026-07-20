@@ -708,7 +708,7 @@ chown root:root "$SATURN_RELEASE_INSTALL_CONFIG"
 chmod 0644 "$SATURN_RELEASE_INSTALL_CONFIG"
 cat >"$SATURN_RELEASE_ACTIVATE_CONFIG" <<EOF
 # Managed by install_saturn_go_nginx.sh. Parsed as data by the root activator.
-# Keep disabled until REM-0204 automatic rollback has been implemented and tested.
+# Keep disabled until automatic rollback passes an explicitly approved live appliance test.
 ACTIVATION_ENABLED="$SATURN_RELEASE_ACTIVATION_ENABLED"
 SATURN_ROOT="$(dirname "$SATURN_RELEASES_ROOT")"
 RELEASES_ROOT="$SATURN_RELEASES_ROOT"
