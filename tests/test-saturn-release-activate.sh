@@ -264,6 +264,8 @@ export SATURN_TEST_RUNNING_COMMIT="$NEW_COMMIT"
 [[ "$(readlink -f "$CURRENT_LINK")" == "$RELEASES_ROOT/$NEW_COMMIT" ]]
 [[ -z "$(find "$SATURN_ROOT" -maxdepth 1 -name '.current.*' -print -quit)" ]]
 [[ "$(stat -c '%a' "$TRANSACTION_FILE")" == "640" ]]
+[[ "$(stat -c '%a' "$TRANSACTION_FILE.last-good")" == "640" ]]
+cmp "$TRANSACTION_FILE" "$TRANSACTION_FILE.last-good"
 
 python3 - "$TRANSACTION_FILE" "$OLD_COMMIT" "$NEW_COMMIT" <<'PY'
 import json

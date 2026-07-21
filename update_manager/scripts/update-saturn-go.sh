@@ -52,8 +52,12 @@ write_status(){
   else
     unit_json='null'
   fi
-  mkdir -p "$(dirname "$STATUS_FILE")" >/dev/null 2>&1 || true
-  cat > "$STATUS_FILE" <<EOF
+  local state_writer="${SATURN_STATE_WRITER:-$(dirname "$0")/saturn-state-write.py}"
+  [[ -x "$state_writer" ]] || {
+    printf '[update-saturn-go] ERROR: atomic state writer is unavailable: %s\n' "$state_writer" >&2
+    return 1
+  }
+  "$state_writer" --path "$STATUS_FILE" --mode 0640 --last-good <<EOF
 {
   "status": "$(json_escape "$status")",
   "phase": "$(json_escape "$phase")",
@@ -77,7 +81,6 @@ write_status(){
   }
 }
 EOF
-  chmod 0640 "$STATUS_FILE" >/dev/null 2>&1 || true
 }
 
 run_cmd(){

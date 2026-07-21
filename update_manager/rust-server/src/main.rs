@@ -8,6 +8,7 @@ mod remote_tls;
 mod repair;
 mod restore;
 mod state;
+mod state_store;
 mod sync_ext;
 mod tailscale;
 mod update;
@@ -42,6 +43,7 @@ use crate::state::{
     P23_ADC_PEAK_TELEMETRY_ENABLE_FILE, P23_ADC_PEAK_TELEMETRY_JSON_FILE,
     P23_APP_PERF_TELEMETRY_JSON_FILE, RUN_LOG_FETCH_MAX_LINES, RUN_LOG_MAX_LINES,
 };
+use crate::state_store::{write_atomic, write_json_atomic, AtomicWriteOptions};
 use crate::sync_ext::MutexExt;
 use crate::tailscale::{
     tailscale_down, tailscale_install, tailscale_logout, tailscale_serve, tailscale_up,
@@ -189,16 +191,31 @@ async fn main() {
     let mut repo_root = tokio::fs::canonicalize(&default_repo_root)
         .await
         .unwrap_or_else(|_| PathBuf::from(&default_repo_root));
-    if let Ok(saved) = tokio::fs::read_to_string(&repo_root_file).await {
-        let saved = saved.trim();
-        if !saved.is_empty() {
-            if let Ok(canonical) = tokio::fs::canonicalize(saved).await {
-                if is_saturn_repo_root(&canonical) {
+    let persist_repo_pointer = match tokio::fs::read_to_string(&repo_root_file).await {
+        Ok(saved) => {
+            let saved = saved.trim();
+            match tokio::fs::canonicalize(saved).await {
+                Ok(canonical) if !saved.is_empty() && is_saturn_repo_root(&canonical) => {
                     repo_root = canonical;
+                    true
+                }
+                _ => {
+                    error!(
+                        "repository pointer is malformed; preserving it and reporting not-ready: {}",
+                        repo_root_file.display()
+                    );
+                    false
                 }
             }
         }
-    }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => true,
+        Err(error) => {
+            error!(
+                "repository pointer cannot be read; preserving it and reporting not-ready: {error}"
+            );
+            false
+        }
+    };
     if let Some(parent) = repo_root_file.parent() {
         let _ = tokio::fs::create_dir_all(parent).await;
     }
@@ -226,9 +243,11 @@ async fn main() {
     let _ = tokio::fs::create_dir_all(&scripts_dir).await;
     let _ = tokio::fs::create_dir_all(&snapshot_dir).await;
     let _ = tokio::fs::create_dir_all(&staging_dir).await;
-    if let Err(error) = persist_repo_root_atomic(&repo_root_file, &repo_root).await {
-        error!("failed to persist repository root: {error}");
-        std::process::exit(1);
+    if persist_repo_pointer {
+        if let Err(error) = persist_repo_root_atomic(&repo_root_file, &repo_root).await {
+            error!("failed to persist repository root: {error}");
+            std::process::exit(1);
+        }
     }
 
     let state = AppState {
@@ -253,6 +272,12 @@ async fn main() {
 
     if let Err(e) = ensure_default_custom_scripts(&state).await {
         error!("failed to initialize default custom scripts: {e}");
+    }
+    if let Err(e) = load_update_policy(&state).await {
+        error!("failed to initialize appliance update policy: {e}");
+    }
+    if let Err(e) = load_saturngo_update_policy(&state).await {
+        error!("failed to initialize Saturn Go update policy: {e}");
     }
 
     let app = Router::new()
@@ -784,11 +809,15 @@ async fn ensure_default_custom_scripts(state: &AppState) -> Result<(), String> {
                 }
             }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                tokio::fs::write(&path, default.content)
-                    .await
-                    .map_err(|err| {
-                        format!("failed to write default script {}: {err}", path.display())
-                    })?;
+                write_atomic(
+                    &path,
+                    default.content.as_bytes(),
+                    AtomicWriteOptions::executable(),
+                )
+                .await
+                .map_err(|err| {
+                    format!("failed to write default script {}: {err}", path.display())
+                })?;
                 tokio::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
                     .await
                     .map_err(|err| {
@@ -852,22 +881,13 @@ async fn load_custom_scripts(state: &AppState) -> Result<Vec<CfgEntry>, String> 
 }
 
 async fn save_custom_scripts(state: &AppState, entries: &[CfgEntry]) -> Result<(), String> {
-    if let Some(parent) = state.custom_scripts_file.parent() {
-        tokio::fs::create_dir_all(parent)
-            .await
-            .map_err(|e| format!("failed to create custom scripts dir: {e}"))?;
-    }
-    let bytes = serde_json::to_vec_pretty(entries)
-        .map_err(|e| format!("failed to serialize custom scripts: {e}"))?;
-    tokio::fs::write(&state.custom_scripts_file, bytes)
-        .await
-        .map_err(|e| format!("failed to write custom scripts: {e}"))?;
-    let _ = tokio::fs::set_permissions(
+    write_json_atomic(
         &state.custom_scripts_file,
-        std::fs::Permissions::from_mode(0o640),
+        &entries,
+        AtomicWriteOptions::state_file(),
     )
-    .await;
-    Ok(())
+    .await
+    .map_err(|error| format!("failed to write custom scripts: {error}"))
 }
 
 async fn read_all_script_entries(state: &AppState) -> Result<Vec<CfgEntry>, String> {
@@ -1015,14 +1035,13 @@ async fn normalize_saturngo_update_policy(policy: UpdatePolicy, state: &AppState
 
 async fn load_saturngo_update_policy(state: &AppState) -> Result<UpdatePolicy, String> {
     let policy = match tokio::fs::read_to_string(&state.saturngo_update_policy_file).await {
-        Ok(data) => serde_json::from_str::<UpdatePolicy>(&data).unwrap_or_default(),
-        Err(_) => UpdatePolicy::default(),
+        Ok(data) => serde_json::from_str::<UpdatePolicy>(&data)
+            .map_err(|error| format!("invalid Saturn Go update policy: {error}"))?,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => UpdatePolicy::default(),
+        Err(error) => return Err(format!("failed to read Saturn Go update policy: {error}")),
     };
     let normalized = normalize_saturngo_update_policy(policy, state).await;
-    if let Err(e) = save_saturngo_update_policy(state, normalized.clone()).await {
-        error!("failed to persist saturngo update policy: {e}");
-    }
-    Ok(normalized)
+    save_saturngo_update_policy(state, normalized).await
 }
 
 async fn save_saturngo_update_policy(
@@ -1030,20 +1049,12 @@ async fn save_saturngo_update_policy(
     policy: UpdatePolicy,
 ) -> Result<UpdatePolicy, String> {
     let normalized = normalize_saturngo_update_policy(policy, state).await;
-    if let Some(parent) = state.saturngo_update_policy_file.parent() {
-        tokio::fs::create_dir_all(parent)
-            .await
-            .map_err(|e| e.to_string())?;
-    }
-    let bytes = serde_json::to_vec_pretty(&normalized).map_err(|e| e.to_string())?;
-    tokio::fs::write(&state.saturngo_update_policy_file, bytes)
-        .await
-        .map_err(|e| e.to_string())?;
-    let _ = tokio::fs::set_permissions(
+    write_json_atomic(
         &state.saturngo_update_policy_file,
-        std::fs::Permissions::from_mode(0o640),
+        &normalized,
+        AtomicWriteOptions::state_file(),
     )
-    .await;
+    .await?;
     Ok(normalized)
 }
 
@@ -1079,19 +1090,11 @@ async fn load_remote_settings_file(path: &Path) -> Result<RemoteSettings, String
     let raw = tokio::fs::read_to_string(path)
         .await
         .map_err(|e| format!("failed to read remote settings file: {e}"))?;
-    if raw.trim().is_empty() {
-        return Ok(RemoteSettings::default());
-    }
     serde_json::from_str::<RemoteSettings>(&raw)
         .map_err(|e| format!("invalid remote settings file: {e}"))
 }
 
 async fn save_remote_settings_file(path: &Path, settings: &RemoteSettings) -> Result<(), String> {
-    if let Some(parent) = path.parent() {
-        tokio::fs::create_dir_all(parent)
-            .await
-            .map_err(|e| format!("failed to create remote settings dir: {e}"))?;
-    }
     let bytes = serde_json::to_vec_pretty(settings)
         .map_err(|e| format!("failed to serialize remote settings: {e}"))?;
     if bytes.len() as u64 > MAX_REMOTE_SETTINGS_FILE_BYTES {
@@ -1100,10 +1103,9 @@ async fn save_remote_settings_file(path: &Path, settings: &RemoteSettings) -> Re
             MAX_REMOTE_SETTINGS_FILE_BYTES
         ));
     }
-    tokio::fs::write(path, bytes)
+    write_atomic(path, bytes, AtomicWriteOptions::state_file())
         .await
         .map_err(|e| format!("failed to write remote settings file: {e}"))?;
-    let _ = tokio::fs::set_permissions(path, std::fs::Permissions::from_mode(0o640)).await;
     Ok(())
 }
 
@@ -1124,9 +1126,6 @@ async fn load_remote_profiles_file(path: &Path) -> Result<RemoteProfilesFile, St
     let raw = tokio::fs::read_to_string(path)
         .await
         .map_err(|e| format!("failed to read remote profiles file: {e}"))?;
-    if raw.trim().is_empty() {
-        return Ok(RemoteProfilesFile::default());
-    }
     serde_json::from_str::<RemoteProfilesFile>(&raw)
         .map_err(|e| format!("invalid remote profiles file: {e}"))
 }
@@ -1135,11 +1134,6 @@ async fn save_remote_profiles_file(
     path: &Path,
     profiles: &RemoteProfilesFile,
 ) -> Result<(), String> {
-    if let Some(parent) = path.parent() {
-        tokio::fs::create_dir_all(parent)
-            .await
-            .map_err(|e| format!("failed to create remote profiles dir: {e}"))?;
-    }
     let bytes = serde_json::to_vec_pretty(profiles)
         .map_err(|e| format!("failed to serialize remote profiles: {e}"))?;
     if bytes.len() as u64 > MAX_REMOTE_PROFILES_FILE_BYTES {
@@ -1148,10 +1142,9 @@ async fn save_remote_profiles_file(
             MAX_REMOTE_PROFILES_FILE_BYTES
         ));
     }
-    tokio::fs::write(path, bytes)
+    write_atomic(path, bytes, AtomicWriteOptions::state_file())
         .await
         .map_err(|e| format!("failed to write remote profiles file: {e}"))?;
-    let _ = tokio::fs::set_permissions(path, std::fs::Permissions::from_mode(0o640)).await;
     Ok(())
 }
 
@@ -2885,22 +2878,18 @@ async fn upsert_custom_script(
         if normalized.trim().is_empty() {
             return json_error(StatusCode::BAD_REQUEST, "content is empty");
         }
-        if let Some(parent) = script_path.parent() {
-            if let Err(e) = tokio::fs::create_dir_all(parent).await {
-                return json_error(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    &format!("failed to create script dir: {e}"),
-                );
-            }
-        }
-        if let Err(e) = tokio::fs::write(&script_path, normalized).await {
+        if let Err(e) = write_atomic(
+            &script_path,
+            normalized.into_bytes(),
+            AtomicWriteOptions::executable(),
+        )
+        .await
+        {
             return json_error(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 &format!("failed to write script: {e}"),
             );
         }
-        let _ =
-            tokio::fs::set_permissions(&script_path, std::fs::Permissions::from_mode(0o755)).await;
     }
 
     let meta = match tokio::fs::metadata(&script_path).await {

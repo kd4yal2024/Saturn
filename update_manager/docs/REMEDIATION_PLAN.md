@@ -375,11 +375,11 @@ expose a complete new state.
 
 ### REM-0401: Centralize atomic state writes
 
-- [ ] Write to a same-directory unique temporary file.
-- [ ] Apply owner and mode before activation.
-- [ ] Flush file contents, rename atomically, and flush the directory.
-- [ ] Preserve a last-known-good record for critical policy and deployment state.
-- [ ] Fail readiness on malformed mandatory state rather than silently replacing it with defaults.
+- [x] Write to a same-directory unique temporary file.
+- [x] Apply owner and mode before activation.
+- [x] Flush file contents, rename atomically, and flush the directory.
+- [x] Preserve a last-known-good record for critical policy and deployment state.
+- [x] Fail readiness on malformed mandatory state rather than silently replacing it with defaults.
 
 Apply to:
 
@@ -393,6 +393,24 @@ Apply to:
 Acceptance criteria:
 
 - Fault-injection tests expose only the complete old or complete new document.
+
+Saturn Go now routes repository pointers, both update policies, update history,
+remote settings/profiles, the custom-script registry, and custom script content
+through one Rust atomic state-store implementation. The writer uses a unique
+same-directory file, fixes and verifies its mode and owner continuity before
+exposure, flushes content, renames, and flushes the parent directory. Validated
+critical documents also receive a `<name>.last-good` copy. Shell deployment
+status uses the companion bounded JSON writer, while the root release journal
+retains the same last-known-good guarantee. Future persistent job records in
+REM-0403 are required to use this state-store contract.
+
+`/readyz` now includes a required `state_documents` component. A missing or
+malformed repository pointer, custom-script registry, or update policy blocks
+readiness; malformed optional settings, history, deployment, or schema files
+also block readiness when present. Policy loaders no longer silently replace
+malformed JSON with defaults. Rust unit tests and
+`tests/test-saturn-atomic-state-write.sh` inject failures on both sides of the
+rename and verify that only a complete old or complete new document is visible.
 
 ### REM-0402: Add host-level maintenance locking
 

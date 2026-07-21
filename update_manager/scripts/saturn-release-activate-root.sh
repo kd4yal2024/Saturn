@@ -383,27 +383,31 @@ value["state_compatibility"] = {
     "migrated": state_migrated == "1",
     "one_way_operator_approval": one_way_approved == "1",
 }
-fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
-try:
-    with os.fdopen(fd, "w", encoding="utf-8") as handle:
-        json.dump(value, handle, indent=2, sort_keys=True)
-        handle.write("\n")
-        handle.flush()
-        os.fsync(handle.fileno())
-    os.chmod(temporary, 0o640)
-    if os.geteuid() == 0:
-        os.chown(temporary, 0, int(transaction_gid))
-    os.replace(temporary, path)
-    directory_fd = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+def atomic_json(destination):
+    fd, temporary = tempfile.mkstemp(prefix=f".{destination.name}.", dir=destination.parent)
     try:
-        os.fsync(directory_fd)
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(value, handle, indent=2, sort_keys=True)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.chmod(temporary, 0o640)
+        if os.geteuid() == 0:
+            os.chown(temporary, 0, int(transaction_gid))
+        os.replace(temporary, destination)
+        directory_fd = os.open(destination.parent, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
     finally:
-        os.close(directory_fd)
-finally:
-    try:
-        os.unlink(temporary)
-    except FileNotFoundError:
-        pass
+        try:
+            os.unlink(temporary)
+        except FileNotFoundError:
+            pass
+
+atomic_json(path.with_name(f"{path.name}.last-good"))
+atomic_json(path)
 PY
 }
 

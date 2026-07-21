@@ -6,8 +6,7 @@ use axum::{
 use serde::Deserialize;
 use serde_json::Value;
 use std::{
-    fs,
-    io::{self, Write},
+    fs, io,
     os::unix::fs::{OpenOptionsExt, PermissionsExt},
     path::{Path, PathBuf},
     time::{SystemTime, UNIX_EPOCH},
@@ -15,6 +14,7 @@ use std::{
 use tokio::{io::AsyncWriteExt, process::Command};
 
 use crate::state::{AppState, MAX_TAR_EXPANSION_FACTOR};
+use crate::state_store::{write_atomic, AtomicWriteOptions};
 use crate::update::begin_update_activity;
 use crate::util::{
     backup_home_dir, current_repo_root, is_saturn_repo_root, json_error, parse_boolish,
@@ -548,51 +548,6 @@ pub async fn recover_restore_transactions(state_root: &Path) -> Result<Value, St
 }
 
 pub async fn persist_repo_root_atomic(path: &Path, repo_root: &Path) -> Result<(), String> {
-    let path = path.to_path_buf();
     let content = format!("{}\n", repo_root.display()).into_bytes();
-    tokio::task::spawn_blocking(move || {
-        let parent = path
-            .parent()
-            .ok_or_else(|| "repository pointer has no parent directory".to_string())?;
-        fs::create_dir_all(parent)
-            .map_err(|error| format!("cannot create repository pointer directory: {error}"))?;
-        let temporary = secure_tmp_path_in(
-            parent,
-            path.file_name()
-                .and_then(|value| value.to_str())
-                .unwrap_or("repo-root"),
-        )?;
-        let result = (|| -> Result<(), String> {
-            let mut file = fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .mode(0o640)
-                .open(&temporary)
-                .map_err(|error| format!("cannot create repository pointer temp file: {error}"))?;
-            file.write_all(&content)
-                .and_then(|_| file.sync_all())
-                .map_err(|error| format!("cannot flush repository pointer: {error}"))?;
-            fs::rename(&temporary, &path)
-                .map_err(|error| format!("cannot activate repository pointer: {error}"))?;
-            let directory = fs::File::open(parent)
-                .map_err(|error| format!("cannot open repository pointer directory: {error}"))?;
-            directory
-                .sync_all()
-                .map_err(|error| format!("cannot flush repository pointer directory: {error}"))
-        })();
-        let _ = fs::remove_file(&temporary);
-        result
-    })
-    .await
-    .map_err(|error| format!("repository pointer task failed: {error}"))?
-}
-
-fn secure_tmp_path_in(parent: &Path, name: &str) -> Result<PathBuf, String> {
-    for attempt in 0..64 {
-        let candidate = parent.join(format!(".{name}.{}-{attempt}.tmp", std::process::id()));
-        if !candidate.exists() {
-            return Ok(candidate);
-        }
-    }
-    Err("cannot allocate repository pointer temp path".to_string())
+    write_atomic(path, content, AtomicWriteOptions::state_file()).await
 }

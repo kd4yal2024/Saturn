@@ -5,18 +5,17 @@ use axum::{
 };
 use chrono::Local;
 use serde::{Deserialize, Serialize};
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::process::Command;
-use tracing::error;
 
 use crate::state::{
     AppState, DEFAULT_STAGE_WORKTREE_KEEP, DEFAULT_UPDATE_HEALTH_INITIAL_DELAY_SECS,
     DEFAULT_UPDATE_HEALTH_RETRIES, DEFAULT_UPDATE_HEALTH_TIMEOUT_SECS,
     DEFAULT_UPDATE_KEEP_SNAPSHOTS, HEALTH_CHECK_RETRY_INTERVAL_SECS,
 };
+use crate::state_store::{write_json_atomic, AtomicWriteOptions};
 use crate::sync_ext::MutexExt;
 use crate::util::{
     current_repo_root, is_safe_ref_name, is_safe_repo_part, json_error, list_repo_root_candidates,
@@ -307,14 +306,13 @@ pub fn normalize_update_policy(mut policy: UpdatePolicy, state: &AppState) -> Up
 
 pub async fn load_update_policy(state: &AppState) -> Result<UpdatePolicy, String> {
     let policy = match tokio::fs::read_to_string(&state.update_policy_file).await {
-        Ok(data) => serde_json::from_str::<UpdatePolicy>(&data).unwrap_or_default(),
-        Err(_) => UpdatePolicy::default(),
+        Ok(data) => serde_json::from_str::<UpdatePolicy>(&data)
+            .map_err(|error| format!("invalid update policy: {error}"))?,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => UpdatePolicy::default(),
+        Err(error) => return Err(format!("failed to read update policy: {error}")),
     };
     let normalized = normalize_update_policy(policy, state);
-    if let Err(e) = save_update_policy(state, normalized.clone()).await {
-        error!("failed to persist update policy: {e}");
-    }
-    Ok(normalized)
+    save_update_policy(state, normalized).await
 }
 
 pub async fn save_update_policy(
@@ -322,46 +320,33 @@ pub async fn save_update_policy(
     policy: UpdatePolicy,
 ) -> Result<UpdatePolicy, String> {
     let normalized = normalize_update_policy(policy, state);
-    if let Some(parent) = state.update_policy_file.parent() {
-        tokio::fs::create_dir_all(parent)
-            .await
-            .map_err(|e| e.to_string())?;
-    }
-    let bytes = serde_json::to_vec_pretty(&normalized).map_err(|e| e.to_string())?;
-    tokio::fs::write(&state.update_policy_file, bytes)
-        .await
-        .map_err(|e| e.to_string())?;
-    let _ = tokio::fs::set_permissions(
+    write_json_atomic(
         &state.update_policy_file,
-        std::fs::Permissions::from_mode(0o640),
+        &normalized,
+        AtomicWriteOptions::state_file(),
     )
-    .await;
+    .await?;
     Ok(normalized)
 }
 
-async fn read_last_update_state(state: &AppState) -> Option<LastUpdateState> {
-    let data = tokio::fs::read_to_string(&state.update_state_file)
-        .await
-        .ok()?;
-    serde_json::from_str::<LastUpdateState>(&data).ok()
+async fn read_last_update_state(state: &AppState) -> Result<Option<LastUpdateState>, String> {
+    let data = match tokio::fs::read_to_string(&state.update_state_file).await {
+        Ok(data) => data,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(format!("failed to read update history: {error}")),
+    };
+    serde_json::from_str::<LastUpdateState>(&data)
+        .map(Some)
+        .map_err(|error| format!("invalid update history: {error}"))
 }
 
 async fn write_last_update_state(state: &AppState, last: &LastUpdateState) -> Result<(), String> {
-    if let Some(parent) = state.update_state_file.parent() {
-        tokio::fs::create_dir_all(parent)
-            .await
-            .map_err(|e| e.to_string())?;
-    }
-    let bytes = serde_json::to_vec_pretty(last).map_err(|e| e.to_string())?;
-    tokio::fs::write(&state.update_state_file, bytes)
-        .await
-        .map_err(|e| e.to_string())?;
-    let _ = tokio::fs::set_permissions(
+    write_json_atomic(
         &state.update_state_file,
-        std::fs::Permissions::from_mode(0o640),
+        last,
+        AtomicWriteOptions::state_file(),
     )
-    .await;
-    Ok(())
+    .await
 }
 
 fn select_channel_and_target(
@@ -399,19 +384,7 @@ fn select_channel_and_target(
 
 pub async fn set_active_repo_root(state: &AppState, new_root: &Path) -> Result<(), String> {
     validate_saturn_repo_root(new_root)?;
-    if let Some(parent) = state.repo_root_file.parent() {
-        tokio::fs::create_dir_all(parent)
-            .await
-            .map_err(|e| format!("failed to create repo_root directory: {e}"))?;
-    }
-    tokio::fs::write(&state.repo_root_file, format!("{}\n", new_root.display()))
-        .await
-        .map_err(|e| format!("failed to persist repo_root: {e}"))?;
-    let _ = tokio::fs::set_permissions(
-        &state.repo_root_file,
-        std::fs::Permissions::from_mode(0o640),
-    )
-    .await;
+    crate::restore::persist_repo_root_atomic(&state.repo_root_file, new_root).await?;
     {
         let mut guard = state.repo_root.write().unwrap_or_else(|e| e.into_inner());
         *guard = new_root.to_path_buf();
@@ -1047,7 +1020,10 @@ pub async fn update_start(
 
 pub async fn update_status(State(state): State<AppState>) -> Response {
     let job = get_appliance_update_job();
-    let last = read_last_update_state(&state).await;
+    let last = match read_last_update_state(&state).await {
+        Ok(last) => last,
+        Err(error) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, &error),
+    };
     Json(serde_json::json!({
         "job": job,
         "last_update": last
@@ -1067,13 +1043,14 @@ pub async fn update_rollback(State(state): State<AppState>) -> Response {
     };
 
     let last = match read_last_update_state(&state).await {
-        Some(v) => v,
-        None => {
+        Ok(Some(value)) => value,
+        Ok(None) => {
             return json_error(
                 StatusCode::NOT_FOUND,
                 "no update state available for rollback",
             )
         }
+        Err(error) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, &error),
     };
     let current_root = current_repo_root(&state);
     let rollback_root = PathBuf::from(last.previous_repo_root.clone());

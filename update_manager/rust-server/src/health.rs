@@ -4,7 +4,7 @@ use axum::{
     response::{IntoResponse, Response},
     Json,
 };
-use serde::{Deserialize, Serialize};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
     collections::BTreeMap,
@@ -13,8 +13,10 @@ use std::{
 };
 use tokio::{fs::OpenOptions, io::AsyncWriteExt, net::TcpStream, process::Command, time::timeout};
 
-use crate::state::{AppState, CfgEntry};
-use crate::util::parse_boolish;
+use crate::state::{AppState, CfgEntry, RemoteProfilesFile, RemoteSettings};
+use crate::state_store::last_good_path;
+use crate::update::UpdatePolicy;
+use crate::util::{is_saturn_repo_root, parse_boolish};
 
 pub const BUILD_COMMIT: &str = env!("SATURN_BUILD_COMMIT");
 const DEFAULT_READY_MIN_FREE_BYTES: u64 = 512 * 1024 * 1024;
@@ -103,6 +105,10 @@ pub async fn readyz(Query(query): Query<ReadyQuery>, State(state): State<AppStat
         release_identity_component(&expected_commit, expected_source),
     );
     components.insert("state".to_string(), state_component(&state).await);
+    components.insert(
+        "state_documents".to_string(),
+        state_documents_component(&state).await,
+    );
     components.insert("configuration".to_string(), config_component(&state).await);
     components.insert("disk".to_string(), disk_component(&state).await);
     components.insert("bridge".to_string(), bridge_component(&state).await);
@@ -241,6 +247,189 @@ async fn state_component(state: &AppState) -> HealthComponent {
             format!("mandatory state directory is not writable: {error}"),
             json!({ "path": dir }),
         ),
+    }
+}
+
+const MAX_READY_STATE_DOCUMENT_BYTES: u64 = 16 * 1024 * 1024;
+
+async fn validate_json_document<T: DeserializeOwned>(path: &Path) -> Result<(), String> {
+    let metadata = tokio::fs::symlink_metadata(path)
+        .await
+        .map_err(|error| format!("cannot inspect {}: {error}", path.display()))?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err(format!(
+            "state document is not a regular file: {}",
+            path.display()
+        ));
+    }
+    if metadata.len() > MAX_READY_STATE_DOCUMENT_BYTES {
+        return Err(format!(
+            "state document exceeds {} bytes: {}",
+            MAX_READY_STATE_DOCUMENT_BYTES,
+            path.display()
+        ));
+    }
+    let raw = tokio::fs::read(path)
+        .await
+        .map_err(|error| format!("cannot read {}: {error}", path.display()))?;
+    serde_json::from_slice::<T>(&raw)
+        .map(|_| ())
+        .map_err(|error| format!("invalid JSON in {}: {error}", path.display()))
+}
+
+async fn validate_optional_json_document<T: DeserializeOwned>(path: &Path) -> Result<bool, String> {
+    match tokio::fs::symlink_metadata(path).await {
+        Ok(_) => validate_json_document::<T>(path).await.map(|_| true),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(format!("cannot inspect {}: {error}", path.display())),
+    }
+}
+
+async fn validate_optional_json_object(path: &Path) -> Result<bool, String> {
+    match tokio::fs::symlink_metadata(path).await {
+        Ok(_) => {
+            let metadata = tokio::fs::symlink_metadata(path)
+                .await
+                .map_err(|error| format!("cannot inspect {}: {error}", path.display()))?;
+            if metadata.file_type().is_symlink() || !metadata.is_file() {
+                return Err(format!(
+                    "state document is not a regular file: {}",
+                    path.display()
+                ));
+            }
+            if metadata.len() > MAX_READY_STATE_DOCUMENT_BYTES {
+                return Err(format!(
+                    "state document exceeds {} bytes: {}",
+                    MAX_READY_STATE_DOCUMENT_BYTES,
+                    path.display()
+                ));
+            }
+            let raw = tokio::fs::read(path)
+                .await
+                .map_err(|error| format!("cannot read {}: {error}", path.display()))?;
+            let value = serde_json::from_slice::<Value>(&raw)
+                .map_err(|error| format!("invalid JSON in {}: {error}", path.display()))?;
+            if !value.is_object() {
+                return Err(format!(
+                    "state document must contain a JSON object: {}",
+                    path.display()
+                ));
+            }
+            Ok(true)
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(format!("cannot inspect {}: {error}", path.display())),
+    }
+}
+
+async fn state_documents_component(state: &AppState) -> HealthComponent {
+    let mut checked = Vec::new();
+    let mut absent_optional = Vec::new();
+    let mut errors = Vec::new();
+    let mut last_good = Vec::new();
+
+    let required_json = [
+        (&state.custom_scripts_file, "custom_scripts", 0_u8),
+        (&state.update_policy_file, "update_policy", 1_u8),
+        (
+            &state.saturngo_update_policy_file,
+            "saturngo_update_policy",
+            1_u8,
+        ),
+    ];
+    for (path, name, kind) in required_json {
+        let result = match kind {
+            0 => validate_json_document::<Vec<CfgEntry>>(path).await,
+            _ => validate_json_document::<UpdatePolicy>(path).await,
+        };
+        match result {
+            Ok(()) => checked.push(name),
+            Err(error) => errors.push(error),
+        }
+        if last_good_path(path).is_ok_and(|candidate| candidate.is_file()) {
+            last_good.push(name);
+        }
+    }
+
+    match tokio::fs::read_to_string(&state.repo_root_file).await {
+        Ok(raw) if !raw.trim().is_empty() && Path::new(raw.trim()).is_absolute() => {
+            match tokio::fs::canonicalize(raw.trim()).await {
+                Ok(canonical) if is_saturn_repo_root(&canonical) => checked.push("repo_root"),
+                _ => errors.push(format!(
+                    "repository pointer does not identify a Saturn checkout: {}",
+                    state.repo_root_file.display()
+                )),
+            }
+        }
+        Ok(_) => errors.push(format!(
+            "repository pointer must contain one absolute path: {}",
+            state.repo_root_file.display()
+        )),
+        Err(error) => errors.push(format!(
+            "cannot read repository pointer {}: {error}",
+            state.repo_root_file.display()
+        )),
+    }
+    if last_good_path(&state.repo_root_file).is_ok_and(|candidate| candidate.is_file()) {
+        last_good.push("repo_root");
+    }
+
+    macro_rules! optional_json {
+        ($path:expr, $name:literal, $kind:ty) => {
+            match validate_optional_json_document::<$kind>($path).await {
+                Ok(true) => checked.push($name),
+                Ok(false) => absent_optional.push($name),
+                Err(error) => errors.push(error),
+            }
+        };
+    }
+    optional_json!(
+        &state.remote_settings_file,
+        "remote_settings",
+        RemoteSettings
+    );
+    optional_json!(
+        &state.remote_profiles_file,
+        "remote_profiles",
+        RemoteProfilesFile
+    );
+    for (path, name) in [
+        (&state.update_state_file, "update_history"),
+        (&state.saturngo_deploy_status_file, "saturngo_deploy_status"),
+    ] {
+        match validate_optional_json_object(path).await {
+            Ok(true) => checked.push(name),
+            Ok(false) => absent_optional.push(name),
+            Err(error) => errors.push(error),
+        }
+    }
+    if let Some(root) = state_dir(state) {
+        let schema = root.join("state-schema.json");
+        match validate_optional_json_object(&schema).await {
+            Ok(true) => checked.push("state_schema"),
+            Ok(false) => absent_optional.push("state_schema"),
+            Err(error) => errors.push(error),
+        }
+    }
+
+    let details = json!({
+        "checked": checked,
+        "absentOptional": absent_optional,
+        "lastKnownGood": last_good,
+        "errors": errors,
+    });
+    if errors.is_empty() {
+        HealthComponent::ok(
+            true,
+            "mandatory state documents parsed successfully",
+            details,
+        )
+    } else {
+        HealthComponent::error(
+            true,
+            "mandatory state contains missing or malformed documents",
+            details,
+        )
     }
 }
 
@@ -627,6 +816,40 @@ mod tests {
         let body = to_bytes(response.into_body(), 64 * 1024).await.unwrap();
         let value: Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(value["components"]["release_identity"]["status"], "error");
+        let _ = tokio::fs::remove_dir_all(tmp).await;
+    }
+
+    #[tokio::test]
+    async fn malformed_mandatory_state_blocks_readiness_without_replacing_it() {
+        let tmp = test_dir("malformed-state");
+        tokio::fs::create_dir_all(&tmp).await.unwrap();
+        let state = test_state(&tmp, "ws://127.0.0.1:1".to_string());
+        tokio::fs::write(&state.repo_root_file, b"/tmp\n")
+            .await
+            .unwrap();
+        tokio::fs::write(&state.custom_scripts_file, b"[]\n")
+            .await
+            .unwrap();
+        let policy = serde_json::to_vec_pretty(&UpdatePolicy::default()).unwrap();
+        tokio::fs::write(&state.update_policy_file, b"{broken-json\n")
+            .await
+            .unwrap();
+        tokio::fs::write(&state.saturngo_update_policy_file, policy)
+            .await
+            .unwrap();
+
+        let component = state_documents_component(&state).await;
+        assert_eq!(component.status, "error");
+        assert!(component.required);
+        assert!(component.details["errors"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|error| error.as_str().unwrap().contains("update_policy.json")));
+        assert_eq!(
+            tokio::fs::read(&state.update_policy_file).await.unwrap(),
+            b"{broken-json\n"
+        );
         let _ = tokio::fs::remove_dir_all(tmp).await;
     }
 }

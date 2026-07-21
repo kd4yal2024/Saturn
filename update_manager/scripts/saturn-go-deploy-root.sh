@@ -26,6 +26,7 @@ RUN_USER="pi"
 RUN_GROUP="pi"
 STAGING_ROOT="/var/lib/saturn-state/repo-staging"
 STATUS_FILE="/var/lib/saturn-state/saturngo_deploy_status.json"
+STATE_WRITER="/usr/local/lib/saturn-go/scripts/saturn-state-write.py"
 SATURN_ROOT="/opt/saturn-go"
 SATURN_GO_BIN="/opt/saturn-go/bin/saturn-go"
 SATURN_GO_SERVICE="saturn-go.service"
@@ -135,17 +136,34 @@ validate_stage(){
 }
 
 write_status(){
-  local status="$1" message="$2" exit_code="$3" now uid gid tmp
+  local status="$1" message="$2" exit_code="$3" now uid gid
   now="$(date -Is)"
   uid="$(id -u "$RUN_USER")"
   gid="$(id -g "$RUN_USER")"
   install -d -m 0750 -o "$uid" -g "$gid" "$(dirname "$STATUS_FILE")"
-  tmp="$(mktemp "$(dirname "$STATUS_FILE")/.saturngo-deploy.XXXXXX")"
-  printf '{\n  "status": "%s",\n  "phase": "root-deploy",\n  "message": "%s",\n  "updated_at": "%s",\n  "exit_code": %s\n}\n' \
-    "$status" "$message" "$now" "$exit_code" >"$tmp"
-  chown "$uid:$gid" "$tmp"
-  chmod 0640 "$tmp"
-  mv -f "$tmp" "$STATUS_FILE"
+  [[ -f "$STATE_WRITER" && -x "$STATE_WRITER" ]] \
+    || die "atomic state writer is unavailable: $STATE_WRITER"
+  [[ "$(stat -c '%u' "$STATE_WRITER")" == "0" ]] \
+    || die "atomic state writer is not root-owned: $STATE_WRITER"
+  (( (8#$(stat -c '%a' "$STATE_WRITER") & 8#022) == 0 )) \
+    || die "atomic state writer is group/world writable: $STATE_WRITER"
+  python3 - "$status" "$message" "$now" "$exit_code" <<'PY' \
+    | "$STATE_WRITER" --path "$STATUS_FILE" --mode 0640 --owner "$uid" --group "$gid" --last-good
+import json
+import sys
+
+status, message, updated_at, exit_code = sys.argv[1:]
+json.dump(
+    {
+        "status": status,
+        "phase": "root-deploy",
+        "message": message,
+        "updated_at": updated_at,
+        "exit_code": int(exit_code),
+    },
+    sys.stdout,
+)
+PY
 }
 
 declare -a ROLLBACK_DESTS=()
