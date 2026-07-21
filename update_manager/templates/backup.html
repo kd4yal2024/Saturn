@@ -16,12 +16,32 @@
       SaturnShell.mount({
         active: 'backup',
         title: 'Backup / Restore',
-        subtitle: 'Create and restore full-repo backups for the Saturn G2 and piHPSDR.'
+        subtitle: 'Keep portable settings separate from source, releases, and whole-disk recovery.'
       });
     </script>
 
     <div class="card p-5">
-      <h2 class="text-xl font-semibold mb-3">Full Repo Backup / Restore</h2>
+      <h2 class="text-xl font-semibold mb-3">Settings Backup</h2>
+      <p class="text-sm opacity-80 mb-4">
+        Downloads a small, versioned archive of Saturn Remote settings and profiles,
+        registered operator scripts, and piHPSDR/deskHPSDR property files. It excludes
+        passwords, remembered-device and TLS secrets, Tailscale/Wi-Fi identity, host
+        identity, boot configuration, logs, repositories, releases, and FPGA contents.
+      </p>
+      <div class="flex flex-wrap gap-3 items-center">
+        <button id="settings-backup-download" class="btn btn-primary px-4 py-2">Download Settings Backup</button>
+        <progress id="settings-backup-progress" class="hidden grow"></progress>
+      </div>
+      <div id="settings-backup-status" class="text-sm opacity-80 mt-3"></div>
+      <p class="text-sm text-amber-300 mt-3">
+        Treat this as private operator data: radio property files and custom scripts may
+        contain sensitive values. Import remains disabled until REM-0303 provides a
+        transactional restore.
+      </p>
+    </div>
+
+    <div class="card p-5 mt-6">
+      <h2 class="text-xl font-semibold mb-3">Source and Installed Releases</h2>
       <div class="flex flex-wrap gap-3 items-end mb-4">
         <div class="min-w-[16rem] grow">
           <label class="block text-sm mb-1">Active Repo Root</label>
@@ -38,37 +58,56 @@
       </div>
       <div id="repo-root-status" class="text-sm opacity-80 mb-4"></div>
       <div class="text-sm opacity-80 mb-4">
-        Backup and restore operations use the active repo root shown above.
+        Source backup and legacy source restore use the active repository shown above.
+        A source archive is not an appliance or settings backup.
       </div>
-      <div class="flex flex-wrap gap-3 items-end">
-        <button id="backup-download" class="btn btn-primary px-4 py-2">Download Full Backup</button>
-        <div>
-          <label class="block text-sm mb-1">Upload .tar.gz</label>
-          <input id="restore-file" type="file" accept=".tar.gz" class="field px-3 py-2" />
+
+      <div class="flex flex-wrap gap-3 items-end mb-4">
+        <button id="backup-download" class="btn btn-primary px-4 py-2">Download Source Backup</button>
+        <div class="min-w-[19rem] grow">
+          <label class="block text-sm mb-1">Installed Immutable Release</label>
+          <select id="release-backup-select" class="field w-full px-3 py-2">
+            <option value="">loading...</option>
+          </select>
         </div>
-        <button id="restore-validate" class="btn btn-ghost px-4 py-2">Validate</button>
-        <div>
-          <label class="block text-sm mb-1">Type RESTORE</label>
-          <input id="restore-confirm" type="text" placeholder="RESTORE" class="field px-3 py-2" />
-        </div>
-        <button id="restore-upload" class="btn btn-danger px-4 py-2">Restore</button>
+        <button id="release-backup-refresh" class="btn btn-ghost px-4 py-2">Refresh Releases</button>
+        <button id="release-backup-download" class="btn btn-primary px-4 py-2">Download Release Backup</button>
       </div>
-      <div class="mt-3">
-        <progress id="backup-progress" class="hidden w-full"></progress>
-        <div id="backup-status" class="text-sm opacity-80 mt-2"></div>
-      </div>
-      <div class="mt-3">
-        <progress id="restore-progress" max="100" value="0" class="hidden w-full"></progress>
-        <div id="restore-status" class="text-sm opacity-80 mt-2"></div>
-      </div>
-      <p class="text-sm opacity-80 mt-3">
-        Restore overwrites the repo after extraction. Use Validate first to check the archive.
-      </p>
+      <progress id="backup-progress" class="hidden w-full"></progress>
+      <div id="backup-status" class="text-sm opacity-80 mt-2"></div>
+      <div id="release-backup-status" class="text-sm opacity-80 mt-2"></div>
 
       <div class="mt-6 border-t border-white/15 pt-5">
-        <h3 class="text-lg font-semibold mb-2">Script Backups</h3>
+        <h3 class="text-lg font-semibold mb-2">Legacy Source Restore</h3>
+        <p class="text-sm text-amber-300 mb-4">
+          This accepts only the historical Saturn repository archive and overwrites the
+          mutable source checkout with <code>rsync --delete</code>. It does not restore
+          settings or an installed release and is not yet transactional. Use Validate first.
+        </p>
+        <div class="flex flex-wrap gap-3 items-end">
+          <div>
+            <label class="block text-sm mb-1">Upload Source .tar.gz</label>
+            <input id="restore-file" type="file" accept=".tar.gz" class="field px-3 py-2" />
+          </div>
+          <button id="restore-validate" class="btn btn-ghost px-4 py-2">Validate</button>
+          <div>
+            <label class="block text-sm mb-1">Type RESTORE</label>
+            <input id="restore-confirm" type="text" placeholder="RESTORE" class="field px-3 py-2" />
+          </div>
+          <button id="restore-upload" class="btn btn-danger px-4 py-2">Restore Source</button>
+        </div>
+        <div class="mt-3">
+          <progress id="restore-progress" max="100" value="0" class="hidden w-full"></progress>
+          <div id="restore-status" class="text-sm opacity-80 mt-2"></div>
+        </div>
+      </div>
+
+      <div class="mt-6 border-t border-white/15 pt-5">
+        <h3 class="text-lg font-semibold mb-2">Legacy Script Source Backups</h3>
         <div class="text-sm opacity-80 mb-3">
-          Use this for backups created by <code>update-G2.py</code> (<code>saturn-backup-*</code>) and <code>update-pihpsdr.py</code> (<code>pihpsdr-backup-*</code>).
+          These are source-tree rollback copies created by <code>update-G2.py</code>
+          (<code>saturn-backup-*</code>) and <code>update-pihpsdr.py</code>
+          (<code>pihpsdr-backup-*</code>), not appliance backups.
         </div>
         <div class="flex flex-wrap gap-3 items-end">
           <div>
@@ -115,7 +154,8 @@
       <div class="text-sm opacity-80">
         SD-card image creation, cloning, and target wiping are intentionally disabled in Saturn Go.
         Perform whole-disk maintenance from a local terminal using the procedure in the Saturn Go
-        Operations Runbook. Repository and settings backup controls above remain available.
+        Operations Runbook. A consistent disk image is same-device disaster recovery; clones must
+        run Saturn first-boot personalization before distribution.
       </div>
     </div>
   </div>
@@ -131,6 +171,18 @@ function withCsrf(headers = {}){
 }
 function setBackupStatus(msg, isError=false){
   const el = $('backup-status');
+  el.textContent = msg || '';
+  el.classList.toggle('text-red-400', !!isError);
+}
+
+function setSettingsBackupStatus(msg, isError=false){
+  const el = $('settings-backup-status');
+  el.textContent = msg || '';
+  el.classList.toggle('text-red-400', !!isError);
+}
+
+function setReleaseBackupStatus(msg, isError=false){
+  const el = $('release-backup-status');
   el.textContent = msg || '';
   el.classList.toggle('text-red-400', !!isError);
 }
@@ -195,12 +247,65 @@ $('repo-root-apply').addEventListener('click', async ()=>{
   }
 });
 
+$('settings-backup-download').addEventListener('click', ()=>{
+  const p = $('settings-backup-progress');
+  show(p, true);
+  setSettingsBackupStatus('Preparing private settings archive… Check your browser downloads.');
+  window.location.href = './backup_settings';
+  setTimeout(()=>{ show(p, false); }, 8000);
+});
+
 $('backup-download').addEventListener('click', ()=>{
   const p = $('backup-progress');
   show(p, true);
-  setBackupStatus('Preparing download… Check your browser downloads.');
-  window.location.href = './backup_full';
+  setBackupStatus('Preparing source repository archive… Check your browser downloads.');
+  window.location.href = './backup_source';
   setTimeout(()=>{ show(p, false); }, 8000);
+});
+
+async function loadReleaseBackups(){
+  const sel = $('release-backup-select');
+  sel.innerHTML = '<option value="">Loading...</option>';
+  try{
+    const r = await fetch('./backup_releases', { cache:'no-store' });
+    const data = await r.json().catch(()=>({}));
+    if (!r.ok) throw new Error(data.message || `HTTP ${r.status}`);
+    const releases = Array.isArray(data.releases) ? data.releases : [];
+    sel.innerHTML = '';
+    const valid = releases.filter((release)=> release.manifest_present);
+    if (!valid.length){
+      const opt = document.createElement('option');
+      opt.value = '';
+      opt.textContent = 'No manifest-bearing immutable releases installed';
+      sel.appendChild(opt);
+      setReleaseBackupStatus('No manifest-bearing immutable release is available yet.');
+      return;
+    }
+    valid.forEach((release)=>{
+      const opt = document.createElement('option');
+      opt.value = release.commit || '';
+      opt.textContent = `${release.commit}${release.active ? ' (active)' : ' (inactive)'}`;
+      sel.appendChild(opt);
+    });
+    if (data.active_commit && valid.some((release)=> release.commit === data.active_commit)) {
+      sel.value = data.active_commit;
+    }
+    setReleaseBackupStatus(`Loaded ${valid.length} immutable release(s).`);
+  }catch(e){
+    sel.innerHTML = '<option value="">Failed to load releases</option>';
+    setReleaseBackupStatus(`Failed to load installed releases: ${e.message}`, true);
+  }
+}
+
+$('release-backup-refresh').addEventListener('click', loadReleaseBackups);
+$('release-backup-download').addEventListener('click', ()=>{
+  const commit = $('release-backup-select').value.trim();
+  if (!commit){
+    setReleaseBackupStatus('Select a manifest-bearing installed release first.', true);
+    return;
+  }
+  setReleaseBackupStatus(`Preparing immutable release ${commit}…`);
+  window.location.href = `./backup_release?commit=${encodeURIComponent(commit)}`;
 });
 
 function setRestoreStatus(msg, isError=false){
@@ -361,6 +466,7 @@ $('g2-backup-restore').addEventListener('click', ()=>{
 
 loadRepoRoots();
 loadG2Backups();
+loadReleaseBackups();
 
 /* Repair pack */
 $('repair-download').addEventListener('click', ()=>{

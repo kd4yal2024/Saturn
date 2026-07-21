@@ -170,6 +170,7 @@ jobs:
             update_manager/scripts/saturn-tailscale.sh \
             sw_tools/p2app-control/install.sh \
             tests/test-admin-password-policy.sh \
+            tests/test-saturn-backup-types.sh \
             tests/test-disk-imaging-disabled.sh \
             tests/test-deskhpsdr-integration.sh \
             tests/test-provisioning-contract.sh \
@@ -203,6 +204,7 @@ jobs:
             update_manager/scripts/update-saturn-go.sh \
             update_manager/install_saturn_go_nginx.sh \
             sw_tools/p2app-control/install.sh \
+            tests/test-saturn-backup-types.sh \
             tests/test-rust-low-memory-build.sh \
             tests/test-saturn-release-activate.sh \
             tests/test-saturn-release-install.sh \
@@ -223,6 +225,9 @@ jobs:
 
       - name: Test browser disk-imaging disablement
         run: tests/test-disk-imaging-disabled.sh
+
+      - name: Test separated backup types and exclusions
+        run: tests/test-saturn-backup-types.sh
 
       - name: Test low-memory Rust build safeguards
         run: tests/test-rust-low-memory-build.sh

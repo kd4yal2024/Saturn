@@ -212,12 +212,25 @@ Notes:
   - FIFO/ADC gauges
   - cumulative counters for high-priority, mic, DDC, wideband, DUC, and speaker packet/DMA/error activity
 
-## Full Backup / Restore
+## Settings, Source, and Release Backup / Legacy Source Restore
+
+Settings backup accepts only regular allowlisted files, caps each file at 16
+MiB and the selected payload at 128 MiB, and emits a manifest with a digest for
+every payload file. Registered scripts with version `custom-default` are
+regenerable and their content is omitted. Other registered scripts are treated
+as operator-authored; a missing or redirected file fails backup creation.
+
+Settings and release imports are intentionally unavailable until REM-0303.
+`/restore_full` is retained only for the historical source-repository format.
 
 | Route | Method | CSRF | Request | Success Response |
 |---|---|---|---|---|
-| `/backup_full` | `GET` | No | none | streaming `application/gzip` attachment |
-| `/restore_full` | `POST` | Yes | `multipart/form-data` with `file`; optional `confirm=RESTORE`; optional boolean query `dry_run` | JSON status |
+| `/backup_settings` | `GET` | No | none | schema-v1 settings `application/gzip` attachment; private operator data, not a support bundle |
+| `/backup_source` | `GET` | No | none | complete active source-repository `application/gzip` attachment |
+| `/backup_full` | `GET` | No | none | compatibility alias for `/backup_source`; not a complete appliance backup |
+| `/backup_releases` | `GET` | No | none | `{ "format":"saturn-installed-release-list", "active_commit", "releases":[{"commit","active","manifest_present"}] }` |
+| `/backup_release` | `GET` | No | query `commit=<full-40-character-hex-commit>`; omitted commit selects active immutable release when one exists | selected manifest-bearing immutable-release `application/gzip` attachment |
+| `/restore_full` | `POST` | Yes | legacy source restore: `multipart/form-data` with `file`; optional `confirm=RESTORE`; optional boolean query `dry_run` | JSON status |
 | `/g2_backups` | `GET` | No | none | `{ "home":"/home/...", "backups":[{ "name","path","files","dirs","bytes","modified_epoch" }, ...] }` |
 | `/g2_restore` | `POST` | Yes | JSON `{ "backup_name":"saturn-backup-...", "dry_run":bool, "confirm":"RESTORE" }` | dry-run stats or `{ "status":"ok", ... }` |
 | `/pihpsdr_backups` | `GET` | No | none | `{ "home":"/home/...", "backups":[{ "name","path","files","dirs","bytes","modified_epoch" }, ...] }` |
@@ -229,6 +242,9 @@ Restore responses:
 - apply: `{ "status":"ok" }`
 
 Restore safety checks:
+
+These checks apply to legacy source restore, not the new settings/release
+archives:
 
 - upload size limit from `SATURN_RESTORE_MAX_UPLOAD_BYTES`
 - tar entries may not be absolute or contain `..`

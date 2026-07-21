@@ -88,22 +88,25 @@ The following is not part of a small settings backup:
 - The repository `FPGA/` tree. It belongs with source/release artifacts, while
   flashed FPGA state is external hardware state.
 
-## Current backup behavior (before REM-0302)
+## Current backup behavior
 
 The names shown in the existing UI are historical and narrower than they
 sound:
 
 | Existing operation | Exactly contains | Explicitly omits |
 |---|---|---|
-| Saturn Go `GET /backup_full` | A gzip tar archive of the current Saturn **repository root**. | Everything outside that repository: administrator/Linux credentials, remembered-device/TLS identity, Saturn Remote settings/profiles, custom-script registry and installed custom files, piHPSDR/deskHPSDR settings, Tailscale/network state, boot/LCD/front-panel config, provisioning state, deployment history, installed releases, and FPGA hardware state. It is not a full appliance backup. |
+| `GET /backup_settings` | A versioned, checksummed selection of Saturn Remote settings/profiles, state schema, custom-script registry and registered operator scripts, update policy, and piHPSDR/deskHPSDR `*.props`. | Credentials, cookie/TLS/SSH secrets, Tailscale/network/host identity, boot and provisioning config, deployments/logs, source/releases/caches, and FPGA hardware state. |
+| `GET /backup_source` (`GET /backup_full` compatibility alias) | A gzip tar archive of the current Saturn **repository root**. | Everything outside that repository: administrator/Linux credentials, remembered-device/TLS identity, Saturn Remote settings/profiles, custom-script registry and installed custom files, piHPSDR/deskHPSDR settings outside that repository, Tailscale/network state, boot/LCD/front-panel config, provisioning state, deployment history, installed releases, and FPGA hardware state. It is not a full appliance backup. |
+| `GET /backup_release?commit=...` | One manifest-bearing immutable release directory for the selected full commit. | Settings, credentials, source repositories, OS/network/boot state, deployment history, other releases, and FPGA hardware state. |
 | `saturn-backup-*` made by `update-G2.py` | A directory copy of the Saturn source repository at update time. | The same appliance state omitted by `/backup_full`. |
 | `pihpsdr-backup-*` made by `update-pihpsdr.py` | A directory copy of `${PIHPSDR_REPO}`. This normally includes `.props` files stored at that repository root. | Saturn state, deskHPSDR properties, operating-system identity/configuration, and any piHPSDR data stored outside the repository. |
 | `deskhpsdr-backup-*` made by `update-deskhpsdr.py` | A directory copy of `${DESKHPSDR_REPO}`. | `${SATURN_HOME}/.config/deskhpsdr/*.props`, Saturn state, and operating-system identity/configuration. It is a source rollback, not a radio-settings backup. |
 | REM-0205 pre-migration backup | Only the declared direct Saturn state files plus the state-schema marker, with checksums/modes/owners, under `deployments/state-backups`. | Credentials, TLS/cookies, custom script content, client-app properties, networking, boot config, release payloads, and all undeclared files. It exists only to roll back an activation migration. |
 | Manual whole-disk image | Every allocated/read block captured from the selected source device, subject to the imaging tool and consistency of the live filesystem. | External browser cookies, the current contents of FPGA flash unless separately read, external credentials/services, and anything on another disk. Disk imaging is local-console-only and remains outside Saturn Go. |
 
-Until REM-0302 is complete, operators must not use “full backup” to mean
-“recoverable appliance.” The current download is a repository archive.
+Operators must not use “full backup” to mean “recoverable appliance.” The
+legacy `/backup_full` endpoint is only a compatibility alias for the source
+repository archive. `BACKUP_FORMATS.md` is the complete REM-0302 contract.
 
 ## Ordinary support-bundle policy
 
@@ -138,8 +141,8 @@ when their inventory entry permits support use.
 
 ## Open ownership boundaries
 
-- REM-0302 must define archive manifests, selection rules for operator custom
-  scripts, and a review gate for radio settings moved to different hardware.
+- REM-0303 must validate the REM-0302 settings manifest, selection, and radio
+  review contract before enabling import.
 - REM-0303 must provide crash-safe staging and activation; this inventory does
   not make the existing `rsync --delete` restore safe.
 - FPGA maintainers must define authoritative artifact naming, signing/hash,

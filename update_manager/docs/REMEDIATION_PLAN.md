@@ -322,10 +322,29 @@ Acceptance criteria:
 
 ### REM-0302: Separate backup types
 
-- [ ] Define a small settings backup.
-- [ ] Define a source/release backup.
-- [ ] Document whole-disk images as a manual disaster-recovery procedure.
-- [ ] Stop referring to a repository archive as a complete appliance backup.
+- [x] Define a small settings backup.
+- [x] Define a source/release backup.
+- [x] Document whole-disk images as a manual disaster-recovery procedure.
+- [x] Stop referring to a repository archive as a complete appliance backup.
+
+`GET /backup_settings` now exports a schema-v1 settings archive with a
+checksummed file manifest and explicit secret/identity exclusions. It includes
+managed Saturn settings, registered operator-authored scripts, and direct
+piHPSDR/deskHPSDR property files. Regular-file, per-file, and total-size checks
+keep the selection bounded and reject redirected content.
+
+`GET /backup_source` accurately names the complete active repository archive;
+the historical `/backup_full` route remains a compatibility alias only.
+`GET /backup_releases` and `/backup_release?commit=<full-commit>` enumerate and
+export individual manifest-bearing immutable releases without mutable state.
+The UI presents all three outputs separately and labels existing in-place
+repository restore as legacy/nontransactional.
+
+The exact format, content, omissions, sensitivity, and restore availability
+are specified in `update_manager/docs/BACKUP_FORMATS.md`. Whole-disk imaging
+remains a manual, local-console, same-device disaster-recovery operation.
+REM-0302 does not enable settings/release archive import and does not change
+live release activation; REM-0303 owns transactional restore.
 
 ### REM-0303: Make repository/settings restore transactional
 

@@ -62,6 +62,17 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
   Backup documentation now states exactly what every existing repository,
   migration, and manual whole-disk backup contains and omits. No backup,
   restore, support-bundle, activation, or live-host behavior changed.
+- Added REM-0302 separated backup types. The new settings download stages only
+  managed Saturn settings, registered operator scripts, and direct
+  piHPSDR/deskHPSDR property files into a bounded schema-v1 archive with
+  per-file SHA-256 metadata and explicit credential/device-identity
+  exclusions. Source backup now has an accurate endpoint/name, while the old
+  `/backup_full` URL is only a compatibility alias. Installed immutable
+  releases can be listed and exported one validated full commit at a time.
+  The Backup page and runbook clearly separate settings, source, release, and
+  manual whole-disk disaster recovery, and label existing repository restore
+  as legacy/nontransactional. Settings and release import remain disabled for
+  REM-0303; live release activation is unchanged.
 - Unified provisioning entry point (`./install.sh`) shared by manual Trixie
   installs and the cloud-init bootstrap. The appliance engine now supports
   appliance/desktop/image-factory profiles, bounded user discovery, exact-ref

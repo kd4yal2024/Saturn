@@ -257,10 +257,17 @@ Concurrency guard:
 
 ## Backup/Restore Model
 
-- Full backup (`GET /backup_full`): streams a `tar.gz` of active repo root.
-- Despite the historical endpoint name, this is a source-repository archive,
-  not a complete appliance backup. Exact contents and omissions for every
-  current backup mechanism are defined in `STATE_INVENTORY.md`.
+- Settings backup (`GET /backup_settings`) stages a bounded allowlist of
+  regular portable/review-before-transfer files in a private temporary tree,
+  writes per-file SHA-256 metadata, and streams a schema-v1 `tar.gz`.
+- Source backup (`GET /backup_source`) streams a `tar.gz` of active repo root.
+  Historical `GET /backup_full` is a compatibility alias for this source
+  archive, not a complete appliance backup.
+- Installed release listing/download (`GET /backup_releases`,
+  `GET /backup_release?commit=...`) exports one full-commit, manifest-bearing,
+  real directory directly below the configured immutable releases root.
+- Exact contents and omissions are defined in `STATE_INVENTORY.md` and
+  `BACKUP_FORMATS.md`.
 - Full restore (`POST /restore_full`): uploads archive to `/tmp`, validates and extracts it, then `rsync --delete` into active repo root.
 - Dry-run restore (`?dry_run=1`) reports extracted tree stats without applying changes.
 - Full restore requires extracted top-level directory to pass Saturn repo-root validation (`.git` + `update_manager/`).

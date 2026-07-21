@@ -1,4 +1,5 @@
 mod auth;
+mod backup;
 mod health;
 mod middleware;
 mod monitor;
@@ -11,6 +12,7 @@ mod tailscale;
 mod update;
 mod util;
 use crate::auth::{change_password, exit_server, kill_process};
+use crate::backup::{backup_release, backup_releases, backup_settings, backup_source};
 use crate::health::{healthz, livez, readyz};
 use crate::middleware::csrf_protect;
 use crate::monitor::{get_system_data, network_test};
@@ -52,9 +54,8 @@ use crate::util::{
 };
 
 use axum::{
-    body::Body,
     extract::{DefaultBodyLimit, Multipart, Query, State},
-    http::{header, HeaderMap, HeaderValue, StatusCode},
+    http::{header, HeaderValue, StatusCode},
     response::{
         sse::{Event, KeepAlive},
         IntoResponse, Json, Response, Sse,
@@ -76,12 +77,11 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use tokio::{
-    io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, BufReader},
+    io::{AsyncRead, AsyncReadExt},
     process::Command,
     sync::{mpsc, watch},
 };
 use tokio_stream::{wrappers::UnboundedReceiverStream, StreamExt};
-use tokio_util::io::ReaderStream;
 use tracing::{error, info, warn};
 
 #[derive(Debug, Deserialize)]
@@ -305,7 +305,11 @@ async fn main() {
         .route("/update_start", post(update_start))
         .route("/update_status", get(update_status))
         .route("/update_rollback", post(update_rollback))
-        .route("/backup_full", get(backup_full))
+        .route("/backup_settings", get(backup_settings))
+        .route("/backup_source", get(backup_source))
+        .route("/backup_releases", get(backup_releases))
+        .route("/backup_release", get(backup_release))
+        .route("/backup_full", get(backup_source))
         .route("/restore_full", post(restore_full))
         .route("/g2_backups", get(g2_backups))
         .route("/g2_restore", post(g2_restore))
@@ -2590,71 +2594,6 @@ async fn get_versions(State(state): State<AppState>) -> impl IntoResponse {
         versions.insert(e.filename, v);
     }
     Json(serde_json::json!({ "versions": versions }))
-}
-
-async fn backup_full(State(state): State<AppState>) -> Result<Response, Response> {
-    let repo_root = current_repo_root(&state);
-    if !repo_root.is_dir() {
-        return Err((StatusCode::BAD_REQUEST, "repo_root is not a directory").into_response());
-    }
-
-    let parent = repo_root.parent().unwrap_or(Path::new("/")).to_path_buf();
-    let base = repo_root
-        .file_name()
-        .and_then(|s| s.to_str())
-        .unwrap_or("Saturn");
-
-    let ts = Local::now().format("%Y%m%d-%H%M%S").to_string();
-    let filename = format!("{base}.bak-{ts}.tar.gz");
-
-    let mut cmd = Command::new("tar");
-    cmd.arg("-C")
-        .arg(&parent)
-        .arg("-czf")
-        .arg("-")
-        .arg(base)
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped());
-
-    let mut child = match cmd.spawn() {
-        Ok(c) => c,
-        Err(e) => return Err((StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response()),
-    };
-
-    let stdout = match child.stdout.take() {
-        Some(s) => s,
-        None => {
-            return Err((StatusCode::INTERNAL_SERVER_ERROR, "tar stdout missing").into_response())
-        }
-    };
-    let stderr = child.stderr.take();
-
-    tokio::spawn(async move {
-        if let Some(err) = stderr {
-            let mut lines = BufReader::new(err).lines();
-            while let Ok(Some(line)) = lines.next_line().await {
-                error!("tar stderr: {line}");
-            }
-        }
-        if let Ok(status) = child.wait().await {
-            if !status.success() {
-                error!("tar exited with status {status}");
-            }
-        }
-    });
-
-    let stream = ReaderStream::new(stdout);
-    let body = Body::from_stream(stream);
-
-    let mut headers = HeaderMap::new();
-    headers.insert("Content-Type", HeaderValue::from_static("application/gzip"));
-    headers.insert(
-        "Content-Disposition",
-        HeaderValue::from_str(&format!("attachment; filename=\"{filename}\""))
-            .unwrap_or_else(|_| HeaderValue::from_static("attachment")),
-    );
-
-    Ok((headers, body).into_response())
 }
 
 #[derive(Deserialize, Default)]
