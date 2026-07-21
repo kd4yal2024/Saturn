@@ -32,6 +32,7 @@ const MAX_SETTINGS_FILE_BYTES: u64 = 16 * 1024 * 1024;
 const MAX_SETTINGS_TOTAL_BYTES: u64 = 128 * 1024 * 1024;
 const DEFAULT_RELEASES_ROOT: &str = "/opt/saturn/releases";
 const DEFAULT_CURRENT_RELEASE: &str = "/opt/saturn/current";
+const RELEASE_MANIFEST_NAME: &str = "release-manifest.json";
 
 #[derive(Debug, Clone)]
 struct SettingsBackupSources {
@@ -649,7 +650,7 @@ fn resolve_installed_release(root: &Path, commit: &str) -> Result<PathBuf, Strin
     if canonical.parent() != Some(root.as_path()) {
         return Err("installed release escapes the releases root".to_string());
     }
-    if !canonical.join("share/release/manifest.json").is_file() {
+    if !canonical.join(RELEASE_MANIFEST_NAME).is_file() {
         return Err("installed release manifest is missing".to_string());
     }
     Ok(canonical)
@@ -673,7 +674,7 @@ pub async fn backup_releases() -> Response {
             }
             releases.push(ReleaseBackupEntry {
                 active: active.as_deref() == Some(name.as_str()),
-                manifest_present: path.join("share/release/manifest.json").is_file(),
+                manifest_present: path.join(RELEASE_MANIFEST_NAME).is_file(),
                 commit: name,
             });
         }
@@ -868,8 +869,8 @@ mod tests {
         let root = test_root("release");
         let commit = "a".repeat(40);
         let release = root.join(&commit);
-        fs::create_dir_all(release.join("share/release")).unwrap();
-        fs::write(release.join("share/release/manifest.json"), b"{}\n").unwrap();
+        fs::create_dir(&release).unwrap();
+        fs::write(release.join(RELEASE_MANIFEST_NAME), b"{}\n").unwrap();
         assert_eq!(resolve_installed_release(&root, &commit).unwrap(), release);
 
         let missing_manifest = "b".repeat(40);

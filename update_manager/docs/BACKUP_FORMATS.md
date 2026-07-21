@@ -100,7 +100,7 @@ Filename: `saturn-release-<full-commit>.tar.gz`
 
 Content: one real direct child of `/opt/saturn/releases` (or the configured
 release root) with a full hexadecimal commit name and an existing
-`share/release/manifest.json`. The complete immutable release directory is
+root-level `release-manifest.json`. The complete immutable release directory is
 archived, including binaries, web assets, its release/component policies, and
 the checksum manifest created by the release builder.
 

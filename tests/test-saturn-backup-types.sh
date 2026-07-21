@@ -25,6 +25,11 @@ grep -Fq 'const MAX_SETTINGS_TOTAL_BYTES: u64 = 128 * 1024 * 1024;' "$BACKUP_RS"
 grep -Fq 'entry.version.as_deref() == Some("custom-default")' "$BACKUP_RS"
 grep -Fq 'settings source must be a regular file' "$BACKUP_RS"
 grep -Fq 'installed release manifest is missing' "$BACKUP_RS"
+grep -Fq 'const RELEASE_MANIFEST_NAME: &str = "release-manifest.json";' "$BACKUP_RS"
+if grep -Fq 'share/release/manifest.json' "$BACKUP_RS"; then
+  printf 'release backup expects the manifest at the wrong installed path\n' >&2
+  exit 1
+fi
 
 for required_id in \
   settings-backup-download \
