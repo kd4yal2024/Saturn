@@ -1,4 +1,4 @@
-# Saturn Application Release Manifest v1
+# Saturn Application Release Manifest v2
 
 Milestone 2 application releases are built as complete inactive directories.
 The release builder does not install files, switch `/opt/saturn/current`, or
@@ -35,9 +35,10 @@ application release.
 | Field | Meaning |
 |---|---|
 | `format` | Literal `saturn-application-release`. |
-| `schema_version` | Integer `1`. Unknown versions must fail closed. |
+| `schema_version` | Integer `2`. Unknown versions fail closed; installed v1 manifests remain readable as legacy releases. |
 | `source` | Full lowercase Git commit, repository identity, and `dirty:false`. |
 | `build` | UTC build time, architecture, operating system, and passed build/test gates. |
+| `state_compatibility` | Versioned persistent-state read/write and migration contract. |
 | `components` | Required named runtime components with role, version, source commit, path, mode, size, and SHA-256. |
 | `files` | Exact inventory of every payload file except the manifest and checksum index. |
 
@@ -53,6 +54,27 @@ incomplete build results, and a component set that differs from
 declared by that component policy; a caller cannot substitute one trivial
 passing check for the normal release gates.
 
+## Persistent-state contract
+
+Manifest v2 embeds the trusted component policy's `state_compatibility`
+object. It declares:
+
+- `state_schema_version`: the version written by the release;
+- `readable_state_schema_versions`: versions the release can safely consume;
+- `migration.from_state_schema_versions`: allowed migration inputs;
+- `migration.kind`: currently only audited `metadata-only` migrations;
+- `migration.one_way` and required documentation; and
+- `managed_paths`: direct files below `/var/lib/saturn-state` included in the
+  migration backup.
+
+Every release must read its own state version and the immediately preceding
+version. Schema-v1 application manifests predate this field; the validator
+maps them to legacy state schema 0 with read compatibility for schemas 0 and 1.
+They may also omit the REM-0205 `state-compatibility-tests` build gate, which
+did not exist when those bundles were created; every original gate, component,
+file, mode, and checksum remains mandatory.
+See `STATE_COMPATIBILITY.md` for activation and rollback behavior.
+
 ## Build contract
 
 Run:
@@ -65,7 +87,8 @@ The source checkout must be clean and resolve to one full commit. On the
 supported low-memory Pi, the builder requires the configured disk-backed build
 swap and uses one Rust build job by default. It runs Rust server tests, Bridge
 tests with native DSP stubs, Remote web type/seam/unit/build checks, Protocol 2
-boundary tests, and release builds before creating the manifest.
+boundary tests, persistent-state compatibility tests, and release builds before
+creating the manifest.
 
 The default output is:
 

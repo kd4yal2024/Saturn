@@ -47,6 +47,12 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
   failures restore and restart the prior deployment and require its exact
   commit to become ready. Durable state distinguishes `rolled_back` from
   `rollback_failed`, and activation never prunes installed releases.
+- Added REM-0205 persistent-state compatibility contracts to schema-v2 release
+  manifests. Activation now preflights state readability, creates a
+  checksummed backup before migration, restores that state during automatic
+  rollback, and blocks undocumented or unapproved one-way migrations. Legacy
+  schema-v1 releases map to state schema 0. Production activation remains
+  disabled by default.
 - Unified provisioning entry point (`./install.sh`) shared by manual Trixie
   installs and the cloud-init bootstrap. The appliance engine now supports
   appliance/desktop/image-factory profiles, bounded user discovery, exact-ref

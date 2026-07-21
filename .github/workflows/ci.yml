@@ -177,6 +177,7 @@ jobs:
             tests/test-saturn-release-activate.sh \
             tests/test-saturn-release-install.sh \
             tests/test-saturn-release-manifest.sh \
+            tests/test-saturn-state-compatibility.sh \
             tests/test-saturn-go-deploy-broker.sh \
             tests/test-saturn-p2-deploy.sh \
             tests/test-xdma-dkms-idempotency.sh
@@ -205,6 +206,7 @@ jobs:
             tests/test-saturn-release-activate.sh \
             tests/test-saturn-release-install.sh \
             tests/test-saturn-release-manifest.sh \
+            tests/test-saturn-state-compatibility.sh \
             tests/test-saturn-go-deploy-broker.sh \
             tests/test-xdma-dkms-idempotency.sh
 
@@ -228,6 +230,9 @@ jobs:
 
       - name: Test immutable release installation
         run: tests/test-saturn-release-install.sh
+
+      - name: Test persistent-state compatibility and rollback
+        run: tests/test-saturn-state-compatibility.sh
 
       - name: Test atomic release activation transaction
         run: tests/test-saturn-release-activate.sh

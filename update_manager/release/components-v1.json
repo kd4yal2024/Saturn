@@ -11,8 +11,29 @@
     "saturn-go-release-build",
     "saturn-bridge-release-build",
     "native-release-build",
-    "release-manifest-validation"
+    "release-manifest-validation",
+    "state-compatibility-tests"
   ],
+  "state_compatibility": {
+    "format": "saturn-state-compatibility",
+    "contract_schema_version": 1,
+    "state_schema_version": 1,
+    "readable_state_schema_versions": [0, 1],
+    "migration": {
+      "from_state_schema_versions": [0],
+      "kind": "metadata-only",
+      "one_way": false,
+      "documentation": "Initial version marker only; managed state file formats are unchanged and remain readable by the legacy deployment."
+    },
+    "managed_paths": [
+      "custom_scripts.json",
+      "remote_profiles.json",
+      "remote_settings.json",
+      "repo_root.txt",
+      "saturngo_update_policy.json",
+      "update_policy.json"
+    ]
+  },
   "components": [
     {
       "name": "saturn-go",

@@ -264,15 +264,33 @@ Acceptance criteria:
 
 ### REM-0205: Define state compatibility
 
-- [ ] Version persistent state schemas.
-- [ ] Back up state before migration.
-- [ ] Require a release to read its own and the immediately preceding supported state version.
-- [ ] Block deployment when rollback would become unsafe unless the operator explicitly approves a documented one-way migration.
+The code-only state contract is implemented and covered by isolated fixtures.
+New schema-v2 release manifests declare the state version they write, the
+versions they can read, the permitted migration, its one-way status, and the
+exact direct files managed below `/var/lib/saturn-state`. Existing schema-v1
+release manifests map to explicit legacy state schema 0 so installed rollback
+releases remain usable.
+
+Before a migration, the activator stops state-writing services and creates a
+checksummed, mode-preserving backup under
+`/var/lib/saturn-state/deployments/state-backups/`. It changes the version
+marker only after the backup is durable. A failed migration cannot switch the
+active pointer; a later activation/readiness failure restores the state backup
+before the prior services restart. Undocumented rollback-unsafe migrations
+fail closed, while a documented one-way migration additionally requires the
+operator-only `--approve-one-way-migration` flag and records that approval.
+
+- [x] Version persistent state schemas.
+- [x] Back up state before migration.
+- [x] Require a release to read its own and the immediately preceding supported state version.
+- [x] Block deployment when rollback would become unsafe unless the operator explicitly approves a documented one-way migration.
 
 Acceptance criteria:
 
 - Upgrade and immediate rollback preserve settings.
 - Migration failure does not activate the new release.
+- Isolated acceptance tests pass. Production activation remains disabled; no
+  live pointer or service was changed for REM-0205.
 
 ## Milestone 3 — Transactional backup and restore
 

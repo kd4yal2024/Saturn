@@ -90,6 +90,35 @@ The durable transaction record is
 resolves it. The rollback snapshot is stored beside that record under
 `rollback-current/`. Activation never prunes installed immutable releases.
 
+REM-0205 adds a persistent-state contract to every new application release.
+The current contract is state schema 1, an initial metadata-only marker over
+the existing state schema 0; the managed settings formats themselves are
+unchanged. Before any required migration, the activator backs up the marker
+and declared settings files to:
+
+```text
+/var/lib/saturn-state/deployments/state-backups/<timestamp>-<full-commit>/
+```
+
+Each backup has a root-owned manifest with sizes, modes, owners, and SHA-256
+digests. Restore validation rejects missing, corrupt, oversized, non-regular,
+or redirected payloads before replacing live state. Migration and backup
+details are also recorded in the deployment transaction.
+
+The activation helper blocks a target that cannot read the current state or
+does not declare support for its immediately preceding schema. If a future
+migration is explicitly documented as one-way, it still requires a local root
+operator to use:
+
+```bash
+sudo /usr/local/lib/saturn-go/scripts/saturn-release-activate-root.sh \
+  --approve-one-way-migration <full-commit>
+```
+
+That flag is intentionally unavailable through Saturn Go sudoers. Do not use
+it merely to bypass an incompatibility error. Production activation remains
+disabled until the separately approved live rollback test.
+
 Saturn Go self-update also builds the bridge in build-only mode, stages the
 binary and service unit with the UI bundle, and deploys them together. Set
 `SATURN_SATURNGO_BUILD_BRIDGE=0` only when intentionally retaining an older

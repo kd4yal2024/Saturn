@@ -10,6 +10,7 @@ set -Eeuo pipefail
 
 CONFIG_FILE="${SATURN_RELEASE_ACTIVATE_CONFIG:-/etc/default/saturn-release-activate}"
 VALIDATE_ONLY=0
+APPROVE_ONE_WAY_MIGRATION=0
 ACTIVATION_ENABLED=0
 SATURN_ROOT="/opt/saturn"
 RELEASES_ROOT="/opt/saturn/releases"
@@ -18,6 +19,9 @@ TRANSACTION_FILE="/var/lib/saturn-state/deployments/current.json"
 LOCK_FILE="/run/lock/saturn-release-activate.lock"
 MANIFEST_TOOL="/usr/local/lib/saturn-go/scripts/saturn-release-manifest.py"
 COMPONENTS_FILE="/usr/local/lib/saturn-go/release/components-v1.json"
+STATE_TOOL="/usr/local/lib/saturn-go/scripts/saturn-state-compatibility.py"
+STATE_ROOT="/var/lib/saturn-state"
+STATE_BACKUP_ROOT="/var/lib/saturn-state/deployments/state-backups"
 SYSTEMD_ROOT="/etc/systemd/system"
 SATURN_GO_SERVICE="saturn-go.service"
 BRIDGE_SERVICE="saturn-bridge.service"
@@ -50,6 +54,9 @@ P2APP_DROPIN_EXISTED=0
 SATURN_GO_WAS_ACTIVE=0
 BRIDGE_WAS_ACTIVE=0
 P2APP_WAS_ACTIVE=0
+STATE_PLAN_JSON=""
+STATE_BACKUP_DIR=""
+STATE_MIGRATED=0
 
 log(){ printf '[saturn-release-activate] %s\n' "$*"; }
 die(){ printf '[saturn-release-activate] ERROR: %s\n' "$*" >&2; return 1; }
@@ -59,10 +66,13 @@ usage(){
   cat <<'EOF'
 Usage:
   saturn-release-activate-root.sh <full-commit>
+  saturn-release-activate-root.sh --approve-one-way-migration <full-commit>
   saturn-release-activate-root.sh --validate <full-commit>
 
 The validation form verifies an installed immutable release without changing
 the host. Activation requires ACTIVATION_ENABLED=1 in the root-owned config.
+The one-way form is accepted only when the release documents that rollback
+compatibility will be lost and records the operator's explicit approval.
 EOF
 }
 
@@ -99,6 +109,9 @@ load_config(){
       LOCK_FILE) LOCK_FILE="$value" ;;
       MANIFEST_TOOL) MANIFEST_TOOL="$value" ;;
       COMPONENTS_FILE) COMPONENTS_FILE="$value" ;;
+      STATE_TOOL) STATE_TOOL="$value" ;;
+      STATE_ROOT) STATE_ROOT="$value" ;;
+      STATE_BACKUP_ROOT) STATE_BACKUP_ROOT="$value" ;;
       SYSTEMD_ROOT) SYSTEMD_ROOT="$value" ;;
       SATURN_GO_SERVICE) SATURN_GO_SERVICE="$value" ;;
       BRIDGE_SERVICE) BRIDGE_SERVICE="$value" ;;
@@ -123,7 +136,8 @@ validate_configuration(){
   (( READY_TIMEOUT_SECONDS <= 300 )) || die "READY_TIMEOUT_SECONDS must not exceed 300"
   for path in \
     "$SATURN_ROOT" "$RELEASES_ROOT" "$CURRENT_LINK" "$TRANSACTION_FILE" "$LOCK_FILE" \
-    "$MANIFEST_TOOL" "$COMPONENTS_FILE" "$SYSTEMD_ROOT"
+    "$MANIFEST_TOOL" "$COMPONENTS_FILE" "$SYSTEMD_ROOT" \
+    "$STATE_TOOL" "$STATE_ROOT" "$STATE_BACKUP_ROOT"
   do
     [[ "$path" == /* && "$path" != *[$'\t\r\n ']* ]] || die "unsafe configured path: $path"
   done
@@ -131,6 +145,8 @@ validate_configuration(){
     || die "RELEASES_ROOT must be directly beneath SATURN_ROOT"
   [[ "$(dirname "$CURRENT_LINK")" == "$SATURN_ROOT" ]] \
     || die "CURRENT_LINK must be directly beneath SATURN_ROOT"
+  [[ "$(dirname "$STATE_BACKUP_ROOT")" == "$(dirname "$TRANSACTION_FILE")" ]] \
+    || die "STATE_BACKUP_ROOT must be directly beneath the deployment transaction directory"
   for service in "$SATURN_GO_SERVICE" "$BRIDGE_SERVICE" "$P2APP_SERVICE"; do
     [[ "$service" =~ ^[A-Za-z0-9_.@-]+\.service$ ]] || die "unsafe service name: $service"
   done
@@ -271,7 +287,9 @@ write_transaction(){
     "$PREVIOUS_READY_COMMIT" "$ROLLBACK_DIR" \
     "$SATURN_GO_WAS_ACTIVE" "$BRIDGE_WAS_ACTIVE" "$P2APP_WAS_ACTIVE" \
     "$ACTIVATION_FAILURE_PHASE" "$ACTIVATION_FAILURE_COMMAND" \
-    "$ACTIVATION_FAILURE_STATUS" "$ROLLBACK_STATUS" "$ROLLBACK_MESSAGE" <<'PY'
+    "$ACTIVATION_FAILURE_STATUS" "$ROLLBACK_STATUS" "$ROLLBACK_MESSAGE" \
+    "$STATE_PLAN_JSON" "$STATE_BACKUP_DIR" "$STATE_MIGRATED" \
+    "$APPROVE_ONE_WAY_MIGRATION" <<'PY'
 import json
 import os
 import sys
@@ -290,6 +308,8 @@ from pathlib import Path
     saturn_go_was_active, bridge_was_active, p2app_was_active,
     failure_phase, failure_command, failure_status,
     rollback_status, rollback_message,
+    state_plan_json, state_backup_directory, state_migrated,
+    one_way_approved,
 ) = sys.argv[1:]
 path = Path(path_text)
 path.parent.mkdir(parents=True, exist_ok=True)
@@ -356,6 +376,13 @@ if rollback_status:
         "message": rollback_message,
         "updated_at": now,
     }
+state_plan = json.loads(state_plan_json)
+value["state_compatibility"] = {
+    "plan": state_plan,
+    "backup_directory": state_backup_directory or None,
+    "migrated": state_migrated == "1",
+    "one_way_operator_approval": one_way_approved == "1",
+}
 fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
 try:
     with os.fdopen(fd, "w", encoding="utf-8") as handle:
@@ -618,6 +645,73 @@ verify_restored_dropin(){
   fi
 }
 
+state_tool_release_args(){
+  printf '%s\0' --state-root "$STATE_ROOT" --target-release "$TARGET_RELEASE"
+  if [[ -n "$PREVIOUS_RELEASE" ]]; then
+    printf '%s\0' --previous-release "$PREVIOUS_RELEASE"
+  fi
+  if (( APPROVE_ONE_WAY_MIGRATION )); then
+    printf '%s\0' --approve-one-way
+  fi
+}
+
+preflight_state_compatibility(){
+  local -a args=()
+  while IFS= read -r -d '' value; do
+    args+=("$value")
+  done < <(state_tool_release_args)
+  STATE_PLAN_JSON="$("$STATE_TOOL" preflight "${args[@]}")"
+  python3 - "$STATE_PLAN_JSON" <<'PY'
+import json
+import sys
+value = json.loads(sys.argv[1])
+required = {
+    "current_state_schema_version",
+    "target_state_schema_version",
+    "migration_required",
+    "rollback_safe",
+    "managed_paths",
+}
+if not isinstance(value, dict) or not required.issubset(value):
+    raise SystemExit(1)
+PY
+}
+
+migrate_state_if_required(){
+  local result value
+  local -a args=()
+  while IFS= read -r -d '' value; do
+    args+=("$value")
+  done < <(state_tool_release_args)
+  # Keep the command substitution in a tested conditional. With errtrace on,
+  # allowing the substitution itself to trigger ERR would invoke automatic
+  # rollback once in the subshell and again when this function returned.
+  if ! result="$("$STATE_TOOL" migrate "${args[@]}" \
+    --backup-root "$STATE_BACKUP_ROOT" \
+    --target-commit "$TARGET_COMMIT" \
+    --state-group "$TRANSACTION_GROUP")"; then
+    return 1
+  fi
+  IFS=$'\t' read -r STATE_MIGRATED STATE_BACKUP_DIR < <(python3 - "$result" <<'PY'
+import json
+import sys
+value = json.loads(sys.argv[1])
+print(f'{1 if value.get("migrated") is True else 0}\t{value.get("backup_directory") or ""}')
+PY
+  )
+  [[ "$STATE_MIGRATED" == "0" || "$STATE_MIGRATED" == "1" ]] \
+    || die "state migration tool returned an invalid result"
+}
+
+restore_previous_state(){
+  [[ "$STATE_MIGRATED" == "1" ]] || return 0
+  [[ -n "$STATE_BACKUP_DIR" ]] || return 1
+  "$STATE_TOOL" restore \
+    --state-root "$STATE_ROOT" \
+    --backup-root "$STATE_BACKUP_ROOT" \
+    --backup-directory "$STATE_BACKUP_DIR" >/dev/null
+}
+
 stop_affected_services(){
   local rc=0
   systemctl stop "$SATURN_GO_SERVICE" || rc=1
@@ -650,6 +744,7 @@ rollback_activation(){
   ROLLBACK_MESSAGE="Restoring the prior release and service configuration"
   write_transaction "rolling_back" "rollback" "$ROLLBACK_MESSAGE" || rc=1
   stop_affected_services || rc=1
+  restore_previous_state || rc=1
 
   if [[ -n "$PREVIOUS_RELEASE" ]]; then
     atomic_switch_pointer "$PREVIOUS_RELEASE" || rc=1
@@ -714,11 +809,25 @@ if [[ "${BASH_SOURCE[0]}" != "$0" ]]; then
   return 0
 fi
 
-if [[ "${1:-}" == "--validate" ]]; then
-  VALIDATE_ONLY=1
+while [[ "${1:-}" == --* ]]; do
+  case "$1" in
+    --validate)
+      VALIDATE_ONLY=1
+      ;;
+    --approve-one-way-migration)
+      APPROVE_ONE_WAY_MIGRATION=1
+      ;;
+    *)
+      usage >&2
+      exit 2
+      ;;
+  esac
   shift
-fi
+done
 [[ $# -eq 1 ]] || { usage >&2; exit 2; }
+if (( VALIDATE_ONLY && APPROVE_ONE_WAY_MIGRATION )); then
+  die "--validate cannot be combined with --approve-one-way-migration"
+fi
 TARGET_COMMIT="$1"
 
 need_cmd curl
@@ -738,6 +847,7 @@ install -d -m 0755 "$(dirname "$LOCK_FILE")"
 exec 9>"$LOCK_FILE"
 flock -n 9 || die "another release activation is already running"
 [[ -x "$MANIFEST_TOOL" ]] || die "trusted manifest validator not executable: $MANIFEST_TOOL"
+[[ -x "$STATE_TOOL" ]] || die "trusted state compatibility tool not executable: $STATE_TOOL"
 [[ -f "$COMPONENTS_FILE" ]] || die "trusted component policy missing: $COMPONENTS_FILE"
 TARGET_RELEASE="$(validate_release "$TARGET_COMMIT")"
 if (( VALIDATE_ONLY )); then
@@ -768,6 +878,7 @@ if [[ -n "$PREVIOUS_COMMIT" ]]; then
   [[ "$(validate_release "$PREVIOUS_COMMIT")" == "$PREVIOUS_RELEASE" ]] \
     || die "previous active release failed validation"
 fi
+preflight_state_compatibility
 SATURN_GO_DROPIN="$SYSTEMD_ROOT/$SATURN_GO_SERVICE.d/50-saturn-release.conf"
 BRIDGE_DROPIN="$SYSTEMD_ROOT/$BRIDGE_SERVICE.d/50-saturn-release.conf"
 P2APP_DROPIN="$SYSTEMD_ROOT/$P2APP_SERVICE.d/50-saturn-release.conf"
@@ -781,6 +892,17 @@ write_transaction "prepared" "$PHASE" "Validated target and persisted deployment
 TRANSACTION_PREPARED=1
 trap mark_failed ERR
 
+PHASE="service-stop"
+write_transaction "activating" "$PHASE" "Stopping affected services in dependency order"
+systemctl stop "$SATURN_GO_SERVICE"
+systemctl stop "$BRIDGE_SERVICE"
+systemctl stop "$P2APP_SERVICE"
+
+PHASE="state-migration"
+write_transaction "activating" "$PHASE" "Backing up and migrating persistent state when required"
+migrate_state_if_required
+write_transaction "activating" "$PHASE" "Persistent state compatibility is ready for the target"
+
 PHASE="service-wiring"
 write_transaction "activating" "$PHASE" "Installing stable-pointer systemd overrides"
 install_release_dropins
@@ -789,12 +911,6 @@ systemctl daemon-reload
 PHASE="pointer-switch"
 write_transaction "activating" "$PHASE" "Atomically switching the active release pointer"
 atomic_switch_pointer "$TARGET_RELEASE"
-
-PHASE="service-stop"
-write_transaction "activating" "$PHASE" "Stopping affected services in dependency order"
-systemctl stop "$SATURN_GO_SERVICE"
-systemctl stop "$BRIDGE_SERVICE"
-systemctl stop "$P2APP_SERVICE"
 
 PHASE="service-start"
 write_transaction "activating" "$PHASE" "Starting affected services in dependency order"

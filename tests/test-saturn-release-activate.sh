@@ -4,6 +4,7 @@ set -Eeuo pipefail
 REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
 ACTIVATOR="$REPO_ROOT/update_manager/scripts/saturn-release-activate-root.sh"
 MANIFEST_TOOL="$REPO_ROOT/update_manager/scripts/saturn-release-manifest.py"
+STATE_TOOL="$REPO_ROOT/update_manager/scripts/saturn-state-compatibility.py"
 COMPONENTS="$REPO_ROOT/update_manager/release/components-v1.json"
 TMP_ROOT="$(mktemp -d)"
 SATURN_ROOT="$TMP_ROOT/saturn"
@@ -22,6 +23,7 @@ STARTUP_COMMIT="4444444444444444444444444444444444444444"
 CONFIG_COMMIT="5555555555555555555555555555555555555555"
 WRONG_COMMIT="6666666666666666666666666666666666666666"
 ROLLBACK_FAIL_COMMIT="7777777777777777777777777777777777777777"
+MIGRATION_FAIL_COMMIT="8888888888888888888888888888888888888888"
 
 cleanup(){ rm -rf -- "$TMP_ROOT"; }
 trap cleanup EXIT
@@ -83,6 +85,9 @@ TRANSACTION_FILE="$TRANSACTION_FILE"
 LOCK_FILE="$LOCK_FILE"
 MANIFEST_TOOL="$MANIFEST_TOOL"
 COMPONENTS_FILE="$COMPONENTS"
+STATE_TOOL="$STATE_TOOL"
+STATE_ROOT="$TMP_ROOT/state"
+STATE_BACKUP_ROOT="$TMP_ROOT/state/deployments/state-backups"
 SYSTEMD_ROOT="$SYSTEMD_ROOT"
 SATURN_GO_SERVICE="saturn-go.service"
 BRIDGE_SERVICE="saturn-bridge.service"
@@ -104,6 +109,7 @@ create_release "$STARTUP_COMMIT"
 create_release "$CONFIG_COMMIT"
 create_release "$WRONG_COMMIT"
 create_release "$ROLLBACK_FAIL_COMMIT"
+create_release "$MIGRATION_FAIL_COMMIT"
 
 cat >"$FAKE_BIN/systemctl" <<'EOF'
 #!/usr/bin/env bash
@@ -157,9 +163,17 @@ grep -Fq 'ACTIVATION_ENABLED="$SATURN_RELEASE_ACTIVATION_ENABLED"' \
 # shellcheck disable=SC2016
 grep -Fq '"$SOURCE_DIR/scripts/$SATURN_RELEASE_ACTIVATOR_NAME"' \
   "$REPO_ROOT/update_manager/install_saturn_go_nginx.sh"
+# shellcheck disable=SC2016
+grep -Fq '"$SOURCE_DIR/scripts/$SATURN_STATE_COMPATIBILITY_TOOL_NAME"' \
+  "$REPO_ROOT/update_manager/install_saturn_go_nginx.sh"
 if grep -Eq 'NOPASSWD:.*saturn-release-activate-root' \
   "$REPO_ROOT/update_manager/install_saturn_go_nginx.sh"; then
   printf 'activation broker unexpectedly exposed through sudoers\n' >&2
+  exit 1
+fi
+if grep -Eq 'NOPASSWD:.*saturn-state-compatibility' \
+  "$REPO_ROOT/update_manager/install_saturn_go_nginx.sh"; then
+  printf 'state migration helper unexpectedly exposed through sudoers\n' >&2
   exit 1
 fi
 
@@ -181,6 +195,9 @@ fi
 [[ ! -e "$TRANSACTION_FILE" ]]
 
 write_config 1
+printf '{"activeProfile":"operator","theme":"dark"}\n' \
+  >"$TMP_ROOT/state/remote_settings.json"
+cp "$TMP_ROOT/state/remote_settings.json" "$TMP_ROOT/remote-settings.expected"
 ln -s /etc/passwd "$TRANSACTION_FILE"
 if "$ACTIVATOR" "$NEW_COMMIT" >/dev/null 2>&1; then
   printf 'symlinked transaction state unexpectedly accepted\n' >&2
@@ -188,6 +205,29 @@ if "$ACTIVATOR" "$NEW_COMMIT" >/dev/null 2>&1; then
 fi
 rm -f "$TRANSACTION_FILE"
 [[ ! -e "$CURRENT_LINK" && ! -L "$CURRENT_LINK" ]]
+
+# A migration failure occurs after the prior services are stopped, but before
+# service wiring or pointer activation. Automatic rollback restarts the legacy
+# services and leaves both settings and schema marker unchanged.
+ln -s /etc/passwd "$TMP_ROOT/state/remote_profiles.json"
+if "$ACTIVATOR" "$MIGRATION_FAIL_COMMIT" >/dev/null 2>&1; then
+  printf 'failed state migration unexpectedly activated a release\n' >&2
+  exit 1
+fi
+rm "$TMP_ROOT/state/remote_profiles.json"
+[[ ! -e "$CURRENT_LINK" && ! -L "$CURRENT_LINK" ]]
+[[ ! -e "$TMP_ROOT/state/state-schema.json" ]]
+cmp "$TMP_ROOT/remote-settings.expected" "$TMP_ROOT/state/remote_settings.json"
+python3 - "$TRANSACTION_FILE" "$MIGRATION_FAIL_COMMIT" <<'PY'
+import json
+import sys
+with open(sys.argv[1], encoding="utf-8") as handle:
+    value = json.load(handle)
+assert value["status"] == "rolled_back"
+assert value["target_commit"] == sys.argv[2]
+assert value["activation_failure"]["phase"] == "state-migration"
+assert value["rollback"]["status"] == "succeeded"
+PY
 
 # A failed first activation restores the legacy no-pointer deployment and
 # removes all newly introduced systemd drop-ins.
@@ -201,6 +241,8 @@ unset SATURN_TEST_READY_FAIL_COMMITS
 [[ ! -e "$SYSTEMD_ROOT/saturn-go.service.d/50-saturn-release.conf" ]]
 [[ ! -e "$SYSTEMD_ROOT/saturn-bridge.service.d/50-saturn-release.conf" ]]
 [[ ! -e "$SYSTEMD_ROOT/p2app.service.d/50-saturn-release.conf" ]]
+[[ ! -e "$TMP_ROOT/state/state-schema.json" ]]
+cmp "$TMP_ROOT/remote-settings.expected" "$TMP_ROOT/state/remote_settings.json"
 python3 - "$TRANSACTION_FILE" "$BAD_COMMIT" "$OLD_COMMIT" <<'PY'
 import json
 import sys
@@ -213,6 +255,8 @@ assert value["previous_ready_commit"] == sys.argv[3]
 assert value["activation_failure"]["phase"] == "readiness"
 assert value["activation_failure"]["exit_status"] != 0
 assert value["rollback"]["status"] == "succeeded"
+assert value["state_compatibility"]["migrated"] is True
+assert value["state_compatibility"]["backup_directory"]
 PY
 
 "$ACTIVATOR" "$NEW_COMMIT" >/dev/null
@@ -243,6 +287,19 @@ assert all(
     not item["previously_existed"]
     for item in value["service_dropins"].values()
 )
+state = value["state_compatibility"]
+assert state["migrated"] is True
+assert state["backup_directory"]
+assert state["plan"]["current_state_schema_version"] == 0
+assert state["plan"]["target_state_schema_version"] == 1
+assert state["plan"]["rollback_safe"] is True
+PY
+python3 - "$TMP_ROOT/state/state-schema.json" <<'PY'
+import json
+import sys
+with open(sys.argv[1], encoding="utf-8") as handle:
+    value = json.load(handle)
+assert value["state_schema_version"] == 1
 PY
 
 grep -Fq "ExecStart=$CURRENT_LINK/bin/saturn-go" \
@@ -261,10 +318,26 @@ cat >"$TMP_ROOT/expected-systemctl.log" <<'EOF'
 is-active --quiet saturn-go.service
 is-active --quiet saturn-bridge.service
 is-active --quiet p2app.service
-daemon-reload
 stop saturn-go.service
 stop saturn-bridge.service
 stop p2app.service
+stop saturn-go.service
+stop saturn-bridge.service
+stop p2app.service
+daemon-reload
+start p2app.service
+is-active --quiet p2app.service
+start saturn-bridge.service
+is-active --quiet saturn-bridge.service
+start saturn-go.service
+is-active --quiet saturn-go.service
+is-active --quiet saturn-go.service
+is-active --quiet saturn-bridge.service
+is-active --quiet p2app.service
+stop saturn-go.service
+stop saturn-bridge.service
+stop p2app.service
+daemon-reload
 start p2app.service
 is-active --quiet p2app.service
 start saturn-bridge.service
@@ -284,10 +357,10 @@ is-active --quiet saturn-go.service
 is-active --quiet saturn-go.service
 is-active --quiet saturn-bridge.service
 is-active --quiet p2app.service
-daemon-reload
 stop saturn-go.service
 stop saturn-bridge.service
 stop p2app.service
+daemon-reload
 start p2app.service
 is-active --quiet p2app.service
 start saturn-bridge.service
@@ -390,6 +463,6 @@ assert "did not fully restore" in value["rollback"]["message"]
 PY
 
 # Activation and rollback never prune the active or prior immutable releases.
-[[ "$(find "$RELEASES_ROOT" -mindepth 1 -maxdepth 1 -type d | wc -l)" -eq 7 ]]
+[[ "$(find "$RELEASES_ROOT" -mindepth 1 -maxdepth 1 -type d | wc -l)" -eq 8 ]]
 
 printf 'Saturn release activation and automatic rollback tests passed\n'
