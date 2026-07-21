@@ -296,13 +296,29 @@ Acceptance criteria:
 
 ### REM-0301: Inventory irreplaceable state
 
-- [ ] Inventory administrator credentials, remembered-device data, profiles, radio settings, calibration, network/Tailscale state, LCD/front-panel configuration, custom scripts, boot configuration, and deployment history.
-- [ ] Identify which data is portable between appliances and which is device-specific.
-- [ ] Exclude secrets from ordinary support bundles.
+- [x] Inventory administrator credentials, remembered-device data, profiles, radio settings, calibration, network/Tailscale state, LCD/front-panel configuration, custom scripts, boot configuration, and deployment history.
+- [x] Identify which data is portable between appliances and which is device-specific.
+- [x] Exclude secrets from ordinary support bundles.
+
+The reviewed inventory is maintained in the machine-readable
+`update_manager/release/state-inventory-v1.json` contract and the operator
+reference `update_manager/docs/STATE_INVENTORY.md`. It separates portable
+settings, review-before-transfer radio data, same-device identity/recovery
+state, reproducible payloads, external hardware state, and diagnostics. It
+also records the exact limits of the current repository, client-source, state
+migration, and manual whole-disk backup mechanisms.
+
+REM-0301 is documentation and contract validation only. It does not add a
+support-bundle endpoint, change backup contents, change live host state, or
+make the current restore transactional. Those changes remain REM-0302 and
+REM-0303.
 
 Acceptance criteria:
 
 - The backup documentation states exactly what each backup contains and omits.
+- The inventory contract test covers every REM-0205 managed state file,
+  requires all reviewed state classes, and prevents secret content from being
+  classified for ordinary support-bundle inclusion.
 
 ### REM-0302: Separate backup types
 

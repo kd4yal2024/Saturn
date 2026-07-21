@@ -15,12 +15,13 @@ This folder contains the operational and technical documentation for the Rust-ba
 9. `REMEDIATION_PLAN.md`
 10. `RELEASE_MANIFEST_SCHEMA.md`
 11. `STATE_COMPATIBILITY.md`
-12. `SATURN_REMOTE_ARCHITECTURE.md`
-13. `SATURN_REMOTE_STATE_STRIP_SPEC.md`
-14. `SATURN_REMOTE_APPLE_SAFARI_VALIDATION.md`
-15. `SATURN_REMOTE_APPLE_SAFARI_RESULTS.md`
-16. `SATURN_REMOTE_SQUELCH_AUDIO_PROFILE_CONTRACT.md`
-17. `SATURN_REMOTE_TX_UPLINK_PHASE38_CONTRACT.md`
+12. `STATE_INVENTORY.md`
+13. `SATURN_REMOTE_ARCHITECTURE.md`
+14. `SATURN_REMOTE_STATE_STRIP_SPEC.md`
+15. `SATURN_REMOTE_APPLE_SAFARI_VALIDATION.md`
+16. `SATURN_REMOTE_APPLE_SAFARI_RESULTS.md`
+17. `SATURN_REMOTE_SQUELCH_AUDIO_PROFILE_CONTRACT.md`
+18. `SATURN_REMOTE_TX_UPLINK_PHASE38_CONTRACT.md`
 
 ## Document Guide
 
@@ -68,6 +69,13 @@ This folder contains the operational and technical documentation for the Rust-ba
 - `STATE_COMPATIBILITY.md`
   - Persistent-state versioning, migration backups, rollback behavior, and
     the explicit one-way-migration policy.
+
+- `STATE_INVENTORY.md`
+  - REM-0301 inventory and classification of portable settings,
+    same-device identity, credentials, network/Tailscale state, boot and
+    hardware configuration, custom scripts, client-radio properties,
+    deployment history, reproducible artifacts, and support-bundle exclusions.
+  - States exactly what each existing backup operation contains and omits.
 
 - `SATURN_REMOTE_ARCHITECTURE.md`
   - Browser, TLS, bridge, TCI, audio, panadapter, and waterfall architecture

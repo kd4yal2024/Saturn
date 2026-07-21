@@ -53,6 +53,15 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
   rollback, and blocks undocumented or unapproved one-way migrations. Legacy
   schema-v1 releases map to state schema 0. Production activation remains
   disabled by default.
+- Added the REM-0301 persistent-state inventory and automated policy contract.
+  It classifies Saturn credentials, remembered-device/TLS identity, Remote and
+  client-radio settings, calibration-bearing property files, custom scripts,
+  networking/Tailscale, boot/LCD/front-panel configuration, deployment state,
+  release/source artifacts, FPGA hardware boundaries, and diagnostics by
+  portability, sensitivity, recovery importance, and support-bundle handling.
+  Backup documentation now states exactly what every existing repository,
+  migration, and manual whole-disk backup contains and omits. No backup,
+  restore, support-bundle, activation, or live-host behavior changed.
 - Unified provisioning entry point (`./install.sh`) shared by manual Trixie
   installs and the cloud-init bootstrap. The appliance engine now supports
   appliance/desktop/image-factory profiles, bounded user discovery, exact-ref

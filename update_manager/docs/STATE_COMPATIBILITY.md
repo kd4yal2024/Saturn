@@ -3,7 +3,8 @@
 REM-0205 defines how an immutable application release may consume or migrate
 mutable operator state without silently making the prior release unusable.
 This is an application-release contract; it does not replace the broader
-appliance backup inventory planned for Milestone 3.
+REM-0301 appliance inventory in `STATE_INVENTORY.md` or the separate backup
+formats planned by REM-0302.
 
 ## State versions
 
@@ -34,8 +35,8 @@ state-schema.json
 
 Logs, build caches, deployment history, administrator credentials, TLS keys,
 remembered-device material, Tailscale identity, boot configuration, and FPGA
-artifacts are not part of this migration snapshot. Their complete backup and
-portability classification belongs to REM-0301 and REM-0302.
+artifacts are not part of this migration snapshot. `STATE_INVENTORY.md`
+classifies them; REM-0302 will define the actual backup formats.
 
 ## Activation sequence
 

@@ -1,0 +1,478 @@
+{
+  "format": "saturn-state-inventory",
+  "schema_version": 1,
+  "scope": "REM-0301 inventory and classification; this file does not implement a backup format",
+  "path_variables": {
+    "${SATURN_HOME}": "Home directory of the configured Saturn operator account",
+    "${SATURN_REPO}": "Active mutable Saturn source repository",
+    "${PIHPSDR_REPO}": "Operator piHPSDR source/build repository",
+    "${DESKHPSDR_REPO}": "Operator deskHPSDR source/build repository"
+  },
+  "entries": [
+    {
+      "id": "saturn-admin-auth",
+      "category": "administrator-credentials",
+      "paths": [
+        "/etc/nginx/.htpasswd",
+        "/etc/systemd/system/saturn-go.service.d/10-remote-auth.conf",
+        "/var/lib/saturn-state/initial-login.txt",
+        "/var/lib/saturn-provision/update-manager-admin-password",
+        "/etc/default/saturn-provision"
+      ],
+      "portability": "same-device-only",
+      "sensitivity": "secret",
+      "recovery_priority": "critical",
+      "recommended_backup_scope": "same-device-disaster-recovery-only",
+      "support_bundle": "exclude",
+      "owner": "Saturn Go authentication",
+      "description": "Hashed and plaintext administrator credential backends, initial-login recovery material, and a provisioning file that may contain SATURN_ADMIN_PASSWORD.",
+      "restore_notes": "Never copy to a different appliance. Prefer setting a new password with saturn-admin-password.sh after restore. Delete initial-login.txt after the operator records or changes the initial credential."
+    },
+    {
+      "id": "linux-account-auth",
+      "category": "administrator-credentials",
+      "paths": [
+        "/etc/shadow",
+        "/etc/gshadow"
+      ],
+      "portability": "same-device-only",
+      "sensitivity": "secret",
+      "recovery_priority": "critical",
+      "recommended_backup_scope": "whole-disk-only",
+      "support_bundle": "exclude",
+      "owner": "Operating system",
+      "description": "Linux account password hashes and group credentials.",
+      "restore_notes": "Owned by whole-system recovery, not Saturn settings restore."
+    },
+    {
+      "id": "remembered-device-secret",
+      "category": "remembered-device-data",
+      "paths": [
+        "/var/lib/saturn-state/remote-tls/cookie.secret"
+      ],
+      "portability": "same-device-only",
+      "sensitivity": "secret",
+      "recovery_priority": "optional",
+      "recommended_backup_scope": "same-device-disaster-recovery-only",
+      "support_bundle": "exclude",
+      "owner": "Saturn Remote authentication",
+      "description": "Server-side HMAC secret used with the administrator credential to validate remembered-browser cookies. Browser cookies themselves live on each browser and are not appliance files.",
+      "restore_notes": "Omitting or regenerating this secret intentionally revokes remembered devices. Never transfer it to another appliance."
+    },
+    {
+      "id": "remote-tls-identity",
+      "category": "tls-identity",
+      "paths": [
+        "/var/lib/saturn-state/remote-tls/saturn-remote.crt",
+        "/var/lib/saturn-state/remote-tls/saturn-remote.key"
+      ],
+      "portability": "same-device-only",
+      "sensitivity": "secret",
+      "recovery_priority": "important",
+      "recommended_backup_scope": "same-device-disaster-recovery-only",
+      "support_bundle": "metadata-only",
+      "owner": "Saturn Remote TLS",
+      "description": "Self-signed Saturn Remote certificate and private key.",
+      "restore_notes": "The certificate may be reported by subject, expiry, and fingerprint; the private key must never enter a support bundle. A new appliance should generate a new pair."
+    },
+    {
+      "id": "remote-radio-settings",
+      "category": "radio-settings",
+      "paths": [
+        "/var/lib/saturn-state/remote_settings.json"
+      ],
+      "portability": "portable",
+      "sensitivity": "sensitive",
+      "recovery_priority": "important",
+      "recommended_backup_scope": "portable-settings",
+      "support_bundle": "metadata-only",
+      "owner": "Saturn Remote",
+      "description": "Current UI, display, receiver, DSP, filter, EQ, CFC, microphone, drive, and transmit preferences.",
+      "restore_notes": "Portable when the destination radio supports the same capabilities. Review transmit drive, microphone gain, antenna, ADC, and filter choices before transmitting."
+    },
+    {
+      "id": "remote-radio-profiles",
+      "category": "radio-profiles",
+      "paths": [
+        "/var/lib/saturn-state/remote_profiles.json"
+      ],
+      "portability": "portable",
+      "sensitivity": "sensitive",
+      "recovery_priority": "important",
+      "recommended_backup_scope": "portable-settings",
+      "support_bundle": "metadata-only",
+      "owner": "Saturn Remote",
+      "description": "Named startup, display, receiver, DSP, and transmit profiles.",
+      "restore_notes": "Portable with the same transmit-safety review required for current remote settings."
+    },
+    {
+      "id": "pihpsdr-radio-properties",
+      "category": "radio-settings-and-calibration",
+      "paths": [
+        "${PIHPSDR_REPO}/*.props"
+      ],
+      "portability": "review-before-transfer",
+      "sensitivity": "sensitive",
+      "recovery_priority": "important",
+      "recommended_backup_scope": "portable-settings",
+      "support_bundle": "metadata-only",
+      "owner": "piHPSDR",
+      "description": "piHPSDR radio, protocol, GPIO, remote, calibration, and operator property files stored in the application repository.",
+      "restore_notes": "Copy only property files, not the whole source tree. Review radio identity, IP/protocol selection, GPIO, PA calibration, drive, and antenna values on different hardware."
+    },
+    {
+      "id": "deskhpsdr-radio-properties",
+      "category": "radio-settings-and-calibration",
+      "paths": [
+        "${SATURN_HOME}/.config/deskhpsdr/*.props"
+      ],
+      "portability": "review-before-transfer",
+      "sensitivity": "sensitive",
+      "recovery_priority": "important",
+      "recommended_backup_scope": "portable-settings",
+      "support_bundle": "metadata-only",
+      "owner": "deskHPSDR",
+      "description": "deskHPSDR startup, protocol, radio, and calibration property files.",
+      "restore_notes": "Review XDMA/network protocol selection, radio identity, PA calibration, drive, and antenna values before use on another radio. Log and error files in the same directory are diagnostics, not settings."
+    },
+    {
+      "id": "custom-script-registry",
+      "category": "custom-scripts",
+      "paths": [
+        "/var/lib/saturn-state/custom_scripts.json"
+      ],
+      "portability": "portable",
+      "sensitivity": "sensitive",
+      "recovery_priority": "important",
+      "recommended_backup_scope": "portable-settings",
+      "support_bundle": "metadata-only",
+      "owner": "Saturn Go custom scripts",
+      "description": "Registry, labels, categories, versions, and flags for browser-managed scripts.",
+      "restore_notes": "Restore together with the matching operator-authored script files."
+    },
+    {
+      "id": "custom-script-content",
+      "category": "custom-scripts",
+      "paths": [
+        "/opt/saturn-go/scripts/*"
+      ],
+      "portability": "review-before-transfer",
+      "sensitivity": "secret",
+      "recovery_priority": "important",
+      "recommended_backup_scope": "portable-settings-selected-files",
+      "support_bundle": "exclude",
+      "owner": "Saturn Go custom scripts",
+      "description": "Operator-authored script content is mixed with installer-provided scripts and may embed credentials, hostnames, paths, or destructive commands.",
+      "restore_notes": "Use custom_scripts.json to select only operator-authored files. Packaged scripts are regenerated by install. Review content before moving it to another appliance."
+    },
+    {
+      "id": "saturn-go-state-schema",
+      "category": "state-schema",
+      "paths": [
+        "/var/lib/saturn-state/state-schema.json"
+      ],
+      "portability": "portable",
+      "sensitivity": "public",
+      "recovery_priority": "critical",
+      "recommended_backup_scope": "portable-settings",
+      "support_bundle": "include",
+      "owner": "Saturn release manager",
+      "description": "Version marker required to interpret managed Saturn Go settings.",
+      "restore_notes": "Must travel with settings and be validated against the destination release before restore."
+    },
+    {
+      "id": "provisioned-hardware-profile",
+      "category": "lcd-front-panel-and-hardware",
+      "paths": [
+        "/var/lib/saturn-provision/profile.env",
+        "/var/lib/saturn-provision/front-panel-type",
+        "/var/lib/saturn-provision/system-role",
+        "/var/lib/saturn-provision/complete"
+      ],
+      "portability": "device-specific",
+      "sensitivity": "sensitive",
+      "recovery_priority": "important",
+      "recommended_backup_scope": "same-device-disaster-recovery-only",
+      "support_bundle": "include",
+      "owner": "Canonical provisioning",
+      "description": "Detected CM generation, storage variant, XDMA role, front panel, LCD profile, UART/panel overlays, PA protection, ATU, and installation contract.",
+      "restore_notes": "Useful for diagnosis and same-device recovery. Re-detect on different hardware instead of restoring it blindly."
+    },
+    {
+      "id": "provisioning-progress",
+      "category": "operational-state",
+      "paths": [
+        "/var/lib/saturn-provision/phases/",
+        "/var/lib/saturn-provision/current-phase",
+        "/var/lib/saturn-provision/ui-status",
+        "/var/lib/saturn-provision/golden-image",
+        "/var/lib/saturn-provision/sealed-hostname"
+      ],
+      "portability": "device-specific",
+      "sensitivity": "sensitive",
+      "recovery_priority": "optional",
+      "recommended_backup_scope": "same-device-disaster-recovery-only",
+      "support_bundle": "include",
+      "owner": "Canonical provisioning",
+      "description": "Provisioning phase, image-factory, and first-boot bookkeeping.",
+      "restore_notes": "Do not copy sealed-image markers or phase completion records to another appliance."
+    },
+    {
+      "id": "boot-firmware-configuration",
+      "category": "boot-configuration",
+      "paths": [
+        "/boot/firmware/config.txt",
+        "/boot/firmware/cmdline.txt",
+        "/boot/config.txt",
+        "/boot/cmdline.txt"
+      ],
+      "portability": "device-specific",
+      "sensitivity": "sensitive",
+      "recovery_priority": "critical",
+      "recommended_backup_scope": "same-device-disaster-recovery-only",
+      "support_bundle": "include",
+      "owner": "Boot firmware and Saturn hardware configuration",
+      "description": "LCD, front-panel UART, USB host, I2C, GPIO power LED, kernel command line, and other board boot settings. Only one path pair normally exists.",
+      "restore_notes": "Restore only to the same board/display role after comparing distribution defaults. A malformed file can prevent boot."
+    },
+    {
+      "id": "saturn-local-service-policy",
+      "category": "service-configuration",
+      "paths": [
+        "/etc/default/saturn-shutdown-waiter",
+        "/etc/default/saturn-p2-deploy",
+        "/etc/default/saturn-release-install",
+        "/etc/default/saturn-release-activate",
+        "/etc/saturn-release"
+      ],
+      "portability": "review-before-transfer",
+      "sensitivity": "sensitive",
+      "recovery_priority": "important",
+      "recommended_backup_scope": "same-device-disaster-recovery-only",
+      "support_bundle": "include",
+      "owner": "Saturn system services",
+      "description": "Local shutdown, deploy, release, activation-safety, and installation policy.",
+      "restore_notes": "Installer defaults are regenerable. Preserve only intentional local overrides and never enable release activation merely because another host did."
+    },
+    {
+      "id": "networkmanager-connections",
+      "category": "network-configuration",
+      "paths": [
+        "/etc/NetworkManager/system-connections/*.nmconnection",
+        "/etc/wpa_supplicant/wpa_supplicant.conf",
+        "/boot/firmware/wpa_supplicant.conf",
+        "/var/lib/iwd/"
+      ],
+      "portability": "device-specific",
+      "sensitivity": "secret",
+      "recovery_priority": "important",
+      "recommended_backup_scope": "same-device-disaster-recovery-only",
+      "support_bundle": "exclude",
+      "owner": "Operating system networking",
+      "description": "Ethernet/Wi-Fi profiles and credentials, including Saturn Ethernet fallback configuration.",
+      "restore_notes": "Site-specific. Prefer recreating through NetworkManager. Never include PSKs or private network topology in an ordinary support bundle."
+    },
+    {
+      "id": "tailscale-node-state",
+      "category": "network-identity",
+      "paths": [
+        "/var/lib/tailscale/"
+      ],
+      "portability": "device-specific",
+      "sensitivity": "secret",
+      "recovery_priority": "important",
+      "recommended_backup_scope": "same-device-disaster-recovery-only",
+      "support_bundle": "exclude",
+      "owner": "Tailscale",
+      "description": "Tailscale node identity, keys, coordination state, and serve configuration.",
+      "restore_notes": "Never clone this directory to another radio. A replacement appliance should authenticate as a new Tailscale node and reapply serve policy."
+    },
+    {
+      "id": "host-machine-identity",
+      "category": "host-identity",
+      "paths": [
+        "/etc/machine-id",
+        "/etc/hostname",
+        "/etc/hosts",
+        "/etc/ssh/ssh_host_*"
+      ],
+      "portability": "device-specific",
+      "sensitivity": "secret",
+      "recovery_priority": "critical",
+      "recommended_backup_scope": "whole-disk-only",
+      "support_bundle": "metadata-only",
+      "owner": "Operating system",
+      "description": "Machine identity, hostname mapping, and SSH host private keys.",
+      "restore_notes": "Same-device recovery only. New or cloned appliances must generate unique machine and SSH identities; support output may contain hostname and public fingerprints, never private keys or machine-id."
+    },
+    {
+      "id": "operator-access-credentials",
+      "category": "developer-and-access-credentials",
+      "paths": [
+        "${SATURN_HOME}/.ssh/",
+        "${SATURN_HOME}/.config/gh/",
+        "${SATURN_HOME}/.git-credentials",
+        "${SATURN_HOME}/.netrc",
+        "${SATURN_HOME}/.npmrc",
+        "${SATURN_HOME}/.cargo/credentials*",
+        "/root/.ssh/",
+        "/root/.config/gh/",
+        "/root/.git-credentials",
+        "/root/.netrc",
+        "/root/.npmrc",
+        "/root/.cargo/credentials*"
+      ],
+      "portability": "external",
+      "sensitivity": "secret",
+      "recovery_priority": "none",
+      "recommended_backup_scope": "exclude",
+      "support_bundle": "exclude",
+      "owner": "Operator",
+      "description": "SSH private keys, GitHub OAuth data, Git credentials, registry tokens, and other developer access material.",
+      "restore_notes": "Back up separately with the operator's credential manager. These are not Saturn appliance state."
+    },
+    {
+      "id": "deployment-transaction-history",
+      "category": "deployment-history",
+      "paths": [
+        "/var/lib/saturn-state/deployments/current.json",
+        "/var/lib/saturn-state/deployments/rollback-current/",
+        "/var/lib/saturn-state/deployments/state-backups/",
+        "/var/lib/saturn-state/saturngo_deploy_status.json",
+        "/var/lib/saturn-state/update_state.json"
+      ],
+      "portability": "device-specific",
+      "sensitivity": "sensitive",
+      "recovery_priority": "critical",
+      "recommended_backup_scope": "same-device-disaster-recovery-only",
+      "support_bundle": "include",
+      "owner": "Saturn release and update managers",
+      "description": "Prepared/active/rollback transaction records, previous deployment snapshots, migration backups, and update results.",
+      "restore_notes": "Required to understand or complete recovery on the same appliance. Do not use another host's transaction record. Support copies should redact repository URLs if private repositories are later supported."
+    },
+    {
+      "id": "update-and-repository-policy",
+      "category": "update-policy",
+      "paths": [
+        "/var/lib/saturn-state/repo_root.txt",
+        "/var/lib/saturn-state/update_policy.json",
+        "/var/lib/saturn-state/saturngo_update_policy.json"
+      ],
+      "portability": "review-before-transfer",
+      "sensitivity": "sensitive",
+      "recovery_priority": "important",
+      "recommended_backup_scope": "portable-settings",
+      "support_bundle": "include",
+      "owner": "Saturn update managers",
+      "description": "Active source path and configured public repository/ref/update policy.",
+      "restore_notes": "Repository paths are host-specific. Revalidate owner, repository, ref, and local path on restore."
+    },
+    {
+      "id": "installed-application-releases",
+      "category": "release-payload",
+      "paths": [
+        "/opt/saturn/releases/",
+        "/opt/saturn/current"
+      ],
+      "portability": "regenerable",
+      "sensitivity": "public",
+      "recovery_priority": "important",
+      "recommended_backup_scope": "source-or-release-backup",
+      "support_bundle": "metadata-only",
+      "owner": "Saturn release manager",
+      "description": "Root-owned immutable application releases and the active release pointer.",
+      "restore_notes": "Prefer reinstalling the exact signed/validated release. Support output needs commit, manifest, hashes, and pointer target rather than binaries."
+    },
+    {
+      "id": "source-repositories-and-builds",
+      "category": "source-and-build-artifacts",
+      "paths": [
+        "${SATURN_REPO}/",
+        "${PIHPSDR_REPO}/",
+        "${DESKHPSDR_REPO}/",
+        "${SATURN_HOME}/*-backup-*/"
+      ],
+      "portability": "regenerable",
+      "sensitivity": "sensitive",
+      "recovery_priority": "optional",
+      "recommended_backup_scope": "source-or-release-backup",
+      "support_bundle": "metadata-only",
+      "owner": "Git/update tooling",
+      "description": "Mutable source trees, update-script repository copies, and source backups. Local uncommitted changes are the only irreplaceable portion.",
+      "restore_notes": "Record remotes, commits, dirty status, and patch files. Existing Saturn Go full backup and script backups are repository copies, not appliance backups."
+    },
+    {
+      "id": "release-staging-and-caches",
+      "category": "cache-and-staging",
+      "paths": [
+        "/var/lib/saturn-state/release-staging/",
+        "/var/lib/saturn-state/repo-staging/",
+        "/var/lib/saturn-state/snapshots/",
+        "${SATURN_REPO}/update_manager/rust-server/target-local/",
+        "${SATURN_REPO}/update_manager/saturn-bridge/target-local/",
+        "${SATURN_REPO}/update_manager/remote-web/node_modules/"
+      ],
+      "portability": "regenerable",
+      "sensitivity": "sensitive",
+      "recovery_priority": "none",
+      "recommended_backup_scope": "exclude",
+      "support_bundle": "metadata-only",
+      "owner": "Build and update tooling",
+      "description": "Inactive staging worktrees, snapshots, dependency trees, compiler outputs, and native build caches.",
+      "restore_notes": "Recreate instead of restoring. Support output may report size and commit only."
+    },
+    {
+      "id": "diagnostic-logs",
+      "category": "diagnostics",
+      "paths": [
+        "/var/log/saturn-provision.log",
+        "/var/log/saturn-cloudinit-bootstrap.log",
+        "${SATURN_HOME}/saturn-logs/",
+        "${SATURN_HOME}/.config/deskhpsdr/*.log",
+        "${SATURN_HOME}/.config/deskhpsdr/*.err",
+        "/var/log/journal/",
+        "/run/log/journal/"
+      ],
+      "portability": "diagnostic",
+      "sensitivity": "sensitive",
+      "recovery_priority": "none",
+      "recommended_backup_scope": "exclude",
+      "support_bundle": "sanitized",
+      "owner": "System and application diagnostics",
+      "description": "Provisioning, update, application, and system logs.",
+      "restore_notes": "Never restore logs as settings. A support bundle may include bounded, sanitized excerpts after removing credentials, tokens, private addresses when requested, and user-entered script output."
+    },
+    {
+      "id": "fpga-artifacts-and-hardware-state",
+      "category": "fpga-state",
+      "paths": [
+        "${SATURN_REPO}/FPGA/"
+      ],
+      "portability": "external",
+      "sensitivity": "public",
+      "recovery_priority": "important",
+      "recommended_backup_scope": "source-or-release-backup",
+      "support_bundle": "metadata-only",
+      "owner": "FPGA maintainers",
+      "description": "Repository FPGA images/sources are reproducible artifacts; the image actually flashed in hardware is external device state and is not captured by a Saturn settings backup.",
+      "restore_notes": "Record reported FPGA version/date and selected image checksum. Defining authoritative FPGA artifact and readback policy remains with the FPGA maintainers."
+    },
+    {
+      "id": "volatile-radio-telemetry",
+      "category": "volatile-runtime-state",
+      "paths": [
+        "/dev/shm/saturn_p23_adc_peak_telemetry.enabled",
+        "/dev/shm/saturn_p23_adc_peak_telemetry.json",
+        "/dev/shm/saturn_p23_perf_stats.json"
+      ],
+      "portability": "regenerable",
+      "sensitivity": "sensitive",
+      "recovery_priority": "none",
+      "recommended_backup_scope": "exclude",
+      "support_bundle": "sanitized",
+      "owner": "P2 runtime diagnostics",
+      "description": "Ephemeral enable flags and live performance/ADC telemetry.",
+      "restore_notes": "Never restore. A support bundle may take a sanitized point-in-time snapshot."
+    }
+  ]
+}

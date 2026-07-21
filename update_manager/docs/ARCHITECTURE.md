@@ -84,7 +84,11 @@ design tokens, local fonts, and vendored browser libraries.
     fonts, and vendored libraries), `config.json`, and `themes.json`. Optional
     Saturn Remote helper scripts are also synced when present.
 - `/var/lib/saturn-state/`
-  - Mutable state: `repo_root.txt`, `update_policy.json`, `update_state.json`, snapshots, staged worktrees.
+  - Mutable settings, update/deployment records, release transaction state,
+    remote TLS/remembered-device identity, snapshots, and staged worktrees.
+  - `STATE_INVENTORY.md` classifies each item by portability, sensitivity,
+    recovery importance, and support-bundle handling; not all files under this
+    root belong in a portable settings backup.
 - `/etc/systemd/system/saturn-go.service`
   - Main backend service.
 - `/etc/systemd/system/saturn-go-watchdog.service`
@@ -254,6 +258,9 @@ Concurrency guard:
 ## Backup/Restore Model
 
 - Full backup (`GET /backup_full`): streams a `tar.gz` of active repo root.
+- Despite the historical endpoint name, this is a source-repository archive,
+  not a complete appliance backup. Exact contents and omissions for every
+  current backup mechanism are defined in `STATE_INVENTORY.md`.
 - Full restore (`POST /restore_full`): uploads archive to `/tmp`, validates and extracts it, then `rsync --delete` into active repo root.
 - Dry-run restore (`?dry_run=1`) reports extracted tree stats without applying changes.
 - Full restore requires extracted top-level directory to pass Saturn repo-root validation (`.git` + `update_manager/`).

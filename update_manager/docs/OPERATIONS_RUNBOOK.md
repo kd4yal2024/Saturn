@@ -555,6 +555,20 @@ Validation requires `.git` and `update_manager/` in the target path.
 
 ### Backup and Restore
 
+Read `STATE_INVENTORY.md` before relying on any backup name. In the current
+implementation, “full backup” means a tar archive of the active **Saturn source
+repository**, not a complete appliance backup. It does not contain Saturn Go
+credentials, remembered-device/TLS secrets, Remote settings or profiles,
+installed custom scripts, piHPSDR/deskHPSDR settings outside the selected
+repository, Tailscale/network state, boot/LCD/front-panel configuration,
+provisioning/deployment state, installed releases, or flashed FPGA state.
+
+Likewise, `saturn-backup-*`, `pihpsdr-backup-*`, and `deskhpsdr-backup-*`
+directories are source-tree rollback copies. The piHPSDR repository copy
+normally carries root-level `*.props`; the deskHPSDR source copy does not carry
+`~/.config/deskhpsdr/*.props`. REM-0205 state backups contain only the direct
+managed Saturn state files needed to undo a release-state migration.
+
 - Download full backup from `backup.html` (or `GET /backup_full`).
 - Validate archive first with restore dry-run (`POST /restore_full?dry_run=1`).
 - Apply restore only after confirmation (`confirm=RESTORE`).
@@ -565,6 +579,7 @@ Validation requires `.git` and `update_manager/` in the target path.
 Important:
 
 - restore overwrites active repo root using `rsync --delete`
+- none of these source-repository restores reconstructs an appliance
 - upload size is limited by `SATURN_RESTORE_MAX_UPLOAD_BYTES`
 - non-dry-run full restore acquires the shared update lock; concurrent update actions return `409 Conflict`
 
