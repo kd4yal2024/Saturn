@@ -212,7 +212,7 @@ Notes:
   - FIFO/ADC gauges
   - cumulative counters for high-priority, mic, DDC, wideband, DUC, and speaker packet/DMA/error activity
 
-## Settings, Source, and Release Backup / Legacy Source Restore
+## Settings, Source, Release Backup, and Transactional Restore
 
 Settings backup accepts only regular allowlisted files, caps each file at 16
 MiB and the selected payload at 128 MiB, and emits a manifest with a digest for
@@ -220,8 +220,8 @@ every payload file. Registered scripts with version `custom-default` are
 regenerable and their content is omitted. Other registered scripts are treated
 as operator-authored; a missing or redirected file fails backup creation.
 
-Settings and release imports are intentionally unavailable until REM-0303.
-`/restore_full` is retained only for the historical source-repository format.
+Settings and source imports are transactional. Installed-release archive import
+and activation remain separate local release-manager operations.
 
 | Route | Method | CSRF | Request | Success Response |
 |---|---|---|---|---|
@@ -230,7 +230,10 @@ Settings and release imports are intentionally unavailable until REM-0303.
 | `/backup_full` | `GET` | No | none | compatibility alias for `/backup_source`; not a complete appliance backup |
 | `/backup_releases` | `GET` | No | none | `{ "format":"saturn-installed-release-list", "active_commit", "releases":[{"commit","active","manifest_present"}] }` |
 | `/backup_release` | `GET` | No | query `commit=<full-40-character-hex-commit>`; omitted commit selects active immutable release when one exists | selected manifest-bearing immutable-release `application/gzip` attachment |
-| `/restore_full` | `POST` | Yes | legacy source restore: `multipart/form-data` with `file`; optional `confirm=RESTORE`; optional boolean query `dry_run` | JSON status |
+| `/restore_settings` | `POST` | Yes | settings archive as `multipart/form-data` field `file`; apply requires `confirm=RESTORE`; query `dry_run=1`; optional explicit `include_host_policy=1` | validation summary or committed transaction ID |
+| `/restore_source` | `POST` | Yes | source archive as `multipart/form-data` field `file`; apply requires `confirm=RESTORE`; query `dry_run=1` | validation summary or old/new repository roots plus transaction ID |
+| `/restore_full` | `POST` | Yes | compatibility alias for `/restore_source` | same as `/restore_source` |
+| `/restore_status` | `GET` | No | none | latest durable settings/source restore transaction records |
 | `/g2_backups` | `GET` | No | none | `{ "home":"/home/...", "backups":[{ "name","path","files","dirs","bytes","modified_epoch" }, ...] }` |
 | `/g2_restore` | `POST` | Yes | JSON `{ "backup_name":"saturn-backup-...", "dry_run":bool, "confirm":"RESTORE" }` | dry-run stats or `{ "status":"ok", ... }` |
 | `/pihpsdr_backups` | `GET` | No | none | `{ "home":"/home/...", "backups":[{ "name","path","files","dirs","bytes","modified_epoch" }, ...] }` |
@@ -238,13 +241,11 @@ Settings and release imports are intentionally unavailable until REM-0303.
 
 Restore responses:
 
-- dry-run: `{ "status":"ok", "dry_run":true, "files", "dirs", "bytes", ... }`
-- apply: `{ "status":"ok" }`
+- settings dry-run: `{ "status":"ok", "dry_run":true, "files", "bytes", "skipped_host_policy", ... }`
+- source dry-run: `{ "status":"ok", "dry_run":true, "source_root", "previous_repo_root", "bytes" }`
+- apply: `{ "status":"ok", "transaction_id", ... }`
 
-Restore safety checks:
-
-These checks apply to legacy source restore, not the new settings/release
-archives:
+Source-restore safety checks:
 
 - upload size limit from `SATURN_RESTORE_MAX_UPLOAD_BYTES`
 - tar entries may not be absolute or contain `..`
@@ -255,15 +256,28 @@ archives:
 - tar path traversal guard (reject absolute and `..` paths)
 - must extract to a single top-level directory
 - extracted top-level directory must pass Saturn repo-root validation (`.git` + `update_manager/`)
-- uses `rsync -a --delete` into active repo root
+- validates source ownership and rejects unsafe symlinks, special files, and
+  special permission bits
+- requires free space for the generation plus a 512 MiB reserve
+- flushes a unique complete generation and atomically switches the repository
+  pointer; the previous checkout is retained
 - non-dry-run acquires update-activity lock and returns `409` if another update action is active
+
+Settings restore additionally verifies the manifest/schema, exact declared
+file set, per-file hashes and size limits, semantic JSON/registry relationships,
+live owner and destination type, and capacity for old/new transaction data.
+Output modes are fixed by destination class. Host-specific repository/update
+policy is excluded unless explicitly requested. Startup recovery rolls back any
+transaction not durably marked committed.
 
 `/g2_restore` safety checks:
 
 - backup name must match `saturn-backup-*` and cannot include path traversal
 - selected backup must resolve under backend `$HOME`
-- selected backup and target repo root must both pass Saturn repo-root validation
+- selected backup and active repo root must both pass Saturn repo-root validation
 - non-dry-run requires `confirm=RESTORE`
+- Saturn backups use the transactional generation switch; piHPSDR retains its
+  historical in-place source restore
 - non-dry-run acquires update-activity lock and returns `409` if conflicting update action is active
 
 `/pihpsdr_restore` safety checks:

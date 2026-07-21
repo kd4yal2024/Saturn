@@ -178,6 +178,7 @@ jobs:
             tests/test-saturn-release-activate.sh \
             tests/test-saturn-release-install.sh \
             tests/test-saturn-release-manifest.sh \
+            tests/test-saturn-transactional-restore.sh \
             tests/test-saturn-state-inventory.sh \
             tests/test-saturn-state-compatibility.sh \
             tests/test-saturn-go-deploy-broker.sh \
@@ -209,6 +210,7 @@ jobs:
             tests/test-saturn-release-activate.sh \
             tests/test-saturn-release-install.sh \
             tests/test-saturn-release-manifest.sh \
+            tests/test-saturn-transactional-restore.sh \
             tests/test-saturn-state-inventory.sh \
             tests/test-saturn-state-compatibility.sh \
             tests/test-saturn-go-deploy-broker.sh \
@@ -240,6 +242,9 @@ jobs:
 
       - name: Test persistent-state compatibility and rollback
         run: tests/test-saturn-state-compatibility.sh
+
+      - name: Test transactional settings and source restore recovery
+        run: tests/test-saturn-transactional-restore.sh
 
       - name: Test persistent-state inventory and support exclusions
         run: tests/test-saturn-state-inventory.sh

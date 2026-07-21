@@ -348,16 +348,28 @@ live release activation; REM-0303 owns transactional restore.
 
 ### REM-0303: Make repository/settings restore transactional
 
-- [ ] Restore into a unique sibling staging location.
-- [ ] Validate content, schema, ownership, permissions, and free space.
-- [ ] Flush the completed restore before activation.
-- [ ] Activate through an atomic pointer/rename where supported.
-- [ ] Retain the prior data until post-restore validation succeeds.
+- [x] Restore into a unique sibling staging location.
+- [x] Validate content, schema, ownership, permissions, and free space.
+- [x] Flush the completed restore before activation.
+- [x] Activate through an atomic pointer/rename where supported.
+- [x] Retain the prior data until post-restore validation succeeds.
 
 Acceptance criteria:
 
 - Process termination, power interruption simulation, and ENOSPC leave the old or new complete state, never a mixed tree.
 - Recovery state remains understandable after reboot.
+
+Settings restore now validates the schema-v1 manifest and exact payload set,
+stages checksummed old/new copies, writes a durable transaction journal, and
+atomically replaces each bounded managed file. Host-specific repository and
+update policy is opt-in. Source restore creates and flushes a unique repository
+generation below the state root and atomically switches `repo_root.txt`; the
+prior checkout is retained. Saturn Go runs transaction recovery before loading
+the pointer or accepting requests. `GET /restore_status` exposes recent durable
+records. Fault-injection tests cover ENOSPC, hard process termination during a
+partially applied settings transaction, and interruption after a source pointer
+switch, proving recovery returns to a complete old state while successful runs
+expose a complete new state.
 
 ## Milestone 4 — Durable state and job controller
 

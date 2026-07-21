@@ -268,13 +268,20 @@ Concurrency guard:
   real directory directly below the configured immutable releases root.
 - Exact contents and omissions are defined in `STATE_INVENTORY.md` and
   `BACKUP_FORMATS.md`.
-- Full restore (`POST /restore_full`): uploads archive to `/tmp`, validates and extracts it, then `rsync --delete` into active repo root.
-- Dry-run restore (`?dry_run=1`) reports extracted tree stats without applying changes.
-- Full restore requires extracted top-level directory to pass Saturn repo-root validation (`.git` + `update_manager/`).
-- Full restore preflight also validates symlink targets plus decompressed size
-  and `/tmp` free space before extraction.
-- Non-dry-run full restore acquires the shared update-activity lock and returns `409 Conflict` if another update action is active.
-- Update G2 directory backups (`GET /g2_backups`, `POST /g2_restore`): lists `saturn-backup-*` directories under backend `$HOME` and restores selected backup into active repo root with validation and confirm guard.
+- Settings restore (`POST /restore_settings`) validates the schema-v1 manifest,
+  exact file set, hashes, ownership, permissions, semantics, and capacity. It
+  stages durable old/new copies and atomically replaces bounded files under a
+  journal; host-specific policy is opt-in.
+- Source restore (`POST /restore_source`, compatibility alias
+  `POST /restore_full`) validates and extracts one Saturn repository, copies it
+  to a flushed generation, then atomically switches `repo_root.txt` while
+  retaining the prior checkout.
+- Saturn Go runs restore recovery before reading `repo_root.txt`; incomplete
+  settings transactions and incomplete source-pointer switches roll back.
+- Dry-run restore performs the same content and capacity preflight without
+  creating or activating a transaction. Apply requires `confirm=RESTORE` and
+  the shared update-activity lock.
+- Update G2 directory backups (`GET /g2_backups`, `POST /g2_restore`): lists `saturn-backup-*` directories under backend `$HOME` and restores selected backup through the transactional source-generation path.
 - piHPSDR directory backups (`GET /pihpsdr_backups`, `POST /pihpsdr_restore`): lists `pihpsdr-backup-*` directories under backend `$HOME` and restores selected backup into configured piHPSDR checkout.
 
 ## Monitor Model

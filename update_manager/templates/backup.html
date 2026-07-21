@@ -33,11 +33,36 @@
         <progress id="settings-backup-progress" class="hidden grow"></progress>
       </div>
       <div id="settings-backup-status" class="text-sm opacity-80 mt-3"></div>
-      <p class="text-sm text-amber-300 mt-3">
+      <p class="text-sm text-amber-300 mt-3 mb-4">
         Treat this as private operator data: radio property files and custom scripts may
-        contain sensitive values. Import remains disabled until REM-0303 provides a
-        transactional restore.
+        contain sensitive values. Settings restore validates the manifest and checksums,
+        retains rollback data, and recovers an interrupted transaction at startup.
       </p>
+      <div class="border-t border-white/15 pt-4">
+        <h3 class="text-lg font-semibold mb-2">Settings Restore</h3>
+        <div class="flex flex-wrap gap-3 items-end">
+          <div>
+            <label class="block text-sm mb-1">Upload Settings .tar.gz</label>
+            <input id="settings-restore-file" type="file" accept=".tar.gz" class="field px-3 py-2" />
+          </div>
+          <button id="settings-restore-validate" class="btn btn-ghost px-4 py-2">Validate</button>
+          <label class="flex items-center gap-2 text-sm px-2 py-2">
+            <input id="settings-restore-host-policy" type="checkbox" />
+            Include host-specific repo/update policy
+          </label>
+          <div>
+            <label class="block text-sm mb-1">Type RESTORE</label>
+            <input id="settings-restore-confirm" type="text" placeholder="RESTORE" class="field px-3 py-2" />
+          </div>
+          <button id="settings-restore-upload" class="btn btn-danger px-4 py-2">Restore Settings</button>
+        </div>
+        <progress id="settings-restore-progress" max="100" value="0" class="hidden w-full mt-3"></progress>
+        <div id="settings-restore-status" class="text-sm opacity-80 mt-2"></div>
+        <p class="text-xs opacity-70 mt-2">
+          Host-specific policy is skipped by default so an imported backup cannot silently
+          change this appliance's repository or update source.
+        </p>
+      </div>
     </div>
 
     <div class="card p-5 mt-6">
@@ -58,7 +83,7 @@
       </div>
       <div id="repo-root-status" class="text-sm opacity-80 mb-4"></div>
       <div class="text-sm opacity-80 mb-4">
-        Source backup and legacy source restore use the active repository shown above.
+        Source backup and transactional source restore use the active repository shown above.
         A source archive is not an appliance or settings backup.
       </div>
 
@@ -78,11 +103,12 @@
       <div id="release-backup-status" class="text-sm opacity-80 mt-2"></div>
 
       <div class="mt-6 border-t border-white/15 pt-5">
-        <h3 class="text-lg font-semibold mb-2">Legacy Source Restore</h3>
+        <h3 class="text-lg font-semibold mb-2">Transactional Source Restore</h3>
         <p class="text-sm text-amber-300 mb-4">
-          This accepts only the historical Saturn repository archive and overwrites the
-          mutable source checkout with <code>rsync --delete</code>. It does not restore
-          settings or an installed release and is not yet transactional. Use Validate first.
+          This accepts a Saturn source archive, creates and flushes a new repository generation,
+          then atomically switches the active repository pointer. The previous checkout is
+          retained. It does not import settings or activate an installed immutable release.
+          Use Validate first.
         </p>
         <div class="flex flex-wrap gap-3 items-end">
           <div>
@@ -181,6 +207,12 @@ function setSettingsBackupStatus(msg, isError=false){
   el.classList.toggle('text-red-400', !!isError);
 }
 
+function setSettingsRestoreStatus(msg, isError=false){
+  const el = $('settings-restore-status');
+  el.textContent = msg || '';
+  el.classList.toggle('text-red-400', !!isError);
+}
+
 function setReleaseBackupStatus(msg, isError=false){
   const el = $('release-backup-status');
   el.textContent = msg || '';
@@ -253,6 +285,61 @@ $('settings-backup-download').addEventListener('click', ()=>{
   setSettingsBackupStatus('Preparing private settings archive… Check your browser downloads.');
   window.location.href = './backup_settings';
   setTimeout(()=>{ show(p, false); }, 8000);
+});
+
+function uploadSettingsRestore(dryRun){
+  const file = $('settings-restore-file').files[0];
+  if (!file) { setSettingsRestoreStatus('Select a Settings Backup first.', true); return; }
+  const confirmText = $('settings-restore-confirm').value.trim();
+  if (!dryRun && confirmText !== 'RESTORE') {
+    setSettingsRestoreStatus('Type RESTORE to confirm settings restore.', true);
+    return;
+  }
+  const includeHostPolicy = $('settings-restore-host-policy').checked;
+  const fd = new FormData();
+  fd.append('file', file);
+  if (!dryRun) fd.append('confirm', confirmText);
+
+  const progress = $('settings-restore-progress');
+  show(progress, true);
+  progress.value = 0;
+  setSettingsRestoreStatus(dryRun ? 'Validating settings archive…' : 'Applying settings transaction…');
+  const query = new URLSearchParams();
+  if (dryRun) query.set('dry_run', '1');
+  if (includeHostPolicy) query.set('include_host_policy', '1');
+  const xhr = new XMLHttpRequest();
+  xhr.open('POST', `./restore_settings?${query.toString()}`, true);
+  xhr.setRequestHeader(CSRF_HEADER_NAME, CSRF_HEADER_VALUE);
+  xhr.upload.onprogress = (event)=>{
+    if (event.lengthComputable) progress.value = Math.round((event.loaded / event.total) * 100);
+  };
+  xhr.onreadystatechange = ()=>{
+    if (xhr.readyState !== 4) return;
+    show(progress, false);
+    let data = {};
+    try { data = JSON.parse(xhr.responseText || '{}'); } catch {}
+    if (xhr.status < 200 || xhr.status >= 300) {
+      setSettingsRestoreStatus(`Restore failed: ${data.message || `HTTP ${xhr.status}`}`, true);
+      return;
+    }
+    const skipped = Array.isArray(data.skipped_host_policy) ? data.skipped_host_policy.length : 0;
+    if (dryRun) {
+      setSettingsRestoreStatus(`Validation OK. ${data.files || 0} files, ${fmtBytes(data.bytes)}, ${skipped} host-policy files skipped.`);
+    } else {
+      setSettingsRestoreStatus(`Settings restore committed. Transaction ${data.transaction_id || 'recorded'}.`);
+    }
+  };
+  xhr.onerror = ()=>{
+    show(progress, false);
+    setSettingsRestoreStatus('Restore failed: network error.', true);
+  };
+  xhr.send(fd);
+}
+
+$('settings-restore-validate').addEventListener('click', ()=> uploadSettingsRestore(true));
+$('settings-restore-upload').addEventListener('click', ()=>{
+  if (!confirm('Apply this settings backup transaction? Previous values will be retained for recovery.')) return;
+  uploadSettingsRestore(false);
 });
 
 $('backup-download').addEventListener('click', ()=>{
@@ -338,7 +425,7 @@ function uploadRestore(dryRun){
   setRestoreStatus(dryRun ? 'Validating archive…' : 'Uploading and restoring…');
 
   const xhr = new XMLHttpRequest();
-  xhr.open('POST', dryRun ? './restore_full?dry_run=1' : './restore_full', true);
+  xhr.open('POST', dryRun ? './restore_source?dry_run=1' : './restore_source', true);
   xhr.setRequestHeader(CSRF_HEADER_NAME, CSRF_HEADER_VALUE);
   xhr.upload.onprogress = (e)=>{
     if (e.lengthComputable) {
@@ -358,11 +445,9 @@ function uploadRestore(dryRun){
     }
     if (dryRun) {
       const size = (data.bytes || 0);
-      const files = data.files || 0;
-      const dirs = data.dirs || 0;
-      setRestoreStatus(`Validation OK. ${files} files, ${dirs} dirs, ${Math.round(size/1024/1024)} MB.`);
+      setRestoreStatus(`Validation OK. New repository generation requires ${Math.round(size/1024/1024)} MB plus reserve.`);
     } else {
-      setRestoreStatus('Restore complete.');
+      setRestoreStatus(`Source restore committed. Active repository: ${data.new_repo_root || 'new generation'}.`);
     }
   };
   xhr.onerror = ()=>{
@@ -374,7 +459,7 @@ function uploadRestore(dryRun){
 
 $('restore-validate').addEventListener('click', ()=> uploadRestore(true));
 $('restore-upload').addEventListener('click', ()=> {
-  if (!confirm('This will overwrite the repo. Continue?')) return;
+  if (!confirm('Create and activate a new source generation? The previous checkout will be retained.')) return;
   uploadRestore(false);
 });
 
@@ -445,9 +530,13 @@ async function restoreG2Backup(dryRun){
     const data = await r.json().catch(()=>({}));
     if (!r.ok) throw new Error(data.message || `HTTP ${r.status}`);
     if (dryRun){
-      const files = Number(data.files || 0);
-      const dirs = Number(data.dirs || 0);
-      setG2BackupStatus(`Validation OK. ${files} files, ${dirs} dirs, ${fmtBytes(data.bytes)}.`);
+      if (kind === 'saturn') {
+        setG2BackupStatus(`Validation OK. Transactional source generation requires ${fmtBytes(data.bytes)} plus reserve.`);
+      } else {
+        const files = Number(data.files || 0);
+        const dirs = Number(data.dirs || 0);
+        setG2BackupStatus(`Validation OK. ${files} files, ${dirs} dirs, ${fmtBytes(data.bytes)}.`);
+      }
     } else {
       setG2BackupStatus(`${kindLabel} restore complete from ${backupName}.`);
     }
@@ -460,7 +549,11 @@ $('g2-backup-kind').addEventListener('change', loadG2Backups);
 $('g2-backup-refresh').addEventListener('click', loadG2Backups);
 $('g2-backup-validate').addEventListener('click', ()=> restoreG2Backup(true));
 $('g2-backup-restore').addEventListener('click', ()=>{
-  if (!confirm('This will overwrite the active repo root from the selected G2 backup. Continue?')) return;
+  const kind = $('g2-backup-kind').value;
+  const message = kind === 'saturn'
+    ? 'Create and activate a new Saturn source generation from this backup? The prior checkout will be retained.'
+    : 'This will overwrite the piHPSDR source tree from the selected backup. Continue?';
+  if (!confirm(message)) return;
   restoreG2Backup(false);
 });
 

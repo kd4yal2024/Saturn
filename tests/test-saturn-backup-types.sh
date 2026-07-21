@@ -4,6 +4,7 @@ set -Eeuo pipefail
 REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
 MAIN_RS="$REPO_ROOT/update_manager/rust-server/src/main.rs"
 BACKUP_RS="$REPO_ROOT/update_manager/rust-server/src/backup.rs"
+RESTORE_RS="$REPO_ROOT/update_manager/rust-server/src/restore.rs"
 BACKUP_HTML="$REPO_ROOT/update_manager/templates/backup.html"
 FORMATS_DOC="$REPO_ROOT/update_manager/docs/BACKUP_FORMATS.md"
 INVENTORY_DOC="$REPO_ROOT/update_manager/docs/STATE_INVENTORY.md"
@@ -13,6 +14,9 @@ grep -Fq '.route("/backup_source", get(backup_source))' "$MAIN_RS"
 grep -Fq '.route("/backup_releases", get(backup_releases))' "$MAIN_RS"
 grep -Fq '.route("/backup_release", get(backup_release))' "$MAIN_RS"
 grep -Fq '.route("/backup_full", get(backup_source))' "$MAIN_RS"
+grep -Fq '.route("/restore_settings", post(restore_settings))' "$MAIN_RS"
+grep -Fq '.route("/restore_source", post(restore_source))' "$MAIN_RS"
+grep -Fq '.route("/restore_full", post(restore_source))' "$MAIN_RS"
 if grep -Fq 'async fn backup_full' "$MAIN_RS"; then
   printf 'legacy backup_full implementation still exists instead of the source alias\n' >&2
   exit 1
@@ -33,6 +37,9 @@ fi
 
 for required_id in \
   settings-backup-download \
+  settings-restore-file \
+  settings-restore-validate \
+  settings-restore-upload \
   backup-download \
   release-backup-select \
   release-backup-download; do
@@ -40,8 +47,10 @@ for required_id in \
 done
 grep -Fq "window.location.href = './backup_settings';" "$BACKUP_HTML"
 grep -Fq "window.location.href = './backup_source';" "$BACKUP_HTML"
-grep -Fq 'Import remains disabled until REM-0303' "$BACKUP_HTML"
-grep -Fq 'Legacy Source Restore' "$BACKUP_HTML"
+grep -Fq 'Transactional Source Restore' "$BACKUP_HTML"
+grep -Fq "xhr.open('POST', \`./restore_settings?" "$BACKUP_HTML"
+grep -Fq "'./restore_source?dry_run=1'" "$BACKUP_HTML"
+grep -Fq 'pub async fn recover_restore_transactions' "$RESTORE_RS"
 if grep -Fq 'Download Full Backup' "$BACKUP_HTML"; then
   printf 'repository archive is still presented as a full backup\n' >&2
   exit 1
@@ -54,7 +63,7 @@ for heading in \
   '## 4. Whole-disk disaster recovery'; do
   grep -Fq "$heading" "$FORMATS_DOC"
 done
-grep -Fq 'Settings import is intentionally unavailable in REM-0302.' "$FORMATS_DOC"
+grep -Fq "Import uses \`POST /restore_settings\`." "$FORMATS_DOC"
 grep -Fq 'compatibility alias for the source' "$INVENTORY_DOC"
 
 printf 'Saturn separated backup-type contract tests passed\n'

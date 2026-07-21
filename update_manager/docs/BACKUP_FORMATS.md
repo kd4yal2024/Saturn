@@ -33,8 +33,8 @@ saturn-settings-v1/
 creation time, Saturn Go build commit, portability/sensitivity notices, and a
 sorted file list. Each file record contains its REM-0301 inventory ID, archive
 path, byte size, original permission mode, and SHA-256 digest. It also embeds
-the explicit exclusions and states that REM-0303 transactional restore is
-required.
+the explicit exclusions and requires Saturn Go transactional restore rather
+than direct unpacking over live state.
 
 Only regular files are accepted. Symlinked state, property, or registered
 script files fail the backup. An individual file is limited to 16 MiB and the
@@ -61,9 +61,17 @@ radio property files may contain sensitive values. Review repository paths,
 protocol/IP settings, PA/calibration, drive, antenna, ADC, microphone, and
 transmit settings before importing to different hardware.
 
-Settings import is intentionally unavailable in REM-0302. REM-0303 must first
-validate the archive, schema, digests, paths, ownership, permissions, and free
-space, then stage and activate it transactionally.
+Import uses `POST /restore_settings`. Dry-run validates the archive format,
+schema, exact declared file set, SHA-256 digests, paths, current ownership,
+permissions, and free space. Apply stages both replacement and rollback files,
+flushes them, records a durable transaction, and replaces each bounded settings
+file atomically. An interrupted transaction is rolled back before Saturn Go
+loads its repository pointer or accepts requests.
+
+`repo_root.txt` and both update-policy files are host-specific and are skipped
+by default. Importing them requires the explicit `include_host_policy=1` query
+option, and a restored repository pointer must identify an existing Saturn Git
+checkout. Non-dry-run import also requires multipart field `confirm=RESTORE`.
 
 ## 2. Source repository backup
 
@@ -85,10 +93,12 @@ OS/network/boot state, client settings outside the repository, or FPGA flash.
 Because Git configuration or untracked files might contain private data, treat
 it as sensitive and inspect it before sharing.
 
-The historical `/restore_full` route is now labelled **Legacy Source
-Restore**. It accepts only a Saturn repository-shaped archive and still uses
-in-place `rsync --delete`; it is not transactional. REM-0303 owns replacement
-of that restore path.
+`POST /restore_source` accepts this repository-shaped archive. It validates
+and copies the tree into a unique generation below the Saturn state directory,
+flushes the complete generation, and atomically replaces `repo_root.txt`. The
+prior checkout is retained and incomplete pointer switches are rolled back on
+startup. The historical `/restore_full` URL is a compatibility alias for this
+same transactional source restore.
 
 ## 3. Installed immutable release backup
 
@@ -111,8 +121,8 @@ release installer's full checksum validation.
 The archive omits mutable settings, credentials, repositories, network/boot
 state, deployment transactions, and every other installed release. It is a
 release payload, not a radio/appliance backup. Restoring and installing a
-release remains a local validated release-manager operation until REM-0303
-defines archive import.
+release remains a separate local validated release-manager operation; REM-0303
+does not activate release archives.
 
 ## 4. Whole-disk disaster recovery
 

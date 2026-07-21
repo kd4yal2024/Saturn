@@ -4,9 +4,8 @@ This document is the REM-0301 inventory of data that can affect a Saturn
 appliance. The machine-readable source of truth is
 `update_manager/release/state-inventory-v1.json`.
 
-This inventory does **not** create a new backup or change restore behavior.
-REM-0302 will turn these classifications into separate settings and release
-backup formats. REM-0303 will make the corresponding restore transactional.
+This inventory is consumed by the separate REM-0302 settings/release backup
+formats and the REM-0303 transactional restore paths.
 
 ## Classification rules
 
@@ -141,10 +140,11 @@ when their inventory entry permits support use.
 
 ## Open ownership boundaries
 
-- REM-0303 must validate the REM-0302 settings manifest, selection, and radio
-  review contract before enabling import.
-- REM-0303 must provide crash-safe staging and activation; this inventory does
-  not make the existing `rsync --delete` restore safe.
+- REM-0303 validates the REM-0302 settings manifest, exact selection, and
+  review-before-transfer host policy before import.
+- REM-0303 provides crash-recoverable settings staging and atomic source
+  generation activation; piHPSDR's separate legacy source restore is outside
+  this inventory's Saturn state boundary.
 - FPGA maintainers must define authoritative artifact naming, signing/hash,
   compatibility, and whether verified hardware readback is possible.
 - piHPSDR and deskHPSDR remain owners of their property-file schemas. Saturn

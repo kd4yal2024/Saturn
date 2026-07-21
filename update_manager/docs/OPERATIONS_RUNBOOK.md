@@ -561,7 +561,7 @@ The Backup page now separates:
 - **Settings Backup**: portable-with-review Saturn settings, registered
   operator scripts, and direct piHPSDR/deskHPSDR property files. The archive
   is private operator data and explicitly excludes credentials and device
-  identity. Import stays disabled until REM-0303.
+  identity. Import is transactional and skips host policy by default.
 - **Source Backup**: the complete active Saturn repository, including local
   changes and anything else below that root. It is not an appliance backup.
   The old `/backup_full` URL remains an alias for compatibility.
@@ -578,17 +578,23 @@ managed Saturn state files needed to undo a release-state migration.
 - Download source with `GET /backup_source`.
 - List/download immutable releases with `GET /backup_releases` and
   `GET /backup_release?commit=<full-commit>`.
-- Legacy source restore only: validate the repository archive first with
-  `POST /restore_full?dry_run=1`, then apply only after `confirm=RESTORE`.
+- Validate/import settings with `POST /restore_settings?dry_run=1`, then apply
+  only after `confirm=RESTORE`. Leave host-policy import off unless deliberately
+  moving this appliance's repository/update configuration.
+- Validate source with `POST /restore_source?dry_run=1`, then apply only after
+  `confirm=RESTORE`. `/restore_full` remains a compatibility alias.
 - For script-created directory backups, use Backup page "Script Backups" controls:
   - Saturn backups from `update-G2.py`: `GET /g2_backups`, `POST /g2_restore`
   - piHPSDR backups from `update-pihpsdr.py`: `GET /pihpsdr_backups`, `POST /pihpsdr_restore`
 
 Important:
 
-- legacy source restore overwrites active repo root using `rsync --delete`
-- settings and immutable-release archive import are intentionally unavailable
-  until REM-0303
+- source restore creates a new flushed repository generation, switches the
+  repository pointer atomically, and retains the previous checkout
+- settings restore keeps durable rollback copies and startup recovery rolls
+  back an incomplete transaction before the service accepts requests
+- immutable-release archive import/activation remains a separate local
+  release-manager operation
 - none of these source-repository restores reconstructs an appliance
 - upload size is limited by `SATURN_RESTORE_MAX_UPLOAD_BYTES`
 - non-dry-run full restore acquires the shared update lock; concurrent update actions return `409 Conflict`
@@ -868,8 +874,8 @@ Safety/usage notes:
 
 - Backup / Restore page now focuses on:
   - repo-root selection
-  - portable settings download (restore intentionally deferred to REM-0303)
-  - source-repository download and clearly labelled legacy source restore
+  - portable settings download and transactional settings restore
+  - source-repository download and transactional generation restore
   - installed immutable-release listing and download
   - repair pack and config verification
   - a notice directing whole-disk imaging to the local-console procedure

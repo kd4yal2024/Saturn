@@ -410,7 +410,7 @@ fn build_settings_backup_tree(
                 "FPGA hardware contents",
             ],
             restore_policy:
-                "REM-0303 transactional restore is required; do not unpack over live state",
+                "Import only through Saturn Go transactional settings restore; do not unpack over live state",
         };
         let manifest_path = archive_root.join("manifest.json");
         let bytes = serde_json::to_vec_pretty(&manifest)

@@ -6,6 +6,7 @@ mod monitor;
 mod pages;
 mod remote_tls;
 mod repair;
+mod restore;
 mod state;
 mod sync_ext;
 mod tailscale;
@@ -27,6 +28,10 @@ use crate::remote_tls::{
     remote_tls_router, RemoteTlsBindDecision,
 };
 use crate::repair::{repair_pack, verify_system_config};
+use crate::restore::{
+    persist_repo_root_atomic, recover_restore_transactions, restore_settings, restore_source,
+    restore_status, transactional_source_restore_directory,
+};
 use crate::state::{
     AppState, CfgEntry, DefaultCustomScript, FlagsQuery, RemoteProfileDeleteRequest,
     RemoteProfileSaveRequest, RemoteProfileStartupRequest, RemoteProfilesFile, RemoteSettings,
@@ -34,7 +39,7 @@ use crate::state::{
     DEFAULT_CUSTOM_SCRIPT_FIX_LED_POWER_BUTTON, DEFAULT_CUSTOM_SCRIPT_SETUP_ETH_FALLBACK,
     DEFAULT_MAX_BODY_BYTES, DEFAULT_RESTORE_MAX_UPLOAD_BYTES, MAX_CUSTOM_SCRIPTS,
     MAX_CUSTOM_SCRIPTS_FILE_BYTES, MAX_REMOTE_PROFILES_FILE_BYTES, MAX_REMOTE_SETTINGS_FILE_BYTES,
-    MAX_TAR_EXPANSION_FACTOR, P23_ADC_PEAK_TELEMETRY_ENABLE_FILE, P23_ADC_PEAK_TELEMETRY_JSON_FILE,
+    P23_ADC_PEAK_TELEMETRY_ENABLE_FILE, P23_ADC_PEAK_TELEMETRY_JSON_FILE,
     P23_APP_PERF_TELEMETRY_JSON_FILE, RUN_LOG_FETCH_MAX_LINES, RUN_LOG_MAX_LINES,
 };
 use crate::sync_ext::MutexExt;
@@ -69,7 +74,7 @@ use chrono::Local;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeMap,
-    fs, io,
+    fs,
     net::SocketAddr,
     os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
@@ -163,6 +168,24 @@ async fn main() {
     // Canonicalize both paths at startup to resolve symlinks before validation,
     // so a symlink planted in SATURN_REPO_ROOT or repo_root.txt cannot bypass
     // the is_saturn_repo_root() check.
+    if let Err(error) = tokio::fs::create_dir_all(&default_state_dir).await {
+        error!("failed to create mandatory Saturn state directory: {error}");
+        std::process::exit(1);
+    }
+    match recover_restore_transactions(Path::new(&default_state_dir)).await {
+        Ok(value) => {
+            if let Some(recovered) = value.get("recovered").and_then(serde_json::Value::as_array) {
+                if !recovered.is_empty() {
+                    warn!("recovered incomplete restore transactions: {recovered:?}");
+                }
+            }
+        }
+        Err(error) => {
+            error!("failed to recover incomplete restore transaction: {error}");
+            std::process::exit(1);
+        }
+    }
+
     let mut repo_root = tokio::fs::canonicalize(&default_repo_root)
         .await
         .unwrap_or_else(|_| PathBuf::from(&default_repo_root));
@@ -203,7 +226,10 @@ async fn main() {
     let _ = tokio::fs::create_dir_all(&scripts_dir).await;
     let _ = tokio::fs::create_dir_all(&snapshot_dir).await;
     let _ = tokio::fs::create_dir_all(&staging_dir).await;
-    let _ = tokio::fs::write(&repo_root_file, format!("{}\n", repo_root.display())).await;
+    if let Err(error) = persist_repo_root_atomic(&repo_root_file, &repo_root).await {
+        error!("failed to persist repository root: {error}");
+        std::process::exit(1);
+    }
 
     let state = AppState {
         webroot: PathBuf::from(webroot),
@@ -310,7 +336,10 @@ async fn main() {
         .route("/backup_releases", get(backup_releases))
         .route("/backup_release", get(backup_release))
         .route("/backup_full", get(backup_source))
-        .route("/restore_full", post(restore_full))
+        .route("/restore_settings", post(restore_settings))
+        .route("/restore_source", post(restore_source))
+        .route("/restore_full", post(restore_source))
+        .route("/restore_status", get(restore_status))
         .route("/g2_backups", get(g2_backups))
         .route("/g2_restore", post(g2_restore))
         .route("/pihpsdr_backups", get(pihpsdr_backups))
@@ -2596,11 +2625,6 @@ async fn get_versions(State(state): State<AppState>) -> impl IntoResponse {
     Json(serde_json::json!({ "versions": versions }))
 }
 
-#[derive(Deserialize, Default)]
-struct RestoreQuery {
-    dry_run: Option<String>,
-}
-
 #[derive(Serialize)]
 struct G2BackupEntry {
     name: String,
@@ -2710,108 +2734,6 @@ async fn pihpsdr_backups() -> Response {
     list_backups_with_prefix("pihpsdr-backup-").await
 }
 
-fn has_unsafe_path_component(path: &str) -> bool {
-    path.starts_with('/') || path.split('/').any(|c| c == "..")
-}
-
-/// Parses one line of GNU tar verbose (`-v`) output.
-/// Format: "PERMS OWNER SIZE DATE TIME PATH[ -> TARGET]"
-/// Returns (full_path_field, uncompressed_size_bytes).
-/// Skips exactly five whitespace-delimited tokens, then treats the remainder as
-/// the path — this correctly handles filenames that contain spaces.
-fn parse_tar_verbose_line(line: &str) -> Option<(&str, u64)> {
-    let mut rest = line;
-    for _ in 0..5 {
-        rest = rest.trim_start_matches(|c: char| c.is_ascii_whitespace());
-        if rest.is_empty() {
-            return None;
-        }
-        let token_end = rest
-            .find(|c: char| c.is_ascii_whitespace())
-            .unwrap_or(rest.len());
-        rest = &rest[token_end..];
-    }
-    let path = rest.trim_start_matches(|c: char| c.is_ascii_whitespace());
-    if path.is_empty() {
-        return None;
-    }
-    // Size is the third whitespace-separated token (index 2).
-    let size = line.split_ascii_whitespace().nth(2)?.parse::<u64>().ok()?;
-    Some((path, size))
-}
-
-async fn available_bytes_at(path: &str) -> Option<u64> {
-    let out = Command::new("df")
-        .arg("-B1")
-        .arg("--output=avail")
-        .arg(path)
-        .output()
-        .await
-        .ok()?;
-    if !out.status.success() {
-        return None;
-    }
-    // Output: "       Avail\n  12345678\n"
-    String::from_utf8_lossy(&out.stdout)
-        .lines()
-        .nth(1)?
-        .trim()
-        .parse::<u64>()
-        .ok()
-}
-
-fn secure_tmp_path(prefix: &str, attempt: u32) -> PathBuf {
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_nanos())
-        .unwrap_or(0);
-    PathBuf::from(format!(
-        "/tmp/{prefix}-{nanos}-{}-{attempt}",
-        std::process::id()
-    ))
-}
-
-fn create_secure_temp_upload_file() -> io::Result<(PathBuf, tokio::fs::File)> {
-    for attempt in 0..64 {
-        let path = secure_tmp_path("saturn-upload", attempt);
-        match fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create_new(true)
-            .open(&path)
-        {
-            Ok(file) => {
-                file.set_permissions(fs::Permissions::from_mode(0o600))?;
-                return Ok((path, tokio::fs::File::from_std(file)));
-            }
-            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
-            Err(error) => return Err(error),
-        }
-    }
-    Err(io::Error::new(
-        io::ErrorKind::AlreadyExists,
-        "could not allocate unique Saturn upload temp file",
-    ))
-}
-
-fn create_secure_temp_extract_dir() -> io::Result<PathBuf> {
-    for attempt in 0..64 {
-        let path = secure_tmp_path("saturn-restore", attempt);
-        match fs::create_dir(&path) {
-            Ok(()) => {
-                fs::set_permissions(&path, fs::Permissions::from_mode(0o700))?;
-                return Ok(path);
-            }
-            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
-            Err(error) => return Err(error),
-        }
-    }
-    Err(io::Error::new(
-        io::ErrorKind::AlreadyExists,
-        "could not allocate unique Saturn restore temp directory",
-    ))
-}
-
 async fn restore_backup_by_kind(state: &AppState, req: G2RestoreReq, kind: &str) -> Response {
     let (prefix, target_label) = match kind {
         "saturn" => ("saturn-backup-", "saturn"),
@@ -2866,6 +2788,12 @@ async fn restore_backup_by_kind(state: &AppState, req: G2RestoreReq, kind: &str)
         root
     };
 
+    if kind == "saturn" {
+        return match transactional_source_restore_directory(state, &backup_root, dry_run).await {
+            Ok(value) => Json(value).into_response(),
+            Err(error) => json_error(StatusCode::BAD_REQUEST, &error),
+        };
+    }
     let (files, dirs, bytes) = tree_stats(backup_root.clone()).await;
     if dry_run {
         return Json(serde_json::json!({
@@ -2918,251 +2846,6 @@ async fn g2_restore(State(state): State<AppState>, Json(req): Json<G2RestoreReq>
 
 async fn pihpsdr_restore(State(state): State<AppState>, Json(req): Json<G2RestoreReq>) -> Response {
     restore_backup_by_kind(&state, req, "pihpsdr").await
-}
-
-async fn restore_full(
-    State(state): State<AppState>,
-    Query(q): Query<RestoreQuery>,
-    mut multipart: Multipart,
-) -> Result<Response, Response> {
-    let dry_run = parse_boolish(q.dry_run);
-    let _activity_guard = if dry_run {
-        None
-    } else {
-        match begin_update_activity("saturn-full-restore", "full archive restore") {
-            Ok(g) => Some(g),
-            Err(e) => return Err(json_error(StatusCode::CONFLICT, &e)),
-        }
-    };
-    let repo_root = current_repo_root(&state);
-
-    let mut upload_path: Option<PathBuf> = None;
-    let mut confirm: Option<String> = None;
-    let mut upload_bytes = 0u64;
-
-    while let Ok(Some(field)) = multipart.next_field().await {
-        let name = field.name().map(|s| s.to_string()).unwrap_or_default();
-        if name == "confirm" {
-            let text = field.text().await.unwrap_or_default();
-            confirm = Some(text.trim().to_string());
-            continue;
-        }
-        if name != "file" {
-            continue;
-        }
-
-        let (path, mut file) = create_secure_temp_upload_file()
-            .map_err(|e| json_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
-
-        let mut field = field;
-        while let Ok(Some(chunk)) = field.chunk().await {
-            upload_bytes = upload_bytes.saturating_add(chunk.len() as u64);
-            if upload_bytes > state.restore_max_upload_bytes {
-                let _ = tokio::fs::remove_file(&path).await;
-                return Err(json_error(
-                    StatusCode::PAYLOAD_TOO_LARGE,
-                    &format!(
-                        "archive too large (limit {} MB)",
-                        state.restore_max_upload_bytes / 1024 / 1024
-                    ),
-                ));
-            }
-            tokio::io::AsyncWriteExt::write_all(&mut file, &chunk)
-                .await
-                .map_err(|e| json_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
-        }
-        upload_path = Some(path);
-    }
-
-    let upload_path = match upload_path {
-        Some(p) => p,
-        None => return Err(json_error(StatusCode::BAD_REQUEST, "missing file")),
-    };
-
-    if !dry_run {
-        if confirm.as_deref() != Some("RESTORE") {
-            let _ = tokio::fs::remove_file(&upload_path).await;
-            return Err(json_error(
-                StatusCode::BAD_REQUEST,
-                "confirm token required",
-            ));
-        }
-    }
-
-    if let Err(e) = validate_saturn_repo_root(&repo_root) {
-        let _ = tokio::fs::remove_file(&upload_path).await;
-        return Err(json_error(StatusCode::BAD_REQUEST, &e));
-    }
-
-    // Pre-validate tar contents: traversal paths, sparse-bomb expansion, and available space.
-    // -tzvf gives verbose output with sizes so we can measure uncompressed bytes in one pass.
-    let list_out = Command::new("tar")
-        .arg("-tzvf")
-        .arg(&upload_path)
-        .output()
-        .await
-        .map_err(|e| json_error(StatusCode::BAD_REQUEST, &e.to_string()))?;
-    if !list_out.status.success() {
-        let msg = String::from_utf8_lossy(&list_out.stderr).trim().to_string();
-        let _ = tokio::fs::remove_file(&upload_path).await;
-        return Err(json_error(
-            StatusCode::BAD_REQUEST,
-            &format!("tar list failed: {msg}"),
-        ));
-    }
-    let mut uncompressed_bytes: u64 = 0;
-    for line in String::from_utf8_lossy(&list_out.stdout).lines() {
-        let Some((path_field, size)) = parse_tar_verbose_line(line) else {
-            continue;
-        };
-        // Symlink entries look like "linkname -> target" — check both sides.
-        let (link_name, link_target) = match path_field.find(" -> ") {
-            Some(pos) => (&path_field[..pos], Some(&path_field[pos + 4..])),
-            None => (path_field, None),
-        };
-        if has_unsafe_path_component(link_name) {
-            let _ = tokio::fs::remove_file(&upload_path).await;
-            return Err(json_error(
-                StatusCode::BAD_REQUEST,
-                "archive contains unsafe paths",
-            ));
-        }
-        if let Some(target) = link_target {
-            if has_unsafe_path_component(target) {
-                let _ = tokio::fs::remove_file(&upload_path).await;
-                return Err(json_error(
-                    StatusCode::BAD_REQUEST,
-                    "archive contains unsafe symlink target",
-                ));
-            }
-        }
-        uncompressed_bytes = uncompressed_bytes.saturating_add(size);
-    }
-    // Sparse-archive bomb check: reject if expansion ratio exceeds the safety limit.
-    if uncompressed_bytes > upload_bytes.saturating_mul(MAX_TAR_EXPANSION_FACTOR) {
-        let _ = tokio::fs::remove_file(&upload_path).await;
-        return Err(json_error(
-            StatusCode::BAD_REQUEST,
-            &format!(
-                "archive expansion ratio too large ({} MB uncompressed from {} MB compressed)",
-                uncompressed_bytes / 1024 / 1024,
-                upload_bytes / 1024 / 1024
-            ),
-        ));
-    }
-    // Available-space check: ensure /tmp has enough room to extract.
-    if let Some(avail) = available_bytes_at("/tmp").await {
-        if uncompressed_bytes > avail {
-            let _ = tokio::fs::remove_file(&upload_path).await;
-            return Err(json_error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                &format!(
-                    "insufficient space in /tmp: need {} MB, have {} MB",
-                    uncompressed_bytes / 1024 / 1024,
-                    avail / 1024 / 1024
-                ),
-            ));
-        }
-    }
-
-    let extract_dir = create_secure_temp_extract_dir()
-        .map_err(|e| json_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
-
-    let status = Command::new("tar")
-        .arg("-xzf")
-        .arg(&upload_path)
-        .arg("-C")
-        .arg(&extract_dir)
-        .status()
-        .await
-        .map_err(|e| json_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
-    if !status.success() {
-        let _ = tokio::fs::remove_file(&upload_path).await;
-        let _ = tokio::fs::remove_dir_all(&extract_dir).await;
-        return Err(json_error(StatusCode::BAD_REQUEST, "extract failed"));
-    }
-
-    let mut entries = tokio::fs::read_dir(&extract_dir)
-        .await
-        .map_err(|e| json_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
-    let mut top_dirs: Vec<PathBuf> = Vec::new();
-    while let Ok(Some(ent)) = entries.next_entry().await {
-        let path = ent.path();
-        if path.is_dir() {
-            top_dirs.push(path);
-        }
-    }
-    if top_dirs.len() != 1 {
-        let _ = tokio::fs::remove_file(&upload_path).await;
-        let _ = tokio::fs::remove_dir_all(&extract_dir).await;
-        return Err(json_error(
-            StatusCode::BAD_REQUEST,
-            "archive must contain a single top-level directory",
-        ));
-    }
-    let extracted_root = top_dirs.remove(0);
-    if let Err(e) = validate_saturn_repo_root(&extracted_root) {
-        let _ = tokio::fs::remove_file(&upload_path).await;
-        let _ = tokio::fs::remove_dir_all(&extract_dir).await;
-        return Err(json_error(
-            StatusCode::BAD_REQUEST,
-            &format!("archive root is not a Saturn repo snapshot: {e}"),
-        ));
-    }
-
-    if dry_run {
-        let (files, dirs, bytes) = tree_stats(extracted_root.clone()).await;
-        let _ = tokio::fs::remove_file(&upload_path).await;
-        let _ = tokio::fs::remove_dir_all(&extract_dir).await;
-        return Ok(Json(serde_json::json!({
-            "status": "ok",
-            "dry_run": true,
-            "extracted_root": extracted_root,
-            "files": files,
-            "dirs": dirs,
-            "bytes": bytes
-        }))
-        .into_response());
-    }
-
-    tokio::fs::create_dir_all(&repo_root)
-        .await
-        .map_err(|e| json_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
-    if let Some(avail) = available_bytes_at(repo_root.to_string_lossy().as_ref()).await {
-        if uncompressed_bytes > avail {
-            let _ = tokio::fs::remove_file(&upload_path).await;
-            let _ = tokio::fs::remove_dir_all(&extract_dir).await;
-            return Err(json_error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                &format!(
-                    "insufficient space in repo target: need {} MB, have {} MB",
-                    uncompressed_bytes / 1024 / 1024,
-                    avail / 1024 / 1024
-                ),
-            ));
-        }
-    }
-
-    let rsync_status = Command::new("rsync")
-        .arg("-a")
-        .arg("--delete")
-        .arg(format!("{}/", extracted_root.display()))
-        .arg(format!("{}/", repo_root.display()))
-        .status()
-        .await
-        .map_err(|e| json_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
-
-    let _ = tokio::fs::remove_file(&upload_path).await;
-    let _ = tokio::fs::remove_dir_all(&extract_dir).await;
-
-    if !rsync_status.success() {
-        return Err(json_error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "rsync failed",
-        ));
-    }
-
-    Ok(Json(serde_json::json!({ "status": "ok" })).into_response())
 }
 
 #[derive(Debug, Deserialize)]
