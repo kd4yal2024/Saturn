@@ -1,6 +1,7 @@
 mod auth;
 mod backup;
 mod health;
+mod maintenance_lock;
 mod middleware;
 mod monitor;
 mod pages;
@@ -589,42 +590,53 @@ fn stdbuf_binary() -> Option<&'static str> {
     })
 }
 
-fn build_script_command(script_path: &Path, flags: &[String]) -> Command {
+fn build_script_command(
+    script_path: &Path,
+    flags: &[String],
+    operation: &str,
+    resources: &[&str],
+) -> Command {
     let is_python = script_path
         .extension()
         .and_then(|ext| ext.to_str())
         .map(|ext| ext.eq_ignore_ascii_case("py"))
         .unwrap_or(false);
 
-    let mut cmd = if is_python {
-        let mut cmd = if let Some(stdbuf) = stdbuf_binary() {
-            let mut c = Command::new(stdbuf);
-            c.arg("-oL")
-                .arg("-eL")
-                .arg("python3")
-                .arg("-u")
-                .arg(script_path)
-                .args(flags);
-            c
+    let (program, arguments) = if is_python {
+        if let Some(stdbuf) = stdbuf_binary() {
+            let mut args = vec![
+                "-oL".to_string(),
+                "-eL".to_string(),
+                "python3".to_string(),
+                "-u".to_string(),
+                script_path.display().to_string(),
+            ];
+            args.extend(flags.iter().cloned());
+            (PathBuf::from(stdbuf), args)
         } else {
-            let mut c = Command::new("python3");
-            c.arg("-u").arg(script_path).args(flags);
-            c
-        };
+            let mut args = vec!["-u".to_string(), script_path.display().to_string()];
+            args.extend(flags.iter().cloned());
+            (PathBuf::from("python3"), args)
+        }
+    } else if let Some(stdbuf) = stdbuf_binary() {
+        let mut args = vec![
+            "-oL".to_string(),
+            "-eL".to_string(),
+            script_path.display().to_string(),
+        ];
+        args.extend(flags.iter().cloned());
+        (PathBuf::from(stdbuf), args)
+    } else {
+        (script_path.to_path_buf(), flags.to_vec())
+    };
+
+    let mut cmd = maintenance_lock::wrapped_command(operation, resources, &program, &arguments);
+    if is_python {
         cmd.env("PYTHONUNBUFFERED", "1");
         cmd.env("PYTHONIOENCODING", "UTF-8");
         cmd.env("PYTHONDONTWRITEBYTECODE", "1");
         cmd.env("PYTHONPYCACHEPREFIX", "/var/cache/saturn-python");
-        cmd
-    } else if let Some(stdbuf) = stdbuf_binary() {
-        let mut cmd = Command::new(stdbuf);
-        cmd.arg("-oL").arg("-eL").arg(script_path).args(flags);
-        cmd
-    } else {
-        let mut cmd = Command::new(script_path);
-        cmd.args(flags);
-        cmd
-    };
+    }
 
     apply_build_subprocess_env(&mut cmd);
     cmd
@@ -2801,13 +2813,26 @@ async fn restore_backup_by_kind(state: &AppState, req: G2RestoreReq, kind: &str)
         .into_response();
     }
 
-    let status = match Command::new("rsync")
-        .arg("-a")
-        .arg("--delete")
-        .arg(format!("{}/", backup_root.display()))
-        .arg(format!("{}/", repo_root.display()))
-        .status()
-        .await
+    let lock_operation = format!("restore:{target_label}-backup");
+    if let Err(error) =
+        maintenance_lock::probe(&lock_operation, maintenance_lock::REPOSITORY_RESTORE).await
+    {
+        return json_error(StatusCode::CONFLICT, &error);
+    }
+    let arguments = vec![
+        "-a".to_string(),
+        "--delete".to_string(),
+        format!("{}/", backup_root.display()),
+        format!("{}/", repo_root.display()),
+    ];
+    let status = match maintenance_lock::wrapped_command(
+        &lock_operation,
+        maintenance_lock::REPOSITORY_RESTORE,
+        Path::new("rsync"),
+        &arguments,
+    )
+    .status()
+    .await
     {
         Ok(v) => v,
         Err(e) => {
@@ -3246,6 +3271,11 @@ async fn run_sse(
     } else {
         None
     };
+    let lock_operation = format!("script:{script}");
+    let lock_resources = maintenance_lock::script_resources(&script);
+    maintenance_lock::probe(&lock_operation, lock_resources)
+        .await
+        .map_err(|error| json_error(StatusCode::CONFLICT, &error))?;
     let update_activity_guard = if g2_script || saturngo_script {
         let kind = if g2_script {
             "update-g2"
@@ -3268,7 +3298,7 @@ async fn run_sse(
     let (run_id, start_line) = begin_script_run_log(&script, &flags);
     let _ = tx.send(start_line);
 
-    let mut cmd = build_script_command(&script_path, &flags);
+    let mut cmd = build_script_command(&script_path, &flags, &lock_operation, lock_resources);
     cmd.env("SATURN_REPO_ROOT", &repo_root_display);
     cmd.env("SATURN_DIR", &repo_root_display);
     cmd.env("SATURN_ACTIVE_REPO_ROOT", &repo_root_display);

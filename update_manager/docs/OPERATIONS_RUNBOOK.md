@@ -1052,6 +1052,34 @@ Typical causes:
 curl -sS http://127.0.0.1:8080/verify_system_config | jq
 ```
 
+### Maintenance Operation Is Busy
+
+Saturn serializes only operations that claim the same host resource. The lock
+owner is the maintenance broker/child, not Saturn Go, so restarting the web
+service does not clear a legitimate busy condition.
+
+Resource files are under `/run/lock/saturn-maintenance`:
+
+- application deployment: `release`, `repository`, `package`, `radio`
+- source/settings restore: `repository`, `radio`
+- FPGA flash: `fpga`, `radio`
+- Tailscale/network changes: `network`
+- local-only disk work: `disk`
+- diagnostics/log reads: shared `read-only`
+
+Inspect without deleting or replacing a lock file:
+
+```bash
+sudo ls -la /run/lock/saturn-maintenance
+sudo lsof /run/lock/saturn-maintenance/*.lock
+ps -ef | grep '[s]aturn-maintenance-lock'
+```
+
+Do not remove a lock file to clear a busy response. Confirm whether its owner
+is still doing useful work. Normal completion releases it automatically; an
+abandoned broker can be terminated only after its maintenance child has been
+identified and handled.
+
 ### Export Repair Pack
 
 ```bash

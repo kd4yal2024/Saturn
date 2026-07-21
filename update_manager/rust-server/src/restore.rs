@@ -13,6 +13,7 @@ use std::{
 };
 use tokio::{io::AsyncWriteExt, process::Command};
 
+use crate::maintenance_lock::{self, READ_ONLY_MAINTENANCE, REPOSITORY_RESTORE};
 use crate::state::{AppState, MAX_TAR_EXPANSION_FACTOR};
 use crate::state_store::{write_atomic, AtomicWriteOptions};
 use crate::update::begin_update_activity;
@@ -333,7 +334,11 @@ async fn validate_and_extract_archive(
     Ok((extract_dir, entry.path()))
 }
 
-async fn run_tool(arguments: &[String]) -> Result<Value, String> {
+async fn run_tool(
+    arguments: &[String],
+    operation: &str,
+    resources: &[&str],
+) -> Result<Value, String> {
     let tool = transaction_tool();
     if !tool.is_file() {
         return Err(format!(
@@ -341,8 +346,7 @@ async fn run_tool(arguments: &[String]) -> Result<Value, String> {
             tool.display()
         ));
     }
-    let output = Command::new(&tool)
-        .args(arguments)
+    let output = maintenance_lock::wrapped_command(operation, resources, &tool, arguments)
         .output()
         .await
         .map_err(|error| format!("failed to start restore transaction helper: {error}"))?;
@@ -399,6 +403,15 @@ async fn restore_archive(
                 .map_err(|error| json_error(StatusCode::CONFLICT, &error))?,
         )
     };
+    let lock_operation = format!("restore:{kind}");
+    let lock_resources = if dry_run {
+        READ_ONLY_MAINTENANCE
+    } else {
+        REPOSITORY_RESTORE
+    };
+    maintenance_lock::probe(&lock_operation, lock_resources)
+        .await
+        .map_err(|error| json_error(StatusCode::CONFLICT, &error))?;
 
     let (upload_path, upload_bytes, confirm) = receive_archive(&state, multipart).await?;
     if !dry_run && confirm.as_deref() != Some("RESTORE") {
@@ -463,7 +476,7 @@ async fn restore_archive(
         arguments.push("--dry-run".to_string());
     }
 
-    let result = run_tool(&arguments).await;
+    let result = run_tool(&arguments, &lock_operation, lock_resources).await;
     let _ = tokio::fs::remove_file(&upload_path).await;
     let _ = tokio::fs::remove_dir_all(&extract_dir).await;
     let value = result.map_err(|error| json_error(StatusCode::BAD_REQUEST, &error))?;
@@ -510,7 +523,13 @@ pub async fn transactional_source_restore_directory(
     if dry_run {
         arguments.push("--dry-run".to_string());
     }
-    let value = run_tool(&arguments).await?;
+    let resources = if dry_run {
+        READ_ONLY_MAINTENANCE
+    } else {
+        REPOSITORY_RESTORE
+    };
+    maintenance_lock::probe("restore:source-directory", resources).await?;
+    let value = run_tool(&arguments, "restore:source-directory", resources).await?;
     if !dry_run {
         update_in_memory_repo_root(state, &value)?;
     }
@@ -522,11 +541,15 @@ pub async fn restore_status(State(state): State<AppState>) -> Response {
         Ok(value) => value,
         Err(error) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, &error),
     };
-    match run_tool(&[
-        "status".to_string(),
-        "--state-root".to_string(),
-        root.display().to_string(),
-    ])
+    match run_tool(
+        &[
+            "status".to_string(),
+            "--state-root".to_string(),
+            root.display().to_string(),
+        ],
+        "restore:status",
+        READ_ONLY_MAINTENANCE,
+    )
     .await
     {
         Ok(value) => Json(value).into_response(),
@@ -539,11 +562,15 @@ pub async fn recover_restore_transactions(state_root: &Path) -> Result<Value, St
     if !transaction_tool().is_file() && !transactions.exists() {
         return Ok(serde_json::json!({"status": "ok", "recovered": []}));
     }
-    run_tool(&[
-        "recover".to_string(),
-        "--state-root".to_string(),
-        state_root.display().to_string(),
-    ])
+    run_tool(
+        &[
+            "recover".to_string(),
+            "--state-root".to_string(),
+            state_root.display().to_string(),
+        ],
+        "restore:recover",
+        REPOSITORY_RESTORE,
+    )
     .await
 }
 

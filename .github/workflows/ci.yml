@@ -179,6 +179,7 @@ jobs:
             tests/test-saturn-release-activate.sh \
             tests/test-saturn-release-install.sh \
             tests/test-saturn-release-manifest.sh \
+            tests/test-saturn-maintenance-lock.sh \
             tests/test-saturn-transactional-restore.sh \
             tests/test-saturn-state-inventory.sh \
             tests/test-saturn-state-compatibility.sh \
@@ -212,6 +213,7 @@ jobs:
             tests/test-saturn-release-activate.sh \
             tests/test-saturn-release-install.sh \
             tests/test-saturn-release-manifest.sh \
+            tests/test-saturn-maintenance-lock.sh \
             tests/test-saturn-transactional-restore.sh \
             tests/test-saturn-state-inventory.sh \
             tests/test-saturn-state-compatibility.sh \
@@ -235,6 +237,9 @@ jobs:
 
       - name: Test atomic persistent-state writes
         run: tests/test-saturn-atomic-state-write.sh
+
+      - name: Test host-level maintenance resource locks
+        run: tests/test-saturn-maintenance-lock.sh
 
       - name: Test low-memory Rust build safeguards
         run: tests/test-rust-low-memory-build.sh

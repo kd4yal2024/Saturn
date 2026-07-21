@@ -10,6 +10,7 @@ use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::process::Command;
 
+use crate::maintenance_lock::{HostLockGuard, APPLICATION_DEPLOYMENT};
 use crate::state::{
     AppState, DEFAULT_STAGE_WORKTREE_KEEP, DEFAULT_UPDATE_HEALTH_INITIAL_DELAY_SECS,
     DEFAULT_UPDATE_HEALTH_RETRIES, DEFAULT_UPDATE_HEALTH_TIMEOUT_SECS,
@@ -977,6 +978,11 @@ pub async fn update_start(
         Ok(g) => g,
         Err(e) => return json_error(StatusCode::CONFLICT, &e),
     };
+    let host_lock_guard =
+        match HostLockGuard::acquire("appliance-update", APPLICATION_DEPLOYMENT).await {
+            Ok(guard) => guard,
+            Err(error) => return json_error(StatusCode::CONFLICT, &error),
+        };
     let job_id = format!(
         "upd-{}-{}",
         std::process::id(),
@@ -1008,6 +1014,7 @@ pub async fn update_start(
     let job_id_clone = job_id.clone();
     tokio::spawn(async move {
         let _activity_guard = activity_guard;
+        let _host_lock_guard = host_lock_guard;
         run_appliance_update(state_clone, job_id_clone, policy, channel, target_ref).await;
     });
 
@@ -1041,6 +1048,11 @@ pub async fn update_rollback(State(state): State<AppState>) -> Response {
         Ok(g) => g,
         Err(e) => return json_error(StatusCode::CONFLICT, &e),
     };
+    let _host_lock_guard =
+        match HostLockGuard::acquire("appliance-rollback", APPLICATION_DEPLOYMENT).await {
+            Ok(guard) => guard,
+            Err(error) => return json_error(StatusCode::CONFLICT, &error),
+        };
 
     let last = match read_last_update_state(&state).await {
         Ok(Some(value)) => value,

@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::{path::Path, time::Duration};
 
 use axum::{
     http::{header, HeaderValue, StatusCode},
@@ -11,10 +11,11 @@ use axum::{
 use serde::Deserialize;
 use tokio::{
     io::{AsyncBufReadExt, BufReader},
-    process::Command,
     sync::mpsc,
 };
 use tokio_stream::{wrappers::UnboundedReceiverStream, StreamExt};
+
+use crate::maintenance_lock::{self, NETWORK_MAINTENANCE};
 
 const HELPER_PATH: &str = "/usr/local/lib/saturn-go/scripts/saturn-tailscale.sh";
 const HOSTNAME_RE_BYTES: &[u8] = b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-";
@@ -77,7 +78,12 @@ fn validate_auth_key(value: &str) -> Result<(), &'static str> {
     Ok(())
 }
 
-fn stream_helper(args: Vec<String>) -> Response {
+async fn stream_helper(args: Vec<String>) -> Response {
+    let action = args.first().map(String::as_str).unwrap_or("unknown");
+    let operation = format!("tailscale:{action}");
+    if let Err(error) = maintenance_lock::probe(&operation, NETWORK_MAINTENANCE).await {
+        return (StatusCode::CONFLICT, error).into_response();
+    }
     let (tx, rx) = mpsc::unbounded_channel::<String>();
 
     let cmd_summary: String = std::iter::once("sudo".to_string())
@@ -87,11 +93,15 @@ fn stream_helper(args: Vec<String>) -> Response {
         .join(" ");
     let _ = tx.send(format!("$ {cmd_summary}"));
 
-    let mut command = Command::new("sudo");
+    let mut command_args = vec!["-n".to_string(), HELPER_PATH.to_string()];
+    command_args.extend(args.iter().cloned());
+    let mut command = maintenance_lock::wrapped_command(
+        &operation,
+        NETWORK_MAINTENANCE,
+        Path::new("sudo"),
+        &command_args,
+    );
     command
-        .arg("-n")
-        .arg(HELPER_PATH)
-        .args(&args)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
 
@@ -155,7 +165,7 @@ fn stream_helper(args: Vec<String>) -> Response {
 }
 
 pub async fn tailscale_install() -> Response {
-    stream_helper(vec!["install".to_string()])
+    stream_helper(vec!["install".to_string()]).await
 }
 
 pub async fn tailscale_up(payload: Option<Json<TailscaleUpRequest>>) -> Response {
@@ -197,15 +207,15 @@ pub async fn tailscale_up(payload: Option<Json<TailscaleUpRequest>>) -> Response
         args.push("--reset".to_string());
     }
 
-    stream_helper(args)
+    stream_helper(args).await
 }
 
 pub async fn tailscale_down() -> Response {
-    stream_helper(vec!["down".to_string()])
+    stream_helper(vec!["down".to_string()]).await
 }
 
 pub async fn tailscale_logout() -> Response {
-    stream_helper(vec!["logout".to_string()])
+    stream_helper(vec!["logout".to_string()]).await
 }
 
 pub async fn tailscale_serve(Json(req): Json<TailscaleServeRequest>) -> Response {
@@ -222,7 +232,7 @@ pub async fn tailscale_serve(Json(req): Json<TailscaleServeRequest>) -> Response
             args.push(format!("--port={port}"));
         }
     }
-    stream_helper(args)
+    stream_helper(args).await
 }
 
 #[cfg(test)]

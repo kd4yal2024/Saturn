@@ -414,14 +414,34 @@ rename and verify that only a complete old or complete new document is visible.
 
 ### REM-0402: Add host-level maintenance locking
 
-- [ ] Use a host-level lock independent of the Saturn Go process.
-- [ ] Define resource classes: release, repository, disk, FPGA, package, network, radio, and read-only.
-- [ ] Prevent conflicting operations before starting a child process.
-- [ ] Keep FPGA and disk-image operations outside normal application deployment.
+- [x] Use a host-level lock independent of the Saturn Go process.
+- [x] Define resource classes: release, repository, disk, FPGA, package, network, radio, and read-only.
+- [x] Prevent conflicting operations before starting a child process.
+- [x] Keep FPGA and disk-image operations outside normal application deployment.
 
 Acceptance criteria:
 
 - Restarting Saturn Go does not permit a second conflicting job.
+
+Saturn maintenance now uses fixed-order advisory locks under
+`/run/lock/saturn-maintenance`. The trusted lock broker owns the locks and
+waits for the maintenance child, so a running script remains exclusive even
+if the Saturn Go process that launched it restarts. Saturn Go probes the same
+resources before spawning to return an immediate HTTP conflict; the broker
+then acquires them authoritatively to close the check/start race. Appliance
+updates and rollbacks that execute in-process use a separate broker holder
+whose lifetime is tied to the server task.
+
+The resource policy is intentionally narrow: application deployment claims
+`release`, `repository`, `package`, and `radio`; it never claims `disk` or
+`fpga`. FPGA flashing claims `fpga` plus `radio`, disk imaging remains disabled
+in the web appliance, and unrecognized operator scripts conservatively claim
+all mutating resource classes. Restore, legacy repository restore, Tailscale,
+and every configured/custom script enter through the same broker. Read-only
+operations use shared locks. The installer creates the root-owned runtime lock
+directory and its service-group-writable lock files through systemd-tmpfiles.
+`tests/test-saturn-maintenance-lock.sh` verifies cross-process conflict,
+independent resources, shared read-only access, and lock release.
 
 ### REM-0403: Persist and reconcile jobs
 
