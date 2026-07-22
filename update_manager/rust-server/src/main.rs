@@ -1,6 +1,7 @@
 mod auth;
 mod backup;
 mod health;
+mod maintenance_jobs;
 mod maintenance_lock;
 mod middleware;
 mod monitor;
@@ -174,6 +175,20 @@ async fn main() {
     if let Err(error) = tokio::fs::create_dir_all(&default_state_dir).await {
         error!("failed to create mandatory Saturn state directory: {error}");
         std::process::exit(1);
+    }
+    match maintenance_jobs::initialize(Path::new(&default_state_dir)).await {
+        Ok(summary) => {
+            if !summary.orphaned.is_empty() || !summary.interrupted.is_empty() {
+                warn!(
+                    "maintenance job recovery: orphaned={:?} interrupted={:?}",
+                    summary.orphaned, summary.interrupted
+                );
+            }
+        }
+        Err(error) => {
+            error!("failed to initialize durable maintenance jobs: {error}");
+            std::process::exit(1);
+        }
     }
     match recover_restore_transactions(Path::new(&default_state_dir)).await {
         Ok(value) => {
@@ -383,6 +398,7 @@ async fn main() {
         .route("/verify_system_config", get(verify_system_config))
         .route("/run", post(run_sse))
         .route("/run_log", get(get_run_log))
+        .route("/maintenance_jobs", get(get_maintenance_jobs))
         .route("/backup_response", post(no_content))
         .route("/change_password", post(change_password))
         .route("/exit", post(exit_server))
@@ -595,6 +611,9 @@ fn build_script_command(
     flags: &[String],
     operation: &str,
     resources: &[&str],
+    job_id: &str,
+    output_path: &Path,
+    result_path: &Path,
 ) -> Command {
     let is_python = script_path
         .extension()
@@ -630,7 +649,15 @@ fn build_script_command(
         (script_path.to_path_buf(), flags.to_vec())
     };
 
-    let mut cmd = maintenance_lock::wrapped_command(operation, resources, &program, &arguments);
+    let mut cmd = maintenance_lock::wrapped_job_command(
+        operation,
+        resources,
+        &program,
+        &arguments,
+        job_id,
+        output_path,
+        result_path,
+    );
     if is_python {
         cmd.env("PYTHONUNBUFFERED", "1");
         cmd.env("PYTHONIOENCODING", "UTF-8");
@@ -3152,7 +3179,7 @@ async fn get_fpga_images(State(state): State<AppState>) -> impl IntoResponse {
     }))
 }
 
-async fn get_run_log(Query(q): Query<RunLogQuery>) -> Response {
+async fn get_run_log(State(state): State<AppState>, Query(q): Query<RunLogQuery>) -> Response {
     let script = q.script.unwrap_or_default();
     if !is_safe_script_name(&script) {
         return json_error(StatusCode::BAD_REQUEST, "invalid script");
@@ -3160,8 +3187,42 @@ async fn get_run_log(Query(q): Query<RunLogQuery>) -> Response {
     let from = q.from.unwrap_or(0);
     let limit = q.limit.unwrap_or(300).clamp(1, RUN_LOG_FETCH_MAX_LINES);
 
-    let guard = script_run_log_slot().lock_unpoisoned();
-    let Some(run) = guard.get(&script) else {
+    let in_memory = script_run_log_slot()
+        .lock_unpoisoned()
+        .get(&script)
+        .cloned();
+    if let Some(run) = in_memory {
+        let total = run.line_offset + run.lines.len();
+        let start = from.max(run.line_offset).min(total);
+        let start_idx = start.saturating_sub(run.line_offset);
+        let end_idx = (start_idx + limit).min(run.lines.len());
+        let end = run.line_offset + end_idx;
+        let lines = run.lines[start_idx..end_idx].to_vec();
+        return Json(serde_json::json!({
+            "script": script,
+            "run_id": run.run_id,
+            "status": run.status,
+            "running": run.status == "running",
+            "started_at": run.started_at,
+            "finished_at": run.finished_at,
+            "from": start,
+            "next_from": end,
+            "total_lines": total,
+            "lines": lines,
+        }))
+        .into_response();
+    }
+
+    let state_dir = state
+        .update_state_file
+        .parent()
+        .unwrap_or_else(|| Path::new("/var/lib/saturn-state"));
+    let job_type = format!("script:{script}");
+    let durable = match maintenance_jobs::latest_for_type(state_dir, &job_type).await {
+        Ok(value) => value,
+        Err(error) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, &error),
+    };
+    let Some(run) = durable else {
         return Json(serde_json::json!({
             "script": script,
             "run_id": serde_json::Value::Null,
@@ -3176,18 +3237,26 @@ async fn get_run_log(Query(q): Query<RunLogQuery>) -> Response {
         }))
         .into_response();
     };
-
-    let total = run.line_offset + run.lines.len();
-    let start = from.max(run.line_offset).min(total);
-    let start_idx = start.saturating_sub(run.line_offset);
-    let end_idx = (start_idx + limit).min(run.lines.len());
-    let end = run.line_offset + end_idx;
-    let lines = run.lines[start_idx..end_idx].to_vec();
+    let all_lines = tokio::fs::read_to_string(&run.output_path)
+        .await
+        .unwrap_or_default()
+        .lines()
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    let line_offset = all_lines.len().saturating_sub(RUN_LOG_MAX_LINES);
+    let retained = &all_lines[line_offset..];
+    let total = all_lines.len();
+    let start = from.max(line_offset).min(total);
+    let start_idx = start.saturating_sub(line_offset);
+    let end_idx = (start_idx + limit).min(retained.len());
+    let end = line_offset + end_idx;
+    let lines = retained[start_idx..end_idx].to_vec();
+    let running = matches!(run.state.as_str(), "starting" | "running" | "orphaned");
     Json(serde_json::json!({
         "script": script,
-        "run_id": run.run_id,
-        "status": run.status,
-        "running": run.status == "running",
+        "run_id": run.id,
+        "status": run.state,
+        "running": running,
         "started_at": run.started_at,
         "finished_at": run.finished_at,
         "from": start,
@@ -3196,6 +3265,26 @@ async fn get_run_log(Query(q): Query<RunLogQuery>) -> Response {
         "lines": lines,
     }))
     .into_response()
+}
+
+async fn get_maintenance_jobs(State(state): State<AppState>) -> Response {
+    let state_dir = state
+        .update_state_file
+        .parent()
+        .unwrap_or_else(|| Path::new("/var/lib/saturn-state"));
+    let recovery = match maintenance_jobs::reconcile(state_dir).await {
+        Ok(value) => value,
+        Err(error) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, &error),
+    };
+    match maintenance_jobs::list(state_dir).await {
+        Ok(jobs) => Json(serde_json::json!({
+            "status": "ok",
+            "recovery": recovery,
+            "jobs": jobs,
+        }))
+        .into_response(),
+        Err(error) => json_error(StatusCode::INTERNAL_SERVER_ERROR, &error),
+    }
 }
 
 async fn run_sse(
@@ -3296,9 +3385,45 @@ async fn run_sse(
     let (tx, rx) = mpsc::unbounded_channel::<String>();
 
     let (run_id, start_line) = begin_script_run_log(&script, &flags);
-    let _ = tx.send(start_line);
+    let _ = tx.send(start_line.clone());
 
-    let mut cmd = build_script_command(&script_path, &flags, &lock_operation, lock_resources);
+    let state_dir = state
+        .update_state_file
+        .parent()
+        .unwrap_or_else(|| Path::new("/var/lib/saturn-state"))
+        .to_path_buf();
+    let mut durable_job = maintenance_jobs::new_job(
+        &state_dir,
+        run_id.clone(),
+        format!("script:{script}"),
+        lock_resources,
+        "authenticated-admin",
+        serde_json::json!({
+            "script": script.clone(),
+            "flags": flags.clone(),
+            "operation": lock_operation.clone(),
+        }),
+    );
+    if let Err(error) = maintenance_jobs::save(&state_dir, &durable_job).await {
+        finish_script_run_log(&script, &run_id, "error");
+        return Err(json_error(StatusCode::INTERNAL_SERVER_ERROR, &error));
+    }
+    let durable_output = PathBuf::from(&durable_job.output_path);
+    if let Err(error) = maintenance_jobs::append_output_line(&durable_output, &start_line).await {
+        finish_script_run_log(&script, &run_id, "error");
+        return Err(json_error(StatusCode::INTERNAL_SERVER_ERROR, &error));
+    }
+    let durable_result = maintenance_jobs::broker_result_path(&state_dir, &run_id);
+
+    let mut cmd = build_script_command(
+        &script_path,
+        &flags,
+        &lock_operation,
+        lock_resources,
+        &run_id,
+        &durable_output,
+        &durable_result,
+    );
     cmd.env("SATURN_REPO_ROOT", &repo_root_display);
     cmd.env("SATURN_DIR", &repo_root_display);
     cmd.env("SATURN_ACTIVE_REPO_ROOT", &repo_root_display);
@@ -3336,11 +3461,50 @@ async fn run_sse(
         Ok(c) => c,
         Err(e) => {
             let msg = format!("Error: {e}");
-            append_script_run_log_line(&script, &run_id, msg);
+            append_script_run_log_line(&script, &run_id, msg.clone());
             finish_script_run_log(&script, &run_id, "error");
+            let _ = maintenance_jobs::append_output_line(&durable_output, &msg).await;
+            let _ = maintenance_jobs::finish(
+                &state_dir,
+                &mut durable_job,
+                "failed",
+                maintenance_jobs::JobResult {
+                    outcome: "failure".to_string(),
+                    message: msg,
+                    exit_code: None,
+                },
+            )
+            .await;
             return Err((StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response());
         }
     };
+    let child_pid = child.id().unwrap_or(0);
+    let identity_error = if child_pid == 0 {
+        Some("maintenance child did not report a PID".to_string())
+    } else {
+        maintenance_jobs::mark_running(&state_dir, &mut durable_job, child_pid)
+            .await
+            .err()
+    };
+    if let Some(error) = identity_error {
+        let _ = child.start_kill();
+        finish_script_run_log(&script, &run_id, "error");
+        let _ = maintenance_jobs::finish(
+            &state_dir,
+            &mut durable_job,
+            "failed",
+            maintenance_jobs::JobResult {
+                outcome: "failure".to_string(),
+                message: error.clone(),
+                exit_code: None,
+            },
+        )
+        .await;
+        return Err(json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &format!("failed to persist maintenance child identity: {error}"),
+        ));
+    }
 
     if let Some(stdout) = child.stdout.take() {
         let tx_out = tx.clone();
@@ -3374,20 +3538,56 @@ async fn run_sse(
             Ok(status) if status.success() => {
                 let line = "Done".to_string();
                 let _ = tx.send(line.clone());
-                append_script_run_log_line(&script_wait, &run_id_wait, line);
+                append_script_run_log_line(&script_wait, &run_id_wait, line.clone());
                 finish_script_run_log(&script_wait, &run_id_wait, "done");
+                let _ = maintenance_jobs::append_output_line(&durable_output, &line).await;
+                let _ = maintenance_jobs::finish(
+                    &state_dir,
+                    &mut durable_job,
+                    "completed",
+                    maintenance_jobs::JobResult {
+                        outcome: "success".to_string(),
+                        message: "maintenance script completed".to_string(),
+                        exit_code: status.code(),
+                    },
+                )
+                .await;
             }
             Ok(status) => {
                 let line = format!("Error: {status}");
                 let _ = tx.send(line.clone());
-                append_script_run_log_line(&script_wait, &run_id_wait, line);
+                append_script_run_log_line(&script_wait, &run_id_wait, line.clone());
                 finish_script_run_log(&script_wait, &run_id_wait, "error");
+                let _ = maintenance_jobs::append_output_line(&durable_output, &line).await;
+                let _ = maintenance_jobs::finish(
+                    &state_dir,
+                    &mut durable_job,
+                    "failed",
+                    maintenance_jobs::JobResult {
+                        outcome: "failure".to_string(),
+                        message: line,
+                        exit_code: status.code(),
+                    },
+                )
+                .await;
             }
             Err(e) => {
                 let line = format!("Error: {e}");
                 let _ = tx.send(line.clone());
-                append_script_run_log_line(&script_wait, &run_id_wait, line);
+                append_script_run_log_line(&script_wait, &run_id_wait, line.clone());
                 finish_script_run_log(&script_wait, &run_id_wait, "error");
+                let _ = maintenance_jobs::append_output_line(&durable_output, &line).await;
+                let _ = maintenance_jobs::finish(
+                    &state_dir,
+                    &mut durable_job,
+                    "failed",
+                    maintenance_jobs::JobResult {
+                        outcome: "failure".to_string(),
+                        message: line,
+                        exit_code: None,
+                    },
+                )
+                .await;
             }
         }
     });

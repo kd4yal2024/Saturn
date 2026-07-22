@@ -1,3 +1,4 @@
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
@@ -83,6 +84,34 @@ pub fn wrapped_command(
 ) -> Command {
     let mut command = base_command("run", operation, resources);
     command.arg("--").arg(program).args(arguments);
+    command.as_std_mut().process_group(0);
+    command
+}
+
+pub fn wrapped_job_command(
+    operation: &str,
+    resources: &[&str],
+    program: &Path,
+    arguments: &[String],
+    job_id: &str,
+    output_path: &Path,
+    result_path: &Path,
+) -> Command {
+    let mut command = base_command("run", operation, resources);
+    command
+        .arg("--job-id")
+        .arg(job_id)
+        .arg("--output-file")
+        .arg(output_path)
+        .arg("--result-file")
+        .arg(result_path)
+        .arg("--")
+        .arg(program)
+        .args(arguments);
+    // The lock broker becomes the process-group leader and its maintenance
+    // child inherits that group. The group survives a Saturn Go restart and
+    // gives startup reconciliation an identity independent of the server PID.
+    command.as_std_mut().process_group(0);
     command
 }
 

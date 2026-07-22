@@ -10,6 +10,7 @@ use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::process::Command;
 
+use crate::maintenance_jobs::{self, JobResult, MaintenanceJob};
 use crate::maintenance_lock::{HostLockGuard, APPLICATION_DEPLOYMENT};
 use crate::state::{
     AppState, DEFAULT_STAGE_WORKTREE_KEEP, DEFAULT_UPDATE_HEALTH_INITIAL_DELAY_SECS,
@@ -651,7 +652,7 @@ async fn health_check_url(
 
 // --- Appliance update flow ---
 
-async fn run_appliance_update(
+async fn run_appliance_update_inner(
     state: AppState,
     job_id: String,
     policy: UpdatePolicy,
@@ -882,6 +883,48 @@ async fn run_appliance_update(
     );
 }
 
+async fn run_appliance_update(
+    state: AppState,
+    job_id: String,
+    policy: UpdatePolicy,
+    channel: String,
+    target_ref: String,
+    mut durable_job: MaintenanceJob,
+) {
+    run_appliance_update_inner(state.clone(), job_id.clone(), policy, channel, target_ref).await;
+
+    let state_dir = state
+        .update_state_file
+        .parent()
+        .unwrap_or_else(|| Path::new("/var/lib/saturn-state"));
+    let job = get_appliance_update_job().filter(|job| job.id == job_id);
+    let (state_name, outcome, message) = match job {
+        Some(job) if matches!(job.status.as_str(), "done" | "no_change" | "rolled_back") => {
+            ("completed", "success", job.message)
+        }
+        Some(job) => ("failed", "failure", job.message),
+        None => (
+            "failed",
+            "failure",
+            "appliance update ended without a controller result".to_string(),
+        ),
+    };
+    let _ =
+        maintenance_jobs::append_output_line(&PathBuf::from(&durable_job.output_path), &message)
+            .await;
+    let _ = maintenance_jobs::finish(
+        state_dir,
+        &mut durable_job,
+        state_name,
+        JobResult {
+            outcome: outcome.to_string(),
+            message,
+            exit_code: None,
+        },
+    )
+    .await;
+}
+
 // --- Handlers ---
 
 pub async fn get_update_policy(State(state): State<AppState>) -> Response {
@@ -1010,12 +1053,59 @@ pub async fn update_start(
         ],
     });
 
+    let state_dir = state
+        .update_state_file
+        .parent()
+        .unwrap_or_else(|| Path::new("/var/lib/saturn-state"));
+    let mut durable_job = maintenance_jobs::new_job(
+        state_dir,
+        job_id.clone(),
+        "appliance-update".to_string(),
+        APPLICATION_DEPLOYMENT,
+        "authenticated-admin",
+        serde_json::json!({
+            "channel": channel.clone(),
+            "target_ref": target_ref.clone(),
+            "source_remote": expected_remote_url(&policy),
+        }),
+    );
+    if let Err(error) = maintenance_jobs::save(state_dir, &durable_job).await {
+        finish_appliance_update_job(&job_id, "error", error.clone());
+        return json_error(StatusCode::INTERNAL_SERVER_ERROR, &error);
+    }
+    if let Err(error) = maintenance_jobs::mark_in_process_running(state_dir, &mut durable_job).await
+    {
+        finish_appliance_update_job(&job_id, "error", error.clone());
+        return json_error(StatusCode::INTERNAL_SERVER_ERROR, &error);
+    }
+    let initial_output = format!(
+        "channel={channel}\ntarget_ref={target_ref}\nsource={}",
+        expected_remote_url(&policy)
+    );
+    if let Err(error) = maintenance_jobs::append_output_line(
+        &PathBuf::from(&durable_job.output_path),
+        &initial_output,
+    )
+    .await
+    {
+        finish_appliance_update_job(&job_id, "error", error.clone());
+        return json_error(StatusCode::INTERNAL_SERVER_ERROR, &error);
+    }
+
     let state_clone = state.clone();
     let job_id_clone = job_id.clone();
     tokio::spawn(async move {
         let _activity_guard = activity_guard;
         let _host_lock_guard = host_lock_guard;
-        run_appliance_update(state_clone, job_id_clone, policy, channel, target_ref).await;
+        run_appliance_update(
+            state_clone,
+            job_id_clone,
+            policy,
+            channel,
+            target_ref,
+            durable_job,
+        )
+        .await;
     });
 
     Json(serde_json::json!({
@@ -1027,12 +1117,24 @@ pub async fn update_start(
 
 pub async fn update_status(State(state): State<AppState>) -> Response {
     let job = get_appliance_update_job();
+    let state_dir = state
+        .update_state_file
+        .parent()
+        .unwrap_or_else(|| Path::new("/var/lib/saturn-state"));
+    if let Err(error) = maintenance_jobs::reconcile(state_dir).await {
+        return json_error(StatusCode::INTERNAL_SERVER_ERROR, &error);
+    }
+    let durable_job = match maintenance_jobs::latest_for_type(state_dir, "appliance-update").await {
+        Ok(value) => value,
+        Err(error) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, &error),
+    };
     let last = match read_last_update_state(&state).await {
         Ok(last) => last,
         Err(error) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, &error),
     };
     Json(serde_json::json!({
         "job": job,
+        "durable_job": durable_job,
         "last_update": last
     }))
     .into_response()

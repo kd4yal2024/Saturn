@@ -445,15 +445,28 @@ independent resources, shared read-only access, and lock release.
 
 ### REM-0403: Persist and reconcile jobs
 
-- [ ] Persist job ID, type, state, resources, requester, timestamps, child scope/PID, output path, and result.
-- [ ] Run maintenance children in named systemd scopes or equivalent process groups.
-- [ ] Reconcile incomplete jobs on Saturn Go startup.
-- [ ] Report interrupted jobs and required recovery steps.
+- [x] Persist job ID, type, state, resources, requester, timestamps, child scope/PID, output path, and result.
+- [x] Run maintenance children in named systemd scopes or equivalent process groups.
+- [x] Reconcile incomplete jobs on Saturn Go startup.
+- [x] Report interrupted jobs and required recovery steps.
 
 Acceptance criteria:
 
 - A Saturn Go restart retains accurate job status and exclusivity.
 - Orphaned and interrupted jobs are detected deterministically.
+
+Maintenance records now live under
+`/var/lib/saturn-state/maintenance-jobs`. Script children run in a dedicated
+process group owned by the REM-0402 lock broker. The broker tees output to a
+durable log and atomically writes a completion result even if Saturn Go is
+restarted. `/maintenance_jobs` reconciles and reports completed, orphaned, and
+interrupted records with operator recovery steps; `/run_log` falls back to the
+durable record after a server restart. Appliance updates publish the same
+durable identity and terminal result contract, with an in-process child scope
+that is deterministically marked interrupted if the controller exits.
+`tests/test-saturn-maintenance-jobs.sh` verifies broker output/result durability,
+exit propagation, and restrictive file modes; Rust tests cover startup
+reconciliation and process identity checks.
 
 ### REM-0404: Graceful shutdown and cancellation
 
@@ -644,7 +657,7 @@ Update this section as milestones complete.
 | 1 — Health | — | — | — | Not started |
 | 2 — Deployment | — | — | — | Not started |
 | 3 — Restore | — | — | — | Not started |
-| 4 — State/jobs | — | — | — | Not started |
+| 4 — State/jobs | — | — | — | In progress (REM-0401 through REM-0403 complete) |
 | 5 — Limits | — | — | — | Not started |
 | 6 — Sessions | Deferred | — | — | Deferred |
 | 7 — Reproducibility | — | — | — | Not started |

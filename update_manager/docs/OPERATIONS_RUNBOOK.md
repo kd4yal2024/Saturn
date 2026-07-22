@@ -1080,6 +1080,23 @@ is still doing useful work. Normal completion releases it automatically; an
 abandoned broker can be terminated only after its maintenance child has been
 identified and handled.
 
+### Maintenance Job Was Interrupted Or Survived A Restart
+
+Durable maintenance records and output are stored below
+`/var/lib/saturn-state/maintenance-jobs`. Query the controller view with:
+
+```bash
+curl -sS http://127.0.0.1:8080/maintenance_jobs | jq
+```
+
+An `orphaned` job still has the same process identity and process group after a
+Saturn Go restart. Its broker continues to hold the REM-0402 resource locks;
+follow the record's `output_path` and wait for its atomic result before
+retrying. An `interrupted` job has no surviving child and no completion result.
+Review its durable output, verify the affected subsystem, and probe the needed
+resource lock before retrying. Do not delete a record, result, or lock file to
+force a new operation.
+
 ### Export Repair Pack
 
 ```bash
