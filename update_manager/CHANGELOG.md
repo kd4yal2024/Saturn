@@ -4,6 +4,12 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
 
 ## [Unreleased]
 ### Changed
+- Bounded maintenance-script live output to 128 queued events, in-memory resume
+  output to 1 MiB/5,000 lines, and durable output to 4 MiB/5,000 lines with
+  explicit backpressure/truncation notices. Routine scripts now default to a
+  30-minute deadline, update scripts to four hours, and caller overrides are
+  clamped to a six-hour absolute maximum. Tailscale helpers use the same
+  bounded live-output channel and a ten-minute deadline.
 - Replaced the global 2 GiB request allowance with 64 KiB ordinary and
   custom-script limits plus a separate configurable, streamed restore limit.
   Restore upload/extraction now preserves the readiness disk reserve, and

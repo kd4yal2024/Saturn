@@ -991,6 +991,15 @@ output reports the fallback path.
 curl -sS "http://127.0.0.1:8080/run_log?script=update-G2.py&from=0&limit=50" | jq
 ```
 
+Live output uses a bounded 128-event channel. An `output backpressure` line
+means the browser was slower than the helper; use `/run_log` for the retained
+output. Resume output is capped at 1 MiB/5,000 lines and durable maintenance
+output at 4 MiB/5,000 lines, with explicit truncation metadata/markers. Routine
+scripts default to 30 minutes, update scripts to four hours, and no requested
+deadline may exceed six hours. A deadline expiry is recorded as `timed_out` in
+`/maintenance_jobs` after the process group is terminated. Tailscale mutations
+use a ten-minute deadline.
+
 ### Restore Errors
 
 Common causes:

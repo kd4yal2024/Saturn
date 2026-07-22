@@ -7,6 +7,8 @@ use tokio::process::{Child, ChildStdin, Command};
 
 const DEFAULT_TOOL: &str = "/usr/local/lib/saturn-go/scripts/saturn-maintenance-lock.py";
 const DEFAULT_LOCK_DIR: &str = "/run/lock/saturn-maintenance";
+pub const JOB_OUTPUT_MAX_BYTES: u64 = 4 * 1024 * 1024;
+pub const JOB_OUTPUT_MAX_LINES: usize = 5000;
 
 pub const RELEASE: &str = "release";
 pub const REPOSITORY: &str = "repository";
@@ -96,6 +98,7 @@ pub fn wrapped_job_command(
     job_id: &str,
     output_path: &Path,
     result_path: &Path,
+    timeout_seconds: u64,
 ) -> Command {
     let mut command = base_command("run", operation, resources);
     command
@@ -105,6 +108,12 @@ pub fn wrapped_job_command(
         .arg(output_path)
         .arg("--result-file")
         .arg(result_path)
+        .arg("--output-max-bytes")
+        .arg(JOB_OUTPUT_MAX_BYTES.to_string())
+        .arg("--output-max-lines")
+        .arg(JOB_OUTPUT_MAX_LINES.to_string())
+        .arg("--timeout-seconds")
+        .arg(timeout_seconds.to_string())
         .arg("--")
         .arg(program)
         .args(arguments);

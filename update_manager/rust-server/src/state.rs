@@ -26,7 +26,11 @@ pub const MAX_REMOTE_PROFILES_FILE_BYTES: u64 = 1_048_576; // 1 MiB
 pub const CSRF_HEADER_NAME: &str = "x-saturn-csrf";
 pub const CSRF_HEADER_VALUE: &str = "1";
 pub const RUN_LOG_MAX_LINES: usize = 5000;
+pub const RUN_LOG_MAX_BYTES: usize = 1024 * 1024;
 pub const RUN_LOG_FETCH_MAX_LINES: usize = 1000;
+pub const DEFAULT_SCRIPT_DEADLINE_SECS: u64 = 30 * 60;
+pub const DEFAULT_UPDATE_SCRIPT_DEADLINE_SECS: u64 = 4 * 60 * 60;
+pub const MAX_SCRIPT_DEADLINE_SECS: u64 = 6 * 60 * 60;
 pub const DEFAULT_CUSTOM_SCRIPT_CLEAN_LOGS: &str =
     include_str!("../../scripts/cleanup-saturn-logs.sh");
 pub const DEFAULT_CUSTOM_SCRIPT_CLEAN_BACKUPS: &str =

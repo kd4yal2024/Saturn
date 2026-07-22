@@ -1,5 +1,6 @@
 mod auth;
 mod backup;
+mod bounded_output;
 mod health;
 mod maintenance_jobs;
 mod maintenance_lock;
@@ -18,6 +19,7 @@ mod update;
 mod util;
 use crate::auth::{change_password, exit_server, kill_process};
 use crate::backup::{backup_release, backup_releases, backup_settings, backup_source};
+use crate::bounded_output::BoundedOutputSender;
 use crate::health::{healthz, livez, readyz};
 use crate::middleware::csrf_protect;
 use crate::monitor::{get_system_data, network_test};
@@ -42,10 +44,11 @@ use crate::state::{
     RunLogQuery, CUSTOM_SCRIPT_REQUEST_MAX_BYTES, DEFAULT_CUSTOM_SCRIPT_CLEAN_BACKUPS,
     DEFAULT_CUSTOM_SCRIPT_CLEAN_LOGS, DEFAULT_CUSTOM_SCRIPT_FIX_LED_POWER_BUTTON,
     DEFAULT_CUSTOM_SCRIPT_SETUP_ETH_FALLBACK, DEFAULT_RESTORE_MAX_UPLOAD_BYTES,
-    JSON_REQUEST_MAX_BYTES, MAX_CUSTOM_SCRIPTS, MAX_CUSTOM_SCRIPTS_FILE_BYTES,
-    MAX_REMOTE_PROFILES_FILE_BYTES, MAX_REMOTE_SETTINGS_FILE_BYTES,
-    P23_ADC_PEAK_TELEMETRY_ENABLE_FILE, P23_ADC_PEAK_TELEMETRY_JSON_FILE,
-    P23_APP_PERF_TELEMETRY_JSON_FILE, RESTORE_MULTIPART_OVERHEAD_BYTES, RUN_LOG_FETCH_MAX_LINES,
+    DEFAULT_SCRIPT_DEADLINE_SECS, DEFAULT_UPDATE_SCRIPT_DEADLINE_SECS, JSON_REQUEST_MAX_BYTES,
+    MAX_CUSTOM_SCRIPTS, MAX_CUSTOM_SCRIPTS_FILE_BYTES, MAX_REMOTE_PROFILES_FILE_BYTES,
+    MAX_REMOTE_SETTINGS_FILE_BYTES, MAX_SCRIPT_DEADLINE_SECS, P23_ADC_PEAK_TELEMETRY_ENABLE_FILE,
+    P23_ADC_PEAK_TELEMETRY_JSON_FILE, P23_APP_PERF_TELEMETRY_JSON_FILE,
+    RESTORE_MULTIPART_OVERHEAD_BYTES, RUN_LOG_FETCH_MAX_LINES, RUN_LOG_MAX_BYTES,
     RUN_LOG_MAX_LINES,
 };
 use crate::state_store::{write_atomic, write_json_atomic, AtomicWriteOptions};
@@ -80,7 +83,7 @@ use axum_server::Handle as AxumServerHandle;
 use chrono::Local;
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, VecDeque},
     fs,
     net::SocketAddr,
     os::unix::fs::PermissionsExt,
@@ -91,9 +94,9 @@ use std::{
 use tokio::{
     io::{AsyncRead, AsyncReadExt},
     process::Command,
-    sync::{mpsc, watch},
+    sync::watch,
 };
-use tokio_stream::{wrappers::UnboundedReceiverStream, StreamExt};
+use tokio_stream::{wrappers::ReceiverStream, StreamExt};
 use tower_http::limit::RequestBodyLimitLayer;
 use tracing::{error, info, warn};
 
@@ -660,6 +663,7 @@ fn build_script_command(
     job_id: &str,
     output_path: &Path,
     result_path: &Path,
+    timeout_seconds: u64,
 ) -> Command {
     let is_python = script_path
         .extension()
@@ -703,6 +707,7 @@ fn build_script_command(
         job_id,
         output_path,
         result_path,
+        timeout_seconds,
     );
     if is_python {
         cmd.env("PYTHONUNBUFFERED", "1");
@@ -733,20 +738,16 @@ fn apply_build_subprocess_env(cmd: &mut Command) {
 
 type RunLineSink = Arc<dyn Fn(String) + Send + Sync>;
 
-fn emit_process_line(
-    tx: &mpsc::UnboundedSender<String>,
-    line_sink: Option<&RunLineSink>,
-    line: String,
-) {
-    let _ = tx.send(line.clone());
+fn emit_process_line(tx: &BoundedOutputSender, line_sink: Option<&RunLineSink>, line: String) {
     if let Some(sink) = line_sink {
-        sink(line);
+        sink(line.clone());
     }
+    tx.try_send(line);
 }
 
 async fn stream_process_output<R>(
     mut reader: R,
-    tx: mpsc::UnboundedSender<String>,
+    tx: BoundedOutputSender,
     prefix: &'static str,
     line_sink: Option<RunLineSink>,
 ) where
@@ -992,7 +993,9 @@ struct ScriptRunLog {
     started_at: String,
     finished_at: Option<String>,
     line_offset: usize,
-    lines: Vec<String>,
+    retained_bytes: usize,
+    truncated_lines: usize,
+    lines: VecDeque<String>,
 }
 
 static SCRIPT_RUN_LOGS: OnceLock<Mutex<BTreeMap<String, ScriptRunLog>>> = OnceLock::new();
@@ -1016,7 +1019,9 @@ fn begin_script_run_log(script: &str, flags: &[String]) -> (String, String) {
         started_at: Local::now().to_rfc3339(),
         finished_at: None,
         line_offset: 0,
-        lines: vec![start_line.clone()],
+        retained_bytes: start_line.len(),
+        truncated_lines: 0,
+        lines: VecDeque::from([start_line.clone()]),
     };
     script_run_log_slot()
         .lock_unpoisoned()
@@ -1032,12 +1037,38 @@ fn append_script_run_log_line(script: &str, run_id: &str, line: String) {
     if run.run_id != run_id {
         return;
     }
-    run.lines.push(line);
-    if run.lines.len() > RUN_LOG_MAX_LINES {
-        let excess = run.lines.len() - RUN_LOG_MAX_LINES;
-        run.lines.drain(0..excess);
-        run.line_offset += excess;
+    let line = if line.len() > RUN_LOG_MAX_BYTES {
+        let suffix = format!(" [line truncated at {} bytes]", RUN_LOG_MAX_BYTES);
+        let mut boundary = RUN_LOG_MAX_BYTES.saturating_sub(suffix.len());
+        while boundary > 0 && !line.is_char_boundary(boundary) {
+            boundary -= 1;
+        }
+        format!("{}{}", &line[..boundary], suffix)
+    } else {
+        line
+    };
+    run.retained_bytes = run.retained_bytes.saturating_add(line.len());
+    run.lines.push_back(line);
+    while run.lines.len() > RUN_LOG_MAX_LINES || run.retained_bytes > RUN_LOG_MAX_BYTES {
+        if run.lines.len() <= 1 {
+            break;
+        }
+        let removed = run.lines.pop_front().unwrap_or_default();
+        run.retained_bytes = run.retained_bytes.saturating_sub(removed.len());
+        run.line_offset += 1;
+        run.truncated_lines += 1;
     }
+}
+
+fn script_deadline_seconds(script: &str, requested: Option<u64>) -> u64 {
+    let default = if is_g2_update_script(script) || is_saturngo_update_script(script) {
+        DEFAULT_UPDATE_SCRIPT_DEADLINE_SECS
+    } else {
+        DEFAULT_SCRIPT_DEADLINE_SECS
+    };
+    requested
+        .unwrap_or(default)
+        .clamp(1, MAX_SCRIPT_DEADLINE_SECS)
 }
 
 fn finish_script_run_log(script: &str, run_id: &str, status: &str) {
@@ -3243,7 +3274,13 @@ async fn get_run_log(State(state): State<AppState>, Query(q): Query<RunLogQuery>
         let start_idx = start.saturating_sub(run.line_offset);
         let end_idx = (start_idx + limit).min(run.lines.len());
         let end = run.line_offset + end_idx;
-        let lines = run.lines[start_idx..end_idx].to_vec();
+        let lines = run
+            .lines
+            .iter()
+            .skip(start_idx)
+            .take(end_idx.saturating_sub(start_idx))
+            .cloned()
+            .collect::<Vec<_>>();
         return Json(serde_json::json!({
             "script": script,
             "run_id": run.run_id,
@@ -3254,6 +3291,9 @@ async fn get_run_log(State(state): State<AppState>, Query(q): Query<RunLogQuery>
             "from": start,
             "next_from": end,
             "total_lines": total,
+            "retained_bytes": run.retained_bytes,
+            "truncated_lines": run.truncated_lines,
+            "truncated": run.truncated_lines > 0,
             "lines": lines,
         }))
         .into_response();
@@ -3289,6 +3329,9 @@ async fn get_run_log(State(state): State<AppState>, Query(q): Query<RunLogQuery>
         .lines()
         .map(str::to_string)
         .collect::<Vec<_>>();
+    let truncated = all_lines
+        .iter()
+        .any(|line| line.contains("[output truncated:"));
     let line_offset = all_lines.len().saturating_sub(RUN_LOG_MAX_LINES);
     let retained = &all_lines[line_offset..];
     let total = all_lines.len();
@@ -3308,6 +3351,8 @@ async fn get_run_log(State(state): State<AppState>, Query(q): Query<RunLogQuery>
         "from": start,
         "next_from": end,
         "total_lines": total,
+        "retained_bytes": all_lines.iter().map(String::len).sum::<usize>(),
+        "truncated": truncated,
         "lines": lines,
     }))
     .into_response()
@@ -3341,7 +3386,7 @@ async fn run_sse(
     State(state): State<AppState>,
     multipart: Multipart,
 ) -> Result<Response, Response> {
-    let (script, flags) = match parse_multipart(multipart).await {
+    let (script, flags, requested_deadline) = match parse_multipart(multipart).await {
         Ok(v) => v,
         Err(resp) => return Err(resp),
     };
@@ -3432,10 +3477,11 @@ async fn run_sse(
         None
     };
 
-    let (tx, rx) = mpsc::unbounded_channel::<String>();
+    let (tx, rx) = BoundedOutputSender::channel();
 
     let (run_id, start_line) = begin_script_run_log(&script, &flags);
-    let _ = tx.send(start_line.clone());
+    tx.try_send(start_line.clone());
+    let deadline_seconds = script_deadline_seconds(&script, requested_deadline);
     let operation_guard = shutdown_controller::register(
         run_id.clone(),
         format!("script:{script}"),
@@ -3461,6 +3507,7 @@ async fn run_sse(
             "script": script.clone(),
             "flags": flags.clone(),
             "operation": lock_operation.clone(),
+            "deadline_seconds": deadline_seconds,
         }),
     );
     if let Err(error) = maintenance_jobs::save(&state_dir, &durable_job).await {
@@ -3482,6 +3529,7 @@ async fn run_sse(
         &run_id,
         &durable_output,
         &durable_result,
+        deadline_seconds,
     );
     cmd.env("SATURN_REPO_ROOT", &repo_root_display);
     cmd.env("SATURN_DIR", &repo_root_display);
@@ -3596,9 +3644,36 @@ async fn run_sse(
     tokio::spawn(async move {
         let _update_activity_guard = update_activity_guard;
         let _operation_guard = operation_guard;
-        let terminal = child.wait().await;
+        let (terminal, controller_timed_out) =
+            match tokio::time::timeout(Duration::from_secs(deadline_seconds), child.wait()).await {
+                Ok(terminal) => (terminal, false),
+                Err(_) => match tokio::time::timeout(Duration::from_secs(7), child.wait()).await {
+                    Ok(terminal) => (terminal, true),
+                    Err(_) => {
+                        shutdown_controller::terminate_process_group(child_pid as i32).await;
+                        (child.wait().await, true)
+                    }
+                },
+            };
+        let timed_out =
+            controller_timed_out || maintenance_jobs::broker_timed_out(&durable_result).await;
         let cancelled = shutdown_controller::cancel_requested(&run_id_wait);
-        let (line, run_status, durable_status, result) = if cancelled {
+        let (line, run_status, durable_status, result) = if timed_out {
+            let exit_code = terminal.as_ref().ok().and_then(|status| status.code());
+            let message = format!(
+                "Timed out after {deadline_seconds} seconds; maintenance process group terminated"
+            );
+            (
+                message.clone(),
+                "timed_out",
+                "timed_out",
+                maintenance_jobs::JobResult {
+                    outcome: "timeout".to_string(),
+                    message,
+                    exit_code,
+                },
+            )
+        } else if cancelled {
             let exit_code = terminal.as_ref().ok().and_then(|status| status.code());
             (
                 "Cancelled by graceful shutdown".to_string(),
@@ -3652,7 +3727,7 @@ async fn run_sse(
                 }
             }
         };
-        let _ = tx.send(line.clone());
+        tx.send_terminal(line.clone()).await;
         append_script_run_log_line(&script_wait, &run_id_wait, line.clone());
         finish_script_run_log(&script_wait, &run_id_wait, run_status);
         let _ = maintenance_jobs::append_output_line(&durable_output, &line).await;
@@ -3660,7 +3735,7 @@ async fn run_sse(
             maintenance_jobs::finish(&state_dir, &mut durable_job, durable_status, result).await;
     });
 
-    let stream = UnboundedReceiverStream::new(rx)
+    let stream = ReceiverStream::new(rx)
         .map(|line| Ok::<Event, std::convert::Infallible>(Event::default().data(line)));
     let sse = Sse::new(stream).keep_alive(KeepAlive::new().interval(Duration::from_secs(5)));
     let mut resp = sse.into_response();
@@ -3673,9 +3748,12 @@ async fn run_sse(
     Ok(resp)
 }
 
-async fn parse_multipart(mut multipart: Multipart) -> Result<(String, Vec<String>), Response> {
+async fn parse_multipart(
+    mut multipart: Multipart,
+) -> Result<(String, Vec<String>, Option<u64>), Response> {
     let mut script = String::new();
     let mut flags = Vec::new();
+    let mut deadline_seconds = None;
 
     loop {
         let Some(field) = multipart
@@ -3691,6 +3769,14 @@ async fn parse_multipart(mut multipart: Multipart) -> Result<(String, Vec<String
             script = text;
         } else if name == "flags" {
             flags.push(text);
+        } else if name == "deadline_seconds" {
+            deadline_seconds = Some(text.trim().parse::<u64>().map_err(|_| {
+                (
+                    StatusCode::BAD_REQUEST,
+                    "deadline_seconds must be an unsigned integer",
+                )
+                    .into_response()
+            })?);
         }
     }
 
@@ -3698,7 +3784,7 @@ async fn parse_multipart(mut multipart: Multipart) -> Result<(String, Vec<String
         return Err((StatusCode::BAD_REQUEST, "missing script").into_response());
     }
 
-    Ok((script, flags))
+    Ok((script, flags, deadline_seconds))
 }
 
 async fn no_content() -> impl IntoResponse {
@@ -3718,7 +3804,10 @@ async fn disk_imaging_disabled() -> Response {
 
 #[cfg(test)]
 mod tests {
-    use super::{bind_addr_is_loopback, disk_imaging_disabled, with_request_limit};
+    use super::{
+        append_script_run_log_line, begin_script_run_log, bind_addr_is_loopback,
+        disk_imaging_disabled, script_deadline_seconds, script_run_log_slot, with_request_limit,
+    };
     use axum::{
         body::{Body, Bytes},
         http::{Request, StatusCode},
@@ -3726,6 +3815,11 @@ mod tests {
         Router,
     };
     use tower::ServiceExt;
+
+    use crate::state::{
+        DEFAULT_SCRIPT_DEADLINE_SECS, DEFAULT_UPDATE_SCRIPT_DEADLINE_SECS,
+        MAX_SCRIPT_DEADLINE_SECS, RUN_LOG_MAX_BYTES, RUN_LOG_MAX_LINES,
+    };
 
     async fn consume_request_body(_body: Bytes) -> StatusCode {
         StatusCode::NO_CONTENT
@@ -3790,5 +3884,35 @@ mod tests {
 
         let response = app.oneshot(request).await.unwrap();
         assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    }
+
+    #[test]
+    fn script_deadlines_have_workflow_defaults_and_an_absolute_maximum() {
+        assert_eq!(
+            script_deadline_seconds("cleanup-saturn-logs.sh", None),
+            DEFAULT_SCRIPT_DEADLINE_SECS
+        );
+        assert_eq!(
+            script_deadline_seconds("update-G2.py", None),
+            DEFAULT_UPDATE_SCRIPT_DEADLINE_SECS
+        );
+        assert_eq!(
+            script_deadline_seconds("operator.sh", Some(u64::MAX)),
+            MAX_SCRIPT_DEADLINE_SECS
+        );
+    }
+
+    #[test]
+    fn script_run_log_is_bounded_by_lines_and_bytes() {
+        let script = format!("bounded-log-test-{}.sh", std::process::id());
+        let (run_id, _) = begin_script_run_log(&script, &[]);
+        for _ in 0..(RUN_LOG_MAX_LINES + 25) {
+            append_script_run_log_line(&script, &run_id, "x".repeat(512));
+        }
+        let guard = script_run_log_slot().lock().unwrap();
+        let run = guard.get(&script).unwrap();
+        assert!(run.lines.len() <= RUN_LOG_MAX_LINES);
+        assert!(run.retained_bytes <= RUN_LOG_MAX_BYTES);
+        assert!(run.truncated_lines > 0);
     }
 }

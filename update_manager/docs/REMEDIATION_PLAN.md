@@ -526,14 +526,23 @@ the independent restore allowance, and chunked restore ingestion.
 
 ### REM-0502: Bound script output and duration
 
-- [ ] Replace unbounded output channels with bounded channels.
-- [ ] Cap retained output by bytes and lines.
-- [ ] Emit an explicit truncation/backpressure message.
-- [ ] Define per-job default and maximum deadlines.
+- [x] Replace unbounded output channels with bounded channels.
+- [x] Cap retained output by bytes and lines.
+- [x] Emit an explicit truncation/backpressure message.
+- [x] Define per-job default and maximum deadlines.
 
 Acceptance criteria:
 
 - A noisy or hung helper cannot cause unbounded Saturn Go memory growth.
+
+Completed in REM-0502. Script and Tailscale SSE streams use bounded 128-entry
+channels and report omitted live events when a client cannot keep up. Per-script
+resume state retains at most 1 MiB and 5,000 lines; durable broker logs retain at
+most 4 MiB and 5,000 lines and end with an explicit truncation marker. Routine
+scripts default to 30 minutes, update scripts default to four hours, and an
+optional `deadline_seconds` request is clamped to a six-hour maximum. Tailscale
+helpers have a ten-minute deadline. Deadline expiry terminates the complete
+maintenance process group and records a durable `timed_out` result.
 
 ### REM-0503: Bound remote client resources
 
@@ -682,6 +691,6 @@ Update this section as milestones complete.
 | 2 — Deployment | — | — | — | Not started |
 | 3 — Restore | — | — | — | Not started |
 | 4 — State/jobs | — | — | — | In progress (REM-0401 through REM-0403 complete) |
-| 5 — Limits | — | — | — | Not started |
+| 5 — Limits | REM-0501 and REM-0502 implementation commits | Rust boundary tests; durable broker cap contract | REM-0501 appliance acceptance complete; REM-0502 pending appliance install | In progress (REM-0501 and REM-0502 complete) |
 | 6 — Sessions | Deferred | — | — | Deferred |
 | 7 — Reproducibility | — | — | — | Not started |

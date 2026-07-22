@@ -57,6 +57,47 @@ result_mode="$(stat -c '%a' "$RESULT_DIR/job-test-1.json")"
 [[ "$output_mode" == "640" ]] || { echo "unexpected output mode: $output_mode" >&2; exit 1; }
 [[ "$result_mode" == "640" ]] || { echo "unexpected result mode: $result_mode" >&2; exit 1; }
 
+setsid "$BROKER" --lock-dir "$LOCK_DIR" run \
+  --operation bounded-output-test \
+  --resources read-only \
+  --job-id job-test-bounded \
+  --output-file "$OUTPUT_DIR/job-test-bounded.log" \
+  --result-file "$RESULT_DIR/job-test-bounded.json" \
+  --output-max-bytes 512 \
+  --output-max-lines 5 \
+  -- sh -c 'seq 1 100 | sed "s/^/noisy-output-/"' \
+  >"$TMP_ROOT/bounded-live-output.log"
+
+bounded_bytes="$(stat -c '%s' "$OUTPUT_DIR/job-test-bounded.log")"
+bounded_lines="$(wc -l <"$OUTPUT_DIR/job-test-bounded.log")"
+(( bounded_bytes <= 512 )) || { echo "bounded output exceeded byte cap: $bounded_bytes" >&2; exit 1; }
+(( bounded_lines <= 5 )) || { echo "bounded output exceeded line cap: $bounded_lines" >&2; exit 1; }
+grep -Fq '[output truncated: durable log byte/line limit reached' "$OUTPUT_DIR/job-test-bounded.log"
+grep -Fq 'noisy-output-100' "$TMP_ROOT/bounded-live-output.log"
+
+set +e
+setsid "$BROKER" --lock-dir "$LOCK_DIR" run \
+  --operation deadline-test \
+  --resources read-only \
+  --job-id job-test-timeout \
+  --output-file "$OUTPUT_DIR/job-test-timeout.log" \
+  --result-file "$RESULT_DIR/job-test-timeout.json" \
+  --timeout-seconds 1 \
+  -- sh -c 'printf "waiting\n"; sleep 30' \
+  >"$TMP_ROOT/timeout-live-output.log" 2>&1
+timeout_status=$?
+set -e
+[[ "$timeout_status" != "0" ]] || { echo "deadline test unexpectedly succeeded" >&2; exit 1; }
+python3 - "$RESULT_DIR/job-test-timeout.json" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as stream:
+    result = json.load(stream)
+assert result["timed_out"] is True
+assert result["exit_code"] != 0
+PY
+
 # A broker killed without cleanup leaves its child process group and inherited
 # lock descriptors intact. This is the orphan case reconciled by Saturn Go.
 # shellcheck disable=SC2016

@@ -264,6 +264,33 @@ fn signal_process_group(process_group: i32, signal: &str) {
     }
 }
 
+pub async fn terminate_process_group(process_group: i32) {
+    terminate_process_group_after(process_group, cancel_grace()).await;
+}
+
+async fn terminate_process_group_after(process_group: i32, grace: Duration) {
+    if process_group <= 0 {
+        return;
+    }
+    signal_process_group(process_group, "TERM");
+    tokio::time::sleep(grace).await;
+    if process_group_exists(process_group) {
+        signal_process_group(process_group, "KILL");
+    }
+}
+
+fn process_group_exists(process_group: i32) -> bool {
+    std::process::Command::new("kill")
+        .arg("-0")
+        .arg("--")
+        .arg(format!("-{process_group}"))
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false)
+}
+
 pub fn status() -> serde_json::Value {
     let active = active_slot()
         .lock()
@@ -366,5 +393,25 @@ mod tests {
         assert!(cancel_requested(&id));
         drop(guard);
         assert!(!cancel_requested(&id));
+    }
+
+    #[tokio::test]
+    async fn deadline_termination_escalates_for_a_term_resistant_process_group() {
+        let mut command = tokio::process::Command::new("sh");
+        command
+            .args(["-c", "trap '' TERM; while :; do sleep 30; done"])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+        command.as_std_mut().process_group(0);
+        let mut child = command.spawn().unwrap();
+        let process_group = child.id().unwrap() as i32;
+        tokio::time::sleep(Duration::from_millis(30)).await;
+
+        terminate_process_group_after(process_group, Duration::from_millis(30)).await;
+        let status = tokio::time::timeout(Duration::from_secs(2), child.wait())
+            .await
+            .expect("deadline SIGKILL escalation timed out")
+            .unwrap();
+        assert!(!status.success());
     }
 }

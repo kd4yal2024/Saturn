@@ -300,19 +300,28 @@ transaction not durably marked committed.
 
 | Route | Method | CSRF | Request | Success Response |
 |---|---|---|---|---|
-| `/run` | `POST` | Yes | `multipart/form-data` with `script` + repeated `flags` | SSE stream (`text/event-stream`) |
-| `/run_log` | `GET` | No | `?script=<filename>&from=<offset>&limit=<n>` | `{ "script","run_id","status","running","started_at","finished_at","from","next_from","total_lines","lines":[...] }` |
+| `/run` | `POST` | Yes | `multipart/form-data` with `script`, repeated `flags`, and optional `deadline_seconds` | SSE stream (`text/event-stream`) |
+| `/run_log` | `GET` | No | `?script=<filename>&from=<offset>&limit=<n>` | `{ "script","run_id","status","running","started_at","finished_at","from","next_from","total_lines","retained_bytes","truncated","lines":[...] }` |
 | `/backup_response` | `POST` | Yes | form payload from legacy prompt | `204 No Content` |
 | `/exit` | `POST` | Yes | none | `{ "status":"shutting down" }` |
 
 SSE output is streamed line-by-line, including stderr lines prefixed with `ERR:`.
+The live channel holds at most 128 events and emits an `output backpressure`
+notice when events are omitted because a client cannot keep up.
 
 Run-log buffering behavior:
 
 - `/run` and `/run_log` share in-memory per-script run state.
 - `run_log` supports resume via `from` offset and returns `next_from`.
-- `run_log` returns `status` (`idle|running|done|error`) and current `run_id`.
+- `run_log` returns `status` (`idle|running|done|error|cancelled|timed_out`) and
+  current `run_id`.
 - `run_log` max fetch `limit` is clamped by backend.
+- In-memory resume output is capped at 1 MiB and 5,000 lines. Durable job output
+  is capped at 4 MiB and 5,000 lines and includes an explicit truncation marker.
+- Routine scripts default to a 30-minute deadline and update scripts to four
+  hours. Optional `deadline_seconds` is clamped to a six-hour maximum.
+- Deadline expiry terminates the complete maintenance process group and records
+  `timed_out`/`timeout` in the durable maintenance job record.
 
 Update-activity behavior for `/run`:
 

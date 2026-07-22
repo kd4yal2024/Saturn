@@ -12,17 +12,16 @@ use axum::{
     Json,
 };
 use serde::Deserialize;
-use tokio::{
-    io::{AsyncBufReadExt, BufReader},
-    sync::mpsc,
-};
-use tokio_stream::{wrappers::UnboundedReceiverStream, StreamExt};
+use tokio::io::{AsyncRead, AsyncReadExt};
+use tokio_stream::{wrappers::ReceiverStream, StreamExt};
 
+use crate::bounded_output::BoundedOutputSender;
 use crate::maintenance_lock::{self, NETWORK_MAINTENANCE};
 use crate::shutdown_controller::{self, ShutdownPolicy};
 
 const HELPER_PATH: &str = "/usr/local/lib/saturn-go/scripts/saturn-tailscale.sh";
 const HOSTNAME_RE_BYTES: &[u8] = b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-";
+const TAILSCALE_HELPER_DEADLINE_SECS: u64 = 10 * 60;
 
 #[derive(Debug, Default, Deserialize)]
 pub struct TailscaleUpRequest {
@@ -82,6 +81,28 @@ fn validate_auth_key(value: &str) -> Result<(), &'static str> {
     Ok(())
 }
 
+async fn stream_bounded_chunks<R>(mut reader: R, tx: BoundedOutputSender, prefix: &'static str)
+where
+    R: AsyncRead + Unpin,
+{
+    let mut buffer = [0_u8; 2048];
+    loop {
+        match reader.read(&mut buffer).await {
+            Ok(0) => break,
+            Ok(count) => {
+                let chunk = String::from_utf8_lossy(&buffer[..count]);
+                for line in chunk.split(['\n', '\r']).filter(|line| !line.is_empty()) {
+                    tx.try_send(format!("{prefix}{line}"));
+                }
+            }
+            Err(error) => {
+                tx.try_send(format!("{prefix}stream read error: {error}"));
+                break;
+            }
+        }
+    }
+}
+
 async fn stream_helper(args: Vec<String>) -> Response {
     let action = args.first().map(String::as_str).unwrap_or("unknown");
     let operation = format!("tailscale:{action}");
@@ -104,14 +125,14 @@ async fn stream_helper(args: Vec<String>) -> Response {
         Ok(guard) => guard,
         Err(error) => return (StatusCode::SERVICE_UNAVAILABLE, error).into_response(),
     };
-    let (tx, rx) = mpsc::unbounded_channel::<String>();
+    let (tx, rx) = BoundedOutputSender::channel();
 
     let cmd_summary: String = std::iter::once("sudo".to_string())
         .chain(std::iter::once(HELPER_PATH.to_string()))
         .chain(args.iter().cloned())
         .collect::<Vec<_>>()
         .join(" ");
-    let _ = tx.send(format!("$ {cmd_summary}"));
+    tx.try_send(format!("$ {cmd_summary}"));
 
     let mut command_args = vec!["-n".to_string(), HELPER_PATH.to_string()];
     command_args.extend(args.iter().cloned());
@@ -128,8 +149,9 @@ async fn stream_helper(args: Vec<String>) -> Response {
     let mut child = match command.spawn() {
         Ok(c) => c,
         Err(e) => {
-            let _ = tx.send(format!("Error: failed to spawn helper: {e}"));
-            let stream = UnboundedReceiverStream::new(rx)
+            tx.send_terminal(format!("Error: failed to spawn helper: {e}"))
+                .await;
+            let stream = ReceiverStream::new(rx)
                 .map(|line| Ok::<Event, std::convert::Infallible>(Event::default().data(line)));
             return Sse::new(stream)
                 .keep_alive(KeepAlive::new().interval(Duration::from_secs(5)))
@@ -138,8 +160,9 @@ async fn stream_helper(args: Vec<String>) -> Response {
     };
     let Some(child_pid) = child.id() else {
         let _ = child.start_kill();
-        let _ = tx.send("Error: maintenance helper did not report a PID".to_string());
-        let stream = UnboundedReceiverStream::new(rx)
+        tx.send_terminal("Error: maintenance helper did not report a PID".to_string())
+            .await;
+        let stream = ReceiverStream::new(rx)
             .map(|line| Ok::<Event, std::convert::Infallible>(Event::default().data(line)));
         return Sse::new(stream)
             .keep_alive(KeepAlive::new().interval(Duration::from_secs(5)))
@@ -147,10 +170,11 @@ async fn stream_helper(args: Vec<String>) -> Response {
     };
     if let Err(error) = operation_guard.set_process_group(child_pid as i32) {
         let _ = child.start_kill();
-        let _ = tx.send(format!(
+        tx.send_terminal(format!(
             "Error: failed to track maintenance helper: {error}"
-        ));
-        let stream = UnboundedReceiverStream::new(rx)
+        ))
+        .await;
+        let stream = ReceiverStream::new(rx)
             .map(|line| Ok::<Event, std::convert::Infallible>(Event::default().data(line)));
         return Sse::new(stream)
             .keep_alive(KeepAlive::new().interval(Duration::from_secs(5)))
@@ -160,38 +184,46 @@ async fn stream_helper(args: Vec<String>) -> Response {
     if let Some(stdout) = child.stdout.take() {
         let tx = tx.clone();
         tokio::spawn(async move {
-            let mut lines = BufReader::new(stdout).lines();
-            while let Ok(Some(line)) = lines.next_line().await {
-                let _ = tx.send(line);
-            }
+            stream_bounded_chunks(stdout, tx, "").await;
         });
     }
     if let Some(stderr) = child.stderr.take() {
         let tx = tx.clone();
         tokio::spawn(async move {
-            let mut lines = BufReader::new(stderr).lines();
-            while let Ok(Some(line)) = lines.next_line().await {
-                let _ = tx.send(format!("ERR: {line}"));
-            }
+            stream_bounded_chunks(stderr, tx, "ERR: ").await;
         });
     }
 
     tokio::spawn(async move {
         let _operation_guard = operation_guard;
-        match child.wait().await {
-            Ok(status) if status.success() => {
-                let _ = tx.send("Done".to_string());
+        let terminal = tokio::time::timeout(
+            Duration::from_secs(TAILSCALE_HELPER_DEADLINE_SECS),
+            child.wait(),
+        )
+        .await;
+        match terminal {
+            Err(_) => {
+                shutdown_controller::terminate_process_group(child_pid as i32).await;
+                let _ = child.wait().await;
+                tx.send_terminal(format!(
+                    "Error: helper timed out after {TAILSCALE_HELPER_DEADLINE_SECS} seconds"
+                ))
+                .await;
             }
-            Ok(status) => {
-                let _ = tx.send(format!("Error: helper exited with {status}"));
+            Ok(Ok(status)) if status.success() => {
+                tx.send_terminal("Done".to_string()).await;
             }
-            Err(e) => {
-                let _ = tx.send(format!("Error: wait failed: {e}"));
+            Ok(Ok(status)) => {
+                tx.send_terminal(format!("Error: helper exited with {status}"))
+                    .await;
+            }
+            Ok(Err(e)) => {
+                tx.send_terminal(format!("Error: wait failed: {e}")).await;
             }
         }
     });
 
-    let stream = UnboundedReceiverStream::new(rx)
+    let stream = ReceiverStream::new(rx)
         .map(|line| Ok::<Event, std::convert::Infallible>(Event::default().data(line)));
     let mut resp = Sse::new(stream)
         .keep_alive(KeepAlive::new().interval(Duration::from_secs(5)))

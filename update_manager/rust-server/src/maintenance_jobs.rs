@@ -6,6 +6,7 @@ use std::sync::OnceLock;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::io::AsyncWriteExt;
 
+use crate::maintenance_lock::{JOB_OUTPUT_MAX_BYTES, JOB_OUTPUT_MAX_LINES};
 use crate::state_store::{write_json_atomic, AtomicWriteOptions};
 
 const SCHEMA_VERSION: u32 = 1;
@@ -58,6 +59,8 @@ pub struct BrokerResult {
     pub job_id: String,
     pub finished_at: String,
     pub exit_code: i32,
+    #[serde(default)]
+    pub timed_out: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -94,6 +97,14 @@ pub fn output_path(state_dir: &Path, id: &str) -> PathBuf {
 
 pub fn broker_result_path(state_dir: &Path, id: &str) -> PathBuf {
     results_dir(state_dir).join(format!("{id}.json"))
+}
+
+pub async fn broker_timed_out(path: &Path) -> bool {
+    tokio::fs::read(path)
+        .await
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<BrokerResult>(&bytes).ok())
+        .is_some_and(|result| result.timed_out)
 }
 
 pub async fn initialize(state_dir: &Path) -> Result<ReconcileSummary, String> {
@@ -151,6 +162,21 @@ pub async fn save(state_dir: &Path, job: &MaintenanceJob) -> Result<(), String> 
 }
 
 pub async fn append_output_line(path: &Path, line: &str) -> Result<(), String> {
+    let existing = match tokio::fs::read(path).await {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+        Err(error) => {
+            return Err(format!(
+                "failed to inspect job output {}: {error}",
+                path.display()
+            ))
+        }
+    };
+    let next_bytes = existing.len().saturating_add(line.len()).saturating_add(1);
+    let existing_lines = existing.iter().filter(|byte| **byte == b'\n').count();
+    if next_bytes > JOB_OUTPUT_MAX_BYTES as usize || existing_lines >= JOB_OUTPUT_MAX_LINES {
+        return Ok(());
+    }
     let mut file = tokio::fs::OpenOptions::new()
         .create(true)
         .append(true)
@@ -296,13 +322,34 @@ pub async fn reconcile(state_dir: &Path) -> Result<ReconcileSummary, String> {
                     broker.job_id
                 ));
             }
-            let success = broker.exit_code == 0;
-            job.state = if success { "completed" } else { "failed" }.to_string();
+            let success = broker.exit_code == 0 && !broker.timed_out;
+            job.state = if broker.timed_out {
+                "timed_out"
+            } else if success {
+                "completed"
+            } else {
+                "failed"
+            }
+            .to_string();
             job.updated_at = broker.finished_at.clone();
             job.finished_at = Some(broker.finished_at);
             job.result = Some(JobResult {
-                outcome: if success { "success" } else { "failure" }.to_string(),
-                message: format!("maintenance child exited with code {}", broker.exit_code),
+                outcome: if broker.timed_out {
+                    "timeout"
+                } else if success {
+                    "success"
+                } else {
+                    "failure"
+                }
+                .to_string(),
+                message: if broker.timed_out {
+                    format!(
+                        "maintenance child exceeded its deadline and exited with code {}",
+                        broker.exit_code
+                    )
+                } else {
+                    format!("maintenance child exited with code {}", broker.exit_code)
+                },
                 exit_code: Some(broker.exit_code),
             });
             job.recovery_steps.clear();
@@ -427,6 +474,7 @@ mod tests {
                 job_id: "job-2".to_string(),
                 finished_at: "2026-07-21T12:00:00-04:00".to_string(),
                 exit_code: 0,
+                timed_out: false,
             },
             AtomicWriteOptions::state_file(),
         )
@@ -435,6 +483,39 @@ mod tests {
         let summary = reconcile(&root).await.unwrap();
         assert_eq!(summary.completed, vec!["job-2"]);
         assert_eq!(load(&root, "job-2").await.unwrap().state, "completed");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn broker_timeout_is_reconciled_as_timed_out() {
+        let root = temp_dir("timeout-result");
+        initialize(&root).await.unwrap();
+        let mut job = new_job(
+            &root,
+            "job-timeout".to_string(),
+            "script:test.sh".to_string(),
+            &["radio"],
+            "tester",
+            serde_json::json!({"deadline_seconds": 1}),
+        );
+        job.controller_instance = "previous-controller".to_string();
+        save(&root, &job).await.unwrap();
+        write_json_atomic(
+            &broker_result_path(&root, "job-timeout"),
+            &BrokerResult {
+                job_id: "job-timeout".to_string(),
+                finished_at: "2026-07-21T12:00:00-04:00".to_string(),
+                exit_code: -15,
+                timed_out: true,
+            },
+            AtomicWriteOptions::state_file(),
+        )
+        .await
+        .unwrap();
+        reconcile(&root).await.unwrap();
+        let recovered = load(&root, "job-timeout").await.unwrap();
+        assert_eq!(recovered.state, "timed_out");
+        assert_eq!(recovered.result.unwrap().outcome, "timeout");
         let _ = std::fs::remove_dir_all(root);
     }
 

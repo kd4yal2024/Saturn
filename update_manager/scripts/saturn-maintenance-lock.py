@@ -17,6 +17,8 @@ import stat
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -32,6 +34,13 @@ RESOURCE_ORDER = (
     "read-only",
 )
 EXIT_CONFLICT = 75
+DEFAULT_OUTPUT_MAX_BYTES = 4 * 1024 * 1024
+DEFAULT_OUTPUT_MAX_LINES = 5000
+MAX_TIMEOUT_SECONDS = 6 * 60 * 60
+TIMEOUT_TERM_GRACE_SECONDS = 5
+OUTPUT_TRUNCATION_MARKER = (
+    b"[output truncated: durable log byte/line limit reached; further output omitted]\n"
+)
 
 
 def fail(message: str, status: int = 1) -> None:
@@ -99,6 +108,9 @@ def parser() -> argparse.ArgumentParser:
             sub.add_argument("--job-id")
             sub.add_argument("--output-file")
             sub.add_argument("--result-file")
+            sub.add_argument("--output-max-bytes", type=int, default=DEFAULT_OUTPUT_MAX_BYTES)
+            sub.add_argument("--output-max-lines", type=int, default=DEFAULT_OUTPUT_MAX_LINES)
+            sub.add_argument("--timeout-seconds", type=int, default=0)
             sub.add_argument("command", nargs=argparse.REMAINDER)
     return result
 
@@ -109,7 +121,7 @@ def open_output_file(value: str | None):
     path = Path(value)
     if not path.is_absolute() or not path.parent.is_dir() or path.parent.is_symlink():
         fail(f"job output parent is missing or unsafe: {path.parent}", 2)
-    flags = os.O_WRONLY | os.O_CREAT | os.O_APPEND | getattr(os, "O_NOFOLLOW", 0)
+    flags = os.O_RDWR | os.O_CREAT | os.O_APPEND | getattr(os, "O_NOFOLLOW", 0)
     try:
         fd = os.open(path, flags, 0o640)
     except OSError as error:
@@ -122,7 +134,58 @@ def open_output_file(value: str | None):
     return os.fdopen(fd, "ab", buffering=0)
 
 
-def write_result(path_value: str | None, job_id: str | None, exit_code: int) -> None:
+class BoundedOutput:
+    def __init__(self, stream, max_bytes: int, max_lines: int) -> None:
+        if max_bytes < len(OUTPUT_TRUNCATION_MARKER) + 1:
+            fail("output byte limit is too small", 2)
+        if max_lines < 1:
+            fail("output line limit must be positive", 2)
+        self.stream = stream
+        self.max_payload_bytes = max_bytes - len(OUTPUT_TRUNCATION_MARKER)
+        self.max_payload_lines = max_lines - 1
+        existing_size = os.fstat(stream.fileno()).st_size
+        existing = os.pread(stream.fileno(), min(existing_size, max_bytes), 0)
+        self.retained_bytes = existing_size
+        self.retained_lines = existing.count(b"\n")
+        self.truncated = OUTPUT_TRUNCATION_MARKER.strip() in existing
+
+    def write(self, chunk: bytes) -> None:
+        if self.truncated:
+            return
+        retained = bytearray()
+        retained_newlines = 0
+        for value in chunk:
+            if (
+                self.retained_bytes + len(retained) >= self.max_payload_bytes
+                or self.retained_lines + retained_newlines >= self.max_payload_lines
+            ):
+                self._mark_truncated(retained, retained_newlines)
+                return
+            retained.append(value)
+            if value == 0x0A:
+                retained_newlines += 1
+        if retained:
+            self.stream.write(retained)
+            self.retained_bytes += len(retained)
+            self.retained_lines += retained_newlines
+
+    def _mark_truncated(self, retained: bytearray, retained_newlines: int) -> None:
+        if retained:
+            self.stream.write(retained)
+            self.retained_bytes += len(retained)
+            self.retained_lines += retained_newlines
+        self.stream.write(OUTPUT_TRUNCATION_MARKER)
+        self.truncated = True
+
+    def close(self) -> None:
+        self.stream.flush()
+        os.fsync(self.stream.fileno())
+        self.stream.close()
+
+
+def write_result(
+    path_value: str | None, job_id: str | None, exit_code: int, timed_out: bool = False
+) -> None:
     if not path_value:
         return
     path = Path(path_value)
@@ -134,6 +197,7 @@ def write_result(path_value: str | None, job_id: str | None, exit_code: int) -> 
         "job_id": job_id or "",
         "finished_at": datetime.now(timezone.utc).isoformat(),
         "exit_code": exit_code,
+        "timed_out": timed_out,
     }
     fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
     try:
@@ -183,11 +247,22 @@ def main() -> int:
         command.pop(0)
     if not command:
         fail("run requires a command after --", 2)
+    if args.timeout_seconds < 0 or args.timeout_seconds > MAX_TIMEOUT_SECONDS:
+        fail(f"timeout must be between 0 and {MAX_TIMEOUT_SECONDS} seconds", 2)
     environment = os.environ.copy()
     environment["SATURN_MAINTENANCE_LOCK_HELD"] = "1"
     environment["SATURN_MAINTENANCE_LOCK_OPERATION"] = args.operation
     environment["SATURN_MAINTENANCE_LOCK_RESOURCES"] = ",".join(resources)
     output_stream = open_output_file(args.output_file)
+    bounded_output = (
+        BoundedOutput(
+            output_stream,
+            args.output_max_bytes,
+            args.output_max_lines,
+        )
+        if output_stream and args.output_file
+        else None
+    )
     child = subprocess.Popen(
         command,
         env=environment,
@@ -198,29 +273,71 @@ def main() -> int:
 
     def forward(signum: int, _frame: object) -> None:
         if child.poll() is None:
-            child.send_signal(signum)
+            try:
+                child.send_signal(signum)
+            except ProcessLookupError:
+                pass
 
     signal.signal(signal.SIGTERM, forward)
     signal.signal(signal.SIGINT, forward)
+    timed_out = threading.Event()
+
+    def expire() -> None:
+        if child.poll() is not None:
+            return
+        timed_out.set()
+        try:
+            os.killpg(os.getpgrp(), signal.SIGTERM)
+        except ProcessLookupError:
+            return
+        time.sleep(TIMEOUT_TERM_GRACE_SECONDS)
+        if child.poll() is None:
+            kill_group_members_except_self(os.getpgrp())
+
+    deadline_timer = None
+    if args.timeout_seconds:
+        deadline_timer = threading.Timer(args.timeout_seconds, expire)
+        deadline_timer.daemon = True
+        deadline_timer.start()
     stdout_available = True
     if output_stream and child.stdout:
         while True:
             chunk = child.stdout.read(65536)
             if not chunk:
                 break
-            output_stream.write(chunk)
+            bounded_output.write(chunk)
             if stdout_available:
                 try:
                     sys.stdout.buffer.write(chunk)
                     sys.stdout.buffer.flush()
                 except BrokenPipeError:
                     stdout_available = False
-        output_stream.flush()
-        os.fsync(output_stream.fileno())
-        output_stream.close()
+        bounded_output.close()
     exit_code = child.wait()
-    write_result(args.result_file, args.job_id, exit_code)
+    if deadline_timer:
+        deadline_timer.cancel()
+    write_result(args.result_file, args.job_id, exit_code, timed_out.is_set())
     return exit_code
+
+
+def kill_group_members_except_self(process_group: int) -> None:
+    own_pid = os.getpid()
+    for entry in Path("/proc").iterdir():
+        if not entry.name.isdigit():
+            continue
+        pid = int(entry.name)
+        if pid == own_pid:
+            continue
+        try:
+            stat_fields = (entry / "stat").read_text(encoding="utf-8").rsplit(")", 1)[1].split()
+            member_group = int(stat_fields[2])
+        except (FileNotFoundError, IndexError, PermissionError, ValueError):
+            continue
+        if member_group == process_group:
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except (PermissionError, ProcessLookupError):
+                pass
 
 
 def raise_exit() -> None:
