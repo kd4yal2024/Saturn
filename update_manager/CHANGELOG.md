@@ -4,6 +4,14 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
 
 ## [Unreleased]
 ### Changed
+- Limited Saturn Remote to four authenticated logical clients (a paired split
+  control/media session counts once) with clean HTTP admission failures and an
+  eight-socket bridge backstop. Inbound commands and per-client outbound
+  control are now bounded/coalesced; microphone and display traffic retain
+  only their newest bounded data, while TX release and safety commands use the
+  priority lane. `/remote_metrics`, `/bridge_diag`, bridge logs, and
+  `remote_backpressure` now expose connection, queue, drop, latency, and
+  high-water metrics.
 - Bounded maintenance-script live output to 128 queued events, in-memory resume
   output to 1 MiB/5,000 lines, and durable output to 4 MiB/5,000 lines with
   explicit backpressure/truncation notices. Routine scripts now default to a

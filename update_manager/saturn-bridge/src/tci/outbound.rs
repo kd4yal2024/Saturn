@@ -53,7 +53,7 @@ impl OutboundClass {
     }
 
     pub(crate) fn is_never_drop(self) -> bool {
-        matches!(self, Self::Safety | Self::Control)
+        matches!(self, Self::Safety)
     }
 }
 
@@ -141,12 +141,15 @@ pub(crate) struct ClientSchedulerStatsDelta {
     pub(crate) control_latencies_us: Vec<u64>,
     pub(crate) display_replaced: u64,
     pub(crate) display_dropped: u64,
+    pub(crate) control_replaced: u64,
+    pub(crate) control_dropped: u64,
     pub(crate) audio_dropped: u64,
     pub(crate) audio_panic_drain: u64,
     pub(crate) send_blocked_ms: u64,
     pub(crate) outbound_high_watermark_bytes: u64,
     pub(crate) tcp_outq_high_watermark_bytes: u64,
     pub(crate) safety_queue_depth_overflow: u64,
+    pub(crate) control_queue_high_watermark: u64,
 }
 
 #[derive(Default, Debug)]
@@ -155,12 +158,15 @@ pub(crate) struct ClientSchedulerStatsInner {
     pub(crate) control_latencies_us: Vec<u64>,
     pub(crate) display_replaced: u64,
     pub(crate) display_dropped: u64,
+    pub(crate) control_replaced: u64,
+    pub(crate) control_dropped: u64,
     pub(crate) audio_dropped: u64,
     pub(crate) audio_panic_drain: u64,
     pub(crate) send_blocked_ms: u64,
     pub(crate) outbound_high_watermark_bytes: u64,
     pub(crate) tcp_outq_high_watermark_bytes: u64,
     pub(crate) safety_queue_depth_overflow: u64,
+    pub(crate) control_queue_high_watermark: u64,
 }
 
 #[derive(Default, Debug)]
@@ -190,6 +196,14 @@ impl ClientSchedulerStats {
         self.inner.lock_unpoisoned().display_dropped += 1;
     }
 
+    pub(crate) fn record_control_replaced(&self) {
+        self.inner.lock_unpoisoned().control_replaced += 1;
+    }
+
+    pub(crate) fn record_control_dropped(&self) {
+        self.inner.lock_unpoisoned().control_dropped += 1;
+    }
+
     pub(crate) fn record_audio_dropped(&self, count: u64) {
         self.inner.lock_unpoisoned().audio_dropped += count;
     }
@@ -216,6 +230,11 @@ impl ClientSchedulerStats {
         self.inner.lock_unpoisoned().safety_queue_depth_overflow += 1;
     }
 
+    pub(crate) fn record_control_queue_high_watermark(&self, depth: usize) {
+        let mut inner = self.inner.lock_unpoisoned();
+        inner.control_queue_high_watermark = inner.control_queue_high_watermark.max(depth as u64);
+    }
+
     pub(crate) fn drain(&self) -> ClientSchedulerStatsDelta {
         let mut inner = self.inner.lock_unpoisoned();
         ClientSchedulerStatsDelta {
@@ -223,12 +242,15 @@ impl ClientSchedulerStats {
             control_latencies_us: std::mem::take(&mut inner.control_latencies_us),
             display_replaced: std::mem::take(&mut inner.display_replaced),
             display_dropped: std::mem::take(&mut inner.display_dropped),
+            control_replaced: std::mem::take(&mut inner.control_replaced),
+            control_dropped: std::mem::take(&mut inner.control_dropped),
             audio_dropped: std::mem::take(&mut inner.audio_dropped),
             audio_panic_drain: std::mem::take(&mut inner.audio_panic_drain),
             send_blocked_ms: std::mem::take(&mut inner.send_blocked_ms),
             outbound_high_watermark_bytes: std::mem::take(&mut inner.outbound_high_watermark_bytes),
             tcp_outq_high_watermark_bytes: std::mem::take(&mut inner.tcp_outq_high_watermark_bytes),
             safety_queue_depth_overflow: std::mem::take(&mut inner.safety_queue_depth_overflow),
+            control_queue_high_watermark: std::mem::take(&mut inner.control_queue_high_watermark),
         }
     }
 }
@@ -292,6 +314,27 @@ impl ClientOutbound {
         let item = QueuedOutbound::new(message);
         match item.class {
             OutboundClass::Safety => {
+                if let Some(key) = safety_coalesce_key(&item.message) {
+                    if let Some(position) = queues.safety.iter().position(|queued| {
+                        safety_coalesce_key(&queued.message) == Some(key.clone())
+                    }) {
+                        let old = std::mem::replace(&mut queues.safety[position], item);
+                        queues.queued_bytes = queues
+                            .queued_bytes
+                            .saturating_sub(old.estimated_bytes)
+                            .saturating_add(queues.safety[position].estimated_bytes);
+                        self.stats.record_high_watermark(queues.queued_bytes);
+                        return 0;
+                    }
+                }
+                if queues.safety.len() >= MAX_SAFETY_QUEUE_MESSAGES {
+                    if let Some(old) = queues.safety.pop_front() {
+                        queues.queued_bytes =
+                            queues.queued_bytes.saturating_sub(old.estimated_bytes);
+                        dropped += 1;
+                        self.stats.record_safety_queue_depth_overflow();
+                    }
+                }
                 queues.queued_bytes = queues.queued_bytes.saturating_add(item.estimated_bytes);
                 queues.safety.push_back(item);
                 if queues.writer_started && queues.safety.len() > 1 {
@@ -303,8 +346,34 @@ impl ClientOutbound {
                 }
             }
             OutboundClass::Control => {
+                if let Some(key) = control_coalesce_key(&item.message) {
+                    if let Some(position) = queues.control.iter().position(|queued| {
+                        control_coalesce_key(&queued.message) == Some(key.clone())
+                    }) {
+                        let old = std::mem::replace(&mut queues.control[position], item);
+                        queues.queued_bytes = queues
+                            .queued_bytes
+                            .saturating_sub(old.estimated_bytes)
+                            .saturating_add(queues.control[position].estimated_bytes);
+                        self.stats.record_control_replaced();
+                        self.stats.record_high_watermark(queues.queued_bytes);
+                        return 1;
+                    }
+                }
                 queues.queued_bytes = queues.queued_bytes.saturating_add(item.estimated_bytes);
                 queues.control.push_back(item);
+                while queues.control.len() > MAX_CONTROL_QUEUE_MESSAGES
+                    || queues.queued_bytes > MAX_CONTROL_QUEUE_BYTES
+                {
+                    let Some(old) = queues.control.pop_front() else {
+                        break;
+                    };
+                    queues.queued_bytes = queues.queued_bytes.saturating_sub(old.estimated_bytes);
+                    dropped += 1;
+                    self.stats.record_control_dropped();
+                }
+                self.stats
+                    .record_control_queue_high_watermark(queues.control.len());
             }
             OutboundClass::Audio => {
                 dropped += self.enqueue_audio_locked(&mut queues, item);
@@ -388,7 +457,20 @@ impl ClientOutbound {
         queues.queued_bytes = queues.queued_bytes.saturating_add(item.estimated_bytes);
         match item.class {
             OutboundClass::Safety => queues.safety.push_front(item),
-            OutboundClass::Control => queues.control.push_front(item),
+            OutboundClass::Control => {
+                queues.control.push_front(item);
+                while queues.control.len() > MAX_CONTROL_QUEUE_MESSAGES
+                    || queues.queued_bytes > MAX_CONTROL_QUEUE_BYTES
+                {
+                    let Some(old) = queues.control.pop_back() else {
+                        break;
+                    };
+                    queues.queued_bytes = queues.queued_bytes.saturating_sub(old.estimated_bytes);
+                    self.stats.record_control_dropped();
+                }
+                self.stats
+                    .record_control_queue_high_watermark(queues.control.len());
+            }
             OutboundClass::Audio => {
                 queues.audio_queued_frames =
                     queues.audio_queued_frames.saturating_add(item.audio_frames);
@@ -408,7 +490,8 @@ impl ClientOutbound {
         match class {
             OutboundClass::Audio => self.stats.record_audio_dropped(1),
             OutboundClass::Display => self.stats.record_display_dropped(),
-            OutboundClass::Safety | OutboundClass::Control => {}
+            OutboundClass::Control => self.stats.record_control_dropped(),
+            OutboundClass::Safety => {}
         }
     }
 
@@ -430,6 +513,49 @@ impl ClientOutbound {
 
     pub(crate) fn queued_bytes(&self) -> u64 {
         self.queues.lock_unpoisoned().queued_bytes as u64
+    }
+}
+
+pub(crate) const MAX_SAFETY_QUEUE_MESSAGES: usize = 16;
+pub(crate) const MAX_CONTROL_QUEUE_MESSAGES: usize = 256;
+pub(crate) const MAX_CONTROL_QUEUE_BYTES: usize = 256 * 1024;
+
+fn safety_coalesce_key(message: &OutboundMessage) -> Option<String> {
+    match message {
+        OutboundMessage::Close => Some("close".to_string()),
+        OutboundMessage::SafetyText(text) => tci_text_coalesce_key(text),
+        _ => None,
+    }
+}
+
+fn control_coalesce_key(message: &OutboundMessage) -> Option<String> {
+    match message {
+        OutboundMessage::Text(text) => tci_text_coalesce_key(text),
+        _ => None,
+    }
+}
+
+fn tci_text_coalesce_key(text: &str) -> Option<String> {
+    let text = text.trim();
+    if text.matches(';').count() > 1 {
+        return None;
+    }
+    let text = text.strip_suffix(';').unwrap_or(text);
+    let (name, rest) = text.split_once(':')?;
+    if name.is_empty() || rest.is_empty() {
+        return None;
+    }
+    let args: Vec<&str> = rest.split(',').collect();
+    if name == "tx_fault" && args.len() >= 2 {
+        return Some(format!("{name}:{},{}", args[0], args[1]));
+    }
+    if matches!(name, "remote_backpressure" | "remote_tx_uplink") {
+        return Some(name.to_string());
+    }
+    if args.len() == 1 {
+        Some(name.to_string())
+    } else {
+        Some(format!("{name}:{}", args[..args.len() - 1].join(",")))
     }
 }
 

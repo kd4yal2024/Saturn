@@ -199,6 +199,19 @@ Remote entry behavior:
 - `https://<host>:8443/remote` and the TLS root `/` redirect to `/remote-next`; the legacy inline page was retired on 2026-07-14.
 - `https://<host>:8443/remote-next?transport=split&tx_opus=1&tx_cfc=1` is the current Saturn Remote default operator URL: split control/media sockets plus the guarded Opus TX path and conservative ESSB CFC baseline. It serves `saturn-remote-next.html` + Vite bundle `saturn-remote-next.js` via `/remote-assets/remote-next.js`. Older `phase42_*` and `phase44_*` flags remain accepted as compatibility aliases.
 - `https://<host>:8443/remote-next` without a query redirects to the default feature query. It is the only remote UI; basic-auth credentials, `remote_settings.json`, and `remote_profiles.json` state are unchanged from the legacy page.
+- Saturn Remote accepts at most four authenticated logical clients. Each split
+  control/media pair sharing a `session` id counts once; the bridge separately
+  caps physical TCI sockets at eight. A fifth logical client is rejected with
+  HTTP 429 and a five-second retry hint. This is an appliance capacity limit,
+  not an authentication failure.
+- Exactly one connected control client remains the operator/TX owner. Other
+  clients are viewers until the operator disconnects and ownership is promoted.
+  Disconnect, TX watchdog, codec fault, and media-lane loss still force RX.
+- Remote control state is coalesced in fixed 256-entry inbound and per-client
+  outbound queues. Outbound control is additionally capped at 256 KiB,
+  display is latest-frame depth one, microphone ingress keeps eight newest
+  frames, and audio retention is limited to 250 ms. TX release and safety
+  commands use the priority lane and are processed before control or media.
 - The current Opus TX processing profile leaves Noise Gate available as an operator control but off by default, keeps TX EQ on with the ESSB-lite curve `3:+1,4:+2,5:+1,6:-1,7:+1,8:+3,9:+1`, and enables the conservative ESSB CFC baseline only when `tx_cfc=1` is present. Noise Gate can be explicitly started on for testing with `tx_noise_gate=1` and a guarded threshold such as `tx_noise_gate_db=-50`; once loaded, the operator Noise Gate toggle is allowed to persist instead of being repeatedly reset by the TX audio restore path.
 - Field validation on 2026-06-11 confirmed `bridgeprefill240-gateoff1` transmitted clear Opus wideband TX audio from Chrome Android with `accepted=opus_wb`, `txNoiseGateEnabled=0`, `txMicDrops=0`, and `txUplinkHwm=854`.
 - Field validation on 2026-06-11 also found the wider TX filter `50-4150` sounded good with `bridgeprefill240-gateoff2`; copy-log evidence showed `accepted=opus_wb`, `txMicDrops=0`, and `txUplinkHwm=637`.
@@ -215,6 +228,20 @@ Remote entry behavior:
 - Browser disconnect and `pagehide` now send an explicit TX-off command before the TCI websocket closes, and the bridge also forces TX/two-tone off when the client detaches.
 - Two-tone test settings now persist in `remote_settings.json`, including `freq1`, `freq2`, `level`, `invert LSB-family`, and `tone 2 delay`.
 - USB/LSB mode changes should move the transparent RX passband box to the correct side of center in both the panadapter and waterfall.
+
+Remote capacity diagnostics:
+
+```bash
+curl -ksS -u admin https://127.0.0.1:8443/remote_metrics | jq
+curl -fsS http://127.0.0.1:8080/bridge_diag | jq '.bridge.latest_diag.fields'
+```
+
+The first response reports authenticated client/connection counts, rejection
+counters, and high-water marks. The bridge diagnostic reports physical
+connection ceilings, command and outbound queue depths, coalesced/replaced and
+dropped traffic, safety/control latency, and byte/TCP high-water marks. The
+same bridge scheduling data is emitted to connected operators in the
+`remote_backpressure` TCI message.
 
 Remote Setup profile notes:
 

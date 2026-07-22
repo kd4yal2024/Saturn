@@ -136,6 +136,59 @@ fn outbound_scheduler_replaces_display_depth_one() {
 }
 
 #[test]
+fn outbound_scheduler_coalesces_control_state_and_keeps_latest() {
+    let outbound = ClientOutbound::new();
+    assert_eq!(
+        outbound.enqueue(OutboundMessage::Text("vfo:0,0,7100000;".to_string())),
+        0
+    );
+    assert_eq!(
+        outbound.enqueue(OutboundMessage::Text("vfo:0,0,7200000;".to_string())),
+        1
+    );
+    let item = outbound.next_message(true).unwrap();
+    assert!(matches!(
+        item.message,
+        OutboundMessage::Text(text) if text == "vfo:0,0,7200000;"
+    ));
+    let delta = outbound.drain_stats();
+    assert_eq!(delta.control_replaced, 1);
+}
+
+#[test]
+fn outbound_scheduler_bounds_unique_control_messages() {
+    let outbound = ClientOutbound::new();
+    for index in 0..(MAX_CONTROL_QUEUE_MESSAGES + 10) {
+        outbound.enqueue(OutboundMessage::Text(format!(
+            "test_metric_{index}:0,{index};"
+        )));
+    }
+    let mut retained = 0;
+    while outbound.next_message(true).is_some() {
+        retained += 1;
+    }
+    assert_eq!(retained, MAX_CONTROL_QUEUE_MESSAGES);
+    let delta = outbound.drain_stats();
+    assert_eq!(delta.control_dropped, 10);
+    assert_eq!(
+        delta.control_queue_high_watermark,
+        MAX_CONTROL_QUEUE_MESSAGES as u64
+    );
+}
+
+#[test]
+fn bridge_connection_slots_are_globally_bounded() {
+    let active = AtomicU64::new(0);
+    let high_watermark = AtomicU64::new(0);
+    for _ in 0..MAX_TCI_CONNECTIONS {
+        assert!(try_reserve_connection_slot(&active, &high_watermark));
+    }
+    assert!(!try_reserve_connection_slot(&active, &high_watermark));
+    assert_eq!(active.load(Ordering::Relaxed), MAX_TCI_CONNECTIONS);
+    assert_eq!(high_watermark.load(Ordering::Relaxed), MAX_TCI_CONNECTIONS);
+}
+
+#[test]
 fn outbound_scheduler_panic_drains_stale_audio() {
     let outbound = ClientOutbound::new();
     let audio = vec![0.0; max_audio_queued_frames(8_000) * 2];

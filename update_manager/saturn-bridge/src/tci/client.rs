@@ -2,7 +2,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::io;
 use std::net::{SocketAddr, TcpStream};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -124,7 +123,7 @@ pub(crate) fn handle_client(
     stream: TcpStream,
     addr: SocketAddr,
     client_id: u64,
-    command_tx: &Sender<TciCommand>,
+    command_tx: &impl TciCommandSink,
     clients: &ClientRegistry,
     operator_client_id: &Arc<AtomicU64>,
     operator_control_at: &Arc<Mutex<Option<Instant>>>,
@@ -599,7 +598,7 @@ pub(crate) fn initial_snapshot_messages(
 
 pub(crate) fn handle_incoming_message(
     message: Message,
-    command_tx: &Sender<TciCommand>,
+    command_tx: &impl TciCommandSink,
     clients: &ClientRegistry,
     operator_client_id: &Arc<AtomicU64>,
     operator_control_at: &Arc<Mutex<Option<Instant>>>,

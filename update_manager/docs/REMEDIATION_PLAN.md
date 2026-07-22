@@ -546,11 +546,11 @@ maintenance process group and records a durable `timed_out` result.
 
 ### REM-0503: Bound remote client resources
 
-- [ ] Set a documented global authenticated-client limit.
-- [ ] Preserve one controller/TX owner.
-- [ ] Bound/coalesce control and display queues.
-- [ ] Prioritize TX release and safety commands over media/display traffic.
-- [ ] Export connection, queue, drop, and high-water metrics.
+- [x] Set a documented global authenticated-client limit.
+- [x] Preserve one controller/TX owner.
+- [x] Bound/coalesce control and display queues.
+- [x] Prioritize TX release and safety commands over media/display traffic.
+- [x] Export connection, queue, drop, and high-water metrics.
 
 Initial capacity target to validate:
 
@@ -562,6 +562,24 @@ Acceptance criteria:
 
 - Excess clients are rejected cleanly.
 - Flood tests keep memory, threads, and safety-command latency within defined limits.
+
+Completed in REM-0503. Saturn Go admits at most four authenticated logical
+remote clients. A split control/media pair with the same session id consumes
+one slot and duplicate lanes are rejected; excess clients receive HTTP 429 with
+a retry hint. Saturn Bridge independently caps physical TCI sockets at eight,
+preserving the four-client split-transport target. The existing single
+operator/controller role remains authoritative.
+
+Inbound commands use fixed safety, control, and microphone queues. State
+commands coalesce, microphone retention is limited to eight newest frames, and
+TX release bypasses both queues through the safety lane. Per-client outbound
+control is capped at 256 messages/256 KiB, display remains depth one, audio
+retention remains bounded to 250 ms, and safety traffic is scheduled first.
+Authenticated connection metrics are available from `/remote_metrics`; bridge
+connection, queue, replacement/drop, latency, and high-water counters are
+exported through `/bridge_diag` and the `remote_backpressure` TCI telemetry.
+Flood tests cover hard queue/socket ceilings and verify that TX release is
+dequeued first in under 10 ms after 10,000 control/media submissions.
 
 ## Milestone 6 — Low-burden session improvements
 
@@ -691,6 +709,6 @@ Update this section as milestones complete.
 | 2 — Deployment | — | — | — | Not started |
 | 3 — Restore | — | — | — | Not started |
 | 4 — State/jobs | — | — | — | In progress (REM-0401 through REM-0403 complete) |
-| 5 — Limits | REM-0501 and REM-0502 implementation commits | Rust boundary tests; durable broker cap contract | REM-0501 appliance acceptance complete; REM-0502 pending appliance install | In progress (REM-0501 and REM-0502 complete) |
+| 5 — Limits | REM-0501 through REM-0503 implementation commits | Rust boundary/flood tests; durable broker cap contract | REM-0501 and REM-0502 appliance acceptance complete; REM-0503 pending appliance install | Complete pending REM-0503 appliance acceptance |
 | 6 — Sessions | Deferred | — | — | Deferred |
 | 7 — Reproducibility | — | — | — | Not started |

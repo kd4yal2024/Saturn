@@ -1,6 +1,5 @@
 use std::collections::BTreeSet;
 use std::sync::atomic::AtomicU64;
-use std::sync::mpsc::Sender;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -149,7 +148,7 @@ pub(crate) fn tx_codec_decode_fault_message(count: u64, limit: u64) -> String {
 #[cfg(test)]
 pub(crate) fn parse_tci_command(
     command: &str,
-    command_tx: &Sender<TciCommand>,
+    command_tx: &impl TciCommandSink,
     clients: &ClientRegistry,
     client_id: u64,
     allow_control: bool,
@@ -159,7 +158,7 @@ pub(crate) fn parse_tci_command(
 
 pub(crate) fn parse_tci_command_with_roles(
     command: &str,
-    command_tx: &Sender<TciCommand>,
+    command_tx: &impl TciCommandSink,
     clients: &ClientRegistry,
     client_id: u64,
     allow_control: bool,

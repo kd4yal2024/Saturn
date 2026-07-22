@@ -166,12 +166,25 @@ Notes:
 | `/remote_profiles/save` | `POST` | Yes | `{ "name", "settings", "makeStartup" }` | Saved profile and complete profile catalog |
 | `/remote_profiles/delete` | `POST` | Yes | `{ "name" }` | Updated profile catalog |
 | `/remote_profiles/startup` | `POST` | Yes | `{ "name": "<profile>" }` or `{ "name": null }` | Updated profile catalog; `null` clears the startup profile |
+| `/remote_metrics` | `GET` | No | none | Authenticated logical-client/connection counts, configured limit, rejection counters, and high-water marks |
 | `/bridge_diag` | `GET` | No | none | Saturn Bridge service state plus recent parsed diagnostic/status journal entries |
 | `/saturn/bridge_diag` | `GET` | No | none | Compatibility alias for `/bridge_diag` |
 | `/tci` | `GET` upgrade | No | WebSocket upgrade | Proxied TCI/WebSocket session to `saturn-bridge` |
+| `/saturn/control?session=<id>` | `GET` upgrade | No | Authenticated split-control WebSocket upgrade | Control lane for one logical remote session |
+| `/saturn/media?session=<id>` | `GET` upgrade | No | Authenticated split-media WebSocket upgrade | Media lane paired with the control lane of the same logical session |
 
 Remote settings and profiles use camelCase JSON fields. Profile names are
 limited to 64 ASCII letters, digits, spaces, hyphens, underscores, or periods.
+These routes are served by the authenticated TLS listener on port 8443. Saturn
+Remote permits four logical clients globally; matching split control/media
+lanes consume one client slot. A fifth client receives HTTP 429 and
+`Retry-After: 5`, a duplicate lane receives HTTP 409, and a split upgrade
+without a valid session id receives HTTP 400.
+
+`/bridge_diag` exposes the latest numeric bridge diagnostics under
+`bridge.latest_diag.fields`, including connection/queue limits and current
+depths, rejected connections, coalesced/replaced/dropped traffic, enqueue-to-
+write latency, and outbound/TCP high-water marks.
 
 ## Tailscale VPN
 

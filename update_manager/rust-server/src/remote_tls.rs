@@ -3,7 +3,7 @@ use std::{
     io::{Read, Write},
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
     path::{Path, PathBuf},
-    sync::{Mutex, OnceLock},
+    sync::{Arc, Mutex, OnceLock},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
@@ -22,6 +22,7 @@ use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use futures_util::{SinkExt, StreamExt};
 use hmac::{Hmac, Mac};
 use rcgen::{CertificateParams, DistinguishedName, DnType, IsCa, KeyPair, SanType};
+use serde::Serialize;
 use sha2::Sha256;
 use tokio_tungstenite::{connect_async, tungstenite::Message as TungsteniteMessage};
 use tracing::{error, info, warn};
@@ -57,12 +58,191 @@ const TARPIT_FREE_FAILURES: u32 = 2;
 const TARPIT_MAX_DELAY: Duration = Duration::from_secs(10);
 const TARPIT_FORGET_AFTER: Duration = Duration::from_secs(15 * 60);
 const TARPIT_MAX_ENTRIES: usize = 4096;
+/// Maximum number of authenticated Saturn Remote operator/viewer sessions.
+/// Split control/media sockets sharing one session id consume one client slot.
+const MAX_AUTHENTICATED_REMOTE_CLIENTS: usize = 4;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum BridgeProxyChannel {
     Legacy,
     Control,
     Media,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct RemoteClientSlot {
+    legacy: bool,
+    control: bool,
+    media: bool,
+}
+
+impl RemoteClientSlot {
+    fn has_channel(self, channel: BridgeProxyChannel) -> bool {
+        match channel {
+            BridgeProxyChannel::Legacy => self.legacy,
+            BridgeProxyChannel::Control => self.control,
+            BridgeProxyChannel::Media => self.media,
+        }
+    }
+
+    fn set_channel(&mut self, channel: BridgeProxyChannel, active: bool) {
+        match channel {
+            BridgeProxyChannel::Legacy => self.legacy = active,
+            BridgeProxyChannel::Control => self.control = active,
+            BridgeProxyChannel::Media => self.media = active,
+        }
+    }
+
+    fn is_empty(self) -> bool {
+        !self.legacy && !self.control && !self.media
+    }
+}
+
+#[derive(Debug, Default)]
+struct RemoteClientCapacityState {
+    clients: HashMap<String, RemoteClientSlot>,
+    next_legacy_id: u64,
+    active_connections: usize,
+    client_high_watermark: usize,
+    connection_high_watermark: usize,
+    rejected_capacity: u64,
+    rejected_duplicate_lane: u64,
+    rejected_invalid_session: u64,
+}
+
+#[derive(Debug)]
+struct RemoteClientCapacity {
+    limit: usize,
+    state: Mutex<RemoteClientCapacityState>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RemoteClientAdmissionError {
+    Capacity,
+    DuplicateLane,
+    InvalidSession,
+}
+
+#[derive(Debug, Serialize, PartialEq, Eq)]
+struct RemoteClientCapacitySnapshot {
+    authenticated_client_limit: usize,
+    active_clients: usize,
+    active_connections: usize,
+    client_high_watermark: usize,
+    connection_high_watermark: usize,
+    rejected_capacity: u64,
+    rejected_duplicate_lane: u64,
+    rejected_invalid_session: u64,
+}
+
+#[derive(Debug)]
+struct RemoteClientAdmission {
+    capacity: Arc<RemoteClientCapacity>,
+    key: String,
+    channel: BridgeProxyChannel,
+}
+
+impl Drop for RemoteClientAdmission {
+    fn drop(&mut self) {
+        self.capacity.release(&self.key, self.channel);
+    }
+}
+
+impl RemoteClientCapacity {
+    fn new(limit: usize) -> Arc<Self> {
+        Arc::new(Self {
+            limit: limit.max(1),
+            state: Mutex::new(RemoteClientCapacityState::default()),
+        })
+    }
+
+    fn acquire(
+        self: &Arc<Self>,
+        channel: BridgeProxyChannel,
+        split_session_id: Option<&str>,
+    ) -> Result<RemoteClientAdmission, RemoteClientAdmissionError> {
+        let mut state = self.state.lock().unwrap_or_else(|err| err.into_inner());
+        let key = match channel {
+            BridgeProxyChannel::Legacy => {
+                state.next_legacy_id = state.next_legacy_id.wrapping_add(1).max(1);
+                format!("legacy-{}", state.next_legacy_id)
+            }
+            BridgeProxyChannel::Control | BridgeProxyChannel::Media => {
+                let Some(session_id) = split_session_id.and_then(sanitize_split_session_id) else {
+                    state.rejected_invalid_session =
+                        state.rejected_invalid_session.saturating_add(1);
+                    return Err(RemoteClientAdmissionError::InvalidSession);
+                };
+                format!("split-{session_id}")
+            }
+        };
+
+        if let Some(slot) = state.clients.get(&key) {
+            if slot.has_channel(channel) {
+                state.rejected_duplicate_lane = state.rejected_duplicate_lane.saturating_add(1);
+                return Err(RemoteClientAdmissionError::DuplicateLane);
+            }
+        } else if state.clients.len() >= self.limit {
+            state.rejected_capacity = state.rejected_capacity.saturating_add(1);
+            return Err(RemoteClientAdmissionError::Capacity);
+        }
+
+        state
+            .clients
+            .entry(key.clone())
+            .or_default()
+            .set_channel(channel, true);
+        state.active_connections = state.active_connections.saturating_add(1);
+        state.client_high_watermark = state.client_high_watermark.max(state.clients.len());
+        state.connection_high_watermark = state
+            .connection_high_watermark
+            .max(state.active_connections);
+        drop(state);
+
+        Ok(RemoteClientAdmission {
+            capacity: Arc::clone(self),
+            key,
+            channel,
+        })
+    }
+
+    fn release(&self, key: &str, channel: BridgeProxyChannel) {
+        let mut state = self.state.lock().unwrap_or_else(|err| err.into_inner());
+        let mut remove = false;
+        let mut released = false;
+        if let Some(slot) = state.clients.get_mut(key) {
+            if slot.has_channel(channel) {
+                slot.set_channel(channel, false);
+                released = true;
+            }
+            remove = slot.is_empty();
+        }
+        if released {
+            state.active_connections = state.active_connections.saturating_sub(1);
+        }
+        if remove {
+            state.clients.remove(key);
+        }
+    }
+
+    fn snapshot(&self) -> RemoteClientCapacitySnapshot {
+        let state = self.state.lock().unwrap_or_else(|err| err.into_inner());
+        RemoteClientCapacitySnapshot {
+            authenticated_client_limit: self.limit,
+            active_clients: state.clients.len(),
+            active_connections: state.active_connections,
+            client_high_watermark: state.client_high_watermark,
+            connection_high_watermark: state.connection_high_watermark,
+            rejected_capacity: state.rejected_capacity,
+            rejected_duplicate_lane: state.rejected_duplicate_lane,
+            rejected_invalid_session: state.rejected_invalid_session,
+        }
+    }
+}
+
+fn remote_client_capacity() -> &'static Arc<RemoteClientCapacity> {
+    static CAPACITY: OnceLock<Arc<RemoteClientCapacity>> = OnceLock::new();
+    CAPACITY.get_or_init(|| RemoteClientCapacity::new(MAX_AUTHENTICATED_REMOTE_CLIENTS))
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -229,6 +409,7 @@ pub fn remote_tls_router(state: AppState) -> Router {
         .route("/healthz", get(healthz))
         .route("/remote_settings", get(remote_settings_get_handler))
         .route("/remote_settings", post(remote_settings_post_handler))
+        .route("/remote_metrics", get(remote_metrics_handler))
         .route("/remote_profiles", get(remote_profiles_get_handler))
         .route("/remote_profiles/save", post(remote_profiles_save_handler))
         .route(
@@ -382,9 +563,56 @@ fn remote_bridge_ws_response(
         header_value_for_log(&headers, header::ORIGIN),
     );
     let split_session_id = extract_split_session_from_uri(&uri);
+    let admission = match remote_client_capacity().acquire(channel, split_session_id.as_deref()) {
+        Ok(admission) => admission,
+        Err(error) => {
+            warn!(
+                "remote TLS {} websocket rejected by client capacity policy: {error:?} uri={uri}",
+                channel.label()
+            );
+            return remote_client_admission_rejection(error);
+        }
+    };
     ws.on_upgrade(move |socket| {
-        proxy_bridge_socket(socket, state.bridge_ws_url, channel, split_session_id)
+        proxy_bridge_socket(
+            socket,
+            state.bridge_ws_url,
+            channel,
+            split_session_id,
+            admission,
+        )
     })
+}
+
+fn remote_client_admission_rejection(error: RemoteClientAdmissionError) -> Response {
+    let (status, message) = match error {
+        RemoteClientAdmissionError::Capacity => (
+            StatusCode::TOO_MANY_REQUESTS,
+            "Saturn Remote client limit reached",
+        ),
+        RemoteClientAdmissionError::DuplicateLane => (
+            StatusCode::CONFLICT,
+            "Saturn Remote session lane is already connected",
+        ),
+        RemoteClientAdmissionError::InvalidSession => (
+            StatusCode::BAD_REQUEST,
+            "split remote websocket requires a valid session id",
+        ),
+    };
+    let mut response = (status, message).into_response();
+    if error == RemoteClientAdmissionError::Capacity {
+        response
+            .headers_mut()
+            .insert(header::RETRY_AFTER, HeaderValue::from_static("5"));
+    }
+    response
+}
+
+async fn remote_metrics_handler(headers: HeaderMap) -> Response {
+    if let Err(rejection) = check_remote_auth(&headers) {
+        return rejection;
+    }
+    Json(remote_client_capacity().snapshot()).into_response()
 }
 
 async fn remote_settings_get_handler(
@@ -945,6 +1173,7 @@ async fn proxy_bridge_socket(
     bridge_ws_url: String,
     channel: BridgeProxyChannel,
     split_session_id: Option<String>,
+    _admission: RemoteClientAdmission,
 ) {
     let (bridge, _) = match connect_async(bridge_dial_url(&bridge_ws_url, channel)).await {
         Ok(connection) => connection,
@@ -1393,6 +1622,90 @@ mod tests {
             split_proxy_lane_message(BridgeProxyChannel::Media, Some("   ")),
             None
         );
+    }
+
+    #[test]
+    fn remote_client_capacity_counts_split_lanes_as_one_client() {
+        let capacity = RemoteClientCapacity::new(2);
+        let first_control = capacity
+            .acquire(BridgeProxyChannel::Control, Some("first"))
+            .unwrap();
+        let first_media = capacity
+            .acquire(BridgeProxyChannel::Media, Some("first"))
+            .unwrap();
+        let second = capacity.acquire(BridgeProxyChannel::Legacy, None).unwrap();
+
+        assert_eq!(
+            capacity.snapshot(),
+            RemoteClientCapacitySnapshot {
+                authenticated_client_limit: 2,
+                active_clients: 2,
+                active_connections: 3,
+                client_high_watermark: 2,
+                connection_high_watermark: 3,
+                rejected_capacity: 0,
+                rejected_duplicate_lane: 0,
+                rejected_invalid_session: 0,
+            }
+        );
+        assert_eq!(
+            capacity
+                .acquire(BridgeProxyChannel::Legacy, None)
+                .unwrap_err(),
+            RemoteClientAdmissionError::Capacity
+        );
+
+        drop(second);
+        let replacement = capacity.acquire(BridgeProxyChannel::Legacy, None).unwrap();
+        let snapshot = capacity.snapshot();
+        assert_eq!(snapshot.active_clients, 2);
+        assert_eq!(snapshot.active_connections, 3);
+        assert_eq!(snapshot.rejected_capacity, 1);
+
+        drop(replacement);
+        drop(first_media);
+        drop(first_control);
+        assert_eq!(capacity.snapshot().active_clients, 0);
+    }
+
+    #[test]
+    fn remote_client_capacity_rejects_duplicate_and_invalid_split_lanes() {
+        let capacity = RemoteClientCapacity::new(4);
+        let control = capacity
+            .acquire(BridgeProxyChannel::Control, Some("session-1"))
+            .unwrap();
+        assert_eq!(
+            capacity
+                .acquire(BridgeProxyChannel::Control, Some("session-1"))
+                .unwrap_err(),
+            RemoteClientAdmissionError::DuplicateLane
+        );
+        assert_eq!(
+            capacity
+                .acquire(BridgeProxyChannel::Media, None)
+                .unwrap_err(),
+            RemoteClientAdmissionError::InvalidSession
+        );
+        let snapshot = capacity.snapshot();
+        assert_eq!(snapshot.active_clients, 1);
+        assert_eq!(snapshot.rejected_duplicate_lane, 1);
+        assert_eq!(snapshot.rejected_invalid_session, 1);
+        drop(control);
+    }
+
+    #[test]
+    fn remote_client_capacity_rejections_use_clean_http_statuses() {
+        let capacity = remote_client_admission_rejection(RemoteClientAdmissionError::Capacity);
+        assert_eq!(capacity.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(capacity.headers().get(header::RETRY_AFTER).unwrap(), "5");
+
+        let duplicate =
+            remote_client_admission_rejection(RemoteClientAdmissionError::DuplicateLane);
+        assert_eq!(duplicate.status(), StatusCode::CONFLICT);
+        assert!(duplicate.headers().get(header::RETRY_AFTER).is_none());
+
+        let invalid = remote_client_admission_rejection(RemoteClientAdmissionError::InvalidSession);
+        assert_eq!(invalid.status(), StatusCode::BAD_REQUEST);
     }
 
     #[test]

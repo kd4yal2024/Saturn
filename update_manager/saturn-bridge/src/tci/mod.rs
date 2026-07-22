@@ -2,7 +2,8 @@ use std::collections::BTreeMap;
 use std::io;
 use std::net::TcpListener;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::mpsc::{self, Receiver};
+#[cfg(test)]
+use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -13,6 +14,7 @@ use crate::sync_ext::MutexExt;
 use crate::tx_codec::TxCodecRuntimeFlags;
 
 mod client;
+mod command_queue;
 mod outbound;
 mod protocol;
 mod session_pair;
@@ -21,6 +23,7 @@ mod session_pair;
 mod tests;
 
 pub(crate) use client::*;
+pub(crate) use command_queue::*;
 pub(crate) use outbound::*;
 pub(crate) use protocol::*;
 pub(crate) use session_pair::*;
@@ -30,6 +33,10 @@ pub struct TciFrontend {
     operator_client_id: Arc<AtomicU64>,
     operator_control_at: Arc<Mutex<Option<Instant>>>,
     drop_count: Arc<AtomicU64>,
+    command_queue: TciCommandMailboxReceiver,
+    active_connections: Arc<AtomicU64>,
+    rejected_connections: Arc<AtomicU64>,
+    connection_high_watermark: Arc<AtomicU64>,
     display_rate_limited_count: AtomicU64,
     // TX media priority is derived from the bridge's authoritative
     // TX intent/armed/keyed state, not from a browser command. While active,
@@ -52,6 +59,10 @@ pub struct TciClientSnapshot {
     pub iq_stream_enabled: bool,
     pub audio_stream_enabled: bool,
     pub outbound_drops: u64,
+    pub active_connections: u64,
+    pub connection_limit: u64,
+    pub rejected_connections: u64,
+    pub connection_high_watermark: u64,
     pub safety_enqueue_to_write_p50_us: u64,
     pub safety_enqueue_to_write_p95_us: u64,
     pub safety_enqueue_to_write_p99_us: u64,
@@ -60,6 +71,8 @@ pub struct TciClientSnapshot {
     pub control_enqueue_to_write_p99_us: u64,
     pub display_replaced_per_sec: u64,
     pub display_dropped_per_sec: u64,
+    pub control_replaced_per_sec: u64,
+    pub control_dropped_per_sec: u64,
     pub audio_dropped_per_sec: u64,
     pub audio_seq_gap_count: u64,
     pub audio_panic_drain_count: u64,
@@ -69,6 +82,12 @@ pub struct TciClientSnapshot {
     pub tcp_outq_high_watermark_bytes: u64,
     pub display_rate_limited_per_sec: u64,
     pub safety_queue_depth_overflow_count: u64,
+    pub control_queue_high_watermark: u64,
+    pub command_queue_depth: u64,
+    pub command_queue_high_watermark: u64,
+    pub command_control_coalesced: u64,
+    pub command_control_dropped: u64,
+    pub command_mic_dropped: u64,
     pub split_control_clients: u64,
     pub split_media_clients: u64,
     pub split_paired_sessions: u64,
@@ -90,6 +109,25 @@ struct JoinGuard {
     handle: thread::JoinHandle<()>,
 }
 
+/// Four authenticated split clients use at most two bridge sockets each.
+pub(crate) const MAX_TCI_CONNECTIONS: u64 = 8;
+
+fn try_reserve_connection_slot(active: &AtomicU64, high_watermark: &AtomicU64) -> bool {
+    loop {
+        let current = active.load(Ordering::Acquire);
+        if current >= MAX_TCI_CONNECTIONS {
+            return false;
+        }
+        if active
+            .compare_exchange_weak(current, current + 1, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+        {
+            high_watermark.fetch_max(current + 1, Ordering::Relaxed);
+            return true;
+        }
+    }
+}
+
 impl TciFrontend {
     /// Returns the frontend plus the command stream fed by client threads.
     /// The receiver stays outside the frontend so the frontend itself is
@@ -97,16 +135,19 @@ impl TciFrontend {
     pub fn bind(
         config: &BridgeConfig,
         radio_model: Arc<Mutex<RadioModel>>,
-    ) -> io::Result<(Self, Receiver<TciCommand>)> {
+    ) -> io::Result<(Self, TciCommandMailboxReceiver)> {
         let listener = TcpListener::bind(config.tci_bind_addr)?;
         listener.set_nonblocking(true)?;
 
-        let (command_tx, command_rx) = mpsc::channel();
+        let (command_tx, command_rx) = tci_command_mailbox();
         let clients = Arc::new(Mutex::new(BTreeMap::new()));
         let next_client_id = Arc::new(AtomicU64::new(0));
         let operator_client_id = Arc::new(AtomicU64::new(0));
         let operator_control_at = Arc::new(Mutex::new(None));
         let drop_count = Arc::new(AtomicU64::new(0));
+        let active_connections = Arc::new(AtomicU64::new(0));
+        let rejected_connections = Arc::new(AtomicU64::new(0));
+        let connection_high_watermark = Arc::new(AtomicU64::new(0));
         let remote_tx_rf_enabled = config.remote_tx_rf_enabled;
         let tx_codec_runtime_flags = TxCodecRuntimeFlags {
             opus_decode_enabled: config.tx_opus_decode_enabled,
@@ -117,10 +158,25 @@ impl TciFrontend {
         let operator_client = operator_client_id.clone();
         let operator_control = operator_control_at.clone();
         let drop_counter = drop_count.clone();
+        let active_connection_counter = active_connections.clone();
+        let rejected_connection_counter = rejected_connections.clone();
+        let connection_high_water = connection_high_watermark.clone();
         let radio_model = radio_model.clone();
         let handle = thread::spawn(move || loop {
             match listener.accept() {
                 Ok((stream, addr)) => {
+                    if !try_reserve_connection_slot(
+                        &active_connection_counter,
+                        &connection_high_water,
+                    ) {
+                        rejected_connection_counter.fetch_add(1, Ordering::Relaxed);
+                        eprintln!(
+                            "saturn-bridge: rejecting TCI websocket from {addr}: connection limit {} reached",
+                            MAX_TCI_CONNECTIONS
+                        );
+                        drop(stream);
+                        continue;
+                    }
                     let client_id = next_client.fetch_add(1, Ordering::SeqCst) + 1;
                     println!(
                         "saturn-bridge: TCI websocket client {client_id} connected from {addr}"
@@ -133,6 +189,7 @@ impl TciFrontend {
                     let drop_count = drop_counter.clone();
                     let radio_model = radio_model.clone();
                     let tx_codec_runtime_flags = tx_codec_runtime_flags;
+                    let active_connections = active_connection_counter.clone();
 
                     thread::spawn(move || {
                         handle_client(
@@ -148,6 +205,7 @@ impl TciFrontend {
                             remote_tx_rf_enabled,
                             tx_codec_runtime_flags,
                         );
+                        active_connections.fetch_sub(1, Ordering::AcqRel);
                     });
                 }
                 Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
@@ -165,6 +223,10 @@ impl TciFrontend {
             operator_client_id,
             operator_control_at,
             drop_count,
+            command_queue: command_rx.clone(),
+            active_connections,
+            rejected_connections,
+            connection_high_watermark,
             display_rate_limited_count: AtomicU64::new(0),
             tx_media_priority_active: AtomicBool::new(false),
             tx_power_meter_scale: config.tx_power_meter_scale,
@@ -230,6 +292,8 @@ impl TciFrontend {
         let mut control_latencies_us = Vec::new();
         let mut display_replaced_per_sec = 0u64;
         let mut display_dropped_per_sec = 0u64;
+        let mut control_replaced_per_sec = 0u64;
+        let mut control_dropped_per_sec = 0u64;
         let mut audio_dropped_per_sec = 0u64;
         let mut audio_panic_drain_count = 0u64;
         let mut send_blocked_ms = 0u64;
@@ -237,6 +301,7 @@ impl TciFrontend {
         let mut outbound_queued_bytes = 0u64;
         let mut tcp_outq_high_watermark_bytes = 0u64;
         let mut safety_queue_depth_overflow_count = 0u64;
+        let mut control_queue_high_watermark = 0u64;
 
         for client in clients.values() {
             let delta = client.outbound.drain_stats();
@@ -245,6 +310,9 @@ impl TciFrontend {
             display_replaced_per_sec =
                 display_replaced_per_sec.saturating_add(delta.display_replaced);
             display_dropped_per_sec = display_dropped_per_sec.saturating_add(delta.display_dropped);
+            control_replaced_per_sec =
+                control_replaced_per_sec.saturating_add(delta.control_replaced);
+            control_dropped_per_sec = control_dropped_per_sec.saturating_add(delta.control_dropped);
             audio_dropped_per_sec = audio_dropped_per_sec.saturating_add(delta.audio_dropped);
             audio_panic_drain_count =
                 audio_panic_drain_count.saturating_add(delta.audio_panic_drain);
@@ -256,7 +324,11 @@ impl TciFrontend {
                 tcp_outq_high_watermark_bytes.max(delta.tcp_outq_high_watermark_bytes);
             safety_queue_depth_overflow_count =
                 safety_queue_depth_overflow_count.saturating_add(delta.safety_queue_depth_overflow);
+            control_queue_high_watermark =
+                control_queue_high_watermark.max(delta.control_queue_high_watermark);
         }
+
+        let command_queue = self.command_queue.snapshot();
 
         TciClientSnapshot {
             active: !clients.is_empty(),
@@ -267,6 +339,10 @@ impl TciFrontend {
                 .values()
                 .any(|client| client.state.audio_stream_enabled),
             outbound_drops: self.drop_count.load(Ordering::Relaxed),
+            active_connections: self.active_connections.load(Ordering::Relaxed),
+            connection_limit: MAX_TCI_CONNECTIONS,
+            rejected_connections: self.rejected_connections.load(Ordering::Relaxed),
+            connection_high_watermark: self.connection_high_watermark.load(Ordering::Relaxed),
             safety_enqueue_to_write_p50_us: percentile_us(&mut safety_latencies_us, 50),
             safety_enqueue_to_write_p95_us: percentile_us(&mut safety_latencies_us, 95),
             safety_enqueue_to_write_p99_us: percentile_us(&mut safety_latencies_us, 99),
@@ -275,6 +351,8 @@ impl TciFrontend {
             control_enqueue_to_write_p99_us: percentile_us(&mut control_latencies_us, 99),
             display_replaced_per_sec,
             display_dropped_per_sec,
+            control_replaced_per_sec,
+            control_dropped_per_sec,
             audio_dropped_per_sec,
             audio_seq_gap_count: clients
                 .values()
@@ -289,6 +367,12 @@ impl TciFrontend {
                 .display_rate_limited_count
                 .swap(0, Ordering::Relaxed),
             safety_queue_depth_overflow_count,
+            control_queue_high_watermark,
+            command_queue_depth: command_queue.total_depth as u64,
+            command_queue_high_watermark: command_queue.high_watermark as u64,
+            command_control_coalesced: command_queue.control_coalesced,
+            command_control_dropped: command_queue.control_dropped,
+            command_mic_dropped: command_queue.mic_dropped,
             split_control_clients: split_lane_client_count(&clients, SplitSocketKind::Control),
             split_media_clients: split_lane_client_count(&clients, SplitSocketKind::Media),
             split_paired_sessions: split_paired_session_count(&clients),
@@ -613,7 +697,7 @@ impl TciFrontend {
 
     pub fn publish_scheduler_telemetry(&self, snapshot: &TciClientSnapshot) {
         self.send_text(format!(
-            "remote_backpressure:0,{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{};",
+            "remote_backpressure:0,{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{};",
             snapshot.safety_enqueue_to_write_p50_us,
             snapshot.safety_enqueue_to_write_p95_us,
             snapshot.safety_enqueue_to_write_p99_us,
@@ -630,7 +714,19 @@ impl TciFrontend {
             snapshot.safety_queue_depth_overflow_count,
             snapshot.tcp_outq_high_watermark_bytes,
             snapshot.display_rate_limited_per_sec,
-            snapshot.outbound_queued_bytes
+            snapshot.outbound_queued_bytes,
+            snapshot.active_connections,
+            snapshot.connection_limit,
+            snapshot.rejected_connections,
+            snapshot.connection_high_watermark,
+            snapshot.control_replaced_per_sec,
+            snapshot.control_dropped_per_sec,
+            snapshot.control_queue_high_watermark,
+            snapshot.command_queue_depth,
+            snapshot.command_queue_high_watermark,
+            snapshot.command_control_coalesced,
+            snapshot.command_control_dropped,
+            snapshot.command_mic_dropped
         ));
     }
 
