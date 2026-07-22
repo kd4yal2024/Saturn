@@ -470,15 +470,28 @@ reconciliation and process identity checks.
 
 ### REM-0404: Graceful shutdown and cancellation
 
-- [ ] Replace direct `process::exit` with the normal shutdown signal.
-- [ ] Stop accepting new jobs before shutdown.
-- [ ] Define which jobs may finish and which must be safely cancelled.
-- [ ] Terminate the complete process group when cancellation is supported.
+- [x] Replace direct `process::exit` with the normal shutdown signal.
+- [x] Stop accepting new jobs before shutdown.
+- [x] Define which jobs may finish and which must be safely cancelled.
+- [x] Terminate the complete process group when cancellation is supported.
 
 Acceptance criteria:
 
 - Shutdown during a maintenance job never silently loses job state.
 - No unmanaged child remains after an acknowledged cancellation.
+
+Saturn Go now closes a process-wide maintenance admission gate before handling
+an API, SIGINT, or SIGTERM shutdown request. `GET /shutdown_status` reports the
+gate and active job policy. Transactional updates, restores, deploys, flashes,
+network changes, password changes, Tailscale actions, and unclassified operator
+scripts conservatively finish. Only the installed log/backup cleanup helpers
+and read-only G2 version report declare cancellation support. Cancelled script
+jobs receive SIGTERM and then SIGKILL after a bounded grace period for the
+complete REM-0403 process group, and are durably recorded as `cancelled` before
+the server exits. The generated systemd unit uses `KillMode=mixed` so SIGTERM
+reaches the controller first, with a 15-minute stop ceiling for finish-policy
+jobs. Rust tests cover policy selection, duplicate admission identity, and
+complete process-group termination.
 
 ## Milestone 5 — Resource limits without blocking appliance workflows
 

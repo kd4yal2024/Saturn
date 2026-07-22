@@ -73,6 +73,12 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
   manual whole-disk disaster recovery, and label existing repository restore
   as legacy/nontransactional. Settings and release import remain disabled for
   REM-0303; live release activation is unchanged.
+- Added REM-0404 graceful maintenance shutdown. API and signal-driven stops
+  close job admission before draining active work; transactional and unknown
+  work finishes, while explicitly cancel-safe cleanup/report scripts receive
+  process-group TERM/KILL and persist a `cancelled` terminal result. The
+  generated systemd service now signals the controller first with
+  `KillMode=mixed` and allows a bounded finish window.
 - Unified provisioning entry point (`./install.sh`) shared by manual Trixie
   installs and the cloud-init bootstrap. The appliance engine now supports
   appliance/desktop/image-factory profiles, bounded user discovery, exact-ref

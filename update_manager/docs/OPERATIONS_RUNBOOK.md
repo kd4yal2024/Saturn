@@ -136,6 +136,28 @@ the Remote UI bundle, then checks the generated deployment helper. During a
 real update, a failed service startup or bridge TCI listener check restores the
 previous service binaries.
 
+### Graceful Saturn Go shutdown
+
+Check shutdown admission without changing service state:
+
+```bash
+curl -fsS http://127.0.0.1:8080/shutdown_status | jq
+```
+
+`accepting_jobs: true` is the normal state. `POST /exit`, SIGINT, and SIGTERM
+first change it to `false`; new maintenance jobs are then rejected. Active
+transactional or unclassified jobs finish, while only explicitly cancel-safe
+cleanup/report scripts receive process-group SIGTERM and, after the configured
+grace period, SIGKILL. Their maintenance record ends in `cancelled` rather than
+being inferred as an unexplained interruption after restart.
+
+Do not use `POST /exit` as a health probe: it intentionally stops Saturn Go and
+`Restart=on-failure` does not restart a clean exit. Announce and approve any
+live service stop/restart before testing it. A normal approved
+`systemctl stop|restart saturn-go.service` follows the same controller path;
+the generated unit uses `KillMode=mixed` and `TimeoutStopSec=15min` so the main
+process can apply the declared job policy before systemd escalates.
+
 ### WDSP 2.00 / PureSignal Post-Install Check
 
 Verify the deployed bridge and UI are from the same installation:

@@ -1050,6 +1050,10 @@ User=${SERVICE_USER}
 Group=${SERVICE_GROUP}
 Restart=on-failure
 RestartSec=2
+# Transactional maintenance jobs declare a finish boundary and are allowed to
+# reach it before systemd escalates a graceful stop.
+KillMode=mixed
+TimeoutStopSec=15min
 PrivateTmp=true
 RestrictSUIDSGID=true
 LockPersonality=true

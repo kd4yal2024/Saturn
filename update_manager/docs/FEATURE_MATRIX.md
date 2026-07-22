@@ -7,7 +7,7 @@ The Saturn Remote frontend ships as `/remote-next` (rendered from `saturn-remote
 | Capability | UI | API Endpoints | Scripts / Commands | State / Files |
 |---|---|---|---|---|
 | Appliance overview and shared offline shell | `overview.html`, `templates/assets/` | `GET /`, `GET /overview`, `GET /readyz`, `GET /assets/{*path}` | Local Inter/Tailwind/Chart.js/ansi_up assets; Nginx `/saturn/` proxy | Browser theme preference |
-| Browser-managed custom script runner with live output | `index.html` (`/custom`) | `POST /run`, `GET /run_log` | `/opt/saturn-go/scripts/*` launched by backend | `custom_scripts.json`, in-memory run-log buffer |
+| Browser-managed custom script runner with live output | `index.html` (`/custom`) | `POST /run`, `GET /run_log`, `GET /maintenance_jobs` | `/opt/saturn-go/scripts/*` launched through the host lock/job broker | `custom_scripts.json`, in-memory resume buffer, durable maintenance job records/output/results |
 | Custom script catalog management (add/update/delete + upload) | `index.html` (`/custom`) | `GET/POST /custom_scripts`, `POST /custom_scripts_delete` | Optional script file write/remove in scripts dir | `custom_scripts.json`, `/opt/saturn-go/scripts` |
 | Backend-seeded default custom maintenance scripts | `index.html` (`/custom`) | `GET /custom_scripts` | `cleanup-saturn-logs.sh`, `cleanup-saturn-backups.sh` | `custom_scripts.json`, `/opt/saturn-go/scripts` |
 | Dedicated Update G2 terminal runner | `update.html` (requires valid Appliance repo URL in UI) | `POST /run`, `GET /run_log` (with `script=update-G2.py`) | `update-G2.py` | Process-local update-activity lock, in-memory run-log buffer |
@@ -42,7 +42,7 @@ The Saturn Remote frontend ships as `/remote-next` (rendered from `saturn-remote
 | Tailscale VPN enrollment, status, and Remote Serve controls | `tailscale.html` | `GET /tailscale_status`; `POST /tailscale/install`, `/tailscale/up`, `/tailscale/down`, `/tailscale/logout`, `/tailscale/serve` | Root-owned `saturn-tailscale.sh` helper via `sudo -n` | `tailscaled.service` state and Tailscale Serve configuration |
 | FPGA image discovery for flash UI | `fpga.html` | `GET /get_fpga_images` | Directory scan for `.bin` files | `SATURN_FPGA_DIR` or repo paths |
 | Legacy backup prompt response hook | `index.html` (modal) | `POST /backup_response` | No-op backend endpoint | N/A |
-| Controlled backend shutdown | `index.html` Exit button | `POST /exit` | `std::process::exit(0)` | N/A |
+| Controlled backend shutdown | `index.html` Exit button | `POST /exit`, `GET /shutdown_status` | Graceful admission close; finish-policy drain; process-group TERM/KILL for declared cancel-safe scripts | Durable cancelled job result under `maintenance-jobs/`; systemd `KillMode=mixed` and bounded stop timeout |
 
 ## Added/Expanded Areas
 

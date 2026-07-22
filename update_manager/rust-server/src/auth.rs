@@ -4,10 +4,11 @@ use axum::{
     response::{IntoResponse, Json},
 };
 use serde::Deserialize;
-use std::time::Duration;
+use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 
+use crate::shutdown_controller::{self, ShutdownPolicy};
 use crate::util::output_error_text;
 
 #[derive(Deserialize)]
@@ -58,6 +59,24 @@ pub async fn change_password(
         }));
     }
 
+    let operation_id = format!(
+        "password-change-{}",
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0)
+    );
+    let _operation_guard = match shutdown_controller::register(
+        operation_id,
+        "password-change",
+        ShutdownPolicy::Finish,
+    ) {
+        Ok(guard) => guard,
+        Err(error) => {
+            return Json(serde_json::json!({ "status": "error", "message": error }));
+        }
+    };
+
     match run_password_helper(&form.new_password).await {
         Ok(out) if out.status.success() => Json(serde_json::json!({
             "status":"success",
@@ -87,12 +106,16 @@ pub async fn exit_server(headers: HeaderMap) -> impl IntoResponse {
         .or_else(|| headers.get("x-real-ip"))
         .and_then(|v| v.to_str().ok())
         .unwrap_or("unknown");
-    tracing::warn!("exit_server called (remote: {remote}); shutting down in 200ms");
-    tokio::spawn(async {
-        tokio::time::sleep(Duration::from_millis(200)).await;
-        std::process::exit(0);
-    });
-    Json(serde_json::json!({ "status":"shutting down" }))
+    let started = shutdown_controller::request_shutdown(format!("admin API from {remote}"));
+    Json(serde_json::json!({
+        "status": "shutting_down",
+        "started": started,
+        "message": if started {
+            "Maintenance admission is closed; Saturn Go will stop after active jobs reach their declared shutdown boundary."
+        } else {
+            "Graceful shutdown is already in progress."
+        }
+    }))
 }
 
 #[derive(Deserialize)]

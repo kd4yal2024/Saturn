@@ -12,6 +12,7 @@ use tokio::process::Command;
 
 use crate::maintenance_jobs::{self, JobResult, MaintenanceJob};
 use crate::maintenance_lock::{HostLockGuard, APPLICATION_DEPLOYMENT};
+use crate::shutdown_controller::{self, ActiveOperationGuard, ShutdownPolicy};
 use crate::state::{
     AppState, DEFAULT_STAGE_WORKTREE_KEEP, DEFAULT_UPDATE_HEALTH_INITIAL_DELAY_SECS,
     DEFAULT_UPDATE_HEALTH_RETRIES, DEFAULT_UPDATE_HEALTH_TIMEOUT_SECS,
@@ -119,6 +120,7 @@ pub struct UpdateActivity {
 
 pub struct UpdateActivityGuard {
     id: String,
+    _shutdown_operation: ActiveOperationGuard,
 }
 
 impl Drop for UpdateActivityGuard {
@@ -191,6 +193,7 @@ pub fn begin_update_activity(
     kind: &str,
     detail: impl Into<String>,
 ) -> Result<UpdateActivityGuard, String> {
+    shutdown_controller::ensure_accepting_jobs()?;
     let mut guard = update_activity_slot().lock_unpoisoned();
     if let Some(active) = guard.as_ref() {
         let suffix = if active.detail.is_empty() {
@@ -208,13 +211,18 @@ pub fn begin_update_activity(
         std::process::id(),
         Local::now().format("%Y%m%d%H%M%S%3f")
     );
+    let shutdown_operation =
+        shutdown_controller::register(id.clone(), kind.to_string(), ShutdownPolicy::Finish)?;
     *guard = Some(UpdateActivity {
         id: id.clone(),
         kind: kind.to_string(),
         started_at: Local::now().to_rfc3339(),
         detail: detail.into(),
     });
-    Ok(UpdateActivityGuard { id })
+    Ok(UpdateActivityGuard {
+        id,
+        _shutdown_operation: shutdown_operation,
+    })
 }
 
 fn release_update_activity(id: &str) {

@@ -97,6 +97,11 @@ Not all utilities are directly wired into current UI buttons, but are included i
 - Matching root-owned helper copies live in `/usr/local/lib/saturn-go/scripts`
   for privileged handoff from Update G2 and the Custom Scripts page.
 - SSE streaming route (`/run`) handles stdout and stderr with low-latency buffering behavior.
+- Graceful shutdown closes script admission before draining active work.
+  `cleanup-saturn-logs.sh`, `cleanup-saturn-backups.sh`, `log_cleaner.sh`, and
+  `g2-version-info.sh` declare cancellation support and are terminated as a
+  complete process group; their durable job state becomes `cancelled`.
+  Mutating and unclassified operator scripts conservatively run to completion.
 - `/run` injects active repo-root context (`SATURN_REPO_ROOT`, `SATURN_DIR`, `SATURN_ACTIVE_REPO_ROOT`) so scripts operate on the currently selected Saturn checkout.
 - `/run` injects Saturn Go self-update policy variables and `SATURN_SATURNGO_DEPLOY_STATUS_FILE` when launching `update-saturn-go.sh`.
 - Python scripts launched by `/run` use `PYTHONDONTWRITEBYTECODE=1` and `PYTHONPYCACHEPREFIX=/var/cache/saturn-python`.

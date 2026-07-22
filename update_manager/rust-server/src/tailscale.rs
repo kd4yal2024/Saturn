@@ -1,4 +1,7 @@
-use std::{path::Path, time::Duration};
+use std::{
+    path::Path,
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
 
 use axum::{
     http::{header, HeaderValue, StatusCode},
@@ -16,6 +19,7 @@ use tokio::{
 use tokio_stream::{wrappers::UnboundedReceiverStream, StreamExt};
 
 use crate::maintenance_lock::{self, NETWORK_MAINTENANCE};
+use crate::shutdown_controller::{self, ShutdownPolicy};
 
 const HELPER_PATH: &str = "/usr/local/lib/saturn-go/scripts/saturn-tailscale.sh";
 const HOSTNAME_RE_BYTES: &[u8] = b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-";
@@ -84,6 +88,22 @@ async fn stream_helper(args: Vec<String>) -> Response {
     if let Err(error) = maintenance_lock::probe(&operation, NETWORK_MAINTENANCE).await {
         return (StatusCode::CONFLICT, error).into_response();
     }
+    let operation_id = format!(
+        "tailscale-{}-{}",
+        action,
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0)
+    );
+    let operation_guard = match shutdown_controller::register(
+        operation_id,
+        operation.clone(),
+        ShutdownPolicy::Finish,
+    ) {
+        Ok(guard) => guard,
+        Err(error) => return (StatusCode::SERVICE_UNAVAILABLE, error).into_response(),
+    };
     let (tx, rx) = mpsc::unbounded_channel::<String>();
 
     let cmd_summary: String = std::iter::once("sudo".to_string())
@@ -116,6 +136,26 @@ async fn stream_helper(args: Vec<String>) -> Response {
                 .into_response();
         }
     };
+    let Some(child_pid) = child.id() else {
+        let _ = child.start_kill();
+        let _ = tx.send("Error: maintenance helper did not report a PID".to_string());
+        let stream = UnboundedReceiverStream::new(rx)
+            .map(|line| Ok::<Event, std::convert::Infallible>(Event::default().data(line)));
+        return Sse::new(stream)
+            .keep_alive(KeepAlive::new().interval(Duration::from_secs(5)))
+            .into_response();
+    };
+    if let Err(error) = operation_guard.set_process_group(child_pid as i32) {
+        let _ = child.start_kill();
+        let _ = tx.send(format!(
+            "Error: failed to track maintenance helper: {error}"
+        ));
+        let stream = UnboundedReceiverStream::new(rx)
+            .map(|line| Ok::<Event, std::convert::Infallible>(Event::default().data(line)));
+        return Sse::new(stream)
+            .keep_alive(KeepAlive::new().interval(Duration::from_secs(5)))
+            .into_response();
+    }
 
     if let Some(stdout) = child.stdout.take() {
         let tx = tx.clone();
@@ -137,6 +177,7 @@ async fn stream_helper(args: Vec<String>) -> Response {
     }
 
     tokio::spawn(async move {
+        let _operation_guard = operation_guard;
         match child.wait().await {
             Ok(status) if status.success() => {
                 let _ = tx.send("Done".to_string());

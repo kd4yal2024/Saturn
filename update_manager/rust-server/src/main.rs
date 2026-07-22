@@ -9,6 +9,7 @@ mod pages;
 mod remote_tls;
 mod repair;
 mod restore;
+mod shutdown_controller;
 mod state;
 mod state_store;
 mod sync_ext;
@@ -399,6 +400,7 @@ async fn main() {
         .route("/run", post(run_sse))
         .route("/run_log", get(get_run_log))
         .route("/maintenance_jobs", get(get_maintenance_jobs))
+        .route("/shutdown_status", get(get_shutdown_status))
         .route("/backup_response", post(no_content))
         .route("/change_password", post(change_password))
         .route("/exit", post(exit_server))
@@ -445,9 +447,16 @@ async fn main() {
     };
 
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
+    shutdown_controller::initialize(shutdown_tx)
+        .expect("shutdown controller must be initialized exactly once");
+    let signal_shutdown_rx = shutdown_rx.clone();
     let signal_task = tokio::spawn(async move {
-        shutdown_signal().await;
-        let _ = shutdown_tx.send(true);
+        tokio::select! {
+            source = shutdown_signal() => {
+                shutdown_controller::request_shutdown(source);
+            }
+            _ = wait_for_shutdown(signal_shutdown_rx) => {}
+        }
     });
 
     info!("Saturn server listening on {addr}");
@@ -536,7 +545,7 @@ fn bind_addr_is_loopback(addr: &str) -> bool {
     host.eq_ignore_ascii_case("localhost") || host == "::1" || host.starts_with("127.")
 }
 
-async fn shutdown_signal() {
+async fn shutdown_signal() -> &'static str {
     let ctrl_c = async {
         tokio::signal::ctrl_c()
             .await
@@ -552,8 +561,14 @@ async fn shutdown_signal() {
     #[cfg(not(unix))]
     let terminate = std::future::pending::<()>();
     tokio::select! {
-        _ = ctrl_c => { info!("received SIGINT, shutting down"); }
-        _ = terminate => { info!("received SIGTERM, shutting down"); }
+        _ = ctrl_c => {
+            info!("received SIGINT, beginning graceful shutdown");
+            "SIGINT"
+        }
+        _ = terminate => {
+            info!("received SIGTERM, beginning graceful shutdown");
+            "SIGTERM"
+        }
     }
 }
 
@@ -3287,6 +3302,10 @@ async fn get_maintenance_jobs(State(state): State<AppState>) -> Response {
     }
 }
 
+async fn get_shutdown_status() -> Json<serde_json::Value> {
+    Json(shutdown_controller::status())
+}
+
 async fn run_sse(
     State(state): State<AppState>,
     multipart: Multipart,
@@ -3386,6 +3405,15 @@ async fn run_sse(
 
     let (run_id, start_line) = begin_script_run_log(&script, &flags);
     let _ = tx.send(start_line.clone());
+    let operation_guard = shutdown_controller::register(
+        run_id.clone(),
+        format!("script:{script}"),
+        shutdown_controller::script_policy(&script),
+    )
+    .map_err(|error| {
+        finish_script_run_log(&script, &run_id, "error");
+        json_error(StatusCode::SERVICE_UNAVAILABLE, &error)
+    })?;
 
     let state_dir = state
         .update_state_file
@@ -3481,6 +3509,8 @@ async fn run_sse(
     let child_pid = child.id().unwrap_or(0);
     let identity_error = if child_pid == 0 {
         Some("maintenance child did not report a PID".to_string())
+    } else if let Err(error) = operation_guard.set_process_group(child_pid as i32) {
+        Some(error)
     } else {
         maintenance_jobs::mark_running(&state_dir, &mut durable_job, child_pid)
             .await
@@ -3534,62 +3564,69 @@ async fn run_sse(
     let run_id_wait = run_id.clone();
     tokio::spawn(async move {
         let _update_activity_guard = update_activity_guard;
-        match child.wait().await {
-            Ok(status) if status.success() => {
-                let line = "Done".to_string();
-                let _ = tx.send(line.clone());
-                append_script_run_log_line(&script_wait, &run_id_wait, line.clone());
-                finish_script_run_log(&script_wait, &run_id_wait, "done");
-                let _ = maintenance_jobs::append_output_line(&durable_output, &line).await;
-                let _ = maintenance_jobs::finish(
-                    &state_dir,
-                    &mut durable_job,
+        let _operation_guard = operation_guard;
+        let terminal = child.wait().await;
+        let cancelled = shutdown_controller::cancel_requested(&run_id_wait);
+        let (line, run_status, durable_status, result) = if cancelled {
+            let exit_code = terminal.as_ref().ok().and_then(|status| status.code());
+            (
+                "Cancelled by graceful shutdown".to_string(),
+                "cancelled",
+                "cancelled",
+                maintenance_jobs::JobResult {
+                    outcome: "cancelled".to_string(),
+                    message:
+                        "cancel-safe maintenance script was terminated during graceful shutdown"
+                            .to_string(),
+                    exit_code,
+                },
+            )
+        } else {
+            match terminal {
+                Ok(status) if status.success() => (
+                    "Done".to_string(),
+                    "done",
                     "completed",
                     maintenance_jobs::JobResult {
                         outcome: "success".to_string(),
                         message: "maintenance script completed".to_string(),
                         exit_code: status.code(),
                     },
-                )
-                .await;
+                ),
+                Ok(status) => {
+                    let line = format!("Error: {status}");
+                    (
+                        line.clone(),
+                        "error",
+                        "failed",
+                        maintenance_jobs::JobResult {
+                            outcome: "failure".to_string(),
+                            message: line,
+                            exit_code: status.code(),
+                        },
+                    )
+                }
+                Err(error) => {
+                    let line = format!("Error: {error}");
+                    (
+                        line.clone(),
+                        "error",
+                        "failed",
+                        maintenance_jobs::JobResult {
+                            outcome: "failure".to_string(),
+                            message: line,
+                            exit_code: None,
+                        },
+                    )
+                }
             }
-            Ok(status) => {
-                let line = format!("Error: {status}");
-                let _ = tx.send(line.clone());
-                append_script_run_log_line(&script_wait, &run_id_wait, line.clone());
-                finish_script_run_log(&script_wait, &run_id_wait, "error");
-                let _ = maintenance_jobs::append_output_line(&durable_output, &line).await;
-                let _ = maintenance_jobs::finish(
-                    &state_dir,
-                    &mut durable_job,
-                    "failed",
-                    maintenance_jobs::JobResult {
-                        outcome: "failure".to_string(),
-                        message: line,
-                        exit_code: status.code(),
-                    },
-                )
-                .await;
-            }
-            Err(e) => {
-                let line = format!("Error: {e}");
-                let _ = tx.send(line.clone());
-                append_script_run_log_line(&script_wait, &run_id_wait, line.clone());
-                finish_script_run_log(&script_wait, &run_id_wait, "error");
-                let _ = maintenance_jobs::append_output_line(&durable_output, &line).await;
-                let _ = maintenance_jobs::finish(
-                    &state_dir,
-                    &mut durable_job,
-                    "failed",
-                    maintenance_jobs::JobResult {
-                        outcome: "failure".to_string(),
-                        message: line,
-                        exit_code: None,
-                    },
-                )
-                .await;
-            }
-        }
+        };
+        let _ = tx.send(line.clone());
+        append_script_run_log_line(&script_wait, &run_id_wait, line.clone());
+        finish_script_run_log(&script_wait, &run_id_wait, run_status);
+        let _ = maintenance_jobs::append_output_line(&durable_output, &line).await;
+        let _ =
+            maintenance_jobs::finish(&state_dir, &mut durable_job, durable_status, result).await;
     });
 
     let stream = UnboundedReceiverStream::new(rx)
