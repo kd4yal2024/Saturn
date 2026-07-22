@@ -44,9 +44,9 @@ SATURN_MAINTENANCE_TMPFILES="/etc/tmpfiles.d/saturn-maintenance.conf"
 SATURN_RELEASE_COMPONENTS_NAME="components-v1.json"
 
 SATURN_ADDR="${SATURN_ADDR:-127.0.0.1:8080}"
-SATURN_MAX_BODY_BYTES="${SATURN_MAX_BODY_BYTES:-2147483648}"
 SATURN_RESTORE_MAX_UPLOAD_BYTES="${SATURN_RESTORE_MAX_UPLOAD_BYTES:-2147483648}"
-SATURN_NGINX_CLIENT_MAX_BODY_SIZE="${SATURN_NGINX_CLIENT_MAX_BODY_SIZE:-2G}"
+SATURN_NGINX_CLIENT_MAX_BODY_SIZE="${SATURN_NGINX_CLIENT_MAX_BODY_SIZE:-64k}"
+SATURN_NGINX_RESTORE_MAX_BODY_SIZE="${SATURN_NGINX_RESTORE_MAX_BODY_SIZE:-2147549184}"
 SATURN_STATE_DIR="${SATURN_STATE_DIR:-/var/lib/saturn-state}"
 SATURN_REPO_ROOT_FILE="${SATURN_REPO_ROOT_FILE:-${SATURN_STATE_DIR}/repo_root.txt}"
 SATURN_UPDATE_POLICY_FILE="${SATURN_UPDATE_POLICY_FILE:-${SATURN_STATE_DIR}/update_policy.json}"
@@ -917,6 +917,23 @@ server {
     add_header Cache-Control "no-cache";
   }
 
+  location ~ ^/saturn/(restore_settings|restore_source|restore_full)$ {
+    auth_basic "Restricted";
+    auth_basic_user_file ${BASIC_AUTH_FILE};
+    client_max_body_size ${SATURN_NGINX_RESTORE_MAX_BODY_SIZE};
+
+    include /etc/nginx/proxy_params;
+    rewrite ^/saturn/(.*)$ /\$1 break;
+    proxy_pass http://${SATURN_ADDR};
+
+    proxy_http_version 1.1;
+    proxy_set_header Connection "";
+    proxy_read_timeout 1d;
+    proxy_send_timeout 1d;
+    proxy_buffering off;
+    proxy_request_buffering off;
+  }
+
   location /saturn/ {
     auth_basic "Restricted";
     auth_basic_user_file ${BASIC_AUTH_FILE};
@@ -1037,7 +1054,6 @@ Environment=SATURN_SATURNGO_DEPLOY_STATUS_FILE=${SATURN_SATURNGO_DEPLOY_STATUS_F
 Environment=SATURN_UPDATE_STATE_FILE=${SATURN_UPDATE_STATE_FILE}
 Environment=SATURN_SNAPSHOT_DIR=${SATURN_SNAPSHOT_DIR}
 Environment=SATURN_STAGING_DIR=${SATURN_STAGING_DIR}
-Environment=SATURN_MAX_BODY_BYTES=${SATURN_MAX_BODY_BYTES}
 Environment=SATURN_RESTORE_MAX_UPLOAD_BYTES=${SATURN_RESTORE_MAX_UPLOAD_BYTES}
 Environment=SATURN_RESTORE_TRANSACTION_TOOL=${PRIVILEGED_SCRIPTS_DIR}/${SATURN_RESTORE_TRANSACTION_TOOL_NAME}
 Environment=SATURN_MAINTENANCE_LOCK_TOOL=${PRIVILEGED_SCRIPTS_DIR}/${SATURN_MAINTENANCE_LOCK_TOOL_NAME}

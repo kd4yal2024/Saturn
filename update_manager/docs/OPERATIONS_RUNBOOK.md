@@ -618,7 +618,10 @@ Important:
 - immutable-release archive import/activation remains a separate local
   release-manager operation
 - none of these source-repository restores reconstructs an appliance
-- upload size is limited by `SATURN_RESTORE_MAX_UPLOAD_BYTES`
+- upload size is limited by `SATURN_RESTORE_MAX_UPLOAD_BYTES`; nginx and the
+  backend stream these routes without buffering the complete request body
+- uploads and extraction preserve `SATURN_READY_MIN_FREE_BYTES` (512 MiB by
+  default); failure to determine free capacity fails the restore closed
 - non-dry-run full restore acquires the shared update lock; concurrent update actions return `409 Conflict`
 
 ### Manual Whole-Disk Imaging
@@ -939,9 +942,10 @@ Service environment commonly used in deployment:
 - `SATURN_CUSTOM_SCRIPTS_FILE` (default `$SATURN_STATE_DIR/custom_scripts.json`)
 - `SATURN_PIHPSDR_ROOT` (default `$HOME/github/pihpsdr`)
 - `SATURN_FPGA_DIR` (optional override for FPGA image scan path)
-- `SATURN_MAX_BODY_BYTES` (default `2147483648`)
 - `SATURN_RESTORE_MAX_UPLOAD_BYTES` (default `2147483648`)
-- `SATURN_NGINX_CLIENT_MAX_BODY_SIZE` (installer default `2G`)
+- `SATURN_NGINX_CLIENT_MAX_BODY_SIZE` (installer default `64k`; ordinary routes)
+- `SATURN_NGINX_RESTORE_MAX_BODY_SIZE` (installer default `2147549184`, the
+  2 GiB restore payload plus 64 KiB multipart framing; restore routes only)
 - `SATURN_WATCHDOG_URL` (default `http://$SATURN_ADDR/livez`)
 - `SATURN_WATCHDOG_INTERVAL` (default `30s`)
 

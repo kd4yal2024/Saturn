@@ -10,6 +10,11 @@ In production, NGINX exposes the backend under `/saturn/`.
 
 Direct backend routes are shown below without the `/saturn` prefix.
 
+Ordinary JSON/configuration requests and custom-script multipart arguments are
+limited to 64 KiB at both the reverse proxy and backend. Restore archive routes
+have a separate configurable streaming allowance; oversized requests receive
+HTTP 413 before route processing.
+
 ## CSRF Requirements
 
 All `POST` endpoints require header:
@@ -252,7 +257,8 @@ Source-restore safety checks:
 - symlink targets may not be absolute or contain `..`
 - the backend rejects archives whose uncompressed size exceeds the configured
   expansion-ratio guard
-- the backend rejects archives that would exceed current `/tmp` free space
+- the backend rejects uploads or extracted archives that would consume the
+  configured readiness disk reserve
 - tar path traversal guard (reject absolute and `..` paths)
 - must extract to a single top-level directory
 - extracted top-level directory must pass Saturn repo-root validation (`.git` + `update_manager/`)

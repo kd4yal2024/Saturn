@@ -14,7 +14,7 @@ use std::{
 use tokio::{io::AsyncWriteExt, process::Command};
 
 use crate::maintenance_lock::{self, READ_ONLY_MAINTENANCE, REPOSITORY_RESTORE};
-use crate::state::{AppState, MAX_TAR_EXPANSION_FACTOR};
+use crate::state::{AppState, DEFAULT_READY_MIN_FREE_BYTES, MAX_TAR_EXPANSION_FACTOR};
 use crate::state_store::{write_atomic, AtomicWriteOptions};
 use crate::update::begin_update_activity;
 use crate::util::{
@@ -134,22 +134,107 @@ async fn available_bytes_at(path: &Path) -> Option<u64> {
         .ok()
 }
 
+fn restore_disk_reserve_bytes() -> Result<u64, String> {
+    match std::env::var("SATURN_READY_MIN_FREE_BYTES") {
+        Ok(value) => value
+            .parse::<u64>()
+            .map_err(|_| "SATURN_READY_MIN_FREE_BYTES must be an unsigned byte count".to_string()),
+        Err(std::env::VarError::NotPresent) => Ok(DEFAULT_READY_MIN_FREE_BYTES),
+        Err(error) => Err(format!("cannot read SATURN_READY_MIN_FREE_BYTES: {error}")),
+    }
+}
+
 async fn receive_archive(
     state: &AppState,
-    mut multipart: Multipart,
+    multipart: Multipart,
 ) -> Result<(PathBuf, u64, Option<String>), Response> {
+    let reserve_bytes = restore_disk_reserve_bytes()
+        .map_err(|error| json_error(StatusCode::INTERNAL_SERVER_ERROR, &error))?;
+    receive_archive_with_reserve(state, multipart, reserve_bytes).await
+}
+
+async fn receive_archive_with_reserve(
+    state: &AppState,
+    mut multipart: Multipart,
+    reserve_bytes: u64,
+) -> Result<(PathBuf, u64, Option<String>), Response> {
+    let temp_root = std::env::temp_dir();
+    let available_bytes = available_bytes_at(&temp_root).await.ok_or_else(|| {
+        json_error(
+            StatusCode::INSUFFICIENT_STORAGE,
+            "cannot determine temporary disk capacity for restore upload",
+        )
+    })?;
+    let upload_disk_budget = available_bytes.checked_sub(reserve_bytes).ok_or_else(|| {
+        json_error(
+            StatusCode::INSUFFICIENT_STORAGE,
+            "insufficient temporary space while preserving the readiness reserve",
+        )
+    })?;
     let mut upload_path = None;
     let mut upload_bytes = 0u64;
     let mut confirm = None;
 
-    while let Ok(Some(field)) = multipart.next_field().await {
+    loop {
+        let field = match multipart.next_field().await {
+            Ok(Some(field)) => field,
+            Ok(None) => break,
+            Err(error) => {
+                if let Some(path) = upload_path.as_ref() {
+                    let _ = tokio::fs::remove_file(path).await;
+                }
+                return Err(error.into_response());
+            }
+        };
         let name = field.name().unwrap_or_default().to_string();
         if name == "confirm" {
-            confirm = Some(field.text().await.unwrap_or_default().trim().to_string());
+            let mut field = field;
+            let mut value = Vec::new();
+            loop {
+                let chunk = match field.chunk().await {
+                    Ok(Some(chunk)) => chunk,
+                    Ok(None) => break,
+                    Err(error) => {
+                        if let Some(path) = upload_path.as_ref() {
+                            let _ = tokio::fs::remove_file(path).await;
+                        }
+                        return Err(error.into_response());
+                    }
+                };
+                if value.len().saturating_add(chunk.len()) > 64 {
+                    if let Some(path) = upload_path.as_ref() {
+                        let _ = tokio::fs::remove_file(path).await;
+                    }
+                    return Err(json_error(
+                        StatusCode::PAYLOAD_TOO_LARGE,
+                        "restore confirmation value is too large",
+                    ));
+                }
+                value.extend_from_slice(&chunk);
+            }
+            let value = match String::from_utf8(value) {
+                Ok(value) => value,
+                Err(_) => {
+                    if let Some(path) = upload_path.as_ref() {
+                        let _ = tokio::fs::remove_file(path).await;
+                    }
+                    return Err(json_error(
+                        StatusCode::BAD_REQUEST,
+                        "restore confirmation must be valid UTF-8",
+                    ));
+                }
+            };
+            confirm = Some(value.trim().to_string());
             continue;
         }
         if name != "file" {
-            continue;
+            if let Some(path) = upload_path.as_ref() {
+                let _ = tokio::fs::remove_file(path).await;
+            }
+            return Err(json_error(
+                StatusCode::BAD_REQUEST,
+                "unexpected restore multipart field",
+            ));
         }
         if let Some(existing) = upload_path.as_ref() {
             let _ = tokio::fs::remove_file(existing).await;
@@ -161,7 +246,15 @@ async fn receive_archive(
         let (path, mut file) = create_secure_temp_upload_file()
             .map_err(|error| json_error(StatusCode::INTERNAL_SERVER_ERROR, &error.to_string()))?;
         let mut field = field;
-        while let Ok(Some(chunk)) = field.chunk().await {
+        loop {
+            let chunk = match field.chunk().await {
+                Ok(Some(chunk)) => chunk,
+                Ok(None) => break,
+                Err(error) => {
+                    let _ = tokio::fs::remove_file(&path).await;
+                    return Err(error.into_response());
+                }
+            };
             upload_bytes = upload_bytes.saturating_add(chunk.len() as u64);
             if upload_bytes > state.restore_max_upload_bytes {
                 let _ = tokio::fs::remove_file(&path).await;
@@ -171,6 +264,13 @@ async fn receive_archive(
                         "archive too large (limit {} MB)",
                         state.restore_max_upload_bytes / 1024 / 1024
                     ),
+                ));
+            }
+            if upload_bytes > upload_disk_budget {
+                let _ = tokio::fs::remove_file(&path).await;
+                return Err(json_error(
+                    StatusCode::INSUFFICIENT_STORAGE,
+                    "restore upload would consume the readiness disk reserve",
                 ));
             }
             if let Err(error) = file.write_all(&chunk).await {
@@ -249,13 +349,19 @@ async fn validate_and_extract_archive(
         ));
     }
     let temp_root = std::env::temp_dir();
-    if let Some(available) = available_bytes_at(&temp_root).await {
-        if uncompressed_bytes > available {
-            return Err(json_error(
-                StatusCode::INSUFFICIENT_STORAGE,
-                "insufficient temporary space to extract the restore archive",
-            ));
-        }
+    let reserve_bytes = restore_disk_reserve_bytes()
+        .map_err(|error| json_error(StatusCode::INTERNAL_SERVER_ERROR, &error))?;
+    let available = available_bytes_at(&temp_root).await.ok_or_else(|| {
+        json_error(
+            StatusCode::INSUFFICIENT_STORAGE,
+            "cannot determine temporary disk capacity for restore extraction",
+        )
+    })?;
+    if uncompressed_bytes.saturating_add(reserve_bytes) > available {
+        return Err(json_error(
+            StatusCode::INSUFFICIENT_STORAGE,
+            "insufficient temporary space to extract while preserving the readiness reserve",
+        ));
     }
 
     let extract_dir = create_secure_temp_extract_dir()
@@ -577,4 +683,86 @@ pub async fn recover_restore_transactions(state_root: &Path) -> Result<Value, St
 pub async fn persist_repo_root_atomic(path: &Path, repo_root: &Path) -> Result<(), String> {
     let content = format!("{}\n", repo_root.display()).into_bytes();
     write_atomic(path, content, AtomicWriteOptions::state_file()).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::receive_archive_with_reserve;
+    use crate::state::AppState;
+    use axum::{
+        body::{Body, Bytes},
+        extract::{FromRequest, Multipart},
+        http::Request,
+    };
+    use futures_util::stream;
+    use std::{
+        convert::Infallible,
+        path::PathBuf,
+        sync::{Arc, RwLock},
+    };
+
+    fn test_state() -> AppState {
+        let root = PathBuf::from("/tmp/saturn-restore-stream-test-state");
+        AppState {
+            webroot: root.clone(),
+            config_path: root.join("config.json"),
+            custom_scripts_file: root.join("custom_scripts.json"),
+            remote_settings_file: root.join("remote_settings.json"),
+            remote_profiles_file: root.join("remote_profiles.json"),
+            scripts_dir: root.join("scripts"),
+            saturn_addr: "127.0.0.1:8080".to_string(),
+            bridge_ws_url: "ws://127.0.0.1:50001".to_string(),
+            repo_root: Arc::new(RwLock::new(root.clone())),
+            repo_root_file: root.join("repo_root.txt"),
+            update_policy_file: root.join("update_policy.json"),
+            saturngo_update_policy_file: root.join("saturngo_update_policy.json"),
+            saturngo_deploy_status_file: root.join("saturngo_deploy_status.json"),
+            update_state_file: root.join("update_state.json"),
+            snapshot_dir: root.join("snapshots"),
+            staging_dir: root.join("staging"),
+            restore_max_upload_bytes: 512 * 1024,
+        }
+    }
+
+    #[tokio::test]
+    async fn restore_upload_is_received_from_a_chunked_stream() {
+        const BOUNDARY: &str = "saturn-rem-0501-boundary";
+        const DATA_CHUNKS: usize = 96;
+        const DATA_CHUNK_BYTES: usize = 1024;
+
+        let mut chunks = Vec::with_capacity(DATA_CHUNKS + 2);
+        chunks.push(Bytes::from(format!(
+            "--{BOUNDARY}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"settings.tar.gz\"\r\nContent-Type: application/gzip\r\n\r\n"
+        )));
+        let data = Bytes::from(vec![b'a'; DATA_CHUNK_BYTES]);
+        for _ in 0..DATA_CHUNKS {
+            chunks.push(data.clone());
+        }
+        chunks.push(Bytes::from(format!("\r\n--{BOUNDARY}--\r\n")));
+        let body = Body::from_stream(stream::iter(
+            chunks.into_iter().map(Ok::<Bytes, Infallible>),
+        ));
+        let request = Request::builder()
+            .method("POST")
+            .uri("/restore_settings")
+            .header(
+                "content-type",
+                format!("multipart/form-data; boundary={BOUNDARY}"),
+            )
+            .body(body)
+            .unwrap();
+        let multipart = Multipart::from_request(request, &()).await.unwrap();
+
+        let (upload_path, upload_bytes, confirm) =
+            receive_archive_with_reserve(&test_state(), multipart, 0)
+                .await
+                .unwrap();
+        assert_eq!(upload_bytes, (DATA_CHUNKS * DATA_CHUNK_BYTES) as u64);
+        assert_eq!(confirm, None);
+        assert_eq!(
+            tokio::fs::metadata(&upload_path).await.unwrap().len(),
+            upload_bytes
+        );
+        tokio::fs::remove_file(upload_path).await.unwrap();
+    }
 }

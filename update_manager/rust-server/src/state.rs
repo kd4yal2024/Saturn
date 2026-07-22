@@ -3,8 +3,11 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 
-pub const DEFAULT_MAX_BODY_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+pub const JSON_REQUEST_MAX_BYTES: usize = 64 * 1024;
+pub const CUSTOM_SCRIPT_REQUEST_MAX_BYTES: usize = 64 * 1024;
+pub const RESTORE_MULTIPART_OVERHEAD_BYTES: u64 = 64 * 1024;
 pub const DEFAULT_RESTORE_MAX_UPLOAD_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+pub const DEFAULT_READY_MIN_FREE_BYTES: u64 = 512 * 1024 * 1024;
 pub const DEFAULT_UPDATE_HEALTH_TIMEOUT_SECS: u64 = 8;
 pub const DEFAULT_UPDATE_HEALTH_RETRIES: u32 = 2;
 pub const DEFAULT_UPDATE_HEALTH_INITIAL_DELAY_SECS: u64 = 0;

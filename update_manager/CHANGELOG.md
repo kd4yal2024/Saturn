@@ -3,6 +3,12 @@
 All notable changes to the Saturn Update Manager (Rust) are documented here.
 
 ## [Unreleased]
+### Changed
+- Replaced the global 2 GiB request allowance with 64 KiB ordinary and
+  custom-script limits plus a separate configurable, streamed restore limit.
+  Restore upload/extraction now preserves the readiness disk reserve, and
+  oversized ordinary requests fail early with HTTP 413.
+
 ### Fixed
 - Provisioning and direct udev/P2 installers now add the configured desktop
   operator to `saturn-radio`. This preserves group-restricted XDMA device
@@ -424,7 +430,8 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
 - Re-aligned uninstall script to remove the exact artifacts created by current install flow (service, NGINX site, SSE map, optional auth/runtime purge).
 - Uninstall now defaults to keeping runtime directories/custom state; use `--purge` for full cleanup.
 - Installer script sync now preserves browser-managed custom scripts and only updates packaged scripts when source files are newer.
-- Request body handling now uses explicit limits (`SATURN_MAX_BODY_BYTES`, `SATURN_RESTORE_MAX_UPLOAD_BYTES`) instead of unlimited bodies.
+- Request body handling gained explicit global and restore upload limits;
+  REM-0501 later replaced the overly broad global allowance with route-specific limits.
 - Main, backup, and monitor web UIs now attach `X-Saturn-CSRF: 1` to all mutating API calls.
 - `run` SSE path now streams with lower latency: line-buffered subprocess invocation (`stdbuf` when available), `\r` + `\n` boundary handling, and no-cache/anti-buffer response headers.
 - NGINX `/saturn/run` now disables request buffering and adds explicit no-cache header to reduce end-to-end stream latency.

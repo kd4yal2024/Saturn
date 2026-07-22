@@ -39,12 +39,14 @@ use crate::restore::{
 use crate::state::{
     AppState, CfgEntry, DefaultCustomScript, FlagsQuery, RemoteProfileDeleteRequest,
     RemoteProfileSaveRequest, RemoteProfileStartupRequest, RemoteProfilesFile, RemoteSettings,
-    RunLogQuery, DEFAULT_CUSTOM_SCRIPT_CLEAN_BACKUPS, DEFAULT_CUSTOM_SCRIPT_CLEAN_LOGS,
-    DEFAULT_CUSTOM_SCRIPT_FIX_LED_POWER_BUTTON, DEFAULT_CUSTOM_SCRIPT_SETUP_ETH_FALLBACK,
-    DEFAULT_MAX_BODY_BYTES, DEFAULT_RESTORE_MAX_UPLOAD_BYTES, MAX_CUSTOM_SCRIPTS,
-    MAX_CUSTOM_SCRIPTS_FILE_BYTES, MAX_REMOTE_PROFILES_FILE_BYTES, MAX_REMOTE_SETTINGS_FILE_BYTES,
+    RunLogQuery, CUSTOM_SCRIPT_REQUEST_MAX_BYTES, DEFAULT_CUSTOM_SCRIPT_CLEAN_BACKUPS,
+    DEFAULT_CUSTOM_SCRIPT_CLEAN_LOGS, DEFAULT_CUSTOM_SCRIPT_FIX_LED_POWER_BUTTON,
+    DEFAULT_CUSTOM_SCRIPT_SETUP_ETH_FALLBACK, DEFAULT_RESTORE_MAX_UPLOAD_BYTES,
+    JSON_REQUEST_MAX_BYTES, MAX_CUSTOM_SCRIPTS, MAX_CUSTOM_SCRIPTS_FILE_BYTES,
+    MAX_REMOTE_PROFILES_FILE_BYTES, MAX_REMOTE_SETTINGS_FILE_BYTES,
     P23_ADC_PEAK_TELEMETRY_ENABLE_FILE, P23_ADC_PEAK_TELEMETRY_JSON_FILE,
-    P23_APP_PERF_TELEMETRY_JSON_FILE, RUN_LOG_FETCH_MAX_LINES, RUN_LOG_MAX_LINES,
+    P23_APP_PERF_TELEMETRY_JSON_FILE, RESTORE_MULTIPART_OVERHEAD_BYTES, RUN_LOG_FETCH_MAX_LINES,
+    RUN_LOG_MAX_LINES,
 };
 use crate::state_store::{write_atomic, write_json_atomic, AtomicWriteOptions};
 use crate::sync_ext::MutexExt;
@@ -92,6 +94,7 @@ use tokio::{
     sync::{mpsc, watch},
 };
 use tokio_stream::{wrappers::UnboundedReceiverStream, StreamExt};
+use tower_http::limit::RequestBodyLimitLayer;
 use tracing::{error, info, warn};
 
 #[derive(Debug, Deserialize)]
@@ -156,14 +159,22 @@ async fn main() {
     let staging_dir = std::env::var("SATURN_STAGING_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|_| PathBuf::from(format!("{default_state_dir}/repo-staging")));
-    let restore_max_upload_bytes = std::env::var("SATURN_RESTORE_MAX_UPLOAD_BYTES")
-        .ok()
-        .and_then(|v| v.parse::<u64>().ok())
-        .unwrap_or(DEFAULT_RESTORE_MAX_UPLOAD_BYTES);
-    let max_body_bytes = std::env::var("SATURN_MAX_BODY_BYTES")
-        .ok()
-        .and_then(|v| v.parse::<u64>().ok())
-        .unwrap_or(DEFAULT_MAX_BODY_BYTES)
+    let restore_max_upload_bytes = match std::env::var("SATURN_RESTORE_MAX_UPLOAD_BYTES") {
+        Ok(value) => match value.parse::<u64>() {
+            Ok(value) if value > 0 => value,
+            _ => {
+                error!("SATURN_RESTORE_MAX_UPLOAD_BYTES must be a positive byte count");
+                std::process::exit(1);
+            }
+        },
+        Err(std::env::VarError::NotPresent) => DEFAULT_RESTORE_MAX_UPLOAD_BYTES,
+        Err(error) => {
+            error!("cannot read SATURN_RESTORE_MAX_UPLOAD_BYTES: {error}");
+            std::process::exit(1);
+        }
+    };
+    let restore_request_max_bytes = restore_max_upload_bytes
+        .saturating_add(RESTORE_MULTIPART_OVERHEAD_BYTES)
         .min(usize::MAX as u64) as usize;
     let bridge_ws_url = std::env::var("SATURN_REMOTE_BRIDGE_WS")
         .unwrap_or_else(|_| "ws://127.0.0.1:50001".to_string());
@@ -297,123 +308,7 @@ async fn main() {
         error!("failed to initialize Saturn Go update policy: {e}");
     }
 
-    let app = Router::new()
-        .route("/assets/{*path}", get(asset_handler))
-        .route("/", get(root_handler))
-        .route("/overview", get(overview_handler))
-        .route("/overview.html", get(overview_handler))
-        .route("/custom", get(custom_handler))
-        .route("/custom.html", get(custom_handler))
-        .route("/index", get(custom_handler))
-        .route("/index.html", get(custom_handler))
-        .route("/backup", get(backup_handler))
-        .route("/backup.html", get(backup_handler))
-        .route("/update", get(update_handler))
-        .route("/update.html", get(update_handler))
-        .route("/saturngo", get(saturngo_handler))
-        .route("/saturngo.html", get(saturngo_handler))
-        .route("/saturn-go", get(saturngo_handler))
-        .route("/saturn-go.html", get(saturngo_handler))
-        .route("/p23test", get(p23test_handler))
-        .route("/p23test.html", get(p23test_handler))
-        .route("/telemetry", get(p23test_handler))
-        .route("/telemetry.html", get(p23test_handler))
-        .route("/fpga", get(fpga_handler))
-        .route("/fpga.html", get(fpga_handler))
-        .route("/pihpsdr", get(pihpsdr_handler))
-        .route("/pihpsdr.html", get(pihpsdr_handler))
-        .route("/deskhpsdr", get(deskhpsdr_handler))
-        .route("/deskhpsdr.html", get(deskhpsdr_handler))
-        .route("/remote", get(remote_next_handler))
-        .route("/remote.html", get(remote_next_handler))
-        .route("/remote-next", get(remote_next_handler))
-        .route("/remote-next.html", get(remote_next_handler))
-        .route("/saturn-remote", get(remote_next_handler))
-        .route("/saturn-remote.html", get(remote_next_handler))
-        .route("/tci", get(remote_bridge_ws_handler))
-        .route("/monitor", get(monitor_handler))
-        .route("/monitor.html", get(monitor_handler))
-        .route("/livez", get(livez))
-        .route("/readyz", get(readyz))
-        .route("/healthz", get(healthz))
-        .route("/get_versions", get(get_versions))
-        .route("/get_scripts", get(get_scripts))
-        .route("/get_flags", get(get_flags))
-        .route("/custom_scripts", get(get_custom_scripts))
-        .route("/custom_scripts", post(upsert_custom_script))
-        .route("/custom_scripts_delete", post(delete_custom_script))
-        .route("/remote_settings", get(get_remote_settings))
-        .route("/remote_settings", post(set_remote_settings))
-        .route("/remote_profiles", get(get_remote_profiles))
-        .route("/remote_profiles/save", post(save_remote_profile))
-        .route("/remote_profiles/delete", post(delete_remote_profile))
-        .route("/remote_profiles/startup", post(set_remote_profile_startup))
-        .route("/get_fpga_images", get(get_fpga_images))
-        .route("/get_repo_root", get(get_repo_root))
-        .route("/list_repo_roots", get(list_repo_roots))
-        .route("/set_repo_root", post(set_repo_root))
-        .route("/update_policy", get(get_update_policy))
-        .route("/update_policy", post(set_update_policy))
-        .route("/saturngo_policy", get(get_saturngo_policy))
-        .route("/saturngo_policy", post(set_saturngo_policy))
-        .route("/saturngo_deploy_status", get(get_saturngo_deploy_status))
-        .route("/tailscale", get(tailscale_handler))
-        .route("/tailscale.html", get(tailscale_handler))
-        .route("/tailscale_status", get(get_tailscale_status))
-        .route("/tailscale/install", post(tailscale_install))
-        .route("/tailscale/up", post(tailscale_up))
-        .route("/tailscale/down", post(tailscale_down))
-        .route("/tailscale/logout", post(tailscale_logout))
-        .route("/tailscale/serve", post(tailscale_serve))
-        .route("/bridge_diag", get(get_bridge_diag))
-        .route("/saturn/bridge_diag", get(get_bridge_diag))
-        .route("/p23_status", get(get_p23_status))
-        .route("/p23_perf", get(get_p23_perf))
-        .route("/p23_adc_telemetry", post(set_p23_adc_telemetry))
-        .route("/update_start", post(update_start))
-        .route("/update_status", get(update_status))
-        .route("/update_rollback", post(update_rollback))
-        .route("/backup_settings", get(backup_settings))
-        .route("/backup_source", get(backup_source))
-        .route("/backup_releases", get(backup_releases))
-        .route("/backup_release", get(backup_release))
-        .route("/backup_full", get(backup_source))
-        .route("/restore_settings", post(restore_settings))
-        .route("/restore_source", post(restore_source))
-        .route("/restore_full", post(restore_source))
-        .route("/restore_status", get(restore_status))
-        .route("/g2_backups", get(g2_backups))
-        .route("/g2_restore", post(g2_restore))
-        .route("/pihpsdr_backups", get(pihpsdr_backups))
-        .route("/pihpsdr_restore", post(pihpsdr_restore))
-        .route("/pi_image_start", post(disk_imaging_disabled))
-        .route("/pi_image_status", get(disk_imaging_disabled))
-        .route("/pi_image_cancel", post(disk_imaging_disabled))
-        .route("/pi_image_download", get(disk_imaging_disabled))
-        .route("/pi_devices", get(disk_imaging_disabled))
-        .route("/pi_wipe_target", post(disk_imaging_disabled))
-        .route("/pi_clone_start", post(disk_imaging_disabled))
-        .route("/pi_clone_status", get(disk_imaging_disabled))
-        .route("/pi_clone_cancel", post(disk_imaging_disabled))
-        .route("/repair_pack", get(repair_pack))
-        .route("/verify_system_config", get(verify_system_config))
-        .route("/run", post(run_sse))
-        .route("/run_log", get(get_run_log))
-        .route("/maintenance_jobs", get(get_maintenance_jobs))
-        .route("/shutdown_status", get(get_shutdown_status))
-        .route("/backup_response", post(no_content))
-        .route("/change_password", post(change_password))
-        .route("/exit", post(exit_server))
-        .route("/get_system_data", get(get_system_data))
-        .route("/network_test", get(network_test))
-        .route("/kill_process/{pid}", post(kill_process))
-        .fallback(get(fallback_handler))
-        .with_state(state.clone())
-        .layer(axum::middleware::from_fn_with_state(
-            state.clone(),
-            csrf_protect,
-        ))
-        .layer(DefaultBodyLimit::max(max_body_bytes));
+    let app = application_router(state.clone(), restore_request_max_bytes);
 
     let remote_tls_router = if let Some(remote_tls_addr) = remote_tls_config.addr {
         match ensure_self_signed_cert(&remote_tls_config.cert_path, &remote_tls_config.key_path)
@@ -519,6 +414,142 @@ async fn main() {
 
     let _ = signal_task.await;
     info!("Saturn server shut down");
+}
+
+fn with_request_limit<S>(router: Router<S>, max_bytes: usize) -> Router<S>
+where
+    S: Clone + Send + Sync + 'static,
+{
+    router
+        .layer(DefaultBodyLimit::max(max_bytes))
+        .layer(RequestBodyLimitLayer::new(max_bytes))
+}
+
+fn application_router(state: AppState, restore_request_max_bytes: usize) -> Router {
+    let ordinary = Router::new()
+        .route("/assets/{*path}", get(asset_handler))
+        .route("/", get(root_handler))
+        .route("/overview", get(overview_handler))
+        .route("/overview.html", get(overview_handler))
+        .route("/custom", get(custom_handler))
+        .route("/custom.html", get(custom_handler))
+        .route("/index", get(custom_handler))
+        .route("/index.html", get(custom_handler))
+        .route("/backup", get(backup_handler))
+        .route("/backup.html", get(backup_handler))
+        .route("/update", get(update_handler))
+        .route("/update.html", get(update_handler))
+        .route("/saturngo", get(saturngo_handler))
+        .route("/saturngo.html", get(saturngo_handler))
+        .route("/saturn-go", get(saturngo_handler))
+        .route("/saturn-go.html", get(saturngo_handler))
+        .route("/p23test", get(p23test_handler))
+        .route("/p23test.html", get(p23test_handler))
+        .route("/telemetry", get(p23test_handler))
+        .route("/telemetry.html", get(p23test_handler))
+        .route("/fpga", get(fpga_handler))
+        .route("/fpga.html", get(fpga_handler))
+        .route("/pihpsdr", get(pihpsdr_handler))
+        .route("/pihpsdr.html", get(pihpsdr_handler))
+        .route("/deskhpsdr", get(deskhpsdr_handler))
+        .route("/deskhpsdr.html", get(deskhpsdr_handler))
+        .route("/remote", get(remote_next_handler))
+        .route("/remote.html", get(remote_next_handler))
+        .route("/remote-next", get(remote_next_handler))
+        .route("/remote-next.html", get(remote_next_handler))
+        .route("/saturn-remote", get(remote_next_handler))
+        .route("/saturn-remote.html", get(remote_next_handler))
+        .route("/tci", get(remote_bridge_ws_handler))
+        .route("/monitor", get(monitor_handler))
+        .route("/monitor.html", get(monitor_handler))
+        .route("/livez", get(livez))
+        .route("/readyz", get(readyz))
+        .route("/healthz", get(healthz))
+        .route("/get_versions", get(get_versions))
+        .route("/get_scripts", get(get_scripts))
+        .route("/get_flags", get(get_flags))
+        .route("/remote_settings", get(get_remote_settings))
+        .route("/remote_settings", post(set_remote_settings))
+        .route("/remote_profiles", get(get_remote_profiles))
+        .route("/remote_profiles/save", post(save_remote_profile))
+        .route("/remote_profiles/delete", post(delete_remote_profile))
+        .route("/remote_profiles/startup", post(set_remote_profile_startup))
+        .route("/get_fpga_images", get(get_fpga_images))
+        .route("/get_repo_root", get(get_repo_root))
+        .route("/list_repo_roots", get(list_repo_roots))
+        .route("/set_repo_root", post(set_repo_root))
+        .route("/update_policy", get(get_update_policy))
+        .route("/update_policy", post(set_update_policy))
+        .route("/saturngo_policy", get(get_saturngo_policy))
+        .route("/saturngo_policy", post(set_saturngo_policy))
+        .route("/saturngo_deploy_status", get(get_saturngo_deploy_status))
+        .route("/tailscale", get(tailscale_handler))
+        .route("/tailscale.html", get(tailscale_handler))
+        .route("/tailscale_status", get(get_tailscale_status))
+        .route("/tailscale/install", post(tailscale_install))
+        .route("/tailscale/up", post(tailscale_up))
+        .route("/tailscale/down", post(tailscale_down))
+        .route("/tailscale/logout", post(tailscale_logout))
+        .route("/tailscale/serve", post(tailscale_serve))
+        .route("/bridge_diag", get(get_bridge_diag))
+        .route("/saturn/bridge_diag", get(get_bridge_diag))
+        .route("/p23_status", get(get_p23_status))
+        .route("/p23_perf", get(get_p23_perf))
+        .route("/p23_adc_telemetry", post(set_p23_adc_telemetry))
+        .route("/update_start", post(update_start))
+        .route("/update_status", get(update_status))
+        .route("/update_rollback", post(update_rollback))
+        .route("/backup_settings", get(backup_settings))
+        .route("/backup_source", get(backup_source))
+        .route("/backup_releases", get(backup_releases))
+        .route("/backup_release", get(backup_release))
+        .route("/backup_full", get(backup_source))
+        .route("/restore_status", get(restore_status))
+        .route("/g2_backups", get(g2_backups))
+        .route("/g2_restore", post(g2_restore))
+        .route("/pihpsdr_backups", get(pihpsdr_backups))
+        .route("/pihpsdr_restore", post(pihpsdr_restore))
+        .route("/pi_image_start", post(disk_imaging_disabled))
+        .route("/pi_image_status", get(disk_imaging_disabled))
+        .route("/pi_image_cancel", post(disk_imaging_disabled))
+        .route("/pi_image_download", get(disk_imaging_disabled))
+        .route("/pi_devices", get(disk_imaging_disabled))
+        .route("/pi_wipe_target", post(disk_imaging_disabled))
+        .route("/pi_clone_start", post(disk_imaging_disabled))
+        .route("/pi_clone_status", get(disk_imaging_disabled))
+        .route("/pi_clone_cancel", post(disk_imaging_disabled))
+        .route("/repair_pack", get(repair_pack))
+        .route("/verify_system_config", get(verify_system_config))
+        .route("/run_log", get(get_run_log))
+        .route("/maintenance_jobs", get(get_maintenance_jobs))
+        .route("/shutdown_status", get(get_shutdown_status))
+        .route("/backup_response", post(no_content))
+        .route("/change_password", post(change_password))
+        .route("/exit", post(exit_server))
+        .route("/get_system_data", get(get_system_data))
+        .route("/network_test", get(network_test))
+        .route("/kill_process/{pid}", post(kill_process))
+        .fallback(get(fallback_handler));
+    let ordinary = with_request_limit(ordinary, JSON_REQUEST_MAX_BYTES);
+
+    let custom = Router::new()
+        .route("/custom_scripts", get(get_custom_scripts))
+        .route("/custom_scripts", post(upsert_custom_script))
+        .route("/custom_scripts_delete", post(delete_custom_script))
+        .route("/run", post(run_sse));
+    let custom = with_request_limit(custom, CUSTOM_SCRIPT_REQUEST_MAX_BYTES);
+
+    let restore = Router::new()
+        .route("/restore_settings", post(restore_settings))
+        .route("/restore_source", post(restore_source))
+        .route("/restore_full", post(restore_source));
+    let restore = with_request_limit(restore, restore_request_max_bytes);
+
+    ordinary
+        .merge(custom)
+        .merge(restore)
+        .with_state(state.clone())
+        .layer(axum::middleware::from_fn_with_state(state, csrf_protect))
 }
 
 fn validate_saturn_bind_addr(addr: &str) -> Result<(), String> {
@@ -3646,9 +3677,16 @@ async fn parse_multipart(mut multipart: Multipart) -> Result<(String, Vec<String
     let mut script = String::new();
     let mut flags = Vec::new();
 
-    while let Ok(Some(field)) = multipart.next_field().await {
+    loop {
+        let Some(field) = multipart
+            .next_field()
+            .await
+            .map_err(IntoResponse::into_response)?
+        else {
+            break;
+        };
         let name = field.name().map(|s| s.to_string()).unwrap_or_default();
-        let text = field.text().await.unwrap_or_default();
+        let text = field.text().await.map_err(IntoResponse::into_response)?;
         if name == "script" {
             script = text;
         } else if name == "flags" {
@@ -3680,7 +3718,18 @@ async fn disk_imaging_disabled() -> Response {
 
 #[cfg(test)]
 mod tests {
-    use super::{bind_addr_is_loopback, disk_imaging_disabled};
+    use super::{bind_addr_is_loopback, disk_imaging_disabled, with_request_limit};
+    use axum::{
+        body::{Body, Bytes},
+        http::{Request, StatusCode},
+        routing::post,
+        Router,
+    };
+    use tower::ServiceExt;
+
+    async fn consume_request_body(_body: Bytes) -> StatusCode {
+        StatusCode::NO_CONTENT
+    }
 
     #[test]
     fn bind_addr_loopback_guard_accepts_only_local_hosts() {
@@ -3698,5 +3747,48 @@ mod tests {
     async fn disk_imaging_routes_report_gone() {
         let response = disk_imaging_disabled().await;
         assert_eq!(response.status(), axum::http::StatusCode::GONE);
+    }
+
+    #[tokio::test]
+    async fn ordinary_and_custom_limits_reject_oversized_requests() {
+        for limit in [
+            super::JSON_REQUEST_MAX_BYTES,
+            super::CUSTOM_SCRIPT_REQUEST_MAX_BYTES,
+        ] {
+            let app = with_request_limit(
+                Router::new().route("/limited", post(consume_request_body)),
+                limit,
+            );
+            let request = Request::builder()
+                .method("POST")
+                .uri("/limited")
+                .header("content-type", "application/octet-stream")
+                .header("content-length", limit + 1)
+                .body(Body::from(vec![0u8; limit + 1]))
+                .unwrap();
+
+            let response = app.oneshot(request).await.unwrap();
+            assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+        }
+    }
+
+    #[tokio::test]
+    async fn restore_limit_is_independent_from_small_request_limit() {
+        let restore_limit = super::JSON_REQUEST_MAX_BYTES * 4;
+        let body_bytes = super::JSON_REQUEST_MAX_BYTES + 1;
+        let app = with_request_limit(
+            Router::new().route("/restore", post(consume_request_body)),
+            restore_limit,
+        );
+        let request = Request::builder()
+            .method("POST")
+            .uri("/restore")
+            .header("content-type", "application/octet-stream")
+            .header("content-length", body_bytes)
+            .body(Body::from(vec![0u8; body_bytes]))
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
     }
 }

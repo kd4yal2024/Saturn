@@ -49,7 +49,9 @@ service names still use `saturn-go` for compatibility with existing installs.
   - `cleanup-saturn-backups.sh`
   - `fix-LED-power-button.sh`
   - `setup-eth-fallback.sh`
-- Dedicated Backup / Restore page (`backup.html`) for repo-root management, backup/restore, Pi imaging, clone, and repair tools
+- Dedicated Backup / Restore page (`backup.html`) for repo-root management,
+  transactional backup/restore, and repair tools; whole-disk imaging, cloning,
+  target enumeration, and wiping are intentionally excluded
 - The shared appliance shell provides grouped desktop sidebar navigation, a
   mobile drawer, common dark/light theming, consistent controls/status tokens,
   compact Saturn G2 page-title branding, and local browser assets. Navigation
@@ -58,8 +60,6 @@ service names still use `saturn-go` for compatibility with existing installs.
 - Tailwind compatibility runtime, Chart.js, ansi_up, and Inter are vendored
   under `templates/assets/`; maintenance and Remote pages do not require public
   CDNs to render or operate.
-- Pi image creation workflow with progress, validation, cancel, and download
-- SD-to-removable/USB-device cloning workflow with auto-detected targets, optional quick target wipe, progress, and cancel
 - Repair Pack download and system config verification tools
 - Built-in monitor for CPU, memory, disk, network, and process data
 - Basic auth via NGINX
@@ -150,9 +150,6 @@ Script definitions come from `config.json` plus browser-managed custom entries i
 - Validate/restore Update G2 backup directory: `POST /g2_restore` with JSON `{ "backup_name":"saturn-backup-...", "dry_run":true|false, "confirm":"RESTORE" }`
 - List piHPSDR backups: `GET /pihpsdr_backups`
 - Validate/restore piHPSDR backup directory: `POST /pihpsdr_restore` with JSON `{ "backup_name":"pihpsdr-backup-...", "dry_run":true|false, "confirm":"RESTORE" }`
-- List clone target devices for SD-to-device copy: `GET /pi_devices`
-- Quick-wipe clone target metadata (signatures/partition tables): `POST /pi_wipe_target` with JSON `{ "target": "/dev/sdX" }`
-- Start/cancel clone job and poll status: `POST /pi_clone_start`, `POST /pi_clone_cancel`, `GET /pi_clone_status`
 - List browser-managed custom scripts: `GET /custom_scripts`
 - Add/update browser-managed custom script entry: `POST /custom_scripts`
 - Delete browser-managed custom script entry: `POST /custom_scripts_delete`
@@ -529,7 +526,6 @@ Default URL:
 - `SATURN_LOG_DIR` (default `$HOME/saturn-logs`; installer-owned by the service user)
 - `SATURN_STATE_DIR` (installer default `/var/lib/saturn-state`)
 - `SATURN_REPO_ROOT_FILE` (default `$SATURN_STATE_DIR/repo_root.txt`)
-- `SATURN_MAX_BODY_BYTES` (default `2147483648`)
 - `SATURN_RESTORE_MAX_UPLOAD_BYTES` (default `2147483648`)
 - `SATURN_UPDATE_POLICY_FILE` (default `$SATURN_STATE_DIR/update_policy.json`)
 - `SATURN_SATURNGO_UPDATE_POLICY_FILE` (default `$SATURN_STATE_DIR/saturngo_update_policy.json`)
@@ -539,7 +535,9 @@ Default URL:
 - `SATURN_STAGING_DIR` (default `$SATURN_STATE_DIR/repo-staging`)
 - `SATURN_CUSTOM_SCRIPTS_FILE` (default `$SATURN_STATE_DIR/custom_scripts.json`)
 - `SATURN_PIHPSDR_ROOT` (default `$HOME/github/pihpsdr`)
-- `SATURN_NGINX_CLIENT_MAX_BODY_SIZE` (installer default `2G`)
+- `SATURN_NGINX_CLIENT_MAX_BODY_SIZE` (installer default `64k`; ordinary routes)
+- `SATURN_NGINX_RESTORE_MAX_BODY_SIZE` (installer default `2147549184`, the
+  2 GiB restore payload plus 64 KiB multipart framing; restore routes only)
 - `SATURN_WATCHDOG_URL` (installer default `http://$SATURN_ADDR/healthz`)
 - `SATURN_WATCHDOG_INTERVAL` (installer default `30s`)
 - `SATURN_ADMIN_PASSWORD` (optional non-interactive initial admin password)

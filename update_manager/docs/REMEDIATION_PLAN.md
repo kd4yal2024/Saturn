@@ -497,10 +497,10 @@ complete process-group termination.
 
 ### REM-0501: Replace the global 2 GiB request limit
 
-- [ ] Apply small limits to JSON and settings routes.
-- [ ] Apply a separate small limit to custom-script arguments.
-- [ ] Retain a configurable streaming limit only for routes that genuinely upload restore data.
-- [ ] Confirm browser clone removal eliminates any clone dependency on the global limit.
+- [x] Apply small limits to JSON and settings routes.
+- [x] Apply a separate small limit to custom-script arguments.
+- [x] Retain a configurable streaming limit only for routes that genuinely upload restore data.
+- [x] Confirm browser clone removal eliminates any clone dependency on the global limit.
 
 Initial limits to validate:
 
@@ -512,6 +512,16 @@ Acceptance criteria:
 
 - Oversized ordinary requests fail early with HTTP 413.
 - A supported restore upload streams without buffering the whole body in memory.
+
+Completed in REM-0501. Saturn Go and nginx now reject ordinary JSON/configuration
+and custom-script requests above 64 KiB with HTTP 413. Only the three restore
+archive routes receive the configurable large-body allowance, and nginx disables
+request buffering for those routes. Multipart chunks are written directly to a
+private temporary file while enforcing both the upload ceiling and the readiness
+disk reserve; multipart framing errors are no longer swallowed. Browser imaging,
+cloning, target enumeration, and wiping remain removed, with only small 410 Gone
+compatibility tombstones in the backend. Rust boundary tests cover early 413,
+the independent restore allowance, and chunked restore ingestion.
 
 ### REM-0502: Bound script output and duration
 

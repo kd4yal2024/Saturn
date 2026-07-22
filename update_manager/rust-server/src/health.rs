@@ -13,13 +13,14 @@ use std::{
 };
 use tokio::{fs::OpenOptions, io::AsyncWriteExt, net::TcpStream, process::Command, time::timeout};
 
-use crate::state::{AppState, CfgEntry, RemoteProfilesFile, RemoteSettings};
+use crate::state::{
+    AppState, CfgEntry, RemoteProfilesFile, RemoteSettings, DEFAULT_READY_MIN_FREE_BYTES,
+};
 use crate::state_store::last_good_path;
 use crate::update::UpdatePolicy;
 use crate::util::{is_saturn_repo_root, parse_boolish};
 
 pub const BUILD_COMMIT: &str = env!("SATURN_BUILD_COMMIT");
-const DEFAULT_READY_MIN_FREE_BYTES: u64 = 512 * 1024 * 1024;
 const DEFAULT_READY_CONNECT_TIMEOUT_MS: u64 = 1500;
 
 #[derive(Debug, Serialize)]
