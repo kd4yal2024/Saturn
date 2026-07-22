@@ -7,7 +7,8 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
 - Replaced the global 2 GiB request allowance with 64 KiB ordinary and
   custom-script limits plus a separate configurable, streamed restore limit.
   Restore upload/extraction now preserves the readiness disk reserve, and
-  oversized ordinary requests fail early with HTTP 413.
+  stages on the persistent Saturn state filesystem rather than the small
+  `/tmp` tmpfs. Oversized ordinary requests fail early with HTTP 413.
 
 ### Fixed
 - Provisioning and direct udev/P2 installers now add the configured desktop

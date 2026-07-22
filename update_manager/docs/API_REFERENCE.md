@@ -259,6 +259,8 @@ Source-restore safety checks:
   expansion-ratio guard
 - the backend rejects uploads or extracted archives that would consume the
   configured readiness disk reserve
+- upload and extraction staging use `$SATURN_STATE_DIR/restore-tmp`, keeping
+  large archives off the appliance's small `/tmp` tmpfs
 - tar path traversal guard (reject absolute and `..` paths)
 - must extract to a single top-level directory
 - extracted top-level directory must pass Saturn repo-root validation (`.git` + `update_manager/`)

@@ -40,6 +40,8 @@ grep -Fq 'proxy_request_buffering off;' <<<"$restore_location" ||
 
 grep -Fq 'upload_disk_budget' "$RESTORE" ||
   fail "restore upload does not enforce a disk budget"
+grep -Fq '.join("restore-tmp")' "$RESTORE" ||
+  fail "restore staging is not kept on the Saturn state filesystem"
 grep -Fq 'saturating_add(reserve_bytes)' "$RESTORE" ||
   fail "restore extraction does not preserve the readiness reserve"
 

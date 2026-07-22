@@ -621,7 +621,8 @@ Important:
 - upload size is limited by `SATURN_RESTORE_MAX_UPLOAD_BYTES`; nginx and the
   backend stream these routes without buffering the complete request body
 - uploads and extraction preserve `SATURN_READY_MIN_FREE_BYTES` (512 MiB by
-  default); failure to determine free capacity fails the restore closed
+  default) on `$SATURN_STATE_DIR/restore-tmp`; failure to determine free
+  capacity fails the restore closed
 - non-dry-run full restore acquires the shared update lock; concurrent update actions return `409 Conflict`
 
 ### Manual Whole-Disk Imaging

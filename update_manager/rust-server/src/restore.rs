@@ -44,17 +44,17 @@ fn state_root(state: &AppState) -> Result<PathBuf, String> {
         .ok_or_else(|| "Saturn state root is unavailable".to_string())
 }
 
-fn secure_tmp_path(prefix: &str, attempt: u32) -> PathBuf {
+fn secure_tmp_path(root: &Path, prefix: &str, attempt: u32) -> PathBuf {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_nanos())
         .unwrap_or(0);
-    std::env::temp_dir().join(format!("{prefix}-{nanos}-{}-{attempt}", std::process::id()))
+    root.join(format!("{prefix}-{nanos}-{}-{attempt}", std::process::id()))
 }
 
-fn create_secure_temp_upload_file() -> io::Result<(PathBuf, tokio::fs::File)> {
+fn create_secure_temp_upload_file(root: &Path) -> io::Result<(PathBuf, tokio::fs::File)> {
     for attempt in 0..64 {
-        let path = secure_tmp_path("saturn-upload", attempt);
+        let path = secure_tmp_path(root, "saturn-upload", attempt);
         match fs::OpenOptions::new()
             .read(true)
             .write(true)
@@ -73,9 +73,9 @@ fn create_secure_temp_upload_file() -> io::Result<(PathBuf, tokio::fs::File)> {
     ))
 }
 
-fn create_secure_temp_extract_dir() -> io::Result<PathBuf> {
+fn create_secure_temp_extract_dir(root: &Path) -> io::Result<PathBuf> {
     for attempt in 0..64 {
-        let path = secure_tmp_path("saturn-restore", attempt);
+        let path = secure_tmp_path(root, "saturn-restore", attempt);
         match fs::create_dir(&path) {
             Ok(()) => {
                 fs::set_permissions(&path, fs::Permissions::from_mode(0o700))?;
@@ -144,22 +144,56 @@ fn restore_disk_reserve_bytes() -> Result<u64, String> {
     }
 }
 
+async fn restore_temp_root(state: &AppState) -> Result<PathBuf, Response> {
+    let root = state_root(state)
+        .map_err(|error| json_error(StatusCode::INTERNAL_SERVER_ERROR, &error))?
+        .join("restore-tmp");
+    tokio::fs::create_dir_all(&root).await.map_err(|error| {
+        json_error(
+            StatusCode::INSUFFICIENT_STORAGE,
+            &format!("cannot create restore staging directory: {error}"),
+        )
+    })?;
+    let metadata = tokio::fs::symlink_metadata(&root).await.map_err(|error| {
+        json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &format!("cannot inspect restore staging directory: {error}"),
+        )
+    })?;
+    if !metadata.is_dir() || metadata.file_type().is_symlink() {
+        return Err(json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "restore staging path is not a real directory",
+        ));
+    }
+    tokio::fs::set_permissions(&root, fs::Permissions::from_mode(0o700))
+        .await
+        .map_err(|error| {
+            json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &format!("cannot secure restore staging directory: {error}"),
+            )
+        })?;
+    Ok(root)
+}
+
 async fn receive_archive(
     state: &AppState,
     multipart: Multipart,
+    temp_root: &Path,
 ) -> Result<(PathBuf, u64, Option<String>), Response> {
     let reserve_bytes = restore_disk_reserve_bytes()
         .map_err(|error| json_error(StatusCode::INTERNAL_SERVER_ERROR, &error))?;
-    receive_archive_with_reserve(state, multipart, reserve_bytes).await
+    receive_archive_with_reserve(state, multipart, temp_root, reserve_bytes).await
 }
 
 async fn receive_archive_with_reserve(
     state: &AppState,
     mut multipart: Multipart,
+    temp_root: &Path,
     reserve_bytes: u64,
 ) -> Result<(PathBuf, u64, Option<String>), Response> {
-    let temp_root = std::env::temp_dir();
-    let available_bytes = available_bytes_at(&temp_root).await.ok_or_else(|| {
+    let available_bytes = available_bytes_at(temp_root).await.ok_or_else(|| {
         json_error(
             StatusCode::INSUFFICIENT_STORAGE,
             "cannot determine temporary disk capacity for restore upload",
@@ -243,7 +277,7 @@ async fn receive_archive_with_reserve(
                 "only one restore archive is accepted",
             ));
         }
-        let (path, mut file) = create_secure_temp_upload_file()
+        let (path, mut file) = create_secure_temp_upload_file(temp_root)
             .map_err(|error| json_error(StatusCode::INTERNAL_SERVER_ERROR, &error.to_string()))?;
         let mut field = field;
         loop {
@@ -306,6 +340,7 @@ async fn receive_archive_with_reserve(
 async fn validate_and_extract_archive(
     upload_path: &Path,
     upload_bytes: u64,
+    temp_root: &Path,
 ) -> Result<(PathBuf, PathBuf), Response> {
     let listing = Command::new("tar")
         .arg("-tzvf")
@@ -348,10 +383,9 @@ async fn validate_and_extract_archive(
             "archive expansion ratio exceeds the restore safety limit",
         ));
     }
-    let temp_root = std::env::temp_dir();
     let reserve_bytes = restore_disk_reserve_bytes()
         .map_err(|error| json_error(StatusCode::INTERNAL_SERVER_ERROR, &error))?;
-    let available = available_bytes_at(&temp_root).await.ok_or_else(|| {
+    let available = available_bytes_at(temp_root).await.ok_or_else(|| {
         json_error(
             StatusCode::INSUFFICIENT_STORAGE,
             "cannot determine temporary disk capacity for restore extraction",
@@ -364,7 +398,7 @@ async fn validate_and_extract_archive(
         ));
     }
 
-    let extract_dir = create_secure_temp_extract_dir()
+    let extract_dir = create_secure_temp_extract_dir(temp_root)
         .map_err(|error| json_error(StatusCode::INTERNAL_SERVER_ERROR, &error.to_string()))?;
     let status = match Command::new("tar")
         .arg("-xzf")
@@ -519,7 +553,9 @@ async fn restore_archive(
         .await
         .map_err(|error| json_error(StatusCode::CONFLICT, &error))?;
 
-    let (upload_path, upload_bytes, confirm) = receive_archive(&state, multipart).await?;
+    let temp_root = restore_temp_root(&state).await?;
+    let (upload_path, upload_bytes, confirm) =
+        receive_archive(&state, multipart, &temp_root).await?;
     if !dry_run && confirm.as_deref() != Some("RESTORE") {
         let _ = tokio::fs::remove_file(&upload_path).await;
         return Err(json_error(
@@ -527,7 +563,7 @@ async fn restore_archive(
             "confirm token required",
         ));
     }
-    let extracted = validate_and_extract_archive(&upload_path, upload_bytes).await;
+    let extracted = validate_and_extract_archive(&upload_path, upload_bytes, &temp_root).await;
     let (extract_dir, archive_root) = match extracted {
         Ok(value) => value,
         Err(error) => {
@@ -753,8 +789,13 @@ mod tests {
             .unwrap();
         let multipart = Multipart::from_request(request, &()).await.unwrap();
 
+        let temp_root =
+            std::env::temp_dir().join(format!("saturn-restore-stream-test-{}", std::process::id()));
+        let _ = tokio::fs::remove_dir_all(&temp_root).await;
+        tokio::fs::create_dir(&temp_root).await.unwrap();
+
         let (upload_path, upload_bytes, confirm) =
-            receive_archive_with_reserve(&test_state(), multipart, 0)
+            receive_archive_with_reserve(&test_state(), multipart, &temp_root, 0)
                 .await
                 .unwrap();
         assert_eq!(upload_bytes, (DATA_CHUNKS * DATA_CHUNK_BYTES) as u64);
@@ -764,5 +805,6 @@ mod tests {
             upload_bytes
         );
         tokio::fs::remove_file(upload_path).await.unwrap();
+        tokio::fs::remove_dir(temp_root).await.unwrap();
     }
 }

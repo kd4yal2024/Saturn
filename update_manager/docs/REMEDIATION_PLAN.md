@@ -518,7 +518,8 @@ and custom-script requests above 64 KiB with HTTP 413. Only the three restore
 archive routes receive the configurable large-body allowance, and nginx disables
 request buffering for those routes. Multipart chunks are written directly to a
 private temporary file while enforcing both the upload ceiling and the readiness
-disk reserve; multipart framing errors are no longer swallowed. Browser imaging,
+disk reserve. Staging lives under Saturn's persistent state filesystem instead
+of the appliance's small `/tmp` tmpfs; multipart framing errors are no longer swallowed. Browser imaging,
 cloning, target enumeration, and wiping remain removed, with only small 410 Gone
 compatibility tombstones in the backend. Rust boundary tests cover early 413,
 the independent restore allowance, and chunked restore ingestion.
