@@ -231,11 +231,18 @@ via `sudo -n` (password piped over stdin).
   auth drop-in (`10-remote-auth.conf`) together, all-or-nothing, so LAN and
   remote passwords cannot drift
 - A deferred `saturn-go` restart (~2s) applies the TLS-side change
+- The restart invalidates every one-year remembered-device login, so each
+  remote browser must authenticate with the new password
 - Returns explicit guidance when the helper or its sudoers entry is missing
 - Newly set passwords are at least five characters with no composition rules;
   generated passwords remain five characters
 - Console recovery: `sudo saturn-admin-password.sh reset` prints a fresh
   generated five-character password (see `docs/ADMIN_AUTH_SIMPLIFICATION.md`)
+
+The one-year remembered login is intended for a trusted personal browser
+profile. On a shared device, anyone with access to that unlocked browser
+profile can operate Saturn Remote without entering the password again. See the
+shared-device warning and recovery procedure in the Operations Runbook.
 
 ### Saturn Go Self-Update (`update-saturn-go.sh`)
 

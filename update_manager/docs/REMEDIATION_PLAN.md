@@ -597,8 +597,19 @@ after replacing its executable.
 ### REM-0601: Preserve the one-year remembered-login behavior
 
 - [A] Do not introduce routine 7–30 day password prompts.
-- [ ] Continue invalidating remembered login when the administrator password changes.
-- [ ] Clearly identify shared-device risk in the operator documentation.
+- [x] Continue invalidating remembered login when the administrator password changes.
+- [x] Clearly identify shared-device risk in the operator documentation.
+
+Completion evidence: the TLS cookie retains an explicit 365-day `Max-Age`
+contract and remains derived from `HMAC-SHA256(persisted secret, current
+credential)`. The administrator password helper defaults to a deferred Saturn
+Go restart, so the new credential immediately produces a different token and
+signs out every remembered browser. Rust tests cover the one-year hardened
+cookie header and password-change invalidation; the password-policy integration
+test statically guards the duration, deferred restart, invalidation message,
+and runbook warning. The Operations Runbook now identifies the shared-browser
+risk and the password-change/clear-site-data recovery procedure. No routine
+7–30 day prompt was introduced.
 
 ### REM-0602: Add optional per-device revocation
 
@@ -721,5 +732,5 @@ Update this section as milestones complete.
 | 3 — Restore | — | — | — | Not started |
 | 4 — State/jobs | — | — | — | In progress (REM-0401 through REM-0403 complete) |
 | 5 — Limits | REM-0501 through REM-0503 implementation commits | Rust boundary/flood tests; durable broker cap contract | REM-0501 through REM-0503 appliance acceptance complete | Complete |
-| 6 — Sessions | Deferred | — | — | Deferred |
+| 6 — Sessions | REM-0601 implementation commit | Rust cookie/invalidation tests; password-policy contract test | Existing appliance auth path retained; no service restart required | REM-0601 complete; REM-0602 deferred |
 | 7 — Reproducibility | — | — | — | Not started |

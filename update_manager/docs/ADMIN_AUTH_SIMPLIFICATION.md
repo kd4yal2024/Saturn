@@ -65,6 +65,11 @@ and installation therefore share one transactional writer for both backends.
   every remembered device at once. If the secret cannot be persisted, the
   token falls back to the old per-process random value (session-only) with a
   warning. Credential and cookie comparisons are constant-time.
+- Shared-device warning: the remembered cookie authenticates anyone using the
+  same unlocked browser profile for up to one year. Use a private OS/browser
+  profile on trusted devices. If a device is lost, transferred, or no longer
+  trusted, change the administrator password to invalidate every remembered
+  device, then clear Saturn site data in that browser when possible.
 - Per-IP tarpit on repeated basic-auth failures on :8443: only requests that
   *carried* an Authorization header and got a 401 count (a first visit
   answered with the challenge stays instant). The first 2 failures per IP are

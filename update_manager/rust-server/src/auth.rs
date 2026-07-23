@@ -80,7 +80,7 @@ pub async fn change_password(
     match run_password_helper(&form.new_password).await {
         Ok(out) if out.status.success() => Json(serde_json::json!({
             "status":"success",
-            "message":"Password updated for LAN and remote. Remote (TLS) sessions reconnect in a few seconds."
+            "message":"Password updated for LAN and remote. All remembered-device logins will be signed out when Saturn Go restarts in a few seconds; remote clients must use the new password."
         })),
         Ok(out) => {
             let detail = output_error_text(&out);

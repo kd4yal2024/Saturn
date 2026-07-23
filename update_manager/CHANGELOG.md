@@ -4,6 +4,10 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
 
 ## [Unreleased]
 ### Changed
+- Made the one-year Saturn Remote remembered-login policy an explicit tested
+  contract. Administrator password changes continue to invalidate every
+  remembered browser after the deferred Saturn Go restart, with clearer UI
+  messaging and shared-device risk/recovery guidance for operators.
 - Restart Saturn Bridge after replacing its executable during standalone or
   appliance installation. Previously, `systemctl enable --now` left an
   already-running service on the deleted prior binary until a reboot or manual

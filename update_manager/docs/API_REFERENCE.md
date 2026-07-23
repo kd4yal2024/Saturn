@@ -376,8 +376,8 @@ Behavior:
 - the helper updates `/etc/nginx/.htpasswd` and the TLS auth drop-in
   together (all-or-nothing with rollback), then schedules a deferred
   `saturn-go` restart (~2s) so the TLS listener picks up the change
-- success response includes a `message` telling the user remote sessions
-  reconnect in a few seconds
+- success response tells the user that the restart invalidates every
+  remembered-device login and remote clients must use the new password
 
 ## Whole-Disk Imaging Compatibility Routes
 

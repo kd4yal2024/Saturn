@@ -3,6 +3,44 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 HELPER="$REPO_ROOT/scripts/saturn-admin-password.sh"
+REMOTE_TLS="$REPO_ROOT/update_manager/rust-server/src/remote_tls.rs"
+AUTH_RS="$REPO_ROOT/update_manager/rust-server/src/auth.rs"
+RUNBOOK="$REPO_ROOT/update_manager/docs/OPERATIONS_RUNBOOK.md"
+
+require_text(){
+  local expected="$1"
+  local path="$2"
+  local description="$3"
+  if ! grep -Fq "$expected" "$path"; then
+    printf 'missing %s contract in %s\n' "$description" "$path" >&2
+    exit 1
+  fi
+}
+
+require_text \
+  'const REMOTE_AUTH_COOKIE_MAX_AGE_SECS: u64 = 365 * 24 * 60 * 60;' \
+  "$REMOTE_TLS" \
+  'one-year remembered-login'
+require_text \
+  'fn password_change_invalidates_existing_cookie_token()' \
+  "$REMOTE_TLS" \
+  'password-change cookie invalidation test'
+require_text \
+  'local restart_mode="deferred"' \
+  "$HELPER" \
+  'default deferred Saturn Go restart'
+require_text \
+  "systemd-run --collect --on-active=2 systemctl try-restart \"\$SERVICE_NAME\"" \
+  "$HELPER" \
+  'deferred Saturn Go restart'
+require_text \
+  'All remembered-device logins will be signed out' \
+  "$AUTH_RS" \
+  'password-change invalidation message'
+require_text \
+  '**Shared-device risk:**' \
+  "$RUNBOOK" \
+  'shared-device operator warning'
 
 validate_password(){
   local password="$1"

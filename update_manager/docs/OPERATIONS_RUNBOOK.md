@@ -944,6 +944,14 @@ The installer grants the service user sudoers entries for exactly `saturn-admin-
 
 Browsers that authenticated to the TLS listener (`/remote*`) hold a long-lived "remember this device" cookie, so operators type the password roughly once per browser. Changing the password invalidates every remembered device at the next request after the saturn-go restart; repeated wrong-password attempts from one IP are answered with growing delays (capped at 10s, forgotten after 15 minutes).
 
+**Shared-device risk:** anyone who can use the same unlocked OS/browser
+profile can operate Saturn Remote without re-entering the password for up to
+one year. Use remembered login only in a trusted personal browser profile. If
+a device is lost, transferred, or no longer trusted, change the administrator
+password to invalidate all remembered devices, then clear Saturn site data and
+cookies on that browser when possible. Per-device session listing and
+revocation are deferred to REM-0602.
+
 ### Monitor and Process Control
 
 - `monitor.html` polls `/get_system_data` every 1 second.

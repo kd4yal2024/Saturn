@@ -765,14 +765,17 @@ fn attach_remote_auth_cookie(response: &mut Response) {
     if configured_basic_auth_header().is_none() {
         return;
     }
-    let value = format!(
-        "{REMOTE_AUTH_COOKIE_NAME}={}; Path=/; Max-Age={REMOTE_AUTH_COOKIE_MAX_AGE_SECS}; \
-         Secure; HttpOnly; SameSite=Strict",
-        remote_auth_cookie_value()
-    );
+    let value = remembered_auth_cookie_header(remote_auth_cookie_value());
     if let Ok(value) = HeaderValue::from_str(&value) {
         response.headers_mut().insert(header::SET_COOKIE, value);
     }
+}
+
+fn remembered_auth_cookie_header(token: &str) -> String {
+    format!(
+        "{REMOTE_AUTH_COOKIE_NAME}={token}; Path=/; \
+         Max-Age={REMOTE_AUTH_COOKIE_MAX_AGE_SECS}; Secure; HttpOnly; SameSite=Strict"
+    )
 }
 
 fn remote_auth_cookie_matches(headers: &HeaderMap) -> bool {
@@ -1478,11 +1481,30 @@ mod tests {
     }
 
     #[test]
-    fn cookie_token_changes_with_credential_or_secret() {
+    fn password_change_invalidates_existing_cookie_token() {
         let secret = [7u8; 32];
-        let token = derive_cookie_token(&secret, "Basic YWRtaW46b2xk");
-        assert_ne!(token, derive_cookie_token(&secret, "Basic YWRtaW46bmV3"));
-        assert_ne!(token, derive_cookie_token(&[8u8; 32], "Basic YWRtaW46b2xk"));
+        let old_token = derive_cookie_token(&secret, "Basic YWRtaW46b2xk");
+        let new_token = derive_cookie_token(&secret, "Basic YWRtaW46bmV3");
+        assert!(!ct_eq(old_token.as_bytes(), new_token.as_bytes()));
+    }
+
+    #[test]
+    fn changing_cookie_secret_invalidates_existing_cookie_token() {
+        let credential = "Basic YWRtaW46b2xk";
+        assert_ne!(
+            derive_cookie_token(&[7u8; 32], credential),
+            derive_cookie_token(&[8u8; 32], credential)
+        );
+    }
+
+    #[test]
+    fn remembered_auth_cookie_contract_is_one_year_and_hardened() {
+        assert_eq!(REMOTE_AUTH_COOKIE_MAX_AGE_SECS, 31_536_000);
+        assert_eq!(
+            remembered_auth_cookie_header("test-token"),
+            "saturn_remote_auth=test-token; Path=/; Max-Age=31536000; \
+             Secure; HttpOnly; SameSite=Strict"
+        );
     }
 
     #[test]
