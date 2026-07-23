@@ -342,9 +342,10 @@ install_binary() {
 }
 
 install_service() {
-  local service_user service_group
+  local service_user service_group service_name
   service_user="$(bridge_build_user)"
   service_group="$(id -gn "$service_user")"
+  service_name="$(basename "$SATURN_BRIDGE_SERVICE")"
   cat >"$SATURN_BRIDGE_SERVICE" <<EOF
 [Unit]
 Description=Saturn Bridge (WDSP 2.00)
@@ -381,8 +382,13 @@ WantedBy=multi-user.target
 EOF
   chmod 0644 "$SATURN_BRIDGE_SERVICE"
   systemctl daemon-reload
-  systemctl enable --now "$(basename "$SATURN_BRIDGE_SERVICE")"
-  log "Enabled and started $(basename "$SATURN_BRIDGE_SERVICE")"
+  systemctl enable "$service_name"
+  # The binary is replaced in place above. `enable --now` does not restart an
+  # already-active unit, which would leave systemd running the deleted prior
+  # executable until the next reboot. Restart unconditionally so the runtime
+  # always matches the binary that this installer just verified and installed.
+  systemctl restart "$service_name"
+  log "Enabled and restarted $service_name"
 }
 
 verify_runtime() {

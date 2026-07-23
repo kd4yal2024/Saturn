@@ -182,7 +182,7 @@ lanes consume one client slot. A fifth client receives HTTP 429 and
 without a valid session id receives HTTP 400.
 
 `/bridge_diag` exposes the latest numeric bridge diagnostics under
-`bridge.latest_diag.fields`, including connection/queue limits and current
+`bridge.journal.latest_diag.fields`, including connection/queue limits and current
 depths, rejected connections, coalesced/replaced/dropped traffic, enqueue-to-
 write latency, and outbound/TCP high-water marks.
 

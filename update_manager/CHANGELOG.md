@@ -4,6 +4,10 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
 
 ## [Unreleased]
 ### Changed
+- Restart Saturn Bridge after replacing its executable during standalone or
+  appliance installation. Previously, `systemctl enable --now` left an
+  already-running service on the deleted prior binary until a reboot or manual
+  restart.
 - Limited Saturn Remote to four authenticated logical clients (a paired split
   control/media session counts once) with clean HTTP admission failures and an
   eight-socket bridge backstop. Inbound commands and per-client outbound

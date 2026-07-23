@@ -233,7 +233,7 @@ Remote capacity diagnostics:
 
 ```bash
 curl -ksS -u admin https://127.0.0.1:8443/remote_metrics | jq
-curl -fsS http://127.0.0.1:8080/bridge_diag | jq '.bridge.latest_diag.fields'
+curl -fsS http://127.0.0.1:8080/bridge_diag | jq '.bridge.journal.latest_diag.fields'
 ```
 
 The first response reports authenticated client/connection counts, rejection
