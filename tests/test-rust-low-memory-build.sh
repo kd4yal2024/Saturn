@@ -37,10 +37,13 @@ grep -Fq 'ensure_low_memory_build_capacity' "$BRIDGE_INSTALLER" \
 # shellcheck disable=SC2016
 grep -Fq 'cargo "${cargo_args[@]}" -j "$SATURN_BRIDGE_BUILD_JOBS"' "$BRIDGE_INSTALLER" \
   || fail "Saturn Bridge Cargo invocation does not enforce bounded jobs"
+# shellcheck disable=SC2016
 grep -Fq 'systemctl enable "$service_name"' "$BRIDGE_INSTALLER" \
   || fail "Saturn Bridge installer does not enable the service"
+# shellcheck disable=SC2016
 grep -Fq 'systemctl restart "$service_name"' "$BRIDGE_INSTALLER" \
   || fail "Saturn Bridge installer does not restart an already-running service after replacing its binary"
+# shellcheck disable=SC2016
 if grep -Fq 'systemctl enable --now "$(basename "$SATURN_BRIDGE_SERVICE")"' "$BRIDGE_INSTALLER"; then
   fail "Saturn Bridge installer can leave an already-running deleted executable active"
 fi

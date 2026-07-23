@@ -27,12 +27,15 @@ if grep -Eq 'SATURN_MAX_BODY_BYTES' "$MAIN" "$INSTALLER"; then
   fail "retired global request-limit setting remains active"
 fi
 
+# These patterns intentionally match literal shell parameter expansions.
+# shellcheck disable=SC2016
 grep -Fq 'SATURN_NGINX_CLIENT_MAX_BODY_SIZE="${SATURN_NGINX_CLIENT_MAX_BODY_SIZE:-64k}"' "$INSTALLER" ||
   fail "nginx ordinary request limit is not 64 KiB"
 grep -Fq 'location ~ ^/saturn/(restore_settings|restore_source|restore_full)$ {' "$INSTALLER" ||
   fail "nginx restore routes do not have a dedicated location"
 
 restore_location="$(sed -n '/location ~ \^\/saturn\/(restore_settings|restore_source|restore_full)\$ {/,/^  }/p' "$INSTALLER")"
+# shellcheck disable=SC2016
 grep -Fq 'client_max_body_size ${SATURN_NGINX_RESTORE_MAX_BODY_SIZE};' <<<"$restore_location" ||
   fail "nginx restore location lacks its separate body limit"
 grep -Fq 'proxy_request_buffering off;' <<<"$restore_location" ||

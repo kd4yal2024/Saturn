@@ -26,8 +26,12 @@ if grep -Eq 'NOPASSWD: .*\/(make_pi_image|clone_pi_to_device|saturn-pi-wipe-targ
   echo "disk imaging helper remains in Saturn Go sudoers policy" >&2
   exit 1
 fi
+# These patterns intentionally match literal shell variable references.
+# shellcheck disable=SC2016
 grep -Fq '"$PRIVILEGED_SCRIPTS_DIR/make_pi_image.sh"' "$INSTALLER"
+# shellcheck disable=SC2016
 grep -Fq '"$PRIVILEGED_SCRIPTS_DIR/clone_pi_to_device.sh"' "$INSTALLER"
+# shellcheck disable=SC2016
 grep -Fq '"$PRIVILEGED_SCRIPTS_DIR/saturn-pi-wipe-target.sh"' "$INSTALLER"
 
 grep -Fq '### Manual Whole-Disk Imaging' "$RUNBOOK"
