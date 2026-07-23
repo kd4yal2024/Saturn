@@ -581,6 +581,17 @@ exported through `/bridge_diag` and the `remote_backpressure` TCI telemetry.
 Flood tests cover hard queue/socket ceilings and verify that TX release is
 dequeued first in under 10 ms after 10,000 control/media submissions.
 
+Appliance acceptance completed on 2026-07-23 against implementation commit
+`8c7c30ca6d3f51e8126fccf492d6aaa411dfce2a` on the supported Trixie arm64
+Saturn. Provisioning and hardware verification passed, `/readyz` reported the
+exact expected commit, and `saturn-go`, `saturn-bridge`, and `p2app` were all
+active. `/remote_metrics` reported the four-client logical limit with no
+rejections. After loading the newly installed bridge executable,
+`/bridge_diag` reported the eight-connection physical limit, numeric queue
+metrics, empty current queues, and zero command drops. Follow-up commit
+`3cd346a` makes future bridge installations restart an already-running service
+after replacing its executable.
+
 ## Milestone 6 — Low-burden session improvements
 
 ### REM-0601: Preserve the one-year remembered-login behavior
@@ -709,6 +720,6 @@ Update this section as milestones complete.
 | 2 — Deployment | — | — | — | Not started |
 | 3 — Restore | — | — | — | Not started |
 | 4 — State/jobs | — | — | — | In progress (REM-0401 through REM-0403 complete) |
-| 5 — Limits | REM-0501 through REM-0503 implementation commits | Rust boundary/flood tests; durable broker cap contract | REM-0501 and REM-0502 appliance acceptance complete; REM-0503 pending appliance install | Complete pending REM-0503 appliance acceptance |
+| 5 — Limits | REM-0501 through REM-0503 implementation commits | Rust boundary/flood tests; durable broker cap contract | REM-0501 through REM-0503 appliance acceptance complete | Complete |
 | 6 — Sessions | Deferred | — | — | Deferred |
 | 7 — Reproducibility | — | — | — | Not started |
