@@ -8,6 +8,7 @@ set -Eeuo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 REPO_ROOT="${SATURN_RELEASE_REPO_ROOT:-$(cd -- "$SCRIPT_DIR/../.." && pwd -P)}"
 OUTPUT_ROOT="${SATURN_RELEASE_OUTPUT_ROOT:-/var/lib/saturn-state/release-staging}"
+SOURCE_WORKTREE_ROOT="${SATURN_RELEASE_SOURCE_WORKTREE_ROOT:-}"
 COMPONENTS_FILE="${SATURN_RELEASE_COMPONENTS_FILE:-$REPO_ROOT/update_manager/release/components-v1.json}"
 MANIFEST_TOOL="${SATURN_RELEASE_MANIFEST_TOOL:-$REPO_ROOT/update_manager/scripts/saturn-release-manifest.py}"
 BUILD_JOBS="${SATURN_RELEASE_BUILD_JOBS:-1}"
@@ -21,6 +22,10 @@ BUILD_PREFLIGHT_INSTALLED="${SATURN_RELEASE_BUILD_PREFLIGHT_HELPER:-/usr/local/l
 WEB_ASSET_HELPERS="$REPO_ROOT/update_manager/scripts/saturn-go-web-assets.sh"
 BRIDGE_INSTALLER="$REPO_ROOT/update_manager/scripts/install-saturn-bridge.sh"
 DRY_RUN=0
+RESOLVE_ONLY=0
+SOURCE_REMOTE=""
+SOURCE_REF=""
+SOURCE_WORKTREE=""
 FINAL_DIR=""
 TEMP_STAGE=""
 declare -a TRACKED_BUILD_OUTPUTS=()
@@ -32,10 +37,14 @@ need_cmd(){ command -v "$1" >/dev/null 2>&1 || die "required command not found: 
 usage(){
   cat <<'EOF'
 Usage: saturn-release-build.sh [--output-root DIR] [--dry-run]
+       saturn-release-build.sh --source-remote URL --source-ref REF [--output-root DIR] [--dry-run]
+       saturn-release-build.sh --source-remote URL --source-ref REF --resolve-only
 
-Builds and validates a complete inactive application release from the current
-clean Git commit. The completed bundle is written to OUTPUT_ROOT/<full-commit>.
-The script does not install, activate, restart, or roll back services.
+Without source options, builds the current clean Git commit. With source
+options, resolves the requested remote branch/tag once, fetches and verifies
+that exact commit, then builds from a detached temporary worktree. The
+completed bundle is written to OUTPUT_ROOT/<full-commit>. The script does not
+install, activate, restart, or roll back services.
 EOF
 }
 
@@ -45,6 +54,11 @@ cleanup(){
   set +e
   if (( rc != 0 )) && [[ -n "$TEMP_STAGE" && -d "$TEMP_STAGE" ]]; then
     rm -rf -- "$TEMP_STAGE"
+  fi
+  if [[ -n "$SOURCE_WORKTREE" ]]; then
+    git -C "$REPO_ROOT" worktree remove --force "$SOURCE_WORKTREE" >/dev/null 2>&1 \
+      || rm -rf -- "$SOURCE_WORKTREE"
+    git -C "$REPO_ROOT" worktree prune >/dev/null 2>&1 || true
   fi
   for relative in "${TRACKED_BUILD_OUTPUTS[@]}"; do
     git -C "$REPO_ROOT" checkout-index -f -- "$relative"
@@ -60,6 +74,17 @@ while [[ $# -gt 0 ]]; do
       OUTPUT_ROOT="$2"
       shift 2
       ;;
+    --source-remote)
+      [[ $# -ge 2 ]] || die "--source-remote requires a repository URL"
+      SOURCE_REMOTE="$2"
+      shift 2
+      ;;
+    --source-ref)
+      [[ $# -ge 2 ]] || die "--source-ref requires a branch or tag"
+      SOURCE_REF="$2"
+      shift 2
+      ;;
+    --resolve-only) RESOLVE_ONLY=1; shift ;;
     --dry-run) DRY_RUN=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *) die "unknown argument: $1" ;;
@@ -97,15 +122,118 @@ require_positive_integer(){
   [[ "$2" =~ ^[1-9][0-9]*$ ]] || die "$1 must be a positive integer, got: $2"
 }
 
+resolve_remote_source(){
+  local probe detail canonical exact_commit peeled_commit
+  local -a patterns=()
+  local -a matching_refs=()
+
+  [[ -n "$SOURCE_REMOTE" ]] || die "--source-remote is required with --source-ref"
+  [[ -n "$SOURCE_REF" ]] || die "--source-ref is required with --source-remote"
+  [[ "$SOURCE_REMOTE" != -* && "$SOURCE_REMOTE" != *$'\n'* && "$SOURCE_REMOTE" != *$'\r'* ]] \
+    || die "invalid source remote"
+  [[ "$SOURCE_REF" != -* && "$SOURCE_REF" != *$'\n'* && "$SOURCE_REF" != *$'\r'* ]] \
+    || die "invalid source ref"
+
+  case "$SOURCE_REF" in
+    refs/heads/*|refs/tags/*)
+      git check-ref-format "$SOURCE_REF" >/dev/null 2>&1 || die "invalid source ref: $SOURCE_REF"
+      patterns=("$SOURCE_REF")
+      ;;
+    refs/*)
+      die "source ref must identify a branch or tag: $SOURCE_REF"
+      ;;
+    *)
+      git check-ref-format "refs/heads/$SOURCE_REF" >/dev/null 2>&1 \
+        || die "invalid source ref: $SOURCE_REF"
+      patterns=("refs/heads/$SOURCE_REF" "refs/tags/$SOURCE_REF")
+      ;;
+  esac
+
+  if ! probe="$(GIT_TERMINAL_PROMPT=0 git ls-remote --exit-code --refs \
+      "$SOURCE_REMOTE" "${patterns[@]}" 2>&1)"; then
+    die "cannot resolve source ref '$SOURCE_REF' from '$SOURCE_REMOTE': $probe"
+  fi
+  while IFS=$'\t' read -r _ ref; do
+    [[ -n "$ref" ]] && matching_refs+=("$ref")
+  done <<<"$probe"
+  [[ "${#matching_refs[@]}" -eq 1 ]] \
+    || die "source ref '$SOURCE_REF' is ambiguous between a branch and tag; use a full refs/... name"
+  canonical="${matching_refs[0]}"
+
+  if ! detail="$(GIT_TERMINAL_PROMPT=0 git ls-remote --exit-code \
+      "$SOURCE_REMOTE" "$canonical" "${canonical}^{}" 2>&1)"; then
+    die "cannot resolve exact source commit for '$canonical': $detail"
+  fi
+  exact_commit=""
+  peeled_commit=""
+  while IFS=$'\t' read -r commit ref; do
+    case "$ref" in
+      "$canonical") exact_commit="$commit" ;;
+      "${canonical}^{}") peeled_commit="$commit" ;;
+    esac
+  done <<<"$detail"
+  RESOLVED_SOURCE_COMMIT="${peeled_commit:-$exact_commit}"
+  [[ "$RESOLVED_SOURCE_COMMIT" =~ ^[0-9a-f]{40}$ ]] \
+    || die "source ref did not resolve to one full commit: $canonical"
+  RESOLVED_SOURCE_REF="$canonical"
+}
+
+build_resolved_remote_source(){
+  local fetched_commit child_rc
+  local -a child_args=(--output-root "$OUTPUT_ROOT")
+
+  resolve_remote_source
+  if (( RESOLVE_ONLY )); then
+    printf 'source_remote=%s\n' "$SOURCE_REMOTE"
+    printf 'requested_ref=%s\n' "$SOURCE_REF"
+    printf 'resolved_ref=%s\n' "$RESOLVED_SOURCE_REF"
+    printf 'resolved_commit=%s\n' "$RESOLVED_SOURCE_COMMIT"
+    return 0
+  fi
+
+  log "Resolved $SOURCE_REMOTE $SOURCE_REF -> $RESOLVED_SOURCE_REF @ $RESOLVED_SOURCE_COMMIT"
+  GIT_TERMINAL_PROMPT=0 git -C "$REPO_ROOT" fetch --no-tags \
+    "$SOURCE_REMOTE" "$RESOLVED_SOURCE_REF"
+  fetched_commit="$(git -C "$REPO_ROOT" rev-parse 'FETCH_HEAD^{commit}' 2>/dev/null || true)"
+  fetched_commit="${fetched_commit,,}"
+  [[ "$fetched_commit" == "$RESOLVED_SOURCE_COMMIT" ]] \
+    || die "source ref moved while preparing the build; resolved $RESOLVED_SOURCE_COMMIT but fetched ${fetched_commit:-unknown}"
+
+  SOURCE_WORKTREE_ROOT="${SOURCE_WORKTREE_ROOT:-$OUTPUT_ROOT/.source-worktrees}"
+  mkdir -p "$SOURCE_WORKTREE_ROOT"
+  SOURCE_WORKTREE="$(mktemp -d "$SOURCE_WORKTREE_ROOT/saturn-release-source.XXXXXX")"
+  rmdir "$SOURCE_WORKTREE"
+  git -C "$REPO_ROOT" worktree add --detach "$SOURCE_WORKTREE" "$RESOLVED_SOURCE_COMMIT"
+  (( DRY_RUN )) && child_args+=(--dry-run)
+
+  set +e
+  SATURN_RELEASE_REPO_ROOT="$SOURCE_WORKTREE" \
+  SATURN_RELEASE_EXPECTED_COMMIT="$RESOLVED_SOURCE_COMMIT" \
+  SATURN_RELEASE_SOURCE_REMOTE="$SOURCE_REMOTE" \
+  SATURN_RELEASE_REQUESTED_REF="$SOURCE_REF" \
+  SATURN_RELEASE_RESOLVED_REF="$RESOLVED_SOURCE_REF" \
+    "$SOURCE_WORKTREE/update_manager/scripts/saturn-release-build.sh" "${child_args[@]}"
+  child_rc="$?"
+  set -e
+  return "$child_rc"
+}
+
 ensure_clean_exact_source(){
-  local status
+  local status current_branch
   [[ -d "$REPO_ROOT/.git" || -f "$REPO_ROOT/.git" ]] || die "not a Git checkout: $REPO_ROOT"
   RELEASE_COMMIT="$(git -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null || true)"
   [[ "$RELEASE_COMMIT" =~ ^[0-9a-fA-F]{40}$ ]] || die "cannot resolve full source commit"
   RELEASE_COMMIT="${RELEASE_COMMIT,,}"
+  if [[ -n "${SATURN_RELEASE_EXPECTED_COMMIT:-}" ]]; then
+    [[ "${SATURN_RELEASE_EXPECTED_COMMIT,,}" == "$RELEASE_COMMIT" ]] \
+      || die "source checkout commit differs from resolved commit: expected ${SATURN_RELEASE_EXPECTED_COMMIT,,}, got $RELEASE_COMMIT"
+  fi
   status="$(git -C "$REPO_ROOT" status --porcelain=v1 --untracked-files=normal)"
   [[ -z "$status" ]] || die "release source tree is not clean; commit or remove all changes first"
-  REPOSITORY_URL="$(git -C "$REPO_ROOT" config --get remote.origin.url 2>/dev/null || printf 'unknown')"
+  REPOSITORY_URL="${SATURN_RELEASE_SOURCE_REMOTE:-$(git -C "$REPO_ROOT" config --get remote.origin.url 2>/dev/null || printf 'unknown')}"
+  current_branch="$(git -C "$REPO_ROOT" symbolic-ref --quiet --short HEAD 2>/dev/null || true)"
+  REQUESTED_SOURCE_REF="${SATURN_RELEASE_REQUESTED_REF:-${current_branch:-$RELEASE_COMMIT}}"
+  RESOLVED_SOURCE_REF="${SATURN_RELEASE_RESOLVED_REF:-$RELEASE_COMMIT}"
 }
 
 record_tracked_build_outputs(){
@@ -326,6 +454,8 @@ create_manifest(){
     --components "$COMPONENTS_FILE" \
     --commit "$RELEASE_COMMIT" \
     --repository "$REPOSITORY_URL" \
+    --requested-ref "$REQUESTED_SOURCE_REF" \
+    --resolved-ref "$RESOLVED_SOURCE_REF" \
     --build-result rust-server-tests \
     --build-result bridge-stub-tests \
     --build-result remote-web-typecheck \
@@ -350,6 +480,10 @@ need_cmd nice
 need_cmd npm
 need_cmd python3
 need_cmd sha256sum
+if [[ -n "$SOURCE_REMOTE" || -n "$SOURCE_REF" || "$RESOLVE_ONLY" == "1" ]]; then
+  build_resolved_remote_source
+  exit $?
+fi
 [[ -f "$COMPONENTS_FILE" ]] || die "component descriptor not found: $COMPONENTS_FILE"
 [[ -x "$MANIFEST_TOOL" ]] || die "manifest tool is not executable: $MANIFEST_TOOL"
 [[ -f "$WEB_ASSET_HELPERS" ]] || die "web asset helper not found: $WEB_ASSET_HELPERS"
@@ -361,6 +495,9 @@ ensure_clean_exact_source
 record_tracked_build_outputs
 FINAL_DIR="$OUTPUT_ROOT/$RELEASE_COMMIT"
 log "Source commit: $RELEASE_COMMIT"
+log "Source repository: $REPOSITORY_URL"
+log "Requested source ref: $REQUESTED_SOURCE_REF"
+log "Resolved source ref: $RESOLVED_SOURCE_REF"
 log "Inactive release destination: $FINAL_DIR"
 [[ "$FINAL_DIR" != "/opt/saturn/current" ]] || die "release builder must never target the active pointer"
 if (( DRY_RUN )); then

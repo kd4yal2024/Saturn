@@ -58,6 +58,8 @@ PY
     --components "$COMPONENTS"
     --commit "$commit"
     --repository fixture://saturn
+    --requested-ref fixture
+    --resolved-ref refs/heads/fixture
     --created-at 2026-07-20T12:00:00Z
   )
   while IFS= read -r result; do

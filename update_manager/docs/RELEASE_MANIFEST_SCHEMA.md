@@ -35,8 +35,8 @@ application release.
 | Field | Meaning |
 |---|---|
 | `format` | Literal `saturn-application-release`. |
-| `schema_version` | Integer `2`. Unknown versions fail closed; installed v1 manifests remain readable as legacy releases. |
-| `source` | Full lowercase Git commit, repository identity, and `dirty:false`. |
+| `schema_version` | Integer `3`. Unknown versions fail closed; installed v1/v2 manifests remain readable. |
+| `source` | Full lowercase Git commit, source repository, requested branch/tag, resolved full ref, and `dirty:false`. |
 | `build` | UTC build time, architecture, operating system, and passed build/test gates. |
 | `state_compatibility` | Versioned persistent-state read/write and migration contract. |
 | `components` | Required named runtime components with role, version, source commit, path, mode, size, and SHA-256. |
@@ -56,8 +56,8 @@ passing check for the normal release gates.
 
 ## Persistent-state contract
 
-Manifest v2 embeds the trusted component policy's `state_compatibility`
-object. It declares:
+Manifest v2 and later embed the trusted component policy's
+`state_compatibility` object. It declares:
 
 - `state_schema_version`: the version written by the release;
 - `readable_state_schema_versions`: versions the release can safely consume;
@@ -77,18 +77,34 @@ See `STATE_COMPATIBILITY.md` for activation and rollback behavior.
 
 ## Build contract
 
-Run:
+Build the current clean checkout:
 
 ```bash
 update_manager/scripts/saturn-release-build.sh
 ```
 
-The source checkout must be clean and resolve to one full commit. On the
+For a branch-following release, select the remote and branch/tag explicitly:
+
+```bash
+update_manager/scripts/saturn-release-build.sh \
+  --source-remote https://github.com/kd4yal2024/Saturn.git \
+  --source-ref remediation/reliability-hardening
+```
+
+The builder resolves the requested branch/tag to one full commit before any
+build, fetches that canonical full ref, rejects it if it moved between
+resolution and fetch, and re-executes the selected commit's builder from a
+detached temporary worktree on the persistent release-staging filesystem
+(never the small `/tmp` tmpfs). The manifest records the repository, requested
+ref, resolved full ref, and exact commit. Branch-following is therefore only
+source selection; tests and payload assembly use the immutable resolved commit.
+
+The source checkout must be clean and match the resolved commit. On the
 supported low-memory Pi, the builder requires the configured disk-backed build
 swap and uses one Rust build job by default. It runs Rust server tests, Bridge
 tests with native DSP stubs, Remote web type/seam/unit/build checks, Protocol 2
-boundary tests, persistent-state compatibility tests, and release builds before
-creating the manifest.
+boundary tests, persistent-state compatibility tests, and release builds
+before creating the manifest.
 
 The default output is:
 

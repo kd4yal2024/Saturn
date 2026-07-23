@@ -17,8 +17,8 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 FORMAT = "saturn-application-release"
-MANIFEST_SCHEMA_VERSION = 2
-SUPPORTED_MANIFEST_SCHEMA_VERSIONS = {1, MANIFEST_SCHEMA_VERSION}
+MANIFEST_SCHEMA_VERSION = 3
+SUPPORTED_MANIFEST_SCHEMA_VERSIONS = {1, 2, MANIFEST_SCHEMA_VERSION}
 DESCRIPTOR_SCHEMA_VERSION = 1
 STATE_CONTRACT_FORMAT = "saturn-state-compatibility"
 STATE_CONTRACT_SCHEMA_VERSION = 1
@@ -343,6 +343,8 @@ def create_manifest(args: argparse.Namespace) -> None:
         "source": {
             "commit": commit,
             "repository": args.repository,
+            "requested_ref": args.requested_ref,
+            "resolved_ref": args.resolved_ref,
             "dirty": False,
         },
         "build": {
@@ -381,6 +383,18 @@ def validate_release(root: Path, descriptor_path: Path | None) -> dict[str, Any]
         fail("release manifest contains an invalid source commit")
     if source.get("dirty") is not False:
         fail("release manifest must declare a clean source tree")
+    source_identity_fields = ("repository", "requested_ref", "resolved_ref")
+    if manifest_schema >= 3 and any(field not in source for field in source_identity_fields):
+        fail("release manifest does not contain exact source selection provenance")
+    for field in source_identity_fields:
+        value = source.get(field)
+        if value is not None and (
+            not isinstance(value, str)
+            or not value
+            or len(value) > 2048
+            or any(ord(character) < 32 for character in value)
+        ):
+            fail(f"release manifest contains invalid source {field}")
     if manifest_schema == 1:
         if "state_compatibility" in manifest:
             fail("legacy release manifests cannot carry a state compatibility contract")
@@ -488,7 +502,9 @@ def parser() -> argparse.ArgumentParser:
     create.add_argument("--repo-root", type=Path, required=True)
     create.add_argument("--components", type=Path, required=True)
     create.add_argument("--commit", required=True)
-    create.add_argument("--repository", default="unknown")
+    create.add_argument("--repository", required=True)
+    create.add_argument("--requested-ref", required=True)
+    create.add_argument("--resolved-ref", required=True)
     create.add_argument("--created-at", default="")
     create.add_argument("--build-result", action="append", default=[])
 

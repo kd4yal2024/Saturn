@@ -83,6 +83,22 @@ Do not set `ACTIVATION_ENABLED=1` in
 installer keeps it disabled. The current legacy deployment remains active
 until a live activation and deliberate rollback test are explicitly approved.
 
+Build an inactive release from a branch or tag without trusting the mutable ref
+after selection:
+
+```bash
+cd /home/pi/github/Saturn
+update_manager/scripts/saturn-release-build.sh \
+  --source-remote https://github.com/kd4yal2024/Saturn.git \
+  --source-ref remediation/reliability-hardening
+```
+
+The builder records the requested ref, its canonical full ref, source remote,
+and resolved 40-character commit in the schema-v3 manifest. It fails if the
+remote ref moves between resolution and fetch, then builds and tests only the
+detached resolved commit. Use `--resolve-only` to inspect the selection without
+building. Neither operation activates a release or restarts services.
+
 The durable transaction record is
 `/var/lib/saturn-state/deployments/current.json`. A successful recovery records
 `status: rolled_back`; an incomplete recovery records

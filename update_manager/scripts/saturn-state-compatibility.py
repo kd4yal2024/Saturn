@@ -136,7 +136,7 @@ def release_contract(release_root: Path) -> dict[str, Any]:
     schema = manifest.get("schema_version")
     if schema == 1:
         return validate_contract(None, legacy=True)
-    if schema == 2:
+    if schema in (2, 3):
         return validate_contract(manifest.get("state_compatibility"))
     fail(f"unsupported release manifest schema: {schema!r}")
 

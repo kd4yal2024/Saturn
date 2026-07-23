@@ -624,10 +624,22 @@ This item is deferred until the deployment, restore, state, and job milestones a
 
 ### REM-0701: Deploy exact commits
 
-- [ ] Resolve a requested branch/tag to a full commit before building.
-- [ ] Record the exact commit and source remote in the release manifest.
-- [ ] Never activate a different commit from the one tested in staging.
-- [ ] Preserve branch-following behavior only as a source-selection convenience; deployment itself uses the resolved immutable commit.
+- [x] Resolve a requested branch/tag to a full commit before building.
+- [x] Record the exact commit and source remote in the release manifest.
+- [x] Never activate a different commit from the one tested in staging.
+- [x] Preserve branch-following behavior only as a source-selection convenience; deployment itself uses the resolved immutable commit.
+
+Completion evidence: the canonical release builder accepts a source remote and
+branch/tag, resolves it to a canonical full ref and peeled 40-character commit,
+fetches that ref, rejects movement between resolution and fetch, and
+re-executes the selected commit's builder in a detached worktree. The child
+builder refuses a checkout whose `HEAD` differs from the resolved commit.
+Schema-v3 manifests require and record the source repository, requested ref,
+resolved ref, and exact commit while retaining v1/v2 validation for installed
+rollback releases. Local branch, annotated-tag, ambiguity, missing-ref, and
+commit-mismatch tests cover selection. Existing activation tests validate the
+manifest-bearing commit and prove that wrong-commit readiness rolls back rather
+than commits activation.
 
 ### REM-0702: Defer release signing without blocking remediation
 
@@ -733,4 +745,4 @@ Update this section as milestones complete.
 | 4 — State/jobs | — | — | — | In progress (REM-0401 through REM-0403 complete) |
 | 5 — Limits | REM-0501 through REM-0503 implementation commits | Rust boundary/flood tests; durable broker cap contract | REM-0501 through REM-0503 appliance acceptance complete | Complete |
 | 6 — Sessions | REM-0601 implementation commit | Rust cookie/invalidation tests; password-policy contract test | Existing appliance auth path retained; no service restart required | REM-0601 complete; REM-0602 deferred |
-| 7 — Reproducibility | — | — | — | Not started |
+| 7 — Reproducibility | REM-0701 implementation commit | Exact branch/tag resolution, manifest provenance, mismatch, and wrong-commit activation tests | Hardware-independent; no service restart required | REM-0701 complete; REM-0702 deferred |

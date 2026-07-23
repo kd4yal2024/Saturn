@@ -180,6 +180,7 @@ jobs:
             tests/test-saturn-release-activate.sh \
             tests/test-saturn-release-install.sh \
             tests/test-saturn-release-manifest.sh \
+            tests/test-saturn-release-source.sh \
             tests/test-saturn-maintenance-lock.sh \
             tests/test-saturn-maintenance-jobs.sh \
             tests/test-saturn-transactional-restore.sh \
@@ -215,6 +216,7 @@ jobs:
             tests/test-saturn-release-activate.sh \
             tests/test-saturn-release-install.sh \
             tests/test-saturn-release-manifest.sh \
+            tests/test-saturn-release-source.sh \
             tests/test-saturn-maintenance-lock.sh \
             tests/test-saturn-maintenance-jobs.sh \
             tests/test-saturn-transactional-restore.sh \
@@ -256,6 +258,9 @@ jobs:
 
       - name: Test application release manifest
         run: tests/test-saturn-release-manifest.sh
+
+      - name: Test exact release source selection
+        run: tests/test-saturn-release-source.sh
 
       - name: Test immutable release installation
         run: tests/test-saturn-release-install.sh

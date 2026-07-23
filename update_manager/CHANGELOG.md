@@ -4,6 +4,11 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
 
 ## [Unreleased]
 ### Changed
+- Release builds can now select a remote branch or tag, resolve it to one
+  immutable commit, detect movement before staging, and build from a detached
+  worktree. Schema-v3 manifests record the source remote, requested ref,
+  canonical resolved ref, and exact tested commit; v1/v2 manifests remain
+  readable for rollback.
 - Made the one-year Saturn Remote remembered-login policy an explicit tested
   contract. Administrator password changes continue to invalidate every
   remembered browser after the deferred Saturn Go restart, with clearer UI

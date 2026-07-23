@@ -20,6 +20,8 @@ create_fixture_manifest(){
     --components "$COMPONENTS"
     --commit "$COMMIT"
     --repository fixture://saturn
+    --requested-ref main
+    --resolved-ref refs/heads/main
     --created-at 2026-07-18T12:00:00Z
   )
   while IFS= read -r result; do
@@ -78,6 +80,8 @@ if python3 "$TOOL" create \
   --components "$COMPONENTS" \
   --commit "$COMMIT" \
   --repository fixture://saturn \
+  --requested-ref fixture \
+  --resolved-ref refs/heads/fixture \
   --created-at 2026-07-18T12:00:00Z \
   --build-result fixture-tests >/dev/null 2>&1; then
   printf 'incomplete build-gate set unexpectedly created a release manifest\n' >&2
@@ -105,8 +109,11 @@ import sys
 with open(sys.argv[1], encoding="utf-8") as handle:
     manifest = json.load(handle)
 assert manifest["format"] == "saturn-application-release"
-assert manifest["schema_version"] == 2
+assert manifest["schema_version"] == 3
 assert manifest["source"]["commit"] == sys.argv[2]
+assert manifest["source"]["repository"] == "fixture://saturn"
+assert manifest["source"]["requested_ref"] == "main"
+assert manifest["source"]["resolved_ref"] == "refs/heads/main"
 assert manifest["source"]["dirty"] is False
 assert manifest["components"]
 assert all(item["source_commit"] == sys.argv[2] for item in manifest["components"])
@@ -123,6 +130,46 @@ python3 "$TOOL" state-contract \
   --release-root "$RELEASE_ROOT" \
   --components "$COMPONENTS" \
   | python3 -c 'import json,sys; value=json.load(sys.stdin); assert value["state_schema_version"] == 1; assert value["readable_state_schema_versions"] == [0, 1]'
+
+# New schema-v3 manifests fail closed when exact source provenance is absent.
+python3 - "$RELEASE_ROOT/release-manifest.json" <<'PY'
+import json
+import sys
+path = sys.argv[1]
+with open(path, encoding="utf-8") as handle:
+    value = json.load(handle)
+value["source"].pop("resolved_ref")
+with open(path, "w", encoding="utf-8") as handle:
+    json.dump(value, handle, indent=2, sort_keys=True)
+    handle.write("\n")
+PY
+refresh_checksum_index
+if python3 "$TOOL" validate \
+  --release-root "$RELEASE_ROOT" \
+  --components "$COMPONENTS" >/dev/null 2>&1; then
+  printf 'schema-v3 manifest without source provenance unexpectedly passed\n' >&2
+  exit 1
+fi
+create_fixture_manifest >/dev/null
+
+# Existing schema-v2 release manifests remain valid without the new source-ref
+# provenance fields.
+python3 - "$RELEASE_ROOT/release-manifest.json" <<'PY'
+import json
+import sys
+path = sys.argv[1]
+with open(path, encoding="utf-8") as handle:
+    value = json.load(handle)
+value["schema_version"] = 2
+value["source"].pop("requested_ref")
+value["source"].pop("resolved_ref")
+with open(path, "w", encoding="utf-8") as handle:
+    json.dump(value, handle, indent=2, sort_keys=True)
+    handle.write("\n")
+PY
+refresh_checksum_index
+python3 "$TOOL" validate --release-root "$RELEASE_ROOT" --components "$COMPONENTS" >/dev/null
+create_fixture_manifest >/dev/null
 
 # Existing schema-v1 release manifests remain valid and receive the explicit
 # legacy state contract so installed rollback releases are not stranded.
@@ -161,6 +208,8 @@ PY
 bad_args=(
   create --release-root "$RELEASE_ROOT" --repo-root "$REPO_ROOT"
   --components "$TMP_ROOT/incompatible-components.json" --commit "$COMMIT"
+  --repository fixture://saturn
+  --requested-ref fixture --resolved-ref refs/heads/fixture
 )
 while IFS= read -r result; do
   bad_args+=(--build-result "$result")
