@@ -33,6 +33,8 @@ import {
   clampSpectrumAverage,
   clampWaterfallSpeed,
   normalizeWaterfallPalette,
+  normalizeSpectrumTraceColor,
+  clampSpectrumVisualEffect,
 } from '../settings/normalize';
 import { clampDemodMode } from '../radio/passband';
 
@@ -104,6 +106,10 @@ export interface DisplayPrefsSource {
   waterfallSpeed: number;
   waterfallPalette: string;
   spectrumPeakHold: boolean;
+  spectrumTraceColor: string;
+  spectrumTraceSmoothing: number;
+  spectrumPeakGlow: number;
+  spectrumGlassSheen: number;
   showGrid: boolean;
   showCenterLine: boolean;
   showBandEdges: boolean;
@@ -180,6 +186,10 @@ export function displayPrefsFromState(s: DisplayPrefsSource): DisplayPrefs {
     waterfallSpeed: clampWaterfallSpeed(s.waterfallSpeed),
     waterfallPalette: normalizeWaterfallPalette(s.waterfallPalette),
     spectrumPeakHold: Boolean(s.spectrumPeakHold),
+    spectrumTraceColor: normalizeSpectrumTraceColor(s.spectrumTraceColor),
+    spectrumTraceSmoothing: clampSpectrumVisualEffect(s.spectrumTraceSmoothing),
+    spectrumPeakGlow: clampSpectrumVisualEffect(s.spectrumPeakGlow),
+    spectrumGlassSheen: clampSpectrumVisualEffect(s.spectrumGlassSheen),
     showGrid: Boolean(s.showGrid),
     showCenterLine: Boolean(s.showCenterLine),
     showBandEdges: Boolean(s.showBandEdges),

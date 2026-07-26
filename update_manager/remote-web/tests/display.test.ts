@@ -4,6 +4,7 @@ import {
   displayPercentForOffsetHz,
   visibleBinsForDisplay,
   shiftBinsHorizontally,
+  smoothSpectrumTrace,
   bandEdgesInView,
   autoRangeFromBins,
 } from '../src/dsp/display';
@@ -76,6 +77,22 @@ describe('shiftBinsHorizontally', () => {
     const bins = new Float32Array([1, 2, 3]);
     const result = shiftBinsHorizontally(bins, 5, -200)!;
     expect(Array.from(result)).toEqual([-200, -200, -200]);
+  });
+});
+
+describe('smoothSpectrumTrace', () => {
+  it('returns the original bins when smoothing is off', () => {
+    const bins = new Float32Array([0, 10, 0]);
+    expect(smoothSpectrumTrace(bins, 0)).toBe(bins);
+  });
+
+  it('softens isolated peaks without changing the bin count', () => {
+    const bins = new Float32Array([0, 0, 12, 0, 0]);
+    const result = smoothSpectrumTrace(bins, 100);
+    expect(result).toHaveLength(bins.length);
+    expect(result[2]).toBeLessThan(12);
+    expect(result[1]).toBeGreaterThan(0);
+    expect(result[3]).toBeGreaterThan(0);
   });
 });
 

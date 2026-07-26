@@ -209,6 +209,10 @@ export interface AppState {
   spectrumAutoRange: boolean;
   spectrumAverage: number;
   spectrumPeakHold: boolean;
+  spectrumTraceColor: string;
+  spectrumTraceSmoothing: number;
+  spectrumPeakGlow: number;
+  spectrumGlassSheen: number;
   spectrumAverageBypassFrames: number;
   waterfallAutoRange: boolean;
   waterfallFloorDb: number;
@@ -490,6 +494,10 @@ export function createAppState(): AppState {
     spectrumAutoRange: true,
     spectrumAverage: 1,
     spectrumPeakHold: false,
+    spectrumTraceColor: '#62d0ff',
+    spectrumTraceSmoothing: 0,
+    spectrumPeakGlow: 0,
+    spectrumGlassSheen: 0,
     spectrumAverageBypassFrames: 0,
     waterfallAutoRange: true,
     waterfallFloorDb: -200,

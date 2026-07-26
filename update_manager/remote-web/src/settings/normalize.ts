@@ -209,6 +209,15 @@ export function normalizeWaterfallPalette(value: unknown): WaterfallPalette {
   return WATERFALL_PALETTES.includes(palette as WaterfallPalette) ? (palette as WaterfallPalette) : 'classic';
 }
 
+export function normalizeSpectrumTraceColor(value: unknown): string {
+  const color = String(value || '').trim().toLowerCase();
+  return /^#[0-9a-f]{6}$/.test(color) ? color : DEFAULT_DISPLAY_PREFS.spectrumTraceColor;
+}
+
+export function clampSpectrumVisualEffect(value: unknown): number {
+  return Math.max(0, Math.min(100, Math.round(safeFiniteNumber(value, 0))));
+}
+
 export function sanitizePhonePanels(values: unknown, fallback: PhonePanels = { ...DEFAULT_PHONE_PANELS }): PhonePanels {
   const panels = { ...fallback };
   if (!values || typeof values !== 'object') return panels;
@@ -332,6 +341,10 @@ export function normalizeDisplayPrefs(input: DeepPartial<DisplayPrefs> | null | 
     waterfallSpeed: clampWaterfallSpeed(source.waterfallSpeed),
     waterfallPalette: normalizeWaterfallPalette(source.waterfallPalette),
     spectrumPeakHold: source.spectrumPeakHold ?? DEFAULT_DISPLAY_PREFS.spectrumPeakHold,
+    spectrumTraceColor: normalizeSpectrumTraceColor(source.spectrumTraceColor),
+    spectrumTraceSmoothing: clampSpectrumVisualEffect(source.spectrumTraceSmoothing),
+    spectrumPeakGlow: clampSpectrumVisualEffect(source.spectrumPeakGlow),
+    spectrumGlassSheen: clampSpectrumVisualEffect(source.spectrumGlassSheen),
     showGrid: source.showGrid ?? DEFAULT_DISPLAY_PREFS.showGrid,
     showCenterLine: source.showCenterLine ?? DEFAULT_DISPLAY_PREFS.showCenterLine,
     showBandEdges: source.showBandEdges ?? DEFAULT_DISPLAY_PREFS.showBandEdges,

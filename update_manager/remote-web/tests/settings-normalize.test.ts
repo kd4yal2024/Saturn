@@ -3,6 +3,7 @@ import { createDefaultSettingsState } from '../src/settings/defaults';
 import {
   applyRemoteSettingsToState,
   normalizeBandMemory,
+  normalizeDisplayPrefs,
   normalizeProfileSettings,
   normalizeRadioPrefs,
   normalizeRemoteSettings,
@@ -93,6 +94,21 @@ describe('settings normalization', () => {
     expect(normalizeStreamMode('WAN')).toBe('wan');
     expect(normalizeStreamMode('raw')).toBe('lan');
     expect(normalizeStreamMode(null)).toBe('lan');
+  });
+
+  it('normalizes panadapter appearance preferences', () => {
+    const prefs = normalizeDisplayPrefs({
+      spectrumTraceColor: '#A1B2C3',
+      spectrumTraceSmoothing: 140,
+      spectrumPeakGlow: -12,
+      spectrumGlassSheen: 42.6,
+    });
+    expect(prefs.spectrumTraceColor).toBe('#a1b2c3');
+    expect(prefs.spectrumTraceSmoothing).toBe(100);
+    expect(prefs.spectrumPeakGlow).toBe(0);
+    expect(prefs.spectrumGlassSheen).toBe(43);
+
+    expect(normalizeDisplayPrefs({ spectrumTraceColor: 'not-a-color' }).spectrumTraceColor).toBe('#62d0ff');
   });
 
   it('normalizes profile and remote settings', () => {

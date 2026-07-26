@@ -62,6 +62,38 @@ export function shiftBinsHorizontally(
   return shifted;
 }
 
+/**
+ * Apply a lightweight spatial moving-average to the displayed spectrum trace.
+ * This is intentionally separate from temporal spectrum averaging so smoothing
+ * does not add latency to tuning or waterfall updates.
+ */
+export function smoothSpectrumTrace(bins: Float32Array, amount: number): Float32Array {
+  const strength = Math.max(0, Math.min(100, Number.isFinite(amount) ? amount : 0)) / 100;
+  if (strength <= 0 || bins.length < 3) return bins;
+
+  const radius = Math.max(1, Math.min(6, Math.ceil(strength * 6)));
+  const smoothed = new Float32Array(bins.length);
+  let sum = 0;
+  let start = 0;
+  let end = Math.min(bins.length - 1, radius);
+
+  for (let i = start; i <= end; i += 1) sum += bins[i] ?? 0;
+  for (let i = 0; i < bins.length; i += 1) {
+    while (start < Math.max(0, i - radius)) {
+      sum -= bins[start] ?? 0;
+      start += 1;
+    }
+    const targetEnd = Math.min(bins.length - 1, i + radius);
+    while (end < targetEnd) {
+      end += 1;
+      sum += bins[end] ?? 0;
+    }
+    const average = sum / Math.max(1, end - start + 1);
+    smoothed[i] = (bins[i] ?? 0) * (1 - strength) + average * strength;
+  }
+  return smoothed;
+}
+
 export type BandEdgeMarker = { hz: number; label: string };
 
 /**

@@ -37,6 +37,8 @@ import {
   clampSpectrumAverage,
   clampWaterfallSpeed,
   normalizeWaterfallPalette,
+  normalizeSpectrumTraceColor,
+  clampSpectrumVisualEffect,
   safeFiniteNumber,
 } from '../settings/normalize';
 import { clampDemodMode, clampFilterLowHz, clampFilterHighHz } from '../radio/passband';
@@ -112,6 +114,10 @@ export interface DisplayPrefsTarget {
   waterfallSpeed: number;
   waterfallPalette: string;
   spectrumPeakHold: boolean;
+  spectrumTraceColor: string;
+  spectrumTraceSmoothing: number;
+  spectrumPeakGlow: number;
+  spectrumGlassSheen: number;
   showGrid: boolean;
   showCenterLine: boolean;
   showBandEdges: boolean;
@@ -259,6 +265,12 @@ export function applyDisplayPrefsToState(
   state.waterfallSpeed = clampWaterfallSpeed(prefs.waterfallSpeed ?? state.waterfallSpeed);
   state.waterfallPalette = normalizeWaterfallPalette(prefs.waterfallPalette ?? state.waterfallPalette);
   state.spectrumPeakHold = Boolean(prefs.spectrumPeakHold ?? state.spectrumPeakHold);
+  state.spectrumTraceColor = normalizeSpectrumTraceColor(prefs.spectrumTraceColor ?? state.spectrumTraceColor);
+  state.spectrumTraceSmoothing = clampSpectrumVisualEffect(
+    prefs.spectrumTraceSmoothing ?? state.spectrumTraceSmoothing,
+  );
+  state.spectrumPeakGlow = clampSpectrumVisualEffect(prefs.spectrumPeakGlow ?? state.spectrumPeakGlow);
+  state.spectrumGlassSheen = clampSpectrumVisualEffect(prefs.spectrumGlassSheen ?? state.spectrumGlassSheen);
   state.showGrid = Boolean(prefs.showGrid ?? state.showGrid);
   state.showCenterLine = Boolean(prefs.showCenterLine ?? state.showCenterLine);
   state.showBandEdges = Boolean(prefs.showBandEdges ?? state.showBandEdges);
@@ -371,6 +383,10 @@ export function normalizeAppStateInPlace(state: NormalizableState): void {
   state.waterfallSpeed = clampWaterfallSpeed(state.waterfallSpeed);
   state.waterfallPalette = normalizeWaterfallPalette(state.waterfallPalette);
   state.spectrumPeakHold = Boolean(state.spectrumPeakHold);
+  state.spectrumTraceColor = normalizeSpectrumTraceColor(state.spectrumTraceColor);
+  state.spectrumTraceSmoothing = clampSpectrumVisualEffect(state.spectrumTraceSmoothing);
+  state.spectrumPeakGlow = clampSpectrumVisualEffect(state.spectrumPeakGlow);
+  state.spectrumGlassSheen = clampSpectrumVisualEffect(state.spectrumGlassSheen);
   state.showGrid = Boolean(state.showGrid);
   state.showCenterLine = Boolean(state.showCenterLine);
   state.showBandEdges = Boolean(state.showBandEdges);

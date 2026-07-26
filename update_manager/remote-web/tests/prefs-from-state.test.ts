@@ -52,6 +52,10 @@ describe('displayPrefsFromState', () => {
     expect(prefs.waterfallPalette).toBe('classic');
     expect(prefs.spectrumAverage).toBe(1);
     expect(prefs.waterfallSpeed).toBe(1);
+    expect(prefs.spectrumTraceColor).toBe('#62d0ff');
+    expect(prefs.spectrumTraceSmoothing).toBe(0);
+    expect(prefs.spectrumPeakGlow).toBe(0);
+    expect(prefs.spectrumGlassSheen).toBe(0);
     expect(prefs.showGrid).toBe(true);
     expect(prefs.showCenterLine).toBe(true);
     expect(prefs.showBandEdges).toBe(true);
@@ -60,7 +64,11 @@ describe('displayPrefsFromState', () => {
   it('normalizes invalid palette', () => {
     const state = createAppState();
     state.waterfallPalette = 'nope';
+    state.spectrumTraceColor = '#ABCDEF';
+    state.spectrumPeakGlow = 200;
     const prefs = displayPrefsFromState(state);
     expect(prefs.waterfallPalette).toBe('classic');
+    expect(prefs.spectrumTraceColor).toBe('#abcdef');
+    expect(prefs.spectrumPeakGlow).toBe(100);
   });
 });

@@ -75,8 +75,19 @@ describe('applyDisplayPrefsToState', () => {
 
   it('merges partial display prefs', () => {
     const state = createAppState();
-    applyDisplayPrefsToState({ waterfallPalette: 'ember', showGrid: false }, state);
+    applyDisplayPrefsToState({
+      waterfallPalette: 'ember',
+      spectrumTraceColor: '#ff8800',
+      spectrumTraceSmoothing: 35,
+      spectrumPeakGlow: 45,
+      spectrumGlassSheen: 55,
+      showGrid: false,
+    }, state);
     expect(state.waterfallPalette).toBe('ember');
+    expect(state.spectrumTraceColor).toBe('#ff8800');
+    expect(state.spectrumTraceSmoothing).toBe(35);
+    expect(state.spectrumPeakGlow).toBe(45);
+    expect(state.spectrumGlassSheen).toBe(55);
     expect(state.showGrid).toBe(false);
     expect(state.showCenterLine).toBe(true); // unchanged
   });
@@ -130,8 +141,14 @@ describe('normalizeAppStateInPlace', () => {
     const state = createAppState();
     state.waterfallPalette = 'invalid';
     state.spectrumAverage = -5;
+    state.spectrumTraceColor = 'invalid';
+    state.spectrumTraceSmoothing = 999;
+    state.spectrumPeakGlow = -1;
     normalizeAppStateInPlace(state);
     expect(state.waterfallPalette).toBe('classic');
     expect(state.spectrumAverage).toBeGreaterThanOrEqual(1);
+    expect(state.spectrumTraceColor).toBe('#62d0ff');
+    expect(state.spectrumTraceSmoothing).toBe(100);
+    expect(state.spectrumPeakGlow).toBe(0);
   });
 });

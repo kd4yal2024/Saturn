@@ -89,6 +89,10 @@ export type DisplayPrefs = {
   waterfallSpeed: number;
   waterfallPalette: WaterfallPalette;
   spectrumPeakHold: boolean;
+  spectrumTraceColor: string;
+  spectrumTraceSmoothing: number;
+  spectrumPeakGlow: number;
+  spectrumGlassSheen: number;
   showGrid: boolean;
   showCenterLine: boolean;
   showBandEdges: boolean;

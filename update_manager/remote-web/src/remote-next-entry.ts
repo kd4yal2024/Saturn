@@ -35,6 +35,8 @@ import {
   clampSpectrumAverage,
   clampWaterfallSpeed,
   normalizeWaterfallPalette,
+  normalizeSpectrumTraceColor,
+  clampSpectrumVisualEffect,
   sanitizePhonePanels,
 } from './settings/normalize';
 import { parseTciText } from './tci/parser';
@@ -151,6 +153,7 @@ import {
   displayPercentForOffsetHz,
   visibleBinsForDisplay,
   shiftBinsHorizontally,
+  smoothSpectrumTrace,
   bandEdgesInView,
   autoRangeFromBins,
 } from './dsp/display';
@@ -260,6 +263,8 @@ const api = {
   clampSpectrumAverage,
   clampWaterfallSpeed,
   normalizeWaterfallPalette,
+  normalizeSpectrumTraceColor,
+  clampSpectrumVisualEffect,
   sanitizePhonePanels,
   normalizeBandMemory,
 
@@ -277,6 +282,7 @@ const api = {
   displayPercentForOffsetHz,
   visibleBinsForDisplay,
   shiftBinsHorizontally,
+  smoothSpectrumTrace,
   bandEdgesInView,
   autoRangeFromBins,
 

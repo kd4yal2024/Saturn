@@ -466,6 +466,17 @@
       width: 100%;
       height: 100%;
     }
+    .spectrum-glass-sheen {
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      opacity: 0;
+      background:
+        linear-gradient(165deg, rgba(255, 255, 255, 0.24) 0%, rgba(255, 255, 255, 0.06) 16%, transparent 42%),
+        radial-gradient(ellipse at 48% -20%, rgba(255, 255, 255, 0.22), transparent 58%);
+      mix-blend-mode: screen;
+      transition: opacity 140ms ease;
+    }
     .display-grid-overlay,
     .band-edge-layer {
       position: absolute;
@@ -2029,6 +2040,12 @@
     .setup-row {
       display: grid;
       gap: 6px;
+    }
+
+    .setup-color-field {
+      min-height: 42px;
+      padding: 5px 7px;
+      cursor: pointer;
     }
 
     .setup-grid {
@@ -4283,6 +4300,26 @@
                             <div class="setup-readout" id="display-spectrum-average-readout">1 frame</div>
                           </div>
                           <div class="setup-row">
+                            <label class="label" for="display-spectrum-trace-color">Trace Color</label>
+                            <input class="field setup-color-field" id="display-spectrum-trace-color" type="color" value="#62d0ff" />
+                            <div class="setup-readout" id="display-spectrum-trace-color-readout">#62d0ff</div>
+                          </div>
+                          <div class="setup-row">
+                            <label class="label" for="display-spectrum-trace-smoothing">Trace Smoothing</label>
+                            <input id="display-spectrum-trace-smoothing" type="range" min="0" max="100" step="1" value="0" />
+                            <div class="setup-readout" id="display-spectrum-trace-smoothing-readout">Off</div>
+                          </div>
+                          <div class="setup-row">
+                            <label class="label" for="display-spectrum-peak-glow">Peak Glow</label>
+                            <input id="display-spectrum-peak-glow" type="range" min="0" max="100" step="1" value="0" />
+                            <div class="setup-readout" id="display-spectrum-peak-glow-readout">Off</div>
+                          </div>
+                          <div class="setup-row">
+                            <label class="label" for="display-spectrum-glass-sheen">Glass Sheen</label>
+                            <input id="display-spectrum-glass-sheen" type="range" min="0" max="100" step="1" value="0" />
+                            <div class="setup-readout" id="display-spectrum-glass-sheen-readout">Off</div>
+                          </div>
+                          <div class="setup-row">
                             <label class="label" for="display-waterfall-speed">Waterfall Speed</label>
                             <input id="display-waterfall-speed" type="range" min="1" max="6" step="1" value="1" />
                             <div class="setup-readout" id="display-waterfall-speed-readout">1x</div>
@@ -4794,6 +4831,7 @@
             <div class="spectrum-shell" id="spectrum-shell" tabindex="0" aria-label="Spectrum panadapter">
               <div class="display-grid-overlay"></div>
               <canvas id="spectrum-canvas"></canvas>
+              <div class="spectrum-glass-sheen" id="spectrum-glass-sheen" aria-hidden="true"></div>
               <div class="band-edge-layer" id="spectrum-band-edges"></div>
               <div class="filter-window interactive-filter-window" id="filter-window">
                 <div class="passband-body" data-passband-drag="body" role="button" tabindex="0" aria-label="Shift RX passband"></div>
@@ -5977,6 +6015,9 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         this.vertexBuffer = null;
         this.positionLocation = -1;
         this.colorLocation = null;
+        this.offsetLocation = null;
+        this.sheen = $("spectrum-glass-sheen");
+        this.lastSheenOpacity = -1;
         this.resolution = { width: 0, height: 0 };
         try {
           this.gl = canvas.getContext("webgl2", { antialias: true, alpha: false });
@@ -5999,8 +6040,9 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         const vertexShader = this.compile(gl.VERTEX_SHADER, `
           #version 300 es
           in vec2 a_position;
+          uniform vec2 u_offset;
           void main() {
-            gl_Position = vec4(a_position, 0.0, 1.0);
+            gl_Position = vec4(a_position + u_offset, 0.0, 1.0);
           }
         `);
         const fragmentShader = this.compile(gl.FRAGMENT_SHADER, `
@@ -6015,6 +6057,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         this.program = this.link(vertexShader, fragmentShader);
         this.positionLocation = gl.getAttribLocation(this.program, "a_position");
         this.colorLocation = gl.getUniformLocation(this.program, "u_color");
+        this.offsetLocation = gl.getUniformLocation(this.program, "u_offset");
         this.vertexBuffer = gl.createBuffer();
       }
 
@@ -6072,15 +6115,26 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
           return;
         }
         this.resize();
+        const renderedBins = _next.smoothSpectrumTrace(bins, state.spectrumTraceSmoothing);
+        const traceColor = _next.normalizeSpectrumTraceColor(state.spectrumTraceColor);
+        const colorValue = Number.parseInt(traceColor.slice(1), 16);
+        const red = ((colorValue >> 16) & 0xff) / 255;
+        const green = ((colorValue >> 8) & 0xff) / 255;
+        const blue = (colorValue & 0xff) / 255;
+        const sheenOpacity = _next.clampSpectrumVisualEffect(state.spectrumGlassSheen) / 100;
+        if (this.sheen && sheenOpacity !== this.lastSheenOpacity) {
+          this.sheen.style.opacity = `${sheenOpacity}`;
+          this.lastSheenOpacity = sheenOpacity;
+        }
         if (this.ctx) {
-          this.render2d(bins, floorDb, ceilingDb);
+          this.render2d(renderedBins, floorDb, ceilingDb, traceColor);
           return;
         }
         const gl = this.gl;
-        const vertices = new Float32Array(bins.length * 2);
-        for (let i = 0; i < bins.length; i += 1) {
-          const x = (i / (bins.length - 1)) * 2 - 1;
-          const normalized = (bins[i] - floorDb) / (ceilingDb - floorDb);
+        const vertices = new Float32Array(renderedBins.length * 2);
+        for (let i = 0; i < renderedBins.length; i += 1) {
+          const x = (i / (renderedBins.length - 1)) * 2 - 1;
+          const normalized = (renderedBins[i] - floorDb) / (ceilingDb - floorDb);
           const y = Math.max(-1, Math.min(1, normalized * 1.8 - 0.9));
           const index = i * 2;
           vertices[index] = x;
@@ -6094,11 +6148,32 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         gl.bufferData(gl.ARRAY_BUFFER, vertices, gl.DYNAMIC_DRAW);
         gl.enableVertexAttribArray(this.positionLocation);
         gl.vertexAttribPointer(this.positionLocation, 2, gl.FLOAT, false, 0, 0);
-        gl.uniform4f(this.colorLocation, 0.38, 0.81, 1.0, 0.98);
-        gl.drawArrays(gl.LINE_STRIP, 0, bins.length);
+        gl.enable(gl.BLEND);
+        gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+
+        const glow = _next.clampSpectrumVisualEffect(state.spectrumPeakGlow) / 100;
+        const glowLayers = Math.ceil(glow * 3);
+        const offsets = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+        for (let layer = glowLayers; layer >= 1; layer -= 1) {
+          const radius = layer * (0.7 + glow * 0.8);
+          const alpha = glow * (0.12 / layer);
+          gl.uniform4f(this.colorLocation, red, green, blue, alpha);
+          offsets.forEach(([offsetX, offsetY]) => {
+            gl.uniform2f(
+              this.offsetLocation,
+              (offsetX * radius * 2) / Math.max(1, this.resolution.width),
+              (offsetY * radius * 2) / Math.max(1, this.resolution.height),
+            );
+            gl.drawArrays(gl.LINE_STRIP, 0, renderedBins.length);
+          });
+        }
+        gl.uniform2f(this.offsetLocation, 0, 0);
+        gl.uniform4f(this.colorLocation, red, green, blue, 0.98);
+        gl.drawArrays(gl.LINE_STRIP, 0, renderedBins.length);
+        gl.disable(gl.BLEND);
       }
 
-      render2d(bins, floorDb, ceilingDb) {
+      render2d(bins, floorDb, ceilingDb, traceColor) {
         const ctx = this.ctx;
         const width = this.canvas.width;
         const height = this.canvas.height;
@@ -6106,25 +6181,33 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         ctx.fillStyle = "#051118";
         ctx.fillRect(0, 0, width, height);
 
-        ctx.strokeStyle = "rgba(255,255,255,0.07)";
-        ctx.lineWidth = 1;
-        for (let row = 1; row < 5; row += 1) {
-          const y = Math.round((row / 5) * height) + 0.5;
-          ctx.beginPath();
-          ctx.moveTo(0, y);
-          ctx.lineTo(width, y);
-          ctx.stroke();
-        }
-        for (let col = 1; col < 10; col += 1) {
-          const x = Math.round((col / 10) * width) + 0.5;
-          ctx.beginPath();
-          ctx.moveTo(x, 0);
-          ctx.lineTo(x, height);
-          ctx.stroke();
+        if (state.showGrid) {
+          ctx.strokeStyle = "rgba(255,255,255,0.07)";
+          ctx.lineWidth = 1;
+          for (let row = 1; row < 5; row += 1) {
+            const y = Math.round((row / 5) * height) + 0.5;
+            ctx.beginPath();
+            ctx.moveTo(0, y);
+            ctx.lineTo(width, y);
+            ctx.stroke();
+          }
+          for (let col = 1; col < 10; col += 1) {
+            const x = Math.round((col / 10) * width) + 0.5;
+            ctx.beginPath();
+            ctx.moveTo(x, 0);
+            ctx.lineTo(x, height);
+            ctx.stroke();
+          }
         }
 
-        ctx.strokeStyle = "#62d0ff";
+        const dpr = Math.max(1, window.devicePixelRatio || 1);
+        const glow = _next.clampSpectrumVisualEffect(state.spectrumPeakGlow) / 100;
+        ctx.strokeStyle = traceColor;
         ctx.lineWidth = 2;
+        ctx.lineJoin = "round";
+        ctx.lineCap = "round";
+        ctx.shadowColor = traceColor;
+        ctx.shadowBlur = glow * 22 * dpr;
         ctx.beginPath();
         for (let i = 0; i < bins.length; i += 1) {
           const x = (i / (bins.length - 1)) * width;
@@ -6137,13 +6220,18 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
           }
         }
         ctx.stroke();
+        ctx.shadowBlur = 0;
 
-        ctx.strokeStyle = "rgba(98,208,255,0.45)";
-        ctx.beginPath();
-        const centerX = Math.round(width / 2) + 0.5;
-        ctx.moveTo(centerX, 0);
-        ctx.lineTo(centerX, height);
-        ctx.stroke();
+        if (state.showCenterLine) {
+          ctx.globalAlpha = 0.45;
+          ctx.strokeStyle = traceColor;
+          ctx.beginPath();
+          const centerX = Math.round(width / 2) + 0.5;
+          ctx.moveTo(centerX, 0);
+          ctx.lineTo(centerX, height);
+          ctx.stroke();
+          ctx.globalAlpha = 1;
+        }
       }
     }
 
@@ -7293,6 +7381,8 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       clampSpectrumAverage,
       clampWaterfallSpeed,
       normalizeWaterfallPalette,
+      normalizeSpectrumTraceColor,
+      clampSpectrumVisualEffect,
       clampRxAdc,
       clampRxAntenna,
       bandKeyForFrequency,
@@ -8638,6 +8728,10 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       setValue("display-waterfall-floor", prefs.waterfallFloorDb);
       setValue("display-waterfall-ceiling", prefs.waterfallCeilingDb);
       setValue("display-spectrum-average", prefs.spectrumAverage);
+      setValue("display-spectrum-trace-color", prefs.spectrumTraceColor);
+      setValue("display-spectrum-trace-smoothing", prefs.spectrumTraceSmoothing);
+      setValue("display-spectrum-peak-glow", prefs.spectrumPeakGlow);
+      setValue("display-spectrum-glass-sheen", prefs.spectrumGlassSheen);
       setValue("display-waterfall-speed", prefs.waterfallSpeed);
       setValue("display-waterfall-palette", prefs.waterfallPalette);
       if ($("display-spectrum-floor-readout")) $("display-spectrum-floor-readout").textContent = `${Math.round(prefs.spectrumFloorDb)} dB`;
@@ -8645,6 +8739,22 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       if ($("display-waterfall-floor-readout")) $("display-waterfall-floor-readout").textContent = `${Math.round(prefs.waterfallFloorDb)} dB`;
       if ($("display-waterfall-ceiling-readout")) $("display-waterfall-ceiling-readout").textContent = `${Math.round(prefs.waterfallCeilingDb)} dB`;
       if ($("display-spectrum-average-readout")) $("display-spectrum-average-readout").textContent = `${prefs.spectrumAverage} frame${prefs.spectrumAverage === 1 ? "" : "s"}`;
+      if ($("display-spectrum-trace-color-readout")) $("display-spectrum-trace-color-readout").textContent = prefs.spectrumTraceColor;
+      if ($("display-spectrum-trace-smoothing-readout")) {
+        $("display-spectrum-trace-smoothing-readout").textContent = prefs.spectrumTraceSmoothing > 0
+          ? `${prefs.spectrumTraceSmoothing}%`
+          : "Off";
+      }
+      if ($("display-spectrum-peak-glow-readout")) {
+        $("display-spectrum-peak-glow-readout").textContent = prefs.spectrumPeakGlow > 0
+          ? `${prefs.spectrumPeakGlow}%`
+          : "Off";
+      }
+      if ($("display-spectrum-glass-sheen-readout")) {
+        $("display-spectrum-glass-sheen-readout").textContent = prefs.spectrumGlassSheen > 0
+          ? `${prefs.spectrumGlassSheen}%`
+          : "Off";
+      }
       if ($("display-waterfall-speed-readout")) $("display-waterfall-speed-readout").textContent = `${prefs.waterfallSpeed}x`;
       setValue("setup-dsp-nr-mode", radio.rxNoiseReductionMode);
       setValue("setup-dsp-nr-level", radio.rxNoiseReductionLevel);
@@ -14066,6 +14176,40 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         persistLocalSettingsFallback(currentRemoteSettings());
         scheduleRemoteSettingsSave();
       });
+      const refreshSpectrumAppearance = () => {
+        spectrumRenderer.render(state.latestBins, state.displayFloorDb, state.displayCeilingDb);
+        persistLocalSettingsFallback(currentRemoteSettings());
+        scheduleRemoteSettingsSave();
+      };
+      $("display-spectrum-trace-color").addEventListener("input", () => {
+        state.spectrumTraceColor = normalizeSpectrumTraceColor($("display-spectrum-trace-color").value);
+        $("display-spectrum-trace-color-readout").textContent = state.spectrumTraceColor;
+        refreshSpectrumAppearance();
+      });
+      const bindSpectrumEffect = (id, readoutId, assign) => {
+        $(id).addEventListener("input", () => {
+          const value = clampSpectrumVisualEffect($(id).value);
+          assign(value);
+          $(id).value = `${value}`;
+          $(readoutId).textContent = value > 0 ? `${value}%` : "Off";
+          refreshSpectrumAppearance();
+        });
+      };
+      bindSpectrumEffect(
+        "display-spectrum-trace-smoothing",
+        "display-spectrum-trace-smoothing-readout",
+        (value) => { state.spectrumTraceSmoothing = value; },
+      );
+      bindSpectrumEffect(
+        "display-spectrum-peak-glow",
+        "display-spectrum-peak-glow-readout",
+        (value) => { state.spectrumPeakGlow = value; },
+      );
+      bindSpectrumEffect(
+        "display-spectrum-glass-sheen",
+        "display-spectrum-glass-sheen-readout",
+        (value) => { state.spectrumGlassSheen = value; },
+      );
       $("display-waterfall-speed").addEventListener("input", () => {
         state.waterfallSpeed = clampWaterfallSpeed($("display-waterfall-speed").value);
         $("display-waterfall-speed-readout").textContent = `${state.waterfallSpeed}x`;
