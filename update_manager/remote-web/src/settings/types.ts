@@ -94,6 +94,7 @@ export type DisplayPrefs = {
   spectrumTraceFill: number;
   spectrumPeakGlow: number;
   spectrumGlassSheen: number;
+  waterfallContrast: number;
   showGrid: boolean;
   showCenterLine: boolean;
   showBandEdges: boolean;

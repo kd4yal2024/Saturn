@@ -82,6 +82,7 @@ describe('applyDisplayPrefsToState', () => {
       spectrumTraceFill: 40,
       spectrumPeakGlow: 45,
       spectrumGlassSheen: 55,
+      waterfallContrast: 135,
       showGrid: false,
     }, state);
     expect(state.waterfallPalette).toBe('ember');
@@ -90,6 +91,7 @@ describe('applyDisplayPrefsToState', () => {
     expect(state.spectrumTraceFill).toBe(40);
     expect(state.spectrumPeakGlow).toBe(45);
     expect(state.spectrumGlassSheen).toBe(55);
+    expect(state.waterfallContrast).toBe(135);
     expect(state.showGrid).toBe(false);
     expect(state.showCenterLine).toBe(true); // unchanged
   });
@@ -147,6 +149,7 @@ describe('normalizeAppStateInPlace', () => {
     state.spectrumTraceSmoothing = 999;
     state.spectrumTraceFill = 250;
     state.spectrumPeakGlow = -1;
+    state.waterfallContrast = 500;
     normalizeAppStateInPlace(state);
     expect(state.waterfallPalette).toBe('classic');
     expect(state.spectrumAverage).toBeGreaterThanOrEqual(1);
@@ -154,5 +157,6 @@ describe('normalizeAppStateInPlace', () => {
     expect(state.spectrumTraceSmoothing).toBe(100);
     expect(state.spectrumTraceFill).toBe(100);
     expect(state.spectrumPeakGlow).toBe(0);
+    expect(state.waterfallContrast).toBe(200);
   });
 });

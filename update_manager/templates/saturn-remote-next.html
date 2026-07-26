@@ -477,6 +477,29 @@
       mix-blend-mode: screen;
       transition: opacity 140ms ease;
     }
+    .spectrum-db-scale {
+      position: absolute;
+      top: 8px;
+      bottom: 8px;
+      left: 8px;
+      z-index: 5;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      align-items: flex-start;
+      pointer-events: none;
+      color: rgba(219, 241, 247, 0.78);
+      font-family: var(--mono);
+      font-size: 10px;
+      line-height: 1;
+      text-shadow: 0 1px 3px rgba(0, 0, 0, 0.95);
+    }
+    .spectrum-db-scale span {
+      min-width: 42px;
+      padding: 2px 4px;
+      border-radius: 5px;
+      background: rgba(3, 12, 17, 0.54);
+    }
     .display-grid-overlay,
     .band-edge-layer {
       position: absolute;
@@ -4329,6 +4352,11 @@
                             <input id="display-waterfall-speed" type="range" min="1" max="6" step="1" value="1" />
                             <div class="setup-readout" id="display-waterfall-speed-readout">1x</div>
                           </div>
+                          <div class="setup-row">
+                            <label class="label" for="display-waterfall-contrast">Waterfall Contrast</label>
+                            <input id="display-waterfall-contrast" type="range" min="50" max="200" step="1" value="100" />
+                            <div class="setup-readout" id="display-waterfall-contrast-readout">100%</div>
+                          </div>
                         </div>
                         <div class="setup-grid">
                           <div class="setup-row">
@@ -4837,6 +4865,13 @@
               <div class="display-grid-overlay"></div>
               <canvas id="spectrum-canvas"></canvas>
               <div class="spectrum-glass-sheen" id="spectrum-glass-sheen" aria-hidden="true"></div>
+              <div class="spectrum-db-scale" id="spectrum-db-scale" aria-hidden="true">
+                <span>-120 dB</span>
+                <span>-140 dB</span>
+                <span>-160 dB</span>
+                <span>-180 dB</span>
+                <span>-200 dB</span>
+              </div>
               <div class="band-edge-layer" id="spectrum-band-edges"></div>
               <div class="filter-window interactive-filter-window" id="filter-window">
                 <div class="passband-body" data-passband-drag="body" role="button" tabindex="0" aria-label="Shift RX passband"></div>
@@ -6172,7 +6207,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
           }
           gl.bufferData(gl.ARRAY_BUFFER, fillVertices, gl.DYNAMIC_DRAW);
           gl.uniform2f(this.offsetLocation, 0, 0);
-          gl.uniform4f(this.colorLocation, red, green, blue, fill * 0.32);
+          gl.uniform4f(this.colorLocation, red, green, blue, fill);
           gl.drawArrays(gl.TRIANGLE_STRIP, 0, renderedBins.length * 2);
         }
 
@@ -6230,7 +6265,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         const glow = _next.clampSpectrumVisualEffect(state.spectrumPeakGlow) / 100;
         const fill = _next.clampSpectrumVisualEffect(state.spectrumTraceFill) / 100;
         if (fill > 0) {
-          ctx.globalAlpha = fill * 0.32;
+          ctx.globalAlpha = fill;
           ctx.fillStyle = traceColor;
           ctx.beginPath();
           ctx.moveTo(0, height);
@@ -6293,6 +6328,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         this.pendingFloorDb = -180;
         this.pendingCeilingDb = -120;
         this.pendingPalette = "classic";
+        this.pendingContrast = 100;
         try {
           this.gl = canvas.getContext("webgl2", { antialias: false, alpha: false });
           if (this.gl) {
@@ -6488,7 +6524,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         return { applied: this.shiftPixels(shiftedPixels), remainder };
       }
 
-      pushLine(bins, floorDb, ceilingDb, palette = "classic") {
+      pushLine(bins, floorDb, ceilingDb, palette = "classic", contrast = 100) {
         if (!this.supported || !bins || bins.length === 0) {
           return;
         }
@@ -6497,13 +6533,14 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
           this.pendingFloorDb = floorDb;
           this.pendingCeilingDb = ceilingDb;
           this.pendingPalette = normalizeWaterfallPalette(palette);
+          this.pendingContrast = clampWaterfallContrast(contrast);
           return;
         }
         this.ensureWidth(bins.length);
         const rowBytes = this.textureWidth * 4;
         this.textureData.copyWithin(rowBytes, 0, rowBytes * (this.textureHeight - 1));
         for (let i = 0; i < this.textureWidth; i += 1) {
-          const color = this.colorForDb(bins[i], floorDb, ceilingDb, palette);
+          const color = this.colorForDb(bins[i], floorDb, ceilingDb, palette, contrast);
           const offset = i * 4;
           this.textureData[offset] = color[0];
           this.textureData[offset + 1] = color[1];
@@ -6515,8 +6552,10 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, this.textureWidth, this.textureHeight, gl.RGBA, gl.UNSIGNED_BYTE, this.textureData);
       }
 
-      colorForDb(db, floorDb, ceilingDb, palette = "classic") {
-        const t = Math.max(0, Math.min(1, (db - floorDb) / (ceilingDb - floorDb)));
+      colorForDb(db, floorDb, ceilingDb, palette = "classic", contrast = 100) {
+        const rawT = Math.max(0, Math.min(1, (db - floorDb) / (ceilingDb - floorDb)));
+        const contrastScale = clampWaterfallContrast(contrast) / 100;
+        const t = Math.max(0, Math.min(1, 0.5 + (rawT - 0.5) * contrastScale));
         const normalizedPalette = normalizeWaterfallPalette(palette);
         if (normalizedPalette === "ember") {
           if (t < 0.45) {
@@ -6614,7 +6653,8 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
             this.pendingBins[sourceIndex],
             this.pendingFloorDb,
             this.pendingCeilingDb,
-            this.pendingPalette
+            this.pendingPalette,
+            this.pendingContrast
           );
           ctx.fillStyle = `rgb(${color[0]}, ${color[1]}, ${color[2]})`;
           ctx.fillRect(x, 0, 1, 1);
@@ -6778,6 +6818,26 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         state.waterfallFloorDb = r.floor;
         state.waterfallCeilingDb = r.ceiling;
       }
+      updateSpectrumDbScale();
+    }
+
+    function updateSpectrumDbScale() {
+      const scale = $("spectrum-db-scale");
+      if (!scale) return;
+      const ceiling = Number(state.displayCeilingDb);
+      const floor = Number(state.displayFloorDb);
+      const span = Math.max(1, ceiling - floor);
+      const labels = Array.from({ length: 5 }, (_, index) => (
+        `${Math.round(ceiling - (span * index) / 4)} dB`
+      ));
+      const signature = labels.join("|");
+      if (scale.dataset.labels === signature) return;
+      scale.dataset.labels = signature;
+      scale.replaceChildren(...labels.map((text) => {
+        const label = document.createElement("span");
+        label.textContent = text;
+        return label;
+      }));
     }
 
     function bandEdgesInView() {
@@ -6901,6 +6961,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         shell.classList.toggle("shell-no-center", !state.showCenterLine);
         shell.classList.toggle("shell-no-band-edges", !state.showBandEdges);
       }
+      updateSpectrumDbScale();
       renderBandEdges();
     }
 
@@ -7423,6 +7484,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       clampDisplayDb,
       clampSpectrumAverage,
       clampWaterfallSpeed,
+      clampWaterfallContrast,
       normalizeWaterfallPalette,
       normalizeSpectrumTraceColor,
       clampSpectrumVisualEffect,
@@ -8777,6 +8839,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       setValue("display-spectrum-peak-glow", prefs.spectrumPeakGlow);
       setValue("display-spectrum-glass-sheen", prefs.spectrumGlassSheen);
       setValue("display-waterfall-speed", prefs.waterfallSpeed);
+      setValue("display-waterfall-contrast", prefs.waterfallContrast);
       setValue("display-waterfall-palette", prefs.waterfallPalette);
       if ($("display-spectrum-floor-readout")) $("display-spectrum-floor-readout").textContent = `${Math.round(prefs.spectrumFloorDb)} dB`;
       if ($("display-spectrum-ceiling-readout")) $("display-spectrum-ceiling-readout").textContent = `${Math.round(prefs.spectrumCeilingDb)} dB`;
@@ -8805,6 +8868,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
           : "Off";
       }
       if ($("display-waterfall-speed-readout")) $("display-waterfall-speed-readout").textContent = `${prefs.waterfallSpeed}x`;
+      if ($("display-waterfall-contrast-readout")) $("display-waterfall-contrast-readout").textContent = `${prefs.waterfallContrast}%`;
       setValue("setup-dsp-nr-mode", radio.rxNoiseReductionMode);
       setValue("setup-dsp-nr-level", radio.rxNoiseReductionLevel);
       setValue("setup-dsp-nr2-gain-method", radio.rxNr2GainMethod);
@@ -13542,7 +13606,13 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       updateDisplayRange(processedBins);
       spectrumRenderer.render(processedBins, state.displayFloorDb, state.displayCeilingDb);
       if (shouldPushWaterfallLine(now)) {
-        waterfallRenderer.pushLine(processedBins, state.waterfallFloorDb, state.waterfallCeilingDb, state.waterfallPalette);
+        waterfallRenderer.pushLine(
+          processedBins,
+          state.waterfallFloorDb,
+          state.waterfallCeilingDb,
+          state.waterfallPalette,
+          state.waterfallContrast,
+        );
         waterfallRenderer.render();
         state.lastWaterfallLineAt = now;
       }
@@ -13584,7 +13654,13 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
               state.waterfallFrameSkipCounter = 0;
             } else if (phoneWanLite) {
               if (shouldPushWaterfallLine(now)) {
-                waterfallRenderer.pushLine(processedBins, state.waterfallFloorDb, state.waterfallCeilingDb, state.waterfallPalette);
+                waterfallRenderer.pushLine(
+                  processedBins,
+                  state.waterfallFloorDb,
+                  state.waterfallCeilingDb,
+                  state.waterfallPalette,
+                  state.waterfallContrast,
+                );
                 waterfallRenderer.render();
                 state.lastWaterfallLineAt = now;
               }
@@ -13593,7 +13669,13 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
             } else {
               state.waterfallFrameSkipCounter = (state.waterfallFrameSkipCounter + 1) % clampWaterfallSpeed(state.waterfallSpeed);
               if (state.waterfallFrameSkipCounter === 0) {
-                waterfallRenderer.pushLine(processedBins, state.waterfallFloorDb, state.waterfallCeilingDb, state.waterfallPalette);
+                waterfallRenderer.pushLine(
+                  processedBins,
+                  state.waterfallFloorDb,
+                  state.waterfallCeilingDb,
+                  state.waterfallPalette,
+                  state.waterfallContrast,
+                );
                 waterfallRenderer.render();
               }
             }
@@ -14267,6 +14349,13 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       $("display-waterfall-speed").addEventListener("input", () => {
         state.waterfallSpeed = clampWaterfallSpeed($("display-waterfall-speed").value);
         $("display-waterfall-speed-readout").textContent = `${state.waterfallSpeed}x`;
+        persistLocalSettingsFallback(currentRemoteSettings());
+        scheduleRemoteSettingsSave();
+      });
+      $("display-waterfall-contrast").addEventListener("input", () => {
+        state.waterfallContrast = clampWaterfallContrast($("display-waterfall-contrast").value);
+        $("display-waterfall-contrast").value = `${state.waterfallContrast}`;
+        $("display-waterfall-contrast-readout").textContent = `${state.waterfallContrast}%`;
         persistLocalSettingsFallback(currentRemoteSettings());
         scheduleRemoteSettingsSave();
       });

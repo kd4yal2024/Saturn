@@ -204,6 +204,10 @@ export function clampWaterfallSpeed(value: unknown): number {
   return Math.max(1, Math.min(6, Math.round(safeFiniteNumber(value, 1))));
 }
 
+export function clampWaterfallContrast(value: unknown): number {
+  return Math.max(50, Math.min(200, Math.round(safeFiniteNumber(value, 100))));
+}
+
 export function normalizeWaterfallPalette(value: unknown): WaterfallPalette {
   const palette = String(value || '').trim().toLowerCase();
   return WATERFALL_PALETTES.includes(palette as WaterfallPalette) ? (palette as WaterfallPalette) : 'classic';
@@ -346,6 +350,7 @@ export function normalizeDisplayPrefs(input: DeepPartial<DisplayPrefs> | null | 
     spectrumTraceFill: clampSpectrumVisualEffect(source.spectrumTraceFill),
     spectrumPeakGlow: clampSpectrumVisualEffect(source.spectrumPeakGlow),
     spectrumGlassSheen: clampSpectrumVisualEffect(source.spectrumGlassSheen),
+    waterfallContrast: clampWaterfallContrast(source.waterfallContrast),
     showGrid: source.showGrid ?? DEFAULT_DISPLAY_PREFS.showGrid,
     showCenterLine: source.showCenterLine ?? DEFAULT_DISPLAY_PREFS.showCenterLine,
     showBandEdges: source.showBandEdges ?? DEFAULT_DISPLAY_PREFS.showBandEdges,

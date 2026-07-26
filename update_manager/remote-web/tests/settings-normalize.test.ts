@@ -103,12 +103,14 @@ describe('settings normalization', () => {
       spectrumTraceFill: 68.4,
       spectrumPeakGlow: -12,
       spectrumGlassSheen: 42.6,
+      waterfallContrast: 250,
     });
     expect(prefs.spectrumTraceColor).toBe('#a1b2c3');
     expect(prefs.spectrumTraceSmoothing).toBe(100);
     expect(prefs.spectrumTraceFill).toBe(68);
     expect(prefs.spectrumPeakGlow).toBe(0);
     expect(prefs.spectrumGlassSheen).toBe(43);
+    expect(prefs.waterfallContrast).toBe(200);
 
     expect(normalizeDisplayPrefs({ spectrumTraceColor: 'not-a-color' }).spectrumTraceColor).toBe('#62d0ff');
   });

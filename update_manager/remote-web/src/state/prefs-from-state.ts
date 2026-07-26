@@ -32,6 +32,7 @@ import {
   clampDisplayDb,
   clampSpectrumAverage,
   clampWaterfallSpeed,
+  clampWaterfallContrast,
   normalizeWaterfallPalette,
   normalizeSpectrumTraceColor,
   clampSpectrumVisualEffect,
@@ -111,6 +112,7 @@ export interface DisplayPrefsSource {
   spectrumTraceFill: number;
   spectrumPeakGlow: number;
   spectrumGlassSheen: number;
+  waterfallContrast: number;
   showGrid: boolean;
   showCenterLine: boolean;
   showBandEdges: boolean;
@@ -192,6 +194,7 @@ export function displayPrefsFromState(s: DisplayPrefsSource): DisplayPrefs {
     spectrumTraceFill: clampSpectrumVisualEffect(s.spectrumTraceFill),
     spectrumPeakGlow: clampSpectrumVisualEffect(s.spectrumPeakGlow),
     spectrumGlassSheen: clampSpectrumVisualEffect(s.spectrumGlassSheen),
+    waterfallContrast: clampWaterfallContrast(s.waterfallContrast),
     showGrid: Boolean(s.showGrid),
     showCenterLine: Boolean(s.showCenterLine),
     showBandEdges: Boolean(s.showBandEdges),

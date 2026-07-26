@@ -157,6 +157,7 @@ pub struct RemoteDisplayPrefs {
     pub spectrum_trace_fill: Option<u8>,
     pub spectrum_peak_glow: Option<u8>,
     pub spectrum_glass_sheen: Option<u8>,
+    pub waterfall_contrast: Option<u16>,
     pub show_grid: Option<bool>,
     pub show_center_line: Option<bool>,
     pub show_band_edges: Option<bool>,

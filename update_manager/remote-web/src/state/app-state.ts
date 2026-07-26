@@ -214,6 +214,7 @@ export interface AppState {
   spectrumTraceFill: number;
   spectrumPeakGlow: number;
   spectrumGlassSheen: number;
+  waterfallContrast: number;
   spectrumAverageBypassFrames: number;
   waterfallAutoRange: boolean;
   waterfallFloorDb: number;
@@ -500,6 +501,7 @@ export function createAppState(): AppState {
     spectrumTraceFill: 0,
     spectrumPeakGlow: 0,
     spectrumGlassSheen: 0,
+    waterfallContrast: 100,
     spectrumAverageBypassFrames: 0,
     waterfallAutoRange: true,
     waterfallFloorDb: -200,

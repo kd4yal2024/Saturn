@@ -57,6 +57,7 @@ describe('displayPrefsFromState', () => {
     expect(prefs.spectrumTraceFill).toBe(0);
     expect(prefs.spectrumPeakGlow).toBe(0);
     expect(prefs.spectrumGlassSheen).toBe(0);
+    expect(prefs.waterfallContrast).toBe(100);
     expect(prefs.showGrid).toBe(true);
     expect(prefs.showCenterLine).toBe(true);
     expect(prefs.showBandEdges).toBe(true);
@@ -67,9 +68,11 @@ describe('displayPrefsFromState', () => {
     state.waterfallPalette = 'nope';
     state.spectrumTraceColor = '#ABCDEF';
     state.spectrumPeakGlow = 200;
+    state.waterfallContrast = 10;
     const prefs = displayPrefsFromState(state);
     expect(prefs.waterfallPalette).toBe('classic');
     expect(prefs.spectrumTraceColor).toBe('#abcdef');
     expect(prefs.spectrumPeakGlow).toBe(100);
+    expect(prefs.waterfallContrast).toBe(50);
   });
 });
