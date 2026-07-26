@@ -58,6 +58,7 @@ describe('displayPrefsFromState', () => {
     expect(prefs.spectrumPeakGlow).toBe(0);
     expect(prefs.spectrumGlassSheen).toBe(0);
     expect(prefs.waterfallContrast).toBe(100);
+    expect(prefs.waterfallSmoothing).toBe(0);
     expect(prefs.showGrid).toBe(true);
     expect(prefs.showCenterLine).toBe(true);
     expect(prefs.showBandEdges).toBe(true);

@@ -2,9 +2,11 @@ import { describe, expect, it } from 'vitest';
 import {
   displaySpanHz,
   displayPercentForOffsetHz,
+  frequencyScaleTicks,
   visibleBinsForDisplay,
   shiftBinsHorizontally,
   smoothSpectrumTrace,
+  smoothWaterfallBins,
   bandEdgesInView,
   autoRangeFromBins,
 } from '../src/dsp/display';
@@ -30,6 +32,20 @@ describe('displayPercentForOffsetHz', () => {
   });
   it('returns 0 for left edge', () => {
     expect(displayPercentForOffsetHz(-96000, 192000)).toBe(0);
+  });
+});
+
+describe('frequencyScaleTicks', () => {
+  it('returns absolute frequencies across the visible span', () => {
+    const ticks = frequencyScaleTicks(14_200_000, 192_000, 5);
+    expect(ticks.map((tick) => tick.hz)).toEqual([
+      14_104_000,
+      14_152_000,
+      14_200_000,
+      14_248_000,
+      14_296_000,
+    ]);
+    expect(ticks.map((tick) => tick.percent)).toEqual([0, 25, 50, 75, 100]);
   });
 });
 
@@ -93,6 +109,24 @@ describe('smoothSpectrumTrace', () => {
     expect(result[2]).toBeLessThan(12);
     expect(result[1]).toBeGreaterThan(0);
     expect(result[3]).toBeGreaterThan(0);
+  });
+});
+
+describe('smoothWaterfallBins', () => {
+  it('leaves the first line and disabled smoothing unchanged', () => {
+    const bins = new Float32Array([-120, -100]);
+    expect(smoothWaterfallBins(bins, null, 100)).toBe(bins);
+    expect(smoothWaterfallBins(bins, new Float32Array([-140, -140]), 0)).toBe(bins);
+  });
+
+  it('reduces frame-to-frame speckle without changing the bin count', () => {
+    const previous = new Float32Array([-120, -120, -120]);
+    const current = new Float32Array([-100, -120, -140]);
+    const result = smoothWaterfallBins(current, previous, 100);
+    expect(result).toHaveLength(current.length);
+    expect(result[0]).toBeLessThan(-100);
+    expect(result[2]).toBeGreaterThan(-140);
+    expect(result[1]).toBe(-120);
   });
 });
 

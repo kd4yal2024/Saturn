@@ -479,7 +479,7 @@
     }
     .spectrum-db-scale {
       position: absolute;
-      top: 8px;
+      top: 30px;
       bottom: 8px;
       left: 8px;
       z-index: 5;
@@ -499,6 +499,51 @@
       padding: 2px 4px;
       border-radius: 5px;
       background: rgba(3, 12, 17, 0.54);
+    }
+    .spectrum-frequency-scale {
+      position: absolute;
+      top: 7px;
+      left: 8px;
+      right: 8px;
+      z-index: 6;
+      height: 19px;
+      pointer-events: none;
+      color: rgba(219, 241, 247, 0.86);
+      font-family: var(--mono);
+      font-size: 10px;
+      line-height: 1;
+      text-shadow: 0 1px 3px rgba(0, 0, 0, 0.95);
+    }
+    .spectrum-frequency-scale span {
+      position: absolute;
+      top: 0;
+      padding: 2px 4px 3px;
+      border-radius: 5px;
+      white-space: nowrap;
+      background: rgba(3, 12, 17, 0.58);
+      transform: translateX(-50%);
+    }
+    .spectrum-frequency-scale span:first-child {
+      transform: none;
+    }
+    .spectrum-frequency-scale span:last-child {
+      transform: translateX(-100%);
+    }
+    .spectrum-frequency-scale span::after {
+      content: "";
+      position: absolute;
+      top: 100%;
+      left: 50%;
+      width: 1px;
+      height: 5px;
+      background: rgba(219, 241, 247, 0.52);
+    }
+    .spectrum-frequency-scale span:first-child::after {
+      left: 4px;
+    }
+    .spectrum-frequency-scale span:last-child::after {
+      left: auto;
+      right: 4px;
     }
     .display-grid-overlay,
     .band-edge-layer {
@@ -4357,6 +4402,11 @@
                             <input id="display-waterfall-contrast" type="range" min="50" max="200" step="1" value="100" />
                             <div class="setup-readout" id="display-waterfall-contrast-readout">100%</div>
                           </div>
+                          <div class="setup-row">
+                            <label class="label" for="display-waterfall-smoothing">Waterfall Smoothing</label>
+                            <input id="display-waterfall-smoothing" type="range" min="0" max="100" step="1" value="0" />
+                            <div class="setup-readout" id="display-waterfall-smoothing-readout">Off</div>
+                          </div>
                         </div>
                         <div class="setup-grid">
                           <div class="setup-row">
@@ -4865,6 +4915,7 @@
               <div class="display-grid-overlay"></div>
               <canvas id="spectrum-canvas"></canvas>
               <div class="spectrum-glass-sheen" id="spectrum-glass-sheen" aria-hidden="true"></div>
+              <div class="spectrum-frequency-scale" id="spectrum-frequency-scale" aria-hidden="true"></div>
               <div class="spectrum-db-scale" id="spectrum-db-scale" aria-hidden="true">
                 <span>-120 dB</span>
                 <span>-140 dB</span>
@@ -6329,6 +6380,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         this.pendingCeilingDb = -120;
         this.pendingPalette = "classic";
         this.pendingContrast = 100;
+        this.smoothedBins = null;
         try {
           this.gl = canvas.getContext("webgl2", { antialias: false, alpha: false });
           if (this.gl) {
@@ -6444,6 +6496,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       }
 
       clear() {
+        this.smoothedBins = null;
         if (this.gl) {
           this.textureData.fill(0);
           const gl = this.gl;
@@ -6521,26 +6574,32 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         if (shiftedPixels === 0) {
           return { applied: false, remainder };
         }
-        return { applied: this.shiftPixels(shiftedPixels), remainder };
+        const applied = this.shiftPixels(shiftedPixels);
+        if (applied) {
+          this.smoothedBins = null;
+        }
+        return { applied, remainder };
       }
 
-      pushLine(bins, floorDb, ceilingDb, palette = "classic", contrast = 100) {
+      pushLine(bins, floorDb, ceilingDb, palette = "classic", contrast = 100, smoothing = 0) {
         if (!this.supported || !bins || bins.length === 0) {
           return;
         }
+        const renderedBins = _next.smoothWaterfallBins(bins, this.smoothedBins, smoothing);
+        this.smoothedBins = new Float32Array(renderedBins);
         if (this.ctx) {
-          this.pendingBins = bins;
+          this.pendingBins = renderedBins;
           this.pendingFloorDb = floorDb;
           this.pendingCeilingDb = ceilingDb;
           this.pendingPalette = normalizeWaterfallPalette(palette);
           this.pendingContrast = clampWaterfallContrast(contrast);
           return;
         }
-        this.ensureWidth(bins.length);
+        this.ensureWidth(renderedBins.length);
         const rowBytes = this.textureWidth * 4;
         this.textureData.copyWithin(rowBytes, 0, rowBytes * (this.textureHeight - 1));
         for (let i = 0; i < this.textureWidth; i += 1) {
-          const color = this.colorForDb(bins[i], floorDb, ceilingDb, palette, contrast);
+          const color = this.colorForDb(renderedBins[i], floorDb, ceilingDb, palette, contrast);
           const offset = i * 4;
           this.textureData[offset] = color[0];
           this.textureData[offset + 1] = color[1];
@@ -6836,6 +6895,21 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       scale.replaceChildren(...labels.map((text) => {
         const label = document.createElement("span");
         label.textContent = text;
+        return label;
+      }));
+    }
+
+    function updateSpectrumFrequencyScale() {
+      const scale = $("spectrum-frequency-scale");
+      if (!scale) return;
+      const ticks = _next.frequencyScaleTicks(state.dds, displaySpanHz(), 5);
+      const signature = ticks.map((tick) => `${Math.round(tick.hz)}@${tick.percent}`).join("|");
+      if (scale.dataset.labels === signature) return;
+      scale.dataset.labels = signature;
+      scale.replaceChildren(...ticks.map((tick) => {
+        const label = document.createElement("span");
+        label.style.left = `${tick.percent}%`;
+        label.textContent = formatFrequency(Math.round(tick.hz));
         return label;
       }));
     }
@@ -8840,6 +8914,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       setValue("display-spectrum-glass-sheen", prefs.spectrumGlassSheen);
       setValue("display-waterfall-speed", prefs.waterfallSpeed);
       setValue("display-waterfall-contrast", prefs.waterfallContrast);
+      setValue("display-waterfall-smoothing", prefs.waterfallSmoothing);
       setValue("display-waterfall-palette", prefs.waterfallPalette);
       if ($("display-spectrum-floor-readout")) $("display-spectrum-floor-readout").textContent = `${Math.round(prefs.spectrumFloorDb)} dB`;
       if ($("display-spectrum-ceiling-readout")) $("display-spectrum-ceiling-readout").textContent = `${Math.round(prefs.spectrumCeilingDb)} dB`;
@@ -8869,6 +8944,11 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       }
       if ($("display-waterfall-speed-readout")) $("display-waterfall-speed-readout").textContent = `${prefs.waterfallSpeed}x`;
       if ($("display-waterfall-contrast-readout")) $("display-waterfall-contrast-readout").textContent = `${prefs.waterfallContrast}%`;
+      if ($("display-waterfall-smoothing-readout")) {
+        $("display-waterfall-smoothing-readout").textContent = prefs.waterfallSmoothing > 0
+          ? `${prefs.waterfallSmoothing}%`
+          : "Off";
+      }
       setValue("setup-dsp-nr-mode", radio.rxNoiseReductionMode);
       setValue("setup-dsp-nr-level", radio.rxNoiseReductionLevel);
       setValue("setup-dsp-nr2-gain-method", radio.rxNr2GainMethod);
@@ -9680,6 +9760,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       $("axis-left").textContent = `-${halfSpanKhz} kHz`;
       $("axis-right").textContent = `+${halfSpanKhz} kHz`;
       $("axis-center").textContent = `Center ${formatFrequency(state.dds)}`;
+      updateSpectrumFrequencyScale();
     }
 
     function selectedTxTool() {
@@ -13612,6 +13693,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
           state.waterfallCeilingDb,
           state.waterfallPalette,
           state.waterfallContrast,
+          state.waterfallSmoothing,
         );
         waterfallRenderer.render();
         state.lastWaterfallLineAt = now;
@@ -13660,6 +13742,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
                   state.waterfallCeilingDb,
                   state.waterfallPalette,
                   state.waterfallContrast,
+                  state.waterfallSmoothing,
                 );
                 waterfallRenderer.render();
                 state.lastWaterfallLineAt = now;
@@ -13675,6 +13758,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
                   state.waterfallCeilingDb,
                   state.waterfallPalette,
                   state.waterfallContrast,
+                  state.waterfallSmoothing,
                 );
                 waterfallRenderer.render();
               }
@@ -14356,6 +14440,16 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         state.waterfallContrast = clampWaterfallContrast($("display-waterfall-contrast").value);
         $("display-waterfall-contrast").value = `${state.waterfallContrast}`;
         $("display-waterfall-contrast-readout").textContent = `${state.waterfallContrast}%`;
+        persistLocalSettingsFallback(currentRemoteSettings());
+        scheduleRemoteSettingsSave();
+      });
+      $("display-waterfall-smoothing").addEventListener("input", () => {
+        state.waterfallSmoothing = clampSpectrumVisualEffect($("display-waterfall-smoothing").value);
+        $("display-waterfall-smoothing").value = `${state.waterfallSmoothing}`;
+        $("display-waterfall-smoothing-readout").textContent = state.waterfallSmoothing > 0
+          ? `${state.waterfallSmoothing}%`
+          : "Off";
+        waterfallRenderer.smoothedBins = null;
         persistLocalSettingsFallback(currentRemoteSettings());
         scheduleRemoteSettingsSave();
       });

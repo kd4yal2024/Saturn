@@ -113,6 +113,7 @@ export interface DisplayPrefsSource {
   spectrumPeakGlow: number;
   spectrumGlassSheen: number;
   waterfallContrast: number;
+  waterfallSmoothing: number;
   showGrid: boolean;
   showCenterLine: boolean;
   showBandEdges: boolean;
@@ -195,6 +196,7 @@ export function displayPrefsFromState(s: DisplayPrefsSource): DisplayPrefs {
     spectrumPeakGlow: clampSpectrumVisualEffect(s.spectrumPeakGlow),
     spectrumGlassSheen: clampSpectrumVisualEffect(s.spectrumGlassSheen),
     waterfallContrast: clampWaterfallContrast(s.waterfallContrast),
+    waterfallSmoothing: clampSpectrumVisualEffect(s.waterfallSmoothing),
     showGrid: Boolean(s.showGrid),
     showCenterLine: Boolean(s.showCenterLine),
     showBandEdges: Boolean(s.showBandEdges),

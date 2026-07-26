@@ -83,6 +83,7 @@ export const DEFAULT_DISPLAY_PREFS: DisplayPrefs = {
   spectrumPeakGlow: 0,
   spectrumGlassSheen: 0,
   waterfallContrast: 100,
+  waterfallSmoothing: 0,
   showGrid: true,
   showCenterLine: true,
   showBandEdges: true,

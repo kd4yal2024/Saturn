@@ -121,6 +121,7 @@ export interface DisplayPrefsTarget {
   spectrumPeakGlow: number;
   spectrumGlassSheen: number;
   waterfallContrast: number;
+  waterfallSmoothing: number;
   showGrid: boolean;
   showCenterLine: boolean;
   showBandEdges: boolean;
@@ -276,6 +277,9 @@ export function applyDisplayPrefsToState(
   state.spectrumPeakGlow = clampSpectrumVisualEffect(prefs.spectrumPeakGlow ?? state.spectrumPeakGlow);
   state.spectrumGlassSheen = clampSpectrumVisualEffect(prefs.spectrumGlassSheen ?? state.spectrumGlassSheen);
   state.waterfallContrast = clampWaterfallContrast(prefs.waterfallContrast ?? state.waterfallContrast);
+  state.waterfallSmoothing = clampSpectrumVisualEffect(
+    prefs.waterfallSmoothing ?? state.waterfallSmoothing,
+  );
   state.showGrid = Boolean(prefs.showGrid ?? state.showGrid);
   state.showCenterLine = Boolean(prefs.showCenterLine ?? state.showCenterLine);
   state.showBandEdges = Boolean(prefs.showBandEdges ?? state.showBandEdges);
@@ -394,6 +398,7 @@ export function normalizeAppStateInPlace(state: NormalizableState): void {
   state.spectrumPeakGlow = clampSpectrumVisualEffect(state.spectrumPeakGlow);
   state.spectrumGlassSheen = clampSpectrumVisualEffect(state.spectrumGlassSheen);
   state.waterfallContrast = clampWaterfallContrast(state.waterfallContrast);
+  state.waterfallSmoothing = clampSpectrumVisualEffect(state.waterfallSmoothing);
   state.showGrid = Boolean(state.showGrid);
   state.showCenterLine = Boolean(state.showCenterLine);
   state.showBandEdges = Boolean(state.showBandEdges);

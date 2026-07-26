@@ -351,6 +351,7 @@ export function normalizeDisplayPrefs(input: DeepPartial<DisplayPrefs> | null | 
     spectrumPeakGlow: clampSpectrumVisualEffect(source.spectrumPeakGlow),
     spectrumGlassSheen: clampSpectrumVisualEffect(source.spectrumGlassSheen),
     waterfallContrast: clampWaterfallContrast(source.waterfallContrast),
+    waterfallSmoothing: clampSpectrumVisualEffect(source.waterfallSmoothing),
     showGrid: source.showGrid ?? DEFAULT_DISPLAY_PREFS.showGrid,
     showCenterLine: source.showCenterLine ?? DEFAULT_DISPLAY_PREFS.showCenterLine,
     showBandEdges: source.showBandEdges ?? DEFAULT_DISPLAY_PREFS.showBandEdges,

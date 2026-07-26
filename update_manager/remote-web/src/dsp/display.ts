@@ -14,6 +14,27 @@ export function displayPercentForOffsetHz(offsetHz: number, spanHz: number): num
   return 50 + (offsetHz / spanHz) * 100;
 }
 
+export type FrequencyScaleTick = { hz: number; percent: number };
+
+/** Build evenly spaced absolute-frequency ticks for the panadapter ruler. */
+export function frequencyScaleTicks(
+  centerHz: number,
+  spanHz: number,
+  tickCount = 5,
+): FrequencyScaleTick[] {
+  const count = Math.max(2, Math.min(9, Math.round(tickCount) || 5));
+  const safeCenter = Number.isFinite(centerHz) ? centerHz : 0;
+  const safeSpan = Math.max(1, Number.isFinite(spanHz) ? spanHz : 1);
+  const lowHz = safeCenter - safeSpan / 2;
+  return Array.from({ length: count }, (_, index) => {
+    const percent = (index / (count - 1)) * 100;
+    return {
+      hz: lowHz + (safeSpan * percent) / 100,
+      percent,
+    };
+  });
+}
+
 /** Passband start/end in signed Hz from UI filter cuts. */
 export { signedPassbandFromUiCuts as displayPassband } from '../radio/passband';
 
@@ -90,6 +111,29 @@ export function smoothSpectrumTrace(bins: Float32Array, amount: number): Float32
     }
     const average = sum / Math.max(1, end - start + 1);
     smoothed[i] = (bins[i] ?? 0) * (1 - strength) + average * strength;
+  }
+  return smoothed;
+}
+
+/**
+ * Apply display-only temporal averaging to waterfall bins. Persistent signals
+ * remain visible while frame-to-frame noise speckle is reduced.
+ */
+export function smoothWaterfallBins(
+  bins: Float32Array,
+  previous: Float32Array | null,
+  amount: number,
+): Float32Array {
+  const strength = Math.max(0, Math.min(100, Number.isFinite(amount) ? amount : 0)) / 100;
+  if (strength <= 0 || !previous || previous.length !== bins.length) {
+    return bins;
+  }
+  const previousWeight = strength * 0.85;
+  const currentWeight = 1 - previousWeight;
+  const smoothed = new Float32Array(bins.length);
+  for (let i = 0; i < bins.length; i += 1) {
+    smoothed[i] = (previous[i] ?? bins[i] ?? 0) * previousWeight +
+      (bins[i] ?? 0) * currentWeight;
   }
   return smoothed;
 }

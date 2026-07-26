@@ -152,9 +152,11 @@ import {
 import {
   displaySpanHz,
   displayPercentForOffsetHz,
+  frequencyScaleTicks,
   visibleBinsForDisplay,
   shiftBinsHorizontally,
   smoothSpectrumTrace,
+  smoothWaterfallBins,
   bandEdgesInView,
   autoRangeFromBins,
 } from './dsp/display';
@@ -282,9 +284,11 @@ const api = {
   FftProcessor,
   displaySpanHz,
   displayPercentForOffsetHz,
+  frequencyScaleTicks,
   visibleBinsForDisplay,
   shiftBinsHorizontally,
   smoothSpectrumTrace,
+  smoothWaterfallBins,
   bandEdgesInView,
   autoRangeFromBins,
 

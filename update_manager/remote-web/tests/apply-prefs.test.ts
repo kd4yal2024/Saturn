@@ -83,6 +83,7 @@ describe('applyDisplayPrefsToState', () => {
       spectrumPeakGlow: 45,
       spectrumGlassSheen: 55,
       waterfallContrast: 135,
+      waterfallSmoothing: 70,
       showGrid: false,
     }, state);
     expect(state.waterfallPalette).toBe('ember');
@@ -92,6 +93,7 @@ describe('applyDisplayPrefsToState', () => {
     expect(state.spectrumPeakGlow).toBe(45);
     expect(state.spectrumGlassSheen).toBe(55);
     expect(state.waterfallContrast).toBe(135);
+    expect(state.waterfallSmoothing).toBe(70);
     expect(state.showGrid).toBe(false);
     expect(state.showCenterLine).toBe(true); // unchanged
   });

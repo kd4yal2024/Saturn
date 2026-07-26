@@ -104,6 +104,7 @@ describe('settings normalization', () => {
       spectrumPeakGlow: -12,
       spectrumGlassSheen: 42.6,
       waterfallContrast: 250,
+      waterfallSmoothing: 72.6,
     });
     expect(prefs.spectrumTraceColor).toBe('#a1b2c3');
     expect(prefs.spectrumTraceSmoothing).toBe(100);
@@ -111,6 +112,7 @@ describe('settings normalization', () => {
     expect(prefs.spectrumPeakGlow).toBe(0);
     expect(prefs.spectrumGlassSheen).toBe(43);
     expect(prefs.waterfallContrast).toBe(200);
+    expect(prefs.waterfallSmoothing).toBe(73);
 
     expect(normalizeDisplayPrefs({ spectrumTraceColor: 'not-a-color' }).spectrumTraceColor).toBe('#62d0ff');
   });
