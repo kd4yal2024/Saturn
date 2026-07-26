@@ -116,8 +116,9 @@ export function smoothSpectrumTrace(bins: Float32Array, amount: number): Float32
 }
 
 /**
- * Apply display-only temporal averaging to waterfall bins. Persistent signals
- * remain visible while frame-to-frame noise speckle is reduced.
+ * Apply display-only temporal averaging and adaptive background suppression to
+ * waterfall bins. The sampled noise estimate keeps the operation inexpensive,
+ * while signals at least 12 dB above the background remain unchanged.
  */
 export function smoothWaterfallBins(
   bins: Float32Array,
@@ -125,15 +126,35 @@ export function smoothWaterfallBins(
   amount: number,
 ): Float32Array {
   const strength = Math.max(0, Math.min(100, Number.isFinite(amount) ? amount : 0)) / 100;
-  if (strength <= 0 || !previous || previous.length !== bins.length) {
+  if (strength <= 0) {
     return bins;
   }
-  const previousWeight = strength * 0.85;
+  const previousWeight = previous?.length === bins.length ? strength * 0.92 : 0;
   const currentWeight = 1 - previousWeight;
   const smoothed = new Float32Array(bins.length);
+  const noiseSamples: number[] = [];
+  const sampleStride = Math.max(1, Math.floor(bins.length / 128));
   for (let i = 0; i < bins.length; i += 1) {
-    smoothed[i] = (previous[i] ?? bins[i] ?? 0) * previousWeight +
-      (bins[i] ?? 0) * currentWeight;
+    const current = bins[i] ?? 0;
+    const value = (previous?.[i] ?? current) * previousWeight + current * currentWeight;
+    smoothed[i] = value;
+    if (i % sampleStride === 0 && Number.isFinite(value)) {
+      noiseSamples.push(value);
+    }
+  }
+  if (noiseSamples.length === 0) {
+    return smoothed;
+  }
+  noiseSamples.sort((a, b) => a - b);
+  const noiseDb = noiseSamples[Math.floor((noiseSamples.length - 1) * 0.35)] ?? 0;
+  const protectStartDb = noiseDb + 3;
+  const protectSpanDb = 9;
+  const maximumSuppressionDb = strength * 18;
+  for (let i = 0; i < smoothed.length; i += 1) {
+    const value = smoothed[i] ?? 0;
+    const linearProtect = Math.max(0, Math.min(1, (value - protectStartDb) / protectSpanDb));
+    const signalProtection = linearProtect * linearProtect * (3 - 2 * linearProtect);
+    smoothed[i] = value - maximumSuppressionDb * (1 - signalProtection);
   }
   return smoothed;
 }

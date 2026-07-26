@@ -113,20 +113,26 @@ describe('smoothSpectrumTrace', () => {
 });
 
 describe('smoothWaterfallBins', () => {
-  it('leaves the first line and disabled smoothing unchanged', () => {
+  it('leaves disabled cleanup unchanged', () => {
     const bins = new Float32Array([-120, -100]);
-    expect(smoothWaterfallBins(bins, null, 100)).toBe(bins);
     expect(smoothWaterfallBins(bins, new Float32Array([-140, -140]), 0)).toBe(bins);
   });
 
-  it('reduces frame-to-frame speckle without changing the bin count', () => {
-    const previous = new Float32Array([-120, -120, -120]);
-    const current = new Float32Array([-100, -120, -140]);
+  it('reduces frame-to-frame speckle and suppresses the measured background', () => {
+    const previous = new Float32Array([-120, -120, -120, -120]);
+    const current = new Float32Array([-100, -120, -140, -120]);
     const result = smoothWaterfallBins(current, previous, 100);
     expect(result).toHaveLength(current.length);
     expect(result[0]).toBeLessThan(-100);
-    expect(result[2]).toBeGreaterThan(-140);
-    expect(result[1]).toBe(-120);
+    expect(result[1]).toBeLessThan(-120);
+    expect(result[2]).toBeGreaterThan(-158);
+  });
+
+  it('protects persistent signals well above the estimated noise floor', () => {
+    const bins = new Float32Array([-120, -121, -119, -120, -100]);
+    const result = smoothWaterfallBins(bins, bins, 100);
+    expect(result[0]).toBeLessThan(-130);
+    expect(result[4]).toBeCloseTo(-100, 4);
   });
 });
 
