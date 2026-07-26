@@ -343,6 +343,7 @@ export function normalizeDisplayPrefs(input: DeepPartial<DisplayPrefs> | null | 
     spectrumPeakHold: source.spectrumPeakHold ?? DEFAULT_DISPLAY_PREFS.spectrumPeakHold,
     spectrumTraceColor: normalizeSpectrumTraceColor(source.spectrumTraceColor),
     spectrumTraceSmoothing: clampSpectrumVisualEffect(source.spectrumTraceSmoothing),
+    spectrumTraceFill: clampSpectrumVisualEffect(source.spectrumTraceFill),
     spectrumPeakGlow: clampSpectrumVisualEffect(source.spectrumPeakGlow),
     spectrumGlassSheen: clampSpectrumVisualEffect(source.spectrumGlassSheen),
     showGrid: source.showGrid ?? DEFAULT_DISPLAY_PREFS.showGrid,

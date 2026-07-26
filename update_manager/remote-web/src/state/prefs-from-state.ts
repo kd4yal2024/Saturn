@@ -108,6 +108,7 @@ export interface DisplayPrefsSource {
   spectrumPeakHold: boolean;
   spectrumTraceColor: string;
   spectrumTraceSmoothing: number;
+  spectrumTraceFill: number;
   spectrumPeakGlow: number;
   spectrumGlassSheen: number;
   showGrid: boolean;
@@ -188,6 +189,7 @@ export function displayPrefsFromState(s: DisplayPrefsSource): DisplayPrefs {
     spectrumPeakHold: Boolean(s.spectrumPeakHold),
     spectrumTraceColor: normalizeSpectrumTraceColor(s.spectrumTraceColor),
     spectrumTraceSmoothing: clampSpectrumVisualEffect(s.spectrumTraceSmoothing),
+    spectrumTraceFill: clampSpectrumVisualEffect(s.spectrumTraceFill),
     spectrumPeakGlow: clampSpectrumVisualEffect(s.spectrumPeakGlow),
     spectrumGlassSheen: clampSpectrumVisualEffect(s.spectrumGlassSheen),
     showGrid: Boolean(s.showGrid),

@@ -79,6 +79,7 @@ export const DEFAULT_DISPLAY_PREFS: DisplayPrefs = {
   spectrumPeakHold: false,
   spectrumTraceColor: '#62d0ff',
   spectrumTraceSmoothing: 0,
+  spectrumTraceFill: 0,
   spectrumPeakGlow: 0,
   spectrumGlassSheen: 0,
   showGrid: true,

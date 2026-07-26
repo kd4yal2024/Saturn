@@ -116,6 +116,7 @@ export interface DisplayPrefsTarget {
   spectrumPeakHold: boolean;
   spectrumTraceColor: string;
   spectrumTraceSmoothing: number;
+  spectrumTraceFill: number;
   spectrumPeakGlow: number;
   spectrumGlassSheen: number;
   showGrid: boolean;
@@ -269,6 +270,7 @@ export function applyDisplayPrefsToState(
   state.spectrumTraceSmoothing = clampSpectrumVisualEffect(
     prefs.spectrumTraceSmoothing ?? state.spectrumTraceSmoothing,
   );
+  state.spectrumTraceFill = clampSpectrumVisualEffect(prefs.spectrumTraceFill ?? state.spectrumTraceFill);
   state.spectrumPeakGlow = clampSpectrumVisualEffect(prefs.spectrumPeakGlow ?? state.spectrumPeakGlow);
   state.spectrumGlassSheen = clampSpectrumVisualEffect(prefs.spectrumGlassSheen ?? state.spectrumGlassSheen);
   state.showGrid = Boolean(prefs.showGrid ?? state.showGrid);
@@ -385,6 +387,7 @@ export function normalizeAppStateInPlace(state: NormalizableState): void {
   state.spectrumPeakHold = Boolean(state.spectrumPeakHold);
   state.spectrumTraceColor = normalizeSpectrumTraceColor(state.spectrumTraceColor);
   state.spectrumTraceSmoothing = clampSpectrumVisualEffect(state.spectrumTraceSmoothing);
+  state.spectrumTraceFill = clampSpectrumVisualEffect(state.spectrumTraceFill);
   state.spectrumPeakGlow = clampSpectrumVisualEffect(state.spectrumPeakGlow);
   state.spectrumGlassSheen = clampSpectrumVisualEffect(state.spectrumGlassSheen);
   state.showGrid = Boolean(state.showGrid);

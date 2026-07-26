@@ -100,11 +100,13 @@ describe('settings normalization', () => {
     const prefs = normalizeDisplayPrefs({
       spectrumTraceColor: '#A1B2C3',
       spectrumTraceSmoothing: 140,
+      spectrumTraceFill: 68.4,
       spectrumPeakGlow: -12,
       spectrumGlassSheen: 42.6,
     });
     expect(prefs.spectrumTraceColor).toBe('#a1b2c3');
     expect(prefs.spectrumTraceSmoothing).toBe(100);
+    expect(prefs.spectrumTraceFill).toBe(68);
     expect(prefs.spectrumPeakGlow).toBe(0);
     expect(prefs.spectrumGlassSheen).toBe(43);
 

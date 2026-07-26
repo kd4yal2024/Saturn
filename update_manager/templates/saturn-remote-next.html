@@ -4310,6 +4310,11 @@
                             <div class="setup-readout" id="display-spectrum-trace-smoothing-readout">Off</div>
                           </div>
                           <div class="setup-row">
+                            <label class="label" for="display-spectrum-trace-fill">Trace Fill</label>
+                            <input id="display-spectrum-trace-fill" type="range" min="0" max="100" step="1" value="0" />
+                            <div class="setup-readout" id="display-spectrum-trace-fill-readout">Off</div>
+                          </div>
+                          <div class="setup-row">
                             <label class="label" for="display-spectrum-peak-glow">Peak Glow</label>
                             <input id="display-spectrum-peak-glow" type="range" min="0" max="100" step="1" value="0" />
                             <div class="setup-readout" id="display-spectrum-peak-glow-readout">Off</div>
@@ -6013,6 +6018,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         this.ctx = null;
         this.program = null;
         this.vertexBuffer = null;
+        this.fillVertices = null;
         this.positionLocation = -1;
         this.colorLocation = null;
         this.offsetLocation = null;
@@ -6145,12 +6151,32 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         gl.clear(gl.COLOR_BUFFER_BIT);
         gl.useProgram(this.program);
         gl.bindBuffer(gl.ARRAY_BUFFER, this.vertexBuffer);
-        gl.bufferData(gl.ARRAY_BUFFER, vertices, gl.DYNAMIC_DRAW);
         gl.enableVertexAttribArray(this.positionLocation);
         gl.vertexAttribPointer(this.positionLocation, 2, gl.FLOAT, false, 0, 0);
         gl.enable(gl.BLEND);
         gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
 
+        const fill = _next.clampSpectrumVisualEffect(state.spectrumTraceFill) / 100;
+        if (fill > 0) {
+          if (!this.fillVertices || this.fillVertices.length !== renderedBins.length * 4) {
+            this.fillVertices = new Float32Array(renderedBins.length * 4);
+          }
+          const fillVertices = this.fillVertices;
+          for (let i = 0; i < renderedBins.length; i += 1) {
+            const lineIndex = i * 2;
+            const fillIndex = i * 4;
+            fillVertices[fillIndex] = vertices[lineIndex];
+            fillVertices[fillIndex + 1] = -1;
+            fillVertices[fillIndex + 2] = vertices[lineIndex];
+            fillVertices[fillIndex + 3] = vertices[lineIndex + 1];
+          }
+          gl.bufferData(gl.ARRAY_BUFFER, fillVertices, gl.DYNAMIC_DRAW);
+          gl.uniform2f(this.offsetLocation, 0, 0);
+          gl.uniform4f(this.colorLocation, red, green, blue, fill * 0.32);
+          gl.drawArrays(gl.TRIANGLE_STRIP, 0, renderedBins.length * 2);
+        }
+
+        gl.bufferData(gl.ARRAY_BUFFER, vertices, gl.DYNAMIC_DRAW);
         const glow = _next.clampSpectrumVisualEffect(state.spectrumPeakGlow) / 100;
         const glowLayers = Math.ceil(glow * 3);
         const offsets = [[1, 0], [-1, 0], [0, 1], [0, -1]];
@@ -6202,6 +6228,23 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
 
         const dpr = Math.max(1, window.devicePixelRatio || 1);
         const glow = _next.clampSpectrumVisualEffect(state.spectrumPeakGlow) / 100;
+        const fill = _next.clampSpectrumVisualEffect(state.spectrumTraceFill) / 100;
+        if (fill > 0) {
+          ctx.globalAlpha = fill * 0.32;
+          ctx.fillStyle = traceColor;
+          ctx.beginPath();
+          ctx.moveTo(0, height);
+          for (let i = 0; i < bins.length; i += 1) {
+            const x = (i / (bins.length - 1)) * width;
+            const normalized = (bins[i] - floorDb) / Math.max(1, (ceilingDb - floorDb));
+            const y = height - Math.max(0, Math.min(1, normalized)) * height;
+            ctx.lineTo(x, y);
+          }
+          ctx.lineTo(width, height);
+          ctx.closePath();
+          ctx.fill();
+          ctx.globalAlpha = 1;
+        }
         ctx.strokeStyle = traceColor;
         ctx.lineWidth = 2;
         ctx.lineJoin = "round";
@@ -8730,6 +8773,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       setValue("display-spectrum-average", prefs.spectrumAverage);
       setValue("display-spectrum-trace-color", prefs.spectrumTraceColor);
       setValue("display-spectrum-trace-smoothing", prefs.spectrumTraceSmoothing);
+      setValue("display-spectrum-trace-fill", prefs.spectrumTraceFill);
       setValue("display-spectrum-peak-glow", prefs.spectrumPeakGlow);
       setValue("display-spectrum-glass-sheen", prefs.spectrumGlassSheen);
       setValue("display-waterfall-speed", prefs.waterfallSpeed);
@@ -8743,6 +8787,11 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       if ($("display-spectrum-trace-smoothing-readout")) {
         $("display-spectrum-trace-smoothing-readout").textContent = prefs.spectrumTraceSmoothing > 0
           ? `${prefs.spectrumTraceSmoothing}%`
+          : "Off";
+      }
+      if ($("display-spectrum-trace-fill-readout")) {
+        $("display-spectrum-trace-fill-readout").textContent = prefs.spectrumTraceFill > 0
+          ? `${prefs.spectrumTraceFill}%`
           : "Off";
       }
       if ($("display-spectrum-peak-glow-readout")) {
@@ -14199,6 +14248,11 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         "display-spectrum-trace-smoothing",
         "display-spectrum-trace-smoothing-readout",
         (value) => { state.spectrumTraceSmoothing = value; },
+      );
+      bindSpectrumEffect(
+        "display-spectrum-trace-fill",
+        "display-spectrum-trace-fill-readout",
+        (value) => { state.spectrumTraceFill = value; },
       );
       bindSpectrumEffect(
         "display-spectrum-peak-glow",

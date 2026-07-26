@@ -54,6 +54,7 @@ describe('displayPrefsFromState', () => {
     expect(prefs.waterfallSpeed).toBe(1);
     expect(prefs.spectrumTraceColor).toBe('#62d0ff');
     expect(prefs.spectrumTraceSmoothing).toBe(0);
+    expect(prefs.spectrumTraceFill).toBe(0);
     expect(prefs.spectrumPeakGlow).toBe(0);
     expect(prefs.spectrumGlassSheen).toBe(0);
     expect(prefs.showGrid).toBe(true);

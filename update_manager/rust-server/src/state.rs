@@ -154,6 +154,7 @@ pub struct RemoteDisplayPrefs {
     pub spectrum_peak_hold: Option<bool>,
     pub spectrum_trace_color: Option<String>,
     pub spectrum_trace_smoothing: Option<u8>,
+    pub spectrum_trace_fill: Option<u8>,
     pub spectrum_peak_glow: Option<u8>,
     pub spectrum_glass_sheen: Option<u8>,
     pub show_grid: Option<bool>,
