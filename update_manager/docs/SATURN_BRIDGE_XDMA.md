@@ -1,0 +1,84 @@
+# Saturn Bridge Direct XDMA
+
+## Goal
+
+Saturn Bridge will support two appliance-wide radio backends:
+
+- `p2`: the stable Protocol 2 path through `p2app.service`
+- `xdma`: direct FPGA register and DMA access modelled on piHPSDR
+
+Protocol 2 remains the default until the direct backend passes the complete
+receive, audio, transmit-safety, recovery, and soak-test gates.
+
+Backend ownership is global to the appliance. It is not selected independently
+for each browser connection because P2_app and Saturn Bridge must never drive
+the same FPGA registers or DMA channels concurrently.
+
+## Operator Switching Contract
+
+Saturn Remote will ultimately expose the backend selector to its operator.
+Changing it must be a transactional control-plane operation:
+
+1. Force RX and disable RF output.
+2. Disconnect and release the active backend.
+3. Stop `p2app.service` when moving to XDMA, or release XDMA before starting P2.
+4. Claim and validate the requested backend.
+5. Re-bootstrap any connected client against the new backend.
+6. Start its RX path and verify data-plane health.
+7. Persist the selection only after readiness succeeds.
+8. Automatically restore the previous backend if any step fails.
+
+Service state alone is not backend readiness. With a client connected, the P2
+backend must complete discovery and show advancing high-priority and DDC packet
+counters. The direct XDMA backend will require advancing DMA/FIFO counters.
+With no client connected, the selected backend may remain available and idle;
+the first client connection must complete the same validation before the UI
+reports it active.
+
+The UI must show the active backend separately from the requested backend and
+must not represent Phase 1 probing as an operational radio connection.
+
+## Phase 1: Identity and Safe Lifecycle
+
+Phase 1 adds a one-shot probe to the installed `saturn-bridge` binary:
+
+```bash
+sudo systemctl stop p2app.service
+sudo -u pi /opt/saturn-go/bin/saturn-bridge --xdma-probe
+sudo systemctl start p2app.service
+```
+
+The probe:
+
+- refuses to run while `p2app.service` is active
+- opens `/dev/xdma0_user` through the `saturn-radio` group policy
+- verifies Saturn product ID, golden/primary image ID, clock status, and FPGA
+  firmware major version
+- preserves unrelated register bits while forcing MOX, TX enable, PA relay,
+  CW keyer, TX watchdog override, and DUC streaming into their safe state
+- repeats the safe-state operation during cleanup
+
+`SATURN_BRIDGE_XDMA_USER_DEVICE` may override the register device path for
+fixture testing. It is not an operational backend-selection setting.
+
+Phase 1 does not open C2H/H2C DMA streams and cannot receive or transmit.
+
+## Planned Data Paths
+
+| Function | XDMA node |
+| --- | --- |
+| FPGA registers | `/dev/xdma0_user` |
+| DDC receive IQ | `/dev/xdma0_c2h_0` |
+| Microphone input | `/dev/xdma0_c2h_1` |
+| DUC transmit IQ | `/dev/xdma0_h2c_0` |
+| Speaker output | `/dev/xdma0_h2c_1` |
+
+## Migration Gates
+
+1. Phase 1: identity, compatibility, ownership, and safe shutdown
+2. RX-only DDC IQ with FIFO and framing telemetry
+3. Microphone and speaker DMA
+4. DUC IQ with RF forcibly disabled
+5. Guarded RF transmit and failure-injection tests
+6. Transactional client-selectable switching and rollback
+7. Long-duration soak testing before considering XDMA as the default

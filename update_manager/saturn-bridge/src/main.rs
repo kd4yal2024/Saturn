@@ -7,6 +7,7 @@ mod tci;
 mod tx_codec;
 mod tx_thread;
 mod wdsp;
+mod xdma;
 
 use std::env;
 use std::error::Error;
@@ -215,6 +216,11 @@ fn clamp_client_ddc0_sample_rate_khz(rate_hz: u32, max_rate_khz: u16) -> u16 {
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
+    if env::args().skip(1).any(|arg| arg == "--xdma-probe") {
+        xdma::run_phase1_probe()?;
+        return Ok(());
+    }
+
     let config = BridgeConfig::from_env();
     let radio_model = Arc::new(Mutex::new(RadioModel::new(
         config.rx_ddc_index,

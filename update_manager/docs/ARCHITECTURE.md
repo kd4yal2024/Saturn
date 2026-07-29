@@ -16,6 +16,8 @@ The Saturn Remote real-time backend also lives in the repo:
   - provides the direct G2 remote/session bridge used by Saturn Remote
   - owns the downstream Protocol 2 client role to `p2app`
   - provides the TCI/WebSocket boundary and native WDSP integration
+  - is gaining an opt-in direct XDMA backend in staged, fail-safe phases; see
+    `SATURN_BRIDGE_XDMA.md` for the ownership and client-switching contract
 
 ## Request Flow
 
