@@ -8,6 +8,7 @@ use crate::xdma::{ensure_p2app_inactive, XdmaError, XdmaRegisterDevice};
 use crate::xdma_duc::{
     allowed_cpu_ids, current_scheduler, enable_realtime_fifo, pin_current_thread, DucDmaSession,
 };
+use crate::xdma_telemetry::{record_probe_outcome, TelemetryValue};
 use std::env;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -241,6 +242,31 @@ pub fn run_phase5_tx_preflight() -> Result<(), XdmaError> {
     let identity = registers.identity().clone();
     let device = registers.path().display().to_string();
     registers.close_safely()?;
+    record_probe_outcome(
+        5,
+        "tx-preflight",
+        "passed",
+        "receive-safe-verified",
+        None,
+        &[
+            ("device", TelemetryValue::text(device.clone())),
+            ("product", TelemetryValue::number(identity.product_id)),
+            ("pcb", TelemetryValue::number(identity.pcb_version)),
+            (
+                "firmware",
+                TelemetryValue::text(format!(
+                    "{}.{}",
+                    identity.firmware_major, identity.firmware_minor
+                )),
+            ),
+            ("rf_keyed", TelemetryValue::boolean(false)),
+            ("amplitude_zero", TelemetryValue::boolean(true)),
+            ("mox", TelemetryValue::boolean(false)),
+            ("tx_enable", TelemetryValue::boolean(false)),
+            ("pa_relay", TelemetryValue::boolean(false)),
+            ("cw", TelemetryValue::boolean(false)),
+        ],
+    );
     println!(
         "saturn-bridge: XDMA Phase 5 TX preflight passed product={} pcb={} firmware={}.{} device={} rf_keyed=0 amplitude_zero=1 mox=0 tx_enable=0 pa_relay=0 cw=0",
         identity.product_id,
@@ -363,6 +389,65 @@ pub fn run_phase5_tx_probe() -> Result<(), XdmaError> {
             fifo_lwm
         )));
     }
+    record_probe_outcome(
+        5,
+        "guarded-tx",
+        "passed",
+        "rf-cleanup-verified",
+        None,
+        &[
+            (
+                "frequency_hz",
+                TelemetryValue::number(VALIDATED_FREQUENCY_HZ),
+            ),
+            (
+                "antenna",
+                TelemetryValue::text(format!("ANT{VALIDATED_ANTENNA}")),
+            ),
+            (
+                "duration_ms",
+                TelemetryValue::number(config.duration.as_millis()),
+            ),
+            ("cpu", TelemetryValue::number(cpu)),
+            ("scheduler", TelemetryValue::text(scheduler.to_string())),
+            (
+                "scheduler_priority",
+                TelemetryValue::number(scheduler_priority),
+            ),
+            ("max_watts", TelemetryValue::number(VALIDATED_MAX_WATTS)),
+            ("target_watts", TelemetryValue::number(TX_TARGET_WATTS)),
+            ("max_drive", TelemetryValue::number(max_drive)),
+            ("final_drive", TelemetryValue::number(drive)),
+            (
+                "final_exciter_raw",
+                TelemetryValue::number(final_power.exciter_raw),
+            ),
+            (
+                "final_forward_raw",
+                TelemetryValue::number(final_power.forward_raw),
+            ),
+            (
+                "final_reverse_raw",
+                TelemetryValue::number(final_power.reverse_raw),
+            ),
+            ("peak_exciter_raw", TelemetryValue::number(peak_exciter_raw)),
+            ("peak_forward_raw", TelemetryValue::number(peak_forward_raw)),
+            ("peak_reverse_raw", TelemetryValue::number(peak_reverse_raw)),
+            (
+                "final_forward_watts",
+                TelemetryValue::number(final_power.forward_watts),
+            ),
+            (
+                "final_reverse_watts",
+                TelemetryValue::number(final_power.reverse_watts),
+            ),
+            ("peak_forward_watts", TelemetryValue::number(peak_forward)),
+            ("peak_reverse_watts", TelemetryValue::number(peak_reverse)),
+            ("peak_swr", TelemetryValue::number(peak_swr)),
+            ("fifo_lwm", TelemetryValue::number(fifo_lwm)),
+            ("rf_cleanup", TelemetryValue::boolean(true)),
+        ],
+    );
     println!(
         "saturn-bridge: XDMA Phase 5 guarded TX probe passed frequency_hz={} antenna=ANT{} duration_ms={} cpu={} scheduler={} scheduler_priority={} max_watts={:.1} target_watts={:.1} max_drive={} final_drive={} exciter_raw={} forward_raw={} reverse_raw={} peak_exciter_raw={} peak_forward_raw={} peak_reverse_raw={} final_forward_watts={:.3} final_reverse_watts={:.3} peak_forward_watts={:.3} peak_reverse_watts={:.3} peak_swr={:.2} fifo_lwm={} rf_cleanup=verified",
         VALIDATED_FREQUENCY_HZ,

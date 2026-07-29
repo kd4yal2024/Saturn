@@ -6,6 +6,7 @@
 
 use crate::xdma::{ensure_p2app_inactive, SaturnIdentity, XdmaError, XdmaRegisterDevice};
 use crate::xdma_rx::AlignedBuffer;
+use crate::xdma_telemetry::{record_probe_outcome, TelemetryValue};
 use std::env;
 use std::fs::{File, OpenOptions};
 use std::io;
@@ -362,6 +363,76 @@ pub fn run_phase3_audio_probe() -> Result<(), XdmaError> {
     stop?;
     registers.close_safely()?;
     let elapsed = mic.elapsed.as_secs_f64().max(0.001);
+    let mic_sample_rate = mic.samples as f64 / elapsed;
+
+    record_probe_outcome(
+        3,
+        "codec-audio",
+        "passed",
+        "receive-safe-verified",
+        None,
+        &[
+            ("product", TelemetryValue::number(identity.product_id)),
+            ("pcb", TelemetryValue::number(identity.pcb_version)),
+            (
+                "firmware",
+                TelemetryValue::text(format!(
+                    "{}.{}",
+                    identity.firmware_major, identity.firmware_minor
+                )),
+            ),
+            (
+                "mic_device",
+                TelemetryValue::text(mic_path.display().to_string()),
+            ),
+            (
+                "speaker_device",
+                TelemetryValue::text(speaker_path.display().to_string()),
+            ),
+            ("duration_ms", TelemetryValue::number(duration_ms)),
+            ("mic_samples", TelemetryValue::number(mic.samples)),
+            ("mic_sample_rate", TelemetryValue::number(mic_sample_rate)),
+            ("mic_dma_reads", TelemetryValue::number(mic.dma_reads)),
+            ("mic_dma_bytes", TelemetryValue::number(mic.dma_bytes)),
+            ("mic_fifo_hwm", TelemetryValue::number(mic.fifo_hwm)),
+            (
+                "mic_fifo_overflow",
+                TelemetryValue::number(mic.fifo_overflows),
+            ),
+            (
+                "mic_fifo_underflow",
+                TelemetryValue::number(mic.fifo_underflows),
+            ),
+            ("mic_rms_dbfs", TelemetryValue::number(mic.rms_dbfs())),
+            ("mic_peak", TelemetryValue::number(mic.peak)),
+            (
+                "speaker_dma_writes",
+                TelemetryValue::number(speaker.dma_writes),
+            ),
+            (
+                "speaker_dma_bytes",
+                TelemetryValue::number(speaker.dma_bytes),
+            ),
+            (
+                "speaker_fifo_after_write",
+                TelemetryValue::number(speaker.fifo_depth_after_write),
+            ),
+            (
+                "speaker_fifo_after_settle",
+                TelemetryValue::number(speaker.fifo_depth_after_settle),
+            ),
+            (
+                "speaker_fifo_overflow",
+                TelemetryValue::number(speaker.fifo_overflows),
+            ),
+            (
+                "speaker_fifo_underflow",
+                TelemetryValue::number(speaker.fifo_underflows),
+            ),
+            ("speaker_muted", TelemetryValue::boolean(true)),
+            ("rf_keyed", TelemetryValue::boolean(false)),
+        ],
+    );
 
     println!(
         "saturn-bridge: XDMA Phase 3 audio probe passed product={} pcb={} firmware={}.{} mic_device={} mic_rate={}Hz mic_byte_order={} duration_ms={} mic_samples={} mic_sample_rate={:.1}/s mic_dma_reads={} mic_dma_bytes={} mic_fifo_hwm={} mic_fifo_overflow={} mic_fifo_threshold={} mic_fifo_startup_underflow={} mic_fifo_underflow={} mic_rms={:.1}dBFS mic_peak={:.4}",
@@ -374,7 +445,7 @@ pub fn run_phase3_audio_probe() -> Result<(), XdmaError> {
         if network_byte_order { "network" } else { "local" },
         duration_ms,
         mic.samples,
-        mic.samples as f64 / elapsed,
+        mic_sample_rate,
         mic.dma_reads,
         mic.dma_bytes,
         mic.fifo_hwm,

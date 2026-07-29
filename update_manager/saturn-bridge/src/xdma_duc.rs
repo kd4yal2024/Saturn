@@ -7,6 +7,7 @@
 
 use crate::xdma::{ensure_p2app_inactive, SaturnIdentity, XdmaError, XdmaRegisterDevice};
 use crate::xdma_rx::AlignedBuffer;
+use crate::xdma_telemetry::{record_probe_outcome, TelemetryValue};
 use std::env;
 use std::fs::{File, OpenOptions};
 use std::io;
@@ -817,6 +818,131 @@ pub fn run_phase4_duc_probe() -> Result<(), XdmaError> {
         + stats.refill_gaps.overflow_observations
         + stats.refill_service_latencies.overflow_observations;
     let p9999_sample_sufficient = stats.refill_service_latencies.observations >= 10_000;
+    let validation_error = validation.as_ref().err().map(ToString::to_string);
+    let validation_status = if validation.is_ok() {
+        "passed"
+    } else {
+        "failed"
+    };
+    let margin_used = if p9999_margin_percent.is_finite() {
+        TelemetryValue::number(p9999_margin_percent)
+    } else {
+        TelemetryValue::text("infinite")
+    };
+    record_probe_outcome(
+        4,
+        "duc-performance",
+        validation_status,
+        "receive-safe-verified",
+        validation_error.as_deref(),
+        &[
+            (
+                "device",
+                TelemetryValue::text(duc_path.display().to_string()),
+            ),
+            ("product", TelemetryValue::number(identity.product_id)),
+            ("pcb", TelemetryValue::number(identity.pcb_version)),
+            (
+                "firmware",
+                TelemetryValue::text(format!(
+                    "{}.{}",
+                    identity.firmware_major, identity.firmware_minor
+                )),
+            ),
+            (
+                "duration_ms",
+                TelemetryValue::number(stats.elapsed.as_millis()),
+            ),
+            (
+                "terminated_early",
+                TelemetryValue::boolean(stats.terminated_early),
+            ),
+            (
+                "iq_pattern",
+                TelemetryValue::text(config.iq_pattern.label()),
+            ),
+            (
+                "cpu",
+                TelemetryValue::text(
+                    config
+                        .cpu
+                        .map_or_else(|| "none".to_string(), |cpu| cpu.to_string()),
+                ),
+            ),
+            (
+                "scheduler",
+                TelemetryValue::text(scheduler_policy.to_string()),
+            ),
+            (
+                "scheduler_priority",
+                TelemetryValue::number(scheduler_priority),
+            ),
+            ("target_rate_hz", TelemetryValue::number(DUC_SAMPLE_RATE_HZ)),
+            (
+                "frames_written",
+                TelemetryValue::number(stats.frames_written),
+            ),
+            (
+                "iq_pairs_consumed",
+                TelemetryValue::number(stats.consumed_iq_pairs()),
+            ),
+            ("iq_rate", TelemetryValue::number(pair_rate)),
+            ("dma_writes", TelemetryValue::number(stats.dma_writes)),
+            ("dma_bytes", TelemetryValue::number(stats.dma_bytes)),
+            ("payload_mbps", TelemetryValue::number(payload_mbps)),
+            ("average_batch", TelemetryValue::number(average_batch)),
+            (
+                "p9999_sample_sufficient",
+                TelemetryValue::boolean(p9999_sample_sufficient),
+            ),
+            ("p9999_write_us", TelemetryValue::number(p9999_write_us)),
+            ("max_write_us", TelemetryValue::number(max_write_us)),
+            (
+                "p9999_refill_gap_ms",
+                TelemetryValue::number(p9999_refill_gap_ms),
+            ),
+            (
+                "p9999_refill_service_ms",
+                TelemetryValue::number(p9999_refill_service_ms),
+            ),
+            (
+                "max_refill_service_ms",
+                TelemetryValue::number(max_refill_service_ms),
+            ),
+            (
+                "minimum_fifo_margin_ms",
+                TelemetryValue::number(minimum_fifo_margin_ms),
+            ),
+            ("p9999_margin_used_percent", margin_used),
+            ("max_loop_gap_ms", TelemetryValue::number(max_loop_gap_ms)),
+            (
+                "histogram_overflows",
+                TelemetryValue::number(histogram_overflows),
+            ),
+            ("fifo_lwm", TelemetryValue::number(stats.fifo_lwm)),
+            ("fifo_hwm", TelemetryValue::number(stats.fifo_hwm)),
+            ("fifo_final", TelemetryValue::number(stats.fifo_final)),
+            (
+                "critical_low_events",
+                TelemetryValue::number(stats.critical_low_events),
+            ),
+            (
+                "fifo_overflow",
+                TelemetryValue::number(stats.fifo_overflows),
+            ),
+            (
+                "fifo_threshold",
+                TelemetryValue::number(stats.fifo_over_threshold),
+            ),
+            (
+                "fifo_underflow",
+                TelemetryValue::number(stats.fifo_underflows),
+            ),
+            ("safety_checks", TelemetryValue::number(stats.safety_checks)),
+            ("amplitude_zero", TelemetryValue::boolean(true)),
+            ("rf_keyed", TelemetryValue::boolean(false)),
+        ],
+    );
 
     println!(
         "saturn-bridge: XDMA Phase 4 DUC probe {} product={} pcb={} firmware={}.{} device={} duration_ms={} terminated_early={} iq_pattern={} cpu={} scheduler={} scheduler_priority={} dma_buffer_locked=1 target_rate={}Hz target_frames_s={} refill_low_frames={} refill_target_frames={} frames_written={} iq_pairs_consumed={} iq_rate={:.1}/s dma_writes={} dma_bytes={} payload={:.3}Mbit/s average_batch={:.2} max_batch={} batch_changes={} write_observations={} refill_observations={} p99.99_sample_sufficient={} average_write={:.1}us p99_write={:.1}us p99.99_write={:.1}us max_write={:.1}us p99_refill_gap={:.3}ms p99.99_refill_gap={:.3}ms p99_refill_service={:.3}ms p99.99_refill_service={:.3}ms max_refill_service={:.3}ms p99.99_margin_used={} max_loop_gap={:.3}ms histogram_overflows={} fifo_depth={} fifo_lwm={} fifo_hwm={} fifo_final={} minimum_fifo_margin={:.3}ms low_water_events={} critical_low_events={} fifo_startup_underflow={} fifo_overflow={} fifo_threshold={} fifo_underflow={} safety_checks={} amplitude_zero=1 mox=0 tx_enable=0 pa_relay=0 cw=0",

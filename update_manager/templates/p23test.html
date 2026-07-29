@@ -1505,7 +1505,10 @@ function renderXdmaDashboard(xdma){
   const optionalReady = optional.filter((device)=>device?.present).length;
   const validation = xdma?.last_validation || {};
   const saved = validation?.snapshot || null;
-  const validationStatus = saved?.status || saved?.result || (validation?.present ? 'saved' : 'not recorded');
+  const validationResult = saved?.status || saved?.result || (validation?.present ? 'saved' : 'not recorded');
+  const validationStatus = saved
+    ? `${validationResult} · Phase ${saved?.phase ?? 'n/a'} ${saved?.probe || ''}`.trim()
+    : validationResult;
   const link = [pcie.current_link_speed || 'n/a', pcie.current_link_width ? `x${pcie.current_link_width}` : 'width n/a'].join(' ');
   return [
     metricCard('Backend Ownership', backend.active || 'none', `requested ${backend.requested || 'p2'} | P2 service ${backend.p2_service_state || 'unknown'}`),

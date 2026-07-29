@@ -5,6 +5,7 @@
 //! not expose an operational client backend and contains no TX DMA path.
 
 use crate::xdma::{ensure_p2app_inactive, SaturnIdentity, XdmaError, XdmaRegisterDevice};
+use crate::xdma_telemetry::{record_probe_outcome, TelemetryValue};
 use std::alloc::{alloc_zeroed, dealloc, Layout};
 use std::env;
 use std::fs::{File, OpenOptions};
@@ -458,6 +459,67 @@ pub fn run_phase2_rx_probe() -> Result<(), XdmaError> {
     stop?;
     registers.close_safely()?;
     let elapsed = started.elapsed().as_secs_f64().max(0.001);
+    let sample_rate = stats.samples as f64 / elapsed;
+
+    record_probe_outcome(
+        2,
+        "rx-ddc",
+        "passed",
+        "receive-safe-verified",
+        None,
+        &[
+            (
+                "device",
+                TelemetryValue::text(ddc_path.display().to_string()),
+            ),
+            ("product", TelemetryValue::number(identity.product_id)),
+            ("pcb", TelemetryValue::number(identity.pcb_version)),
+            (
+                "firmware",
+                TelemetryValue::text(format!(
+                    "{}.{}",
+                    identity.firmware_major, identity.firmware_minor
+                )),
+            ),
+            ("ddc", TelemetryValue::number(DIRECT_DDC_INDEX)),
+            ("adc", TelemetryValue::text("ADC1")),
+            ("frequency_hz", TelemetryValue::number(config.frequency_hz)),
+            (
+                "sample_rate_khz",
+                TelemetryValue::number(DIRECT_DDC_SAMPLE_RATE_KHZ),
+            ),
+            (
+                "duration_ms",
+                TelemetryValue::number(config.duration.as_millis()),
+            ),
+            ("frames", TelemetryValue::number(stats.frames)),
+            ("samples", TelemetryValue::number(stats.samples)),
+            ("observed_sample_rate", TelemetryValue::number(sample_rate)),
+            ("dma_reads", TelemetryValue::number(stats.dma_reads)),
+            ("dma_bytes", TelemetryValue::number(stats.dma_bytes)),
+            ("fifo_hwm", TelemetryValue::number(stats.fifo_depth_hwm)),
+            (
+                "fifo_overflow",
+                TelemetryValue::number(stats.fifo_overflows),
+            ),
+            (
+                "fifo_threshold",
+                TelemetryValue::number(stats.fifo_over_threshold),
+            ),
+            (
+                "fifo_underflow",
+                TelemetryValue::number(stats.fifo_underflows),
+            ),
+            (
+                "header_resync",
+                TelemetryValue::number(stats.header_resyncs),
+            ),
+            ("header_errors", TelemetryValue::number(stats.header_errors)),
+            ("rms_dbfs", TelemetryValue::number(stats.rms_dbfs())),
+            ("peak", TelemetryValue::number(stats.peak)),
+            ("rf_keyed", TelemetryValue::boolean(false)),
+        ],
+    );
 
     println!(
         "saturn-bridge: XDMA Phase 2 RX probe passed device={} product={} pcb={} firmware={}.{} ddc={} adc=ADC1 frequency={}Hz rate={}kHz duration_ms={} frames={} frame_seq=0..{} samples={} sample_rate={:.1}/s dma_reads={} dma_bytes={} fifo_hwm={} fifo_overflow={} fifo_threshold={} fifo_startup_underflow={} fifo_underflow={} header_resync={} header_errors={} rms={:.1}dBFS peak={:.4}",
@@ -473,7 +535,7 @@ pub fn run_phase2_rx_probe() -> Result<(), XdmaError> {
         stats.frames,
         stats.frames.saturating_sub(1),
         stats.samples,
-        stats.samples as f64 / elapsed,
+        sample_rate,
         stats.dma_reads,
         stats.dma_bytes,
         stats.fifo_depth_hwm,

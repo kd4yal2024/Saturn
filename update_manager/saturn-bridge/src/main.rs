@@ -11,6 +11,7 @@ mod xdma;
 mod xdma_audio;
 mod xdma_duc;
 mod xdma_rx;
+mod xdma_telemetry;
 mod xdma_tx;
 
 use std::env;
@@ -219,30 +220,38 @@ fn clamp_client_ddc0_sample_rate_khz(rate_hz: u32, max_rate_khz: u16) -> u16 {
     requested_rate_khz.min(max_rate_khz.max(48))
 }
 
+fn finish_xdma_probe_command(
+    phase: u8,
+    probe: &str,
+    result: Result<(), xdma::XdmaError>,
+) -> Result<(), Box<dyn Error>> {
+    match result {
+        Ok(()) => Ok(()),
+        Err(error) => {
+            xdma_telemetry::record_probe_failure_if_unrecorded(phase, probe, &error.to_string());
+            Err(Box::new(error))
+        }
+    }
+}
+
 fn main() -> Result<(), Box<dyn Error>> {
     if env::args().skip(1).any(|arg| arg == "--xdma-probe") {
-        xdma::run_phase1_probe()?;
-        return Ok(());
+        return finish_xdma_probe_command(1, "identity", xdma::run_phase1_probe());
     }
     if env::args().skip(1).any(|arg| arg == "--xdma-rx-probe") {
-        xdma_rx::run_phase2_rx_probe()?;
-        return Ok(());
+        return finish_xdma_probe_command(2, "rx-ddc", xdma_rx::run_phase2_rx_probe());
     }
     if env::args().skip(1).any(|arg| arg == "--xdma-audio-probe") {
-        xdma_audio::run_phase3_audio_probe()?;
-        return Ok(());
+        return finish_xdma_probe_command(3, "codec-audio", xdma_audio::run_phase3_audio_probe());
     }
     if env::args().skip(1).any(|arg| arg == "--xdma-duc-probe") {
-        xdma_duc::run_phase4_duc_probe()?;
-        return Ok(());
+        return finish_xdma_probe_command(4, "duc-performance", xdma_duc::run_phase4_duc_probe());
     }
     if env::args().skip(1).any(|arg| arg == "--xdma-tx-preflight") {
-        xdma_tx::run_phase5_tx_preflight()?;
-        return Ok(());
+        return finish_xdma_probe_command(5, "tx-preflight", xdma_tx::run_phase5_tx_preflight());
     }
     if env::args().skip(1).any(|arg| arg == "--xdma-tx-probe") {
-        xdma_tx::run_phase5_tx_probe()?;
-        return Ok(());
+        return finish_xdma_probe_command(5, "guarded-tx", xdma_tx::run_phase5_tx_probe());
     }
 
     let config = BridgeConfig::from_env();

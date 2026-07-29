@@ -4,6 +4,7 @@
 //! the hardware-identity, compatibility, ownership, register-access, and
 //! fail-safe shutdown foundation needed before an RX data path is added.
 
+use crate::xdma_telemetry::{record_probe_outcome, TelemetryValue};
 use std::env;
 use std::fmt;
 use std::fs::{File, OpenOptions};
@@ -265,23 +266,52 @@ pub fn run_phase1_probe() -> Result<(), XdmaError> {
         .unwrap_or_else(|| PathBuf::from(DEFAULT_USER_DEVICE));
     let device = XdmaRegisterDevice::open(&path)?;
     let identity = device.identity().clone();
+    let device_path = device.path().display().to_string();
+    let image = if identity.is_fallback() {
+        "golden/fallback"
+    } else {
+        "primary"
+    };
     println!(
         "saturn-bridge: XDMA Phase 1 probe passed device={} product={} pcb={} firmware={}.{} software_id={} image={} clocks=0x{:02x} user_version=0x{:08x}",
-        device.path().display(),
+        device_path,
         identity.product_id,
         identity.pcb_version,
         identity.firmware_major,
         identity.firmware_minor,
         identity.software_id,
-        if identity.is_fallback() {
-            "golden/fallback"
-        } else {
-            "primary"
-        },
+        image,
         identity.clock_mask,
         identity.user_version
     );
     device.close_safely()?;
+    record_probe_outcome(
+        1,
+        "identity",
+        "passed",
+        "receive-safe-verified",
+        None,
+        &[
+            ("device", TelemetryValue::text(device_path)),
+            ("product", TelemetryValue::number(identity.product_id)),
+            ("pcb", TelemetryValue::number(identity.pcb_version)),
+            (
+                "firmware",
+                TelemetryValue::text(format!(
+                    "{}.{}",
+                    identity.firmware_major, identity.firmware_minor
+                )),
+            ),
+            ("software_id", TelemetryValue::number(identity.software_id)),
+            ("image", TelemetryValue::text(image)),
+            ("clock_mask", TelemetryValue::number(identity.clock_mask)),
+            (
+                "user_version",
+                TelemetryValue::number(identity.user_version),
+            ),
+            ("rf_keyed", TelemetryValue::boolean(false)),
+        ],
+    );
     println!(
         "saturn-bridge: XDMA Phase 1 probe completed; MOX, TX enable, PA relay, CW keyer, and DUC stream are safely disabled"
     );

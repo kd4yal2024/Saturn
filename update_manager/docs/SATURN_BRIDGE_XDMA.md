@@ -434,6 +434,33 @@ and XDMA completion thread at FIFO priority 20, then verified receive-safe
 cleanup. This establishes the direct-XDMA RF path without relaxing the 3 W
 ceiling; higher-power calibration remains separate work.
 
+## Structured probe telemetry
+
+Every Phase 1 through Phase 5 one-shot probe now writes its latest outcome to:
+
+```text
+/var/lib/saturn-state/xdma-telemetry.json
+```
+
+Successful runs include phase-specific identity, DMA, FIFO, scheduler, signal,
+power, and cleanup metrics. Failed runs retain the error and cleanup state;
+Phase 4 validation failures retain the full bounded performance record rather
+than only the final gate error. The file is replaced atomically with mode
+`0644`.
+
+Snapshot persistence is deliberately best-effort. A state-directory or write
+failure emits a diagnostic warning but cannot change the probe result, skip
+DMA shutdown, or interfere with receive-safe RF cleanup.
+
+`SATURN_BRIDGE_XDMA_TELEMETRY_PATH` may override the destination for fixture
+tests. It is not an operational backend-selection setting.
+
+Saturn Go reads this record through `/bridge_diag` and displays it in Radio
+Telemetry & Diagnostics under the **XDMA Telemetry** tab. The same payload also
+reports backend ownership, device-node readiness, driver completion policy,
+PCIe link state, and XDMA interrupt counts. Direct XDMA remains explicitly
+inactive—not failed—while `p2app.service` owns the FPGA.
+
 ## Planned Data Paths
 
 | Function | XDMA node |
