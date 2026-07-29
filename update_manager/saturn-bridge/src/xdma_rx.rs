@@ -215,14 +215,14 @@ impl DdcStreamParser {
     }
 }
 
-struct AlignedBuffer {
+pub(crate) struct AlignedBuffer {
     ptr: NonNull<u8>,
     len: usize,
     layout: Layout,
 }
 
 impl AlignedBuffer {
-    fn new(len: usize) -> Result<Self, XdmaError> {
+    pub(crate) fn new(len: usize) -> Result<Self, XdmaError> {
         let layout = Layout::from_size_align(len, DMA_ALIGNMENT).map_err(|error| {
             XdmaError::Incompatible(format!("invalid aligned DMA buffer layout: {error}"))
         })?;
@@ -235,11 +235,18 @@ impl AlignedBuffer {
         Ok(Self { ptr, len, layout })
     }
 
-    fn as_mut_slice(&mut self, len: usize) -> &mut [u8] {
+    pub(crate) fn as_mut_slice(&mut self, len: usize) -> &mut [u8] {
         assert!(len <= self.len);
         // SAFETY: ptr owns `self.len` initialized bytes for this object's
         // lifetime, and the mutable borrow prevents aliasing.
         unsafe { std::slice::from_raw_parts_mut(self.ptr.as_ptr(), len) }
+    }
+
+    pub(crate) fn as_slice(&self, len: usize) -> &[u8] {
+        assert!(len <= self.len);
+        // SAFETY: ptr owns `self.len` initialized bytes for this object's
+        // lifetime, and this immutable borrow does not permit mutation.
+        unsafe { std::slice::from_raw_parts(self.ptr.as_ptr(), len) }
     }
 }
 

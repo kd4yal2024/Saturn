@@ -94,6 +94,40 @@ The following test-only environment settings are supported:
 Phase 2 does not send the captured samples to clients. P2 remains the only
 operational backend while the direct data path is validated in isolation.
 
+## Phase 3: Codec microphone and speaker DMA
+
+Phase 3 adds a one-shot codec-audio probe:
+
+```bash
+sudo systemctl stop p2app.service
+sudo -u pi /opt/saturn-go/bin/saturn-bridge --xdma-audio-probe
+sudo systemctl start p2app.service
+```
+
+The probe:
+
+- refuses to run while `p2app.service` is active
+- captures 48 kHz signed 16-bit microphone samples from
+  `/dev/xdma0_c2h_1` at AXI offset `0x40000`
+- honors the FPGA's current local/network byte-order setting
+- writes only zero-valued 48 kHz stereo speaker frames to
+  `/dev/xdma0_h2c_1` at AXI offset `0x40000`
+- asserts the hardware speaker mute before opening the audio path and leaves
+  it asserted during cleanup
+- verifies that the speaker FIFO accepts the DMA write and begins draining
+- reports microphone level/rate and per-stream DMA/FIFO telemetry
+- resets both codec FIFOs and preserves the Phase 1 receive-safe RF state on
+  every normal or error exit
+
+The following test-only environment settings are supported:
+
+- `SATURN_BRIDGE_XDMA_AUDIO_DURATION_MS` (default `2000`, range `250..10000`)
+- `SATURN_BRIDGE_XDMA_MIC_DEVICE` (default `/dev/xdma0_c2h_1`)
+- `SATURN_BRIDGE_XDMA_SPEAKER_DEVICE` (default `/dev/xdma0_h2c_1`)
+
+Phase 3 does not route codec audio to clients and does not enable DUC or RF
+transmit. P2 remains the only operational client backend.
+
 ## Planned Data Paths
 
 | Function | XDMA node |
