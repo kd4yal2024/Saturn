@@ -224,6 +224,23 @@ hardware FIFO can cover, so the result blocks Phase 5. The next acceptance run
 must use `SCHED_FIFO`; increasing FIFO watermarks cannot mask that scheduler
 tail.
 
+The corresponding 30-minute `SCHED_FIFO` priority 20 baseline passed with
+360,000 refill observations, exact 192 kHz consumption, 4.600 ms p99.99 and
+5.919 ms maximum refill service, 8.806 ms minimum FIFO margin, zero critical
+low-water events, and zero runtime FIFO faults.
+
+The final Phase 4 gate applies bounded concurrent host pressure:
+
+```bash
+sudo update_manager/scripts/saturn-xdma-phase4-stress.sh
+```
+
+The orchestrator runs the same 30-minute RF-inhibited changing-IQ probe under
+two CPU workers, a 192 MiB `/dev/shm` random workload, loopback HTTP
+concurrency, and read-only random I/O against the repository's block device.
+It does not write to persistent storage. Stressors are bounded, checked for
+early exit, and terminated on every exit; `p2app.service` is always restored.
+
 ## Planned Data Paths
 
 | Function | XDMA node |

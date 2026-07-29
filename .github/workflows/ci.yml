@@ -167,6 +167,7 @@ jobs:
             update_manager/scripts/saturn-go-build-preflight.sh \
             update_manager/scripts/saturn-release-build.sh \
             update_manager/scripts/saturn-go-deploy-root.sh \
+            update_manager/scripts/saturn-xdma-phase4-stress.sh \
             update_manager/scripts/saturn-tailscale.sh \
             sw_tools/p2app-control/install.sh \
             tests/test-admin-password-policy.sh \
@@ -188,6 +189,7 @@ jobs:
             tests/test-saturn-state-compatibility.sh \
             tests/test-saturn-go-deploy-broker.sh \
             tests/test-saturn-p2-deploy.sh \
+            tests/test-xdma-phase4-stress.sh \
             tests/test-xdma-dkms-idempotency.sh
           bash -n \
             install.sh \
@@ -207,6 +209,7 @@ jobs:
             update_manager/scripts/saturn-release-install-root.sh \
             update_manager/scripts/saturn-release-build.sh \
             update_manager/scripts/saturn-go-deploy-root.sh \
+            update_manager/scripts/saturn-xdma-phase4-stress.sh \
             update_manager/scripts/update-saturn-go.sh \
             update_manager/install_saturn_go_nginx.sh \
             sw_tools/p2app-control/install.sh \
@@ -224,6 +227,7 @@ jobs:
             tests/test-saturn-state-inventory.sh \
             tests/test-saturn-state-compatibility.sh \
             tests/test-saturn-go-deploy-broker.sh \
+            tests/test-xdma-phase4-stress.sh \
             tests/test-xdma-dkms-idempotency.sh
 
       - name: Validate cloud-init configuration
@@ -288,6 +292,9 @@ jobs:
 
       - name: Test XDMA DKMS rerun behavior
         run: tests/test-xdma-dkms-idempotency.sh
+
+      - name: Test XDMA Phase 4 stress safety contract
+        run: tests/test-xdma-phase4-stress.sh
 
       - name: Test P2 controller lease
         run: make test-controller-lease-asan
