@@ -63,6 +63,37 @@ fixture testing. It is not an operational backend-selection setting.
 
 Phase 1 does not open C2H/H2C DMA streams and cannot receive or transmit.
 
+## Phase 2: RX-only DDC IQ
+
+Phase 2 adds a one-shot, RX-only capture:
+
+```bash
+sudo systemctl stop p2app.service
+sudo -u pi /opt/saturn-go/bin/saturn-bridge --xdma-rx-probe
+sudo systemctl start p2app.service
+```
+
+The capture:
+
+- refuses to run while `p2app.service` is active
+- keeps MOX, TX enable, PA relay, CW keyer, and DUC streaming disabled
+- configures hardware DDC6 for ADC1 at 192 kHz
+- reads page-aligned DMA blocks from `/dev/xdma0_c2h_0`
+- validates every 64-bit rate header and packed 24-bit I/Q frame
+- reports a synthesized frame sequence, observed sample rate, DMA throughput,
+  FIFO high-water/error counters, header resynchronization, RMS, and peak
+- disables DDC streaming, clears the rate word, and resets the FIFO on every
+  normal or error exit
+
+The following test-only environment settings are supported:
+
+- `SATURN_BRIDGE_XDMA_RX_FREQUENCY_HZ` (default `14200000`)
+- `SATURN_BRIDGE_XDMA_RX_DURATION_MS` (default `2000`, range `250..10000`)
+- `SATURN_BRIDGE_XDMA_RX_DEVICE` (default `/dev/xdma0_c2h_0`)
+
+Phase 2 does not send the captured samples to clients. P2 remains the only
+operational backend while the direct data path is validated in isolation.
+
 ## Planned Data Paths
 
 | Function | XDMA node |

@@ -161,6 +161,23 @@ impl XdmaRegisterDevice {
         &self.path
     }
 
+    pub(crate) fn read_register(&self, offset: u64) -> Result<u32, XdmaError> {
+        read_u32(&self.file, offset)
+    }
+
+    pub(crate) fn write_register(&self, offset: u64, value: u32) -> Result<(), XdmaError> {
+        write_u32(&self.file, offset, value)
+    }
+
+    pub(crate) fn update_register(
+        &self,
+        offset: u64,
+        update: impl FnOnce(u32) -> u32,
+        action: &'static str,
+    ) -> Result<(), XdmaError> {
+        update_register(&self.file, offset, update, action)
+    }
+
     /// Force the minimum safe, non-transmitting hardware state.
     ///
     /// Register values are read-modify-written so unrelated GPIO, keyer, and
@@ -234,7 +251,7 @@ pub fn run_phase1_probe() -> Result<(), XdmaError> {
     Ok(())
 }
 
-fn ensure_p2app_inactive() -> Result<(), XdmaError> {
+pub(crate) fn ensure_p2app_inactive() -> Result<(), XdmaError> {
     let status = match Command::new("systemctl")
         .args(["is-active", "--quiet", "p2app.service"])
         .status()
