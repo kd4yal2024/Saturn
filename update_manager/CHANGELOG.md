@@ -51,6 +51,10 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
 - Added an opt-in event-driven SCHED_FIFO XDMA completion thread after staged
   latency diagnostics isolated network-stress outliers in deferred workqueue
   dispatch rather than hardware DMA, IRQ delivery, or caller wakeup.
+- Moved Phase 4 progress output off the real-time refill thread, made automatic
+  CPU selection the stress-harness default, and widened the DUC FIFO operating
+  band to an efficient eight-frame window. The validated band halves refill
+  calls while absorbing rare scheduler stalls under combined appliance load.
 - Split Saturn Go health reporting into `/livez` process liveness and
   structured `/readyz` dependency/release readiness. Rust builds embed their
   full Git commit; staged Saturn Go payloads carry the same identity, and the

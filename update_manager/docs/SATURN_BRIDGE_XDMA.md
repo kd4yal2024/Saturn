@@ -242,7 +242,9 @@ sudo update_manager/scripts/saturn-xdma-phase4-stress.sh --profile storage --dur
 ```
 
 Each invocation runs the same RF-inhibited changing-IQ probe with just one
-bounded stress source. A failed run stops on its first FIFO fault or critical
+bounded stress source. The harness selects an available CPU for the SCHED_FIFO
+probe by default; set `SATURN_XDMA_STRESS_PROBE_CPU=none` only for an explicit
+un-pinned comparison. A failed run stops on its first FIFO fault or critical
 low-water observation, prints the probe telemetry and stressor log tails, and
 restores `p2app.service`. The storage profile performs read-only random I/O
 against the repository's block device; all temporary writes and logs remain in
@@ -299,13 +301,20 @@ per-transfer setup or completion waits can materially improve the Phase 4
 tail.
 
 The staged A/B run isolated an 8.241 ms IRQ-to-workqueue delay while hardware
-submit-to-IRQ took only 35 microseconds. With the SCHED_FIFO completion thread
-at priority 20, the 60-second network profile passed with 0.400 ms p99.99 and
-0.524 ms maximum refill service. The 60-second combined CPU, memory, network,
-and storage profile also passed with 0.790 ms p99.99, 0.900 ms maximum service,
-8.847 ms minimum FIFO margin, and no critical-low or runtime FIFO-fault events.
-These short A/B results justify the longer isolated and combined soak gates;
-they do not replace them.
+submit-to-IRQ took only 35 microseconds. The SCHED_FIFO completion thread
+removed that bottleneck. The DUC probe then moved synchronous progress output
+off its real-time thread, selected an available CPU, and widened the operating
+band from 7→11 frames to 12→20 frames while preserving the 11-frame maximum
+DMA batch. The wider eight-frame window averaged eight frames per write, halved
+the refill syscall rate to approximately 100/second, and retained 15 ms at the
+normal low-water boundary.
+
+The resulting five-minute combined CPU, memory, network, and storage profile
+passed with 30,001 writes, exact 192 kHz consumption, 2.800 ms p99.99 and
+3.111 ms maximum refill service, 7.743 ms observed minimum FIFO margin, and no
+critical-low or runtime FIFO-fault events despite a 12.212 ms maximum loop gap.
+The five-minute result justifies the full 30-minute combined soak; it does not
+replace that final gate.
 
 ## Planned Data Paths
 

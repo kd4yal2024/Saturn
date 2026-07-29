@@ -47,6 +47,8 @@ grep -Fq -- '--readonly' <<<"$combined_dry_run" \
   || fail "dry run does not show read-only storage pressure"
 grep -Fq 'SATURN_BRIDGE_XDMA_DUC_RT_PRIORITY=20' <<<"$combined_dry_run" \
   || fail "dry run does not show real-time XDMA probe"
+grep -Fq 'SATURN_BRIDGE_XDMA_DUC_CPU=auto' <<<"$combined_dry_run" \
+  || fail "dry run does not isolate the XDMA probe on an available CPU"
 
 for profile in cpu memory network storage; do
   if [[ "$profile" == "storage" ]]; then

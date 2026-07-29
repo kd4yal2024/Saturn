@@ -12,6 +12,7 @@ use std::fs::{File, OpenOptions};
 use std::io;
 use std::os::unix::fs::FileExt;
 use std::path::{Path, PathBuf};
+use std::sync::mpsc::{sync_channel, SyncSender, TrySendError};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -54,8 +55,9 @@ const DUC_IQ_PAIRS_PER_FRAME: usize = 240;
 const DUC_FRAME_BYTES: usize = 1_440;
 const DUC_FIFO_WORDS_PER_FRAME: usize = 180;
 const DUC_FRAMES_PER_SECOND: u64 = DUC_SAMPLE_RATE_HZ / DUC_IQ_PAIRS_PER_FRAME as u64;
-const DUC_PREFILL_FRAMES: usize = 11;
-const DUC_REFILL_LOW_FRAMES: usize = 7;
+const DUC_PREFILL_FRAMES: usize = 20;
+const DUC_REFILL_LOW_FRAMES: usize = 12;
+const DUC_REFILL_TARGET_FRAMES: usize = 20;
 const DUC_MAX_DMA_BATCH_FRAMES: usize = 11;
 const DMA_BUFFER_BYTES: usize = DUC_MAX_DMA_BATCH_FRAMES * DUC_FRAME_BYTES;
 const FIFO_POLL_INTERVAL: Duration = Duration::from_micros(250);
@@ -336,6 +338,72 @@ impl DucStats {
     }
 }
 
+#[derive(Clone, Copy, Debug)]
+struct ProgressSnapshot {
+    elapsed_seconds: u64,
+    dma_writes: u64,
+    fifo_lwm: usize,
+    max_refill_service_ns: u128,
+    critical_low_events: u64,
+    fifo_faults: u64,
+}
+
+struct ProgressReporter {
+    sender: Option<SyncSender<ProgressSnapshot>>,
+    thread: Option<thread::JoinHandle<()>>,
+}
+
+impl ProgressReporter {
+    fn start() -> Result<Self, XdmaError> {
+        let (sender, receiver) = sync_channel::<ProgressSnapshot>(1);
+        let thread = thread::Builder::new()
+            .name("xdma-duc-progress".into())
+            .spawn(move || {
+                while let Ok(snapshot) = receiver.recv() {
+                    eprintln!(
+                        "saturn-bridge: XDMA Phase 4 soak progress elapsed_s={} dma_writes={} fifo_lwm={} max_refill_service_ms={:.3} critical_low_events={} fifo_faults={}",
+                        snapshot.elapsed_seconds,
+                        snapshot.dma_writes,
+                        snapshot.fifo_lwm,
+                        snapshot.max_refill_service_ns as f64 / 1_000_000.0,
+                        snapshot.critical_low_events,
+                        snapshot.fifo_faults,
+                    );
+                }
+            })
+            .map_err(|source| XdmaError::Io {
+                action: "could not start non-real-time XDMA DUC progress reporter",
+                source,
+            })?;
+        Ok(Self {
+            sender: Some(sender),
+            thread: Some(thread),
+        })
+    }
+
+    fn report(&self, snapshot: ProgressSnapshot) {
+        let Some(sender) = &self.sender else {
+            return;
+        };
+        match sender.try_send(snapshot) {
+            Ok(()) | Err(TrySendError::Full(_)) | Err(TrySendError::Disconnected(_)) => {}
+        }
+    }
+
+    fn stop(&mut self) {
+        self.sender.take();
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
+}
+
+impl Drop for ProgressReporter {
+    fn drop(&mut self) {
+        self.stop();
+    }
+}
+
 struct DucDmaSession<'a> {
     registers: &'a mut XdmaRegisterDevice,
     dma: File,
@@ -400,7 +468,11 @@ impl<'a> DucDmaSession<'a> {
         Ok(())
     }
 
-    fn run(&mut self, config: DucProbeConfig) -> Result<DucStats, XdmaError> {
+    fn run(
+        &mut self,
+        config: DucProbeConfig,
+        progress: &ProgressReporter,
+    ) -> Result<DucStats, XdmaError> {
         self.iq_pattern = config.iq_pattern;
         let mut stats = DucStats {
             fifo_lwm: usize::MAX,
@@ -419,7 +491,12 @@ impl<'a> DucDmaSession<'a> {
         let startup =
             FifoSnapshot::decode(self.registers.read_register(DUC_FIFO_MONITOR_REGISTER)?);
         stats.fifo_startup_underflow = startup.underflow;
-        self.write_frames(DUC_PREFILL_FRAMES, &mut stats)?;
+        let mut prefill_frames = DUC_PREFILL_FRAMES;
+        while prefill_frames != 0 {
+            let frames = prefill_frames.min(DUC_MAX_DMA_BATCH_FRAMES);
+            self.write_frames(frames, &mut stats)?;
+            prefill_frames -= frames;
+        }
         let prefill =
             FifoSnapshot::decode(self.registers.read_register(DUC_FIFO_MONITOR_REGISTER)?);
         stats.fifo_startup_underflow |= prefill.underflow;
@@ -442,7 +519,7 @@ impl<'a> DucDmaSession<'a> {
         let mut previous_refill_at = started;
         let mut low_water_active = false;
         let mut critical_low_active = false;
-        let mut previous_batch_frames = DUC_PREFILL_FRAMES;
+        let mut previous_batch_frames = DUC_PREFILL_FRAMES % DUC_MAX_DMA_BATCH_FRAMES;
         while started.elapsed() < config.duration {
             let loop_at = Instant::now();
             let loop_gap = loop_at.saturating_duration_since(previous_loop_at);
@@ -473,7 +550,7 @@ impl<'a> DucDmaSession<'a> {
                 let frames = refill_batch_frames(
                     fifo.occupied_words,
                     self.fifo_depth_words,
-                    DUC_PREFILL_FRAMES,
+                    DUC_REFILL_TARGET_FRAMES,
                 );
                 if frames != 0 {
                     let refill_started = Instant::now();
@@ -501,17 +578,16 @@ impl<'a> DucDmaSession<'a> {
                 }
             }
             if loop_at >= next_progress_at {
-                eprintln!(
-                    "saturn-bridge: XDMA Phase 4 soak progress elapsed_s={} dma_writes={} fifo_lwm={} max_refill_service_ms={:.3} critical_low_events={} fifo_faults={}",
-                    started.elapsed().as_secs(),
-                    stats.dma_writes,
-                    stats.fifo_lwm,
-                    stats.refill_service_latencies.max_ns as f64 / 1_000_000.0,
-                    stats.critical_low_events,
-                    stats.fifo_overflows
+                progress.report(ProgressSnapshot {
+                    elapsed_seconds: started.elapsed().as_secs(),
+                    dma_writes: stats.dma_writes,
+                    fifo_lwm: stats.fifo_lwm,
+                    max_refill_service_ns: stats.refill_service_latencies.max_ns,
+                    critical_low_events: stats.critical_low_events,
+                    fifo_faults: stats.fifo_overflows
                         + stats.fifo_over_threshold
                         + stats.fifo_underflows,
-                );
+                });
                 next_progress_at += SOAK_PROGRESS_INTERVAL;
             }
             thread::sleep(FIFO_POLL_INTERVAL);
@@ -611,6 +687,10 @@ impl Drop for DucDmaSession<'_> {
 pub fn run_phase4_duc_probe() -> Result<(), XdmaError> {
     ensure_p2app_inactive()?;
     let config = DucProbeConfig::from_env()?;
+    // Start the reporter before changing this thread's affinity or scheduler.
+    // It therefore remains ordinary SCHED_OTHER work and can never block the
+    // real-time refill loop on terminal or journal output.
+    let mut progress = ProgressReporter::start()?;
     if let Some(cpu) = config.cpu {
         pin_current_thread(cpu)?;
     }
@@ -628,9 +708,10 @@ pub fn run_phase4_duc_probe() -> Result<(), XdmaError> {
     let mut registers = XdmaRegisterDevice::open(&register_path)?;
     let identity: SaturnIdentity = registers.identity().clone();
     let mut session = DucDmaSession::start(&mut registers, &duc_path)?;
-    let probe = session.run(config);
+    let probe = session.run(config, &progress);
     let stop = session.stop();
     drop(session);
+    progress.stop();
     let stats = probe?;
     stop?;
     registers.close_safely()?;
@@ -682,7 +763,7 @@ pub fn run_phase4_duc_probe() -> Result<(), XdmaError> {
         DUC_SAMPLE_RATE_HZ,
         DUC_FRAMES_PER_SECOND,
         DUC_REFILL_LOW_FRAMES,
-        DUC_PREFILL_FRAMES,
+        DUC_REFILL_TARGET_FRAMES,
         stats.frames_written,
         stats.consumed_iq_pairs(),
         pair_rate,
@@ -974,7 +1055,8 @@ fn refill_batch_frames(
     fifo_depth_words: usize,
     target_frames: usize,
 ) -> usize {
-    let target_words = target_frames.min(DUC_MAX_DMA_BATCH_FRAMES) * DUC_FIFO_WORDS_PER_FRAME;
+    let fifo_frames = fifo_depth_words / DUC_FIFO_WORDS_PER_FRAME;
+    let target_words = target_frames.min(fifo_frames) * DUC_FIFO_WORDS_PER_FRAME;
     if occupied_words >= target_words {
         return 0;
     }
@@ -1051,13 +1133,14 @@ mod tests {
     }
 
     #[test]
-    fn refill_window_batches_to_eleven_frames() {
-        assert_eq!(refill_batch_frames(11 * 180, 4_096, 11), 0);
-        assert_eq!(refill_batch_frames(7 * 180, 4_096, 11), 4);
-        assert_eq!(refill_batch_frames(6 * 180 + 1, 4_096, 11), 5);
-        assert_eq!(refill_batch_frames(0, 1_024, 11), 5);
+    fn refill_window_uses_fifo_headroom_and_bounds_each_dma_batch() {
+        assert_eq!(refill_batch_frames(20 * 180, 4_096, 20), 0);
+        assert_eq!(refill_batch_frames(12 * 180, 4_096, 20), 8);
+        assert_eq!(refill_batch_frames(11 * 180 + 1, 4_096, 20), 9);
+        assert_eq!(refill_batch_frames(0, 4_096, 20), 11);
+        assert_eq!(refill_batch_frames(0, 1_024, 20), 5);
         assert_eq!(refill_batch_frames(4 * 180, 4_096, 10), 6);
-        assert_eq!(refill_batch_frames(2 * 180, 4_096, 11), 9);
+        assert_eq!(refill_batch_frames(2 * 180, 4_096, 20), 11);
     }
 
     #[test]
