@@ -43,6 +43,12 @@ static unsigned int interrupt_mode;
 module_param(interrupt_mode, uint, 0644);
 MODULE_PARM_DESC(interrupt_mode, "0 - Auto , 1 - MSI, 2 - Legacy, 3 - MSI-x");
 
+static bool completion_wq_highpri;
+module_param(completion_wq_highpri, bool, 0444);
+MODULE_PARM_DESC(
+	completion_wq_highpri,
+	"Use a dedicated high-priority unbound workqueue for interrupt completions");
+
 static unsigned int enable_credit_mp = 1;
 module_param(enable_credit_mp, uint, 0644);
 MODULE_PARM_DESC(
@@ -1235,6 +1241,14 @@ unlock:
 	spin_unlock_irqrestore(&engine->lock, flags);
 }
 
+static void schedule_engine_service(struct xdma_engine *engine)
+{
+	if (engine->xdev->completion_wq)
+		queue_work(engine->xdev->completion_wq, &engine->work);
+	else
+		schedule_work(&engine->work);
+}
+
 static u32 engine_service_wb_monitor(struct xdma_engine *engine,
 				     u32 expected_wb)
 {
@@ -1424,7 +1438,7 @@ static irqreturn_t xdma_isr(int irq, void *dev_id)
 			    (engine->magic == MAGIC_ENGINE)) {
 				mask &= ~engine->irq_bitmask;
 				dbg_tfr("schedule_work, %s.\n", engine->name);
-				schedule_work(&engine->work);
+				schedule_engine_service(engine);
 			}
 		}
 	}
@@ -1443,7 +1457,7 @@ static irqreturn_t xdma_isr(int irq, void *dev_id)
 			    (engine->magic == MAGIC_ENGINE)) {
 				mask &= ~engine->irq_bitmask;
 				dbg_tfr("schedule_work, %s.\n", engine->name);
-				schedule_work(&engine->work);
+				schedule_engine_service(engine);
 			}
 		}
 	}
@@ -1510,7 +1524,7 @@ static irqreturn_t xdma_channel_irq(int irq, void *dev_id)
 	/* Dummy read to flush the above write */
 	read_register(&irq_regs->channel_int_pending);
 	/* Schedule the bottom half */
-	schedule_work(&engine->work);
+	schedule_engine_service(engine);
 
 	/*
 	 * need to protect access here if multiple MSI-X are used for
@@ -2604,6 +2618,17 @@ static int engine_destroy(struct xdma_dev *xdev, struct xdma_engine *engine)
 	write_register(0x0, &engine->regs->interrupt_enable_mask,
 		       (unsigned long)(&engine->regs->interrupt_enable_mask) -
 			       (unsigned long)(&engine->regs));
+
+	if (!poll_mode) {
+		cancel_work_sync(&engine->work);
+		/* A completion already running during the first disable may have
+		 * re-enabled the engine interrupt before cancel_work_sync()
+		 * returned. Disable it again before releasing engine state.
+		 */
+		write_register(0x0, &engine->regs->interrupt_enable_mask,
+			       (unsigned long)(&engine->regs->interrupt_enable_mask) -
+				       (unsigned long)(&engine->regs));
+	}
 
 	if (enable_credit_mp && engine->streaming &&
 	    engine->dir == DMA_FROM_DEVICE) {
@@ -3808,6 +3833,19 @@ static struct xdma_dev *alloc_dev_instance(struct pci_dev *pdev)
 
 	/* create a driver to device reference */
 	xdev->pdev = pdev;
+	if (completion_wq_highpri && !poll_mode) {
+		xdev->completion_wq = alloc_workqueue(
+			"xdma_cmpl_%s",
+			WQ_HIGHPRI | WQ_UNBOUND | WQ_MEM_RECLAIM,
+			0, dev_name(&pdev->dev));
+		if (!xdev->completion_wq) {
+			pr_err("could not allocate high-priority completion workqueue\n");
+			kfree(xdev);
+			return NULL;
+		}
+		pr_info("high-priority completion workqueue enabled for %s\n",
+			dev_name(&pdev->dev));
+	}
 	dbg_init("xdev = 0x%p\n", xdev);
 
 	/* Set up data user IRQ data structures */
@@ -4185,6 +4223,8 @@ err_regions:
 err_enable:
 	xdev_list_remove(xdev);
 free_xdev:
+	if (xdev->completion_wq)
+		destroy_workqueue(xdev->completion_wq);
 	kfree(xdev);
 	return NULL;
 }
@@ -4216,6 +4256,10 @@ void xdma_device_close(struct pci_dev *pdev, void *dev_hndl)
 	disable_msi_msix(xdev, pdev);
 
 	remove_engines(xdev);
+	if (xdev->completion_wq) {
+		destroy_workqueue(xdev->completion_wq);
+		xdev->completion_wq = NULL;
+	}
 	unmap_bars(xdev, pdev);
 
 	if (xdev->got_regions) {

@@ -190,6 +190,7 @@ jobs:
             tests/test-saturn-go-deploy-broker.sh \
             tests/test-saturn-p2-deploy.sh \
             tests/test-xdma-phase4-stress.sh \
+            tests/test-xdma-realtime-completion.sh \
             tests/test-xdma-dkms-idempotency.sh
           bash -n \
             install.sh \
@@ -228,6 +229,7 @@ jobs:
             tests/test-saturn-state-compatibility.sh \
             tests/test-saturn-go-deploy-broker.sh \
             tests/test-xdma-phase4-stress.sh \
+            tests/test-xdma-realtime-completion.sh \
             tests/test-xdma-dkms-idempotency.sh
 
       - name: Validate cloud-init configuration
@@ -295,6 +297,9 @@ jobs:
 
       - name: Test XDMA Phase 4 stress safety contract
         run: tests/test-xdma-phase4-stress.sh
+
+      - name: Test XDMA real-time completion contract
+        run: tests/test-xdma-realtime-completion.sh
 
       - name: Test P2 controller lease
         run: make test-controller-lease-asan

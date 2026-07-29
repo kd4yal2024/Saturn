@@ -2,6 +2,25 @@
 
 All notable changes to `linuxdriver/xdma` are documented in this file.
 
+## 2026-07-29
+
+### Added
+- Added an opt-in `completion_wq_highpri=1` module mode that sends interrupt
+  completions to a dedicated high-priority unbound workqueue instead of the
+  shared kernel workqueue. The default remains unchanged for controlled A/B
+  validation.
+- Added the runtime-adjustable `transfer_latency_warn_us` diagnostic threshold.
+  Slow synchronous transfers report page-pin/scatterlist, submit/completion
+  wait, and cleanup timing separately.
+
+### Fixed
+- Drain pending completion work before releasing an XDMA engine, and disable
+  its interrupt again after the drain in case a completion raced teardown.
+
+### Validation
+- Rebuilt `xdma.ko` without compiler warnings against Raspberry Pi kernel
+  `6.18.34+rpt-rpi-v8`.
+
 ## 2026-07-18
 
 ### Fixed

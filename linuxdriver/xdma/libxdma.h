@@ -597,6 +597,7 @@ struct xdma_dev {
 	int irq_line;		/* flag if irq allocated successfully */
 	int msi_enabled;	/* flag if msi was enabled for the device */
 	int msix_enabled;	/* flag if msi-x was enabled for the device */
+	struct workqueue_struct *completion_wq;
 #if KERNEL_VERSION(4, 12, 0) > LINUX_VERSION_CODE
 	struct msix_entry entry[32];	/* msi-x vector/entry table */
 #endif

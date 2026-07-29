@@ -264,6 +264,32 @@ the stress failure. The isolated profiles are therefore required to distinguish
 CPU, memory, loopback-network, and shared-storage interrupt pressure before any
 scheduler or IRQ-affinity tuning.
 
+The isolated five-minute results separated two failure modes:
+
+| Profile | Result | Key evidence |
+| --- | --- | --- |
+| CPU | Marginal gate failure, no FIFO danger | 5.140 ms p99.99, 5.391 ms maximum, zero critical/fault events |
+| Memory | Critical low-water | stopped at 91.492 s with a 9.365 ms loop gap and 1.451 ms FIFO margin |
+| Network | FIFO underflow | stopped at 10.646 s with a 16.505 ms synchronous XDMA write and two underflows |
+| Storage | Marginal gate failure, no FIFO danger | 5.260 ms p99.99, 5.755 ms maximum, zero critical/fault events |
+
+The generic synchronous XDMA character path pins pages, constructs and maps a
+scatterlist, allocates transfer metadata, waits for interrupt completion, and
+then unmaps and frees those resources for every refill. Interrupt completion is
+normally deferred to the shared kernel workqueue. Phase 4 therefore includes an
+opt-in driver A/B experiment:
+
+- `completion_wq_highpri=1` routes interrupt completions through a dedicated
+  high-priority unbound workqueue. It is load-time-only and defaults to `0`.
+- `transfer_latency_warn_us=5000` logs synchronous transfers at or above 5 ms
+  with separate page-pin/scatterlist, submit/completion-wait, and cleanup
+  timings. It defaults to `0` and can be adjusted at runtime.
+
+These options do not change XDMA device names, transfer semantics, or the
+Protocol 2/direct-XDMA selection model. A persistent pre-pinned DMA ring remains
+the preferred later optimization if completion prioritization alone does not
+meet the Phase 4 gates.
+
 ## Planned Data Paths
 
 | Function | XDMA node |

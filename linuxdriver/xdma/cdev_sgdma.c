@@ -21,6 +21,7 @@
 
 #include <linux/types.h>
 #include <asm/cacheflush.h>
+#include <linux/ktime.h>
 #include <linux/slab.h>
 #include <linux/aio.h>
 #include <linux/sched.h>
@@ -43,6 +44,12 @@ MODULE_PARM_DESC(h2c_timeout, "H2C sgdma timeout in seconds, default is 10 sec."
 unsigned int c2h_timeout = 10;
 module_param(c2h_timeout, uint, 0644);
 MODULE_PARM_DESC(c2h_timeout, "C2H sgdma timeout in seconds, default is 10 sec.");
+
+static unsigned int transfer_latency_warn_us;
+module_param(transfer_latency_warn_us, uint, 0644);
+MODULE_PARM_DESC(
+	transfer_latency_warn_us,
+	"Log synchronous DMA transfer stages at or above this latency in microseconds; 0 disables");
 
 extern struct kmem_cache *cdev_cache;
 static void char_sgdma_unmap_user_buf(struct xdma_io_cb *cb, bool write);
@@ -354,6 +361,11 @@ static ssize_t char_sgdma_read_write(struct file *file, const char __user *buf,
 	struct xdma_dev *xdev;
 	struct xdma_engine *engine;
 	struct xdma_io_cb cb;
+	u64 started_ns = 0;
+	u64 mapped_ns = 0;
+	u64 submitted_ns = 0;
+	u64 completed_ns;
+	u64 warn_ns = (u64)READ_ONCE(transfer_latency_warn_us) * 1000;
 
 	rv = xcdev_check(__func__, xcdev, 1);
 	if (rv < 0)
@@ -383,15 +395,33 @@ static ssize_t char_sgdma_read_write(struct file *file, const char __user *buf,
 	cb.len = count;
 	cb.ep_addr = (u64)*pos;
 	cb.write = write;
+	if (warn_ns)
+		started_ns = ktime_get_ns();
 	rv = char_sgdma_map_user_buf_to_sgl(&cb, write);
 	if (rv < 0)
 		return rv;
+	if (warn_ns)
+		mapped_ns = ktime_get_ns();
 
 	res = xdma_xfer_submit(xdev, engine->channel, write, *pos, &cb.sgt,
 				0, write ? h2c_timeout * 1000 :
 					   c2h_timeout * 1000);
+	if (warn_ns)
+		submitted_ns = ktime_get_ns();
 
 	char_sgdma_unmap_user_buf(&cb, write);
+	if (warn_ns) {
+		completed_ns = ktime_get_ns();
+		if (completed_ns - started_ns >= warn_ns)
+			pr_warn_ratelimited(
+				"%s channel %d %zu-byte transfer latency %llu us (pin_sg=%llu us submit_wait=%llu us cleanup=%llu us) result=%zd\n",
+				engine->name, engine->channel, count,
+				(unsigned long long)((completed_ns - started_ns) / 1000),
+				(unsigned long long)((mapped_ns - started_ns) / 1000),
+				(unsigned long long)((submitted_ns - mapped_ns) / 1000),
+				(unsigned long long)((completed_ns - submitted_ns) / 1000),
+				res);
+	}
 
 	return res;
 }
