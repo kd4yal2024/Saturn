@@ -48,6 +48,9 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
   work. Slow synchronous transfers now separate page mapping, submission wait,
   and cleanup; the submission wait further reports submit-to-IRQ,
   IRQ-to-worker, worker-to-wake, and wake-to-caller latency.
+- Added an opt-in event-driven SCHED_FIFO XDMA completion thread after staged
+  latency diagnostics isolated network-stress outliers in deferred workqueue
+  dispatch rather than hardware DMA, IRQ delivery, or caller wakeup.
 - Split Saturn Go health reporting into `/livez` process liveness and
   structured `/readyz` dependency/release readiness. Rust builds embed their
   full Git commit; staged Saturn Go payloads carry the same identity, and the

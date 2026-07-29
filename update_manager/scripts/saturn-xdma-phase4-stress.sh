@@ -204,6 +204,9 @@ log "Starting ${DURATION_SECONDS}s RF-inhibited soak with profile=$PROFILE"
 if [[ -r /sys/module/xdma/parameters/completion_wq_highpri ]]; then
   log "XDMA completion_wq_highpri=$(</sys/module/xdma/parameters/completion_wq_highpri)"
 fi
+if [[ -r /sys/module/xdma/parameters/completion_kthread_priority ]]; then
+  log "XDMA completion_kthread_priority=$(</sys/module/xdma/parameters/completion_kthread_priority)"
+fi
 if [[ -r /sys/module/xdma/parameters/transfer_latency_warn_us ]]; then
   log "XDMA transfer_latency_warn_us=$(</sys/module/xdma/parameters/transfer_latency_warn_us)"
 fi

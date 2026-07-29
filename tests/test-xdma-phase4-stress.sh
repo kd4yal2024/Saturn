@@ -36,6 +36,8 @@ grep -Fq -- 'cpu|memory|network|storage|combined' "$STRESS_SCRIPT" \
   || fail "script does not expose staged stress profiles"
 grep -Fq -- 'Failure tail:' "$STRESS_SCRIPT" \
   || fail "script does not preserve failure diagnostics"
+grep -Fq -- 'completion_kthread_priority' "$STRESS_SCRIPT" \
+  || fail "script does not report the active completion thread priority"
 
 combined_dry_run="$(
   SATURN_XDMA_STRESS_BLOCK_DEVICE=/dev/test-block-device \

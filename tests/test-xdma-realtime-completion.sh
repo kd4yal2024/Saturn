@@ -21,6 +21,16 @@ grep -Fq 'queue_work(engine->xdev->completion_wq, &engine->work);' "$LIBXDMA" \
   || fail "interrupt completion does not use the dedicated workqueue"
 grep -Fq 'schedule_work(&engine->work);' "$LIBXDMA" \
   || fail "default shared-workqueue fallback was removed"
+grep -Fq 'module_param(completion_kthread_priority, uint, 0444);' "$LIBXDMA" \
+  || fail "SCHED_FIFO completion mode is not load-time-only"
+grep -Fq 'sched_setattr_nocheck(xdev->completion_task, &attr);' "$LIBXDMA" \
+  || fail "completion thread does not receive real-time scheduling"
+grep -Fq 'atomic_or(engine->irq_bitmask,' "$LIBXDMA" \
+  || fail "interrupt completion cannot signal the real-time thread"
+grep -Fq 'wait_event_interruptible(' "$LIBXDMA" \
+  || fail "real-time completion thread lacks an event-driven wait"
+grep -Fq 'kthread_stop(xdev->completion_task);' "$LIBXDMA" \
+  || fail "real-time completion thread is not stopped during teardown"
 grep -Fq 'cancel_work_sync(&engine->work);' "$LIBXDMA" \
   || fail "engine teardown does not drain completion work"
 grep -Fq 'struct workqueue_struct *completion_wq;' "$LIBXDMA_HEADER" \

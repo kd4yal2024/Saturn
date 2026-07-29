@@ -27,6 +27,7 @@
 #include <linux/errno.h>
 #include <linux/ktime.h>
 #include <linux/sched.h>
+#include <uapi/linux/sched/types.h>
 #include <linux/vmalloc.h>
 
 #include "libxdma.h"
@@ -49,6 +50,12 @@ module_param(completion_wq_highpri, bool, 0444);
 MODULE_PARM_DESC(
 	completion_wq_highpri,
 	"Use a dedicated high-priority unbound workqueue for interrupt completions");
+
+static unsigned int completion_kthread_priority;
+module_param(completion_kthread_priority, uint, 0444);
+MODULE_PARM_DESC(
+	completion_kthread_priority,
+	"Use a dedicated SCHED_FIFO completion thread at priority 1-99; 0 disables");
 
 unsigned int transfer_latency_warn_us;
 module_param(transfer_latency_warn_us, uint, 0644);
@@ -1210,15 +1217,12 @@ done:
 	return err_flag ? -1 : 0;
 }
 
-/* engine_service_work */
-static void engine_service_work(struct work_struct *work)
+static void engine_service_run(struct xdma_engine *engine)
 {
-	struct xdma_engine *engine;
 	struct xdma_transfer *transfer;
 	unsigned long flags;
 	int rv;
 
-	engine = container_of(work, struct xdma_engine, work);
 	if (engine->magic != MAGIC_ENGINE) {
 		pr_err("%s has invalid magic number %lx\n", engine->name,
 		       engine->magic);
@@ -1259,12 +1263,59 @@ unlock:
 	spin_unlock_irqrestore(&engine->lock, flags);
 }
 
+/* engine_service_work */
+static void engine_service_work(struct work_struct *work)
+{
+	struct xdma_engine *engine;
+
+	engine = container_of(work, struct xdma_engine, work);
+	engine_service_run(engine);
+}
+
+static int completion_thread_main(void *data)
+{
+	struct xdma_dev *xdev = data;
+
+	while (!kthread_should_stop()) {
+		u32 pending;
+		int i;
+
+		wait_event_interruptible(
+			xdev->completion_waitq,
+			kthread_should_stop() ||
+				atomic_read(&xdev->completion_pending));
+		if (kthread_should_stop())
+			break;
+
+		pending = (u32)atomic_xchg(&xdev->completion_pending, 0);
+		for (i = 0; i < xdev->h2c_channel_max; i++) {
+			struct xdma_engine *engine = &xdev->engine_h2c[i];
+
+			if (pending & engine->irq_bitmask)
+				engine_service_run(engine);
+		}
+		for (i = 0; i < xdev->c2h_channel_max; i++) {
+			struct xdma_engine *engine = &xdev->engine_c2h[i];
+
+			if (pending & engine->irq_bitmask)
+				engine_service_run(engine);
+		}
+	}
+
+	return 0;
+}
+
 static void schedule_engine_service(struct xdma_engine *engine)
 {
-	if (engine->xdev->completion_wq)
+	if (engine->xdev->completion_task) {
+		atomic_or(engine->irq_bitmask,
+			  &engine->xdev->completion_pending);
+		wake_up_interruptible(&engine->xdev->completion_waitq);
+	} else if (engine->xdev->completion_wq) {
 		queue_work(engine->xdev->completion_wq, &engine->work);
-	else
+	} else {
 		schedule_work(&engine->work);
+	}
 }
 
 static void record_engine_completion_irq(struct xdma_engine *engine)
@@ -3882,6 +3933,7 @@ err_engine_transfer:
 static struct xdma_dev *alloc_dev_instance(struct pci_dev *pdev)
 {
 	int i;
+	int rv;
 	struct xdma_dev *xdev;
 	struct xdma_engine *engine;
 
@@ -3906,7 +3958,45 @@ static struct xdma_dev *alloc_dev_instance(struct pci_dev *pdev)
 
 	/* create a driver to device reference */
 	xdev->pdev = pdev;
-	if (completion_wq_highpri && !poll_mode) {
+	init_waitqueue_head(&xdev->completion_waitq);
+	atomic_set(&xdev->completion_pending, 0);
+	if (completion_kthread_priority && !poll_mode) {
+		struct sched_attr attr = {
+			.size = sizeof(attr),
+			.sched_policy = SCHED_FIFO,
+			.sched_priority = completion_kthread_priority,
+		};
+
+		if (completion_kthread_priority > 99) {
+			pr_err("completion kthread priority must be 1-99\n");
+			kfree(xdev);
+			return NULL;
+		}
+		xdev->completion_task = kthread_create(
+			completion_thread_main, xdev, "xdma_cmpl/%s",
+			dev_name(&pdev->dev));
+		if (IS_ERR(xdev->completion_task)) {
+			pr_err("could not create SCHED_FIFO completion thread: %ld\n",
+				PTR_ERR(xdev->completion_task));
+			xdev->completion_task = NULL;
+			kfree(xdev);
+			return NULL;
+		}
+		rv = sched_setattr_nocheck(xdev->completion_task, &attr);
+		if (rv) {
+			pr_err("could not set completion thread SCHED_FIFO priority %u: %d\n",
+				completion_kthread_priority, rv);
+			kthread_stop(xdev->completion_task);
+			xdev->completion_task = NULL;
+			kfree(xdev);
+			return NULL;
+		}
+		wake_up_process(xdev->completion_task);
+		pr_info("SCHED_FIFO completion thread priority %u enabled for %s\n",
+			completion_kthread_priority, dev_name(&pdev->dev));
+		if (completion_wq_highpri)
+			pr_info("SCHED_FIFO completion thread supersedes high-priority workqueue\n");
+	} else if (completion_wq_highpri && !poll_mode) {
 		xdev->completion_wq = alloc_workqueue(
 			"xdma_cmpl_%s",
 			WQ_HIGHPRI | WQ_UNBOUND | WQ_MEM_RECLAIM,
@@ -4284,6 +4374,10 @@ void *xdma_device_open(const char *mname, struct pci_dev *pdev, int *user_max,
 err_msix:
 	disable_msi_msix(xdev, pdev);
 err_engines:
+	if (xdev->completion_task) {
+		kthread_stop(xdev->completion_task);
+		xdev->completion_task = NULL;
+	}
 	remove_engines(xdev);
 err_mask:
 	unmap_bars(xdev, pdev);
@@ -4296,6 +4390,10 @@ err_regions:
 err_enable:
 	xdev_list_remove(xdev);
 free_xdev:
+	if (xdev->completion_task) {
+		kthread_stop(xdev->completion_task);
+		xdev->completion_task = NULL;
+	}
 	if (xdev->completion_wq)
 		destroy_workqueue(xdev->completion_wq);
 	kfree(xdev);
@@ -4328,6 +4426,10 @@ void xdma_device_close(struct pci_dev *pdev, void *dev_hndl)
 	irq_teardown(xdev);
 	disable_msi_msix(xdev, pdev);
 
+	if (xdev->completion_task) {
+		kthread_stop(xdev->completion_task);
+		xdev->completion_task = NULL;
+	}
 	remove_engines(xdev);
 	if (xdev->completion_wq) {
 		destroy_workqueue(xdev->completion_wq);

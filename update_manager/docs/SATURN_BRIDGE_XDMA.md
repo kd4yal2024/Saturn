@@ -281,6 +281,10 @@ opt-in driver A/B experiment:
 
 - `completion_wq_highpri=1` routes interrupt completions through a dedicated
   high-priority unbound workqueue. It is load-time-only and defaults to `0`.
+- `completion_kthread_priority=20` instead routes completions through one
+  event-driven SCHED_FIFO thread at the requested priority. It is
+  load-time-only, defaults to `0`, and supersedes `completion_wq_highpri` when
+  both are set.
 - `transfer_latency_warn_us=5000` logs synchronous transfers at or above 5 ms
   with separate page-pin/scatterlist, submit/completion-wait, and cleanup
   timings. The completion-wait warning is further divided into submit-to-IRQ,
@@ -293,6 +297,15 @@ Protocol 2/direct-XDMA selection model. A persistent pre-pinned DMA ring remains
 a later option only if the stage timings show that eliminating synchronous
 per-transfer setup or completion waits can materially improve the Phase 4
 tail.
+
+The staged A/B run isolated an 8.241 ms IRQ-to-workqueue delay while hardware
+submit-to-IRQ took only 35 microseconds. With the SCHED_FIFO completion thread
+at priority 20, the 60-second network profile passed with 0.400 ms p99.99 and
+0.524 ms maximum refill service. The 60-second combined CPU, memory, network,
+and storage profile also passed with 0.790 ms p99.99, 0.900 ms maximum service,
+8.847 ms minimum FIFO margin, and no critical-low or runtime FIFO-fault events.
+These short A/B results justify the longer isolated and combined soak gates;
+they do not replace them.
 
 ## Planned Data Paths
 
