@@ -475,6 +475,7 @@
     <div class="tab-row" role="tablist" aria-label="Radio telemetry diagnostic views">
       <button id="tab-p23" class="btn tab-btn" role="tab" aria-controls="panel-p23" aria-selected="true">p2app Service</button>
       <button id="tab-bridge" class="btn tab-btn" role="tab" aria-controls="panel-bridge" aria-selected="false">Bridge Diagnostics</button>
+      <button id="tab-xdma" class="btn tab-btn" role="tab" aria-controls="panel-xdma" aria-selected="false">XDMA Telemetry</button>
     </div>
 
     <div id="panel-p23" class="lab-panel main-grid" role="tabpanel" aria-labelledby="tab-p23">
@@ -630,6 +631,54 @@
             <details>
               <summary>Raw Bridge JSON</summary>
               <pre id="bridge-diag-raw" class="term compact"></pre>
+            </details>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div id="panel-xdma" class="lab-panel" role="tabpanel" aria-labelledby="tab-xdma" hidden>
+      <div class="main-grid bridge-grid">
+        <div class="card">
+          <div class="row space">
+            <div>
+              <div class="section-kicker">Direct FPGA Data Path</div>
+              <h2 style="margin:4px 0 0 0; font-size: 24px;">XDMA Telemetry</h2>
+            </div>
+            <div class="row">
+              <button id="xdma-diag-refresh" class="btn">Refresh</button>
+              <button id="xdma-diag-copy" class="btn">Copy JSON</button>
+              <button id="xdma-diag-download" class="btn">Download</button>
+            </div>
+          </div>
+          <div id="xdma-diag-summary" class="summary" style="margin-top:10px;">Loading XDMA diagnostics...</div>
+          <div class="muted" style="margin-top:8px; font-size:12px;">
+            An inactive direct path is expected while <code>p2app.service</code> owns the FPGA. Availability is not the same as an active production backend.
+          </div>
+          <div id="xdma-diag-dashboard" class="dashboard-grid" style="margin-top:14px;">
+            <div class="metric"><div class="metric-label">Loading</div><div class="metric-value">Waiting...</div></div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="section-kicker">Driver + Validation Evidence</div>
+          <h2 style="margin:4px 0 10px 0; font-size: 24px;">Detailed State</h2>
+          <div class="details-stack">
+            <details open>
+              <summary>XDMA Device Nodes</summary>
+              <pre id="xdma-device-lines" class="term compact"></pre>
+            </details>
+            <details>
+              <summary>XDMA Interrupts</summary>
+              <pre id="xdma-interrupt-lines" class="term compact"></pre>
+            </details>
+            <details>
+              <summary>Last Direct-XDMA Validation</summary>
+              <pre id="xdma-validation-raw" class="term compact"></pre>
+            </details>
+            <details>
+              <summary>Raw XDMA JSON</summary>
+              <pre id="xdma-diag-raw" class="term compact"></pre>
             </details>
           </div>
         </div>
@@ -890,6 +939,47 @@ function setBridgeDiagText(diag){
   if (raw) raw.textContent = JSON.stringify(diag || {}, null, 2);
   if (diagLines) diagLines.textContent = (diag?.journal?.diag_lines || []).join('\n');
   if (statusLines) statusLines.textContent = (diag?.journal?.status_lines || []).join('\n');
+}
+function setXdmaDiagSummary(text, isError=false){
+  const el = $('xdma-diag-summary');
+  if (!el) return;
+  el.textContent = text || '';
+  el.style.color = isError ? '#fca5a5' : '';
+}
+function setXdmaDiagDashboardHtml(html){
+  const el = $('xdma-diag-dashboard');
+  if (el) el.innerHTML = html || '';
+}
+function setXdmaDiagText(xdma){
+  const raw = $('xdma-diag-raw');
+  const devices = $('xdma-device-lines');
+  const interrupts = $('xdma-interrupt-lines');
+  const validation = $('xdma-validation-raw');
+  if (raw) raw.textContent = JSON.stringify(xdma || {}, null, 2);
+  if (devices){
+    const lines = (xdma?.driver?.devices || []).map((device)=>{
+      const requirement = device?.required ? 'required' : 'optional';
+      return `${device?.present ? 'READY  ' : 'MISSING'} ${String(device?.name || 'unknown').padEnd(14)} ${device?.path || 'n/a'} (${requirement}, mode ${device?.mode || 'n/a'})`;
+    });
+    devices.textContent = lines.length ? lines.join('\n') : 'No XDMA device-node telemetry available.';
+  }
+  if (interrupts){
+    const lines = xdma?.runtime?.interrupt_lines || [];
+    interrupts.textContent = lines.length
+      ? lines.map((item)=>`${item?.irq || '?'}: ${item?.count ?? 0} | ${item?.raw || ''}`).join('\n')
+      : 'No XDMA interrupt lines were reported.';
+  }
+  if (validation){
+    validation.textContent = JSON.stringify(
+      xdma?.last_validation?.snapshot || {
+        status: 'not-recorded',
+        message: 'No structured direct-XDMA validation snapshot has been saved yet.',
+        path: xdma?.last_validation?.path || 'n/a',
+      },
+      null,
+      2
+    );
+  }
 }
 function setSnapshotSummary(text, isError=false){
   const el = $('p23-snapshot-summary');
@@ -1381,6 +1471,56 @@ function renderBridgeDashboard(bridge){
     metricCard('Latest Status', latestStatus.slice(0, 72), latestStatus.length > 72 ? latestStatus.slice(72, 160) : ''),
   ].join('');
 }
+function formatXdmaSummary(xdma){
+  if (!xdma || typeof xdma !== 'object') return 'No structured XDMA diagnostic data.';
+  const backend = xdma.backend || {};
+  const driver = xdma.driver || {};
+  const active = backend.active || 'none';
+  const direct = backend.direct_state || 'unknown';
+  const pcie = xdma.runtime?.pcie || {};
+  const link = [pcie.current_link_speed, pcie.current_link_width ? `x${pcie.current_link_width}` : null]
+    .filter(Boolean)
+    .join(' ');
+  return `Active backend ${active} | requested ${backend.requested || 'p2'} | direct XDMA ${direct} | driver ${driver.status || 'unknown'} | PCIe ${link || 'n/a'} | ${backend.message || ''}`;
+}
+function formatXdmaAge(milliseconds){
+  const seconds = Math.max(0, Math.round((Number(milliseconds) || 0) / 1000));
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 48) return `${hours}h`;
+  return `${Math.round(hours / 24)}d`;
+}
+function renderXdmaDashboard(xdma){
+  const backend = xdma?.backend || {};
+  const driver = xdma?.driver || {};
+  const runtime = xdma?.runtime || {};
+  const pcie = runtime?.pcie || {};
+  const parameters = driver?.parameters || {};
+  const devices = Array.isArray(driver?.devices) ? driver.devices : [];
+  const required = devices.filter((device)=>device?.required);
+  const requiredReady = required.filter((device)=>device?.present).length;
+  const optional = devices.filter((device)=>!device?.required);
+  const optionalReady = optional.filter((device)=>device?.present).length;
+  const validation = xdma?.last_validation || {};
+  const saved = validation?.snapshot || null;
+  const validationStatus = saved?.status || saved?.result || (validation?.present ? 'saved' : 'not recorded');
+  const link = [pcie.current_link_speed || 'n/a', pcie.current_link_width ? `x${pcie.current_link_width}` : 'width n/a'].join(' ');
+  return [
+    metricCard('Backend Ownership', backend.active || 'none', `requested ${backend.requested || 'p2'} | P2 service ${backend.p2_service_state || 'unknown'}`),
+    metricCard('Direct XDMA', backend.direct_state || 'unknown', backend.message || 'No ownership detail.'),
+    metricCard('Implementation', `Phase ${backend.implementation_phase ?? 'n/a'}`, backend.direct_operational ? 'production backend active' : 'guarded validation only; not operational'),
+    metricCard('Driver', driver.status || 'unknown', `module ${driver.module_loaded ? 'loaded' : 'not loaded'} | required nodes ${requiredReady}/${required.length}`),
+    metricCard('DMA Nodes', `${requiredReady}/${required.length} required`, `${optionalReady}/${optional.length} optional`),
+    metricCard('PCIe Link', link, runtime.present ? 'XDMA runtime detected' : 'No XDMA runtime evidence'),
+    metricCard('XDMA Interrupts', String(runtime.interrupts_total ?? 'n/a'), `${(runtime.interrupt_lines || []).length} IRQ vectors reported`),
+    metricCard('Completion Thread', `${parameters.completion_kthread_priority ?? 'n/a'}`, `SCHED_FIFO priority | high-priority workqueue ${parameters.completion_wq_highpri ?? 'n/a'}`),
+    metricCard('Latency Diagnostics', `${parameters.transfer_latency_warn_us ?? 'n/a'} µs`, 'rate-limited kernel transfer warning threshold'),
+    metricCard('Last Validation', String(validationStatus), validation.present ? `age ${formatXdmaAge(validation.age_ms)}` : 'structured probe snapshot not recorded'),
+    metricCard('RF Safety', backend.direct_operational ? 'operational' : 'not keyed', backend.direct_operational ? 'live backend must publish safety counters' : 'this page does not enable or key RF'),
+  ].join('');
+}
 function buildBridgeDiagSnapshot(){
   if (!latestBridgeDiag) return null;
   const now = new Date();
@@ -1393,6 +1533,52 @@ function buildBridgeDiagSnapshot(){
     },
     bridge: jsonSafe(latestBridgeDiag),
   };
+}
+function buildXdmaDiagSnapshot(){
+  const xdma = latestBridgeDiag?.xdma;
+  if (!xdma) return null;
+  const now = new Date();
+  return {
+    captured_at_ms: now.getTime(),
+    captured_at_iso: now.toISOString(),
+    page: {
+      path: window.location.pathname,
+      xdma_summary: $('xdma-diag-summary')?.textContent || '',
+    },
+    xdma: jsonSafe(xdma),
+  };
+}
+async function copyXdmaDiagSnapshot(){
+  const snapshot = buildXdmaDiagSnapshot();
+  if (!snapshot){
+    setXdmaDiagSummary('No XDMA diagnostics available yet. Wait for the next poll, then copy again.', true);
+    return;
+  }
+  try{
+    await copyTextWithFallback(JSON.stringify(snapshot, null, 2));
+    setXdmaDiagSummary(`Copied XDMA diagnostics JSON | ${snapshot.page.xdma_summary}`, false);
+  }catch(e){
+    setXdmaDiagSummary('Failed to copy XDMA diagnostics JSON: ' + e.message, true);
+  }
+}
+function downloadXdmaDiagSnapshot(){
+  const snapshot = buildXdmaDiagSnapshot();
+  if (!snapshot){
+    setXdmaDiagSummary('No XDMA diagnostics available yet. Wait for the next poll, then download again.', true);
+    return;
+  }
+  const text = JSON.stringify(snapshot, null, 2);
+  const blob = new Blob([text], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  const stamp = snapshotTimestampTag(new Date(snapshot.captured_at_ms));
+  a.href = url;
+  a.download = `saturn-xdma-diagnostics-${stamp}.json`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+  setXdmaDiagSummary(`Downloaded XDMA diagnostics JSON | ${snapshot.page.xdma_summary}`, false);
 }
 async function copyBridgeDiagSnapshot(){
   const snapshot = buildBridgeDiagSnapshot();
@@ -1441,11 +1627,17 @@ async function loadBridgeDiag(){
     setBridgeDiagSummary(formatBridgeSummary(bridge), false);
     setBridgeDiagDashboardHtml(renderBridgeDashboard(bridge));
     setBridgeDiagText(bridge);
+    setXdmaDiagSummary(formatXdmaSummary(bridge.xdma), false);
+    setXdmaDiagDashboardHtml(renderXdmaDashboard(bridge.xdma));
+    setXdmaDiagText(bridge.xdma);
   }catch(e){
     latestBridgeDiag = null;
     setBridgeDiagSummary('Failed to load bridge diagnostics: ' + e.message, true);
     setBridgeDiagDashboardHtml(metricCard('Bridge Diagnostics', 'load failed', e.message));
     setBridgeDiagText(null);
+    setXdmaDiagSummary('Failed to load XDMA diagnostics: ' + e.message, true);
+    setXdmaDiagDashboardHtml(metricCard('XDMA Diagnostics', 'load failed', e.message));
+    setXdmaDiagText(null);
   }finally{
     bridgeDiagPollInFlight = false;
   }
@@ -1459,13 +1651,14 @@ function showLabPanel(name){
   const panels = [
     { name: 'p23', tab: $('tab-p23'), panel: $('panel-p23') },
     { name: 'bridge', tab: $('tab-bridge'), panel: $('panel-bridge') },
+    { name: 'xdma', tab: $('tab-xdma'), panel: $('panel-xdma') },
   ];
   panels.forEach((item)=>{
     const active = item.name === name;
     if (item.tab) item.tab.setAttribute('aria-selected', active ? 'true' : 'false');
     if (item.panel) item.panel.hidden = !active;
   });
-  if (name === 'bridge') loadBridgeDiag();
+  if (name === 'bridge' || name === 'xdma') loadBridgeDiag();
 }
 function formatWorkloadSummaryFromPerf(perf){
   const workload = perf?.workload || {};
@@ -2177,8 +2370,12 @@ $('p23-snapshot-download').addEventListener('click', ()=>{ downloadCapturedSnaps
 $('bridge-diag-refresh').addEventListener('click', ()=>{ loadBridgeDiag(); });
 $('bridge-diag-copy').addEventListener('click', ()=>{ copyBridgeDiagSnapshot(); });
 $('bridge-diag-download').addEventListener('click', ()=>{ downloadBridgeDiagSnapshot(); });
+$('xdma-diag-refresh').addEventListener('click', ()=>{ loadBridgeDiag(); });
+$('xdma-diag-copy').addEventListener('click', ()=>{ copyXdmaDiagSnapshot(); });
+$('xdma-diag-download').addEventListener('click', ()=>{ downloadXdmaDiagSnapshot(); });
 $('tab-p23').addEventListener('click', ()=>{ showLabPanel('p23'); });
 $('tab-bridge').addEventListener('click', ()=>{ showLabPanel('bridge'); });
+$('tab-xdma').addEventListener('click', ()=>{ showLabPanel('xdma'); });
 document.querySelectorAll('.p23-action').forEach((btn)=>{
   btn.addEventListener('click', ()=>{
     const baseFlags = String(btn.dataset.flags || '').trim().split(/\s+/).filter(Boolean);

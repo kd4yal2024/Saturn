@@ -1423,6 +1423,247 @@ async fn command_text(program: &str, args: &[&str]) -> (bool, String) {
     }
 }
 
+const XDMA_TELEMETRY_SNAPSHOT_FILE: &str = "/var/lib/saturn-state/xdma-telemetry.json";
+
+fn read_trimmed_file(path: impl AsRef<Path>) -> Option<String> {
+    fs::read_to_string(path)
+        .ok()
+        .map(|value| value.trim().to_string())
+}
+
+fn parse_xdma_interrupts_text(raw: &str) -> (u64, Vec<serde_json::Value>) {
+    let mut interrupt_lines = Vec::<serde_json::Value>::new();
+    let mut interrupts_total = 0u64;
+
+    for line in raw.lines() {
+        if !line.to_ascii_lowercase().contains("xdma") {
+            continue;
+        }
+        let Some((irq, rest)) = line.split_once(':') else {
+            continue;
+        };
+        let mut line_count = 0u64;
+        for token in rest.split_whitespace() {
+            match token.parse::<u64>() {
+                Ok(value) => line_count = line_count.saturating_add(value),
+                Err(_) => break,
+            }
+        }
+        interrupts_total = interrupts_total.saturating_add(line_count);
+        interrupt_lines.push(serde_json::json!({
+            "irq": irq.trim(),
+            "count": line_count,
+            "raw": line.trim(),
+        }));
+    }
+
+    (interrupts_total, interrupt_lines)
+}
+
+fn xdma_interrupt_telemetry() -> serde_json::Value {
+    let raw = fs::read_to_string("/proc/interrupts").ok();
+    let (interrupts_total, interrupt_lines) = raw
+        .as_deref()
+        .map(parse_xdma_interrupts_text)
+        .unwrap_or_else(|| (0, Vec::new()));
+    let pcie_speed = read_trimmed_file("/sys/class/xdma/xdma0_control/device/current_link_speed")
+        .or_else(|| read_trimmed_file("/sys/class/xdma/xdma0_h2c_0/device/current_link_speed"));
+    let pcie_width = read_trimmed_file("/sys/class/xdma/xdma0_control/device/current_link_width")
+        .or_else(|| read_trimmed_file("/sys/class/xdma/xdma0_h2c_0/device/current_link_width"));
+    let present = !interrupt_lines.is_empty() || pcie_speed.is_some() || pcie_width.is_some();
+
+    serde_json::json!({
+        "present": present,
+        "interrupts_total": if interrupt_lines.is_empty() {
+            None::<u64>
+        } else {
+            Some(interrupts_total)
+        },
+        "interrupt_lines": interrupt_lines,
+        "pcie": {
+            "current_link_speed": pcie_speed,
+            "current_link_width": pcie_width,
+        }
+    })
+}
+
+fn systemd_environment_value(environment: &str, key: &str) -> Option<String> {
+    environment
+        .split_whitespace()
+        .find_map(|entry| {
+            let entry = entry.trim_matches(|character| character == '"' || character == '\'');
+            let (name, value) = entry.split_once('=')?;
+            (name == key).then(|| {
+                value
+                    .trim_matches(|character| character == '"' || character == '\'')
+                    .to_string()
+            })
+        })
+        .filter(|value| !value.is_empty())
+}
+
+fn xdma_probe_snapshot() -> serde_json::Value {
+    let path = Path::new(XDMA_TELEMETRY_SNAPSHOT_FILE);
+    let metadata = fs::metadata(path).ok();
+    let modified_at_ms = metadata
+        .as_ref()
+        .and_then(|value| value.modified().ok())
+        .and_then(|value| value.duration_since(UNIX_EPOCH).ok())
+        .map(|value| value.as_millis() as u64);
+    let now_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|value| value.as_millis() as u64)
+        .unwrap_or(0);
+
+    match fs::read_to_string(path) {
+        Ok(raw) => match serde_json::from_str::<serde_json::Value>(&raw) {
+            Ok(snapshot) => serde_json::json!({
+                "present": true,
+                "path": XDMA_TELEMETRY_SNAPSHOT_FILE,
+                "modified_at_ms": modified_at_ms,
+                "age_ms": modified_at_ms.map(|value| now_ms.saturating_sub(value)),
+                "snapshot": snapshot,
+                "read_error": null,
+                "parse_error": null,
+            }),
+            Err(error) => serde_json::json!({
+                "present": true,
+                "path": XDMA_TELEMETRY_SNAPSHOT_FILE,
+                "modified_at_ms": modified_at_ms,
+                "age_ms": modified_at_ms.map(|value| now_ms.saturating_sub(value)),
+                "snapshot": null,
+                "read_error": null,
+                "parse_error": error.to_string(),
+            }),
+        },
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => serde_json::json!({
+            "present": false,
+            "path": XDMA_TELEMETRY_SNAPSHOT_FILE,
+            "modified_at_ms": null,
+            "age_ms": null,
+            "snapshot": null,
+            "read_error": null,
+            "parse_error": null,
+        }),
+        Err(error) => serde_json::json!({
+            "present": false,
+            "path": XDMA_TELEMETRY_SNAPSHOT_FILE,
+            "modified_at_ms": modified_at_ms,
+            "age_ms": modified_at_ms.map(|value| now_ms.saturating_sub(value)),
+            "snapshot": null,
+            "read_error": error.to_string(),
+            "parse_error": null,
+        }),
+    }
+}
+
+fn xdma_bridge_telemetry(
+    p2_active: bool,
+    p2_service_state: &str,
+    bridge_environment: &str,
+) -> serde_json::Value {
+    const DEVICE_NODES: [(&str, &str, bool); 6] = [
+        ("registers", "/dev/xdma0_user", true),
+        ("control", "/dev/xdma0_control", true),
+        ("ddc_iq", "/dev/xdma0_c2h_0", true),
+        ("codec_mic", "/dev/xdma0_c2h_1", false),
+        ("duc_iq", "/dev/xdma0_h2c_0", true),
+        ("codec_speaker", "/dev/xdma0_h2c_1", false),
+    ];
+
+    let module_loaded = Path::new("/sys/module/xdma").is_dir();
+    let devices = DEVICE_NODES
+        .iter()
+        .map(|(name, path, required)| {
+            let metadata = fs::metadata(path).ok();
+            serde_json::json!({
+                "name": name,
+                "path": path,
+                "required": required,
+                "present": metadata.is_some(),
+                "mode": metadata
+                    .as_ref()
+                    .map(|value| format!("{:04o}", value.permissions().mode() & 0o7777)),
+            })
+        })
+        .collect::<Vec<_>>();
+    let required_devices_ready = devices.iter().all(|device| {
+        !device["required"].as_bool().unwrap_or(false)
+            || device["present"].as_bool().unwrap_or(false)
+    });
+
+    let requested_backend =
+        systemd_environment_value(bridge_environment, "SATURN_BRIDGE_RADIO_BACKEND")
+            .or_else(|| systemd_environment_value(bridge_environment, "SATURN_BRIDGE_BACKEND"))
+            .unwrap_or_else(|| "p2".to_string())
+            .to_ascii_lowercase();
+    let direct_requested = matches!(
+        requested_backend.as_str(),
+        "xdma" | "direct" | "direct-xdma"
+    );
+    let active_backend = if p2_active { Some("p2") } else { None };
+    let direct_state = if p2_active {
+        "inactive"
+    } else if module_loaded && required_devices_ready {
+        "available"
+    } else {
+        "unavailable"
+    };
+    let direct_message = match direct_state {
+        "inactive" => "Direct XDMA is idle because p2app.service owns the FPGA.",
+        "available" if direct_requested => {
+            "Direct XDMA is requested and hardware-ready, but the production backend is not active."
+        }
+        "available" => {
+            "Direct XDMA hardware is available for guarded probes; no production backend owns it."
+        }
+        _ => "Direct XDMA hardware is not ready.",
+    };
+    let driver_status = if module_loaded && required_devices_ready {
+        "ready"
+    } else if module_loaded {
+        "degraded"
+    } else {
+        "unavailable"
+    };
+
+    serde_json::json!({
+        "schema_version": 1,
+        "collected_at_ms": SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|value| value.as_millis() as u64)
+            .unwrap_or(0),
+        "backend": {
+            "requested": requested_backend,
+            "active": active_backend,
+            "p2_service_state": p2_service_state.trim(),
+            "direct_state": direct_state,
+            "direct_operational": false,
+            "implementation_phase": 5,
+            "message": direct_message,
+        },
+        "driver": {
+            "status": driver_status,
+            "module_loaded": module_loaded,
+            "required_devices_ready": required_devices_ready,
+            "parameters": {
+                "completion_kthread_priority": read_trimmed_file(
+                    "/sys/module/xdma/parameters/completion_kthread_priority"
+                ),
+                "completion_wq_highpri": read_trimmed_file(
+                    "/sys/module/xdma/parameters/completion_wq_highpri"
+                ),
+                "transfer_latency_warn_us": read_trimmed_file(
+                    "/sys/module/xdma/parameters/transfer_latency_warn_us"
+                ),
+            },
+            "devices": devices,
+        },
+        "runtime": xdma_interrupt_telemetry(),
+        "last_validation": xdma_probe_snapshot(),
+    })
+}
+
 fn strip_trailing_dns_dot(value: &str) -> String {
     value.trim().trim_end_matches('.').to_string()
 }
@@ -1627,6 +1868,8 @@ async fn get_bridge_diag() -> Response {
         &["show", "-p", "Environment", "--value", service_name],
     )
     .await;
+    let (p2_active_ok, p2_active) =
+        command_text("systemctl", &["is-active", "p2app.service"]).await;
     let (journal_ok, journal) = command_text(
         "journalctl",
         &[
@@ -1680,6 +1923,7 @@ async fn get_bridge_diag() -> Response {
         })
     });
     let latest_status = status_lines.last().cloned();
+    let xdma = xdma_bridge_telemetry(p2_active_ok, &p2_active, &environment);
 
     Json(serde_json::json!({
         "status": "ok",
@@ -1700,7 +1944,8 @@ async fn get_bridge_diag() -> Response {
                 "latest_status": latest_status,
                 "diag_lines": diag_lines,
                 "status_lines": status_lines,
-            }
+            },
+            "xdma": xdma,
         }
     }))
     .into_response()
@@ -2153,60 +2398,6 @@ async fn get_p23_perf(State(_state): State<AppState>) -> Response {
         })
     }
 
-    fn read_trimmed(path: &str) -> Option<String> {
-        fs::read_to_string(path).ok().map(|s| s.trim().to_string())
-    }
-
-    fn parse_xdma_interrupts() -> serde_json::Value {
-        let raw = match fs::read_to_string("/proc/interrupts") {
-            Ok(v) => v,
-            Err(_) => return serde_json::json!({ "present": false }),
-        };
-
-        let mut lines_json = Vec::<serde_json::Value>::new();
-        let mut total_count: u64 = 0;
-        let mut found = false;
-
-        for line in raw.lines() {
-            if !line.to_ascii_lowercase().contains("xdma") {
-                continue;
-            }
-            let (irq, rest) = match line.split_once(':') {
-                Some(v) => v,
-                None => continue,
-            };
-            let mut line_count: u64 = 0;
-            for tok in rest.split_whitespace() {
-                match tok.parse::<u64>() {
-                    Ok(v) => line_count = line_count.saturating_add(v),
-                    Err(_) => break,
-                }
-            }
-            total_count = total_count.saturating_add(line_count);
-            found = true;
-            lines_json.push(serde_json::json!({
-                "irq": irq.trim(),
-                "count": line_count,
-                "raw": line.trim(),
-            }));
-        }
-
-        let pcie_speed = read_trimmed("/sys/class/xdma/xdma0_control/device/current_link_speed")
-            .or_else(|| read_trimmed("/sys/class/xdma/xdma0_h2c_0/device/current_link_speed"));
-        let pcie_width = read_trimmed("/sys/class/xdma/xdma0_control/device/current_link_width")
-            .or_else(|| read_trimmed("/sys/class/xdma/xdma0_h2c_0/device/current_link_width"));
-
-        serde_json::json!({
-            "present": found || pcie_speed.is_some() || pcie_width.is_some(),
-            "interrupts_total": if found { Some(total_count) } else { None::<u64> },
-            "interrupt_lines": lines_json,
-            "pcie": {
-                "current_link_speed": pcie_speed,
-                "current_link_width": pcie_width,
-            }
-        })
-    }
-
     fn parse_proc_status(pid: u32) -> serde_json::Value {
         let path = format!("/proc/{pid}/status");
         let raw = match fs::read_to_string(path) {
@@ -2594,15 +2785,16 @@ async fn get_p23_perf(State(_state): State<AppState>) -> Response {
         parse_system_cpu().unwrap_or((0, 0, 0));
     let (mem_total_bytes, mem_available_bytes) = parse_meminfo();
     let (load_1, load_5, load_15) = parse_loadavg();
-    let soc_temp_c = read_trimmed("/sys/class/thermal/thermal_zone0/temp")
+    let soc_temp_c = read_trimmed_file("/sys/class/thermal/thermal_zone0/temp")
         .and_then(|value| value.parse::<f64>().ok())
         .map(|value| value / 1000.0);
-    let cpu_frequency_mhz = read_trimmed("/sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq")
-        .or_else(|| read_trimmed("/sys/devices/system/cpu/cpu0/cpufreq/cpuinfo_cur_freq"))
-        .and_then(|value| value.parse::<f64>().ok())
-        .map(|value| value / 1000.0);
+    let cpu_frequency_mhz =
+        read_trimmed_file("/sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq")
+            .or_else(|| read_trimmed_file("/sys/devices/system/cpu/cpu0/cpufreq/cpuinfo_cur_freq"))
+            .and_then(|value| value.parse::<f64>().ok())
+            .map(|value| value / 1000.0);
     let cpu_frequency_max_mhz =
-        read_trimmed("/sys/devices/system/cpu/cpu0/cpufreq/scaling_max_freq")
+        read_trimmed_file("/sys/devices/system/cpu/cpu0/cpufreq/scaling_max_freq")
             .and_then(|value| value.parse::<f64>().ok())
             .map(|value| value / 1000.0);
 
@@ -2681,7 +2873,7 @@ async fn get_p23_perf(State(_state): State<AppState>) -> Response {
                 "eth0": eth0,
                 "wlan0": wlan0,
             },
-            "xdma": parse_xdma_interrupts(),
+            "xdma": xdma_interrupt_telemetry(),
             "workload": p23_workload_info(main_pid),
             "app_telemetry": p23_app_perf_telemetry(main_pid),
             "process": process,
@@ -3806,7 +3998,8 @@ async fn disk_imaging_disabled() -> Response {
 mod tests {
     use super::{
         append_script_run_log_line, begin_script_run_log, bind_addr_is_loopback,
-        disk_imaging_disabled, script_deadline_seconds, script_run_log_slot, with_request_limit,
+        disk_imaging_disabled, parse_xdma_interrupts_text, script_deadline_seconds,
+        script_run_log_slot, systemd_environment_value, with_request_limit,
     };
     use axum::{
         body::{Body, Bytes},
@@ -3823,6 +4016,45 @@ mod tests {
 
     async fn consume_request_body(_body: Bytes) -> StatusCode {
         StatusCode::NO_CONTENT
+    }
+
+    #[test]
+    fn xdma_interrupt_parser_sums_cpu_columns_only() {
+        let raw = concat!(
+            "           CPU0       CPU1       CPU2       CPU3\n",
+            " 45:         10         20         30         40  PCI-MSI  xdma0-user\n",
+            " 46:          1          2          3          4  PCI-MSI  xdma0-h2c-0\n",
+            " 47:         99         99         99         99  PCI-MSI  ethernet\n",
+        );
+        let (total, lines) = parse_xdma_interrupts_text(raw);
+        assert_eq!(total, 110);
+        assert_eq!(lines.len(), 2);
+        assert_eq!(lines[0]["irq"], "45");
+        assert_eq!(lines[1]["count"], 10);
+    }
+
+    #[test]
+    fn xdma_backend_environment_supports_current_and_future_unit_formats() {
+        assert_eq!(
+            systemd_environment_value(
+                "SATURN_FOO=1 SATURN_BRIDGE_RADIO_BACKEND=xdma SATURN_BAR=2",
+                "SATURN_BRIDGE_RADIO_BACKEND"
+            )
+            .as_deref(),
+            Some("xdma")
+        );
+        assert_eq!(
+            systemd_environment_value(
+                "'SATURN_BRIDGE_BACKEND=p2' \"SATURN_OTHER=value\"",
+                "SATURN_BRIDGE_BACKEND"
+            )
+            .as_deref(),
+            Some("p2")
+        );
+        assert_eq!(
+            systemd_environment_value("SATURN_FOO=1", "SATURN_BRIDGE_BACKEND"),
+            None
+        );
     }
 
     #[test]
