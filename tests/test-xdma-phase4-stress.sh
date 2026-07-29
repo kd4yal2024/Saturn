@@ -38,6 +38,10 @@ grep -Fq -- 'Failure tail:' "$STRESS_SCRIPT" \
   || fail "script does not preserve failure diagnostics"
 grep -Fq -- 'completion_kthread_priority' "$STRESS_SCRIPT" \
   || fail "script does not report the active completion thread priority"
+# shellcheck disable=SC2016
+grep -Fq -- '[[ "$ACTIVE_COMPLETION_PRIORITY" == "$REQUIRED_COMPLETION_PRIORITY" ]]' \
+  "$STRESS_SCRIPT" \
+  || fail "script does not require the validated completion thread priority"
 
 combined_dry_run="$(
   SATURN_XDMA_STRESS_BLOCK_DEVICE=/dev/test-block-device \
@@ -49,6 +53,8 @@ grep -Fq 'SATURN_BRIDGE_XDMA_DUC_RT_PRIORITY=20' <<<"$combined_dry_run" \
   || fail "dry run does not show real-time XDMA probe"
 grep -Fq 'SATURN_BRIDGE_XDMA_DUC_CPU=auto' <<<"$combined_dry_run" \
   || fail "dry run does not isolate the XDMA probe on an available CPU"
+grep -Fq 'Would require XDMA completion_kthread_priority=20' <<<"$combined_dry_run" \
+  || fail "dry run does not show the validated completion priority gate"
 
 for profile in cpu memory network storage; do
   if [[ "$profile" == "storage" ]]; then

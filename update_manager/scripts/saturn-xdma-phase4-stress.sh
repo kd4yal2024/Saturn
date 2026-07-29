@@ -13,6 +13,7 @@ MEMORY_MIB="${SATURN_XDMA_STRESS_MEMORY_MIB:-192}"
 HTTP_CONCURRENCY="${SATURN_XDMA_STRESS_HTTP_CONCURRENCY:-8}"
 RT_PRIORITY="${SATURN_XDMA_STRESS_RT_PRIORITY:-20}"
 PROBE_CPU="${SATURN_XDMA_STRESS_PROBE_CPU:-auto}"
+REQUIRED_COMPLETION_PRIORITY="${SATURN_XDMA_STRESS_REQUIRED_COMPLETION_PRIORITY:-20}"
 BLOCK_DEVICE="${SATURN_XDMA_STRESS_BLOCK_DEVICE:-}"
 PROFILE="${SATURN_XDMA_STRESS_PROFILE:-combined}"
 DRY_RUN=0
@@ -126,12 +127,19 @@ positive_integer "CPU worker count" "$CPU_WORKERS"
 positive_integer "memory MiB" "$MEMORY_MIB"
 positive_integer "HTTP concurrency" "$HTTP_CONCURRENCY"
 positive_integer "real-time priority" "$RT_PRIORITY"
+if [[ "$REQUIRED_COMPLETION_PRIORITY" != "none" ]]; then
+  positive_integer "required XDMA completion priority" "$REQUIRED_COMPLETION_PRIORITY"
+fi
 (( DURATION_SECONDS >= 60 && DURATION_SECONDS <= 86400 )) \
   || die "duration must be between 60 and 86400 seconds"
 (( CPU_WORKERS <= 3 )) || die "CPU worker count must not exceed 3"
 (( MEMORY_MIB <= 384 )) || die "memory workload must not exceed 384 MiB"
 (( HTTP_CONCURRENCY <= 32 )) || die "HTTP concurrency must not exceed 32"
 (( RT_PRIORITY <= 80 )) || die "real-time priority must not exceed 80"
+if [[ "$REQUIRED_COMPLETION_PRIORITY" != "none" ]]; then
+  (( REQUIRED_COMPLETION_PRIORITY <= 99 )) \
+    || die "required XDMA completion priority must not exceed 99"
+fi
 
 if uses_profile storage; then
   if [[ -z "$BLOCK_DEVICE" ]]; then
@@ -145,6 +153,7 @@ fi
 if (( DRY_RUN )); then
   log "Would use repository: $REPO_ROOT"
   log "Would use stress profile: $PROFILE"
+  log "Would require XDMA completion_kthread_priority=$REQUIRED_COMPLETION_PRIORITY"
   print_command systemctl stop p2app.service
   if uses_profile cpu; then
     print_command sha256sum /dev/zero
@@ -192,6 +201,14 @@ fi
 [[ -x "$BRIDGE_BINARY" ]] || die "bridge binary is not executable: $BRIDGE_BINARY"
 [[ "$(findmnt -n -o FSTYPE -T /dev/shm)" == "tmpfs" ]] \
   || die "/dev/shm is not tmpfs; refusing temporary stress files"
+if [[ "$REQUIRED_COMPLETION_PRIORITY" != "none" ]]; then
+  COMPLETION_PRIORITY_PATH="/sys/module/xdma/parameters/completion_kthread_priority"
+  [[ -r "$COMPLETION_PRIORITY_PATH" ]] \
+    || die "XDMA completion priority is unavailable; install the Phase 4 driver and reload it"
+  ACTIVE_COMPLETION_PRIORITY="$(<"$COMPLETION_PRIORITY_PATH")"
+  [[ "$ACTIVE_COMPLETION_PRIORITY" == "$REQUIRED_COMPLETION_PRIORITY" ]] \
+    || die "XDMA completion_kthread_priority=$ACTIVE_COMPLETION_PRIORITY; expected $REQUIRED_COMPLETION_PRIORITY. Install the persistent policy and reload XDMA or reboot before stress testing"
+fi
 
 TEMP_DIR="$(mktemp -d /dev/shm/saturn-xdma-phase4-stress.XXXXXX)"
 MEMORY_FILE="/dev/shm/saturn-xdma-stress.$$"

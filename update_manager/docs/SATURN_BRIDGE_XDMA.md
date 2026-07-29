@@ -153,10 +153,11 @@ The probe:
   available for A/B measurements but remains off by default because a
   non-isolated CPU can worsen scheduler stalls
 - enables the zero-amplitude, RF-disabled DUC mux immediately before seeding
-  eleven 1.25 ms frames (H2C0 discards writes while the mux is disabled)
-- refills at seven frames toward an eleven-frame target; this keeps the normal
-  transfer near four frames while reserving enough FIFO for observed 5–7 ms
-  H2C kernel-write tails that cannot be predicted before a refill starts
+  twenty 1.25 ms frames in writes of at most eleven frames (H2C0 discards
+  writes while the mux is disabled)
+- refills at twelve frames toward a twenty-frame target; this keeps the normal
+  transfer near eight frames, halves the refill rate, and retains approximately
+  15 ms at the normal low-water boundary
 - uses fixed-memory latency histograms, allowing multi-hour runs without
   accumulating one allocation per refill
 - reports observation counts, FIFO low-water/fault counts, batch-size changes,
@@ -249,6 +250,12 @@ low-water observation, prints the probe telemetry and stressor log tails, and
 restores `p2app.service`. The storage profile performs read-only random I/O
 against the repository's block device; all temporary writes and logs remain in
 `/dev/shm`.
+
+The harness also refuses to start unless the loaded driver reports
+`completion_kthread_priority=20`. This prevents a high-pressure test from
+repeating the known shared-workqueue underflow mode. Set
+`SATURN_XDMA_STRESS_REQUIRED_COMPLETION_PRIORITY=none` only for a deliberate
+driver A/B experiment with RF still inhibited.
 
 Only after every isolated profile passes should the combined 30-minute gate be
 repeated:

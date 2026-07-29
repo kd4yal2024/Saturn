@@ -57,6 +57,8 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
   CPU selection the stress-harness default, and widened the DUC FIFO operating
   band to an efficient eight-frame window. The validated band halves refill
   calls while absorbing rare scheduler stalls under combined appliance load.
+  Stress runs now fail before applying load unless the loaded driver has the
+  validated priority-20 completion thread, with an explicit A/B-only override.
   The final 30-minute combined stress gate sustained 192 kHz with zero
   critical-low or runtime FIFO-fault events, 0.600 ms p99.99 refill service,
   and 1.632 ms maximum refill service.
