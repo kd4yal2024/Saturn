@@ -69,6 +69,7 @@ const HISTOGRAM_MAX_NS: u128 = 100_000_000;
 enum DucIqPattern {
     Zero,
     Changing,
+    Carrier,
 }
 
 impl DucIqPattern {
@@ -90,6 +91,7 @@ impl DucIqPattern {
         match self {
             Self::Zero => "zero",
             Self::Changing => "changing",
+            Self::Carrier => "carrier",
         }
     }
 }
@@ -178,7 +180,7 @@ impl DucProbeConfig {
     }
 }
 
-fn allowed_cpu_ids() -> Result<Vec<usize>, XdmaError> {
+pub(crate) fn allowed_cpu_ids() -> Result<Vec<usize>, XdmaError> {
     // SAFETY: the set is initialized and passed with its exact size. pid 0
     // queries the calling thread's effective affinity mask.
     let set = unsafe {
@@ -221,11 +223,11 @@ fn parse_env_u64(name: &'static str, default: u64) -> Result<u64, XdmaError> {
 }
 
 #[derive(Clone, Copy, Debug, Default)]
-struct FifoSnapshot {
-    occupied_words: usize,
-    overflow: bool,
-    over_threshold: bool,
-    underflow: bool,
+pub(crate) struct FifoSnapshot {
+    pub(crate) occupied_words: usize,
+    pub(crate) overflow: bool,
+    pub(crate) over_threshold: bool,
+    pub(crate) underflow: bool,
 }
 
 impl FifoSnapshot {
@@ -404,7 +406,7 @@ impl Drop for ProgressReporter {
     }
 }
 
-struct DucDmaSession<'a> {
+pub(crate) struct DucDmaSession<'a> {
     registers: &'a mut XdmaRegisterDevice,
     dma: File,
     fifo_depth_words: usize,
@@ -415,7 +417,10 @@ struct DucDmaSession<'a> {
 }
 
 impl<'a> DucDmaSession<'a> {
-    fn start(registers: &'a mut XdmaRegisterDevice, dma_path: &Path) -> Result<Self, XdmaError> {
+    pub(crate) fn start(
+        registers: &'a mut XdmaRegisterDevice,
+        dma_path: &Path,
+    ) -> Result<Self, XdmaError> {
         apply_rf_disabled_duc_state(registers, false)?;
         let dma = match OpenOptions::new().write(true).open(dma_path) {
             Ok(dma) => dma,
@@ -643,6 +648,75 @@ impl<'a> DucDmaSession<'a> {
         Ok(())
     }
 
+    /// Seed the proven Phase 4 FIFO geometry with a full-scale constant
+    /// complex carrier while RF remains inhibited and TX amplitude is zero.
+    /// The caller must explicitly arm and key the RF path afterward.
+    pub(crate) fn prefill_guarded_carrier(&mut self) -> Result<FifoSnapshot, XdmaError> {
+        self.iq_pattern = DucIqPattern::Carrier;
+        apply_rf_disabled_duc_state(self.registers, true)?;
+        // Clear the expected empty-FIFO condition before the guarded prefill.
+        self.registers.read_register(DUC_FIFO_MONITOR_REGISTER)?;
+        let mut remaining = DUC_PREFILL_FRAMES;
+        let mut stats = DucStats::default();
+        while remaining != 0 {
+            let frames = remaining.min(DUC_MAX_DMA_BATCH_FRAMES);
+            self.write_frames(frames, &mut stats)?;
+            remaining -= frames;
+        }
+        let snapshot =
+            FifoSnapshot::decode(self.registers.read_register(DUC_FIFO_MONITOR_REGISTER)?);
+        let minimum_words = (DUC_PREFILL_FRAMES - 2) * DUC_FIFO_WORDS_PER_FRAME;
+        if snapshot.occupied_words < minimum_words {
+            return Err(XdmaError::Incompatible(format!(
+                "guarded TX prefill accepted only {} of at least {} expected FIFO words",
+                snapshot.occupied_words, minimum_words
+            )));
+        }
+        Ok(snapshot)
+    }
+
+    /// Service one guarded-TX refill cycle and return the post-service FIFO
+    /// snapshot. Runtime FIFO faults are never recoverable during keyed RF.
+    pub(crate) fn service_guarded_carrier(&mut self) -> Result<FifoSnapshot, XdmaError> {
+        let before = FifoSnapshot::decode(self.registers.read_register(DUC_FIFO_MONITOR_REGISTER)?);
+        if before.overflow || before.over_threshold || before.underflow {
+            return Err(XdmaError::Incompatible(format!(
+                "guarded TX DUC FIFO fault: occupied={} overflow={} threshold={} underflow={}",
+                before.occupied_words, before.overflow, before.over_threshold, before.underflow
+            )));
+        }
+        let occupied_frames = before.occupied_words / DUC_FIFO_WORDS_PER_FRAME;
+        if occupied_frames <= 2 {
+            return Err(XdmaError::Incompatible(format!(
+                "guarded TX DUC reached critical FIFO level: {} words",
+                before.occupied_words
+            )));
+        }
+        if occupied_frames <= DUC_REFILL_LOW_FRAMES {
+            let frames = refill_batch_frames(
+                before.occupied_words,
+                self.fifo_depth_words,
+                DUC_REFILL_TARGET_FRAMES,
+            );
+            if frames != 0 {
+                let mut stats = DucStats::default();
+                self.write_frames(frames, &mut stats)?;
+            }
+        }
+        let after = FifoSnapshot::decode(self.registers.read_register(DUC_FIFO_MONITOR_REGISTER)?);
+        if after.overflow || after.over_threshold || after.underflow {
+            return Err(XdmaError::Incompatible(format!(
+                "guarded TX DUC FIFO fault after refill: occupied={} overflow={} threshold={} underflow={}",
+                after.occupied_words, after.overflow, after.over_threshold, after.underflow
+            )));
+        }
+        Ok(after)
+    }
+
+    pub(crate) fn registers(&self) -> &XdmaRegisterDevice {
+        self.registers
+    }
+
     fn pulse_duc_mux_reset(&self) -> Result<(), XdmaError> {
         let base = self.registers.read_register(TX_CONFIG_REGISTER)?
             & !(DUC_STREAM_ENABLE_BIT | DUC_MUX_RESET_BIT);
@@ -664,7 +738,7 @@ impl<'a> DucDmaSession<'a> {
         )
     }
 
-    fn stop(&mut self) -> Result<(), XdmaError> {
+    pub(crate) fn stop(&mut self) -> Result<(), XdmaError> {
         if self.stopped {
             return Ok(());
         }
@@ -860,7 +934,7 @@ fn validate_duc_stats(stats: &DucStats, config: DucProbeConfig) -> Result<(), Xd
     Ok(())
 }
 
-fn pin_current_thread(cpu: usize) -> Result<(), XdmaError> {
+pub(crate) fn pin_current_thread(cpu: usize) -> Result<(), XdmaError> {
     // SAFETY: cpu_set_t is initialized before use, cpu was range-checked
     // against the process's available parallelism, and pid 0 means the
     // calling thread.
@@ -883,7 +957,7 @@ fn pin_current_thread(cpu: usize) -> Result<(), XdmaError> {
     Ok(())
 }
 
-fn enable_realtime_fifo(priority: i32) -> Result<(), XdmaError> {
+pub(crate) fn enable_realtime_fifo(priority: i32) -> Result<(), XdmaError> {
     let parameter = libc::sched_param {
         sched_priority: priority,
     };
@@ -900,7 +974,7 @@ fn enable_realtime_fifo(priority: i32) -> Result<(), XdmaError> {
     Ok(())
 }
 
-fn current_scheduler() -> Result<(&'static str, i32), XdmaError> {
+pub(crate) fn current_scheduler() -> Result<(&'static str, i32), XdmaError> {
     // SAFETY: pid 0 queries the calling thread and the parameter pointer is
     // valid for the duration of the syscall.
     let (policy, parameter) = unsafe {
@@ -1072,6 +1146,17 @@ fn fill_iq_pattern(buffer: &mut [u8], pattern: DucIqPattern, pair_index: &mut u6
         *pair_index = pair_index.saturating_add((buffer.len() / 6) as u64);
         return;
     }
+    if pattern == DucIqPattern::Carrier {
+        for pair in buffer.chunks_exact_mut(6) {
+            // Match P2_app's proven InDUCIQ conversion exactly: the FPGA DMA
+            // stream receives Q followed by I, both as signed 24-bit
+            // big-endian samples, while RF GPIO byte swapping is enabled.
+            write_i24_be(&mut pair[0..3], 0);
+            write_i24_be(&mut pair[3..6], 0x007f_ffff);
+        }
+        *pair_index = pair_index.saturating_add((buffer.len() / 6) as u64);
+        return;
+    }
 
     for pair in buffer.chunks_exact_mut(6) {
         // A repeatable quadrature ramp exercises every DMA data bit without
@@ -1089,6 +1174,11 @@ fn fill_iq_pattern(buffer: &mut [u8], pattern: DucIqPattern, pair_index: &mut u6
 fn write_i24_le(target: &mut [u8], value: i32) {
     let encoded = value.to_le_bytes();
     target.copy_from_slice(&encoded[..3]);
+}
+
+fn write_i24_be(target: &mut [u8], value: i32) {
+    let encoded = value.to_be_bytes();
+    target.copy_from_slice(&encoded[1..]);
 }
 
 fn fifo_margin_ns(occupied_words: usize) -> u128 {
@@ -1173,6 +1263,18 @@ mod tests {
         fill_iq_pattern(&mut buffer, DucIqPattern::Zero, &mut pair_index);
         assert_eq!(buffer, [0_u8; 12]);
         assert_eq!(pair_index, 4);
+    }
+
+    #[test]
+    fn guarded_carrier_matches_p2app_q_then_i_network_order() {
+        let mut buffer = [0xa5; 12];
+        let mut pair_index = 0;
+        fill_iq_pattern(&mut buffer, DucIqPattern::Carrier, &mut pair_index);
+        assert_eq!(
+            buffer,
+            [0x00, 0x00, 0x00, 0x7f, 0xff, 0xff, 0x00, 0x00, 0x00, 0x7f, 0xff, 0xff,]
+        );
+        assert_eq!(pair_index, 2);
     }
 
     #[test]

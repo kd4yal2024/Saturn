@@ -240,6 +240,10 @@ fn main() -> Result<(), Box<dyn Error>> {
         xdma_tx::run_phase5_tx_preflight()?;
         return Ok(());
     }
+    if env::args().skip(1).any(|arg| arg == "--xdma-tx-probe") {
+        xdma_tx::run_phase5_tx_probe()?;
+        return Ok(());
+    }
 
     let config = BridgeConfig::from_env();
     let radio_model = Arc::new(Mutex::new(RadioModel::new(

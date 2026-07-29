@@ -380,6 +380,60 @@ TX enable, or PA relay. A later low-power RF-keying probe requires a separately
 confirmed load or antenna, explicit frequency and power limits, forward/reverse
 power trips, a bounded key-down timer, and authorization to generate RF.
 
+### First guarded RF probe
+
+The first RF-generating Phase 5 probe is intentionally locked to the field
+validation hardware and operating envelope:
+
+- primary Saturn image, PCB2, firmware 1.27
+- ANT1 with a confirmed 40 m antenna or suitable load
+- 7.200 MHz only
+- 3 W absolute forward-power ceiling
+- 2.5 W ramp target and drive byte no higher than 11
+- 0.75 W reverse-power and 3.0:1 SWR trips
+- 250 ms default key-down, with a hard 500 ms configuration maximum
+- XDMA completion thread and probe thread both at validated FIFO priority 20
+
+The probe preloads the proven Phase 4 DUC FIFO while amplitude, MOX, TX enable,
+and the PA relay remain inhibited. It then switches from the Phase 4 always-on
+consumer to the normal MOX-gated data path, ramps drive one step every 12 ms,
+and checks the FIFO and forward/reverse power on every loop. Drive and amplitude
+are zeroed before MOX, TX enable, and the relay are returned to receive state.
+SIGINT and SIGTERM request the same cleanup. Live carrier samples use the exact
+P2_app DMA representation: Q then I, signed 24-bit network byte order, with the
+FPGA byte-swap control explicitly enabled and verified.
+
+Do not run this command until ANT1 is physically confirmed:
+
+```bash
+(
+  trap 'sudo systemctl start p2app.service' EXIT
+  sudo systemctl stop p2app.service
+
+  sudo env \
+    SATURN_BRIDGE_XDMA_TX_CONFIRM=ANTENNA_CONNECTED_40M_7200000HZ_3W_ANT1 \
+    SATURN_BRIDGE_XDMA_TX_FREQUENCY_HZ=7200000 \
+    SATURN_BRIDGE_XDMA_TX_MAX_WATTS=3 \
+    SATURN_BRIDGE_XDMA_TX_ANTENNA=1 \
+    update_manager/saturn-bridge/target/release/saturn-bridge \
+      --xdma-tx-probe
+)
+```
+
+`SATURN_BRIDGE_XDMA_TX_DURATION_MS` may be set only within 100 through 500 ms.
+`SATURN_BRIDGE_XDMA_TX_POWER_METER_SCALE` defaults to `1.0` and is constrained
+to `0.5` through `1.5`. The frequency, ceiling, antenna, confirmation token,
+hardware revision, firmware revision, and completion policy cannot be relaxed
+by environment variables in this first RF probe.
+
+The first antenna-connected field run passed on 2026-07-29. At 7.200 MHz for
+250 ms, the guarded ramp reached its drive-byte-11 ceiling and measured
+1.403 W peak forward power, zero measured reverse power, 1.00 peak SWR, and a
+2,342-word DUC FIFO low-water mark. The probe ran on CPU 3 with both the caller
+and XDMA completion thread at FIFO priority 20, then verified receive-safe
+cleanup. This establishes the direct-XDMA RF path without relaxing the 3 W
+ceiling; higher-power calibration remains separate work.
+
 ## Planned Data Paths
 
 | Function | XDMA node |

@@ -66,6 +66,14 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
   common emergency cleanup to zero and disable the entire transmit data path,
   verifies receive-safe register readback, and provides bounded failure
   checkpoints for testing automatic cleanup.
+- Added the first explicitly authorized Phase 5 RF probe, locked to PCB2
+  firmware 1.27, ANT1, 7.200 MHz, and a 3 W ceiling. It preloads the validated
+  direct-XDMA DUC FIFO while RF is inhibited, ramps only to drive byte 11,
+  continuously trips on FIFO, forward/reverse-power, or SWR faults, bounds
+  key-down to 500 ms, and returns the full transmit path to receive-safe state
+  before reporting results. The initial antenna-connected field run produced
+  1.403 W forward, zero measured reverse power, no FIFO fault, and verified
+  cleanup.
 - Split Saturn Go health reporting into `/livez` process liveness and
   structured `/readyz` dependency/release readiness. Rust builds embed their
   full Git commit; staged Saturn Go payloads carry the same identity, and the
