@@ -32,14 +32,38 @@ grep -Fq -- 'trap cleanup EXIT' "$STRESS_SCRIPT" \
   || fail "script does not install unconditional cleanup"
 grep -Fq -- 'systemctl start p2app.service' "$STRESS_SCRIPT" \
   || fail "cleanup does not restore P2"
+grep -Fq -- 'cpu|memory|network|storage|combined' "$STRESS_SCRIPT" \
+  || fail "script does not expose staged stress profiles"
+grep -Fq -- 'Failure tail:' "$STRESS_SCRIPT" \
+  || fail "script does not preserve failure diagnostics"
 
-dry_run="$(
+combined_dry_run="$(
   SATURN_XDMA_STRESS_BLOCK_DEVICE=/dev/test-block-device \
-    bash "$STRESS_SCRIPT" --duration-seconds 60 --dry-run 2>&1
+    bash "$STRESS_SCRIPT" --profile combined --duration-seconds 60 --dry-run 2>&1
 )"
-grep -Fq -- '--readonly' <<<"$dry_run" \
+grep -Fq -- '--readonly' <<<"$combined_dry_run" \
   || fail "dry run does not show read-only storage pressure"
-grep -Fq 'SATURN_BRIDGE_XDMA_DUC_RT_PRIORITY=20' <<<"$dry_run" \
+grep -Fq 'SATURN_BRIDGE_XDMA_DUC_RT_PRIORITY=20' <<<"$combined_dry_run" \
   || fail "dry run does not show real-time XDMA probe"
+
+for profile in cpu memory network storage; do
+  if [[ "$profile" == "storage" ]]; then
+    dry_run="$(
+      SATURN_XDMA_STRESS_BLOCK_DEVICE=/dev/test-block-device \
+        bash "$STRESS_SCRIPT" --profile "$profile" --duration-seconds 60 --dry-run 2>&1
+    )"
+  else
+    dry_run="$(bash "$STRESS_SCRIPT" --profile "$profile" --duration-seconds 60 --dry-run 2>&1)"
+  fi
+  grep -Fq "stress profile: $profile" <<<"$dry_run" \
+    || fail "$profile dry run does not identify its profile"
+  grep -Fq -- '--xdma-duc-probe' <<<"$dry_run" \
+    || fail "$profile dry run omits the XDMA probe"
+done
+
+cpu_dry_run="$(bash "$STRESS_SCRIPT" --profile cpu --duration-seconds 60 --dry-run 2>&1)"
+if grep -Fq -- '--readonly' <<<"$cpu_dry_run"; then
+  fail "CPU profile unexpectedly includes storage pressure"
+fi
 
 printf 'XDMA Phase 4 stress contract passed\n'

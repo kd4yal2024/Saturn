@@ -167,6 +167,8 @@ The probe:
   runs still apply the conservative nearest-rank gate but do not claim a
   statistically representative tail
 - rejects a rate outside five percent of 192 kHz or any runtime FIFO fault
+- stops immediately on the first runtime FIFO fault or critical low-water
+  observation, while retaining and printing the partial-run telemetry
 - rejects p99.99 low-water-to-write-complete service above 5 ms
 - rejects a maximum refill service that reaches the minimum observed FIFO
   margin, or p99.99 service above 60 percent of that margin
@@ -229,17 +231,38 @@ The corresponding 30-minute `SCHED_FIFO` priority 20 baseline passed with
 5.919 ms maximum refill service, 8.806 ms minimum FIFO margin, zero critical
 low-water events, and zero runtime FIFO faults.
 
-The final Phase 4 gate applies bounded concurrent host pressure:
+The final Phase 4 gate applies bounded host pressure. Run the isolated
+five-minute profiles first:
 
 ```bash
-sudo update_manager/scripts/saturn-xdma-phase4-stress.sh
+sudo update_manager/scripts/saturn-xdma-phase4-stress.sh --profile cpu --duration-seconds 300
+sudo update_manager/scripts/saturn-xdma-phase4-stress.sh --profile memory --duration-seconds 300
+sudo update_manager/scripts/saturn-xdma-phase4-stress.sh --profile network --duration-seconds 300
+sudo update_manager/scripts/saturn-xdma-phase4-stress.sh --profile storage --duration-seconds 300
 ```
 
-The orchestrator runs the same 30-minute RF-inhibited changing-IQ probe under
-two CPU workers, a 192 MiB `/dev/shm` random workload, loopback HTTP
-concurrency, and read-only random I/O against the repository's block device.
-It does not write to persistent storage. Stressors are bounded, checked for
-early exit, and terminated on every exit; `p2app.service` is always restored.
+Each invocation runs the same RF-inhibited changing-IQ probe with just one
+bounded stress source. A failed run stops on its first FIFO fault or critical
+low-water observation, prints the probe telemetry and stressor log tails, and
+restores `p2app.service`. The storage profile performs read-only random I/O
+against the repository's block device; all temporary writes and logs remain in
+`/dev/shm`.
+
+Only after every isolated profile passes should the combined 30-minute gate be
+repeated:
+
+```bash
+sudo update_manager/scripts/saturn-xdma-phase4-stress.sh --profile combined
+```
+
+The first combined development run correctly failed: p99.99 refill service
+reached 64.360 ms, maximum refill service reached 146.023 ms, the FIFO reached
+zero, and the probe recorded 1,781 critical-low events and 2,662 underflows.
+The same host had already passed the unstressed 30-minute `SCHED_FIFO` baseline,
+and showed no thermal throttling, kernel I/O errors, or XDMA driver errors after
+the stress failure. The isolated profiles are therefore required to distinguish
+CPU, memory, loopback-network, and shared-storage interrupt pressure before any
+scheduler or IRQ-affinity tuning.
 
 ## Planned Data Paths
 

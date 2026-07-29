@@ -237,6 +237,10 @@ impl FifoSnapshot {
     }
 }
 
+fn is_terminal_fifo_condition(snapshot: FifoSnapshot, occupied_frames: usize) -> bool {
+    snapshot.overflow || snapshot.over_threshold || snapshot.underflow || occupied_frames <= 2
+}
+
 #[derive(Debug, Default)]
 struct LatencyHistogram {
     buckets: Box<[u64]>,
@@ -306,6 +310,7 @@ struct DucStats {
     low_water_events: u64,
     critical_low_events: u64,
     batch_size_changes: u64,
+    terminated_early: bool,
     elapsed: Duration,
 }
 
@@ -459,6 +464,10 @@ impl<'a> DucDmaSession<'a> {
                 stats.critical_low_events += 1;
             }
             critical_low_active = critical_now;
+            if is_terminal_fifo_condition(fifo, occupied_frames) {
+                stats.terminated_early = true;
+                break;
+            }
 
             if low_now {
                 let frames = refill_batch_frames(
@@ -655,7 +664,7 @@ pub fn run_phase4_duc_probe() -> Result<(), XdmaError> {
     let p9999_sample_sufficient = stats.refill_service_latencies.observations >= 10_000;
 
     println!(
-        "saturn-bridge: XDMA Phase 4 DUC probe {} product={} pcb={} firmware={}.{} device={} duration_ms={} iq_pattern={} cpu={} scheduler={} scheduler_priority={} dma_buffer_locked=1 target_rate={}Hz target_frames_s={} refill_low_frames={} refill_target_frames={} frames_written={} iq_pairs_consumed={} iq_rate={:.1}/s dma_writes={} dma_bytes={} payload={:.3}Mbit/s average_batch={:.2} max_batch={} batch_changes={} write_observations={} refill_observations={} p99.99_sample_sufficient={} average_write={:.1}us p99_write={:.1}us p99.99_write={:.1}us max_write={:.1}us p99_refill_gap={:.3}ms p99.99_refill_gap={:.3}ms p99_refill_service={:.3}ms p99.99_refill_service={:.3}ms max_refill_service={:.3}ms p99.99_margin_used={} max_loop_gap={:.3}ms histogram_overflows={} fifo_depth={} fifo_lwm={} fifo_hwm={} fifo_final={} minimum_fifo_margin={:.3}ms low_water_events={} critical_low_events={} fifo_startup_underflow={} fifo_overflow={} fifo_threshold={} fifo_underflow={} safety_checks={} amplitude_zero=1 mox=0 tx_enable=0 pa_relay=0 cw=0",
+        "saturn-bridge: XDMA Phase 4 DUC probe {} product={} pcb={} firmware={}.{} device={} duration_ms={} terminated_early={} iq_pattern={} cpu={} scheduler={} scheduler_priority={} dma_buffer_locked=1 target_rate={}Hz target_frames_s={} refill_low_frames={} refill_target_frames={} frames_written={} iq_pairs_consumed={} iq_rate={:.1}/s dma_writes={} dma_bytes={} payload={:.3}Mbit/s average_batch={:.2} max_batch={} batch_changes={} write_observations={} refill_observations={} p99.99_sample_sufficient={} average_write={:.1}us p99_write={:.1}us p99.99_write={:.1}us max_write={:.1}us p99_refill_gap={:.3}ms p99.99_refill_gap={:.3}ms p99_refill_service={:.3}ms p99.99_refill_service={:.3}ms max_refill_service={:.3}ms p99.99_margin_used={} max_loop_gap={:.3}ms histogram_overflows={} fifo_depth={} fifo_lwm={} fifo_hwm={} fifo_final={} minimum_fifo_margin={:.3}ms low_water_events={} critical_low_events={} fifo_startup_underflow={} fifo_overflow={} fifo_threshold={} fifo_underflow={} safety_checks={} amplitude_zero=1 mox=0 tx_enable=0 pa_relay=0 cw=0",
         if validation.is_ok() { "passed" } else { "FAILED" },
         identity.product_id,
         identity.pcb_version,
@@ -663,6 +672,7 @@ pub fn run_phase4_duc_probe() -> Result<(), XdmaError> {
         identity.firmware_minor,
         duc_path.display(),
         stats.elapsed.as_millis(),
+        u8::from(stats.terminated_early),
         config.iq_pattern.label(),
         config
             .cpu
@@ -722,18 +732,24 @@ pub fn run_phase4_duc_probe() -> Result<(), XdmaError> {
 }
 
 fn validate_duc_stats(stats: &DucStats, config: DucProbeConfig) -> Result<(), XdmaError> {
+    if stats.fifo_overflows != 0 || stats.fifo_over_threshold != 0 || stats.fifo_underflows != 0 {
+        return Err(XdmaError::Incompatible(format!(
+            "DUC runtime FIFO fault: overflow={} threshold={} underflow={}",
+            stats.fifo_overflows, stats.fifo_over_threshold, stats.fifo_underflows
+        )));
+    }
+    if stats.critical_low_events != 0 {
+        return Err(XdmaError::Incompatible(format!(
+            "DUC reached the critical FIFO low-water boundary {} time(s)",
+            stats.critical_low_events
+        )));
+    }
     let pair_rate = stats.consumed_iq_pairs() as f64 / stats.elapsed.as_secs_f64().max(0.001);
     let minimum_rate = DUC_SAMPLE_RATE_HZ as f64 * 0.95;
     let maximum_rate = DUC_SAMPLE_RATE_HZ as f64 * 1.05;
     if !(minimum_rate..=maximum_rate).contains(&pair_rate) {
         return Err(XdmaError::Incompatible(format!(
             "DUC consumed IQ at {pair_rate:.1} pairs/s; expected within 5% of {DUC_SAMPLE_RATE_HZ}"
-        )));
-    }
-    if stats.fifo_overflows != 0 || stats.fifo_over_threshold != 0 || stats.fifo_underflows != 0 {
-        return Err(XdmaError::Incompatible(format!(
-            "DUC runtime FIFO fault: overflow={} threshold={} underflow={}",
-            stats.fifo_overflows, stats.fifo_over_threshold, stats.fifo_underflows
         )));
     }
     let p9999_refill_service = stats.refill_service_latencies.percentile_ns(0.9999);
@@ -1098,5 +1114,31 @@ mod tests {
         assert!(snapshot.overflow);
         assert!(snapshot.over_threshold);
         assert!(snapshot.underflow);
+    }
+
+    #[test]
+    fn phase4_stops_on_fifo_fault_or_critical_margin() {
+        assert!(!is_terminal_fifo_condition(
+            FifoSnapshot {
+                occupied_words: 3 * DUC_FIFO_WORDS_PER_FRAME,
+                ..FifoSnapshot::default()
+            },
+            3
+        ));
+        assert!(is_terminal_fifo_condition(
+            FifoSnapshot {
+                occupied_words: 2 * DUC_FIFO_WORDS_PER_FRAME,
+                ..FifoSnapshot::default()
+            },
+            2
+        ));
+        assert!(is_terminal_fifo_condition(
+            FifoSnapshot {
+                occupied_words: 7 * DUC_FIFO_WORDS_PER_FRAME,
+                underflow: true,
+                ..FifoSnapshot::default()
+            },
+            7
+        ));
     }
 }
