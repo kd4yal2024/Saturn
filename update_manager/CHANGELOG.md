@@ -55,6 +55,9 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
   CPU selection the stress-harness default, and widened the DUC FIFO operating
   band to an efficient eight-frame window. The validated band halves refill
   calls while absorbing rare scheduler stalls under combined appliance load.
+  The final 30-minute combined stress gate sustained 192 kHz with zero
+  critical-low or runtime FIFO-fault events, 0.600 ms p99.99 refill service,
+  and 1.632 ms maximum refill service.
 - Split Saturn Go health reporting into `/livez` process liveness and
   structured `/readyz` dependency/release readiness. Rust builds embed their
   full Git commit; staged Saturn Go payloads carry the same identity, and the

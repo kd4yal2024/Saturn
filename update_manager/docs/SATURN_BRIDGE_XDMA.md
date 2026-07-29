@@ -313,8 +313,14 @@ The resulting five-minute combined CPU, memory, network, and storage profile
 passed with 30,001 writes, exact 192 kHz consumption, 2.800 ms p99.99 and
 3.111 ms maximum refill service, 7.743 ms observed minimum FIFO margin, and no
 critical-low or runtime FIFO-fault events despite a 12.212 ms maximum loop gap.
-The five-minute result justifies the full 30-minute combined soak; it does not
-replace that final gate.
+
+The final 30-minute combined soak also passed. It sustained 192,000.1 IQ
+pairs/second across 180,000 DMA writes and 345,600,213 consumed pairs. The
+p99.99 refill service was 0.600 ms, the maximum was 1.632 ms, and p99.99 used
+6.9% of the observed 8.743 ms minimum FIFO margin. The run recorded no
+critical-low events, FIFO overflow, threshold fault, runtime underflow, or
+histogram overflow. Cleanup left amplitude at zero and every RF control
+inhibited.
 
 ## Planned Data Paths
 
