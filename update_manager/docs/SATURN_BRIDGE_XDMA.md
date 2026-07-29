@@ -141,31 +141,88 @@ sudo systemctl start p2app.service
 The probe:
 
 - refuses to run while `p2app.service` is active
-- writes only zero-valued 24-bit I/Q pairs to `/dev/xdma0_h2c_0`
+- writes zero-valued 24-bit I/Q pairs to `/dev/xdma0_h2c_0` by default, with
+  an optional deterministic changing-IQ soak pattern
 - forces MOX, TX enable, PA relay, CW keyer, and TX watchdog override off
 - holds the TX amplitude scale at zero and verifies the RF-safe register state
   before every DMA refill
+- configures the safety state once and then uses read-only verification in the
+  refill hot path, avoiding redundant register writes while still aborting
+  before DMA if any RF control changes
+- locks the 15,840-byte aligned DMA buffer in RAM; optional CPU affinity is
+  available for A/B measurements but remains off by default because a
+  non-isolated CPU can worsen scheduler stalls
 - enables the zero-amplitude, RF-disabled DUC mux immediately before seeding
-  nine 1.25 ms frames (H2C0 discards writes while the mux is disabled)
-- normally refills at five frames toward a nine-frame target
-- temporarily expands the target to ten or eleven frames after a 2–3 ms
-  scheduler stall or critical FIFO low-water event, then contracts after
-  500 ms of stability
-- reports FIFO low-water/fault counts, batch-size changes, DMA write latency,
-  p99 and p99.99 write/refill service timing, maximum loop gap, minimum FIFO
-  time margin, and observed IQ rate
+  eleven 1.25 ms frames (H2C0 discards writes while the mux is disabled)
+- refills at seven frames toward an eleven-frame target; this keeps the normal
+  transfer near four frames while reserving enough FIFO for observed 5–7 ms
+  H2C kernel-write tails that cannot be predicted before a refill starts
+- uses fixed-memory latency histograms, allowing multi-hour runs without
+  accumulating one allocation per refill
+- reports observation counts, FIFO low-water/fault counts, batch-size changes,
+  DMA write latency, p99 and p99.99 write/refill service timing, exact maximum
+  refill service, maximum loop gap, minimum FIFO time margin, and observed IQ
+  rate; soak progress is printed every 60 seconds
+- marks p99.99 as sample-sufficient after 10,000 refill observations; shorter
+  runs still apply the conservative nearest-rank gate but do not claim a
+  statistically representative tail
 - rejects a rate outside five percent of 192 kHz or any runtime FIFO fault
 - rejects p99.99 low-water-to-write-complete service above 5 ms
+- rejects a maximum refill service that reaches the minimum observed FIFO
+  margin, or p99.99 service above 60 percent of that margin
 - disables the DUC mux and output gate, resets the FIFO, retains zero
   amplitude, and restores the receive-safe state on every exit
+- prints the complete bounded telemetry record before returning a failed
+  acceptance gate, preserving evidence from tail-latency failures
 
 The following test-only environment settings are supported:
 
-- `SATURN_BRIDGE_XDMA_DUC_DURATION_MS` (default `3000`, range `500..10000`)
+- `SATURN_BRIDGE_XDMA_DUC_DURATION_MS` (default `3000`, range
+  `500..86400000`, up to 24 hours)
 - `SATURN_BRIDGE_XDMA_DUC_DEVICE` (default `/dev/xdma0_h2c_0`)
+- `SATURN_BRIDGE_XDMA_DUC_PATTERN` (`zero` by default, or `changing`)
+- `SATURN_BRIDGE_XDMA_DUC_CPU` (`none` by default, a CPU number, or `auto` for
+  the highest available CPU)
+- `SATURN_BRIDGE_XDMA_DUC_RT_PRIORITY` (`0` by default; `1..80` requests
+  `SCHED_FIFO` and requires root or `CAP_SYS_NICE`)
+- `SATURN_BRIDGE_XDMA_DUC_MAX_P9999_REFILL_SERVICE_US` (default `5000`)
+- `SATURN_BRIDGE_XDMA_DUC_MAX_P9999_MARGIN_PERCENT` (default `60`)
 
-Phase 4 cannot generate RF. Guarded non-zero IQ and RF-keying tests remain
-separate Phase 5 work.
+The changing pattern exercises the H2C data path while TX amplitude remains
+zero and the RF controls remain inhibited. Phase 4 cannot generate RF.
+Guarded RF-keying tests remain separate Phase 5 work.
+
+A 30-minute changing-IQ soak can be run with:
+
+```bash
+sudo systemctl stop p2app.service
+sudo -u pi env \
+  SATURN_BRIDGE_XDMA_DUC_DURATION_MS=1800000 \
+  SATURN_BRIDGE_XDMA_DUC_PATTERN=changing \
+  /opt/saturn-go/bin/saturn-bridge --xdma-duc-probe
+sudo systemctl start p2app.service
+```
+
+For an A/B scheduler comparison, run the same soak once normally and once
+under a real-time FIFO policy (root is required to select the policy):
+
+```bash
+sudo env \
+  SATURN_BRIDGE_XDMA_DUC_DURATION_MS=1800000 \
+  SATURN_BRIDGE_XDMA_DUC_PATTERN=changing \
+  SATURN_BRIDGE_XDMA_DUC_RT_PRIORITY=20 \
+  /opt/saturn-go/bin/saturn-bridge --xdma-duc-probe
+```
+
+The result records the selected CPU, scheduler policy and priority, and locked
+DMA-buffer state alongside the latency measurements.
+
+On the development CM4, an unpinned one-minute `SCHED_OTHER` changing-IQ run
+crossed 10,000 refill observations but exposed a 78.87 ms H2C write stall, two
+FIFO underflows, and one critical-low event. This is longer than the entire
+hardware FIFO can cover, so the result blocks Phase 5. The next acceptance run
+must use `SCHED_FIFO`; increasing FIFO watermarks cannot mask that scheduler
+tail.
 
 ## Planned Data Paths
 

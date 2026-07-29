@@ -1,8 +1,9 @@
 //! Phase 4 direct Saturn/XDMA DUC performance probe.
 //!
-//! This one-shot path writes only zero-valued IQ to the TX DUC while every RF
-//! control remains forced off. The DUC mux is enabled solely so the FPGA can
-//! consume the test stream and its sustained 192 kHz pacing can be measured.
+//! This one-shot path writes zero-valued or deterministic changing IQ to the
+//! TX DUC while every RF control remains forced off and TX amplitude remains
+//! zero. The DUC mux is enabled solely so the FPGA can consume the test stream
+//! and its sustained 192 kHz pacing can be measured.
 
 use crate::xdma::{ensure_p2app_inactive, SaturnIdentity, XdmaError, XdmaRegisterDevice};
 use crate::xdma_rx::AlignedBuffer;
@@ -17,7 +18,14 @@ use std::time::{Duration, Instant};
 const DEFAULT_DUC_DEVICE: &str = "/dev/xdma0_h2c_0";
 const DEFAULT_PROBE_DURATION_MS: u64 = 3_000;
 const MIN_PROBE_DURATION_MS: u64 = 500;
-const MAX_PROBE_DURATION_MS: u64 = 10_000;
+const MAX_PROBE_DURATION_MS: u64 = 86_400_000;
+const DEFAULT_MAX_P9999_REFILL_SERVICE_US: u64 = 5_000;
+const MIN_MAX_P9999_REFILL_SERVICE_US: u64 = 100;
+const MAX_MAX_P9999_REFILL_SERVICE_US: u64 = 100_000;
+const DEFAULT_MAX_P9999_MARGIN_PERCENT: u64 = 60;
+const MIN_MAX_P9999_MARGIN_PERCENT: u64 = 10;
+const MAX_MAX_P9999_MARGIN_PERCENT: u64 = 95;
+const MAX_RT_PRIORITY: u64 = 80;
 
 const DUC_DMA_AXI_OFFSET: u64 = 0;
 const FIFO_RESET_REGISTER: u64 = 0x7000;
@@ -46,44 +54,167 @@ const DUC_IQ_PAIRS_PER_FRAME: usize = 240;
 const DUC_FRAME_BYTES: usize = 1_440;
 const DUC_FIFO_WORDS_PER_FRAME: usize = 180;
 const DUC_FRAMES_PER_SECOND: u64 = DUC_SAMPLE_RATE_HZ / DUC_IQ_PAIRS_PER_FRAME as u64;
-const DUC_PREFILL_FRAMES: usize = 9;
-const DUC_REFILL_LOW_FRAMES: usize = 5;
+const DUC_PREFILL_FRAMES: usize = 11;
+const DUC_REFILL_LOW_FRAMES: usize = 7;
 const DUC_MAX_DMA_BATCH_FRAMES: usize = 11;
 const DMA_BUFFER_BYTES: usize = DUC_MAX_DMA_BATCH_FRAMES * DUC_FRAME_BYTES;
 const FIFO_POLL_INTERVAL: Duration = Duration::from_micros(250);
-const ADAPTIVE_HOLD_TIME: Duration = Duration::from_millis(500);
-const EXPAND_TO_TEN_STALL: Duration = Duration::from_millis(2);
-const EXPAND_TO_ELEVEN_STALL: Duration = Duration::from_millis(3);
-const MAX_P9999_REFILL_SERVICE: Duration = Duration::from_millis(5);
+const SOAK_PROGRESS_INTERVAL: Duration = Duration::from_secs(60);
+const HISTOGRAM_BUCKET_WIDTH_NS: u128 = 10_000;
+const HISTOGRAM_MAX_NS: u128 = 100_000_000;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DucIqPattern {
+    Zero,
+    Changing,
+}
+
+impl DucIqPattern {
+    fn from_env() -> Result<Self, XdmaError> {
+        match env::var("SATURN_BRIDGE_XDMA_DUC_PATTERN") {
+            Ok(value) if value.eq_ignore_ascii_case("zero") => Ok(Self::Zero),
+            Ok(value) if value.eq_ignore_ascii_case("changing") => Ok(Self::Changing),
+            Ok(value) => Err(XdmaError::Incompatible(format!(
+                "SATURN_BRIDGE_XDMA_DUC_PATTERN must be zero or changing, not {value:?}"
+            ))),
+            Err(env::VarError::NotPresent) => Ok(Self::Zero),
+            Err(error) => Err(XdmaError::Incompatible(format!(
+                "could not read SATURN_BRIDGE_XDMA_DUC_PATTERN: {error}"
+            ))),
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Zero => "zero",
+            Self::Changing => "changing",
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug)]
 struct DucProbeConfig {
     duration: Duration,
+    iq_pattern: DucIqPattern,
+    max_p9999_refill_service: Duration,
+    max_p9999_margin_percent: u64,
+    cpu: Option<usize>,
+    rt_priority: i32,
 }
 
 impl DucProbeConfig {
     fn from_env() -> Result<Self, XdmaError> {
-        let duration_ms = match env::var("SATURN_BRIDGE_XDMA_DUC_DURATION_MS") {
-            Ok(value) => value.parse::<u64>().map_err(|_| {
-                XdmaError::Incompatible(
-                    "SATURN_BRIDGE_XDMA_DUC_DURATION_MS must be an unsigned integer".into(),
-                )
-            })?,
-            Err(env::VarError::NotPresent) => DEFAULT_PROBE_DURATION_MS,
-            Err(error) => {
-                return Err(XdmaError::Incompatible(format!(
-                    "could not read SATURN_BRIDGE_XDMA_DUC_DURATION_MS: {error}"
-                )));
-            }
-        };
+        let duration_ms = parse_env_u64(
+            "SATURN_BRIDGE_XDMA_DUC_DURATION_MS",
+            DEFAULT_PROBE_DURATION_MS,
+        )?;
         if !(MIN_PROBE_DURATION_MS..=MAX_PROBE_DURATION_MS).contains(&duration_ms) {
             return Err(XdmaError::Incompatible(format!(
                 "direct XDMA DUC duration {duration_ms} ms is outside the supported {MIN_PROBE_DURATION_MS}..={MAX_PROBE_DURATION_MS} ms range"
             )));
         }
+        let max_p9999_refill_service_us = parse_env_u64(
+            "SATURN_BRIDGE_XDMA_DUC_MAX_P9999_REFILL_SERVICE_US",
+            DEFAULT_MAX_P9999_REFILL_SERVICE_US,
+        )?;
+        if !(MIN_MAX_P9999_REFILL_SERVICE_US..=MAX_MAX_P9999_REFILL_SERVICE_US)
+            .contains(&max_p9999_refill_service_us)
+        {
+            return Err(XdmaError::Incompatible(format!(
+                "direct XDMA DUC p99.99 service gate {max_p9999_refill_service_us} us is outside the supported {MIN_MAX_P9999_REFILL_SERVICE_US}..={MAX_MAX_P9999_REFILL_SERVICE_US} us range"
+            )));
+        }
+        let max_p9999_margin_percent = parse_env_u64(
+            "SATURN_BRIDGE_XDMA_DUC_MAX_P9999_MARGIN_PERCENT",
+            DEFAULT_MAX_P9999_MARGIN_PERCENT,
+        )?;
+        if !(MIN_MAX_P9999_MARGIN_PERCENT..=MAX_MAX_P9999_MARGIN_PERCENT)
+            .contains(&max_p9999_margin_percent)
+        {
+            return Err(XdmaError::Incompatible(format!(
+                "direct XDMA DUC p99.99 margin gate {max_p9999_margin_percent}% is outside the supported {MIN_MAX_P9999_MARGIN_PERCENT}..={MAX_MAX_P9999_MARGIN_PERCENT}% range"
+            )));
+        }
+        let allowed_cpus = allowed_cpu_ids()?;
+        let cpu = match env::var("SATURN_BRIDGE_XDMA_DUC_CPU") {
+            Ok(value) if value.eq_ignore_ascii_case("none") => None,
+            Ok(value) if value.eq_ignore_ascii_case("auto") => allowed_cpus.last().copied(),
+            Ok(value) => {
+                let cpu = value.parse::<usize>().map_err(|_| {
+                    XdmaError::Incompatible(
+                        "SATURN_BRIDGE_XDMA_DUC_CPU must be a CPU number, auto, or none".into(),
+                    )
+                })?;
+                if !allowed_cpus.contains(&cpu) {
+                    return Err(XdmaError::Incompatible(format!(
+                        "direct XDMA DUC CPU {cpu} is unavailable; process can use {allowed_cpus:?}"
+                    )));
+                }
+                Some(cpu)
+            }
+            Err(env::VarError::NotPresent) => None,
+            Err(error) => {
+                return Err(XdmaError::Incompatible(format!(
+                    "could not read SATURN_BRIDGE_XDMA_DUC_CPU: {error}"
+                )));
+            }
+        };
+        let rt_priority = parse_env_u64("SATURN_BRIDGE_XDMA_DUC_RT_PRIORITY", 0)?;
+        if rt_priority > MAX_RT_PRIORITY {
+            return Err(XdmaError::Incompatible(format!(
+                "direct XDMA DUC real-time priority {rt_priority} exceeds the supported maximum {MAX_RT_PRIORITY}"
+            )));
+        }
         Ok(Self {
             duration: Duration::from_millis(duration_ms),
+            iq_pattern: DucIqPattern::from_env()?,
+            max_p9999_refill_service: Duration::from_micros(max_p9999_refill_service_us),
+            max_p9999_margin_percent,
+            cpu,
+            rt_priority: rt_priority as i32,
         })
+    }
+}
+
+fn allowed_cpu_ids() -> Result<Vec<usize>, XdmaError> {
+    // SAFETY: the set is initialized and passed with its exact size. pid 0
+    // queries the calling thread's effective affinity mask.
+    let set = unsafe {
+        let mut set: libc::cpu_set_t = std::mem::zeroed();
+        if libc::sched_getaffinity(
+            0,
+            std::mem::size_of::<libc::cpu_set_t>(),
+            &mut set as *mut libc::cpu_set_t,
+        ) != 0
+        {
+            return Err(XdmaError::Io {
+                action: "could not determine CPUs available to XDMA DUC probe",
+                source: io::Error::last_os_error(),
+            });
+        }
+        set
+    };
+    let cpus: Vec<usize> = (0..libc::CPU_SETSIZE as usize)
+        // SAFETY: every queried index is inside cpu_set_t's supported range.
+        .filter(|cpu| unsafe { libc::CPU_ISSET(*cpu, &set) })
+        .collect();
+    if cpus.is_empty() {
+        return Err(XdmaError::Incompatible(
+            "XDMA DUC probe has no CPUs in its affinity mask".into(),
+        ));
+    }
+    Ok(cpus)
+}
+
+fn parse_env_u64(name: &'static str, default: u64) -> Result<u64, XdmaError> {
+    match env::var(name) {
+        Ok(value) => value
+            .parse::<u64>()
+            .map_err(|_| XdmaError::Incompatible(format!("{name} must be an unsigned integer"))),
+        Err(env::VarError::NotPresent) => Ok(default),
+        Err(error) => Err(XdmaError::Incompatible(format!(
+            "could not read {name}: {error}"
+        ))),
     }
 }
 
@@ -106,7 +237,54 @@ impl FifoSnapshot {
     }
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Debug, Default)]
+struct LatencyHistogram {
+    buckets: Box<[u64]>,
+    observations: u64,
+    overflow_observations: u64,
+    max_ns: u128,
+}
+
+impl LatencyHistogram {
+    fn new() -> Self {
+        let bucket_count = HISTOGRAM_MAX_NS.div_ceil(HISTOGRAM_BUCKET_WIDTH_NS) as usize;
+        Self {
+            buckets: vec![0; bucket_count].into_boxed_slice(),
+            ..Self::default()
+        }
+    }
+
+    fn observe(&mut self, value_ns: u128) {
+        self.observations = self.observations.saturating_add(1);
+        self.max_ns = self.max_ns.max(value_ns);
+        let bucket = value_ns.saturating_sub(1) / HISTOGRAM_BUCKET_WIDTH_NS;
+        if let Some(count) = self.buckets.get_mut(bucket as usize) {
+            *count = count.saturating_add(1);
+        } else {
+            self.overflow_observations = self.overflow_observations.saturating_add(1);
+        }
+    }
+
+    fn percentile_ns(&self, percentile: f64) -> u128 {
+        if self.observations == 0 {
+            return 0;
+        }
+        let rank = (percentile.clamp(0.0, 1.0) * self.observations as f64).ceil() as u64;
+        let mut cumulative = 0_u64;
+        for (index, count) in self.buckets.iter().enumerate() {
+            cumulative = cumulative.saturating_add(*count);
+            if cumulative >= rank {
+                return ((index as u128 + 1) * HISTOGRAM_BUCKET_WIDTH_NS).min(self.max_ns);
+            }
+        }
+        // Values beyond the fixed 100 ms histogram range are represented by
+        // their exact maximum. This is conservative for acceptance gates and
+        // keeps soak memory usage constant.
+        self.max_ns
+    }
+}
+
+#[derive(Debug, Default)]
 struct DucStats {
     dma_writes: u64,
     dma_bytes: u64,
@@ -121,16 +299,13 @@ struct DucStats {
     fifo_startup_underflow: bool,
     safety_checks: u64,
     write_time_ns: u128,
-    max_write_time_ns: u128,
-    write_latencies_ns: Vec<u128>,
-    refill_gaps_ns: Vec<u128>,
-    refill_service_latencies_ns: Vec<u128>,
+    write_latencies: LatencyHistogram,
+    refill_gaps: LatencyHistogram,
+    refill_service_latencies: LatencyHistogram,
     max_loop_gap_ns: u128,
     low_water_events: u64,
     critical_low_events: u64,
     batch_size_changes: u64,
-    expansions_to_ten: u64,
-    expansions_to_eleven: u64,
     elapsed: Duration,
 }
 
@@ -161,6 +336,8 @@ struct DucDmaSession<'a> {
     dma: File,
     fifo_depth_words: usize,
     buffer: AlignedBuffer,
+    iq_pattern: DucIqPattern,
+    pattern_pair_index: u64,
     stopped: bool,
 }
 
@@ -177,19 +354,25 @@ impl<'a> DucDmaSession<'a> {
                 });
             }
         };
-        let buffer = match AlignedBuffer::new(DMA_BUFFER_BYTES) {
+        let mut buffer = match AlignedBuffer::new(DMA_BUFFER_BYTES) {
             Ok(buffer) => buffer,
             Err(error) => {
                 let _ = apply_rf_disabled_duc_shutdown(registers);
                 return Err(error);
             }
         };
+        if let Err(error) = buffer.lock_memory() {
+            let _ = apply_rf_disabled_duc_shutdown(registers);
+            return Err(error);
+        }
         let fifo_depth_words = duc_fifo_depth_words(registers.identity().firmware_minor);
         let mut session = Self {
             registers,
             dma,
             fifo_depth_words,
             buffer,
+            iq_pattern: DucIqPattern::Zero,
+            pattern_pair_index: 0,
             stopped: false,
         };
         if let Err(error) = session.configure() {
@@ -212,18 +395,13 @@ impl<'a> DucDmaSession<'a> {
         Ok(())
     }
 
-    fn run(&mut self, duration: Duration) -> Result<DucStats, XdmaError> {
+    fn run(&mut self, config: DucProbeConfig) -> Result<DucStats, XdmaError> {
+        self.iq_pattern = config.iq_pattern;
         let mut stats = DucStats {
             fifo_lwm: usize::MAX,
-            write_latencies_ns: Vec::with_capacity(
-                (duration.as_secs_f64() * DUC_FRAMES_PER_SECOND as f64 / 2.0) as usize + 32,
-            ),
-            refill_gaps_ns: Vec::with_capacity(
-                (duration.as_secs_f64() * DUC_FRAMES_PER_SECOND as f64 / 2.0) as usize + 32,
-            ),
-            refill_service_latencies_ns: Vec::with_capacity(
-                (duration.as_secs_f64() * DUC_FRAMES_PER_SECOND as f64 / 2.0) as usize + 32,
-            ),
+            write_latencies: LatencyHistogram::new(),
+            refill_gaps: LatencyHistogram::new(),
+            refill_service_latencies: LatencyHistogram::new(),
             ..DucStats::default()
         };
 
@@ -254,14 +432,13 @@ impl<'a> DucDmaSession<'a> {
         stats.safety_checks += 1;
 
         let started = Instant::now();
+        let mut next_progress_at = started + SOAK_PROGRESS_INTERVAL;
         let mut previous_loop_at = started;
         let mut previous_refill_at = started;
-        let mut elevated_until: Option<Instant> = None;
-        let mut target_frames = DUC_PREFILL_FRAMES;
         let mut low_water_active = false;
         let mut critical_low_active = false;
         let mut previous_batch_frames = DUC_PREFILL_FRAMES;
-        while started.elapsed() < duration {
+        while started.elapsed() < config.duration {
             let loop_at = Instant::now();
             let loop_gap = loop_at.saturating_duration_since(previous_loop_at);
             previous_loop_at = loop_at;
@@ -283,28 +460,21 @@ impl<'a> DucDmaSession<'a> {
             }
             critical_low_active = critical_now;
 
-            let requested_target = adaptive_target_frames(occupied_frames, loop_gap);
-            if requested_target > target_frames {
-                target_frames = requested_target;
-                elevated_until = Some(loop_at + ADAPTIVE_HOLD_TIME);
-                if target_frames == DUC_MAX_DMA_BATCH_FRAMES {
-                    stats.expansions_to_eleven += 1;
-                } else {
-                    stats.expansions_to_ten += 1;
-                }
-            } else if elevated_until.is_some_and(|deadline| loop_at >= deadline) {
-                target_frames = DUC_PREFILL_FRAMES;
-                elevated_until = None;
-            }
-
             if low_now {
-                let frames =
-                    refill_batch_frames(fifo.occupied_words, self.fifo_depth_words, target_frames);
+                let frames = refill_batch_frames(
+                    fifo.occupied_words,
+                    self.fifo_depth_words,
+                    DUC_PREFILL_FRAMES,
+                );
                 if frames != 0 {
                     let refill_started = Instant::now();
-                    apply_rf_disabled_duc_state(self.registers, true)?;
+                    // Configuration is owned exclusively for the probe.
+                    // Re-read and verify the three safety registers before
+                    // every refill, but avoid rewriting unchanged values on
+                    // the 100-200 Hz hot path.
+                    verify_rf_disabled_duc_state(self.registers, true)?;
                     stats.safety_checks += 1;
-                    stats.refill_gaps_ns.push(
+                    stats.refill_gaps.observe(
                         loop_at
                             .saturating_duration_since(previous_refill_at)
                             .as_nanos(),
@@ -316,10 +486,24 @@ impl<'a> DucDmaSession<'a> {
                     }
                     self.write_frames(frames, &mut stats)?;
                     stats
-                        .refill_service_latencies_ns
-                        .push(refill_started.elapsed().as_nanos());
+                        .refill_service_latencies
+                        .observe(refill_started.elapsed().as_nanos());
                     continue;
                 }
+            }
+            if loop_at >= next_progress_at {
+                eprintln!(
+                    "saturn-bridge: XDMA Phase 4 soak progress elapsed_s={} dma_writes={} fifo_lwm={} max_refill_service_ms={:.3} critical_low_events={} fifo_faults={}",
+                    started.elapsed().as_secs(),
+                    stats.dma_writes,
+                    stats.fifo_lwm,
+                    stats.refill_service_latencies.max_ns as f64 / 1_000_000.0,
+                    stats.critical_low_events,
+                    stats.fifo_overflows
+                        + stats.fifo_over_threshold
+                        + stats.fifo_underflows,
+                );
+                next_progress_at += SOAK_PROGRESS_INTERVAL;
             }
             thread::sleep(FIFO_POLL_INTERVAL);
         }
@@ -332,29 +516,6 @@ impl<'a> DucDmaSession<'a> {
         apply_rf_disabled_duc_state(self.registers, true)?;
         stats.safety_checks += 1;
 
-        let pair_rate = stats.consumed_iq_pairs() as f64 / stats.elapsed.as_secs_f64().max(0.001);
-        let minimum_rate = DUC_SAMPLE_RATE_HZ as f64 * 0.95;
-        let maximum_rate = DUC_SAMPLE_RATE_HZ as f64 * 1.05;
-        if !(minimum_rate..=maximum_rate).contains(&pair_rate) {
-            return Err(XdmaError::Incompatible(format!(
-                "DUC consumed IQ at {pair_rate:.1} pairs/s; expected within 5% of {DUC_SAMPLE_RATE_HZ}"
-            )));
-        }
-        if stats.fifo_overflows != 0 || stats.fifo_over_threshold != 0 || stats.fifo_underflows != 0
-        {
-            return Err(XdmaError::Incompatible(format!(
-                "DUC runtime FIFO fault: overflow={} threshold={} underflow={}",
-                stats.fifo_overflows, stats.fifo_over_threshold, stats.fifo_underflows
-            )));
-        }
-        let p9999_refill_service = percentile_ns(&stats.refill_service_latencies_ns, 0.9999);
-        if p9999_refill_service > MAX_P9999_REFILL_SERVICE.as_nanos() {
-            return Err(XdmaError::Incompatible(format!(
-                "DUC p99.99 refill service {:.3} ms exceeds the {:.3} ms Phase 4 performance gate",
-                p9999_refill_service as f64 / 1_000_000.0,
-                MAX_P9999_REFILL_SERVICE.as_secs_f64() * 1_000.0
-            )));
-        }
         Ok(stats)
     }
 
@@ -365,12 +526,17 @@ impl<'a> DucDmaSession<'a> {
             )));
         }
         let bytes = frames * DUC_FRAME_BYTES;
+        fill_iq_pattern(
+            self.buffer.as_mut_slice(bytes),
+            self.iq_pattern,
+            &mut self.pattern_pair_index,
+        );
         let write_started = Instant::now();
         let written = self
             .dma
             .write_at(self.buffer.as_slice(bytes), DUC_DMA_AXI_OFFSET)
             .map_err(|source| XdmaError::Io {
-                action: "could not write zero IQ to XDMA DUC stream",
+                action: "could not write IQ to XDMA DUC stream",
                 source,
             })?;
         let write_time = write_started.elapsed().as_nanos();
@@ -388,8 +554,7 @@ impl<'a> DucDmaSession<'a> {
         stats.frames_written += frames as u64;
         stats.max_batch_frames = stats.max_batch_frames.max(frames);
         stats.write_time_ns += write_time;
-        stats.max_write_time_ns = stats.max_write_time_ns.max(write_time);
-        stats.write_latencies_ns.push(write_time);
+        stats.write_latencies.observe(write_time);
         Ok(())
     }
 
@@ -437,6 +602,13 @@ impl Drop for DucDmaSession<'_> {
 pub fn run_phase4_duc_probe() -> Result<(), XdmaError> {
     ensure_p2app_inactive()?;
     let config = DucProbeConfig::from_env()?;
+    if let Some(cpu) = config.cpu {
+        pin_current_thread(cpu)?;
+    }
+    if config.rt_priority != 0 {
+        enable_realtime_fifo(config.rt_priority)?;
+    }
+    let (scheduler_policy, scheduler_priority) = current_scheduler()?;
     let register_path = env::var_os("SATURN_BRIDGE_XDMA_USER_DEVICE")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("/dev/xdma0_user"));
@@ -447,42 +619,60 @@ pub fn run_phase4_duc_probe() -> Result<(), XdmaError> {
     let mut registers = XdmaRegisterDevice::open(&register_path)?;
     let identity: SaturnIdentity = registers.identity().clone();
     let mut session = DucDmaSession::start(&mut registers, &duc_path)?;
-    let probe = session.run(config.duration);
+    let probe = session.run(config);
     let stop = session.stop();
     drop(session);
     let stats = probe?;
     stop?;
     registers.close_safely()?;
+    let validation = validate_duc_stats(&stats, config);
 
     let elapsed = stats.elapsed.as_secs_f64().max(0.001);
     let pair_rate = stats.consumed_iq_pairs() as f64 / elapsed;
     let payload_mbps = stats.dma_bytes as f64 * 8.0 / elapsed / 1_000_000.0;
     let average_batch = stats.frames_written as f64 / stats.dma_writes.max(1) as f64;
     let average_write_us = stats.write_time_ns as f64 / stats.dma_writes.max(1) as f64 / 1_000.0;
-    let max_write_us = stats.max_write_time_ns as f64 / 1_000.0;
-    let p99_write_us = percentile_ns(&stats.write_latencies_ns, 0.99) as f64 / 1_000.0;
-    let p9999_write_us = percentile_ns(&stats.write_latencies_ns, 0.9999) as f64 / 1_000.0;
-    let p99_refill_gap_ms = percentile_ns(&stats.refill_gaps_ns, 0.99) as f64 / 1_000_000.0;
-    let p9999_refill_gap_ms = percentile_ns(&stats.refill_gaps_ns, 0.9999) as f64 / 1_000_000.0;
+    let max_write_us = stats.write_latencies.max_ns as f64 / 1_000.0;
+    let p99_write_us = stats.write_latencies.percentile_ns(0.99) as f64 / 1_000.0;
+    let p9999_write_us = stats.write_latencies.percentile_ns(0.9999) as f64 / 1_000.0;
+    let p99_refill_gap_ms = stats.refill_gaps.percentile_ns(0.99) as f64 / 1_000_000.0;
+    let p9999_refill_gap_ms = stats.refill_gaps.percentile_ns(0.9999) as f64 / 1_000_000.0;
     let p99_refill_service_ms =
-        percentile_ns(&stats.refill_service_latencies_ns, 0.99) as f64 / 1_000_000.0;
+        stats.refill_service_latencies.percentile_ns(0.99) as f64 / 1_000_000.0;
     let p9999_refill_service_ms =
-        percentile_ns(&stats.refill_service_latencies_ns, 0.9999) as f64 / 1_000_000.0;
+        stats.refill_service_latencies.percentile_ns(0.9999) as f64 / 1_000_000.0;
+    let max_refill_service_ms = stats.refill_service_latencies.max_ns as f64 / 1_000_000.0;
     let max_loop_gap_ms = stats.max_loop_gap_ns as f64 / 1_000_000.0;
-    let minimum_fifo_margin_ms = stats.fifo_lwm as f64
-        / (DUC_FIFO_WORDS_PER_FRAME * DUC_FRAMES_PER_SECOND as usize) as f64
-        * 1_000.0;
+    let minimum_fifo_margin_ms = fifo_margin_ns(stats.fifo_lwm) as f64 / 1_000_000.0;
+    let p9999_margin_percent = if minimum_fifo_margin_ms > 0.0 {
+        p9999_refill_service_ms / minimum_fifo_margin_ms * 100.0
+    } else {
+        f64::INFINITY
+    };
+    let histogram_overflows = stats.write_latencies.overflow_observations
+        + stats.refill_gaps.overflow_observations
+        + stats.refill_service_latencies.overflow_observations;
+    let p9999_sample_sufficient = stats.refill_service_latencies.observations >= 10_000;
 
     println!(
-        "saturn-bridge: XDMA Phase 4 DUC probe passed product={} pcb={} firmware={}.{} device={} duration_ms={} target_rate={}Hz target_frames_s={} frames_written={} iq_pairs_consumed={} iq_rate={:.1}/s dma_writes={} dma_bytes={} payload={:.3}Mbit/s average_batch={:.2} max_batch={} batch_changes={} average_write={:.1}us p99_write={:.1}us p99.99_write={:.1}us max_write={:.1}us p99_refill_gap={:.3}ms p99.99_refill_gap={:.3}ms p99_refill_service={:.3}ms p99.99_refill_service={:.3}ms max_loop_gap={:.3}ms fifo_depth={} fifo_lwm={} fifo_hwm={} fifo_final={} minimum_fifo_margin={:.3}ms low_water_events={} critical_low_events={} expand_10={} expand_11={} fifo_startup_underflow={} fifo_overflow={} fifo_threshold={} fifo_underflow={} safety_checks={} zero_iq=1 amplitude_zero=1 mox=0 tx_enable=0 pa_relay=0 cw=0",
+        "saturn-bridge: XDMA Phase 4 DUC probe {} product={} pcb={} firmware={}.{} device={} duration_ms={} iq_pattern={} cpu={} scheduler={} scheduler_priority={} dma_buffer_locked=1 target_rate={}Hz target_frames_s={} refill_low_frames={} refill_target_frames={} frames_written={} iq_pairs_consumed={} iq_rate={:.1}/s dma_writes={} dma_bytes={} payload={:.3}Mbit/s average_batch={:.2} max_batch={} batch_changes={} write_observations={} refill_observations={} p99.99_sample_sufficient={} average_write={:.1}us p99_write={:.1}us p99.99_write={:.1}us max_write={:.1}us p99_refill_gap={:.3}ms p99.99_refill_gap={:.3}ms p99_refill_service={:.3}ms p99.99_refill_service={:.3}ms max_refill_service={:.3}ms p99.99_margin_used={} max_loop_gap={:.3}ms histogram_overflows={} fifo_depth={} fifo_lwm={} fifo_hwm={} fifo_final={} minimum_fifo_margin={:.3}ms low_water_events={} critical_low_events={} fifo_startup_underflow={} fifo_overflow={} fifo_threshold={} fifo_underflow={} safety_checks={} amplitude_zero=1 mox=0 tx_enable=0 pa_relay=0 cw=0",
+        if validation.is_ok() { "passed" } else { "FAILED" },
         identity.product_id,
         identity.pcb_version,
         identity.firmware_major,
         identity.firmware_minor,
         duc_path.display(),
         stats.elapsed.as_millis(),
+        config.iq_pattern.label(),
+        config
+            .cpu
+            .map_or_else(|| "none".to_string(), |cpu| cpu.to_string()),
+        scheduler_policy,
+        scheduler_priority,
         DUC_SAMPLE_RATE_HZ,
         DUC_FRAMES_PER_SECOND,
+        DUC_REFILL_LOW_FRAMES,
+        DUC_PREFILL_FRAMES,
         stats.frames_written,
         stats.consumed_iq_pairs(),
         pair_rate,
@@ -492,6 +682,9 @@ pub fn run_phase4_duc_probe() -> Result<(), XdmaError> {
         average_batch,
         stats.max_batch_frames,
         stats.batch_size_changes,
+        stats.write_latencies.observations,
+        stats.refill_service_latencies.observations,
+        u8::from(p9999_sample_sufficient),
         average_write_us,
         p99_write_us,
         p9999_write_us,
@@ -500,7 +693,14 @@ pub fn run_phase4_duc_probe() -> Result<(), XdmaError> {
         p9999_refill_gap_ms,
         p99_refill_service_ms,
         p9999_refill_service_ms,
+        max_refill_service_ms,
+        if p9999_margin_percent.is_finite() {
+            format!("{p9999_margin_percent:.1}%")
+        } else {
+            "infinite".to_string()
+        },
         max_loop_gap_ms,
+        histogram_overflows,
         duc_fifo_depth_words(identity.firmware_minor),
         stats.fifo_lwm,
         stats.fifo_hwm,
@@ -508,8 +708,6 @@ pub fn run_phase4_duc_probe() -> Result<(), XdmaError> {
         minimum_fifo_margin_ms,
         stats.low_water_events,
         stats.critical_low_events,
-        stats.expansions_to_ten,
-        stats.expansions_to_eleven,
         u8::from(stats.fifo_startup_underflow),
         stats.fifo_overflows,
         stats.fifo_over_threshold,
@@ -519,7 +717,115 @@ pub fn run_phase4_duc_probe() -> Result<(), XdmaError> {
     println!(
         "saturn-bridge: XDMA Phase 4 cleanup completed; DUC stream and output gate disabled, DUC FIFO reset, zero amplitude retained, and RF remains receive-safe"
     );
+    validation?;
     Ok(())
+}
+
+fn validate_duc_stats(stats: &DucStats, config: DucProbeConfig) -> Result<(), XdmaError> {
+    let pair_rate = stats.consumed_iq_pairs() as f64 / stats.elapsed.as_secs_f64().max(0.001);
+    let minimum_rate = DUC_SAMPLE_RATE_HZ as f64 * 0.95;
+    let maximum_rate = DUC_SAMPLE_RATE_HZ as f64 * 1.05;
+    if !(minimum_rate..=maximum_rate).contains(&pair_rate) {
+        return Err(XdmaError::Incompatible(format!(
+            "DUC consumed IQ at {pair_rate:.1} pairs/s; expected within 5% of {DUC_SAMPLE_RATE_HZ}"
+        )));
+    }
+    if stats.fifo_overflows != 0 || stats.fifo_over_threshold != 0 || stats.fifo_underflows != 0 {
+        return Err(XdmaError::Incompatible(format!(
+            "DUC runtime FIFO fault: overflow={} threshold={} underflow={}",
+            stats.fifo_overflows, stats.fifo_over_threshold, stats.fifo_underflows
+        )));
+    }
+    let p9999_refill_service = stats.refill_service_latencies.percentile_ns(0.9999);
+    if p9999_refill_service > config.max_p9999_refill_service.as_nanos() {
+        return Err(XdmaError::Incompatible(format!(
+            "DUC p99.99 refill service {:.3} ms exceeds the {:.3} ms Phase 4 performance gate",
+            p9999_refill_service as f64 / 1_000_000.0,
+            config.max_p9999_refill_service.as_secs_f64() * 1_000.0
+        )));
+    }
+    let minimum_fifo_margin_ns = fifo_margin_ns(stats.fifo_lwm);
+    if stats.refill_service_latencies.max_ns >= minimum_fifo_margin_ns {
+        return Err(XdmaError::Incompatible(format!(
+            "DUC maximum refill service {:.3} ms exhausted the minimum {:.3} ms FIFO margin",
+            stats.refill_service_latencies.max_ns as f64 / 1_000_000.0,
+            minimum_fifo_margin_ns as f64 / 1_000_000.0,
+        )));
+    }
+    let p9999_margin_percent =
+        p9999_refill_service.saturating_mul(100) / minimum_fifo_margin_ns.max(1);
+    if p9999_margin_percent > config.max_p9999_margin_percent as u128 {
+        return Err(XdmaError::Incompatible(format!(
+            "DUC p99.99 refill service uses {p9999_margin_percent}% of the minimum FIFO margin; gate is {}%",
+            config.max_p9999_margin_percent
+        )));
+    }
+    Ok(())
+}
+
+fn pin_current_thread(cpu: usize) -> Result<(), XdmaError> {
+    // SAFETY: cpu_set_t is initialized before use, cpu was range-checked
+    // against the process's available parallelism, and pid 0 means the
+    // calling thread.
+    let result = unsafe {
+        let mut set: libc::cpu_set_t = std::mem::zeroed();
+        libc::CPU_ZERO(&mut set);
+        libc::CPU_SET(cpu, &mut set);
+        libc::sched_setaffinity(
+            0,
+            std::mem::size_of::<libc::cpu_set_t>(),
+            &set as *const libc::cpu_set_t,
+        )
+    };
+    if result != 0 {
+        return Err(XdmaError::Io {
+            action: "could not pin XDMA DUC probe to its dedicated CPU",
+            source: io::Error::last_os_error(),
+        });
+    }
+    Ok(())
+}
+
+fn enable_realtime_fifo(priority: i32) -> Result<(), XdmaError> {
+    let parameter = libc::sched_param {
+        sched_priority: priority,
+    };
+    // SAFETY: pid 0 targets the calling thread, SCHED_FIFO accepts the
+    // initialized sched_param, and the priority was range-limited above.
+    let result = unsafe { libc::sched_setscheduler(0, libc::SCHED_FIFO, &parameter) };
+    if result != 0 {
+        return Err(XdmaError::Io {
+            action:
+                "could not enable SCHED_FIFO for XDMA DUC probe (run as root or grant CAP_SYS_NICE)",
+            source: io::Error::last_os_error(),
+        });
+    }
+    Ok(())
+}
+
+fn current_scheduler() -> Result<(&'static str, i32), XdmaError> {
+    // SAFETY: pid 0 queries the calling thread and the parameter pointer is
+    // valid for the duration of the syscall.
+    let (policy, parameter) = unsafe {
+        let policy = libc::sched_getscheduler(0);
+        let mut parameter: libc::sched_param = std::mem::zeroed();
+        let result = libc::sched_getparam(0, &mut parameter);
+        if policy == -1 || result != 0 {
+            return Err(XdmaError::Io {
+                action: "could not query XDMA DUC probe scheduler",
+                source: io::Error::last_os_error(),
+            });
+        }
+        (policy, parameter)
+    };
+    let label = match policy {
+        libc::SCHED_FIFO => "fifo",
+        libc::SCHED_RR => "rr",
+        libc::SCHED_BATCH => "batch",
+        libc::SCHED_IDLE => "idle",
+        _ => "other",
+    };
+    Ok((label, parameter.sched_priority))
 }
 
 fn apply_rf_disabled_duc_state(
@@ -647,16 +953,6 @@ fn duc_fifo_depth_words(firmware_minor: u16) -> usize {
     }
 }
 
-fn adaptive_target_frames(occupied_frames: usize, loop_gap: Duration) -> usize {
-    if occupied_frames <= 2 || loop_gap >= EXPAND_TO_ELEVEN_STALL {
-        11
-    } else if occupied_frames <= 3 || loop_gap >= EXPAND_TO_TEN_STALL {
-        10
-    } else {
-        DUC_PREFILL_FRAMES
-    }
-}
-
 fn refill_batch_frames(
     occupied_words: usize,
     fifo_depth_words: usize,
@@ -672,14 +968,34 @@ fn refill_batch_frames(
     needed_frames.min(free_frames).min(DUC_MAX_DMA_BATCH_FRAMES)
 }
 
-fn percentile_ns(samples: &[u128], percentile: f64) -> u128 {
-    if samples.is_empty() {
-        return 0;
+fn fill_iq_pattern(buffer: &mut [u8], pattern: DucIqPattern, pair_index: &mut u64) {
+    if pattern == DucIqPattern::Zero {
+        buffer.fill(0);
+        *pair_index = pair_index.saturating_add((buffer.len() / 6) as u64);
+        return;
     }
-    let mut sorted = samples.to_vec();
-    sorted.sort_unstable();
-    let rank = (percentile.clamp(0.0, 1.0) * sorted.len() as f64).ceil() as usize;
-    sorted[rank.saturating_sub(1).min(sorted.len() - 1)]
+
+    for pair in buffer.chunks_exact_mut(6) {
+        // A repeatable quadrature ramp exercises every DMA data bit without
+        // enabling RF: TX amplitude remains zero and all RF controls are
+        // verified off immediately before each write.
+        let phase = (*pair_index & 0xffff) as i32 - 0x8000;
+        let i = phase << 7;
+        let q = -i;
+        write_i24_le(&mut pair[0..3], i);
+        write_i24_le(&mut pair[3..6], q);
+        *pair_index = pair_index.wrapping_add(1);
+    }
+}
+
+fn write_i24_le(target: &mut [u8], value: i32) {
+    let encoded = value.to_le_bytes();
+    target.copy_from_slice(&encoded[..3]);
+}
+
+fn fifo_margin_ns(occupied_words: usize) -> u128 {
+    occupied_words as u128 * 1_000_000_000
+        / (DUC_FIFO_WORDS_PER_FRAME as u128 * DUC_FRAMES_PER_SECOND as u128)
 }
 
 #[cfg(test)]
@@ -719,32 +1035,51 @@ mod tests {
     }
 
     #[test]
-    fn refill_window_batches_to_nine_frames() {
-        assert_eq!(refill_batch_frames(9 * 180, 4_096, 9), 0);
-        assert_eq!(refill_batch_frames(5 * 180, 4_096, 9), 4);
-        assert_eq!(refill_batch_frames(4 * 180 + 1, 4_096, 9), 5);
-        assert_eq!(refill_batch_frames(0, 1_024, 9), 5);
+    fn refill_window_batches_to_eleven_frames() {
+        assert_eq!(refill_batch_frames(11 * 180, 4_096, 11), 0);
+        assert_eq!(refill_batch_frames(7 * 180, 4_096, 11), 4);
+        assert_eq!(refill_batch_frames(6 * 180 + 1, 4_096, 11), 5);
+        assert_eq!(refill_batch_frames(0, 1_024, 11), 5);
         assert_eq!(refill_batch_frames(4 * 180, 4_096, 10), 6);
         assert_eq!(refill_batch_frames(2 * 180, 4_096, 11), 9);
     }
 
     #[test]
-    fn adaptive_target_expands_on_low_water_or_scheduler_stall() {
-        assert_eq!(adaptive_target_frames(5, Duration::from_millis(1)), 9);
-        assert_eq!(adaptive_target_frames(4, Duration::from_millis(1)), 9);
-        assert_eq!(adaptive_target_frames(3, Duration::from_millis(1)), 10);
-        assert_eq!(adaptive_target_frames(2, Duration::from_millis(1)), 11);
-        assert_eq!(adaptive_target_frames(8, Duration::from_millis(2)), 10);
-        assert_eq!(adaptive_target_frames(8, Duration::from_millis(3)), 11);
+    fn fixed_histogram_is_bounded_and_conservative() {
+        let mut histogram = LatencyHistogram::new();
+        for value in [10_000, 20_000, 30_000, 40_000, 50_000] {
+            histogram.observe(value);
+        }
+        assert_eq!(histogram.observations, 5);
+        assert_eq!(histogram.percentile_ns(0.5), 30_000);
+        assert_eq!(histogram.percentile_ns(0.99), 50_000);
+        assert_eq!(histogram.percentile_ns(0.9999), 50_000);
+        assert_eq!(histogram.max_ns, 50_000);
+
+        histogram.observe(HISTOGRAM_MAX_NS + 123);
+        assert_eq!(histogram.overflow_observations, 1);
+        assert_eq!(histogram.percentile_ns(1.0), HISTOGRAM_MAX_NS + 123);
     }
 
     #[test]
-    fn percentile_uses_nearest_rank_tail() {
-        let samples = [10, 20, 30, 40, 50];
-        assert_eq!(percentile_ns(&samples, 0.5), 30);
-        assert_eq!(percentile_ns(&samples, 0.99), 50);
-        assert_eq!(percentile_ns(&samples, 0.9999), 50);
-        assert_eq!(percentile_ns(&[], 0.99), 0);
+    fn changing_iq_pattern_is_deterministic_and_nonzero() {
+        let mut buffer = [0_u8; 12];
+        let mut pair_index = 0;
+        fill_iq_pattern(&mut buffer, DucIqPattern::Changing, &mut pair_index);
+        assert_eq!(pair_index, 2);
+        assert_ne!(buffer, [0_u8; 12]);
+        assert_eq!(&buffer[0..3], &[0x00, 0x00, 0xc0]);
+        assert_eq!(&buffer[3..6], &[0x00, 0x00, 0x40]);
+
+        fill_iq_pattern(&mut buffer, DucIqPattern::Zero, &mut pair_index);
+        assert_eq!(buffer, [0_u8; 12]);
+        assert_eq!(pair_index, 4);
+    }
+
+    #[test]
+    fn fifo_margin_converts_words_to_time() {
+        assert_eq!(fifo_margin_ns(180), 1_250_000);
+        assert_eq!(fifo_margin_ns(900), 6_250_000);
     }
 
     #[test]

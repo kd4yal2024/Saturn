@@ -219,6 +219,7 @@ pub(crate) struct AlignedBuffer {
     ptr: NonNull<u8>,
     len: usize,
     layout: Layout,
+    locked: bool,
 }
 
 impl AlignedBuffer {
@@ -232,7 +233,26 @@ impl AlignedBuffer {
             action: "could not allocate aligned XDMA receive buffer",
             source: io::Error::from(io::ErrorKind::OutOfMemory),
         })?;
-        Ok(Self { ptr, len, layout })
+        Ok(Self {
+            ptr,
+            len,
+            layout,
+            locked: false,
+        })
+    }
+
+    pub(crate) fn lock_memory(&mut self) -> Result<(), XdmaError> {
+        // SAFETY: ptr owns `self.len` readable and writable bytes. mlock does
+        // not change Rust aliasing and remains in effect until munlock/drop.
+        let result = unsafe { libc::mlock(self.ptr.as_ptr().cast(), self.len) };
+        if result != 0 {
+            return Err(XdmaError::Io {
+                action: "could not lock aligned XDMA buffer in memory",
+                source: io::Error::last_os_error(),
+            });
+        }
+        self.locked = true;
+        Ok(())
     }
 
     pub(crate) fn as_mut_slice(&mut self, len: usize) -> &mut [u8] {
@@ -252,6 +272,13 @@ impl AlignedBuffer {
 
 impl Drop for AlignedBuffer {
     fn drop(&mut self) {
+        if self.locked {
+            // SAFETY: the same live allocation was successfully locked and is
+            // not freed until after this call.
+            unsafe {
+                libc::munlock(self.ptr.as_ptr().cast(), self.len);
+            }
+        }
         // SAFETY: ptr was allocated with this exact layout and is freed once.
         unsafe { dealloc(self.ptr.as_ptr(), self.layout) };
     }
