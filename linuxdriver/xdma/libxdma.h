@@ -459,7 +459,13 @@ struct xdma_transfer {
 	unsigned int len;
 	struct sg_table *sgt;
 	struct xdma_io_cb *cb;
+	u64 submitted_ns;		/* synchronous submit timestamp */
+	u64 irq_ns;			/* completion interrupt timestamp */
+	u64 service_started_ns;		/* completion worker timestamp */
+	u64 completed_ns;		/* waiter wake timestamp */
 };
+
+extern unsigned int transfer_latency_warn_us;
 
 struct xdma_request_cb {
 	struct sg_table *sgt;

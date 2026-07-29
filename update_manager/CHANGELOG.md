@@ -44,6 +44,10 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
   `/dev/xdma0_user` after a new login or reboot.
 
 ### Added
+- Added opt-in XDMA completion diagnostics for the direct-DMA Phase 4 stress
+  work. Slow synchronous transfers now separate page mapping, submission wait,
+  and cleanup; the submission wait further reports submit-to-IRQ,
+  IRQ-to-worker, worker-to-wake, and wake-to-caller latency.
 - Split Saturn Go health reporting into `/livez` process liveness and
   structured `/readyz` dependency/release readiness. Rust builds embed their
   full Git commit; staged Saturn Go payloads carry the same identity, and the

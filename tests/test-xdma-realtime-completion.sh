@@ -26,11 +26,13 @@ grep -Fq 'cancel_work_sync(&engine->work);' "$LIBXDMA" \
 grep -Fq 'struct workqueue_struct *completion_wq;' "$LIBXDMA_HEADER" \
   || fail "XDMA device does not own its completion workqueue"
 
-grep -Fq 'static unsigned int transfer_latency_warn_us;' "$SGDMA" \
+grep -Fq 'unsigned int transfer_latency_warn_us;' "$LIBXDMA" \
   || fail "transfer latency diagnostics are not default-off"
-grep -Fq 'module_param(transfer_latency_warn_us, uint, 0644);' "$SGDMA" \
+grep -Fq 'module_param(transfer_latency_warn_us, uint, 0644);' "$LIBXDMA" \
   || fail "transfer latency threshold is not runtime-adjustable"
 grep -Fq 'pin_sg=%llu us submit_wait=%llu us cleanup=%llu us' "$SGDMA" \
   || fail "slow-transfer warning omits stage-level timing"
+grep -Fq 'submit_to_irq=%llu us irq_to_worker=%llu us worker_to_wake=%llu us wake_to_resume=%llu us' "$LIBXDMA" \
+  || fail "completion diagnostics omit interrupt, worker, or wake timing"
 
 printf 'XDMA real-time completion contract passed\n'

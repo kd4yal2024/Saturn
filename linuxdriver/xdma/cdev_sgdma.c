@@ -45,12 +45,6 @@ unsigned int c2h_timeout = 10;
 module_param(c2h_timeout, uint, 0644);
 MODULE_PARM_DESC(c2h_timeout, "C2H sgdma timeout in seconds, default is 10 sec.");
 
-static unsigned int transfer_latency_warn_us;
-module_param(transfer_latency_warn_us, uint, 0644);
-MODULE_PARM_DESC(
-	transfer_latency_warn_us,
-	"Log synchronous DMA transfer stages at or above this latency in microseconds; 0 disables");
-
 extern struct kmem_cache *cdev_cache;
 static void char_sgdma_unmap_user_buf(struct xdma_io_cb *cb, bool write);
 

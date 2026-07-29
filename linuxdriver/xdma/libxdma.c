@@ -25,6 +25,7 @@
 #include <linux/string.h>
 #include <linux/mm.h>
 #include <linux/errno.h>
+#include <linux/ktime.h>
 #include <linux/sched.h>
 #include <linux/vmalloc.h>
 
@@ -48,6 +49,12 @@ module_param(completion_wq_highpri, bool, 0444);
 MODULE_PARM_DESC(
 	completion_wq_highpri,
 	"Use a dedicated high-priority unbound workqueue for interrupt completions");
+
+unsigned int transfer_latency_warn_us;
+module_param(transfer_latency_warn_us, uint, 0644);
+MODULE_PARM_DESC(
+	transfer_latency_warn_us,
+	"Log synchronous DMA transfer stages at or above this latency in microseconds; 0 disables");
 
 static unsigned int enable_credit_mp = 1;
 module_param(enable_credit_mp, uint, 0644);
@@ -813,6 +820,8 @@ static struct xdma_transfer *engine_transfer_completion(
 
 	/* synchronous I/O? */
 	/* awake task on transfer's wait queue */
+	if (READ_ONCE(transfer->submitted_ns))
+		WRITE_ONCE(transfer->completed_ns, ktime_get_ns());
 	xlx_wake_up(&transfer->wq);
 
 	/* Send completion notification for Last transfer */
@@ -1205,6 +1214,7 @@ done:
 static void engine_service_work(struct work_struct *work)
 {
 	struct xdma_engine *engine;
+	struct xdma_transfer *transfer;
 	unsigned long flags;
 	int rv;
 
@@ -1217,6 +1227,14 @@ static void engine_service_work(struct work_struct *work)
 
 	/* lock the engine */
 	spin_lock_irqsave(&engine->lock, flags);
+
+	if (!list_empty(&engine->transfer_list)) {
+		transfer = list_first_entry(&engine->transfer_list,
+					   struct xdma_transfer, entry);
+		if (READ_ONCE(transfer->submitted_ns) &&
+		    !READ_ONCE(transfer->service_started_ns))
+			WRITE_ONCE(transfer->service_started_ns, ktime_get_ns());
+	}
 
 	dbg_tfr("engine_service() for %s engine %p\n", engine->name, engine);
 	rv = engine_service(engine, 0);
@@ -1247,6 +1265,27 @@ static void schedule_engine_service(struct xdma_engine *engine)
 		queue_work(engine->xdev->completion_wq, &engine->work);
 	else
 		schedule_work(&engine->work);
+}
+
+static void record_engine_completion_irq(struct xdma_engine *engine)
+{
+	struct xdma_transfer *transfer;
+	unsigned long flags;
+	u64 now_ns;
+
+	if (!READ_ONCE(transfer_latency_warn_us))
+		return;
+
+	now_ns = ktime_get_ns();
+	spin_lock_irqsave(&engine->lock, flags);
+	if (!list_empty(&engine->transfer_list)) {
+		transfer = list_first_entry(&engine->transfer_list,
+					   struct xdma_transfer, entry);
+		if (READ_ONCE(transfer->submitted_ns) &&
+		    !READ_ONCE(transfer->irq_ns))
+			WRITE_ONCE(transfer->irq_ns, now_ns);
+	}
+	spin_unlock_irqrestore(&engine->lock, flags);
 }
 
 static u32 engine_service_wb_monitor(struct xdma_engine *engine,
@@ -1438,6 +1477,7 @@ static irqreturn_t xdma_isr(int irq, void *dev_id)
 			    (engine->magic == MAGIC_ENGINE)) {
 				mask &= ~engine->irq_bitmask;
 				dbg_tfr("schedule_work, %s.\n", engine->name);
+				record_engine_completion_irq(engine);
 				schedule_engine_service(engine);
 			}
 		}
@@ -1457,6 +1497,7 @@ static irqreturn_t xdma_isr(int irq, void *dev_id)
 			    (engine->magic == MAGIC_ENGINE)) {
 				mask &= ~engine->irq_bitmask;
 				dbg_tfr("schedule_work, %s.\n", engine->name);
+				record_engine_completion_irq(engine);
 				schedule_engine_service(engine);
 			}
 		}
@@ -1524,6 +1565,7 @@ static irqreturn_t xdma_channel_irq(int irq, void *dev_id)
 	/* Dummy read to flush the above write */
 	read_register(&irq_regs->channel_int_pending);
 	/* Schedule the bottom half */
+	record_engine_completion_irq(engine);
 	schedule_engine_service(engine);
 
 	/*
@@ -3255,6 +3297,12 @@ ssize_t xdma_xfer_submit(void *dev_hndl, int channel, bool write, u64 ep_addr,
 	while (nents) {
 		unsigned long flags;
 		struct xdma_transfer *xfer;
+		u64 resumed_ns;
+		u64 submitted_ns;
+		u64 irq_ns;
+		u64 service_started_ns;
+		u64 completed_ns;
+		u64 warn_ns;
 
 		/* build transfer */
 		rv = transfer_init(engine, req, &req->tfer[0]);
@@ -3281,6 +3329,8 @@ ssize_t xdma_xfer_submit(void *dev_hndl, int channel, bool write, u64 ep_addr,
 		transfer_dump(xfer);
 #endif
 
+		if (READ_ONCE(transfer_latency_warn_us))
+			WRITE_ONCE(xfer->submitted_ns, ktime_get_ns());
 		rv = transfer_queue(engine, xfer);
 		if (rv < 0) {
 			mutex_unlock(&engine->desc_lock);
@@ -3298,6 +3348,29 @@ ssize_t xdma_xfer_submit(void *dev_hndl, int channel, bool write, u64 ep_addr,
 		else
 			xlx_wait_event_interruptible(xfer->wq,
 				(xfer->state != TRANSFER_STATE_SUBMITTED));
+
+		resumed_ns = ktime_get_ns();
+		submitted_ns = READ_ONCE(xfer->submitted_ns);
+		irq_ns = READ_ONCE(xfer->irq_ns);
+		service_started_ns = READ_ONCE(xfer->service_started_ns);
+		completed_ns = READ_ONCE(xfer->completed_ns);
+		warn_ns = (u64)READ_ONCE(transfer_latency_warn_us) * 1000;
+		if (warn_ns && submitted_ns && resumed_ns >= submitted_ns &&
+		    resumed_ns - submitted_ns >= warn_ns)
+			pr_warn_ratelimited(
+				"%s channel %d completion latency %llu us (submit_to_irq=%llu us irq_to_worker=%llu us worker_to_wake=%llu us wake_to_resume=%llu us irq_seen=%u)\n",
+				engine->name, engine->channel,
+				(unsigned long long)((resumed_ns - submitted_ns) / 1000),
+				(unsigned long long)((irq_ns >= submitted_ns ?
+					irq_ns - submitted_ns : 0) / 1000),
+				(unsigned long long)((service_started_ns >= irq_ns &&
+					irq_ns ? service_started_ns - irq_ns : 0) / 1000),
+				(unsigned long long)((completed_ns >= service_started_ns &&
+					service_started_ns ?
+					completed_ns - service_started_ns : 0) / 1000),
+				(unsigned long long)((resumed_ns >= completed_ns &&
+					completed_ns ? resumed_ns - completed_ns : 0) / 1000),
+				irq_ns ? 1U : 0U);
 
 		spin_lock_irqsave(&engine->lock, flags);
 

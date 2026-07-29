@@ -283,12 +283,16 @@ opt-in driver A/B experiment:
   high-priority unbound workqueue. It is load-time-only and defaults to `0`.
 - `transfer_latency_warn_us=5000` logs synchronous transfers at or above 5 ms
   with separate page-pin/scatterlist, submit/completion-wait, and cleanup
-  timings. It defaults to `0` and can be adjusted at runtime.
+  timings. The completion-wait warning is further divided into submit-to-IRQ,
+  IRQ-to-worker, worker-to-wake, and wake-to-caller stages so hardware/IRQ
+  latency can be distinguished from workqueue and scheduler latency. It
+  defaults to `0` and can be adjusted at runtime.
 
 These options do not change XDMA device names, transfer semantics, or the
 Protocol 2/direct-XDMA selection model. A persistent pre-pinned DMA ring remains
-the preferred later optimization if completion prioritization alone does not
-meet the Phase 4 gates.
+a later option only if the stage timings show that eliminating synchronous
+per-transfer setup or completion waits can materially improve the Phase 4
+tail.
 
 ## Planned Data Paths
 
