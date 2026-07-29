@@ -32,6 +32,11 @@ const TX_ENABLE_BIT: u32 = 1 << 25;
 const TX_RELAY_DISABLE_BIT: u32 = 1 << 27;
 const CW_KEYER_ENABLE_BIT: u32 = 1 << 31;
 const TX_WATCHDOG_OVERRIDE_BIT: u32 = 1 << 28;
+const TX_MODULATION_SOURCE_MASK: u32 = 0b11;
+const TX_OUTPUT_GATE_BIT: u32 = 1 << 2;
+const TX_AMPLITUDE_MASK: u32 = 0x3ffff << 4;
+const DUC_MUX_RESET_BIT: u32 = 1 << 29;
+const TX_IQ_DEINTERLEAVE_BIT: u32 = 1 << 30;
 const DUC_STREAM_ENABLE_BIT: u32 = 1 << 31;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -198,9 +203,41 @@ impl XdmaRegisterDevice {
         update_register(
             &self.file,
             TX_CONFIG_REGISTER,
-            |value| value & !(TX_WATCHDOG_OVERRIDE_BIT | DUC_STREAM_ENABLE_BIT),
-            "could not disable Saturn DUC stream",
+            |value| {
+                value
+                    & !(TX_MODULATION_SOURCE_MASK
+                        | TX_OUTPUT_GATE_BIT
+                        | TX_AMPLITUDE_MASK
+                        | TX_WATCHDOG_OVERRIDE_BIT
+                        | DUC_MUX_RESET_BIT
+                        | TX_IQ_DEINTERLEAVE_BIT
+                        | DUC_STREAM_ENABLE_BIT)
+            },
+            "could not disable Saturn transmit data path",
         )?;
+        self.verify_safe_receive_state()
+    }
+
+    pub(crate) fn verify_safe_receive_state(&self) -> Result<(), XdmaError> {
+        let gpio = self.read_register(RF_GPIO_REGISTER)?;
+        let keyer = self.read_register(KEYER_CONFIG_REGISTER)?;
+        let tx = self.read_register(TX_CONFIG_REGISTER)?;
+        let unsafe_tx = TX_MODULATION_SOURCE_MASK
+            | TX_OUTPUT_GATE_BIT
+            | TX_AMPLITUDE_MASK
+            | TX_WATCHDOG_OVERRIDE_BIT
+            | DUC_MUX_RESET_BIT
+            | TX_IQ_DEINTERLEAVE_BIT
+            | DUC_STREAM_ENABLE_BIT;
+        if gpio & (MOX_BIT | TX_ENABLE_BIT) != 0
+            || gpio & TX_RELAY_DISABLE_BIT == 0
+            || keyer & CW_KEYER_ENABLE_BIT != 0
+            || tx & unsafe_tx != 0
+        {
+            return Err(XdmaError::Incompatible(format!(
+                "Saturn receive-safe readback failed: gpio=0x{gpio:08x} keyer=0x{keyer:08x} tx=0x{tx:08x}"
+            )));
+        }
         Ok(())
     }
 
@@ -414,7 +451,14 @@ mod tests {
         fixture.write(KEYER_CONFIG_REGISTER, 0x0000_0033 | CW_KEYER_ENABLE_BIT);
         fixture.write(
             TX_CONFIG_REGISTER,
-            0x0000_000B | TX_WATCHDOG_OVERRIDE_BIT | DUC_STREAM_ENABLE_BIT,
+            0x0000_0008
+                | TX_MODULATION_SOURCE_MASK
+                | TX_OUTPUT_GATE_BIT
+                | TX_AMPLITUDE_MASK
+                | TX_WATCHDOG_OVERRIDE_BIT
+                | DUC_MUX_RESET_BIT
+                | TX_IQ_DEINTERLEAVE_BIT
+                | DUC_STREAM_ENABLE_BIT,
         );
 
         let device = XdmaRegisterDevice::open(&fixture.path).unwrap();
@@ -423,8 +467,42 @@ mod tests {
             gpio_unrelated | TX_RELAY_DISABLE_BIT
         );
         assert_eq!(fixture.read(KEYER_CONFIG_REGISTER), 0x0000_0033);
-        assert_eq!(fixture.read(TX_CONFIG_REGISTER), 0x0000_000B);
+        assert_eq!(fixture.read(TX_CONFIG_REGISTER), 0x0000_0008);
         device.close_safely().unwrap();
+    }
+
+    #[test]
+    fn drop_recovers_unsafe_registers_after_an_injected_failure() {
+        let fixture = Fixture::new();
+        fixture.install_valid_identity();
+        let device = XdmaRegisterDevice::open(&fixture.path).unwrap();
+        device
+            .write_register(RF_GPIO_REGISTER, MOX_BIT | TX_ENABLE_BIT | 0x0000_0055)
+            .unwrap();
+        device
+            .write_register(KEYER_CONFIG_REGISTER, CW_KEYER_ENABLE_BIT | 0x33)
+            .unwrap();
+        device
+            .write_register(
+                TX_CONFIG_REGISTER,
+                TX_MODULATION_SOURCE_MASK
+                    | TX_OUTPUT_GATE_BIT
+                    | TX_AMPLITUDE_MASK
+                    | TX_WATCHDOG_OVERRIDE_BIT
+                    | DUC_MUX_RESET_BIT
+                    | TX_IQ_DEINTERLEAVE_BIT
+                    | DUC_STREAM_ENABLE_BIT,
+            )
+            .unwrap();
+
+        drop(device);
+
+        assert_eq!(
+            fixture.read(RF_GPIO_REGISTER),
+            TX_RELAY_DISABLE_BIT | 0x0000_0055
+        );
+        assert_eq!(fixture.read(KEYER_CONFIG_REGISTER), 0x33);
+        assert_eq!(fixture.read(TX_CONFIG_REGISTER), 0);
     }
 
     #[test]

@@ -11,6 +11,7 @@ mod xdma;
 mod xdma_audio;
 mod xdma_duc;
 mod xdma_rx;
+mod xdma_tx;
 
 use std::env;
 use std::error::Error;
@@ -233,6 +234,10 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
     if env::args().skip(1).any(|arg| arg == "--xdma-duc-probe") {
         xdma_duc::run_phase4_duc_probe()?;
+        return Ok(());
+    }
+    if env::args().skip(1).any(|arg| arg == "--xdma-tx-preflight") {
+        xdma_tx::run_phase5_tx_preflight()?;
         return Ok(());
     }
 

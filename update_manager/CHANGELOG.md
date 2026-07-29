@@ -62,6 +62,10 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
   The final 30-minute combined stress gate sustained 192 kHz with zero
   critical-low or runtime FIFO-fault events, 0.600 ms p99.99 refill service,
   and 1.632 ms maximum refill service.
+- Added the first Phase 5 guarded-transmit preflight. It never keys RF, expands
+  common emergency cleanup to zero and disable the entire transmit data path,
+  verifies receive-safe register readback, and provides bounded failure
+  checkpoints for testing automatic cleanup.
 - Split Saturn Go health reporting into `/livez` process liveness and
   structured `/readyz` dependency/release readiness. Rust builds embed their
   full Git commit; staged Saturn Go payloads carry the same identity, and the

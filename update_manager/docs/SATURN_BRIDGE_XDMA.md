@@ -340,6 +340,46 @@ critical-low events, FIFO overflow, threshold fault, runtime underflow, or
 histogram overflow. Cleanup left amplitude at zero and every RF control
 inhibited.
 
+A post-reboot 60-second combined regression confirmed that the persisted
+priority-20 completion policy was active. It sustained 192,000.6 IQ
+pairs/second with 0.368 ms maximum refill service, 14.556 ms minimum FIFO
+margin, and zero critical-low or runtime FIFO-fault events.
+
+## Phase 5: Guarded transmit preflight
+
+The first Phase 5 slice remains completely RF-inhibited:
+
+```bash
+sudo systemctl stop p2app.service
+sudo update_manager/saturn-bridge/target/release/saturn-bridge \
+  --xdma-tx-preflight
+sudo systemctl start p2app.service
+```
+
+The preflight validates exclusive XDMA ownership and compatible Saturn
+identity, forces the common receive-safe state, and verifies register readback.
+The common emergency cleanup now clears the modulation source, output gate,
+amplitude, watchdog override, DUC mux reset, IQ deinterleave, and DUC stream in
+addition to disabling MOX, TX enable, PA relay, and CW.
+
+Two deliberate failure checkpoints exercise automatic cleanup without keying
+RF:
+
+```bash
+sudo env SATURN_BRIDGE_XDMA_TX_PREFLIGHT_INJECT_FAILURE=after-open \
+  update_manager/saturn-bridge/target/release/saturn-bridge \
+  --xdma-tx-preflight
+sudo env SATURN_BRIDGE_XDMA_TX_PREFLIGHT_INJECT_FAILURE=after-verify \
+  update_manager/saturn-bridge/target/release/saturn-bridge \
+  --xdma-tx-preflight
+```
+
+Both injected commands are expected to fail after arming receive-safe cleanup.
+No Phase 5 preflight path enables the DUC stream, output gate, amplitude, MOX,
+TX enable, or PA relay. A later low-power RF-keying probe requires a separately
+confirmed load or antenna, explicit frequency and power limits, forward/reverse
+power trips, a bounded key-down timer, and authorization to generate RF.
+
 ## Planned Data Paths
 
 | Function | XDMA node |
