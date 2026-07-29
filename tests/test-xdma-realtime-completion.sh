@@ -5,6 +5,7 @@ REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
 LIBXDMA="$REPO_ROOT/linuxdriver/xdma/libxdma.c"
 LIBXDMA_HEADER="$REPO_ROOT/linuxdriver/xdma/libxdma.h"
 SGDMA="$REPO_ROOT/linuxdriver/xdma/cdev_sgdma.c"
+MODULE_OPTIONS="$REPO_ROOT/linuxdriver/etc/modprobe.d/saturn-xdma.conf"
 
 fail(){
   printf 'XDMA real-time completion contract failed: %s\n' "$*" >&2
@@ -44,5 +45,8 @@ grep -Fq 'pin_sg=%llu us submit_wait=%llu us cleanup=%llu us' "$SGDMA" \
   || fail "slow-transfer warning omits stage-level timing"
 grep -Fq 'submit_to_irq=%llu us irq_to_worker=%llu us worker_to_wake=%llu us wake_to_resume=%llu us' "$LIBXDMA" \
   || fail "completion diagnostics omit interrupt, worker, or wake timing"
+grep -Fq 'options xdma completion_kthread_priority=20 transfer_latency_warn_us=5000' \
+  "$MODULE_OPTIONS" \
+  || fail "Saturn appliance does not persist the validated completion policy"
 
 printf 'XDMA real-time completion contract passed\n'

@@ -3,6 +3,7 @@ set -Eeuo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 INSTALLER="$REPO_ROOT/scripts/install-xdma-dkms.sh"
+MODULE_OPTIONS="$REPO_ROOT/linuxdriver/etc/modprobe.d/saturn-xdma.conf"
 TMP_ROOT="$(mktemp -d)"
 trap 'rm -rf "$TMP_ROOT"' EXIT
 
@@ -48,5 +49,12 @@ version_changed="$(SATURN_REPO_DIR="$fixture_b" "$INSTALLER" --print-source-vers
 
 grep -Fq 'command+=(--force)' "$INSTALLER" \
   || fail "a successfully built replacement cannot override an older installed DKMS package"
+grep -Fq 'install_module_options' "$INSTALLER" \
+  || fail "DKMS installation does not persist Saturn module options"
+grep -Fq 'SATURN_XDMA_MODPROBE_CONFIG' "$INSTALLER" \
+  || fail "persistent module-options destination is not configurable"
+grep -Fq 'options xdma completion_kthread_priority=20 transfer_latency_warn_us=5000' \
+  "$MODULE_OPTIONS" \
+  || fail "validated Saturn XDMA module options are missing"
 
 printf 'XDMA DKMS idempotency contract passed\n'

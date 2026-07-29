@@ -7,6 +7,7 @@ PACKAGE_NAME="${SATURN_XDMA_DKMS_NAME:-saturn-xdma}"
 PACKAGE_VERSION="${SATURN_XDMA_DKMS_VERSION:-}"
 TARGET_KERNEL="${SATURN_XDMA_DKMS_KERNEL:-$(uname -r)}"
 MANUAL_POSTINST_HOOK="${SATURN_XDMA_MANUAL_POSTINST_HOOK:-/etc/kernel/postinst.d/saturn-xdma}"
+MODPROBE_CONFIG="${SATURN_XDMA_MODPROBE_CONFIG:-/etc/modprobe.d/saturn-xdma.conf}"
 DRY_RUN=0
 FORCE=0
 UNINSTALL=0
@@ -128,6 +129,30 @@ disable_manual_postinst_hook(){
   fi
 }
 
+install_module_options(){
+  [[ -f "$MODULE_OPTIONS_SOURCE" ]] || \
+    die "Saturn XDMA module options not found: $MODULE_OPTIONS_SOURCE"
+  run install -d -m 0755 "$(dirname "$MODPROBE_CONFIG")"
+  run install -m 0644 "$MODULE_OPTIONS_SOURCE" "$MODPROBE_CONFIG"
+  ok "Installed Saturn XDMA module options: $MODPROBE_CONFIG"
+}
+
+remove_module_options(){
+  [[ -e "$MODPROBE_CONFIG" || -L "$MODPROBE_CONFIG" ]] || return 0
+  if [[ -f "$MODPROBE_CONFIG" ]] && cmp -s "$MODULE_OPTIONS_SOURCE" "$MODPROBE_CONFIG"; then
+    run rm -f "$MODPROBE_CONFIG"
+    ok "Removed Saturn XDMA module options: $MODPROBE_CONFIG"
+  else
+    warn "Preserving modified XDMA module options: $MODPROBE_CONFIG"
+  fi
+}
+
+finalize_install(){
+  install_module_options
+  disable_manual_postinst_hook
+  prune_old_versions
+}
+
 uninstall_dkms(){
   info "Uninstalling DKMS package: ${PACKAGE_NAME}/${PACKAGE_VERSION}"
   if dkms_registered; then
@@ -139,6 +164,7 @@ uninstall_dkms(){
   if [[ -d "$SRC_ROOT" || -L "$SRC_ROOT" ]]; then
     run rm -rf "$SRC_ROOT"
   fi
+  remove_module_options
   run depmod "$TARGET_KERNEL"
   local disabled_hook="${MANUAL_POSTINST_HOOK}.disabled-by-dkms"
   if [[ ! -e "$MANUAL_POSTINST_HOOK" && -e "$disabled_hook" ]]; then
@@ -188,6 +214,8 @@ Environment:
   SATURN_XDMA_PRUNE_OLD       Set to 1 to prune older versions after success
   SATURN_XDMA_MANUAL_POSTINST_HOOK
                                 Legacy manual kernel hook path override
+  SATURN_XDMA_MODPROBE_CONFIG   Persistent module-options path override
+                                (default: /etc/modprobe.d/saturn-xdma.conf)
   SATURN_REPO_DIR             Saturn repo root override
 EOF
 }
@@ -243,6 +271,7 @@ fi
 DRIVER_DIR="$REPO_ROOT/linuxdriver/xdma"
 INCLUDE_DIR="$REPO_ROOT/linuxdriver/include"
 DKMS_TEMPLATE="$REPO_ROOT/linuxdriver/dkms/dkms.conf"
+MODULE_OPTIONS_SOURCE="$REPO_ROOT/linuxdriver/etc/modprobe.d/saturn-xdma.conf"
 if [[ -z "$PACKAGE_VERSION" ]]; then
   SOURCE_REV="$(source_revision)"
   PACKAGE_VERSION="2020.1.8-saturn.${SOURCE_REV}"
@@ -274,7 +303,7 @@ fi
 if equivalent_version="$(equivalent_installed_version)" \
     && [[ "$equivalent_version" != "$PACKAGE_VERSION" ]]; then
   ok "Equivalent XDMA source is already installed for ${TARGET_KERNEL}: ${PACKAGE_NAME}/${equivalent_version}"
-  disable_manual_postinst_hook
+  finalize_install
   exit 0
 fi
 
@@ -287,7 +316,7 @@ if dkms_registered; then
     run dkms remove -m "$PACKAGE_NAME" -v "$PACKAGE_VERSION" -k "$TARGET_KERNEL"
   elif dkms status -m "$PACKAGE_NAME" -v "$PACKAGE_VERSION" -k "$TARGET_KERNEL" 2>/dev/null | grep -q 'installed'; then
     ok "DKMS package is already installed for ${TARGET_KERNEL}."
-    disable_manual_postinst_hook
+    finalize_install
     exit 0
   fi
 
@@ -297,8 +326,7 @@ if dkms_registered; then
   run depmod "$TARGET_KERNEL"
   dkms status -m "$PACKAGE_NAME" -v "$PACKAGE_VERSION" -k "$TARGET_KERNEL" | grep -q 'installed' || \
     die "DKMS did not report an installed module for ${TARGET_KERNEL}"
-  disable_manual_postinst_hook
-  prune_old_versions
+  finalize_install
   ok "DKMS-managed XDMA installed for ${TARGET_KERNEL}."
   exit 0
 fi
@@ -333,8 +361,7 @@ if [[ "$DRY_RUN" -ne 1 ]]; then
   dkms status -m "$PACKAGE_NAME" -v "$PACKAGE_VERSION" -k "$TARGET_KERNEL" | grep -q 'installed' || \
     die "DKMS did not report an installed module for ${TARGET_KERNEL}"
 fi
-disable_manual_postinst_hook
-prune_old_versions
+finalize_install
 
 ok "DKMS-managed XDMA installed for ${TARGET_KERNEL}."
 ok "Future kernel installs can rebuild with: dkms autoinstall -m ${PACKAGE_NAME}/${PACKAGE_VERSION}"

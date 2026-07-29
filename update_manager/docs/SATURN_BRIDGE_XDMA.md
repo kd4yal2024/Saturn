@@ -294,6 +294,17 @@ opt-in driver A/B experiment:
   latency can be distinguished from workqueue and scheduler latency. It
   defaults to `0` and can be adjusted at runtime.
 
+The generic driver defaults remain disabled. Saturn installation persists the
+validated appliance policy in `/etc/modprobe.d/saturn-xdma.conf`:
+
+```text
+options xdma completion_kthread_priority=20 transfer_latency_warn_us=5000
+```
+
+The options apply on the next module load and every reboot. An already loaded
+module retains its current load-time completion mode until XDMA is safely
+unloaded and loaded again or the appliance reboots.
+
 These options do not change XDMA device names, transfer semantics, or the
 Protocol 2/direct-XDMA selection model. A persistent pre-pinned DMA ring remains
 a later option only if the stage timings show that eliminating synchronous

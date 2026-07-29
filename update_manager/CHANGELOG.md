@@ -50,7 +50,9 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
   IRQ-to-worker, worker-to-wake, and wake-to-caller latency.
 - Added an opt-in event-driven SCHED_FIFO XDMA completion thread after staged
   latency diagnostics isolated network-stress outliers in deferred workqueue
-  dispatch rather than hardware DMA, IRQ delivery, or caller wakeup.
+  dispatch rather than hardware DMA, IRQ delivery, or caller wakeup. Saturn
+  appliances now persist the validated priority-20 completion policy and 5 ms
+  rate-limited diagnostic threshold across module reloads and reboots.
 - Moved Phase 4 progress output off the real-time refill thread, made automatic
   CPU selection the stress-harness default, and widened the DUC FIFO operating
   band to an efficient eight-frame window. The validated band halves refill
