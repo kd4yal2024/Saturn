@@ -9,6 +9,7 @@ mod tx_thread;
 mod wdsp;
 mod xdma;
 mod xdma_audio;
+mod xdma_duc;
 mod xdma_rx;
 
 use std::env;
@@ -228,6 +229,10 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
     if env::args().skip(1).any(|arg| arg == "--xdma-audio-probe") {
         xdma_audio::run_phase3_audio_probe()?;
+        return Ok(());
+    }
+    if env::args().skip(1).any(|arg| arg == "--xdma-duc-probe") {
+        xdma_duc::run_phase4_duc_probe()?;
         return Ok(());
     }
 

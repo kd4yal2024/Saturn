@@ -128,6 +128,45 @@ The following test-only environment settings are supported:
 Phase 3 does not route codec audio to clients and does not enable DUC or RF
 transmit. P2 remains the only operational client backend.
 
+## Phase 4: RF-disabled DUC IQ performance
+
+Phase 4 adds a one-shot DUC throughput and tail-latency probe:
+
+```bash
+sudo systemctl stop p2app.service
+sudo -u pi /opt/saturn-go/bin/saturn-bridge --xdma-duc-probe
+sudo systemctl start p2app.service
+```
+
+The probe:
+
+- refuses to run while `p2app.service` is active
+- writes only zero-valued 24-bit I/Q pairs to `/dev/xdma0_h2c_0`
+- forces MOX, TX enable, PA relay, CW keyer, and TX watchdog override off
+- holds the TX amplitude scale at zero and verifies the RF-safe register state
+  before every DMA refill
+- enables the zero-amplitude, RF-disabled DUC mux immediately before seeding
+  nine 1.25 ms frames (H2C0 discards writes while the mux is disabled)
+- normally refills at five frames toward a nine-frame target
+- temporarily expands the target to ten or eleven frames after a 2–3 ms
+  scheduler stall or critical FIFO low-water event, then contracts after
+  500 ms of stability
+- reports FIFO low-water/fault counts, batch-size changes, DMA write latency,
+  p99 and p99.99 write/refill service timing, maximum loop gap, minimum FIFO
+  time margin, and observed IQ rate
+- rejects a rate outside five percent of 192 kHz or any runtime FIFO fault
+- rejects p99.99 low-water-to-write-complete service above 5 ms
+- disables the DUC mux and output gate, resets the FIFO, retains zero
+  amplitude, and restores the receive-safe state on every exit
+
+The following test-only environment settings are supported:
+
+- `SATURN_BRIDGE_XDMA_DUC_DURATION_MS` (default `3000`, range `500..10000`)
+- `SATURN_BRIDGE_XDMA_DUC_DEVICE` (default `/dev/xdma0_h2c_0`)
+
+Phase 4 cannot generate RF. Guarded non-zero IQ and RF-keying tests remain
+separate Phase 5 work.
+
 ## Planned Data Paths
 
 | Function | XDMA node |
