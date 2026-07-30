@@ -23,12 +23,27 @@ use std::time::{Duration, Instant};
 const DEFAULT_READY_PATH: &str = "/run/saturn-bridge/xdma-ready.json";
 const READY_DMA_READS: u64 = 4;
 const READY_IQ_PAIRS: u64 = 1_024;
-const MAX_COMMANDS_PER_LOOP: usize = 128;
+const MAX_COMMANDS_PER_LOOP: usize = 8;
 const IDLE_POLL: Duration = Duration::from_micros(250);
 const READINESS_PERIOD: Duration = Duration::from_secs(1);
 const STATUS_PERIOD: Duration = Duration::from_secs(5);
 
 static STOP_REQUESTED: AtomicBool = AtomicBool::new(false);
+
+#[derive(Clone, Copy, Debug, Default)]
+struct CommandEffects {
+    dsp_dirty: bool,
+    tuning_dirty: bool,
+    tx_state_dirty: bool,
+}
+
+impl CommandEffects {
+    fn merge(&mut self, other: Self) {
+        self.dsp_dirty |= other.dsp_dirty;
+        self.tuning_dirty |= other.tuning_dirty;
+        self.tx_state_dirty |= other.tx_state_dirty;
+    }
+}
 
 struct SignalGuard {
     previous_int: libc::sigaction,
@@ -140,14 +155,10 @@ fn run_inner(config: BridgeConfig, ready_path: &Path) -> Result<(), Box<dyn Erro
 
     while !STOP_REQUESTED.load(Ordering::Relaxed) {
         let mut did_work = false;
-        for _ in 0..MAX_COMMANDS_PER_LOOP {
-            let Ok(command) = command_rx.try_recv() else {
-                break;
-            };
-            did_work = true;
-            handle_command(command, &radio_model, &tci, &mut wdsp, &mut rx)?;
-        }
-
+        // Service the continuously advancing hardware FIFO before bounded
+        // client control work. A browser can submit dozens of preferences in
+        // one burst; letting that burst run first can starve DDC long enough
+        // to cross the FPGA FIFO threshold.
         if rx.read_iq(&mut iq_samples)? {
             did_work = true;
             tci.publish_iq_frame(DIRECT_DDC_SAMPLE_RATE_KHZ * 1_000, &iq_samples);
@@ -158,6 +169,49 @@ fn run_inner(config: BridgeConfig, ready_path: &Path) -> Result<(), Box<dyn Erro
             model.observed.ddc0_packets = rx.stats().dma_reads;
             model.observed.ddc0_meter_dbm = wdsp.smeter_dbm();
             model.observed.rx_wbfm_stereo_detected = wdsp.wbfm_stereo_detected();
+        }
+
+        let command_started = Instant::now();
+        let mut command_count = 0;
+        let mut command_effects = CommandEffects::default();
+        for _ in 0..MAX_COMMANDS_PER_LOOP {
+            let Ok(command) = command_rx.try_recv() else {
+                break;
+            };
+            command_count += 1;
+            did_work = true;
+            command_effects.merge(handle_command(
+                command,
+                &radio_model,
+                &tci,
+                &mut wdsp,
+                &mut rx,
+            )?);
+        }
+        if command_count != 0 {
+            let mut model = radio_model.lock_unpoisoned();
+            model.desired.tx_enabled = false;
+            model.desired.tx_phase = TxPhase::Rx;
+            if command_effects.dsp_dirty {
+                wdsp.sync_model(&model)?;
+            }
+            if command_effects.tuning_dirty {
+                tci.publish_tuning_state(&model);
+            }
+            if command_effects.tx_state_dirty {
+                tci.publish_tx_state(&model);
+            }
+            let command_elapsed = command_started.elapsed();
+            if command_elapsed >= Duration::from_millis(5) {
+                println!(
+                    "saturn-bridge: xdma_rx control batch commands={} dsp_sync={} tuning_publish={} tx_publish={} elapsed_us={}",
+                    command_count,
+                    u8::from(command_effects.dsp_dirty),
+                    u8::from(command_effects.tuning_dirty),
+                    u8::from(command_effects.tx_state_dirty),
+                    command_elapsed.as_micros(),
+                );
+            }
         }
 
         if readiness_state == "starting"
@@ -220,7 +274,41 @@ fn handle_command(
     tci: &TciFrontend,
     wdsp: &mut WdspRxEngine,
     rx: &mut OperationalRxSession,
-) -> Result<(), Box<dyn Error>> {
+) -> Result<CommandEffects, Box<dyn Error>> {
+    let effects = CommandEffects {
+        dsp_dirty: matches!(
+            &command,
+            TciCommand::SetMode(_)
+                | TciCommand::SetFilterBand { .. }
+                | TciCommand::SetRxVolume(_)
+                | TciCommand::SetRxNoiseReductionMode(_)
+                | TciCommand::SetRxNoiseReductionEnabled(_)
+                | TciCommand::SetRxNoiseReductionLevel(_)
+                | TciCommand::SetRxNr2GainMethod(_)
+                | TciCommand::SetRxNr2NpeMethod(_)
+                | TciCommand::SetRxNr2PostFilterEnabled(_)
+                | TciCommand::SetRxWbfmDeemphasis(_)
+                | TciCommand::SetRxAnrVals { .. }
+                | TciCommand::SetNoiseBlankerMode(_)
+                | TciCommand::SetNoiseBlankerThreshold(_)
+                | TciCommand::SetAnfEnabled(_)
+                | TciCommand::SetRxAnfVals { .. }
+                | TciCommand::SetAgcMode(_)
+                | TciCommand::SetAgcGain(_)
+                | TciCommand::SetRxEqEnabled(_)
+                | TciCommand::SetRxEqBand { .. }
+                | TciCommand::SetRxFftSize(_)
+                | TciCommand::SetRxLowLatency(_)
+        ),
+        tuning_dirty: matches!(
+            &command,
+            TciCommand::SetVfoA(_) | TciCommand::SetVfoB(_) | TciCommand::SetIqCenter(_)
+        ),
+        tx_state_dirty: matches!(
+            &command,
+            TciCommand::SetTxEnabled(_) | TciCommand::ClientDisconnected
+        ),
+    };
     let mut model = radio_model.lock_unpoisoned();
     match command {
         TciCommand::SetVfoA(frequency_hz) => {
@@ -411,11 +499,7 @@ fn handle_command(
         // hardware on this RX-only backend.
         _ => {}
     }
-    model.desired.tx_enabled = false;
-    model.desired.tx_phase = TxPhase::Rx;
-    wdsp.sync_model(&model)?;
-    tci.publish_radio_state(&model);
-    Ok(())
+    Ok(effects)
 }
 
 fn write_readiness(

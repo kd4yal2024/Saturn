@@ -553,6 +553,41 @@ pairs/second), with no header resynchronization, header error, or FIFO fault.
 The runtime then disabled DDC, verified receive-safe cleanup, and restored both
 previously active services.
 
+Client acceptance is enabled with:
+
+```bash
+sudo update_manager/scripts/saturn-xdma-operational-rx-smoke.sh \
+  --client-probe \
+  --duration-seconds 45
+```
+
+The localhost-only client opens the actual TCI WebSocket, validates 192 kHz IQ
+and 48 kHz audio binary frames, submits an eight-command RX DSP preference
+burst, requires media and DMA progress afterward, retunes both VFO and DDC to
+7.200 MHz, deliberately requests TX, and requires the RX-only backend to refuse
+it while readiness remains receive-safe. It then stops its streams and
+disconnects before the harness terminates the runtime.
+
+The first two client runs exposed a genuine debug-build starvation path: the
+runtime synchronized WDSP and published the complete radio snapshot after each
+stream-control command, allowing the DDC FIFO to reach its 16,384-word
+threshold. The operational loop now drains DMA before bounded control work,
+handles at most eight commands per slice, synchronizes WDSP only for actual DSP
+changes, and publishes targeted tuning/TX acknowledgements instead of flooding
+the complete state.
+
+The subsequent 45-second PCB2/firmware-1.27 client run passed:
+
+- 191,992 steady-state IQ pairs/second over 39.609 seconds
+- 37 delivered IQ frames and 62 delivered audio frames
+- continued IQ, audio, and DMA progress after the DSP preference burst
+- 30.048 ms worst reported DSP control batch
+- FIFO high-water of 8,016 words, with zero FIFO or framing faults
+- successful 7.200 MHz retune
+- explicit TX refusal with `tx_capable=false`
+- verified DDC shutdown, receive-safe cleanup, and restoration of both
+  previously active services
+
 ## Planned Data Paths
 
 | Function | XDMA node |

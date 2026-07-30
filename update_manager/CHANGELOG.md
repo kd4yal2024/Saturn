@@ -56,6 +56,14 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
   receive-safe shutdown, and restores the prior radio-service activity without
   changing that policy. The first appliance run sustained approximately
   191,975 IQ pairs/second with no framing or FIFO fault.
+- Added a dependency-free direct-XDMA TCI acceptance client. It validates live
+  IQ and receive-audio frames, continued streaming after a DSP preference
+  burst, retuning, fail-closed TX refusal, disconnect, and service restoration.
+  Client testing exposed and corrected command-burst DDC starvation by making
+  the operational loop RX-first, bounding each control slice, synchronizing
+  WDSP only for DSP changes, and replacing complete-state floods with targeted
+  acknowledgements. The passing debug-build run sustained 191,992 IQ
+  pairs/second with an 8,016-word FIFO high-water and zero FIFO/framing faults.
 - Added opt-in XDMA completion diagnostics for the direct-DMA Phase 4 stress
   work. Slow synchronous transfers now separate page mapping, submission wait,
   and cleanup; the submission wait further reports submit-to-IRQ,

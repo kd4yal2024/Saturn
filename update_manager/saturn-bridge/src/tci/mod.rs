@@ -635,6 +635,17 @@ impl TciFrontend {
         self.publish_telemetry(model);
     }
 
+    pub fn publish_tuning_state(&self, model: &RadioModel) {
+        self.send_text(format!("vfo:0,0,{};", model.desired.vfo_a_hz));
+        self.send_text(format!("vfo:0,1,{};", model.desired.vfo_b_hz));
+        self.send_text(format!("dds:0,{};", model.desired.iq_center_hz));
+    }
+
+    pub fn publish_tx_state(&self, model: &RadioModel) {
+        self.send_text(format!("trx:0,{};", model.desired.tx_enabled));
+        self.send_text(format!("tx_state:0,{};", model.desired.tx_phase));
+    }
+
     pub fn publish_puresignal_status(&self, model: &RadioModel) {
         self.send_text(format!(
             "tx_puresignal_attenuation:0,{};",

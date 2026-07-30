@@ -14,9 +14,13 @@ READY_WAIT_SECONDS="${SATURN_XDMA_RX_SMOKE_READY_WAIT_SECONDS:-}"
 READY_FILE="${SATURN_XDMA_RX_SMOKE_READY_FILE:-/tmp/saturn-xdma-ready.json}"
 OBSERVED_FILE="${SATURN_XDMA_RX_SMOKE_OBSERVED_FILE:-/tmp/saturn-xdma-ready-observed.json}"
 LOG_FILE="${SATURN_XDMA_RX_SMOKE_LOG_FILE:-/tmp/saturn-xdma-operational-rx-smoke.log}"
+CLIENT_PROBE_SCRIPT="${SATURN_XDMA_RX_SMOKE_CLIENT_PROBE_SCRIPT:-$SCRIPT_DIR/saturn-xdma-operational-client.py}"
+CLIENT_RESULT_FILE="${SATURN_XDMA_RX_SMOKE_CLIENT_RESULT_FILE:-/tmp/saturn-xdma-operational-client-result.json}"
+CLIENT_ERROR_FILE="${SATURN_XDMA_RX_SMOKE_CLIENT_ERROR_FILE:-/tmp/saturn-xdma-operational-client-error.log}"
 MIN_STREAM_RATE=188160
 MAX_STREAM_RATE=195840
 
+CLIENT_PROBE=0
 P2_WAS=""
 BRIDGE_WAS=""
 WATCHER_PID=""
@@ -29,11 +33,16 @@ need_cmd(){ command -v "$1" >/dev/null 2>&1 || die "required command not found: 
 
 usage(){
   cat <<'EOF'
-Usage: sudo saturn-xdma-operational-rx-smoke.sh [--duration-seconds SECONDS]
+Usage: sudo saturn-xdma-operational-rx-smoke.sh \
+  [--duration-seconds SECONDS] [--client-probe]
 
 Runs the source-tree direct-XDMA RX backend for a bounded interval, requires
 advancing DMA/IQ readiness, verifies receive-safe shutdown, and restores the
 prior p2app.service and saturn-bridge.service activity.
+
+The client probe requires at least 45 seconds. It connects directly to the TCI
+endpoint, verifies IQ and audio frames, retunes to 7.200 MHz, requires a TX
+request to be refused, and disconnects before runtime cleanup.
 
 Build the standalone debug binary before running this test:
   CARGO_BUILD_JOBS=1 cargo build \
@@ -108,6 +117,10 @@ while [[ $# -gt 0 ]]; do
       DURATION_SECONDS="$2"
       shift 2
       ;;
+    --client-probe)
+      CLIENT_PROBE=1
+      shift
+      ;;
     -h|--help)
       usage
       exit 0
@@ -127,6 +140,10 @@ positive_integer "readiness wait" "$READY_WAIT_SECONDS"
   || die "duration must be between 5 and 300 seconds"
 (( READY_WAIT_SECONDS >= 5 && READY_WAIT_SECONDS <= DURATION_SECONDS )) \
   || die "readiness wait must be between 5 seconds and the test duration"
+if (( CLIENT_PROBE )); then
+  (( DURATION_SECONDS >= 45 )) \
+    || die "--client-probe requires a duration of at least 45 seconds"
+fi
 
 (( EUID == 0 )) || die "run this smoke test with sudo"
 need_cmd cp
@@ -137,6 +154,11 @@ need_cmd systemctl
 need_cmd tee
 need_cmd timeout
 [[ -x "$BRIDGE_BINARY" ]] || die "bridge binary is not executable: $BRIDGE_BINARY"
+if (( CLIENT_PROBE )); then
+  need_cmd python3
+  [[ -r "$CLIENT_PROBE_SCRIPT" ]] \
+    || die "client probe is not readable: $CLIENT_PROBE_SCRIPT"
+fi
 
 NEWER_SOURCE="$(find "$BRIDGE_ROOT/src" -type f -newer "$BRIDGE_BINARY" -print -quit)"
 for build_input in \
@@ -164,7 +186,12 @@ systemctl stop saturn-bridge.service p2app.service
 [[ "$(service_state p2app.service)" != "active" ]] \
   || die "p2app.service retained ownership after stop"
 
-rm -f -- "$READY_FILE" "$OBSERVED_FILE" "$LOG_FILE"
+rm -f -- \
+  "$READY_FILE" \
+  "$OBSERVED_FILE" \
+  "$LOG_FILE" \
+  "$CLIENT_RESULT_FILE" \
+  "$CLIENT_ERROR_FILE"
 
 (
   deadline="$((SECONDS + READY_WAIT_SECONDS))"
@@ -179,6 +206,19 @@ rm -f -- "$READY_FILE" "$OBSERVED_FILE" "$LOG_FILE"
       .metrics.iq_pairs >= 1024
     ' "$READY_FILE" >/dev/null 2>&1; then
       cp -- "$READY_FILE" "$OBSERVED_FILE"
+      if (( CLIENT_PROBE )); then
+        if ! python3 "$CLIENT_PROBE_SCRIPT" \
+          --url ws://127.0.0.1:50001/ \
+          --readiness-file "$READY_FILE" \
+          --retune-hz 7200000 \
+          --timeout-seconds 15 \
+          >"$CLIENT_RESULT_FILE" 2>"$CLIENT_ERROR_FILE"
+        then
+          sed 's/^/[saturn-xdma-operational-rx-smoke] client: /' \
+            "$CLIENT_ERROR_FILE" >&2
+          exit 1
+        fi
+      fi
       exit 0
     fi
     sleep 0.25
@@ -206,7 +246,7 @@ WATCHER_PID=""
 [[ "$RUNTIME_RC" -eq 124 ]] \
   || die "runtime exited with $RUNTIME_RC; expected bounded timeout status 124"
 [[ "$WATCHER_RC" -eq 0 ]] \
-  || die "runtime never published advancing, RF-safe direct-XDMA readiness"
+  || die "runtime readiness or client acceptance did not complete"
 [[ -s "$OBSERVED_FILE" ]] || die "ready-state observation was not retained"
 
 jq -e '
@@ -225,6 +265,29 @@ grep -Fq 'direct XDMA RX backend ready' "$LOG_FILE" \
 grep -Fq 'direct XDMA RX backend stopped; DDC disabled and receive-safe cleanup verified' \
   "$LOG_FILE" || die "runtime log is missing the receive-safe cleanup marker"
 
+if (( CLIENT_PROBE )); then
+  jq -e '
+    .status == "passed" and
+    .bridge_ready == true and
+    .remote_tx_rf_enabled == false and
+    .tx_request_refused == true and
+    .dsp_burst_continued == true and
+    .retune_hz == 7200000 and
+    .iq_frames >= 3 and
+    .iq_pairs > 0 and
+    .iq_nonzero == true and
+    .audio_frames >= 3 and
+    .audio_samples > 0
+  ' "$CLIENT_RESULT_FILE" >/dev/null \
+    || die "client acceptance result is incomplete"
+  grep -Fq 'refusing TX request: operational direct XDMA backend is RX-only' \
+    "$LOG_FILE" || die "runtime log is missing the RX-only TX refusal"
+  grep -Fq 'TCI websocket client' "$LOG_FILE" \
+    || die "runtime log is missing the client connection"
+  grep -Fq 'disconnected from' "$LOG_FILE" \
+    || die "runtime log is missing the client disconnect"
+fi
+
 READY_UPDATED_MS="$(jq -r '.updated_at_ms' "$OBSERVED_FILE")"
 STOPPED_UPDATED_MS="$(jq -r '.updated_at_ms' "$READY_FILE")"
 READY_IQ_PAIRS="$(jq -r '.metrics.iq_pairs' "$OBSERVED_FILE")"
@@ -240,6 +303,10 @@ STREAM_RATE="$((STREAM_IQ_PAIRS * 1000 / STREAM_ELAPSED_MS))"
 restore_services || die "could not restore the prior service activity"
 
 log "Steady-state IQ rate: ${STREAM_RATE} pairs/s over ${STREAM_ELAPSED_MS}ms"
+if (( CLIENT_PROBE )); then
+  log "Client acceptance result:"
+  jq . "$CLIENT_RESULT_FILE"
+fi
 log "Observed ready state:"
 jq '{status,rf_safe,metrics:(.metrics | {frequency_hz,sample_rate_hz,dma_reads,dma_bytes,iq_pairs,fifo_hwm,header_resync,header_errors,tx_capable})}' \
   "$OBSERVED_FILE"
