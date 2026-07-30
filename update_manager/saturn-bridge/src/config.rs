@@ -4,6 +4,35 @@ use std::time::Duration;
 
 use crate::p2::ports::{P2PortMap, COMMAND_DISCOVERY_PORT};
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum RadioBackend {
+    #[default]
+    P2,
+    Xdma,
+}
+
+impl RadioBackend {
+    pub fn from_env() -> Result<Self, String> {
+        match env::var("SATURN_BRIDGE_RADIO_BACKEND") {
+            Ok(value) => Self::parse(&value),
+            Err(env::VarError::NotPresent) => Ok(Self::P2),
+            Err(error) => Err(format!(
+                "could not read SATURN_BRIDGE_RADIO_BACKEND: {error}"
+            )),
+        }
+    }
+
+    fn parse(value: &str) -> Result<Self, String> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "p2" => Ok(Self::P2),
+            "xdma" => Ok(Self::Xdma),
+            _ => Err(format!(
+                "SATURN_BRIDGE_RADIO_BACKEND must be 'p2' or 'xdma', not {value:?}"
+            )),
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct BridgeConfig {
     pub radio_command_addr: SocketAddr,
@@ -253,4 +282,17 @@ fn clamp_fft_size(value: u32) -> u32 {
     let clamped = value.clamp(MIN_FFT, MAX_FFT);
     // Round down to nearest power of two
     1 << (31 - clamped.leading_zeros())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::RadioBackend;
+
+    #[test]
+    fn radio_backend_selection_is_explicit_and_fail_closed() {
+        assert_eq!(RadioBackend::parse("p2").unwrap(), RadioBackend::P2);
+        assert_eq!(RadioBackend::parse(" XDMA ").unwrap(), RadioBackend::Xdma);
+        assert!(RadioBackend::parse("auto").is_err());
+        assert!(RadioBackend::parse("").is_err());
+    }
 }

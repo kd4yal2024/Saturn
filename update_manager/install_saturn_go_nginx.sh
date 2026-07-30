@@ -772,12 +772,13 @@ chmod 0644 "$SATURN_RELEASE_ACTIVATE_CONFIG"
 install -d -m 0750 -o root -g "$SERVICE_GROUP" "$SATURN_RADIO_BACKEND_STATE_DIR"
 cat >"$SATURN_RADIO_BACKEND_CONFIG" <<EOF
 # Managed by install_saturn_go_nginx.sh. Parsed as data by the root switcher.
-# Direct XDMA remains probe-only; do not enable it until the operational
-# backend has its own receive-safe release and data-plane readiness gates.
+# Direct XDMA has an RX-only runtime, but remains production-disabled until its
+# appliance switch, rollback, and client validation gates are accepted.
 XDMA_OPERATIONAL_ENABLED="0"
 STATE_FILE="$SATURN_RADIO_BACKEND_STATE_DIR/selection.json"
 TRANSACTION_FILE="/run/saturn-radio-backend/transaction.json"
 LOCK_FILE="$SATURN_MAINTENANCE_LOCK_DIR/radio.lock"
+XDMA_READY_FILE="/run/saturn-bridge/xdma-ready.json"
 SYSTEMD_ROOT="/etc/systemd/system"
 BRIDGE_SERVICE="saturn-bridge.service"
 P2APP_SERVICE="p2app.service"

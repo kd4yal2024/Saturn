@@ -360,6 +360,8 @@ WorkingDirectory=${SATURN_GO_ROOT}
 ExecStart=${SATURN_BRIDGE_BIN}
 Restart=on-failure
 RestartSec=2
+RuntimeDirectory=saturn-bridge
+RuntimeDirectoryMode=0750
 NoNewPrivileges=yes
 PrivateTmp=yes
 ProtectSystem=strict
@@ -370,6 +372,7 @@ RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 Environment=SATURN_BRIDGE_RADIO_HOST=127.0.0.1
 Environment=SATURN_BRIDGE_RADIO_PORT=1024
 Environment=SATURN_BRIDGE_RADIO_BACKEND=p2
+Environment=SATURN_BRIDGE_XDMA_READY_PATH=/run/saturn-bridge/xdma-ready.json
 Environment=SATURN_BRIDGE_CLIENT_HOST=127.0.0.1
 Environment=SATURN_BRIDGE_CLIENT_PORT=12000
 Environment=SATURN_BRIDGE_TCI_HOST=127.0.0.1

@@ -1504,6 +1504,9 @@ function renderXdmaDashboard(xdma){
   const optional = devices.filter((device)=>!device?.required);
   const optionalReady = optional.filter((device)=>device?.present).length;
   const validation = xdma?.last_validation || {};
+  const operational = xdma?.operational || {};
+  const operationalSnapshot = operational?.snapshot || {};
+  const operationalMetrics = operationalSnapshot?.metrics || {};
   const saved = validation?.snapshot || null;
   const validationResult = saved?.status || saved?.result || (validation?.present ? 'saved' : 'not recorded');
   const validationStatus = saved
@@ -1513,7 +1516,7 @@ function renderXdmaDashboard(xdma){
   return [
     metricCard('Backend Ownership', backend.active || 'none', `requested ${backend.requested || 'p2'} | P2 service ${backend.p2_service_state || 'unknown'}`),
     metricCard('Direct XDMA', backend.direct_state || 'unknown', backend.message || 'No ownership detail.'),
-    metricCard('Implementation', `Phase ${backend.implementation_phase ?? 'n/a'}`, backend.direct_operational ? 'production backend active' : 'guarded validation only; not operational'),
+    metricCard('Implementation', `Phase ${backend.implementation_phase ?? 'n/a'}`, backend.direct_operational ? 'RX-only runtime active' : 'production selection gated'),
     metricCard('Driver', driver.status || 'unknown', `module ${driver.module_loaded ? 'loaded' : 'not loaded'} | required nodes ${requiredReady}/${required.length}`),
     metricCard('DMA Nodes', `${requiredReady}/${required.length} required`, `${optionalReady}/${optional.length} optional`),
     metricCard('PCIe Link', link, runtime.present ? 'XDMA runtime detected' : 'No XDMA runtime evidence'),
@@ -1521,7 +1524,8 @@ function renderXdmaDashboard(xdma){
     metricCard('Completion Thread', `${parameters.completion_kthread_priority ?? 'n/a'}`, `SCHED_FIFO priority | high-priority workqueue ${parameters.completion_wq_highpri ?? 'n/a'}`),
     metricCard('Latency Diagnostics', `${parameters.transfer_latency_warn_us ?? 'n/a'} µs`, 'rate-limited kernel transfer warning threshold'),
     metricCard('Last Validation', String(validationStatus), validation.present ? `age ${formatXdmaAge(validation.age_ms)}` : 'structured probe snapshot not recorded'),
-    metricCard('RF Safety', backend.direct_operational ? 'operational' : 'not keyed', backend.direct_operational ? 'live backend must publish safety counters' : 'this page does not enable or key RF'),
+    metricCard('RX Data Plane', operationalSnapshot?.status || 'inactive', operational.present ? `${operationalMetrics.iq_pairs ?? 0} IQ pairs | ${operationalMetrics.dma_reads ?? 0} DMA reads | age ${formatXdmaAge(operational.age_ms)}` : 'No operational heartbeat'),
+    metricCard('RF Safety', backend.direct_operational ? 'receive-safe' : 'not keyed', backend.direct_operational ? `TX capable ${operationalMetrics.tx_capable === true ? 'yes' : 'no'} | heartbeat verified` : 'this page does not enable or key RF'),
   ].join('');
 }
 function buildBridgeDiagSnapshot(){

@@ -3,10 +3,9 @@ set -Eeuo pipefail
 
 # Transactionally select the one appliance-wide owner of the Saturn FPGA.
 #
-# Direct XDMA remains probe-only. The installed configuration therefore keeps
-# XDMA_OPERATIONAL_ENABLED=0, causing a request for the XDMA backend to fail
-# before any service or state mutation. Test mode can exercise the completed
-# transaction and rollback paths without touching production paths.
+# Direct XDMA now has an RX-only operational runtime, but production selection
+# remains gated while its appliance switch, rollback, and client behavior are
+# validated. Test mode exercises the transaction without changing production.
 
 CONFIG_FILE="${SATURN_RADIO_BACKEND_CONFIG:-/etc/default/saturn-radio-backend}"
 XDMA_OPERATIONAL_ENABLED=0
@@ -18,6 +17,7 @@ BRIDGE_SERVICE="saturn-bridge.service"
 P2APP_SERVICE="p2app.service"
 BRIDGE_DROPIN_NAME="20-radio-backend.conf"
 READY_TIMEOUT_SECONDS=15
+XDMA_READY_FILE="/run/saturn-bridge/xdma-ready.json"
 STATE_GROUP="pi"
 TEST_MODE="${SATURN_RADIO_BACKEND_TEST_MODE:-0}"
 
@@ -42,9 +42,9 @@ Usage:
   saturn-radio-backend-switch-root.sh switch p2
   saturn-radio-backend-switch-root.sh switch xdma
 
-The selection is appliance-wide. Direct XDMA activation remains disabled until
-the production backend is implemented and explicitly enabled by root-owned
-configuration.
+The selection is appliance-wide. Direct XDMA production activation remains
+disabled until the RX-only runtime completes appliance validation and is
+explicitly enabled by root-owned configuration.
 EOF
 }
 
@@ -83,6 +83,7 @@ load_config() {
       P2APP_SERVICE) P2APP_SERVICE="$value" ;;
       BRIDGE_DROPIN_NAME) BRIDGE_DROPIN_NAME="$value" ;;
       READY_TIMEOUT_SECONDS) READY_TIMEOUT_SECONDS="$value" ;;
+      XDMA_READY_FILE) XDMA_READY_FILE="$value" ;;
       STATE_GROUP) STATE_GROUP="$value" ;;
       *) die "unsupported backend config key: $key" ;;
     esac
@@ -100,7 +101,10 @@ validate_configuration() {
   [[ "$TEST_MODE" == "0" || "$TEST_MODE" == "1" ]] \
     || die "SATURN_RADIO_BACKEND_TEST_MODE must be 0 or 1"
 
-  for path in "$STATE_FILE" "$TRANSACTION_FILE" "$LOCK_FILE" "$SYSTEMD_ROOT"; do
+  for path in \
+    "$STATE_FILE" "$TRANSACTION_FILE" "$LOCK_FILE" "$SYSTEMD_ROOT" \
+    "$XDMA_READY_FILE"
+  do
     [[ "$path" == /* && "$path" != *[$'\t\r\n ']* ]] \
       || die "unsafe configured path: $path"
   done
@@ -122,7 +126,7 @@ validate_configuration() {
       || die "non-root test mode refuses production state and lock paths"
   fi
   if [[ "$XDMA_OPERATIONAL_ENABLED" == "1" && "$TEST_MODE" != "1" ]]; then
-    die "direct XDMA is still probe-only; production activation cannot be enabled"
+    die "direct XDMA production activation remains gated pending appliance validation"
   fi
   if (( EUID == 0 )); then
     getent group "$STATE_GROUP" >/dev/null 2>&1 \
@@ -264,6 +268,9 @@ Environment=SATURN_BRIDGE_RADIO_BACKEND=p2
 EOF
   else
     cat >"$temporary" <<'EOF'
+[Unit]
+Conflicts=p2app.service
+
 [Service]
 Environment=SATURN_BRIDGE_RADIO_BACKEND=xdma
 EOF
@@ -283,6 +290,61 @@ bridge_runtime_backend() {
   esac
 }
 
+read_xdma_ready_counters() {
+  python3 - "$XDMA_READY_FILE" <<'PY'
+import json
+import sys
+import time
+
+try:
+    with open(sys.argv[1], encoding="utf-8") as handle:
+        value = json.load(handle)
+    metrics = value["metrics"]
+    updated_at_ms = int(value["updated_at_ms"])
+    dma_reads = int(metrics["dma_reads"])
+    iq_pairs = int(metrics["iq_pairs"])
+except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError):
+    raise SystemExit(1)
+
+age_ms = int(time.time() * 1000) - updated_at_ms
+if (
+    value.get("backend") != "xdma"
+    or value.get("status") != "ready"
+    or value.get("rf_safe") is not True
+    or metrics.get("tx_capable") is not False
+    or dma_reads < 4
+    or iq_pairs < 1024
+    or age_ms < -1000
+    or age_ms > 5000
+):
+    raise SystemExit(1)
+print(dma_reads, iq_pairs)
+PY
+}
+
+wait_for_xdma_ready() {
+  local elapsed=0 first="" current first_dma first_iq current_dma current_iq
+  while (( elapsed < READY_TIMEOUT_SECONDS )); do
+    if current="$(read_xdma_ready_counters 2>/dev/null)"; then
+      if [[ "$TEST_MODE" == "1" ]]; then
+        return 0
+      fi
+      if [[ -z "$first" ]]; then
+        first="$current"
+      else
+        read -r first_dma first_iq <<<"$first"
+        read -r current_dma current_iq <<<"$current"
+        if (( current_dma > first_dma && current_iq > first_iq )); then
+          return 0
+        fi
+      fi
+    fi
+    sleep 1
+    elapsed=$((elapsed + 1))
+  done
+  die "direct XDMA readiness did not become fresh and advancing within ${READY_TIMEOUT_SECONDS}s"
+}
+
 verify_target_ready() {
   local backend="$1" runtime_backend
   wait_for_service_state "$BRIDGE_SERVICE" active
@@ -294,6 +356,7 @@ verify_target_ready() {
     wait_for_service_state "$P2APP_SERVICE" active
   else
     wait_for_service_state "$P2APP_SERVICE" inactive
+    wait_for_xdma_ready
   fi
 }
 
@@ -367,7 +430,7 @@ prepare_transaction() {
 
 switch_backend() {
   if [[ "$TARGET_BACKEND" == "xdma" && "$XDMA_OPERATIONAL_ENABLED" != "1" ]]; then
-    die "direct XDMA is still probe-only; no service or persistent state was changed"
+    die "direct XDMA production activation remains gated; no service or persistent state was changed"
   fi
 
   prepare_transaction
@@ -471,7 +534,7 @@ main() {
   need_cmd mktemp
 
   if [[ "$TARGET_BACKEND" == "xdma" && "$XDMA_OPERATIONAL_ENABLED" != "1" ]]; then
-    die "direct XDMA is still probe-only; no service or persistent state was changed"
+    die "direct XDMA production activation remains gated; no service or persistent state was changed"
   fi
   if [[ "$command" == "status" ]]; then
     print_status

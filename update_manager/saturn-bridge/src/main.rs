@@ -9,6 +9,7 @@ mod tx_thread;
 mod wdsp;
 mod xdma;
 mod xdma_audio;
+mod xdma_backend;
 mod xdma_duc;
 mod xdma_rx;
 mod xdma_telemetry;
@@ -22,7 +23,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use config::BridgeConfig;
+use config::{BridgeConfig, RadioBackend};
 use p2::session::P2Session;
 use radio_model::{DemodMode, PureSignalState, RadioModel, TxPhase};
 use rx_thread::{RxCommand, RxEvent, RxStats};
@@ -254,7 +255,18 @@ fn main() -> Result<(), Box<dyn Error>> {
         return finish_xdma_probe_command(5, "guarded-tx", xdma_tx::run_phase5_tx_probe());
     }
 
-    let config = BridgeConfig::from_env();
+    let backend = RadioBackend::from_env()
+        .map_err(|message| std::io::Error::new(std::io::ErrorKind::InvalidInput, message))?;
+    let mut config = BridgeConfig::from_env();
+    if backend == RadioBackend::Xdma {
+        config.rx_ddc_index = xdma_rx::DIRECT_DDC_INDEX as u8;
+        config.ddc0_adc = 0;
+        config.ddc0_sample_rate_khz = xdma_rx::DIRECT_DDC_SAMPLE_RATE_KHZ as u16;
+        config.max_client_ddc0_sample_rate_khz = xdma_rx::DIRECT_DDC_SAMPLE_RATE_KHZ as u16;
+        config.ddc0_sample_size_bits = 24;
+        config.remote_tx_rf_enabled = false;
+        return xdma_backend::run(config);
+    }
     let radio_model = Arc::new(Mutex::new(RadioModel::new(
         config.rx_ddc_index,
         config.ddc0_frequency_hz,

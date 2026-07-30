@@ -44,6 +44,18 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
   `/dev/xdma0_user` after a new login or reboot.
 
 ### Added
+- Added the first operational direct-XDMA receive backend behind the
+  production-disabled backend selector. DDC6/ADC1 IQ now feeds the existing TCI
+  and WDSP receive paths at 192 kHz, live tuning and RX DSP controls remain
+  available, all TX requests fail closed, and signal-driven shutdown restores
+  the receive-safe register state. The transaction broker now requires a fresh
+  operational heartbeat with DMA and IQ counters before accepting XDMA, while
+  the installed policy continues to block production selection pending
+  appliance validation. A bounded source-tree smoke harness rejects stale
+  binaries, proves a steady-state IQ rate within two percent of 192 kHz plus
+  receive-safe shutdown, and restores the prior radio-service activity without
+  changing that policy. The first appliance run sustained approximately
+  191,975 IQ pairs/second with no framing or FIFO fault.
 - Added opt-in XDMA completion diagnostics for the direct-DMA Phase 4 stress
   work. Slow synchronous transfers now separate page mapping, submission wait,
   and cleanup; the submission wait further reports submit-to-IRQ,

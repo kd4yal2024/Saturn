@@ -1424,6 +1424,7 @@ async fn command_text(program: &str, args: &[&str]) -> (bool, String) {
 }
 
 const XDMA_TELEMETRY_SNAPSHOT_FILE: &str = "/var/lib/saturn-state/xdma-telemetry.json";
+const XDMA_OPERATIONAL_READY_FILE: &str = "/run/saturn-bridge/xdma-ready.json";
 
 fn read_trimmed_file(path: impl AsRef<Path>) -> Option<String> {
     fs::read_to_string(path)
@@ -1502,8 +1503,8 @@ fn systemd_environment_value(environment: &str, key: &str) -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
-fn xdma_probe_snapshot() -> serde_json::Value {
-    let path = Path::new(XDMA_TELEMETRY_SNAPSHOT_FILE);
+fn xdma_structured_snapshot(path_text: &str) -> serde_json::Value {
+    let path = Path::new(path_text);
     let metadata = fs::metadata(path).ok();
     let modified_at_ms = metadata
         .as_ref()
@@ -1519,7 +1520,7 @@ fn xdma_probe_snapshot() -> serde_json::Value {
         Ok(raw) => match serde_json::from_str::<serde_json::Value>(&raw) {
             Ok(snapshot) => serde_json::json!({
                 "present": true,
-                "path": XDMA_TELEMETRY_SNAPSHOT_FILE,
+                "path": path_text,
                 "modified_at_ms": modified_at_ms,
                 "age_ms": modified_at_ms.map(|value| now_ms.saturating_sub(value)),
                 "snapshot": snapshot,
@@ -1528,7 +1529,7 @@ fn xdma_probe_snapshot() -> serde_json::Value {
             }),
             Err(error) => serde_json::json!({
                 "present": true,
-                "path": XDMA_TELEMETRY_SNAPSHOT_FILE,
+                "path": path_text,
                 "modified_at_ms": modified_at_ms,
                 "age_ms": modified_at_ms.map(|value| now_ms.saturating_sub(value)),
                 "snapshot": null,
@@ -1538,7 +1539,7 @@ fn xdma_probe_snapshot() -> serde_json::Value {
         },
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => serde_json::json!({
             "present": false,
-            "path": XDMA_TELEMETRY_SNAPSHOT_FILE,
+            "path": path_text,
             "modified_at_ms": null,
             "age_ms": null,
             "snapshot": null,
@@ -1547,7 +1548,7 @@ fn xdma_probe_snapshot() -> serde_json::Value {
         }),
         Err(error) => serde_json::json!({
             "present": false,
-            "path": XDMA_TELEMETRY_SNAPSHOT_FILE,
+            "path": path_text,
             "modified_at_ms": modified_at_ms,
             "age_ms": modified_at_ms.map(|value| now_ms.saturating_sub(value)),
             "snapshot": null,
@@ -1555,6 +1556,38 @@ fn xdma_probe_snapshot() -> serde_json::Value {
             "parse_error": null,
         }),
     }
+}
+
+fn xdma_probe_snapshot() -> serde_json::Value {
+    xdma_structured_snapshot(XDMA_TELEMETRY_SNAPSHOT_FILE)
+}
+
+fn xdma_operational_snapshot() -> serde_json::Value {
+    xdma_structured_snapshot(XDMA_OPERATIONAL_READY_FILE)
+}
+
+fn xdma_operational_is_ready(
+    p2_active: bool,
+    direct_requested: bool,
+    operational: &serde_json::Value,
+) -> bool {
+    !p2_active
+        && direct_requested
+        && operational["present"].as_bool().unwrap_or(false)
+        && operational["parse_error"].is_null()
+        && operational["snapshot"]["backend"].as_str() == Some("xdma")
+        && operational["snapshot"]["status"].as_str() == Some("ready")
+        && operational["snapshot"]["rf_safe"].as_bool() == Some(true)
+        && operational["snapshot"]["metrics"]["tx_capable"].as_bool() == Some(false)
+        && operational["snapshot"]["metrics"]["dma_reads"]
+            .as_u64()
+            .is_some_and(|count| count >= 4)
+        && operational["snapshot"]["metrics"]["iq_pairs"]
+            .as_u64()
+            .is_some_and(|count| count >= 1_024)
+        && operational["age_ms"]
+            .as_u64()
+            .is_some_and(|age| age <= 5_000)
 }
 
 fn xdma_bridge_telemetry(
@@ -1601,9 +1634,19 @@ fn xdma_bridge_telemetry(
         requested_backend.as_str(),
         "xdma" | "direct" | "direct-xdma"
     );
-    let active_backend = if p2_active { Some("p2") } else { None };
+    let operational = xdma_operational_snapshot();
+    let direct_operational = xdma_operational_is_ready(p2_active, direct_requested, &operational);
+    let active_backend = if p2_active {
+        Some("p2")
+    } else if direct_operational {
+        Some("xdma")
+    } else {
+        None
+    };
     let direct_state = if p2_active {
         "inactive"
+    } else if direct_operational {
+        "active"
     } else if module_loaded && required_devices_ready {
         "available"
     } else {
@@ -1611,8 +1654,9 @@ fn xdma_bridge_telemetry(
     };
     let direct_message = match direct_state {
         "inactive" => "Direct XDMA is idle because p2app.service owns the FPGA.",
+        "active" => "Direct XDMA owns the FPGA and is publishing a fresh RX data-plane heartbeat.",
         "available" if direct_requested => {
-            "Direct XDMA is requested and hardware-ready, but the production backend is not active."
+            "Direct XDMA is requested, but its RX data-plane heartbeat is not ready."
         }
         "available" => {
             "Direct XDMA hardware is available for guarded probes; no production backend owns it."
@@ -1638,8 +1682,8 @@ fn xdma_bridge_telemetry(
             "active": active_backend,
             "p2_service_state": p2_service_state.trim(),
             "direct_state": direct_state,
-            "direct_operational": false,
-            "implementation_phase": 5,
+            "direct_operational": direct_operational,
+            "implementation_phase": 6,
             "message": direct_message,
         },
         "driver": {
@@ -1660,6 +1704,7 @@ fn xdma_bridge_telemetry(
             "devices": devices,
         },
         "runtime": xdma_interrupt_telemetry(),
+        "operational": operational,
         "last_validation": xdma_probe_snapshot(),
     })
 }
@@ -4000,6 +4045,7 @@ mod tests {
         append_script_run_log_line, begin_script_run_log, bind_addr_is_loopback,
         disk_imaging_disabled, parse_xdma_interrupts_text, script_deadline_seconds,
         script_run_log_slot, systemd_environment_value, with_request_limit,
+        xdma_operational_is_ready,
     };
     use axum::{
         body::{Body, Bytes},
@@ -4055,6 +4101,41 @@ mod tests {
             systemd_environment_value("SATURN_FOO=1", "SATURN_BRIDGE_BACKEND"),
             None
         );
+    }
+
+    #[test]
+    fn xdma_operational_readiness_requires_fresh_safe_exclusive_ownership() {
+        let ready = serde_json::json!({
+            "present": true,
+            "age_ms": 1000,
+            "parse_error": null,
+            "snapshot": {
+                "backend": "xdma",
+                "status": "ready",
+                "rf_safe": true,
+                "metrics": {
+                    "tx_capable": false,
+                    "dma_reads": 4,
+                    "iq_pairs": 1024,
+                },
+            }
+        });
+        assert!(xdma_operational_is_ready(false, true, &ready));
+        assert!(!xdma_operational_is_ready(true, true, &ready));
+        assert!(!xdma_operational_is_ready(false, false, &ready));
+
+        let mut stale = ready.clone();
+        stale["age_ms"] = serde_json::json!(5001);
+        assert!(!xdma_operational_is_ready(false, true, &stale));
+
+        let mut unsafe_runtime = ready;
+        unsafe_runtime["snapshot"]["rf_safe"] = serde_json::json!(false);
+        assert!(!xdma_operational_is_ready(false, true, &unsafe_runtime));
+
+        let mut transmit_capable = unsafe_runtime;
+        transmit_capable["snapshot"]["rf_safe"] = serde_json::json!(true);
+        transmit_capable["snapshot"]["metrics"]["tx_capable"] = serde_json::json!(true);
+        assert!(!xdma_operational_is_ready(false, true, &transmit_capable));
     }
 
     #[test]

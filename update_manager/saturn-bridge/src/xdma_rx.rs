@@ -23,8 +23,8 @@ const MIN_CAPTURE_DURATION_MS: u64 = 250;
 const MAX_CAPTURE_DURATION_MS: u64 = 10_000;
 const ADC_SAMPLE_CLOCK_HZ: u128 = 122_880_000;
 
-const DIRECT_DDC_INDEX: usize = 6;
-const DIRECT_DDC_SAMPLE_RATE_KHZ: u32 = 192;
+pub(crate) const DIRECT_DDC_INDEX: usize = 6;
+pub(crate) const DIRECT_DDC_SAMPLE_RATE_KHZ: u32 = 192;
 const DDC_RATE_CODE_192_KHZ: u32 = 3;
 const DDC_RATE_REGISTER: u64 = 0x100C;
 const DDC_INPUT_SELECT_REGISTER: u64 = 0x1010;
@@ -96,18 +96,18 @@ impl FifoSnapshot {
 }
 
 #[derive(Clone, Debug, Default)]
-struct RxCaptureStats {
-    dma_reads: u64,
-    dma_bytes: u64,
-    frames: u64,
-    samples: u64,
-    header_resyncs: u64,
-    header_errors: u64,
-    fifo_depth_hwm: usize,
-    fifo_overflows: u64,
-    fifo_over_threshold: u64,
-    fifo_underflows: u64,
-    fifo_startup_underflow: bool,
+pub(crate) struct RxCaptureStats {
+    pub(crate) dma_reads: u64,
+    pub(crate) dma_bytes: u64,
+    pub(crate) frames: u64,
+    pub(crate) samples: u64,
+    pub(crate) header_resyncs: u64,
+    pub(crate) header_errors: u64,
+    pub(crate) fifo_depth_hwm: usize,
+    pub(crate) fifo_overflows: u64,
+    pub(crate) fifo_over_threshold: u64,
+    pub(crate) fifo_underflows: u64,
+    pub(crate) fifo_startup_underflow: bool,
     power_sum: f64,
     peak: f32,
 }
@@ -146,7 +146,7 @@ impl DdcStreamParser {
         }
     }
 
-    fn feed(&mut self, bytes: &[u8]) -> Result<(), XdmaError> {
+    fn feed(&mut self, bytes: &[u8], iq_samples: &mut Vec<f32>) -> Result<(), XdmaError> {
         if !bytes.len().is_multiple_of(FIFO_WORD_BYTES) {
             return Err(XdmaError::Incompatible(format!(
                 "DDC DMA read length {} is not a multiple of {FIFO_WORD_BYTES}",
@@ -206,6 +206,8 @@ impl DdcStreamParser {
             {
                 let i = signed_24_be(&sample_word[0..3]) as f32 / 8_388_608.0;
                 let q = signed_24_be(&sample_word[3..6]) as f32 / 8_388_608.0;
+                iq_samples.push(i);
+                iq_samples.push(q);
                 self.stats.power_sum += ((i * i + q * q) * 0.5) as f64;
                 self.stats.peak = self.stats.peak.max(i.abs()).max(q.abs());
                 self.stats.samples += 1;
@@ -341,6 +343,7 @@ impl<'a> RxDdcSession<'a> {
     fn capture(&mut self, duration: Duration) -> Result<RxCaptureStats, XdmaError> {
         let mut aligned = AlignedBuffer::new(DMA_MAX_READ_BYTES)?;
         let mut parser = DdcStreamParser::new(direct_ddc_rate_word());
+        let mut discarded_iq = Vec::with_capacity(DMA_MAX_READ_BYTES / FIFO_WORD_BYTES * 2);
         // The FPGA can latch one benign underflow while a newly enabled,
         // empty read FIFO starts filling.  P2 likewise excludes startup FIFO
         // conditions from runtime telemetry.  Clear that boundary here so
@@ -384,7 +387,8 @@ impl<'a> RxDdcSession<'a> {
             }
             parser.stats.dma_reads += 1;
             parser.stats.dma_bytes += read as u64;
-            parser.feed(&target[..read])?;
+            discarded_iq.clear();
+            parser.feed(&target[..read], &mut discarded_iq)?;
         }
 
         if parser.stats.frames == 0 || parser.stats.samples == 0 {
@@ -434,6 +438,191 @@ impl Drop for RxDdcSession<'_> {
     fn drop(&mut self) {
         if let Err(error) = self.stop() {
             eprintln!("saturn-bridge: XDMA RX emergency cleanup failed: {error}");
+        }
+    }
+}
+
+/// Owned, receive-only XDMA DDC session used by the operational backend.
+///
+/// The register device remains armed for emergency receive-safe cleanup for
+/// the session's entire lifetime. This type exposes no H2C device and cannot
+/// key RF.
+pub(crate) struct OperationalRxSession {
+    registers: XdmaRegisterDevice,
+    dma: File,
+    parser: DdcStreamParser,
+    aligned: AlignedBuffer,
+    identity: SaturnIdentity,
+    frequency_hz: u32,
+    stopped: bool,
+}
+
+impl OperationalRxSession {
+    pub(crate) fn open(frequency_hz: u32) -> Result<Self, XdmaError> {
+        ensure_p2app_inactive()?;
+        validate_frequency(frequency_hz)?;
+        let register_path = env::var_os("SATURN_BRIDGE_XDMA_USER_DEVICE")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("/dev/xdma0_user"));
+        let ddc_path = env::var_os("SATURN_BRIDGE_XDMA_RX_DEVICE")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(DEFAULT_DDC_DEVICE));
+        let registers = XdmaRegisterDevice::open(&register_path)?;
+        let identity = registers.identity().clone();
+        let dma = OpenOptions::new()
+            .read(true)
+            .open(&ddc_path)
+            .map_err(|source| XdmaError::Io {
+                action: "could not open operational XDMA DDC receive device",
+                source,
+            })?;
+        let mut aligned = AlignedBuffer::new(DMA_MAX_READ_BYTES)?;
+        aligned.lock_memory()?;
+        let mut session = Self {
+            registers,
+            dma,
+            parser: DdcStreamParser::new(direct_ddc_rate_word()),
+            aligned,
+            identity,
+            frequency_hz,
+            stopped: false,
+        };
+        if let Err(error) = session.configure(frequency_hz) {
+            let _ = session.stop();
+            return Err(error);
+        }
+        Ok(session)
+    }
+
+    pub(crate) fn identity(&self) -> &SaturnIdentity {
+        &self.identity
+    }
+
+    pub(crate) fn frequency_hz(&self) -> u32 {
+        self.frequency_hz
+    }
+
+    pub(crate) fn stats(&self) -> &RxCaptureStats {
+        &self.parser.stats
+    }
+
+    pub(crate) fn verify_receive_safe(&self) -> Result<(), XdmaError> {
+        self.registers.verify_safe_receive_state()
+    }
+
+    pub(crate) fn tune(&mut self, frequency_hz: u32) -> Result<(), XdmaError> {
+        validate_frequency(frequency_hz)?;
+        self.registers.write_register(
+            DDC6_FREQUENCY_REGISTER,
+            frequency_to_phase_word(frequency_hz),
+        )?;
+        self.frequency_hz = frequency_hz;
+        Ok(())
+    }
+
+    pub(crate) fn read_iq(&mut self, iq_samples: &mut Vec<f32>) -> Result<bool, XdmaError> {
+        iq_samples.clear();
+        let fifo = FifoSnapshot::decode(self.registers.read_register(DDC_FIFO_MONITOR_REGISTER)?);
+        self.parser.stats.observe_fifo(fifo);
+        if fifo.overflow || fifo.over_threshold || fifo.underflow {
+            return Err(XdmaError::Incompatible(format!(
+                "operational XDMA RX FIFO fault: depth={} overflow={} threshold={} underflow={}",
+                fifo.depth_words,
+                u8::from(fifo.overflow),
+                u8::from(fifo.over_threshold),
+                u8::from(fifo.underflow)
+            )));
+        }
+        let read_bytes = dma_read_size(fifo.depth_words);
+        if read_bytes == 0 {
+            return Ok(false);
+        }
+        let target = self.aligned.as_mut_slice(read_bytes);
+        let read = self
+            .dma
+            .read_at(target, 0)
+            .map_err(|source| XdmaError::Io {
+                action: "could not read operational XDMA DDC receive stream",
+                source,
+            })?;
+        if read != read_bytes {
+            return Err(XdmaError::Io {
+                action: "operational XDMA DDC receive stream returned a short read",
+                source: io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    format!("read {read} of {read_bytes} bytes"),
+                ),
+            });
+        }
+        self.parser.stats.dma_reads += 1;
+        self.parser.stats.dma_bytes += read as u64;
+        self.parser.feed(&target[..read], iq_samples)?;
+        Ok(!iq_samples.is_empty())
+    }
+
+    fn configure(&mut self, frequency_hz: u32) -> Result<(), XdmaError> {
+        self.disable_stream()?;
+        thread::sleep(Duration::from_millis(1));
+        self.reset_fifo()?;
+        self.registers.read_register(DDC_FIFO_MONITOR_REGISTER)?;
+        self.registers
+            .write_register(DDC_RATE_REGISTER, direct_ddc_rate_word())?;
+        self.tune(frequency_hz)?;
+        self.registers.update_register(
+            DDC_INPUT_SELECT_REGISTER,
+            |value| (value & !DDC6_ADC_MASK) | DDC_STREAM_ENABLE_BIT,
+            "could not route ADC1 and enable operational direct DDC stream",
+        )?;
+        thread::sleep(Duration::from_millis(1));
+        let startup =
+            FifoSnapshot::decode(self.registers.read_register(DDC_FIFO_MONITOR_REGISTER)?);
+        self.parser.stats.fifo_depth_hwm = startup.depth_words;
+        self.parser.stats.fifo_overflows += u64::from(startup.overflow);
+        self.parser.stats.fifo_over_threshold += u64::from(startup.over_threshold);
+        self.parser.stats.fifo_startup_underflow = startup.underflow;
+        Ok(())
+    }
+
+    fn disable_stream(&self) -> Result<(), XdmaError> {
+        self.registers.update_register(
+            DDC_INPUT_SELECT_REGISTER,
+            |value| value & !DDC_STREAM_ENABLE_BIT,
+            "could not disable operational direct DDC stream",
+        )
+    }
+
+    fn reset_fifo(&self) -> Result<(), XdmaError> {
+        self.registers.update_register(
+            FIFO_RESET_REGISTER,
+            |value| value & !DDC_FIFO_RESET_BIT,
+            "could not assert operational direct DDC FIFO reset",
+        )?;
+        self.registers.update_register(
+            FIFO_RESET_REGISTER,
+            |value| value | DDC_FIFO_RESET_BIT,
+            "could not release operational direct DDC FIFO reset",
+        )
+    }
+
+    pub(crate) fn stop(&mut self) -> Result<(), XdmaError> {
+        if self.stopped {
+            return Ok(());
+        }
+        let disable = self.disable_stream();
+        thread::sleep(Duration::from_millis(1));
+        let clear_rates = self.registers.write_register(DDC_RATE_REGISTER, 0);
+        let reset = self.reset_fifo();
+        let safe = self.registers.force_safe_receive_state();
+        let result = disable.and(clear_rates).and(reset).and(safe);
+        self.stopped = result.is_ok();
+        result
+    }
+}
+
+impl Drop for OperationalRxSession {
+    fn drop(&mut self) {
+        if let Err(error) = self.stop() {
+            eprintln!("saturn-bridge: operational XDMA RX cleanup failed: {error}");
         }
     }
 }
@@ -556,6 +745,15 @@ pub fn run_phase2_rx_probe() -> Result<(), XdmaError> {
 
 fn direct_ddc_rate_word() -> u32 {
     DDC_RATE_CODE_192_KHZ << (DIRECT_DDC_INDEX * 3)
+}
+
+fn validate_frequency(frequency_hz: u32) -> Result<(), XdmaError> {
+    if frequency_hz > (ADC_SAMPLE_CLOCK_HZ as u32 / 2) {
+        return Err(XdmaError::Incompatible(format!(
+            "direct XDMA RX frequency {frequency_hz} Hz exceeds the 61.44 MHz Nyquist limit"
+        )));
+    }
+    Ok(())
 }
 
 fn frequency_to_phase_word(frequency_hz: u32) -> u32 {
@@ -688,10 +886,14 @@ mod tests {
         stream.extend_from_slice(&frame);
         stream.extend_from_slice(&frame);
         let mut parser = DdcStreamParser::new(direct_ddc_rate_word());
-        parser.feed(&stream[..32]).unwrap();
-        parser.feed(&stream[32..]).unwrap();
+        let mut iq_samples = Vec::new();
+        parser.feed(&stream[..32], &mut iq_samples).unwrap();
+        parser.feed(&stream[32..], &mut iq_samples).unwrap();
         assert_eq!(parser.stats.frames, 2);
         assert_eq!(parser.stats.samples, 8);
+        assert_eq!(iq_samples.len(), 16);
+        assert!((iq_samples[0] - 1000.0 / 8_388_608.0).abs() < f32::EPSILON);
+        assert!((iq_samples[1] - (-2000.0 / 8_388_608.0)).abs() < f32::EPSILON);
         assert_eq!(parser.stats.header_errors, 0);
         assert_eq!(parser.stats.header_resyncs, 1);
         assert!(parser.stats.peak > 0.0);

@@ -480,8 +480,15 @@ modify.
 The transaction snapshots the prior service activity, bridge drop-in, and
 persistent selection. A start, readiness, or mutual-exclusion failure restores
 all three. The XDMA form first stops P2 and refuses to start the bridge if P2
-retains ownership. Tests exercise successful transactions in both directions,
-a failed bridge start, and a P2 service that refuses to stop.
+retains ownership. It then requires a fresh RX heartbeat with advancing DMA
+read and IQ-pair counters before persisting XDMA. Tests exercise successful
+transactions in both directions, a missing data-plane heartbeat, a failed
+bridge start, and a P2 service that refuses to stop.
+
+The XDMA-specific bridge drop-in also declares
+`Conflicts=p2app.service`. If an operator later starts P2 manually, systemd
+stops the direct bridge first; its SIGTERM handler completes receive-safe DDC
+cleanup before P2 can claim the FPGA.
 
 The base bridge unit depends only on network readiness. It does not `Wants=`
 P2, because such a dependency cannot be removed reliably by a systemd drop-in
@@ -497,10 +504,54 @@ XDMA_OPERATIONAL_ENABLED="0"
 
 Consequently, `switch xdma` fails before changing a service, drop-in, or
 persistent state. Test mode can exercise the otherwise complete transaction,
-but production cannot enable it yet. The gate will remain closed until Saturn
-Bridge has an operational direct backend with explicit receive-safe release
-and advancing DMA/FIFO readiness checks. Protocol 2 remains the production
-default.
+but production cannot enable it yet.
+
+The next Phase 6 slice now provides an RX-only operational bridge runtime when
+`SATURN_BRIDGE_RADIO_BACKEND=xdma` is set in an isolated test:
+
+- DDC6/ADC1 runs at the validated fixed 192 kHz rate.
+- decoded IQ is published through the existing TCI client stream and WDSP
+  produces the existing 48 kHz receive-audio stream.
+- VFO/center tuning and RX DSP controls are applied without constructing a TX
+  DMA path.
+- TX requests are refused and the model remains in the RX phase.
+- SIGINT/SIGTERM perform explicit DDC shutdown, FIFO reset, rate clearing, and
+  receive-safe RF cleanup.
+- `/run/saturn-bridge/xdma-ready.json` is atomically refreshed with DMA, IQ,
+  framing, FIFO, and RF-safety counters.
+
+The production gate remains closed until this exact runtime passes the
+appliance client/retune/disconnect tests, transactional switching in both
+directions, and failure-injection rollback. Direct antenna relay control is
+also intentionally not claimed by this first runtime slice. Protocol 2 remains
+the production default.
+
+Build the standalone development binary and run the bounded receive-only
+appliance smoke test with:
+
+```bash
+CARGO_BUILD_JOBS=1 cargo build \
+  --manifest-path update_manager/saturn-bridge/Cargo.toml
+
+sudo update_manager/scripts/saturn-xdma-operational-rx-smoke.sh
+```
+
+The harness refuses a binary older than its Rust/build inputs, stops both
+possible radio owners, and requires an observed `ready` heartbeat with
+advancing DMA and IQ counters. It calculates the steady-state rate between the
+first ready heartbeat and the final stopped heartbeat and requires it to remain
+within two percent of 192 kHz. After the bounded SIGTERM, it also requires the
+final `stopped` heartbeat and explicit receive-safe cleanup log before restoring
+only the services that were active before the test. It leaves the observed
+ready JSON, final stopped JSON, and runtime log under `/tmp` for inspection.
+It does not open the production backend gate.
+
+The initial 15-second PCB2/firmware-1.27 appliance run passed. The debug build
+spent part of the bounded wall time initializing, but its ready-to-stopped
+interval delivered 1,836,648 IQ pairs in 9.567 seconds (approximately 191,975
+pairs/second), with no header resynchronization, header error, or FIFO fault.
+The runtime then disabled DDC, verified receive-safe cleanup, and restored both
+previously active services.
 
 ## Planned Data Paths
 

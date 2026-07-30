@@ -52,6 +52,13 @@ case "${1:-}" in
       exit 1
     fi
     : >"$(service_state "$service")"
+    if [[ "$service" == "saturn-bridge.service" \
+      && "$(backend_from_dropin)" == "xdma" \
+      && ! -f "$MOCK_STATE/suppress-xdma-ready" ]]; then
+      mkdir -p "$(dirname "$MOCK_XDMA_READY_FILE")"
+      printf '{"schema_version":1,"updated_at_ms":%s,"source":"saturn-bridge","backend":"xdma","status":"ready","rf_safe":true,"error":null,"metrics":{"dma_reads":8,"iq_pairs":2048,"tx_capable":false}}\n' \
+        "$(date +%s%3N)" >"$MOCK_XDMA_READY_FILE"
+    fi
     printf 'start %s\n' "$service" >>"$MOCK_STATE/calls"
     ;;
   daemon-reload)
@@ -77,6 +84,7 @@ BRIDGE_SERVICE="saturn-bridge.service"
 P2APP_SERVICE="p2app.service"
 BRIDGE_DROPIN_NAME="20-radio-backend.conf"
 READY_TIMEOUT_SECONDS="1"
+XDMA_READY_FILE="$TMP_DIR/run/xdma-ready.json"
 STATE_GROUP="$(id -gn)"
 EOF
 }
@@ -86,6 +94,7 @@ run_helper() {
     PATH="$TMP_DIR/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
     MOCK_STATE="$TMP_DIR/mock" \
     MOCK_BRIDGE_DROPIN="$TMP_DIR/systemd/saturn-bridge.service.d/20-radio-backend.conf" \
+    MOCK_XDMA_READY_FILE="$TMP_DIR/run/xdma-ready.json" \
     SATURN_RADIO_BACKEND_CONFIG="$TMP_DIR/config" \
     SATURN_RADIO_BACKEND_TEST_MODE=1 \
     "$HELPER" "$@"
@@ -148,6 +157,11 @@ run_helper switch p2 >/dev/null
 assert_state_backend p2
 grep -Fq 'Environment=SATURN_BRIDGE_RADIO_BACKEND=p2' \
   "$TMP_DIR/systemd/saturn-bridge.service.d/20-radio-backend.conf"
+if grep -Fq 'Conflicts=p2app.service' \
+  "$TMP_DIR/systemd/saturn-bridge.service.d/20-radio-backend.conf"; then
+  printf 'P2 backend retained the XDMA-only systemd conflict\n' >&2
+  exit 1
+fi
 [[ -f "$TMP_DIR/mock/p2app.service.active" ]]
 [[ -f "$TMP_DIR/mock/saturn-bridge.service.active" ]]
 [[ ! -e "$TMP_DIR/run/transaction.json" ]]
@@ -158,8 +172,24 @@ run_helper switch xdma >/dev/null
 assert_state_backend xdma
 grep -Fq 'Environment=SATURN_BRIDGE_RADIO_BACKEND=xdma' \
   "$TMP_DIR/systemd/saturn-bridge.service.d/20-radio-backend.conf"
+grep -Fq 'Conflicts=p2app.service' \
+  "$TMP_DIR/systemd/saturn-bridge.service.d/20-radio-backend.conf"
 [[ ! -f "$TMP_DIR/mock/p2app.service.active" ]]
 [[ -f "$TMP_DIR/mock/saturn-bridge.service.active" ]]
+
+# A bridge that starts but never proves a fresh RX stream is rolled back.
+reset_fixture 1
+run_helper switch p2 >/dev/null
+cp "$TMP_DIR/state/radio-backend.json" "$TMP_DIR/original-state"
+: >"$TMP_DIR/mock/suppress-xdma-ready"
+if run_helper switch xdma >"$TMP_DIR/readiness-rollback.log" 2>&1; then
+  printf 'missing direct XDMA readiness was incorrectly accepted\n' >&2
+  exit 1
+fi
+cmp "$TMP_DIR/original-state" "$TMP_DIR/state/radio-backend.json"
+[[ -f "$TMP_DIR/mock/p2app.service.active" ]]
+[[ -f "$TMP_DIR/mock/saturn-bridge.service.active" ]]
+[[ ! -e "$TMP_DIR/run/transaction.json" ]]
 
 # A bridge start failure restores the prior service, drop-in, and state.
 reset_fixture 1
@@ -210,5 +240,9 @@ if grep -Fq 'After=network-online.target p2app.service' \
   printf 'bridge base unit still carries an implicit P2 dependency\n' >&2
   exit 1
 fi
+grep -Fq 'RuntimeDirectory=saturn-bridge' \
+  "$REPO_ROOT/update_manager/scripts/install-saturn-bridge.sh"
+grep -Fq 'SATURN_BRIDGE_XDMA_READY_PATH=/run/saturn-bridge/xdma-ready.json' \
+  "$REPO_ROOT/update_manager/scripts/install-saturn-bridge.sh"
 
 printf 'Saturn radio backend transaction tests passed\n'

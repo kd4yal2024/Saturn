@@ -90,6 +90,48 @@ pub(crate) fn record_probe_failure_if_unrecorded(phase: u8, probe: &str, error: 
     }
 }
 
+pub(crate) fn record_runtime_readiness(
+    path: &Path,
+    status: &str,
+    error: Option<&str>,
+    metrics: &[(&str, TelemetryValue)],
+) -> io::Result<()> {
+    let updated_at_ms = unix_time_ms();
+    let mut document = format!(
+        concat!(
+            "{{\n",
+            "  \"schema_version\": 1,\n",
+            "  \"updated_at_ms\": {},\n",
+            "  \"source\": \"saturn-bridge\",\n",
+            "  \"backend\": \"xdma\",\n",
+            "  \"status\": {},\n",
+            "  \"rf_safe\": true,\n",
+            "  \"error\": {},\n",
+            "  \"metrics\": {{"
+        ),
+        updated_at_ms,
+        json_string(status),
+        error.map_or_else(|| "null".to_string(), json_string),
+    );
+    for (index, (name, value)) in metrics.iter().enumerate() {
+        if index == 0 {
+            document.push('\n');
+        } else {
+            document.push_str(",\n");
+        }
+        document.push_str("    ");
+        document.push_str(&json_string(name));
+        document.push_str(": ");
+        document.push_str(&value.to_json());
+    }
+    if metrics.is_empty() {
+        document.push_str("}\n}\n");
+    } else {
+        document.push_str("\n  }\n}\n");
+    }
+    write_snapshot_atomic(path, document.as_bytes())
+}
+
 fn snapshot_path() -> PathBuf {
     env::var_os(SNAPSHOT_PATH_ENV)
         .map(PathBuf::from)
@@ -104,10 +146,7 @@ fn serialize_snapshot(
     error: Option<&str>,
     metrics: &[(&str, TelemetryValue)],
 ) -> String {
-    let updated_at_ms = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|value| value.as_millis() as u64)
-        .unwrap_or(0);
+    let updated_at_ms = unix_time_ms();
     let mut document = format!(
         concat!(
             "{{\n",
@@ -165,6 +204,13 @@ fn json_string(value: &str) -> String {
     }
     escaped.push('"');
     escaped
+}
+
+fn unix_time_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|value| value.as_millis() as u64)
+        .unwrap_or(0)
 }
 
 fn write_snapshot_atomic(path: &Path, contents: &[u8]) -> io::Result<()> {
