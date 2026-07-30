@@ -33,6 +33,9 @@ SATURN_RELEASE_INSTALLER_NAME="saturn-release-install-root.sh"
 SATURN_RELEASE_INSTALL_CONFIG="/etc/default/saturn-release-install"
 SATURN_RELEASE_ACTIVATOR_NAME="saturn-release-activate-root.sh"
 SATURN_RELEASE_ACTIVATE_CONFIG="/etc/default/saturn-release-activate"
+SATURN_RADIO_BACKEND_SWITCH_NAME="saturn-radio-backend-switch-root.sh"
+SATURN_RADIO_BACKEND_CONFIG="/etc/default/saturn-radio-backend"
+SATURN_RADIO_BACKEND_STATE_DIR="/var/lib/saturn-radio-backend"
 SATURN_RELEASE_POLICY_DIR="$WATCHDOG_SCRIPT_DIR/release"
 SATURN_RELEASE_MANIFEST_TOOL_NAME="saturn-release-manifest.py"
 SATURN_STATE_COMPATIBILITY_TOOL_NAME="saturn-state-compatibility.py"
@@ -149,6 +152,7 @@ PRIVILEGED_HELPER_SCRIPTS=(
   "$SOURCE_DIR/scripts/$SATURN_GO_DEPLOY_BROKER_NAME"
   "$SOURCE_DIR/scripts/$SATURN_RELEASE_INSTALLER_NAME"
   "$SOURCE_DIR/scripts/$SATURN_RELEASE_ACTIVATOR_NAME"
+  "$SOURCE_DIR/scripts/$SATURN_RADIO_BACKEND_SWITCH_NAME"
   "$SOURCE_DIR/scripts/$SATURN_STATE_COMPATIBILITY_TOOL_NAME"
   "$SOURCE_DIR/scripts/$SATURN_RESTORE_TRANSACTION_TOOL_NAME"
   "$SOURCE_DIR/scripts/$SATURN_STATE_WRITER_TOOL_NAME"
@@ -765,6 +769,24 @@ TRANSACTION_GROUP="$SERVICE_GROUP"
 EOF
 chown root:root "$SATURN_RELEASE_ACTIVATE_CONFIG"
 chmod 0644 "$SATURN_RELEASE_ACTIVATE_CONFIG"
+install -d -m 0750 -o root -g "$SERVICE_GROUP" "$SATURN_RADIO_BACKEND_STATE_DIR"
+cat >"$SATURN_RADIO_BACKEND_CONFIG" <<EOF
+# Managed by install_saturn_go_nginx.sh. Parsed as data by the root switcher.
+# Direct XDMA remains probe-only; do not enable it until the operational
+# backend has its own receive-safe release and data-plane readiness gates.
+XDMA_OPERATIONAL_ENABLED="0"
+STATE_FILE="$SATURN_RADIO_BACKEND_STATE_DIR/selection.json"
+TRANSACTION_FILE="/run/saturn-radio-backend/transaction.json"
+LOCK_FILE="$SATURN_MAINTENANCE_LOCK_DIR/radio.lock"
+SYSTEMD_ROOT="/etc/systemd/system"
+BRIDGE_SERVICE="saturn-bridge.service"
+P2APP_SERVICE="p2app.service"
+BRIDGE_DROPIN_NAME="20-radio-backend.conf"
+READY_TIMEOUT_SECONDS="15"
+STATE_GROUP="$SERVICE_GROUP"
+EOF
+chown root:root "$SATURN_RADIO_BACKEND_CONFIG"
+chmod 0644 "$SATURN_RADIO_BACKEND_CONFIG"
 cat >"$SUDOERS_FILE" <<EOF
 # Managed by install_saturn_go_nginx.sh
 Defaults:${SERVICE_USER} secure_path="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
@@ -790,6 +812,9 @@ ${SERVICE_USER} ALL=(root) NOPASSWD: ${PRIVILEGED_SCRIPTS_DIR}/saturn-go-build-p
 ${SERVICE_USER} ALL=(root) NOPASSWD: ${PRIVILEGED_SCRIPTS_DIR}/saturn-go-build-preflight.sh status
 ${SERVICE_USER} ALL=(root) NOPASSWD: ${PRIVILEGED_SCRIPTS_DIR}/${SATURN_BRIDGE_INSTALLER_NAME}
 ${SERVICE_USER} ALL=(root) NOPASSWD: ${PRIVILEGED_SCRIPTS_DIR}/${SATURN_BRIDGE_INSTALLER_NAME} *
+${SERVICE_USER} ALL=(root) NOPASSWD: ${PRIVILEGED_SCRIPTS_DIR}/${SATURN_RADIO_BACKEND_SWITCH_NAME} status
+${SERVICE_USER} ALL=(root) NOPASSWD: ${PRIVILEGED_SCRIPTS_DIR}/${SATURN_RADIO_BACKEND_SWITCH_NAME} switch p2
+${SERVICE_USER} ALL=(root) NOPASSWD: ${PRIVILEGED_SCRIPTS_DIR}/${SATURN_RADIO_BACKEND_SWITCH_NAME} switch xdma
 ${SERVICE_USER} ALL=(root) NOPASSWD: ${PRIVILEGED_SCRIPTS_DIR}/saturn-tailscale.sh
 ${SERVICE_USER} ALL=(root) NOPASSWD: ${PRIVILEGED_SCRIPTS_DIR}/saturn-tailscale.sh *
 ${SERVICE_USER} ALL=(root) NOPASSWD: ${PRIVILEGED_SCRIPTS_DIR}/saturn-go-tailscale-serve.sh

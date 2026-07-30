@@ -163,6 +163,7 @@ jobs:
             update_manager/scripts/install-saturn-bridge.sh \
             update_manager/scripts/saturn-release-activate-root.sh \
             update_manager/scripts/saturn-release-install-root.sh \
+            update_manager/scripts/saturn-radio-backend-switch-root.sh \
             update_manager/scripts/update-saturn-go.sh \
             update_manager/scripts/saturn-go-build-preflight.sh \
             update_manager/scripts/saturn-release-build.sh \
@@ -189,6 +190,7 @@ jobs:
             tests/test-saturn-state-compatibility.sh \
             tests/test-saturn-go-deploy-broker.sh \
             tests/test-saturn-p2-deploy.sh \
+            tests/test-saturn-radio-backend-switch.sh \
             tests/test-xdma-phase4-stress.sh \
             tests/test-xdma-realtime-completion.sh \
             tests/test-xdma-dkms-idempotency.sh
@@ -208,6 +210,7 @@ jobs:
             update_manager/scripts/install-saturn-bridge.sh \
             update_manager/scripts/saturn-release-activate-root.sh \
             update_manager/scripts/saturn-release-install-root.sh \
+            update_manager/scripts/saturn-radio-backend-switch-root.sh \
             update_manager/scripts/saturn-release-build.sh \
             update_manager/scripts/saturn-go-deploy-root.sh \
             update_manager/scripts/saturn-xdma-phase4-stress.sh \
@@ -228,6 +231,7 @@ jobs:
             tests/test-saturn-state-inventory.sh \
             tests/test-saturn-state-compatibility.sh \
             tests/test-saturn-go-deploy-broker.sh \
+            tests/test-saturn-radio-backend-switch.sh \
             tests/test-xdma-phase4-stress.sh \
             tests/test-xdma-realtime-completion.sh \
             tests/test-xdma-dkms-idempotency.sh
@@ -288,6 +292,9 @@ jobs:
 
       - name: Test production P2 deployment rollback
         run: tests/test-saturn-p2-deploy.sh
+
+      - name: Test transactional radio backend ownership
+        run: tests/test-saturn-radio-backend-switch.sh
 
       - name: Test deployment broker policy
         run: tests/test-saturn-go-deploy-broker.sh

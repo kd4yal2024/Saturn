@@ -461,6 +461,47 @@ reports backend ownership, device-node readiness, driver completion policy,
 PCIe link state, and XDMA interrupt counts. Direct XDMA remains explicitly
 inactive—not failed—while `p2app.service` owns the FPGA.
 
+## Phase 6 foundation: transactional backend ownership
+
+The first Phase 6 slice installs a root-owned transaction broker:
+
+```text
+/usr/local/lib/saturn-go/scripts/saturn-radio-backend-switch-root.sh
+```
+
+Its `status` command is read-only. `switch p2` stops Saturn Bridge at the
+current receive-safe release boundary, applies an explicit P2 systemd
+environment drop-in, starts P2 before the bridge, verifies both services and
+the bridge runtime selection, and only then atomically persists
+`/var/lib/saturn-radio-backend/selection.json`. This state is kept in a
+root-owned directory that the Saturn Go service group can read but cannot
+modify.
+
+The transaction snapshots the prior service activity, bridge drop-in, and
+persistent selection. A start, readiness, or mutual-exclusion failure restores
+all three. The XDMA form first stops P2 and refuses to start the bridge if P2
+retains ownership. Tests exercise successful transactions in both directions,
+a failed bridge start, and a P2 service that refuses to stop.
+
+The base bridge unit depends only on network readiness. It does not `Wants=`
+P2, because such a dependency cannot be removed reliably by a systemd drop-in
+and would silently reacquire P2 during an XDMA switch. Transaction ordering,
+service-state verification, and the persisted backend environment replace that
+implicit ownership.
+
+The installed `/etc/default/saturn-radio-backend` deliberately contains:
+
+```text
+XDMA_OPERATIONAL_ENABLED="0"
+```
+
+Consequently, `switch xdma` fails before changing a service, drop-in, or
+persistent state. Test mode can exercise the otherwise complete transaction,
+but production cannot enable it yet. The gate will remain closed until Saturn
+Bridge has an operational direct backend with explicit receive-safe release
+and advancing DMA/FIFO readiness checks. Protocol 2 remains the production
+default.
+
 ## Planned Data Paths
 
 | Function | XDMA node |

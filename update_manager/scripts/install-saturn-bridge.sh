@@ -349,8 +349,8 @@ install_service() {
   cat >"$SATURN_BRIDGE_SERVICE" <<EOF
 [Unit]
 Description=Saturn Bridge (WDSP 2.00)
-After=network-online.target p2app.service
-Wants=network-online.target p2app.service
+After=network-online.target
+Wants=network-online.target
 
 [Service]
 Type=simple
@@ -369,6 +369,7 @@ LockPersonality=yes
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 Environment=SATURN_BRIDGE_RADIO_HOST=127.0.0.1
 Environment=SATURN_BRIDGE_RADIO_PORT=1024
+Environment=SATURN_BRIDGE_RADIO_BACKEND=p2
 Environment=SATURN_BRIDGE_CLIENT_HOST=127.0.0.1
 Environment=SATURN_BRIDGE_CLIENT_PORT=12000
 Environment=SATURN_BRIDGE_TCI_HOST=127.0.0.1
