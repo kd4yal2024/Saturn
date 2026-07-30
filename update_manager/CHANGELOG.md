@@ -56,6 +56,12 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
   receive-safe shutdown, and restores the prior radio-service activity without
   changing that policy. The first appliance run sustained approximately
   191,975 IQ pairs/second with no framing or FIFO fault.
+- Added a bounded full backend-transaction acceptance that stages the tested
+  bridge under `/opt/saturn-go` for the hardened systemd namespace and the
+  appliance's `noexec` `/run`, proves exclusive `P2 -> XDMA -> P2` ownership
+  through the production Saturn Go split proxy, restores the exact prior
+  appliance state, and emits focused diagnostics on any failed transition. The
+  production XDMA selector remains disabled.
 - Added a dependency-free direct-XDMA TCI acceptance client. It validates live
   IQ and receive-audio frames, continued streaming after a DSP preference
   burst, retuning, fail-closed TX refusal, disconnect, and service restoration.
@@ -64,6 +70,11 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
   WDSP only for DSP changes, and replacing complete-state floods with targeted
   acknowledgements. The passing debug-build run sustained 191,992 IQ
   pairs/second with an 8,016-word FIFO high-water and zero FIFO/framing faults.
+- Extended direct-XDMA acceptance through Saturn Go's authenticated TLS split
+  control/media proxy, including session pairing without exposing the stored
+  credential. Added a bounded appliance transaction harness for test-gated
+  `P2 -> XDMA -> P2` validation with exact pre-test restoration, plus regression
+  coverage for the round trip and rollback from a failed return to P2.
 - Added opt-in XDMA completion diagnostics for the direct-DMA Phase 4 stress
   work. Slow synchronous transfers now separate page mapping, submission wait,
   and cleanup; the submission wait further reports submit-to-IRQ,

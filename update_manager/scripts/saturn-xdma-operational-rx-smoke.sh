@@ -17,12 +17,16 @@ LOG_FILE="${SATURN_XDMA_RX_SMOKE_LOG_FILE:-/tmp/saturn-xdma-operational-rx-smoke
 CLIENT_PROBE_SCRIPT="${SATURN_XDMA_RX_SMOKE_CLIENT_PROBE_SCRIPT:-$SCRIPT_DIR/saturn-xdma-operational-client.py}"
 CLIENT_RESULT_FILE="${SATURN_XDMA_RX_SMOKE_CLIENT_RESULT_FILE:-/tmp/saturn-xdma-operational-client-result.json}"
 CLIENT_ERROR_FILE="${SATURN_XDMA_RX_SMOKE_CLIENT_ERROR_FILE:-/tmp/saturn-xdma-operational-client-error.log}"
+PROXY_BASE_URL="${SATURN_XDMA_RX_SMOKE_PROXY_BASE_URL:-wss://127.0.0.1:8443}"
+SATURN_GO_SERVICE="${SATURN_XDMA_RX_SMOKE_SATURN_GO_SERVICE:-saturn-go.service}"
 MIN_STREAM_RATE=188160
 MAX_STREAM_RATE=195840
 
 CLIENT_PROBE=0
+PROXY_CLIENT_PROBE=0
 P2_WAS=""
 BRIDGE_WAS=""
+SATURN_GO_WAS=""
 WATCHER_PID=""
 RESTORED=0
 SERVICES_CAPTURED=0
@@ -34,7 +38,7 @@ need_cmd(){ command -v "$1" >/dev/null 2>&1 || die "required command not found: 
 usage(){
   cat <<'EOF'
 Usage: sudo saturn-xdma-operational-rx-smoke.sh \
-  [--duration-seconds SECONDS] [--client-probe]
+  [--duration-seconds SECONDS] [--client-probe | --proxy-client-probe]
 
 Runs the source-tree direct-XDMA RX backend for a bounded interval, requires
 advancing DMA/IQ readiness, verifies receive-safe shutdown, and restores the
@@ -43,6 +47,11 @@ prior p2app.service and saturn-bridge.service activity.
 The client probe requires at least 45 seconds. It connects directly to the TCI
 endpoint, verifies IQ and audio frames, retunes to 7.200 MHz, requires a TX
 request to be refused, and disconnects before runtime cleanup.
+
+The proxy client probe performs the same acceptance through Saturn Go's
+authenticated TLS split control/media WebSockets. It reads the configured
+credential from saturn-go.service without printing it and accepts the
+appliance's localhost self-signed certificate only for this bounded test.
 
 Build the standalone debug binary before running this test:
   CARGO_BUILD_JOBS=1 cargo build \
@@ -121,6 +130,11 @@ while [[ $# -gt 0 ]]; do
       CLIENT_PROBE=1
       shift
       ;;
+    --proxy-client-probe)
+      CLIENT_PROBE=1
+      PROXY_CLIENT_PROBE=1
+      shift
+      ;;
     -h|--help)
       usage
       exit 0
@@ -177,9 +191,14 @@ fi
 
 P2_WAS="$(service_state p2app.service)"
 BRIDGE_WAS="$(service_state saturn-bridge.service)"
+SATURN_GO_WAS="$(service_state "$SATURN_GO_SERVICE")"
 SERVICES_CAPTURED=1
 
-log "Prior services: p2app=$P2_WAS saturn-bridge=$BRIDGE_WAS"
+if (( PROXY_CLIENT_PROBE )) && [[ "$SATURN_GO_WAS" != "active" ]]; then
+  die "$SATURN_GO_SERVICE must be active for --proxy-client-probe"
+fi
+
+log "Prior services: p2app=$P2_WAS saturn-bridge=$BRIDGE_WAS saturn-go=$SATURN_GO_WAS"
 systemctl stop saturn-bridge.service p2app.service
 [[ "$(service_state saturn-bridge.service)" != "active" ]] \
   || die "saturn-bridge.service retained ownership after stop"
@@ -207,11 +226,23 @@ rm -f -- \
     ' "$READY_FILE" >/dev/null 2>&1; then
       cp -- "$READY_FILE" "$OBSERVED_FILE"
       if (( CLIENT_PROBE )); then
-        if ! python3 "$CLIENT_PROBE_SCRIPT" \
-          --url ws://127.0.0.1:50001/ \
-          --readiness-file "$READY_FILE" \
-          --retune-hz 7200000 \
-          --timeout-seconds 15 \
+        client_args=(
+          --readiness-file "$READY_FILE"
+          --retune-hz 7200000
+          --timeout-seconds 15
+        )
+        if (( PROXY_CLIENT_PROBE )); then
+          proxy_session="xdma-acceptance-$$-$RANDOM"
+          client_args+=(
+            --url "$PROXY_BASE_URL/saturn/control?session=$proxy_session"
+            --media-url "$PROXY_BASE_URL/saturn/media?session=$proxy_session"
+            --basic-auth-systemd-unit "$SATURN_GO_SERVICE"
+            --insecure-tls
+          )
+        else
+          client_args+=(--url ws://127.0.0.1:50001/)
+        fi
+        if ! python3 "$CLIENT_PROBE_SCRIPT" "${client_args[@]}" \
           >"$CLIENT_RESULT_FILE" 2>"$CLIENT_ERROR_FILE"
         then
           sed 's/^/[saturn-xdma-operational-rx-smoke] client: /' \
@@ -247,6 +278,9 @@ WATCHER_PID=""
   || die "runtime exited with $RUNTIME_RC; expected bounded timeout status 124"
 [[ "$WATCHER_RC" -eq 0 ]] \
   || die "runtime readiness or client acceptance did not complete"
+if (( PROXY_CLIENT_PROBE )) && [[ "$(service_state "$SATURN_GO_SERVICE")" != "active" ]]; then
+  die "$SATURN_GO_SERVICE stopped during proxy client acceptance"
+fi
 [[ -s "$OBSERVED_FILE" ]] || die "ready-state observation was not retained"
 
 jq -e '
@@ -269,6 +303,7 @@ if (( CLIENT_PROBE )); then
   jq -e '
     .status == "passed" and
     .bridge_ready == true and
+    .split_paired == true and
     .remote_tx_rf_enabled == false and
     .tx_request_refused == true and
     .dsp_burst_continued == true and
@@ -280,6 +315,17 @@ if (( CLIENT_PROBE )); then
     .audio_samples > 0
   ' "$CLIENT_RESULT_FILE" >/dev/null \
     || die "client acceptance result is incomplete"
+  if (( PROXY_CLIENT_PROBE )); then
+    jq -e '
+      .transport == "split-proxy" and
+      .control_text_messages > 0 and
+      .media_binary_messages > 0
+    ' "$CLIENT_RESULT_FILE" >/dev/null \
+      || die "client did not validate the split proxy transport"
+  else
+    jq -e '.transport == "direct"' "$CLIENT_RESULT_FILE" >/dev/null \
+      || die "client did not validate the direct transport"
+  fi
   grep -Fq 'refusing TX request: operational direct XDMA backend is RX-only' \
     "$LOG_FILE" || die "runtime log is missing the RX-only TX refusal"
   grep -Fq 'TCI websocket client' "$LOG_FILE" \

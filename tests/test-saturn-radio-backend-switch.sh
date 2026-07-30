@@ -177,6 +177,20 @@ grep -Fq 'Conflicts=p2app.service' \
 [[ ! -f "$TMP_DIR/mock/p2app.service.active" ]]
 [[ -f "$TMP_DIR/mock/saturn-bridge.service.active" ]]
 
+# The same test-gated transaction returns ownership cleanly to P2.
+run_helper switch p2 >/dev/null
+assert_state_backend p2
+grep -Fq 'Environment=SATURN_BRIDGE_RADIO_BACKEND=p2' \
+  "$TMP_DIR/systemd/saturn-bridge.service.d/20-radio-backend.conf"
+if grep -Fq 'Conflicts=p2app.service' \
+  "$TMP_DIR/systemd/saturn-bridge.service.d/20-radio-backend.conf"; then
+  printf 'P2 round trip retained the XDMA-only systemd conflict\n' >&2
+  exit 1
+fi
+[[ -f "$TMP_DIR/mock/p2app.service.active" ]]
+[[ -f "$TMP_DIR/mock/saturn-bridge.service.active" ]]
+[[ ! -e "$TMP_DIR/run/transaction.json" ]]
+
 # A bridge that starts but never proves a fresh RX stream is rolled back.
 reset_fixture 1
 run_helper switch p2 >/dev/null
@@ -211,6 +225,24 @@ cmp "$TMP_DIR/original-dropin" \
   "$TMP_DIR/systemd/saturn-bridge.service.d/20-radio-backend.conf"
 cmp "$TMP_DIR/original-state" "$TMP_DIR/state/radio-backend.json"
 [[ -f "$TMP_DIR/mock/p2app.service.active" ]]
+[[ -f "$TMP_DIR/mock/saturn-bridge.service.active" ]]
+[[ ! -e "$TMP_DIR/run/transaction.json" ]]
+
+# A failed return from XDMA to P2 restores exclusive XDMA ownership.
+reset_fixture 1
+run_helper switch xdma >/dev/null
+cp "$TMP_DIR/systemd/saturn-bridge.service.d/20-radio-backend.conf" \
+  "$TMP_DIR/original-dropin"
+cp "$TMP_DIR/state/radio-backend.json" "$TMP_DIR/original-state"
+: >"$TMP_DIR/mock/fail-bridge-once"
+if run_helper switch p2 >"$TMP_DIR/p2-rollback.log" 2>&1; then
+  printf 'failed P2 return was incorrectly accepted\n' >&2
+  exit 1
+fi
+cmp "$TMP_DIR/original-dropin" \
+  "$TMP_DIR/systemd/saturn-bridge.service.d/20-radio-backend.conf"
+cmp "$TMP_DIR/original-state" "$TMP_DIR/state/radio-backend.json"
+[[ ! -f "$TMP_DIR/mock/p2app.service.active" ]]
 [[ -f "$TMP_DIR/mock/saturn-bridge.service.active" ]]
 [[ ! -e "$TMP_DIR/run/transaction.json" ]]
 

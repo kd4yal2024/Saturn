@@ -588,6 +588,40 @@ The subsequent 45-second PCB2/firmware-1.27 client run passed:
 - verified DDC shutdown, receive-safe cleanup, and restoration of both
   previously active services
 
+The same acceptance can be routed through Saturn Go's production TLS split
+proxy instead of connecting directly to the bridge:
+
+```bash
+sudo update_manager/scripts/saturn-xdma-operational-rx-smoke.sh \
+  --proxy-client-probe \
+  --duration-seconds 45
+```
+
+This opens paired `/saturn/control` and `/saturn/media` WebSockets on the
+localhost port-8443 listener, supplies the configured Basic credential without
+printing it, sends the same `session_open` command as the browser, and proves
+pairing by requiring text exclusively on the control lane while IQ/audio arrive
+exclusively on the media lane. The localhost self-signed certificate bypass is
+scoped only to this bounded appliance test.
+
+After the split-proxy test passes, exercise the actual ownership transaction:
+
+```bash
+sudo update_manager/scripts/saturn-xdma-backend-switch-smoke.sh
+```
+
+That harness requires the appliance to begin with stable P2 ownership. It
+rejects a stale source-tree binary and stages the tested binary in a temporary
+root-owned directory under `/opt/saturn-go`. That location remains executable
+inside the production unit's `ProtectHome=yes` namespace while avoiding the
+appliance's `noexec` `/run` mount. It installs a temporary runtime override,
+then invokes the root transaction broker under its explicit test gate,
+validates `P2 -> XDMA`, runs the split-proxy client acceptance, validates
+`XDMA -> P2`, and restores the exact prior backend drop-in, persisted selection,
+readiness file, and service state. On failure it prints bounded
+unit/readiness/journal diagnostics before restoration. The installed production
+configuration remains gated throughout.
+
 ## Planned Data Paths
 
 | Function | XDMA node |

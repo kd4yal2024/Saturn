@@ -9,14 +9,18 @@ import hashlib
 import json
 import math
 import os
+import select
+import shlex
 import socket
+import ssl
 import struct
+import subprocess
 import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 
 HEADER_BYTES = 64
@@ -37,25 +41,45 @@ class WebSocket:
         self.buffered = bytearray(buffered)
 
     @classmethod
-    def connect(cls, url: str, timeout: float) -> "WebSocket":
+    def connect(
+        cls,
+        url: str,
+        timeout: float,
+        *,
+        authorization: str | None = None,
+        insecure_tls: bool = False,
+    ) -> "WebSocket":
         parsed = urlparse(url)
-        if parsed.scheme != "ws":
-            raise AcceptanceError("only ws:// URLs are supported")
+        if parsed.scheme not in {"ws", "wss"}:
+            raise AcceptanceError("only ws:// and wss:// URLs are supported")
         if parsed.hostname not in {"127.0.0.1", "localhost", "::1"}:
             raise AcceptanceError("acceptance client is restricted to localhost")
-        port = parsed.port or 80
+        port = parsed.port or (443 if parsed.scheme == "wss" else 80)
         path = parsed.path or "/"
         if parsed.query:
             path = f"{path}?{parsed.query}"
         sock = socket.create_connection((parsed.hostname, port), timeout=timeout)
+        if parsed.scheme == "wss":
+            context = ssl.create_default_context()
+            if insecure_tls:
+                context.check_hostname = False
+                context.verify_mode = ssl.CERT_NONE
+            sock = context.wrap_socket(sock, server_hostname=parsed.hostname)
         key = base64.b64encode(os.urandom(16)).decode("ascii")
+        origin_scheme = "https" if parsed.scheme == "wss" else "http"
+        authority = f"{parsed.hostname}:{port}"
+        authorization_header = (
+            f"Authorization: {authorization}\r\n" if authorization else ""
+        )
         request = (
             f"GET {path} HTTP/1.1\r\n"
-            f"Host: {parsed.hostname}:{port}\r\n"
+            f"Host: {authority}\r\n"
+            f"Origin: {origin_scheme}://{authority}\r\n"
             "Upgrade: websocket\r\n"
             "Connection: Upgrade\r\n"
             f"Sec-WebSocket-Key: {key}\r\n"
             "Sec-WebSocket-Version: 13\r\n"
+            f"{authorization_header}"
             "\r\n"
         ).encode("ascii")
         sock.sendall(request)
@@ -95,6 +119,11 @@ class WebSocket:
         value = bytes(self.buffered[:length])
         del self.buffered[:length]
         return value
+
+    def has_pending_data(self) -> bool:
+        return bool(self.buffered) or (
+            isinstance(self.sock, ssl.SSLSocket) and self.sock.pending() > 0
+        )
 
     def _recv_frame(self, timeout: float) -> tuple[bool, int, bytes]:
         self.sock.settimeout(timeout)
@@ -182,6 +211,12 @@ class FrameStats:
     audio_nonzero: bool = False
 
 
+@dataclass
+class LaneStats:
+    control_text_messages: int = 0
+    media_binary_messages: int = 0
+
+
 def parse_binary_frame(payload: bytes, stats: FrameStats) -> None:
     if len(payload) < HEADER_BYTES:
         raise AcceptanceError(f"TCI binary frame is only {len(payload)} bytes")
@@ -227,8 +262,9 @@ def read_readiness(path: Path) -> dict[str, object] | None:
 
 
 def wait_messages(
-    websocket: WebSocket,
+    websockets: list[WebSocket],
     stats: FrameStats,
+    lanes: LaneStats,
     text_handler: Callable[[str], None],
     predicate: Callable[[], bool],
     timeout: float,
@@ -238,23 +274,108 @@ def wait_messages(
         if predicate():
             return
         remaining = max(0.05, min(0.5, deadline - time.monotonic()))
+        ready = [websocket for websocket in websockets if websocket.has_pending_data()]
+        if not ready:
+            readable, _, _ = select.select(
+                [websocket.sock for websocket in websockets], [], [], remaining
+            )
+            ready = [
+                websocket for websocket in websockets if websocket.sock in readable
+            ]
+        if not ready:
+            continue
         try:
-            message = websocket.receive(remaining)
+            source = ready[0]
+            message = source.receive(remaining)
         except socket.timeout:
             continue
         if isinstance(message, str):
+            if len(websockets) > 1 and source is not websockets[0]:
+                raise AcceptanceError("split media lane delivered a text message")
+            lanes.control_text_messages += 1
             text_handler(message)
         else:
+            if len(websockets) > 1 and source is not websockets[1]:
+                raise AcceptanceError("split control lane delivered a binary message")
+            lanes.media_binary_messages += 1
             parse_binary_frame(message, stats)
     if not predicate():
         raise AcceptanceError("timed out waiting for the expected TCI state")
 
 
-def run_acceptance(url: str, readiness_file: Path, retune_hz: int, timeout: float) -> dict[str, object]:
-    websocket = WebSocket.connect(url, timeout=min(timeout, 5.0))
+def basic_auth_header(spec: str) -> str:
+    if ":" not in spec:
+        raise AcceptanceError("basic authentication must use username:password format")
+    username, password = spec.split(":", 1)
+    if not username or not password:
+        raise AcceptanceError("basic authentication username and password must be non-empty")
+    encoded = base64.b64encode(spec.encode("utf-8")).decode("ascii")
+    return f"Basic {encoded}"
+
+
+def systemd_basic_auth(unit: str) -> str:
+    if (
+        not unit.endswith(".service")
+        or not unit
+        or any(
+            character not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.@-"
+            for character in unit
+        )
+    ):
+        raise AcceptanceError("unsafe systemd unit name for credential lookup")
+    result = subprocess.run(
+        ["systemctl", "show", "--property=Environment", "--value", unit],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        raise AcceptanceError(f"could not inspect {unit} environment")
+    try:
+        entries = shlex.split(result.stdout)
+    except ValueError as error:
+        raise AcceptanceError(f"could not parse {unit} environment") from error
+    for entry in entries:
+        if entry.startswith("SATURN_REMOTE_BASIC_AUTH="):
+            return entry.split("=", 1)[1]
+    raise AcceptanceError(f"{unit} does not expose SATURN_REMOTE_BASIC_AUTH")
+
+
+def run_acceptance(
+    url: str,
+    readiness_file: Path,
+    retune_hz: int,
+    timeout: float,
+    *,
+    media_url: str | None = None,
+    authorization: str | None = None,
+    insecure_tls: bool = False,
+) -> dict[str, object]:
+    control = WebSocket.connect(
+        url,
+        timeout=min(timeout, 5.0),
+        authorization=authorization,
+        insecure_tls=insecure_tls,
+    )
+    media = (
+        WebSocket.connect(
+            media_url,
+            timeout=min(timeout, 5.0),
+            authorization=authorization,
+            insecure_tls=insecure_tls,
+        )
+        if media_url
+        else None
+    )
+    websockets = [control] + ([media] if media is not None else [])
     stats = FrameStats()
+    lanes = LaneStats()
     bridge_ready = False
     remote_tx_disabled = False
+    split_session = (
+        parse_qs(urlparse(url).query).get("session", [""])[0] if media_url else ""
+    )
+    split_paired = not media_url
     retune_vfo = False
     retune_dds = False
     tx_refused = False
@@ -271,14 +392,17 @@ def run_acceptance(url: str, readiness_file: Path, retune_hz: int, timeout: floa
             tx_refused = True
 
     try:
+        if media is not None:
+            control.send_text(f"session_open:{split_session},operator;")
         wait_messages(
-            websocket,
+            websockets,
             stats,
+            lanes,
             handle_text,
             lambda: bridge_ready and remote_tx_disabled,
             timeout=min(timeout, 8.0),
         )
-        websocket.send_text(
+        control.send_text(
             "iq_start:0;"
             "audio_samplerate:48000;"
             "audio_stream_samples:2048;"
@@ -286,12 +410,18 @@ def run_acceptance(url: str, readiness_file: Path, retune_hz: int, timeout: floa
             "audio_start:0;"
         )
         wait_messages(
-            websocket,
+            websockets,
             stats,
+            lanes,
             handle_text,
             lambda: stats.iq_frames >= 3 and stats.audio_frames >= 3,
             timeout=min(timeout, 10.0),
         )
+        split_paired = split_paired or (
+            lanes.control_text_messages > 0 and lanes.media_binary_messages > 0
+        )
+        if not split_paired:
+            raise AcceptanceError("split control/media lane routing was not observed")
         if not stats.iq_nonzero:
             raise AcceptanceError("IQ frames contain no measurable samples")
 
@@ -301,7 +431,7 @@ def run_acceptance(url: str, readiness_file: Path, retune_hz: int, timeout: floa
         )
         before_dsp_iq_frames = stats.iq_frames
         before_dsp_audio_frames = stats.audio_frames
-        websocket.send_text(
+        control.send_text(
             "modulation:0,USB;"
             "rx_filter_band:0,300,2700;"
             "rx_volume:0,0,-12.0;"
@@ -327,8 +457,9 @@ def run_acceptance(url: str, readiness_file: Path, retune_hz: int, timeout: floa
             return dsp_burst_continued
 
         wait_messages(
-            websocket,
+            websockets,
             stats,
+            lanes,
             handle_text,
             dsp_stream_continued,
             timeout=min(timeout, 8.0),
@@ -338,7 +469,7 @@ def run_acceptance(url: str, readiness_file: Path, retune_hz: int, timeout: floa
         before_dma = int(
             ((before_retune or {}).get("metrics") or {}).get("dma_reads", 0)  # type: ignore[union-attr]
         )
-        websocket.send_text(f"vfo:0,0,{retune_hz};dds:0,{retune_hz};")
+        control.send_text(f"vfo:0,0,{retune_hz};dds:0,{retune_hz};")
 
         def retune_ready() -> bool:
             readiness = read_readiness(readiness_file)
@@ -354,18 +485,20 @@ def run_acceptance(url: str, readiness_file: Path, retune_hz: int, timeout: floa
             )
 
         wait_messages(
-            websocket,
+            websockets,
             stats,
+            lanes,
             handle_text,
             retune_ready,
             timeout=min(timeout, 8.0),
         )
 
         after_tx_request = True
-        websocket.send_text("trx:0,true,tci;")
+        control.send_text("trx:0,true,tci;")
         wait_messages(
-            websocket,
+            websockets,
             stats,
+            lanes,
             handle_text,
             lambda: tx_refused,
             timeout=min(timeout, 5.0),
@@ -380,15 +513,21 @@ def run_acceptance(url: str, readiness_file: Path, retune_hz: int, timeout: floa
         ):
             raise AcceptanceError("readiness did not remain receive-safe after TX refusal")
 
-        websocket.send_text("trx:0,false;iq_stop:0;audio_stop:0;")
+        control.send_text("trx:0,false;iq_stop:0;audio_stop:0;")
     finally:
-        websocket.close()
+        if media is not None:
+            media.close()
+        control.close()
 
     return {
         "status": "passed",
         "url": url,
+        "transport": "split-proxy" if media_url else "direct",
         "retune_hz": retune_hz,
         "bridge_ready": bridge_ready,
+        "split_paired": split_paired,
+        "control_text_messages": lanes.control_text_messages,
+        "media_binary_messages": lanes.media_binary_messages,
         "remote_tx_rf_enabled": False,
         "tx_request_refused": tx_refused,
         "dsp_burst_continued": dsp_burst_continued,
@@ -412,15 +551,20 @@ def self_test() -> None:
     parse_binary_frame(bytes(payload), stats)
     if stats.iq_frames != 1 or stats.iq_pairs != 2 or not stats.iq_nonzero:
         raise AcceptanceError("binary frame self-test failed")
+    if basic_auth_header("admin:secret") != "Basic YWRtaW46c2VjcmV0":
+        raise AcceptanceError("basic authentication self-test failed")
     print("saturn XDMA operational client self-test passed")
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--url", default="ws://127.0.0.1:50001/")
+    parser.add_argument("--media-url")
     parser.add_argument("--readiness-file", type=Path)
     parser.add_argument("--retune-hz", type=int, default=7_200_000)
     parser.add_argument("--timeout-seconds", type=float, default=15.0)
+    parser.add_argument("--basic-auth-systemd-unit")
+    parser.add_argument("--insecure-tls", action="store_true")
     parser.add_argument("--self-test", action="store_true")
     args = parser.parse_args()
     if args.self_test:
@@ -430,12 +574,34 @@ def main() -> int:
         parser.error("--readiness-file is required unless --self-test is used")
     if not 100_000 <= args.retune_hz <= 61_440_000:
         parser.error("--retune-hz must be between 100 kHz and 61.44 MHz")
+    control_url = urlparse(args.url)
+    if bool(args.media_url) != (control_url.path == "/saturn/control"):
+        parser.error("--media-url must be paired with a /saturn/control control URL")
+    if args.media_url:
+        media_url = urlparse(args.media_url)
+        if (
+            media_url.scheme != control_url.scheme
+            or media_url.netloc != control_url.netloc
+            or media_url.path != "/saturn/media"
+            or parse_qs(media_url.query).get("session")
+            != parse_qs(control_url.query).get("session")
+        ):
+            parser.error(
+                "split control/media URLs must share an authority and session"
+            )
     try:
+        auth_spec = os.environ.get("SATURN_REMOTE_BASIC_AUTH")
+        if args.basic_auth_systemd_unit:
+            auth_spec = auth_spec or systemd_basic_auth(args.basic_auth_systemd_unit)
+        authorization = basic_auth_header(auth_spec) if auth_spec else None
         result = run_acceptance(
             args.url,
             args.readiness_file,
             args.retune_hz,
             max(5.0, args.timeout_seconds),
+            media_url=args.media_url,
+            authorization=authorization,
+            insecure_tls=args.insecure_tls,
         )
     except (AcceptanceError, OSError, ValueError) as error:
         print(f"saturn XDMA operational client FAILED: {error}", file=sys.stderr)
