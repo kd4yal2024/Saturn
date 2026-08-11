@@ -1,0 +1,21 @@
+diff --git a/src/new_protocol.c b/src/new_protocol.c
+--- a/src/new_protocol.c
++++ b/src/new_protocol.c
+@@ -775,6 +775,16 @@ static void new_protocol_high_priority(void) {
+     return;
+   }
+-
++
++  /*
++   * Receiver construction can schedule a high-priority update before
++   * radio_create_visual() assigns active_receiver. The update is repeated
++   * after initialization, so skip this premature call instead of
++   * dereferencing a null receiver below.
++   */
++  if (active_receiver == NULL) {
++    return;
++  }
++
+   pthread_mutex_lock(&hi_prio_mutex);
+   memset(high_priority_buffer_to_radio, 0, sizeof(high_priority_buffer_to_radio));
+   //

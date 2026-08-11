@@ -1,0 +1,18 @@
+diff --git a/src/gpio.c b/src/gpio.c
+--- a/src/gpio.c
++++ b/src/gpio.c
+@@ -1786,8 +1786,11 @@ int gpio_init(void) {
+-
+ void gpio_close(void) {
+ #ifdef GPIO
+-
++#ifdef GPIOD_V2
++  release_request(&monitor_request);
++  release_request(&pttout_request);
++  release_request(&cwout_request);
++#endif
++
+   if (chip != NULL) { gpiod_chip_close(chip); }
+-
+ #endif
+ }

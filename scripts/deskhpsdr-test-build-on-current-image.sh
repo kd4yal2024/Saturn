@@ -6,7 +6,9 @@ SCRIPT_DIR="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)"
 REPO_DIR="${SCRIPT_DIR}"
 PATCH_DIR="${SCRIPT_DIR}/patches"
 DESKHPSDR_GPIO_PATCH="${PATCH_DIR}/deskhpsdr-libgpiod-v2.patch"
+DESKHPSDR_GPIO_CLEANUP_PATCH="${PATCH_DIR}/deskhpsdr-libgpiod-v2-cleanup.patch"
 DESKHPSDR_STARTUP_PATCH="${PATCH_DIR}/deskhpsdr-active-receiver-init.patch"
+DESKHPSDR_LEGACY_STARTUP_PATCH="${PATCH_DIR}/deskhpsdr-2.6.84-active-receiver-init.patch"
 DEPS_HELPER_NAME="deskhpsdr-install-deps-on-current-image.sh"
 PRIVILEGED_DEPS_HELPER="/usr/local/lib/saturn-go/scripts/${DEPS_HELPER_NAME}"
 JOBS="${JOBS:-$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 2)}"
@@ -14,6 +16,8 @@ INSTALL_DEPS=0
 RUN_CLEAN=1
 CREATE_DESKTOP_SHORTCUT=1
 LEGACY_GPIO_AVAILABLE=0
+REQUIRE_LEGACY_GPIO=0
+LEGACY_GPIO_REF="${DESKHPSDR_LEGACY_GPIO_REF:-2.6.84}"
 SUDO_SHIM_DIR=""
 
 usage() {
@@ -29,6 +33,9 @@ Options:
   --no-clean          skip "make clean" before the build probe
   --no-desktop-shortcut
                       skip creating a Desktop launcher for the built binary
+  --require-legacy-gpio
+                      require the pinned deskHPSDR 2.6.84 GPIO source and
+                      build it with Saturn's libgpiod-v2 compatibility patch
   -h, --help          show this help
 
 Notes:
@@ -57,20 +64,29 @@ apply_saturn_patch() {
     exit 1
   fi
 
+  if git -C "${repo_dir}" apply --reverse --check "${patch_file}" >/dev/null 2>&1; then
+    echo "Local Saturn patch already present: ${patch_name}"
+    return 0
+  fi
+
   if git -C "${repo_dir}" apply --check "${patch_file}" >/dev/null 2>&1; then
     echo "Applying local Saturn patch: ${patch_name}"
     git -C "${repo_dir}" apply "${patch_file}"
     return 0
   fi
 
-  if git -C "${repo_dir}" apply --reverse --check "${patch_file}" >/dev/null 2>&1; then
-    echo "Local Saturn patch already present: ${patch_name}"
-    return 0
-  fi
-
   echo "Local Saturn patch could not be applied cleanly: ${patch_name}" >&2
   git -C "${repo_dir}" apply --check "${patch_file}" || true
   exit 1
+}
+
+legacy_gpio_cleanup_present() {
+  awk '
+    /^void gpio_close\(void\)/ { in_close = 1 }
+    in_close && /release_request\(&monitor_request\);/ { found = 1 }
+    in_close && /^}/ { exit }
+    END { exit(found ? 0 : 1) }
+  ' "${REPO_DIR}/src/gpio.c"
 }
 
 package_installed() {
@@ -199,6 +215,10 @@ while [[ $# -gt 0 ]]; do
       CREATE_DESKTOP_SHORTCUT=0
       shift
       ;;
+    --require-legacy-gpio)
+      REQUIRE_LEGACY_GPIO=1
+      shift
+      ;;
     -h|--help)
       usage
       exit 0
@@ -222,6 +242,20 @@ if [[ ! -f "${REPO_DIR}/Makefile" ]]; then
 fi
 
 detect_legacy_gpio_support
+
+if [[ ${REQUIRE_LEGACY_GPIO} -eq 1 ]]; then
+  if [[ ${LEGACY_GPIO_AVAILABLE} -ne 1 ]]; then
+    echo "Legacy GPIO V1 mode requires deskHPSDR ${LEGACY_GPIO_REF} with src/gpio.c present." >&2
+    echo "Run the Saturn deskHPSDR updater with --legacy-gpio so it selects the pinned source." >&2
+    exit 1
+  fi
+
+  selected_ref="$(git -C "${REPO_DIR}" describe --tags --exact-match HEAD 2>/dev/null || true)"
+  if [[ "${selected_ref}" != "${LEGACY_GPIO_REF}" ]]; then
+    echo "Legacy GPIO V1 mode requires deskHPSDR tag ${LEGACY_GPIO_REF}; found ${selected_ref:-untagged HEAD}." >&2
+    exit 1
+  fi
+fi
 
 if [[ -r /etc/os-release ]]; then
   # shellcheck disable=SC1091
@@ -333,6 +367,9 @@ if [[ ${LEGACY_GPIO_AVAILABLE} -eq 1 ]]; then
 else
   echo "  Pi GPIO:        upstream removed legacy source; patch/build skipped"
 fi
+if [[ ${REQUIRE_LEGACY_GPIO} -eq 1 ]]; then
+  echo "  GPIO channel:   pinned deskHPSDR ${LEGACY_GPIO_REF} for V1 controllers"
+fi
 echo "  WebKitGTK:      ${webkit_version:-missing}"
 echo "  GTK3:           ${gtk_version:-missing}"
 echo "  fftw3:          ${fftw3_version:-missing}"
@@ -362,11 +399,20 @@ BUILD_LOG="${LOG_DIR}/deskhpsdr-build-${STAMP}.log"
 
 if [[ ${LEGACY_GPIO_AVAILABLE} -eq 1 ]]; then
   apply_saturn_patch "${REPO_DIR}" "${DESKHPSDR_GPIO_PATCH}"
+  if legacy_gpio_cleanup_present; then
+    echo "Local Saturn patch already present: $(basename "${DESKHPSDR_GPIO_CLEANUP_PATCH}")"
+  else
+    apply_saturn_patch "${REPO_DIR}" "${DESKHPSDR_GPIO_CLEANUP_PATCH}"
+  fi
 else
   echo "Skipping Saturn libgpiod patch; upstream checkout has no src/gpio.c legacy GPIO path."
 fi
 
-apply_saturn_patch "${REPO_DIR}" "${DESKHPSDR_STARTUP_PATCH}"
+if [[ ${REQUIRE_LEGACY_GPIO} -eq 1 ]]; then
+  apply_saturn_patch "${REPO_DIR}" "${DESKHPSDR_LEGACY_STARTUP_PATCH}"
+else
+  apply_saturn_patch "${REPO_DIR}" "${DESKHPSDR_STARTUP_PATCH}"
+fi
 
 MAKE_ARGS=(
   -C "${REPO_DIR}"
@@ -398,6 +444,22 @@ fi
   make "${MAKE_ARGS[@]}" -j"${JOBS}"
   echo "=== $(date -Is) make probe success ==="
 } 2>&1 | tee "${BUILD_LOG}"
+
+if [[ ${REQUIRE_LEGACY_GPIO} -eq 1 ]]; then
+  if ! command -v strings >/dev/null 2>&1 || ! command -v nm >/dev/null 2>&1; then
+    echo "Cannot verify GPIO build because strings or nm is unavailable." >&2
+    exit 1
+  fi
+  if ! strings "${REPO_DIR}/deskhpsdr" | grep -F "GPIO " >/dev/null; then
+    echo "deskHPSDR binary does not advertise the required GPIO build option." >&2
+    exit 1
+  fi
+  if ! nm -D "${REPO_DIR}/deskhpsdr" | grep -F "gpiod_line_request_read_edge_events" >/dev/null; then
+    echo "deskHPSDR binary does not link the required libgpiod-v2 edge-event API." >&2
+    exit 1
+  fi
+  echo "Verified deskHPSDR ${LEGACY_GPIO_REF} binary includes GPIO support."
+fi
 
 echo
 echo "Build probe succeeded."

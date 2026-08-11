@@ -897,13 +897,16 @@ Safety/usage notes:
 - Run `update-deskhpsdr.py` from `/saturn/deskhpsdr`.
 - This page mirrors the dedicated terminal workflow (flags + SSE output) used by Update G2 and Update piHPSDR.
 - If `~/github/deskhpsdr` does not exist and `--skip-git` is not selected, the updater clones the upstream deskHPSDR repo before the build step.
-- If the checkout already exists and `--skip-git` is not selected, the updater pulls `origin/<current-branch>` with `--ff-only` and auto-stashes local changes first when needed.
+- In the normal channel, if the checkout already exists and `--skip-git` is not selected, the updater pulls `origin/<current-branch>` with `--ff-only` and auto-stashes local changes first when needed. If the checkout was left detached by the legacy GPIO channel, a normal run switches it back to `master` before pulling.
 - The build step resolves helper scripts from the active Saturn repo root and then runs `scripts/deskhpsdr-test-build-on-current-image.sh --repo ~/github/deskhpsdr`.
-- Before building older deskHPSDR checkouts that still include `src/gpio.c`, the helper applies `scripts/patches/deskhpsdr-libgpiod-v2.patch` with `git apply` when the checkout still needs the local Saturn compatibility fix; if the patch is already present, the helper continues without error.
+- Select **Legacy GPIO V1 (deskHPSDR 2.6.84 / Trixie)**, or pass `--legacy-gpio`, for first-generation direct-GPIO controllers. This channel fetches and checks out the pinned upstream `2.6.84` tag, then requires `scripts/patches/deskhpsdr-libgpiod-v2.patch`. The patch ports input edge monitoring, line bias, and PTT/CW output requests to libgpiod v2 while preserving deskHPSDR's Controller1/Controller2-V1 mappings. The finished binary is rejected unless it advertises the `GPIO` build option.
+- Before building any older deskHPSDR checkout that still includes `src/gpio.c`, the helper applies `scripts/patches/deskhpsdr-libgpiod-v2.patch` with `git apply` when the checkout still needs the local Saturn compatibility fix; if the patch is already present, the helper continues without error.
 - The helper also applies `scripts/patches/deskhpsdr-active-receiver-init.patch`
   on every supported checkout. This prevents a null `active_receiver` crash
   when **Connect** starts Saturn XDMA before receiver construction finishes.
 - Current upstream deskHPSDR removed the direct Raspberry Pi GPIO source path. For those checkouts, the helper skips the obsolete patch and builds `deskHPSDR` with `SATURN=ON` for the native G2/XDMA path.
+- Do not combine `--legacy-gpio` with `--skip-git` unless the checkout is already exactly at tag `2.6.84`; the required-channel guard fails closed on any other source. To return to current deskHPSDR, clear the Legacy GPIO V1 checkbox and run the updater normally.
+- The Trixie build probe proves the pinned source compiles and links against libgpiod v2. Final acceptance still requires a V1 panel: verify every encoder direction and push switch, all direct switches, PTT/CW inputs, and clean shutdown/restart before distributing the build.
 - The helper keeps PulseAudio client libraries for build compatibility but prefers `pipewire-pulse` at runtime and removes the redundant `pulseaudio` daemon package when PipeWire Pulse is installed.
 - `--no-install-deps`, `--no-clean`, and `--no-desktop-shortcut` map directly to the helper-script build flow.
 - Unless `--no-desktop-shortcut` is selected, the helper installs direct

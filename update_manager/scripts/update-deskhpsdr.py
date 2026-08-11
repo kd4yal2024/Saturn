@@ -68,7 +68,7 @@ def guard_repo_tree_python_execution():
 
 
 SCRIPT_NAME = "deskHPSDR Update"
-SCRIPT_VERSION = "1.2"
+SCRIPT_VERSION = "1.3"
 SCRIPT_START_TIME = datetime.now()
 TIMESTAMP = SCRIPT_START_TIME.strftime("%Y%m%d-%H%M%S")
 DESKHPSDR_DIR = Path.home() / "github" / "deskhpsdr"
@@ -76,6 +76,7 @@ LOG_DIR = Path.home() / "saturn-logs"
 BACKUP_DIR = Path.home() / f"deskhpsdr-backup-{TIMESTAMP}"
 REPO_URL = "https://github.com/dl1bz/deskhpsdr.git"
 DEFAULT_BRANCH = "master"
+LEGACY_GPIO_REF = "2.6.84"
 TMP_DIR = Path("/tmp") / f"deskhpsdr-update-{TIMESTAMP}-{os.getpid()}"
 PRIVILEGED_DEPS_HELPER = Path("/usr/local/lib/saturn-go/scripts/deskhpsdr-install-deps-on-current-image.sh")
 
@@ -292,6 +293,11 @@ def init_logging(verbose=False):
 def parse_args():
     parser = argparse.ArgumentParser(description="deskHPSDR Update Script")
     parser.add_argument("--skip-git", action="store_true", help="Skip Git repository update")
+    parser.add_argument(
+        "--legacy-gpio",
+        action="store_true",
+        help=f"Build the pinned deskHPSDR {LEGACY_GPIO_REF} release with Saturn's Trixie/libgpiod-v2 V1 controller patch",
+    )
     parser.add_argument("-y", "--yes", action="store_true", help="Auto-confirm backup creation")
     parser.add_argument("-n", "--no", action="store_true", help="Skip backup creation")
     parser.add_argument("--no-install-deps", action="store_true", help="Skip apt-based dependency installation during the build step")
@@ -545,11 +551,12 @@ def update_git():
             current_commit = subprocess.check_output(
                 ["git", "rev-parse", "--short", "HEAD"], text=True
             ).strip()
-            current_branch = subprocess.check_output(
+            branch_output = subprocess.check_output(
                 ["git", "branch", "--show-current"], text=True
-            ).strip() or DEFAULT_BRANCH
+            ).strip()
+            current_branch = branch_output or DEFAULT_BRANCH
             print_info(f"Commit: {current_commit}")
-            print_info(f"Branch: {current_branch}")
+            print_info(f"Branch: {branch_output or '(detached)'}")
 
             try:
                 remote_url = subprocess.check_output(
@@ -570,19 +577,35 @@ def update_git():
                     check=True,
                 )
 
+            if not args.legacy_gpio and not branch_output:
+                print_info(f"Returning detached checkout to {DEFAULT_BRANCH}")
+                subprocess.run(["git", "switch", DEFAULT_BRANCH], check=True)
+
             git_pull_log = temp_log_path("git_pull_output")
             max_attempts = 3
             for attempt in range(1, max_attempts + 1):
                 with git_pull_log.open("w", encoding="utf-8") as f:
+                    if args.legacy_gpio:
+                        git_command = [
+                            "git",
+                            "fetch",
+                            "--force",
+                            "origin",
+                            f"refs/tags/{LEGACY_GPIO_REF}:refs/tags/{LEGACY_GPIO_REF}",
+                        ]
+                        progress_label = f"Fetching deskHPSDR {LEGACY_GPIO_REF}"
+                    else:
+                        git_command = ["git", "pull", "--ff-only", "origin", current_branch]
+                        progress_label = "Pulling changes"
                     process = subprocess.Popen(
-                        ["git", "pull", "--ff-only", "origin", current_branch],
+                        git_command,
                         stdout=f,
                         stderr=f,
                         text=True,
                         encoding="utf-8",
                         errors="replace",
                     )
-                    return_code = progress_bar(process, "Pulling changes", 50)
+                    return_code = progress_bar(process, progress_label, 50)
                 if return_code == 0:
                     break
                 if attempt < max_attempts:
@@ -594,6 +617,15 @@ def update_git():
                     time.sleep(2)
                 else:
                     git_output_or_die(git_pull_log, f"Git update failed after {max_attempts} attempts")
+
+            if args.legacy_gpio:
+                subprocess.run(
+                    ["git", "checkout", "--detach", LEGACY_GPIO_REF],
+                    check=True,
+                )
+                print_success(
+                    f"Selected pinned legacy GPIO source: deskHPSDR {LEGACY_GPIO_REF}"
+                )
 
             if args.verbose:
                 print_info(f"Git output: {git_pull_log.read_text(errors='replace').strip()}")
@@ -645,6 +677,14 @@ def update_git():
         if args.verbose:
             print_info(f"Git output: {git_clone_log.read_text(errors='replace').strip()}")
         os.chdir(DESKHPSDR_DIR)
+        if args.legacy_gpio:
+            subprocess.run(
+                ["git", "checkout", "--detach", LEGACY_GPIO_REF],
+                check=True,
+            )
+            print_success(
+                f"Selected pinned legacy GPIO source: deskHPSDR {LEGACY_GPIO_REF}"
+            )
         new_commit = subprocess.check_output(
             ["git", "rev-parse", "--short", "HEAD"], text=True
         ).strip()
@@ -734,6 +774,8 @@ def build_deskhpsdr():
         cmd.append("--no-clean")
     if args.no_desktop_shortcut:
         cmd.append("--no-desktop-shortcut")
+    if args.legacy_gpio:
+        cmd.append("--require-legacy-gpio")
 
     print(f"{Colors.CYAN}⚡ Building deskHPSDR...{Colors.END}")
     run_command(cmd, "Building deskHPSDR", "deskhpsdr_build_output")
@@ -790,6 +832,10 @@ def main():
 
     if args.skip_git:
         print_warning("Skipping Git update")
+    if args.legacy_gpio:
+        print_success(
+            f"Legacy GPIO V1 mode enabled (pinned deskHPSDR {LEGACY_GPIO_REF})"
+        )
     if args.yes:
         print_success("Backup enabled via -y flag")
     if args.no:

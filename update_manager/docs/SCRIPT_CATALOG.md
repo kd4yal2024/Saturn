@@ -10,7 +10,7 @@ Defined in `config.json` and surfaced by `/get_scripts`.
 |---|---|---|---|
 | `update-G2.py` | `2.15` | Update Saturn repository and related components with backup options and privilege-aware behavior, including resilient per-user log handling. | `--skip-git`, `-y`, `-n`, `--dry-run`, `--verbose` |
 | `update-pihpsdr.py` | `1.12` | Update/build piHPSDR with dependency preflight and current WDSP 2.00 Linux compatibility. | `--skip-git`, `-y`, `-n`, `--no-gpio`, `--dry-run`, `--verbose` |
-| `update-deskhpsdr.py` | `1.2` | Clone/update/build deskHPSDR with privileged prerequisite preflight, repo-local WDSP library preparation, resumable no-clean builds, and conditional legacy libgpiod patch handling. | `--skip-git`, `-y`, `-n`, `--no-install-deps`, `--no-clean`, `--no-desktop-shortcut`, `--dry-run`, `--verbose` |
+| `update-deskhpsdr.py` | `1.3` | Clone/update/build deskHPSDR with privileged prerequisite preflight, repo-local WDSP library preparation, resumable no-clean builds, and a pinned 2.6.84 Trixie/libgpiod-v2 channel for legacy V1 GPIO controllers. | `--skip-git`, `--legacy-gpio`, `-y`, `-n`, `--no-install-deps`, `--no-clean`, `--no-desktop-shortcut`, `--dry-run`, `--verbose` |
 | `log_cleaner.sh` | `3.00` | Find and optionally delete `*.log` files under home directory. | `--delete-all`, `--no-recursive`, `--dry-run` |
 | `restore-backup.sh` | `3.10` | Restore Saturn or piHPSDR from backup directories with list/latest/explicit selection support. | `--saturn`, `--pihpsdr`, `--latest`, `--list`, `--backup-dir`, `--backup-name`, `--dry-run`, `--verbose`, `--json` |
 
@@ -123,7 +123,7 @@ Not all utilities are directly wired into current UI buttons, but are included i
 - `update-G2.py` emits `SATURN_WEB_MANAGER_CHANGED=1` when pulled commits modify paths under `update_manager/`; the G2 page uses that marker to optionally chain a final `update-saturn-go.sh --skip-git --verbose` post-step.
 - `update-saturn-go.sh --skip-git` now works from the active repo root even if no separate Saturn Go repo policy URL is configured, which is what allows the post-G2 self-update chain to reuse the repo that `update-G2.py` just updated.
 - `update-deskhpsdr.py` resolves helper scripts from the active repo root, clones/pulls `~/github/deskhpsdr` unless `--skip-git` is selected, and then delegates the build to `scripts/deskhpsdr-test-build-on-current-image.sh`.
-- `scripts/deskhpsdr-test-build-on-current-image.sh` applies `scripts/patches/deskhpsdr-libgpiod-v2.patch` only for older deskHPSDR checkouts that still include the legacy `src/gpio.c` path, and accepts an already-applied patch as success.
+- `update-deskhpsdr.py --legacy-gpio` pins the checkout to upstream tag `2.6.84`; `scripts/deskhpsdr-test-build-on-current-image.sh --require-legacy-gpio` then requires `src/gpio.c`, applies `scripts/patches/deskhpsdr-libgpiod-v2.patch`, and verifies the resulting binary advertises GPIO support. Older GPIO-bearing checkouts still receive the patch conditionally, and an already-applied patch is accepted as success.
 - The same helper always applies
   `scripts/patches/deskhpsdr-active-receiver-init.patch` to prevent the Saturn
   XDMA Connect initialization crash, and installs a direct Desktop application

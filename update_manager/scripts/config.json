@@ -23,8 +23,8 @@
     "description": "Updates deskHPSDR",
     "directory": "/opt/saturn-go/scripts",
     "category": "Update Scripts",
-    "flags": ["--skip-git", "-y", "-n", "--no-install-deps", "--no-clean", "--no-desktop-shortcut", "--dry-run", "--verbose"],
-    "version": "1.2"
+    "flags": ["--skip-git", "--legacy-gpio", "-y", "-n", "--no-install-deps", "--no-clean", "--no-desktop-shortcut", "--dry-run", "--verbose"],
+    "version": "1.3"
   },
   {
     "filename": "log_cleaner.sh",

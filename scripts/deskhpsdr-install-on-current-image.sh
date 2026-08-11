@@ -3,8 +3,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)"
-DEFAULT_REPO_URL="$(git -C "${SCRIPT_DIR}" config --get remote.origin.url 2>/dev/null || true)"
-REPO_URL="${DEFAULT_REPO_URL:-https://github.com/dl1bz/deskhpsdr.git}"
+REPO_URL="${DESKHPSDR_REPO_URL:-https://github.com/dl1bz/deskhpsdr.git}"
 TARGET_ROOT="${HOME}/github"
 TARGET_NAME="deskhpsdr"
 TARGET_DIR="${TARGET_ROOT}/${TARGET_NAME}"
@@ -13,6 +12,8 @@ RUN_CLEAN=1
 INSTALL_DEPS=1
 CREATE_DESKTOP_SHORTCUT=1
 UPDATE_EXISTING=0
+LEGACY_GPIO=0
+LEGACY_GPIO_REF="${DESKHPSDR_LEGACY_GPIO_REF:-2.6.84}"
 
 usage() {
   cat <<'EOF'
@@ -27,11 +28,13 @@ What it does:
      build deskHPSDR with SATURN=ON, and create a Desktop shortcut
 
 Options:
-  --repo-url URL            clone source (default: repo origin or GitHub HTTPS URL)
+  --repo-url URL            clone source (default: upstream deskHPSDR GitHub URL)
   --target-root PATH        parent directory for the clone (default: ~/github)
   --target-dir PATH         full checkout path (overrides --target-root)
   --jobs N                  parallel make jobs for the build (default: detected CPU count)
   --update                  run git pull --ff-only in an existing checkout before building
+  --legacy-gpio             pin deskHPSDR 2.6.84 and apply Saturn's Trixie
+                            libgpiod-v2 patch for V1 GPIO controllers
   --no-install-deps         skip apt-based dependency installation in the build step
   --no-clean                skip "make clean" in the build step
   --no-desktop-shortcut     skip creating the Desktop launcher after a successful build
@@ -77,6 +80,10 @@ while [[ $# -gt 0 ]]; do
       UPDATE_EXISTING=1
       shift
       ;;
+    --legacy-gpio)
+      LEGACY_GPIO=1
+      shift
+      ;;
     --no-install-deps)
       INSTALL_DEPS=0
       shift
@@ -113,18 +120,38 @@ fi
 if [[ ! -d "${TARGET_DIR}/.git" ]]; then
   echo "Cloning deskHPSDR into ${TARGET_DIR}..."
   git -C "$(dirname "${TARGET_DIR}")" clone "${REPO_URL}" "$(basename "${TARGET_DIR}")"
-elif [[ ${UPDATE_EXISTING} -eq 1 ]]; then
+elif [[ ${UPDATE_EXISTING} -eq 1 && ${LEGACY_GPIO} -eq 0 ]]; then
   echo "Updating existing deskHPSDR checkout at ${TARGET_DIR}..."
-  git -C "${TARGET_DIR}" pull --ff-only
+  current_branch="$(git -C "${TARGET_DIR}" branch --show-current)"
+  if [[ -z "${current_branch}" ]]; then
+    echo "Existing deskHPSDR checkout is detached; use Saturn's deskHPSDR updater to switch channels safely." >&2
+    exit 1
+  fi
+  git -C "${TARGET_DIR}" pull --ff-only origin "${current_branch}"
 else
   echo "Using existing deskHPSDR checkout at ${TARGET_DIR}..."
 fi
 
-BUILD_SCRIPT="${TARGET_DIR}/test-build-on-current-image.sh"
+if [[ ${LEGACY_GPIO} -eq 1 ]]; then
+  current_ref="$(git -C "${TARGET_DIR}" describe --tags --exact-match HEAD 2>/dev/null || true)"
+  if [[ "${current_ref}" != "${LEGACY_GPIO_REF}" ]]; then
+    if ! git -C "${TARGET_DIR}" diff-index --quiet HEAD --; then
+      echo "Cannot select deskHPSDR ${LEGACY_GPIO_REF} with tracked local changes present: ${TARGET_DIR}" >&2
+      echo "Use Saturn's deskHPSDR updater, which backs up and stashes the patched tree safely." >&2
+      exit 1
+    fi
+    git -C "${TARGET_DIR}" fetch --force origin \
+      "refs/tags/${LEGACY_GPIO_REF}:refs/tags/${LEGACY_GPIO_REF}"
+    git -C "${TARGET_DIR}" checkout --detach "${LEGACY_GPIO_REF}"
+  fi
+  echo "Selected pinned legacy GPIO source: deskHPSDR ${LEGACY_GPIO_REF}"
+fi
+
+BUILD_SCRIPT="${SCRIPT_DIR}/deskhpsdr-test-build-on-current-image.sh"
 
 if [[ ! -f "${BUILD_SCRIPT}" ]]; then
-  echo "Build script not found in ${TARGET_DIR}: ${BUILD_SCRIPT}" >&2
-  echo "The target checkout may be older than this installer entry point." >&2
+  echo "Saturn deskHPSDR build helper not found: ${BUILD_SCRIPT}" >&2
+  echo "Run this installer from the Saturn repository scripts directory." >&2
   exit 1
 fi
 
@@ -145,6 +172,10 @@ fi
 
 if [[ ${CREATE_DESKTOP_SHORTCUT} -eq 0 ]]; then
   BUILD_ARGS+=(--no-desktop-shortcut)
+fi
+
+if [[ ${LEGACY_GPIO} -eq 1 ]]; then
+  BUILD_ARGS+=(--require-legacy-gpio)
 fi
 
 echo "Running deskHPSDR build and install flow from ${TARGET_DIR}..."

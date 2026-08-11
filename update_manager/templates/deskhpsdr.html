@@ -229,7 +229,9 @@ async function loadFlags(){
       input.className = 'h-5 w-5';
       if (flag === '--verbose') input.checked = true;
       const text = document.createElement('span');
-      text.textContent = flag;
+      text.textContent = flag === '--legacy-gpio'
+        ? 'Legacy GPIO V1 (deskHPSDR 2.6.84 / Trixie)'
+        : flag;
       lbl.appendChild(input);
       lbl.appendChild(text);
       host.appendChild(lbl);
