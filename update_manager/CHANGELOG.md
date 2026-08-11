@@ -44,6 +44,9 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
   `/dev/xdma0_user` after a new login or reboot.
 
 ### Added
+- Added a built-in Saturn Remote **Voodoo 3.8k** TX audio profile with a true
+  50-3850 Hz passband, warm restrained EQ/CFC curves, microphone headroom, and
+  one-click application that never changes drive, tuning, PTT/MOX, or RF state.
 - Added the first operational direct-XDMA receive backend behind the
   production-disabled backend selector. DDC6/ADC1 IQ now feeds the existing TCI
   and WDSP receive paths at 192 kHz, live tuning and RX DSP controls remain

@@ -60,6 +60,7 @@ describe('RX audio telemetry', () => {
       connectionRecoveryMs: null,
       connectionLossCount: 0,
       audioSequenceGaps: 1,
+      audioSequenceMissingPackets: 7,
       reconnectPhase: 'online',
       reconnectAttempt: 0,
       reconnectReason: '',
@@ -72,5 +73,6 @@ describe('RX audio telemetry', () => {
     expect(text).toContain('AudioContext base/output: 10.0 ms / unavailable');
     expect(text).toContain('Media backlog bridge/browser: 4096 B / 0 B');
     expect(text).toContain('Reconnect: online | attempt 0');
+    expect(text).toContain('Audio packets missing: 7');
   });
 });

@@ -538,13 +538,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                         tci.publish_audio_stopped();
                     }
                 }
-                TciCommand::SetAudioSampleRate(rate_hz) => {
-                    if rate_hz != WDSP_AUDIO_RATE_HZ {
-                        eprintln!(
-                            "saturn-bridge: requested audio sample rate {} Hz, using {} Hz",
-                            rate_hz, WDSP_AUDIO_RATE_HZ
-                        );
-                    }
+                TciCommand::SetAudioSampleRate(_rate_hz) => {
                     let _ = rx_cmd_tx.send(RxCommand::ResetAudioPacketizer);
                     tci.publish_audio_started(WDSP_AUDIO_RATE_HZ);
                 }
@@ -560,13 +554,8 @@ fn main() -> Result<(), Box<dyn Error>> {
                         );
                     }
                 }
-                TciCommand::SetAudioChannels(channels) => {
-                    if channels != 2 {
-                        eprintln!(
-                            "saturn-bridge: requested {} audio channels, using stereo",
-                            channels
-                        );
-                    }
+                TciCommand::SetAudioChannels(_channels) => {
+                    tci.publish_audio_started(WDSP_AUDIO_RATE_HZ);
                 }
                 TciCommand::ClientConnected => {
                     controller_release_deadline = None;

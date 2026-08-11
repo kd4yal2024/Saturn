@@ -31,6 +31,7 @@ export type RxLatencyDiagnostic = {
   connectionRecoveryMs: number | null;
   connectionLossCount: number;
   audioSequenceGaps: number;
+  audioSequenceMissingPackets?: number;
   reconnectPhase?: string;
   reconnectAttempt?: number;
   reconnectReason?: string;
@@ -120,6 +121,7 @@ export function formatRxLatencyDiagnostic(value: RxLatencyDiagnostic): string {
     `Backlog high-water bridge/TCP: ${diagnosticBytes(value.bridgeHighWaterBytes)} / ${diagnosticBytes(value.tcpHighWaterBytes)}`,
     `Recovery/losses: ${diagnosticMilliseconds(value.connectionRecoveryMs)} / ${Math.max(0, Math.round(value.connectionLossCount || 0))}`,
     `Audio sequence gaps: ${Math.max(0, Math.round(value.audioSequenceGaps || 0))}`,
+    `Audio packets missing: ${Math.max(0, Math.round(value.audioSequenceMissingPackets || 0))}`,
   ];
   if (value.reconnectPhase) {
     const reason = value.reconnectReason ? ` | ${value.reconnectReason}` : '';

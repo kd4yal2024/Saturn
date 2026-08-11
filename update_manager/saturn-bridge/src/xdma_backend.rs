@@ -428,12 +428,7 @@ fn handle_command(
                 tci.publish_audio_stopped();
             }
         }
-        TciCommand::SetAudioSampleRate(rate_hz) => {
-            if rate_hz != WDSP_AUDIO_RATE_HZ {
-                eprintln!(
-                    "saturn-bridge: direct XDMA audio rate is fixed at {WDSP_AUDIO_RATE_HZ} Hz; refusing {rate_hz} Hz"
-                );
-            }
+        TciCommand::SetAudioSampleRate(_rate_hz) => {
             wdsp.reset_audio_packetizer();
             tci.publish_audio_started(WDSP_AUDIO_RATE_HZ);
         }
@@ -441,10 +436,8 @@ fn handle_command(
             let normalized = normalize_audio_frame_float_count(samples as usize);
             wdsp.set_audio_frame_float_count(normalized);
         }
-        TciCommand::SetAudioChannels(channels) => {
-            if channels != 2 {
-                eprintln!("saturn-bridge: direct XDMA audio output remains stereo");
-            }
+        TciCommand::SetAudioChannels(_channels) => {
+            tci.publish_audio_started(WDSP_AUDIO_RATE_HZ);
         }
         TciCommand::ClientConnected => model.desired.running = true,
         TciCommand::ClientDisconnected => {

@@ -4331,6 +4331,14 @@
                             <button class="btn ghost" id="setup-startup-clear-btn" type="button">Clear Startup</button>
                           </div>
                         </div>
+                        <div class="setup-row">
+                          <label class="label" for="setup-stream-mode">RX Network Profile</label>
+                          <select class="field" id="setup-stream-mode">
+                            <option value="lan">LAN — 48 kHz stereo audio</option>
+                            <option value="wan">WAN / VPN — 12 kHz mono audio</option>
+                          </select>
+                          <div class="setup-readout" id="setup-stream-mode-status">LAN: full-quality local transport</div>
+                        </div>
                       </div>
                     </div>
 
@@ -5180,6 +5188,19 @@
                 <div class="field-row">
                   <div class="range-wrap">
                     <div class="row spread">
+                      <span class="label" style="margin: 0;">TX Audio Profile</span>
+                      <span class="mono small" id="tx-audio-profile-status">Custom</span>
+                    </div>
+                    <div class="row spread" style="margin-top: 8px; gap: 10px; align-items: center;">
+                      <span class="small muted">50–3850 Hz · warm ESSB · moderate EQ/CFC</span>
+                      <button class="btn ghost" id="apply-voodoo-38k-btn" type="button">Apply Voodoo 3.8k</button>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="field-row">
+                  <div class="range-wrap">
+                    <div class="row spread">
                       <span class="label" style="margin: 0;">Noise Gate</span>
                       <label class="mono small"><input id="tx-noise-gate-enabled" type="checkbox" checked /> <span id="tx-noise-gate-label">ON</span></label>
                     </div>
@@ -5536,7 +5557,6 @@
       { start: 50000000, end: 54000000, label: "6m" },
       { start: 88000000, end: 108000000, label: "FM" },
     ]);
-    const RX_AUDIO_FRAME_FLOATS = 2048;
     const RX_AUDIO_START_PREROLL_SEC = 0.008;
     const RX_AUDIO_RECOVERY_PREROLL_SEC = 0.002;
     const RX_AUDIO_RESYNC_PREROLL_SEC = 0.004;
@@ -6833,7 +6853,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       }
       waterfallRenderer.clear();
       if (state.connected) {
-        sendTci(`iq_samplerate:${state.sampleRate};`);
+        sendTci(`iq_samplerate:${effectiveIqSampleRate()};`);
         if (!profile.autoIq) {
           stopIq();
         }
@@ -8385,6 +8405,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         displayZoom: Math.max(1, Math.min(32, Number(state.displayZoom) || 1)),
         frequencyLock: Boolean(state.frequencyLock),
         keepScreenAwake: Boolean(state.keepScreenAwake),
+        streamMode: normalizeStreamMode(state.streamMode),
         layoutMode: state.layoutMode === "phone" ? "phone" : "desktop",
         theme: state.theme === "light" ? "light" : "dark",
         phonePanels: sanitizePhonePanels(state.phonePanels),
@@ -8427,12 +8448,15 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       return [0, 0, 0, 0, -1, 0, 1, 2, 1, 0, 0];
     }
 
+    function voodoo38kTxProfile() {
+      return _next.voodoo38kTxAudioProfile();
+    }
+
     function txOpusLabDesiredTxEqBands() {
       if (!TX_OPUS_VOICE_EQ) {
         return txOpusLabZeroBands();
       }
-      // 32, 63, 125, 250, 500, 1k, 2k, 4k, 8k, 16k.
-      return [0, 0, 0, 1, 2, 1, -1, 1, 3, 1, 0];
+      return Array.from(voodoo38kTxProfile().eqBands);
     }
 
     function txOpusLabDesiredCfcPrecomp() {
@@ -8443,9 +8467,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       if (!TX_OPUS_CFC) {
         return txOpusLabZeroBands();
       }
-      // 50, 100, 200, 500, 1k, 1.5k, 2.5k, 3k, 5k, 8k.
-      // Gentle ESSB baseline: low-end warmth, warm mids, no high-band CFC lift.
-      return [0, 0.5, 1.5, 2.0, 2.0, 1.0, 0.5, 0, 0, 0, 0];
+      return Array.from(voodoo38kTxProfile().cfcBands);
     }
 
     function txOpusLabClampNoiseGateThreshold(value) {
@@ -8568,7 +8590,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       if (state.txOpusOverrideEnabled !== true) {
         return false;
       }
-      if (TX_OPUS_CFC && state.txOpusCfcUserEdited) {
+      if (state.txOpusCfcUserEdited) {
         return false;
       }
       const desiredCfcPrecomp = txOpusLabDesiredCfcPrecomp();
@@ -8591,6 +8613,46 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         }
       }
       return changed;
+    }
+
+    function txAudioProfileMatchesState(profile) {
+      if (!profile) return false;
+      if (
+        state.txFilterLow !== profile.filterLowHz ||
+        state.txFilterHigh !== profile.filterHighHz ||
+        state.txEqEnabled !== profile.eqEnabled ||
+        state.cfcEnabled !== profile.cfcEnabled ||
+        state.txNoiseGateEnabled !== profile.noiseGateEnabled ||
+        Math.abs((Number(state.cfcPrecomp) || 0) - profile.cfcPrecompDb) > 0.001 ||
+        !txOpusLabBandsMatch(state.txEqBands, profile.eqBands) ||
+        !txOpusLabBandsMatch(state.cfcBands, profile.cfcBands)
+      ) {
+        return false;
+      }
+      return true;
+    }
+
+    function applyVoodoo38kTxAudioProfile() {
+      const profile = voodoo38kTxProfile();
+      state.txMicGainDb = profile.micGainDb;
+      state.txFilterLow = profile.filterLowHz;
+      state.txFilterHigh = profile.filterHighHz;
+      state.txEqEnabled = profile.eqEnabled;
+      state.txEqBands = sanitizeEqBands(Array.from(profile.eqBands));
+      state.cfcEnabled = profile.cfcEnabled;
+      state.cfcPrecomp = profile.cfcPrecompDb;
+      state.cfcBands = sanitizeCfcBands(Array.from(profile.cfcBands));
+      state.txNoiseGateEnabled = profile.noiseGateEnabled;
+      state.txNoiseGateThresholdDb = profile.noiseGateThresholdDb;
+      state.txOpusProcessingUserEdited = true;
+      state.txOpusCfcUserEdited = true;
+      saveRadioPrefs();
+      if (state.connected && state.ws && state.ws.readyState === WebSocket.OPEN) {
+        sendTci(_next.buildTxAudioProfileCommands(profile, state.mode).join(""));
+      }
+      updateTxFilterReadouts();
+      updateUi();
+      logEvent(`TX audio profile applied: ${profile.label} (${profile.filterLowHz}-${profile.filterHighHz} Hz)`);
     }
 
     function sendTxOpusLabCleanTxAudioToBridge() {
@@ -8702,6 +8764,37 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       return _next.effectiveIqSampleRate(state.sampleRate, state.streamMode);
     }
 
+    function applyRxTransportMode(mode, persist = true, reason = "operator") {
+      const normalized = normalizeStreamMode(mode);
+      const changed = normalized !== state.streamMode;
+      state.streamMode = normalized;
+      const selector = $("setup-stream-mode");
+      if (selector) selector.value = normalized;
+      const status = $("setup-stream-mode-status");
+      if (status) {
+        status.textContent = normalized === "wan"
+          ? "WAN: 96 kHz IQ cap and 12 kHz mono audio"
+          : "LAN: full-quality local transport";
+      }
+      if (state.connected && state.bridgeReady) {
+        sendTci(`iq_samplerate:${effectiveIqSampleRate()};`);
+        if (state.audioStreaming) {
+          flushRxAudioQueue();
+          state.lastAudioSequence = null;
+          state.lastAudioArrivalAt = 0;
+          sendTci(rxAudioStartCommand());
+        }
+      }
+      if (changed) {
+        logEvent(`RX network profile changed to ${normalized.toUpperCase()} (${reason})`);
+      }
+      if (persist) {
+        persistLocalSettingsFallback(currentRemoteSettings());
+        scheduleRemoteSettingsSave();
+      }
+      return changed;
+    }
+
     function saveRadioPrefs() {
       try {
         localStorage.setItem(RADIO_PREFS_KEY, JSON.stringify(currentRadioPrefs()));
@@ -8733,6 +8826,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         localStorage.setItem("saturn.remote.displayZoom", `${Math.max(1, Math.min(32, Number(settings.displayZoom) || 1))}`);
         localStorage.setItem(FREQ_LOCK_KEY, settings.frequencyLock ? "1" : "0");
         localStorage.setItem(WAKE_LOCK_KEY, settings.keepScreenAwake ? "1" : "0");
+        localStorage.setItem("saturn.remote.streamMode", normalizeStreamMode(settings.streamMode));
         localStorage.setItem("saturn.remote.layout", settings.layoutMode === "phone" ? "phone" : "desktop");
         localStorage.setItem("saturn.remote.theme", settings.theme === "light" ? "light" : "dark");
         localStorage.setItem("saturn.remote.phonePanels", JSON.stringify(sanitizePhonePanels(settings.phonePanels)));
@@ -8764,6 +8858,9 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       }
       if (typeof settings.keepScreenAwake === "boolean") {
         state.keepScreenAwake = settings.keepScreenAwake;
+      }
+      if (settings.streamMode != null) {
+        applyRxTransportMode(settings.streamMode, false, "profile");
       }
       if (settings.layoutMode != null) {
         applyLayout(settings.layoutMode, false, false);
@@ -8917,6 +9014,12 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       setValue("display-waterfall-contrast", prefs.waterfallContrast);
       setValue("display-waterfall-smoothing", prefs.waterfallSmoothing);
       setValue("display-waterfall-palette", prefs.waterfallPalette);
+      setValue("setup-stream-mode", normalizeStreamMode(state.streamMode));
+      if ($("setup-stream-mode-status")) {
+        $("setup-stream-mode-status").textContent = state.streamMode === "wan"
+          ? "WAN: 96 kHz IQ cap and 12 kHz mono audio"
+          : "LAN: full-quality local transport";
+      }
       if ($("display-spectrum-floor-readout")) $("display-spectrum-floor-readout").textContent = `${Math.round(prefs.spectrumFloorDb)} dB`;
       if ($("display-spectrum-ceiling-readout")) $("display-spectrum-ceiling-readout").textContent = `${Math.round(prefs.spectrumCeilingDb)} dB`;
       if ($("display-waterfall-floor-readout")) $("display-waterfall-floor-readout").textContent = `${Math.round(prefs.waterfallFloorDb)} dB`;
@@ -10022,7 +10125,8 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         return { label: "Stopped", tone: "warn", title: "RX audio is stopped" };
       }
       const leadMs = audioLeadMs();
-      const dropCount = state.audioBackpressureDrops + state.rxWorkletDrops + state.rxWorkletOverflows;
+      const dropCount = state.audioBackpressureDrops + state.rxWorkletDrops +
+        state.rxWorkletOverflows + state.audioSeqResyncCount;
       const rate = `${Math.round(state.audioSampleRate / 1000)} kHz`;
       const mode = state.audioWorkletMode === "sab" ? "SAB" : "MSG";
       const leadLabel = leadMs == null ? "-- ms" : `${leadMs} ms`;
@@ -10035,7 +10139,8 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     function updateAudioControlStrip() {
       const audio = audioStripState();
       const leadMs = audioLeadMs();
-      const dropCount = state.audioBackpressureDrops + state.rxWorkletDrops + state.rxWorkletOverflows;
+      const dropCount = state.audioBackpressureDrops + state.rxWorkletDrops +
+        state.rxWorkletOverflows + state.audioSeqResyncCount;
       const rateLabel = state.audioStreaming ? `${Math.round(state.audioSampleRate / 1000)} kHz` : "--";
       const leadLabel = leadMs == null ? "--" : `${leadMs} ms`;
       const pathLabel = state.audioStreaming
@@ -10137,7 +10242,8 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       const band = vfoBandState();
       const readyMs = txReadyRemainingMs();
       const leadMs = audioLeadMs();
-      const dropCount = state.audioBackpressureDrops + state.rxWorkletDrops + state.rxWorkletOverflows;
+      const dropCount = state.audioBackpressureDrops + state.rxWorkletDrops +
+        state.rxWorkletOverflows + state.audioSeqResyncCount;
       const bridgeRttAge = state.bridgeRttAt ? Math.max(0, Math.round(now - state.bridgeRttAt)) : null;
       const audioAge = metricAgeMs(state.lastAudioFrameAt, now);
       const iqAge = metricAgeMs(state.lastFrameAt, now);
@@ -10233,7 +10339,8 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       const recoveryMs = state.connectionLossStartedAt
         ? Math.max(0, now - state.connectionLossStartedAt)
         : state.connectionRecoveryMs;
-      const audioDropEvents = state.audioBackpressureDrops + state.rxWorkletDrops;
+      const audioDropEvents = state.audioBackpressureDrops + state.rxWorkletDrops +
+        state.audioSeqResyncCount;
       return _next.formatRxLatencyDiagnostic({
         capturedAtIso: new Date().toISOString(),
         connection: reconnectConnectionState(now).label,
@@ -10260,6 +10367,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         connectionRecoveryMs: recoveryMs,
         connectionLossCount: state.connectionLossCount,
         audioSequenceGaps: state.audioSeqGapCount,
+        audioSequenceMissingPackets: state.audioSeqMissingPacketCount,
         reconnectPhase: reconnectSnapshot.phase,
         reconnectAttempt: reconnectSnapshot.attempt,
         reconnectReason: reconnectSnapshot.lastReason,
@@ -10819,6 +10927,12 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       if (txAdvancedStatus) {
         txAdvancedStatus.textContent = `Gate ${state.txNoiseGateEnabled ? "ON" : "OFF"} | ${state.txFilterLow}-${state.txFilterHigh} Hz`;
       }
+      const txAudioProfileStatus = $("tx-audio-profile-status");
+      if (txAudioProfileStatus) {
+        txAudioProfileStatus.textContent = txAudioProfileMatchesState(voodoo38kTxProfile())
+          ? "Voodoo 3.8k"
+          : "Custom";
+      }
       $("rx-eq-enable-btn").textContent = state.rxEqEnabled ? "EQ On" : "EQ Off";
       $("rx-eq-enable-btn").classList.toggle("active", state.rxEqEnabled);
       $("tx-eq-enable-btn").textContent = state.txEqEnabled ? "EQ On" : "EQ Off";
@@ -10864,7 +10978,9 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       $("two-tone-invert-lsb").checked = Boolean(state.txTwoToneInvertLsb);
       $("frame-rate-readout").textContent = `${safeFixed(state.frameRate, 1, "0.0")} fps`;
       $("fft-readout").textContent = `${state.fftWidth}`;
-      $("audio-drop-readout").textContent = `${state.audioBackpressureDrops}`;
+      $("audio-drop-readout").textContent = `${
+        state.audioBackpressureDrops + state.rxWorkletDrops + state.audioSeqResyncCount
+      }`;
       $("display-caption").textContent = state.displayCaption;
       const connection = reconnectConnectionState();
       $("connection-summary").textContent = state.connected && state.bridgeReady
@@ -11360,7 +11476,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     }
 
     function rxAudioStartCommand() {
-      return `audio_stream_samples:${RX_AUDIO_FRAME_FLOATS};audio_stream_channels:2;audio_stream_sample_type:float32;audio_samplerate:48000;audio_start:0;rx_volume:0,0,${state.rxVolumeDb.toFixed(1)};`;
+      return _next.buildRxAudioStartCommand(state.streamMode, state.rxVolumeDb);
     }
 
     function startIq() {
@@ -11388,7 +11504,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       resetDisplayHistory();
       if (shouldAutoStartIq()) {
         state.iqStreaming = true;
-        sendTci(`iq_samplerate:${state.sampleRate};iq_start:0;`);
+        sendTci(`iq_samplerate:${effectiveIqSampleRate()};iq_start:0;`);
       }
       if (shouldAutoStartRxAudio()) {
         if (state.audioStreaming) {
@@ -11453,7 +11569,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         if (restoreVfoA > 0) {
           sendTci(`vfo:0,0,${restoreVfoA};dds:0,${restoreVfoA};`);
         }
-        sendTci(`iq_samplerate:${restoreSampleRate};`);
+        sendTci(`iq_samplerate:${effectiveIqSampleRate()};`);
         if (restoreIq) {
           startIq();
           scheduleRxMediaStartupResume("reconnect");
@@ -11705,13 +11821,16 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       }
 
       state.audioStreaming = true;
-      state.audioSampleRate = 48000;
+      const requestedAudioProfile = _next.rxAudioTransportProfile(state.streamMode);
+      state.audioSampleRate = requestedAudioProfile.sampleRateHz;
       state.audioFramesPlayed = 0;
       state.audioBackpressureDrops = 0;
-      state.audioChannels = 2;
+      state.audioChannels = requestedAudioProfile.channels;
       resetRxLatencyTelemetry();
       state.lastAudioSequence = null;
       state.audioSeqGapCount = 0;
+      state.audioSeqMissingPacketCount = 0;
+      state.audioSeqResyncCount = 0;
       state.lastAudioSeqGapReportAt = 0;
       sendTci(rxAudioStartCommand());
       logEvent("RX audio requested");
@@ -13423,12 +13542,25 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         const expected = (state.lastAudioSequence + 1) >>> 0;
         if (sequence !== expected) {
           state.audioSeqGapCount = (state.audioSeqGapCount || 0) + 1;
-          state.lastAudioSeqGapReportAt = performance.now();
+          state.audioSeqResyncCount = (state.audioSeqResyncCount || 0) + 1;
+          const missingPackets = sequence > expected ? sequence - expected : 1;
+          state.audioSeqMissingPacketCount =
+            (state.audioSeqMissingPacketCount || 0) + missingPackets;
           flushRxAudioQueue();
           recordOperatorFault("Audio sequence gap", "warn");
           sendTci(`audio_seq_gap_count:0,${state.audioSeqGapCount};`);
-          if (state.audioSeqGapCount === 1 || state.audioSeqGapCount % 10 === 0) {
-            logEvent(`RX audio sequence gap ${state.audioSeqGapCount} (expected ${expected}, got ${sequence})`);
+          const now = performance.now();
+          if (
+            state.audioSeqGapCount === 1 ||
+            state.audioSeqGapCount % 500 === 0 ||
+            now - (state.lastAudioSeqGapReportAt || 0) >= 30000
+          ) {
+            state.lastAudioSeqGapReportAt = now;
+            logEvent(
+              `RX audio discontinuities=${state.audioSeqGapCount} ` +
+              `missing_packets=${state.audioSeqMissingPacketCount} ` +
+              `(expected ${expected}, got ${sequence})`
+            );
           }
         }
       }
@@ -14236,6 +14368,10 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         setFrequencyLock(!state.frequencyLock);
       });
       $("waterfall-toggle-btn").addEventListener("click", togglePhoneWaterfall);
+      $("setup-stream-mode").addEventListener("change", () => {
+        applyRxTransportMode($("setup-stream-mode").value, true, "setup");
+        updateUi();
+      });
       $("sample-rate").addEventListener("change", () => {
         state.sampleRate = clampSampleRateHz($("sample-rate").value);
         state.spectrumShiftCarryBins = 0;
@@ -14244,7 +14380,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         waterfallRenderer.clear();
         saveRadioPrefs();
         updateUi();
-        sendTci(`iq_samplerate:${state.sampleRate};`);
+        sendTci(`iq_samplerate:${effectiveIqSampleRate()};`);
       });
       $("rx-adc").addEventListener("change", () => {
         state.rxAdc = clampRxAdc($("rx-adc").value);
@@ -14580,6 +14716,9 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       $("tx-mic-gain").addEventListener("change", () => {
         saveRadioPrefs();
         sendTci(`tx_mic_gain:0,${state.txMicGainDb.toFixed(1)};`);
+      });
+      $("apply-voodoo-38k-btn").addEventListener("click", () => {
+        applyVoodoo38kTxAudioProfile();
       });
       $("tx-noise-gate-enabled").addEventListener("change", () => {
         state.txOpusProcessingUserEdited = true;
@@ -15033,6 +15172,9 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
           console.warn("Saturn Remote display preference restore failed", error);
         }
         state.activeProfile = `${localStorage.getItem(ACTIVE_PROFILE_KEY) || ""}`.trim();
+        state.streamMode = normalizeStreamMode(
+          localStorage.getItem("saturn.remote.streamMode") || state.streamMode
+        );
         state.wsUrl = defaultWsUrl();
         const savedZoom = Number(localStorage.getItem("saturn.remote.displayZoom"));
         if (!Number.isNaN(savedZoom) && savedZoom >= 1 && savedZoom <= 32) {

@@ -614,6 +614,21 @@ pub(crate) fn shape_rx_audio_for_transport(
     (target_rate_hz, target_channels as u32, output)
 }
 
+pub(crate) fn effective_rx_audio_transport_profile(
+    requested_rate_hz: u32,
+    requested_channels: u32,
+    source_rate_hz: u32,
+    rate_cap_hz: u32,
+    channel_cap: u32,
+) -> (u32, u32) {
+    let source_rate_hz = source_rate_hz.clamp(8_000, 48_000);
+    let rate_cap_hz = rate_cap_hz.clamp(8_000, source_rate_hz);
+    let requested_rate_hz = requested_rate_hz.clamp(8_000, source_rate_hz);
+    let rate_hz = requested_rate_hz.min(rate_cap_hz);
+    let channels = requested_channels.clamp(1, 2).min(channel_cap.clamp(1, 2));
+    (rate_hz, channels)
+}
+
 pub(crate) fn display_frame_interval_for_limit(limit_hz: u16) -> Duration {
     if limit_hz == 0 {
         Duration::ZERO

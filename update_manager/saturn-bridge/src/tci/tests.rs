@@ -75,6 +75,103 @@ fn shapes_rx_audio_for_wan_transport() {
 }
 
 #[test]
+fn per_client_audio_profile_honors_request_and_service_caps() {
+    assert_eq!(
+        effective_rx_audio_transport_profile(48_000, 2, 48_000, 48_000, 2),
+        (48_000, 2)
+    );
+    assert_eq!(
+        effective_rx_audio_transport_profile(12_000, 1, 48_000, 48_000, 2),
+        (12_000, 1)
+    );
+    assert_eq!(
+        effective_rx_audio_transport_profile(48_000, 2, 48_000, 24_000, 1),
+        (24_000, 1)
+    );
+}
+
+#[test]
+fn mixed_clients_receive_independent_lan_and_wan_audio_shapes() {
+    let clients = test_client_registry(1);
+    {
+        let mut clients = clients.lock_unpoisoned();
+        let lan = clients.get_mut(&1).unwrap();
+        lan.state.audio_stream_enabled = true;
+        lan.state.audio_sample_rate_hz = 48_000;
+        lan.state.audio_channels = 2;
+        clients.insert(
+            2,
+            ClientConnection {
+                outbound: ClientOutbound::new(),
+                state: ClientState {
+                    audio_stream_enabled: true,
+                    audio_sample_rate_hz: 12_000,
+                    audio_channels: 1,
+                    ..ClientState::default()
+                },
+            },
+        );
+    }
+
+    let source = vec![0.25; 2_048];
+    assert_eq!(
+        enqueue_rx_audio_for_clients(&clients, 48_000, &source, 48_000, 2, false),
+        0
+    );
+
+    let clients = clients.lock_unpoisoned();
+    let lan = clients
+        .get(&1)
+        .unwrap()
+        .outbound
+        .queues
+        .lock_unpoisoned()
+        .audio
+        .front()
+        .unwrap()
+        .message
+        .clone();
+    let wan = clients
+        .get(&2)
+        .unwrap()
+        .outbound
+        .queues
+        .lock_unpoisoned()
+        .audio
+        .front()
+        .unwrap()
+        .message
+        .clone();
+
+    match lan {
+        OutboundMessage::AudioFrame {
+            sample_rate,
+            channels,
+            audio_samples,
+            ..
+        } => {
+            assert_eq!(sample_rate, 48_000);
+            assert_eq!(channels, 2);
+            assert_eq!(audio_samples.len(), 2_048);
+        }
+        _ => panic!("expected LAN audio frame"),
+    }
+    match wan {
+        OutboundMessage::AudioFrame {
+            sample_rate,
+            channels,
+            audio_samples,
+            ..
+        } => {
+            assert_eq!(sample_rate, 12_000);
+            assert_eq!(channels, 1);
+            assert_eq!(audio_samples.len(), 256);
+        }
+        _ => panic!("expected WAN audio frame"),
+    }
+}
+
+#[test]
 fn outbound_scheduler_prioritizes_safety_and_control_over_display() {
     let outbound = ClientOutbound::new();
     outbound.enqueue(OutboundMessage::IqFrame {

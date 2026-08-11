@@ -78,6 +78,19 @@ expect_rejected "$stage" "staged executable helper"
 # rewrite helper against both legacy and already-canonical redirect lines.
 # shellcheck disable=SC1090
 source "$BROKER"
+running_status="$(render_status_json "running" "Installing payload" "2026-07-30T18:00:00-04:00" "null")"
+success_status="$(render_status_json "success" "Installed payload" "2026-07-30T18:01:00-04:00" "0")"
+python3 - "$running_status" "$success_status" <<'PY'
+import json
+import sys
+
+running = json.loads(sys.argv[1])
+success = json.loads(sys.argv[2])
+assert running["status"] == "running"
+assert running["exit_code"] is None
+assert success["status"] == "success"
+assert success["exit_code"] == 0
+PY
 expected_commit='0123456789abcdef0123456789abcdef01234567'
 expected_ready_url="http://127.0.0.1:8080/readyz?expected_commit=$expected_commit"
 actual_ready_url="$(target_ready_url 'http://127.0.0.1:8080/readyz?ignored=1' "$expected_commit")"

@@ -116,6 +116,14 @@ import {
   rxAudioArrivalJitterMs,
   summarizeRxAudioJitter,
 } from './audio/rx-telemetry';
+import {
+  buildRxAudioStartCommand,
+  rxAudioTransportProfile,
+} from './audio/rx-profile';
+import {
+  buildTxAudioProfileCommands,
+  voodoo38kTxAudioProfile,
+} from './audio/tx-audio-profile';
 import { volumeAmplitudeFromDb } from './audio/constants';
 import { FftProcessor } from './dsp/fft';
 import {
@@ -279,6 +287,10 @@ const api = {
   formatRxLatencyDiagnostic,
   rxAudioArrivalJitterMs,
   summarizeRxAudioJitter,
+  buildRxAudioStartCommand,
+  rxAudioTransportProfile,
+  buildTxAudioProfileCommands,
+  voodoo38kTxAudioProfile,
 
   // DSP
   FftProcessor,

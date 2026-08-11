@@ -18,7 +18,6 @@ import {
   clampPureSignalAttenuationDb,
   clampRxNbThreshold,
   clampRxVolumeDb,
-  clampSampleRateHz,
   clampTxDriveWatts,
   clampTwoToneDelayMs,
   clampTwoToneFreqHz,
@@ -444,7 +443,12 @@ export function applyTciCommand(command: TciCommand, current: TciRadioState): Tc
     next.audioStreaming = false;
   } else if (command.name === 'audio_samplerate' && args.length >= 1) {
     const rate = numericArg(argAt(args, 0));
-    if (rate != null && rate > 0) next.audioSampleRate = clampSampleRateHz(rate);
+    if (rate != null && rate > 0) {
+      next.audioSampleRate = Math.max(8_000, Math.min(48_000, Math.round(rate)));
+    }
+  } else if (command.name === 'audio_stream_channels' && args.length >= 1) {
+    const channels = numericArg(argAt(args, 0));
+    if (channels != null) next.audioChannels = Math.max(1, Math.min(2, Math.round(channels)));
   }
 
   next.filterLow = clampFilterLowHz(next.filterLow);

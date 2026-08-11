@@ -12,6 +12,7 @@ function createState(): TciRadioState {
     rxAntenna: 1,
     sampleRate: 192000,
     audioSampleRate: 48000,
+    audioChannels: 2,
     rxVolumeDb: -10,
     rxNoiseReductionMode: 'NR2',
     rxNoiseReductionLevel: 100,
@@ -303,6 +304,16 @@ describe('applyTciText', () => {
     expect(result.state.moxRequested).toBe(false);
     expect(result.state.audioStreaming).toBe(true);
     expect(result.state.audioSampleRate).toBe(48000);
+  });
+
+  it('accepts negotiated WAN RX audio format', () => {
+    const result = applyTciText(
+      'audio_start:0;audio_samplerate:12000;audio_stream_channels:1;',
+      createState(),
+    );
+    expect(result.state.audioStreaming).toBe(true);
+    expect(result.state.audioSampleRate).toBe(12000);
+    expect(result.state.audioChannels).toBe(1);
   });
 
   it('keeps local mox armed when bridge reports not keyed before RF is active', () => {

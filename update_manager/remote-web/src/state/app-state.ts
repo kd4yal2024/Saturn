@@ -248,6 +248,8 @@ export interface AppState {
   audioBackpressureDrops: number;
   lastAudioSequence: number | null;
   lastAudioSeqGapReportAt: number;
+  audioSeqMissingPacketCount: number;
+  audioSeqResyncCount: number;
   audioWorkletMode: 'sab' | 'msg' | null;
   rxWorkletNode: AudioWorkletNode | null;
   rxRingBuf: SharedArrayBuffer | null;
@@ -534,6 +536,8 @@ export function createAppState(): AppState {
     audioBackpressureDrops: 0,
     lastAudioSequence: null,
     lastAudioSeqGapReportAt: 0,
+    audioSeqMissingPacketCount: 0,
+    audioSeqResyncCount: 0,
     audioWorkletMode: null,
     rxWorkletNode: null,
     rxRingBuf: null,

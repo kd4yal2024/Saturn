@@ -808,11 +808,21 @@ impl TciFrontend {
     }
 
     pub fn publish_audio_started(&self, sample_rate_hz: u32) {
-        self.send_text("audio_start:0;".to_string());
-        self.send_text(format!(
-            "audio_samplerate:{};",
-            self.audio_transport_sample_rate(sample_rate_hz)
-        ));
+        let clients = self.clients.lock_unpoisoned();
+        for client in clients.values() {
+            if !client.state.audio_stream_enabled {
+                continue;
+            }
+            let (rate_hz, channels) = self.effective_audio_profile(&client.state, sample_rate_hz);
+            let message = OutboundMessage::Text(format!(
+                "audio_start:0;audio_samplerate:{rate_hz};audio_stream_channels:{channels};"
+            ));
+            if !client_wants_outbound_message(client, &message, false) {
+                continue;
+            }
+            let drops = client.outbound.enqueue(message);
+            self.drop_count.fetch_add(drops, Ordering::Relaxed);
+        }
     }
 
     pub fn publish_audio_stopped(&self) {
@@ -824,27 +834,25 @@ impl TciFrontend {
             return;
         }
 
-        let (transport_rate_hz, transport_channels, transport_samples) =
-            shape_rx_audio_for_transport(
-                audio_samples,
-                sample_rate_hz,
-                2,
-                self.audio_transport_sample_rate(sample_rate_hz),
-                self.rx_audio_transport_channels,
-            );
-
-        self.send_message(OutboundMessage::AudioFrame {
-            receiver: 0,
-            sample_rate: transport_rate_hz,
-            channels: transport_channels,
-            audio_samples: transport_samples,
-            sequence: 0,
-        });
+        let drops = enqueue_rx_audio_for_clients(
+            &self.clients,
+            sample_rate_hz,
+            audio_samples,
+            self.rx_audio_transport_rate_hz,
+            self.rx_audio_transport_channels,
+            self.tx_media_priority_active(),
+        );
+        self.drop_count.fetch_add(drops, Ordering::Relaxed);
     }
 
-    fn audio_transport_sample_rate(&self, source_rate_hz: u32) -> u32 {
-        self.rx_audio_transport_rate_hz
-            .clamp(8_000, source_rate_hz.max(8_000).min(48_000))
+    fn effective_audio_profile(&self, state: &ClientState, source_rate_hz: u32) -> (u32, u32) {
+        effective_rx_audio_transport_profile(
+            state.audio_sample_rate_hz,
+            state.audio_channels,
+            source_rate_hz,
+            self.rx_audio_transport_rate_hz,
+            self.rx_audio_transport_channels,
+        )
     }
 
     fn is_iq_stream_enabled(&self) -> bool {
@@ -916,4 +924,66 @@ impl TciFrontend {
             self.drop_count.fetch_add(drops, Ordering::Relaxed);
         }
     }
+}
+
+fn enqueue_rx_audio_for_clients(
+    clients: &ClientRegistry,
+    sample_rate_hz: u32,
+    audio_samples: &[f32],
+    rate_cap_hz: u32,
+    channel_cap: u32,
+    tx_media_priority_active: bool,
+) -> u64 {
+    let targets = {
+        let clients = clients.lock_unpoisoned();
+        let routing_probe = OutboundMessage::AudioFrame {
+            receiver: 0,
+            sample_rate: sample_rate_hz,
+            channels: 2,
+            audio_samples: Vec::new(),
+            sequence: 0,
+        };
+        clients
+            .values()
+            .filter(|client| {
+                client_wants_outbound_message(client, &routing_probe, tx_media_priority_active)
+            })
+            .map(|client| {
+                (
+                    client.outbound.clone(),
+                    effective_rx_audio_transport_profile(
+                        client.state.audio_sample_rate_hz,
+                        client.state.audio_channels,
+                        sample_rate_hz,
+                        rate_cap_hz,
+                        channel_cap,
+                    ),
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+
+    let mut shaped = BTreeMap::<(u32, u32), OutboundMessage>::new();
+    let mut drops = 0u64;
+    for (outbound, profile) in targets {
+        let message = shaped.entry(profile).or_insert_with(|| {
+            let (transport_rate_hz, transport_channels, transport_samples) =
+                shape_rx_audio_for_transport(
+                    audio_samples,
+                    sample_rate_hz,
+                    2,
+                    profile.0,
+                    profile.1,
+                );
+            OutboundMessage::AudioFrame {
+                receiver: 0,
+                sample_rate: transport_rate_hz,
+                channels: transport_channels,
+                audio_samples: transport_samples,
+                sequence: 0,
+            }
+        });
+        drops = drops.saturating_add(outbound.enqueue(message.clone()));
+    }
+    drops
 }

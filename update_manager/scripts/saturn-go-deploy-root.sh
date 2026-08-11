@@ -135,6 +135,26 @@ validate_stage(){
   printf '%s\n' "$stage"
 }
 
+render_status_json(){
+  local status="$1" message="$2" updated_at="$3" exit_code="$4"
+  python3 - "$status" "$message" "$updated_at" "$exit_code" <<'PY'
+import json
+import sys
+
+status, message, updated_at, exit_code = sys.argv[1:]
+json.dump(
+    {
+        "status": status,
+        "phase": "root-deploy",
+        "message": message,
+        "updated_at": updated_at,
+        "exit_code": None if exit_code == "null" else int(exit_code),
+    },
+    sys.stdout,
+)
+PY
+}
+
 write_status(){
   local status="$1" message="$2" exit_code="$3" now uid gid
   now="$(date -Is)"
@@ -147,23 +167,8 @@ write_status(){
     || die "atomic state writer is not root-owned: $STATE_WRITER"
   (( (8#$(stat -c '%a' "$STATE_WRITER") & 8#022) == 0 )) \
     || die "atomic state writer is group/world writable: $STATE_WRITER"
-  python3 - "$status" "$message" "$now" "$exit_code" <<'PY' \
+  render_status_json "$status" "$message" "$now" "$exit_code" \
     | "$STATE_WRITER" --path "$STATUS_FILE" --mode 0640 --owner "$uid" --group "$gid" --last-good
-import json
-import sys
-
-status, message, updated_at, exit_code = sys.argv[1:]
-json.dump(
-    {
-        "status": status,
-        "phase": "root-deploy",
-        "message": message,
-        "updated_at": updated_at,
-        "exit_code": int(exit_code),
-    },
-    sys.stdout,
-)
-PY
 }
 
 declare -a ROLLBACK_DESTS=()

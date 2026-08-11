@@ -20,6 +20,7 @@ export type TciRadioState = {
   rxAntenna: number;
   sampleRate: number;
   audioSampleRate: number;
+  audioChannels: number;
   rxVolumeDb: number;
   rxNoiseReductionMode: NoiseReductionMode;
   rxNoiseReductionLevel: number;

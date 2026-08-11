@@ -18,6 +18,7 @@ function createInitialRadioState(settings: SettingsState): TciRadioState {
     rxAntenna: settings.radioPrefs.rxAntenna,
     sampleRate: settings.radioPrefs.sampleRate,
     audioSampleRate: 48000,
+    audioChannels: 2,
     rxVolumeDb: settings.radioPrefs.rxVolumeDb,
     rxNoiseReductionMode: settings.radioPrefs.rxNoiseReductionMode,
     rxNoiseReductionLevel: settings.radioPrefs.rxNoiseReductionLevel,
