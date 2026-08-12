@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-# Exercise the operational receive-only direct-XDMA backend for a bounded
+# Exercise the operational direct-XDMA backend for a bounded
 # interval. The source-tree binary must already be current; this script never
 # builds, installs, or enables the production XDMA backend-selection policy.
 
@@ -24,9 +24,12 @@ MAX_STREAM_RATE=195840
 
 CLIENT_PROBE=0
 PROXY_CLIENT_PROBE=0
+RF_TX_PROBE=0
+RF_TX_CONFIRM_TOKEN="DUMMY_LOAD_CONNECTED_ANT1_7200000HZ_3W"
 P2_WAS=""
 BRIDGE_WAS=""
 SATURN_GO_WAS=""
+SATURN_GO_MANAGED=0
 WATCHER_PID=""
 RESTORED=0
 SERVICES_CAPTURED=0
@@ -38,7 +41,8 @@ need_cmd(){ command -v "$1" >/dev/null 2>&1 || die "required command not found: 
 usage(){
   cat <<'EOF'
 Usage: sudo saturn-xdma-operational-rx-smoke.sh \
-  [--duration-seconds SECONDS] [--client-probe | --proxy-client-probe]
+  [--duration-seconds SECONDS] [--client-probe | --proxy-client-probe] \
+  [--rf-tx-probe]
 
 Runs the source-tree direct-XDMA RX backend for a bounded interval, requires
 advancing DMA/IQ readiness, verifies receive-safe shutdown, and restores the
@@ -46,12 +50,16 @@ prior p2app.service and saturn-bridge.service activity.
 
 The client probe requires at least 45 seconds. It connects directly to the TCI
 endpoint, verifies IQ and audio frames, retunes to 7.200 MHz, requires a TX
-request to be refused, and disconnects before runtime cleanup.
+request to exercise the RF-inhibited DUC, and disconnects before cleanup.
 
 The proxy client probe performs the same acceptance through Saturn Go's
 authenticated TLS split control/media WebSockets. It reads the configured
 credential from saturn-go.service without printing it and accepts the
 appliance's localhost self-signed certificate only for this bounded test.
+
+--rf-tx-probe changes the client probe to a 2.5-second production RF test,
+locked to 7.200 MHz, ANT1, and 3 W. It requires this exact environment token:
+  SATURN_XDMA_PRODUCTION_TX_CONFIRM=DUMMY_LOAD_CONNECTED_ANT1_7200000HZ_3W
 
 Build the standalone debug binary before running this test:
   CARGO_BUILD_JOBS=1 cargo build \
@@ -78,6 +86,9 @@ restore_services(){
   if [[ "$BRIDGE_WAS" == "active" ]]; then
     systemctl start saturn-bridge.service || failed=1
   fi
+  if (( SATURN_GO_MANAGED )) && [[ "$SATURN_GO_WAS" == "active" ]]; then
+    systemctl start "$SATURN_GO_SERVICE" || failed=1
+  fi
 
   if [[ "$P2_WAS" == "active" && "$(service_state p2app.service)" != "active" ]]; then
     printf '[saturn-xdma-operational-rx-smoke] ERROR: p2app.service was not restored\n' >&2
@@ -94,6 +105,16 @@ restore_services(){
   if [[ "$BRIDGE_WAS" != "active" && "$(service_state saturn-bridge.service)" == "active" ]]; then
     printf '[saturn-xdma-operational-rx-smoke] ERROR: saturn-bridge.service was unexpectedly activated\n' >&2
     failed=1
+  fi
+  if (( SATURN_GO_MANAGED )); then
+    if [[ "$SATURN_GO_WAS" == "active" && "$(service_state "$SATURN_GO_SERVICE")" != "active" ]]; then
+      printf '[saturn-xdma-operational-rx-smoke] ERROR: %s was not restored\n' "$SATURN_GO_SERVICE" >&2
+      failed=1
+    fi
+    if [[ "$SATURN_GO_WAS" != "active" && "$(service_state "$SATURN_GO_SERVICE")" == "active" ]]; then
+      printf '[saturn-xdma-operational-rx-smoke] ERROR: %s was unexpectedly activated\n' "$SATURN_GO_SERVICE" >&2
+      failed=1
+    fi
   fi
 
   (( failed == 0 )) || return 1
@@ -135,6 +156,11 @@ while [[ $# -gt 0 ]]; do
       PROXY_CLIENT_PROBE=1
       shift
       ;;
+    --rf-tx-probe)
+      CLIENT_PROBE=1
+      RF_TX_PROBE=1
+      shift
+      ;;
     -h|--help)
       usage
       exit 0
@@ -157,6 +183,15 @@ positive_integer "readiness wait" "$READY_WAIT_SECONDS"
 if (( CLIENT_PROBE )); then
   (( DURATION_SECONDS >= 45 )) \
     || die "--client-probe requires a duration of at least 45 seconds"
+fi
+if (( RF_TX_PROBE )); then
+  [[ "${SATURN_XDMA_PRODUCTION_TX_CONFIRM:-}" == "$RF_TX_CONFIRM_TOKEN" ]] \
+    || die "--rf-tx-probe requires SATURN_XDMA_PRODUCTION_TX_CONFIRM=$RF_TX_CONFIRM_TOKEN"
+  [[ "$BRIDGE_BINARY" == "$BRIDGE_ROOT/target/release/saturn-bridge" ]] \
+    || die "--rf-tx-probe requires the current optimized binary: $BRIDGE_ROOT/target/release/saturn-bridge"
+fi
+if (( RF_TX_PROBE && PROXY_CLIENT_PROBE )); then
+  die "--rf-tx-probe uses the direct localhost TCI lane and cannot be combined with --proxy-client-probe"
 fi
 
 (( EUID == 0 )) || die "run this smoke test with sudo"
@@ -199,6 +234,12 @@ if (( PROXY_CLIENT_PROBE )) && [[ "$SATURN_GO_WAS" != "active" ]]; then
 fi
 
 log "Prior services: p2app=$P2_WAS saturn-bridge=$BRIDGE_WAS saturn-go=$SATURN_GO_WAS"
+if (( RF_TX_PROBE )); then
+  SATURN_GO_MANAGED=1
+  systemctl stop "$SATURN_GO_SERVICE"
+  [[ "$(service_state "$SATURN_GO_SERVICE")" != "active" ]] \
+    || die "$SATURN_GO_SERVICE retained proxy/client access during the RF probe"
+fi
 systemctl stop saturn-bridge.service p2app.service
 [[ "$(service_state saturn-bridge.service)" != "active" ]] \
   || die "saturn-bridge.service retained ownership after stop"
@@ -231,6 +272,13 @@ rm -f -- \
           --retune-hz 7200000
           --timeout-seconds 15
         )
+        if (( RF_TX_PROBE )); then
+          client_args+=(
+            --rf-tx-probe
+            --tx-duration-ms 2500
+            --tx-drive-watts 3
+          )
+        fi
         if (( PROXY_CLIENT_PROBE )); then
           proxy_session="xdma-acceptance-$$-$RANDOM"
           client_args+=(
@@ -258,11 +306,15 @@ rm -f -- \
 ) &
 WATCHER_PID="$!"
 
-log "Starting ${DURATION_SECONDS}s RF-inhibited direct-XDMA RX/TX runtime"
+if (( RF_TX_PROBE )); then
+  log "Starting ${DURATION_SECONDS}s direct-XDMA runtime with bounded 7.200 MHz ANT1 RF probe (3 W maximum, 2.5s)"
+else
+  log "Starting ${DURATION_SECONDS}s RF-inhibited direct-XDMA RX/TX runtime"
+fi
 set +e
 env \
   SATURN_BRIDGE_RADIO_BACKEND=xdma \
-  SATURN_REMOTE_TX_RF_ENABLED=0 \
+  SATURN_REMOTE_TX_RF_ENABLED="$RF_TX_PROBE" \
   SATURN_BRIDGE_XDMA_READY_PATH="$READY_FILE" \
   timeout --signal=TERM --kill-after=3s "${DURATION_SECONDS}s" \
   "$BRIDGE_BINARY" 2>&1 | tee "$LOG_FILE"
@@ -301,21 +353,43 @@ grep -Fq 'direct XDMA backend stopped; DDC and DUC disabled and receive-safe cle
   "$LOG_FILE" || die "runtime log is missing the receive-safe cleanup marker"
 
 if (( CLIENT_PROBE )); then
-  jq -e '
-    .status == "passed" and
-    .bridge_ready == true and
-    .split_paired == true and
-    .remote_tx_rf_enabled == false and
-    .rf_inhibited_duc_exercised == true and
-    .dsp_burst_continued == true and
-    .retune_hz == 7200000 and
-    .iq_frames >= 3 and
-    .iq_pairs > 0 and
-    .iq_nonzero == true and
-    .audio_frames >= 3 and
-    .audio_samples > 0
-  ' "$CLIENT_RESULT_FILE" >/dev/null \
-    || die "client acceptance result is incomplete"
+  if (( RF_TX_PROBE )); then
+    jq -e '
+      .status == "passed" and
+      .bridge_ready == true and
+      .split_paired == true and
+      .remote_tx_rf_enabled == true and
+      .rf_tx_exercised == true and
+      .tx_keyed_observed == true and
+      .tx_duration_ms == 2500 and
+      .tx_drive_watts == 3 and
+      .peak_forward_watts >= 0.05 and
+      .peak_forward_watts <= 4.0 and
+      .peak_reverse_watts <= 0.75 and
+      .peak_swr <= 3.0 and
+      .dsp_burst_continued == true and
+      .retune_hz == 7200000 and
+      .iq_nonzero == true and
+      .audio_nonzero == true
+    ' "$CLIENT_RESULT_FILE" >/dev/null \
+      || die "production RF client acceptance result is incomplete"
+  else
+    jq -e '
+      .status == "passed" and
+      .bridge_ready == true and
+      .split_paired == true and
+      .remote_tx_rf_enabled == false and
+      .rf_inhibited_duc_exercised == true and
+      .dsp_burst_continued == true and
+      .retune_hz == 7200000 and
+      .iq_frames >= 3 and
+      .iq_pairs > 0 and
+      .iq_nonzero == true and
+      .audio_frames >= 3 and
+      .audio_samples > 0
+    ' "$CLIENT_RESULT_FILE" >/dev/null \
+      || die "client acceptance result is incomplete"
+  fi
   if (( PROXY_CLIENT_PROBE )); then
     jq -e '
       .transport == "split-proxy" and
@@ -327,8 +401,18 @@ if (( CLIENT_PROBE )); then
     jq -e '.transport == "direct"' "$CLIENT_RESULT_FILE" >/dev/null \
       || die "client did not validate the direct transport"
   fi
-  grep -Fq 'TX armed with RF disabled; holding off key' \
-    "$LOG_FILE" || die "runtime log is missing RF-inhibited DUC activity"
+  if (( RF_TX_PROBE )); then
+    grep -Fq 'TX state -> ON' "$LOG_FILE" \
+      || die "runtime log is missing the production TX key marker"
+    grep -Fq 'TX state -> OFF' "$LOG_FILE" \
+      || die "runtime log is missing the production TX release marker"
+    if grep -Eq 'power trip|TX output fault forced receive state' "$LOG_FILE"; then
+      die "production TX reported a safety trip"
+    fi
+  else
+    grep -Fq 'TX armed with RF disabled; holding off key' \
+      "$LOG_FILE" || die "runtime log is missing RF-inhibited DUC activity"
+  fi
   grep -Fq 'TCI websocket client' "$LOG_FILE" \
     || die "runtime log is missing the client connection"
   grep -Fq 'disconnected from' "$LOG_FILE" \
@@ -359,4 +443,8 @@ jq '{status,rf_safe,metrics:(.metrics | {frequency_hz,sample_rate_hz,dma_reads,d
   "$OBSERVED_FILE"
 log "Final stopped state:"
 jq '{status,rf_safe,error,metrics}' "$READY_FILE"
-log "Operational direct-XDMA RF-inhibited RX/TX smoke test passed; prior services restored"
+if (( RF_TX_PROBE )); then
+  log "Operational direct-XDMA bounded production RF test passed; prior services restored"
+else
+  log "Operational direct-XDMA RF-inhibited RX/TX smoke test passed; prior services restored"
+fi

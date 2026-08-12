@@ -784,6 +784,14 @@ fn run(
                     chunk_consumed_on_key = true;
                     state = TxState::Keyed;
                     keyed_at = Some(Instant::now());
+                    // Arming can wait for microphone prefill and backend FIFO
+                    // prefill. Those intervals are not missed on-air packet
+                    // deadlines: resetting here prevents a direct-XDMA backend
+                    // from immediately bursting several artificial catch-up
+                    // frames into an already prefilled DUC FIFO. Ordinary
+                    // steady-state lateness still uses the bounded catch-up
+                    // loop above.
+                    next_duc_iq_at = Instant::now() + duc_packet_period;
                     let _ = event_tx.send(TxEvent::Keyed);
                     println!(
                     "saturn-bridge: TX state -> ON (packet_peak={:.4}, input_peak={:.4}, output_peak={:.4}, wdsp_mic_avg={:.1}dB, wdsp_alc_pk={:.1}dB, wdsp_out_avg={:.1}dB)",

@@ -649,8 +649,21 @@ service, systemd drop-in, and persisted selection.
 
 RF-inhibited acceptance sets `SATURN_REMOTE_TX_RF_ENABLED=0`, arms a two-tone
 diagnostic, and requires advancing DUC DMA/FIFO counters while MOX, TX enable,
-and the PA relay remain off. Actual RF validation remains a separate,
-operator-approved dummy-load test.
+and the PA relay remain off. Actual RF validation is a separate,
+operator-approved dummy-load test. Its locked harness mode is:
+
+```bash
+sudo env \
+  SATURN_XDMA_PRODUCTION_TX_CONFIRM=DUMMY_LOAD_CONNECTED_ANT1_7200000HZ_3W \
+  SATURN_XDMA_RX_SMOKE_BRIDGE_BINARY="$PWD/update_manager/saturn-bridge/target/release/saturn-bridge" \
+  update_manager/scripts/saturn-xdma-operational-rx-smoke.sh \
+    --client-probe --rf-tx-probe --duration-seconds 45
+```
+
+The RF mode is fixed at 7.200 MHz, ANT1, a 3 W drive target, and a 2.5-second
+key window. It temporarily stops Saturn Go so an open browser cannot compete
+for the operator lease, uses only the direct localhost TCI socket, and restores
+the exact prior P2, bridge, and Saturn Go service activity.
 
 The live PCB2/firmware-1.27 production-path acceptance on 2026-08-11 passed:
 
@@ -667,6 +680,23 @@ handling; it is counted and drained. Actual overflow or underflow remains a
 fail-fast runtime fault. The DUC's single expected empty-stream startup
 underflow is likewise cleared after verified prefill; all later DUC FIFO
 conditions remain fatal.
+
+The operator-approved production RF run on 2026-08-11 passed on a 50-ohm dummy
+load. A 1 kHz TCI microphone tone keyed for 2.5 seconds at the 3 W drive target:
+
+- 0.698 W peak observed forward power, 0.000 W reverse power, and 1.00 SWR
+- 1,910 DUC frames in 1,893 H2C writes
+- 2,231-word DUC low-water and 3,554-word high-water marks
+- zero RX hard faults, TX FIFO faults, or power/SWR trips
+- explicit TX release, receive-safe DDC/DUC cleanup, 191,877 IQ pairs/second,
+  and restoration of P2, Saturn Bridge, and Saturn Go
+
+Two earlier bounded attempts proved the fail-closed paths before this pass. An
+artificial post-key catch-up burst reached the DUC high threshold and unkeyed;
+the scheduler now resets its packet deadline at the key transition. A debug
+build then underflowed because it could not deliver microphone/DSP frames in
+real time and also unkeyed; the production RF gate therefore uses the optimized
+release binary. Neither attempt sustained RF or bypassed a safety condition.
 
 ## Production Data Paths
 
