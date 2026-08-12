@@ -40,6 +40,7 @@ const DMA_MIN_READ_BYTES: usize = 4096;
 const DMA_MAX_READ_BYTES: usize = 32768;
 const FIFO_WORD_BYTES: usize = 8;
 const FIFO_POLL_INTERVAL: Duration = Duration::from_micros(250);
+const STARTUP_FIFO_DRAIN_MAX_READS: usize = 16;
 
 const RATE_CODES_TO_SAMPLE_WORDS: [usize; 8] = [0, 1, 2, 4, 8, 16, 32, 0];
 
@@ -95,6 +96,14 @@ impl FifoSnapshot {
     }
 }
 
+fn startup_threshold_separately_accounted(snapshot: FifoSnapshot, allowed: bool) -> bool {
+    allowed && snapshot.over_threshold && !snapshot.overflow && !snapshot.underflow
+}
+
+fn fifo_has_hard_fault(snapshot: FifoSnapshot) -> bool {
+    snapshot.overflow || snapshot.underflow
+}
+
 #[derive(Clone, Debug, Default)]
 pub(crate) struct RxCaptureStats {
     pub(crate) dma_reads: u64,
@@ -108,6 +117,7 @@ pub(crate) struct RxCaptureStats {
     pub(crate) fifo_over_threshold: u64,
     pub(crate) fifo_underflows: u64,
     pub(crate) fifo_startup_underflow: bool,
+    pub(crate) fifo_startup_over_threshold: u64,
     power_sum: f64,
     peak: f32,
 }
@@ -224,6 +234,11 @@ pub(crate) struct AlignedBuffer {
     layout: Layout,
     locked: bool,
 }
+
+// The allocation is exclusively owned, contains no borrowed data, and all
+// access requires a Rust borrow of the AlignedBuffer. Moving ownership to the
+// dedicated TX worker is therefore equivalent to moving a Vec<u8>.
+unsafe impl Send for AlignedBuffer {}
 
 impl AlignedBuffer {
     pub(crate) fn new(len: usize) -> Result<Self, XdmaError> {
@@ -521,10 +536,46 @@ impl OperationalRxSession {
     }
 
     pub(crate) fn read_iq(&mut self, iq_samples: &mut Vec<f32>) -> Result<bool, XdmaError> {
+        self.read_iq_with_policy(iq_samples, false)
+            .map(|(ready, _)| ready)
+    }
+
+    /// Drain DDC data accumulated during bounded startup work such as atomic
+    /// readiness-file updates. Threshold is the FPGA's sticky high-watermark,
+    /// not proof of data loss, so it is drained and tracked separately here.
+    /// Actual overflow and underflow remain fatal at startup and runtime.
+    pub(crate) fn drain_startup_fifo(
+        &mut self,
+        iq_samples: &mut Vec<f32>,
+    ) -> Result<(), XdmaError> {
+        for _ in 0..STARTUP_FIFO_DRAIN_MAX_READS {
+            let (_, over_threshold) = self.read_iq_with_policy(iq_samples, true)?;
+            if !over_threshold {
+                return Ok(());
+            }
+        }
+        Err(XdmaError::Incompatible(format!(
+            "operational XDMA RX FIFO remained over threshold after {STARTUP_FIFO_DRAIN_MAX_READS} bounded startup drains"
+        )))
+    }
+
+    fn read_iq_with_policy(
+        &mut self,
+        iq_samples: &mut Vec<f32>,
+        allow_startup_threshold: bool,
+    ) -> Result<(bool, bool), XdmaError> {
         iq_samples.clear();
         let fifo = FifoSnapshot::decode(self.registers.read_register(DDC_FIFO_MONITOR_REGISTER)?);
-        self.parser.stats.observe_fifo(fifo);
-        if fifo.overflow || fifo.over_threshold || fifo.underflow {
+        let recover_startup_threshold =
+            startup_threshold_separately_accounted(fifo, allow_startup_threshold);
+        if recover_startup_threshold {
+            self.parser.stats.fifo_depth_hwm =
+                self.parser.stats.fifo_depth_hwm.max(fifo.depth_words);
+            self.parser.stats.fifo_startup_over_threshold += 1;
+        } else {
+            self.parser.stats.observe_fifo(fifo);
+        }
+        if fifo_has_hard_fault(fifo) {
             return Err(XdmaError::Incompatible(format!(
                 "operational XDMA RX FIFO fault: depth={} overflow={} threshold={} underflow={}",
                 fifo.depth_words,
@@ -535,7 +586,7 @@ impl OperationalRxSession {
         }
         let read_bytes = dma_read_size(fifo.depth_words);
         if read_bytes == 0 {
-            return Ok(false);
+            return Ok((false, fifo.over_threshold));
         }
         let target = self.aligned.as_mut_slice(read_bytes);
         let read = self
@@ -557,7 +608,7 @@ impl OperationalRxSession {
         self.parser.stats.dma_reads += 1;
         self.parser.stats.dma_bytes += read as u64;
         self.parser.feed(&target[..read], iq_samples)?;
-        Ok(!iq_samples.is_empty())
+        Ok((!iq_samples.is_empty(), fifo.over_threshold))
     }
 
     fn configure(&mut self, frequency_hz: u32) -> Result<(), XdmaError> {
@@ -578,7 +629,7 @@ impl OperationalRxSession {
             FifoSnapshot::decode(self.registers.read_register(DDC_FIFO_MONITOR_REGISTER)?);
         self.parser.stats.fifo_depth_hwm = startup.depth_words;
         self.parser.stats.fifo_overflows += u64::from(startup.overflow);
-        self.parser.stats.fifo_over_threshold += u64::from(startup.over_threshold);
+        self.parser.stats.fifo_startup_over_threshold += u64::from(startup.over_threshold);
         self.parser.stats.fifo_startup_underflow = startup.underflow;
         Ok(())
     }
@@ -911,6 +962,29 @@ mod tests {
         assert_eq!(dma_read_size(1024), 8192);
         assert_eq!(dma_read_size(2048), 16384);
         assert_eq!(dma_read_size(4096), 32768);
+    }
+
+    #[test]
+    fn fifo_threshold_is_a_watermark_while_overflow_and_underflow_are_hard_faults() {
+        let threshold = FifoSnapshot {
+            over_threshold: true,
+            ..FifoSnapshot::default()
+        };
+        assert!(!fifo_has_hard_fault(threshold));
+        assert!(startup_threshold_separately_accounted(threshold, true));
+        assert!(!startup_threshold_separately_accounted(threshold, false));
+        let overflow = FifoSnapshot {
+            overflow: true,
+            ..threshold
+        };
+        assert!(fifo_has_hard_fault(overflow));
+        assert!(!startup_threshold_separately_accounted(overflow, true));
+        let underflow = FifoSnapshot {
+            underflow: true,
+            ..threshold
+        };
+        assert!(fifo_has_hard_fault(underflow));
+        assert!(!startup_threshold_separately_accounted(underflow, true));
     }
 
     #[test]

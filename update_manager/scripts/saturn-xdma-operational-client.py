@@ -378,18 +378,19 @@ def run_acceptance(
     split_paired = not media_url
     retune_vfo = False
     retune_dds = False
-    tx_refused = False
+    tx_release_confirmed = False
     after_tx_request = False
     dsp_burst_continued = False
+    rf_inhibited_duc_exercised = False
 
     def handle_text(text: str) -> None:
-        nonlocal bridge_ready, remote_tx_disabled, retune_vfo, retune_dds, tx_refused
+        nonlocal bridge_ready, remote_tx_disabled, retune_vfo, retune_dds, tx_release_confirmed
         bridge_ready = bridge_ready or "ready;" in text
         remote_tx_disabled = remote_tx_disabled or "remote_tx_rf_enabled:0,false;" in text
         retune_vfo = retune_vfo or f"vfo:0,0,{retune_hz};" in text
         retune_dds = retune_dds or f"dds:0,{retune_hz};" in text
         if after_tx_request and "trx:0,false;" in text:
-            tx_refused = True
+            tx_release_confirmed = True
 
     try:
         if media is not None:
@@ -451,7 +452,7 @@ def run_acceptance(
                 and stats.audio_frames >= before_dsp_audio_frames + 3
                 and isinstance(metrics, dict)
                 and int(metrics.get("dma_reads", 0)) > before_dsp_dma
-                and metrics.get("tx_capable") is False
+                and metrics.get("tx_capable") is True
                 and metrics.get("rf_safe") is True
             )
             return dsp_burst_continued
@@ -480,7 +481,7 @@ def run_acceptance(
                 and isinstance(metrics, dict)
                 and metrics.get("frequency_hz") == retune_hz
                 and int(metrics.get("dma_reads", 0)) > before_dma
-                and metrics.get("tx_capable") is False
+                and metrics.get("tx_capable") is True
                 and metrics.get("rf_safe") is True
             )
 
@@ -493,15 +494,35 @@ def run_acceptance(
             timeout=min(timeout, 8.0),
         )
 
+        before_tx = read_readiness(readiness_file) or {}
+        before_tx_writes = int(((before_tx.get("metrics") or {}).get("tx_dma_writes", 0)))
         after_tx_request = True
-        control.send_text("trx:0,true,tci;")
+        control.send_text("tx_two_tone:0,true;trx:0,true,tci;")
+
+        def rf_inhibited_duc_ready() -> bool:
+            nonlocal rf_inhibited_duc_exercised
+            current = read_readiness(readiness_file) or {}
+            current_metrics = current.get("metrics")
+            rf_inhibited_duc_exercised = (
+                current.get("rf_safe") is True
+                and isinstance(current_metrics, dict)
+                and current_metrics.get("rf_safe") is True
+                and current_metrics.get("tx_rf_enabled") is False
+                and current_metrics.get("tx_stream_active") is True
+                and current_metrics.get("tx_keyed") is False
+                and int(current_metrics.get("tx_dma_writes", 0)) > before_tx_writes
+                and int(current_metrics.get("tx_frames", 0)) >= 20
+                and int(current_metrics.get("tx_fifo_faults", 0)) == 0
+            )
+            return rf_inhibited_duc_exercised
+
         wait_messages(
             websockets,
             stats,
             lanes,
             handle_text,
-            lambda: tx_refused,
-            timeout=min(timeout, 5.0),
+            rf_inhibited_duc_ready,
+            timeout=min(timeout, 8.0),
         )
         readiness = read_readiness(readiness_file) or {}
         metrics = readiness.get("metrics")
@@ -509,11 +530,11 @@ def run_acceptance(
             readiness.get("rf_safe") is not True
             or not isinstance(metrics, dict)
             or metrics.get("rf_safe") is not True
-            or metrics.get("tx_capable") is not False
+            or metrics.get("tx_capable") is not True
         ):
-            raise AcceptanceError("readiness did not remain receive-safe after TX refusal")
+            raise AcceptanceError("readiness did not remain receive-safe during RF-inhibited TX")
 
-        control.send_text("trx:0,false;iq_stop:0;audio_stop:0;")
+        control.send_text("trx:0,false;tx_two_tone:0,false;iq_stop:0;audio_stop:0;")
     finally:
         if media is not None:
             media.close()
@@ -529,7 +550,8 @@ def run_acceptance(
         "control_text_messages": lanes.control_text_messages,
         "media_binary_messages": lanes.media_binary_messages,
         "remote_tx_rf_enabled": False,
-        "tx_request_refused": tx_refused,
+        "tx_release_confirmed": tx_release_confirmed,
+        "rf_inhibited_duc_exercised": rf_inhibited_duc_exercised,
         "dsp_burst_continued": dsp_burst_continued,
         "iq_frames": stats.iq_frames,
         "iq_pairs": stats.iq_pairs,

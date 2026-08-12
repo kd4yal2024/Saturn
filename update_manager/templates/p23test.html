@@ -655,6 +655,21 @@
           <div class="muted" style="margin-top:8px; font-size:12px;">
             An inactive direct path is expected while <code>p2app.service</code> owns the FPGA. Availability is not the same as an active production backend.
           </div>
+          <div class="card" style="margin-top:14px; padding:14px;">
+            <div class="row space">
+              <div>
+                <div class="section-kicker">Exclusive Radio Owner</div>
+                <div id="radio-backend-status" class="summary" style="margin-top:5px;">Loading backend selection...</div>
+              </div>
+              <div class="row">
+                <button id="radio-backend-p2" class="btn primary">Use P2 / Thetis</button>
+                <button id="radio-backend-xdma" class="btn">Use XDMA / TCI</button>
+              </div>
+            </div>
+            <div class="muted" style="margin-top:8px; font-size:12px;">
+              P2 remains the default for Thetis and other Protocol 2 clients. Direct XDMA is the Saturn Remote/TCI RX+TX path, initially limited to primary PCB2 firmware 1.27 and 3 W. Switching disconnects current radio clients and automatically rolls back if readiness fails.
+            </div>
+          </div>
           <div id="xdma-diag-dashboard" class="dashboard-grid" style="margin-top:14px;">
             <div class="metric"><div class="metric-label">Loading</div><div class="metric-value">Waiting...</div></div>
           </div>
@@ -750,6 +765,7 @@ let latestCapturedSnapshot = null;
 let bridgeDiagPollTimer = null;
 let bridgeDiagPollInFlight = false;
 let latestBridgeDiag = null;
+let radioBackendBusy = false;
 const PERF_THRESH = {
   cpuCoreWarn: 60,
   cpuCoreCrit: 90,
@@ -763,6 +779,57 @@ const PERF_THRESH = {
 };
 
 function withCsrf(h={}){ return { ...h, [CSRF_HEADER_NAME]: CSRF_HEADER_VALUE }; }
+function setRadioBackendButtons(disabled){
+  radioBackendBusy = !!disabled;
+  $('radio-backend-p2').disabled = radioBackendBusy;
+  $('radio-backend-xdma').disabled = radioBackendBusy;
+}
+function renderRadioBackendStatus(value){
+  const status = value?.backend || value || {};
+  const selected = status.selected || 'unknown';
+  const runtime = status.runtime || 'unknown';
+  const services = status.services || {};
+  $('radio-backend-status').textContent = `Selected ${selected} | runtime ${runtime} | P2 ${services.p2app || 'unknown'} | Bridge ${services.saturn_bridge || 'unknown'} | exclusion ${status.mutual_exclusion_ok === false ? 'FAULT' : 'ok'}`;
+  $('radio-backend-p2').classList.toggle('primary', selected === 'p2');
+  $('radio-backend-xdma').classList.toggle('primary', selected === 'xdma');
+}
+async function loadRadioBackend(){
+  if (radioBackendBusy) return;
+  try {
+    const response = await fetch('./radio_backend', { cache:'no-store' });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data?.message || `HTTP ${response.status}`);
+    renderRadioBackendStatus(data);
+  } catch(error) {
+    $('radio-backend-status').textContent = `Backend status unavailable: ${error.message}`;
+  }
+}
+async function switchRadioBackend(backend){
+  if (radioBackendBusy) return;
+  const direct = backend === 'xdma';
+  const prompt = direct
+    ? 'SWITCH RADIO OWNER TO DIRECT XDMA?\n\nThis stops P2app, disconnects Thetis/Protocol 2 clients, and starts the Saturn Remote/TCI RX+TX backend. Direct TX is initially capped at 3 W. The transaction rolls back if XDMA readiness fails.'
+    : 'SWITCH RADIO OWNER TO P2APP?\n\nThis safely stops direct XDMA, restores receive state, and starts P2app for Thetis/Protocol 2 clients.';
+  if (!confirm(prompt)) return;
+  setRadioBackendButtons(true);
+  $('radio-backend-status').textContent = `Switching to ${backend}...`;
+  try {
+    const response = await fetch('./radio_backend', {
+      method:'POST',
+      headers: withCsrf({ 'Content-Type':'application/json' }),
+      body: JSON.stringify({ backend }),
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data?.message || `HTTP ${response.status}`);
+    renderRadioBackendStatus(data.backend || { selected: backend });
+    setTimeout(loadBridgeDiag, 300);
+    setTimeout(loadRadioBackend, 700);
+  } catch(error) {
+    $('radio-backend-status').textContent = `Switch failed: ${error.message}`;
+  } finally {
+    setRadioBackendButtons(false);
+  }
+}
 function ansi(line){ return ansi_up.ansi_to_html(String(line ?? '')); }
 function saveState(){
   try {
@@ -1516,7 +1583,7 @@ function renderXdmaDashboard(xdma){
   return [
     metricCard('Backend Ownership', backend.active || 'none', `requested ${backend.requested || 'p2'} | P2 service ${backend.p2_service_state || 'unknown'}`),
     metricCard('Direct XDMA', backend.direct_state || 'unknown', backend.message || 'No ownership detail.'),
-    metricCard('Implementation', `Phase ${backend.implementation_phase ?? 'n/a'}`, backend.direct_operational ? 'RX-only runtime active' : 'production selection gated'),
+    metricCard('Implementation', `Phase ${backend.implementation_phase ?? 'n/a'}`, backend.direct_operational ? 'production RX+TX runtime active' : 'direct backend available when selected'),
     metricCard('Driver', driver.status || 'unknown', `module ${driver.module_loaded ? 'loaded' : 'not loaded'} | required nodes ${requiredReady}/${required.length}`),
     metricCard('DMA Nodes', `${requiredReady}/${required.length} required`, `${optionalReady}/${optional.length} optional`),
     metricCard('PCIe Link', link, runtime.present ? 'XDMA runtime detected' : 'No XDMA runtime evidence'),
@@ -1525,7 +1592,7 @@ function renderXdmaDashboard(xdma){
     metricCard('Latency Diagnostics', `${parameters.transfer_latency_warn_us ?? 'n/a'} µs`, 'rate-limited kernel transfer warning threshold'),
     metricCard('Last Validation', String(validationStatus), validation.present ? `age ${formatXdmaAge(validation.age_ms)}` : 'structured probe snapshot not recorded'),
     metricCard('RX Data Plane', operationalSnapshot?.status || 'inactive', operational.present ? `${operationalMetrics.iq_pairs ?? 0} IQ pairs | ${operationalMetrics.dma_reads ?? 0} DMA reads | age ${formatXdmaAge(operational.age_ms)}` : 'No operational heartbeat'),
-    metricCard('RF Safety', backend.direct_operational ? 'receive-safe' : 'not keyed', backend.direct_operational ? `TX capable ${operationalMetrics.tx_capable === true ? 'yes' : 'no'} | heartbeat verified` : 'this page does not enable or key RF'),
+    metricCard('RF Safety', operationalSnapshot?.rf_safe === false ? 'TX keyed' : 'receive-safe', backend.direct_operational ? `TX capable ${operationalMetrics.tx_capable === true ? 'yes' : 'no'} | max ${operationalMetrics.tx_max_watts ?? 'n/a'} W | heartbeat verified` : 'backend is not directly keyed'),
   ].join('');
 }
 function buildBridgeDiagSnapshot(){
@@ -1666,6 +1733,7 @@ function showLabPanel(name){
     if (item.panel) item.panel.hidden = !active;
   });
   if (name === 'bridge' || name === 'xdma') loadBridgeDiag();
+  if (name === 'xdma') loadRadioBackend();
 }
 function formatWorkloadSummaryFromPerf(perf){
   const workload = perf?.workload || {};
@@ -2378,6 +2446,8 @@ $('bridge-diag-refresh').addEventListener('click', ()=>{ loadBridgeDiag(); });
 $('bridge-diag-copy').addEventListener('click', ()=>{ copyBridgeDiagSnapshot(); });
 $('bridge-diag-download').addEventListener('click', ()=>{ downloadBridgeDiagSnapshot(); });
 $('xdma-diag-refresh').addEventListener('click', ()=>{ loadBridgeDiag(); });
+$('radio-backend-p2').addEventListener('click', ()=>{ switchRadioBackend('p2'); });
+$('radio-backend-xdma').addEventListener('click', ()=>{ switchRadioBackend('xdma'); });
 $('xdma-diag-copy').addEventListener('click', ()=>{ copyXdmaDiagSnapshot(); });
 $('xdma-diag-download').addEventListener('click', ()=>{ downloadXdmaDiagSnapshot(); });
 $('tab-p23').addEventListener('click', ()=>{ showLabPanel('p23'); });
@@ -2397,6 +2467,7 @@ loadP23Perf();
 ensureStatusPoll();
 ensurePerfPoll();
 ensureBridgeDiagPoll();
+loadRadioBackend();
 fetchRunLog();
 </script>
 </body>

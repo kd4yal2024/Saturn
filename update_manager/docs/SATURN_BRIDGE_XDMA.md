@@ -496,15 +496,15 @@ and would silently reacquire P2 during an XDMA switch. Transaction ordering,
 service-state verification, and the persisted backend environment replace that
 implicit ownership.
 
-The installed `/etc/default/saturn-radio-backend` deliberately contains:
+The installed `/etc/default/saturn-radio-backend` now contains:
 
 ```text
-XDMA_OPERATIONAL_ENABLED="0"
+XDMA_OPERATIONAL_ENABLED="1"
 ```
 
-Consequently, `switch xdma` fails before changing a service, drop-in, or
-persistent state. Test mode can exercise the otherwise complete transaction,
-but production cannot enable it yet.
+P2 remains the persisted/default owner after installation. Operators can select
+XDMA explicitly through the Radio Telemetry page or the root broker. The broker
+persists only a ready selection and restores the exact prior state on failure.
 
 The next Phase 6 slice now provides an RX-only operational bridge runtime when
 `SATURN_BRIDGE_RADIO_BACKEND=xdma` is set in an isolated test:
@@ -564,9 +564,10 @@ sudo update_manager/scripts/saturn-xdma-operational-rx-smoke.sh \
 The localhost-only client opens the actual TCI WebSocket, validates 192 kHz IQ
 and 48 kHz audio binary frames, submits an eight-command RX DSP preference
 burst, requires media and DMA progress afterward, retunes both VFO and DDC to
-7.200 MHz, deliberately requests TX, and requires the RX-only backend to refuse
-it while readiness remains receive-safe. It then stops its streams and
-disconnects before the harness terminates the runtime.
+7.200 MHz, and exercises the DUC with RF explicitly inhibited. It requires
+advancing H2C writes and TX frames while MOX, TX enable, and the PA relay remain
+off. It then releases TX, stops its streams, and disconnects before the harness
+terminates the runtime.
 
 The first two client runs exposed a genuine debug-build starvation path: the
 runtime synchronized WDSP and published the complete radio snapshot after each
@@ -584,7 +585,7 @@ The subsequent 45-second PCB2/firmware-1.27 client run passed:
 - 30.048 ms worst reported DSP control batch
 - FIFO high-water of 8,016 words, with zero FIFO or framing faults
 - successful 7.200 MHz retune
-- explicit TX refusal with `tx_capable=false`
+- historical Phase 6 TX refusal before the Phase 7 production TX implementation
 - verified DDC shutdown, receive-safe cleanup, and restoration of both
   previously active services
 
@@ -619,10 +620,55 @@ then invokes the root transaction broker under its explicit test gate,
 validates `P2 -> XDMA`, runs the split-proxy client acceptance, validates
 `XDMA -> P2`, and restores the exact prior backend drop-in, persisted selection,
 readiness file, and service state. On failure it prints bounded
-unit/readiness/journal diagnostics before restoration. The installed production
-configuration remains gated throughout.
+unit/readiness/journal diagnostics before restoration. RF remains inhibited
+throughout this transaction test.
 
-## Planned Data Paths
+## Phase 7 production RX/TX backend
+
+The direct runtime now reuses the same TCI operator lease, WDSP TX engine,
+microphone path, TX display, EQ, CFC, phase rotator, noise gate, and watchdog
+state machine as the P2 transport. Its backend-specific output packs WDSP's
+192 kHz IQ as Q-then-I signed 24-bit big-endian samples and writes H2C0 with
+the proven Phase 4 FIFO geometry.
+
+The initial production envelope is intentionally narrow:
+
+- primary Saturn PCB2 firmware 1.27 only
+- ANT1 with the same band-filter mapping as P2app
+- 3 W maximum direct-XDMA target
+- PureSignal and RF-generating two-tone disabled
+- DUC FIFO prefill before MOX
+- immediate receive cleanup on DMA/FIFO/register error, SWR or reverse-power
+  trip, operator disconnect, stale microphone, stale control, or process exit
+
+P2app is retained and remains the default owner for Thetis and other Protocol 2
+clients. Direct XDMA is an explicit alternative for Saturn Remote and other TCI
+clients. The Radio Telemetry page calls the root-owned transaction broker; only
+one backend can own the FPGA, and readiness failure restores the previous
+service, systemd drop-in, and persisted selection.
+
+RF-inhibited acceptance sets `SATURN_REMOTE_TX_RF_ENABLED=0`, arms a two-tone
+diagnostic, and requires advancing DUC DMA/FIFO counters while MOX, TX enable,
+and the PA relay remain off. Actual RF validation remains a separate,
+operator-approved dummy-load test.
+
+The live PCB2/firmware-1.27 production-path acceptance on 2026-08-11 passed:
+
+- 191,757 steady-state IQ pairs/second over 37.763 seconds
+- 7,254,424 IQ pairs at receive-safe shutdown, with no RX overflow/underflow or
+  framing faults
+- nonzero IQ and audio over paired Saturn Go TLS control/media WebSockets
+- 846 RF-inhibited DUC frames in 829 H2C writes, with no TX FIFO fault
+- successful transactional `P2 -> XDMA -> P2` acceptance with the original P2
+  selection and all three services restored
+
+The RX FIFO threshold bit is a sticky high-watermark warning, matching P2app's
+handling; it is counted and drained. Actual overflow or underflow remains a
+fail-fast runtime fault. The DUC's single expected empty-stream startup
+underflow is likewise cleared after verified prefill; all later DUC FIFO
+conditions remain fatal.
+
+## Production Data Paths
 
 | Function | XDMA node |
 | --- | --- |
@@ -640,4 +686,5 @@ configuration remains gated throughout.
 4. DUC IQ with RF forcibly disabled
 5. Guarded RF transmit and failure-injection tests
 6. Transactional client-selectable switching and rollback
-7. Long-duration soak testing before considering XDMA as the default
+7. Production direct RX/TX behind explicit operator selection, with P2 default
+8. Long-duration and dummy-load acceptance before wider power or XDMA default

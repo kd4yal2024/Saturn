@@ -41,6 +41,72 @@ const TX_ACTIVE_IDLE_SLEEP: Duration = Duration::from_micros(250);
 const PURE_SIGNAL_FEEDBACK_TIMEOUT: Duration = Duration::from_millis(250);
 const PURE_SIGNAL_STATUS_PERIOD: Duration = Duration::from_millis(100);
 
+pub type TxRadioResult = Result<(), String>;
+
+/// Hardware-output boundary for the shared WDSP/TCI transmit state machine.
+///
+/// P2 remains the default implementation. The direct-XDMA implementation uses
+/// the same arm, mic/IQ, watchdog, unkey, and diagnostics logic while changing
+/// only how radio configuration and DUC IQ reach the FPGA.
+pub trait TxRadio: Send + Sync {
+    fn configure_puresignal_feedback(&self) -> TxRadioResult;
+    fn send_duc_specific(&self, model: &RadioModel) -> TxRadioResult;
+    fn send_high_priority(&self, model: &RadioModel) -> TxRadioResult;
+    /// Stage the first keyable DUC IQ and key the selected backend when its
+    /// transmit data plane is ready. Direct XDMA may return `Ok(false)` while
+    /// it accumulates a safe FIFO prefill; P2 keys and sends immediately.
+    fn try_key_with_iq(&self, model: &RadioModel, iq_samples: &[f32]) -> Result<bool, String>;
+    fn send_duc_iq(&self, iq_samples: &[f32]) -> TxRadioResult;
+    /// Exercise the DUC data path while RF controls remain forced to receive.
+    /// P2 uses only the browser-side diagnostic; direct XDMA also validates
+    /// packing, DMA writes, FIFO pacing, and cleanup in this mode.
+    fn stage_iq_rf_disabled(&self, _model: &RadioModel, _iq_samples: &[f32]) -> TxRadioResult {
+        Ok(())
+    }
+    fn configure_rx_ddc(
+        &self,
+        ddc_index: u8,
+        sample_rate_khz: u16,
+        sample_size_bits: u8,
+        adc: u8,
+    ) -> TxRadioResult;
+}
+
+impl TxRadio for P2Session {
+    fn configure_puresignal_feedback(&self) -> TxRadioResult {
+        P2Session::configure_puresignal_feedback(self).map_err(|error| error.to_string())
+    }
+
+    fn send_duc_specific(&self, model: &RadioModel) -> TxRadioResult {
+        P2Session::send_duc_specific(self, model).map_err(|error| error.to_string())
+    }
+
+    fn send_high_priority(&self, model: &RadioModel) -> TxRadioResult {
+        P2Session::send_high_priority(self, model).map_err(|error| error.to_string())
+    }
+
+    fn try_key_with_iq(&self, model: &RadioModel, iq_samples: &[f32]) -> Result<bool, String> {
+        P2Session::send_high_priority(self, model).map_err(|error| error.to_string())?;
+        P2Session::send_duc_iq(self, iq_samples).map_err(|error| error.to_string())?;
+        Ok(true)
+    }
+
+    fn send_duc_iq(&self, iq_samples: &[f32]) -> TxRadioResult {
+        P2Session::send_duc_iq(self, iq_samples).map_err(|error| error.to_string())
+    }
+
+    fn configure_rx_ddc(
+        &self,
+        ddc_index: u8,
+        sample_rate_khz: u16,
+        sample_size_bits: u8,
+        adc: u8,
+    ) -> TxRadioResult {
+        P2Session::configure_rx_ddc(self, ddc_index, sample_rate_khz, sample_size_bits, adc)
+            .map_err(|error| error.to_string())
+    }
+}
+
 fn duc_iq_packet_period() -> Duration {
     Duration::from_secs_f64(DUC_IQ_SAMPLES_PER_PACKET as f64 / WDSP_TX_IQ_RATE_HZ as f64)
 }
@@ -154,7 +220,7 @@ impl TxState {
 }
 
 pub fn spawn(
-    session: Arc<P2Session>,
+    session: Arc<dyn TxRadio>,
     radio_model: Arc<Mutex<RadioModel>>,
     cmd_rx: Receiver<TxCommand>,
     event_tx: Sender<TxEvent>,
@@ -169,7 +235,7 @@ pub fn spawn(
 }
 
 fn run(
-    session: Arc<P2Session>,
+    session: Arc<dyn TxRadio>,
     radio_model: Arc<Mutex<RadioModel>>,
     cmd_rx: Receiver<TxCommand>,
     event_tx: Sender<TxEvent>,
@@ -288,7 +354,13 @@ fn run(
                 }
                 Ok(TxCommand::Disarm) => {
                     if state != TxState::Idle {
-                        do_unkey(&session, &radio_model, &mut wdsp_tx, &event_tx, state);
+                        do_unkey(
+                            session.as_ref(),
+                            &radio_model,
+                            &mut wdsp_tx,
+                            &event_tx,
+                            state,
+                        );
                         state = TxState::Idle;
                         rf_enabled = false;
                         two_tone = false;
@@ -440,7 +512,13 @@ fn run(
                 }
                 Ok(TxCommand::Shutdown) => {
                     if state != TxState::Idle {
-                        do_unkey(&session, &radio_model, &mut wdsp_tx, &event_tx, state);
+                        do_unkey(
+                            session.as_ref(),
+                            &radio_model,
+                            &mut wdsp_tx,
+                            &event_tx,
+                            state,
+                        );
                     }
                     println!("saturn-bridge: TX thread shutting down");
                     return;
@@ -448,7 +526,13 @@ fn run(
                 Err(TryRecvError::Empty) => break,
                 Err(TryRecvError::Disconnected) => {
                     if state != TxState::Idle {
-                        do_unkey(&session, &radio_model, &mut wdsp_tx, &event_tx, state);
+                        do_unkey(
+                            session.as_ref(),
+                            &radio_model,
+                            &mut wdsp_tx,
+                            &event_tx,
+                            state,
+                        );
                     }
                     println!("saturn-bridge: TX thread: command channel closed");
                     return;
@@ -491,7 +575,13 @@ fn run(
                 "saturn-bridge: TX watchdog timeout ({}s), auto-unkeying",
                 tx_watchdog.as_secs()
             );
-            do_unkey(&session, &radio_model, &mut wdsp_tx, &event_tx, state);
+            do_unkey(
+                session.as_ref(),
+                &radio_model,
+                &mut wdsp_tx,
+                &event_tx,
+                state,
+            );
             state = TxState::Idle;
             rf_enabled = false;
             two_tone = false;
@@ -572,11 +662,13 @@ fn run(
         // unkey or client disconnect.
         if state != TxState::Idle {
             let mut sent_this_loop = 0usize;
+            let mut output_fault = false;
             while wdsp_tx.pending_iq.len() >= floats_per_packet
                 && Instant::now() >= next_duc_iq_at
                 && sent_this_loop < MAX_DUC_PACKETS_PER_LOOP
             {
                 let chunk: Vec<f32> = wdsp_tx.pending_iq.drain(..floats_per_packet).collect();
+                let mut chunk_consumed_on_key = false;
                 next_duc_iq_at += duc_packet_period;
                 sent_this_loop += 1;
                 let peak = chunk
@@ -608,6 +700,15 @@ fn run(
                         .unwrap_or(false);
 
                     if !rf_enabled {
+                        let staged = {
+                            let model = radio_model.lock_unpoisoned();
+                            session.stage_iq_rf_disabled(&model, &chunk)
+                        };
+                        if let Err(error) = staged {
+                            eprintln!("saturn-bridge: TX RF-disabled DUC staging failed: {error}");
+                            output_fault = true;
+                            break;
+                        }
                         if last_zero_iq_log_at.elapsed() >= TX_ZERO_IQ_LOG_INTERVAL {
                             let diag = wdsp_tx.diagnostics();
                             println!(
@@ -643,7 +744,7 @@ fn run(
 
                     // First keyable mic+IQ packet — key the radio.
                     let diag = wdsp_tx.diagnostics();
-                    {
+                    let keyed = {
                         let mut model = radio_model.lock_unpoisoned();
                         if model.desired.pure_signal_enabled {
                             if let Err(e) = session.configure_puresignal_feedback() {
@@ -661,10 +762,26 @@ fn run(
                             wdsp_tx.set_puresignal_mox(true);
                         }
                         model.desired.tx_enabled = true;
-                        if let Err(e) = session.send_high_priority(&model) {
-                            eprintln!("saturn-bridge: TX thread: HP send error on key: {e}");
+                        match session.try_key_with_iq(&model, &chunk) {
+                            Ok(keyed) => keyed,
+                            Err(error) => {
+                                model.desired.tx_enabled = false;
+                                eprintln!(
+                                    "saturn-bridge: TX output failed while staging/keying: {error}"
+                                );
+                                output_fault = true;
+                                false
+                            }
                         }
+                    };
+                    if output_fault {
+                        break;
                     }
+                    if !keyed {
+                        did_work = true;
+                        continue;
+                    }
+                    chunk_consumed_on_key = true;
                     state = TxState::Keyed;
                     keyed_at = Some(Instant::now());
                     let _ = event_tx.send(TxEvent::Keyed);
@@ -687,9 +804,14 @@ fn run(
                     peak,
                     &chunk,
                 );
-                if let Err(e) = session.send_duc_iq(&chunk) {
-                    eprintln!("saturn-bridge: TX thread: DUC IQ send error: {e}");
-                    break;
+                if !chunk_consumed_on_key {
+                    // The transition packet is consumed by try_key_with_iq().
+                    // Every later keyed packet uses the steady-state path.
+                    if let Err(e) = session.send_duc_iq(&chunk) {
+                        eprintln!("saturn-bridge: TX thread: DUC IQ send error: {e}");
+                        output_fault = true;
+                        break;
+                    }
                 }
                 duc_packet_count = duc_packet_count.saturating_add(1);
                 if duc_packet_count == 1 || last_diag_at.elapsed() >= Duration::from_millis(500) {
@@ -700,6 +822,21 @@ fn run(
                     last_diag_at = Instant::now();
                 }
                 did_work = true;
+            }
+            if output_fault {
+                do_unkey(
+                    session.as_ref(),
+                    &radio_model,
+                    &mut wdsp_tx,
+                    &event_tx,
+                    state,
+                );
+                state = TxState::Idle;
+                rf_enabled = false;
+                two_tone = false;
+                pending_mic_samples.clear();
+                wdsp_tx.pending_iq.clear();
+                println!("saturn-bridge: TX output fault forced receive state");
             }
         }
 
@@ -734,7 +871,13 @@ fn run(
     }
 
     if state != TxState::Idle {
-        do_unkey(&session, &radio_model, &mut wdsp_tx, &event_tx, state);
+        do_unkey(
+            session.as_ref(),
+            &radio_model,
+            &mut wdsp_tx,
+            &event_tx,
+            state,
+        );
     }
     println!("saturn-bridge: TX thread stopped");
 }
@@ -880,7 +1023,7 @@ fn mic_samples_to_mono(samples: Vec<f32>, channels: u32) -> Vec<f32> {
 }
 
 fn do_unkey(
-    session: &P2Session,
+    session: &dyn TxRadio,
     radio_model: &Mutex<RadioModel>,
     wdsp_tx: &mut WdspTxEngine,
     event_tx: &Sender<TxEvent>,

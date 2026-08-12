@@ -1,0 +1,751 @@
+//! Production direct-XDMA transmit output for the shared WDSP TX pipeline.
+//!
+//! This deliberately keeps the validated Phase 4/5 one-shot probes intact.
+//! The runtime owns a separate register descriptor and H2C0 descriptor, but
+//! shares their proven FIFO geometry, sample packing, register ordering, and
+//! fail-safe receive cleanup. Initial production enablement remains limited to
+//! the field-qualified primary PCB2 firmware 1.27 image and 3 W maximum.
+
+use crate::radio_model::RadioModel;
+use crate::tx_thread::{TxRadio, TxRadioResult};
+use crate::xdma::{ensure_p2app_inactive, XdmaError, XdmaRegisterDevice};
+use crate::xdma_rx::AlignedBuffer;
+use std::env;
+use std::fs::{File, OpenOptions};
+use std::io;
+use std::os::unix::fs::FileExt;
+use std::path::PathBuf;
+use std::sync::Mutex;
+
+const DEFAULT_DUC_DEVICE: &str = "/dev/xdma0_h2c_0";
+const DEFAULT_USER_DEVICE: &str = "/dev/xdma0_user";
+
+const TX_CONFIG_REGISTER: u64 = 0x2008;
+const TX_DUC_REGISTER: u64 = 0x200c;
+const RF_GPIO_REGISTER: u64 = 0x2014;
+const DAC_CONTROL_REGISTER: u64 = 0x201c;
+const FIFO_RESET_REGISTER: u64 = 0x7000;
+const DUC_FIFO_MONITOR_REGISTER: u64 = 0x9004;
+const DUC_FIFO_MONITOR_CONFIG_REGISTER: u64 = 0x9014;
+const ALEX_FORWARD_POWER_REGISTER: u64 = 0xa000;
+const ALEX_REVERSE_POWER_REGISTER: u64 = 0xa004;
+const ALEX_TX_FILTER_REGISTER: u64 = 0xb000;
+const ALEX_TX_ANTENNA_REGISTER: u64 = 0xb008;
+
+const DUC_FIFO_RESET_BIT: u32 = 1 << 3;
+const MOX_BIT: u32 = 1 << 24;
+const TX_ENABLE_BIT: u32 = 1 << 25;
+const RF_DATA_NETWORK_ENDIAN_BIT: u32 = 1 << 26;
+const TX_RELAY_DISABLE_BIT: u32 = 1 << 27;
+const TX_MODULATION_SOURCE_MASK: u32 = 0b11;
+const TX_OUTPUT_GATE_BIT: u32 = 1 << 2;
+const TX_PROTOCOL_P2_BIT: u32 = 1 << 3;
+const TX_AMPLITUDE_MASK: u32 = 0x3ffff << 4;
+const TX_WATCHDOG_OVERRIDE_BIT: u32 = 1 << 28;
+const DUC_MUX_RESET_BIT: u32 = 1 << 29;
+const TX_IQ_DEINTERLEAVE_BIT: u32 = 1 << 30;
+const DUC_STREAM_ENABLE_BIT: u32 = 1 << 31;
+const PCB2_FW13_TX_AMPLITUDE: u32 = 0x2000;
+
+const ALEX_ANT1_BIT: u16 = 0x0100;
+const ALEX_TX_RELAY_BIT: u16 = 0x0800;
+const DUC_FRAME_IQ_FLOATS: usize = 480;
+const DUC_FRAME_BYTES: usize = 1_440;
+const DUC_FIFO_WORDS_PER_FRAME: usize = 180;
+const DUC_PREFILL_FRAMES: usize = 20;
+const DUC_MAX_DMA_BATCH_FRAMES: usize = 11;
+const DMA_BUFFER_BYTES: usize = DUC_MAX_DMA_BATCH_FRAMES * DUC_FRAME_BYTES;
+const INITIAL_MAX_WATTS: u8 = 3;
+const REVERSE_POWER_TRIP_WATTS: f32 = 0.75;
+const FORWARD_POWER_TRIP_WATTS: f32 = 4.0;
+const SWR_TRIP: f32 = 3.0;
+const SWR_MIN_FORWARD_WATTS: f32 = 0.25;
+
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct DirectTxSnapshot {
+    pub(crate) stream_active: bool,
+    pub(crate) keyed: bool,
+    pub(crate) dma_writes: u64,
+    pub(crate) frames_written: u64,
+    pub(crate) fifo_lwm: usize,
+    pub(crate) fifo_hwm: usize,
+    pub(crate) fifo_faults: u64,
+    pub(crate) fifo_startup_underflows: u64,
+    pub(crate) forward_watts: f32,
+    pub(crate) reverse_watts: f32,
+    pub(crate) swr: f32,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct FifoSnapshot {
+    occupied_words: usize,
+    overflow: bool,
+    over_threshold: bool,
+    underflow: bool,
+}
+
+impl FifoSnapshot {
+    fn decode(value: u32) -> Self {
+        Self {
+            occupied_words: (value & 0xffff) as usize,
+            overflow: value & (1 << 31) != 0,
+            over_threshold: value & (1 << 30) != 0,
+            underflow: value & (1 << 29) != 0,
+        }
+    }
+}
+
+fn prefill_has_hard_fault(snapshot: FifoSnapshot) -> bool {
+    snapshot.overflow || snapshot.over_threshold
+}
+
+struct DirectTxState {
+    registers: XdmaRegisterDevice,
+    dma: File,
+    buffer: AlignedBuffer,
+    fifo_depth_words: usize,
+    stream_active: bool,
+    keyed: bool,
+    dma_writes: u64,
+    frames_written: u64,
+    fifo_lwm: usize,
+    fifo_hwm: usize,
+    fifo_faults: u64,
+    fifo_startup_underflows: u64,
+    forward_watts: f32,
+    reverse_watts: f32,
+    swr: f32,
+    power_meter_scale: f32,
+}
+
+impl DirectTxState {
+    fn open(power_meter_scale: f32) -> Result<Self, XdmaError> {
+        ensure_p2app_inactive()?;
+        let register_path = env::var_os("SATURN_BRIDGE_XDMA_USER_DEVICE")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(DEFAULT_USER_DEVICE));
+        let duc_path = env::var_os("SATURN_BRIDGE_XDMA_DUC_DEVICE")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(DEFAULT_DUC_DEVICE));
+        let registers = XdmaRegisterDevice::open(&register_path)?;
+        let identity = registers.identity();
+        if identity.is_fallback()
+            || identity.pcb_version != 2
+            || identity.firmware_major != 1
+            || identity.firmware_minor != 27
+        {
+            return Err(XdmaError::Incompatible(format!(
+                "production direct TX is qualified only for primary Saturn PCB2 firmware 1.27; found pcb={} firmware={}.{} image={}",
+                identity.pcb_version,
+                identity.firmware_major,
+                identity.firmware_minor,
+                if identity.is_fallback() { "fallback" } else { "primary" }
+            )));
+        }
+        let dma = OpenOptions::new()
+            .write(true)
+            .open(&duc_path)
+            .map_err(|source| XdmaError::Io {
+                action: "could not open production XDMA DUC device",
+                source,
+            })?;
+        let mut buffer = AlignedBuffer::new(DMA_BUFFER_BYTES)?;
+        buffer.lock_memory()?;
+        let fifo_depth_words = 4_096;
+        let mut state = Self {
+            registers,
+            dma,
+            buffer,
+            fifo_depth_words,
+            stream_active: false,
+            keyed: false,
+            dma_writes: 0,
+            frames_written: 0,
+            fifo_lwm: usize::MAX,
+            fifo_hwm: 0,
+            fifo_faults: 0,
+            fifo_startup_underflows: 0,
+            forward_watts: 0.0,
+            reverse_watts: 0.0,
+            swr: 1.0,
+            power_meter_scale: power_meter_scale.clamp(0.5, 1.5),
+        };
+        state.shutdown()?;
+        Ok(state)
+    }
+
+    fn configure_stream(&mut self, model: &RadioModel) -> Result<(), XdmaError> {
+        self.shutdown()?;
+        self.registers
+            .write_register(DAC_CONTROL_REGISTER, dac_control_word(0))?;
+        self.registers.write_register(
+            TX_DUC_REGISTER,
+            frequency_to_phase_word(model.desired.tx_frequency_hz),
+        )?;
+        let filter = alex_tx_filter_bits(model.desired.tx_frequency_hz);
+        self.registers
+            .write_register(ALEX_TX_FILTER_REGISTER, u32::from(filter))?;
+        self.registers
+            .write_register(ALEX_TX_ANTENNA_REGISTER, u32::from(filter | ALEX_ANT1_BIT))?;
+        self.registers.update_register(
+            RF_GPIO_REGISTER,
+            |value| {
+                (value | RF_DATA_NETWORK_ENDIAN_BIT | TX_RELAY_DISABLE_BIT)
+                    & !(MOX_BIT | TX_ENABLE_BIT)
+            },
+            "could not configure direct TX RF byte order",
+        )?;
+        self.pulse_fifo_reset()?;
+        self.registers.write_register(
+            DUC_FIFO_MONITOR_CONFIG_REGISTER,
+            self.fifo_depth_words as u32,
+        )?;
+        self.registers.update_register(
+            TX_CONFIG_REGISTER,
+            rf_disabled_stream_config,
+            "could not enable RF-inhibited production DUC stream",
+        )?;
+        // Clear the expected empty-FIFO startup condition.
+        let _ = self.registers.read_register(DUC_FIFO_MONITOR_REGISTER)?;
+        self.stream_active = true;
+        self.keyed = false;
+        Ok(())
+    }
+
+    fn stage_frame(&mut self, model: &RadioModel, iq: &[f32]) -> Result<(), XdmaError> {
+        if !self.stream_active {
+            self.configure_stream(model)?;
+            self.prefill_frame(iq)?;
+        } else {
+            self.observe_fifo(true)?;
+            self.write_repeated_frame(iq, 1)?;
+        }
+        Ok(())
+    }
+
+    fn key_with_frame(&mut self, model: &RadioModel, iq: &[f32]) -> Result<(), XdmaError> {
+        if !self.stream_active {
+            self.configure_stream(model)?;
+            self.prefill_frame(iq)?;
+        }
+        let fifo = self.observe_fifo(false)?;
+        let minimum_words = (DUC_PREFILL_FRAMES - 2) * DUC_FIFO_WORDS_PER_FRAME;
+        if fifo.occupied_words < minimum_words {
+            return Err(XdmaError::Incompatible(format!(
+                "production DUC prefill has {} words; at least {} required before key",
+                fifo.occupied_words, minimum_words
+            )));
+        }
+        self.apply_frequency_and_filter(model)?;
+        self.registers.update_register(
+            TX_CONFIG_REGISTER,
+            keyed_stream_config,
+            "could not arm production direct-XDMA TX configuration",
+        )?;
+        let filter = alex_tx_filter_bits(model.desired.tx_frequency_hz);
+        self.registers.write_register(
+            ALEX_TX_ANTENNA_REGISTER,
+            u32::from(filter | ALEX_ANT1_BIT | ALEX_TX_RELAY_BIT),
+        )?;
+        self.registers.update_register(
+            RF_GPIO_REGISTER,
+            |value| (value | TX_ENABLE_BIT) & !(MOX_BIT | TX_RELAY_DISABLE_BIT),
+            "could not enable production direct-XDMA TX hardware",
+        )?;
+        self.registers.update_register(
+            RF_GPIO_REGISTER,
+            |value| value | MOX_BIT,
+            "could not assert production direct-XDMA MOX",
+        )?;
+        let drive = tx_drive_watts_to_byte(model.desired.tx_drive.min(INITIAL_MAX_WATTS));
+        self.registers
+            .write_register(DAC_CONTROL_REGISTER, dac_control_word(drive))?;
+        self.verify_keyed(model)?;
+        self.keyed = true;
+        Ok(())
+    }
+
+    fn apply_frequency_and_filter(&self, model: &RadioModel) -> Result<(), XdmaError> {
+        let filter = alex_tx_filter_bits(model.desired.tx_frequency_hz);
+        self.registers.write_register(
+            TX_DUC_REGISTER,
+            frequency_to_phase_word(model.desired.tx_frequency_hz),
+        )?;
+        self.registers
+            .write_register(ALEX_TX_FILTER_REGISTER, u32::from(filter))
+    }
+
+    fn write_repeated_frame(&mut self, iq: &[f32], frames: usize) -> Result<(), XdmaError> {
+        if iq.len() < DUC_FRAME_IQ_FLOATS || frames == 0 || frames > DUC_MAX_DMA_BATCH_FRAMES {
+            return Err(XdmaError::Incompatible(format!(
+                "invalid production DUC frame: floats={} frames={frames}",
+                iq.len()
+            )));
+        }
+        let bytes = frames * DUC_FRAME_BYTES;
+        let buffer = self.buffer.as_mut_slice(bytes);
+        for frame in buffer.chunks_exact_mut(DUC_FRAME_BYTES) {
+            encode_iq_frame(frame, iq);
+        }
+        self.write_buffer(bytes, frames)
+    }
+
+    fn write_zero_frames(&mut self, frames: usize) -> Result<(), XdmaError> {
+        if frames == 0 || frames > DUC_MAX_DMA_BATCH_FRAMES {
+            return Err(XdmaError::Incompatible(format!(
+                "invalid production zero-IQ DUC batch: frames={frames}"
+            )));
+        }
+        let bytes = frames * DUC_FRAME_BYTES;
+        self.buffer.as_mut_slice(bytes).fill(0);
+        self.write_buffer(bytes, frames)
+    }
+
+    fn write_buffer(&mut self, bytes: usize, frames: usize) -> Result<(), XdmaError> {
+        let written = self
+            .dma
+            .write_at(self.buffer.as_slice(bytes), 0)
+            .map_err(|source| XdmaError::Io {
+                action: "could not write production IQ to XDMA DUC stream",
+                source,
+            })?;
+        if written != bytes {
+            return Err(XdmaError::Io {
+                action: "production XDMA DUC stream returned a short write",
+                source: io::Error::new(
+                    io::ErrorKind::WriteZero,
+                    format!("transferred {written} of {bytes} bytes"),
+                ),
+            });
+        }
+        self.dma_writes = self.dma_writes.saturating_add(1);
+        self.frames_written = self.frames_written.saturating_add(frames as u64);
+        Ok(())
+    }
+
+    fn prefill_frame(&mut self, iq: &[f32]) -> Result<(), XdmaError> {
+        // Seed silence so the direct backend adds a bounded 25 ms key-up
+        // latency instead of repeating the first mic frame and smearing the
+        // operator's first phoneme. The final frame is the first live IQ.
+        let mut remaining = DUC_PREFILL_FRAMES - 1;
+        while remaining != 0 {
+            let frames = remaining.min(DUC_MAX_DMA_BATCH_FRAMES);
+            self.write_zero_frames(frames)?;
+            remaining -= frames;
+        }
+        self.write_repeated_frame(iq, 1)?;
+
+        // As in the qualified Phase-4 probe, enabling an empty DUC stream can
+        // latch one underflow before the first H2C write reaches the FPGA. Read
+        // and account for that startup boundary after prefill; every later
+        // underflow remains a hard output fault.
+        let prefill =
+            FifoSnapshot::decode(self.registers.read_register(DUC_FIFO_MONITOR_REGISTER)?);
+        self.fifo_lwm = self.fifo_lwm.min(prefill.occupied_words);
+        self.fifo_hwm = self.fifo_hwm.max(prefill.occupied_words);
+        self.fifo_startup_underflows = self
+            .fifo_startup_underflows
+            .saturating_add(u64::from(prefill.underflow));
+        let minimum_words = (DUC_PREFILL_FRAMES - 2) * DUC_FIFO_WORDS_PER_FRAME;
+        if prefill_has_hard_fault(prefill) || prefill.occupied_words < minimum_words {
+            self.fifo_faults = self.fifo_faults.saturating_add(1);
+            let _ = self.shutdown();
+            return Err(XdmaError::Incompatible(format!(
+                "production DUC prefill fault: words={} minimum={} overflow={} threshold={} startup_underflow={}",
+                prefill.occupied_words,
+                minimum_words,
+                prefill.overflow,
+                prefill.over_threshold,
+                prefill.underflow
+            )));
+        }
+        Ok(())
+    }
+
+    fn observe_fifo(&mut self, underflow_is_fault: bool) -> Result<FifoSnapshot, XdmaError> {
+        let fifo = FifoSnapshot::decode(self.registers.read_register(DUC_FIFO_MONITOR_REGISTER)?);
+        self.fifo_lwm = self.fifo_lwm.min(fifo.occupied_words);
+        self.fifo_hwm = self.fifo_hwm.max(fifo.occupied_words);
+        let faulted = fifo.overflow
+            || fifo.over_threshold
+            || (underflow_is_fault && fifo.underflow)
+            || (self.keyed && fifo.occupied_words <= 2 * DUC_FIFO_WORDS_PER_FRAME);
+        if faulted {
+            self.fifo_faults = self.fifo_faults.saturating_add(1);
+            let _ = self.shutdown();
+            return Err(XdmaError::Incompatible(format!(
+                "production DUC FIFO fault: words={} overflow={} threshold={} underflow={}",
+                fifo.occupied_words, fifo.overflow, fifo.over_threshold, fifo.underflow
+            )));
+        }
+        Ok(fifo)
+    }
+
+    fn sample_power(&mut self) -> Result<(), XdmaError> {
+        let forward_raw = self
+            .registers
+            .read_register(ALEX_FORWARD_POWER_REGISTER)?
+            .min(u32::from(u16::MAX)) as u16;
+        let reverse_raw = self
+            .registers
+            .read_register(ALEX_REVERSE_POWER_REGISTER)?
+            .min(u32::from(u16::MAX)) as u16;
+        self.forward_watts = saturn_adc_to_watts(forward_raw, 32, self.power_meter_scale);
+        self.reverse_watts = saturn_adc_to_watts(reverse_raw, 28, self.power_meter_scale);
+        self.swr = calculate_swr(self.forward_watts, self.reverse_watts);
+        if self.forward_watts > FORWARD_POWER_TRIP_WATTS
+            || self.reverse_watts > REVERSE_POWER_TRIP_WATTS
+            || (self.forward_watts >= SWR_MIN_FORWARD_WATTS && self.swr > SWR_TRIP)
+        {
+            let _ = self.shutdown();
+            return Err(XdmaError::Incompatible(format!(
+                "production direct TX power trip: forward={:.3}W reverse={:.3}W swr={:.2}",
+                self.forward_watts, self.reverse_watts, self.swr
+            )));
+        }
+        Ok(())
+    }
+
+    fn verify_keyed(&self, model: &RadioModel) -> Result<(), XdmaError> {
+        let gpio = self.registers.read_register(RF_GPIO_REGISTER)?;
+        let tx = self.registers.read_register(TX_CONFIG_REGISTER)?;
+        let filter = alex_tx_filter_bits(model.desired.tx_frequency_hz);
+        let alex = self.registers.read_register(ALEX_TX_ANTENNA_REGISTER)?;
+        if gpio & (MOX_BIT | TX_ENABLE_BIT) != MOX_BIT | TX_ENABLE_BIT
+            || gpio & RF_DATA_NETWORK_ENDIAN_BIT == 0
+            || gpio & TX_RELAY_DISABLE_BIT != 0
+            || tx & DUC_STREAM_ENABLE_BIT == 0
+            || tx & TX_AMPLITUDE_MASK == 0
+            || alex != u32::from(filter | ALEX_ANT1_BIT | ALEX_TX_RELAY_BIT)
+        {
+            return Err(XdmaError::Incompatible(format!(
+                "production direct TX readback failed: gpio=0x{gpio:08x} tx=0x{tx:08x} alex=0x{alex:08x}"
+            )));
+        }
+        Ok(())
+    }
+
+    fn pulse_fifo_reset(&self) -> Result<(), XdmaError> {
+        self.registers.update_register(
+            FIFO_RESET_REGISTER,
+            |value| value & !DUC_FIFO_RESET_BIT,
+            "could not assert production DUC FIFO reset",
+        )?;
+        self.registers.update_register(
+            FIFO_RESET_REGISTER,
+            |value| value | DUC_FIFO_RESET_BIT,
+            "could not release production DUC FIFO reset",
+        )
+    }
+
+    fn shutdown(&mut self) -> Result<(), XdmaError> {
+        let drive = self
+            .registers
+            .write_register(DAC_CONTROL_REGISTER, dac_control_word(0));
+        let amplitude = self.registers.update_register(
+            TX_CONFIG_REGISTER,
+            |value| {
+                value
+                    & !(TX_AMPLITUDE_MASK
+                        | TX_OUTPUT_GATE_BIT
+                        | DUC_STREAM_ENABLE_BIT
+                        | DUC_MUX_RESET_BIT)
+            },
+            "could not disable production direct-XDMA DUC stream",
+        );
+        let gpio = self.registers.update_register(
+            RF_GPIO_REGISTER,
+            |value| (value & !(MOX_BIT | TX_ENABLE_BIT)) | TX_RELAY_DISABLE_BIT,
+            "could not force production direct-XDMA RF receive state",
+        );
+        let alex = self.registers.update_register(
+            ALEX_TX_ANTENNA_REGISTER,
+            |value| value & !u32::from(ALEX_TX_RELAY_BIT),
+            "could not release production direct-XDMA TX relay",
+        );
+        let reset = self.pulse_fifo_reset();
+        self.stream_active = false;
+        self.keyed = false;
+        drive.and(amplitude).and(gpio).and(alex).and(reset)
+    }
+
+    fn snapshot(&self) -> DirectTxSnapshot {
+        DirectTxSnapshot {
+            stream_active: self.stream_active,
+            keyed: self.keyed,
+            dma_writes: self.dma_writes,
+            frames_written: self.frames_written,
+            fifo_lwm: if self.fifo_lwm == usize::MAX {
+                0
+            } else {
+                self.fifo_lwm
+            },
+            fifo_hwm: self.fifo_hwm,
+            fifo_faults: self.fifo_faults,
+            fifo_startup_underflows: self.fifo_startup_underflows,
+            forward_watts: self.forward_watts,
+            reverse_watts: self.reverse_watts,
+            swr: self.swr,
+        }
+    }
+}
+
+impl Drop for DirectTxState {
+    fn drop(&mut self) {
+        if let Err(error) = self.shutdown() {
+            eprintln!("saturn-bridge: production XDMA TX emergency cleanup failed: {error}");
+        }
+    }
+}
+
+pub(crate) struct DirectXdmaTxRadio {
+    state: Mutex<DirectTxState>,
+}
+
+impl DirectXdmaTxRadio {
+    pub(crate) fn open(power_meter_scale: f32) -> Result<Self, XdmaError> {
+        Ok(Self {
+            state: Mutex::new(DirectTxState::open(power_meter_scale)?),
+        })
+    }
+
+    pub(crate) fn snapshot(&self) -> DirectTxSnapshot {
+        self.state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .snapshot()
+    }
+
+    fn with_state<T>(
+        &self,
+        operation: impl FnOnce(&mut DirectTxState) -> Result<T, XdmaError>,
+    ) -> Result<T, String> {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        operation(&mut state).map_err(|error| error.to_string())
+    }
+}
+
+impl TxRadio for DirectXdmaTxRadio {
+    fn configure_puresignal_feedback(&self) -> TxRadioResult {
+        Err("PureSignal is not supported by the production direct-XDMA backend".into())
+    }
+
+    fn send_duc_specific(&self, _model: &RadioModel) -> TxRadioResult {
+        Ok(())
+    }
+
+    fn send_high_priority(&self, model: &RadioModel) -> TxRadioResult {
+        self.with_state(|state| {
+            if !model.desired.tx_enabled {
+                state.shutdown()
+            } else if state.keyed {
+                state.apply_frequency_and_filter(model)?;
+                let drive = tx_drive_watts_to_byte(model.desired.tx_drive.min(INITIAL_MAX_WATTS));
+                state
+                    .registers
+                    .write_register(DAC_CONTROL_REGISTER, dac_control_word(drive))
+            } else {
+                Ok(())
+            }
+        })
+    }
+
+    fn try_key_with_iq(&self, model: &RadioModel, iq_samples: &[f32]) -> Result<bool, String> {
+        self.with_state(|state| {
+            let result = state.key_with_frame(model, iq_samples);
+            if result.is_err() {
+                let _ = state.shutdown();
+            }
+            result
+        })?;
+        Ok(true)
+    }
+
+    fn send_duc_iq(&self, iq_samples: &[f32]) -> TxRadioResult {
+        self.with_state(|state| {
+            let result = (|| {
+                if !state.stream_active {
+                    return Err(XdmaError::Incompatible(
+                        "production DUC write requested while stream is stopped".into(),
+                    ));
+                }
+                state.observe_fifo(true)?;
+                state.write_repeated_frame(iq_samples, 1)?;
+                if state.keyed {
+                    state.sample_power()?;
+                }
+                Ok(())
+            })();
+            if result.is_err() {
+                let _ = state.shutdown();
+            }
+            result
+        })
+    }
+
+    fn stage_iq_rf_disabled(&self, model: &RadioModel, iq_samples: &[f32]) -> TxRadioResult {
+        self.with_state(|state| {
+            let result = state.stage_frame(model, iq_samples);
+            if result.is_err() {
+                let _ = state.shutdown();
+            }
+            result
+        })
+    }
+
+    fn configure_rx_ddc(
+        &self,
+        _ddc_index: u8,
+        _sample_rate_khz: u16,
+        _sample_size_bits: u8,
+        _adc: u8,
+    ) -> TxRadioResult {
+        Ok(())
+    }
+}
+
+fn rf_disabled_stream_config(current: u32) -> u32 {
+    (current
+        & !(TX_MODULATION_SOURCE_MASK
+            | TX_AMPLITUDE_MASK
+            | TX_WATCHDOG_OVERRIDE_BIT
+            | DUC_MUX_RESET_BIT
+            | TX_IQ_DEINTERLEAVE_BIT
+            | DUC_STREAM_ENABLE_BIT))
+        | TX_OUTPUT_GATE_BIT
+        | TX_PROTOCOL_P2_BIT
+        | DUC_STREAM_ENABLE_BIT
+}
+
+fn keyed_stream_config(current: u32) -> u32 {
+    (current
+        & !(TX_MODULATION_SOURCE_MASK
+            | TX_OUTPUT_GATE_BIT
+            | TX_AMPLITUDE_MASK
+            | TX_WATCHDOG_OVERRIDE_BIT
+            | DUC_MUX_RESET_BIT
+            | TX_IQ_DEINTERLEAVE_BIT
+            | DUC_STREAM_ENABLE_BIT))
+        | TX_PROTOCOL_P2_BIT
+        | (PCB2_FW13_TX_AMPLITUDE << 4)
+        | DUC_STREAM_ENABLE_BIT
+}
+
+fn encode_iq_frame(target: &mut [u8], iq: &[f32]) {
+    for (encoded, pair) in target.chunks_exact_mut(6).zip(iq.chunks_exact(2)) {
+        // Match P2_app's InDUCIQ path: Q then I, signed 24-bit big-endian,
+        // with the FPGA RF byte-swap bit selected.
+        write_i24_be(encoded, float_to_i24(pair[1]));
+        write_i24_be(&mut encoded[3..], float_to_i24(pair[0]));
+    }
+}
+
+fn float_to_i24(value: f32) -> i32 {
+    (value.clamp(-1.0, 1.0) * 8_388_607.0).round() as i32
+}
+
+fn write_i24_be(target: &mut [u8], value: i32) {
+    target[..3].copy_from_slice(&value.to_be_bytes()[1..]);
+}
+
+fn frequency_to_phase_word(frequency_hz: u32) -> u32 {
+    let numerator = u128::from(frequency_hz.min(122_880_000)) * (1u128 << 32);
+    ((numerator + 61_440_000) / 122_880_000) as u32
+}
+
+fn alex_tx_filter_bits(frequency_hz: u32) -> u16 {
+    match frequency_hz {
+        35_600_001..=u32::MAX => 0x2000,
+        24_000_001..=35_600_000 => 0x4000,
+        16_500_001..=24_000_000 => 0x8000,
+        8_000_001..=16_500_000 => 0x0010,
+        5_000_001..=8_000_000 => 0x0020,
+        2_500_001..=5_000_000 => 0x0040,
+        _ => 0x0080,
+    }
+}
+
+fn tx_drive_watts_to_byte(watts: u8) -> u8 {
+    let watts = f32::from(watts.min(INITIAL_MAX_WATTS));
+    if watts == 0.0 {
+        return 0;
+    }
+    ((watts / 5.0) * 18.0).round().clamp(1.0, 18.0) as u8
+}
+
+fn dac_control_word(level: u8) -> u32 {
+    if level == 0 {
+        return 0x3f3f_0000;
+    }
+    let desired_atten = 20.0 * (255.0_f64 / f64::from(level)).log10();
+    let step = (2.0 * desired_atten).floor().clamp(0.0, 63.0) as u32;
+    let residual_atten = desired_atten - f64::from(step) * 0.5;
+    let dac = (255.0 / 10.0_f64.powf(residual_atten / 20.0))
+        .floor()
+        .clamp(0.0, 255.0) as u32;
+    dac | (dac << 8) | (step << 16) | (step << 24)
+}
+
+fn saturn_adc_to_watts(raw: u16, offset: i32, scale: f32) -> f32 {
+    let corrected = (i32::from(raw) - offset).max(0) as f32;
+    let volts = corrected / 4095.0 * 5.0;
+    (volts * volts / 0.12) * scale
+}
+
+fn calculate_swr(forward_watts: f32, reverse_watts: f32) -> f32 {
+    if forward_watts <= 0.0 || reverse_watts <= 0.0 {
+        return 1.0;
+    }
+    if reverse_watts >= forward_watts {
+        return f32::INFINITY;
+    }
+    let ratio = (reverse_watts / forward_watts).sqrt();
+    (1.0 + ratio) / (1.0 - ratio)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn packs_q_then_i_as_signed_24_bit_big_endian() {
+        let mut frame = [0_u8; 6];
+        encode_iq_frame(&mut frame, &[1.0, -1.0]);
+        assert_eq!(&frame[..3], &[0x80, 0x00, 0x01]);
+        assert_eq!(&frame[3..], &[0x7f, 0xff, 0xff]);
+    }
+
+    #[test]
+    fn production_drive_is_clamped_to_three_watts() {
+        assert_eq!(tx_drive_watts_to_byte(3), tx_drive_watts_to_byte(100));
+        assert!(tx_drive_watts_to_byte(3) < 18);
+    }
+
+    #[test]
+    fn prefill_accepts_only_the_expected_startup_underflow() {
+        let startup = FifoSnapshot {
+            occupied_words: (DUC_PREFILL_FRAMES - 1) * DUC_FIFO_WORDS_PER_FRAME,
+            underflow: true,
+            ..FifoSnapshot::default()
+        };
+        assert!(!prefill_has_hard_fault(startup));
+        assert!(prefill_has_hard_fault(FifoSnapshot {
+            overflow: true,
+            ..startup
+        }));
+        assert!(prefill_has_hard_fault(FifoSnapshot {
+            over_threshold: true,
+            ..startup
+        }));
+    }
+
+    #[test]
+    fn alex_filter_mapping_matches_p2_contract() {
+        assert_eq!(alex_tx_filter_bits(7_200_000), 0x0020);
+        assert_eq!(alex_tx_filter_bits(14_200_000), 0x0010);
+        assert_eq!(alex_tx_filter_bits(3_900_000), 0x0040);
+    }
+}

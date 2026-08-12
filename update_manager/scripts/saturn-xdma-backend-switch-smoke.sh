@@ -174,6 +174,7 @@ cat >"$ACCEPTANCE_DROPIN" <<EOF
 [Service]
 RuntimeDirectory=saturn-bridge
 RuntimeDirectoryMode=0755
+Environment=SATURN_REMOTE_TX_RF_ENABLED=0
 ExecStart=
 ExecStart=$STAGED_BRIDGE_BINARY
 EOF
@@ -242,7 +243,7 @@ jq -e '
   .status == "ready" and
   .rf_safe == true and
   .metrics.rf_safe == true and
-  .metrics.tx_capable == false and
+  .metrics.tx_capable == true and
   .metrics.dma_reads >= 4 and
   .metrics.iq_pairs >= 1024
 ' "$XDMA_READY_FILE" >/dev/null \
@@ -270,7 +271,7 @@ jq -e '
   .media_binary_messages > 0 and
   .bridge_ready == true and
   .dsp_burst_continued == true and
-  .tx_request_refused == true and
+  .rf_inhibited_duc_exercised == true and
   .iq_nonzero == true and
   .iq_frames >= 3 and
   .audio_frames >= 3
@@ -294,4 +295,4 @@ restore_appliance || die "the exact pre-test appliance state could not be restor
 log "Client acceptance result:"
 jq . "$CLIENT_RESULT"
 log "Transactional P2 -> XDMA -> P2 split-proxy acceptance passed"
-log "Production XDMA selection remained disabled and prior appliance state was restored"
+log "RF remained inhibited and the prior appliance selection was restored"

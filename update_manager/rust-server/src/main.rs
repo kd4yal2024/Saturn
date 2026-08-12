@@ -105,6 +105,11 @@ struct P23AdcTelemetryRequest {
     enabled: bool,
 }
 
+#[derive(Debug, Deserialize)]
+struct RadioBackendRequest {
+    backend: String,
+}
+
 #[tokio::main]
 async fn main() {
     tracing_subscriber::fmt().with_env_filter("info").init();
@@ -496,6 +501,8 @@ fn application_router(state: AppState, restore_request_max_bytes: usize) -> Rout
         .route("/tailscale/serve", post(tailscale_serve))
         .route("/bridge_diag", get(get_bridge_diag))
         .route("/saturn/bridge_diag", get(get_bridge_diag))
+        .route("/radio_backend", get(get_radio_backend))
+        .route("/radio_backend", post(set_radio_backend))
         .route("/p23_status", get(get_p23_status))
         .route("/p23_perf", get(get_p23_perf))
         .route("/p23_adc_telemetry", post(set_p23_adc_telemetry))
@@ -1566,6 +1573,98 @@ fn xdma_operational_snapshot() -> serde_json::Value {
     xdma_structured_snapshot(XDMA_OPERATIONAL_READY_FILE)
 }
 
+const RADIO_BACKEND_SWITCH_HELPER: &str = "saturn-radio-backend-switch-root.sh";
+
+async fn invoke_radio_backend_helper(state: &AppState, args: &[&str]) -> Result<String, String> {
+    let helper = state.scripts_dir.join(RADIO_BACKEND_SWITCH_HELPER);
+    if !helper.is_file() {
+        return Err(format!(
+            "radio backend helper is missing: {}",
+            helper.display()
+        ));
+    }
+    let mut command = Command::new("sudo");
+    command.arg("-n").arg(&helper).args(args);
+    command.kill_on_drop(true);
+    let output = tokio::time::timeout(Duration::from_secs(45), command.output())
+        .await
+        .map_err(|_| "radio backend transaction timed out after 45 seconds".to_string())?
+        .map_err(|error| format!("could not run radio backend helper: {error}"))?;
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    if !output.status.success() {
+        return Err(if stderr.is_empty() {
+            format!(
+                "radio backend helper exited with {}: {stdout}",
+                output.status
+            )
+        } else {
+            stderr
+        });
+    }
+    Ok(stdout)
+}
+
+async fn get_radio_backend(State(state): State<AppState>) -> Response {
+    match invoke_radio_backend_helper(&state, &["status"]).await {
+        Ok(stdout) => match serde_json::from_str::<serde_json::Value>(&stdout) {
+            Ok(status) => {
+                Json(serde_json::json!({"status": "ok", "backend": status})).into_response()
+            }
+            Err(error) => (
+                StatusCode::BAD_GATEWAY,
+                Json(serde_json::json!({
+                    "status": "error",
+                    "message": format!("backend helper returned invalid JSON: {error}")
+                })),
+            )
+                .into_response(),
+        },
+        Err(message) => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({"status": "error", "message": message})),
+        )
+            .into_response(),
+    }
+}
+
+async fn set_radio_backend(
+    State(state): State<AppState>,
+    Json(request): Json<RadioBackendRequest>,
+) -> Response {
+    let backend = request.backend.trim().to_ascii_lowercase();
+    if !matches!(backend.as_str(), "p2" | "xdma") {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "status": "error",
+                "message": "backend must be p2 or xdma"
+            })),
+        )
+            .into_response();
+    }
+    match invoke_radio_backend_helper(&state, &["switch", &backend]).await {
+        Ok(output) => {
+            let status = invoke_radio_backend_helper(&state, &["status"])
+                .await
+                .ok()
+                .and_then(|value| serde_json::from_str::<serde_json::Value>(&value).ok());
+            Json(serde_json::json!({
+                "status": "ok",
+                "selected": backend,
+                "message": output,
+                "backend": status,
+            }))
+            .into_response()
+        }
+        Err(message) => (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({"status": "error", "message": message})),
+        )
+            .into_response(),
+    }
+}
+
 fn xdma_operational_is_ready(
     p2_active: bool,
     direct_requested: bool,
@@ -1577,8 +1676,9 @@ fn xdma_operational_is_ready(
         && operational["parse_error"].is_null()
         && operational["snapshot"]["backend"].as_str() == Some("xdma")
         && operational["snapshot"]["status"].as_str() == Some("ready")
-        && operational["snapshot"]["rf_safe"].as_bool() == Some(true)
-        && operational["snapshot"]["metrics"]["tx_capable"].as_bool() == Some(false)
+        && (operational["snapshot"]["rf_safe"].as_bool() == Some(true)
+            || operational["snapshot"]["metrics"]["tx_keyed"].as_bool() == Some(true))
+        && operational["snapshot"]["metrics"]["tx_capable"].as_bool() == Some(true)
         && operational["snapshot"]["metrics"]["dma_reads"]
             .as_u64()
             .is_some_and(|count| count >= 4)
@@ -1654,7 +1754,9 @@ fn xdma_bridge_telemetry(
     };
     let direct_message = match direct_state {
         "inactive" => "Direct XDMA is idle because p2app.service owns the FPGA.",
-        "active" => "Direct XDMA owns the FPGA and is publishing a fresh RX data-plane heartbeat.",
+        "active" => {
+            "Direct XDMA owns the FPGA and is publishing a fresh RX/TX data-plane heartbeat."
+        }
         "available" if direct_requested => {
             "Direct XDMA is requested, but its RX data-plane heartbeat is not ready."
         }
@@ -1683,7 +1785,7 @@ fn xdma_bridge_telemetry(
             "p2_service_state": p2_service_state.trim(),
             "direct_state": direct_state,
             "direct_operational": direct_operational,
-            "implementation_phase": 6,
+            "implementation_phase": 7,
             "message": direct_message,
         },
         "driver": {
@@ -4114,7 +4216,7 @@ mod tests {
                 "status": "ready",
                 "rf_safe": true,
                 "metrics": {
-                    "tx_capable": false,
+                    "tx_capable": true,
                     "dma_reads": 4,
                     "iq_pairs": 1024,
                 },
@@ -4132,10 +4234,10 @@ mod tests {
         unsafe_runtime["snapshot"]["rf_safe"] = serde_json::json!(false);
         assert!(!xdma_operational_is_ready(false, true, &unsafe_runtime));
 
-        let mut transmit_capable = unsafe_runtime;
-        transmit_capable["snapshot"]["rf_safe"] = serde_json::json!(true);
-        transmit_capable["snapshot"]["metrics"]["tx_capable"] = serde_json::json!(true);
-        assert!(!xdma_operational_is_ready(false, true, &transmit_capable));
+        let mut receive_only = unsafe_runtime;
+        receive_only["snapshot"]["rf_safe"] = serde_json::json!(true);
+        receive_only["snapshot"]["metrics"]["tx_capable"] = serde_json::json!(false);
+        assert!(!xdma_operational_is_ready(false, true, &receive_only));
     }
 
     #[test]

@@ -14,6 +14,7 @@ mod xdma_duc;
 mod xdma_rx;
 mod xdma_telemetry;
 mod xdma_tx;
+mod xdma_tx_radio;
 
 use std::env;
 use std::error::Error;
@@ -264,7 +265,6 @@ fn main() -> Result<(), Box<dyn Error>> {
         config.ddc0_sample_rate_khz = xdma_rx::DIRECT_DDC_SAMPLE_RATE_KHZ as u16;
         config.max_client_ddc0_sample_rate_khz = xdma_rx::DIRECT_DDC_SAMPLE_RATE_KHZ as u16;
         config.ddc0_sample_size_bits = 24;
-        config.remote_tx_rf_enabled = false;
         return xdma_backend::run(config);
     }
     let radio_model = Arc::new(Mutex::new(RadioModel::new(

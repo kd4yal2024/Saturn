@@ -3,9 +3,8 @@ set -Eeuo pipefail
 
 # Transactionally select the one appliance-wide owner of the Saturn FPGA.
 #
-# Direct XDMA now has an RX-only operational runtime, but production selection
-# remains gated while its appliance switch, rollback, and client behavior are
-# validated. Test mode exercises the transaction without changing production.
+# Direct XDMA production ownership is an explicit alternative to P2app. The
+# switch is transactional and never permits both backends to own the FPGA.
 
 CONFIG_FILE="${SATURN_RADIO_BACKEND_CONFIG:-/etc/default/saturn-radio-backend}"
 XDMA_OPERATIONAL_ENABLED=0
@@ -42,9 +41,8 @@ Usage:
   saturn-radio-backend-switch-root.sh switch p2
   saturn-radio-backend-switch-root.sh switch xdma
 
-The selection is appliance-wide. Direct XDMA production activation remains
-disabled until the RX-only runtime completes appliance validation and is
-explicitly enabled by root-owned configuration.
+The selection is appliance-wide. P2 is the default and supports Protocol 2
+clients such as Thetis. XDMA is the direct RX/TX backend for TCI clients.
 EOF
 }
 
@@ -124,9 +122,6 @@ validate_configuration() {
       || die "non-root test mode refuses the production systemd root"
     [[ "$STATE_FILE" != /var/lib/* && "$LOCK_FILE" != /run/* ]] \
       || die "non-root test mode refuses production state and lock paths"
-  fi
-  if [[ "$XDMA_OPERATIONAL_ENABLED" == "1" && "$TEST_MODE" != "1" ]]; then
-    die "direct XDMA production activation remains gated pending appliance validation"
   fi
   if (( EUID == 0 )); then
     getent group "$STATE_GROUP" >/dev/null 2>&1 \
@@ -311,7 +306,7 @@ if (
     value.get("backend") != "xdma"
     or value.get("status") != "ready"
     or value.get("rf_safe") is not True
-    or metrics.get("tx_capable") is not False
+    or metrics.get("tx_capable") is not True
     or dma_reads < 4
     or iq_pairs < 1024
     or age_ms < -1000
@@ -430,16 +425,16 @@ prepare_transaction() {
 
 switch_backend() {
   if [[ "$TARGET_BACKEND" == "xdma" && "$XDMA_OPERATIONAL_ENABLED" != "1" ]]; then
-    die "direct XDMA production activation remains gated; no service or persistent state was changed"
+    die "direct XDMA is disabled by root policy; no service or persistent state was changed"
   fi
 
   prepare_transaction
   trap 'on_error "$?" "$LINENO"' ERR
   trap 'on_error 130 "$LINENO"' INT TERM
 
-  # Stopping the bridge is the current global force-RX/release boundary. The
-  # production direct backend will add its explicit RX-safe shutdown handshake
-  # before XDMA_OPERATIONAL_ENABLED can be enabled outside fixture tests.
+  # Stopping the bridge invokes both TX-thread and XDMA Drop cleanup before the
+  # other owner can be started. Readiness then proves fresh advancing RX while
+  # the selected backend is idle and receive-safe.
   systemctl stop "$BRIDGE_SERVICE"
   wait_for_service_state "$BRIDGE_SERVICE" inactive
 
@@ -534,7 +529,7 @@ main() {
   need_cmd mktemp
 
   if [[ "$TARGET_BACKEND" == "xdma" && "$XDMA_OPERATIONAL_ENABLED" != "1" ]]; then
-    die "direct XDMA production activation remains gated; no service or persistent state was changed"
+    die "direct XDMA is disabled by root policy; no service or persistent state was changed"
   fi
   if [[ "$command" == "status" ]]; then
     print_status

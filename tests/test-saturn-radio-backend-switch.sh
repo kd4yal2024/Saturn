@@ -56,7 +56,7 @@ case "${1:-}" in
       && "$(backend_from_dropin)" == "xdma" \
       && ! -f "$MOCK_STATE/suppress-xdma-ready" ]]; then
       mkdir -p "$(dirname "$MOCK_XDMA_READY_FILE")"
-      printf '{"schema_version":1,"updated_at_ms":%s,"source":"saturn-bridge","backend":"xdma","status":"ready","rf_safe":true,"error":null,"metrics":{"dma_reads":8,"iq_pairs":2048,"tx_capable":false}}\n' \
+      printf '{"schema_version":1,"updated_at_ms":%s,"source":"saturn-bridge","backend":"xdma","status":"ready","rf_safe":true,"error":null,"metrics":{"dma_reads":8,"iq_pairs":2048,"tx_capable":true}}\n' \
         "$(date +%s%3N)" >"$MOCK_XDMA_READY_FILE"
     fi
     printf 'start %s\n' "$service" >>"$MOCK_STATE/calls"

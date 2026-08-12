@@ -220,7 +220,7 @@ rm -f -- \
       .status == "ready" and
       .rf_safe == true and
       .metrics.rf_safe == true and
-      .metrics.tx_capable == false and
+      .metrics.tx_capable == true and
       .metrics.dma_reads >= 4 and
       .metrics.iq_pairs >= 1024
     ' "$READY_FILE" >/dev/null 2>&1; then
@@ -258,10 +258,11 @@ rm -f -- \
 ) &
 WATCHER_PID="$!"
 
-log "Starting ${DURATION_SECONDS}s RX-only direct-XDMA runtime"
+log "Starting ${DURATION_SECONDS}s RF-inhibited direct-XDMA RX/TX runtime"
 set +e
 env \
   SATURN_BRIDGE_RADIO_BACKEND=xdma \
+  SATURN_REMOTE_TX_RF_ENABLED=0 \
   SATURN_BRIDGE_XDMA_READY_PATH="$READY_FILE" \
   timeout --signal=TERM --kill-after=3s "${DURATION_SECONDS}s" \
   "$BRIDGE_BINARY" 2>&1 | tee "$LOG_FILE"
@@ -296,7 +297,7 @@ jq -e '
 
 grep -Fq 'direct XDMA RX backend ready' "$LOG_FILE" \
   || die "runtime log is missing the direct-XDMA ready marker"
-grep -Fq 'direct XDMA RX backend stopped; DDC disabled and receive-safe cleanup verified' \
+grep -Fq 'direct XDMA backend stopped; DDC and DUC disabled and receive-safe cleanup verified' \
   "$LOG_FILE" || die "runtime log is missing the receive-safe cleanup marker"
 
 if (( CLIENT_PROBE )); then
@@ -305,7 +306,7 @@ if (( CLIENT_PROBE )); then
     .bridge_ready == true and
     .split_paired == true and
     .remote_tx_rf_enabled == false and
-    .tx_request_refused == true and
+    .rf_inhibited_duc_exercised == true and
     .dsp_burst_continued == true and
     .retune_hz == 7200000 and
     .iq_frames >= 3 and
@@ -326,8 +327,8 @@ if (( CLIENT_PROBE )); then
     jq -e '.transport == "direct"' "$CLIENT_RESULT_FILE" >/dev/null \
       || die "client did not validate the direct transport"
   fi
-  grep -Fq 'refusing TX request: operational direct XDMA backend is RX-only' \
-    "$LOG_FILE" || die "runtime log is missing the RX-only TX refusal"
+  grep -Fq 'TX armed with RF disabled; holding off key' \
+    "$LOG_FILE" || die "runtime log is missing RF-inhibited DUC activity"
   grep -Fq 'TCI websocket client' "$LOG_FILE" \
     || die "runtime log is missing the client connection"
   grep -Fq 'disconnected from' "$LOG_FILE" \
@@ -354,8 +355,8 @@ if (( CLIENT_PROBE )); then
   jq . "$CLIENT_RESULT_FILE"
 fi
 log "Observed ready state:"
-jq '{status,rf_safe,metrics:(.metrics | {frequency_hz,sample_rate_hz,dma_reads,dma_bytes,iq_pairs,fifo_hwm,header_resync,header_errors,tx_capable})}' \
+jq '{status,rf_safe,metrics:(.metrics | {frequency_hz,sample_rate_hz,dma_reads,dma_bytes,iq_pairs,fifo_hwm,fifo_threshold,fifo_overflow,fifo_underflow,header_resync,header_errors,tx_capable})}' \
   "$OBSERVED_FILE"
 log "Final stopped state:"
 jq '{status,rf_safe,error,metrics}' "$READY_FILE"
-log "Operational direct-XDMA RX smoke test passed; prior services restored"
+log "Operational direct-XDMA RF-inhibited RX/TX smoke test passed; prior services restored"
