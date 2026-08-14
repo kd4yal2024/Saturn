@@ -24,7 +24,10 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
   acceptance covers the correction before live RF use. The installed bridge
   subsequently completed four clear live Voodoo 3.8k voice transmissions with
   four sessions started/completed, 12,256 DUC frames, four mux resets, and zero
-  FIFO faults.
+  FIFO faults. A later 15-minute dummy-load reconnect run extended that
+  evidence to 22 clear keyed sessions, 55,563 DUC frames, 22 mux resets, and
+  zero FIFO or framing faults; one never-keyed mic-stale arm safely returned
+  to receive before the following deliberate transmission completed normally.
 - Release builds can now select a remote branch or tag, resolve it to one
   immutable commit, detect movement before staging, and build from a detached
   worktree. Schema-v3 manifests record the source remote, requested ref,

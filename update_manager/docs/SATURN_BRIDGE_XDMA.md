@@ -24,7 +24,7 @@ FPGA at a time.
 | Area | Current evidence | Gate |
 | --- | --- | --- |
 | Direct RX | Live 384 kHz IQ/audio, tuning, reconnect recovery, and receive-safe cleanup passed on PCB2 firmware 1.27 at 383,321 IQ pairs/second. | Passed for the current hardware envelope. |
-| Direct TX audio | After distinct-frame DMA batching, four consecutive live Voodoo 3.8k transmissions sounded clear; all four sessions keyed/released with four mux resets and zero FIFO faults. | Passed for repeated-key voice at the current 3 W envelope; longer soak remains required. |
+| Direct TX audio | After distinct-frame DMA batching, a 15-minute dummy-load run completed 22 keyed Voodoo 3.8k voice sessions with clean audio before and after a browser reconnect, 22 mux resets, and zero FIFO faults. | Passed for repeated-key voice and reconnect at the current 3 W envelope; longer unattended soak remains required. |
 | Repeated-key automation | The final 384 kHz split-proxy run completed five independent RF-inhibited cycles under SCHED_FIFO priority 20, with 3,310 total TX frames, a 3,728-word high-water, zero TX FIFO faults, and receive-safe cleanup. | Passed; validation persisted. |
 | Backend ownership | Transactional `P2 -> XDMA -> P2` switching and rollback have passed. The installer now preserves the selected backend instead of silently returning an XDMA appliance to P2. | Repeat after every installer or broker change. |
 | Wider production use | P2 fallback is retained and direct XDMA stays opt-in. | Requires repeated-key, bounded-RF, reconnect, and soak gates below. |
@@ -128,7 +128,21 @@ four mux resets, and zero FIFO faults. The 140--3,623-word lifetime FIFO range
 shows that the producer exercised the low-water recovery path without latching
 an underflow. The four startup-underflow indications are the expected sticky
 empty-FIFO events cleared during the four deliberate reset/prefill cycles.
-Longer mixed RX/TX soak and reconnect testing remain the next live gates.
+Two subsequent locked dummy-load probes passed at 7.200 MHz with a 3 W drive
+setting and a bounded 2.5-second transmission. They measured approximately
+0.487 W forward, zero reverse power, SWR 1.00, and 383,570--383,575 IQ
+pairs/second. Both runs completed with zero FIFO and framing faults, verified
+receive-safe cleanup, and restored the prior services.
+
+A later 15-minute live dummy-load run completed 22 keyed Voodoo 3.8k voice
+sessions with clean audio before and after a deliberate Saturn Remote browser
+reload. All 22 sessions completed with one DUC mux reset per session, 55,563
+distinct DUC frames in 30,476 H2C writes, a 653--3,623-word FIFO range, and
+zero FIFO, header, or resynchronization faults. One rapid post-reload MOX
+attempt armed without receiving microphone audio; the mic-stale watchdog
+forced receive state and the session never keyed. The following deliberate
+arm acquired microphone audio and transmitted normally. A longer unattended
+mixed-path soak remains the next live gate.
 
 Run the current production-path acceptance from the repository root:
 
