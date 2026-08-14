@@ -256,6 +256,7 @@ if ! python3 "$CLIENT" \
   --readiness-file "$XDMA_READY_FILE" \
   --retune-hz 7200000 \
   --timeout-seconds 15 \
+  --tx-cycles 5 \
   --basic-auth-systemd-unit "$SATURN_GO_SERVICE" \
   --insecure-tls \
   >"$CLIENT_RESULT" 2>"$CLIENT_ERROR"
@@ -272,6 +273,9 @@ jq -e '
   .bridge_ready == true and
   .dsp_burst_continued == true and
   .rf_inhibited_duc_exercised == true and
+  .tx_cycles_requested == 5 and
+  .tx_cycles_completed == 5 and
+  ([.tx_cycle_results[] | select(.dma_writes > 0 and .frames >= 20 and .fifo_faults == 0 and .mux_resets >= 1)] | length) == 5 and
   .iq_nonzero == true and
   .iq_frames >= 3 and
   .audio_frames >= 3

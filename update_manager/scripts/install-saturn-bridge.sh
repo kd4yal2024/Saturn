@@ -27,6 +27,9 @@ SATURN_BRIDGE_OUTPUT_BIN="${SATURN_BRIDGE_OUTPUT_BIN:-}"
 SATURN_BRIDGE_WDSP_FLAVOR="${SATURN_BRIDGE_WDSP_FLAVOR:-wdsp2}"
 SATURN_INSTALL_PACKAGES="${SATURN_INSTALL_PACKAGES:-1}"
 SATURN_BRIDGE_VERIFY_RUNTIME="${SATURN_BRIDGE_VERIFY_RUNTIME:-1}"
+SATURN_BRIDGE_BACKEND_STATE_FILE="${SATURN_BRIDGE_BACKEND_STATE_FILE:-/var/lib/saturn-radio-backend/selection.json}"
+SATURN_BRIDGE_BACKEND_SWITCH_HELPER="${SATURN_BRIDGE_BACKEND_SWITCH_HELPER:-/usr/local/lib/saturn-go/scripts/saturn-radio-backend-switch-root.sh}"
+SATURN_BRIDGE_PRESERVED_BACKEND="p2"
 
 # These commits are part of the Saturn Bridge native build contract. Updating
 # either pin requires rebuilding and re-running the WDSP/bridge test matrix.
@@ -341,6 +344,34 @@ install_binary() {
   log "Installed bridge binary: $SATURN_BRIDGE_BIN"
 }
 
+capture_selected_backend() {
+  local selected=""
+  if [[ -r "$SATURN_BRIDGE_BACKEND_STATE_FILE" ]]; then
+    selected="$(python3 - "$SATURN_BRIDGE_BACKEND_STATE_FILE" <<'PY'
+import json
+import sys
+
+try:
+    with open(sys.argv[1], encoding="utf-8") as handle:
+        value = json.load(handle).get("active", "")
+except (OSError, TypeError, ValueError):
+    value = ""
+print(value if value in {"p2", "xdma"} else "")
+PY
+)"
+  fi
+  if [[ -z "$selected" ]] && systemctl cat "$(basename "$SATURN_BRIDGE_SERVICE")" >/dev/null 2>&1; then
+    local environment
+    environment="$(systemctl show --property=Environment --value "$(basename "$SATURN_BRIDGE_SERVICE")" 2>/dev/null || true)"
+    case " $environment " in
+      *" SATURN_BRIDGE_RADIO_BACKEND=xdma "*) selected="xdma" ;;
+      *" SATURN_BRIDGE_RADIO_BACKEND=p2 "*) selected="p2" ;;
+    esac
+  fi
+  SATURN_BRIDGE_PRESERVED_BACKEND="${selected:-p2}"
+  log "Preserving appliance radio backend: $SATURN_BRIDGE_PRESERVED_BACKEND"
+}
+
 install_service() {
   local service_user service_group service_name
   service_user="$(bridge_build_user)"
@@ -391,12 +422,17 @@ EOF
   # already-active unit, which would leave systemd running the deleted prior
   # executable until the next reboot. Restart unconditionally so the runtime
   # always matches the binary that this installer just verified and installed.
-  systemctl restart "$service_name"
-  log "Enabled and restarted $service_name"
+  if [[ -x "$SATURN_BRIDGE_BACKEND_SWITCH_HELPER" ]]; then
+    "$SATURN_BRIDGE_BACKEND_SWITCH_HELPER" switch "$SATURN_BRIDGE_PRESERVED_BACKEND"
+    log "Reapplied preserved backend '$SATURN_BRIDGE_PRESERVED_BACKEND' through the transactional owner switch"
+  else
+    systemctl restart "$service_name"
+    log "Enabled and restarted $service_name (backend broker not installed)"
+  fi
 }
 
 verify_runtime() {
-  local service_name
+  local service_name environment runtime_backend="unknown"
   service_name="$(basename "$SATURN_BRIDGE_SERVICE")"
   if ! systemctl is-active --quiet "$service_name"; then
     systemctl --no-pager status "$service_name" || true
@@ -406,6 +442,13 @@ verify_runtime() {
     systemctl --no-pager status "$service_name" || true
     die "saturn-bridge is active but TCI port 127.0.0.1:50001 is not listening"
   fi
+  environment="$(systemctl show --property=Environment --value "$service_name")"
+  case " $environment " in
+    *" SATURN_BRIDGE_RADIO_BACKEND=xdma "*) runtime_backend="xdma" ;;
+    *" SATURN_BRIDGE_RADIO_BACKEND=p2 "*) runtime_backend="p2" ;;
+  esac
+  [[ "$runtime_backend" == "$SATURN_BRIDGE_PRESERVED_BACKEND" ]] \
+    || die "saturn-bridge backend changed during install: preserved=$SATURN_BRIDGE_PRESERVED_BACKEND runtime=$runtime_backend"
   log "saturn-bridge runtime check passed."
 }
 
@@ -427,6 +470,7 @@ main() {
   ensure_low_memory_build_capacity
   build_bridge
   verify_built_bridge
+  capture_selected_backend
   install_binary
   install_service
   if flag_enabled "$SATURN_BRIDGE_VERIFY_RUNTIME"; then

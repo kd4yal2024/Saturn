@@ -82,7 +82,7 @@ jobs:
             (
               cd "$crate"
               cargo audit --deny warnings
-              cargo deny check --config ../deny.toml advisories bans sources
+              cargo deny --config ../deny.toml check advisories bans sources
             )
             echo "::endgroup::"
           done
@@ -169,6 +169,8 @@ jobs:
             update_manager/scripts/saturn-release-build.sh \
             update_manager/scripts/saturn-go-deploy-root.sh \
             update_manager/scripts/saturn-xdma-phase4-stress.sh \
+            update_manager/scripts/saturn-xdma-backend-switch-smoke.sh \
+            update_manager/scripts/saturn-xdma-operational-rx-smoke.sh \
             update_manager/scripts/saturn-tailscale.sh \
             sw_tools/p2app-control/install.sh \
             tests/test-admin-password-policy.sh \
@@ -214,6 +216,8 @@ jobs:
             update_manager/scripts/saturn-release-build.sh \
             update_manager/scripts/saturn-go-deploy-root.sh \
             update_manager/scripts/saturn-xdma-phase4-stress.sh \
+            update_manager/scripts/saturn-xdma-backend-switch-smoke.sh \
+            update_manager/scripts/saturn-xdma-operational-rx-smoke.sh \
             update_manager/scripts/update-saturn-go.sh \
             update_manager/install_saturn_go_nginx.sh \
             sw_tools/p2app-control/install.sh \
@@ -238,6 +242,9 @@ jobs:
 
       - name: Validate cloud-init configuration
         run: cloud-init schema --config-file provision/cloud-init/user-data.example.yaml
+
+      - name: Test direct-XDMA operational client framing
+        run: python3 update_manager/scripts/saturn-xdma-operational-client.py --self-test
 
       - name: Test unified provisioning contract
         run: tests/test-provisioning-contract.sh

@@ -780,6 +780,7 @@ fn write_readiness(
         rx.verify_receive_safe()?;
     }
     let stats = rx.stats();
+    let last_tx = tx.last_session.unwrap_or_default();
     record_runtime_readiness(
         path,
         status,
@@ -850,6 +851,76 @@ fn write_readiness(
             ("forward_watts", TelemetryValue::number(tx.forward_watts)),
             ("reverse_watts", TelemetryValue::number(tx.reverse_watts)),
             ("swr", TelemetryValue::number(tx.swr)),
+            (
+                "tx_sessions_started",
+                TelemetryValue::number(tx.sessions_started),
+            ),
+            (
+                "tx_sessions_completed",
+                TelemetryValue::number(tx.sessions_completed),
+            ),
+            ("tx_mux_resets", TelemetryValue::number(tx.mux_resets)),
+            ("tx_last_session_id", TelemetryValue::number(last_tx.id)),
+            (
+                "tx_last_session_duration_ms",
+                TelemetryValue::number(last_tx.duration_ms),
+            ),
+            (
+                "tx_last_session_frequency_hz",
+                TelemetryValue::number(last_tx.frequency_hz),
+            ),
+            (
+                "tx_last_session_filter_low_hz",
+                TelemetryValue::number(last_tx.filter_low_hz),
+            ),
+            (
+                "tx_last_session_filter_high_hz",
+                TelemetryValue::number(last_tx.filter_high_hz),
+            ),
+            (
+                "tx_last_session_keyed",
+                TelemetryValue::boolean(last_tx.keyed),
+            ),
+            (
+                "tx_last_session_dma_writes",
+                TelemetryValue::number(last_tx.dma_writes),
+            ),
+            (
+                "tx_last_session_frames",
+                TelemetryValue::number(last_tx.frames_written),
+            ),
+            (
+                "tx_last_session_fifo_lwm",
+                TelemetryValue::number(last_tx.fifo_lwm),
+            ),
+            (
+                "tx_last_session_fifo_hwm",
+                TelemetryValue::number(last_tx.fifo_hwm),
+            ),
+            (
+                "tx_last_session_fifo_faults",
+                TelemetryValue::number(last_tx.fifo_faults),
+            ),
+            (
+                "tx_last_session_startup_underflows",
+                TelemetryValue::number(last_tx.startup_underflows),
+            ),
+            (
+                "tx_last_session_mux_resets",
+                TelemetryValue::number(last_tx.mux_resets),
+            ),
+            (
+                "tx_last_session_peak_forward_watts",
+                TelemetryValue::number(last_tx.peak_forward_watts),
+            ),
+            (
+                "tx_last_session_peak_reverse_watts",
+                TelemetryValue::number(last_tx.peak_reverse_watts),
+            ),
+            (
+                "tx_last_session_peak_swr",
+                TelemetryValue::number(last_tx.peak_swr),
+            ),
         ],
     )
     .map_err(|source| XdmaError::Io {

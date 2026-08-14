@@ -14,6 +14,79 @@ Backend ownership is global to the appliance. It is not selected independently
 for each browser connection because P2_app and Saturn Bridge must never drive
 the same FPGA registers or DMA channels concurrently.
 
+## Production Qualification Status (2026-08-14)
+
+P2_app has not been removed. It remains the installed/default backend for
+Thetis and other Protocol 2 clients. Direct XDMA is an explicit, transactional
+alternative for Saturn Remote and other TCI clients; only one backend owns the
+FPGA at a time.
+
+| Area | Current evidence | Gate |
+| --- | --- | --- |
+| Direct RX | Live 192 kHz IQ/audio, tuning, reconnect recovery, and receive-safe cleanup have passed on PCB2 firmware 1.27. | Passed for the current hardware envelope. |
+| Direct TX audio | Four consecutive Voodoo 3.8k voice transmissions were received clearly after the per-arm DUC mux/FIFO reset correction. | Field behavior confirmed; automated repetition remains required. |
+| Repeated-key automation | The first five-cycle RF-inhibited run found a pre-key FIFO threshold at 4,076 of 4,096 words. Delayed H2C completion made the second adaptive prefill batch visible later than its occupancy read. | Open pending retest of the DMA-settle and three-frame pacing-headroom correction. |
+| Backend ownership | Transactional `P2 -> XDMA -> P2` switching and rollback have passed. The installer now preserves the selected backend instead of silently returning an XDMA appliance to P2. | Repeat after every installer or broker change. |
+| Wider production use | P2 fallback is retained and direct XDMA stays opt-in. | Requires repeated-key, bounded-RF, reconnect, and soak gates below. |
+
+The FIFO event above occurred before RF keying with RF inhibited. It does not
+indicate microphone loss, an RF frequency error, or an over-the-air audio
+failure. The runtime failed closed, disarmed the unkeyed TX session, returned
+to RX, and restored the prior services. The correction deliberately waits for
+DMA writes to become visible before making another prefill decision and admits
+each live frame only with three complete frames of FIFO ceiling headroom.
+
+Run the current production-path acceptance from the repository root:
+
+```bash
+sudo update_manager/scripts/saturn-xdma-operational-rx-smoke.sh \
+  --proxy-client-probe \
+  --tx-cycles 5 \
+  --duration-seconds 45
+```
+
+A passing result must complete all five independent arm/disarm cycles. Every
+cycle must report a new mux reset, advancing DUC DMA writes and frames, zero TX
+FIFO faults, and a final unkeyed receive-safe state. Only a passing run writes
+`/var/lib/saturn-state/xdma-telemetry.json`; an absent or stale file must not be
+presented as current qualification evidence.
+
+The direct-backend readiness snapshot in
+`/run/saturn-bridge/xdma-ready.json` includes lifetime counters and the last
+completed TX session. The session record identifies its frequency and filter,
+whether it keyed, DMA writes and frames, FIFO low/high water, FIFO faults,
+startup underflows, mux resets, peak forward/reverse power, SWR, and duration.
+This makes an alternating-key regression attributable to one arm instead of
+only to process-wide totals.
+
+To return immediately to the Protocol 2 backend:
+
+```bash
+sudo /usr/local/lib/saturn-go/scripts/saturn-radio-backend-switch-root.sh switch p2
+```
+
+Verify `p2app.service` is active before opening Thetis or another Protocol 2
+client. Do not start P2_app manually while the XDMA backend owns the FPGA; use
+the transaction broker so ownership, systemd state, readiness, and persisted
+selection move together.
+
+### Remaining production gates
+
+1. Pass the five-cycle RF-inhibited split-proxy test repeatedly with no FIFO,
+   framing, DMA, session, or cleanup fault.
+2. Pass `saturn-xdma-backend-switch-smoke.sh`, including restoration of the
+   exact prior service state and persisted selection.
+3. Repeat the bounded 3 W dummy-load RF test only after the inhibited gate is
+   green; verify frequency/sideband with the locked tone and retain the power,
+   reverse-power, SWR, and per-session record.
+4. Exercise browser reconnect plus multiple voice key-ups and confirm every arm
+   creates a new WDSP TX channel and DUC mux reset.
+5. Complete long-duration RX and mixed RX/TX soak testing before raising the
+   power envelope or considering XDMA as the default.
+6. Re-run installer, CI, and rollback tests while P2 is selected and while XDMA
+   is selected. Neither installation nor upgrade may discard the operator's
+   valid persisted backend choice.
+
 ## Operator Switching Contract
 
 Saturn Remote will ultimately expose the backend selector to its operator.
@@ -564,10 +637,13 @@ sudo update_manager/scripts/saturn-xdma-operational-rx-smoke.sh \
 The localhost-only client opens the actual TCI WebSocket, validates 192 kHz IQ
 and 48 kHz audio binary frames, submits an eight-command RX DSP preference
 burst, requires media and DMA progress afterward, retunes both VFO and DDC to
-7.200 MHz, and exercises the DUC with RF explicitly inhibited. It requires
-advancing H2C writes and TX frames while MOX, TX enable, and the PA relay remain
-off. It then releases TX, stops its streams, and disconnects before the harness
-terminates the runtime.
+7.200 MHz, and exercises the DUC with RF explicitly inhibited. The default is
+five complete TX cycles; every cycle must perform a fresh DUC mux reset,
+advance H2C writes and TX frames without a FIFO fault, and return to a stopped,
+receive-safe stream state while MOX, TX enable, and the PA relay remain off.
+Use `--tx-cycles COUNT` to select 1 through 20 cycles. After successful cleanup
+and service restoration, the harness atomically records the result in
+`/var/lib/saturn-state/xdma-telemetry.json` for the Radio Telemetry page.
 
 The first two client runs exposed a genuine debug-build starvation path: the
 runtime synchronized WDSP and published the complete radio snapshot after each

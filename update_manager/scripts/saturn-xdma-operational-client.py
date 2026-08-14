@@ -380,6 +380,7 @@ def run_acceptance(
     rf_tx_probe: bool = False,
     tx_duration_ms: int = 2_500,
     tx_drive_watts: int = 3,
+    tx_cycles: int = 1,
 ) -> dict[str, object]:
     control = WebSocket.connect(
         url,
@@ -412,6 +413,8 @@ def run_acceptance(
     after_tx_request = False
     dsp_burst_continued = False
     rf_inhibited_duc_exercised = False
+    tx_cycles_completed = 0
+    tx_cycle_results: list[dict[str, object]] = []
 
     def handle_text(text: str) -> None:
         nonlocal bridge_ready, remote_tx_state_seen, split_paired
@@ -639,47 +642,94 @@ def run_acceptance(
                 )
             control.send_text("iq_stop:0;audio_stop:0;")
         else:
-            control.send_text("tx_two_tone:0,true;trx:0,true,tci;")
+            for cycle in range(1, tx_cycles + 1):
+                cycle_before = read_readiness(readiness_file) or {}
+                cycle_before_metrics = cycle_before.get("metrics") or {}
+                cycle_before_writes = int(cycle_before_metrics.get("tx_dma_writes", 0))
+                cycle_before_frames = int(cycle_before_metrics.get("tx_frames", 0))
+                cycle_before_faults = int(cycle_before_metrics.get("tx_fifo_faults", 0))
+                cycle_before_sessions = int(cycle_before_metrics.get("tx_sessions_completed", 0))
+                control.send_text("tx_two_tone:0,true;trx:0,true,tci;")
 
-            def rf_inhibited_duc_ready() -> bool:
-                nonlocal rf_inhibited_duc_exercised
-                current = read_readiness(readiness_file) or {}
-                current_metrics = current.get("metrics")
-                rf_inhibited_duc_exercised = (
-                    current.get("rf_safe") is True
-                    and isinstance(current_metrics, dict)
-                    and current_metrics.get("rf_safe") is True
-                    and current_metrics.get("tx_rf_enabled") is False
-                    and current_metrics.get("tx_stream_active") is True
-                    and current_metrics.get("tx_keyed") is False
-                    and int(current_metrics.get("tx_dma_writes", 0)) > before_tx_writes
-                    and int(current_metrics.get("tx_frames", 0)) >= 20
-                    and int(current_metrics.get("tx_fifo_faults", 0)) == 0
-                )
-                return rf_inhibited_duc_exercised
+                def rf_inhibited_duc_ready() -> bool:
+                    current = read_readiness(readiness_file) or {}
+                    current_metrics = current.get("metrics")
+                    return (
+                        current.get("rf_safe") is True
+                        and isinstance(current_metrics, dict)
+                        and current_metrics.get("rf_safe") is True
+                        and current_metrics.get("tx_rf_enabled") is False
+                        and current_metrics.get("tx_stream_active") is True
+                        and current_metrics.get("tx_keyed") is False
+                        and int(current_metrics.get("tx_dma_writes", 0)) > cycle_before_writes
+                        and int(current_metrics.get("tx_frames", 0))
+                        >= cycle_before_frames + 20
+                        and int(current_metrics.get("tx_fifo_faults", 0))
+                        == cycle_before_faults
+                    )
 
-            wait_messages(
-                websockets,
-                stats,
-                lanes,
-                handle_text,
-                rf_inhibited_duc_ready,
-                timeout=min(timeout, 8.0),
-            )
-            readiness = read_readiness(readiness_file) or {}
-            metrics = readiness.get("metrics")
-            if (
-                readiness.get("rf_safe") is not True
-                or not isinstance(metrics, dict)
-                or metrics.get("rf_safe") is not True
-                or metrics.get("tx_capable") is not True
-            ):
-                raise AcceptanceError(
-                    "readiness did not remain receive-safe during RF-inhibited TX"
+                wait_messages(
+                    websockets,
+                    stats,
+                    lanes,
+                    handle_text,
+                    rf_inhibited_duc_ready,
+                    timeout=min(timeout, 8.0),
                 )
-            control.send_text(
-                "trx:0,false;tx_two_tone:0,false;iq_stop:0;audio_stop:0;"
-            )
+                control.send_text("trx:0,false;tx_two_tone:0,false;")
+
+                def rf_inhibited_release_ready() -> bool:
+                    current = read_readiness(readiness_file) or {}
+                    current_metrics = current.get("metrics")
+                    return (
+                        current.get("rf_safe") is True
+                        and isinstance(current_metrics, dict)
+                        and current_metrics.get("rf_safe") is True
+                        and current_metrics.get("tx_stream_active") is False
+                        and current_metrics.get("tx_keyed") is False
+                        and int(current_metrics.get("tx_fifo_faults", 0))
+                        == cycle_before_faults
+                        and int(current_metrics.get("tx_sessions_completed", 0))
+                        >= cycle_before_sessions + 1
+                    )
+
+                wait_messages(
+                    websockets,
+                    stats,
+                    lanes,
+                    handle_text,
+                    rf_inhibited_release_ready,
+                    timeout=min(timeout, 8.0),
+                )
+                readiness = read_readiness(readiness_file) or {}
+                metrics = readiness.get("metrics") or {}
+                if (
+                    readiness.get("rf_safe") is not True
+                    or not isinstance(metrics, dict)
+                    or metrics.get("rf_safe") is not True
+                    or metrics.get("tx_capable") is not True
+                ):
+                    raise AcceptanceError(
+                        f"cycle {cycle} did not return to receive-safe state"
+                    )
+                tx_cycles_completed += 1
+                tx_cycle_results.append(
+                    {
+                        "cycle": cycle,
+                        "dma_writes": int(metrics.get("tx_dma_writes", 0))
+                        - cycle_before_writes,
+                        "frames": int(metrics.get("tx_frames", 0))
+                        - cycle_before_frames,
+                        "fifo_faults": int(metrics.get("tx_fifo_faults", 0))
+                        - cycle_before_faults,
+                        "session_id": int(metrics.get("tx_last_session_id", 0)),
+                        "mux_resets": int(metrics.get("tx_last_session_mux_resets", 0)),
+                    }
+                )
+                if cycle < tx_cycles:
+                    time.sleep(0.20)
+            rf_inhibited_duc_exercised = tx_cycles_completed == tx_cycles
+            control.send_text("iq_stop:0;audio_stop:0;")
     finally:
         if media is not None:
             media.close()
@@ -701,6 +751,9 @@ def run_acceptance(
         "tx_keyed_observed": tx_keyed_observed,
         "tx_duration_ms": tx_duration_ms if rf_tx_probe else 0,
         "tx_drive_watts": tx_drive_watts if rf_tx_probe else 0,
+        "tx_cycles_requested": tx_cycles,
+        "tx_cycles_completed": tx_cycles_completed if not rf_tx_probe else 1,
+        "tx_cycle_results": tx_cycle_results,
         "peak_forward_watts": peak_forward_watts,
         "peak_reverse_watts": peak_reverse_watts,
         "peak_swr": peak_swr,
@@ -749,6 +802,7 @@ def main() -> int:
     parser.add_argument("--rf-tx-probe", action="store_true")
     parser.add_argument("--tx-duration-ms", type=int, default=2_500)
     parser.add_argument("--tx-drive-watts", type=int, default=3)
+    parser.add_argument("--tx-cycles", type=int, default=1)
     parser.add_argument("--self-test", action="store_true")
     args = parser.parse_args()
     if args.self_test:
@@ -764,6 +818,10 @@ def main() -> int:
         parser.error("--rf-tx-probe duration must be 500..3000 ms")
     if args.rf_tx_probe and args.tx_drive_watts != 3:
         parser.error("--rf-tx-probe is locked to 3 W")
+    if not 1 <= args.tx_cycles <= 20:
+        parser.error("--tx-cycles must be between 1 and 20")
+    if args.rf_tx_probe and args.tx_cycles != 1:
+        parser.error("--rf-tx-probe permits exactly one TX cycle")
     control_url = urlparse(args.url)
     if bool(args.media_url) != (control_url.path == "/saturn/control"):
         parser.error("--media-url must be paired with a /saturn/control control URL")
@@ -795,6 +853,7 @@ def main() -> int:
             rf_tx_probe=args.rf_tx_probe,
             tx_duration_ms=args.tx_duration_ms,
             tx_drive_watts=args.tx_drive_watts,
+            tx_cycles=args.tx_cycles,
         )
     except (AcceptanceError, OSError, ValueError) as error:
         print(f"saturn XDMA operational client FAILED: {error}", file=sys.stderr)

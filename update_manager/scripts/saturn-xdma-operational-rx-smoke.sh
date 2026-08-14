@@ -17,6 +17,7 @@ LOG_FILE="${SATURN_XDMA_RX_SMOKE_LOG_FILE:-/tmp/saturn-xdma-operational-rx-smoke
 CLIENT_PROBE_SCRIPT="${SATURN_XDMA_RX_SMOKE_CLIENT_PROBE_SCRIPT:-$SCRIPT_DIR/saturn-xdma-operational-client.py}"
 CLIENT_RESULT_FILE="${SATURN_XDMA_RX_SMOKE_CLIENT_RESULT_FILE:-/tmp/saturn-xdma-operational-client-result.json}"
 CLIENT_ERROR_FILE="${SATURN_XDMA_RX_SMOKE_CLIENT_ERROR_FILE:-/tmp/saturn-xdma-operational-client-error.log}"
+VALIDATION_FILE="${SATURN_XDMA_RX_SMOKE_VALIDATION_FILE:-/var/lib/saturn-state/xdma-telemetry.json}"
 PROXY_BASE_URL="${SATURN_XDMA_RX_SMOKE_PROXY_BASE_URL:-wss://127.0.0.1:8443}"
 SATURN_GO_SERVICE="${SATURN_XDMA_RX_SMOKE_SATURN_GO_SERVICE:-saturn-go.service}"
 MIN_STREAM_RATE=188160
@@ -25,6 +26,8 @@ MAX_STREAM_RATE=195840
 CLIENT_PROBE=0
 PROXY_CLIENT_PROBE=0
 RF_TX_PROBE=0
+TX_CYCLES=5
+TX_CYCLES_EXPLICIT=0
 RF_TX_CONFIRM_TOKEN="DUMMY_LOAD_CONNECTED_ANT1_7200000HZ_3W"
 P2_WAS=""
 BRIDGE_WAS=""
@@ -42,7 +45,7 @@ usage(){
   cat <<'EOF'
 Usage: sudo saturn-xdma-operational-rx-smoke.sh \
   [--duration-seconds SECONDS] [--client-probe | --proxy-client-probe] \
-  [--rf-tx-probe]
+  [--tx-cycles COUNT] [--rf-tx-probe]
 
 Runs the source-tree direct-XDMA RX backend for a bounded interval, requires
 advancing DMA/IQ readiness, verifies receive-safe shutdown, and restores the
@@ -51,6 +54,8 @@ prior p2app.service and saturn-bridge.service activity.
 The client probe requires at least 45 seconds. It connects directly to the TCI
 endpoint, verifies IQ and audio frames, retunes to 7.200 MHz, requires a TX
 request to exercise the RF-inhibited DUC, and disconnects before cleanup.
+By default it performs five complete TX arm/stream/disarm cycles so stale DUC
+mux state and second-key regressions are covered.
 
 The proxy client probe performs the same acceptance through Saturn Go's
 authenticated TLS split control/media WebSockets. It reads the configured
@@ -69,6 +74,71 @@ EOF
 
 positive_integer(){
   [[ "$2" =~ ^[1-9][0-9]*$ ]] || die "$1 must be a positive integer, got: $2"
+}
+
+persist_validation(){
+  python3 - \
+    "$VALIDATION_FILE" "$OBSERVED_FILE" "$READY_FILE" "$CLIENT_RESULT_FILE" \
+    "$STREAM_RATE" "$STREAM_ELAPSED_MS" "$TX_CYCLES" <<'PY'
+import json
+import os
+import sys
+import tempfile
+import time
+
+path, observed_path, stopped_path, client_path, rate, elapsed_ms, cycles = sys.argv[1:]
+with open(observed_path, encoding="utf-8") as handle:
+    observed = json.load(handle)
+with open(stopped_path, encoding="utf-8") as handle:
+    stopped = json.load(handle)
+client = None
+try:
+    with open(client_path, encoding="utf-8") as handle:
+        client = json.load(handle)
+except FileNotFoundError:
+    pass
+
+document = {
+    "schema_version": 1,
+    "updated_at_ms": int(time.time() * 1000),
+    "source": "saturn-xdma-operational-rx-smoke",
+    "phase": 7,
+    "probe": (
+        "operational-rx-tx-repeated-key" if client is not None else "operational-rx"
+    ),
+    "status": "passed",
+    "cleanup": "receive-safe-services-restored",
+    "error": None,
+    "metrics": {
+        "steady_iq_pairs_per_second": int(rate),
+        "steady_interval_ms": int(elapsed_ms),
+        "tx_cycles_requested": int(cycles) if client is not None else 0,
+        "tx_cycles_completed": int((client or {}).get("tx_cycles_completed", 0)),
+        "rx_dma_reads": int(stopped.get("metrics", {}).get("dma_reads", 0)),
+        "rx_iq_pairs": int(stopped.get("metrics", {}).get("iq_pairs", 0)),
+        "rf_safe": stopped.get("rf_safe") is True,
+    },
+    "client": client,
+    "observed_ready": observed,
+    "final_stopped": stopped,
+}
+directory = os.path.dirname(path)
+os.makedirs(directory, mode=0o755, exist_ok=True)
+fd, temporary = tempfile.mkstemp(prefix=".xdma-validation-", dir=directory)
+try:
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        json.dump(document, handle, indent=2, sort_keys=True)
+        handle.write("\n")
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.chmod(temporary, 0o644)
+    os.replace(temporary, path)
+finally:
+    try:
+        os.unlink(temporary)
+    except FileNotFoundError:
+        pass
+PY
 }
 
 service_state(){
@@ -161,6 +231,12 @@ while [[ $# -gt 0 ]]; do
       RF_TX_PROBE=1
       shift
       ;;
+    --tx-cycles)
+      [[ $# -ge 2 ]] || die "--tx-cycles requires a value"
+      TX_CYCLES="$2"
+      TX_CYCLES_EXPLICIT=1
+      shift 2
+      ;;
     -h|--help)
       usage
       exit 0
@@ -171,11 +247,16 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+if (( RF_TX_PROBE && ! TX_CYCLES_EXPLICIT )); then
+  TX_CYCLES=1
+fi
+
 if [[ -z "$READY_WAIT_SECONDS" ]]; then
   READY_WAIT_SECONDS="$DURATION_SECONDS"
 fi
 positive_integer "duration" "$DURATION_SECONDS"
 positive_integer "readiness wait" "$READY_WAIT_SECONDS"
+positive_integer "TX cycles" "$TX_CYCLES"
 (( DURATION_SECONDS >= 5 && DURATION_SECONDS <= 300 )) \
   || die "duration must be between 5 and 300 seconds"
 (( READY_WAIT_SECONDS >= 5 && READY_WAIT_SECONDS <= DURATION_SECONDS )) \
@@ -184,11 +265,14 @@ if (( CLIENT_PROBE )); then
   (( DURATION_SECONDS >= 45 )) \
     || die "--client-probe requires a duration of at least 45 seconds"
 fi
+(( TX_CYCLES <= 20 )) || die "TX cycles must not exceed 20"
 if (( RF_TX_PROBE )); then
   [[ "${SATURN_XDMA_PRODUCTION_TX_CONFIRM:-}" == "$RF_TX_CONFIRM_TOKEN" ]] \
     || die "--rf-tx-probe requires SATURN_XDMA_PRODUCTION_TX_CONFIRM=$RF_TX_CONFIRM_TOKEN"
   [[ "$BRIDGE_BINARY" == "$BRIDGE_ROOT/target/release/saturn-bridge" ]] \
     || die "--rf-tx-probe requires the current optimized binary: $BRIDGE_ROOT/target/release/saturn-bridge"
+  (( TX_CYCLES == 1 )) \
+    || die "--rf-tx-probe permits exactly one TX cycle; pass --tx-cycles 1"
 fi
 if (( RF_TX_PROBE && PROXY_CLIENT_PROBE )); then
   die "--rf-tx-probe uses the direct localhost TCI lane and cannot be combined with --proxy-client-probe"
@@ -199,12 +283,12 @@ need_cmd cp
 need_cmd find
 need_cmd grep
 need_cmd jq
+need_cmd python3
 need_cmd systemctl
 need_cmd tee
 need_cmd timeout
 [[ -x "$BRIDGE_BINARY" ]] || die "bridge binary is not executable: $BRIDGE_BINARY"
 if (( CLIENT_PROBE )); then
-  need_cmd python3
   [[ -r "$CLIENT_PROBE_SCRIPT" ]] \
     || die "client probe is not readable: $CLIENT_PROBE_SCRIPT"
 fi
@@ -271,6 +355,7 @@ rm -f -- \
           --readiness-file "$READY_FILE"
           --retune-hz 7200000
           --timeout-seconds 15
+          --tx-cycles "$TX_CYCLES"
         )
         if (( RF_TX_PROBE )); then
           client_args+=(
@@ -380,6 +465,8 @@ if (( CLIENT_PROBE )); then
       .split_paired == true and
       .remote_tx_rf_enabled == false and
       .rf_inhibited_duc_exercised == true and
+      .tx_cycles_completed == .tx_cycles_requested and
+      ([.tx_cycle_results[] | select(.dma_writes > 0 and .frames >= 20 and .fifo_faults == 0 and .mux_resets >= 1)] | length) == .tx_cycles_completed and
       .dsp_burst_continued == true and
       .retune_hz == 7200000 and
       .iq_frames >= 3 and
@@ -432,6 +519,7 @@ STREAM_RATE="$((STREAM_IQ_PAIRS * 1000 / STREAM_ELAPSED_MS))"
   || die "steady-state IQ rate ${STREAM_RATE}/s is outside the 192 kHz +/-2% acceptance band"
 
 restore_services || die "could not restore the prior service activity"
+persist_validation
 
 log "Steady-state IQ rate: ${STREAM_RATE} pairs/s over ${STREAM_ELAPSED_MS}ms"
 if (( CLIENT_PROBE )); then

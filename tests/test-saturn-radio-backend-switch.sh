@@ -276,5 +276,9 @@ grep -Fq 'RuntimeDirectory=saturn-bridge' \
   "$REPO_ROOT/update_manager/scripts/install-saturn-bridge.sh"
 grep -Fq 'SATURN_BRIDGE_XDMA_READY_PATH=/run/saturn-bridge/xdma-ready.json' \
   "$REPO_ROOT/update_manager/scripts/install-saturn-bridge.sh"
+grep -Fq 'capture_selected_backend' \
+  "$REPO_ROOT/update_manager/scripts/install-saturn-bridge.sh"
+grep -Fq "switch \"\$SATURN_BRIDGE_PRESERVED_BACKEND\"" \
+  "$REPO_ROOT/update_manager/scripts/install-saturn-bridge.sh"
 
 printf 'Saturn radio backend transaction tests passed\n'

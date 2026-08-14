@@ -60,7 +60,7 @@ grep -Fq 'gpiod_line_request_read_edge_events' "${GPIO_PATCH}"
 grep -Fq 'release_request(&monitor_request);' "${GPIO_CLEANUP_PATCH}"
 grep -Fq 'DESKHPSDR_GPIO_CLEANUP_PATCH' "${HELPER}"
 reverse_check_line="$(grep -n 'apply --reverse --check' "${HELPER}" | head -n1 | cut -d: -f1)"
-forward_check_line="$(grep -n 'apply --check "${patch_file}"' "${HELPER}" | head -n1 | cut -d: -f1)"
+forward_check_line="$(grep -n "apply --check \"\${patch_file}\"" "${HELPER}" | head -n1 | cut -d: -f1)"
 if [[ -z "${reverse_check_line}" || -z "${forward_check_line}" || ${reverse_check_line} -ge ${forward_check_line} ]]; then
   echo "deskHPSDR patch helper must detect already-applied insertion patches before testing forward application" >&2
   exit 1

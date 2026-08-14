@@ -16,7 +16,8 @@ use std::io;
 use std::os::unix::fs::FileExt;
 use std::path::PathBuf;
 use std::sync::Mutex;
-use std::time::Duration;
+use std::thread;
+use std::time::{Duration, Instant};
 
 const DEFAULT_DUC_DEVICE: &str = "/dev/xdma0_h2c_0";
 const DEFAULT_USER_DEVICE: &str = "/dev/xdma0_user";
@@ -57,6 +58,10 @@ const DUC_PREFILL_MINIMUM_WORDS: usize = 18 * DUC_FIFO_WORDS_PER_FRAME;
 const DUC_PREFILL_TARGET_WORDS: usize = 19 * DUC_FIFO_WORDS_PER_FRAME;
 const DUC_PREFILL_MAX_ATTEMPTS: usize = 8;
 const DUC_MAX_DMA_BATCH_FRAMES: usize = 11;
+const DUC_PREFILL_DMA_SETTLE: Duration = Duration::from_micros(500);
+const DUC_FIFO_PACING_POLL: Duration = Duration::from_micros(100);
+const DUC_FIFO_PACING_POLLS: usize = 20;
+const DUC_FIFO_WRITE_HEADROOM_FRAMES: usize = 3;
 const DMA_BUFFER_BYTES: usize = DUC_MAX_DMA_BATCH_FRAMES * DUC_FRAME_BYTES;
 const INITIAL_MAX_WATTS: u8 = 3;
 const REVERSE_POWER_TRIP_WATTS: f32 = 0.75;
@@ -80,6 +85,49 @@ pub(crate) struct DirectTxSnapshot {
     pub(crate) forward_watts: f32,
     pub(crate) reverse_watts: f32,
     pub(crate) swr: f32,
+    pub(crate) sessions_started: u64,
+    pub(crate) sessions_completed: u64,
+    pub(crate) mux_resets: u64,
+    pub(crate) last_session: Option<DirectTxSessionSnapshot>,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct DirectTxSessionSnapshot {
+    pub(crate) id: u64,
+    pub(crate) duration_ms: u64,
+    pub(crate) frequency_hz: u64,
+    pub(crate) filter_low_hz: i32,
+    pub(crate) filter_high_hz: i32,
+    pub(crate) keyed: bool,
+    pub(crate) dma_writes: u64,
+    pub(crate) frames_written: u64,
+    pub(crate) fifo_lwm: usize,
+    pub(crate) fifo_hwm: usize,
+    pub(crate) fifo_faults: u64,
+    pub(crate) startup_underflows: u64,
+    pub(crate) mux_resets: u64,
+    pub(crate) peak_forward_watts: f32,
+    pub(crate) peak_reverse_watts: f32,
+    pub(crate) peak_swr: f32,
+}
+
+struct ActiveTxSession {
+    id: u64,
+    started_at: Instant,
+    frequency_hz: u64,
+    filter_low_hz: i32,
+    filter_high_hz: i32,
+    keyed: bool,
+    dma_writes_start: u64,
+    frames_written_start: u64,
+    fifo_faults_start: u64,
+    startup_underflows_start: u64,
+    mux_resets_start: u64,
+    fifo_lwm: usize,
+    fifo_hwm: usize,
+    peak_forward_watts: f32,
+    peak_reverse_watts: f32,
+    peak_swr: f32,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -127,6 +175,11 @@ struct DirectTxState {
     reverse_watts: f32,
     swr: f32,
     power_meter_scale: f32,
+    sessions_started: u64,
+    sessions_completed: u64,
+    mux_resets: u64,
+    active_session: Option<ActiveTxSession>,
+    last_session: Option<DirectTxSessionSnapshot>,
 }
 
 impl DirectTxState {
@@ -180,6 +233,11 @@ impl DirectTxState {
             reverse_watts: 0.0,
             swr: 1.0,
             power_meter_scale: power_meter_scale.clamp(0.5, 1.5),
+            sessions_started: 0,
+            sessions_completed: 0,
+            mux_resets: 0,
+            active_session: None,
+            last_session: None,
         };
         state.shutdown()?;
         Ok(state)
@@ -211,6 +269,7 @@ impl DirectTxState {
         // DUC multiplexer holding a partial word. If that state survives into
         // the next stream, otherwise valid Q/I bytes are decoded on the wrong
         // 48-bit boundary and sound like wideband static.
+        self.begin_session(model);
         self.reset_duc_input_path()?;
         self.registers.write_register(
             DUC_FIFO_MONITOR_CONFIG_REGISTER,
@@ -233,7 +292,7 @@ impl DirectTxState {
             self.configure_stream(model)?;
             self.prefill_frame(iq)?;
         } else {
-            self.observe_fifo(true)?;
+            self.wait_for_fifo_write_window(true)?;
             self.write_repeated_frame(iq, 1)?;
         }
         Ok(())
@@ -287,7 +346,72 @@ impl DirectTxState {
             fifo.occupied_words
         );
         self.keyed = true;
+        if let Some(session) = self.active_session.as_mut() {
+            session.keyed = true;
+        }
         Ok(())
+    }
+
+    fn begin_session(&mut self, model: &RadioModel) {
+        self.sessions_started = self.sessions_started.saturating_add(1);
+        self.active_session = Some(ActiveTxSession {
+            id: self.sessions_started,
+            started_at: Instant::now(),
+            frequency_hz: u64::from(model.desired.tx_frequency_hz),
+            filter_low_hz: model.desired.tx_filter_low_hz,
+            filter_high_hz: model.desired.tx_filter_high_hz,
+            keyed: false,
+            dma_writes_start: self.dma_writes,
+            frames_written_start: self.frames_written,
+            fifo_faults_start: self.fifo_faults,
+            startup_underflows_start: self.fifo_startup_underflows,
+            mux_resets_start: self.mux_resets,
+            fifo_lwm: usize::MAX,
+            fifo_hwm: 0,
+            peak_forward_watts: 0.0,
+            peak_reverse_watts: 0.0,
+            peak_swr: 1.0,
+        });
+    }
+
+    fn observe_session_fifo(&mut self, occupied_words: usize) {
+        if let Some(session) = self.active_session.as_mut() {
+            session.fifo_lwm = session.fifo_lwm.min(occupied_words);
+            session.fifo_hwm = session.fifo_hwm.max(occupied_words);
+        }
+    }
+
+    fn finish_session(&mut self) {
+        let Some(session) = self.active_session.take() else {
+            return;
+        };
+        self.sessions_completed = self.sessions_completed.saturating_add(1);
+        self.last_session = Some(DirectTxSessionSnapshot {
+            id: session.id,
+            duration_ms: session.started_at.elapsed().as_millis() as u64,
+            frequency_hz: session.frequency_hz,
+            filter_low_hz: session.filter_low_hz,
+            filter_high_hz: session.filter_high_hz,
+            keyed: session.keyed,
+            dma_writes: self.dma_writes.saturating_sub(session.dma_writes_start),
+            frames_written: self
+                .frames_written
+                .saturating_sub(session.frames_written_start),
+            fifo_lwm: if session.fifo_lwm == usize::MAX {
+                0
+            } else {
+                session.fifo_lwm
+            },
+            fifo_hwm: session.fifo_hwm,
+            fifo_faults: self.fifo_faults.saturating_sub(session.fifo_faults_start),
+            startup_underflows: self
+                .fifo_startup_underflows
+                .saturating_sub(session.startup_underflows_start),
+            mux_resets: self.mux_resets.saturating_sub(session.mux_resets_start),
+            peak_forward_watts: session.peak_forward_watts,
+            peak_reverse_watts: session.peak_reverse_watts,
+            peak_swr: session.peak_swr,
+        });
     }
 
     fn apply_frequency_and_filter(&self, model: &RadioModel) -> Result<(), XdmaError> {
@@ -354,6 +478,7 @@ impl DirectTxState {
         // bounded batch, then close the measured deficit until the target is
         // reached. Keep one live-frame slot below the 4096-word FIFO ceiling.
         self.write_zero_frames(DUC_MAX_DMA_BATCH_FRAMES)?;
+        thread::sleep(DUC_PREFILL_DMA_SETTLE);
         let mut startup_underflow_seen = false;
         let mut attempts = 1usize;
 
@@ -362,6 +487,7 @@ impl DirectTxState {
                 FifoSnapshot::decode(self.registers.read_register(DUC_FIFO_MONITOR_REGISTER)?);
             self.fifo_lwm = self.fifo_lwm.min(prefill.occupied_words);
             self.fifo_hwm = self.fifo_hwm.max(prefill.occupied_words);
+            self.observe_session_fifo(prefill.occupied_words);
             if prefill.underflow {
                 startup_underflow_seen = true;
                 self.fifo_startup_underflows = self.fifo_startup_underflows.saturating_add(1);
@@ -388,6 +514,7 @@ impl DirectTxState {
                 return self.prefill_fault(prefill, startup_underflow_seen);
             }
             self.write_zero_frames(frames)?;
+            thread::sleep(DUC_PREFILL_DMA_SETTLE);
             attempts += 1;
         }
 
@@ -395,9 +522,11 @@ impl DirectTxState {
         // inserted behind it. The following read is a hard boundary: the
         // startup underflow was already observed and cleared above.
         self.write_repeated_frame(iq, 1)?;
+        thread::sleep(DUC_PREFILL_DMA_SETTLE);
         let ready = FifoSnapshot::decode(self.registers.read_register(DUC_FIFO_MONITOR_REGISTER)?);
         self.fifo_lwm = self.fifo_lwm.min(ready.occupied_words);
         self.fifo_hwm = self.fifo_hwm.max(ready.occupied_words);
+        self.observe_session_fifo(ready.occupied_words);
         if prefill_has_hard_fault(ready)
             || ready.underflow
             || ready.occupied_words < DUC_PREFILL_MINIMUM_WORDS
@@ -430,6 +559,7 @@ impl DirectTxState {
         let fifo = FifoSnapshot::decode(self.registers.read_register(DUC_FIFO_MONITOR_REGISTER)?);
         self.fifo_lwm = self.fifo_lwm.min(fifo.occupied_words);
         self.fifo_hwm = self.fifo_hwm.max(fifo.occupied_words);
+        self.observe_session_fifo(fifo.occupied_words);
         let faulted = fifo.overflow
             || fifo.over_threshold
             || (underflow_is_fault && fifo.underflow)
@@ -445,6 +575,29 @@ impl DirectTxState {
         Ok(fifo)
     }
 
+    fn wait_for_fifo_write_window(
+        &mut self,
+        underflow_is_fault: bool,
+    ) -> Result<FifoSnapshot, XdmaError> {
+        let maximum_words = self
+            .fifo_depth_words
+            .saturating_sub(DUC_FIFO_WRITE_HEADROOM_FRAMES * DUC_FIFO_WORDS_PER_FRAME);
+        let mut fifo = self.observe_fifo(underflow_is_fault)?;
+        for _ in 0..DUC_FIFO_PACING_POLLS {
+            if fifo.occupied_words <= maximum_words {
+                return Ok(fifo);
+            }
+            thread::sleep(DUC_FIFO_PACING_POLL);
+            fifo = self.observe_fifo(underflow_is_fault)?;
+        }
+        self.fifo_faults = self.fifo_faults.saturating_add(1);
+        let _ = self.shutdown();
+        Err(XdmaError::Incompatible(format!(
+            "production DUC FIFO pacing timeout: words={} maximum_before_write={maximum_words}",
+            fifo.occupied_words
+        )))
+    }
+
     fn sample_power(&mut self) -> Result<(), XdmaError> {
         let forward_raw = self
             .registers
@@ -457,6 +610,11 @@ impl DirectTxState {
         self.forward_watts = saturn_adc_to_watts(forward_raw, 32, self.power_meter_scale);
         self.reverse_watts = saturn_adc_to_watts(reverse_raw, 28, self.power_meter_scale);
         self.swr = calculate_swr(self.forward_watts, self.reverse_watts);
+        if let Some(session) = self.active_session.as_mut() {
+            session.peak_forward_watts = session.peak_forward_watts.max(self.forward_watts);
+            session.peak_reverse_watts = session.peak_reverse_watts.max(self.reverse_watts);
+            session.peak_swr = session.peak_swr.max(self.swr);
+        }
         if self.forward_watts > FORWARD_POWER_TRIP_WATTS
             || self.reverse_watts > REVERSE_POWER_TRIP_WATTS
             || (self.forward_watts >= SWR_MIN_FORWARD_WATTS && self.swr > SWR_TRIP)
@@ -506,7 +664,7 @@ impl DirectTxState {
         )
     }
 
-    fn reset_duc_input_path(&self) -> Result<(), XdmaError> {
+    fn reset_duc_input_path(&mut self) -> Result<(), XdmaError> {
         self.registers.update_register(
             TX_CONFIG_REGISTER,
             duc_mux_disabled_for_reset,
@@ -522,7 +680,9 @@ impl DirectTxState {
             duc_mux_reset_released,
             "could not release production DUC mux reset",
         )?;
-        self.pulse_fifo_reset()
+        self.pulse_fifo_reset()?;
+        self.mux_resets = self.mux_resets.saturating_add(1);
+        Ok(())
     }
 
     fn shutdown(&mut self) -> Result<(), XdmaError> {
@@ -553,7 +713,9 @@ impl DirectTxState {
         let reset = self.pulse_fifo_reset();
         self.stream_active = false;
         self.keyed = false;
-        drive.and(amplitude).and(gpio).and(alex).and(reset)
+        let result = drive.and(amplitude).and(gpio).and(alex).and(reset);
+        self.finish_session();
+        result
     }
 
     fn snapshot(&self) -> DirectTxSnapshot {
@@ -573,6 +735,10 @@ impl DirectTxState {
             forward_watts: self.forward_watts,
             reverse_watts: self.reverse_watts,
             swr: self.swr,
+            sessions_started: self.sessions_started,
+            sessions_completed: self.sessions_completed,
+            mux_resets: self.mux_resets,
+            last_session: self.last_session,
         }
     }
 }
@@ -659,7 +825,7 @@ impl TxRadio for DirectXdmaTxRadio {
                         "production DUC write requested while stream is stopped".into(),
                     ));
                 }
-                state.observe_fifo(true)?;
+                state.wait_for_fifo_write_window(true)?;
                 state.write_repeated_frame(iq_samples, 1)?;
                 if state.keyed {
                     state.sample_power()?;
