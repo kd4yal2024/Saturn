@@ -16,6 +16,7 @@ use std::io;
 use std::os::unix::fs::FileExt;
 use std::path::PathBuf;
 use std::sync::Mutex;
+use std::time::Duration;
 
 const DEFAULT_DUC_DEVICE: &str = "/dev/xdma0_h2c_0";
 const DEFAULT_USER_DEVICE: &str = "/dev/xdma0_user";
@@ -52,7 +53,9 @@ const ALEX_TX_RELAY_BIT: u16 = 0x0800;
 const DUC_FRAME_IQ_FLOATS: usize = 480;
 const DUC_FRAME_BYTES: usize = 1_440;
 const DUC_FIFO_WORDS_PER_FRAME: usize = 180;
-const DUC_PREFILL_FRAMES: usize = 20;
+const DUC_PREFILL_MINIMUM_WORDS: usize = 18 * DUC_FIFO_WORDS_PER_FRAME;
+const DUC_PREFILL_TARGET_WORDS: usize = 19 * DUC_FIFO_WORDS_PER_FRAME;
+const DUC_PREFILL_MAX_ATTEMPTS: usize = 8;
 const DUC_MAX_DMA_BATCH_FRAMES: usize = 11;
 const DMA_BUFFER_BYTES: usize = DUC_MAX_DMA_BATCH_FRAMES * DUC_FRAME_BYTES;
 const INITIAL_MAX_WATTS: u8 = 3;
@@ -60,6 +63,9 @@ const REVERSE_POWER_TRIP_WATTS: f32 = 0.75;
 const FORWARD_POWER_TRIP_WATTS: f32 = 4.0;
 const SWR_TRIP: f32 = 3.0;
 const SWR_MIN_FORWARD_WATTS: f32 = 0.25;
+const DIRECT_TX_STARTUP_SETTLE_BLOCKS: usize = 4;
+const DIRECT_TX_KEY_QUALIFICATION_PACKETS: usize = 8;
+const DIRECT_TX_MIC_RECENCY_WINDOW: Duration = Duration::from_millis(150);
 
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct DirectTxSnapshot {
@@ -97,6 +103,11 @@ impl FifoSnapshot {
 
 fn prefill_has_hard_fault(snapshot: FifoSnapshot) -> bool {
     snapshot.overflow || snapshot.over_threshold
+}
+
+fn zero_frames_needed_for_prefill(occupied_words: usize) -> usize {
+    let deficit = DUC_PREFILL_TARGET_WORDS.saturating_sub(occupied_words);
+    deficit.saturating_add(DUC_FIFO_WORDS_PER_FRAME - 1) / DUC_FIFO_WORDS_PER_FRAME
 }
 
 struct DirectTxState {
@@ -195,7 +206,12 @@ impl DirectTxState {
             },
             "could not configure direct TX RF byte order",
         )?;
-        self.pulse_fifo_reset()?;
+        // Match P2_app's InDUCIQ startup boundary exactly. Resetting only the
+        // FIFO is insufficient: an unkey can leave the FPGA's 64-to-48-bit
+        // DUC multiplexer holding a partial word. If that state survives into
+        // the next stream, otherwise valid Q/I bytes are decoded on the wrong
+        // 48-bit boundary and sound like wideband static.
+        self.reset_duc_input_path()?;
         self.registers.write_register(
             DUC_FIFO_MONITOR_CONFIG_REGISTER,
             self.fifo_depth_words as u32,
@@ -224,16 +240,16 @@ impl DirectTxState {
     }
 
     fn key_with_frame(&mut self, model: &RadioModel, iq: &[f32]) -> Result<(), XdmaError> {
-        if !self.stream_active {
+        let fifo = if !self.stream_active {
             self.configure_stream(model)?;
-            self.prefill_frame(iq)?;
-        }
-        let fifo = self.observe_fifo(false)?;
-        let minimum_words = (DUC_PREFILL_FRAMES - 2) * DUC_FIFO_WORDS_PER_FRAME;
-        if fifo.occupied_words < minimum_words {
+            self.prefill_frame(iq)?
+        } else {
+            self.observe_fifo(false)?
+        };
+        if fifo.occupied_words < DUC_PREFILL_MINIMUM_WORDS {
             return Err(XdmaError::Incompatible(format!(
                 "production DUC prefill has {} words; at least {} required before key",
-                fifo.occupied_words, minimum_words
+                fifo.occupied_words, DUC_PREFILL_MINIMUM_WORDS
             )));
         }
         self.apply_frequency_and_filter(model)?;
@@ -261,6 +277,15 @@ impl DirectTxState {
         self.registers
             .write_register(DAC_CONTROL_REGISTER, dac_control_word(drive))?;
         self.verify_keyed(model)?;
+        println!(
+            "saturn-bridge: direct XDMA TX keyed carrier={}Hz mode={} filter={}..{}Hz phase_word=0x{:08x} iq_pack=Q,I fifo_words={}",
+            model.desired.tx_frequency_hz,
+            model.desired.mode,
+            model.desired.tx_filter_low_hz,
+            model.desired.tx_filter_high_hz,
+            frequency_to_phase_word(model.desired.tx_frequency_hz),
+            fifo.occupied_words
+        );
         self.keyed = true;
         Ok(())
     }
@@ -323,43 +348,82 @@ impl DirectTxState {
         Ok(())
     }
 
-    fn prefill_frame(&mut self, iq: &[f32]) -> Result<(), XdmaError> {
-        // Seed silence so the direct backend adds a bounded 25 ms key-up
-        // latency instead of repeating the first mic frame and smearing the
-        // operator's first phoneme. The final frame is the first live IQ.
-        let mut remaining = DUC_PREFILL_FRAMES - 1;
-        while remaining != 0 {
-            let frames = remaining.min(DUC_MAX_DMA_BATCH_FRAMES);
-            self.write_zero_frames(frames)?;
-            remaining -= frames;
-        }
-        self.write_repeated_frame(iq, 1)?;
+    fn prefill_frame(&mut self, iq: &[f32]) -> Result<FifoSnapshot, XdmaError> {
+        // The stream drains while H2C writes and register reads execute, so a
+        // fixed frame count is not a reliable occupancy guarantee. Seed one
+        // bounded batch, then close the measured deficit until the target is
+        // reached. Keep one live-frame slot below the 4096-word FIFO ceiling.
+        self.write_zero_frames(DUC_MAX_DMA_BATCH_FRAMES)?;
+        let mut startup_underflow_seen = false;
+        let mut attempts = 1usize;
 
-        // As in the qualified Phase-4 probe, enabling an empty DUC stream can
-        // latch one underflow before the first H2C write reaches the FPGA. Read
-        // and account for that startup boundary after prefill; every later
-        // underflow remains a hard output fault.
-        let prefill =
-            FifoSnapshot::decode(self.registers.read_register(DUC_FIFO_MONITOR_REGISTER)?);
-        self.fifo_lwm = self.fifo_lwm.min(prefill.occupied_words);
-        self.fifo_hwm = self.fifo_hwm.max(prefill.occupied_words);
-        self.fifo_startup_underflows = self
-            .fifo_startup_underflows
-            .saturating_add(u64::from(prefill.underflow));
-        let minimum_words = (DUC_PREFILL_FRAMES - 2) * DUC_FIFO_WORDS_PER_FRAME;
-        if prefill_has_hard_fault(prefill) || prefill.occupied_words < minimum_words {
-            self.fifo_faults = self.fifo_faults.saturating_add(1);
-            let _ = self.shutdown();
-            return Err(XdmaError::Incompatible(format!(
-                "production DUC prefill fault: words={} minimum={} overflow={} threshold={} startup_underflow={}",
-                prefill.occupied_words,
-                minimum_words,
-                prefill.overflow,
-                prefill.over_threshold,
-                prefill.underflow
-            )));
+        loop {
+            let prefill =
+                FifoSnapshot::decode(self.registers.read_register(DUC_FIFO_MONITOR_REGISTER)?);
+            self.fifo_lwm = self.fifo_lwm.min(prefill.occupied_words);
+            self.fifo_hwm = self.fifo_hwm.max(prefill.occupied_words);
+            if prefill.underflow {
+                startup_underflow_seen = true;
+                self.fifo_startup_underflows = self.fifo_startup_underflows.saturating_add(1);
+            }
+            if prefill_has_hard_fault(prefill) {
+                return self.prefill_fault(prefill, startup_underflow_seen);
+            }
+            if prefill.occupied_words >= DUC_PREFILL_TARGET_WORDS {
+                break;
+            }
+            if attempts >= DUC_PREFILL_MAX_ATTEMPTS {
+                return self.prefill_fault(prefill, startup_underflow_seen);
+            }
+
+            let room_before_live = self
+                .fifo_depth_words
+                .saturating_sub(DUC_FIFO_WORDS_PER_FRAME)
+                .saturating_sub(prefill.occupied_words)
+                / DUC_FIFO_WORDS_PER_FRAME;
+            let frames = zero_frames_needed_for_prefill(prefill.occupied_words)
+                .min(DUC_MAX_DMA_BATCH_FRAMES)
+                .min(room_before_live);
+            if frames == 0 {
+                return self.prefill_fault(prefill, startup_underflow_seen);
+            }
+            self.write_zero_frames(frames)?;
+            attempts += 1;
         }
-        Ok(())
+
+        // The final pre-key frame is the first live IQ; silence is never
+        // inserted behind it. The following read is a hard boundary: the
+        // startup underflow was already observed and cleared above.
+        self.write_repeated_frame(iq, 1)?;
+        let ready = FifoSnapshot::decode(self.registers.read_register(DUC_FIFO_MONITOR_REGISTER)?);
+        self.fifo_lwm = self.fifo_lwm.min(ready.occupied_words);
+        self.fifo_hwm = self.fifo_hwm.max(ready.occupied_words);
+        if prefill_has_hard_fault(ready)
+            || ready.underflow
+            || ready.occupied_words < DUC_PREFILL_MINIMUM_WORDS
+        {
+            return self.prefill_fault(ready, startup_underflow_seen);
+        }
+        Ok(ready)
+    }
+
+    fn prefill_fault<T>(
+        &mut self,
+        snapshot: FifoSnapshot,
+        startup_underflow_seen: bool,
+    ) -> Result<T, XdmaError> {
+        self.fifo_faults = self.fifo_faults.saturating_add(1);
+        let _ = self.shutdown();
+        Err(XdmaError::Incompatible(format!(
+            "production DUC occupancy prefill fault: words={} minimum={} target={} overflow={} threshold={} underflow={} startup_underflow_seen={}",
+            snapshot.occupied_words,
+            DUC_PREFILL_MINIMUM_WORDS,
+            DUC_PREFILL_TARGET_WORDS,
+            snapshot.overflow,
+            snapshot.over_threshold,
+            snapshot.underflow,
+            startup_underflow_seen
+        )))
     }
 
     fn observe_fifo(&mut self, underflow_is_fault: bool) -> Result<FifoSnapshot, XdmaError> {
@@ -409,17 +473,21 @@ impl DirectTxState {
     fn verify_keyed(&self, model: &RadioModel) -> Result<(), XdmaError> {
         let gpio = self.registers.read_register(RF_GPIO_REGISTER)?;
         let tx = self.registers.read_register(TX_CONFIG_REGISTER)?;
+        let tx_duc = self.registers.read_register(TX_DUC_REGISTER)?;
+        let expected_tx_duc = frequency_to_phase_word(model.desired.tx_frequency_hz);
         let filter = alex_tx_filter_bits(model.desired.tx_frequency_hz);
         let alex = self.registers.read_register(ALEX_TX_ANTENNA_REGISTER)?;
         if gpio & (MOX_BIT | TX_ENABLE_BIT) != MOX_BIT | TX_ENABLE_BIT
             || gpio & RF_DATA_NETWORK_ENDIAN_BIT == 0
             || gpio & TX_RELAY_DISABLE_BIT != 0
             || tx & DUC_STREAM_ENABLE_BIT == 0
+            || tx & (DUC_MUX_RESET_BIT | TX_IQ_DEINTERLEAVE_BIT) != 0
             || tx & TX_AMPLITUDE_MASK == 0
+            || tx_duc != expected_tx_duc
             || alex != u32::from(filter | ALEX_ANT1_BIT | ALEX_TX_RELAY_BIT)
         {
             return Err(XdmaError::Incompatible(format!(
-                "production direct TX readback failed: gpio=0x{gpio:08x} tx=0x{tx:08x} alex=0x{alex:08x}"
+                "production direct TX readback failed: gpio=0x{gpio:08x} tx=0x{tx:08x} tx_duc=0x{tx_duc:08x} expected_tx_duc=0x{expected_tx_duc:08x} alex=0x{alex:08x}"
             )));
         }
         Ok(())
@@ -436,6 +504,25 @@ impl DirectTxState {
             |value| value | DUC_FIFO_RESET_BIT,
             "could not release production DUC FIFO reset",
         )
+    }
+
+    fn reset_duc_input_path(&self) -> Result<(), XdmaError> {
+        self.registers.update_register(
+            TX_CONFIG_REGISTER,
+            duc_mux_disabled_for_reset,
+            "could not disable production DUC mux before reset",
+        )?;
+        self.registers.update_register(
+            TX_CONFIG_REGISTER,
+            duc_mux_reset_asserted,
+            "could not assert production DUC mux reset",
+        )?;
+        self.registers.update_register(
+            TX_CONFIG_REGISTER,
+            duc_mux_reset_released,
+            "could not release production DUC mux reset",
+        )?;
+        self.pulse_fifo_reset()
     }
 
     fn shutdown(&mut self) -> Result<(), XdmaError> {
@@ -596,6 +683,30 @@ impl TxRadio for DirectXdmaTxRadio {
         })
     }
 
+    fn startup_settle_blocks(&self) -> usize {
+        DIRECT_TX_STARTUP_SETTLE_BLOCKS
+    }
+
+    fn key_qualification_packets(&self) -> usize {
+        DIRECT_TX_KEY_QUALIFICATION_PACKETS
+    }
+
+    fn keyable_mic_window(&self) -> Duration {
+        DIRECT_TX_MIC_RECENCY_WINDOW
+    }
+
+    fn qualify_mic_at_dsp_input(&self) -> bool {
+        true
+    }
+
+    fn recreate_wdsp_on_arm(&self) -> bool {
+        true
+    }
+
+    fn defer_model_changes_while_keyed(&self) -> bool {
+        true
+    }
+
     fn configure_rx_ddc(
         &self,
         _ddc_index: u8,
@@ -632,6 +743,18 @@ fn keyed_stream_config(current: u32) -> u32 {
         | TX_PROTOCOL_P2_BIT
         | (PCB2_FW13_TX_AMPLITUDE << 4)
         | DUC_STREAM_ENABLE_BIT
+}
+
+fn duc_mux_disabled_for_reset(current: u32) -> u32 {
+    current & !(DUC_STREAM_ENABLE_BIT | DUC_MUX_RESET_BIT | TX_IQ_DEINTERLEAVE_BIT)
+}
+
+fn duc_mux_reset_asserted(current: u32) -> u32 {
+    current | DUC_MUX_RESET_BIT
+}
+
+fn duc_mux_reset_released(current: u32) -> u32 {
+    current & !DUC_MUX_RESET_BIT
 }
 
 fn encode_iq_frame(target: &mut [u8], iq: &[f32]) {
@@ -727,7 +850,7 @@ mod tests {
     #[test]
     fn prefill_accepts_only_the_expected_startup_underflow() {
         let startup = FifoSnapshot {
-            occupied_words: (DUC_PREFILL_FRAMES - 1) * DUC_FIFO_WORDS_PER_FRAME,
+            occupied_words: DUC_PREFILL_TARGET_WORDS,
             underflow: true,
             ..FifoSnapshot::default()
         };
@@ -740,6 +863,44 @@ mod tests {
             over_threshold: true,
             ..startup
         }));
+    }
+
+    #[test]
+    fn occupancy_prefill_closes_the_observed_live_deficit() {
+        assert_eq!(zero_frames_needed_for_prefill(3_039), 3);
+        assert_eq!(zero_frames_needed_for_prefill(DUC_PREFILL_TARGET_WORDS), 0);
+        assert_eq!(
+            zero_frames_needed_for_prefill(DUC_PREFILL_TARGET_WORDS + 100),
+            0
+        );
+    }
+
+    #[test]
+    fn duc_mux_reset_sequence_preserves_unrelated_tx_configuration() {
+        let unrelated = TX_PROTOCOL_P2_BIT | TX_OUTPUT_GATE_BIT | (0x1234 << 4);
+        let initial =
+            unrelated | DUC_STREAM_ENABLE_BIT | DUC_MUX_RESET_BIT | TX_IQ_DEINTERLEAVE_BIT;
+        let disabled = duc_mux_disabled_for_reset(initial);
+        assert_eq!(
+            disabled & (DUC_STREAM_ENABLE_BIT | DUC_MUX_RESET_BIT | TX_IQ_DEINTERLEAVE_BIT),
+            0
+        );
+        assert_eq!(disabled & unrelated, unrelated);
+
+        let asserted = duc_mux_reset_asserted(disabled);
+        assert_ne!(asserted & DUC_MUX_RESET_BIT, 0);
+        assert_eq!(asserted & DUC_STREAM_ENABLE_BIT, 0);
+
+        let released = duc_mux_reset_released(asserted);
+        assert_eq!(released & DUC_MUX_RESET_BIT, 0);
+        assert_eq!(released & unrelated, unrelated);
+    }
+
+    #[test]
+    fn direct_tx_startup_policy_is_stricter_than_p2_defaults() {
+        assert!(DIRECT_TX_STARTUP_SETTLE_BLOCKS > 0);
+        assert!(DIRECT_TX_KEY_QUALIFICATION_PACKETS > 1);
+        assert_eq!(DIRECT_TX_MIC_RECENCY_WINDOW, Duration::from_millis(150));
     }
 
     #[test]

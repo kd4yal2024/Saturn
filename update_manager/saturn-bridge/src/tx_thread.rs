@@ -63,6 +63,37 @@ pub trait TxRadio: Send + Sync {
     fn stage_iq_rf_disabled(&self, _model: &RadioModel, _iq_samples: &[f32]) -> TxRadioResult {
         Ok(())
     }
+    /// Number of zero-input WDSP blocks to process and discard whenever TX is
+    /// armed. Direct hardware uses this to flush retained native filter state;
+    /// P2 keeps its established zero-latency behavior.
+    fn startup_settle_blocks(&self) -> usize {
+        0
+    }
+    /// Consecutive mic-qualified IQ packets required before RF may be keyed.
+    /// A backend may raise this above one to reject startup transients.
+    fn key_qualification_packets(&self) -> usize {
+        1
+    }
+    /// How recently a keyable mic block must have entered WDSP for its output
+    /// IQ to qualify. Direct hardware narrows this alignment window.
+    fn keyable_mic_window(&self) -> Duration {
+        TX_MIC_RECENCY_WINDOW
+    }
+    /// Direct hardware aligns mic qualification to the fixed block entering
+    /// WDSP. P2 retains its established browser-frame qualification point.
+    fn qualify_mic_at_dsp_input(&self) -> bool {
+        false
+    }
+    /// Recreate the native WDSP channel for each arm. Direct XDMA uses this to
+    /// prevent filter/ALC state from one transmission entering the next one.
+    fn recreate_wdsp_on_arm(&self) -> bool {
+        false
+    }
+    /// Direct XDMA cannot tolerate a synchronous WDSP reconfiguration while
+    /// its hardware FIFO is draining. Such changes take effect on next arm.
+    fn defer_model_changes_while_keyed(&self) -> bool {
+        false
+    }
     fn configure_rx_ddc(
         &self,
         ddc_index: u8,
@@ -120,6 +151,45 @@ fn duc_iq_packet_can_key_rf(rf_enabled: bool, peak: f32) -> bool {
 ///  2. Recent mic audio above noise floor (or two-tone mode)
 fn can_key_rf(rf_enabled: bool, iq_peak: f32, mic_recent: bool, two_tone: bool) -> bool {
     duc_iq_packet_can_key_rf(rf_enabled, iq_peak) && (mic_recent || two_tone)
+}
+
+#[derive(Clone, Copy, Debug)]
+struct KeyQualification {
+    required: usize,
+    consecutive: usize,
+}
+
+impl KeyQualification {
+    fn new(required: usize) -> Self {
+        Self {
+            required: required.max(1),
+            consecutive: 0,
+        }
+    }
+
+    fn reset(&mut self) {
+        self.consecutive = 0;
+    }
+
+    fn observe(&mut self, eligible: bool) -> bool {
+        if eligible {
+            self.consecutive = self.consecutive.saturating_add(1).min(self.required);
+        } else {
+            self.reset();
+        }
+        self.consecutive >= self.required
+    }
+}
+
+fn settle_wdsp_tx(wdsp_tx: &mut WdspTxEngine, blocks: usize) {
+    if blocks == 0 {
+        return;
+    }
+    let silence = vec![0.0; TX_MIC_SAMPLES_PER_DSP_BLOCK];
+    for _ in 0..blocks {
+        wdsp_tx.push_mic(&silence);
+    }
+    wdsp_tx.pending_iq.clear();
 }
 
 pub enum TxCommand {
@@ -219,6 +289,10 @@ impl TxState {
     }
 }
 
+fn should_defer_model_change(state: TxState, backend_requires_deferral: bool) -> bool {
+    backend_requires_deferral && state == TxState::Keyed
+}
+
 pub fn spawn(
     session: Arc<dyn TxRadio>,
     radio_model: Arc<Mutex<RadioModel>>,
@@ -286,12 +360,22 @@ fn run(
     let tx_watchdog = tx_watchdog_duration();
     let tx_mic_prefill_samples = tx_mic_prefill_samples();
     let tx_mic_prefill_ms = tx_mic_prefill_samples as f64 / 48.0;
+    let startup_settle_blocks = session.startup_settle_blocks();
+    let keyable_mic_window = session.keyable_mic_window();
+    let qualify_mic_at_dsp_input = session.qualify_mic_at_dsp_input();
+    let recreate_wdsp_on_arm = session.recreate_wdsp_on_arm();
+    let defer_model_changes_while_keyed = session.defer_model_changes_while_keyed();
+    let mut key_qualification = KeyQualification::new(session.key_qualification_packets());
+    let mut logged_keyable_mic_input = false;
 
     println!(
-        "saturn-bridge: TX thread started; watchdog={}s mic_prefill={} samples ({:.1}ms)",
+        "saturn-bridge: TX thread started; watchdog={}s mic_prefill={} samples ({:.1}ms) settle_blocks={} key_qualify_packets={} mic_window={}ms",
         tx_watchdog.as_secs(),
         tx_mic_prefill_samples,
-        tx_mic_prefill_ms
+        tx_mic_prefill_ms,
+        startup_settle_blocks,
+        key_qualification.required,
+        keyable_mic_window.as_millis()
     );
 
     while !stop_flag.load(Ordering::Relaxed) {
@@ -310,6 +394,13 @@ fn run(
                         let now = Instant::now();
                         tx_armed_at = now;
                         last_zero_iq_log_at = now;
+                        if recreate_wdsp_on_arm {
+                            let model = radio_model.lock_unpoisoned();
+                            wdsp_tx.recreate_channel(&model);
+                            println!(
+                                "saturn-bridge: TX native WDSP channel recreated for clean arm"
+                            );
+                        }
                         wdsp_tx.set_active(true);
                         {
                             let model = radio_model.lock_unpoisoned();
@@ -318,6 +409,13 @@ fn run(
                             if let Err(e) = session.send_duc_specific(&model) {
                                 eprintln!("saturn-bridge: TX thread: duc_specific error: {e}");
                             }
+                        }
+                        settle_wdsp_tx(&mut wdsp_tx, startup_settle_blocks);
+                        if startup_settle_blocks != 0 {
+                            println!(
+                                "saturn-bridge: TX startup filters settled with {} zero-input WDSP blocks",
+                                startup_settle_blocks
+                            );
                         }
                         last_mic_audio_at = now;
                         next_mic_dsp_at = now;
@@ -339,6 +437,8 @@ fn run(
                         first_keyable_iq_at = None;
                         keyed_at = None;
                         last_keyable_mic_at = None;
+                        logged_keyable_mic_input = false;
+                        key_qualification.reset();
                         pure_signal_last_sequence = None;
                         pure_signal_last_feedback_at = None;
                         pure_signal_feedback_packets = 0;
@@ -364,6 +464,7 @@ fn run(
                         state = TxState::Idle;
                         rf_enabled = false;
                         two_tone = false;
+                        key_qualification.reset();
                         keepalive_active = false;
                         keepalive_resume_frames = 0;
                         tx_display_buffer.clear();
@@ -379,15 +480,15 @@ fn run(
                     if state != TxState::Idle {
                         let mono = mic_samples_to_mono(samples, channels);
                         let mic_peak = mono.iter().fold(0.0f32, |p, s| p.max(s.abs()));
-                        if mic_peak >= TX_KEY_MIC_PEAK_THRESHOLD {
-                            let was_none = last_keyable_mic_at.is_none();
+                        if mic_peak >= TX_KEY_MIC_PEAK_THRESHOLD && !logged_keyable_mic_input {
+                            logged_keyable_mic_input = true;
+                            println!(
+                                "saturn-bridge: TX mic audio detected (peak={:.4}, threshold={:.4})",
+                                mic_peak, TX_KEY_MIC_PEAK_THRESHOLD
+                            );
+                        }
+                        if mic_peak >= TX_KEY_MIC_PEAK_THRESHOLD && !qualify_mic_at_dsp_input {
                             last_keyable_mic_at = Some(Instant::now());
-                            if was_none {
-                                println!(
-                                    "saturn-bridge: TX mic audio detected (peak={:.4}, threshold={:.4})",
-                                    mic_peak, TX_KEY_MIC_PEAK_THRESHOLD
-                                );
-                            }
                         }
                         for sample in mono.iter().copied() {
                             if pending_mic_samples.len() >= TX_MIC_INPUT_QUEUE_MAX_SAMPLES {
@@ -505,9 +606,13 @@ fn run(
                     did_work = true;
                 }
                 Ok(TxCommand::ModelChanged) => {
-                    let model = radio_model.lock_unpoisoned();
-                    wdsp_tx.sync_model(&model);
-                    two_tone = model.desired.two_tone_enabled;
+                    if should_defer_model_change(state, defer_model_changes_while_keyed) {
+                        println!("saturn-bridge: TX DSP model change deferred until next arm");
+                    } else {
+                        let model = radio_model.lock_unpoisoned();
+                        wdsp_tx.sync_model(&model);
+                        two_tone = model.desired.two_tone_enabled;
+                    }
                     did_work = true;
                 }
                 Ok(TxCommand::Shutdown) => {
@@ -585,6 +690,7 @@ fn run(
             state = TxState::Idle;
             rf_enabled = false;
             two_tone = false;
+            key_qualification.reset();
             keepalive_active = false;
             keepalive_resume_frames = 0;
             tx_display_buffer.clear();
@@ -630,7 +736,16 @@ fn run(
                 if !two_tone && block_underrun {
                     mic_queue_underruns = mic_queue_underruns.saturating_add(1);
                 }
+                let block_peak = block
+                    .iter()
+                    .fold(0.0f32, |current, sample| current.max(sample.abs()));
                 wdsp_tx.push_mic(&block);
+                // Qualify the mic at the point its block enters WDSP, not when
+                // a browser callback happens to arrive. This keeps the gate
+                // aligned with the IQ that WDSP subsequently produces.
+                if qualify_mic_at_dsp_input && block_peak >= TX_KEY_MIC_PEAK_THRESHOLD {
+                    last_keyable_mic_at = Some(Instant::now());
+                }
                 next_mic_dsp_at += mic_block_period;
                 sent += 1;
             }
@@ -696,7 +811,7 @@ fn run(
                     );
 
                     let mic_recent = last_keyable_mic_at
-                        .map(|t| t.elapsed() < TX_MIC_RECENCY_WINDOW)
+                        .map(|t| t.elapsed() < keyable_mic_window)
                         .unwrap_or(false);
 
                     if !rf_enabled {
@@ -723,18 +838,22 @@ fn run(
 
                     // Gate RF keying on BOTH conditions:
                     //  1. WDSP IQ output exceeds keying threshold (non-zero signal)
-                    //  2. Recent mic audio above noise floor (within TX_MIC_RECENCY_WINDOW)
+                    //  2. A recently processed mic block above the noise floor
+                    //  3. The backend's required number of consecutive
+                    //     eligible packets (direct XDMA rejects transients)
                     // This prevents keying from WDSP residual filter state or
                     // AMSQ gate leakage when the operator is not speaking.
                     // Two-tone bypasses the mic check since it generates signal
                     // internally via PostGen.
                     let can_key = can_key_rf(rf_enabled, peak, mic_recent, two_tone);
-                    if !can_key {
+                    let key_is_qualified = key_qualification.observe(can_key);
+                    if !key_is_qualified {
                         if last_zero_iq_log_at.elapsed() >= TX_ZERO_IQ_LOG_INTERVAL {
                             let diag = wdsp_tx.diagnostics();
                             println!(
-                            "saturn-bridge: TX armed; waiting for mic+IQ packet_peak={:.4} input_peak={:.4} output_peak={:.4} wdsp_out_pk={:.1}dB mic_recent={} iq_keyable={}",
-                            peak, diag.input_peak, diag.output_peak, diag.out_peak_db, mic_recent, iq_is_keyable
+                            "saturn-bridge: TX armed; waiting for qualified mic+IQ packet_peak={:.4} input_peak={:.4} output_peak={:.4} wdsp_out_pk={:.1}dB mic_recent={} iq_keyable={} consecutive={}/{}",
+                            peak, diag.input_peak, diag.output_peak, diag.out_peak_db, mic_recent, iq_is_keyable,
+                            key_qualification.consecutive, key_qualification.required
                         );
                             last_zero_iq_log_at = Instant::now();
                         }
@@ -842,6 +961,7 @@ fn run(
                 state = TxState::Idle;
                 rf_enabled = false;
                 two_tone = false;
+                key_qualification.reset();
                 pending_mic_samples.clear();
                 wdsp_tx.pending_iq.clear();
                 println!("saturn-bridge: TX output fault forced receive state");
@@ -850,7 +970,7 @@ fn run(
 
         if state != TxState::Idle && last_diag_event_at.elapsed() >= Duration::from_secs(1) {
             let mic_recent = last_keyable_mic_at
-                .map(|t| t.elapsed() < TX_MIC_RECENCY_WINDOW)
+                .map(|t| t.elapsed() < keyable_mic_window)
                 .unwrap_or(false);
             publish_tx_diagnostics(
                 &event_tx,
@@ -1125,6 +1245,34 @@ mod tests {
 
         // IQ above threshold + both — key
         assert!(can_key_rf(true, iq_hi, true, true));
+    }
+
+    #[test]
+    fn key_qualification_requires_consecutive_eligible_packets() {
+        let mut qualification = KeyQualification::new(3);
+        assert!(!qualification.observe(true));
+        assert!(!qualification.observe(true));
+        assert!(!qualification.observe(false));
+        assert_eq!(qualification.consecutive, 0);
+        assert!(!qualification.observe(true));
+        assert!(!qualification.observe(true));
+        assert!(qualification.observe(true));
+        assert!(qualification.observe(true));
+    }
+
+    #[test]
+    fn key_qualification_clamps_zero_requirement_to_one() {
+        let mut qualification = KeyQualification::new(0);
+        assert_eq!(qualification.required, 1);
+        assert!(qualification.observe(true));
+    }
+
+    #[test]
+    fn direct_model_changes_are_deferred_only_while_keyed() {
+        assert!(!should_defer_model_change(TxState::Idle, true));
+        assert!(!should_defer_model_change(TxState::Armed, true));
+        assert!(should_defer_model_change(TxState::Keyed, true));
+        assert!(!should_defer_model_change(TxState::Keyed, false));
     }
 
     #[test]

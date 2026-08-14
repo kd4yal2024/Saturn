@@ -962,6 +962,7 @@ const CFC_FREQS: [f64; 10] = [
 
 pub struct WdspTxEngine {
     channel_id: i32,
+    channel_open: bool,
     mode: DemodMode,
     mic_gain_db: f64,
     filter_low_hz: i32,
@@ -1033,6 +1034,7 @@ impl WdspTxEngine {
     pub fn new(model: &RadioModel) -> Self {
         let mut engine = Self {
             channel_id: WDSP_TX_CHANNEL,
+            channel_open: false,
             mode: model.desired.mode,
             mic_gain_db: model.desired.tx_mic_gain_db,
             filter_low_hz: model.desired.tx_filter_low_hz,
@@ -1166,7 +1168,23 @@ impl WdspTxEngine {
             SetPSMox(self.channel_id, 0);
             SetPSControl(self.channel_id, 1, 0, 0, 0);
         }
+        self.channel_open = true;
         self.apply_pure_signal_enabled(self.pure_signal_enabled);
+    }
+
+    /// Fully close and recreate the native TX channel. This is stronger than
+    /// clearing Rust-side queues: WDSP filters, delay lines, meters, and ALC
+    /// state live behind the FFI boundary and otherwise survive an MOX cycle.
+    pub fn recreate_channel(&mut self, model: &RadioModel) {
+        if self.channel_open {
+            unsafe {
+                CloseChannel(self.channel_id);
+            }
+            self.channel_open = false;
+        }
+        // `channel_open` is false before assignment, so dropping the old Rust
+        // value cannot close the newly opened replacement channel.
+        *self = Self::new(model);
     }
 
     pub fn sync_model(&mut self, model: &RadioModel) {
@@ -1619,8 +1637,11 @@ fn signed_two_tone_freqs(
 
 impl Drop for WdspTxEngine {
     fn drop(&mut self) {
-        unsafe {
-            CloseChannel(self.channel_id);
+        if self.channel_open {
+            unsafe {
+                CloseChannel(self.channel_id);
+            }
+            self.channel_open = false;
         }
     }
 }
@@ -1784,5 +1805,20 @@ mod tests {
 
         assert_ne!(status.state, PureSignalState::Off);
         engine.set_puresignal_mox(false);
+
+        model.desired.pure_signal_enabled = false;
+        engine.recreate_channel(&model);
+        assert!(!engine.is_active());
+        engine.set_active(true);
+        engine.push_mic(&vec![0.0; super::TX_MIC_SAMPLES_PER_DSP_BLOCK]);
+        let restarted = engine.diagnostics();
+        assert_eq!(
+            restarted.total_input_samples,
+            super::TX_MIC_SAMPLES_PER_DSP_BLOCK as u64
+        );
+        assert_eq!(
+            restarted.total_output_pairs,
+            super::WDSP_TX_OUTPUT_SAMPLES as u64
+        );
     }
 }

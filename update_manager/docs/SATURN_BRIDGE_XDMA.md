@@ -681,6 +681,51 @@ fail-fast runtime fault. The DUC's single expected empty-stream startup
 underflow is likewise cleared after verified prefill; all later DUC FIFO
 conditions remain fatal.
 
+Field key-up testing on 2026-08-13 exposed a timing assumption in that DUC
+prefill: 3,039 words remained after the nominal fixed write, below the
+3,240-word keying floor. Production prefill now reads live FIFO occupancy and
+closes the measured deficit in bounded H2C batches before appending the first
+live IQ frame. It still fails closed on overflow, threshold, post-startup
+underflow, an exhausted retry bound, or insufficient final occupancy.
+
+The direct backend also flushes four zero-input WDSP blocks at each arm and
+requires eight consecutive IQ packets backed by a recently processed mic block
+before MOX. These direct-only qualifications reject retained filter transients
+without changing P2app's established TX behavior. Key readback now verifies the
+DUC phase word and logs carrier, mode, filter edges, Q/I packing, and FIFO
+occupancy. Any reported opposite-sideband offset must be reproduced with the
+locked 1 kHz tone before changing IQ packing; the production path remains the
+P2-compatible Q-then-I network-order contract.
+
+Follow-up field testing on 2026-08-14 isolated the remaining alternating-key
+static. The first clean transmission received a Voodoo profile update while
+keyed and then failed closed on a DUC underflow. A later arm reported WDSP
+output peak `0.5318` with zero input, proving that native filter/ALC state had
+survived the prior MOX cycle. Direct XDMA now closes and recreates the native
+WDSP TX channel on every arm, defers TX DSP model changes received while keyed
+until the next arm, and targets 3,420 prefill words before the first live frame
+to retain both underflow margin and FIFO ceiling headroom. P2 retains its
+existing channel lifecycle and live model-update behavior.
+
+A subsequent direct-backend A/B test produced a clear first key-up and static
+on the second despite identical carrier/filter readback, clean browser mic
+sequencing, and healthy DUC FIFO occupancy. The remaining startup difference
+from P2_app was the FPGA's 64-to-48-bit DUC multiplexer: P2 disables and pulses
+that mux reset before resetting the FIFO, while the direct path had reset only
+the FIFO. Direct XDMA now performs the complete P2-proven mux/FIFO reset
+sequence on every arm and refuses to key if readback reports mux reset or IQ
+deinterleave still asserted.
+
+The post-fix field retest on 2026-08-14 completed four consecutive Voodoo 3.8k
+voice transmissions at 7.210 MHz with clear received audio and no recurrence
+of static. All four arms recreated and settled WDSP, keyed with identical LSB
+carrier/filter/phase/Q-I readback, and returned safely to RX. Browser mic input
+and the Bridge mic queue had no gaps or underruns; the DUC FIFO remained between
+1,694 and 3,737 words with zero runtime FIFO faults, while RX reported zero
+header errors or resynchronizations. The four recorded DUC startup underflows
+were the expected sticky empty-FIFO indications cleared during the four
+deliberate reset/prefill cycles.
+
 The operator-approved production RF run on 2026-08-11 passed on a 50-ohm dummy
 load. A 1 kHz TCI microphone tone keyed for 2.5 seconds at the 3 W drive target:
 

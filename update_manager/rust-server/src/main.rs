@@ -1573,10 +1573,14 @@ fn xdma_operational_snapshot() -> serde_json::Value {
     xdma_structured_snapshot(XDMA_OPERATIONAL_READY_FILE)
 }
 
-const RADIO_BACKEND_SWITCH_HELPER: &str = "saturn-radio-backend-switch-root.sh";
+const RADIO_BACKEND_SWITCH_HELPER: &str =
+    "/usr/local/lib/saturn-go/scripts/saturn-radio-backend-switch-root.sh";
 
-async fn invoke_radio_backend_helper(state: &AppState, args: &[&str]) -> Result<String, String> {
-    let helper = state.scripts_dir.join(RADIO_BACKEND_SWITCH_HELPER);
+async fn invoke_radio_backend_helper(_state: &AppState, args: &[&str]) -> Result<String, String> {
+    // This helper is intentionally root-owned and has a matching absolute
+    // sudoers entry. The mutable web-script mirror under /opt/saturn-go is not
+    // an authorized privilege boundary and must never be selected here.
+    let helper = PathBuf::from(RADIO_BACKEND_SWITCH_HELPER);
     if !helper.is_file() {
         return Err(format!(
             "radio backend helper is missing: {}",
@@ -4147,7 +4151,7 @@ mod tests {
         append_script_run_log_line, begin_script_run_log, bind_addr_is_loopback,
         disk_imaging_disabled, parse_xdma_interrupts_text, script_deadline_seconds,
         script_run_log_slot, systemd_environment_value, with_request_limit,
-        xdma_operational_is_ready,
+        xdma_operational_is_ready, RADIO_BACKEND_SWITCH_HELPER,
     };
     use axum::{
         body::{Body, Bytes},
@@ -4164,6 +4168,14 @@ mod tests {
 
     async fn consume_request_body(_body: Bytes) -> StatusCode {
         StatusCode::NO_CONTENT
+    }
+
+    #[test]
+    fn radio_backend_switch_uses_root_owned_privileged_helper() {
+        assert_eq!(
+            RADIO_BACKEND_SWITCH_HELPER,
+            "/usr/local/lib/saturn-go/scripts/saturn-radio-backend-switch-root.sh"
+        );
     }
 
     #[test]
