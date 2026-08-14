@@ -296,7 +296,8 @@ shared-device warning and recovery procedure in the Operations Runbook.
 
 - Dedicated page `/deskhpsdr` runs the deskHPSDR update/build workflow with live terminal output and buffered resume via `/run` + `/run_log`.
 - If `~/github/deskhpsdr` does not exist and `--skip-git` is not selected, the updater clones `https://github.com/dl1bz/deskhpsdr.git` before building.
-- If the checkout already exists and `--skip-git` is not selected, the updater pulls `origin/<current-branch>` using `--ff-only` and auto-stashes local changes first when needed.
+- If the checkout already exists and `--skip-git` is not selected, the updater pulls `origin/<current-branch>` using `--ff-only` and auto-stashes local changes first when needed. A normal run also returns a checkout left detached by the legacy GPIO channel to `master`.
+- `--legacy-gpio` selects the pinned upstream deskHPSDR `2.6.84` tag and requires Saturn's Trixie/libgpiod-v2 compatibility patch for first-generation direct-GPIO Controller1/Controller2-V1 panels. Clear the option and run normally to return to current upstream deskHPSDR.
 - The build step delegates to the active Saturn repo-root helper script:
   - `scripts/deskhpsdr-test-build-on-current-image.sh --repo ~/github/deskhpsdr`
 - When dependency installation is enabled, the build helper installs Debian
@@ -310,9 +311,9 @@ shared-device warning and recovery procedure in the Operations Runbook.
   already-applied patches are accepted.
 - Successful builds install direct `Type=Application` launchers under both
   `~/.local/share/applications` and `~/Desktop`.
-- The helper build probe now forces `GPIO=ON` and `SATURN=ON`, which keeps the Trixie/libgpiod v2 compatibility fix active in web-driven updates.
+- The helper build probe forces `GPIO=ON` whenever the selected source still has GPIO support and always forces `SATURN=ON`. In `--legacy-gpio` mode it also verifies the final binary advertises the `GPIO` build option.
 - UI run options map to script flags:
-  - `--skip-git`, `-y`, `-n`, `--no-install-deps`, `--no-clean`, `--no-desktop-shortcut`, `--dry-run`, `--verbose`
+  - `--skip-git`, `--legacy-gpio`, `-y`, `-n`, `--no-install-deps`, `--no-clean`, `--no-desktop-shortcut`, `--dry-run`, `--verbose`
 - The updater resolves helper scripts from the active backend repo root (`SATURN_REPO_ROOT` / `SATURN_ACTIVE_REPO_ROOT`), so it stays aligned with the currently selected Saturn checkout.
 - On a fresh image, do not select `--skip-git`; otherwise the updater will fail because there is no local `~/github/deskhpsdr` checkout to build.
 

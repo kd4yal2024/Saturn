@@ -44,6 +44,11 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
   `/dev/xdma0_user` after a new login or reboot.
 
 ### Added
+- Added an explicit deskHPSDR legacy GPIO V1 channel for Debian Trixie. The
+  updater pins upstream `2.6.84`, applies Saturn's libgpiod-v2 port, requires
+  the legacy controller source, verifies GPIO is present in the built binary,
+  and can return the checkout to the current upstream channel on the next
+  normal run.
 - Added a built-in Saturn Remote **Voodoo 3.8k** TX audio profile with a true
   50-3850 Hz passband, warm restrained EQ/CFC curves, microphone headroom, and
   one-click application that never changes drive, tuning, PTT/MOX, or RF state.

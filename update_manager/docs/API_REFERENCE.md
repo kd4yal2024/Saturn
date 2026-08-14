@@ -353,7 +353,7 @@ Update-activity behavior for `/run`:
   - `SATURN_SATURNGO_POLICY_URL`
   - `SATURN_SATURNGO_DEPLOY_STATUS_FILE`
 - `p23-app-manager.sh` (advanced Radio Telemetry service-lab workflow) uses the active repo-root env (`SATURN_ACTIVE_REPO_ROOT`) and runs privileged deploy/restart actions via `sudo -n` when not root.
-- `update-deskhpsdr.py` uses the active repo-root env to find `scripts/deskhpsdr-test-build-on-current-image.sh`, clones/pulls `~/github/deskhpsdr` unless `--skip-git` is set, then runs the helper-script build flow with the selected flags.
+- `update-deskhpsdr.py` uses the active repo-root env to find `scripts/deskhpsdr-test-build-on-current-image.sh`, clones/pulls `~/github/deskhpsdr` unless `--skip-git` is set, then runs the helper-script build flow with the selected flags. `--legacy-gpio` instead selects the pinned upstream `2.6.84` tag and requires the Saturn libgpiod-v2 V1 controller patch.
 - `scripts/deskhpsdr-test-build-on-current-image.sh` always applies the
   idempotent `scripts/patches/deskhpsdr-active-receiver-init.patch` startup
   guard. It applies `deskhpsdr-libgpiod-v2.patch` only to older checkouts that
