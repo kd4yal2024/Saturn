@@ -652,7 +652,28 @@ pub(crate) fn handle_incoming_message(
                         let _ = command_tx.send(TciCommand::MicAudioFrame(frame));
                     }
                     Err(TciMicFrameParseError::NotMicFrame) => {}
-                    Err(_) => {
+                    Err(error) => {
+                        let incoming_codec = parse_tci_mic_frame_parts(&data)
+                            .ok()
+                            .map(|parts| parts.codec);
+                        eprintln!(
+                            "saturn-bridge: TCI client {client_id} TX mic decode error: {error:?} incoming_codec={incoming_codec:?}"
+                        );
+                        match recover_client_tx_codec_to_pcm(clients, client_id, incoming_codec) {
+                            TxCodecDecodeRecovery::FallbackToPcm => {
+                                println!(
+                                    "saturn-bridge: TCI client {client_id} TX codec fell back to PCM after Opus decode error"
+                                );
+                                send_safety_text_to_client_or_control(
+                                    clients,
+                                    client_id,
+                                    tx_codec_accept_message(TxMicCodec::Pcm),
+                                );
+                                return true;
+                            }
+                            TxCodecDecodeRecovery::IgnorePendingOpus => return true,
+                            TxCodecDecodeRecovery::None => {}
+                        }
                         let action = record_client_tx_codec_decode_error(clients, client_id);
                         if action.force_rx {
                             send_safety_text_to_client_or_control(
@@ -834,6 +855,75 @@ pub(crate) fn set_client_tx_codec_caps(
         }
     }
     selected
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum TxCodecDecodeRecovery {
+    None,
+    FallbackToPcm,
+    IgnorePendingOpus,
+}
+
+/// Recover an Opus uplink without aborting an armed TX attempt.  Split control
+/// and media lanes are independent TCP streams, and a corrupted or reordered
+/// first Opus packet must not turn into ten decode errors and a forced RX.
+/// When PCM was advertised, atomically downgrade both paired lanes and tell the
+/// browser to continue with PCM.  Already queued Opus chunks are ignored until
+/// the browser observes the acceptance message.
+pub(crate) fn recover_client_tx_codec_to_pcm(
+    clients: &ClientRegistry,
+    client_id: u64,
+    incoming_codec: Option<TxMicCodec>,
+) -> TxCodecDecodeRecovery {
+    if !matches!(
+        incoming_codec,
+        Some(TxMicCodec::OpusNb | TxMicCodec::OpusWb)
+    ) {
+        return TxCodecDecodeRecovery::None;
+    }
+
+    let mut clients = clients.lock_unpoisoned();
+    let Some(client) = clients.get(&client_id) else {
+        return TxCodecDecodeRecovery::None;
+    };
+    if client.state.tx_codec_active == TxMicCodec::Pcm {
+        // Before the control lane's capability command is applied, the media
+        // lane still owns its safe default PCM decoder.  Drop an early Opus
+        // chunk and let negotiation catch up instead of counting a split-lane
+        // ordering race as a codec failure.  The same rule drains chunks that
+        // WebCodecs had already queued before a PCM fallback.
+        if client.state.tx_codec_negotiated_at.is_none() || client.state.tx_codec_degraded {
+            return TxCodecDecodeRecovery::IgnorePendingOpus;
+        }
+        return TxCodecDecodeRecovery::None;
+    }
+    if !client.state.tx_codec_caps.contains(&TxMicCodec::Pcm) {
+        return TxCodecDecodeRecovery::None;
+    }
+
+    let mut affected = vec![client_id];
+    if let Some(metadata) = client.state.split.as_ref() {
+        if let Some(pair) = split_session_pair_in_clients(&clients, &metadata.session_id) {
+            let paired_id = if pair.control_client_id == client_id {
+                pair.media_client_id
+            } else {
+                pair.control_client_id
+            };
+            if paired_id != client_id {
+                affected.push(paired_id);
+            }
+        }
+    }
+
+    let now = Instant::now();
+    for affected_id in affected {
+        if let Some(affected_client) = clients.get_mut(&affected_id) {
+            let caps = affected_client.state.tx_codec_caps.clone();
+            reset_client_tx_codec_state(affected_client, caps, Some(TxMicCodec::Pcm), now);
+            affected_client.state.tx_codec_degraded = true;
+        }
+    }
+    TxCodecDecodeRecovery::FallbackToPcm
 }
 
 pub(crate) fn send_text_to_client(clients: &ClientRegistry, client_id: u64, text: String) {

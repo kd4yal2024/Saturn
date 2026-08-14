@@ -4,6 +4,27 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
 
 ## [Unreleased]
 ### Changed
+- Advanced the opt-in direct-XDMA backend to a validated 384 kHz DDC6/ADC1
+  receive stream. The optimized split-proxy appliance acceptance sustained
+  383,321 IQ pairs/second, completed five independent RF-inhibited TX cycles
+  under a verified SCHED_FIFO priority-20 producer with zero FIFO faults, and
+  persisted the receive-safe passing record. Acceptance now requires the
+  operator lease, keeps control heartbeats alive while armed, and measures the
+  RX-rate gate only after the final half-duplex TX release.
+- Run the direct-XDMA TX producer at FIFO priority 21, one level above the
+  shared priority-20 XDMA completion kthread. Live RF diagnostics showed that
+  equal-priority completion work could delay an awakened H2C writer by 6--10
+  ms while continuous C2H completions were serviced, eventually draining the
+  DUC FIFO; the installed service now grants `LimitRTPRIO=21`.
+- Batch up to eight consecutive, distinct direct-XDMA DUC IQ frames while
+  preserving three-frame FIFO ceiling headroom. Pacing writes the largest safe
+  partial batch immediately instead of draining the FIFO until the whole batch
+  fits. This amortizes synchronous transfer latency without creating a polling
+  underflow window; RF-inhibited staging uses the same path so repeated-key
+  acceptance covers the correction before live RF use. The installed bridge
+  subsequently completed four clear live Voodoo 3.8k voice transmissions with
+  four sessions started/completed, 12,256 DUC frames, four mux resets, and zero
+  FIFO faults.
 - Release builds can now select a remote branch or tag, resolve it to one
   immutable commit, detect movement before staging, and build from a detached
   worktree. Schema-v3 manifests record the source remote, requested ref,
@@ -38,6 +59,17 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
   `/tmp` tmpfs. Oversized ordinary requests fail early with HTTP 413.
 
 ### Fixed
+- Made live direct-XDMA TX recover from a low but nonempty DUC FIFO instead of
+  forcing receive before the FPGA reports an underflow. A 384 kHz field run
+  reached 230 words with the underflow, overflow, and threshold flags all
+  clear; the producer now performs its immediately pending refill while the
+  existing latched hardware-fault and receive-safe shutdown gates remain in
+  force.
+- Made split-lane Opus startup fail over atomically to PCM. A malformed,
+  corrupted, or reordered Opus packet now resets the paired control/media
+  decoder state, notifies Saturn Remote to continue in PCM, ignores already
+  queued Opus chunks during the handoff, and keeps an armed TX attempt from
+  being cancelled by the codec decode-error threshold.
 - Provisioning and direct udev/P2 installers now add the configured desktop
   operator to `saturn-radio`. This preserves group-restricted XDMA device
   permissions while allowing locally launched piHPSDR and deskHPSDR to open

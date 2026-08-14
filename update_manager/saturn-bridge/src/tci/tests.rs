@@ -1269,6 +1269,151 @@ fn media_lane_decodes_opus_mic_frame_when_runtime_flag_enabled() {
 }
 
 #[test]
+fn split_opus_decode_failure_falls_back_both_lanes_to_pcm_without_forcing_rx() {
+    let (tx, rx) = mpsc::channel();
+    let mut clients_map = BTreeMap::new();
+    for client_id in [73, 74] {
+        clients_map.insert(
+            client_id,
+            ClientConnection {
+                outbound: ClientOutbound::new(),
+                state: ClientState::with_tx_codec_runtime_flags(TxCodecRuntimeFlags {
+                    opus_decode_enabled: true,
+                }),
+            },
+        );
+    }
+    let clients = Arc::new(Mutex::new(clients_map));
+    let operator_client_id = Arc::new(AtomicU64::new(73));
+    let operator_control_at = Arc::new(Mutex::new(None));
+
+    parse_tci_command(
+        "session_lane:codec-fallback,control;",
+        &tx,
+        &clients,
+        73,
+        true,
+    );
+    parse_tci_command(
+        "session_lane:codec-fallback,media;",
+        &tx,
+        &clients,
+        74,
+        false,
+    );
+    while rx.try_recv().is_ok() {}
+    parse_tci_command("tx_codec_caps:0,opus_wb,pcm;", &tx, &clients, 73, true);
+
+    let mut bad_opus = vec![0u8; 66];
+    write_u32_le(&mut bad_opus, 4, 48_000);
+    write_u32_le(&mut bad_opus, 8, TX_SAMPLE_TYPE_S16);
+    write_u32_le(
+        &mut bad_opus,
+        20,
+        TX_OPUS_DECODE_OUTPUT_FRAME_SAMPLES as u32,
+    );
+    write_u32_le(&mut bad_opus, 24, 2);
+    write_u32_le(&mut bad_opus, 28, 1);
+    write_u32_le(&mut bad_opus, 32, 1);
+    write_u32_le(&mut bad_opus, 36, TX_MIC_CODEC_OPUS_WB_ID);
+    write_u32_le(&mut bad_opus, 40, 2);
+    bad_opus[64..].copy_from_slice(&[0xff, 0xff]);
+
+    assert!(handle_incoming_message(
+        Message::Binary(bad_opus.clone().into()),
+        &tx,
+        &clients,
+        &operator_client_id,
+        &operator_control_at,
+        74,
+    ));
+    assert!(rx.try_recv().is_err());
+
+    let control_outbound = {
+        let clients = clients.lock_unpoisoned();
+        for client_id in [73, 74] {
+            let state = &clients.get(&client_id).unwrap().state;
+            assert_eq!(state.tx_codec_active, TxMicCodec::Pcm);
+            assert!(state.tx_codec_degraded);
+        }
+        clients.get(&73).unwrap().outbound.clone()
+    };
+    let mut saw_pcm_accept = false;
+    while let Some(message) = control_outbound.next_message(true) {
+        if matches!(message.message, OutboundMessage::SafetyText(ref text) if text == "tx_codec_accept:0,pcm;")
+        {
+            saw_pcm_accept = true;
+        }
+    }
+    assert!(saw_pcm_accept);
+
+    // An Opus chunk already queued by WebCodecs is ignored during the handoff.
+    assert!(handle_incoming_message(
+        Message::Binary(bad_opus.into()),
+        &tx,
+        &clients,
+        &operator_client_id,
+        &operator_control_at,
+        74,
+    ));
+    assert!(rx.try_recv().is_err());
+}
+
+#[test]
+fn split_media_ignores_opus_that_arrives_before_control_lane_negotiation() {
+    let (tx, rx) = mpsc::channel();
+    let mut clients_map = BTreeMap::new();
+    for client_id in [73, 74] {
+        clients_map.insert(
+            client_id,
+            ClientConnection {
+                outbound: ClientOutbound::new(),
+                state: ClientState::with_tx_codec_runtime_flags(TxCodecRuntimeFlags {
+                    opus_decode_enabled: true,
+                }),
+            },
+        );
+    }
+    let clients = Arc::new(Mutex::new(clients_map));
+    let operator_client_id = Arc::new(AtomicU64::new(73));
+    let operator_control_at = Arc::new(Mutex::new(None));
+    parse_tci_command("session_lane:codec-race,control;", &tx, &clients, 73, true);
+    parse_tci_command("session_lane:codec-race,media;", &tx, &clients, 74, false);
+    while rx.try_recv().is_ok() {}
+
+    let mut early_opus = vec![0u8; 66];
+    write_u32_le(&mut early_opus, 4, 48_000);
+    write_u32_le(&mut early_opus, 8, TX_SAMPLE_TYPE_S16);
+    write_u32_le(
+        &mut early_opus,
+        20,
+        TX_OPUS_DECODE_OUTPUT_FRAME_SAMPLES as u32,
+    );
+    write_u32_le(&mut early_opus, 24, 2);
+    write_u32_le(&mut early_opus, 28, 1);
+    write_u32_le(&mut early_opus, 36, TX_MIC_CODEC_OPUS_WB_ID);
+    write_u32_le(&mut early_opus, 40, 2);
+    early_opus[64..].copy_from_slice(&[0xff, 0xff]);
+
+    for _ in 0..TX_CODEC_DECODE_ERROR_FORCE_RX_LIMIT {
+        assert!(handle_incoming_message(
+            Message::Binary(early_opus.clone().into()),
+            &tx,
+            &clients,
+            &operator_client_id,
+            &operator_control_at,
+            74,
+        ));
+    }
+    assert!(rx.try_recv().is_err());
+    let clients = clients.lock_unpoisoned();
+    let media = &clients.get(&74).unwrap().state;
+    assert_eq!(media.tx_codec_active, TxMicCodec::Pcm);
+    assert_eq!(media.tx_codec_decode_error_count, 0);
+    assert!(!media.tx_codec_degraded);
+}
+
+#[test]
 fn split_unpaired_media_socket_cannot_supply_mic_binary() {
     let (tx, rx) = mpsc::channel();
     let clients = test_client_registry(81);

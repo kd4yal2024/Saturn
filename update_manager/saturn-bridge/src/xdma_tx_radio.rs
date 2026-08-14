@@ -58,10 +58,17 @@ const DUC_PREFILL_MINIMUM_WORDS: usize = 18 * DUC_FIFO_WORDS_PER_FRAME;
 const DUC_PREFILL_TARGET_WORDS: usize = 19 * DUC_FIFO_WORDS_PER_FRAME;
 const DUC_PREFILL_MAX_ATTEMPTS: usize = 8;
 const DUC_MAX_DMA_BATCH_FRAMES: usize = 11;
+const DIRECT_TX_STEADY_BATCH_FRAMES: usize = 8;
 const DUC_PREFILL_DMA_SETTLE: Duration = Duration::from_micros(500);
 const DUC_FIFO_PACING_POLL: Duration = Duration::from_micros(100);
-const DUC_FIFO_PACING_POLLS: usize = 20;
+const DUC_FIFO_PACING_POLLS: usize = 200;
 const DUC_FIFO_WRITE_HEADROOM_FRAMES: usize = 3;
+// The shared XDMA completion kthread runs at FIFO priority 20.  The producer
+// must be one level higher so that, once an H2C completion wakes it, a busy
+// completion thread servicing continuous C2H traffic cannot defer its return
+// to userspace long enough to drain the DUC FIFO.
+const XDMA_COMPLETION_RT_PRIORITY: i32 = 20;
+const DIRECT_TX_RT_PRIORITY: i32 = XDMA_COMPLETION_RT_PRIORITY + 1;
 const DMA_BUFFER_BYTES: usize = DUC_MAX_DMA_BATCH_FRAMES * DUC_FRAME_BYTES;
 const INITIAL_MAX_WATTS: u8 = 3;
 const REVERSE_POWER_TRIP_WATTS: f32 = 0.75;
@@ -287,13 +294,28 @@ impl DirectTxState {
         Ok(())
     }
 
-    fn stage_frame(&mut self, model: &RadioModel, iq: &[f32]) -> Result<(), XdmaError> {
+    fn stage_frame_batch(&mut self, model: &RadioModel, iq: &[f32]) -> Result<(), XdmaError> {
+        if iq.is_empty() || !iq.len().is_multiple_of(DUC_FRAME_IQ_FLOATS) {
+            return Err(XdmaError::Incompatible(format!(
+                "invalid RF-disabled production DUC batch: floats={} frame_floats={DUC_FRAME_IQ_FLOATS}",
+                iq.len()
+            )));
+        }
+        let frames = iq.len() / DUC_FRAME_IQ_FLOATS;
+        if frames > DUC_MAX_DMA_BATCH_FRAMES {
+            return Err(XdmaError::Incompatible(format!(
+                "RF-disabled production DUC batch exceeds DMA buffer: frames={frames} maximum={DUC_MAX_DMA_BATCH_FRAMES}"
+            )));
+        }
         if !self.stream_active {
             self.configure_stream(model)?;
-            self.prefill_frame(iq)?;
+            let (first, remaining) = iq.split_at(DUC_FRAME_IQ_FLOATS);
+            self.prefill_frame(first)?;
+            if !remaining.is_empty() {
+                self.write_frame_batch_paced(remaining, true)?;
+            }
         } else {
-            self.wait_for_fifo_write_window(true)?;
-            self.write_repeated_frame(iq, 1)?;
+            self.write_frame_batch_paced(iq, true)?;
         }
         Ok(())
     }
@@ -439,6 +461,76 @@ impl DirectTxState {
         self.write_buffer(bytes, frames)
     }
 
+    fn write_frame_batch(&mut self, iq: &[f32]) -> Result<(), XdmaError> {
+        if iq.is_empty() || !iq.len().is_multiple_of(DUC_FRAME_IQ_FLOATS) {
+            return Err(XdmaError::Incompatible(format!(
+                "invalid production DUC batch: floats={} frame_floats={DUC_FRAME_IQ_FLOATS}",
+                iq.len()
+            )));
+        }
+        let frames = iq.len() / DUC_FRAME_IQ_FLOATS;
+        if frames > DUC_MAX_DMA_BATCH_FRAMES {
+            return Err(XdmaError::Incompatible(format!(
+                "production DUC batch exceeds DMA buffer: frames={frames} maximum={DUC_MAX_DMA_BATCH_FRAMES}"
+            )));
+        }
+        let bytes = frames * DUC_FRAME_BYTES;
+        let buffer = self.buffer.as_mut_slice(bytes);
+        encode_iq_batch(buffer, iq);
+        self.write_buffer(bytes, frames)
+    }
+
+    fn write_frame_batch_paced(
+        &mut self,
+        iq: &[f32],
+        underflow_is_fault: bool,
+    ) -> Result<(), XdmaError> {
+        if iq.is_empty() || !iq.len().is_multiple_of(DUC_FRAME_IQ_FLOATS) {
+            return Err(XdmaError::Incompatible(format!(
+                "invalid paced production DUC batch: floats={} frame_floats={DUC_FRAME_IQ_FLOATS}",
+                iq.len()
+            )));
+        }
+        let requested_frames = iq.len() / DUC_FRAME_IQ_FLOATS;
+        if requested_frames > DUC_MAX_DMA_BATCH_FRAMES {
+            return Err(XdmaError::Incompatible(format!(
+                "paced production DUC batch exceeds DMA buffer: frames={requested_frames} maximum={DUC_MAX_DMA_BATCH_FRAMES}"
+            )));
+        }
+
+        let mut sent_frames = 0usize;
+        let mut polls_without_progress = 0usize;
+        while sent_frames < requested_frames {
+            let fifo = self.observe_fifo(underflow_is_fault)?;
+            let remaining_frames = requested_frames - sent_frames;
+            let frames = fifo_batch_frames_available(
+                self.fifo_depth_words,
+                fifo.occupied_words,
+                remaining_frames,
+            );
+            if frames == 0 {
+                if polls_without_progress >= DUC_FIFO_PACING_POLLS {
+                    self.fifo_faults = self.fifo_faults.saturating_add(1);
+                    let _ = self.shutdown();
+                    return Err(XdmaError::Incompatible(format!(
+                        "production DUC FIFO pacing timeout: words={} remaining_frames={remaining_frames}",
+                        fifo.occupied_words
+                    )));
+                }
+                thread::sleep(DUC_FIFO_PACING_POLL);
+                polls_without_progress += 1;
+                continue;
+            }
+
+            let start = sent_frames * DUC_FRAME_IQ_FLOATS;
+            let end = start + frames * DUC_FRAME_IQ_FLOATS;
+            self.write_frame_batch(&iq[start..end])?;
+            sent_frames += frames;
+            polls_without_progress = 0;
+        }
+        Ok(())
+    }
+
     fn write_zero_frames(&mut self, frames: usize) -> Result<(), XdmaError> {
         if frames == 0 || frames > DUC_MAX_DMA_BATCH_FRAMES {
             return Err(XdmaError::Incompatible(format!(
@@ -560,10 +652,13 @@ impl DirectTxState {
         self.fifo_lwm = self.fifo_lwm.min(fifo.occupied_words);
         self.fifo_hwm = self.fifo_hwm.max(fifo.occupied_words);
         self.observe_session_fifo(fifo.occupied_words);
-        let faulted = fifo.overflow
-            || fifo.over_threshold
-            || (underflow_is_fault && fifo.underflow)
-            || (self.keyed && fifo.occupied_words <= 2 * DUC_FIFO_WORDS_PER_FRAME);
+        // A low but non-empty FIFO is recoverable: the cadence loop may be
+        // catching up after a bounded scheduler/driver delay and this call is
+        // immediately followed by a write.  Treat only the FPGA's latched
+        // fault bits as fatal.  The former two-frame occupancy guard could
+        // force RX at 230 words even though the underflow bit was clear,
+        // turning a recoverable refill into an audible TX interruption.
+        let faulted = steady_state_fifo_fault(fifo, underflow_is_fault);
         if faulted {
             self.fifo_faults = self.fifo_faults.saturating_add(1);
             let _ = self.shutdown();
@@ -573,29 +668,6 @@ impl DirectTxState {
             )));
         }
         Ok(fifo)
-    }
-
-    fn wait_for_fifo_write_window(
-        &mut self,
-        underflow_is_fault: bool,
-    ) -> Result<FifoSnapshot, XdmaError> {
-        let maximum_words = self
-            .fifo_depth_words
-            .saturating_sub(DUC_FIFO_WRITE_HEADROOM_FRAMES * DUC_FIFO_WORDS_PER_FRAME);
-        let mut fifo = self.observe_fifo(underflow_is_fault)?;
-        for _ in 0..DUC_FIFO_PACING_POLLS {
-            if fifo.occupied_words <= maximum_words {
-                return Ok(fifo);
-            }
-            thread::sleep(DUC_FIFO_PACING_POLL);
-            fifo = self.observe_fifo(underflow_is_fault)?;
-        }
-        self.fifo_faults = self.fifo_faults.saturating_add(1);
-        let _ = self.shutdown();
-        Err(XdmaError::Incompatible(format!(
-            "production DUC FIFO pacing timeout: words={} maximum_before_write={maximum_words}",
-            fifo.occupied_words
-        )))
     }
 
     fn sample_power(&mut self) -> Result<(), XdmaError> {
@@ -743,6 +815,24 @@ impl DirectTxState {
     }
 }
 
+fn steady_state_fifo_fault(snapshot: FifoSnapshot, underflow_is_fault: bool) -> bool {
+    snapshot.overflow || snapshot.over_threshold || (underflow_is_fault && snapshot.underflow)
+}
+
+fn fifo_batch_frames_available(
+    fifo_depth_words: usize,
+    occupied_words: usize,
+    requested_frames: usize,
+) -> usize {
+    let safe_ceiling_words =
+        fifo_depth_words.saturating_sub(DUC_FIFO_WRITE_HEADROOM_FRAMES * DUC_FIFO_WORDS_PER_FRAME);
+    safe_ceiling_words
+        .saturating_sub(occupied_words)
+        .div_euclid(DUC_FIFO_WORDS_PER_FRAME)
+        .min(requested_frames)
+        .min(DUC_MAX_DMA_BATCH_FRAMES)
+}
+
 impl Drop for DirectTxState {
     fn drop(&mut self) {
         if let Err(error) = self.shutdown() {
@@ -818,6 +908,14 @@ impl TxRadio for DirectXdmaTxRadio {
     }
 
     fn send_duc_iq(&self, iq_samples: &[f32]) -> TxRadioResult {
+        self.send_duc_iq_batch(iq_samples)
+    }
+
+    fn max_duc_iq_batch_packets(&self) -> usize {
+        DIRECT_TX_STEADY_BATCH_FRAMES
+    }
+
+    fn send_duc_iq_batch(&self, iq_samples: &[f32]) -> TxRadioResult {
         self.with_state(|state| {
             let result = (|| {
                 if !state.stream_active {
@@ -825,8 +923,15 @@ impl TxRadio for DirectXdmaTxRadio {
                         "production DUC write requested while stream is stopped".into(),
                     ));
                 }
-                state.wait_for_fifo_write_window(true)?;
-                state.write_repeated_frame(iq_samples, 1)?;
+                if iq_samples.is_empty()
+                    || !iq_samples.len().is_multiple_of(DUC_FRAME_IQ_FLOATS)
+                {
+                    return Err(XdmaError::Incompatible(format!(
+                        "invalid production DUC batch: floats={} frame_floats={DUC_FRAME_IQ_FLOATS}",
+                        iq_samples.len()
+                    )));
+                }
+                state.write_frame_batch_paced(iq_samples, true)?;
                 if state.keyed {
                     state.sample_power()?;
                 }
@@ -840,8 +945,12 @@ impl TxRadio for DirectXdmaTxRadio {
     }
 
     fn stage_iq_rf_disabled(&self, model: &RadioModel, iq_samples: &[f32]) -> TxRadioResult {
+        self.stage_iq_batch_rf_disabled(model, iq_samples)
+    }
+
+    fn stage_iq_batch_rf_disabled(&self, model: &RadioModel, iq_samples: &[f32]) -> TxRadioResult {
         self.with_state(|state| {
-            let result = state.stage_frame(model, iq_samples);
+            let result = state.stage_frame_batch(model, iq_samples);
             if result.is_err() {
                 let _ = state.shutdown();
             }
@@ -871,6 +980,10 @@ impl TxRadio for DirectXdmaTxRadio {
 
     fn defer_model_changes_while_keyed(&self) -> bool {
         true
+    }
+
+    fn realtime_priority(&self) -> Option<i32> {
+        Some(DIRECT_TX_RT_PRIORITY)
     }
 
     fn configure_rx_ddc(
@@ -929,6 +1042,15 @@ fn encode_iq_frame(target: &mut [u8], iq: &[f32]) {
         // with the FPGA RF byte-swap bit selected.
         write_i24_be(encoded, float_to_i24(pair[1]));
         write_i24_be(&mut encoded[3..], float_to_i24(pair[0]));
+    }
+}
+
+fn encode_iq_batch(target: &mut [u8], iq: &[f32]) {
+    for (encoded, samples) in target
+        .chunks_exact_mut(DUC_FRAME_BYTES)
+        .zip(iq.chunks_exact(DUC_FRAME_IQ_FLOATS))
+    {
+        encode_iq_frame(encoded, samples);
     }
 }
 
@@ -1008,6 +1130,28 @@ mod tests {
     }
 
     #[test]
+    fn batch_packing_preserves_distinct_consecutive_frames() {
+        let mut iq = vec![0.0; DUC_FRAME_IQ_FLOATS * 2];
+        iq[0] = 1.0;
+        iq[1] = -1.0;
+        iq[DUC_FRAME_IQ_FLOATS] = -0.5;
+        iq[DUC_FRAME_IQ_FLOATS + 1] = 0.5;
+        let mut encoded = vec![0_u8; DUC_FRAME_BYTES * 2];
+        encode_iq_batch(&mut encoded, &iq);
+
+        let mut first_pair = [0_u8; 6];
+        encode_iq_frame(&mut first_pair, &iq[..2]);
+        let mut second_pair = [0_u8; 6];
+        encode_iq_frame(
+            &mut second_pair,
+            &iq[DUC_FRAME_IQ_FLOATS..DUC_FRAME_IQ_FLOATS + 2],
+        );
+        assert_eq!(&encoded[..6], &first_pair);
+        assert_eq!(&encoded[DUC_FRAME_BYTES..DUC_FRAME_BYTES + 6], &second_pair);
+        assert_ne!(first_pair, second_pair);
+    }
+
+    #[test]
     fn production_drive_is_clamped_to_three_watts() {
         assert_eq!(tx_drive_watts_to_byte(3), tx_drive_watts_to_byte(100));
         assert!(tx_drive_watts_to_byte(3) < 18);
@@ -1039,6 +1183,52 @@ mod tests {
             zero_frames_needed_for_prefill(DUC_PREFILL_TARGET_WORDS + 100),
             0
         );
+    }
+
+    #[test]
+    fn low_nonempty_fifo_is_recoverable_until_hardware_reports_a_fault() {
+        let low = FifoSnapshot {
+            occupied_words: 230,
+            ..FifoSnapshot::default()
+        };
+        assert!(!steady_state_fifo_fault(low, true));
+        assert!(steady_state_fifo_fault(
+            FifoSnapshot {
+                underflow: true,
+                ..low
+            },
+            true
+        ));
+        assert!(!steady_state_fifo_fault(
+            FifoSnapshot {
+                underflow: true,
+                ..low
+            },
+            false
+        ));
+    }
+
+    #[test]
+    fn direct_tx_producer_preempts_the_xdma_completion_thread_after_wake() {
+        assert_eq!(XDMA_COMPLETION_RT_PRIORITY, 20);
+        assert_eq!(DIRECT_TX_RT_PRIORITY, 21);
+        assert!(DIRECT_TX_RT_PRIORITY > XDMA_COMPLETION_RT_PRIORITY);
+    }
+
+    #[test]
+    fn steady_state_batch_fits_dma_buffer_and_spans_ten_milliseconds() {
+        assert_eq!(DIRECT_TX_STEADY_BATCH_FRAMES, 8);
+        assert!(DIRECT_TX_STEADY_BATCH_FRAMES <= DUC_MAX_DMA_BATCH_FRAMES);
+        assert_eq!(DIRECT_TX_STEADY_BATCH_FRAMES * DUC_FRAME_IQ_FLOATS, 3_840);
+    }
+
+    #[test]
+    fn fifo_pacing_writes_safe_partial_batches_without_waiting_for_the_whole_batch() {
+        assert_eq!(fifo_batch_frames_available(4_096, 3_560, 8), 0);
+        assert_eq!(fifo_batch_frames_available(4_096, 3_376, 8), 1);
+        assert_eq!(fifo_batch_frames_available(4_096, 3_016, 8), 3);
+        assert_eq!(fifo_batch_frames_available(4_096, 2_116, 8), 8);
+        assert_eq!(fifo_batch_frames_available(4_096, 1_184, 8), 8);
     }
 
     #[test]

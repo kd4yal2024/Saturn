@@ -26,7 +26,7 @@ from urllib.parse import parse_qs, urlparse
 HEADER_BYTES = 64
 IQ_STREAM_TYPE = 0
 AUDIO_STREAM_TYPE = 1
-EXPECTED_IQ_RATE = 192_000
+EXPECTED_IQ_RATE = 384_000
 EXPECTED_AUDIO_RATE = 48_000
 MAX_MESSAGE_BYTES = 4 * 1024 * 1024
 TX_MIC_HEADER_BYTES = 64
@@ -288,6 +288,21 @@ def build_tx_mic_pcm_s16_frame(sequence: int, tone_hz: float = 1_000.0) -> bytes
     return bytes(frame)
 
 
+def build_control_heartbeat(
+    label: str, sequence: int, sent_at: float | None = None
+) -> str:
+    timestamp = time.monotonic() if sent_at is None else sent_at
+    return f"saturn_ping:{label}-{sequence},{timestamp:.6f};"
+
+
+def parse_remote_client_role(text: str) -> str | None:
+    operator_at = text.rfind("remote_client_role:0,operator,")
+    viewer_at = text.rfind("remote_client_role:0,viewer,")
+    if operator_at < 0 and viewer_at < 0:
+        return None
+    return "operator" if operator_at > viewer_at else "viewer"
+
+
 def wait_messages(
     websockets: list[WebSocket],
     stats: FrameStats,
@@ -295,12 +310,24 @@ def wait_messages(
     text_handler: Callable[[str], None],
     predicate: Callable[[], bool],
     timeout: float,
+    *,
+    heartbeat: Callable[[int], None] | None = None,
+    heartbeat_interval: float = 0.25,
 ) -> None:
     deadline = time.monotonic() + timeout
+    next_heartbeat_at = time.monotonic()
+    heartbeat_sequence = 1
     while time.monotonic() < deadline:
         if predicate():
             return
-        remaining = max(0.05, min(0.5, deadline - time.monotonic()))
+        now = time.monotonic()
+        if heartbeat is not None and now >= next_heartbeat_at:
+            heartbeat(heartbeat_sequence)
+            heartbeat_sequence += 1
+            next_heartbeat_at = now + heartbeat_interval
+        remaining = max(0.01, min(0.5, deadline - now))
+        if heartbeat is not None:
+            remaining = max(0.01, min(remaining, next_heartbeat_at - now))
         ready = [websocket for websocket in websockets if websocket.has_pending_data()]
         if not ready:
             readable, _, _ = select.select(
@@ -415,10 +442,12 @@ def run_acceptance(
     rf_inhibited_duc_exercised = False
     tx_cycles_completed = 0
     tx_cycle_results: list[dict[str, object]] = []
+    control_role: str | None = None
 
     def handle_text(text: str) -> None:
         nonlocal bridge_ready, remote_tx_state_seen, split_paired
         nonlocal retune_vfo, retune_dds, tx_release_confirmed
+        nonlocal control_role
         bridge_ready = bridge_ready or "ready;" in text
         expected_rf = "true" if rf_tx_probe else "false"
         remote_tx_state_seen = remote_tx_state_seen or (
@@ -426,6 +455,9 @@ def run_acceptance(
         )
         if split_session and f"session_paired:{split_session};" in text:
             split_paired = True
+        reported_role = parse_remote_client_role(text)
+        if reported_role is not None:
+            control_role = reported_role
         retune_vfo = retune_vfo or f"vfo:0,0,{retune_hz};" in text
         retune_dds = retune_dds or f"dds:0,{retune_hz};" in text
         if after_tx_request and "trx:0,false;" in text:
@@ -454,6 +486,25 @@ def run_acceptance(
             lambda: bridge_ready and remote_tx_state_seen,
             timeout=min(timeout, 8.0),
         )
+        if control_role != "operator":
+            # The media socket can complete its handshake first and briefly
+            # receive the operator lease before session_open moves that lease
+            # to the paired control socket. Wait for the authoritative control
+            # role update instead of treating that bounded pairing race as an
+            # external operator conflict.
+            wait_messages(
+                websockets,
+                stats,
+                lanes,
+                handle_text,
+                lambda: control_role == "operator",
+                timeout=1.0,
+            )
+        if control_role != "operator":
+            raise AcceptanceError(
+                "operator lease unavailable; close any active Saturn Remote or "
+                "TCI client before running the XDMA acceptance"
+            )
         control.send_text(
             "iq_start:0;"
             "audio_samplerate:48000;"
@@ -581,7 +632,7 @@ def run_acceptance(
                         sequence += 1
                         next_frame_at += frame_period
                     if now >= next_heartbeat_at:
-                        control.send_text(f"saturn_ping:rf-probe-{sequence};")
+                        control.send_text(build_control_heartbeat("rf-probe", sequence))
                         next_heartbeat_at += 0.25
                     current = read_readiness(readiness_file) or {}
                     current_metrics = current.get("metrics") or {}
@@ -675,6 +726,9 @@ def run_acceptance(
                     handle_text,
                     rf_inhibited_duc_ready,
                     timeout=min(timeout, 8.0),
+                    heartbeat=lambda sequence, cycle=cycle: control.send_text(
+                        build_control_heartbeat(f"tx-cycle-{cycle}", sequence)
+                    ),
                 )
                 control.send_text("trx:0,false;tx_two_tone:0,false;")
 
@@ -742,6 +796,7 @@ def run_acceptance(
         "retune_hz": retune_hz,
         "bridge_ready": bridge_ready,
         "split_paired": split_paired,
+        "control_role": control_role,
         "control_text_messages": lanes.control_text_messages,
         "media_binary_messages": lanes.media_binary_messages,
         "remote_tx_rf_enabled": rf_tx_probe,
@@ -780,6 +835,29 @@ def self_test() -> None:
         raise AcceptanceError("binary frame self-test failed")
     if basic_auth_header("admin:secret") != "Basic YWRtaW46c2VjcmV0":
         raise AcceptanceError("basic authentication self-test failed")
+    if build_control_heartbeat("cycle-2", 7, 123.456) != (
+        "saturn_ping:cycle-2-7,123.456000;"
+    ):
+        raise AcceptanceError("control heartbeat self-test failed")
+    if (
+        parse_remote_client_role("remote_client_role:0,operator,7;") != "operator"
+        or parse_remote_client_role("remote_client_role:0,viewer,8;") != "viewer"
+        or parse_remote_client_role("trx:0,false;") is not None
+    ):
+        raise AcceptanceError("remote client role self-test failed")
+    heartbeat_sequences: list[int] = []
+    wait_messages(
+        [],
+        FrameStats(),
+        LaneStats(),
+        lambda _text: None,
+        lambda: len(heartbeat_sequences) >= 2,
+        timeout=0.1,
+        heartbeat=heartbeat_sequences.append,
+        heartbeat_interval=0.01,
+    )
+    if heartbeat_sequences != [1, 2]:
+        raise AcceptanceError("periodic control heartbeat self-test failed")
     mic = build_tx_mic_pcm_s16_frame(7)
     if (
         len(mic) != TX_MIC_HEADER_BYTES + TX_MIC_BLOCK_SAMPLES * 2

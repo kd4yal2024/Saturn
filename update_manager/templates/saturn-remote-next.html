@@ -3770,17 +3770,17 @@
 
     .strip-grid {
       display: grid;
-      grid-template-columns: minmax(0, 1fr) auto;
+      grid-template-columns: minmax(440px, 0.82fr) minmax(620px, 1.18fr);
       gap: 8px;
       align-items: stretch;
     }
 
     .vfo-deck.primary-deck {
       display: grid;
-      grid-template-columns: minmax(270px, 1fr) 190px minmax(180px, 240px);
+      grid-template-columns: minmax(270px, 1fr);
       grid-template-areas:
-        "readout step input"
-        "sub sub input";
+        "readout"
+        "sub";
       gap: 4px 12px;
       min-height: 82px;
       padding: 7px 10px;
@@ -3835,6 +3835,7 @@
       grid-template-columns: minmax(0, 1fr) auto;
       gap: 6px;
       align-items: end;
+      align-self: center;
       margin: 0;
     }
 
@@ -3849,13 +3850,17 @@
     }
 
     .control-cluster {
-      min-width: 190px;
-      gap: 6px;
+      display: grid;
+      grid-template-columns: minmax(104px, 0.2fr) minmax(0, 1fr);
+      grid-column: auto;
+      min-width: 0;
+      gap: 8px;
       align-content: stretch;
+      padding: 7px;
     }
 
     .launch-grid {
-      grid-template-columns: repeat(2, minmax(88px, 1fr));
+      grid-template-columns: 1fr;
       height: 100%;
       gap: 6px;
     }
@@ -3864,6 +3869,90 @@
     .launch-grid .setup-anchor > .btn {
       min-height: 100%;
       border-radius: 4px;
+    }
+
+    .top-meter-bank {
+      position: relative;
+      z-index: 1;
+      display: grid;
+      grid-template-columns: minmax(210px, 1.1fr) minmax(250px, 1fr);
+      gap: 8px;
+      min-width: 0;
+      padding-left: 8px;
+      border-left: 1px solid var(--theme-cluster-border);
+      align-items: start;
+    }
+
+    .top-meter-bank > .analog-meter-shell,
+    .top-meter-bank .aux-meter-row {
+      min-width: 0;
+      margin: 0 !important;
+    }
+
+    .top-meter-bank .aux-meter-row {
+      align-self: stretch;
+      gap: 6px;
+    }
+
+    .top-meter-side {
+      display: grid;
+      grid-template-rows: auto 1fr;
+      gap: 7px;
+      min-width: 0;
+    }
+
+    .top-meter-telemetry {
+      display: grid;
+      gap: 5px;
+      min-width: 0;
+      padding-top: 6px;
+      border-top: 1px solid var(--theme-cluster-border);
+    }
+
+    .top-meter-telemetry-head {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 8px;
+      font-family: var(--mono);
+      text-transform: uppercase;
+    }
+
+    .top-meter-telemetry-title {
+      color: var(--text);
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+    }
+
+    .top-meter-telemetry-meta {
+      color: var(--muted);
+      font-size: 8px;
+      letter-spacing: 0.06em;
+    }
+
+    .top-meter-telemetry .tx-tool-dock {
+      margin: 0;
+      padding: 6px;
+    }
+
+    .top-meter-bank .analog-meter-shell {
+      border-radius: 6px;
+    }
+
+    .top-meter-bank .meter-dBm-row {
+      padding-bottom: 3px;
+    }
+
+    .top-meter-bank .aux-meter-val {
+      padding-bottom: 3px;
+    }
+
+    .top-meter-bank #tx-meter-mode {
+      width: 74px !important;
+      margin-top: 2px !important;
+      padding: 2px 6px !important;
+      font-size: 10px !important;
     }
 
     .console-layout {
@@ -4079,6 +4168,14 @@
         grid-template-columns: repeat(2, minmax(0, 1fr));
         gap: 0 12px;
       }
+
+      .strip-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .control-cluster {
+        grid-template-columns: minmax(104px, 0.16fr) minmax(0, 1fr);
+      }
     }
 
     @media (max-width: 780px) {
@@ -4122,19 +4219,37 @@
       }
 
       .vfo-deck.primary-deck {
-        grid-template-columns: 1fr auto;
+        grid-template-columns: 1fr;
         grid-template-areas:
-          "readout readout"
-          "step input"
-          "sub sub";
+          "readout"
+          "sub";
       }
 
       .primary-deck .deck-frequency {
+        flex: 0 0 auto;
         font-size: 30px;
+      }
+
+      .primary-deck .vfo-readout-row {
+        flex-wrap: wrap;
       }
 
       .control-cluster {
         min-width: 0;
+        grid-template-columns: 1fr;
+      }
+
+      .launch-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        height: auto;
+      }
+
+      .top-meter-bank {
+        grid-template-columns: 1fr;
+        padding-top: 8px;
+        padding-left: 0;
+        border-top: 1px solid var(--theme-cluster-border);
+        border-left: 0;
       }
 
       .launch-grid > .btn,
@@ -4255,24 +4370,9 @@
                 <span class="vfo-band-tag mono" id="vfo-band-tag" data-band-state="ok">20m</span>
               </span>
             </div>
-            <div class="vfo-step-affordance" aria-label="Quick tune step">
-              <button class="btn ghost" id="vfo-step-down-btn" type="button" aria-label="Tune down selected step">-</button>
-              <div class="vfo-step-label" id="vfo-step-label">100 Hz quick step</div>
-              <button class="btn ghost" id="vfo-step-up-btn" type="button" aria-label="Tune up selected step">+</button>
-            </div>
             <div class="deck-subline">
               <span id="path-summary">ADC1 • ANT1 • 192 kHz IQ</span>
               <span>Center frequency / click-to-tune reference</span>
-            </div>
-            <div class="deck-input-row">
-              <div style="flex: 1 1 auto;">
-                <label class="label" for="vfo-a-input">Direct Frequency Entry</label>
-                <input class="field" id="vfo-a-input" inputmode="decimal" readonly />
-              </div>
-              <button class="btn alt freq-entry-launch" id="freq-entry-open-btn" type="button">Keypad</button>
-              <div class="deck-note">
-                Tap a digit to choose the step. Use +/-, wheel, keypad, or the panadapter to tune.
-              </div>
             </div>
           </div>
 
@@ -4668,6 +4768,142 @@
                 </div>
               </div>
             </div>
+            <div class="top-meter-bank" aria-label="Radio meters">
+              <!-- S-Meter -->
+              <div class="analog-meter-shell" style="margin-bottom:10px;">
+                <svg id="smeter-svg" viewBox="0 0 360 185" xmlns="http://www.w3.org/2000/svg">
+                  <defs>
+                    <radialGradient id="smeter-face" cx="50%" cy="85%" r="70%">
+                      <stop offset="0%" stop-color="#14242c"/>
+                      <stop offset="100%" stop-color="#060d12"/>
+                    </radialGradient>
+                    <linearGradient id="smeter-needle-g" x1="180" y1="38" x2="180" y2="165" gradientUnits="userSpaceOnUse">
+                      <stop offset="0%" stop-color="#ffe060"/>
+                      <stop offset="55%" stop-color="#d4a820"/>
+                      <stop offset="100%" stop-color="#7a5a08"/>
+                    </linearGradient>
+                  </defs>
+                  <!-- Bezel -->
+                  <rect x="1" y="1" width="358" height="183" rx="13" fill="#141e24" stroke="#2e4858" stroke-width="1.5"/>
+                  <!-- Face -->
+                  <rect x="5" y="5" width="350" height="175" rx="10" fill="url(#smeter-face)"/>
+                  <!-- Arc zones (built by JS) -->
+                  <path id="smeter-arc-s"    fill="none" stroke="#a87818" stroke-width="4" stroke-linecap="round"/>
+                  <path id="smeter-arc-over" fill="none" stroke="#a02828" stroke-width="4" stroke-linecap="round"/>
+                  <!-- Ticks and labels (built by JS) -->
+                  <g id="smeter-ticks"></g>
+                  <g id="smeter-labels"></g>
+                  <!-- Title -->
+                  <text x="180" y="16" text-anchor="middle" font-family="IBM Plex Mono,monospace"
+                    font-size="8" letter-spacing="5" fill="#3a6070">S I G N A L</text>
+                  <!-- Needle -->
+                  <g id="smeter-needle" style="transform:rotate(-60deg);transform-origin:180px 165px;">
+                    <polygon points="179.5,162 180.5,162 180.2,42 179.8,42" fill="rgba(0,0,0,0.30)" transform="translate(1.5,1.5)"/>
+                    <polygon points="179,162 181,162 180.3,40 179.7,40" fill="url(#smeter-needle-g)"/>
+                    <polygon points="179.7,150 180,150 180,42 179.7,42" fill="rgba(255,248,180,0.50)"/>
+                    <rect x="178.5" y="163" width="3" height="9" rx="1.5" fill="#c09018"/>
+                  </g>
+                  <!-- Pivot -->
+                  <circle cx="180" cy="165" r="9"   fill="#101c24" stroke="#304858" stroke-width="1.5"/>
+                  <circle cx="180" cy="165" r="5.5" fill="#1e3040" stroke="#486070" stroke-width="1"/>
+                  <circle cx="180" cy="165" r="2.5" fill="#7aa0b8"/>
+                  <circle cx="180" cy="165" r="1"   fill="#c0d8e0"/>
+                  <!-- Glass glare -->
+                  <ellipse cx="135" cy="58" rx="85" ry="28" fill="rgba(255,255,255,0.025)" transform="rotate(-12,135,58)"/>
+                </svg>
+                <div class="meter-dBm-row">
+                  <span style="font-family:var(--mono);font-size:9px;letter-spacing:3px;color:#3a6070;">S-METER</span>
+                  <span class="mono small" id="meter-readout" style="color:#b08018;">-- dBm</span>
+                </div>
+              </div>
+
+              <div class="top-meter-side">
+                <!-- TX Power + SWR gauges -->
+                <div class="aux-meter-row">
+                <div class="analog-meter-shell">
+                  <svg id="txpwr-svg" viewBox="0 0 175 115" xmlns="http://www.w3.org/2000/svg">
+                    <defs>
+                      <radialGradient id="aux-face" cx="50%" cy="85%" r="70%">
+                        <stop offset="0%" stop-color="#14242c"/>
+                        <stop offset="100%" stop-color="#060d12"/>
+                      </radialGradient>
+                    </defs>
+                    <rect x="1" y="1" width="173" height="113" rx="10" fill="#141e24" stroke="#2e4858" stroke-width="1.5"/>
+                    <rect x="4" y="4" width="167" height="107" rx="8" fill="url(#aux-face)"/>
+                    <path id="txpwr-arc-bg"   fill="none" stroke="#1a2c38" stroke-width="3.5" stroke-linecap="round"/>
+                    <path id="txpwr-arc-fill" fill="none" stroke="#309cff" stroke-width="3.5" stroke-linecap="round"/>
+                    <g id="txpwr-ticks"></g>
+                    <g id="txpwr-labels"></g>
+                    <g id="txpwr-needle" style="transform:rotate(-65deg);transform-origin:87px 100px;">
+                      <polygon points="86.5,98 87.5,98 87.2,30 86.8,30" fill="rgba(0,0,0,0.3)" transform="translate(1,1)"/>
+                      <polygon points="86.5,98 87.5,98 87.2,30 86.8,30" fill="#62d0ff"/>
+                      <rect x="86" y="99" width="2" height="6" rx="1" fill="#3080a0"/>
+                    </g>
+                    <circle cx="87" cy="100" r="7"   fill="#101c24" stroke="#304858" stroke-width="1.5"/>
+                    <circle cx="87" cy="100" r="4"   fill="#1e3040" stroke="#486070" stroke-width="1"/>
+                    <circle cx="87" cy="100" r="1.5" fill="#7aa0b8"/>
+                    <text x="87" y="14" text-anchor="middle" font-family="IBM Plex Mono,monospace"
+                      font-size="7" letter-spacing="3" fill="#3a6070">TX PWR</text>
+                  </svg>
+                  <div class="aux-meter-val" style="color:#62d0ff;">
+                    <span id="tx-power-readout">-- W</span>
+                    <select id="tx-meter-mode" class="field" style="margin-top:6px;width:92px;font-size:11px;padding:4px 8px;">
+                      <option value="peak">Peak</option>
+                      <option value="avg">Avg</option>
+                    </select>
+                  </div>
+                </div>
+                <div class="analog-meter-shell">
+                  <svg id="swrmeter-svg" viewBox="0 0 175 115" xmlns="http://www.w3.org/2000/svg">
+                    <rect x="1" y="1" width="173" height="113" rx="10" fill="#141e24" stroke="#2e4858" stroke-width="1.5"/>
+                    <rect x="4" y="4" width="167" height="107" rx="8" fill="url(#aux-face)"/>
+                    <path id="swr-arc-good" fill="none" stroke="#28a870" stroke-width="3.5" stroke-linecap="round"/>
+                    <path id="swr-arc-warn" fill="none" stroke="#c08820" stroke-width="3.5" stroke-linecap="round"/>
+                    <path id="swr-arc-bad"  fill="none" stroke="#a02828" stroke-width="3.5" stroke-linecap="round"/>
+                    <g id="swr-ticks"></g>
+                    <g id="swr-labels"></g>
+                    <g id="swr-needle" style="transform:rotate(-65deg);transform-origin:87px 100px;">
+                      <polygon points="86.5,98 87.5,98 87.2,30 86.8,30" fill="rgba(0,0,0,0.3)" transform="translate(1,1)"/>
+                      <polygon id="swr-needle-poly" points="86.5,98 87.5,98 87.2,30 86.8,30" fill="#5de8b5"/>
+                      <rect x="86" y="99" width="2" height="6" rx="1" fill="#207858"/>
+                    </g>
+                    <circle cx="87" cy="100" r="7"   fill="#101c24" stroke="#304858" stroke-width="1.5"/>
+                    <circle cx="87" cy="100" r="4"   fill="#1e3040" stroke="#486070" stroke-width="1"/>
+                    <circle cx="87" cy="100" r="1.5" fill="#7aa0b8"/>
+                    <text x="87" y="14" text-anchor="middle" font-family="IBM Plex Mono,monospace"
+                      font-size="7" letter-spacing="3" fill="#3a6070">S W R</text>
+                  </svg>
+                  <div class="aux-meter-val" style="color:#5de8b5;">
+                    <span id="swr-readout">-- : 1</span>
+                  </div>
+                </div>
+                </div>
+
+                <div class="top-meter-telemetry">
+                  <div class="top-meter-telemetry-head">
+                    <span class="top-meter-telemetry-title">Telemetry</span>
+                    <span class="top-meter-telemetry-meta">Observed radio state</span>
+                  </div>
+                  <div class="tx-tool-dock">
+                    <div class="tx-tool-row">
+                      <select id="tx-tool-select" class="field" aria-label="TX tool selector" style="font-size:11px;padding:5px 8px;">
+                        <option value="meters">TX Meters</option>
+                        <option value="mic">Mic Gain</option>
+                        <option value="gate">Gate</option>
+                        <option value="eq">TX EQ</option>
+                        <option value="cfc">CFC</option>
+                        <option value="leveler">Leveler</option>
+                      </select>
+                      <button class="btn" id="tx-tool-open-btn" type="button" style="font-size:11px;padding:5px 9px;">Open</button>
+                    </div>
+                    <div class="tx-tool-summary" id="tx-tool-summary">TX meters -- W | SWR -- : 1</div>
+                    <div class="tx-tool-bar" aria-hidden="true">
+                      <div class="tx-tool-bar-fill" id="tx-tool-bar-fill"></div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -4979,141 +5215,6 @@
       </div>
 
       <div class="stack right-rail">
-        <div class="panel" data-phone-panel="telemetry">
-          <div class="panel-head" data-phone-panel-head>
-            <h2 class="panel-title">Telemetry</h2>
-            <div class="panel-meta">Observed radio state</div>
-          </div>
-          <div class="panel-body">
-            <!-- S-Meter -->
-            <div class="analog-meter-shell" style="margin-bottom:10px;">
-              <svg id="smeter-svg" viewBox="0 0 360 185" xmlns="http://www.w3.org/2000/svg">
-                <defs>
-                  <radialGradient id="smeter-face" cx="50%" cy="85%" r="70%">
-                    <stop offset="0%" stop-color="#14242c"/>
-                    <stop offset="100%" stop-color="#060d12"/>
-                  </radialGradient>
-                  <linearGradient id="smeter-needle-g" x1="180" y1="38" x2="180" y2="165" gradientUnits="userSpaceOnUse">
-                    <stop offset="0%" stop-color="#ffe060"/>
-                    <stop offset="55%" stop-color="#d4a820"/>
-                    <stop offset="100%" stop-color="#7a5a08"/>
-                  </linearGradient>
-                </defs>
-                <!-- Bezel -->
-                <rect x="1" y="1" width="358" height="183" rx="13" fill="#141e24" stroke="#2e4858" stroke-width="1.5"/>
-                <!-- Face -->
-                <rect x="5" y="5" width="350" height="175" rx="10" fill="url(#smeter-face)"/>
-                <!-- Arc zones (built by JS) -->
-                <path id="smeter-arc-s"    fill="none" stroke="#a87818" stroke-width="4" stroke-linecap="round"/>
-                <path id="smeter-arc-over" fill="none" stroke="#a02828" stroke-width="4" stroke-linecap="round"/>
-                <!-- Ticks and labels (built by JS) -->
-                <g id="smeter-ticks"></g>
-                <g id="smeter-labels"></g>
-                <!-- Title -->
-                <text x="180" y="16" text-anchor="middle" font-family="IBM Plex Mono,monospace"
-                  font-size="8" letter-spacing="5" fill="#3a6070">S I G N A L</text>
-                <!-- Needle -->
-                <g id="smeter-needle" style="transform:rotate(-60deg);transform-origin:180px 165px;">
-                  <polygon points="179.5,162 180.5,162 180.2,42 179.8,42" fill="rgba(0,0,0,0.30)" transform="translate(1.5,1.5)"/>
-                  <polygon points="179,162 181,162 180.3,40 179.7,40" fill="url(#smeter-needle-g)"/>
-                  <polygon points="179.7,150 180,150 180,42 179.7,42" fill="rgba(255,248,180,0.50)"/>
-                  <rect x="178.5" y="163" width="3" height="9" rx="1.5" fill="#c09018"/>
-                </g>
-                <!-- Pivot -->
-                <circle cx="180" cy="165" r="9"   fill="#101c24" stroke="#304858" stroke-width="1.5"/>
-                <circle cx="180" cy="165" r="5.5" fill="#1e3040" stroke="#486070" stroke-width="1"/>
-                <circle cx="180" cy="165" r="2.5" fill="#7aa0b8"/>
-                <circle cx="180" cy="165" r="1"   fill="#c0d8e0"/>
-                <!-- Glass glare -->
-                <ellipse cx="135" cy="58" rx="85" ry="28" fill="rgba(255,255,255,0.025)" transform="rotate(-12,135,58)"/>
-              </svg>
-              <div class="meter-dBm-row">
-                <span style="font-family:var(--mono);font-size:9px;letter-spacing:3px;color:#3a6070;">S-METER</span>
-                <span class="mono small" id="meter-readout" style="color:#b08018;">-- dBm</span>
-              </div>
-            </div>
-
-            <div class="tx-tool-dock">
-              <div class="tx-tool-row">
-                <select id="tx-tool-select" class="field" aria-label="TX tool selector" style="font-size:11px;padding:5px 8px;">
-                  <option value="meters">TX Meters</option>
-                  <option value="mic">Mic Gain</option>
-                  <option value="gate">Gate</option>
-                  <option value="eq">TX EQ</option>
-                  <option value="cfc">CFC</option>
-                  <option value="leveler">Leveler</option>
-                </select>
-                <button class="btn" id="tx-tool-open-btn" type="button" style="font-size:11px;padding:5px 9px;">Open</button>
-              </div>
-              <div class="tx-tool-summary" id="tx-tool-summary">TX meters -- W | SWR -- : 1</div>
-              <div class="tx-tool-bar" aria-hidden="true">
-                <div class="tx-tool-bar-fill" id="tx-tool-bar-fill"></div>
-              </div>
-            </div>
-
-            <!-- TX Power + SWR gauges -->
-            <div class="aux-meter-row">
-              <div class="analog-meter-shell">
-                <svg id="txpwr-svg" viewBox="0 0 175 115" xmlns="http://www.w3.org/2000/svg">
-                  <defs>
-                    <radialGradient id="aux-face" cx="50%" cy="85%" r="70%">
-                      <stop offset="0%" stop-color="#14242c"/>
-                      <stop offset="100%" stop-color="#060d12"/>
-                    </radialGradient>
-                  </defs>
-                  <rect x="1" y="1" width="173" height="113" rx="10" fill="#141e24" stroke="#2e4858" stroke-width="1.5"/>
-                  <rect x="4" y="4" width="167" height="107" rx="8" fill="url(#aux-face)"/>
-                  <path id="txpwr-arc-bg"   fill="none" stroke="#1a2c38" stroke-width="3.5" stroke-linecap="round"/>
-                  <path id="txpwr-arc-fill" fill="none" stroke="#309cff" stroke-width="3.5" stroke-linecap="round"/>
-                  <g id="txpwr-ticks"></g>
-                  <g id="txpwr-labels"></g>
-                  <g id="txpwr-needle" style="transform:rotate(-65deg);transform-origin:87px 100px;">
-                    <polygon points="86.5,98 87.5,98 87.2,30 86.8,30" fill="rgba(0,0,0,0.3)" transform="translate(1,1)"/>
-                    <polygon points="86.5,98 87.5,98 87.2,30 86.8,30" fill="#62d0ff"/>
-                    <rect x="86" y="99" width="2" height="6" rx="1" fill="#3080a0"/>
-                  </g>
-                  <circle cx="87" cy="100" r="7"   fill="#101c24" stroke="#304858" stroke-width="1.5"/>
-                  <circle cx="87" cy="100" r="4"   fill="#1e3040" stroke="#486070" stroke-width="1"/>
-                  <circle cx="87" cy="100" r="1.5" fill="#7aa0b8"/>
-                  <text x="87" y="14" text-anchor="middle" font-family="IBM Plex Mono,monospace"
-                    font-size="7" letter-spacing="3" fill="#3a6070">TX PWR</text>
-                </svg>
-                <div class="aux-meter-val" style="color:#62d0ff;">
-                  <span id="tx-power-readout">-- W</span>
-                  <select id="tx-meter-mode" class="field" style="margin-top:6px;width:92px;font-size:11px;padding:4px 8px;">
-                    <option value="peak">Peak</option>
-                    <option value="avg">Avg</option>
-                  </select>
-                </div>
-              </div>
-              <div class="analog-meter-shell">
-                <svg id="swrmeter-svg" viewBox="0 0 175 115" xmlns="http://www.w3.org/2000/svg">
-                  <rect x="1" y="1" width="173" height="113" rx="10" fill="#141e24" stroke="#2e4858" stroke-width="1.5"/>
-                  <rect x="4" y="4" width="167" height="107" rx="8" fill="url(#aux-face)"/>
-                  <path id="swr-arc-good" fill="none" stroke="#28a870" stroke-width="3.5" stroke-linecap="round"/>
-                  <path id="swr-arc-warn" fill="none" stroke="#c08820" stroke-width="3.5" stroke-linecap="round"/>
-                  <path id="swr-arc-bad"  fill="none" stroke="#a02828" stroke-width="3.5" stroke-linecap="round"/>
-                  <g id="swr-ticks"></g>
-                  <g id="swr-labels"></g>
-                  <g id="swr-needle" style="transform:rotate(-65deg);transform-origin:87px 100px;">
-                    <polygon points="86.5,98 87.5,98 87.2,30 86.8,30" fill="rgba(0,0,0,0.3)" transform="translate(1,1)"/>
-                    <polygon id="swr-needle-poly" points="86.5,98 87.5,98 87.2,30 86.8,30" fill="#5de8b5"/>
-                    <rect x="86" y="99" width="2" height="6" rx="1" fill="#207858"/>
-                  </g>
-                  <circle cx="87" cy="100" r="7"   fill="#101c24" stroke="#304858" stroke-width="1.5"/>
-                  <circle cx="87" cy="100" r="4"   fill="#1e3040" stroke="#486070" stroke-width="1"/>
-                  <circle cx="87" cy="100" r="1.5" fill="#7aa0b8"/>
-                  <text x="87" y="14" text-anchor="middle" font-family="IBM Plex Mono,monospace"
-                    font-size="7" letter-spacing="3" fill="#3a6070">S W R</text>
-                </svg>
-                <div class="aux-meter-val" style="color:#5de8b5;">
-                  <span id="swr-readout">-- : 1</span>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-
         <div class="panel" data-phone-panel="tx">
           <div class="panel-head" data-phone-panel-head>
             <h2 class="panel-title">Transmit</h2>
@@ -7978,7 +8079,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       if (overlay) {
         overlay.hidden = false;
       }
-      $("vfo-a-input").blur();
+      $("vfo-a-input")?.blur();
     }
 
     function closeFrequencyEntry() {
@@ -8146,9 +8247,9 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     }
 
     function bindFrequencyEntrySheet() {
-      $("freq-entry-open-btn").addEventListener("click", () => openFrequencyEntry());
-      $("vfo-a-input").addEventListener("click", () => openFrequencyEntry());
-      $("vfo-a-input").addEventListener("keydown", (event) => {
+      $("freq-entry-open-btn")?.addEventListener("click", () => openFrequencyEntry());
+      $("vfo-a-input")?.addEventListener("click", () => openFrequencyEntry());
+      $("vfo-a-input")?.addEventListener("keydown", (event) => {
         if (event.key === "Enter" || event.key === " ") {
           event.preventDefault();
           openFrequencyEntry();
@@ -10854,9 +10955,10 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       normalizeUiState();
       syncPhoneWaterfall();
       updateOperatorStateStrip();
-      // Don't clobber the VFO input while the operator is typing.
-      if (document.activeElement !== $("vfo-a-input")) {
-        $("vfo-a-input").value = formatFrequency(state.vfoA);
+      const vfoInput = $("vfo-a-input");
+      // Keep compatibility with layouts that expose the compact VFO input.
+      if (vfoInput && document.activeElement !== vfoInput) {
+        vfoInput.value = formatFrequency(state.vfoA);
       }
       updateFrequencyReadout($("dds-readout"), state.dds);
       $("vfo-b-readout").textContent = formatFrequency(state.vfoB);
@@ -14643,10 +14745,10 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
           updateUi();
         });
       });
-      $("vfo-step-down-btn").addEventListener("click", () => {
+      $("vfo-step-down-btn")?.addEventListener("click", () => {
         if (!state.frequencyLock) tuneBy(-normalizeVfoTuneStep(state.vfoTuneStepHz));
       });
-      $("vfo-step-up-btn").addEventListener("click", () => {
+      $("vfo-step-up-btn")?.addEventListener("click", () => {
         if (!state.frequencyLock) tuneBy(normalizeVfoTuneStep(state.vfoTuneStepHz));
       });
       bindFrequencyDigitControl($("dds-readout"));

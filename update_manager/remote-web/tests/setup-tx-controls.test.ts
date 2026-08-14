@@ -7,6 +7,46 @@ const template = readFileSync(
 );
 
 describe('TX setup controls', () => {
+  it('keeps the operating meters in the top command cluster without Quick Step', () => {
+    const commandStart = template.indexOf('class="command-strip panel"');
+    const controlsStart = template.indexOf('class="control-cluster"', commandStart);
+    const meterBankStart = template.indexOf('class="top-meter-bank"', controlsStart);
+    const commandEnd = template.indexOf('class="audio-control-strip panel"', meterBankStart);
+
+    expect(commandStart).toBeGreaterThanOrEqual(0);
+    expect(controlsStart).toBeGreaterThan(commandStart);
+    expect(meterBankStart).toBeGreaterThan(controlsStart);
+    expect(meterBankStart).toBeLessThan(commandEnd);
+
+    for (const id of [
+      'smeter-svg',
+      'meter-readout',
+      'txpwr-svg',
+      'tx-power-readout',
+      'swrmeter-svg',
+      'swr-readout',
+    ]) {
+      const position = template.indexOf(`id="${id}"`);
+      expect(position).toBeGreaterThan(meterBankStart);
+      expect(position).toBeLessThan(commandEnd);
+      expect(template.match(new RegExp(`id="${id}"`, 'g'))).toHaveLength(1);
+    }
+
+    const auxMeters = template.indexOf('class="aux-meter-row"', meterBankStart);
+    const telemetry = template.indexOf('class="top-meter-telemetry"', auxMeters);
+    expect(auxMeters).toBeGreaterThan(meterBankStart);
+    expect(telemetry).toBeGreaterThan(auxMeters);
+    expect(telemetry).toBeLessThan(commandEnd);
+    expect(template).toContain('class="top-meter-telemetry-title">Telemetry');
+    expect(template).toContain('class="top-meter-telemetry-meta">Observed radio state');
+    expect(template).not.toContain('data-phone-panel="telemetry"');
+    expect(template).not.toContain('class="direct-frequency-control"');
+    expect(template).not.toContain('id="vfo-a-input"');
+    expect(template).not.toContain('id="freq-entry-open-btn"');
+    expect(template).not.toContain('id="vfo-step-down-btn"');
+    expect(template).not.toContain('id="vfo-step-up-btn"');
+  });
+
   it('places the complete two-tone test inside the TX setup panel', () => {
     const txSetupStart = template.indexOf('id="setup-panel-tx"');
     const twoToneSection = template.indexOf('id="setup-tx-two-tone-section"');

@@ -331,7 +331,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         tx_cmd_rx,
         tx_event_tx,
         stop_flag.clone(),
-    );
+    )?;
     let rx_thread = rx_thread::spawn(
         session.clone(),
         radio_model.clone(),

@@ -5,7 +5,7 @@ set -Eeuo pipefail
 # Saturn Go split proxy while keeping the production XDMA selector closed.
 #
 # Preconditions are deliberately strict: stable P2 ownership, both radio
-# services active, a current source-tree debug bridge, and an active Saturn Go
+# services active, a current optimized source-tree bridge, and an active Saturn Go
 # TLS listener. The bridge binary is staged in a temporary root-owned directory
 # under /opt/saturn-go because the production unit deliberately hides /home
 # with ProtectHome=yes and the appliance mounts /run noexec. The test-gated
@@ -16,7 +16,7 @@ set -Eeuo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 REPO_ROOT="${SATURN_XDMA_SWITCH_SMOKE_REPO_ROOT:-$(cd -- "$SCRIPT_DIR/../.." && pwd -P)}"
 BRIDGE_ROOT="$REPO_ROOT/update_manager/saturn-bridge"
-BRIDGE_BINARY="${SATURN_XDMA_SWITCH_SMOKE_BRIDGE_BINARY:-$BRIDGE_ROOT/target/debug/saturn-bridge}"
+BRIDGE_BINARY="${SATURN_XDMA_SWITCH_SMOKE_BRIDGE_BINARY:-$BRIDGE_ROOT/target/release/saturn-bridge}"
 SWITCH_HELPER="${SATURN_XDMA_SWITCH_SMOKE_HELPER:-$SCRIPT_DIR/saturn-radio-backend-switch-root.sh}"
 CLIENT="${SATURN_XDMA_SWITCH_SMOKE_CLIENT:-$SCRIPT_DIR/saturn-xdma-operational-client.py}"
 PROXY_BASE_URL="${SATURN_XDMA_SWITCH_SMOKE_PROXY_BASE_URL:-wss://127.0.0.1:8443}"

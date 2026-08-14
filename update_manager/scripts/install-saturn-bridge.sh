@@ -393,6 +393,7 @@ Restart=on-failure
 RestartSec=2
 RuntimeDirectory=saturn-bridge
 RuntimeDirectoryMode=0750
+LimitRTPRIO=21
 NoNewPrivileges=yes
 PrivateTmp=yes
 ProtectSystem=strict

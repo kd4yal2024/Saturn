@@ -23,9 +23,9 @@ FPGA at a time.
 
 | Area | Current evidence | Gate |
 | --- | --- | --- |
-| Direct RX | Live 192 kHz IQ/audio, tuning, reconnect recovery, and receive-safe cleanup have passed on PCB2 firmware 1.27. | Passed for the current hardware envelope. |
-| Direct TX audio | Four consecutive Voodoo 3.8k voice transmissions were received clearly after the per-arm DUC mux/FIFO reset correction. | Field behavior confirmed; automated repetition remains required. |
-| Repeated-key automation | The first five-cycle RF-inhibited run found a pre-key FIFO threshold at 4,076 of 4,096 words. Delayed H2C completion made the second adaptive prefill batch visible later than its occupancy read. | Open pending retest of the DMA-settle and three-frame pacing-headroom correction. |
+| Direct RX | Live 384 kHz IQ/audio, tuning, reconnect recovery, and receive-safe cleanup passed on PCB2 firmware 1.27 at 383,321 IQ pairs/second. | Passed for the current hardware envelope. |
+| Direct TX audio | After distinct-frame DMA batching, four consecutive live Voodoo 3.8k transmissions sounded clear; all four sessions keyed/released with four mux resets and zero FIFO faults. | Passed for repeated-key voice at the current 3 W envelope; longer soak remains required. |
+| Repeated-key automation | The final 384 kHz split-proxy run completed five independent RF-inhibited cycles under SCHED_FIFO priority 20, with 3,310 total TX frames, a 3,728-word high-water, zero TX FIFO faults, and receive-safe cleanup. | Passed; validation persisted. |
 | Backend ownership | Transactional `P2 -> XDMA -> P2` switching and rollback have passed. The installer now preserves the selected backend instead of silently returning an XDMA appliance to P2. | Repeat after every installer or broker change. |
 | Wider production use | P2 fallback is retained and direct XDMA stays opt-in. | Requires repeated-key, bounded-RF, reconnect, and soak gates below. |
 
@@ -36,14 +36,117 @@ to RX, and restored the prior services. The correction deliberately waits for
 DMA writes to become visible before making another prefill decision and admits
 each live frame only with three complete frames of FIFO ceiling headroom.
 
+The next hardware run confirmed that pacing removed the ceiling fault: 460 DUC
+frames were staged with a 3,710-word high-water and no threshold or overflow.
+The acceptance client then remained silent while waiting up to eight seconds
+for the next readiness transition, exceeding the direct backend's 1.5-second
+operator-control watchdog. RF-inhibited and bounded-RF client waits now send a
+valid `saturn_ping` every 250 ms while armed. The watchdog and its timeout are
+unchanged.
+
+Two follow-up runs separated the remaining test conditions. One started while
+an open Saturn Remote browser already held the operator lease; the acceptance
+session was a viewer and therefore could not issue TX commands. The client now
+requires an explicit operator-role response and fails immediately with an
+instruction to close other Remote/TCI clients. An isolated run retained its
+lease and heartbeat but underflowed after 185 frames. The 3,710-word prefill is
+only about 24 ms at 192 kHz, while observed ordinary-scheduler control bursts
+reached 25--45 ms. This confirms the earlier Phase 4 result: FIFO depth cannot
+substitute for deterministic refill scheduling.
+
+The first deterministic correction pinned the direct-XDMA TX producer to an
+allowed CPU and required `SCHED_FIFO` priority 20 before startup readiness.
+Failure to obtain or verify that policy aborted the direct backend before a
+client could arm TX; P2's established UDP TX thread remained under the normal
+scheduler.
+
+The first two optimized 192 kHz five-cycle runs confirmed that correction on the
+appliance. Both completed every arm/disarm cycle without a DUC fault and
+returned receive-safe. Their final harness result still failed because the
+original steady-IQ calculation divided all IQ progress by the entire runtime,
+including the intentional half-duplex TX intervals, yielding approximately
+169k pairs/second. The rate gate now snapshots a fresh start point only after
+the final TX release has remained receive-safe.
+
+The direct DDC was then advanced to its firmware-supported 384 kHz rate code.
+The final split-proxy appliance run measured 383,321 IQ pairs/second over an
+18.860-second receive-only interval, within the required 376,320--391,680
+range. All five RF-inhibited TX cycles passed with one mux reset per arm, zero
+FIFO faults, and a final receive-safe state. The passing record is stored at
+`/var/lib/saturn-state/xdma-telemetry.json` with the client result, post-TX rate
+start, final stopped snapshot, and service-restoration outcome.
+
+A subsequent live 384 kHz browser run confirmed RX/audio, band changes, and
+three keyed voice sessions, but exposed two independent recoverable TX
+boundaries. The first Opus attempt accumulated decode errors before keying;
+another session reached a 230-word DUC low-water observation while the FPGA's
+underflow, overflow, and threshold flags were all clear. Split sessions now
+downgrade both lanes atomically to PCM after an Opus decode failure and ignore
+already queued Opus chunks during that handoff. Production DUC pacing now
+treats a low but nonempty observation as an immediate refill opportunity; only
+the FPGA's latched runtime fault flags force receive.
+
+Two fresh 384 kHz inhibited runs then passed at 383,348 and 383,258 IQ
+pairs/second with all five cycles fault-free. The installed bridge completed
+five live Opus voice sessions, but the third session latched one real DUC
+underflow while the other four remained clean. Kernel transfer diagnostics
+isolated the remaining boundary: H2C completion interrupts arrived in tens of
+microseconds, but an awakened priority-20 TX producer could wait 6--10 ms while
+the equal-priority shared completion kthread continued servicing C2H work.
+Production TX therefore runs at FIFO priority 21, one level above the
+priority-20 completion thread, and the service grants `LimitRTPRIO=21`. This
+preserves the power, SWR, watchdog, ceiling-headroom, and receive-safe cleanup
+gates and requires one more inhibited acceptance plus live repeated-key
+confirmation.
+
+The priority-21 live follow-up still caught one second-key underflow. Kernel
+timing showed that the H2C interrupt arrived promptly, but a synchronous
+1,440-byte transfer could still take 6--11 ms to resume in userspace. The DUC
+consumes one such 240-pair frame every 1.25 ms, so scheduling priority alone
+cannot make a one-syscall-per-frame producer robust against that tail.
+Production direct XDMA now batches up to eight consecutive, distinct DUC IQ
+frames into one H2C transfer. The TX thread advances its cadence by the number
+of frames in the batch. The backend writes the largest safe partial batch as
+soon as measured FIFO space permits, then completes any remainder while always
+retaining three-frame ceiling headroom; it never drains the FIFO merely to make
+an entire requested batch fit. Packet-level display and diagnostic accounting
+remain unchanged. RF-inhibited staging uses the same batch path so the
+five-cycle acceptance exercises the correction before any RF test. Protocol 2
+retains its established one-packet UDP output.
+
+The corrected RF-inhibited split-proxy run passed all five cycles at FIFO
+priority 21. It sustained 383,284 IQ pairs/second, staged 829--841 DUC frames
+per cycle, recorded a 1,112-word low-water and 3,605-word high-water, and
+reported zero FIFO faults. Final receive-safe cleanup and restoration of the
+previous service state also passed, and the validation record was refreshed.
+
+The installed production bridge then passed a live repeated-key voice check at
+7.210 MHz. Four consecutive Voodoo 3.8k transmissions sounded clear, all four
+sessions keyed and released, and the final runtime snapshot reported four
+sessions started/completed, 12,256 distinct DUC frames in 6,976 H2C writes,
+four mux resets, and zero FIFO faults. The 140--3,623-word lifetime FIFO range
+shows that the producer exercised the low-water recovery path without latching
+an underflow. The four startup-underflow indications are the expected sticky
+empty-FIFO events cleared during the four deliberate reset/prefill cycles.
+Longer mixed RX/TX soak and reconnect testing remain the next live gates.
+
 Run the current production-path acceptance from the repository root:
 
 ```bash
+CARGO_BUILD_JOBS=1 cargo build --release \
+  --manifest-path update_manager/saturn-bridge/Cargo.toml
+
 sudo update_manager/scripts/saturn-xdma-operational-rx-smoke.sh \
   --proxy-client-probe \
   --tx-cycles 5 \
   --duration-seconds 45
 ```
+
+Close or disconnect every Saturn Remote and other TCI client before starting
+the acceptance. The test must acquire the operator lease; it now rejects a
+viewer assignment instead of waiting for TX state that the viewer cannot
+request. Client acceptance selects the optimized release bridge by default
+because a debug build cannot satisfy the 1.25 ms DUC refill cadence reliably.
 
 A passing result must complete all five independent arm/disarm cycles. Every
 cycle must report a new mux reset, advancing DUC DMA writes and frames, zero TX
@@ -150,7 +253,7 @@ The capture:
 
 - refuses to run while `p2app.service` is active
 - keeps MOX, TX enable, PA relay, CW keyer, and DUC streaming disabled
-- configures hardware DDC6 for ADC1 at 192 kHz
+- configures hardware DDC6 for ADC1 at 384 kHz
 - reads page-aligned DMA blocks from `/dev/xdma0_c2h_0`
 - validates every 64-bit rate header and packed 24-bit I/Q frame
 - reports a synthesized frame sequence, observed sample rate, DMA throughput,
@@ -582,7 +685,7 @@ persists only a ready selection and restores the exact prior state on failure.
 The next Phase 6 slice now provides an RX-only operational bridge runtime when
 `SATURN_BRIDGE_RADIO_BACKEND=xdma` is set in an isolated test:
 
-- DDC6/ADC1 runs at the validated fixed 192 kHz rate.
+- DDC6/ADC1 runs at the validated fixed 384 kHz rate.
 - decoded IQ is published through the existing TCI client stream and WDSP
   produces the existing 48 kHz receive-audio stream.
 - VFO/center tuning and RX DSP controls are applied without constructing a TX
@@ -611,9 +714,9 @@ sudo update_manager/scripts/saturn-xdma-operational-rx-smoke.sh
 
 The harness refuses a binary older than its Rust/build inputs, stops both
 possible radio owners, and requires an observed `ready` heartbeat with
-advancing DMA and IQ counters. It calculates the steady-state rate between the
-first ready heartbeat and the final stopped heartbeat and requires it to remain
-within two percent of 192 kHz. After the bounded SIGTERM, it also requires the
+advancing DMA and IQ counters. For client acceptance it calculates the
+steady-state rate between a post-TX receive-safe heartbeat and the final stopped
+heartbeat and requires it to remain within two percent of 384 kHz. After the bounded SIGTERM, it also requires the
 final `stopped` heartbeat and explicit receive-safe cleanup log before restoring
 only the services that were active before the test. It leaves the observed
 ready JSON, final stopped JSON, and runtime log under `/tmp` for inspection.
@@ -629,12 +732,15 @@ previously active services.
 Client acceptance is enabled with:
 
 ```bash
+CARGO_BUILD_JOBS=1 cargo build --release \
+  --manifest-path update_manager/saturn-bridge/Cargo.toml
+
 sudo update_manager/scripts/saturn-xdma-operational-rx-smoke.sh \
   --client-probe \
   --duration-seconds 45
 ```
 
-The localhost-only client opens the actual TCI WebSocket, validates 192 kHz IQ
+The localhost-only client opens the actual TCI WebSocket, validates 384 kHz IQ
 and 48 kHz audio binary frames, submits an eight-command RX DSP preference
 burst, requires media and DMA progress afterward, retunes both VFO and DDC to
 7.200 MHz, and exercises the DUC with RF explicitly inhibited. The default is
@@ -673,6 +779,9 @@ sudo update_manager/scripts/saturn-xdma-operational-rx-smoke.sh \
   --proxy-client-probe \
   --duration-seconds 45
 ```
+
+The client modes default to `target/release/saturn-bridge`; the receive-only
+mode above continues to default to the development binary.
 
 This opens paired `/saturn/control` and `/saturn/media` WebSockets on the
 localhost port-8443 listener, supplies the configured Basic credential without

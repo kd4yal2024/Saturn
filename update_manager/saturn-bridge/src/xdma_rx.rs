@@ -24,8 +24,8 @@ const MAX_CAPTURE_DURATION_MS: u64 = 10_000;
 const ADC_SAMPLE_CLOCK_HZ: u128 = 122_880_000;
 
 pub(crate) const DIRECT_DDC_INDEX: usize = 6;
-pub(crate) const DIRECT_DDC_SAMPLE_RATE_KHZ: u32 = 192;
-const DDC_RATE_CODE_192_KHZ: u32 = 3;
+pub(crate) const DIRECT_DDC_SAMPLE_RATE_KHZ: u32 = 384;
+const DIRECT_DDC_RATE_CODE: u32 = 4;
 const DDC_RATE_REGISTER: u64 = 0x100C;
 const DDC_INPUT_SELECT_REGISTER: u64 = 0x1010;
 const DDC6_FREQUENCY_REGISTER: u64 = 0x0018;
@@ -196,7 +196,7 @@ impl DdcStreamParser {
 
             let counts = analyse_rate_word(rate_word)?;
             let frame_words: usize = counts.iter().sum();
-            if counts[DIRECT_DDC_INDEX] != 4
+            if counts[DIRECT_DDC_INDEX] != direct_ddc_sample_words()
                 || counts
                     .iter()
                     .enumerate()
@@ -795,7 +795,11 @@ pub fn run_phase2_rx_probe() -> Result<(), XdmaError> {
 }
 
 fn direct_ddc_rate_word() -> u32 {
-    DDC_RATE_CODE_192_KHZ << (DIRECT_DDC_INDEX * 3)
+    DIRECT_DDC_RATE_CODE << (DIRECT_DDC_INDEX * 3)
+}
+
+fn direct_ddc_sample_words() -> usize {
+    RATE_CODES_TO_SAMPLE_WORDS[DIRECT_DDC_RATE_CODE as usize]
 }
 
 fn validate_frequency(frequency_hz: u32) -> Result<(), XdmaError> {
@@ -906,7 +910,7 @@ mod tests {
     }
 
     fn test_frame() -> Vec<u8> {
-        let mut frame = vec![0u8; 40];
+        let mut frame = vec![0u8; (direct_ddc_sample_words() + 1) * FIFO_WORD_BYTES];
         frame[0..4].copy_from_slice(&direct_ddc_rate_word().to_le_bytes());
         frame[4..8].copy_from_slice(&0x8000_0000u32.to_le_bytes());
         for (index, word) in frame[8..].chunks_exact_mut(8).enumerate() {
@@ -917,10 +921,10 @@ mod tests {
     }
 
     #[test]
-    fn direct_rate_word_selects_only_ddc6_at_192khz() {
+    fn direct_rate_word_selects_only_ddc6_at_384khz() {
         let counts = analyse_rate_word(direct_ddc_rate_word()).unwrap();
-        assert_eq!(counts[DIRECT_DDC_INDEX], 4);
-        assert_eq!(counts.iter().sum::<usize>(), 4);
+        assert_eq!(counts[DIRECT_DDC_INDEX], 8);
+        assert_eq!(counts.iter().sum::<usize>(), 8);
     }
 
     #[test]
@@ -941,8 +945,8 @@ mod tests {
         parser.feed(&stream[..32], &mut iq_samples).unwrap();
         parser.feed(&stream[32..], &mut iq_samples).unwrap();
         assert_eq!(parser.stats.frames, 2);
-        assert_eq!(parser.stats.samples, 8);
-        assert_eq!(iq_samples.len(), 16);
+        assert_eq!(parser.stats.samples, 16);
+        assert_eq!(iq_samples.len(), 32);
         assert!((iq_samples[0] - 1000.0 / 8_388_608.0).abs() < f32::EPSILON);
         assert!((iq_samples[1] - (-2000.0 / 8_388_608.0)).abs() < f32::EPSILON);
         assert_eq!(parser.stats.header_errors, 0);

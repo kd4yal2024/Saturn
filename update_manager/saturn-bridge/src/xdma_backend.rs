@@ -155,7 +155,7 @@ fn run_inner(config: BridgeConfig, ready_path: &Path) -> Result<(), Box<dyn Erro
         tx_cmd_rx,
         tx_event_tx,
         tx_stop.clone(),
-    );
+    )?;
     let mut tx_control = DirectTxControl::default();
     let mut wdsp = {
         let model = radio_model.lock_unpoisoned();

@@ -1,7 +1,7 @@
 use std::collections::VecDeque;
 use std::env;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{Receiver, Sender, TryRecvError};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender, TryRecvError};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
@@ -11,6 +11,10 @@ use crate::radio_model::{PureSignalState, RadioModel};
 use crate::sync_ext::MutexExt;
 use crate::wdsp::{
     WdspTxEngine, DUC_IQ_SAMPLES_PER_PACKET, TX_MIC_SAMPLES_PER_DSP_BLOCK, WDSP_TX_IQ_RATE_HZ,
+};
+use crate::xdma::XdmaError;
+use crate::xdma_duc::{
+    allowed_cpu_ids, current_scheduler, enable_realtime_fifo, pin_current_thread,
 };
 
 const TX_SILENCE_GAP: Duration = Duration::from_millis(250);
@@ -57,10 +61,48 @@ pub trait TxRadio: Send + Sync {
     /// it accumulates a safe FIFO prefill; P2 keys and sends immediately.
     fn try_key_with_iq(&self, model: &RadioModel, iq_samples: &[f32]) -> Result<bool, String>;
     fn send_duc_iq(&self, iq_samples: &[f32]) -> TxRadioResult;
+    /// Maximum number of consecutive DUC IQ packets that the backend can
+    /// accept in one output operation. P2 preserves its established
+    /// packet-at-a-time UDP cadence; direct XDMA advertises a bounded batch so
+    /// one kernel wakeup can replenish several milliseconds of FPGA FIFO.
+    fn max_duc_iq_batch_packets(&self) -> usize {
+        1
+    }
+    /// Send consecutive, distinct DUC IQ packets in chronological order.
+    /// Backends without a native batching primitive retain packet-at-a-time
+    /// behavior through this default implementation.
+    fn send_duc_iq_batch(&self, iq_samples: &[f32]) -> TxRadioResult {
+        let floats_per_packet = DUC_IQ_SAMPLES_PER_PACKET * 2;
+        if iq_samples.is_empty() || !iq_samples.len().is_multiple_of(floats_per_packet) {
+            return Err(format!(
+                "invalid DUC IQ batch: floats={} packet_floats={floats_per_packet}",
+                iq_samples.len()
+            ));
+        }
+        for packet in iq_samples.chunks_exact(floats_per_packet) {
+            self.send_duc_iq(packet)?;
+        }
+        Ok(())
+    }
     /// Exercise the DUC data path while RF controls remain forced to receive.
     /// P2 uses only the browser-side diagnostic; direct XDMA also validates
     /// packing, DMA writes, FIFO pacing, and cleanup in this mode.
     fn stage_iq_rf_disabled(&self, _model: &RadioModel, _iq_samples: &[f32]) -> TxRadioResult {
+        Ok(())
+    }
+    /// Batch counterpart to `stage_iq_rf_disabled`. The default preserves the
+    /// one-packet staging contract for non-XDMA backends.
+    fn stage_iq_batch_rf_disabled(&self, model: &RadioModel, iq_samples: &[f32]) -> TxRadioResult {
+        let floats_per_packet = DUC_IQ_SAMPLES_PER_PACKET * 2;
+        if iq_samples.is_empty() || !iq_samples.len().is_multiple_of(floats_per_packet) {
+            return Err(format!(
+                "invalid RF-disabled DUC IQ batch: floats={} packet_floats={floats_per_packet}",
+                iq_samples.len()
+            ));
+        }
+        for packet in iq_samples.chunks_exact(floats_per_packet) {
+            self.stage_iq_rf_disabled(model, packet)?;
+        }
         Ok(())
     }
     /// Number of zero-input WDSP blocks to process and discard whenever TX is
@@ -93,6 +135,11 @@ pub trait TxRadio: Send + Sync {
     /// its hardware FIFO is draining. Such changes take effect on next arm.
     fn defer_model_changes_while_keyed(&self) -> bool {
         false
+    }
+    /// Direct FPGA output must not depend on ordinary time-sharing latency.
+    /// P2 uses its established UDP producer and leaves this unset.
+    fn realtime_priority(&self) -> Option<i32> {
+        None
     }
     fn configure_rx_ddc(
         &self,
@@ -140,6 +187,20 @@ impl TxRadio for P2Session {
 
 fn duc_iq_packet_period() -> Duration {
     Duration::from_secs_f64(DUC_IQ_SAMPLES_PER_PACKET as f64 / WDSP_TX_IQ_RATE_HZ as f64)
+}
+
+fn duc_batch_packet_count(
+    batching_allowed: bool,
+    available_packets: usize,
+    backend_limit: usize,
+    loop_limit: usize,
+) -> usize {
+    let state_limit = if batching_allowed {
+        backend_limit.max(1)
+    } else {
+        1
+    };
+    available_packets.min(state_limit).min(loop_limit)
 }
 
 fn duc_iq_packet_can_key_rf(rf_enabled: bool, peak: f32) -> bool {
@@ -299,13 +360,79 @@ pub fn spawn(
     cmd_rx: Receiver<TxCommand>,
     event_tx: Sender<TxEvent>,
     stop_flag: Arc<AtomicBool>,
-) -> JoinHandle<()> {
-    thread::Builder::new()
+) -> Result<JoinHandle<()>, XdmaError> {
+    let realtime_priority = session.realtime_priority();
+    let thread_stop = stop_flag.clone();
+    let (startup_tx, startup_rx) = mpsc::sync_channel(1);
+    let worker = thread::Builder::new()
         .name("saturn-tx".into())
         .spawn(move || {
-            run(session, radio_model, cmd_rx, event_tx, stop_flag);
+            let scheduling = configure_tx_thread_scheduling(realtime_priority);
+            match scheduling {
+                Ok(Some((cpu, policy, priority))) => {
+                    let _ = startup_tx.send(Ok(()));
+                    println!(
+                        "saturn-bridge: TX thread scheduling cpu={cpu} policy={policy} priority={priority}"
+                    );
+                    run(session, radio_model, cmd_rx, event_tx, thread_stop);
+                }
+                Ok(None) => {
+                    let _ = startup_tx.send(Ok(()));
+                    run(session, radio_model, cmd_rx, event_tx, thread_stop);
+                }
+                Err(error) => {
+                    let message = error.to_string();
+                    let _ = startup_tx.send(Err(message.clone()));
+                    eprintln!("saturn-bridge: TX thread scheduling failed: {message}");
+                }
+            }
         })
-        .expect("failed to spawn TX thread")
+        .map_err(|source| XdmaError::Io {
+            action: "could not spawn Saturn TX thread",
+            source,
+        })?;
+
+    match startup_rx.recv_timeout(Duration::from_secs(2)) {
+        Ok(Ok(())) => Ok(worker),
+        Ok(Err(message)) => {
+            let _ = worker.join();
+            Err(XdmaError::Incompatible(message))
+        }
+        Err(RecvTimeoutError::Timeout) => {
+            stop_flag.store(true, Ordering::SeqCst);
+            let _ = worker.join();
+            Err(XdmaError::Incompatible(
+                "timed out configuring Saturn TX thread scheduling".into(),
+            ))
+        }
+        Err(RecvTimeoutError::Disconnected) => {
+            let _ = worker.join();
+            Err(XdmaError::Incompatible(
+                "Saturn TX thread exited before reporting scheduling readiness".into(),
+            ))
+        }
+    }
+}
+
+fn configure_tx_thread_scheduling(
+    realtime_priority: Option<i32>,
+) -> Result<Option<(usize, &'static str, i32)>, XdmaError> {
+    let Some(realtime_priority) = realtime_priority else {
+        return Ok(None);
+    };
+    let cpu = allowed_cpu_ids()?
+        .last()
+        .copied()
+        .ok_or_else(|| XdmaError::Incompatible("no CPU is available for direct XDMA TX".into()))?;
+    pin_current_thread(cpu)?;
+    enable_realtime_fifo(realtime_priority)?;
+    let (policy, actual_priority) = current_scheduler()?;
+    if policy != "fifo" || actual_priority != realtime_priority {
+        return Err(XdmaError::Incompatible(format!(
+            "direct XDMA TX scheduler verification failed: policy={policy} priority={actual_priority} expected=fifo/{realtime_priority}"
+        )));
+    }
+    Ok(Some((cpu, policy, actual_priority)))
 }
 
 fn run(
@@ -365,6 +492,9 @@ fn run(
     let qualify_mic_at_dsp_input = session.qualify_mic_at_dsp_input();
     let recreate_wdsp_on_arm = session.recreate_wdsp_on_arm();
     let defer_model_changes_while_keyed = session.defer_model_changes_while_keyed();
+    let max_duc_iq_batch_packets = session
+        .max_duc_iq_batch_packets()
+        .clamp(1, MAX_DUC_PACKETS_PER_LOOP);
     let mut key_qualification = KeyQualification::new(session.key_qualification_packets());
     let mut logged_keyable_mic_input = false;
 
@@ -782,10 +912,17 @@ fn run(
                 && Instant::now() >= next_duc_iq_at
                 && sent_this_loop < MAX_DUC_PACKETS_PER_LOOP
             {
-                let chunk: Vec<f32> = wdsp_tx.pending_iq.drain(..floats_per_packet).collect();
+                let batch_packets = duc_batch_packet_count(
+                    state == TxState::Keyed || !rf_enabled,
+                    wdsp_tx.pending_iq.len() / floats_per_packet,
+                    max_duc_iq_batch_packets,
+                    MAX_DUC_PACKETS_PER_LOOP - sent_this_loop,
+                );
+                let chunk_floats = batch_packets * floats_per_packet;
+                let chunk: Vec<f32> = wdsp_tx.pending_iq.drain(..chunk_floats).collect();
                 let mut chunk_consumed_on_key = false;
-                next_duc_iq_at += duc_packet_period;
-                sent_this_loop += 1;
+                next_duc_iq_at += duc_packet_period * batch_packets as u32;
+                sent_this_loop += batch_packets;
                 let peak = chunk
                     .iter()
                     .fold(0.0f32, |current, sample| current.max(sample.abs()));
@@ -801,14 +938,19 @@ fn run(
                     // Always publish TX IQ to the browser display, even
                     // before keying — the operator should see the TX
                     // spectrum as soon as MOX is armed.
-                    maybe_publish_tx_iq_display(
-                        &event_tx,
-                        &mut tx_display_buffer,
-                        &mut tx_display_peak,
-                        tx_display_frame_floats,
-                        peak,
-                        &chunk,
-                    );
+                    for packet in chunk.chunks_exact(floats_per_packet) {
+                        let packet_peak = packet
+                            .iter()
+                            .fold(0.0f32, |current, sample| current.max(sample.abs()));
+                        maybe_publish_tx_iq_display(
+                            &event_tx,
+                            &mut tx_display_buffer,
+                            &mut tx_display_peak,
+                            tx_display_frame_floats,
+                            packet_peak,
+                            packet,
+                        );
+                    }
 
                     let mic_recent = last_keyable_mic_at
                         .map(|t| t.elapsed() < keyable_mic_window)
@@ -817,7 +959,7 @@ fn run(
                     if !rf_enabled {
                         let staged = {
                             let model = radio_model.lock_unpoisoned();
-                            session.stage_iq_rf_disabled(&model, &chunk)
+                            session.stage_iq_batch_rf_disabled(&model, &chunk)
                         };
                         if let Err(error) = staged {
                             eprintln!("saturn-bridge: TX RF-disabled DUC staging failed: {error}");
@@ -923,28 +1065,35 @@ fn run(
                 );
                 }
 
-                maybe_publish_tx_iq_display(
-                    &event_tx,
-                    &mut tx_display_buffer,
-                    &mut tx_display_peak,
-                    tx_display_frame_floats,
-                    peak,
-                    &chunk,
-                );
+                for packet in chunk.chunks_exact(floats_per_packet) {
+                    let packet_peak = packet
+                        .iter()
+                        .fold(0.0f32, |current, sample| current.max(sample.abs()));
+                    maybe_publish_tx_iq_display(
+                        &event_tx,
+                        &mut tx_display_buffer,
+                        &mut tx_display_peak,
+                        tx_display_frame_floats,
+                        packet_peak,
+                        packet,
+                    );
+                }
                 if !chunk_consumed_on_key {
                     // The transition packet is consumed by try_key_with_iq().
                     // Every later keyed packet uses the steady-state path.
-                    if let Err(e) = session.send_duc_iq(&chunk) {
+                    if let Err(e) = session.send_duc_iq_batch(&chunk) {
                         eprintln!("saturn-bridge: TX thread: DUC IQ send error: {e}");
                         output_fault = true;
                         break;
                     }
                 }
-                duc_packet_count = duc_packet_count.saturating_add(1);
-                if duc_packet_count == 1 || last_diag_at.elapsed() >= Duration::from_millis(500) {
+                duc_packet_count = duc_packet_count.saturating_add(batch_packets as u64);
+                if duc_packet_count == batch_packets as u64
+                    || last_diag_at.elapsed() >= Duration::from_millis(500)
+                {
                     println!(
-                        "saturn-bridge: TX diag duc_packet={} packet_peak={:.4}",
-                        duc_packet_count, peak
+                        "saturn-bridge: TX diag duc_packet={} batch_packets={} packet_peak={:.4}",
+                        duc_packet_count, batch_packets, peak
                     );
                     last_diag_at = Instant::now();
                 }
@@ -1276,6 +1425,11 @@ mod tests {
     }
 
     #[test]
+    fn normal_backend_does_not_change_thread_scheduling() {
+        assert!(configure_tx_thread_scheduling(None).unwrap().is_none());
+    }
+
+    #[test]
     fn puresignal_auto_attenuation_tracks_feedback_target_window() {
         assert_eq!(puresignal_auto_attenuation(152, 10), 10);
         assert_eq!(puresignal_auto_attenuation(300, 10), 25);
@@ -1335,5 +1489,23 @@ mod tests {
     #[test]
     fn duc_iq_packet_period_matches_192khz_packet_rate() {
         assert_eq!(duc_iq_packet_period(), Duration::from_micros(1250));
+    }
+
+    #[test]
+    fn keyed_direct_output_batches_only_available_packets_within_loop_limit() {
+        assert_eq!(duc_batch_packet_count(true, 12, 8, 8), 8);
+        assert_eq!(duc_batch_packet_count(true, 3, 8, 8), 3);
+        assert_eq!(duc_batch_packet_count(true, 8, 8, 5), 5);
+    }
+
+    #[test]
+    fn armed_and_packet_backends_keep_single_packet_output() {
+        assert_eq!(duc_batch_packet_count(false, 8, 8, 8), 1);
+        assert_eq!(duc_batch_packet_count(true, 8, 1, 8), 1);
+    }
+
+    #[test]
+    fn rf_inhibited_direct_output_can_exercise_the_batch_path() {
+        assert_eq!(duc_batch_packet_count(true, 8, 8, 8), 8);
     }
 }

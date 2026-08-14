@@ -1092,8 +1092,7 @@ pub(crate) fn enable_realtime_fifo(priority: i32) -> Result<(), XdmaError> {
     let result = unsafe { libc::sched_setscheduler(0, libc::SCHED_FIFO, &parameter) };
     if result != 0 {
         return Err(XdmaError::Io {
-            action:
-                "could not enable SCHED_FIFO for XDMA DUC probe (run as root or grant CAP_SYS_NICE)",
+            action: "could not enable SCHED_FIFO for XDMA DUC thread (run as root or configure LimitRTPRIO)",
             source: io::Error::last_os_error(),
         });
     }

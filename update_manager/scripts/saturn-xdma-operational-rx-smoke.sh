@@ -8,11 +8,12 @@ set -Eeuo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 REPO_ROOT="${SATURN_XDMA_RX_SMOKE_REPO_ROOT:-$(cd -- "$SCRIPT_DIR/../.." && pwd -P)}"
 BRIDGE_ROOT="$REPO_ROOT/update_manager/saturn-bridge"
-BRIDGE_BINARY="${SATURN_XDMA_RX_SMOKE_BRIDGE_BINARY:-$BRIDGE_ROOT/target/debug/saturn-bridge}"
+BRIDGE_BINARY="${SATURN_XDMA_RX_SMOKE_BRIDGE_BINARY:-}"
 DURATION_SECONDS="${SATURN_XDMA_RX_SMOKE_DURATION_SECONDS:-15}"
 READY_WAIT_SECONDS="${SATURN_XDMA_RX_SMOKE_READY_WAIT_SECONDS:-}"
 READY_FILE="${SATURN_XDMA_RX_SMOKE_READY_FILE:-/tmp/saturn-xdma-ready.json}"
 OBSERVED_FILE="${SATURN_XDMA_RX_SMOKE_OBSERVED_FILE:-/tmp/saturn-xdma-ready-observed.json}"
+RATE_START_FILE="${SATURN_XDMA_RX_SMOKE_RATE_START_FILE:-/tmp/saturn-xdma-rate-start.json}"
 LOG_FILE="${SATURN_XDMA_RX_SMOKE_LOG_FILE:-/tmp/saturn-xdma-operational-rx-smoke.log}"
 CLIENT_PROBE_SCRIPT="${SATURN_XDMA_RX_SMOKE_CLIENT_PROBE_SCRIPT:-$SCRIPT_DIR/saturn-xdma-operational-client.py}"
 CLIENT_RESULT_FILE="${SATURN_XDMA_RX_SMOKE_CLIENT_RESULT_FILE:-/tmp/saturn-xdma-operational-client-result.json}"
@@ -20,8 +21,9 @@ CLIENT_ERROR_FILE="${SATURN_XDMA_RX_SMOKE_CLIENT_ERROR_FILE:-/tmp/saturn-xdma-op
 VALIDATION_FILE="${SATURN_XDMA_RX_SMOKE_VALIDATION_FILE:-/var/lib/saturn-state/xdma-telemetry.json}"
 PROXY_BASE_URL="${SATURN_XDMA_RX_SMOKE_PROXY_BASE_URL:-wss://127.0.0.1:8443}"
 SATURN_GO_SERVICE="${SATURN_XDMA_RX_SMOKE_SATURN_GO_SERVICE:-saturn-go.service}"
-MIN_STREAM_RATE=188160
-MAX_STREAM_RATE=195840
+TARGET_STREAM_RATE=384000
+MIN_STREAM_RATE=376320
+MAX_STREAM_RATE=391680
 
 CLIENT_PROBE=0
 PROXY_CLIENT_PROBE=0
@@ -66,8 +68,9 @@ appliance's localhost self-signed certificate only for this bounded test.
 locked to 7.200 MHz, ANT1, and 3 W. It requires this exact environment token:
   SATURN_XDMA_PRODUCTION_TX_CONFIRM=DUMMY_LOAD_CONNECTED_ANT1_7200000HZ_3W
 
-Build the standalone debug binary before running this test:
-  CARGO_BUILD_JOBS=1 cargo build \
+RX-only smoke tests may use the debug binary. Client acceptance exercises the
+real-time DUC path and therefore defaults to the optimized release binary:
+  CARGO_BUILD_JOBS=1 cargo build --release \
     --manifest-path update_manager/saturn-bridge/Cargo.toml
 EOF
 }
@@ -78,7 +81,7 @@ positive_integer(){
 
 persist_validation(){
   python3 - \
-    "$VALIDATION_FILE" "$OBSERVED_FILE" "$READY_FILE" "$CLIENT_RESULT_FILE" \
+    "$VALIDATION_FILE" "$OBSERVED_FILE" "$RATE_START_FILE" "$READY_FILE" "$CLIENT_RESULT_FILE" \
     "$STREAM_RATE" "$STREAM_ELAPSED_MS" "$TX_CYCLES" <<'PY'
 import json
 import os
@@ -86,9 +89,11 @@ import sys
 import tempfile
 import time
 
-path, observed_path, stopped_path, client_path, rate, elapsed_ms, cycles = sys.argv[1:]
+path, observed_path, rate_start_path, stopped_path, client_path, rate, elapsed_ms, cycles = sys.argv[1:]
 with open(observed_path, encoding="utf-8") as handle:
     observed = json.load(handle)
+with open(rate_start_path, encoding="utf-8") as handle:
+    rate_start = json.load(handle)
 with open(stopped_path, encoding="utf-8") as handle:
     stopped = json.load(handle)
 client = None
@@ -120,6 +125,7 @@ document = {
     },
     "client": client,
     "observed_ready": observed,
+    "steady_rate_start": rate_start,
     "final_stopped": stopped,
 }
 directory = os.path.dirname(path)
@@ -251,6 +257,19 @@ if (( RF_TX_PROBE && ! TX_CYCLES_EXPLICIT )); then
   TX_CYCLES=1
 fi
 
+if [[ -z "$BRIDGE_BINARY" ]]; then
+  if (( CLIENT_PROBE )); then
+    BRIDGE_BINARY="$BRIDGE_ROOT/target/release/saturn-bridge"
+  else
+    BRIDGE_BINARY="$BRIDGE_ROOT/target/debug/saturn-bridge"
+  fi
+fi
+
+BUILD_PROFILE_ARG=""
+if [[ "$BRIDGE_BINARY" == "$BRIDGE_ROOT/target/release/saturn-bridge" ]]; then
+  BUILD_PROFILE_ARG=" --release"
+fi
+
 if [[ -z "$READY_WAIT_SECONDS" ]]; then
   READY_WAIT_SECONDS="$DURATION_SECONDS"
 fi
@@ -264,6 +283,8 @@ positive_integer "TX cycles" "$TX_CYCLES"
 if (( CLIENT_PROBE )); then
   (( DURATION_SECONDS >= 45 )) \
     || die "--client-probe requires a duration of at least 45 seconds"
+  [[ "$BRIDGE_BINARY" != "$BRIDGE_ROOT/target/debug/saturn-bridge" ]] \
+    || die "--client-probe requires an optimized bridge binary; build target/release/saturn-bridge or set SATURN_XDMA_RX_SMOKE_BRIDGE_BINARY to an optimized staged binary"
 fi
 (( TX_CYCLES <= 20 )) || die "TX cycles must not exceed 20"
 if (( RF_TX_PROBE )); then
@@ -305,7 +326,7 @@ do
   fi
 done
 if [[ -n "$NEWER_SOURCE" ]]; then
-  die "standalone bridge binary is stale (newer input: $NEWER_SOURCE). Run: CARGO_BUILD_JOBS=1 cargo build --manifest-path update_manager/saturn-bridge/Cargo.toml"
+  die "standalone bridge binary is stale (newer input: $NEWER_SOURCE). Run: CARGO_BUILD_JOBS=1 cargo build$BUILD_PROFILE_ARG --manifest-path update_manager/saturn-bridge/Cargo.toml"
 fi
 
 P2_WAS="$(service_state p2app.service)"
@@ -318,6 +339,7 @@ if (( PROXY_CLIENT_PROBE )) && [[ "$SATURN_GO_WAS" != "active" ]]; then
 fi
 
 log "Prior services: p2app=$P2_WAS saturn-bridge=$BRIDGE_WAS saturn-go=$SATURN_GO_WAS"
+log "Bridge binary: $BRIDGE_BINARY"
 if (( RF_TX_PROBE )); then
   SATURN_GO_MANAGED=1
   systemctl stop "$SATURN_GO_SERVICE"
@@ -333,6 +355,7 @@ systemctl stop saturn-bridge.service p2app.service
 rm -f -- \
   "$READY_FILE" \
   "$OBSERVED_FILE" \
+  "$RATE_START_FILE" \
   "$LOG_FILE" \
   "$CLIENT_RESULT_FILE" \
   "$CLIENT_ERROR_FILE"
@@ -382,6 +405,36 @@ rm -f -- \
             "$CLIENT_ERROR_FILE" >&2
           exit 1
         fi
+        rate_deadline="$((SECONDS + 5))"
+        while (( SECONDS < rate_deadline )); do
+          if jq -e '
+            .backend == "xdma" and
+            .status == "ready" and
+            .rf_safe == true and
+            .metrics.rf_safe == true and
+            .metrics.tx_stream_active == false and
+            .metrics.tx_keyed == false
+          ' "$READY_FILE" >/dev/null 2>&1; then
+            # Exclude half-duplex TX and its release transition from the
+            # receive-only 384 kHz rate gate.
+            sleep 1
+            if jq -e '
+              .backend == "xdma" and
+              .status == "ready" and
+              .rf_safe == true and
+              .metrics.rf_safe == true and
+              .metrics.tx_stream_active == false and
+              .metrics.tx_keyed == false
+            ' "$READY_FILE" >/dev/null 2>&1; then
+              cp -- "$READY_FILE" "$RATE_START_FILE"
+              exit 0
+            fi
+          fi
+          sleep 0.25
+        done
+        exit 1
+      else
+        cp -- "$OBSERVED_FILE" "$RATE_START_FILE"
       fi
       exit 0
     fi
@@ -420,6 +473,12 @@ if (( PROXY_CLIENT_PROBE )) && [[ "$(service_state "$SATURN_GO_SERVICE")" != "ac
   die "$SATURN_GO_SERVICE stopped during proxy client acceptance"
 fi
 [[ -s "$OBSERVED_FILE" ]] || die "ready-state observation was not retained"
+[[ -s "$RATE_START_FILE" ]] || die "steady receive-rate start state was not retained"
+
+jq -e --argjson target_rate "$TARGET_STREAM_RATE" '
+  .metrics.sample_rate_hz == $target_rate
+' "$OBSERVED_FILE" >/dev/null \
+  || die "direct XDMA readiness did not report the required ${TARGET_STREAM_RATE} Hz IQ rate"
 
 jq -e '
   .backend == "xdma" and
@@ -464,6 +523,7 @@ if (( CLIENT_PROBE )); then
       .bridge_ready == true and
       .split_paired == true and
       .remote_tx_rf_enabled == false and
+      .control_role == "operator" and
       .rf_inhibited_duc_exercised == true and
       .tx_cycles_completed == .tx_cycles_requested and
       ([.tx_cycle_results[] | select(.dma_writes > 0 and .frames >= 20 and .fifo_faults == 0 and .mux_resets >= 1)] | length) == .tx_cycles_completed and
@@ -506,9 +566,9 @@ if (( CLIENT_PROBE )); then
     || die "runtime log is missing the client disconnect"
 fi
 
-READY_UPDATED_MS="$(jq -r '.updated_at_ms' "$OBSERVED_FILE")"
+READY_UPDATED_MS="$(jq -r '.updated_at_ms' "$RATE_START_FILE")"
 STOPPED_UPDATED_MS="$(jq -r '.updated_at_ms' "$READY_FILE")"
-READY_IQ_PAIRS="$(jq -r '.metrics.iq_pairs' "$OBSERVED_FILE")"
+READY_IQ_PAIRS="$(jq -r '.metrics.iq_pairs' "$RATE_START_FILE")"
 STOPPED_IQ_PAIRS="$(jq -r '.metrics.iq_pairs' "$READY_FILE")"
 STREAM_ELAPSED_MS="$((STOPPED_UPDATED_MS - READY_UPDATED_MS))"
 STREAM_IQ_PAIRS="$((STOPPED_IQ_PAIRS - READY_IQ_PAIRS))"
@@ -516,7 +576,7 @@ STREAM_IQ_PAIRS="$((STOPPED_IQ_PAIRS - READY_IQ_PAIRS))"
   || die "readiness timestamps or IQ counters did not advance"
 STREAM_RATE="$((STREAM_IQ_PAIRS * 1000 / STREAM_ELAPSED_MS))"
 (( STREAM_RATE >= MIN_STREAM_RATE && STREAM_RATE <= MAX_STREAM_RATE )) \
-  || die "steady-state IQ rate ${STREAM_RATE}/s is outside the 192 kHz +/-2% acceptance band"
+  || die "steady-state IQ rate ${STREAM_RATE}/s is outside the 384 kHz +/-2% acceptance band"
 
 restore_services || die "could not restore the prior service activity"
 persist_validation
