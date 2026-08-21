@@ -52,7 +52,7 @@ describe('displayPrefsFromState', () => {
     expect(prefs.waterfallPalette).toBe('classic');
     expect(prefs.spectrumAverage).toBe(1);
     expect(prefs.waterfallSpeed).toBe(1);
-    expect(prefs.spectrumTraceColor).toBe('#62d0ff');
+    expect(prefs.spectrumTraceColor).toBe('#8b3fb2');
     expect(prefs.spectrumTraceSmoothing).toBe(0);
     expect(prefs.spectrumTraceFill).toBe(0);
     expect(prefs.spectrumPeakGlow).toBe(0);

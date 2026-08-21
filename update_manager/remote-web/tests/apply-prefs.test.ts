@@ -155,7 +155,7 @@ describe('normalizeAppStateInPlace', () => {
     normalizeAppStateInPlace(state);
     expect(state.waterfallPalette).toBe('classic');
     expect(state.spectrumAverage).toBeGreaterThanOrEqual(1);
-    expect(state.spectrumTraceColor).toBe('#62d0ff');
+    expect(state.spectrumTraceColor).toBe('#8b3fb2');
     expect(state.spectrumTraceSmoothing).toBe(100);
     expect(state.spectrumTraceFill).toBe(100);
     expect(state.spectrumPeakGlow).toBe(0);

@@ -53,6 +53,44 @@ export function dbmToSmDeg(dbm: number): number {
   return SM_START + Math.max(0, Math.min(1, (dbm + 121) / 108)) * 120;
 }
 
+/**
+ * Format an HF S-meter value without pretending that a missing sample is S0.
+ * S1 starts at -121 dBm, S9 is -73 dBm, and readings above S9 are expressed
+ * as decibels over S9 in the familiar transceiver form.
+ */
+export function formatSignalStrength(dbm: number | null): string {
+  if (dbm == null || !Number.isFinite(dbm)) return '--';
+  if (dbm < -121) return '< S1';
+  if (dbm < -73) {
+    const sUnit = Math.min(8, Math.max(1, Math.floor((dbm + 127) / 6)));
+    return `S${sUnit}`;
+  }
+  const overS9 = Math.max(0, Math.round(dbm + 73));
+  return overS9 === 0 ? 'S9' : `S9 +${overS9}`;
+}
+
+/** Convert a normalized linear peak to a stable dBFS readout. */
+export function linearLevelToDbfs(level: number | null, floorDb = -120): number | null {
+  if (level == null || !Number.isFinite(level)) return null;
+  const floor = Math.min(0, Number.isFinite(floorDb) ? floorDb : -120);
+  if (level <= 0) return floor;
+  return Math.max(floor, Math.min(0, 20 * Math.log10(level)));
+}
+
+export type InstrumentOperatingState = 'rx' | 'armed' | 'tx';
+
+/** Derive presentation state only from authoritative TX state. */
+export function instrumentOperatingState(
+  txPhase: string,
+  moxRequested: boolean,
+  txEnabled: boolean,
+  txReady = false,
+): InstrumentOperatingState {
+  if (txPhase === 'keyed' || txEnabled) return 'tx';
+  if (txPhase === 'armed' || moxRequested || txReady) return 'armed';
+  return 'rx';
+}
+
 // ── Aux meters (TX Power, SWR) ──────────────────────────────────────────────
 
 /** Aux meter geometry constants. */

@@ -26,14 +26,31 @@ const expectedPills = [
 const viewportScenarios = [
   { name: 'phone-portrait', width: 390, height: 844, layout: 'phone' },
   { name: 'phone-landscape', width: 844, height: 390, layout: 'phone' },
-  { name: 'tablet', width: 1024, height: 768, layout: 'desktop' },
-  { name: 'laptop', width: 1366, height: 768, layout: 'desktop' },
+  { name: 'tablet-portrait', width: 768, height: 1024, layout: 'desktop' },
+  { name: 'tablet-landscape', width: 1024, height: 768, layout: 'desktop' },
+  { name: 'compact-desktop', width: 1366, height: 768, layout: 'desktop' },
+  { name: 'desktop', width: 1440, height: 900, layout: 'desktop' },
+  { name: 'desktop-hd', width: 1920, height: 1080, layout: 'desktop' },
+  { name: 'desktop-ultrawide', width: 2560, height: 1440, layout: 'desktop' },
 ];
 
-const scenarios = viewportScenarios.flatMap((scenario) => [
+const drawerScenarios = viewportScenarios.flatMap((scenario) => [
   { ...scenario, drawerOpen: false },
   { ...scenario, name: `${scenario.name}-drawer`, drawerOpen: true },
 ]);
+const setupScenarios = viewportScenarios
+  .filter((scenario) => ['phone-portrait', 'phone-landscape', 'tablet-portrait', 'desktop'].includes(scenario.name))
+  .map((scenario) => ({ ...scenario, name: `${scenario.name}-setup`, drawerOpen: false, setupOpen: true }));
+const allScenarios = [...drawerScenarios, ...setupScenarios];
+const requestedScenarioNames = new Set(
+  `${process.env.SATURN_LAYOUT_SCENARIOS || ''}`
+    .split(',')
+    .map((name) => name.trim())
+    .filter(Boolean),
+);
+const scenarios = requestedScenarioNames.size
+  ? allScenarios.filter((scenario) => requestedScenarioNames.has(scenario.name))
+  : allScenarios;
 
 function requireFile(path, label) {
   if (!existsSync(path)) {
@@ -128,6 +145,70 @@ function validationScript(scenario) {
       drawerRowCount: rows.length >= 22 ? [] : [{ expectedAtLeast: 22, actual: rows.length }]
     };
   }
+  function setupFailures() {
+    const menu = document.getElementById("setup-menu");
+    const nav = menu?.querySelector(".setup-nav");
+    const tabs = Array.from(menu?.querySelectorAll("[data-setup-panel]") || []);
+    const panels = Array.from(menu?.querySelectorAll("[data-setup-panel-id]") || []);
+    if (!scenario.setupOpen) {
+      return {
+        setupMissing: menu ? [] : ["setup-menu"],
+        setupUnexpectedlyVisible: menu && visible(menu) ? ["setup-menu"] : [],
+        setupViewportOverflow: [],
+        setupContentOverflow: [],
+        setupTabCount: [],
+        setupPanelCount: []
+      };
+    }
+    const rect = menu ? rectFor(menu) : null;
+    return {
+      setupMissing: [menu ? "" : "setup-menu", nav ? "" : "setup-nav"].filter(Boolean),
+      setupHidden: menu && visible(menu) ? [] : ["setup-menu"],
+      setupViewportOverflow: rect && (
+        rect.left < -1 || rect.top < -1 ||
+        rect.right > window.innerWidth + 1 || rect.bottom > window.innerHeight + 1
+      ) ? ["setup-menu"] : [],
+      setupContentOverflow: textOverflow(".setup-title, .setup-meta, .setup-tab-btn, .setup-section-title, .setup-readout"),
+      setupTabCount: tabs.length === 7 ? [] : [{ expected: 7, actual: tabs.length }],
+      setupPanelCount: panels.length === 7 ? [] : [{ expected: 7, actual: panels.length }]
+    };
+  }
+  function displayWorkspaceFailures() {
+    const stack = document.querySelector(".display-stack");
+    const spectrum = document.getElementById("spectrum-shell");
+    const waterfall = document.getElementById("waterfall-shell");
+    const separator = document.getElementById("spectrum-waterfall-resizer");
+    const stackRect = stack ? rectFor(stack) : null;
+    const spectrumRect = spectrum ? rectFor(spectrum) : null;
+    const waterfallRect = waterfall ? rectFor(waterfall) : null;
+    const separatorVisible = separator ? visible(separator) : false;
+    const aligned = spectrumRect && waterfallRect &&
+      Math.abs(spectrumRect.left - waterfallRect.left) <= 1 &&
+      Math.abs(spectrumRect.right - waterfallRect.right) <= 1;
+    return {
+      displayWorkspaceMissing: [
+        stack ? "" : "display-stack",
+        spectrum ? "" : "spectrum-shell",
+        waterfall ? "" : "waterfall-shell",
+        separator ? "" : "spectrum-waterfall-resizer"
+      ].filter(Boolean),
+      displayWorkspaceHidden: [
+        spectrum && visible(spectrum) ? "" : "spectrum-shell",
+        waterfall && visible(waterfall) ? "" : "waterfall-shell"
+      ].filter(Boolean),
+      displayWorkspaceMisaligned: aligned ? [] : [{ spectrum: spectrumRect, waterfall: waterfallRect }],
+      displayWorkspaceTooSmall: [
+        spectrumRect && spectrumRect.height >= 120 ? "" : { id: "spectrum-shell", height: spectrumRect?.height || 0 },
+        waterfallRect && waterfallRect.height >= 80 ? "" : { id: "waterfall-shell", height: waterfallRect?.height || 0 }
+      ].filter(Boolean),
+      displayWorkspaceViewportOverflow: stackRect && (
+        stackRect.left < -1 || stackRect.right > window.innerWidth + 1
+      ) ? ["display-stack"] : [],
+      displaySeparatorState: scenario.layout === "phone"
+        ? (separatorVisible ? ["separator visible in phone mode"] : [])
+        : (separatorVisible ? [] : ["separator hidden outside phone mode"])
+    };
+  }
   function runValidation() {
     const strip = document.querySelector(".operator-state-strip");
     const pills = Array.from(document.querySelectorAll(".operator-pill"));
@@ -165,7 +246,9 @@ function validationScript(scenario) {
       viewportOverflow,
       valueOverflow: textOverflow(".operator-pill-value"),
       layoutMismatch: layout === scenario.layout ? [] : [{ expected: scenario.layout, actual: layout }],
-      ...drawerFailures()
+      ...displayWorkspaceFailures(),
+      ...drawerFailures(),
+      ...setupFailures()
     };
     const ok = Object.values(failures).every((value) => Array.isArray(value) && value.length === 0);
     const report = {
@@ -173,6 +256,11 @@ function validationScript(scenario) {
       ok,
       layout,
       viewport: { width: window.innerWidth, height: window.innerHeight },
+      page: document.querySelector(".page.console-page") ? {
+        rect: rectFor(document.querySelector(".page.console-page")),
+        width: window.getComputedStyle(document.querySelector(".page.console-page")).width,
+        maxWidth: window.getComputedStyle(document.querySelector(".page.console-page")).maxWidth
+      } : null,
       stripRect,
       drawer: {
         open: Boolean(scenario.drawerOpen),
@@ -180,6 +268,17 @@ function validationScript(scenario) {
         sheetRect: document.querySelector(".operator-detail-sheet") ? rectFor(document.querySelector(".operator-detail-sheet")) : null,
         groupCount: document.querySelectorAll(".operator-detail-group").length,
         rowCount: document.querySelectorAll(".operator-detail-row").length
+      },
+      setup: {
+        open: Boolean(scenario.setupOpen),
+        menuRect: document.getElementById("setup-menu") ? rectFor(document.getElementById("setup-menu")) : null,
+        tabCount: document.querySelectorAll("#setup-menu [data-setup-panel]").length,
+        panelCount: document.querySelectorAll("#setup-menu [data-setup-panel-id]").length
+      },
+      displayWorkspace: {
+        stackRect: document.querySelector(".display-stack") ? rectFor(document.querySelector(".display-stack")) : null,
+        spectrumRect: document.getElementById("spectrum-shell") ? rectFor(document.getElementById("spectrum-shell")) : null,
+        waterfallRect: document.getElementById("waterfall-shell") ? rectFor(document.getElementById("waterfall-shell")) : null
       },
       pills: boxes,
       failures,
@@ -206,6 +305,7 @@ function makeScenarioHtml(template, scenario) {
   document.documentElement.dataset.layout = ${JSON.stringify(scenario.layout)};
   document.documentElement.dataset.phoneWaterfall = "hidden";
   const drawerOpen = ${JSON.stringify(Boolean(scenario.drawerOpen))};
+  const setupOpen = ${JSON.stringify(Boolean(scenario.setupOpen))};
   const values = {
     "operator-conn": ["warn", "Reconnecting 12", "Static validation state"],
     "operator-owner": ["warn", "Role pending", "Static validation state"],
@@ -224,6 +324,34 @@ function makeScenarioHtml(template, scenario) {
       pill.title = title;
     }
     if (valueNode) valueNode.textContent = value;
+  }
+  const consoleLayout = document.querySelector(".console-layout");
+  const rightRail = document.querySelector(".right-rail");
+  const audioStrip = document.querySelector('[data-phone-panel="audio"]');
+  if (consoleLayout && rightRail && audioStrip && !document.getElementById("radio-context-rail")) {
+    const contextRail = document.createElement("aside");
+    contextRail.id = "radio-context-rail";
+    contextRail.className = "context-rail";
+    contextRail.dataset.activeContext = "rx";
+    contextRail.setAttribute("aria-label", "Radio controls");
+    const tabs = document.createElement("div");
+    tabs.className = "context-tabs";
+    tabs.setAttribute("role", "tablist");
+    tabs.setAttribute("aria-label", "Radio control context");
+    for (const context of ["rx", "dsp", "tx"]) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "context-tab";
+      button.dataset.controlContext = context;
+      button.setAttribute("role", "tab");
+      button.setAttribute("aria-selected", context === "rx" ? "true" : "false");
+      button.textContent = context.toUpperCase();
+      tabs.appendChild(button);
+    }
+    contextRail.appendChild(tabs);
+    contextRail.appendChild(audioStrip);
+    contextRail.appendChild(rightRail);
+    consoleLayout.insertAdjacentElement("afterend", contextRail);
   }
   function detailRow(label, value, note, tone = "rx") {
     const row = document.createElement("div");
@@ -308,6 +436,21 @@ function makeScenarioHtml(template, scenario) {
       ].forEach((group) => grid.appendChild(group));
     }
   }
+  if (setupOpen) {
+    const menu = document.getElementById("setup-menu");
+    const scrim = document.getElementById("setup-scrim");
+    if (menu) menu.hidden = false;
+    if (scrim) scrim.hidden = false;
+    document.body.classList.add("setup-open");
+    document.querySelectorAll("#setup-menu [data-setup-panel]").forEach((button) => {
+      const active = button.dataset.setupPanel === "display";
+      button.classList.toggle("active", active);
+      button.setAttribute("aria-selected", active ? "true" : "false");
+    });
+    document.querySelectorAll("#setup-menu [data-setup-panel-id]").forEach((panel) => {
+      panel.hidden = panel.dataset.setupPanelId !== "display";
+    });
+  }
 })();
 </script>`;
 
@@ -336,7 +479,10 @@ function chromiumArgs(scenario, scenarioDir) {
     '--disable-dev-shm-usage',
     '--disable-extensions',
     '--disable-background-networking',
+    '--disable-breakpad',
+    '--disable-crash-reporter',
     '--disable-default-apps',
+    '--disable-features=Crashpad',
     '--disable-sync',
     '--hide-scrollbars',
     '--mute-audio',
@@ -421,6 +567,9 @@ function printReport(report) {
 
 async function main() {
   requireFile(templatePath, 'remote-next template');
+  if (!scenarios.length) {
+    throw new Error(`No layout scenarios matched SATURN_LAYOUT_SCENARIOS=${[...requestedScenarioNames].join(',')}`);
+  }
   rmSync(outputRoot, { recursive: true, force: true });
   mkdirSync(outputRoot, { recursive: true });
 

@@ -2240,6 +2240,19 @@
       background: rgba(255, 255, 255, 0.025);
     }
 
+    .tx-zone[data-tx-state="fault"] {
+      border-color: rgba(255, 77, 69, 0.68);
+      background:
+        linear-gradient(135deg, rgba(255, 77, 69, 0.15), rgba(88, 20, 20, 0.08)),
+        rgba(18, 8, 9, 0.88);
+    }
+
+    .tx-zone[data-tx-state="fault"] .tx-zone-state {
+      border-color: rgba(255, 77, 69, 0.42);
+      background: rgba(255, 77, 69, 0.12);
+      color: var(--fault-red);
+    }
+
     .tx-zone[data-tx-state="locked"] .tx-zone-state {
       border-color: rgba(250, 204, 21, 0.38);
       background: rgba(250, 204, 21, 0.10);
@@ -2321,6 +2334,38 @@
       color: #f8d69b;
     }
 
+    .tx-arm-button {
+      min-height: 48px;
+      border-color: rgba(245, 158, 11, 0.66);
+      background:
+        repeating-linear-gradient(135deg, rgba(245, 158, 11, 0.17) 0 7px, rgba(245, 158, 11, 0.05) 7px 14px),
+        rgba(77, 48, 16, 0.82);
+      color: #fff1c9;
+      font-family: var(--mono);
+      font-size: 12px;
+      font-weight: 800;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+    }
+
+    .tx-arm-button[hidden] { display: none; }
+
+    .tx-arm-note {
+      margin-top: -5px;
+      color: var(--muted);
+      font: 650 9px/1.2 var(--mono);
+      letter-spacing: 0.04em;
+      text-align: center;
+    }
+
+    .tx-arm-note[hidden] { display: none; }
+
+    .tx-arm-button:disabled {
+      border-color: rgba(148, 163, 184, 0.2);
+      background: rgba(255, 255, 255, 0.025);
+      color: var(--muted);
+    }
+
     .tx-ptt-primary {
       min-height: 62px;
       border-radius: 16px;
@@ -2370,6 +2415,13 @@
         repeating-linear-gradient(135deg, rgba(245, 158, 11, 0.12) 0 6px, rgba(245, 158, 11, 0.04) 6px 12px),
         rgba(77, 48, 16, 0.82);
       color: #ffe6b8;
+    }
+
+    .tx-ptt-primary:disabled,
+    .tx-mox-secondary:disabled {
+      opacity: 0.42;
+      cursor: not-allowed;
+      box-shadow: none;
     }
 
     .tx-meter-mini-grid {
@@ -3883,6 +3935,70 @@
       align-items: start;
     }
 
+    .instrument-state-line {
+      grid-column: 1 / -1;
+      display: flex;
+      align-items: center;
+      min-height: 24px;
+      gap: 8px;
+      padding: 3px 7px;
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-control);
+      background: rgba(5, 9, 12, 0.62);
+      color: var(--text-secondary);
+      font: 700 9px/1 var(--font-instrument);
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+    }
+
+    .instrument-state-line::before {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--rx-cyan);
+      content: "";
+    }
+
+    .instrument-state-frequency {
+      margin-left: auto;
+      color: var(--text-muted);
+      letter-spacing: 0.04em;
+    }
+
+    .top-meter-bank[data-operating-state="armed"] .instrument-state-line {
+      border-color: rgba(240, 183, 46, 0.38);
+      color: var(--warning-amber);
+    }
+
+    .top-meter-bank[data-operating-state="armed"] .instrument-state-line::before {
+      background: var(--warning-amber);
+    }
+
+    .top-meter-bank[data-operating-state="tx"] .instrument-state-line {
+      border-color: rgba(255, 138, 48, 0.48);
+      color: var(--tx-orange);
+      background: rgba(255, 77, 69, 0.08);
+    }
+
+    .top-meter-bank[data-operating-state="tx"] .instrument-state-line::before {
+      background: var(--fault-red);
+      box-shadow: 0 0 8px rgba(255, 77, 69, 0.5);
+    }
+
+    .top-meter-bank[data-operating-state="armed"] .s-meter-shell,
+    .top-meter-bank[data-operating-state="tx"] .s-meter-shell {
+      opacity: 0.68;
+    }
+
+    .top-meter-bank[data-operating-state="armed"] .top-meter-side,
+    .top-meter-bank[data-operating-state="tx"] .top-meter-side {
+      border-color: rgba(240, 183, 46, 0.32);
+    }
+
+    .top-meter-bank[data-operating-state="tx"] .top-meter-side {
+      border-color: rgba(255, 138, 48, 0.44);
+    }
+
     .top-meter-bank > .analog-meter-shell,
     .top-meter-bank .aux-meter-row {
       min-width: 0;
@@ -3899,6 +4015,9 @@
       grid-template-rows: auto 1fr;
       gap: 7px;
       min-width: 0;
+      padding: 3px;
+      border: 1px solid transparent;
+      border-radius: var(--radius-control);
     }
 
     .top-meter-telemetry {
@@ -3943,6 +4062,36 @@
     .top-meter-bank .meter-dBm-row {
       padding-bottom: 3px;
     }
+
+    .meter-dBm-row .instrument-primary-readout {
+      color: var(--warning-amber);
+      font: 700 13px/1 var(--font-instrument);
+      letter-spacing: 0.02em;
+    }
+
+    .meter-dBm-row .meter-name {
+      color: var(--text-muted);
+      font: 700 8px/1 var(--font-instrument);
+      letter-spacing: 0.12em;
+    }
+
+    .instrument-mic-meter {
+      display: grid;
+      grid-template-columns: auto minmax(50px, 1fr) auto;
+      align-items: center;
+      gap: 6px;
+      color: var(--text-muted);
+      font: 700 9px/1 var(--font-instrument);
+      letter-spacing: 0.08em;
+    }
+
+    .instrument-mic-meter .tx-tool-bar { height: 7px; }
+
+    #smeter-needle,
+    #smeter-peak,
+    #txpwr-needle,
+    #txpwr-peak,
+    #swr-needle { transition: none; }
 
     .top-meter-bank .aux-meter-val {
       padding-bottom: 3px;
@@ -4270,6 +4419,1100 @@
       .waterfall-shell { height: 180px; }
     }
   </style>
+  <style id="saturn-transceiver-shell-v1">
+    :root {
+      color-scheme: dark;
+
+      /* Instrument-console color system. */
+      --bg-chassis: #05090c;
+      --bg-workspace: #080e12;
+      --bg-panel: #0d151a;
+      --bg-raised: #121e24;
+      --bg-control: #15252c;
+      --border-subtle: rgba(150, 190, 205, 0.14);
+      --border-active: rgba(70, 210, 220, 0.55);
+      --text-primary: #edf3f5;
+      --text-secondary: #9aabb2;
+      --text-muted: #62747c;
+      --rx-cyan: #35d1d0;
+      --vfo-blue: #35bfe8;
+      --subrx-green: #41d88b;
+      --safe-green: #38d078;
+      --warning-amber: #f0b72e;
+      --tx-orange: #ff8a30;
+      --fault-red: #ff4d45;
+      --spectrum-purple: #8b3fb2;
+      --waterfall-blue: #063d71;
+
+      /* Shared sizing and typography. */
+      --font-ui: "Inter", "Segoe UI", system-ui, sans-serif;
+      --font-instrument: ui-monospace, "SFMono-Regular", "Roboto Mono", Consolas, monospace;
+      --space-1: 4px;
+      --space-2: 8px;
+      --space-3: 12px;
+      --space-4: 16px;
+      --space-5: 20px;
+      --radius-control: 5px;
+      --radius-panel: 8px;
+      --control-desktop: 34px;
+      --control-touch: 44px;
+      --ptt-touch: 68px;
+      --header-height: 44px;
+
+      /* Compatibility map while the legacy template is extracted. */
+      --bg-0: var(--bg-chassis);
+      --bg-1: var(--bg-workspace);
+      --bg-2: var(--bg-panel);
+      --bg-3: var(--bg-raised);
+      --card: var(--bg-panel);
+      --line: var(--border-subtle);
+      --line-strong: rgba(150, 190, 205, 0.24);
+      --text: var(--text-primary);
+      --muted: var(--text-secondary);
+      --accent: var(--rx-cyan);
+      --accent-warm: var(--warning-amber);
+      --good: var(--safe-green);
+      --warn: var(--warning-amber);
+      --danger: var(--fault-red);
+      --saturn-rx: var(--rx-cyan);
+      --saturn-tx: var(--tx-orange);
+      --saturn-tx-keyed: var(--fault-red);
+      --saturn-caution: var(--warning-amber);
+      --saturn-alarm: var(--fault-red);
+      --saturn-ok: var(--safe-green);
+      --mono: var(--font-instrument);
+      --sans: var(--font-ui);
+      --theme-body-bg: var(--bg-chassis);
+      --theme-command-bg: var(--bg-panel);
+      --theme-command-border: var(--border-subtle);
+      --theme-command-shadow: 0 12px 28px rgba(0, 0, 0, 0.2);
+      --theme-cluster-border: var(--border-subtle);
+      --theme-cluster-bg: var(--bg-workspace);
+      --theme-cluster-overlay: none;
+      --theme-panel-bg: var(--bg-panel);
+      --theme-panel-border: var(--border-subtle);
+      --theme-panel-shadow: none;
+      --theme-panel-title: var(--text-primary);
+      --theme-panel-meta: var(--text-muted);
+      --theme-field-bg: var(--bg-control);
+      --theme-field-border: var(--border-subtle);
+      --theme-metric-bg: var(--bg-workspace);
+      --theme-status-bg: rgba(53, 209, 208, 0.07);
+      --theme-status-ghost-bg: rgba(255, 255, 255, 0.018);
+      --theme-status-border: var(--border-subtle);
+      --theme-status-text: var(--text-secondary);
+      --theme-deck-frequency: var(--text-primary);
+      --theme-deck-label: var(--text-muted);
+      --theme-scope-bg: #03070a;
+      --theme-scope-shadow: none;
+      --theme-display-shell-border: rgba(150, 190, 205, 0.16);
+    }
+
+    body,
+    :root[data-theme="light"] body {
+      min-width: 320px;
+      overflow-x: hidden;
+      color: var(--text-primary);
+      font-family: var(--font-ui);
+      background:
+        radial-gradient(circle at 48% -20%, rgba(53, 191, 232, 0.08), transparent 34%),
+        linear-gradient(180deg, var(--bg-chassis), var(--bg-workspace));
+    }
+
+    body::before { display: none; }
+    body.setup-open { overflow: hidden; }
+
+    .mono,
+    .freq-readout,
+    .deck-frequency,
+    .operator-pill-value,
+    .scope-stat-value,
+    .tx-zone-frequency,
+    .tx-zone-state,
+    input[type="number"] {
+      font-family: var(--font-instrument);
+      font-variant-numeric: tabular-nums lining-nums;
+    }
+
+    button,
+    [role="button"],
+    a,
+    input,
+    select,
+    summary {
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    :where(button, [role="button"], a, input, select, summary):focus-visible {
+      outline: 2px solid var(--rx-cyan);
+      outline-offset: 2px;
+      box-shadow: 0 0 0 4px rgba(53, 209, 208, 0.12);
+    }
+
+    .page.console-page {
+      display: grid;
+      grid-template-columns: clamp(190px, 12vw, 220px) minmax(0, 1fr) clamp(270px, 17vw, 310px);
+      grid-template-areas:
+        "header header header"
+        "state state state"
+        "left command context"
+        "left stage context"
+        "drawer drawer drawer";
+      gap: 7px;
+      align-items: start;
+      width: 100%;
+      max-width: none;
+      margin: 0;
+      padding: 7px;
+    }
+
+    .console-header {
+      grid-area: header;
+      min-height: var(--header-height);
+      padding: 0 5px;
+      border-bottom: 1px solid var(--border-subtle);
+    }
+
+    .console-header .kicker {
+      color: var(--rx-cyan);
+      font-size: 11px;
+      font-weight: 800;
+      letter-spacing: 0.14em;
+    }
+
+    .console-header h1 {
+      color: var(--text-primary);
+      font-size: clamp(19px, 1.45vw, 25px);
+      font-weight: 680;
+    }
+
+    .console-header .btn,
+    .console-header .nav-link {
+      min-height: 32px;
+      border-color: var(--border-subtle);
+      background: transparent;
+      color: var(--text-secondary);
+    }
+
+    .operator-state-strip {
+      grid-area: state;
+      position: sticky;
+      z-index: 18;
+      top: 0;
+      display: grid;
+      grid-template-columns: repeat(8, minmax(0, 1fr));
+      gap: 2px;
+      margin: 0;
+      padding: 3px;
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-control);
+      background: rgba(8, 14, 18, 0.96);
+      backdrop-filter: blur(10px);
+    }
+
+    .operator-pill {
+      min-height: 32px;
+      border: 0;
+      border-right: 1px solid var(--border-subtle);
+      border-radius: 2px;
+      background: transparent;
+    }
+
+    .operator-pill:last-child { border-right: 0; }
+    .operator-pill::before { width: 7px; height: 7px; }
+    .operator-pill-label { color: var(--text-muted); font-size: 8px; }
+    .operator-pill-value { color: var(--text-secondary); font-size: 10px; }
+    .operator-pill[data-tone="ok"]::before { background: var(--safe-green); }
+    .operator-pill[data-tone="rx"]::before { background: var(--rx-cyan); }
+    .operator-pill[data-tone="tx"]::before { background: var(--warning-amber); }
+    .operator-pill[data-tone="keyed"]::before { background: var(--tx-orange); }
+    .operator-pill[data-tone="warn"]::before { background: var(--warning-amber); }
+    .operator-pill[data-tone="alarm"]::before { background: var(--fault-red); }
+
+    .command-strip {
+      grid-area: command;
+      min-width: 0;
+      overflow: visible;
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-panel);
+      background: var(--bg-panel);
+    }
+
+    .strip-grid {
+      display: grid;
+      grid-template-columns: minmax(280px, 0.72fr) minmax(510px, 1.28fr);
+      gap: 6px;
+    }
+
+    .vfo-deck.primary-deck {
+      min-height: 142px;
+      border: 1px solid var(--border-subtle);
+      background:
+        linear-gradient(180deg, rgba(53, 191, 232, 0.035), transparent 45%),
+        var(--bg-workspace);
+    }
+
+    .primary-deck .deck-frequency {
+      color: var(--text-primary);
+      font-size: clamp(34px, 3vw, 52px);
+      font-weight: 520;
+      letter-spacing: 0.035em;
+      text-shadow: 0 0 18px rgba(53, 191, 232, 0.08);
+    }
+
+    .freq-digit.active-step {
+      color: var(--rx-cyan);
+      border-bottom-color: var(--rx-cyan);
+    }
+
+    .vfo-mode-tag {
+      border-color: rgba(53, 209, 208, 0.28);
+      color: var(--rx-cyan);
+    }
+
+    .control-cluster {
+      grid-template-columns: 86px minmax(0, 1fr);
+      gap: 7px;
+      border: 0;
+      background: transparent;
+    }
+
+    .top-meter-bank {
+      grid-template-columns: minmax(190px, 1.15fr) minmax(230px, 1fr);
+      gap: 7px;
+    }
+
+    .analog-meter-shell,
+    .top-meter-telemetry,
+    .tx-tool-dock {
+      border-color: var(--border-subtle);
+      background: var(--bg-workspace);
+      box-shadow: none;
+    }
+
+    .console-layout { display: contents; }
+    .left-rail { grid-area: left; }
+    .console-stage { grid-area: stage; min-width: 0; }
+    .right-rail { min-width: 0; }
+    .audio-control-strip { margin: 0; }
+    .context-rail {
+      grid-area: context;
+      position: sticky;
+      top: 45px;
+      display: grid;
+      gap: 7px;
+      min-width: 0;
+      max-height: calc(100dvh - 52px);
+      overflow: auto;
+      scrollbar-width: thin;
+      scrollbar-color: var(--border-active) transparent;
+    }
+
+    .context-rail > .audio-control-strip,
+    .context-rail > .right-rail {
+      grid-area: auto;
+      width: 100%;
+      min-width: 0;
+    }
+
+    .context-tabs {
+      position: sticky;
+      z-index: 4;
+      top: 0;
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 3px;
+      padding: 4px;
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-panel);
+      background: rgba(8, 14, 18, 0.98);
+    }
+
+    .context-tab {
+      min-height: 38px;
+      border: 1px solid transparent;
+      border-radius: var(--radius-control);
+      color: var(--text-secondary);
+      background: transparent;
+      font: 750 10px/1 var(--font-ui);
+      letter-spacing: 0.09em;
+      cursor: pointer;
+    }
+
+    .context-tab[aria-selected="true"] {
+      border-color: var(--border-active);
+      color: var(--rx-cyan);
+      background: rgba(53, 209, 208, 0.11);
+    }
+
+    .context-tab[data-control-context="tx"] { color: var(--warning-amber); }
+    .context-rail[data-active-context="tx"] .context-tab[data-control-context="tx"] {
+      border-color: rgba(255, 138, 48, 0.48);
+      color: var(--tx-orange);
+      background: rgba(255, 138, 48, 0.1);
+    }
+
+    .context-rail:not([data-active-context="tx"]) .right-rail [data-phone-panel="tx"] > .panel-body > .field-row,
+    .context-rail:not([data-active-context="tx"]) .right-rail [data-phone-panel="tx"] > .panel-body > .tx-advanced-card {
+      display: none;
+    }
+
+    .context-rail:not([data-active-context="tx"]) .right-rail [data-phone-panel="tx"] .panel-head {
+      min-height: 29px;
+      padding-block: 4px;
+    }
+
+    .context-rail:not([data-active-context="tx"]) .tx-zone {
+      border-color: var(--border-subtle);
+    }
+
+    .audio-control-strip[hidden],
+    .audio-control[hidden] { display: none; }
+    .operations-drawer { grid-area: drawer; }
+
+    .left-rail,
+    .right-rail,
+    .console-stage { gap: 7px; }
+
+    .left-rail > [data-phone-panel="tuning"] { order: 1; }
+    .left-rail > [data-phone-panel="demod"] { order: 2; }
+    .left-rail > [data-phone-panel="routing"] { order: 3; }
+
+    .panel,
+    .display-card,
+    .audio-control-strip {
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-panel);
+      background: var(--bg-panel);
+    }
+
+    .panel-head,
+    .display-head {
+      min-height: 34px;
+      border-bottom-color: var(--border-subtle);
+    }
+
+    .panel-title {
+      color: var(--text-primary);
+      font-size: 10px;
+      letter-spacing: 0.055em;
+    }
+
+    .panel-title::before { background: var(--warning-amber); }
+    .field { background: var(--bg-control); }
+
+    .mode-btn,
+    .band-btn,
+    .btn {
+      min-height: var(--control-desktop);
+      border-color: var(--border-subtle);
+      border-radius: var(--radius-control);
+      background: var(--bg-control);
+    }
+
+    .mode-btn.active,
+    .band-btn.active,
+    .btn.alt,
+    .btn.active {
+      border-color: var(--border-active);
+      background: rgba(53, 209, 208, 0.16);
+      color: var(--text-primary);
+      box-shadow: inset 0 0 0 1px rgba(53, 209, 208, 0.08);
+    }
+
+    .display-card.scope-frame {
+      overflow: hidden;
+      border-color: rgba(150, 190, 205, 0.18);
+      background: #03070a;
+    }
+
+    .display-head { background: var(--bg-panel); }
+    .display-meta { color: var(--text-muted); }
+    .display-pill { border-color: var(--border-subtle); background: transparent; color: var(--text-secondary); }
+    .frequency-ruler { background: var(--bg-workspace); }
+    .ruler-main { color: var(--rx-cyan); }
+
+    .spectrum-shell {
+      height: clamp(280px, 36vh, 470px);
+      border-color: var(--border-subtle);
+    }
+
+    .waterfall-shell {
+      height: clamp(170px, 23vh, 290px);
+      border-color: var(--border-subtle);
+      background-color: var(--waterfall-blue);
+    }
+
+    .filter-window {
+      border-color: rgba(53, 209, 208, 0.8);
+      background: rgba(53, 209, 208, 0.13);
+    }
+
+    .passband-label { color: var(--text-primary); background: rgba(5, 9, 12, 0.78); }
+    .scope-footer { display: none; }
+
+    .audio-control-grid { grid-template-columns: 1fr; }
+    .audio-control {
+      padding: 10px 0;
+      border: 0;
+      border-bottom: 1px solid var(--border-subtle);
+      border-radius: 0;
+      background: transparent;
+    }
+    .audio-control:last-child { border-bottom: 0; }
+
+    .tx-zone {
+      border-color: var(--border-subtle);
+      background: var(--bg-workspace);
+    }
+    .tx-zone[data-tx-state="locked"] { border-color: rgba(240, 183, 46, 0.45); }
+    .tx-zone[data-tx-state="armed"] { border-color: var(--warning-amber); }
+    .tx-zone[data-tx-state="keyed"] { border-color: var(--tx-orange); }
+    .tx-zone[data-tx-state="fault"] { border-color: var(--fault-red); }
+    .tx-zone[data-tx-state="disabled"] { border-color: rgba(255, 77, 69, 0.3); }
+    .tx-ptt-primary { min-height: 54px; }
+
+    .setup-menu {
+      position: fixed;
+      z-index: 100;
+      inset: 0 0 0 auto;
+      display: flex;
+      width: min(600px, calc(100vw - 24px));
+      height: 100dvh;
+      max-height: 100dvh;
+      flex-direction: column;
+      overflow: hidden;
+      padding: 0;
+      border: 0;
+      border-left: 1px solid var(--border-subtle);
+      border-radius: 0;
+      background: var(--bg-panel);
+      box-shadow: -22px 0 54px rgba(0, 0, 0, 0.48);
+    }
+
+    .setup-scrim {
+      position: fixed;
+      z-index: 99;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.46);
+    }
+
+    .setup-scrim[hidden] { display: none; }
+
+    .setup-menu-head {
+      position: sticky;
+      z-index: 2;
+      top: 0;
+      flex: 0 0 auto;
+      margin: 0;
+      padding: 14px 16px;
+      border-bottom: 1px solid var(--border-subtle);
+      background: rgba(13, 21, 26, 0.98);
+    }
+
+    .setup-menu-body {
+      display: grid;
+      min-height: 0;
+      flex: 1 1 auto;
+      grid-template-columns: 122px minmax(0, 1fr);
+    }
+
+    .setup-menu-body > .setup-nav {
+      position: relative;
+      display: flex;
+      min-width: 0;
+      margin: 0;
+      padding: 10px 7px;
+      flex-direction: column;
+      gap: 4px;
+      overflow-y: auto;
+      border-right: 1px solid var(--border-subtle);
+      background: var(--bg-workspace);
+    }
+
+    .setup-menu-body > .setup-nav .setup-tab-btn {
+      min-height: 38px;
+      padding: 7px 9px;
+      border-color: transparent;
+      border-radius: var(--radius-control);
+      text-align: left;
+      background: transparent;
+      font-size: 10px;
+    }
+
+    .setup-menu-body > .setup-nav .setup-tab-btn.active {
+      border-color: var(--border-active);
+      color: var(--rx-cyan);
+      background: rgba(53, 209, 208, 0.1);
+    }
+
+    .setup-menu-body > .setup-stack {
+      min-width: 0;
+      overflow-y: auto;
+      padding: 12px;
+      scrollbar-color: var(--border-active) transparent;
+      scrollbar-width: thin;
+    }
+
+    .setup-section {
+      border-radius: var(--radius-control);
+      border-color: var(--border-subtle);
+      background: var(--bg-workspace);
+    }
+
+    .setup-danger-zone {
+      margin-top: 4px;
+      padding-top: 10px;
+      border-top: 1px solid rgba(255, 77, 69, 0.18);
+    }
+
+    .setup-danger-zone .btn {
+      border-color: rgba(255, 77, 69, 0.3);
+      color: var(--fault-red);
+      background: rgba(255, 77, 69, 0.06);
+    }
+
+    :root[data-layout="phone"] .setup-menu {
+      position: fixed;
+      inset: 0;
+      width: 100vw;
+      height: 100dvh;
+      max-height: 100dvh;
+      margin: 0;
+    }
+
+    :root[data-layout="phone"] .setup-menu-body {
+      grid-template-columns: 1fr;
+      grid-template-rows: auto minmax(0, 1fr);
+    }
+
+    :root[data-layout="phone"] .setup-menu-body > .setup-nav {
+      flex-direction: row;
+      overflow-x: auto;
+      overflow-y: hidden;
+      border-right: 0;
+      border-bottom: 1px solid var(--border-subtle);
+    }
+
+    :root[data-layout="phone"] .setup-menu-body > .setup-nav .setup-tab-btn {
+      flex: 0 0 auto;
+      min-height: var(--control-touch);
+      text-align: center;
+    }
+
+    :root[data-layout="phone"] .setup-menu-body > .setup-stack { padding: 8px; }
+
+    .operations-drawer {
+      position: relative;
+      min-height: 44px;
+      overflow: hidden;
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-panel);
+      background: var(--bg-panel);
+    }
+
+    .operations-drawer-nav {
+      display: flex;
+      align-items: center;
+      min-height: 44px;
+      gap: 2px;
+      padding: 3px 5px;
+    }
+
+    .operations-drawer-title {
+      margin-right: auto;
+      padding: 0 8px;
+      color: var(--text-muted);
+      font-size: 9px;
+      font-weight: 700;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+    }
+
+    .operations-tab,
+    .mobile-dock-button {
+      min-height: 36px;
+      padding: 6px 11px;
+      border: 1px solid transparent;
+      border-radius: var(--radius-control);
+      color: var(--text-secondary);
+      background: transparent;
+      font: 650 10px/1 var(--font-ui);
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      cursor: pointer;
+    }
+
+    .operations-tab[aria-selected="true"],
+    .mobile-dock-button[aria-current="true"] {
+      border-color: var(--border-active);
+      color: var(--rx-cyan);
+      background: rgba(53, 209, 208, 0.1);
+    }
+
+    .operations-drawer-content {
+      display: none;
+      max-height: min(42vh, 420px);
+      overflow: auto;
+      border-top: 1px solid var(--border-subtle);
+      scrollbar-color: var(--border-active) transparent;
+      scrollbar-width: thin;
+    }
+    .operations-drawer[data-open="true"] .operations-drawer-content { display: block; }
+    .operations-panel { min-width: 0; padding: 12px; }
+    .operations-panel[hidden] { display: none; }
+    .operations-panel-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 10px;
+    }
+    .operations-panel-title {
+      margin: 0;
+      color: var(--text-primary);
+      font-size: 12px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+    .operations-panel-meta { color: var(--text-muted); font-size: 11px; }
+    .operations-memory-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+      gap: 8px;
+    }
+    .operations-memory-button {
+      display: grid;
+      min-height: 58px;
+      gap: 3px;
+      padding: 9px 11px;
+      text-align: left;
+    }
+    .operations-memory-button strong,
+    .operations-memory-button span { font-family: var(--font-instrument); font-variant-numeric: tabular-nums; }
+    .operations-memory-button span { color: var(--text-secondary); font-size: 11px; }
+    .operations-empty {
+      padding: 18px;
+      border: 1px dashed var(--border-subtle);
+      border-radius: var(--radius-control);
+      color: var(--text-muted);
+      font-size: 12px;
+      text-align: center;
+    }
+    .operations-panel .operator-detail-grid { grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); }
+    .operations-panel .operator-detail-group { border-radius: var(--radius-control); background: var(--bg-workspace); }
+    .operations-drawer .console-log { display: block; border: 0; border-radius: 0; }
+    .operations-drawer .console-log .panel-head { padding: 0 0 10px; }
+    .operations-drawer .console-log pre { max-height: min(34vh, 320px); }
+    .console-stage > .console-log { display: none; }
+
+    .mobile-control-dock { display: none; }
+
+    @media (min-width: 1440px) {
+      .audio-control-strip {
+        max-height: 258px;
+        overflow: auto;
+        scrollbar-color: var(--border-active) transparent;
+        scrollbar-width: thin;
+      }
+    }
+
+    @media (min-width: 1024px) and (max-width: 1439px) {
+      .page.console-page {
+        grid-template-columns: clamp(190px, 20vw, 230px) minmax(0, 1fr);
+        grid-template-areas:
+          "header header"
+          "state state"
+          "command command"
+          "left stage"
+          "context stage"
+          "drawer drawer";
+      }
+
+      .strip-grid { grid-template-columns: minmax(300px, 0.75fr) minmax(0, 1.25fr); }
+      .top-meter-bank { grid-template-columns: minmax(190px, 1fr) minmax(220px, 1fr); }
+      .console-header #saturn-manage-home,
+      .console-header #saturn-manage-monitor { display: none; }
+      .spectrum-shell { height: clamp(320px, 44vh, 500px); }
+      .waterfall-shell { height: clamp(180px, 27vh, 300px); }
+    }
+
+    @media (min-width: 1024px) and (max-width: 1199px) {
+      .operator-state-strip { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+    }
+
+    @media (min-width: 768px) and (max-width: 1023px) {
+      .page.console-page {
+        display: flex;
+        flex-direction: column;
+        gap: 7px;
+        padding-bottom: 64px;
+      }
+
+      .console-header { order: 1; width: 100%; }
+      .operator-state-strip { order: 2; width: 100%; grid-template-columns: repeat(4, minmax(0, 1fr)); }
+      .command-strip { order: 3; width: 100%; }
+      .console-layout { order: 4; display: flex; width: 100%; flex-direction: column; }
+      .console-stage { order: 1; width: 100%; }
+      .left-rail { order: 2; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .left-rail,
+      .right-rail { width: 100%; }
+      .left-rail > [data-phone-panel="routing"] { grid-column: 1 / -1; }
+      .right-rail { order: 3; }
+      .audio-control-strip { order: 5; width: 100%; }
+      .context-rail {
+        position: static;
+        order: 5;
+        width: 100%;
+        max-height: none;
+        overflow: visible;
+      }
+      .operations-drawer { order: 6; width: 100%; }
+      .strip-grid { grid-template-columns: minmax(225px, 0.62fr) minmax(0, 1.38fr); }
+      .control-cluster {
+        grid-template-columns: 1fr;
+        grid-template-areas:
+          "meters"
+          "launch";
+      }
+      .launch-grid {
+        grid-area: launch;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+      .top-meter-bank { grid-area: meters; }
+      .top-meter-bank { grid-template-columns: minmax(220px, 1.1fr) minmax(280px, 1fr); }
+      .display-pill-row { flex-direction: row; flex-wrap: wrap; }
+      .spectrum-shell { height: clamp(300px, 42vh, 460px); }
+      .waterfall-shell { height: clamp(180px, 27vh, 300px); }
+      .mobile-control-dock {
+        position: fixed;
+        z-index: 80;
+        right: 10px;
+        bottom: max(8px, env(safe-area-inset-bottom));
+        left: 10px;
+        display: grid;
+        grid-template-columns: repeat(5, minmax(0, 1fr));
+        gap: 3px;
+        order: 7;
+        padding: 4px;
+        border: 1px solid rgba(150, 190, 205, 0.22);
+        border-radius: 9px;
+        background: rgba(8, 14, 18, 0.97);
+        box-shadow: 0 -8px 28px rgba(0, 0, 0, 0.38);
+      }
+      .mobile-dock-button { min-height: 48px; }
+    }
+
+    @media (max-width: 767px), (pointer: coarse) and (max-height: 599px) and (max-width: 1023px) {
+      .page.console-page {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        padding: 6px 6px calc(76px + env(safe-area-inset-bottom));
+      }
+
+      .console-header,
+      :root[data-layout="phone"] .console-header {
+        order: 1;
+        display: flex;
+        width: 100%;
+        min-height: 42px;
+        margin: 0;
+        padding: 0 3px 5px;
+        align-items: center;
+        gap: 8px;
+      }
+      .console-header > div:first-child,
+      :root[data-layout="phone"] .console-header > div:first-child {
+        flex-direction: row;
+        align-items: baseline;
+        gap: 8px;
+      }
+      .console-header h1,
+      :root[data-layout="phone"] .console-header h1 { font-size: 19px; }
+      .console-header .kicker,
+      :root[data-layout="phone"] .console-header .kicker { margin: 0; font-size: 9px; }
+      .console-header #saturn-manage-home,
+      .console-header #saturn-manage-monitor,
+      .console-header #layout-btn,
+      .console-header #theme-btn { display: none; }
+      .console-header .hero-actions,
+      :root[data-layout="phone"] .hero-actions {
+        display: flex;
+        width: auto;
+        margin-left: auto;
+        gap: 4px;
+      }
+      :root[data-layout="phone"] .hero-actions > * { width: 42px; }
+
+      .operator-state-strip {
+        order: 2;
+        position: relative;
+        width: 100%;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+      }
+      :root[data-layout="phone"] .operator-state-strip {
+        top: 0;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 2px;
+        padding: 3px;
+        border-radius: var(--radius-control);
+      }
+      .operator-pill { min-height: 31px; padding: 4px 5px; }
+      :root[data-layout="phone"] .operator-pill { min-height: 31px; padding: 4px 5px; }
+      .operator-pill-label { display: none; }
+      .operator-pill-value { font-size: 9px; text-align: left; }
+
+      .command-strip { order: 3; width: 100%; }
+      :root[data-layout="phone"] .command-strip { border-radius: var(--radius-panel); }
+      .command-strip > .panel-body { padding: 5px; }
+      .strip-grid { grid-template-columns: 1fr; }
+      :root[data-layout="phone"] .strip-grid { gap: 5px; }
+      .vfo-deck.primary-deck,
+      :root[data-layout="phone"] .vfo-deck.primary-deck {
+        min-height: 104px;
+        padding: 8px;
+        border-radius: var(--radius-panel);
+      }
+      .primary-deck .deck-frequency { font-size: clamp(35px, 11.5vw, 50px); letter-spacing: 0.015em; }
+      :root[data-layout="phone"] .primary-deck .deck-frequency {
+        margin: 2px 0 5px;
+        font-size: clamp(35px, 11.5vw, 50px);
+        letter-spacing: 0.015em;
+      }
+      :root[data-layout="phone"] .vfo-mode-tag { min-height: 30px; padding: 4px 7px; }
+      .primary-deck .deck-subline { font-size: 9px; }
+      .control-cluster,
+      :root[data-layout="phone"] .control-cluster {
+        grid-template-columns: 1fr;
+        grid-template-areas:
+          "meters"
+          "launch";
+        gap: 5px;
+        padding: 5px;
+        border-radius: var(--radius-panel);
+      }
+      .launch-grid,
+      :root[data-layout="phone"] .launch-grid {
+        grid-area: launch;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 5px;
+      }
+      .launch-grid > .btn,
+      .launch-grid .setup-anchor > .btn { min-height: var(--control-touch); }
+      .top-meter-bank {
+        grid-area: meters;
+        grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr);
+        padding: 0;
+      }
+      :root[data-layout="phone"] .aux-meter-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .top-meter-bank svg { max-height: 96px; }
+      .top-meter-bank .aux-meter-row svg { max-height: 82px; }
+      .top-meter-bank .meter-dBm-row,
+      .top-meter-bank .aux-meter-val { min-height: 20px; padding: 1px 4px 3px; }
+      .top-meter-telemetry { display: none; }
+      .analog-meter-shell { min-width: 0; }
+      :root[data-layout="phone"] .setup-menu {
+        position: fixed;
+        inset: 0;
+        width: 100vw;
+        max-height: 100dvh;
+        margin: 0;
+      }
+      .setup-menu-body {
+        grid-template-columns: 1fr;
+        grid-template-rows: auto minmax(0, 1fr);
+      }
+      .setup-menu-body > .setup-nav {
+        flex-direction: row;
+        overflow-x: auto;
+        overflow-y: hidden;
+        border-right: 0;
+        border-bottom: 1px solid var(--border-subtle);
+      }
+      .setup-menu-body > .setup-nav .setup-tab-btn {
+        flex: 0 0 auto;
+        min-height: var(--control-touch);
+        text-align: center;
+      }
+      .setup-menu-body > .setup-stack { padding: 8px; }
+
+      .console-layout { order: 4; display: flex; width: 100%; flex-direction: column; }
+      .console-stage { order: 1; }
+      .left-rail { order: 2; }
+      .right-rail { order: 3; }
+      .audio-control-strip { order: 5; width: 100%; }
+      .context-rail {
+        position: static;
+        order: 5;
+        width: 100%;
+        max-height: none;
+        overflow: visible;
+      }
+      .operations-drawer { order: 6; width: 100%; }
+
+      .display-head {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr);
+        align-items: flex-start;
+        gap: 7px;
+      }
+      .display-pill-row {
+        width: 100%;
+        flex-direction: row;
+        flex-wrap: nowrap;
+        justify-content: flex-start;
+        max-width: 100%;
+        overflow-x: auto;
+      }
+      .display-pill-row #mode-readout,
+      .display-pill-row #wbfm-stereo-pill,
+      .display-pill-row #wake-lock-btn { display: none; }
+      .display-zoom { padding: 6px 9px; }
+      .frequency-ruler { padding: 7px 9px; }
+      .ruler-main { font-size: 22px; }
+      .ruler-sub { flex-direction: row; align-items: center; font-size: 8px; }
+      .spectrum-shell { height: clamp(210px, 34dvh, 290px); }
+      .waterfall-shell { height: clamp(135px, 23dvh, 205px); }
+      .scope-footer { display: none; }
+
+      .panel-toggle-btn,
+      .mode-btn,
+      .band-btn,
+      .audio-control .btn { min-height: var(--control-touch); }
+      .tx-ptt-primary { min-height: var(--ptt-touch); font-size: 15px; }
+
+      .operations-drawer-nav { overflow-x: auto; }
+      .operations-drawer-title { display: none; }
+      .operations-tab { flex: 0 0 auto; min-height: var(--control-touch); }
+      .operations-drawer-content { max-height: min(56dvh, 520px); }
+      .operations-panel { padding: 8px; }
+      .operations-panel .operator-detail-grid { grid-template-columns: 1fr; }
+      .operations-panel-head { align-items: flex-start; flex-direction: column; gap: 3px; }
+
+      .mobile-control-dock {
+        position: fixed;
+        z-index: 80;
+        right: 6px;
+        bottom: max(6px, env(safe-area-inset-bottom));
+        left: 6px;
+        display: grid;
+        grid-template-columns: repeat(5, minmax(0, 1fr));
+        gap: 2px;
+        padding: 4px;
+        border: 1px solid rgba(150, 190, 205, 0.22);
+        border-radius: 9px;
+        background: rgba(8, 14, 18, 0.97);
+        box-shadow: 0 -8px 28px rgba(0, 0, 0, 0.38);
+        backdrop-filter: blur(14px);
+      }
+      .context-tabs { display: none; }
+
+      .context-rail[data-active-context="tx"] .tx-zone {
+        position: sticky;
+        z-index: 35;
+        bottom: calc(68px + env(safe-area-inset-bottom));
+        box-shadow: 0 -8px 24px rgba(0, 0, 0, 0.38);
+      }
+
+      .mobile-dock-button { min-height: 54px; padding: 5px 3px; font-size: 9px; }
+      .mobile-dock-button[data-shell-target="tx"] { color: var(--warning-amber); }
+    }
+
+    /* Phase 10: operator-adjustable, renderer-safe display proportions. */
+    .display-stack {
+      --display-workspace-height: clamp(450px, 59vh, 760px);
+      position: relative;
+      display: grid;
+      grid-template-rows: minmax(180px, 0.62fr) 12px minmax(120px, 0.38fr);
+      height: var(--display-workspace-height);
+      gap: 0;
+    }
+
+    .display-stack > .spectrum-shell,
+    .display-stack > .waterfall-shell {
+      min-height: 0;
+      height: auto !important;
+    }
+
+    .spectrum-waterfall-resizer {
+      position: relative;
+      z-index: 12;
+      display: grid;
+      min-height: 12px;
+      cursor: row-resize;
+      place-items: center;
+      touch-action: none;
+    }
+
+    .spectrum-waterfall-resizer::before {
+      position: absolute;
+      inset: 3px 0;
+      border-top: 1px solid var(--border-subtle);
+      border-bottom: 1px solid rgba(0, 0, 0, 0.72);
+      background: var(--bg-workspace);
+      content: "";
+    }
+
+    .spectrum-waterfall-resizer > span {
+      position: relative;
+      width: 48px;
+      height: 3px;
+      border-radius: 999px;
+      background: var(--text-muted);
+      transition: width 120ms ease, background-color 120ms ease;
+    }
+
+    .spectrum-waterfall-resizer:hover > span,
+    .spectrum-waterfall-resizer:focus-visible > span,
+    .spectrum-waterfall-resizer[data-dragging="true"] > span {
+      width: 68px;
+      background: var(--rx-cyan);
+    }
+
+    @media (min-width: 1024px) and (max-width: 1439px) {
+      .display-stack { --display-workspace-height: clamp(500px, 71vh, 800px); }
+    }
+
+    @media (min-width: 768px) and (max-width: 1023px) {
+      .display-stack { --display-workspace-height: clamp(480px, 69vh, 760px); }
+    }
+
+    :root[data-layout="phone"] .display-stack {
+      --display-workspace-height: clamp(355px, 57dvh, 495px);
+      grid-template-rows: minmax(140px, 0.62fr) 0 minmax(96px, 0.38fr);
+      gap: 0;
+    }
+
+    :root[data-layout="phone"] .spectrum-waterfall-resizer {
+      display: grid;
+      min-height: 0;
+      visibility: hidden;
+      pointer-events: none;
+    }
+
+    :root[data-layout="phone"] .spectrum-shell,
+    :root[data-layout="phone"] .waterfall-shell {
+      display: block;
+      border-radius: 13px;
+      touch-action: pan-y;
+    }
+
+    :root[data-layout="phone"][data-phone-waterfall="hidden"] .waterfall-shell {
+      display: block;
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      *,
+      *::before,
+      *::after {
+        scroll-behavior: auto !important;
+        transition-duration: 0.01ms !important;
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+      }
+    }
+  </style>
 </head>
 <body>
   <div class="page console-page">
@@ -4394,22 +5637,27 @@
               <button class="btn primary" id="go-live-btn" type="button">Go Live</button>
               <div class="setup-anchor">
                 <button class="btn ghost" id="setup-menu-btn" type="button" aria-expanded="false">Setup</button>
-                <div class="setup-menu" id="setup-menu" hidden>
+                <div class="setup-scrim" id="setup-scrim" hidden></div>
+                <div class="setup-menu" id="setup-menu" role="dialog" aria-modal="true" aria-labelledby="setup-title" hidden>
                   <div class="setup-menu-head">
                     <div>
-                      <div class="setup-title">Setup</div>
-                      <div class="setup-meta">Profiles, display, and Thetis-style DSP control surfaces</div>
+                      <div class="setup-title" id="setup-title">Saturn Remote Setup</div>
+                      <div class="setup-meta">Operator preferences and advanced radio configuration</div>
                     </div>
                     <button class="btn ghost" id="setup-close-btn" type="button">Close</button>
                   </div>
-                  <div class="setup-nav">
-                    <button class="setup-tab-btn active" id="setup-tab-profiles" data-setup-panel="profiles" type="button">Profiles</button>
-                    <button class="setup-tab-btn" id="setup-tab-display" data-setup-panel="display" type="button">Display</button>
-                    <button class="setup-tab-btn" id="setup-tab-dsp" data-setup-panel="dsp" type="button">DSP</button>
-                    <button class="setup-tab-btn" id="setup-tab-tx" data-setup-panel="tx" type="button">TX</button>
-                  </div>
-                  <div class="setup-stack">
-                    <div class="setup-panel" id="setup-panel-profiles" data-setup-panel-id="profiles">
+                  <div class="setup-menu-body">
+                    <div class="setup-nav" role="tablist" aria-label="Setup sections">
+                      <button class="setup-tab-btn active" id="setup-tab-profiles" role="tab" aria-selected="true" aria-controls="setup-panel-profiles" data-setup-panel="profiles" type="button">Profiles</button>
+                      <button class="setup-tab-btn" id="setup-tab-display" role="tab" aria-selected="false" aria-controls="setup-panel-display" data-setup-panel="display" type="button">Display</button>
+                      <button class="setup-tab-btn" id="setup-tab-dsp" role="tab" aria-selected="false" aria-controls="setup-panel-dsp" data-setup-panel="dsp" type="button">DSP</button>
+                      <button class="setup-tab-btn" id="setup-tab-tx" role="tab" aria-selected="false" aria-controls="setup-panel-tx" data-setup-panel="tx" type="button">Transmit</button>
+                      <button class="setup-tab-btn" id="setup-tab-network" role="tab" aria-selected="false" aria-controls="setup-panel-network" data-setup-panel="network" type="button">Network</button>
+                      <button class="setup-tab-btn" id="setup-tab-audio" role="tab" aria-selected="false" aria-controls="setup-panel-audio" data-setup-panel="audio" type="button">Audio</button>
+                      <button class="setup-tab-btn" id="setup-tab-advanced" role="tab" aria-selected="false" aria-controls="setup-panel-advanced" data-setup-panel="advanced" type="button">Advanced</button>
+                    </div>
+                    <div class="setup-stack">
+                    <div class="setup-panel" id="setup-panel-profiles" data-setup-panel-id="profiles" role="tabpanel" aria-labelledby="setup-tab-profiles">
                       <div class="setup-section">
                         <div class="setup-section-title">Profiles</div>
                         <div class="setup-row">
@@ -4417,10 +5665,12 @@
                           <select class="field" id="setup-profile-select"></select>
                           <div class="setup-readout" id="setup-profile-status">Working settings only</div>
                         </div>
-                        <div class="setup-button-row">
+                        <div class="setup-button-row" style="grid-template-columns: repeat(3, minmax(0, 1fr));">
                           <button class="btn ghost" id="setup-profile-load-btn" type="button">Load</button>
                           <button class="btn alt" id="setup-profile-save-btn" type="button">Save</button>
                           <button class="btn alt" id="setup-profile-save-as-btn" type="button">Save As</button>
+                        </div>
+                        <div class="setup-danger-zone">
                           <button class="btn ghost" id="setup-profile-delete-btn" type="button">Delete</button>
                         </div>
                         <div class="setup-row">
@@ -4431,18 +5681,10 @@
                             <button class="btn ghost" id="setup-startup-clear-btn" type="button">Clear Startup</button>
                           </div>
                         </div>
-                        <div class="setup-row">
-                          <label class="label" for="setup-stream-mode">RX Network Profile</label>
-                          <select class="field" id="setup-stream-mode">
-                            <option value="lan">LAN — 48 kHz stereo audio</option>
-                            <option value="wan">WAN / VPN — 12 kHz mono audio</option>
-                          </select>
-                          <div class="setup-readout" id="setup-stream-mode-status">LAN: full-quality local transport</div>
-                        </div>
                       </div>
                     </div>
 
-                    <div class="setup-panel" id="setup-panel-display" data-setup-panel-id="display" hidden>
+                    <div class="setup-panel" id="setup-panel-display" data-setup-panel-id="display" role="tabpanel" aria-labelledby="setup-tab-display" hidden>
                       <div class="setup-section">
                         <div class="setup-section-title">Panadapter / Waterfall</div>
                         <div class="setup-grid">
@@ -4477,8 +5719,8 @@
                           </div>
                           <div class="setup-row">
                             <label class="label" for="display-spectrum-trace-color">Trace Color</label>
-                            <input class="field setup-color-field" id="display-spectrum-trace-color" type="color" value="#62d0ff" />
-                            <div class="setup-readout" id="display-spectrum-trace-color-readout">#62d0ff</div>
+                            <input class="field setup-color-field" id="display-spectrum-trace-color" type="color" value="#8b3fb2" />
+                            <div class="setup-readout" id="display-spectrum-trace-color-readout">#8b3fb2</div>
                           </div>
                           <div class="setup-row">
                             <label class="label" for="display-spectrum-trace-smoothing">Trace Smoothing</label>
@@ -4535,7 +5777,7 @@
                       </div>
                     </div>
 
-                    <div class="setup-panel" id="setup-panel-dsp" data-setup-panel-id="dsp" hidden>
+                    <div class="setup-panel" id="setup-panel-dsp" data-setup-panel-id="dsp" role="tabpanel" aria-labelledby="setup-tab-dsp" hidden>
                       <div class="setup-section">
                         <div class="setup-section-title">DSP</div>
                         <div class="setup-subnav">
@@ -4645,7 +5887,7 @@
                         </div>
                       </div>
                     </div>
-                    <div class="setup-panel" id="setup-panel-tx" data-setup-panel-id="tx" hidden>
+                    <div class="setup-panel" id="setup-panel-tx" data-setup-panel-id="tx" role="tabpanel" aria-labelledby="setup-tab-tx" hidden>
                       <div class="setup-section">
                         <div class="setup-section-title">TX Timeout</div>
                         <label class="toggle-field">
@@ -4764,13 +6006,78 @@
                         </div>
                       </div>
                     </div>
+                    <div class="setup-panel" id="setup-panel-network" data-setup-panel-id="network" role="tabpanel" aria-labelledby="setup-tab-network" hidden>
+                      <div class="setup-section">
+                        <div class="setup-section-title">Network Profile</div>
+                        <div class="setup-row">
+                          <label class="label" for="setup-stream-mode">RX Transport</label>
+                          <select class="field" id="setup-stream-mode">
+                            <option value="lan">LAN — 48 kHz stereo audio</option>
+                            <option value="wan">WAN / VPN — 12 kHz mono audio</option>
+                          </select>
+                          <div class="setup-readout" id="setup-stream-mode-status">LAN: full-quality local transport</div>
+                        </div>
+                      </div>
+                      <div class="setup-section">
+                        <div class="setup-section-title">Live Network Health</div>
+                        <div class="setup-inline-fields">
+                          <div class="setup-row"><span class="label">Connection</span><div class="setup-readout" id="setup-network-connection-status">Disconnected</div></div>
+                          <div class="setup-row"><span class="label">Latency</span><div class="setup-readout" id="setup-network-latency-status">No bridge RTT</div></div>
+                        </div>
+                        <div class="setup-button-row" style="grid-template-columns: minmax(0, 1fr);">
+                          <button class="btn ghost" id="setup-network-copy-diagnostics-btn" type="button">Copy Network Diagnostics</button>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div class="setup-panel" id="setup-panel-audio" data-setup-panel-id="audio" role="tabpanel" aria-labelledby="setup-tab-audio" hidden>
+                      <div class="setup-section">
+                        <div class="setup-section-title">Audio Paths</div>
+                        <div class="setup-inline-fields">
+                          <div class="setup-row"><span class="label">RX Profile</span><div class="setup-readout" id="setup-audio-profile-status">Audio stopped</div></div>
+                          <div class="setup-row"><span class="label">Buffer</span><div class="setup-readout" id="setup-audio-buffer-status">Unavailable</div></div>
+                          <div class="setup-row"><span class="label">Continuity</span><div class="setup-readout" id="setup-audio-continuity-status">No events</div></div>
+                          <div class="setup-row"><span class="label">Microphone</span><div class="setup-readout" id="setup-audio-microphone-status">Idle</div></div>
+                        </div>
+                        <div class="setup-button-row" style="grid-template-columns: repeat(2, minmax(0, 1fr));">
+                          <button class="btn ghost" id="setup-audio-open-rx-btn" type="button">Open RX Controls</button>
+                          <button class="btn ghost" id="setup-audio-open-tx-btn" type="button">Open TX Controls</button>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div class="setup-panel" id="setup-panel-advanced" data-setup-panel-id="advanced" role="tabpanel" aria-labelledby="setup-tab-advanced" hidden>
+                      <div class="setup-section">
+                        <div class="setup-section-title">Advanced Routing</div>
+                        <div class="setup-row">
+                          <label class="label" for="ws-url">Bridge WebSocket</label>
+                          <input class="field" id="ws-url" spellcheck="false" />
+                          <div class="setup-readout">Internal bridge routing. Change only when operating through a non-default bridge.</div>
+                        </div>
+                        <div class="setup-row">
+                          <label class="label" for="sample-rate">IQ Sample Rate</label>
+                          <select class="field" id="sample-rate">
+                            <option value="48000">48 kHz</option>
+                            <option value="96000">96 kHz</option>
+                            <option value="192000" selected>192 kHz</option>
+                            <option value="384000">384 kHz</option>
+                          </select>
+                          <div class="setup-readout">Higher rates widen the panadapter and increase network/DSP load.</div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
                   </div>
                 </div>
               </div>
             </div>
-            <div class="top-meter-bank" aria-label="Radio meters">
+            <div class="top-meter-bank" id="instrument-meter-deck" data-operating-state="rx" aria-label="Radio meters">
+              <div class="instrument-state-line" role="status" aria-live="polite">
+                <span id="instrument-state-label">Receiving</span>
+                <span class="instrument-state-frequency" id="instrument-state-frequency">RX 14.200.000 USB</span>
+              </div>
               <!-- S-Meter -->
-              <div class="analog-meter-shell" style="margin-bottom:10px;">
+              <div class="analog-meter-shell s-meter-shell" style="margin-bottom:10px;">
                 <svg id="smeter-svg" viewBox="0 0 360 185" xmlns="http://www.w3.org/2000/svg">
                   <defs>
                     <radialGradient id="smeter-face" cx="50%" cy="85%" r="70%">
@@ -4803,6 +6110,9 @@
                     <polygon points="179.7,150 180,150 180,42 179.7,42" fill="rgba(255,248,180,0.50)"/>
                     <rect x="178.5" y="163" width="3" height="9" rx="1.5" fill="#c09018"/>
                   </g>
+                  <g id="smeter-peak" opacity="0" style="transform:rotate(-60deg);transform-origin:180px 165px;">
+                    <path d="M176 34 L180 40 L184 34" fill="none" stroke="#fff0a0" stroke-width="1.5" stroke-linecap="round"/>
+                  </g>
                   <!-- Pivot -->
                   <circle cx="180" cy="165" r="9"   fill="#101c24" stroke="#304858" stroke-width="1.5"/>
                   <circle cx="180" cy="165" r="5.5" fill="#1e3040" stroke="#486070" stroke-width="1"/>
@@ -4812,7 +6122,8 @@
                   <ellipse cx="135" cy="58" rx="85" ry="28" fill="rgba(255,255,255,0.025)" transform="rotate(-12,135,58)"/>
                 </svg>
                 <div class="meter-dBm-row">
-                  <span style="font-family:var(--mono);font-size:9px;letter-spacing:3px;color:#3a6070;">S-METER</span>
+                  <span class="meter-name">S-METER</span>
+                  <span class="instrument-primary-readout" id="meter-s-readout">--</span>
                   <span class="mono small" id="meter-readout" style="color:#b08018;">-- dBm</span>
                 </div>
               </div>
@@ -4838,6 +6149,9 @@
                       <polygon points="86.5,98 87.5,98 87.2,30 86.8,30" fill="rgba(0,0,0,0.3)" transform="translate(1,1)"/>
                       <polygon points="86.5,98 87.5,98 87.2,30 86.8,30" fill="#62d0ff"/>
                       <rect x="86" y="99" width="2" height="6" rx="1" fill="#3080a0"/>
+                    </g>
+                    <g id="txpwr-peak" opacity="0" style="transform:rotate(-65deg);transform-origin:87px 100px;">
+                      <path d="M84 25 L87 30 L90 25" fill="none" stroke="#edf3f5" stroke-width="1.4" stroke-linecap="round"/>
                     </g>
                     <circle cx="87" cy="100" r="7"   fill="#101c24" stroke="#304858" stroke-width="1.5"/>
                     <circle cx="87" cy="100" r="4"   fill="#1e3040" stroke="#486070" stroke-width="1"/>
@@ -4900,6 +6214,11 @@
                     <div class="tx-tool-bar" aria-hidden="true">
                       <div class="tx-tool-bar-fill" id="tx-tool-bar-fill"></div>
                     </div>
+                    <div class="instrument-mic-meter" aria-label="Microphone input level">
+                      <span>MIC</span>
+                      <div class="tx-tool-bar" aria-hidden="true"><div class="tx-tool-bar-fill" id="instrument-mic-fill"></div></div>
+                      <span id="instrument-mic-readout">IDLE</span>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -4922,7 +6241,7 @@
       </div>
       <div class="panel-body">
         <div class="audio-control-grid">
-          <div class="audio-control">
+          <div class="audio-control" data-control-context="rx">
             <div class="audio-control-title">
               <span class="label">RX Volume</span>
               <span class="mono small" id="rx-volume-readout">-10.0 dB</span>
@@ -4951,7 +6270,7 @@
             </div>
           </div>
 
-          <div class="audio-control">
+          <div class="audio-control" data-control-context="rx">
             <div class="audio-control-title">
               <span class="label">AGC / ANF</span>
               <button class="btn eq-enable-btn" id="rx-anf-btn" type="button" style="font-size:11px;padding:4px 10px;">ANF Off</button>
@@ -4970,7 +6289,7 @@
             <input id="agc-gain" type="range" min="0" max="100" step="1" value="80" />
           </div>
 
-          <div class="audio-control">
+          <div class="audio-control" data-control-context="dsp">
             <div class="audio-control-title">
               <span class="label">Noise Reduction</span>
               <span class="mono small" id="rx-nr-readout">Off</span>
@@ -4995,7 +6314,7 @@
             <input id="rx-nb-threshold" type="range" min="2.5" max="82.5" step="0.05" value="4.95" />
           </div>
 
-          <div class="audio-control">
+          <div class="audio-control" data-control-context="rx">
             <div class="audio-control-title">
               <span class="label">RX Filter</span>
               <span class="mono small">Passband</span>
@@ -5019,26 +6338,11 @@
       <div class="stack left-rail">
         <div class="panel" data-phone-panel="routing">
           <div class="panel-head" data-phone-panel-head>
-            <h2 class="panel-title">Routing</h2>
-            <div class="panel-meta">Bridge / sampling path</div>
+            <h2 class="panel-title">Radio Path</h2>
+            <div class="panel-meta">Antenna / receiver input</div>
           </div>
           <div class="panel-body">
             <div class="field-row">
-              <div>
-                <label class="label" for="ws-url">Bridge WebSocket</label>
-                <input class="field" id="ws-url" spellcheck="false" />
-              </div>
-            </div>
-            <div class="field-row">
-              <div>
-                <label class="label" for="sample-rate">IQ Sample Rate</label>
-                <select class="field" id="sample-rate">
-                  <option value="48000">48 kHz</option>
-                  <option value="96000">96 kHz</option>
-                  <option value="192000" selected>192 kHz</option>
-                  <option value="384000">384 kHz</option>
-                </select>
-              </div>
               <div>
                 <span class="label">RX Input</span>
                 <div class="status-chip ghost">ADC1 fixed</div>
@@ -5133,11 +6437,12 @@
             <div class="display-pill-row">
               <span class="display-pill mono" id="mode-readout">USB</span>
               <span class="display-pill mono" id="wbfm-stereo-pill" hidden>FM Mono</span>
-              <span class="display-pill mono" id="sample-rate-readout">192 kHz</span>
-              <span class="display-pill mono" id="display-resolution">Display: --</span>
+              <span class="display-pill mono" id="sample-rate-readout">SPAN 192k</span>
+              <span class="display-pill mono" id="zoom-toolbar-readout">ZOOM 1.0x</span>
+              <button class="btn eq-enable-btn" id="display-center-btn" type="button" title="Reset the display span">Center</button>
               <button class="btn eq-enable-btn" id="wake-lock-btn" type="button" style="font-size:11px;padding:4px 10px;">Stay Awake</button>
-              <button class="btn eq-enable-btn" id="freq-lock-btn" type="button" style="font-size:11px;padding:4px 10px;">Freq Lock</button>
-              <button class="btn eq-enable-btn waterfall-toggle-btn" id="waterfall-toggle-btn" type="button" style="font-size:11px;padding:4px 10px;" aria-pressed="false">WF Off</button>
+              <button class="btn eq-enable-btn" id="freq-lock-btn" type="button" style="font-size:11px;padding:4px 10px;">Lock</button>
+              <button class="btn eq-enable-btn waterfall-toggle-btn" id="waterfall-toggle-btn" type="button" style="font-size:11px;padding:4px 10px;" aria-label="Change phone spectrum and waterfall balance">View Both</button>
             </div>
           </div>
           <div class="display-zoom">
@@ -5173,10 +6478,21 @@
                 <div class="passband-body" data-passband-drag="body" role="button" tabindex="0" aria-label="Shift RX passband"></div>
                 <button class="passband-handle passband-handle-left" data-passband-drag="low" type="button" aria-label="Adjust lower RX passband edge"></button>
                 <button class="passband-handle passband-handle-right" data-passband-drag="high" type="button" aria-label="Adjust upper RX passband edge"></button>
-                <div class="passband-label" id="filter-window-label">RX 50-3050 Hz</div>
+                <div class="passband-label" id="filter-window-label">USB • 50–3050 Hz</div>
               </div>
               <div class="center-line"></div>
             </div>
+            <div
+              class="spectrum-waterfall-resizer"
+              id="spectrum-waterfall-resizer"
+              role="separator"
+              tabindex="0"
+              aria-label="Resize spectrum and waterfall"
+              aria-orientation="horizontal"
+              aria-valuemin="34"
+              aria-valuemax="78"
+              aria-valuenow="62"
+            ><span aria-hidden="true"></span></div>
             <div class="waterfall-shell" id="waterfall-shell" tabindex="0" aria-label="Waterfall panadapter">
               <div class="display-grid-overlay"></div>
               <canvas id="waterfall-canvas"></canvas>
@@ -5199,8 +6515,8 @@
               <div class="scope-stat-value mono" id="audio-drop-readout">0</div>
             </div>
             <div class="scope-stat">
-              <div class="scope-stat-label">Display Contract</div>
-              <div class="scope-stat-value mono">TCI IQ</div>
+              <div class="scope-stat-label">Display Path</div>
+              <div class="scope-stat-value mono"><span id="display-resolution">--</span> • TCI IQ</div>
             </div>
           </div>
         </div>
@@ -5227,12 +6543,14 @@
                   <span class="tx-zone-label">TX Control</span>
                   <span class="tx-zone-source" id="tx-zone-source" hidden>MOX</span>
                 </span>
-                <span class="tx-zone-state" id="tx-zone-state">RX ready</span>
+                <span class="tx-zone-state" id="tx-zone-state" role="status" aria-live="polite" aria-atomic="true">RX ready</span>
               </div>
               <div class="tx-zone-frequency" id="tx-zone-frequency">TX 14.200.000 USB</div>
+              <button class="btn tx-arm-button" id="tx-arm-btn" type="button" aria-describedby="tx-arm-note" disabled>TX UNAVAILABLE</button>
+              <div class="tx-arm-note" id="tx-arm-note">Arming does not transmit</div>
               <div class="tx-action-row">
-                <button class="btn ptt-btn tx-ptt-primary" id="ptt-btn" type="button" aria-pressed="false">PTT</button>
-                <button class="btn ghost tx-mox-secondary" id="mox-btn" type="button" aria-pressed="false">MOX</button>
+                <button class="btn ptt-btn tx-ptt-primary" id="ptt-btn" type="button" aria-describedby="tx-zone-hint" aria-pressed="false" disabled>HOLD PTT</button>
+                <button class="btn ghost tx-mox-secondary" id="mox-btn" type="button" aria-describedby="tx-zone-hint" aria-pressed="false" disabled>MOX</button>
               </div>
               <div class="tx-meter-mini-grid" aria-label="Transmit quick meters">
                 <div class="tx-meter-mini">
@@ -5336,6 +6654,52 @@
         </div>
       </div>
     </section>
+
+    <section class="operations-drawer" id="operations-drawer" data-open="false" aria-label="Operations drawer">
+      <nav class="operations-drawer-nav" role="tablist" aria-label="Operations and diagnostics">
+        <span class="operations-drawer-title">Operations</span>
+        <button class="operations-tab" id="operations-tab-memory" type="button" role="tab" data-operations-target="memory" aria-selected="false" aria-controls="operations-panel-memory">Memory</button>
+        <button class="operations-tab" id="operations-tab-audio" type="button" role="tab" data-operations-target="audio" aria-selected="false" aria-controls="operations-panel-audio">Audio</button>
+        <button class="operations-tab" id="operations-tab-network" type="button" role="tab" data-operations-target="network" aria-selected="false" aria-controls="operations-panel-network">Network</button>
+        <button class="operations-tab" id="operations-tab-dsp" type="button" role="tab" data-operations-target="dsp" aria-selected="false" aria-controls="operations-panel-dsp">DSP</button>
+        <button class="operations-tab" id="operations-tab-radio" type="button" role="tab" data-operations-target="radio" aria-selected="false" aria-controls="operations-panel-radio">Radio</button>
+        <button class="operations-tab" id="operations-tab-log" type="button" role="tab" data-operations-target="log" aria-selected="false" aria-controls="operations-panel-log">Log</button>
+      </nav>
+      <div class="operations-drawer-content" id="operations-drawer-content">
+        <section class="operations-panel" id="operations-panel-memory" role="tabpanel" aria-labelledby="operations-tab-memory" data-operations-panel="memory" hidden>
+          <div class="operations-panel-head">
+            <div><h2 class="operations-panel-title">Band Memory</h2><span class="operations-panel-meta" id="operations-memory-meta">Automatic per-band operating memories</span></div>
+            <button class="btn ghost" id="operations-memory-save-btn" type="button">Save Current</button>
+          </div>
+          <div class="operations-memory-grid" id="operations-memory-grid"></div>
+        </section>
+        <section class="operations-panel" id="operations-panel-audio" role="tabpanel" aria-labelledby="operations-tab-audio" data-operations-panel="audio" hidden>
+          <div class="operations-panel-head"><h2 class="operations-panel-title">Audio Health</h2><span class="operations-panel-meta">RX path, buffer, and continuity</span></div>
+          <div class="operator-detail-grid" id="operations-audio-grid"></div>
+        </section>
+        <section class="operations-panel" id="operations-panel-network" role="tabpanel" aria-labelledby="operations-tab-network" data-operations-panel="network" hidden>
+          <div class="operations-panel-head"><h2 class="operations-panel-title">Network</h2><span class="operations-panel-meta">Latency, jitter, backlog, and recovery</span></div>
+          <div class="operator-detail-grid" id="operations-network-grid"></div>
+        </section>
+        <section class="operations-panel" id="operations-panel-dsp" role="tabpanel" aria-labelledby="operations-tab-dsp" data-operations-panel="dsp" hidden>
+          <div class="operations-panel-head"><h2 class="operations-panel-title">DSP State</h2><span class="operations-panel-meta">Current receive processing</span></div>
+          <div class="operator-detail-grid" id="operations-dsp-grid"></div>
+        </section>
+        <section class="operations-panel" id="operations-panel-radio" role="tabpanel" aria-labelledby="operations-tab-radio" data-operations-panel="radio" hidden>
+          <div class="operations-panel-head"><h2 class="operations-panel-title">Radio</h2><span class="operations-panel-meta">Observed radio and TX safety state</span></div>
+          <div class="operator-detail-grid" id="operations-radio-grid"></div>
+        </section>
+        <section class="operations-panel" id="operations-panel-log" role="tabpanel" aria-labelledby="operations-tab-log" data-operations-panel="log" hidden></section>
+      </div>
+    </section>
+
+    <nav class="mobile-control-dock" id="mobile-control-dock" aria-label="Operating controls">
+      <button class="mobile-dock-button" type="button" data-shell-target="radio">Radio</button>
+      <button class="mobile-dock-button" type="button" data-shell-target="rx">RX</button>
+      <button class="mobile-dock-button" type="button" data-shell-target="tx">TX</button>
+      <button class="mobile-dock-button" type="button" data-shell-target="dsp">DSP</button>
+      <button class="mobile-dock-button" type="button" data-shell-target="more">More</button>
+    </nav>
   </div>
 
   <div class="frequency-entry-overlay" id="freq-entry-overlay" hidden>
@@ -5632,8 +6996,12 @@
     const FREQ_LOCK_KEY = "saturn.remote.freqLock";
     const WAKE_LOCK_KEY = "saturn.remote.keepScreenAwake";
     const PHONE_WATERFALL_KEY = "saturn.remote.phoneWaterfall";
+    const PHONE_SPECTRUM_MODE_KEY = "saturn.remote.phoneSpectrumMode";
+    const SPECTRUM_WATERFALL_RATIO_KEY = "saturn.remote.spectrumWaterfallRatio";
     const DISPLAY_PREFS_KEY = "saturn.remote.displayPrefs";
     const ACTIVE_PROFILE_KEY = "saturn.remote.activeProfile";
+    const OPERATIONS_DRAWER_PREF_KEY = "saturn.remote.operationsDrawer";
+    const SETUP_PANEL_PREF_KEY = "saturn.remote.setupPanel";
     const REMOTE_SETTINGS_PATH = "/remote_settings";
     const REMOTE_PROFILES_PATH = "/remote_profiles";
     const REMOTE_PROFILES_SAVE_PATH = "/remote_profiles/save";
@@ -6123,6 +7491,8 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     state.wsDiagBinaryFrames = 0;
     state.wsDiagLastMarkerAt = 0;
     state.phoneWaterfallVisible = false;
+    state.phoneSpectrumMode = "balanced";
+    state.spectrumWaterfallRatio = 0.62;
     state.vfoTuneStepHz = 100;
     state.keyboardPttActive = false;
     state.keyboardPttRequestId = 0;
@@ -7595,11 +8965,22 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     }
 
     function preferredLayout() {
-      return localStorage.getItem("saturn.remote.layout") === "phone" ? "phone" : "desktop";
+      const saved = localStorage.getItem("saturn.remote.layout");
+      return _next.preferredResponsiveLayout(saved, {
+        width: window.innerWidth,
+        height: window.innerHeight,
+        coarsePointer: Boolean(window.matchMedia?.("(pointer: coarse)").matches),
+      });
     }
 
-    function loadPhoneWaterfallVisible() {
-      return localStorage.getItem(PHONE_WATERFALL_KEY) === "1";
+    function loadPhoneSpectrumMode() {
+      const saved = localStorage.getItem(PHONE_SPECTRUM_MODE_KEY);
+      if (saved) return normalizePhoneSpectrumMode(saved);
+      return localStorage.getItem(PHONE_WATERFALL_KEY) === "0" ? "spectrum" : "balanced";
+    }
+
+    function loadSpectrumWaterfallRatio() {
+      return clampSpectrumWaterfallRatio(localStorage.getItem(SPECTRUM_WATERFALL_RATIO_KEY));
     }
 
     function tuneStepLabel(stepHz) {
@@ -7708,12 +9089,27 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       shiftBinsHorizontally: _shiftBinsHorizontally,
       bandEdgesInView: _bandEdgesInView,
       autoRangeFromBins: _autoRangeFromBins,
-      lerp, moveToward, svgArcPath, dbmToSmDeg, auxDeg, txPowerToAuxDeg, swrToAuxDeg,
+      lerp, moveToward, svgArcPath, dbmToSmDeg, formatSignalStrength, linearLevelToDbfs, instrumentOperatingState,
+      auxDeg, txPowerToAuxDeg, swrToAuxDeg,
       SM_CX, SM_CY, SM_R, SM_START, SM_END, SM_S9_DEG,
       AX_CX, AX_CY, AX_R, AX_START, AX_END, AX_SPAN,
       SMETER_ATTACK_PER_SEC, SMETER_RELEASE_PER_SEC, SMETER_PEAK_HOLD_MS, SMETER_PEAK_DROP_PER_SEC,
       TX_POWER_ATTACK_PER_SEC, TX_POWER_RELEASE_PER_SEC, TX_POWER_PEAK_HOLD_MS, TX_POWER_PEAK_DROP_PER_SEC,
       SWR_ATTACK_PER_SEC, SWR_RELEASE_PER_SEC,
+      normalizeRadioControlContext,
+      radioControlContextForTarget,
+      txActionAvailability,
+      txControlPresentationState,
+      normalizeOperationsDrawerTarget,
+      restoreOperationsDrawerSelection,
+      selectOperationsDrawerTarget,
+      adjacentSetupPanelId,
+      normalizeSetupPanelId,
+      clampSpectrumWaterfallRatio,
+      nextPhoneSpectrumMode,
+      normalizePhoneSpectrumMode,
+      phoneSpectrumRatio,
+      spectrumWaterfallRatioFromPointer,
       noiseReductionLabel: _noiseReductionLabel,
       describeMicCaptureError: _describeMicCaptureError,
     } = _next;
@@ -7804,29 +9200,172 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       button.title = isPhone ? "Switch to desktop layout" : "Switch to phone layout";
     }
 
+    function syncDisplayWorkspaceRatio() {
+      const stack = document.querySelector(".display-stack");
+      const separator = $("spectrum-waterfall-resizer");
+      const phone = state.layoutMode === "phone";
+      const ratio = phone
+        ? phoneSpectrumRatio(state.phoneSpectrumMode)
+        : clampSpectrumWaterfallRatio(state.spectrumWaterfallRatio);
+      const spectrumMinimum = phone ? 140 : 180;
+      const waterfallMinimum = phone ? 96 : 120;
+      const separatorSize = phone ? 0 : 12;
+      if (stack) {
+        stack.style.gridTemplateRows = `minmax(${spectrumMinimum}px, ${ratio.toFixed(3)}fr) ${separatorSize}px minmax(${waterfallMinimum}px, ${(1 - ratio).toFixed(3)}fr)`;
+      }
+      if (separator) {
+        const percent = Math.round(ratio * 100);
+        separator.setAttribute("aria-valuenow", `${percent}`);
+        separator.setAttribute("aria-valuetext", `${percent}% spectrum, ${100 - percent}% waterfall`);
+      }
+      return ratio;
+    }
+
     function syncPhoneWaterfall() {
-      const wanLite = phoneWanLiteActive();
-      const visible = wanLite || state.layoutMode !== "phone" || Boolean(state.phoneWaterfallVisible);
-      document.documentElement.dataset.phoneWaterfall = visible ? "visible" : "hidden";
+      const mode = normalizePhoneSpectrumMode(state.phoneSpectrumMode);
+      state.phoneSpectrumMode = mode;
+      state.phoneWaterfallVisible = true;
+      document.documentElement.dataset.phoneWaterfall = "visible";
+      document.documentElement.dataset.phoneSpectrumMode = mode;
       const button = $("waterfall-toggle-btn");
       if (button) {
-        button.textContent = wanLite ? "WF WAN" : (visible ? "WF On" : "WF Off");
-        button.classList.toggle("active", visible);
+        const labels = {
+          balanced: "View Both",
+          spectrum: "Spectrum +",
+          waterfall: "Waterfall +",
+        };
+        const descriptions = {
+          balanced: "Balanced spectrum and waterfall view",
+          spectrum: "Spectrum-dominant view with waterfall retained",
+          waterfall: "Waterfall-dominant view with spectrum retained",
+        };
+        button.textContent = phoneWanLiteActive() ? `${labels[mode]} WAN` : labels[mode];
+        button.classList.toggle("active", mode !== "balanced");
         button.disabled = false;
-        button.setAttribute("aria-pressed", visible ? "true" : "false");
-        button.title = wanLite ? "Phone WAN mode shows a low-rate waterfall" : (visible ? "Hide phone waterfall" : "Show phone waterfall");
+        button.setAttribute("aria-label", `${descriptions[mode]}. Activate for next view.`);
+        button.title = descriptions[mode];
       }
+      syncDisplayWorkspaceRatio();
     }
 
     function togglePhoneWaterfall() {
-      state.phoneWaterfallVisible = !state.phoneWaterfallVisible;
-      localStorage.setItem(PHONE_WATERFALL_KEY, state.phoneWaterfallVisible ? "1" : "0");
+      state.phoneSpectrumMode = nextPhoneSpectrumMode(state.phoneSpectrumMode);
+      localStorage.setItem(PHONE_SPECTRUM_MODE_KEY, state.phoneSpectrumMode);
+      localStorage.setItem(PHONE_WATERFALL_KEY, "1");
       syncPhoneWaterfall();
       requestAnimationFrame(() => {
         spectrumRenderer.resize();
         waterfallRenderer.resize();
         updateUi();
       });
+    }
+
+    let displaySurfaceResizeFrame = 0;
+    let displayWorkspaceResizeObserver = null;
+    function scheduleDisplaySurfaceResize() {
+      if (displaySurfaceResizeFrame) return;
+      displaySurfaceResizeFrame = requestAnimationFrame(() => {
+        displaySurfaceResizeFrame = 0;
+        spectrumRenderer.resize();
+        waterfallRenderer.resize();
+        if (state.latestBins?.length) {
+          spectrumRenderer.render(state.latestBins, state.displayFloorDb, state.displayCeilingDb);
+        }
+        if (waterfallRenderEnabled()) waterfallRenderer.render();
+        updateAxes();
+        updateFilterOverlay();
+        renderBandEdges();
+      });
+    }
+
+    function setSpectrumWaterfallRatio(value, persist = true) {
+      state.spectrumWaterfallRatio = clampSpectrumWaterfallRatio(
+        value,
+        state.spectrumWaterfallRatio,
+      );
+      if (persist) {
+        localStorage.setItem(
+          SPECTRUM_WATERFALL_RATIO_KEY,
+          state.spectrumWaterfallRatio.toFixed(3),
+        );
+      }
+      syncDisplayWorkspaceRatio();
+      scheduleDisplaySurfaceResize();
+    }
+
+    function bindDisplayWorkspaceResizer() {
+      const separator = $("spectrum-waterfall-resizer");
+      const stack = document.querySelector(".display-stack");
+      if (!separator || !stack) return;
+      let pointerId = null;
+
+      const updateFromPointer = (event, persist = false) => {
+        const rect = stack.getBoundingClientRect();
+        setSpectrumWaterfallRatio(
+          spectrumWaterfallRatioFromPointer(
+            event.clientY,
+            rect.top,
+            rect.height,
+            state.spectrumWaterfallRatio,
+          ),
+          persist,
+        );
+      };
+
+      separator.addEventListener("pointerdown", (event) => {
+        if (event.pointerType === "mouse" && event.button !== 0) return;
+        event.preventDefault();
+        pointerId = event.pointerId;
+        separator.dataset.dragging = "true";
+        separator.focus({ preventScroll: true });
+        try { separator.setPointerCapture(pointerId); } catch {}
+        updateFromPointer(event);
+      });
+      separator.addEventListener("pointermove", (event) => {
+        if (pointerId !== event.pointerId) return;
+        event.preventDefault();
+        updateFromPointer(event);
+      });
+      const finish = (event) => {
+        if (pointerId !== event.pointerId) return;
+        event.preventDefault();
+        updateFromPointer(event, true);
+        try { separator.releasePointerCapture(pointerId); } catch {}
+        pointerId = null;
+        separator.dataset.dragging = "false";
+      };
+      separator.addEventListener("pointerup", finish);
+      separator.addEventListener("pointercancel", (event) => {
+        if (pointerId !== event.pointerId) return;
+        pointerId = null;
+        separator.dataset.dragging = "false";
+        setSpectrumWaterfallRatio(state.spectrumWaterfallRatio, true);
+      });
+      separator.addEventListener("keydown", (event) => {
+        const deltas = {
+          ArrowUp: -0.02,
+          ArrowDown: 0.02,
+          PageUp: -0.1,
+          PageDown: 0.1,
+        };
+        if (event.key === "Home") {
+          event.preventDefault();
+          setSpectrumWaterfallRatio(0.34);
+        } else if (event.key === "End") {
+          event.preventDefault();
+          setSpectrumWaterfallRatio(0.78);
+        } else if (event.key in deltas) {
+          event.preventDefault();
+          setSpectrumWaterfallRatio(state.spectrumWaterfallRatio + deltas[event.key]);
+        }
+      });
+      separator.addEventListener("dblclick", () => setSpectrumWaterfallRatio(0.62));
+
+      if (typeof ResizeObserver === "function") {
+        displayWorkspaceResizeObserver = new ResizeObserver(scheduleDisplaySurfaceResize);
+        displayWorkspaceResizeObserver.observe($("spectrum-shell"));
+        displayWorkspaceResizeObserver.observe($("waterfall-shell"));
+      }
     }
 
     function syncPhonePanels() {
@@ -7878,6 +9417,321 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         head.appendChild(button);
       });
       syncPhonePanels();
+    }
+
+    function revealShellPanel(panel) {
+      if (!panel) return;
+      const key = panel.dataset.phonePanel;
+      if (key && key in state.phonePanels && state.phonePanels[key]) {
+        state.phonePanels[key] = false;
+        savePhonePanelState();
+        syncPhonePanels();
+      }
+      panel.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+
+    function applyControlContext(value, persist = true) {
+      const context = normalizeRadioControlContext(value);
+      const rail = $("radio-context-rail");
+      const audioStrip = document.querySelector('[data-phone-panel="audio"]');
+      const rightRail = document.querySelector(".right-rail");
+      if (!rail || !audioStrip || !rightRail) return context;
+
+      rail.dataset.activeContext = context;
+      rail.querySelectorAll(".context-tab").forEach((button) => {
+        const active = button.dataset.controlContext === context;
+        button.setAttribute("aria-selected", active ? "true" : "false");
+        button.tabIndex = active ? 0 : -1;
+      });
+
+      audioStrip.hidden = context === "tx";
+      audioStrip.querySelectorAll("[data-control-context]").forEach((control) => {
+        control.hidden = control.dataset.controlContext !== context;
+      });
+      const audioTitle = audioStrip.querySelector(".panel-title");
+      if (audioTitle) audioTitle.textContent = context === "dsp" ? "DSP" : "Receive";
+      const audioMeta = audioStrip.querySelector(".panel-meta");
+      if (audioMeta) {
+        audioMeta.textContent = context === "dsp"
+          ? "Noise reduction / blanker"
+          : "Audio / AGC / filter";
+      }
+      rightRail.dataset.contextCompact = context === "tx" ? "false" : "true";
+
+      if (persist) localStorage.setItem("saturn.remote.controlContext", context);
+      return context;
+    }
+
+    function initControlContextRail() {
+      const consoleLayout = document.querySelector(".console-layout");
+      const audioStrip = document.querySelector('[data-phone-panel="audio"]');
+      const rightRail = document.querySelector(".right-rail");
+      if (!consoleLayout || !audioStrip || !rightRail) return;
+
+      let rail = $("radio-context-rail");
+      if (!rail) {
+        rail = document.createElement("aside");
+        rail.id = "radio-context-rail";
+        rail.className = "context-rail";
+        rail.setAttribute("aria-label", "Radio controls");
+
+        const tabs = document.createElement("div");
+        tabs.className = "context-tabs";
+        tabs.setAttribute("role", "tablist");
+        tabs.setAttribute("aria-label", "Radio control context");
+        for (const context of ["rx", "dsp", "tx"]) {
+          const button = document.createElement("button");
+          button.type = "button";
+          button.className = "context-tab";
+          button.dataset.controlContext = context;
+          button.setAttribute("role", "tab");
+          button.textContent = context.toUpperCase();
+          button.addEventListener("click", () => applyControlContext(context));
+          tabs.appendChild(button);
+        }
+        rail.appendChild(tabs);
+        consoleLayout.insertAdjacentElement("afterend", rail);
+      }
+
+      rail.appendChild(audioStrip);
+      rail.appendChild(rightRail);
+      applyControlContext(localStorage.getItem("saturn.remote.controlContext"), false);
+    }
+
+    let operationsDrawerLastRenderAt = 0;
+
+    function operationsDrawerSelectionFromDom() {
+      const drawer = $("operations-drawer");
+      return {
+        open: drawer?.dataset.open === "true",
+        target: normalizeOperationsDrawerTarget(drawer?.dataset.activePanel),
+      };
+    }
+
+    function renderOperationsGroups(containerId, groups) {
+      const grid = $(containerId);
+      if (!grid) return;
+      grid.textContent = "";
+      groups.forEach((group) => {
+        const section = document.createElement("section");
+        section.className = "operator-detail-group";
+        const title = document.createElement("div");
+        title.className = "operator-detail-group-title";
+        title.textContent = group.title;
+        section.appendChild(title);
+        group.items.forEach((item) => section.appendChild(renderOperatorDetailItem(item)));
+        grid.appendChild(section);
+      });
+    }
+
+    function recallOperationsBandMemory(key, entry) {
+      const targetHz = Number(entry?.frequency);
+      if (!Number.isFinite(targetHz) || targetHz <= 0) return;
+      if (state.frequencyLock) {
+        recordOperatorFault("Frequency lock blocks memory recall", "warn");
+        updateUi();
+        return;
+      }
+      rememberCurrentBandSettings();
+      setFrequency(targetHz, true, { rememberBand: false });
+      if (applyBandMemoryForFrequency(targetHz)) {
+        sendCurrentRadioPrefsToBridge();
+      }
+      resumeRxMediaAfterBandChange("operations memory");
+      persistLocalSettingsFallback(currentRemoteSettings());
+      scheduleRemoteSettingsSave();
+      logEvent(`Recalled ${key} band memory from Operations`);
+      updateUi();
+    }
+
+    function updateOperationsMemoryPanel() {
+      const grid = $("operations-memory-grid");
+      if (!grid) return;
+      const entries = Object.entries(state.bandMemory || {})
+        .filter(([, entry]) => Number(entry?.frequency) > 0)
+        .sort(([, left], [, right]) => Number(left.frequency) - Number(right.frequency));
+      const meta = $("operations-memory-meta");
+      if (meta) {
+        const active = state.activeProfile ? ` · profile ${state.activeProfile}` : "";
+        meta.textContent = `${entries.length} saved band ${entries.length === 1 ? "memory" : "memories"}${active}`;
+      }
+      grid.textContent = "";
+      if (!entries.length) {
+        const empty = document.createElement("div");
+        empty.className = "operations-empty";
+        empty.textContent = "No band memories saved yet. Save the current band or change bands to create one.";
+        grid.appendChild(empty);
+        return;
+      }
+      entries.forEach(([key, entry]) => {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "btn ghost operations-memory-button";
+        button.title = `Recall ${key} without leaving the operating screen`;
+        const label = document.createElement("strong");
+        label.textContent = key.toUpperCase();
+        const frequency = document.createElement("span");
+        frequency.textContent = `${formatFrequency(Number(entry.frequency))} · ${entry.radioPrefs?.mode || "--"}`;
+        button.append(label, frequency);
+        button.addEventListener("click", () => recallOperationsBandMemory(key, entry));
+        grid.appendChild(button);
+      });
+    }
+
+    function updateOperationsDrawer(force = false) {
+      const selection = operationsDrawerSelectionFromDom();
+      if (!selection.open || selection.target === "log") return;
+      const now = performance.now();
+      if (!force && now - operationsDrawerLastRenderAt < 500) return;
+      operationsDrawerLastRenderAt = now;
+
+      if (selection.target === "memory") {
+        updateOperationsMemoryPanel();
+        return;
+      }
+      const groups = operatorDetailGroups(now);
+      if (selection.target === "network") {
+        renderOperationsGroups("operations-network-grid", groups.filter((group) => group.title === "RX Latency"));
+        return;
+      }
+      if (selection.target === "radio") {
+        renderOperationsGroups(
+          "operations-radio-grid",
+          groups.filter((group) => group.title === "Radio" || group.title === "TX Safety" || group.title === "Fault History")
+        );
+        return;
+      }
+      if (selection.target === "audio") {
+        const leadMs = audioLeadMs();
+        const dropCount = state.audioBackpressureDrops + state.rxWorkletDrops +
+          state.rxWorkletOverflows + state.audioSeqResyncCount;
+        renderOperationsGroups("operations-audio-grid", [
+          {
+            title: "RX Audio",
+            items: [
+              operatorDetailItem("State", state.audioStreaming ? "Running" : "Stopped", audioProfileLabel(), state.audioStreaming ? "ok" : "warn"),
+              operatorDetailItem("AF Gain", `${safeFixed(state.rxVolumeDb, 1, "-10.0")} dB`, "Receiver audio gain", "rx"),
+              operatorDetailItem("Queue", leadMs == null ? "--" : `${leadMs} ms`, `${state.rxWorkletUnderruns} underrun(s)`, audioStripState().tone),
+              operatorDetailItem("Continuity", `${dropCount} event(s)`, `${state.audioSeqGapCount} sequence gap(s), ${state.audioSeqMissingPacketCount} missing packet(s)`, dropCount ? "warn" : "ok"),
+            ],
+          },
+          {
+            title: "Timing",
+            items: [
+              operatorDetailItem("Packet Jitter", `${state.rxAudioJitterP50Ms.toFixed(1)} / ${state.rxAudioJitterP95Ms.toFixed(1)} / ${state.rxAudioJitterP99Ms.toFixed(1)} ms`, "p50 / p95 / p99", state.rxAudioJitterP99Ms > 40 ? "warn" : "ok"),
+              operatorDetailItem("AudioContext", state.audioContextBaseLatencyMs == null ? "Unavailable" : `${state.audioContextBaseLatencyMs.toFixed(1)} ms`, state.audioContextOutputLatencyMs == null ? "Output latency not reported" : `${state.audioContextOutputLatencyMs.toFixed(1)} ms output`, state.audioContextBaseLatencyMs == null ? "warn" : "ok"),
+              operatorDetailItem("Resync", `${state.audioSeqResyncCount}`, `${state.rxWorkletOverflows} worklet overflow(s)`, state.audioSeqResyncCount || state.rxWorkletOverflows ? "warn" : "ok"),
+            ],
+          },
+        ]);
+        return;
+      }
+      if (selection.target === "dsp") {
+        renderOperationsGroups("operations-dsp-grid", [
+          {
+            title: "Receive DSP",
+            items: [
+              operatorDetailItem("Noise Reduction", noiseReductionLabel(), `Mode ${state.rxNoiseReductionMode}`, state.rxNoiseReductionMode === "OFF" ? "rx" : "ok"),
+              operatorDetailItem("Noise Blanker", state.rxNbMode, `Threshold ${safeFixed(state.rxNbThreshold, 2, "0.00")}`, state.rxNbMode === "OFF" ? "rx" : "ok"),
+              operatorDetailItem("ANF", state.anfEnabled ? "On" : "Off", "Automatic notch filter", state.anfEnabled ? "ok" : "rx"),
+              operatorDetailItem("AGC", state.agcMode, `Gain ${state.agcGain}`, "rx"),
+              operatorDetailItem("RX EQ", state.rxEqEnabled ? "On" : "Off", "10-band equalizer", state.rxEqEnabled ? "ok" : "rx"),
+              operatorDetailItem("Passband", `${state.filterLow}-${state.filterHigh} Hz`, state.rxFilterShiftHz ? `Shift ${state.rxFilterShiftHz} Hz` : "Centered", "rx"),
+            ],
+          },
+        ]);
+      }
+    }
+
+    function applyOperationsDrawerSelection(selection, persist = true) {
+      const drawer = $("operations-drawer");
+      if (!drawer) return;
+      const target = normalizeOperationsDrawerTarget(selection.target);
+      const open = Boolean(selection.open);
+      drawer.dataset.open = open ? "true" : "false";
+      drawer.dataset.activePanel = target;
+      drawer.querySelectorAll(".operations-tab").forEach((button) => {
+        const active = button.dataset.operationsTarget === target;
+        button.setAttribute("aria-selected", open && active ? "true" : "false");
+        button.setAttribute("aria-expanded", open && active ? "true" : "false");
+        button.tabIndex = active ? 0 : -1;
+      });
+      drawer.querySelectorAll("[data-operations-panel]").forEach((panel) => {
+        panel.hidden = !open || panel.dataset.operationsPanel !== target;
+      });
+      if (persist) {
+        try {
+          localStorage.setItem(OPERATIONS_DRAWER_PREF_KEY, JSON.stringify({ open, target }));
+        } catch {}
+      }
+      if (open) updateOperationsDrawer(true);
+    }
+
+    function initResponsiveShell() {
+      initControlContextRail();
+      const drawer = $("operations-drawer");
+      const logPanel = $("operations-panel-log");
+      const operatorLog = document.querySelector(".console-log");
+      if (logPanel && operatorLog && operatorLog.parentElement !== logPanel) {
+        logPanel.appendChild(operatorLog);
+      }
+
+      const panelTargets = {
+        dsp: '[data-phone-panel="audio"]',
+        radio: '[data-phone-panel="demod"]',
+        rx: '[data-phone-panel="audio"]',
+        tx: '[data-phone-panel="tx"]',
+      };
+
+      const operationsTabs = Array.from(document.querySelectorAll(".operations-tab"));
+      operationsTabs.forEach((button, index) => {
+        button.addEventListener("click", () => {
+          const next = selectOperationsDrawerTarget(operationsDrawerSelectionFromDom(), button.dataset.operationsTarget);
+          applyOperationsDrawerSelection(next);
+          if (next.open) drawer?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+        });
+        button.addEventListener("keydown", (event) => {
+          let nextIndex = null;
+          if (event.key === "ArrowRight") nextIndex = (index + 1) % operationsTabs.length;
+          if (event.key === "ArrowLeft") nextIndex = (index - 1 + operationsTabs.length) % operationsTabs.length;
+          if (event.key === "Home") nextIndex = 0;
+          if (event.key === "End") nextIndex = operationsTabs.length - 1;
+          if (nextIndex == null) return;
+          event.preventDefault();
+          operationsTabs[nextIndex].focus();
+        });
+      });
+
+      $("operations-memory-save-btn")?.addEventListener("click", () => {
+        rememberCurrentBandSettings();
+        updateOperationsDrawer(true);
+        logEvent("Saved current band memory from Operations");
+      });
+
+      let restored = { open: false, target: "memory" };
+      try {
+        restored = restoreOperationsDrawerSelection(JSON.parse(localStorage.getItem(OPERATIONS_DRAWER_PREF_KEY) || "null"));
+      } catch {}
+      applyOperationsDrawerSelection(restored, false);
+
+      document.querySelectorAll(".mobile-dock-button").forEach((button) => {
+        button.addEventListener("click", () => {
+          const target = button.dataset.shellTarget;
+          document.querySelectorAll(".mobile-dock-button").forEach((candidate) => {
+            candidate.setAttribute("aria-current", candidate === button ? "true" : "false");
+          });
+          if (target === "more") {
+            const current = operationsDrawerSelectionFromDom();
+            if (!current.open) applyOperationsDrawerSelection({ open: true, target: current.target });
+            drawer?.scrollIntoView({ behavior: "smooth", block: "end" });
+            return;
+          }
+          const controlContext = radioControlContextForTarget(target);
+          if (controlContext) applyControlContext(controlContext);
+          revealShellPanel(document.querySelector(panelTargets[target] || ""));
+        });
+      });
+      bindDisplayWorkspaceResizer();
     }
 
     function applyLayout(mode, persist = true, refresh = true) {
@@ -9121,6 +10975,30 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
           ? "WAN: 96 kHz IQ cap and 12 kHz mono audio"
           : "LAN: full-quality local transport";
       }
+      const setupConnection = reconnectConnectionState();
+      if ($("setup-network-connection-status")) {
+        $("setup-network-connection-status").textContent = `${setupConnection.label} · ${networkProfileLabel()}`;
+      }
+      if ($("setup-network-latency-status")) {
+        $("setup-network-latency-status").textContent = latencyStripState().label;
+      }
+      const setupAudioLeadMs = audioLeadMs();
+      const setupAudioEvents = state.audioBackpressureDrops + state.rxWorkletDrops +
+        state.rxWorkletOverflows + state.audioSeqResyncCount;
+      if ($("setup-audio-profile-status")) {
+        $("setup-audio-profile-status").textContent = state.audioStreaming ? audioProfileLabel() : "Audio stopped";
+      }
+      if ($("setup-audio-buffer-status")) {
+        $("setup-audio-buffer-status").textContent = setupAudioLeadMs == null ? "Unavailable" : `${setupAudioLeadMs} ms lead`;
+      }
+      if ($("setup-audio-continuity-status")) {
+        $("setup-audio-continuity-status").textContent = `${setupAudioEvents} event(s) · ${state.rxWorkletUnderruns} underrun(s)`;
+      }
+      if ($("setup-audio-microphone-status")) {
+        $("setup-audio-microphone-status").textContent = state.micCapturing
+          ? `Live · ${safeFixed(linearLevelToDbfs(state.txMicLevelVisual || 0, -90), 1, "-90.0")} dBFS`
+          : "Idle · requested only when transmitting";
+      }
       if ($("display-spectrum-floor-readout")) $("display-spectrum-floor-readout").textContent = `${Math.round(prefs.spectrumFloorDb)} dB`;
       if ($("display-spectrum-ceiling-readout")) $("display-spectrum-ceiling-readout").textContent = `${Math.round(prefs.spectrumCeilingDb)} dB`;
       if ($("display-waterfall-floor-readout")) $("display-waterfall-floor-readout").textContent = `${Math.round(prefs.waterfallFloorDb)} dB`;
@@ -9242,7 +11120,10 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
 
     function syncSetupPanels() {
       document.querySelectorAll("[data-setup-panel]").forEach((button) => {
-        button.classList.toggle("active", button.dataset.setupPanel === state.setupPanel);
+        const active = button.dataset.setupPanel === state.setupPanel;
+        button.classList.toggle("active", active);
+        button.setAttribute("aria-selected", active ? "true" : "false");
+        button.tabIndex = active ? 0 : -1;
       });
       document.querySelectorAll("[data-setup-panel-id]").forEach((panel) => {
         panel.hidden = panel.dataset.setupPanelId !== state.setupPanel;
@@ -9255,8 +11136,11 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       });
     }
 
-    function setSetupPanel(panelId) {
-      state.setupPanel = ["profiles", "display", "dsp", "tx"].includes(panelId) ? panelId : "profiles";
+    function setSetupPanel(panelId, persist = true) {
+      state.setupPanel = normalizeSetupPanelId(panelId);
+      if (persist) {
+        try { localStorage.setItem(SETUP_PANEL_PREF_KEY, state.setupPanel); } catch {}
+      }
       syncSetupPanels();
     }
 
@@ -9273,9 +11157,15 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       }
       const next = Boolean(open);
       menu.hidden = !next;
+      const scrim = $("setup-scrim");
+      if (scrim) scrim.hidden = !next;
+      document.body.classList.toggle("setup-open", next);
       button.setAttribute("aria-expanded", next ? "true" : "false");
       if (next) {
         syncSetupMenuFields();
+        requestAnimationFrame(() => $("setup-close-btn")?.focus({ preventScroll: true }));
+      } else if (document.activeElement && menu.contains(document.activeElement)) {
+        button.focus({ preventScroll: true });
       }
     }
 
@@ -9711,18 +11601,42 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       setFrequency(state.vfoA + delta);
     }
 
-    function adjustDisplayZoom(direction) {
-      const next = Math.max(1, Math.min(32, state.displayZoom + direction));
-      if (next !== state.displayZoom) {
-        state.displayZoom = next;
-        state.spectrumShiftCarryBins = 0;
-        state.waterfallShiftCarryPixels = 0;
-        state.waterfallSettleFrames = 0;
-        waterfallRenderer.clear();
-        localStorage.setItem("saturn.remote.displayZoom", `${state.displayZoom}`);
+    function setDisplayZoomValue(value, persist = true, fullRefresh = true) {
+      const next = Math.max(1, Math.min(32, Math.round(Number(value) || 1)));
+      if (next === state.displayZoom) return false;
+      state.displayZoom = next;
+      state.spectrumShiftCarryBins = 0;
+      state.waterfallShiftCarryPixels = 0;
+      state.waterfallSettleFrames = 0;
+      waterfallRenderer.clear();
+      const zoomInput = $("display-zoom");
+      if (zoomInput) zoomInput.value = `${next}`;
+      if (persist) {
+        localStorage.setItem("saturn.remote.displayZoom", `${next}`);
+        persistLocalSettingsFallback(currentRemoteSettings());
         scheduleRemoteSettingsSave();
-        updateUi();
       }
+      if (fullRefresh) {
+        updateUi();
+      } else {
+        $("zoom-readout").textContent = `${safeFixed(next, 1, "1.0")}x`;
+        $("zoom-toolbar-readout").textContent = `ZOOM ${safeFixed(next, 1, "1.0")}x`;
+        const visibleSpan = displaySpanHz();
+        $("sample-rate-readout").textContent = `SPAN ${visibleSpan >= 1000000 ? `${safeFixed(visibleSpan / 1000000, 1, "1.0")}M` : `${Math.round(visibleSpan / 1000)}k`}`;
+        updateAxes();
+        updateFilterOverlay();
+      }
+      return true;
+    }
+
+    function persistCurrentDisplayZoom() {
+      localStorage.setItem("saturn.remote.displayZoom", `${state.displayZoom}`);
+      persistLocalSettingsFallback(currentRemoteSettings());
+      scheduleRemoteSettingsSave();
+    }
+
+    function adjustDisplayZoom(direction) {
+      setDisplayZoomValue(state.displayZoom + direction);
     }
 
     function frequencyFromDisplayPoint(clientX, element) {
@@ -9942,8 +11856,8 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       const windowWidth = `${Math.max(1.5, Math.abs(clampedRight - clampedLeft))}%`;
       const txOverlay = txFilterOverlayActive();
       const label = txOverlay
-        ? `TX ${state.txFilterLow}-${state.txFilterHigh} Hz`
-        : `RX ${passband.startHz}-${passband.endHz} Hz`;
+        ? `TX ${state.mode} • ${state.txFilterLow}–${state.txFilterHigh} Hz`
+        : `${state.mode} • ${state.filterLow}–${state.filterHigh} Hz`;
       for (const element of [$("filter-window"), $("waterfall-filter-window")]) {
         element.style.left = windowLeft;
         element.style.width = windowWidth;
@@ -10011,6 +11925,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     }
 
     function openSelectedTxTool() {
+      applyControlContext("tx");
       const mode = selectedTxTool();
       const targets = {
         meters: "tx-meter-mode",
@@ -10133,10 +12048,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     }
 
     function waterfallRenderEnabled(now = performance.now()) {
-      if (phoneWanLiteActive(now)) {
-        return true;
-      }
-      return state.layoutMode !== "phone" || Boolean(state.phoneWaterfallVisible);
+      return true;
     }
 
     function shouldPushWaterfallLine(now = performance.now()) {
@@ -10714,7 +12626,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
 
       const swr = state.swrVisual;
       const swrPercent = swr == null ? 0 : ((Math.max(1, Math.min(3, swr)) - 1) / 2) * 100;
-      const swrTone = swr == null ? "idle" : (swr >= 2 ? "alarm" : (swr >= 1.5 ? "warn" : "ok"));
+      const swrTone = swr == null ? "idle" : (swr > 3 ? "alarm" : (swr >= 1.5 ? "warn" : "ok"));
       setTxMiniMeter(
         "tx-zone-swr-bar",
         swrPercent,
@@ -10827,30 +12739,54 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       const txDiagnostic = txDiagnosticTxActive();
       const rfBlocked = rfDisabledBlocksTx();
       const roleBlocked = clientRoleBlocksTx();
-      const txState = rfBlocked
-        ? "disabled"
-        : (roleBlocked
-        ? "disabled"
-        : (state.txPhase === "keyed"
-        ? "keyed"
-        : (state.txPhase === "armed" || state.moxRequested ? "armed" : (state.connected ? (ready ? "ready" : "locked") : "disabled"))));
+      const presentationState = txControlPresentationState({
+        connected: state.connected,
+        blocked: rfBlocked || roleBlocked,
+        receiveOnly: wfmRxOnly,
+        faulted: state.txLockReason === "tx-fault",
+        ready,
+        txPhase: state.txPhase,
+        requested: state.moxRequested,
+        enabled: state.txEnabled,
+      });
+      const txState = {
+        disabled: "disabled",
+        fault: "fault",
+        locked: "locked",
+        armed: "ready",
+        engaging: "armed",
+        transmitting: "keyed",
+      }[presentationState];
+      const actions = txActionAvailability(presentationState, source);
       txZone.dataset.txState = txState;
+      txZone.dataset.txPresentation = presentationState;
       txZone.dataset.txSource = source || "none";
-      const stateLabel = wfmRxOnly
-        ? "WFM RX ONLY"
-        : (txDiagnostic
-        ? (state.txPhase === "keyed"
+      let stateLabel = "TX LOCKED";
+      if (presentationState === "fault") {
+        stateLabel = "TX FAULT";
+      } else if (wfmRxOnly) {
+        stateLabel = "WFM RX ONLY";
+      } else if (txDiagnostic) {
+        stateLabel = state.txPhase === "keyed"
           ? (source === "ptt" ? "PTT DIAG" : "MOX DIAG")
-          : (state.txPhase === "armed" || state.moxRequested ? "TX DIAG armed" : (state.connected ? (ready ? `TX DIAG · ${formatDurationClock(remainingMs)}` : "TX DIAG locked") : "Connect first")))
-        : (rfBlocked
-        ? "TX DISABLED"
-        : (roleBlocked
-        ? (state.remoteClientRole === "viewer" ? "VIEW ONLY" : "Role pending")
-        : (state.txPhase === "keyed"
-        ? (source === "ptt" ? "PTT ON AIR" : "MOX ON AIR")
-        : (state.txPhase === "armed" || state.moxRequested
-          ? (source === "ptt" ? "PTT armed" : "MOX armed")
-          : (state.connected ? (ready ? `TX READY · ${formatDurationClock(remainingMs)}` : "TX LOCKED") : "Connect first"))))));
+          : (state.txPhase === "armed" || state.moxRequested
+            ? "TX DIAG engaging"
+            : (state.connected
+              ? (ready ? `TX DIAG ARMED · ${formatDurationClock(remainingMs)}` : "TX DIAG locked")
+              : "Connect first"));
+      } else if (rfBlocked) {
+        stateLabel = "TX DISABLED";
+      } else if (roleBlocked) {
+        stateLabel = state.remoteClientRole === "viewer" ? "VIEW ONLY" : "Role pending";
+      } else if (state.txPhase === "keyed") {
+        stateLabel = source === "ptt" ? "PTT ON AIR" : "MOX ON AIR";
+      } else if (state.txPhase === "armed" || state.moxRequested) {
+        stateLabel = source === "ptt" ? "PTT ENGAGING" : "MOX ENGAGING";
+      } else if (!state.connected) {
+        stateLabel = "Connect first";
+      } else if (ready) {
+        stateLabel = `TX ARMED · ${formatDurationClock(remainingMs)}`;
+      }
       $("tx-zone-state").textContent = stateLabel;
       const sourceEl = $("tx-zone-source");
       if (sourceEl) {
@@ -10862,42 +12798,65 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       $("tx-zone-power-value").textContent = power == null ? "-- W" : `${power.toFixed(1)} W`;
       $("tx-zone-swr-value").textContent = state.swrVisual == null ? "-- : 1" : `${state.swrVisual.toFixed(2)} : 1`;
       const micLevel = Math.max(0, Math.min(1, state.txMicLevelVisual || 0));
+      const micPeakDbfs = linearLevelToDbfs(micLevel, -90);
       $("tx-zone-mic-value").textContent = state.micCapturing
-        ? (micLevel >= 0.92 ? "Clip" : `${(micLevel * 100).toFixed(0)}%`)
+        ? (micLevel >= 0.92 ? "CLIP" : `${micPeakDbfs.toFixed(1)} dB`)
         : (active ? "Starting" : "Idle");
       $("tx-zone-mic-dot").classList.toggle("live", Boolean(state.micCapturing));
       updateTxMiniMeters();
-      $("tx-zone-hint").textContent = wfmRxOnly
-        ? "FM broadcast stereo is receive-only"
-        : (txDiagnostic
-        ? "TX diagnostic: bridge RF output remains disabled"
-        : (rfBlocked
-        ? "Bridge RF output is disabled"
-        : (roleBlocked
-        ? (state.remoteClientRole === "viewer" ? "Viewer role cannot transmit" : "Waiting for bridge operator role")
-        : (state.connected
-        ? (active
-          ? (source === "ptt" ? "Release PTT or press Esc to unkey" : "Tap MOX again or press Esc to unkey")
-          : (ready ? "Hold PTT to key, or tap MOX to latch" : `Tap PTT or MOX to arm after ${txLockReasonLabel(state.txLockReason)}`))
-        : "Connect before transmit"))));
+      let txHint = "Connect before transmit";
+      if (presentationState === "fault") {
+        txHint = "Transmit stopped by a fault; verify the condition has cleared, then re-arm";
+      } else if (wfmRxOnly) {
+        txHint = "FM broadcast stereo is receive-only";
+      } else if (txDiagnostic) {
+        txHint = "TX diagnostic: bridge RF output remains disabled";
+      } else if (rfBlocked) {
+        txHint = "Bridge RF output is disabled";
+      } else if (roleBlocked) {
+        txHint = state.remoteClientRole === "viewer"
+          ? "Viewer role cannot transmit"
+          : "Waiting for bridge operator role";
+      } else if (state.connected && active) {
+        txHint = source === "ptt"
+          ? "Release PTT or press Esc to unkey"
+          : "Tap MOX again or press Esc to unkey";
+      } else if (state.connected && ready) {
+        txHint = "Hold PTT to transmit, or tap MOX to latch";
+      } else if (state.connected) {
+        txHint = `Tap ARM to enable transmit after ${txLockReasonLabel(state.txLockReason)}`;
+      }
+      $("tx-zone-hint").textContent = txHint;
+      const arm = $("tx-arm-btn");
+      if (arm) {
+        arm.hidden = presentationState !== "locked" && presentationState !== "fault" && presentationState !== "disabled";
+        arm.disabled = !actions.arm;
+        if (presentationState === "fault") {
+          arm.textContent = "VERIFY & RE-ARM";
+        } else if (presentationState === "locked") {
+          arm.textContent = "TAP TO ARM";
+        } else {
+          arm.textContent = wfmRxOnly
+            ? "RX ONLY"
+            : (rfBlocked ? "TX DISABLED" : (roleBlocked ? "TX UNAVAILABLE" : "CONNECT TO ARM"));
+        }
+        arm.title = presentationState === "fault"
+          ? "After verifying the fault has cleared, re-arm without transmitting"
+          : presentationState === "locked"
+          ? `Arm TX for ${formatDurationClock(TX_READY_WINDOW_MS)} without transmitting`
+          : $("tx-zone-hint").textContent;
+      }
+      const armNote = $("tx-arm-note");
+      if (armNote) armNote.hidden = !arm || arm.hidden;
       const ptt = $("ptt-btn");
       if (ptt) {
-        ptt.textContent = wfmRxOnly
-          ? "RX ONLY"
-          : (txDiagnostic
-          ? (active
-            ? (source === "ptt" ? "PTT DIAG" : "TX DIAG")
-            : (state.connected ? (ready ? "PTT DIAG" : "ARM DIAG") : "CONNECT"))
-          : (rfBlocked
-          ? "TX OFF"
-          : (roleBlocked
-          ? (state.remoteClientRole === "viewer" ? "VIEW" : "WAIT")
-          : (active
-          ? (source === "ptt" ? (state.txPhase === "keyed" ? "PTT ON AIR" : "PTT HOLD") : (state.txPhase === "keyed" ? "ON AIR" : "TX ARM"))
-          : (state.connected ? (ready ? "PTT" : "TAP TO ARM") : "CONNECT")))));
+        ptt.textContent = active && source === "ptt"
+          ? (state.txPhase === "keyed" ? "PTT ON AIR" : "PTT HOLD")
+          : (txDiagnostic ? "HOLD PTT DIAG" : "HOLD PTT");
         ptt.classList.toggle("active", active && source === "ptt");
-        ptt.disabled = rfBlocked || roleBlocked;
+        ptt.disabled = !actions.ptt;
         ptt.setAttribute("aria-pressed", active && source === "ptt" ? "true" : "false");
+        ptt.title = actions.ptt ? "Hold to transmit; release to return to receive" : "Arm TX before holding PTT";
       }
       const mox = $("mox-btn");
       if (mox) {
@@ -10906,7 +12865,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
           ? (moxActive ? "MOX DIAG" : "MOX DIAG")
           : (moxActive ? (state.txPhase === "keyed" ? "MOX ON" : "MOX ARM") : "MOX");
         mox.classList.toggle("active", moxActive);
-        mox.disabled = rfBlocked || roleBlocked;
+        mox.disabled = !actions.mox;
         mox.setAttribute("aria-pressed", moxActive ? "true" : "false");
       }
       const lockButton = $("tx-lock-btn");
@@ -10914,7 +12873,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         const locked = state.connected && !active && !ready;
         lockButton.textContent = locked ? "Locked" : "Lock TX";
         lockButton.classList.toggle("active", locked);
-        lockButton.disabled = rfBlocked || roleBlocked || (!state.connected && !active);
+        lockButton.disabled = !actions.lock && !active;
         lockButton.title = active
           ? "Unkey now and require TX reconfirm before the next key"
           : (locked ? `TX locked after ${txLockReasonLabel(state.txLockReason)}` : "Require TX reconfirm before the next key");
@@ -10995,7 +12954,11 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       }
       const primaryDeck = document.querySelector(".primary-deck");
       if (primaryDeck) primaryDeck.dataset.bandState = bandState.state;
-      $("sample-rate-readout").textContent = `IQ ${Math.round(state.sampleRate / 1000)} kHz`;
+      const visibleSpan = displaySpanHz();
+      const visibleSpanLabel = visibleSpan >= 1000000
+        ? `${safeFixed(visibleSpan / 1000000, 1, "1.0")}M`
+        : `${Math.round(visibleSpan / 1000)}k`;
+      $("sample-rate-readout").textContent = `SPAN ${visibleSpanLabel}`;
       $("path-summary").textContent = `${adcLabel(state.rxAdc)} • ${antennaLabel(state.rxAntenna)} • ${Math.round(state.sampleRate / 1000)} kHz IQ`;
       const wakeLockBtn = $("wake-lock-btn");
       if (wakeLockSupported()) {
@@ -11010,7 +12973,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         wakeLockBtn.textContent = "Stay Awake N/A";
       }
       wakeLockBtn.classList.toggle("active", state.keepScreenAwake && (state.wakeLockActive || state.wakeLockPending));
-      $("freq-lock-btn").textContent = state.frequencyLock ? "Freq Lock On" : "Freq Lock Off";
+      $("freq-lock-btn").textContent = state.frequencyLock ? "Locked" : "Lock";
       $("freq-lock-btn").classList.toggle("active", state.frequencyLock);
       $("rx-volume-readout").textContent = `${safeFixed(state.rxVolumeDb, 1, "-10.0")} dB`;
       $("rx-nr-readout").textContent = noiseReductionLabel();
@@ -11019,6 +12982,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       $("rx-anf-btn").classList.toggle("active", state.anfEnabled);
       $("agc-gain-readout").textContent = `${state.agcGain}`;
       $("zoom-readout").textContent = `${safeFixed(state.displayZoom, 1, "1.0")}x`;
+      $("zoom-toolbar-readout").textContent = `ZOOM ${safeFixed(state.displayZoom, 1, "1.0")}x`;
       $("filter-low-readout").textContent = wfmActive ? "Fixed" : `${state.filterLow} Hz`;
       $("filter-high-readout").textContent = wfmActive ? "180 kHz RF" : `${state.filterHigh} Hz`;
       $("tx-drive-readout").textContent = `${state.txDrive} W`;
@@ -11057,17 +13021,40 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       );
       twoToneButton.title = state.twoToneEnabled ? "Stop two-tone test" : "Start two-tone test";
       updateTxZone();
+      const instrumentState = instrumentOperatingState(
+        state.txPhase,
+        state.moxRequested,
+        state.txEnabled,
+        normalizeTxReadyState()
+      );
+      const instrumentDeck = $("instrument-meter-deck");
+      if (instrumentDeck) instrumentDeck.dataset.operatingState = instrumentState;
+      $("instrument-state-label").textContent = instrumentState === "tx"
+        ? "Transmitting"
+        : (instrumentState === "armed" ? "TX Armed" : "Receiving");
+      const instrumentFrequency = instrumentState === "rx" ? state.vfoA : (state.vfoB || state.vfoA);
+      $("instrument-state-frequency").textContent = `${instrumentState === "rx" ? "RX" : "TX"} ${formatFrequency(instrumentFrequency)} ${state.mode}`;
       $("meter-readout").textContent = state.meterDbmVisual == null ? "-- dBm" : `${state.meterDbmVisual.toFixed(1)} dBm`;
+      $("meter-s-readout").textContent = formatSignalStrength(state.meterDbmVisual);
       const txMeterValue = state.txMeterMode === "avg" ? state.txPowerAvg : state.txPowerPeak;
       $("tx-power-readout").textContent = txMeterValue == null ? "-- W" : `${txMeterValue.toFixed(1)} W`;
       $("swr-readout").textContent = state.swrVisual == null ? "-- : 1" : `${state.swrVisual.toFixed(2)} : 1`;
       updateTxToolDock();
-      updateSmeter(state.meterDbmVisual);
+      updateSmeter(state.meterDbmVisual, state.meterDbmPeak);
       updateTxPwrMeter(
         state.txMeterMode === "avg" ? state.txPowerAvg : state.txPowerVisual,
         state.txMeterMode === "peak" ? state.txPowerPeak : null
       );
       updateSwrMeter(state.swrVisual);
+      const instrumentMicLevel = Math.max(0, Math.min(1, state.txMicLevelVisual || 0));
+      const instrumentMicDbfs = linearLevelToDbfs(instrumentMicLevel, -90);
+      $("instrument-mic-fill").style.width = `${(instrumentMicLevel * 100).toFixed(1)}%`;
+      $("instrument-mic-fill").style.background = instrumentMicLevel >= 0.92
+        ? "var(--fault-red)"
+        : (instrumentMicLevel >= 0.72 ? "var(--warning-amber)" : "var(--safe-green)");
+      $("instrument-mic-readout").textContent = state.micCapturing
+        ? (instrumentMicLevel >= 0.92 ? "CLIP" : `${instrumentMicDbfs.toFixed(1)} dBFS`)
+        : "IDLE";
       $("tx-meter-mode").value = normalizeTxMeterMode(state.txMeterMode);
       $("two-tone-freq1-readout").textContent = `${clampTwoToneFreqHz(state.txTwoToneFreq1, 700)} Hz`;
       $("two-tone-freq2-readout").textContent = `${clampTwoToneFreqHz(state.txTwoToneFreq2, 1900)} Hz`;
@@ -11115,11 +13102,12 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         ? ` | W ${safeFixed(state.waterfallFloorDb, 0, "-200")}..${safeFixed(state.waterfallCeilingDb, 0, "-120")} dB`
         : " | W hidden";
       for (const element of [$("spectrum-shell"), $("waterfall-shell")]) {
-        element.style.touchAction = state.frequencyLock ? "pan-y" : "manipulation";
+        element.style.touchAction = state.frequencyLock ? "pan-y pinch-zoom" : "pan-y";
       }
       updateDisplayDecorations();
       updateAxes();
       updateFilterOverlay();
+      updateOperationsDrawer();
       syncSetupMenuFields();
       syncActiveButtons();
     }
@@ -12994,10 +14982,19 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     }
 
     function bindPttButton() {
+      const armButton = $("tx-arm-btn");
       const pttButton = $("ptt-btn");
       const moxButton = $("mox-btn");
       const lockButton = $("tx-lock-btn");
-      if (!pttButton || !moxButton || !lockButton) { return; }
+      if (!armButton || !pttButton || !moxButton || !lockButton) { return; }
+
+      const armTxFromButton = (event) => {
+        event.preventDefault();
+        if (state.moxRequested || state.txEnabled || state.micCapturing || holdPttActive()) {
+          return;
+        }
+        armTxReady("operator-arm");
+      };
 
       const startPointerPtt = (event) => {
         if (event.pointerType === "mouse" && event.button !== 0) {
@@ -13058,6 +15055,10 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         }
       };
 
+      armButton.addEventListener("click", armTxFromButton);
+      armButton.addEventListener("contextmenu", (event) => {
+        event.preventDefault();
+      });
       pttButton.addEventListener("pointerdown", startPointerPtt);
       pttButton.addEventListener("pointerup", stopPointerPtt);
       pttButton.addEventListener("pointercancel", stopPointerPtt);
@@ -14220,9 +16221,27 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       $("setup-close-btn").addEventListener("click", () => {
         setSetupMenuOpen(false);
       });
-      document.querySelectorAll("[data-setup-panel]").forEach((button) => {
+      $("setup-scrim")?.addEventListener("click", () => setSetupMenuOpen(false));
+      const setupTabs = Array.from(document.querySelectorAll("[data-setup-panel]"));
+      setupTabs.forEach((button) => {
         button.addEventListener("click", () => {
           setSetupPanel(button.dataset.setupPanel);
+        });
+        button.addEventListener("keydown", (event) => {
+          let target = null;
+          if (event.key === "ArrowRight" || event.key === "ArrowDown") {
+            target = adjacentSetupPanelId(button.dataset.setupPanel, 1);
+          } else if (event.key === "ArrowLeft" || event.key === "ArrowUp") {
+            target = adjacentSetupPanelId(button.dataset.setupPanel, -1);
+          } else if (event.key === "Home") {
+            target = "profiles";
+          } else if (event.key === "End") {
+            target = "advanced";
+          }
+          if (!target) return;
+          event.preventDefault();
+          setSetupPanel(target);
+          $("setup-tab-" + target)?.focus();
         });
       });
       document.querySelectorAll("[data-setup-dsp-panel]").forEach((button) => {
@@ -14239,6 +16258,42 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         if (!anchor) {
           setSetupMenuOpen(false);
         }
+      });
+      $("setup-menu")?.addEventListener("keydown", (event) => {
+        const menu = $("setup-menu");
+        if (!menu || menu.hidden) return;
+        if (event.key === "Escape") {
+          event.preventDefault();
+          event.stopPropagation();
+          setSetupMenuOpen(false);
+          return;
+        }
+        if (event.key !== "Tab") return;
+        const focusable = Array.from(menu.querySelectorAll("button, input, select, [tabindex]"))
+          .filter((node) => !node.disabled && node.tabIndex >= 0 && !node.closest("[hidden]"));
+        if (!focusable.length) return;
+        const first = focusable[0];
+        const last = focusable[focusable.length - 1];
+        if (event.shiftKey && document.activeElement === first) {
+          event.preventDefault();
+          last.focus();
+        } else if (!event.shiftKey && document.activeElement === last) {
+          event.preventDefault();
+          first.focus();
+        }
+      });
+      $("setup-network-copy-diagnostics-btn")?.addEventListener("click", () => {
+        void copyRxLatencyDiagnostic();
+      });
+      $("setup-audio-open-rx-btn")?.addEventListener("click", () => {
+        setSetupMenuOpen(false);
+        applyControlContext("rx");
+        revealShellPanel(document.querySelector('[data-phone-panel="audio"]'));
+      });
+      $("setup-audio-open-tx-btn")?.addEventListener("click", () => {
+        setSetupMenuOpen(false);
+        applyControlContext("tx");
+        revealShellPanel(document.querySelector('[data-phone-panel="tx"]'));
       });
       $("setup-dsp-nr-mode").addEventListener("change", () => {
         state.rxNoiseReductionMode = normalizeNrMode($("setup-dsp-nr-mode").value);
@@ -14571,15 +16626,10 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         sendTci(`rx_agc_gain:0,${state.agcGain};`);
       });
       $("display-zoom").addEventListener("input", () => {
-        state.displayZoom = Math.max(1, Math.min(32, Number($("display-zoom").value)));
-        state.spectrumShiftCarryBins = 0;
-        state.waterfallShiftCarryPixels = 0;
-        state.waterfallSettleFrames = 0;
-        waterfallRenderer.clear();
-        $("zoom-readout").textContent = `${safeFixed(state.displayZoom, 1, "1.0")}x`;
-        localStorage.setItem("saturn.remote.displayZoom", `${state.displayZoom}`);
-        persistLocalSettingsFallback(currentRemoteSettings());
-        scheduleRemoteSettingsSave();
+        setDisplayZoomValue($("display-zoom").value, true, false);
+      });
+      $("display-center-btn").addEventListener("click", () => {
+        if (!setDisplayZoomValue(1)) updateUi();
       });
       const bindDisplayToggle = (id, assign) => {
         $(id).addEventListener("change", () => {
@@ -14755,30 +16805,148 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       bindFrequencyDigitControl($("operator-center-readout"));
       bindPassbandDragControls($("filter-window"), $("spectrum-shell"));
       for (const element of [$("spectrum-shell"), $("waterfall-shell")]) {
+        const pointers = new Map();
+        let primaryPointerId = null;
+        let gestureStart = null;
+        let dragging = false;
+        let scrolling = false;
+        let pinchStart = null;
+        let longPressTimer = null;
+        let longPressTriggered = false;
+        let gestureConsumed = false;
+        let lastTap = null;
+
+        const clearLongPress = () => {
+          if (longPressTimer) clearTimeout(longPressTimer);
+          longPressTimer = null;
+        };
+        const distance = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
+
         element.addEventListener("pointerdown", (event) => {
           if (state.frequencyLock) return;
           if (event.pointerType === "mouse" && event.button !== 0) return;
-          event.preventDefault();
-          state.panadapterTunePointerId = event.pointerId;
+          pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
           element.focus({ preventScroll: true });
-          try { element.setPointerCapture(event.pointerId); } catch {}
-          applyPanadapterTune(event.clientX, element);
+
+          if (pointers.size === 2) {
+            clearLongPress();
+            gestureConsumed = true;
+            const [first, second] = Array.from(pointers.values());
+            pinchStart = {
+              distance: Math.max(1, distance(first, second)),
+              zoom: state.displayZoom,
+            };
+            dragging = false;
+            scrolling = false;
+            event.preventDefault();
+            for (const pointer of pointers.keys()) {
+              try { element.setPointerCapture(pointer); } catch {}
+            }
+            return;
+          }
+
+          if (pointers.size !== 1) return;
+          gestureConsumed = false;
+          primaryPointerId = event.pointerId;
+          gestureStart = { x: event.clientX, y: event.clientY, pointerType: event.pointerType };
+          dragging = event.pointerType === "mouse";
+          scrolling = false;
+          longPressTriggered = false;
+          if (dragging) {
+            event.preventDefault();
+            try { element.setPointerCapture(event.pointerId); } catch {}
+            applyPanadapterTune(event.clientX, element);
+          } else {
+            longPressTimer = setTimeout(() => {
+              longPressTimer = null;
+              if (dragging || scrolling || pointers.size !== 1 || state.frequencyLock) return;
+              longPressTriggered = true;
+              gestureConsumed = true;
+              const targetHz = snapTuneFrequencyHz(tunedFrequencyFromDisplayPoint(gestureStart.x, element));
+              openFrequencyEntry(frequencyEntrySeedFromHz(targetHz));
+            }, 650);
+          }
         });
         element.addEventListener("pointermove", (event) => {
-          if (state.frequencyLock || state.panadapterTunePointerId !== event.pointerId) return;
+          if (state.frequencyLock || !pointers.has(event.pointerId)) return;
+          pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+          if (pinchStart && pointers.size >= 2) {
+            clearLongPress();
+            const [first, second] = Array.from(pointers.values());
+            const scale = distance(first, second) / pinchStart.distance;
+            setDisplayZoomValue(pinchStart.zoom * scale, false, false);
+            event.preventDefault();
+            return;
+          }
+          if (primaryPointerId !== event.pointerId || !gestureStart) return;
+          const dx = event.clientX - gestureStart.x;
+          const dy = event.clientY - gestureStart.y;
+          if (!dragging && !scrolling && Math.hypot(dx, dy) >= 10) {
+            clearLongPress();
+            if (Math.abs(dx) > Math.abs(dy) * 1.15) {
+              dragging = true;
+              try { element.setPointerCapture(event.pointerId); } catch {}
+            } else {
+              scrolling = true;
+            }
+          }
+          if (!dragging) return;
           event.preventDefault();
           applyPanadapterTune(event.clientX, element);
         });
         const finishPanadapterTune = (event) => {
-          if (state.panadapterTunePointerId !== event.pointerId) return;
-          event.preventDefault();
-          applyPanadapterTune(event.clientX, element, true);
-          state.panadapterTunePointerId = null;
+          if (!pointers.has(event.pointerId)) return;
+          const wasPinching = Boolean(pinchStart);
+          pointers.delete(event.pointerId);
+          clearLongPress();
+          if (wasPinching) {
+            event.preventDefault();
+            persistCurrentDisplayZoom();
+            if (pointers.size < 2) pinchStart = null;
+          } else if (dragging && primaryPointerId === event.pointerId) {
+            event.preventDefault();
+            applyPanadapterTune(event.clientX, element, true);
+          } else if (!scrolling && !longPressTriggered && !gestureConsumed && primaryPointerId === event.pointerId) {
+            event.preventDefault();
+            const now = performance.now();
+            const currentTap = { x: event.clientX, y: event.clientY, at: now };
+            if (lastTap && now - lastTap.at <= 325 && distance(lastTap, currentTap) <= 24) {
+              lastTap = null;
+              $("display-center-btn").click();
+            } else {
+              applyPanadapterTune(event.clientX, element, true);
+              lastTap = currentTap;
+            }
+          }
           try { element.releasePointerCapture(event.pointerId); } catch {}
+          if (primaryPointerId === event.pointerId) primaryPointerId = null;
+          if (pointers.size === 0) {
+            gestureStart = null;
+            dragging = false;
+            scrolling = false;
+            longPressTriggered = false;
+            gestureConsumed = false;
+            pinchStart = null;
+          }
         };
         element.addEventListener("pointerup", finishPanadapterTune);
         element.addEventListener("pointercancel", (event) => {
-          if (state.panadapterTunePointerId === event.pointerId) state.panadapterTunePointerId = null;
+          pointers.delete(event.pointerId);
+          clearLongPress();
+          if (primaryPointerId === event.pointerId) primaryPointerId = null;
+          if (pointers.size < 2 && pinchStart) persistCurrentDisplayZoom();
+          if (pointers.size === 0) {
+            gestureStart = null;
+            dragging = false;
+            scrolling = false;
+            gestureConsumed = false;
+            pinchStart = null;
+          }
+        });
+        element.addEventListener("dblclick", (event) => {
+          if (state.frequencyLock) return;
+          event.preventDefault();
+          $("display-center-btn").click();
         });
         element.addEventListener("wheel", (event) => {
           if (state.frequencyLock) return;
@@ -14793,8 +16961,8 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         }, { passive: false });
       }
       window.addEventListener("resize", () => {
-        spectrumRenderer.resize();
-        waterfallRenderer.resize();
+        syncDisplayWorkspaceRatio();
+        scheduleDisplaySurfaceResize();
         updateUi();
       });
       bindPttButton();
@@ -15108,9 +17276,13 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       }
     }
 
-    function updateSmeter(dbm) {
+    function updateSmeter(dbm, peakDbm = null) {
       const svgDeg = dbm == null ? SM_START : Math.max(SM_START, Math.min(SM_END, dbmToSmDeg(dbm)));
       $('smeter-needle').style.transform = `rotate(${(svgDeg - 270).toFixed(1)}deg)`;
+      const peak = $('smeter-peak');
+      const peakDeg = peakDbm == null ? svgDeg : Math.max(SM_START, Math.min(SM_END, dbmToSmDeg(peakDbm)));
+      peak.style.transform = `rotate(${(peakDeg - 270).toFixed(1)}deg)`;
+      peak.setAttribute('opacity', peakDbm == null ? '0' : '0.8');
     }
 
     // Aux meter geometry and functions (auxDeg, txPowerToAuxDeg, swrToAuxDeg)
@@ -15198,7 +17370,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     function initTxPwrMeter() {
       $('txpwr-arc-bg').setAttribute('d', svgArcPath(AX_CX, AX_CY, AX_R, AX_START, AX_END));
       $('txpwr-arc-fill').setAttribute('d', svgArcPath(AX_CX, AX_CY, AX_R, AX_START, AX_START + 0.5));
-      const marks = [[0,'0'],[5,'5'],[10,'10'],[50,'50'],[100,'100'],[120,'120+']];
+      const marks = [[0,'0'],[5,'5'],[10,'10'],[25,'25'],[50,'50'],[100,'100'],[120,'120']];
       const tg = $('txpwr-ticks'), lg = $('txpwr-labels');
       marks.forEach(([w, lbl]) => {
         const deg = txPowerToAuxDeg(w);
@@ -15223,10 +17395,10 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       arc.setAttribute('d', svgArcPath(AX_CX, AX_CY, AX_R, AX_START, fillDeg));
       arc.setAttribute('stroke', c);
       const peakDeg = peakWatts == null ? fillDeg : txPowerToAuxDeg(Math.max(0, Math.min(120, peakWatts)));
-      arc.setAttribute('opacity', peakWatts != null && peakWatts > w ? '0.92' : '1');
-      if (peakWatts != null && peakWatts > w) {
-        arc.setAttribute('d', svgArcPath(AX_CX, AX_CY, AX_R, AX_START, peakDeg));
-      }
+      arc.setAttribute('opacity', '1');
+      const peak = $('txpwr-peak');
+      peak.style.transform = `rotate(${(peakDeg - 270).toFixed(1)}deg)`;
+      peak.setAttribute('opacity', peakWatts != null && peakWatts > 0 ? '0.9' : '0');
     }
 
     function initSwrMeter() {
@@ -15234,7 +17406,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       $('swr-arc-good').setAttribute('d', svgArcPath(AX_CX, AX_CY, AX_R, AX_START, goodEnd));
       $('swr-arc-warn').setAttribute('d', svgArcPath(AX_CX, AX_CY, AX_R, goodEnd, warnEnd));
       $('swr-arc-bad').setAttribute('d',  svgArcPath(AX_CX, AX_CY, AX_R, warnEnd, AX_END));
-      const marks = [[1.0,'1'],[1.5,'1.5'],[2.0,'2'],[3.0,'3'],[4.0,'4'],[5.0,'5']];
+      const marks = [[1.0,'1.0'],[1.2,'1.2'],[1.5,'1.5'],[2.0,'2'],[3.0,'3'],[5.0,'5+']];
       const tg = $('swr-ticks'), lg = $('swr-labels');
       marks.forEach(([s, lbl]) => {
         const deg = swrToAuxDeg(s);
@@ -15256,7 +17428,9 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     // ─────────────────────────────────────────────────────────────────────────
 
     async function init() {
-      state.phoneWaterfallVisible = loadPhoneWaterfallVisible();
+      state.phoneWaterfallVisible = true;
+      state.phoneSpectrumMode = loadPhoneSpectrumMode();
+      state.spectrumWaterfallRatio = loadSpectrumWaterfallRatio();
       state.vfoTuneStepHz = loadVfoTuneStep();
       applyLayout(preferredLayout(), false, false);
       applyTheme(preferredTheme(), false);
@@ -15340,9 +17514,11 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       $("tx-noise-gate-threshold").value = `${state.txNoiseGateThresholdDb}`;
       $("tx-noise-gate-threshold").disabled = !state.txNoiseGateEnabled;
       $("tx-noise-gate-threshold-readout").textContent = `${state.txNoiseGateThresholdDb} dB`;
-      $("tx-filter-low").value = `${state.txFilterLow}`;
-      $("tx-filter-high").value = `${state.txFilterHigh}`;
-      initPhonePanels();
+       $("tx-filter-low").value = `${state.txFilterLow}`;
+       $("tx-filter-high").value = `${state.txFilterHigh}`;
+       state.setupPanel = normalizeSetupPanelId(localStorage.getItem(SETUP_PANEL_PREF_KEY));
+       initPhonePanels();
+      initResponsiveShell();
       buildEqGrid("rx-eq-grid", "rx");
       buildEqGrid("tx-eq-grid", "tx");
       buildCfcBandGrid("cfc-band-grid");

@@ -114,7 +114,7 @@ describe('settings normalization', () => {
     expect(prefs.waterfallContrast).toBe(200);
     expect(prefs.waterfallSmoothing).toBe(73);
 
-    expect(normalizeDisplayPrefs({ spectrumTraceColor: 'not-a-color' }).spectrumTraceColor).toBe('#62d0ff');
+    expect(normalizeDisplayPrefs({ spectrumTraceColor: 'not-a-color' }).spectrumTraceColor).toBe('#8b3fb2');
   });
 
   it('normalizes profile and remote settings', () => {

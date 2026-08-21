@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
-  lerp, moveToward, svgArcPath, dbmToSmDeg, auxDeg, txPowerToAuxDeg, swrToAuxDeg,
+  lerp, moveToward, svgArcPath, dbmToSmDeg, formatSignalStrength, linearLevelToDbfs,
+  instrumentOperatingState, auxDeg, txPowerToAuxDeg, swrToAuxDeg,
   SM_START, SM_END, AX_START, AX_END,
 } from '../src/ui/meter-math';
 
@@ -43,6 +44,50 @@ describe('dbmToSmDeg', () => {
     const deg = dbmToSmDeg(-97);
     expect(deg).toBeGreaterThan(SM_START);
     expect(deg).toBeLessThan(SM_END);
+  });
+});
+
+describe('formatSignalStrength', () => {
+  it('does not represent missing telemetry as a signal', () => {
+    expect(formatSignalStrength(null)).toBe('--');
+    expect(formatSignalStrength(Number.NaN)).toBe('--');
+  });
+
+  it('formats the calibrated S-unit thresholds', () => {
+    expect(formatSignalStrength(-121)).toBe('S1');
+    expect(formatSignalStrength(-97)).toBe('S5');
+    expect(formatSignalStrength(-73)).toBe('S9');
+  });
+
+  it('formats readings above S9 as decibels over S9', () => {
+    expect(formatSignalStrength(-63)).toBe('S9 +10');
+    expect(formatSignalStrength(-13)).toBe('S9 +60');
+  });
+});
+
+describe('instrumentOperatingState', () => {
+  it('keeps receive quiet until TX is requested', () => {
+    expect(instrumentOperatingState('rx', false, false)).toBe('rx');
+  });
+
+  it('distinguishes armed from keyed operation', () => {
+    expect(instrumentOperatingState('armed', false, false)).toBe('armed');
+    expect(instrumentOperatingState('rx', true, false)).toBe('armed');
+    expect(instrumentOperatingState('rx', false, false, true)).toBe('armed');
+    expect(instrumentOperatingState('keyed', true, true)).toBe('tx');
+  });
+});
+
+describe('linearLevelToDbfs', () => {
+  it('formats normalized audio peaks on a dBFS scale', () => {
+    expect(linearLevelToDbfs(1)).toBe(0);
+    expect(linearLevelToDbfs(0.5)).toBeCloseTo(-6.02, 2);
+    expect(linearLevelToDbfs(0.1)).toBeCloseTo(-20, 4);
+  });
+
+  it('uses the configured floor for silence and rejects missing telemetry', () => {
+    expect(linearLevelToDbfs(0, -90)).toBe(-90);
+    expect(linearLevelToDbfs(null)).toBeNull();
   });
 });
 

@@ -131,6 +131,9 @@ import {
   moveToward,
   svgArcPath,
   dbmToSmDeg,
+  formatSignalStrength,
+  linearLevelToDbfs,
+  instrumentOperatingState,
   auxDeg,
   txPowerToAuxDeg,
   swrToAuxDeg,
@@ -169,6 +172,30 @@ import {
   autoRangeFromBins,
 } from './dsp/display';
 import { createAppState } from './state/app-state';
+import {
+  normalizeRadioControlContext,
+  radioControlContextForTarget,
+} from './ui/control-context';
+import {
+  txActionAvailability,
+  txControlPresentationState,
+} from './ui/tx-presentation';
+import {
+  normalizeOperationsDrawerTarget,
+  restoreOperationsDrawerSelection,
+  selectOperationsDrawerTarget,
+} from './ui/operations-drawer';
+import {
+  adjacentSetupPanelId,
+  normalizeSetupPanelId,
+} from './ui/setup-navigation';
+import {
+  clampSpectrumWaterfallRatio,
+  nextPhoneSpectrumMode,
+  normalizePhoneSpectrumMode,
+  phoneSpectrumRatio,
+  spectrumWaterfallRatioFromPointer,
+} from './ui/display-layout';
 import { radioPrefsFromState, displayPrefsFromState } from './state/prefs-from-state';
 import { buildPerfSnapshot, buildPerfSummary } from './state/perf-snapshot';
 import {
@@ -176,6 +203,7 @@ import {
   applyDisplayPrefsToState,
   normalizeAppStateInPlace,
 } from './state/apply-prefs';
+import { preferredResponsiveLayout } from './ui/responsive-layout';
 
 const api = {
   // Controller / runtime
@@ -313,9 +341,25 @@ const api = {
   applyRadioPrefsToState,
   applyDisplayPrefsToState,
   normalizeAppStateInPlace,
+  preferredResponsiveLayout,
+  normalizeRadioControlContext,
+  radioControlContextForTarget,
+  txActionAvailability,
+  txControlPresentationState,
+  normalizeOperationsDrawerTarget,
+  restoreOperationsDrawerSelection,
+  selectOperationsDrawerTarget,
+  adjacentSetupPanelId,
+  normalizeSetupPanelId,
+  clampSpectrumWaterfallRatio,
+  nextPhoneSpectrumMode,
+  normalizePhoneSpectrumMode,
+  phoneSpectrumRatio,
+  spectrumWaterfallRatioFromPointer,
 
   // Meter math
-  lerp, moveToward, svgArcPath, dbmToSmDeg, auxDeg, txPowerToAuxDeg, swrToAuxDeg,
+  lerp, moveToward, svgArcPath, dbmToSmDeg, formatSignalStrength, linearLevelToDbfs, instrumentOperatingState,
+  auxDeg, txPowerToAuxDeg, swrToAuxDeg,
   SM_CX, SM_CY, SM_R, SM_START, SM_END, SM_S9_DEG,
   AX_CX, AX_CY, AX_R, AX_START, AX_END, AX_SPAN,
   SMETER_ATTACK_PER_SEC, SMETER_RELEASE_PER_SEC, SMETER_PEAK_HOLD_MS, SMETER_PEAK_DROP_PER_SEC,

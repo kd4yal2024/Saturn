@@ -77,7 +77,7 @@ export const DEFAULT_DISPLAY_PREFS: DisplayPrefs = {
   waterfallSpeed: 1,
   waterfallPalette: 'classic',
   spectrumPeakHold: false,
-  spectrumTraceColor: '#62d0ff',
+  spectrumTraceColor: '#8b3fb2',
   spectrumTraceSmoothing: 0,
   spectrumTraceFill: 0,
   spectrumPeakGlow: 0,
