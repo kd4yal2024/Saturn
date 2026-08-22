@@ -4,6 +4,10 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
 
 ## [Unreleased]
 ### Changed
+- Fit the Saturn Remote operating console to the appliance's 1920x1080 LCD without page
+  scrolling. Desktop VFO and meter instrumentation is approximately 20% more compact while
+  preserving full-time panadapter, waterfall, side controls, and the collapsed Operations
+  drawer; automated layout acceptance now rejects 1920 HD viewport overflow.
 - Advanced the opt-in direct-XDMA backend to a validated 384 kHz DDC6/ADC1
   receive stream. The optimized split-proxy appliance acceptance sustained
   383,321 IQ pairs/second, completed five independent RF-inhibited TX cycles
@@ -62,6 +66,17 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
   `/tmp` tmpfs. Oversized ordinary requests fail early with HTTP 413.
 
 ### Fixed
+- Made front-panel shutdown ownership safe on CM5/Trixie systems that already expose a
+  native gpio-keys `pwr_button`. Installation now disables the GPIO polling waiter, retires
+  Raspberry Pi OS's desktop `handle-power-key` inhibitor with a reversible per-user XDG
+  override, reports a duplicate `gpio-shutdown` overlay without silently editing boot
+  configuration, and writes waiter diagnostics directly to its unit journal. CM4/legacy
+  systems without a native power input retain the existing guarded GPIO26 fallback.
+- Made appliance resume markers fingerprint the operator-owned checkout,
+  including tracked edits and untracked source files, instead of silently
+  collapsing root Git lookup failures to `unknown`. Hardware verification now
+  accepts either an exclusive, operational P2 owner or an exclusive,
+  operational direct-XDMA owner rather than always requiring P2 to be active.
 - Made live direct-XDMA TX recover from a low but nonempty DUC FIFO instead of
   forcing receive before the FPGA reports an underflow. A 384 kHz field run
   reached 230 words with the underflow, overflow, and threshold flags all
@@ -79,6 +94,12 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
   `/dev/xdma0_user` after a new login or reboot.
 
 ### Added
+- Added first-class appliance controls to the Saturn Go overview. Operators can
+  start or stop P2 and direct XDMA without bypassing the transactional ownership
+  broker, see selected/runtime/stopped state without treating an intentionally
+  inactive P2 service as a fault, and request a confirmed G2 poweroff that first
+  performs receive-safe radio shutdown. Poweroff is refused during active
+  maintenance and is scheduled by a root-owned transient systemd helper.
 - Added an explicit deskHPSDR legacy GPIO V1 channel for Debian Trixie. The
   updater pins upstream `2.6.84`, applies Saturn's libgpiod-v2 port, requires
   the legacy controller source, verifies GPIO is present in the built binary,

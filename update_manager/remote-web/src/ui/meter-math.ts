@@ -27,6 +27,29 @@ export function moveToward(
   return Math.max(target, current - fallPerSec * dtSec);
 }
 
+/**
+ * Smooth a value toward a target using frame-rate-independent exponential
+ * attack/release time constants. This eases into the target instead of
+ * stopping with the rigid edge produced by a constant-rate slew limiter.
+ */
+export function smoothToward(
+  current: number | null,
+  target: number,
+  attackMs: number,
+  releaseMs: number,
+  dtSec: number,
+): number {
+  if (!Number.isFinite(target)) return current ?? 0;
+  if (current == null || !Number.isFinite(current)) return target;
+  const elapsedMs = Math.max(0, Number(dtSec) || 0) * 1000;
+  if (elapsedMs === 0) return current;
+  const requestedTimeConstant = target >= current ? attackMs : releaseMs;
+  const timeConstantMs = Math.max(0, Number(requestedTimeConstant) || 0);
+  if (timeConstantMs === 0) return target;
+  const alpha = 1 - Math.exp(-elapsedMs / timeConstantMs);
+  return current + (target - current) * alpha;
+}
+
 /** SVG arc path string between two angles (degrees, clockwise from 3-o'clock). */
 export function svgArcPath(
   cx: number, cy: number, r: number,
@@ -124,8 +147,8 @@ export function swrToAuxDeg(swr: number): number {
 
 // ── Meter dynamics constants ────────────────────────────────────────────────
 
-export const SMETER_ATTACK_PER_SEC = 85;
-export const SMETER_RELEASE_PER_SEC = 22;
+export const SMETER_ATTACK_MS = 65;
+export const SMETER_RELEASE_MS = 360;
 export const SMETER_PEAK_HOLD_MS = 900;
 export const SMETER_PEAK_DROP_PER_SEC = 18;
 

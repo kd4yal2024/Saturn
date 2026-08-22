@@ -208,10 +208,19 @@ passwordless `sudo -n`. SSE responses disable proxy buffering.
 | `/p23_status` | `GET` | No | none | `{ "status":"ok", "p23": { service, sources, deployed, override, repo_root } }` |
 | `/p23_perf` | `GET` | No | none | `{ "status":"ok", "perf": { collected_at_ms, system, process, network, xdma, workload, app_telemetry } }` |
 | `/p23_adc_telemetry` | `POST` | Yes | `{ "enabled": bool }` | ADC peak telemetry control/snapshot paths and effective enabled state |
+| `/radio_backend` | `GET` | No | none | Selected/runtime backend, persisted and operational status, P2/bridge service state, and mutual-exclusion result |
+| `/radio_backend` | `POST` | Yes | `{ "backend":"p2|xdma", "action":"switch|start|stop" }`; `action` defaults to `switch` | Transaction result and refreshed backend status |
+| `/appliance_power` | `POST` | Yes | `{ "action":"poweroff", "confirmation":"POWER OFF" }` | HTTP 202 after the selected radio backend is stopped and a delayed systemd-owned G2 poweroff is scheduled |
 
 Notes:
 
 - `p23_status` is used by the `/telemetry` page status panel.
+- The overview page uses `/radio_backend` for exclusive P2/XDMA start and stop
+  controls. Starting either backend is a transactional ownership switch;
+  stopping preserves the selection so Start resumes the same backend.
+- `/appliance_power` refuses while maintenance operations are active, requires
+  exact confirmation text, and does not schedule poweroff unless receive-safe
+  radio shutdown succeeds first.
 - It reports:
   - `p2app.service` active/enabled/main PID (and running executable path when available)
   - source/deployed binary details in the active repo root and `/opt/saturn-go/p23-apps`

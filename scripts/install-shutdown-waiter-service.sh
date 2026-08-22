@@ -9,6 +9,12 @@ set -euo pipefail
 #     -> written only when /etc/default/saturn-shutdown-waiter does not exist
 #   SATURN_USER (default: pi)
 #
+# Native gpio-keys policy:
+#   - a live pwr_button input disables the polling fallback
+#   - a per-user XDG override retires Raspberry Pi OS's desktop power-key
+#     inhibitor after the next login/reboot, allowing logind to power off
+#   - duplicate gpio-shutdown overlays are reported but never edited silently
+#
 # Optional flags:
 #   --enabled-default <mode>
 #   --saturn-user <user>
@@ -22,6 +28,9 @@ SRC_SCRIPT="${REPO_ROOT}/scripts/shutdown-waiter.sh"
 DEST_SCRIPT="/usr/local/sbin/saturn-shutdown-waiter.sh"
 UNIT_PATH="/etc/systemd/system/saturn-shutdown-waiter.service"
 CONF_PATH="/etc/default/saturn-shutdown-waiter"
+SYSTEM_POWER_KEY_AUTOSTART="${SATURN_SYSTEM_POWER_KEY_AUTOSTART:-/etc/xdg/autostart/pwrkey.desktop}"
+POWER_KEY_OVERRIDE_NAME="pwrkey.desktop"
+POWER_KEY_OVERRIDE_MARKER="X-Saturn-Native-Power-Button=true"
 
 SATURN_USER="${SATURN_USER:-pi}"
 DEFAULT_ENABLED="${SATURN_SHUTDOWN_WAITER_ENABLED_DEFAULT:-auto}"
@@ -143,6 +152,73 @@ remove_legacy_autostart_entry() {
   fi
 }
 
+saturn_user_home() {
+  getent passwd "$SATURN_USER" | cut -d: -f6 || true
+}
+
+write_native_power_key_override() {
+  local saturn_home="${1:-}" autostart_dir override group
+  [[ -n "$saturn_home" ]] || return 0
+  [[ -f "$SYSTEM_POWER_KEY_AUTOSTART" ]] || {
+    log "No desktop power-key inhibitor entry found at $SYSTEM_POWER_KEY_AUTOSTART"
+    return 0
+  }
+
+  autostart_dir="${saturn_home}/.config/autostart"
+  override="${autostart_dir}/${POWER_KEY_OVERRIDE_NAME}"
+  if [[ -e "$override" ]] && ! grep -Fq "$POWER_KEY_OVERRIDE_MARKER" "$override"; then
+    log "Existing operator-owned power-key override preserved: $override"
+    return 0
+  fi
+  group="$(id -gn "$SATURN_USER" 2>/dev/null || printf '%s' "$SATURN_USER")"
+  install -d -m 0755 -o "$SATURN_USER" -g "$group" "$autostart_dir"
+  cat > "$override" <<EOF
+[Desktop Entry]
+Type=Application
+Name=Saturn native power-key handling
+Hidden=true
+$POWER_KEY_OVERRIDE_MARKER
+EOF
+  chmod 0644 "$override"
+  chown "$SATURN_USER:$group" "$override"
+  log "Disabled the desktop handle-power-key inhibitor for $SATURN_USER: $override"
+}
+
+remove_native_power_key_override() {
+  local saturn_home="${1:-}" override
+  [[ -n "$saturn_home" ]] || return 0
+  override="${saturn_home}/.config/autostart/${POWER_KEY_OVERRIDE_NAME}"
+  if [[ -f "$override" ]] && grep -Fq "$POWER_KEY_OVERRIDE_MARKER" "$override"; then
+    rm -f "$override"
+    log "Removed obsolete Saturn-managed power-key inhibitor override: $override"
+  fi
+}
+
+apply_power_button_policy() {
+  local saturn_home diagnostics overlay line
+  saturn_home="$(saturn_user_home)"
+  diagnostics="$("$DEST_SCRIPT" --diagnose 2>/dev/null || true)"
+  while IFS= read -r line; do
+    [[ -n "$line" ]] && log "Power-button diagnostic: $line"
+  done <<< "$diagnostics"
+
+  if "$DEST_SCRIPT" --probe-native-power-button; then
+    overlay="$(sed -n 's/^gpio_shutdown_overlay=//p' <<< "$diagnostics" | tail -n 1)"
+    if [[ -n "$overlay" && "$overlay" != "none" ]]; then
+      log "WARNING: native pwr_button and gpio-shutdown both claim the configured shutdown GPIO; boot config was left unchanged"
+      log "WARNING: inspect $overlay in /boot/firmware/config.txt and remove only the verified duplicate"
+    fi
+    write_native_power_key_override "$saturn_home"
+    systemctl disable --now saturn-shutdown-waiter.service >/dev/null 2>&1 || true
+    log "Native gpio-keys KEY_POWER input detected; polling waiter disabled"
+    log "A reboot or desktop logout/login is required to retire any currently running power-key inhibitor"
+    return 0
+  fi
+
+  remove_native_power_key_override "$saturn_home"
+  return 1
+}
+
 main() {
   parse_args "$@"
   validate_args
@@ -157,6 +233,11 @@ main() {
   remove_legacy_autostart_entry
 
   systemctl daemon-reload
+
+  if apply_power_button_policy; then
+    log "Installed native power-button policy; saturn-shutdown-waiter.service remains available as a disabled fallback"
+    exit 0
+  fi
 
   if [[ "$(systemctl is-enabled saturn-shutdown-waiter.service 2>/dev/null || true)" == "masked" ]]; then
     log "Service is masked; leaving masked and skipping enable/start"
@@ -173,4 +254,6 @@ main() {
   log "Installed and started saturn-shutdown-waiter.service"
 }
 
-main "$@"
+if [[ "${SATURN_SHUTDOWN_WAITER_SOURCE_ONLY:-0}" != "1" ]]; then
+  main "$@"
+fi

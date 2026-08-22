@@ -121,12 +121,16 @@ body.light .status-unknown{ color:#4b5563; background:rgba(107,114,128,.12); }
 .overview-service-name{ font-weight:700; }
 .overview-service-detail{ margin-top:.15rem; font-size:.75rem; opacity:.65; }
 .overview-refresh-note{ font-size:.75rem; opacity:.62; }
+.overview-service-controls{ display:flex; align-items:center; justify-content:flex-end; gap:.5rem; flex-wrap:wrap; }
+.overview-service-control-row .btn{ min-width:4.5rem; }
 
 @media (max-width: 1180px){
   .overview-status-grid{ grid-template-columns:repeat(2,minmax(0,1fr)); }
 }
 @media (max-width: 760px){
   .overview-status-grid,.overview-section-grid,.overview-link-grid{ grid-template-columns:1fr; }
+  .overview-service-control-row{ align-items:flex-start; flex-direction:column; }
+  .overview-service-controls{ width:100%; justify-content:flex-start; }
 }
 
 /* --- Saturn shell: sidebar / topbar / mobile drawer --- */

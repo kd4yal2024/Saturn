@@ -18,6 +18,8 @@ P2APP_RUNTIME_ROOT="${P2APP_RUNTIME_ROOT:-/opt/saturn-radio}"
 P2APP_BIN="${P2APP_RUNTIME_ROOT}/bin/p2app"
 P2APP_SERVICE_USER="${P2APP_SERVICE_USER:-saturn-radio}"
 P2APP_SERVICE_GROUP="${P2APP_SERVICE_GROUP:-saturn-radio}"
+P23_OVERRIDE_DIR="/etc/systemd/system/${UNIT_NAME}.d"
+P23_OVERRIDE_FILE="${P23_OVERRIDE_DIR}/10-saturn-p23-switch.conf"
 XDMA_DOCTOR_LOCAL="${REPO_ROOT}/scripts/saturn-xdma-doctor.sh"
 XDMA_DOCTOR_INSTALL="/usr/local/bin/saturn-xdma-doctor.sh"
 XDMA_READY_LOCAL="${REPO_ROOT}/scripts/saturn-xdma-ready.sh"
@@ -137,6 +139,31 @@ wait_for_service_running() {
   return 1
 }
 
+retire_broken_p23_override() {
+  local override_exec=""
+  sudo test -f "$P23_OVERRIDE_FILE" || return 0
+
+  override_exec="$(sudo awk '
+    /^ExecStart=\// {
+      value = substr($0, length("ExecStart=") + 1)
+      sub(/[[:space:]].*$/, "", value)
+      print value
+    }
+  ' "$P23_OVERRIDE_FILE" | tail -n 1)"
+
+  case "$override_exec" in
+    /opt/saturn-go/p23-apps/*)
+      if ! sudo test -x "$override_exec"; then
+        echo "[!] WARN: Retiring broken advanced p2app override: ${P23_OVERRIDE_FILE}"
+        echo "[!] WARN: Missing override executable: ${override_exec}"
+        echo "[!] WARN: p2app.service will use the canonical runtime: ${P2APP_BIN}"
+        sudo rm -f -- "$P23_OVERRIDE_FILE"
+        sudo rmdir "$P23_OVERRIDE_DIR" >/dev/null 2>&1 || true
+      fi
+      ;;
+  esac
+}
+
 echo "[*] Building widget..."
 make -C "$HERE"
 
@@ -248,6 +275,7 @@ echo "[*] Installing root-owned p2app runtime -> ${P2APP_BIN}"
 ensure_radio_service_account
 sudo install -d -m 0755 -o root -g root "${P2APP_RUNTIME_ROOT}/bin"
 sudo install -m 0755 -o root -g root "${P2APP_SOURCE_BIN}" "${P2APP_BIN}"
+retire_broken_p23_override
 
 echo "[*] Ensuring XDMA readiness unit exists/updated -> ${XDMA_READY_UNIT_PATH}"
 TMP_XDMA_READY_UNIT="$(mktemp)"

@@ -40,6 +40,9 @@ Usage:
   saturn-radio-backend-switch-root.sh status
   saturn-radio-backend-switch-root.sh switch p2
   saturn-radio-backend-switch-root.sh switch xdma
+  saturn-radio-backend-switch-root.sh start p2
+  saturn-radio-backend-switch-root.sh start xdma
+  saturn-radio-backend-switch-root.sh stop [p2|xdma]
 
 The selection is appliance-wide. P2 is the default and supports Protocol 2
 clients such as Thetis. XDMA is the direct RX/TX backend for TCI clients.
@@ -180,6 +183,22 @@ wait_for_service_state() {
   die "$service did not become $expected within ${READY_TIMEOUT_SECONDS}s"
 }
 
+validate_p2app_launch_target() {
+  local override_file override_exec=""
+  override_file="$SYSTEMD_ROOT/${P2APP_SERVICE}.d/10-saturn-p23-switch.conf"
+  [[ -f "$override_file" ]] || return 0
+
+  override_exec="$(awk '
+    /^ExecStart=\// {
+      value = substr($0, length("ExecStart=") + 1)
+      sub(/[[:space:]].*$/, "", value)
+      print value
+    }
+  ' "$override_file" | tail -n 1)"
+  [[ -z "$override_exec" || -x "$override_exec" ]] || \
+    die "P2 launch override executable is missing: $override_exec. Restore the p2app unit default or deploy the advanced P2 workload before switching to P2"
+}
+
 read_selected_backend() {
   [[ -f "$STATE_FILE" ]] || {
     printf 'p2\n'
@@ -195,6 +214,24 @@ try:
 except (OSError, ValueError, TypeError):
     value = "p2"
 print(value if value in {"p2", "xdma"} else "p2")
+PY
+}
+
+read_selection_status() {
+  [[ -f "$STATE_FILE" ]] || {
+    printf 'ready\n'
+    return 0
+  }
+  python3 - "$STATE_FILE" <<'PY'
+import json
+import sys
+
+try:
+    with open(sys.argv[1], encoding="utf-8") as handle:
+        value = json.load(handle).get("status", "ready")
+except (OSError, ValueError, TypeError):
+    value = "ready"
+print(value if value in {"ready", "stopped"} else "ready")
 PY
 }
 
@@ -427,6 +464,9 @@ switch_backend() {
   if [[ "$TARGET_BACKEND" == "xdma" && "$XDMA_OPERATIONAL_ENABLED" != "1" ]]; then
     die "direct XDMA is disabled by root policy; no service or persistent state was changed"
   fi
+  if [[ "$TARGET_BACKEND" == "p2" ]]; then
+    validate_p2app_launch_target
+  fi
 
   prepare_transaction
   trap 'on_error "$?" "$LINENO"' ERR
@@ -462,20 +502,73 @@ switch_backend() {
   log "Backend '$TARGET_BACKEND' is ready and persisted"
 }
 
-print_status() {
-  local selected p2_status bridge_status runtime_backend
+stop_backend() {
+  local selected runtime_backend
   selected="$(read_selected_backend)"
+  runtime_backend="$(bridge_runtime_backend)"
+  [[ -n "$TARGET_BACKEND" ]] || TARGET_BACKEND="$selected"
+
+  if [[ "$TARGET_BACKEND" != "$selected" ]]; then
+    if [[ "$TARGET_BACKEND" == "p2" ]]; then
+      systemctl stop "$P2APP_SERVICE"
+      wait_for_service_state "$P2APP_SERVICE" inactive
+    elif [[ "$runtime_backend" == "xdma" ]]; then
+      die "cannot stop XDMA independently while backend '$selected' is selected"
+    fi
+    log "Backend '$TARGET_BACKEND' is already inactive; selected backend remains '$selected'"
+    return 0
+  fi
+
+  prepare_transaction
+  trap 'on_error "$?" "$LINENO"' ERR
+  trap 'on_error 130 "$LINENO"' INT TERM
+
+  if [[ "$TARGET_BACKEND" == "p2" ]]; then
+    systemctl stop "$BRIDGE_SERVICE"
+    wait_for_service_state "$BRIDGE_SERVICE" inactive
+    systemctl stop "$P2APP_SERVICE"
+    wait_for_service_state "$P2APP_SERVICE" inactive
+  else
+    systemctl stop "$BRIDGE_SERVICE"
+    wait_for_service_state "$BRIDGE_SERVICE" inactive
+    systemctl stop "$P2APP_SERVICE"
+    wait_for_service_state "$P2APP_SERVICE" inactive
+  fi
+
+  write_json_state "$STATE_FILE" "$TARGET_BACKEND" "$TARGET_BACKEND" "stopped"
+  TRANSACTION_ACTIVE=0
+  trap - ERR INT TERM
+  remove_transaction_file
+  rm -rf "$ROLLBACK_DIR"
+  ROLLBACK_DIR=""
+  log "Backend '$TARGET_BACKEND' is stopped and remains selected"
+}
+
+print_status() {
+  local selected persisted_status operational_status p2_status bridge_status runtime_backend
+  selected="$(read_selected_backend)"
+  persisted_status="$(read_selection_status)"
   p2_status="inactive"
   bridge_status="inactive"
   service_is_active "$P2APP_SERVICE" && p2_status="active"
   service_is_active "$BRIDGE_SERVICE" && bridge_status="active"
   runtime_backend="$(bridge_runtime_backend)"
-  python3 - "$selected" "$runtime_backend" "$p2_status" "$bridge_status" \
+  operational_status="degraded"
+  if [[ "$selected" == "p2" && "$runtime_backend" == "p2" \
+      && "$p2_status" == "active" && "$bridge_status" == "active" ]]; then
+    operational_status="ready"
+  elif [[ "$selected" == "xdma" && "$runtime_backend" == "xdma" \
+      && "$p2_status" == "inactive" && "$bridge_status" == "active" ]]; then
+    operational_status="ready"
+  elif [[ "$p2_status" == "inactive" && "$bridge_status" == "inactive" ]]; then
+    operational_status="stopped"
+  fi
+  python3 - "$selected" "$persisted_status" "$operational_status" "$runtime_backend" "$p2_status" "$bridge_status" \
     "$XDMA_OPERATIONAL_ENABLED" "$TRANSACTION_FILE" <<'PY'
 import json
 import sys
 
-selected, runtime, p2, bridge, xdma_enabled, transaction_path = sys.argv[1:]
+selected, persisted_status, operational_status, runtime, p2, bridge, xdma_enabled, transaction_path = sys.argv[1:]
 requested = selected
 transaction_status = "idle"
 try:
@@ -489,6 +582,8 @@ print(json.dumps({
     "schema_version": 1,
     "requested": requested,
     "selected": selected,
+    "persisted_status": persisted_status,
+    "operational_status": operational_status,
     "runtime": runtime,
     "transaction_status": transaction_status,
     "services": {"p2app": p2, "saturn_bridge": bridge},
@@ -507,12 +602,25 @@ main() {
         return 2
       }
       ;;
-    switch)
+    switch|start)
       [[ $# == 2 && ("$2" == "p2" || "$2" == "xdma") ]] || {
         usage >&2
         return 2
       }
       TARGET_BACKEND="$2"
+      ;;
+    stop)
+      [[ $# -le 2 ]] || {
+        usage >&2
+        return 2
+      }
+      if [[ $# == 2 ]]; then
+        [[ "$2" == "p2" || "$2" == "xdma" ]] || {
+          usage >&2
+          return 2
+        }
+        TARGET_BACKEND="$2"
+      fi
       ;;
     *)
       usage >&2
@@ -540,7 +648,11 @@ main() {
   ensure_lock_directory
   exec 9>"$LOCK_FILE"
   flock -w 30 9 || die "timed out waiting for the radio ownership lock"
-  switch_backend
+  if [[ "$command" == "stop" ]]; then
+    stop_backend
+  else
+    switch_backend
+  fi
 }
 
 main "$@"

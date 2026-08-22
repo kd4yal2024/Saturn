@@ -6,7 +6,7 @@ set -euo pipefail
 # The historical P2/P3 split has been retired; this script now manages a
 # single supported app path while keeping the same web UI/override endpoints.
 
-SCRIPT_VERSION="0.3.0"
+SCRIPT_VERSION="0.3.1"
 
 ACTION=""
 VERBOSE=0
@@ -172,7 +172,6 @@ P23_XDMA_READY_SERVICE="${P23_XDMA_READY_SERVICE:-saturn-xdma-ready.service}"
 P23_XDMA_DOCTOR="${P23_XDMA_DOCTOR:-/usr/local/bin/saturn-xdma-doctor.sh}"
 P23_PANEL_ENV_NAME="${P23_PANEL_ENV_NAME:-SATURN_FRONT_PANEL_MODE}"
 if [[ -n "${P23_SERVICE_ARGS+x}" ]] && [[ -n "${P23_SERVICE_ARGS}" ]]; then
-  P23_SERVICE_ARGS="$P23_SERVICE_ARGS"
   SERVICE_MODE_PROFILE="custom"
 else
   P23_SERVICE_ARGS="$(service_args_for_profile "$SERVICE_MODE_PROFILE")" || \
@@ -183,6 +182,27 @@ P23_CURRENT_LINK="$P23_DEPLOY_ROOT/current"
 P23_DEPLOY_BIN="$P23_DEPLOY_ROOT/p2app"
 P23_OVERRIDE_DIR="/etc/systemd/system/${P23_SERVICE_NAME}.d"
 P23_OVERRIDE_FILE="$P23_OVERRIDE_DIR/10-saturn-p23-switch.conf"
+P23_RADIO_BACKEND_HELPER="${P23_RADIO_BACKEND_HELPER:-/usr/local/lib/saturn-go/scripts/saturn-radio-backend-switch-root.sh}"
+
+require_p2_backend_if_restarting(){
+  (( NO_RESTART )) && return 0
+  [[ -x "$P23_RADIO_BACKEND_HELPER" ]] || return 0
+
+  local backend_status selected
+  backend_status="$(sudo -n "$P23_RADIO_BACKEND_HELPER" status)" || \
+    die "Could not verify appliance radio ownership before restarting $P23_SERVICE_NAME"
+  selected="$(python3 -c '
+import json
+import sys
+try:
+    value = json.load(sys.stdin)
+except (OSError, ValueError, TypeError):
+    raise SystemExit(1)
+print(value.get("selected", "unknown"))
+' <<<"$backend_status")" || die "Radio backend helper returned invalid status"
+  [[ "$selected" == "p2" ]] || \
+    die "Cannot restart $P23_SERVICE_NAME while radio backend '$selected' is selected. Switch the Radio Backend selector to P2 first, or use --no-restart to stage changes."
+}
 
 need_cmd make
 
@@ -240,6 +260,10 @@ EOF
 }
 
 write_override(){
+  if (( ! DRY_RUN )) && [[ ! -x "$P23_DEPLOY_BIN" ]]; then
+    die "Cannot activate the advanced p2app override because the deployed binary is missing: $P23_DEPLOY_BIN. Run --deploy to install it, or --revert to use the canonical unit binary."
+  fi
+
   run_root_cmd mkdir -p "$P23_DEPLOY_ROOT" "$P23_OVERRIDE_DIR"
   run_root_cmd ln -sfn "$P23_DEPLOY_BIN" "$P23_CURRENT_LINK"
 
@@ -351,6 +375,7 @@ build_app(){
 }
 
 deploy_app(){
+  require_p2_backend_if_restarting
   [[ -d "$P2_DIR" ]] || die "App directory not found: $P2_DIR"
 
   progress 5
@@ -381,6 +406,7 @@ deploy_app(){
 }
 
 restart_with_current_override(){
+  require_p2_backend_if_restarting
   progress 15
   info "Refreshing override/current symlink for converged p2app"
   write_override
@@ -391,6 +417,7 @@ restart_with_current_override(){
 }
 
 revert_to_unit_default(){
+  require_p2_backend_if_restarting
   progress 10
   info "Reverting $P23_SERVICE_NAME to unit default ExecStart (remove Saturn override)"
 

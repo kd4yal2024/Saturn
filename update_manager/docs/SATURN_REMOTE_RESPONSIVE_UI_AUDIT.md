@@ -386,10 +386,10 @@ Tune meter damping, focus order, touch gestures, alert transitions, high-DPI vis
 performance. Execute the full RX/IQ/audio/control/TX/profile/reconnect regression matrix and
 the desktop/tablet/phone operator workflows from the redesign specification.
 
-## Implementation status (2026-08-21)
+## Implementation status (2026-08-22)
 
 The presentation refactor described above is now implemented on
-`feature/saturn-remote-responsive-redesign` through Phase 10. The bridge protocol, DSP,
+`feature/saturn-remote-responsive-redesign` through Phase 12. The bridge protocol, DSP,
 audio transport, state application, and TX command ownership remain on their existing paths.
 
 - Phases 2-3: semantic console tokens, wide/compact/tablet/phone layouts, compact status
@@ -407,9 +407,12 @@ audio transport, state application, and TX command ownership remain on their exi
 - Phase 10: UI-only spectrum/waterfall preferences, three phone display proportions,
   keyboard resizing, touch tap/drag/pinch/double-tap/long-press handling, ResizeObserver
   isolation, visible focus, and reduced-motion behavior are in place.
+- Phases 11-12: desktop VFO and meter instrumentation is approximately 20% more compact,
+  meter motion is less rigid, and the complete appliance console is constrained to a
+  1920x1080 LCD viewport without hiding the waterfall or collapsed Operations drawer.
 
-Automated acceptance currently passes 46 test files / 379 tests, TypeScript typechecking,
-the 165-entry template/bundle seam check, the production build, and responsive Chromium
+Automated acceptance currently passes 48 test files / 389 tests, TypeScript typechecking,
+the 166-entry template/bundle seam check, the production build, and responsive Chromium
 geometry validation across phone portrait/landscape, tablet portrait/landscape, compact
 desktop, 1440 desktop, 1920 HD, and 2560 ultrawide, including representative drawer and
 setup-open states.

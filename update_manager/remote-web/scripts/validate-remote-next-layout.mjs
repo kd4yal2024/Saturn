@@ -210,6 +210,7 @@ function validationScript(scenario) {
     };
   }
   function runValidation() {
+    const page = document.querySelector(".page.console-page");
     const strip = document.querySelector(".operator-state-strip");
     const pills = Array.from(document.querySelectorAll(".operator-pill"));
     const stripRect = strip ? rectFor(strip) : null;
@@ -238,6 +239,7 @@ function validationScript(scenario) {
       .filter((box) => box.rect.left < -1 || box.rect.top < -1 || box.rect.right > window.innerWidth + 1)
       .map((box) => box.id);
     const layout = document.documentElement.dataset.layout || "";
+    const pageRect = page ? rectFor(page) : null;
     const failures = {
       missing,
       invisible,
@@ -246,6 +248,9 @@ function validationScript(scenario) {
       viewportOverflow,
       valueOverflow: textOverflow(".operator-pill-value"),
       layoutMismatch: layout === scenario.layout ? [] : [{ expected: scenario.layout, actual: layout }],
+      lcdViewportOverflow: scenario.name === "desktop-hd" && pageRect && pageRect.bottom > window.innerHeight + 1
+        ? [{ pageBottom: pageRect.bottom, viewportHeight: window.innerHeight }]
+        : [],
       ...displayWorkspaceFailures(),
       ...drawerFailures(),
       ...setupFailures()
@@ -256,10 +261,10 @@ function validationScript(scenario) {
       ok,
       layout,
       viewport: { width: window.innerWidth, height: window.innerHeight },
-      page: document.querySelector(".page.console-page") ? {
-        rect: rectFor(document.querySelector(".page.console-page")),
-        width: window.getComputedStyle(document.querySelector(".page.console-page")).width,
-        maxWidth: window.getComputedStyle(document.querySelector(".page.console-page")).maxWidth
+      page: page ? {
+        rect: pageRect,
+        width: window.getComputedStyle(page).width,
+        maxWidth: window.getComputedStyle(page).maxWidth
       } : null,
       stripRect,
       drawer: {

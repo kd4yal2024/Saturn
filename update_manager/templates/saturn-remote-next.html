@@ -1326,6 +1326,11 @@
       margin-left: auto;
     }
 
+    .rx-audio-toggle {
+      min-height: 34px;
+      padding-inline: 12px;
+    }
+
     .audio-control-grid {
       display: grid;
       grid-template-columns: minmax(180px, 0.85fr) minmax(260px, 1.15fr) minmax(260px, 1.15fr) minmax(260px, 1.15fr);
@@ -5502,6 +5507,219 @@
       display: block;
     }
 
+    /* Phase 11: operator-requested compact instrument sizing. */
+    .top-meter-bank[data-operating-state="rx"] .top-meter-telemetry {
+      display: none;
+    }
+
+    .launch-grid {
+      height: auto;
+      align-content: start;
+      grid-auto-rows: minmax(44px, auto);
+    }
+
+    .launch-grid > .btn,
+    .launch-grid .setup-anchor > .btn {
+      min-height: 44px;
+    }
+
+    @media (min-width: 768px) {
+      .vfo-deck.primary-deck {
+        min-height: 114px;
+      }
+
+      .primary-deck .deck-frequency {
+        font-size: clamp(26px, 2vw, 38px);
+      }
+
+      .top-meter-bank > .analog-meter-shell > svg,
+      .top-meter-bank .aux-meter-row .analog-meter-shell > svg {
+        width: 72%;
+        margin-inline: auto;
+      }
+    }
+
+    :root[data-layout="phone"] .vfo-deck.primary-deck {
+      min-height: 84px;
+    }
+
+    :root[data-layout="phone"] .primary-deck .deck-frequency {
+      font-size: clamp(28px, 9.2vw, 40px);
+    }
+
+    :root[data-layout="phone"] .top-meter-bank svg {
+      max-height: 77px;
+    }
+
+    :root[data-layout="phone"] .top-meter-bank .aux-meter-row svg {
+      max-height: 66px;
+    }
+
+    :root[data-layout="phone"] .rx-audio-toggle {
+      min-height: 44px;
+    }
+
+    /* Phase 12: fixed-height 1920x1080 appliance LCD console. */
+    @media (min-width: 1440px) and (min-height: 850px) and (max-height: 1200px) {
+      html,
+      body {
+        height: 100%;
+        min-height: 0;
+        overflow: hidden;
+      }
+
+      .page.console-page {
+        box-sizing: border-box;
+        height: 100dvh;
+        min-height: 0;
+        grid-template-rows: auto auto auto minmax(0, 1fr) auto;
+        align-items: stretch;
+        overflow: hidden;
+      }
+
+      .console-header {
+        min-height: 38px;
+      }
+
+      .command-strip,
+      .command-strip > .panel-body,
+      .strip-grid,
+      .control-cluster,
+      .top-meter-bank {
+        min-height: 0;
+      }
+
+      .command-strip > .panel-body {
+        box-sizing: border-box;
+        height: 174px;
+        padding: 6px;
+      }
+
+      .strip-grid,
+      .control-cluster,
+      .launch-grid,
+      .top-meter-bank {
+        height: 100%;
+      }
+
+      .vfo-deck.primary-deck {
+        height: 100%;
+        min-height: 0;
+        padding: 7px 10px;
+      }
+
+      .primary-deck .deck-frequency {
+        font-size: clamp(26px, 1.75vw, 34px);
+      }
+
+      .control-cluster {
+        padding: 5px;
+      }
+
+      .launch-grid {
+        grid-auto-rows: minmax(0, 1fr);
+      }
+
+      .launch-grid > .btn,
+      .launch-grid .setup-anchor,
+      .launch-grid .setup-anchor > .btn {
+        min-height: 0;
+        height: 100%;
+      }
+
+      .top-meter-bank {
+        grid-template-rows: 24px minmax(0, 1fr);
+        gap: 4px 7px;
+        padding-left: 6px;
+        overflow: hidden;
+      }
+
+      .top-meter-bank > .analog-meter-shell > svg {
+        width: 52%;
+      }
+
+      .top-meter-bank .aux-meter-row .analog-meter-shell > svg {
+        width: 68%;
+      }
+
+      .top-meter-bank .meter-dBm-row,
+      .top-meter-bank .aux-meter-val {
+        min-height: 18px;
+        padding: 1px 4px 2px;
+      }
+
+      .top-meter-side {
+        gap: 3px;
+        padding: 1px;
+      }
+
+      .console-stage {
+        height: 100%;
+        min-height: 0;
+        overflow: hidden;
+      }
+
+      .left-rail,
+      .context-rail {
+        align-content: start;
+        grid-auto-rows: max-content;
+      }
+
+      .display-card.scope-frame {
+        display: grid;
+        height: 100%;
+        min-height: 0;
+        grid-template-rows: auto auto auto minmax(0, 1fr);
+      }
+
+      .display-head {
+        min-height: 38px;
+        padding: 5px 9px;
+      }
+
+      .display-head .panel-title {
+        margin-bottom: 2px !important;
+      }
+
+      .display-zoom {
+        padding: 4px 9px;
+      }
+
+      .frequency-ruler {
+        padding: 4px 9px 5px;
+      }
+
+      .ruler-main {
+        font-size: 27px;
+      }
+
+      .ruler-sub {
+        font-size: 8px;
+      }
+
+      .display-stack {
+        --display-workspace-height: auto;
+        box-sizing: border-box;
+        height: 100%;
+        min-height: 0;
+        grid-template-rows: minmax(190px, 0.62fr) 10px minmax(118px, 0.38fr);
+        padding: 0 16px 10px;
+      }
+
+      .spectrum-waterfall-resizer {
+        min-height: 10px;
+      }
+
+      .operations-drawer,
+      .operations-drawer-nav {
+        min-height: 40px;
+      }
+
+      .operations-tab {
+        min-height: 32px;
+      }
+    }
+
     @media (prefers-reduced-motion: reduce) {
       *,
       *::before,
@@ -6237,6 +6455,7 @@
         <div class="audio-control-status" aria-label="Audio status">
           <span class="status-chip" id="audio-strip-status">Audio stopped</span>
           <span class="status-chip ghost" id="audio-buffer-status">Buffer --</span>
+          <button class="btn alt rx-audio-toggle" id="rx-audio-toggle-btn" type="button" aria-pressed="false">Start Audio</button>
         </div>
       </div>
       <div class="panel-body">
@@ -9089,11 +9308,11 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       shiftBinsHorizontally: _shiftBinsHorizontally,
       bandEdgesInView: _bandEdgesInView,
       autoRangeFromBins: _autoRangeFromBins,
-      lerp, moveToward, svgArcPath, dbmToSmDeg, formatSignalStrength, linearLevelToDbfs, instrumentOperatingState,
+      lerp, moveToward, smoothToward, svgArcPath, dbmToSmDeg, formatSignalStrength, linearLevelToDbfs, instrumentOperatingState,
       auxDeg, txPowerToAuxDeg, swrToAuxDeg,
       SM_CX, SM_CY, SM_R, SM_START, SM_END, SM_S9_DEG,
       AX_CX, AX_CY, AX_R, AX_START, AX_END, AX_SPAN,
-      SMETER_ATTACK_PER_SEC, SMETER_RELEASE_PER_SEC, SMETER_PEAK_HOLD_MS, SMETER_PEAK_DROP_PER_SEC,
+      SMETER_ATTACK_MS, SMETER_RELEASE_MS, SMETER_PEAK_HOLD_MS, SMETER_PEAK_DROP_PER_SEC,
       TX_POWER_ATTACK_PER_SEC, TX_POWER_RELEASE_PER_SEC, TX_POWER_PEAK_HOLD_MS, TX_POWER_PEAK_DROP_PER_SEC,
       SWR_ATTACK_PER_SEC, SWR_RELEASE_PER_SEC,
       normalizeRadioControlContext,
@@ -9609,7 +9828,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
           {
             title: "RX Audio",
             items: [
-              operatorDetailItem("State", state.audioStreaming ? "Running" : "Stopped", audioProfileLabel(), state.audioStreaming ? "ok" : "warn"),
+              operatorDetailItem("State", audioStripState().label, `${audioProfileLabel()}; context ${state.audioCtx?.state || "unavailable"}; ${state.audioFramesPlayed} frame(s)`, audioStripState().tone),
               operatorDetailItem("AF Gain", `${safeFixed(state.rxVolumeDb, 1, "-10.0")} dB`, "Receiver audio gain", "rx"),
               operatorDetailItem("Queue", leadMs == null ? "--" : `${leadMs} ms`, `${state.rxWorkletUnderruns} underrun(s)`, audioStripState().tone),
               operatorDetailItem("Continuity", `${dropCount} event(s)`, `${state.audioSeqGapCount} sequence gap(s), ${state.audioSeqMissingPacketCount} missing packet(s)`, dropCount ? "warn" : "ok"),
@@ -12137,6 +12356,24 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       if (!state.audioStreaming) {
         return { label: "Stopped", tone: "warn", title: "RX audio is stopped" };
       }
+      const contextState = state.audioCtx?.state || "unavailable";
+      if (contextState !== "running") {
+        return {
+          label: "Tap Audio",
+          tone: "warn",
+          title: `RX audio stream is requested, but the browser audio context is ${contextState}`,
+        };
+      }
+      if (txReceiveSuppressionActive()) {
+        return { label: "TX Muted", tone: "rx", title: "RX audio is intentionally muted while transmitting" };
+      }
+      if (!state.lastAudioFrameAt) {
+        return { label: "Waiting RX", tone: "warn", title: "Browser audio is enabled and waiting for the first RX audio frame" };
+      }
+      const frameAgeMs = Math.max(0, performance.now() - state.lastAudioFrameAt);
+      if (frameAgeMs > 2000) {
+        return { label: "Audio Stale", tone: "warn", title: `Last RX audio frame arrived ${Math.round(frameAgeMs)} ms ago` };
+      }
       const leadMs = audioLeadMs();
       const dropCount = state.audioBackpressureDrops + state.rxWorkletDrops +
         state.rxWorkletOverflows + state.audioSeqResyncCount;
@@ -12161,9 +12398,24 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         : "Idle";
       const statusEl = $("audio-strip-status");
       if (statusEl) {
-        statusEl.textContent = state.audioStreaming ? `RX audio ${rateLabel}` : "Audio stopped";
+        statusEl.textContent = state.audioStreaming && state.audioCtx?.state === "running"
+          ? `RX audio ${rateLabel}`
+          : audio.label;
         statusEl.className = audio.tone === "ok" ? "status-chip" : "status-chip ghost";
         statusEl.title = audio.title;
+      }
+      const toggle = $("rx-audio-toggle-btn");
+      if (toggle) {
+        const contextRunning = state.audioCtx?.state === "running";
+        const playing = state.audioStreaming && contextRunning;
+        toggle.textContent = playing
+          ? "Stop Audio"
+          : (state.audioStreaming ? "Resume Audio" : "Start Audio");
+        toggle.setAttribute("aria-pressed", playing ? "true" : "false");
+        toggle.disabled = !state.connected || !state.bridgeReady;
+        toggle.title = playing
+          ? "Stop receiver audio"
+          : (state.audioStreaming ? "Resume browser receiver audio" : "Start receiver audio");
       }
       const bufferEl = $("audio-buffer-status");
       if (bufferEl) {
@@ -13076,7 +13328,11 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         ? `Live on ${state.wsUrl}`
         : connection.label;
       $("stream-label").textContent = state.iqStreaming ? "IQ running" : "IQ stopped";
-      $("audio-label").textContent = state.audioStreaming ? `Audio ${Math.round(state.audioSampleRate / 1000)} kHz` : "Audio stopped";
+      const audioState = audioStripState();
+      $("audio-label").textContent = audioState.tone === "ok"
+        ? `Audio ${Math.round(state.audioSampleRate / 1000)} kHz`
+        : audioState.label;
+      $("audio-label").title = audioState.title;
       $("conn-label").textContent = connection.label;
       const connDot = $("conn-dot");
       connDot.className = "dot " + (state.connected && state.bridgeReady ? "live" : (reconnectSnapshot.active || state.demoMode ? "warn" : "dead"));
@@ -13756,6 +14012,9 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         `txUplinkHwm=${Math.round(state.txUplinkBufferedHwmBytes || 0)}`,
         `iqStreaming=${state.iqStreaming ? 1 : 0}`,
         `audioStreaming=${state.audioStreaming ? 1 : 0}`,
+        `audioContextState=${state.audioCtx?.state || "unavailable"}`,
+        `audioFramesPlayed=${state.audioFramesPlayed || 0}`,
+        `lastAudioAgeMs=${state.lastAudioFrameAt ? Math.round(performance.now() - state.lastAudioFrameAt) : 0}`,
         `lastIqAgeMs=${state.lastFrameAt ? Math.round(performance.now() - state.lastFrameAt) : 0}`,
         `lastError=${window.saturnDiagLastError || ""}`,
       ];
@@ -15130,7 +15389,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       }
     }
 
-    function goLive() {
+    async function goLive() {
       const isConnectingOrLive = state.connected ||
         state.connectPending ||
         reconnectSnapshot.active ||
@@ -15138,6 +15397,9 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       if (isConnectingOrLive) {
         void disconnectBridge();
       } else {
+        // Create/resume AudioContext directly inside the operator's click so
+        // browser autoplay policy cannot leave IQ live while RX audio is suspended.
+        await primeRxAudioContextFromGesture();
         beginBridgeSession();
       }
     }
@@ -16295,6 +16557,27 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         applyControlContext("tx");
         revealShellPanel(document.querySelector('[data-phone-panel="tx"]'));
       });
+      $("rx-audio-toggle-btn")?.addEventListener("click", async () => {
+        const playing = state.audioStreaming && state.audioCtx?.state === "running";
+        if (playing) {
+          await stopRxAudio(true);
+          logEvent("RX audio stopped by operator");
+          return;
+        }
+        const primed = await primeRxAudioContextFromGesture();
+        if (!primed) {
+          recordOperatorFault("RX audio unavailable", "warn");
+          updateUi();
+          return;
+        }
+        if (state.audioStreaming) {
+          sendTci(rxAudioStartCommand());
+          logEvent("RX audio resumed by operator");
+          updateUi();
+          return;
+        }
+        await startRxAudio();
+      });
       $("setup-dsp-nr-mode").addEventListener("change", () => {
         state.rxNoiseReductionMode = normalizeNrMode($("setup-dsp-nr-mode").value);
         saveRadioPrefs();
@@ -17298,11 +17581,11 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         state.meterDbmVisual = null;
         state.meterDbmPeak = null;
       } else {
-        state.meterDbmVisual = moveToward(
+        state.meterDbmVisual = smoothToward(
           state.meterDbmVisual,
           state.meterDbm,
-          SMETER_ATTACK_PER_SEC,
-          SMETER_RELEASE_PER_SEC,
+          SMETER_ATTACK_MS,
+          SMETER_RELEASE_MS,
           dtSec
         );
         if (state.meterDbmPeak == null || state.meterDbmVisual >= state.meterDbmPeak) {

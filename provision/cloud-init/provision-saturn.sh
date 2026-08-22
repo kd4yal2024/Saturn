@@ -14,7 +14,7 @@ while IFS='=' read -r _saturn_name _saturn_value; do
 done < <(env)
 
 # Optional environment file written by cloud-init user-data.
-if [[ -f /etc/default/saturn-provision ]]; then
+if [[ -r /etc/default/saturn-provision ]]; then
   # shellcheck disable=SC1091
   source /etc/default/saturn-provision
 fi
@@ -60,7 +60,7 @@ SATURN_ADMIN_PASSWORD_MIN_LEN=5
 SATURN_NONINTERACTIVE="${SATURN_NONINTERACTIVE:-0}"
 SATURN_VERIFY_MODE="${SATURN_VERIFY_MODE:-hardware}"
 SATURN_RESUME="${SATURN_RESUME:-1}"
-SATURN_HOST_SCHEMA_VERSION=2
+SATURN_HOST_SCHEMA_VERSION=3
 SATURN_FORCE_REPROVISION="${SATURN_FORCE_REPROVISION:-0}"
 SATURN_STATE_DIR="${SATURN_STATE_DIR:-/var/lib/saturn-provision}"
 SATURN_LOG_FILE="${SATURN_LOG_FILE:-/var/log/saturn-provision.log}"
@@ -1809,7 +1809,12 @@ verify_install() {
       log "VERIFY FAIL: XDMA user device is unavailable"
       failed=1
     fi
-    if bool_true "$SATURN_INSTALL_P2APP_CONTROL" \
+    if bool_true "$SATURN_INSTALL_SATURN_BRIDGE"; then
+      if ! verify_active_radio_backend; then
+        log "VERIFY FAIL: selected radio backend is not operational"
+        failed=1
+      fi
+    elif bool_true "$SATURN_INSTALL_P2APP_CONTROL" \
         && ! systemctl is-active --quiet p2app.service; then
       log "VERIFY FAIL: p2app.service is not active"
       failed=1
@@ -1838,6 +1843,53 @@ verify_install() {
 
   (( failed == 0 )) || die "$mode installation verification failed"
   log "$mode installation verification passed"
+}
+
+radio_backend_status_is_ready() {
+  python3 -c '
+import json
+import sys
+
+try:
+    value = json.load(sys.stdin)
+    selected = value.get("selected", "p2")
+    runtime = value.get("runtime", "unknown")
+    services = value.get("services", {})
+    p2app = services.get("p2app", "inactive")
+    bridge = services.get("saturn_bridge", "inactive")
+    exclusive = value.get("mutual_exclusion_ok", False) is True
+except (AttributeError, json.JSONDecodeError, TypeError, ValueError):
+    raise SystemExit(1)
+
+ready = exclusive and bridge == "active" and (
+    (selected == "p2" and runtime == "p2" and p2app == "active")
+    or (selected == "xdma" and runtime == "xdma" and p2app == "inactive")
+)
+raise SystemExit(0 if ready else 1)
+'
+}
+
+verify_active_radio_backend() {
+  local helper status_json selected runtime
+  helper="/usr/local/lib/saturn-go/scripts/saturn-radio-backend-switch-root.sh"
+  if [[ ! -x "$helper" ]]; then
+    helper="${SATURN_REPO_DIR}/update_manager/scripts/saturn-radio-backend-switch-root.sh"
+  fi
+  if [[ ! -x "$helper" ]]; then
+    log "VERIFY FAIL: radio backend status helper is missing"
+    return 1
+  fi
+  if ! status_json="$("$helper" status 2>/dev/null)"; then
+    log "VERIFY FAIL: radio backend status could not be read"
+    return 1
+  fi
+  selected="$(python3 -c 'import json,sys; print(json.load(sys.stdin).get("selected", "unknown"))' <<<"$status_json" 2>/dev/null || printf unknown)"
+  runtime="$(python3 -c 'import json,sys; print(json.load(sys.stdin).get("runtime", "unknown"))' <<<"$status_json" 2>/dev/null || printf unknown)"
+  if ! radio_backend_status_is_ready <<<"$status_json"; then
+    log "VERIFY FAIL: radio backend selected=$selected runtime=$runtime"
+    return 1
+  fi
+  log "Verified active radio backend: selected=$selected runtime=$runtime"
 }
 
 write_completion_state() {
@@ -1880,13 +1932,43 @@ EOF
   chmod 0644 /etc/saturn-release
 }
 
+repo_git() {
+  local saturn_home
+  saturn_home="$(getent passwd "$SATURN_USER" | cut -d: -f6)"
+  if [[ "$(id -un)" == "$SATURN_USER" ]]; then
+    env HOME="$saturn_home" git -C "$SATURN_REPO_DIR" "$@"
+  else
+    run_as_user "$saturn_home" git -C "$SATURN_REPO_DIR" "$@"
+  fi
+}
+
+repository_source_fingerprint() {
+  local commit relative path content_hash
+  commit="$(repo_git rev-parse HEAD 2>/dev/null || printf unknown)"
+  content_hash="$({
+    repo_git diff --no-ext-diff --binary HEAD -- 2>/dev/null || true
+    while IFS= read -r -d '' relative; do
+      path="${SATURN_REPO_DIR}/${relative}"
+      printf 'untracked:%s\0' "$relative"
+      if [[ -L "$path" ]]; then
+        printf 'symlink:%s\0' "$(readlink "$path")"
+      elif [[ -f "$path" ]]; then
+        sha256sum -- "$path"
+      else
+        printf 'missing\0'
+      fi
+    done < <(repo_git ls-files --others --exclude-standard -z 2>/dev/null || true)
+  } | sha256sum | awk '{print substr($1,1,16)}')"
+  printf '%s:%s\n' "$commit" "$content_hash"
+}
+
 installer_contract_hash() {
-  local commit
-  commit="$(git -C "$SATURN_REPO_DIR" rev-parse HEAD 2>/dev/null || printf unknown)"
+  local source_fingerprint
+  source_fingerprint="$(repository_source_fingerprint)"
   {
     printf '%s\n' \
       "installer=$SATURN_HOST_SCHEMA_VERSION" \
-      "commit=$commit" \
+      "source=$source_fingerprint" \
       "kernel=$(uname -r)" \
       "user=$SATURN_USER" \
       "group=$SATURN_GROUP" \
@@ -1920,12 +2002,12 @@ installer_contract_hash() {
 }
 
 phase_contract_hash() {
-  local commit
-  commit="$(git -C "$SATURN_REPO_DIR" rev-parse HEAD 2>/dev/null || printf unknown)"
+  local source_fingerprint
+  source_fingerprint="$(repository_source_fingerprint)"
   {
     printf '%s\n' \
       "installer=$SATURN_HOST_SCHEMA_VERSION" \
-      "commit=$commit" \
+      "source=$source_fingerprint" \
       "kernel=$(uname -r)" \
       "user=$SATURN_USER" \
       "group=$SATURN_GROUP" \
@@ -2152,4 +2234,6 @@ main() {
   log "Provision log: $SATURN_LOG_FILE"
 }
 
-main "$@"
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  main "$@"
+fi

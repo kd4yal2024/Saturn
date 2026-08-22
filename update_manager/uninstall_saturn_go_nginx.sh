@@ -47,6 +47,7 @@ PRIVILEGED_SCRIPTS_DIR="$WATCHDOG_SCRIPT_DIR/scripts"
 SATURN_STATE_DIR="/var/lib/saturn-state"
 SUDOERS_FILE="/etc/sudoers.d/saturn-go-maintenance"
 PRIVILEGED_HELPERS=(
+  "$PRIVILEGED_SCRIPTS_DIR/saturn-appliance-power-root.sh"
   "$PRIVILEGED_SCRIPTS_DIR/fix-LED-power-button.sh"
   "$PRIVILEGED_SCRIPTS_DIR/install-shutdown-waiter-service.sh"
   "$PRIVILEGED_SCRIPTS_DIR/shutdown-waiter.sh"

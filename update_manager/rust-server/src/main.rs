@@ -108,6 +108,13 @@ struct P23AdcTelemetryRequest {
 #[derive(Debug, Deserialize)]
 struct RadioBackendRequest {
     backend: String,
+    action: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AppliancePowerRequest {
+    action: String,
+    confirmation: String,
 }
 
 #[tokio::main]
@@ -503,6 +510,7 @@ fn application_router(state: AppState, restore_request_max_bytes: usize) -> Rout
         .route("/saturn/bridge_diag", get(get_bridge_diag))
         .route("/radio_backend", get(get_radio_backend))
         .route("/radio_backend", post(set_radio_backend))
+        .route("/appliance_power", post(set_appliance_power))
         .route("/p23_status", get(get_p23_status))
         .route("/p23_perf", get(get_p23_perf))
         .route("/p23_adc_telemetry", post(set_p23_adc_telemetry))
@@ -1575,6 +1583,8 @@ fn xdma_operational_snapshot() -> serde_json::Value {
 
 const RADIO_BACKEND_SWITCH_HELPER: &str =
     "/usr/local/lib/saturn-go/scripts/saturn-radio-backend-switch-root.sh";
+const APPLIANCE_POWER_HELPER: &str =
+    "/usr/local/lib/saturn-go/scripts/saturn-appliance-power-root.sh";
 
 async fn invoke_radio_backend_helper(_state: &AppState, args: &[&str]) -> Result<String, String> {
     // This helper is intentionally root-owned and has a matching absolute
@@ -1637,6 +1647,12 @@ async fn set_radio_backend(
     Json(request): Json<RadioBackendRequest>,
 ) -> Response {
     let backend = request.backend.trim().to_ascii_lowercase();
+    let action = request
+        .action
+        .as_deref()
+        .unwrap_or("switch")
+        .trim()
+        .to_ascii_lowercase();
     if !matches!(backend.as_str(), "p2" | "xdma") {
         return (
             StatusCode::BAD_REQUEST,
@@ -1647,7 +1663,17 @@ async fn set_radio_backend(
         )
             .into_response();
     }
-    match invoke_radio_backend_helper(&state, &["switch", &backend]).await {
+    if !matches!(action.as_str(), "switch" | "start" | "stop") {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "status": "error",
+                "message": "action must be switch, start, or stop"
+            })),
+        )
+            .into_response();
+    }
+    match invoke_radio_backend_helper(&state, &[&action, &backend]).await {
         Ok(output) => {
             let status = invoke_radio_backend_helper(&state, &["status"])
                 .await
@@ -1655,6 +1681,7 @@ async fn set_radio_backend(
                 .and_then(|value| serde_json::from_str::<serde_json::Value>(&value).ok());
             Json(serde_json::json!({
                 "status": "ok",
+                "action": action,
                 "selected": backend,
                 "message": output,
                 "backend": status,
@@ -1664,6 +1691,105 @@ async fn set_radio_backend(
         Err(message) => (
             StatusCode::CONFLICT,
             Json(serde_json::json!({"status": "error", "message": message})),
+        )
+            .into_response(),
+    }
+}
+
+async fn set_appliance_power(
+    State(state): State<AppState>,
+    Json(request): Json<AppliancePowerRequest>,
+) -> Response {
+    if request.action.trim().to_ascii_lowercase() != "poweroff"
+        || request.confirmation.trim() != "POWER OFF"
+    {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "status": "error",
+                "message": "poweroff requires confirmation text POWER OFF"
+            })),
+        )
+            .into_response();
+    }
+
+    let shutdown = shutdown_controller::status();
+    let active_operations = shutdown
+        .get("active_operations")
+        .and_then(serde_json::Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    if !active_operations.is_empty() {
+        return (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({
+                "status": "error",
+                "message": "G2 shutdown is blocked while maintenance operations are active",
+                "active_operations": active_operations,
+            })),
+        )
+            .into_response();
+    }
+
+    if let Err(message) = invoke_radio_backend_helper(&state, &["stop"]).await {
+        return (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({
+                "status": "error",
+                "message": format!("could not stop the selected radio backend: {message}")
+            })),
+        )
+            .into_response();
+    }
+
+    let helper = PathBuf::from(APPLIANCE_POWER_HELPER);
+    if !helper.is_file() {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({
+                "status": "error",
+                "message": format!("appliance power helper is missing: {}", helper.display())
+            })),
+        )
+            .into_response();
+    }
+    let output = Command::new("sudo")
+        .arg("-n")
+        .arg(&helper)
+        .arg("schedule-poweroff")
+        .kill_on_drop(true)
+        .output()
+        .await;
+    match output {
+        Ok(output) if output.status.success() => {
+            let backend = invoke_radio_backend_helper(&state, &["status"])
+                .await
+                .ok()
+                .and_then(|value| serde_json::from_str::<serde_json::Value>(&value).ok());
+            (
+                StatusCode::ACCEPTED,
+                Json(serde_json::json!({
+                    "status": "poweroff_scheduled",
+                    "message": "Radio services stopped safely. The G2 will power off in a few seconds.",
+                    "backend": backend,
+                })),
+            )
+                .into_response()
+        }
+        Ok(output) => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({
+                "status": "error",
+                "message": format!("poweroff scheduling failed after radio shutdown: {}", output_error_text(&output))
+            })),
+        )
+            .into_response(),
+        Err(error) => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({
+                "status": "error",
+                "message": format!("could not start the appliance power helper: {error}")
+            })),
         )
             .into_response(),
     }
@@ -4151,7 +4277,7 @@ mod tests {
         append_script_run_log_line, begin_script_run_log, bind_addr_is_loopback,
         disk_imaging_disabled, parse_xdma_interrupts_text, script_deadline_seconds,
         script_run_log_slot, systemd_environment_value, with_request_limit,
-        xdma_operational_is_ready, RADIO_BACKEND_SWITCH_HELPER,
+        xdma_operational_is_ready, APPLIANCE_POWER_HELPER, RADIO_BACKEND_SWITCH_HELPER,
     };
     use axum::{
         body::{Body, Bytes},
@@ -4175,6 +4301,10 @@ mod tests {
         assert_eq!(
             RADIO_BACKEND_SWITCH_HELPER,
             "/usr/local/lib/saturn-go/scripts/saturn-radio-backend-switch-root.sh"
+        );
+        assert_eq!(
+            APPLIANCE_POWER_HELPER,
+            "/usr/local/lib/saturn-go/scripts/saturn-appliance-power-root.sh"
         );
     }
 

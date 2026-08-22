@@ -5,6 +5,10 @@ set -euo pipefail
 # Wait for a shutdown signal on GPIO26, but avoid false triggers on
 # hardware variants where this line is not a dedicated shutdown input.
 #
+# CM5 device trees can expose the front-panel switch as a native gpio-keys
+# KEY_POWER device named "pwr_button". In that case systemd-logind owns the
+# shutdown path and this fallback must not compete for the same GPIO line.
+#
 # Optional config file:
 #   /etc/default/saturn-shutdown-waiter
 # Supported keys:
@@ -33,13 +37,67 @@ LOW_CONFIRM_COUNT="${SATURN_SHUTDOWN_WAITER_LOW_CONFIRM_COUNT:-3}"
 REQUIRE_HIGH_BEFORE_ARM="${SATURN_SHUTDOWN_WAITER_REQUIRE_HIGH_BEFORE_ARM:-1}"
 I2C_BUS="${SATURN_SHUTDOWN_WAITER_I2C_BUS:-1}"
 I2C_ADDR="${SATURN_SHUTDOWN_WAITER_I2C_ADDR:-0x20}"
+INPUT_DEVICES_PATH="${SATURN_POWER_INPUT_DEVICES_PATH:-/proc/bus/input/devices}"
+DEVICE_TREE_ROOT="${SATURN_POWER_DEVICE_TREE_ROOT:-/sys/firmware/devicetree/base}"
+BOOT_CONFIG_PATH="${SATURN_POWER_BOOT_CONFIG_PATH:-/boot/firmware/config.txt}"
+SYSTEMD_INHIBIT_BIN="${SATURN_POWER_SYSTEMD_INHIBIT:-systemd-inhibit}"
 
 log() {
-  local msg="$1"
-  if command -v systemd-cat >/dev/null 2>&1; then
-    printf '%s\n' "$msg" | systemd-cat -t saturn-shutdown-waiter
+  printf '[saturn-shutdown-waiter] %s\n' "$1"
+}
+
+native_power_button_present() {
+  if [[ -r "$INPUT_DEVICES_PATH" ]]; then
+    awk '
+      BEGIN { RS=""; found=0 }
+      /N: Name="pwr_button"/ && (/P: Phys=gpio-keys\/input/ || /S: Sysfs=.*\/platform\/pwr_button\/input\//) { found=1 }
+      END { exit(found ? 0 : 1) }
+    ' "$INPUT_DEVICES_PATH"
+    return $?
+  fi
+
+  [[ -d "$DEVICE_TREE_ROOT/pwr_button" ]]
+}
+
+active_gpio_shutdown_overlay() {
+  [[ -r "$BOOT_CONFIG_PATH" ]] || return 1
+  awk -v gpio_line="$GPIO_LINE" '
+    /^[[:space:]]*#/ { next }
+    /^[[:space:]]*dtoverlay=gpio-shutdown([,[:space:]]|$)/ {
+      if ($0 ~ "gpio_pin=" gpio_line "([,[:space:]]|$)") {
+        print NR ":" $0
+        found=1
+      }
+    }
+    END { exit(found ? 0 : 1) }
+  ' "$BOOT_CONFIG_PATH"
+}
+
+power_key_inhibitor_present() {
+  command -v "$SYSTEMD_INHIBIT_BIN" >/dev/null 2>&1 || return 1
+  "$SYSTEMD_INHIBIT_BIN" --list --no-pager 2>/dev/null \
+    | grep -Eq 'handle-power-key|handle-power-key:'
+}
+
+diagnose_power_button_policy() {
+  local overlay=""
+  if native_power_button_present; then
+    printf 'native_power_button=yes\n'
   else
-    printf '[saturn-shutdown-waiter] %s\n' "$msg"
+    printf 'native_power_button=no\n'
+  fi
+
+  overlay="$(active_gpio_shutdown_overlay || true)"
+  if [[ -n "$overlay" ]]; then
+    printf 'gpio_shutdown_overlay=%s\n' "$overlay"
+  else
+    printf 'gpio_shutdown_overlay=none\n'
+  fi
+
+  if power_key_inhibitor_present; then
+    printf 'power_key_inhibitor=yes\n'
+  else
+    printf 'power_key_inhibitor=no\n'
   fi
 }
 
@@ -101,6 +159,22 @@ request_shutdown() {
   return 1
 }
 
+case "${1:-}" in
+  --probe-native-power-button)
+    native_power_button_present
+    exit $?
+    ;;
+  --diagnose)
+    diagnose_power_button_policy
+    exit 0
+    ;;
+  "") ;;
+  *)
+    printf 'Usage: %s [--probe-native-power-button|--diagnose]\n' "$0" >&2
+    exit 2
+    ;;
+esac
+
 case "${ENABLED,,}" in
   0|false|no|off|disabled)
     log "disabled by config (SATURN_SHUTDOWN_WAITER_ENABLED=$ENABLED)"
@@ -121,6 +195,17 @@ case "${ENABLED,,}" in
     exit 1
     ;;
 esac
+
+if native_power_button_present; then
+  log "native gpio-keys power button detected; polling fallback is not required"
+  if overlay="$(active_gpio_shutdown_overlay || true)" && [[ -n "$overlay" ]]; then
+    log "WARNING: active gpio-shutdown overlay also targets GPIO${GPIO_LINE}: $overlay"
+  fi
+  if power_key_inhibitor_present; then
+    log "WARNING: a handle-power-key inhibitor is active; the native KEY_POWER event may be ignored"
+  fi
+  exit 0
+fi
 
 if ! command -v gpioget >/dev/null 2>&1; then
   log "ERROR: gpioget not found"

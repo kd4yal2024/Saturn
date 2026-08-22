@@ -7,6 +7,8 @@ All notable changes to provisioning assets are documented in this file.
 ### Changed
 
 - `cloud-init/provision-saturn.sh`
+  - shutdown-waiter installation now recognizes a live CM5/native gpio-keys `pwr_button`, disables the GPIO polling fallback, and retires Raspberry Pi OS's desktop power-key inhibitor for the configured Saturn user after reboot/login
+  - duplicate `gpio-shutdown` overlays are reported for controlled operator repair instead of being removed automatically; CM4 systems without a native button continue using the guarded GPIO26 waiter
   - user-supplied Saturn administrator passwords now accept any value of at least five characters; unattended/generated passwords remain five characters
   - now installs piHPSDR native build dependencies whenever the default standalone installer is enabled, preventing the desktop and web runners from failing because they cannot prompt for sudo
   - includes `SATURN_PIHPSDR_INSTALLER_ENABLED` in provisioning contract hashes so changing the installer setting reruns the affected phases

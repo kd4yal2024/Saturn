@@ -65,8 +65,24 @@
             <span id="service-saturngo" class="status-pill status-unknown">Loading</span>
           </div>
           <div class="overview-service-row">
-            <div><div class="overview-service-name">p2app</div><div id="service-p2app-detail" class="overview-service-detail">Protocol 2 radio service</div></div>
-            <span id="service-p2app" class="status-pill status-unknown">Loading</span>
+            <div><div class="overview-service-name">Radio Owner</div><div id="service-radio-detail" class="overview-service-detail">Selected appliance radio backend</div></div>
+            <span id="service-radio" class="status-pill status-unknown">Loading</span>
+          </div>
+          <div class="overview-service-row overview-service-control-row">
+            <div><div class="overview-service-name">P2 App</div><div id="service-p2app-detail" class="overview-service-detail">Protocol 2 radio service</div></div>
+            <div class="overview-service-controls">
+              <span id="service-p2app" class="status-pill status-unknown">Loading</span>
+              <button id="radio-p2-start" class="btn btn-primary px-3 py-2 text-sm" type="button">Start</button>
+              <button id="radio-p2-stop" class="btn btn-ghost px-3 py-2 text-sm" type="button">Stop</button>
+            </div>
+          </div>
+          <div class="overview-service-row overview-service-control-row">
+            <div><div class="overview-service-name">Direct XDMA</div><div id="service-xdma-detail" class="overview-service-detail">Saturn Remote direct radio backend</div></div>
+            <div class="overview-service-controls">
+              <span id="service-xdma" class="status-pill status-unknown">Loading</span>
+              <button id="radio-xdma-start" class="btn btn-primary px-3 py-2 text-sm" type="button">Start</button>
+              <button id="radio-xdma-stop" class="btn btn-ghost px-3 py-2 text-sm" type="button">Stop</button>
+            </div>
           </div>
           <div class="overview-service-row">
             <div><div class="overview-service-name">Saturn Bridge</div><div id="service-bridge-detail" class="overview-service-detail">Remote browser bridge</div></div>
@@ -91,13 +107,35 @@
           <a class="overview-link" href="./fpga"><strong>FPGA Flash</strong><span>Firmware image management</span></a>
           <a class="overview-link" href="./backup"><strong>Backup / Restore</strong><span>Snapshots and recovery</span></a>
         </div>
+        <div class="status-panel status-panel-warn mt-4">
+          <div class="font-semibold">G2 Power</div>
+          <p class="text-sm opacity-75 mt-1">Stops the selected radio backend, releases the FPGA safely, then powers off the appliance.</p>
+          <button id="g2-poweroff-open" class="btn btn-danger px-4 py-2 mt-3" type="button">Shut Down G2</button>
+        </div>
       </section>
+    </div>
+  </div>
+
+  <div id="g2-poweroff-modal" class="fixed inset-0 hidden items-center justify-center bg-black/60 p-4" role="dialog" aria-modal="true" aria-labelledby="g2-poweroff-title">
+    <div class="card p-6 max-w-md w-full">
+      <h2 id="g2-poweroff-title" class="text-xl font-semibold">Shut Down Saturn G2</h2>
+      <p class="text-sm opacity-80 mt-2">Radio operation will stop immediately. The appliance will power off after receive-safe cleanup.</p>
+      <label class="block text-sm mt-4" for="g2-poweroff-confirm">Type <strong>POWER OFF</strong> to confirm.</label>
+      <input id="g2-poweroff-confirm" class="field w-full px-3 py-2 mt-2" autocomplete="off" spellcheck="false" />
+      <div id="g2-poweroff-message" class="text-sm mt-3 opacity-80"></div>
+      <div class="flex justify-end gap-3 mt-5">
+        <button id="g2-poweroff-cancel" class="btn btn-ghost px-4 py-2" type="button">Cancel</button>
+        <button id="g2-poweroff-submit" class="btn btn-danger px-4 py-2" type="button" disabled>Power Off</button>
+      </div>
     </div>
   </div>
 
 <script>
 const $ = (id)=>document.getElementById(id);
 let overviewRefreshInFlight = false;
+let radioControlInFlight = false;
+const CSRF_HEADER_NAME = 'X-Saturn-CSRF';
+const CSRF_HEADER_VALUE = '1';
 
 function fmtRate(bytesPerSecond){
   const value = Number(bytesPerSecond);
@@ -134,6 +172,20 @@ async function fetchStatusJson(path){
   return body;
 }
 
+async function postJson(path, body){
+  const response = await fetch(path, {
+    method:'POST',
+    headers:{
+      'Content-Type':'application/json',
+      [CSRF_HEADER_NAME]:CSRF_HEADER_VALUE,
+    },
+    body:JSON.stringify(body),
+  });
+  const value = await response.json().catch(()=>({}));
+  if (!response.ok) throw new Error(value.message || `HTTP ${response.status}`);
+  return value;
+}
+
 function setService(id, level, label, detail){
   const badge = $(`service-${id}`);
   const detailEl = $(`service-${id}-detail`);
@@ -159,6 +211,7 @@ async function refreshOverview(){
       fetchJson('./tailscale_status'),
       fetchJson('./saturngo_deploy_status'),
       fetchStatusJson('./readyz'),
+      fetchJson('./radio_backend'),
     ]);
     const system = resultValue(results[0]);
     const p23Status = resultValue(results[1])?.p23 || null;
@@ -167,6 +220,7 @@ async function refreshOverview(){
     const tailscale = resultValue(results[4]);
     const deploy = resultValue(results[5])?.deploy || null;
     const readiness = resultValue(results[6]);
+    const radioBackend = resultValue(results[7])?.backend || null;
     const backendReachable = Boolean(readiness);
     const backendReady = readiness?.ready === true;
 
@@ -184,17 +238,26 @@ async function refreshOverview(){
       $('overview-network-detail').textContent = 'Network metrics could not be loaded.';
     }
 
-    const radioService = String(p23Status?.service?.active || 'unknown');
+    const radioService = String(radioBackend?.services?.p2app || p23Status?.service?.active || 'unknown');
+    const selectedBackend = String(radioBackend?.selected || 'unknown');
+    const operationalStatus = String(radioBackend?.operational_status || 'unknown');
+    const bridgeActive = String(radioBackend?.services?.saturn_bridge || bridge?.service?.active || 'unknown');
     const app = perf?.app_telemetry?.current || {};
     const appState = app?.state || {};
-    const radioLabel = radioService !== 'active' ? 'Service Offline' : (appState?.sdr_active ? (appState?.tx_mode ? 'Transmitting' : 'Receiving') : 'Ready · Idle');
+    const radioLabel = operationalStatus === 'stopped'
+      ? 'Radio Stopped'
+      : (selectedBackend === 'xdma' && operationalStatus === 'ready'
+          ? 'Direct XDMA'
+          : (radioService !== 'active' ? 'Service Offline' : (appState?.sdr_active ? (appState?.tx_mode ? 'Transmitting' : 'Receiving') : 'P2 Ready · Idle')));
     $('overview-radio-value').textContent = radioLabel;
     const fpgaDetail = app?.fpga?.available
       ? `FPGA ${app?.fpga?.firmware_version ?? 'n/a'} · ${fmtNumber(app?.fpga?.die_temp_c, 1, ' °C')}`
       : 'FPGA telemetry unavailable';
-    $('overview-radio-detail').textContent = radioService === 'active'
-      ? `P2 PID ${p23Status?.service?.main_pid || 'n/a'} · ${fpgaDetail} · panel ${perf?.workload?.panel_mode || 'n/a'}`
-      : `p2app.service is ${radioService}`;
+    $('overview-radio-detail').textContent = selectedBackend === 'xdma'
+      ? `XDMA ${operationalStatus} · Bridge PID ${bridge?.service?.main_pid || 'n/a'} · receive-safe direct backend`
+      : (radioService === 'active'
+          ? `P2 PID ${p23Status?.service?.main_pid || 'n/a'} · ${fpgaDetail} · panel ${perf?.workload?.panel_mode || 'n/a'}`
+          : `P2 selected · radio ${operationalStatus}`);
 
     if (deploy){
       const deployStatus = String(deploy.status || 'unknown');
@@ -218,11 +281,19 @@ async function refreshOverview(){
           ? `Not ready · commit ${shortCommit}${failedComponents.length ? ` · failed ${failedComponents.join(', ')}` : ''}`
           : 'Readiness endpoint unavailable');
     setService('saturngo', backendReady ? 'ok' : (backendReachable ? 'warn' : 'bad'), backendReady ? 'Ready' : (backendReachable ? 'Not Ready' : 'Unavailable'), backendDetail);
-    setService('p2app', radioService === 'active' ? 'ok' : 'bad', radioService === 'active' ? 'Running' : radioService, `PID ${p23Status?.service?.main_pid || 'n/a'} · enabled ${p23Status?.service?.enabled || 'unknown'}`);
-    const bridgeActive = String(bridge?.service?.active || 'unknown');
+    const radioLevel = operationalStatus === 'ready' ? 'ok' : (operationalStatus === 'stopped' ? 'unknown' : 'warn');
+    setService('radio', radioLevel, operationalStatus, `Selected ${selectedBackend} · runtime ${radioBackend?.runtime || 'unknown'} · exclusion ${radioBackend?.mutual_exclusion_ok === false ? 'FAULT' : 'ok'}`);
+    const p2Level = radioService === 'active' ? 'ok' : (selectedBackend === 'p2' && operationalStatus !== 'stopped' ? 'warn' : 'unknown');
+    setService('p2app', p2Level, radioService === 'active' ? 'Running' : 'Stopped', `PID ${p23Status?.service?.main_pid || 'n/a'} · enabled ${p23Status?.service?.enabled || 'unknown'}`);
+    const xdmaRunning = selectedBackend === 'xdma' && operationalStatus === 'ready' && bridgeActive === 'active';
+    setService('xdma', xdmaRunning ? 'ok' : (selectedBackend === 'xdma' && operationalStatus !== 'stopped' ? 'warn' : 'unknown'), xdmaRunning ? 'Running' : 'Stopped', `Selected ${selectedBackend === 'xdma' ? 'yes' : 'no'} · bridge ${bridgeActive}`);
     setService('bridge', bridgeActive === 'active' ? 'ok' : (bridge ? 'warn' : 'bad'), bridgeActive === 'active' ? 'Running' : bridgeActive, `PID ${bridge?.service?.main_pid || 'n/a'} · enabled ${bridge?.service?.enabled || 'unknown'}`);
     const tailLevel = tailscale?.level === 'ok' ? 'ok' : (tailscale?.installed ? 'warn' : 'unknown');
     setService('tailscale', tailLevel, tailscale?.level || 'Optional', tailscale?.summary || 'Not configured');
+    $('radio-p2-start').disabled = radioControlInFlight || (selectedBackend === 'p2' && operationalStatus === 'ready');
+    $('radio-p2-stop').disabled = radioControlInFlight || radioService !== 'active';
+    $('radio-xdma-start').disabled = radioControlInFlight || xdmaRunning;
+    $('radio-xdma-stop').disabled = radioControlInFlight || !xdmaRunning;
     $('overview-updated').textContent = `Updated ${new Date().toLocaleTimeString()} · refreshes every 10 seconds`;
   } finally {
     overviewRefreshInFlight = false;
@@ -230,7 +301,68 @@ async function refreshOverview(){
   }
 }
 
+async function controlRadio(action, backend){
+  if (radioControlInFlight) return;
+  const verb = action === 'start' ? 'start' : 'stop';
+  const label = backend === 'p2' ? 'P2 App' : 'Direct XDMA';
+  const warning = action === 'start'
+    ? `Start ${label}? Starting it will safely stop the other radio backend if necessary.`
+    : `Stop ${label}? Active radio and browser sessions on this backend will disconnect.`;
+  if (!confirm(warning)) return;
+  radioControlInFlight = true;
+  ['radio-p2-start','radio-p2-stop','radio-xdma-start','radio-xdma-stop'].forEach((id)=>$(id).disabled = true);
+  $('overview-updated').textContent = `${verb === 'start' ? 'Starting' : 'Stopping'} ${label}…`;
+  try{
+    await postJson('./radio_backend', { action, backend });
+  }catch(error){
+    $('overview-updated').textContent = `${label} ${verb} failed: ${error.message}`;
+  }finally{
+    radioControlInFlight = false;
+    await refreshOverview();
+  }
+}
+
+function showPoweroffModal(show){
+  const modal = $('g2-poweroff-modal');
+  modal.classList.toggle('hidden', !show);
+  modal.classList.toggle('flex', show);
+  if (show){
+    $('g2-poweroff-confirm').value = '';
+    $('g2-poweroff-submit').disabled = true;
+    $('g2-poweroff-message').textContent = '';
+    setTimeout(()=>$('g2-poweroff-confirm').focus(), 0);
+  }
+}
+
+async function schedulePoweroff(){
+  const confirmation = $('g2-poweroff-confirm').value.trim();
+  if (confirmation !== 'POWER OFF') return;
+  $('g2-poweroff-submit').disabled = true;
+  $('g2-poweroff-cancel').disabled = true;
+  $('g2-poweroff-message').textContent = 'Stopping radio services and scheduling poweroff…';
+  try{
+    const result = await postJson('./appliance_power', { action:'poweroff', confirmation });
+    $('g2-poweroff-message').textContent = result.message || 'G2 poweroff scheduled.';
+    $('g2-poweroff-confirm').disabled = true;
+  }catch(error){
+    $('g2-poweroff-message').textContent = `Shutdown failed: ${error.message}`;
+    $('g2-poweroff-cancel').disabled = false;
+    $('g2-poweroff-submit').disabled = false;
+    await refreshOverview();
+  }
+}
+
 $('overview-refresh').addEventListener('click', refreshOverview);
+$('radio-p2-start').addEventListener('click', ()=>controlRadio('start', 'p2'));
+$('radio-p2-stop').addEventListener('click', ()=>controlRadio('stop', 'p2'));
+$('radio-xdma-start').addEventListener('click', ()=>controlRadio('start', 'xdma'));
+$('radio-xdma-stop').addEventListener('click', ()=>controlRadio('stop', 'xdma'));
+$('g2-poweroff-open').addEventListener('click', ()=>showPoweroffModal(true));
+$('g2-poweroff-cancel').addEventListener('click', ()=>showPoweroffModal(false));
+$('g2-poweroff-confirm').addEventListener('input', (event)=>{
+  $('g2-poweroff-submit').disabled = event.target.value.trim() !== 'POWER OFF';
+});
+$('g2-poweroff-submit').addEventListener('click', schedulePoweroff);
 refreshOverview();
 setInterval(refreshOverview, 10000);
 </script>

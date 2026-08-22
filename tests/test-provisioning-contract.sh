@@ -39,6 +39,55 @@ grep -Fq 'verify_saturn_go_target_readiness' "$PROVISIONER"
 grep -Fq "Environment=SATURN_READY_REQUIRE_BRIDGE=\${SATURN_READY_REQUIRE_BRIDGE}" "$MANAGER_INSTALLER"
 grep -Fq "if env_flag_enabled \"\$SATURN_DEFER_FINAL_READINESS\"" "$MANAGER_INSTALLER"
 
+# Resume markers must track the actual checkout content, including dirty and
+# untracked work, and hardware verification must accept either healthy radio
+# owner while still rejecting mixed or inactive ownership.
+# shellcheck disable=SC1090
+source "$PROVISIONER"
+FINGERPRINT_REPO="$TMP_DIR/fingerprint-repo"
+mkdir -p "$FINGERPRINT_REPO"
+git -C "$FINGERPRINT_REPO" init -q
+git -C "$FINGERPRINT_REPO" config user.name Saturn-Test
+git -C "$FINGERPRINT_REPO" config user.email saturn-test@example.invalid
+printf 'initial\n' >"$FINGERPRINT_REPO/tracked.txt"
+git -C "$FINGERPRINT_REPO" add tracked.txt
+git -C "$FINGERPRINT_REPO" commit -qm initial
+SATURN_REPO_DIR="$FINGERPRINT_REPO"
+# Consumed by repo_git() from the sourced provisioner.
+# shellcheck disable=SC2034
+SATURN_USER="$TEST_USER"
+fingerprint_clean="$(repository_source_fingerprint)"
+printf 'dirty\n' >>"$FINGERPRINT_REPO/tracked.txt"
+fingerprint_dirty="$(repository_source_fingerprint)"
+[[ "$fingerprint_clean" != "$fingerprint_dirty" ]]
+printf 'untracked\n' >"$FINGERPRINT_REPO/new-source.txt"
+fingerprint_untracked="$(repository_source_fingerprint)"
+[[ "$fingerprint_dirty" != "$fingerprint_untracked" ]]
+
+radio_backend_status_is_ready <<'JSON'
+{"selected":"p2","runtime":"p2","services":{"p2app":"active","saturn_bridge":"active"},"mutual_exclusion_ok":true}
+JSON
+radio_backend_status_is_ready <<'JSON'
+{"selected":"xdma","runtime":"xdma","services":{"p2app":"inactive","saturn_bridge":"active"},"mutual_exclusion_ok":true}
+JSON
+if radio_backend_status_is_ready <<'JSON'
+{"selected":"xdma","runtime":"xdma","services":{"p2app":"active","saturn_bridge":"active"},"mutual_exclusion_ok":false}
+JSON
+then
+  printf 'mixed P2/XDMA ownership unexpectedly passed verification\n' >&2
+  exit 1
+fi
+if radio_backend_status_is_ready <<'JSON'
+{"selected":"xdma","runtime":"xdma","services":{"p2app":"inactive","saturn_bridge":"inactive"},"mutual_exclusion_ok":true}
+JSON
+then
+  printf 'inactive selected backend unexpectedly passed verification\n' >&2
+  exit 1
+fi
+# Restored for any later sourced provisioner helpers.
+# shellcheck disable=SC2034
+SATURN_REPO_DIR="$REPO_ROOT"
+
 # XDMA device nodes are group-restricted. Canonical and manual installers must
 # grant the configured desktop operator access so piHPSDR and deskHPSDR can
 # open /dev/xdma0_user after p2app.service is stopped.

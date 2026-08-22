@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  lerp, moveToward, svgArcPath, dbmToSmDeg, formatSignalStrength, linearLevelToDbfs,
+  lerp, moveToward, smoothToward, svgArcPath, dbmToSmDeg, formatSignalStrength, linearLevelToDbfs,
   instrumentOperatingState, auxDeg, txPowerToAuxDeg, swrToAuxDeg,
   SM_START, SM_END, AX_START, AX_END,
 } from '../src/ui/meter-math';
@@ -23,6 +23,25 @@ describe('moveToward', () => {
   });
   it('clamps to target on overshoot', () => {
     expect(moveToward(99, 100, 200, 50, 1)).toBe(100);
+  });
+});
+
+describe('smoothToward', () => {
+  it('uses a fast exponential attack without overshooting', () => {
+    const value = smoothToward(-120, -60, 65, 360, 0.065);
+    expect(value).toBeGreaterThan(-100);
+    expect(value).toBeLessThan(-60);
+  });
+
+  it('uses a slower release than attack', () => {
+    const attack = smoothToward(-120, -60, 65, 360, 0.065);
+    const release = smoothToward(-60, -120, 65, 360, 0.065);
+    expect(attack - (-120)).toBeGreaterThan((-60) - release);
+  });
+
+  it('initializes from the target and remains stable at zero elapsed time', () => {
+    expect(smoothToward(null, -73, 65, 360, 0.016)).toBe(-73);
+    expect(smoothToward(-90, -60, 65, 360, 0)).toBe(-90);
   });
 });
 

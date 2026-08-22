@@ -568,6 +568,43 @@ sudo systemctl restart saturn-go.service
 sudo systemctl restart saturn-go-watchdog.timer
 ```
 
+### Front-Panel Power Button
+
+The shutdown installer selects one owner for the physical power button:
+
+- A live native gpio-keys input named `pwr_button` owns shutdown through
+  `KEY_POWER` and systemd-logind. The GPIO polling waiter is disabled.
+- Hardware without that native input retains `saturn-shutdown-waiter.service`
+  as the guarded GPIO26 fallback.
+- BCM15 belongs to the red/white front-panel LED and is not the button input.
+
+On Raspberry Pi OS desktop images, `/etc/xdg/autostart/pwrkey.desktop` starts a
+low-level `handle-power-key` inhibitor. For a native Saturn power button, the
+installer writes a Saturn-managed `~/.config/autostart/pwrkey.desktop` override
+for the configured operator. Reboot or log out/in once so the already-running
+desktop inhibitor exits; logind then performs the clean poweroff.
+
+Inspect the selected policy without changing state:
+
+```bash
+sudo /usr/local/sbin/saturn-shutdown-waiter.sh --diagnose
+cat /proc/bus/input/devices | grep -A7 -B2 -E 'shutdown_button|pwr_button'
+sudo systemd-inhibit --list --no-pager
+```
+
+If diagnostics report both a native button and an active
+`dtoverlay=gpio-shutdown,gpio_pin=26`, the same switch may be registered twice.
+The installer warns but deliberately leaves `/boot/firmware/config.txt`
+unchanged. Back it up, confirm both input devices target GPIO26, comment only
+the verified duplicate overlay, and reboot. Do not change the button to GPIO20
+without hardware evidence.
+
+Waiter messages are available in the normal unit journal:
+
+```bash
+sudo journalctl -u saturn-shutdown-waiter.service -b --no-pager
+```
+
 ### NGINX Validation
 
 ```bash

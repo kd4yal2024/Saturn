@@ -155,6 +155,7 @@ jobs:
             scripts/seal-saturn-image.sh \
             scripts/saturn-admin-password.sh \
             scripts/install-shutdown-waiter-service.sh \
+            scripts/shutdown-waiter.sh \
             scripts/fix-LED-power-button.sh \
             scripts/fix-xdma.sh \
             scripts/install-xdma-dkms.sh \
@@ -179,6 +180,7 @@ jobs:
             tests/test-disk-imaging-disabled.sh \
             tests/test-deskhpsdr-integration.sh \
             tests/test-provisioning-contract.sh \
+            tests/test-shutdown-waiter-policy.sh \
             tests/test-request-body-limits.sh \
             tests/test-rust-low-memory-build.sh \
             tests/test-saturn-release-activate.sh \
@@ -205,6 +207,7 @@ jobs:
             scripts/seal-saturn-image.sh \
             scripts/saturn-admin-password.sh \
             scripts/install-shutdown-waiter-service.sh \
+            scripts/shutdown-waiter.sh \
             scripts/fix-LED-power-button.sh \
             scripts/fix-xdma.sh \
             scripts/install-xdma-dkms.sh \
@@ -232,6 +235,7 @@ jobs:
             tests/test-saturn-maintenance-jobs.sh \
             tests/test-saturn-transactional-restore.sh \
             tests/test-request-body-limits.sh \
+            tests/test-shutdown-waiter-policy.sh \
             tests/test-saturn-state-inventory.sh \
             tests/test-saturn-state-compatibility.sh \
             tests/test-saturn-go-deploy-broker.sh \
@@ -248,6 +252,9 @@ jobs:
 
       - name: Test unified provisioning contract
         run: tests/test-provisioning-contract.sh
+
+      - name: Test native and fallback power-button policy
+        run: tests/test-shutdown-waiter-policy.sh
 
       - name: Test five-character admin password policy
         run: tests/test-admin-password-policy.sh

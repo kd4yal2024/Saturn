@@ -6,7 +6,7 @@ The Saturn Remote frontend ships as `/remote-next` (rendered from `saturn-remote
 
 | Capability | UI | API Endpoints | Scripts / Commands | State / Files |
 |---|---|---|---|---|
-| Appliance overview and shared offline shell | `overview.html`, `templates/assets/` | `GET /`, `GET /overview`, `GET /readyz`, `GET /assets/{*path}` | Local Inter/Tailwind/Chart.js/ansi_up assets; Nginx `/saturn/` proxy | Browser theme preference |
+| Appliance overview, radio service controls, G2 shutdown, and shared offline shell | `overview.html`, `templates/assets/` | `GET /`, `GET /overview`, `GET /readyz`, `GET/POST /radio_backend`, `POST /appliance_power`, `GET /assets/{*path}` | Transactional radio owner broker; root-owned delayed systemd poweroff helper; local Inter/Tailwind/Chart.js/ansi_up assets; Nginx `/saturn/` proxy | Selected/stopped radio backend state; browser theme preference |
 | Bounded Saturn Remote client admission and scheduling | `/remote-next` | TLS `GET /remote_metrics`, WebSockets `/tci`, `/saturn/control`, `/saturn/media`; admin `GET /bridge_diag` | Four logical authenticated clients, eight bridge sockets, one operator/TX owner; fixed/coalesced command/control queues with priority TX-release lane and depth-one display | Process-local admission/queue counters and journal-exported high-water/drop metrics; no persistent session identity |
 | Browser-managed custom script runner with live output | `index.html` (`/custom`) | `POST /run`, `GET /run_log`, `GET /maintenance_jobs` | `/opt/saturn-go/scripts/*` launched through the host lock/job broker with bounded SSE, retention, and deadlines | `custom_scripts.json`, 1 MiB/5,000-line resume ring, 4 MiB/5,000-line durable output, durable job records/results |
 | Custom script catalog management (add/update/delete + upload) | `index.html` (`/custom`) | `GET/POST /custom_scripts`, `POST /custom_scripts_delete` | Optional script file write/remove in scripts dir | `custom_scripts.json`, `/opt/saturn-go/scripts` |
@@ -43,7 +43,7 @@ The Saturn Remote frontend ships as `/remote-next` (rendered from `saturn-remote
 | Tailscale VPN enrollment, status, and Remote Serve controls | `tailscale.html` | `GET /tailscale_status`; `POST /tailscale/install`, `/tailscale/up`, `/tailscale/down`, `/tailscale/logout`, `/tailscale/serve` | Root-owned `saturn-tailscale.sh` helper via `sudo -n` | `tailscaled.service` state and Tailscale Serve configuration |
 | FPGA image discovery for flash UI | `fpga.html` | `GET /get_fpga_images` | Directory scan for `.bin` files | `SATURN_FPGA_DIR` or repo paths |
 | Legacy backup prompt response hook | `index.html` (modal) | `POST /backup_response` | No-op backend endpoint | N/A |
-| Controlled backend shutdown | `index.html` Exit button | `POST /exit`, `GET /shutdown_status` | Graceful admission close; finish-policy drain; process-group TERM/KILL for declared cancel-safe scripts | Durable cancelled job result under `maintenance-jobs/`; systemd `KillMode=mixed` and bounded stop timeout |
+| Controlled Saturn Go process shutdown | `index.html` Exit button | `POST /exit`, `GET /shutdown_status` | Graceful admission close; finish-policy drain; process-group TERM/KILL for declared cancel-safe scripts | Durable cancelled job result under `maintenance-jobs/`; systemd `KillMode=mixed` and bounded stop timeout |
 
 ## Added/Expanded Areas
 

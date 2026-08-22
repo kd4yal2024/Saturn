@@ -129,6 +129,7 @@ import { FftProcessor } from './dsp/fft';
 import {
   lerp,
   moveToward,
+  smoothToward,
   svgArcPath,
   dbmToSmDeg,
   formatSignalStrength,
@@ -149,8 +150,8 @@ import {
   AX_START,
   AX_END,
   AX_SPAN,
-  SMETER_ATTACK_PER_SEC,
-  SMETER_RELEASE_PER_SEC,
+  SMETER_ATTACK_MS,
+  SMETER_RELEASE_MS,
   SMETER_PEAK_HOLD_MS,
   SMETER_PEAK_DROP_PER_SEC,
   TX_POWER_ATTACK_PER_SEC,
@@ -358,11 +359,11 @@ const api = {
   spectrumWaterfallRatioFromPointer,
 
   // Meter math
-  lerp, moveToward, svgArcPath, dbmToSmDeg, formatSignalStrength, linearLevelToDbfs, instrumentOperatingState,
+  lerp, moveToward, smoothToward, svgArcPath, dbmToSmDeg, formatSignalStrength, linearLevelToDbfs, instrumentOperatingState,
   auxDeg, txPowerToAuxDeg, swrToAuxDeg,
   SM_CX, SM_CY, SM_R, SM_START, SM_END, SM_S9_DEG,
   AX_CX, AX_CY, AX_R, AX_START, AX_END, AX_SPAN,
-  SMETER_ATTACK_PER_SEC, SMETER_RELEASE_PER_SEC, SMETER_PEAK_HOLD_MS, SMETER_PEAK_DROP_PER_SEC,
+  SMETER_ATTACK_MS, SMETER_RELEASE_MS, SMETER_PEAK_HOLD_MS, SMETER_PEAK_DROP_PER_SEC,
   TX_POWER_ATTACK_PER_SEC, TX_POWER_RELEASE_PER_SEC, TX_POWER_PEAK_HOLD_MS, TX_POWER_PEAK_DROP_PER_SEC,
   SWR_ATTACK_PER_SEC, SWR_RELEASE_PER_SEC,
 };
