@@ -26,6 +26,19 @@ describe('responsive setup drawer template', () => {
     expect(template).toContain('document.body.classList.toggle("setup-open", next)');
   });
 
+  it('keeps settings immediately available from the transceiver header', () => {
+    expect(template.match(/id="header-setup-btn"/g)).toHaveLength(1);
+    expect(template).toContain('aria-label="Open Saturn Remote settings"');
+    expect(template).toContain('aria-controls="setup-menu" aria-expanded="false"');
+    expect(template).toContain('$("header-setup-btn")?.addEventListener("click", () => setSetupMenuOpen(true));');
+  });
+
+  it('keeps the drawer mounted when the legacy launch-grid button is hidden', () => {
+    expect(template).toContain('.launch-grid .setup-anchor { display: contents; }');
+    expect(template).toContain('.launch-grid .setup-anchor > #setup-menu-btn { display: none; }');
+    expect(template).not.toContain('.launch-grid .setup-anchor { display: none; }');
+  });
+
   it('places engineering routing only in Advanced', () => {
     const advancedStart = template.indexOf('id="setup-panel-advanced"');
     const setupEnd = template.indexOf('class="top-meter-bank"', advancedStart);

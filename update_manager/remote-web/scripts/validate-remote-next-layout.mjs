@@ -39,7 +39,7 @@ const drawerScenarios = viewportScenarios.flatMap((scenario) => [
   { ...scenario, name: `${scenario.name}-drawer`, drawerOpen: true },
 ]);
 const setupScenarios = viewportScenarios
-  .filter((scenario) => ['phone-portrait', 'phone-landscape', 'tablet-portrait', 'desktop'].includes(scenario.name))
+  .filter((scenario) => ['phone-portrait', 'phone-landscape', 'tablet-portrait', 'desktop', 'desktop-hd'].includes(scenario.name))
   .map((scenario) => ({ ...scenario, name: `${scenario.name}-setup`, drawerOpen: false, setupOpen: true }));
 const allScenarios = [...drawerScenarios, ...setupScenarios];
 const requestedScenarioNames = new Set(
@@ -357,6 +357,10 @@ function makeScenarioHtml(template, scenario) {
     contextRail.appendChild(audioStrip);
     contextRail.appendChild(rightRail);
     consoleLayout.insertAdjacentElement("afterend", contextRail);
+    audioStrip.querySelectorAll("[data-control-context]").forEach((control) => {
+      control.hidden = control.dataset.controlContext !== "rx";
+    });
+    rightRail.dataset.contextCompact = "true";
   }
   function detailRow(label, value, note, tone = "rx") {
     const row = document.createElement("div");

@@ -5720,6 +5720,389 @@
       }
     }
 
+    /* Phase 13: mockup-aligned premium desktop instrument deck. */
+    @media (min-width: 1440px) {
+      :root {
+        --bg-workspace: #071017;
+        --bg-panel: #0a141b;
+        --bg-raised: #0e1b23;
+        --bg-control: #10212a;
+        --border-subtle: rgba(105, 158, 176, 0.18);
+      }
+
+      .page.console-page {
+        position: relative;
+        grid-template-areas:
+          "header header header"
+          "left command context"
+          "left stage context"
+          "drawer drawer drawer";
+        grid-template-rows: auto auto minmax(0, 1fr) auto;
+        gap: 6px 8px;
+        padding: 6px 8px 7px;
+      }
+
+      .console-header {
+        min-height: 42px;
+        padding-inline: 4px;
+      }
+
+      .console-header #saturn-manage-home,
+      .console-header #saturn-manage-monitor {
+        display: none;
+      }
+
+      .launch-grid .setup-anchor { display: contents; }
+      .launch-grid .setup-anchor > #setup-menu-btn { display: none; }
+
+      .operator-state-strip {
+        position: absolute;
+        top: 8px;
+        right: clamp(255px, 17vw, 325px);
+        left: clamp(285px, 19vw, 360px);
+        min-height: 30px;
+        padding: 2px;
+        border-color: rgba(105, 158, 176, 0.12);
+        background: rgba(5, 11, 15, 0.72);
+        backdrop-filter: none;
+      }
+
+      .operator-pill {
+        min-height: 28px;
+        padding: 3px 6px;
+      }
+
+      .operator-pill-label { display: none; }
+      .operator-pill-value { font-size: 9px; text-align: left; }
+
+      .command-strip,
+      .panel,
+      .display-card,
+      .audio-control-strip,
+      .operations-drawer {
+        border-radius: 4px;
+      }
+
+      .command-strip > .panel-body { padding: 5px; }
+
+      .strip-grid {
+        grid-template-columns: minmax(410px, 0.76fr) minmax(700px, 1.24fr);
+        gap: 5px;
+      }
+
+      .vfo-deck.primary-deck {
+        grid-template-areas:
+          "top"
+          "readout"
+          "sub";
+        grid-template-rows: 24px minmax(0, 1fr) 18px;
+        padding: 8px 12px;
+        border-radius: 3px;
+        background:
+          linear-gradient(110deg, rgba(53, 191, 232, 0.055), transparent 46%),
+          #060d12;
+      }
+
+      .primary-deck .deck-top {
+        grid-area: top;
+        display: flex;
+        min-height: 24px;
+        align-items: center;
+        justify-content: space-between;
+      }
+
+      .primary-deck .deck-label {
+        color: var(--rx-cyan);
+        font: 750 10px/1 var(--font-instrument);
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+      }
+
+      .primary-deck .vfo-readout-row {
+        align-self: center;
+        justify-content: center;
+      }
+
+      .primary-deck .deck-frequency {
+        font-size: clamp(39px, 2.45vw, 47px);
+        font-weight: 480;
+        letter-spacing: 0.06em;
+        text-shadow: 0 0 20px rgba(53, 191, 232, 0.12);
+      }
+
+      .primary-deck .deck-subline {
+        justify-content: center;
+        color: var(--text-muted);
+        letter-spacing: 0.04em;
+      }
+
+      .control-cluster {
+        position: relative;
+        display: block;
+        min-width: 0;
+        padding: 3px 4px;
+      }
+
+      .launch-grid {
+        position: absolute;
+        z-index: 5;
+        top: 5px;
+        right: 5px;
+        display: flex;
+        width: auto;
+        height: 24px;
+        gap: 4px;
+      }
+
+      .launch-grid > .btn,
+      .launch-grid .setup-anchor,
+      .launch-grid .setup-anchor > .btn {
+        width: auto;
+        min-width: 62px;
+        min-height: 24px;
+        height: 24px;
+        padding: 3px 8px;
+        border-radius: 3px;
+        font-size: 9px;
+      }
+
+      .top-meter-bank {
+        height: 100%;
+        grid-template-columns: minmax(300px, 1.38fr) minmax(340px, 1fr);
+        grid-template-rows: 25px minmax(0, 1fr);
+        gap: 3px 6px;
+        padding: 0;
+        border-left: 0;
+      }
+
+      .instrument-state-line {
+        min-height: 25px;
+        padding: 3px 78px 3px 7px;
+        border-width: 0 0 1px;
+        border-radius: 0;
+        background: transparent;
+      }
+
+      .top-meter-bank > .analog-meter-shell > svg {
+        width: auto;
+        max-width: 100%;
+        height: 108px;
+        margin-inline: auto;
+      }
+
+      .top-meter-bank .aux-meter-row .analog-meter-shell > svg {
+        width: auto;
+        max-width: 100%;
+        height: 86px;
+        margin-inline: auto;
+      }
+
+      .top-meter-bank .analog-meter-shell {
+        display: grid;
+        min-height: 0;
+        grid-template-rows: minmax(0, 1fr) auto;
+        align-items: end;
+        overflow: hidden;
+        border-radius: 3px;
+        background: #050b0f;
+      }
+
+      .top-meter-side {
+        min-height: 0;
+        padding: 0;
+        border-radius: 3px;
+      }
+
+      .top-meter-bank .aux-meter-row {
+        min-height: 0;
+        align-items: stretch;
+      }
+
+      .meter-dBm-row .instrument-primary-readout,
+      .top-meter-bank .aux-meter-val {
+        font-size: 12px;
+      }
+
+      .band-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+
+      .panel-head,
+      .display-head {
+        min-height: 31px;
+        padding: 6px 8px;
+      }
+
+      .panel-body { padding: 7px 8px 8px; }
+
+      .mode-btn,
+      .band-btn {
+        min-height: 30px;
+        border-radius: 3px;
+      }
+
+      .display-card.scope-frame {
+        border-radius: 4px;
+        box-shadow: inset 0 1px rgba(255, 255, 255, 0.018);
+      }
+
+      .display-head,
+      .frequency-ruler {
+        background: #081118;
+      }
+
+      .display-zoom {
+        border-top-color: rgba(105, 158, 176, 0.12);
+        border-bottom-color: rgba(105, 158, 176, 0.12);
+      }
+
+      .spectrum-shell,
+      .waterfall-shell {
+        background-image:
+          linear-gradient(rgba(84, 130, 146, 0.06) 1px, transparent 1px),
+          linear-gradient(90deg, rgba(84, 130, 146, 0.05) 1px, transparent 1px);
+        background-size: 64px 48px;
+      }
+
+      .waterfall-shell {
+        background-color: #04325d;
+        background-blend-mode: soft-light;
+      }
+
+      /* Phase 14: keep the complete RX context and TX safety surface in view. */
+      .context-rail:not([data-active-context="tx"]) .audio-control-strip {
+        max-height: none;
+        overflow: visible;
+      }
+
+      .context-rail[data-active-context="rx"] .audio-control {
+        gap: 5px;
+        padding: 6px 0;
+      }
+
+      .context-rail[data-active-context="rx"] .audio-control-title {
+        min-height: 18px;
+      }
+
+      .context-rail[data-active-context="rx"] .audio-health-grid {
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 3px;
+      }
+
+      .context-rail[data-active-context="rx"] .audio-health-cell {
+        padding: 5px 4px;
+        border-radius: 3px;
+      }
+
+      .context-rail[data-active-context="rx"] .audio-health-label {
+        font-size: 7px;
+        letter-spacing: 0.06em;
+      }
+
+      .context-rail[data-active-context="rx"] .audio-health-value {
+        margin-top: 2px;
+        font-size: 9px;
+      }
+
+      .context-rail[data-active-context="rx"] .audio-buffer-meter {
+        height: 5px;
+      }
+
+      .context-rail[data-active-context="rx"] .nr-grid {
+        gap: 3px;
+      }
+
+      .context-rail[data-active-context="rx"] .nr-grid .mode-btn {
+        min-height: 27px;
+        padding-block: 4px;
+      }
+
+      .context-rail:not([data-active-context="tx"]) .right-rail [data-phone-panel="tx"] > .panel-body {
+        padding: 5px 6px 6px;
+      }
+
+      .context-rail:not([data-active-context="tx"]) .tx-zone {
+        gap: 5px;
+        margin-bottom: 0;
+        padding: 7px;
+      }
+
+      .context-rail:not([data-active-context="tx"]) .tx-arm-button {
+        min-height: 40px;
+      }
+
+      .context-rail:not([data-active-context="tx"]) .tx-arm-note {
+        display: none;
+      }
+
+      .context-rail:not([data-active-context="tx"]) .tx-action-row .tx-ptt-primary,
+      .context-rail:not([data-active-context="tx"]) .tx-mox-secondary {
+        min-height: 52px;
+        border-radius: 4px;
+      }
+
+      .context-rail:not([data-active-context="tx"]) .tx-meter-mini-grid {
+        gap: 4px;
+      }
+
+      .context-rail:not([data-active-context="tx"]) .tx-meter-mini {
+        padding: 4px 5px;
+        border-radius: 3px;
+      }
+
+      .context-rail:not([data-active-context="tx"]) .tx-meter-mini-label {
+        margin-bottom: 2px;
+        font-size: 7px;
+      }
+
+      .context-rail:not([data-active-context="tx"]) .tx-meter-mini-value {
+        font-size: 9px;
+      }
+
+      .context-rail:not([data-active-context="tx"]) .tx-meter-mini-bar {
+        height: 3px;
+        margin-top: 3px;
+      }
+    }
+
+    @media (max-width: 767px), (pointer: coarse) and (max-height: 599px) and (max-width: 1023px) {
+      :root[data-layout="phone"] .operator-state-strip {
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+      }
+
+      :root[data-layout="phone"] .operator-pill-value {
+        font-size: 8px;
+        letter-spacing: -0.015em;
+      }
+
+      :root[data-layout="phone"] .vfo-deck.primary-deck {
+        grid-template-areas:
+          "top"
+          "readout"
+          "sub";
+        grid-template-rows: 18px minmax(0, 1fr) 16px;
+        min-height: 104px;
+      }
+
+      :root[data-layout="phone"] .primary-deck .deck-top {
+        grid-area: top;
+        display: flex;
+        min-height: 18px;
+        align-items: center;
+      }
+
+      :root[data-layout="phone"] .primary-deck .deck-label {
+        color: var(--rx-cyan);
+        font: 750 9px/1 var(--font-instrument);
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+      }
+
+      :root[data-layout="phone"] .primary-deck #connection-summary { display: none; }
+      :root[data-layout="phone"] .primary-deck .vfo-readout-row { justify-content: center; }
+      :root[data-layout="phone"] .launch-grid { grid-template-columns: 1fr; }
+      :root[data-layout="phone"] .launch-grid .setup-anchor { display: contents; }
+      :root[data-layout="phone"] .launch-grid .setup-anchor > #setup-menu-btn { display: none; }
+    }
+
     @media (prefers-reduced-motion: reduce) {
       *,
       *::before,
@@ -5748,6 +6131,7 @@
         <button class="btn ghost shortcut-help-btn" id="shortcut-help-btn" type="button" aria-label="Show operator controls" title="Show operator controls">?</button>
         <button class="btn ghost" id="layout-btn" type="button">Phone: Off</button>
         <button class="btn ghost" id="theme-btn" type="button">Theme: Dark</button>
+        <button class="btn ghost" id="header-setup-btn" type="button" aria-label="Open Saturn Remote settings" aria-controls="setup-menu" aria-expanded="false" title="Settings">&#9881;</button>
       </div>
     </header>
 
@@ -5821,7 +6205,7 @@
         <div class="strip-grid">
           <div class="vfo-deck primary-deck">
             <div class="deck-top">
-              <span class="deck-label">Primary VFO</span>
+              <span class="deck-label">VFO A</span>
               <span class="status-chip ghost" id="connection-summary">Idle</span>
             </div>
             <div class="vfo-readout-row">
@@ -11371,7 +11755,8 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     function setSetupMenuOpen(open) {
       const menu = $("setup-menu");
       const button = $("setup-menu-btn");
-      if (!menu || !button) {
+      const headerButton = $("header-setup-btn");
+      if (!menu) {
         return;
       }
       const next = Boolean(open);
@@ -11379,12 +11764,13 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       const scrim = $("setup-scrim");
       if (scrim) scrim.hidden = !next;
       document.body.classList.toggle("setup-open", next);
-      button.setAttribute("aria-expanded", next ? "true" : "false");
+      button?.setAttribute("aria-expanded", next ? "true" : "false");
+      headerButton?.setAttribute("aria-expanded", next ? "true" : "false");
       if (next) {
         syncSetupMenuFields();
         requestAnimationFrame(() => $("setup-close-btn")?.focus({ preventScroll: true }));
       } else if (document.activeElement && menu.contains(document.activeElement)) {
-        button.focus({ preventScroll: true });
+        (headerButton || button)?.focus({ preventScroll: true });
       }
     }
 
@@ -16480,6 +16866,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         event.stopPropagation();
         toggleSetupMenu();
       });
+      $("header-setup-btn")?.addEventListener("click", () => setSetupMenuOpen(true));
       $("setup-close-btn").addEventListener("click", () => {
         setSetupMenuOpen(false);
       });

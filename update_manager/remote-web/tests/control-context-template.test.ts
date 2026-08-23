@@ -21,6 +21,14 @@ describe('responsive radio control context', () => {
     expect(template).toContain('applyControlContext(controlContext)');
   });
 
+  it('keeps the complete desktop RX context visible beside the TX safety surface', () => {
+    expect(template).toContain('Phase 14: keep the complete RX context and TX safety surface in view.');
+    expect(template).toContain('.context-rail:not([data-active-context="tx"]) .audio-control-strip');
+    expect(template).toContain('max-height: none;');
+    expect(template).toContain('.context-rail[data-active-context="rx"] .audio-health-grid');
+    expect(template).toContain('grid-template-columns: repeat(4, minmax(0, 1fr));');
+  });
+
   it('persists a separate UI context preference', () => {
     expect(template).toContain('saturn.remote.controlContext');
     expect(template).toContain('normalizeRadioControlContext(value)');

@@ -389,7 +389,7 @@ the desktop/tablet/phone operator workflows from the redesign specification.
 ## Implementation status (2026-08-22)
 
 The presentation refactor described above is now implemented on
-`feature/saturn-remote-responsive-redesign` through Phase 12. The bridge protocol, DSP,
+`feature/saturn-remote-responsive-redesign` through Phase 13. The bridge protocol, DSP,
 audio transport, state application, and TX command ownership remain on their existing paths.
 
 - Phases 2-3: semantic console tokens, wide/compact/tablet/phone layouts, compact status
@@ -410,8 +410,17 @@ audio transport, state application, and TX command ownership remain on their exi
 - Phases 11-12: desktop VFO and meter instrumentation is approximately 20% more compact,
   meter motion is less rigid, and the complete appliance console is constrained to a
   1920x1080 LCD viewport without hiding the waterfall or collapsed Operations drawer.
+- Phase 13: the supplied desktop and phone design references are reflected more directly
+  in the production shell: desktop status moves into the application header, VFO A and
+  the shared meter bank dominate the instrument deck, session/setup actions no longer
+  consume a meter column, band selection uses a four-column operator grid, and phone
+  keeps all eight safety states in a compact two-row strip with settings in the header.
+- Phase 14: the 1920x1080 RX context rail no longer clips common controls behind an
+  artificial short scroll region. RX volume and health, AGC/ANF, filter controls, and the
+  authoritative TX arm/PTT/MOX surface share the visible operating rail; the TX tab still
+  expands the complete transmit setup without creating a second command path.
 
-Automated acceptance currently passes 48 test files / 389 tests, TypeScript typechecking,
+Automated acceptance currently passes 48 test files / 393 tests, TypeScript typechecking,
 the 166-entry template/bundle seam check, the production build, and responsive Chromium
 geometry validation across phone portrait/landscape, tablet portrait/landscape, compact
 desktop, 1440 desktop, 1920 HD, and 2560 ultrawide, including representative drawer and

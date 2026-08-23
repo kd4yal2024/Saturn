@@ -43,4 +43,11 @@ describe('responsive panadapter workspace template', () => {
     expect(layoutValidator).toContain('lcdViewportOverflow');
     expect(layoutValidator).toContain('scenario.name === "desktop-hd"');
   });
+
+  it('uses the mockup-aligned premium desktop instrument hierarchy', () => {
+    expect(template).toContain('Phase 13: mockup-aligned premium desktop instrument deck.');
+    expect(template).toContain('grid-template-columns: minmax(410px, 0.76fr) minmax(700px, 1.24fr);');
+    expect(template).toContain('grid-template-columns: minmax(300px, 1.38fr) minmax(340px, 1fr);');
+    expect(template).toContain('.band-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }');
+  });
 });
