@@ -37,12 +37,18 @@ grep -Fq 'ensure_low_memory_build_capacity' "$BRIDGE_INSTALLER" \
 # shellcheck disable=SC2016
 grep -Fq 'cargo "${cargo_args[@]}" -j "$SATURN_BRIDGE_BUILD_JOBS"' "$BRIDGE_INSTALLER" \
   || fail "Saturn Bridge Cargo invocation does not enforce bounded jobs"
+# Boot enablement belongs to the transactional radio-owner helper. In P2 mode
+# it enables only P2app; in direct-XDMA mode it enables Saturn Bridge.
 # shellcheck disable=SC2016
-grep -Fq 'systemctl enable "$service_name"' "$BRIDGE_INSTALLER" \
-  || fail "Saturn Bridge installer does not enable the service"
+grep -Fq '"$SATURN_BRIDGE_BACKEND_SWITCH_HELPER" switch "$SATURN_BRIDGE_PRESERVED_BACKEND"' "$BRIDGE_INSTALLER" \
+  || fail "Saturn Bridge installer does not delegate startup policy to the backend transaction"
+# shellcheck disable=SC2016
+if grep -Fq 'systemctl enable "$service_name"' "$BRIDGE_INSTALLER"; then
+  fail "Saturn Bridge installer unconditionally enables the service instead of preserving backend startup policy"
+fi
 # shellcheck disable=SC2016
 grep -Fq 'systemctl restart "$service_name"' "$BRIDGE_INSTALLER" \
-  || fail "Saturn Bridge installer does not restart an already-running service after replacing its binary"
+  || fail "Saturn Bridge installer lacks the broker-unavailable restart fallback"
 # shellcheck disable=SC2016
 if grep -Fq 'systemctl enable --now "$(basename "$SATURN_BRIDGE_SERVICE")"' "$BRIDGE_INSTALLER"; then
   fail "Saturn Bridge installer can leave an already-running deleted executable active"
