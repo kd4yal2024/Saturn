@@ -18,6 +18,10 @@ service_state() {
   printf '%s/%s.active' "$MOCK_STATE" "$1"
 }
 
+service_enabled_state() {
+  printf '%s/%s.enabled' "$MOCK_STATE" "$1"
+}
+
 backend_from_dropin() {
   if [[ -f "$MOCK_BRIDGE_DROPIN" ]]; then
     sed -n 's/^Environment=SATURN_BRIDGE_RADIO_BACKEND=//p' \
@@ -32,6 +36,11 @@ case "${1:-}" in
     shift
     [[ "${1:-}" == "--quiet" ]] && shift
     [[ -f "$(service_state "$1")" ]]
+    ;;
+  is-enabled)
+    shift
+    [[ "${1:-}" == "--quiet" ]] && shift
+    [[ -f "$(service_enabled_state "$1")" ]]
     ;;
   show)
     printf 'SATURN_BRIDGE_RADIO_BACKEND=%s\n' "$(backend_from_dropin)"
@@ -51,6 +60,11 @@ case "${1:-}" in
       printf 'failed-start %s\n' "$service" >>"$MOCK_STATE/calls"
       exit 1
     fi
+    if [[ "$service" == "p2app.service" && -f "$MOCK_STATE/fail-p2-once" ]]; then
+      rm -f "$MOCK_STATE/fail-p2-once"
+      printf 'failed-start %s\n' "$service" >>"$MOCK_STATE/calls"
+      exit 1
+    fi
     : >"$(service_state "$service")"
     if [[ "$service" == "saturn-bridge.service" \
       && "$(backend_from_dropin)" == "xdma" \
@@ -60,6 +74,16 @@ case "${1:-}" in
         "$(date +%s%3N)" >"$MOCK_XDMA_READY_FILE"
     fi
     printf 'start %s\n' "$service" >>"$MOCK_STATE/calls"
+    ;;
+  enable)
+    service="$2"
+    : >"$(service_enabled_state "$service")"
+    printf 'enable %s\n' "$service" >>"$MOCK_STATE/calls"
+    ;;
+  disable)
+    service="$2"
+    rm -f "$(service_enabled_state "$service")"
+    printf 'disable %s\n' "$service" >>"$MOCK_STATE/calls"
     ;;
   daemon-reload)
     printf 'daemon-reload\n' >>"$MOCK_STATE/calls"
@@ -105,6 +129,8 @@ reset_fixture() {
   mkdir -p "$TMP_DIR/systemd" "$TMP_DIR/state" "$TMP_DIR/run" "$TMP_DIR/mock"
   : >"$TMP_DIR/mock/p2app.service.active"
   : >"$TMP_DIR/mock/saturn-bridge.service.active"
+  : >"$TMP_DIR/mock/p2app.service.enabled"
+  : >"$TMP_DIR/mock/saturn-bridge.service.enabled"
   : >"$TMP_DIR/mock/calls"
   write_config "$1"
 }
@@ -152,7 +178,8 @@ fi
 [[ -f "$TMP_DIR/mock/p2app.service.active" ]]
 [[ -f "$TMP_DIR/mock/saturn-bridge.service.active" ]]
 
-# P2 transaction persists only after both services are ready.
+# P2 transaction persists after P2app is ready and the browser bridge is
+# stopped and disabled for the next boot.
 run_helper switch p2 >/dev/null
 assert_state_backend p2
 grep -Fq 'Environment=SATURN_BRIDGE_RADIO_BACKEND=p2' \
@@ -163,8 +190,31 @@ if grep -Fq 'Conflicts=p2app.service' \
   exit 1
 fi
 [[ -f "$TMP_DIR/mock/p2app.service.active" ]]
-[[ -f "$TMP_DIR/mock/saturn-bridge.service.active" ]]
+[[ ! -f "$TMP_DIR/mock/saturn-bridge.service.active" ]]
+[[ -f "$TMP_DIR/mock/p2app.service.enabled" ]]
+[[ ! -f "$TMP_DIR/mock/saturn-bridge.service.enabled" ]]
 [[ ! -e "$TMP_DIR/run/transaction.json" ]]
+
+# In P2 mode the browser bridge can be stopped and started without touching
+# P2app, so Thetis remains connected to the radio owner.
+run_helper stop bridge >/dev/null
+[[ -f "$TMP_DIR/mock/p2app.service.active" ]]
+[[ ! -f "$TMP_DIR/mock/saturn-bridge.service.active" ]]
+run_helper status >"$TMP_DIR/p2-bridge-stopped-status.json"
+python3 - "$TMP_DIR/p2-bridge-stopped-status.json" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as handle:
+    status = json.load(handle)
+assert status["selected"] == "p2", status
+assert status["operational_status"] == "ready", status
+assert status["services"] == {"p2app": "active", "saturn_bridge": "inactive"}, status
+PY
+run_helper start bridge >/dev/null
+[[ -f "$TMP_DIR/mock/p2app.service.active" ]]
+[[ -f "$TMP_DIR/mock/saturn-bridge.service.active" ]]
+assert_state_backend p2
 
 # Fixture-enabled XDMA proves exclusive ownership and persistence.
 reset_fixture 1
@@ -174,6 +224,29 @@ grep -Fq 'Environment=SATURN_BRIDGE_RADIO_BACKEND=xdma' \
   "$TMP_DIR/systemd/saturn-bridge.service.d/20-radio-backend.conf"
 grep -Fq 'Conflicts=p2app.service' \
   "$TMP_DIR/systemd/saturn-bridge.service.d/20-radio-backend.conf"
+[[ ! -f "$TMP_DIR/mock/p2app.service.active" ]]
+[[ -f "$TMP_DIR/mock/saturn-bridge.service.active" ]]
+[[ ! -f "$TMP_DIR/mock/p2app.service.enabled" ]]
+[[ -f "$TMP_DIR/mock/saturn-bridge.service.enabled" ]]
+
+# In XDMA mode Saturn Bridge is the radio owner, so its dedicated control uses
+# the complete stopped-state and readiness transaction.
+run_helper stop bridge >/dev/null
+[[ ! -f "$TMP_DIR/mock/p2app.service.active" ]]
+[[ ! -f "$TMP_DIR/mock/saturn-bridge.service.active" ]]
+run_helper status >"$TMP_DIR/xdma-bridge-stopped-status.json"
+python3 - "$TMP_DIR/xdma-bridge-stopped-status.json" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as handle:
+    status = json.load(handle)
+assert status["selected"] == "xdma", status
+assert status["persisted_status"] == "stopped", status
+assert status["operational_status"] == "stopped", status
+PY
+run_helper start bridge >/dev/null
+assert_state_backend xdma
 [[ ! -f "$TMP_DIR/mock/p2app.service.active" ]]
 [[ -f "$TMP_DIR/mock/saturn-bridge.service.active" ]]
 
@@ -188,7 +261,9 @@ if grep -Fq 'Conflicts=p2app.service' \
   exit 1
 fi
 [[ -f "$TMP_DIR/mock/p2app.service.active" ]]
-[[ -f "$TMP_DIR/mock/saturn-bridge.service.active" ]]
+[[ ! -f "$TMP_DIR/mock/saturn-bridge.service.active" ]]
+[[ -f "$TMP_DIR/mock/p2app.service.enabled" ]]
+[[ ! -f "$TMP_DIR/mock/saturn-bridge.service.enabled" ]]
 [[ ! -e "$TMP_DIR/run/transaction.json" ]]
 
 # A bridge that starts but never proves a fresh RX stream is rolled back.
@@ -202,7 +277,7 @@ if run_helper switch xdma >"$TMP_DIR/readiness-rollback.log" 2>&1; then
 fi
 cmp "$TMP_DIR/original-state" "$TMP_DIR/state/radio-backend.json"
 [[ -f "$TMP_DIR/mock/p2app.service.active" ]]
-[[ -f "$TMP_DIR/mock/saturn-bridge.service.active" ]]
+[[ ! -f "$TMP_DIR/mock/saturn-bridge.service.active" ]]
 [[ ! -e "$TMP_DIR/run/transaction.json" ]]
 
 # A bridge start failure restores the prior service, drop-in, and state.
@@ -225,7 +300,7 @@ cmp "$TMP_DIR/original-dropin" \
   "$TMP_DIR/systemd/saturn-bridge.service.d/20-radio-backend.conf"
 cmp "$TMP_DIR/original-state" "$TMP_DIR/state/radio-backend.json"
 [[ -f "$TMP_DIR/mock/p2app.service.active" ]]
-[[ -f "$TMP_DIR/mock/saturn-bridge.service.active" ]]
+[[ ! -f "$TMP_DIR/mock/saturn-bridge.service.active" ]]
 [[ ! -e "$TMP_DIR/run/transaction.json" ]]
 
 # A failed return from XDMA to P2 restores exclusive XDMA ownership.
@@ -234,7 +309,7 @@ run_helper switch xdma >/dev/null
 cp "$TMP_DIR/systemd/saturn-bridge.service.d/20-radio-backend.conf" \
   "$TMP_DIR/original-dropin"
 cp "$TMP_DIR/state/radio-backend.json" "$TMP_DIR/original-state"
-: >"$TMP_DIR/mock/fail-bridge-once"
+: >"$TMP_DIR/mock/fail-p2-once"
 if run_helper switch p2 >"$TMP_DIR/p2-rollback.log" 2>&1; then
   printf 'failed P2 return was incorrectly accepted\n' >&2
   exit 1
@@ -257,7 +332,7 @@ if run_helper switch xdma >"$TMP_DIR/exclusion.log" 2>&1; then
 fi
 cmp "$TMP_DIR/original-state" "$TMP_DIR/state/radio-backend.json"
 [[ -f "$TMP_DIR/mock/p2app.service.active" ]]
-[[ -f "$TMP_DIR/mock/saturn-bridge.service.active" ]]
+[[ ! -f "$TMP_DIR/mock/saturn-bridge.service.active" ]]
 [[ ! -e "$TMP_DIR/run/transaction.json" ]]
 
 grep -Fq "\"\$SOURCE_DIR/scripts/\$SATURN_RADIO_BACKEND_SWITCH_NAME\"" "$INSTALLER"
@@ -266,6 +341,10 @@ grep -Fq "\${PRIVILEGED_SCRIPTS_DIR}/\${SATURN_RADIO_BACKEND_SWITCH_NAME} status
 grep -Fq "\${PRIVILEGED_SCRIPTS_DIR}/\${SATURN_RADIO_BACKEND_SWITCH_NAME} switch p2" \
   "$INSTALLER"
 grep -Fq "\${PRIVILEGED_SCRIPTS_DIR}/\${SATURN_RADIO_BACKEND_SWITCH_NAME} switch xdma" \
+  "$INSTALLER"
+grep -Fq "\${PRIVILEGED_SCRIPTS_DIR}/\${SATURN_RADIO_BACKEND_SWITCH_NAME} start bridge" \
+  "$INSTALLER"
+grep -Fq "\${PRIVILEGED_SCRIPTS_DIR}/\${SATURN_RADIO_BACKEND_SWITCH_NAME} stop bridge" \
   "$INSTALLER"
 if grep -Fq 'After=network-online.target p2app.service' \
   "$REPO_ROOT/update_manager/scripts/install-saturn-bridge.sh"; then

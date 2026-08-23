@@ -3,8 +3,8 @@
 //! This deliberately keeps the validated Phase 4/5 one-shot probes intact.
 //! The runtime owns a separate register descriptor and H2C0 descriptor, but
 //! shares their proven FIFO geometry, sample packing, register ordering, and
-//! fail-safe receive cleanup. Initial production enablement remains limited to
-//! the field-qualified primary PCB2 firmware 1.27 image and 3 W maximum.
+//! fail-safe receive cleanup. Production enablement remains limited to the
+//! field-qualified primary PCB2 firmware 1.27 image.
 
 use crate::radio_model::RadioModel;
 use crate::tx_thread::{TxRadio, TxRadioResult};
@@ -70,9 +70,9 @@ const DUC_FIFO_WRITE_HEADROOM_FRAMES: usize = 3;
 const XDMA_COMPLETION_RT_PRIORITY: i32 = 20;
 const DIRECT_TX_RT_PRIORITY: i32 = XDMA_COMPLETION_RT_PRIORITY + 1;
 const DMA_BUFFER_BYTES: usize = DUC_MAX_DMA_BATCH_FRAMES * DUC_FRAME_BYTES;
-const INITIAL_MAX_WATTS: u8 = 3;
-const REVERSE_POWER_TRIP_WATTS: f32 = 0.75;
-const FORWARD_POWER_TRIP_WATTS: f32 = 4.0;
+const DIRECT_TX_MAX_WATTS: u8 = 100;
+const REVERSE_POWER_TRIP_WATTS: f32 = 25.0;
+const FORWARD_POWER_TRIP_WATTS: f32 = 110.0;
 const SWR_TRIP: f32 = 3.0;
 const SWR_MIN_FORWARD_WATTS: f32 = 0.25;
 const DIRECT_TX_STARTUP_SETTLE_BLOCKS: usize = 4;
@@ -354,7 +354,7 @@ impl DirectTxState {
             |value| value | MOX_BIT,
             "could not assert production direct-XDMA MOX",
         )?;
-        let drive = tx_drive_watts_to_byte(model.desired.tx_drive.min(INITIAL_MAX_WATTS));
+        let drive = tx_drive_watts_to_byte(model.desired.tx_drive);
         self.registers
             .write_register(DAC_CONTROL_REGISTER, dac_control_word(drive))?;
         self.verify_keyed(model)?;
@@ -886,7 +886,7 @@ impl TxRadio for DirectXdmaTxRadio {
                 state.shutdown()
             } else if state.keyed {
                 state.apply_frequency_and_filter(model)?;
-                let drive = tx_drive_watts_to_byte(model.desired.tx_drive.min(INITIAL_MAX_WATTS));
+                let drive = tx_drive_watts_to_byte(model.desired.tx_drive);
                 state
                     .registers
                     .write_register(DAC_CONTROL_REGISTER, dac_control_word(drive))
@@ -1080,11 +1080,31 @@ fn alex_tx_filter_bits(frequency_hz: u32) -> u16 {
 }
 
 fn tx_drive_watts_to_byte(watts: u8) -> u8 {
-    let watts = f32::from(watts.min(INITIAL_MAX_WATTS));
+    let watts = f32::from(watts.min(DIRECT_TX_MAX_WATTS));
     if watts == 0.0 {
         return 0;
     }
-    ((watts / 5.0) * 18.0).round().clamp(1.0, 18.0) as u8
+    let curve = [
+        (0.0_f32, 0.0_f32),
+        (5.0, 18.0),
+        (10.0, 24.0),
+        (25.0, 34.0),
+        (50.0, 46.0),
+        (100.0, 68.0),
+    ];
+    let mut lower = curve[0];
+    let mut upper = curve[curve.len() - 1];
+    for window in curve.windows(2) {
+        if watts <= window[1].0 {
+            lower = window[0];
+            upper = window[1];
+            break;
+        }
+    }
+    let fraction = (watts - lower.0) / (upper.0 - lower.0);
+    (lower.1 + (upper.1 - lower.1) * fraction)
+        .round()
+        .clamp(1.0, 68.0) as u8
 }
 
 fn dac_control_word(level: u8) -> u32 {
@@ -1152,9 +1172,14 @@ mod tests {
     }
 
     #[test]
-    fn production_drive_is_clamped_to_three_watts() {
-        assert_eq!(tx_drive_watts_to_byte(3), tx_drive_watts_to_byte(100));
-        assert!(tx_drive_watts_to_byte(3) < 18);
+    fn production_drive_supports_the_full_power_curve() {
+        assert_eq!(tx_drive_watts_to_byte(0), 0);
+        assert_eq!(tx_drive_watts_to_byte(5), 18);
+        assert_eq!(tx_drive_watts_to_byte(10), 24);
+        assert_eq!(tx_drive_watts_to_byte(25), 34);
+        assert_eq!(tx_drive_watts_to_byte(50), 46);
+        assert_eq!(tx_drive_watts_to_byte(100), 68);
+        assert_eq!(tx_drive_watts_to_byte(u8::MAX), 68);
     }
 
     #[test]

@@ -24,6 +24,8 @@ TARGET_BACKEND=""
 PREVIOUS_BACKEND="p2"
 P2APP_WAS_ACTIVE=0
 BRIDGE_WAS_ACTIVE=0
+P2APP_WAS_ENABLED=0
+BRIDGE_WAS_ENABLED=0
 DROPIN_EXISTED=0
 STATE_EXISTED=0
 TRANSACTION_ACTIVE=0
@@ -42,7 +44,8 @@ Usage:
   saturn-radio-backend-switch-root.sh switch xdma
   saturn-radio-backend-switch-root.sh start p2
   saturn-radio-backend-switch-root.sh start xdma
-  saturn-radio-backend-switch-root.sh stop [p2|xdma]
+  saturn-radio-backend-switch-root.sh start bridge
+  saturn-radio-backend-switch-root.sh stop [p2|xdma|bridge]
 
 The selection is appliance-wide. P2 is the default and supports Protocol 2
 clients such as Thetis. XDMA is the direct RX/TX backend for TCI clients.
@@ -167,6 +170,19 @@ ensure_lock_directory() {
 
 service_is_active() {
   systemctl is-active --quiet "$1"
+}
+
+service_is_enabled() {
+  systemctl is-enabled --quiet "$1"
+}
+
+restore_service_enablement() {
+  local service="$1" was_enabled="$2"
+  if [[ "$was_enabled" == "1" ]]; then
+    systemctl enable "$service" >/dev/null 2>&1
+  else
+    systemctl disable "$service" >/dev/null 2>&1
+  fi
 }
 
 wait_for_service_state() {
@@ -379,15 +395,24 @@ wait_for_xdma_ready() {
 
 verify_target_ready() {
   local backend="$1" runtime_backend
-  wait_for_service_state "$BRIDGE_SERVICE" active
   runtime_backend="$(bridge_runtime_backend)"
   [[ "$runtime_backend" == "$backend" ]] \
     || die "$BRIDGE_SERVICE started with backend '$runtime_backend', expected '$backend'"
 
   if [[ "$backend" == "p2" ]]; then
     wait_for_service_state "$P2APP_SERVICE" active
+    wait_for_service_state "$BRIDGE_SERVICE" inactive
+    service_is_enabled "$P2APP_SERVICE" \
+      || die "$P2APP_SERVICE is active but not enabled for the next boot"
+    ! service_is_enabled "$BRIDGE_SERVICE" \
+      || die "$BRIDGE_SERVICE must be disabled for P2-only startup"
   else
+    wait_for_service_state "$BRIDGE_SERVICE" active
     wait_for_service_state "$P2APP_SERVICE" inactive
+    service_is_enabled "$BRIDGE_SERVICE" \
+      || die "$BRIDGE_SERVICE is not enabled for the selected XDMA backend"
+    ! service_is_enabled "$P2APP_SERVICE" \
+      || die "$P2APP_SERVICE must be disabled while XDMA owns the radio"
     wait_for_xdma_ready
   fi
 }
@@ -423,6 +448,10 @@ rollback() {
   else
     systemctl stop "$BRIDGE_SERVICE" >/dev/null 2>&1 || rollback_failed=1
   fi
+  restore_service_enablement "$P2APP_SERVICE" "$P2APP_WAS_ENABLED" \
+    || rollback_failed=1
+  restore_service_enablement "$BRIDGE_SERVICE" "$BRIDGE_WAS_ENABLED" \
+    || rollback_failed=1
 
   restore_file_snapshot "$STATE_EXISTED" "$ROLLBACK_DIR/state" "$STATE_FILE" \
     0750 || rollback_failed=1
@@ -448,6 +477,8 @@ prepare_transaction() {
   PREVIOUS_BACKEND="$(read_selected_backend)"
   service_is_active "$P2APP_SERVICE" && P2APP_WAS_ACTIVE=1
   service_is_active "$BRIDGE_SERVICE" && BRIDGE_WAS_ACTIVE=1
+  service_is_enabled "$P2APP_SERVICE" && P2APP_WAS_ENABLED=1
+  service_is_enabled "$BRIDGE_SERVICE" && BRIDGE_WAS_ENABLED=1
   if [[ -f "$BRIDGE_DROPIN" ]]; then
     DROPIN_EXISTED=1
     cp -p "$BRIDGE_DROPIN" "$ROLLBACK_DIR/bridge-dropin"
@@ -483,13 +514,16 @@ switch_backend() {
     wait_for_service_state "$P2APP_SERVICE" inactive
     write_bridge_dropin xdma
     systemctl daemon-reload
+    systemctl disable "$P2APP_SERVICE"
+    systemctl enable "$BRIDGE_SERVICE"
     systemctl start "$BRIDGE_SERVICE"
   else
     write_bridge_dropin p2
     systemctl daemon-reload
+    systemctl enable "$P2APP_SERVICE"
+    systemctl disable "$BRIDGE_SERVICE"
     systemctl start "$P2APP_SERVICE"
     wait_for_service_state "$P2APP_SERVICE" active
-    systemctl start "$BRIDGE_SERVICE"
   fi
 
   verify_target_ready "$TARGET_BACKEND"
@@ -528,11 +562,14 @@ stop_backend() {
     wait_for_service_state "$BRIDGE_SERVICE" inactive
     systemctl stop "$P2APP_SERVICE"
     wait_for_service_state "$P2APP_SERVICE" inactive
+    systemctl disable "$P2APP_SERVICE"
+    systemctl disable "$BRIDGE_SERVICE"
   else
     systemctl stop "$BRIDGE_SERVICE"
     wait_for_service_state "$BRIDGE_SERVICE" inactive
     systemctl stop "$P2APP_SERVICE"
     wait_for_service_state "$P2APP_SERVICE" inactive
+    systemctl disable "$BRIDGE_SERVICE"
   fi
 
   write_json_state "$STATE_FILE" "$TARGET_BACKEND" "$TARGET_BACKEND" "stopped"
@@ -542,6 +579,64 @@ stop_backend() {
   rm -rf "$ROLLBACK_DIR"
   ROLLBACK_DIR=""
   log "Backend '$TARGET_BACKEND' is stopped and remains selected"
+}
+
+start_bridge_service() {
+  local selected runtime_backend
+  selected="$(read_selected_backend)"
+  runtime_backend="$(bridge_runtime_backend)"
+
+  # In direct-XDMA mode the bridge is also the selected radio owner, so use
+  # the full transaction and readiness proof rather than starting the unit
+  # independently.
+  if [[ "$selected" == "xdma" ]]; then
+    TARGET_BACKEND="xdma"
+    switch_backend
+    return 0
+  fi
+
+  [[ "$selected" == "p2" ]] || die "unsupported selected backend: $selected"
+  [[ "$runtime_backend" == "p2" ]] \
+    || die "$BRIDGE_SERVICE is configured for backend '$runtime_backend', expected 'p2'"
+  service_is_active "$P2APP_SERVICE" \
+    || die "cannot start Saturn Bridge in P2 mode while $P2APP_SERVICE is inactive"
+
+  if service_is_active "$BRIDGE_SERVICE"; then
+    log "Saturn Bridge is already active in P2 mode"
+    return 0
+  fi
+
+  systemctl start "$BRIDGE_SERVICE"
+  wait_for_service_state "$BRIDGE_SERVICE" active
+  write_json_state "$STATE_FILE" "p2" "p2" "ready"
+  log "Saturn Bridge is active in P2 mode; $P2APP_SERVICE remains the radio owner"
+}
+
+stop_bridge_service() {
+  local selected runtime_backend
+  selected="$(read_selected_backend)"
+  runtime_backend="$(bridge_runtime_backend)"
+
+  # Stopping the bridge in direct-XDMA mode stops the selected radio owner and
+  # must persist the backend as stopped.
+  if [[ "$selected" == "xdma" ]]; then
+    TARGET_BACKEND="xdma"
+    stop_backend
+    return 0
+  fi
+
+  [[ "$selected" == "p2" ]] || die "unsupported selected backend: $selected"
+  [[ "$runtime_backend" == "p2" ]] \
+    || die "$BRIDGE_SERVICE is configured for backend '$runtime_backend', expected 'p2'"
+
+  if ! service_is_active "$BRIDGE_SERVICE"; then
+    log "Saturn Bridge is already inactive; $P2APP_SERVICE remains unchanged"
+    return 0
+  fi
+
+  systemctl stop "$BRIDGE_SERVICE"
+  wait_for_service_state "$BRIDGE_SERVICE" inactive
+  log "Saturn Bridge is stopped; $P2APP_SERVICE remains unchanged for Protocol 2 clients"
 }
 
 print_status() {
@@ -555,7 +650,7 @@ print_status() {
   runtime_backend="$(bridge_runtime_backend)"
   operational_status="degraded"
   if [[ "$selected" == "p2" && "$runtime_backend" == "p2" \
-      && "$p2_status" == "active" && "$bridge_status" == "active" ]]; then
+      && "$p2_status" == "active" ]]; then
     operational_status="ready"
   elif [[ "$selected" == "xdma" && "$runtime_backend" == "xdma" \
       && "$p2_status" == "inactive" && "$bridge_status" == "active" ]]; then
@@ -602,8 +697,15 @@ main() {
         return 2
       }
       ;;
-    switch|start)
+    switch)
       [[ $# == 2 && ("$2" == "p2" || "$2" == "xdma") ]] || {
+        usage >&2
+        return 2
+      }
+      TARGET_BACKEND="$2"
+      ;;
+    start)
+      [[ $# == 2 && ("$2" == "p2" || "$2" == "xdma" || "$2" == "bridge") ]] || {
         usage >&2
         return 2
       }
@@ -615,7 +717,7 @@ main() {
         return 2
       }
       if [[ $# == 2 ]]; then
-        [[ "$2" == "p2" || "$2" == "xdma" ]] || {
+        [[ "$2" == "p2" || "$2" == "xdma" || "$2" == "bridge" ]] || {
           usage >&2
           return 2
         }
@@ -648,7 +750,11 @@ main() {
   ensure_lock_directory
   exec 9>"$LOCK_FILE"
   flock -w 30 9 || die "timed out waiting for the radio ownership lock"
-  if [[ "$command" == "stop" ]]; then
+  if [[ "$command" == "start" && "$TARGET_BACKEND" == "bridge" ]]; then
+    start_bridge_service
+  elif [[ "$command" == "stop" && "$TARGET_BACKEND" == "bridge" ]]; then
+    stop_bridge_service
+  elif [[ "$command" == "stop" ]]; then
     stop_backend
   else
     switch_backend

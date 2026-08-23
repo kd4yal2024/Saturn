@@ -31,7 +31,7 @@ const MAX_COMMANDS_PER_LOOP: usize = 8;
 const IDLE_POLL: Duration = Duration::from_micros(250);
 const READINESS_PERIOD: Duration = Duration::from_secs(1);
 const STATUS_PERIOD: Duration = Duration::from_secs(5);
-const DIRECT_TX_MAX_WATTS: u8 = 3;
+const DIRECT_TX_MAX_WATTS: u8 = 100;
 const TX_UPLINK_TIMEOUT: Duration = Duration::from_millis(750);
 const TX_CONTROL_TIMEOUT: Duration = Duration::from_millis(1_500);
 

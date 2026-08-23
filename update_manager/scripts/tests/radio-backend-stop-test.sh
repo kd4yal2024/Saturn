@@ -14,6 +14,7 @@ mkdir -p \
   "$TEST_ROOT/services" \
   "$TEST_ROOT/state"
 touch "$TEST_ROOT/services/saturn-bridge.service"
+touch "$TEST_ROOT/services/saturn-bridge.service.enabled"
 
 cat >"$TEST_ROOT/bin/systemctl" <<'EOF'
 #!/usr/bin/env bash
@@ -22,6 +23,10 @@ case "${1:-}" in
   is-active)
     service="${3:-${2:-}}"
     [[ -f "$MOCK_SERVICE_STATE/$service" ]]
+    ;;
+  is-enabled)
+    service="${3:-${2:-}}"
+    [[ -f "$MOCK_SERVICE_STATE/$service.enabled" ]]
     ;;
   show)
     printf 'SATURN_BRIDGE_RADIO_BACKEND=xdma\n'
@@ -33,6 +38,14 @@ case "${1:-}" in
   start)
     shift
     for service in "$@"; do touch "$MOCK_SERVICE_STATE/$service"; done
+    ;;
+  enable)
+    shift
+    for service in "$@"; do touch "$MOCK_SERVICE_STATE/$service.enabled"; done
+    ;;
+  disable)
+    shift
+    for service in "$@"; do rm -f -- "$MOCK_SERVICE_STATE/$service.enabled"; done
     ;;
   daemon-reload)
     ;;

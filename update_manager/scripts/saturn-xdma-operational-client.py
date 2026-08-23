@@ -405,6 +405,7 @@ def run_acceptance(
     authorization: str | None = None,
     insecure_tls: bool = False,
     rf_tx_probe: bool = False,
+    rx_only: bool = False,
     tx_duration_ms: int = 2_500,
     tx_drive_watts: int = 3,
     tx_cycles: int = 1,
@@ -430,6 +431,7 @@ def run_acceptance(
     lanes = LaneStats()
     bridge_ready = False
     remote_tx_state_seen = False
+    remote_tx_rf_enabled: bool | None = None
     split_session = (
         parse_qs(urlparse(url).query).get("session", [""])[0] if media_url else ""
     )
@@ -445,14 +447,17 @@ def run_acceptance(
     control_role: str | None = None
 
     def handle_text(text: str) -> None:
-        nonlocal bridge_ready, remote_tx_state_seen, split_paired
+        nonlocal bridge_ready, remote_tx_state_seen, remote_tx_rf_enabled
+        nonlocal split_paired
         nonlocal retune_vfo, retune_dds, tx_release_confirmed
         nonlocal control_role
         bridge_ready = bridge_ready or "ready;" in text
-        expected_rf = "true" if rf_tx_probe else "false"
-        remote_tx_state_seen = remote_tx_state_seen or (
-            f"remote_tx_rf_enabled:0,{expected_rf};" in text
-        )
+        if "remote_tx_rf_enabled:0,true;" in text:
+            remote_tx_rf_enabled = True
+            remote_tx_state_seen = True
+        elif "remote_tx_rf_enabled:0,false;" in text:
+            remote_tx_rf_enabled = False
+            remote_tx_state_seen = True
         if split_session and f"session_paired:{split_session};" in text:
             split_paired = True
         reported_role = parse_remote_client_role(text)
@@ -605,9 +610,11 @@ def run_acceptance(
         peak_reverse_watts = 0.0
         peak_swr = 1.0
         rf_tx_exercised = False
-        after_tx_request = True
+        after_tx_request = not rx_only
 
-        if rf_tx_probe:
+        if rx_only:
+            control.send_text("iq_stop:0;audio_stop:0;")
+        elif rf_tx_probe:
             control.send_text(
                 f"tx_drive:0,{tx_drive_watts};"
                 "tx_mic_gain:0,0.0;"
@@ -799,15 +806,18 @@ def run_acceptance(
         "control_role": control_role,
         "control_text_messages": lanes.control_text_messages,
         "media_binary_messages": lanes.media_binary_messages,
-        "remote_tx_rf_enabled": rf_tx_probe,
+        "remote_tx_rf_enabled": remote_tx_rf_enabled,
+        "rx_only": rx_only,
         "tx_release_confirmed": tx_release_confirmed,
         "rf_inhibited_duc_exercised": rf_inhibited_duc_exercised,
         "rf_tx_exercised": rf_tx_exercised,
         "tx_keyed_observed": tx_keyed_observed,
         "tx_duration_ms": tx_duration_ms if rf_tx_probe else 0,
         "tx_drive_watts": tx_drive_watts if rf_tx_probe else 0,
-        "tx_cycles_requested": tx_cycles,
-        "tx_cycles_completed": tx_cycles_completed if not rf_tx_probe else 1,
+        "tx_cycles_requested": 0 if rx_only else tx_cycles,
+        "tx_cycles_completed": (
+            0 if rx_only else tx_cycles_completed if not rf_tx_probe else 1
+        ),
         "tx_cycle_results": tx_cycle_results,
         "peak_forward_watts": peak_forward_watts,
         "peak_reverse_watts": peak_reverse_watts,
@@ -878,6 +888,7 @@ def main() -> int:
     parser.add_argument("--basic-auth-systemd-unit")
     parser.add_argument("--insecure-tls", action="store_true")
     parser.add_argument("--rf-tx-probe", action="store_true")
+    parser.add_argument("--rx-only", action="store_true")
     parser.add_argument("--tx-duration-ms", type=int, default=2_500)
     parser.add_argument("--tx-drive-watts", type=int, default=3)
     parser.add_argument("--tx-cycles", type=int, default=1)
@@ -892,6 +903,8 @@ def main() -> int:
         parser.error("--retune-hz must be between 100 kHz and 61.44 MHz")
     if args.rf_tx_probe and args.retune_hz != 7_200_000:
         parser.error("--rf-tx-probe is locked to 7.200 MHz")
+    if args.rf_tx_probe and args.rx_only:
+        parser.error("--rf-tx-probe and --rx-only are mutually exclusive")
     if args.rf_tx_probe and not 500 <= args.tx_duration_ms <= 3_000:
         parser.error("--rf-tx-probe duration must be 500..3000 ms")
     if args.rf_tx_probe and args.tx_drive_watts != 3:
@@ -929,6 +942,7 @@ def main() -> int:
             authorization=authorization,
             insecure_tls=args.insecure_tls,
             rf_tx_probe=args.rf_tx_probe,
+            rx_only=args.rx_only,
             tx_duration_ms=args.tx_duration_ms,
             tx_drive_watts=args.tx_drive_watts,
             tx_cycles=args.tx_cycles,

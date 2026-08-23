@@ -28,13 +28,13 @@ output="$("$TMP_DIR/Saturn checkout/install.sh" --dry-run --user "$TEST_USER")"
 grep -Fq "repository: $TMP_DIR/Saturn checkout" <<<"$output"
 
 # Canonical provisioning installs Saturn Go before Saturn Bridge. The nested
-# installer must defer readiness, preserve the outer Bridge requirement in the
-# service environment, and the orchestrator must perform the exact-commit
+# installer must defer readiness, keep the operator-controlled Bridge out of
+# process readiness, and the orchestrator must perform the exact-commit
 # readiness check after installing Bridge.
 PROVISIONER="$REPO_ROOT/provision/cloud-init/provision-saturn.sh"
 MANAGER_INSTALLER="$REPO_ROOT/update_manager/install_saturn_go_nginx.sh"
 grep -Fq 'SATURN_DEFER_FINAL_READINESS=1' "$PROVISIONER"
-grep -Fq "SATURN_READY_REQUIRE_BRIDGE=\"\$SATURN_REQUIRE_SATURN_BRIDGE\"" "$PROVISIONER"
+grep -Fq 'SATURN_READY_REQUIRE_BRIDGE=0' "$PROVISIONER"
 grep -Fq 'verify_saturn_go_target_readiness' "$PROVISIONER"
 grep -Fq "Environment=SATURN_READY_REQUIRE_BRIDGE=\${SATURN_READY_REQUIRE_BRIDGE}" "$MANAGER_INSTALLER"
 grep -Fq "if env_flag_enabled \"\$SATURN_DEFER_FINAL_READINESS\"" "$MANAGER_INSTALLER"

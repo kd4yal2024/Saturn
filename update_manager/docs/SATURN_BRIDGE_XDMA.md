@@ -661,19 +661,25 @@ The first Phase 6 slice installs a root-owned transaction broker:
 
 Its `status` command is read-only. `switch p2` stops Saturn Bridge at the
 current receive-safe release boundary, applies an explicit P2 systemd
-environment drop-in, starts P2 before the bridge, verifies both services and
-the bridge runtime selection, and only then atomically persists
+environment drop-in, enables and starts P2app, and leaves Saturn Bridge
+disabled for P2-only startup. It verifies that service policy and the bridge
+runtime selection before atomically persisting
 `/var/lib/saturn-radio-backend/selection.json`. This state is kept in a
 root-owned directory that the Saturn Go service group can read but cannot
 modify.
 
 The transaction snapshots the prior service activity, bridge drop-in, and
 persistent selection. A start, readiness, or mutual-exclusion failure restores
-all three. The XDMA form first stops P2 and refuses to start the bridge if P2
-retains ownership. It then requires a fresh RX heartbeat with advancing DMA
+all three, including prior boot enablement. The XDMA form first stops and
+disables P2 and refuses to start the bridge if P2 retains ownership. It enables
+the bridge, then requires a fresh RX heartbeat with advancing DMA
 read and IQ-pair counters before persisting XDMA. Tests exercise successful
 transactions in both directions, a missing data-plane heartbeat, a failed
 bridge start, and a P2 service that refuses to stop.
+
+While P2 owns the radio, an operator may start Saturn Bridge on demand for a
+browser session. This start is intentionally transient: the bridge remains
+disabled at boot, so a reboot returns to the low-overhead P2app-only default.
 
 The XDMA-specific bridge drop-in also declares
 `Conflicts=p2app.service`. If an operator later starts P2 manually, systemd
@@ -830,14 +836,14 @@ state machine as the P2 transport. Its backend-specific output packs WDSP's
 192 kHz IQ as Q-then-I signed 24-bit big-endian samples and writes H2C0 with
 the proven Phase 4 FIFO geometry.
 
-The initial production envelope is intentionally narrow:
+The production envelope is:
 
 - primary Saturn PCB2 firmware 1.27 only
 - ANT1 with the same band-filter mapping as P2app
-- 3 W maximum direct-XDMA target
+- normal 1–100 W direct-XDMA target using the calibrated drive curve
 - PureSignal and RF-generating two-tone disabled
 - DUC FIFO prefill before MOX
-- immediate receive cleanup on DMA/FIFO/register error, SWR or reverse-power
+- immediate receive cleanup on DMA/FIFO/register error, forward-power, SWR, or reverse-power
   trip, operator disconnect, stale microphone, stale control, or process exit
 
 P2app is retained and remains the default owner for Thetis and other Protocol 2

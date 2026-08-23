@@ -79,9 +79,11 @@ Backend also enforces same-host checks when `Origin` or `Referer` is present.
 `/readyz` requires the running binary's embedded full Git commit to match the
 expected commit. The installer and root deployment broker always supply the
 staged commit explicitly. State writability, configuration parsing, free disk
-space, and the Saturn Bridge listener are required checks. P2 and XDMA state
-are reported but do not block an application deployment unless
-`SATURN_READY_REQUIRE_P2` is enabled.
+space are required checks. The Saturn Bridge listener is reported but the
+installer marks it optional because P2-only startup deliberately leaves that
+operator-controlled service stopped. P2 and XDMA state are also reported but
+do not block an application deployment unless `SATURN_READY_REQUIRE_P2` is
+enabled.
 
 ## Repo Root Management
 
@@ -209,15 +211,19 @@ passwordless `sudo -n`. SSE responses disable proxy buffering.
 | `/p23_perf` | `GET` | No | none | `{ "status":"ok", "perf": { collected_at_ms, system, process, network, xdma, workload, app_telemetry } }` |
 | `/p23_adc_telemetry` | `POST` | Yes | `{ "enabled": bool }` | ADC peak telemetry control/snapshot paths and effective enabled state |
 | `/radio_backend` | `GET` | No | none | Selected/runtime backend, persisted and operational status, P2/bridge service state, and mutual-exclusion result |
-| `/radio_backend` | `POST` | Yes | `{ "backend":"p2|xdma", "action":"switch|start|stop" }`; `action` defaults to `switch` | Transaction result and refreshed backend status |
+| `/radio_backend` | `POST` | Yes | `{ "backend":"p2|xdma|bridge", "action":"switch|start|stop" }`; `action` defaults to `switch`; `bridge` accepts only `start` or `stop` | Transaction result and refreshed backend/service status |
 | `/appliance_power` | `POST` | Yes | `{ "action":"poweroff", "confirmation":"POWER OFF" }` | HTTP 202 after the selected radio backend is stopped and a delayed systemd-owned G2 poweroff is scheduled |
 
 Notes:
 
 - `p23_status` is used by the `/telemetry` page status panel.
 - The overview page uses `/radio_backend` for exclusive P2/XDMA start and stop
-  controls. Starting either backend is a transactional ownership switch;
-  stopping preserves the selection so Start resumes the same backend.
+  plus independent Saturn Bridge control while P2 owns the radio. In direct
+  XDMA mode the bridge control uses the complete backend transaction because
+  Saturn Bridge is the FPGA owner. P2 selection enables only P2app at boot;
+  starting Bridge in P2 mode is an on-demand action that does not enable it for
+  the next boot. Starting either radio backend is a transactional ownership
+  switch; stopping preserves the selection so Start resumes the same backend.
 - `/appliance_power` refuses while maintenance operations are active, requires
   exact confirmation text, and does not schedule poweroff unless receive-safe
   radio shutdown succeeds first.

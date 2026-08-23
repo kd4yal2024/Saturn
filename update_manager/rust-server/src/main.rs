@@ -1653,12 +1653,12 @@ async fn set_radio_backend(
         .unwrap_or("switch")
         .trim()
         .to_ascii_lowercase();
-    if !matches!(backend.as_str(), "p2" | "xdma") {
+    if !matches!(backend.as_str(), "p2" | "xdma" | "bridge") {
         return (
             StatusCode::BAD_REQUEST,
             Json(serde_json::json!({
                 "status": "error",
-                "message": "backend must be p2 or xdma"
+                "message": "backend must be p2, xdma, or bridge"
             })),
         )
             .into_response();
@@ -1669,6 +1669,16 @@ async fn set_radio_backend(
             Json(serde_json::json!({
                 "status": "error",
                 "message": "action must be switch, start, or stop"
+            })),
+        )
+            .into_response();
+    }
+    if backend == "bridge" && action == "switch" {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "status": "error",
+                "message": "Saturn Bridge supports only start or stop"
             })),
         )
             .into_response();

@@ -283,8 +283,8 @@ write_bridge_unit(){
   cat >"$tmp" <<EOF
 [Unit]
 Description=Saturn Bridge (WDSP 2.00)
-After=network-online.target p2app.service
-Wants=network-online.target p2app.service
+After=network-online.target
+Wants=network-online.target
 
 [Service]
 Type=simple
@@ -294,6 +294,9 @@ WorkingDirectory=${SATURN_ROOT}
 ExecStart=${BRIDGE_BIN}
 Restart=on-failure
 RestartSec=2
+RuntimeDirectory=saturn-bridge
+RuntimeDirectoryMode=0750
+LimitRTPRIO=21
 NoNewPrivileges=yes
 PrivateTmp=yes
 ProtectSystem=strict
@@ -303,6 +306,7 @@ LockPersonality=yes
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 Environment=SATURN_BRIDGE_RADIO_HOST=127.0.0.1
 Environment=SATURN_BRIDGE_RADIO_PORT=1024
+Environment=SATURN_BRIDGE_RADIO_BACKEND=p2
 Environment=SATURN_BRIDGE_CLIENT_HOST=127.0.0.1
 Environment=SATURN_BRIDGE_CLIENT_PORT=12000
 Environment=SATURN_BRIDGE_TCI_HOST=127.0.0.1
@@ -394,14 +398,15 @@ done < <(find "$STAGE_DIR/scripts" -mindepth 1 -maxdepth 1 -type f | sort)
 
 systemctl daemon-reload
 if [[ -f "$STAGE_DIR/saturn-bridge" ]]; then
-  systemctl enable "$BRIDGE_SERVICE" >/dev/null
-  systemctl start "$BRIDGE_SERVICE"
-  systemctl is-active --quiet "$BRIDGE_SERVICE"
-  for _ in {1..20}; do
-    listener_owned_by_service "$BRIDGE_SERVICE" 50001 && break
-    sleep 1
-  done
-  listener_owned_by_service "$BRIDGE_SERVICE" 50001
+  if (( BRIDGE_WAS_ACTIVE )); then
+    systemctl start "$BRIDGE_SERVICE"
+    systemctl is-active --quiet "$BRIDGE_SERVICE"
+    for _ in {1..20}; do
+      listener_owned_by_service "$BRIDGE_SERVICE" 50001 && break
+      sleep 1
+    done
+    listener_owned_by_service "$BRIDGE_SERVICE" 50001
+  fi
 fi
 
 systemctl start "$SATURN_GO_SERVICE"

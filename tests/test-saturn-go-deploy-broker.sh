@@ -78,6 +78,11 @@ expect_rejected "$stage" "staged executable helper"
 # rewrite helper against both legacy and already-canonical redirect lines.
 # shellcheck disable=SC1090
 source "$BROKER"
+bridge_unit="$TMP_ROOT/saturn-bridge.service"
+write_bridge_unit "$bridge_unit"
+grep -Fxq 'RuntimeDirectory=saturn-bridge' "$bridge_unit"
+grep -Fxq 'RuntimeDirectoryMode=0750' "$bridge_unit"
+grep -Fxq 'LimitRTPRIO=21' "$bridge_unit"
 running_status="$(render_status_json "running" "Installing payload" "2026-07-30T18:00:00-04:00" "null")"
 success_status="$(render_status_json "success" "Installed payload" "2026-07-30T18:01:00-04:00" "0")"
 python3 - "$running_status" "$success_status" <<'PY'

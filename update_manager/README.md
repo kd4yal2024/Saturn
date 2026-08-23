@@ -29,8 +29,10 @@ service names still use `saturn-go` for compatibility with existing installs.
 - Startup repo-root selection canonicalizes configured and saved paths before
   Saturn repo validation
 - Overview is the default landing page (`/`, `overview.html`) with live system,
-  radio, network, deployment, p2app, bridge, and Tailscale status plus quick
-  links to common workflows
+  radio, network, deployment, p2app, bridge, and Tailscale status, guarded
+  start/stop controls for P2app, direct XDMA, and Saturn Bridge, plus quick
+  links to common workflows. P2 is the default boot owner: only P2app starts
+  automatically, while Saturn Bridge is started on demand from Overview.
 - Appliance Update policy panel (right side on desktop, below G2 terminal on narrow screens) stores GitHub repo URL + branch/ref + health-check values used by both Appliance Update and Run Update G2
 - Appliance Update health policy also supports retry count and initial startup
   delay so a good staged switch is less likely to roll back on a slow first
@@ -561,6 +563,9 @@ Default URL:
   and installing `saturn-bridge.service`
 - `SATURN_REQUIRE_BRIDGE` defaults to `SATURN_INSTALL_BRIDGE`; when enabled,
   native source/build failures fail the full installation
+- `SATURN_READY_REQUIRE_BRIDGE` defaults to `0`; Bridge state is reported by
+  `/readyz` and Overview but does not gate Saturn Go process readiness because
+  P2-only startup intentionally leaves Bridge stopped
 - `SATURN_BRIDGE_WDSP_FLAVOR` defaults to `wdsp2`; `pihpsdr` is the explicit
   legacy-library mode
 - `SATURN_WDSP2_REPO_URL` / `SATURN_WDSP2_REF` override the pinned TAPR WDSP

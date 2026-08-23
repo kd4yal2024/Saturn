@@ -667,7 +667,7 @@
               </div>
             </div>
             <div class="muted" style="margin-top:8px; font-size:12px;">
-              P2 remains the default for Thetis and other Protocol 2 clients. Direct XDMA is the Saturn Remote/TCI RX+TX path, initially limited to primary PCB2 firmware 1.27 and 3 W. Switching disconnects current radio clients and automatically rolls back if readiness fails.
+              P2 remains the default for Thetis and other Protocol 2 clients. Direct XDMA is the Saturn Remote/TCI RX+TX path for primary PCB2 firmware 1.27, with a normal 1–100 W target range and active power/SWR protection. Switching disconnects current radio clients and automatically rolls back if readiness fails.
             </div>
           </div>
           <div id="xdma-diag-dashboard" class="dashboard-grid" style="margin-top:14px;">
@@ -808,7 +808,7 @@ async function switchRadioBackend(backend){
   if (radioBackendBusy) return;
   const direct = backend === 'xdma';
   const prompt = direct
-    ? 'SWITCH RADIO OWNER TO DIRECT XDMA?\n\nThis stops P2app, disconnects Thetis/Protocol 2 clients, and starts the Saturn Remote/TCI RX+TX backend. Direct TX is initially capped at 3 W. The transaction rolls back if XDMA readiness fails.'
+    ? 'SWITCH RADIO OWNER TO DIRECT XDMA?\n\nThis stops P2app, disconnects Thetis/Protocol 2 clients, and starts the Saturn Remote/TCI RX+TX backend. Direct TX follows the selected 1–100 W target with active power/SWR protection. The transaction rolls back if XDMA readiness fails.'
     : 'SWITCH RADIO OWNER TO P2APP?\n\nThis safely stops direct XDMA, restores receive state, and starts P2app for Thetis/Protocol 2 clients.';
   if (!confirm(prompt)) return;
   setRadioBackendButtons(true);

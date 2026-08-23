@@ -418,11 +418,9 @@ WantedBy=multi-user.target
 EOF
   chmod 0644 "$SATURN_BRIDGE_SERVICE"
   systemctl daemon-reload
-  systemctl enable "$service_name"
-  # The binary is replaced in place above. `enable --now` does not restart an
-  # already-active unit, which would leave systemd running the deleted prior
-  # executable until the next reboot. Restart unconditionally so the runtime
-  # always matches the binary that this installer just verified and installed.
+  # The backend transaction owns both the active and boot-time service policy.
+  # P2 is deliberately P2app-only at boot; the browser bridge is started on
+  # demand. Direct XDMA instead enables the bridge and disables P2app.
   if [[ -x "$SATURN_BRIDGE_BACKEND_SWITCH_HELPER" ]]; then
     "$SATURN_BRIDGE_BACKEND_SWITCH_HELPER" switch "$SATURN_BRIDGE_PRESERVED_BACKEND"
     log "Reapplied preserved backend '$SATURN_BRIDGE_PRESERVED_BACKEND' through the transactional owner switch"
@@ -435,14 +433,6 @@ EOF
 verify_runtime() {
   local service_name environment runtime_backend="unknown"
   service_name="$(basename "$SATURN_BRIDGE_SERVICE")"
-  if ! systemctl is-active --quiet "$service_name"; then
-    systemctl --no-pager status "$service_name" || true
-    die "saturn-bridge service is not active after install"
-  fi
-  if command -v ss >/dev/null 2>&1 && ! ss -ltn | grep -q ':50001 '; then
-    systemctl --no-pager status "$service_name" || true
-    die "saturn-bridge is active but TCI port 127.0.0.1:50001 is not listening"
-  fi
   environment="$(systemctl show --property=Environment --value "$service_name")"
   case " $environment " in
     *" SATURN_BRIDGE_RADIO_BACKEND=xdma "*) runtime_backend="xdma" ;;
@@ -450,7 +440,25 @@ verify_runtime() {
   esac
   [[ "$runtime_backend" == "$SATURN_BRIDGE_PRESERVED_BACKEND" ]] \
     || die "saturn-bridge backend changed during install: preserved=$SATURN_BRIDGE_PRESERVED_BACKEND runtime=$runtime_backend"
-  log "saturn-bridge runtime check passed."
+  if [[ "$SATURN_BRIDGE_PRESERVED_BACKEND" == "p2" ]]; then
+    systemctl is-active --quiet p2app.service \
+      || die "p2app.service is not active after applying the P2 startup policy"
+    ! systemctl is-active --quiet "$service_name" \
+      || die "saturn-bridge must be stopped after applying the P2-only startup policy"
+    ! systemctl is-enabled --quiet "$service_name" \
+      || die "saturn-bridge must be disabled for P2-only startup"
+    log "saturn-bridge installation check passed; P2-only startup policy is active."
+  else
+    if ! systemctl is-active --quiet "$service_name"; then
+      systemctl --no-pager status "$service_name" || true
+      die "saturn-bridge service is not active after install"
+    fi
+    if command -v ss >/dev/null 2>&1 && ! ss -ltn | grep -q ':50001 '; then
+      systemctl --no-pager status "$service_name" || true
+      die "saturn-bridge is active but TCI port 127.0.0.1:50001 is not listening"
+    fi
+    log "saturn-bridge runtime check passed."
+  fi
 }
 
 main() {
