@@ -65,7 +65,7 @@ fingerprint_untracked="$(repository_source_fingerprint)"
 [[ "$fingerprint_dirty" != "$fingerprint_untracked" ]]
 
 radio_backend_status_is_ready <<'JSON'
-{"selected":"p2","runtime":"p2","services":{"p2app":"active","saturn_bridge":"active"},"mutual_exclusion_ok":true}
+{"selected":"p2","runtime":"p2","services":{"p2app":"active","saturn_bridge":"inactive"},"mutual_exclusion_ok":true}
 JSON
 radio_backend_status_is_ready <<'JSON'
 {"selected":"xdma","runtime":"xdma","services":{"p2app":"inactive","saturn_bridge":"active"},"mutual_exclusion_ok":true}
@@ -78,10 +78,27 @@ then
   exit 1
 fi
 if radio_backend_status_is_ready <<'JSON'
+{"selected":"p2","runtime":"p2","services":{"p2app":"active","saturn_bridge":"active"},"mutual_exclusion_ok":true}
+JSON
+then
+  printf 'P2 backend with the on-demand bridge still active unexpectedly passed startup verification\n' >&2
+  exit 1
+fi
+if radio_backend_status_is_ready <<'JSON'
 {"selected":"xdma","runtime":"xdma","services":{"p2app":"inactive","saturn_bridge":"inactive"},"mutual_exclusion_ok":true}
 JSON
 then
   printf 'inactive selected backend unexpectedly passed verification\n' >&2
+  exit 1
+fi
+radio_backend_enablement_is_ready p2 true false
+radio_backend_enablement_is_ready xdma false true
+if radio_backend_enablement_is_ready p2 true true; then
+  printf 'P2 startup policy unexpectedly accepted an enabled Saturn Bridge\n' >&2
+  exit 1
+fi
+if radio_backend_enablement_is_ready xdma true true; then
+  printf 'XDMA startup policy unexpectedly accepted enabled P2app\n' >&2
   exit 1
 fi
 # Restored for any later sourced provisioner helpers.

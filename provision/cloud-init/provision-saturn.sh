@@ -1766,7 +1766,6 @@ verify_install() {
     verify_file /opt/saturn-radio/bin/p2app "production P2 binary"
     verify_file /etc/systemd/system/p2app.service "P2 systemd unit"
     verify_file /usr/local/lib/saturn-go/scripts/saturn-p2-deploy.sh "trusted P2 deploy helper"
-    verify_enabled p2app.service
     if [[ -x /opt/saturn-radio/bin/p2app ]] \
         && [[ "$(stat -c '%U:%G' /opt/saturn-radio/bin/p2app)" != root:root ]]; then
       log "VERIFY FAIL: production P2 binary is not root-owned"
@@ -1800,7 +1799,6 @@ verify_install() {
   if bool_true "$SATURN_INSTALL_SATURN_BRIDGE"; then
     verify_file /opt/saturn-go/bin/saturn-bridge "Saturn Bridge binary"
     verify_file /etc/systemd/system/saturn-bridge.service "Saturn Bridge systemd unit"
-    verify_enabled saturn-bridge.service
   fi
 
   if [[ "$mode" == hardware ]]; then
@@ -1829,16 +1827,6 @@ verify_install() {
         failed=1
       }
     fi
-    if bool_true "$SATURN_INSTALL_SATURN_BRIDGE"; then
-      systemctl is-active --quiet saturn-bridge.service || {
-        log "VERIFY FAIL: saturn-bridge.service is not active"
-        failed=1
-      }
-      if command -v ss >/dev/null 2>&1 && ! ss -ltn | grep -q ':50001 '; then
-        log "VERIFY FAIL: Saturn Bridge TCI listener is unavailable"
-        failed=1
-      fi
-    fi
   fi
 
   (( failed == 0 )) || die "$mode installation verification failed"
@@ -1861,16 +1849,31 @@ try:
 except (AttributeError, json.JSONDecodeError, TypeError, ValueError):
     raise SystemExit(1)
 
-ready = exclusive and bridge == "active" and (
-    (selected == "p2" and runtime == "p2" and p2app == "active")
-    or (selected == "xdma" and runtime == "xdma" and p2app == "inactive")
+ready = exclusive and (
+    (selected == "p2" and runtime == "p2" and p2app == "active" and bridge == "inactive")
+    or (selected == "xdma" and runtime == "xdma" and p2app == "inactive" and bridge == "active")
 )
 raise SystemExit(0 if ready else 1)
 '
 }
 
+radio_backend_enablement_is_ready() {
+  local selected="$1" p2app_enabled="$2" bridge_enabled="$3"
+  case "$selected" in
+    p2)
+      [[ "$p2app_enabled" == true && "$bridge_enabled" == false ]]
+      ;;
+    xdma)
+      [[ "$p2app_enabled" == false && "$bridge_enabled" == true ]]
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
 verify_active_radio_backend() {
-  local helper status_json selected runtime
+  local helper status_json selected runtime p2app_enabled=false bridge_enabled=false
   helper="/usr/local/lib/saturn-go/scripts/saturn-radio-backend-switch-root.sh"
   if [[ ! -x "$helper" ]]; then
     helper="${SATURN_REPO_DIR}/update_manager/scripts/saturn-radio-backend-switch-root.sh"
@@ -1887,6 +1890,21 @@ verify_active_radio_backend() {
   runtime="$(python3 -c 'import json,sys; print(json.load(sys.stdin).get("runtime", "unknown"))' <<<"$status_json" 2>/dev/null || printf unknown)"
   if ! radio_backend_status_is_ready <<<"$status_json"; then
     log "VERIFY FAIL: radio backend selected=$selected runtime=$runtime"
+    return 1
+  fi
+  if systemctl is-enabled --quiet p2app.service; then
+    p2app_enabled=true
+  fi
+  if systemctl is-enabled --quiet saturn-bridge.service; then
+    bridge_enabled=true
+  fi
+  if ! radio_backend_enablement_is_ready "$selected" "$p2app_enabled" "$bridge_enabled"; then
+    log "VERIFY FAIL: backend startup policy selected=$selected p2app_enabled=$p2app_enabled bridge_enabled=$bridge_enabled"
+    return 1
+  fi
+  if [[ "$selected" == xdma ]] && command -v ss >/dev/null 2>&1 \
+      && ! ss -ltn | grep -q ':50001 '; then
+    log "VERIFY FAIL: Saturn Bridge TCI listener is unavailable for XDMA"
     return 1
   fi
   log "Verified active radio backend: selected=$selected runtime=$runtime"
