@@ -53,14 +53,19 @@ export interface AppState {
   mode: string;
   vfoA: number;
   vfoB: number;
+  activeVfo: 'A' | 'B';
+  splitEnabled: boolean;
   dds: number;
   rxAdc: number;
   rxAntenna: number;
+  rxAttenuationDb: number;
   sampleRate: number;
   streamMode: string;
 
   // ── RX DSP ──────────────────────────────────────────────────────────────
   rxVolumeDb: number;
+  rxSsqlEnabled: boolean;
+  rxSsqlThreshold: number;
   rxNoiseReductionMode: string;
   rxNoiseReductionLevel: number;
   rxNr2GainMethod: string;
@@ -144,7 +149,17 @@ export interface AppState {
   // ── Meters ──────────────────────────────────────────────────────────────
   meterDbm: number | null;
   txPower: number | null;
+  txReflectedPower: number | null;
   swr: number | null;
+  txAlcPeakDb: number | null;
+  txAlcAvgDb: number | null;
+  txAlcGainDb: number | null;
+  txCompPeakDb: number | null;
+  txCompAvgDb: number | null;
+  txMicPeakDb: number | null;
+  adcOverflowMask: number;
+  adc1Peak: number;
+  adc2Peak: number;
   bridgeRttMs: number | null;
   bridgeRttAt: number;
   backpressureSafetyP50Us: number;
@@ -272,6 +287,14 @@ export interface AppState {
   rxAudioJitterP95Ms: number;
   rxAudioJitterP99Ms: number;
   rxAudioJitterSummaryAt: number;
+  rxAudioScopeLeft: Float32Array;
+  rxAudioScopeRight: Float32Array;
+  rxAudioScopeLeftPeak: number;
+  rxAudioScopeRightPeak: number;
+  rxAudioScopeLeftPeakDbfs: number;
+  rxAudioScopeRightPeakDbfs: number;
+  rxAudioScopeCapturedAt: number;
+  rxAudioScopeRenderPending: boolean;
 
   // ── Frame Stats ─────────────────────────────────────────────────────────
   lastFrameAt: number;
@@ -349,13 +372,18 @@ export function createAppState(): AppState {
     mode: 'USB',
     vfoA: 14200000,
     vfoB: 14200000,
+    activeVfo: 'A',
+    splitEnabled: false,
     dds: 14200000,
     rxAdc: 0,
     rxAntenna: 1,
+    rxAttenuationDb: 0,
     sampleRate: 192000,
     streamMode: 'lan',
 
     rxVolumeDb: -10.0,
+    rxSsqlEnabled: false,
+    rxSsqlThreshold: 16,
     rxNoiseReductionMode: 'NR2',
     rxNoiseReductionLevel: 100,
     rxNr2GainMethod: 'GAMMA',
@@ -435,7 +463,17 @@ export function createAppState(): AppState {
 
     meterDbm: null,
     txPower: null,
+    txReflectedPower: null,
     swr: null,
+    txAlcPeakDb: null,
+    txAlcAvgDb: null,
+    txAlcGainDb: null,
+    txCompPeakDb: null,
+    txCompAvgDb: null,
+    txMicPeakDb: null,
+    adcOverflowMask: 0,
+    adc1Peak: 0,
+    adc2Peak: 0,
     bridgeRttMs: null,
     bridgeRttAt: 0,
     backpressureSafetyP50Us: 0,
@@ -560,6 +598,14 @@ export function createAppState(): AppState {
     rxAudioJitterP95Ms: 0,
     rxAudioJitterP99Ms: 0,
     rxAudioJitterSummaryAt: 0,
+    rxAudioScopeLeft: new Float32Array(256),
+    rxAudioScopeRight: new Float32Array(256),
+    rxAudioScopeLeftPeak: 0,
+    rxAudioScopeRightPeak: 0,
+    rxAudioScopeLeftPeakDbfs: -90,
+    rxAudioScopeRightPeakDbfs: -90,
+    rxAudioScopeCapturedAt: 0,
+    rxAudioScopeRenderPending: false,
 
     lastFrameAt: 0,
     frameCounter: 0,

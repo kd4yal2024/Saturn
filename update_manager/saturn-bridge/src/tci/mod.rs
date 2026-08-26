@@ -427,6 +427,15 @@ impl TciFrontend {
     pub fn publish_radio_state(&self, model: &RadioModel) {
         self.send_text(format!("vfo:0,0,{};", model.desired.vfo_a_hz));
         self.send_text(format!("vfo:0,1,{};", model.desired.vfo_b_hz));
+        self.send_text(format!(
+            "vfo_active:0,{};",
+            if model.desired.active_vfo == 0 {
+                "A"
+            } else {
+                "B"
+            }
+        ));
+        self.send_text(format!("split:0,{};", model.desired.split_enabled));
         self.send_text(format!("dds:0,{};", model.desired.iq_center_hz));
         self.send_text(format!("rx_adc:0,{};", model.desired.ddc0_adc));
         self.send_text(format!(
@@ -434,11 +443,20 @@ impl TciFrontend {
             model.desired.rx_antenna.max(1).min(3)
         ));
         self.send_text(format!(
+            "rx_attenuation:0,{};",
+            model.desired.rx_attenuation_db
+        ));
+        self.send_text(format!(
             "iq_samplerate:{};",
             model.desired.ddc0_sample_rate_khz as u32 * 1000
         ));
         self.send_text(format!("modulation:0,{};", model.desired.mode));
         self.send_text(format!("rx_volume:0,0,{:.1};", model.desired.rx_volume_db));
+        self.send_text(format!("rx_ssql:0,{};", model.desired.rx_ssql_enabled));
+        self.send_text(format!(
+            "rx_ssql_threshold:0,{:.0};",
+            model.desired.rx_ssql_threshold
+        ));
         self.send_text(format!(
             "rx_nr:0,{};",
             model.desired.rx_noise_reduction_mode != NoiseReductionMode::Off
@@ -638,6 +656,15 @@ impl TciFrontend {
     pub fn publish_tuning_state(&self, model: &RadioModel) {
         self.send_text(format!("vfo:0,0,{};", model.desired.vfo_a_hz));
         self.send_text(format!("vfo:0,1,{};", model.desired.vfo_b_hz));
+        self.send_text(format!(
+            "vfo_active:0,{};",
+            if model.desired.active_vfo == 0 {
+                "A"
+            } else {
+                "B"
+            }
+        ));
+        self.send_text(format!("split:0,{};", model.desired.split_enabled));
         self.send_text(format!("dds:0,{};", model.desired.iq_center_hz));
     }
 
@@ -695,10 +722,39 @@ impl TciFrontend {
             let rev_watts =
                 saturn_adc_to_watts(packet.reverse_power, 28, self.tx_power_meter_scale);
             self.send_text(format!("tx_power:0,{:.1};", fwd_watts));
+            self.send_text(format!("tx_reflected_power:0,{:.1};", rev_watts));
             self.send_text(format!(
                 "swr:0,{:.2};",
                 calculate_swr_watts(fwd_watts, rev_watts)
             ));
+        } else if let (Some(fwd_watts), Some(rev_watts), Some(swr)) = (
+            model.observed.tx_forward_watts,
+            model.observed.tx_reflected_watts,
+            model.observed.tx_swr,
+        ) {
+            self.send_text(format!("tx_power:0,{fwd_watts:.1};"));
+            self.send_text(format!("tx_reflected_power:0,{rev_watts:.1};"));
+            self.send_text(format!("swr:0,{swr:.2};"));
+        }
+        self.send_text(format!(
+            "adc_overload:0,{},{},{};",
+            model.observed.adc_overflows, model.observed.adc1_peak, model.observed.adc2_peak
+        ));
+        if let (Some(peak), Some(avg), Some(gain)) = (
+            model.observed.tx_alc_peak_db,
+            model.observed.tx_alc_avg_db,
+            model.observed.tx_alc_gain_db,
+        ) {
+            self.send_text(format!("tx_alc:0,{peak:.1},{avg:.1},{gain:.1};"));
+        }
+        if let (Some(peak), Some(avg)) = (
+            model.observed.tx_comp_peak_db,
+            model.observed.tx_comp_avg_db,
+        ) {
+            self.send_text(format!("tx_comp:0,{peak:.1},{avg:.1};"));
+        }
+        if let Some(peak) = model.observed.tx_mic_peak_db {
+            self.send_text(format!("tx_mic_peak:0,{peak:.1};"));
         }
         let drops = self.drop_count.swap(0, Ordering::Relaxed);
         if drops > 0 {

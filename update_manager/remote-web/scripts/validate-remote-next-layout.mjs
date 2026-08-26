@@ -41,7 +41,16 @@ const drawerScenarios = viewportScenarios.flatMap((scenario) => [
 const setupScenarios = viewportScenarios
   .filter((scenario) => ['phone-portrait', 'phone-landscape', 'tablet-portrait', 'desktop', 'desktop-hd'].includes(scenario.name))
   .map((scenario) => ({ ...scenario, name: `${scenario.name}-setup`, drawerOpen: false, setupOpen: true }));
-const allScenarios = [...drawerScenarios, ...setupScenarios];
+const operationsScenarios = viewportScenarios
+  .filter((scenario) => scenario.name === 'desktop-hd')
+  .map((scenario) => ({
+    ...scenario,
+    name: `${scenario.name}-operations-audio`,
+    drawerOpen: false,
+    setupOpen: false,
+    operationsAudioOpen: true,
+  }));
+const allScenarios = [...drawerScenarios, ...setupScenarios, ...operationsScenarios];
 const requestedScenarioNames = new Set(
   `${process.env.SATURN_LAYOUT_SCENARIOS || ''}`
     .split(',')
@@ -173,6 +182,25 @@ function validationScript(scenario) {
       setupPanelCount: panels.length === 7 ? [] : [{ expected: 7, actual: panels.length }]
     };
   }
+  function operationsAudioFailures() {
+    if (!scenario.operationsAudioOpen) return {};
+    const drawer = document.getElementById("operations-drawer");
+    const panel = document.getElementById("operations-panel-audio");
+    const close = document.getElementById("operations-audio-close-btn");
+    const closeRect = close ? rectFor(close) : null;
+    return {
+      operationsAudioMissing: [drawer ? "" : "operations-drawer", panel ? "" : "operations-panel-audio", close ? "" : "operations-audio-close-btn"].filter(Boolean),
+      operationsAudioHidden: [
+        drawer && visible(drawer) ? "" : "operations-drawer",
+        panel && visible(panel) ? "" : "operations-panel-audio",
+        close && visible(close) ? "" : "operations-audio-close-btn"
+      ].filter(Boolean),
+      operationsAudioCloseViewportOverflow: closeRect && (
+        closeRect.left < -1 || closeRect.top < -1 ||
+        closeRect.right > window.innerWidth + 1 || closeRect.bottom > window.innerHeight + 1
+      ) ? [{ id: "operations-audio-close-btn", rect: closeRect }] : []
+    };
+  }
   function displayWorkspaceFailures() {
     const stack = document.querySelector(".display-stack");
     const spectrum = document.getElementById("spectrum-shell");
@@ -253,7 +281,8 @@ function validationScript(scenario) {
         : [],
       ...displayWorkspaceFailures(),
       ...drawerFailures(),
-      ...setupFailures()
+      ...setupFailures(),
+      ...operationsAudioFailures()
     };
     const ok = Object.values(failures).every((value) => Array.isArray(value) && value.length === 0);
     const report = {
@@ -279,6 +308,12 @@ function validationScript(scenario) {
         menuRect: document.getElementById("setup-menu") ? rectFor(document.getElementById("setup-menu")) : null,
         tabCount: document.querySelectorAll("#setup-menu [data-setup-panel]").length,
         panelCount: document.querySelectorAll("#setup-menu [data-setup-panel-id]").length
+      },
+      operationsAudio: {
+        open: Boolean(scenario.operationsAudioOpen),
+        drawerRect: document.getElementById("operations-drawer") ? rectFor(document.getElementById("operations-drawer")) : null,
+        panelRect: document.getElementById("operations-panel-audio") ? rectFor(document.getElementById("operations-panel-audio")) : null,
+        closeRect: document.getElementById("operations-audio-close-btn") ? rectFor(document.getElementById("operations-audio-close-btn")) : null
       },
       displayWorkspace: {
         stackRect: document.querySelector(".display-stack") ? rectFor(document.querySelector(".display-stack")) : null,
@@ -311,6 +346,7 @@ function makeScenarioHtml(template, scenario) {
   document.documentElement.dataset.phoneWaterfall = "hidden";
   const drawerOpen = ${JSON.stringify(Boolean(scenario.drawerOpen))};
   const setupOpen = ${JSON.stringify(Boolean(scenario.setupOpen))};
+  const operationsAudioOpen = ${JSON.stringify(Boolean(scenario.operationsAudioOpen))};
   const values = {
     "operator-conn": ["warn", "Reconnecting 12", "Static validation state"],
     "operator-owner": ["warn", "Role pending", "Static validation state"],
@@ -444,6 +480,21 @@ function makeScenarioHtml(template, scenario) {
         ])
       ].forEach((group) => grid.appendChild(group));
     }
+  }
+  if (operationsAudioOpen) {
+    const drawer = document.getElementById("operations-drawer");
+    if (drawer) {
+      drawer.dataset.open = "true";
+      drawer.dataset.activePanel = "audio";
+    }
+    document.querySelectorAll(".operations-tab").forEach((button) => {
+      const active = button.dataset.operationsTarget === "audio";
+      button.setAttribute("aria-selected", active ? "true" : "false");
+      button.setAttribute("aria-expanded", active ? "true" : "false");
+    });
+    document.querySelectorAll("[data-operations-panel]").forEach((panel) => {
+      panel.hidden = panel.dataset.operationsPanel !== "audio";
+    });
   }
   if (setupOpen) {
     const menu = document.getElementById("setup-menu");

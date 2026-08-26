@@ -110,6 +110,7 @@ import {
   buildTxCodecCapsCommand,
 } from './tci/commands';
 import { prepareAudioForPlayback } from './audio/resample';
+import { buildAudioScopeSnapshot } from './audio/scope';
 import {
   audioFramesToMilliseconds,
   formatRxLatencyDiagnostic,
@@ -312,6 +313,7 @@ const api = {
   // Audio
   volumeAmplitudeFromDb,
   prepareAudioForPlayback,
+  buildAudioScopeSnapshot,
   audioFramesToMilliseconds,
   formatRxLatencyDiagnostic,
   rxAudioArrivalJitterMs,

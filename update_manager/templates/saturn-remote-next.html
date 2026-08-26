@@ -1986,6 +1986,17 @@
       background: var(--theme-status-ghost-bg);
     }
 
+    .status-chip[data-tone="fault"] {
+      color: #fff3f1;
+      border-color: rgba(255, 77, 69, 0.72);
+      background: rgba(255, 77, 69, 0.18);
+      box-shadow: 0 0 12px rgba(255, 77, 69, 0.18);
+    }
+
+    .status-chip[hidden] {
+      display: none !important;
+    }
+
     .launch-grid {
       display: grid;
       grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -5055,6 +5066,18 @@
       background: rgba(53, 209, 208, 0.1);
     }
 
+    .operations-close-button {
+      min-height: 34px;
+      margin-left: 4px;
+      padding: 5px 10px;
+      color: var(--text-secondary);
+      font-size: 10px;
+    }
+
+    .operations-drawer:not([data-open="true"]) .operations-close-button {
+      display: none;
+    }
+
     .operations-drawer-content {
       display: none;
       max-height: min(42vh, 420px);
@@ -5072,6 +5095,16 @@
       justify-content: space-between;
       gap: 12px;
       margin-bottom: 10px;
+    }
+    .operations-panel-heading {
+      min-width: 0;
+    }
+    .operations-panel-close {
+      flex: 0 0 auto;
+      min-height: 34px;
+      padding: 5px 10px;
+      color: var(--text-primary);
+      font-size: 10px;
     }
     .operations-panel-title {
       margin: 0;
@@ -5110,6 +5143,43 @@
     .operations-drawer .console-log .panel-head { padding: 0 0 10px; }
     .operations-drawer .console-log pre { max-height: min(34vh, 320px); }
     .console-stage > .console-log { display: none; }
+
+    @media (min-width: 768px) {
+      .operations-drawer[data-open="true"] {
+        position: fixed;
+        z-index: 110;
+        right: 8px;
+        bottom: 8px;
+        left: 8px;
+        display: grid;
+        max-height: min(52dvh, 540px);
+        grid-template-rows: auto minmax(0, 1fr);
+        box-shadow: 0 -18px 48px rgba(0, 0, 0, 0.62);
+      }
+
+      .operations-drawer[data-open="true"] .operations-drawer-nav {
+        position: relative;
+        z-index: 2;
+        flex: 0 0 auto;
+        border-bottom: 1px solid var(--border-subtle);
+        background: var(--bg-panel);
+      }
+
+      .operations-drawer[data-open="true"] .operations-drawer-content {
+        min-height: 0;
+        max-height: none;
+        overflow: auto;
+        border-top: 0;
+      }
+
+      .operations-drawer[data-open="true"] .operations-panel-head {
+        position: sticky;
+        z-index: 1;
+        top: -12px;
+        padding: 10px 0 8px;
+        background: var(--bg-panel);
+      }
+    }
 
     .mobile-control-dock { display: none; }
 
@@ -5239,7 +5309,6 @@
       :root[data-layout="phone"] .console-header .kicker { margin: 0; font-size: 9px; }
       .console-header #saturn-manage-home,
       .console-header #saturn-manage-monitor,
-      .console-header #layout-btn,
       .console-header #theme-btn { display: none; }
       .console-header .hero-actions,
       :root[data-layout="phone"] .hero-actions {
@@ -5249,6 +5318,13 @@
         gap: 4px;
       }
       :root[data-layout="phone"] .hero-actions > * { width: 42px; }
+      .console-header #layout-btn,
+      :root[data-layout="phone"] .console-header #layout-btn {
+        display: inline-flex;
+        width: auto;
+        min-width: 68px;
+        padding-inline: 8px;
+      }
 
       .operator-state-strip {
         order: 2;
@@ -5886,7 +5962,7 @@
       .top-meter-bank > .analog-meter-shell > svg {
         width: auto;
         max-width: 100%;
-        height: 108px;
+        height: 80px;
         margin-inline: auto;
       }
 
@@ -5905,6 +5981,15 @@
         overflow: hidden;
         border-radius: 3px;
         background: #050b0f;
+      }
+
+      .top-meter-bank > .analog-meter-shell {
+        grid-template-rows: minmax(0, 1fr) auto auto;
+      }
+
+      .top-meter-bank > .analog-meter-shell .instrument-rx-audio {
+        gap: 2px;
+        padding: 3px 5px 4px;
       }
 
       .top-meter-side {
@@ -6103,6 +6188,328 @@
       :root[data-layout="phone"] .launch-grid .setup-anchor > #setup-menu-btn { display: none; }
     }
 
+    .rx-audio-instrument {
+      display: grid;
+      grid-template-columns: minmax(280px, 1.35fr) minmax(260px, 1fr);
+      gap: 10px;
+      margin-bottom: 10px;
+      padding: 8px;
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-panel);
+      background: rgba(5, 9, 12, 0.58);
+    }
+
+    #rx-audio-scope {
+      display: block;
+      width: 100%;
+      height: 104px;
+      border-radius: var(--radius-control);
+      background: #05090c;
+    }
+
+    .rx-audio-meter-stack {
+      display: grid;
+      align-content: center;
+      gap: 8px;
+      min-width: 0;
+    }
+
+    .rx-audio-meter-row {
+      display: grid;
+      grid-template-columns: 16px minmax(0, 1fr) 68px;
+      gap: 6px;
+      align-items: center;
+    }
+
+    .rx-audio-channel,
+    .rx-audio-peak,
+    .rx-audio-scale {
+      color: var(--text-secondary);
+      font: 700 9px/1 var(--font-instrument);
+    }
+
+    .rx-audio-meter {
+      height: 10px;
+      overflow: hidden;
+      border: 1px solid var(--border-subtle);
+      border-radius: 2px;
+      background: linear-gradient(90deg, rgba(56, 208, 120, 0.08) 0 72%, rgba(240, 183, 46, 0.09) 72% 90%, rgba(255, 77, 69, 0.1) 90%);
+    }
+
+    .rx-audio-meter > span {
+      display: block;
+      width: 0;
+      height: 100%;
+      background: linear-gradient(90deg, var(--safe-green) 0 72%, var(--warning-amber) 72% 90%, var(--fault-red) 90%);
+      transition: width 70ms linear;
+    }
+
+    .rx-audio-peak { text-align: right; font-variant-numeric: tabular-nums; }
+    .rx-audio-scale {
+      display: flex;
+      justify-content: space-between;
+      padding-left: 22px;
+      color: var(--text-muted);
+      font-size: 7px;
+    }
+
+    .instrument-rx-audio {
+      display: none;
+      gap: 4px;
+      padding: 5px 7px 6px;
+      border-top: 1px solid var(--border-subtle);
+      background: rgba(5, 9, 12, 0.42);
+    }
+
+    .instrument-rx-audio .rx-audio-meter-row {
+      grid-template-columns: 14px minmax(46px, 1fr) 58px;
+      gap: 5px;
+    }
+
+    .instrument-rx-audio .rx-audio-meter {
+      height: 7px;
+    }
+
+    .instrument-rx-audio .rx-audio-channel,
+    .instrument-rx-audio .rx-audio-peak {
+      font-size: 8px;
+    }
+
+    .vfo-path-button {
+      min-height: 24px;
+      padding: 3px 8px;
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-control);
+      color: var(--rx-cyan);
+      background: rgba(53, 209, 208, 0.08);
+      font: 700 9px/1 var(--font-instrument);
+      letter-spacing: 0.06em;
+      white-space: nowrap;
+      cursor: pointer;
+    }
+
+    @media (min-width: 768px) {
+      .instrument-rx-audio {
+        display: grid;
+      }
+    }
+
+    /* Phase 15: operator-first VFO and quick-control refinements. */
+    .header-diagnostics {
+      position: relative;
+      z-index: 92;
+    }
+
+    .header-diagnostics > summary {
+      display: inline-flex;
+      align-items: center;
+      min-height: 30px;
+      list-style: none;
+      user-select: none;
+    }
+
+    .header-diagnostics > summary::-webkit-details-marker { display: none; }
+
+    .header-diagnostics-menu {
+      position: absolute;
+      top: calc(100% + 6px);
+      right: 0;
+      display: grid;
+      width: 178px;
+      gap: 5px;
+      padding: 7px;
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-panel);
+      background: rgba(8, 14, 18, 0.98);
+      box-shadow: 0 16px 38px rgba(0, 0, 0, 0.52);
+    }
+
+    .header-diagnostics-menu #static-wsdiag-marker,
+    .header-diagnostics-menu #static-wsdiag-btn,
+    .header-diagnostics-menu #static-wsdiag-copy-btn,
+    .header-diagnostics-menu #saturn-manage-home,
+    .header-diagnostics-menu #saturn-manage-monitor {
+      display: flex;
+      width: 100%;
+      box-sizing: border-box;
+      justify-content: center;
+    }
+
+    .header-diagnostics-menu #static-wsdiag-marker {
+      justify-content: flex-start;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .vfo-annunciator-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 5px;
+      margin: 3px 0 8px;
+    }
+
+    .vfo-annunciator {
+      min-height: 22px;
+      padding: 5px 7px;
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-control);
+      color: var(--text-muted);
+      background: rgba(5, 9, 12, 0.42);
+      font: 750 8px/1 var(--font-instrument);
+      letter-spacing: 0.09em;
+    }
+
+    .vfo-annunciator.active {
+      border-color: var(--border-active);
+      color: var(--rx-cyan);
+      background: rgba(53, 209, 208, 0.09);
+    }
+
+    .vfo-annunciator.unavailable {
+      color: var(--text-muted);
+      opacity: 0.68;
+    }
+
+    .mobile-radio-quickbar { display: none; }
+
+    #spectrum-average-toolbar-btn,
+    #spectrum-peak-toolbar-btn {
+      min-width: 62px;
+      font-family: var(--font-instrument);
+      font-size: 10px;
+    }
+
+    @media (min-width: 1280px) {
+      .strip-grid {
+        grid-template-columns: minmax(350px, 0.68fr) minmax(235px, 0.42fr) minmax(620px, 1.2fr);
+      }
+
+      .secondary-deck {
+        display: grid;
+        grid-template-rows: auto minmax(0, 1fr) auto auto;
+        min-height: 0;
+        padding: 8px 10px;
+        border: 0;
+        border-radius: var(--radius-panel);
+        box-shadow: none;
+      }
+
+      .secondary-deck .deck-top { margin-bottom: 2px; }
+      .secondary-deck .deck-frequency {
+        align-self: center;
+        margin: 2px 0;
+        font-size: clamp(24px, 1.8vw, 32px);
+        letter-spacing: 0.035em;
+      }
+      .secondary-deck .deck-subline {
+        gap: 4px;
+        font-size: 8px;
+      }
+      .secondary-deck .status-chip { padding: 3px 5px; font-size: 8px; }
+    }
+
+    /* Preserve the instrument hierarchy on the 1920x1080 Saturn LCD. */
+    @media (min-width: 1600px) and (min-height: 850px) and (max-height: 1200px) {
+      .command-strip > .panel-body {
+        height: 202px;
+      }
+
+      .strip-grid {
+        grid-template-columns: minmax(450px, 0.72fr) minmax(265px, 0.42fr) minmax(620px, 1.02fr);
+        gap: 6px;
+      }
+
+      .vfo-deck.primary-deck,
+      .vfo-deck.secondary-deck {
+        box-sizing: border-box;
+        height: 100%;
+        min-height: 0;
+      }
+
+      .primary-deck .deck-frequency {
+        font-size: clamp(42px, 2.5vw, 48px);
+      }
+
+      .secondary-deck {
+        grid-template-rows: 25px minmax(46px, 1fr) auto auto;
+        padding: 8px 12px;
+      }
+
+      .secondary-deck .deck-frequency {
+        margin: 3px 0;
+        font-size: clamp(31px, 1.8vw, 35px);
+      }
+
+      .secondary-deck .vfo-annunciator-row {
+        margin-block: 3px 6px;
+      }
+
+      .top-meter-bank {
+        grid-template-columns: minmax(310px, 1.32fr) minmax(330px, 1fr);
+      }
+
+      .top-meter-bank > .analog-meter-shell > svg {
+        height: 116px;
+      }
+
+      .top-meter-bank .aux-meter-row .analog-meter-shell > svg {
+        height: 110px;
+      }
+
+      .top-meter-bank > .analog-meter-shell .instrument-rx-audio {
+        padding-block: 2px 3px;
+      }
+
+      .instrument-rx-audio .rx-audio-meter-row {
+        grid-template-columns: 12px minmax(54px, 1fr) 54px;
+      }
+    }
+
+    @media (max-width: 767px), (pointer: coarse) and (max-height: 599px) and (max-width: 1023px) {
+      .header-diagnostics { display: none; }
+
+      .mobile-radio-quickbar {
+        position: fixed;
+        z-index: 79;
+        right: 10px;
+        bottom: calc(64px + env(safe-area-inset-bottom));
+        left: 10px;
+        display: grid;
+        grid-template-columns: repeat(5, minmax(0, 1fr));
+        gap: 3px;
+        padding: 4px;
+        border: 1px solid rgba(150, 190, 205, 0.18);
+        border-radius: 8px;
+        background: rgba(8, 14, 18, 0.96);
+        box-shadow: 0 -5px 20px rgba(0, 0, 0, 0.3);
+      }
+
+      .mobile-quick-button {
+        min-width: 0;
+        min-height: 44px;
+        padding: 6px 3px;
+        border: 1px solid var(--border-subtle);
+        border-radius: var(--radius-control);
+        color: var(--text-secondary);
+        background: var(--bg-control);
+        font: 750 9px/1 var(--font-instrument);
+        letter-spacing: 0.04em;
+      }
+
+      .mobile-quick-button.active {
+        border-color: var(--border-active);
+        color: var(--rx-cyan);
+        background: rgba(53, 209, 208, 0.11);
+      }
+
+      .page.console-page {
+        padding-bottom: calc(128px + env(safe-area-inset-bottom));
+      }
+
+      .rx-audio-instrument { grid-template-columns: 1fr; }
+    }
+
     @media (prefers-reduced-motion: reduce) {
       *,
       *::before,
@@ -6123,13 +6530,18 @@
         <h1>Saturn Remote</h1>
       </div>
       <div class="hero-actions">
-        <span class="status-chip ghost" id="static-wsdiag-marker">Diag loading</span>
-        <button class="btn ghost" id="static-wsdiag-btn" type="button">WS Probe</button>
-        <button class="btn ghost" id="static-wsdiag-copy-btn" type="button">Copy Log</button>
-        <a class="nav-link" id="saturn-manage-home" href="#" title="Open the Saturn Go management UI">Saturn Go</a>
-        <a class="nav-link" id="saturn-manage-monitor" href="#" title="Open system monitoring">Monitor</a>
+        <details class="header-diagnostics">
+          <summary class="btn ghost" aria-label="Open system and diagnostic tools">System</summary>
+          <div class="header-diagnostics-menu">
+            <span class="status-chip ghost" id="static-wsdiag-marker">Diag loading</span>
+            <button class="btn ghost" id="static-wsdiag-btn" type="button">WS Probe</button>
+            <button class="btn ghost" id="static-wsdiag-copy-btn" type="button">Copy Log</button>
+            <a class="nav-link" id="saturn-manage-home" href="#" title="Open the Saturn Go management UI">Saturn Go</a>
+            <a class="nav-link" id="saturn-manage-monitor" href="#" title="Open system monitoring">Monitor</a>
+          </div>
+        </details>
         <button class="btn ghost shortcut-help-btn" id="shortcut-help-btn" type="button" aria-label="Show operator controls" title="Show operator controls">?</button>
-        <button class="btn ghost" id="layout-btn" type="button">Phone: Off</button>
+        <button class="btn ghost" id="layout-btn" type="button">Phone</button>
         <button class="btn ghost" id="theme-btn" type="button">Theme: Dark</button>
         <button class="btn ghost" id="header-setup-btn" type="button" aria-label="Open Saturn Remote settings" aria-controls="setup-menu" aria-expanded="false" title="Settings">&#9881;</button>
       </div>
@@ -6205,7 +6617,7 @@
         <div class="strip-grid">
           <div class="vfo-deck primary-deck">
             <div class="deck-top">
-              <span class="deck-label">VFO A</span>
+              <span class="deck-label" id="active-vfo-label">VFO A</span>
               <span class="status-chip ghost" id="connection-summary">Idle</span>
             </div>
             <div class="vfo-readout-row">
@@ -6216,21 +6628,26 @@
               </span>
             </div>
             <div class="deck-subline">
-              <span id="path-summary">ADC1 • ANT1 • 192 kHz IQ</span>
+              <span><span id="path-summary">ADC1 • ANT1 • 192 kHz IQ</span> <button class="vfo-path-button" id="rx-att-quick-btn" type="button">ATT Off</button></span>
               <span>Center frequency / click-to-tune reference</span>
             </div>
           </div>
 
           <div class="vfo-deck secondary-deck">
             <div class="deck-top">
-              <span class="deck-label">Live Stream</span>
-              <span class="status-chip ghost" id="stream-label">IQ stopped</span>
+              <span class="deck-label">VFO B</span>
+              <span class="status-chip ghost" id="vfo-b-state">Standby</span>
             </div>
-            <div class="deck-frequency mono" id="vfo-b-readout" hidden>14.200.000</div>
+            <div class="deck-frequency mono" id="vfo-b-readout">14.200.000</div>
+            <div class="vfo-annunciator-row" aria-label="VFO operating state">
+              <button class="vfo-annunciator active" id="vfo-a-select-btn" type="button">A RX</button>
+              <button class="vfo-annunciator" id="vfo-b-select-btn" type="button">B</button>
+              <button class="vfo-annunciator" id="split-toggle-btn" type="button" aria-pressed="false">SPLIT OFF</button>
+            </div>
             <div class="deck-subline">
+              <span class="status-chip ghost" id="stream-label">IQ stopped</span>
               <span class="status-chip ghost" id="audio-label">Audio stopped</span>
               <span class="status-chip ghost"><span class="dot" id="conn-dot"></span><span id="conn-label">Disconnected</span></span>
-              <span>Primary VFO only</span>
             </div>
           </div>
 
@@ -6727,6 +7144,19 @@
                   <span class="meter-name">S-METER</span>
                   <span class="instrument-primary-readout" id="meter-s-readout">--</span>
                   <span class="mono small" id="meter-readout" style="color:#b08018;">-- dBm</span>
+                  <span class="status-chip" id="adc-overload-annunciator" data-tone="fault" hidden>OVF</span>
+                </div>
+                <div class="instrument-rx-audio" aria-label="Receiver audio stereo peak meters">
+                  <div class="rx-audio-meter-row">
+                    <span class="rx-audio-channel">L</span>
+                    <span class="rx-audio-meter"><span id="instrument-rx-audio-left-fill"></span></span>
+                    <span class="rx-audio-peak mono" id="instrument-rx-audio-left-peak">-- dBFS</span>
+                  </div>
+                  <div class="rx-audio-meter-row">
+                    <span class="rx-audio-channel">R</span>
+                    <span class="rx-audio-meter"><span id="instrument-rx-audio-right-fill"></span></span>
+                    <span class="rx-audio-peak mono" id="instrument-rx-audio-right-peak">-- dBFS</span>
+                  </div>
                 </div>
               </div>
 
@@ -6821,6 +7251,7 @@
                       <div class="tx-tool-bar" aria-hidden="true"><div class="tx-tool-bar-fill" id="instrument-mic-fill"></div></div>
                       <span id="instrument-mic-readout">IDLE</span>
                     </div>
+                    <div class="tx-tool-summary mono" id="tx-processing-readout">ALC -- | COMP -- | REF -- W</div>
                   </div>
                 </div>
               </div>
@@ -6871,6 +7302,11 @@
                 <span id="audio-buffer-fill"></span>
               </div>
             </div>
+            <div class="audio-control-title" style="margin-top:10px;">
+              <button class="btn eq-enable-btn" id="rx-ssql-btn" type="button">SQL Off</button>
+              <span class="mono small" id="rx-ssql-readout">SQL 16</span>
+            </div>
+            <input id="rx-ssql-threshold" type="range" min="0" max="100" step="1" value="16" aria-label="Squelch threshold" />
           </div>
 
           <div class="audio-control" data-control-context="rx">
@@ -6961,6 +7397,15 @@
                   <option value="3">ANT3</option>
                 </select>
               </div>
+              <div>
+                <label class="label" for="rx-attenuation">Attenuator</label>
+                <select class="field" id="rx-attenuation">
+                  <option value="0">ATT Off</option>
+                  <option value="10">10 dB</option>
+                  <option value="20">20 dB</option>
+                  <option value="30">30 dB</option>
+                </select>
+              </div>
             </div>
           </div>
         </div>
@@ -6977,6 +7422,7 @@
                 <div class="band-grid" id="band-grid">
                   <button class="band-btn" data-band="1840000" type="button">160m</button>
                   <button class="band-btn" data-band="3800000" type="button">80m</button>
+                  <button class="band-btn" data-band="5357500" type="button">60m</button>
                   <button class="band-btn" data-band="7150000" type="button">40m</button>
                   <button class="band-btn" data-band="10125000" type="button">30m</button>
                   <button class="band-btn" data-band="14200000" type="button">20m</button>
@@ -7042,6 +7488,8 @@
               <span class="display-pill mono" id="wbfm-stereo-pill" hidden>FM Mono</span>
               <span class="display-pill mono" id="sample-rate-readout">SPAN 192k</span>
               <span class="display-pill mono" id="zoom-toolbar-readout">ZOOM 1.0x</span>
+              <button class="btn eq-enable-btn" id="spectrum-average-toolbar-btn" type="button" title="Cycle spectrum averaging">AVG 1</button>
+              <button class="btn eq-enable-btn" id="spectrum-peak-toolbar-btn" type="button" aria-pressed="false" title="Toggle spectrum peak hold">PEAK OFF</button>
               <button class="btn eq-enable-btn" id="display-center-btn" type="button" title="Reset the display span">Center</button>
               <button class="btn eq-enable-btn" id="wake-lock-btn" type="button" style="font-size:11px;padding:4px 10px;">Stay Awake</button>
               <button class="btn eq-enable-btn" id="freq-lock-btn" type="button" style="font-size:11px;padding:4px 10px;">Lock</button>
@@ -7267,6 +7715,7 @@
         <button class="operations-tab" id="operations-tab-dsp" type="button" role="tab" data-operations-target="dsp" aria-selected="false" aria-controls="operations-panel-dsp">DSP</button>
         <button class="operations-tab" id="operations-tab-radio" type="button" role="tab" data-operations-target="radio" aria-selected="false" aria-controls="operations-panel-radio">Radio</button>
         <button class="operations-tab" id="operations-tab-log" type="button" role="tab" data-operations-target="log" aria-selected="false" aria-controls="operations-panel-log">Log</button>
+        <button class="btn ghost operations-close-button" id="operations-close-btn" type="button" aria-label="Close Operations drawer" onclick="collapseOperationsDrawer()">Close</button>
       </nav>
       <div class="operations-drawer-content" id="operations-drawer-content">
         <section class="operations-panel" id="operations-panel-memory" role="tabpanel" aria-labelledby="operations-tab-memory" data-operations-panel="memory" hidden>
@@ -7277,7 +7726,29 @@
           <div class="operations-memory-grid" id="operations-memory-grid"></div>
         </section>
         <section class="operations-panel" id="operations-panel-audio" role="tabpanel" aria-labelledby="operations-tab-audio" data-operations-panel="audio" hidden>
-          <div class="operations-panel-head"><h2 class="operations-panel-title">Audio Health</h2><span class="operations-panel-meta">RX path, buffer, and continuity</span></div>
+          <div class="operations-panel-head">
+            <div class="operations-panel-heading">
+              <h2 class="operations-panel-title">Audio Scope</h2>
+              <span class="operations-panel-meta">Decoded RX waveform, level, buffer, and continuity</span>
+            </div>
+            <button class="btn ghost operations-panel-close" id="operations-audio-close-btn" type="button" aria-label="Collapse Audio Scope" onclick="collapseOperationsDrawer('audio')">Collapse Scope</button>
+          </div>
+          <div class="rx-audio-instrument" aria-label="Receiver audio waveform and stereo peak meters">
+            <canvas id="rx-audio-scope" width="720" height="128" aria-label="Receiver audio waveform"></canvas>
+            <div class="rx-audio-meter-stack">
+              <div class="rx-audio-meter-row">
+                <span class="rx-audio-channel">L</span>
+                <span class="rx-audio-meter"><span id="rx-audio-left-fill"></span></span>
+                <span class="rx-audio-peak mono" id="rx-audio-left-peak">-- dBFS</span>
+              </div>
+              <div class="rx-audio-meter-row">
+                <span class="rx-audio-channel">R</span>
+                <span class="rx-audio-meter"><span id="rx-audio-right-fill"></span></span>
+                <span class="rx-audio-peak mono" id="rx-audio-right-peak">-- dBFS</span>
+              </div>
+              <div class="rx-audio-scale mono" aria-hidden="true"><span>-60</span><span>-30</span><span>-12</span><span>-6</span><span>0</span></div>
+            </div>
+          </div>
           <div class="operator-detail-grid" id="operations-audio-grid"></div>
         </section>
         <section class="operations-panel" id="operations-panel-network" role="tabpanel" aria-labelledby="operations-tab-network" data-operations-panel="network" hidden>
@@ -7303,6 +7774,13 @@
       <button class="mobile-dock-button" type="button" data-shell-target="dsp">DSP</button>
       <button class="mobile-dock-button" type="button" data-shell-target="more">More</button>
     </nav>
+    <div class="mobile-radio-quickbar" id="mobile-radio-quickbar" aria-label="Receiver quick controls">
+      <button class="mobile-quick-button" id="mobile-att-btn" type="button">ATT Off</button>
+      <button class="mobile-quick-button" id="mobile-nr-btn" type="button">NR Off</button>
+      <button class="mobile-quick-button" id="mobile-nb-btn" type="button">NB Off</button>
+      <button class="mobile-quick-button" id="mobile-anf-btn" type="button">ANF Off</button>
+      <button class="mobile-quick-button" id="mobile-filter-btn" type="button">FIL 3.0k</button>
+    </div>
   </div>
 
   <div class="frequency-entry-overlay" id="freq-entry-overlay" hidden>
@@ -9797,7 +10275,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         return;
       }
       const isPhone = state.layoutMode === "phone";
-      button.textContent = `Phone: ${isPhone ? "On" : "Off"}`;
+      button.textContent = isPhone ? "Desktop" : "Phone";
       button.className = isPhone ? "btn alt" : "btn ghost";
       button.setAttribute("aria-pressed", isPhone ? "true" : "false");
       button.title = isPhone ? "Switch to desktop layout" : "Switch to phone layout";
@@ -10227,6 +10705,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
             ],
           },
         ]);
+        requestAnimationFrame(renderRxAudioScope);
         return;
       }
       if (selection.target === "dsp") {
@@ -10243,6 +10722,98 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
             ],
           },
         ]);
+      }
+    }
+
+    function audioPeakPercent(dbfs) {
+      return Math.max(0, Math.min(100, ((Number(dbfs) + 60) / 60) * 100));
+    }
+
+    function updateRxAudioMeterElements() {
+      const setMeter = (fillId, readoutId, peak, dbfs) => {
+        const fill = $(fillId);
+        const readout = $(readoutId);
+        if (fill) fill.style.width = `${audioPeakPercent(dbfs).toFixed(1)}%`;
+        if (readout) {
+          readout.textContent = state.audioFramesPlayed ? `${dbfs.toFixed(1)} dBFS` : "-- dBFS";
+          readout.style.color = peak >= 0.98 ? "var(--fault-red)" : "";
+        }
+      };
+      setMeter("rx-audio-left-fill", "rx-audio-left-peak", state.rxAudioScopeLeftPeak, state.rxAudioScopeLeftPeakDbfs);
+      setMeter("rx-audio-right-fill", "rx-audio-right-peak", state.rxAudioScopeRightPeak, state.rxAudioScopeRightPeakDbfs);
+      setMeter("instrument-rx-audio-left-fill", "instrument-rx-audio-left-peak", state.rxAudioScopeLeftPeak, state.rxAudioScopeLeftPeakDbfs);
+      setMeter("instrument-rx-audio-right-fill", "instrument-rx-audio-right-peak", state.rxAudioScopeRightPeak, state.rxAudioScopeRightPeakDbfs);
+    }
+
+    function renderRxAudioScope() {
+      state.rxAudioScopeRenderPending = false;
+      updateRxAudioMeterElements();
+      const canvas = $("rx-audio-scope");
+      const panel = $("operations-panel-audio");
+      if (!canvas || !panel || panel.hidden) return;
+      const rect = canvas.getBoundingClientRect();
+      if (rect.width < 2 || rect.height < 2) return;
+      const dpr = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
+      const width = Math.max(2, Math.round(rect.width * dpr));
+      const height = Math.max(2, Math.round(rect.height * dpr));
+      if (canvas.width !== width || canvas.height !== height) {
+        canvas.width = width;
+        canvas.height = height;
+      }
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return;
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      const cssWidth = width / dpr;
+      const cssHeight = height / dpr;
+      ctx.clearRect(0, 0, cssWidth, cssHeight);
+      ctx.fillStyle = "#05090c";
+      ctx.fillRect(0, 0, cssWidth, cssHeight);
+      ctx.strokeStyle = "rgba(150, 190, 205, 0.12)";
+      ctx.lineWidth = 1;
+      for (let column = 1; column < 8; column += 1) {
+        const x = (cssWidth * column) / 8;
+        ctx.beginPath();
+        ctx.moveTo(x, 0);
+        ctx.lineTo(x, cssHeight);
+        ctx.stroke();
+      }
+      for (const y of [cssHeight * 0.25, cssHeight * 0.5, cssHeight * 0.75]) {
+        ctx.beginPath();
+        ctx.moveTo(0, y);
+        ctx.lineTo(cssWidth, y);
+        ctx.stroke();
+      }
+      const drawChannel = (samples, centerY, color) => {
+        if (!samples?.length) return;
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 1.25;
+        ctx.beginPath();
+        for (let index = 0; index < samples.length; index += 1) {
+          const x = samples.length > 1 ? (index / (samples.length - 1)) * cssWidth : 0;
+          const y = centerY - Math.max(-1, Math.min(1, samples[index] || 0)) * cssHeight * 0.2;
+          if (index === 0) ctx.moveTo(x, y);
+          else ctx.lineTo(x, y);
+        }
+        ctx.stroke();
+      };
+      drawChannel(state.rxAudioScopeLeft, cssHeight * 0.25, "#35d1d0");
+      drawChannel(state.rxAudioScopeRight, cssHeight * 0.75, "#41d88b");
+    }
+
+    function captureRxAudioScope(left, right, now = performance.now()) {
+      if (now - (state.rxAudioScopeCapturedAt || 0) < 66) return;
+      const snapshot = _next.buildAudioScopeSnapshot(left, right, 256);
+      state.rxAudioScopeLeft = snapshot.left;
+      state.rxAudioScopeRight = snapshot.right;
+      state.rxAudioScopeLeftPeak = snapshot.leftPeak;
+      state.rxAudioScopeRightPeak = snapshot.rightPeak;
+      state.rxAudioScopeLeftPeakDbfs = snapshot.leftPeakDbfs;
+      state.rxAudioScopeRightPeakDbfs = snapshot.rightPeakDbfs;
+      state.rxAudioScopeCapturedAt = now;
+      updateRxAudioMeterElements();
+      if (!state.rxAudioScopeRenderPending && !$("operations-panel-audio")?.hidden) {
+        state.rxAudioScopeRenderPending = true;
+        requestAnimationFrame(renderRxAudioScope);
       }
     }
 
@@ -10268,6 +10839,14 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         } catch {}
       }
       if (open) updateOperationsDrawer(true);
+    }
+
+    function collapseOperationsDrawer(target = null) {
+      const current = operationsDrawerSelectionFromDom();
+      applyOperationsDrawerSelection({
+        open: false,
+        target: normalizeOperationsDrawerTarget(target || current.target),
+      });
     }
 
     function initResponsiveShell() {
@@ -10304,6 +10883,16 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
           operationsTabs[nextIndex].focus();
         });
       });
+      $("operations-close-btn")?.addEventListener("click", () => {
+        collapseOperationsDrawer();
+      });
+      $("operations-audio-close-btn")?.addEventListener("click", () => {
+        collapseOperationsDrawer("audio");
+      });
+      document.addEventListener("keydown", (event) => {
+        if (event.key !== "Escape" || !operationsDrawerSelectionFromDom().open) return;
+        collapseOperationsDrawer();
+      });
 
       $("operations-memory-save-btn")?.addEventListener("click", () => {
         rememberCurrentBandSettings();
@@ -10333,6 +10922,22 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
           if (controlContext) applyControlContext(controlContext);
           revealShellPanel(document.querySelector(panelTargets[target] || ""));
         });
+      });
+
+      $("mobile-nr-btn")?.addEventListener("click", () => {
+        const modes = ["OFF", "NR1", "NR2", "NR3", "NR4"];
+        const next = modes[(Math.max(0, modes.indexOf(state.rxNoiseReductionMode)) + 1) % modes.length];
+        document.querySelector(`#rx-nr-grid .mode-btn[data-nr-mode="${next}"]`)?.click();
+      });
+      $("mobile-nb-btn")?.addEventListener("click", () => {
+        const modes = ["OFF", "NB1", "NB2"];
+        const next = modes[(Math.max(0, modes.indexOf(state.rxNbMode)) + 1) % modes.length];
+        document.querySelector(`#rx-nb-grid .mode-btn[data-nb-mode="${next}"]`)?.click();
+      });
+      $("mobile-anf-btn")?.addEventListener("click", () => $("rx-anf-btn")?.click());
+      $("mobile-filter-btn")?.addEventListener("click", () => {
+        applyControlContext("rx");
+        revealShellPanel(document.querySelector('[data-phone-panel="audio"]'));
       });
       bindDisplayWorkspaceResizer();
     }
@@ -10434,7 +11039,35 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       return HAM_BAND_EDGES_HZ.find((band) => hz >= band.start && hz <= band.end) || null;
     }
 
-    function vfoBandState(hz = state.vfoA) {
+    function activeVfoFrequency() {
+      return state.activeVfo === "B" ? state.vfoB : state.vfoA;
+    }
+
+    function txVfoFrequency() {
+      if (!state.splitEnabled) return activeVfoFrequency();
+      return state.activeVfo === "B" ? state.vfoA : state.vfoB;
+    }
+
+    function speechSquelchSupported() {
+      return ["USB", "LSB", "AM", "SAM", "DIGU", "DIGL"].includes(state.mode);
+    }
+
+    const RX_ATTENUATION_STEPS = [0, 10, 20, 30];
+
+    function setRxAttenuation(value, send = true) {
+      state.rxAttenuationDb = Math.max(0, Math.min(31, Math.round(Number(value) || 0)));
+      saveRadioPrefs();
+      updateUi();
+      if (send) sendTci(`rx_attenuation:0,${state.rxAttenuationDb};`);
+    }
+
+    function cycleRxAttenuation() {
+      const current = Math.max(0, Math.round(Number(state.rxAttenuationDb) || 0));
+      const next = RX_ATTENUATION_STEPS.find((value) => value > current) ?? RX_ATTENUATION_STEPS[0];
+      setRxAttenuation(next);
+    }
+
+    function vfoBandState(hz = activeVfoFrequency()) {
       const band = frequencyEntryBandForHz(Math.max(0, Math.round(Number(hz) || 0)));
       return {
         label: band ? band.label : "OOB",
@@ -10528,7 +11161,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         logEvent("Frequency entry blocked: VFO lock is on");
         return;
       }
-      freqEntryBuffer = normalizeFrequencyEntryText(seed == null ? frequencyEntrySeedFromHz(state.vfoA || state.dds) : seed);
+      freqEntryBuffer = normalizeFrequencyEntryText(seed == null ? frequencyEntrySeedFromHz(activeVfoFrequency() || state.dds) : seed);
       freqEntryUnit = inferFrequencyEntryUnit(freqEntryBuffer);
       freqEntryOobConfirmKey = "";
       updateFrequencyEntryPreview();
@@ -11280,7 +11913,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
 
     function currentBandMemoryEntry() {
       return {
-        frequency: state.vfoA || state.dds,
+        frequency: activeVfoFrequency() || state.dds,
         radioPrefs: state.txOpusOverrideEnabled === true
           ? txOpusLabCleanRadioPrefs(currentRadioPrefs())
           : currentRadioPrefs(),
@@ -11291,7 +11924,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
 
     function rememberCurrentBandSettings() {
       if (state.applyingBandMemory) return;
-      const key = bandKeyForFrequency(state.vfoA || state.dds);
+      const key = bandKeyForFrequency(activeVfoFrequency() || state.dds);
       if (!key) return;
       state.bandMemory[key] = currentBandMemoryEntry();
       try { localStorage.setItem(BAND_MEMORY_KEY, JSON.stringify(state.bandMemory)); }
@@ -12140,15 +12773,19 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
 
     function setFrequency(hz, syncBoth = false, options = {}) {
       const nextHz = Math.max(0, Math.round(hz));
+      const activeFrequency = state.activeVfo === "B" ? state.vfoB : state.vfoA;
+      const activeIndex = state.activeVfo === "B" ? 1 : 0;
       const shouldRememberBand = options.rememberBand !== false;
       const shouldSend = options.send !== false;
-      if (shouldRememberBand && bandKeyForFrequency(state.vfoA) !== bandKeyForFrequency(nextHz)) {
+      if (shouldRememberBand && bandKeyForFrequency(activeFrequency) !== bandKeyForFrequency(nextHz)) {
         rememberCurrentBandSettings();
       }
       shiftDisplayForCenterChange(nextHz);
-      state.vfoA = nextHz;
+      if (activeIndex === 0) state.vfoA = nextHz;
+      else state.vfoB = nextHz;
       state.dds = nextHz;
       if (syncBoth) {
+        state.vfoA = nextHz;
         state.vfoB = nextHz;
       }
       if (options.lightweight) {
@@ -12157,18 +12794,18 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         updateUi();
       }
       if (shouldSend) {
-        sendTci(`vfo:0,0,${nextHz};dds:0,${nextHz};${syncBoth ? `vfo:0,1,${nextHz};` : ""}`);
+        sendTci(`vfo:0,${activeIndex},${nextHz};dds:0,${nextHz};${syncBoth ? `vfo:0,${activeIndex === 0 ? 1 : 0},${nextHz};` : ""}`);
       }
     }
 
     function tuneBy(stepHz) {
-      setFrequency(state.vfoA + stepHz);
+      setFrequency((state.activeVfo === "B" ? state.vfoB : state.vfoA) + stepHz);
     }
 
     function sendPanadapterTuneNow(hz) {
       state.panadapterTunePendingHz = null;
       state.panadapterTuneLastSentAt = performance.now();
-      sendTci(`vfo:0,0,${hz};dds:0,${hz};`);
+      sendTci(`vfo:0,${state.activeVfo === "B" ? 1 : 0},${hz};dds:0,${hz};`);
     }
 
     function schedulePanadapterTuneSend(hz) {
@@ -12189,7 +12826,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
 
     function applyPanadapterTune(clientX, element, immediate = false) {
       const nextHz = snapTuneFrequencyHz(tunedFrequencyFromDisplayPoint(clientX, element));
-      if (nextHz === state.vfoA && !immediate) return nextHz;
+      if (nextHz === activeVfoFrequency() && !immediate) return nextHz;
       setFrequency(nextHz, false, { send: false, rememberBand: false, lightweight: true });
       if (immediate) {
         if (state.panadapterTuneTimer) { clearTimeout(state.panadapterTuneTimer); state.panadapterTuneTimer = null; }
@@ -12203,7 +12840,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     function tuneDigitByStep(stepHz, direction) {
       const magnitude = Math.max(1, Math.round(Number(stepHz)));
       const delta = magnitude * (direction >= 0 ? 1 : -1);
-      setFrequency(state.vfoA + delta);
+      setFrequency(activeVfoFrequency() + delta);
     }
 
     function setDisplayZoomValue(value, persist = true, fullRefresh = true) {
@@ -12247,7 +12884,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     function frequencyFromDisplayPoint(clientX, element) {
       const rect = element.getBoundingClientRect();
       if (!rect.width) {
-        return state.vfoA;
+        return activeVfoFrequency();
       }
       const normalized = (clientX - rect.left) / rect.width;
       const offsetHz = (normalized - 0.5) * displaySpanHz();
@@ -12446,6 +13083,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     // Lightweight update for panadapter drag tuning — avoids full updateUi()
     function updateTuneVisuals() {
       updateFrequencyReadout($("dds-readout"), state.dds);
+      $("active-vfo-label").textContent = `VFO ${state.activeVfo}`;
       updateFrequencyReadout($("operator-center-readout"), state.dds);
       updateAxes();
       updateFilterOverlay();
@@ -12943,7 +13581,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         {
           title: "Radio",
           items: [
-            operatorDetailItem("VFO A", formatFrequency(state.vfoA), band.band ? `${band.band.label} band` : "Out of band", band.state === "oob" ? "warn" : "ok"),
+            operatorDetailItem(`VFO ${state.activeVfo}`, formatFrequency(activeVfoFrequency()), band.band ? `${band.band.label} band` : "Out of band", band.state === "oob" ? "warn" : "ok"),
             operatorDetailItem("Mode", state.mode, `Sample rate ${Math.round(state.sampleRate / 1000)} kHz`, "rx"),
             operatorDetailItem("RX Filter", `${state.filterLow}-${state.filterHigh} Hz`, state.rxFilterShiftHz ? `Shift ${state.rxFilterShiftHz} Hz` : "No shift", "rx"),
             operatorDetailItem("Freq Lock", state.frequencyLock ? "On" : "Off", state.frequencyLock ? "QSY controls blocked" : "QSY controls available", state.frequencyLock ? "warn" : "ok"),
@@ -13297,7 +13935,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         : (state.txPhase === "armed" || state.moxRequested ? (txSource === "ptt" ? "PTT armed" : "Armed") : "RX");
       setOperatorPill("operator-rxtx-pill", "operator-rxtx-value", txLabel, txTone, state.txPhase);
 
-      const bandState = vfoBandState();
+      const bandState = vfoBandState(txVfoFrequency());
       const oob = bandState.state === "oob";
       const wfmRxOnly = state.mode === "WFM";
       const rfDisabled = bridgeRfDisabled();
@@ -13328,7 +13966,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         : (roleBlocked
           ? (state.remoteClientRole === "viewer" ? "Bridge assigned viewer role" : "Waiting for bridge role before TX")
         : (oob
-          ? `${formatFrequency(state.vfoA)} is outside the configured ham band plan`
+          ? `${formatFrequency(txVfoFrequency())} is outside the configured ham band plan`
           : (state.connected ? `Reconfirm: ${txLockReasonLabel(state.txLockReason)}` : "Connect before TX"))));
       setOperatorPill(
         "operator-rf-pill",
@@ -13431,7 +14069,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         sourceEl.hidden = !source;
         sourceEl.textContent = sourceLabel;
       }
-      $("tx-zone-frequency").textContent = `TX ${formatFrequency(state.vfoB || state.vfoA)} ${state.mode}`;
+      $("tx-zone-frequency").textContent = `TX ${formatFrequency(txVfoFrequency())} ${state.mode}`;
       const power = state.txMeterMode === "avg" ? state.txPowerAvg : state.txPowerPeak;
       $("tx-zone-power-value").textContent = power == null ? "-- W" : `${power.toFixed(1)} W`;
       $("tx-zone-swr-value").textContent = state.swrVisual == null ? "-- : 1" : `${state.swrVisual.toFixed(2)} : 1`;
@@ -13555,10 +14193,26 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       const vfoInput = $("vfo-a-input");
       // Keep compatibility with layouts that expose the compact VFO input.
       if (vfoInput && document.activeElement !== vfoInput) {
-        vfoInput.value = formatFrequency(state.vfoA);
+        vfoInput.value = formatFrequency(activeVfoFrequency());
       }
       updateFrequencyReadout($("dds-readout"), state.dds);
       $("vfo-b-readout").textContent = formatFrequency(state.vfoB);
+      const vfoBState = $("vfo-b-state");
+      if (vfoBState) {
+        const txVfo = state.splitEnabled ? (state.activeVfo === "A" ? "B" : "A") : state.activeVfo;
+        vfoBState.textContent = state.splitEnabled && txVfo === "B" ? "TX" : (state.activeVfo === "B" ? "RX" : "Reference");
+        vfoBState.title = `VFO ${state.activeVfo} receives; VFO ${txVfo} transmits`;
+      }
+      const vfoASelect = $("vfo-a-select-btn");
+      const vfoBSelect = $("vfo-b-select-btn");
+      const splitToggle = $("split-toggle-btn");
+      vfoASelect.textContent = state.activeVfo === "A" ? "A RX" : (state.splitEnabled ? "A TX" : "A");
+      vfoBSelect.textContent = state.activeVfo === "B" ? "B RX" : (state.splitEnabled ? "B TX" : "B");
+      vfoASelect.classList.toggle("active", state.activeVfo === "A");
+      vfoBSelect.classList.toggle("active", state.activeVfo === "B");
+      splitToggle.textContent = state.splitEnabled ? "SPLIT ON" : "SPLIT OFF";
+      splitToggle.classList.toggle("active", state.splitEnabled);
+      splitToggle.setAttribute("aria-pressed", state.splitEnabled ? "true" : "false");
       updateFrequencyReadout($("operator-center-readout"), state.dds);
       $("mode-readout").textContent = state.mode;
       $("vfo-mode-tag").textContent = state.mode;
@@ -13588,7 +14242,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         bandTag.dataset.bandState = bandState.state;
         bandTag.title = bandState.band
           ? `${bandState.band.label} ${formatFrequency(bandState.band.start)}-${formatFrequency(bandState.band.end)}`
-          : `${formatFrequency(state.vfoA)} is outside the configured ham band plan`;
+          : `${formatFrequency(activeVfoFrequency())} is outside the configured ham band plan`;
       }
       const primaryDeck = document.querySelector(".primary-deck");
       if (primaryDeck) primaryDeck.dataset.bandState = bandState.state;
@@ -13597,7 +14251,8 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         ? `${safeFixed(visibleSpan / 1000000, 1, "1.0")}M`
         : `${Math.round(visibleSpan / 1000)}k`;
       $("sample-rate-readout").textContent = `SPAN ${visibleSpanLabel}`;
-      $("path-summary").textContent = `${adcLabel(state.rxAdc)} • ${antennaLabel(state.rxAntenna)} • ${Math.round(state.sampleRate / 1000)} kHz IQ`;
+      const attenuationLabel = state.rxAttenuationDb > 0 ? `ATT ${state.rxAttenuationDb} dB` : "ATT Off";
+      $("path-summary").textContent = `${adcLabel(state.rxAdc)} • ${antennaLabel(state.rxAntenna)} • ${attenuationLabel} • ${Math.round(state.sampleRate / 1000)} kHz IQ`;
       const wakeLockBtn = $("wake-lock-btn");
       if (wakeLockSupported()) {
         wakeLockBtn.disabled = false;
@@ -13614,6 +14269,12 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       $("freq-lock-btn").textContent = state.frequencyLock ? "Locked" : "Lock";
       $("freq-lock-btn").classList.toggle("active", state.frequencyLock);
       $("rx-volume-readout").textContent = `${safeFixed(state.rxVolumeDb, 1, "-10.0")} dB`;
+      const ssqlSupported = speechSquelchSupported();
+      $("rx-ssql-btn").textContent = ssqlSupported ? (state.rxSsqlEnabled ? "SQL On" : "SQL Off") : "SQL N/A";
+      $("rx-ssql-btn").disabled = !ssqlSupported;
+      $("rx-ssql-btn").classList.toggle("active", ssqlSupported && state.rxSsqlEnabled);
+      $("rx-ssql-threshold").disabled = !ssqlSupported;
+      $("rx-ssql-readout").textContent = `SQL ${Math.round(state.rxSsqlThreshold)}`;
       $("rx-nr-readout").textContent = noiseReductionLabel();
       $("rx-nb-threshold-readout").textContent = safeFixed(state.rxNbThreshold, 2, "0.00");
       $("rx-anf-btn").textContent = state.anfEnabled ? "ANF On" : "ANF Off";
@@ -13621,6 +14282,17 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       $("agc-gain-readout").textContent = `${state.agcGain}`;
       $("zoom-readout").textContent = `${safeFixed(state.displayZoom, 1, "1.0")}x`;
       $("zoom-toolbar-readout").textContent = `ZOOM ${safeFixed(state.displayZoom, 1, "1.0")}x`;
+      const averageToolbarButton = $("spectrum-average-toolbar-btn");
+      if (averageToolbarButton) {
+        averageToolbarButton.textContent = `AVG ${state.spectrumAverage}`;
+        averageToolbarButton.classList.toggle("active", state.spectrumAverage > 1);
+      }
+      const peakToolbarButton = $("spectrum-peak-toolbar-btn");
+      if (peakToolbarButton) {
+        peakToolbarButton.textContent = state.spectrumPeakHold ? "PEAK ON" : "PEAK OFF";
+        peakToolbarButton.classList.toggle("active", state.spectrumPeakHold);
+        peakToolbarButton.setAttribute("aria-pressed", state.spectrumPeakHold ? "true" : "false");
+      }
       $("filter-low-readout").textContent = wfmActive ? "Fixed" : `${state.filterLow} Hz`;
       $("filter-high-readout").textContent = wfmActive ? "180 kHz RF" : `${state.filterHigh} Hz`;
       $("tx-drive-readout").textContent = `${state.txDrive} W`;
@@ -13670,13 +14342,26 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       $("instrument-state-label").textContent = instrumentState === "tx"
         ? "Transmitting"
         : (instrumentState === "armed" ? "TX Armed" : "Receiving");
-      const instrumentFrequency = instrumentState === "rx" ? state.vfoA : (state.vfoB || state.vfoA);
+      const rxFrequency = state.activeVfo === "A" ? state.vfoA : state.vfoB;
+      const txFrequency = state.splitEnabled
+        ? (state.activeVfo === "A" ? state.vfoB : state.vfoA)
+        : rxFrequency;
+      const instrumentFrequency = instrumentState === "rx" ? rxFrequency : txFrequency;
       $("instrument-state-frequency").textContent = `${instrumentState === "rx" ? "RX" : "TX"} ${formatFrequency(instrumentFrequency)} ${state.mode}`;
       $("meter-readout").textContent = state.meterDbmVisual == null ? "-- dBm" : `${state.meterDbmVisual.toFixed(1)} dBm`;
       $("meter-s-readout").textContent = formatSignalStrength(state.meterDbmVisual);
       const txMeterValue = state.txMeterMode === "avg" ? state.txPowerAvg : state.txPowerPeak;
       $("tx-power-readout").textContent = txMeterValue == null ? "-- W" : `${txMeterValue.toFixed(1)} W`;
       $("swr-readout").textContent = state.swrVisual == null ? "-- : 1" : `${state.swrVisual.toFixed(2)} : 1`;
+      const alc = state.txAlcPeakDb == null ? "--" : `${state.txAlcPeakDb.toFixed(1)} dB`;
+      const comp = state.txCompPeakDb == null ? "--" : `${state.txCompPeakDb.toFixed(1)} dB`;
+      const reflected = state.txReflectedPower == null ? "--" : state.txReflectedPower.toFixed(1);
+      $("tx-processing-readout").textContent = `ALC ${alc} | COMP ${comp} | REF ${reflected} W`;
+      const overload = $("adc-overload-annunciator");
+      overload.hidden = state.adcOverflowMask === 0;
+      const overloadAdc = state.adcOverflowMask === 3 ? "ADC1+2" : (state.adcOverflowMask & 1 ? "ADC1" : "ADC2");
+      overload.textContent = state.adcOverflowMask === 0 ? "OVF" : `OVF ${overloadAdc}`;
+      overload.title = `ADC peaks ${state.adc1Peak}/${state.adc2Peak}`;
       updateTxToolDock();
       updateSmeter(state.meterDbmVisual, state.meterDbmPeak);
       updateTxPwrMeter(
@@ -13743,6 +14428,29 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       $("display-resolution").textContent += waterfallRenderEnabled()
         ? ` | W ${safeFixed(state.waterfallFloorDb, 0, "-200")}..${safeFixed(state.waterfallCeilingDb, 0, "-120")} dB`
         : " | W hidden";
+      const mobileNr = $("mobile-nr-btn");
+      if (mobileNr) {
+        mobileNr.textContent = state.rxNoiseReductionMode === "OFF" ? "NR Off" : state.rxNoiseReductionMode;
+        mobileNr.classList.toggle("active", state.rxNoiseReductionMode !== "OFF");
+        mobileNr.disabled = wfmActive;
+      }
+      const mobileNb = $("mobile-nb-btn");
+      if (mobileNb) {
+        mobileNb.textContent = state.rxNbMode === "OFF" ? "NB Off" : state.rxNbMode;
+        mobileNb.classList.toggle("active", state.rxNbMode !== "OFF");
+        mobileNb.disabled = wfmActive;
+      }
+      const mobileAnf = $("mobile-anf-btn");
+      if (mobileAnf) {
+        mobileAnf.textContent = state.anfEnabled ? "ANF On" : "ANF Off";
+        mobileAnf.classList.toggle("active", state.anfEnabled);
+        mobileAnf.disabled = wfmActive;
+      }
+      const mobileFilter = $("mobile-filter-btn");
+      if (mobileFilter) {
+        const bandwidthHz = Math.max(0, state.filterHigh - state.filterLow);
+        mobileFilter.textContent = wfmActive ? "FIL WFM" : `FIL ${safeFixed(bandwidthHz / 1000, 1, "0.0")}k`;
+      }
       for (const element of [$("spectrum-shell"), $("waterfall-shell")]) {
         element.style.touchAction = state.frequencyLock ? "pan-y pinch-zoom" : "pan-y";
       }
@@ -13764,7 +14472,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       });
       document.querySelectorAll("#band-grid .band-btn").forEach((button) => {
         const target = Number(button.dataset.band);
-        button.classList.toggle("active", Math.abs(target - state.vfoA) < 20000);
+        button.classList.toggle("active", Math.abs(target - activeVfoFrequency()) < 20000);
         if (button.dataset.mode === "WFM") button.disabled = !state.rxWbfmSupported;
       });
       const sampleRate = `${state.sampleRate}`;
@@ -13783,10 +14491,23 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       if ($("rx-antenna").value !== rxAntenna) {
         $("rx-antenna").value = rxAntenna;
       }
+      const rxAttenuation = `${Math.max(0, Math.min(31, Math.round(state.rxAttenuationDb)))}`;
+      if ($("rx-attenuation").value !== rxAttenuation) {
+        const option = Array.from($("rx-attenuation").options).find((item) => item.value === rxAttenuation);
+        if (option) $("rx-attenuation").value = rxAttenuation;
+      }
+      const attenuationLabel = state.rxAttenuationDb > 0 ? `ATT ${state.rxAttenuationDb} dB` : "ATT Off";
+      for (const button of [$("rx-att-quick-btn"), $("mobile-att-btn")]) {
+        if (!button) continue;
+        button.textContent = attenuationLabel;
+        button.classList.toggle("active", state.rxAttenuationDb > 0);
+        button.setAttribute("aria-label", `${attenuationLabel}; press to select the next attenuation step`);
+      }
       const rxVolume = `${state.rxVolumeDb}`;
       if ($("rx-volume").value !== rxVolume) {
         $("rx-volume").value = rxVolume;
       }
+      $("rx-ssql-threshold").value = `${state.rxSsqlThreshold}`;
       const nrLevel = `${state.rxNoiseReductionLevel}`;
       if ($("rx-nr-level").value !== nrLevel) {
         $("rx-nr-level").value = nrLevel;
@@ -16362,6 +17083,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         sourceRate,
         targetRate
       );
+      captureRxAudioScope(playback.left, playback.right, arrivedAt);
 
       if (state.audioWorkletMode === "sab") {
         if (writeRxAudioFrameToSab(playback.left, playback.right)) {
@@ -17221,6 +17943,26 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         updateUi();
         sendTci(`rx_antenna:0,${state.rxAntenna};`);
       });
+      $("rx-attenuation").addEventListener("change", () => {
+        setRxAttenuation($("rx-attenuation").value);
+      });
+      $("rx-att-quick-btn").addEventListener("click", cycleRxAttenuation);
+      $("mobile-att-btn").addEventListener("click", cycleRxAttenuation);
+      $("vfo-a-select-btn").addEventListener("click", () => {
+        state.activeVfo = "A";
+        updateUi();
+        sendTci("vfo_active:0,A;");
+      });
+      $("vfo-b-select-btn").addEventListener("click", () => {
+        state.activeVfo = "B";
+        updateUi();
+        sendTci("vfo_active:0,B;");
+      });
+      $("split-toggle-btn").addEventListener("click", () => {
+        state.splitEnabled = !state.splitEnabled;
+        updateUi();
+        sendTci(`split:0,${state.splitEnabled};`);
+      });
       bindFrequencyEntrySheet();
       $("rx-volume").addEventListener("input", () => {
         state.rxVolumeDb = clampRxVolumeDb($("rx-volume").value);
@@ -17230,6 +17972,18 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       $("rx-volume").addEventListener("change", () => {
         saveRadioPrefs();
         sendTci(`rx_volume:0,0,${state.rxVolumeDb.toFixed(1)};`);
+      });
+      $("rx-ssql-btn").addEventListener("click", () => {
+        state.rxSsqlEnabled = !state.rxSsqlEnabled;
+        updateUi();
+        sendTci(`rx_ssql:0,${state.rxSsqlEnabled};`);
+      });
+      $("rx-ssql-threshold").addEventListener("input", () => {
+        state.rxSsqlThreshold = Math.max(0, Math.min(100, Number($("rx-ssql-threshold").value) || 0));
+        $("rx-ssql-readout").textContent = `SQL ${Math.round(state.rxSsqlThreshold)}`;
+      });
+      $("rx-ssql-threshold").addEventListener("change", () => {
+        sendTci(`rx_ssql_threshold:0,${Math.round(state.rxSsqlThreshold)};`);
       });
       document.querySelectorAll("#rx-nr-grid .mode-btn").forEach((button) => {
         button.addEventListener("click", () => {
@@ -17300,6 +18054,19 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       });
       $("display-center-btn").addEventListener("click", () => {
         if (!setDisplayZoomValue(1)) updateUi();
+      });
+      $("spectrum-average-toolbar-btn").addEventListener("click", () => {
+        const values = [1, 2, 4, 8, 12];
+        const currentIndex = values.indexOf(clampSpectrumAverage(state.spectrumAverage));
+        const next = values[(currentIndex + 1) % values.length];
+        $("display-spectrum-average").value = `${next}`;
+        $("display-spectrum-average").dispatchEvent(new Event("input", { bubbles: true }));
+        updateUi();
+      });
+      $("spectrum-peak-toolbar-btn").addEventListener("click", () => {
+        const checkbox = $("display-spectrum-peak-hold");
+        checkbox.checked = !state.spectrumPeakHold;
+        checkbox.dispatchEvent(new Event("change", { bubbles: true }));
       });
       const bindDisplayToggle = (id, assign) => {
         $(id).addEventListener("change", () => {

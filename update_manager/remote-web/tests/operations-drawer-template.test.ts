@@ -23,6 +23,16 @@ describe('responsive operations drawer template', () => {
     expect(template).toContain('logPanel.appendChild(operatorLog)');
   });
 
+  it('provides an explicit close control', () => {
+    expect(template).toContain('id="operations-close-btn"');
+    expect(template).toContain('id="operations-audio-close-btn"');
+    expect(template).toContain('Collapse Scope');
+    expect(template).toContain('onclick="collapseOperationsDrawer()"');
+    expect(template).toContain('onclick="collapseOperationsDrawer(\'audio\')"');
+    expect(template).toContain('function collapseOperationsDrawer(target = null)');
+    expect(template).toContain('event.key !== "Escape"');
+  });
+
   it('persists drawer selection separately from radio profiles', () => {
     expect(template).toContain('const OPERATIONS_DRAWER_PREF_KEY = "saturn.remote.operationsDrawer"');
     const start = template.indexOf('function applyOperationsDrawerSelection(');

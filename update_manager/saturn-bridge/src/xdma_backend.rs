@@ -58,6 +58,49 @@ impl CommandEffects {
     }
 }
 
+fn command_effects(command: &TciCommand) -> CommandEffects {
+    CommandEffects {
+        dsp_dirty: matches!(
+            command,
+            TciCommand::SetMode(_)
+                | TciCommand::SetFilterBand { .. }
+                | TciCommand::SetRxVolume(_)
+                | TciCommand::SetRxSsqlEnabled(_)
+                | TciCommand::SetRxSsqlThreshold(_)
+                | TciCommand::SetRxNoiseReductionMode(_)
+                | TciCommand::SetRxNoiseReductionEnabled(_)
+                | TciCommand::SetRxNoiseReductionLevel(_)
+                | TciCommand::SetRxNr2GainMethod(_)
+                | TciCommand::SetRxNr2NpeMethod(_)
+                | TciCommand::SetRxNr2PostFilterEnabled(_)
+                | TciCommand::SetRxWbfmDeemphasis(_)
+                | TciCommand::SetRxAnrVals { .. }
+                | TciCommand::SetNoiseBlankerMode(_)
+                | TciCommand::SetNoiseBlankerThreshold(_)
+                | TciCommand::SetAnfEnabled(_)
+                | TciCommand::SetRxAnfVals { .. }
+                | TciCommand::SetAgcMode(_)
+                | TciCommand::SetAgcGain(_)
+                | TciCommand::SetRxEqEnabled(_)
+                | TciCommand::SetRxEqBand { .. }
+                | TciCommand::SetRxFftSize(_)
+                | TciCommand::SetRxLowLatency(_)
+        ),
+        tuning_dirty: matches!(
+            command,
+            TciCommand::SetVfoA(_)
+                | TciCommand::SetVfoB(_)
+                | TciCommand::SetActiveVfo(_)
+                | TciCommand::SetSplitEnabled(_)
+                | TciCommand::SetIqCenter(_)
+        ),
+        tx_state_dirty: matches!(
+            command,
+            TciCommand::SetTxEnabled(_) | TciCommand::ClientDisconnected
+        ),
+    }
+}
+
 struct SignalGuard {
     previous_int: libc::sigaction,
     previous_term: libc::sigaction,
@@ -281,7 +324,20 @@ fn run_inner(config: BridgeConfig, ready_path: &Path) -> Result<(), Box<dyn Erro
                         sample_rate_hz,
                         iq_samples,
                     } => tci.publish_tx_iq_frame(sample_rate_hz, &iq_samples),
-                    TxEvent::Diagnostics(_diagnostics) => {}
+                    TxEvent::Diagnostics(diag) => {
+                        let mut model = radio_model.lock_unpoisoned();
+                        let tx = tx_radio.snapshot();
+                        model.observed.tx_forward_watts = Some(tx.forward_watts);
+                        model.observed.tx_reflected_watts = Some(tx.reverse_watts);
+                        model.observed.tx_swr = Some(tx.swr);
+                        model.observed.tx_mic_peak_db = Some(diag.mic_peak_db);
+                        model.observed.tx_comp_peak_db = Some(diag.comp_peak_db);
+                        model.observed.tx_comp_avg_db = Some(diag.comp_avg_db);
+                        model.observed.tx_alc_peak_db = Some(diag.alc_peak_db);
+                        model.observed.tx_alc_avg_db = Some(diag.alc_avg_db);
+                        model.observed.tx_alc_gain_db = Some(diag.alc_gain_db);
+                        tci.publish_telemetry(&model);
+                    }
                     TxEvent::PureSignalStatus(_status) => {}
                 }
             }
@@ -347,6 +403,17 @@ fn run_inner(config: BridgeConfig, ready_path: &Path) -> Result<(), Box<dyn Erro
                 last_readiness = Instant::now();
             }
             if last_status.elapsed() >= STATUS_PERIOD {
+                if let Ok((overflow, adc1_peak, adc2_peak)) = rx.read_adc_telemetry() {
+                    let mut model = radio_model.lock_unpoisoned();
+                    model.observed.adc_overflows = overflow;
+                    model.observed.adc1_peak = adc1_peak;
+                    model.observed.adc2_peak = adc2_peak;
+                    let tx = tx_radio.snapshot();
+                    model.observed.tx_forward_watts = Some(tx.forward_watts);
+                    model.observed.tx_reflected_watts = Some(tx.reverse_watts);
+                    model.observed.tx_swr = Some(tx.swr);
+                    tci.publish_telemetry(&model);
+                }
                 let stats = rx.stats();
                 let tx = tx_radio.snapshot();
                 println!(
@@ -416,49 +483,32 @@ fn handle_command(
     tx_control: &mut DirectTxControl,
     remote_tx_rf_enabled: bool,
 ) -> Result<CommandEffects, Box<dyn Error>> {
-    let effects = CommandEffects {
-        dsp_dirty: matches!(
-            &command,
-            TciCommand::SetMode(_)
-                | TciCommand::SetFilterBand { .. }
-                | TciCommand::SetRxVolume(_)
-                | TciCommand::SetRxNoiseReductionMode(_)
-                | TciCommand::SetRxNoiseReductionEnabled(_)
-                | TciCommand::SetRxNoiseReductionLevel(_)
-                | TciCommand::SetRxNr2GainMethod(_)
-                | TciCommand::SetRxNr2NpeMethod(_)
-                | TciCommand::SetRxNr2PostFilterEnabled(_)
-                | TciCommand::SetRxWbfmDeemphasis(_)
-                | TciCommand::SetRxAnrVals { .. }
-                | TciCommand::SetNoiseBlankerMode(_)
-                | TciCommand::SetNoiseBlankerThreshold(_)
-                | TciCommand::SetAnfEnabled(_)
-                | TciCommand::SetRxAnfVals { .. }
-                | TciCommand::SetAgcMode(_)
-                | TciCommand::SetAgcGain(_)
-                | TciCommand::SetRxEqEnabled(_)
-                | TciCommand::SetRxEqBand { .. }
-                | TciCommand::SetRxFftSize(_)
-                | TciCommand::SetRxLowLatency(_)
-        ),
-        tuning_dirty: matches!(
-            &command,
-            TciCommand::SetVfoA(_) | TciCommand::SetVfoB(_) | TciCommand::SetIqCenter(_)
-        ),
-        tx_state_dirty: matches!(
-            &command,
-            TciCommand::SetTxEnabled(_) | TciCommand::ClientDisconnected
-        ),
-    };
+    let effects = command_effects(&command);
     let mut model = radio_model.lock_unpoisoned();
     match command {
         TciCommand::SetVfoA(frequency_hz) => {
-            rx.tune(frequency_hz)?;
             model.desired.vfo_a_hz = frequency_hz;
-            model.desired.iq_center_hz = frequency_hz;
-            model.desired.tx_frequency_hz = frequency_hz;
+            model.sync_vfo_routes();
+            rx.tune(model.desired.iq_center_hz)?;
+            let _ = tx_cmd_tx.send(TxCommand::ModelChanged);
         }
-        TciCommand::SetVfoB(frequency_hz) => model.desired.vfo_b_hz = frequency_hz,
+        TciCommand::SetVfoB(frequency_hz) => {
+            model.desired.vfo_b_hz = frequency_hz;
+            model.sync_vfo_routes();
+            rx.tune(model.desired.iq_center_hz)?;
+            let _ = tx_cmd_tx.send(TxCommand::ModelChanged);
+        }
+        TciCommand::SetActiveVfo(active) => {
+            model.desired.active_vfo = active.min(1);
+            model.sync_vfo_routes();
+            rx.tune(model.desired.iq_center_hz)?;
+            let _ = tx_cmd_tx.send(TxCommand::ModelChanged);
+        }
+        TciCommand::SetSplitEnabled(enabled) => {
+            model.desired.split_enabled = enabled;
+            model.sync_vfo_routes();
+            let _ = tx_cmd_tx.send(TxCommand::ModelChanged);
+        }
         TciCommand::SetIqCenter(frequency_hz) => {
             rx.tune(frequency_hz)?;
             model.desired.iq_center_hz = frequency_hz;
@@ -493,7 +543,16 @@ fn handle_command(
                 "saturn-bridge: direct XDMA RX antenna selection is not yet wired; retaining hardware relay state"
             );
         }
+        TciCommand::SetRxAttenuation(attenuation_db) => {
+            let attenuation_db = attenuation_db.min(31);
+            rx.set_rx_attenuation(attenuation_db)?;
+            model.desired.rx_attenuation_db = attenuation_db;
+        }
         TciCommand::SetRxVolume(value) => model.desired.rx_volume_db = value.clamp(-40.0, 12.0),
+        TciCommand::SetRxSsqlEnabled(enabled) => model.desired.rx_ssql_enabled = enabled,
+        TciCommand::SetRxSsqlThreshold(threshold) => {
+            model.desired.rx_ssql_threshold = threshold.clamp(0.0, 100.0)
+        }
         TciCommand::SetRxNoiseReductionMode(mode) => {
             model.desired.rx_noise_reduction_mode = mode
         }
@@ -937,5 +996,11 @@ mod tests {
     fn readiness_requires_advancing_dma_and_iq() {
         assert!(READY_DMA_READS > 0);
         assert!(READY_IQ_PAIRS >= READY_DMA_READS);
+    }
+
+    #[test]
+    fn speech_squelch_commands_resynchronize_wdsp() {
+        assert!(command_effects(&TciCommand::SetRxSsqlEnabled(true)).dsp_dirty);
+        assert!(command_effects(&TciCommand::SetRxSsqlThreshold(16.0)).dsp_dirty);
     }
 }

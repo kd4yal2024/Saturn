@@ -437,15 +437,30 @@ pub(crate) fn initial_snapshot_messages(
         remote_client_role_message(client_id, role),
         format!("vfo:0,0,{};", model.desired.vfo_a_hz),
         format!("vfo:0,1,{};", model.desired.vfo_b_hz),
+        format!(
+            "vfo_active:0,{};",
+            if model.desired.active_vfo == 0 {
+                "A"
+            } else {
+                "B"
+            }
+        ),
+        format!("split:0,{};", model.desired.split_enabled),
         format!("dds:0,{};", model.desired.iq_center_hz),
         format!("rx_adc:0,{};", model.desired.ddc0_adc),
         format!("rx_antenna:0,{};", model.desired.rx_antenna.max(1).min(3)),
+        format!("rx_attenuation:0,{};", model.desired.rx_attenuation_db),
         format!(
             "iq_samplerate:{};",
             model.desired.ddc0_sample_rate_khz as u32 * 1000
         ),
         format!("modulation:0,{};", model.desired.mode),
         format!("rx_volume:0,0,{:.1};", model.desired.rx_volume_db),
+        format!("rx_ssql:0,{};", model.desired.rx_ssql_enabled),
+        format!(
+            "rx_ssql_threshold:0,{:.0};",
+            model.desired.rx_ssql_threshold
+        ),
         format!(
             "rx_nr:0,{};",
             model.desired.rx_noise_reduction_mode != NoiseReductionMode::Off

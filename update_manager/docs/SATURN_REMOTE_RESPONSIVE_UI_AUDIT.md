@@ -386,11 +386,12 @@ Tune meter damping, focus order, touch gestures, alert transitions, high-DPI vis
 performance. Execute the full RX/IQ/audio/control/TX/profile/reconnect regression matrix and
 the desktop/tablet/phone operator workflows from the redesign specification.
 
-## Implementation status (2026-08-22)
+## Implementation status (2026-08-25)
 
 The presentation refactor described above is now implemented on
-`feature/saturn-remote-responsive-redesign` through Phase 13. The bridge protocol, DSP,
-audio transport, state application, and TX command ownership remain on their existing paths.
+`feature/saturn-remote-responsive-redesign` through Phase 16. Existing DSP, audio transport,
+and TX safety ownership remain in place; new controls extend their established state and command
+paths rather than adding a second radio implementation.
 
 - Phases 2-3: semantic console tokens, wide/compact/tablet/phone layouts, compact status
   header, primary VFO deck, and thumb-reachable mobile navigation.
@@ -419,9 +420,30 @@ audio transport, state application, and TX command ownership remain on their exi
   artificial short scroll region. RX volume and health, AGC/ANF, filter controls, and the
   authoritative TX arm/PTT/MOX surface share the visible operating rail; the TX tab still
   expands the complete transmit setup without creating a second command path.
+- Phase 15: the primary band rail includes 60 metres, VFO B is visible as a deliberately
+  subdued reference, spectrum average and peak
+  hold are promoted to the operator toolbar, and engineering links are grouped under the
+  System menu. Phone adds persistent NR/NB/ANF/filter shortcuts above its operating dock.
+  The Operations Audio panel now renders a throttled stereo RX waveform and calibrated L/R
+  dBFS peak bars from the existing decoded audio frames without joining the IQ render loop.
+- Phase 16: VFO A/B selection and SPLIT now route the actual RX and TX frequencies through
+  the existing TCI/model/Protocol 2 and direct-XDMA paths. RX attenuation drives the Saturn
+  ADC attenuator; speech squelch drives WDSP SSQL in supported voice/data modes. The shared
+  telemetry path now reports reflected power, ALC, compression, microphone peak, ADC peak,
+  and ADC overflow, with an explicit OVF annunciator in the instrument deck. Operator
+  follow-up moved ATT into the always-visible VFO path and phone quick bar, added compact
+  desktop L/R RX audio meters, added an explicit Operations close control, corrected OVF
+  hidden-state rendering, and made direct-XDMA squelch commands resynchronize WDSP.
 
-Automated acceptance currently passes 48 test files / 393 tests, TypeScript typechecking,
-the 166-entry template/bundle seam check, the production build, and responsive Chromium
+The following controls remain intentionally deferred rather than rendered as non-functional
+switches: a distinct RX preamp has no verified Saturn wire/register command; VOX needs a
+pre-key microphone analysis path and the same arm, timeout, role, disconnect, and stale-audio
+interlocks as PTT; TUNE needs a single-tone RF source plus the existing TX qualification and
+power/SWR trip behavior; and TX monitor needs a dedicated echo-safe browser audio route.
+
+Automated acceptance currently passes 50 test files / 405 tests and 195 bridge tests,
+TypeScript typechecking,
+the 167-entry template/bundle seam check, the production build, and responsive Chromium
 geometry validation across phone portrait/landscape, tablet portrait/landscape, compact
 desktop, 1440 desktop, 1920 HD, and 2560 ultrawide, including representative drawer and
 setup-open states.

@@ -375,12 +375,17 @@ pub struct DesiredRadioState {
     pub rx_ddc_index: u8,
     pub vfo_a_hz: u32,
     pub vfo_b_hz: u32,
+    pub active_vfo: u8,
+    pub split_enabled: bool,
     pub iq_center_hz: u32,
     pub tx_frequency_hz: u32,
     pub ddc0_adc: u8,
     pub rx_antenna: u8,
+    pub rx_attenuation_db: u8,
     pub mode: DemodMode,
     pub rx_volume_db: f64,
+    pub rx_ssql_enabled: bool,
+    pub rx_ssql_threshold: f64,
     pub rx_noise_reduction_mode: NoiseReductionMode,
     pub rx_noise_reduction_level: f64,
     pub rx_nr2_gain_method: Nr2GainMethod,
@@ -446,6 +451,18 @@ pub struct ObservedRadioState {
     pub high_priority_packets: u64,
     pub ddc0_meter_dbm: Option<f32>,
     pub rx_wbfm_stereo_detected: bool,
+    pub tx_mic_peak_db: Option<f64>,
+    pub tx_comp_peak_db: Option<f64>,
+    pub tx_comp_avg_db: Option<f64>,
+    pub tx_alc_peak_db: Option<f64>,
+    pub tx_alc_avg_db: Option<f64>,
+    pub tx_alc_gain_db: Option<f64>,
+    pub tx_forward_watts: Option<f32>,
+    pub tx_reflected_watts: Option<f32>,
+    pub tx_swr: Option<f32>,
+    pub adc_overflows: u8,
+    pub adc1_peak: u16,
+    pub adc2_peak: u16,
     pub pure_signal_state: PureSignalState,
     pub pure_signal_feedback_level: i32,
     pub pure_signal_calibration_count: i32,
@@ -462,6 +479,26 @@ pub struct RadioModel {
 }
 
 impl RadioModel {
+    pub fn sync_vfo_routes(&mut self) {
+        self.desired.active_vfo = self.desired.active_vfo.min(1);
+        let receive_hz = if self.desired.active_vfo == 0 {
+            self.desired.vfo_a_hz
+        } else {
+            self.desired.vfo_b_hz
+        };
+        let transmit_hz = if self.desired.split_enabled {
+            if self.desired.active_vfo == 0 {
+                self.desired.vfo_b_hz
+            } else {
+                self.desired.vfo_a_hz
+            }
+        } else {
+            receive_hz
+        };
+        self.desired.iq_center_hz = receive_hz;
+        self.desired.tx_frequency_hz = transmit_hz;
+    }
+
     pub fn new(
         rx_ddc_index: u8,
         ddc0_frequency_hz: u32,
@@ -484,12 +521,17 @@ impl RadioModel {
                 rx_ddc_index: rx_ddc_index.min(9),
                 vfo_a_hz: ddc0_frequency_hz,
                 vfo_b_hz: ddc0_frequency_hz,
+                active_vfo: 0,
+                split_enabled: false,
                 iq_center_hz: ddc0_frequency_hz,
                 tx_frequency_hz: ddc0_frequency_hz,
                 ddc0_adc: ddc0_adc.min(2),
                 rx_antenna: 1,
+                rx_attenuation_db: 0,
                 mode,
                 rx_volume_db: -10.0,
+                rx_ssql_enabled: false,
+                rx_ssql_threshold: 16.0,
                 rx_noise_reduction_mode: NoiseReductionMode::Off,
                 rx_noise_reduction_level: 0.0,
                 rx_nr2_gain_method: Nr2GainMethod::Gamma,
@@ -553,6 +595,9 @@ impl RadioModel {
 
     pub fn apply_high_priority(&mut self, packet: HighPriorityFromSdr) {
         self.observed.high_priority_packets += 1;
+        self.observed.adc_overflows = packet.adc_overflows;
+        self.observed.adc1_peak = packet.adc1_peak;
+        self.observed.adc2_peak = packet.adc2_peak;
         self.observed.high_priority = Some(packet);
     }
 

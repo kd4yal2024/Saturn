@@ -439,7 +439,7 @@ fn build_high_priority_state(model: &RadioModel, drive_byte_at_100w: u8) -> High
         } else {
             0
         },
-        rx1_attenuation_db: 0,
+        rx1_attenuation_db: model.desired.rx_attenuation_db.min(31),
     }
 }
 
@@ -586,6 +586,16 @@ mod tests {
         let state = build_high_priority_state(&model, 68);
 
         assert_eq!(state.tx_drive, 46);
+    }
+
+    #[test]
+    fn high_priority_applies_requested_receive_attenuation() {
+        let mut model = RadioModel::new(2, 14_200_000, 0, 192, 24, 2048, true, 4096, true);
+        model.desired.rx_attenuation_db = 20;
+
+        let state = build_high_priority_state(&model, 68);
+
+        assert_eq!(state.rx1_attenuation_db, 20);
     }
 
     #[test]

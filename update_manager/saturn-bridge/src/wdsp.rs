@@ -99,6 +99,8 @@ unsafe extern "C" {
     fn SetRXAPanelSelect(channel: i32, select: i32);
     fn SetRXAPanelCopy(channel: i32, copy: i32);
     fn SetRXAPanelGain1(channel: i32, gain: f64);
+    fn SetRXASSQLRun(channel: i32, run: i32);
+    fn SetRXASSQLThreshold(channel: i32, threshold: f64);
     #[cfg(wdsp_has_wbfm)]
     fn SetRXAWBFMdmph(channel: i32, dmph_run: i32, dmph_continent: i32);
     #[cfg(wdsp_has_wbfm)]
@@ -358,6 +360,8 @@ pub struct WdspRxEngine {
     rx_low_latency: bool,
     rx_eq_enabled: bool,
     rx_eq_bands: [i32; 11],
+    ssql_enabled: bool,
+    ssql_threshold: f64,
 }
 
 impl WdspRxEngine {
@@ -403,6 +407,8 @@ impl WdspRxEngine {
             rx_low_latency: model.desired.rx_low_latency,
             rx_eq_enabled: false,
             rx_eq_bands: [0i32; 11],
+            ssql_enabled: false,
+            ssql_threshold: 16.0,
         };
         engine.reconfigure(model)?;
         Ok(engine)
@@ -429,6 +435,10 @@ impl WdspRxEngine {
             self.wbfm_stereo_detected = false;
             unsafe {
                 SetRXAMode(self.channel_id, wdsp_mode(self.mode));
+                SetRXASSQLRun(
+                    self.channel_id,
+                    (self.ssql_enabled && ssql_supported_for_mode(self.mode)) as i32,
+                );
             }
             self.apply_agc();
         }
@@ -442,6 +452,23 @@ impl WdspRxEngine {
             self.volume_db = model.desired.rx_volume_db;
             unsafe {
                 SetRXAPanelGain1(self.channel_id, panel_gain_for_volume_db(self.volume_db));
+            }
+        }
+
+        if model.desired.rx_ssql_enabled != self.ssql_enabled
+            || (model.desired.rx_ssql_threshold - self.ssql_threshold).abs() > f64::EPSILON
+        {
+            self.ssql_enabled = model.desired.rx_ssql_enabled;
+            self.ssql_threshold = model.desired.rx_ssql_threshold;
+            unsafe {
+                SetRXASSQLThreshold(
+                    self.channel_id,
+                    (self.ssql_threshold / 100.0).clamp(0.0, 1.0),
+                );
+                SetRXASSQLRun(
+                    self.channel_id,
+                    (self.ssql_enabled && ssql_supported_for_mode(self.mode)) as i32,
+                );
             }
         }
 
@@ -687,6 +714,8 @@ impl WdspRxEngine {
         self.anr_leakage = model.desired.rx_anr_leakage;
         self.filter_low_hz = model.desired.filter_low_hz;
         self.filter_high_hz = model.desired.filter_high_hz;
+        self.ssql_enabled = model.desired.rx_ssql_enabled;
+        self.ssql_threshold = model.desired.rx_ssql_threshold;
         self.input_complex_samples = (input_ratio as usize) * WDSP_DSP_SIZE;
         self.output_audio_frames = WDSP_DSP_SIZE / output_ratio as usize;
         self.input_buffer = vec![0.0; self.input_complex_samples * 2];
@@ -717,6 +746,14 @@ impl WdspRxEngine {
             SetRXAPanelSelect(self.channel_id, 3); // use both I and Q input
             SetRXAPanelCopy(self.channel_id, 1); // copy I→Q so both speakers get audio
             SetRXAPanelGain1(self.channel_id, panel_gain_for_volume_db(self.volume_db));
+            SetRXASSQLThreshold(
+                self.channel_id,
+                (self.ssql_threshold / 100.0).clamp(0.0, 1.0),
+            );
+            SetRXASSQLRun(
+                self.channel_id,
+                (self.ssql_enabled && ssql_supported_for_mode(self.mode)) as i32,
+            );
             RXASetNC(self.channel_id, model.desired.rx_fft_size as i32);
             // Thetis defaults to Low_Latency (MP=1) for both RX and TX.
             // Linear phase (MP=0) adds NC/2 samples of group delay;
@@ -1674,6 +1711,18 @@ pub const fn wbfm_supported() -> bool {
     cfg!(wdsp_has_wbfm)
 }
 
+fn ssql_supported_for_mode(mode: DemodMode) -> bool {
+    matches!(
+        mode,
+        DemodMode::Usb
+            | DemodMode::Lsb
+            | DemodMode::Am
+            | DemodMode::Sam
+            | DemodMode::DigU
+            | DemodMode::DigL
+    )
+}
+
 fn rx_dsp_rate_for_mode(mode: DemodMode) -> u32 {
     if mode == DemodMode::Wfm && wbfm_supported() {
         192_000
@@ -1745,7 +1794,7 @@ mod tests {
         normalize_audio_frame_float_count, nr2_factor_for_level, nr2_nlevel_for_level,
         nr2_rate_for_level, nr2_taper_for_level, nr4_post_threshold_for_level,
         nr4_reduction_amount_for_level, panel_gain_for_volume_db, rx_dsp_rate_for_mode,
-        wbfm_supported, wdsp_mode, WdspTxEngine, WDSP_AUDIO_RATE_HZ,
+        ssql_supported_for_mode, wbfm_supported, wdsp_mode, WdspTxEngine, WDSP_AUDIO_RATE_HZ,
     };
     use crate::radio_model::{DemodMode, PureSignalState, RadioModel};
 
@@ -1779,6 +1828,16 @@ mod tests {
         };
         assert_eq!(wdsp_mode(DemodMode::Wfm), expected_mode);
         assert_eq!(rx_dsp_rate_for_mode(DemodMode::Wfm), expected_rate);
+    }
+
+    #[test]
+    fn speech_squelch_is_limited_to_supported_voice_demodulators() {
+        assert!(ssql_supported_for_mode(DemodMode::Usb));
+        assert!(ssql_supported_for_mode(DemodMode::Lsb));
+        assert!(ssql_supported_for_mode(DemodMode::Am));
+        assert!(!ssql_supported_for_mode(DemodMode::Fm));
+        assert!(!ssql_supported_for_mode(DemodMode::Wfm));
+        assert!(!ssql_supported_for_mode(DemodMode::Cwu));
     }
 
     #[test]

@@ -7,13 +7,18 @@ function createState(): TciRadioState {
     mode: 'USB',
     vfoA: 14200000,
     vfoB: 14200000,
+    activeVfo: 'A',
+    splitEnabled: false,
     dds: 14200000,
     rxAdc: 0,
     rxAntenna: 1,
+    rxAttenuationDb: 0,
     sampleRate: 192000,
     audioSampleRate: 48000,
     audioChannels: 2,
     rxVolumeDb: -10,
+    rxSsqlEnabled: false,
+    rxSsqlThreshold: 16,
     rxNoiseReductionMode: 'NR2',
     rxNoiseReductionLevel: 100,
     rxNr2GainMethod: 'GAMMA',
@@ -42,7 +47,17 @@ function createState(): TciRadioState {
     txFilterHigh: 3050,
     meterDbm: null,
     txPower: null,
+    txReflectedPower: null,
     swr: null,
+    txAlcPeakDb: null,
+    txAlcAvgDb: null,
+    txAlcGainDb: null,
+    txCompPeakDb: null,
+    txCompAvgDb: null,
+    txMicPeakDb: null,
+    adcOverflowMask: 0,
+    adc1Peak: 0,
+    adc2Peak: 0,
     bridgeRttMs: null,
     bridgeRttAt: 0,
     backpressureSafetyP50Us: 0,
@@ -139,6 +154,26 @@ describe('applyTciText', () => {
     expect(result.state.meterDbm).toBe(-91.2);
     expect(result.state.txPower).toBe(35);
     expect(result.state.swr).toBe(1.8);
+  });
+
+  it('applies VFO routing, attenuation, squelch, and instrument telemetry', () => {
+    const result = applyTciText(
+      'vfo_active:0,B;split:0,true;rx_attenuation:0,20;rx_ssql:0,true;' +
+      'rx_ssql_threshold:0,27;tx_reflected_power:0,1.4;tx_alc:0,-2.1,-3.0,-1.2;' +
+      'tx_comp:0,6.5,4.2;tx_mic_peak:0,-3.1;adc_overload:0,1,32760,12000;',
+      createState(),
+    );
+    expect(result.state.activeVfo).toBe('B');
+    expect(result.state.splitEnabled).toBe(true);
+    expect(result.state.rxAttenuationDb).toBe(20);
+    expect(result.state.rxSsqlEnabled).toBe(true);
+    expect(result.state.rxSsqlThreshold).toBe(27);
+    expect(result.state.txReflectedPower).toBe(1.4);
+    expect(result.state.txAlcPeakDb).toBe(-2.1);
+    expect(result.state.txCompPeakDb).toBe(6.5);
+    expect(result.state.txMicPeakDb).toBe(-3.1);
+    expect(result.state.adcOverflowMask).toBe(1);
+    expect(result.state.adc1Peak).toBe(32760);
   });
 
   it('applies WDSP 2.00 NR2 and phase-rotator state', () => {

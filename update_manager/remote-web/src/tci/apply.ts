@@ -139,6 +139,11 @@ export function applyTciCommand(command: TciCommand, current: TciRadioState): Tc
       if (which === '0') next.vfoA = hz;
       if (which === '1') next.vfoB = hz;
     }
+  } else if (command.name === 'vfo_active') {
+    const active = String(argAt(args, 1) ?? trailingArg(args) ?? 'A').trim().toUpperCase();
+    next.activeVfo = active === 'B' || active === '1' ? 'B' : 'A';
+  } else if (command.name === 'split') {
+    next.splitEnabled = booleanArg(argAt(args, 1) ?? trailingArg(args)) === true;
   } else if (command.name === 'dds' && args.length >= 2) {
     const dds = numericArg(argAt(args, 1));
     if (dds != null && dds !== next.dds) {
@@ -151,6 +156,9 @@ export function applyTciCommand(command: TciCommand, current: TciRadioState): Tc
   } else if (command.name === 'rx_antenna') {
     const antenna = numericArg(argAt(args, 1) ?? trailingArg(args));
     if (antenna != null) next.rxAntenna = clampRxAntenna(antenna);
+  } else if (command.name === 'rx_attenuation') {
+    const attenuation = numericArg(argAt(args, 1) ?? trailingArg(args));
+    if (attenuation != null) next.rxAttenuationDb = Math.max(0, Math.min(31, Math.round(attenuation)));
   } else if (command.name === 'iq_samplerate' && args.length >= 1) {
     const rate = numericArg(argAt(args, 0));
     if (rate != null && rate > 0 && rate !== next.sampleRate) {
@@ -165,6 +173,11 @@ export function applyTciCommand(command: TciCommand, current: TciRadioState): Tc
       next.rxVolumeDb = clampRxVolumeDb(volume);
       rxVolumeChanged = true;
     }
+  } else if (command.name === 'rx_ssql') {
+    next.rxSsqlEnabled = booleanArg(argAt(args, 1) ?? trailingArg(args)) === true;
+  } else if (command.name === 'rx_ssql_threshold') {
+    const threshold = numericArg(argAt(args, 1) ?? trailingArg(args));
+    if (threshold != null) next.rxSsqlThreshold = Math.max(0, Math.min(100, threshold));
   } else if (command.name === 'rx_nr_mode' || command.name === 'nr_mode') {
     next.rxNoiseReductionMode = normalizeNrMode(argAt(args, 1) ?? trailingArg(args));
   } else if (command.name === 'rx_nr' || command.name === 'nr') {
@@ -237,6 +250,25 @@ export function applyTciCommand(command: TciCommand, current: TciRadioState): Tc
   } else if (command.name === 'tx_power') {
     const value = numericArg(argAt(args, 1) ?? argAt(args, 0));
     if (value != null) next.txPower = value;
+  } else if (command.name === 'tx_reflected_power') {
+    const value = numericArg(argAt(args, 1) ?? argAt(args, 0));
+    if (value != null) next.txReflectedPower = value;
+  } else if (command.name === 'tx_alc') {
+    const offset = String(argAt(args, 0) ?? '') === '0' ? 1 : 0;
+    next.txAlcPeakDb = numericArg(argAt(args, offset)) ?? next.txAlcPeakDb;
+    next.txAlcAvgDb = numericArg(argAt(args, offset + 1)) ?? next.txAlcAvgDb;
+    next.txAlcGainDb = numericArg(argAt(args, offset + 2)) ?? next.txAlcGainDb;
+  } else if (command.name === 'tx_comp') {
+    const offset = String(argAt(args, 0) ?? '') === '0' ? 1 : 0;
+    next.txCompPeakDb = numericArg(argAt(args, offset)) ?? next.txCompPeakDb;
+    next.txCompAvgDb = numericArg(argAt(args, offset + 1)) ?? next.txCompAvgDb;
+  } else if (command.name === 'tx_mic_peak') {
+    next.txMicPeakDb = numericArg(argAt(args, 1) ?? argAt(args, 0)) ?? next.txMicPeakDb;
+  } else if (command.name === 'adc_overload') {
+    const offset = String(argAt(args, 0) ?? '') === '0' ? 1 : 0;
+    next.adcOverflowMask = Math.max(0, Math.round(numericArg(argAt(args, offset)) ?? 0));
+    next.adc1Peak = Math.max(0, Math.round(numericArg(argAt(args, offset + 1)) ?? 0));
+    next.adc2Peak = Math.max(0, Math.round(numericArg(argAt(args, offset + 2)) ?? 0));
   } else if (command.name === 'tx_drive') {
     const value = numericArg(argAt(args, 1) ?? trailingArg(args));
     if (value != null) next.txDrive = clampTxDriveWatts(value);

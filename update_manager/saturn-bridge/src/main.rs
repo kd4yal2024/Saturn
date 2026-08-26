@@ -375,13 +375,27 @@ fn main() -> Result<(), Box<dyn Error>> {
             match command {
                 TciCommand::SetVfoA(freq_hz) => {
                     model.desired.vfo_a_hz = freq_hz;
-                    model.desired.iq_center_hz = freq_hz;
-                    model.desired.tx_frequency_hz = freq_hz;
+                    model.sync_vfo_routes();
                     needs_high_priority = true;
                     let _ = tx_cmd_tx.send(TxCommand::ModelChanged);
                 }
                 TciCommand::SetVfoB(freq_hz) => {
                     model.desired.vfo_b_hz = freq_hz;
+                    model.sync_vfo_routes();
+                    needs_high_priority = true;
+                    let _ = tx_cmd_tx.send(TxCommand::ModelChanged);
+                }
+                TciCommand::SetActiveVfo(active) => {
+                    model.desired.active_vfo = active.min(1);
+                    model.sync_vfo_routes();
+                    needs_high_priority = true;
+                    let _ = tx_cmd_tx.send(TxCommand::ModelChanged);
+                }
+                TciCommand::SetSplitEnabled(enabled) => {
+                    model.desired.split_enabled = enabled;
+                    model.sync_vfo_routes();
+                    needs_high_priority = true;
+                    let _ = tx_cmd_tx.send(TxCommand::ModelChanged);
                 }
                 TciCommand::SetIqCenter(freq_hz) => {
                     model.desired.iq_center_hz = freq_hz;
@@ -435,8 +449,18 @@ fn main() -> Result<(), Box<dyn Error>> {
                     model.desired.rx_antenna = antenna.clamp(1, 3);
                     needs_high_priority = true;
                 }
+                TciCommand::SetRxAttenuation(attenuation_db) => {
+                    model.desired.rx_attenuation_db = attenuation_db.min(31);
+                    needs_high_priority = true;
+                }
                 TciCommand::SetRxVolume(volume_db) => {
                     model.desired.rx_volume_db = volume_db.clamp(-40.0, 12.0);
+                }
+                TciCommand::SetRxSsqlEnabled(enabled) => {
+                    model.desired.rx_ssql_enabled = enabled;
+                }
+                TciCommand::SetRxSsqlThreshold(threshold) => {
+                    model.desired.rx_ssql_threshold = threshold.clamp(0.0, 100.0);
                 }
                 TciCommand::SetRxNoiseReductionMode(mode) => {
                     model.desired.rx_noise_reduction_mode = mode;
@@ -987,6 +1011,14 @@ fn main() -> Result<(), Box<dyn Error>> {
                     tci.publish_tx_iq_frame(sample_rate_hz, &iq_samples);
                 }
                 TxEvent::Diagnostics(diag) => {
+                    let mut model = radio_model.lock_unpoisoned();
+                    model.observed.tx_mic_peak_db = Some(diag.mic_peak_db);
+                    model.observed.tx_comp_peak_db = Some(diag.comp_peak_db);
+                    model.observed.tx_comp_avg_db = Some(diag.comp_avg_db);
+                    model.observed.tx_alc_peak_db = Some(diag.alc_peak_db);
+                    model.observed.tx_alc_avg_db = Some(diag.alc_avg_db);
+                    model.observed.tx_alc_gain_db = Some(diag.alc_gain_db);
+                    tci.publish_telemetry(&model);
                     latest_tx_diag = Some(diag);
                 }
                 TxEvent::PureSignalStatus(status) => {

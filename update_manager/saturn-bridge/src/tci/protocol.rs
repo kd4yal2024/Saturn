@@ -25,6 +25,8 @@ pub struct TciMicFrame {
 pub enum TciCommand {
     SetVfoA(u32),
     SetVfoB(u32),
+    SetActiveVfo(u8),
+    SetSplitEnabled(bool),
     SetIqCenter(u32),
     SetMode(DemodMode),
     SetFilterBand {
@@ -33,7 +35,10 @@ pub enum TciCommand {
     },
     SetRxAdc(u8),
     SetRxAntenna(u8),
+    SetRxAttenuation(u8),
     SetRxVolume(f64),
+    SetRxSsqlEnabled(bool),
+    SetRxSsqlThreshold(f64),
     SetRxNoiseReductionMode(NoiseReductionMode),
     SetRxNoiseReductionEnabled(bool),
     SetRxNoiseReductionLevel(f64),
@@ -212,6 +217,20 @@ pub(crate) fn parse_tci_command_with_roles(
                 }
             }
         }
+        "vfo_active" => {
+            let value = args.get(1).or_else(|| args.first()).copied().unwrap_or("A");
+            let active = match value.trim().to_ascii_uppercase().as_str() {
+                "1" | "B" => 1,
+                _ => 0,
+            };
+            let _ = command_tx.send(TciCommand::SetActiveVfo(active));
+        }
+        "split" => {
+            let value = args.get(1).or_else(|| args.first());
+            if let Some(enabled) = value.and_then(|text| parse_tci_bool(text)) {
+                let _ = command_tx.send(TciCommand::SetSplitEnabled(enabled));
+            }
+        }
         "dds" => {
             if args.len() >= 2 {
                 if let Ok(freq_hz) = args[1].trim().parse::<u32>() {
@@ -258,6 +277,25 @@ pub(crate) fn parse_tci_command_with_roles(
                 if let Ok(volume_db) = volume_text.trim().parse::<f64>() {
                     let _ = command_tx.send(TciCommand::SetRxVolume(volume_db));
                 }
+            }
+        }
+        "rx_attenuation" => {
+            let value = args.get(1).or_else(|| args.first());
+            if let Some(attenuation) = value.and_then(|text| text.trim().parse::<u8>().ok()) {
+                let _ = command_tx.send(TciCommand::SetRxAttenuation(attenuation.min(31)));
+            }
+        }
+        "rx_ssql" => {
+            let value = args.get(1).or_else(|| args.first());
+            if let Some(enabled) = value.and_then(|text| parse_tci_bool(text)) {
+                let _ = command_tx.send(TciCommand::SetRxSsqlEnabled(enabled));
+            }
+        }
+        "rx_ssql_threshold" => {
+            let value = args.get(1).or_else(|| args.first());
+            if let Some(threshold) = value.and_then(|text| text.trim().parse::<f64>().ok()) {
+                let _ =
+                    command_tx.send(TciCommand::SetRxSsqlThreshold(threshold.clamp(0.0, 100.0)));
             }
         }
         "rx_nr_mode" | "nr_mode" => {

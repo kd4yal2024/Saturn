@@ -609,6 +609,40 @@ fn parses_puresignal_control_commands() {
 }
 
 #[test]
+fn parses_vfo_split_attenuation_and_squelch_commands() {
+    let (tx, rx) = mpsc::channel();
+    let clients = test_client_registry(7);
+
+    for command in [
+        "vfo_active:0,B",
+        "split:0,true",
+        "rx_attenuation:0,20",
+        "rx_ssql:0,true",
+        "rx_ssql_threshold:0,27",
+    ] {
+        parse_tci_command(command, &tx, &clients, 7, true);
+    }
+
+    assert!(matches!(rx.recv().unwrap(), TciCommand::SetActiveVfo(1)));
+    assert!(matches!(
+        rx.recv().unwrap(),
+        TciCommand::SetSplitEnabled(true)
+    ));
+    assert!(matches!(
+        rx.recv().unwrap(),
+        TciCommand::SetRxAttenuation(20)
+    ));
+    assert!(matches!(
+        rx.recv().unwrap(),
+        TciCommand::SetRxSsqlEnabled(true)
+    ));
+    assert!(matches!(
+        rx.recv().unwrap(),
+        TciCommand::SetRxSsqlThreshold(value) if value == 27.0
+    ));
+}
+
+#[test]
 fn tx_codec_caps_accepts_pcm_scaffold() {
     let (tx, rx) = mpsc::channel();
     let clients = test_client_registry(7);

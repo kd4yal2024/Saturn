@@ -31,6 +31,11 @@ const DDC_INPUT_SELECT_REGISTER: u64 = 0x1010;
 const DDC6_FREQUENCY_REGISTER: u64 = 0x0018;
 const FIFO_RESET_REGISTER: u64 = 0x7000;
 const DDC_FIFO_MONITOR_REGISTER: u64 = 0x9000;
+const ADC_ATTENUATION_REGISTER: u64 = 0x2018;
+const ADC1_RX_ATTENUATION_MASK: u32 = 0x1f;
+const ADC_OVERFLOW_REGISTER: u64 = 0x5000;
+const ADC1_PEAK_REGISTER: u64 = 0x5004;
+const ADC2_PEAK_REGISTER: u64 = 0x5008;
 const DDC_FIFO_RESET_BIT: u32 = 1 << 2;
 const DDC_STREAM_ENABLE_BIT: u32 = 1 << 30;
 const DDC6_ADC_MASK: u32 = 0x3 << (DIRECT_DDC_INDEX * 2);
@@ -535,6 +540,28 @@ impl OperationalRxSession {
         Ok(())
     }
 
+    pub(crate) fn set_rx_attenuation(&mut self, attenuation_db: u8) -> Result<(), XdmaError> {
+        self.registers.update_register(
+            ADC_ATTENUATION_REGISTER,
+            |value| adc1_rx_attenuation_word(value, attenuation_db),
+            "could not set ADC1 receive attenuation",
+        )?;
+        Ok(())
+    }
+
+    pub(crate) fn read_adc_telemetry(&self) -> Result<(u8, u16, u16), XdmaError> {
+        let overflow = (self.registers.read_register(ADC_OVERFLOW_REGISTER)? & 0x03) as u8;
+        let adc1_peak = self
+            .registers
+            .read_register(ADC1_PEAK_REGISTER)?
+            .min(u32::from(u16::MAX)) as u16;
+        let adc2_peak = self
+            .registers
+            .read_register(ADC2_PEAK_REGISTER)?
+            .min(u32::from(u16::MAX)) as u16;
+        Ok((overflow, adc1_peak, adc2_peak))
+    }
+
     pub(crate) fn read_iq(&mut self, iq_samples: &mut Vec<f32>) -> Result<bool, XdmaError> {
         self.read_iq_with_policy(iq_samples, false)
             .map(|(ready, _)| ready)
@@ -668,6 +695,10 @@ impl OperationalRxSession {
         self.stopped = result.is_ok();
         result
     }
+}
+
+fn adc1_rx_attenuation_word(value: u32, attenuation_db: u8) -> u32 {
+    (value & !ADC1_RX_ATTENUATION_MASK) | u32::from(attenuation_db.min(31))
 }
 
 impl Drop for OperationalRxSession {
@@ -932,6 +963,13 @@ mod tests {
         assert_eq!(frequency_to_phase_word(0), 0);
         assert_eq!(frequency_to_phase_word(30_720_000), 0x4000_0000);
         assert_eq!(frequency_to_phase_word(61_440_000), 0x8000_0000);
+    }
+
+    #[test]
+    fn receive_attenuation_clamps_and_preserves_other_adc_fields() {
+        let original = 0xa5a5_ffe0;
+        assert_eq!(adc1_rx_attenuation_word(original, 12), 0xa5a5_ffec);
+        assert_eq!(adc1_rx_attenuation_word(original, 99), 0xa5a5_ffff);
     }
 
     #[test]
