@@ -48,6 +48,10 @@ describe('operator-first control checkpoint', () => {
     expect(template).toContain('id="mobile-nr-btn"');
     expect(template).toContain('id="mobile-nb-btn"');
     expect(template).toContain('id="mobile-anf-btn"');
+    expect(template).toContain('id="mobile-wake-lock-btn"');
+    expect(template).toContain('repeat(6, minmax(0, 1fr))');
+    expect(template).toContain('updateWakeLockControl($("mobile-wake-lock-btn"), true)');
+    expect(template).toContain('$("mobile-wake-lock-btn")?.addEventListener("click"');
     expect(template).toContain('min-height: 44px;');
   });
 

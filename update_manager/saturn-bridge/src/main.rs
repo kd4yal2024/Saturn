@@ -1,4 +1,5 @@
 mod config;
+mod fftw_wisdom;
 mod p2;
 mod radio_model;
 mod rx_thread;
@@ -237,22 +238,33 @@ fn finish_xdma_probe_command(
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
-    if env::args().skip(1).any(|arg| arg == "--xdma-probe") {
+    let args = env::args().skip(1).collect::<Vec<_>>();
+    if let Some(result) = fftw_wisdom::handle_cli(&args) {
+        return result.map_err(|message| {
+            Box::<dyn Error>::from(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                message,
+            ))
+        });
+    }
+    fftw_wisdom::import_configured();
+
+    if args.iter().any(|arg| arg == "--xdma-probe") {
         return finish_xdma_probe_command(1, "identity", xdma::run_phase1_probe());
     }
-    if env::args().skip(1).any(|arg| arg == "--xdma-rx-probe") {
+    if args.iter().any(|arg| arg == "--xdma-rx-probe") {
         return finish_xdma_probe_command(2, "rx-ddc", xdma_rx::run_phase2_rx_probe());
     }
-    if env::args().skip(1).any(|arg| arg == "--xdma-audio-probe") {
+    if args.iter().any(|arg| arg == "--xdma-audio-probe") {
         return finish_xdma_probe_command(3, "codec-audio", xdma_audio::run_phase3_audio_probe());
     }
-    if env::args().skip(1).any(|arg| arg == "--xdma-duc-probe") {
+    if args.iter().any(|arg| arg == "--xdma-duc-probe") {
         return finish_xdma_probe_command(4, "duc-performance", xdma_duc::run_phase4_duc_probe());
     }
-    if env::args().skip(1).any(|arg| arg == "--xdma-tx-preflight") {
+    if args.iter().any(|arg| arg == "--xdma-tx-preflight") {
         return finish_xdma_probe_command(5, "tx-preflight", xdma_tx::run_phase5_tx_preflight());
     }
-    if env::args().skip(1).any(|arg| arg == "--xdma-tx-probe") {
+    if args.iter().any(|arg| arg == "--xdma-tx-probe") {
         return finish_xdma_probe_command(5, "guarded-tx", xdma_tx::run_phase5_tx_probe());
     }
 

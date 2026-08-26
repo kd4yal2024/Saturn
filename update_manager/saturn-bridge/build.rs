@@ -7,10 +7,12 @@ fn main() {
     println!("cargo:rustc-check-cfg=cfg(wdsp_has_rnnr_sbnr)");
     println!("cargo:rustc-check-cfg=cfg(wdsp_has_phrot_auto)");
     println!("cargo:rustc-check-cfg=cfg(wdsp_has_wbfm)");
+    println!("cargo:rustc-check-cfg=cfg(saturn_bridge_stub_native)");
     if env::var("SATURN_BRIDGE_STUB_NATIVE")
         .map(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes" | "YES"))
         .unwrap_or(false)
     {
+        println!("cargo:rustc-cfg=saturn_bridge_stub_native");
         build_stub_native();
         return;
     }

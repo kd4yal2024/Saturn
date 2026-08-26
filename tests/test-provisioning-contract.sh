@@ -112,5 +112,10 @@ grep -Fq "SATURN_USER=\"\$SATURN_USER\"" "$REPO_ROOT/provision/cloud-init/provis
 grep -Fq "ensure_operator_xdma_access \"\$OPERATOR_USER\"" "$REPO_ROOT/rules/install-rules.sh"
 grep -Fq "ensure_operator_xdma_access \"\$operator_user\"" "$REPO_ROOT/scripts/install-udev-rules-on-current-image.sh"
 grep -Fq "usermod -a -G \"\$P2APP_SERVICE_GROUP\" \"\$CONTROL_USER\"" "$REPO_ROOT/sw_tools/p2app-control/install.sh"
+grep -Fq 'g2-autostart-p2app.desktop' "$REPO_ROOT/sw_tools/p2app-control/install.sh"
+grep -Fq 'retire_legacy_p2app_autostarts' "$REPO_ROOT/sw_tools/p2app-control/install.sh"
+grep -Fq 'stop_non_service_p2app_owners' "$REPO_ROOT/sw_tools/p2app-control/install.sh"
+grep -Fq 'verify_single_p2app_owner' "$REPO_ROOT/sw_tools/p2app-control/install.sh"
+grep -Fq 'Refusing to start a second P2app instance.' "$REPO_ROOT/sw_tools/p2app-control/install.sh"
 
 printf 'provisioning contract tests passed\n'

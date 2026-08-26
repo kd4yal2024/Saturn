@@ -559,6 +559,8 @@ Use `--purge` for a full cleanup.
 sudo systemctl status saturn-go.service
 sudo journalctl -u saturn-go.service -n 200 --no-pager
 sudo systemctl status saturn-go-watchdog.timer
+sudo systemctl status saturn-fftw-wisdom.timer
+sudo /usr/local/lib/saturn-go/scripts/saturn-fftw-wisdom.sh --status
 ```
 
 ### Restart
@@ -567,6 +569,33 @@ sudo systemctl status saturn-go-watchdog.timer
 sudo systemctl restart saturn-go.service
 sudo systemctl restart saturn-go-watchdog.timer
 ```
+
+### FFTW Wisdom Maintenance
+
+Saturn Bridge imports the machine-local cache at
+`/var/cache/saturn-bridge/wdspWisdom01`. The installer creates it with Saturn's
+Rust FFTW planner and enables a low-priority, persistent weekly timer. The
+timer checks a hardware/software fingerprint and does not rebuild a fresh
+cache.
+
+```bash
+# Inspect freshness without changing anything
+sudo /usr/local/lib/saturn-go/scripts/saturn-fftw-wisdom.sh --status
+
+# Run the normal fingerprint-aware check now
+sudo systemctl start saturn-fftw-wisdom.service
+
+# Force regeneration (may take significant time on a Raspberry Pi)
+sudo /usr/local/lib/saturn-go/scripts/saturn-fftw-wisdom.sh --rebuild
+
+# Review planner output
+sudo journalctl -u saturn-fftw-wisdom.service -n 200 --no-pager
+```
+
+Generation uses `FFTW_PATIENT`, runs with low CPU and I/O priority, and never
+opens the radio backend. A generated cache becomes active the next time
+`saturn-bridge.service` starts. If the cache is missing or invalid, the bridge
+logs the condition and safely performs normal runtime FFTW planning.
 
 ### Front-Panel Power Button
 

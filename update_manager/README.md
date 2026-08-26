@@ -460,6 +460,10 @@ Installer behavior (current):
   provisions pinned sparse WDSP 2.00 and piHPSDR Linux-port sources, builds the
   native archive, verifies WFM/phase-rotator/PureSignal symbols, and links the
   bridge without a prebuilt piHPSDR tree or cloud-init provisioning.
+- Generates Saturn-owned Rust FFTW wisdom during bridge installation and
+  enables a persistent, low-priority weekly fingerprint check. Rebuilds occur
+  only when the CPU, FFTW library, bridge binary, plan schema, or configured
+  maximum transform size changes.
 - Copies `saturn-remote-next.js` only from the Vite `dist/` output and verifies the deployed bundle with `saturn-remote-next.js.sha256`, preventing stale template/root files from shadowing a fresh build
 - Proxies all `/saturn/*` routes through NGINX to the Rust backend
 - Redirects plain HTTP remote entry points such as `/remote` and `/saturn/remote` to `https://<host>:8443/remote`

@@ -6476,7 +6476,7 @@
         bottom: calc(64px + env(safe-area-inset-bottom));
         left: 10px;
         display: grid;
-        grid-template-columns: repeat(5, minmax(0, 1fr));
+        grid-template-columns: repeat(6, minmax(0, 1fr));
         gap: 3px;
         padding: 4px;
         border: 1px solid rgba(150, 190, 205, 0.18);
@@ -7780,6 +7780,7 @@
       <button class="mobile-quick-button" id="mobile-nb-btn" type="button">NB Off</button>
       <button class="mobile-quick-button" id="mobile-anf-btn" type="button">ANF Off</button>
       <button class="mobile-quick-button" id="mobile-filter-btn" type="button">FIL 3.0k</button>
+      <button class="mobile-quick-button" id="mobile-wake-lock-btn" type="button" aria-pressed="false">Awake Off</button>
     </div>
   </div>
 
@@ -14253,19 +14254,25 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       $("sample-rate-readout").textContent = `SPAN ${visibleSpanLabel}`;
       const attenuationLabel = state.rxAttenuationDb > 0 ? `ATT ${state.rxAttenuationDb} dB` : "ATT Off";
       $("path-summary").textContent = `${adcLabel(state.rxAdc)} • ${antennaLabel(state.rxAntenna)} • ${attenuationLabel} • ${Math.round(state.sampleRate / 1000)} kHz IQ`;
-      const wakeLockBtn = $("wake-lock-btn");
-      if (wakeLockSupported()) {
-        wakeLockBtn.disabled = false;
-        if (state.keepScreenAwake) {
-          wakeLockBtn.textContent = state.wakeLockActive ? "Stay Awake On" : (state.wakeLockPending ? "Stay Awake…" : "Stay Awake Ready");
+      const wakeLockSupportedNow = wakeLockSupported();
+      const wakeLockActiveNow = state.keepScreenAwake && (state.wakeLockActive || state.wakeLockPending);
+      const updateWakeLockControl = (button, compact = false) => {
+        if (!button) return;
+        button.disabled = !wakeLockSupportedNow;
+        if (!wakeLockSupportedNow) {
+          button.textContent = compact ? "Awake N/A" : "Stay Awake N/A";
+        } else if (!state.keepScreenAwake) {
+          button.textContent = compact ? "Awake Off" : "Stay Awake Off";
+        } else if (state.wakeLockPending) {
+          button.textContent = compact ? "Awake…" : "Stay Awake…";
         } else {
-          wakeLockBtn.textContent = "Stay Awake Off";
+          button.textContent = compact ? "Awake On" : (state.wakeLockActive ? "Stay Awake On" : "Stay Awake Ready");
         }
-      } else {
-        wakeLockBtn.disabled = true;
-        wakeLockBtn.textContent = "Stay Awake N/A";
-      }
-      wakeLockBtn.classList.toggle("active", state.keepScreenAwake && (state.wakeLockActive || state.wakeLockPending));
+        button.classList.toggle("active", wakeLockActiveNow);
+        button.setAttribute("aria-pressed", state.keepScreenAwake ? "true" : "false");
+      };
+      updateWakeLockControl($("wake-lock-btn"));
+      updateWakeLockControl($("mobile-wake-lock-btn"), true);
       $("freq-lock-btn").textContent = state.frequencyLock ? "Locked" : "Lock";
       $("freq-lock-btn").classList.toggle("active", state.frequencyLock);
       $("rx-volume-readout").textContent = `${safeFixed(state.rxVolumeDb, 1, "-10.0")} dB`;
@@ -17911,6 +17918,9 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       $("layout-btn").addEventListener("click", toggleLayout);
       $("theme-btn").addEventListener("click", toggleTheme);
       $("wake-lock-btn").addEventListener("click", () => {
+        setKeepScreenAwake(!state.keepScreenAwake);
+      });
+      $("mobile-wake-lock-btn")?.addEventListener("click", () => {
         setKeepScreenAwake(!state.keepScreenAwake);
       });
       $("freq-lock-btn").addEventListener("click", () => {

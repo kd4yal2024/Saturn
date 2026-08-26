@@ -664,6 +664,9 @@ Then `provision-saturn.sh` performs:
   - `scripts/fix-xdma.sh` remains a field-recovery tool, not the normal lifecycle owner
 - optional p2app-control install
   - installs tray autostart (`~/.config/autostart/P2_app-Control-tray.desktop`)
+  - retires factory/legacy desktop files that launch P2app directly, stops any
+    surviving direct-launch process, and verifies that the systemd service is
+    the only P2app process before completing installation
   - requires `libayatana-appindicator3-dev` and `ayatana-indicator-application`
   - installs `/usr/local/bin/saturn-xdma-doctor.sh` as the supported XDMA diagnostic helper
   - installs `/usr/local/bin/saturn-xdma-ready.sh` plus `saturn-xdma-ready.service` as the dedicated XDMA readiness gate

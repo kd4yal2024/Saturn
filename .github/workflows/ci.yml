@@ -183,6 +183,7 @@ jobs:
             tests/test-shutdown-waiter-policy.sh \
             tests/test-request-body-limits.sh \
             tests/test-rust-low-memory-build.sh \
+            tests/test-saturn-fftw-wisdom.sh \
             tests/test-saturn-release-activate.sh \
             tests/test-saturn-release-install.sh \
             tests/test-saturn-release-manifest.sh \
@@ -227,6 +228,7 @@ jobs:
             tests/test-saturn-backup-types.sh \
             tests/test-saturn-atomic-state-write.sh \
             tests/test-rust-low-memory-build.sh \
+            tests/test-saturn-fftw-wisdom.sh \
             tests/test-saturn-release-activate.sh \
             tests/test-saturn-release-install.sh \
             tests/test-saturn-release-manifest.sh \
@@ -279,6 +281,9 @@ jobs:
 
       - name: Test low-memory Rust build safeguards
         run: tests/test-rust-low-memory-build.sh
+
+      - name: Test Saturn FFTW wisdom lifecycle
+        run: tests/test-saturn-fftw-wisdom.sh
 
       - name: Test application release manifest
         run: tests/test-saturn-release-manifest.sh

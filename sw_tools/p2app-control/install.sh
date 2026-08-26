@@ -11,6 +11,7 @@ XDMA_READY_UNIT_PATH="/etc/systemd/system/${XDMA_READY_UNIT_NAME}"
 XDMA_REG_DEV="/dev/xdma0_user"
 P2APP_START_TIMEOUT_SECONDS="${P2APP_START_TIMEOUT_SECONDS:-30}"
 P2APP_STABLE_SECONDS="${P2APP_STABLE_SECONDS:-2}"
+P2APP_OWNER_STOP_TIMEOUT_SECONDS="${P2APP_OWNER_STOP_TIMEOUT_SECONDS:-5}"
 
 P2APP_DIR="${REPO_ROOT}/sw_projects/P2_app"
 P2APP_SOURCE_BIN="${P2APP_DIR}/p2app"
@@ -52,6 +53,11 @@ LEGACY_P2APP_APPS="${HOME}/.local/share/applications/${LEGACY_P2APP_LAUNCHER}"
 AUTOSTART_DIR="${HOME}/.config/autostart"
 AUTOSTART_NAME="P2_app-Control-tray.desktop"
 AUTOSTART_FILE="${AUTOSTART_DIR}/${AUTOSTART_NAME}"
+LEGACY_P2APP_AUTOSTART_NAMES=(
+  "g2-autostart-p2app.desktop"
+  "P2app.desktop"
+  "p2app.desktop"
+)
 ENABLE_TRAY_AUTOSTART="${ENABLE_TRAY_AUTOSTART:-1}"
 FRONT_PANEL_STATE_FILE="${SATURN_FRONT_PANEL_STATE_FILE:-/var/lib/saturn-provision/front-panel-type}"
 P2APP_ENABLE_CONTROL_PANEL="${P2APP_ENABLE_CONTROL_PANEL:-auto}"
@@ -136,6 +142,75 @@ wait_for_service_running() {
     sleep 1
     ((elapsed+=1))
   done
+  return 1
+}
+
+retire_legacy_p2app_autostarts() {
+  local name active disabled
+  for name in "${LEGACY_P2APP_AUTOSTART_NAMES[@]}"; do
+    active="${AUTOSTART_DIR}/${name}"
+    disabled="${active}.disabled"
+    if [[ ! -e "$active" && ! -L "$active" ]]; then
+      continue
+    fi
+
+    echo "[*] Retiring legacy direct-P2app desktop autostart: ${active}"
+    if [[ ! -e "$disabled" && ! -L "$disabled" ]]; then
+      mv -- "$active" "$disabled"
+    else
+      rm -f -- "$active"
+    fi
+  done
+}
+
+running_p2app_pids() {
+  sudo pgrep -x p2app 2>/dev/null || true
+}
+
+stop_non_service_p2app_owners() {
+  local elapsed=0
+  local -a pids=()
+
+  # Stop the canonical unit first. Any exact-name p2app process left after
+  # this is a legacy desktop/manual owner and must release the radio before
+  # the canonical service is started again.
+  sudo systemctl stop "${UNIT_NAME}" >/dev/null 2>&1 || true
+  mapfile -t pids < <(running_p2app_pids)
+  if (( ${#pids[@]} == 0 )); then
+    return 0
+  fi
+
+  echo "[*] Stopping legacy P2app process owner(s): ${pids[*]}"
+  sudo kill -TERM -- "${pids[@]}"
+  while (( elapsed < P2APP_OWNER_STOP_TIMEOUT_SECONDS )); do
+    sleep 1
+    mapfile -t pids < <(running_p2app_pids)
+    if (( ${#pids[@]} == 0 )); then
+      return 0
+    fi
+    elapsed=$((elapsed + 1))
+  done
+
+  echo "[!] ERROR: P2app process owner(s) did not stop: ${pids[*]}" >&2
+  echo "[!] ERROR: Refusing to start a second P2app instance." >&2
+  return 1
+}
+
+verify_single_p2app_owner() {
+  local main_pid
+  local -a pids=()
+  main_pid="$(sudo systemctl show -p MainPID --value "${UNIT_NAME}" 2>/dev/null || true)"
+  mapfile -t pids < <(running_p2app_pids)
+
+  if [[ "$main_pid" =~ ^[1-9][0-9]*$ ]] \
+      && (( ${#pids[@]} == 1 )) \
+      && [[ "${pids[0]}" == "$main_pid" ]]; then
+    echo "[*] Verified single P2app owner: ${UNIT_NAME} PID ${main_pid}"
+    return 0
+  fi
+
+  echo "[!] ERROR: P2app ownership is not exclusive." >&2
+  echo "[!] ERROR: ${UNIT_NAME} MainPID=${main_pid:-unknown}; running PID(s)=${pids[*]:-none}" >&2
   return 1
 }
 
@@ -408,6 +483,8 @@ fi
 rm -f "$TMP_SUDOERS"
 
 echo "[*] Reloading systemd + enabling service"
+retire_legacy_p2app_autostarts
+stop_non_service_p2app_owners
 sudo systemctl daemon-reload
 sudo systemctl enable "${UNIT_NAME}" >/dev/null
 
@@ -432,6 +509,9 @@ if ! wait_for_service_running; then
     echo "[!] ERROR: ${XDMA_REG_DEV} exists, but ${UNIT_NAME} is still not active."
     start_rc=1
   fi
+fi
+if service_is_running && ! verify_single_p2app_owner; then
+  start_rc=1
 fi
 
 echo "[*] Removing legacy desktop shortcuts (window mode launcher no longer installed)"

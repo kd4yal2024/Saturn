@@ -1241,18 +1241,27 @@ async fn proxy_bridge_socket(
                         .map_err(|err| format!("bridge websocket send failed: {err}"))?;
                 }
                 AxumMessage::Ping(bytes) => {
+                    if !bridge_proxy_allows_message(channel, BridgeProxyMessageKind::Ping) {
+                        continue;
+                    }
                     bridge_tx
                         .send(TungsteniteMessage::Ping(bytes.to_vec().into()))
                         .await
                         .map_err(|err| format!("bridge websocket ping failed: {err}"))?;
                 }
                 AxumMessage::Pong(bytes) => {
+                    if !bridge_proxy_allows_message(channel, BridgeProxyMessageKind::Pong) {
+                        continue;
+                    }
                     bridge_tx
                         .send(TungsteniteMessage::Pong(bytes.to_vec().into()))
                         .await
                         .map_err(|err| format!("bridge websocket pong failed: {err}"))?;
                 }
                 AxumMessage::Close(_) => {
+                    if !bridge_proxy_allows_message(channel, BridgeProxyMessageKind::Close) {
+                        continue;
+                    }
                     let _ = bridge_tx.send(TungsteniteMessage::Close(None)).await;
                     break;
                 }
@@ -1286,18 +1295,27 @@ async fn proxy_bridge_socket(
                         .map_err(|err| format!("client websocket send failed: {err}"))?;
                 }
                 TungsteniteMessage::Ping(bytes) => {
+                    if !bridge_proxy_allows_message(channel, BridgeProxyMessageKind::Ping) {
+                        continue;
+                    }
                     client_tx
                         .send(AxumMessage::Ping(bytes.to_vec().into()))
                         .await
                         .map_err(|err| format!("client websocket ping failed: {err}"))?;
                 }
                 TungsteniteMessage::Pong(bytes) => {
+                    if !bridge_proxy_allows_message(channel, BridgeProxyMessageKind::Pong) {
+                        continue;
+                    }
                     client_tx
                         .send(AxumMessage::Pong(bytes.to_vec().into()))
                         .await
                         .map_err(|err| format!("client websocket pong failed: {err}"))?;
                 }
                 TungsteniteMessage::Close(_) => {
+                    if !bridge_proxy_allows_message(channel, BridgeProxyMessageKind::Close) {
+                        continue;
+                    }
                     let _ = client_tx.send(AxumMessage::Close(None)).await;
                     break;
                 }

@@ -30,6 +30,15 @@ SATURN_BRIDGE_VERIFY_RUNTIME="${SATURN_BRIDGE_VERIFY_RUNTIME:-1}"
 SATURN_BRIDGE_BACKEND_STATE_FILE="${SATURN_BRIDGE_BACKEND_STATE_FILE:-/var/lib/saturn-radio-backend/selection.json}"
 SATURN_BRIDGE_BACKEND_SWITCH_HELPER="${SATURN_BRIDGE_BACKEND_SWITCH_HELPER:-/usr/local/lib/saturn-go/scripts/saturn-radio-backend-switch-root.sh}"
 SATURN_BRIDGE_PRESERVED_BACKEND="p2"
+SATURN_BRIDGE_FFTW_WISDOM_SOURCE="${SATURN_BRIDGE_FFTW_WISDOM_SOURCE:-${SATURN_REPO_ROOT}/update_manager/scripts/saturn-fftw-wisdom.sh}"
+SATURN_BRIDGE_FFTW_WISDOM_HELPER="${SATURN_BRIDGE_FFTW_WISDOM_HELPER:-/usr/local/lib/saturn-go/scripts/saturn-fftw-wisdom.sh}"
+SATURN_BRIDGE_FFTW_WISDOM_CACHE_DIR="${SATURN_BRIDGE_FFTW_WISDOM_CACHE_DIR:-/var/cache/saturn-bridge}"
+SATURN_BRIDGE_FFTW_WISDOM_PATH="${SATURN_BRIDGE_FFTW_WISDOM_PATH:-${SATURN_BRIDGE_FFTW_WISDOM_CACHE_DIR}/wdspWisdom01}"
+SATURN_BRIDGE_FFTW_WISDOM_SERVICE="${SATURN_BRIDGE_FFTW_WISDOM_SERVICE:-/etc/systemd/system/saturn-fftw-wisdom.service}"
+SATURN_BRIDGE_FFTW_WISDOM_TIMER="${SATURN_BRIDGE_FFTW_WISDOM_TIMER:-/etc/systemd/system/saturn-fftw-wisdom.timer}"
+SATURN_BRIDGE_FFTW_WISDOM_MAX_SIZE="${SATURN_BRIDGE_FFTW_WISDOM_MAX_SIZE:-262144}"
+SATURN_BRIDGE_FFTW_WISDOM_ON_CALENDAR="${SATURN_BRIDGE_FFTW_WISDOM_ON_CALENDAR:-Sun *-*-* 03:15:00}"
+SATURN_BRIDGE_FFTW_WISDOM_GENERATE_ON_INSTALL="${SATURN_BRIDGE_FFTW_WISDOM_GENERATE_ON_INSTALL:-1}"
 
 # These commits are part of the Saturn Bridge native build contract. Updating
 # either pin requires rebuilding and re-running the WDSP/bridge test matrix.
@@ -265,11 +274,13 @@ verify_bridge_inputs() {
   need_file "$SATURN_BRIDGE_SOURCE_DIR/Cargo.toml" "saturn-bridge Cargo manifest"
   need_cmd git
   need_cmd ionice
+  need_cmd flock
   need_cmd nm
   need_cmd nice
   need_cmd pkg-config
   need_cmd python3
   pkg-config --exists fftw3 || die "fftw3 development package is required"
+  need_file "$SATURN_BRIDGE_FFTW_WISDOM_SOURCE" "Saturn FFTW wisdom helper"
 }
 
 build_bridge() {
@@ -344,6 +355,81 @@ install_binary() {
   log "Installed bridge binary: $SATURN_BRIDGE_BIN"
 }
 
+install_fftw_wisdom_maintenance() {
+  local service_name timer_name
+  service_name="$(basename "$SATURN_BRIDGE_FFTW_WISDOM_SERVICE")"
+  timer_name="$(basename "$SATURN_BRIDGE_FFTW_WISDOM_TIMER")"
+
+  install -D -m 0755 -o root -g root \
+    "$SATURN_BRIDGE_FFTW_WISDOM_SOURCE" "$SATURN_BRIDGE_FFTW_WISDOM_HELPER"
+  install -d -m 0755 -o root -g root "$SATURN_BRIDGE_FFTW_WISDOM_CACHE_DIR"
+
+  cat >"$SATURN_BRIDGE_FFTW_WISDOM_SERVICE" <<EOF
+[Unit]
+Description=Check and refresh Saturn Bridge FFTW wisdom
+Documentation=https://github.com/kd4yal2024/Saturn
+ConditionFileIsExecutable=${SATURN_BRIDGE_BIN}
+
+[Service]
+Type=oneshot
+ExecStart=${SATURN_BRIDGE_FFTW_WISDOM_HELPER} --check
+Environment=SATURN_FFTW_WISDOM_BRIDGE_BIN=${SATURN_BRIDGE_BIN}
+Environment=SATURN_FFTW_WISDOM_CACHE_DIR=${SATURN_BRIDGE_FFTW_WISDOM_CACHE_DIR}
+Environment=SATURN_BRIDGE_FFTW_WISDOM_MAX_SIZE=${SATURN_BRIDGE_FFTW_WISDOM_MAX_SIZE}
+Nice=19
+IOSchedulingClass=idle
+CPUWeight=10
+TimeoutStartSec=6h
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=${SATURN_BRIDGE_FFTW_WISDOM_CACHE_DIR}
+RestrictAddressFamilies=AF_UNIX
+LockPersonality=yes
+RestrictSUIDSGID=yes
+EOF
+
+  cat >"$SATURN_BRIDGE_FFTW_WISDOM_TIMER" <<EOF
+[Unit]
+Description=Periodically verify Saturn Bridge FFTW wisdom fingerprint
+
+[Timer]
+OnCalendar=${SATURN_BRIDGE_FFTW_WISDOM_ON_CALENDAR}
+RandomizedDelaySec=45m
+Persistent=true
+Unit=${service_name}
+
+[Install]
+WantedBy=timers.target
+EOF
+
+  chmod 0644 "$SATURN_BRIDGE_FFTW_WISDOM_SERVICE" "$SATURN_BRIDGE_FFTW_WISDOM_TIMER"
+  systemctl daemon-reload
+  systemctl enable "$timer_name"
+  if systemctl is-active --quiet "$timer_name"; then
+    systemctl restart "$timer_name"
+  else
+    systemctl start "$timer_name"
+  fi
+  log "Installed FFTW wisdom fingerprint timer: $timer_name"
+
+  if flag_enabled "$SATURN_BRIDGE_FFTW_WISDOM_GENERATE_ON_INSTALL"; then
+    log "Checking machine-local FFTW wisdom during installation"
+    if ! env \
+      SATURN_FFTW_WISDOM_BRIDGE_BIN="$SATURN_BRIDGE_BIN" \
+      SATURN_FFTW_WISDOM_CACHE_DIR="$SATURN_BRIDGE_FFTW_WISDOM_CACHE_DIR" \
+      SATURN_BRIDGE_FFTW_WISDOM_MAX_SIZE="$SATURN_BRIDGE_FFTW_WISDOM_MAX_SIZE" \
+      "$SATURN_BRIDGE_FFTW_WISDOM_HELPER" --check
+    then
+      log "WARNING: FFTW wisdom generation failed; Saturn Bridge will use safe runtime planning and the timer will retry"
+    fi
+  else
+    log "Skipping install-time FFTW wisdom generation; periodic fingerprint checks remain enabled"
+  fi
+}
+
 capture_selected_backend() {
   local selected=""
   if [[ -r "$SATURN_BRIDGE_BACKEND_STATE_FILE" ]]; then
@@ -405,6 +491,7 @@ Environment=SATURN_BRIDGE_RADIO_HOST=127.0.0.1
 Environment=SATURN_BRIDGE_RADIO_PORT=1024
 Environment=SATURN_BRIDGE_RADIO_BACKEND=p2
 Environment=SATURN_BRIDGE_XDMA_READY_PATH=/run/saturn-bridge/xdma-ready.json
+Environment=SATURN_BRIDGE_FFTW_WISDOM_PATH=${SATURN_BRIDGE_FFTW_WISDOM_PATH}
 Environment=SATURN_BRIDGE_CLIENT_HOST=127.0.0.1
 Environment=SATURN_BRIDGE_CLIENT_PORT=12000
 Environment=SATURN_BRIDGE_TCI_HOST=127.0.0.1
@@ -481,6 +568,7 @@ main() {
   verify_built_bridge
   capture_selected_backend
   install_binary
+  install_fftw_wisdom_maintenance
   install_service
   if flag_enabled "$SATURN_BRIDGE_VERIFY_RUNTIME"; then
     verify_runtime

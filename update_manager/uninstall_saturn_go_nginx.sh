@@ -34,6 +34,8 @@ SYSTEMD_SERVICE="/etc/systemd/system/saturn-go.service"
 BRIDGE_SERVICE="/etc/systemd/system/saturn-bridge.service"
 WATCHDOG_SERVICE="/etc/systemd/system/saturn-go-watchdog.service"
 WATCHDOG_TIMER="/etc/systemd/system/saturn-go-watchdog.timer"
+FFTW_WISDOM_SERVICE="/etc/systemd/system/saturn-fftw-wisdom.service"
+FFTW_WISDOM_TIMER="/etc/systemd/system/saturn-fftw-wisdom.timer"
 NGINX_SITE_AVAILABLE="/etc/nginx/sites-available/saturn"
 NGINX_SITE_ENABLED="/etc/nginx/sites-enabled/saturn"
 NGINX_SSE_MAP="/etc/nginx/conf.d/saturn_sse_map.conf"
@@ -43,6 +45,8 @@ WEB_ROOT="/var/lib/saturn-web"
 WATCHDOG_SCRIPT_NEW="/usr/local/lib/saturn-go/saturn-health-watchdog.sh"
 WATCHDOG_SCRIPT_OLD="/opt/saturn-go/scripts/saturn-health-watchdog.sh"
 WATCHDOG_SCRIPT_DIR="/usr/local/lib/saturn-go"
+FFTW_WISDOM_HELPER="$WATCHDOG_SCRIPT_DIR/scripts/saturn-fftw-wisdom.sh"
+FFTW_WISDOM_CACHE_DIR="/var/cache/saturn-bridge"
 PRIVILEGED_SCRIPTS_DIR="$WATCHDOG_SCRIPT_DIR/scripts"
 SATURN_STATE_DIR="/var/lib/saturn-state"
 SUDOERS_FILE="/etc/sudoers.d/saturn-go-maintenance"
@@ -90,6 +94,15 @@ if systemctl list-unit-files | grep -Fq "saturn-go-watchdog.service"; then
   run_cmd systemctl stop saturn-go-watchdog.service || true
   run_cmd systemctl disable saturn-go-watchdog.service || true
 fi
+if systemctl list-unit-files | grep -Fq "saturn-fftw-wisdom.timer"; then
+  echo "[INFO] Stopping and disabling saturn-fftw-wisdom.timer"
+  run_cmd systemctl stop saturn-fftw-wisdom.timer || true
+  run_cmd systemctl disable saturn-fftw-wisdom.timer || true
+fi
+if systemctl list-unit-files | grep -Fq "saturn-fftw-wisdom.service"; then
+  echo "[INFO] Stopping saturn-fftw-wisdom.service"
+  run_cmd systemctl stop saturn-fftw-wisdom.service || true
+fi
 
 # 2) Kill straggler process if present
 if pgrep -f "/opt/saturn-go/bin/saturn-go" >/dev/null 2>&1; then
@@ -118,6 +131,22 @@ fi
 if [[ -f "$WATCHDOG_TIMER" ]]; then
   echo "[INFO] Removing watchdog timer file: $WATCHDOG_TIMER"
   run_cmd rm -f "$WATCHDOG_TIMER"
+fi
+if [[ -f "$FFTW_WISDOM_SERVICE" ]]; then
+  echo "[INFO] Removing FFTW wisdom service: $FFTW_WISDOM_SERVICE"
+  run_cmd rm -f "$FFTW_WISDOM_SERVICE"
+fi
+if [[ -f "$FFTW_WISDOM_TIMER" ]]; then
+  echo "[INFO] Removing FFTW wisdom timer: $FFTW_WISDOM_TIMER"
+  run_cmd rm -f "$FFTW_WISDOM_TIMER"
+fi
+if [[ -f "$FFTW_WISDOM_HELPER" ]]; then
+  echo "[INFO] Removing FFTW wisdom helper: $FFTW_WISDOM_HELPER"
+  run_cmd rm -f "$FFTW_WISDOM_HELPER"
+fi
+if [[ -d "$FFTW_WISDOM_CACHE_DIR" ]]; then
+  echo "[INFO] Removing derived FFTW wisdom cache: $FFTW_WISDOM_CACHE_DIR"
+  run_cmd rm -rf "$FFTW_WISDOM_CACHE_DIR"
 fi
 if [[ -f "$SUDOERS_FILE" ]]; then
   echo "[INFO] Removing sudoers policy: $SUDOERS_FILE"
