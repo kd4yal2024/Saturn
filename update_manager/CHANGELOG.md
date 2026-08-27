@@ -4,6 +4,12 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
 
 ## [Unreleased]
 ### Changed
+- Completed live Saturn G2 operator acceptance of the responsive Saturn Remote console at
+  checkpoint `92ec62d`. Desktop, 1920x1080, and phone layouts; RX display/audio/DSP controls;
+  VFO A/B, SPLIT, attenuation, speech squelch, ADC-overload annunciation, phone Stay Awake,
+  and TX safety presentation passed. A dummy-load transmission confirmed ALC, compression,
+  microphone-peak, and reflected-power telemetry, while repeated MOX/PTT cycles remained
+  stable after eliminating a duplicate factory-autostarted P2app owner.
 - Fit the Saturn Remote operating console to the appliance's 1920x1080 LCD without page
   scrolling. Desktop VFO and meter instrumentation is approximately 20% more compact while
   preserving full-time panadapter, waterfall, side controls, and the collapsed Operations

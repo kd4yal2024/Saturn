@@ -441,17 +441,23 @@ pre-key microphone analysis path and the same arm, timeout, role, disconnect, an
 interlocks as PTT; TUNE needs a single-tone RF source plus the existing TX qualification and
 power/SWR trip behavior; and TX monitor needs a dedicated echo-safe browser audio route.
 
-Automated acceptance currently passes 50 test files / 405 tests and 195 bridge tests,
+Automated acceptance currently passes 50 test files / 405 tests and 197 bridge tests,
 TypeScript typechecking,
 the 167-entry template/bundle seam check, the production build, and responsive Chromium
 geometry validation across phone portrait/landscape, tablet portrait/landscape, compact
 desktop, 1440 desktop, 1920 HD, and 2560 ultrawide, including representative drawer and
 setup-open states.
 
-Live RF acceptance remains deliberately separate. RX/IQ/audio and TX interlock/PTT/MOX must
-be exercised against the intended Saturn G2 with the operator-confirmed RF-safe load and
-hardware ownership before any transmit command is sent. No radio was keyed during this UI
-implementation pass.
+Live Saturn G2 operator acceptance completed on 2026-08-26 against checkpoint `92ec62d`.
+Desktop, 1920x1080, and phone layouts; spectrum/waterfall/RX audio; band, mode, filter,
+NR/NB/ANF/AGC; VFO A/B and SPLIT; desktop audio meters and collapsible Audio Scope;
+Operations visibility; phone/desktop layout switching; ATT response; supported-mode speech
+squelch; true ADC-overload annunciation; phone Stay Awake; and TX Arm/PTT/MOX presentation
+all operated as expected. An RF-safe dummy-load pass also confirmed ALC, compression,
+microphone-peak, and reflected-power telemetry. Repeated MOX/PTT operation remained stable
+after a factory desktop autostart that launched a second P2app instance was retired. The
+deferred preamp, VOX, TUNE, and TX Monitor features remain future work rather than acceptance
+blockers for this responsive redesign.
 
 ## Initial implementation boundary
 
