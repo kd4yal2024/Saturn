@@ -31,6 +31,9 @@ import {
   clampTwoToneFreqHz,
   clampTwoToneLevelDb,
   clampTwoToneDelayMs,
+  clampTxDexpThresholdDb,
+  clampTxDexpExpansionDb,
+  clampTxSpeechProcessorGainDb,
   sanitizeEqBands,
   sanitizeCfcBands,
   clampDisplayDb,
@@ -99,6 +102,12 @@ export interface RadioPrefsTarget {
   txTwoToneDelayMs: number;
   txNoiseGateEnabled: boolean;
   txNoiseGateThresholdDb: number;
+  txDexpEnabled: boolean;
+  txDexpThresholdDb: number;
+  txDexpExpansionDb: number;
+  txSpeechProcessorEnabled: boolean;
+  txSpeechProcessorGainDb: number;
+  txCessbEnabled: boolean;
   txTimeoutEnabled: boolean;
   txTimeoutSeconds: number;
 }
@@ -125,6 +134,7 @@ export interface DisplayPrefsTarget {
   showGrid: boolean;
   showCenterLine: boolean;
   showBandEdges: boolean;
+  peakTuneAssistEnabled: boolean;
 }
 
 /** Full state shape for normalizeAppStateInPlace. */
@@ -241,6 +251,16 @@ export function applyRadioPrefsToState(
   state.txNoiseGateEnabled = Boolean(prefs.txNoiseGateEnabled ?? state.txNoiseGateEnabled);
   state.txNoiseGateThresholdDb = Math.max(-80, Math.min(0,
     Number(prefs.txNoiseGateThresholdDb ?? state.txNoiseGateThresholdDb) || -30));
+  state.txDexpEnabled = Boolean(prefs.txDexpEnabled ?? state.txDexpEnabled);
+  state.txDexpThresholdDb = clampTxDexpThresholdDb(prefs.txDexpThresholdDb ?? state.txDexpThresholdDb);
+  state.txDexpExpansionDb = clampTxDexpExpansionDb(prefs.txDexpExpansionDb ?? state.txDexpExpansionDb);
+  state.txSpeechProcessorEnabled = Boolean(
+    prefs.txSpeechProcessorEnabled ?? state.txSpeechProcessorEnabled,
+  );
+  state.txSpeechProcessorGainDb = clampTxSpeechProcessorGainDb(
+    prefs.txSpeechProcessorGainDb ?? state.txSpeechProcessorGainDb,
+  );
+  state.txCessbEnabled = Boolean(prefs.txCessbEnabled ?? state.txCessbEnabled);
   state.txTimeoutEnabled = Boolean(prefs.txTimeoutEnabled ?? state.txTimeoutEnabled);
   state.txTimeoutSeconds = Math.max(10, Math.min(600, Math.round(Number(prefs.txTimeoutSeconds ?? state.txTimeoutSeconds) || 180)));
 }
@@ -283,6 +303,7 @@ export function applyDisplayPrefsToState(
   state.showGrid = Boolean(prefs.showGrid ?? state.showGrid);
   state.showCenterLine = Boolean(prefs.showCenterLine ?? state.showCenterLine);
   state.showBandEdges = Boolean(prefs.showBandEdges ?? state.showBandEdges);
+  state.peakTuneAssistEnabled = Boolean(prefs.peakTuneAssistEnabled ?? state.peakTuneAssistEnabled);
 
   return { peakHoldCleared: wasPeakHold && !state.spectrumPeakHold };
 }
@@ -347,6 +368,12 @@ export function normalizeAppStateInPlace(state: NormalizableState): void {
   state.txNoiseGateEnabled = Boolean(state.txNoiseGateEnabled);
   state.txNoiseGateThresholdDb = Math.max(-80, Math.min(0,
     Number(state.txNoiseGateThresholdDb) || -30));
+  state.txDexpEnabled = Boolean(state.txDexpEnabled);
+  state.txDexpThresholdDb = clampTxDexpThresholdDb(state.txDexpThresholdDb);
+  state.txDexpExpansionDb = clampTxDexpExpansionDb(state.txDexpExpansionDb);
+  state.txSpeechProcessorEnabled = Boolean(state.txSpeechProcessorEnabled);
+  state.txSpeechProcessorGainDb = clampTxSpeechProcessorGainDb(state.txSpeechProcessorGainDb);
+  state.txCessbEnabled = Boolean(state.txCessbEnabled);
   state.txTimeoutEnabled = Boolean(state.txTimeoutEnabled);
   state.txTimeoutSeconds = Math.max(10, Math.min(600, Math.round(safeFiniteNumber(state.txTimeoutSeconds, 180))));
 
@@ -402,4 +429,5 @@ export function normalizeAppStateInPlace(state: NormalizableState): void {
   state.showGrid = Boolean(state.showGrid);
   state.showCenterLine = Boolean(state.showCenterLine);
   state.showBandEdges = Boolean(state.showBandEdges);
+  state.peakTuneAssistEnabled = Boolean(state.peakTuneAssistEnabled);
 }

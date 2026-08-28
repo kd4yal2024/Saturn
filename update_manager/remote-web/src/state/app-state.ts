@@ -116,6 +116,12 @@ export interface AppState {
   txTwoToneDelayMs: number;
   txNoiseGateEnabled: boolean;
   txNoiseGateThresholdDb: number;
+  txDexpEnabled: boolean;
+  txDexpThresholdDb: number;
+  txDexpExpansionDb: number;
+  txSpeechProcessorEnabled: boolean;
+  txSpeechProcessorGainDb: number;
+  txCessbEnabled: boolean;
   txTimeoutEnabled: boolean;
   txTimeoutSeconds: number;
   txTimeoutTimerId: ReturnType<typeof setTimeout> | null;
@@ -240,6 +246,9 @@ export interface AppState {
   showGrid: boolean;
   showCenterLine: boolean;
   showBandEdges: boolean;
+  peakTuneAssistEnabled: boolean;
+  peakTuneFrequencyHz: number | null;
+  peakTuneLevelDb: number | null;
 
   // ── FFT / Spectrum State ────────────────────────────────────────────────
   latestBins: Float32Array;
@@ -432,6 +441,12 @@ export function createAppState(): AppState {
     txTwoToneDelayMs: 0,
     txNoiseGateEnabled: true,
     txNoiseGateThresholdDb: -30.0,
+    txDexpEnabled: false,
+    txDexpThresholdDb: -40.0,
+    txDexpExpansionDb: 10.0,
+    txSpeechProcessorEnabled: false,
+    txSpeechProcessorGainDb: 10.0,
+    txCessbEnabled: false,
     txTimeoutEnabled: true,
     txTimeoutSeconds: 180,
     txTimeoutTimerId: null,
@@ -553,6 +568,9 @@ export function createAppState(): AppState {
     showGrid: true,
     showCenterLine: true,
     showBandEdges: true,
+    peakTuneAssistEnabled: false,
+    peakTuneFrequencyHz: null,
+    peakTuneLevelDb: null,
 
     latestBins: new Float32Array(1024),
     fftWidth: 1024,

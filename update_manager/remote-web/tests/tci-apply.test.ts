@@ -129,6 +129,12 @@ function createState(): TciRadioState {
     txTwoToneDelayMs: 0,
     txNoiseGateEnabled: true,
     txNoiseGateThresholdDb: -30,
+    txDexpEnabled: false,
+    txDexpThresholdDb: -40,
+    txDexpExpansionDb: 10,
+    txSpeechProcessorEnabled: false,
+    txSpeechProcessorGainDb: 10,
+    txCessbEnabled: false,
   };
 }
 
@@ -437,5 +443,19 @@ describe('applyTciText', () => {
     expect(result.state.twoToneEnabled).toBe(true);
     expect(result.state.txTwoToneFreq1).toBe(850);
     expect(result.state.txTwoToneLevelDb).toBe(-6);
+  });
+
+  it('updates NB3, DEXP, speech processor, and CESSB controls', () => {
+    const result = applyTciText(
+      'rx_nb:0,NB3;tx_dexp:0,true;tx_dexp_threshold:0,-44;tx_dexp_expansion:0,14;tx_speech_processor:0,true;tx_speech_processor_gain:0,9.5;tx_cessb:0,true;',
+      createState(),
+    );
+    expect(result.state.rxNbMode).toBe('NB3');
+    expect(result.state.txDexpEnabled).toBe(true);
+    expect(result.state.txDexpThresholdDb).toBe(-44);
+    expect(result.state.txDexpExpansionDb).toBe(14);
+    expect(result.state.txSpeechProcessorEnabled).toBe(true);
+    expect(result.state.txSpeechProcessorGainDb).toBe(9.5);
+    expect(result.state.txCessbEnabled).toBe(true);
   });
 });

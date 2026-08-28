@@ -24,6 +24,9 @@ import {
   clampTwoToneFreqHz,
   clampTwoToneLevelDb,
   clampTwoToneDelayMs,
+  clampTxDexpThresholdDb,
+  clampTxDexpExpansionDb,
+  clampTxSpeechProcessorGainDb,
 } from '../settings/normalize';
 import { clampDemodMode, shiftedSignedPassbandFromUiCuts, signedPassbandFromUiCuts } from '../radio/passband';
 import type { TxCodecCapability } from '../transport/tx-uplink';
@@ -141,6 +144,12 @@ export function buildAllRadioPrefsCommands(prefs: RadioPrefs): string[] {
   cmds.push(`tx_puresignal_attenuation:0,${clampPureSignalAttenuationDb(prefs.pureSignalAttenuationDb)};`);
   cmds.push(...buildTwoToneCommands(prefs));
   cmds.push(`tx_two_tone:0,${Boolean(prefs.twoToneEnabled)};`);
+  cmds.push(`tx_dexp:0,${Boolean(prefs.txDexpEnabled)};`);
+  cmds.push(`tx_dexp_threshold:0,${clampTxDexpThresholdDb(prefs.txDexpThresholdDb).toFixed(1)};`);
+  cmds.push(`tx_dexp_expansion:0,${clampTxDexpExpansionDb(prefs.txDexpExpansionDb).toFixed(1)};`);
+  cmds.push(`tx_speech_processor:0,${Boolean(prefs.txSpeechProcessorEnabled)};`);
+  cmds.push(`tx_speech_processor_gain:0,${clampTxSpeechProcessorGainDb(prefs.txSpeechProcessorGainDb).toFixed(1)};`);
+  cmds.push(`tx_cessb:0,${Boolean(prefs.txCessbEnabled)};`);
 
   return cmds;
 }

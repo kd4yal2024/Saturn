@@ -469,6 +469,21 @@ export function applyTciCommand(command: TciCommand, current: TciRadioState): Tc
   } else if (command.name === 'tx_noise_gate_threshold') {
     const value = numericArg(argAt(args, 1) ?? argAt(args, 0));
     if (value != null) next.txNoiseGateThresholdDb = Math.max(-80, Math.min(0, value));
+  } else if (command.name === 'tx_dexp') {
+    next.txDexpEnabled = booleanArg(argAt(args, 1) ?? argAt(args, 0)) === true;
+  } else if (command.name === 'tx_dexp_threshold') {
+    const value = numericArg(argAt(args, 1) ?? argAt(args, 0));
+    if (value != null) next.txDexpThresholdDb = Math.max(-80, Math.min(-6, value));
+  } else if (command.name === 'tx_dexp_expansion') {
+    const value = numericArg(argAt(args, 1) ?? argAt(args, 0));
+    if (value != null) next.txDexpExpansionDb = Math.max(0, Math.min(30, value));
+  } else if (command.name === 'tx_speech_processor') {
+    next.txSpeechProcessorEnabled = booleanArg(argAt(args, 1) ?? argAt(args, 0)) === true;
+  } else if (command.name === 'tx_speech_processor_gain') {
+    const value = numericArg(argAt(args, 1) ?? argAt(args, 0));
+    if (value != null) next.txSpeechProcessorGainDb = Math.max(0, Math.min(20, value));
+  } else if (command.name === 'tx_cessb') {
+    next.txCessbEnabled = booleanArg(argAt(args, 1) ?? argAt(args, 0)) === true;
   } else if (command.name === 'audio_start') {
     next.audioStreaming = true;
   } else if (command.name === 'audio_stop') {

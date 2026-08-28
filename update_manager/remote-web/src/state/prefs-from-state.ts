@@ -26,6 +26,9 @@ import {
   clampTwoToneFreqHz,
   clampTwoToneLevelDb,
   clampTwoToneDelayMs,
+  clampTxDexpThresholdDb,
+  clampTxDexpExpansionDb,
+  clampTxSpeechProcessorGainDb,
   sanitizeEqBands,
   sanitizeCfcBands,
   normalizeTxMeterMode,
@@ -92,6 +95,12 @@ export interface RadioPrefsSource {
   txTwoToneDelayMs: number;
   txNoiseGateEnabled: boolean;
   txNoiseGateThresholdDb: number;
+  txDexpEnabled: boolean;
+  txDexpThresholdDb: number;
+  txDexpExpansionDb: number;
+  txSpeechProcessorEnabled: boolean;
+  txSpeechProcessorGainDb: number;
+  txCessbEnabled: boolean;
   txTimeoutEnabled: boolean;
   txTimeoutSeconds: number;
 }
@@ -117,6 +126,7 @@ export interface DisplayPrefsSource {
   showGrid: boolean;
   showCenterLine: boolean;
   showBandEdges: boolean;
+  peakTuneAssistEnabled: boolean;
 }
 
 export function radioPrefsFromState(s: RadioPrefsSource): RadioPrefs {
@@ -173,6 +183,12 @@ export function radioPrefsFromState(s: RadioPrefsSource): RadioPrefs {
     txTwoToneDelayMs: clampTwoToneDelayMs(s.txTwoToneDelayMs),
     txNoiseGateEnabled: Boolean(s.txNoiseGateEnabled),
     txNoiseGateThresholdDb: Math.max(-80, Math.min(0, Number(s.txNoiseGateThresholdDb) || -30)),
+    txDexpEnabled: Boolean(s.txDexpEnabled),
+    txDexpThresholdDb: clampTxDexpThresholdDb(s.txDexpThresholdDb),
+    txDexpExpansionDb: clampTxDexpExpansionDb(s.txDexpExpansionDb),
+    txSpeechProcessorEnabled: Boolean(s.txSpeechProcessorEnabled),
+    txSpeechProcessorGainDb: clampTxSpeechProcessorGainDb(s.txSpeechProcessorGainDb),
+    txCessbEnabled: Boolean(s.txCessbEnabled),
     txTimeoutEnabled: Boolean(s.txTimeoutEnabled),
     txTimeoutSeconds: Math.max(10, Math.min(600, Math.round(Number(s.txTimeoutSeconds) || 180))),
   };
@@ -200,5 +216,6 @@ export function displayPrefsFromState(s: DisplayPrefsSource): DisplayPrefs {
     showGrid: Boolean(s.showGrid),
     showCenterLine: Boolean(s.showCenterLine),
     showBandEdges: Boolean(s.showBandEdges),
+    peakTuneAssistEnabled: Boolean(s.peakTuneAssistEnabled),
   };
 }

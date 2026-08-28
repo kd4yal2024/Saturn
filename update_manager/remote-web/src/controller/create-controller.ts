@@ -135,6 +135,12 @@ function createInitialRadioState(settings: SettingsState): TciRadioState {
     txTwoToneDelayMs: settings.radioPrefs.txTwoToneDelayMs,
     txNoiseGateEnabled: settings.radioPrefs.txNoiseGateEnabled,
     txNoiseGateThresholdDb: settings.radioPrefs.txNoiseGateThresholdDb,
+    txDexpEnabled: settings.radioPrefs.txDexpEnabled,
+    txDexpThresholdDb: settings.radioPrefs.txDexpThresholdDb,
+    txDexpExpansionDb: settings.radioPrefs.txDexpExpansionDb,
+    txSpeechProcessorEnabled: settings.radioPrefs.txSpeechProcessorEnabled,
+    txSpeechProcessorGainDb: settings.radioPrefs.txSpeechProcessorGainDb,
+    txCessbEnabled: settings.radioPrefs.txCessbEnabled,
   };
 }
 

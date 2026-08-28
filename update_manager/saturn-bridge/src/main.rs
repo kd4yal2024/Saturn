@@ -881,6 +881,30 @@ fn main() -> Result<(), Box<dyn Error>> {
                     model.desired.tx_noise_gate_threshold_db = thresh_db.clamp(-80.0, 0.0);
                     let _ = tx_cmd_tx.send(TxCommand::ModelChanged);
                 }
+                TciCommand::SetTxDexpEnabled(enabled) => {
+                    model.desired.tx_dexp_enabled = enabled;
+                    let _ = tx_cmd_tx.send(TxCommand::ModelChanged);
+                }
+                TciCommand::SetTxDexpThreshold(threshold_db) => {
+                    model.desired.tx_dexp_threshold_db = threshold_db.clamp(-80.0, -6.0);
+                    let _ = tx_cmd_tx.send(TxCommand::ModelChanged);
+                }
+                TciCommand::SetTxDexpExpansion(expansion_db) => {
+                    model.desired.tx_dexp_expansion_db = expansion_db.clamp(0.0, 30.0);
+                    let _ = tx_cmd_tx.send(TxCommand::ModelChanged);
+                }
+                TciCommand::SetTxSpeechProcessorEnabled(enabled) => {
+                    model.desired.tx_speech_processor_enabled = enabled;
+                    let _ = tx_cmd_tx.send(TxCommand::ModelChanged);
+                }
+                TciCommand::SetTxSpeechProcessorGain(gain_db) => {
+                    model.desired.tx_speech_processor_gain_db = gain_db.clamp(0.0, 20.0);
+                    let _ = tx_cmd_tx.send(TxCommand::ModelChanged);
+                }
+                TciCommand::SetTxCessbEnabled(enabled) => {
+                    model.desired.tx_cessb_enabled = enabled;
+                    let _ = tx_cmd_tx.send(TxCommand::ModelChanged);
+                }
                 TciCommand::SetRxFftSize(size) => {
                     let clamped = size.clamp(1024, 262144);
                     model.desired.rx_fft_size = 1 << (31 - clamped.leading_zeros());

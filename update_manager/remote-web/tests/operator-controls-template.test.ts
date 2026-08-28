@@ -43,6 +43,17 @@ describe('operator-first control checkpoint', () => {
     expect(template).toContain('display-spectrum-peak-hold");');
   });
 
+  it('provides NB3, mode-aware squelch, peak tuning, DEXP, processor, and CESSB controls', () => {
+    expect(template).toContain('data-nb-mode="NB3"');
+    expect(template).toContain('function modeAwareSquelchKind()');
+    expect(template).toContain('id="spectrum-tune-peak-btn"');
+    expect(template).toContain('detectPeakInPassband(');
+    expect(template).toContain('id="tx-dexp-enabled"');
+    expect(template).toContain('id="tx-speech-processor-enabled"');
+    expect(template).toContain('id="tx-cessb-enabled"');
+    expect(template).toContain('sendTci(`tx_cessb:0,${state.txCessbEnabled};`)');
+  });
+
   it('provides phone-size shortcuts for existing receiver DSP controls', () => {
     expect(template).toContain('id="mobile-radio-quickbar"');
     expect(template).toContain('id="mobile-nr-btn"');

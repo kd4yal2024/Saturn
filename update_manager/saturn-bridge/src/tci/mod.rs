@@ -639,6 +639,24 @@ impl TciFrontend {
             "tx_noise_gate_threshold:0,{:.1};",
             model.desired.tx_noise_gate_threshold_db
         ));
+        self.send_text(format!("tx_dexp:0,{};", model.desired.tx_dexp_enabled));
+        self.send_text(format!(
+            "tx_dexp_threshold:0,{:.1};",
+            model.desired.tx_dexp_threshold_db
+        ));
+        self.send_text(format!(
+            "tx_dexp_expansion:0,{:.1};",
+            model.desired.tx_dexp_expansion_db
+        ));
+        self.send_text(format!(
+            "tx_speech_processor:0,{};",
+            model.desired.tx_speech_processor_enabled
+        ));
+        self.send_text(format!(
+            "tx_speech_processor_gain:0,{:.1};",
+            model.desired.tx_speech_processor_gain_db
+        ));
+        self.send_text(format!("tx_cessb:0,{};", model.desired.tx_cessb_enabled));
         self.send_text(format!("rx_fft_size:0,{};", model.desired.rx_fft_size));
         self.send_text(format!(
             "rx_low_latency:0,{};",

@@ -14,6 +14,7 @@ use crate::radio_model::{
 
 const WDSP_RX_CHANNEL: i32 = 0;
 const WDSP_TX_CHANNEL: i32 = 1;
+const WDSP_DEXP_ID: i32 = 1;
 pub const WDSP_AUDIO_RATE_HZ: u32 = 48_000;
 const WDSP_DSP_SIZE: usize = 64;
 pub const TX_MIC_SAMPLES_PER_DSP_BLOCK: usize = 512;
@@ -101,6 +102,11 @@ unsafe extern "C" {
     fn SetRXAPanelGain1(channel: i32, gain: f64);
     fn SetRXASSQLRun(channel: i32, run: i32);
     fn SetRXASSQLThreshold(channel: i32, threshold: f64);
+    fn SetRXAAMSQRun(channel: i32, run: i32);
+    fn SetRXAAMSQThreshold(channel: i32, threshold: f64);
+    fn SetRXAAMSQMaxTail(channel: i32, tail: f64);
+    fn SetRXAFMSQRun(channel: i32, run: i32);
+    fn SetRXAFMSQThreshold(channel: i32, threshold: f64);
     #[cfg(wdsp_has_wbfm)]
     fn SetRXAWBFMdmph(channel: i32, dmph_run: i32, dmph_continent: i32);
     #[cfg(wdsp_has_wbfm)]
@@ -147,6 +153,10 @@ unsafe extern "C" {
     fn SetEXTNOBHangtime(id: i32, time: f64);
     fn SetEXTNOBAdvtime(id: i32, time: f64);
     fn SetEXTNOBThreshold(id: i32, thresh: f64);
+
+    // Spectral Noise Blanker (LPC impulse detector/reconstructor)
+    fn SetRXASNBARun(channel: i32, run: i32);
+    fn SetRXASNBAOutputBandwidth(channel: i32, flow: f64, fhigh: f64);
 
     // Auto Notch Filter
     fn SetRXAANFRun(channel: i32, run: i32);
@@ -248,6 +258,9 @@ unsafe extern "C" {
     fn SetTXACFCOMPPrecomp(channel: i32, precomp: f64);
     fn SetTXACFCOMPPeqRun(channel: i32, run: i32);
     fn SetTXACFCOMPPrePeq(channel: i32, prepeq: f64);
+    fn SetTXACompressorRun(channel: i32, run: i32);
+    fn SetTXACompressorGain(channel: i32, gain: f64);
+    fn SetTXAosctrlRun(channel: i32, run: i32);
 
     // PostGen — two-tone test signal generator (mode 2 = two-tone)
     fn SetTXAPostGenMode(channel: i32, mode: i32);
@@ -269,29 +282,43 @@ unsafe extern "C" {
     fn GetPSMaxTX(channel: i32, max_tx: *mut f64);
     fn SetPSFeedbackRate(channel: i32, rate: i32);
 
-    // DEXP — downward expander / noise gate (operates on mic input buffer)
-    #[allow(dead_code)]
+    // DEXP — external downward expander operating in-place on mic blocks.
+    #[allow(improper_ctypes)]
+    fn create_dexp(
+        id: i32,
+        run_dexp: i32,
+        size: i32,
+        input: *mut f64,
+        output: *mut f64,
+        rate: i32,
+        detector_tau: f64,
+        attack_time: f64,
+        decay_time: f64,
+        hold_time: f64,
+        expansion_ratio: f64,
+        hysteresis_ratio: f64,
+        attack_threshold: f64,
+        filter_taps: i32,
+        window_type: i32,
+        low_cut: f64,
+        high_cut: f64,
+        run_filter: i32,
+        run_vox: i32,
+        run_audio_delay: i32,
+        audio_delay: f64,
+        push_vox: Option<unsafe extern "C" fn(i32, i32)>,
+        anti_vox_run: i32,
+        anti_vox_size: i32,
+        anti_vox_rate: i32,
+        anti_vox_gain: f64,
+        anti_vox_tau: f64,
+    );
+    fn destroy_dexp(id: i32);
+    fn flush_dexp(id: i32);
+    fn xdexp(id: i32);
     fn SetDEXPRun(id: i32, run: i32);
-    #[allow(dead_code)]
-    fn SetDEXPDetectorTau(id: i32, tau: f64);
-    #[allow(dead_code)]
-    fn SetDEXPAttackTime(id: i32, time: f64);
-    #[allow(dead_code)]
-    fn SetDEXPReleaseTime(id: i32, time: f64);
-    #[allow(dead_code)]
-    fn SetDEXPHoldTime(id: i32, time: f64);
-    #[allow(dead_code)]
     fn SetDEXPExpansionRatio(id: i32, ratio: f64);
-    #[allow(dead_code)]
-    fn SetDEXPHysteresisRatio(id: i32, ratio: f64);
-    #[allow(dead_code)]
     fn SetDEXPAttackThreshold(id: i32, thresh: f64);
-    #[allow(dead_code)]
-    fn SetDEXPLowCut(id: i32, lowcut: f64);
-    #[allow(dead_code)]
-    fn SetDEXPHighCut(id: i32, highcut: f64);
-    #[allow(dead_code)]
-    fn SetDEXPRunSideChannelFilter(id: i32, run: i32);
 }
 
 #[derive(Debug)]
@@ -435,11 +462,9 @@ impl WdspRxEngine {
             self.wbfm_stereo_detected = false;
             unsafe {
                 SetRXAMode(self.channel_id, wdsp_mode(self.mode));
-                SetRXASSQLRun(
-                    self.channel_id,
-                    (self.ssql_enabled && ssql_supported_for_mode(self.mode)) as i32,
-                );
             }
+            self.apply_squelch();
+            self.apply_noise_blanker();
             self.apply_agc();
         }
 
@@ -460,16 +485,7 @@ impl WdspRxEngine {
         {
             self.ssql_enabled = model.desired.rx_ssql_enabled;
             self.ssql_threshold = model.desired.rx_ssql_threshold;
-            unsafe {
-                SetRXASSQLThreshold(
-                    self.channel_id,
-                    (self.ssql_threshold / 100.0).clamp(0.0, 1.0),
-                );
-                SetRXASSQLRun(
-                    self.channel_id,
-                    (self.ssql_enabled && ssql_supported_for_mode(self.mode)) as i32,
-                );
-            }
+            self.apply_squelch();
         }
 
         if model.desired.rx_noise_reduction_mode != self.noise_reduction_mode
@@ -539,6 +555,7 @@ impl WdspRxEngine {
                     self.filter_high_hz as f64,
                 );
             }
+            self.apply_noise_blanker();
         }
 
         if model.desired.rx_fft_size != self.rx_fft_size
@@ -746,14 +763,6 @@ impl WdspRxEngine {
             SetRXAPanelSelect(self.channel_id, 3); // use both I and Q input
             SetRXAPanelCopy(self.channel_id, 1); // copy I→Q so both speakers get audio
             SetRXAPanelGain1(self.channel_id, panel_gain_for_volume_db(self.volume_db));
-            SetRXASSQLThreshold(
-                self.channel_id,
-                (self.ssql_threshold / 100.0).clamp(0.0, 1.0),
-            );
-            SetRXASSQLRun(
-                self.channel_id,
-                (self.ssql_enabled && ssql_supported_for_mode(self.mode)) as i32,
-            );
             RXASetNC(self.channel_id, model.desired.rx_fft_size as i32);
             // Thetis defaults to Low_Latency (MP=1) for both RX and TX.
             // Linear phase (MP=0) adds NC/2 samples of group delay;
@@ -801,6 +810,7 @@ impl WdspRxEngine {
             SetRXAEQRun(self.channel_id, 0);
         }
         self.apply_agc();
+        self.apply_squelch();
         self.apply_wbfm_deemphasis();
         self.apply_noise_blanker();
         self.apply_anf();
@@ -865,6 +875,30 @@ impl WdspRxEngine {
         }
     }
 
+    fn apply_squelch(&self) {
+        let slider = self.ssql_threshold.clamp(0.0, 100.0);
+        let enabled = self.ssql_enabled;
+        let voice = enabled && speech_squelch_supported_for_mode(self.mode);
+        let am = enabled && matches!(self.mode, DemodMode::Am | DemodMode::Sam);
+        let fm = enabled && matches!(self.mode, DemodMode::Fm | DemodMode::Wfm);
+        unsafe {
+            // Voice SQL uses a normalized voice/noise classifier threshold.
+            SetRXASSQLThreshold(self.channel_id, slider / 100.0);
+            SetRXASSQLRun(self.channel_id, voice as i32);
+
+            // AM SQL accepts a signal threshold in dBm. Preserve the familiar
+            // 0..100 operator scale while mapping it across -160..-60 dBm.
+            SetRXAAMSQThreshold(self.channel_id, -160.0 + slider);
+            SetRXAAMSQMaxTail(self.channel_id, 1.5);
+            SetRXAAMSQRun(self.channel_id, am as i32);
+
+            // FM SQL measures discriminator noise: a higher operator setting
+            // becomes a lower unmute threshold and therefore tighter SQL.
+            SetRXAFMSQThreshold(self.channel_id, 10f64.powf(-2.0 * slider / 100.0));
+            SetRXAFMSQRun(self.channel_id, fm as i32);
+        }
+    }
+
     fn apply_noise_blanker(&self) {
         let threshold = self.nb_threshold;
         let allowed = self.mode != DemodMode::Wfm;
@@ -886,6 +920,15 @@ impl WdspRxEngine {
             SetEXTNOBRun(
                 self.channel_id,
                 (allowed && self.nb_mode == NoiseBlankerMode::Nb2) as i32,
+            );
+            SetRXASNBAOutputBandwidth(
+                self.channel_id,
+                self.filter_low_hz as f64,
+                self.filter_high_hz as f64,
+            );
+            SetRXASNBARun(
+                self.channel_id,
+                (allowed && self.nb_mode == NoiseBlankerMode::Nb3) as i32,
             );
         }
     }
@@ -1033,6 +1076,13 @@ pub struct WdspTxEngine {
     two_tone_second_active: bool,
     noise_gate_enabled: bool,
     noise_gate_threshold_db: f64,
+    dexp_initialized: bool,
+    dexp_enabled: bool,
+    dexp_threshold_db: f64,
+    dexp_expansion_db: f64,
+    speech_processor_enabled: bool,
+    speech_processor_gain_db: f64,
+    cessb_enabled: bool,
     last_input_peak: f32,
     last_output_peak: f32,
     total_input_samples: u64,
@@ -1108,6 +1158,13 @@ impl WdspTxEngine {
             two_tone_second_active: false,
             noise_gate_enabled: model.desired.tx_noise_gate_enabled,
             noise_gate_threshold_db: model.desired.tx_noise_gate_threshold_db,
+            dexp_initialized: false,
+            dexp_enabled: model.desired.tx_dexp_enabled,
+            dexp_threshold_db: model.desired.tx_dexp_threshold_db,
+            dexp_expansion_db: model.desired.tx_dexp_expansion_db,
+            speech_processor_enabled: model.desired.tx_speech_processor_enabled,
+            speech_processor_gain_db: model.desired.tx_speech_processor_gain_db,
+            cessb_enabled: model.desired.tx_cessb_enabled,
             last_input_peak: 0.0,
             last_output_peak: 0.0,
             total_input_samples: 0,
@@ -1162,6 +1219,17 @@ impl WdspTxEngine {
             SetTXAPHROTAutoMode(self.channel_id, self.phase_rotator_auto as i32);
             SetTXAPHROTRun(self.channel_id, self.phase_rotator_enabled as i32);
             SetTXAEQRun(self.channel_id, 0);
+            SetTXACompressorGain(self.channel_id, self.speech_processor_gain_db);
+            SetTXACompressorRun(
+                self.channel_id,
+                (self.speech_processor_enabled && tx_voice_processing_supported(self.mode)) as i32,
+            );
+            SetTXAosctrlRun(
+                self.channel_id,
+                (self.cessb_enabled
+                    && self.speech_processor_enabled
+                    && tx_voice_processing_supported(self.mode)) as i32,
+            );
             TXASetNC(self.channel_id, self.tx_fft_size as i32);
             TXASetMP(self.channel_id, self.tx_low_latency as i32);
             SetTXABandpassFreqs(
@@ -1206,6 +1274,7 @@ impl WdspTxEngine {
             SetPSControl(self.channel_id, 1, 0, 0, 0);
         }
         self.channel_open = true;
+        self.apply_dexp();
         self.apply_pure_signal_enabled(self.pure_signal_enabled);
     }
 
@@ -1213,6 +1282,12 @@ impl WdspTxEngine {
     /// clearing Rust-side queues: WDSP filters, delay lines, meters, and ALC
     /// state live behind the FFI boundary and otherwise survive an MOX cycle.
     pub fn recreate_channel(&mut self, model: &RadioModel) {
+        if self.dexp_initialized {
+            unsafe {
+                destroy_dexp(WDSP_DEXP_ID);
+            }
+            self.dexp_initialized = false;
+        }
         if self.channel_open {
             unsafe {
                 CloseChannel(self.channel_id);
@@ -1230,6 +1305,8 @@ impl WdspTxEngine {
             unsafe {
                 SetTXAMode(self.channel_id, wdsp_tx_mode(self.mode));
             }
+            self.apply_dexp();
+            self.apply_speech_processing();
         }
 
         if model.desired.tx_filter_low_hz != self.filter_low_hz
@@ -1322,6 +1399,27 @@ impl WdspTxEngine {
             }
         }
 
+        if model.desired.tx_dexp_enabled != self.dexp_enabled
+            || (model.desired.tx_dexp_threshold_db - self.dexp_threshold_db).abs() > f64::EPSILON
+            || (model.desired.tx_dexp_expansion_db - self.dexp_expansion_db).abs() > f64::EPSILON
+        {
+            self.dexp_enabled = model.desired.tx_dexp_enabled;
+            self.dexp_threshold_db = model.desired.tx_dexp_threshold_db;
+            self.dexp_expansion_db = model.desired.tx_dexp_expansion_db;
+            self.apply_dexp();
+        }
+
+        if model.desired.tx_speech_processor_enabled != self.speech_processor_enabled
+            || (model.desired.tx_speech_processor_gain_db - self.speech_processor_gain_db).abs()
+                > f64::EPSILON
+            || model.desired.tx_cessb_enabled != self.cessb_enabled
+        {
+            self.speech_processor_enabled = model.desired.tx_speech_processor_enabled;
+            self.speech_processor_gain_db = model.desired.tx_speech_processor_gain_db;
+            self.cessb_enabled = model.desired.tx_cessb_enabled;
+            self.apply_speech_processing();
+        }
+
         if model.desired.tx_fft_size != self.tx_fft_size
             || model.desired.tx_low_latency != self.tx_low_latency
         {
@@ -1401,6 +1499,72 @@ impl WdspTxEngine {
         }
     }
 
+    fn apply_dexp(&mut self) {
+        if self.dexp_enabled && !self.dexp_initialized {
+            let threshold = db_to_linear(self.dexp_threshold_db);
+            let expansion_ratio = db_to_linear(self.dexp_expansion_db);
+            let buffer = self.input_buffer.as_mut_ptr();
+            unsafe {
+                create_dexp(
+                    WDSP_DEXP_ID,
+                    0,
+                    TX_MIC_SAMPLES_PER_DSP_BLOCK as i32,
+                    buffer,
+                    buffer,
+                    WDSP_AUDIO_RATE_HZ as i32,
+                    0.020,
+                    0.005,
+                    0.100,
+                    0.250,
+                    expansion_ratio,
+                    db_to_linear(-2.0),
+                    threshold,
+                    1024,
+                    1,
+                    500.0,
+                    1500.0,
+                    1,
+                    0,
+                    0,
+                    0.0,
+                    None,
+                    0,
+                    TX_MIC_SAMPLES_PER_DSP_BLOCK as i32,
+                    WDSP_AUDIO_RATE_HZ as i32,
+                    0.0,
+                    0.020,
+                );
+            }
+            self.dexp_initialized = true;
+        }
+        if self.dexp_initialized {
+            unsafe {
+                SetDEXPAttackThreshold(WDSP_DEXP_ID, db_to_linear(self.dexp_threshold_db));
+                SetDEXPExpansionRatio(WDSP_DEXP_ID, db_to_linear(self.dexp_expansion_db));
+                SetDEXPRun(WDSP_DEXP_ID, self.dexp_active() as i32);
+            }
+        }
+    }
+
+    fn dexp_active(&self) -> bool {
+        self.dexp_enabled && tx_voice_processing_supported(self.mode)
+    }
+
+    fn apply_speech_processing(&self) {
+        let processor_active =
+            self.speech_processor_enabled && tx_voice_processing_supported(self.mode);
+        unsafe {
+            SetTXACompressorGain(self.channel_id, self.speech_processor_gain_db);
+            SetTXACompressorRun(self.channel_id, processor_active as i32);
+            // WDSP requires its speech processor ahead of the overshoot
+            // controller. Fail closed if CESSB was requested without it.
+            SetTXAosctrlRun(
+                self.channel_id,
+                (processor_active && self.cessb_enabled) as i32,
+            );
+        }
+    }
+
     fn clear_tx_buffers(&mut self) {
         self.pending_mic.clear();
         self.pending_iq.clear();
@@ -1422,6 +1586,11 @@ impl WdspTxEngine {
         self.tx_active = active;
         if active {
             self.clear_tx_buffers();
+            if self.dexp_initialized {
+                unsafe {
+                    flush_dexp(WDSP_DEXP_ID);
+                }
+            }
             unsafe {
                 SetChannelState(self.channel_id, 1, 0);
             } // run, no wait
@@ -1592,6 +1761,12 @@ impl WdspTxEngine {
                 *sample = self.pending_mic.pop_front().unwrap_or(0.0);
             }
 
+            if self.dexp_initialized && self.dexp_active() {
+                unsafe {
+                    xdexp(WDSP_DEXP_ID);
+                }
+            }
+
             let mut error = 0;
             unsafe {
                 fexchange0(
@@ -1655,6 +1830,10 @@ fn two_tone_magnitude(level_db: f64) -> f64 {
     0.49999 * 10f64.powf(level_db.clamp(-40.0, 0.0) / 20.0)
 }
 
+fn db_to_linear(db: f64) -> f64 {
+    10f64.powf(db / 20.0)
+}
+
 fn mode_inverts_two_tone(mode: DemodMode) -> bool {
     matches!(mode, DemodMode::Lsb | DemodMode::DigL | DemodMode::Cwl)
 }
@@ -1674,6 +1853,12 @@ fn signed_two_tone_freqs(
 
 impl Drop for WdspTxEngine {
     fn drop(&mut self) {
+        if self.dexp_initialized {
+            unsafe {
+                destroy_dexp(WDSP_DEXP_ID);
+            }
+            self.dexp_initialized = false;
+        }
         if self.channel_open {
             unsafe {
                 CloseChannel(self.channel_id);
@@ -1711,15 +1896,10 @@ pub const fn wbfm_supported() -> bool {
     cfg!(wdsp_has_wbfm)
 }
 
-fn ssql_supported_for_mode(mode: DemodMode) -> bool {
+fn speech_squelch_supported_for_mode(mode: DemodMode) -> bool {
     matches!(
         mode,
-        DemodMode::Usb
-            | DemodMode::Lsb
-            | DemodMode::Am
-            | DemodMode::Sam
-            | DemodMode::DigU
-            | DemodMode::DigL
+        DemodMode::Usb | DemodMode::Lsb | DemodMode::DigU | DemodMode::DigL
     )
 }
 
@@ -1737,6 +1917,13 @@ fn wdsp_tx_mode(mode: DemodMode) -> i32 {
     } else {
         wdsp_mode(mode)
     }
+}
+
+fn tx_voice_processing_supported(mode: DemodMode) -> bool {
+    matches!(
+        mode,
+        DemodMode::Usb | DemodMode::Lsb | DemodMode::Am | DemodMode::Sam | DemodMode::Fm
+    )
 }
 
 fn tx_phase_rotator_supported(mode: DemodMode) -> bool {
@@ -1794,7 +1981,8 @@ mod tests {
         normalize_audio_frame_float_count, nr2_factor_for_level, nr2_nlevel_for_level,
         nr2_rate_for_level, nr2_taper_for_level, nr4_post_threshold_for_level,
         nr4_reduction_amount_for_level, panel_gain_for_volume_db, rx_dsp_rate_for_mode,
-        ssql_supported_for_mode, wbfm_supported, wdsp_mode, WdspTxEngine, WDSP_AUDIO_RATE_HZ,
+        speech_squelch_supported_for_mode, tx_voice_processing_supported, wbfm_supported,
+        wdsp_mode, WdspTxEngine, WDSP_AUDIO_RATE_HZ,
     };
     use crate::radio_model::{DemodMode, PureSignalState, RadioModel};
 
@@ -1832,12 +2020,34 @@ mod tests {
 
     #[test]
     fn speech_squelch_is_limited_to_supported_voice_demodulators() {
-        assert!(ssql_supported_for_mode(DemodMode::Usb));
-        assert!(ssql_supported_for_mode(DemodMode::Lsb));
-        assert!(ssql_supported_for_mode(DemodMode::Am));
-        assert!(!ssql_supported_for_mode(DemodMode::Fm));
-        assert!(!ssql_supported_for_mode(DemodMode::Wfm));
-        assert!(!ssql_supported_for_mode(DemodMode::Cwu));
+        assert!(speech_squelch_supported_for_mode(DemodMode::Usb));
+        assert!(speech_squelch_supported_for_mode(DemodMode::Lsb));
+        assert!(!speech_squelch_supported_for_mode(DemodMode::Am));
+        assert!(!speech_squelch_supported_for_mode(DemodMode::Fm));
+        assert!(!speech_squelch_supported_for_mode(DemodMode::Wfm));
+        assert!(!speech_squelch_supported_for_mode(DemodMode::Cwu));
+    }
+
+    #[test]
+    fn tx_voice_processing_excludes_digital_cw_and_wide_fm_modes() {
+        for mode in [
+            DemodMode::Usb,
+            DemodMode::Lsb,
+            DemodMode::Am,
+            DemodMode::Sam,
+            DemodMode::Fm,
+        ] {
+            assert!(tx_voice_processing_supported(mode));
+        }
+        for mode in [
+            DemodMode::DigU,
+            DemodMode::DigL,
+            DemodMode::Cwu,
+            DemodMode::Cwl,
+            DemodMode::Wfm,
+        ] {
+            assert!(!tx_voice_processing_supported(mode));
+        }
     }
 
     #[test]

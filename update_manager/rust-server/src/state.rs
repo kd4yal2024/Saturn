@@ -104,6 +104,10 @@ pub struct RemoteRadioPrefs {
     pub rx_volume_db: Option<f64>,
     pub rx_noise_reduction_mode: Option<String>,
     pub rx_noise_reduction_level: Option<u8>,
+    pub rx_nr2_gain_method: Option<String>,
+    pub rx_nr2_npe_method: Option<String>,
+    pub rx_nr2_post_filter_enabled: Option<bool>,
+    pub rx_wbfm_deemphasis: Option<String>,
     pub rx_nb_mode: Option<String>,
     pub rx_nb_threshold: Option<f64>,
     pub rx_anr_taps: Option<u16>,
@@ -130,6 +134,12 @@ pub struct RemoteRadioPrefs {
     pub cfc_enabled: Option<bool>,
     pub cfc_precomp: Option<f64>,
     pub cfc_bands: Vec<f64>,
+    pub tx_phase_rotator_enabled: Option<bool>,
+    pub tx_phase_rotator_auto: Option<bool>,
+    pub tx_phase_rotator_corner_hz: Option<f64>,
+    pub pure_signal_enabled: Option<bool>,
+    pub pure_signal_auto_attenuate: Option<bool>,
+    pub pure_signal_attenuation_db: Option<u8>,
     pub tx_meter_mode: Option<String>,
     pub two_tone_enabled: Option<bool>,
     pub tx_two_tone_freq1: Option<f64>,
@@ -137,6 +147,18 @@ pub struct RemoteRadioPrefs {
     pub tx_two_tone_level_db: Option<f64>,
     pub tx_two_tone_invert_lsb: Option<bool>,
     pub tx_two_tone_delay_ms: Option<u16>,
+    pub tx_noise_gate_enabled: Option<bool>,
+    pub tx_noise_gate_threshold_db: Option<f64>,
+    pub tx_dexp_enabled: Option<bool>,
+    pub tx_dexp_threshold_db: Option<f64>,
+    pub tx_dexp_expansion_db: Option<f64>,
+    pub tx_speech_processor_enabled: Option<bool>,
+    pub tx_speech_processor_gain_db: Option<f64>,
+    pub tx_cessb_enabled: Option<bool>,
+    pub tx_timeout_enabled: Option<bool>,
+    pub tx_timeout_seconds: Option<u16>,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, serde_json::Value>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
@@ -162,6 +184,49 @@ pub struct RemoteDisplayPrefs {
     pub show_grid: Option<bool>,
     pub show_center_line: Option<bool>,
     pub show_band_edges: Option<bool>,
+    pub peak_tune_assist_enabled: Option<bool>,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, serde_json::Value>,
+}
+
+#[cfg(test)]
+mod remote_settings_tests {
+    use super::RemoteSettings;
+
+    #[test]
+    fn current_remote_dsp_settings_survive_json_round_trip() {
+        let input = serde_json::json!({
+            "activeProfile": null,
+            "displayPrefs": {
+                "peakTuneAssistEnabled": true
+            },
+            "radioPrefs": {
+                "rxNbMode": "NB3",
+                "rxNr2GainMethod": "TRAINED",
+                "rxNr2NpeMethod": "NSTAT",
+                "rxNr2PostFilterEnabled": false,
+                "rxWbfmDeemphasis": "EU_50US",
+                "txDexpEnabled": true,
+                "txDexpThresholdDb": -42.0,
+                "txDexpExpansionDb": 12.0,
+                "txSpeechProcessorEnabled": true,
+                "txSpeechProcessorGainDb": 6.0,
+                "txCessbEnabled": true,
+                "futureDspControl": 17
+            }
+        });
+
+        let settings: RemoteSettings = serde_json::from_value(input.clone()).unwrap();
+        let output = serde_json::to_value(settings).unwrap();
+
+        assert_eq!(output["displayPrefs"]["peakTuneAssistEnabled"], true);
+        assert_eq!(output["radioPrefs"]["rxNbMode"], "NB3");
+        assert_eq!(output["radioPrefs"]["rxNr2GainMethod"], "TRAINED");
+        assert_eq!(output["radioPrefs"]["txDexpThresholdDb"], -42.0);
+        assert_eq!(output["radioPrefs"]["txSpeechProcessorGainDb"], 6.0);
+        assert_eq!(output["radioPrefs"]["txCessbEnabled"], true);
+        assert_eq!(output["radioPrefs"]["futureDspControl"], 17);
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]

@@ -96,7 +96,20 @@ export function normalizeNbMode(value: unknown): RadioPrefs['rxNbMode'] {
   const text = String(value || '').trim().toUpperCase();
   if (['NB1', 'NB', '1'].includes(text)) return 'NB1';
   if (['NB2', 'NOB', '2'].includes(text)) return 'NB2';
+  if (['NB3', 'SNB', 'SNBA', '3'].includes(text)) return 'NB3';
   return 'OFF';
+}
+
+export function clampTxDexpThresholdDb(value: unknown): number {
+  return Math.max(-80, Math.min(-6, safeFiniteNumber(value, DEFAULT_RADIO_PREFS.txDexpThresholdDb)));
+}
+
+export function clampTxDexpExpansionDb(value: unknown): number {
+  return Math.max(0, Math.min(30, safeFiniteNumber(value, DEFAULT_RADIO_PREFS.txDexpExpansionDb)));
+}
+
+export function clampTxSpeechProcessorGainDb(value: unknown): number {
+  return Math.max(0, Math.min(20, safeFiniteNumber(value, DEFAULT_RADIO_PREFS.txSpeechProcessorGainDb)));
 }
 
 export function clampRxNbThreshold(value: unknown): number {
@@ -324,6 +337,12 @@ export function normalizeRadioPrefs(input: DeepPartial<RadioPrefs> | null | unde
     txNoiseGateEnabled: source.txNoiseGateEnabled ?? DEFAULT_RADIO_PREFS.txNoiseGateEnabled,
     txNoiseGateThresholdDb: Math.max(-80, Math.min(0,
       Number(source.txNoiseGateThresholdDb) || DEFAULT_RADIO_PREFS.txNoiseGateThresholdDb)),
+    txDexpEnabled: Boolean(source.txDexpEnabled),
+    txDexpThresholdDb: clampTxDexpThresholdDb(source.txDexpThresholdDb),
+    txDexpExpansionDb: clampTxDexpExpansionDb(source.txDexpExpansionDb),
+    txSpeechProcessorEnabled: Boolean(source.txSpeechProcessorEnabled),
+    txSpeechProcessorGainDb: clampTxSpeechProcessorGainDb(source.txSpeechProcessorGainDb),
+    txCessbEnabled: Boolean(source.txCessbEnabled),
     txTimeoutEnabled: source.txTimeoutEnabled ?? DEFAULT_RADIO_PREFS.txTimeoutEnabled,
     txTimeoutSeconds: Math.max(
       15,
@@ -355,6 +374,7 @@ export function normalizeDisplayPrefs(input: DeepPartial<DisplayPrefs> | null | 
     showGrid: source.showGrid ?? DEFAULT_DISPLAY_PREFS.showGrid,
     showCenterLine: source.showCenterLine ?? DEFAULT_DISPLAY_PREFS.showCenterLine,
     showBandEdges: source.showBandEdges ?? DEFAULT_DISPLAY_PREFS.showBandEdges,
+    peakTuneAssistEnabled: source.peakTuneAssistEnabled ?? DEFAULT_DISPLAY_PREFS.peakTuneAssistEnabled,
   };
 }
 

@@ -62,6 +62,12 @@ export const DEFAULT_RADIO_PREFS: RadioPrefs = {
   txTwoToneDelayMs: 0,
   txNoiseGateEnabled: true,
   txNoiseGateThresholdDb: -30,
+  txDexpEnabled: false,
+  txDexpThresholdDb: -40,
+  txDexpExpansionDb: 10,
+  txSpeechProcessorEnabled: false,
+  txSpeechProcessorGainDb: 10,
+  txCessbEnabled: false,
   txTimeoutEnabled: true,
   txTimeoutSeconds: 180,
 };
@@ -87,6 +93,7 @@ export const DEFAULT_DISPLAY_PREFS: DisplayPrefs = {
   showGrid: true,
   showCenterLine: true,
   showBandEdges: true,
+  peakTuneAssistEnabled: false,
 };
 
 export function createDefaultSettingsState(): SettingsState {

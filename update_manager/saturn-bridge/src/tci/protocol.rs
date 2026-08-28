@@ -123,6 +123,12 @@ pub enum TciCommand {
     SetTxTwoToneDelayMs(u16),
     SetTxNoiseGateEnabled(bool),
     SetTxNoiseGateThreshold(f64),
+    SetTxDexpEnabled(bool),
+    SetTxDexpThreshold(f64),
+    SetTxDexpExpansion(f64),
+    SetTxSpeechProcessorEnabled(bool),
+    SetTxSpeechProcessorGain(f64),
+    SetTxCessbEnabled(bool),
     SetRxFftSize(u32),
     SetRxLowLatency(bool),
     SetTxFftSize(u32),
@@ -1036,6 +1042,48 @@ pub(crate) fn parse_tci_command_with_roles(
                     let clamped = thresh_db.clamp(-80.0, 0.0);
                     let _ = command_tx.send(TciCommand::SetTxNoiseGateThreshold(clamped));
                 }
+            }
+        }
+        "tx_dexp" => {
+            let value = args.get(1).or_else(|| args.first());
+            if let Some(enabled) = value.and_then(|text| parse_tci_bool(text)) {
+                let _ = command_tx.send(TciCommand::SetTxDexpEnabled(enabled));
+            }
+        }
+        "tx_dexp_threshold" => {
+            let value = args.get(1).or_else(|| args.first());
+            if let Some(threshold_db) = value.and_then(|text| text.trim().parse::<f64>().ok()) {
+                let _ = command_tx.send(TciCommand::SetTxDexpThreshold(
+                    threshold_db.clamp(-80.0, -6.0),
+                ));
+            }
+        }
+        "tx_dexp_expansion" => {
+            let value = args.get(1).or_else(|| args.first());
+            if let Some(expansion_db) = value.and_then(|text| text.trim().parse::<f64>().ok()) {
+                let _ = command_tx.send(TciCommand::SetTxDexpExpansion(
+                    expansion_db.clamp(0.0, 30.0),
+                ));
+            }
+        }
+        "tx_speech_processor" => {
+            let value = args.get(1).or_else(|| args.first());
+            if let Some(enabled) = value.and_then(|text| parse_tci_bool(text)) {
+                let _ = command_tx.send(TciCommand::SetTxSpeechProcessorEnabled(enabled));
+            }
+        }
+        "tx_speech_processor_gain" => {
+            let value = args.get(1).or_else(|| args.first());
+            if let Some(gain_db) = value.and_then(|text| text.trim().parse::<f64>().ok()) {
+                let _ = command_tx.send(TciCommand::SetTxSpeechProcessorGain(
+                    gain_db.clamp(0.0, 20.0),
+                ));
+            }
+        }
+        "tx_cessb" => {
+            let value = args.get(1).or_else(|| args.first());
+            if let Some(enabled) = value.and_then(|text| parse_tci_bool(text)) {
+                let _ = command_tx.send(TciCommand::SetTxCessbEnabled(enabled));
             }
         }
         "rx_fft_size" => {

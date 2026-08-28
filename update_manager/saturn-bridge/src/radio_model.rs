@@ -246,6 +246,7 @@ pub enum NoiseBlankerMode {
     Off,
     Nb1,
     Nb2,
+    Nb3,
 }
 
 impl Default for NoiseBlankerMode {
@@ -260,6 +261,7 @@ impl fmt::Display for NoiseBlankerMode {
             Self::Off => "OFF",
             Self::Nb1 => "NB1",
             Self::Nb2 => "NB2",
+            Self::Nb3 => "NB3",
         };
         f.write_str(text)
     }
@@ -271,6 +273,7 @@ impl NoiseBlankerMode {
             "0" | "OFF" => Self::Off,
             "1" | "NB1" | "NB" => Self::Nb1,
             "2" | "NB2" | "NOB" => Self::Nb2,
+            "3" | "NB3" | "SNB" | "SNBA" => Self::Nb3,
             _ => Self::Off,
         }
     }
@@ -440,6 +443,12 @@ pub struct DesiredRadioState {
     pub tx_low_latency: bool,
     pub tx_noise_gate_enabled: bool,
     pub tx_noise_gate_threshold_db: f64,
+    pub tx_dexp_enabled: bool,
+    pub tx_dexp_threshold_db: f64,
+    pub tx_dexp_expansion_db: f64,
+    pub tx_speech_processor_enabled: bool,
+    pub tx_speech_processor_gain_db: f64,
+    pub tx_cessb_enabled: bool,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -584,6 +593,12 @@ impl RadioModel {
                 tx_low_latency,
                 tx_noise_gate_enabled: true,
                 tx_noise_gate_threshold_db: -30.0,
+                tx_dexp_enabled: false,
+                tx_dexp_threshold_db: -40.0,
+                tx_dexp_expansion_db: 10.0,
+                tx_speech_processor_enabled: false,
+                tx_speech_processor_gain_db: 10.0,
+                tx_cessb_enabled: false,
             },
             observed: ObservedRadioState::default(),
         }

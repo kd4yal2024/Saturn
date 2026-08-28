@@ -601,6 +601,24 @@ pub(crate) fn initial_snapshot_messages(
             "tx_noise_gate_threshold:0,{:.1};",
             model.desired.tx_noise_gate_threshold_db
         ),
+        format!("tx_dexp:0,{};", model.desired.tx_dexp_enabled),
+        format!(
+            "tx_dexp_threshold:0,{:.1};",
+            model.desired.tx_dexp_threshold_db
+        ),
+        format!(
+            "tx_dexp_expansion:0,{:.1};",
+            model.desired.tx_dexp_expansion_db
+        ),
+        format!(
+            "tx_speech_processor:0,{};",
+            model.desired.tx_speech_processor_enabled
+        ),
+        format!(
+            "tx_speech_processor_gain:0,{:.1};",
+            model.desired.tx_speech_processor_gain_db
+        ),
+        format!("tx_cessb:0,{};", model.desired.tx_cessb_enabled),
         format!("rx_fft_size:0,{};", model.desired.rx_fft_size),
         format!("rx_low_latency:0,{};", model.desired.rx_low_latency),
         format!("tx_fft_size:0,{};", model.desired.tx_fft_size),

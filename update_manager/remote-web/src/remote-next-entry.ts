@@ -28,6 +28,9 @@ import {
   clampTwoToneFreqHz,
   clampTwoToneLevelDb,
   clampTwoToneDelayMs,
+  clampTxDexpThresholdDb,
+  clampTxDexpExpansionDb,
+  clampTxSpeechProcessorGainDb,
   clampEqGainDb,
   sanitizeEqBands,
   sanitizeCfcBands,
@@ -127,6 +130,11 @@ import {
 } from './audio/tx-audio-profile';
 import { volumeAmplitudeFromDb } from './audio/constants';
 import { FftProcessor } from './dsp/fft';
+import {
+  detectPeakInPassband,
+  emptyPeakAssistTrackingState,
+  trackPeakAssist,
+} from './dsp/peak-assist';
 import {
   lerp,
   moveToward,
@@ -297,6 +305,9 @@ const api = {
   clampTwoToneFreqHz,
   clampTwoToneLevelDb,
   clampTwoToneDelayMs,
+  clampTxDexpThresholdDb,
+  clampTxDexpExpansionDb,
+  clampTxSpeechProcessorGainDb,
   clampEqGainDb,
   sanitizeEqBands,
   sanitizeCfcBands,
@@ -325,6 +336,9 @@ const api = {
 
   // DSP
   FftProcessor,
+  detectPeakInPassband,
+  emptyPeakAssistTrackingState,
+  trackPeakAssist,
   displaySpanHz,
   displayPercentForOffsetHz,
   frequencyScaleTicks,

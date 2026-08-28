@@ -137,6 +137,12 @@ export type TciRadioState = {
   txTwoToneDelayMs: number;
   txNoiseGateEnabled: boolean;
   txNoiseGateThresholdDb: number;
+  txDexpEnabled: boolean;
+  txDexpThresholdDb: number;
+  txDexpExpansionDb: number;
+  txSpeechProcessorEnabled: boolean;
+  txSpeechProcessorGainDb: number;
+  txCessbEnabled: boolean;
 };
 
 export type TciApplyResult = {

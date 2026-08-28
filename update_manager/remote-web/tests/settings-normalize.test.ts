@@ -52,7 +52,7 @@ describe('settings normalization', () => {
       rxNr2NpeMethod: 'nstat',
       rxNr2PostFilterEnabled: false,
       rxWbfmDeemphasis: 'europe',
-      rxNbMode: '2',
+      rxNbMode: 'snb',
       agcMode: '4',
       txDrive: 200,
       txMicGainDb: 99,
@@ -64,6 +64,12 @@ describe('settings normalization', () => {
       pureSignalEnabled: true,
       pureSignalAutoAttenuate: false,
       pureSignalAttenuationDb: 99,
+      txDexpEnabled: true,
+      txDexpThresholdDb: -100,
+      txDexpExpansionDb: 50,
+      txSpeechProcessorEnabled: true,
+      txSpeechProcessorGainDb: 99,
+      txCessbEnabled: true,
     } as any);
 
     expect(prefs.sampleRate).toBe(192000);
@@ -75,7 +81,7 @@ describe('settings normalization', () => {
     expect(prefs.rxNr2NpeMethod).toBe('NSTAT');
     expect(prefs.rxNr2PostFilterEnabled).toBe(false);
     expect(prefs.rxWbfmDeemphasis).toBe('EU_50US');
-    expect(prefs.rxNbMode).toBe('NB2');
+    expect(prefs.rxNbMode).toBe('NB3');
     expect(prefs.agcMode).toBe('FAST');
     expect(prefs.txDrive).toBe(100);
     expect(prefs.txMicGainDb).toBe(20);
@@ -87,6 +93,12 @@ describe('settings normalization', () => {
     expect(prefs.pureSignalEnabled).toBe(true);
     expect(prefs.pureSignalAutoAttenuate).toBe(false);
     expect(prefs.pureSignalAttenuationDb).toBe(31);
+    expect(prefs.txDexpEnabled).toBe(true);
+    expect(prefs.txDexpThresholdDb).toBe(-80);
+    expect(prefs.txDexpExpansionDb).toBe(30);
+    expect(prefs.txSpeechProcessorEnabled).toBe(true);
+    expect(prefs.txSpeechProcessorGainDb).toBe(20);
+    expect(prefs.txCessbEnabled).toBe(true);
   });
 
   it('normalizes stream mode as an explicit LAN/WAN preference', () => {
@@ -105,6 +117,7 @@ describe('settings normalization', () => {
       spectrumGlassSheen: 42.6,
       waterfallContrast: 250,
       waterfallSmoothing: 72.6,
+      peakTuneAssistEnabled: true,
     });
     expect(prefs.spectrumTraceColor).toBe('#a1b2c3');
     expect(prefs.spectrumTraceSmoothing).toBe(100);
@@ -113,6 +126,7 @@ describe('settings normalization', () => {
     expect(prefs.spectrumGlassSheen).toBe(43);
     expect(prefs.waterfallContrast).toBe(200);
     expect(prefs.waterfallSmoothing).toBe(73);
+    expect(prefs.peakTuneAssistEnabled).toBe(true);
 
     expect(normalizeDisplayPrefs({ spectrumTraceColor: 'not-a-color' }).spectrumTraceColor).toBe('#8b3fb2');
   });

@@ -574,6 +574,25 @@
     .shell-no-center .center-line {
       display: none;
     }
+    .peak-tune-marker {
+      position: absolute;
+      top: 25px;
+      bottom: 0;
+      z-index: 7;
+      width: 1px;
+      transform: translateX(-50%);
+      background: linear-gradient(180deg, rgba(255, 224, 96, 0.9), rgba(255, 224, 96, 0.22));
+      pointer-events: none;
+    }
+    .peak-tune-marker::before {
+      content: "";
+      position: absolute;
+      top: 0;
+      left: -4px;
+      border-left: 4px solid transparent;
+      border-right: 4px solid transparent;
+      border-top: 7px solid #ffe060;
+    }
     .band-edge-marker {
       position: absolute;
       top: 0;
@@ -6374,7 +6393,8 @@
     .mobile-radio-quickbar { display: none; }
 
     #spectrum-average-toolbar-btn,
-    #spectrum-peak-toolbar-btn {
+    #spectrum-peak-toolbar-btn,
+    #spectrum-tune-peak-btn {
       min-width: 62px;
       font-family: var(--font-instrument);
       font-size: 10px;
@@ -6789,6 +6809,7 @@
                             </select>
                           </div>
                           <label class="toggle-field"><span>Spectrum Peak Hold</span><input id="display-spectrum-peak-hold" type="checkbox" /></label>
+                          <label class="toggle-field"><span>Peak Tuning Assist</span><input id="display-peak-tune-assist" type="checkbox" /></label>
                           <label class="toggle-field"><span>Show Grid</span><input id="display-show-grid" type="checkbox" /></label>
                           <label class="toggle-field"><span>Show Center Line</span><input id="display-show-center-line" type="checkbox" /></label>
                           <label class="toggle-field"><span>Show Band Edges</span><input id="display-show-band-edges" type="checkbox" /></label>
@@ -7349,6 +7370,7 @@
               <button class="mode-btn active" data-nb-mode="OFF" type="button">Off</button>
               <button class="mode-btn" data-nb-mode="NB1" type="button">NB1</button>
               <button class="mode-btn" data-nb-mode="NB2" type="button">NB2</button>
+              <button class="mode-btn" data-nb-mode="NB3" type="button" title="Spectral noise blanker">NB3</button>
             </div>
             <input id="rx-nb-threshold" type="range" min="2.5" max="82.5" step="0.05" value="4.95" />
           </div>
@@ -7490,6 +7512,8 @@
               <span class="display-pill mono" id="zoom-toolbar-readout">ZOOM 1.0x</span>
               <button class="btn eq-enable-btn" id="spectrum-average-toolbar-btn" type="button" title="Cycle spectrum averaging">AVG 1</button>
               <button class="btn eq-enable-btn" id="spectrum-peak-toolbar-btn" type="button" aria-pressed="false" title="Toggle spectrum peak hold">PEAK OFF</button>
+              <button class="btn eq-enable-btn" id="spectrum-tune-peak-btn" type="button" aria-pressed="false" title="Tune the strongest signal inside the RX passband">Tune Peak</button>
+              <span class="display-pill mono" id="peak-tune-readout" hidden>PEAK --</span>
               <button class="btn eq-enable-btn" id="display-center-btn" type="button" title="Reset the display span">Center</button>
               <button class="btn eq-enable-btn" id="wake-lock-btn" type="button" style="font-size:11px;padding:4px 10px;">Stay Awake</button>
               <button class="btn eq-enable-btn" id="freq-lock-btn" type="button" style="font-size:11px;padding:4px 10px;">Lock</button>
@@ -7525,6 +7549,7 @@
                 <span>-200 dB</span>
               </div>
               <div class="band-edge-layer" id="spectrum-band-edges"></div>
+              <div class="peak-tune-marker" id="peak-tune-marker" hidden aria-hidden="true"></div>
               <div class="filter-window interactive-filter-window" id="filter-window">
                 <div class="passband-body" data-passband-drag="body" role="button" tabindex="0" aria-label="Shift RX passband"></div>
                 <button class="passband-handle passband-handle-left" data-passband-drag="low" type="button" aria-label="Adjust lower RX passband edge"></button>
@@ -7650,7 +7675,7 @@
               <summary>
                 <span>
                   <span class="tx-advanced-title">TX Setup</span>
-                  <span class="tx-advanced-subtitle">Noise gate and TX filter</span>
+                  <span class="tx-advanced-subtitle">Gate, DEXP, processor, CESSB and filter</span>
                 </span>
                 <span class="tx-advanced-status" id="tx-advanced-status">Gate ON | 50-3050 Hz</span>
               </summary>
@@ -7665,6 +7690,40 @@
                       <span class="small muted">50–3850 Hz · warm ESSB · moderate EQ/CFC</span>
                       <button class="btn ghost" id="apply-voodoo-38k-btn" type="button">Apply Voodoo 3.8k</button>
                     </div>
+                  </div>
+                </div>
+
+                <div class="field-row">
+                  <div class="range-wrap">
+                    <div class="row spread">
+                      <span class="label" style="margin: 0;">Downward Expander (DEXP)</span>
+                      <label class="mono small"><input id="tx-dexp-enabled" type="checkbox" /> <span id="tx-dexp-label">OFF</span></label>
+                    </div>
+                    <div class="row spread">
+                      <span class="label small" style="margin: 0;">Threshold</span>
+                      <span class="mono small" id="tx-dexp-threshold-readout">-40 dB</span>
+                    </div>
+                    <input id="tx-dexp-threshold" type="range" min="-80" max="-6" step="1" value="-40" />
+                    <div class="row spread">
+                      <span class="label small" style="margin: 0;">Expansion</span>
+                      <span class="mono small" id="tx-dexp-expansion-readout">10 dB</span>
+                    </div>
+                    <input id="tx-dexp-expansion" type="range" min="0" max="30" step="1" value="10" />
+                  </div>
+                  <div class="range-wrap">
+                    <div class="row spread">
+                      <span class="label" style="margin: 0;">Speech Processor</span>
+                      <label class="mono small"><input id="tx-speech-processor-enabled" type="checkbox" /> <span id="tx-speech-processor-label">OFF</span></label>
+                    </div>
+                    <div class="row spread">
+                      <span class="label small" style="margin: 0;">Compression Gain</span>
+                      <span class="mono small" id="tx-speech-processor-gain-readout">10 dB</span>
+                    </div>
+                    <input id="tx-speech-processor-gain" type="range" min="0" max="20" step="0.5" value="10" />
+                    <label class="toggle-field" style="margin-top: 10px;">
+                      <span>CESSB Overshoot Control</span>
+                      <input id="tx-cessb-enabled" type="checkbox" />
+                    </label>
                   </div>
                 </div>
 
@@ -8668,6 +8727,12 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     let pureSignalOperatorLogReasons = new Set();
     let pureSignalOperatorTelemetryLastAt = 0;
     let pureSignalFeedbackGapFaultActive = false;
+    let peakTuneTracker = {
+      candidate: null,
+      candidateFrames: 0,
+      locked: null,
+      missingFrames: 0,
+    };
 
     const FftProcessor = globalThis.SaturnRemoteNext.FftProcessor;
 
@@ -9649,7 +9714,61 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
 
       state.latestBins = bins;
       state.fftWidth = bins.length;
+      updatePeakTuneAssist(bins);
       return bins;
+    }
+
+    function clearPeakTuneAssist(resetTracker = true) {
+      if (resetTracker) {
+        peakTuneTracker = emptyPeakAssistTrackingState();
+      }
+      state.peakTuneFrequencyHz = null;
+      state.peakTuneLevelDb = null;
+      const marker = $("peak-tune-marker");
+      const readout = $("peak-tune-readout");
+      if (marker) marker.hidden = true;
+      if (readout) readout.hidden = true;
+    }
+
+    function updatePeakTuneAssist(bins = state.latestBins) {
+      if (!state.peakTuneAssistEnabled || txReceiveSuppressionActive() || !bins?.length) {
+        clearPeakTuneAssist();
+        return null;
+      }
+      const passband = currentRxPassbandHz();
+      const detected = detectPeakInPassband(
+        bins,
+        state.dds,
+        displaySpanHz(),
+        passband.lowHz,
+        passband.highHz,
+      );
+      const tracked = trackPeakAssist(
+        peakTuneTracker,
+        detected,
+        displaySpanHz() / Math.max(1, bins.length),
+      );
+      peakTuneTracker = tracked.state;
+      const peak = tracked.peak;
+      if (!peak) {
+        clearPeakTuneAssist(false);
+        return null;
+      }
+      state.peakTuneFrequencyHz = peak.frequencyHz;
+      state.peakTuneLevelDb = peak.levelDb;
+      const percent = displayPercentForFrequencyHz(peak.frequencyHz);
+      const marker = $("peak-tune-marker");
+      const readout = $("peak-tune-readout");
+      if (marker) {
+        marker.style.left = `${Math.max(0, Math.min(100, percent))}%`;
+        marker.hidden = percent < 0 || percent > 100;
+      }
+      if (readout) {
+        const offset = Math.round(peak.frequencyHz - state.dds);
+        readout.textContent = `PEAK ${offset >= 0 ? "+" : ""}${offset} Hz | ${safeFixed(peak.levelDb, 1, "--")} dB | +${safeFixed(peak.prominenceDb, 1, "--")} dB`;
+        readout.hidden = false;
+      }
+      return peak;
     }
 
     function logEvent(message) {
@@ -10137,6 +10256,9 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       clampTwoToneFreqHz,
       clampTwoToneLevelDb,
       clampTwoToneDelayMs,
+      clampTxDexpThresholdDb,
+      clampTxDexpExpansionDb,
+      clampTxSpeechProcessorGainDb,
       clampEqGainDb,
       sanitizeEqBands,
       sanitizeCfcBands,
@@ -10171,6 +10293,9 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       shiftBinsHorizontally: _shiftBinsHorizontally,
       bandEdgesInView: _bandEdgesInView,
       autoRangeFromBins: _autoRangeFromBins,
+      detectPeakInPassband,
+      emptyPeakAssistTrackingState,
+      trackPeakAssist,
       lerp, moveToward, smoothToward, svgArcPath, dbmToSmDeg, formatSignalStrength, linearLevelToDbfs, instrumentOperatingState,
       auxDeg, txPowerToAuxDeg, swrToAuxDeg,
       SM_CX, SM_CY, SM_R, SM_START, SM_END, SM_S9_DEG,
@@ -11049,8 +11174,11 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       return state.activeVfo === "B" ? state.vfoA : state.vfoB;
     }
 
-    function speechSquelchSupported() {
-      return ["USB", "LSB", "AM", "SAM", "DIGU", "DIGL"].includes(state.mode);
+    function modeAwareSquelchKind() {
+      if (["USB", "LSB", "DIGU", "DIGL"].includes(state.mode)) return "Voice";
+      if (["AM", "SAM"].includes(state.mode)) return "AM";
+      if (["FM", "WFM"].includes(state.mode)) return "FM";
+      return null;
     }
 
     const RX_ATTENUATION_STEPS = [0, 10, 20, 30];
@@ -12189,6 +12317,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       setChecked("display-spectrum-auto-range", prefs.spectrumAutoRange);
       setChecked("display-waterfall-auto-range", prefs.waterfallAutoRange);
       setChecked("display-spectrum-peak-hold", prefs.spectrumPeakHold);
+      setChecked("display-peak-tune-assist", prefs.peakTuneAssistEnabled);
       setChecked("display-show-grid", prefs.showGrid);
       setChecked("display-show-center-line", prefs.showCenterLine);
       setChecked("display-show-band-edges", prefs.showBandEdges);
@@ -14276,12 +14405,12 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       $("freq-lock-btn").textContent = state.frequencyLock ? "Locked" : "Lock";
       $("freq-lock-btn").classList.toggle("active", state.frequencyLock);
       $("rx-volume-readout").textContent = `${safeFixed(state.rxVolumeDb, 1, "-10.0")} dB`;
-      const ssqlSupported = speechSquelchSupported();
-      $("rx-ssql-btn").textContent = ssqlSupported ? (state.rxSsqlEnabled ? "SQL On" : "SQL Off") : "SQL N/A";
-      $("rx-ssql-btn").disabled = !ssqlSupported;
-      $("rx-ssql-btn").classList.toggle("active", ssqlSupported && state.rxSsqlEnabled);
-      $("rx-ssql-threshold").disabled = !ssqlSupported;
-      $("rx-ssql-readout").textContent = `SQL ${Math.round(state.rxSsqlThreshold)}`;
+      const squelchKind = modeAwareSquelchKind();
+      $("rx-ssql-btn").textContent = squelchKind ? `${squelchKind} SQL ${state.rxSsqlEnabled ? "On" : "Off"}` : "SQL N/A";
+      $("rx-ssql-btn").disabled = !squelchKind;
+      $("rx-ssql-btn").classList.toggle("active", Boolean(squelchKind) && state.rxSsqlEnabled);
+      $("rx-ssql-threshold").disabled = !squelchKind;
+      $("rx-ssql-readout").textContent = `${squelchKind || "SQL"} ${Math.round(state.rxSsqlThreshold)}`;
       $("rx-nr-readout").textContent = noiseReductionLabel();
       $("rx-nb-threshold-readout").textContent = safeFixed(state.rxNbThreshold, 2, "0.00");
       $("rx-anf-btn").textContent = state.anfEnabled ? "ANF On" : "ANF Off";
@@ -14300,6 +14429,11 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         peakToolbarButton.classList.toggle("active", state.spectrumPeakHold);
         peakToolbarButton.setAttribute("aria-pressed", state.spectrumPeakHold ? "true" : "false");
       }
+      const tunePeakButton = $("spectrum-tune-peak-btn");
+      if (tunePeakButton) {
+        tunePeakButton.classList.toggle("active", state.peakTuneAssistEnabled);
+        tunePeakButton.setAttribute("aria-pressed", state.peakTuneAssistEnabled ? "true" : "false");
+      }
       $("filter-low-readout").textContent = wfmActive ? "Fixed" : `${state.filterLow} Hz`;
       $("filter-high-readout").textContent = wfmActive ? "180 kHz RF" : `${state.filterHigh} Hz`;
       $("tx-drive-readout").textContent = `${state.txDrive} W`;
@@ -14308,7 +14442,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       $("tx-filter-high-readout").textContent = `${state.txFilterHigh} Hz`;
       const txAdvancedStatus = $("tx-advanced-status");
       if (txAdvancedStatus) {
-        txAdvancedStatus.textContent = `Gate ${state.txNoiseGateEnabled ? "ON" : "OFF"} | ${state.txFilterLow}-${state.txFilterHigh} Hz`;
+        txAdvancedStatus.textContent = `DEXP ${state.txDexpEnabled ? "ON" : "OFF"} | PROC ${state.txSpeechProcessorEnabled ? "ON" : "OFF"} | ${state.txFilterLow}-${state.txFilterHigh} Hz`;
       }
       const txAudioProfileStatus = $("tx-audio-profile-status");
       if (txAudioProfileStatus) {
@@ -14568,6 +14702,21 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         $("tx-noise-gate-threshold").value = ngThresh;
         $("tx-noise-gate-threshold-readout").textContent = `${state.txNoiseGateThresholdDb} dB`;
       }
+      $("tx-dexp-enabled").checked = state.txDexpEnabled;
+      $("tx-dexp-label").textContent = state.txDexpEnabled ? "ON" : "OFF";
+      $("tx-dexp-threshold").value = `${state.txDexpThresholdDb}`;
+      $("tx-dexp-threshold").disabled = !state.txDexpEnabled;
+      $("tx-dexp-threshold-readout").textContent = `${safeFixed(state.txDexpThresholdDb, 1, "-40.0")} dB`;
+      $("tx-dexp-expansion").value = `${state.txDexpExpansionDb}`;
+      $("tx-dexp-expansion").disabled = !state.txDexpEnabled;
+      $("tx-dexp-expansion-readout").textContent = `${safeFixed(state.txDexpExpansionDb, 1, "10.0")} dB`;
+      $("tx-speech-processor-enabled").checked = state.txSpeechProcessorEnabled;
+      $("tx-speech-processor-label").textContent = state.txSpeechProcessorEnabled ? "ON" : "OFF";
+      $("tx-speech-processor-gain").value = `${state.txSpeechProcessorGainDb}`;
+      $("tx-speech-processor-gain").disabled = !state.txSpeechProcessorEnabled;
+      $("tx-speech-processor-gain-readout").textContent = `${safeFixed(state.txSpeechProcessorGainDb, 1, "10.0")} dB`;
+      $("tx-cessb-enabled").checked = state.txCessbEnabled;
+      $("tx-cessb-enabled").disabled = !state.txSpeechProcessorEnabled;
       const txFl = `${state.txFilterLow}`;
       if ($("tx-filter-low").value !== txFl) { $("tx-filter-low").value = txFl; }
       const txFh = `${state.txFilterHigh}`;
@@ -18078,6 +18227,23 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         checkbox.checked = !state.spectrumPeakHold;
         checkbox.dispatchEvent(new Event("change", { bubbles: true }));
       });
+      $("spectrum-tune-peak-btn").addEventListener("click", () => {
+        if (!state.peakTuneAssistEnabled) {
+          state.peakTuneAssistEnabled = true;
+          $("display-peak-tune-assist").checked = true;
+        }
+        const peak = updatePeakTuneAssist();
+        persistLocalSettingsFallback(currentRemoteSettings());
+        scheduleRemoteSettingsSave();
+        if (!peak) {
+          logEvent("Peak tuning assist: no usable peak inside the RX passband");
+          updateUi();
+          return;
+        }
+        const nextHz = snapTuneFrequencyHz(peak.frequencyHz - clickTuneCarrierOffsetHz(state.mode));
+        setFrequency(nextHz);
+        logEvent(`Peak tuning assist: tuned ${formatFrequencyPlain(nextHz)} at ${safeFixed(peak.levelDb, 1, "--")} dB`);
+      });
       const bindDisplayToggle = (id, assign) => {
         $(id).addEventListener("change", () => {
           assign(Boolean($(id).checked));
@@ -18093,6 +18259,11 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         if (!value) {
           resetPeakHoldBins();
         }
+      });
+      bindDisplayToggle("display-peak-tune-assist", (value) => {
+        state.peakTuneAssistEnabled = value;
+        if (!value) clearPeakTuneAssist();
+        else updatePeakTuneAssist();
       });
       bindDisplayToggle("display-show-grid", (value) => { state.showGrid = value; });
       bindDisplayToggle("display-show-center-line", (value) => { state.showCenterLine = value; });
@@ -18455,6 +18626,50 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         saveRadioPrefs();
         sendTci(`tx_noise_gate_threshold:0,${state.txNoiseGateThresholdDb.toFixed(1)};`);
         logEvent(`TX Noise Gate threshold ${state.txNoiseGateThresholdDb.toFixed(1)} dB sent`);
+      });
+      $("tx-dexp-enabled").addEventListener("change", () => {
+        state.txDexpEnabled = $("tx-dexp-enabled").checked;
+        saveRadioPrefs();
+        sendTci(`tx_dexp:0,${state.txDexpEnabled};`);
+        updateUi();
+        logEvent(`TX DEXP ${state.txDexpEnabled ? "ON" : "OFF"} sent`);
+      });
+      $("tx-dexp-threshold").addEventListener("input", () => {
+        state.txDexpThresholdDb = clampTxDexpThresholdDb($("tx-dexp-threshold").value);
+        $("tx-dexp-threshold-readout").textContent = `${safeFixed(state.txDexpThresholdDb, 1, "-40.0")} dB`;
+      });
+      $("tx-dexp-threshold").addEventListener("change", () => {
+        saveRadioPrefs();
+        sendTci(`tx_dexp_threshold:0,${state.txDexpThresholdDb.toFixed(1)};`);
+      });
+      $("tx-dexp-expansion").addEventListener("input", () => {
+        state.txDexpExpansionDb = clampTxDexpExpansionDb($("tx-dexp-expansion").value);
+        $("tx-dexp-expansion-readout").textContent = `${safeFixed(state.txDexpExpansionDb, 1, "10.0")} dB`;
+      });
+      $("tx-dexp-expansion").addEventListener("change", () => {
+        saveRadioPrefs();
+        sendTci(`tx_dexp_expansion:0,${state.txDexpExpansionDb.toFixed(1)};`);
+      });
+      $("tx-speech-processor-enabled").addEventListener("change", () => {
+        state.txSpeechProcessorEnabled = $("tx-speech-processor-enabled").checked;
+        saveRadioPrefs();
+        sendTci(`tx_speech_processor:0,${state.txSpeechProcessorEnabled};`);
+        updateUi();
+        logEvent(`TX Speech Processor ${state.txSpeechProcessorEnabled ? "ON" : "OFF"} sent`);
+      });
+      $("tx-speech-processor-gain").addEventListener("input", () => {
+        state.txSpeechProcessorGainDb = clampTxSpeechProcessorGainDb($("tx-speech-processor-gain").value);
+        $("tx-speech-processor-gain-readout").textContent = `${safeFixed(state.txSpeechProcessorGainDb, 1, "10.0")} dB`;
+      });
+      $("tx-speech-processor-gain").addEventListener("change", () => {
+        saveRadioPrefs();
+        sendTci(`tx_speech_processor_gain:0,${state.txSpeechProcessorGainDb.toFixed(1)};`);
+      });
+      $("tx-cessb-enabled").addEventListener("change", () => {
+        state.txCessbEnabled = $("tx-cessb-enabled").checked;
+        saveRadioPrefs();
+        sendTci(`tx_cessb:0,${state.txCessbEnabled};`);
+        logEvent(`TX CESSB ${state.txCessbEnabled ? "ON" : "OFF"} sent`);
       });
       $("tx-filter-low").addEventListener("input", () => {
         state.txFilterLow = clampFilterLowHz($("tx-filter-low").value);

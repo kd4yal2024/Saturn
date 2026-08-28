@@ -7,7 +7,7 @@ export type NoiseReductionMode = 'OFF' | 'NR1' | 'NR2' | 'NR3' | 'NR4';
 export type Nr2GainMethod = 'GAUSSIAN' | 'GAUSSIAN_LOG' | 'GAMMA' | 'TRAINED';
 export type Nr2NpeMethod = 'OSMS' | 'MMSE' | 'NSTAT';
 export type WbfmDeemphasis = 'OFF' | 'NA_75US' | 'EU_50US';
-export type NoiseBlankerMode = 'OFF' | 'NB1' | 'NB2';
+export type NoiseBlankerMode = 'OFF' | 'NB1' | 'NB2' | 'NB3';
 export type AgcMode = 'OFF' | 'LONG' | 'SLOW' | 'MEDIUM' | 'FAST';
 export type TxMeterMode = 'peak' | 'avg';
 export type WaterfallPalette = 'classic' | 'ember' | 'ice' | 'forest';
@@ -74,6 +74,12 @@ export type RadioPrefs = {
   txTwoToneDelayMs: number;
   txNoiseGateEnabled: boolean;
   txNoiseGateThresholdDb: number;
+  txDexpEnabled: boolean;
+  txDexpThresholdDb: number;
+  txDexpExpansionDb: number;
+  txSpeechProcessorEnabled: boolean;
+  txSpeechProcessorGainDb: number;
+  txCessbEnabled: boolean;
   txTimeoutEnabled: boolean;
   txTimeoutSeconds: number;
 };
@@ -99,6 +105,7 @@ export type DisplayPrefs = {
   showGrid: boolean;
   showCenterLine: boolean;
   showBandEdges: boolean;
+  peakTuneAssistEnabled: boolean;
 };
 
 export type BandMemoryEntry = {

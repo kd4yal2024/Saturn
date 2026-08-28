@@ -43,6 +43,13 @@ STUB_VOID_I32_I32(SetRXAPanelRun)
 STUB_VOID_I32_I32(SetRXAPanelSelect)
 STUB_VOID_I32_I32(SetRXAPanelCopy)
 STUB_VOID_I32_F64(SetRXAPanelGain1)
+STUB_VOID_I32_I32(SetRXASSQLRun)
+STUB_VOID_I32_F64(SetRXASSQLThreshold)
+STUB_VOID_I32_I32(SetRXAAMSQRun)
+STUB_VOID_I32_F64(SetRXAAMSQThreshold)
+STUB_VOID_I32_F64(SetRXAAMSQMaxTail)
+STUB_VOID_I32_I32(SetRXAFMSQRun)
+STUB_VOID_I32_F64(SetRXAFMSQThreshold)
 void SetRXAWBFMdmph(int32_t channel, int32_t dmph_run,
                     int32_t dmph_continent) {
   (void)channel; (void)dmph_run; (void)dmph_continent;
@@ -79,6 +86,8 @@ STUB_VOID_I32_F64(SetEXTNOBTau)
 STUB_VOID_I32_F64(SetEXTNOBHangtime)
 STUB_VOID_I32_F64(SetEXTNOBAdvtime)
 STUB_VOID_I32_F64(SetEXTNOBThreshold)
+STUB_VOID_I32_I32(SetRXASNBARun)
+STUB_VOID_I32_F64_F64(SetRXASNBAOutputBandwidth)
 
 STUB_VOID_I32_I32(SetRXAANFRun)
 void SetRXAANFVals(int32_t channel, int32_t taps, int32_t delay, double gain,
@@ -168,6 +177,9 @@ void SetTXACFCOMPprofile(int32_t channel, int32_t nfreqs, const double *f,
 STUB_VOID_I32_F64(SetTXACFCOMPPrecomp)
 STUB_VOID_I32_I32(SetTXACFCOMPPeqRun)
 STUB_VOID_I32_F64(SetTXACFCOMPPrePeq)
+STUB_VOID_I32_I32(SetTXACompressorRun)
+STUB_VOID_I32_F64(SetTXACompressorGain)
+STUB_VOID_I32_I32(SetTXAosctrlRun)
 
 STUB_VOID_I32_I32(SetTXAPostGenMode)
 void SetTXAPostGenTTMag(int32_t channel, double mag1, double mag2) {
@@ -204,14 +216,29 @@ void GetPSMaxTX(int32_t channel, double *max_tx) {
 }
 STUB_VOID_I32_I32(SetPSFeedbackRate)
 
+void create_dexp(int32_t id, int32_t run_dexp, int32_t size, double *input,
+                 double *output, int32_t rate, double detector_tau,
+                 double attack_time, double decay_time, double hold_time,
+                 double expansion_ratio, double hysteresis_ratio,
+                 double attack_threshold, int32_t filter_taps,
+                 int32_t window_type, double low_cut, double high_cut,
+                 int32_t run_filter, int32_t run_vox,
+                 int32_t run_audio_delay, double audio_delay,
+                 void (*push_vox)(int32_t, int32_t), int32_t anti_vox_run,
+                 int32_t anti_vox_size, int32_t anti_vox_rate,
+                 double anti_vox_gain, double anti_vox_tau) {
+  (void)id; (void)run_dexp; (void)size; (void)input; (void)output;
+  (void)rate; (void)detector_tau; (void)attack_time; (void)decay_time;
+  (void)hold_time; (void)expansion_ratio; (void)hysteresis_ratio;
+  (void)attack_threshold; (void)filter_taps; (void)window_type;
+  (void)low_cut; (void)high_cut; (void)run_filter; (void)run_vox;
+  (void)run_audio_delay; (void)audio_delay; (void)push_vox;
+  (void)anti_vox_run; (void)anti_vox_size; (void)anti_vox_rate;
+  (void)anti_vox_gain; (void)anti_vox_tau;
+}
+void destroy_dexp(int32_t id) { (void)id; }
+void flush_dexp(int32_t id) { (void)id; }
+void xdexp(int32_t id) { (void)id; }
 STUB_VOID_I32_I32(SetDEXPRun)
-STUB_VOID_I32_F64(SetDEXPDetectorTau)
-STUB_VOID_I32_F64(SetDEXPAttackTime)
-STUB_VOID_I32_F64(SetDEXPReleaseTime)
-STUB_VOID_I32_F64(SetDEXPHoldTime)
 STUB_VOID_I32_F64(SetDEXPExpansionRatio)
-STUB_VOID_I32_F64(SetDEXPHysteresisRatio)
 STUB_VOID_I32_F64(SetDEXPAttackThreshold)
-STUB_VOID_I32_F64(SetDEXPLowCut)
-STUB_VOID_I32_F64(SetDEXPHighCut)
-STUB_VOID_I32_I32(SetDEXPRunSideChannelFilter)

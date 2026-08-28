@@ -1,5 +1,7 @@
 use super::*;
-use crate::radio_model::{DemodMode, Nr2GainMethod, Nr2NpeMethod, WbfmDeemphasis};
+use crate::radio_model::{
+    DemodMode, NoiseBlankerMode, Nr2GainMethod, Nr2NpeMethod, WbfmDeemphasis,
+};
 use crate::tx_codec::{TxCodecDecoder, TxDecodeError, TxMicCodec};
 use crate::tx_codec::{
     TX_MIC_CODEC_OPUS_WB_ID, TX_MIC_CODEC_PCM_ID, TX_OPUS_DECODE_OUTPUT_FRAME_SAMPLES,
@@ -639,6 +641,53 @@ fn parses_vfo_split_attenuation_and_squelch_commands() {
     assert!(matches!(
         rx.recv().unwrap(),
         TciCommand::SetRxSsqlThreshold(value) if value == 27.0
+    ));
+}
+
+#[test]
+fn parses_nb3_dexp_speech_processor_and_cessb_commands() {
+    let (tx, rx) = mpsc::channel();
+    let clients = test_client_registry(7);
+
+    for command in [
+        "rx_nb:0,NB3",
+        "tx_dexp:0,true",
+        "tx_dexp_threshold:0,-42.5",
+        "tx_dexp_expansion:0,12",
+        "tx_speech_processor:0,true",
+        "tx_speech_processor_gain:0,8.5",
+        "tx_cessb:0,true",
+    ] {
+        parse_tci_command(command, &tx, &clients, 7, true);
+    }
+
+    assert!(matches!(
+        rx.recv().unwrap(),
+        TciCommand::SetNoiseBlankerMode(NoiseBlankerMode::Nb3)
+    ));
+    assert!(matches!(
+        rx.recv().unwrap(),
+        TciCommand::SetTxDexpEnabled(true)
+    ));
+    assert!(matches!(
+        rx.recv().unwrap(),
+        TciCommand::SetTxDexpThreshold(value) if value == -42.5
+    ));
+    assert!(matches!(
+        rx.recv().unwrap(),
+        TciCommand::SetTxDexpExpansion(value) if value == 12.0
+    ));
+    assert!(matches!(
+        rx.recv().unwrap(),
+        TciCommand::SetTxSpeechProcessorEnabled(true)
+    ));
+    assert!(matches!(
+        rx.recv().unwrap(),
+        TciCommand::SetTxSpeechProcessorGain(value) if value == 8.5
+    ));
+    assert!(matches!(
+        rx.recv().unwrap(),
+        TciCommand::SetTxCessbEnabled(true)
     ));
 }
 
@@ -2201,4 +2250,10 @@ fn initial_snapshot_includes_remote_tx_rf_state() {
     assert!(enabled.contains(&"remote_tx_rf_enabled:0,true;".to_string()));
     assert!(disabled.contains(&"remote_client_role:0,viewer,7;".to_string()));
     assert!(enabled.contains(&"remote_client_role:0,operator,8;".to_string()));
+    assert!(enabled.contains(&"tx_dexp:0,false;".to_string()));
+    assert!(enabled.contains(&"tx_dexp_threshold:0,-40.0;".to_string()));
+    assert!(enabled.contains(&"tx_dexp_expansion:0,10.0;".to_string()));
+    assert!(enabled.contains(&"tx_speech_processor:0,false;".to_string()));
+    assert!(enabled.contains(&"tx_speech_processor_gain:0,10.0;".to_string()));
+    assert!(enabled.contains(&"tx_cessb:0,false;".to_string()));
 }

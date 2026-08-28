@@ -102,6 +102,12 @@ describe('buildAllRadioPrefsCommands', () => {
     expect(cmds).toContain('tx_puresignal_auto_attenuate:0,true;');
     expect(cmds).toContain('tx_puresignal_attenuation:0,0;');
     expect(cmds.some((c) => c.startsWith('tx_two_tone:'))).toBe(true);
+    expect(cmds).toContain('tx_dexp:0,false;');
+    expect(cmds).toContain('tx_dexp_threshold:0,-40.0;');
+    expect(cmds).toContain('tx_dexp_expansion:0,10.0;');
+    expect(cmds).toContain('tx_speech_processor:0,false;');
+    expect(cmds).toContain('tx_speech_processor_gain:0,10.0;');
+    expect(cmds).toContain('tx_cessb:0,false;');
   });
 
   it('every command ends with semicolon', () => {
