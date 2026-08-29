@@ -48,13 +48,31 @@ static int xdma_thread_cmpl_status_pend(struct list_head *work_item)
 static int xdma_thread_cmpl_status_proc(struct list_head *work_item)
 {
 	struct xdma_engine *engine;
-	struct xdma_transfer * transfer;
+	struct xdma_transfer *transfer;
+	unsigned long flags;
+	u32 expected_desc_count = 0;
+	bool have_transfer = false;
 
 	engine = list_entry(work_item, struct xdma_engine, cmplthp_list);
-	transfer = list_entry(engine->transfer_list.next, struct xdma_transfer,
-			entry);
-	if (transfer)
-		engine_service_poll(engine, transfer->desc_cmpl_th);
+
+	/*
+	 * The pending predicate and this callback are intentionally separate.
+	 * A timeout or abort can empty the transfer list between them, so never
+	 * turn the list head itself into a transfer.  Copy only the completion
+	 * threshold while holding the engine lock; engine_service_poll() takes
+	 * that lock again when it services the completion.
+	 */
+	spin_lock_irqsave(&engine->lock, flags);
+	if (!list_empty(&engine->transfer_list)) {
+		transfer = list_first_entry(&engine->transfer_list,
+					    struct xdma_transfer, entry);
+		expected_desc_count = transfer->desc_cmpl_th;
+		have_transfer = true;
+	}
+	spin_unlock_irqrestore(&engine->lock, flags);
+
+	if (have_transfer)
+		engine_service_poll(engine, expected_desc_count);
 	return 0;
 }
 
@@ -312,9 +330,12 @@ int xdma_threads_create(unsigned int num_threads)
 	return 0;
 
 cleanup_threads:
+	while (thread_cnt) {
+		thread_cnt--;
+		xdma_kthread_stop(&cs_threads[thread_cnt]);
+	}
 	kfree(cs_threads);
 	cs_threads = NULL;
-	thread_cnt = 0;
 
 	return rv;
 }

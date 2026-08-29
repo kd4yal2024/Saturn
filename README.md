@@ -16,9 +16,10 @@ app, and exposes maintenance plus remote operation through Saturn Go.
   support files. The current project still expects Vivado 2023.1 for rebuilds.
 - `linuxdriver/xdma/` - active hardened XDMA kernel driver tree used by current
   Saturn images.
-- `sw_projects/P1_app`, `sw_projects/P2_app`, `sw_projects/P3_app` - native C
-  radio/protocol applications. `P2_app` is the current hardened Protocol 2 path
-  used for Thetis/OpenHPSDR compatibility.
+- `sw_projects/P1_app`, `sw_projects/P2_app` - native C radio/protocol
+  applications. `P2_app` is the current hardened Protocol 2 path used for
+  Thetis/OpenHPSDR compatibility. `sw_projects/P3_app` is retained only as a
+  historical staging snapshot; its accepted work has been merged into P2.
 - `sw_tools/` - Saturn command-line tools, FPGA loader/flash tools, diagnostics,
   and `p2app-control` service integration.
 - `scripts/` - host maintenance helpers, XDMA doctor/staging scripts, shutdown
@@ -160,7 +161,6 @@ Native and kernel components are still primarily build/runtime validated:
 make -C sw_projects/P2_app
 make -C sw_projects/P2_app test-controller-lease
 make -C sw_projects/P2_app cppcheck-ci
-make -C sw_projects/P3_app
 make -C linuxdriver/xdma
 sudo bash scripts/install-xdma-dkms.sh --dry-run
 ```

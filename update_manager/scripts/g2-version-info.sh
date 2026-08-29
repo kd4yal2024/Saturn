@@ -49,10 +49,6 @@ if [[ -n "${CURRENT_TARGET}" ]]; then
       ACTIVE_APP="p2"
       APP_SOURCE="${REPO_ROOT}/sw_projects/P2_app/p2app.c"
       ;;
-    p3app)
-      ACTIVE_APP="p3"
-      APP_SOURCE="${REPO_ROOT}/sw_projects/P3_app/p2app.c"
-      ;;
   esac
 fi
 

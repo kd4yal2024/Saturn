@@ -1,5 +1,9 @@
 # P2/P3 ADC Peak Status Message
 
+> **Current implementation note:** P3_app is archived. The supported source and
+> runtime implementation of this telemetry is `sw_projects/P2_app`; P3
+> references in this document describe development history only.
+
 Date: 2026-03-16
 
 ## Summary

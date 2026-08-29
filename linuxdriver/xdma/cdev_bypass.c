@@ -182,13 +182,11 @@ static ssize_t char_bypass_write(struct file *file, const char __user *buf,
 
 	/* Write descriptor data to the bypass BAR */
 	bypass_addr = xdev->bar[xdev->bypass_bar_idx];
-	bypass_addr = (void __iomem *)(
-				(u32 __iomem *)bypass_addr + engine->bypass_offset
-				);
+	bypass_addr = (void __iomem *)((u8 __iomem *)bypass_addr +
+					 engine->bypass_offset);
 	while (buf_offset < count) {
 		memcpy(&desc_data, &kbuf[buf_offset], sizeof(u32));
-		write_register(desc_data, bypass_addr,
-				bypass_addr - engine->bypass_offset);
+		write_register(desc_data, bypass_addr, engine->bypass_offset);
 		buf_offset += sizeof(u32);
 		rc = buf_offset;
 	}

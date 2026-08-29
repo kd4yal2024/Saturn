@@ -1,5 +1,10 @@
 # P3 Audio Lab Handoff
 
+> **Historical document:** P3_app was an early staging tree. Do not use the
+> deployment commands in this document on a current Saturn appliance. All
+> accepted audio and DUC work is maintained and deployed from
+> `sw_projects/P2_app`.
+
 Date: 2026-03-21
 
 ## Purpose

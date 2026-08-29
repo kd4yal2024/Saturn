@@ -365,7 +365,11 @@ static int xdma_mod_init(void)
 	if (rv < 0)
 		return rv;
 
-	return pci_register_driver(&pci_driver);
+	rv = pci_register_driver(&pci_driver);
+	if (rv)
+		xdma_cdev_cleanup();
+
+	return rv;
 }
 
 static void xdma_mod_exit(void)

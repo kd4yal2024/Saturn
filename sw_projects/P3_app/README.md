@@ -1,5 +1,10 @@
 # P3_app Hardening Notes
 
+> **Archived staging tree:** P3_app was used for early hardening development.
+> Its accepted changes are carried by `../P2_app`, which is the only supported
+> Protocol 2 build, deployment, and runtime source. This directory remains for
+> historical comparison and must not be installed on an appliance.
+
 This document records the code-safety, concurrency, and runtime-hardening
 changes applied to `P3_app`, and why each change was made.
 

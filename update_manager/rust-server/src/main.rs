@@ -2423,13 +2423,10 @@ async fn get_p23_status(State(state): State<AppState>) -> Response {
 
     let repo_root = current_repo_root(&state);
     let p2_dir = repo_root.join("sw_projects/P2_app");
-    let p3_dir = repo_root.join("sw_projects/P3_app");
     let p2_bin = p2_dir.join("p2app");
-    let p3_bin = p3_dir.join("p3app");
 
     let deploy_root = PathBuf::from("/opt/saturn-go/p23-apps");
     let deploy_p2 = deploy_root.join("p2app");
-    let deploy_p3 = deploy_root.join("p3app");
     let current_link = deploy_root.join("current");
     let override_file =
         PathBuf::from("/etc/systemd/system/p2app.service.d/10-saturn-p23-switch.conf");
@@ -2444,7 +2441,6 @@ async fn get_p23_status(State(state): State<AppState>) -> Response {
         .map(|p| p.display().to_string());
     let selected_app = match current_target_abs.as_deref() {
         Some(v) if v == deploy_p2.display().to_string() => Some("p2"),
-        Some(v) if v == deploy_p3.display().to_string() => Some("p3"),
         _ => None,
     };
 
@@ -2549,14 +2545,11 @@ async fn get_p23_status(State(state): State<AppState>) -> Response {
             },
             "sources": {
                 "p2_dir": dir_info(&p2_dir),
-                "p3_dir": dir_info(&p3_dir),
                 "p2_bin": file_info(&p2_bin),
-                "p3_bin": file_info(&p3_bin),
             },
             "deployed": {
                 "deploy_root": dir_info(&deploy_root),
                 "p2_bin": file_info(&deploy_p2),
-                "p3_bin": file_info(&deploy_p3),
                 "current": {
                     "path": current_link.display().to_string(),
                     "exists": symlink_meta.is_some(),
@@ -3055,7 +3048,6 @@ async fn get_p23_perf(State(_state): State<AppState>) -> Response {
     fn p23_workload_info(main_pid: Option<u32>) -> serde_json::Value {
         let deploy_root = PathBuf::from("/opt/saturn-go/p23-apps");
         let deploy_p2 = deploy_root.join("p2app");
-        let deploy_p3 = deploy_root.join("p3app");
         let current_link = deploy_root.join("current");
         let override_file =
             PathBuf::from("/etc/systemd/system/p2app.service.d/10-saturn-p23-switch.conf");
@@ -3072,14 +3064,12 @@ async fn get_p23_perf(State(_state): State<AppState>) -> Response {
                 let name = Path::new(binary).file_name()?.to_str()?;
                 match name {
                     "p2app" => Some("p2".to_string()),
-                    "p3app" => Some("p3".to_string()),
                     _ => None,
                 }
             })
         });
         let selected_app = match current_target_abs.as_deref() {
             Some(v) if v == deploy_p2.display().to_string() => Some("p2".to_string()),
-            Some(v) if v == deploy_p3.display().to_string() => Some("p3".to_string()),
             _ => inferred_app,
         };
 

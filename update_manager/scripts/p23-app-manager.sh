@@ -26,10 +26,10 @@ usage(){
 Usage: p23-app-manager.sh [options]
 Actions (choose one):
   --status               Show current build/deploy/service status
-  --build [p2|p3]        Build the converged app in sw_projects/P2_app
-  --deploy [p2|p3]       Build, install, and optionally restart the converged app
-  --restart [p2|p3]      Reapply override metadata/current symlink and restart service
-  --switch [p2|p3]       Deprecated alias for --restart
+  --build [p2]           Build the converged app in sw_projects/P2_app
+  --deploy [p2]          Build, install, and optionally restart the converged app
+  --restart [p2]         Reapply override metadata/current symlink and restart service
+  --switch [p2]          Deprecated alias for --restart
   --revert               Remove Saturn override and restore unit default ExecStart
 
 Options:

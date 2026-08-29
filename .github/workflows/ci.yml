@@ -196,6 +196,8 @@ jobs:
             tests/test-saturn-go-deploy-broker.sh \
             tests/test-saturn-p2-deploy.sh \
             tests/test-saturn-radio-backend-switch.sh \
+            tests/test-p3-retirement.sh \
+            tests/test-xdma-driver-hardening.sh \
             tests/test-xdma-phase4-stress.sh \
             tests/test-xdma-realtime-completion.sh \
             tests/test-xdma-dkms-idempotency.sh
@@ -242,6 +244,8 @@ jobs:
             tests/test-saturn-state-compatibility.sh \
             tests/test-saturn-go-deploy-broker.sh \
             tests/test-saturn-radio-backend-switch.sh \
+            tests/test-p3-retirement.sh \
+            tests/test-xdma-driver-hardening.sh \
             tests/test-xdma-phase4-stress.sh \
             tests/test-xdma-realtime-completion.sh \
             tests/test-xdma-dkms-idempotency.sh
@@ -318,6 +322,9 @@ jobs:
       - name: Test deployment broker policy
         run: tests/test-saturn-go-deploy-broker.sh
 
+      - name: Test historical P3 retirement contract
+        run: tests/test-p3-retirement.sh
+
       - name: Test XDMA DKMS rerun behavior
         run: tests/test-xdma-dkms-idempotency.sh
 
@@ -326,6 +333,9 @@ jobs:
 
       - name: Test XDMA real-time completion contract
         run: tests/test-xdma-realtime-completion.sh
+
+      - name: Test XDMA driver hardening contract
+        run: tests/test-xdma-driver-hardening.sh
 
       - name: Test P2 controller lease
         run: make test-controller-lease-asan
@@ -346,10 +356,6 @@ jobs:
       - name: Build P1 app
         run: make clean all
         working-directory: sw_projects/P1_app
-
-      - name: Build P3 app
-        run: make clean all
-        working-directory: sw_projects/P3_app
 
       - name: Build XDMA module
         run: make clean all

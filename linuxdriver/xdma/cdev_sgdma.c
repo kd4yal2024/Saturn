@@ -659,6 +659,9 @@ static int ioctl_do_perf_start(struct xdma_engine *engine, unsigned long arg)
 {
 	int rv;
 	struct xdma_dev *xdev;
+	struct xdma_performance_ioctl requested;
+	struct xdma_performance_ioctl *perf;
+	unsigned long flags;
 
 	if (!engine) {
 		pr_err("Invalid DMA engine\n");
@@ -671,36 +674,41 @@ static int ioctl_do_perf_start(struct xdma_engine *engine, unsigned long arg)
 		return -EINVAL;
 	}
 
-	/* performance measurement already running on this engine? */
-	if (engine->xdma_perf) {
-		dbg_perf("IOCTL_XDMA_PERF_START failed!\n");
-		dbg_perf("Perf measurement already seems to be running!\n");
-		return -EBUSY;
-	}
-	engine->xdma_perf = kzalloc(sizeof(struct xdma_performance_ioctl),
-		GFP_KERNEL);
-
-	if (!engine->xdma_perf)
-		return -ENOMEM;
-
-	rv = copy_from_user(engine->xdma_perf,
+	rv = copy_from_user(&requested,
 		(struct xdma_performance_ioctl __user *)arg,
 		sizeof(struct xdma_performance_ioctl));
-
 	if (rv) {
 		dbg_perf("Failed to copy from user space 0x%lx\n", arg);
-		rv = -EFAULT;
-		goto err_free_perf;
+		return -EFAULT;
 	}
-	if (engine->xdma_perf->version != IOCTL_XDMA_PERF_V1) {
+	if (requested.version != IOCTL_XDMA_PERF_V1) {
 		dbg_perf("Unsupported IOCTL version %d\n",
-			engine->xdma_perf->version);
-		rv = -EINVAL;
-		goto err_free_perf;
+			requested.version);
+		return -EINVAL;
+	}
+	if (!requested.transfer_size) {
+		dbg_perf("Performance transfer size must be nonzero\n");
+		return -EINVAL;
 	}
 
+	perf = kmemdup(&requested, sizeof(requested), GFP_KERNEL);
+	if (!perf)
+		return -ENOMEM;
+
+	mutex_lock(&engine->perf_lock);
+	spin_lock_irqsave(&engine->lock, flags);
+	if (engine->xdma_perf) {
+		spin_unlock_irqrestore(&engine->lock, flags);
+		mutex_unlock(&engine->perf_lock);
+		kfree(perf);
+		dbg_perf("Performance measurement is already running\n");
+		return -EBUSY;
+	}
+	engine->xdma_perf = perf;
+	spin_unlock_irqrestore(&engine->lock, flags);
+
 	enable_perf(engine);
-	dbg_perf("transfer_size = %d\n", engine->xdma_perf->transfer_size);
+	dbg_perf("transfer_size = %d\n", perf->transfer_size);
 	/* initialize wait queue */
 #if HAS_SWAKE_UP
 	init_swait_queue_head(&engine->xdma_perf_wq);
@@ -710,18 +718,26 @@ static int ioctl_do_perf_start(struct xdma_engine *engine, unsigned long arg)
 	rv = xdma_performance_submit(xdev, engine);
 	if (rv < 0)
 		goto err_free_perf;
+	mutex_unlock(&engine->perf_lock);
 	return rv;
 
 err_free_perf:
 	pr_err("Failed to start dma performance, err %d\n", rv);
-	kfree(engine->xdma_perf);
-	engine->xdma_perf = NULL;
+	spin_lock_irqsave(&engine->lock, flags);
+	if (engine->xdma_perf == perf)
+		engine->xdma_perf = NULL;
+	spin_unlock_irqrestore(&engine->lock, flags);
+	mutex_unlock(&engine->perf_lock);
+	kfree(perf);
 	return rv;
 }
 
 static int ioctl_do_perf_stop(struct xdma_engine *engine, unsigned long arg)
 {
 	struct xdma_transfer *transfer = NULL;
+	struct xdma_performance_ioctl result;
+	struct xdma_performance_ioctl *perf;
+	unsigned long flags;
 	int rv;
 
 	if (!engine) {
@@ -731,8 +747,12 @@ static int ioctl_do_perf_stop(struct xdma_engine *engine, unsigned long arg)
 
 	dbg_perf("IOCTL_XDMA_PERF_STOP\n");
 
-	/* no performance measurement running on this engine? */
-	if (!engine->xdma_perf) {
+	mutex_lock(&engine->perf_lock);
+	spin_lock_irqsave(&engine->lock, flags);
+	perf = engine->xdma_perf;
+	if (!perf) {
+		spin_unlock_irqrestore(&engine->lock, flags);
+		mutex_unlock(&engine->perf_lock);
 		dbg_perf("No measurement in progress\n");
 		return -EINVAL;
 	}
@@ -740,14 +760,19 @@ static int ioctl_do_perf_stop(struct xdma_engine *engine, unsigned long arg)
 	/* stop measurement */
 	transfer = engine_cyclic_stop(engine);
 	if (!transfer) {
+		spin_unlock_irqrestore(&engine->lock, flags);
+		mutex_unlock(&engine->perf_lock);
 		pr_err("Failed to stop cyclic transfer\n");
 		return -EINVAL;
 	}
 	dbg_perf("Waiting for measurement to stop\n");
 
 	get_perf_stats(engine);
+	result = *perf;
+	engine->xdma_perf = NULL;
+	spin_unlock_irqrestore(&engine->lock, flags);
 
-	rv = copy_to_user((void __user *)arg, engine->xdma_perf,
+	rv = copy_to_user((void __user *)arg, &result,
 			sizeof(struct xdma_performance_ioctl));
 	if (rv) {
 		dbg_perf("Error copying result to user\n");
@@ -759,9 +784,8 @@ static int ioctl_do_perf_stop(struct xdma_engine *engine, unsigned long arg)
 
 cleanup_perf:
 	kfree(transfer);
-
-	kfree(engine->xdma_perf);
-	engine->xdma_perf = NULL;
+	kfree(perf);
+	mutex_unlock(&engine->perf_lock);
 
 	return rv;
 }
@@ -769,6 +793,8 @@ cleanup_perf:
 static int ioctl_do_perf_get(struct xdma_engine *engine, unsigned long arg)
 {
 	int rc;
+	struct xdma_performance_ioctl result;
+	unsigned long flags;
 
 	if (!engine) {
 		pr_err("Invalid DMA engine\n");
@@ -777,18 +803,23 @@ static int ioctl_do_perf_get(struct xdma_engine *engine, unsigned long arg)
 
 	dbg_perf("IOCTL_XDMA_PERF_GET\n");
 
+	mutex_lock(&engine->perf_lock);
+	spin_lock_irqsave(&engine->lock, flags);
 	if (engine->xdma_perf) {
 		get_perf_stats(engine);
-
-		rc = copy_to_user((void __user *)arg, engine->xdma_perf,
-			sizeof(struct xdma_performance_ioctl));
-		if (rc) {
-			dbg_perf("Error copying result to user\n");
-			return rc;
-		}
+		result = *engine->xdma_perf;
+		spin_unlock_irqrestore(&engine->lock, flags);
+		rc = copy_to_user((void __user *)arg, &result, sizeof(result));
 	} else {
+		spin_unlock_irqrestore(&engine->lock, flags);
 		dbg_perf("engine->xdma_perf == NULL?\n");
-		return -EPROTO;
+		rc = -EPROTO;
+	}
+	mutex_unlock(&engine->perf_lock);
+
+	if (rc) {
+		dbg_perf("Error copying performance result to user\n");
+		return rc < 0 ? rc : -EFAULT;
 	}
 
 	return 0;
@@ -888,11 +919,14 @@ static int char_sgdma_open(struct inode *inode, struct file *file)
 	engine = xcdev->engine;
 
 	if (engine->streaming && engine->dir == DMA_FROM_DEVICE) {
-		if (engine->device_open == 1)
+		mutex_lock(&engine->open_lock);
+		if (engine->device_open == 1) {
+			mutex_unlock(&engine->open_lock);
 			return -EBUSY;
+		}
 		engine->device_open = 1;
-
 		engine->eop_flush = (file->f_flags & O_TRUNC) ? 1 : 0;
+		mutex_unlock(&engine->open_lock);
 	}
 
 	return 0;
@@ -910,8 +944,12 @@ static int char_sgdma_close(struct inode *inode, struct file *file)
 
 	engine = xcdev->engine;
 
-	if (engine->streaming && engine->dir == DMA_FROM_DEVICE)
+	if (engine->streaming && engine->dir == DMA_FROM_DEVICE) {
+		mutex_lock(&engine->open_lock);
 		engine->device_open = 0;
+		engine->eop_flush = 0;
+		mutex_unlock(&engine->open_lock);
+	}
 
 	return 0;
 }

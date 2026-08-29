@@ -8,7 +8,13 @@ CFLAGS = -Wall -Wextra -Wno-unused-function -O2 -g -D_GNU_SOURCE \
          -Wformat-security -fstack-protector-strong -D_FORTIFY_SOURCE=2
 DEPFLAGS = -MMD -MP
 LDFLAGS = -lm -lpthread
-.DEFAULT_GOAL := all
+.DEFAULT_GOAL := archived
+
+.PHONY: archived
+archived:
+	@echo "P3_app is an archived staging tree; build sw_projects/P2_app instead."
+	@echo "For historical comparison only: make SATURN_ALLOW_ARCHIVED_P3_BUILD=1 all"
+	@exit 2
 
 # NOTE (2026-01): keep "local" libs here. libgpiod link flags are added below
 #                 via pkg-config (with a safe fallback).
@@ -83,7 +89,11 @@ $(G2PANEL_OBJ): $(G2PANEL_SRC) g2panel.h
 # ****************************************************
 # Targets needed to bring the executable up to date
 
+ifeq ($(SATURN_ALLOW_ARCHIVED_P3_BUILD),1)
 all: $(TARGET)
+else
+all: archived
+endif
 
 $(TARGET): $(OBJS)
 	$(LD) -o $(TARGET) $(OBJS) $(LDFLAGS) $(LIBS)

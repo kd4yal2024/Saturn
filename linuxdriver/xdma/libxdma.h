@@ -473,7 +473,7 @@ struct xdma_request_cb {
 	unsigned int total_len;
 	u64 ep_addr;
 
-	/* Use two transfers in case single request needs to be split */
+	/* Synchronous requests reuse slot zero for each bounded transfer. */
 	struct xdma_transfer tfer[2];
 
 	struct xdma_io_cb *cb;
@@ -540,6 +540,8 @@ struct xdma_engine {
 	struct work_struct work;	/* Work queue for interrupt handling */
 
 	struct mutex desc_lock;		/* protects concurrent access */
+	struct mutex open_lock;		/* serializes AXI-ST C2H ownership */
+	struct mutex perf_lock;		/* serializes performance ioctls */
 	dma_addr_t desc_bus;
 	struct xdma_desc *desc;
 	int desc_idx;			/* current descriptor index */
