@@ -33,6 +33,10 @@ void fexchange0(int32_t channel, const double *input, double *output,
 #define STUB_VOID_I32_F64_F64(name) void name(int32_t a, double b, double c) { (void)a; (void)b; (void)c; }
 
 STUB_VOID_I32_I32(SetRXAMode)
+STUB_VOID_I32_F64(SetChannelTDelayUp)
+STUB_VOID_I32_F64(SetChannelTSlewUp)
+STUB_VOID_I32_F64(SetChannelTDelayDown)
+STUB_VOID_I32_F64(SetChannelTSlewDown)
 STUB_VOID_I32_F64_F64(RXASetPassband)
 STUB_VOID_I32_I32(RXASetNC)
 STUB_VOID_I32_I32(RXASetMP)
