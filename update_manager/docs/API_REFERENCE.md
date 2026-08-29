@@ -210,6 +210,10 @@ passwordless `sudo -n`. SSE responses disable proxy buffering.
 | `/p23_status` | `GET` | No | none | `{ "status":"ok", "p23": { service, sources, deployed, override, repo_root } }` |
 | `/p23_perf` | `GET` | No | none | `{ "status":"ok", "perf": { collected_at_ms, system, process, network, xdma, workload, app_telemetry } }` |
 | `/p23_adc_telemetry` | `POST` | Yes | `{ "enabled": bool }` | ADC peak telemetry control/snapshot paths and effective enabled state |
+| `/performance_benchmarks` | `GET` | No | none | Persistent bounded benchmark history |
+| `/performance_benchmarks` | `POST` | Yes | Validated benchmark-run document | Updated persistent benchmark history |
+| `/performance_benchmarks/compare` | `POST` | Yes | `{ "baseline_id": string, "candidate_id": string }` | Workload compatibility, verdict, and per-metric checks |
+| `/performance_benchmarks/delete` | `POST` | Yes | `{ "id": string }` | Updated history after deleting one run |
 | `/radio_backend` | `GET` | No | none | Selected/runtime backend, persisted and operational status, P2/bridge service state, and mutual-exclusion result |
 | `/radio_backend` | `POST` | Yes | `{ "backend":"p2|xdma|bridge", "action":"switch|start|stop" }`; `action` defaults to `switch`; `bridge` accepts only `start` or `stop` | Transaction result and refreshed backend/service status |
 | `/appliance_power` | `POST` | Yes | `{ "action":"poweroff", "confirmation":"POWER OFF" }` | HTTP 202 after the selected radio backend is stopped and a delayed systemd-owned G2 poweroff is scheduled |

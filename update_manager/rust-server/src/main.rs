@@ -7,6 +7,7 @@ mod maintenance_lock;
 mod middleware;
 mod monitor;
 mod pages;
+mod performance_lab;
 mod remote_tls;
 mod repair;
 mod restore;
@@ -27,6 +28,11 @@ use crate::pages::{
     asset_handler, backup_handler, custom_handler, deskhpsdr_handler, fallback_handler,
     fpga_handler, monitor_handler, overview_handler, p23test_handler, pihpsdr_handler,
     remote_next_handler, root_handler, saturngo_handler, tailscale_handler, update_handler,
+};
+use crate::performance_lab::{
+    compare_by_id, delete_run as delete_performance_benchmark,
+    load_benchmark_file as load_performance_benchmarks, save_run as save_performance_benchmark,
+    BenchmarkCompareRequest, BenchmarkDeleteRequest, PerformanceBenchmarkRun,
 };
 use crate::remote_tls::{
     dev_insecure_override_set, ensure_self_signed_cert, load_remote_tls_config,
@@ -82,9 +88,11 @@ use axum_server::tls_rustls::RustlsConfig;
 use axum_server::Handle as AxumServerHandle;
 use chrono::Local;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, VecDeque},
     fs,
+    io::Read,
     net::SocketAddr,
     os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
@@ -115,6 +123,40 @@ struct RadioBackendRequest {
 struct AppliancePowerRequest {
     action: String,
     confirmation: String,
+}
+
+fn sha256_file_hex(path: &Path) -> std::io::Result<String> {
+    let mut file = fs::File::open(path)?;
+    let mut digest = Sha256::new();
+    let mut buffer = [0u8; 64 * 1024];
+    loop {
+        let count = file.read(&mut buffer)?;
+        if count == 0 {
+            break;
+        }
+        digest.update(&buffer[..count]);
+    }
+    Ok(format!("{:x}", digest.finalize()))
+}
+
+fn p23_exec_path_from_systemd(value: &str) -> Option<PathBuf> {
+    let tail = value.split_once("path=")?.1;
+    let end = tail
+        .find(|character: char| character.is_ascii_whitespace() || matches!(character, ';' | '}'))
+        .unwrap_or(tail.len());
+    let path = PathBuf::from(&tail[..end]);
+    if !path.is_absolute() {
+        return None;
+    }
+    let canonical = fs::canonicalize(path).ok()?;
+    let approved = [
+        Path::new("/opt/saturn-radio/bin"),
+        Path::new("/opt/saturn-go/p23-apps"),
+    ];
+    approved
+        .iter()
+        .any(|root| canonical.starts_with(root))
+        .then_some(canonical)
 }
 
 #[tokio::main]
@@ -514,6 +556,16 @@ fn application_router(state: AppState, restore_request_max_bytes: usize) -> Rout
         .route("/p23_status", get(get_p23_status))
         .route("/p23_perf", get(get_p23_perf))
         .route("/p23_adc_telemetry", post(set_p23_adc_telemetry))
+        .route("/performance_benchmarks", get(get_performance_benchmarks))
+        .route("/performance_benchmarks", post(post_performance_benchmark))
+        .route(
+            "/performance_benchmarks/delete",
+            post(post_delete_performance_benchmark),
+        )
+        .route(
+            "/performance_benchmarks/compare",
+            post(post_compare_performance_benchmarks),
+        )
         .route("/update_start", post(update_start))
         .route("/update_status", get(update_status))
         .route("/update_rollback", post(update_rollback))
@@ -2399,14 +2451,22 @@ async fn get_p23_status(State(state): State<AppState>) -> Response {
     let active = systemctl_text(&["is-active", service_name]).await;
     let enabled = systemctl_text(&["is-enabled", service_name]).await;
     let main_pid_text = systemctl_text(&["show", "-p", "MainPID", "--value", service_name]).await;
+    let service_execstart_text =
+        systemctl_text(&["show", "-p", "ExecStart", "--value", service_name]).await;
     let service_environment_text =
         systemctl_text(&["show", "-p", "Environment", "--value", service_name]).await;
     let main_pid = main_pid_text.trim().parse::<u32>().ok().filter(|v| *v > 0);
-    let running_exe = main_pid.and_then(|pid| {
-        fs::read_link(format!("/proc/{pid}/exe"))
-            .ok()
-            .map(|p| p.display().to_string())
-    });
+    let proc_exe_path = main_pid.and_then(|pid| fs::read_link(format!("/proc/{pid}/exe")).ok());
+    let configured_exe_path = p23_exec_path_from_systemd(&service_execstart_text);
+    let (running_exe_path, running_exe_source) = match proc_exe_path {
+        Some(path) => (Some(path), Some("proc")),
+        None if main_pid.is_some() => (configured_exe_path, Some("systemd_execstart")),
+        None => (None, None),
+    };
+    let running_exe_sha256 = running_exe_path
+        .as_deref()
+        .and_then(|path| sha256_file_hex(path).ok());
+    let running_exe = running_exe_path.map(|path| path.display().to_string());
 
     let override_contents = fs::read_to_string(&override_file).ok();
     let override_execstart = override_contents.as_deref().and_then(|text| {
@@ -2484,6 +2544,8 @@ async fn get_p23_status(State(state): State<AppState>) -> Response {
                 "enabled": enabled,
                 "main_pid": main_pid,
                 "running_exe": running_exe,
+                "running_exe_source": running_exe_source,
+                "running_exe_sha256": running_exe_sha256,
             },
             "sources": {
                 "p2_dir": dir_info(&p2_dir),
@@ -2560,6 +2622,94 @@ async fn set_p23_adc_telemetry(Json(req): Json<P23AdcTelemetryRequest>) -> Respo
                 "status": "error",
                 "message": format!("failed to update ADC telemetry toggle: {e}")
             })),
+        )
+            .into_response(),
+    }
+}
+
+fn performance_benchmark_file(state: &AppState) -> PathBuf {
+    state
+        .remote_settings_file
+        .parent()
+        .unwrap_or_else(|| Path::new("/var/lib/saturn-state"))
+        .join("performance_benchmarks.json")
+}
+
+async fn get_performance_benchmarks(State(state): State<AppState>) -> Response {
+    let path = performance_benchmark_file(&state);
+    match load_performance_benchmarks(&path).await {
+        Ok(file) => Json(serde_json::json!({
+            "status": "ok",
+            "path": path.display().to_string(),
+            "history": file,
+        }))
+        .into_response(),
+        Err(message) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "status": "error", "message": message })),
+        )
+            .into_response(),
+    }
+}
+
+async fn post_performance_benchmark(
+    State(state): State<AppState>,
+    Json(run): Json<PerformanceBenchmarkRun>,
+) -> Response {
+    let path = performance_benchmark_file(&state);
+    match save_performance_benchmark(&path, run).await {
+        Ok(file) => Json(serde_json::json!({
+            "status": "ok",
+            "path": path.display().to_string(),
+            "history": file,
+        }))
+        .into_response(),
+        Err(message) => (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "status": "error", "message": message })),
+        )
+            .into_response(),
+    }
+}
+
+async fn post_delete_performance_benchmark(
+    State(state): State<AppState>,
+    Json(request): Json<BenchmarkDeleteRequest>,
+) -> Response {
+    let path = performance_benchmark_file(&state);
+    match delete_performance_benchmark(&path, &request.id).await {
+        Ok(file) => Json(serde_json::json!({
+            "status": "ok",
+            "path": path.display().to_string(),
+            "history": file,
+        }))
+        .into_response(),
+        Err(message) => (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "status": "error", "message": message })),
+        )
+            .into_response(),
+    }
+}
+
+async fn post_compare_performance_benchmarks(
+    State(state): State<AppState>,
+    Json(request): Json<BenchmarkCompareRequest>,
+) -> Response {
+    let path = performance_benchmark_file(&state);
+    let result = match load_performance_benchmarks(&path).await {
+        Ok(file) => compare_by_id(&file, &request.baseline_id, &request.candidate_id),
+        Err(message) => Err(message),
+    };
+    match result {
+        Ok(comparison) => Json(serde_json::json!({
+            "status": "ok",
+            "comparison": comparison,
+        }))
+        .into_response(),
+        Err(message) => (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "status": "error", "message": message })),
         )
             .into_response(),
     }

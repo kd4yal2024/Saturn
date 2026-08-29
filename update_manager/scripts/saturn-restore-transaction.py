@@ -37,6 +37,7 @@ HOST_POLICY_PATHS = {
 STATE_PATHS = {
     "saturn-state/state-schema.json": "state-schema.json",
     "saturn-state/custom_scripts.json": "custom_scripts.json",
+    "saturn-state/performance_benchmarks.json": "performance_benchmarks.json",
     "saturn-state/remote_settings.json": "remote_settings.json",
     "saturn-state/remote_profiles.json": "remote_profiles.json",
     "saturn-state/repo_root.txt": "repo_root.txt",
@@ -291,6 +292,7 @@ def validate_settings_semantics(archive_root: Path, records: dict[str, dict[str,
             fail(f"unsupported Saturn state schema version: {version!r}")
 
     for relative in (
+        "saturn-state/performance_benchmarks.json",
         "saturn-state/remote_settings.json",
         "saturn-state/remote_profiles.json",
         "saturn-state/update_policy.json",

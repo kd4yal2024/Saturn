@@ -9,20 +9,21 @@ This folder contains the operational and technical documentation for the Rust-ba
 3. `API_REFERENCE.md`
 4. `SCRIPT_CATALOG.md`
 5. `OPERATIONS_RUNBOOK.md`
-6. `RUST_SUPPLY_CHAIN.md`
-7. `ADMIN_AUTH_SIMPLIFICATION.md`
-8. `XDMA_RELEASE_POLICY.md`
-9. `REMEDIATION_PLAN.md`
-10. `RELEASE_MANIFEST_SCHEMA.md`
-11. `STATE_COMPATIBILITY.md`
-12. `STATE_INVENTORY.md`
-13. `BACKUP_FORMATS.md`
-14. `SATURN_REMOTE_ARCHITECTURE.md`
-15. `SATURN_REMOTE_STATE_STRIP_SPEC.md`
-16. `SATURN_REMOTE_APPLE_SAFARI_VALIDATION.md`
-17. `SATURN_REMOTE_APPLE_SAFARI_RESULTS.md`
-18. `SATURN_REMOTE_SQUELCH_AUDIO_PROFILE_CONTRACT.md`
-19. `SATURN_REMOTE_TX_UPLINK_PHASE38_CONTRACT.md`
+6. `PERFORMANCE_LAB.md`
+7. `RUST_SUPPLY_CHAIN.md`
+8. `ADMIN_AUTH_SIMPLIFICATION.md`
+9. `XDMA_RELEASE_POLICY.md`
+10. `REMEDIATION_PLAN.md`
+11. `RELEASE_MANIFEST_SCHEMA.md`
+12. `STATE_COMPATIBILITY.md`
+13. `STATE_INVENTORY.md`
+14. `BACKUP_FORMATS.md`
+15. `SATURN_REMOTE_ARCHITECTURE.md`
+16. `SATURN_REMOTE_STATE_STRIP_SPEC.md`
+17. `SATURN_REMOTE_APPLE_SAFARI_VALIDATION.md`
+18. `SATURN_REMOTE_APPLE_SAFARI_RESULTS.md`
+19. `SATURN_REMOTE_SQUELCH_AUDIO_PROFILE_CONTRACT.md`
+20. `SATURN_REMOTE_TX_UPLINK_PHASE38_CONTRACT.md`
 
 ## Document Guide
 
@@ -46,6 +47,10 @@ This folder contains the operational and technical documentation for the Rust-ba
   - Includes the Overview and Radio Telemetry operator views, G2 Update page
     (G2 + Appliance Update), dedicated application/FPGA update flows,
     browser-managed custom scripts, backup/restore, and service checks.
+
+- `PERFORMANCE_LAB.md`
+  - Repeatable benchmark methodology, captured evidence, workload identity,
+    persistent history, and baseline/candidate verdict gates.
 
 - `RUST_SUPPLY_CHAIN.md`
   - Rust dependency policy for `saturn-go` and `saturn-bridge`.

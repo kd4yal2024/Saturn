@@ -29,6 +29,7 @@ MAX_MANAGED_FILE_BYTES = 16 * 1024 * 1024
 COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
 LEGACY_MANAGED_PATHS = [
     "custom_scripts.json",
+    "performance_benchmarks.json",
     "remote_profiles.json",
     "remote_settings.json",
     "repo_root.txt",

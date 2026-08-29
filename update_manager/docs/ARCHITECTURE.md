@@ -64,6 +64,7 @@ The Saturn Remote real-time backend also lives in the repo:
 - `p23test.html`
   - Radio Telemetry & Diagnostics page served canonically at `/telemetry`.
   - Combines live `p2app`, FPGA, network, and XDMA telemetry with advanced build/deploy/restart and override controls.
+  - Includes the persistent Performance Lab for fixed-window, workload-locked baseline/candidate comparisons; see `PERFORMANCE_LAB.md`.
   - Legacy `/p23test` routes remain available for compatibility.
 - `tailscale.html`
   - Tailscale VPN status, enrollment, service, and Saturn Remote access controls.

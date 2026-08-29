@@ -911,6 +911,7 @@ Capabilities:
 - Separate status panel backed by `GET /p23_status`
 - Separate workload/performance dashboard backed by `GET /p23_perf`
 - `Capture Snapshot` button for exporting a point-in-time JSON bundle of the live `/p23_perf` sample, derived metrics, current baseline summary, and effective `p2app.service` runtime tuning state seen by the lab
+- A separate `Saturn Performance Lab` tab for a warm-up plus fixed measurement window, persistent named runs, operator observations, and a server-side baseline/candidate `ACCEPT`, `REVIEW`, `REJECT`, or `INCOMPATIBLE` verdict; the live service dashboard remains on `Telemetry & Diagnostics`
 
 Implementation details:
 
@@ -926,6 +927,8 @@ Implementation details:
 - `GET /p23_status` also reports the effective `p2app.service` runtime environment subset from `systemctl show -p Environment`, including optional `SATURN_P3_RT_AUDIO_*` settings for P3 audio-thread tuning
 - `GET /p23_perf` overlays host metrics with workload tags and live app telemetry exported from `/dev/shm/saturn_p23_perf_stats.json`
 - The dashboard baseline resets automatically when the active workload identity changes (PID, binary-family/mode, or routing shape)
+- A Performance Lab run aborts if the service PID, telemetry ownership, active-radio state, or workload identity changes. Use the same band, sample rate, receiver count, routing, and client display shape for both runs.
+- Full methodology and gate definitions are in `PERFORMANCE_LAB.md`.
 - Snapshot `Copy JSON` falls back to a legacy in-page copy path when the browser Clipboard API is unavailable
 - The dashboard is organized around:
   - workload identity and app shape

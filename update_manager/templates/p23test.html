@@ -144,6 +144,53 @@
     body.light .chip { border-color: rgba(15,23,42,0.12); background: rgba(37,99,235,0.06); }
     .list { display:grid; gap:10px; }
     .option-grid { display:grid; gap:10px; }
+    .field-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px;
+    }
+    .field-grid label { display: grid; gap: 6px; font-size: 12px; }
+    .field-grid .wide { grid-column: span 2; }
+    .field-input {
+      width: 100%;
+      min-height: 42px;
+      border: 1px solid var(--line-strong);
+      border-radius: 11px;
+      padding: 9px 11px;
+      background: rgba(255,255,255,0.045);
+      color: var(--text);
+      font: inherit;
+    }
+    textarea.field-input { min-height: 72px; resize: vertical; }
+    body.light .field-input { background: rgba(15,23,42,0.035); }
+    .benchmark-card { grid-column: 1 / -1; }
+    .benchmark-progress { width: min(520px, 100%); height: 12px; }
+    .benchmark-history { display: grid; gap: 8px; margin-top: 12px; }
+    .benchmark-run {
+      display: grid;
+      grid-template-columns: minmax(190px, 1.2fr) minmax(160px, .7fr) minmax(180px, 1fr);
+      gap: 12px;
+      align-items: center;
+      padding: 11px 12px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: rgba(255,255,255,0.025);
+    }
+    .benchmark-run-title { font-weight: 750; overflow-wrap: anywhere; }
+    .benchmark-run-meta, .benchmark-run-result { color: var(--muted); font-size: 12px; line-height: 1.35; }
+    .benchmark-verdict {
+      display: inline-flex;
+      padding: 4px 9px;
+      border: 1px solid var(--line-strong);
+      border-radius: 999px;
+      font-size: 11px;
+      font-weight: 800;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+    }
+    .benchmark-verdict.accept, .benchmark-verdict.pass { color: var(--good); border-color: rgba(110,231,183,.42); }
+    .benchmark-verdict.review, .benchmark-verdict.incompatible { color: var(--warn); border-color: rgba(253,230,138,.48); }
+    .benchmark-verdict.reject { color: var(--crit); border-color: rgba(252,165,165,.52); }
     label { user-select:none; color: #d7e2ef; }
     body.light label { color: #334155; }
     progress { width: 180px; height: 12px; }
@@ -392,6 +439,9 @@
       .runtime-section.full { grid-column: auto; }
       .runtime-section-head { display: block; }
       .runtime-section-note { margin-top: 3px; text-align: left; }
+      .field-grid { grid-template-columns: 1fr; }
+      .field-grid .wide { grid-column: auto; }
+      .benchmark-run { grid-template-columns: 1fr; }
     }
   </style>
 </head>
@@ -473,7 +523,8 @@
     </div>
 
     <div class="tab-row" role="tablist" aria-label="Radio telemetry diagnostic views">
-      <button id="tab-p23" class="btn tab-btn" role="tab" aria-controls="panel-p23" aria-selected="true">p2app Service</button>
+      <button id="tab-p23" class="btn tab-btn" role="tab" aria-controls="panel-p23" aria-selected="true">Telemetry &amp; Diagnostics</button>
+      <button id="tab-performance" class="btn tab-btn" role="tab" aria-controls="panel-performance" aria-selected="false">Saturn Performance Lab</button>
       <button id="tab-bridge" class="btn tab-btn" role="tab" aria-controls="panel-bridge" aria-selected="false">Bridge Diagnostics</button>
       <button id="tab-xdma" class="btn tab-btn" role="tab" aria-controls="panel-xdma" aria-selected="false">XDMA Telemetry</button>
     </div>
@@ -592,6 +643,88 @@
             </div>
             <pre id="p23-snapshot-view" class="term compact"></pre>
           </details>
+        </div>
+      </div>
+    </div>
+
+    <div id="panel-performance" class="lab-panel" role="tabpanel" aria-labelledby="tab-performance" hidden>
+      <div class="card benchmark-card" id="performance-lab-card">
+        <div class="row space">
+          <div>
+            <div class="section-kicker">Change Validation</div>
+            <h2 style="margin:4px 0 4px 0; font-size:24px;">Saturn Performance Lab</h2>
+            <div class="muted" style="font-size:12px;">Warm up, measure a fixed workload, save the run, then compare a candidate against a named baseline.</div>
+          </div>
+          <div class="row">
+            <button id="benchmark-start" class="btn primary">Start Benchmark</button>
+            <button id="benchmark-abort" class="btn danger" disabled>Abort</button>
+            <button id="benchmark-refresh" class="btn">Refresh History</button>
+          </div>
+        </div>
+
+        <div class="field-grid" style="margin-top:14px;">
+          <label>Run name
+            <input id="benchmark-name" class="field-input" maxlength="96" placeholder="Before scheduler change" />
+          </label>
+          <label>Measurement window
+            <select id="benchmark-duration" class="field-input">
+              <option value="30">30 seconds</option>
+              <option value="60" selected>60 seconds</option>
+              <option value="120">2 minutes</option>
+              <option value="300">5 minutes</option>
+            </select>
+          </label>
+          <label>Warm-up
+            <select id="benchmark-warmup" class="field-input">
+              <option value="6" selected>6 seconds</option>
+              <option value="10">10 seconds</option>
+              <option value="20">20 seconds</option>
+            </select>
+          </label>
+          <label class="wide">Change notes
+            <textarea id="benchmark-notes" class="field-input" maxlength="800" placeholder="Commit, FPGA image, setting, or implementation change under test"></textarea>
+          </label>
+          <label>Operator observation
+            <textarea id="benchmark-observation" class="field-input" maxlength="800" placeholder="For example: Sounded clean; tuning remained responsive"></textarea>
+          </label>
+        </div>
+
+        <div style="margin-top:14px;">
+          <div class="row space">
+            <div id="benchmark-status" class="summary">Ready. Start the radio client and hold its receiver configuration steady.</div>
+            <div id="benchmark-clock" class="chip">Idle</div>
+          </div>
+          <progress id="benchmark-progress" class="benchmark-progress" value="0" max="100" style="margin-top:10px;"></progress>
+        </div>
+
+        <hr style="margin:18px 0;">
+
+        <div class="row space">
+          <div>
+            <div class="section-kicker">A/B Comparison</div>
+            <h3 style="margin:4px 0 0 0; font-size:18px;">Baseline vs Candidate</h3>
+          </div>
+          <div class="row">
+            <select id="benchmark-baseline" class="field-input" aria-label="Baseline benchmark" style="min-width:220px;"></select>
+            <select id="benchmark-candidate" class="field-input" aria-label="Candidate benchmark" style="min-width:220px;"></select>
+            <button id="benchmark-compare" class="btn primary">Compare</button>
+            <button id="benchmark-delete" class="btn danger">Delete Candidate</button>
+          </div>
+        </div>
+        <div id="benchmark-comparison" class="runtime-sections" style="margin-top:12px;">
+          <div class="runtime-section full"><div class="runtime-section-head"><div class="runtime-section-title">No comparison selected</div><div class="runtime-section-note">Choose compatible runs with the same workload identity.</div></div></div>
+        </div>
+
+        <details open style="margin-top:14px;">
+          <summary>Saved benchmark history</summary>
+          <div id="benchmark-history" class="benchmark-history">
+            <div class="muted">Loading benchmark history...</div>
+          </div>
+        </details>
+        <div class="muted note-list" style="margin-top:12px;">
+          <div>- Keep the band, sample rate, receiver count, wideband state, and client configuration unchanged between runs.</div>
+          <div>- The hard gate rejects new application, FIFO, network, or ADC-overflow events; CPU, scheduler delay, memory, XDMA efficiency, and DDC throughput use bounded regression thresholds.</div>
+          <div>- <strong>Accept</strong> means “no regression detected by the current gates,” not proof that RF sensitivity, dynamic range, phase noise, or transmitted spectral purity improved.</div>
         </div>
       </div>
     </div>
@@ -766,6 +899,10 @@ let bridgeDiagPollTimer = null;
 let bridgeDiagPollInFlight = false;
 let latestBridgeDiag = null;
 let radioBackendBusy = false;
+let benchmarkHistory = [];
+let benchmarkRun = null;
+let benchmarkTicker = null;
+let benchmarkLastSampleTs = 0;
 const PERF_THRESH = {
   cpuCoreWarn: 60,
   cpuCoreCrit: 90,
@@ -1437,6 +1574,380 @@ function downloadBaselineSnapshot(){
   URL.revokeObjectURL(url);
   setPerfSummary(`Downloaded baseline snapshot | ${snapshot.baseline?.samples || 0} samples | ${snapshot.page.alert_level.toUpperCase()}`, false);
 }
+function setBenchmarkStatus(text, isError=false){
+  const el = $('benchmark-status');
+  if (!el) return;
+  el.textContent = text || '';
+  el.style.color = isError ? 'var(--crit)' : '';
+}
+function benchmarkMetricValues(d){
+  const adc = d?.appGauges?.adc || {};
+  const adcDbfs = (value)=>{
+    const peak = Number(value);
+    return Number.isFinite(peak) && peak > 0 ? 20 * Math.log10(Math.min(65535, peak) / 65535) : NaN;
+  };
+  return {
+    cpu_pct_core: d?.cpuPctCore,
+    rss_mb: d?.rssMb,
+    scheduler_delay_ms_per_sec: d?.schedDelayMsPerSec,
+    context_switches_per_sec: d?.ctxPerSec,
+    ethernet_rx_mbps: d?.ethRxMbps,
+    ethernet_tx_mbps: d?.ethTxMbps,
+    ethernet_rx_packets_per_sec: d?.ethRxPps,
+    ethernet_tx_packets_per_sec: d?.ethTxPps,
+    xdma_irq_per_sec: d?.xdmaIrqPerSec,
+    xdma_irq_per_mib: d?.xdmaIrqPerMiB,
+    ddc_packets_per_sec: d?.ddcPps,
+    duc_packets_per_sec: d?.ducPps,
+    ddc_dma_mib_per_sec: d?.ddcDmaMiBs,
+    ddc_dma_reads_per_sec: d?.ddcDmaReadsPerSec,
+    ddc_dma_avg_kib: d?.ddcDmaAvgKiB,
+    duc_dma_mib_per_sec: d?.ducDmaMiBs,
+    duc_dma_writes_per_sec: d?.ducDmaWritesPerSec,
+    duc_dma_avg_kib: d?.ducDmaAvgKiB,
+    soc_temp_c: d?.socTempC,
+    cpu_frequency_mhz: d?.cpuFrequencyMhz,
+    adc1_peak_dbfs: adcDbfs(adc?.peak1),
+    adc2_peak_dbfs: adcDbfs(adc?.peak2),
+  };
+}
+function benchmarkEventValues(d){
+  const sumFinite = (values)=>values.reduce((sum, value)=>sum + (Number.isFinite(Number(value)) ? Math.max(0, Number(value)) : 0), 0);
+  return {
+    app_errors: sumFinite([
+      d?.hpSendErrDelta, d?.micSendErrDelta, d?.micDmaErrDelta,
+      d?.ddcSendErrDelta, d?.ddcDmaErrDelta, d?.ddcPartialDelta,
+      d?.ddcHeaderErrDelta, d?.wbSendErrDelta, d?.ducRecvErrDelta,
+      d?.ducDmaErrDelta, d?.spkrRecvErrDelta, d?.spkrDmaErrDelta,
+    ]),
+    fifo_faults: sumFinite([d?.fifoDdcOverDelta, d?.fifoMicOverDelta, d?.fifoDucUnderDelta, d?.fifoSpkrUnderDelta]),
+    network_errors: sumFinite([d?.ethRxErrDelta, d?.ethRxDropDelta, d?.ethTxErrDelta, d?.ethTxDropDelta]),
+    adc_overflows: sumFinite([d?.adcOverflowEventDelta]),
+  };
+}
+function benchmarkPercentile(sorted, percentile){
+  if (!sorted.length) return NaN;
+  const index = Math.max(0, Math.min(sorted.length - 1, Math.ceil(sorted.length * percentile) - 1));
+  return sorted[index];
+}
+function benchmarkSummarize(values){
+  const sorted = values.filter(Number.isFinite).slice().sort((a,b)=>a-b);
+  if (!sorted.length) return null;
+  return {
+    count: sorted.length,
+    min: sorted[0],
+    mean: sorted.reduce((sum, value)=>sum + value, 0) / sorted.length,
+    p95: benchmarkPercentile(sorted, 0.95),
+    max: sorted[sorted.length - 1],
+  };
+}
+function benchmarkFormatMetric(run, key, unit=''){
+  const value = Number(run?.metrics?.[key]?.mean);
+  return Number.isFinite(value) ? `${fmtNum(value)}${unit}` : 'n/a';
+}
+function benchmarkSetButtons(running){
+  $('benchmark-start').disabled = !!running;
+  $('benchmark-abort').disabled = !running;
+  $('benchmark-duration').disabled = !!running;
+  $('benchmark-warmup').disabled = !!running;
+}
+function benchmarkStopTicker(){
+  if (benchmarkTicker){
+    clearInterval(benchmarkTicker);
+    benchmarkTicker = null;
+  }
+}
+function benchmarkUpdateClock(){
+  if (!benchmarkRun){
+    $('benchmark-clock').textContent = 'Idle';
+    return;
+  }
+  const now = Date.now();
+  const elapsed = Math.max(0, (now - benchmarkRun.startedAtMs) / 1000);
+  const warmup = benchmarkRun.warmupSeconds;
+  const duration = benchmarkRun.durationSeconds;
+  const total = warmup + duration;
+  const progress = Math.min(100, (elapsed / total) * 100);
+  $('benchmark-progress').value = progress;
+  if (elapsed < warmup){
+    const remaining = Math.max(0, warmup - elapsed);
+    $('benchmark-clock').textContent = `Warm-up ${remaining.toFixed(1)} s`;
+    setBenchmarkStatus(`Stabilizing the current workload. Measurement begins in ${remaining.toFixed(1)} seconds.`);
+  } else {
+    const remaining = Math.max(0, total - elapsed);
+    $('benchmark-clock').textContent = `Measure ${remaining.toFixed(1)} s`;
+    setBenchmarkStatus(`Measuring ${benchmarkRun.samples} sample(s) · keep the client workload unchanged.`);
+  }
+}
+async function benchmarkBuildCommit(){
+  try{
+    const response = await fetch('./livez', { cache:'no-store' });
+    const data = await response.json();
+    return String(data?.build_commit || '');
+  }catch(_error){
+    return '';
+  }
+}
+async function startPerformanceBenchmark(){
+  if (benchmarkRun) return;
+  const d = latestDerivedPerf;
+  const perf = latestP23Perf;
+  const workloadKey = String(perf?.workload?.workload_key || '');
+  const artifactSha256 = String(latestP23Status?.service?.running_exe_sha256 || '');
+  if (!d || !perf?.process || !d.appPidMatchesService || !d.appState?.sdr_active || !workloadKey){
+    setBenchmarkStatus('Cannot start: p2app telemetry must be live and a radio client must hold a stable active RX workload.', true);
+    return;
+  }
+  if (!/^[0-9a-f]{64}$/i.test(artifactSha256)){
+    setBenchmarkStatus('Cannot start: the exact running P2app binary fingerprint is not available yet. Refresh status and try again.', true);
+    return;
+  }
+  const durationSeconds = Number($('benchmark-duration').value) || 60;
+  const warmupSeconds = Number($('benchmark-warmup').value) || 6;
+  const now = Date.now();
+  const defaultName = `Benchmark ${new Date(now).toLocaleString()}`;
+  const name = String($('benchmark-name').value || '').trim() || defaultName;
+  benchmarkLastSampleTs = 0;
+  benchmarkRun = {
+    id: `bench-${now}`,
+    name,
+    notes: String($('benchmark-notes').value || '').trim(),
+    operatorObservation: String($('benchmark-observation').value || '').trim(),
+    startedAtMs: now,
+    measureStartedAtMs: now + warmupSeconds * 1000,
+    warmupSeconds,
+    durationSeconds,
+    initialPid: Number(d.pid) || 0,
+    workloadKey,
+    selectedApp: String(perf?.workload?.selected_app || 'p2'),
+    startupMode: String(perf?.workload?.startup_mode || ''),
+    panelMode: String(perf?.workload?.panel_mode || ''),
+    buildCommit: await benchmarkBuildCommit(),
+    artifactSha256,
+    metricValues: {},
+    events: { app_errors:0, fifo_faults:0, network_errors:0, adc_overflows:0 },
+    samples: 0,
+    firstSampleAtMs: 0,
+    lastSampleAtMs: 0,
+  };
+  benchmarkSetButtons(true);
+  $('benchmark-progress').value = 0;
+  benchmarkUpdateClock();
+  benchmarkTicker = setInterval(benchmarkUpdateClock, 250);
+}
+function abortPerformanceBenchmark(message='Benchmark aborted by operator.'){
+  if (!benchmarkRun) return;
+  benchmarkRun = null;
+  benchmarkLastSampleTs = 0;
+  benchmarkStopTicker();
+  benchmarkSetButtons(false);
+  $('benchmark-progress').value = 0;
+  $('benchmark-clock').textContent = 'Aborted';
+  setBenchmarkStatus(message, true);
+}
+async function persistPerformanceBenchmark(run){
+  const response = await fetch('./performance_benchmarks', {
+    method:'POST',
+    headers: withCsrf({ 'Content-Type':'application/json' }),
+    body: JSON.stringify(run),
+  });
+  const data = await response.json().catch(()=>({}));
+  if (!response.ok) throw new Error(data?.message || `HTTP ${response.status}`);
+  benchmarkHistory = Array.isArray(data?.history?.runs) ? data.history.runs : [];
+  renderBenchmarkHistory();
+}
+async function finishPerformanceBenchmark(){
+  const active = benchmarkRun;
+  if (!active) return;
+  benchmarkRun = null;
+  benchmarkStopTicker();
+  benchmarkSetButtons(false);
+  $('benchmark-progress').value = 100;
+  $('benchmark-clock').textContent = 'Saving';
+  const metrics = {};
+  Object.entries(active.metricValues).forEach(([key, values])=>{
+    const summary = benchmarkSummarize(values);
+    if (summary) metrics[key] = summary;
+  });
+  const sampleIntervalSeconds = active.samples > 1 && active.firstSampleAtMs && active.lastSampleAtMs
+    ? ((active.lastSampleAtMs - active.firstSampleAtMs) / 1000) / (active.samples - 1)
+    : 2;
+  const run = {
+    schema_version: 1,
+    id: active.id,
+    name: active.name,
+    notes: active.notes,
+    operator_observation: active.operatorObservation,
+    captured_at_ms: Date.now(),
+    captured_at_iso: new Date().toISOString(),
+    duration_seconds: active.durationSeconds,
+    sample_interval_seconds: Math.max(.25, sampleIntervalSeconds),
+    sample_count: active.samples,
+    workload_key: active.workloadKey,
+    selected_app: active.selectedApp,
+    startup_mode: active.startupMode,
+    panel_mode: active.panelMode,
+    backend: 'p2',
+    build_commit: active.buildCommit,
+    artifact_sha256: active.artifactSha256,
+    metrics,
+    events: active.events,
+  };
+  if (active.samples < 5){
+    $('benchmark-clock').textContent = 'Failed';
+    setBenchmarkStatus(`Benchmark did not collect enough samples (${active.samples}); no run was saved.`, true);
+    return;
+  }
+  try{
+    await persistPerformanceBenchmark(run);
+    $('benchmark-clock').textContent = 'Saved';
+    setBenchmarkStatus(`Saved “${active.name}” with ${active.samples} samples. Select it as a baseline or candidate below.`);
+  }catch(error){
+    $('benchmark-clock').textContent = 'Save failed';
+    setBenchmarkStatus(`Benchmark completed but could not be saved: ${error.message}`, true);
+  }
+}
+function benchmarkConsumeSample(perf, d){
+  const active = benchmarkRun;
+  if (!active || !d) return;
+  const ts = Number(perf?.collected_at_ms) || 0;
+  if (!ts || ts === benchmarkLastSampleTs) return;
+  benchmarkLastSampleTs = ts;
+  const currentWorkload = String(perf?.workload?.workload_key || '');
+  if (currentWorkload !== active.workloadKey || Number(d.pid) !== active.initialPid || !d.appPidMatchesService || !d.appState?.sdr_active){
+    abortPerformanceBenchmark('Benchmark invalidated: service identity or active radio workload changed during the run.');
+    return;
+  }
+  const now = Date.now();
+  if (now < active.measureStartedAtMs) return;
+  if (now > active.measureStartedAtMs + active.durationSeconds * 1000){
+    finishPerformanceBenchmark();
+    return;
+  }
+  Object.entries(benchmarkMetricValues(d)).forEach(([key, value])=>{
+    const number = Number(value);
+    if (!Number.isFinite(number)) return;
+    if (!active.metricValues[key]) active.metricValues[key] = [];
+    active.metricValues[key].push(number);
+  });
+  const events = benchmarkEventValues(d);
+  Object.entries(events).forEach(([key, value])=>{
+    active.events[key] = (Number(active.events[key]) || 0) + (Number(value) || 0);
+  });
+  active.samples += 1;
+  if (!active.firstSampleAtMs) active.firstSampleAtMs = ts;
+  active.lastSampleAtMs = ts;
+  benchmarkUpdateClock();
+}
+function benchmarkRunOption(run){
+  const commit = run?.build_commit ? ` · ${String(run.build_commit).slice(0,7)}` : '';
+  return `${run?.name || run?.id} · ${new Date(Number(run?.captured_at_ms) || 0).toLocaleString()}${commit}`;
+}
+function renderBenchmarkHistory(){
+  const history = $('benchmark-history');
+  const baseline = $('benchmark-baseline');
+  const candidate = $('benchmark-candidate');
+  const previousBaseline = baseline.value;
+  const previousCandidate = candidate.value;
+  const options = benchmarkHistory.map((run)=>`<option value="${escapeHtml(run.id)}">${escapeHtml(benchmarkRunOption(run))}</option>`).join('');
+  baseline.innerHTML = options || '<option value="">No saved runs</option>';
+  candidate.innerHTML = options || '<option value="">No saved runs</option>';
+  if (benchmarkHistory.some((run)=>run.id === previousBaseline)) baseline.value = previousBaseline;
+  else if (benchmarkHistory.length > 1) baseline.value = benchmarkHistory[1].id;
+  if (benchmarkHistory.some((run)=>run.id === previousCandidate)) candidate.value = previousCandidate;
+  else if (benchmarkHistory.length) candidate.value = benchmarkHistory[0].id;
+  if (!benchmarkHistory.length){
+    history.innerHTML = '<div class="muted">No saved benchmark runs yet.</div>';
+    return;
+  }
+  history.innerHTML = benchmarkHistory.map((run)=>{
+    const faultTotal = Object.values(run?.events || {}).reduce((sum, value)=>sum + (Number(value) || 0), 0);
+    const observation = run?.operator_observation ? ` · ${escapeHtml(run.operator_observation)}` : '';
+    const artifact = run?.artifact_sha256 ? ` · bin ${escapeHtml(String(run.artifact_sha256).slice(0,12))}` : '';
+    return `<div class="benchmark-run">
+      <div><div class="benchmark-run-title">${escapeHtml(run.name)}</div><div class="benchmark-run-meta">${escapeHtml(new Date(run.captured_at_ms).toLocaleString())} · ${escapeHtml(run.selected_app)} · ${run.sample_count} samples · ${Number(run.duration_seconds).toFixed(0)} s</div></div>
+      <div class="benchmark-run-result">CPU ${benchmarkFormatMetric(run,'cpu_pct_core','%')} · scheduler ${benchmarkFormatMetric(run,'scheduler_delay_ms_per_sec',' ms/s')} · DDC ${benchmarkFormatMetric(run,'ddc_packets_per_sec','/s')}</div>
+      <div class="benchmark-run-result">Events ${fmtInt(faultTotal)} · ${escapeHtml(String(run.build_commit || '').slice(0,12) || 'commit n/a')}${artifact}${observation}</div>
+    </div>`;
+  }).join('');
+}
+async function loadPerformanceBenchmarks(){
+  try{
+    const response = await fetch('./performance_benchmarks', { cache:'no-store' });
+    const data = await response.json().catch(()=>({}));
+    if (!response.ok) throw new Error(data?.message || `HTTP ${response.status}`);
+    benchmarkHistory = Array.isArray(data?.history?.runs) ? data.history.runs : [];
+    renderBenchmarkHistory();
+  }catch(error){
+    $('benchmark-history').innerHTML = `<div style="color:var(--crit)">Unable to load benchmark history: ${escapeHtml(error.message)}</div>`;
+  }
+}
+function renderBenchmarkComparison(comparison){
+  const verdict = String(comparison?.verdict || 'review');
+  const checks = Array.isArray(comparison?.checks) ? comparison.checks : [];
+  const rows = checks.map((check)=>{
+    const status = String(check.status || 'review');
+    const delta = Number.isFinite(Number(check.delta_percent))
+      ? ` · ${Number(check.delta_percent) >= 0 ? '+' : ''}${Number(check.delta_percent).toFixed(1)}%`
+      : '';
+    return `<div class="runtime-row">
+      <div class="runtime-row-label">${escapeHtml(check.label || check.key)}</div>
+      <div class="runtime-row-value"><span class="benchmark-verdict ${escapeHtml(status)}">${escapeHtml(status)}</span></div>
+      <div class="runtime-row-sub">${escapeHtml(check.message || '')}${escapeHtml(delta)}</div>
+    </div>`;
+  });
+  $('benchmark-comparison').innerHTML = runtimeSection(
+    `Verdict: ${verdict.toUpperCase()}`,
+    comparison?.summary || '',
+    rows,
+    verdict === 'reject'
+  );
+}
+async function comparePerformanceBenchmarks(){
+  const baselineId = $('benchmark-baseline').value;
+  const candidateId = $('benchmark-candidate').value;
+  if (!baselineId || !candidateId){
+    setBenchmarkStatus('Save at least two runs before comparing.', true);
+    return;
+  }
+  if (baselineId === candidateId){
+    setBenchmarkStatus('Choose two different runs for the comparison.', true);
+    return;
+  }
+  try{
+    const response = await fetch('./performance_benchmarks/compare', {
+      method:'POST',
+      headers: withCsrf({ 'Content-Type':'application/json' }),
+      body: JSON.stringify({ baseline_id:baselineId, candidate_id:candidateId }),
+    });
+    const data = await response.json().catch(()=>({}));
+    if (!response.ok) throw new Error(data?.message || `HTTP ${response.status}`);
+    renderBenchmarkComparison(data.comparison);
+    setBenchmarkStatus(`Comparison complete: ${String(data?.comparison?.verdict || 'review').toUpperCase()}. ${data?.comparison?.summary || ''}`);
+  }catch(error){
+    setBenchmarkStatus(`Comparison failed: ${error.message}`, true);
+  }
+}
+async function deleteCandidateBenchmark(){
+  const id = $('benchmark-candidate').value;
+  const run = benchmarkHistory.find((item)=>item.id === id);
+  if (!run) return;
+  if (!confirm(`DELETE BENCHMARK RUN?\n\n${run.name}\n\nThis removes the saved measurement history entry.`)) return;
+  try{
+    const response = await fetch('./performance_benchmarks/delete', {
+      method:'POST',
+      headers: withCsrf({ 'Content-Type':'application/json' }),
+      body: JSON.stringify({ id }),
+    });
+    const data = await response.json().catch(()=>({}));
+    if (!response.ok) throw new Error(data?.message || `HTTP ${response.status}`);
+    benchmarkHistory = Array.isArray(data?.history?.runs) ? data.history.runs : [];
+    renderBenchmarkHistory();
+    setBenchmarkStatus(`Deleted benchmark “${run.name}”.`);
+  }catch(error){
+    setBenchmarkStatus(`Delete failed: ${error.message}`, true);
+  }
+}
 function counterValue(counters, key){
   return Number(counters?.[key]) || 0;
 }
@@ -1724,6 +2235,7 @@ function ensureBridgeDiagPoll(){
 function showLabPanel(name){
   const panels = [
     { name: 'p23', tab: $('tab-p23'), panel: $('panel-p23') },
+    { name: 'performance', tab: $('tab-performance'), panel: $('panel-performance') },
     { name: 'bridge', tab: $('tab-bridge'), panel: $('panel-bridge') },
     { name: 'xdma', tab: $('tab-xdma'), panel: $('panel-xdma') },
   ];
@@ -2232,6 +2744,7 @@ async function loadP23Perf(){
     if (!r.ok) throw new Error(data.message || ('HTTP ' + r.status));
     const perf = data.perf || {};
     if (!perf.process){
+      if (benchmarkRun) abortPerformanceBenchmark('Benchmark invalidated: p2app.service stopped during the run.');
       latestP23Perf = null;
       latestDerivedPerf = null;
       latestPerfAlertState = null;
@@ -2262,6 +2775,7 @@ async function loadP23Perf(){
     latestP23Perf = perf;
     latestDerivedPerf = d;
     latestPerfAlertState = alertState;
+    benchmarkConsumeSample(perf, d);
     setTelemetryHealth(perf);
     baselinePush(perfBaseline.cpuPctCore, d.cpuPctCore);
     baselinePush(perfBaseline.rssMb, d.rssMb);
@@ -2283,6 +2797,7 @@ async function loadP23Perf(){
     setPerfDashboardHtml(renderPerfDashboard(d, perf, alertState, perfBaseline));
     setPerfRawText(JSON.stringify({ perf }, null, 2));
   }catch(e){
+    if (benchmarkRun) abortPerformanceBenchmark(`Benchmark invalidated: telemetry failed (${e.message}).`);
     latestP23Perf = null;
     latestDerivedPerf = null;
     latestPerfAlertState = null;
@@ -2442,6 +2957,11 @@ $('p23-baseline-download').addEventListener('click', ()=>{ downloadBaselineSnaps
 $('p23-perf-snapshot').addEventListener('click', ()=>{ capturePerfSnapshot(); });
 $('p23-snapshot-copy').addEventListener('click', ()=>{ copyCapturedSnapshot(); });
 $('p23-snapshot-download').addEventListener('click', ()=>{ downloadCapturedSnapshot(); });
+$('benchmark-start').addEventListener('click', ()=>{ startPerformanceBenchmark(); });
+$('benchmark-abort').addEventListener('click', ()=>{ abortPerformanceBenchmark(); });
+$('benchmark-refresh').addEventListener('click', ()=>{ loadPerformanceBenchmarks(); });
+$('benchmark-compare').addEventListener('click', ()=>{ comparePerformanceBenchmarks(); });
+$('benchmark-delete').addEventListener('click', ()=>{ deleteCandidateBenchmark(); });
 $('bridge-diag-refresh').addEventListener('click', ()=>{ loadBridgeDiag(); });
 $('bridge-diag-copy').addEventListener('click', ()=>{ copyBridgeDiagSnapshot(); });
 $('bridge-diag-download').addEventListener('click', ()=>{ downloadBridgeDiagSnapshot(); });
@@ -2451,6 +2971,7 @@ $('radio-backend-xdma').addEventListener('click', ()=>{ switchRadioBackend('xdma
 $('xdma-diag-copy').addEventListener('click', ()=>{ copyXdmaDiagSnapshot(); });
 $('xdma-diag-download').addEventListener('click', ()=>{ downloadXdmaDiagSnapshot(); });
 $('tab-p23').addEventListener('click', ()=>{ showLabPanel('p23'); });
+$('tab-performance').addEventListener('click', ()=>{ showLabPanel('performance'); });
 $('tab-bridge').addEventListener('click', ()=>{ showLabPanel('bridge'); });
 $('tab-xdma').addEventListener('click', ()=>{ showLabPanel('xdma'); });
 document.querySelectorAll('.p23-action').forEach((btn)=>{
@@ -2468,6 +2989,7 @@ ensureStatusPoll();
 ensurePerfPoll();
 ensureBridgeDiagPoll();
 loadRadioBackend();
+loadPerformanceBenchmarks();
 fetchRunLog();
 </script>
 </body>

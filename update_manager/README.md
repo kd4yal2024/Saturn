@@ -353,6 +353,8 @@ shared-device warning and recovery procedure in the Operations Runbook.
   `eth0` RX/TX byte counters as the char-I/O proxy source so the Radio Telemetry
   `IRQ/MiB` metric remains available.
 - Performance baseline resets automatically when the running `p2app.service` workload identity or active/idle radio state changes, so unrelated samples are not mixed together.
+- The Saturn Performance Lab adds fixed-window, workload-locked benchmark runs with a warm-up phase, persistent named history, build provenance, notes, operator observations, and server-side baseline/candidate verdicts. See `docs/PERFORMANCE_LAB.md`.
+- Benchmark history is atomically stored in `/var/lib/saturn-state/performance_benchmarks.json`, retains the newest 64 runs, and participates in settings backup/restore.
 - Status/performance panes are always reloaded fresh and are no longer restored from browser session storage.
 - Restart/deploy actions support startup profiles (`panel`, `panel-debug`, `headless`) and front-panel mode overrides (`auto`, `g2`, `g2v2`, `prefer-g2`, `prefer-g2v2`, `off`), written as `SATURN_FRONT_PANEL_MODE` in the systemd drop-in.
 - Status/dashboard views also report the effective service runtime environment seen by `p2app.service`, including optional `SATURN_P3_RT_AUDIO_ENABLE`, `SATURN_P3_RT_AUDIO_POLICY`, `SATURN_P3_RT_AUDIO_PRIORITY`, and `SATURN_P3_RT_AUDIO_CPUS`.
