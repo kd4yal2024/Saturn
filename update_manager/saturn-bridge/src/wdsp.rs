@@ -25,6 +25,15 @@ const WDSP_TX_OUTPUT_SAMPLES: usize =
     TX_MIC_SAMPLES_PER_DSP_BLOCK * (WDSP_TX_IQ_RATE_HZ as usize / WDSP_AUDIO_RATE_HZ as usize);
 const WDSP_PS_FEEDBACK_BLOCK_SAMPLES: usize = 1024;
 const WDSP_PS_SATURN_HW_PEAK: f64 = 0.6121;
+
+// Phase 0B B1 (docs/PHASE0B_B1_CHANNEL_STATE_LIVENESS.md §3.4): zero-input
+// blocks fed through fexchange0 after SetChannelState(ch, 0, 0) so the WDSP
+// down-slew can complete and its flushChannel thread can reset the ring
+// buffers. Slew is tslewdown=0.010s: TX completes within ~1 call (2048 IQ out
+// vs 1920-sample slew), RX needs ~8 calls (64 audio out vs 480-sample slew);
+// both include DSP_MULT pipeline-depth margin.
+const SLEW_FLUSH_BLOCKS_TX: usize = 8;
+const SLEW_FLUSH_BLOCKS_RX: usize = 16;
 const WDSP_AUDIO_FRAME_FLOATS: usize = 512;
 const WDSP_ANR_TAPS: i32 = 64;
 const WDSP_ANR_DELAY: i32 = 16;
@@ -348,6 +357,48 @@ pub fn normalize_audio_frame_float_count(frame_float_count: usize) -> usize {
     frame_float_count.clamp(256, 8192) & !1usize
 }
 
+/// Feed zero-input blocks through `fexchange0` so a `SetChannelState(ch, 0, 0)`
+/// down-slew can complete and WDSP's per-channel flushChannel thread can reset
+/// the ring buffers (pinned WDSP 2.00 `iobuffs.c`). With `bfo = 1` each call
+/// self-paces on `Sem_OutReady`, so this finishes in milliseconds without
+/// artificial pacing. Returns true once the channel's exchange flag is observed
+/// cleared — `fexchange0` then no-ops with `error == 0` and the sentinel output
+/// untouched (`iobuffs.c:471`). `dmode = 1` must never be used instead: in a
+/// single-threaded caller it always times out (~100 ms) and takes WDSP's
+/// force-reset path, which skips `flush_iobuffs` and is the mechanical cause of
+/// the zero-TX-IQ-after-first-MOX bug (see PHASE0B_B1 spec §3).
+fn feed_slew_flush_blocks(
+    channel_id: i32,
+    input_len: usize,
+    output_buffer: &mut [f64],
+    max_blocks: usize,
+) -> bool {
+    let zeros = vec![0.0f64; input_len];
+    for _ in 0..max_blocks {
+        for sample in output_buffer.iter_mut() {
+            *sample = f64::NAN;
+        }
+        let mut error = 0;
+        unsafe {
+            fexchange0(
+                channel_id,
+                zeros.as_ptr(),
+                output_buffer.as_mut_ptr(),
+                &mut error,
+            );
+        }
+        if error == 0 && output_buffer.first().map(|s| s.is_nan()).unwrap_or(true) {
+            // Exchange cleared: the flush is signaled. Give the flushChannel
+            // thread a moment to finish flush_iobuffs before a subsequent
+            // state-1 transition could race its exec_bypass write (the window
+            // is microseconds; real re-arm latency is human-scale).
+            std::thread::sleep(std::time::Duration::from_millis(5));
+            return true;
+        }
+    }
+    false
+}
+
 pub struct WdspRxEngine {
     channel_id: i32,
     input_sample_rate_hz: u32,
@@ -385,6 +436,7 @@ pub struct WdspRxEngine {
     frame_float_count: usize,
     last_meter_dbm: Option<f32>,
     nb_initialized: bool,
+    rx_suspended: bool,
     rx_fft_size: u32,
     rx_low_latency: bool,
     rx_eq_enabled: bool,
@@ -432,6 +484,7 @@ impl WdspRxEngine {
             frame_float_count: WDSP_AUDIO_FRAME_FLOATS,
             last_meter_dbm: None,
             nb_initialized: false,
+            rx_suspended: false,
             rx_fft_size: model.desired.rx_fft_size,
             rx_low_latency: model.desired.rx_low_latency,
             rx_eq_enabled: false,
@@ -585,7 +638,55 @@ impl WdspRxEngine {
         Ok(())
     }
 
+    /// Stop the RX channel for the duration of MOX (Phase 0B B1 §2.2). The
+    /// channel is stopped — not fed TX energy and not starved mid-slew — so
+    /// AGC/NR state neither pumps on local TX energy nor slews to maximum on
+    /// zero input, and unkey recovery is a clean up-slew. Idempotent.
+    pub fn suspend_for_tx(&mut self) {
+        if self.rx_suspended {
+            return;
+        }
+        self.rx_suspended = true;
+        unsafe {
+            SetChannelState(self.channel_id, 0, 0);
+        }
+        let flushed = feed_slew_flush_blocks(
+            self.channel_id,
+            self.input_buffer.len(),
+            &mut self.output_buffer,
+            SLEW_FLUSH_BLOCKS_RX,
+        );
+        if !flushed {
+            // RX is an audio-quality path, not an RF-safety path: log and
+            // continue; resume still issues a clean state-1 up-slew.
+            eprintln!(
+                "saturn-bridge: RX channel down-slew flush did not complete within {SLEW_FLUSH_BLOCKS_RX} blocks"
+            );
+        }
+        self.pending_iq.clear();
+        self.pending_audio.clear();
+    }
+
+    /// Restart the RX channel after MOX (Phase 0B B1 §2.2). Idempotent.
+    pub fn resume_from_tx(&mut self) {
+        if !self.rx_suspended {
+            return;
+        }
+        self.rx_suspended = false;
+        self.pending_iq.clear();
+        self.pending_audio.clear();
+        unsafe {
+            SetChannelState(self.channel_id, 1, 0);
+        }
+    }
+
     pub fn push_iq(&mut self, iq_samples: &[f32]) -> Vec<Vec<f32>> {
+        // Defensive: a suspended channel's fexchange0 is a no-op that leaves
+        // the output buffer stale with error == 0 (iobuffs.c:471); never
+        // consume it (B1 INV-2 analogue for RX).
+        if self.rx_suspended {
+            return Vec::new();
+        }
         for sample in iq_samples {
             self.pending_iq.push_back(*sample as f64);
         }
@@ -1064,6 +1165,7 @@ pub struct WdspTxEngine {
     tx_fft_size: u32,
     tx_low_latency: bool,
     tx_active: bool,
+    flush_failed: bool,
     input_buffer: Vec<f64>,
     output_buffer: Vec<f64>,
     pending_mic: VecDeque<f64>,
@@ -1143,6 +1245,7 @@ impl WdspTxEngine {
             tx_fft_size: model.desired.tx_fft_size,
             tx_low_latency: model.desired.tx_low_latency,
             tx_active: false,
+            flush_failed: false,
             // Match piHPSDR's Protocol 2 TX shape: 512 mic samples in,
             // 2048 IQ pairs out at 192 kHz.
             input_buffer: vec![0.0f64; TX_MIC_SAMPLES_PER_DSP_BLOCK * 2],
@@ -1594,8 +1697,10 @@ impl WdspTxEngine {
     }
 
     /// Enable or disable the TX DSP chain. PTT is a control-plane event for
-    /// the remote bridge; never wait for WDSP slew-down on release or the main
-    /// loop cannot send the immediate RX-recovery high-priority packet.
+    /// the remote bridge; the stop path uses the bounded fed flush (a few ms,
+    /// Phase 0B B1 §2.1) — never the ~100 ms `dmode = 1` wait, which
+    /// single-threaded always times out into WDSP's force-reset path and
+    /// reproduces the zero-TX-IQ-after-first-MOX bug (B1 spec §3 item 2).
     pub fn set_active(&mut self, active: bool) {
         if active == self.tx_active {
             return;
@@ -1612,16 +1717,42 @@ impl WdspTxEngine {
                 SetChannelState(self.channel_id, 1, 0);
             } // run, no wait
         } else {
-            // Do not stop the WDSP TX channel here. On the G2 test path,
-            // stopping/restarting the channel after the first MOX cycle can
-            // leave later mic frames producing zero TX IQ until the bridge
-            // process restarts. The TX thread stops RF and DUC packet output
-            // separately; while tx_active is false, no fexchange0 calls run.
+            // Stop the channel per WDSP Guide §3.2/§3.3 with a fed down-slew.
+            // INV-1: SetPSMox(0) precedes the state-0 transition (Guide
+            // §6.3.20 NOTE); do_unkey already ordered it, this is defensive.
+            unsafe {
+                SetPSMox(self.channel_id, 0);
+                SetChannelState(self.channel_id, 0, 0);
+            }
+            let input_len = self.input_buffer.len();
+            let flushed = feed_slew_flush_blocks(
+                self.channel_id,
+                input_len,
+                &mut self.output_buffer,
+                SLEW_FLUSH_BLOCKS_TX,
+            );
+            if !flushed {
+                // RF-relevant path: force a full native-channel recreate on
+                // the next arm rather than transmitting from a channel whose
+                // ring-buffer accounting may be inconsistent.
+                self.flush_failed = true;
+                eprintln!(
+                    "saturn-bridge: TX channel down-slew flush did not complete within {SLEW_FLUSH_BLOCKS_TX} blocks; channel will be recreated on next arm"
+                );
+            }
+            // INV-2: flush output was written only into output_buffer and is
+            // never forwarded; clear every queue so no stale IQ survives.
             self.clear_tx_buffers();
             self.two_tone_enabled = false;
             self.two_tone_started_at = None;
             self.two_tone_second_active = false;
         }
+    }
+
+    /// True when the last stop-path flush failed and the native channel must
+    /// be recreated before the next transmission (B1 §2.1 fallback).
+    pub fn needs_recreate(&self) -> bool {
+        self.flush_failed
     }
 
     fn feed_puresignal_reset_blocks(&mut self) {

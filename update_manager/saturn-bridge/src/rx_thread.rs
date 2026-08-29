@@ -188,6 +188,16 @@ fn handle_event(
             };
             let tx_active = tx_requested.load(Ordering::Relaxed) || tx_enabled;
 
+            // Phase 0B B1 §2.2: stop the RX WDSP channel across MOX instead
+            // of starving it mid-stream (WDSP Guide §3.3). Both calls are
+            // idempotent; transitions are detected here because DDC frames
+            // keep arriving throughout TX.
+            if tx_active {
+                wdsp.suspend_for_tx();
+            } else {
+                wdsp.resume_from_tx();
+            }
+
             if frame.ddc_index == 0 && pure_signal_enabled && tx_active {
                 if let Some(samples) = split_puresignal_samples(&frame) {
                     let _ = tx_cmd_tx.send(TxCommand::PureSignalFeedback {
@@ -201,9 +211,10 @@ fn handle_event(
                 stats.ddc_packets.fetch_add(1, Ordering::Relaxed);
                 let sample_rate_hz = ddc0_sample_rate_khz as u32 * 1000;
                 tci.publish_iq_frame(sample_rate_hz, &frame.iq_samples);
-                // Keep display IQ live during MOX, but do not drive RX WDSP
-                // audio/AGC with local TX energy; that makes unkey recovery
-                // feel slow, especially with SLOW/LONG AGC.
+                // Keep display IQ live during MOX. The RX WDSP channel is
+                // suspended (state 0) while tx_active, so AGC/NR neither pump
+                // on local TX energy nor slew to maximum on zero input;
+                // push_iq is additionally self-guarded while suspended.
                 if !tx_active {
                     for audio_frame in wdsp.push_iq(&frame.iq_samples) {
                         stats.audio_frames.fetch_add(1, Ordering::Relaxed);

@@ -35,6 +35,13 @@ const TX_ZERO_IQ_LOG_INTERVAL: Duration = Duration::from_millis(500);
 const DEFAULT_TX_WATCHDOG: Duration = Duration::from_secs(180);
 const MIN_TX_WATCHDOG: Duration = Duration::from_secs(3);
 const MAX_TX_WATCHDOG: Duration = Duration::from_secs(180);
+
+// Phase 0B B1 watchdog (d) — TX source stall: bound on real mic-frame
+// *arrival* (not audio level) while armed/keyed. Keepalive zero-fill bridges
+// silence but must never substitute for a live source (B1 spec §2.3, INV-4).
+const DEFAULT_TX_SOURCE_STALL: Duration = Duration::from_millis(2000);
+const MIN_TX_SOURCE_STALL: Duration = Duration::from_millis(500);
+const MAX_TX_SOURCE_STALL: Duration = Duration::from_millis(10_000);
 const MAX_DUC_PACKETS_PER_LOOP: usize = 8;
 const MAX_TX_COMMANDS_PER_LOOP: usize = 128;
 const TX_MIC_INPUT_QUEUE_MAX_SAMPLES: usize = 48_000;
@@ -485,6 +492,8 @@ fn run(
     let mut pure_signal_fault_active = false;
     let mut pure_signal_last_status_at = Instant::now();
     let tx_watchdog = tx_watchdog_duration();
+    let tx_source_stall_limit = tx_source_stall_limit();
+    let mut tx_source_stall_count = 0u64;
     let tx_mic_prefill_samples = tx_mic_prefill_samples();
     let tx_mic_prefill_ms = tx_mic_prefill_samples as f64 / 48.0;
     let startup_settle_blocks = session.startup_settle_blocks();
@@ -524,7 +533,10 @@ fn run(
                         let now = Instant::now();
                         tx_armed_at = now;
                         last_zero_iq_log_at = now;
-                        if recreate_wdsp_on_arm {
+                        if recreate_wdsp_on_arm || wdsp_tx.needs_recreate() {
+                            // needs_recreate: the last unkey's down-slew flush
+                            // did not complete (B1 §2.1 fallback) — never arm
+                            // a channel with possibly inconsistent buffers.
                             let model = radio_model.lock_unpoisoned();
                             wdsp_tx.recreate_channel(&model);
                             println!(
@@ -809,6 +821,39 @@ fn run(
             eprintln!(
                 "saturn-bridge: TX watchdog timeout ({}s), auto-unkeying",
                 tx_watchdog.as_secs()
+            );
+            do_unkey(
+                session.as_ref(),
+                &radio_model,
+                &mut wdsp_tx,
+                &event_tx,
+                state,
+            );
+            state = TxState::Idle;
+            rf_enabled = false;
+            two_tone = false;
+            key_qualification.reset();
+            keepalive_active = false;
+            keepalive_resume_frames = 0;
+            tx_display_buffer.clear();
+            tx_display_peak = 0.0;
+            did_work = true;
+        }
+
+        // TX source-stall watchdog (Phase 0B B1, watchdog (d)): loss of real
+        // mic-frame arrival while armed/keyed forces the RF-safe dekey path.
+        // last_mic_audio_at is written only on Arm and on TxCommand::MicAudio
+        // arrival — keepalive zero-fill never refreshes it (INV-4). Two-tone
+        // is self-sourced and exempt; watchdogs (a)-(c) still bound it.
+        if state != TxState::Idle
+            && !two_tone
+            && last_mic_audio_at.elapsed() >= tx_source_stall_limit
+        {
+            tx_source_stall_count = tx_source_stall_count.saturating_add(1);
+            eprintln!(
+                "saturn-bridge: TX source stall ({}ms without mic frames), auto-unkeying (TX_SOURCE_STALL, count={})",
+                tx_source_stall_limit.as_millis(),
+                tx_source_stall_count
             );
             do_unkey(
                 session.as_ref(),
@@ -1254,6 +1299,21 @@ fn tx_mic_prefill_samples() -> usize {
     tx_mic_prefill_samples_for_ms(prefill_ms)
 }
 
+fn tx_source_stall_limit_for_ms(stall_ms: Option<u64>) -> Duration {
+    stall_ms
+        .map(Duration::from_millis)
+        .map(|duration| duration.clamp(MIN_TX_SOURCE_STALL, MAX_TX_SOURCE_STALL))
+        .unwrap_or(DEFAULT_TX_SOURCE_STALL)
+}
+
+fn tx_source_stall_limit() -> Duration {
+    tx_source_stall_limit_for_ms(
+        env::var("SATURN_BRIDGE_TX_SOURCE_STALL_MS")
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok()),
+    )
+}
+
 fn tx_mic_prefill_samples_for_ms(prefill_ms: Option<u64>) -> usize {
     prefill_ms
         .map(|ms| {
@@ -1356,6 +1416,20 @@ fn do_unkey(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tx_source_stall_limit_clamps_and_defaults() {
+        assert_eq!(tx_source_stall_limit_for_ms(None), DEFAULT_TX_SOURCE_STALL);
+        assert_eq!(tx_source_stall_limit_for_ms(Some(100)), MIN_TX_SOURCE_STALL);
+        assert_eq!(
+            tx_source_stall_limit_for_ms(Some(60_000)),
+            MAX_TX_SOURCE_STALL
+        );
+        assert_eq!(
+            tx_source_stall_limit_for_ms(Some(3000)),
+            Duration::from_millis(3000)
+        );
+    }
 
     #[test]
     fn rf_keying_requires_rf_enabled_and_nonzero_duc_iq() {
