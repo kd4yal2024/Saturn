@@ -3197,11 +3197,172 @@ async fn get_p23_perf(State(_state): State<AppState>) -> Response {
         })
     }
 
-    let service_name = "p2app.service";
-    let main_pid = systemctl_value(&["show", "-p", "MainPID", "--value", service_name])
+    async fn bridge_app_perf_telemetry(main_pid: Option<u32>) -> serde_json::Value {
+        fn parse_diag_fields(line: &str) -> BTreeMap<String, serde_json::Value> {
+            let mut fields = BTreeMap::<String, serde_json::Value>::new();
+            let Some((_, rest)) = line.split_once("diag ") else {
+                return fields;
+            };
+            for token in rest.split_whitespace() {
+                let Some((key, value)) = token.split_once('=') else {
+                    continue;
+                };
+                let parsed = if value == "-" {
+                    serde_json::Value::Null
+                } else if let Ok(value) = value.parse::<i64>() {
+                    serde_json::json!(value)
+                } else if let Ok(value) = value.parse::<f64>() {
+                    serde_json::json!(value)
+                } else {
+                    serde_json::json!(value)
+                };
+                fields.insert(key.to_string(), parsed);
+            }
+            fields
+        }
+
+        let journal = Command::new("journalctl")
+            .args([
+                "-u",
+                "saturn-bridge.service",
+                "-n",
+                "80",
+                "--no-pager",
+                "-o",
+                "cat",
+                "--since",
+                "10 seconds ago",
+            ])
+            .output()
+            .await;
+        let (journal_ok, journal_error, latest_line) = match journal {
+            Ok(output) => {
+                let text = String::from_utf8_lossy(&output.stdout);
+                let latest = text
+                    .lines()
+                    .rev()
+                    .find(|line| line.contains("saturn-bridge: diag "))
+                    .map(str::to_string);
+                (
+                    output.status.success(),
+                    (!output.status.success()).then(|| output_error_text(&output)),
+                    latest,
+                )
+            }
+            Err(error) => (false, Some(error.to_string()), None),
+        };
+        let fields = latest_line
+            .as_deref()
+            .map(parse_diag_fields)
+            .unwrap_or_default();
+        let numeric = |key: &str| fields.get(key).and_then(serde_json::Value::as_f64);
+        let client_count = numeric("client").unwrap_or(0.0);
+        let hp_per_sec = numeric("hp_s").unwrap_or(0.0);
+        let ddc_per_sec = numeric("ddc_s").unwrap_or(0.0);
+        let sdr_active = main_pid.is_some()
+            && journal_ok
+            && client_count >= 1.0
+            && hp_per_sec > 0.0
+            && ddc_per_sec > 0.0;
+        let timestamp_epoch = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_secs())
+            .unwrap_or(0);
+
+        serde_json::json!({
+            "snapshot_file": "journalctl:saturn-bridge.service",
+            "snapshot_exists": latest_line.is_some(),
+            "snapshot_readable": journal_ok && latest_line.is_some(),
+            "read_error": journal_error,
+            "parse_error": None::<String>,
+            "modified": None::<String>,
+            "pid_matches_service": main_pid.is_some(),
+            "snapshot_pid": main_pid,
+            "age_seconds": 0,
+            "current": {
+                "pid": main_pid,
+                "timestamp_epoch": timestamp_epoch,
+                "app": "saturn-bridge",
+                "state": {
+                    "sdr_active": sdr_active,
+                    "tx_mode": false,
+                },
+                "gauges": {
+                    "bridge": fields,
+                },
+                "counters": {},
+                "features": {},
+                "routing": {},
+                "fpga": {},
+            },
+            "latest_diag": latest_line,
+        })
+    }
+
+    fn bridge_workload_info(
+        main_pid: Option<u32>,
+        app_telemetry: &serde_json::Value,
+    ) -> serde_json::Value {
+        let fields = app_telemetry
+            .get("current")
+            .and_then(|value| value.get("gauges"))
+            .and_then(|value| value.get("bridge"));
+        let field_text = |key: &str| {
+            fields
+                .and_then(|value| value.get(key))
+                .map(|value| match value {
+                    serde_json::Value::String(value) => value.clone(),
+                    _ => value.to_string(),
+                })
+                .unwrap_or_else(|| "n/a".to_string())
+        };
+        let client = field_text("client");
+        let connections = field_text("connections");
+        let iq = field_text("iq");
+        let audio = field_text("audio");
+
+        serde_json::json!({
+            "selected_app": "xdma",
+            "current_target": "/opt/saturn-go/bin/saturn-bridge",
+            "current_target_abs": exe_for_pid(main_pid.unwrap_or(0)),
+            "startup_mode": "direct-xdma",
+            "panel_mode": None::<String>,
+            "saturn_meta": None::<String>,
+            "source": "saturn-bridge.service",
+            "service_cmdline": main_pid.and_then(cmdline_for_pid),
+            "service_main_pid": main_pid,
+            "workload_key": format!(
+                "xdma|client={client}|connections={connections}|iq={iq}|audio={audio}"
+            ),
+        })
+    }
+
+    let p2_pid = systemctl_value(&["show", "-p", "MainPID", "--value", "p2app.service"])
         .await
         .and_then(|s| s.parse::<u32>().ok())
         .filter(|v| *v > 0);
+    let bridge_pid =
+        systemctl_value(&["show", "-p", "MainPID", "--value", "saturn-bridge.service"])
+            .await
+            .and_then(|s| s.parse::<u32>().ok())
+            .filter(|v| *v > 0);
+    let (service_name, main_pid, backend) = if let Some(pid) = p2_pid {
+        ("p2app.service", Some(pid), "p2")
+    } else if let Some(pid) = bridge_pid {
+        ("saturn-bridge.service", Some(pid), "xdma")
+    } else {
+        ("p2app.service", None, "none")
+    };
+    let app_telemetry = if backend == "xdma" {
+        bridge_app_perf_telemetry(main_pid).await
+    } else {
+        p23_app_perf_telemetry(main_pid)
+    };
+    let workload = if backend == "xdma" {
+        bridge_workload_info(main_pid, &app_telemetry)
+    } else {
+        p23_workload_info(main_pid)
+    };
 
     let cpu_count = std::thread::available_parallelism()
         .map(|n| n.get())
@@ -3258,6 +3419,10 @@ async fn get_p23_perf(State(_state): State<AppState>) -> Response {
             "schedstat": parse_proc_schedstat(pid),
         }))
     });
+    let running_exe_sha256 = main_pid
+        .and_then(|pid| fs::read_link(format!("/proc/{pid}/exe")).ok())
+        .as_deref()
+        .and_then(|path| sha256_file_hex(path).ok());
 
     let collected_at_ms = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -3271,6 +3436,8 @@ async fn get_p23_perf(State(_state): State<AppState>) -> Response {
             "service": {
                 "name": service_name,
                 "main_pid": main_pid,
+                "backend": backend,
+                "running_exe_sha256": running_exe_sha256,
             },
             "system": {
                 "cpu_count": cpu_count,
@@ -3301,8 +3468,8 @@ async fn get_p23_perf(State(_state): State<AppState>) -> Response {
                 "wlan0": wlan0,
             },
             "xdma": xdma_interrupt_telemetry(),
-            "workload": p23_workload_info(main_pid),
-            "app_telemetry": p23_app_perf_telemetry(main_pid),
+            "workload": workload,
+            "app_telemetry": app_telemetry,
             "process": process,
         }
     }))

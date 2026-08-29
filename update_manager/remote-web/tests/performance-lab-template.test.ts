@@ -33,7 +33,11 @@ describe('Saturn Go performance lab template', () => {
     expect(template).toContain('Sounded clean');
     expect(template).toContain('running_exe_sha256');
     expect(template).toContain('artifact_sha256');
-    expect(template).toContain('exact running P2app binary fingerprint');
+    expect(template).toContain("backend === 'xdma' ? 'Saturn Bridge' : 'P2app'");
+    expect(template).toContain('perf?.service?.running_exe_sha256');
+    expect(template).toContain('currentBackend !== active.backend');
+    expect(template).toContain('Open Saturn Remote and keep RX streaming.');
+    expect(template).toContain('Connect Thetis or another Protocol 2 client and start the radio.');
     expect(template).toContain("showLabPanel('performance')");
   });
 });

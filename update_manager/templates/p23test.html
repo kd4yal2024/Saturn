@@ -1084,8 +1084,9 @@ function activityPresentation(perf, alertState=null){
   const state = app?.state || {};
   const workload = perf?.workload || {};
   const identity = String(app?.app || workload?.selected_app || 'P23').toUpperCase();
+  const serviceName = String(perf?.service?.name || 'radio backend service');
   if (!servicePid){
-    return { tone:'fault', label:'Service Offline', context:'p2app.service is not running.', active:false };
+    return { tone:'fault', label:'Service Offline', context:`${serviceName} is not running.`, active:false };
   }
   if (state?.thread_error || alertState?.level === 'crit'){
     return { tone:'fault', label:'Fault', context:alertState?.alerts?.[0] || 'The application reported a runtime fault.', active:!!state?.sdr_active };
@@ -1098,9 +1099,9 @@ function activityPresentation(perf, alertState=null){
   }
   if (state?.sdr_active){
     const mode = state?.tx_mode ? 'transmitting' : 'receiving';
-    return { tone:'active', label:'Healthy · Active', context:`${identity} is ${mode}; live packet and DMA rates are available.`, active:true };
+    return { tone:'active', label:'Healthy · Active', context:`${identity} is ${mode}; live radio and host rates are available.`, active:true };
   }
-  return { tone:'idle', label:'Healthy · Idle', context:`${identity} is ready and waiting for a Protocol 2 client to start the radio.`, active:false };
+  return { tone:'idle', label:'Healthy · Idle', context:`${identity} is ready and waiting for a radio client to start RX.`, active:false };
 }
 function healthItem(label, value, level='good'){
   return `<div class="health-item ${escapeHtml(level)}"><div class="health-label">${escapeHtml(label)}</div><div class="health-value">${escapeHtml(value)}</div></div>`;
@@ -1693,13 +1694,29 @@ async function startPerformanceBenchmark(){
   const d = latestDerivedPerf;
   const perf = latestP23Perf;
   const workloadKey = String(perf?.workload?.workload_key || '');
-  const artifactSha256 = String(latestP23Status?.service?.running_exe_sha256 || '');
-  if (!d || !perf?.process || !d.appPidMatchesService || !d.appState?.sdr_active || !workloadKey){
-    setBenchmarkStatus('Cannot start: p2app telemetry must be live and a radio client must hold a stable active RX workload.', true);
+  const backend = String(perf?.service?.backend || perf?.workload?.selected_app || 'p2');
+  const artifactSha256 = String(perf?.service?.running_exe_sha256 || latestP23Status?.service?.running_exe_sha256 || '');
+  if (!d || !perf?.process){
+    setBenchmarkStatus('Cannot start: neither P2app nor the Saturn Bridge has a running radio process.', true);
+    return;
+  }
+  if (!d.appPidMatchesService){
+    setBenchmarkStatus(`Cannot start: live ${backend === 'xdma' ? 'Saturn Bridge/XDMA' : 'P2app'} telemetry does not match the running service process. Refresh status and try again.`, true);
+    return;
+  }
+  if (!d.appState?.sdr_active){
+    const action = backend === 'xdma'
+      ? 'Open Saturn Remote and keep RX streaming.'
+      : 'Connect Thetis or another Protocol 2 client and start the radio.';
+    setBenchmarkStatus(`Cannot start: no stable active ${backend === 'xdma' ? 'Saturn Bridge/XDMA' : 'P2app'} RX workload. ${action}`, true);
+    return;
+  }
+  if (!workloadKey){
+    setBenchmarkStatus('Cannot start: the active radio workload identity is unavailable. Refresh status and try again.', true);
     return;
   }
   if (!/^[0-9a-f]{64}$/i.test(artifactSha256)){
-    setBenchmarkStatus('Cannot start: the exact running P2app binary fingerprint is not available yet. Refresh status and try again.', true);
+    setBenchmarkStatus(`Cannot start: the exact running ${backend === 'xdma' ? 'Saturn Bridge' : 'P2app'} binary fingerprint is not available yet. Refresh status and try again.`, true);
     return;
   }
   const durationSeconds = Number($('benchmark-duration').value) || 60;
@@ -1724,6 +1741,7 @@ async function startPerformanceBenchmark(){
     panelMode: String(perf?.workload?.panel_mode || ''),
     buildCommit: await benchmarkBuildCommit(),
     artifactSha256,
+    backend,
     metricValues: {},
     events: { app_errors:0, fifo_faults:0, network_errors:0, adc_overflows:0 },
     samples: 0,
@@ -1787,7 +1805,7 @@ async function finishPerformanceBenchmark(){
     selected_app: active.selectedApp,
     startup_mode: active.startupMode,
     panel_mode: active.panelMode,
-    backend: 'p2',
+    backend: active.backend,
     build_commit: active.buildCommit,
     artifact_sha256: active.artifactSha256,
     metrics,
@@ -1814,7 +1832,8 @@ function benchmarkConsumeSample(perf, d){
   if (!ts || ts === benchmarkLastSampleTs) return;
   benchmarkLastSampleTs = ts;
   const currentWorkload = String(perf?.workload?.workload_key || '');
-  if (currentWorkload !== active.workloadKey || Number(d.pid) !== active.initialPid || !d.appPidMatchesService || !d.appState?.sdr_active){
+  const currentBackend = String(perf?.service?.backend || perf?.workload?.selected_app || 'p2');
+  if (currentBackend !== active.backend || currentWorkload !== active.workloadKey || Number(d.pid) !== active.initialPid || !d.appPidMatchesService || !d.appState?.sdr_active){
     abortPerformanceBenchmark('Benchmark invalidated: service identity or active radio workload changed during the run.');
     return;
   }
@@ -2490,6 +2509,11 @@ function derivePerf(current){
         fifoSpkrUnderDelta = counterValue(c.appCounters, 'fifo_speaker_under_events') - counterValue(perfPrevSample.appCounters, 'fifo_speaker_under_events');
         adcOverflowEventDelta = counterValue(c.appCounters, 'adc_overflow_events') - counterValue(perfPrevSample.appCounters, 'adc_overflow_events');
       }
+      if (c.selectedApp === 'xdma'){
+        const bridge = c.appGauges?.bridge || {};
+        hpPps = Number(bridge.hp_s);
+        ddcPps = Number(bridge.ddc_s);
+      }
     }
   }
   perfPrevSample = c;
@@ -2744,18 +2768,18 @@ async function loadP23Perf(){
     if (!r.ok) throw new Error(data.message || ('HTTP ' + r.status));
     const perf = data.perf || {};
     if (!perf.process){
-      if (benchmarkRun) abortPerformanceBenchmark('Benchmark invalidated: p2app.service stopped during the run.');
+      if (benchmarkRun) abortPerformanceBenchmark('Benchmark invalidated: the active radio backend service stopped during the run.');
       latestP23Perf = null;
       latestDerivedPerf = null;
       latestPerfAlertState = null;
       perfPrevSample = null;
       perfBaseline = newPerfBaseline();
       perfProcessIdentity = '';
-      setWorkloadSummary('No running p2app.service process.', true);
-      setPerfSummary('p2app.service main process is not running.', true);
-      setActivityState('fault', 'Service Offline', 'Start p2app.service to collect radio and host metrics.');
+      setWorkloadSummary('No running P2app or Saturn Bridge radio process.', true);
+      setPerfSummary('No active radio backend main process is running.', true);
+      setActivityState('fault', 'Service Offline', 'Start P2app or the Saturn Bridge to collect radio and host metrics.');
       setPrimaryKpisHtml(kpiCard('Service', 'Offline', 'No performance samples are available.', true));
-      setPerfDashboardHtml(runtimeSection('Service', 'No active process', [runtimeRow('p2app.service', 'Not running', 'Start or deploy the service to resume monitoring.')], true));
+      setPerfDashboardHtml(runtimeSection('Service', 'No active process', [runtimeRow('Radio backend', 'Not running', 'Start or deploy P2app or the Saturn Bridge to resume monitoring.')], true));
       setPerfRawText(JSON.stringify({ perf }, null, 2));
       setTelemetryHealth(perf);
       return;
