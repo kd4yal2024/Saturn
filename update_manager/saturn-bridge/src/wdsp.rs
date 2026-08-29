@@ -51,6 +51,15 @@ const WDSP_NR4_WHITENING_FACTOR: f32 = 0.0;
 #[allow(dead_code)]
 const WDSP_NR4_NOISE_SCALING_TYPE: i32 = 0;
 
+fn drain_front_into<T: Copy>(queue: &mut VecDeque<T>, destination: &mut [T]) {
+    let (front, back) = queue.as_slices();
+    let destination_len = destination.len();
+    let front_len = front.len().min(destination_len);
+    destination[..front_len].copy_from_slice(&front[..front_len]);
+    destination[front_len..].copy_from_slice(&back[..destination_len - front_len]);
+    drop(queue.drain(..destination_len));
+}
+
 // NoiseBlanker defaults (from pihpsdr receiver.c)
 const NB_TAU: f64 = 0.00001;
 const NB_HANGTIME: f64 = 0.00001;
@@ -694,17 +703,14 @@ impl WdspRxEngine {
         if self.rx_suspended {
             return Vec::new();
         }
-        for sample in iq_samples {
-            self.pending_iq.push_back(*sample as f64);
-        }
+        self.pending_iq
+            .extend(iq_samples.iter().map(|&sample| sample as f64));
 
         let mut ready_frames = Vec::new();
         let needed_floats = self.input_complex_samples * 2;
 
         while self.pending_iq.len() >= needed_floats {
-            for sample in &mut self.input_buffer {
-                *sample = self.pending_iq.pop_front().unwrap_or(0.0);
-            }
+            drain_front_into(&mut self.pending_iq, &mut self.input_buffer);
 
             let mut error = 0;
             unsafe {
@@ -1846,12 +1852,10 @@ impl WdspTxEngine {
         while self.pure_signal_tx_reference.len() >= block_floats
             && self.pure_signal_rx_feedback.len() >= block_floats
         {
-            let mut tx = Vec::with_capacity(block_floats);
-            let mut rx = Vec::with_capacity(block_floats);
-            for _ in 0..block_floats {
-                tx.push(self.pure_signal_tx_reference.pop_front().unwrap_or(0.0));
-                rx.push(self.pure_signal_rx_feedback.pop_front().unwrap_or(0.0));
-            }
+            let mut tx = vec![0.0; block_floats];
+            let mut rx = vec![0.0; block_floats];
+            drain_front_into(&mut self.pure_signal_tx_reference, &mut tx);
+            drain_front_into(&mut self.pure_signal_rx_feedback, &mut rx);
             unsafe {
                 pscc(
                     self.channel_id,
@@ -1908,16 +1912,12 @@ impl WdspTxEngine {
             .saturating_add(samples.len() as u64);
 
         // Expand mono mic to stereo interleaved [L, R] where L=mic, R=0.0
-        for s in samples {
-            self.pending_mic.push_back(*s as f64); // I (left = mic)
-            self.pending_mic.push_back(0.0); // Q (right = zero)
-        }
+        self.pending_mic
+            .extend(samples.iter().flat_map(|&sample| [sample as f64, 0.0]));
 
         let needed = TX_MIC_SAMPLES_PER_DSP_BLOCK * 2;
         while self.pending_mic.len() >= needed {
-            for sample in &mut self.input_buffer {
-                *sample = self.pending_mic.pop_front().unwrap_or(0.0);
-            }
+            drain_front_into(&mut self.pending_mic, &mut self.input_buffer);
 
             if self.dexp_initialized && self.dexp_active() {
                 unsafe {

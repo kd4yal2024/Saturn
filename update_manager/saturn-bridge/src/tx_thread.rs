@@ -632,12 +632,7 @@ fn run(
                         if mic_peak >= TX_KEY_MIC_PEAK_THRESHOLD && !qualify_mic_at_dsp_input {
                             last_keyable_mic_at = Some(Instant::now());
                         }
-                        for sample in mono.iter().copied() {
-                            if pending_mic_samples.len() >= TX_MIC_INPUT_QUEUE_MAX_SAMPLES {
-                                let _ = pending_mic_samples.pop_front();
-                            }
-                            pending_mic_samples.push_back(sample);
-                        }
+                        extend_mic_input_queue(&mut pending_mic_samples, &mono);
                         mic_frame_count = mic_frame_count.saturating_add(1);
                         last_mic_audio_at = Instant::now();
                         if first_mic_audio_at.is_none() {
@@ -1359,6 +1354,16 @@ fn mic_samples_to_mono(samples: Vec<f32>, channels: u32) -> Vec<f32> {
         .collect()
 }
 
+fn extend_mic_input_queue(queue: &mut VecDeque<f32>, samples: &[f32]) {
+    let overflow = queue
+        .len()
+        .saturating_add(samples.len())
+        .saturating_sub(TX_MIC_INPUT_QUEUE_MAX_SAMPLES);
+    let queued_overflow = overflow.min(queue.len());
+    drop(queue.drain(..queued_overflow));
+    queue.extend(samples[overflow - queued_overflow..].iter().copied());
+}
+
 fn do_unkey(
     session: &dyn TxRadio,
     radio_model: &Mutex<RadioModel>,
@@ -1541,6 +1546,40 @@ mod tests {
     fn mic_samples_to_mono_extracts_left_channel_from_stereo_frames() {
         let samples = vec![0.1, -0.1, 0.2, -0.2, 0.3, -0.3];
         assert_eq!(mic_samples_to_mono(samples, 2), vec![0.1, 0.2, 0.3]);
+    }
+
+    #[test]
+    fn mic_input_queue_bulk_extend_drops_oldest_samples() {
+        let mut queue: VecDeque<f32> = (0..TX_MIC_INPUT_QUEUE_MAX_SAMPLES)
+            .map(|sample| sample as f32)
+            .collect();
+        extend_mic_input_queue(
+            &mut queue,
+            &[
+                TX_MIC_INPUT_QUEUE_MAX_SAMPLES as f32,
+                (TX_MIC_INPUT_QUEUE_MAX_SAMPLES + 1) as f32,
+            ],
+        );
+
+        assert_eq!(queue.len(), TX_MIC_INPUT_QUEUE_MAX_SAMPLES);
+        assert_eq!(queue.front(), Some(&2.0));
+        assert_eq!(
+            queue.back(),
+            Some(&((TX_MIC_INPUT_QUEUE_MAX_SAMPLES + 1) as f32))
+        );
+
+        let oversized: Vec<f32> = (0..TX_MIC_INPUT_QUEUE_MAX_SAMPLES + 2)
+            .map(|sample| sample as f32)
+            .collect();
+        queue.clear();
+        extend_mic_input_queue(&mut queue, &oversized);
+
+        assert_eq!(queue.len(), TX_MIC_INPUT_QUEUE_MAX_SAMPLES);
+        assert_eq!(queue.front(), Some(&2.0));
+        assert_eq!(
+            queue.back(),
+            Some(&((TX_MIC_INPUT_QUEUE_MAX_SAMPLES + 1) as f32))
+        );
     }
 
     #[test]
