@@ -55,6 +55,7 @@ pub struct BridgeConfig {
     pub tx_low_latency: bool,
     pub remote_tx_100w_drive_byte: u8,
     pub tx_power_meter_scale: f32,
+    pub smeter_calibration_db: f64,
     pub remote_tx_rf_enabled: bool,
     pub allow_rf_disabled_two_tone: bool,
     pub display_frame_limit_hz: u16,
@@ -89,6 +90,7 @@ impl Default for BridgeConfig {
             tx_low_latency: true,
             remote_tx_100w_drive_byte: 68,
             tx_power_meter_scale: 1.0,
+            smeter_calibration_db: 0.0,
             remote_tx_rf_enabled: false,
             allow_rf_disabled_two_tone: false,
             display_frame_limit_hz: 30,
@@ -191,6 +193,11 @@ impl BridgeConfig {
                 defaults.tx_power_meter_scale,
             )
             .clamp(0.1, 2.0),
+            smeter_calibration_db: parse_env_f64(
+                "SATURN_BRIDGE_SMETER_CAL_DB",
+                defaults.smeter_calibration_db,
+            )
+            .clamp(-60.0, 60.0),
             remote_tx_rf_enabled: parse_env_bool(
                 "SATURN_REMOTE_TX_RF_ENABLED",
                 defaults.remote_tx_rf_enabled,
@@ -270,6 +277,14 @@ fn parse_env_f32(name: &str, default: f32) -> f32 {
     env::var(name)
         .ok()
         .and_then(|value| value.parse::<f32>().ok())
+        .filter(|value| value.is_finite())
+        .unwrap_or(default)
+}
+
+fn parse_env_f64(name: &str, default: f64) -> f64 {
+    env::var(name)
+        .ok()
+        .and_then(|value| value.parse::<f64>().ok())
         .filter(|value| value.is_finite())
         .unwrap_or(default)
 }

@@ -354,6 +354,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         tx_cmd_tx.clone(),
         tx_requested.clone(),
         rx_stats.clone(),
+        config.smeter_calibration_db,
         stop_flag.clone(),
     );
 

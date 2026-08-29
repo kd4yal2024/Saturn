@@ -95,6 +95,10 @@ unsafe extern "C" {
     );
     fn CloseChannel(channel: i32);
     fn SetChannelState(channel: i32, state: i32, dmode: i32) -> i32;
+    fn SetChannelTDelayUp(channel: i32, time: f64);
+    fn SetChannelTSlewUp(channel: i32, time: f64);
+    fn SetChannelTDelayDown(channel: i32, time: f64);
+    fn SetChannelTSlewDown(channel: i32, time: f64);
     fn fexchange0(channel: i32, input: *const f64, output: *mut f64, error: *mut i32);
 
     // RX DSP
@@ -497,6 +501,8 @@ impl WdspRxEngine {
     }
 
     pub fn smeter_dbm(&self) -> Option<f32> {
+        // Raw WDSP DDC-output domain. Antenna attenuation and radio
+        // calibration are added only when the value is published.
         self.last_meter_dbm
     }
 
@@ -518,6 +524,7 @@ impl WdspRxEngine {
             unsafe {
                 SetRXAMode(self.channel_id, wdsp_mode(self.mode));
             }
+            apply_channel_slew_timing(self.channel_id, self.mode);
             self.apply_squelch();
             self.apply_noise_blanker();
             self.apply_agc();
@@ -871,6 +878,7 @@ impl WdspRxEngine {
                 0.010,
                 1,
             );
+            apply_channel_slew_timing(self.channel_id, self.mode);
             SetRXABandpassWindow(self.channel_id, 1);
             SetRXABandpassRun(self.channel_id, 1);
             SetRXAAMDSBMode(self.channel_id, 0);
@@ -1308,6 +1316,7 @@ impl WdspTxEngine {
                 0.010,
                 1,
             );
+            apply_channel_slew_timing(self.channel_id, self.mode);
             SetTXABandpassWindow(self.channel_id, 1);
             SetTXABandpassRun(self.channel_id, 1);
             // FPGA fir_compiler_0 (tx1024cfirImpulse.coe) already equalizes CIC droop;
@@ -1425,6 +1434,7 @@ impl WdspTxEngine {
             unsafe {
                 SetTXAMode(self.channel_id, wdsp_tx_mode(self.mode));
             }
+            apply_channel_slew_timing(self.channel_id, self.mode);
             self.apply_dexp();
             self.apply_speech_processing();
         }
@@ -2052,10 +2062,28 @@ fn speech_squelch_supported_for_mode(mode: DemodMode) -> bool {
 }
 
 fn rx_dsp_rate_for_mode(mode: DemodMode) -> u32 {
-    if mode == DemodMode::Wfm && wbfm_supported() {
+    if mode == DemodMode::Fm || (mode == DemodMode::Wfm && wbfm_supported()) {
         192_000
     } else {
         WDSP_AUDIO_RATE_HZ
+    }
+}
+
+fn channel_slew_timing(mode: DemodMode) -> (f64, f64, f64, f64) {
+    if matches!(mode, DemodMode::Cwl | DemodMode::Cwu) {
+        (0.0, 0.010, 0.0, 0.010)
+    } else {
+        (0.010, 0.025, 0.0, 0.010)
+    }
+}
+
+fn apply_channel_slew_timing(channel: i32, mode: DemodMode) {
+    let (tdelayup, tslewup, tdelaydown, tslewdown) = channel_slew_timing(mode);
+    unsafe {
+        SetChannelTDelayUp(channel, tdelayup);
+        SetChannelTSlewUp(channel, tslewup);
+        SetChannelTDelayDown(channel, tdelaydown);
+        SetChannelTSlewDown(channel, tslewdown);
     }
 }
 
@@ -2126,11 +2154,11 @@ fn nr4_post_threshold_for_level(level_percent: f64) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::{
-        normalize_audio_frame_float_count, nr2_factor_for_level, nr2_nlevel_for_level,
-        nr2_rate_for_level, nr2_taper_for_level, nr4_post_threshold_for_level,
-        nr4_reduction_amount_for_level, panel_gain_for_volume_db, rx_dsp_rate_for_mode,
-        speech_squelch_supported_for_mode, tx_voice_processing_supported, wbfm_supported,
-        wdsp_mode, WdspTxEngine, WDSP_AUDIO_RATE_HZ,
+        channel_slew_timing, normalize_audio_frame_float_count, nr2_factor_for_level,
+        nr2_nlevel_for_level, nr2_rate_for_level, nr2_taper_for_level,
+        nr4_post_threshold_for_level, nr4_reduction_amount_for_level, panel_gain_for_volume_db,
+        rx_dsp_rate_for_mode, speech_squelch_supported_for_mode, tx_voice_processing_supported,
+        wbfm_supported, wdsp_mode, WdspTxEngine, WDSP_AUDIO_RATE_HZ,
     };
     use crate::radio_model::{DemodMode, PureSignalState, RadioModel};
 
@@ -2164,6 +2192,40 @@ mod tests {
         };
         assert_eq!(wdsp_mode(DemodMode::Wfm), expected_mode);
         assert_eq!(rx_dsp_rate_for_mode(DemodMode::Wfm), expected_rate);
+    }
+
+    #[test]
+    fn narrow_fm_alone_uses_192k_dsp_rate() {
+        assert_eq!(rx_dsp_rate_for_mode(DemodMode::Fm), 192_000);
+        for mode in [
+            DemodMode::Usb,
+            DemodMode::Lsb,
+            DemodMode::Cwu,
+            DemodMode::Cwl,
+            DemodMode::Am,
+            DemodMode::Sam,
+            DemodMode::DigU,
+            DemodMode::DigL,
+            DemodMode::Unknown,
+        ] {
+            assert_eq!(rx_dsp_rate_for_mode(mode), WDSP_AUDIO_RATE_HZ);
+        }
+    }
+
+    #[test]
+    fn channel_slew_timing_is_shorter_only_for_cw() {
+        assert_eq!(
+            channel_slew_timing(DemodMode::Cwl),
+            (0.0, 0.010, 0.0, 0.010)
+        );
+        assert_eq!(
+            channel_slew_timing(DemodMode::Cwu),
+            (0.0, 0.010, 0.0, 0.010)
+        );
+        assert_eq!(
+            channel_slew_timing(DemodMode::Usb),
+            (0.010, 0.025, 0.0, 0.010)
+        );
     }
 
     #[test]

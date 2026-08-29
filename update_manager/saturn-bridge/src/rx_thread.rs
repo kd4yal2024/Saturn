@@ -62,6 +62,7 @@ pub fn spawn(
     tx_cmd_tx: Sender<TxCommand>,
     tx_requested: Arc<AtomicBool>,
     stats: Arc<RxStats>,
+    smeter_calibration_db: f64,
     stop_flag: Arc<AtomicBool>,
 ) -> JoinHandle<()> {
     thread::Builder::new()
@@ -77,6 +78,7 @@ pub fn spawn(
                 tx_cmd_tx,
                 tx_requested,
                 stats,
+                smeter_calibration_db,
                 stop_flag,
             );
         })
@@ -94,6 +96,7 @@ fn run(
     tx_cmd_tx: Sender<TxCommand>,
     tx_requested: Arc<AtomicBool>,
     stats: Arc<RxStats>,
+    smeter_calibration_db: f64,
     stop_flag: Arc<AtomicBool>,
 ) {
     println!("saturn-bridge: RX thread started");
@@ -125,6 +128,7 @@ fn run(
                 &tx_cmd_tx,
                 &tx_requested,
                 &stats,
+                smeter_calibration_db,
             ),
             // The socket read timeout paces this loop; no extra sleep.
             Ok(None) => {}
@@ -171,6 +175,7 @@ fn handle_event(
     tx_cmd_tx: &Sender<TxCommand>,
     tx_requested: &AtomicBool,
     stats: &RxStats,
+    smeter_calibration_db: f64,
 ) {
     match event {
         P2Event::HighPriorityFromSdr(packet) => {
@@ -225,12 +230,36 @@ fn handle_event(
                     }
                 }
                 let mut model = radio_model.lock_unpoisoned();
-                if let Some(dbm) = wdsp.smeter_dbm() {
-                    model.observed.ddc0_meter_dbm = Some(dbm);
+                if let Some(raw_dbm) = wdsp.smeter_dbm() {
+                    model.observed.ddc0_meter_dbm = Some(correct_smeter_dbm(
+                        raw_dbm,
+                        model.desired.rx_attenuation_db,
+                        smeter_calibration_db,
+                    ));
                 }
                 model.observed.rx_wbfm_stereo_detected = wdsp.wbfm_stereo_detected();
                 model.apply_ddc_frame(frame);
             }
         }
+    }
+}
+
+/// Convert WDSP's raw DDC-output meter domain to antenna-referenced dBm.
+pub(crate) fn correct_smeter_dbm(
+    raw_wdsp_dbm: f32,
+    rx_attenuation_db: u8,
+    calibration_db: f64,
+) -> f32 {
+    (f64::from(raw_wdsp_dbm) + f64::from(rx_attenuation_db) + calibration_db) as f32
+}
+
+#[cfg(test)]
+mod tests {
+    use super::correct_smeter_dbm;
+
+    #[test]
+    fn smeter_correction_adds_attenuation_and_calibration() {
+        let corrected = correct_smeter_dbm(-100.25, 20, -3.5);
+        assert!((corrected - -83.75).abs() < f32::EPSILON);
     }
 }

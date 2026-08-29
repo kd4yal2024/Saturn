@@ -7,6 +7,7 @@
 
 use crate::config::BridgeConfig;
 use crate::radio_model::{DemodMode, NoiseReductionMode, PureSignalState, RadioModel, TxPhase};
+use crate::rx_thread::correct_smeter_dbm;
 use crate::sync_ext::MutexExt;
 use crate::tci::{TciCommand, TciFrontend};
 use crate::tx_thread::{self, TxCommand, TxEvent};
@@ -254,7 +255,13 @@ fn run_inner(config: BridgeConfig, ready_path: &Path) -> Result<(), Box<dyn Erro
                 }
                 let mut model = radio_model.lock_unpoisoned();
                 model.observed.ddc0_packets = rx.stats().dma_reads;
-                model.observed.ddc0_meter_dbm = wdsp.smeter_dbm();
+                model.observed.ddc0_meter_dbm = wdsp.smeter_dbm().map(|raw_dbm| {
+                    correct_smeter_dbm(
+                        raw_dbm,
+                        model.desired.rx_attenuation_db,
+                        config.smeter_calibration_db,
+                    )
+                });
                 model.observed.rx_wbfm_stereo_detected = wdsp.wbfm_stereo_detected();
             }
 
