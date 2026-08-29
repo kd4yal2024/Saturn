@@ -126,6 +126,7 @@ unsafe extern "C" {
         threshold: f64,
     );
     fn destroy_anbEXT(id: i32);
+    fn xanbEXT(id: i32, input: *const f64, output: *mut f64);
     fn SetEXTANBRun(id: i32, run: i32);
     fn SetEXTANBTau(id: i32, tau: f64);
     fn SetEXTANBHangtime(id: i32, time: f64);
@@ -147,6 +148,7 @@ unsafe extern "C" {
         threshold: f64,
     );
     fn destroy_nobEXT(id: i32);
+    fn xnobEXT(id: i32, input: *const f64, output: *mut f64);
     fn SetEXTNOBRun(id: i32, run: i32);
     fn SetEXTNOBMode(id: i32, mode: i32);
     fn SetEXTNOBTau(id: i32, tau: f64);
@@ -598,6 +600,18 @@ impl WdspRxEngine {
 
             let mut error = 0;
             unsafe {
+                if self.nb_initialized {
+                    xanbEXT(
+                        self.channel_id,
+                        self.input_buffer.as_ptr(),
+                        self.input_buffer.as_mut_ptr(),
+                    );
+                    xnobEXT(
+                        self.channel_id,
+                        self.input_buffer.as_ptr(),
+                        self.input_buffer.as_mut_ptr(),
+                    );
+                }
                 fexchange0(
                     self.channel_id,
                     self.input_buffer.as_ptr(),
@@ -784,7 +798,7 @@ impl WdspRxEngine {
             create_anbEXT(
                 self.channel_id,
                 1,
-                WDSP_DSP_SIZE as i32,
+                self.input_complex_samples as i32,
                 sr,
                 0.0001,
                 0.0001,
@@ -796,7 +810,7 @@ impl WdspRxEngine {
                 self.channel_id,
                 1,
                 0,
-                WDSP_DSP_SIZE as i32,
+                self.input_complex_samples as i32,
                 sr,
                 0.0001,
                 0.0001,
@@ -1193,7 +1207,10 @@ impl WdspTxEngine {
             );
             SetTXABandpassWindow(self.channel_id, 1);
             SetTXABandpassRun(self.channel_id, 1);
-            SetTXACFIRRun(self.channel_id, 1);
+            // FPGA fir_compiler_0 (tx1024cfirImpulse.coe) already equalizes CIC droop;
+            // WDSP's Orion P2 CFIR targets a different CIC and adds ~10.7 ms delay
+            // (architecture doc §17 / §67 B2).
+            SetTXACFIRRun(self.channel_id, 0);
             SetTXAAMSQThreshold(self.channel_id, self.noise_gate_threshold_db);
             SetTXAAMSQMutedGain(self.channel_id, -140.0);
             SetTXAAMSQRun(self.channel_id, self.noise_gate_enabled as i32);
