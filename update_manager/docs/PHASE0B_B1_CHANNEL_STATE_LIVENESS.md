@@ -185,3 +185,8 @@ extend any of (a)/(b)/(c), and each must fire at its unchanged limit.
 
 B2–B8 (§67 table — separate work package), FPGA changes, PureSignal internals, codec
 paths, mic-prefill/DUC-pacing retune (done after B2's CFIR removal, on hardware).
+
+**Post-B6 note:** the RX reconfigure path now performs a state-preserving retune
+(fed stop → `SetInputBuffsize`/`SetInputSamplerate`/`SetDSPSamplerate` → resume only
+when not TX-suspended), which also closes the accepted B1 edge where a mid-MOX
+reconfigure could restart the RX channel.

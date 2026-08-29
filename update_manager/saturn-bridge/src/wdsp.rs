@@ -104,6 +104,13 @@ unsafe extern "C" {
     );
     fn CloseChannel(channel: i32);
     fn SetChannelState(channel: i32, state: i32, dmode: i32) -> i32;
+    // State-preserving rate/size setters (pinned channel.c:168/197/211):
+    // they rebuild only the pre/post-main I/O scaffolding and propagate the
+    // new value into the existing RXA/TXA blocks — AGC/NR/notch adapted
+    // state survives, unlike CloseChannel/OpenChannel.
+    fn SetInputBuffsize(channel: i32, in_size: i32);
+    fn SetInputSamplerate(channel: i32, samplerate: i32);
+    fn SetDSPSamplerate(channel: i32, samplerate: i32);
     fn SetChannelTDelayUp(channel: i32, time: f64);
     fn SetChannelTSlewUp(channel: i32, time: f64);
     fn SetChannelTDelayDown(channel: i32, time: f64);
@@ -820,9 +827,36 @@ impl WdspRxEngine {
             return Err(WdspError::UnsupportedInputSampleRate(input_sample_rate_hz));
         }
 
-        if self.input_sample_rate_hz != 0 {
+        let first_open = self.input_sample_rate_hz == 0;
+
+        if !first_open && !self.rx_suspended {
+            // Phase 0B B6: state-preserving retune (WDSP Guide §3.3). Stop to
+            // state 0 with a fed flush FIRST, using the old buffer sizes:
+            // (a) the graceful down-slew avoids WDSP's dmode=1 force-reset;
+            // (b) the rate setters' internal SetChannelState(0, 1) no-ops on
+            // an already-stopped channel, so their ~100 ms timeout path is
+            // never taken; (c) SetInputSamplerate clears the exchange flag
+            // without touching the state field, so resuming from a state-1
+            // field would hit SetChannelState's no-change guard and never
+            // restart the channel — stopping first makes the resume a real
+            // 0 -> 1 transition. When rx_suspended, suspend_for_tx() already
+            // stopped and flushed the channel.
             unsafe {
-                CloseChannel(self.channel_id);
+                SetChannelState(self.channel_id, 0, 0);
+            }
+            let input_len = self.input_buffer.len();
+            let flushed = feed_slew_flush_blocks(
+                self.channel_id,
+                input_len,
+                &mut self.output_buffer,
+                SLEW_FLUSH_BLOCKS_RX,
+            );
+            if !flushed {
+                // Not fatal here: the rate setters rebuild the I/O buffers
+                // wholesale (pre/post_main destroy + build).
+                eprintln!(
+                    "saturn-bridge: RX down-slew flush incomplete before retune; rate setters rebuild the I/O buffers"
+                );
             }
         }
 
@@ -869,21 +903,30 @@ impl WdspRxEngine {
         self.pending_audio.clear();
 
         unsafe {
-            OpenChannel(
-                self.channel_id,
-                self.input_complex_samples as i32,
-                WDSP_DSP_SIZE as i32,
-                self.input_sample_rate_hz as i32,
-                self.dsp_sample_rate_hz as i32,
-                WDSP_AUDIO_RATE_HZ as i32,
-                0,
-                1,
-                0.010,
-                0.025,
-                0.0,
-                0.010,
-                1,
-            );
+            if first_open {
+                OpenChannel(
+                    self.channel_id,
+                    self.input_complex_samples as i32,
+                    WDSP_DSP_SIZE as i32,
+                    self.input_sample_rate_hz as i32,
+                    self.dsp_sample_rate_hz as i32,
+                    WDSP_AUDIO_RATE_HZ as i32,
+                    0,
+                    1,
+                    0.010,
+                    0.025,
+                    0.0,
+                    0.010,
+                    1,
+                );
+            } else {
+                // B6 retune: each setter self-guards on no-change, so only
+                // values that actually changed trigger a scaffolding rebuild.
+                // RXA DSP state (AGC hang, NR adaptation, notch db) survives.
+                SetInputBuffsize(self.channel_id, self.input_complex_samples as i32);
+                SetInputSamplerate(self.channel_id, self.input_sample_rate_hz as i32);
+                SetDSPSamplerate(self.channel_id, self.dsp_sample_rate_hz as i32);
+            }
             apply_channel_slew_timing(self.channel_id, self.mode);
             SetRXABandpassWindow(self.channel_id, 1);
             SetRXABandpassRun(self.channel_id, 1);
@@ -944,6 +987,15 @@ impl WdspRxEngine {
         self.apply_noise_blanker();
         self.apply_anf();
         self.apply_noise_reduction();
+        // Resume only when not suspended for TX: during MOX the channel stays
+        // stopped and resume_from_tx() owns the state-1 transition on unkey
+        // (this also removes the pre-B6 edge where a mid-MOX reconfigure
+        // restarted the channel). First open starts running via OpenChannel.
+        if !first_open && !self.rx_suspended {
+            unsafe {
+                SetChannelState(self.channel_id, 1, 0);
+            }
+        }
         Ok(())
     }
 
