@@ -268,6 +268,12 @@ export interface AppState {
   audioCtx: AudioContext | null;
   audioGainNode: GainNode | null;
   audioSources: Set<AudioBufferSourceNode>;
+  audioInputDeviceId: string;
+  audioOutputDeviceId: string;
+  rxOutputSinkNode: MediaStreamAudioDestinationNode | null;
+  rxOutputSinkStream: MediaStream | null;
+  rxOutputSinkStreamCtx: AudioContext | null;
+  rxOutputSinkEl: HTMLAudioElement | null;
   audioNextTime: number;
   audioBackpressureDrops: number;
   lastAudioSequence: number | null;
@@ -593,6 +599,12 @@ export function createAppState(): AppState {
     audioCtx: null,
     audioGainNode: null,
     audioSources: new Set(),
+    audioInputDeviceId: '',
+    audioOutputDeviceId: '',
+    rxOutputSinkNode: null,
+    rxOutputSinkStream: null,
+    rxOutputSinkStreamCtx: null,
+    rxOutputSinkEl: null,
     audioNextTime: 0,
     audioBackpressureDrops: 0,
     lastAudioSequence: null,

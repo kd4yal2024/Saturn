@@ -7275,6 +7275,22 @@
                           <button class="btn ghost" id="setup-audio-open-tx-btn" type="button">Open TX Controls</button>
                         </div>
                       </div>
+                      <div class="setup-section">
+                        <div class="setup-section-title">Local Device Audio</div>
+                        <div class="setup-row">
+                          <label class="label" for="setup-audio-input-select">Microphone Input</label>
+                          <select class="field" id="setup-audio-input-select"><option value="">System Default</option></select>
+                          <div class="setup-readout">Which microphone this browser/device captures for TX. Takes effect on the next transmission.</div>
+                        </div>
+                        <div class="setup-row">
+                          <label class="label" for="setup-audio-output-select">Speaker Output</label>
+                          <select class="field" id="setup-audio-output-select"><option value="">System Default</option></select>
+                          <div class="setup-readout" id="setup-audio-output-note">Which speaker/headphone plays RX audio. Applies immediately. Not supported on every browser (notably Safari) - unsupported browsers keep the system default.</div>
+                        </div>
+                        <div class="setup-button-row" style="grid-template-columns: minmax(0, 1fr);">
+                          <button class="btn ghost" id="setup-audio-refresh-devices-btn" type="button">Refresh Device List</button>
+                        </div>
+                      </div>
                     </div>
 
                     <div class="setup-panel" id="setup-panel-advanced" data-setup-panel-id="advanced" role="tabpanel" aria-labelledby="setup-tab-advanced" hidden>
@@ -8255,7 +8271,7 @@
     })();
   </script>
   <script
-    src="/remote-assets/remote-next.js?v=stable-controls-4"
+    src="/remote-assets/remote-next.js?v=audio-devices-1"
     onload="window.saturnRemoteBundleLoaded=true"
     onerror="window.saturnRemoteBundleError=true; window.saturnDiagLastError='remote-next.js failed to load'; window.saturnSetWsDiag && window.saturnSetWsDiag('JS error: remote-next.js failed to load')"
   ></script>
@@ -8287,6 +8303,11 @@
     const RADIO_PREFS_KEY = "saturn.remote.radioPrefs";
     const FREQ_LOCK_KEY = "saturn.remote.freqLock";
     const WAKE_LOCK_KEY = "saturn.remote.keepScreenAwake";
+    // Device IDs are meaningful only on the browser/computer that chose
+    // them, so these stay local-only and are never part of the synced
+    // radioPrefs blob.
+    const AUDIO_INPUT_DEVICE_KEY = "saturn.remote.audioInputDeviceId";
+    const AUDIO_OUTPUT_DEVICE_KEY = "saturn.remote.audioOutputDeviceId";
     const PHONE_WATERFALL_KEY = "saturn.remote.phoneWaterfall";
     const PHONE_SPECTRUM_MODE_KEY = "saturn.remote.phoneSpectrumMode";
     const SPECTRUM_WATERFALL_RATIO_KEY = "saturn.remote.spectrumWaterfallRatio";
@@ -15569,7 +15590,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
           numberOfOutputs: 1,
           outputChannelCount: [2],
         });
-        node.connect(ctx.destination);
+        node.connect(rxAudioOutputTarget(ctx));
         state.rxWorkletNode = node;
         node.port.onmessage = (event) => {
           const data = event.data || {};
@@ -15610,7 +15631,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         // Legacy path: GainNode + BufferSource scheduling
         if (!state.audioGainNode) {
           state.audioGainNode = ctx.createGain();
-          state.audioGainNode.connect(ctx.destination);
+          state.audioGainNode.connect(rxAudioOutputTarget(ctx));
         }
         state.audioWorkletMode = null;
         state.audioNextTime = ctx.currentTime + RX_AUDIO_START_PREROLL_SEC;
@@ -15651,7 +15672,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         }
         if (!state.audioGainNode && !state.audioWorkletMode) {
           state.audioGainNode = state.audioCtx.createGain();
-          state.audioGainNode.connect(state.audioCtx.destination);
+          state.audioGainNode.connect(rxAudioOutputTarget(state.audioCtx));
           applyRxVolumeGain();
         }
         return true;
@@ -15668,7 +15689,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
           try { await ensureWorkletRegistered(ctx); } catch {}
         }
         state.audioGainNode = ctx.createGain();
-        state.audioGainNode.connect(ctx.destination);
+        state.audioGainNode.connect(rxAudioOutputTarget(ctx));
         applyRxVolumeGain();
         return true;
       } catch (error) {
@@ -15705,6 +15726,12 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       if (state.audioCtx && closeContext) {
         await state.audioCtx.close();
         state.audioCtx = null;
+        if (state.rxOutputSinkEl) {
+          state.rxOutputSinkEl.srcObject = null;
+        }
+        state.rxOutputSinkNode = null;
+        state.rxOutputSinkStream = null;
+        state.rxOutputSinkStreamCtx = null;
       }
       refreshAudioContextLatency();
       updateUi();
@@ -16332,6 +16359,107 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       return true;
     }
 
+    function audioOutputSinkSupported() {
+      return typeof HTMLMediaElement !== "undefined"
+        && typeof HTMLMediaElement.prototype.setSinkId === "function";
+    }
+
+    function populateAudioDeviceSelect(selectEl, devices, selectedId, kindLabel) {
+      if (!selectEl) return;
+      const previousValue = selectEl.value;
+      selectEl.innerHTML = "";
+      const defaultOption = document.createElement("option");
+      defaultOption.value = "";
+      defaultOption.textContent = "System Default";
+      selectEl.appendChild(defaultOption);
+      devices.forEach((device, index) => {
+        const option = document.createElement("option");
+        option.value = device.deviceId;
+        option.textContent = device.label || `${kindLabel} ${index + 1}`;
+        selectEl.appendChild(option);
+      });
+      const candidate = selectedId || previousValue || "";
+      const knownIds = new Set(Array.from(selectEl.options, (option) => option.value));
+      selectEl.value = knownIds.has(candidate) ? candidate : "";
+    }
+
+    async function refreshAudioDeviceLists() {
+      if (!navigator.mediaDevices || typeof navigator.mediaDevices.enumerateDevices !== "function") {
+        return;
+      }
+      let devices;
+      try {
+        devices = await navigator.mediaDevices.enumerateDevices();
+      } catch (error) {
+        logEvent(`Audio device enumeration failed: ${error.message || error}`);
+        return;
+      }
+      const inputs = devices.filter((device) => device.kind === "audioinput");
+      const outputs = devices.filter((device) => device.kind === "audiooutput");
+      populateAudioDeviceSelect($("setup-audio-input-select"), inputs, state.audioInputDeviceId, "Microphone");
+      populateAudioDeviceSelect($("setup-audio-output-select"), outputs, state.audioOutputDeviceId, "Speaker");
+      const outputSelect = $("setup-audio-output-select");
+      const outputSupported = audioOutputSinkSupported();
+      if (outputSelect) {
+        outputSelect.disabled = !outputSupported || outputs.length === 0;
+      }
+      const outputNote = $("setup-audio-output-note");
+      if (outputNote) {
+        outputNote.textContent = !outputSupported
+          ? "This browser does not support output device selection; RX audio plays through the system default."
+          : outputs.length === 0
+            ? "No output devices reported by this browser yet. Grant microphone permission, then refresh."
+            : "Which speaker/headphone plays RX audio. Applies immediately.";
+      }
+    }
+
+    // Routes RX audio to a selected non-default output device. Returns
+    // ctx.destination unchanged (identical to prior behavior, zero added
+    // latency) unless the operator picked a specific device and this
+    // browser supports HTMLMediaElement.setSinkId. Only then does audio
+    // take the extra MediaStreamDestination -> hidden <audio> hop.
+    function rxAudioOutputTarget(ctx) {
+      if (!state.audioOutputDeviceId || !audioOutputSinkSupported()) {
+        return ctx.destination;
+      }
+      if (state.rxOutputSinkNode && state.rxOutputSinkStreamCtx === ctx) {
+        return state.rxOutputSinkNode;
+      }
+      state.rxOutputSinkNode = ctx.createMediaStreamDestination();
+      state.rxOutputSinkStream = state.rxOutputSinkNode.stream;
+      state.rxOutputSinkStreamCtx = ctx;
+      if (!state.rxOutputSinkEl) {
+        const el = document.createElement("audio");
+        el.autoplay = true;
+        el.style.display = "none";
+        document.body.appendChild(el);
+        state.rxOutputSinkEl = el;
+      }
+      state.rxOutputSinkEl.srcObject = state.rxOutputSinkStream;
+      state.rxOutputSinkEl.setSinkId(state.audioOutputDeviceId).catch((error) => {
+        logEvent(`RX audio output device selection failed: ${error.message || error}`);
+        recordOperatorFault("Output device unavailable", "warn");
+      });
+      state.rxOutputSinkEl.play().catch(() => {});
+      return state.rxOutputSinkNode;
+    }
+
+    // Re-point whatever RX audio graph already exists (primed and idle, or
+    // actively streaming) at the current output target. Safe to call anytime;
+    // a no-op when there is no audio context yet.
+    function reconnectRxAudioOutput() {
+      if (!state.audioCtx) return;
+      const target = rxAudioOutputTarget(state.audioCtx);
+      if (state.rxWorkletNode) {
+        state.rxWorkletNode.disconnect();
+        state.rxWorkletNode.connect(target);
+      }
+      if (state.audioGainNode) {
+        state.audioGainNode.disconnect();
+        state.audioGainNode.connect(target);
+      }
+    }
+
     function requestMicrophoneStream(constraints) {
       if (navigator.mediaDevices && typeof navigator.mediaDevices.getUserMedia === "function") {
         return navigator.mediaDevices.getUserMedia(constraints);
@@ -16367,8 +16495,15 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       try {
         if (!generatedTxSource) {
           micStream = await requestMicrophoneStream({
-            audio: { sampleRate: 48000, channelCount: 1, echoCancellation: false, noiseSuppression: false, autoGainControl: false },
+            audio: {
+              sampleRate: 48000, channelCount: 1, echoCancellation: false, noiseSuppression: false, autoGainControl: false,
+              ...(state.audioInputDeviceId ? { deviceId: { exact: state.audioInputDeviceId } } : {}),
+            },
           });
+          // Device labels are blank until permission is granted; refresh now
+          // that getUserMedia has resolved so the Setup > Audio dropdown can
+          // show real names instead of "Microphone 1/2/...".
+          refreshAudioDeviceLists();
         }
         micCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 48000, latencyHint: "interactive" });
         if (micCtx.state === "suspended") {
@@ -18010,6 +18145,25 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         applyControlContext("tx");
         revealShellPanel(document.querySelector('[data-phone-panel="tx"]'));
       });
+      $("setup-audio-input-select")?.addEventListener("change", () => {
+        state.audioInputDeviceId = $("setup-audio-input-select").value;
+        try { localStorage.setItem(AUDIO_INPUT_DEVICE_KEY, state.audioInputDeviceId); } catch {}
+        logEvent(state.micCapturing
+          ? "Microphone input device changed; takes effect on the next transmission"
+          : "Microphone input device set");
+      });
+      $("setup-audio-output-select")?.addEventListener("change", () => {
+        state.audioOutputDeviceId = $("setup-audio-output-select").value;
+        try { localStorage.setItem(AUDIO_OUTPUT_DEVICE_KEY, state.audioOutputDeviceId); } catch {}
+        reconnectRxAudioOutput();
+        logEvent("RX audio output device set");
+      });
+      $("setup-audio-refresh-devices-btn")?.addEventListener("click", () => {
+        refreshAudioDeviceLists();
+      });
+      if (navigator.mediaDevices && typeof navigator.mediaDevices.addEventListener === "function") {
+        navigator.mediaDevices.addEventListener("devicechange", refreshAudioDeviceLists);
+      }
       $("rx-audio-toggle-btn")?.addEventListener("click", async () => {
         const playing = state.audioStreaming && state.audioCtx?.state === "running";
         if (playing) {
@@ -19405,6 +19559,10 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       state.vfoTuneStepHz = loadVfoTuneStep();
       applyLayout(preferredLayout(), false, false);
       applyTheme(preferredTheme(), false);
+      // Local-only: device IDs are never part of the synced settings blob,
+      // so this loads unconditionally regardless of which branch below runs.
+      try { state.audioInputDeviceId = localStorage.getItem(AUDIO_INPUT_DEVICE_KEY) || ""; } catch { state.audioInputDeviceId = ""; }
+      try { state.audioOutputDeviceId = localStorage.getItem(AUDIO_OUTPUT_DEVICE_KEY) || ""; } catch { state.audioOutputDeviceId = ""; }
       const persistedSettings = loadPersistedLocalSettings();
       if (persistedSettings) {
         applyRemoteSettingsObject(persistedSettings);
@@ -19522,6 +19680,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       logEvent(`Display backends: spectrum=${spectrumRenderer.backend}, waterfall=${waterfallRenderer.backend}`);
       initAnalogMeters();
       initInteractions();
+      refreshAudioDeviceLists();
       document.addEventListener("visibilitychange", () => {
         void syncWakeLock(false);
         if (document.visibilityState === "visible") {
