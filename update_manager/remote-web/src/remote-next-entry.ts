@@ -112,7 +112,10 @@ import {
   buildAllRadioPrefsCommands,
   buildTxCodecCapsCommand,
 } from './tci/commands';
-import { prepareAudioForPlayback } from './audio/resample';
+import {
+  AdaptivePlaybackRateController,
+  prepareAudioForPlayback,
+} from './audio/resample';
 import { buildAudioScopeSnapshot } from './audio/scope';
 import {
   audioFramesToMilliseconds,
@@ -323,6 +326,7 @@ const api = {
 
   // Audio
   volumeAmplitudeFromDb,
+  AdaptivePlaybackRateController,
   prepareAudioForPlayback,
   buildAudioScopeSnapshot,
   audioFramesToMilliseconds,

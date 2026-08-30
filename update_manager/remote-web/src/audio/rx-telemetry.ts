@@ -19,6 +19,11 @@ export type RxLatencyDiagnostic = {
   audioQueueMs: number | null;
   workletUnderruns: number;
   workletOverflows: number;
+  adaptiveRateEnabled: boolean;
+  adaptiveRateRatio: number;
+  adaptiveRateCorrectionPpm: number;
+  adaptiveRateCorrectionCount: number;
+  adaptiveRateTargetQueueMs: number;
   audioDropEvents: number;
   audioContextBaseLatencyMs: number | null;
   audioContextOutputLatencyMs: number | null;
@@ -114,6 +119,7 @@ export function formatRxLatencyDiagnostic(value: RxLatencyDiagnostic): string {
     `Packet jitter p50/p95/p99: ${diagnosticNumber(value.jitterP50Ms)} / ${diagnosticNumber(value.jitterP95Ms)} / ${diagnosticNumber(value.jitterP99Ms)} ms (${Math.max(0, Math.round(value.jitterSampleCount || 0))} samples)`,
     `Audio queue: ${diagnosticMilliseconds(value.audioQueueMs)}`,
     `Worklet underruns/overflows: ${Math.max(0, Math.round(value.workletUnderruns || 0))} / ${Math.max(0, Math.round(value.workletOverflows || 0))}`,
+    `Adaptive playback: ${value.adaptiveRateEnabled ? 'on' : 'off'} / ratio ${Number(value.adaptiveRateRatio || 1).toFixed(9)} / ${Number(value.adaptiveRateCorrectionPpm || 0).toFixed(1)} ppm / ${Math.max(0, Math.round(value.adaptiveRateCorrectionCount || 0))} correction(s) / target ${diagnosticNumber(value.adaptiveRateTargetQueueMs)} ms`,
     `Audio drop/resync events: ${Math.max(0, Math.round(value.audioDropEvents || 0))}`,
     `AudioContext base/output: ${diagnosticMilliseconds(value.audioContextBaseLatencyMs)} / ${diagnosticMilliseconds(value.audioContextOutputLatencyMs)}`,
     `Frame age audio/IQ: ${diagnosticMilliseconds(value.audioFrameAgeMs)} / ${diagnosticMilliseconds(value.iqFrameAgeMs)}`,

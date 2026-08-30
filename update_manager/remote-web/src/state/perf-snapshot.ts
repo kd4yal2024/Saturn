@@ -19,6 +19,11 @@ export interface PerfSnapshotSource {
   rxWorkletQueuedMs: number;
   rxWorkletUnderruns: number;
   rxWorkletOverflows: number;
+  rxAdaptiveRateEnabled: boolean;
+  rxAdaptiveRateRatio: number;
+  rxAdaptiveRateCorrectionPpm: number;
+  rxAdaptiveRateCorrectionCount: number;
+  rxAdaptiveRateTargetQueueMs: number;
   audioContextBaseLatencyMs: number | null;
   audioContextOutputLatencyMs: number | null;
   rxAudioJitterSamples: { length: number };
@@ -97,6 +102,11 @@ export interface PerfSnapshot {
   rxWorkletQueuedMs: number;
   rxWorkletUnderruns: number;
   rxWorkletOverflows: number;
+  rxAdaptiveRateEnabled: boolean;
+  rxAdaptiveRateRatio: number;
+  rxAdaptiveRateCorrectionPpm: number;
+  rxAdaptiveRateCorrectionCount: number;
+  rxAdaptiveRateTargetQueueMs: number;
   audioContextBaseLatencyMs: number | null;
   audioContextOutputLatencyMs: number | null;
   rxAudioJitterSampleCount: number;
@@ -176,6 +186,10 @@ export interface PerfSummary {
   finalRxWorkletDrops: number;
   finalRxWorkletUnderruns: number;
   finalRxWorkletOverflows: number;
+  finalRxAdaptiveRateRatio: number;
+  finalRxAdaptiveRateCorrectionPpm: number;
+  finalRxAdaptiveRateCorrectionCount: number;
+  maxAbsRxAdaptiveRateCorrectionPpm: number;
   maxRxWorkletQueuedMs: number;
   maxRxAudioJitterP99Ms: number;
   maxWsMediaBacklogBytes: number;
@@ -233,6 +247,11 @@ export function buildPerfSnapshot(s: PerfSnapshotSource, nowMs: number): PerfSna
     rxWorkletQueuedMs: nonNegativeDecimal(s.rxWorkletQueuedMs),
     rxWorkletUnderruns: nonNegativeInteger(s.rxWorkletUnderruns),
     rxWorkletOverflows: nonNegativeInteger(s.rxWorkletOverflows),
+    rxAdaptiveRateEnabled: Boolean(s.rxAdaptiveRateEnabled),
+    rxAdaptiveRateRatio: Number(finiteNumber(s.rxAdaptiveRateRatio, 1).toFixed(9)),
+    rxAdaptiveRateCorrectionPpm: Number(finiteNumber(s.rxAdaptiveRateCorrectionPpm).toFixed(2)),
+    rxAdaptiveRateCorrectionCount: nonNegativeInteger(s.rxAdaptiveRateCorrectionCount),
+    rxAdaptiveRateTargetQueueMs: nonNegativeDecimal(s.rxAdaptiveRateTargetQueueMs),
     audioContextBaseLatencyMs: nullableNonNegativeDecimal(s.audioContextBaseLatencyMs),
     audioContextOutputLatencyMs: nullableNonNegativeDecimal(s.audioContextOutputLatencyMs),
     rxAudioJitterSampleCount: nonNegativeInteger(s.rxAudioJitterSamples?.length),
@@ -303,6 +322,9 @@ export function buildPerfSummary(snapshots: PerfSnapshot[], currentSnapshot: Per
   const backpressure = samples.map((s) => Number(s.audioBackpressureDrops) || 0);
   const workletDrops = samples.map((s) => Number(s.rxWorkletDrops) || 0);
   const workletQueued = samples.map((s) => Number(s.rxWorkletQueuedMs) || 0);
+  const adaptiveCorrectionPpm = samples.map(
+    (s) => Number(s.rxAdaptiveRateCorrectionPpm) || 0,
+  );
   const jitterP99 = samples.map((s) => Number(s.rxAudioJitterP99Ms) || 0);
   const wsBacklog = samples.map((s) => Number(s.wsMediaBacklogBytes) || 0);
   const bridgeQueued = samples.map((s) => Number(s.bridgeOutboundQueuedBytes) || 0);
@@ -349,6 +371,14 @@ export function buildPerfSummary(snapshots: PerfSnapshot[], currentSnapshot: Per
     finalRxWorkletDrops,
     finalRxWorkletUnderruns: samples[samples.length - 1]?.rxWorkletUnderruns ?? 0,
     finalRxWorkletOverflows: samples[samples.length - 1]?.rxWorkletOverflows ?? 0,
+    finalRxAdaptiveRateRatio: samples[samples.length - 1]?.rxAdaptiveRateRatio ?? 1,
+    finalRxAdaptiveRateCorrectionPpm:
+      samples[samples.length - 1]?.rxAdaptiveRateCorrectionPpm ?? 0,
+    finalRxAdaptiveRateCorrectionCount:
+      samples[samples.length - 1]?.rxAdaptiveRateCorrectionCount ?? 0,
+    maxAbsRxAdaptiveRateCorrectionPpm: adaptiveCorrectionPpm.length
+      ? Math.max(...adaptiveCorrectionPpm.map(Math.abs))
+      : 0,
     maxRxWorkletQueuedMs: workletQueued.length ? Math.max(...workletQueued) : 0,
     maxRxAudioJitterP99Ms: jitterP99.length ? Math.max(...jitterP99) : 0,
     maxWsMediaBacklogBytes: wsBacklog.length ? Math.max(...wsBacklog) : 0,

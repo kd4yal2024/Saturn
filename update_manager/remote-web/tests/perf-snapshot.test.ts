@@ -34,6 +34,9 @@ describe('buildPerfSnapshot', () => {
     expect(snap.audioIdleMs).toBe(1000);
     expect(snap.rxAudioJitterP99Ms).toBe(0);
     expect(snap.rxWorkletQueuedMs).toBe(0);
+    expect(snap.rxAdaptiveRateEnabled).toBe(true);
+    expect(snap.rxAdaptiveRateRatio).toBe(1);
+    expect(snap.rxAdaptiveRateCorrectionPpm).toBe(0);
     expect(snap.wallTime).toBeTruthy();
   });
 
@@ -64,6 +67,9 @@ describe('buildPerfSummary', () => {
     source2.rxWorkletQueuedMs = 24;
     source2.rxWorkletUnderruns = 2;
     source2.rxWorkletOverflows = 1;
+    source2.rxAdaptiveRateRatio = 1.000125;
+    source2.rxAdaptiveRateCorrectionPpm = 125;
+    source2.rxAdaptiveRateCorrectionCount = 42;
     source2.audioContextBaseLatencyMs = 5.5;
     source2.audioContextOutputLatencyMs = 11.25;
     source2.lastAudioFrameAt = 1980;
@@ -119,6 +125,10 @@ describe('buildPerfSummary', () => {
     expect(summary.finalRxWorkletDrops).toBe(1);
     expect(summary.finalRxWorkletUnderruns).toBe(2);
     expect(summary.finalRxWorkletOverflows).toBe(1);
+    expect(summary.finalRxAdaptiveRateRatio).toBe(1.000125);
+    expect(summary.finalRxAdaptiveRateCorrectionPpm).toBe(125);
+    expect(summary.finalRxAdaptiveRateCorrectionCount).toBe(42);
+    expect(summary.maxAbsRxAdaptiveRateCorrectionPpm).toBe(125);
     expect(summary.maxRxWorkletQueuedMs).toBe(24);
     expect(summary.maxRxAudioJitterP99Ms).toBe(12.5);
     expect(summary.maxWsMediaBacklogBytes).toBe(512);

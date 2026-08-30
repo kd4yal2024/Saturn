@@ -286,6 +286,11 @@ export interface AppState {
   rxWorkletUnderruns: number;
   rxWorkletOverflows: number;
   rxWorkletTelemetryAt: number;
+  rxAdaptiveRateEnabled: boolean;
+  rxAdaptiveRateRatio: number;
+  rxAdaptiveRateCorrectionPpm: number;
+  rxAdaptiveRateCorrectionCount: number;
+  rxAdaptiveRateTargetQueueMs: number;
   audioContextBaseLatencyMs: number | null;
   audioContextOutputLatencyMs: number | null;
   lastAudioFrameAt: number;
@@ -606,6 +611,11 @@ export function createAppState(): AppState {
     rxWorkletUnderruns: 0,
     rxWorkletOverflows: 0,
     rxWorkletTelemetryAt: 0,
+    rxAdaptiveRateEnabled: true,
+    rxAdaptiveRateRatio: 1,
+    rxAdaptiveRateCorrectionPpm: 0,
+    rxAdaptiveRateCorrectionCount: 0,
+    rxAdaptiveRateTargetQueueMs: 42,
     audioContextBaseLatencyMs: null,
     audioContextOutputLatencyMs: null,
     lastAudioFrameAt: 0,

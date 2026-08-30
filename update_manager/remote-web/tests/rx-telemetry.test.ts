@@ -48,6 +48,11 @@ describe('RX audio telemetry', () => {
       audioQueueMs: 42.7,
       workletUnderruns: 3,
       workletOverflows: 1,
+      adaptiveRateEnabled: true,
+      adaptiveRateRatio: 1.000125,
+      adaptiveRateCorrectionPpm: 125,
+      adaptiveRateCorrectionCount: 42,
+      adaptiveRateTargetQueueMs: 42,
       audioDropEvents: 2,
       audioContextBaseLatencyMs: 10,
       audioContextOutputLatencyMs: null,
@@ -70,6 +75,7 @@ describe('RX audio telemetry', () => {
     expect(text).toContain('Profiles: LAN / PCM F32 48 kHz stereo / Worklet');
     expect(text).toContain('Packet jitter p50/p95/p99: 1.2 / 8.4 / 21.3 ms (512 samples)');
     expect(text).toContain('Worklet underruns/overflows: 3 / 1');
+    expect(text).toContain('Adaptive playback: on / ratio 1.000125000 / 125.0 ppm');
     expect(text).toContain('AudioContext base/output: 10.0 ms / unavailable');
     expect(text).toContain('Media backlog bridge/browser: 4096 B / 0 B');
     expect(text).toContain('Reconnect: online | attempt 0');

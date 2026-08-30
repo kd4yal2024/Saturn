@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest';
-import { resampleChannel, prepareAudioForPlayback, ringBufferFreeFrames } from '../src/audio/resample';
+import {
+  AdaptivePlaybackRateController,
+  resampleChannel,
+  prepareAudioForPlayback,
+  ringBufferFreeFrames,
+} from '../src/audio/resample';
 import {
   RX_AUDIO_FRAME_FLOATS,
   RX_RING_FRAMES,
@@ -68,6 +73,61 @@ describe('ringBufferFreeFrames', () => {
 
   it('handles wrap-around', () => {
     expect(ringBufferFreeFrames(3000, 1000, 4096)).toBe(1999);
+  });
+});
+
+describe('AdaptivePlaybackRateController', () => {
+  it('slews toward more output frames when playback occupancy is low', () => {
+    const controller = new AdaptivePlaybackRateController();
+    controller.observeQueue(0, 1000);
+    const telemetry = controller.observeQueue(0, 2000);
+
+    expect(telemetry.ratio).toBeCloseTo(1.0005, 7);
+    expect(telemetry.correctionPpm).toBeCloseTo(500, 3);
+    expect(telemetry.correctionCount).toBe(1);
+  });
+
+  it('slews toward fewer output frames when playback occupancy is high', () => {
+    const controller = new AdaptivePlaybackRateController();
+    controller.observeQueue(100, 1000);
+    const telemetry = controller.observeQueue(100, 2000);
+
+    expect(telemetry.ratio).toBeCloseTo(0.9995, 7);
+    expect(telemetry.correctionPpm).toBeCloseTo(-500, 3);
+  });
+
+  it('carries fractional frame corrections between packets', () => {
+    const controller = new AdaptivePlaybackRateController({
+      targetQueueMs: 10,
+      proportionalGainPerMs: 0.001,
+      maxCorrectionRatio: 0.01,
+      slewPerSecond: 0.01,
+    });
+    controller.observeQueue(0, 1000);
+    controller.observeQueue(0, 2000);
+    let outputFrames = 0;
+    for (let packet = 0; packet < 100; packet += 1) {
+      outputFrames += controller.prepare(
+        new Float32Array(480),
+        new Float32Array(480),
+        480,
+        48000,
+        48000,
+      ).frames;
+    }
+    expect(outputFrames).toBe(48480);
+  });
+
+  it('retains static playback behavior when disabled', () => {
+    const controller = new AdaptivePlaybackRateController({ enabled: false });
+    controller.observeQueue(0, 1000);
+    const left = new Float32Array([0.1, 0.2]);
+    const right = new Float32Array([0.3, 0.4]);
+    const prepared = controller.prepare(left, right, 2, 48000, 48000);
+
+    expect(prepared.left).toBe(left);
+    expect(prepared.right).toBe(right);
+    expect(controller.telemetry().ratio).toBe(1);
   });
 });
 
