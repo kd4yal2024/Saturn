@@ -20,11 +20,16 @@ describe('TX setup controls', () => {
 
     for (const id of [
       'smeter-svg',
+      'instrument-meter-mode',
+      'meter-s-readout',
       'meter-readout',
-      'txpwr-svg',
       'tx-power-readout',
-      'swrmeter-svg',
       'swr-readout',
+      'multimeter-scale-signal',
+      'multimeter-scale-power',
+      'multimeter-scale-swr',
+      'multimeter-scale-process',
+      'multimeter-scale-mic',
     ]) {
       const position = template.indexOf(`id="${id}"`);
       expect(position).toBeGreaterThan(meterBankStart);
@@ -32,10 +37,10 @@ describe('TX setup controls', () => {
       expect(template.match(new RegExp(`id="${id}"`, 'g'))).toHaveLength(1);
     }
 
-    const auxMeters = template.indexOf('class="aux-meter-row"', meterBankStart);
-    const telemetry = template.indexOf('class="top-meter-telemetry"', auxMeters);
-    expect(auxMeters).toBeGreaterThan(meterBankStart);
-    expect(telemetry).toBeGreaterThan(auxMeters);
+    const multimeter = template.indexOf('class="analog-meter-shell multimeter-shell"', meterBankStart);
+    const telemetry = template.indexOf('class="top-meter-telemetry"', multimeter);
+    expect(multimeter).toBeGreaterThan(meterBankStart);
+    expect(telemetry).toBeGreaterThan(multimeter);
     expect(telemetry).toBeLessThan(commandEnd);
     expect(template).toContain('class="top-meter-telemetry-title">Telemetry');
     expect(template).toContain('class="top-meter-telemetry-meta">Observed radio state');
@@ -45,6 +50,13 @@ describe('TX setup controls', () => {
     expect(template).not.toContain('id="freq-entry-open-btn"');
     expect(template).not.toContain('id="vfo-step-down-btn"');
     expect(template).not.toContain('id="vfo-step-up-btn"');
+    expect(template).not.toContain('id="txpwr-svg"');
+    expect(template).not.toContain('id="swrmeter-svg"');
+    for (const value of [
+      'signal', 'power', 'reflected', 'swr', 'alc', 'compression', 'mic',
+    ]) {
+      expect(template).toContain(`<option value="${value}">`);
+    }
   });
 
   it('places the complete two-tone test inside the TX setup panel', () => {

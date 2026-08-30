@@ -359,6 +359,7 @@
     .analog-meter-shell svg { display: block; width: 100%; height: auto; }
     .meter-dBm-row {
       display: flex; justify-content: space-between; align-items: center;
+      gap: 6px;
       padding: 2px 12px 6px;
     }
     .tx-tool-dock {
@@ -4099,15 +4100,30 @@
     }
 
     .meter-dBm-row .instrument-primary-readout {
+      flex: 0 0 auto;
+      min-width: 7.5ch;
+      white-space: nowrap;
+      text-align: center;
       color: var(--warning-amber);
       font: 700 13px/1 var(--font-instrument);
       letter-spacing: 0.02em;
     }
 
     .meter-dBm-row .meter-name {
+      flex: 1 1 auto;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
       color: var(--text-muted);
       font: 700 8px/1 var(--font-instrument);
       letter-spacing: 0.12em;
+    }
+
+    .meter-dBm-row #meter-readout,
+    .meter-dBm-row .status-chip {
+      flex: 0 0 auto;
+      white-space: nowrap;
     }
 
     .instrument-mic-meter {
@@ -6540,6 +6556,181 @@
         animation-iteration-count: 1 !important;
       }
     }
+
+    /* Selectable full-width radio multimeter. */
+    .top-meter-bank {
+      grid-template-columns: minmax(0, 1fr) !important;
+      grid-template-rows: auto auto !important;
+      overflow: visible !important;
+    }
+
+    .top-meter-bank[data-operating-state="armed"] .multimeter-shell,
+    .top-meter-bank[data-operating-state="tx"] .multimeter-shell {
+      opacity: 1;
+      border-color: rgba(255, 138, 48, 0.38);
+    }
+
+    .top-meter-bank > .multimeter-shell {
+      display: grid;
+      grid-column: 1 / -1;
+      grid-template-rows: auto auto !important;
+      min-width: 0;
+      overflow: hidden;
+      background: #050b0f;
+    }
+
+    .multimeter-workbench {
+      display: grid;
+      grid-template-columns: minmax(300px, 1.75fr) minmax(205px, 0.55fr);
+      gap: 6px;
+      align-items: stretch;
+      min-width: 0;
+      padding: 5px 7px 6px;
+    }
+
+    .top-meter-bank .multimeter-workbench > .multimeter-svg {
+      display: block;
+      width: 100% !important;
+      max-width: none !important;
+      height: auto !important;
+      max-height: 150px !important;
+      margin: 0 auto !important;
+    }
+
+    .multimeter-scale {
+      opacity: 0.28;
+      transition: opacity 120ms ease;
+    }
+
+    .multimeter-scale[data-active="true"] { opacity: 1; }
+
+    .multimeter-console {
+      display: grid;
+      grid-template-columns: minmax(210px, 0.9fr) minmax(300px, 1.35fr);
+      gap: 6px;
+      align-items: stretch;
+      padding: 6px;
+      border-top: 1px solid rgba(98, 208, 255, 0.14);
+      background: linear-gradient(180deg, rgba(10, 20, 26, 0.98), rgba(5, 11, 15, 0.98));
+    }
+
+    .multimeter-control-stack {
+      display: grid;
+      grid-template-rows: auto auto minmax(52px, 1fr) auto;
+      gap: 4px;
+      min-width: 0;
+      padding: 6px;
+      border: 1px solid var(--border-subtle);
+      border-radius: 5px;
+      background: linear-gradient(180deg, rgba(9, 19, 25, 0.92), rgba(4, 10, 14, 0.96));
+    }
+
+    .multimeter-control-stack .meter-name,
+    .meter-response-label {
+      color: var(--text-muted);
+      font: 700 9px/1 var(--font-instrument);
+      letter-spacing: 0.12em;
+    }
+
+    #instrument-meter-mode {
+      width: 100%;
+      min-height: 30px;
+      padding: 5px 8px;
+      color: var(--text);
+      font: 700 11px/1.1 var(--font-instrument);
+    }
+
+    .multimeter-digital {
+      position: relative;
+      display: grid;
+      place-content: center;
+      gap: 3px;
+      min-width: 0;
+      padding: 6px 8px;
+      border: 1px solid rgba(240, 183, 46, 0.32);
+      border-radius: 4px;
+      background: rgba(2, 7, 10, 0.9);
+      text-align: center;
+      box-shadow: inset 0 0 16px rgba(0, 0, 0, 0.65);
+    }
+
+    .multimeter-digital .instrument-primary-readout {
+      color: #ffd24a;
+      font: 800 25px/1 var(--font-instrument);
+      letter-spacing: 0.035em;
+      white-space: nowrap;
+    }
+
+    .multimeter-digital #meter-readout {
+      color: #c59b2a;
+      font-size: 10px;
+      white-space: nowrap;
+    }
+
+    .multimeter-digital .status-chip {
+      position: absolute;
+      top: 3px;
+      right: 3px;
+    }
+
+    .meter-response-control {
+      display: grid;
+      gap: 4px;
+    }
+
+    .meter-response-switches {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 5px;
+    }
+
+    .meter-response-switches .vfo-annunciator {
+      min-height: 28px;
+      cursor: pointer;
+    }
+
+    .meter-response-switches .vfo-annunciator:disabled {
+      cursor: default;
+      opacity: 0.52;
+    }
+
+    .multimeter-console > .instrument-rx-audio {
+      align-content: center;
+      min-width: 0;
+      padding: 6px;
+      border: 1px solid var(--border-subtle);
+      border-radius: 4px;
+      background: rgba(5, 13, 18, 0.78);
+    }
+
+    .multimeter-console .top-meter-telemetry,
+    .top-meter-bank[data-operating-state="rx"] .multimeter-console .top-meter-telemetry {
+      display: grid;
+      min-width: 0;
+      padding: 0;
+      border-top: 0;
+    }
+
+    #smeter-needle,
+    #smeter-peak { transition: none; }
+
+    @media (max-width: 767px) {
+      .multimeter-workbench {
+        grid-template-columns: 1fr;
+      }
+
+      .top-meter-bank .multimeter-workbench > .multimeter-svg {
+        width: 100% !important;
+        height: auto !important;
+        max-height: 230px !important;
+      }
+
+      .multimeter-console {
+        grid-template-columns: 1fr;
+      }
+
+      .multimeter-console .top-meter-telemetry { display: none !important; }
+    }
   </style>
 </head>
 <body>
@@ -7116,137 +7307,89 @@
                 <span id="instrument-state-label">Receiving</span>
                 <span class="instrument-state-frequency" id="instrument-state-frequency">RX 14.200.000 USB</span>
               </div>
-              <!-- S-Meter -->
-              <div class="analog-meter-shell s-meter-shell" style="margin-bottom:10px;">
-                <svg id="smeter-svg" viewBox="0 0 360 185" xmlns="http://www.w3.org/2000/svg">
+              <div class="analog-meter-shell multimeter-shell">
+                <div class="multimeter-workbench">
+                <svg id="smeter-svg" class="multimeter-svg" viewBox="0 0 620 320" xmlns="http://www.w3.org/2000/svg" aria-labelledby="multimeter-title">
+                  <title id="multimeter-title">Selectable Saturn radio multimeter</title>
                   <defs>
-                    <radialGradient id="smeter-face" cx="50%" cy="85%" r="70%">
-                      <stop offset="0%" stop-color="#14242c"/>
-                      <stop offset="100%" stop-color="#060d12"/>
+                    <radialGradient id="multimeter-face" cx="50%" cy="92%" r="78%">
+                      <stop offset="0%" stop-color="#172833"/>
+                      <stop offset="58%" stop-color="#0a151c"/>
+                      <stop offset="100%" stop-color="#03080b"/>
                     </radialGradient>
-                    <linearGradient id="smeter-needle-g" x1="180" y1="38" x2="180" y2="165" gradientUnits="userSpaceOnUse">
-                      <stop offset="0%" stop-color="#ffe060"/>
-                      <stop offset="55%" stop-color="#d4a820"/>
-                      <stop offset="100%" stop-color="#7a5a08"/>
+                    <linearGradient id="smeter-needle-g" x1="310" y1="25" x2="310" y2="298" gradientUnits="userSpaceOnUse">
+                      <stop offset="0%" stop-color="#ff5148"/>
+                      <stop offset="58%" stop-color="#e52d2d"/>
+                      <stop offset="100%" stop-color="#741010"/>
                     </linearGradient>
+                    <filter id="multimeter-needle-glow" x="-30%" y="-20%" width="160%" height="150%">
+                      <feGaussianBlur stdDeviation="1.5" result="blur"/>
+                      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+                    </filter>
                   </defs>
-                  <!-- Bezel -->
-                  <rect x="1" y="1" width="358" height="183" rx="13" fill="#141e24" stroke="#2e4858" stroke-width="1.5"/>
-                  <!-- Face -->
-                  <rect x="5" y="5" width="350" height="175" rx="10" fill="url(#smeter-face)"/>
-                  <!-- Arc zones (built by JS) -->
-                  <path id="smeter-arc-s"    fill="none" stroke="#a87818" stroke-width="4" stroke-linecap="round"/>
-                  <path id="smeter-arc-over" fill="none" stroke="#a02828" stroke-width="4" stroke-linecap="round"/>
-                  <!-- Ticks and labels (built by JS) -->
-                  <g id="smeter-ticks"></g>
-                  <g id="smeter-labels"></g>
-                  <!-- Title -->
-                  <text x="180" y="16" text-anchor="middle" font-family="IBM Plex Mono,monospace"
-                    font-size="8" letter-spacing="5" fill="#3a6070">S I G N A L</text>
-                  <!-- Needle -->
-                  <g id="smeter-needle" style="transform:rotate(-60deg);transform-origin:180px 165px;">
-                    <polygon points="179.5,162 180.5,162 180.2,42 179.8,42" fill="rgba(0,0,0,0.30)" transform="translate(1.5,1.5)"/>
-                    <polygon points="179,162 181,162 180.3,40 179.7,40" fill="url(#smeter-needle-g)"/>
-                    <polygon points="179.7,150 180,150 180,42 179.7,42" fill="rgba(255,248,180,0.50)"/>
-                    <rect x="178.5" y="163" width="3" height="9" rx="1.5" fill="#c09018"/>
+                  <rect x="1" y="1" width="618" height="318" rx="12" fill="#10191f" stroke="#355062" stroke-width="2"/>
+                  <rect x="7" y="7" width="606" height="306" rx="9" fill="url(#multimeter-face)" stroke="#091117"/>
+                  <text x="310" y="24" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="11" letter-spacing="6" fill="#6f8998">SATURN MULTIMETER</text>
+                  <g id="multimeter-scale-signal" class="multimeter-scale" data-meter-scale="signal"></g>
+                  <g id="multimeter-scale-power" class="multimeter-scale" data-meter-scale="power"></g>
+                  <g id="multimeter-scale-swr" class="multimeter-scale" data-meter-scale="swr"></g>
+                  <g id="multimeter-scale-process" class="multimeter-scale" data-meter-scale="process"></g>
+                  <g id="multimeter-scale-mic" class="multimeter-scale" data-meter-scale="mic"></g>
+                  <g id="smeter-needle" filter="url(#multimeter-needle-glow)" style="transform:rotate(-60deg);transform-origin:310px 296px;">
+                    <polygon points="308.5,292 311.5,292 310.8,35 309.2,35" fill="rgba(0,0,0,0.4)" transform="translate(2,2)"/>
+                    <polygon points="308.2,293 311.8,293 310.9,32 309.1,32" fill="url(#smeter-needle-g)"/>
+                    <polygon points="309.1,270 310,270 310,36 309.1,36" fill="rgba(255,220,210,0.55)"/>
                   </g>
-                  <g id="smeter-peak" opacity="0" style="transform:rotate(-60deg);transform-origin:180px 165px;">
-                    <path d="M176 34 L180 40 L184 34" fill="none" stroke="#fff0a0" stroke-width="1.5" stroke-linecap="round"/>
+                  <g id="smeter-peak" opacity="0" style="transform:rotate(-60deg);transform-origin:310px 296px;">
+                    <path d="M304 26 L310 34 L316 26" fill="none" stroke="#fff4c0" stroke-width="2" stroke-linecap="round"/>
                   </g>
-                  <!-- Pivot -->
-                  <circle cx="180" cy="165" r="9"   fill="#101c24" stroke="#304858" stroke-width="1.5"/>
-                  <circle cx="180" cy="165" r="5.5" fill="#1e3040" stroke="#486070" stroke-width="1"/>
-                  <circle cx="180" cy="165" r="2.5" fill="#7aa0b8"/>
-                  <circle cx="180" cy="165" r="1"   fill="#c0d8e0"/>
-                  <!-- Glass glare -->
-                  <ellipse cx="135" cy="58" rx="85" ry="28" fill="rgba(255,255,255,0.025)" transform="rotate(-12,135,58)"/>
+                  <circle cx="310" cy="296" r="14" fill="#0d171d" stroke="#486171" stroke-width="2"/>
+                  <circle cx="310" cy="296" r="8" fill="#263b48" stroke="#78909d"/>
+                  <circle cx="310" cy="296" r="3" fill="#d5e2e8"/>
+                  <ellipse cx="220" cy="72" rx="155" ry="38" fill="rgba(255,255,255,0.022)" transform="rotate(-8,220,72)"/>
                 </svg>
-                <div class="meter-dBm-row">
-                  <span class="meter-name">S-METER</span>
-                  <span class="instrument-primary-readout" id="meter-s-readout">--</span>
-                  <span class="mono small" id="meter-readout" style="color:#b08018;">-- dBm</span>
-                  <span class="status-chip" id="adc-overload-annunciator" data-tone="fault" hidden>OVF</span>
-                </div>
-                <div class="instrument-rx-audio" aria-label="Receiver audio stereo peak meters">
-                  <div class="rx-audio-meter-row">
-                    <span class="rx-audio-channel">L</span>
-                    <span class="rx-audio-meter"><span id="instrument-rx-audio-left-fill"></span></span>
-                    <span class="rx-audio-peak mono" id="instrument-rx-audio-left-peak">-- dBFS</span>
-                  </div>
-                  <div class="rx-audio-meter-row">
-                    <span class="rx-audio-channel">R</span>
-                    <span class="rx-audio-meter"><span id="instrument-rx-audio-right-fill"></span></span>
-                    <span class="rx-audio-peak mono" id="instrument-rx-audio-right-peak">-- dBFS</span>
-                  </div>
-                </div>
-              </div>
 
-              <div class="top-meter-side">
-                <!-- TX Power + SWR gauges -->
-                <div class="aux-meter-row">
-                <div class="analog-meter-shell">
-                  <svg id="txpwr-svg" viewBox="0 0 175 115" xmlns="http://www.w3.org/2000/svg">
-                    <defs>
-                      <radialGradient id="aux-face" cx="50%" cy="85%" r="70%">
-                        <stop offset="0%" stop-color="#14242c"/>
-                        <stop offset="100%" stop-color="#060d12"/>
-                      </radialGradient>
-                    </defs>
-                    <rect x="1" y="1" width="173" height="113" rx="10" fill="#141e24" stroke="#2e4858" stroke-width="1.5"/>
-                    <rect x="4" y="4" width="167" height="107" rx="8" fill="url(#aux-face)"/>
-                    <path id="txpwr-arc-bg"   fill="none" stroke="#1a2c38" stroke-width="3.5" stroke-linecap="round"/>
-                    <path id="txpwr-arc-fill" fill="none" stroke="#309cff" stroke-width="3.5" stroke-linecap="round"/>
-                    <g id="txpwr-ticks"></g>
-                    <g id="txpwr-labels"></g>
-                    <g id="txpwr-needle" style="transform:rotate(-65deg);transform-origin:87px 100px;">
-                      <polygon points="86.5,98 87.5,98 87.2,30 86.8,30" fill="rgba(0,0,0,0.3)" transform="translate(1,1)"/>
-                      <polygon points="86.5,98 87.5,98 87.2,30 86.8,30" fill="#62d0ff"/>
-                      <rect x="86" y="99" width="2" height="6" rx="1" fill="#3080a0"/>
-                    </g>
-                    <g id="txpwr-peak" opacity="0" style="transform:rotate(-65deg);transform-origin:87px 100px;">
-                      <path d="M84 25 L87 30 L90 25" fill="none" stroke="#edf3f5" stroke-width="1.4" stroke-linecap="round"/>
-                    </g>
-                    <circle cx="87" cy="100" r="7"   fill="#101c24" stroke="#304858" stroke-width="1.5"/>
-                    <circle cx="87" cy="100" r="4"   fill="#1e3040" stroke="#486070" stroke-width="1"/>
-                    <circle cx="87" cy="100" r="1.5" fill="#7aa0b8"/>
-                    <text x="87" y="14" text-anchor="middle" font-family="IBM Plex Mono,monospace"
-                      font-size="7" letter-spacing="3" fill="#3a6070">TX PWR</text>
-                  </svg>
-                  <div class="aux-meter-val" style="color:#62d0ff;">
-                    <span id="tx-power-readout">-- W</span>
-                    <select id="tx-meter-mode" class="field" style="margin-top:6px;width:92px;font-size:11px;padding:4px 8px;">
-                      <option value="peak">Peak</option>
-                      <option value="avg">Avg</option>
+                  <div class="multimeter-control-stack">
+                    <label class="meter-name" for="instrument-meter-mode">METER FUNCTION</label>
+                    <select id="instrument-meter-mode" class="field" aria-label="Analog meter function">
+                      <option value="signal">Signal strength</option>
+                      <option value="power">Forward power</option>
+                      <option value="reflected">Reflected power</option>
+                      <option value="swr">SWR</option>
+                      <option value="alc">ALC</option>
+                      <option value="compression">Compression</option>
+                      <option value="mic">Microphone level</option>
                     </select>
+                    <div class="multimeter-digital meter-dBm-row" aria-live="polite">
+                      <span class="instrument-primary-readout" id="meter-s-readout">--</span>
+                      <span class="mono" id="meter-readout">-- dBm</span>
+                      <span class="status-chip" id="adc-overload-annunciator" data-tone="fault" hidden>OVF</span>
+                    </div>
+                    <div class="meter-response-control">
+                      <span class="meter-response-label">METER RESPONSE</span>
+                      <div class="meter-response-switches" role="group" aria-label="Meter response">
+                        <button class="vfo-annunciator" id="instrument-meter-average-btn" type="button" aria-pressed="false">AVG</button>
+                        <button class="vfo-annunciator" id="instrument-meter-peak-btn" type="button" aria-pressed="true">PEAK</button>
+                      </div>
+                    </div>
                   </div>
-                </div>
-                <div class="analog-meter-shell">
-                  <svg id="swrmeter-svg" viewBox="0 0 175 115" xmlns="http://www.w3.org/2000/svg">
-                    <rect x="1" y="1" width="173" height="113" rx="10" fill="#141e24" stroke="#2e4858" stroke-width="1.5"/>
-                    <rect x="4" y="4" width="167" height="107" rx="8" fill="url(#aux-face)"/>
-                    <path id="swr-arc-good" fill="none" stroke="#28a870" stroke-width="3.5" stroke-linecap="round"/>
-                    <path id="swr-arc-warn" fill="none" stroke="#c08820" stroke-width="3.5" stroke-linecap="round"/>
-                    <path id="swr-arc-bad"  fill="none" stroke="#a02828" stroke-width="3.5" stroke-linecap="round"/>
-                    <g id="swr-ticks"></g>
-                    <g id="swr-labels"></g>
-                    <g id="swr-needle" style="transform:rotate(-65deg);transform-origin:87px 100px;">
-                      <polygon points="86.5,98 87.5,98 87.2,30 86.8,30" fill="rgba(0,0,0,0.3)" transform="translate(1,1)"/>
-                      <polygon id="swr-needle-poly" points="86.5,98 87.5,98 87.2,30 86.8,30" fill="#5de8b5"/>
-                      <rect x="86" y="99" width="2" height="6" rx="1" fill="#207858"/>
-                    </g>
-                    <circle cx="87" cy="100" r="7"   fill="#101c24" stroke="#304858" stroke-width="1.5"/>
-                    <circle cx="87" cy="100" r="4"   fill="#1e3040" stroke="#486070" stroke-width="1"/>
-                    <circle cx="87" cy="100" r="1.5" fill="#7aa0b8"/>
-                    <text x="87" y="14" text-anchor="middle" font-family="IBM Plex Mono,monospace"
-                      font-size="7" letter-spacing="3" fill="#3a6070">S W R</text>
-                  </svg>
-                  <div class="aux-meter-val" style="color:#5de8b5;">
-                    <span id="swr-readout">-- : 1</span>
-                  </div>
-                </div>
                 </div>
 
-                <div class="top-meter-telemetry">
+                <div class="multimeter-console">
+                  <div class="instrument-rx-audio" aria-label="Receiver audio stereo peak meters">
+                    <div class="rx-audio-meter-row">
+                      <span class="rx-audio-channel">L</span>
+                      <span class="rx-audio-meter"><span id="instrument-rx-audio-left-fill"></span></span>
+                      <span class="rx-audio-peak mono" id="instrument-rx-audio-left-peak">-- dBFS</span>
+                    </div>
+                    <div class="rx-audio-meter-row">
+                      <span class="rx-audio-channel">R</span>
+                      <span class="rx-audio-meter"><span id="instrument-rx-audio-right-fill"></span></span>
+                      <span class="rx-audio-peak mono" id="instrument-rx-audio-right-peak">-- dBFS</span>
+                    </div>
+                  </div>
+
+                  <div class="top-meter-telemetry">
                   <div class="top-meter-telemetry-head">
                     <span class="top-meter-telemetry-title">Telemetry</span>
                     <span class="top-meter-telemetry-meta">Observed radio state</span>
@@ -7274,6 +7417,14 @@
                     </div>
                     <div class="tx-tool-summary mono" id="tx-processing-readout">ALC -- | COMP -- | REF -- W</div>
                   </div>
+                </div>
+                <div class="instrument-compat-hidden" hidden>
+                  <span id="tx-power-readout">-- W</span>
+                  <span id="swr-readout">-- : 1</span>
+                  <select id="tx-meter-mode" aria-label="Legacy TX meter averaging mode">
+                    <option value="peak">Peak</option>
+                    <option value="avg">Avg</option>
+                  </select>
                 </div>
               </div>
             </div>
@@ -8104,7 +8255,7 @@
     })();
   </script>
   <script
-    src="/remote-assets/remote-next.js?v=stable-controls-1"
+    src="/remote-assets/remote-next.js?v=stable-controls-4"
     onload="window.saturnRemoteBundleLoaded=true"
     onerror="window.saturnRemoteBundleError=true; window.saturnDiagLastError='remote-next.js failed to load'; window.saturnSetWsDiag && window.saturnSetWsDiag('JS error: remote-next.js failed to load')"
   ></script>
@@ -8143,6 +8294,7 @@
     const ACTIVE_PROFILE_KEY = "saturn.remote.activeProfile";
     const OPERATIONS_DRAWER_PREF_KEY = "saturn.remote.operationsDrawer";
     const SETUP_PANEL_PREF_KEY = "saturn.remote.setupPanel";
+    const INSTRUMENT_METER_MODE_KEY = "saturn.remote.instrumentMeterMode";
     const REMOTE_SETTINGS_PATH = "/remote_settings";
     const REMOTE_PROFILES_PATH = "/remote_profiles";
     const REMOTE_PROFILES_SAVE_PATH = "/remote_profiles/save";
@@ -8556,6 +8708,13 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       return direct || bundle?.SaturnRemoteNext || bundle || {};
     }
     const _next = saturnRemoteNextApi();
+    const RX_AUDIO_ADAPTIVE_RATE = !["0", "false", "off", "no", "static"].includes(
+      `${pageQueryValue("rx_audio_adaptive") || ""}`.trim().toLowerCase()
+    );
+    const rxAdaptiveRateController = new _next.AdaptivePlaybackRateController({
+      enabled: RX_AUDIO_ADAPTIVE_RATE,
+      targetQueueMs: 42,
+    });
     globalThis.saturnRemoteNextApiDebug = {
       directKeys: Object.keys(globalThis.SaturnRemoteNext || {}).slice(0, 24),
       bundleKeys: Object.keys(globalThis.SaturnRemoteNextBundle || {}).slice(0, 24),
@@ -8605,6 +8764,10 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     );
 
     const state = _next.createAppState();
+    let instrumentMeterMode = _next.normalizeInstrumentMeterMode(
+      safeLocalStorageGet(INSTRUMENT_METER_MODE_KEY)
+    );
+    updateRxAdaptiveRateTelemetry(rxAdaptiveRateController.telemetry());
     state.displayProfile = DISPLAY_PROFILE_LABEL;
     state.txOpusOverrideEnabled = TX_OPUS_OVERRIDE;
     state.txOpusProducer = null;
@@ -10297,9 +10460,11 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       emptyPeakAssistTrackingState,
       trackPeakAssist,
       lerp, moveToward, smoothToward, svgArcPath, dbmToSmDeg, formatSignalStrength, linearLevelToDbfs, instrumentOperatingState,
+      normalizeInstrumentMeterMode, instrumentMeterDegrees,
       auxDeg, txPowerToAuxDeg, swrToAuxDeg,
       SM_CX, SM_CY, SM_R, SM_START, SM_END, SM_S9_DEG,
       AX_CX, AX_CY, AX_R, AX_START, AX_END, AX_SPAN,
+      MULTI_START, MULTI_END,
       SMETER_ATTACK_MS, SMETER_RELEASE_MS, SMETER_PEAK_HOLD_MS, SMETER_PEAK_DROP_PER_SEC,
       TX_POWER_ATTACK_PER_SEC, TX_POWER_RELEASE_PER_SEC, TX_POWER_PEAK_HOLD_MS, TX_POWER_PEAK_DROP_PER_SEC,
       SWR_ATTACK_PER_SEC, SWR_RELEASE_PER_SEC,
@@ -13774,6 +13939,11 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         audioQueueMs,
         workletUnderruns: state.rxWorkletUnderruns,
         workletOverflows: state.rxWorkletOverflows,
+        adaptiveRateEnabled: state.rxAdaptiveRateEnabled,
+        adaptiveRateRatio: state.rxAdaptiveRateRatio,
+        adaptiveRateCorrectionPpm: state.rxAdaptiveRateCorrectionPpm,
+        adaptiveRateCorrectionCount: state.rxAdaptiveRateCorrectionCount,
+        adaptiveRateTargetQueueMs: state.rxAdaptiveRateTargetQueueMs,
         audioDropEvents,
         audioContextBaseLatencyMs: state.audioContextBaseLatencyMs,
         audioContextOutputLatencyMs: state.audioContextOutputLatencyMs,
@@ -14489,8 +14659,6 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         : rxFrequency;
       const instrumentFrequency = instrumentState === "rx" ? rxFrequency : txFrequency;
       $("instrument-state-frequency").textContent = `${instrumentState === "rx" ? "RX" : "TX"} ${formatFrequency(instrumentFrequency)} ${state.mode}`;
-      $("meter-readout").textContent = state.meterDbmVisual == null ? "-- dBm" : `${state.meterDbmVisual.toFixed(1)} dBm`;
-      $("meter-s-readout").textContent = formatSignalStrength(state.meterDbmVisual);
       const txMeterValue = state.txMeterMode === "avg" ? state.txPowerAvg : state.txPowerPeak;
       $("tx-power-readout").textContent = txMeterValue == null ? "-- W" : `${txMeterValue.toFixed(1)} W`;
       $("swr-readout").textContent = state.swrVisual == null ? "-- : 1" : `${state.swrVisual.toFixed(2)} : 1`;
@@ -14504,12 +14672,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       overload.textContent = state.adcOverflowMask === 0 ? "OVF" : `OVF ${overloadAdc}`;
       overload.title = `ADC peaks ${state.adc1Peak}/${state.adc2Peak}`;
       updateTxToolDock();
-      updateSmeter(state.meterDbmVisual, state.meterDbmPeak);
-      updateTxPwrMeter(
-        state.txMeterMode === "avg" ? state.txPowerAvg : state.txPowerVisual,
-        state.txMeterMode === "peak" ? state.txPowerPeak : null
-      );
-      updateSwrMeter(state.swrVisual);
+      updateInstrumentMultimeter();
       const instrumentMicLevel = Math.max(0, Math.min(1, state.txMicLevelVisual || 0));
       const instrumentMicDbfs = linearLevelToDbfs(instrumentMicLevel, -90);
       $("instrument-mic-fill").style.width = `${(instrumentMicLevel * 100).toFixed(1)}%`;
@@ -15307,6 +15470,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     }
 
     function resetRxLatencyTelemetry() {
+      rxAdaptiveRateController.reset();
       state.lastAudioFrameAt = 0;
       state.lastAudioArrivalAt = 0;
       state.lastAudioPacketDurationMs = 0;
@@ -15319,6 +15483,27 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       state.rxWorkletUnderruns = 0;
       state.rxWorkletOverflows = 0;
       state.rxWorkletTelemetryAt = 0;
+      updateRxAdaptiveRateTelemetry(rxAdaptiveRateController.telemetry());
+    }
+
+    function updateRxAdaptiveRateTelemetry(telemetry) {
+      state.rxAdaptiveRateEnabled = Boolean(telemetry.enabled);
+      state.rxAdaptiveRateRatio = Number(telemetry.ratio) || 1;
+      state.rxAdaptiveRateCorrectionPpm = Number(telemetry.correctionPpm) || 0;
+      state.rxAdaptiveRateCorrectionCount = Math.max(
+        0,
+        Math.round(Number(telemetry.correctionCount) || 0)
+      );
+      state.rxAdaptiveRateTargetQueueMs = Math.max(
+        0,
+        Number(telemetry.targetQueueMs) || 0
+      );
+    }
+
+    function observeRxPlaybackQueue(queuedMs, observedAt = performance.now()) {
+      updateRxAdaptiveRateTelemetry(
+        rxAdaptiveRateController.observeQueue(queuedMs, observedAt)
+      );
     }
 
     function refreshRxAudioJitterSummary(now = performance.now()) {
@@ -15393,6 +15578,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
           state.rxWorkletUnderruns = Math.max(0, Math.round(Number(data.underruns) || 0));
           state.rxWorkletOverflows = Math.max(0, Math.round(Number(data.overflows) || 0));
           state.rxWorkletTelemetryAt = performance.now();
+          observeRxPlaybackQueue(state.rxWorkletQueuedMs, state.rxWorkletTelemetryAt);
         };
 
         // Try SharedArrayBuffer ring buffer (disabled by default — postMessage is more stable)
@@ -15525,6 +15711,8 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     }
 
     function flushRxAudioQueue() {
+      rxAdaptiveRateController.reset();
+      updateRxAdaptiveRateTelemetry(rxAdaptiveRateController.telemetry());
       for (const source of state.audioSources) {
         try {
           source.onended = null;
@@ -17232,7 +17420,13 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       state.audioSampleRate = frame.header.sampleRate;
       state.audioChannels = Math.max(1, Number(frame.header.channels) || 1);
       const targetRate = Math.max(1, Number(state.audioCtx?.sampleRate) || sourceRate);
-      const playback = prepareAudioForPlayback(
+      if (!state.audioWorkletMode) {
+        observeRxPlaybackQueue(
+          Math.max(0, (state.audioNextTime - state.audioCtx.currentTime) * 1000),
+          arrivedAt
+        );
+      }
+      const playback = rxAdaptiveRateController.prepare(
         frame.left,
         frame.right,
         frame.frames,
@@ -17541,16 +17735,10 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       } else if (waterfallEnabled && !phoneWanLite) {
         waterfallRenderer.render();
       }
-      $("meter-readout").textContent = state.meterDbmVisual == null ? "-- dBm" : `${state.meterDbmVisual.toFixed(1)} dBm`;
       const txMeterValue = state.txMeterMode === "avg" ? state.txPowerAvg : state.txPowerPeak;
       $("tx-power-readout").textContent = txMeterValue == null ? "-- W" : `${txMeterValue.toFixed(1)} W`;
       $("swr-readout").textContent = state.swrVisual == null ? "-- : 1" : `${state.swrVisual.toFixed(2)} : 1`;
-      updateSmeter(state.meterDbmVisual);
-      updateTxPwrMeter(
-        state.txMeterMode === "avg" ? state.txPowerAvg : state.txPowerVisual,
-        state.txMeterMode === "peak" ? state.txPowerPeak : null
-      );
-      updateSwrMeter(state.swrVisual);
+      updateInstrumentMultimeter();
       updateTxMiniMeters();
       requestAnimationFrame(animationLoop);
     }
@@ -18723,6 +18911,23 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         saveRadioPrefs();
         updateUi();
       });
+      $("instrument-meter-mode").addEventListener("change", () => {
+        instrumentMeterMode = normalizeInstrumentMeterMode($("instrument-meter-mode").value);
+        try { localStorage.setItem(INSTRUMENT_METER_MODE_KEY, instrumentMeterMode); } catch {}
+        updateInstrumentMultimeter();
+      });
+      $("instrument-meter-average-btn").addEventListener("click", () => {
+        if ($("instrument-meter-average-btn").disabled) return;
+        state.txMeterMode = "avg";
+        saveRadioPrefs();
+        updateUi();
+      });
+      $("instrument-meter-peak-btn").addEventListener("click", () => {
+        if ($("instrument-meter-peak-btn").disabled) return;
+        state.txMeterMode = "peak";
+        saveRadioPrefs();
+        updateUi();
+      });
       $("tx-tool-select").addEventListener("change", () => {
         updateTxToolDock();
       });
@@ -18906,45 +19111,149 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       return el;
     }
 
-    // S-Meter / aux-meter constants and pure math (lerp, moveToward, dbmToSmDeg,
-    // auxDeg, txPowerToAuxDeg, swrToAuxDeg, svgArcPath) now come from bundle destructuring
+    const MULTI_CX = 310;
+    const MULTI_CY = 296;
 
-    function initSmeter() {
-      $('smeter-arc-s').setAttribute('d',    svgArcPath(SM_CX, SM_CY, SM_R, SM_START, SM_S9_DEG));
-      $('smeter-arc-over').setAttribute('d', svgArcPath(SM_CX, SM_CY, SM_R, SM_S9_DEG, SM_END));
+    function appendMeterArc(group, radius, startDeg, endDeg, color, width = 3) {
+      const arc = document.createElementNS(NS, 'path');
+      arc.setAttribute('d', svgArcPath(MULTI_CX, MULTI_CY, radius, startDeg, endDeg));
+      arc.setAttribute('fill', 'none');
+      arc.setAttribute('stroke', color);
+      arc.setAttribute('stroke-width', `${width}`);
+      arc.setAttribute('stroke-linecap', 'round');
+      group.appendChild(arc);
+    }
 
-      const major = [
-        [-121,'S1',false],[-115,'S2',false],[-109,'S3',false],[-103,'S4',false],
-        [-97,'S5',false], [-91,'S6',false], [-85,'S7',false], [-79,'S8',false],
-        [-73,'S9',false], [-63,'+10',true], [-53,'+20',true], [-33,'+40',true], [-13,'+60',true]
-      ];
-      const majorSet = new Set(major.map(([d]) => d));
-      const tg = $('smeter-ticks'), lg = $('smeter-labels');
-
-      major.forEach(([dbm, lbl, over]) => {
-        const deg = dbmToSmDeg(dbm);
-        const tc = over ? '#b83030' : (dbm >= -85 ? '#c8a830' : '#a87828');
-        const lc = over ? '#b06060' : '#a09030';
-        tg.appendChild(svgTick(SM_CX, SM_CY, SM_R, SM_R - 13, deg, tc, '2'));
-        lg.appendChild(svgLabel(SM_CX, SM_CY, SM_R + 17, deg, lbl, lc, '9'));
+    function appendMeterScale(groupId, title, radius, marks, mode, color) {
+      const group = $(groupId);
+      appendMeterArc(group, radius, MULTI_START, MULTI_END, color, 3);
+      marks.forEach(([value, label, markColor]) => {
+        const deg = instrumentMeterDegrees(mode, value);
+        const tickColor = markColor || color;
+        group.appendChild(svgTick(MULTI_CX, MULTI_CY, radius, radius - 10, deg, tickColor, '2'));
+        group.appendChild(svgLabel(MULTI_CX, MULTI_CY, radius + 20, deg, label, tickColor, '22'));
       });
+      const titleLabel = document.createElementNS(NS, 'text');
+      titleLabel.setAttribute('x', '22');
+      titleLabel.setAttribute('y', `${MULTI_CY - radius * 0.5 + 3}`);
+      titleLabel.setAttribute('font-family', 'IBM Plex Mono, monospace');
+      titleLabel.setAttribute('font-size', '23');
+      titleLabel.setAttribute('font-weight', '700');
+      titleLabel.setAttribute('fill', color);
+      titleLabel.textContent = title;
+      group.appendChild(titleLabel);
+    }
 
-      // Minor ticks every 2 dBm
-      for (let d = -121; d <= -13; d += 2) {
-        if (majorSet.has(d)) continue;
-        const deg = dbmToSmDeg(d);
-        const over = d > -73;
-        tg.appendChild(svgTick(SM_CX, SM_CY, SM_R, SM_R - 6, deg, over ? '#702020' : '#6a5018', '1'));
+    function initMultimeter() {
+      const s9Deg = instrumentMeterDegrees('signal', -73);
+      appendMeterScale('multimeter-scale-signal', 'S', 244, [
+        [-121, '1'], [-109, '3'], [-97, '5'], [-85, '7'], [-73, '9'],
+        [-53, '+20', '#ff665c'], [-33, '+40', '#ff665c'], [-13, '+60', '#ff665c']
+      ], 'signal', '#d7e0e4');
+      appendMeterArc($('multimeter-scale-signal'), 244, s9Deg, MULTI_END, '#e13a34', 4);
+
+      appendMeterScale('multimeter-scale-power', 'PWR', 202, [
+        [0, '0'], [5, '5'], [10, '10'], [25, '25'], [50, '50'], [100, '100'], [120, '120W', '#ff796c']
+      ], 'power-peak', '#62d0ff');
+
+      appendMeterScale('multimeter-scale-swr', 'SWR', 160, [
+        [1, '1'], [1.2, '1.2'], [1.5, '1.5'], [2, '2', '#f0bf48'], [3, '3', '#ff796c'], [5, '5+', '#ff5148']
+      ], 'swr', '#5de8b5');
+      appendMeterArc($('multimeter-scale-swr'), 160, instrumentMeterDegrees('swr', 2), instrumentMeterDegrees('swr', 3), '#dca536', 4);
+      appendMeterArc($('multimeter-scale-swr'), 160, instrumentMeterDegrees('swr', 3), MULTI_END, '#d9463f', 4);
+
+      appendMeterScale('multimeter-scale-process', 'ALC / COMP', 119, [
+        [0, '0'], [5, '5'], [10, '10'], [20, '20'], [30, '30dB', '#ff796c']
+      ], 'compression', '#f0b72e');
+
+      appendMeterScale('multimeter-scale-mic', 'MIC', 80, [
+        [-60, '-60'], [-40, '-40'], [-20, '-20'], [-10, '-10'], [0, '0dB', '#ff796c']
+      ], 'mic', '#5ad6d6');
+
+      $('instrument-meter-mode').value = instrumentMeterMode;
+      updateInstrumentMultimeter();
+    }
+
+    function selectedInstrumentMeterValue() {
+      switch (instrumentMeterMode) {
+        case 'power': return state.txMeterMode === 'avg' ? state.txPowerAvg : state.txPowerPeak;
+        case 'reflected': return state.txReflectedPower;
+        case 'swr': return state.swrVisual;
+        case 'alc': return state.txAlcPeakDb;
+        case 'compression': return state.txCompPeakDb;
+        case 'mic': return state.txMicPeakDb;
+        case 'signal':
+        default: return state.txMeterMode === 'avg' ? state.meterDbmVisual : state.meterDbmPeak;
       }
     }
 
-    function updateSmeter(dbm, peakDbm = null) {
-      const svgDeg = dbm == null ? SM_START : Math.max(SM_START, Math.min(SM_END, dbmToSmDeg(dbm)));
-      $('smeter-needle').style.transform = `rotate(${(svgDeg - 270).toFixed(1)}deg)`;
+    function selectedInstrumentScale() {
+      if (instrumentMeterMode === 'power' || instrumentMeterMode === 'reflected') return 'power';
+      if (instrumentMeterMode === 'alc' || instrumentMeterMode === 'compression') return 'process';
+      return instrumentMeterMode;
+    }
+
+    function formatInstrumentDigital(value) {
+      if (value == null || !Number.isFinite(value)) return ['--', 'No live measurement'];
+      switch (instrumentMeterMode) {
+        case 'signal': {
+          const isAvg = state.txMeterMode === 'avg';
+          let secondary = `${value.toFixed(1)} dBm · ${isAvg ? 'avg' : 'peak hold'}`;
+          // AVG response draws a peak-marker chevron on the dial (see
+          // updateInstrumentMultimeter) in addition to the averaged needle;
+          // surface that same peak reading numerically so the digital
+          // readout doesn't silently stay below S9 while the marker on the
+          // face has clearly swept past it.
+          if (isAvg && state.meterDbmPeak != null) {
+            const peakOverS9 = Math.round(state.meterDbmPeak + 73);
+            if (peakOverS9 > 0) {
+              secondary = `${value.toFixed(1)} dBm avg · pk S9+${peakOverS9}`;
+            }
+          }
+          return [formatSignalStrength(value), secondary];
+        }
+        case 'power': return [`${value.toFixed(1)} W`, `Forward power · ${state.txMeterMode === 'avg' ? 'average' : 'peak hold'}`];
+        case 'reflected': return [`${value.toFixed(1)} W`, 'Reflected power'];
+        case 'swr': return [`${value.toFixed(2)} : 1`, 'Standing wave ratio'];
+        case 'alc': return [`${value.toFixed(1)} dB`, 'ALC peak'];
+        case 'compression': return [`${value.toFixed(1)} dB`, 'Compression peak'];
+        case 'mic': return [`${value.toFixed(1)} dBFS`, 'Microphone peak'];
+        default: return ['--', 'No live measurement'];
+      }
+    }
+
+    function updateInstrumentMultimeter() {
+      const value = selectedInstrumentMeterValue();
+      const deg = value == null ? MULTI_START : instrumentMeterDegrees(instrumentMeterMode, value);
+      $('smeter-needle').style.transform = `rotate(${(deg - 270).toFixed(1)}deg)`;
+
       const peak = $('smeter-peak');
-      const peakDeg = peakDbm == null ? svgDeg : Math.max(SM_START, Math.min(SM_END, dbmToSmDeg(peakDbm)));
-      peak.style.transform = `rotate(${(peakDeg - 270).toFixed(1)}deg)`;
-      peak.setAttribute('opacity', peakDbm == null ? '0' : '0.8');
+      if (instrumentMeterMode === 'signal' && state.txMeterMode === 'avg' && state.meterDbmPeak != null) {
+        const peakDeg = instrumentMeterDegrees('signal', state.meterDbmPeak);
+        peak.style.transform = `rotate(${(peakDeg - 270).toFixed(1)}deg)`;
+        peak.setAttribute('opacity', '0.85');
+      } else {
+        peak.setAttribute('opacity', '0');
+      }
+
+      const activeScale = selectedInstrumentScale();
+      document.querySelectorAll('.multimeter-scale').forEach((scale) => {
+        scale.dataset.active = `${scale.dataset.meterScale === activeScale}`;
+      });
+      const [primary, secondary] = formatInstrumentDigital(value);
+      $('meter-s-readout').textContent = primary;
+      $('meter-readout').textContent = secondary;
+
+      const responseSupported = instrumentMeterMode === 'signal' || instrumentMeterMode === 'power';
+      const responseMode = responseSupported ? normalizeTxMeterMode(state.txMeterMode) : 'peak';
+      const averageButton = $('instrument-meter-average-btn');
+      const peakButton = $('instrument-meter-peak-btn');
+      averageButton.disabled = !responseSupported;
+      peakButton.disabled = !responseSupported;
+      averageButton.classList.toggle('active', responseMode === 'avg');
+      peakButton.classList.toggle('active', responseMode === 'peak');
+      averageButton.setAttribute('aria-pressed', responseMode === 'avg' ? 'true' : 'false');
+      peakButton.setAttribute('aria-pressed', responseMode === 'peak' ? 'true' : 'false');
     }
 
     // Aux meter geometry and functions (auxDeg, txPowerToAuxDeg, swrToAuxDeg)
@@ -19085,7 +19394,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       $('swr-needle-poly').setAttribute('fill', c);
     }
 
-    function initAnalogMeters() { initSmeter(); initTxPwrMeter(); initSwrMeter(); }
+    function initAnalogMeters() { initMultimeter(); }
 
     // ─────────────────────────────────────────────────────────────────────────
 

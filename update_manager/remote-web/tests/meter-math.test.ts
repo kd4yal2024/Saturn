@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest';
 import {
   lerp, moveToward, smoothToward, svgArcPath, dbmToSmDeg, formatSignalStrength, linearLevelToDbfs,
   instrumentOperatingState, auxDeg, txPowerToAuxDeg, swrToAuxDeg,
-  SM_START, SM_END, AX_START, AX_END,
+  normalizeInstrumentMeterMode, instrumentMeterFraction, instrumentMeterDegrees,
+  SM_START, SM_END, AX_START, AX_END, MULTI_START, MULTI_END,
 } from '../src/ui/meter-math';
 
 describe('lerp', () => {
@@ -79,7 +80,10 @@ describe('formatSignalStrength', () => {
   });
 
   it('formats readings above S9 as decibels over S9', () => {
+    expect(formatSignalStrength(-73)).toBe('S9');
+    expect(formatSignalStrength(-68)).toBe('S9 +5');
     expect(formatSignalStrength(-63)).toBe('S9 +10');
+    expect(formatSignalStrength(-58)).toBe('S9 +15');
     expect(formatSignalStrength(-13)).toBe('S9 +60');
   });
 });
@@ -139,5 +143,31 @@ describe('swrToAuxDeg', () => {
   it('increases with SWR', () => {
     expect(swrToAuxDeg(2)).toBeGreaterThan(swrToAuxDeg(1));
     expect(swrToAuxDeg(3)).toBeGreaterThan(swrToAuxDeg(2));
+  });
+});
+
+describe('selectable instrument multimeter', () => {
+  it('normalizes supported modes and folds legacy power-peak/power-avg into power', () => {
+    expect(normalizeInstrumentMeterMode('power-peak')).toBe('power');
+    expect(normalizeInstrumentMeterMode('power-avg')).toBe('power');
+    expect(normalizeInstrumentMeterMode('COMPRESSION')).toBe('compression');
+    expect(normalizeInstrumentMeterMode('unknown')).toBe('signal');
+  });
+
+  it('maps every scale onto the common needle sweep', () => {
+    expect(instrumentMeterDegrees('signal', -121)).toBe(MULTI_START);
+    expect(instrumentMeterDegrees('signal', -13)).toBe(MULTI_END);
+    expect(instrumentMeterDegrees('power', 120)).toBe(MULTI_END);
+    expect(instrumentMeterDegrees('swr', 5)).toBe(MULTI_END);
+    expect(instrumentMeterDegrees('alc', -30)).toBe(MULTI_END);
+    expect(instrumentMeterDegrees('compression', 30)).toBe(MULTI_END);
+    expect(instrumentMeterDegrees('mic', 0)).toBe(MULTI_END);
+  });
+
+  it('clamps missing and out-of-range readings', () => {
+    expect(instrumentMeterFraction('signal', Number.NaN)).toBeGreaterThanOrEqual(0);
+    expect(instrumentMeterFraction('power', -10)).toBe(0);
+    expect(instrumentMeterFraction('swr', 99)).toBe(1);
+    expect(instrumentMeterFraction('mic', -100)).toBe(0);
   });
 });

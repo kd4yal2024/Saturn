@@ -145,10 +145,71 @@ export function swrToAuxDeg(swr: number): number {
   return lerp(AX_START + AX_SPAN * 0.75, AX_END, (value - 3) / 2);
 }
 
+// ── Selectable multimeter ───────────────────────────────────────────────────
+
+export const INSTRUMENT_METER_MODES = [
+  'signal',
+  'power',
+  'reflected',
+  'swr',
+  'alc',
+  'compression',
+  'mic',
+] as const;
+
+export type InstrumentMeterMode = typeof INSTRUMENT_METER_MODES[number];
+
+export const MULTI_START = 210;
+export const MULTI_END = 330;
+
+export function normalizeInstrumentMeterMode(value: unknown): InstrumentMeterMode {
+  const normalized = String(value || '').trim().toLowerCase();
+  // Migrate the original function list, where average and peak power were
+  // separate meter functions. They are now one function with a response
+  // selector beside the meter face.
+  if (normalized === 'power-peak' || normalized === 'power-avg') return 'power';
+  return (INSTRUMENT_METER_MODES as readonly string[]).includes(normalized)
+    ? normalized as InstrumentMeterMode
+    : 'signal';
+}
+
+/** Convert a selected live measurement to the common 0..1 multimeter sweep. */
+export function instrumentMeterFraction(mode: InstrumentMeterMode, value: number): number {
+  const finite = Number.isFinite(value) ? value : 0;
+  let fraction = 0;
+  switch (mode) {
+    case 'signal':
+      fraction = (finite + 121) / 108;
+      break;
+    case 'power':
+    case 'reflected':
+      fraction = (txPowerToAuxDeg(finite) - AX_START) / AX_SPAN;
+      break;
+    case 'swr':
+      fraction = (swrToAuxDeg(finite) - AX_START) / AX_SPAN;
+      break;
+    case 'alc':
+      fraction = Math.abs(finite) / 30;
+      break;
+    case 'compression':
+      fraction = finite / 30;
+      break;
+    case 'mic':
+      fraction = (finite + 60) / 60;
+      break;
+  }
+  return Math.max(0, Math.min(1, fraction));
+}
+
+/** Convert a selected live measurement to the shared analog needle angle. */
+export function instrumentMeterDegrees(mode: InstrumentMeterMode, value: number): number {
+  return lerp(MULTI_START, MULTI_END, instrumentMeterFraction(mode, value));
+}
+
 // ── Meter dynamics constants ────────────────────────────────────────────────
 
-export const SMETER_ATTACK_MS = 65;
-export const SMETER_RELEASE_MS = 360;
+export const SMETER_ATTACK_MS = 320;
+export const SMETER_RELEASE_MS = 620;
 export const SMETER_PEAK_HOLD_MS = 900;
 export const SMETER_PEAK_DROP_PER_SEC = 18;
 

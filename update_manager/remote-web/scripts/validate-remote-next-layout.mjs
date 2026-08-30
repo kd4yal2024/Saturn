@@ -237,6 +237,20 @@ function validationScript(scenario) {
         : (separatorVisible ? [] : ["separator hidden outside phone mode"])
     };
   }
+  function meterReadoutFailures() {
+    const row = document.querySelector(".meter-dBm-row");
+    const readout = document.getElementById("meter-s-readout");
+    const rowRect = row ? rectFor(row) : null;
+    const readoutRect = readout ? rectFor(readout) : null;
+    return {
+      meterReadoutMissing: [row ? "" : "meter-dBm-row", readout ? "" : "meter-s-readout"].filter(Boolean),
+      meterReadoutOverflow: readout && rowRect && readoutRect && (
+        readout.scrollWidth > readout.clientWidth + 1 ||
+        readoutRect.left < rowRect.left - 1 ||
+        readoutRect.right > rowRect.right + 1
+      ) ? [{ text: readout.textContent, row: rowRect, readout: readoutRect, clientWidth: readout.clientWidth, scrollWidth: readout.scrollWidth }] : []
+    };
+  }
   function runValidation() {
     const page = document.querySelector(".page.console-page");
     const strip = document.querySelector(".operator-state-strip");
@@ -280,6 +294,7 @@ function validationScript(scenario) {
         ? [{ pageBottom: pageRect.bottom, viewportHeight: window.innerHeight }]
         : [],
       ...displayWorkspaceFailures(),
+      ...meterReadoutFailures(),
       ...drawerFailures(),
       ...setupFailures(),
       ...operationsAudioFailures()
@@ -366,6 +381,10 @@ function makeScenarioHtml(template, scenario) {
     }
     if (valueNode) valueNode.textContent = value;
   }
+  const meterSReadout = document.getElementById("meter-s-readout");
+  const meterDbmReadout = document.getElementById("meter-readout");
+  if (meterSReadout) meterSReadout.textContent = "S10 +60";
+  if (meterDbmReadout) meterDbmReadout.textContent = "-13.0 dBm";
   const consoleLayout = document.querySelector(".console-layout");
   const rightRail = document.querySelector(".right-rail");
   const audioStrip = document.querySelector('[data-phone-panel="audio"]');
