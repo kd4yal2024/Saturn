@@ -4,7 +4,10 @@
 //! validates its hardware rate headers and packed 24-bit I/Q framing.  It does
 //! not expose an operational client backend and contains no TX DMA path.
 
-use crate::xdma::{ensure_p2app_inactive, SaturnIdentity, XdmaError, XdmaRegisterDevice};
+use crate::xdma::{
+    alex_receive_state_word, alex_rx_filter_word, ensure_p2app_inactive, SaturnIdentity, XdmaError,
+    XdmaRegisterDevice, ALEX_RX_FILTER_REGISTER, ALEX_TX_FILTER_RX_ANTENNA_REGISTER,
+};
 use crate::xdma_telemetry::{record_probe_outcome, TelemetryValue};
 use std::alloc::{alloc_zeroed, dealloc, Layout};
 use std::env;
@@ -474,11 +477,17 @@ pub(crate) struct OperationalRxSession {
     aligned: AlignedBuffer,
     identity: SaturnIdentity,
     frequency_hz: u32,
+    rx_antenna: u8,
+    rx_attenuation_db: u8,
     stopped: bool,
 }
 
 impl OperationalRxSession {
-    pub(crate) fn open(frequency_hz: u32) -> Result<Self, XdmaError> {
+    pub(crate) fn open(
+        frequency_hz: u32,
+        rx_antenna: u8,
+        rx_attenuation_db: u8,
+    ) -> Result<Self, XdmaError> {
         ensure_p2app_inactive()?;
         validate_frequency(frequency_hz)?;
         let register_path = env::var_os("SATURN_BRIDGE_XDMA_USER_DEVICE")
@@ -505,6 +514,8 @@ impl OperationalRxSession {
             aligned,
             identity,
             frequency_hz,
+            rx_antenna: rx_antenna.clamp(1, 3),
+            rx_attenuation_db: rx_attenuation_db.min(31),
             stopped: false,
         };
         if let Err(error) = session.configure(frequency_hz) {
@@ -533,6 +544,12 @@ impl OperationalRxSession {
     pub(crate) fn tune(&mut self, frequency_hz: u32) -> Result<(), XdmaError> {
         validate_frequency(frequency_hz)?;
         self.registers.write_register(
+            ALEX_TX_FILTER_RX_ANTENNA_REGISTER,
+            alex_receive_state_word(frequency_hz, self.rx_antenna),
+        )?;
+        self.registers
+            .write_register(ALEX_RX_FILTER_REGISTER, alex_rx_filter_word(frequency_hz))?;
+        self.registers.write_register(
             DDC6_FREQUENCY_REGISTER,
             frequency_to_phase_word(frequency_hz),
         )?;
@@ -540,12 +557,24 @@ impl OperationalRxSession {
         Ok(())
     }
 
+    pub(crate) fn set_rx_antenna(&mut self, antenna: u8) -> Result<(), XdmaError> {
+        let antenna = antenna.clamp(1, 3);
+        self.registers.write_register(
+            ALEX_TX_FILTER_RX_ANTENNA_REGISTER,
+            alex_receive_state_word(self.frequency_hz, antenna),
+        )?;
+        self.rx_antenna = antenna;
+        Ok(())
+    }
+
     pub(crate) fn set_rx_attenuation(&mut self, attenuation_db: u8) -> Result<(), XdmaError> {
+        let attenuation_db = attenuation_db.min(31);
         self.registers.update_register(
             ADC_ATTENUATION_REGISTER,
             |value| adc1_rx_attenuation_word(value, attenuation_db),
             "could not set ADC1 receive attenuation",
         )?;
+        self.rx_attenuation_db = attenuation_db;
         Ok(())
     }
 
@@ -646,6 +675,12 @@ impl OperationalRxSession {
         self.registers
             .write_register(DDC_RATE_REGISTER, direct_ddc_rate_word())?;
         self.tune(frequency_hz)?;
+        // piHPSDR writes the ADC step attenuator on every Protocol 2
+        // high-priority update. Direct XDMA must likewise establish the
+        // model's receive attenuation while claiming hardware ownership;
+        // otherwise a value left by P2 can survive while the model reports
+        // ATT Off and the S-meter compensation assumes zero attenuation.
+        self.set_rx_attenuation(self.rx_attenuation_db)?;
         self.registers.update_register(
             DDC_INPUT_SELECT_REGISTER,
             |value| (value & !DDC6_ADC_MASK) | DDC_STREAM_ENABLE_BIT,

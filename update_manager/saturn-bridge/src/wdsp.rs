@@ -2,7 +2,9 @@ use std::collections::VecDeque;
 use std::error::Error;
 #[cfg(wdsp_has_rnnr_sbnr)]
 use std::ffi::c_char;
+use std::ffi::c_void;
 use std::fmt;
+use std::ptr::NonNull;
 #[cfg(wdsp_has_rnnr_sbnr)]
 use std::sync::Once;
 use std::time::{Duration, Instant};
@@ -111,6 +113,29 @@ unsafe extern "C" {
     fn SetInputBuffsize(channel: i32, in_size: i32);
     fn SetInputSamplerate(channel: i32, samplerate: i32);
     fn SetDSPSamplerate(channel: i32, samplerate: i32);
+    // Variable-ratio rate matcher (Guide §8.5, pinned rmatch.c/h) — Phase 0D
+    // item 1. Signatures verified against rmatch.h:117-141.
+    fn create_rmatchV(
+        in_size: i32,
+        out_size: i32,
+        nom_inrate: i32,
+        nom_outrate: i32,
+        ringsize: i32,
+        var: f64,
+    ) -> *mut c_void;
+    fn destroy_rmatchV(ptr: *mut c_void);
+    fn xrmatchIN(ptr: *mut c_void, input: *const f64);
+    fn xrmatchOUT(ptr: *mut c_void, output: *mut f64);
+    fn getRMatchDiags(
+        ptr: *mut c_void,
+        underflows: *mut i32,
+        overflows: *mut i32,
+        var: *mut f64,
+        ringsize: *mut i32,
+        nring: *mut i32,
+    );
+    fn resetRMatchDiags(ptr: *mut c_void);
+    fn setRMatchRingsize(ptr: *mut c_void, ringsize: i32);
     fn SetChannelTDelayUp(channel: i32, time: f64);
     fn SetChannelTSlewUp(channel: i32, time: f64);
     fn SetChannelTDelayDown(channel: i32, time: f64);
@@ -417,6 +442,137 @@ fn feed_slew_flush_blocks(
         }
     }
     false
+}
+
+/// Complex samples per `xrmatchIN` call: browser frames of any length are
+/// staged and fed in fixed chunks (adds at most 64/48000 ≈ 1.3 ms latency).
+const MIC_RMATCH_IN_CHUNK: usize = 64;
+
+/// Snapshot of the rate matcher's servo state (Phase 0D spec, §89.3 item 4).
+#[derive(Clone, Copy, Debug, Default)]
+pub struct MicRmatchDiags {
+    pub underflows: i32,
+    pub overflows: i32,
+    pub var_ratio: f64,
+    pub ringsize: i32,
+    pub nring: i32,
+}
+
+/// Variable-ratio rate matcher between the browser-clocked mic stream and the
+/// Pi-clocked WDSP TX block cadence (Phase 0D item 1,
+/// docs/PHASE0D_CLOCK_DOMAIN.md). Mono samples are carried as complex `[s, 0]`;
+/// the ring initializes and servos at half-full, so added latency is
+/// ringsize/2 complex samples. `xrmatchOUT` always yields a full block —
+/// underflow slews to silence and recovery up-slews, replacing the legacy
+/// hold-last/zero fill. Owned by the TX thread; not Send.
+pub struct MicRateMatcher {
+    ptr: NonNull<c_void>,
+    ringsize: i32,
+    stage: Vec<f64>,
+    out_buf: Vec<f64>,
+    last_underflows: i32,
+}
+
+impl MicRateMatcher {
+    /// `latency_samples` (the operator's mic-prefill setting) becomes the
+    /// servo setpoint: ringsize = 2 × latency.
+    pub fn new(latency_samples: usize) -> Self {
+        let ringsize = mic_rmatch_ring_size(latency_samples);
+        let ptr = NonNull::new(unsafe {
+            create_rmatchV(
+                MIC_RMATCH_IN_CHUNK as i32,
+                TX_MIC_SAMPLES_PER_DSP_BLOCK as i32,
+                WDSP_AUDIO_RATE_HZ as i32,
+                WDSP_AUDIO_RATE_HZ as i32,
+                ringsize,
+                1.0,
+            )
+        })
+        .expect("WDSP create_rmatchV returned null");
+        Self {
+            ptr,
+            ringsize,
+            stage: Vec::with_capacity(MIC_RMATCH_IN_CHUNK * 4),
+            out_buf: vec![0.0; TX_MIC_SAMPLES_PER_DSP_BLOCK * 2],
+            last_underflows: 0,
+        }
+    }
+
+    /// Feed arriving mono mic samples (browser clock domain).
+    pub fn feed(&mut self, mono: &[f32]) {
+        self.stage
+            .extend(mono.iter().flat_map(|&sample| [f64::from(sample), 0.0]));
+        let chunk_floats = MIC_RMATCH_IN_CHUNK * 2;
+        let mut offset = 0;
+        while self.stage.len() - offset >= chunk_floats {
+            unsafe {
+                xrmatchIN(self.ptr.as_ptr(), self.stage[offset..].as_ptr());
+            }
+            offset += chunk_floats;
+        }
+        self.stage.drain(..offset);
+    }
+
+    /// Pull one 512-sample mono block (Pi clock domain). Returns true when the
+    /// servo ring underflowed while producing it (output is slewed silence).
+    pub fn take_block(&mut self, block: &mut Vec<f32>) -> bool {
+        unsafe {
+            xrmatchOUT(self.ptr.as_ptr(), self.out_buf.as_mut_ptr());
+        }
+        block.clear();
+        block.extend(
+            self.out_buf
+                .chunks_exact(2)
+                .map(|complex| complex[0] as f32),
+        );
+        let diags = self.diags();
+        let underflowed = diags.underflows != self.last_underflows;
+        self.last_underflows = diags.underflows;
+        underflowed
+    }
+
+    /// Full reset for a new transmission: setRMatchRingsize with the same size
+    /// stops the matcher, rebuilds all internal state (ring re-primed
+    /// half-full with silence), and restarts (~10 ms) — there is no separate
+    /// flush API in WDSP 2.00.
+    pub fn reset(&mut self) {
+        unsafe {
+            setRMatchRingsize(self.ptr.as_ptr(), self.ringsize);
+            resetRMatchDiags(self.ptr.as_ptr());
+        }
+        self.stage.clear();
+        self.last_underflows = 0;
+    }
+
+    pub fn diags(&self) -> MicRmatchDiags {
+        let mut diags = MicRmatchDiags::default();
+        unsafe {
+            getRMatchDiags(
+                self.ptr.as_ptr(),
+                &mut diags.underflows,
+                &mut diags.overflows,
+                &mut diags.var_ratio,
+                &mut diags.ringsize,
+                &mut diags.nring,
+            );
+        }
+        diags
+    }
+}
+
+impl Drop for MicRateMatcher {
+    fn drop(&mut self) {
+        unsafe {
+            destroy_rmatchV(self.ptr.as_ptr());
+        }
+    }
+}
+
+fn mic_rmatch_ring_size(latency_samples: usize) -> i32 {
+    latency_samples
+        .max(TX_MIC_SAMPLES_PER_DSP_BLOCK)
+        .saturating_mul(2)
+        .min(i32::MAX as usize) as i32
 }
 
 pub struct WdspRxEngine {
@@ -2206,11 +2362,11 @@ fn nr4_post_threshold_for_level(level_percent: f64) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::{
-        channel_slew_timing, normalize_audio_frame_float_count, nr2_factor_for_level,
-        nr2_nlevel_for_level, nr2_rate_for_level, nr2_taper_for_level,
+        channel_slew_timing, mic_rmatch_ring_size, normalize_audio_frame_float_count,
+        nr2_factor_for_level, nr2_nlevel_for_level, nr2_rate_for_level, nr2_taper_for_level,
         nr4_post_threshold_for_level, nr4_reduction_amount_for_level, panel_gain_for_volume_db,
         rx_dsp_rate_for_mode, speech_squelch_supported_for_mode, tx_voice_processing_supported,
-        wbfm_supported, wdsp_mode, WdspTxEngine, WDSP_AUDIO_RATE_HZ,
+        wbfm_supported, wdsp_mode, MicRateMatcher, WdspTxEngine, WDSP_AUDIO_RATE_HZ,
     };
     use crate::radio_model::{DemodMode, PureSignalState, RadioModel};
 
@@ -2220,6 +2376,35 @@ mod tests {
         assert!((nr2_factor_for_level(50.0) - 15.0).abs() < 1.0e-12);
         assert!((nr2_rate_for_level(50.0) - 5.0).abs() < 1.0e-12);
         assert_eq!(nr2_taper_for_level(50.0), 12);
+    }
+
+    #[test]
+    fn mic_rmatch_ring_uses_prefill_as_half_full_setpoint() {
+        assert_eq!(mic_rmatch_ring_size(2_048), 4_096);
+        assert_eq!(mic_rmatch_ring_size(960), 1_920);
+        assert_eq!(mic_rmatch_ring_size(1), 1_024);
+    }
+
+    #[test]
+    fn mic_rmatch_native_lifecycle_preserves_a_bounded_ring() {
+        let mut matcher = MicRateMatcher::new(2_048);
+        matcher.feed(&vec![0.25; 2_048]);
+        let mut block = Vec::new();
+        for _ in 0..4 {
+            assert!(!matcher.take_block(&mut block));
+            assert_eq!(block.len(), 512);
+        }
+        let running = matcher.diags();
+        assert_eq!(running.underflows, 0);
+        assert_eq!(running.overflows, 0);
+        assert_eq!(running.ringsize, 4_096);
+        assert!(running.nring > 0 && running.nring < running.ringsize);
+
+        matcher.reset();
+        let reset = matcher.diags();
+        assert_eq!(reset.underflows, 0);
+        assert_eq!(reset.overflows, 0);
+        assert_eq!(reset.nring, reset.ringsize / 2);
     }
 
     #[test]

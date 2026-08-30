@@ -8,7 +8,11 @@
 
 use crate::radio_model::RadioModel;
 use crate::tx_thread::{TxRadio, TxRadioResult};
-use crate::xdma::{ensure_p2app_inactive, XdmaError, XdmaRegisterDevice};
+use crate::xdma::{
+    alex_receive_state_word, alex_tx_filter_bits, ensure_p2app_inactive, XdmaError,
+    XdmaRegisterDevice, ALEX_ANT1_BIT, ALEX_TX_FILTER_RX_ANTENNA_REGISTER,
+    ALEX_TX_FILTER_TX_ANTENNA_REGISTER,
+};
 use crate::xdma_rx::AlignedBuffer;
 use std::env;
 use std::fs::{File, OpenOptions};
@@ -31,8 +35,6 @@ const DUC_FIFO_MONITOR_REGISTER: u64 = 0x9004;
 const DUC_FIFO_MONITOR_CONFIG_REGISTER: u64 = 0x9014;
 const ALEX_FORWARD_POWER_REGISTER: u64 = 0xa000;
 const ALEX_REVERSE_POWER_REGISTER: u64 = 0xa004;
-const ALEX_TX_FILTER_REGISTER: u64 = 0xb000;
-const ALEX_TX_ANTENNA_REGISTER: u64 = 0xb008;
 
 const DUC_FIFO_RESET_BIT: u32 = 1 << 3;
 const MOX_BIT: u32 = 1 << 24;
@@ -49,7 +51,6 @@ const TX_IQ_DEINTERLEAVE_BIT: u32 = 1 << 30;
 const DUC_STREAM_ENABLE_BIT: u32 = 1 << 31;
 const PCB2_FW13_TX_AMPLITUDE: u32 = 0x2000;
 
-const ALEX_ANT1_BIT: u16 = 0x0100;
 const ALEX_TX_RELAY_BIT: u16 = 0x0800;
 const DUC_FRAME_IQ_FLOATS: usize = 480;
 const DUC_FRAME_BYTES: usize = 1_440;
@@ -259,10 +260,14 @@ impl DirectTxState {
             frequency_to_phase_word(model.desired.tx_frequency_hz),
         )?;
         let filter = alex_tx_filter_bits(model.desired.tx_frequency_hz);
-        self.registers
-            .write_register(ALEX_TX_FILTER_REGISTER, u32::from(filter))?;
-        self.registers
-            .write_register(ALEX_TX_ANTENNA_REGISTER, u32::from(filter | ALEX_ANT1_BIT))?;
+        self.registers.write_register(
+            ALEX_TX_FILTER_RX_ANTENNA_REGISTER,
+            alex_receive_state_word(model.desired.tx_frequency_hz, model.desired.rx_antenna),
+        )?;
+        self.registers.write_register(
+            ALEX_TX_FILTER_TX_ANTENNA_REGISTER,
+            u32::from(filter | ALEX_ANT1_BIT),
+        )?;
         self.registers.update_register(
             RF_GPIO_REGISTER,
             |value| {
@@ -341,7 +346,7 @@ impl DirectTxState {
         )?;
         let filter = alex_tx_filter_bits(model.desired.tx_frequency_hz);
         self.registers.write_register(
-            ALEX_TX_ANTENNA_REGISTER,
+            ALEX_TX_FILTER_TX_ANTENNA_REGISTER,
             u32::from(filter | ALEX_ANT1_BIT | ALEX_TX_RELAY_BIT),
         )?;
         self.registers.update_register(
@@ -437,13 +442,14 @@ impl DirectTxState {
     }
 
     fn apply_frequency_and_filter(&self, model: &RadioModel) -> Result<(), XdmaError> {
-        let filter = alex_tx_filter_bits(model.desired.tx_frequency_hz);
         self.registers.write_register(
             TX_DUC_REGISTER,
             frequency_to_phase_word(model.desired.tx_frequency_hz),
         )?;
-        self.registers
-            .write_register(ALEX_TX_FILTER_REGISTER, u32::from(filter))
+        self.registers.write_register(
+            ALEX_TX_FILTER_RX_ANTENNA_REGISTER,
+            alex_receive_state_word(model.desired.tx_frequency_hz, model.desired.rx_antenna),
+        )
     }
 
     fn write_repeated_frame(&mut self, iq: &[f32], frames: usize) -> Result<(), XdmaError> {
@@ -706,7 +712,9 @@ impl DirectTxState {
         let tx_duc = self.registers.read_register(TX_DUC_REGISTER)?;
         let expected_tx_duc = frequency_to_phase_word(model.desired.tx_frequency_hz);
         let filter = alex_tx_filter_bits(model.desired.tx_frequency_hz);
-        let alex = self.registers.read_register(ALEX_TX_ANTENNA_REGISTER)?;
+        let alex = self
+            .registers
+            .read_register(ALEX_TX_FILTER_TX_ANTENNA_REGISTER)?;
         if gpio & (MOX_BIT | TX_ENABLE_BIT) != MOX_BIT | TX_ENABLE_BIT
             || gpio & RF_DATA_NETWORK_ENDIAN_BIT == 0
             || gpio & TX_RELAY_DISABLE_BIT != 0
@@ -778,7 +786,7 @@ impl DirectTxState {
             "could not force production direct-XDMA RF receive state",
         );
         let alex = self.registers.update_register(
-            ALEX_TX_ANTENNA_REGISTER,
+            ALEX_TX_FILTER_TX_ANTENNA_REGISTER,
             |value| value & !u32::from(ALEX_TX_RELAY_BIT),
             "could not release production direct-XDMA TX relay",
         );
@@ -1065,18 +1073,6 @@ fn write_i24_be(target: &mut [u8], value: i32) {
 fn frequency_to_phase_word(frequency_hz: u32) -> u32 {
     let numerator = u128::from(frequency_hz.min(122_880_000)) * (1u128 << 32);
     ((numerator + 61_440_000) / 122_880_000) as u32
-}
-
-fn alex_tx_filter_bits(frequency_hz: u32) -> u16 {
-    match frequency_hz {
-        35_600_001..=u32::MAX => 0x2000,
-        24_000_001..=35_600_000 => 0x4000,
-        16_500_001..=24_000_000 => 0x8000,
-        8_000_001..=16_500_000 => 0x0010,
-        5_000_001..=8_000_000 => 0x0020,
-        2_500_001..=5_000_000 => 0x0040,
-        _ => 0x0080,
-    }
 }
 
 fn tx_drive_watts_to_byte(watts: u8) -> u8 {

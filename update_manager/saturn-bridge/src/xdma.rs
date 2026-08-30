@@ -22,6 +22,11 @@ const KEYER_CONFIG_REGISTER: u64 = 0x2000;
 const TX_CONFIG_REGISTER: u64 = 0x2008;
 const RF_GPIO_REGISTER: u64 = 0x2014;
 
+pub(crate) const ALEX_TX_FILTER_RX_ANTENNA_REGISTER: u64 = 0xb000;
+pub(crate) const ALEX_RX_FILTER_REGISTER: u64 = 0xb004;
+pub(crate) const ALEX_TX_FILTER_TX_ANTENNA_REGISTER: u64 = 0xb008;
+pub(crate) const ALEX_ANT1_BIT: u16 = 0x0100;
+
 const SATURN_PRODUCT_ID: u16 = 1;
 const GOLDEN_SOFTWARE_ID: u8 = 3;
 const PRIMARY_SOFTWARE_ID: u8 = 4;
@@ -39,6 +44,48 @@ const TX_AMPLITUDE_MASK: u32 = 0x3ffff << 4;
 const DUC_MUX_RESET_BIT: u32 = 1 << 29;
 const TX_IQ_DEINTERLEAVE_BIT: u32 = 1 << 30;
 const DUC_STREAM_ENABLE_BIT: u32 = 1 << 31;
+
+pub(crate) fn alex_tx_filter_bits(frequency_hz: u32) -> u16 {
+    match frequency_hz {
+        35_600_001..=u32::MAX => 0x2000,
+        24_000_001..=35_600_000 => 0x4000,
+        16_500_001..=24_000_000 => 0x8000,
+        8_000_001..=16_500_000 => 0x0010,
+        5_000_001..=8_000_000 => 0x0020,
+        2_500_001..=5_000_000 => 0x0040,
+        _ => 0x0080,
+    }
+}
+
+pub(crate) fn alex_rx_filter_bits(frequency_hz: u32) -> u16 {
+    match frequency_hz {
+        0..=1_499_999 => 0x1000,
+        1_500_000..=2_099_999 => 0x0040,
+        2_100_000..=5_499_999 => 0x0020,
+        5_500_000..=10_999_999 => 0x0010,
+        11_000_000..=21_999_999 => 0x0002,
+        22_000_000..=34_999_999 => 0x0004,
+        35_000_000..=u32::MAX => 0x0008,
+    }
+}
+
+pub(crate) fn alex_rx_filter_word(frequency_hz: u32) -> u32 {
+    // Direct XDMA owns ADC1 only. Match P2's idle ADC2 behavior by bypassing
+    // its filter while programming ADC1 for the active receive frequency.
+    (0x1000_u32 << 16) | u32::from(alex_rx_filter_bits(frequency_hz))
+}
+
+pub(crate) fn alex_rx_antenna_bits(antenna: u8) -> u16 {
+    match antenna.clamp(1, 3) {
+        2 => 0x0200,
+        3 => 0x0400,
+        _ => ALEX_ANT1_BIT,
+    }
+}
+
+pub(crate) fn alex_receive_state_word(frequency_hz: u32, antenna: u8) -> u32 {
+    u32::from(alex_tx_filter_bits(frequency_hz) | alex_rx_antenna_bits(antenna))
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SaturnIdentity {
@@ -394,6 +441,38 @@ mod tests {
     use super::*;
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn alex_filter_mappings_match_the_p2_saturn_contract() {
+        assert_eq!(alex_tx_filter_bits(7_200_000), 0x0020);
+        assert_eq!(alex_tx_filter_bits(14_200_000), 0x0010);
+        assert_eq!(alex_tx_filter_bits(3_900_000), 0x0040);
+
+        let boundaries = [
+            (1_499_999, 0x1000),
+            (1_500_000, 0x0040),
+            (2_099_999, 0x0040),
+            (2_100_000, 0x0020),
+            (5_499_999, 0x0020),
+            (5_500_000, 0x0010),
+            (10_999_999, 0x0010),
+            (11_000_000, 0x0002),
+            (21_999_999, 0x0002),
+            (22_000_000, 0x0004),
+            (34_999_999, 0x0004),
+            (35_000_000, 0x0008),
+        ];
+        for (frequency_hz, expected) in boundaries {
+            assert_eq!(alex_rx_filter_bits(frequency_hz), expected);
+        }
+        assert_eq!(alex_rx_filter_word(7_200_000), 0x1000_0010);
+        assert_eq!(alex_rx_antenna_bits(1), 0x0100);
+        assert_eq!(alex_rx_antenna_bits(2), 0x0200);
+        assert_eq!(alex_rx_antenna_bits(3), 0x0400);
+        assert_eq!(alex_receive_state_word(7_200_000, 1), 0x0120);
+        assert_eq!(alex_receive_state_word(7_200_000, 2), 0x0220);
+        assert_eq!(alex_receive_state_word(7_200_000, 3), 0x0420);
+    }
 
     struct Fixture {
         path: PathBuf,

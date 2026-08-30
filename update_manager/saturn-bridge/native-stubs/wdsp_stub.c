@@ -5,6 +5,8 @@
 // stub when SATURN_BRIDGE_STUB_NATIVE=1 to let Rust parser/control tests run.
 
 #include <stdint.h>
+#include <stdlib.h>
+#include <string.h>
 
 void OpenChannel(int32_t channel, int32_t in_size, int32_t dsp_size,
                  int32_t input_samplerate, int32_t dsp_rate,
@@ -37,6 +39,83 @@ STUB_VOID_I32_F64(SetChannelTDelayUp)
 STUB_VOID_I32_F64(SetChannelTSlewUp)
 STUB_VOID_I32_F64(SetChannelTDelayDown)
 STUB_VOID_I32_F64(SetChannelTSlewDown)
+
+typedef struct {
+  int32_t in_size;
+  int32_t out_size;
+  int32_t ring_size;
+  int32_t nring;
+  int32_t underflows;
+  int32_t overflows;
+  double var;
+} StubRmatch;
+
+void *create_rmatchV(int32_t in_size, int32_t out_size, int32_t nom_inrate,
+                     int32_t nom_outrate, int32_t ring_size, double var) {
+  (void)nom_inrate;
+  (void)nom_outrate;
+  StubRmatch *matcher = calloc(1, sizeof(*matcher));
+  if (!matcher) return NULL;
+  matcher->in_size = in_size;
+  matcher->out_size = out_size;
+  matcher->ring_size = ring_size;
+  matcher->nring = ring_size / 2;
+  matcher->var = var;
+  return matcher;
+}
+
+void destroy_rmatchV(void *ptr) { free(ptr); }
+
+void xrmatchIN(void *ptr, const double *input) {
+  StubRmatch *matcher = ptr;
+  (void)input;
+  if (!matcher) return;
+  matcher->nring += matcher->in_size;
+  if (matcher->nring > matcher->ring_size) {
+    matcher->nring = matcher->ring_size;
+    matcher->overflows += 1;
+  }
+}
+
+void xrmatchOUT(void *ptr, double *output) {
+  StubRmatch *matcher = ptr;
+  if (!matcher) return;
+  if (output) memset(output, 0, (size_t)matcher->out_size * 2 * sizeof(*output));
+  if (matcher->nring < matcher->out_size) {
+    matcher->underflows += 1;
+    matcher->nring = 0;
+  } else {
+    matcher->nring -= matcher->out_size;
+  }
+}
+
+void getRMatchDiags(void *ptr, int32_t *underflows, int32_t *overflows,
+                    double *var, int32_t *ring_size, int32_t *nring) {
+  StubRmatch *matcher = ptr;
+  if (!matcher) return;
+  if (underflows) *underflows = matcher->underflows;
+  if (overflows) *overflows = matcher->overflows;
+  if (var) *var = matcher->var;
+  if (ring_size) *ring_size = matcher->ring_size;
+  if (nring) *nring = matcher->nring;
+}
+
+void resetRMatchDiags(void *ptr) {
+  StubRmatch *matcher = ptr;
+  if (!matcher) return;
+  matcher->underflows = 0;
+  matcher->overflows = 0;
+}
+
+void setRMatchRingsize(void *ptr, int32_t ring_size) {
+  StubRmatch *matcher = ptr;
+  if (!matcher) return;
+  matcher->ring_size = ring_size;
+  matcher->nring = ring_size / 2;
+  matcher->underflows = 0;
+  matcher->overflows = 0;
+}
+
 STUB_VOID_I32_F64_F64(RXASetPassband)
 STUB_VOID_I32_I32(RXASetNC)
 STUB_VOID_I32_I32(RXASetMP)

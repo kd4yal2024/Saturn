@@ -171,6 +171,13 @@ falls back to normal runtime planning if import fails.
 | `SATURN_BRIDGE_DDC0_ADC` | `0` | ADC selection (0=ADC1, 1=ADC2) |
 | `SATURN_BRIDGE_DDC0_SAMPLE_RATE_KHZ` | `192` | IQ sample rate kHz |
 | `SATURN_BRIDGE_DDC0_SAMPLE_SIZE_BITS` | `24` | IQ sample bit depth |
+| `SATURN_BRIDGE_TX_MIC_RMATCH` | `false` | Experimental WDSP variable-ratio browser-mic rate matcher; set to `1` only for controlled A/B testing |
+| `SATURN_BRIDGE_TX_MIC_PREFILL_MS` | `42.7` | TX mic/rmatch nominal latency setpoint, clamped to 20–250 ms |
+
+Saturn Remote also defaults to adaptive RX playback clock matching. Append
+`?rx_audio_adaptive=0` to the page URL only when comparing against the legacy
+static-ratio browser path. See `update_manager/docs/PHASE0D_CLOCK_DOMAIN.md`
+for diagnostics and the hardware acceptance procedure.
 
 ## Remaining Work
 

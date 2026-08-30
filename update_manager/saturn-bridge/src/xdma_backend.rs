@@ -43,6 +43,7 @@ struct CommandEffects {
     dsp_dirty: bool,
     tuning_dirty: bool,
     tx_state_dirty: bool,
+    radio_state_dirty: bool,
 }
 
 #[derive(Debug, Default)]
@@ -56,6 +57,7 @@ impl CommandEffects {
         self.dsp_dirty |= other.dsp_dirty;
         self.tuning_dirty |= other.tuning_dirty;
         self.tx_state_dirty |= other.tx_state_dirty;
+        self.radio_state_dirty |= other.radio_state_dirty;
     }
 }
 
@@ -98,6 +100,15 @@ fn command_effects(command: &TciCommand) -> CommandEffects {
         tx_state_dirty: matches!(
             command,
             TciCommand::SetTxEnabled(_) | TciCommand::ClientDisconnected
+        ),
+        // Mic frames are media, not model mutations. Publishing the complete
+        // radio state for every 20 ms browser frame consumed several
+        // milliseconds in the direct-XDMA control loop and could starve DUC
+        // pacing. A mixed batch still publishes when any real control command
+        // is present.
+        radio_state_dirty: !matches!(
+            command,
+            TciCommand::MicAudioFrame(_) | TciCommand::SaturnPing { .. }
         ),
     }
 }
@@ -205,7 +216,15 @@ fn run_inner(config: BridgeConfig, ready_path: &Path) -> Result<(), Box<dyn Erro
         let model = radio_model.lock_unpoisoned();
         WdspRxEngine::new(&model)?
     };
-    let mut rx = OperationalRxSession::open(config.ddc0_frequency_hz)?;
+    let (rx_frequency_hz, rx_antenna, rx_attenuation_db) = {
+        let model = radio_model.lock_unpoisoned();
+        (
+            model.desired.iq_center_hz,
+            model.desired.rx_antenna,
+            model.desired.rx_attenuation_db,
+        )
+    };
+    let mut rx = OperationalRxSession::open(rx_frequency_hz, rx_antenna, rx_attenuation_db)?;
     let identity = rx.identity().clone();
     let mut iq_samples = Vec::with_capacity(8_192);
     rx.drain_startup_fifo(&mut iq_samples)?;
@@ -286,25 +305,34 @@ fn run_inner(config: BridgeConfig, ready_path: &Path) -> Result<(), Box<dyn Erro
                 )?);
             }
             if command_count != 0 {
-                let model = radio_model.lock_unpoisoned();
-                if command_effects.dsp_dirty {
-                    wdsp.sync_model(&model)?;
+                if command_effects.dsp_dirty
+                    || command_effects.tuning_dirty
+                    || command_effects.tx_state_dirty
+                    || command_effects.radio_state_dirty
+                {
+                    let model = radio_model.lock_unpoisoned();
+                    if command_effects.dsp_dirty {
+                        wdsp.sync_model(&model)?;
+                    }
+                    if command_effects.tuning_dirty {
+                        tci.publish_tuning_state(&model);
+                    }
+                    if command_effects.tx_state_dirty {
+                        tci.publish_tx_state(&model);
+                    }
+                    if command_effects.radio_state_dirty {
+                        tci.publish_radio_state(&model);
+                    }
                 }
-                if command_effects.tuning_dirty {
-                    tci.publish_tuning_state(&model);
-                }
-                if command_effects.tx_state_dirty {
-                    tci.publish_tx_state(&model);
-                }
-                tci.publish_radio_state(&model);
                 let command_elapsed = command_started.elapsed();
                 if command_elapsed >= Duration::from_millis(5) {
                     println!(
-                    "saturn-bridge: xdma_rx control batch commands={} dsp_sync={} tuning_publish={} tx_publish={} elapsed_us={}",
+                    "saturn-bridge: xdma_rx control batch commands={} dsp_sync={} tuning_publish={} tx_publish={} radio_publish={} elapsed_us={}",
                     command_count,
                     u8::from(command_effects.dsp_dirty),
                     u8::from(command_effects.tuning_dirty),
                     u8::from(command_effects.tx_state_dirty),
+                    u8::from(command_effects.radio_state_dirty),
                     command_elapsed.as_micros(),
                 );
                 }
@@ -491,6 +519,32 @@ fn handle_command(
     remote_tx_rf_enabled: bool,
 ) -> Result<CommandEffects, Box<dyn Error>> {
     let effects = command_effects(&command);
+    let command = match command {
+        TciCommand::MicAudioFrame(frame) => {
+            if tx_control.requested {
+                tx_control.last_mic_at = Some(frame.received_at);
+                let _ = tx_cmd_tx.send(TxCommand::MicAudio {
+                    samples: frame.samples,
+                    channels: frame.channels,
+                    sample_rate_hz: frame.sample_rate_hz,
+                });
+            }
+            return Ok(effects);
+        }
+        TciCommand::SaturnPing {
+            client_id,
+            nonce,
+            sent_at,
+        } => {
+            // The dedicated pong is sufficient for RTT and TX-watchdog
+            // freshness. A full state snapshot here turns the 200 ms keyed
+            // heartbeat into avoidable control-loop work; the independent
+            // one-second S-meter request retains periodic state convergence.
+            tci.publish_saturn_pong(client_id, &nonce, &sent_at);
+            return Ok(effects);
+        }
+        command => command,
+    };
     let mut model = radio_model.lock_unpoisoned();
     match command {
         TciCommand::SetVfoA(frequency_hz) => {
@@ -545,10 +599,9 @@ fn handle_command(
             model.desired.ddc0_adc = 0;
         }
         TciCommand::SetRxAntenna(antenna) => {
-            model.desired.rx_antenna = antenna.clamp(1, 3);
-            eprintln!(
-                "saturn-bridge: direct XDMA RX antenna selection is not yet wired; retaining hardware relay state"
-            );
+            let antenna = antenna.clamp(1, 3);
+            rx.set_rx_antenna(antenna)?;
+            model.desired.rx_antenna = antenna;
         }
         TciCommand::SetRxAttenuation(attenuation_db) => {
             let attenuation_db = attenuation_db.min(31);
@@ -608,11 +661,9 @@ fn handle_command(
             }
         }
         TciCommand::SetIqStreaming | TciCommand::RequestSmeter => {}
-        TciCommand::SaturnPing {
-            client_id,
-            nonce,
-            sent_at,
-        } => tci.publish_saturn_pong(client_id, &nonce, &sent_at),
+        TciCommand::SaturnPing { .. } => {
+            unreachable!("Saturn heartbeat is handled before model locking")
+        }
         TciCommand::SplitSessionOpen {
             client_id,
             session_id,
@@ -836,16 +887,7 @@ fn handle_command(
             model.desired.tx_low_latency = enabled;
             let _ = tx_cmd_tx.send(TxCommand::ModelChanged);
         }
-        TciCommand::MicAudioFrame(frame) => {
-            if tx_control.requested {
-                tx_control.last_mic_at = Some(frame.received_at);
-                let _ = tx_cmd_tx.send(TxCommand::MicAudio {
-                    samples: frame.samples,
-                    channels: frame.channels,
-                    sample_rate_hz: frame.sample_rate_hz,
-                });
-            }
-        }
+        TciCommand::MicAudioFrame(_) => unreachable!("mic media is handled before model locking"),
         TciCommand::SetPureSignalEnabled(_)
         | TciCommand::SetPureSignalAutoAttenuate(_)
         | TciCommand::SetPureSignalAttenuation(_)
@@ -1033,5 +1075,38 @@ mod tests {
     fn speech_squelch_commands_resynchronize_wdsp() {
         assert!(command_effects(&TciCommand::SetRxSsqlEnabled(true)).dsp_dirty);
         assert!(command_effects(&TciCommand::SetRxSsqlThreshold(16.0)).dsp_dirty);
+    }
+
+    #[test]
+    fn mic_media_does_not_publish_full_radio_state_at_frame_cadence() {
+        let mic_effects = command_effects(&TciCommand::MicAudioFrame(crate::tci::TciMicFrame {
+            sample_rate_hz: 48_000,
+            channels: 1,
+            sequence: 1,
+            received_at: Instant::now(),
+            samples: vec![0.0; 960],
+        }));
+        assert!(!mic_effects.radio_state_dirty);
+
+        let control_effects = command_effects(&TciCommand::SetRxAttenuation(10));
+        assert!(control_effects.radio_state_dirty);
+
+        let mut mixed_effects = mic_effects;
+        mixed_effects.merge(control_effects);
+        assert!(mixed_effects.radio_state_dirty);
+    }
+
+    #[test]
+    fn watchdog_heartbeat_uses_dedicated_pong_without_full_state_publication() {
+        let effects = command_effects(&TciCommand::SaturnPing {
+            client_id: 7,
+            nonce: "test-nonce".to_string(),
+            sent_at: "123.456".to_string(),
+        });
+        assert!(!effects.radio_state_dirty);
+
+        // The one-second S-meter request remains the periodic full-state
+        // convergence point.
+        assert!(command_effects(&TciCommand::RequestSmeter).radio_state_dirty);
     }
 }

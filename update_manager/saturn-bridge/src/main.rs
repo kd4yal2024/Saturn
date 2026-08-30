@@ -189,7 +189,7 @@ fn ms_field(value: Option<u64>) -> String {
 fn format_tx_diag(diag: Option<&TxDiagnostics>) -> String {
     match diag {
         Some(diag) => format!(
-            "tx_diag state={} rf={} armed_ms={} first_mic_ms={} first_iq_ms={} first_keyable_iq_ms={} mic_recent={} keyed_ms={} mic_frames={} duc_packets={} in_pk={:.4} out_pk={:.4} mic_pk_db={:.1} comp_pk_db={:.1} comp_avg_db={:.1} alc_pk_db={:.1} alc_avg_db={:.1} alc_gain_db={:.1} out_pk_db={:.1} in_samples={} out_pairs={} pending_mic={} pending_iq={}",
+            "tx_diag state={} rf={} armed_ms={} first_mic_ms={} first_iq_ms={} first_keyable_iq_ms={} mic_recent={} keyed_ms={} mic_frames={} duc_packets={} in_pk={:.4} out_pk={:.4} mic_pk_db={:.1} comp_pk_db={:.1} comp_avg_db={:.1} alc_pk_db={:.1} alc_avg_db={:.1} alc_gain_db={:.1} out_pk_db={:.1} in_samples={} out_pairs={} pending_mic={} pending_iq={} mic_rmatch={} rmatch_underflows={} rmatch_overflows={} rmatch_var={:.9} rmatch_ring={}/{}",
             diag.state,
             bool01(diag.rf_enabled),
             diag.armed_ms,
@@ -212,7 +212,13 @@ fn format_tx_diag(diag: Option<&TxDiagnostics>) -> String {
             diag.total_input_samples,
             diag.total_output_pairs,
             diag.pending_mic_floats,
-            diag.pending_iq_floats
+            diag.pending_iq_floats,
+            bool01(diag.mic_rmatch_enabled),
+            diag.mic_rmatch_underflows,
+            diag.mic_rmatch_overflows,
+            diag.mic_rmatch_var_ratio,
+            diag.mic_rmatch_nring,
+            diag.mic_rmatch_ringsize
         ),
         None => "tx_diag state=idle".to_string(),
     }

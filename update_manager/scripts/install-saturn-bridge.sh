@@ -248,7 +248,8 @@ verify_wdsp2_archive() {
   for symbol in \
     SetRXAWBFMdmph GetRXAWBFMStereoIndicator \
     SetTXAPHROTAutoMode SetTXAPHROTRun \
-    pscc SetPSMox SetPSControl GetPSInfo SetPSFeedbackRate
+    pscc SetPSMox SetPSControl GetPSInfo SetPSFeedbackRate \
+    create_rmatchV destroy_rmatchV xrmatchIN xrmatchOUT getRMatchDiags resetRMatchDiags setRMatchRingsize
   do
     grep -Eq "[[:space:]]${symbol}$" <<<"$symbols" || die "WDSP 2.00 archive is missing required symbol: $symbol"
   done
@@ -333,7 +334,7 @@ verify_built_bridge() {
   if [[ "$SATURN_BRIDGE_WDSP_FLAVOR" == "wdsp2" || "$SATURN_BRIDGE_WDSP_FLAVOR" == "2.00" ]]; then
     local symbol symbols
     symbols="$(nm -a "$built_bin")"
-    for symbol in SetRXAWBFMdmph SetTXAPHROTAutoMode pscc SetPSControl; do
+    for symbol in SetRXAWBFMdmph SetTXAPHROTAutoMode pscc SetPSControl create_rmatchV xrmatchIN xrmatchOUT; do
       grep -Eq "[[:space:]]${symbol}$" <<<"$symbols" || die "Built bridge is missing WDSP 2.00 symbol: $symbol"
     done
   fi

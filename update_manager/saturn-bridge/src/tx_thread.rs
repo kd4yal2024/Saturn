@@ -10,7 +10,8 @@ use crate::p2::session::P2Session;
 use crate::radio_model::{PureSignalState, RadioModel};
 use crate::sync_ext::MutexExt;
 use crate::wdsp::{
-    WdspTxEngine, DUC_IQ_SAMPLES_PER_PACKET, TX_MIC_SAMPLES_PER_DSP_BLOCK, WDSP_TX_IQ_RATE_HZ,
+    MicRateMatcher, MicRmatchDiags, WdspTxEngine, DUC_IQ_SAMPLES_PER_PACKET,
+    TX_MIC_SAMPLES_PER_DSP_BLOCK, WDSP_TX_IQ_RATE_HZ,
 };
 use crate::xdma::XdmaError;
 use crate::xdma_duc::{
@@ -338,6 +339,12 @@ pub struct TxDiagnostics {
     pub total_output_pairs: u64,
     pub pending_mic_floats: usize,
     pub pending_iq_floats: usize,
+    pub mic_rmatch_enabled: bool,
+    pub mic_rmatch_underflows: i32,
+    pub mic_rmatch_overflows: i32,
+    pub mic_rmatch_var_ratio: f64,
+    pub mic_rmatch_ringsize: i32,
+    pub mic_rmatch_nring: i32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -496,6 +503,8 @@ fn run(
     let mut tx_source_stall_count = 0u64;
     let tx_mic_prefill_samples = tx_mic_prefill_samples();
     let tx_mic_prefill_ms = tx_mic_prefill_samples as f64 / 48.0;
+    let mut mic_rmatch =
+        tx_mic_rmatch_enabled().then(|| MicRateMatcher::new(tx_mic_prefill_samples));
     let startup_settle_blocks = session.startup_settle_blocks();
     let keyable_mic_window = session.keyable_mic_window();
     let qualify_mic_at_dsp_input = session.qualify_mic_at_dsp_input();
@@ -508,10 +517,11 @@ fn run(
     let mut logged_keyable_mic_input = false;
 
     println!(
-        "saturn-bridge: TX thread started; watchdog={}s mic_prefill={} samples ({:.1}ms) settle_blocks={} key_qualify_packets={} mic_window={}ms",
+        "saturn-bridge: TX thread started; watchdog={}s mic_prefill={} samples ({:.1}ms) mic_rmatch={} settle_blocks={} key_qualify_packets={} mic_window={}ms",
         tx_watchdog.as_secs(),
         tx_mic_prefill_samples,
         tx_mic_prefill_ms,
+        mic_rmatch.is_some() as u8,
         startup_settle_blocks,
         key_qualification.required,
         keyable_mic_window.as_millis()
@@ -563,8 +573,14 @@ fn run(
                         next_mic_dsp_at = now;
                         next_duc_iq_at = now;
                         pending_mic_samples.clear();
+                        if let Some(matcher) = mic_rmatch.as_mut() {
+                            matcher.reset();
+                        }
                         mic_queue_underruns = 0;
-                        mic_output_started = false;
+                        // WDSP rmatch starts half-full with silence, which is
+                        // the configured prefill/latency setpoint. The legacy
+                        // queue still waits until it reaches that setpoint.
+                        mic_output_started = mic_rmatch.is_some();
                         last_mic_output_sample = 0.0;
                         keepalive_active = false;
                         keepalive_resume_frames = 0;
@@ -632,7 +648,11 @@ fn run(
                         if mic_peak >= TX_KEY_MIC_PEAK_THRESHOLD && !qualify_mic_at_dsp_input {
                             last_keyable_mic_at = Some(Instant::now());
                         }
-                        extend_mic_input_queue(&mut pending_mic_samples, &mono);
+                        if let Some(matcher) = mic_rmatch.as_mut() {
+                            matcher.feed(&mono);
+                        } else {
+                            extend_mic_input_queue(&mut pending_mic_samples, &mono);
+                        }
                         mic_frame_count = mic_frame_count.saturating_add(1);
                         last_mic_audio_at = Instant::now();
                         if first_mic_audio_at.is_none() {
@@ -874,7 +894,7 @@ fn run(
         if state == TxState::Armed || state == TxState::Keyed {
             let now = Instant::now();
             if !two_tone && !mic_output_started {
-                if pending_mic_samples.len() >= tx_mic_prefill_samples {
+                if mic_rmatch.is_some() || pending_mic_samples.len() >= tx_mic_prefill_samples {
                     mic_output_started = true;
                     next_mic_dsp_at = now;
                 }
@@ -883,11 +903,13 @@ fn run(
             while (two_tone || mic_output_started) && now >= next_mic_dsp_at && sent < 8 {
                 let mut block = Vec::with_capacity(TX_MIC_SAMPLES_PER_DSP_BLOCK);
                 let mut block_underrun = false;
-                for _ in 0..TX_MIC_SAMPLES_PER_DSP_BLOCK {
-                    block.push(if two_tone {
-                        0.0
-                    } else {
-                        match pending_mic_samples.pop_front() {
+                if two_tone {
+                    block.resize(TX_MIC_SAMPLES_PER_DSP_BLOCK, 0.0);
+                } else if let Some(matcher) = mic_rmatch.as_mut() {
+                    block_underrun = matcher.take_block(&mut block);
+                } else {
+                    for _ in 0..TX_MIC_SAMPLES_PER_DSP_BLOCK {
+                        block.push(match pending_mic_samples.pop_front() {
                             Some(sample) => {
                                 last_mic_output_sample = sample;
                                 sample
@@ -900,8 +922,8 @@ fn run(
                                     0.0
                                 }
                             }
-                        }
-                    });
+                        });
+                    }
                 }
                 if !two_tone && block_underrun {
                     mic_queue_underruns = mic_queue_underruns.saturating_add(1);
@@ -1174,6 +1196,7 @@ fn run(
                 keyed_at,
                 mic_frame_count,
                 duc_packet_count,
+                mic_rmatch.as_ref().map(MicRateMatcher::diags),
             );
             last_diag_event_at = Instant::now();
         }
@@ -1213,8 +1236,10 @@ fn publish_tx_diagnostics(
     keyed_at: Option<Instant>,
     mic_frame_count: u64,
     duc_packet_count: u64,
+    mic_rmatch: Option<MicRmatchDiags>,
 ) {
     let diag = wdsp_tx.diagnostics();
+    let rmatch = mic_rmatch.unwrap_or_default();
     let _ = event_tx.send(TxEvent::Diagnostics(TxDiagnostics {
         state: state.as_str(),
         rf_enabled,
@@ -1242,6 +1267,12 @@ fn publish_tx_diagnostics(
         total_output_pairs: diag.total_output_pairs,
         pending_mic_floats: diag.pending_mic_floats,
         pending_iq_floats: diag.pending_iq_floats,
+        mic_rmatch_enabled: mic_rmatch.is_some(),
+        mic_rmatch_underflows: rmatch.underflows,
+        mic_rmatch_overflows: rmatch.overflows,
+        mic_rmatch_var_ratio: rmatch.var_ratio,
+        mic_rmatch_ringsize: rmatch.ringsize,
+        mic_rmatch_nring: rmatch.nring,
     }));
 }
 
@@ -1292,6 +1323,18 @@ fn tx_mic_prefill_samples() -> usize {
         .ok()
         .and_then(|value| value.parse::<u64>().ok());
     tx_mic_prefill_samples_for_ms(prefill_ms)
+}
+
+fn tx_mic_rmatch_enabled() -> bool {
+    tx_mic_rmatch_enabled_from(env::var("SATURN_BRIDGE_TX_MIC_RMATCH").ok().as_deref())
+}
+
+fn tx_mic_rmatch_enabled_from(value: Option<&str>) -> bool {
+    match value.map(str::to_ascii_lowercase).as_deref() {
+        Some("1" | "true" | "yes" | "on") => true,
+        Some("0" | "false" | "no" | "off") | None => false,
+        Some(_) => false,
+    }
 }
 
 fn tx_source_stall_limit_for_ms(stall_ms: Option<u64>) -> Duration {
@@ -1534,6 +1577,16 @@ mod tests {
         assert_eq!(tx_mic_prefill_samples_for_ms(Some(240)), 11_520);
         assert_eq!(tx_mic_prefill_samples_for_ms(Some(1)), 960);
         assert_eq!(tx_mic_prefill_samples_for_ms(Some(1_000)), 12_000);
+    }
+
+    #[test]
+    fn tx_mic_rmatch_is_experimental_and_requires_explicit_opt_in() {
+        assert!(!tx_mic_rmatch_enabled_from(None));
+        assert!(tx_mic_rmatch_enabled_from(Some("1")));
+        assert!(tx_mic_rmatch_enabled_from(Some("yes")));
+        assert!(!tx_mic_rmatch_enabled_from(Some("0")));
+        assert!(!tx_mic_rmatch_enabled_from(Some("OFF")));
+        assert!(!tx_mic_rmatch_enabled_from(Some("unexpected")));
     }
 
     #[test]
