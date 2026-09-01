@@ -162,6 +162,7 @@ PRIVILEGED_HELPER_SCRIPTS=(
   "$SOURCE_DIR/scripts/$SATURN_STATE_WRITER_TOOL_NAME"
   "$SOURCE_DIR/scripts/$SATURN_MAINTENANCE_LOCK_TOOL_NAME"
   "$SOURCE_DIR/scripts/$SATURN_BRIDGE_INSTALLER_NAME"
+  "$SOURCE_DIR/scripts/saturn-tci-bind.sh"
   "$ADMIN_PASSWORD_HELPER_SRC"
   "$REPO_SOURCE_DIR/scripts/saturn-flash-fpga.sh"
   "$REPO_SOURCE_DIR/scripts/saturn-xdma-doctor.sh"
@@ -832,6 +833,8 @@ ${SERVICE_USER} ALL=(root) NOPASSWD: ${PRIVILEGED_SCRIPTS_DIR}/saturn-tailscale.
 ${SERVICE_USER} ALL=(root) NOPASSWD: ${PRIVILEGED_SCRIPTS_DIR}/saturn-tailscale.sh *
 ${SERVICE_USER} ALL=(root) NOPASSWD: ${PRIVILEGED_SCRIPTS_DIR}/saturn-go-tailscale-serve.sh
 ${SERVICE_USER} ALL=(root) NOPASSWD: ${PRIVILEGED_SCRIPTS_DIR}/saturn-go-tailscale-serve.sh *
+${SERVICE_USER} ALL=(root) NOPASSWD: ${PRIVILEGED_SCRIPTS_DIR}/saturn-tci-bind.sh
+${SERVICE_USER} ALL=(root) NOPASSWD: ${PRIVILEGED_SCRIPTS_DIR}/saturn-tci-bind.sh *
 ${SERVICE_USER} ALL=(root) NOPASSWD: /usr/bin/systemd-run --unit saturn-go-self-deploy-* --collect --no-block ${SATURN_GO_DEPLOY_BROKER} ${SATURN_STAGING_DIR}/*
 EOF
 chmod 0440 "$SUDOERS_FILE"

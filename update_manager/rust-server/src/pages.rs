@@ -55,6 +55,10 @@ pub async fn tailscale_handler(State(state): State<AppState>) -> impl IntoRespon
     serve_page(&state.webroot, "tailscale.html").await
 }
 
+pub async fn settings_handler(State(state): State<AppState>) -> impl IntoResponse {
+    serve_page(&state.webroot, "settings.html").await
+}
+
 fn remote_host_without_port(host: &str) -> &str {
     if host.starts_with('[') {
         if let Some(end) = host.find(']') {

@@ -189,6 +189,17 @@ pub struct RemoteDisplayPrefs {
     pub extra: BTreeMap<String, serde_json::Value>,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+#[serde(default, rename_all = "camelCase")]
+pub struct RemoteBandMemoryEntry {
+    pub frequency: Option<u64>,
+    pub radio_prefs: RemoteRadioPrefs,
+    pub display_prefs: RemoteDisplayPrefs,
+    pub display_zoom: Option<f64>,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, serde_json::Value>,
+}
+
 #[cfg(test)]
 mod remote_settings_tests {
     use super::RemoteSettings;
@@ -197,6 +208,14 @@ mod remote_settings_tests {
     fn current_remote_dsp_settings_survive_json_round_trip() {
         let input = serde_json::json!({
             "activeProfile": null,
+            "bandMemory": {
+                "20m": {
+                    "frequency": 14250000,
+                    "displayZoom": 4,
+                    "radioPrefs": { "mode": "USB" },
+                    "displayPrefs": { "waterfallPalette": "ember" }
+                }
+            },
             "displayPrefs": {
                 "peakTuneAssistEnabled": true
             },
@@ -226,6 +245,24 @@ mod remote_settings_tests {
         assert_eq!(output["radioPrefs"]["txSpeechProcessorGainDb"], 6.0);
         assert_eq!(output["radioPrefs"]["txCessbEnabled"], true);
         assert_eq!(output["radioPrefs"]["futureDspControl"], 17);
+        assert_eq!(output["bandMemory"]["20m"]["frequency"], 14250000);
+        assert_eq!(output["bandMemory"]["20m"]["radioPrefs"]["mode"], "USB");
+        assert_eq!(
+            output["bandMemory"]["20m"]["displayPrefs"]["waterfallPalette"],
+            "ember"
+        );
+    }
+
+    #[test]
+    fn legacy_remote_settings_do_not_invent_empty_band_memory() {
+        let settings: RemoteSettings = serde_json::from_value(serde_json::json!({
+            "radioPrefs": { "mode": "USB" }
+        }))
+        .unwrap();
+        assert!(settings.band_memory.is_none());
+
+        let output = serde_json::to_value(settings).unwrap();
+        assert!(output.get("bandMemory").is_none());
     }
 }
 
@@ -242,6 +279,8 @@ pub struct RemoteProfileData {
     pub phone_panels: BTreeMap<String, bool>,
     pub display_prefs: RemoteDisplayPrefs,
     pub radio_prefs: RemoteRadioPrefs,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub band_memory: Option<BTreeMap<String, RemoteBandMemoryEntry>>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
@@ -258,6 +297,8 @@ pub struct RemoteSettings {
     pub phone_panels: BTreeMap<String, bool>,
     pub display_prefs: RemoteDisplayPrefs,
     pub radio_prefs: RemoteRadioPrefs,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub band_memory: Option<BTreeMap<String, RemoteBandMemoryEntry>>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]

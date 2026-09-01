@@ -37,6 +37,7 @@ pub(crate) struct TciCommandQueueSnapshot {
 #[derive(Debug, PartialEq, Eq)]
 enum CommandCoalesceKey {
     Variant(Discriminant<TciCommand>),
+    RadioState(u64),
     RxEqBand(usize),
     TxEqBand(usize),
     TxCfcBand(usize),
@@ -183,6 +184,9 @@ fn command_coalesce_key(command: &TciCommand) -> Option<CommandCoalesceKey> {
         TciCommand::SetRxEqBand { band, .. } => Some(CommandCoalesceKey::RxEqBand(*band)),
         TciCommand::SetTxEqBand { band, .. } => Some(CommandCoalesceKey::TxEqBand(*band)),
         TciCommand::SetTxCfcBand { band, .. } => Some(CommandCoalesceKey::TxCfcBand(*band)),
+        TciCommand::RequestRadioState { client_id } => {
+            Some(CommandCoalesceKey::RadioState(*client_id))
+        }
         TciCommand::SetRxAnrVals { .. }
         | TciCommand::SetRxAnfVals { .. }
         | TciCommand::RequestSmeter
@@ -263,6 +267,30 @@ mod tests {
         assert!(matches!(
             rx.try_recv(),
             Ok(TciCommand::MicAudioFrame(frame)) if frame.sequence == 13
+        ));
+    }
+
+    #[test]
+    fn mailbox_keeps_state_queries_for_distinct_clients() {
+        let (tx, rx) = tci_command_mailbox();
+        tx.send(TciCommand::RequestRadioState { client_id: 41 })
+            .unwrap();
+        tx.send(TciCommand::RequestRadioState { client_id: 41 })
+            .unwrap();
+        tx.send(TciCommand::RequestRadioState { client_id: 42 })
+            .unwrap();
+
+        let snapshot = rx.snapshot();
+        assert_eq!(snapshot.control_depth, 2);
+        assert_eq!(snapshot.control_coalesced, 1);
+
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(TciCommand::RequestRadioState { client_id: 41 })
+        ));
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(TciCommand::RequestRadioState { client_id: 42 })
         ));
     }
 }

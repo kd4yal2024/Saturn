@@ -55,6 +55,9 @@ pub enum TciCommand {
     SetIqSampleRate(u32),
     SetIqStreaming,
     RequestSmeter,
+    RequestRadioState {
+        client_id: u64,
+    },
     SaturnPing {
         client_id: u64,
         nonce: String,
@@ -182,7 +185,7 @@ pub(crate) fn parse_tci_command_with_roles(
     let args: Vec<&str> = rest.split(',').collect();
     let name = name.to_ascii_lowercase();
     if let Some((session_id, role)) = parse_split_session_open(command) {
-        if set_client_split_session_open(clients, client_id, &session_id, role) {
+        if let Some(role) = set_client_split_session_open(clients, client_id, &session_id, role) {
             if let Some(operator_client_id) = operator_client_id {
                 reconcile_split_operator_role(clients, operator_client_id, client_id);
             }
@@ -205,6 +208,10 @@ pub(crate) fn parse_tci_command_with_roles(
                 lane,
             });
         }
+        return;
+    }
+    if standard_tci_read_request(&name, &args) {
+        let _ = command_tx.send(TciCommand::RequestRadioState { client_id });
         return;
     }
     if !allow_control && !viewer_tci_command_allowed(&name) {
@@ -231,7 +238,7 @@ pub(crate) fn parse_tci_command_with_roles(
             };
             let _ = command_tx.send(TciCommand::SetActiveVfo(active));
         }
-        "split" => {
+        "split" | "split_enable" => {
             let value = args.get(1).or_else(|| args.first());
             if let Some(enabled) = value.and_then(|text| parse_tci_bool(text)) {
                 let _ = command_tx.send(TciCommand::SetSplitEnabled(enabled));
@@ -316,7 +323,7 @@ pub(crate) fn parse_tci_command_with_roles(
                 ));
             }
         }
-        "rx_nr" | "nr" => {
+        "rx_nr" | "nr" | "rx_nr_enable" => {
             let enabled_arg = if args.len() >= 2 {
                 args.get(1)
             } else {
@@ -638,6 +645,17 @@ pub(crate) fn parse_tci_command_with_roles(
                 ));
             }
         }
+        "rx_nb_enable" => {
+            let enabled_arg = args.get(1).or_else(|| args.first());
+            if let Some(enabled) = enabled_arg.and_then(|text| parse_tci_bool(text)) {
+                let mode = if enabled {
+                    NoiseBlankerMode::Nb1
+                } else {
+                    NoiseBlankerMode::Off
+                };
+                let _ = command_tx.send(TciCommand::SetNoiseBlankerMode(mode));
+            }
+        }
         "rx_nb_threshold" => {
             let thresh_arg = if args.len() >= 2 {
                 args.get(1)
@@ -650,7 +668,7 @@ pub(crate) fn parse_tci_command_with_roles(
                 }
             }
         }
-        "rx_anf" => {
+        "rx_anf" | "rx_anf_enable" => {
             let enabled_arg = if args.len() >= 2 {
                 args.get(1)
             } else {
@@ -730,7 +748,7 @@ pub(crate) fn parse_tci_command_with_roles(
                 }
             }
         }
-        "rx_agc" => {
+        "rx_agc" | "agc_mode" => {
             let mode_arg = if args.len() >= 2 {
                 args.get(1)
             } else {
@@ -740,7 +758,7 @@ pub(crate) fn parse_tci_command_with_roles(
                 let _ = command_tx.send(TciCommand::SetAgcMode(AgcMode::from_tci(mode_text)));
             }
         }
-        "rx_agc_gain" => {
+        "rx_agc_gain" | "agc_gain" => {
             let gain_arg = if args.len() >= 2 {
                 args.get(1)
             } else {
@@ -752,7 +770,7 @@ pub(crate) fn parse_tci_command_with_roles(
                 }
             }
         }
-        "tx_drive" => {
+        "tx_drive" | "drive" => {
             let drive_arg = if args.len() >= 2 {
                 args.get(1)
             } else {
@@ -1135,6 +1153,15 @@ pub(crate) fn parse_tci_command_with_roles(
             }
         }
         _ => {}
+    }
+}
+
+pub(crate) fn standard_tci_read_request(name: &str, args: &[&str]) -> bool {
+    match name {
+        "vfo" => args.len() == 2,
+        "dds" | "modulation" | "trx" | "drive" | "split_enable" | "rx_filter_band" | "agc_mode"
+        | "agc_gain" | "rx_nb_enable" | "rx_nr_enable" | "rx_anf_enable" => args.len() == 1,
+        _ => false,
     }
 }
 

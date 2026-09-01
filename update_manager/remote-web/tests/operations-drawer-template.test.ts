@@ -47,4 +47,16 @@ describe('responsive operations drawer template', () => {
     expect(template).toContain('now - operationsDrawerLastRenderAt < 500');
     expect(template).toContain('updateOperationsDrawer();');
   });
+
+  it('persists band-memory saves through local, server, and profile settings', () => {
+    const handlerStart = template.indexOf('$("operations-memory-save-btn")?.addEventListener');
+    const handlerEnd = template.indexOf('let restored = { open: false, target: "memory" }', handlerStart);
+    const handler = template.slice(handlerStart, handlerEnd);
+    expect(handler).toContain('rememberCurrentBandSettings();');
+    expect(handler).toContain('persistLocalSettingsFallback(currentRemoteSettings());');
+    expect(handler).toContain('scheduleRemoteSettingsSave();');
+
+    expect(template).toContain('bandMemory: sanitizeBandMemory(state.bandMemory)');
+    expect(template).toContain('state.bandMemory = sanitizeBandMemory(settings.bandMemory)');
+  });
 });

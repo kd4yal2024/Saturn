@@ -469,6 +469,8 @@ install_service() {
 Description=Saturn Bridge (WDSP 2.00)
 After=network-online.target
 Wants=network-online.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
 
 [Service]
 Type=simple
@@ -477,7 +479,7 @@ Group=${service_group}
 WorkingDirectory=${SATURN_GO_ROOT}
 ExecStart=${SATURN_BRIDGE_BIN}
 Restart=on-failure
-RestartSec=2
+RestartSec=5
 RuntimeDirectory=saturn-bridge
 RuntimeDirectoryMode=0750
 LimitRTPRIO=21

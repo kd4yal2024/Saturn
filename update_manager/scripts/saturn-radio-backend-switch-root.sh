@@ -45,6 +45,7 @@ Usage:
   saturn-radio-backend-switch-root.sh start p2
   saturn-radio-backend-switch-root.sh start xdma
   saturn-radio-backend-switch-root.sh start bridge
+  saturn-radio-backend-switch-root.sh restart bridge
   saturn-radio-backend-switch-root.sh stop [p2|xdma|bridge]
 
 The selection is appliance-wide. P2 is the default and supports Protocol 2
@@ -639,6 +640,26 @@ stop_bridge_service() {
   log "Saturn Bridge is stopped; $P2APP_SERVICE remains unchanged for Protocol 2 clients"
 }
 
+restart_bridge_service() {
+  local selected
+  selected="$(read_selected_backend)"
+
+  # Keep stop and start under the same appliance-wide ownership lock. In P2
+  # mode this leaves P2app running; in direct-XDMA mode the normal backend
+  # transaction performs the required safe stop, readiness proof, and start.
+  if [[ "$selected" == "xdma" ]]; then
+    TARGET_BACKEND="xdma"
+    stop_backend
+    start_bridge_service
+    return 0
+  fi
+
+  [[ "$selected" == "p2" ]] || die "unsupported selected backend: $selected"
+  stop_bridge_service
+  start_bridge_service
+  log "Saturn Bridge restarted in P2 mode through the ownership broker"
+}
+
 print_status() {
   local selected persisted_status operational_status p2_status bridge_status runtime_backend
   selected="$(read_selected_backend)"
@@ -711,6 +732,13 @@ main() {
       }
       TARGET_BACKEND="$2"
       ;;
+    restart)
+      [[ $# == 2 && "$2" == "bridge" ]] || {
+        usage >&2
+        return 2
+      }
+      TARGET_BACKEND="$2"
+      ;;
     stop)
       [[ $# -le 2 ]] || {
         usage >&2
@@ -752,6 +780,8 @@ main() {
   flock -w 30 9 || die "timed out waiting for the radio ownership lock"
   if [[ "$command" == "start" && "$TARGET_BACKEND" == "bridge" ]]; then
     start_bridge_service
+  elif [[ "$command" == "restart" && "$TARGET_BACKEND" == "bridge" ]]; then
+    restart_bridge_service
   elif [[ "$command" == "stop" && "$TARGET_BACKEND" == "bridge" ]]; then
     stop_bridge_service
   elif [[ "$command" == "stop" ]]; then

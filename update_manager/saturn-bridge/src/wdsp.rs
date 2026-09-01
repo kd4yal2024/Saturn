@@ -1633,6 +1633,8 @@ impl WdspTxEngine {
         }
         if self.channel_open {
             unsafe {
+                SetPSMox(self.channel_id, 0);
+                SetChannelState(self.channel_id, 0, 0);
                 CloseChannel(self.channel_id);
             }
             self.channel_open = false;

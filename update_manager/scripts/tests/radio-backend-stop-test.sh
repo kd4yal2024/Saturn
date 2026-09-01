@@ -19,6 +19,7 @@ touch "$TEST_ROOT/services/saturn-bridge.service.enabled"
 cat >"$TEST_ROOT/bin/systemctl" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
+printf '%s\n' "$*" >>"$MOCK_SYSTEMCTL_LOG"
 case "${1:-}" in
   is-active)
     service="${3:-${2:-}}"
@@ -29,7 +30,7 @@ case "${1:-}" in
     [[ -f "$MOCK_SERVICE_STATE/$service.enabled" ]]
     ;;
   show)
-    printf 'SATURN_BRIDGE_RADIO_BACKEND=xdma\n'
+    printf 'SATURN_BRIDGE_RADIO_BACKEND=%s\n' "${MOCK_RUNTIME_BACKEND:-xdma}"
     ;;
   stop)
     shift
@@ -88,6 +89,7 @@ EOF
 env \
   PATH="$TEST_ROOT/bin:$PATH" \
   MOCK_SERVICE_STATE="$TEST_ROOT/services" \
+  MOCK_SYSTEMCTL_LOG="$TEST_ROOT/systemctl.log" \
   SATURN_RADIO_BACKEND_CONFIG="$TEST_ROOT/backend.conf" \
   SATURN_RADIO_BACKEND_TEST_MODE=1 \
   "$HELPER" stop xdma >/dev/null
@@ -98,6 +100,7 @@ env \
 status="$(env \
   PATH="$TEST_ROOT/bin:$PATH" \
   MOCK_SERVICE_STATE="$TEST_ROOT/services" \
+  MOCK_SYSTEMCTL_LOG="$TEST_ROOT/systemctl.log" \
   SATURN_RADIO_BACKEND_CONFIG="$TEST_ROOT/backend.conf" \
   SATURN_RADIO_BACKEND_TEST_MODE=1 \
   "$HELPER" status)"
@@ -112,5 +115,38 @@ assert value["operational_status"] == "stopped"
 assert value["services"] == {"p2app": "inactive", "saturn_bridge": "inactive"}
 assert value["mutual_exclusion_ok"] is True
 PY
+
+cat >"$TEST_ROOT/state/selection.json" <<'EOF'
+{
+  "schema_version": 1,
+  "requested": "p2",
+  "active": "p2",
+  "status": "ready"
+}
+EOF
+cat >"$TEST_ROOT/etc/systemd/system/saturn-bridge.service.d/20-radio-backend.conf" <<'EOF'
+[Unit]
+Conflicts=p2app.service
+[Service]
+Environment=SATURN_BRIDGE_RADIO_BACKEND=p2
+EOF
+touch "$TEST_ROOT/services/p2app.service" "$TEST_ROOT/services/saturn-bridge.service"
+: >"$TEST_ROOT/systemctl.log"
+
+env \
+  PATH="$TEST_ROOT/bin:$PATH" \
+  MOCK_SERVICE_STATE="$TEST_ROOT/services" \
+  MOCK_SYSTEMCTL_LOG="$TEST_ROOT/systemctl.log" \
+  MOCK_RUNTIME_BACKEND=p2 \
+  SATURN_RADIO_BACKEND_CONFIG="$TEST_ROOT/backend.conf" \
+  SATURN_RADIO_BACKEND_TEST_MODE=1 \
+  "$HELPER" restart bridge >/dev/null
+
+[[ -e "$TEST_ROOT/services/p2app.service" ]]
+[[ -e "$TEST_ROOT/services/saturn-bridge.service" ]]
+mapfile -t bridge_transitions < <(
+  grep -E '^(stop|start) saturn-bridge\.service$' "$TEST_ROOT/systemctl.log"
+)
+[[ "${bridge_transitions[*]}" == "stop saturn-bridge.service start saturn-bridge.service" ]]
 
 printf 'radio backend stop test passed\n'

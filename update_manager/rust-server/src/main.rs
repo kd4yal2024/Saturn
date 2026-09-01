@@ -27,7 +27,8 @@ use crate::monitor::{get_system_data, network_test};
 use crate::pages::{
     asset_handler, backup_handler, custom_handler, deskhpsdr_handler, fallback_handler,
     fpga_handler, monitor_handler, overview_handler, p23test_handler, pihpsdr_handler,
-    remote_next_handler, root_handler, saturngo_handler, tailscale_handler, update_handler,
+    remote_next_handler, root_handler, saturngo_handler, settings_handler, tailscale_handler,
+    update_handler,
 };
 use crate::performance_lab::{
     compare_by_id, delete_run as delete_performance_benchmark,
@@ -519,6 +520,10 @@ fn application_router(state: AppState, restore_request_max_bytes: usize) -> Rout
         .route("/tci", get(remote_bridge_ws_handler))
         .route("/monitor", get(monitor_handler))
         .route("/monitor.html", get(monitor_handler))
+        .route("/settings", get(settings_handler))
+        .route("/settings.html", get(settings_handler))
+        .route("/tci_status", get(get_tci_status))
+        .route("/tci_settings", post(set_tci_settings))
         .route("/livez", get(livez))
         .route("/readyz", get(readyz))
         .route("/healthz", get(healthz))
@@ -1753,6 +1758,149 @@ async fn set_radio_backend(
         Err(message) => (
             StatusCode::CONFLICT,
             Json(serde_json::json!({"status": "error", "message": message})),
+        )
+            .into_response(),
+    }
+}
+
+const TCI_BIND_HELPER: &str = "/usr/local/lib/saturn-go/scripts/saturn-tci-bind.sh";
+
+#[derive(serde::Deserialize)]
+struct TciBindRequest {
+    host: String,
+    port: u16,
+}
+
+async fn invoke_tci_bind_helper(args: &[&str]) -> Result<String, String> {
+    let helper = PathBuf::from(TCI_BIND_HELPER);
+    if !helper.is_file() {
+        return Err(format!("TCI bind helper is missing: {}", helper.display()));
+    }
+    let mut command = Command::new("sudo");
+    command.arg("-n").arg(&helper).args(args);
+    command.kill_on_drop(true);
+    let output = tokio::time::timeout(Duration::from_secs(30), command.output())
+        .await
+        .map_err(|_| "TCI bind helper timed out after 30 seconds".to_string())?
+        .map_err(|error| format!("could not run TCI bind helper: {error}"))?;
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    if !output.status.success() {
+        return Err(if stderr.is_empty() {
+            format!("TCI bind helper exited with {}: {stdout}", output.status)
+        } else {
+            stderr
+        });
+    }
+    Ok(stdout)
+}
+
+async fn get_tci_status() -> Response {
+    fn strip_journal_prefix(line: &str) -> &str {
+        line.split_once("saturn-bridge")
+            .map(|(_, rest)| {
+                rest.trim_start_matches([
+                    '[', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', ']',
+                ])
+            })
+            .and_then(|rest| rest.split_once(": ").map(|(_, msg)| msg))
+            .unwrap_or(line)
+    }
+
+    let (_, environment) = command_text(
+        "systemctl",
+        &[
+            "show",
+            "saturn-bridge.service",
+            "-p",
+            "Environment",
+            "--value",
+        ],
+    )
+    .await;
+    let host = environment
+        .split_whitespace()
+        .filter_map(|entry| entry.strip_prefix("SATURN_BRIDGE_TCI_HOST="))
+        .last()
+        .unwrap_or("127.0.0.1")
+        .to_string();
+    let port = environment
+        .split_whitespace()
+        .filter_map(|entry| entry.strip_prefix("SATURN_BRIDGE_TCI_PORT="))
+        .last()
+        .unwrap_or("50001")
+        .to_string();
+    let (bridge_active, _) = command_text(
+        "systemctl",
+        &["is-active", "--quiet", "saturn-bridge.service"],
+    )
+    .await;
+
+    let (journal_ok, journal) = command_text(
+        "journalctl",
+        &[
+            "-u",
+            "saturn-bridge.service",
+            "-n",
+            "300",
+            "--no-pager",
+            "-o",
+            "short-iso",
+        ],
+    )
+    .await;
+    let tci_lines: Vec<String> = journal
+        .lines()
+        .filter(|line| {
+            line.contains("TCI websocket")
+                || line.contains("TCI iq_start")
+                || line.contains("TCI audio_start")
+                || line.contains("TCI accept")
+        })
+        .rev()
+        .take(40)
+        .map(|line| strip_journal_prefix(line).to_string())
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect();
+
+    Json(serde_json::json!({
+        "status": "ok",
+        "tci": {
+            "host": host,
+            "port": port,
+            "lan_reachable": host != "127.0.0.1",
+            "bridge_active": bridge_active,
+            "lan_role": "viewer",
+        },
+        "journal": {
+            "ok": journal_ok,
+            "lines": tci_lines,
+        }
+    }))
+    .into_response()
+}
+
+async fn set_tci_settings(Json(request): Json<TciBindRequest>) -> Response {
+    let host = request.host.trim();
+    if host.parse::<std::net::Ipv4Addr>().is_err() {
+        return json_error(
+            StatusCode::BAD_REQUEST,
+            "host must be a plain IPv4 address (e.g. 192.168.0.139)",
+        );
+    }
+    if request.port == 0 {
+        return json_error(StatusCode::BAD_REQUEST, "port must be between 1 and 65535");
+    }
+    let port_text = request.port.to_string();
+    match invoke_tci_bind_helper(&["set", host, &port_text]).await {
+        Ok(stdout) => {
+            Json(serde_json::json!({ "status": "ok", "message": stdout })).into_response()
+        }
+        Err(message) => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({ "status": "error", "message": message })),
         )
             .into_response(),
     }

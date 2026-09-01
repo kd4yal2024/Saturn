@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Saturn Go Settings</title>
+<link rel="stylesheet" href="./assets/css/saturn-ui.css">
+<script src="./assets/vendor/tailwind.js"></script>
+<script src="./assets/js/saturn-shell.js"></script>
+</head>
+<body class="min-h-screen">
+  <div class="max-w-6xl mx-auto px-4 py-6 sm:py-10">
+    <div id="saturn-shell-mount" class="mb-6"></div>
+    <script>
+      SaturnShell.mount({
+        active: 'settings',
+        title: 'Settings',
+        subtitle: 'Network-level configuration for Saturn Bridge and accessories.'
+      });
+    </script>
+
+    <div class="grid grid-cols-1 gap-6">
+      <div class="card p-5">
+        <h2 class="text-xl font-semibold mb-2">Saturn Bridge TCI Server</h2>
+        <p class="text-sm opacity-80 mb-4">
+          The TCI server broadcasts receive frequency (<code>vfo:</code>),
+          authoritative transmit frequency (<code>tx_frequency:</code>), and TX state
+          (<code>trx:</code>) to every connected client, the same way Saturn
+          Remote's browser connection works. Point a TCI-compatible accessory
+          (e.g. an amplifier that follows band/frequency changes) at this
+          address to have it track the radio automatically.
+        </p>
+        <p class="text-sm mb-4 rounded p-3" style="background: rgba(240,183,46,0.12); border: 1px solid rgba(240,183,46,0.35);">
+          <strong>LAN clients are read-only accessories.</strong> A client that
+          connects through a non-loopback address can receive frequency, mode,
+          meters, and TX state, but it cannot become operator or key TX.
+          Loopback connections through Saturn Go remain the control path.
+        </p>
+
+        <div class="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-4">
+          <div>
+            <div class="text-xs opacity-70 mb-1">Current host</div>
+            <div id="tci-current-host" class="text-lg font-mono">—</div>
+          </div>
+          <div>
+            <div class="text-xs opacity-70 mb-1">Current port</div>
+            <div id="tci-current-port" class="text-lg font-mono">—</div>
+          </div>
+          <div>
+            <div class="text-xs opacity-70 mb-1">Reachability</div>
+            <div id="tci-current-reach" class="text-lg font-mono">—</div>
+          </div>
+        </div>
+
+        <div class="grid grid-cols-1 sm:grid-cols-3 gap-4 items-end mb-2">
+          <div>
+            <label class="block text-sm mb-1" for="tci-host-input">Host (IPv4)</label>
+            <input id="tci-host-input" type="text" class="field px-3 py-2 w-full" placeholder="192.168.0.139" />
+          </div>
+          <div>
+            <label class="block text-sm mb-1" for="tci-port-input">Port</label>
+            <input id="tci-port-input" type="number" min="1" max="65535" class="field px-3 py-2 w-full" placeholder="50001" />
+          </div>
+          <div>
+            <button id="tci-save-btn" class="btn btn-primary px-5 py-2 w-full">Save TCI Bind</button>
+          </div>
+        </div>
+        <div class="text-xs opacity-75 mb-3">
+          If Saturn Bridge is running, saving restarts it through the radio
+          ownership broker. If it is stopped, it stays stopped so clean boot
+          remains Protocol 2 first. Save only while not transmitting.
+        </div>
+        <div id="tci-save-result" class="text-sm mb-4"></div>
+
+        <h3 class="text-sm font-semibold mb-2 opacity-80">Recent TCI Activity</h3>
+        <pre id="tci-log" style="min-height:220px; max-height:360px; overflow:auto;"></pre>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+
+    async function refreshTciStatus() {
+      try {
+        const res = await fetch('./tci_status', { cache: 'no-store' });
+        const data = await res.json();
+        if (data.status !== 'ok') return;
+        $('tci-current-host').textContent = data.tci.host;
+        $('tci-current-port').textContent = data.tci.port;
+        $('tci-current-reach').textContent = data.tci.lan_reachable ? 'LAN-reachable' : 'Localhost only';
+        if (!$('tci-host-input').value) $('tci-host-input').value = data.tci.host;
+        if (!$('tci-port-input').value) $('tci-port-input').value = data.tci.port;
+        const lines = (data.journal && data.journal.lines) || [];
+        $('tci-log').textContent = lines.length ? lines.join('\n') : '(no recent TCI activity in the last 300 log lines)';
+        $('tci-log').scrollTop = $('tci-log').scrollHeight;
+      } catch (error) {
+        // Transient fetch failures are expected right after a bridge restart; next poll recovers.
+      }
+    }
+
+    $('tci-save-btn').addEventListener('click', async () => {
+      const host = $('tci-host-input').value.trim();
+      const port = Number($('tci-port-input').value);
+      const resultEl = $('tci-save-result');
+      resultEl.textContent = 'Saving...';
+      resultEl.className = 'text-sm mb-4 opacity-70';
+      $('tci-save-btn').disabled = true;
+      try {
+        const res = await fetch('./tci_settings', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Saturn-CSRF': '1',
+          },
+          body: JSON.stringify({ host, port }),
+        });
+        const data = await res.json();
+        if (data.status === 'ok') {
+          resultEl.textContent = `Applied: ${data.message || 'TCI bind updated'}`;
+          resultEl.className = 'text-sm mb-4';
+          resultEl.style.color = '#3fb950';
+        } else {
+          resultEl.textContent = `Error: ${data.message || 'unknown error'}`;
+          resultEl.className = 'text-sm mb-4';
+          resultEl.style.color = '#f85149';
+        }
+      } catch (error) {
+        resultEl.textContent = `Request failed: ${error.message || error}`;
+        resultEl.style.color = '#f85149';
+      } finally {
+        $('tci-save-btn').disabled = false;
+        setTimeout(refreshTciStatus, 3000);
+      }
+    });
+
+    refreshTciStatus();
+    setInterval(refreshTciStatus, 5000);
+  </script>
+</body>
+</html>

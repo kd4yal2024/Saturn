@@ -1,6 +1,6 @@
 use super::*;
 use crate::radio_model::{
-    DemodMode, NoiseBlankerMode, Nr2GainMethod, Nr2NpeMethod, WbfmDeemphasis,
+    AgcMode, DemodMode, NoiseBlankerMode, Nr2GainMethod, Nr2NpeMethod, WbfmDeemphasis,
 };
 use crate::tx_codec::{TxCodecDecoder, TxDecodeError, TxMicCodec};
 use crate::tx_codec::{
@@ -2147,6 +2147,90 @@ fn operator_disconnect_promotes_oldest_viewer() {
 }
 
 #[test]
+fn lan_accessory_cannot_become_or_inherit_operator_role() {
+    let clients: ClientRegistry = Arc::new(Mutex::new(BTreeMap::new()));
+    let operator_client_id = Arc::new(AtomicU64::new(0));
+
+    let (lan_role, first_client, _) = register_client(
+        &clients,
+        &operator_client_id,
+        41,
+        ClientOutbound::new(),
+        TxCodecRuntimeFlags::default(),
+        None,
+        false,
+    );
+    assert!(first_client);
+    assert_eq!(lan_role, TciClientRole::Viewer);
+    assert_eq!(operator_client_id.load(Ordering::SeqCst), 0);
+
+    let (loopback_role, _, _) = register_client(
+        &clients,
+        &operator_client_id,
+        42,
+        ClientOutbound::new(),
+        TxCodecRuntimeFlags::default(),
+        None,
+        true,
+    );
+    assert_eq!(loopback_role, TciClientRole::Operator);
+    assert_eq!(operator_client_id.load(Ordering::SeqCst), 42);
+
+    let disconnect = unregister_client(&clients, &operator_client_id, 42);
+    assert!(disconnect.was_operator);
+    assert_eq!(disconnect.promoted_operator, None);
+    assert_eq!(operator_client_id.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn lan_tci_bind_also_opens_same_family_loopback_listener() {
+    let configured: SocketAddr = "192.168.0.139:50001".parse().unwrap();
+    assert_eq!(
+        listener_addrs(configured),
+        vec![configured, "127.0.0.1:50001".parse().unwrap()]
+    );
+}
+
+#[test]
+fn loopback_and_wildcard_tci_binds_do_not_add_duplicate_listener() {
+    let loopback: SocketAddr = "127.0.0.1:50001".parse().unwrap();
+    assert_eq!(listener_addrs(loopback), vec![loopback]);
+
+    let wildcard: SocketAddr = "0.0.0.0:50001".parse().unwrap();
+    assert_eq!(listener_addrs(wildcard), vec![wildcard]);
+}
+
+#[test]
+fn lan_split_session_operator_request_is_downgraded_to_viewer() {
+    let clients: ClientRegistry = Arc::new(Mutex::new(BTreeMap::new()));
+    let mut state = ClientState::default();
+    state.operator_eligible = false;
+    clients.lock_unpoisoned().insert(
+        51,
+        ClientConnection {
+            outbound: ClientOutbound::new(),
+            state,
+        },
+    );
+
+    let role =
+        set_client_split_session_open(&clients, 51, "lan-accessory", TciClientRole::Operator);
+    assert_eq!(role, Some(TciClientRole::Viewer));
+    assert_eq!(
+        clients
+            .lock_unpoisoned()
+            .get(&51)
+            .unwrap()
+            .state
+            .split
+            .as_ref()
+            .unwrap()
+            .role,
+        Some(TciClientRole::Viewer)
+    );
+}
+
+#[test]
 fn split_media_disconnect_forces_rx_when_paired_with_operator() {
     let (tx, rx) = mpsc::channel();
     let clients = test_client_registry(91);
@@ -2256,4 +2340,101 @@ fn initial_snapshot_includes_remote_tx_rf_state() {
     assert!(enabled.contains(&"tx_speech_processor:0,false;".to_string()));
     assert!(enabled.contains(&"tx_speech_processor_gain:0,10.0;".to_string()));
     assert!(enabled.contains(&"tx_cessb:0,false;".to_string()));
+}
+
+#[test]
+fn initial_snapshot_has_standard_tci_initialization_before_ready() {
+    let model = RadioModel::new(2, 14_200_000, 0, 192, 24, 2048, true, 4096, true);
+    let messages = initial_snapshot_messages(&model, false, 7, TciClientRole::Viewer);
+
+    assert_eq!(
+        messages.first().map(String::as_str),
+        Some("protocol:SaturnBridge,2.0;")
+    );
+    assert_eq!(messages.last().map(String::as_str), Some("ready;"));
+    for required in [
+        "device:ANAN-G2;",
+        "receive_only:false;",
+        "trx_count:1;",
+        "channel_count:2;",
+        "vfo_limits:10000,61440000;",
+        "if_limits:-96000,96000;",
+        "modulations_list:LSB,USB,CWL,CWU,AM,SAM,FM,NFM,DIGL,DIGU,WFM;",
+    ] {
+        assert!(
+            messages.iter().any(|message| message == required),
+            "missing {required}"
+        );
+    }
+}
+
+#[test]
+fn initial_snapshot_publishes_authoritative_split_tx_frequency() {
+    let mut model = RadioModel::new(2, 14_200_000, 0, 192, 24, 2048, true, 4096, true);
+    model.desired.vfo_a_hz = 7_100_000;
+    model.desired.vfo_b_hz = 14_250_000;
+    model.desired.active_vfo = 0;
+    model.desired.split_enabled = true;
+    model.sync_vfo_routes();
+
+    let messages = initial_snapshot_messages(&model, false, 7, TciClientRole::Viewer);
+    assert!(messages.contains(&"vfo:0,0,7100000;".to_string()));
+    assert!(messages.contains(&"split_enable:0,true;".to_string()));
+    assert!(messages.contains(&"tx_frequency:14250000;".to_string()));
+}
+
+#[test]
+fn viewer_may_read_standard_state_but_may_not_change_it() {
+    let (tx, rx) = mpsc::channel();
+    let clients = test_client_registry(29);
+
+    parse_tci_command("vfo:0,0", &tx, &clients, 29, false);
+    assert!(matches!(
+        rx.recv().unwrap(),
+        TciCommand::RequestRadioState { client_id: 29 }
+    ));
+
+    parse_tci_command("vfo:0,0,7100000", &tx, &clients, 29, false);
+    assert!(rx.try_recv().is_err());
+}
+
+#[test]
+fn parses_standard_tci_control_aliases() {
+    let (tx, rx) = mpsc::channel();
+    let clients = test_client_registry(30);
+
+    for command in [
+        "split_enable:0,true",
+        "drive:0,25",
+        "agc_mode:0,fast",
+        "agc_gain:0,73",
+        "rx_nb_enable:0,true",
+        "rx_nr_enable:0,true",
+        "rx_anf_enable:0,true",
+    ] {
+        parse_tci_command(command, &tx, &clients, 30, true);
+    }
+
+    assert!(matches!(
+        rx.recv().unwrap(),
+        TciCommand::SetSplitEnabled(true)
+    ));
+    assert!(matches!(rx.recv().unwrap(), TciCommand::SetTxDrive(25)));
+    assert!(matches!(
+        rx.recv().unwrap(),
+        TciCommand::SetAgcMode(AgcMode::Fast)
+    ));
+    assert!(matches!(rx.recv().unwrap(), TciCommand::SetAgcGain(value) if value == 73.0));
+    assert!(matches!(
+        rx.recv().unwrap(),
+        TciCommand::SetNoiseBlankerMode(NoiseBlankerMode::Nb1)
+    ));
+    assert!(matches!(
+        rx.recv().unwrap(),
+        TciCommand::SetRxNoiseReductionEnabled(true)
+    ));
+    assert!(matches!(
+        rx.recv().unwrap(),
+        TciCommand::SetAnfEnabled(true)
+    ));
 }

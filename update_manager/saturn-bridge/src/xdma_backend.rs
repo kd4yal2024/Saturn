@@ -108,7 +108,9 @@ fn command_effects(command: &TciCommand) -> CommandEffects {
         // is present.
         radio_state_dirty: !matches!(
             command,
-            TciCommand::MicAudioFrame(_) | TciCommand::SaturnPing { .. }
+            TciCommand::MicAudioFrame(_)
+                | TciCommand::SaturnPing { .. }
+                | TciCommand::RequestRadioState { .. }
         ),
     }
 }
@@ -661,6 +663,9 @@ fn handle_command(
             }
         }
         TciCommand::SetIqStreaming | TciCommand::RequestSmeter => {}
+        TciCommand::RequestRadioState { client_id } => {
+            tci.publish_standard_radio_state_to(client_id, &model);
+        }
         TciCommand::SaturnPing { .. } => {
             unreachable!("Saturn heartbeat is handled before model locking")
         }
@@ -1104,6 +1109,9 @@ mod tests {
             sent_at: "123.456".to_string(),
         });
         assert!(!effects.radio_state_dirty);
+        assert!(
+            !command_effects(&TciCommand::RequestRadioState { client_id: 8 }).radio_state_dirty
+        );
 
         // The one-second S-meter request remains the periodic full-state
         // convergence point.

@@ -19,6 +19,10 @@ use super::*;
 
 #[derive(Clone, Debug)]
 pub(crate) struct ClientState {
+    /// Only trusted loopback clients may become the radio operator. Raw TCI
+    /// sessions accepted from the LAN are accessory/viewer sessions: they can
+    /// observe frequency, mode, meters, and TX state but cannot control RF.
+    pub(crate) operator_eligible: bool,
     pub(crate) iq_stream_enabled: bool,
     pub(crate) audio_stream_enabled: bool,
     pub(crate) audio_sample_rate_hz: u32,
@@ -61,6 +65,7 @@ impl Default for ClientState {
 impl ClientState {
     pub(crate) fn with_tx_codec_runtime_flags(tx_codec_runtime_flags: TxCodecRuntimeFlags) -> Self {
         Self {
+            operator_eligible: true,
             iq_stream_enabled: false,
             audio_stream_enabled: false,
             audio_sample_rate_hz: 48_000,
@@ -145,6 +150,7 @@ pub(crate) fn handle_client(
     match accept_result {
         Ok(mut websocket) => {
             let outbound = ClientOutbound::new();
+            let operator_eligible = addr.ip().is_loopback();
             let (role, first_client, client_count) = register_client(
                 clients,
                 operator_client_id,
@@ -152,6 +158,7 @@ pub(crate) fn handle_client(
                 outbound.clone(),
                 tx_codec_runtime_flags,
                 connect_lane_hint,
+                operator_eligible,
             );
             println!(
                 "saturn-bridge: TCI client {client_id} assigned {} role ({client_count} connected){}",
@@ -355,15 +362,19 @@ pub(crate) fn register_client(
     outbound: Arc<ClientOutbound>,
     tx_codec_runtime_flags: TxCodecRuntimeFlags,
     connect_lane_hint: Option<SplitSocketKind>,
+    operator_eligible: bool,
 ) -> (TciClientRole, bool, usize) {
     let mut clients = clients.lock_unpoisoned();
     let first_client = clients.is_empty();
     let mut state = ClientState::with_tx_codec_runtime_flags(tx_codec_runtime_flags);
     state.connect_lane_hint = connect_lane_hint;
+    state.operator_eligible = operator_eligible;
     clients.insert(client_id, ClientConnection { outbound, state });
 
     let current_operator = operator_client_id.load(Ordering::SeqCst);
-    let role = if current_operator == 0 || !clients.contains_key(&current_operator) {
+    let role = if operator_eligible
+        && (current_operator == 0 || !clients.contains_key(&current_operator))
+    {
         operator_client_id.store(client_id, Ordering::SeqCst);
         TciClientRole::Operator
     } else {
@@ -390,7 +401,7 @@ pub(crate) fn unregister_client(
     if was_operator {
         if let Some((&next_operator, _)) = clients
             .iter()
-            .find(|(_, client)| !client_is_split_media(client))
+            .find(|(_, client)| client.state.operator_eligible && !client_is_split_media(client))
         {
             operator_client_id.store(next_operator, Ordering::SeqCst);
             promoted_operator = Some(next_operator);
@@ -433,7 +444,18 @@ pub(crate) fn initial_snapshot_messages(
     role: TciClientRole,
 ) -> Vec<String> {
     vec![
-        "ready;".to_string(),
+        "protocol:SaturnBridge,2.0;".to_string(),
+        "device:ANAN-G2;".to_string(),
+        "receive_only:false;".to_string(),
+        "trx_count:1;".to_string(),
+        "channel_count:2;".to_string(),
+        "vfo_limits:10000,61440000;".to_string(),
+        format!(
+            "if_limits:-{},{};",
+            model.desired.ddc0_sample_rate_khz as u32 * 500,
+            model.desired.ddc0_sample_rate_khz as u32 * 500
+        ),
+        "modulations_list:LSB,USB,CWL,CWU,AM,SAM,FM,NFM,DIGL,DIGU,WFM;".to_string(),
         remote_client_role_message(client_id, role),
         format!("vfo:0,0,{};", model.desired.vfo_a_hz),
         format!("vfo:0,1,{};", model.desired.vfo_b_hz),
@@ -446,6 +468,7 @@ pub(crate) fn initial_snapshot_messages(
             }
         ),
         format!("split:0,{};", model.desired.split_enabled),
+        format!("split_enable:0,{};", model.desired.split_enabled),
         format!("dds:0,{};", model.desired.iq_center_hz),
         format!("rx_adc:0,{};", model.desired.ddc0_adc),
         format!("rx_antenna:0,{};", model.desired.rx_antenna.max(1).min(3)),
@@ -499,10 +522,31 @@ pub(crate) fn initial_snapshot_messages(
         format!("rx_anf_leakage:0,{:.6};", model.desired.rx_anf_leakage),
         format!("rx_agc:0,{};", model.desired.agc_mode),
         format!("rx_agc_gain:0,{:.0};", model.desired.agc_gain),
+        format!(
+            "agc_mode:0,{};",
+            match model.desired.agc_mode {
+                crate::radio_model::AgcMode::Off => "off",
+                crate::radio_model::AgcMode::Fast => "fast",
+                _ => "normal",
+            }
+        ),
+        format!("agc_gain:0,{:.0};", model.desired.agc_gain),
+        format!(
+            "rx_nb_enable:0,{};",
+            model.desired.nb_mode != crate::radio_model::NoiseBlankerMode::Off
+        ),
+        format!(
+            "rx_nr_enable:0,{};",
+            model.desired.rx_noise_reduction_mode != NoiseReductionMode::Off
+        ),
+        format!("rx_anf_enable:0,{};", model.desired.anf_enabled),
         format!("tx_drive:0,{};", model.desired.tx_drive),
+        format!("drive:0,{};", model.desired.tx_drive),
         format!("remote_tx_rf_enabled:0,{remote_tx_rf_enabled};"),
+        format!("tx_enable:0,{remote_tx_rf_enabled};"),
         format!("tx_mic_gain:0,{:.1};", model.desired.tx_mic_gain_db),
         format!("trx:0,{};", model.desired.tx_enabled),
+        format!("tx_frequency:{};", model.desired.tx_frequency_hz),
         format!("tx_state:0,{};", model.desired.tx_phase),
         format!(
             "tx_filter_band:0,{},{};",
@@ -625,6 +669,7 @@ pub(crate) fn initial_snapshot_messages(
         format!("tx_low_latency:0,{};", model.desired.tx_low_latency),
         "tune:0,false;".to_string(),
         "audio_samplerate:48000;".to_string(),
+        "ready;".to_string(),
     ])
     .collect()
 }

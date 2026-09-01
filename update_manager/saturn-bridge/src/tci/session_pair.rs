@@ -260,7 +260,8 @@ pub(crate) fn reconcile_split_operator_role(
         let pair = split_session_pair_in_clients(&clients, &changed_metadata.session_id)?;
         let control = clients.get(&pair.control_client_id)?;
         let control_metadata = control.state.split.as_ref()?;
-        if control_metadata.role != Some(TciClientRole::Operator)
+        if !control.state.operator_eligible
+            || control_metadata.role != Some(TciClientRole::Operator)
             || current_operator == pair.control_client_id
         {
             return None;
@@ -321,14 +322,19 @@ pub(crate) fn set_client_split_session_open(
     clients: &ClientRegistry,
     client_id: u64,
     session_id: &str,
-    role: TciClientRole,
-) -> bool {
+    requested_role: TciClientRole,
+) -> Option<TciClientRole> {
     let Some(session_id) = normalize_split_session_id(session_id) else {
-        return false;
+        return None;
     };
     let mut clients = clients.lock_unpoisoned();
     let Some(client) = clients.get_mut(&client_id) else {
-        return false;
+        return None;
+    };
+    let role = if client.state.operator_eligible {
+        requested_role
+    } else {
+        TciClientRole::Viewer
     };
     let metadata = client
         .state
@@ -340,10 +346,10 @@ pub(crate) fn set_client_split_session_open(
             ignore_media_until: None,
         });
     if metadata.session_id != session_id {
-        return false;
+        return None;
     }
     metadata.role = Some(role);
-    true
+    Some(role)
 }
 
 pub(crate) fn set_client_split_session_lane(

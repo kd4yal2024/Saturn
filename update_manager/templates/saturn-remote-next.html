@@ -11208,6 +11208,8 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
 
       $("operations-memory-save-btn")?.addEventListener("click", () => {
         rememberCurrentBandSettings();
+        persistLocalSettingsFallback(currentRemoteSettings());
+        scheduleRemoteSettingsSave();
         updateOperationsDrawer(true);
         logEvent("Saved current band memory from Operations");
       });
@@ -11917,6 +11919,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         phonePanels: sanitizePhonePanels(state.phonePanels),
         displayPrefs: currentDisplayPrefs(),
         radioPrefs: currentRadioPrefs(),
+        bandMemory: sanitizeBandMemory(state.bandMemory),
       };
     }
 
@@ -12337,6 +12340,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         localStorage.setItem("saturn.remote.theme", settings.theme === "light" ? "light" : "dark");
         localStorage.setItem("saturn.remote.phonePanels", JSON.stringify(sanitizePhonePanels(settings.phonePanels)));
         localStorage.setItem(DISPLAY_PREFS_KEY, JSON.stringify(settings.displayPrefs || currentDisplayPrefs()));
+        localStorage.setItem(BAND_MEMORY_KEY, JSON.stringify(sanitizeBandMemory(settings.bandMemory || state.bandMemory)));
         localStorage.setItem(ACTIVE_PROFILE_KEY, settings.activeProfile || "");
       } catch (error) {
         console.warn("Saturn Remote settings fallback save failed", error);
@@ -12377,6 +12381,9 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       if (settings.phonePanels && typeof settings.phonePanels === "object") {
         state.phonePanels = sanitizePhonePanels(settings.phonePanels, state.phonePanels);
         syncPhonePanels();
+      }
+      if (settings.bandMemory && typeof settings.bandMemory === "object") {
+        state.bandMemory = sanitizeBandMemory(settings.bandMemory);
       }
       ensureBridgeWsUrl();
       if ($("display-zoom")) {

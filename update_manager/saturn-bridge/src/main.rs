@@ -56,6 +56,113 @@ const TX_CONTROL_WATCHDOG_LIMIT: Duration = Duration::from_millis(500);
 // from phone/Tailscale timer jitter while mic frames still flow on media.
 const TX_CONTROL_WATCHDOG_SPLIT_LIMIT: Duration = Duration::from_millis(1500);
 
+static P2_STOP_REQUESTED: AtomicBool = AtomicBool::new(false);
+
+struct P2SignalGuard {
+    previous_int: libc::sigaction,
+    previous_term: libc::sigaction,
+}
+
+impl P2SignalGuard {
+    fn install() -> std::io::Result<Self> {
+        P2_STOP_REQUESTED.store(false, Ordering::SeqCst);
+        // SAFETY: the handler performs only an async-signal-safe atomic store,
+        // and Drop restores the exact dispositions returned by sigaction.
+        unsafe {
+            let mut action: libc::sigaction = std::mem::zeroed();
+            action.sa_sigaction = p2_stop_signal as *const () as usize;
+            libc::sigemptyset(&mut action.sa_mask);
+            action.sa_flags = 0;
+            let mut previous_int: libc::sigaction = std::mem::zeroed();
+            let mut previous_term: libc::sigaction = std::mem::zeroed();
+            if libc::sigaction(libc::SIGINT, &action, &mut previous_int) != 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            if libc::sigaction(libc::SIGTERM, &action, &mut previous_term) != 0 {
+                libc::sigaction(libc::SIGINT, &previous_int, std::ptr::null_mut());
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(Self {
+                previous_int,
+                previous_term,
+            })
+        }
+    }
+}
+
+impl Drop for P2SignalGuard {
+    fn drop(&mut self) {
+        // SAFETY: these values came from sigaction for these signals.
+        unsafe {
+            libc::sigaction(libc::SIGINT, &self.previous_int, std::ptr::null_mut());
+            libc::sigaction(libc::SIGTERM, &self.previous_term, std::ptr::null_mut());
+        }
+    }
+}
+
+extern "C" fn p2_stop_signal(_signal: libc::c_int) {
+    P2_STOP_REQUESTED.store(true, Ordering::SeqCst);
+}
+
+struct P2RuntimeSafetyGuard {
+    session: Arc<P2Session>,
+    radio_model: Arc<Mutex<RadioModel>>,
+    tx_cmd_tx: mpsc::Sender<TxCommand>,
+    tx_requested: Arc<AtomicBool>,
+    stop_flag: Arc<AtomicBool>,
+    shutdown_requested: bool,
+    controller_released: bool,
+    finished: bool,
+}
+
+impl P2RuntimeSafetyGuard {
+    fn request_tx_shutdown(&mut self) {
+        if self.shutdown_requested {
+            return;
+        }
+        self.tx_requested.store(false, Ordering::Relaxed);
+        {
+            let mut model = self.radio_model.lock_unpoisoned();
+            model.desired.tx_enabled = false;
+            model.desired.tx_phase = TxPhase::Rx;
+            model.desired.running = false;
+        }
+        let _ = self.tx_cmd_tx.send(TxCommand::Disarm);
+        let _ = self.tx_cmd_tx.send(TxCommand::Shutdown);
+        self.shutdown_requested = true;
+    }
+
+    fn release_controller(&mut self) -> std::io::Result<()> {
+        match self.session.send_stop() {
+            Ok(()) => {
+                self.controller_released = true;
+                Ok(())
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    fn finish(&mut self) {
+        self.stop_flag.store(true, Ordering::Relaxed);
+        self.finished = true;
+    }
+}
+
+impl Drop for P2RuntimeSafetyGuard {
+    fn drop(&mut self) {
+        if self.finished {
+            return;
+        }
+        self.request_tx_shutdown();
+        if !self.controller_released {
+            if let Err(error) = self.release_controller() {
+                eprintln!("saturn-bridge: P2 emergency controller release failed: {error}");
+            }
+        }
+        self.stop_flag.store(true, Ordering::Relaxed);
+    }
+}
+
 fn parse_remote_tx_max_watts(value: Option<&str>) -> u8 {
     value
         .and_then(|value| value.trim().parse::<u8>().ok())
@@ -285,6 +392,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         config.ddc0_sample_size_bits = 24;
         return xdma_backend::run(config);
     }
+    let _signal_guard = P2SignalGuard::install()?;
     let radio_model = Arc::new(Mutex::new(RadioModel::new(
         config.rx_ddc_index,
         config.ddc0_frequency_hz,
@@ -320,6 +428,16 @@ fn main() -> Result<(), Box<dyn Error>> {
     let (rx_event_tx, rx_event_rx) = mpsc::channel();
     let rx_stats = Arc::new(RxStats::default());
     let tx_requested = Arc::new(AtomicBool::new(false));
+    let mut runtime_guard = P2RuntimeSafetyGuard {
+        session: session.clone(),
+        radio_model: radio_model.clone(),
+        tx_cmd_tx: tx_cmd_tx.clone(),
+        tx_requested: tx_requested.clone(),
+        stop_flag: stop_flag.clone(),
+        shutdown_requested: false,
+        controller_released: false,
+        finished: false,
+    };
 
     println!(
         "saturn-bridge: binding {} -> radio {} | TCI {} | remote TX RF {} | remote TX max target={}W 100W-drive-byte={} power meter scale={:.4} power trip={:.1}W | TCI release grace={}ms | display fps cap={} | max client DDC0 rate={}k | RX audio transport={}Hz/{}ch",
@@ -377,6 +495,10 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut tx_uplink_fault_active = false;
     let mut tx_control_watchdog_fault_active = false;
     loop {
+        if P2_STOP_REQUESTED.load(Ordering::Relaxed) {
+            println!("saturn-bridge: P2 shutdown signal received; disarming TX");
+            break;
+        }
         let mut did_work = false;
         let mut needs_bootstrap = false;
         let mut needs_stop = false;
@@ -388,6 +510,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 break;
             };
             did_work = true;
+            let targeted_state_read = matches!(&command, TciCommand::RequestRadioState { .. });
             let mut model = radio_model.lock_unpoisoned();
             let mut reconfigure_ddc = false;
 
@@ -546,6 +669,9 @@ fn main() -> Result<(), Box<dyn Error>> {
                 }
                 TciCommand::SetIqStreaming => {}
                 TciCommand::RequestSmeter => {}
+                TciCommand::RequestRadioState { client_id } => {
+                    tci.publish_standard_radio_state_to(client_id, &model);
+                }
                 TciCommand::SaturnPing {
                     client_id,
                     nonce,
@@ -954,7 +1080,9 @@ fn main() -> Result<(), Box<dyn Error>> {
                 )?;
             }
             let _ = rx_cmd_tx.send(RxCommand::ModelChanged);
-            tci.publish_radio_state(&model);
+            if !targeted_state_read {
+                tci.publish_radio_state(&model);
+            }
         }
 
         // bootstrap() acquires the radio_model lock internally, so it must be called
@@ -1270,15 +1398,20 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
     }
 
+    runtime_guard.request_tx_shutdown();
+    let tx_result = tx_thread.join().map_err(|_| "TX thread panicked");
+    let stop_result = runtime_guard.release_controller();
     stop_flag.store(true, Ordering::Relaxed);
-    let _ = tx_cmd_tx.send(TxCommand::Shutdown);
     let hp_result = hp_thread
         .join()
-        .map_err(|_| "high-priority thread panicked")?;
-    hp_result?;
-    tx_thread.join().map_err(|_| "TX thread panicked")?;
-    rx_thread.join().map_err(|_| "RX thread panicked")?;
+        .map_err(|_| "high-priority thread panicked");
+    let rx_result = rx_thread.join().map_err(|_| "RX thread panicked");
     thread::sleep(Duration::from_millis(10));
+    tx_result?;
+    stop_result?;
+    hp_result??;
+    rx_result?;
+    runtime_guard.finish();
     Ok(())
 }
 

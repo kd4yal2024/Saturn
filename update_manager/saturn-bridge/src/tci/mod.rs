@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 use std::io;
-use std::net::TcpListener;
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, TcpListener};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 #[cfg(test)]
 use std::sync::mpsc;
@@ -112,6 +112,18 @@ struct JoinGuard {
 /// Four authenticated split clients use at most two bridge sockets each.
 pub(crate) const MAX_TCI_CONNECTIONS: u64 = 8;
 
+fn listener_addrs(configured: SocketAddr) -> Vec<SocketAddr> {
+    let mut addrs = vec![configured];
+    if !configured.ip().is_loopback() && !configured.ip().is_unspecified() {
+        let loopback_ip = match configured.ip() {
+            IpAddr::V4(_) => IpAddr::V4(Ipv4Addr::LOCALHOST),
+            IpAddr::V6(_) => IpAddr::V6(Ipv6Addr::LOCALHOST),
+        };
+        addrs.push(SocketAddr::new(loopback_ip, configured.port()));
+    }
+    addrs
+}
+
 fn try_reserve_connection_slot(active: &AtomicU64, high_watermark: &AtomicU64) -> bool {
     loop {
         let current = active.load(Ordering::Acquire);
@@ -136,8 +148,15 @@ impl TciFrontend {
         config: &BridgeConfig,
         radio_model: Arc<Mutex<RadioModel>>,
     ) -> io::Result<(Self, TciCommandMailboxReceiver)> {
-        let listener = TcpListener::bind(config.tci_bind_addr)?;
-        listener.set_nonblocking(true)?;
+        let listeners = listener_addrs(config.tci_bind_addr)
+            .into_iter()
+            .map(|addr| {
+                let listener = TcpListener::bind(addr)?;
+                listener.set_nonblocking(true)?;
+                println!("saturn-bridge: TCI websocket listening on {addr}");
+                Ok(listener)
+            })
+            .collect::<io::Result<Vec<_>>>()?;
 
         let (command_tx, command_rx) = tci_command_mailbox();
         let clients = Arc::new(Mutex::new(BTreeMap::new()));
@@ -163,58 +182,63 @@ impl TciFrontend {
         let connection_high_water = connection_high_watermark.clone();
         let radio_model = radio_model.clone();
         let handle = thread::spawn(move || loop {
-            match listener.accept() {
-                Ok((stream, addr)) => {
-                    if !try_reserve_connection_slot(
-                        &active_connection_counter,
-                        &connection_high_water,
-                    ) {
-                        rejected_connection_counter.fetch_add(1, Ordering::Relaxed);
-                        eprintln!(
+            let mut accepted_connection = false;
+            for listener in &listeners {
+                match listener.accept() {
+                    Ok((stream, addr)) => {
+                        accepted_connection = true;
+                        if !try_reserve_connection_slot(
+                            &active_connection_counter,
+                            &connection_high_water,
+                        ) {
+                            rejected_connection_counter.fetch_add(1, Ordering::Relaxed);
+                            eprintln!(
                             "saturn-bridge: rejecting TCI websocket from {addr}: connection limit {} reached",
                             MAX_TCI_CONNECTIONS
                         );
-                        drop(stream);
-                        continue;
-                    }
-                    let client_id = next_client.fetch_add(1, Ordering::SeqCst) + 1;
-                    println!(
-                        "saturn-bridge: TCI websocket client {client_id} connected from {addr}"
-                    );
-
-                    let command_tx = command_tx.clone();
-                    let clients = client_registry.clone();
-                    let operator_client_id = operator_client.clone();
-                    let operator_control_at = operator_control.clone();
-                    let drop_count = drop_counter.clone();
-                    let radio_model = radio_model.clone();
-                    let tx_codec_runtime_flags = tx_codec_runtime_flags;
-                    let active_connections = active_connection_counter.clone();
-
-                    thread::spawn(move || {
-                        handle_client(
-                            stream,
-                            addr,
-                            client_id,
-                            &command_tx,
-                            &clients,
-                            &operator_client_id,
-                            &operator_control_at,
-                            &radio_model,
-                            &drop_count,
-                            remote_tx_rf_enabled,
-                            tx_codec_runtime_flags,
+                            drop(stream);
+                            continue;
+                        }
+                        let client_id = next_client.fetch_add(1, Ordering::SeqCst) + 1;
+                        println!(
+                            "saturn-bridge: TCI websocket client {client_id} connected from {addr}"
                         );
-                        active_connections.fetch_sub(1, Ordering::AcqRel);
-                    });
+
+                        let command_tx = command_tx.clone();
+                        let clients = client_registry.clone();
+                        let operator_client_id = operator_client.clone();
+                        let operator_control_at = operator_control.clone();
+                        let drop_count = drop_counter.clone();
+                        let radio_model = radio_model.clone();
+                        let tx_codec_runtime_flags = tx_codec_runtime_flags;
+                        let active_connections = active_connection_counter.clone();
+
+                        thread::spawn(move || {
+                            handle_client(
+                                stream,
+                                addr,
+                                client_id,
+                                &command_tx,
+                                &clients,
+                                &operator_client_id,
+                                &operator_control_at,
+                                &radio_model,
+                                &drop_count,
+                                remote_tx_rf_enabled,
+                                tx_codec_runtime_flags,
+                            );
+                            active_connections.fetch_sub(1, Ordering::AcqRel);
+                        });
+                    }
+                    Err(error) if error.kind() == io::ErrorKind::WouldBlock => {}
+                    Err(error) => {
+                        eprintln!("saturn-bridge: TCI listener error: {error}");
+                        thread::sleep(Duration::from_millis(250));
+                    }
                 }
-                Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
-                    thread::sleep(Duration::from_millis(50));
-                }
-                Err(error) => {
-                    eprintln!("saturn-bridge: TCI listener error: {error}");
-                    thread::sleep(Duration::from_millis(250));
-                }
+            }
+            if !accepted_connection {
+                thread::sleep(Duration::from_millis(50));
             }
         });
 
@@ -436,6 +460,7 @@ impl TciFrontend {
             }
         ));
         self.send_text(format!("split:0,{};", model.desired.split_enabled));
+        self.send_text(format!("split_enable:0,{};", model.desired.split_enabled));
         self.send_text(format!("dds:0,{};", model.desired.iq_center_hz));
         self.send_text(format!("rx_adc:0,{};", model.desired.ddc0_adc));
         self.send_text(format!(
@@ -449,6 +474,11 @@ impl TciFrontend {
         self.send_text(format!(
             "iq_samplerate:{};",
             model.desired.ddc0_sample_rate_khz as u32 * 1000
+        ));
+        self.send_text(format!(
+            "if_limits:-{},{};",
+            model.desired.ddc0_sample_rate_khz as u32 * 500,
+            model.desired.ddc0_sample_rate_khz as u32 * 500
         ));
         self.send_text(format!("modulation:0,{};", model.desired.mode));
         self.send_text(format!("rx_volume:0,0,{:.1};", model.desired.rx_volume_db));
@@ -519,16 +549,37 @@ impl TciFrontend {
         ));
         self.send_text(format!("rx_agc:0,{};", model.desired.agc_mode));
         self.send_text(format!("rx_agc_gain:0,{:.0};", model.desired.agc_gain));
+        self.send_text(format!(
+            "agc_mode:0,{};",
+            match model.desired.agc_mode {
+                crate::radio_model::AgcMode::Off => "off",
+                crate::radio_model::AgcMode::Fast => "fast",
+                _ => "normal",
+            }
+        ));
+        self.send_text(format!("agc_gain:0,{:.0};", model.desired.agc_gain));
+        self.send_text(format!(
+            "rx_nb_enable:0,{};",
+            model.desired.nb_mode != crate::radio_model::NoiseBlankerMode::Off
+        ));
+        self.send_text(format!(
+            "rx_nr_enable:0,{};",
+            model.desired.rx_noise_reduction_mode != NoiseReductionMode::Off
+        ));
+        self.send_text(format!("rx_anf_enable:0,{};", model.desired.anf_enabled));
         self.send_text(format!("tx_drive:0,{};", model.desired.tx_drive));
+        self.send_text(format!("drive:0,{};", model.desired.tx_drive));
         self.send_text(format!(
             "remote_tx_rf_enabled:0,{};",
             self.remote_tx_rf_enabled
         ));
+        self.send_text(format!("tx_enable:0,{};", self.remote_tx_rf_enabled));
         self.send_text(format!(
             "tx_mic_gain:0,{:.1};",
             model.desired.tx_mic_gain_db
         ));
         self.send_text(format!("trx:0,{};", model.desired.tx_enabled));
+        self.send_text(format!("tx_frequency:{};", model.desired.tx_frequency_hz));
         self.send_text(format!("tx_state:0,{};", model.desired.tx_phase));
         self.send_text(format!(
             "tx_filter_band:0,{},{};",
@@ -671,6 +722,42 @@ impl TciFrontend {
         self.publish_telemetry(model);
     }
 
+    pub fn publish_standard_radio_state_to(&self, client_id: u64, model: &RadioModel) {
+        let agc_mode = match model.desired.agc_mode {
+            crate::radio_model::AgcMode::Off => "off",
+            crate::radio_model::AgcMode::Fast => "fast",
+            _ => "normal",
+        };
+        for message in [
+            format!("dds:0,{};", model.desired.iq_center_hz),
+            format!("vfo:0,0,{};", model.desired.vfo_a_hz),
+            format!("vfo:0,1,{};", model.desired.vfo_b_hz),
+            format!("modulation:0,{};", model.desired.mode),
+            format!("trx:0,{};", model.desired.tx_enabled),
+            format!("drive:0,{};", model.desired.tx_drive),
+            format!("split_enable:0,{};", model.desired.split_enabled),
+            format!(
+                "rx_filter_band:0,{},{};",
+                model.desired.filter_low_hz, model.desired.filter_high_hz
+            ),
+            format!("agc_mode:0,{agc_mode};"),
+            format!("agc_gain:0,{:.0};", model.desired.agc_gain),
+            format!(
+                "rx_nb_enable:0,{};",
+                model.desired.nb_mode != crate::radio_model::NoiseBlankerMode::Off
+            ),
+            format!(
+                "rx_nr_enable:0,{};",
+                model.desired.rx_noise_reduction_mode != NoiseReductionMode::Off
+            ),
+            format!("rx_anf_enable:0,{};", model.desired.anf_enabled),
+            format!("tx_enable:0,{};", self.remote_tx_rf_enabled),
+            format!("tx_frequency:{};", model.desired.tx_frequency_hz),
+        ] {
+            self.send_text_to(client_id, message);
+        }
+    }
+
     pub fn publish_tuning_state(&self, model: &RadioModel) {
         self.send_text(format!("vfo:0,0,{};", model.desired.vfo_a_hz));
         self.send_text(format!("vfo:0,1,{};", model.desired.vfo_b_hz));
@@ -683,7 +770,9 @@ impl TciFrontend {
             }
         ));
         self.send_text(format!("split:0,{};", model.desired.split_enabled));
+        self.send_text(format!("split_enable:0,{};", model.desired.split_enabled));
         self.send_text(format!("dds:0,{};", model.desired.iq_center_hz));
+        self.send_text(format!("tx_frequency:{};", model.desired.tx_frequency_hz));
     }
 
     pub fn publish_tx_state(&self, model: &RadioModel) {
@@ -733,6 +822,7 @@ impl TciFrontend {
         ));
         if let Some(meter_dbm) = model.observed.ddc0_meter_dbm {
             self.send_text(format!("rx_smeter:0,0,{meter_dbm:.1};"));
+            self.send_text(format!("rx_channel_sensors:0,0,{meter_dbm:.1};"));
         }
         if let Some(packet) = model.observed.high_priority.as_ref() {
             let fwd_watts =
@@ -745,6 +835,11 @@ impl TciFrontend {
                 "swr:0,{:.2};",
                 calculate_swr_watts(fwd_watts, rev_watts)
             ));
+            let swr = calculate_swr_watts(fwd_watts, rev_watts);
+            let mic_db = model.observed.tx_mic_peak_db.unwrap_or(-120.0);
+            self.send_text(format!(
+                "tx_sensors:0,{mic_db:.1},{fwd_watts:.1},{fwd_watts:.1},{swr:.2};"
+            ));
         } else if let (Some(fwd_watts), Some(rev_watts), Some(swr)) = (
             model.observed.tx_forward_watts,
             model.observed.tx_reflected_watts,
@@ -753,6 +848,10 @@ impl TciFrontend {
             self.send_text(format!("tx_power:0,{fwd_watts:.1};"));
             self.send_text(format!("tx_reflected_power:0,{rev_watts:.1};"));
             self.send_text(format!("swr:0,{swr:.2};"));
+            let mic_db = model.observed.tx_mic_peak_db.unwrap_or(-120.0);
+            self.send_text(format!(
+                "tx_sensors:0,{mic_db:.1},{fwd_watts:.1},{fwd_watts:.1},{swr:.2};"
+            ));
         }
         self.send_text(format!(
             "adc_overload:0,{},{},{};",

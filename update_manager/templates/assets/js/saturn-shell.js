@@ -31,6 +31,7 @@
     {
       label: 'System',
       items: [
+        { key: 'settings', label: 'Settings', href: './settings' },
         { key: 'backup', label: 'Backup / Restore', href: './backup' },
         { key: 'tailscale', label: 'Tailscale VPN', href: './tailscale' },
         { key: 'custom', label: 'Custom Scripts', href: './custom' }
