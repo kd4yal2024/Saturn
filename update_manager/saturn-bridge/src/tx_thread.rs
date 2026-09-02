@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::collections::VecDeque;
 use std::env;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -9,6 +10,7 @@ use std::time::{Duration, Instant};
 use crate::p2::session::P2Session;
 use crate::radio_model::{PureSignalState, RadioModel};
 use crate::sync_ext::MutexExt;
+use crate::tx_audio::{TxAudioIngressStats, TxAudioMessage, TxAudioSource};
 use crate::wdsp::{
     MicRateMatcher, MicRmatchDiags, WdspTxEngine, DUC_IQ_SAMPLES_PER_PACKET,
     TX_MIC_SAMPLES_PER_DSP_BLOCK, WDSP_TX_IQ_RATE_HZ,
@@ -45,6 +47,7 @@ const MIN_TX_SOURCE_STALL: Duration = Duration::from_millis(500);
 const MAX_TX_SOURCE_STALL: Duration = Duration::from_millis(10_000);
 const MAX_DUC_PACKETS_PER_LOOP: usize = 8;
 const MAX_TX_COMMANDS_PER_LOOP: usize = 128;
+const MAX_TX_AUDIO_MESSAGES_PER_LOOP: usize = 128;
 const TX_MIC_INPUT_QUEUE_MAX_SAMPLES: usize = 48_000;
 const DEFAULT_TX_MIC_PREFILL_SAMPLES: usize = 2_048;
 const MIN_TX_MIC_PREFILL_MS: u64 = 20;
@@ -268,12 +271,6 @@ pub enum TxCommand {
     },
     /// PTT released — unkey, send stop burst, deactivate WDSP.
     Disarm,
-    /// Mic audio samples from TCI client.
-    MicAudio {
-        samples: Vec<f32>,
-        channels: u32,
-        sample_rate_hz: u32,
-    },
     PureSignalFeedback {
         sequence: u32,
         tx_reference: Vec<f64>,
@@ -345,6 +342,25 @@ pub struct TxDiagnostics {
     pub mic_rmatch_var_ratio: f64,
     pub mic_rmatch_ringsize: i32,
     pub mic_rmatch_nring: i32,
+    pub audio_source: &'static str,
+    pub audio_ingress_depth: usize,
+    pub audio_ingress_high_water: usize,
+    pub satp_frames_enqueued: u64,
+    pub satp_samples_enqueued: u64,
+    pub satp_frames_queue_full: u64,
+    pub satp_samples_queue_full: u64,
+    pub satp_frames_accepted: u64,
+    pub satp_samples_accepted: u64,
+    pub satp_frames_rejected_idle: u64,
+    pub satp_frames_rejected_source: u64,
+    pub tci_frames_enqueued: u64,
+    pub tci_samples_enqueued: u64,
+    pub tci_frames_queue_full: u64,
+    pub tci_samples_queue_full: u64,
+    pub tci_frames_accepted: u64,
+    pub tci_samples_accepted: u64,
+    pub tci_frames_rejected_idle: u64,
+    pub tci_frames_rejected_source: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -372,6 +388,9 @@ pub fn spawn(
     session: Arc<dyn TxRadio>,
     radio_model: Arc<Mutex<RadioModel>>,
     cmd_rx: Receiver<TxCommand>,
+    audio_rx: Receiver<TxAudioMessage>,
+    audio_stats: Arc<TxAudioIngressStats>,
+    audio_source: TxAudioSource,
     event_tx: Sender<TxEvent>,
     stop_flag: Arc<AtomicBool>,
 ) -> Result<JoinHandle<()>, XdmaError> {
@@ -388,11 +407,29 @@ pub fn spawn(
                     println!(
                         "saturn-bridge: TX thread scheduling cpu={cpu} policy={policy} priority={priority}"
                     );
-                    run(session, radio_model, cmd_rx, event_tx, thread_stop);
+                    run(
+                        session,
+                        radio_model,
+                        cmd_rx,
+                        audio_rx,
+                        audio_stats,
+                        audio_source,
+                        event_tx,
+                        thread_stop,
+                    );
                 }
                 Ok(None) => {
                     let _ = startup_tx.send(Ok(()));
-                    run(session, radio_model, cmd_rx, event_tx, thread_stop);
+                    run(
+                        session,
+                        radio_model,
+                        cmd_rx,
+                        audio_rx,
+                        audio_stats,
+                        audio_source,
+                        event_tx,
+                        thread_stop,
+                    );
                 }
                 Err(error) => {
                     let message = error.to_string();
@@ -453,6 +490,9 @@ fn run(
     session: Arc<dyn TxRadio>,
     radio_model: Arc<Mutex<RadioModel>>,
     cmd_rx: Receiver<TxCommand>,
+    audio_rx: Receiver<TxAudioMessage>,
+    audio_stats: Arc<TxAudioIngressStats>,
+    audio_source: TxAudioSource,
     event_tx: Sender<TxEvent>,
     stop_flag: Arc<AtomicBool>,
 ) {
@@ -503,8 +543,11 @@ fn run(
     let mut tx_source_stall_count = 0u64;
     let tx_mic_prefill_samples = tx_mic_prefill_samples();
     let tx_mic_prefill_ms = tx_mic_prefill_samples as f64 / 48.0;
-    let mut mic_rmatch =
-        tx_mic_rmatch_enabled().then(|| MicRateMatcher::new(tx_mic_prefill_samples));
+    // SATP is a separate capture clock and always requires the existing WDSP
+    // variable-rate matcher. Preserve the production-default bypass for TCI
+    // browser audio unless its explicit experimental opt-in is set.
+    let mut mic_rmatch = tx_audio_requires_rmatch(audio_source, tx_mic_rmatch_enabled())
+        .then(|| MicRateMatcher::new(tx_mic_prefill_samples));
     let startup_settle_blocks = session.startup_settle_blocks();
     let keyable_mic_window = session.keyable_mic_window();
     let qualify_mic_at_dsp_input = session.qualify_mic_at_dsp_input();
@@ -517,11 +560,13 @@ fn run(
     let mut logged_keyable_mic_input = false;
 
     println!(
-        "saturn-bridge: TX thread started; watchdog={}s mic_prefill={} samples ({:.1}ms) mic_rmatch={} settle_blocks={} key_qualify_packets={} mic_window={}ms",
+        "saturn-bridge: TX thread started; audio_source={} watchdog={}s mic_prefill={} samples ({:.1}ms) mic_rmatch={} ingress_capacity={} settle_blocks={} key_qualify_packets={} mic_window={}ms",
+        audio_source.as_str(),
         tx_watchdog.as_secs(),
         tx_mic_prefill_samples,
         tx_mic_prefill_ms,
         mic_rmatch.is_some() as u8,
+        crate::tx_audio::TX_AUDIO_INGRESS_CAPACITY,
         startup_settle_blocks,
         key_qualification.required,
         keyable_mic_window.as_millis()
@@ -627,68 +672,6 @@ fn run(
                         keepalive_resume_frames = 0;
                         tx_display_buffer.clear();
                         tx_display_peak = 0.0;
-                        did_work = true;
-                    }
-                }
-                Ok(TxCommand::MicAudio {
-                    samples,
-                    channels,
-                    sample_rate_hz,
-                }) => {
-                    if state != TxState::Idle {
-                        let mono = mic_samples_to_mono(samples, channels);
-                        let mic_peak = mono.iter().fold(0.0f32, |p, s| p.max(s.abs()));
-                        if mic_peak >= TX_KEY_MIC_PEAK_THRESHOLD && !logged_keyable_mic_input {
-                            logged_keyable_mic_input = true;
-                            println!(
-                                "saturn-bridge: TX mic audio detected (peak={:.4}, threshold={:.4})",
-                                mic_peak, TX_KEY_MIC_PEAK_THRESHOLD
-                            );
-                        }
-                        if mic_peak >= TX_KEY_MIC_PEAK_THRESHOLD && !qualify_mic_at_dsp_input {
-                            last_keyable_mic_at = Some(Instant::now());
-                        }
-                        if let Some(matcher) = mic_rmatch.as_mut() {
-                            matcher.feed(&mono);
-                        } else {
-                            extend_mic_input_queue(&mut pending_mic_samples, &mono);
-                        }
-                        mic_frame_count = mic_frame_count.saturating_add(1);
-                        last_mic_audio_at = Instant::now();
-                        if first_mic_audio_at.is_none() {
-                            first_mic_audio_at = Some(last_mic_audio_at);
-                        }
-                        if mic_frame_count == 1
-                            || last_diag_at.elapsed() >= Duration::from_millis(500)
-                        {
-                            let diag = wdsp_tx.diagnostics();
-                            println!(
-                                "saturn-bridge: TX diag mic frame={} channels={} sample_rate={}Hz mono_samples={} queue_samples={} underruns={} total_samples={} input_peak={:.4} output_peak={:.4} wdsp_mic_pk={:.1}dB wdsp_out_pk={:.1}dB iq_pairs={}",
-                                mic_frame_count,
-                                channels,
-                                sample_rate_hz,
-                                mono.len(),
-                                pending_mic_samples.len(),
-                                mic_queue_underruns,
-                                diag.total_input_samples,
-                                diag.input_peak,
-                                diag.output_peak,
-                                diag.mic_peak_db,
-                                diag.out_peak_db,
-                                diag.total_output_pairs
-                            );
-                            last_diag_at = Instant::now();
-                        }
-                        if keepalive_active {
-                            keepalive_resume_frames = keepalive_resume_frames.saturating_add(1);
-                            if keepalive_resume_frames >= TX_KEEPALIVE_RESUME_FRAMES {
-                                keepalive_active = false;
-                                keepalive_resume_frames = 0;
-                                println!("saturn-bridge: TX live audio resumed");
-                            }
-                        } else {
-                            keepalive_resume_frames = 0;
-                        }
                         did_work = true;
                     }
                 }
@@ -802,6 +785,103 @@ fn run(
             }
         }
 
+        // Realtime audio has its own bounded queue so media can never bury a
+        // PTT release or shutdown command. Only the configured source enters
+        // the shared WDSP/DUC path; the other source is explicitly rejected.
+        for _ in 0..MAX_TX_AUDIO_MESSAGES_PER_LOOP {
+            match audio_rx.try_recv() {
+                Ok(TxAudioMessage::Flush(source)) => {
+                    audio_stats.on_dequeued();
+                    audio_stats.on_flush_processed();
+                    if source == audio_source {
+                        pending_mic_samples.clear();
+                        if let Some(matcher) = mic_rmatch.as_mut() {
+                            matcher.reset();
+                        }
+                        mic_output_started = mic_rmatch.is_some();
+                        last_mic_output_sample = 0.0;
+                    }
+                    did_work = true;
+                }
+                Ok(TxAudioMessage::Frames(frame)) => {
+                    audio_stats.on_dequeued();
+                    if frame.source != audio_source {
+                        audio_stats.on_rejected_source(frame.source);
+                        did_work = true;
+                        continue;
+                    }
+                    if state == TxState::Idle {
+                        audio_stats.on_rejected_idle(frame.source);
+                        did_work = true;
+                        continue;
+                    }
+
+                    let channels = frame.channels;
+                    let sample_rate_hz = frame.sample_rate_hz;
+                    let source = frame.source;
+                    let mono = mic_samples_to_mono(frame.samples.as_slice(), channels);
+                    audio_stats.on_accepted(source, mono.len());
+                    let mic_peak = mono.iter().fold(0.0f32, |p, s| p.max(s.abs()));
+                    if mic_peak >= TX_KEY_MIC_PEAK_THRESHOLD && !logged_keyable_mic_input {
+                        logged_keyable_mic_input = true;
+                        println!(
+                            "saturn-bridge: TX {} audio detected (peak={:.4}, threshold={:.4})",
+                            source.as_str(),
+                            mic_peak,
+                            TX_KEY_MIC_PEAK_THRESHOLD
+                        );
+                    }
+                    if mic_peak >= TX_KEY_MIC_PEAK_THRESHOLD && !qualify_mic_at_dsp_input {
+                        last_keyable_mic_at = Some(Instant::now());
+                    }
+                    if let Some(matcher) = mic_rmatch.as_mut() {
+                        matcher.feed(&mono);
+                    } else {
+                        extend_mic_input_queue(&mut pending_mic_samples, &mono);
+                    }
+                    mic_frame_count = mic_frame_count.saturating_add(1);
+                    last_mic_audio_at = Instant::now();
+                    if first_mic_audio_at.is_none() {
+                        first_mic_audio_at = Some(last_mic_audio_at);
+                    }
+                    if mic_frame_count == 1 || last_diag_at.elapsed() >= Duration::from_millis(500)
+                    {
+                        let diag = wdsp_tx.diagnostics();
+                        println!(
+                            "saturn-bridge: TX diag source={} mic_frame={} channels={} sample_rate={}Hz mono_samples={} queue_samples={} underruns={} total_samples={} input_peak={:.4} output_peak={:.4} wdsp_mic_pk={:.1}dB wdsp_out_pk={:.1}dB iq_pairs={}",
+                            source.as_str(),
+                            mic_frame_count,
+                            channels,
+                            sample_rate_hz,
+                            mono.len(),
+                            pending_mic_samples.len(),
+                            mic_queue_underruns,
+                            diag.total_input_samples,
+                            diag.input_peak,
+                            diag.output_peak,
+                            diag.mic_peak_db,
+                            diag.out_peak_db,
+                            diag.total_output_pairs
+                        );
+                        last_diag_at = Instant::now();
+                    }
+                    if keepalive_active {
+                        keepalive_resume_frames = keepalive_resume_frames.saturating_add(1);
+                        if keepalive_resume_frames >= TX_KEEPALIVE_RESUME_FRAMES {
+                            keepalive_active = false;
+                            keepalive_resume_frames = 0;
+                            println!("saturn-bridge: TX live audio resumed");
+                        }
+                    } else {
+                        keepalive_resume_frames = 0;
+                    }
+                    did_work = true;
+                }
+                Err(TryRecvError::Empty) => break,
+                Err(TryRecvError::Disconnected) => break,
+            }
+        }
+
         if state == TxState::Keyed && !pure_signal_fault_active {
             let model = radio_model.lock_unpoisoned();
             if model.desired.pure_signal_enabled {
@@ -857,7 +937,7 @@ fn run(
 
         // TX source-stall watchdog (Phase 0B B1, watchdog (d)): loss of real
         // mic-frame arrival while armed/keyed forces the RF-safe dekey path.
-        // last_mic_audio_at is written only on Arm and on TxCommand::MicAudio
+        // last_mic_audio_at is written only on Arm and accepted audio ingress
         // arrival — keepalive zero-fill never refreshes it (INV-4). Two-tone
         // is self-sourced and exempt; watchdogs (a)-(c) still bound it.
         if state != TxState::Idle
@@ -1197,8 +1277,12 @@ fn run(
                 mic_frame_count,
                 duc_packet_count,
                 mic_rmatch.as_ref().map(MicRateMatcher::diags),
+                audio_source,
+                audio_stats.as_ref(),
             );
             last_diag_event_at = Instant::now();
+        } else if state == TxState::Idle {
+            audio_stats.mark_pipeline_idle();
         }
 
         if !did_work {
@@ -1237,9 +1321,27 @@ fn publish_tx_diagnostics(
     mic_frame_count: u64,
     duc_packet_count: u64,
     mic_rmatch: Option<MicRmatchDiags>,
+    audio_source: TxAudioSource,
+    audio_stats: &TxAudioIngressStats,
 ) {
     let diag = wdsp_tx.diagnostics();
+    let mic_rmatch_enabled = mic_rmatch.is_some();
     let rmatch = mic_rmatch.unwrap_or_default();
+    let ingress = audio_stats.snapshot();
+    audio_stats.update_pipeline(
+        state.as_str(),
+        rf_enabled,
+        mic_frame_count,
+        duc_packet_count,
+        diag.total_input_samples,
+        diag.total_output_pairs,
+        diag.pending_mic_floats,
+        diag.pending_iq_floats,
+        mic_rmatch_enabled,
+        rmatch.underflows,
+        rmatch.overflows,
+        rmatch.var_ratio,
+    );
     let _ = event_tx.send(TxEvent::Diagnostics(TxDiagnostics {
         state: state.as_str(),
         rf_enabled,
@@ -1267,12 +1369,31 @@ fn publish_tx_diagnostics(
         total_output_pairs: diag.total_output_pairs,
         pending_mic_floats: diag.pending_mic_floats,
         pending_iq_floats: diag.pending_iq_floats,
-        mic_rmatch_enabled: mic_rmatch.is_some(),
+        mic_rmatch_enabled,
         mic_rmatch_underflows: rmatch.underflows,
         mic_rmatch_overflows: rmatch.overflows,
         mic_rmatch_var_ratio: rmatch.var_ratio,
         mic_rmatch_ringsize: rmatch.ringsize,
         mic_rmatch_nring: rmatch.nring,
+        audio_source: audio_source.as_str(),
+        audio_ingress_depth: ingress.queue_depth,
+        audio_ingress_high_water: ingress.queue_high_water,
+        satp_frames_enqueued: ingress.satp_frames_enqueued,
+        satp_samples_enqueued: ingress.satp_samples_enqueued,
+        satp_frames_queue_full: ingress.satp_frames_queue_full,
+        satp_samples_queue_full: ingress.satp_samples_queue_full,
+        satp_frames_accepted: ingress.satp_frames_accepted,
+        satp_samples_accepted: ingress.satp_samples_accepted,
+        satp_frames_rejected_idle: ingress.satp_frames_rejected_idle,
+        satp_frames_rejected_source: ingress.satp_frames_rejected_source,
+        tci_frames_enqueued: ingress.tci_frames_enqueued,
+        tci_samples_enqueued: ingress.tci_samples_enqueued,
+        tci_frames_queue_full: ingress.tci_frames_queue_full,
+        tci_samples_queue_full: ingress.tci_samples_queue_full,
+        tci_frames_accepted: ingress.tci_frames_accepted,
+        tci_samples_accepted: ingress.tci_samples_accepted,
+        tci_frames_rejected_idle: ingress.tci_frames_rejected_idle,
+        tci_frames_rejected_source: ingress.tci_frames_rejected_source,
     }));
 }
 
@@ -1337,6 +1458,10 @@ fn tx_mic_rmatch_enabled_from(value: Option<&str>) -> bool {
     }
 }
 
+fn tx_audio_requires_rmatch(source: TxAudioSource, tci_rmatch_opt_in: bool) -> bool {
+    source == TxAudioSource::Satp || tci_rmatch_opt_in
+}
+
 fn tx_source_stall_limit_for_ms(stall_ms: Option<u64>) -> Duration {
     stall_ms
         .map(Duration::from_millis)
@@ -1385,16 +1510,18 @@ fn puresignal_sequence_gap(expected: u32, received: u32) -> u64 {
     }
 }
 
-fn mic_samples_to_mono(samples: Vec<f32>, channels: u32) -> Vec<f32> {
+fn mic_samples_to_mono(samples: &[f32], channels: u32) -> Cow<'_, [f32]> {
     if channels <= 1 {
-        return samples;
+        return Cow::Borrowed(samples);
     }
 
     let channel_count = channels as usize;
-    samples
-        .chunks_exact(channel_count)
-        .map(|frame| frame[0])
-        .collect()
+    Cow::Owned(
+        samples
+            .chunks_exact(channel_count)
+            .map(|frame| frame[0])
+            .collect(),
+    )
 }
 
 fn extend_mic_input_queue(queue: &mut VecDeque<f32>, samples: &[f32]) {
@@ -1590,15 +1717,23 @@ mod tests {
     }
 
     #[test]
+    fn satp_always_uses_destination_clock_rate_matching() {
+        assert!(tx_audio_requires_rmatch(TxAudioSource::Satp, false));
+        assert!(tx_audio_requires_rmatch(TxAudioSource::Satp, true));
+        assert!(!tx_audio_requires_rmatch(TxAudioSource::Tci, false));
+        assert!(tx_audio_requires_rmatch(TxAudioSource::Tci, true));
+    }
+
+    #[test]
     fn mic_samples_to_mono_preserves_explicit_mono_frames() {
         let samples = vec![0.1, 0.2, 0.3, 0.4];
-        assert_eq!(mic_samples_to_mono(samples.clone(), 1), samples);
+        assert_eq!(mic_samples_to_mono(&samples, 1).as_ref(), samples);
     }
 
     #[test]
     fn mic_samples_to_mono_extracts_left_channel_from_stereo_frames() {
         let samples = vec![0.1, -0.1, 0.2, -0.2, 0.3, -0.3];
-        assert_eq!(mic_samples_to_mono(samples, 2), vec![0.1, 0.2, 0.3]);
+        assert_eq!(mic_samples_to_mono(&samples, 2).as_ref(), &[0.1, 0.2, 0.3]);
     }
 
     #[test]

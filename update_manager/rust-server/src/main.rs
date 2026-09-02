@@ -1794,6 +1794,12 @@ struct SatpConfigRequest {
     jitter_target_frames: u32,
     jitter_capacity_frames: u32,
     audio_loss_timeout_ms: u32,
+    #[serde(default = "default_tx_audio_source")]
+    tx_audio_source: String,
+}
+
+fn default_tx_audio_source() -> String {
+    "tci".to_string()
 }
 
 async fn invoke_tci_bind_helper(args: &[&str]) -> Result<String, String> {
@@ -1966,6 +1972,11 @@ fn satp_config_json(environment: &str) -> serde_json::Value {
             .unwrap_or(default)
             .to_string()
     };
+    let tx_audio_source = value("SATURN_BRIDGE_TX_AUDIO_SOURCE=", "tci");
+    let rf_enabled = matches!(
+        value("SATURN_REMOTE_TX_RF_ENABLED=", "0").as_str(),
+        "1" | "true" | "yes" | "on"
+    );
     serde_json::json!({
         "enabled": matches!(value("SATURN_BRIDGE_SATP_ENABLED=", "0").as_str(), "1" | "true" | "yes" | "on"),
         "host": value("SATURN_BRIDGE_SATP_HOST=", "127.0.0.1"),
@@ -1978,8 +1989,10 @@ fn satp_config_json(environment: &str) -> serde_json::Value {
         "jitter_target_frames": value("SATURN_BRIDGE_SATP_JITTER_TARGET_FRAMES=", "512").parse::<u32>().unwrap_or(512),
         "jitter_capacity_frames": value("SATURN_BRIDGE_SATP_JITTER_CAPACITY_FRAMES=", "4096").parse::<u32>().unwrap_or(4096),
         "audio_loss_timeout_ms": value("SATURN_BRIDGE_SATP_AUDIO_LOSS_TIMEOUT_MS=", "250").parse::<u32>().unwrap_or(250),
-        "sink": "null",
-        "rf_connected": false
+        "tx_audio_source": tx_audio_source,
+        "sink": if tx_audio_source == "satp" { "tx_thread" } else { "null" },
+        "tx_chain_connected": tx_audio_source == "satp",
+        "rf_enabled": rf_enabled
     })
 }
 
@@ -2023,6 +2036,13 @@ async fn set_satp_settings(Json(request): Json<SatpConfigRequest>) -> Response {
         );
     }
     let allowed_source = request.allowed_source_ip.as_deref().unwrap_or("").trim();
+    let tx_audio_source = request.tx_audio_source.trim().to_ascii_lowercase();
+    if !matches!(tx_audio_source.as_str(), "tci" | "satp") {
+        return json_error(
+            StatusCode::BAD_REQUEST,
+            "TX audio source must be 'tci' or 'satp'",
+        );
+    }
     if !allowed_source.is_empty() && allowed_source.parse::<std::net::Ipv4Addr>().is_err() {
         return json_error(
             StatusCode::BAD_REQUEST,
@@ -2059,6 +2079,7 @@ async fn set_satp_settings(Json(request): Json<SatpConfigRequest>) -> Response {
         &target,
         &capacity,
         &timeout,
+        &tx_audio_source,
     ])
     .await
     {
@@ -5012,14 +5033,18 @@ mod tests {
         assert_eq!(defaults["jitter_target_frames"], 512);
         assert_eq!(defaults["jitter_capacity_frames"], 4096);
         assert_eq!(defaults["sink"], "null");
-        assert_eq!(defaults["rf_connected"], false);
+        assert_eq!(defaults["tx_audio_source"], "tci");
+        assert_eq!(defaults["tx_chain_connected"], false);
+        assert_eq!(defaults["rf_enabled"], false);
 
         let environment = concat!(
             "SATURN_BRIDGE_SATP_ENABLED=1 ",
             "SATURN_BRIDGE_SATP_HOST=192.168.0.139 ",
             "SATURN_BRIDGE_SATP_PORT=50123 ",
             "SATURN_BRIDGE_SATP_ALLOWED_SOURCE_IP=192.168.0.20 ",
-            "SATURN_BRIDGE_SATP_JITTER_TARGET_FRAMES=1024"
+            "SATURN_BRIDGE_SATP_JITTER_TARGET_FRAMES=1024 ",
+            "SATURN_BRIDGE_TX_AUDIO_SOURCE=satp ",
+            "SATURN_REMOTE_TX_RF_ENABLED=1"
         );
         let configured = satp_config_json(environment);
         assert_eq!(configured["enabled"], true);
@@ -5027,6 +5052,10 @@ mod tests {
         assert_eq!(configured["port"], 50123);
         assert_eq!(configured["allowed_source_ip"], "192.168.0.20");
         assert_eq!(configured["jitter_target_frames"], 1024);
+        assert_eq!(configured["tx_audio_source"], "satp");
+        assert_eq!(configured["sink"], "tx_thread");
+        assert_eq!(configured["tx_chain_connected"], true);
+        assert_eq!(configured["rf_enabled"], true);
         assert_eq!(
             environment_value(environment, "SATURN_BRIDGE_SATP_PORT="),
             Some("50123")

@@ -13,8 +13,10 @@ configuration and diagnostics.
 **INTENDED DESIGN:** TCI remains the control plane. SATP/UDP is a separate PCM
 media plane. SATP does not change frequency, mode, RX state, PTT, or MOX.
 
-**VERIFIED CURRENT BEHAVIOR:** The Phase 0E SATP sink is
-`NullTxAudioSink`. No SATP sample reaches WDSP, DUC, XDMA, P2, FPGA, or RF.
+**VERIFIED CURRENT BEHAVIOR:** Phase 0E remains the default: `tci` is the
+default TX audio source and SATP terminates at `NullTxAudioSink`. Phase 0F adds
+an explicit `satp` source selection that connects SATP to the existing shared
+WDSP/DUC TX thread through a bounded ingress. Selecting SATP does not enable RF.
 
 ```text
 Windows native audio bridge
@@ -22,7 +24,12 @@ Windows native audio bridge
           | SATP v1 / UDP
           v
 Saturn Bridge receiver -> validator -> fixed packet ring -> playout clock
-                                                        -> NullTxAudioSink
+                                                        -> TxAudioSink
+                                                           | default: null
+                                                           | selected: bounded TX ingress
+                                                           v
+                                                     WDSP rmatch -> TX DSP
+                                                        -> DUC -> selected backend
 
 TCI clients -> TCI 2.0 WebSocket -> RadioModel -> existing radio control
 ```
@@ -107,10 +114,12 @@ the receiver counts a timeline resynchronization, flushes stale buffered state,
 and re-primes from current media rather than allowing one underflow to turn all
 following packets into late drops. Reordered old packets remain drop-only.
 
-**TECHNICAL DEBT:** Phase 0E applies that correction only to null-sink playout
-cadence. A live Phase 0F sink must use the existing WDSP/rmatch-style sample-rate
-conversion against destination occupancy; it must not pace XDMA from the PC
-clock or assume that two nominal 48 kHz clocks are identical.
+**VERIFIED CURRENT BEHAVIOR:** When SATP is selected, the common TX thread
+always enables its existing native WDSP `rmatch` stage. SATP jitter playout
+therefore does not directly pace DUC/XDMA and independent nominal 48 kHz clocks
+are reconciled before WDSP TX processing. TCI/browser audio retains its
+production-default behavior and still requires its separate explicit rmatch
+opt-in.
 
 **VERIFIED CURRENT BEHAVIOR:** A new `session_id` flushes the packet ring and
 resets sequence, timeline, and playout state without treating the sender epoch
@@ -119,19 +128,18 @@ change as packet loss.
 ## PTT boundary
 
 **VERIFIED CURRENT BEHAVIOR:** SATP receives continuously while the bridge is
-in RX or TX. The null sink is written only while the existing authoritative
+in RX or TX. The selected sink is written only while the existing authoritative
 radio model indicates TX intent/armed/keyed state.
 
 **VERIFIED CURRENT BEHAVIOR:** A TX rising edge flushes buffered pre-PTT audio
 and waits for a fresh target of current packets. A TX falling edge immediately
 stops null-sink delivery while reception continues.
 
-**TECHNICAL DEBT:** Audio health is reported as healthy below 50 ms, degraded
-from 50 ms through the configured timeout (250 ms default), and lost after the
-timeout. Phase 0E does not request dekey on SATP loss because SATP is not yet a
-selectable live TX source. Doing so now could incorrectly dekey an unrelated
-browser-microphone transmission. Phase 0F must add explicit audio-source
-selection, then route a loss request through the normal TX control path.
+**VERIFIED CURRENT BEHAVIOR:** Audio health is reported as healthy below 50 ms,
+degraded from 50 ms through the configured timeout (250 ms default), and lost
+after the timeout. Loss requests one normal `TxCommand::Disarm` only when SATP
+is the selected source and TX is authorized. It cannot dekey an unrelated TCI
+microphone transmission and never manipulates MOX/XDMA directly.
 
 ## Configuration and status
 
@@ -155,7 +163,8 @@ An inactive bridge remains inactive, preserving P2-first clean-boot ownership.
 `/run/saturn-bridge/satp-status.json` and surfaced by Saturn Go. It includes
 source/session identity, packet and frame counts, sequence/timeline counters,
 buffer occupancy, silence insertion, packet/effective rate, health, socket
-buffer size, and null-sink delivery counts.
+buffer size, source/sink selection, bounded-ingress depth/high-water/drops,
+WDSP/rmatch counts, DUC packets, RF-inhibit state, and loss-dekey requests.
 
 ## Exit gate and next phase
 
@@ -171,6 +180,10 @@ python3 update_manager/scripts/satp-synthetic-sender.py \
   192.168.0.139 --port 50100 --seconds 1800
 ```
 
-**PROPOSED CHANGE:** Only after those results are reviewed may Phase 0F add an
-`XDMATxAudioSink`, first to a non-RF diagnostic path. Live DUC/RF connection is
-explicitly outside Phase 0E.
+**VERIFIED CURRENT BEHAVIOR:** Phase 0F reuses the existing TX thread and its P2
+or direct-XDMA `TxRadio` implementation; UDP code contains no XDMA or FPGA
+access. The new connection is guarded by `SATURN_BRIDGE_TX_AUDIO_SOURCE=satp`
+and the independent `SATURN_REMOTE_TX_RF_ENABLED` RF-inhibit gate.
+
+**PROPOSED CHANGE:** Complete the full RF-inhibited chain soak, inspect copied
+ingress/WDSP/DUC telemetry, then perform a short controlled dummy-load RF test.

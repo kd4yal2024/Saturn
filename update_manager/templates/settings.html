@@ -96,8 +96,9 @@
       <div class="card p-5">
         <h2 class="text-xl font-semibold mb-2">Native TX Audio — SATP</h2>
         <p class="text-sm opacity-80 mb-4">
-          Phase 0E receives and times SATP v1 audio into a null test sink. It
-          cannot key the transmitter and is not connected to XDMA or RF.
+          SATP v1 can feed the existing bounded WDSP/DUC transmit chain when
+          Native SATP is explicitly selected below. SATP never keys the radio;
+          TCI/PTT and the existing TX watchdogs remain authoritative.
           Protocol values are fixed at 48 kHz, float32 little-endian, mono,
           128 frames per packet.
         </p>
@@ -109,6 +110,7 @@
           <label class="text-sm"><span class="block mb-1">Jitter target (frames)</span><input id="satp-target" type="number" step="128" min="128" class="field px-3 py-2 w-full" value="512" /></label>
           <label class="text-sm"><span class="block mb-1">Capacity (frames)</span><input id="satp-capacity" type="number" step="128" min="512" class="field px-3 py-2 w-full" value="4096" /></label>
           <label class="text-sm"><span class="block mb-1">Audio loss (ms)</span><input id="satp-timeout" type="number" min="100" max="5000" class="field px-3 py-2 w-full" value="250" /></label>
+          <label class="text-sm"><span class="block mb-1">TX audio source</span><select id="satp-tx-source" class="field px-3 py-2 w-full"><option value="tci">TCI / browser mic</option><option value="satp">Native SATP</option></select></label>
           <button id="satp-save-btn" class="btn btn-primary px-5 py-2 w-full">Save SATP Settings</button>
         </div>
         <div class="text-xs opacity-75 mb-3">Saving restarts only an already-active bridge through the ownership broker. An inactive bridge stays inactive.</div>
@@ -131,6 +133,8 @@
           <div><div class="opacity-60">Effective rate</div><div id="satp-effective" class="font-mono">—</div></div>
           <div><div class="opacity-60">Buffer</div><div id="satp-buffer" class="font-mono">—</div></div>
           <div><div class="opacity-60">Socket buffer</div><div id="satp-socket-buffer" class="font-mono">—</div></div>
+          <div><div class="opacity-60">TX source / sink</div><div id="satp-tx-path" class="font-mono">—</div></div>
+          <div><div class="opacity-60">RF output</div><div id="satp-rf-state" class="font-mono">—</div></div>
         </div>
         <pre id="satp-counters" style="min-height:150px; max-height:280px; overflow:auto;">Waiting for status…</pre>
       </div>
@@ -164,6 +168,10 @@
       'late', 'invalid', 'buffer_overruns', 'audio_loss_events', 'sessions',
       'session_changes', 'silence_frames', 'frames_consumed', 'frames_delivered',
       'sink_errors', 'dekey_requests', 'sample_counter_discontinuities',
+      'tx_frames_enqueued', 'tx_samples_enqueued', 'tx_frames_queue_full',
+      'tx_samples_queue_full', 'tx_frames_accepted', 'tx_samples_accepted',
+      'tx_frames_rejected_idle', 'tx_frames_rejected_source',
+      'tx_flushes_enqueued', 'tx_flushes_processed',
     ];
     let satpFormInitialized = false;
     let satpLastData = null;
@@ -193,8 +201,18 @@
         `silence_frames=${silenceFrames}`,
         `media_frames_consumed=${Math.max(0, framesConsumed - silenceFrames)}`,
         `sink_frames_during_tx=${satpCounter(runtime, 'frames_delivered')} (zero is expected while RX)`,
+        `tx_ingress=${runtime.tx_ingress_depth || 0}/${runtime.tx_ingress_capacity || 0} high_water=${runtime.tx_ingress_high_water || 0}`,
+        `tx_enqueued_frames=${satpCounter(runtime, 'tx_frames_enqueued')} samples=${satpCounter(runtime, 'tx_samples_enqueued')}`,
+        `tx_accepted_frames=${satpCounter(runtime, 'tx_frames_accepted')} samples=${satpCounter(runtime, 'tx_samples_accepted')}`,
+        `tx_queue_full_frames=${satpCounter(runtime, 'tx_frames_queue_full')} samples=${satpCounter(runtime, 'tx_samples_queue_full')}`,
+        `tx_rejected_idle=${satpCounter(runtime, 'tx_frames_rejected_idle')} tx_rejected_source=${satpCounter(runtime, 'tx_frames_rejected_source')}`,
+        `tx_flushes_enqueued=${satpCounter(runtime, 'tx_flushes_enqueued')} processed=${satpCounter(runtime, 'tx_flushes_processed')} dekey_requests=${satpCounter(runtime, 'dekey_requests')}`,
+        `tx_pipeline_state=${runtime.tx_pipeline_state || 'idle'} mic_frames=${runtime.tx_pipeline_mic_frames || 0} duc_packets=${runtime.tx_pipeline_duc_packets || 0}`,
+        `wdsp_input_samples=${runtime.tx_pipeline_wdsp_input_samples || 0} wdsp_output_pairs=${runtime.tx_pipeline_wdsp_output_pairs || 0}`,
+        `wdsp_pending_mic=${runtime.tx_pipeline_pending_mic_floats || 0} pending_iq=${runtime.tx_pipeline_pending_iq_floats || 0}`,
+        `wdsp_rmatch=${!!runtime.tx_pipeline_rmatch_enabled} ratio=${Number(runtime.tx_pipeline_rmatch_ratio || 1).toFixed(9)} underflows=${runtime.tx_pipeline_rmatch_underflows || 0} overflows=${runtime.tx_pipeline_rmatch_overflows || 0}`,
         `rate_match_ratio=${Number(runtime.rate_match_ratio || 1).toFixed(9)} correction_ppm=${Number(runtime.clock_correction_ppm || 0).toFixed(1)}`,
-        `sink=null rf_connected=false tx_authorized=${!!runtime.tx_authorized}`,
+        `source=${config.tx_audio_source || 'tci'} sink=${runtime.sink || config.sink || 'null'} tx_chain_connected=${!!runtime.tx_chain_connected} rf_enabled=${!!runtime.rf_enabled} tx_authorized=${!!runtime.tx_authorized}`,
       ].join('\n');
     }
 
@@ -247,6 +265,7 @@
           $('satp-target').value = config.jitter_target_frames || 512;
           $('satp-capacity').value = config.jitter_capacity_frames || 4096;
           $('satp-timeout').value = config.audio_loss_timeout_ms || 250;
+          $('satp-tx-source').value = config.tx_audio_source || 'tci';
           satpFormInitialized = true;
         }
         const playoutState = runtime.playout_primed ? 'primed' : 'priming';
@@ -258,6 +277,8 @@
         $('satp-effective').textContent = runtime.effective_sample_rate == null ? '—' : `${Number(runtime.effective_sample_rate).toFixed(1)} Hz`;
         $('satp-buffer').textContent = `${runtime.buffer_current || 0} / ${runtime.buffer_capacity || config.jitter_capacity_frames || 4096}`;
         $('satp-socket-buffer').textContent = runtime.actual_socket_buffer_bytes ? `${runtime.actual_socket_buffer_bytes} B` : '—';
+        $('satp-tx-path').textContent = `${config.tx_audio_source || 'tci'} / ${runtime.sink || config.sink || 'null'}`;
+        $('satp-rf-state').textContent = runtime.rf_enabled ? 'enabled' : 'inhibited';
         $('satp-counters').textContent = formatSatpCounters(data);
       } catch (error) {
         // Status is absent while the bridge is stopped or restarting.
@@ -312,6 +333,7 @@
           jitter_target_frames: Number($('satp-target').value),
           jitter_capacity_frames: Number($('satp-capacity').value),
           audio_loss_timeout_ms: Number($('satp-timeout').value),
+          tx_audio_source: $('satp-tx-source').value,
         };
         const res = await fetch('./api/v1/satp/config', {
           method: 'PUT',

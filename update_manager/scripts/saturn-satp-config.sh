@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Configure the Phase 0E SATP v1 UDP receiver. This helper only changes the
+# Configure the SATP v1 receiver and its explicit TX-audio source gate. This helper only changes the
 # bridge subsystem environment; it never selects a radio backend or starts an
 # inactive bridge. Active bridge restarts go through the ownership broker.
 
@@ -44,7 +44,7 @@ cmd="${1:-}"
 case "$cmd" in
   show)
     systemctl show "$SERVICE_NAME" -p Environment --value \
-      | tr ' ' '\n' | grep '^SATURN_BRIDGE_SATP_' || true
+      | tr ' ' '\n' | grep -E '^SATURN_BRIDGE_(SATP_|TX_AUDIO_SOURCE=)' || true
     ;;
   set)
     enabled="${2:-}"
@@ -54,6 +54,7 @@ case "$cmd" in
     target="${6:-512}"
     capacity="${7:-4096}"
     timeout_ms="${8:-250}"
+    tx_audio_source="${9:-tci}"
     [[ "$enabled" == "0" || "$enabled" == "1" ]] || die "enabled must be 0 or 1"
     valid_ipv4 "$host" || die "host must be a plain IPv4 address: $host"
     valid_port "$port" || die "port must be 1-65535: $port"
@@ -66,6 +67,10 @@ case "$cmd" in
       || die "jitter target/capacity must be multiples of 128 frames"
     valid_uint "$timeout_ms" && (( timeout_ms >= 100 && timeout_ms <= 5000 )) \
       || die "audio loss timeout must be 100-5000 ms"
+    [[ "$tx_audio_source" == "tci" || "$tx_audio_source" == "satp" ]] \
+      || die "TX audio source must be 'tci' or 'satp'"
+    [[ "$tx_audio_source" != "satp" || "$enabled" == "1" ]] \
+      || die "SATP receiver must be enabled when TX audio source is satp"
     [[ -x "$BACKEND_HELPER" ]] || die "radio ownership broker is missing: $BACKEND_HELPER"
 
     was_active=0
@@ -97,6 +102,7 @@ case "$cmd" in
       printf 'Environment=SATURN_BRIDGE_SATP_JITTER_TARGET_FRAMES=%s\n' "$target"
       printf 'Environment=SATURN_BRIDGE_SATP_JITTER_CAPACITY_FRAMES=%s\n' "$capacity"
       printf 'Environment=SATURN_BRIDGE_SATP_AUDIO_LOSS_TIMEOUT_MS=%s\n' "$timeout_ms"
+      printf 'Environment=SATURN_BRIDGE_TX_AUDIO_SOURCE=%s\n' "$tx_audio_source"
       if [[ "$allowed_source" != "-" ]]; then
         printf 'Environment=SATURN_BRIDGE_SATP_ALLOWED_SOURCE_IP=%s\n' "$allowed_source"
       fi
@@ -120,5 +126,5 @@ case "$cmd" in
     "$BACKEND_HELPER" restart bridge || true
     die "bridge restart failed; restored previous SATP configuration"
     ;;
-  *) die "usage: $0 {show|set <0|1> <host> <port> <allowed-ip|-> <target> <capacity> <timeout-ms>}" ;;
+  *) die "usage: $0 {show|set <0|1> <host> <port> <allowed-ip|-> <target> <capacity> <timeout-ms> <tci|satp>}" ;;
 esac

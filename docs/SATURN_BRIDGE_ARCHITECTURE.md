@@ -238,12 +238,12 @@ TCI client / Saturn Remote
 
 - **VERIFIED CURRENT BEHAVIOR:** Phase 0E adds a dedicated SATP v1 UDP receiver, exact packet validator, fixed-capacity sample-counter-keyed packet ring, steady playout clock, sequence/timeline metrics, and atomically published runtime status (`satp.rs`).
 - **VERIFIED CURRENT BEHAVIOR:** Phase 0E null-sink playout uses bounded occupancy correction and re-primes current in-order media if its cursor ever outruns the source, preventing a single clock-domain underflow from cascading into permanent late drops (`satp.rs`).
-- **VERIFIED CURRENT BEHAVIOR:** The only Phase 0E consumer is `NullTxAudioSink`; SATP has no connection to WDSP, DUC, P2, direct XDMA, FPGA, or RF (`tx_audio.rs`).
-- **TECHNICAL DEBT:** Before any live Phase 0F sink, replace null-sink cadence correction with WDSP/rmatch-style sample-rate conversion governed by destination occupancy. XDMA pacing must remain in the existing hardware-clock domain.
+- **VERIFIED CURRENT BEHAVIOR:** `tci` remains the default TX audio source. Explicit `satp` selection replaces the null sink with a bounded common TX ingress that feeds the existing WDSP/DUC thread; SATP networking has no XDMA or FPGA access (`tx_audio.rs`, `satp.rs`, `tx_thread.rs`).
+- **VERIFIED CURRENT BEHAVIOR:** The SATP path always enables the existing WDSP `rmatch` stage before TX DSP. Hardware output remains paced by the existing P2 or direct-XDMA backend, not UDP arrival timing.
 - **INTENDED DESIGN:** TCI remains the control/status/negotiation plane. SATP/UDP is a separate low-latency media plane from the Windows native audio client to Saturn-side TX DSP.
 - **INTENDED DESIGN:** TX may occur only when an authorized control-plane state and valid media/DSP/backend conditions are all true. SATP packets alone never arm, key, extend, or re-authorize TX.
-- **TECHNICAL DEBT:** Phase 0E uses fixed-cadence playout and bounded jitter smoothing but does not yet apply long-term occupancy-driven clock correction.
-- **PROPOSED CHANGE:** Feed both current TCI mic frames and future SATP frames into a common bounded `TxAudioIngress` abstraction after transport-specific validation. Keep PTT/release on the prioritized control path.
+- **VERIFIED CURRENT BEHAVIOR:** Phase 0E playout uses bounded occupancy correction and publishes its ratio/ppm; Phase 0F then uses WDSP `rmatch` at the destination clock boundary.
+- **VERIFIED CURRENT BEHAVIOR:** TCI and SATP audio enter a common bounded `TxAudioIngress`. PTT/release remains on the separate prioritized control path.
 
 ## 11. Queue inventory and overload policy
 
@@ -252,6 +252,7 @@ TCI client / Saturn Remote
 | VERIFIED CURRENT BEHAVIOR | TCI safety command mailbox | 16 commands | Same command kind is coalesced; at capacity the oldest safety command is removed (`tci/command_queue.rs:10-12,108-125`). |
 | VERIFIED CURRENT BEHAVIOR | TCI control command mailbox | 256 commands | Latest matching setting replaces old; otherwise oldest control command drops (`command_queue.rs:132-155`). |
 | VERIFIED CURRENT BEHAVIOR | SATP packet ring | 4096 frames default (32 packets) | Fixed slots keyed by sample counter; duplicates/late packets drop, slot replacement is counted, and missing playout positions produce exactly 128 silence frames. |
+| VERIFIED CURRENT BEHAVIOR | Common TX audio ingress | 256 messages | Non-blocking producers drop new realtime media when full and count frames/samples; control/PTT uses a separate channel. |
 | VERIFIED CURRENT BEHAVIOR | TCI mic command mailbox | 8 frames | Drop oldest mic frame and increment counter (`command_queue.rs:126-131`). |
 | VERIFIED CURRENT BEHAVIOR | Per-client outbound safety | 16 messages | Coalesce keyed messages; otherwise pop oldest and count depth overflow (`tci/outbound.rs:314-347,519-521`). |
 | VERIFIED CURRENT BEHAVIOR | Per-client outbound control | 256 messages and 256 KiB | Coalesce latest setting; drop oldest until both limits hold (`outbound.rs:348-376,519-521`). |
@@ -260,7 +261,7 @@ TCI client / Saturn Remote
 | VERIFIED CURRENT BEHAVIOR | TCP kernel outbound gate | 64 KiB | Bulk audio/display pauses while queued kernel bytes exceed limit; safety/control remain prioritized (`outbound.rs:668-724`). |
 | VERIFIED CURRENT BEHAVIOR | TX legacy mic samples | 48,000 mono samples | Drop oldest samples and retain newest (`tx_thread.rs:48,1400-1407`). |
 | VERIFIED CURRENT BEHAVIOR | TX `MicRateMatcher` | Native `rmatch` ring plus small staging vector | Native occupancy/rate matching; enabled only by environment opt-in (`wdsp.rs:449-568`). |
-| VERIFIED CURRENT BEHAVIOR | Main → TX commands | Unbounded `std::sync::mpsc` | No admission limit; can carry microphone vectors (`main.rs:317`, `xdma_backend.rs:204`). |
+| VERIFIED CURRENT BEHAVIOR | Main → TX commands | Unbounded `std::sync::mpsc` | Control-only path; microphone vectors use the separate bounded TX audio ingress. |
 | VERIFIED CURRENT BEHAVIOR | TX → main events | Unbounded `std::sync::mpsc` | No admission limit; can carry TX IQ display vectors and diagnostics (`main.rs:318`, `xdma_backend.rs:205`). |
 | VERIFIED CURRENT BEHAVIOR | Main → RX commands | Unbounded `std::sync::mpsc` | No admission limit (`main.rs:319`). |
 | VERIFIED CURRENT BEHAVIOR | RX → main events | Unbounded `std::sync::mpsc` | No admission limit (`main.rs:320`). |
@@ -307,8 +308,8 @@ TCI client / Saturn Remote
 - **VERIFIED CURRENT BEHAVIOR:** Once-per-second P2 diagnostics already include HP/DDC/audio rates, TCI client/session state, queue depths/high-water marks/drops, transport backlog, mic age/gaps/drops, codec faults, and TX diagnostics (`main.rs:1198-1262`).
 - **VERIFIED CURRENT BEHAVIOR:** Direct-XDMA periodic status reports DDC DMA/sample counts, FIFO thresholds/faults, TX request/stream/key state, DUC DMA/frame/FIFO metrics, forward/reverse power, and SWR (`xdma_backend.rs:427-477`).
 - **VERIFIED CURRENT BEHAVIOR:** State transitions and watchdog faults are logged rather than every realtime packet.
-- **VERIFIED CURRENT BEHAVIOR:** SATP status reports source/session, packets/frames, gaps/missing/duplicates/reorder/late/invalid, bounded-buffer occupancy, silence, audio health, effective rate, socket buffer, and null-sink delivery through Saturn Go.
-- **TECHNICAL DEBT:** Shutdown reason, controller identity changes, SATP rate-correction ppm, and per-backend safety transition durations are not yet one structured metrics model.
+- **VERIFIED CURRENT BEHAVIOR:** SATP status reports source/session, packets/frames, gaps/missing/duplicates/reorder/late/invalid, bounded-buffer occupancy, silence, health, rate/correction ppm, socket buffer, selected sink, ingress high-water/drops, WDSP/rmatch progress, DUC packets, RF inhibit, and loss-dekey requests through Saturn Go.
+- **TECHNICAL DEBT:** Shutdown reason, controller identity changes, and per-backend safety transition durations are not yet one structured metrics model.
 - **PROPOSED CHANGE:** Add stable counters/gauges and a structured terminal shutdown reason that Saturn Go can display without scraping journal strings.
 
 ## 15. Intended target boundary
@@ -357,12 +358,12 @@ TCI client / Saturn Remote
 
 ### P1 — data corruption / realtime stream correctness
 
-1. **TECHNICAL DEBT:** Four bridge inter-thread channels are unbounded and carry realtime vectors. Sustained imbalance can grow memory and latency, consistent with the class of failure suspected during development, although this audit does not prove that they caused the prior Pi crash.
-   - **PROPOSED CHANGE:** Convert them to bounded policy-specific queues and export depth/high-water/drop counters.
+1. **TECHNICAL DEBT:** TX microphone media now uses a bounded ingress, but several bridge control/event channels remain unbounded and TX/RX display events can still carry realtime vectors. Sustained consumer imbalance can grow memory and latency, although this audit does not prove that it caused the prior Pi crash.
+   - **PROPOSED CHANGE:** Convert remaining media-bearing event paths to bounded policy-specific queues and export depth/high-water/drop counters.
 2. **TECHNICAL DEBT:** P2 receive dispatch trusts source port without source-IP validation.
    - **PROPOSED CHANGE:** Validate the configured radio endpoint/session before applying status or DDC frames.
-3. **VERIFIED CURRENT BEHAVIOR:** Native SATP sequence, session, jitter, reorder, late, and missing-timeline handling exists behind a null sink and is unit tested independently of TX WDSP.
-   - **PROPOSED CHANGE:** Complete synthetic and real-Windows 30-minute soaks, then add occupancy-driven rate correction before any hardware sink.
+3. **VERIFIED CURRENT BEHAVIOR:** Native SATP sequence, session, jitter, reorder, late, missing-timeline, bounded TX ingress, and forced destination-clock rate matching are unit tested. SATP loss can request only the normal fail-safe disarm path.
+   - **PROPOSED CHANGE:** Complete synthetic and real-Windows 30-minute RF-inhibited full-chain soaks before controlled RF acceptance.
 
 ### P2 — lifecycle / race / resource leak
 

@@ -3,6 +3,7 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::time::Duration;
 
 use crate::p2::ports::{P2PortMap, COMMAND_DISCOVERY_PORT};
+use crate::tx_audio::TxAudioSource;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum RadioBackend {
@@ -62,6 +63,7 @@ pub struct BridgeConfig {
     pub rx_audio_transport_rate_hz: u32,
     pub rx_audio_transport_channels: u32,
     pub tx_opus_decode_enabled: bool,
+    pub tx_audio_source: TxAudioSource,
     pub satp_enabled: bool,
     pub satp_bind_addr: SocketAddr,
     pub satp_allowed_source_ip: Option<IpAddr>,
@@ -103,6 +105,7 @@ impl Default for BridgeConfig {
             rx_audio_transport_rate_hz: 48_000,
             rx_audio_transport_channels: 2,
             tx_opus_decode_enabled: false,
+            tx_audio_source: TxAudioSource::Tci,
             satp_enabled: false,
             satp_bind_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 50100),
             satp_allowed_source_ip: None,
@@ -148,6 +151,15 @@ impl BridgeConfig {
             },
             Err(_) => None,
         };
+        let tx_audio_source = match env::var("SATURN_BRIDGE_TX_AUDIO_SOURCE") {
+            Ok(value) => TxAudioSource::parse(&value).unwrap_or_else(|| {
+                eprintln!(
+                    "saturn-bridge: invalid TX audio source {value:?}; using fail-closed TCI source"
+                );
+                TxAudioSource::Tci
+            }),
+            Err(_) => defaults.tx_audio_source,
+        };
         let satp_jitter_capacity_frames = align_packet_frames(
             parse_env_u32(
                 "SATURN_BRIDGE_SATP_JITTER_CAPACITY_FRAMES",
@@ -175,7 +187,7 @@ impl BridgeConfig {
         )
         .min(max_client_ddc0_sample_rate_khz);
 
-        Self {
+        let config = Self {
             radio_command_addr: parse_socket_addr(
                 &radio_host,
                 radio_port,
@@ -268,6 +280,7 @@ impl BridgeConfig {
                 "SATURN_BRIDGE_TX_OPUS_DECODE_ENABLED",
                 defaults.tx_opus_decode_enabled,
             ),
+            tx_audio_source,
             satp_enabled: parse_env_bool("SATURN_BRIDGE_SATP_ENABLED", defaults.satp_enabled),
             satp_bind_addr: parse_socket_addr(&satp_host, satp_port, defaults.satp_bind_addr),
             satp_allowed_source_ip,
@@ -280,7 +293,13 @@ impl BridgeConfig {
                 )
                 .clamp(100, 5_000),
             ),
+        };
+        if config.tx_audio_source == TxAudioSource::Satp && !config.satp_enabled {
+            eprintln!(
+                "saturn-bridge: SATP is selected as TX audio source but its receiver is disabled; TX will remain audio-starved and fail safe"
+            );
         }
+        config
     }
 }
 
@@ -362,6 +381,7 @@ fn clamp_fft_size(value: u32) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::{align_packet_frames, RadioBackend};
+    use crate::tx_audio::TxAudioSource;
 
     #[test]
     fn radio_backend_selection_is_explicit_and_fail_closed() {
@@ -376,5 +396,12 @@ mod tests {
         assert_eq!(align_packet_frames(128), 128);
         assert_eq!(align_packet_frames(129), 256);
         assert_eq!(align_packet_frames(4096), 4096);
+    }
+
+    #[test]
+    fn tx_audio_source_is_explicit() {
+        assert_eq!(TxAudioSource::parse("tci"), Some(TxAudioSource::Tci));
+        assert_eq!(TxAudioSource::parse(" SATP "), Some(TxAudioSource::Satp));
+        assert_eq!(TxAudioSource::parse("auto"), None);
     }
 }

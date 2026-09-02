@@ -10,6 +10,7 @@ use crate::radio_model::{DemodMode, NoiseReductionMode, PureSignalState, RadioMo
 use crate::rx_thread::correct_smeter_dbm;
 use crate::sync_ext::MutexExt;
 use crate::tci::{TciCommand, TciFrontend};
+use crate::tx_audio::{TxAudioIngress, TxAudioSource};
 use crate::tx_thread::{self, TxCommand, TxEvent};
 use crate::wdsp::{normalize_audio_frame_float_count, WdspRxEngine, WDSP_AUDIO_RATE_HZ};
 use crate::xdma::{SaturnIdentity, XdmaError};
@@ -200,19 +201,28 @@ fn run_inner(config: BridgeConfig, ready_path: &Path) -> Result<(), Box<dyn Erro
         model.desired.pure_signal_enabled = false;
         model.observed.pure_signal_state = PureSignalState::Off;
     }
-    let _satp_runtime = crate::satp::SatpRuntime::start(&config, radio_model.clone())?;
     let (tci, command_rx) = TciFrontend::bind(&config, radio_model.clone())?;
     let tci = Arc::new(tci);
     let tx_radio = Arc::new(DirectXdmaTxRadio::open(config.tx_power_meter_scale)?);
     let (tx_cmd_tx, tx_cmd_rx) = mpsc::channel();
+    let (tx_audio_ingress, tx_audio_rx, tx_audio_stats) = TxAudioIngress::bounded();
     let (tx_event_tx, tx_event_rx) = mpsc::channel();
     let tx_stop = Arc::new(AtomicBool::new(false));
     let tx_worker = tx_thread::spawn(
         tx_radio.clone(),
         radio_model.clone(),
         tx_cmd_rx,
+        tx_audio_rx,
+        tx_audio_stats,
+        config.tx_audio_source,
         tx_event_tx,
         tx_stop.clone(),
+    )?;
+    let _satp_runtime = crate::satp::SatpRuntime::start(
+        &config,
+        radio_model.clone(),
+        tx_audio_ingress.clone(),
+        tx_cmd_tx.clone(),
     )?;
     let mut tx_control = DirectTxControl::default();
     let mut wdsp = {
@@ -305,6 +315,8 @@ fn run_inner(config: BridgeConfig, ready_path: &Path) -> Result<(), Box<dyn Erro
                     &tx_cmd_tx,
                     &mut tx_control,
                     config.remote_tx_rf_enabled,
+                    config.tx_audio_source,
+                    &tx_audio_ingress,
                 )?);
             }
             if command_count != 0 {
@@ -382,9 +394,10 @@ fn run_inner(config: BridgeConfig, ready_path: &Path) -> Result<(), Box<dyn Erro
 
             if tx_control.requested {
                 let now = Instant::now();
-                let mic_stale = tx_control
-                    .last_mic_at
-                    .is_some_and(|last| now.saturating_duration_since(last) > TX_UPLINK_TIMEOUT);
+                let mic_stale = config.tx_audio_source == TxAudioSource::Tci
+                    && tx_control.last_mic_at.is_some_and(|last| {
+                        now.saturating_duration_since(last) > TX_UPLINK_TIMEOUT
+                    });
                 let control_stale = tci
                     .last_operator_control_at()
                     .is_some_and(|last| now.saturating_duration_since(last) > TX_CONTROL_TIMEOUT);
@@ -520,17 +533,22 @@ fn handle_command(
     tx_cmd_tx: &mpsc::Sender<TxCommand>,
     tx_control: &mut DirectTxControl,
     remote_tx_rf_enabled: bool,
+    tx_audio_source: TxAudioSource,
+    tx_audio_ingress: &TxAudioIngress,
 ) -> Result<CommandEffects, Box<dyn Error>> {
     let effects = command_effects(&command);
     let command = match command {
         TciCommand::MicAudioFrame(frame) => {
             if tx_control.requested {
                 tx_control.last_mic_at = Some(frame.received_at);
-                let _ = tx_cmd_tx.send(TxCommand::MicAudio {
-                    samples: frame.samples,
-                    channels: frame.channels,
-                    sample_rate_hz: frame.sample_rate_hz,
-                });
+                if tx_audio_source == TxAudioSource::Tci {
+                    let _ = tx_audio_ingress.write_frame(
+                        TxAudioSource::Tci,
+                        frame.samples,
+                        frame.channels,
+                        frame.sample_rate_hz,
+                    );
+                }
             }
             return Ok(effects);
         }

@@ -42,19 +42,25 @@ run_helper() {
     "$HELPER" "$@"
 }
 
-run_helper set 1 192.168.1.50 50100 192.168.1.20 512 4096 250 | grep -q 'remains inactive'
+run_helper set 1 192.168.1.50 50100 192.168.1.20 512 4096 250 satp | grep -q 'remains inactive'
 dropin="$TEST_ROOT/systemd/saturn-bridge.service.d/satp.conf"
 grep -Fqx 'Environment=SATURN_BRIDGE_SATP_ENABLED=1' "$dropin"
 grep -Fqx 'Environment=SATURN_BRIDGE_SATP_ALLOWED_SOURCE_IP=192.168.1.20' "$dropin"
+grep -Fqx 'Environment=SATURN_BRIDGE_TX_AUDIO_SOURCE=satp' "$dropin"
+
+if run_helper set 0 192.168.1.50 50100 - 512 4096 250 satp >/dev/null 2>&1; then
+  echo 'expected disabled SATP receiver with SATP TX source to fail' >&2
+  exit 1
+fi
 
 touch "$TEST_ROOT/state/bridge-active"
-run_helper set 0 127.0.0.1 50101 - 512 4096 250 | grep -q 'ownership broker'
+run_helper set 0 127.0.0.1 50101 - 512 4096 250 tci | grep -q 'ownership broker'
 grep -Fqx 'restart bridge' "$TEST_ROOT/backend.log"
 cp "$dropin" "$TEST_ROOT/known-good.conf"
 
 MOCK_BACKEND_FAIL=1
 export MOCK_BACKEND_FAIL
-if run_helper set 1 192.168.1.51 50102 - 512 4096 250 >/dev/null 2>&1; then
+if run_helper set 1 192.168.1.51 50102 - 512 4096 250 satp >/dev/null 2>&1; then
   echo 'expected failed restart to reject SATP configuration' >&2
   exit 1
 fi

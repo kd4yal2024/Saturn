@@ -33,6 +33,7 @@ use radio_model::{DemodMode, PureSignalState, RadioModel, TxPhase};
 use rx_thread::{RxCommand, RxEvent, RxStats};
 use sync_ext::MutexExt;
 use tci::{TciCommand, TciFrontend};
+use tx_audio::{TxAudioIngress, TxAudioSource};
 use tx_thread::{TxCommand, TxDiagnostics, TxEvent};
 use wdsp::{normalize_audio_frame_float_count, WdspRxEngine, WDSP_AUDIO_RATE_HZ};
 
@@ -298,9 +299,10 @@ fn ms_field(value: Option<u64>) -> String {
 fn format_tx_diag(diag: Option<&TxDiagnostics>) -> String {
     match diag {
         Some(diag) => format!(
-            "tx_diag state={} rf={} armed_ms={} first_mic_ms={} first_iq_ms={} first_keyable_iq_ms={} mic_recent={} keyed_ms={} mic_frames={} duc_packets={} in_pk={:.4} out_pk={:.4} mic_pk_db={:.1} comp_pk_db={:.1} comp_avg_db={:.1} alc_pk_db={:.1} alc_avg_db={:.1} alc_gain_db={:.1} out_pk_db={:.1} in_samples={} out_pairs={} pending_mic={} pending_iq={} mic_rmatch={} rmatch_underflows={} rmatch_overflows={} rmatch_var={:.9} rmatch_ring={}/{}",
+            "tx_diag state={} rf={} audio_source={} armed_ms={} first_mic_ms={} first_iq_ms={} first_keyable_iq_ms={} mic_recent={} keyed_ms={} mic_frames={} duc_packets={} in_pk={:.4} out_pk={:.4} mic_pk_db={:.1} comp_pk_db={:.1} comp_avg_db={:.1} alc_pk_db={:.1} alc_avg_db={:.1} alc_gain_db={:.1} out_pk_db={:.1} in_samples={} out_pairs={} pending_mic={} pending_iq={} mic_rmatch={} rmatch_underflows={} rmatch_overflows={} rmatch_var={:.9} rmatch_ring={}/{} audio_q={}/{} satp_enq={}/{} satp_full={}/{} satp_accept={}/{} satp_reject_idle={} satp_reject_source={} tci_enq={}/{} tci_full={}/{} tci_accept={}/{} tci_reject_idle={} tci_reject_source={}",
             diag.state,
             bool01(diag.rf_enabled),
+            diag.audio_source,
             diag.armed_ms,
             ms_field(diag.first_mic_ms),
             ms_field(diag.first_iq_ms),
@@ -327,7 +329,25 @@ fn format_tx_diag(diag: Option<&TxDiagnostics>) -> String {
             diag.mic_rmatch_overflows,
             diag.mic_rmatch_var_ratio,
             diag.mic_rmatch_nring,
-            diag.mic_rmatch_ringsize
+            diag.mic_rmatch_ringsize,
+            diag.audio_ingress_depth,
+            diag.audio_ingress_high_water,
+            diag.satp_frames_enqueued,
+            diag.satp_samples_enqueued,
+            diag.satp_frames_queue_full,
+            diag.satp_samples_queue_full,
+            diag.satp_frames_accepted,
+            diag.satp_samples_accepted,
+            diag.satp_frames_rejected_idle,
+            diag.satp_frames_rejected_source,
+            diag.tci_frames_enqueued,
+            diag.tci_samples_enqueued,
+            diag.tci_frames_queue_full,
+            diag.tci_samples_queue_full,
+            diag.tci_frames_accepted,
+            diag.tci_samples_accepted,
+            diag.tci_frames_rejected_idle,
+            diag.tci_frames_rejected_source
         ),
         None => "tx_diag state=idle".to_string(),
     }
@@ -406,7 +426,6 @@ fn main() -> Result<(), Box<dyn Error>> {
         config.tx_fft_size,
         config.tx_low_latency,
     )));
-    let _satp_runtime = satp::SatpRuntime::start(&config, radio_model.clone())?;
     let session = Arc::new(P2Session::bind(config.clone())?);
     let (tci, tci_command_rx) = TciFrontend::bind(&config, radio_model.clone())?;
     let tci = Arc::new(tci);
@@ -426,6 +445,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         model.desired.tx_drive = model.desired.tx_drive.clamp(1, remote_tx_max_watts);
     }
     let (tx_cmd_tx, tx_cmd_rx) = mpsc::channel();
+    let (tx_audio_ingress, tx_audio_rx, tx_audio_stats) = TxAudioIngress::bounded();
     let (tx_event_tx, tx_event_rx) = mpsc::channel();
     let (rx_cmd_tx, rx_cmd_rx) = mpsc::channel();
     let (rx_event_tx, rx_event_rx) = mpsc::channel();
@@ -443,10 +463,11 @@ fn main() -> Result<(), Box<dyn Error>> {
     };
 
     println!(
-        "saturn-bridge: binding {} -> radio {} | TCI {} | remote TX RF {} | remote TX max target={}W 100W-drive-byte={} power meter scale={:.4} power trip={:.1}W | TCI release grace={}ms | display fps cap={} | max client DDC0 rate={}k | RX audio transport={}Hz/{}ch",
+        "saturn-bridge: binding {} -> radio {} | TCI {} | TX audio source={} | remote TX RF {} | remote TX max target={}W 100W-drive-byte={} power meter scale={:.4} power trip={:.1}W | TCI release grace={}ms | display fps cap={} | max client DDC0 rate={}k | RX audio transport={}Hz/{}ch",
         session.client_bind_addr(),
         config.radio_command_addr,
         config.tci_bind_addr,
+        config.tx_audio_source.as_str(),
         if remote_tx_rf_enabled {
             "enabled"
         } else {
@@ -468,8 +489,17 @@ fn main() -> Result<(), Box<dyn Error>> {
         session.clone(),
         radio_model.clone(),
         tx_cmd_rx,
+        tx_audio_rx,
+        tx_audio_stats,
+        config.tx_audio_source,
         tx_event_tx,
         stop_flag.clone(),
+    )?;
+    let _satp_runtime = satp::SatpRuntime::start(
+        &config,
+        radio_model.clone(),
+        tx_audio_ingress.clone(),
+        tx_cmd_tx.clone(),
     )?;
     let rx_thread = rx_thread::spawn(
         session.clone(),
@@ -1066,11 +1096,12 @@ fn main() -> Result<(), Box<dyn Error>> {
                     status_tci_mic_frames = status_tci_mic_frames.saturating_add(1);
                     status_tci_mic_samples =
                         status_tci_mic_samples.saturating_add(frame.samples.len() as u64);
-                    let _ = tx_cmd_tx.send(TxCommand::MicAudio {
-                        samples: frame.samples,
-                        channels: frame.channels,
-                        sample_rate_hz: frame.sample_rate_hz,
-                    });
+                    let _ = tx_audio_ingress.write_frame(
+                        TxAudioSource::Tci,
+                        frame.samples,
+                        frame.channels,
+                        frame.sample_rate_hz,
+                    );
                 }
             }
 
@@ -1264,7 +1295,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 tx_uplink_late_since = None;
                 tx_uplink_fault_active = false;
                 tx_control_watchdog_fault_active = false;
-            } else if !tx_uplink_fault_active {
+            } else if config.tx_audio_source == TxAudioSource::Tci && !tx_uplink_fault_active {
                 if let Some(age) = update_tx_uplink_late_detector(
                     on_air,
                     last_operator_mic_at,

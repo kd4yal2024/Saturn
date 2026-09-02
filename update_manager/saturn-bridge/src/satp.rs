@@ -4,14 +4,18 @@ use std::mem;
 use std::net::{IpAddr, SocketAddr, UdpSocket};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{mpsc, Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crate::config::BridgeConfig;
 use crate::radio_model::{RadioModel, TxPhase};
 use crate::sync_ext::MutexExt;
-use crate::tx_audio::{NullTxAudioSink, TxAudioSink};
+use crate::tx_audio::{
+    NullTxAudioSink, TxAudioIngress, TxAudioSink, TxAudioSource, TxThreadAudioSink,
+    TX_AUDIO_INGRESS_CAPACITY,
+};
+use crate::tx_thread::TxCommand;
 
 pub const SATP_MAGIC: &[u8; 4] = b"SAT1";
 pub const SATP_VERSION: u8 = 1;
@@ -394,6 +398,15 @@ fn classify_audio_health(
     }
 }
 
+fn should_request_audio_loss_dekey(
+    audio_lost: bool,
+    tx_authorized: bool,
+    tx_chain_connected: bool,
+    already_requested: bool,
+) -> bool {
+    audio_lost && tx_authorized && tx_chain_connected && !already_requested
+}
+
 #[derive(Clone, Debug)]
 pub struct SatpStatus {
     pub enabled: bool,
@@ -440,6 +453,34 @@ pub struct SatpStatus {
     pub last_packet_age_ms: Option<u64>,
     pub tx_authorized: bool,
     pub dekey_requests: u64,
+    pub sink: &'static str,
+    pub tx_chain_connected: bool,
+    pub rf_enabled: bool,
+    pub tx_ingress_capacity: usize,
+    pub tx_ingress_depth: usize,
+    pub tx_ingress_high_water: usize,
+    pub tx_frames_enqueued: u64,
+    pub tx_samples_enqueued: u64,
+    pub tx_frames_queue_full: u64,
+    pub tx_samples_queue_full: u64,
+    pub tx_frames_accepted: u64,
+    pub tx_samples_accepted: u64,
+    pub tx_frames_rejected_idle: u64,
+    pub tx_frames_rejected_source: u64,
+    pub tx_flushes_enqueued: u64,
+    pub tx_flushes_processed: u64,
+    pub tx_pipeline_state: &'static str,
+    pub tx_pipeline_rf_enabled: bool,
+    pub tx_pipeline_mic_frames: u64,
+    pub tx_pipeline_duc_packets: u64,
+    pub tx_pipeline_wdsp_input_samples: u64,
+    pub tx_pipeline_wdsp_output_pairs: u64,
+    pub tx_pipeline_pending_mic_floats: usize,
+    pub tx_pipeline_pending_iq_floats: usize,
+    pub tx_pipeline_rmatch_enabled: bool,
+    pub tx_pipeline_rmatch_underflows: i32,
+    pub tx_pipeline_rmatch_overflows: i32,
+    pub tx_pipeline_rmatch_ratio: f64,
 }
 
 impl SatpStatus {
@@ -489,6 +530,38 @@ impl SatpStatus {
             last_packet_age_ms: None,
             tx_authorized: false,
             dekey_requests: 0,
+            sink: if config.tx_audio_source == TxAudioSource::Satp {
+                "tx_thread"
+            } else {
+                "null"
+            },
+            tx_chain_connected: config.tx_audio_source == TxAudioSource::Satp,
+            rf_enabled: config.remote_tx_rf_enabled,
+            tx_ingress_capacity: TX_AUDIO_INGRESS_CAPACITY,
+            tx_ingress_depth: 0,
+            tx_ingress_high_water: 0,
+            tx_frames_enqueued: 0,
+            tx_samples_enqueued: 0,
+            tx_frames_queue_full: 0,
+            tx_samples_queue_full: 0,
+            tx_frames_accepted: 0,
+            tx_samples_accepted: 0,
+            tx_frames_rejected_idle: 0,
+            tx_frames_rejected_source: 0,
+            tx_flushes_enqueued: 0,
+            tx_flushes_processed: 0,
+            tx_pipeline_state: "idle",
+            tx_pipeline_rf_enabled: false,
+            tx_pipeline_mic_frames: 0,
+            tx_pipeline_duc_packets: 0,
+            tx_pipeline_wdsp_input_samples: 0,
+            tx_pipeline_wdsp_output_pairs: 0,
+            tx_pipeline_pending_mic_floats: 0,
+            tx_pipeline_pending_iq_floats: 0,
+            tx_pipeline_rmatch_enabled: config.tx_audio_source == TxAudioSource::Satp,
+            tx_pipeline_rmatch_underflows: 0,
+            tx_pipeline_rmatch_overflows: 0,
+            tx_pipeline_rmatch_ratio: 1.0,
         }
     }
 }
@@ -500,7 +573,12 @@ pub struct SatpRuntime {
 }
 
 impl SatpRuntime {
-    pub fn start(config: &BridgeConfig, radio_model: Arc<Mutex<RadioModel>>) -> io::Result<Self> {
+    pub fn start(
+        config: &BridgeConfig,
+        radio_model: Arc<Mutex<RadioModel>>,
+        tx_audio_ingress: TxAudioIngress,
+        tx_cmd_tx: mpsc::Sender<TxCommand>,
+    ) -> io::Result<Self> {
         let status = Arc::new(Mutex::new(SatpStatus::new(config)));
         let stop = Arc::new(AtomicBool::new(false));
         if !config.satp_enabled {
@@ -522,8 +600,10 @@ impl SatpRuntime {
             write_status_file(&snapshot);
         }
         println!(
-            "saturn-bridge: SATP v1 receiver listening on {} sink=null target={} capacity={} SO_RCVBUF={}",
+            "saturn-bridge: SATP v1 receiver listening on {} sink={} rf_enabled={} target={} capacity={} SO_RCVBUF={}",
             config.satp_bind_addr,
+            status.lock_unpoisoned().sink,
+            u8::from(config.remote_tx_rf_enabled),
             config.satp_jitter_target_frames,
             config.satp_jitter_capacity_frames,
             actual_socket_buffer_bytes,
@@ -535,6 +615,7 @@ impl SatpRuntime {
         let jitter_target_frames = config.satp_jitter_target_frames;
         let jitter_capacity_frames = config.satp_jitter_capacity_frames;
         let audio_loss_timeout = config.satp_audio_loss_timeout;
+        let tx_chain_connected = config.tx_audio_source == TxAudioSource::Satp;
         let worker = thread::Builder::new()
             .name("saturn-satp".into())
             .spawn(move || {
@@ -545,6 +626,9 @@ impl SatpRuntime {
                     jitter_capacity_frames,
                     audio_loss_timeout,
                     radio_model,
+                    tx_audio_ingress,
+                    tx_cmd_tx,
+                    tx_chain_connected,
                     worker_status,
                     worker_stop,
                 );
@@ -579,12 +663,20 @@ fn run_receiver(
     jitter_capacity_frames: u32,
     audio_loss_timeout: Duration,
     radio_model: Arc<Mutex<RadioModel>>,
+    tx_audio_ingress: TxAudioIngress,
+    tx_cmd_tx: mpsc::Sender<TxCommand>,
+    tx_chain_connected: bool,
     status: Arc<Mutex<SatpStatus>>,
     stop: Arc<AtomicBool>,
 ) {
     let mut ring = PacketRing::new(jitter_target_frames, jitter_capacity_frames);
     let mut rate_control = PlayoutRateControl::new(jitter_target_frames);
-    let mut sink = NullTxAudioSink::default();
+    let mut sink: Box<dyn TxAudioSink> = if tx_chain_connected {
+        Box::new(TxThreadAudioSink::new(tx_audio_ingress.clone()))
+    } else {
+        Box::new(NullTxAudioSink::default())
+    };
+    status.lock_unpoisoned().sink = sink.name();
     let mut receive_buffer = [0u8; RECEIVE_BUFFER_BYTES];
     let startup_delay =
         Duration::from_secs_f64(jitter_target_frames as f64 / SATP_SAMPLE_RATE_HZ as f64);
@@ -597,6 +689,7 @@ fn run_receiver(
     let mut sequence_tracker = SequenceTracker::default();
     let mut previous_tx_authorized = false;
     let mut audio_loss_latched = false;
+    let mut audio_loss_dekey_latched = false;
     let mut measurement_started = Instant::now();
     let mut measurement_packets_base = 0u64;
     let mut first_sample_counter: Option<u64> = None;
@@ -787,6 +880,23 @@ fn run_receiver(
         } else if !audio_lost {
             audio_loss_latched = false;
         }
+        if should_request_audio_loss_dekey(
+            audio_lost,
+            tx_authorized,
+            tx_chain_connected,
+            audio_loss_dekey_latched,
+        ) {
+            if tx_cmd_tx.send(TxCommand::Disarm).is_ok() {
+                let mut snapshot = status.lock_unpoisoned();
+                snapshot.dekey_requests = snapshot.dekey_requests.saturating_add(1);
+                eprintln!(
+                    "saturn-bridge: SATP audio lost while TX authorized; requested normal TX disarm"
+                );
+            }
+            audio_loss_dekey_latched = true;
+        } else if !audio_lost || !tx_authorized {
+            audio_loss_dekey_latched = false;
+        }
         if !audio_lost {
             playout_clock.prime_if_ready(&mut ring, now, startup_delay);
         }
@@ -808,7 +918,7 @@ fn run_receiver(
                 }
                 previous_playout_was_silence = silence;
                 if tx_authorized {
-                    match sink.write_frames(&samples) {
+                    match sink.write_frames(samples) {
                         Ok(()) => {
                             snapshot.frames_delivered = snapshot
                                 .frames_delivered
@@ -838,6 +948,31 @@ fn run_receiver(
                 .map(|at| Instant::now().saturating_duration_since(at).as_millis() as u64);
             snapshot.audio_health =
                 classify_audio_health(last_packet_at, Instant::now(), audio_loss_timeout);
+            let ingress = tx_audio_ingress.stats();
+            snapshot.tx_ingress_depth = ingress.queue_depth;
+            snapshot.tx_ingress_high_water = ingress.queue_high_water;
+            snapshot.tx_frames_enqueued = ingress.satp_frames_enqueued;
+            snapshot.tx_samples_enqueued = ingress.satp_samples_enqueued;
+            snapshot.tx_frames_queue_full = ingress.satp_frames_queue_full;
+            snapshot.tx_samples_queue_full = ingress.satp_samples_queue_full;
+            snapshot.tx_frames_accepted = ingress.satp_frames_accepted;
+            snapshot.tx_samples_accepted = ingress.satp_samples_accepted;
+            snapshot.tx_frames_rejected_idle = ingress.satp_frames_rejected_idle;
+            snapshot.tx_frames_rejected_source = ingress.satp_frames_rejected_source;
+            snapshot.tx_flushes_enqueued = ingress.flushes_enqueued;
+            snapshot.tx_flushes_processed = ingress.flushes_processed;
+            snapshot.tx_pipeline_state = ingress.pipeline_state;
+            snapshot.tx_pipeline_rf_enabled = ingress.pipeline_rf_enabled;
+            snapshot.tx_pipeline_mic_frames = ingress.pipeline_mic_frames;
+            snapshot.tx_pipeline_duc_packets = ingress.pipeline_duc_packets;
+            snapshot.tx_pipeline_wdsp_input_samples = ingress.pipeline_wdsp_input_samples;
+            snapshot.tx_pipeline_wdsp_output_pairs = ingress.pipeline_wdsp_output_pairs;
+            snapshot.tx_pipeline_pending_mic_floats = ingress.pipeline_pending_mic_floats;
+            snapshot.tx_pipeline_pending_iq_floats = ingress.pipeline_pending_iq_floats;
+            snapshot.tx_pipeline_rmatch_enabled = ingress.pipeline_rmatch_enabled;
+            snapshot.tx_pipeline_rmatch_underflows = ingress.pipeline_rmatch_underflows;
+            snapshot.tx_pipeline_rmatch_overflows = ingress.pipeline_rmatch_overflows;
+            snapshot.tx_pipeline_rmatch_ratio = ingress.pipeline_rmatch_ratio;
             let elapsed = measurement_started.elapsed().as_secs_f64();
             if elapsed > 0.0 {
                 snapshot.packet_rate =
@@ -915,7 +1050,8 @@ fn status_json(status: &SatpStatus) -> String {
         concat!(
             "{{\n",
             "  \"version\": 1,\n",
-            "  \"enabled\": {},\n  \"running\": {},\n  \"sink\": \"null\",\n",
+            "  \"enabled\": {},\n  \"running\": {},\n  \"sink\": {},\n",
+            "  \"tx_chain_connected\": {},\n  \"rf_enabled\": {},\n",
             "  \"bind\": {},\n  \"requested_socket_buffer_bytes\": {},\n  \"actual_socket_buffer_bytes\": {},\n",
             "  \"source\": {},\n  \"session_id\": {},\n  \"stream_id\": {},\n",
             "  \"packets_rx\": {},\n  \"frames_rx\": {},\n  \"gap_events\": {},\n  \"packets_missing\": {},\n",
@@ -929,10 +1065,25 @@ fn status_json(status: &SatpStatus) -> String {
             "  \"timeline_resyncs\": {},\n  \"rate_match_ratio\": {:.9},\n  \"clock_correction_ppm\": {:.3},\n",
             "  \"sample_counter_discontinuities\": {},\n  \"sample_counter_delta_last\": {},\n  \"sample_counter_delta_min\": {},\n  \"sample_counter_delta_max\": {},\n",
             "  \"audio_health\": {},\n  \"audio_loss_events\": {},\n  \"last_packet_age_ms\": {},\n  \"tx_authorized\": {},\n",
-            "  \"dekey_requests\": {},\n  \"updated_unix_ms\": {}\n}}\n"
+            "  \"dekey_requests\": {},\n",
+            "  \"tx_ingress_capacity\": {},\n  \"tx_ingress_depth\": {},\n  \"tx_ingress_high_water\": {},\n",
+            "  \"tx_frames_enqueued\": {},\n  \"tx_samples_enqueued\": {},\n",
+            "  \"tx_frames_queue_full\": {},\n  \"tx_samples_queue_full\": {},\n",
+            "  \"tx_frames_accepted\": {},\n  \"tx_samples_accepted\": {},\n",
+            "  \"tx_frames_rejected_idle\": {},\n  \"tx_frames_rejected_source\": {},\n",
+            "  \"tx_flushes_enqueued\": {},\n  \"tx_flushes_processed\": {},\n",
+            "  \"tx_pipeline_state\": {},\n  \"tx_pipeline_rf_enabled\": {},\n  \"tx_pipeline_mic_frames\": {},\n  \"tx_pipeline_duc_packets\": {},\n",
+            "  \"tx_pipeline_wdsp_input_samples\": {},\n  \"tx_pipeline_wdsp_output_pairs\": {},\n",
+            "  \"tx_pipeline_pending_mic_floats\": {},\n  \"tx_pipeline_pending_iq_floats\": {},\n",
+            "  \"tx_pipeline_rmatch_enabled\": {},\n  \"tx_pipeline_rmatch_underflows\": {},\n",
+            "  \"tx_pipeline_rmatch_overflows\": {},\n  \"tx_pipeline_rmatch_ratio\": {:.9},\n",
+            "  \"updated_unix_ms\": {}\n}}\n"
         ),
         status.enabled,
         status.running,
+        json_string(status.sink),
+        status.tx_chain_connected,
+        status.rf_enabled,
         json_string(&status.bind),
         status.requested_socket_buffer_bytes,
         status.actual_socket_buffer_bytes,
@@ -975,6 +1126,31 @@ fn status_json(status: &SatpStatus) -> String {
         optional_number(status.last_packet_age_ms),
         status.tx_authorized,
         status.dekey_requests,
+        status.tx_ingress_capacity,
+        status.tx_ingress_depth,
+        status.tx_ingress_high_water,
+        status.tx_frames_enqueued,
+        status.tx_samples_enqueued,
+        status.tx_frames_queue_full,
+        status.tx_samples_queue_full,
+        status.tx_frames_accepted,
+        status.tx_samples_accepted,
+        status.tx_frames_rejected_idle,
+        status.tx_frames_rejected_source,
+        status.tx_flushes_enqueued,
+        status.tx_flushes_processed,
+        json_string(status.tx_pipeline_state),
+        status.tx_pipeline_rf_enabled,
+        status.tx_pipeline_mic_frames,
+        status.tx_pipeline_duc_packets,
+        status.tx_pipeline_wdsp_input_samples,
+        status.tx_pipeline_wdsp_output_pairs,
+        status.tx_pipeline_pending_mic_floats,
+        status.tx_pipeline_pending_iq_floats,
+        status.tx_pipeline_rmatch_enabled,
+        status.tx_pipeline_rmatch_underflows,
+        status.tx_pipeline_rmatch_overflows,
+        status.tx_pipeline_rmatch_ratio,
         SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
@@ -1220,6 +1396,15 @@ mod tests {
             classify_audio_health(Some(now - Duration::from_millis(251)), now, loss),
             AudioHealth::Lost
         );
+    }
+
+    #[test]
+    fn audio_loss_dekeys_only_the_selected_satp_tx_path_once() {
+        assert!(!should_request_audio_loss_dekey(true, false, true, false));
+        assert!(!should_request_audio_loss_dekey(true, true, false, false));
+        assert!(!should_request_audio_loss_dekey(true, true, true, true));
+        assert!(!should_request_audio_loss_dekey(false, true, true, false));
+        assert!(should_request_audio_loss_dekey(true, true, true, false));
     }
 
     #[test]
