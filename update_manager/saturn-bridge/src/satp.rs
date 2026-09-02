@@ -30,6 +30,9 @@ const REQUESTED_SOCKET_BUFFER_BYTES: i32 = 1024 * 1024;
 const PLAYOUT_POLL: Duration = Duration::from_micros(250);
 const HEALTHY_LIMIT: Duration = Duration::from_millis(50);
 const STATUS_WRITE_PERIOD: Duration = Duration::from_secs(1);
+const RATE_MATCH_FILTER_ALPHA: f64 = 1.0 / 32.0;
+const RATE_MATCH_PPM_PER_FRAME: f64 = 2.0;
+const RATE_MATCH_MAX_PPM: f64 = 2_000.0;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SatpHeader {
@@ -224,6 +227,44 @@ impl PlayoutClock {
     }
 }
 
+struct PlayoutRateControl {
+    target_frames: f64,
+    filtered_frames: f64,
+    correction_ppm: f64,
+}
+
+impl PlayoutRateControl {
+    fn new(target_frames: u32) -> Self {
+        let target_frames = f64::from(target_frames);
+        Self {
+            target_frames,
+            filtered_frames: target_frames,
+            correction_ppm: 0.0,
+        }
+    }
+
+    fn reset(&mut self) {
+        self.filtered_frames = self.target_frames;
+        self.correction_ppm = 0.0;
+    }
+
+    fn observe(&mut self, buffer_frames: u32) -> Duration {
+        self.filtered_frames +=
+            (f64::from(buffer_frames) - self.filtered_frames) * RATE_MATCH_FILTER_ALPHA;
+        self.correction_ppm = ((self.filtered_frames - self.target_frames)
+            * RATE_MATCH_PPM_PER_FRAME)
+            .clamp(-RATE_MATCH_MAX_PPM, RATE_MATCH_MAX_PPM);
+        let ratio = 1.0 + self.correction_ppm / 1_000_000.0;
+        Duration::from_secs_f64(
+            (SATP_FRAMES_PER_PACKET as f64 / SATP_SAMPLE_RATE_HZ as f64) / ratio,
+        )
+    }
+
+    fn ratio(&self) -> f64 {
+        1.0 + self.correction_ppm / 1_000_000.0
+    }
+}
+
 impl PacketRing {
     fn new(target_frames: u32, capacity_frames: u32) -> Self {
         let capacity_packets = capacity_frames.div_ceil(SATP_FRAMES_PER_PACKET as u32) as usize;
@@ -250,11 +291,12 @@ impl PacketRing {
         (self.occupied * SATP_FRAMES_PER_PACKET as usize) as u32
     }
 
+    fn is_late(&self, sample_counter: u64) -> bool {
+        self.cursor.is_some_and(|cursor| sample_counter < cursor)
+    }
+
     fn insert(&mut self, packet: SatpPacket) -> InsertResult {
-        if self
-            .cursor
-            .is_some_and(|cursor| packet.header.sample_counter < cursor)
-        {
+        if self.is_late(packet.header.sample_counter) {
             return InsertResult::Late;
         }
         let packet_number = packet.header.sample_counter / SATP_FRAMES_PER_PACKET as u64;
@@ -383,6 +425,9 @@ pub struct SatpStatus {
     pub frames_delivered: u64,
     pub playout_gap_events: u64,
     pub playout_primed: bool,
+    pub timeline_resyncs: u64,
+    pub rate_match_ratio: f64,
+    pub clock_correction_ppm: f64,
     pub sink_errors: u64,
     pub effective_sample_rate: f64,
     pub packet_rate: f64,
@@ -425,6 +470,9 @@ impl SatpStatus {
             frames_delivered: 0,
             playout_gap_events: 0,
             playout_primed: false,
+            timeline_resyncs: 0,
+            rate_match_ratio: 1.0,
+            clock_correction_ppm: 0.0,
             sink_errors: 0,
             effective_sample_rate: 0.0,
             packet_rate: 0.0,
@@ -527,10 +575,9 @@ fn run_receiver(
     stop: Arc<AtomicBool>,
 ) {
     let mut ring = PacketRing::new(jitter_target_frames, jitter_capacity_frames);
+    let mut rate_control = PlayoutRateControl::new(jitter_target_frames);
     let mut sink = NullTxAudioSink::default();
     let mut receive_buffer = [0u8; RECEIVE_BUFFER_BYTES];
-    let packet_period =
-        Duration::from_secs_f64(SATP_FRAMES_PER_PACKET as f64 / SATP_SAMPLE_RATE_HZ as f64);
     let startup_delay =
         Duration::from_secs_f64(jitter_target_frames as f64 / SATP_SAMPLE_RATE_HZ as f64);
     let mut playout_clock = PlayoutClock::default();
@@ -588,6 +635,7 @@ fn run_receiver(
                 let changed = session_id.is_some();
                 ring.clear();
                 playout_clock.reset();
+                rate_control.reset();
                 sequence_tracker.reset();
                 first_sample_counter = None;
                 measurement_started = now;
@@ -607,23 +655,54 @@ fn run_receiver(
             }
 
             let header = packet.header;
-            let insert_result = ring.insert(packet);
+            let was_timeline_late = ring.is_late(header.sample_counter);
+            let mut observed_sequence = None;
+            let mut timeline_resynced = false;
+            let insert_result = if was_timeline_late {
+                let sequence_result = sequence_tracker.observe(header.sequence);
+                observed_sequence = Some(sequence_result);
+                if sequence_result != SequenceResult::OutOfOrder {
+                    // Current, forward-moving media must win over a playout
+                    // cursor that has crept ahead of the source clock. Flush
+                    // stale buffered state and rebuild the configured target
+                    // instead of cascading every future packet into `late`.
+                    ring.clear();
+                    playout_clock.reset();
+                    rate_control.reset();
+                    previous_playout_was_silence = false;
+                    timeline_resynced = true;
+                    ring.insert(packet)
+                } else {
+                    InsertResult::Late
+                }
+            } else {
+                ring.insert(packet)
+            };
             {
                 let mut snapshot = status.lock_unpoisoned();
                 snapshot.packets_rx = snapshot.packets_rx.saturating_add(1);
                 snapshot.frames_rx = snapshot.frames_rx.saturating_add(header.frame_count as u64);
                 snapshot.source = Some(source.to_string());
                 snapshot.stream_id = Some(header.stream_id);
+                if was_timeline_late {
+                    snapshot.late = snapshot.late.saturating_add(1);
+                }
+                if timeline_resynced {
+                    snapshot.timeline_resyncs = snapshot.timeline_resyncs.saturating_add(1);
+                }
                 match insert_result {
                     InsertResult::Inserted | InsertResult::Replaced => {}
                     InsertResult::Duplicate => snapshot.duplicates += 1,
-                    InsertResult::Late => snapshot.late += 1,
+                    InsertResult::Late if !was_timeline_late => snapshot.late += 1,
+                    InsertResult::Late => {}
                 }
                 if insert_result == InsertResult::Replaced {
                     snapshot.buffer_overruns = snapshot.buffer_overruns.saturating_add(1);
                 }
-                if insert_result != InsertResult::Duplicate {
-                    match sequence_tracker.observe(header.sequence) {
+                if insert_result != InsertResult::Duplicate || observed_sequence.is_some() {
+                    match observed_sequence
+                        .unwrap_or_else(|| sequence_tracker.observe(header.sequence))
+                    {
                         SequenceResult::InOrder => {}
                         SequenceResult::Gap => {
                             snapshot.gap_events = snapshot.gap_events.saturating_add(1)
@@ -651,6 +730,7 @@ fn run_receiver(
             ring.clear();
             let _ = sink.flush();
             playout_clock.reset();
+            rate_control.reset();
             previous_playout_was_silence = false;
         }
         previous_tx_authorized = tx_authorized;
@@ -662,6 +742,7 @@ fn run_receiver(
             ring.clear();
             let _ = sink.flush();
             playout_clock.reset();
+            rate_control.reset();
             previous_playout_was_silence = false;
             status.lock_unpoisoned().audio_loss_events += 1;
             audio_loss_latched = true;
@@ -699,7 +780,8 @@ fn run_receiver(
                     }
                 }
             }
-            playout_clock.advance(packet_period);
+            let adjusted_period = rate_control.observe(ring.frames());
+            playout_clock.advance(adjusted_period);
             playout_steps += 1;
             did_work = true;
         }
@@ -712,6 +794,8 @@ fn run_receiver(
             snapshot.buffer_max = snapshot.buffer_max.max(current);
             snapshot.tx_authorized = tx_authorized;
             snapshot.playout_primed = ring.started;
+            snapshot.rate_match_ratio = rate_control.ratio();
+            snapshot.clock_correction_ppm = rate_control.correction_ppm;
             snapshot.last_packet_age_ms = last_packet_at
                 .map(|at| Instant::now().saturating_duration_since(at).as_millis() as u64);
             snapshot.audio_health =
@@ -804,6 +888,7 @@ fn status_json(status: &SatpStatus) -> String {
             "  \"buffer_current\": {},\n  \"buffer_min\": {},\n  \"buffer_max\": {},\n",
             "  \"buffer_target\": {},\n  \"buffer_capacity\": {},\n",
             "  \"silence_frames\": {},\n  \"frames_consumed\": {},\n  \"frames_delivered\": {},\n  \"playout_gap_events\": {},\n  \"playout_primed\": {},\n  \"sink_errors\": {},\n",
+            "  \"timeline_resyncs\": {},\n  \"rate_match_ratio\": {:.9},\n  \"clock_correction_ppm\": {:.3},\n",
             "  \"audio_health\": {},\n  \"audio_loss_events\": {},\n  \"last_packet_age_ms\": {},\n  \"tx_authorized\": {},\n",
             "  \"dekey_requests\": {},\n  \"updated_unix_ms\": {}\n}}\n"
         ),
@@ -839,6 +924,9 @@ fn status_json(status: &SatpStatus) -> String {
         status.playout_gap_events,
         status.playout_primed,
         status.sink_errors,
+        status.timeline_resyncs,
+        status.rate_match_ratio,
+        status.clock_correction_ppm,
         json_string(status.audio_health.as_str()),
         status.audio_loss_events,
         optional_number(status.last_packet_age_ms),
@@ -1013,6 +1101,51 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn occupancy_rate_control_tracks_measured_windows_clock_without_underflow() {
+        let source_group_period: f64 = 512.0 / 47_993.6;
+        let mut rate_control = PlayoutRateControl::new(512);
+        let mut occupied_packets = 4u32;
+        let mut next_source = source_group_period;
+        let mut next_playout = 512.0 / 48_000.0;
+        let mut missing_packets = 0u32;
+
+        while next_source.min(next_playout) < 1_800.0 {
+            if next_source <= next_playout {
+                occupied_packets += 4;
+                next_source += source_group_period;
+            } else {
+                if occupied_packets == 0 {
+                    missing_packets += 1;
+                } else {
+                    occupied_packets -= 1;
+                }
+                next_playout += rate_control.observe(occupied_packets * 128).as_secs_f64();
+            }
+        }
+
+        assert_eq!(missing_packets, 0);
+        assert!((-200.0..=-80.0).contains(&rate_control.correction_ppm));
+        assert!((0.9998..1.0).contains(&rate_control.ratio()));
+    }
+
+    #[test]
+    fn occupancy_rate_control_is_bounded_and_has_correct_direction() {
+        let mut rate_control = PlayoutRateControl::new(512);
+        for _ in 0..512 {
+            rate_control.observe(0);
+        }
+        assert!(rate_control.correction_ppm < 0.0);
+        assert!(rate_control.correction_ppm >= -RATE_MATCH_MAX_PPM);
+
+        rate_control.reset();
+        for _ in 0..512 {
+            rate_control.observe(4096);
+        }
+        assert!(rate_control.correction_ppm > 0.0);
+        assert!(rate_control.correction_ppm <= RATE_MATCH_MAX_PPM);
     }
 
     #[test]

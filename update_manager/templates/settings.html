@@ -182,6 +182,7 @@
           `packets_rx=${runtime.packets_rx || 0} frames_rx=${runtime.frames_rx || 0}`,
           `sequence_gap_events=${runtime.gap_events || 0} packets_missing=${runtime.packets_missing || 0}`,
           `playout_gap_events=${runtime.playout_gap_events || 0}`,
+          `timeline_resyncs=${runtime.timeline_resyncs || 0}`,
           `duplicates=${runtime.duplicates || 0} out_of_order=${runtime.out_of_order || 0}`,
           `late=${runtime.late || 0} invalid=${runtime.invalid || 0}`,
           `buffer_overruns=${runtime.buffer_overruns || 0} audio_loss_events=${runtime.audio_loss_events || 0}`,
@@ -190,6 +191,7 @@
           `silence_frames=${runtime.silence_frames || 0}`,
           `media_frames_consumed=${Math.max(0, (runtime.frames_consumed || 0) - (runtime.silence_frames || 0))}`,
           `sink_frames_during_tx=${runtime.frames_delivered || 0} (zero is expected while RX)`,
+          `rate_match_ratio=${Number(runtime.rate_match_ratio || 1).toFixed(9)} correction_ppm=${Number(runtime.clock_correction_ppm || 0).toFixed(1)}`,
           `sink=null rf_connected=false tx_authorized=${!!runtime.tx_authorized}`,
         ].join('\n');
       } catch (error) {

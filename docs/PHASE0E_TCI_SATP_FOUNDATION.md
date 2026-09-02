@@ -91,6 +91,18 @@ audio-loss recovery reset that clock; it is re-anchored only after a fresh
 target is available. This prevents an old wall-clock deadline from racing the
 timeline forward and classifying current packets as late after a sender pause.
 
+**VERIFIED CURRENT BEHAVIOR:** A bounded occupancy controller makes small
+playout-rate corrections around the 512-frame target. The ratio and correction
+in ppm are observable. If an in-order packet still arrives behind the cursor,
+the receiver counts a timeline resynchronization, flushes stale buffered state,
+and re-primes from current media rather than allowing one underflow to turn all
+following packets into late drops. Reordered old packets remain drop-only.
+
+**TECHNICAL DEBT:** Phase 0E applies that correction only to null-sink playout
+cadence. A live Phase 0F sink must use the existing WDSP/rmatch-style sample-rate
+conversion against destination occupancy; it must not pace XDMA from the PC
+clock or assume that two nominal 48 kHz clocks are identical.
+
 **VERIFIED CURRENT BEHAVIOR:** A new `session_id` flushes the packet ring and
 resets sequence, timeline, and playout state without treating the sender epoch
 change as packet loss.

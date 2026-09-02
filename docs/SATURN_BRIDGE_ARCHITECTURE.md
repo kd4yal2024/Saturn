@@ -237,7 +237,9 @@ TCI client / Saturn Remote
 ### 10.3 Native SATP/UDP boundary
 
 - **VERIFIED CURRENT BEHAVIOR:** Phase 0E adds a dedicated SATP v1 UDP receiver, exact packet validator, fixed-capacity sample-counter-keyed packet ring, steady playout clock, sequence/timeline metrics, and atomically published runtime status (`satp.rs`).
+- **VERIFIED CURRENT BEHAVIOR:** Phase 0E null-sink playout uses bounded occupancy correction and re-primes current in-order media if its cursor ever outruns the source, preventing a single clock-domain underflow from cascading into permanent late drops (`satp.rs`).
 - **VERIFIED CURRENT BEHAVIOR:** The only Phase 0E consumer is `NullTxAudioSink`; SATP has no connection to WDSP, DUC, P2, direct XDMA, FPGA, or RF (`tx_audio.rs`).
+- **TECHNICAL DEBT:** Before any live Phase 0F sink, replace null-sink cadence correction with WDSP/rmatch-style sample-rate conversion governed by destination occupancy. XDMA pacing must remain in the existing hardware-clock domain.
 - **INTENDED DESIGN:** TCI remains the control/status/negotiation plane. SATP/UDP is a separate low-latency media plane from the Windows native audio client to Saturn-side TX DSP.
 - **INTENDED DESIGN:** TX may occur only when an authorized control-plane state and valid media/DSP/backend conditions are all true. SATP packets alone never arm, key, extend, or re-authorize TX.
 - **TECHNICAL DEBT:** Phase 0E uses fixed-cadence playout and bounded jitter smoothing but does not yet apply long-term occupancy-driven clock correction.
