@@ -692,7 +692,6 @@ fn run_receiver(
                     // instead of cascading every future packet into `late`.
                     ring.clear();
                     playout_clock.reset();
-                    rate_control.reset();
                     previous_playout_was_silence = false;
                     timeline_resynced = true;
                     ring.insert(packet)
@@ -771,7 +770,6 @@ fn run_receiver(
             ring.clear();
             let _ = sink.flush();
             playout_clock.reset();
-            rate_control.reset();
             previous_playout_was_silence = false;
         }
         previous_tx_authorized = tx_authorized;
@@ -783,7 +781,6 @@ fn run_receiver(
             ring.clear();
             let _ = sink.flush();
             playout_clock.reset();
-            rate_control.reset();
             previous_playout_was_silence = false;
             status.lock_unpoisoned().audio_loss_events += 1;
             audio_loss_latched = true;

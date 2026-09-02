@@ -100,7 +100,9 @@ timeline forward and classifying current packets as late after a sender pause.
 
 **VERIFIED CURRENT BEHAVIOR:** A bounded occupancy controller makes small
 playout-rate corrections around the 512-frame target. The ratio and correction
-in ppm are observable. If an in-order packet still arrives behind the cursor,
+in ppm are observable and retained across PTT transitions and sender pauses so
+post-run diagnostics preserve the learned clock relationship. A new sender
+session resets the controller. If an in-order packet still arrives behind the cursor,
 the receiver counts a timeline resynchronization, flushes stale buffered state,
 and re-primes from current media rather than allowing one underflow to turn all
 following packets into late drops. Reordered old packets remain drop-only.
