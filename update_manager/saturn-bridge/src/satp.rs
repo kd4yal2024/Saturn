@@ -203,11 +203,13 @@ impl PlayoutClock {
         self.next = None;
     }
 
-    fn prime_if_ready(&mut self, ring: &mut PacketRing, now: Instant, packet_period: Duration) {
+    fn prime_if_ready(&mut self, ring: &mut PacketRing, now: Instant, startup_delay: Duration) {
         if self.next.is_none() && ring.begin_if_ready() {
-            // Keep one packet period of scheduling margin after the initial
-            // 512-frame burst. UDP arrival time is never the playout clock.
-            self.next = Some(now + packet_period);
+            // Hold the complete jitter target before starting steady playout.
+            // The Windows sender emits four 128-frame packets as one burst;
+            // using only one packet period here races the next burst at an
+            // empty ring instead of maintaining the configured midpoint.
+            self.next = Some(now + startup_delay);
         }
     }
 
@@ -529,6 +531,8 @@ fn run_receiver(
     let mut receive_buffer = [0u8; RECEIVE_BUFFER_BYTES];
     let packet_period =
         Duration::from_secs_f64(SATP_FRAMES_PER_PACKET as f64 / SATP_SAMPLE_RATE_HZ as f64);
+    let startup_delay =
+        Duration::from_secs_f64(jitter_target_frames as f64 / SATP_SAMPLE_RATE_HZ as f64);
     let mut playout_clock = PlayoutClock::default();
     let mut last_status_write = Instant::now();
     let mut last_packet_at: Option<Instant> = None;
@@ -665,7 +669,7 @@ fn run_receiver(
             audio_loss_latched = false;
         }
         if !audio_lost {
-            playout_clock.prime_if_ready(&mut ring, now, packet_period);
+            playout_clock.prime_if_ready(&mut ring, now, startup_delay);
         }
         let mut playout_steps = 0;
         while !audio_lost && playout_clock.is_due(now) && playout_steps < 8 {
@@ -947,19 +951,20 @@ mod tests {
     #[test]
     fn playout_clock_waits_for_fresh_target_after_reset() {
         let period = Duration::from_millis(3);
+        let startup_delay = Duration::from_millis(12);
         let first_epoch = Instant::now();
         let mut clock = PlayoutClock::default();
         let mut ring = PacketRing::new(512, 4096);
 
-        clock.prime_if_ready(&mut ring, first_epoch, period);
+        clock.prime_if_ready(&mut ring, first_epoch, startup_delay);
         assert!(!clock.is_due(first_epoch + Duration::from_secs(10)));
 
         for sequence in 0..4 {
             ring.insert(parse_packet(&packet(sequence, u64::from(sequence) * 128, 0.25)).unwrap());
         }
-        clock.prime_if_ready(&mut ring, first_epoch, period);
-        assert!(!clock.is_due(first_epoch));
-        assert!(clock.is_due(first_epoch + period));
+        clock.prime_if_ready(&mut ring, first_epoch, startup_delay);
+        assert!(!clock.is_due(first_epoch + period));
+        assert!(clock.is_due(first_epoch + startup_delay));
 
         ring.clear();
         clock.reset();
@@ -968,9 +973,46 @@ mod tests {
         for sequence in 4..8 {
             ring.insert(parse_packet(&packet(sequence, u64::from(sequence) * 128, 0.5)).unwrap());
         }
-        clock.prime_if_ready(&mut ring, resumed_at, period);
+        clock.prime_if_ready(&mut ring, resumed_at, startup_delay);
         assert!(!clock.is_due(resumed_at));
-        assert!(clock.is_due(resumed_at + period));
+        assert!(clock.is_due(resumed_at + startup_delay));
+    }
+
+    #[test]
+    fn target_delay_absorbs_burst_arrival_jitter_without_silence() {
+        let period = Duration::from_micros(2_667);
+        let startup_delay = period * 4;
+        let epoch = Instant::now();
+        let mut clock = PlayoutClock::default();
+        let mut ring = PacketRing::new(512, 4096);
+
+        for sequence in 0..4 {
+            ring.insert(parse_packet(&packet(sequence, u64::from(sequence) * 128, 0.25)).unwrap());
+        }
+        clock.prime_if_ready(&mut ring, epoch, startup_delay);
+
+        // The next four-packet callback is delayed by one packet period. A
+        // target-sized startup hold leaves enough real audio to absorb it.
+        for tick in 4..12u32 {
+            let now = epoch + period * tick;
+            assert!(clock.is_due(now));
+            let (_, silence) = ring.pop_or_silence().unwrap();
+            assert!(!silence, "unexpected silence at playout tick {tick}");
+            clock.advance(period);
+            if tick == 5 {
+                for sequence in 4..8 {
+                    ring.insert(
+                        parse_packet(&packet(sequence, u64::from(sequence) * 128, 0.5)).unwrap(),
+                    );
+                }
+            } else if tick == 9 {
+                for sequence in 8..12 {
+                    ring.insert(
+                        parse_packet(&packet(sequence, u64::from(sequence) * 128, 0.75)).unwrap(),
+                    );
+                }
+            }
+        }
     }
 
     #[test]

@@ -84,10 +84,12 @@ the start of each contiguous silence-insertion run, so internal playout gaps
 cannot be mistaken for network sequence gaps.
 
 **VERIFIED CURRENT BEHAVIOR:** The playout clock is unarmed until the bounded
-ring reaches its target. Session changes, PTT rising edges, and audio-loss
-recovery reset that clock; it is re-anchored only after a fresh target is
-available. This prevents an old wall-clock deadline from racing the timeline
-forward and classifying current packets as late after a sender pause.
+ring reaches its target. It then holds the complete target duration before
+steady playout begins, keeping the four-packet Windows burst around the target
+instead of racing it at an empty ring. Session changes, PTT rising edges, and
+audio-loss recovery reset that clock; it is re-anchored only after a fresh
+target is available. This prevents an old wall-clock deadline from racing the
+timeline forward and classifying current packets as late after a sender pause.
 
 **VERIFIED CURRENT BEHAVIOR:** A new `session_id` flushes the packet ring and
 resets sequence, timeline, and playout state without treating the sender epoch
