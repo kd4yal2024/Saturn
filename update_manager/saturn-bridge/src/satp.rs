@@ -426,6 +426,10 @@ pub struct SatpStatus {
     pub playout_gap_events: u64,
     pub playout_primed: bool,
     pub timeline_resyncs: u64,
+    pub sample_counter_discontinuities: u64,
+    pub sample_counter_delta_last: Option<u64>,
+    pub sample_counter_delta_min: Option<u64>,
+    pub sample_counter_delta_max: Option<u64>,
     pub rate_match_ratio: f64,
     pub clock_correction_ppm: f64,
     pub sink_errors: u64,
@@ -471,6 +475,10 @@ impl SatpStatus {
             playout_gap_events: 0,
             playout_primed: false,
             timeline_resyncs: 0,
+            sample_counter_discontinuities: 0,
+            sample_counter_delta_last: None,
+            sample_counter_delta_min: None,
+            sample_counter_delta_max: None,
             rate_match_ratio: 1.0,
             clock_correction_ppm: 0.0,
             sink_errors: 0,
@@ -594,6 +602,7 @@ fn run_receiver(
     let mut first_sample_counter: Option<u64> = None;
     let mut latest_sample_counter: Option<u64> = None;
     let mut previous_playout_was_silence = false;
+    let mut last_arrival_timeline: Option<(u32, u64)> = None;
 
     while !stop.load(Ordering::Relaxed) {
         let mut did_work = false;
@@ -637,6 +646,7 @@ fn run_receiver(
                 playout_clock.reset();
                 rate_control.reset();
                 sequence_tracker.reset();
+                last_arrival_timeline = None;
                 first_sample_counter = None;
                 measurement_started = now;
                 let _ = sink.flush();
@@ -655,6 +665,20 @@ fn run_receiver(
             }
 
             let header = packet.header;
+            let mut sample_counter_delta = None;
+            let mut sample_counter_discontinuity = false;
+            if let Some((previous_sequence, previous_counter)) = last_arrival_timeline {
+                let sequence_advance = header.sequence.wrapping_sub(previous_sequence);
+                if sequence_advance > 0 && sequence_advance < (1 << 31) {
+                    sample_counter_delta = header.sample_counter.checked_sub(previous_counter);
+                    let expected_delta =
+                        u64::from(sequence_advance) * u64::from(SATP_FRAMES_PER_PACKET);
+                    sample_counter_discontinuity = sample_counter_delta != Some(expected_delta);
+                    last_arrival_timeline = Some((header.sequence, header.sample_counter));
+                }
+            } else {
+                last_arrival_timeline = Some((header.sequence, header.sample_counter));
+            }
             let was_timeline_late = ring.is_late(header.sample_counter);
             let mut observed_sequence = None;
             let mut timeline_resynced = false;
@@ -689,6 +713,23 @@ fn run_receiver(
                 }
                 if timeline_resynced {
                     snapshot.timeline_resyncs = snapshot.timeline_resyncs.saturating_add(1);
+                }
+                if let Some(delta) = sample_counter_delta {
+                    snapshot.sample_counter_delta_last = Some(delta);
+                    snapshot.sample_counter_delta_min = Some(
+                        snapshot
+                            .sample_counter_delta_min
+                            .map_or(delta, |current| current.min(delta)),
+                    );
+                    snapshot.sample_counter_delta_max = Some(
+                        snapshot
+                            .sample_counter_delta_max
+                            .map_or(delta, |current| current.max(delta)),
+                    );
+                }
+                if sample_counter_discontinuity {
+                    snapshot.sample_counter_discontinuities =
+                        snapshot.sample_counter_discontinuities.saturating_add(1);
                 }
                 match insert_result {
                     InsertResult::Inserted | InsertResult::Replaced => {}
@@ -889,6 +930,7 @@ fn status_json(status: &SatpStatus) -> String {
             "  \"buffer_target\": {},\n  \"buffer_capacity\": {},\n",
             "  \"silence_frames\": {},\n  \"frames_consumed\": {},\n  \"frames_delivered\": {},\n  \"playout_gap_events\": {},\n  \"playout_primed\": {},\n  \"sink_errors\": {},\n",
             "  \"timeline_resyncs\": {},\n  \"rate_match_ratio\": {:.9},\n  \"clock_correction_ppm\": {:.3},\n",
+            "  \"sample_counter_discontinuities\": {},\n  \"sample_counter_delta_last\": {},\n  \"sample_counter_delta_min\": {},\n  \"sample_counter_delta_max\": {},\n",
             "  \"audio_health\": {},\n  \"audio_loss_events\": {},\n  \"last_packet_age_ms\": {},\n  \"tx_authorized\": {},\n",
             "  \"dekey_requests\": {},\n  \"updated_unix_ms\": {}\n}}\n"
         ),
@@ -927,6 +969,10 @@ fn status_json(status: &SatpStatus) -> String {
         status.timeline_resyncs,
         status.rate_match_ratio,
         status.clock_correction_ppm,
+        status.sample_counter_discontinuities,
+        optional_number(status.sample_counter_delta_last),
+        optional_number(status.sample_counter_delta_min),
+        optional_number(status.sample_counter_delta_max),
         json_string(status.audio_health.as_str()),
         status.audio_loss_events,
         optional_number(status.last_packet_age_ms),

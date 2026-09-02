@@ -62,6 +62,13 @@ The 32-byte header is:
 The payload is 128 little-endian finite `float32` mono samples. Incompatible,
 misaligned, malformed, or non-finite packets are rejected and counted.
 
+`sample_counter` is measured in audio frames, not bytes and not ASIO callback
+blocks. Its value identifies the first frame in this datagram. With the initial
+mono 128-frame contract, consecutive packets advance it by exactly 128 even
+when four packets are emitted back-to-back from one 512-frame ASIO callback.
+Runtime diagnostics report the observed last/min/max counter delta and count
+departures from the sequence-correlated expected value.
+
 ## Receiver and playout
 
 **VERIFIED CURRENT BEHAVIOR:** The UDP socket requests a 1 MiB receive buffer

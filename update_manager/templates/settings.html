@@ -114,7 +114,14 @@
         <div class="text-xs opacity-75 mb-3">Saving restarts only an already-active bridge through the ownership broker. An inactive bridge stays inactive.</div>
         <div id="satp-save-result" class="text-sm mb-4"></div>
 
-        <h3 class="text-sm font-semibold mb-2 opacity-80">Live SATP Diagnostics</h3>
+        <div class="flex flex-wrap items-center justify-between gap-2 mb-2">
+          <h3 class="text-sm font-semibold opacity-80">Live SATP Diagnostics</h3>
+          <div class="flex flex-wrap gap-2">
+            <button id="satp-clear-stats-btn" class="btn px-3 py-1 text-sm">Clear Display</button>
+            <button id="satp-copy-stats-btn" class="btn px-3 py-1 text-sm">Copy Stats</button>
+          </div>
+        </div>
+        <div id="satp-stats-result" class="text-xs opacity-75 mb-2">Clear Display starts a local counter baseline without restarting the radio or receiver.</div>
         <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-3 text-sm">
           <div><div class="opacity-60">State</div><div id="satp-state" class="font-mono">—</div></div>
           <div><div class="opacity-60">Source</div><div id="satp-live-source" class="font-mono">—</div></div>
@@ -151,7 +158,79 @@
       }
     }
 
+    const satpCounterNames = [
+      'packets_rx', 'frames_rx', 'gap_events', 'packets_missing',
+      'playout_gap_events', 'timeline_resyncs', 'duplicates', 'out_of_order',
+      'late', 'invalid', 'buffer_overruns', 'audio_loss_events', 'sessions',
+      'session_changes', 'silence_frames', 'frames_consumed', 'frames_delivered',
+      'sink_errors', 'dekey_requests', 'sample_counter_discontinuities',
+    ];
     let satpFormInitialized = false;
+    let satpLastData = null;
+    let satpCounterBaseline = {};
+
+    function satpCounter(runtime, name) {
+      return Math.max(0, Number(runtime[name] || 0) - Number(satpCounterBaseline[name] || 0));
+    }
+
+    function formatSatpCounters(data) {
+      const config = data.config || {};
+      const runtime = data.runtime || {};
+      const framesConsumed = satpCounter(runtime, 'frames_consumed');
+      const silenceFrames = satpCounter(runtime, 'silence_frames');
+      return [
+        `packets_rx=${satpCounter(runtime, 'packets_rx')} frames_rx=${satpCounter(runtime, 'frames_rx')}`,
+        `sequence_gap_events=${satpCounter(runtime, 'gap_events')} packets_missing=${satpCounter(runtime, 'packets_missing')}`,
+        `playout_gap_events=${satpCounter(runtime, 'playout_gap_events')}`,
+        `timeline_resyncs=${satpCounter(runtime, 'timeline_resyncs')}`,
+        `sample_counter_delta=${runtime.sample_counter_delta_last == null ? '—' : runtime.sample_counter_delta_last} expected=128 min=${runtime.sample_counter_delta_min == null ? '—' : runtime.sample_counter_delta_min} max=${runtime.sample_counter_delta_max == null ? '—' : runtime.sample_counter_delta_max}`,
+        `sample_counter_discontinuities=${satpCounter(runtime, 'sample_counter_discontinuities')}`,
+        `duplicates=${satpCounter(runtime, 'duplicates')} out_of_order=${satpCounter(runtime, 'out_of_order')}`,
+        `late=${satpCounter(runtime, 'late')} invalid=${satpCounter(runtime, 'invalid')}`,
+        `buffer_overruns=${satpCounter(runtime, 'buffer_overruns')} audio_loss_events=${satpCounter(runtime, 'audio_loss_events')}`,
+        `sessions=${satpCounter(runtime, 'sessions')} session_changes=${satpCounter(runtime, 'session_changes')}`,
+        `buffer_min=${runtime.buffer_min || 0} buffer_max=${runtime.buffer_max || 0} target=${runtime.buffer_target || config.jitter_target_frames || 512}`,
+        `silence_frames=${silenceFrames}`,
+        `media_frames_consumed=${Math.max(0, framesConsumed - silenceFrames)}`,
+        `sink_frames_during_tx=${satpCounter(runtime, 'frames_delivered')} (zero is expected while RX)`,
+        `rate_match_ratio=${Number(runtime.rate_match_ratio || 1).toFixed(9)} correction_ppm=${Number(runtime.clock_correction_ppm || 0).toFixed(1)}`,
+        `sink=null rf_connected=false tx_authorized=${!!runtime.tx_authorized}`,
+      ].join('\n');
+    }
+
+    function formatSatpClipboard(data) {
+      const runtime = data.runtime || {};
+      return [
+        'Saturn SATP Diagnostics',
+        `Captured: ${new Date().toISOString()}`,
+        `State: ${$('satp-state').textContent}`,
+        `Source: ${runtime.source || 'none'}`,
+        `Session / Stream: ${runtime.session_id == null ? 'none' : `${runtime.session_id} / ${runtime.stream_id}`}`,
+        `Last packet: ${runtime.last_packet_age_ms == null ? 'none' : `${runtime.last_packet_age_ms} ms ago`}`,
+        `Packet rate: ${Number(runtime.packet_rate || 0).toFixed(1)} packets/sec`,
+        `Effective rate: ${Number(runtime.effective_sample_rate || 0).toFixed(1)} Hz`,
+        `Buffer: ${runtime.buffer_current || 0} / ${runtime.buffer_capacity || 0}`,
+        '',
+        formatSatpCounters(data),
+      ].join('\n');
+    }
+
+    async function copyText(text) {
+      if (navigator.clipboard && window.isSecureContext) {
+        await navigator.clipboard.writeText(text);
+        return;
+      }
+      const textarea = document.createElement('textarea');
+      textarea.value = text;
+      textarea.style.position = 'fixed';
+      textarea.style.opacity = '0';
+      document.body.appendChild(textarea);
+      textarea.select();
+      const copied = document.execCommand('copy');
+      textarea.remove();
+      if (!copied) throw new Error('browser denied clipboard access');
+    }
+
     async function refreshSatpStatus() {
       try {
         const res = await fetch('./api/v1/satp/status', { cache: 'no-store' });
@@ -159,6 +238,7 @@
         if (data.status !== 'ok') return;
         const config = data.config || {};
         const runtime = data.runtime || {};
+        satpLastData = data;
         if (!satpFormInitialized) {
           $('satp-enabled').checked = !!config.enabled;
           $('satp-host').value = config.host || '127.0.0.1';
@@ -178,22 +258,7 @@
         $('satp-effective').textContent = runtime.effective_sample_rate == null ? '—' : `${Number(runtime.effective_sample_rate).toFixed(1)} Hz`;
         $('satp-buffer').textContent = `${runtime.buffer_current || 0} / ${runtime.buffer_capacity || config.jitter_capacity_frames || 4096}`;
         $('satp-socket-buffer').textContent = runtime.actual_socket_buffer_bytes ? `${runtime.actual_socket_buffer_bytes} B` : '—';
-        $('satp-counters').textContent = [
-          `packets_rx=${runtime.packets_rx || 0} frames_rx=${runtime.frames_rx || 0}`,
-          `sequence_gap_events=${runtime.gap_events || 0} packets_missing=${runtime.packets_missing || 0}`,
-          `playout_gap_events=${runtime.playout_gap_events || 0}`,
-          `timeline_resyncs=${runtime.timeline_resyncs || 0}`,
-          `duplicates=${runtime.duplicates || 0} out_of_order=${runtime.out_of_order || 0}`,
-          `late=${runtime.late || 0} invalid=${runtime.invalid || 0}`,
-          `buffer_overruns=${runtime.buffer_overruns || 0} audio_loss_events=${runtime.audio_loss_events || 0}`,
-          `sessions=${runtime.sessions || 0} session_changes=${runtime.session_changes || 0}`,
-          `buffer_min=${runtime.buffer_min || 0} buffer_max=${runtime.buffer_max || 0} target=${runtime.buffer_target || config.jitter_target_frames || 512}`,
-          `silence_frames=${runtime.silence_frames || 0}`,
-          `media_frames_consumed=${Math.max(0, (runtime.frames_consumed || 0) - (runtime.silence_frames || 0))}`,
-          `sink_frames_during_tx=${runtime.frames_delivered || 0} (zero is expected while RX)`,
-          `rate_match_ratio=${Number(runtime.rate_match_ratio || 1).toFixed(9)} correction_ppm=${Number(runtime.clock_correction_ppm || 0).toFixed(1)}`,
-          `sink=null rf_connected=false tx_authorized=${!!runtime.tx_authorized}`,
-        ].join('\n');
+        $('satp-counters').textContent = formatSatpCounters(data);
       } catch (error) {
         // Status is absent while the bridge is stopped or restarting.
       }
@@ -263,6 +328,30 @@
       } finally {
         $('satp-save-btn').disabled = false;
         setTimeout(refreshSatpStatus, 3000);
+      }
+    });
+
+    $('satp-clear-stats-btn').addEventListener('click', () => {
+      if (!satpLastData) return;
+      const runtime = satpLastData.runtime || {};
+      satpCounterBaseline = Object.fromEntries(
+        satpCounterNames.map((name) => [name, Number(runtime[name] || 0)]),
+      );
+      $('satp-counters').textContent = formatSatpCounters(satpLastData);
+      $('satp-stats-result').textContent = 'Display counters cleared. Runtime collection continues without restarting the bridge.';
+    });
+
+    $('satp-copy-stats-btn').addEventListener('click', async () => {
+      const resultEl = $('satp-stats-result');
+      if (!satpLastData) {
+        resultEl.textContent = 'No SATP status is available to copy yet.';
+        return;
+      }
+      try {
+        await copyText(formatSatpClipboard(satpLastData));
+        resultEl.textContent = 'SATP diagnostics copied to the clipboard.';
+      } catch (error) {
+        resultEl.textContent = `Copy failed: ${error.message || error}`;
       }
     });
 
