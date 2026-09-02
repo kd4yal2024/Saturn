@@ -524,6 +524,18 @@ fn application_router(state: AppState, restore_request_max_bytes: usize) -> Rout
         .route("/settings.html", get(settings_handler))
         .route("/tci_status", get(get_tci_status))
         .route("/tci_settings", post(set_tci_settings))
+        .route(
+            "/api/v1/tci/config",
+            get(get_tci_status).put(set_tci_settings),
+        )
+        .route("/api/v1/tci/status", get(get_tci_status))
+        .route("/satp_status", get(get_satp_status))
+        .route("/satp_settings", post(set_satp_settings))
+        .route(
+            "/api/v1/satp/config",
+            get(get_satp_config).put(set_satp_settings),
+        )
+        .route("/api/v1/satp/status", get(get_satp_status))
         .route("/livez", get(livez))
         .route("/readyz", get(readyz))
         .route("/healthz", get(healthz))
@@ -1764,11 +1776,24 @@ async fn set_radio_backend(
 }
 
 const TCI_BIND_HELPER: &str = "/usr/local/lib/saturn-go/scripts/saturn-tci-bind.sh";
+const SATP_CONFIG_HELPER: &str = "/usr/local/lib/saturn-go/scripts/saturn-satp-config.sh";
+const SATP_STATUS_FILE: &str = "/run/saturn-bridge/satp-status.json";
 
 #[derive(serde::Deserialize)]
 struct TciBindRequest {
     host: String,
     port: u16,
+}
+
+#[derive(serde::Deserialize)]
+struct SatpConfigRequest {
+    enabled: bool,
+    host: String,
+    port: u16,
+    allowed_source_ip: Option<String>,
+    jitter_target_frames: u32,
+    jitter_capacity_frames: u32,
+    audio_loss_timeout_ms: u32,
 }
 
 async fn invoke_tci_bind_helper(args: &[&str]) -> Result<String, String> {
@@ -1795,6 +1820,40 @@ async fn invoke_tci_bind_helper(args: &[&str]) -> Result<String, String> {
     Ok(stdout)
 }
 
+async fn invoke_satp_config_helper(args: &[&str]) -> Result<String, String> {
+    let helper = PathBuf::from(SATP_CONFIG_HELPER);
+    if !helper.is_file() {
+        return Err(format!(
+            "SATP config helper is missing: {}",
+            helper.display()
+        ));
+    }
+    let mut command = Command::new("sudo");
+    command.arg("-n").arg(&helper).args(args);
+    command.kill_on_drop(true);
+    let output = tokio::time::timeout(Duration::from_secs(30), command.output())
+        .await
+        .map_err(|_| "SATP config helper timed out after 30 seconds".to_string())?
+        .map_err(|error| format!("could not run SATP config helper: {error}"))?;
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    if !output.status.success() {
+        return Err(if stderr.is_empty() {
+            format!("SATP config helper exited with {}: {stdout}", output.status)
+        } else {
+            stderr
+        });
+    }
+    Ok(stdout)
+}
+
+fn environment_value<'a>(environment: &'a str, key: &str) -> Option<&'a str> {
+    environment
+        .split_whitespace()
+        .filter_map(|entry| entry.strip_prefix(key))
+        .last()
+}
+
 async fn get_tci_status() -> Response {
     fn strip_journal_prefix(line: &str) -> &str {
         line.split_once("saturn-bridge")
@@ -1818,16 +1877,10 @@ async fn get_tci_status() -> Response {
         ],
     )
     .await;
-    let host = environment
-        .split_whitespace()
-        .filter_map(|entry| entry.strip_prefix("SATURN_BRIDGE_TCI_HOST="))
-        .last()
+    let host = environment_value(&environment, "SATURN_BRIDGE_TCI_HOST=")
         .unwrap_or("127.0.0.1")
         .to_string();
-    let port = environment
-        .split_whitespace()
-        .filter_map(|entry| entry.strip_prefix("SATURN_BRIDGE_TCI_PORT="))
-        .last()
+    let port = environment_value(&environment, "SATURN_BRIDGE_TCI_PORT=")
         .unwrap_or("50001")
         .to_string();
     let (bridge_active, _) = command_text(
@@ -1873,6 +1926,16 @@ async fn get_tci_status() -> Response {
             "lan_reachable": host != "127.0.0.1",
             "bridge_active": bridge_active,
             "lan_role": "viewer",
+            "protocol": "TCI 2.0",
+            "device": "Saturn G2",
+            "max_clients": 8,
+            "permissions": {
+                "lan_frequency_control": false,
+                "lan_mode_control": false,
+                "lan_rx_control": false,
+                "lan_ptt_control": false,
+                "loopback_operator_control": true
+            }
         },
         "journal": {
             "ok": journal_ok,
@@ -1880,6 +1943,132 @@ async fn get_tci_status() -> Response {
         }
     }))
     .into_response()
+}
+
+async fn bridge_environment() -> String {
+    command_text(
+        "systemctl",
+        &[
+            "show",
+            "saturn-bridge.service",
+            "-p",
+            "Environment",
+            "--value",
+        ],
+    )
+    .await
+    .1
+}
+
+fn satp_config_json(environment: &str) -> serde_json::Value {
+    let value = |key: &str, default: &str| {
+        environment_value(environment, key)
+            .unwrap_or(default)
+            .to_string()
+    };
+    serde_json::json!({
+        "enabled": matches!(value("SATURN_BRIDGE_SATP_ENABLED=", "0").as_str(), "1" | "true" | "yes" | "on"),
+        "host": value("SATURN_BRIDGE_SATP_HOST=", "127.0.0.1"),
+        "port": value("SATURN_BRIDGE_SATP_PORT=", "50100").parse::<u16>().unwrap_or(50100),
+        "allowed_source_ip": environment_value(environment, "SATURN_BRIDGE_SATP_ALLOWED_SOURCE_IP="),
+        "sample_rate": 48000,
+        "sample_format": "float32_le",
+        "channels": 1,
+        "frames_per_packet": 128,
+        "jitter_target_frames": value("SATURN_BRIDGE_SATP_JITTER_TARGET_FRAMES=", "512").parse::<u32>().unwrap_or(512),
+        "jitter_capacity_frames": value("SATURN_BRIDGE_SATP_JITTER_CAPACITY_FRAMES=", "4096").parse::<u32>().unwrap_or(4096),
+        "audio_loss_timeout_ms": value("SATURN_BRIDGE_SATP_AUDIO_LOSS_TIMEOUT_MS=", "250").parse::<u32>().unwrap_or(250),
+        "sink": "null",
+        "rf_connected": false
+    })
+}
+
+async fn get_satp_config() -> Response {
+    let environment = bridge_environment().await;
+    Json(serde_json::json!({"status": "ok", "satp": satp_config_json(&environment)}))
+        .into_response()
+}
+
+async fn get_satp_status() -> Response {
+    let environment = bridge_environment().await;
+    let config = satp_config_json(&environment);
+    let runtime = fs::read_to_string(SATP_STATUS_FILE)
+        .ok()
+        .filter(|text| text.len() <= 1024 * 1024)
+        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok());
+    let now_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64;
+    let runtime_stale = runtime
+        .as_ref()
+        .and_then(|value| value.get("updated_unix_ms"))
+        .and_then(serde_json::Value::as_u64)
+        .is_none_or(|updated| now_ms.saturating_sub(updated) > 5_000);
+    Json(serde_json::json!({
+        "status": "ok",
+        "config": config,
+        "runtime": runtime,
+        "runtime_stale": runtime_stale,
+    }))
+    .into_response()
+}
+
+async fn set_satp_settings(Json(request): Json<SatpConfigRequest>) -> Response {
+    let host = request.host.trim();
+    if host.parse::<std::net::Ipv4Addr>().is_err() {
+        return json_error(
+            StatusCode::BAD_REQUEST,
+            "SATP host must be a plain IPv4 address",
+        );
+    }
+    let allowed_source = request.allowed_source_ip.as_deref().unwrap_or("").trim();
+    if !allowed_source.is_empty() && allowed_source.parse::<std::net::Ipv4Addr>().is_err() {
+        return json_error(
+            StatusCode::BAD_REQUEST,
+            "allowed SATP source must be empty or a plain IPv4 address",
+        );
+    }
+    if request.port == 0
+        || request.jitter_target_frames < 128
+        || request.jitter_target_frames > request.jitter_capacity_frames
+        || request.jitter_capacity_frames < 512
+        || request.jitter_capacity_frames > 65_536
+        || !request.jitter_target_frames.is_multiple_of(128)
+        || !request.jitter_capacity_frames.is_multiple_of(128)
+        || !(100..=5_000).contains(&request.audio_loss_timeout_ms)
+    {
+        return json_error(StatusCode::BAD_REQUEST, "invalid SATP configuration bounds");
+    }
+    let enabled = if request.enabled { "1" } else { "0" };
+    let port = request.port.to_string();
+    let allowed_source = if allowed_source.is_empty() {
+        "-"
+    } else {
+        allowed_source
+    };
+    let target = request.jitter_target_frames.to_string();
+    let capacity = request.jitter_capacity_frames.to_string();
+    let timeout = request.audio_loss_timeout_ms.to_string();
+    match invoke_satp_config_helper(&[
+        "set",
+        enabled,
+        host,
+        &port,
+        allowed_source,
+        &target,
+        &capacity,
+        &timeout,
+    ])
+    .await
+    {
+        Ok(stdout) => Json(serde_json::json!({"status": "ok", "message": stdout})).into_response(),
+        Err(message) => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({"status": "error", "message": message})),
+        )
+            .into_response(),
+    }
 }
 
 async fn set_tci_settings(Json(request): Json<TciBindRequest>) -> Response {
@@ -4740,9 +4929,10 @@ async fn disk_imaging_disabled() -> Response {
 mod tests {
     use super::{
         append_script_run_log_line, begin_script_run_log, bind_addr_is_loopback,
-        disk_imaging_disabled, parse_xdma_interrupts_text, script_deadline_seconds,
-        script_run_log_slot, systemd_environment_value, with_request_limit,
-        xdma_operational_is_ready, APPLIANCE_POWER_HELPER, RADIO_BACKEND_SWITCH_HELPER,
+        disk_imaging_disabled, environment_value, parse_xdma_interrupts_text, satp_config_json,
+        script_deadline_seconds, script_run_log_slot, systemd_environment_value,
+        with_request_limit, xdma_operational_is_ready, APPLIANCE_POWER_HELPER,
+        RADIO_BACKEND_SWITCH_HELPER,
     };
     use axum::{
         body::{Body, Bytes},
@@ -4809,6 +4999,37 @@ mod tests {
         assert_eq!(
             systemd_environment_value("SATURN_FOO=1", "SATURN_BRIDGE_BACKEND"),
             None
+        );
+    }
+
+    #[test]
+    fn satp_config_uses_bounded_protocol_defaults_and_environment() {
+        let defaults = satp_config_json("");
+        assert_eq!(defaults["enabled"], false);
+        assert_eq!(defaults["port"], 50100);
+        assert_eq!(defaults["sample_rate"], 48_000);
+        assert_eq!(defaults["frames_per_packet"], 128);
+        assert_eq!(defaults["jitter_target_frames"], 512);
+        assert_eq!(defaults["jitter_capacity_frames"], 4096);
+        assert_eq!(defaults["sink"], "null");
+        assert_eq!(defaults["rf_connected"], false);
+
+        let environment = concat!(
+            "SATURN_BRIDGE_SATP_ENABLED=1 ",
+            "SATURN_BRIDGE_SATP_HOST=192.168.0.139 ",
+            "SATURN_BRIDGE_SATP_PORT=50123 ",
+            "SATURN_BRIDGE_SATP_ALLOWED_SOURCE_IP=192.168.0.20 ",
+            "SATURN_BRIDGE_SATP_JITTER_TARGET_FRAMES=1024"
+        );
+        let configured = satp_config_json(environment);
+        assert_eq!(configured["enabled"], true);
+        assert_eq!(configured["host"], "192.168.0.139");
+        assert_eq!(configured["port"], 50123);
+        assert_eq!(configured["allowed_source_ip"], "192.168.0.20");
+        assert_eq!(configured["jitter_target_frames"], 1024);
+        assert_eq!(
+            environment_value(environment, "SATURN_BRIDGE_SATP_PORT="),
+            Some("50123")
         );
     }
 

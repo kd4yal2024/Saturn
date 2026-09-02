@@ -136,6 +136,7 @@ pub(crate) fn handle_client(
     drop_count: &Arc<AtomicU64>,
     remote_tx_rf_enabled: bool,
     tx_codec_runtime_flags: TxCodecRuntimeFlags,
+    satp_advertisement: (bool, u16),
 ) {
     let _ = stream.set_nonblocking(true);
     let mut connect_lane_hint = None;
@@ -178,6 +179,7 @@ pub(crate) fn handle_client(
                     remote_tx_rf_enabled,
                     client_id,
                     role,
+                    satp_advertisement,
                 ) {
                     let drops = outbound.enqueue(OutboundMessage::Text(message));
                     drop_count.fetch_add(drops, Ordering::Relaxed);
@@ -442,6 +444,7 @@ pub(crate) fn initial_snapshot_messages(
     remote_tx_rf_enabled: bool,
     client_id: u64,
     role: TciClientRole,
+    satp_advertisement: (bool, u16),
 ) -> Vec<String> {
     vec![
         "protocol:SaturnBridge,2.0;".to_string(),
@@ -456,6 +459,12 @@ pub(crate) fn initial_snapshot_messages(
             model.desired.ddc0_sample_rate_khz as u32 * 500
         ),
         "modulations_list:LSB,USB,CWL,CWU,AM,SAM,FM,NFM,DIGL,DIGU,WFM;".to_string(),
+        "saturn_satp_supported:true;".to_string(),
+        format!("saturn_satp_enabled:{};", satp_advertisement.0),
+        "saturn_satp_version:1;".to_string(),
+        format!("saturn_satp_tx_port:{};", satp_advertisement.1),
+        "saturn_satp_tx_format:48000,float32_le,1,128;".to_string(),
+        "saturn_satp_feedback:false;".to_string(),
         remote_client_role_message(client_id, role),
         format!("vfo:0,0,{};", model.desired.vfo_a_hz),
         format!("vfo:0,1,{};", model.desired.vfo_b_hz),

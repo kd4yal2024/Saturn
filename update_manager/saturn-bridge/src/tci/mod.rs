@@ -168,6 +168,7 @@ impl TciFrontend {
         let rejected_connections = Arc::new(AtomicU64::new(0));
         let connection_high_watermark = Arc::new(AtomicU64::new(0));
         let remote_tx_rf_enabled = config.remote_tx_rf_enabled;
+        let satp_advertisement = (config.satp_enabled, config.satp_bind_addr.port());
         let tx_codec_runtime_flags = TxCodecRuntimeFlags {
             opus_decode_enabled: config.tx_opus_decode_enabled,
         };
@@ -211,6 +212,7 @@ impl TciFrontend {
                         let drop_count = drop_counter.clone();
                         let radio_model = radio_model.clone();
                         let tx_codec_runtime_flags = tx_codec_runtime_flags;
+                        let satp_advertisement = satp_advertisement;
                         let active_connections = active_connection_counter.clone();
 
                         thread::spawn(move || {
@@ -226,6 +228,7 @@ impl TciFrontend {
                                 &drop_count,
                                 remote_tx_rf_enabled,
                                 tx_codec_runtime_flags,
+                                satp_advertisement,
                             );
                             active_connections.fetch_sub(1, Ordering::AcqRel);
                         });

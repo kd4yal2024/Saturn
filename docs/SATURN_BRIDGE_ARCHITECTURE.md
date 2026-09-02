@@ -236,10 +236,11 @@ TCI client / Saturn Remote
 
 ### 10.3 Native SATP/UDP boundary
 
-- **VERIFIED CURRENT BEHAVIOR:** No `satp` module, SATP packet parser, native UDP audio socket, jitter/reorder buffer, or SATP loss/reorder telemetry exists in `saturn-bridge` in this checkout.
+- **VERIFIED CURRENT BEHAVIOR:** Phase 0E adds a dedicated SATP v1 UDP receiver, exact packet validator, fixed-capacity sample-counter-keyed packet ring, steady playout clock, sequence/timeline metrics, and atomically published runtime status (`satp.rs`).
+- **VERIFIED CURRENT BEHAVIOR:** The only Phase 0E consumer is `NullTxAudioSink`; SATP has no connection to WDSP, DUC, P2, direct XDMA, FPGA, or RF (`tx_audio.rs`).
 - **INTENDED DESIGN:** TCI remains the control/status/negotiation plane. SATP/UDP is a separate low-latency media plane from the Windows native audio client to Saturn-side TX DSP.
 - **INTENDED DESIGN:** TX may occur only when an authorized control-plane state and valid media/DSP/backend conditions are all true. SATP packets alone never arm, key, extend, or re-authorize TX.
-- **PROPOSED CHANGE:** Add a separate `satp/` subsystem with a bounded sequence-aware jitter buffer, explicit session identity negotiated over TCI, replay/stale rejection, rate matching, and loss/reorder/jitter counters.
+- **TECHNICAL DEBT:** Phase 0E uses fixed-cadence playout and bounded jitter smoothing but does not yet apply long-term occupancy-driven clock correction.
 - **PROPOSED CHANGE:** Feed both current TCI mic frames and future SATP frames into a common bounded `TxAudioIngress` abstraction after transport-specific validation. Keep PTT/release on the prioritized control path.
 
 ## 11. Queue inventory and overload policy
@@ -248,6 +249,7 @@ TCI client / Saturn Remote
 |---|---|---:|---|
 | VERIFIED CURRENT BEHAVIOR | TCI safety command mailbox | 16 commands | Same command kind is coalesced; at capacity the oldest safety command is removed (`tci/command_queue.rs:10-12,108-125`). |
 | VERIFIED CURRENT BEHAVIOR | TCI control command mailbox | 256 commands | Latest matching setting replaces old; otherwise oldest control command drops (`command_queue.rs:132-155`). |
+| VERIFIED CURRENT BEHAVIOR | SATP packet ring | 4096 frames default (32 packets) | Fixed slots keyed by sample counter; duplicates/late packets drop, slot replacement is counted, and missing playout positions produce exactly 128 silence frames. |
 | VERIFIED CURRENT BEHAVIOR | TCI mic command mailbox | 8 frames | Drop oldest mic frame and increment counter (`command_queue.rs:126-131`). |
 | VERIFIED CURRENT BEHAVIOR | Per-client outbound safety | 16 messages | Coalesce keyed messages; otherwise pop oldest and count depth overflow (`tci/outbound.rs:314-347,519-521`). |
 | VERIFIED CURRENT BEHAVIOR | Per-client outbound control | 256 messages and 256 KiB | Coalesce latest setting; drop oldest until both limits hold (`outbound.rs:348-376,519-521`). |
@@ -303,7 +305,8 @@ TCI client / Saturn Remote
 - **VERIFIED CURRENT BEHAVIOR:** Once-per-second P2 diagnostics already include HP/DDC/audio rates, TCI client/session state, queue depths/high-water marks/drops, transport backlog, mic age/gaps/drops, codec faults, and TX diagnostics (`main.rs:1198-1262`).
 - **VERIFIED CURRENT BEHAVIOR:** Direct-XDMA periodic status reports DDC DMA/sample counts, FIFO thresholds/faults, TX request/stream/key state, DUC DMA/frame/FIFO metrics, forward/reverse power, and SWR (`xdma_backend.rs:427-477`).
 - **VERIFIED CURRENT BEHAVIOR:** State transitions and watchdog faults are logged rather than every realtime packet.
-- **TECHNICAL DEBT:** There is no SATP loss/reorder/jitter telemetry because SATP is absent. Shutdown reason, controller identity changes, rate-correction ppm, and per-backend safety transition durations are not yet one structured metrics model.
+- **VERIFIED CURRENT BEHAVIOR:** SATP status reports source/session, packets/frames, gaps/missing/duplicates/reorder/late/invalid, bounded-buffer occupancy, silence, audio health, effective rate, socket buffer, and null-sink delivery through Saturn Go.
+- **TECHNICAL DEBT:** Shutdown reason, controller identity changes, SATP rate-correction ppm, and per-backend safety transition durations are not yet one structured metrics model.
 - **PROPOSED CHANGE:** Add stable counters/gauges and a structured terminal shutdown reason that Saturn Go can display without scraping journal strings.
 
 ## 15. Intended target boundary
@@ -356,8 +359,8 @@ TCI client / Saturn Remote
    - **PROPOSED CHANGE:** Convert them to bounded policy-specific queues and export depth/high-water/drop counters.
 2. **TECHNICAL DEBT:** P2 receive dispatch trusts source port without source-IP validation.
    - **PROPOSED CHANGE:** Validate the configured radio endpoint/session before applying status or DDC frames.
-3. **TECHNICAL DEBT:** Native SATP sequence, jitter, reorder, stale/replay, and clock-domain handling does not exist yet.
-   - **PROPOSED CHANGE:** Implement and fuzz the bounded SATP ingress independently of TCI control before connecting it to TX WDSP.
+3. **VERIFIED CURRENT BEHAVIOR:** Native SATP sequence, session, jitter, reorder, late, and missing-timeline handling exists behind a null sink and is unit tested independently of TX WDSP.
+   - **PROPOSED CHANGE:** Complete synthetic and real-Windows 30-minute soaks, then add occupancy-driven rate correction before any hardware sink.
 
 ### P2 — lifecycle / race / resource leak
 
@@ -402,7 +405,7 @@ TCI client / Saturn Remote
 4. **PROPOSED CHANGE:** Strengthen P2_app controller lease identity for same-host controllers.
 5. **PROPOSED CHANGE:** Bound the four inter-thread queues and preserve priority/coalescing semantics.
 6. **VERIFIED CURRENT BEHAVIOR:** Official TCI `TX_FREQUENCY` now supplies the authoritative split-aware amplifier frequency. A live read-only Windows-client interoperability check remains outstanding.
-7. **PROPOSED CHANGE:** Obtain/version the Windows SATP wire contract, then add the SATP module as a separate UDP media plane with bounded buffering, sequence handling, observability, and no PTT authority.
+7. **VERIFIED CURRENT BEHAVIOR:** The SATP v1 wire contract is frozen in `PHASE0E_TCI_SATP_FOUNDATION.md`; the separate UDP plane has bounded buffering, sequence/timeline handling, observability, and no PTT authority.
 8. **PROPOSED CHANGE:** Validate and enable occupancy-driven rate matching for the native Windows audio clock.
 9. **PROPOSED CHANGE:** Consolidate TX state and backend lifecycle only after safety/behavior tests cover both P2 and direct-XDMA modes.
 

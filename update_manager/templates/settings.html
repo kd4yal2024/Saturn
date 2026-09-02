@@ -75,6 +75,58 @@
         <h3 class="text-sm font-semibold mb-2 opacity-80">Recent TCI Activity</h3>
         <pre id="tci-log" style="min-height:220px; max-height:360px; overflow:auto;"></pre>
       </div>
+
+      <div class="card p-5">
+        <h2 class="text-xl font-semibold mb-2">TCI Control Permissions</h2>
+        <p class="text-sm opacity-80 mb-4">
+          Control authority follows the bridge's fail-closed client roles. LAN
+          TCI clients are viewers; Saturn Go's loopback proxy is the operator.
+          These values are shown explicitly so a frequency-following accessory
+          can never gain transmit authority merely by connecting.
+        </p>
+        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 text-sm">
+          <label><input type="checkbox" disabled /> LAN frequency control</label>
+          <label><input type="checkbox" disabled /> LAN mode control</label>
+          <label><input type="checkbox" disabled /> LAN RX control</label>
+          <label><input type="checkbox" disabled /> LAN PTT / TX control</label>
+        </div>
+        <div class="text-xs opacity-70 mt-3">Loopback operator control: enabled. Protocol: TCI 2.0. Device: Saturn G2.</div>
+      </div>
+
+      <div class="card p-5">
+        <h2 class="text-xl font-semibold mb-2">Native TX Audio — SATP</h2>
+        <p class="text-sm opacity-80 mb-4">
+          Phase 0E receives and times SATP v1 audio into a null test sink. It
+          cannot key the transmitter and is not connected to XDMA or RF.
+          Protocol values are fixed at 48 kHz, float32 little-endian, mono,
+          128 frames per packet.
+        </p>
+        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 items-end mb-3">
+          <label class="text-sm"><span class="block mb-1">Receiver</span><input id="satp-enabled" type="checkbox" /> Enable SATP</label>
+          <label class="text-sm"><span class="block mb-1">Listen IPv4</span><input id="satp-host" class="field px-3 py-2 w-full" placeholder="192.168.0.139" /></label>
+          <label class="text-sm"><span class="block mb-1">UDP port</span><input id="satp-port" type="number" min="1" max="65535" class="field px-3 py-2 w-full" value="50100" /></label>
+          <label class="text-sm"><span class="block mb-1">Allowed source IPv4</span><input id="satp-source" class="field px-3 py-2 w-full" placeholder="Any LAN source" /></label>
+          <label class="text-sm"><span class="block mb-1">Jitter target (frames)</span><input id="satp-target" type="number" step="128" min="128" class="field px-3 py-2 w-full" value="512" /></label>
+          <label class="text-sm"><span class="block mb-1">Capacity (frames)</span><input id="satp-capacity" type="number" step="128" min="512" class="field px-3 py-2 w-full" value="4096" /></label>
+          <label class="text-sm"><span class="block mb-1">Audio loss (ms)</span><input id="satp-timeout" type="number" min="100" max="5000" class="field px-3 py-2 w-full" value="250" /></label>
+          <button id="satp-save-btn" class="btn btn-primary px-5 py-2 w-full">Save SATP Settings</button>
+        </div>
+        <div class="text-xs opacity-75 mb-3">Saving restarts only an already-active bridge through the ownership broker. An inactive bridge stays inactive.</div>
+        <div id="satp-save-result" class="text-sm mb-4"></div>
+
+        <h3 class="text-sm font-semibold mb-2 opacity-80">Live SATP Diagnostics</h3>
+        <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-3 text-sm">
+          <div><div class="opacity-60">State</div><div id="satp-state" class="font-mono">—</div></div>
+          <div><div class="opacity-60">Source</div><div id="satp-live-source" class="font-mono">—</div></div>
+          <div><div class="opacity-60">Session / Stream</div><div id="satp-session" class="font-mono">—</div></div>
+          <div><div class="opacity-60">Last packet</div><div id="satp-last" class="font-mono">—</div></div>
+          <div><div class="opacity-60">Packets / sec</div><div id="satp-rate" class="font-mono">—</div></div>
+          <div><div class="opacity-60">Effective rate</div><div id="satp-effective" class="font-mono">—</div></div>
+          <div><div class="opacity-60">Buffer</div><div id="satp-buffer" class="font-mono">—</div></div>
+          <div><div class="opacity-60">Socket buffer</div><div id="satp-socket-buffer" class="font-mono">—</div></div>
+        </div>
+        <pre id="satp-counters" style="min-height:150px; max-height:280px; overflow:auto;">Waiting for status…</pre>
+      </div>
     </div>
   </div>
 
@@ -96,6 +148,52 @@
         $('tci-log').scrollTop = $('tci-log').scrollHeight;
       } catch (error) {
         // Transient fetch failures are expected right after a bridge restart; next poll recovers.
+      }
+    }
+
+    let satpFormInitialized = false;
+    async function refreshSatpStatus() {
+      try {
+        const res = await fetch('./api/v1/satp/status', { cache: 'no-store' });
+        const data = await res.json();
+        if (data.status !== 'ok') return;
+        const config = data.config || {};
+        const runtime = data.runtime || {};
+        if (!satpFormInitialized) {
+          $('satp-enabled').checked = !!config.enabled;
+          $('satp-host').value = config.host || '127.0.0.1';
+          $('satp-port').value = config.port || 50100;
+          $('satp-source').value = config.allowed_source_ip || '';
+          $('satp-target').value = config.jitter_target_frames || 512;
+          $('satp-capacity').value = config.jitter_capacity_frames || 4096;
+          $('satp-timeout').value = config.audio_loss_timeout_ms || 250;
+          satpFormInitialized = true;
+        }
+        const playoutState = runtime.playout_primed ? 'primed' : 'priming';
+        $('satp-state').textContent = !config.enabled ? 'disabled' : (data.runtime_stale ? 'stale' : `${runtime.audio_health || 'starting'} / ${playoutState}`);
+        $('satp-live-source').textContent = runtime.source || '—';
+        $('satp-session').textContent = runtime.session_id == null ? '—' : `${runtime.session_id} / ${runtime.stream_id}`;
+        $('satp-last').textContent = runtime.last_packet_age_ms == null ? '—' : `${runtime.last_packet_age_ms} ms ago`;
+        $('satp-rate').textContent = runtime.packet_rate == null ? '—' : Number(runtime.packet_rate).toFixed(1);
+        $('satp-effective').textContent = runtime.effective_sample_rate == null ? '—' : `${Number(runtime.effective_sample_rate).toFixed(1)} Hz`;
+        $('satp-buffer').textContent = `${runtime.buffer_current || 0} / ${runtime.buffer_capacity || config.jitter_capacity_frames || 4096}`;
+        $('satp-socket-buffer').textContent = runtime.actual_socket_buffer_bytes ? `${runtime.actual_socket_buffer_bytes} B` : '—';
+        $('satp-counters').textContent = [
+          `packets_rx=${runtime.packets_rx || 0} frames_rx=${runtime.frames_rx || 0}`,
+          `sequence_gap_events=${runtime.gap_events || 0} packets_missing=${runtime.packets_missing || 0}`,
+          `playout_gap_events=${runtime.playout_gap_events || 0}`,
+          `duplicates=${runtime.duplicates || 0} out_of_order=${runtime.out_of_order || 0}`,
+          `late=${runtime.late || 0} invalid=${runtime.invalid || 0}`,
+          `buffer_overruns=${runtime.buffer_overruns || 0} audio_loss_events=${runtime.audio_loss_events || 0}`,
+          `sessions=${runtime.sessions || 0} session_changes=${runtime.session_changes || 0}`,
+          `buffer_min=${runtime.buffer_min || 0} buffer_max=${runtime.buffer_max || 0} target=${runtime.buffer_target || config.jitter_target_frames || 512}`,
+          `silence_frames=${runtime.silence_frames || 0}`,
+          `media_frames_consumed=${Math.max(0, (runtime.frames_consumed || 0) - (runtime.silence_frames || 0))}`,
+          `sink_frames_during_tx=${runtime.frames_delivered || 0} (zero is expected while RX)`,
+          `sink=null rf_connected=false tx_authorized=${!!runtime.tx_authorized}`,
+        ].join('\n');
+      } catch (error) {
+        // Status is absent while the bridge is stopped or restarting.
       }
     }
 
@@ -134,8 +232,42 @@
       }
     });
 
+    $('satp-save-btn').addEventListener('click', async () => {
+      const resultEl = $('satp-save-result');
+      resultEl.textContent = 'Saving...';
+      $('satp-save-btn').disabled = true;
+      try {
+        const payload = {
+          enabled: $('satp-enabled').checked,
+          host: $('satp-host').value.trim(),
+          port: Number($('satp-port').value),
+          allowed_source_ip: $('satp-source').value.trim() || null,
+          jitter_target_frames: Number($('satp-target').value),
+          jitter_capacity_frames: Number($('satp-capacity').value),
+          audio_loss_timeout_ms: Number($('satp-timeout').value),
+        };
+        const res = await fetch('./api/v1/satp/config', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json', 'X-Saturn-CSRF': '1' },
+          body: JSON.stringify(payload),
+        });
+        const data = await res.json();
+        if (data.status === 'ok') satpFormInitialized = false;
+        resultEl.textContent = data.status === 'ok' ? `Applied: ${data.message}` : `Error: ${data.message || 'unknown error'}`;
+        resultEl.style.color = data.status === 'ok' ? '#3fb950' : '#f85149';
+      } catch (error) {
+        resultEl.textContent = `Request failed: ${error.message || error}`;
+        resultEl.style.color = '#f85149';
+      } finally {
+        $('satp-save-btn').disabled = false;
+        setTimeout(refreshSatpStatus, 3000);
+      }
+    });
+
     refreshTciStatus();
+    refreshSatpStatus();
     setInterval(refreshTciStatus, 5000);
+    setInterval(refreshSatpStatus, 1000);
   </script>
 </body>
 </html>

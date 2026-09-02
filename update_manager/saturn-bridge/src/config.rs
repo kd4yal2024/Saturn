@@ -62,6 +62,12 @@ pub struct BridgeConfig {
     pub rx_audio_transport_rate_hz: u32,
     pub rx_audio_transport_channels: u32,
     pub tx_opus_decode_enabled: bool,
+    pub satp_enabled: bool,
+    pub satp_bind_addr: SocketAddr,
+    pub satp_allowed_source_ip: Option<IpAddr>,
+    pub satp_jitter_target_frames: u32,
+    pub satp_jitter_capacity_frames: u32,
+    pub satp_audio_loss_timeout: Duration,
 }
 
 impl Default for BridgeConfig {
@@ -97,6 +103,12 @@ impl Default for BridgeConfig {
             rx_audio_transport_rate_hz: 48_000,
             rx_audio_transport_channels: 2,
             tx_opus_decode_enabled: false,
+            satp_enabled: false,
+            satp_bind_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 50100),
+            satp_allowed_source_ip: None,
+            satp_jitter_target_frames: 512,
+            satp_jitter_capacity_frames: 4096,
+            satp_audio_loss_timeout: Duration::from_millis(250),
         }
     }
 }
@@ -120,6 +132,37 @@ impl BridgeConfig {
         let tci_host =
             env::var("SATURN_BRIDGE_TCI_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
         let tci_port = parse_env_u16("SATURN_BRIDGE_TCI_PORT", defaults.tci_bind_addr.port());
+        let satp_host =
+            env::var("SATURN_BRIDGE_SATP_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
+        let satp_port = parse_env_u16("SATURN_BRIDGE_SATP_PORT", defaults.satp_bind_addr.port());
+        let satp_allowed_source_ip = match env::var("SATURN_BRIDGE_SATP_ALLOWED_SOURCE_IP") {
+            Ok(value) if value.trim().is_empty() => None,
+            Ok(value) => match value.trim().parse::<IpAddr>() {
+                Ok(address) => Some(address),
+                Err(_) => {
+                    eprintln!(
+                        "saturn-bridge: invalid SATP allowed-source address {value:?}; rejecting all remote SATP sources"
+                    );
+                    Some(IpAddr::V4(Ipv4Addr::UNSPECIFIED))
+                }
+            },
+            Err(_) => None,
+        };
+        let satp_jitter_capacity_frames = align_packet_frames(
+            parse_env_u32(
+                "SATURN_BRIDGE_SATP_JITTER_CAPACITY_FRAMES",
+                defaults.satp_jitter_capacity_frames,
+            )
+            .clamp(512, 65_536),
+        );
+        let satp_jitter_target_frames = align_packet_frames(
+            parse_env_u32(
+                "SATURN_BRIDGE_SATP_JITTER_TARGET_FRAMES",
+                defaults.satp_jitter_target_frames,
+            )
+            .clamp(128, satp_jitter_capacity_frames),
+        )
+        .min(satp_jitter_capacity_frames);
 
         let max_client_ddc0_sample_rate_khz = parse_env_u16(
             "SATURN_BRIDGE_MAX_CLIENT_DDC0_SAMPLE_RATE_KHZ",
@@ -225,6 +268,18 @@ impl BridgeConfig {
                 "SATURN_BRIDGE_TX_OPUS_DECODE_ENABLED",
                 defaults.tx_opus_decode_enabled,
             ),
+            satp_enabled: parse_env_bool("SATURN_BRIDGE_SATP_ENABLED", defaults.satp_enabled),
+            satp_bind_addr: parse_socket_addr(&satp_host, satp_port, defaults.satp_bind_addr),
+            satp_allowed_source_ip,
+            satp_jitter_target_frames,
+            satp_jitter_capacity_frames,
+            satp_audio_loss_timeout: Duration::from_millis(
+                parse_env_u64(
+                    "SATURN_BRIDGE_SATP_AUDIO_LOSS_TIMEOUT_MS",
+                    defaults.satp_audio_loss_timeout.as_millis() as u64,
+                )
+                .clamp(100, 5_000),
+            ),
         }
     }
 }
@@ -289,6 +344,11 @@ fn parse_env_f64(name: &str, default: f64) -> f64 {
         .unwrap_or(default)
 }
 
+fn align_packet_frames(frames: u32) -> u32 {
+    const PACKET_FRAMES: u32 = 128;
+    frames.div_ceil(PACKET_FRAMES) * PACKET_FRAMES
+}
+
 /// Clamp an FFT size to the nearest valid power-of-two in [1024, 262144].
 /// Follows piHPSDR/Thetis convention: only power-of-two sizes are valid for WDSP.
 fn clamp_fft_size(value: u32) -> u32 {
@@ -301,7 +361,7 @@ fn clamp_fft_size(value: u32) -> u32 {
 
 #[cfg(test)]
 mod tests {
-    use super::RadioBackend;
+    use super::{align_packet_frames, RadioBackend};
 
     #[test]
     fn radio_backend_selection_is_explicit_and_fail_closed() {
@@ -309,5 +369,12 @@ mod tests {
         assert_eq!(RadioBackend::parse(" XDMA ").unwrap(), RadioBackend::Xdma);
         assert!(RadioBackend::parse("auto").is_err());
         assert!(RadioBackend::parse("").is_err());
+    }
+
+    #[test]
+    fn satp_jitter_sizes_align_to_whole_packets() {
+        assert_eq!(align_packet_frames(128), 128);
+        assert_eq!(align_packet_frames(129), 256);
+        assert_eq!(align_packet_frames(4096), 4096);
     }
 }

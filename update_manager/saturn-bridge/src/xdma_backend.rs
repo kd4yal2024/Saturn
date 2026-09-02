@@ -200,6 +200,7 @@ fn run_inner(config: BridgeConfig, ready_path: &Path) -> Result<(), Box<dyn Erro
         model.desired.pure_signal_enabled = false;
         model.observed.pure_signal_state = PureSignalState::Off;
     }
+    let _satp_runtime = crate::satp::SatpRuntime::start(&config, radio_model.clone())?;
     let (tci, command_rx) = TciFrontend::bind(&config, radio_model.clone())?;
     let tci = Arc::new(tci);
     let tx_radio = Arc::new(DirectXdmaTxRadio::open(config.tx_power_meter_scale)?);

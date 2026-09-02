@@ -3,8 +3,10 @@ mod fftw_wisdom;
 mod p2;
 mod radio_model;
 mod rx_thread;
+mod satp;
 mod sync_ext;
 mod tci;
+mod tx_audio;
 mod tx_codec;
 mod tx_thread;
 mod wdsp;
@@ -404,6 +406,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         config.tx_fft_size,
         config.tx_low_latency,
     )));
+    let _satp_runtime = satp::SatpRuntime::start(&config, radio_model.clone())?;
     let session = Arc::new(P2Session::bind(config.clone())?);
     let (tci, tci_command_rx) = TciFrontend::bind(&config, radio_model.clone())?;
     let tci = Arc::new(tci);

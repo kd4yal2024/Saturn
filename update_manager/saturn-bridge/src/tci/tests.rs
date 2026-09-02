@@ -2327,8 +2327,10 @@ fn operator_disconnect_does_not_promote_split_media_socket() {
 #[test]
 fn initial_snapshot_includes_remote_tx_rf_state() {
     let model = RadioModel::new(2, 14_200_000, 0, 192, 24, 2048, true, 4096, true);
-    let disabled = initial_snapshot_messages(&model, false, 7, TciClientRole::Viewer);
-    let enabled = initial_snapshot_messages(&model, true, 8, TciClientRole::Operator);
+    let disabled =
+        initial_snapshot_messages(&model, false, 7, TciClientRole::Viewer, (false, 50100));
+    let enabled =
+        initial_snapshot_messages(&model, true, 8, TciClientRole::Operator, (true, 50100));
 
     assert!(disabled.contains(&"remote_tx_rf_enabled:0,false;".to_string()));
     assert!(enabled.contains(&"remote_tx_rf_enabled:0,true;".to_string()));
@@ -2340,12 +2342,18 @@ fn initial_snapshot_includes_remote_tx_rf_state() {
     assert!(enabled.contains(&"tx_speech_processor:0,false;".to_string()));
     assert!(enabled.contains(&"tx_speech_processor_gain:0,10.0;".to_string()));
     assert!(enabled.contains(&"tx_cessb:0,false;".to_string()));
+    assert!(disabled.contains(&"saturn_satp_enabled:false;".to_string()));
+    assert!(enabled.contains(&"saturn_satp_enabled:true;".to_string()));
+    assert!(enabled.contains(&"saturn_satp_version:1;".to_string()));
+    assert!(enabled.contains(&"saturn_satp_tx_port:50100;".to_string()));
+    assert!(enabled.contains(&"saturn_satp_tx_format:48000,float32_le,1,128;".to_string()));
 }
 
 #[test]
 fn initial_snapshot_has_standard_tci_initialization_before_ready() {
     let model = RadioModel::new(2, 14_200_000, 0, 192, 24, 2048, true, 4096, true);
-    let messages = initial_snapshot_messages(&model, false, 7, TciClientRole::Viewer);
+    let messages =
+        initial_snapshot_messages(&model, false, 7, TciClientRole::Viewer, (true, 50100));
 
     assert_eq!(
         messages.first().map(String::as_str),
@@ -2377,7 +2385,8 @@ fn initial_snapshot_publishes_authoritative_split_tx_frequency() {
     model.desired.split_enabled = true;
     model.sync_vfo_routes();
 
-    let messages = initial_snapshot_messages(&model, false, 7, TciClientRole::Viewer);
+    let messages =
+        initial_snapshot_messages(&model, false, 7, TciClientRole::Viewer, (false, 50100));
     assert!(messages.contains(&"vfo:0,0,7100000;".to_string()));
     assert!(messages.contains(&"split_enable:0,true;".to_string()));
     assert!(messages.contains(&"tx_frequency:14250000;".to_string()));
