@@ -592,7 +592,11 @@ fn run(
                             // needs_recreate: the last unkey's down-slew flush
                             // did not complete (B1 §2.1 fallback) — never arm
                             // a channel with possibly inconsistent buffers.
-                            let model = radio_model.lock_unpoisoned();
+                            // Native channel creation can take longer than the
+                            // SATP loss window. Use a snapshot so the receiver
+                            // can continue draining packets and refreshing its
+                            // source-liveness timestamp while WDSP is rebuilt.
+                            let model = radio_model.lock_unpoisoned().clone();
                             wdsp_tx.recreate_channel(&model);
                             println!(
                                 "saturn-bridge: TX native WDSP channel recreated for clean arm"
@@ -648,6 +652,11 @@ fn run(
                         pure_signal_feedback_gaps = 0;
                         pure_signal_last_calibration_count = 0;
                         pure_signal_fault_active = false;
+                        // Publish readiness only after the slow native setup
+                        // and every consumer-side queue reset have completed.
+                        // SATP uses this edge to discard pre-arm audio and
+                        // begin forwarding a fresh jitter-buffer epoch.
+                        audio_stats.mark_pipeline_armed(rf_enabled);
                         println!(
                             "saturn-bridge: TX armed; waiting for mic audio + nonzero DUC IQ{}",
                             if rf_enabled { "" } else { " (RF disabled)" }

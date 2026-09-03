@@ -263,6 +263,12 @@ impl TxAudioIngressStats {
         self.pipeline_rf_enabled.store(false, Ordering::Relaxed);
     }
 
+    pub fn mark_pipeline_armed(&self, rf_enabled: bool) {
+        self.pipeline_rf_enabled
+            .store(rf_enabled, Ordering::Relaxed);
+        self.pipeline_state.store(1, Ordering::Release);
+    }
+
     pub fn snapshot(&self) -> TxAudioIngressSnapshot {
         macro_rules! load {
             ($field:ident) => {
@@ -444,6 +450,10 @@ impl TxAudioIngress {
     pub fn stats(&self) -> TxAudioIngressSnapshot {
         self.stats.snapshot()
     }
+
+    pub fn pipeline_accepting_audio(&self) -> bool {
+        self.stats.pipeline_state.load(Ordering::Acquire) != 0
+    }
 }
 
 /// Consumer boundary for native transmit PCM. Implementations must enqueue
@@ -563,5 +573,19 @@ mod tests {
         assert_eq!(snapshot.queue_high_water, TX_AUDIO_INGRESS_CAPACITY);
         assert_eq!(snapshot.satp_frames_queue_full, 1);
         assert_eq!(snapshot.satp_samples_queue_full, 128);
+    }
+
+    #[test]
+    fn pipeline_acceptance_follows_consumer_arm_state() {
+        let (ingress, _receiver, stats) = TxAudioIngress::bounded();
+        assert!(!ingress.pipeline_accepting_audio());
+
+        stats.mark_pipeline_armed(true);
+        assert!(ingress.pipeline_accepting_audio());
+        assert_eq!(stats.snapshot().pipeline_state, "armed");
+        assert!(stats.snapshot().pipeline_rf_enabled);
+
+        stats.mark_pipeline_idle();
+        assert!(!ingress.pipeline_accepting_audio());
     }
 }

@@ -407,6 +407,14 @@ fn should_request_audio_loss_dekey(
     audio_lost && tx_authorized && tx_chain_connected && !already_requested
 }
 
+fn satp_tx_authorized(
+    radio_tx_requested: bool,
+    tx_chain_connected: bool,
+    pipeline_accepting_audio: bool,
+) -> bool {
+    radio_tx_requested && (!tx_chain_connected || pipeline_accepting_audio)
+}
+
 #[derive(Clone, Debug)]
 pub struct SatpStatus {
     pub enabled: bool,
@@ -855,10 +863,15 @@ fn run_receiver(
             last_packet_at = Some(now);
         }
 
-        let tx_authorized = {
+        let radio_tx_requested = {
             let model = radio_model.lock_unpoisoned();
             model.desired.tx_phase != TxPhase::Rx || model.desired.tx_enabled
         };
+        let tx_authorized = satp_tx_authorized(
+            radio_tx_requested,
+            tx_chain_connected,
+            tx_audio_ingress.pipeline_accepting_audio(),
+        );
         if tx_authorized && !previous_tx_authorized {
             ring.clear();
             let _ = sink.flush();
@@ -1405,6 +1418,17 @@ mod tests {
         assert!(!should_request_audio_loss_dekey(true, true, true, true));
         assert!(!should_request_audio_loss_dekey(false, true, true, false));
         assert!(should_request_audio_loss_dekey(true, true, true, false));
+    }
+
+    #[test]
+    fn selected_satp_path_waits_for_tx_consumer_to_finish_arming() {
+        assert!(!satp_tx_authorized(true, true, false));
+        assert!(satp_tx_authorized(true, true, true));
+        assert!(!satp_tx_authorized(false, true, true));
+
+        // A disconnected/null sink retains the legacy radio-state reporting;
+        // it cannot forward audio or trigger the SATP loss dekey path.
+        assert!(satp_tx_authorized(true, false, false));
     }
 
     #[test]
