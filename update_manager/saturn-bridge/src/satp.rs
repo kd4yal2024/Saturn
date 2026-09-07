@@ -415,6 +415,54 @@ fn satp_tx_authorized(
     radio_tx_requested && (!tx_chain_connected || pipeline_accepting_audio)
 }
 
+#[derive(Clone, Copy, Debug)]
+struct RateMeasurement {
+    started: Instant,
+    packets_base: u64,
+    first_sample_counter: Option<u64>,
+    latest_sample_counter: Option<u64>,
+}
+
+impl RateMeasurement {
+    fn new(now: Instant) -> Self {
+        Self {
+            started: now,
+            packets_base: 0,
+            first_sample_counter: None,
+            latest_sample_counter: None,
+        }
+    }
+
+    fn reset(&mut self, now: Instant, packets_base: u64) {
+        self.started = now;
+        self.packets_base = packets_base;
+        self.first_sample_counter = None;
+        self.latest_sample_counter = None;
+    }
+
+    fn observe(&mut self, sample_counter: u64) {
+        self.first_sample_counter.get_or_insert(sample_counter);
+        self.latest_sample_counter = Some(
+            self.latest_sample_counter
+                .map_or(sample_counter, |latest| latest.max(sample_counter)),
+        );
+    }
+
+    fn rates(&self, now: Instant, packets_rx: u64) -> Option<(f64, f64)> {
+        let elapsed = now.saturating_duration_since(self.started).as_secs_f64();
+        let (Some(first), Some(latest)) = (self.first_sample_counter, self.latest_sample_counter)
+        else {
+            return None;
+        };
+        (elapsed > 0.0).then(|| {
+            (
+                packets_rx.saturating_sub(self.packets_base) as f64 / elapsed,
+                latest.saturating_sub(first) as f64 / elapsed,
+            )
+        })
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct SatpStatus {
     pub enabled: bool,
@@ -698,10 +746,7 @@ fn run_receiver(
     let mut previous_tx_authorized = false;
     let mut audio_loss_latched = false;
     let mut audio_loss_dekey_latched = false;
-    let mut measurement_started = Instant::now();
-    let mut measurement_packets_base = 0u64;
-    let mut first_sample_counter: Option<u64> = None;
-    let mut latest_sample_counter: Option<u64> = None;
+    let mut rate_measurement = RateMeasurement::new(Instant::now());
     let mut previous_playout_was_silence = false;
     let mut last_arrival_timeline: Option<(u32, u64)> = None;
 
@@ -748,11 +793,9 @@ fn run_receiver(
                 rate_control.reset();
                 sequence_tracker.reset();
                 last_arrival_timeline = None;
-                first_sample_counter = None;
-                measurement_started = now;
                 let _ = sink.flush();
                 let mut snapshot = status.lock_unpoisoned();
-                measurement_packets_base = snapshot.packets_rx;
+                rate_measurement.reset(now, snapshot.packets_rx);
                 snapshot.sessions = snapshot.sessions.saturating_add(1);
                 if changed {
                     snapshot.session_changes = snapshot.session_changes.saturating_add(1);
@@ -854,12 +897,7 @@ fn run_receiver(
                     }
                 }
             }
-            first_sample_counter.get_or_insert(header.sample_counter);
-            latest_sample_counter = Some(
-                latest_sample_counter.map_or(header.sample_counter, |latest| {
-                    latest.max(header.sample_counter)
-                }),
-            );
+            rate_measurement.observe(header.sample_counter);
             last_packet_at = Some(now);
         }
 
@@ -986,15 +1024,11 @@ fn run_receiver(
             snapshot.tx_pipeline_rmatch_underflows = ingress.pipeline_rmatch_underflows;
             snapshot.tx_pipeline_rmatch_overflows = ingress.pipeline_rmatch_overflows;
             snapshot.tx_pipeline_rmatch_ratio = ingress.pipeline_rmatch_ratio;
-            let elapsed = measurement_started.elapsed().as_secs_f64();
-            if elapsed > 0.0 {
-                snapshot.packet_rate =
-                    snapshot.packets_rx.saturating_sub(measurement_packets_base) as f64 / elapsed;
-            }
-            if let (Some(first), Some(latest)) = (first_sample_counter, latest_sample_counter) {
-                if elapsed > 0.0 {
-                    snapshot.effective_sample_rate = latest.saturating_sub(first) as f64 / elapsed;
-                }
+            if let Some((packet_rate, effective_sample_rate)) =
+                rate_measurement.rates(Instant::now(), snapshot.packets_rx)
+            {
+                snapshot.packet_rate = packet_rate;
+                snapshot.effective_sample_rate = effective_sample_rate;
             }
         }
 
@@ -1429,6 +1463,26 @@ mod tests {
         // A disconnected/null sink retains the legacy radio-state reporting;
         // it cannot forward audio or trigger the SATP loss dekey path.
         assert!(satp_tx_authorized(true, false, false));
+    }
+
+    #[test]
+    fn rate_measurement_discards_previous_session_counters() {
+        let started = Instant::now();
+        let mut measurement = RateMeasurement::new(started);
+        measurement.observe(100_000_000);
+        measurement.observe(100_048_000);
+
+        let restarted = started + Duration::from_secs(1);
+        measurement.reset(restarted, 375);
+        assert!(measurement.rates(restarted, 375).is_none());
+
+        measurement.observe(0);
+        measurement.observe(48_000);
+        let (packet_rate, effective_sample_rate) = measurement
+            .rates(restarted + Duration::from_secs(1), 750)
+            .unwrap();
+        assert!((packet_rate - 375.0).abs() < f64::EPSILON);
+        assert!((effective_sample_rate - 48_000.0).abs() < f64::EPSILON);
     }
 
     #[test]

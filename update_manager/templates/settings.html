@@ -200,7 +200,7 @@
         `buffer_min=${runtime.buffer_min || 0} buffer_max=${runtime.buffer_max || 0} target=${runtime.buffer_target || config.jitter_target_frames || 512}`,
         `silence_frames=${silenceFrames}`,
         `media_frames_consumed=${Math.max(0, framesConsumed - silenceFrames)}`,
-        `sink_frames_during_tx=${satpCounter(runtime, 'frames_delivered')} (zero is expected while RX)`,
+        `tx_sink_frames=${satpCounter(runtime, 'frames_delivered')} (cumulative; unchanged while RX)`,
         `tx_ingress=${runtime.tx_ingress_depth || 0}/${runtime.tx_ingress_capacity || 0} high_water=${runtime.tx_ingress_high_water || 0}`,
         `tx_enqueued_frames=${satpCounter(runtime, 'tx_frames_enqueued')} samples=${satpCounter(runtime, 'tx_samples_enqueued')}`,
         `tx_accepted_frames=${satpCounter(runtime, 'tx_frames_accepted')} samples=${satpCounter(runtime, 'tx_samples_accepted')}`,

@@ -34,10 +34,47 @@ TX_MIC_SAMPLE_RATE = 48_000
 TX_MIC_BLOCK_SAMPLES = 1_024
 TX_MIC_STREAM_TYPE = 2
 TX_MIC_TONE_AMPLITUDE = 0.85
+RF_MIN_FORWARD_WATTS = 0.05
+RF_MAX_FORWARD_WATTS = 4.0
+RF_MAX_REVERSE_WATTS = 0.75
+RF_SWR_MIN_FORWARD_WATTS = 0.25
+RF_MAX_SWR = 3.0
 
 
 class AcceptanceError(RuntimeError):
     pass
+
+
+@dataclass(frozen=True)
+class RfSessionEvidence:
+    advanced: bool
+    session_id: int
+    duration_ms: int
+    keyed: bool
+    dma_writes: int
+    frames: int
+    peak_forward_watts: float
+    peak_reverse_watts: float
+    peak_swr: float
+    fifo_faults: int
+
+    def accepted(self) -> bool:
+        return (
+            self.advanced
+            and self.keyed
+            and self.duration_ms > 0
+            and self.dma_writes > 0
+            and self.frames > 0
+            and RF_MIN_FORWARD_WATTS
+            <= self.peak_forward_watts
+            <= RF_MAX_FORWARD_WATTS
+            and self.peak_reverse_watts <= RF_MAX_REVERSE_WATTS
+            and (
+                self.peak_forward_watts < RF_SWR_MIN_FORWARD_WATTS
+                or self.peak_swr <= RF_MAX_SWR
+            )
+            and self.fifo_faults == 0
+        )
 
 
 class WebSocket:
@@ -267,6 +304,31 @@ def read_readiness(path: Path) -> dict[str, object] | None:
         return value if isinstance(value, dict) else None
     except (OSError, json.JSONDecodeError):
         return None
+
+
+def completed_rf_session_evidence(
+    before_metrics: dict[str, object], final_metrics: dict[str, object]
+) -> RfSessionEvidence:
+    before_completed = int(before_metrics.get("tx_sessions_completed", 0))
+    final_completed = int(final_metrics.get("tx_sessions_completed", 0))
+    before_session_id = int(before_metrics.get("tx_last_session_id", 0))
+    session_id = int(final_metrics.get("tx_last_session_id", 0))
+    return RfSessionEvidence(
+        advanced=final_completed > before_completed and session_id != before_session_id,
+        session_id=session_id,
+        duration_ms=int(final_metrics.get("tx_last_session_duration_ms", 0)),
+        keyed=final_metrics.get("tx_last_session_keyed") is True,
+        dma_writes=int(final_metrics.get("tx_last_session_dma_writes", 0)),
+        frames=int(final_metrics.get("tx_last_session_frames", 0)),
+        peak_forward_watts=float(
+            final_metrics.get("tx_last_session_peak_forward_watts", 0.0)
+        ),
+        peak_reverse_watts=float(
+            final_metrics.get("tx_last_session_peak_reverse_watts", 0.0)
+        ),
+        peak_swr=float(final_metrics.get("tx_last_session_peak_swr", 1.0)),
+        fifo_faults=int(final_metrics.get("tx_last_session_fifo_faults", 0)),
+    )
 
 
 def build_tx_mic_pcm_s16_frame(sequence: int, tone_hz: float = 1_000.0) -> bytes:
@@ -609,6 +671,8 @@ def run_acceptance(
         peak_forward_watts = 0.0
         peak_reverse_watts = 0.0
         peak_swr = 1.0
+        tx_session_id = 0
+        tx_session_duration_ms = 0
         rf_tx_exercised = False
         after_tx_request = not rx_only
 
@@ -670,6 +734,8 @@ def run_acceptance(
                     and current_metrics.get("tx_keyed") is False
                     and int(current_metrics.get("tx_frames", 0)) > before_tx_frames
                     and int(current_metrics.get("tx_fifo_faults", 0)) == 0
+                    and int(current_metrics.get("tx_sessions_completed", 0))
+                    > int(before_tx_metrics.get("tx_sessions_completed", 0))
                 )
 
             wait_messages(
@@ -682,12 +748,22 @@ def run_acceptance(
             )
             final_tx = read_readiness(readiness_file) or {}
             final_tx_metrics = final_tx.get("metrics") or {}
+            rf_session = completed_rf_session_evidence(
+                before_tx_metrics, final_tx_metrics
+            )
+            tx_session_id = rf_session.session_id
+            tx_session_duration_ms = rf_session.duration_ms
+            tx_keyed_observed = tx_keyed_observed or (
+                rf_session.advanced and rf_session.keyed
+            )
+            if rf_session.advanced:
+                peak_forward_watts = rf_session.peak_forward_watts
+                peak_reverse_watts = rf_session.peak_reverse_watts
+                peak_swr = rf_session.peak_swr
             rf_tx_exercised = (
-                tx_keyed_observed
-                and peak_forward_watts >= 0.05
-                and peak_forward_watts <= 4.0
-                and peak_reverse_watts <= 0.75
-                and (peak_forward_watts < 0.25 or peak_swr <= 3.0)
+                rf_session.accepted()
+                and final_tx.get("rf_safe") is True
+                and final_tx_metrics.get("rf_safe") is True
                 and int(final_tx_metrics.get("tx_dma_writes", 0)) > before_tx_writes
                 and int(final_tx_metrics.get("tx_frames", 0)) > before_tx_frames
                 and int(final_tx_metrics.get("tx_fifo_faults", 0)) == 0
@@ -695,8 +771,13 @@ def run_acceptance(
             if not rf_tx_exercised:
                 raise AcceptanceError(
                     "production RF evidence was incomplete: "
-                    f"keyed={tx_keyed_observed} forward={peak_forward_watts:.3f}W "
-                    f"reverse={peak_reverse_watts:.3f}W swr={peak_swr:.2f}"
+                    f"session_advanced={rf_session.advanced} "
+                    f"session_id={rf_session.session_id} keyed={tx_keyed_observed} "
+                    f"duration={rf_session.duration_ms}ms "
+                    f"dma_writes={rf_session.dma_writes} frames={rf_session.frames} "
+                    f"forward={peak_forward_watts:.3f}W "
+                    f"reverse={peak_reverse_watts:.3f}W swr={peak_swr:.2f} "
+                    f"fifo_faults={rf_session.fifo_faults}"
                 )
             control.send_text("iq_stop:0;audio_stop:0;")
         else:
@@ -812,6 +893,8 @@ def run_acceptance(
         "rf_inhibited_duc_exercised": rf_inhibited_duc_exercised,
         "rf_tx_exercised": rf_tx_exercised,
         "tx_keyed_observed": tx_keyed_observed,
+        "tx_session_id": tx_session_id,
+        "tx_session_duration_ms": tx_session_duration_ms,
         "tx_duration_ms": tx_duration_ms if rf_tx_probe else 0,
         "tx_drive_watts": tx_drive_watts if rf_tx_probe else 0,
         "tx_cycles_requested": 0 if rx_only else tx_cycles,
@@ -875,6 +958,37 @@ def self_test() -> None:
         or struct.unpack_from("<I", mic, 32)[0] != 7
     ):
         raise AcceptanceError("TX microphone frame self-test failed")
+    before_session = {
+        "tx_sessions_completed": 3,
+        "tx_last_session_id": 3,
+    }
+    completed_session = {
+        "tx_sessions_completed": 4,
+        "tx_last_session_id": 4,
+        "tx_last_session_duration_ms": 1380,
+        "tx_last_session_keyed": True,
+        "tx_last_session_dma_writes": 822,
+        "tx_last_session_frames": 1118,
+        "tx_last_session_peak_forward_watts": 0.764,
+        "tx_last_session_peak_reverse_watts": 0.0,
+        "tx_last_session_peak_swr": 1.0,
+        "tx_last_session_fifo_faults": 0,
+    }
+    evidence = completed_rf_session_evidence(before_session, completed_session)
+    if not evidence.advanced or not evidence.accepted():
+        raise AcceptanceError("completed RF session self-test failed")
+    stale_session = dict(completed_session)
+    stale_session.update(tx_sessions_completed=3, tx_last_session_id=3)
+    if completed_rf_session_evidence(before_session, stale_session).accepted():
+        raise AcceptanceError("stale RF session self-test failed")
+    unsafe_session = dict(completed_session)
+    unsafe_session.update(
+        tx_last_session_peak_forward_watts=0.30,
+        tx_last_session_peak_reverse_watts=0.09,
+        tx_last_session_peak_swr=3.46,
+    )
+    if completed_rf_session_evidence(before_session, unsafe_session).accepted():
+        raise AcceptanceError("unsafe RF session self-test failed")
     print("saturn XDMA operational client self-test passed")
 
 

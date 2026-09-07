@@ -325,6 +325,9 @@ run_test_gates(){
     )
   fi
 
+  log "Running direct-XDMA operational client self-tests"
+  run python3 "$REPO_ROOT/update_manager/scripts/saturn-xdma-operational-client.py" --self-test
+
   log "Running Protocol 2 native boundary tests"
   run make -C "$REPO_ROOT/sw_projects/P2_app" test
 
