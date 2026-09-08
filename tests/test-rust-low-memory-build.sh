@@ -9,6 +9,7 @@ BRIDGE_INSTALLER="$REPO_ROOT/update_manager/scripts/install-saturn-bridge.sh"
 RUST_TOOLCHAIN_HELPER="$REPO_ROOT/update_manager/scripts/saturn-rust-toolchain.sh"
 RUST_TOOLCHAIN_FILE="$REPO_ROOT/rust-toolchain.toml"
 PROVISIONER="$REPO_ROOT/provision/cloud-init/provision-saturn.sh"
+CI_WORKFLOW="$REPO_ROOT/.github/workflows/ci.yml"
 
 fail(){
   printf 'low-memory Rust build contract failed: %s\n' "$*" >&2
@@ -21,6 +22,8 @@ done
 
 grep -Fq 'channel = "1.98.1"' "$RUST_TOOLCHAIN_FILE" \
   || fail "repository does not pin the validated Rust toolchain"
+[[ "$(grep -Fc 'uses: dtolnay/rust-toolchain@1.98.1' "$CI_WORKFLOW")" -eq 2 ]] \
+  || fail "CI Rust jobs do not install the repository-pinned toolchain"
 arm_config="$(SATURN_RUSTUP_TARGET=aarch64-unknown-linux-gnu "$RUST_TOOLCHAIN_HELPER" print-config)"
 grep -Fq 'rustup_url=https://static.rust-lang.org/rustup/archive/1.29.1/aarch64-unknown-linux-gnu/rustup-init' <<<"$arm_config" \
   || fail "Rust prerequisite does not use the immutable arm64 rustup artifact"
