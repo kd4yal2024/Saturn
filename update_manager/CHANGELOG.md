@@ -72,6 +72,11 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
   `/tmp` tmpfs. Oversized ordinary requests fail early with HTTP 413.
 
 ### Fixed
+- Replaced the mutable `sh.rustup.rs` bootstrap with checksummed, immutable
+  rustup 1.29.1 artifacts and pinned the validated Rust 1.98.1 toolchain. The
+  shared prerequisite now runs before Saturn Go and standalone Saturn Bridge
+  builds. The piHPSDR dependency preflight also detects the current PipeWire
+  development module so `libpipewire-0.3-dev` is installed before compilation.
 - Made front-panel shutdown ownership safe on CM5/Trixie systems that already expose a
   native gpio-keys `pwr_button`. Installation now disables the GPIO polling waiter, retires
   Raspberry Pi OS's desktop `handle-power-key` inhibitor with a reversible per-user XDG

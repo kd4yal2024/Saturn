@@ -25,7 +25,9 @@ Installer actions include:
 
 - installs dependencies (`nginx`, `apache2-utils`, build tools, Python tools, etc.)
 - removes legacy distro `cargo`/`rustc` packages (if present)
-- bootstraps/updates a current stable Rust toolchain via `rustup` for the build user, then validates Cargo can read the repo lockfile
+- bootstraps rustup from a checksummed, immutable release artifact, installs the
+  repository-pinned Rust toolchain for the build user, then validates Cargo can
+  read the repo lockfile
 - builds and deploys Rust binary to `/opt/saturn-go/bin/saturn-go`
 - provisions exact pinned WDSP 2.00 and piHPSDR Linux-port source commits in an
   installer-owned sparse cache, then builds and installs
@@ -206,7 +208,8 @@ sudo systemctl start saturn-bridge.service
 
 If an older install attempt failed with a Cargo lockfile parse error (for example
 `lock file version '4'` on Bookworm using distro `cargo`), rerun the installer.
-Current installer versions self-bootstrap a newer Rust toolchain via `rustup`.
+Current installer versions self-bootstrap the repository-pinned Rust toolchain
+through the shared `saturn-rust-toolchain.sh` prerequisite.
 
 Remote entry behavior:
 

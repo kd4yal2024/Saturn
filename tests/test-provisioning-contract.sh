@@ -39,6 +39,12 @@ grep -Fq 'verify_saturn_go_target_readiness' "$PROVISIONER"
 grep -Fq "Environment=SATURN_READY_REQUIRE_BRIDGE=\${SATURN_READY_REQUIRE_BRIDGE}" "$MANAGER_INSTALLER"
 grep -Fq "if env_flag_enabled \"\$SATURN_DEFER_FINAL_READINESS\"" "$MANAGER_INSTALLER"
 
+# Rust and piHPSDR dependencies must be established before their builds.
+grep -Fq 'run_phase rust-toolchain "Preparing Rust build prerequisite"' "$PROVISIONER"
+grep -Fq 'saturn-rust-toolchain.sh' "$MANAGER_INSTALLER"
+grep -Fq 'libpipewire-0.3-dev' "$PROVISIONER"
+grep -Fq '"libpipewire-0.3",' "$REPO_ROOT/update_manager/scripts/update-pihpsdr.py"
+
 # Resume markers must track the actual checkout content, including dirty and
 # untracked work, and hardware verification must accept either healthy radio
 # owner while still rejecting mixed or inactive ownership.

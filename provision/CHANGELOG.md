@@ -7,6 +7,8 @@ All notable changes to provisioning assets are documented in this file.
 ### Changed
 
 - `cloud-init/provision-saturn.sh`
+  - establishes the repository-pinned Rust toolchain in a resumable prerequisite phase before any Rust component build
+  - installs `libpipewire-0.3-dev` with the piHPSDR build dependencies now that upstream piHPSDR uses PipeWire as its default Linux audio backend
   - shutdown-waiter installation now recognizes a live CM5/native gpio-keys `pwr_button`, disables the GPIO polling fallback, and retires Raspberry Pi OS's desktop power-key inhibitor for the configured Saturn user after reboot/login
   - duplicate `gpio-shutdown` overlays are reported for controlled operator repair instead of being removed automatically; CM4 systems without a native button continue using the guarded GPIO26 waiter
   - user-supplied Saturn administrator passwords now accept any value of at least five characters; unattended/generated passwords remain five characters

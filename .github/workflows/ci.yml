@@ -167,6 +167,7 @@ jobs:
             update_manager/scripts/saturn-radio-backend-switch-root.sh \
             update_manager/scripts/update-saturn-go.sh \
             update_manager/scripts/saturn-go-build-preflight.sh \
+            update_manager/scripts/saturn-rust-toolchain.sh \
             update_manager/scripts/saturn-release-build.sh \
             update_manager/scripts/saturn-go-deploy-root.sh \
             update_manager/scripts/saturn-xdma-phase4-stress.sh \

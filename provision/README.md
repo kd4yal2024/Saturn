@@ -52,7 +52,7 @@ Verification modes are deliberate deployment choices:
 ## What the End User Should Expect
 
 A first install is not a small package update. It can download hundreds of
-packages, prepare a Python virtual environment, install a Rust toolchain, and
+packages, prepare a Python virtual environment, install the repository-pinned Rust toolchain, and
 compile native, kernel, Rust, and web components. Plan for a stable network,
 several gigabytes of free space, continuous power, and roughly 30-60 minutes;
 slow storage or first-time Rust downloads can take longer. The installer does
@@ -153,6 +153,7 @@ sudo systemctl reboot
   own I2C/front-panel shutdown path, while other/no-panel configurations use
   the guarded GPIO26 waiter
 - optionally installs Update Manager
+- verifies the repository-pinned Rust toolchain in a resumable prerequisite phase before building Rust components
 - installs Saturn Bridge with its pinned WDSP 2.00 source by default; piHPSDR is an optional desktop application and is no longer a bridge prerequisite
 - installs piHPSDR native build dependencies by default for the standalone desktop and Update Manager installers
 - optionally flashes FPGA (disabled by default)

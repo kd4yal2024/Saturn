@@ -6,15 +6,42 @@ PREFLIGHT="$REPO_ROOT/update_manager/scripts/saturn-go-build-preflight.sh"
 UPDATER="$REPO_ROOT/update_manager/scripts/update-saturn-go.sh"
 INSTALLER="$REPO_ROOT/update_manager/install_saturn_go_nginx.sh"
 BRIDGE_INSTALLER="$REPO_ROOT/update_manager/scripts/install-saturn-bridge.sh"
+RUST_TOOLCHAIN_HELPER="$REPO_ROOT/update_manager/scripts/saturn-rust-toolchain.sh"
+RUST_TOOLCHAIN_FILE="$REPO_ROOT/rust-toolchain.toml"
+PROVISIONER="$REPO_ROOT/provision/cloud-init/provision-saturn.sh"
 
 fail(){
   printf 'low-memory Rust build contract failed: %s\n' "$*" >&2
   exit 1
 }
 
-for script in "$PREFLIGHT" "$UPDATER" "$INSTALLER" "$BRIDGE_INSTALLER"; do
+for script in "$PREFLIGHT" "$UPDATER" "$INSTALLER" "$BRIDGE_INSTALLER" "$RUST_TOOLCHAIN_HELPER"; do
   bash -n "$script"
 done
+
+grep -Fq 'channel = "1.98.1"' "$RUST_TOOLCHAIN_FILE" \
+  || fail "repository does not pin the validated Rust toolchain"
+arm_config="$(SATURN_RUSTUP_TARGET=aarch64-unknown-linux-gnu "$RUST_TOOLCHAIN_HELPER" print-config)"
+grep -Fq 'rustup_url=https://static.rust-lang.org/rustup/archive/1.29.1/aarch64-unknown-linux-gnu/rustup-init' <<<"$arm_config" \
+  || fail "Rust prerequisite does not use the immutable arm64 rustup artifact"
+grep -Fq 'rustup_sha256=15f6e4ce9f583b929c996c91562bad6d4454f3281de858b02cdfdef615fac433' <<<"$arm_config" \
+  || fail "Rust prerequisite arm64 checksum changed unexpectedly"
+grep -Fq 'toolchain=1.98.1' <<<"$arm_config" \
+  || fail "Rust prerequisite does not resolve the repository toolchain pin"
+x86_config="$(SATURN_RUSTUP_TARGET=x86_64-unknown-linux-gnu "$RUST_TOOLCHAIN_HELPER" print-config)"
+grep -Fq 'rustup_sha256=dda7234360b7f578ca8b0ddcb80145646fa61a67c1720a5abc7051b35c9fcb71' <<<"$x86_config" \
+  || fail "Rust prerequisite x86_64 checksum changed unexpectedly"
+armv7_config="$(SATURN_RUSTUP_TARGET=armv7-unknown-linux-gnueabihf "$RUST_TOOLCHAIN_HELPER" print-config)"
+grep -Fq 'rustup_sha256=6f34abb0d553273ce08306ea3adb758d0171f21090cc5ad5426f474ded5504d1' <<<"$armv7_config" \
+  || fail "Rust prerequisite armv7 checksum changed unexpectedly"
+grep -Fq 'run_phase rust-toolchain "Preparing Rust build prerequisite"' "$PROVISIONER" \
+  || fail "provisioning does not establish Rust before component builds"
+# shellcheck disable=SC2016
+grep -Fq 'bash "$RUST_TOOLCHAIN_HELPER" ensure' "$INSTALLER" \
+  || fail "Saturn Go installer bypasses the shared Rust prerequisite"
+# shellcheck disable=SC2016
+grep -Fq 'bash "$SATURN_RUST_TOOLCHAIN_HELPER" ensure' "$BRIDGE_INSTALLER" \
+  || fail "Saturn Bridge installer bypasses the shared Rust prerequisite"
 
 # The patterns below intentionally match literal shell parameter expansions.
 # shellcheck disable=SC2016

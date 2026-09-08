@@ -742,6 +742,7 @@ ensure_packages() {
     || bool_true "$SATURN_INSTALL_UPDATE_MANAGER"; then
     apt_install \
       libminiupnpc-dev libwebsockets-dev zlib1g-dev libopus-dev \
+      libpipewire-0.3-dev \
       libsqlite3-dev libssl-dev
   fi
 
@@ -2085,6 +2086,24 @@ phase_packages() {
   fi
 }
 
+phase_rust_toolchain() {
+  local saturn_home="$1"
+  local helper="$SATURN_REPO_DIR/update_manager/scripts/saturn-rust-toolchain.sh"
+  if ! bool_true "$SATURN_INSTALL_UPDATE_MANAGER" \
+      && ! bool_true "$SATURN_INSTALL_SATURN_BRIDGE"; then
+    log "Skipping Rust toolchain prerequisite (no Rust components selected)"
+    return 0
+  fi
+  [[ -x "$helper" ]] || die "Rust toolchain prerequisite helper not found/executable: $helper"
+  env \
+    HOME="$saturn_home" \
+    SATURN_RUST_BUILD_USER="$SATURN_USER" \
+    SATURN_RUST_USER_HOME="$saturn_home" \
+    SATURN_RUST_CARGO_HOME="$saturn_home/.cargo" \
+    SATURN_RUSTUP_HOME="$saturn_home/.rustup" \
+    bash "$helper" ensure
+}
+
 phase_repository() {
   local saturn_home="$1"
   ensure_repo "$saturn_home"
@@ -2219,6 +2238,7 @@ main() {
   fi
 
   run_phase repository "Preparing Saturn repository" phase_repository "$saturn_home"
+  run_phase rust-toolchain "Preparing Rust build prerequisite" phase_rust_toolchain "$saturn_home"
   run_phase build "Building Saturn applications and tools" phase_build "$saturn_home" "$nproc"
   set_ui_stage "Installing desktop launchers"
   install_desktop_shortcuts "$saturn_home"

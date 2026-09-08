@@ -22,6 +22,7 @@ SOURCE_DIR="${SATURN_UPDATE_MANAGER_SOURCE_DIR:-$INSTALLER_DIR}"
 RUST_SRC_DIR="$SOURCE_DIR/rust-server"
 WEB_ASSET_HELPERS="$SOURCE_DIR/scripts/saturn-go-web-assets.sh"
 BUILD_PREFLIGHT_HELPER="$SOURCE_DIR/scripts/saturn-go-build-preflight.sh"
+RUST_TOOLCHAIN_HELPER="$SOURCE_DIR/scripts/saturn-rust-toolchain.sh"
 XDMA_FIX_SCRIPT_INSTALL="/usr/local/bin/saturn-fix-xdma.sh"
 XDMA_POSTINST_HELPER_INSTALL="/usr/local/bin/saturn-xdma-kernel-postinst.sh"
 XDMA_POSTINST_HOOK_PATH="/etc/kernel/postinst.d/saturn-xdma"
@@ -70,8 +71,6 @@ SATURN_WATCHDOG_URL="${SATURN_WATCHDOG_URL:-http://${SATURN_ADDR}/livez}"
 SATURN_WATCHDOG_INTERVAL="${SATURN_WATCHDOG_INTERVAL:-30s}"
 SATURN_INSTALL_PACKAGES="${SATURN_INSTALL_PACKAGES:-1}"
 SATURN_INSTALL_LEGACY_XDMA_HOOK="${SATURN_INSTALL_LEGACY_XDMA_HOOK:-1}"
-RUSTUP_INIT_URL="${RUSTUP_INIT_URL:-https://sh.rustup.rs}"
-RUSTUP_INIT_SHA256="${RUSTUP_INIT_SHA256:-6c30b75a75b28a96fd913a037c8581b580080b6ee9b8169a3c0feb1af7fe8caf}"
 TAILSCALE_INSTALL_URL="${TAILSCALE_INSTALL_URL:-https://tailscale.com/install.sh}"
 TAILSCALE_INSTALL_SHA256="${TAILSCALE_INSTALL_SHA256:-ada2fe9d54df0d3e5a77879470bda195b2c53d27ecd73aba6de270c795725625}"
 SATURN_INSTALL_BRIDGE="${SATURN_INSTALL_BRIDGE:-1}"
@@ -191,6 +190,10 @@ if [[ ! -f "$BUILD_PREFLIGHT_HELPER" ]]; then
   err "Build preflight helper not found: $BUILD_PREFLIGHT_HELPER"
   exit 1
 fi
+if [[ ! -x "$RUST_TOOLCHAIN_HELPER" ]]; then
+  err "Rust toolchain prerequisite helper not found/executable: $RUST_TOOLCHAIN_HELPER"
+  exit 1
+fi
 # shellcheck disable=SC1090
 source "$WEB_ASSET_HELPERS"
 for extra_script in "${EXTRA_PACKAGED_SCRIPTS[@]}"; do
@@ -259,7 +262,6 @@ fi
 RUSTUP_BIN_DIR="$BUILD_HOME/.cargo/bin"
 RUSTUP_CARGO_BIN="$RUSTUP_BIN_DIR/cargo"
 RUSTUP_RUSTC_BIN="$RUSTUP_BIN_DIR/rustc"
-RUSTUP_CMD_BIN="$RUSTUP_BIN_DIR/rustup"
 RUST_BUILD_TMP_DIR="$RUST_SRC_DIR/.tmp"
 RUST_BUILD_TARGET_DIR="$RUST_SRC_DIR/target-local"
 RUST_BUILD_SWAP_FILE="${SATURN_SATURNGO_BUILD_SWAP_FILE:-$BUILD_HOME/saturn-build.swap}"
@@ -477,22 +479,14 @@ cargo_lock_preflight() {
 
 ensure_modern_rust_toolchain() {
   remove_legacy_apt_rust
-
-  if [[ ! -x "$RUSTUP_CARGO_BIN" || ! -x "$RUSTUP_RUSTC_BIN" || ! -x "$RUSTUP_CMD_BIN" ]]; then
-    local rustup_installer
-    rustup_installer="$(mktemp)"
-    info "Installing rustup toolchain for build user '$BUILD_USER'..."
-    download_verified "$RUSTUP_INIT_URL" "$RUSTUP_INIT_SHA256" "$rustup_installer"
-    chmod 0644 "$rustup_installer"
-    run_as_build_user "sh \"$rustup_installer\" -y --profile minimal --default-toolchain stable"
-    rm -f "$rustup_installer"
-  else
-    info "rustup already installed for build user '$BUILD_USER'; updating stable toolchain..."
-    run_as_build_user "\"$RUSTUP_CMD_BIN\" self update >/dev/null 2>&1 || true"
-  fi
-
-  run_as_build_user "\"$RUSTUP_CMD_BIN\" toolchain install stable --profile minimal"
-  run_as_build_user "\"$RUSTUP_CMD_BIN\" default stable"
+  info "Verifying pinned Rust build prerequisite for '$BUILD_USER'..."
+  env \
+    HOME="$BUILD_HOME" \
+    SATURN_RUST_BUILD_USER="$BUILD_USER" \
+    SATURN_RUST_USER_HOME="$BUILD_HOME" \
+    SATURN_RUST_CARGO_HOME="$BUILD_HOME/.cargo" \
+    SATURN_RUSTUP_HOME="$BUILD_HOME/.rustup" \
+    bash "$RUST_TOOLCHAIN_HELPER" ensure
 
   local rc=0
   if cargo_lock_preflight; then

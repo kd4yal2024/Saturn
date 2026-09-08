@@ -452,8 +452,9 @@ Installer behavior (current):
 
 - Deploys Rust backend only (no legacy Go source generation)
 - When package management is enabled, removes legacy distro `cargo`/`rustc`
-  packages (if installed), then bootstraps a current Rust toolchain via
-  `rustup` for the build user before compiling. With
+  packages (if installed), then bootstraps rustup from a checksummed immutable
+  release and installs the repository-pinned Rust toolchain for the build user
+  before compiling. With
   `SATURN_INSTALL_PACKAGES=0`, apt state is left untouched and the explicit
   user rustup toolchain is still used.
 - Installs `nodejs` and `npm` and runs lockfile-only `npm ci && npm run build` in `update_manager/remote-web` to produce the `saturn-remote-next.js` Vite bundle before staging web assets
@@ -608,7 +609,7 @@ Default URL:
 - `update-pihpsdr.py` fails with `UnicodeEncodeError` on `latin-1` output:
   - Update the deployed `/opt/saturn-go/scripts/update-pihpsdr.py` from this repo; current script degrades unsupported symbols on non-UTF-8 streams and writes logs as UTF-8
 - Installer fails building Rust server with `lock file version '4'` / old Cargo:
-  - Current installer now removes legacy apt `cargo`/`rustc` and installs a modern stable toolchain via `rustup`
+  - Current installer removes legacy apt `cargo`/`rustc` and installs the repository-pinned toolchain through `saturn-rust-toolchain.sh`
   - If rerunning after a failed older installer, run `sudo bash update_manager/install_saturn_go_nginx.sh` again
 
 ## Credits

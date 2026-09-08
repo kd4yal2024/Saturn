@@ -19,6 +19,7 @@ SATURN_BRIDGE_BUILD_SWAP_FILE="${SATURN_BRIDGE_BUILD_SWAP_FILE:-${SATURN_SATURNG
 SATURN_BRIDGE_BUILD_SWAP_MIB="${SATURN_BRIDGE_BUILD_SWAP_MIB:-${SATURN_SATURNGO_BUILD_SWAP_MIB:-2048}}"
 SATURN_BRIDGE_BUILD_PREFLIGHT_HELPER="${SATURN_BRIDGE_BUILD_PREFLIGHT_HELPER:-${SATURN_REPO_ROOT}/update_manager/scripts/saturn-go-build-preflight.sh}"
 SATURN_BRIDGE_INSTALLED_PREFLIGHT_HELPER="${SATURN_BRIDGE_INSTALLED_PREFLIGHT_HELPER:-/usr/local/lib/saturn-go/scripts/saturn-go-build-preflight.sh}"
+SATURN_RUST_TOOLCHAIN_HELPER="${SATURN_RUST_TOOLCHAIN_HELPER:-${SATURN_REPO_ROOT}/update_manager/scripts/saturn-rust-toolchain.sh}"
 SATURN_BRIDGE_RF_TX_ENABLED="${SATURN_BRIDGE_RF_TX_ENABLED:-1}"
 SATURN_BRIDGE_TX_OPUS_DECODE_ENABLED="${SATURN_BRIDGE_TX_OPUS_DECODE_ENABLED:-1}"
 SATURN_BRIDGE_MAX_CLIENT_DDC0_SAMPLE_RATE_KHZ="${SATURN_BRIDGE_MAX_CLIENT_DDC0_SAMPLE_RATE_KHZ:-192}"
@@ -100,7 +101,7 @@ apt_pkg_installed() {
 ensure_apt_packages() {
   local missing=()
   local pkg
-  for pkg in build-essential binutils pkg-config libfftw3-dev libopus0 ca-certificates git python3; do
+  for pkg in build-essential binutils pkg-config libfftw3-dev libopus0 ca-certificates curl git python3; do
     apt_pkg_installed "$pkg" || missing+=("$pkg")
   done
   if (( ${#missing[@]} == 0 )); then
@@ -141,6 +142,21 @@ run_as_bridge_user() {
   else
     die "Cannot run build as $build_user from user $(id -un)"
   fi
+}
+
+ensure_rust_toolchain() {
+  local build_user build_home
+  build_user="$(bridge_build_user)"
+  build_home="$(getent passwd "$build_user" | cut -d: -f6)"
+  [[ -n "$build_home" && -d "$build_home" ]] || die "Cannot resolve home for build user: $build_user"
+  need_file "$SATURN_RUST_TOOLCHAIN_HELPER" "Rust toolchain prerequisite helper"
+  env \
+    HOME="$build_home" \
+    SATURN_RUST_BUILD_USER="$build_user" \
+    SATURN_RUST_USER_HOME="$build_home" \
+    SATURN_RUST_CARGO_HOME="${CARGO_HOME:-${build_home}/.cargo}" \
+    SATURN_RUSTUP_HOME="${RUSTUP_HOME:-${build_home}/.rustup}" \
+    bash "$SATURN_RUST_TOOLCHAIN_HELPER" ensure
 }
 
 ensure_build_directories() {
@@ -553,6 +569,7 @@ verify_runtime() {
 
 main() {
   if flag_enabled "$SATURN_BRIDGE_BUILD_ONLY"; then
+    ensure_rust_toolchain
     verify_bridge_inputs
     ensure_build_directories
     ensure_low_memory_build_capacity
@@ -564,6 +581,7 @@ main() {
 
   need_root
   ensure_apt_packages
+  ensure_rust_toolchain
   verify_bridge_inputs
   ensure_build_directories
   ensure_low_memory_build_capacity

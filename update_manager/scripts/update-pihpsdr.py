@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 # update-pihpsdr.py - piHPSDR Update Script
 # Automates cloning, updating, and building the pihpsdr repository
-# Version: 1.12
+# Version: 1.13
 # Written by: Jerry DeLong KD4YAL
 # Changes: Removed --show-compile flag, merged into --verbose, fixed make process output to display in CLI,
 #          changed make output color to white in CLI with --verbose, compacted noisy dependency output,
-#          added WDSP 2.00 Linux compatibility and dependency preflight
+#          added WDSP 2.00 Linux compatibility and dependency preflight,
+#          added PipeWire development-module detection for current piHPSDR
 # Dependencies: psutil (version 7.0.0) in ~/venv, optional pyfiglet, urllib.error
 # Usage: python3 /opt/saturn-go/scripts/update-pihpsdr.py
 
@@ -72,7 +73,7 @@ def guard_repo_tree_python_execution():
 
 # Script metadata
 SCRIPT_NAME = "piHPSDR Update"
-SCRIPT_VERSION = "1.12"
+SCRIPT_VERSION = "1.13"
 SCRIPT_START_TIME = datetime.now()
 TIMESTAMP = SCRIPT_START_TIME.strftime('%Y%m%d-%H%M%S')
 PIHPSDR_DIR = Path.home() / "github" / "pihpsdr"
@@ -796,6 +797,7 @@ PIHPSDR_BUILD_PKG_CONFIG_MODULES = (
     "libpulse",
     "libpulse-simple",
     "libpulse-mainloop-glib",
+    "libpipewire-0.3",
     "miniupnpc",
     "libwebsockets",
     "zlib",
