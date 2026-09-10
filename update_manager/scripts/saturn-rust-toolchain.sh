@@ -111,7 +111,7 @@ check_toolchain() {
 }
 
 ensure_toolchain() {
-  local cargo_home rustup_home bin_dir rustup_bin expected_sha url installer actual_sha
+  local cargo_home rustup_home bin_dir rustup_bin expected_sha url temp_dir installer actual_sha
   cargo_home="${SATURN_RUST_CARGO_HOME:-${CARGO_HOME:-${BUILD_HOME}/.cargo}}"
   rustup_home="${SATURN_RUSTUP_HOME:-${RUSTUP_HOME:-${BUILD_HOME}/.rustup}}"
   bin_dir="${cargo_home}/bin"
@@ -123,8 +123,9 @@ ensure_toolchain() {
     expected_sha="${SATURN_RUSTUP_INIT_SHA256:-$(default_rustup_sha256)}"
     [[ "$expected_sha" =~ ^[0-9a-f]{64}$ ]] || die "Invalid rustup SHA-256: $expected_sha"
     url="${SATURN_RUSTUP_INIT_URL:-https://static.rust-lang.org/rustup/archive/${RUSTUP_VERSION}/${TARGET}/rustup-init}"
-    installer="$(mktemp)"
-    trap 'rm -f "${installer:-}"' EXIT
+    temp_dir="$(mktemp -d)"
+    installer="${temp_dir}/rustup-init"
+    trap 'rm -f "${installer:-}"; rmdir "${temp_dir:-}" 2>/dev/null || true' EXIT
     log "Downloading immutable rustup ${RUSTUP_VERSION} bootstrap for ${TARGET}"
     curl --proto '=https' --tlsv1.2 --retry 3 --retry-all-errors -fsSL "$url" -o "$installer"
     actual_sha="$(sha256sum "$installer" | awk '{print $1}')"
@@ -134,6 +135,7 @@ ensure_toolchain() {
     run_as_build_user "$cargo_home" "$rustup_home" \
       "$installer" -y --profile minimal --default-toolchain none --no-modify-path
     rm -f "$installer"
+    rmdir "$temp_dir"
     trap - EXIT
   fi
 

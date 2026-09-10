@@ -31,6 +31,10 @@ grep -Fq 'rustup_sha256=15f6e4ce9f583b929c996c91562bad6d4454f3281de858b02cdfdef6
   || fail "Rust prerequisite arm64 checksum changed unexpectedly"
 grep -Fq 'toolchain=1.98.1' <<<"$arm_config" \
   || fail "Rust prerequisite does not resolve the repository toolchain pin"
+# rustup-init dispatches by argv[0], so its downloaded basename must stay exact.
+# shellcheck disable=SC2016
+grep -Fq 'installer="${temp_dir}/rustup-init"' "$RUST_TOOLCHAIN_HELPER" \
+  || fail "Rust bootstrap does not preserve the required rustup-init executable name"
 x86_config="$(SATURN_RUSTUP_TARGET=x86_64-unknown-linux-gnu "$RUST_TOOLCHAIN_HELPER" print-config)"
 grep -Fq 'rustup_sha256=dda7234360b7f578ca8b0ddcb80145646fa61a67c1720a5abc7051b35c9fcb71' <<<"$x86_config" \
   || fail "Rust prerequisite x86_64 checksum changed unexpectedly"
