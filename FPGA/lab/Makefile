@@ -4,7 +4,7 @@ VENV_DIR ?= $(HOME)/.venvs/saturn-fpga
 VENV_PYTHON := $(VENV_DIR)/bin/python
 VIVADO ?= $(LAB_DIR)/scripts/vivado-windows.sh
 
-.PHONY: doctor python-env python-test lint lint-strict formal check vivado-validate vivado-build sim-ddc sim-duc sim-iqmod sim-all
+.PHONY: doctor python-env python-test lint lint-strict formal check vivado-validate vivado-build export-prom sim-ddc sim-duc sim-iqmod sim-all
 
 doctor:
 	$(LAB_DIR)/scripts/doctor.sh
@@ -32,6 +32,9 @@ vivado-validate:
 
 vivado-build:
 	$(VIVADO) -mode batch -nolog -nojournal -source $(LAB_DIR)/tcl/build.tcl
+
+export-prom:
+	$(VIVADO) -mode batch -nolog -nojournal -source $(LAB_DIR)/tcl/export-prom.tcl
 
 sim-ddc:
 	$(VIVADO) -mode batch -nolog -nojournal -source $(LAB_DIR)/tcl/sim-ddc.tcl

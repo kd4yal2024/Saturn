@@ -108,8 +108,11 @@ Generated files under `results/vivado/` include:
 - copied `.bit` artifact
 - JSON manifest containing Git identity, dirty state, Vivado version, and SHA256
 
-No PROM/BIN file is generated in Phase 0. The first known-good GUI PROM export
-must be recorded before that step is automated.
+PROM/BIN export is scripted in `tcl/export-prom.tcl` and recorded in
+`PROM_BIN_EXPORT.md`. It produces the uncompressed 32-Mbit SPIx1 multiboot
+layout used by Saturn (golden at `0x00000000`, primary at `0x00980000`, with
+the two timer payloads at `0x0097FC00` and `0x01300000`). Run it only after a
+validated bitstream build from a Vivado 2023.1 Tcl console.
 
 The automated quality gate rejects negative setup or hold slack and any DRC
 with `Error` severity. Critical-warning and unconstrained-path reports still
