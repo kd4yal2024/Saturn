@@ -146,11 +146,20 @@ Set `SATURN_SIM_WAVES=1` when an interactive waveform database is useful.
 Wave capture is disabled by default in batch smoke tests.
 
 The checked-in IQ-modulation test project was last saved by Vivado 2021.2.
-Vivado 2023.1 can upgrade its locked IP in memory, but the current migration
-changes the AXI BRAM controller interface and its old block-design wrapper no
-longer elaborates. DDC and DUC smoke baselines pass; IQ modulation remains an
-explicit Phase 0 migration item. Do not patch generated wrappers to conceal
-this incompatibility.
+Vivado 2023.1 can leave a stale hierarchical child wrapper in the ignored
+`CODEC_IQMOD_IP.ip_user_files` tree while regenerating the outer wrapper under
+`.gen`. The stale child omits `S_AXI_keyerBRAM` burst/cache/lock ports, while
+the fresh outer wrapper connects them, producing XSIM `cannot find port`
+errors. `sim-common.tcl` now synchronizes the generated nested-BD top wrapper
+into the ignored user-files location before compiling. Do not patch generated
+wrapper Verilog to conceal this.
+
+The permanent source-design cleanup is to normalize the child
+`S_AXI_keyerBRAM` interface properties (`HAS_BURST`, `HAS_CACHE`, and
+`HAS_LOCK`) to match the parent AXI-VIP interface (currently all `0`), then
+validate/save both source BDs and regenerate child before parent output
+products. The synchronization step keeps the regression reproducible while
+that Vivado GUI/Tcl migration is completed.
 
 The DDC and canonical DUC testbench clocks are 122.88 MHz
 (`8.138020833 ns`), matching Saturn hardware.

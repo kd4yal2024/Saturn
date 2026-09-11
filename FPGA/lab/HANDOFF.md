@@ -9,21 +9,46 @@ Codex (or anyone else) without re-deriving or redoing what's already done.
 
 - Repo: `C:\Users\jd\Saturn`, remote `kd4yal2024/Saturn` (fork of
   `laurencebarker/Saturn`).
-- Branch: `fpga-v28-lab`, with safety checkpoint commit
-  `114a00a Add Saturn FPGA Phase 0 lab and verification gates`; the
-  worktree is clean.
+- Branch: `fpga-v28-lab`, with safety checkpoint commits `114a00a` and
+  `f40132d`. The cosmetic Vivado `.xpr` drift was reverted; current lab
+  changes are documented below.
 - Vivado 2023.1 ML Standard is installed at `C:\Xilinx\Vivado\2023.1`,
   matching the version the project itself pins (see `FPGA/README.md`
   changelog: "V9, Sept 29 2023: updated project to vivado 2023.1").
-- WSL2 (`Ubuntu-24.04`) is present and starts correctly.
+- **WSL distro matters**: the lab toolchain (OSS CAD Suite, the
+  `saturn-fpga` Python venv, the locally built GNU Make, and the
+  `.bashrc` PATH exports for all of it) is installed in the **`Ubuntu`**
+  WSL distro. `Ubuntu-24.04` is the **default** distro
+  (`wsl -l -v` marks it with `*`) and has none of this installed — plain
+  `wsl` drops you there and `make doctor` will report `LAB_NOT_READY`.
+  Always use `wsl -d Ubuntu` for lab work, or run
+  `wsl --set-default Ubuntu` once to change the default.
+- `.bashrc`'s PATH/tool exports only take effect in a genuinely
+  **interactive** shell (stock Ubuntu `.bashrc` has an
+  `case $- in *i*) ;; *) return;; esac` guard). `source ~/.bashrc` from a
+  non-interactive `bash -c`/script will silently no-op; a real typed
+  terminal session is fine.
 - Golden fallback image `FPGA/saturnfallback.bin` exists. `FPGA/README.md`:
   "DON'T program this unless you need to!"
 
 ## 2. Safety checkpoint
 
-The Phase 0 lab and the reviewed RTL/testbench changes are now protected by
-commit `114a00a`. The checkpoint was created before further build/debug work;
-the worktree is currently clean.
+The Phase 0 lab and the reviewed RTL/testbench changes are protected by
+commits `114a00a` and `f40132d`.
+
+**Current worktree state (verified 2026-09-11):** the cosmetic Vivado
+`FPGA/saturn_project/saturn_project.xpr` rewrite (path and source ordering)
+was reverted to the checked-in canonical project. The IQ-mod simulation fix
+is in `FPGA/lab/tcl/sim-common.tcl` and is not generated HDL.
+
+The IQ-mod failure is a stale ignored child wrapper: the simulation fileset
+uses `CODEC_IQMOD_IP.ip_user_files/bd/IQ_Modulation_Select_inst_0/sim`,
+which omits AXI burst/cache/lock ports, while Vivado 2023.1 regenerates the
+outer wrapper and fresh child under `.gen` with those ports. The lab now
+synchronizes that generated nested-BD top wrapper before simulation. The
+long-term source-BD cleanup is to normalize the child `S_AXI_keyerBRAM`
+`HAS_BURST`, `HAS_CACHE`, and `HAS_LOCK` properties to the parent AXI-VIP
+values (all `0`) and regenerate child before parent products.
 
 The checkpoint contains:
 
@@ -165,34 +190,53 @@ not introduce a second, parallel telemetry path.
 
 ## 6. Prioritized path back on track
 
-1. **Checkpoint complete.** Commit `114a00a` protects the current state.
-2. Run `make doctor` in WSL — confirm the lab environment is actually
-   sane on this machine and record the fallback SHA256 somewhere outside
-   the repo.
-3. Run `make check` (lint + formal + python-test) — confirm the existing
-   gates actually pass here; they're built but it's unclear from repo
-   state alone whether they've been exercised end-to-end on this machine.
-4. Run `make vivado-validate`, then `make vivado-build` — get a baseline
-   V27 timing/utilization/DRC report and manifest. This satisfies Phase 0
-   acceptance criterion 4, which per the README is not yet done.
-5. Decide how to handle the IQModtb Vivado-version migration issue before
-   declaring Phase 0 sim baselines complete (fix, or explicitly scope out
-   with a tracked follow-up).
-6. Do the PROM/BIN GUI export once, record the exact settings, then
+1. **Checkpoint complete.** Commits `114a00a` and `f40132d` protect the
+   Phase 0 lab and reviewed RTL/testbench changes.
+2. **Project drift resolved.** The `.xpr` was reverted to the canonical
+   checked-in form; the remaining IQ-mod work is the simulation migration
+   described in §2.
+3. ~~Run `make doctor`~~ **Done and independently re-verified 2026-09-11**
+   in the `Ubuntu` WSL distro (interactive shell): `LAB_READY`. Golden
+   fallback SHA256:
+   `543b207750e0aafe1c63ffb377efa4fea4624527a5f6c09744291779b096f037` —
+   record this outside the repo if not already done.
+4. ~~Run `make check`~~ **Done and independently re-verified 2026-09-11**:
+   lint (`SATURN_LAB_LINT_OK`), formal watchdog `prove`+`cover`
+   (k-induction pass, cover trace reached), and both Python DSP regression
+   tests all pass on this machine.
+5. ~~Run `make vivado-build`~~ **Done and independently re-verified
+   2026-09-11**: `results/vivado/quality-gate.txt` shows WNS 0.176 ns, WHS
+   0.049 ns, 0 DRC errors, 0 DRC critical warnings. Bitstream
+   `results/vivado/saturn-a2e84943.bit` SHA256 independently recomputed
+   and matches `manifest.json` exactly:
+   `8710d9066a96e41babb439d58922f40f4aa2d6a702df4ea13613ca1535212d49`.
+   **Caveat**: `manifest.json`'s `git_sha` is `a2e8494` (the commit
+   *before* the Phase 0 checkpoint) with `git_dirty: true` — this build
+   predates commits `114a00a`/`f40132d`. No build has yet been run and
+   manifested against the actual checkpointed HEAD. Re-run
+   `make vivado-build` after resolving item 2 so the manifest reflects a
+   real commit, not a pre-checkpoint dirty tree.
+6. Run `make sim-iqmod` to verify the new nested-wrapper synchronization;
+   then perform the permanent source-BD interface normalization if desired.
+7. Do the PROM/BIN GUI export once, record the exact settings, then
    automate it in Tcl — explicitly flagged as the last unfinished Phase 0
    automation piece.
-7. Only after all 5 Phase 0 acceptance criteria in `FPGA/lab/README.md`
+8. Only after all 5 Phase 0 acceptance criteria in `FPGA/lab/README.md`
    are met, start V28 telemetry work — cross-check the wire/register
    format against §5 so `P2_app` doesn't need a second protocol.
-8. Expand formal coverage from watchdog-only to `FIFO_Monitor.v` and
+9. Expand formal coverage from watchdog-only to `FIFO_Monitor.v` and
    `DDCMux.v`, as already earmarked in their `rtl-tests/*/README.md`
    files.
 
 ## 7. Open questions worth resolving with the user before continuing
 
-- Has `make doctor` / `make check` actually been run to completion on
-  this machine yet, or is the scaffold built but unexercised?
-- Is the golden fallback SHA256 recorded anywhere outside this repo yet?
+- The `.xpr` drift is resolved by reverting Vivado's cosmetic rewrite; keep
+  the canonical checked-in project path.
+- The guarded launcher now has a nested-BD simulation synchronization step;
+  verify it with `make sim-iqmod` in the configured Vivado environment.
 - Is a G2 unit currently connected for the CM4/XDMA programming and
   hardware-in-the-loop steps, or is work still simulation/synthesis-only
   for now?
+- Should `Ubuntu` be made the default WSL distro (`wsl --set-default
+  Ubuntu`) to remove the distro-mismatch trap for future sessions, or is
+  `Ubuntu-24.04` needed as default for something else?

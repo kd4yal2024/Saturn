@@ -28,6 +28,31 @@ proc saturn_lab::register_generated_simulation_sources {} {
     }
 }
 
+proc saturn_lab::sync_nested_bd_simulation_sources {} {
+    # Vivado 2023.1 can regenerate the outer BD wrapper under .gen while
+    # leaving the older hierarchical-child wrapper in .ip_user_files. The
+    # latter is what the checked-in simulation fileset references, so a
+    # 2021.2 child (with HAS_BURST/CACHE/LOCK omitted) can be elaborated
+    # against a 2023.1 parent that connects those ports.
+    set project_dir [get_property DIRECTORY [current_project]]
+    set project_name [get_property NAME [current_project]]
+    set generated_bd_root [file join $project_dir "${project_name}.gen" sources_1 bd]
+    set user_bd_root [file join $project_dir "${project_name}.ip_user_files" bd]
+
+    foreach sim_dir [glob -nocomplain -types d -directory $generated_bd_root */bd/*/sim] {
+        set child_name [file tail [file dirname $sim_dir]]
+        set generated_top [file join $sim_dir "${child_name}.v"]
+        set user_sim_dir [file join $user_bd_root $child_name sim]
+        set user_top [file join $user_sim_dir "${child_name}.v"]
+        if {![file isfile $generated_top] || ![file isfile $user_top]} {
+            continue
+        }
+        puts "Synchronizing nested BD simulation wrapper $child_name"
+        file mkdir $user_sim_dir
+        file copy -force $generated_top $user_top
+    }
+}
+
 proc saturn_lab::generate_simulation_products {} {
     set locked_ips [get_ips -quiet -filter {IS_LOCKED == 1}]
     if {[llength $locked_ips] > 0} {
@@ -58,6 +83,7 @@ proc saturn_lab::generate_simulation_products {} {
             -of_objects [concat $block_designs $ip_files] \
             -no_script -sync -force -quiet
     }
+    sync_nested_bd_simulation_sources
     register_generated_simulation_sources
 }
 
