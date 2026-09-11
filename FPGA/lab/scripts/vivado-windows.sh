@@ -22,6 +22,22 @@ if [[ ! -f "$vivado_bat_wsl" ]]; then
     exit 127
 fi
 
+# WSL normally registers this handler at distro startup.  Without it, PE
+# binaries are visible under /mnt/c but fail with "Exec format error" before
+# Vivado can print anything.  Give the operator a repair path instead of a
+# misleading Vivado failure.
+if [[ ! -e /proc/sys/fs/binfmt_misc/WSLInterop ]]; then
+    cat >&2 <<'EOF'
+Windows interop is unavailable in this WSL session (WSLInterop handler missing).
+From an elevated Windows PowerShell, run:
+  wsl --shutdown
+Then reopen the Ubuntu distro explicitly with:
+  wsl -d Ubuntu
+If the handler is still absent, check /etc/wsl.conf for [interop] enabled=true.
+EOF
+    exit 126
+fi
+
 restore_project() {
     local status=$?
     if [[ -n "$backup_dir" ]]; then
