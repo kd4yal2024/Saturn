@@ -44,7 +44,7 @@ proc saturn_lab::sync_nested_bd_simulation_sources {} {
         set generated_top [file join $sim_dir "${child_name}.v"]
         set user_sim_dir [file join $user_bd_root $child_name sim]
         set user_top [file join $user_sim_dir "${child_name}.v"]
-        if {![file isfile $generated_top] || ![file isfile $user_top]} {
+        if {![file isfile $generated_top]} {
             continue
         }
         puts "Synchronizing nested BD simulation wrapper $child_name"
