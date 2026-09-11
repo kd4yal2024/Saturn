@@ -307,27 +307,33 @@ source/destination (not just counted):**
     `din1` tied to the full `mult_gen_0/P` bus; no bit-15-specific BD
     connection is present. The remaining asymmetry is therefore
     post-synthesis net behavior or boundary optimization, not an obvious BD
-    wiring typo.
+    wiring typo. The apparent two-flop depth on bits 0–14 is likewise not a
+    deliberate synchronizer; it is an optimization artifact and cannot be
+    treated as CDC protection. The robust fix is one explicit,
+    `ASYNC_REG`-tagged two-flop synchronizer on `TX_ENABLE` upstream of this
+    mute mux, replacing the accidental per-bit behavior and addressing all
+    16 related findings.
 - **4 CDC-12 "multi-clock fan-in" findings — need Vivado tracing:**
   `AXIL_ConfigReg_64_1/config_reg0_reg[1]/[3]` and
   `Double_D_register_syncareset1/Intermediate2_reg[0]` both fan into the
-  same `xpm_cdc_sync_rst` reset-synchronizer inputs for
+    same `xpm_cdc_sync_rst` reset-synchronizer inputs for
     `axis_data_fifo_DUC` and `axis_data_fifo_codecspk`. Vivado cross-probing
-    shows the explicit fan-ins `PCIe/DUCFIFORstn →
+    shows the explicit downstream fan-ins `PCIe/DUCFIFORstn →
     FIFO_Interfaces/TX_FIFO_aresetn` and `PCIe/CodecSkpRstn →
-    FIFO_Interfaces/CodecSpkResetn`; these are the reset-combining points to
-    trace before changing synchronization. Two different-clock registers
-    driving one synchronizer input is a real hazard (the synchronizer only
-    guards one source domain).
+    FIFO_Interfaces/CodecSpkResetn`. The remaining question is the upstream
+    convergence inside `saturn_top.bd`: where the two different-clock
+    register sources merge into `DUCFIFORstn`/`CodecSkpRstn`. Two different-
+    clock registers driving one synchronizer input is a real hazard (the
+    synchronizer only guards one source domain).
 
 **Agreed triage order** (Codex's sequencing, endorsed): (1) document all
-23 in this section — done above; (2) fix the `TX_ENABLE` readback
-crossing if its destination clock is confirmed different; (3) inspect
-`regmux_2_1_0` bit-15 wiring in Vivado — the most suspicious finding;
-(4) trace the 4 FIFO reset fan-ins and synchronize each source
-independently; (5) for `CODEC_MISO`/`ADC_MISO`, confirm the exact `aclk`
+23 in this section — done above; (2) add one explicit `ASYNC_REG`
+two-flop synchronizer for `TX_ENABLE` upstream of the DUC mute mux and fix
+the readback crossing if its destination clock is confirmed different; (3)
+trace the 4 FIFO reset fan-ins and synchronize each source
+independently; (4) for `CODEC_MISO`/`ADC_MISO`, confirm the exact `aclk`
 frequency driving each FSM against the timing budgets above before adding
-any synchronizer; (6) add formal CDC waivers only for the vendor/monitor/
+any synchronizer; (5) add formal CDC waivers only for the vendor/monitor/
 strap buckets (15 findings), each with path-specific rationale, not a
 blanket waiver.
 
