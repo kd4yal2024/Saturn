@@ -285,10 +285,11 @@ source/destination (not just counted):**
     - ADC SPI (`FPGA/documentation/SPI ADC timing diagram.pdf`): SCK
       period 128 ns (7.8125 MHz), each FSM clock phase 32 ns, MISO
       sampled on SCK rising edge.
-    Both are slow enough relative to a >100 MHz `aclk` that 1–2 cycles of
-    synchronizer delay likely has margin — but the exact `aclk` frequency
-    driving each FSM instance needs to be confirmed (not yet done) before
-    trusting that, per Codex's caution.
+    Focused Vivado cross-probing confirmed both FSM instances use
+    `clk_122_1`, the 122.88 MHz `aclk`. The generated SPI clocks are
+    synchronous derivatives of that domain, but synchronizer insertion still
+    requires checking the FSM sample phase against the peripheral setup/hold
+    budget.
   - `TX_ENABLE` → `TX_DUC_0/regmux_2_1_0/dout_reg[15]/D` — the most
     suspicious finding: this is the *same* 16-bit register as 15 sibling
     bits that already carry a 2-flop path (`dout_reg[0..14]`, flagged only
@@ -301,16 +302,23 @@ source/destination (not just counted):**
     instance's `din0`/`din1`/`sel` — needs Vivado's IP Integrator canvas
     or CDC cross-probing to see the actual per-bit connections; not
     traceable from RTL/grep alone.
+    The focused top-level probe shows `/Transmitter/TX_DUC_0/regmux_2_1_0`
+    clocked by `Net5`/`clk122`, with `din0` tied to the zero constant and
+    `din1` tied to the full `mult_gen_0/P` bus; no bit-15-specific BD
+    connection is present. The remaining asymmetry is therefore
+    post-synthesis net behavior or boundary optimization, not an obvious BD
+    wiring typo.
 - **4 CDC-12 "multi-clock fan-in" findings — need Vivado tracing:**
   `AXIL_ConfigReg_64_1/config_reg0_reg[1]/[3]` and
   `Double_D_register_syncareset1/Intermediate2_reg[0]` both fan into the
   same `xpm_cdc_sync_rst` reset-synchronizer inputs for
-  `axis_data_fifo_DUC` and `axis_data_fifo_codecspk`. Two different-clock
-  registers driving one synchronizer's input is a real hazard (the
-  synchronizer only guards one of the two source domains). These instance
-  names live in `saturn_top.bd`, not hand-written RTL — needs Vivado to
-  trace the actual reset-combining logic and synchronize each source
-  independently before combining.
+    `axis_data_fifo_DUC` and `axis_data_fifo_codecspk`. Vivado cross-probing
+    shows the explicit fan-ins `PCIe/DUCFIFORstn →
+    FIFO_Interfaces/TX_FIFO_aresetn` and `PCIe/CodecSkpRstn →
+    FIFO_Interfaces/CodecSpkResetn`; these are the reset-combining points to
+    trace before changing synchronization. Two different-clock registers
+    driving one synchronizer input is a real hazard (the synchronizer only
+    guards one source domain).
 
 **Agreed triage order** (Codex's sequencing, endorsed): (1) document all
 23 in this section — done above; (2) fix the `TX_ENABLE` readback
