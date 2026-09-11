@@ -54,9 +54,9 @@ TX_DUC UUT
     .sel(sel)
 );
 
-parameter CLK_PERIOD=8;              // 125MHz
-// Generate the clock : 125 MHz    
-always #(CLK_PERIOD/2) clk122 = ~clk122;
+localparam real CLK_PERIOD_NS = 8.138020833; // 122.88 MHz
+// Generate the clock at the hardware DUC rate.
+always #(CLK_PERIOD_NS/2.0) clk122 = ~clk122;
 
 
 

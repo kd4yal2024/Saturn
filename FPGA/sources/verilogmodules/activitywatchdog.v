@@ -45,11 +45,17 @@ module Watchdog #
   input wire             activity2,
 
   output reg             TXEnable
+`ifdef FORMAL
+  , output wire [31:0]    formal_counter
+`endif
 );
 //
 // internal registers
 //
   reg [31:0]counter = 2'b00;                  // sequencer for control  
+`ifdef FORMAL
+  assign formal_counter = counter;
+`endif
 //
   always @(posedge aclk)
   begin

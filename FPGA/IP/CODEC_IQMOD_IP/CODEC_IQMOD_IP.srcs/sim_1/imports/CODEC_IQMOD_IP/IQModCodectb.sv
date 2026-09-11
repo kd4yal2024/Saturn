@@ -66,6 +66,7 @@ reg CWKeyerEnable;
 reg [31:0] CodecConfig;
 reg [15:0] SidetoneFreq;
 reg [15:0] SidetoneVol;
+integer KeyHoldNs;
 
 
 wire [47:0] m_axis_TXMod_tdata;
@@ -193,6 +194,9 @@ IQCODECBLK_axi_vip_0_0_mst_t      master_agent;
 
 initial begin    
 
+KeyHoldNs=20000000;
+if($value$plusargs("SATURN_KEY_HOLD_NS=%d", KeyHoldNs))
+    $display("CW key hold override = %d ns", KeyHoldNs);
 CWRampLength=3840;
 CWHangTime = 10;
 CWPttDelay=3;
@@ -239,9 +243,10 @@ end
 //
 #1000
 cw_key_down=1;
-#20000000           // wait to release key
+#(KeyHoldNs)        // wait to release key
 cw_key_down=0;
+#1000
+$finish;
 
 end
 endmodule
-

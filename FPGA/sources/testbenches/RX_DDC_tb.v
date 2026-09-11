@@ -82,9 +82,9 @@ reg [31:0] fd_debw;                   // file handle
 
 
 
-parameter CLK_PERIOD=8;              // 125MHz
-// Generate the clock : 125 MHz    
-always #(CLK_PERIOD/2) aclk = ~aclk;
+localparam real CLK_PERIOD_NS = 8.138020833; // 122.88 MHz
+// Generate the clock at the hardware DDC rate.
+always #(CLK_PERIOD_NS/2.0) aclk = ~aclk;
 
 
 
@@ -99,6 +99,10 @@ initial begin
 //
     DiscardSampleCount = 100;          // samples to be discarded before starting to record (filter initiailising)
     RequiredSampleCount = 4096;
+    if($value$plusargs("SATURN_REQUIRED_SAMPLES=%d", RequiredSampleCount))
+        $display("Required sample override = %d", RequiredSampleCount);
+    if($value$plusargs("SATURN_DISCARD_SAMPLES=%d", DiscardSampleCount))
+        $display("Discard sample override = %d", DiscardSampleCount);
     fd_w = $fopen("./ddcdata.txt", "w");
     if(fd_w) $display("file opened successfully");
     else $display("file open FAIL");
@@ -139,7 +143,8 @@ begin
         SampleCount = SampleCount + 1;
         if(SampleCount > DiscardSampleCount)
             $fwrite(fd_w, "%d,%d\n", $signed(IOut), $signed(QOut));
-        $display("Samples collected = %d\n",SampleCount);
+        if((SampleCount <= 10) || ((SampleCount % 256) == 0))
+            $display("Samples collected = %d\n",SampleCount);
         if(SampleCount == (RequiredSampleCount + DiscardSampleCount))
         begin
             $fclose(fd_w);
