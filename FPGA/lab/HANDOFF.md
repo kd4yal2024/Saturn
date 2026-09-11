@@ -242,12 +242,86 @@ regression, but is no longer a release blocker.
 (independently confirmed):
 `CDC-1` 16 Critical, `CDC-7` 1 Critical, `CDC-12` 4 Critical, `CDC-13` 2
 Critical (= 23 Critical total), plus `CDC-2` 15 synchronizers missing
-`ASYNC_REG`. Some are inside XDMA/Xilinx-generated structures; others
-touch Saturn-level signals (TX_ENABLE, CODEC_MISO, ADC_MISO, board-version
-pins, resets, FIFO resets per the review) and need individual fixes or
-documented waivers. Confirmed: `FPGA/lab/tcl/reports.tcl`'s
+`ASYNC_REG`. Confirmed: `FPGA/lab/tcl/reports.tcl`'s
 `implementation_quality_gate` only writes WNS/WHS/DRC fields to
 `quality-gate.txt` — **it does not check or reject CDC findings at all.**
+
+**CDC triage — every one of the 23 Critical findings traced to its actual
+source/destination (not just counted):**
+
+- **15 waiver/documentation candidates, no RTL work:**
+  - 6 pure vendor IP: 3× `pcie_reset_n` (CDC-1) + 1× `pcie_reset_n` (CDC-7)
+    + 2× CDC-13, all inside Xilinx's XDMA/PCIe2-to-PCIe3 wrapper
+    (`saturn_top_i/PCIe/xdma_0/inst/...pcie2_ip_i/...`) — pre-verified
+    vendor hard IP.
+  - 4 intentional clock-monitor sampling: `ref_in_10`, `EMC_CLK`, and the
+    `clk_wiz_0` MMCM `CLKOUT0` (×2), all landing in `clock_monitor_0`,
+    whose entire job is sampling foreign clocks — single-register
+    sampling is the designed mechanism, not an oversight.
+  - 5 static hardware straps: `pcb_version_id[0..3]` (5 rows, one bit
+    feeds two destination bits) into `c_addsub_0` — board-version ID
+    pins, stable at power-up, no runtime CDC hazard.
+- **4 straightforward-looking real-signal crossings — NOT yet proven
+  safe, do not blindly add synchronizers:**
+  - `TX_ENABLE` → `AXIL_ReadReg_64_0/rdatareg_reg[31]/D` (status readback
+    mirror) — fix if the destination is confirmed to be a genuinely
+    different clock domain.
+  - `CODEC_MISO` → `AXIL_SPIWriter_0/shiftinreg_reg[0]/D` and `ADC_MISO`
+    → `AXI_SPI_ADC_0/ADCData_reg[0]/D` — **both modules
+    (`FPGA/sources/verilogmodules/axil_SPIWriter.v`,
+    `axi_spi_adc.v`) generate their own SPI clock from `aclk` and sample
+    MISO at a specific FSM state timed against that self-generated
+    clock** (confirmed by direct RTL read: `axil_SPIWriter.v` samples
+    `SPIMISO` on entry to state 4, "deassert SCK; shift in input bit";
+    `axi_spi_adc.v` samples `MISO` at a specific `clk_phase`/`BitCnt`).
+    Inserting synchronizer flops before the sample point shifts the
+    effective sample instant without adjusting the FSM's phase count —
+    could sample a stale or wrong bit. Relevant timing budgets, read
+    directly from the documentation PDFs:
+    - Codec SPI (`FPGA/documentation/Codec SPI Write Timing Diag.pdf`):
+      SPICk ≈ 10 MHz, 4 aclk-driven FSM states per bit cell, MISO
+      sampled on SCK deassert (entry to state 4); codec gets ~100 ns
+      setup time since last shift.
+    - ADC SPI (`FPGA/documentation/SPI ADC timing diagram.pdf`): SCK
+      period 128 ns (7.8125 MHz), each FSM clock phase 32 ns, MISO
+      sampled on SCK rising edge.
+    Both are slow enough relative to a >100 MHz `aclk` that 1–2 cycles of
+    synchronizer delay likely has margin — but the exact `aclk` frequency
+    driving each FSM instance needs to be confirmed (not yet done) before
+    trusting that, per Codex's caution.
+  - `TX_ENABLE` → `TX_DUC_0/regmux_2_1_0/dout_reg[15]/D` — the most
+    suspicious finding: this is the *same* 16-bit register as 15 sibling
+    bits that already carry a 2-flop path (`dout_reg[0..14]`, flagged only
+    as CDC-2 Warning, missing `ASYNC_REG`) — bit 15 alone shows zero
+    depth (Critical). `regmux_2_1` itself
+    (`FPGA/sources/verilogmodules/regmux_2_1.v`) is a plain synchronous
+    2:1 mux with no per-bit logic, so the asymmetry originates in how the
+    `TX_DUC` block design
+    (`FPGA/IP/DUCIP/DUCIP.srcs/sources_1/bd/TX_DUC/TX_DUC.bd`) wires that
+    instance's `din0`/`din1`/`sel` — needs Vivado's IP Integrator canvas
+    or CDC cross-probing to see the actual per-bit connections; not
+    traceable from RTL/grep alone.
+- **4 CDC-12 "multi-clock fan-in" findings — need Vivado tracing:**
+  `AXIL_ConfigReg_64_1/config_reg0_reg[1]/[3]` and
+  `Double_D_register_syncareset1/Intermediate2_reg[0]` both fan into the
+  same `xpm_cdc_sync_rst` reset-synchronizer inputs for
+  `axis_data_fifo_DUC` and `axis_data_fifo_codecspk`. Two different-clock
+  registers driving one synchronizer's input is a real hazard (the
+  synchronizer only guards one of the two source domains). These instance
+  names live in `saturn_top.bd`, not hand-written RTL — needs Vivado to
+  trace the actual reset-combining logic and synchronize each source
+  independently before combining.
+
+**Agreed triage order** (Codex's sequencing, endorsed): (1) document all
+23 in this section — done above; (2) fix the `TX_ENABLE` readback
+crossing if its destination clock is confirmed different; (3) inspect
+`regmux_2_1_0` bit-15 wiring in Vivado — the most suspicious finding;
+(4) trace the 4 FIFO reset fan-ins and synchronize each source
+independently; (5) for `CODEC_MISO`/`ADC_MISO`, confirm the exact `aclk`
+frequency driving each FSM against the timing budgets above before adding
+any synchronizer; (6) add formal CDC waivers only for the vendor/monitor/
+strap buckets (15 findings), each with path-specific rationale, not a
+blanket waiver.
 
 **Important, and not obvious from the CDC report alone**: a `set_false_path`
 does not resolve a CDC finding. `TX_ENABLE` already has
