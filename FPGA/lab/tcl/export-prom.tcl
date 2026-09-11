@@ -12,8 +12,9 @@ saturn_lab::vivado_guard
 set repo_dir $saturn_lab::repo_dir
 set golden_bit [saturn_lab::env_or SATURN_GOLDEN_BIT \
     [file join $repo_dir FPGA multiboot_address_table saturn_top_wrapper_golden.bit]]
+set current_sha [string range [saturn_lab::git_value rev-parse HEAD] 0 7]
 set primary_bit [saturn_lab::env_or SATURN_PRIMARY_BIT \
-    [file join $repo_dir FPGA lab results vivado saturn-a2e84943.bit]]
+    [file join $repo_dir FPGA lab results vivado "saturn-${current_sha}.bit"]]
 set timer1 [saturn_lab::env_or SATURN_TIMER1 \
     [file join $repo_dir FPGA multiboot_address_table timer1.bin]]
 set timer2 [saturn_lab::env_or SATURN_TIMER2 \

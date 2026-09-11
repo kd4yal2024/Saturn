@@ -28,8 +28,9 @@ or a Windows Vivado command prompt:
 vivado -mode batch -nolog -nojournal -source FPGA/lab/tcl/export-prom.tcl
 ```
 
-The script defaults to the known golden bitstream, the current lab bitstream
-(`results/vivado/saturn-a2e84943.bit`), and the checked-in timer payloads. To
+The script defaults to the known golden bitstream, the current-HEAD lab
+bitstream (`results/vivado/saturn-<git-sha>.bit`), and the checked-in timer
+payloads. To
 export a different primary bitstream, set `SATURN_PRIMARY_BIT` to its path and
 `SATURN_PROM_OUTPUT` to the desired output path. Vivado writes both the BIN and
 the adjacent PRM report. The script verifies that both files were created and
