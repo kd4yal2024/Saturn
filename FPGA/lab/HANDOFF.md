@@ -262,8 +262,8 @@ explicit, documented CDC waiver. So the CDC triage for these signals is a
 genuine synchronizer-or-waiver decision, not something the existing
 timing constraints already cover.
 
-**4. External timing — not actually neglected, one exception short of
-done.** `results/vivado/methodology.txt` flags `PROM_SPI_io0..3_io`,
+**4. External timing — fixed in commits `f82dc67` + `2613c2f`, one build
+short of full empirical confirmation.** `results/vivado/methodology.txt` flags `PROM_SPI_io0..3_io`,
 `PROM_SPI_ss_io[0]`, and `TX_DAC_PWM` as missing a delay relative to
 `VIRTUAL_clk_125mhz` / `clock_122_in_p` respectively (confirmed by direct
 read). But `FPGA/constraints/timingconstraints.xdc` shows these ports
@@ -273,22 +273,30 @@ slower functional clock:
 - `PROM_SPI_io0..3_io`/`ss_io[0]`: `set_output_delay -clock [get_clocks clk_sck] -max 1.700 -min -2.200` (lines 176–185), where `clk_sck` is a real `create_generated_clock` sourced from the AXI Quad SPI IP's own `ext_spi_clk` (line 166), plus existing `set_multicycle_path` exceptions between `clk_sck` and that IP's internal `ext_spi_clk` domain (lines 172–173, 186–187).
 
 So these aren't unconstrained-and-ignored — they're constrained for their
-real functional clock, but `check_timing` is separately flagging a path
-from the *other*, faster reference clock domain that isn't yet excepted.
-**The design already has an established pattern for exactly this
-situation** — `FPGA/constraints/timingconstraints.xdc` false-paths
-`RF_SPI_CK/DATA/RX_LOAD/TX_LOAD` (lines 48–51), the bit-banged ADC SPI
-signals `nADC_CS/ADC_MOSI/ADC_CLK/ADC_MISO` (lines 93–96), and
-`CODEC_SPI_CLK/DATA/CS/RESETN/MISO` (lines 201–205) — all similar slow
-control interfaces — with `set_false_path`. `PROM_SPI_*`/`TX_DAC_PWM` are
-simply missing the equivalent exception against the flagged fast clock
-(most likely `set_false_path -from [get_clocks VIRTUAL_clk_125mhz] -to
-[get_ports PROM_SPI_io*_io]`-style entries, or a `set_clock_groups
--asynchronous` between the flagged fast clock and each port's own
-functional clock — confirm which with `report_timing -through` on these
-ports in an interactive Vivado session before committing to one). This
-is a small, low-risk, pattern-consistent fix — not a case of needing
-unknown hardware timing specs.
+real functional clock, but `check_timing` was separately flagging a path
+from the *other*, faster reference clock domain that wasn't yet excepted.
+**Fixed, matching the design's own established pattern** (`RF_SPI_*`,
+ADC SPI, `CODEC_SPI_*` all use plain `set_false_path` for exactly this
+kind of slow control interface — lines 48–51, 93–96, 201–205):
+- `f82dc67` added `set_false_path -from [get_clocks clock_122_in_p] -to
+  [get_ports TX_DAC_PWM]` and `-from [get_clocks VIRTUAL_clk_125mhz] -to
+  [get_ports PROM_SPI_io0..3_io / ss_io[0]]` (output direction) —
+  verified by direct diff read.
+- The same build's `methodology.txt` still showed the *input*-direction
+  half of the report (`PROM_SPI_io*_io` are bidirectional `_io` ports, so
+  `check_timing` wants both directions excepted) — `2613c2f` added the
+  mirrored `set_false_path -from [get_ports PROM_SPI_io*_io] -to
+  [get_clocks VIRTUAL_clk_125mhz]` entries. Also verified by direct diff
+  read.
+
+**Not yet empirically re-confirmed**: the `methodology.txt`/
+`timing-summary.txt` currently on disk are from the build at git SHA
+`f82dc67` (confirmed via `manifest.json`) — i.e. *before* `2613c2f`'s
+input-direction fix. They still show the 4 `PROM_SPI_io0..3_io`
+"input delay... missing" (HIGH) lines from `TIMING-18`. That's expected
+given the timing, not a sign the fix failed — but it means one more
+`make vivado-build` is needed to get a fresh methodology report and
+confirm the input-side gap is actually closed, not just logically sound.
 
 (Note: `FPGA/documentation/Generating Configuration PROM file.docx` was
 checked — it's a GUI click-through for the PROM export step only
@@ -305,11 +313,10 @@ manifest write) finishes. The fix: `vivado-windows.sh` now computes
 `git_dirty` once, before backing up/launching Vivado, and exports it as
 `SATURN_GIT_DIRTY`; `common.tcl`'s `git_dirty` proc reads that env var
 first and only falls back to a live check if it's unset. Verified by
-direct read of both files. **Not yet empirically re-confirmed**: no fresh
-`make vivado-build` has been run since this fix to show a `manifest.json`
-with `git_dirty: false` on a clean tree — the existing `manifest.json` on
-disk still predates this fix and still says `true`. Worth one more build
-run to close this out completely.
+direct read of both files. **Empirically confirmed 2026-09-11**: the
+build at git SHA `f82dc67` produced `manifest.json` with `git_dirty:
+false` on a tree that had just been committed — independently verified by
+reading the current manifest. Fully closed.
 
 **Artifacts from the latest build, independently re-hashed and matching
 exactly:**
@@ -346,21 +353,19 @@ exactly:**
 7. ~~Run `make export-prom`~~ **Done** — `saturn-lab.bin`/`saturn-lab.prm`
    generated and hashed, recorded in §5.5 and `PROM_BIN_EXPORT.md`.
 8. **Remaining priority, before calling Phase 0 done**: work through the
-   §5.5 gaps in order of risk — (a) add real IQ output checks (wiring bug
-   itself is fixed as of `eacce67`, but there's still no output assertion),
-   (b) retain the corrected DUC warm-up settings and capture a formal
-   262,144-sample baseline, (c) triage the 23 CDC Critical findings — note
-   `TX_ENABLE` and `pcb_version_id[*]` already have timing false-paths yet
-   are still CDC-critical, so each needs an explicit synchronizer-or-waiver
-   decision, not just a timing fix, (d) add a `set_false_path`/
-   `set_clock_groups` exception between the flagged fast clock
-   (`VIRTUAL_clk_125mhz`/`clock_122_in_p`) and each port's own already-
-   constrained functional clock for `PROM_SPI_*`/`TX_DAC_PWM` — confirm the
-   exact clock pair with `report_timing -through` first; this follows the
-   same pattern already used for `RF_SPI_*`/`CODEC_SPI_*`/ADC-SPI signals,
-   see §5.5 item 4. ~~(e) fix the
-   manifest's `git_dirty` timing~~ **done in `eacce67`** — just needs one
-   fresh `make vivado-build` to confirm empirically (§5.5 item 5).
+   §5.5 gaps — (a) add real IQ output checks (wiring bug itself is fixed
+   as of `eacce67`, but there's still no output assertion), (b) retain the
+   corrected DUC warm-up settings and capture a formal 262,144-sample
+   baseline, (c) triage the 23 CDC Critical findings — note `TX_ENABLE`
+   and `pcb_version_id[*]` already have timing false-paths yet are still
+   CDC-critical, so each needs an explicit synchronizer-or-waiver
+   decision, not just a timing fix. ~~(d) PROM_SPI/TX_DAC_PWM timing
+   exceptions~~ **done in `f82dc67` + `2613c2f`** — one more
+   `make vivado-build` needed to regenerate `methodology.txt` and confirm
+   the input-direction fix empirically (§5.5 item 4). ~~(e) fix the
+   manifest's `git_dirty` timing~~ **done in `eacce67`, empirically
+   confirmed** (§5.5 item 5) — `git_dirty: false` now shows correctly.
+   **CDC triage (c) is the only remaining substantive Phase 0 blocker.**
 9. Only after all 5 Phase 0 acceptance criteria in `FPGA/lab/README.md`
    are genuinely met (not just "build completes"), start V28 telemetry
    work — cross-check the wire/register format against §5 so `P2_app`
