@@ -35,23 +35,23 @@ module IQModn_tb( );
 reg aclk = 0;
 reg aresetn = 1;
 
-reg cw_key_down;
-reg TX_ENABLE;
-reg protocol_2;
+reg cw_key_down = 1'b0;
+reg TX_ENABLE = 1'b0;
+reg protocol_2 = 1'b0;
 
-reg [63:0] TXIQIn_tdata;
-reg TXIQIn_tvalid;
+reg [47:0] TXIQIn_tdata = '0;
+reg TXIQIn_tvalid = 1'b0;
 wire TXIQIn_tready;
 
-reg Deinterleave;
-reg Byteswap;
+reg Deinterleave = 1'b0;
+reg Byteswap = 1'b0;
 
 
-reg [2:0] Modulation_Setup;
-reg IQEnable;
-reg Mux_Reset;
-reg [31:0] TXTestFreq;
-reg TX_Strobe;
+reg [2:0] Modulation_Setup = '0;
+reg IQEnable = 1'b0;
+reg Mux_Reset = 1'b0;
+reg [31:0] TXTestFreq = '0;
+reg TX_Strobe = 1'b0;
 
 //reg [31:0] keyer_config;
 // replaced by
@@ -69,7 +69,7 @@ wire m_axis_TXMod_tready;
 
 wire [47:0] m_axis_envelope_tdata;
 wire m_axis_envelope_tvalid;
-reg m_axis_envelope_tready;
+reg m_axis_envelope_tready = 1'b1;
             
 wire [15:0] m_axis_sidetoneampl_tdata;
 wire m_axis_sidetoneampl_tvalid;
@@ -110,7 +110,7 @@ IQBLKTB_wrapper UUT
     .Mux_Reset           (Mux_Reset),
     .TXIQIn_tdata        (TXIQIn_tdata),
     .TXIQIn_tready       (TXIQIn_tready),
-    .TXIQIn_tvalid       (TXIQIn_tdata),
+    .TXIQIn_tvalid       (TXIQIn_tvalid),
     .TXTestFreq          (TXTestFreq),
     .TX_ENABLE           (TX_ENABLE),
     .TX_OUTPUTENABLE     (TX_OUTPUTENABLE),

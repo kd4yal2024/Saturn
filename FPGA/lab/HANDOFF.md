@@ -190,6 +190,95 @@ watchdog diagnostics, build ID) should extend the existing ADC-overflow
 register block / status-packet convention that `P2_app` already reads,
 not introduce a second, parallel telemetry path.
 
+## 5.5 Build/functional signoff status — NOT complete (verified 2026-09-11)
+
+The build/export mechanics work, but this is a **V27 baseline build
+artifact, not a signed-off release**, and does not yet satisfy Phase 0
+acceptance criterion 4 in `FPGA/lab/README.md` ("no unexplained... critical
+DRC/CDC issues"). Every item below was independently reproduced, not just
+read from a report.
+
+| Area | Result | Status |
+|---|---|---|
+| Synthesis/implementation | 100% complete | Pass |
+| Setup timing | WNS +0.176 ns | Pass |
+| Hold timing | WHS +0.049 ns | Pass |
+| Routing | 0 failed/unrouted nets | Pass |
+| DRC | 0 errors, 0 critical warnings | Pass |
+| PROM export | Valid 32-Mbit layout | Pass |
+| Functional simulation | All 3 reach `$finish` | **Not sufficient for signoff** |
+| CDC | 23 Critical findings | **Review/fix required** |
+| I/O timing coverage | 11 inputs, 32 outputs missing delay | **Review required** |
+
+**1. IQ testbench had a real wiring bug**, not just a migration
+side-effect. `FPGA/IP/CODEC_IQMOD_IP/CODEC_IQMOD_IP.srcs/sim_1/imports/CODEC_IQMOD_IP/IQModCodectb.sv`
+instantiates the UUT with:
+```
+.TXIQIn_tvalid       (TXIQIn_tdata),
+```
+— a 64-bit data bus wired into a 1-bit valid input (verified by direct
+read of the file). The same mistake existed in the canonical copy. The
+connection is now corrected in all four maintained testbench copies and the
+control signals are initialized. `make sim-iqmod` reaches `$finish` after
+the migration; it remains a smoke check because it does not yet assert IQ
+output values or compare DSP metrics.
+
+**2. The simulation gate is a smoke gate only.**
+`FPGA/lab/tcl/sim-common.tcl` (`saturn_lab::run_simulation`, around line
+128) checks for fatal errors, `$finish`, and expected capture length —
+confirmed by direct read. It does not validate output values or compare
+DSP metrics. Confirmed by rerunning `python/analyze_ddc.py` myself:
+DDC fundamental exactly `-300000.0` Hz, SFDR `54.07` dBc — plausible. But
+the first DUC smoke capture was suspicious: its 16,384-sample discard left
+the 4,096 captured samples at `32760`–`32775` (offset-binary, mid-scale
+`32768`). After fixing launcher environment forwarding and rerunning with
+the intended 100,000-sample discard, the capture ranged `4156`–`61378`, with
+a 7.11 MHz fundamental at `-1.66 dBFS` and `60.87 dBc` SFDR. The flat result
+was therefore an insufficient warm-up artifact, not current evidence of a
+DUC failure. A 262,144-sample baseline remains useful for formal DSP
+regression, but is no longer a release blocker.
+
+**3. CDC is not signed off.** `results/vivado/cdc.txt` header table
+(independently confirmed):
+`CDC-1` 16 Critical, `CDC-7` 1 Critical, `CDC-12` 4 Critical, `CDC-13` 2
+Critical (= 23 Critical total), plus `CDC-2` 15 synchronizers missing
+`ASYNC_REG`. Some are inside XDMA/Xilinx-generated structures; others
+touch Saturn-level signals (TX_ENABLE, CODEC_MISO, ADC_MISO, board-version
+pins, resets, FIFO resets per the review) and need individual fixes or
+documented waivers. Confirmed: `FPGA/lab/tcl/reports.tcl`'s
+`implementation_quality_gate` only writes WNS/WHS/DRC fields to
+`quality-gate.txt` — **it does not check or reject CDC findings at all.**
+
+**4. External timing is incomplete.** `results/vivado/methodology.txt`
+names the unconstrained ports explicitly (confirmed by direct read):
+`PROM_SPI_io0..3_io`, `PROM_SPI_ss_io[0]`, and `TX_DAC_PWM` have no
+input/output delay relative to their clocks. `timing-summary.txt` reports
+0 unconstrained *internal* endpoints, but `check_timing` separately
+reports 4 input ports with no input delay at all, 7 more with only a
+false-path exception, and 32 output ports with only a false-path
+exception (11 + 32 lines up with the review's count). **WNS/WHS only
+qualify the paths that are actually constrained** — these ports need real
+constraints or documented async exceptions.
+
+**5. The manifest's `git_dirty: true` is a real artifact but not a
+regression.** Root-caused in `FPGA/lab/tcl/common.tcl`'s `git_dirty` proc:
+it runs `git diff`/`git status --porcelain` live, from *inside* the Vivado
+Tcl session, while `FPGA/saturn_project/saturn_project.xpr` (and other
+guarded files) are still in their Vivado-modified state — `scripts/vivado-windows.sh`
+only restores those files in its `EXIT` trap *after* the whole Vivado
+process (and thus the manifest write) has finished. So `git_dirty: true`
+in `manifest.json` reflects that in-run moment, not the final repo state
+(confirmed clean via `git status` right after the build completes). Fix
+would be to capture the dirty flag once, before backing up/launching
+Vivado, and thread that captured value into the manifest instead of
+re-checking live.
+
+**Artifacts from the latest build, independently re-hashed and matching
+exactly:**
+- `saturn-bcbd9c4c.bit`: `1e451743db68d736dbc9a12b668ae1007a1d540baf38e91bb5cc88358db333fc`
+- `saturn-lab.bin`: `18302f4bb33e306b3f481924b516c28dde2c5fe60fc5871cefc2752b3253dc84`
+- `saturn-lab.prm`: `33838c90f09bae99604c5f23ff78c3e1d658c0393e955c010d86e9371afecc24`
+
 ## 6. Prioritized path back on track
 
 1. **Checkpoint complete.** Commits `114a00a` and `f40132d` protect the
@@ -206,30 +295,32 @@ not introduce a second, parallel telemetry path.
    lint (`SATURN_LAB_LINT_OK`), formal watchdog `prove`+`cover`
    (k-induction pass, cover trace reached), and both Python DSP regression
    tests all pass on this machine.
-5. ~~Run `make vivado-build`~~ **Done and independently re-verified
-   2026-09-11**: `results/vivado/quality-gate.txt` shows WNS 0.176 ns, WHS
-   0.049 ns, 0 DRC errors, 0 DRC critical warnings. Bitstream
-   `results/vivado/saturn-a2e84943.bit` SHA256 independently recomputed
-   and matches `manifest.json` exactly:
-   `8710d9066a96e41babb439d58922f40f4aa2d6a702df4ea13613ca1535212d49`.
-   **Caveat**: `manifest.json`'s `git_sha` is `a2e8494` (the commit
-   *before* the Phase 0 checkpoint) with `git_dirty: true` — this build
-   predates commits `114a00a`/`f40132d`. No build has yet been run and
-   manifested against the actual checkpointed HEAD. Re-run
-   `make vivado-build` after resolving item 2 so the manifest reflects a
-   real commit, not a pre-checkpoint dirty tree.
-6. Run `make sim-iqmod` from the configured `Ubuntu` WSL distro (or a Windows
-   Vivado shell) to verify the nested-wrapper synchronization. The current
-   automation shell cannot execute `cmd.exe` (`Exec format error`), so this
-   run is still outstanding here.
-7. Run `make export-prom` after the validated bitstream build, then record the
-   generated BIN/PRM SHA256s alongside the settings in `PROM_BIN_EXPORT.md`.
-8. Only after all 5 Phase 0 acceptance criteria in `FPGA/lab/README.md`
-   are met, start V28 telemetry work — cross-check the wire/register
-   format against §5 so `P2_app` doesn't need a second protocol.
-9. Expand formal coverage from watchdog-only to `FIFO_Monitor.v` and
-   `DDCMux.v`, as already earmarked in their `rtl-tests/*/README.md`
-   files.
+5. ~~Run `make vivado-build`~~ **Done, current as of commit `bcbd9c4`
+   (2026-09-11)**: `saturn-bcbd9c4c.bit`, WNS/WHS/DRC all pass — see §5.5
+   for the full picture. **This does not mean Phase 0 acceptance
+   criterion 4 is met** — see §5.5 for the 23 CDC Critical findings and
+   unconstrained I/O timing that still need resolution or documented
+   waivers before this build can be called signed off.
+6. ~~Run `make sim-iqmod`~~ **Done** — reaches `$finish` — but see §5.5
+   item 1: the testbench itself has a wiring bug, so this does **not**
+   validate IQ modulation functionality. Fix the testbench before trusting
+   this result.
+7. ~~Run `make export-prom`~~ **Done** — `saturn-lab.bin`/`saturn-lab.prm`
+   generated and hashed, recorded in §5.5 and `PROM_BIN_EXPORT.md`.
+8. **New priority, before calling Phase 0 done**: work through the §5.5
+   gaps in order of risk — (a) add real IQ output checks, (b) retain the
+   corrected DUC warm-up settings and capture a formal baseline, (c) triage the 23 CDC
+   Critical findings (fix or document individual waivers), (d) add real
+   timing constraints or documented async exceptions for PROM_SPI/TX_DAC_PWM,
+   (e) fix the manifest's `git_dirty` timing so it reflects final repo
+   state, not mid-run state.
+9. Only after all 5 Phase 0 acceptance criteria in `FPGA/lab/README.md`
+   are genuinely met (not just "build completes"), start V28 telemetry
+   work — cross-check the wire/register format against §5 so `P2_app`
+   doesn't need a second protocol.
+10. Expand formal coverage from watchdog-only to `FIFO_Monitor.v` and
+    `DDCMux.v`, as already earmarked in their `rtl-tests/*/README.md`
+    files.
 
 ## 7. Open questions worth resolving with the user before continuing
 

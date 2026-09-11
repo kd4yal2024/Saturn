@@ -70,6 +70,9 @@ namespace eval saturn_lab {
 
     proc git_dirty {} {
         variable repo_dir
+        if {[info exists ::env(SATURN_GIT_DIRTY)] && $::env(SATURN_GIT_DIRTY) ne ""} {
+            return $::env(SATURN_GIT_DIRTY)
+        }
         if {[catch {exec git -C $repo_dir diff --quiet --ignore-submodules --}]} {
             return true
         }
