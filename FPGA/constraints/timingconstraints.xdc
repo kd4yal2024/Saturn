@@ -101,6 +101,11 @@ set_false_path -from [get_clocks VIRTUAL_clk_125mhz] -to [get_ports PROM_SPI_io1
 set_false_path -from [get_clocks VIRTUAL_clk_125mhz] -to [get_ports PROM_SPI_io2_io]
 set_false_path -from [get_clocks VIRTUAL_clk_125mhz] -to [get_ports PROM_SPI_io3_io]
 set_false_path -from [get_clocks VIRTUAL_clk_125mhz] -to [get_ports {PROM_SPI_ss_io[0]}]
+set_false_path -from [get_ports PROM_SPI_io0_io] -to [get_clocks VIRTUAL_clk_125mhz]
+set_false_path -from [get_ports PROM_SPI_io1_io] -to [get_clocks VIRTUAL_clk_125mhz]
+set_false_path -from [get_ports PROM_SPI_io2_io] -to [get_clocks VIRTUAL_clk_125mhz]
+set_false_path -from [get_ports PROM_SPI_io3_io] -to [get_clocks VIRTUAL_clk_125mhz]
+set_false_path -from [get_ports {PROM_SPI_ss_io[0]}] -to [get_clocks VIRTUAL_clk_125mhz]
 
 #RF analogue inputs (fwd, rev power etc)
 set_false_path -to [get_ports {nADC_CS[0]}]
@@ -249,5 +254,4 @@ set_false_path -to [get_ports {HPF_SEL2[0]}]
 # clock PLL
 #
 set_false_path -to [get_ports pll_cr]
-
 
