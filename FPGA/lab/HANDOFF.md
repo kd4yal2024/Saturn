@@ -234,9 +234,9 @@ not introduce a second, parallel telemetry path.
   the canonical checked-in project path.
 - The guarded launcher now has a nested-BD simulation synchronization step;
   verify it with `make sim-iqmod` in the configured Vivado environment.
-- Is a G2 unit currently connected for the CM4/XDMA programming and
-  hardware-in-the-loop steps, or is work still simulation/synthesis-only
-  for now?
+- G2 hardware is not currently connected. CM4/XDMA programming and
+  hardware-in-the-loop tests remain deferred; current work is
+  simulation/synthesis-only.
 - Should `Ubuntu` be made the default WSL distro (`wsl --set-default
   Ubuntu`) to remove the distro-mismatch trap for future sessions, or is
   `Ubuntu-24.04` needed as default for something else?
