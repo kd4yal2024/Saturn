@@ -9,8 +9,9 @@ Codex (or anyone else) without re-deriving or redoing what's already done.
 
 - Repo: `C:\Users\jd\Saturn`, remote `kd4yal2024/Saturn` (fork of
   `laurencebarker/Saturn`).
-- Branch: `fpga-v28-lab`, **0 commits ahead of `main`** — every change
-  described below exists only in the working tree right now.
+- Branch: `fpga-v28-lab`, with safety checkpoint commit
+  `114a00a Add Saturn FPGA Phase 0 lab and verification gates`; the
+  worktree is clean.
 - Vivado 2023.1 ML Standard is installed at `C:\Xilinx\Vivado\2023.1`,
   matching the version the project itself pins (see `FPGA/README.md`
   changelog: "V9, Sept 29 2023: updated project to vivado 2023.1").
@@ -18,16 +19,26 @@ Codex (or anyone else) without re-deriving or redoing what's already done.
 - Golden fallback image `FPGA/saturnfallback.bin` exists. `FPGA/README.md`:
   "DON'T program this unless you need to!"
 
-## 2. URGENT — uncommitted work is currently unprotected
+## 2. Safety checkpoint
 
-Nothing below is committed anywhere. There is no backup other than the
-working tree on disk.
+The Phase 0 lab and the reviewed RTL/testbench changes are now protected by
+commit `114a00a`. The checkpoint was created before further build/debug work;
+the worktree is currently clean.
 
-**Untracked** (`git status`):
+The checkpoint contains:
+
+- `FPGA/lab/` — the entire Phase 0 lab (Makefile, tcl/, formal/, python/,
+  scripts/, rtl-tests/, vectors/)
+- The reviewed RTL/testbench updates listed below.
+
+The original handoff inventory was written before the checkpoint and listed
+these as uncommitted:
+
+**Previously untracked**:
 - `FPGA/lab/` — the entire Phase 0 lab (Makefile, tcl/, formal/, python/,
   scripts/, rtl-tests/, vectors/)
 
-**Modified, uncommitted**:
+**Previously modified**:
 - `FPGA/IP/CODEC_IQMOD_IP/.../IQModCodectb.sv`
 - `FPGA/IP/DDCIP/DDCIP.srcs/sim_1/imports/testbenches/RX_DDC_tb.v`
 - `FPGA/IP/DUCIP/TX_DUC_tb.v`
@@ -38,11 +49,9 @@ working tree on disk.
   exposes an internal counter to the formal harness; it has no effect on
   normal synthesis.
 
-**Action**: commit this before anything else. Don't `git clean`, `git
-reset --hard`, or start a second clone (e.g. at `C:\xilinxdesigns\Saturn`,
-which an earlier planning doc suggested) — that would abandon all of it,
-since `FPGA/lab/` isn't committed anywhere to be picked up by a fresh
-clone.
+Do not `git clean`, `git reset --hard`, or start a second clone (e.g. at
+`C:\xilinxdesigns\Saturn`, which an earlier planning doc suggested). The
+active work is in `C:\Users\jd\Saturn`.
 
 (Note: `.gitattributes` already normalizes line endings — the CRLF/LF
 warnings git prints on these files are expected `text=auto` behavior, not
@@ -50,7 +59,8 @@ a misconfiguration. No action needed there.)
 
 ## 3. What's already built — Phase 0 lab inventory
 
-Everything below exists now, in `FPGA/lab/`, uncommitted (see §2).
+Everything below exists now, in `FPGA/lab/`, and is protected by the
+checkpoint in §2.
 
 ### Makefile targets (`FPGA/lab/Makefile`)
 
@@ -117,7 +127,7 @@ Full detail was already given in this conversation; short version for
 reference:
 
 1. Don't clone fresh into `C:\xilinxdesigns\Saturn` — real work is at
-   `C:\Users\jd\Saturn` on `fpga-v28-lab`, entirely uncommitted (§2).
+   `C:\Users\jd\Saturn` on `fpga-v28-lab`, protected by the checkpoint (§2).
 2. The plan's Steps 1, 5, 6, 9, 10, 11, 13, 16 describe things that
    already exist here, often in a more correct form (clock period already
    fixed, branch already created, watchdog already formally proved, build
@@ -155,8 +165,7 @@ not introduce a second, parallel telemetry path.
 
 ## 6. Prioritized path back on track
 
-1. **Commit or explicitly checkpoint current state.** Nothing here is
-   backed up yet.
+1. **Checkpoint complete.** Commit `114a00a` protects the current state.
 2. Run `make doctor` in WSL — confirm the lab environment is actually
    sane on this machine and record the fallback SHA256 somewhere outside
    the repo.
