@@ -128,9 +128,11 @@ explicitly defer formal + self-checking coverage for those two modules to
   Critical warnings and unconstrained paths still require human review.
 - Produces a JSON manifest: git SHA, dirty-tree flag, Vivado version,
   SHA256 of the `.bit`.
-- **No PROM/BIN generation yet** — README states this explicitly: "The
-  first known-good GUI PROM export must be recorded before that step is
-  automated."
+- PROM/BIN generation is now scripted in `tcl/export-prom.tcl` and recorded
+  in `PROM_BIN_EXPORT.md`, using the authoritative uncompressed 32-Mbit
+  SPIx1 multiboot layout. The script still needs to be executed once from a
+  working Vivado 2023.1 Windows shell to capture the new lab image's BIN/PRM
+  hashes.
 
 ### Known open issue: IQ-modulation sim can't just be "repeated"
 The checked-in IQ-mod IP test project (`IQBLKTB`) was last saved in
@@ -216,11 +218,12 @@ not introduce a second, parallel telemetry path.
    manifested against the actual checkpointed HEAD. Re-run
    `make vivado-build` after resolving item 2 so the manifest reflects a
    real commit, not a pre-checkpoint dirty tree.
-6. Run `make sim-iqmod` to verify the new nested-wrapper synchronization;
-   then perform the permanent source-BD interface normalization if desired.
-7. Do the PROM/BIN GUI export once, record the exact settings, then
-   automate it in Tcl — explicitly flagged as the last unfinished Phase 0
-   automation piece.
+6. Run `make sim-iqmod` from the configured `Ubuntu` WSL distro (or a Windows
+   Vivado shell) to verify the nested-wrapper synchronization. The current
+   automation shell cannot execute `cmd.exe` (`Exec format error`), so this
+   run is still outstanding here.
+7. Run `make export-prom` after the validated bitstream build, then record the
+   generated BIN/PRM SHA256s alongside the settings in `PROM_BIN_EXPORT.md`.
 8. Only after all 5 Phase 0 acceptance criteria in `FPGA/lab/README.md`
    are met, start V28 telemetry work — cross-check the wire/register
    format against §5 so `P2_app` doesn't need a second protocol.
