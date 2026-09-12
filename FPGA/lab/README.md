@@ -99,6 +99,10 @@ runs:
 Set `SATURN_VIVADO_JOBS` to change the default of eight jobs. Set
 `SATURN_SKIP_RESET=1` only when intentionally resuming existing run products.
 
+`make vivado-validate` skips compile-order refresh by default because Vivado
+can hang while migrating older projects. Set
+`SATURN_VALIDATE_UPDATE_COMPILE_ORDER=1` to force that refresh for diagnosis.
+
 Generated files under `results/vivado/` include:
 
 - timing summary with unconstrained paths

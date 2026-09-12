@@ -11,7 +11,12 @@ set report_file [file join $output_dir validation.txt]
 puts "Opening $project_file"
 open_project $project_file
 saturn_lab::ensure_managed_wrapper
-update_compile_order -fileset sources_1
+# Validation is intentionally metadata-only. Vivado 2023.1 can hang while
+# refreshing compile order in a project migrated from an older release. The
+# build and simulation flows perform this refresh when it is required.
+if {[saturn_lab::env_or SATURN_VALIDATE_UPDATE_COMPILE_ORDER 0] eq "1"} {
+    update_compile_order -fileset sources_1
+}
 
 set expected_part xc7a200tfbg676-2
 set actual_part [get_property PART [current_project]]
