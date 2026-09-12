@@ -77,6 +77,8 @@ From WSL, the supplied launcher uses the Windows installation at
 cd /mnt/c/Users/jd/Saturn/FPGA/lab
 make vivado-validate
 make vivado-build
+make vivado-cdc
+make export-prom
 ```
 
 The first command opens and validates the checked-in project without running
@@ -107,8 +109,8 @@ Generated files under `results/vivado/` include:
 
 - timing summary with unconstrained paths
 - hierarchical utilization
-- DRC, clock interaction, CDC, and methodology reports
-- machine-readable setup/hold and DRC-error quality gate
+- DRC, clock interaction, methodology, and raw/reviewed/waived CDC reports
+- machine-readable setup/hold, DRC-error, and unwaived-Critical-CDC quality gate
 - copied `.bit` artifact
 - JSON manifest containing Git identity, dirty state, Vivado version, and SHA256
 
@@ -118,9 +120,14 @@ layout used by Saturn (golden at `0x00000000`, primary at `0x00980000`, with
 the two timer payloads at `0x0097FC00` and `0x01300000`). Run it only after a
 validated bitstream build from a Vivado 2023.1 Tcl console.
 
-The automated quality gate rejects negative setup or hold slack and any DRC
-with `Error` severity. Critical-warning and unconstrained-path reports still
-require engineering review before a build is accepted.
+The automated quality gate rejects negative setup or hold slack, any DRC with
+`Error` severity, and any unwaived CDC finding with `Critical` severity. CDC
+waivers are endpoint-bound in `tcl/cdc-waivers.tcl`; hierarchy drift or a new
+destination therefore fails closed. The reviewed contracts cover Xilinx XDMA
+internals, diagnostic clock-monitor sampling, static PCB revision straps,
+protocol-timed SPI MISO sampling, and XPM FIFO asynchronous-reset assertion
+with synchronized release. Critical-warning and unconstrained-path reports
+still require engineering review before a build is accepted.
 
 ## Vivado simulations
 
@@ -139,7 +146,8 @@ expected capture length. Fast smoke-test defaults are:
 
 - DDC: 256 captured samples after 64 discarded samples
 - DUC: 4096 captured samples after 16384 discarded samples
-- IQ modulation: 100000 ns key-down interval
+- IQ modulation: 16 accepted CW samples during a 100000 ns key-down interval;
+  Q must be zero and I must follow the programmed monotonic 8192-count ramp
 
 Override those defaults for the original full-length regressions:
 
@@ -147,33 +155,29 @@ Override those defaults for the original full-length regressions:
 SATURN_DDC_SIM_SAMPLES=4096 SATURN_DDC_SIM_DISCARD=100 make sim-ddc
 SATURN_DUC_SIM_SAMPLES=262144 SATURN_DUC_SIM_DISCARD=100000 make sim-duc
 SATURN_IQMOD_KEY_HOLD_NS=20000000 make sim-iqmod
+SATURN_IQMOD_SIM_SAMPLES=64 make sim-iqmod
 ```
 
 Set `SATURN_SIM_WAVES=1` when an interactive waveform database is useful.
 
 If XSim stops during compile/analyze after a crashed run, set
-`SATURN_SIM_FRESH=1` to archive the existing simulator cache before launch:
+`SATURN_SIM_FRESH=1` to archive the existing simulator cache from WSL before
+Windows Vivado starts:
 
 ```bash
 SATURN_SIM_FRESH=1 make sim-iqmod
 ```
+If Windows still has the directory open, the launcher stops with an explicit
+message; close the matching `vivado.exe`, `xvlog.exe`, `xelab.exe`, or
+`xsim.exe` process and retry.
 Wave capture is disabled by default in batch smoke tests.
 
-The checked-in IQ-modulation test project was last saved by Vivado 2021.2.
-Vivado 2023.1 can leave a stale hierarchical child wrapper in the ignored
-`CODEC_IQMOD_IP.ip_user_files` tree while regenerating the outer wrapper under
-`.gen`. The stale child omits `S_AXI_keyerBRAM` burst/cache/lock ports, while
-the fresh outer wrapper connects them, producing XSIM `cannot find port`
-errors. `sim-common.tcl` now synchronizes the generated nested-BD top wrapper
-into the ignored user-files location before compiling. Do not patch generated
-wrapper Verilog to conceal this.
-
-The permanent source-design cleanup is to normalize the child
-`S_AXI_keyerBRAM` interface properties (`HAS_BURST`, `HAS_CACHE`, and
-`HAS_LOCK`) to match the parent AXI-VIP interface (currently all `0`), then
-validate/save both source BDs and regenerate child before parent output
-products. The synchronization step keeps the regression reproducible while
-that Vivado GUI/Tcl migration is completed.
+The IQ-modulation source BDs and catalog IP are persistently migrated to
+Vivado 2023.1. `make vivado-migrate-iqmod` is the guarded, write-back migration
+target for intentional future catalog changes; ordinary Vivado commands still
+restore incidental project-file churn. `sim-common.tcl` synchronizes nested-BD
+simulation wrappers into the ignored user-files tree before compile because
+Vivado keeps both generated locations.
 
 The DDC and canonical DUC testbench clocks are 122.88 MHz
 (`8.138020833 ns`), matching Saturn hardware.

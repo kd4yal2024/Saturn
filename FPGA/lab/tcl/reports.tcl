@@ -1,3 +1,31 @@
+proc saturn_lab::write_cdc_reports {output_dir} {
+    variable cdc_critical_count
+
+    # Establish the complete routed finding set before applying reviewed,
+    # endpoint-bound waivers.  Keep raw, waived, reviewed, and gate inputs as
+    # separate artifacts so every production decision remains auditable.
+    report_cdc -details -no_waiver \
+        -file [file join $output_dir cdc-raw.txt]
+    source [file join $saturn_lab::tcl_dir cdc-waivers.tcl]
+    report_cdc -details -show_waiver \
+        -file [file join $output_dir cdc-reviewed.txt]
+    report_cdc -details -waived \
+        -file [file join $output_dir cdc-waived.txt]
+    report_waivers -type CDC \
+        -file [file join $output_dir cdc-waivers.txt]
+
+    # Run the unwaived report last.  get_cdc_violations then addresses exactly
+    # the result set used by the production gate, without relying on parsing a
+    # human-readable report.
+    report_cdc -details -name saturn_cdc_unwaived \
+        -file [file join $output_dir cdc.txt]
+    set critical [get_cdc_violations -name saturn_cdc_unwaived -quiet \
+        -filter {SEVERITY == Critical}]
+    set cdc_critical_count [llength $critical]
+    puts "Unwaived CDC Critical count: $cdc_critical_count"
+    return $cdc_critical_count
+}
+
 proc saturn_lab::write_reports {output_dir synth_run impl_run} {
     file mkdir $output_dir
 
@@ -9,14 +37,7 @@ proc saturn_lab::write_reports {output_dir synth_run impl_run} {
     report_clock_interaction \
         -file [file join $output_dir clock-interaction.txt]
 
-    if {[catch {
-        report_cdc -details -file [file join $output_dir cdc.txt]
-    } message]} {
-        set stream [open [file join $output_dir cdc-unavailable.txt] w]
-        puts $stream $message
-        close $stream
-        puts "WARNING: report_cdc was unavailable: $message"
-    }
+    write_cdc_reports $output_dir
 
     if {[catch {
         report_methodology -file [file join $output_dir methodology.txt]
@@ -32,6 +53,7 @@ proc saturn_lab::write_reports {output_dir synth_run impl_run} {
 }
 
 proc saturn_lab::implementation_quality_gate {output_dir} {
+    variable cdc_critical_count
     set setup_paths [get_timing_paths -quiet -delay_type max -max_paths 1]
     set hold_paths [get_timing_paths -quiet -delay_type min -max_paths 1]
     if {[llength $setup_paths] == 0 || [llength $hold_paths] == 0} {
@@ -57,9 +79,10 @@ proc saturn_lab::implementation_quality_gate {output_dir} {
     puts $stream "WHS_NS\t$whs"
     puts $stream "DRC_ERRORS\t$drc_errors"
     puts $stream "DRC_CRITICAL_WARNINGS\t$drc_critical_warnings"
+    puts $stream "CDC_CRITICAL_UNWAIVED\t$cdc_critical_count"
     close $stream
 
-    puts "Implementation quality: WNS=$wns ns, WHS=$whs ns, DRC errors=$drc_errors, DRC critical warnings=$drc_critical_warnings"
+    puts "Implementation quality: WNS=$wns ns, WHS=$whs ns, DRC errors=$drc_errors, DRC critical warnings=$drc_critical_warnings, unwaived CDC critical=$cdc_critical_count"
     set failures {}
     if {$wns < 0.0} {
         lappend failures "negative setup slack ($wns ns)"
@@ -69,6 +92,9 @@ proc saturn_lab::implementation_quality_gate {output_dir} {
     }
     if {$drc_errors > 0} {
         lappend failures "$drc_errors DRC error(s)"
+    }
+    if {$cdc_critical_count > 0} {
+        lappend failures "$cdc_critical_count unwaived CDC Critical finding(s)"
     }
     if {[llength $failures] > 0} {
         error "Implementation quality gate failed: [join $failures {; }]"

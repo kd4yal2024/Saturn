@@ -142,6 +142,7 @@ begin
             if(key_down && keyer_enable)
             begin
                 ramp_length_reg <= (ramp_length << 2);
+                bram_enable <= 1;                       // zero-delay path also reads the ramp RAM
                 if(protocol_2 == 1)
                     address_increment <= 4;             // 1 word steps for protocol 2
                 else 

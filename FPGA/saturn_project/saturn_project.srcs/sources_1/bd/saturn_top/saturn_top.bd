@@ -138,7 +138,8 @@
         "AXI_SPI_ADC_0": "",
         "D_register_0": "",
         "Usr_Reg_Access_0": "",
-        "AXIL_SPIWriter_0": ""
+        "AXIL_SPIWriter_0": "",
+        "Double_D_register_TX_ENABLE": ""
       },
       "RF_interfaces": {
         "AttenDrivers": {
@@ -368,7 +369,8 @@
         "regmux_2_1_1": "",
         "xlslice_wdogoverride": "",
         "xlslice_HPFSelect": "",
-        "util_vector_logic_0": ""
+        "util_vector_logic_0": "",
+        "Double_D_register_TX_ENABLE": ""
       },
       "audio_codec_0": "",
       "clock_generator": {
@@ -10178,6 +10180,62 @@
                 "direction": "I"
               }
             }
+          },
+          "Double_D_register_TX_ENABLE": {
+            "vlnv": "xilinx.com:module_ref:Double_D_register:1.0",
+            "xci_name": "saturn_top_Double_D_register_TX_ENABLE_0",
+            "xci_path": "ip\\saturn_top_Double_D_register_TX_ENABLE_0\\saturn_top_Double_D_register_TX_ENABLE_0.xci",
+            "inst_hier_path": "PCIe/Double_D_register_TX_ENABLE",
+            "parameters": {
+              "DATA_WIDTH": {
+                "value": "1"
+              }
+            },
+            "reference_info": {
+              "ref_type": "hdl",
+              "ref_name": "Double_D_register",
+              "boundary_crc": "0x0"
+            },
+            "ports": {
+              "aclk": {
+                "type": "clk",
+                "direction": "I",
+                "parameters": {
+                  "FREQ_HZ": {
+                    "value": "122880000",
+                    "value_src": "ip_prop"
+                  },
+                  "PHASE": {
+                    "value": "0.0",
+                    "value_src": "ip_prop"
+                  },
+                  "CLK_DOMAIN": {
+                    "value": "saturn_top_clk_wiz_0_0_clk_out1",
+                    "value_src": "default_prop"
+                  }
+                }
+              },
+              "din": {
+                "direction": "I",
+                "left": "0",
+                "right": "0",
+                "parameters": {
+                  "PortType": {
+                    "value": "undef",
+                    "value_src": "ip_prop"
+                  },
+                  "PortType.PROP_SRC": {
+                    "value": "false",
+                    "value_src": "ip_prop"
+                  }
+                }
+              },
+              "dout": {
+                "direction": "O",
+                "left": "0",
+                "right": "0"
+              }
+            }
           }
         },
         "interface_nets": {
@@ -10498,6 +10556,12 @@
               "axi_resetn"
             ]
           },
+          "Double_D_register_TX_ENABLE_dout": {
+            "ports": [
+              "Double_D_register_TX_ENABLE/dout",
+              "xlconcat_0/In6"
+            ]
+          },
           "Double_D_register_syncareset1_dout": {
             "ports": [
               "Double_D_register_syncareset1/dout",
@@ -10550,7 +10614,7 @@
           "TX_ENABLE_1": {
             "ports": [
               "TX_ENABLE",
-              "xlconcat_0/In6"
+              "Double_D_register_TX_ENABLE/din"
             ]
           },
           "Usr_Reg_Access_0_Usr_Reg_Data": {
@@ -10602,7 +10666,8 @@
               "AXIL_ConfigReg_256_2/aclk",
               "AXI_SPI_ADC_0/aclk",
               "D_register_0/aclk",
-              "AXIL_SPIWriter_0/aclk"
+              "AXIL_SPIWriter_0/aclk",
+              "Double_D_register_TX_ENABLE/aclk"
             ]
           },
           "clock_mon_1": {
@@ -26889,6 +26954,72 @@
                 "value": "1"
               }
             }
+          },
+          "Double_D_register_TX_ENABLE": {
+            "vlnv": "xilinx.com:module_ref:Double_D_register:1.0",
+            "xci_name": "saturn_top_Double_D_register_TX_ENABLE_1",
+            "xci_path": "ip\\saturn_top_Double_D_register_TX_ENABLE_1\\saturn_top_Double_D_register_TX_ENABLE_1.xci",
+            "inst_hier_path": "Transmitter/Double_D_register_TX_ENABLE",
+            "parameters": {
+              "DATA_WIDTH": {
+                "value": "1"
+              }
+            },
+            "reference_info": {
+              "ref_type": "hdl",
+              "ref_name": "Double_D_register",
+              "boundary_crc": "0x0"
+            },
+            "ports": {
+              "aclk": {
+                "type": "clk",
+                "direction": "I",
+                "parameters": {
+                  "FREQ_HZ": {
+                    "value": "122880000",
+                    "value_src": "ip_prop"
+                  },
+                  "PHASE": {
+                    "value": "0.0",
+                    "value_src": "ip_prop"
+                  },
+                  "CLK_DOMAIN": {
+                    "value": "saturn_top_clk_wiz_0_0_clk_out1",
+                    "value_src": "default_prop"
+                  }
+                }
+              },
+              "din": {
+                "direction": "I",
+                "left": "0",
+                "right": "0",
+                "parameters": {
+                  "PortType": {
+                    "value": "undef",
+                    "value_src": "ip_prop"
+                  },
+                  "PortType.PROP_SRC": {
+                    "value": "false",
+                    "value_src": "ip_prop"
+                  }
+                }
+              },
+              "dout": {
+                "direction": "O",
+                "left": "0",
+                "right": "0",
+                "parameters": {
+                  "PortType": {
+                    "value": "undef",
+                    "value_src": "ip_prop"
+                  },
+                  "PortType.PROP_SRC": {
+                    "value": "false",
+                    "value_src": "ip_prop"
+                  }
+                }
+              }
+            }
           }
         },
         "interface_nets": {
@@ -26936,6 +27067,12 @@
               "TXMagnitude"
             ]
           },
+          "Double_D_register_TX_ENABLE_dout": {
+            "ports": [
+              "Double_D_register_TX_ENABLE/dout",
+              "IQ_Modulation_Select/TX_ENABLE"
+            ]
+          },
           "IQ_Modulation_Select_TX_OPENABLE": {
             "ports": [
               "IQ_Modulation_Select/TX_OUTPUTENABLE",
@@ -26948,7 +27085,8 @@
               "IQ_Modulation_Select/clk122",
               "TX_DUC_0/clk122",
               "TX_Envelope/clk122",
-              "regmux_2_1_1/aclk"
+              "regmux_2_1_1/aclk",
+              "Double_D_register_TX_ENABLE/aclk"
             ]
           },
           "TXConfig_1": {
@@ -26985,7 +27123,7 @@
           "TX_ENABLE_1": {
             "ports": [
               "TX_ENABLE",
-              "IQ_Modulation_Select/TX_ENABLE"
+              "Double_D_register_TX_ENABLE/din"
             ]
           },
           "TX_LO_Tune_1": {

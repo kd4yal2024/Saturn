@@ -7,16 +7,16 @@
       "name": "IQCODECBLK",
       "rev_ctrl_bd_flag": "RevCtrlBdOff",
       "synth_flow_mode": "Hierarchical",
-      "tool_version": "2021.2",
+      "tool_version": "2023.1",
       "validated": "true"
     },
     "design_tree": {
-      "axi_vip_0": "",
       "xlconcat_0": "",
       "IQ_Modulation_Select_0": "",
       "audio_codec_0": "",
-      "dds_compiler_0": "",
-      "axis_data_fifo_0": ""
+      "axi_vip_0": "",
+      "axis_data_fifo_0": "",
+      "dds_compiler_0": ""
     },
     "ports": {
       "CWKeyerEnable": {
@@ -232,97 +232,6 @@
       }
     },
     "components": {
-      "axi_vip_0": {
-        "vlnv": "xilinx.com:ip:axi_vip:1.1",
-        "xci_name": "IQCODECBLK_axi_vip_0_0",
-        "xci_path": "ip\\IQCODECBLK_axi_vip_0_0\\IQCODECBLK_axi_vip_0_0.xci",
-        "inst_hier_path": "axi_vip_0",
-        "parameters": {
-          "ADDR_WIDTH": {
-            "value": "32"
-          },
-          "ARUSER_WIDTH": {
-            "value": "0"
-          },
-          "AWUSER_WIDTH": {
-            "value": "0"
-          },
-          "BUSER_WIDTH": {
-            "value": "0"
-          },
-          "DATA_WIDTH": {
-            "value": "32"
-          },
-          "HAS_BRESP": {
-            "value": "1"
-          },
-          "HAS_BURST": {
-            "value": "0"
-          },
-          "HAS_CACHE": {
-            "value": "0"
-          },
-          "HAS_LOCK": {
-            "value": "0"
-          },
-          "HAS_PROT": {
-            "value": "1"
-          },
-          "HAS_QOS": {
-            "value": "0"
-          },
-          "HAS_REGION": {
-            "value": "0"
-          },
-          "HAS_RRESP": {
-            "value": "1"
-          },
-          "HAS_WSTRB": {
-            "value": "1"
-          },
-          "ID_WIDTH": {
-            "value": "0"
-          },
-          "INTERFACE_MODE": {
-            "value": "MASTER"
-          },
-          "PROTOCOL": {
-            "value": "AXI4"
-          },
-          "READ_WRITE_MODE": {
-            "value": "READ_WRITE"
-          },
-          "RUSER_WIDTH": {
-            "value": "0"
-          },
-          "SUPPORTS_NARROW": {
-            "value": "0"
-          },
-          "WUSER_WIDTH": {
-            "value": "0"
-          }
-        },
-        "interface_ports": {
-          "M_AXI": {
-            "vlnv": "xilinx.com:interface:aximm_rtl:1.0",
-            "mode": "Master",
-            "address_space_ref": "Master_AXI",
-            "base_address": {
-              "minimum": "0x00000000",
-              "maximum": "0xFFFFFFFF",
-              "width": "32"
-            }
-          }
-        },
-        "addressing": {
-          "address_spaces": {
-            "Master_AXI": {
-              "range": "4G",
-              "width": "32"
-            }
-          }
-        }
-      },
       "xlconcat_0": {
         "vlnv": "xilinx.com:ip:xlconcat:2.1",
         "xci_name": "IQCODECBLK_xlconcat_0_0",
@@ -497,6 +406,122 @@
                 "value": "0",
                 "value_src": "auto_prop"
               }
+            },
+            "port_maps": {
+              "ARADDR": {
+                "physical_name": "S_AXI_keyerBRAM_araddr",
+                "direction": "I",
+                "left": "31",
+                "right": "0"
+              },
+              "ARLEN": {
+                "physical_name": "S_AXI_keyerBRAM_arlen",
+                "direction": "I",
+                "left": "7",
+                "right": "0"
+              },
+              "ARPROT": {
+                "physical_name": "S_AXI_keyerBRAM_arprot",
+                "direction": "I",
+                "left": "2",
+                "right": "0"
+              },
+              "ARREADY": {
+                "physical_name": "S_AXI_keyerBRAM_arready",
+                "direction": "O"
+              },
+              "ARVALID": {
+                "physical_name": "S_AXI_keyerBRAM_arvalid",
+                "direction": "I"
+              },
+              "AWADDR": {
+                "physical_name": "S_AXI_keyerBRAM_awaddr",
+                "direction": "I",
+                "left": "31",
+                "right": "0"
+              },
+              "AWLEN": {
+                "physical_name": "S_AXI_keyerBRAM_awlen",
+                "direction": "I",
+                "left": "7",
+                "right": "0"
+              },
+              "AWPROT": {
+                "physical_name": "S_AXI_keyerBRAM_awprot",
+                "direction": "I",
+                "left": "2",
+                "right": "0"
+              },
+              "AWREADY": {
+                "physical_name": "S_AXI_keyerBRAM_awready",
+                "direction": "O"
+              },
+              "AWVALID": {
+                "physical_name": "S_AXI_keyerBRAM_awvalid",
+                "direction": "I"
+              },
+              "BREADY": {
+                "physical_name": "S_AXI_keyerBRAM_bready",
+                "direction": "I"
+              },
+              "BRESP": {
+                "physical_name": "S_AXI_keyerBRAM_bresp",
+                "direction": "O",
+                "left": "1",
+                "right": "0"
+              },
+              "BVALID": {
+                "physical_name": "S_AXI_keyerBRAM_bvalid",
+                "direction": "O"
+              },
+              "RDATA": {
+                "physical_name": "S_AXI_keyerBRAM_rdata",
+                "direction": "O",
+                "left": "31",
+                "right": "0"
+              },
+              "RLAST": {
+                "physical_name": "S_AXI_keyerBRAM_rlast",
+                "direction": "O"
+              },
+              "RREADY": {
+                "physical_name": "S_AXI_keyerBRAM_rready",
+                "direction": "I"
+              },
+              "RRESP": {
+                "physical_name": "S_AXI_keyerBRAM_rresp",
+                "direction": "O",
+                "left": "1",
+                "right": "0"
+              },
+              "RVALID": {
+                "physical_name": "S_AXI_keyerBRAM_rvalid",
+                "direction": "O"
+              },
+              "WDATA": {
+                "physical_name": "S_AXI_keyerBRAM_wdata",
+                "direction": "I",
+                "left": "31",
+                "right": "0"
+              },
+              "WLAST": {
+                "physical_name": "S_AXI_keyerBRAM_wlast",
+                "direction": "I"
+              },
+              "WREADY": {
+                "physical_name": "S_AXI_keyerBRAM_wready",
+                "direction": "O"
+              },
+              "WSTRB": {
+                "physical_name": "S_AXI_keyerBRAM_wstrb",
+                "direction": "I",
+                "left": "3",
+                "right": "0"
+              },
+              "WVALID": {
+                "physical_name": "S_AXI_keyerBRAM_wvalid",
+                "direction": "I"
+              }
             }
           },
           "TX_IQ_in": {
@@ -556,6 +581,22 @@
                 "value": "0",
                 "value_src": "strong"
               }
+            },
+            "port_maps": {
+              "TDATA": {
+                "physical_name": "TX_IQ_in_tdata",
+                "direction": "I",
+                "left": "47",
+                "right": "0"
+              },
+              "TVALID": {
+                "physical_name": "TX_IQ_in_tvalid",
+                "direction": "I"
+              },
+              "TREADY": {
+                "physical_name": "TX_IQ_in_tready",
+                "direction": "O"
+              }
             }
           },
           "m_axis_TXMod": {
@@ -604,16 +645,60 @@
                 "value_src": "auto_prop"
               },
               "TDEST_WIDTH": {
-                "value": "8",
+                "value": "1",
                 "value_src": "auto_prop"
               },
               "TID_WIDTH": {
-                "value": "8",
+                "value": "1",
                 "value_src": "auto_prop"
               },
               "TUSER_WIDTH": {
                 "value": "1",
                 "value_src": "auto_prop"
+              }
+            },
+            "port_maps": {
+              "TID": {
+                "physical_name": "m_axis_TXMod_tid",
+                "direction": "O",
+                "left": "7",
+                "right": "0"
+              },
+              "TDEST": {
+                "physical_name": "m_axis_TXMod_tdest",
+                "direction": "O",
+                "left": "7",
+                "right": "0"
+              },
+              "TDATA": {
+                "physical_name": "m_axis_TXMod_tdata",
+                "direction": "O",
+                "left": "47",
+                "right": "0"
+              },
+              "TKEEP": {
+                "physical_name": "m_axis_TXMod_tkeep",
+                "direction": "O",
+                "left": "0",
+                "right": "0"
+              },
+              "TLAST": {
+                "physical_name": "m_axis_TXMod_tlast",
+                "direction": "O"
+              },
+              "TUSER": {
+                "physical_name": "m_axis_TXMod_tuser",
+                "direction": "O",
+                "left": "0",
+                "right": "0"
+              },
+              "TVALID": {
+                "physical_name": "m_axis_TXMod_tvalid",
+                "direction": "O"
+              },
+              "TREADY": {
+                "physical_name": "m_axis_TXMod_tready",
+                "direction": "I"
               }
             }
           },
@@ -674,6 +759,22 @@
                 "value": "0",
                 "value_src": "const_prop"
               }
+            },
+            "port_maps": {
+              "TDATA": {
+                "physical_name": "m_axis_envelope_tdata",
+                "direction": "O",
+                "left": "47",
+                "right": "0"
+              },
+              "TVALID": {
+                "physical_name": "m_axis_envelope_tvalid",
+                "direction": "O"
+              },
+              "TREADY": {
+                "physical_name": "m_axis_envelope_tready",
+                "direction": "I"
+              }
             }
           },
           "m_axis_sidetoneampl": {
@@ -732,6 +833,18 @@
               "TUSER_WIDTH": {
                 "value": "0",
                 "value_src": "const_prop"
+              }
+            },
+            "port_maps": {
+              "TDATA": {
+                "physical_name": "m_axis_sidetoneampl_tdata",
+                "direction": "O",
+                "left": "15",
+                "right": "0"
+              },
+              "TVALID": {
+                "physical_name": "m_axis_sidetoneampl_tvalid",
+                "direction": "O"
               }
             }
           }
@@ -802,11 +915,7 @@
             "direction": "I",
             "parameters": {
               "ASSOCIATED_BUSIF": {
-                "value": "S_AXI_keyerBRAM:TX_IQ_in:m_axis_TXMod:m_axis_envelope:m_axis_sidetoneampl",
-                "value_src": "strong"
-              },
-              "ASSOCIATED_CLKEN": {
-                "value": "aclken",
+                "value": "m_axis_TXMod:S_AXI_keyerBRAM:TX_IQ_in:m_axis_envelope:m_axis_sidetoneampl",
                 "value_src": "strong"
               },
               "ASSOCIATED_RESET": {
@@ -866,10 +975,6 @@
               "POLARITY": {
                 "value": "ACTIVE_LOW",
                 "value_src": "default_prop"
-              },
-              "TYPE": {
-                "value": "INTERCONNECT",
-                "value_src": "strong"
               }
             }
           },
@@ -882,7 +987,7 @@
         "variant_info": {
           "IQ_Modulation_Select.bd": {
             "scoped_diagram": "IQ_Modulation_Select_inst_0.bd",
-            "design_checksum": "0xE6B4B58C",
+            "design_checksum": "0xF099E2C7",
             "ref_name": "IQ_Modulation_Select",
             "ref_subinst_path": "IQCODECBLK_IQ_Modulation_Select_0",
             "ref_type": "Block Design",
@@ -970,6 +1075,22 @@
                 "value": "0",
                 "value_src": "default"
               }
+            },
+            "port_maps": {
+              "TDATA": {
+                "physical_name": "RX_Audio_Data_tdata",
+                "direction": "O",
+                "left": "15",
+                "right": "0"
+              },
+              "TREADY": {
+                "physical_name": "RX_Audio_Data_tready",
+                "direction": "I"
+              },
+              "TVALID": {
+                "physical_name": "RX_Audio_Data_tvalid",
+                "direction": "O"
+              }
             }
           },
           "S_AXIS_KeyerAmpl": {
@@ -1029,6 +1150,22 @@
                 "value": "0",
                 "value_src": "default_prop"
               }
+            },
+            "port_maps": {
+              "TDATA": {
+                "physical_name": "S_AXIS_KeyerAmpl_tdata",
+                "direction": "I",
+                "left": "15",
+                "right": "0"
+              },
+              "TVALID": {
+                "physical_name": "S_AXIS_KeyerAmpl_tvalid",
+                "direction": "I"
+              },
+              "TREADY": {
+                "physical_name": "S_AXIS_KeyerAmpl_tready",
+                "direction": "O"
+              }
             }
           },
           "LR_Spkr_data": {
@@ -1065,7 +1202,31 @@
                 "value_src": "strong"
               },
               "LAYERED_METADATA": {
-                "value": "xilinx.com:interface:datatypes:1.0 {TDATA {datatype {name {attribs {resolve_type immediate dependency {} format string minimum {} maximum {}} value {}} bitwidth {attribs {resolve_type automatic dependency {} format long minimum {} maximum {}} value 29} bitoffset {attribs {resolve_type immediate dependency {} format long minimum {} maximum {}} value 0} array_type {name {attribs {resolve_type immediate dependency {} format string minimum {} maximum {}} value chan} size {attribs {resolve_type generated dependency chan_size format long minimum {} maximum {}} value 1} stride {attribs {resolve_type generated dependency chan_stride format long minimum {} maximum {}} value 32} datatype {name {attribs {resolve_type immediate dependency {} format string minimum {} maximum {}} value {}} bitwidth {attribs {resolve_type automatic dependency {} format long minimum {} maximum {}} value 29} bitoffset {attribs {resolve_type immediate dependency {} format long minimum {} maximum {}} value 0} struct {field_cosine {name {attribs {resolve_type immediate dependency {} format string minimum {} maximum {}} value cosine} enabled {attribs {resolve_type generated dependency cosine_enabled format bool minimum {} maximum {}} value true} datatype {name {attribs {resolve_type immediate dependency {} format string minimum {} maximum {}} value {}} bitwidth {attribs {resolve_type generated dependency cosine_width format long minimum {} maximum {}} value 13} bitoffset {attribs {resolve_type immediate dependency {} format long minimum {} maximum {}} value 0} real {fixed {fractwidth {attribs {resolve_type generated dependency cosine_fractwidth format long minimum {} maximum {}} value 12} signed {attribs {resolve_type immediate dependency {} format bool minimum {} maximum {}} value true}}}}} field_sine {name {attribs {resolve_type immediate dependency {} format string minimum {} maximum {}} value sine} enabled {attribs {resolve_type generated dependency sine_enabled format bool minimum {} maximum {}} value true} datatype {name {attribs {resolve_type immediate dependency {} format string minimum {} maximum {}} value {}} bitwidth {attribs {resolve_type generated dependency sine_width format long minimum {} maximum {}} value 13} bitoffset {attribs {resolve_type generated dependency sine_offset format long minimum {} maximum {}} value 16} real {fixed {fractwidth {attribs {resolve_type generated dependency sine_fractwidth format long minimum {} maximum {}} value 12} signed {attribs {resolve_type immediate dependency {} format bool minimum {} maximum {}} value true}}}}}}}}}} TDATA_WIDTH 32 TUSER {datatype {name {attribs {resolve_type immediate dependency {} format string minimum {} maximum {}} value {}} bitwidth {attribs {resolve_type automatic dependency {} format long minimum {} maximum {}} value 0} bitoffset {attribs {resolve_type immediate dependency {} format long minimum {} maximum {}} value 0} struct {field_chanid {name {attribs {resolve_type immediate dependency {} format string minimum {} maximum {}} value chanid} enabled {attribs {resolve_type generated dependency chanid_enabled format bool minimum {} maximum {}} value false} datatype {name {attribs {resolve_type immediate dependency {} format string minimum {} maximum {}} value {}} bitwidth {attribs {resolve_type generated dependency chanid_width format long minimum {} maximum {}} value 0} bitoffset {attribs {resolve_type immediate dependency {} format long minimum {} maximum {}} value 0} integer {signed {attribs {resolve_type immediate dependency {} format bool minimum {} maximum {}} value false}}}} field_user {name {attribs {resolve_type immediate dependency {} format string minimum {} maximum {}} value user} enabled {attribs {resolve_type generated dependency user_enabled format bool minimum {} maximum {}} value false} datatype {name {attribs {resolve_type immediate dependency {} format string minimum {} maximum {}} value {}} bitwidth {attribs {resolve_type generated dependency user_width format long minimum {} maximum {}} value 0} bitoffset {attribs {resolve_type generated dependency user_offset format long minimum {} maximum {}} value 0}}}}}} TUSER_WIDTH 0}",
+                "value": [
+                  "xilinx.com:interface:datatypes:1.0 {",
+                  "TDATA {datatype {name {attribs {resolve_type immediate dependency {} format string minimum {} maximum {}} value {}} bitwidth {attribs {resolve_type automatic dependency {} format long minimum {}",
+                  "maximum {}} value 29} bitoffset {attribs {resolve_type immediate dependency {} format long minimum {} maximum {}} value 0} array_type {name {attribs {resolve_type immediate dependency {} format string",
+                  "minimum {} maximum {}} value chan} size {attribs {resolve_type generated dependency chan_size format long minimum {} maximum {}} value 1} stride {attribs {resolve_type generated dependency chan_stride",
+                  "format long minimum {} maximum {}} value 32} datatype {name {attribs {resolve_type immediate dependency {} format string minimum {} maximum {}} value {}} bitwidth {attribs {resolve_type automatic",
+                  "dependency {} format long minimum {} maximum {}} value 29} bitoffset {attribs {resolve_type immediate dependency {} format long minimum {} maximum {}} value 0} struct {field_cosine {name {attribs",
+                  "{resolve_type immediate dependency {} format string minimum {} maximum {}} value cosine} enabled {attribs {resolve_type generated dependency cosine_enabled format bool minimum {} maximum {}} value",
+                  "true} datatype {name {attribs {resolve_type immediate dependency {} format string minimum {} maximum {}} value {}} bitwidth {attribs {resolve_type generated dependency cosine_width format long minimum",
+                  "{} maximum {}} value 13} bitoffset {attribs {resolve_type immediate dependency {} format long minimum {} maximum {}} value 0} real {fixed {fractwidth {attribs {resolve_type generated dependency",
+                  "cosine_fractwidth format long minimum {} maximum {}} value 12} signed {attribs {resolve_type immediate dependency {} format bool minimum {} maximum {}} value true}}}}} field_sine {name {attribs",
+                  "{resolve_type immediate dependency {} format string minimum {} maximum {}} value sine} enabled {attribs {resolve_type generated dependency sine_enabled format bool minimum {} maximum {}} value true}",
+                  "datatype {name {attribs {resolve_type immediate dependency {} format string minimum {} maximum {}} value {}} bitwidth {attribs {resolve_type generated dependency sine_width format long minimum {}",
+                  "maximum {}} value 13} bitoffset {attribs {resolve_type generated dependency sine_offset format long minimum {} maximum {}} value 16} real {fixed {fractwidth {attribs {resolve_type generated dependency",
+                  "sine_fractwidth format long minimum {} maximum {}} value 12} signed {attribs {resolve_type immediate dependency {} format bool minimum {} maximum {}} value true}}}}}}}}}} TDATA_WIDTH 32 TUSER",
+                  "{datatype {name {attribs {resolve_type immediate dependency {} format string minimum {} maximum {}} value {}} bitwidth {attribs {resolve_type automatic dependency {} format long minimum {} maximum {}}",
+                  "value 0} bitoffset {attribs {resolve_type immediate dependency {} format long minimum {} maximum {}} value 0} struct {field_chanid {name {attribs {resolve_type immediate dependency {} format string",
+                  "minimum {} maximum {}} value chanid} enabled {attribs {resolve_type generated dependency chanid_enabled format bool minimum {} maximum {}} value false} datatype {name {attribs {resolve_type immediate",
+                  "dependency {} format string minimum {} maximum {}} value {}} bitwidth {attribs {resolve_type generated dependency chanid_width format long minimum {} maximum {}} value 0} bitoffset {attribs",
+                  "{resolve_type immediate dependency {} format long minimum {} maximum {}} value 0} integer {signed {attribs {resolve_type immediate dependency {} format bool minimum {} maximum {}} value false}}}}",
+                  "field_user {name {attribs {resolve_type immediate dependency {} format string minimum {} maximum {}} value user} enabled {attribs {resolve_type generated dependency user_enabled format bool minimum {}",
+                  "maximum {}} value false} datatype {name {attribs {resolve_type immediate dependency {} format string minimum {} maximum {}} value {}} bitwidth {attribs {resolve_type generated dependency user_width",
+                  "format long minimum {} maximum {}} value 0} bitoffset {attribs {resolve_type generated dependency user_offset format long minimum {} maximum {}} value 0}}}}}} TUSER_WIDTH 0",
+                  "}"
+                ],
                 "value_src": "ip_prop"
               },
               "PHASE": {
@@ -1087,6 +1248,22 @@
               "TUSER_WIDTH": {
                 "value": "0",
                 "value_src": "auto_prop"
+              }
+            },
+            "port_maps": {
+              "TDATA": {
+                "physical_name": "LR_Spkr_data_tdata",
+                "direction": "I",
+                "left": "31",
+                "right": "0"
+              },
+              "TVALID": {
+                "physical_name": "LR_Spkr_data_tvalid",
+                "direction": "I"
+              },
+              "TREADY": {
+                "physical_name": "LR_Spkr_data_tready",
+                "direction": "O"
               }
             }
           }
@@ -1189,7 +1366,7 @@
                 "value_src": "strong"
               },
               "ASSOCIATED_RESET": {
-                "value": "arstn:aresetn:aresetn12",
+                "value": "arstn:aresetn12",
                 "value_src": "strong"
               },
               "CLK_DOMAIN": {
@@ -1229,12 +1406,117 @@
         "variant_info": {
           "audio_codec.bd": {
             "scoped_diagram": "audio_codec_inst_0.bd",
-            "design_checksum": "0xB9638D01",
+            "design_checksum": "0xFE690A8C",
             "ref_name": "audio_codec",
             "ref_subinst_path": "IQCODECBLK_audio_codec_0",
             "ref_type": "Block Design",
             "source_type": "all",
             "active": "all"
+          }
+        }
+      },
+      "axi_vip_0": {
+        "vlnv": "xilinx.com:ip:axi_vip:1.1",
+        "xci_name": "IQCODECBLK_axi_vip_0_0",
+        "xci_path": "ip\\IQCODECBLK_axi_vip_0_0\\IQCODECBLK_axi_vip_0_0.xci",
+        "inst_hier_path": "axi_vip_0",
+        "parameters": {
+          "ADDR_WIDTH": {
+            "value": "32"
+          },
+          "ARUSER_WIDTH": {
+            "value": "0"
+          },
+          "AWUSER_WIDTH": {
+            "value": "0"
+          },
+          "BUSER_WIDTH": {
+            "value": "0"
+          },
+          "DATA_WIDTH": {
+            "value": "32"
+          },
+          "HAS_BRESP": {
+            "value": "1"
+          },
+          "HAS_BURST": {
+            "value": "0"
+          },
+          "HAS_CACHE": {
+            "value": "0"
+          },
+          "HAS_LOCK": {
+            "value": "0"
+          },
+          "HAS_PROT": {
+            "value": "1"
+          },
+          "HAS_QOS": {
+            "value": "0"
+          },
+          "HAS_REGION": {
+            "value": "0"
+          },
+          "HAS_RRESP": {
+            "value": "1"
+          },
+          "HAS_WSTRB": {
+            "value": "1"
+          },
+          "ID_WIDTH": {
+            "value": "0"
+          },
+          "INTERFACE_MODE": {
+            "value": "MASTER"
+          },
+          "PROTOCOL": {
+            "value": "AXI4"
+          },
+          "READ_WRITE_MODE": {
+            "value": "READ_WRITE"
+          },
+          "RUSER_WIDTH": {
+            "value": "0"
+          },
+          "SUPPORTS_NARROW": {
+            "value": "0"
+          },
+          "WUSER_WIDTH": {
+            "value": "0"
+          }
+        },
+        "interface_ports": {
+          "M_AXI": {
+            "vlnv": "xilinx.com:interface:aximm_rtl:1.0",
+            "mode": "Master",
+            "address_space_ref": "Master_AXI",
+            "base_address": {
+              "minimum": "0x00000000",
+              "maximum": "0xFFFFFFFF",
+              "width": "32"
+            }
+          }
+        },
+        "addressing": {
+          "address_spaces": {
+            "Master_AXI": {
+              "range": "4G",
+              "width": "32"
+            }
+          }
+        }
+      },
+      "axis_data_fifo_0": {
+        "vlnv": "xilinx.com:ip:axis_data_fifo:2.0",
+        "xci_name": "IQCODECBLK_axis_data_fifo_0_0",
+        "xci_path": "ip\\IQCODECBLK_axis_data_fifo_0_0\\IQCODECBLK_axis_data_fifo_0_0.xci",
+        "inst_hier_path": "axis_data_fifo_0",
+        "parameters": {
+          "FIFO_DEPTH": {
+            "value": "16"
+          },
+          "IS_ACLK_ASYNC": {
+            "value": "1"
           }
         }
       },
@@ -1287,20 +1569,6 @@
             "value": "76"
           }
         }
-      },
-      "axis_data_fifo_0": {
-        "vlnv": "xilinx.com:ip:axis_data_fifo:2.0",
-        "xci_name": "IQCODECBLK_axis_data_fifo_0_0",
-        "xci_path": "ip\\IQCODECBLK_axis_data_fifo_0_0\\IQCODECBLK_axis_data_fifo_0_0.xci",
-        "inst_hier_path": "axis_data_fifo_0",
-        "parameters": {
-          "FIFO_DEPTH": {
-            "value": "16"
-          },
-          "IS_ACLK_ASYNC": {
-            "value": "1"
-          }
-        }
       }
     },
     "interface_nets": {
@@ -1347,8 +1615,8 @@
         "ports": [
           "aclk12",
           "audio_codec_0/clk12",
-          "dds_compiler_0/aclk",
-          "axis_data_fifo_0/m_axis_aclk"
+          "axis_data_fifo_0/m_axis_aclk",
+          "dds_compiler_0/aclk"
         ]
       },
       "CodecConfig_0_1": {
@@ -1462,16 +1730,16 @@
       "aclk_0_1": {
         "ports": [
           "aclk",
-          "axi_vip_0/aclk",
           "IQ_Modulation_Select_0/clk122",
+          "axi_vip_0/aclk",
           "axis_data_fifo_0/s_axis_aclk"
         ]
       },
       "aresetn_0_1": {
         "ports": [
           "aresetn",
-          "axi_vip_0/aresetn",
           "IQ_Modulation_Select_0/resetn",
+          "axi_vip_0/aresetn",
           "axis_data_fifo_0/s_axis_aresetn"
         ]
       },

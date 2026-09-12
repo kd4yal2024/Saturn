@@ -6038,6 +6038,18 @@ proc create_hier_cell_Transmitter { parentCell nameHier } {
    }
   
   # Create interface connections
+  # Synchronize the external TX enable in the transmitter clk122 domain.
+  set block_name Double_D_register
+  set block_cell_name Double_D_register_TX_ENABLE
+  if { [catch {set Double_D_register_TX_ENABLE [create_bd_cell -type module -reference $block_name $block_cell_name] } errmsg] } {
+     catch {common::send_gid_msg -ssname BD::TCL -id 2095 -severity "ERROR" "Unable to add referenced block <$block_name>. Please add the files for ${block_name}'s definition into the project."}
+     return 1
+   } elseif { $Double_D_register_TX_ENABLE eq "" } {
+     catch {common::send_gid_msg -ssname BD::TCL -id 2096 -severity "ERROR" "Unable to referenced block <$block_name>. Please add the files for ${block_name}'s definition into the project."}
+     return 1
+   }
+  set_property CONFIG.DATA_WIDTH {1} $Double_D_register_TX_ENABLE
+
   connect_bd_intf_net -intf_net Conn1 [get_bd_intf_pins S_AXI_keyerBRAM] [get_bd_intf_pins IQ_Modulation_Select/S_AXI_keyerBRAM]
   connect_bd_intf_net -intf_net Conn2 [get_bd_intf_pins m_axis_sidetoneampl] [get_bd_intf_pins IQ_Modulation_Select/m_axis_sidetoneampl]
   connect_bd_intf_net -intf_net IQ_Modulation_Select_m_axis_envelope [get_bd_intf_pins IQ_Modulation_Select/m_axis_envelope] [get_bd_intf_pins TX_Envelope/S_AXIS]
@@ -6048,12 +6060,13 @@ proc create_hier_cell_Transmitter { parentCell nameHier } {
   connect_bd_net -net Byteswap_1 [get_bd_pins Byteswap] [get_bd_pins IQ_Modulation_Select/Byteswap]
   connect_bd_net -net D_register_1_dout [get_bd_pins TX_Envelope/TXMagnitude] [get_bd_pins TXMagnitude]
   connect_bd_net -net IQ_Modulation_Select_TX_OPENABLE [get_bd_pins IQ_Modulation_Select/TX_OUTPUTENABLE] [get_bd_pins TX_DUC_0/sel]
-  connect_bd_net -net Net5 [get_bd_pins clk122] [get_bd_pins IQ_Modulation_Select/clk122] [get_bd_pins TX_DUC_0/clk122] [get_bd_pins TX_Envelope/clk122] [get_bd_pins regmux_2_1_1/aclk]
+  connect_bd_net -net Net5 [get_bd_pins clk122] [get_bd_pins IQ_Modulation_Select/clk122] [get_bd_pins TX_DUC_0/clk122] [get_bd_pins TX_Envelope/clk122] [get_bd_pins regmux_2_1_1/aclk] [get_bd_pins Double_D_register_TX_ENABLE/aclk]
   connect_bd_net -net TXConfig_1 [get_bd_pins TXConfig] [get_bd_pins TX_DUC_0/TXConfig] [get_bd_pins xlslice_0/Din] [get_bd_pins xlslice_deinterleave/Din] [get_bd_pins xlslice_enable/Din] [get_bd_pins xlslice_rate/Din] [get_bd_pins xlslice_reset/Din]
   connect_bd_net -net TXStrobe_1 [get_bd_pins TXStrobe] [get_bd_pins IQ_Modulation_Select/TX_Strobe]
   connect_bd_net -net TX_DUC_0_TXDACData [get_bd_pins TX_DUC_0/TXDACData] [get_bd_pins TXDACData]
   connect_bd_net -net TX_DUC_0_TXSamplesToRX [get_bd_pins TX_DUC_0/TXSamplesToRX] [get_bd_pins TXSamplesToRX]
-  connect_bd_net -net TX_ENABLE_1 [get_bd_pins TX_ENABLE] [get_bd_pins IQ_Modulation_Select/TX_ENABLE]
+  connect_bd_net -net TX_ENABLE_1 [get_bd_pins TX_ENABLE] [get_bd_pins Double_D_register_TX_ENABLE/din]
+  connect_bd_net -net Double_D_register_TX_ENABLE_dout [get_bd_pins Double_D_register_TX_ENABLE/dout] [get_bd_pins IQ_Modulation_Select/TX_ENABLE]
   connect_bd_net -net TX_LO_Tune_1 [get_bd_pins TXLOTune] [get_bd_pins TX_DUC_0/TXLOTune]
   connect_bd_net -net TX_Test_Freq_1 [get_bd_pins TXTestFreq] [get_bd_pins IQ_Modulation_Select/TXTestFreq]
   connect_bd_net -net clk12_1 -boundary_type lower [get_bd_pins clk12]
@@ -6800,6 +6813,19 @@ proc create_hier_cell_PCIe { parentCell nameHier } {
     set_property CONFIG.DATA_WIDTH {1} $Double_D_register_syncareset
 
 
+  # Create instance: Double_D_register_TX_ENABLE, and set properties
+  set block_name Double_D_register
+  set block_cell_name Double_D_register_TX_ENABLE
+  if { [catch {set Double_D_register_TX_ENABLE [create_bd_cell -type module -reference $block_name $block_cell_name] } errmsg] } {
+     catch {common::send_gid_msg -ssname BD::TCL -id 2095 -severity "ERROR" "Unable to add referenced block <$block_name>. Please add the files for ${block_name}'s definition into the project."}
+     return 1
+   } elseif { $Double_D_register_TX_ENABLE eq "" } {
+     catch {common::send_gid_msg -ssname BD::TCL -id 2096 -severity "ERROR" "Unable to referenced block <$block_name>. Please add the files for ${block_name}'s definition into the project."}
+     return 1
+   }
+  set_property CONFIG.DATA_WIDTH {1} $Double_D_register_TX_ENABLE
+
+
   # Create instance: AXIL_ConfigReg_256_2, and set properties
   set block_name AXIL_ConfigReg_256
   set block_cell_name AXIL_ConfigReg_256_2
@@ -7197,12 +7223,13 @@ proc create_hier_cell_PCIe { parentCell nameHier } {
   connect_bd_net -net Net3 [get_bd_pins xlconstant_1/dout] [get_bd_pins D_register_0/resetn] [get_bd_pins D_register_1/resetn]
   connect_bd_net -net PLL_LOCK_1 [get_bd_pins PLL_LOCK] [get_bd_pins xlconcat_0/In1]
   connect_bd_net -net Status_data_1 [get_bd_pins Status_data] [get_bd_pins xlconcat_0/In0]
-  connect_bd_net -net TX_ENABLE_1 [get_bd_pins TX_ENABLE] [get_bd_pins xlconcat_0/In6]
+  connect_bd_net -net TX_ENABLE_1 [get_bd_pins TX_ENABLE] [get_bd_pins Double_D_register_TX_ENABLE/din]
+  connect_bd_net -net Double_D_register_TX_ENABLE_dout [get_bd_pins Double_D_register_TX_ENABLE/dout] [get_bd_pins xlconcat_0/In6]
   connect_bd_net -net Usr_Reg_Access_0_Usr_Reg_Data [get_bd_pins Usr_Reg_Access_0/Usr_Reg_Data] [get_bd_pins AXIL_ReadReg_64_0/readdata1]
   connect_bd_net -net Watchdog_TXEN_1 [get_bd_pins Watchdog_TXEN] [get_bd_pins xlconcat_0/In4]
   connect_bd_net -net c_addsub_0_S [get_bd_pins c_addsub_0/S] [get_bd_pins xlconcat_1/In0]
   connect_bd_net -net clk12_1 [get_bd_pins clk12] [get_bd_pins Double_D_register_syncareset1/aclk]
-  connect_bd_net -net clk_122_1 [get_bd_pins clk_122] [get_bd_pins AXIL_ReadReg_64_0/aclk] [get_bd_pins Double_D_register_syncareset/aclk] [get_bd_pins AXIL_ConfigReg_256_2/aclk] [get_bd_pins AXI_SPI_ADC_0/aclk] [get_bd_pins AXI_FIFO_overflow_re_0/aclk] [get_bd_pins AXIL_ConfigReg_64_1/aclk] [get_bd_pins axi_interconnect_122/ACLK] [get_bd_pins axi_interconnect_122/S00_ACLK] [get_bd_pins axi_interconnect_122/M00_ACLK] [get_bd_pins axi_interconnect_122/M01_ACLK] [get_bd_pins axi_interconnect_122/M02_ACLK] [get_bd_pins axi_interconnect_122/M03_ACLK] [get_bd_pins axi_interconnect_122/M04_ACLK] [get_bd_pins axi_interconnect_122/M05_ACLK] [get_bd_pins axi_interconnect_122/M06_ACLK] [get_bd_pins axi_interconnect_122/M07_ACLK] [get_bd_pins axi_interconnect_122/M08_ACLK] [get_bd_pins axi_interconnect_122/M09_ACLK] [get_bd_pins axi_interconnect_122/M10_ACLK] [get_bd_pins axi_interconnect_lite/M01_ACLK] [get_bd_pins axi_interconnect_122/M11_ACLK] [get_bd_pins D_register_0/aclk] [get_bd_pins D_register_1/aclk] [get_bd_pins AXIL_SPIWriter_0/aclk]
+  connect_bd_net -net clk_122_1 [get_bd_pins clk_122] [get_bd_pins AXIL_ReadReg_64_0/aclk] [get_bd_pins Double_D_register_syncareset/aclk] [get_bd_pins Double_D_register_TX_ENABLE/aclk] [get_bd_pins AXIL_ConfigReg_256_2/aclk] [get_bd_pins AXI_SPI_ADC_0/aclk] [get_bd_pins AXI_FIFO_overflow_re_0/aclk] [get_bd_pins AXIL_ConfigReg_64_1/aclk] [get_bd_pins axi_interconnect_122/ACLK] [get_bd_pins axi_interconnect_122/S00_ACLK] [get_bd_pins axi_interconnect_122/M00_ACLK] [get_bd_pins axi_interconnect_122/M01_ACLK] [get_bd_pins axi_interconnect_122/M02_ACLK] [get_bd_pins axi_interconnect_122/M03_ACLK] [get_bd_pins axi_interconnect_122/M04_ACLK] [get_bd_pins axi_interconnect_122/M05_ACLK] [get_bd_pins axi_interconnect_122/M06_ACLK] [get_bd_pins axi_interconnect_122/M07_ACLK] [get_bd_pins axi_interconnect_122/M08_ACLK] [get_bd_pins axi_interconnect_122/M09_ACLK] [get_bd_pins axi_interconnect_122/M10_ACLK] [get_bd_pins axi_interconnect_lite/M01_ACLK] [get_bd_pins axi_interconnect_122/M11_ACLK] [get_bd_pins D_register_0/aclk] [get_bd_pins D_register_1/aclk] [get_bd_pins AXIL_SPIWriter_0/aclk]
   connect_bd_net -net clock_mon_1 [get_bd_pins clock_mon] [get_bd_pins xlconcat_3/In0]
   connect_bd_net -net pcb_version_id_1 [get_bd_pins pcb_version_id] [get_bd_pins util_vector_logic_6/Op1]
   connect_bd_net -net pci_clk_buf_IBUF_OUT [get_bd_pins pci_clk_buf/IBUF_OUT] [get_bd_pins xdma_0/sys_clk]

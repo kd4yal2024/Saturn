@@ -43,4 +43,24 @@ write_cfgmem -format bin -size 32 -interface SPIx1 \
 set prm [file rootname $output_bin].prm
 saturn_lab::require_file $output_bin "generated PROM/BIN image"
 saturn_lab::require_file $prm "generated PROM report"
-puts "SATURN_LAB_PROM_OK bin=$output_bin prm=$prm"
+
+set manifest [file join [file dirname $output_bin] prom-manifest.json]
+set stream [open $manifest w]
+puts $stream "{"
+puts $stream "  \"schema\": 1,"
+puts $stream "  \"created_utc\": \"[clock format [clock seconds] -gmt true -format {%Y-%m-%dT%H:%M:%SZ}]\","
+puts $stream "  \"git_sha\": \"[saturn_lab::json_escape [saturn_lab::git_value rev-parse HEAD]]\","
+puts $stream "  \"git_dirty\": [saturn_lab::git_dirty],"
+puts $stream "  \"vivado\": \"[saturn_lab::json_escape [version -short]]\","
+puts $stream "  \"format\": \"bin\","
+puts $stream "  \"interface\": \"SPIx1\","
+puts $stream "  \"size_mbit\": 32,"
+puts $stream "  \"output\": \"[saturn_lab::json_escape [file tail $output_bin]]\","
+puts $stream "  \"output_sha256\": \"[saturn_lab::sha256 $output_bin]\","
+puts $stream "  \"primary_bit\": \"[saturn_lab::json_escape [file tail $primary_bit]]\","
+puts $stream "  \"primary_sha256\": \"[saturn_lab::sha256 $primary_bit]\","
+puts $stream "  \"golden_sha256\": \"[saturn_lab::sha256 $golden_bit]\""
+puts $stream "}"
+close $stream
+
+puts "SATURN_LAB_PROM_OK bin=$output_bin prm=$prm manifest=$manifest"

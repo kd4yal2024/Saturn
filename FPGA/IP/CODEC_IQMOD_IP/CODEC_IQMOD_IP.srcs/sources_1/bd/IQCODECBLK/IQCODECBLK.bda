@@ -1,93 +1,273 @@
-<?xml version="1.0" encoding="utf-8"?>
-<graphml xmlns="http://graphml.graphdrawing.org/xmlns" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://graphml.graphdrawing.org/xmlns http://graphml.graphdrawing.org/xmlns/1.0/graphml.xsd">
-  <key id="BA" for="node" attr.name="base_addr" attr.type="string"/>
-  <key id="BP" for="node" attr.name="base_param" attr.type="string"/>
-  <key id="EH" for="edge" attr.name="edge_hid" attr.type="int"/>
-  <key id="HA" for="node" attr.name="high_addr" attr.type="string"/>
-  <key id="HP" for="node" attr.name="high_param" attr.type="string"/>
-  <key id="MA" for="node" attr.name="master_addrspace" attr.type="string"/>
-  <key id="MX" for="node" attr.name="master_instance" attr.type="string"/>
-  <key id="MI" for="node" attr.name="master_interface" attr.type="string"/>
-  <key id="MS" for="node" attr.name="master_segment" attr.type="string"/>
-  <key id="MV" for="node" attr.name="master_vlnv" attr.type="string"/>
-  <key id="TM" for="node" attr.name="memory_type" attr.type="string"/>
-  <key id="SX" for="node" attr.name="slave_instance" attr.type="string"/>
-  <key id="SI" for="node" attr.name="slave_interface" attr.type="string"/>
-  <key id="SS" for="node" attr.name="slave_segment" attr.type="string"/>
-  <key id="SV" for="node" attr.name="slave_vlnv" attr.type="string"/>
-  <key id="TU" for="node" attr.name="usage_type" attr.type="string"/>
-  <key id="VH" for="node" attr.name="vert_hid" attr.type="int"/>
-  <key id="VM" for="node" attr.name="vert_name" attr.type="string"/>
-  <key id="VT" for="node" attr.name="vert_type" attr.type="string"/>
-  <graph id="G" edgedefault="undirected" parse.nodeids="canonical" parse.edgeids="canonical" parse.order="nodesfirst">
-    <node id="n0">
-      <data key="BA">0x001C0000</data>
-      <data key="BP">C_S_AXI_BASEADDR</data>
-      <data key="HA">0x001C1FFF</data>
-      <data key="HP">C_S_AXI_HIGHADDR</data>
-      <data key="MA">Master_AXI</data>
-      <data key="MX">/axi_vip_0</data>
-      <data key="MI">M_AXI</data>
-      <data key="MS">SEG_axi_bram_ctrl_0_Mem0</data>
-      <data key="MV">xilinx.com:ip:axi_vip:1.1</data>
-      <data key="TM">both</data>
-      <data key="SX">/IQ_Modulation_Select_0/axi_bram_ctrl_0</data>
-      <data key="SI">S_AXI</data>
-      <data key="SS">Mem0</data>
-      <data key="SV">xilinx.com:ip:axi_bram_ctrl:4.1</data>
-      <data key="TU">memory</data>
-      <data key="VT">AC</data>
-    </node>
-    <node id="n1">
-      <data key="VM">IQCODECBLK</data>
-      <data key="VT">BC</data>
-    </node>
-    <node id="n2">
-      <data key="VM">/audio_codec_0</data>
-      <data key="VT">BC</data>
-    </node>
-    <node id="n3">
-      <data key="VH">5</data>
-      <data key="VM">audio_codec_inst_0</data>
-      <data key="VT">VR</data>
-    </node>
-    <node id="n4">
-      <data key="MA">Master_AXI</data>
-      <data key="MX">/axi_vip_0</data>
-      <data key="MI">M_AXI</data>
-      <data key="MV">xilinx.com:ip:axi_vip:1.1</data>
-      <data key="SX">/IQ_Modulation_Select_0</data>
-      <data key="SI">S_AXI_keyerBRAM</data>
-      <data key="VT">CX</data>
-    </node>
-    <node id="n5">
-      <data key="TU">active</data>
-      <data key="VH">30</data>
-      <data key="VT">PM</data>
-    </node>
-    <node id="n6">
-      <data key="VM">/IQ_Modulation_Select_0</data>
-      <data key="VT">BC</data>
-    </node>
-    <node id="n7">
-      <data key="VH">3</data>
-      <data key="VM">IQ_Modulation_Select_inst_0</data>
-      <data key="VT">VR</data>
-    </node>
-    <node id="n8">
-      <data key="VH">2</data>
-      <data key="VM">IQCODECBLK</data>
-      <data key="VT">VR</data>
-    </node>
-    <edge id="e0" source="n1" target="n8"/>
-    <edge id="e1" source="n6" target="n7"/>
-    <edge id="e2" source="n8" target="n5"/>
-    <edge id="e3" source="n7" target="n5"/>
-    <edge id="e4" source="n0" target="n5">
-      <data key="EH">30</data>
-    </edge>
-    <edge id="e5" source="n2" target="n3"/>
-    <edge id="e6" source="n3" target="n5"/>
-    <edge id="e7" source="n6" target="n4"/>
-  </graph>
-</graphml>
+{
+    "graphjs": {
+        "version": "1.0",
+        "keys": [
+            {
+                "abrv": "VH",
+                "name": "vert_hid",
+                "type": "int",
+                "for": "node"
+            },
+            {
+                "abrv": "VM",
+                "name": "vert_name",
+                "type": "string",
+                "for": "node"
+            },
+            {
+                "abrv": "VT",
+                "name": "vert_type",
+                "type": "string",
+                "for": "node"
+            },
+            {
+                "abrv": "BA",
+                "name": "base_addr",
+                "type": "string",
+                "for": "node"
+            },
+            {
+                "abrv": "HA",
+                "name": "high_addr",
+                "type": "string",
+                "for": "node"
+            },
+            {
+                "abrv": "BP",
+                "name": "base_param",
+                "type": "string",
+                "for": "node"
+            },
+            {
+                "abrv": "HP",
+                "name": "high_param",
+                "type": "string",
+                "for": "node"
+            },
+            {
+                "abrv": "MA",
+                "name": "master_addrspace",
+                "type": "string",
+                "for": "node"
+            },
+            {
+                "abrv": "MX",
+                "name": "master_instance",
+                "type": "string",
+                "for": "node"
+            },
+            {
+                "abrv": "MI",
+                "name": "master_interface",
+                "type": "string",
+                "for": "node"
+            },
+            {
+                "abrv": "MS",
+                "name": "master_segment",
+                "type": "string",
+                "for": "node"
+            },
+            {
+                "abrv": "MV",
+                "name": "master_vlnv",
+                "type": "string",
+                "for": "node"
+            },
+            {
+                "abrv": "SX",
+                "name": "slave_instance",
+                "type": "string",
+                "for": "node"
+            },
+            {
+                "abrv": "SI",
+                "name": "slave_interface",
+                "type": "string",
+                "for": "node"
+            },
+            {
+                "abrv": "MM",
+                "name": "slave_memmap",
+                "type": "string",
+                "for": "node"
+            },
+            {
+                "abrv": "SS",
+                "name": "slave_segment",
+                "type": "string",
+                "for": "node"
+            },
+            {
+                "abrv": "SV",
+                "name": "slave_vlnv",
+                "type": "string",
+                "for": "node"
+            },
+            {
+                "abrv": "TM",
+                "name": "memory_type",
+                "type": "string",
+                "for": "node"
+            },
+            {
+                "abrv": "TU",
+                "name": "usage_type",
+                "type": "string",
+                "for": "node"
+            },
+            {
+                "abrv": "LT",
+                "name": "lock_type",
+                "type": "string",
+                "for": "node"
+            },
+            {
+                "abrv": "BT",
+                "name": "boot_type",
+                "type": "string",
+                "for": "node"
+            },
+            {
+                "abrv": "EH",
+                "name": "edge_hid",
+                "type": "int",
+                "for": "edge"
+            }
+        ],
+        "vertice_type_order": [
+            {
+                "abrv": "BC",
+                "desc": "Block Container"
+            },
+            {
+                "abrv": "PR",
+                "desc": "Parital Reference"
+            },
+            {
+                "abrv": "VR",
+                "desc": "Variant"
+            },
+            {
+                "abrv": "PM",
+                "desc": "Variant Permutations"
+            },
+            {
+                "abrv": "CX",
+                "desc": "Boundary Connection"
+            },
+            {
+                "abrv": "AC",
+                "desc": "Assignment Coordinate"
+            },
+            {
+                "abrv": "ACE",
+                "desc": "Excluded Assign Coordinate"
+            },
+            {
+                "abrv": "APX",
+                "desc": "Boundary Aperture"
+            },
+            {
+                "abrv": "CIP",
+                "desc": "High level Processing System"
+            }
+        ],
+        "vertices": {
+            "V0": {
+                "VM": "/IQ_Modulation_Select_0",
+                "VT": "BC"
+            },
+            "V1": {
+                "VM": "/audio_codec_0",
+                "VT": "BC"
+            },
+            "V2": {
+                "VM": "IQCODECBLK",
+                "VT": "BC"
+            },
+            "V3": {
+                "VH": "2",
+                "VM": "IQCODECBLK",
+                "VT": "VR"
+            },
+            "V4": {
+                "VH": "3",
+                "VM": "IQ_Modulation_Select_inst_0",
+                "VT": "VR"
+            },
+            "V5": {
+                "VH": "5",
+                "VM": "audio_codec_inst_0",
+                "VT": "VR"
+            },
+            "V6": {
+                "VH": "30",
+                "VT": "PM",
+                "TU": "active"
+            },
+            "V7": {
+                "VT": "CX",
+                "MA": "Master_AXI",
+                "MX": "/axi_vip_0",
+                "MI": "M_AXI",
+                "MV": "xilinx.com:ip:axi_vip:1.1",
+                "SX": "/IQ_Modulation_Select_0",
+                "SI": "S_AXI_keyerBRAM"
+            },
+            "V8": {
+                "VT": "AC",
+                "BA": "0x001C0000",
+                "HA": "0x001C1FFF",
+                "BP": "C_S_AXI_BASEADDR",
+                "HP": "C_S_AXI_HIGHADDR",
+                "MA": "Master_AXI",
+                "MX": "/axi_vip_0",
+                "MI": "M_AXI",
+                "MS": "SEG_axi_bram_ctrl_0_Mem0",
+                "MV": "xilinx.com:ip:axi_vip:1.1",
+                "SX": "/IQ_Modulation_Select_0/axi_bram_ctrl_0",
+                "SI": "S_AXI",
+                "SS": "Mem0",
+                "SV": "xilinx.com:ip:axi_bram_ctrl:4.1",
+                "TM": "both",
+                "TU": "memory"
+            }
+        },
+        "edges": [
+            {
+                "src": "V0",
+                "trg": "V4"
+            },
+            {
+                "src": "V0",
+                "trg": "V7"
+            },
+            {
+                "src": "V1",
+                "trg": "V5"
+            },
+            {
+                "src": "V2",
+                "trg": "V3"
+            },
+            {
+                "src": "V3",
+                "trg": "V6"
+            },
+            {
+                "src": "V4",
+                "trg": "V6"
+            },
+            {
+                "src": "V5",
+                "trg": "V6"
+            },
+            {
+                "src": "V8",
+                "trg": "V6",
+                "EH": "30"
+            }
+        ]
+    }
+}

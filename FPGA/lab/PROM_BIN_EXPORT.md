@@ -34,7 +34,9 @@ payloads. To
 export a different primary bitstream, set `SATURN_PRIMARY_BIT` to its path and
 `SATURN_PROM_OUTPUT` to the desired output path. Vivado writes both the BIN and
 the adjacent PRM report. The script verifies that both files were created and
-prints `SATURN_LAB_PROM_OK`.
+prints `SATURN_LAB_PROM_OK`. It also writes `prom-manifest.json` beside the
+image with the current Git SHA/dirty state, Vivado version, layout, and SHA256
+digests for the output, primary bitstream, and immutable golden input.
 
 The equivalent command, matching the original project instructions, is:
 

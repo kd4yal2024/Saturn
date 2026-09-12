@@ -1,5 +1,17 @@
 # Saturn FPGA V28 Lab — Handoff & Status
 
+## Production-hardening update — 2026-09-12
+
+This section supersedes the older open-issue statements below. The IQMod
+project is persistently migrated to Vivado 2023.1 and reopens with zero locked
+IP; its fresh-cache regression now checks numerical CW I/Q output rather than
+only `$finish`. `TX_ENABLE` has explicit two-flop synchronizers in both clk122
+destinations. All remaining routed Critical CDCs have endpoint-bound reviewed
+waivers in `tcl/cdc-waivers.tcl`, and the normal implementation quality gate
+now rejects any unwaived Critical finding. Use `make vivado-cdc` to audit an
+existing completed route. PROM export now records Git and input/output hashes
+in `prom-manifest.json`.
+
 Written 2026-09-11 by Claude, grounded directly against the state of this
 repo (`C:\Users\jd\Saturn`, branch `fpga-v28-lab`) rather than against a
 plan document written without repo access. Use this to resume work with

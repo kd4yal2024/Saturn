@@ -104,20 +104,6 @@ proc saturn_lab::configure_wave_capture {} {
     }
 }
 
-proc saturn_lab::refresh_xsim_cache {project_file} {
-    if {[env_or SATURN_SIM_FRESH 0] ne "1"} {
-        return
-    }
-    set project_dir [file dirname $project_file]
-    set project_name [file rootname [file tail $project_file]]
-    set sim_dir [file join $project_dir "${project_name}.sim" sim_1 behav xsim]
-    if {[file isdirectory $sim_dir]} {
-        set archived "${sim_dir}.stale-[clock milliseconds]"
-        puts "Archiving stale XSim cache to [file tail $archived]"
-        file rename -force $sim_dir $archived
-    }
-}
-
 proc saturn_lab::run_simulation {project_file top label runtime {simulator_options ""} {capture_file ""} {expected_lines 0}} {
     vivado_guard
     require_file $project_file "$label simulation project"
@@ -138,7 +124,6 @@ proc saturn_lab::run_simulation {project_file top label runtime {simulator_optio
     generate_simulation_products
     configure_wave_capture
     update_compile_order -fileset $simset
-    refresh_xsim_cache $project_file
     launch_simulation -simset $simset -mode behavioral
     close_sim
 

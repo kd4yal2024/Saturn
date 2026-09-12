@@ -25,6 +25,29 @@ if ! git -C "$repo_dir" diff --quiet --ignore-submodules -- || \
 fi
 export SATURN_GIT_DIRTY=$git_dirty
 
+if [[ ${SATURN_SIM_FRESH:-0} == 1 ]]; then
+    archive_suffix="$(date +%s)-$$"
+    sim_roots=(
+        "$repo_dir/FPGA/IP/DDCIP"
+        "$repo_dir/FPGA/IP/DUCIP"
+        "$repo_dir/FPGA/IP/CODEC_IQMOD_IP"
+    )
+    for sim_root in "${sim_roots[@]}"; do
+        while IFS= read -r -d '' sim_cache; do
+            archived_cache="${sim_cache}.stale-${archive_suffix}"
+            printf 'Archiving stale XSim cache: %s\n' "$sim_cache"
+            if ! mv -- "$sim_cache" "$archived_cache"; then
+                cat >&2 <<EOF
+Unable to archive the XSim cache. A Windows Vivado/XSim process may still hold it open.
+Close the matching Vivado process (check tasklist.exe for vivado.exe, xvlog.exe,
+xelab.exe, or xsim.exe), then rerun with SATURN_SIM_FRESH=1.
+EOF
+                exit 1
+            fi
+        done < <(find "$sim_root" -type d -path '*/sim_1/behav/xsim' -print0 2>/dev/null)
+    done
+fi
+
 if [[ ! -f "$vivado_bat_wsl" ]]; then
     printf 'Vivado launcher not found: %s\n' "$vivado_bat_windows" >&2
     exit 127
@@ -49,6 +72,10 @@ fi
 restore_project() {
     local status=$?
     if [[ -n "$backup_dir" ]]; then
+        if [[ $status -eq 0 && ${SATURN_VIVADO_WRITEBACK:-0} == 1 ]]; then
+            rm -rf -- "$backup_dir"
+            return "$status"
+        fi
         local relative
         for relative in "${guarded_files[@]}"; do
             cp -p "$backup_dir/$relative" "$repo_dir/$relative"
@@ -69,6 +96,11 @@ if [[ -f "$project_file" ]]; then
     trap restore_project EXIT
 fi
 
+if [[ ${SATURN_VIVADO_WRITEBACK:-0} != 0 && ${SATURN_VIVADO_WRITEBACK:-0} != 1 ]]; then
+    printf 'SATURN_VIVADO_WRITEBACK must be 0 or 1\n' >&2
+    exit 2
+fi
+
 converted=()
 for argument in "$@"; do
     if [[ "$argument" == /* && -e "$argument" ]]; then
@@ -84,9 +116,11 @@ done
 windows_env_prefix=
 for variable in \
     SATURN_ALLOW_UNSUPPORTED_VIVADO SATURN_VIVADO_JOBS SATURN_SKIP_RESET \
-    SATURN_SIM_WAVES SATURN_DDC_SIM_SAMPLES SATURN_DDC_SIM_DISCARD \
+    SATURN_SIM_WAVES SATURN_SIM_FRESH SATURN_VALIDATE_UPDATE_COMPILE_ORDER \
+    SATURN_DDC_SIM_SAMPLES SATURN_DDC_SIM_DISCARD \
     SATURN_DDC_SIM_RUNTIME SATURN_DUC_SIM_SAMPLES SATURN_DUC_SIM_DISCARD \
-    SATURN_DUC_SIM_RUNTIME SATURN_IQMOD_KEY_HOLD_NS SATURN_IQMOD_SIM_RUNTIME \
+    SATURN_DUC_SIM_RUNTIME SATURN_IQMOD_KEY_HOLD_NS SATURN_IQMOD_SIM_SAMPLES \
+    SATURN_IQMOD_SIM_RUNTIME \
     SATURN_KEY_HOLD_NS SATURN_REQUIRED_SAMPLES SATURN_DISCARD_SAMPLES \
     SATURN_GOLDEN_BIT SATURN_PRIMARY_BIT SATURN_TIMER1 SATURN_TIMER2 \
     SATURN_PROM_OUTPUT SATURN_GIT_DIRTY; do
