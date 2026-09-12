@@ -17,13 +17,40 @@ set synth_run [saturn_lab::require_run $synth_name]
 set impl_run [saturn_lab::require_run $impl_name]
 update_compile_order -fileset sources_1
 
-if {[saturn_lab::env_or SATURN_SKIP_RESET 0] ne "1"} {
-    reset_run $impl_run
-    reset_run $synth_run
+set reuse_synth [saturn_lab::env_or SATURN_REUSE_SYNTH 0]
+if {$reuse_synth ni {0 1}} {
+    error "SATURN_REUSE_SYNTH must be 0 or 1"
 }
 
-launch_runs $synth_run -jobs [saturn_lab::jobs]
-wait_on_run $synth_run
+# Allow a timing-closure retry to select stronger implementation directives
+# while keeping the production defaults in the project. Vivado validates each
+# value when it is assigned, so misspelled or unsupported directives fail fast.
+foreach {environment property} {
+    SATURN_PLACE_DIRECTIVE STEPS.PLACE_DESIGN.ARGS.DIRECTIVE
+    SATURN_PHYSOPT_DIRECTIVE STEPS.PHYS_OPT_DESIGN.ARGS.DIRECTIVE
+    SATURN_ROUTE_DIRECTIVE STEPS.ROUTE_DESIGN.ARGS.DIRECTIVE
+    SATURN_POST_ROUTE_PHYSOPT_DIRECTIVE STEPS.POST_ROUTE_PHYS_OPT_DESIGN.ARGS.DIRECTIVE
+} {
+    set directive [saturn_lab::env_or $environment ""]
+    if {$directive ne ""} {
+        puts "Setting $property=$directive on $impl_name"
+        set_property $property $directive $impl_run
+    }
+}
+
+if {[saturn_lab::env_or SATURN_SKIP_RESET 0] ne "1"} {
+    reset_run $impl_run
+    if {!$reuse_synth} {
+        reset_run $synth_run
+    }
+}
+
+if {!$reuse_synth} {
+    launch_runs $synth_run -jobs [saturn_lab::jobs]
+    wait_on_run $synth_run
+} else {
+    puts "Reusing completed synthesis run $synth_name"
+}
 saturn_lab::assert_run_complete $synth_run
 
 launch_runs $impl_run -to_step write_bitstream -jobs [saturn_lab::jobs]
