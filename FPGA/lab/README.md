@@ -146,6 +146,13 @@ SATURN_IQMOD_KEY_HOLD_NS=20000000 make sim-iqmod
 ```
 
 Set `SATURN_SIM_WAVES=1` when an interactive waveform database is useful.
+
+If XSim stops during compile/analyze after a crashed run, set
+`SATURN_SIM_FRESH=1` to archive the existing simulator cache before launch:
+
+```bash
+SATURN_SIM_FRESH=1 make sim-iqmod
+```
 Wave capture is disabled by default in batch smoke tests.
 
 The checked-in IQ-modulation test project was last saved by Vivado 2021.2.
