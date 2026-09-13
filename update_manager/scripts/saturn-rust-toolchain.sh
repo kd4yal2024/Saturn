@@ -123,7 +123,13 @@ ensure_toolchain() {
     expected_sha="${SATURN_RUSTUP_INIT_SHA256:-$(default_rustup_sha256)}"
     [[ "$expected_sha" =~ ^[0-9a-f]{64}$ ]] || die "Invalid rustup SHA-256: $expected_sha"
     url="${SATURN_RUSTUP_INIT_URL:-https://static.rust-lang.org/rustup/archive/${RUSTUP_VERSION}/${TARGET}/rustup-init}"
-    temp_dir="$(mktemp -d)"
+    # The appliance installer invokes this helper as root, but rustup-init must
+    # run as the unprivileged build user.  Stage it on the build user's
+    # executable home filesystem and make the root-owned directory traversable
+    # by that user; a default mktemp directory is mode 0700 and may also live on
+    # a noexec /tmp mount.
+    temp_dir="$(mktemp -d "${BUILD_HOME}/.saturn-rustup.XXXXXX")"
+    chmod 0711 "$temp_dir"
     installer="${temp_dir}/rustup-init"
     trap 'rm -f "${installer:-}"; rmdir "${temp_dir:-}" 2>/dev/null || true' EXIT
     log "Downloading immutable rustup ${RUSTUP_VERSION} bootstrap for ${TARGET}"

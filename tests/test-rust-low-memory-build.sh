@@ -35,6 +35,15 @@ grep -Fq 'toolchain=1.98.1' <<<"$arm_config" \
 # shellcheck disable=SC2016
 grep -Fq 'installer="${temp_dir}/rustup-init"' "$RUST_TOOLCHAIN_HELPER" \
   || fail "Rust bootstrap does not preserve the required rustup-init executable name"
+# The provisioning entry point runs as root before switching to the build user.
+# Keep the bootstrap off a potentially noexec /tmp and make its root-owned
+# staging directory traversable by the user that executes rustup-init.
+# shellcheck disable=SC2016
+grep -Fq 'temp_dir="$(mktemp -d "${BUILD_HOME}/.saturn-rustup.XXXXXX")"' "$RUST_TOOLCHAIN_HELPER" \
+  || fail "Rust bootstrap is not staged on the build user's executable filesystem"
+# shellcheck disable=SC2016
+grep -Fq 'chmod 0711 "$temp_dir"' "$RUST_TOOLCHAIN_HELPER" \
+  || fail "Rust bootstrap staging directory is not traversable by the build user"
 x86_config="$(SATURN_RUSTUP_TARGET=x86_64-unknown-linux-gnu "$RUST_TOOLCHAIN_HELPER" print-config)"
 grep -Fq 'rustup_sha256=dda7234360b7f578ca8b0ddcb80145646fa61a67c1720a5abc7051b35c9fcb71' <<<"$x86_config" \
   || fail "Rust prerequisite x86_64 checksum changed unexpectedly"
