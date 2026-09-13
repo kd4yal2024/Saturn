@@ -5,6 +5,44 @@ All notable changes from the hardened app convergence pass are documented here.
 This changelog originated under `P3_app` and now follows the converged
 `P2_app` implementation.
 
+## [2026-09-13] Speaker Pacing Diagnostics
+
+### Added
+
+- Added allocation-free, monotonic timing in the active speaker loop for loop
+  gaps, `recvmmsg()` calls, and XDMA writes. Process-lifetime maxima and
+  threshold counters distinguish scheduling pauses, socket wakeup delays, and
+  DMA completion delays without changing refill or batching behavior.
+- Published speaker-thread TID, scheduling policy, priority, current CPU, peak
+  software-queue depth, and one incident-consistent last-underrun record under
+  `gauges.speaker_pacing_diagnostics`. The record includes FIFO and queue state,
+  selected/written frame counts, queue age, monotonic timestamp, and thread CPU.
+- Added deterministic duration-injection tests for normal operation and
+  scheduling, receive, and DMA stalls, including the JSON field/unit contract.
+
+## [2026-09-13] V29 FPGA FIFO Telemetry
+
+### Changed
+
+- Incremented the P2 application version from 50 to 51.
+- Added a single bounded V29 FIFO snapshot sampler owned by P2. Firmware older
+  than V29 performs no extended-register reads; V29 and newer reads only build
+  ID `0x56323900` until the marker matches.
+- Published coherent DDC, DUC, microphone, and speaker occupancy snapshots
+  under `gauges.fpga_fifo_v29`; snapshot validity and generation apply only to
+  those captured occupancy values. Minimum/maximum occupancy and aggregate
+  event-transition counters are live, boot-lifetime accumulators and are not
+  part of the coherent snapshot. Event transitions are explicitly not
+  described as sample-loss counters.
+
+### Verified
+
+- Mocked `RegisterRead`/`RegisterWrite` tests cover firmware gating, marker
+  mismatch, register decoding, snapshot generation, bounded timeout behavior,
+  JSON names, raw word units, and the prohibition on automatic clear writes.
+- `make test`
+- `make -j2`
+
 ## [2026-07-14] CAT Connect Backoff And Log Throttling
 
 ### Fixed

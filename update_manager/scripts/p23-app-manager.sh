@@ -162,7 +162,9 @@ done
 
 REPO_ROOT="${SATURN_ACTIVE_REPO_ROOT:-${SATURN_REPO_ROOT:-}}"
 [[ -n "$REPO_ROOT" ]] || die "SATURN_ACTIVE_REPO_ROOT/SATURN_REPO_ROOT is not set"
-[[ -d "$REPO_ROOT/.git" ]] || die "Repo root is not a git checkout: $REPO_ROOT"
+need_cmd git
+git -C "$REPO_ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1 || \
+  die "Repo root is not a git checkout: $REPO_ROOT"
 
 P2_DIR="$REPO_ROOT/sw_projects/P2_app"
 P2_BIN="$P2_DIR/p2app"

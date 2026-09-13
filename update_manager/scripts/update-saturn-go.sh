@@ -304,7 +304,8 @@ export PATH="$CARGO_BIN_DIR:$PATH"
 RUN_STARTED_AT="$(date -Is)"
 REPO_ROOT="${SATURN_ACTIVE_REPO_ROOT:-${SATURN_REPO_ROOT:-}}"
 [[ -n "$REPO_ROOT" ]] || die "SATURN_ACTIVE_REPO_ROOT is not set"
-[[ -d "$REPO_ROOT/.git" ]] || die "Repo root is not a git checkout: $REPO_ROOT"
+git -C "$REPO_ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1 ||
+  die "Repo root is not a git checkout: $REPO_ROOT"
 [[ -d "$REPO_ROOT/update_manager" ]] || die "Repo root does not contain update_manager/: $REPO_ROOT"
 EXTRA_PACKAGED_SCRIPTS=(
   "$REPO_ROOT/scripts/fix-LED-power-button.sh"

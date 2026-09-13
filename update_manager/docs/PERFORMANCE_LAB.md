@@ -63,6 +63,8 @@ backup/restore and managed-state migration.
 - XDMA interrupts per second and interrupts per MiB;
 - DDC/DUC packet and DMA rates;
 - average DDC/DUC DMA operation size;
+- process-lifetime speaker-loop, socket-receive, and DMA-write timing maxima and
+  threshold counters, plus thread scheduling identity and last-underrun context;
 - SoC temperature and CPU frequency;
 - ADC1/ADC2 peak dBFS when available.
 

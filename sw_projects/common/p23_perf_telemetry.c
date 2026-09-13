@@ -3,6 +3,7 @@
 #include <errno.h>
 #include <inttypes.h>
 #include <pthread.h>
+#include <sched.h>
 #include <stdatomic.h>
 #include <stdio.h>
 #include <string.h>
@@ -56,10 +57,26 @@ typedef struct
   uint32_t SpeakerUnderQueueAgeUs;
   uint8_t SpeakerUnderMode;
   bool SpeakerUnderGapActive;
+  bool SpeakerPacingAvailable;
+  uint32_t SpeakerThreadTid;
+  int32_t SpeakerThreadSchedulingPolicy;
+  int32_t SpeakerThreadPriority;
+  bool SpeakerLastUnderrunValid;
+  uint64_t SpeakerLastUnderrunMonotonicNs;
+  uint64_t SpeakerLastUnderrunLoopGapNs;
+  uint64_t SpeakerLastUnderrunReceiveDurationNs;
+  uint64_t SpeakerLastUnderrunDMAWriteDurationNs;
+  uint32_t SpeakerLastUnderrunFIFOFramesBeforeRefill;
+  uint32_t SpeakerLastUnderrunQueuedFrames;
+  uint32_t SpeakerLastUnderrunFramesSelected;
+  uint32_t SpeakerLastUnderrunFramesWritten;
+  uint32_t SpeakerLastUnderrunQueueAgeUs;
+  int32_t SpeakerLastUnderrunThreadCPU;
   bool FPGAInfoValid;
   TVersionInfoSnapshot FPGAInfo;
   bool DieTempValid;
   float DieTempC;
+  TFPGAFifoV29Snapshot FPGAFifoV29;
 } TP23PerfState;
 
 static const char *g_port_names[P23_PERF_MAX_PORTS] =
@@ -142,10 +159,89 @@ static const char *g_counter_names[eP23PerfCounterCount] =
 static pthread_mutex_t g_perf_mutex = PTHREAD_MUTEX_INITIALIZER;
 static TP23PerfState g_perf_state;
 static atomic_ullong g_perf_counters[eP23PerfCounterCount];
+static atomic_ullong g_speaker_maximum_loop_gap_ns;
+static atomic_ullong g_speaker_maximum_receive_duration_ns;
+static atomic_ullong g_speaker_maximum_dma_write_duration_ns;
+static atomic_ullong g_speaker_loop_gap_over_threshold[P23_SPEAKER_LOOP_GAP_THRESHOLD_COUNT];
+static atomic_ullong g_speaker_receive_duration_over_threshold[P23_SPEAKER_DURATION_THRESHOLD_COUNT];
+static atomic_ullong g_speaker_dma_write_duration_over_threshold[P23_SPEAKER_DURATION_THRESHOLD_COUNT];
+static atomic_uint g_speaker_peak_software_queue_frames;
+static atomic_int g_speaker_thread_cpu;
 static char g_app_name[16] = "unknown";
 static uint32_t g_app_version = 0;
 static time_t g_started_at = 0;
 static time_t g_last_write = 0;
+
+static const uint64_t g_speaker_loop_gap_threshold_ns[P23_SPEAKER_LOOP_GAP_THRESHOLD_COUNT] =
+{
+  2000000ULL, 4000000ULL, 8000000ULL, 16000000ULL
+};
+
+static const uint64_t g_speaker_duration_threshold_ns[P23_SPEAKER_DURATION_THRESHOLD_COUNT] =
+{
+  1000000ULL, 2000000ULL, 4000000ULL, 8000000ULL, 16000000ULL
+};
+
+static void AtomicMaximumU64(atomic_ullong *Maximum, uint64_t Candidate)
+{
+  unsigned long long Observed = atomic_load(Maximum);
+
+  while ((Candidate > Observed) &&
+         !atomic_compare_exchange_weak(Maximum, &Observed, Candidate))
+  {
+  }
+}
+
+static void AtomicMaximumU32(atomic_uint *Maximum, uint32_t Candidate)
+{
+  unsigned int Observed = atomic_load(Maximum);
+
+  while ((Candidate > Observed) &&
+         !atomic_compare_exchange_weak(Maximum, &Observed, Candidate))
+  {
+  }
+}
+
+static void ObserveSpeakerDuration(uint64_t DurationNs, atomic_ullong *Maximum,
+                                   const uint64_t *Thresholds, atomic_ullong *Counters,
+                                   unsigned int ThresholdCount)
+{
+  unsigned int Index;
+
+  AtomicMaximumU64(Maximum, DurationNs);
+  for (Index = 0; Index < ThresholdCount; Index++)
+  {
+    if (DurationNs > Thresholds[Index])
+      atomic_fetch_add(&Counters[Index], 1U);
+  }
+}
+
+static const char *SchedulingPolicyName(int32_t Policy)
+{
+  switch (Policy)
+  {
+    case SCHED_OTHER:
+      return "other";
+    case SCHED_FIFO:
+      return "fifo";
+    case SCHED_RR:
+      return "round_robin";
+#ifdef SCHED_BATCH
+    case SCHED_BATCH:
+      return "batch";
+#endif
+#ifdef SCHED_IDLE
+    case SCHED_IDLE:
+      return "idle";
+#endif
+#ifdef SCHED_DEADLINE
+    case SCHED_DEADLINE:
+      return "deadline";
+#endif
+    default:
+      return "unknown";
+  }
+}
 
 static const char *SpeakerUnderrunModeName(uint8_t Mode)
 {
@@ -177,6 +273,66 @@ static const char *DUCWriteModeName(uint8_t Mode)
     default:
       return "unknown";
   }
+}
+
+static const char *FPGAFifoV29StatusJSON(EFPGAFifoV29Status Status)
+{
+  switch (Status)
+  {
+    case eFPGAFifoV29Available:
+      return "available";
+    case eFPGAFifoV29MarkerMismatch:
+      return "marker_mismatch";
+    default:
+      return "unsupported";
+  }
+}
+
+void P23PerfTelemetryWriteFPGAFifoV29JSON(FILE *File, const TFPGAFifoV29Snapshot *Snapshot)
+{
+  static const char *Names[FPGA_FIFO_V29_CHANNEL_COUNT] = {"ddc", "duc", "mic", "speaker"};
+  const uint32_t *Groups[4];
+  static const char *GroupNames[4] = {
+    "occupancy_words", "minimum_words", "maximum_words", "event_transitions"
+  };
+  unsigned int Group;
+  unsigned int Channel;
+
+  if ((File == NULL) || (Snapshot == NULL))
+    return;
+
+  Groups[0] = Snapshot->OccupancyWords;
+  Groups[1] = Snapshot->MinimumWords;
+  Groups[2] = Snapshot->MaximumWords;
+  Groups[3] = Snapshot->EventTransitions;
+
+  fprintf(File,
+          "    \"fpga_fifo_v29\": {\n"
+          "      \"available\": %s,\n"
+          "      \"status\": \"%s\",\n"
+          "      \"build_id\": %" PRIu32 ",\n"
+          "      \"snapshot_valid\": %s,\n"
+          "      \"snapshot_generation\": %" PRIu16 ",\n"
+          "      \"snapshot_timeout_count\": %" PRIu64 ",\n",
+          Snapshot->Available ? "true" : "false",
+          FPGAFifoV29StatusJSON(Snapshot->Status),
+          Snapshot->BuildId,
+          Snapshot->SnapshotValid ? "true" : "false",
+          Snapshot->SnapshotGeneration,
+          Snapshot->SnapshotTimeoutCount);
+
+  for (Group = 0; Group < 4U; Group++)
+  {
+    fprintf(File, "      \"%s\": {\n", GroupNames[Group]);
+    for (Channel = 0; Channel < FPGA_FIFO_V29_CHANNEL_COUNT; Channel++)
+    {
+      fprintf(File, "        \"%s\": %" PRIu32 "%s\n",
+              Names[Channel], Groups[Group][Channel],
+              (Channel + 1U == FPGA_FIFO_V29_CHANNEL_COUNT) ? "" : ",");
+    }
+    fprintf(File, "      }%s\n", (Group == 3U) ? "" : ",");
+  }
+  fprintf(File, "    }\n");
 }
 
 static void AppendCounterJSON(FILE *File)
@@ -219,6 +375,18 @@ void P23PerfTelemetryInit(const char *AppName, uint32_t AppVersion)
   for (Index = 0; Index < (unsigned int)eP23PerfCounterCount; Index++)
   {
     atomic_store(&g_perf_counters[Index], 0U);
+  }
+  atomic_store(&g_speaker_maximum_loop_gap_ns, 0U);
+  atomic_store(&g_speaker_maximum_receive_duration_ns, 0U);
+  atomic_store(&g_speaker_maximum_dma_write_duration_ns, 0U);
+  atomic_store(&g_speaker_peak_software_queue_frames, 0U);
+  atomic_store(&g_speaker_thread_cpu, -1);
+  for (Index = 0; Index < P23_SPEAKER_LOOP_GAP_THRESHOLD_COUNT; Index++)
+    atomic_store(&g_speaker_loop_gap_over_threshold[Index], 0U);
+  for (Index = 0; Index < P23_SPEAKER_DURATION_THRESHOLD_COUNT; Index++)
+  {
+    atomic_store(&g_speaker_receive_duration_over_threshold[Index], 0U);
+    atomic_store(&g_speaker_dma_write_duration_over_threshold[Index], 0U);
   }
 }
 
@@ -321,6 +489,16 @@ void P23PerfTelemetrySetFIFOSnapshot(uint32_t DDCSamples, uint32_t MicSamples,
   pthread_mutex_unlock(&g_perf_mutex);
 }
 
+void P23PerfTelemetrySetFPGAFifoV29(const TFPGAFifoV29Snapshot *Snapshot)
+{
+  if (Snapshot == NULL)
+    return;
+
+  pthread_mutex_lock(&g_perf_mutex);
+  g_perf_state.FPGAFifoV29 = *Snapshot;
+  pthread_mutex_unlock(&g_perf_mutex);
+}
+
 void P23PerfTelemetrySetADCSnapshot(uint16_t ADC1Peak, uint16_t ADC2Peak, uint8_t OverflowBits)
 {
   pthread_mutex_lock(&g_perf_mutex);
@@ -354,6 +532,180 @@ void P23PerfTelemetrySetSpeakerUnderrunContext(uint32_t QueueFrames, uint32_t FI
   pthread_mutex_unlock(&g_perf_mutex);
 }
 
+void P23PerfTelemetrySetSpeakerThread(uint32_t Tid, int32_t SchedulingPolicy,
+                                      int32_t Priority, int32_t CPU)
+{
+  pthread_mutex_lock(&g_perf_mutex);
+  g_perf_state.SpeakerPacingAvailable = true;
+  g_perf_state.SpeakerThreadTid = Tid;
+  g_perf_state.SpeakerThreadSchedulingPolicy = SchedulingPolicy;
+  g_perf_state.SpeakerThreadPriority = Priority;
+  pthread_mutex_unlock(&g_perf_mutex);
+  atomic_store(&g_speaker_thread_cpu, CPU);
+}
+
+void P23PerfTelemetrySetSpeakerThreadCPU(int32_t CPU)
+{
+  atomic_store(&g_speaker_thread_cpu, CPU);
+}
+
+void P23PerfTelemetryObserveSpeakerLoopGap(uint64_t DurationNs)
+{
+  ObserveSpeakerDuration(DurationNs, &g_speaker_maximum_loop_gap_ns,
+                         g_speaker_loop_gap_threshold_ns,
+                         g_speaker_loop_gap_over_threshold,
+                         P23_SPEAKER_LOOP_GAP_THRESHOLD_COUNT);
+}
+
+void P23PerfTelemetryObserveSpeakerReceiveDuration(uint64_t DurationNs)
+{
+  ObserveSpeakerDuration(DurationNs, &g_speaker_maximum_receive_duration_ns,
+                         g_speaker_duration_threshold_ns,
+                         g_speaker_receive_duration_over_threshold,
+                         P23_SPEAKER_DURATION_THRESHOLD_COUNT);
+}
+
+void P23PerfTelemetryObserveSpeakerDMAWriteDuration(uint64_t DurationNs)
+{
+  ObserveSpeakerDuration(DurationNs, &g_speaker_maximum_dma_write_duration_ns,
+                         g_speaker_duration_threshold_ns,
+                         g_speaker_dma_write_duration_over_threshold,
+                         P23_SPEAKER_DURATION_THRESHOLD_COUNT);
+}
+
+void P23PerfTelemetryObserveSpeakerQueueDepth(uint32_t QueueFrames)
+{
+  AtomicMaximumU32(&g_speaker_peak_software_queue_frames, QueueFrames);
+}
+
+void P23PerfTelemetrySetSpeakerUnderrunContextWithPacing(
+  uint32_t QueueFrames, uint32_t FIFOFrames, uint32_t QueueAgeUs, uint8_t Mode,
+  bool GapActive, uint64_t LoopGapNs, uint64_t ReceiveDurationNs,
+  uint64_t DMAWriteDurationNs, uint64_t EventMonotonicNs, int32_t ThreadCPU)
+{
+  pthread_mutex_lock(&g_perf_mutex);
+  g_perf_state.SpeakerUnderQueueFrames = QueueFrames;
+  g_perf_state.SpeakerUnderFIFOFrames = FIFOFrames;
+  g_perf_state.SpeakerUnderQueueAgeUs = QueueAgeUs;
+  g_perf_state.SpeakerUnderMode = Mode;
+  g_perf_state.SpeakerUnderGapActive = GapActive;
+  g_perf_state.SpeakerLastUnderrunValid = true;
+  g_perf_state.SpeakerLastUnderrunMonotonicNs = EventMonotonicNs;
+  g_perf_state.SpeakerLastUnderrunLoopGapNs = LoopGapNs;
+  g_perf_state.SpeakerLastUnderrunReceiveDurationNs = ReceiveDurationNs;
+  g_perf_state.SpeakerLastUnderrunDMAWriteDurationNs = DMAWriteDurationNs;
+  g_perf_state.SpeakerLastUnderrunFIFOFramesBeforeRefill = FIFOFrames;
+  g_perf_state.SpeakerLastUnderrunQueuedFrames = QueueFrames;
+  g_perf_state.SpeakerLastUnderrunFramesSelected = 0U;
+  g_perf_state.SpeakerLastUnderrunFramesWritten = 0U;
+  g_perf_state.SpeakerLastUnderrunQueueAgeUs = QueueAgeUs;
+  g_perf_state.SpeakerLastUnderrunThreadCPU = ThreadCPU;
+  pthread_mutex_unlock(&g_perf_mutex);
+}
+
+void P23PerfTelemetrySetSpeakerUnderrunRefill(uint64_t EventMonotonicNs,
+                                              uint32_t FramesSelected,
+                                              uint32_t FramesWritten)
+{
+  pthread_mutex_lock(&g_perf_mutex);
+  if (g_perf_state.SpeakerLastUnderrunValid &&
+      (g_perf_state.SpeakerLastUnderrunMonotonicNs == EventMonotonicNs))
+  {
+    g_perf_state.SpeakerLastUnderrunFramesSelected = FramesSelected;
+    g_perf_state.SpeakerLastUnderrunFramesWritten = FramesWritten;
+  }
+  pthread_mutex_unlock(&g_perf_mutex);
+}
+
+void P23PerfTelemetryGetSpeakerPacingDiagnostics(TP23SpeakerPacingDiagnostics *Snapshot)
+{
+  unsigned int Index;
+
+  if (Snapshot == NULL)
+    return;
+
+  memset(Snapshot, 0, sizeof(*Snapshot));
+  pthread_mutex_lock(&g_perf_mutex);
+  Snapshot->Available = g_perf_state.SpeakerPacingAvailable;
+  Snapshot->ThreadTid = g_perf_state.SpeakerThreadTid;
+  Snapshot->ThreadSchedulingPolicy = g_perf_state.SpeakerThreadSchedulingPolicy;
+  Snapshot->ThreadPriority = g_perf_state.SpeakerThreadPriority;
+  Snapshot->LastUnderrunValid = g_perf_state.SpeakerLastUnderrunValid;
+  Snapshot->LastUnderrunMonotonicNs = g_perf_state.SpeakerLastUnderrunMonotonicNs;
+  Snapshot->LastUnderrunLoopGapNs = g_perf_state.SpeakerLastUnderrunLoopGapNs;
+  Snapshot->LastUnderrunReceiveDurationNs = g_perf_state.SpeakerLastUnderrunReceiveDurationNs;
+  Snapshot->LastUnderrunDMAWriteDurationNs = g_perf_state.SpeakerLastUnderrunDMAWriteDurationNs;
+  Snapshot->LastUnderrunFIFOFramesBeforeRefill = g_perf_state.SpeakerLastUnderrunFIFOFramesBeforeRefill;
+  Snapshot->LastUnderrunQueuedFrames = g_perf_state.SpeakerLastUnderrunQueuedFrames;
+  Snapshot->LastUnderrunFramesSelected = g_perf_state.SpeakerLastUnderrunFramesSelected;
+  Snapshot->LastUnderrunFramesWritten = g_perf_state.SpeakerLastUnderrunFramesWritten;
+  Snapshot->LastUnderrunQueueAgeUs = g_perf_state.SpeakerLastUnderrunQueueAgeUs;
+  Snapshot->LastUnderrunThreadCPU = g_perf_state.SpeakerLastUnderrunThreadCPU;
+  pthread_mutex_unlock(&g_perf_mutex);
+
+  Snapshot->ThreadCPU = atomic_load(&g_speaker_thread_cpu);
+  Snapshot->MaximumLoopGapNs = atomic_load(&g_speaker_maximum_loop_gap_ns);
+  Snapshot->MaximumReceiveDurationNs = atomic_load(&g_speaker_maximum_receive_duration_ns);
+  Snapshot->MaximumDMAWriteDurationNs = atomic_load(&g_speaker_maximum_dma_write_duration_ns);
+  Snapshot->PeakSoftwareQueueFrames = atomic_load(&g_speaker_peak_software_queue_frames);
+  for (Index = 0; Index < P23_SPEAKER_LOOP_GAP_THRESHOLD_COUNT; Index++)
+    Snapshot->LoopGapOverThreshold[Index] = atomic_load(&g_speaker_loop_gap_over_threshold[Index]);
+  for (Index = 0; Index < P23_SPEAKER_DURATION_THRESHOLD_COUNT; Index++)
+  {
+    Snapshot->ReceiveDurationOverThreshold[Index] = atomic_load(&g_speaker_receive_duration_over_threshold[Index]);
+    Snapshot->DMAWriteDurationOverThreshold[Index] = atomic_load(&g_speaker_dma_write_duration_over_threshold[Index]);
+  }
+}
+
+void P23PerfTelemetryWriteSpeakerPacingJSON(FILE *File,
+                                            const TP23SpeakerPacingDiagnostics *Snapshot)
+{
+  if ((File == NULL) || (Snapshot == NULL))
+    return;
+
+  fprintf(File,
+          "    \"speaker_pacing_diagnostics\": {\n"
+          "      \"available\": %s,\n"
+          "      \"lifetime_scope\": \"process\",\n"
+          "      \"duration_unit\": \"microseconds\",\n"
+          "      \"thread\": { \"tid\": %" PRIu32 ", \"scheduling_policy\": \"%s\", \"scheduling_policy_code\": %" PRIi32 ", \"priority\": %" PRIi32 ", \"cpu\": %" PRIi32 " },\n"
+          "      \"maximum\": { \"loop_gap_us\": %" PRIu64 ", \"recvmmsg_duration_us\": %" PRIu64 ", \"dma_write_duration_us\": %" PRIu64 ", \"software_queue_depth_frames\": %" PRIu32 " },\n"
+          "      \"loop_gap_counts\": { \"over_2ms\": %" PRIu64 ", \"over_4ms\": %" PRIu64 ", \"over_8ms\": %" PRIu64 ", \"over_16ms\": %" PRIu64 " },\n"
+          "      \"recvmmsg_duration_counts\": { \"over_1ms\": %" PRIu64 ", \"over_2ms\": %" PRIu64 ", \"over_4ms\": %" PRIu64 ", \"over_8ms\": %" PRIu64 ", \"over_16ms\": %" PRIu64 " },\n"
+          "      \"dma_write_duration_counts\": { \"over_1ms\": %" PRIu64 ", \"over_2ms\": %" PRIu64 ", \"over_4ms\": %" PRIu64 ", \"over_8ms\": %" PRIu64 ", \"over_16ms\": %" PRIu64 " },\n"
+          "      \"last_underrun\": { \"valid\": %s, \"monotonic_timestamp_ns\": %" PRIu64 ", \"loop_gap_us\": %" PRIu64 ", \"recvmmsg_duration_us\": %" PRIu64 ", \"dma_write_duration_us\": %" PRIu64 ", \"fifo_frames_before_refill\": %" PRIu32 ", \"queued_frames\": %" PRIu32 ", \"frames_selected\": %" PRIu32 ", \"frames_written\": %" PRIu32 ", \"queue_age_us\": %" PRIu32 ", \"thread_cpu\": %" PRIi32 " }\n"
+          "    },\n",
+          Snapshot->Available ? "true" : "false",
+          Snapshot->ThreadTid,
+          SchedulingPolicyName(Snapshot->ThreadSchedulingPolicy),
+          Snapshot->ThreadSchedulingPolicy,
+          Snapshot->ThreadPriority,
+          Snapshot->ThreadCPU,
+          (uint64_t)(Snapshot->MaximumLoopGapNs / 1000U),
+          (uint64_t)(Snapshot->MaximumReceiveDurationNs / 1000U),
+          (uint64_t)(Snapshot->MaximumDMAWriteDurationNs / 1000U),
+          Snapshot->PeakSoftwareQueueFrames,
+          Snapshot->LoopGapOverThreshold[0], Snapshot->LoopGapOverThreshold[1],
+          Snapshot->LoopGapOverThreshold[2], Snapshot->LoopGapOverThreshold[3],
+          Snapshot->ReceiveDurationOverThreshold[0], Snapshot->ReceiveDurationOverThreshold[1],
+          Snapshot->ReceiveDurationOverThreshold[2], Snapshot->ReceiveDurationOverThreshold[3],
+          Snapshot->ReceiveDurationOverThreshold[4],
+          Snapshot->DMAWriteDurationOverThreshold[0], Snapshot->DMAWriteDurationOverThreshold[1],
+          Snapshot->DMAWriteDurationOverThreshold[2], Snapshot->DMAWriteDurationOverThreshold[3],
+          Snapshot->DMAWriteDurationOverThreshold[4],
+          Snapshot->LastUnderrunValid ? "true" : "false",
+          Snapshot->LastUnderrunMonotonicNs,
+          (uint64_t)(Snapshot->LastUnderrunLoopGapNs / 1000U),
+          (uint64_t)(Snapshot->LastUnderrunReceiveDurationNs / 1000U),
+          (uint64_t)(Snapshot->LastUnderrunDMAWriteDurationNs / 1000U),
+          Snapshot->LastUnderrunFIFOFramesBeforeRefill,
+          Snapshot->LastUnderrunQueuedFrames,
+          Snapshot->LastUnderrunFramesSelected,
+          Snapshot->LastUnderrunFramesWritten,
+          Snapshot->LastUnderrunQueueAgeUs,
+          Snapshot->LastUnderrunThreadCPU);
+}
+
 void P23PerfTelemetryCounterAdd(EP23PerfCounterId CounterId, uint64_t Delta)
 {
   if (CounterId >= eP23PerfCounterCount)
@@ -365,6 +717,7 @@ void P23PerfTelemetryCounterAdd(EP23PerfCounterId CounterId, uint64_t Delta)
 void P23PerfTelemetryMaybeWrite(void)
 {
   TP23PerfState Snapshot;
+  TP23SpeakerPacingDiagnostics SpeakerPacingSnapshot;
   char TempPath[192];
   FILE *File;
   time_t Now;
@@ -386,6 +739,7 @@ void P23PerfTelemetryMaybeWrite(void)
     UptimeSeconds = (long long)(Now - g_started_at);
   g_last_write = Now;
   pthread_mutex_unlock(&g_perf_mutex);
+  P23PerfTelemetryGetSpeakerPacingDiagnostics(&SpeakerPacingSnapshot);
 
   snprintf(TempPath, sizeof(TempPath), "%s.%ld.tmp", P23_PERF_TELEMETRY_JSON_FILE, (long)getpid());
   File = fopen(TempPath, "w");
@@ -533,8 +887,7 @@ void P23PerfTelemetryMaybeWrite(void)
           "      \"last_mode\": \"%s\",\n"
           "      \"last_mode_code\": %" PRIu8 ",\n"
           "      \"last_gap_active\": %s\n"
-          "    }\n"
-          "  },\n",
+          "    },\n",
           Snapshot.FIFODDCSamples,
           Snapshot.FIFOMicSamples,
           Snapshot.FIFODUCSamples,
@@ -554,6 +907,10 @@ void P23PerfTelemetryMaybeWrite(void)
           SpeakerUnderrunModeName(Snapshot.SpeakerUnderMode),
           Snapshot.SpeakerUnderMode,
           Snapshot.SpeakerUnderGapActive ? "true" : "false");
+
+  P23PerfTelemetryWriteSpeakerPacingJSON(File, &SpeakerPacingSnapshot);
+  P23PerfTelemetryWriteFPGAFifoV29JSON(File, &Snapshot.FPGAFifoV29);
+  fprintf(File, "  },\n");
 
   AppendCounterJSON(File);
   fprintf(File, "}\n");

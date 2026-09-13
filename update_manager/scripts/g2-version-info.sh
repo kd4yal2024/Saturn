@@ -1,15 +1,16 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SCRIPT_VERSION="1.6"
+SCRIPT_VERSION="1.7"
 PERF_URL="${SATURN_LOCAL_P23_PERF_URL:-http://127.0.0.1:8080/p23_perf}"
 CURRENT_TARGET="$(readlink -f /opt/saturn-go/p23-apps/current 2>/dev/null || true)"
 REPO_ROOT="${SATURN_ACTIVE_REPO_ROOT:-${SATURN_REPO_ROOT:-/home/pi/github/Saturn}}"
 TMP_PERF_JSON="$(mktemp)"
+TMP_BANNER="$(mktemp)"
 PERF_FETCH_STATUS=""
 
 cleanup() {
-  rm -f "${TMP_PERF_JSON}"
+  rm -f "${TMP_PERF_JSON}" "${TMP_BANNER}"
 }
 
 trap cleanup EXIT
@@ -271,6 +272,7 @@ LAST_KNOWN_STARTUP_LINES="$(
     | grep -E 'FPGA BIT file data code| Product:| FPGA Firmware loaded:|All clocks present|Die Temp =' \
     | tail -n 5 || true
 )"
+printf '%s\n' "${LAST_KNOWN_STARTUP_LINES}" > "${TMP_BANNER}"
 
 if [[ -n "${CURRENT_STARTUP_LINES}" ]]; then
   while IFS= read -r line; do
@@ -278,11 +280,65 @@ if [[ -n "${CURRENT_STARTUP_LINES}" ]]; then
     say "  ${line}"
   done <<< "${CURRENT_STARTUP_LINES}"
 elif [[ -n "${LAST_KNOWN_STARTUP_LINES}" ]]; then
+  RETAINED_IDENTITY_STATE="$(python3 - "${TMP_PERF_JSON}" "${TMP_BANNER}" <<'PY'
+import json
+import re
+import sys
+
+try:
+    with open(sys.argv[1], "r", encoding="utf-8") as handle:
+        root = json.load(handle)
+    live = (((root.get("perf") or {}).get("app_telemetry") or {}).get("current") or {}).get("fpga") or {}
+except Exception:
+    live = {}
+
+try:
+    with open(sys.argv[2], "r", encoding="utf-8") as handle:
+        banner = handle.read()
+except Exception:
+    banner = ""
+
+if not live.get("available"):
+    print("unverified")
+    raise SystemExit
+
+patterns = {
+    "firmware_version": r"FW Version\s*=\s*(\d+)",
+    "product_version": r"Product:.*?Version\s*=\s*(\d+)",
+    "date_code_hex": r"FPGA BIT file data code\s*=\s*([0-9A-Fa-f]+)",
+}
+mismatches = []
+for field, pattern in patterns.items():
+    match = re.search(pattern, banner)
+    current = live.get(field)
+    if not match or current is None:
+        continue
+    retained = match.group(1)
+    if field == "date_code_hex":
+        equal = retained.upper().zfill(8) == str(current).upper().zfill(8)
+    else:
+        try:
+            equal = int(retained) == int(current)
+        except (TypeError, ValueError):
+            equal = False
+    if not equal:
+        mismatches.append(f"{field} retained={retained} live={current}")
+
+print("stale:" + "; ".join(mismatches) if mismatches else "match")
+PY
+)"
   say "  Current p2app.service start at ${ACTIVE_SINCE:-unknown time} did not emit matching startup banner lines."
-  say "  Showing most recent captured banner from an earlier retained start:"
+  if [[ "${RETAINED_IDENTITY_STATE}" == stale:* ]]; then
+    say "  STALE retained startup banner: ${RETAINED_IDENTITY_STATE#stale:}"
+    say "  Historical only; this banner is not current FPGA identity evidence:"
+    BANNER_PREFIX="[stale]"
+  else
+    say "  Retained startup banner is historical and not current FPGA identity evidence (${RETAINED_IDENTITY_STATE})."
+    BANNER_PREFIX="[retained]"
+  fi
   while IFS= read -r line; do
     [[ -n "${line}" ]] || continue
-    say "  ${line}"
+    say "  ${BANNER_PREFIX} ${line}"
   done <<< "${LAST_KNOWN_STARTUP_LINES}"
 else
   if [[ -n "${ACTIVE_SINCE}" ]]; then

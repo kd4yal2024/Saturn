@@ -25,6 +25,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <pthread.h>
+#include <sched.h>
 #include <sys/socket.h>
 #include <time.h>
 #include <syscall.h>
@@ -74,22 +75,27 @@ typedef enum
     eSpeakerWriteModeGapFill = 4
 } ESpeakerWriteMode;
 
-static void NoteSpeakerUnderflow(bool ReportingEnabled, bool Underflowed, bool *UnderflowActive,
-                                 unsigned int Current, uint32_t QueueFrames, uint64_t QueueAgeUs,
-                                 bool PrefillIsActive, bool GapIsActive)
+static uint64_t GetMonotonicTimeNs(void);
+
+static uint64_t NoteSpeakerUnderflow(bool ReportingEnabled, bool Underflowed, bool *UnderflowActive,
+                                     unsigned int Current, uint32_t QueueFrames, uint64_t QueueAgeUs,
+                                     bool PrefillIsActive, bool GapIsActive, uint64_t LoopGapNs,
+                                     uint64_t ReceiveDurationNs, uint64_t DMAWriteDurationNs)
 {
     uint8_t Mode = eSpeakerWriteModeUnknown;
+    uint64_t EventMonotonicNs = 0;
+    int EventThreadCPU = -1;
 
     if (!ReportingEnabled)
     {
         *UnderflowActive = false;
-        return;
+        return 0;
     }
 
     if (!Underflowed)
     {
         *UnderflowActive = false;
-        return;
+        return 0;
     }
 
     pthread_mutex_lock(&g_fifo_overflow_mutex);
@@ -113,18 +119,28 @@ static void NoteSpeakerUnderflow(bool ReportingEnabled, bool Underflowed, bool *
         else
             Mode = eSpeakerWriteModeNormal;
 
-        P23PerfTelemetrySetSpeakerUnderrunContext(
+        EventMonotonicNs = GetMonotonicTimeNs();
+        EventThreadCPU = sched_getcpu();
+        P23PerfTelemetrySetSpeakerThreadCPU(EventThreadCPU);
+        P23PerfTelemetrySetSpeakerUnderrunContextWithPacing(
             QueueFrames,
             Current / VMEMWORDSPERFRAME,
             (QueueAgeUs > UINT32_MAX) ? UINT32_MAX : (uint32_t)QueueAgeUs,
             Mode,
-            GapIsActive
+            GapIsActive,
+            LoopGapNs,
+            ReceiveDurationNs,
+            DMAWriteDurationNs,
+            EventMonotonicNs,
+            EventThreadCPU
         );
         *UnderflowActive = true;
     }
 
     if (UseDebug)
         printf("Codec speaker FIFO Underflowed, depth now = %d\n", Current);
+
+    return EventMonotonicNs;
 }
 
 static uint64_t GetMonotonicTimeNs(void)
@@ -135,6 +151,15 @@ static uint64_t GetMonotonicTimeNs(void)
         return 0;
 
     return ((uint64_t)Now.tv_sec * 1000000000ULL) + (uint64_t)Now.tv_nsec;
+}
+
+static uint64_t GetMonotonicElapsedNs(uint64_t StartNs)
+{
+    uint64_t FinishNs = GetMonotonicTimeNs();
+
+    if((StartNs == 0U) || (FinishNs < StartNs))
+        return 0;
+    return FinishNs - StartNs;
 }
 
 static uint32_t GetSpeakerTargetFrames(unsigned int Current, bool *PrefillActive)
@@ -261,12 +286,34 @@ void *IncomingSpkrAudio(void *arg)                      // listener thread
     TP2SequenceTracker SequenceTracker = {0};
     struct timespec ReceiveTimeout;
     struct timespec *ReceiveTimeoutPtr = NULL;
+    struct sched_param SchedulingParameters = {0};
+    uint64_t PreviousLoopStartNs = 0;
+    uint64_t LoopStartNs = 0;
+    uint64_t LoopGapNs = 0;
+    uint64_t ReceiveStartNs = 0;
+    uint64_t LastReceiveDurationNs = 0;
+    uint64_t DMAWriteStartNs = 0;
+    uint64_t LastDMAWriteDurationNs = 0;
+    uint64_t UnderflowEventMonotonicNs = 0;
+    uint64_t NewUnderflowEventMonotonicNs = 0;
+    int SchedulingPolicy = -1;
+    int ThreadCPU = -1;
+    pid_t ThreadTid = 0;
 
 
     ThreadData = (struct ThreadSocketData *)arg;
     atomic_store(&ThreadData->Active, true);
     printf("spinning up speaker audio thread with port %u, pid=%ld\n", (unsigned int)atomic_load(&ThreadData->Portid), syscall(SYS_gettid));
     ApplyCriticalAudioThreadRuntime("Speaker audio");
+    ThreadTid = (pid_t)syscall(SYS_gettid);
+    if(pthread_getschedparam(pthread_self(), &SchedulingPolicy, &SchedulingParameters) != 0)
+    {
+        SchedulingPolicy = -1;
+        SchedulingParameters.sched_priority = -1;
+    }
+    ThreadCPU = sched_getcpu();
+    P23PerfTelemetrySetSpeakerThread((uint32_t)ThreadTid, SchedulingPolicy,
+                                     SchedulingParameters.sched_priority, ThreadCPU);
 
     memset(DatagramList, 0, sizeof(DatagramList));
     memset(SourceAddresses, 0, sizeof(SourceAddresses));
@@ -314,6 +361,18 @@ void *IncomingSpkrAudio(void *arg)                      // listener thread
   //
     while(!atomic_load(&ExitRequested))
     {
+        LoopStartNs = GetMonotonicTimeNs();
+        LoopGapNs = 0;
+        if((PreviousLoopStartNs != 0U) && PrevSDRActive && (LoopStartNs >= PreviousLoopStartNs))
+        {
+            LoopGapNs = LoopStartNs - PreviousLoopStartNs;
+            P23PerfTelemetryObserveSpeakerLoopGap(LoopGapNs);
+        }
+        PreviousLoopStartNs = LoopStartNs;
+        ThreadCPU = sched_getcpu();
+        P23PerfTelemetrySetSpeakerThreadCPU(ThreadCPU);
+        UnderflowEventMonotonicNs = 0;
+
         if(atomic_load(&ThreadData->Cmdid) & VBITCHANGEPORT)
         {
             printf("Speaker audio request change port\n");
@@ -341,6 +400,8 @@ void *IncomingSpkrAudio(void *arg)                      // listener thread
             QueueCount = 0;
             LastObservedFIFOFrames = 0;
             LastPacketNs = 0;
+            LastReceiveDurationNs = 0;
+            LastDMAWriteDurationNs = 0;
             GapMuteActive = false;
             P2SequenceReset(&SequenceTracker);
             memset(QueueArrivalNs, 0, sizeof(QueueArrivalNs));
@@ -366,6 +427,8 @@ void *IncomingSpkrAudio(void *arg)                      // listener thread
             unsigned int ReceiveGoal = VSPKSOFTQUEUEFRAMES - QueueCount;
             int ReceiveFlags = MSG_WAITFORONE;
 
+            LastReceiveDurationNs = 0;
+
             if(ReceiveGoal > VSPKMAXRECVBATCHFRAMES)
                 ReceiveGoal = VSPKMAXRECVBATCHFRAMES;
             ReceiveTimeoutPtr = NULL;
@@ -389,7 +452,11 @@ void *IncomingSpkrAudio(void *arg)                      // listener thread
                     ReceiveTimeout.tv_sec = (time_t)(RemainingAgeUs / 1000000ULL);
                     ReceiveTimeout.tv_nsec = (long)((RemainingAgeUs % 1000000ULL) * 1000ULL);
                     ReceiveTimeoutPtr = &ReceiveTimeout;
+                    ReceiveStartNs = GetMonotonicTimeNs();
                     Received = recvmmsg(atomic_load(&ThreadData->Socketid), DatagramList, ReceiveGoal, ReceiveFlags, ReceiveTimeoutPtr);
+                    LastReceiveDurationNs = GetMonotonicElapsedNs(ReceiveStartNs);
+                    if(SDRActiveNow)
+                        P23PerfTelemetryObserveSpeakerReceiveDuration(LastReceiveDurationNs);
                 }
             }
             else if(SDRActiveNow)
@@ -397,10 +464,17 @@ void *IncomingSpkrAudio(void *arg)                      // listener thread
                 ReceiveTimeout.tv_sec = 0;
                 ReceiveTimeout.tv_nsec = (long)(VSPKIDLEPOLLUS * 1000ULL);
                 ReceiveTimeoutPtr = &ReceiveTimeout;
+                ReceiveStartNs = GetMonotonicTimeNs();
                 Received = recvmmsg(atomic_load(&ThreadData->Socketid), DatagramList, ReceiveGoal, ReceiveFlags, ReceiveTimeoutPtr);
+                LastReceiveDurationNs = GetMonotonicElapsedNs(ReceiveStartNs);
+                P23PerfTelemetryObserveSpeakerReceiveDuration(LastReceiveDurationNs);
             }
             else
+            {
+                ReceiveStartNs = GetMonotonicTimeNs();
                 Received = recvmmsg(atomic_load(&ThreadData->Socketid), DatagramList, ReceiveGoal, ReceiveFlags, NULL);
+                LastReceiveDurationNs = GetMonotonicElapsedNs(ReceiveStartNs);
+            }
 
             if((Received < 0) && (errno != EAGAIN) && (errno != EWOULDBLOCK))
             {
@@ -413,7 +487,10 @@ void *IncomingSpkrAudio(void *arg)                      // listener thread
                 Received = 0;
         }
         else
+        {
             Received = 0;
+            LastReceiveDurationNs = 0;
+        }
 
         if(Received > 0)                                        // we have received one or more packets
         {
@@ -491,6 +568,7 @@ void *IncomingSpkrAudio(void *arg)                      // listener thread
                 GapMuteActive = true;
             }
         }
+        P23PerfTelemetryObserveSpeakerQueueDepth(QueueCount);
 
         if(QueueCount == 0)
         {
@@ -503,21 +581,37 @@ void *IncomingSpkrAudio(void *arg)                      // listener thread
                 printf("Codec speaker FIFO Overthreshold, depth now = %d\n", Current);
             if(FIFOUnderflow)
                 PrefillActive = true;
-            NoteSpeakerUnderflow((StartupCount == 0) && SDRActiveNow, FIFOUnderflow, &UnderflowActive,
-                                 Current, QueueCount, 0, PrefillActive, GapMuteActive);
+            NewUnderflowEventMonotonicNs = NoteSpeakerUnderflow(
+                (StartupCount == 0) && SDRActiveNow, FIFOUnderflow, &UnderflowActive,
+                Current, QueueCount, 0, PrefillActive, GapMuteActive, LoopGapNs,
+                LastReceiveDurationNs, LastDMAWriteDurationNs);
+            if(NewUnderflowEventMonotonicNs != 0U)
+                UnderflowEventMonotonicNs = NewUnderflowEventMonotonicNs;
 
             SilenceFramesToWrite = GetSpeakerGapSilenceFrames(Current, Depth / VMEMWORDSPERFRAME);
+            if(UnderflowEventMonotonicNs != 0U)
+                P23PerfTelemetrySetSpeakerUnderrunRefill(UnderflowEventMonotonicNs,
+                                                         SilenceFramesToWrite, 0U);
             if(SilenceFramesToWrite == 0)
                 continue;
 
             WriteBytes = SilenceFramesToWrite * VDMATRANSFERSIZE;
             memset(SpkBasePtr, 0, WriteBytes);
+            DMAWriteStartNs = GetMonotonicTimeNs();
             if(DMAWriteToFPGA(DMAWritefile_fd, SpkBasePtr, WriteBytes, VADDRSPKRSTREAMWRITE) < 0)
             {
+                LastDMAWriteDurationNs = GetMonotonicElapsedNs(DMAWriteStartNs);
+                P23PerfTelemetryObserveSpeakerDMAWriteDuration(LastDMAWriteDurationNs);
                 P23PerfTelemetryCounterAdd(eP23PerfCounterSpkrDMAErrors, 1U);
                 atomic_store(&ThreadError, true);
                 break;
             }
+            LastDMAWriteDurationNs = GetMonotonicElapsedNs(DMAWriteStartNs);
+            P23PerfTelemetryObserveSpeakerDMAWriteDuration(LastDMAWriteDurationNs);
+            if(UnderflowEventMonotonicNs != 0U)
+                P23PerfTelemetrySetSpeakerUnderrunRefill(UnderflowEventMonotonicNs,
+                                                         SilenceFramesToWrite,
+                                                         SilenceFramesToWrite);
             P23PerfTelemetryCounterAdd(eP23PerfCounterSpkrDMAWrites, 1U);
             P23PerfTelemetryCounterAdd(eP23PerfCounterSpkrDMAWriteBytes, WriteBytes);
             P23PerfTelemetryCounterAdd(eP23PerfCounterSpkrSilenceFrames, SilenceFramesToWrite);
@@ -534,8 +628,12 @@ void *IncomingSpkrAudio(void *arg)                      // listener thread
             printf("Codec speaker FIFO Overthreshold, depth now = %d\n", Current);
         if(FIFOUnderflow)
             PrefillActive = true;
-        NoteSpeakerUnderflow((StartupCount == 0) && SDRActiveNow, FIFOUnderflow, &UnderflowActive,
-                             Current, QueueCount, QueueAgeUs, PrefillActive, GapMuteActive);
+        NewUnderflowEventMonotonicNs = NoteSpeakerUnderflow(
+            (StartupCount == 0) && SDRActiveNow, FIFOUnderflow, &UnderflowActive,
+            Current, QueueCount, QueueAgeUs, PrefillActive, GapMuteActive, LoopGapNs,
+            LastReceiveDurationNs, LastDMAWriteDurationNs);
+        if(NewUnderflowEventMonotonicNs != 0U)
+            UnderflowEventMonotonicNs = NewUnderflowEventMonotonicNs;
 
         FramesToWrite = GetSpeakerWriteFrames(Current, &PrefillActive, QueueCount, QueueAgeUs);
         if(FramesToWrite == 0)
@@ -550,14 +648,21 @@ void *IncomingSpkrAudio(void *arg)                      // listener thread
                 printf("Codec speaker FIFO Overthreshold, depth now = %d\n", Current);
             if(FIFOUnderflow)
                 PrefillActive = true;
-            NoteSpeakerUnderflow((StartupCount == 0) && SDRActiveNow, FIFOUnderflow, &UnderflowActive,
-                                 Current, QueueCount, QueueAgeUs, PrefillActive, GapMuteActive);
+            NewUnderflowEventMonotonicNs = NoteSpeakerUnderflow(
+                (StartupCount == 0) && SDRActiveNow, FIFOUnderflow, &UnderflowActive,
+                Current, QueueCount, QueueAgeUs, PrefillActive, GapMuteActive, LoopGapNs,
+                LastReceiveDurationNs, LastDMAWriteDurationNs);
+            if(NewUnderflowEventMonotonicNs != 0U)
+                UnderflowEventMonotonicNs = NewUnderflowEventMonotonicNs;
         }
         if(atomic_load(&ExitRequested))
             break;
 
         if(FramesToWrite > (Depth / VMEMWORDSPERFRAME))
             FramesToWrite = Depth / VMEMWORDSPERFRAME;
+        if(UnderflowEventMonotonicNs != 0U)
+            P23PerfTelemetrySetSpeakerUnderrunRefill(UnderflowEventMonotonicNs,
+                                                     FramesToWrite, 0U);
         if(FramesToWrite == 0)
             continue;
 
@@ -570,12 +675,20 @@ void *IncomingSpkrAudio(void *arg)                      // listener thread
         }
 
         WriteBytes = FramesToWrite * VDMATRANSFERSIZE;
+        DMAWriteStartNs = GetMonotonicTimeNs();
         if(DMAWriteToFPGA(DMAWritefile_fd, SpkBasePtr, WriteBytes, VADDRSPKRSTREAMWRITE) < 0)
         {
+            LastDMAWriteDurationNs = GetMonotonicElapsedNs(DMAWriteStartNs);
+            P23PerfTelemetryObserveSpeakerDMAWriteDuration(LastDMAWriteDurationNs);
             P23PerfTelemetryCounterAdd(eP23PerfCounterSpkrDMAErrors, 1U);
             atomic_store(&ThreadError, true);
             break;
         }
+        LastDMAWriteDurationNs = GetMonotonicElapsedNs(DMAWriteStartNs);
+        P23PerfTelemetryObserveSpeakerDMAWriteDuration(LastDMAWriteDurationNs);
+        if(UnderflowEventMonotonicNs != 0U)
+            P23PerfTelemetrySetSpeakerUnderrunRefill(UnderflowEventMonotonicNs,
+                                                     FramesToWrite, FramesToWrite);
         P23PerfTelemetryCounterAdd(eP23PerfCounterSpkrDMAWrites, 1U);
         P23PerfTelemetryCounterAdd(eP23PerfCounterSpkrDMAWriteBytes, WriteBytes);
         Current += FramesToWrite * VMEMWORDSPERFRAME;
