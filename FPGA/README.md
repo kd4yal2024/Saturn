@@ -14,12 +14,17 @@ Configuration artifacts and their purposes:
 
 Version history:
 
-V29 candidate, 12/09/2026: fixes I2S receive AXI-Stream backpressure, makes
-FIFO/ADC AXI-Lite read responses stable under stalls, defines no-loss
-read-clear boundaries, adds coherent FIFO/ADC diagnostics, and strengthens
-build/netlist/PROM safety gates. Offline regressions pass. A fresh routed build
-and G2 qualification are required before release; no RF-performance
-improvement is claimed.
+V29 RX-qualified candidate, 12/09/2026: fixes I2S receive AXI-Stream
+backpressure, makes FIFO/ADC AXI-Lite read responses stable under stalls,
+defines no-loss read-clear boundaries, adds coherent FIFO/ADC diagnostics,
+and strengthens build/netlist/PROM safety gates. The clean Vivado 2023.1 build
+and guarded primary export passed timing, DRC, CDC, methodology, and routed
+telemetry gates. P2 V51 / V29 passed 30-minute controlled dummy-load and
+representative antenna RX soaks on the G2. TX, PureSignal, post-TX recovery,
+and flash-recovery qualification remain separate. The tracked loader artifact
+is `saturn-primary-v29-984d5237.bin` (9,730,652 bytes; SHA256
+`039092b1a4691c31f4a51ed1e6a5fd1bd449a7e56ba40ad41cef9dbc55a10aeb`).
+No RF-performance improvement is claimed.
 
 V28 lab candidate, 12/09/2026: first G2-loaded telemetry candidate. Basic RX
 and operator-supervised TX worked, but strict 30-minute RX qualification did
