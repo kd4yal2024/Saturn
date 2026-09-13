@@ -351,6 +351,10 @@ jobs:
         run: make test-protocol2-control test-protocol2-command-asan test-protocol2-high-priority-asan
         working-directory: sw_projects/P2_app
 
+      - name: Test P2 FPGA and speaker telemetry
+        run: make test-fpga-fifo-v29 test-speaker-pacing-diagnostics
+        working-directory: sw_projects/P2_app
+
       - name: P2 static analysis
         run: make cppcheck-ci
         working-directory: sw_projects/P2_app

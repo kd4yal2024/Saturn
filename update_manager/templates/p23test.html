@@ -665,6 +665,9 @@
         <div id="p23-fpga-fifo-v29-summary" class="summary" style="margin-top:14px;" aria-live="polite">
           V29 FPGA FIFO telemetry: waiting for a live P2 sample.
         </div>
+        <div id="p23-speaker-pacing-summary" class="summary" style="margin-top:8px;" aria-live="polite">
+          Speaker pacing diagnostics: waiting for a live P2 sample.
+        </div>
 
         <div class="field-grid" style="margin-top:14px;">
           <label>Run name
@@ -1429,6 +1432,35 @@ function updateFpgaFifoV29Summary(perf){
   if (element) element.textContent = `V29 FPGA FIFO telemetry: ${presentation.summary}. ${presentation.detail}`;
   return presentation;
 }
+/* SPEAKER_PACING_PRESENTATION_BEGIN */
+function speakerPacingPresentation(value){
+  const number = (input)=>Number.isFinite(Number(input)) ? Math.round(Number(input)) : 'n/a';
+  const counts = (input, thresholds)=>thresholds
+    .map((threshold)=>`>${threshold}ms ${number(input?.[`over_${threshold}ms`])}`).join(' · ');
+
+  if (!value || value.available !== true){
+    return { state:'unavailable', summary:'unavailable', detail:'Requires a P2 build with process-lifetime speaker pacing instrumentation.' };
+  }
+  const thread = value.thread || {};
+  const maximum = value.maximum || {};
+  const incident = value.last_underrun || {};
+  const incidentDetail = incident.valid
+    ? `last underrun mono ${number(incident.monotonic_timestamp_ns)} ns · loop ${number(incident.loop_gap_us)} µs · recv ${number(incident.recvmmsg_duration_us)} µs · DMA ${number(incident.dma_write_duration_us)} µs · FIFO ${number(incident.fifo_frames_before_refill)} frames · queued ${number(incident.queued_frames)} · selected/written ${number(incident.frames_selected)}/${number(incident.frames_written)} · age ${number(incident.queue_age_us)} µs · CPU ${number(incident.thread_cpu)}`
+    : 'no classified underrun captured';
+  return {
+    state:'available',
+    summary:`available · process lifetime · max loop ${number(maximum.loop_gap_us)} µs · recv ${number(maximum.recvmmsg_duration_us)} µs · DMA ${number(maximum.dma_write_duration_us)} µs · queue ${number(maximum.software_queue_depth_frames)} frames`,
+    detail:`thread TID ${number(thread.tid)} · ${thread.scheduling_policy || 'unknown'} priority ${number(thread.priority)} · CPU ${number(thread.cpu)} | process-lifetime loop counts ${counts(value.loop_gap_counts, [2, 4, 8, 16])} | receive counts ${counts(value.recvmmsg_duration_counts, [1, 2, 4, 8, 16])} | DMA counts ${counts(value.dma_write_duration_counts, [1, 2, 4, 8, 16])} | ${incidentDetail}`,
+  };
+}
+/* SPEAKER_PACING_PRESENTATION_END */
+function updateSpeakerPacingSummary(perf){
+  const value = perf?.app_telemetry?.current?.gauges?.speaker_pacing_diagnostics;
+  const presentation = speakerPacingPresentation(value);
+  const element = $('p23-speaker-pacing-summary');
+  if (element) element.textContent = `Speaker pacing diagnostics: ${presentation.summary}. ${presentation.detail}`;
+  return presentation;
+}
 function jsonSafe(value){
   if (value === null) return null;
   if (typeof value === 'number') return Number.isFinite(value) ? value : null;
@@ -1499,6 +1531,7 @@ function buildPerfSnapshot(){
     panel_mode: latestP23Perf?.workload?.panel_mode || '',
     current_sample: jsonSafe(latestDerivedPerf),
     fpga_fifo_v29: jsonSafe(latestP23Perf?.app_telemetry?.current?.gauges?.fpga_fifo_v29 || null),
+    speaker_pacing_diagnostics: jsonSafe(latestP23Perf?.app_telemetry?.current?.gauges?.speaker_pacing_diagnostics || null),
     baseline: jsonSafe(serializePerfBaseline(perfBaseline)),
     service_runtime: jsonSafe(latestP23Status?.service_runtime || null),
     raw: jsonSafe({ perf: latestP23Perf }),
@@ -1534,6 +1567,7 @@ function buildBaselineSnapshot(){
       xdma_irq_per_mib: latestDerivedPerf.xdmaIrqPerMiB,
     } : null),
     latest_fpga_fifo_v29: jsonSafe(latestP23Perf?.app_telemetry?.current?.gauges?.fpga_fifo_v29 || null),
+    latest_speaker_pacing_diagnostics: jsonSafe(latestP23Perf?.app_telemetry?.current?.gauges?.speaker_pacing_diagnostics || null),
     alerts: jsonSafe(latestPerfAlertState?.alerts || []),
   };
 }
@@ -2699,6 +2733,7 @@ function renderPerfDashboard(d, perf, alertState, baseline){
   const ducQueue = app?.gauges?.duc_queue || {};
   const speakerQueue = app?.gauges?.speaker_underrun || {};
   const fifoV29 = fpgaFifoV29Presentation(app?.gauges?.fpga_fifo_v29, fpga?.firmware_version);
+  const speakerPacing = speakerPacingPresentation(app?.gauges?.speaker_pacing_diagnostics);
   const ddc = Array.isArray(app?.routing?.ddc) ? app.routing.ddc : [];
   const enabledCount = ddc.filter((item)=>item?.enabled).length;
   const interleavedCount = ddc.filter((item)=>item?.interleaved).length;
@@ -2779,6 +2814,7 @@ function renderPerfDashboard(d, perf, alertState, baseline){
     runtimeRow('Ingest path', activity.active ? `${fmtNum(d.ducPps)} DUC pkt/s` : '— Idle', activity.active ? `Speaker ${fmtNum(d.spkrPps)} pkt/s · DUC ${fmtNum(d.ducDmaWritesPerSec)} DMA/s @ ${fmtNum(d.ducDmaAvgKiB)} KiB/op · speaker ${fmtNum(d.spkrDmaWritesPerSec)} DMA/s @ ${fmtNum(d.spkrDmaAvgKiB)} KiB/op` : 'Transmit and speaker paths are inactive.'),
     runtimeRow('ADC peaks', `ADC1 ${formatAdcDbfs(adc?.peak1)} · ADC2 ${formatAdcDbfs(adc?.peak2)}`, `raw ${fmtInt(adc?.peak1)} / ${fmtInt(adc?.peak2)} · overflow bits ${fmtInt(adc?.overflow_bits)} · peak values update with active high-priority status`),
     runtimeRow('Queue context', `DUC ${fmtInt(ducQueue?.last_queue_frames)} queued · ${fmtInt(ducQueue?.last_fifo_frames)} FIFO`, `age ${fmtInt(ducQueue?.last_queue_age_us)} µs · mode ${ducQueue?.last_mode || 'unknown'} · speaker ${fmtInt(speakerQueue?.last_queue_frames)} queued / ${fmtInt(speakerQueue?.last_fifo_frames)} FIFO · gap ${speakerQueue?.last_gap_active ? 'active' : 'clear'}`),
+    runtimeRow('Speaker pacing', speakerPacing.summary, speakerPacing.detail),
     runtimeRow('V29 FPGA FIFO monitor', fifoV29.summary, fifoV29.detail),
     runtimeRow('Routing', `${enabledCount} DDC enabled · ${wbState}`, `${interleavedCount} interleaved · features ${featureBits} · ${formatAudioRtSummary(serviceRuntime)}`),
   ];
@@ -2824,6 +2860,7 @@ async function loadP23Perf(){
       setPrimaryKpisHtml(kpiCard('Service', 'Offline', 'No performance samples are available.', true));
       setPerfDashboardHtml(runtimeSection('Service', 'No active process', [runtimeRow('Radio backend', 'Not running', 'Start or deploy P2app or the Saturn Bridge to resume monitoring.')], true));
       updateFpgaFifoV29Summary(perf);
+      updateSpeakerPacingSummary(perf);
       setPerfRawText(JSON.stringify({ perf }, null, 2));
       setTelemetryHealth(perf);
       return;
@@ -2846,6 +2883,7 @@ async function loadP23Perf(){
     benchmarkConsumeSample(perf, d);
     setTelemetryHealth(perf);
     updateFpgaFifoV29Summary(perf);
+    updateSpeakerPacingSummary(perf);
     baselinePush(perfBaseline.cpuPctCore, d.cpuPctCore);
     baselinePush(perfBaseline.rssMb, d.rssMb);
     baselinePush(perfBaseline.schedDelayMsPerSec, d.schedDelayMsPerSec);
@@ -2877,6 +2915,8 @@ async function loadP23Perf(){
     setPerfDashboardHtml(runtimeSection('Performance', 'Load failed', [runtimeRow('Telemetry endpoint', 'Unavailable', e.message)], true));
     const fifoSummary = $('p23-fpga-fifo-v29-summary');
     if (fifoSummary) fifoSummary.textContent = `V29 FPGA FIFO telemetry: unavailable. ${e.message}`;
+    const speakerPacingSummary = $('p23-speaker-pacing-summary');
+    if (speakerPacingSummary) speakerPacingSummary.textContent = `Speaker pacing diagnostics: unavailable. ${e.message}`;
     setPerfRawText('');
     setPerfAlertVisual('crit');
   }finally{

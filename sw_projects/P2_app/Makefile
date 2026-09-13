@@ -13,7 +13,7 @@ LDFLAGS = -lm -lpthread
         test-controller-lease-asan test-protocol2-control \
         test-protocol2-command test-protocol2-command-asan \
         test-protocol2-high-priority test-protocol2-high-priority-asan \
-        test-fpga-fifo-v29 smoke-shutdown
+        test-fpga-fifo-v29 test-speaker-pacing-diagnostics smoke-shutdown
 
 # NOTE (2026-01): keep "local" libs here. libgpiod link flags are added below
 #                 via pkg-config (with a safe fallback).
@@ -146,14 +146,20 @@ test-fpga-fifo-v29:
 	./tests/fpga_fifo_v29_test
 	rm -f tests/fpga_fifo_v29_test
 
+test-speaker-pacing-diagnostics:
+	$(CC) $(CFLAGS) -I. -I../common tests/speaker_pacing_diagnostics_test.c \
+		../common/p23_perf_telemetry.c -lpthread -o tests/speaker_pacing_diagnostics_test
+	./tests/speaker_pacing_diagnostics_test
+	rm -f tests/speaker_pacing_diagnostics_test
+
 test: test-controller-lease test-protocol2-control test-protocol2-command \
-	test-protocol2-high-priority test-fpga-fifo-v29
+	test-protocol2-high-priority test-fpga-fifo-v29 test-speaker-pacing-diagnostics
 
 clean:
 	rm -rf $(TARGET) *.o *.d *.bin tests/controller_lease_test tests/protocol2_control_test \
 		tests/protocol2_command_test tests/protocol2_command_test_asan \
 		tests/protocol2_high_priority_test tests/protocol2_high_priority_test_asan \
-		tests/fpga_fifo_v29_test
+		tests/fpga_fifo_v29_test tests/speaker_pacing_diagnostics_test
 
 smoke-shutdown: all
 	bash ./tools/shutdown_smoke.sh ./$(TARGET)

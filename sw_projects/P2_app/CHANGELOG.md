@@ -5,6 +5,21 @@ All notable changes from the hardened app convergence pass are documented here.
 This changelog originated under `P3_app` and now follows the converged
 `P2_app` implementation.
 
+## [2026-09-13] Speaker Pacing Diagnostics
+
+### Added
+
+- Added allocation-free, monotonic timing in the active speaker loop for loop
+  gaps, `recvmmsg()` calls, and XDMA writes. Process-lifetime maxima and
+  threshold counters distinguish scheduling pauses, socket wakeup delays, and
+  DMA completion delays without changing refill or batching behavior.
+- Published speaker-thread TID, scheduling policy, priority, current CPU, peak
+  software-queue depth, and one incident-consistent last-underrun record under
+  `gauges.speaker_pacing_diagnostics`. The record includes FIFO and queue state,
+  selected/written frame counts, queue age, monotonic timestamp, and thread CPU.
+- Added deterministic duration-injection tests for normal operation and
+  scheduling, receive, and DMA stalls, including the JSON field/unit contract.
+
 ## [2026-09-13] V29 FPGA FIFO Telemetry
 
 ### Changed

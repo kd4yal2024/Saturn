@@ -4,6 +4,11 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
 
 ## [Unreleased]
 ### Changed
+- Performance Lab now displays and exports P2 speaker pacing diagnostics,
+  including process-lifetime loop/receive/DMA maxima and threshold counts,
+  speaker-thread scheduling identity, peak software-queue depth, and the full
+  context captured for the most recent classified underrun. Missing fields from
+  older P2 builds remain compatible and display as unavailable.
 - Performance Lab now displays and exports P2's V29 coherent FIFO occupancy
   snapshot separately from the live, boot-lifetime minimum/maximum occupancy
   and aggregate transition accumulators. Snapshot validity and generation apply
