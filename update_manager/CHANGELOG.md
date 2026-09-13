@@ -4,9 +4,11 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
 
 ## [Unreleased]
 ### Changed
-- Performance Lab now displays and exports P2's V29 coherent FIFO occupancy,
-  extrema, and aggregate transition telemetry while showing `unsupported` for
-  pre-V29 images and `marker mismatch` when the build ID is unexpected.
+- Performance Lab now displays and exports P2's V29 coherent FIFO occupancy
+  snapshot separately from the live, boot-lifetime minimum/maximum occupancy
+  and aggregate transition accumulators. Snapshot validity and generation apply
+  only to captured occupancy. The display shows `unsupported` for pre-V29
+  images and `marker mismatch` when the build ID is unexpected.
 - `g2-version-info.sh` 1.7 labels retained startup banners as stale when they
   disagree with live FPGA identity, so historical output is not presented as
   current evidence.

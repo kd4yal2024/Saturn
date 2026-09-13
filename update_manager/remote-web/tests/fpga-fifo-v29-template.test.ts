@@ -33,7 +33,7 @@ describe('V29 FPGA FIFO telemetry presentation', () => {
     expect(result.detail).toContain('were not probed');
   });
 
-  it('shows raw word locations and transition counters', () => {
+  it('distinguishes coherent occupancy from live boot-lifetime accumulators', () => {
     const result = present({
       available: true,
       status: 'available',
@@ -46,8 +46,12 @@ describe('V29 FPGA FIFO telemetry presentation', () => {
       event_transitions: { ddc: 21, duc: 22, mic: 23, speaker: 24 },
     }, 29);
     expect(result.state).toBe('available');
-    expect(result.detail).toContain('occupancy words: ddc 1');
-    expect(result.detail).toContain('event transitions: ddc 21');
+    expect(result.summary).toContain('coherent occupancy snapshot generation 7');
+    expect(result.detail).toContain('captured occupancy words: ddc 1');
+    expect(result.detail).toContain('live boot-lifetime min words: ddc 0');
+    expect(result.detail).toContain('live boot-lifetime max words: ddc 11');
+    expect(result.detail).toContain('live boot-lifetime event transitions: ddc 21');
+    expect(result.detail).not.toContain('coherent');
   });
 
   it('includes the FIFO object in captured telemetry JSON', () => {

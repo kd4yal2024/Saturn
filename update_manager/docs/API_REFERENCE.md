@@ -247,11 +247,14 @@ Notes:
   - runtime flags and feature flags
   - port/DDC/wideband routing shape
   - FIFO/ADC gauges
-  - `gauges.fpga_fifo_v29`, when supported: build marker, coherent snapshot
-    validity/generation/timeout count, and raw DDC/DUC/microphone/speaker
-    occupancy/minimum/maximum word counts plus aggregate event-transition
-    counters. These FPGA counters combine overflow-signal, full, and empty
-    transitions and are not sample-loss counters.
+  - `gauges.fpga_fifo_v29`, when supported: build marker and coherent captured
+    DDC/DUC/microphone/speaker occupancy in raw words. Snapshot validity and
+    generation apply only to those captured occupancy values; timeout count is
+    maintained by the host sampling path. Minimum/maximum occupancy and
+    aggregate event-transition counters are live, boot-lifetime FPGA
+    accumulators read separately from the coherent occupancy snapshot. Event
+    counters combine overflow-signal, full, and empty transitions and are not
+    sample-loss counters.
   - cumulative counters for high-priority, mic, DDC, wideband, DUC, and speaker packet/DMA/error activity
 
 ## Settings, Source, Release Backup, and Transactional Restore

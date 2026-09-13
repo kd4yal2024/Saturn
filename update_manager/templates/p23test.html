@@ -1417,8 +1417,8 @@ function fpgaFifoV29Presentation(value, firmwareVersion){
   }
   return {
     state:'available',
-    summary:`available · generation ${number(value.snapshot_generation)} · ${value.snapshot_valid ? 'valid' : 'not valid'} · timeouts ${number(value.snapshot_timeout_count)}`,
-    detail:`occupancy words: ${group(value.occupancy_words)} | min: ${group(value.minimum_words)} | max: ${group(value.maximum_words)} | event transitions: ${group(value.event_transitions)}`,
+    summary:`available · coherent occupancy snapshot generation ${number(value.snapshot_generation)} · ${value.snapshot_valid ? 'valid' : 'not valid'} · timeouts ${number(value.snapshot_timeout_count)}`,
+    detail:`captured occupancy words: ${group(value.occupancy_words)} | live boot-lifetime min words: ${group(value.minimum_words)} | live boot-lifetime max words: ${group(value.maximum_words)} | live boot-lifetime event transitions: ${group(value.event_transitions)}`,
   };
 }
 /* FPGA_FIFO_V29_PRESENTATION_END */

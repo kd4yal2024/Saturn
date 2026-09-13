@@ -4,9 +4,12 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PAGE="${ROOT}/update_manager/templates/p23test.html"
 VERSION_SCRIPT="${ROOT}/update_manager/scripts/g2-version-info.sh"
+API_REFERENCE="${ROOT}/update_manager/docs/API_REFERENCE.md"
 
 grep -Fq '#define P2APPVERSION 51' "${ROOT}/sw_projects/P2_app/p2app.c"
 grep -Fq 'SCRIPT_VERSION="1.7"' "${VERSION_SCRIPT}"
+grep -Fq 'generation apply only to those captured occupancy values' "${API_REFERENCE}"
+grep -Fq 'accumulators read separately from the coherent occupancy snapshot' "${API_REFERENCE}"
 make -C "${ROOT}/sw_projects/P2_app" test-fpga-fifo-v29
 
 node - "${PAGE}" <<'JS'
@@ -42,8 +45,12 @@ const available = context.fpgaFifoV29Presentation({
   event_transitions: {ddc: 21, duc: 22, mic: 23, speaker: 24},
 }, 29);
 assert.strictEqual(available.state, 'available');
-assert(available.detail.includes('occupancy words: ddc 1'));
-assert(available.detail.includes('event transitions: ddc 21'));
+assert(available.summary.includes('coherent occupancy snapshot generation 7'));
+assert(available.detail.includes('captured occupancy words: ddc 1'));
+assert(available.detail.includes('live boot-lifetime min words: ddc 0'));
+assert(available.detail.includes('live boot-lifetime max words: ddc 11'));
+assert(available.detail.includes('live boot-lifetime event transitions: ddc 21'));
+assert(!available.detail.includes('coherent'));
 assert(source.includes('fpga_fifo_v29: jsonSafe('), 'captured export omits V29 telemetry');
 console.log('Web Manager V29 compatibility tests passed');
 JS

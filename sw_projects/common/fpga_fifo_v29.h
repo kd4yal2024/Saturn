@@ -37,14 +37,17 @@ typedef struct
   EFPGAFifoV29Status Status;
   bool Available;
   uint32_t BuildId;
+  /* Validity and generation identify only the coherent captured occupancy. */
   bool SnapshotValid;
   uint16_t SnapshotGeneration;
   uint64_t SnapshotTimeoutCount;
   uint32_t OccupancyWords[FPGA_FIFO_V29_CHANNEL_COUNT];
+  /* Live FPGA boot-lifetime accumulators, not members of the snapshot. */
   uint32_t MinimumWords[FPGA_FIFO_V29_CHANNEL_COUNT];
   uint32_t MaximumWords[FPGA_FIFO_V29_CHANNEL_COUNT];
-  /* Each raw counter combines overflow-signal, full, and empty transitions.
-   * It is not a sample-loss counter. */
+  /* Live FPGA boot-lifetime accumulators. Each raw counter combines
+   * overflow-signal, full, and empty transitions; it is not a sample-loss
+   * counter. */
   uint32_t EventTransitions[FPGA_FIFO_V29_CHANNEL_COUNT];
 } TFPGAFifoV29Snapshot;
 

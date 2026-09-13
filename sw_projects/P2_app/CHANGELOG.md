@@ -13,9 +13,12 @@ This changelog originated under `P3_app` and now follows the converged
 - Added a single bounded V29 FIFO snapshot sampler owned by P2. Firmware older
   than V29 performs no extended-register reads; V29 and newer reads only build
   ID `0x56323900` until the marker matches.
-- Published coherent DDC, DUC, microphone, and speaker occupancy, extrema, and
-  aggregate event-transition counters under `gauges.fpga_fifo_v29`. Event
-  transitions are explicitly not described as sample-loss counters.
+- Published coherent DDC, DUC, microphone, and speaker occupancy snapshots
+  under `gauges.fpga_fifo_v29`; snapshot validity and generation apply only to
+  those captured occupancy values. Minimum/maximum occupancy and aggregate
+  event-transition counters are live, boot-lifetime accumulators and are not
+  part of the coherent snapshot. Event transitions are explicitly not
+  described as sample-loss counters.
 
 ### Verified
 
