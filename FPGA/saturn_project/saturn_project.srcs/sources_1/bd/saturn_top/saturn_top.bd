@@ -2629,7 +2629,7 @@
                 "value": "16384"
               },
               "HAS_AFULL": {
-                "value": "0"
+                "value": "1"
               },
               "HAS_RD_DATA_COUNT": {
                 "value": "1"
@@ -2654,6 +2654,9 @@
               "FIFO_DEPTH": {
                 "value": "4096"
               },
+              "HAS_AFULL": {
+                "value": "1"
+              },
               "HAS_WR_DATA_COUNT": {
                 "value": "1"
               },
@@ -2674,6 +2677,9 @@
               "FIFO_DEPTH": {
                 "value": "256"
               },
+              "HAS_AFULL": {
+                "value": "1"
+              },
               "HAS_RD_DATA_COUNT": {
                 "value": "1"
               },
@@ -2693,6 +2699,9 @@
             "parameters": {
               "FIFO_DEPTH": {
                 "value": "1024"
+              },
+              "HAS_AFULL": {
+                "value": "1"
               },
               "HAS_WR_DATA_COUNT": {
                 "value": "1"
@@ -4782,10 +4791,22 @@
               "axis_dwidth_converter_64to32bit/aresetn"
             ]
           },
+          "axis_data_fifo_DDC0_almost_full": {
+            "ports": [
+              "axis_data_fifo_DDC0/almost_full",
+              "FIFO_Monitor_0/fifo1_overflow"
+            ]
+          },
           "axis_data_fifo_DDC0_axis_rd_data_count": {
             "ports": [
               "axis_data_fifo_DDC0/axis_rd_data_count",
               "FIFO_Monitor_0/fifo1_count"
+            ]
+          },
+          "axis_data_fifo_DUC_almost_full": {
+            "ports": [
+              "axis_data_fifo_DUC/almost_full",
+              "FIFO_Monitor_0/fifo2_overflow"
             ]
           },
           "axis_data_fifo_DUC_axis_wr_data_count": {
@@ -4794,10 +4815,22 @@
               "FIFO_Monitor_0/fifo2_count"
             ]
           },
+          "axis_data_fifo_codecmic_almost_full": {
+            "ports": [
+              "axis_data_fifo_codecmic/almost_full",
+              "FIFO_Monitor_0/fifo3_overflow"
+            ]
+          },
           "axis_data_fifo_codecmic_axis_rd_data_count": {
             "ports": [
               "axis_data_fifo_codecmic/axis_rd_data_count",
               "FIFO_Monitor_0/fifo3_count"
+            ]
+          },
+          "axis_data_fifo_codecspk_almost_full": {
+            "ports": [
+              "axis_data_fifo_codecspk/almost_full",
+              "FIFO_Monitor_0/fifo4_overflow"
             ]
           },
           "axis_data_fifo_codecspk_axis_wr_data_count": {
@@ -4814,11 +4847,7 @@
           },
           "xlconstant_val0_dout": {
             "ports": [
-              "xlconstant_val0/dout",
-              "FIFO_Monitor_0/fifo1_overflow",
-              "FIFO_Monitor_0/fifo2_overflow",
-              "FIFO_Monitor_0/fifo3_overflow",
-              "FIFO_Monitor_0/fifo4_overflow"
+              "xlconstant_val0/dout"
             ]
           }
         }
@@ -8665,7 +8694,7 @@
             "inst_hier_path": "PCIe/xlconstant_swversion",
             "parameters": {
               "CONST_VAL": {
-                "value": "27"
+                "value": "29"
               },
               "CONST_WIDTH": {
                 "value": "16"

@@ -1,6 +1,8 @@
 # PROM/BIN export record
 
-The Saturn configuration image is a 32-Mbit, uncompressed `SPIx1` BIN image.
+The Saturn complete configuration image is a 32-Mbit, uncompressed `SPIx1`
+BIN image. The export also creates a slot-relative primary BIN specifically
+for the CM4 `load-FPGA` utility.
 The multiboot layout is fixed and must not be changed without updating the CM4
 loader and fallback recovery procedure:
 
@@ -29,14 +31,21 @@ vivado -mode batch -nolog -nojournal -source FPGA/lab/tcl/export-prom.tcl
 ```
 
 The script defaults to the known golden bitstream, the current-HEAD lab
-bitstream (`results/vivado/saturn-<git-sha>.bit`), and the checked-in timer
-payloads. To
+bitstream (`results/vivado/saturn-v29-<git-sha>.bit`), and the checked-in timer
+payloads. It creates two deliberately distinct artifacts:
+
+- `saturn-primary-v29-<git-sha>.bin`: slot-relative primary payload; this is the
+  only generated artifact suitable for `load-FPGA -b ... -v` without `-f`.
+- `saturn-lab.bin`: complete address-zero multiboot image for archival or an
+  external programmer; never pass this file to the default `load-FPGA` path.
+
+To
 export a different primary bitstream, set `SATURN_PRIMARY_BIT` to its path and
-`SATURN_PROM_OUTPUT` to the desired output path. Vivado writes both the BIN and
-the adjacent PRM report. The script verifies that both files were created and
-prints `SATURN_LAB_PROM_OK`. It also writes `prom-manifest.json` beside the
-image with the current Git SHA/dirty state, Vivado version, layout, and SHA256
-digests for the output, primary bitstream, and immutable golden input.
+`SATURN_PROM_OUTPUT`/`SATURN_PRIMARY_BIN` to the desired output paths. Vivado
+writes both BIN files and adjacent PRM reports. The script verifies the files,
+checks that the primary payload ends below the `0x01300000` timer barrier, and
+prints `SATURN_LAB_PROM_OK`. It also writes `prom-manifest.json` with source
+identity, hashes, primary byte count, and exact loader erase interval.
 
 The equivalent command, matching the original project instructions, is:
 
@@ -47,6 +56,6 @@ write_cfgmem -format bin -size 32 -interface SPIx1 \
   saturngolden.bin -force
 ```
 
-This record is export-only. CM4/XDMA programming and G2/RF validation remain
-deferred until the hardware is connected; normal development must never use
-`load-FPGA -f`.
+This record is export-only. CM4/XDMA programming and G2/RF validation require
+an operator-approved hardware step. Normal development must never use
+`load-FPGA -f`, and must never give `saturn-lab.bin` to `load-FPGA`.

@@ -7110,7 +7110,7 @@ proc create_hier_cell_PCIe { parentCell nameHier } {
   # Create instance: xlconstant_swversion, and set properties
   set xlconstant_swversion [ create_bd_cell -type ip -vlnv xilinx.com:ip:xlconstant:1.1 xlconstant_swversion ]
   set_property -dict [list \
-    CONFIG.CONST_VAL {21} \
+    CONFIG.CONST_VAL {29} \
     CONFIG.CONST_WIDTH {16} \
   ] $xlconstant_swversion
 
@@ -7356,12 +7356,14 @@ proc create_hier_cell_FIFO_Interfaces { parentCell nameHier } {
     CONFIG.IS_ACLK_ASYNC {1} \
     CONFIG.TDATA_NUM_BYTES {8} \
   ] $axis_data_fifo_DDC0
+  set_property CONFIG.HAS_AFULL {1} $axis_data_fifo_DDC0
 
 
   # Create instance: axis_data_fifo_DUC, and set properties
   set axis_data_fifo_DUC [ create_bd_cell -type ip -vlnv xilinx.com:ip:axis_data_fifo:2.0 axis_data_fifo_DUC ]
   set_property -dict [list \
     CONFIG.FIFO_DEPTH {4096} \
+    CONFIG.HAS_AFULL {1} \
     CONFIG.HAS_WR_DATA_COUNT {1} \
     CONFIG.IS_ACLK_ASYNC {1} \
     CONFIG.TDATA_NUM_BYTES {8} \
@@ -7372,6 +7374,7 @@ proc create_hier_cell_FIFO_Interfaces { parentCell nameHier } {
   set axis_data_fifo_codecmic [ create_bd_cell -type ip -vlnv xilinx.com:ip:axis_data_fifo:2.0 axis_data_fifo_codecmic ]
   set_property -dict [list \
     CONFIG.FIFO_DEPTH {256} \
+    CONFIG.HAS_AFULL {1} \
     CONFIG.HAS_RD_DATA_COUNT {1} \
     CONFIG.IS_ACLK_ASYNC {1} \
     CONFIG.TDATA_NUM_BYTES {8} \
@@ -7382,6 +7385,7 @@ proc create_hier_cell_FIFO_Interfaces { parentCell nameHier } {
   set axis_data_fifo_codecspk [ create_bd_cell -type ip -vlnv xilinx.com:ip:axis_data_fifo:2.0 axis_data_fifo_codecspk ]
   set_property -dict [list \
     CONFIG.FIFO_DEPTH {1024} \
+    CONFIG.HAS_AFULL {1} \
     CONFIG.HAS_WR_DATA_COUNT {1} \
     CONFIG.IS_ACLK_ASYNC {1} \
     CONFIG.TDATA_NUM_BYTES {8} \
@@ -7510,7 +7514,10 @@ proc create_hier_cell_FIFO_Interfaces { parentCell nameHier } {
   connect_bd_net -net axis_data_fifo_codecmic_axis_rd_data_count [get_bd_pins axis_data_fifo_codecmic/axis_rd_data_count] [get_bd_pins FIFO_Monitor_0/fifo3_count]
   connect_bd_net -net axis_data_fifo_codecspk_axis_wr_data_count [get_bd_pins axis_data_fifo_codecspk/axis_wr_data_count] [get_bd_pins FIFO_Monitor_0/fifo4_count]
   connect_bd_net -net txmux_reset_1 [get_bd_pins txmux_reset] [get_bd_pins AXIS_Sizer_64to48_0/mux_reset]
-  connect_bd_net -net xlconstant_val0_dout [get_bd_pins xlconstant_val0/dout] [get_bd_pins FIFO_Monitor_0/fifo1_overflow] [get_bd_pins FIFO_Monitor_0/fifo2_overflow] [get_bd_pins FIFO_Monitor_0/fifo3_overflow] [get_bd_pins FIFO_Monitor_0/fifo4_overflow]
+  connect_bd_net -net axis_data_fifo_DDC0_almost_full [get_bd_pins axis_data_fifo_DDC0/almost_full] [get_bd_pins FIFO_Monitor_0/fifo1_overflow]
+  connect_bd_net -net axis_data_fifo_DUC_almost_full [get_bd_pins axis_data_fifo_DUC/almost_full] [get_bd_pins FIFO_Monitor_0/fifo2_overflow]
+  connect_bd_net -net axis_data_fifo_codecmic_almost_full [get_bd_pins axis_data_fifo_codecmic/almost_full] [get_bd_pins FIFO_Monitor_0/fifo3_overflow]
+  connect_bd_net -net axis_data_fifo_codecspk_almost_full [get_bd_pins axis_data_fifo_codecspk/almost_full] [get_bd_pins FIFO_Monitor_0/fifo4_overflow]
 
   # Restore current instance
   current_bd_instance $oldCurInst

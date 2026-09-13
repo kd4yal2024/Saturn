@@ -17,6 +17,7 @@ fi
 sources=(
     "$fpga_dir/sources/verilogmodules/activitywatchdog.v"
     "$fpga_dir/sources/verilogmodules/FIFO_Monitor.v"
+    "$fpga_dir/sources/verilogmodules/I2S_rcv.v"
     "$fpga_dir/sources/verilogmodules/DDCMux.v"
 )
 

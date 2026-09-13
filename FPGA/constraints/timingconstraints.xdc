@@ -215,6 +215,15 @@ set_false_path -from [get_ports pcie_reset_n]
 # asynchronous TX enable input
 set_false_path -from [get_ports TX_ENABLE]
 
+# FIFO almost-full indications are produced in their FIFO write-clock domains
+# and are consumed by explicit two-stage ASYNC_REG synchronizers in the 125 MHz
+# telemetry block.  Exclude only the asynchronous launch-to-first-stage paths;
+# the meta-to-sync stages remain timed and report_cdc remains responsible for
+# verifying the synchronizer structure.  FIFO 2 and FIFO 4 are already in the
+# 125 MHz telemetry clock domain and therefore need no exception.
+set_false_path -to [get_pins {saturn_top_i/FIFO_Interfaces/FIFO_Monitor_0/inst/fifo1_overflow_meta_reg/D}]
+set_false_path -to [get_pins {saturn_top_i/FIFO_Interfaces/FIFO_Monitor_0/inst/fifo3_overflow_meta_reg/D}]
+
 # codec SPI is guaranteed by design
 set_false_path -to [get_ports CODEC_SPI_CLK]
 set_false_path -to [get_ports CODEC_SPI_DATA]
@@ -254,4 +263,3 @@ set_false_path -to [get_ports {HPF_SEL2[0]}]
 # clock PLL
 #
 set_false_path -to [get_ports pll_cr]
-

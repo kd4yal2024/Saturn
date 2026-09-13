@@ -107,7 +107,7 @@ namespace eval saturn_lab {
         return [string map [list "\\" "\\\\" "\"" "\\\"" "\n" "\\n" "\r" "\\r" "\t" "\\t"] $value]
     }
 
-    proc write_manifest {path artifact vivado_version synth_run impl_run} {
+    proc write_manifest {path artifact vivado_version synth_run impl_run firmware_version} {
         set sha [git_value rev-parse HEAD]
         set branch [git_value branch --show-current]
         set timestamp [clock format [clock seconds] -gmt true -format {%Y-%m-%dT%H:%M:%SZ}]
@@ -117,12 +117,13 @@ namespace eval saturn_lab {
         }
         set stream [open $path w]
         puts $stream "{"
-        puts $stream "  \"schema\": 1,"
+        puts $stream "  \"schema\": 2,"
         puts $stream "  \"created_utc\": \"[json_escape $timestamp]\","
         puts $stream "  \"git_branch\": \"[json_escape $branch]\","
         puts $stream "  \"git_sha\": \"[json_escape $sha]\","
         puts $stream "  \"git_dirty\": [git_dirty],"
         puts $stream "  \"vivado\": \"[json_escape $vivado_version]\","
+        puts $stream "  \"firmware_version\": $firmware_version,"
         puts $stream "  \"synthesis_run\": \"[json_escape $synth_run]\","
         puts $stream "  \"implementation_run\": \"[json_escape $impl_run]\","
         puts $stream "  \"artifact\": \"[json_escape $artifact_name]\","

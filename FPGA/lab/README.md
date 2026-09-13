@@ -12,6 +12,12 @@ DSP analysis, batch simulations, implementation reports, and build manifests.
 - Development images target the primary flash slot. Do not pass `-f` to
   `load-FPGA` during normal development.
 - Phase 0 does not program hardware or enable TX.
+- Do not use generic file-dump tools (`od`, `dd`, `head`, or similar) on
+  `/dev/xdma*_user`. Their skip/read behavior is not a positioned, single-MMIO
+  transaction contract and can traverse side-effect registers or wedge the
+  XDMA path. Hardware register diagnostics must go through a reviewed Saturn
+  accessor while the owning service is quiesced or explicitly coordinating
+  access.
 
 The lab doctor prints the fallback image SHA256 so it can be recorded outside
 the repository:
@@ -61,12 +67,12 @@ make lint          # warnings reported; syntax/semantic errors fail
 make lint-strict   # warnings also fail
 make formal        # watchdog safety proof and expiry cover trace
 make python-test   # numerical measurement regression
-make check         # lint + formal + Python regression
+make check         # lint + formal + Python + V29 telemetry regression
 ```
 
-The Phase 0 lint gate covers `activitywatchdog.v`, `FIFO_Monitor.v`, and
-`DDCMux.v`. Formal coverage begins with the TX watchdog and expands alongside
-V28 telemetry work.
+The Phase 0 lint gate covers `activitywatchdog.v`, `FIFO_Monitor.v`,
+`DDCMux.v`, and `I2S_rcv.v`. `make check` also runs the self-checking V29
+FIFO/ADC/I2S telemetry regression (`make telemetry-test`).
 
 ## Vivado 2023.1 batch build
 
@@ -110,18 +116,22 @@ Generated files under `results/vivado/` include:
 - timing summary with unconstrained paths
 - hierarchical utilization
 - DRC, clock interaction, methodology, and raw/reviewed/waived CDC reports
-- machine-readable setup/hold, DRC-error, and unwaived-Critical-CDC quality gate
+- machine-readable setup/hold, DRC, CDC, and methodology quality gate
 - copied `.bit` artifact
 - JSON manifest containing Git identity, dirty state, Vivado version, and SHA256
 
 PROM/BIN export is scripted in `tcl/export-prom.tcl` and recorded in
-`PROM_BIN_EXPORT.md`. It produces the uncompressed 32-Mbit SPIx1 multiboot
-layout used by Saturn (golden at `0x00000000`, primary at `0x00980000`, with
-the two timer payloads at `0x0097FC00` and `0x01300000`). Run it only after a
-validated bitstream build from a Vivado 2023.1 Tcl console.
+`PROM_BIN_EXPORT.md`. It produces both a slot-relative
+`saturn-primary-v29-<sha>.bin` for the default `load-FPGA` primary destination and
+an uncompressed 32-Mbit `saturn-lab.bin` complete multiboot image (golden at
+`0x00000000`, primary at `0x00980000`, timers at `0x0097FC00` and
+`0x01300000`). Never pass the complete image to `load-FPGA`; the loader adds
+the primary offset itself. Run export only after a validated Vivado 2023.1
+bitstream build.
 
-The automated quality gate rejects negative setup or hold slack, any DRC with
-`Error` severity, and any unwaived CDC finding with `Critical` severity. CDC
+The automated quality gate rejects negative setup or hold slack, DRC errors or
+critical warnings, unwaived CDC Critical findings, and methodology Critical
+Warnings. CDC
 waivers are endpoint-bound in `tcl/cdc-waivers.tcl`; hierarchy drift or a new
 destination therefore fails closed. The reviewed contracts cover Xilinx XDMA
 internals, diagnostic clock-monitor sampling, static PCB revision straps,
@@ -174,8 +184,9 @@ Wave capture is disabled by default in batch smoke tests.
 
 The IQ-modulation source BDs and catalog IP are persistently migrated to
 Vivado 2023.1. `make vivado-migrate-iqmod` is the guarded, write-back migration
-target for intentional future catalog changes; ordinary Vivado commands still
-restore incidental project-file churn. `sim-common.tcl` synchronizes nested-BD
+target for future catalog changes. `make vivado-migrate-telemetry` persists the
+V29 FIFO `almost_full` wiring in an existing top-level project. Ordinary Vivado
+commands restore incidental project-file churn. `sim-common.tcl` synchronizes nested-BD
 simulation wrappers into the ignored user-files tree before compile because
 Vivado keeps both generated locations.
 

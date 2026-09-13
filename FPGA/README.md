@@ -2,14 +2,34 @@
 
 Saturn SDR project FPGA
 
-BIT files to program the configuration Flash EPROM can be found here.
+Configuration artifacts and their purposes:
 
-saturnfallback.bin: complete fallback image. DON'T program this unless you need to!
-saturnprinaryxx.bin: primary config file for FPGA version XX. This should be programmed using flashwriter" as the PRIMARY image.
+- `saturnfallback.bin`: complete fallback image. Do not program this during
+  normal development.
+- `saturn-primary-vXX-<sha>.bin`: slot-relative primary image created by the
+  guarded lab export. This is the only generated BIN intended for the
+  loader's default primary destination.
+- `saturn-lab.bin`: complete multiboot image for archival or an external
+  programmer. Do not give this file to the default primary loader path.
 
 Version history:
 
+V29 candidate, 12/09/2026: fixes I2S receive AXI-Stream backpressure, makes
+FIFO/ADC AXI-Lite read responses stable under stalls, defines no-loss
+read-clear boundaries, adds coherent FIFO/ADC diagnostics, and strengthens
+build/netlist/PROM safety gates. Offline regressions pass. A fresh routed build
+and G2 qualification are required before release; no RF-performance
+improvement is claimed.
 
+V28 lab candidate, 12/09/2026: first G2-loaded telemetry candidate. Basic RX
+and operator-supervised TX worked, but strict 30-minute RX qualification did
+not pass because microphone FIFO status observations remained unexplained.
+The extended telemetry registers were not safely exposed by the host. Retain
+V28 as test evidence, not as the final production release.
+
+V27, 03/06/2026: established G2 baseline preceding the V28/V29 lab work.
+The exact source/artifact identity must be taken from its archived manifest,
+not inferred from this history entry.
 
 V26. 04/01/2026. Added debug LO DDS selection to allow a Thetis debug mode to be used. No benefit for normal operation. 
 
@@ -39,8 +59,23 @@ Jan 25 2023: Added Iambic keyer.
 
 
 Recommended build procedure
-the build method using create\_saturn\_project.tcl is not recommended with newer versions of Vivado.
-Instead, the design source tree from Vivado can now be checked into git, which is what we have done.
+
+Vivado 2023.1 is the project authority. The older
+`create_saturn_project.tcl` recreation path is retained for reference but is
+not the recommended production build path. Use the checked-in project and the
+fail-aware lab wrapper:
+
+```bash
+cd /mnt/c/Users/jd/Saturn
+SATURN_VIVADO_JOBS=12 make -C FPGA/lab vivado-build
+make -C FPGA/lab export-prom
+```
+
+The build is successful only when the quality and routed-netlist gates pass.
+See `FPGA/lab/README.md`, `FPGA/lab/HANDOFF.md`, and
+`FPGA/lab/PROM_BIN_EXPORT.md` for the complete commands and safety contract.
+
+Manual project procedure (legacy reference):
 
 1. Install Vivado 2023.1
 2. Create a suitable folder: I recommend c:\\xilinxdesigns\\Saturn
@@ -50,5 +85,7 @@ Instead, the design source tree from Vivado can now be checked into git, which i
 6. Find design source file listed as saturn\_top\_i: saturn top (saturn\_top.bd)
 7. right click the file and select Create HDL wrapper. Allow Vivado to manage the file.
 8. click Generate Bitstream in the project manager window.
-9. Wait patiently... this could take several hours the 1st time!
-10. After that has completed, loci Generate Memory Configuration File from the Tools menu. There are instructions in the FPGA\\documentation folder: Generating Configuration PROM file.docx
+9. Wait for implementation and inspect timing, DRC, CDC, and methodology
+   reports; a generated bitstream alone is not a release verdict.
+10. Use the guarded lab export for a primary BIN. Do not manually combine or
+    offset an image unless following the documented recovery procedure.
