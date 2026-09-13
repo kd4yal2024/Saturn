@@ -88,6 +88,24 @@ set_output_delay -clock [get_clocks VIRTUAL_clk_out2_saturn_top_clk_wiz_0_0] -ma
 # asynchronous, so needs no timings
 set_output_delay -clock [get_clocks VIRTUAL_clk_out2_saturn_top_clk_wiz_0_0] -min -add_delay 0.000 [get_ports TX_DAC_PWM]
 set_output_delay -clock [get_clocks VIRTUAL_clk_out2_saturn_top_clk_wiz_0_0] -max -add_delay 0.000 [get_ports TX_DAC_PWM]
+# The PWM pin is also reached by the unrelated 122.88 MHz clock.  Its
+# interface timing is defined by the dedicated slow update clock above.
+set_false_path -from [get_clocks clock_122_in_p] -to [get_ports TX_DAC_PWM]
+
+## Configuration PROM SPI outputs
+# PROM timing is constrained against the generated SPI clock in the AXI
+# Quad-SPI constraint set.  Exclude the unrelated 125 MHz virtual clock,
+# which otherwise produces duplicate missing-delay reports.
+set_false_path -from [get_clocks VIRTUAL_clk_125mhz] -to [get_ports PROM_SPI_io0_io]
+set_false_path -from [get_clocks VIRTUAL_clk_125mhz] -to [get_ports PROM_SPI_io1_io]
+set_false_path -from [get_clocks VIRTUAL_clk_125mhz] -to [get_ports PROM_SPI_io2_io]
+set_false_path -from [get_clocks VIRTUAL_clk_125mhz] -to [get_ports PROM_SPI_io3_io]
+set_false_path -from [get_clocks VIRTUAL_clk_125mhz] -to [get_ports {PROM_SPI_ss_io[0]}]
+set_false_path -from [get_ports PROM_SPI_io0_io] -to [get_clocks VIRTUAL_clk_125mhz]
+set_false_path -from [get_ports PROM_SPI_io1_io] -to [get_clocks VIRTUAL_clk_125mhz]
+set_false_path -from [get_ports PROM_SPI_io2_io] -to [get_clocks VIRTUAL_clk_125mhz]
+set_false_path -from [get_ports PROM_SPI_io3_io] -to [get_clocks VIRTUAL_clk_125mhz]
+set_false_path -from [get_ports {PROM_SPI_ss_io[0]}] -to [get_clocks VIRTUAL_clk_125mhz]
 
 #RF analogue inputs (fwd, rev power etc)
 set_false_path -to [get_ports {nADC_CS[0]}]
@@ -197,6 +215,15 @@ set_false_path -from [get_ports pcie_reset_n]
 # asynchronous TX enable input
 set_false_path -from [get_ports TX_ENABLE]
 
+# FIFO almost-full indications are produced in their FIFO write-clock domains
+# and are consumed by explicit two-stage ASYNC_REG synchronizers in the 125 MHz
+# telemetry block.  Exclude only the asynchronous launch-to-first-stage paths;
+# the meta-to-sync stages remain timed and report_cdc remains responsible for
+# verifying the synchronizer structure.  FIFO 2 and FIFO 4 are already in the
+# 125 MHz telemetry clock domain and therefore need no exception.
+set_false_path -to [get_pins {saturn_top_i/FIFO_Interfaces/FIFO_Monitor_0/inst/fifo1_overflow_meta_reg/D}]
+set_false_path -to [get_pins {saturn_top_i/FIFO_Interfaces/FIFO_Monitor_0/inst/fifo3_overflow_meta_reg/D}]
+
 # codec SPI is guaranteed by design
 set_false_path -to [get_ports CODEC_SPI_CLK]
 set_false_path -to [get_ports CODEC_SPI_DATA]
@@ -236,6 +263,3 @@ set_false_path -to [get_ports {HPF_SEL2[0]}]
 # clock PLL
 #
 set_false_path -to [get_ports pll_cr]
-
-
-

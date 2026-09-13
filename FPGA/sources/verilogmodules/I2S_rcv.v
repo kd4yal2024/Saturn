@@ -43,6 +43,7 @@ parameter DSTRB     = 1;            // which position in b_clk to grab data
 
 localparam DS = DATA_BITS/2;        // size of left/right data
 localparam SS = clogb2(DS+BCNT+1);  // number of bits to hold range from 0 - ((DS+BCNT+1)-1)
+localparam [SS-1:0] CAPTURE_COUNT = DS + BCNT;
 
 (* X_INTERFACE_INFO = "xilinx.com:signal:clock:1.0 ACLK CLK" *)
 (* X_INTERFACE_PARAMETER = "ASSOCIATED_RESET resetn" *)
@@ -55,8 +56,8 @@ input   wire          Bfall;
 input   wire          LRrise;
 input   wire          LRfall;
 output  reg  [DATA_BITS-1:0] mrecv_axis_tdata;         // {Left,Right} data
-output  reg           mrecv_axis_tvalid;        // one aclk wide pulse
-input wire            mrecv_axis_tready;        // throttle inupt (not needed)
+output  reg           mrecv_axis_tvalid;
+input wire            mrecv_axis_tready;
 input   wire          BCLK;                     // not in aclk domain
 input   wire          LRCLK;                    // not in aclk domain
 input   wire          din;                      // data synchronous to BCLK/LRCLK
@@ -92,9 +93,6 @@ begin
   {d2, d1, d0}        <= #IF_TPD {d1, d0, din};
 
   if (!resetn)
-    mrecv_axis_tvalid <= 1'b0;
-
-  if (!resetn)
     shift_cnt <= #IF_TPD 0;
   else if (LRfall || LRrise)
     shift_cnt <= #IF_TPD 0;
@@ -104,20 +102,26 @@ begin
       shift_cnt <= #IF_TPD shift_cnt + 1'b1;
   end
 
-  if ((shift_cnt == (DS+BCNT)) && (b_clk_cnt == DSTRB) && !LRCLK)
+  if ((shift_cnt == CAPTURE_COUNT) && (b_clk_cnt == DSTRB) && !LRCLK)
     LocalData  <= #IF_TPD temp_data;
 
-  if ((shift_cnt == (DS+BCNT)) && (b_clk_cnt == DSTRB) && LRCLK)
+  if (!resetn)
   begin
-    mrecv_axis_tdata[DS-1:0]  <= #IF_TPD temp_data;                    // 2ns half of local shifdted data
-    mrecv_axis_tdata[DATA_BITS-1:DS] <= LocalData;
-    mrecv_axis_tvalid <= 1'b1;
+    mrecv_axis_tdata <= {DATA_BITS{1'b0}};
+    mrecv_axis_tvalid <= 1'b0;
   end
-
-//
-// deassert TVALID when TREADY detected
-//
-  if (mrecv_axis_tvalid && mrecv_axis_tready)
+  else if ((shift_cnt == CAPTURE_COUNT) && (b_clk_cnt == DSTRB) && LRCLK)
+  begin
+    // If the previous word is accepted on this edge, replace it immediately.
+    // Otherwise preserve it until TREADY is asserted, as AXI-Stream requires.
+    if (!mrecv_axis_tvalid || mrecv_axis_tready)
+    begin
+      mrecv_axis_tdata[DS-1:0] <= #IF_TPD temp_data;
+      mrecv_axis_tdata[DATA_BITS-1:DS] <= #IF_TPD LocalData;
+      mrecv_axis_tvalid <= 1'b1;
+    end
+  end
+  else if (mrecv_axis_tvalid && mrecv_axis_tready)
     mrecv_axis_tvalid <= 1'b0;
 end
 

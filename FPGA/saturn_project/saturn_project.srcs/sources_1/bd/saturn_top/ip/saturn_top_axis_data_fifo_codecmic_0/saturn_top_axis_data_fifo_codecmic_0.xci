@@ -26,7 +26,7 @@
         "HAS_AEMPTY": [ { "value": "0", "resolve_type": "user", "format": "long", "usage": "all" } ],
         "HAS_PROG_EMPTY": [ { "value": "0", "resolve_type": "user", "format": "long", "usage": "all" } ],
         "PROG_EMPTY_THRESH": [ { "value": "5", "resolve_type": "user", "format": "long", "enabled": false, "usage": "all" } ],
-        "HAS_AFULL": [ { "value": "0", "resolve_type": "user", "format": "long", "usage": "all" } ],
+        "HAS_AFULL": [ { "value": "1", "value_src": "user", "resolve_type": "user", "format": "long", "usage": "all" } ],
         "HAS_PROG_FULL": [ { "value": "0", "resolve_type": "user", "format": "long", "usage": "all" } ],
         "PROG_FULL_THRESH": [ { "value": "11", "resolve_type": "user", "format": "long", "enabled": false, "usage": "all" } ],
         "ENABLE_ECC": [ { "value": "0", "resolve_type": "user", "format": "long", "enabled": false, "usage": "all" } ],
@@ -48,7 +48,7 @@
         "C_ACLKEN_CONV_MODE": [ { "value": "0", "resolve_type": "generated", "format": "long", "usage": "all" } ],
         "C_ECC_MODE": [ { "value": "0", "resolve_type": "generated", "format": "long", "usage": "all" } ],
         "C_FIFO_MEMORY_TYPE": [ { "value": "auto", "resolve_type": "generated", "usage": "all" } ],
-        "C_USE_ADV_FEATURES": [ { "value": "825503792", "resolve_type": "generated", "format": "long", "usage": "all" } ],
+        "C_USE_ADV_FEATURES": [ { "value": "825503800", "resolve_type": "generated", "format": "long", "usage": "all" } ],
         "C_PROG_EMPTY_THRESH": [ { "value": "5", "resolve_type": "generated", "format": "long", "usage": "all" } ],
         "C_PROG_FULL_THRESH": [ { "value": "11", "resolve_type": "generated", "format": "long", "usage": "all" } ]
       },
@@ -89,7 +89,8 @@
         "m_axis_tvalid": [ { "direction": "out" } ],
         "m_axis_tready": [ { "direction": "in", "driver_value": "0x1" } ],
         "m_axis_tdata": [ { "direction": "out", "size_left": "63", "size_right": "0" } ],
-        "axis_rd_data_count": [ { "direction": "out", "size_left": "31", "size_right": "0" } ]
+        "axis_rd_data_count": [ { "direction": "out", "size_left": "31", "size_right": "0" } ],
+        "almost_full": [ { "direction": "out" } ]
       },
       "interfaces": {
         "S_AXIS": {

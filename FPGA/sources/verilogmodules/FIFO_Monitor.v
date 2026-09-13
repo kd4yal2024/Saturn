@@ -30,6 +30,15 @@
 //     bit(15:0)   Threshold FIFO depth
 //     bit 31      Interrupt enable
 //
+// V29 telemetry registers:
+//   0x20 snapshot control/status (write bit0=capture, bit1=clear extrema/events;
+//        read bit31=valid, bits15:0=sequence)
+//   0x24..0x30 captured FIFO1..4 counts
+//   0x34..0x40 minimum FIFO1..4 occupancy
+//   0x44..0x50 maximum FIFO1..4 occupancy
+//   0x54..0x60 FIFO1..4 event counters
+//   0x64 build ID
+//
 // FIFO Interface signals:
 //     FIFOn_Words(31:0)      current FIFO depth (note only 16 bits considered valid)
 //     FIFOn_Overflow         if 1, an over(or under) flow has occurred 
@@ -49,7 +58,12 @@
 module FIFO_Monitor #
 (
   parameter integer AXI_DATA_WIDTH = 32,
-  parameter integer AXI_ADDR_WIDTH = 16
+  parameter integer AXI_ADDR_WIDTH = 16,
+  parameter integer FIFO1_DEPTH = 16384,
+  parameter integer FIFO2_DEPTH = 4096,
+  parameter integer FIFO3_DEPTH = 256,
+  parameter integer FIFO4_DEPTH = 1024,
+  parameter [31:0] BUILD_ID = 32'h5632_3900
 )
 (
   // System signals
@@ -126,6 +140,44 @@ module FIFO_Monitor #
   reg fifo4_underflowed;                     // set if FIFO emptied (from count)
   reg interrupt4_out;                        // interrupt bit out 
 
+  // V29 coherent telemetry.  A write of bit 0 to 0x20 captures all four
+  // channels on one clock edge; the resulting bank is read-only until the
+  // next capture.  Counts are kept at their native 32-bit width.
+  reg [31:0] fifo1_snapshot, fifo2_snapshot, fifo3_snapshot, fifo4_snapshot;
+  reg [31:0] fifo1_min, fifo2_min, fifo3_min, fifo4_min;
+  reg [31:0] fifo1_max, fifo2_max, fifo3_max, fifo4_max;
+  reg [31:0] fifo1_events, fifo2_events, fifo3_events, fifo4_events;
+  reg [15:0] snapshot_sequence;
+  reg snapshot_valid;
+  reg fifo1_overflow_prev, fifo2_overflow_prev, fifo3_overflow_prev, fifo4_overflow_prev;
+  reg fifo1_full_prev, fifo2_full_prev, fifo3_full_prev, fifo4_full_prev;
+  reg fifo1_empty_prev, fifo2_empty_prev, fifo3_empty_prev, fifo4_empty_prev;
+  (* ASYNC_REG = "TRUE" *) reg fifo1_overflow_meta, fifo2_overflow_meta;
+  (* ASYNC_REG = "TRUE" *) reg fifo3_overflow_meta, fifo4_overflow_meta;
+  (* ASYNC_REG = "TRUE" *) reg fifo1_overflow_sync, fifo2_overflow_sync;
+  (* ASYNC_REG = "TRUE" *) reg fifo3_overflow_sync, fifo4_overflow_sync;
+
+  wire fifo1_full_now = (fifo1_count >= FIFO1_DEPTH);
+  wire fifo2_full_now = (fifo2_count >= FIFO2_DEPTH);
+  wire fifo3_full_now = (fifo3_count >= FIFO3_DEPTH);
+  wire fifo4_full_now = (fifo4_count >= FIFO4_DEPTH);
+  wire fifo1_empty_now = (fifo1_count == 0);
+  wire fifo2_empty_now = (fifo2_count == 0);
+  wire fifo3_empty_now = (fifo3_count == 0);
+  wire fifo4_empty_now = (fifo4_count == 0);
+  wire fifo1_event = (fifo1_overflow_sync & ~fifo1_overflow_prev) |
+                     (fifo1_full_now & ~fifo1_full_prev) |
+                     (fifo1_empty_now & ~fifo1_empty_prev);
+  wire fifo2_event = (fifo2_overflow_sync & ~fifo2_overflow_prev) |
+                     (fifo2_full_now & ~fifo2_full_prev) |
+                     (fifo2_empty_now & ~fifo2_empty_prev);
+  wire fifo3_event = (fifo3_overflow_sync & ~fifo3_overflow_prev) |
+                     (fifo3_full_now & ~fifo3_full_prev) |
+                     (fifo3_empty_now & ~fifo3_empty_prev);
+  wire fifo4_event = (fifo4_overflow_sync & ~fifo4_overflow_prev) |
+                     (fifo4_full_now & ~fifo4_full_prev) |
+                     (fifo4_empty_now & ~fifo4_empty_prev);
+
   reg [AXI_ADDR_WIDTH-1:0] raddrreg;        // AXI read address register
   reg [AXI_ADDR_WIDTH-1:0] waddrreg;        // AXI write address register
   reg [AXI_DATA_WIDTH-1:0] rdatareg;        // AXI read data register
@@ -183,43 +235,90 @@ module FIFO_Monitor #
       wreadyreg  <= 1'b1;                           // initialise to write data ready
       bvalidreg <= 1'b0;                            // initialise to "not ready to complete"
 // clear the FIFO registers      
-      fifo1_threshold <= {32{1'b0}};                // zero the FIFO threshold
+      fifo1_threshold <= 16'd0;                     // zero the FIFO threshold
       int1_enable <= 1'b0;
       fifo1_overflowed <= 1'b0;
       interrupt1_out <= 1'b0;
       fifo1_over_threshold <= 1'b0;
       fifo1_underflowed <= 1'b0;
 
-      fifo2_threshold <= {32{1'b0}};                // zero the FIFO threshold
+      fifo2_threshold <= 16'd0;                     // zero the FIFO threshold
       int2_enable <= 1'b0;
       fifo2_overflowed <= 1'b0;
       interrupt2_out <= 1'b0;
       fifo2_over_threshold <= 1'b0;
       fifo2_underflowed <= 1'b0;
 
-      fifo3_threshold <= {32{1'b0}};                // zero the FIFO threshold
+      fifo3_threshold <= 16'd0;                     // zero the FIFO threshold
       int3_enable <= 1'b0;
       fifo3_overflowed <= 1'b0;
       interrupt3_out <= 1'b0;
       fifo3_over_threshold <= 1'b0;
       fifo3_underflowed <= 1'b0;
 
-      fifo4_threshold <= {32{1'b0}};                // zero the FIFO threshold
+      fifo4_threshold <= 16'd0;                     // zero the FIFO threshold
       int4_enable <= 1'b0;
       fifo4_overflowed <= 1'b0;
       interrupt4_out <= 1'b0;
       fifo4_over_threshold <= 1'b0;
       fifo4_underflowed <= 1'b0;
+
+      fifo1_snapshot <= 32'd0;
+      fifo2_snapshot <= 32'd0;
+      fifo3_snapshot <= 32'd0;
+      fifo4_snapshot <= 32'd0;
+      fifo1_min <= 32'hffff_ffff;
+      fifo2_min <= 32'hffff_ffff;
+      fifo3_min <= 32'hffff_ffff;
+      fifo4_min <= 32'hffff_ffff;
+      fifo1_max <= 32'd0;
+      fifo2_max <= 32'd0;
+      fifo3_max <= 32'd0;
+      fifo4_max <= 32'd0;
+      fifo1_events <= 32'd0;
+      fifo2_events <= 32'd0;
+      fifo3_events <= 32'd0;
+      fifo4_events <= 32'd0;
+      snapshot_sequence <= 16'd0;
+      snapshot_valid <= 1'b0;
+      fifo1_overflow_prev <= 1'b0;
+      fifo2_overflow_prev <= 1'b0;
+      fifo3_overflow_prev <= 1'b0;
+      fifo4_overflow_prev <= 1'b0;
+      fifo1_full_prev <= 1'b0;
+      fifo2_full_prev <= 1'b0;
+      fifo3_full_prev <= 1'b0;
+      fifo4_full_prev <= 1'b0;
+      fifo1_empty_prev <= 1'b1;
+      fifo2_empty_prev <= 1'b1;
+      fifo3_empty_prev <= 1'b1;
+      fifo4_empty_prev <= 1'b1;
+      fifo1_overflow_meta <= 1'b0;
+      fifo2_overflow_meta <= 1'b0;
+      fifo3_overflow_meta <= 1'b0;
+      fifo4_overflow_meta <= 1'b0;
+      fifo1_overflow_sync <= 1'b0;
+      fifo2_overflow_sync <= 1'b0;
+      fifo3_overflow_sync <= 1'b0;
+      fifo4_overflow_sync <= 1'b0;
     end
     else
     begin
+      fifo1_overflow_meta <= fifo1_overflow;
+      fifo2_overflow_meta <= fifo2_overflow;
+      fifo3_overflow_meta <= fifo3_overflow;
+      fifo4_overflow_meta <= fifo4_overflow;
+      fifo1_overflow_sync <= fifo1_overflow_meta;
+      fifo2_overflow_sync <= fifo2_overflow_meta;
+      fifo3_overflow_sync <= fifo3_overflow_meta;
+      fifo4_overflow_sync <= fifo4_overflow_meta;
 //
 // collect FIFO state to internal registers
 // latch overflow and underflow indications so they are stored until read
 // FIFO 1
 //
-      fifo1_count_reg <= fifo1_count;           // latch the current FIFO data count
-      if(fifo1_overflow)                        // if FIFO overflow flag, set the bit
+      fifo1_count_reg <= fifo1_count[15:0];     // legacy register exposes low 16 bits
+      if(fifo1_overflow_sync)                   // synchronized FIFO overflow flag
         fifo1_overflowed <= 1'b1;               // set persistently
 
       if(fifo1_count_reg >= fifo1_threshold)
@@ -230,8 +329,8 @@ module FIFO_Monitor #
 //
 // FIFO 2
 //
-      fifo2_count_reg <= fifo2_count;           // latch the current FIFO data count
-      if(fifo2_overflow)                        // if FIFO overflow flag, set the bit
+      fifo2_count_reg <= fifo2_count[15:0];     // legacy register exposes low 16 bits
+      if(fifo2_overflow_sync)                   // synchronized FIFO overflow flag
         fifo2_overflowed <= 1'b1;               // set persistently
 
       if(fifo2_count_reg >= fifo2_threshold)
@@ -242,8 +341,8 @@ module FIFO_Monitor #
 //
 // FIFO 3
 //
-      fifo3_count_reg <= fifo3_count;           // latch the current FIFO data count
-      if(fifo3_overflow)                        // if FIFO overflow flag, set the bit
+      fifo3_count_reg <= fifo3_count[15:0];     // legacy register exposes low 16 bits
+      if(fifo3_overflow_sync)                   // synchronized FIFO overflow flag
         fifo3_overflowed <= 1'b1;               // set persistently
 
       if(fifo3_count_reg >= fifo3_threshold)
@@ -254,8 +353,8 @@ module FIFO_Monitor #
 //
 // FIFO 4
 //
-      fifo4_count_reg <= fifo4_count;           // latch the current FIFO data count
-      if(fifo4_overflow)                        // if FIFO overflow flag, set the bit
+      fifo4_count_reg <= fifo4_count[15:0];     // legacy register exposes low 16 bits
+      if(fifo4_overflow_sync)                   // synchronized FIFO overflow flag
         fifo4_overflowed <= 1'b1;               // set persistently
 
       if(fifo4_count_reg >= fifo4_threshold)
@@ -263,6 +362,38 @@ module FIFO_Monitor #
       else if(fifo4_count_reg == 0)
         fifo4_underflowed <= 1'b1;
       interrupt4_out <= (int4_enable & (fifo4_overflowed | fifo4_over_threshold | fifo4_underflowed));
+
+      // Continuous telemetry accumulation.  Full/empty transitions provide
+      // useful overflow/underflow evidence for Xilinx AXIS FIFOs, whose native
+      // overflow pins are not available in every configuration.
+      if (fifo1_count < fifo1_min) fifo1_min <= fifo1_count;
+      if (fifo2_count < fifo2_min) fifo2_min <= fifo2_count;
+      if (fifo3_count < fifo3_min) fifo3_min <= fifo3_count;
+      if (fifo4_count < fifo4_min) fifo4_min <= fifo4_count;
+      if (fifo1_count > fifo1_max) fifo1_max <= fifo1_count;
+      if (fifo2_count > fifo2_max) fifo2_max <= fifo2_count;
+      if (fifo3_count > fifo3_max) fifo3_max <= fifo3_count;
+      if (fifo4_count > fifo4_max) fifo4_max <= fifo4_count;
+      if (fifo1_event && !(&fifo1_events)) fifo1_events <= fifo1_events + 32'd1;
+      if (fifo2_event && !(&fifo2_events)) fifo2_events <= fifo2_events + 32'd1;
+      if (fifo3_event && !(&fifo3_events)) fifo3_events <= fifo3_events + 32'd1;
+      if (fifo4_event && !(&fifo4_events)) fifo4_events <= fifo4_events + 32'd1;
+      if (fifo1_full_now) fifo1_overflowed <= 1'b1;
+      if (fifo2_full_now) fifo2_overflowed <= 1'b1;
+      if (fifo3_full_now) fifo3_overflowed <= 1'b1;
+      if (fifo4_full_now) fifo4_overflowed <= 1'b1;
+      fifo1_overflow_prev <= fifo1_overflow_sync;
+      fifo2_overflow_prev <= fifo2_overflow_sync;
+      fifo3_overflow_prev <= fifo3_overflow_sync;
+      fifo4_overflow_prev <= fifo4_overflow_sync;
+      fifo1_full_prev <= fifo1_full_now;
+      fifo2_full_prev <= fifo2_full_now;
+      fifo3_full_prev <= fifo3_full_now;
+      fifo4_full_prev <= fifo4_full_now;
+      fifo1_empty_prev <= fifo1_empty_now;
+      fifo2_empty_prev <= fifo2_empty_now;
+      fifo3_empty_prev <= fifo3_empty_now;
+      fifo4_empty_prev <= fifo4_empty_now;
 
 //
 // implement read transactions
@@ -273,10 +404,10 @@ module FIFO_Monitor #
         raddrreg <= s_axi_araddr;            // latch read address
       end
 // read step 3. assert rvalid & data when address is complete
-      if(!arreadyreg)         // address complete
+      if(!arreadyreg & !rvalidreg) // latch exactly one response per address
       begin
         rvalidreg <= 1'b1;                                  // signal ready to complete data
-        case (raddrreg[4:2])
+        case (raddrreg[6:2])
         0:  rdatareg <= {fifo1_overflowed, fifo1_over_threshold, fifo1_underflowed,
                     {(AXI_DATA_WIDTH - 19){1'b0}}, 
                     fifo1_count_reg};                        // concat data
@@ -301,6 +432,25 @@ module FIFO_Monitor #
         7: rdatareg <= {int4_enable,  
                     {(AXI_DATA_WIDTH - 16 - 1){1'b0}}, 
                     fifo4_threshold};                        //concat 
+        8:  rdatareg <= {snapshot_valid, 15'd0, snapshot_sequence};
+        9:  rdatareg <= fifo1_snapshot;
+        10: rdatareg <= fifo2_snapshot;
+        11: rdatareg <= fifo3_snapshot;
+        12: rdatareg <= fifo4_snapshot;
+        13: rdatareg <= fifo1_min;
+        14: rdatareg <= fifo2_min;
+        15: rdatareg <= fifo3_min;
+        16: rdatareg <= fifo4_min;
+        17: rdatareg <= fifo1_max;
+        18: rdatareg <= fifo2_max;
+        19: rdatareg <= fifo3_max;
+        20: rdatareg <= fifo4_max;
+        21: rdatareg <= fifo1_events;
+        22: rdatareg <= fifo2_events;
+        23: rdatareg <= fifo3_events;
+        24: rdatareg <= fifo4_events;
+        25: rdatareg <= BUILD_ID;
+        default: rdatareg <= {(AXI_DATA_WIDTH){1'b0}};
         endcase
       end
 // read step 4. When rvalid and rready, terminate the transaction & clear data.
@@ -309,29 +459,31 @@ module FIFO_Monitor #
         rvalidreg <= 1'b0;                                  // deassert rvalid
         arreadyreg <= 1'b1;                                 // ready for new address
         rdatareg <= {(AXI_DATA_WIDTH){1'b0}};
-        case (raddrreg[4:2])
+        case (raddrreg[6:2])
           0: begin 
-                fifo1_overflowed <= 0; 
-                fifo1_over_threshold <= 0; 
-                fifo1_underflowed <= 0; 
+                // A condition present on the transfer edge belongs to the
+                // next observation window, so a legacy read cannot erase it.
+                fifo1_overflowed <= fifo1_overflow_sync | fifo1_full_now;
+                fifo1_over_threshold <= (fifo1_count >= fifo1_threshold);
+                fifo1_underflowed <= fifo1_empty_now;
           end             // clear on data transfer
 
           1: begin 
-                fifo2_overflowed <= 0; 
-                fifo2_over_threshold <= 0; 
-                fifo2_underflowed <= 0; 
+                fifo2_overflowed <= fifo2_overflow_sync | fifo2_full_now;
+                fifo2_over_threshold <= (fifo2_count >= fifo2_threshold);
+                fifo2_underflowed <= fifo2_empty_now;
           end             // clear on data transfer
 
           2: begin 
-                fifo3_overflowed <= 0; 
-                fifo3_over_threshold <= 0; 
-                fifo3_underflowed <= 0; 
+                fifo3_overflowed <= fifo3_overflow_sync | fifo3_full_now;
+                fifo3_over_threshold <= (fifo3_count >= fifo3_threshold);
+                fifo3_underflowed <= fifo3_empty_now;
           end             // clear on data transfer
 
           3: begin 
-                fifo4_overflowed <= 0; 
-                fifo4_over_threshold <= 0; 
-                fifo4_underflowed <= 0; 
+                fifo4_overflowed <= fifo4_overflow_sync | fifo4_full_now;
+                fifo4_over_threshold <= (fifo4_count >= fifo4_threshold);
+                fifo4_underflowed <= fifo4_empty_now;
           end             // clear on data transfer
         endcase
       end
@@ -365,22 +517,50 @@ module FIFO_Monitor #
         bvalidreg <= 1'b0;                                  // clear valid when done
         awreadyreg <= 1'b1;                                 // and reassert the readys
         wreadyreg <= 1'b1;
-        case (waddrreg[4:2])
+        case (waddrreg[6:2])
           4: begin
-               fifo1_threshold <= ( wdatareg & {16{1'b1}});      // subset
-               int1_enable <= (wdatareg >> (AXI_DATA_WIDTH-1)) & 1'b1;
+               fifo1_threshold <= wdatareg[15:0];
+               int1_enable <= wdatareg[AXI_DATA_WIDTH-1];
              end
           5: begin
-               fifo2_threshold <= ( wdatareg & {16{1'b1}});      // subset
-               int2_enable <= (wdatareg >> (AXI_DATA_WIDTH-1)) & 1'b1;
+               fifo2_threshold <= wdatareg[15:0];
+               int2_enable <= wdatareg[AXI_DATA_WIDTH-1];
              end
           6: begin
-               fifo3_threshold <= ( wdatareg & {16{1'b1}});      // subset
-               int3_enable <= (wdatareg >> (AXI_DATA_WIDTH-1)) & 1'b1;
+               fifo3_threshold <= wdatareg[15:0];
+               int3_enable <= wdatareg[AXI_DATA_WIDTH-1];
              end
           7: begin
-               fifo4_threshold <= ( wdatareg & {16{1'b1}});      // subset
-               int4_enable <= (wdatareg >> (AXI_DATA_WIDTH-1)) & 1'b1;
+               fifo4_threshold <= wdatareg[15:0];
+               int4_enable <= wdatareg[AXI_DATA_WIDTH-1];
+             end
+          8: begin
+               // V29 snapshot command: bit 0 captures all channels; bit 1
+               // clears accumulated extrema/event counters.
+               if (wdatareg[0]) begin
+                 fifo1_snapshot <= fifo1_count;
+                 fifo2_snapshot <= fifo2_count;
+                 fifo3_snapshot <= fifo3_count;
+                 fifo4_snapshot <= fifo4_count;
+                 snapshot_sequence <= snapshot_sequence + 16'd1;
+                 snapshot_valid <= 1'b1;
+               end
+               if (wdatareg[1]) begin
+                 fifo1_min <= fifo1_count;
+                 fifo2_min <= fifo2_count;
+                 fifo3_min <= fifo3_count;
+                 fifo4_min <= fifo4_count;
+                 fifo1_max <= fifo1_count;
+                 fifo2_max <= fifo2_count;
+                 fifo3_max <= fifo3_count;
+                 fifo4_max <= fifo4_count;
+                 // Boundary events are retained as the first event in the
+                 // new window instead of being lost to the clear operation.
+                 fifo1_events <= fifo1_event ? 32'd1 : 32'd0;
+                 fifo2_events <= fifo2_event ? 32'd1 : 32'd0;
+                 fifo3_events <= fifo3_event ? 32'd1 : 32'd0;
+                 fifo4_events <= fifo4_event ? 32'd1 : 32'd0;
+               end
              end
         endcase
       end 

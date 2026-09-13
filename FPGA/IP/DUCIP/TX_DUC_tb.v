@@ -83,6 +83,10 @@ initial begin
     RecordDiskFile = 1;                 // enable file write
     DiscardSampleCount = 100000;        // samples to be discarded before starting to record (filter initialising)
     RequiredSampleCount = 262144;
+    if($value$plusargs("SATURN_REQUIRED_SAMPLES=%d", RequiredSampleCount))
+        $display("Required sample override = %d", RequiredSampleCount);
+    if($value$plusargs("SATURN_DISCARD_SAMPLES=%d", DiscardSampleCount))
+        $display("Discard sample override = %d", DiscardSampleCount);
     if(RecordDiskFile == 1)
     begin
         fd_w = $fopen("./ducoffbindata.txt", "w");
@@ -135,7 +139,8 @@ always @(posedge clk122)
 //            $fwrite(fd_w, "%d\n", $signed(TXSamplesToRX));
 //            $fwrite(fd_w, "%d\n", $signed(testdata));
         $fwrite(fd_w, "%d\n", $unsigned(TXDACData));        // offset binary DAC output
-        $display("Sample number = %d\n",SampleCount);
+        if((SampleCount <= 10) || ((SampleCount % 4096) == 0))
+            $display("Sample number = %d\n",SampleCount);
         if(SampleCount == (RequiredSampleCount + DiscardSampleCount))
         begin
             $fclose(fd_w);

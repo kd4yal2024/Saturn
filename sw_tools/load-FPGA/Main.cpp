@@ -140,6 +140,13 @@ int main(int argc, char* argv[])
 {
    try
    {
+      // The normal loader accepts a slot-relative BIN and adds this physical
+      // destination.  Never allow it to cross the timer2 barrier: doing so
+      // would permit a complete address-zero multiboot image to be applied a
+      // second time at the primary offset and overwrite protected flash data.
+      constexpr long int kPrimaryFlashBase = 0x00980000;
+      constexpr long int kPrimaryFlashLimit = 0x01300000;
+
       // Since our erase/program reports don't have a newline, we disable stdout buffering
       // to achieve the desired effect
       setbuf(stdout, NULL);
@@ -165,7 +172,7 @@ int main(int argc, char* argv[])
       char* dataFileBIN = NULL;
       long int byteLen = 0;
       long int srcInx = 0;
-      long int dstInx = 0x00980000;             // load primary image at this location
+      long int dstInx = kPrimaryFlashBase;      // load primary image at this location
       bool verify = false;
       bool fallback = false;
 
@@ -224,6 +231,18 @@ int main(int argc, char* argv[])
          printf("Binary data file empty- no data to write\n");
          return 1; 
 // << early exit
+      }
+
+      if (!fallback && data_to_write.size() >
+              static_cast<size_t>(kPrimaryFlashLimit - kPrimaryFlashBase))
+      {
+         printf("Primary image is too large (%zu bytes); maximum is %ld bytes.\n"
+                "Refusing to cross protected flash address 0x%08lX.\n"
+                "Use the slot-relative saturn-primary-<sha>.bin, not a complete multiboot image.\n",
+                data_to_write.size(),
+                kPrimaryFlashLimit - kPrimaryFlashBase,
+                kPrimaryFlashLimit);
+         return 1;
       }
 
       // At this point, we have a device and some data to write to it.
@@ -307,6 +326,5 @@ int main(int argc, char* argv[])
 
    return 0;
 }
-
 
 
