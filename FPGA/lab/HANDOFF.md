@@ -1,19 +1,30 @@
 # Saturn FPGA V29 lab handoff
 
-Updated 2026-09-12. This file describes the V29 source candidate on branch
-`fpga-v29-lab`. Historical V27/V28 investigation details remain available in
-Git history; they are not current release claims.
+Updated 2026-09-13. This file describes the V29 source and RX hardware
+qualification state on branch `fpga-v29-lab`. Historical V27/V28 investigation
+details remain available in Git history; they are not current release claims.
 
 ## Current state
 
-- V28 is the image currently exercised on Jerry's G2. Runtime inventory
-  reported firmware 28, BIT date `09122026`, all clocks present, and fallback
-  inactive.
-- V28 passed basic RX/TX operation, but its 30-minute RX qualification failed
-  the strict gate after two microphone FIFO status observations. Host evidence
-  could not prove two distinct overflows or count lost microphone frames.
-- V29 is a source candidate only. It has not yet been synthesized, packaged,
-  loaded, or qualified on hardware.
+- V29 is running on Jerry's G2 with P2 V51. Runtime inventory reports firmware
+  29, BIT date `09122026`, all clocks present, fallback inactive, and the V29
+  build marker `0x56323900`.
+- A controlled 30-minute RX soak with the ADC1 antenna path moved to a
+  1500-watt 50-ohm dummy load passed all strict gates: 361 samples, zero V29
+  snapshot timeouts, no ADC overflow, and no new speaker underrun or
+  queue-ready event.
+- Two earlier antenna-connected attempts stopped only on ADC overflow. A live
+  follow-up captured ADC1 at positive full scale (`32767`) during a storm and
+  showed one brief clip burst producing multiple `adc_overflow_events`
+  reports. Those runs remain valid environmental/ADC evidence, but do not
+  implicate the V51 speaker instrumentation.
+- `scripts/rx-soak.py` now defines separate `controlled` and `antenna`
+  profiles. Controlled input keeps ADC overflow as a hard gate; antenna use
+  records sampled ADC report clusters without assigning speaker-test
+  causality. All speaker, transport, network, identity, routing, and V29
+  snapshot gates remain strict.
+- The queue-ready refill-policy reproduction remains unconfirmed, so no V52
+  speaker change has been implemented.
 - Vivado 2023.1 remains the required full-design build and vendor-IP
   simulation authority.
 
@@ -61,7 +72,38 @@ The routed-netlist audit previously passed against the V28 checkpoint. That
 proves the persisted telemetry hierarchy was present in that checkpoint; it
 does not replace a fresh V29 implementation run.
 
-## Required V29 build and package
+## Verified on RX hardware
+
+- Controlled dummy-load soak:
+  `/home/pi/saturn-v29-validation/v29-p2v51-pacing-rx-30m-dummy-20260913T144252Z`
+  (`PASS`, 1800.078 seconds, 361 samples; all artifact hashes verified).
+- Antenna attempt 1:
+  `/home/pi/saturn-v29-validation/v29-p2v51-pacing-rx-30m-20260913T141128Z`
+  (speaker gates clean; stopped after one ADC overflow report).
+- Antenna attempt 2:
+  `/home/pi/saturn-v29-validation/v29-p2v51-pacing-rx-30m-20260913T141304Z`
+  (speaker gates clean; stopped after an ADC report burst of 24).
+- Final controlled-profile dual-DDC smoke:
+  `/home/pi/saturn-v29-validation/v29-p2v51-rx-controlled-dual-smoke-20260913T152434Z`
+  (`PASS`, 10.068 seconds; all artifact hashes verified).
+- Final antenna-profile execution smoke, still on the dummy load:
+  `/home/pi/saturn-v29-validation/v29-p2v51-rx-antenna-profile-smoke-20260913T152852Z`
+  (`PASS`, 10.067 seconds; all artifact hashes verified).
+
+The checked-in collector is deployed read-only at
+`/home/pi/saturn-v29-validation/rx-soak.py`. Its SHA256 is
+`b2905797a963086a749fcc1b923edcfedd77beae73155be3dddc303d3c4610c6`.
+The live Thetis workload at the final smoke had DDC2 and DDC3 enabled at 384
+ksps, so both were declared explicitly and frozen by the collector.
+
+The ADC report counter is not a physical edge or episode counter. P2 polls the
+read-to-clear status during the RX reporting wait and immediately emits a
+high-priority report after a hit. A sustained or closely spaced ADC overrange
+condition can therefore produce multiple counter increments. Preserve the
+counter for compatibility and immediate Thetis indication, but use the
+antenna soak profile when qualifying unrelated speaker behavior.
+
+## V29 rebuild and package procedure
 
 After committing the source, run one non-reused build so the artifact name and
 manifest contain the V29 commit SHA:
@@ -96,8 +138,9 @@ not be passed to the normal loader path.
   `/dev/xdma*_user`; a prior direct read disrupted the G2 and caused an
   unclean reboot.
 - Register access requires a reviewed accessor and coordination with the
-  running P2 service. V29 extended telemetry is not yet exposed by the host.
-- Loading V29 requires an operator-approved artifact hash, a known-good
+  running P2 service. Use the host-exposed `/p23_perf` V29 telemetry for
+  read-only qualification instead of direct register access.
+- Reloading V29 requires an operator-approved artifact hash, a known-good
   primary backup, protected fallback confirmation, and a documented recovery
   path for a valid image that breaks PCIe/XDMA.
 - Hardware qualification begins RX-only. TX, PureSignal, flash operations,
@@ -105,7 +148,9 @@ not be passed to the normal loader path.
 
 ## Release verdict
 
-V29 is ready for a fresh production-gated build after the source commit. It is
-not yet a production firmware release: implementation evidence, a guarded
-primary BIN, host exposure of the telemetry contract, and G2 qualification are
-still pending.
+V29 and P2 V51 have passed the controlled 30-minute RX qualification. The
+antenna-connected RX qualification still needs a full-duration run using the
+non-gating ADC observation profile. TX, PureSignal, post-TX RX recovery, flash
+recovery, and broader mixed-use qualification remain separate
+operator-approved steps, so V29 is not yet a fully qualified production
+release.

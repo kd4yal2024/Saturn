@@ -74,6 +74,70 @@ The Phase 0 lint gate covers `activitywatchdog.v`, `FIFO_Monitor.v`,
 `DDCMux.v`, and `I2S_rcv.v`. `make check` also runs the self-checking V29
 FIFO/ADC/I2S telemetry regression (`make telemetry-test`).
 
+## Hardware RX soak profiles
+
+`scripts/rx-soak.py` captures a read-only P2 V51 / FPGA V29 RX soak from the
+Saturn Go `/p23_perf` endpoint. It does not read raw XDMA registers, clear FPGA
+accumulators, restart services, or change RX/TX state. The operator must place
+the radio in the required RX-only workload and declare every expected DDC
+before starting it. Run the collector on the Saturn node so its default
+loopback endpoint reaches Saturn Go. For example, deploy the checked-in copy
+from the workstation with:
+
+```bash
+scp FPGA/lab/scripts/rx-soak.py \
+  pi@192.168.0.139:/home/pi/saturn-v29-validation/rx-soak.py
+```
+
+Use `controlled` with a known stable 50-ohm termination or dummy load. Any ADC
+overflow remains a hard failure in this profile:
+
+```bash
+stamp="$(date -u +%Y%m%dT%H%M%SZ)"
+python3 /home/pi/saturn-v29-validation/rx-soak.py \
+  --profile controlled \
+  --expect-ddc 2:384 --expect-ddc 3:384 \
+  --output "/home/pi/saturn-v29-validation/v29-p2v51-rx-controlled-${stamp}"
+```
+
+Use `antenna` for representative field operation. ADC overflow reports and
+sampled channel/peak context are preserved in the summary but do not assign
+speaker-test causality or stop the run. Speaker, transport, network, FPGA
+snapshot, identity, routing, and RX-only gates remain strict:
+
+```bash
+stamp="$(date -u +%Y%m%dT%H%M%SZ)"
+python3 /home/pi/saturn-v29-validation/rx-soak.py \
+  --profile antenna \
+  --expect-ddc 2:384 --expect-ddc 3:384 \
+  --output "/home/pi/saturn-v29-validation/v29-p2v51-rx-antenna-${stamp}"
+```
+
+The default duration is 1800 seconds at five-second intervals. `--duration`
+may be shortened for a smoke test. The interval may be lengthened but is
+enforced at a minimum of five seconds so consecutive samples can reliably see
+the published V29 generation advance. The output directory must be new or
+empty; the collector refuses existing contents before writing any status.
+Each completed artifact contains a copy of the collector and a `SHA256SUMS`
+manifest over the defined output files.
+
+The expected receiver set is explicit. It defaults to the original single
+`DDC2` 384 ksps non-interleaved workload. The examples above declare the
+current dual-receiver Thetis workload. Repeat `--expect-ddc` for any
+intentional multi-receiver run; any later routing drift still fails closed:
+
+```bash
+--expect-ddc 2:384 --expect-ddc 3:384
+```
+
+An optional third field accepts `interleaved` or `noninterleaved`, for example
+`--expect-ddc 2:384:interleaved`.
+
+The existing `adc_overflow_events` value counts nonzero status reports, not
+independent physical clip episodes. Antenna-profile ADC entries are therefore
+classified as sampled report clusters. Do not infer episode count or duration
+from them without finer-grained runtime telemetry.
+
 ## Vivado 2023.1 batch build
 
 From WSL, the supplied launcher uses the Windows installation at
