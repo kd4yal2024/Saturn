@@ -13,6 +13,11 @@ details remain available in Git history; they are not current release claims.
   1500-watt 50-ohm dummy load passed all strict gates: 361 samples, zero V29
   snapshot timeouts, no ADC overflow, and no new speaker underrun or
   queue-ready event.
+- A representative 30-minute antenna RX soak during active low-band static
+  also passed all strict gates: 361 samples, zero V29 snapshot timeouts, and
+  no new speaker underrun, queue-ready, queue-empty, gap, stall, transport, or
+  network error. Seven sampled ADC report clusters contained eight reports;
+  those environmental observations were non-gating by profile.
 - Two earlier antenna-connected attempts stopped only on ADC overflow. A live
   follow-up captured ADC1 at positive full scale (`32767`) during a storm and
   showed one brief clip burst producing multiple `adc_overflow_events`
@@ -89,6 +94,10 @@ does not replace a fresh V29 implementation run.
 - Final antenna-profile execution smoke, still on the dummy load:
   `/home/pi/saturn-v29-validation/v29-p2v51-rx-antenna-profile-smoke-20260913T152852Z`
   (`PASS`, 10.067 seconds; all artifact hashes verified).
+- Full antenna-profile dual-DDC soak:
+  `/home/pi/saturn-v29-validation/v29-p2v51-rx-antenna-30m-20260913T154630Z`
+  (`PASS`, 1800.067 seconds, 361 samples; ADC reports `62 -> 70`, no
+  strict-gate failures, and all artifact hashes verified).
 
 The checked-in collector is deployed read-only at
 `/home/pi/saturn-v29-validation/rx-soak.py`. Its SHA256 is
@@ -148,9 +157,10 @@ not be passed to the normal loader path.
 
 ## Release verdict
 
-V29 and P2 V51 have passed the controlled 30-minute RX qualification. The
-antenna-connected RX qualification still needs a full-duration run using the
-non-gating ADC observation profile. TX, PureSignal, post-TX RX recovery, flash
-recovery, and broader mixed-use qualification remain separate
-operator-approved steps, so V29 is not yet a fully qualified production
-release.
+V29 and P2 V51 have passed both controlled dummy-load and representative
+antenna-connected 30-minute RX qualification. The antenna run included eight
+ADC reports without any correlated speaker or transport failure. TX,
+PureSignal, post-TX RX recovery, flash recovery, and broader mixed-use
+qualification remain separate operator-approved steps, so V29 is not yet a
+fully qualified production release. The queue-ready refill-policy
+reproduction remains unconfirmed and does not justify a V52 speaker change.
