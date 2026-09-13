@@ -125,7 +125,10 @@ proc saturn_lab::telemetry_netlist_gate {output_dir} {
     set checks [list \
         fifo_event_counter {.*FIFO_Monitor_0/inst/fifo1_events_reg.*} \
         snapshot_sequence {.*FIFO_Monitor_0/inst/snapshot_sequence_reg.*} \
-        extended_read_address {.*FIFO_Monitor_0/inst/raddrreg_reg\[6\].*}]
+        extended_read_address {.*FIFO_Monitor_0/inst/raddrreg_reg\[6\].*} \
+        adc_episode_counter {.*AXI_FIFO_overflow_re_1/inst/ADC1episodecountreg_reg.*} \
+        adc_episode_duration {.*AXI_FIFO_overflow_re_1/inst/ADC1totalhighreg_reg.*} \
+        adc_extended_read_address {.*AXI_FIFO_overflow_re_1/inst/raddrreg_reg\[6\].*}]
     set report_path [file join $output_dir telemetry-netlist-gate.txt]
     set stream [open $report_path w]
     set failures {}
@@ -140,7 +143,7 @@ proc saturn_lab::telemetry_netlist_gate {output_dir} {
     }
     close $stream
     if {[llength $failures] > 0} {
-        error "Routed telemetry netlist is missing required V29 state: [join $failures {, }]"
+        error "Routed telemetry netlist is missing required V29/V30 state: [join $failures {, }]"
     }
     puts "SATURN_LAB_TELEMETRY_NETLIST_OK report=$report_path"
 }

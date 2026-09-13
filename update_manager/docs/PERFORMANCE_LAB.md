@@ -67,6 +67,9 @@ backup/restore and managed-state migration.
   threshold counters, plus thread scheduling identity and last-underrun context;
 - SoC temperature and CPU frequency;
 - ADC1/ADC2 peak dBFS when available.
+- FPGA V30 per-ADC physical overrange episode counts, total/longest/latest
+  duration in 122.88 MHz clocks, associated latest/current peak, and active
+  state when supported by the running firmware and host.
 
 ## Verdict rules
 

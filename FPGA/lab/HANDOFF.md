@@ -4,6 +4,16 @@ Updated 2026-09-13. This file describes the V29 source and RX hardware
 qualification state on branch `fpga-v29-lab`. Historical V27/V28 investigation
 details remain available in Git history; they are not current release claims.
 
+## V30 development branch
+
+Branch `fpga-v30-adc-telemetry` advances the source identity to FPGA V30 and
+P2 V52 without changing the V29 signal path or the deferred speaker refill
+policy. It adds physical ADC overrange episode, high-clock duration, and
+associated peak telemetry so lightning/static bursts can be distinguished
+from repeated software observation of one sustained condition. No V30 build,
+package, G2 load, or hardware qualification is claimed here until those gates
+are completed and recorded separately.
+
 ## Current state
 
 - V29 is running on Jerry's G2 with P2 V51. Runtime inventory reports firmware

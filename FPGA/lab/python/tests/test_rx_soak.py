@@ -53,7 +53,7 @@ def make_perf(adc_reports=0, adc_bits=0):
             "fpga_fifo_v29": {
                 "available": True,
                 "status": "available",
-                "build_id": RX_SOAK.EXPECTED_BUILD_ID,
+                "build_id": RX_SOAK.EXPECTED_V29_BUILD_ID,
                 "snapshot_valid": True,
                 "snapshot_timeout_count": 0,
                 "snapshot_generation": 10,
@@ -80,6 +80,37 @@ def make_perf(adc_reports=0, adc_bits=0):
 
 
 class RXSoakProfileTests(unittest.TestCase):
+    def test_v30_requires_and_accepts_physical_episode_telemetry(self):
+        sample = make_perf()
+        app = sample["app_telemetry"]["current"]
+        app["version"] = 52
+        app["fpga"]["firmware_version"] = 30
+        app["fpga"]["date_code_hex"] = "09132026"
+        app["gauges"]["fpga_adc_v30"] = {
+            "available": True,
+            "status": "available",
+            "build_id": RX_SOAK.EXPECTED_V30_ADC_BUILD_ID,
+            "snapshot_valid": True,
+            "snapshot_retry_failure_count": 0,
+            "snapshot_generation": 20,
+            "clock_hz": 122880000,
+            "adc1": {"episode_count": 2, "total_high_clocks": 12},
+            "adc2": {"episode_count": 0, "total_high_clocks": 0},
+        }
+
+        problems = RX_SOAK.gate_violations(
+            sample, None, None, "antenna", RX_SOAK.DEFAULT_DDC_EXPECTATIONS,
+            "ok", 52, 30, "09132026",
+        )
+        self.assertEqual([], problems)
+
+        del app["gauges"]["fpga_adc_v30"]
+        problems = RX_SOAK.gate_violations(
+            sample, None, None, "antenna", RX_SOAK.DEFAULT_DDC_EXPECTATIONS,
+            "ok", 52, 30, "09132026",
+        )
+        self.assertIn("fpga_adc_v30 is not available", problems)
+
     def test_controlled_profile_gates_adc_reports_and_live_bits(self):
         baseline = make_perf()
         sample = make_perf(adc_reports=6, adc_bits=1)

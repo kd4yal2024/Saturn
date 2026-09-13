@@ -5,14 +5,20 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PAGE="${ROOT}/update_manager/templates/p23test.html"
 VERSION_SCRIPT="${ROOT}/update_manager/scripts/g2-version-info.sh"
 API_REFERENCE="${ROOT}/update_manager/docs/API_REFERENCE.md"
+NODE_BIN="$(command -v node || command -v node.exe)"
+PAGE_ARG="${PAGE}"
+if [[ "${NODE_BIN}" == *.exe ]]; then
+  PAGE_ARG="$(wslpath -w "${PAGE}")"
+fi
 
-grep -Fq '#define P2APPVERSION 51' "${ROOT}/sw_projects/P2_app/p2app.c"
+grep -Fq '#define P2APPVERSION 52' "${ROOT}/sw_projects/P2_app/p2app.c"
 grep -Fq 'SCRIPT_VERSION="1.7"' "${VERSION_SCRIPT}"
 grep -Fq 'generation apply only to those captured occupancy values' "${API_REFERENCE}"
 grep -Fq 'accumulators read separately from the coherent occupancy snapshot' "${API_REFERENCE}"
 make -C "${ROOT}/sw_projects/P2_app" test-fpga-fifo-v29
+make -C "${ROOT}/sw_projects/P2_app" test-fpga-adc-v30
 
-node - "${PAGE}" <<'JS'
+"${NODE_BIN}" - "${PAGE_ARG}" <<'JS'
 const assert = require('assert');
 const fs = require('fs');
 const vm = require('vm');
@@ -52,7 +58,37 @@ assert(available.detail.includes('live boot-lifetime max words: ddc 11'));
 assert(available.detail.includes('live boot-lifetime event transitions: ddc 21'));
 assert(!available.detail.includes('coherent'));
 assert(source.includes('fpga_fifo_v29: jsonSafe('), 'captured export omits V29 telemetry');
-console.log('Web Manager V29 compatibility tests passed');
+
+const adcBegin = source.indexOf('/* FPGA_ADC_V30_PRESENTATION_BEGIN */');
+const adcEnd = source.indexOf('/* FPGA_ADC_V30_PRESENTATION_END */');
+assert(adcBegin >= 0 && adcEnd > adcBegin, 'V30 ADC presentation helper markers missing');
+vm.runInContext(source.slice(adcBegin, adcEnd), context);
+assert.strictEqual(context.fpgaAdcV30Presentation(undefined, 29).state, 'unsupported');
+assert.strictEqual(context.fpgaAdcV30Presentation(undefined, 30).state, 'unavailable');
+const adcMismatch = context.fpgaAdcV30Presentation({
+  available: false,
+  status: 'marker_mismatch',
+  build_id: 0x56323900,
+}, 30);
+assert.strictEqual(adcMismatch.state, 'marker_mismatch');
+assert(adcMismatch.detail.includes('0x56323900'));
+const adcAvailable = context.fpgaAdcV30Presentation({
+  available: true,
+  status: 'available',
+  snapshot_valid: true,
+  snapshot_generation: 12,
+  snapshot_retry_failure_count: 0,
+  clock_hz: 122880000,
+  adc1: {episode_count: 3, total_high_clocks: 123, longest_episode_clocks: 61, latest_episode_clocks: 20, latest_episode_peak: 32768, episode_active: false},
+  adc2: {episode_count: 1, total_high_clocks: 10, longest_episode_clocks: 10, latest_episode_clocks: 10, latest_episode_peak: 7000, episode_active: true},
+}, 30);
+assert.strictEqual(adcAvailable.state, 'available');
+assert(adcAvailable.summary.includes('snapshot generation 12'));
+assert(adcAvailable.detail.includes('ADC1 episodes 3'));
+assert(adcAvailable.detail.includes('ADC2 episodes 1'));
+assert(adcAvailable.detail.includes('active'));
+assert(source.includes('fpga_adc_v30: jsonSafe('), 'captured export omits V30 ADC telemetry');
+console.log('Web Manager V29/V30 telemetry compatibility tests passed');
 JS
 
 TEST_TMP="$(mktemp -d)"

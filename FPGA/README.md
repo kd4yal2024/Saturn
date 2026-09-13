@@ -14,6 +14,15 @@ Configuration artifacts and their purposes:
 
 Version history:
 
+V30 ADC telemetry source candidate, 13/09/2026: preserves the V29 signal path
+and legacy ADC status/peak registers while adding boot-lifetime, saturating
+per-ADC physical overrange episode counts, total overrange clocks, longest
+continuous episode, and coherent latest/current episode duration and peak.
+Durations use the exported 122.88 MHz observation clock. P2 V52 exposes the
+guarded V30 bank and does not change the deferred speaker refill policy. This
+entry does not claim a qualified bitstream or hardware result until the full
+build, packaging, load, and controlled/antenna validation gates pass.
+
 V29 RX-qualified candidate, 12/09/2026: fixes I2S receive AXI-Stream
 backpressure, makes FIFO/ADC AXI-Lite read responses stable under stalls,
 defines no-loss read-clear boundaries, adds coherent FIFO/ADC diagnostics,

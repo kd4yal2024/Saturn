@@ -21,3 +21,10 @@ new physical I2S frame overwrote an AXI-Stream word while `TVALID` was high
 and `TREADY` was low. The regression requires the pending word and `TVALID`
 to remain stable until acceptance. A future hardware loss counter is still
 needed to observe a new physical frame that arrives during a prolonged stall.
+
+`adc_fifo_reader_tb.sv` also covers the V30 ADC episode bank at the existing
+`0x5000` peripheral base. A low-to-high overrange transition starts exactly
+one episode; boot-lifetime episode counts, high-clock totals, longest runs,
+and the latest/current run length and peak are captured coherently by the
+legacy status read. Repeated reads during one sustained high interval must not
+increase the episode count. Durations use the exported 122.88 MHz clock rate.

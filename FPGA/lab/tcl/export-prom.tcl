@@ -14,9 +14,9 @@ set golden_bit [saturn_lab::env_or SATURN_GOLDEN_BIT \
     [file join $repo_dir FPGA multiboot_address_table saturn_top_wrapper_golden.bit]]
 set current_sha [string range [saturn_lab::git_value rev-parse HEAD] 0 7]
 set primary_bit [saturn_lab::env_or SATURN_PRIMARY_BIT \
-    [file join $repo_dir FPGA lab results vivado "saturn-v29-${current_sha}.bit"]]
+    [file join $repo_dir FPGA lab results vivado "saturn-v30-${current_sha}.bit"]]
 set primary_bin [saturn_lab::env_or SATURN_PRIMARY_BIN \
-    [file join $repo_dir FPGA lab results vivado "saturn-primary-v29-${current_sha}.bin"]]
+    [file join $repo_dir FPGA lab results vivado "saturn-primary-v30-${current_sha}.bin"]]
 set timer1 [saturn_lab::env_or SATURN_TIMER1 \
     [file join $repo_dir FPGA multiboot_address_table timer1.bin]]
 set timer2 [saturn_lab::env_or SATURN_TIMER2 \
@@ -76,7 +76,7 @@ puts $stream "  \"created_utc\": \"[clock format [clock seconds] -gmt true -form
 puts $stream "  \"git_sha\": \"[saturn_lab::json_escape [saturn_lab::git_value rev-parse HEAD]]\","
 puts $stream "  \"git_dirty\": [saturn_lab::git_dirty],"
 puts $stream "  \"vivado\": \"[saturn_lab::json_escape [version -short]]\","
-puts $stream "  \"firmware_version\": 29,"
+puts $stream "  \"firmware_version\": 30,"
 puts $stream "  \"format\": \"bin\","
 puts $stream "  \"interface\": \"SPIx1\","
 puts $stream "  \"size_mbit\": 32,"

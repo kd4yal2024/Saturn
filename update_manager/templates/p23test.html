@@ -665,6 +665,9 @@
         <div id="p23-fpga-fifo-v29-summary" class="summary" style="margin-top:14px;" aria-live="polite">
           V29 FPGA FIFO telemetry: waiting for a live P2 sample.
         </div>
+        <div id="p23-fpga-adc-v30-summary" class="summary" style="margin-top:8px;" aria-live="polite">
+          V30 FPGA ADC episode telemetry: waiting for a live P2 sample.
+        </div>
         <div id="p23-speaker-pacing-summary" class="summary" style="margin-top:8px;" aria-live="polite">
           Speaker pacing diagnostics: waiting for a live P2 sample.
         </div>
@@ -1432,6 +1435,51 @@ function updateFpgaFifoV29Summary(perf){
   if (element) element.textContent = `V29 FPGA FIFO telemetry: ${presentation.summary}. ${presentation.detail}`;
   return presentation;
 }
+/* FPGA_ADC_V30_PRESENTATION_BEGIN */
+function fpgaAdcV30Presentation(value, firmwareVersion){
+  const firmware = Number(firmwareVersion);
+  const status = String(value?.status || '').toLowerCase();
+  const number = (input)=>Number.isFinite(Number(input)) ? Math.round(Number(input)) : 'n/a';
+  const duration = (clocks)=>{
+    const count = Number(clocks);
+    const hz = Number(value?.clock_hz);
+    if (!Number.isFinite(count) || !Number.isFinite(hz) || hz <= 0) return 'n/a';
+    const microseconds = count * 1000000 / hz;
+    return microseconds < 1 ? `${microseconds.toFixed(3)} µs` : `${microseconds.toFixed(2)} µs`;
+  };
+  const adc = (name)=>{
+    const item = value?.[name] || {};
+    const latestState = item.episode_active ? 'active' : 'latest';
+    return `${name.toUpperCase()} episodes ${number(item.episode_count)} · total ${duration(item.total_high_clocks)} · longest ${duration(item.longest_episode_clocks)} · ${latestState} ${duration(item.latest_episode_clocks)} peak ${number(item.latest_episode_peak)}`;
+  };
+
+  if (status === 'marker_mismatch'){
+    const marker = Number(value?.build_id);
+    const markerText = Number.isFinite(marker)
+      ? `0x${(marker >>> 0).toString(16).toUpperCase().padStart(8, '0')}`
+      : 'unknown';
+    return { state:'marker_mismatch', summary:'marker mismatch', detail:`Observed build ID ${markerText}; expected 0x56333000. Extended registers were not probed.` };
+  }
+  if (status === 'unsupported' || (!value && Number.isFinite(firmware) && firmware < 30)){
+    return { state:'unsupported', summary:'unsupported', detail:'Requires FPGA firmware 30 or newer.' };
+  }
+  if (!value || value.available !== true){
+    return { state:'unavailable', summary:'telemetry unavailable', detail:'The active host does not expose V30 ADC episode fields.' };
+  }
+  return {
+    state:'available',
+    summary:`available · coherent snapshot generation ${number(value.snapshot_generation)} · ${value.snapshot_valid ? 'valid' : 'not valid'} · retry failures ${number(value.snapshot_retry_failure_count)}`,
+    detail:`${adc('adc1')} | ${adc('adc2')} | ${number(value.clock_hz)} Hz observation clock`,
+  };
+}
+/* FPGA_ADC_V30_PRESENTATION_END */
+function updateFpgaAdcV30Summary(perf){
+  const app = perf?.app_telemetry?.current || {};
+  const presentation = fpgaAdcV30Presentation(app?.gauges?.fpga_adc_v30, app?.fpga?.firmware_version);
+  const element = $('p23-fpga-adc-v30-summary');
+  if (element) element.textContent = `V30 FPGA ADC episode telemetry: ${presentation.summary}. ${presentation.detail}`;
+  return presentation;
+}
 /* SPEAKER_PACING_PRESENTATION_BEGIN */
 function speakerPacingPresentation(value){
   const number = (input)=>Number.isFinite(Number(input)) ? Math.round(Number(input)) : 'n/a';
@@ -1531,6 +1579,7 @@ function buildPerfSnapshot(){
     panel_mode: latestP23Perf?.workload?.panel_mode || '',
     current_sample: jsonSafe(latestDerivedPerf),
     fpga_fifo_v29: jsonSafe(latestP23Perf?.app_telemetry?.current?.gauges?.fpga_fifo_v29 || null),
+    fpga_adc_v30: jsonSafe(latestP23Perf?.app_telemetry?.current?.gauges?.fpga_adc_v30 || null),
     speaker_pacing_diagnostics: jsonSafe(latestP23Perf?.app_telemetry?.current?.gauges?.speaker_pacing_diagnostics || null),
     baseline: jsonSafe(serializePerfBaseline(perfBaseline)),
     service_runtime: jsonSafe(latestP23Status?.service_runtime || null),
@@ -1567,6 +1616,7 @@ function buildBaselineSnapshot(){
       xdma_irq_per_mib: latestDerivedPerf.xdmaIrqPerMiB,
     } : null),
     latest_fpga_fifo_v29: jsonSafe(latestP23Perf?.app_telemetry?.current?.gauges?.fpga_fifo_v29 || null),
+    latest_fpga_adc_v30: jsonSafe(latestP23Perf?.app_telemetry?.current?.gauges?.fpga_adc_v30 || null),
     latest_speaker_pacing_diagnostics: jsonSafe(latestP23Perf?.app_telemetry?.current?.gauges?.speaker_pacing_diagnostics || null),
     alerts: jsonSafe(latestPerfAlertState?.alerts || []),
   };
@@ -2860,6 +2910,7 @@ async function loadP23Perf(){
       setPrimaryKpisHtml(kpiCard('Service', 'Offline', 'No performance samples are available.', true));
       setPerfDashboardHtml(runtimeSection('Service', 'No active process', [runtimeRow('Radio backend', 'Not running', 'Start or deploy P2app or the Saturn Bridge to resume monitoring.')], true));
       updateFpgaFifoV29Summary(perf);
+      updateFpgaAdcV30Summary(perf);
       updateSpeakerPacingSummary(perf);
       setPerfRawText(JSON.stringify({ perf }, null, 2));
       setTelemetryHealth(perf);
@@ -2883,6 +2934,7 @@ async function loadP23Perf(){
     benchmarkConsumeSample(perf, d);
     setTelemetryHealth(perf);
     updateFpgaFifoV29Summary(perf);
+    updateFpgaAdcV30Summary(perf);
     updateSpeakerPacingSummary(perf);
     baselinePush(perfBaseline.cpuPctCore, d.cpuPctCore);
     baselinePush(perfBaseline.rssMb, d.rssMb);
@@ -2915,6 +2967,8 @@ async function loadP23Perf(){
     setPerfDashboardHtml(runtimeSection('Performance', 'Load failed', [runtimeRow('Telemetry endpoint', 'Unavailable', e.message)], true));
     const fifoSummary = $('p23-fpga-fifo-v29-summary');
     if (fifoSummary) fifoSummary.textContent = `V29 FPGA FIFO telemetry: unavailable. ${e.message}`;
+    const adcV30Summary = $('p23-fpga-adc-v30-summary');
+    if (adcV30Summary) adcV30Summary.textContent = `V30 FPGA ADC episode telemetry: unavailable. ${e.message}`;
     const speakerPacingSummary = $('p23-speaker-pacing-summary');
     if (speakerPacingSummary) speakerPacingSummary.textContent = `Speaker pacing diagnostics: unavailable. ${e.message}`;
     setPerfRawText('');

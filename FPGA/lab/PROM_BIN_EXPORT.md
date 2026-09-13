@@ -31,10 +31,10 @@ vivado -mode batch -nolog -nojournal -source FPGA/lab/tcl/export-prom.tcl
 ```
 
 The script defaults to the known golden bitstream, the current-HEAD lab
-bitstream (`results/vivado/saturn-v29-<git-sha>.bit`), and the checked-in timer
+bitstream (`results/vivado/saturn-v30-<git-sha>.bit`), and the checked-in timer
 payloads. It creates two deliberately distinct artifacts:
 
-- `saturn-primary-v29-<git-sha>.bin`: slot-relative primary payload; this is the
+- `saturn-primary-v30-<git-sha>.bin`: slot-relative primary payload; this is the
   only generated artifact suitable for `load-FPGA -b ... -v` without `-f`.
 - `saturn-lab.bin`: complete address-zero multiboot image for archival or an
   external programmer; never pass this file to the default `load-FPGA` path.

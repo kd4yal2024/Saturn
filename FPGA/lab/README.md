@@ -67,16 +67,17 @@ make lint          # warnings reported; syntax/semantic errors fail
 make lint-strict   # warnings also fail
 make formal        # watchdog safety proof and expiry cover trace
 make python-test   # numerical measurement regression
-make check         # lint + formal + Python + V29 telemetry regression
+make check         # lint + formal + Python + V29/V30 telemetry regression
 ```
 
-The Phase 0 lint gate covers `activitywatchdog.v`, `FIFO_Monitor.v`,
-`DDCMux.v`, and `I2S_rcv.v`. `make check` also runs the self-checking V29
-FIFO/ADC/I2S telemetry regression (`make telemetry-test`).
+The Phase 0 lint gate covers `activitywatchdog.v`, `FIFO_Monitor.v`, the ADC
+overflow reader, `DDCMux.v`, and `I2S_rcv.v`. `make check` also runs the
+self-checking V29/V30 FIFO/ADC/I2S telemetry regression
+(`make telemetry-test`).
 
 ## Hardware RX soak profiles
 
-`scripts/rx-soak.py` captures a read-only P2 V51 / FPGA V29 RX soak from the
+`scripts/rx-soak.py` captures a read-only, version-pinned P2/FPGA RX soak from the
 Saturn Go `/p23_perf` endpoint. It does not read raw XDMA registers, clear FPGA
 accumulators, restart services, or change RX/TX state. The operator must place
 the radio in the required RX-only workload and declare every expected DDC
@@ -128,6 +129,14 @@ intentional multi-receiver run; any later routing drift still fails closed:
 
 ```bash
 --expect-ddc 2:384 --expect-ddc 3:384
+```
+
+The historical defaults remain P2 V51 / FPGA V29 / BIT `09122026`. For a V30
+candidate, pin all three identity fields explicitly; V30 runs also require the
+guarded physical-episode telemetry and a stable, advancing coherent snapshot:
+
+```bash
+--expect-p2-version 52 --expect-fpga-version 30 --expect-bit-date 09132026
 ```
 
 An optional third field accepts `interleaved` or `noninterleaved`, for example
@@ -186,7 +195,7 @@ Generated files under `results/vivado/` include:
 
 PROM/BIN export is scripted in `tcl/export-prom.tcl` and recorded in
 `PROM_BIN_EXPORT.md`. It produces both a slot-relative
-`saturn-primary-v29-<sha>.bin` for the default `load-FPGA` primary destination and
+`saturn-primary-v30-<sha>.bin` for the default `load-FPGA` primary destination and
 an uncompressed 32-Mbit `saturn-lab.bin` complete multiboot image (golden at
 `0x00000000`, primary at `0x00980000`, timers at `0x0097FC00` and
 `0x01300000`). Never pass the complete image to `load-FPGA`; the loader adds

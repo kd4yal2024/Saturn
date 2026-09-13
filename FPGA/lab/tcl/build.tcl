@@ -17,7 +17,7 @@ saturn_lab::ensure_managed_wrapper
 # The host uses this constant as the public firmware revision.  Keep it tied to
 # the telemetry ABI implemented by this candidate instead of silently emitting
 # a new image that still advertises the legacy V27 contract.
-set expected_firmware_version 29
+set expected_firmware_version 30
 set firmware_version_ip [get_ips -quiet saturn_top_xlconstant_5_0]
 if {[llength $firmware_version_ip] != 1} {
     error "Expected one firmware-version IP saturn_top_xlconstant_5_0; found [llength $firmware_version_ip]"
@@ -26,7 +26,7 @@ set actual_firmware_version [get_property CONFIG.CONST_VAL $firmware_version_ip]
 if {$actual_firmware_version != $expected_firmware_version} {
     error "Firmware identity mismatch: expected $expected_firmware_version, found $actual_firmware_version"
 }
-puts "Firmware identity: version=$actual_firmware_version, USR_ACCESS date=09122026"
+puts "Firmware identity: version=$actual_firmware_version, USR_ACCESS date=09132026"
 
 set synth_run [saturn_lab::require_run $synth_name]
 set impl_run [saturn_lab::require_run $impl_name]
@@ -36,7 +36,7 @@ if {$reuse_synth ni {0 1}} {
     error "SATURN_REUSE_SYNTH must be 0 or 1"
 }
 
-set synth_identity "firmware_version=$expected_firmware_version\nusr_access=09122026"
+set synth_identity "firmware_version=$expected_firmware_version\nusr_access=09132026"
 set synth_identity_stamp [file join $output_dir synth-identity.txt]
 if {$reuse_synth} {
     if {![file isfile $synth_identity_stamp]} {
