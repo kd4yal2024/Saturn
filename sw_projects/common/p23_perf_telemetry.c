@@ -60,6 +60,7 @@ typedef struct
   TVersionInfoSnapshot FPGAInfo;
   bool DieTempValid;
   float DieTempC;
+  TFPGAFifoV29Snapshot FPGAFifoV29;
 } TP23PerfState;
 
 static const char *g_port_names[P23_PERF_MAX_PORTS] =
@@ -177,6 +178,66 @@ static const char *DUCWriteModeName(uint8_t Mode)
     default:
       return "unknown";
   }
+}
+
+static const char *FPGAFifoV29StatusJSON(EFPGAFifoV29Status Status)
+{
+  switch (Status)
+  {
+    case eFPGAFifoV29Available:
+      return "available";
+    case eFPGAFifoV29MarkerMismatch:
+      return "marker_mismatch";
+    default:
+      return "unsupported";
+  }
+}
+
+void P23PerfTelemetryWriteFPGAFifoV29JSON(FILE *File, const TFPGAFifoV29Snapshot *Snapshot)
+{
+  static const char *Names[FPGA_FIFO_V29_CHANNEL_COUNT] = {"ddc", "duc", "mic", "speaker"};
+  const uint32_t *Groups[4];
+  static const char *GroupNames[4] = {
+    "occupancy_words", "minimum_words", "maximum_words", "event_transitions"
+  };
+  unsigned int Group;
+  unsigned int Channel;
+
+  if ((File == NULL) || (Snapshot == NULL))
+    return;
+
+  Groups[0] = Snapshot->OccupancyWords;
+  Groups[1] = Snapshot->MinimumWords;
+  Groups[2] = Snapshot->MaximumWords;
+  Groups[3] = Snapshot->EventTransitions;
+
+  fprintf(File,
+          "    \"fpga_fifo_v29\": {\n"
+          "      \"available\": %s,\n"
+          "      \"status\": \"%s\",\n"
+          "      \"build_id\": %" PRIu32 ",\n"
+          "      \"snapshot_valid\": %s,\n"
+          "      \"snapshot_generation\": %" PRIu16 ",\n"
+          "      \"snapshot_timeout_count\": %" PRIu64 ",\n",
+          Snapshot->Available ? "true" : "false",
+          FPGAFifoV29StatusJSON(Snapshot->Status),
+          Snapshot->BuildId,
+          Snapshot->SnapshotValid ? "true" : "false",
+          Snapshot->SnapshotGeneration,
+          Snapshot->SnapshotTimeoutCount);
+
+  for (Group = 0; Group < 4U; Group++)
+  {
+    fprintf(File, "      \"%s\": {\n", GroupNames[Group]);
+    for (Channel = 0; Channel < FPGA_FIFO_V29_CHANNEL_COUNT; Channel++)
+    {
+      fprintf(File, "        \"%s\": %" PRIu32 "%s\n",
+              Names[Channel], Groups[Group][Channel],
+              (Channel + 1U == FPGA_FIFO_V29_CHANNEL_COUNT) ? "" : ",");
+    }
+    fprintf(File, "      }%s\n", (Group == 3U) ? "" : ",");
+  }
+  fprintf(File, "    }\n");
 }
 
 static void AppendCounterJSON(FILE *File)
@@ -318,6 +379,16 @@ void P23PerfTelemetrySetFIFOSnapshot(uint32_t DDCSamples, uint32_t MicSamples,
   g_perf_state.FIFODUCSamples = DUCSamples;
   g_perf_state.FIFOSpeakerSamples = SpeakerSamples;
   g_perf_state.FIFOOverflowBits = OverflowBits;
+  pthread_mutex_unlock(&g_perf_mutex);
+}
+
+void P23PerfTelemetrySetFPGAFifoV29(const TFPGAFifoV29Snapshot *Snapshot)
+{
+  if (Snapshot == NULL)
+    return;
+
+  pthread_mutex_lock(&g_perf_mutex);
+  g_perf_state.FPGAFifoV29 = *Snapshot;
   pthread_mutex_unlock(&g_perf_mutex);
 }
 
@@ -533,8 +604,7 @@ void P23PerfTelemetryMaybeWrite(void)
           "      \"last_mode\": \"%s\",\n"
           "      \"last_mode_code\": %" PRIu8 ",\n"
           "      \"last_gap_active\": %s\n"
-          "    }\n"
-          "  },\n",
+          "    },\n",
           Snapshot.FIFODDCSamples,
           Snapshot.FIFOMicSamples,
           Snapshot.FIFODUCSamples,
@@ -554,6 +624,9 @@ void P23PerfTelemetryMaybeWrite(void)
           SpeakerUnderrunModeName(Snapshot.SpeakerUnderMode),
           Snapshot.SpeakerUnderMode,
           Snapshot.SpeakerUnderGapActive ? "true" : "false");
+
+  P23PerfTelemetryWriteFPGAFifoV29JSON(File, &Snapshot.FPGAFifoV29);
+  fprintf(File, "  },\n");
 
   AppendCounterJSON(File);
   fprintf(File, "}\n");

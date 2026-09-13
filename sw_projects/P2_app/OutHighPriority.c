@@ -34,7 +34,17 @@
 #include "protocol2_control.h"
 #include "../common/auxadc.h"
 #include "../common/p23_perf_telemetry.h"
+#include "../common/fpga_fifo_v29.h"
 #include "LDGATU.h"
+
+static void UpdateFPGAFifoV29Telemetry(void)
+{
+  TFPGAFifoV29Snapshot Snapshot;
+
+  (void)FPGAFifoV29MaybeSample();
+  FPGAFifoV29GetSnapshot(&Snapshot);
+  P23PerfTelemetrySetFPGAFifoV29(&Snapshot);
+}
 
 #define ADC_PEAK_TELEMETRY_ENABLE_FILE "/dev/shm/saturn_p23_adc_peak_telemetry.enabled"
 #define ADC_PEAK_TELEMETRY_JSON_FILE "/dev/shm/saturn_p23_adc_peak_telemetry.json"
@@ -179,6 +189,7 @@ void *OutgoingHighPriority(void *arg)
       );
       P23PerfTelemetrySetPureSignalEnabled(GetPureSignalEnabled());
       P23PerfTelemetrySetDieTempC(GetDieTempC());
+      UpdateFPGAFifoV29Telemetry();
       P23PerfTelemetryMaybeWrite();
       // Port rebinding is handled centrally by the p2app control plane.
       usleep(100);
@@ -321,6 +332,7 @@ void *OutgoingHighPriority(void *arg)
         P23PerfTelemetryCounterAdd(eP23PerfCounterHighPriorityBytes, (uint64_t)Error);
       }
       P23PerfTelemetrySetDieTempC(GetDieTempC());
+      UpdateFPGAFifoV29Telemetry();
       P23PerfTelemetryMaybeWrite();
       //
       // now we need to sleep for 1ms (in TX) or 200ms (not in TX)

@@ -3,7 +3,9 @@
 
 #include <stdbool.h>
 #include <stdint.h>
+#include <stdio.h>
 
+#include "fpga_fifo_v29.h"
 #include "version.h"
 
 #define P23_PERF_MAX_DDC 10U
@@ -80,6 +82,8 @@ void P23PerfTelemetrySetWidebandConfig(uint8_t Enables, uint16_t SamplesPerPacke
 void P23PerfTelemetrySetFIFOSnapshot(uint32_t DDCSamples, uint32_t MicSamples,
                                      uint32_t DUCSamples, uint32_t SpeakerSamples,
                                      uint8_t OverflowBits);
+void P23PerfTelemetrySetFPGAFifoV29(const TFPGAFifoV29Snapshot *Snapshot);
+void P23PerfTelemetryWriteFPGAFifoV29JSON(FILE *File, const TFPGAFifoV29Snapshot *Snapshot);
 void P23PerfTelemetrySetADCSnapshot(uint16_t ADC1Peak, uint16_t ADC2Peak, uint8_t OverflowBits);
 void P23PerfTelemetrySetDUCQueueContext(uint32_t QueueFrames, uint32_t FIFOFrames,
                                         uint32_t QueueAgeUs, uint8_t Mode);

@@ -12,7 +12,8 @@ LDFLAGS = -lm -lpthread
 .PHONY: all clean cppcheck cppcheck-ci test test-controller-lease \
         test-controller-lease-asan test-protocol2-control \
         test-protocol2-command test-protocol2-command-asan \
-        test-protocol2-high-priority test-protocol2-high-priority-asan smoke-shutdown
+        test-protocol2-high-priority test-protocol2-high-priority-asan \
+        test-fpga-fifo-v29 smoke-shutdown
 
 # NOTE (2026-01): keep "local" libs here. libgpiod link flags are added below
 #                 via pkg-config (with a safe fallback).
@@ -22,7 +23,7 @@ TARGET = p2app
 VPATH=.:../common
 GIT_DATE := $(wordlist 2,5, $(shell git log -1 --format=%cd --date=rfc))
 
-BASE_SRCS = p2app.c controller_lease.c protocol2_control.c protocol2_command.c hwaccess.c saturnregisters.c codecwrite.c saturndrivers.c version.c generalpacket.c IncomingDDCSpecific.c IncomingDUCSpecific.c InHighPriority.c InDUCIQ.c InSpkrAudio.c OutMicAudio.c OutDDCIQ.c OutHighPriority.c debugaids.c auxadc.c cathandler.c frontpanelhandler.c catmessages.c LDGATU.c g2v2panel.c i2cdriver.c andromedacatmessages.c Outwideband.c serialport.c AriesATU.c GanymedePAControl.c p23_perf_telemetry.c
+BASE_SRCS = p2app.c controller_lease.c protocol2_control.c protocol2_command.c hwaccess.c saturnregisters.c codecwrite.c saturndrivers.c version.c generalpacket.c IncomingDDCSpecific.c IncomingDUCSpecific.c InHighPriority.c InDUCIQ.c InSpkrAudio.c OutMicAudio.c OutDDCIQ.c OutHighPriority.c debugaids.c auxadc.c cathandler.c frontpanelhandler.c catmessages.c LDGATU.c g2v2panel.c i2cdriver.c andromedacatmessages.c Outwideband.c serialport.c AriesATU.c GanymedePAControl.c p23_perf_telemetry.c fpga_fifo_v29.c
 
 # for cppcheck
 CPP_OPTIONS= --inline-suppr --enable=all --suppress=unmatchedSuppression
@@ -139,13 +140,20 @@ test-protocol2-high-priority-asan:
 	ASAN_OPTIONS=detect_leaks=1 ./tests/protocol2_high_priority_test_asan
 	rm -f tests/protocol2_high_priority_test_asan
 
+test-fpga-fifo-v29:
+	$(CC) $(CFLAGS) -I. -I../common tests/fpga_fifo_v29_test.c \
+		../common/fpga_fifo_v29.c ../common/p23_perf_telemetry.c -lpthread -o tests/fpga_fifo_v29_test
+	./tests/fpga_fifo_v29_test
+	rm -f tests/fpga_fifo_v29_test
+
 test: test-controller-lease test-protocol2-control test-protocol2-command \
-	test-protocol2-high-priority
+	test-protocol2-high-priority test-fpga-fifo-v29
 
 clean:
 	rm -rf $(TARGET) *.o *.d *.bin tests/controller_lease_test tests/protocol2_control_test \
 		tests/protocol2_command_test tests/protocol2_command_test_asan \
-		tests/protocol2_high_priority_test tests/protocol2_high_priority_test_asan
+		tests/protocol2_high_priority_test tests/protocol2_high_priority_test_asan \
+		tests/fpga_fifo_v29_test
 
 smoke-shutdown: all
 	bash ./tools/shutdown_smoke.sh ./$(TARGET)

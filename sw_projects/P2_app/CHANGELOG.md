@@ -5,6 +5,26 @@ All notable changes from the hardened app convergence pass are documented here.
 This changelog originated under `P3_app` and now follows the converged
 `P2_app` implementation.
 
+## [2026-09-13] V29 FPGA FIFO Telemetry
+
+### Changed
+
+- Incremented the P2 application version from 50 to 51.
+- Added a single bounded V29 FIFO snapshot sampler owned by P2. Firmware older
+  than V29 performs no extended-register reads; V29 and newer reads only build
+  ID `0x56323900` until the marker matches.
+- Published coherent DDC, DUC, microphone, and speaker occupancy, extrema, and
+  aggregate event-transition counters under `gauges.fpga_fifo_v29`. Event
+  transitions are explicitly not described as sample-loss counters.
+
+### Verified
+
+- Mocked `RegisterRead`/`RegisterWrite` tests cover firmware gating, marker
+  mismatch, register decoding, snapshot generation, bounded timeout behavior,
+  JSON names, raw word units, and the prohibition on automatic clear writes.
+- `make test`
+- `make -j2`
+
 ## [2026-07-14] CAT Connect Backoff And Log Throttling
 
 ### Fixed

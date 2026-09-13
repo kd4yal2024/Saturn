@@ -4,6 +4,14 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
 
 ## [Unreleased]
 ### Changed
+- Performance Lab now displays and exports P2's V29 coherent FIFO occupancy,
+  extrema, and aggregate transition telemetry while showing `unsupported` for
+  pre-V29 images and `marker mismatch` when the build ID is unexpected.
+- `g2-version-info.sh` 1.7 labels retained startup banners as stale when they
+  disagree with live FPGA identity, so historical output is not presented as
+  current evidence.
+- The P2 app manager now accepts Git worktrees as supervised deployment
+  sources.
 - Completed live Saturn G2 operator acceptance of the responsive Saturn Remote console at
   checkpoint `92ec62d`. Desktop, 1920x1080, and phone layouts; RX display/audio/DSP controls;
   VFO A/B, SPLIT, attenuation, speech squelch, ADC-overload annunciation, phone Stay Awake,

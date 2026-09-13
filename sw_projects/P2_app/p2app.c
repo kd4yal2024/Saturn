@@ -51,6 +51,7 @@
 #include "../common/version.h"                      // version I/O for Saturn
 #include "../common/auxadc.h"                       // version I/O for Saturn
 #include "../common/p23_perf_telemetry.h"
+#include "../common/fpga_fifo_v29.h"
 
 #include "threaddata.h"
 #include "generalpacket.h"
@@ -70,7 +71,7 @@
 #include "frontpanelhandler.h"
 #include "controller_lease.h"
 
-#define P2APPVERSION 50
+#define P2APPVERSION 51
 #define FWREQUIREDMAJORVERSION 1                  // major version that is required. Only altered if programming interface changes.
 //
 // the Firmware version is a protection to make sure that if a p2app update is required by the new firmware,
@@ -1244,6 +1245,7 @@ int main(int argc, char *argv[])
   bool IncompatibleFirmware = false;                                // becomes set if firmware is not compatible with this version
   unsigned int PCBVersion;
   TVersionInfoSnapshot VersionInfo;
+  TFPGAFifoV29Snapshot FifoV29Snapshot;
 
   //
   // initialise register access semaphores
@@ -1269,6 +1271,9 @@ int main(int argc, char *argv[])
   }
   GetVersionInfoSnapshot(&VersionInfo);
   P23PerfTelemetrySetVersionInfo(&VersionInfo);
+  FPGAFifoV29Init(VersionInfo.FirmwareVersion);
+  FPGAFifoV29GetSnapshot(&FifoV29Snapshot);
+  P23PerfTelemetrySetFPGAFifoV29(&FifoV29Snapshot);
   PrintVersionInfo();
   PCBVersion = GetPCBVersionNumber();
   printf("p2app client app software Version:%d Build Date:%s\n", P2APPVERSION, BuildDate);
