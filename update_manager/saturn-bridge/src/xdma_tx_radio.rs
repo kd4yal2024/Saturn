@@ -1158,10 +1158,16 @@ mod tests {
     #[test]
     fn production_firmware_gate_accepts_1_27_through_1_30_only() {
         for firmware_minor in 27..=30 {
-            assert!(production_direct_tx_is_qualified(&primary_pcb2_identity(firmware_minor)));
+            assert!(production_direct_tx_is_qualified(&primary_pcb2_identity(
+                firmware_minor
+            )));
         }
-        assert!(!production_direct_tx_is_qualified(&primary_pcb2_identity(26)));
-        assert!(!production_direct_tx_is_qualified(&primary_pcb2_identity(31)));
+        assert!(!production_direct_tx_is_qualified(&primary_pcb2_identity(
+            26
+        )));
+        assert!(!production_direct_tx_is_qualified(&primary_pcb2_identity(
+            31
+        )));
     }
 
     #[test]
