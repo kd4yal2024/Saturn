@@ -4,6 +4,9 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
 
 ## [Unreleased]
 ### Changed
+- Pin the optional Tailscale installer to a verified immutable upstream commit
+  and refresh its SHA-256, avoiding failures when Tailscale changes the
+  contents served by its mutable `install.sh` URL.
 - Performance Lab now displays and exports P2 speaker pacing diagnostics,
   including process-lifetime loop/receive/DMA maxima and threshold counts,
   speaker-thread scheduling identity, peak software-queue depth, and the full

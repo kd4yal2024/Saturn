@@ -21,8 +21,8 @@ set -euo pipefail
 
 PRIVILEGED_DIR="${SATURN_PRIVILEGED_DIR:-/usr/local/lib/saturn-go/scripts}"
 SERVE_HELPER="${SATURN_SERVE_HELPER:-${PRIVILEGED_DIR}/saturn-go-tailscale-serve.sh}"
-TAILSCALE_INSTALL_URL="${TAILSCALE_INSTALL_URL:-https://tailscale.com/install.sh}"
-TAILSCALE_INSTALL_SHA256="${TAILSCALE_INSTALL_SHA256:-ada2fe9d54df0d3e5a77879470bda195b2c53d27ecd73aba6de270c795725625}"
+TAILSCALE_INSTALL_URL="${TAILSCALE_INSTALL_URL:-https://raw.githubusercontent.com/tailscale/tailscale/e2ed432399c9b0fda7aa14e9eb27784d2d893c55/scripts/installer.sh}"
+TAILSCALE_INSTALL_SHA256="${TAILSCALE_INSTALL_SHA256:-805e85ed6f6f81a7ea2e70d52d47e7d5290863299e5c922b2787d71aa312f22e}"
 
 # Allow-list patterns. Reject anything that does not match exactly.
 HOSTNAME_RE='^[A-Za-z0-9][A-Za-z0-9-]{0,62}$'
