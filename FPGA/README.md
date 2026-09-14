@@ -25,6 +25,10 @@ and keeps almost-full transitions in extended telemetry instead of reporting
 them as terminal legacy overflow. Configured FIFO capacity still asserts legacy
 bit 31. This entry does not claim a qualified bitstream or hardware result until
 the full build, packaging, load, and controlled/antenna validation gates pass.
+The initial V30 implementation missed setup timing inside generated XDMA PCIe
+logic; the checked-in V30 build flow now uses the timing strategy that closed
+the same synthesized design at positive setup and hold slack and prevents PROM
+export without a clean, matching successful-build manifest.
 
 V29 RX-qualified candidate, 12/09/2026: fixes I2S receive AXI-Stream
 backpressure, makes FIFO/ADC AXI-Lite read responses stable under stalls,

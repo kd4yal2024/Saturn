@@ -180,6 +180,15 @@ runs:
 Set `SATURN_VIVADO_JOBS` to change the default of eight jobs. Set
 `SATURN_SKIP_RESET=1` only when intentionally resuming existing run products.
 
+The V30 build applies its qualified timing-closure strategy by default:
+`ExtraNetDelay_high` placement plus `AggressiveExplore` pre-route physical
+optimization, routing, and post-route physical optimization. The selected
+values are written to `results/vivado/implementation-strategy.txt` and printed
+in the console log. `SATURN_PLACE_DIRECTIVE`, `SATURN_PHYSOPT_DIRECTIVE`,
+`SATURN_ROUTE_DIRECTIVE`, and `SATURN_POST_ROUTE_PHYSOPT_DIRECTIVE` are retained
+only for controlled experiments; a release build should use the checked-in
+defaults.
+
 `make vivado-validate` skips compile-order refresh by default because Vivado
 can hang while migrating older projects. Set
 `SATURN_VALIDATE_UPDATE_COMPILE_ORDER=1` to force that refresh for diagnosis.
@@ -190,6 +199,7 @@ Generated files under `results/vivado/` include:
 - hierarchical utilization
 - DRC, clock interaction, methodology, and raw/reviewed/waived CDC reports
 - machine-readable setup/hold, DRC, CDC, and methodology quality gate
+- exact implementation-directive record
 - copied `.bit` artifact
 - JSON manifest containing Git identity, dirty state, Vivado version, and SHA256
 
@@ -201,6 +211,12 @@ an uncompressed 32-Mbit `saturn-lab.bin` complete multiboot image (golden at
 `0x01300000`). Never pass the complete image to `load-FPGA`; the loader adds
 the primary offset itself. Run export only after a validated Vivado 2023.1
 bitstream build.
+
+PROM export fails closed unless `manifest.json` proves that the selected V30
+bitstream came from the current clean commit, passed the build gates, and still
+matches its recorded SHA256. Starting a rebuild moves the preceding manifest to
+`manifest.previous.json`, preventing a failed same-SHA rebuild from authorizing
+an older bitstream.
 
 The automated quality gate rejects negative setup or hold slack, DRC errors or
 critical warnings, unwaived CDC Critical findings, and methodology Critical

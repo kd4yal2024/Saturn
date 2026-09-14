@@ -10,6 +10,16 @@ set impl_name [saturn_lab::env_or SATURN_IMPL_RUN impl_1_copy_1]
 set output_dir [file join $saturn_lab::results_dir vivado]
 file mkdir $output_dir
 
+# A failed rebuild must not leave the preceding successful manifest looking
+# current. Preserve it for diagnosis, but require this invocation to create a
+# new manifest before PROM export can proceed.
+set manifest_path [file join $output_dir manifest.json]
+if {[file isfile $manifest_path]} {
+    set previous_manifest [file join $output_dir manifest.previous.json]
+    file rename -force $manifest_path $previous_manifest
+    puts "Preserved preceding build manifest as $previous_manifest"
+}
+
 puts "Opening $project_file"
 open_project $project_file
 saturn_lab::ensure_managed_wrapper
@@ -83,21 +93,26 @@ if {!$reuse_synth} {
 }
 update_compile_order -fileset sources_1
 
-# Allow a timing-closure retry to select stronger implementation directives
-# while keeping the production defaults in the project. Vivado validates each
-# value when it is assigned, so misspelled or unsupported directives fail fast.
-foreach {environment property} {
-    SATURN_PLACE_DIRECTIVE STEPS.PLACE_DESIGN.ARGS.DIRECTIVE
-    SATURN_PHYSOPT_DIRECTIVE STEPS.PHYS_OPT_DESIGN.ARGS.DIRECTIVE
-    SATURN_ROUTE_DIRECTIVE STEPS.ROUTE_DESIGN.ARGS.DIRECTIVE
-    SATURN_POST_ROUTE_PHYSOPT_DIRECTIVE STEPS.POST_ROUTE_PHYS_OPT_DESIGN.ARGS.DIRECTIVE
+# V30's first default-strategy route missed setup timing by 0.373 ns in the
+# generated XDMA PCIe receive-valid filter. The same synthesized netlist met
+# timing with the strategy below (WNS 0.109 ns, WHS 0.049 ns). Make that
+# proven strategy the reproducible V30 default while retaining explicit
+# environment overrides for controlled implementation experiments. Vivado
+# validates every value when assigned, so invalid directives fail fast.
+set strategy_path [file join $output_dir implementation-strategy.txt]
+set strategy_stream [open $strategy_path w]
+foreach {environment property production_default} {
+    SATURN_PLACE_DIRECTIVE STEPS.PLACE_DESIGN.ARGS.DIRECTIVE ExtraNetDelay_high
+    SATURN_PHYSOPT_DIRECTIVE STEPS.PHYS_OPT_DESIGN.ARGS.DIRECTIVE AggressiveExplore
+    SATURN_ROUTE_DIRECTIVE STEPS.ROUTE_DESIGN.ARGS.DIRECTIVE AggressiveExplore
+    SATURN_POST_ROUTE_PHYSOPT_DIRECTIVE STEPS.POST_ROUTE_PHYS_OPT_DESIGN.ARGS.DIRECTIVE AggressiveExplore
 } {
-    set directive [saturn_lab::env_or $environment ""]
-    if {$directive ne ""} {
-        puts "Setting $property=$directive on $impl_name"
-        set_property $property $directive $impl_run
-    }
+    set directive [saturn_lab::env_or $environment $production_default]
+    puts "Implementation directive: $environment=$directive ($property on $impl_name)"
+    puts $strategy_stream "$environment\t$directive\t$property"
+    set_property $property $directive $impl_run
 }
+close $strategy_stream
 
 if {[saturn_lab::env_or SATURN_SKIP_RESET 0] ne "1"} {
     reset_run $impl_run
@@ -156,7 +171,7 @@ if {[file isfile $preferred]} {
 set short_sha [string range [saturn_lab::git_value rev-parse HEAD] 0 7]
 set artifact [file join $output_dir "saturn-v${expected_firmware_version}-${short_sha}.bit"]
 file copy -force $bitstream $artifact
-saturn_lab::write_manifest [file join $output_dir manifest.json] $artifact \
+saturn_lab::write_manifest $manifest_path $artifact \
     $vivado_version $synth_name $impl_name $expected_firmware_version
 
 puts "SATURN_LAB_BUILD_OK artifact=$artifact"

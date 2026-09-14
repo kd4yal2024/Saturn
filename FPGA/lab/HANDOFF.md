@@ -17,6 +17,16 @@ almost-full transitions remain in the V29 extended event counters. No V30
 build, package, G2 load, or hardware qualification is claimed here until those
 gates are completed and recorded separately.
 
+The first V30 default-strategy implementation completed routing but failed the
+setup gate at WNS `-0.373 ns`; the worst path was entirely inside the generated
+XDMA PCIe receive-valid filter, with routing contributing 76% of its data-path
+delay. Reimplementing the same synthesized V30 netlist with
+`ExtraNetDelay_high` placement and `AggressiveExplore` physical optimization
+and routing passed at WNS `+0.109 ns`, WHS `+0.049 ns`, with zero DRC, unwaived
+CDC, or methodology critical findings. Those directives are now the V30 build
+defaults. PROM export additionally requires a clean, current, hash-matching
+successful-build manifest so a failed rebuild cannot package stale output.
+
 ## Current state
 
 - V29 is running on Jerry's G2 with P2 V51. Runtime inventory reports firmware
