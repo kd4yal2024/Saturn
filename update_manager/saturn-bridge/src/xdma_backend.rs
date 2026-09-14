@@ -14,7 +14,10 @@ use crate::tx_audio::{TxAudioIngress, TxAudioSource};
 use crate::tx_thread::{self, TxCommand, TxEvent};
 use crate::wdsp::{normalize_audio_frame_float_count, WdspRxEngine, WDSP_AUDIO_RATE_HZ};
 use crate::xdma::{SaturnIdentity, XdmaError};
-use crate::xdma_rx::{OperationalRxSession, DIRECT_DDC_INDEX, DIRECT_DDC_SAMPLE_RATE_KHZ};
+use crate::xdma_rx::{
+    OperationalRxSession, DIRECT_DDC_INDEX, DIRECT_DDC_SAMPLE_RATE_KHZ,
+    RUNTIME_FIFO_DRAIN_MAX_READS,
+};
 use crate::xdma_telemetry::{record_runtime_readiness, TelemetryValue};
 use crate::xdma_tx_radio::{DirectTxSnapshot, DirectXdmaTxRadio};
 use std::env;
@@ -279,22 +282,34 @@ fn run_inner(config: BridgeConfig, ready_path: &Path) -> Result<(), Box<dyn Erro
             // client control work. A browser can submit dozens of preferences in
             // one burst; letting that burst run first can starve DDC long enough
             // to cross the FPGA FIFO threshold.
-            if rx.read_iq(&mut iq_samples)? {
-                did_work = true;
-                tci.publish_iq_frame(DIRECT_DDC_SAMPLE_RATE_KHZ * 1_000, &iq_samples);
-                for audio in wdsp.push_iq(&iq_samples) {
-                    tci.publish_audio_frame(wdsp.audio_sample_rate_hz(), &audio);
+            for drain_read in 0..RUNTIME_FIFO_DRAIN_MAX_READS {
+                let outcome = rx.read_iq(&mut iq_samples)?;
+                if outcome.samples_ready {
+                    did_work = true;
+                    tci.publish_iq_frame(DIRECT_DDC_SAMPLE_RATE_KHZ * 1_000, &iq_samples);
+                    for audio in wdsp.push_iq(&iq_samples) {
+                        tci.publish_audio_frame(wdsp.audio_sample_rate_hz(), &audio);
+                    }
+                    let mut model = radio_model.lock_unpoisoned();
+                    model.observed.ddc0_packets = rx.stats().dma_reads;
+                    model.observed.ddc0_meter_dbm = wdsp.smeter_dbm().map(|raw_dbm| {
+                        correct_smeter_dbm(
+                            raw_dbm,
+                            model.desired.rx_attenuation_db,
+                            config.smeter_calibration_db,
+                        )
+                    });
+                    model.observed.rx_wbfm_stereo_detected = wdsp.wbfm_stereo_detected();
                 }
-                let mut model = radio_model.lock_unpoisoned();
-                model.observed.ddc0_packets = rx.stats().dma_reads;
-                model.observed.ddc0_meter_dbm = wdsp.smeter_dbm().map(|raw_dbm| {
-                    correct_smeter_dbm(
-                        raw_dbm,
-                        model.desired.rx_attenuation_db,
-                        config.smeter_calibration_db,
-                    )
-                });
-                model.observed.rx_wbfm_stereo_detected = wdsp.wbfm_stereo_detected();
+                if !outcome.requires_drain {
+                    break;
+                }
+                if drain_read + 1 == RUNTIME_FIFO_DRAIN_MAX_READS {
+                    return Err(XdmaError::Incompatible(format!(
+                        "operational XDMA RX FIFO remained at high water after {RUNTIME_FIFO_DRAIN_MAX_READS} bounded runtime drains"
+                    ))
+                    .into());
+                }
             }
 
             let command_started = Instant::now();
@@ -468,7 +483,7 @@ fn run_inner(config: BridgeConfig, ready_path: &Path) -> Result<(), Box<dyn Erro
                 let stats = rx.stats();
                 let tx = tx_radio.snapshot();
                 println!(
-                "saturn-bridge: xdma status={} frequency_hz={} dma_reads={} dma_bytes={} iq_pairs={} rx_fifo_hwm={} header_resync={} header_errors={} rx_fifo_thresholds={} rx_fifo_faults={} tx_requested={} tx_stream={} tx_keyed={} tx_dma_writes={} tx_frames={} tx_fifo_lwm={} tx_fifo_hwm={} tx_fifo_faults={} forward_w={:.3} reverse_w={:.3} swr={:.2}",
+                "saturn-bridge: xdma status={} frequency_hz={} dma_reads={} dma_bytes={} iq_pairs={} rx_fifo_hwm={} header_resync={} header_errors={} rx_fifo_thresholds={} rx_fifo_almost_full={} rx_fifo_empty_observations={} rx_fifo_faults={} tx_requested={} tx_stream={} tx_keyed={} tx_dma_writes={} tx_frames={} tx_fifo_lwm={} tx_fifo_hwm={} tx_fifo_faults={} forward_w={:.3} reverse_w={:.3} swr={:.2}",
                 readiness_state,
                 rx.frequency_hz(),
                 stats.dma_reads,
@@ -478,6 +493,8 @@ fn run_inner(config: BridgeConfig, ready_path: &Path) -> Result<(), Box<dyn Erro
                 stats.header_resyncs,
                 stats.header_errors,
                 stats.fifo_over_threshold + stats.fifo_startup_over_threshold,
+                stats.fifo_almost_full,
+                stats.fifo_empty_observations,
                 stats.fifo_overflows + stats.fifo_underflows,
                 u8::from(tx_control.requested),
                 u8::from(tx.stream_active),
@@ -962,6 +979,14 @@ fn write_readiness(
             ("dma_bytes", TelemetryValue::number(stats.dma_bytes)),
             ("iq_pairs", TelemetryValue::number(stats.samples)),
             ("fifo_hwm", TelemetryValue::number(stats.fifo_depth_hwm)),
+            (
+                "fifo_almost_full",
+                TelemetryValue::number(stats.fifo_almost_full),
+            ),
+            (
+                "fifo_empty_observations",
+                TelemetryValue::number(stats.fifo_empty_observations),
+            ),
             (
                 "fifo_startup_threshold_recoveries",
                 TelemetryValue::number(stats.fifo_startup_over_threshold),

@@ -49,6 +49,7 @@ const DMA_MAX_READ_BYTES: usize = 32768;
 const FIFO_WORD_BYTES: usize = 8;
 const FIFO_POLL_INTERVAL: Duration = Duration::from_micros(250);
 const STARTUP_FIFO_DRAIN_MAX_READS: usize = 16;
+pub(crate) const RUNTIME_FIFO_DRAIN_MAX_READS: usize = 16;
 
 const RATE_CODES_TO_SAMPLE_WORDS: [usize; 8] = [0, 1, 2, 4, 8, 16, 32, 0];
 
@@ -104,12 +105,45 @@ impl FifoSnapshot {
     }
 }
 
-fn startup_threshold_separately_accounted(snapshot: FifoSnapshot, allowed: bool) -> bool {
-    allowed && snapshot.over_threshold && !snapshot.overflow && !snapshot.underflow
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum FifoStatusPolicy {
+    Legacy,
+    V29Plus,
 }
 
-fn fifo_has_hard_fault(snapshot: FifoSnapshot) -> bool {
-    snapshot.overflow || snapshot.underflow
+impl FifoStatusPolicy {
+    fn for_identity(identity: &SaturnIdentity) -> Self {
+        if identity.firmware_major == 1 && identity.firmware_minor >= 29 {
+            Self::V29Plus
+        } else {
+            Self::Legacy
+        }
+    }
+}
+
+fn fifo_has_recoverable_high_water(snapshot: FifoSnapshot, policy: FifoStatusPolicy) -> bool {
+    snapshot.over_threshold || (policy == FifoStatusPolicy::V29Plus && snapshot.overflow)
+}
+
+fn fifo_requires_drain(snapshot: FifoSnapshot, policy: FifoStatusPolicy) -> bool {
+    snapshot.depth_words != 0 && fifo_has_recoverable_high_water(snapshot, policy)
+}
+
+fn startup_high_water_separately_accounted(
+    snapshot: FifoSnapshot,
+    allowed: bool,
+    policy: FifoStatusPolicy,
+) -> bool {
+    allowed
+        && fifo_has_recoverable_high_water(snapshot, policy)
+        && !fifo_has_hard_fault(snapshot, policy)
+}
+
+fn fifo_has_hard_fault(snapshot: FifoSnapshot, policy: FifoStatusPolicy) -> bool {
+    match policy {
+        FifoStatusPolicy::Legacy => snapshot.overflow || snapshot.underflow,
+        FifoStatusPolicy::V29Plus => snapshot.underflow && snapshot.depth_words != 0,
+    }
 }
 
 #[derive(Clone, Debug, Default)]
@@ -121,6 +155,10 @@ pub(crate) struct RxCaptureStats {
     pub(crate) header_resyncs: u64,
     pub(crate) header_errors: u64,
     pub(crate) fifo_depth_hwm: usize,
+    /// V29+ bit-31/almost-full observations recovered by draining C2H.
+    pub(crate) fifo_almost_full: u64,
+    /// V29+ bit-29 observations whose coherent current depth was zero.
+    pub(crate) fifo_empty_observations: u64,
     pub(crate) fifo_overflows: u64,
     pub(crate) fifo_over_threshold: u64,
     pub(crate) fifo_underflows: u64,
@@ -131,11 +169,34 @@ pub(crate) struct RxCaptureStats {
 }
 
 impl RxCaptureStats {
-    fn observe_fifo(&mut self, snapshot: FifoSnapshot) {
+    fn observe_fifo(&mut self, snapshot: FifoSnapshot, policy: FifoStatusPolicy) {
         self.fifo_depth_hwm = self.fifo_depth_hwm.max(snapshot.depth_words);
-        self.fifo_overflows += u64::from(snapshot.overflow);
+        if policy == FifoStatusPolicy::V29Plus {
+            self.fifo_almost_full += u64::from(snapshot.overflow);
+            self.fifo_empty_observations +=
+                u64::from(snapshot.underflow && snapshot.depth_words == 0);
+        } else {
+            self.fifo_overflows += u64::from(snapshot.overflow);
+        }
         self.fifo_over_threshold += u64::from(snapshot.over_threshold);
-        self.fifo_underflows += u64::from(snapshot.underflow);
+        self.fifo_underflows += u64::from(
+            snapshot.underflow
+                && !(policy == FifoStatusPolicy::V29Plus && snapshot.depth_words == 0),
+        );
+    }
+
+    fn observe_startup_fifo(&mut self, snapshot: FifoSnapshot, policy: FifoStatusPolicy) {
+        self.fifo_depth_hwm = self.fifo_depth_hwm.max(snapshot.depth_words);
+        self.fifo_startup_over_threshold += u64::from(snapshot.over_threshold);
+        if policy == FifoStatusPolicy::V29Plus {
+            self.fifo_almost_full += u64::from(snapshot.overflow);
+            self.fifo_empty_observations +=
+                u64::from(snapshot.underflow && snapshot.depth_words == 0);
+        } else {
+            self.fifo_overflows += u64::from(snapshot.overflow);
+        }
+        self.fifo_startup_underflow |= snapshot.underflow
+            && !(policy == FifoStatusPolicy::V29Plus && snapshot.depth_words == 0);
     }
 
     fn rms_dbfs(&self) -> f32 {
@@ -197,9 +258,10 @@ impl DdcStreamParser {
             let rate_word = u32::from_le_bytes(self.pending[0..4].try_into().unwrap());
             if self.pending[7] != 0x80 || rate_word != self.expected_rate_word {
                 self.stats.header_errors += 1;
-                self.synchronized = false;
-                self.pending.drain(..FIFO_WORD_BYTES);
-                continue;
+                return Err(XdmaError::Incompatible(format!(
+                    "DDC stream framing error after synchronization: header=0x{:02x} rate=0x{rate_word:08x} expected_rate=0x{:08x}",
+                    self.pending[7], self.expected_rate_word
+                )));
             }
 
             let counts = analyse_rate_word(rate_word)?;
@@ -313,6 +375,7 @@ impl Drop for AlignedBuffer {
 struct RxDdcSession<'a> {
     registers: &'a mut XdmaRegisterDevice,
     dma: File,
+    fifo_policy: FifoStatusPolicy,
     stopped: bool,
 }
 
@@ -321,6 +384,7 @@ impl<'a> RxDdcSession<'a> {
         registers: &'a mut XdmaRegisterDevice,
         dma_path: &Path,
         frequency_hz: u32,
+        fifo_policy: FifoStatusPolicy,
     ) -> Result<Self, XdmaError> {
         let dma = OpenOptions::new()
             .read(true)
@@ -332,6 +396,7 @@ impl<'a> RxDdcSession<'a> {
         let mut session = Self {
             registers,
             dma,
+            fifo_policy,
             stopped: false,
         };
         if let Err(error) = session.configure(frequency_hz) {
@@ -374,17 +439,16 @@ impl<'a> RxDdcSession<'a> {
         thread::sleep(Duration::from_millis(1));
         let startup_fifo =
             FifoSnapshot::decode(self.registers.read_register(DDC_FIFO_MONITOR_REGISTER)?);
-        parser.stats.fifo_depth_hwm = startup_fifo.depth_words;
-        parser.stats.fifo_overflows += u64::from(startup_fifo.overflow);
-        parser.stats.fifo_over_threshold += u64::from(startup_fifo.over_threshold);
-        parser.stats.fifo_startup_underflow = startup_fifo.underflow;
+        parser
+            .stats
+            .observe_startup_fifo(startup_fifo, self.fifo_policy);
         let started = Instant::now();
         let deadline = started + duration;
 
         while Instant::now() < deadline {
             let fifo =
                 FifoSnapshot::decode(self.registers.read_register(DDC_FIFO_MONITOR_REGISTER)?);
-            parser.stats.observe_fifo(fifo);
+            parser.stats.observe_fifo(fifo, self.fifo_policy);
             let read_bytes = dma_read_size(fifo.depth_words);
             if read_bytes == 0 {
                 thread::sleep(FIFO_POLL_INTERVAL);
@@ -476,10 +540,16 @@ pub(crate) struct OperationalRxSession {
     parser: DdcStreamParser,
     aligned: AlignedBuffer,
     identity: SaturnIdentity,
+    fifo_policy: FifoStatusPolicy,
     frequency_hz: u32,
     rx_antenna: u8,
     rx_attenuation_db: u8,
     stopped: bool,
+}
+
+pub(crate) struct OperationalRxRead {
+    pub(crate) samples_ready: bool,
+    pub(crate) requires_drain: bool,
 }
 
 impl OperationalRxSession {
@@ -498,6 +568,7 @@ impl OperationalRxSession {
             .unwrap_or_else(|| PathBuf::from(DEFAULT_DDC_DEVICE));
         let registers = XdmaRegisterDevice::open(&register_path)?;
         let identity = registers.identity().clone();
+        let fifo_policy = FifoStatusPolicy::for_identity(&identity);
         let dma = OpenOptions::new()
             .read(true)
             .open(&ddc_path)
@@ -513,6 +584,7 @@ impl OperationalRxSession {
             parser: DdcStreamParser::new(direct_ddc_rate_word()),
             aligned,
             identity,
+            fifo_policy,
             frequency_hz,
             rx_antenna: rx_antenna.clamp(1, 3),
             rx_attenuation_db: rx_attenuation_db.min(31),
@@ -591,47 +663,59 @@ impl OperationalRxSession {
         Ok((overflow, adc1_peak, adc2_peak))
     }
 
-    pub(crate) fn read_iq(&mut self, iq_samples: &mut Vec<f32>) -> Result<bool, XdmaError> {
-        self.read_iq_with_policy(iq_samples, false)
-            .map(|(ready, _)| ready)
+    pub(crate) fn read_iq(
+        &mut self,
+        iq_samples: &mut Vec<f32>,
+    ) -> Result<OperationalRxRead, XdmaError> {
+        iq_samples.clear();
+        let (samples_ready, requires_drain) = self.read_iq_once(iq_samples, false)?;
+        Ok(OperationalRxRead {
+            samples_ready,
+            requires_drain,
+        })
     }
 
     /// Drain DDC data accumulated during bounded startup work such as atomic
-    /// readiness-file updates. Threshold is the FPGA's sticky high-watermark,
-    /// not proof of data loss, so it is drained and tracked separately here.
-    /// Actual overflow and underflow remain fatal at startup and runtime.
+    /// readiness-file updates. Threshold, plus bit 31 on V29 and later, is a
+    /// recoverable high-water condition rather than proof of data loss. A V29+
+    /// bit-29 observation at a coherent zero depth is likewise an empty FIFO,
+    /// not a hard underflow. Legacy overflow/underflow and non-empty V29+
+    /// underflow observations remain fatal at startup and runtime.
     pub(crate) fn drain_startup_fifo(
         &mut self,
         iq_samples: &mut Vec<f32>,
     ) -> Result<(), XdmaError> {
         for _ in 0..STARTUP_FIFO_DRAIN_MAX_READS {
-            let (_, over_threshold) = self.read_iq_with_policy(iq_samples, true)?;
-            if !over_threshold {
+            iq_samples.clear();
+            let (_, requires_drain) = self.read_iq_once(iq_samples, true)?;
+            if !requires_drain {
                 return Ok(());
             }
         }
         Err(XdmaError::Incompatible(format!(
-            "operational XDMA RX FIFO remained over threshold after {STARTUP_FIFO_DRAIN_MAX_READS} bounded startup drains"
+            "operational XDMA RX FIFO remained at high water after {STARTUP_FIFO_DRAIN_MAX_READS} bounded startup drains"
         )))
     }
 
-    fn read_iq_with_policy(
+    fn read_iq_once(
         &mut self,
         iq_samples: &mut Vec<f32>,
-        allow_startup_threshold: bool,
+        allow_startup_high_water: bool,
     ) -> Result<(bool, bool), XdmaError> {
-        iq_samples.clear();
         let fifo = FifoSnapshot::decode(self.registers.read_register(DDC_FIFO_MONITOR_REGISTER)?);
-        let recover_startup_threshold =
-            startup_threshold_separately_accounted(fifo, allow_startup_threshold);
-        if recover_startup_threshold {
-            self.parser.stats.fifo_depth_hwm =
-                self.parser.stats.fifo_depth_hwm.max(fifo.depth_words);
-            self.parser.stats.fifo_startup_over_threshold += 1;
+        let recover_startup_high_water = startup_high_water_separately_accounted(
+            fifo,
+            allow_startup_high_water,
+            self.fifo_policy,
+        );
+        if recover_startup_high_water {
+            self.parser
+                .stats
+                .observe_startup_fifo(fifo, self.fifo_policy);
         } else {
-            self.parser.stats.observe_fifo(fifo);
+            self.parser.stats.observe_fifo(fifo, self.fifo_policy);
         }
-        if fifo_has_hard_fault(fifo) {
+        if fifo_has_hard_fault(fifo, self.fifo_policy) {
             return Err(XdmaError::Incompatible(format!(
                 "operational XDMA RX FIFO fault: depth={} overflow={} threshold={} underflow={}",
                 fifo.depth_words,
@@ -642,7 +726,7 @@ impl OperationalRxSession {
         }
         let read_bytes = dma_read_size(fifo.depth_words);
         if read_bytes == 0 {
-            return Ok((false, fifo.over_threshold));
+            return Ok((false, fifo_requires_drain(fifo, self.fifo_policy)));
         }
         let target = self.aligned.as_mut_slice(read_bytes);
         let read = self
@@ -663,8 +747,12 @@ impl OperationalRxSession {
         }
         self.parser.stats.dma_reads += 1;
         self.parser.stats.dma_bytes += read as u64;
+        let samples_before = iq_samples.len();
         self.parser.feed(&target[..read], iq_samples)?;
-        Ok((!iq_samples.is_empty(), fifo.over_threshold))
+        Ok((
+            iq_samples.len() != samples_before,
+            fifo_requires_drain(fifo, self.fifo_policy),
+        ))
     }
 
     fn configure(&mut self, frequency_hz: u32) -> Result<(), XdmaError> {
@@ -689,10 +777,9 @@ impl OperationalRxSession {
         thread::sleep(Duration::from_millis(1));
         let startup =
             FifoSnapshot::decode(self.registers.read_register(DDC_FIFO_MONITOR_REGISTER)?);
-        self.parser.stats.fifo_depth_hwm = startup.depth_words;
-        self.parser.stats.fifo_overflows += u64::from(startup.overflow);
-        self.parser.stats.fifo_startup_over_threshold += u64::from(startup.over_threshold);
-        self.parser.stats.fifo_startup_underflow = startup.underflow;
+        self.parser
+            .stats
+            .observe_startup_fifo(startup, self.fifo_policy);
         Ok(())
     }
 
@@ -756,8 +843,10 @@ pub fn run_phase2_rx_probe() -> Result<(), XdmaError> {
 
     let mut registers = XdmaRegisterDevice::open(&register_path)?;
     let identity: SaturnIdentity = registers.identity().clone();
+    let fifo_policy = FifoStatusPolicy::for_identity(&identity);
     let started = Instant::now();
-    let mut session = RxDdcSession::start(&mut registers, &ddc_path, config.frequency_hz)?;
+    let mut session =
+        RxDdcSession::start(&mut registers, &ddc_path, config.frequency_hz, fifo_policy)?;
     let capture = session.capture(config.duration);
     let stop = session.stop();
     drop(session);
@@ -805,6 +894,14 @@ pub fn run_phase2_rx_probe() -> Result<(), XdmaError> {
             ("dma_bytes", TelemetryValue::number(stats.dma_bytes)),
             ("fifo_hwm", TelemetryValue::number(stats.fifo_depth_hwm)),
             (
+                "fifo_almost_full",
+                TelemetryValue::number(stats.fifo_almost_full),
+            ),
+            (
+                "fifo_empty_observations",
+                TelemetryValue::number(stats.fifo_empty_observations),
+            ),
+            (
                 "fifo_overflow",
                 TelemetryValue::number(stats.fifo_overflows),
             ),
@@ -828,7 +925,7 @@ pub fn run_phase2_rx_probe() -> Result<(), XdmaError> {
     );
 
     println!(
-        "saturn-bridge: XDMA Phase 2 RX probe passed device={} product={} pcb={} firmware={}.{} ddc={} adc=ADC1 frequency={}Hz rate={}kHz duration_ms={} frames={} frame_seq=0..{} samples={} sample_rate={:.1}/s dma_reads={} dma_bytes={} fifo_hwm={} fifo_overflow={} fifo_threshold={} fifo_startup_underflow={} fifo_underflow={} header_resync={} header_errors={} rms={:.1}dBFS peak={:.4}",
+        "saturn-bridge: XDMA Phase 2 RX probe passed device={} product={} pcb={} firmware={}.{} ddc={} adc=ADC1 frequency={}Hz rate={}kHz duration_ms={} frames={} frame_seq=0..{} samples={} sample_rate={:.1}/s dma_reads={} dma_bytes={} fifo_hwm={} fifo_almost_full={} fifo_empty_observations={} fifo_overflow={} fifo_threshold={} fifo_startup_underflow={} fifo_underflow={} header_resync={} header_errors={} rms={:.1}dBFS peak={:.4}",
         ddc_path.display(),
         identity.product_id,
         identity.pcb_version,
@@ -845,6 +942,8 @@ pub fn run_phase2_rx_probe() -> Result<(), XdmaError> {
         stats.dma_reads,
         stats.dma_bytes,
         stats.fifo_depth_hwm,
+        stats.fifo_almost_full,
+        stats.fifo_empty_observations,
         stats.fifo_overflows,
         stats.fifo_over_threshold,
         u8::from(stats.fifo_startup_underflow),
@@ -1028,6 +1127,20 @@ mod tests {
     }
 
     #[test]
+    fn parser_rejects_a_framing_error_after_synchronization() {
+        let frame = test_frame();
+        let mut parser = DdcStreamParser::new(direct_ddc_rate_word());
+        let mut iq_samples = Vec::new();
+        parser.feed(&frame, &mut iq_samples).unwrap();
+
+        let mut malformed = frame;
+        malformed[7] = 0;
+        let error = parser.feed(&malformed, &mut iq_samples).unwrap_err();
+        assert!(error.to_string().contains("DDC stream framing error"));
+        assert_eq!(parser.stats.header_errors, 1);
+    }
+
+    #[test]
     fn malformed_interleave_at_ddc9_is_rejected() {
         assert!(analyse_rate_word(7 << (9 * 3)).is_err());
     }
@@ -1042,26 +1155,118 @@ mod tests {
     }
 
     #[test]
-    fn fifo_threshold_is_a_watermark_while_overflow_and_underflow_are_hard_faults() {
+    fn legacy_fifo_threshold_is_a_watermark_while_fault_bits_are_fatal() {
         let threshold = FifoSnapshot {
             over_threshold: true,
             ..FifoSnapshot::default()
         };
-        assert!(!fifo_has_hard_fault(threshold));
-        assert!(startup_threshold_separately_accounted(threshold, true));
-        assert!(!startup_threshold_separately_accounted(threshold, false));
+        assert!(!fifo_has_hard_fault(threshold, FifoStatusPolicy::Legacy));
+        assert!(startup_high_water_separately_accounted(
+            threshold,
+            true,
+            FifoStatusPolicy::Legacy
+        ));
+        assert!(!startup_high_water_separately_accounted(
+            threshold,
+            false,
+            FifoStatusPolicy::Legacy
+        ));
         let overflow = FifoSnapshot {
             overflow: true,
             ..threshold
         };
-        assert!(fifo_has_hard_fault(overflow));
-        assert!(!startup_threshold_separately_accounted(overflow, true));
+        assert!(fifo_has_hard_fault(overflow, FifoStatusPolicy::Legacy));
+        assert!(!startup_high_water_separately_accounted(
+            overflow,
+            true,
+            FifoStatusPolicy::Legacy
+        ));
         let underflow = FifoSnapshot {
             underflow: true,
             ..threshold
         };
-        assert!(fifo_has_hard_fault(underflow));
-        assert!(!startup_threshold_separately_accounted(underflow, true));
+        assert!(fifo_has_hard_fault(underflow, FifoStatusPolicy::Legacy));
+        assert!(!startup_high_water_separately_accounted(
+            underflow,
+            true,
+            FifoStatusPolicy::Legacy
+        ));
+    }
+
+    #[test]
+    fn v29_plus_treats_bit31_as_recoverable_high_water() {
+        let almost_full = FifoSnapshot {
+            depth_words: 16_000,
+            overflow: true,
+            ..FifoSnapshot::default()
+        };
+        assert!(!fifo_has_hard_fault(almost_full, FifoStatusPolicy::V29Plus));
+        assert!(fifo_requires_drain(almost_full, FifoStatusPolicy::V29Plus));
+        assert!(!fifo_requires_drain(
+            FifoSnapshot {
+                depth_words: 0,
+                ..almost_full
+            },
+            FifoStatusPolicy::V29Plus
+        ));
+    }
+
+    #[test]
+    fn v29_and_v30_select_the_new_fifo_status_policy() {
+        let identity = |firmware_minor| SaturnIdentity {
+            product_id: 1,
+            pcb_version: 2,
+            software_id: 1,
+            firmware_major: 1,
+            firmware_minor,
+            clock_mask: 0,
+            user_version: 0,
+        };
+        assert_eq!(
+            FifoStatusPolicy::for_identity(&identity(27)),
+            FifoStatusPolicy::Legacy
+        );
+        assert_eq!(
+            FifoStatusPolicy::for_identity(&identity(29)),
+            FifoStatusPolicy::V29Plus
+        );
+        assert_eq!(
+            FifoStatusPolicy::for_identity(&identity(30)),
+            FifoStatusPolicy::V29Plus
+        );
+    }
+
+    #[test]
+    fn v29_plus_zero_depth_bit29_is_an_empty_observation() {
+        let empty = FifoSnapshot {
+            depth_words: 0,
+            underflow: true,
+            ..FifoSnapshot::default()
+        };
+        assert!(!fifo_has_hard_fault(empty, FifoStatusPolicy::V29Plus));
+        let nonempty = FifoSnapshot {
+            depth_words: 1,
+            ..empty
+        };
+        assert!(fifo_has_hard_fault(nonempty, FifoStatusPolicy::V29Plus));
+    }
+
+    #[test]
+    fn fifo_stats_separate_v29_conditions_from_hard_faults() {
+        let mut stats = RxCaptureStats::default();
+        stats.observe_fifo(
+            FifoSnapshot {
+                depth_words: 0,
+                overflow: true,
+                underflow: true,
+                ..FifoSnapshot::default()
+            },
+            FifoStatusPolicy::V29Plus,
+        );
+        assert_eq!(stats.fifo_almost_full, 1);
+        assert_eq!(stats.fifo_empty_observations, 1);
+        assert_eq!(stats.fifo_overflows, 0);
+        assert_eq!(stats.fifo_underflows, 0);
     }
 
     #[test]
