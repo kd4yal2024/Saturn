@@ -23,7 +23,14 @@ if ! git -C "$repo_dir" diff --quiet --ignore-submodules -- || \
    [[ -n "$(git -C "$repo_dir" status --porcelain)" ]]; then
     git_dirty=true
 fi
+git_sha=$(git -C "$repo_dir" rev-parse HEAD)
+git_branch=$(git -C "$repo_dir" branch --show-current)
+if [[ -z "$git_branch" ]]; then
+    git_branch=detached
+fi
 export SATURN_GIT_DIRTY=$git_dirty
+export SATURN_GIT_SHA=$git_sha
+export SATURN_GIT_BRANCH=$git_branch
 
 if [[ ${SATURN_SIM_FRESH:-0} == 1 ]]; then
     archive_suffix="$(date +%s)-$$"
@@ -126,7 +133,7 @@ for variable in \
     SATURN_KEY_HOLD_NS SATURN_REQUIRED_SAMPLES SATURN_DISCARD_SAMPLES \
     SATURN_GOLDEN_BIT SATURN_PRIMARY_BIT SATURN_PRIMARY_BIN \
     SATURN_BUILD_MANIFEST SATURN_TIMER1 SATURN_TIMER2 \
-    SATURN_PROM_OUTPUT SATURN_GIT_DIRTY; do
+    SATURN_PROM_OUTPUT SATURN_GIT_DIRTY SATURN_GIT_SHA SATURN_GIT_BRANCH; do
     if [[ -n ${!variable+x} ]]; then
         value=${!variable}
         windows_env_prefix+="set ${variable}=${value}&&"

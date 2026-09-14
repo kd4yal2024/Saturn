@@ -177,8 +177,19 @@ runs:
 - synthesis: `synth_2_copy_1`
 - implementation: `impl_1_copy_1`
 
+The WSL launcher passes the commit, branch, and dirty state explicitly to
+Windows Vivado. This keeps artifact provenance intact for linked Git worktrees,
+whose `.git` file can contain a WSL-only path. Keep Windows-side checkout or
+worktree paths short (for example, `C:\V30`); Vivado 2023.1 rejects generated
+IP paths longer than 260 bytes.
+
 Set `SATURN_VIVADO_JOBS` to change the default of eight jobs. Set
 `SATURN_SKIP_RESET=1` only when intentionally resuming existing run products.
+When `SATURN_REUSE_SYNTH=1` is selected, the build retains the compile order
+captured by that completed synthesis checkpoint instead of asking an older
+project to refresh it during the reuse-only pass. Combining it with
+`SATURN_SKIP_RESET=1` also reuses a completed implementation rather than
+relaunching a run that has no pending steps.
 
 The V30 build applies its qualified timing-closure strategy by default:
 `ExtraNetDelay_high` placement plus `AggressiveExplore` pre-route physical
