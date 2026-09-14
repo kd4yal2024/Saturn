@@ -10,9 +10,12 @@ Branch `fpga-v30-adc-telemetry` advances the source identity to FPGA V30 and
 P2 V52 without changing the V29 signal path or the deferred speaker refill
 policy. It adds physical ADC overrange episode, high-clock duration, and
 associated peak telemetry so lightning/static bursts can be distinguished
-from repeated software observation of one sustained condition. No V30 build,
-package, G2 load, or hardware qualification is claimed here until those gates
-are completed and recorded separately.
+from repeated software observation of one sustained condition. The V30
+compatibility candidate also restores the V27 legacy FIFO read-to-clear
+boundary and reserves legacy bit 31 for configured-capacity observations;
+almost-full transitions remain in the V29 extended event counters. No V30
+build, package, G2 load, or hardware qualification is claimed here until those
+gates are completed and recorded separately.
 
 ## Current state
 

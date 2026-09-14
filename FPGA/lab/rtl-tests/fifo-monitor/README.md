@@ -1,9 +1,12 @@
 # FIFO monitor RTL gate
 
-`FIFO_Monitor.v` is part of the Phase 0 Verilator lint gate. The V29
+`FIFO_Monitor.v` is part of the Phase 0 Verilator lint gate. The V29/V30
 self-checking AXI-Lite regression is `fifo_monitor_tb.sv` and covers coherent
 snapshot capture, extrema, saturating state-transition counters, build-ID
-reporting, stalled read-response stability, and read-clear boundary events.
+reporting, stalled read-response stability, and the V30 legacy compatibility
+contract. Almost-full remains an extended event source but does not assert
+legacy bit 31; configured capacity does. Legacy bits 29--31 use the V27
+read-to-clear boundary.
 
 Register map additions (relative to the existing 0x9000 base):
 

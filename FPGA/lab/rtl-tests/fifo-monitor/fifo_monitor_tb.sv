@@ -50,11 +50,16 @@ module fifo_monitor_tb;
     end
   endtask
 
-  reg [31:0] value, event_value, held_value;
+  reg [31:0] value, event_value, event_before, held_value;
   initial begin
     repeat (4) @(posedge clk);
     resetn <= 1;
     repeat (3) @(posedge clk);
+
+    // Keep the legacy threshold meaningful for this small test FIFO and clear
+    // the expected reset-time empty observation before exercising events.
+    axi_write(16'h10, 32'd16);
+    axi_read(16'h00, value);
 
     // Establish extrema, then clear them and capture a coherent count set.
     c1 <= 3; c2 <= 2; c3 <= 1; c4 <= 1;
@@ -79,6 +84,23 @@ module fifo_monitor_tb;
     axi_read(16'h34, value); if (value !== 32'd0)  $fatal(1, "min c1 %h", value);
     axi_read(16'h54, event_value); if (event_value == 0) $fatal(1, "event c1 did not increment");
     axi_read(16'h64, value); if (value !== 32'h5632_3901) $fatal(1, "build id %h", value);
+    axi_read(16'h00, value); // clear the preceding full/empty legacy observations
+
+    // An almost-full input remains an extended event source, but V30 must not
+    // expose it as legacy bit 31. That bit is reserved for configured capacity.
+    c1 <= 15; o1 <= 0;
+    repeat (3) @(posedge clk);
+    axi_read(16'h54, event_before);
+    o1 <= 1;
+    repeat (3) @(posedge clk);
+    axi_read(16'h00, value);
+    if (value[31] !== 1'b0)
+      $fatal(1, "almost-full leaked into legacy overflow status: %h", value);
+    axi_read(16'h54, value);
+    if (value <= event_before)
+      $fatal(1, "almost-full did not increment extended events: before=%0d after=%0d",
+             event_before, value);
+    o1 <= 0;
 
     // AXI4-Lite requires RDATA and RVALID to remain stable until RREADY.
     // Read the live status, then vary its sources for several stalled cycles.
@@ -88,21 +110,40 @@ module fifo_monitor_tb;
     @(posedge clk); arvalid <= 0;
     while (!rvalid) @(posedge clk);
     held_value = rdata;
-    c1 <= 16; o1 <= 1;
+    c1 <= 16;
     repeat (4) begin
       @(posedge clk);
       if (!rvalid || rdata !== held_value)
         $fatal(1, "stalled FIFO response changed: held=%h now=%h", held_value, rdata);
     end
     rready <= 1;
-    @(posedge clk); rready <= 0; o1 <= 0;
+    @(posedge clk);
+    #1;
+    if ({dut.fifo1_overflowed, dut.fifo1_over_threshold,
+         dut.fifo1_underflowed} !== 3'b000)
+      $fatal(1, "V27 accepted-read boundary did not clear legacy state");
+    rready <= 0;
+    c1 <= 5;
 
-    // The full condition on the read-completion edge must survive the
-    // read-to-clear boundary and appear in the next status response.
+    // A configured-capacity observation is the genuine legacy bit-31 event.
+    repeat (2) @(posedge clk);
+    c1 <= 16;
     repeat (2) @(posedge clk);
     axi_read(16'h00, value);
     if (value[31] !== 1'b1)
-      $fatal(1, "simultaneous full/read-clear event was lost: %h", value);
+      $fatal(1, "configured-capacity event missing from legacy status: %h", value);
+
+    // Restore the V27 read-to-clear boundary: conditions present while the
+    // response is accepted are not copied back into the sticky legacy bits.
+    // Move away from the boundary immediately after the accepted read and
+    // require a clean next observation.
+    c1 <= 5;
+    repeat (2) @(posedge clk);
+    axi_read(16'h00, value);
+    repeat (2) @(posedge clk);
+    axi_read(16'h00, value);
+    if (value[31:29] !== 3'b000)
+      $fatal(1, "legacy status did not clear at the accepted read: %h", value);
 
     $display("SATURN_FIFO_TELEMETRY_OK seq=1 max1=16 events1=%0d", event_value);
     $finish;
