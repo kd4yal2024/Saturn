@@ -8,15 +8,23 @@ use crate::xdma::{
     alex_receive_state_word, alex_rx_filter_word, ensure_p2app_inactive, SaturnIdentity, XdmaError,
     XdmaRegisterDevice, ALEX_RX_FILTER_REGISTER, ALEX_TX_FILTER_RX_ANTENNA_REGISTER,
 };
+use crate::xdma_duc::{
+    allowed_cpu_ids, current_scheduler, enable_realtime_fifo, pin_current_thread,
+};
 use crate::xdma_telemetry::{record_probe_outcome, TelemetryValue};
 use std::alloc::{alloc_zeroed, dealloc, Layout};
+use std::collections::VecDeque;
 use std::env;
 use std::fs::{File, OpenOptions};
 use std::io;
 use std::os::unix::fs::FileExt;
 use std::path::{Path, PathBuf};
 use std::ptr::NonNull;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, TryRecvError};
+use std::sync::{Arc, Mutex};
 use std::thread;
+use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 const DEFAULT_DDC_DEVICE: &str = "/dev/xdma0_c2h_0";
@@ -48,8 +56,17 @@ const DMA_MIN_READ_BYTES: usize = 4096;
 const DMA_MAX_READ_BYTES: usize = 32768;
 const FIFO_WORD_BYTES: usize = 8;
 const FIFO_POLL_INTERVAL: Duration = Duration::from_micros(250);
-const STARTUP_FIFO_DRAIN_MAX_READS: usize = 16;
-pub(crate) const RUNTIME_FIFO_DRAIN_MAX_READS: usize = 16;
+const STARTUP_HOST_DRAIN_MAX_READS: usize = 256;
+pub(crate) const RUNTIME_HOST_DRAIN_MAX_READS: usize = 16;
+pub(crate) const OPERATIONAL_RX_BUFFER_COUNT: usize = 256;
+pub(crate) const OPERATIONAL_RX_BUFFER_BYTES: usize =
+    OPERATIONAL_RX_BUFFER_COUNT * DMA_MAX_READ_BYTES;
+// The XDMA completion kthread runs at FIFO priority 20 and the direct TX
+// producer at 21. The C2H owner does no DSP, network, or filesystem work and
+// runs one level above both so an awakened reader can promptly return to its
+// blocking DMA service point.
+const DIRECT_RX_RT_PRIORITY: i32 = 22;
+const READER_START_TIMEOUT: Duration = Duration::from_secs(2);
 
 const RATE_CODES_TO_SAMPLE_WORDS: [usize; 8] = [0, 1, 2, 4, 8, 16, 32, 0];
 
@@ -108,27 +125,33 @@ impl FifoSnapshot {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum FifoStatusPolicy {
     Legacy,
-    V29Plus,
+    V29,
 }
 
 impl FifoStatusPolicy {
     fn for_identity(identity: &SaturnIdentity) -> Self {
-        if identity.firmware_major == 1 && identity.firmware_minor >= 29 {
-            Self::V29Plus
+        // V29 exported almost-full on bit 31 and an empty observation on bit
+        // 29. V30 deliberately restores the V27 legacy read-to-clear contract,
+        // so the exception must never be applied as an open-ended >=29 rule.
+        if identity.firmware_major == 1 && identity.firmware_minor == 29 {
+            Self::V29
         } else {
             Self::Legacy
         }
     }
 }
 
+#[cfg(test)]
 fn fifo_has_recoverable_high_water(snapshot: FifoSnapshot, policy: FifoStatusPolicy) -> bool {
-    snapshot.over_threshold || (policy == FifoStatusPolicy::V29Plus && snapshot.overflow)
+    snapshot.over_threshold || (policy == FifoStatusPolicy::V29 && snapshot.overflow)
 }
 
+#[cfg(test)]
 fn fifo_requires_drain(snapshot: FifoSnapshot, policy: FifoStatusPolicy) -> bool {
     snapshot.depth_words != 0 && fifo_has_recoverable_high_water(snapshot, policy)
 }
 
+#[cfg(test)]
 fn startup_high_water_separately_accounted(
     snapshot: FifoSnapshot,
     allowed: bool,
@@ -142,7 +165,7 @@ fn startup_high_water_separately_accounted(
 fn fifo_has_hard_fault(snapshot: FifoSnapshot, policy: FifoStatusPolicy) -> bool {
     match policy {
         FifoStatusPolicy::Legacy => snapshot.overflow || snapshot.underflow,
-        FifoStatusPolicy::V29Plus => snapshot.underflow && snapshot.depth_words != 0,
+        FifoStatusPolicy::V29 => snapshot.underflow && snapshot.depth_words != 0,
     }
 }
 
@@ -155,15 +178,23 @@ pub(crate) struct RxCaptureStats {
     pub(crate) header_resyncs: u64,
     pub(crate) header_errors: u64,
     pub(crate) fifo_depth_hwm: usize,
-    /// V29+ bit-31/almost-full observations recovered by draining C2H.
+    /// V29 bit-31/almost-full observations recovered by draining C2H.
     pub(crate) fifo_almost_full: u64,
-    /// V29+ bit-29 observations whose coherent current depth was zero.
+    /// V29 bit-29 observations whose coherent current depth was zero.
     pub(crate) fifo_empty_observations: u64,
     pub(crate) fifo_overflows: u64,
     pub(crate) fifo_over_threshold: u64,
     pub(crate) fifo_underflows: u64,
     pub(crate) fifo_startup_underflow: bool,
     pub(crate) fifo_startup_over_threshold: u64,
+    /// Raw C2H buffers discarded to keep the FPGA drained when the downstream
+    /// parser/DSP/publication stage falls behind.
+    pub(crate) host_buffer_drops: u64,
+    pub(crate) host_buffer_drop_bytes: u64,
+    /// Sequence gaps observed by the parser after one or more buffer drops.
+    pub(crate) host_discontinuities: u64,
+    pub(crate) host_ring_depth_hwm: usize,
+    pub(crate) host_pool_starvations: u64,
     power_sum: f64,
     peak: f32,
 }
@@ -171,7 +202,7 @@ pub(crate) struct RxCaptureStats {
 impl RxCaptureStats {
     fn observe_fifo(&mut self, snapshot: FifoSnapshot, policy: FifoStatusPolicy) {
         self.fifo_depth_hwm = self.fifo_depth_hwm.max(snapshot.depth_words);
-        if policy == FifoStatusPolicy::V29Plus {
+        if policy == FifoStatusPolicy::V29 {
             self.fifo_almost_full += u64::from(snapshot.overflow);
             self.fifo_empty_observations +=
                 u64::from(snapshot.underflow && snapshot.depth_words == 0);
@@ -180,23 +211,22 @@ impl RxCaptureStats {
         }
         self.fifo_over_threshold += u64::from(snapshot.over_threshold);
         self.fifo_underflows += u64::from(
-            snapshot.underflow
-                && !(policy == FifoStatusPolicy::V29Plus && snapshot.depth_words == 0),
+            snapshot.underflow && !(policy == FifoStatusPolicy::V29 && snapshot.depth_words == 0),
         );
     }
 
     fn observe_startup_fifo(&mut self, snapshot: FifoSnapshot, policy: FifoStatusPolicy) {
         self.fifo_depth_hwm = self.fifo_depth_hwm.max(snapshot.depth_words);
         self.fifo_startup_over_threshold += u64::from(snapshot.over_threshold);
-        if policy == FifoStatusPolicy::V29Plus {
+        if policy == FifoStatusPolicy::V29 {
             self.fifo_almost_full += u64::from(snapshot.overflow);
             self.fifo_empty_observations +=
                 u64::from(snapshot.underflow && snapshot.depth_words == 0);
         } else {
             self.fifo_overflows += u64::from(snapshot.overflow);
         }
-        self.fifo_startup_underflow |= snapshot.underflow
-            && !(policy == FifoStatusPolicy::V29Plus && snapshot.depth_words == 0);
+        self.fifo_startup_underflow |=
+            snapshot.underflow && !(policy == FifoStatusPolicy::V29 && snapshot.depth_words == 0);
     }
 
     fn rms_dbfs(&self) -> f32 {
@@ -296,6 +326,12 @@ impl DdcStreamParser {
             self.pending.drain(..frame_bytes);
         }
     }
+
+    fn mark_host_discontinuity(&mut self) {
+        self.pending.clear();
+        self.synchronized = false;
+        self.stats.host_discontinuities += 1;
+    }
 }
 
 pub(crate) struct AlignedBuffer {
@@ -369,6 +405,257 @@ impl Drop for AlignedBuffer {
         }
         // SAFETY: ptr was allocated with this exact layout and is freed once.
         unsafe { dealloc(self.ptr.as_ptr(), self.layout) };
+    }
+}
+
+struct FilledRxBuffer {
+    buffer: AlignedBuffer,
+    len: usize,
+    sequence: u64,
+}
+
+struct OperationalRxBufferPoolState {
+    free: Vec<AlignedBuffer>,
+    ready: VecDeque<FilledRxBuffer>,
+}
+
+/// Fixed-capacity ownership ring between the hardware reader and the
+/// parser/DSP stage. The producer can reclaim the oldest unread buffer when
+/// necessary, which keeps C2H moving without allocating under load.
+struct OperationalRxBufferPool {
+    state: Mutex<OperationalRxBufferPoolState>,
+}
+
+impl OperationalRxBufferPool {
+    fn new(buffer_count: usize, lock_memory: bool) -> Result<Self, XdmaError> {
+        let mut free = Vec::with_capacity(buffer_count);
+        for _ in 0..buffer_count {
+            let mut buffer = AlignedBuffer::new(DMA_MAX_READ_BYTES)?;
+            if lock_memory {
+                buffer.lock_memory()?;
+            }
+            free.push(buffer);
+        }
+        Ok(Self {
+            state: Mutex::new(OperationalRxBufferPoolState {
+                free,
+                ready: VecDeque::with_capacity(buffer_count),
+            }),
+        })
+    }
+
+    /// Obtain storage without waiting for the downstream consumer. If all
+    /// free buffers are occupied, reclaim the oldest unread buffer and report
+    /// the number of bytes discarded.
+    fn acquire_for_reader(&self) -> Option<(AlignedBuffer, usize)> {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(buffer) = state.free.pop() {
+            return Some((buffer, 0));
+        }
+        state
+            .ready
+            .pop_front()
+            .map(|dropped| (dropped.buffer, dropped.len))
+    }
+
+    fn publish(&self, filled: FilledRxBuffer) -> usize {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        state.ready.push_back(filled);
+        state.ready.len()
+    }
+
+    fn try_take_ready(&self) -> Option<FilledRxBuffer> {
+        self.state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .ready
+            .pop_front()
+    }
+
+    fn recycle(&self, buffer: AlignedBuffer) {
+        self.state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .free
+            .push(buffer);
+    }
+
+    fn ready_len(&self) -> usize {
+        self.state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .ready
+            .len()
+    }
+}
+
+fn configure_operational_reader_scheduling() -> Result<(usize, &'static str, i32), XdmaError> {
+    let cpus = allowed_cpu_ids()?;
+    let cpu = cpus
+        .iter()
+        .rev()
+        .nth(1)
+        .or_else(|| cpus.last())
+        .copied()
+        .ok_or_else(|| XdmaError::Incompatible("no CPU is available for direct XDMA RX".into()))?;
+    pin_current_thread(cpu)?;
+    enable_realtime_fifo(DIRECT_RX_RT_PRIORITY)?;
+    let (policy, priority) = current_scheduler()?;
+    if policy != "fifo" || priority != DIRECT_RX_RT_PRIORITY {
+        return Err(XdmaError::Incompatible(format!(
+            "direct XDMA RX scheduler verification failed: policy={policy} priority={priority} expected=fifo/{DIRECT_RX_RT_PRIORITY}"
+        )));
+    }
+    Ok((cpu, policy, priority))
+}
+
+fn run_operational_reader(
+    registers: Arc<Mutex<XdmaRegisterDevice>>,
+    dma: File,
+    fifo_policy: FifoStatusPolicy,
+    pool: Arc<OperationalRxBufferPool>,
+    stats: Arc<Mutex<RxCaptureStats>>,
+    stop: Arc<AtomicBool>,
+) -> Result<(), XdmaError> {
+    let mut sequence = 0u64;
+    while !stop.load(Ordering::Relaxed) {
+        let fifo_value = registers
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .read_register(DDC_FIFO_MONITOR_REGISTER)?;
+        let fifo = FifoSnapshot::decode(fifo_value);
+        {
+            let mut reader_stats = stats
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            reader_stats.observe_fifo(fifo, fifo_policy);
+        }
+        if fifo_has_hard_fault(fifo, fifo_policy) {
+            return Err(XdmaError::Incompatible(format!(
+                "operational XDMA RX FIFO fault: depth={} overflow={} threshold={} underflow={}",
+                fifo.depth_words,
+                u8::from(fifo.overflow),
+                u8::from(fifo.over_threshold),
+                u8::from(fifo.underflow)
+            )));
+        }
+        let read_bytes = dma_read_size(fifo.depth_words);
+        if read_bytes == 0 {
+            thread::sleep(FIFO_POLL_INTERVAL);
+            continue;
+        }
+
+        let Some((mut buffer, dropped_bytes)) = pool.acquire_for_reader() else {
+            // The synchronous consumer owns at most one buffer, so this is an
+            // invariant fallback rather than normal flow. Yield briefly and
+            // retry instead of turning a bookkeeping bug into a masked reader
+            // panic.
+            stats
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .host_pool_starvations += 1;
+            thread::sleep(Duration::from_micros(50));
+            continue;
+        };
+        let target = buffer.as_mut_slice(read_bytes);
+        let read = dma.read_at(target, 0).map_err(|source| XdmaError::Io {
+            action: "could not read operational XDMA DDC receive stream",
+            source,
+        })?;
+        if read != read_bytes {
+            return Err(XdmaError::Io {
+                action: "operational XDMA DDC receive stream returned a short read",
+                source: io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    format!("read {read} of {read_bytes} bytes"),
+                ),
+            });
+        }
+        let ring_depth = pool.publish(FilledRxBuffer {
+            buffer,
+            len: read,
+            sequence,
+        });
+        sequence = sequence.wrapping_add(1);
+        let mut reader_stats = stats
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        reader_stats.dma_reads += 1;
+        reader_stats.dma_bytes += read as u64;
+        reader_stats.host_ring_depth_hwm = reader_stats.host_ring_depth_hwm.max(ring_depth);
+        if dropped_bytes != 0 {
+            reader_stats.host_buffer_drops += 1;
+            reader_stats.host_buffer_drop_bytes += dropped_bytes as u64;
+        }
+    }
+    Ok(())
+}
+
+fn spawn_operational_reader(
+    registers: Arc<Mutex<XdmaRegisterDevice>>,
+    dma: File,
+    fifo_policy: FifoStatusPolicy,
+    pool: Arc<OperationalRxBufferPool>,
+    stats: Arc<Mutex<RxCaptureStats>>,
+    stop: Arc<AtomicBool>,
+) -> Result<(JoinHandle<()>, Receiver<Result<(), XdmaError>>), XdmaError> {
+    let (startup_tx, startup_rx) = mpsc::sync_channel(1);
+    let (result_tx, result_rx) = mpsc::sync_channel(1);
+    let thread_stop = stop.clone();
+    let worker = thread::Builder::new()
+        .name("saturn-xdma-rx".into())
+        .spawn(move || match configure_operational_reader_scheduling() {
+            Ok((cpu, policy, priority)) => {
+                let _ = startup_tx.send(Ok((cpu, policy, priority)));
+                let result =
+                    run_operational_reader(registers, dma, fifo_policy, pool, stats, thread_stop);
+                let _ = result_tx.send(result);
+            }
+            Err(error) => {
+                let message = error.to_string();
+                let _ = startup_tx.send(Err(message));
+                let _ = result_tx.send(Err(error));
+            }
+        })
+        .map_err(|source| XdmaError::Io {
+            action: "could not spawn direct XDMA RX reader thread",
+            source,
+        })?;
+
+    match startup_rx.recv_timeout(READER_START_TIMEOUT) {
+        Ok(Ok((cpu, policy, priority))) => {
+            println!(
+                "saturn-bridge: XDMA RX reader scheduling cpu={cpu} policy={policy} priority={priority} buffers={OPERATIONAL_RX_BUFFER_COUNT} locked_bytes={OPERATIONAL_RX_BUFFER_BYTES}"
+            );
+            Ok((worker, result_rx))
+        }
+        Ok(Err(message)) => {
+            let _ = worker.join();
+            match result_rx.recv() {
+                Ok(Err(error)) => Err(error),
+                _ => Err(XdmaError::Incompatible(message)),
+            }
+        }
+        Err(RecvTimeoutError::Timeout) => {
+            stop.store(true, Ordering::SeqCst);
+            let _ = worker.join();
+            Err(XdmaError::Incompatible(
+                "timed out configuring direct XDMA RX reader scheduling".into(),
+            ))
+        }
+        Err(RecvTimeoutError::Disconnected) => {
+            stop.store(true, Ordering::SeqCst);
+            let _ = worker.join();
+            Err(XdmaError::Incompatible(
+                "direct XDMA RX reader exited before reporting scheduling readiness".into(),
+            ))
+        }
     }
 }
 
@@ -535,12 +822,16 @@ impl Drop for RxDdcSession<'_> {
 /// the session's entire lifetime. This type exposes no H2C device and cannot
 /// key RF.
 pub(crate) struct OperationalRxSession {
-    registers: XdmaRegisterDevice,
-    dma: File,
+    registers: Arc<Mutex<XdmaRegisterDevice>>,
     parser: DdcStreamParser,
-    aligned: AlignedBuffer,
+    pool: Arc<OperationalRxBufferPool>,
+    reader_stats: Arc<Mutex<RxCaptureStats>>,
+    reader_stop: Arc<AtomicBool>,
+    reader: Option<JoinHandle<()>>,
+    reader_result: Option<Receiver<Result<(), XdmaError>>>,
     identity: SaturnIdentity,
     fifo_policy: FifoStatusPolicy,
+    last_dma_sequence: Option<u64>,
     frequency_hz: u32,
     rx_antenna: u8,
     rx_attenuation_db: u8,
@@ -566,8 +857,12 @@ impl OperationalRxSession {
         let ddc_path = env::var_os("SATURN_BRIDGE_XDMA_RX_DEVICE")
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from(DEFAULT_DDC_DEVICE));
-        let registers = XdmaRegisterDevice::open(&register_path)?;
-        let identity = registers.identity().clone();
+        let registers = Arc::new(Mutex::new(XdmaRegisterDevice::open(&register_path)?));
+        let identity = registers
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .identity()
+            .clone();
         let fifo_policy = FifoStatusPolicy::for_identity(&identity);
         let dma = OpenOptions::new()
             .read(true)
@@ -576,15 +871,23 @@ impl OperationalRxSession {
                 action: "could not open operational XDMA DDC receive device",
                 source,
             })?;
-        let mut aligned = AlignedBuffer::new(DMA_MAX_READ_BYTES)?;
-        aligned.lock_memory()?;
+        let pool = Arc::new(OperationalRxBufferPool::new(
+            OPERATIONAL_RX_BUFFER_COUNT,
+            true,
+        )?);
+        let reader_stats = Arc::new(Mutex::new(RxCaptureStats::default()));
+        let reader_stop = Arc::new(AtomicBool::new(false));
         let mut session = Self {
             registers,
-            dma,
             parser: DdcStreamParser::new(direct_ddc_rate_word()),
-            aligned,
+            pool,
+            reader_stats,
+            reader_stop,
+            reader: None,
+            reader_result: None,
             identity,
             fifo_policy,
+            last_dma_sequence: None,
             frequency_hz,
             rx_antenna: rx_antenna.clamp(1, 3),
             rx_attenuation_db: rx_attenuation_db.min(31),
@@ -593,6 +896,23 @@ impl OperationalRxSession {
         if let Err(error) = session.configure(frequency_hz) {
             let _ = session.stop();
             return Err(error);
+        }
+        match spawn_operational_reader(
+            session.registers.clone(),
+            dma,
+            session.fifo_policy,
+            session.pool.clone(),
+            session.reader_stats.clone(),
+            session.reader_stop.clone(),
+        ) {
+            Ok((reader, result)) => {
+                session.reader = Some(reader);
+                session.reader_result = Some(result);
+            }
+            Err(error) => {
+                let _ = session.stop();
+                return Err(error);
+            }
         }
         Ok(session)
     }
@@ -605,23 +925,41 @@ impl OperationalRxSession {
         self.frequency_hz
     }
 
-    pub(crate) fn stats(&self) -> &RxCaptureStats {
-        &self.parser.stats
+    pub(crate) fn stats(&self) -> RxCaptureStats {
+        let mut combined = self
+            .reader_stats
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone();
+        combined.frames = self.parser.stats.frames;
+        combined.samples = self.parser.stats.samples;
+        combined.header_resyncs = self.parser.stats.header_resyncs;
+        combined.header_errors = self.parser.stats.header_errors;
+        combined.host_discontinuities = self.parser.stats.host_discontinuities;
+        combined.power_sum = self.parser.stats.power_sum;
+        combined.peak = self.parser.stats.peak;
+        combined
     }
 
     pub(crate) fn verify_receive_safe(&self) -> Result<(), XdmaError> {
-        self.registers.verify_safe_receive_state()
+        self.registers
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .verify_safe_receive_state()
     }
 
     pub(crate) fn tune(&mut self, frequency_hz: u32) -> Result<(), XdmaError> {
         validate_frequency(frequency_hz)?;
-        self.registers.write_register(
+        let registers = self
+            .registers
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        registers.write_register(
             ALEX_TX_FILTER_RX_ANTENNA_REGISTER,
             alex_receive_state_word(frequency_hz, self.rx_antenna),
         )?;
-        self.registers
-            .write_register(ALEX_RX_FILTER_REGISTER, alex_rx_filter_word(frequency_hz))?;
-        self.registers.write_register(
+        registers.write_register(ALEX_RX_FILTER_REGISTER, alex_rx_filter_word(frequency_hz))?;
+        registers.write_register(
             DDC6_FREQUENCY_REGISTER,
             frequency_to_phase_word(frequency_hz),
         )?;
@@ -631,33 +969,41 @@ impl OperationalRxSession {
 
     pub(crate) fn set_rx_antenna(&mut self, antenna: u8) -> Result<(), XdmaError> {
         let antenna = antenna.clamp(1, 3);
-        self.registers.write_register(
-            ALEX_TX_FILTER_RX_ANTENNA_REGISTER,
-            alex_receive_state_word(self.frequency_hz, antenna),
-        )?;
+        self.registers
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .write_register(
+                ALEX_TX_FILTER_RX_ANTENNA_REGISTER,
+                alex_receive_state_word(self.frequency_hz, antenna),
+            )?;
         self.rx_antenna = antenna;
         Ok(())
     }
 
     pub(crate) fn set_rx_attenuation(&mut self, attenuation_db: u8) -> Result<(), XdmaError> {
         let attenuation_db = attenuation_db.min(31);
-        self.registers.update_register(
-            ADC_ATTENUATION_REGISTER,
-            |value| adc1_rx_attenuation_word(value, attenuation_db),
-            "could not set ADC1 receive attenuation",
-        )?;
+        self.registers
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .update_register(
+                ADC_ATTENUATION_REGISTER,
+                |value| adc1_rx_attenuation_word(value, attenuation_db),
+                "could not set ADC1 receive attenuation",
+            )?;
         self.rx_attenuation_db = attenuation_db;
         Ok(())
     }
 
     pub(crate) fn read_adc_telemetry(&self) -> Result<(u8, u16, u16), XdmaError> {
-        let overflow = (self.registers.read_register(ADC_OVERFLOW_REGISTER)? & 0x03) as u8;
-        let adc1_peak = self
+        let registers = self
             .registers
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let overflow = (registers.read_register(ADC_OVERFLOW_REGISTER)? & 0x03) as u8;
+        let adc1_peak = registers
             .read_register(ADC1_PEAK_REGISTER)?
             .min(u32::from(u16::MAX)) as u16;
-        let adc2_peak = self
-            .registers
+        let adc2_peak = registers
             .read_register(ADC2_PEAK_REGISTER)?
             .min(u32::from(u16::MAX)) as u16;
         Ok((overflow, adc1_peak, adc2_peak))
@@ -668,99 +1014,77 @@ impl OperationalRxSession {
         iq_samples: &mut Vec<f32>,
     ) -> Result<OperationalRxRead, XdmaError> {
         iq_samples.clear();
-        let (samples_ready, requires_drain) = self.read_iq_once(iq_samples, false)?;
+        self.check_reader_result()?;
+        let Some(filled) = self.pool.try_take_ready() else {
+            return Ok(OperationalRxRead {
+                samples_ready: false,
+                requires_drain: false,
+            });
+        };
+
+        let discontinuity = self
+            .last_dma_sequence
+            .map_or(filled.sequence != 0, |previous| {
+                filled.sequence != previous.wrapping_add(1)
+            });
+        if discontinuity {
+            self.parser.mark_host_discontinuity();
+        }
+        self.last_dma_sequence = Some(filled.sequence);
+        let parse_result = self
+            .parser
+            .feed(filled.buffer.as_slice(filled.len), iq_samples);
+        self.pool.recycle(filled.buffer);
+        parse_result?;
         Ok(OperationalRxRead {
-            samples_ready,
-            requires_drain,
+            samples_ready: !iq_samples.is_empty(),
+            requires_drain: self.pool.ready_len() != 0,
         })
     }
 
-    /// Drain DDC data accumulated during bounded startup work such as atomic
-    /// readiness-file updates. Threshold, plus bit 31 on V29 and later, is a
-    /// recoverable high-water condition rather than proof of data loss. A V29+
-    /// bit-29 observation at a coherent zero depth is likewise an empty FIFO,
-    /// not a hard underflow. Legacy overflow/underflow and non-empty V29+
-    /// underflow observations remain fatal at startup and runtime.
+    /// Parse any raw data queued during startup bookkeeping. The dedicated
+    /// reader continues draining hardware throughout this work; this bounded
+    /// pass only reduces downstream latency before clients are admitted.
     pub(crate) fn drain_startup_fifo(
         &mut self,
         iq_samples: &mut Vec<f32>,
     ) -> Result<(), XdmaError> {
-        for _ in 0..STARTUP_FIFO_DRAIN_MAX_READS {
-            iq_samples.clear();
-            let (_, requires_drain) = self.read_iq_once(iq_samples, true)?;
-            if !requires_drain {
+        for _ in 0..STARTUP_HOST_DRAIN_MAX_READS {
+            let outcome = self.read_iq(iq_samples)?;
+            if !outcome.requires_drain {
                 return Ok(());
             }
         }
-        Err(XdmaError::Incompatible(format!(
-            "operational XDMA RX FIFO remained at high water after {STARTUP_FIFO_DRAIN_MAX_READS} bounded startup drains"
-        )))
+        Ok(())
     }
 
-    fn read_iq_once(
-        &mut self,
-        iq_samples: &mut Vec<f32>,
-        allow_startup_high_water: bool,
-    ) -> Result<(bool, bool), XdmaError> {
-        let fifo = FifoSnapshot::decode(self.registers.read_register(DDC_FIFO_MONITOR_REGISTER)?);
-        let recover_startup_high_water = startup_high_water_separately_accounted(
-            fifo,
-            allow_startup_high_water,
-            self.fifo_policy,
-        );
-        if recover_startup_high_water {
-            self.parser
-                .stats
-                .observe_startup_fifo(fifo, self.fifo_policy);
-        } else {
-            self.parser.stats.observe_fifo(fifo, self.fifo_policy);
+    fn check_reader_result(&self) -> Result<(), XdmaError> {
+        let Some(result) = &self.reader_result else {
+            return Ok(());
+        };
+        match result.try_recv() {
+            Ok(Ok(())) => Err(XdmaError::Incompatible(
+                "direct XDMA RX reader stopped unexpectedly".into(),
+            )),
+            Ok(Err(error)) => Err(error),
+            Err(TryRecvError::Empty) => Ok(()),
+            Err(TryRecvError::Disconnected) => Err(XdmaError::Incompatible(
+                "direct XDMA RX reader result channel disconnected unexpectedly".into(),
+            )),
         }
-        if fifo_has_hard_fault(fifo, self.fifo_policy) {
-            return Err(XdmaError::Incompatible(format!(
-                "operational XDMA RX FIFO fault: depth={} overflow={} threshold={} underflow={}",
-                fifo.depth_words,
-                u8::from(fifo.overflow),
-                u8::from(fifo.over_threshold),
-                u8::from(fifo.underflow)
-            )));
-        }
-        let read_bytes = dma_read_size(fifo.depth_words);
-        if read_bytes == 0 {
-            return Ok((false, fifo_requires_drain(fifo, self.fifo_policy)));
-        }
-        let target = self.aligned.as_mut_slice(read_bytes);
-        let read = self
-            .dma
-            .read_at(target, 0)
-            .map_err(|source| XdmaError::Io {
-                action: "could not read operational XDMA DDC receive stream",
-                source,
-            })?;
-        if read != read_bytes {
-            return Err(XdmaError::Io {
-                action: "operational XDMA DDC receive stream returned a short read",
-                source: io::Error::new(
-                    io::ErrorKind::UnexpectedEof,
-                    format!("read {read} of {read_bytes} bytes"),
-                ),
-            });
-        }
-        self.parser.stats.dma_reads += 1;
-        self.parser.stats.dma_bytes += read as u64;
-        let samples_before = iq_samples.len();
-        self.parser.feed(&target[..read], iq_samples)?;
-        Ok((
-            iq_samples.len() != samples_before,
-            fifo_requires_drain(fifo, self.fifo_policy),
-        ))
     }
 
     fn configure(&mut self, frequency_hz: u32) -> Result<(), XdmaError> {
         self.disable_stream()?;
         thread::sleep(Duration::from_millis(1));
         self.reset_fifo()?;
-        self.registers.read_register(DDC_FIFO_MONITOR_REGISTER)?;
         self.registers
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .read_register(DDC_FIFO_MONITOR_REGISTER)?;
+        self.registers
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
             .write_register(DDC_RATE_REGISTER, direct_ddc_rate_word())?;
         self.tune(frequency_hz)?;
         // piHPSDR writes the ADC step attenuator on every Protocol 2
@@ -769,35 +1093,50 @@ impl OperationalRxSession {
         // otherwise a value left by P2 can survive while the model reports
         // ATT Off and the S-meter compensation assumes zero attenuation.
         self.set_rx_attenuation(self.rx_attenuation_db)?;
-        self.registers.update_register(
-            DDC_INPUT_SELECT_REGISTER,
-            |value| (value & !DDC6_ADC_MASK) | DDC_STREAM_ENABLE_BIT,
-            "could not route ADC1 and enable operational direct DDC stream",
-        )?;
+        self.registers
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .update_register(
+                DDC_INPUT_SELECT_REGISTER,
+                |value| (value & !DDC6_ADC_MASK) | DDC_STREAM_ENABLE_BIT,
+                "could not route ADC1 and enable operational direct DDC stream",
+            )?;
         thread::sleep(Duration::from_millis(1));
-        let startup =
-            FifoSnapshot::decode(self.registers.read_register(DDC_FIFO_MONITOR_REGISTER)?);
-        self.parser
-            .stats
+        let startup = FifoSnapshot::decode(
+            self.registers
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .read_register(DDC_FIFO_MONITOR_REGISTER)?,
+        );
+        self.reader_stats
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
             .observe_startup_fifo(startup, self.fifo_policy);
         Ok(())
     }
 
     fn disable_stream(&self) -> Result<(), XdmaError> {
-        self.registers.update_register(
-            DDC_INPUT_SELECT_REGISTER,
-            |value| value & !DDC_STREAM_ENABLE_BIT,
-            "could not disable operational direct DDC stream",
-        )
+        self.registers
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .update_register(
+                DDC_INPUT_SELECT_REGISTER,
+                |value| value & !DDC_STREAM_ENABLE_BIT,
+                "could not disable operational direct DDC stream",
+            )
     }
 
     fn reset_fifo(&self) -> Result<(), XdmaError> {
-        self.registers.update_register(
+        let registers = self
+            .registers
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        registers.update_register(
             FIFO_RESET_REGISTER,
             |value| value & !DDC_FIFO_RESET_BIT,
             "could not assert operational direct DDC FIFO reset",
         )?;
-        self.registers.update_register(
+        registers.update_register(
             FIFO_RESET_REGISTER,
             |value| value | DDC_FIFO_RESET_BIT,
             "could not release operational direct DDC FIFO reset",
@@ -808,12 +1147,30 @@ impl OperationalRxSession {
         if self.stopped {
             return Ok(());
         }
+        self.reader_stop.store(true, Ordering::SeqCst);
+        let reader_join = self.reader.take().map_or(Ok(()), |reader| {
+            reader.join().map_err(|_| {
+                XdmaError::Incompatible("direct XDMA RX reader thread panicked".into())
+            })
+        });
         let disable = self.disable_stream();
         thread::sleep(Duration::from_millis(1));
-        let clear_rates = self.registers.write_register(DDC_RATE_REGISTER, 0);
+        let clear_rates = self
+            .registers
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .write_register(DDC_RATE_REGISTER, 0);
         let reset = self.reset_fifo();
-        let safe = self.registers.force_safe_receive_state();
-        let result = disable.and(clear_rates).and(reset).and(safe);
+        let safe = self
+            .registers
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .force_safe_receive_state();
+        let result = reader_join
+            .and(disable)
+            .and(clear_rates)
+            .and(reset)
+            .and(safe);
         self.stopped = result.is_ok();
         result
     }
@@ -1194,25 +1551,25 @@ mod tests {
     }
 
     #[test]
-    fn v29_plus_treats_bit31_as_recoverable_high_water() {
+    fn v29_treats_bit31_as_recoverable_high_water() {
         let almost_full = FifoSnapshot {
             depth_words: 16_000,
             overflow: true,
             ..FifoSnapshot::default()
         };
-        assert!(!fifo_has_hard_fault(almost_full, FifoStatusPolicy::V29Plus));
-        assert!(fifo_requires_drain(almost_full, FifoStatusPolicy::V29Plus));
+        assert!(!fifo_has_hard_fault(almost_full, FifoStatusPolicy::V29));
+        assert!(fifo_requires_drain(almost_full, FifoStatusPolicy::V29));
         assert!(!fifo_requires_drain(
             FifoSnapshot {
                 depth_words: 0,
                 ..almost_full
             },
-            FifoStatusPolicy::V29Plus
+            FifoStatusPolicy::V29
         ));
     }
 
     #[test]
-    fn v29_and_v30_select_the_new_fifo_status_policy() {
+    fn v29_exception_does_not_leak_into_v30_legacy_compatibility() {
         let identity = |firmware_minor| SaturnIdentity {
             product_id: 1,
             pcb_version: 2,
@@ -1228,27 +1585,27 @@ mod tests {
         );
         assert_eq!(
             FifoStatusPolicy::for_identity(&identity(29)),
-            FifoStatusPolicy::V29Plus
+            FifoStatusPolicy::V29
         );
         assert_eq!(
             FifoStatusPolicy::for_identity(&identity(30)),
-            FifoStatusPolicy::V29Plus
+            FifoStatusPolicy::Legacy
         );
     }
 
     #[test]
-    fn v29_plus_zero_depth_bit29_is_an_empty_observation() {
+    fn v29_zero_depth_bit29_is_an_empty_observation() {
         let empty = FifoSnapshot {
             depth_words: 0,
             underflow: true,
             ..FifoSnapshot::default()
         };
-        assert!(!fifo_has_hard_fault(empty, FifoStatusPolicy::V29Plus));
+        assert!(!fifo_has_hard_fault(empty, FifoStatusPolicy::V29));
         let nonempty = FifoSnapshot {
             depth_words: 1,
             ..empty
         };
-        assert!(fifo_has_hard_fault(nonempty, FifoStatusPolicy::V29Plus));
+        assert!(fifo_has_hard_fault(nonempty, FifoStatusPolicy::V29));
     }
 
     #[test]
@@ -1261,7 +1618,7 @@ mod tests {
                 underflow: true,
                 ..FifoSnapshot::default()
             },
-            FifoStatusPolicy::V29Plus,
+            FifoStatusPolicy::V29,
         );
         assert_eq!(stats.fifo_almost_full, 1);
         assert_eq!(stats.fifo_empty_observations, 1);
@@ -1273,5 +1630,48 @@ mod tests {
     fn allocated_dma_buffer_has_page_alignment() {
         let buffer = AlignedBuffer::new(DMA_MAX_READ_BYTES).unwrap();
         assert_eq!(buffer.ptr.as_ptr() as usize % DMA_ALIGNMENT, 0);
+    }
+
+    #[test]
+    fn bounded_rx_pool_reclaims_oldest_unread_buffer() {
+        let pool = OperationalRxBufferPool::new(2, false).unwrap();
+        let (first, dropped) = pool.acquire_for_reader().unwrap();
+        assert_eq!(dropped, 0);
+        pool.publish(FilledRxBuffer {
+            buffer: first,
+            len: 4096,
+            sequence: 0,
+        });
+        let (second, dropped) = pool.acquire_for_reader().unwrap();
+        assert_eq!(dropped, 0);
+        pool.publish(FilledRxBuffer {
+            buffer: second,
+            len: 8192,
+            sequence: 1,
+        });
+
+        let (reclaimed, dropped) = pool.acquire_for_reader().unwrap();
+        assert_eq!(dropped, 4096);
+        pool.publish(FilledRxBuffer {
+            buffer: reclaimed,
+            len: 16_384,
+            sequence: 2,
+        });
+        assert_eq!(pool.ready_len(), 2);
+        assert_eq!(pool.try_take_ready().unwrap().sequence, 1);
+        assert_eq!(pool.try_take_ready().unwrap().sequence, 2);
+    }
+
+    #[test]
+    fn parser_resynchronizes_after_a_host_discontinuity() {
+        let frame = test_frame();
+        let mut parser = DdcStreamParser::new(direct_ddc_rate_word());
+        let mut iq_samples = Vec::new();
+        parser.feed(&frame[..32], &mut iq_samples).unwrap();
+        parser.mark_host_discontinuity();
+        parser.feed(&frame, &mut iq_samples).unwrap();
+        assert_eq!(parser.stats.host_discontinuities, 1);
+        assert_eq!(parser.stats.frames, 1);
+        assert_eq!(parser.stats.header_errors, 0);
     }
 }

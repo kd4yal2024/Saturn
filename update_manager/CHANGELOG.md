@@ -4,6 +4,22 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
 
 ## [Unreleased]
 ### Changed
+- Decoupled operational Direct-XDMA receive draining from WDSP, WebSocket,
+  control, telemetry, and filesystem work. A dedicated priority-22 C2H owner
+  now feeds a preallocated, page-aligned, locked 256-buffer/8 MiB ring. If the
+  downstream consumer exhausts that bounded reserve, the owner discards the
+  oldest unread host buffer, records the dropped bytes and parser-visible
+  discontinuity, and continues draining the FPGA. The service grants 16 MiB
+  of locked memory and retains the existing transactional P2/Direct-XDMA
+  ownership boundary, so legacy P2 clients are unchanged.
+- Scope the V29 FIFO-status exception to firmware 1.29 exactly. The V30
+  compatibility image now matches the complete V27 legacy contract, including
+  a zero legacy bit 31; full and almost-full evidence remains in the extended
+  telemetry bank. The 2026-09-15 failure mechanism and qualification gap are
+  retained in `docs/V30_BRIDGE_FIFO_INCIDENT.md`. Direct-XDMA
+  RX can start on primary PCB2 V29/V30, while RF TX is forcibly inhibited on
+  both until each image completes separate dummy-load TX qualification; V27
+  retains its existing production TX qualification.
 - Performance Lab now displays and exports P2 speaker pacing diagnostics,
   including process-lifetime loop/receive/DMA maxima and threshold counts,
   speaker-thread scheduling identity, peak software-queue depth, and the full
@@ -40,7 +56,8 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
   shared priority-20 XDMA completion kthread. Live RF diagnostics showed that
   equal-priority completion work could delay an awakened H2C writer by 6--10
   ms while continuous C2H completions were serviced, eventually draining the
-  DUC FIFO; the installed service now grants `LimitRTPRIO=21`.
+  DUC FIFO. TX requires priority 21; the service ceiling is now 22 for the
+  dedicated C2H reader described above.
 - Batch up to eight consecutive, distinct direct-XDMA DUC IQ frames while
   preserving three-frame FIFO ceiling headroom. Pacing writes the largest safe
   partial batch immediately instead of draining the FIFO until the whole batch

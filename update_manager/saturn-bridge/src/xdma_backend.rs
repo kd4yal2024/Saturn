@@ -16,7 +16,7 @@ use crate::wdsp::{normalize_audio_frame_float_count, WdspRxEngine, WDSP_AUDIO_RA
 use crate::xdma::{SaturnIdentity, XdmaError};
 use crate::xdma_rx::{
     OperationalRxSession, DIRECT_DDC_INDEX, DIRECT_DDC_SAMPLE_RATE_KHZ,
-    RUNTIME_FIFO_DRAIN_MAX_READS,
+    OPERATIONAL_RX_BUFFER_BYTES, OPERATIONAL_RX_BUFFER_COUNT, RUNTIME_HOST_DRAIN_MAX_READS,
 };
 use crate::xdma_telemetry::{record_runtime_readiness, TelemetryValue};
 use crate::xdma_tx_radio::{DirectTxSnapshot, DirectXdmaTxRadio};
@@ -63,6 +63,10 @@ impl CommandEffects {
         self.tx_state_dirty |= other.tx_state_dirty;
         self.radio_state_dirty |= other.radio_state_dirty;
     }
+}
+
+fn effective_direct_tx_rf_enabled(requested: bool, firmware_qualified: bool) -> bool {
+    requested && firmware_qualified
 }
 
 fn command_effects(command: &TciCommand) -> CommandEffects {
@@ -182,7 +186,7 @@ pub(crate) fn run(config: BridgeConfig) -> Result<(), Box<dyn Error>> {
     result
 }
 
-fn run_inner(config: BridgeConfig, ready_path: &Path) -> Result<(), Box<dyn Error>> {
+fn run_inner(mut config: BridgeConfig, ready_path: &Path) -> Result<(), Box<dyn Error>> {
     let _signal_guard = SignalGuard::install()?;
     let radio_model = Arc::new(Mutex::new(RadioModel::new(
         DIRECT_DDC_INDEX as u8,
@@ -204,9 +208,21 @@ fn run_inner(config: BridgeConfig, ready_path: &Path) -> Result<(), Box<dyn Erro
         model.desired.pure_signal_enabled = false;
         model.observed.pure_signal_state = PureSignalState::Off;
     }
+    let tx_radio = Arc::new(DirectXdmaTxRadio::open(config.tx_power_meter_scale)?);
+    let requested_tx_rf_enabled = config.remote_tx_rf_enabled;
+    let remote_tx_rf_enabled =
+        effective_direct_tx_rf_enabled(requested_tx_rf_enabled, tx_radio.rf_tx_qualified());
+    if requested_tx_rf_enabled && !remote_tx_rf_enabled {
+        eprintln!(
+            "saturn-bridge: direct XDMA RF TX requested but this firmware is not yet TX-qualified; continuing RX with RF TX inhibited"
+        );
+    }
+    // TCI capability messages must advertise the effective safety gate, not
+    // merely the configured request, so legacy clients cannot mistake an
+    // unqualified firmware image for an RF-enabled backend.
+    config.remote_tx_rf_enabled = remote_tx_rf_enabled;
     let (tci, command_rx) = TciFrontend::bind(&config, radio_model.clone())?;
     let tci = Arc::new(tci);
-    let tx_radio = Arc::new(DirectXdmaTxRadio::open(config.tx_power_meter_scale)?);
     let (tx_cmd_tx, tx_cmd_rx) = mpsc::channel();
     let (tx_audio_ingress, tx_audio_rx, tx_audio_stats) = TxAudioIngress::bounded();
     let (tx_event_tx, tx_event_rx) = mpsc::channel();
@@ -254,10 +270,11 @@ fn run_inner(config: BridgeConfig, ready_path: &Path) -> Result<(), Box<dyn Erro
         &identity,
         &rx,
         tx_radio.snapshot(),
-        config.remote_tx_rf_enabled,
+        remote_tx_rf_enabled,
+        requested_tx_rf_enabled,
     )?;
     println!(
-        "saturn-bridge: direct XDMA backend starting product={} pcb={} firmware={}.{} ddc={} adc=ADC1 frequency={}Hz rate={}kHz TCI={} TX={} max={}W PureSignal=disabled",
+        "saturn-bridge: direct XDMA backend starting product={} pcb={} firmware={}.{} ddc={} adc=ADC1 frequency={}Hz rate={}kHz rx_buffers={} rx_locked_bytes={} TCI={} TX={} max={}W PureSignal=disabled",
         identity.product_id,
         identity.pcb_version,
         identity.firmware_major,
@@ -265,8 +282,10 @@ fn run_inner(config: BridgeConfig, ready_path: &Path) -> Result<(), Box<dyn Erro
         DIRECT_DDC_INDEX,
         rx.frequency_hz(),
         DIRECT_DDC_SAMPLE_RATE_KHZ,
+        OPERATIONAL_RX_BUFFER_COUNT,
+        OPERATIONAL_RX_BUFFER_BYTES,
         config.tci_bind_addr,
-        if config.remote_tx_rf_enabled { "RF-enabled" } else { "RF-inhibited" },
+        if remote_tx_rf_enabled { "RF-enabled" } else { "RF-inhibited" },
         DIRECT_TX_MAX_WATTS,
     );
     // Readiness persistence can occasionally stall on an appliance SD card
@@ -278,11 +297,10 @@ fn run_inner(config: BridgeConfig, ready_path: &Path) -> Result<(), Box<dyn Erro
     let runtime_result = (|| -> Result<(), Box<dyn Error>> {
         while !STOP_REQUESTED.load(Ordering::Relaxed) {
             let mut did_work = false;
-            // Service the continuously advancing hardware FIFO before bounded
-            // client control work. A browser can submit dozens of preferences in
-            // one burst; letting that burst run first can starve DDC long enough
-            // to cross the FPGA FIFO threshold.
-            for drain_read in 0..RUNTIME_FIFO_DRAIN_MAX_READS {
+            // Consume a bounded slice of the host ring before client control
+            // work. The dedicated reader continues servicing the hardware FIFO
+            // during every DSP, publication, command, and filesystem operation.
+            for _ in 0..RUNTIME_HOST_DRAIN_MAX_READS {
                 let outcome = rx.read_iq(&mut iq_samples)?;
                 if outcome.samples_ready {
                     did_work = true;
@@ -304,12 +322,6 @@ fn run_inner(config: BridgeConfig, ready_path: &Path) -> Result<(), Box<dyn Erro
                 if !outcome.requires_drain {
                     break;
                 }
-                if drain_read + 1 == RUNTIME_FIFO_DRAIN_MAX_READS {
-                    return Err(XdmaError::Incompatible(format!(
-                        "operational XDMA RX FIFO remained at high water after {RUNTIME_FIFO_DRAIN_MAX_READS} bounded runtime drains"
-                    ))
-                    .into());
-                }
             }
 
             let command_started = Instant::now();
@@ -329,7 +341,7 @@ fn run_inner(config: BridgeConfig, ready_path: &Path) -> Result<(), Box<dyn Erro
                     &mut rx,
                     &tx_cmd_tx,
                     &mut tx_control,
-                    config.remote_tx_rf_enabled,
+                    remote_tx_rf_enabled,
                     config.tx_audio_source,
                     &tx_audio_ingress,
                 )?);
@@ -449,7 +461,8 @@ fn run_inner(config: BridgeConfig, ready_path: &Path) -> Result<(), Box<dyn Erro
                     &identity,
                     &rx,
                     tx_radio.snapshot(),
-                    config.remote_tx_rf_enabled,
+                    remote_tx_rf_enabled,
+                    requested_tx_rf_enabled,
                 )?;
                 println!(
                 "saturn-bridge: direct XDMA RX backend ready dma_reads={} iq_pairs={} rf_safe=1",
@@ -464,7 +477,8 @@ fn run_inner(config: BridgeConfig, ready_path: &Path) -> Result<(), Box<dyn Erro
                     &identity,
                     &rx,
                     tx_radio.snapshot(),
-                    config.remote_tx_rf_enabled,
+                    remote_tx_rf_enabled,
+                    requested_tx_rf_enabled,
                 )?;
                 last_readiness = Instant::now();
             }
@@ -483,7 +497,7 @@ fn run_inner(config: BridgeConfig, ready_path: &Path) -> Result<(), Box<dyn Erro
                 let stats = rx.stats();
                 let tx = tx_radio.snapshot();
                 println!(
-                "saturn-bridge: xdma status={} frequency_hz={} dma_reads={} dma_bytes={} iq_pairs={} rx_fifo_hwm={} header_resync={} header_errors={} rx_fifo_thresholds={} rx_fifo_almost_full={} rx_fifo_empty_observations={} rx_fifo_faults={} tx_requested={} tx_stream={} tx_keyed={} tx_dma_writes={} tx_frames={} tx_fifo_lwm={} tx_fifo_hwm={} tx_fifo_faults={} forward_w={:.3} reverse_w={:.3} swr={:.2}",
+                "saturn-bridge: xdma status={} frequency_hz={} dma_reads={} dma_bytes={} iq_pairs={} rx_fifo_hwm={} header_resync={} header_errors={} rx_fifo_thresholds={} rx_fifo_almost_full={} rx_fifo_empty_observations={} rx_fifo_faults={} rx_host_ring_hwm={} rx_host_buffer_drops={} rx_host_drop_bytes={} rx_host_discontinuities={} rx_host_pool_starvations={} tx_requested={} tx_stream={} tx_keyed={} tx_dma_writes={} tx_frames={} tx_fifo_lwm={} tx_fifo_hwm={} tx_fifo_faults={} forward_w={:.3} reverse_w={:.3} swr={:.2}",
                 readiness_state,
                 rx.frequency_hz(),
                 stats.dma_reads,
@@ -496,6 +510,11 @@ fn run_inner(config: BridgeConfig, ready_path: &Path) -> Result<(), Box<dyn Erro
                 stats.fifo_almost_full,
                 stats.fifo_empty_observations,
                 stats.fifo_overflows + stats.fifo_underflows,
+                stats.host_ring_depth_hwm,
+                stats.host_buffer_drops,
+                stats.host_buffer_drop_bytes,
+                stats.host_discontinuities,
+                stats.host_pool_starvations,
                 u8::from(tx_control.requested),
                 u8::from(tx.stream_active),
                 u8::from(tx.keyed),
@@ -532,6 +551,18 @@ fn run_inner(config: BridgeConfig, ready_path: &Path) -> Result<(), Box<dyn Erro
         &[
             ("dma_reads", TelemetryValue::number(rx.stats().dma_reads)),
             ("iq_pairs", TelemetryValue::number(rx.stats().samples)),
+            (
+                "host_buffer_drops",
+                TelemetryValue::number(rx.stats().host_buffer_drops),
+            ),
+            (
+                "host_discontinuities",
+                TelemetryValue::number(rx.stats().host_discontinuities),
+            ),
+            (
+                "host_pool_starvations",
+                TelemetryValue::number(rx.stats().host_pool_starvations),
+            ),
             ("rf_safe", TelemetryValue::boolean(true)),
         ],
     )?;
@@ -948,6 +979,7 @@ fn write_readiness(
     rx: &OperationalRxSession,
     tx: DirectTxSnapshot,
     remote_tx_rf_enabled: bool,
+    requested_tx_rf_enabled: bool,
 ) -> Result<(), XdmaError> {
     if !tx.stream_active {
         rx.verify_receive_safe()?;
@@ -1008,11 +1040,50 @@ fn write_readiness(
                 TelemetryValue::number(stats.header_resyncs),
             ),
             ("header_errors", TelemetryValue::number(stats.header_errors)),
+            (
+                "host_ring_buffers",
+                TelemetryValue::number(OPERATIONAL_RX_BUFFER_COUNT),
+            ),
+            (
+                "host_ring_bytes",
+                TelemetryValue::number(OPERATIONAL_RX_BUFFER_BYTES),
+            ),
+            (
+                "host_ring_hwm",
+                TelemetryValue::number(stats.host_ring_depth_hwm),
+            ),
+            (
+                "host_buffer_drops",
+                TelemetryValue::number(stats.host_buffer_drops),
+            ),
+            (
+                "host_buffer_drop_bytes",
+                TelemetryValue::number(stats.host_buffer_drop_bytes),
+            ),
+            (
+                "host_discontinuities",
+                TelemetryValue::number(stats.host_discontinuities),
+            ),
+            (
+                "host_pool_starvations",
+                TelemetryValue::number(stats.host_pool_starvations),
+            ),
             ("rf_safe", TelemetryValue::boolean(!tx.keyed)),
+            // Preserve the legacy capability contract: the backend accepts TX
+            // audio and can exercise RF-inhibited DUC staging. RF authority is
+            // the separate, explicit qualification bit below.
             ("tx_capable", TelemetryValue::boolean(true)),
+            (
+                "tx_rf_qualified",
+                TelemetryValue::boolean(tx.rf_tx_qualified),
+            ),
             (
                 "tx_rf_enabled",
                 TelemetryValue::boolean(remote_tx_rf_enabled),
+            ),
+            (
+                "tx_rf_requested",
+                TelemetryValue::boolean(requested_tx_rf_enabled),
             ),
             ("tx_max_watts", TelemetryValue::number(DIRECT_TX_MAX_WATTS)),
             (
@@ -1118,6 +1189,14 @@ mod tests {
     fn readiness_requires_advancing_dma_and_iq() {
         assert!(READY_DMA_READS > 0);
         assert!(READY_IQ_PAIRS >= READY_DMA_READS);
+    }
+
+    #[test]
+    fn direct_rf_requires_both_operator_configuration_and_firmware_qualification() {
+        assert!(effective_direct_tx_rf_enabled(true, true));
+        assert!(!effective_direct_tx_rf_enabled(true, false));
+        assert!(!effective_direct_tx_rf_enabled(false, true));
+        assert!(!effective_direct_tx_rf_enabled(false, false));
     }
 
     #[test]

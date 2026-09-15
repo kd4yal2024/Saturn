@@ -20,10 +20,11 @@ per-ADC physical overrange episode counts, total overrange clocks, longest
 continuous episode, and coherent latest/current episode duration and peak.
 Durations use the exported 122.88 MHz observation clock. P2 V52 exposes the
 guarded V30 bank and does not change the deferred speaker refill policy. The
-V30 compatibility revision restores the V27 FIFO legacy read-to-clear boundary
-and keeps almost-full transitions in extended telemetry instead of reporting
-them as terminal legacy overflow. Configured FIFO capacity still asserts legacy
-bit 31. This entry does not claim a qualified bitstream or hardware result until
+V30 compatibility revision restores the complete V27 FIFO legacy boundary:
+read-to-clear behavior is retained and legacy bit 31 remains zero, matching the
+V27 block design where all monitor overflow inputs were tied low. Almost-full
+and configured-capacity transitions remain visible in extended telemetry rather
+than becoming terminal legacy status. This entry does not claim a qualified bitstream or hardware result until
 the full build, packaging, load, and controlled/antenna validation gates pass.
 The initial V30 implementation missed setup timing inside generated XDMA PCIe
 logic; the checked-in V30 build flow now uses the timing strategy that closed

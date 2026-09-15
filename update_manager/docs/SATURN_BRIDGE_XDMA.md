@@ -36,6 +36,35 @@ to RX, and restored the prior services. The correction deliberately waits for
 DMA writes to become visible before making another prefill decision and admits
 each live frame only with three complete frames of FIFO ceiling headroom.
 
+## Scalable C2H receive candidate (2026-09-13)
+
+The V30 connection failure observed on 2026-09-15 and the exact V27/V30 FIFO
+contract difference are preserved in `V30_BRIDGE_FIFO_INCIDENT.md`.
+
+The operational Direct-XDMA backend no longer services C2H from the same loop
+that runs WDSP, publishes IQ/audio, handles browser control, writes readiness,
+and samples telemetry. A dedicated `saturn-xdma-rx` thread exclusively owns
+`/dev/xdma0_c2h_0`, runs at `SCHED_FIFO` priority 22 on a CPU separate from the
+priority-21 TX producer when the host exposes more than one allowed CPU, and
+feeds a preallocated 256-buffer/8 MiB locked raw-DMA ring. The service grants
+`LimitRTPRIO=22` and `LimitMEMLOCK=16M` for that bounded design.
+
+The parser/DSP stage consumes the ring independently. If it exhausts all free
+buffers, the reader reclaims the oldest unread buffer, accounts the dropped
+buffer and byte totals, and continues draining hardware. A DMA sequence gap
+resets parser synchronization and records a host discontinuity before parsing
+resumes. This makes a recoverable host-side media gap explicit without
+weakening fatal FPGA FIFO, DMA, or framing checks.
+
+Firmware policy is versioned rather than inferred: V29 alone receives its
+special bit-31 almost-full and zero-depth bit-29 handling, while the V30
+compatibility image uses the restored V27 legacy contract. Primary PCB2
+firmware V27 through V30 can enter the Direct-XDMA runtime, but only the
+already-qualified V27 image can key RF. V28/V29/V30 are forced to RF-inhibited
+operation until separate dummy-load qualification advances that gate. The
+candidate has passed the 250-test Linux bridge suite; it still requires the
+V30 hardware RX connection/reconnect/soak gates before qualification.
+
 The next hardware run confirmed that pacing removed the ceiling fault: 460 DUC
 frames were staged with a 3,710-word high-water and no threshold or overflow.
 The acceptance client then remained silent while waiting up to eight seconds
@@ -94,10 +123,11 @@ isolated the remaining boundary: H2C completion interrupts arrived in tens of
 microseconds, but an awakened priority-20 TX producer could wait 6--10 ms while
 the equal-priority shared completion kthread continued servicing C2H work.
 Production TX therefore runs at FIFO priority 21, one level above the
-priority-20 completion thread, and the service grants `LimitRTPRIO=21`. This
-preserves the power, SWR, watchdog, ceiling-headroom, and receive-safe cleanup
-gates and requires one more inhibited acceptance plus live repeated-key
-confirmation.
+priority-20 completion thread. The service originally granted
+`LimitRTPRIO=21` for that correction and now grants 22 for the dedicated C2H
+reader. This preserves the power, SWR, watchdog, ceiling-headroom, and
+receive-safe cleanup gates and requires one more inhibited acceptance plus
+live repeated-key confirmation.
 
 The priority-21 live follow-up still caught one second-key underflow. Kernel
 timing showed that the H2C interrupt arrived promptly, but a synchronous
@@ -774,10 +804,11 @@ and service restoration, the harness atomically records the result in
 The first two client runs exposed a genuine debug-build starvation path: the
 runtime synchronized WDSP and published the complete radio snapshot after each
 stream-control command, allowing the DDC FIFO to reach its 16,384-word
-threshold. The operational loop now drains DMA before bounded control work,
-handles at most eight commands per slice, synchronizes WDSP only for actual DSP
-changes, and publishes targeted tuning/TX acknowledgements instead of flooding
-the complete state.
+threshold. The initial correction drained DMA before bounded control work,
+handled at most eight commands per slice, synchronized WDSP only for actual DSP
+changes, and published targeted tuning/TX acknowledgements. The scalable C2H
+candidate above supersedes that scheduling coupling by moving hardware reads
+to their own owner thread.
 
 The subsequent 45-second PCB2/firmware-1.27 client run passed:
 

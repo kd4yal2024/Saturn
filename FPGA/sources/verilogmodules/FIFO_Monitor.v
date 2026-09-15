@@ -20,7 +20,8 @@
 //     bit(15:0)   Current FIFO Depth
 //     bit 29      1 if the FIFO has been observed empty, from depth
 //     bit 30      1 if the programmed depth threshold has been reached
-//     bit 31      1 if the configured FIFO capacity has been reached
+//     bit 31      Reserved and held at 0 for the V27 legacy host contract.
+//                 Capacity/almost-full evidence is available in the extended bank.
 //     bits 29-31 Cleared by read.
 //
 //  addr 10         Control register 1 (read/write, with no read side effect)
@@ -112,7 +113,7 @@ module FIFO_Monitor #
   reg [15:0] fifo1_threshold;                // writable register - threshold to trigger intr
   reg [15:0] fifo1_count_reg;                // current FIFO word count
   reg int1_enable;                           // 1 enables interrupt generation
-  reg fifo1_overflowed;                      // set true if configured FIFO depth is reached
+  reg fifo1_overflowed;                      // V27-compatible legacy bit 31; held clear
   reg fifo1_over_threshold;                  // set if FIFO exceeds threshold
   reg fifo1_underflowed;                     // set if FIFO emptied (from count)
   reg interrupt1_out;                        // interrupt bit out 
@@ -120,7 +121,7 @@ module FIFO_Monitor #
   reg [15:0] fifo2_threshold; // writable register - threshold to trigger intr
   reg [15:0] fifo2_count_reg; // current FIFO word count
   reg int2_enable;                           // 1 enables interrupt generation
-  reg fifo2_overflowed;                      // set true if configured FIFO depth is reached
+  reg fifo2_overflowed;                      // V27-compatible legacy bit 31; held clear
   reg fifo2_over_threshold;                  // set if FIFO exceeds threshold
   reg fifo2_underflowed;                     // set if FIFO emptied (from count)
   reg interrupt2_out;                        // interrupt bit out 
@@ -128,7 +129,7 @@ module FIFO_Monitor #
   reg [15:0] fifo3_threshold; // writable register - threshold to trigger intr
   reg [15:0] fifo3_count_reg; // current FIFO word count
   reg int3_enable;                           // 1 enables interrupt generation
-  reg fifo3_overflowed;                      // set true if configured FIFO depth is reached
+  reg fifo3_overflowed;                      // V27-compatible legacy bit 31; held clear
   reg fifo3_over_threshold;                  // set if FIFO exceeds threshold
   reg fifo3_underflowed;                     // set if FIFO emptied (from count)
   reg interrupt3_out;                        // interrupt bit out 
@@ -136,7 +137,7 @@ module FIFO_Monitor #
   reg [15:0] fifo4_threshold; // writable register - threshold to trigger intr
   reg [15:0] fifo4_count_reg; // current FIFO word count
   reg int4_enable;                           // 1 enables interrupt generation
-  reg fifo4_overflowed;                      // set true if configured FIFO depth is reached
+  reg fifo4_overflowed;                      // V27-compatible legacy bit 31; held clear
   reg fifo4_over_threshold;                  // set if FIFO exceeds threshold
   reg fifo4_underflowed;                     // set if FIFO emptied (from count)
   reg interrupt4_out;                        // interrupt bit out 
@@ -354,8 +355,10 @@ module FIFO_Monitor #
 
       // Continuous telemetry accumulation. Almost-full, full, and empty
       // transitions remain available through the V29 extended bank. The
-      // almost-full input is deliberately excluded from legacy status bit 31:
-      // legacy hosts expect that bit to mean the FIFO reached capacity.
+      // almost-full and full observations are deliberately excluded from
+      // legacy status bit 31. V27 tied the monitor overflow inputs low, so
+      // existing hosts never observed that bit. Preserve that exact boundary
+      // and retain the useful evidence in extrema and transition counters.
       if (fifo1_count < fifo1_min) fifo1_min <= fifo1_count;
       if (fifo2_count < fifo2_min) fifo2_min <= fifo2_count;
       if (fifo3_count < fifo3_min) fifo3_min <= fifo3_count;
@@ -368,10 +371,6 @@ module FIFO_Monitor #
       if (fifo2_event && !(&fifo2_events)) fifo2_events <= fifo2_events + 32'd1;
       if (fifo3_event && !(&fifo3_events)) fifo3_events <= fifo3_events + 32'd1;
       if (fifo4_event && !(&fifo4_events)) fifo4_events <= fifo4_events + 32'd1;
-      if (fifo1_full_now) fifo1_overflowed <= 1'b1;
-      if (fifo2_full_now) fifo2_overflowed <= 1'b1;
-      if (fifo3_full_now) fifo3_overflowed <= 1'b1;
-      if (fifo4_full_now) fifo4_overflowed <= 1'b1;
       fifo1_overflow_prev <= fifo1_overflow_sync;
       fifo2_overflow_prev <= fifo2_overflow_sync;
       fifo3_overflow_prev <= fifo3_overflow_sync;

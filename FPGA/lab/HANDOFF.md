@@ -11,9 +11,10 @@ P2 V52 without changing the V29 signal path or the deferred speaker refill
 policy. It adds physical ADC overrange episode, high-clock duration, and
 associated peak telemetry so lightning/static bursts can be distinguished
 from repeated software observation of one sustained condition. The V30
-compatibility candidate also restores the V27 legacy FIFO read-to-clear
-boundary and reserves legacy bit 31 for configured-capacity observations;
-almost-full transitions remain in the V29 extended event counters. No V30
+compatibility candidate also restores the complete V27 legacy FIFO boundary:
+read-to-clear behavior is retained and legacy bit 31 remains zero, matching the
+V27 block design where its monitor inputs were tied low. Almost-full and
+configured-capacity transitions remain in the extended event counters. No V30
 build, package, G2 load, or hardware qualification is claimed here until those
 gates are completed and recorded separately.
 

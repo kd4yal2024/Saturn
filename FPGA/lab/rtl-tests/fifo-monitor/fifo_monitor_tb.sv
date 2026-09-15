@@ -87,7 +87,7 @@ module fifo_monitor_tb;
     axi_read(16'h00, value); // clear the preceding full/empty legacy observations
 
     // An almost-full input remains an extended event source, but V30 must not
-    // expose it as legacy bit 31. That bit is reserved for configured capacity.
+    // expose it as legacy bit 31. V27 tied that legacy source low.
     c1 <= 15; o1 <= 0;
     repeat (3) @(posedge clk);
     axi_read(16'h54, event_before);
@@ -125,13 +125,19 @@ module fifo_monitor_tb;
     rready <= 0;
     c1 <= 5;
 
-    // A configured-capacity observation is the genuine legacy bit-31 event.
+    // Configured capacity is also extended-only. V27 tied the legacy bit-31
+    // source low, and V30 must preserve that exact host-visible contract.
+    axi_read(16'h54, event_before);
     repeat (2) @(posedge clk);
     c1 <= 16;
     repeat (2) @(posedge clk);
     axi_read(16'h00, value);
-    if (value[31] !== 1'b1)
-      $fatal(1, "configured-capacity event missing from legacy status: %h", value);
+    if (value[31] !== 1'b0)
+      $fatal(1, "configured capacity leaked into V27 legacy status: %h", value);
+    axi_read(16'h54, value);
+    if (value <= event_before)
+      $fatal(1, "configured capacity did not increment extended events: before=%0d after=%0d",
+             event_before, value);
 
     // Restore the V27 read-to-clear boundary: conditions present while the
     // response is accepted are not copied back into the sticky legacy bits.

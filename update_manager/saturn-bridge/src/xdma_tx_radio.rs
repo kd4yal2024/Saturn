@@ -3,13 +3,14 @@
 //! This deliberately keeps the validated Phase 4/5 one-shot probes intact.
 //! The runtime owns a separate register descriptor and H2C0 descriptor, but
 //! shares their proven FIFO geometry, sample packing, register ordering, and
-//! fail-safe receive cleanup. Production enablement remains limited to the
+//! fail-safe receive cleanup. V28/V29/V30 may open this receive-safe companion
+//! so Direct-XDMA RX can run, but RF keying remains limited to the separately
 //! field-qualified primary PCB2 firmware 1.27 image.
 
 use crate::radio_model::RadioModel;
 use crate::tx_thread::{TxRadio, TxRadioResult};
 use crate::xdma::{
-    alex_receive_state_word, alex_tx_filter_bits, ensure_p2app_inactive, XdmaError,
+    alex_receive_state_word, alex_tx_filter_bits, ensure_p2app_inactive, SaturnIdentity, XdmaError,
     XdmaRegisterDevice, ALEX_ANT1_BIT, ALEX_TX_FILTER_RX_ANTENNA_REGISTER,
     ALEX_TX_FILTER_TX_ANTENNA_REGISTER,
 };
@@ -25,6 +26,9 @@ use std::time::{Duration, Instant};
 
 const DEFAULT_DUC_DEVICE: &str = "/dev/xdma0_h2c_0";
 const DEFAULT_USER_DEVICE: &str = "/dev/xdma0_user";
+const DIRECT_RUNTIME_MIN_FIRMWARE_MINOR: u16 = 27;
+const DIRECT_RUNTIME_MAX_FIRMWARE_MINOR: u16 = 30;
+const RF_TX_QUALIFIED_FIRMWARE_MINOR: u16 = 27;
 
 const TX_CONFIG_REGISTER: u64 = 0x2008;
 const TX_DUC_REGISTER: u64 = 0x200c;
@@ -82,6 +86,7 @@ const DIRECT_TX_MIC_RECENCY_WINDOW: Duration = Duration::from_millis(150);
 
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct DirectTxSnapshot {
+    pub(crate) rf_tx_qualified: bool,
     pub(crate) stream_active: bool,
     pub(crate) keyed: bool,
     pub(crate) dma_writes: u64,
@@ -171,6 +176,7 @@ struct DirectTxState {
     dma: File,
     buffer: AlignedBuffer,
     fifo_depth_words: usize,
+    rf_tx_qualified: bool,
     stream_active: bool,
     keyed: bool,
     dma_writes: u64,
@@ -201,19 +207,16 @@ impl DirectTxState {
             .unwrap_or_else(|| PathBuf::from(DEFAULT_DUC_DEVICE));
         let registers = XdmaRegisterDevice::open(&register_path)?;
         let identity = registers.identity();
-        if identity.is_fallback()
-            || identity.pcb_version != 2
-            || identity.firmware_major != 1
-            || identity.firmware_minor != 27
-        {
+        if !direct_runtime_is_supported(identity) {
             return Err(XdmaError::Incompatible(format!(
-                "production direct TX is qualified only for primary Saturn PCB2 firmware 1.27; found pcb={} firmware={}.{} image={}",
+                "direct XDMA runtime supports primary Saturn PCB2 firmware 1.{DIRECT_RUNTIME_MIN_FIRMWARE_MINOR} through 1.{DIRECT_RUNTIME_MAX_FIRMWARE_MINOR}; found pcb={} firmware={}.{} image={}",
                 identity.pcb_version,
                 identity.firmware_major,
                 identity.firmware_minor,
                 if identity.is_fallback() { "fallback" } else { "primary" }
             )));
         }
+        let rf_tx_qualified = direct_rf_tx_is_qualified(identity);
         let dma = OpenOptions::new()
             .write(true)
             .open(&duc_path)
@@ -229,6 +232,7 @@ impl DirectTxState {
             dma,
             buffer,
             fifo_depth_words,
+            rf_tx_qualified,
             stream_active: false,
             keyed: false,
             dma_writes: 0,
@@ -326,6 +330,12 @@ impl DirectTxState {
     }
 
     fn key_with_frame(&mut self, model: &RadioModel, iq: &[f32]) -> Result<(), XdmaError> {
+        if !self.rf_tx_qualified {
+            return Err(XdmaError::Incompatible(
+                "direct XDMA RF TX is not qualified on this firmware; RX and RF-inhibited DUC staging remain available"
+                    .into(),
+            ));
+        }
         let fifo = if !self.stream_active {
             self.configure_stream(model)?;
             self.prefill_frame(iq)?
@@ -800,6 +810,7 @@ impl DirectTxState {
 
     fn snapshot(&self) -> DirectTxSnapshot {
         DirectTxSnapshot {
+            rf_tx_qualified: self.rf_tx_qualified,
             stream_active: self.stream_active,
             keyed: self.keyed,
             dma_writes: self.dma_writes,
@@ -821,6 +832,19 @@ impl DirectTxState {
             last_session: self.last_session,
         }
     }
+}
+
+fn direct_runtime_is_supported(identity: &SaturnIdentity) -> bool {
+    !identity.is_fallback()
+        && identity.pcb_version == 2
+        && identity.firmware_major == 1
+        && (DIRECT_RUNTIME_MIN_FIRMWARE_MINOR..=DIRECT_RUNTIME_MAX_FIRMWARE_MINOR)
+            .contains(&identity.firmware_minor)
+}
+
+fn direct_rf_tx_is_qualified(identity: &SaturnIdentity) -> bool {
+    direct_runtime_is_supported(identity)
+        && identity.firmware_minor == RF_TX_QUALIFIED_FIRMWARE_MINOR
 }
 
 fn steady_state_fifo_fault(snapshot: FifoSnapshot, underflow_is_fault: bool) -> bool {
@@ -865,6 +889,13 @@ impl DirectXdmaTxRadio {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .snapshot()
+    }
+
+    pub(crate) fn rf_tx_qualified(&self) -> bool {
+        self.state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .rf_tx_qualified
     }
 
     fn with_state<T>(
@@ -1136,6 +1167,54 @@ fn calculate_swr(forward_watts: f32, reverse_watts: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn primary_pcb2_identity(firmware_minor: u16) -> SaturnIdentity {
+        SaturnIdentity {
+            product_id: 1,
+            pcb_version: 2,
+            software_id: 4,
+            firmware_major: 1,
+            firmware_minor,
+            clock_mask: 0x0f,
+            user_version: 0,
+        }
+    }
+
+    #[test]
+    fn direct_runtime_accepts_primary_pcb2_v27_through_v30() {
+        for firmware_minor in 27..=30 {
+            assert!(direct_runtime_is_supported(&primary_pcb2_identity(
+                firmware_minor
+            )));
+        }
+        assert!(!direct_runtime_is_supported(&primary_pcb2_identity(26)));
+        assert!(!direct_runtime_is_supported(&primary_pcb2_identity(31)));
+    }
+
+    #[test]
+    fn direct_rf_tx_remains_qualified_only_on_v27() {
+        assert!(direct_rf_tx_is_qualified(&primary_pcb2_identity(27)));
+        for firmware_minor in 28..=30 {
+            assert!(!direct_rf_tx_is_qualified(&primary_pcb2_identity(
+                firmware_minor
+            )));
+        }
+    }
+
+    #[test]
+    fn direct_runtime_still_requires_primary_pcb2_firmware_1() {
+        let mut identity = primary_pcb2_identity(30);
+        identity.software_id = 3;
+        assert!(!direct_runtime_is_supported(&identity));
+
+        let mut identity = primary_pcb2_identity(30);
+        identity.pcb_version = 3;
+        assert!(!direct_runtime_is_supported(&identity));
+
+        let mut identity = primary_pcb2_identity(30);
+        identity.firmware_major = 2;
+        assert!(!direct_runtime_is_supported(&identity));
+    }
 
     #[test]
     fn packs_q_then_i_as_signed_24_bit_big_endian() {
