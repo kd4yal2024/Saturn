@@ -56,6 +56,12 @@ resets parser synchronization and records a host discontinuity before parsing
 resumes. This makes a recoverable host-side media gap explicit without
 weakening fatal FPGA FIFO, DMA, or framing checks.
 
+Direct ownership also establishes sample representation rather than inheriting
+it. Before either probe or operational DDC enable, the bridge sets and reads
+back RF GPIO bit 26, matching P2's `SetByteSwapping(true)` network-order
+contract. Without that step, a cold boot can leave local-order 24-bit samples
+that pass every structural framing check but decode as near-full-scale noise.
+
 Firmware policy is versioned rather than inferred: V29 alone receives its
 special bit-31 almost-full and zero-depth bit-29 handling, while the V30
 compatibility image uses the restored V27 legacy contract. Primary PCB2

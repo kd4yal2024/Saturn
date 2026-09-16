@@ -4,6 +4,13 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
 
 ## [Unreleased]
 ### Changed
+- Direct-XDMA RX now explicitly selects and verifies P2-compatible network
+  byte order before enabling the DDC stream. Previously it decoded signed
+  24-bit network-order samples but inherited the FPGA's global byte-order bit;
+  a cold boot could therefore publish byte-reversed, near-full-scale noise
+  while all DMA framing and FIFO health checks still passed. The field
+  evidence and V27 inheritance trap are retained in
+  `docs/V30_BRIDGE_FIFO_INCIDENT.md`.
 - Decoupled operational Direct-XDMA receive draining from WDSP, WebSocket,
   control, telemetry, and filesystem work. A dedicated priority-22 C2H owner
   now feeds a preallocated, page-aligned, locked 256-buffer/8 MiB ring. If the

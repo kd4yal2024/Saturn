@@ -697,6 +697,11 @@ impl<'a> RxDdcSession<'a> {
         self.disable_stream()?;
         thread::sleep(Duration::from_millis(1));
         self.reset_fifo()?;
+        // P2_app calls SetByteSwapping(true) before enabling its streams. Do
+        // not inherit this global FPGA setting: after a cold boot it is clear,
+        // and decoding those local-order 24-bit samples as network order
+        // produces near-full-scale noise with no recoverable stations.
+        self.registers.enable_network_byte_order()?;
         // Reading the monitor clears its sticky condition flags.  Do this
         // while the stream is disabled so telemetry covers this capture only,
         // rather than an underflow left behind by the previous owner.
@@ -1078,6 +1083,10 @@ impl OperationalRxSession {
         self.disable_stream()?;
         thread::sleep(Duration::from_millis(1));
         self.reset_fifo()?;
+        self.registers
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .enable_network_byte_order()?;
         self.registers
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())

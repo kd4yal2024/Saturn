@@ -108,3 +108,32 @@ the expected incomplete state when only the FPGA half of the two-part repair
 is installed; it is not evidence that the repaired FPGA reintroduced the
 original bit-31 failure. Hardware qualification begins only after the matching
 priority-22 dedicated-reader bridge and service unit are deployed.
+
+## Direct-RX byte-order field follow-up
+
+Deploying the matching priority-22 bridge allowed split control and media
+lanes to remain connected, but received audio and spectrum were unusable
+full-scale noise with no discernible stations. This was a separate Bridge
+ownership bug, not another V30 FIFO-monitor failure.
+
+Read-only capture through the Bridge's TCI IQ output showed ten consecutive
+frames at approximately `0.57` to `0.60` normalized RMS (`-4.9` to `-4.4`
+dBFS), with peaks repeatedly reaching `0.999`. Reinterpreting the exact same
+24-bit sample bytes in the opposite order produced approximately `0.014` to
+`0.027` RMS (`-37.2` to `-31.4` dBFS). The stream had no header errors,
+resynchronizations, FIFO faults, host-ring drops, or discontinuities.
+
+P2 establishes the required representation during startup with
+`SetByteSwapping(true)`, which sets RF GPIO bit 26 before DDC operation. The
+Direct-XDMA RX path decoded every sample as signed 24-bit network byte order
+but never set or verified that global FPGA bit. Earlier V27 tests could inherit
+the correct bit from a preceding P2 owner; a cold boot or ownership sequence
+that did not run P2 left the power-on local byte order active. The resulting
+byte-reversed sample magnitudes looked like near-full-scale random noise even
+though DMA framing remained structurally valid.
+
+The Bridge repair now sets and reads back RF GPIO bit 26 before enabling either
+the probe or operational DDC stream. Failure to establish the byte order is
+fatal before samples are published. Correcting the sample representation also
+removes the false near-full-scale input that drove WDSP's meter to the observed
+`S9+51` level; ordinary per-radio S-meter calibration remains a separate trim.

@@ -21,6 +21,7 @@ const PRODUCT_VERSION_REGISTER: u64 = 0xC004;
 const KEYER_CONFIG_REGISTER: u64 = 0x2000;
 const TX_CONFIG_REGISTER: u64 = 0x2008;
 const RF_GPIO_REGISTER: u64 = 0x2014;
+const RF_DATA_NETWORK_ENDIAN_BIT: u32 = 1 << 26;
 
 pub(crate) const ALEX_TX_FILTER_RX_ANTENNA_REGISTER: u64 = 0xb000;
 pub(crate) const ALEX_RX_FILTER_REGISTER: u64 = 0xb004;
@@ -229,6 +230,26 @@ impl XdmaRegisterDevice {
         action: &'static str,
     ) -> Result<(), XdmaError> {
         update_register(&self.file, offset, update, action)
+    }
+
+    /// Select and verify the byte order used by P2 for DDC, DUC, and codec
+    /// sample streams. A direct-XDMA owner must establish this explicitly:
+    /// the FPGA register survives service hand-offs, but its power-on value is
+    /// local byte order and cannot safely be inherited from a previous owner.
+    pub(crate) fn enable_network_byte_order(&self) -> Result<(), XdmaError> {
+        update_register(
+            &self.file,
+            RF_GPIO_REGISTER,
+            |value| value | RF_DATA_NETWORK_ENDIAN_BIT,
+            "could not select P2-compatible network byte order",
+        )?;
+        let actual = self.read_register(RF_GPIO_REGISTER)?;
+        if actual & RF_DATA_NETWORK_ENDIAN_BIT == 0 {
+            return Err(XdmaError::Incompatible(format!(
+                "network byte-order readback failed: gpio=0x{actual:08x}"
+            )));
+        }
+        Ok(())
     }
 
     /// Force the minimum safe, non-transmitting hardware state.
@@ -578,6 +599,27 @@ mod tests {
         assert_eq!(fixture.read(KEYER_CONFIG_REGISTER), 0x0000_0033);
         assert_eq!(fixture.read(TX_CONFIG_REGISTER), 0x0000_0008);
         device.close_safely().unwrap();
+    }
+
+    #[test]
+    fn network_byte_order_is_explicit_and_preserves_unrelated_gpio_bits() {
+        let fixture = Fixture::new();
+        fixture.install_valid_identity();
+        let unrelated = 0x0000_0055 | TX_RELAY_DISABLE_BIT;
+        fixture.write(RF_GPIO_REGISTER, unrelated);
+
+        let device = XdmaRegisterDevice::open(&fixture.path).unwrap();
+        device.enable_network_byte_order().unwrap();
+
+        assert_eq!(
+            fixture.read(RF_GPIO_REGISTER),
+            unrelated | RF_DATA_NETWORK_ENDIAN_BIT
+        );
+        device.enable_network_byte_order().unwrap();
+        assert_eq!(
+            fixture.read(RF_GPIO_REGISTER),
+            unrelated | RF_DATA_NETWORK_ENDIAN_BIT
+        );
     }
 
     #[test]
