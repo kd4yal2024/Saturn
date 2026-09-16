@@ -15,8 +15,9 @@ use crate::tx_thread::{self, TxCommand, TxEvent};
 use crate::wdsp::{normalize_audio_frame_float_count, WdspRxEngine, WDSP_AUDIO_RATE_HZ};
 use crate::xdma::{SaturnIdentity, XdmaError};
 use crate::xdma_rx::{
-    OperationalRxSession, RxCaptureStats, DIRECT_DDC_INDEX, DIRECT_DDC_SAMPLE_RATE_KHZ,
-    OPERATIONAL_RX_BUFFER_BYTES, OPERATIONAL_RX_BUFFER_COUNT, RUNTIME_HOST_DRAIN_MAX_READS,
+    FpgaAdcV30Telemetry, FpgaFifoV29Telemetry, OperationalRxSession, RxCaptureStats,
+    DIRECT_DDC_INDEX, DIRECT_DDC_SAMPLE_RATE_KHZ, OPERATIONAL_RX_BUFFER_BYTES,
+    OPERATIONAL_RX_BUFFER_COUNT, RUNTIME_HOST_DRAIN_MAX_READS,
 };
 use crate::xdma_telemetry::{record_runtime_performance, record_runtime_readiness, TelemetryValue};
 use crate::xdma_tx_radio::{DirectTxSnapshot, DirectXdmaTxRadio};
@@ -38,6 +39,7 @@ const IDLE_POLL: Duration = Duration::from_micros(250);
 const READINESS_PERIOD: Duration = Duration::from_secs(1);
 const STATUS_PERIOD: Duration = Duration::from_secs(5);
 const PERF_PERIOD: Duration = Duration::from_secs(1);
+const DIAG_PERIOD: Duration = Duration::from_secs(5);
 const MEDIA_DEMAND_REFRESH: Duration = Duration::from_millis(10);
 const IDLE_METER_PERIOD: Duration = Duration::from_millis(100);
 const DIRECT_TX_MAX_WATTS: u8 = 100;
@@ -91,6 +93,14 @@ struct DirectRxPerformance {
     dsp_iq_pairs: u64,
     bypassed_iq_pairs: u64,
     meter_only_iq_pairs: u64,
+}
+
+#[derive(Debug, Default)]
+struct WdspResumePerformance {
+    count: u64,
+    flush_failures: u64,
+    last_us: u64,
+    max_us: u64,
 }
 
 fn rx_processing_mode(demand: TciMediaDemand, meter_due: bool) -> RxProcessingMode {
@@ -326,15 +336,17 @@ fn run_inner(mut config: BridgeConfig, ready_path: &Path) -> Result<(), Box<dyn 
     let mut iq_samples = Vec::with_capacity(8_192);
     rx.drain_startup_fifo(&mut iq_samples)?;
     let mut readiness_state = "starting";
-    let mut last_readiness = Instant::now() - READINESS_PERIOD;
+    let mut last_readiness = Instant::now();
     let mut last_status = Instant::now();
-    let mut last_perf = Instant::now() - PERF_PERIOD;
+    let mut last_perf = Instant::now();
+    let mut last_diag = Instant::now() - DIAG_PERIOD;
     let mut last_perf_stats = rx.stats();
     let mut last_media_demand_refresh = Instant::now() - MEDIA_DEMAND_REFRESH;
     let mut media_demand = TciMediaDemand::default();
     let mut last_idle_meter = Instant::now() - IDLE_METER_PERIOD;
     let mut wdsp_input_gap = false;
     let mut rx_performance = DirectRxPerformance::default();
+    let mut wdsp_resume_performance = WdspResumePerformance::default();
     let mut meter_source = "unavailable";
     let mut current_processing_mode = RxProcessingMode::DrainOnly;
 
@@ -406,7 +418,20 @@ fn run_inner(mut config: BridgeConfig, ready_path: &Path) -> Result<(), Box<dyn 
                     }
                     if mode == RxProcessingMode::Audio {
                         if wdsp_input_gap {
-                            wdsp.restart_after_input_gap();
+                            let restart_started = Instant::now();
+                            let flushed = wdsp.restart_after_input_gap();
+                            let elapsed_us = restart_started
+                                .elapsed()
+                                .as_micros()
+                                .min(u128::from(u64::MAX))
+                                as u64;
+                            wdsp_resume_performance.count += 1;
+                            wdsp_resume_performance.last_us = elapsed_us;
+                            wdsp_resume_performance.max_us =
+                                wdsp_resume_performance.max_us.max(elapsed_us);
+                            if !flushed {
+                                wdsp_resume_performance.flush_failures += 1;
+                            }
                             wdsp_input_gap = false;
                         }
                         rx_performance.dsp_iq_pairs += outcome.sample_pairs;
@@ -580,6 +605,11 @@ fn run_inner(mut config: BridgeConfig, ready_path: &Path) -> Result<(), Box<dyn 
                     iq_stream_enabled: client.iq_stream_enabled,
                     audio_stream_enabled: client.audio_stream_enabled,
                 };
+                if let Err(error) = rx.sample_extended_telemetry() {
+                    eprintln!(
+                        "saturn-bridge: extended FPGA telemetry read failed without interrupting RX: {error}"
+                    );
+                }
                 let stats = rx.stats();
                 if let Err(error) = write_performance(
                     &perf_path,
@@ -594,12 +624,16 @@ fn run_inner(mut config: BridgeConfig, ready_path: &Path) -> Result<(), Box<dyn 
                     &stats,
                     &last_perf_stats,
                     &rx_performance,
+                    &wdsp_resume_performance,
+                    rx.fifo_v29_telemetry(),
+                    rx.adc_v30_telemetry(),
                 ) {
                     eprintln!(
                         "saturn-bridge: performance telemetry write failed without interrupting RX: {error}"
                     );
                 }
-                println!(
+                if last_diag.elapsed() >= DIAG_PERIOD {
+                    println!(
                     "saturn-bridge: diag hp_s=0.0 ddc_s={:.1} rx_audio_frames_s={:.1} rx_audio_samples_s={:.0} tci_mic_frames_s=0.0 tci_mic_samples_s=0 client={} connections={} connection_limit={} connection_rejected={} connection_hwm={} iq={} audio={} split_control={} split_media={} split_paired={} outbound_drops={} safety_p99_us={} control_p99_us={} control_replaced_s={} control_dropped_s={} control_q_hwm={} display_replaced_s={} display_dropped_s={} display_rate_limited_s={} audio_dropped_s={} audio_gaps={} audio_panic={} command_q={} command_q_hwm={} command_coalesced={} command_dropped={} command_mic_dropped={} send_blocked_ms={} out_hwm_bytes={} tcp_outq_hwm_bytes={} safety_depth_overflow={} processing={} dsp_iq_pairs={} bypassed_iq_pairs={} meter_source={}",
                     stats.dma_reads.saturating_sub(last_perf_stats.dma_reads) as f64 / elapsed,
                     rx_performance.audio_frames_published as f64 / elapsed,
@@ -640,6 +674,8 @@ fn run_inner(mut config: BridgeConfig, ready_path: &Path) -> Result<(), Box<dyn 
                     rx_performance.bypassed_iq_pairs,
                     meter_source,
                 );
+                    last_diag = Instant::now();
+                }
                 tci.publish_scheduler_telemetry(&client);
                 tci.publish_tx_uplink_telemetry(&client);
                 last_perf_stats = stats;
@@ -1183,6 +1219,9 @@ fn write_performance(
     stats: &RxCaptureStats,
     previous: &RxCaptureStats,
     performance: &DirectRxPerformance,
+    wdsp_resume: &WdspResumePerformance,
+    fifo_v29: &FpgaFifoV29Telemetry,
+    adc_v30: &FpgaAdcV30Telemetry,
 ) -> Result<(), XdmaError> {
     let dma_reads_per_sec = stats.dma_reads.saturating_sub(previous.dma_reads) as f64 / elapsed;
     let dma_bytes_per_sec = stats.dma_bytes.saturating_sub(previous.dma_bytes) as f64 / elapsed;
@@ -1279,6 +1318,22 @@ fn write_performance(
                 TelemetryValue::number(performance.meter_only_iq_pairs as f64 / elapsed),
             ),
             (
+                "wdsp_resume_count",
+                TelemetryValue::number(wdsp_resume.count),
+            ),
+            (
+                "wdsp_resume_flush_failures",
+                TelemetryValue::number(wdsp_resume.flush_failures),
+            ),
+            (
+                "wdsp_resume_last_us",
+                TelemetryValue::number(wdsp_resume.last_us),
+            ),
+            (
+                "wdsp_resume_max_us",
+                TelemetryValue::number(wdsp_resume.max_us),
+            ),
+            (
                 "outbound_drops",
                 TelemetryValue::number(client.outbound_drops),
             ),
@@ -1351,6 +1406,172 @@ fn write_performance(
             (
                 "host_pool_starvations",
                 TelemetryValue::number(stats.host_pool_starvations),
+            ),
+            (
+                "fifo_v29_available",
+                TelemetryValue::boolean(fifo_v29.available()),
+            ),
+            (
+                "fifo_v29_status",
+                TelemetryValue::text(fifo_v29.status.label()),
+            ),
+            (
+                "fifo_v29_build_id",
+                TelemetryValue::number(fifo_v29.build_id),
+            ),
+            (
+                "fifo_v29_snapshot_valid",
+                TelemetryValue::boolean(fifo_v29.snapshot_valid),
+            ),
+            (
+                "fifo_v29_snapshot_generation",
+                TelemetryValue::number(fifo_v29.snapshot_generation),
+            ),
+            (
+                "fifo_v29_snapshot_timeout_count",
+                TelemetryValue::number(fifo_v29.snapshot_timeout_count),
+            ),
+            (
+                "fifo_v29_occupancy_ddc",
+                TelemetryValue::number(fifo_v29.occupancy_words[0]),
+            ),
+            (
+                "fifo_v29_occupancy_duc",
+                TelemetryValue::number(fifo_v29.occupancy_words[1]),
+            ),
+            (
+                "fifo_v29_occupancy_mic",
+                TelemetryValue::number(fifo_v29.occupancy_words[2]),
+            ),
+            (
+                "fifo_v29_occupancy_speaker",
+                TelemetryValue::number(fifo_v29.occupancy_words[3]),
+            ),
+            (
+                "fifo_v29_minimum_ddc",
+                TelemetryValue::number(fifo_v29.minimum_words[0]),
+            ),
+            (
+                "fifo_v29_minimum_duc",
+                TelemetryValue::number(fifo_v29.minimum_words[1]),
+            ),
+            (
+                "fifo_v29_minimum_mic",
+                TelemetryValue::number(fifo_v29.minimum_words[2]),
+            ),
+            (
+                "fifo_v29_minimum_speaker",
+                TelemetryValue::number(fifo_v29.minimum_words[3]),
+            ),
+            (
+                "fifo_v29_maximum_ddc",
+                TelemetryValue::number(fifo_v29.maximum_words[0]),
+            ),
+            (
+                "fifo_v29_maximum_duc",
+                TelemetryValue::number(fifo_v29.maximum_words[1]),
+            ),
+            (
+                "fifo_v29_maximum_mic",
+                TelemetryValue::number(fifo_v29.maximum_words[2]),
+            ),
+            (
+                "fifo_v29_maximum_speaker",
+                TelemetryValue::number(fifo_v29.maximum_words[3]),
+            ),
+            (
+                "fifo_v29_events_ddc",
+                TelemetryValue::number(fifo_v29.event_transitions[0]),
+            ),
+            (
+                "fifo_v29_events_duc",
+                TelemetryValue::number(fifo_v29.event_transitions[1]),
+            ),
+            (
+                "fifo_v29_events_mic",
+                TelemetryValue::number(fifo_v29.event_transitions[2]),
+            ),
+            (
+                "fifo_v29_events_speaker",
+                TelemetryValue::number(fifo_v29.event_transitions[3]),
+            ),
+            (
+                "adc_v30_available",
+                TelemetryValue::boolean(adc_v30.available()),
+            ),
+            (
+                "adc_v30_status",
+                TelemetryValue::text(adc_v30.status.label()),
+            ),
+            ("adc_v30_build_id", TelemetryValue::number(adc_v30.build_id)),
+            (
+                "adc_v30_snapshot_valid",
+                TelemetryValue::boolean(adc_v30.snapshot_valid),
+            ),
+            (
+                "adc_v30_snapshot_generation",
+                TelemetryValue::number(adc_v30.snapshot_generation),
+            ),
+            (
+                "adc_v30_snapshot_retry_failure_count",
+                TelemetryValue::number(adc_v30.snapshot_retry_failure_count),
+            ),
+            ("adc_v30_clock_hz", TelemetryValue::number(adc_v30.clock_hz)),
+            (
+                "adc_v30_adc1_episode_count",
+                TelemetryValue::number(adc_v30.channels[0].episode_count),
+            ),
+            (
+                "adc_v30_adc1_total_high_clocks",
+                TelemetryValue::number(adc_v30.channels[0].total_high_clocks),
+            ),
+            (
+                "adc_v30_adc1_longest_episode_clocks",
+                TelemetryValue::number(adc_v30.channels[0].longest_episode_clocks),
+            ),
+            (
+                "adc_v30_adc1_latest_episode_clocks",
+                TelemetryValue::number(adc_v30.channels[0].latest_episode_clocks),
+            ),
+            (
+                "adc_v30_adc1_latest_episode_peak",
+                TelemetryValue::number(adc_v30.channels[0].latest_episode_peak),
+            ),
+            (
+                "adc_v30_adc1_episode_active",
+                TelemetryValue::boolean(adc_v30.channels[0].episode_active),
+            ),
+            (
+                "adc_v30_adc1_episode_valid",
+                TelemetryValue::boolean(adc_v30.channels[0].episode_valid),
+            ),
+            (
+                "adc_v30_adc2_episode_count",
+                TelemetryValue::number(adc_v30.channels[1].episode_count),
+            ),
+            (
+                "adc_v30_adc2_total_high_clocks",
+                TelemetryValue::number(adc_v30.channels[1].total_high_clocks),
+            ),
+            (
+                "adc_v30_adc2_longest_episode_clocks",
+                TelemetryValue::number(adc_v30.channels[1].longest_episode_clocks),
+            ),
+            (
+                "adc_v30_adc2_latest_episode_clocks",
+                TelemetryValue::number(adc_v30.channels[1].latest_episode_clocks),
+            ),
+            (
+                "adc_v30_adc2_latest_episode_peak",
+                TelemetryValue::number(adc_v30.channels[1].latest_episode_peak),
+            ),
+            (
+                "adc_v30_adc2_episode_active",
+                TelemetryValue::boolean(adc_v30.channels[1].episode_active),
+            ),
+            (
+                "adc_v30_adc2_episode_valid",
+                TelemetryValue::boolean(adc_v30.channels[1].episode_valid),
             ),
             ("product_id", TelemetryValue::number(identity.product_id)),
             ("pcb_version", TelemetryValue::number(identity.pcb_version)),

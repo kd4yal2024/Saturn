@@ -4,6 +4,17 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
 
 ## [Unreleased]
 ### Changed
+- Direct-XDMA Performance Lab now exposes per-interval host-ring, parser,
+  FIFO, and extended FPGA counter deltas instead of presenting absent P2-only
+  counters as zero. The direct hardware owner now samples the marker-gated V29
+  FIFO snapshot and V30 ADC episode banks, with their original coherence and
+  lifetime semantics. Runtime telemetry no longer forces an fsync on ephemeral
+  `/run` snapshots, duplicate startup snapshots are removed, and the verbose
+  journal fallback is reduced to five-second cadence to protect the RX consumer
+  from diagnostic I/O stalls. Resuming WDSP after an intentional input gap now
+  uses the bounded fed down-slew already required by the channel-state contract,
+  rather than the blocking `dmode=1` reset that can starve the sole host-ring
+  consumer; resume count, latency, and flush-failure telemetry were added.
 - Direct-XDMA RX now keeps the dedicated C2H drain and framing/loss checks
   active while making sample expansion, WDSP receive processing, and media
   publication consumer-driven. Audio clients retain the full existing WDSP

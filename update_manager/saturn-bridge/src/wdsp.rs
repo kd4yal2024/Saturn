@@ -106,6 +106,10 @@ unsafe extern "C" {
     );
     fn CloseChannel(channel: i32);
     fn SetChannelState(channel: i32, state: i32, dmode: i32) -> i32;
+    #[cfg(saturn_bridge_stub_native)]
+    fn saturn_wdsp_stub_reset_channel_state_calls();
+    #[cfg(saturn_bridge_stub_native)]
+    fn saturn_wdsp_stub_dmode_one_call_count() -> u64;
     // State-preserving rate/size setters (pinned channel.c:168/197/211):
     // they rebuild only the pre/post-main I/O scaffolding and propagate the
     // new value into the existing RXA/TXA blocks — AGC/NR/notch adapted
@@ -965,16 +969,34 @@ impl WdspRxEngine {
     }
 
     /// Reset WDSP after the direct backend intentionally stopped feeding RX
-    /// samples while no audio consumer existed. A forced state reset prevents
-    /// stale AGC/NR/filter history from leaking into newly resumed audio.
-    pub fn restart_after_input_gap(&mut self) {
+    /// samples while no audio consumer existed. Complete the normal down-slew
+    /// by feeding zero-input blocks before restarting. `dmode = 1` is not safe
+    /// here: this is the same thread that must feed `fexchange0`, so the native
+    /// wait times out and can block the sole direct-XDMA ring consumer long
+    /// enough to lose input buffers.
+    pub fn restart_after_input_gap(&mut self) -> bool {
         self.reset_stream_buffers();
         unsafe {
-            SetChannelState(self.channel_id, 0, 1);
+            SetChannelState(self.channel_id, 0, 0);
+        }
+        let flushed = feed_slew_flush_blocks(
+            self.channel_id,
+            self.input_buffer.len(),
+            &mut self.output_buffer,
+            SLEW_FLUSH_BLOCKS_RX,
+        );
+        if !flushed {
+            eprintln!(
+                "saturn-bridge: RX input-gap down-slew flush did not complete within {SLEW_FLUSH_BLOCKS_RX} blocks"
+            );
+        }
+        self.reset_stream_buffers();
+        unsafe {
             SetChannelState(self.channel_id, 1, 0);
         }
         self.last_meter_dbm = None;
         self.wbfm_stereo_detected = false;
+        flushed
     }
 
     pub fn reset_audio_packetizer(&mut self) {
@@ -2381,7 +2403,7 @@ mod tests {
         nr2_factor_for_level, nr2_nlevel_for_level, nr2_rate_for_level, nr2_taper_for_level,
         nr4_post_threshold_for_level, nr4_reduction_amount_for_level, panel_gain_for_volume_db,
         rx_dsp_rate_for_mode, speech_squelch_supported_for_mode, tx_voice_processing_supported,
-        wbfm_supported, wdsp_mode, MicRateMatcher, WdspTxEngine, WDSP_AUDIO_RATE_HZ,
+        wbfm_supported, wdsp_mode, MicRateMatcher, WdspRxEngine, WdspTxEngine, WDSP_AUDIO_RATE_HZ,
     };
     use crate::radio_model::{DemodMode, PureSignalState, RadioModel};
 
@@ -2519,6 +2541,19 @@ mod tests {
         assert_eq!(normalize_audio_frame_float_count(511), 510);
         assert_eq!(normalize_audio_frame_float_count(512), 512);
         assert_eq!(normalize_audio_frame_float_count(100_000), 8192);
+    }
+
+    #[cfg(saturn_bridge_stub_native)]
+    #[test]
+    fn input_gap_restart_never_uses_blocking_channel_state_mode() {
+        let model = RadioModel::new(2, 7_200_000, 0, 384, 24, 2048, true, 4096, true);
+        let mut engine = WdspRxEngine::new(&model).expect("RX engine");
+        unsafe {
+            super::saturn_wdsp_stub_reset_channel_state_calls();
+        }
+
+        assert!(engine.restart_after_input_gap());
+        assert_eq!(unsafe { super::saturn_wdsp_stub_dmode_one_call_count() }, 0);
     }
 
     #[test]

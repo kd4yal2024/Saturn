@@ -38,6 +38,13 @@ describe('Saturn Go performance lab template', () => {
     expect(template).toContain('currentBackend !== active.backend');
     expect(template).toContain('Open Saturn Remote and keep RX streaming.');
     expect(template).toContain('Connect Thetis or another Protocol 2 client and start the radio.');
+    expect(template).toContain('Direct-XDMA integrity');
+    expect(template).toContain("optionalDeltaCounter('ddc_host_buffer_drops')");
+    expect(template).toContain('direct-XDMA loss events');
+    expect(template).toContain('rx_host_ring_hwm');
+    expect(template).toContain("optionalDeltaCounter('wdsp_resume_flush_failures')");
+    expect(template).toContain("optionalDeltaCounter('duc_fifo_faults')");
+    expect(template).toContain('wdsp_resume_max_us');
     expect(template).toContain("showLabPanel('performance')");
   });
 });

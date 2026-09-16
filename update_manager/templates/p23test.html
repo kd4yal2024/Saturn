@@ -2547,6 +2547,18 @@ function derivePerf(current){
   let fifoDucUnderDelta = NaN;
   let fifoSpkrUnderDelta = NaN;
   let adcOverflowEventDelta = NaN;
+  let directHeaderResyncDelta = NaN;
+  let directHostBufferDropDelta = NaN;
+  let directHostBufferDropBytesDelta = NaN;
+  let directHostDiscontinuityDelta = NaN;
+  let directHostPoolStarvationDelta = NaN;
+  let directFifoThresholdDelta = NaN;
+  let directFifoAlmostFullDelta = NaN;
+  let directFifoEmptyObservationDelta = NaN;
+  let directFifoFaultDelta = NaN;
+  let directTxFifoFaultDelta = NaN;
+  let directWdspResumeDelta = NaN;
+  let directWdspResumeFlushFailureDelta = NaN;
   if (perfPrevSample && perfPrevSample.pid === c.pid && c.tsMs > perfPrevSample.tsMs){
     dtSec = (c.tsMs - perfPrevSample.tsMs) / 1000;
     const dSys = c.sysTotal - perfPrevSample.sysTotal;
@@ -2595,6 +2607,14 @@ function derivePerf(current){
       }
       if (c.appPidMatchesService && perfPrevSample.appPidMatchesService){
         const deltaCounter = (key)=> counterValue(c.appCounters, key) - counterValue(perfPrevSample.appCounters, key);
+        const optionalDeltaCounter = (key)=>{
+          const currentValue = c.appCounters?.[key];
+          const previousValue = perfPrevSample.appCounters?.[key];
+          return typeof currentValue === 'number' && Number.isFinite(currentValue)
+            && typeof previousValue === 'number' && Number.isFinite(previousValue)
+            ? currentValue - previousValue
+            : NaN;
+        };
         const rate = (key)=> deltaCounter(key) / dtSec;
         hpPps = rate('high_priority_packets');
         micPps = rate('mic_packets');
@@ -2638,6 +2658,37 @@ function derivePerf(current){
         const bridge = c.appGauges?.bridge || {};
         hpPps = Number(bridge.hp_s);
         ddcPps = Number(bridge.ddc_s);
+        micPps = NaN;
+        wbPps = NaN;
+        spkrPps = NaN;
+        hpSendErrDelta = NaN;
+        micSendErrDelta = NaN;
+        micDmaErrDelta = NaN;
+        ddcSendErrDelta = NaN;
+        ddcDmaErrDelta = NaN;
+        ddcPartialDelta = NaN;
+        wbSendErrDelta = NaN;
+        ducRecvErrDelta = NaN;
+        ducDmaErrDelta = NaN;
+        spkrRecvErrDelta = NaN;
+        spkrDmaErrDelta = NaN;
+        fifoDdcOverDelta = NaN;
+        fifoMicOverDelta = NaN;
+        fifoDucUnderDelta = NaN;
+        fifoSpkrUnderDelta = NaN;
+        adcOverflowEventDelta = optionalDeltaCounter('adc_overflow_events');
+        directHeaderResyncDelta = optionalDeltaCounter('ddc_header_resyncs');
+        directHostBufferDropDelta = optionalDeltaCounter('ddc_host_buffer_drops');
+        directHostBufferDropBytesDelta = optionalDeltaCounter('ddc_host_buffer_drop_bytes');
+        directHostDiscontinuityDelta = optionalDeltaCounter('ddc_host_discontinuities');
+        directHostPoolStarvationDelta = optionalDeltaCounter('ddc_host_pool_starvations');
+        directFifoThresholdDelta = optionalDeltaCounter('ddc_fifo_threshold_events');
+        directFifoAlmostFullDelta = optionalDeltaCounter('ddc_fifo_almost_full_events');
+        directFifoEmptyObservationDelta = optionalDeltaCounter('ddc_fifo_empty_observations');
+        directFifoFaultDelta = optionalDeltaCounter('ddc_fifo_faults');
+        directTxFifoFaultDelta = optionalDeltaCounter('duc_fifo_faults');
+        directWdspResumeDelta = optionalDeltaCounter('wdsp_resume_events');
+        directWdspResumeFlushFailureDelta = optionalDeltaCounter('wdsp_resume_flush_failures');
       }
     }
   }
@@ -2704,6 +2755,18 @@ function derivePerf(current){
     fifoDucUnderDelta,
     fifoSpkrUnderDelta,
     adcOverflowEventDelta,
+    directHeaderResyncDelta,
+    directHostBufferDropDelta,
+    directHostBufferDropBytesDelta,
+    directHostDiscontinuityDelta,
+    directHostPoolStarvationDelta,
+    directFifoThresholdDelta,
+    directFifoAlmostFullDelta,
+    directFifoEmptyObservationDelta,
+    directFifoFaultDelta,
+    directTxFifoFaultDelta,
+    directWdspResumeDelta,
+    directWdspResumeFlushFailureDelta,
     memAvailBytes: Number(current?.system?.memory?.available_bytes) || NaN,
     memTotalBytes: Number(current?.system?.memory?.total_bytes) || NaN,
     load1: Number(current?.system?.loadavg?.one),
@@ -2769,6 +2832,23 @@ function computePerfAlerts(d, baseline){
       }
     }
   }
+  if (d.selectedApp === 'xdma'){
+    const directLoss = [
+      d.directHostBufferDropDelta,
+      d.directHostDiscontinuityDelta,
+      d.directHostPoolStarvationDelta,
+      d.directFifoFaultDelta,
+      d.directTxFifoFaultDelta,
+      d.directWdspResumeFlushFailureDelta,
+    ].filter(Number.isFinite).reduce((sum, value)=>sum + value, 0);
+    if (directLoss > 0){
+      alerts.push(`CRIT direct-XDMA loss events +${fmtInt(directLoss)} in the latest sample interval`);
+      level = perfSeverityMax(level, 'crit');
+    } else if (Number.isFinite(d.directHeaderResyncDelta) && d.directHeaderResyncDelta > 0){
+      alerts.push(`WARN direct-XDMA header resynchronizations +${fmtInt(d.directHeaderResyncDelta)}`);
+      level = perfSeverityMax(level, 'warn');
+    }
+  }
   return { level, alerts };
 }
 function renderPerfDashboard(d, perf, alertState, baseline){
@@ -2778,6 +2858,7 @@ function renderPerfDashboard(d, perf, alertState, baseline){
     ? ((d.memTotalBytes - d.memAvailBytes) / d.memTotalBytes) * 100
     : NaN;
   const app = perf?.app_telemetry?.current || {};
+  const bridge = app?.gauges?.bridge || {};
   const fpga = app?.fpga || {};
   const adc = app?.gauges?.adc || {};
   const ducQueue = app?.gauges?.duc_queue || {};
@@ -2851,6 +2932,16 @@ function renderPerfDashboard(d, perf, alertState, baseline){
   const fifoTotal = fifoValues.reduce((sum, value)=>sum + value, 0);
   const networkFaults = [d.ethRxErrDelta, d.ethRxDropDelta, d.ethTxErrDelta, d.ethTxDropDelta].filter(Number.isFinite)
     .reduce((sum, value)=>sum + value, 0);
+  const directIntegrityValues = [
+    d.directHeaderResyncDelta,
+    d.directHostBufferDropDelta,
+    d.directHostDiscontinuityDelta,
+    d.directHostPoolStarvationDelta,
+    d.directFifoFaultDelta,
+    d.directTxFifoFaultDelta,
+    d.directWdspResumeFlushFailureDelta,
+  ].filter(Number.isFinite);
+  const directIntegrityTotal = directIntegrityValues.reduce((sum, value)=>sum + value, 0);
   const appMode = activity.active ? (app?.state?.tx_mode ? 'TX' : 'RX') : 'Standby';
   const fpgaHealth = fpga?.available
     ? `${fpga?.product || 'FPGA'} · ${fmtNum(fpga?.die_temp_c)} °C`
@@ -2877,6 +2968,7 @@ function renderPerfDashboard(d, perf, alertState, baseline){
   ];
   const reliabilityRows = [
     runtimeRow('Overall health', alertState.alerts.length ? alertState.alerts[0] : (activity.active ? 'Healthy · active' : 'Healthy · waiting'), alertState.alerts.slice(1).join(' · ') || (activity.active ? 'All monitored values are within current thresholds.' : 'Idle is a normal operating state and is excluded from XDMA drop alerts.')),
+    ...(d.selectedApp === 'xdma' ? [runtimeRow('Direct-XDMA integrity', directIntegrityValues.length ? `${fmtInt(directIntegrityTotal)} event(s) this interval` : 'Collecting…', `Δ header resync ${fmtInt(d.directHeaderResyncDelta)} · buffer drops ${fmtInt(d.directHostBufferDropDelta)} (${fmtBytes(d.directHostBufferDropBytesDelta)}) · discontinuities ${fmtInt(d.directHostDiscontinuityDelta)} · pool starvation ${fmtInt(d.directHostPoolStarvationDelta)} · RX FIFO thresholds ${fmtInt(d.directFifoThresholdDelta)} · almost-full ${fmtInt(d.directFifoAlmostFullDelta)} · empty observations ${fmtInt(d.directFifoEmptyObservationDelta)} · RX/TX faults ${fmtInt(d.directFifoFaultDelta)} / ${fmtInt(d.directTxFifoFaultDelta)} · WDSP resumes ${fmtInt(d.directWdspResumeDelta)} / failures ${fmtInt(d.directWdspResumeFlushFailureDelta)} | lifetime ring HWM ${fmtInt(bridge?.rx_host_ring_hwm)} / 256 · drops ${fmtInt(bridge?.host_buffer_drops)} · discontinuities ${fmtInt(bridge?.host_discontinuities)} · WDSP resume last/max ${fmtInt(bridge?.wdsp_resume_last_us)} / ${fmtInt(bridge?.wdsp_resume_max_us)} µs`)] : []),
     runtimeRow('Application events', appErrorValues.length ? `${fmtInt(appErrorTotal)} error event(s)` : 'Collecting…', errorBurst),
     runtimeRow('FIFO events', fifoValues.length ? `${fmtInt(fifoTotal)} event(s)` : 'Collecting…', fifoBurst),
     runtimeRow('Network integrity', Number.isFinite(networkFaults) ? `${fmtInt(networkFaults)} error/drop event(s)` : 'Collecting…', `RX errors ${fmtInt(d.ethRxErrDelta)} · RX drops ${fmtInt(d.ethRxDropDelta)} · TX errors ${fmtInt(d.ethTxErrDelta)} · TX drops ${fmtInt(d.ethTxDropDelta)}`),

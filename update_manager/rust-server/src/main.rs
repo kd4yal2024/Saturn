@@ -3103,6 +3103,7 @@ fn bridge_perf_file_telemetry(
     let number = |key: &str| metrics.get(key).and_then(serde_json::Value::as_f64);
     let integer = |key: &str| metrics.get(key).and_then(serde_json::Value::as_u64);
     let boolean = |key: &str| metrics.get(key).and_then(serde_json::Value::as_bool);
+    let text = |key: &str| metrics.get(key).and_then(serde_json::Value::as_str);
     let snapshot_pid = integer("pid");
     let pid_matches_service = matches!(
         (main_pid, snapshot_pid),
@@ -3127,6 +3128,74 @@ fn bridge_perf_file_telemetry(
         .and_then(|metadata| metadata.modified().ok())
         .map(|time| chrono::DateTime::<Local>::from(time).to_rfc3339());
     let metrics_value = serde_json::Value::Object(metrics.clone());
+    let fifo_v29 = serde_json::json!({
+        "available": boolean("fifo_v29_available").unwrap_or(false),
+        "status": text("fifo_v29_status").unwrap_or("unavailable"),
+        "build_id": integer("fifo_v29_build_id").unwrap_or(0),
+        "snapshot_valid": boolean("fifo_v29_snapshot_valid").unwrap_or(false),
+        "snapshot_generation": integer("fifo_v29_snapshot_generation").unwrap_or(0),
+        "snapshot_timeout_count": integer("fifo_v29_snapshot_timeout_count").unwrap_or(0),
+        "occupancy_words": {
+            "ddc": integer("fifo_v29_occupancy_ddc").unwrap_or(0),
+            "duc": integer("fifo_v29_occupancy_duc").unwrap_or(0),
+            "mic": integer("fifo_v29_occupancy_mic").unwrap_or(0),
+            "speaker": integer("fifo_v29_occupancy_speaker").unwrap_or(0),
+        },
+        "minimum_words": {
+            "ddc": integer("fifo_v29_minimum_ddc").unwrap_or(0),
+            "duc": integer("fifo_v29_minimum_duc").unwrap_or(0),
+            "mic": integer("fifo_v29_minimum_mic").unwrap_or(0),
+            "speaker": integer("fifo_v29_minimum_speaker").unwrap_or(0),
+        },
+        "maximum_words": {
+            "ddc": integer("fifo_v29_maximum_ddc").unwrap_or(0),
+            "duc": integer("fifo_v29_maximum_duc").unwrap_or(0),
+            "mic": integer("fifo_v29_maximum_mic").unwrap_or(0),
+            "speaker": integer("fifo_v29_maximum_speaker").unwrap_or(0),
+        },
+        "event_transitions": {
+            "ddc": integer("fifo_v29_events_ddc").unwrap_or(0),
+            "duc": integer("fifo_v29_events_duc").unwrap_or(0),
+            "mic": integer("fifo_v29_events_mic").unwrap_or(0),
+            "speaker": integer("fifo_v29_events_speaker").unwrap_or(0),
+        },
+    });
+    let adc_v30 = serde_json::json!({
+        "available": boolean("adc_v30_available").unwrap_or(false),
+        "status": text("adc_v30_status").unwrap_or("unavailable"),
+        "build_id": integer("adc_v30_build_id").unwrap_or(0),
+        "snapshot_valid": boolean("adc_v30_snapshot_valid").unwrap_or(false),
+        "snapshot_generation": integer("adc_v30_snapshot_generation").unwrap_or(0),
+        "snapshot_retry_failure_count": integer("adc_v30_snapshot_retry_failure_count").unwrap_or(0),
+        "lifetime_scope": "fpga_boot",
+        "duration_unit": "adc_clocks",
+        "clock_hz": integer("adc_v30_clock_hz").unwrap_or(0),
+        "adc1": {
+            "episode_count": integer("adc_v30_adc1_episode_count").unwrap_or(0),
+            "total_high_clocks": integer("adc_v30_adc1_total_high_clocks").unwrap_or(0),
+            "longest_episode_clocks": integer("adc_v30_adc1_longest_episode_clocks").unwrap_or(0),
+            "latest_episode_clocks": integer("adc_v30_adc1_latest_episode_clocks").unwrap_or(0),
+            "latest_episode_peak": integer("adc_v30_adc1_latest_episode_peak").unwrap_or(0),
+            "episode_active": boolean("adc_v30_adc1_episode_active").unwrap_or(false),
+            "episode_valid": boolean("adc_v30_adc1_episode_valid").unwrap_or(false),
+        },
+        "adc2": {
+            "episode_count": integer("adc_v30_adc2_episode_count").unwrap_or(0),
+            "total_high_clocks": integer("adc_v30_adc2_total_high_clocks").unwrap_or(0),
+            "longest_episode_clocks": integer("adc_v30_adc2_longest_episode_clocks").unwrap_or(0),
+            "latest_episode_clocks": integer("adc_v30_adc2_latest_episode_clocks").unwrap_or(0),
+            "latest_episode_peak": integer("adc_v30_adc2_latest_episode_peak").unwrap_or(0),
+            "episode_active": boolean("adc_v30_adc2_episode_active").unwrap_or(false),
+            "episode_valid": boolean("adc_v30_adc2_episode_valid").unwrap_or(false),
+        },
+    });
+    let adc_episode_count = match (
+        integer("adc_v30_adc1_episode_count"),
+        integer("adc_v30_adc2_episode_count"),
+    ) {
+        (Some(adc1), Some(adc2)) => Some(adc1.saturating_add(adc2)),
+        _ => None,
+    };
 
     Ok(serde_json::json!({
         "snapshot_file": path.display().to_string(),
@@ -3148,6 +3217,8 @@ fn bridge_perf_file_telemetry(
             },
             "gauges": {
                 "bridge": metrics_value,
+                "fpga_fifo_v29": fifo_v29,
+                "fpga_adc_v30": adc_v30,
             },
             "counters": {
                 "ddc_packets": integer("dma_reads").unwrap_or(0),
@@ -3155,12 +3226,21 @@ fn bridge_perf_file_telemetry(
                 "ddc_dma_reads": integer("dma_reads").unwrap_or(0),
                 "ddc_dma_read_bytes": integer("dma_bytes").unwrap_or(0),
                 "ddc_header_errors": integer("header_errors").unwrap_or(0),
-                "ddc_dma_errors": 0,
-                "ddc_send_errors": 0,
-                "ddc_partial_sends": 0,
+                "ddc_header_resyncs": integer("header_resync"),
+                "ddc_host_buffer_drops": integer("host_buffer_drops"),
+                "ddc_host_buffer_drop_bytes": integer("host_buffer_drop_bytes"),
+                "ddc_host_discontinuities": integer("host_discontinuities"),
+                "ddc_host_pool_starvations": integer("host_pool_starvations"),
+                "ddc_fifo_threshold_events": integer("rx_fifo_thresholds"),
+                "ddc_fifo_almost_full_events": integer("rx_fifo_almost_full"),
+                "ddc_fifo_empty_observations": integer("rx_fifo_empty_observations"),
+                "ddc_fifo_faults": integer("rx_fifo_faults"),
+                "wdsp_resume_events": integer("wdsp_resume_count"),
+                "wdsp_resume_flush_failures": integer("wdsp_resume_flush_failures"),
+                "adc_overflow_events": adc_episode_count,
                 "duc_dma_writes": integer("tx_dma_writes").unwrap_or(0),
                 "duc_packets": integer("tx_frames").unwrap_or(0),
-                "duc_dma_errors": integer("tx_fifo_faults").unwrap_or(0),
+                "duc_fifo_faults": integer("tx_fifo_faults").unwrap_or(0),
             },
             "features": {
                 "pure_signal": false,
@@ -5130,6 +5210,22 @@ mod tests {
                     "product_id":1,"pcb_version":2,"software_id":4,
                     "date_code_hex":"09122026","fallback_config":false,
                     "sample_rate_hz":384000,"ddc":6,
+                    "header_resync":2,"host_buffer_drops":3,
+                    "host_buffer_drop_bytes":12288,"host_discontinuities":1,
+                    "host_pool_starvations":0,"rx_fifo_thresholds":4,
+                    "rx_fifo_almost_full":0,"rx_fifo_empty_observations":0,
+                    "rx_fifo_faults":0,
+                    "wdsp_resume_count":2,"wdsp_resume_flush_failures":0,
+                    "wdsp_resume_last_us":6100,"wdsp_resume_max_us":6400,
+                    "fifo_v29_available":true,"fifo_v29_status":"available",
+                    "fifo_v29_build_id":1446131968,"fifo_v29_snapshot_valid":true,
+                    "fifo_v29_snapshot_generation":12,"fifo_v29_snapshot_timeout_count":0,
+                    "fifo_v29_occupancy_ddc":42,
+                    "adc_v30_available":true,"adc_v30_status":"available",
+                    "adc_v30_build_id":1446195200,"adc_v30_snapshot_valid":true,
+                    "adc_v30_snapshot_generation":13,"adc_v30_snapshot_retry_failure_count":0,
+                    "adc_v30_clock_hz":122880000,"adc_v30_adc1_episode_count":5,
+                    "adc_v30_adc2_episode_count":7,
                     "build_git_sha":"d570b4e6c58f09e71b03e2fdcc0ac66bbb9f5d1c",
                     "wdsp_flavor":"wdsp2-2.00"
                 }
@@ -5142,6 +5238,26 @@ mod tests {
         assert_eq!(telemetry["pid_matches_service"], true);
         assert_eq!(telemetry["current"]["state"]["sdr_active"], true);
         assert_eq!(telemetry["current"]["fpga"]["firmware_version"], 30);
+        assert_eq!(telemetry["current"]["counters"]["ddc_host_buffer_drops"], 3);
+        assert_eq!(telemetry["current"]["counters"]["wdsp_resume_events"], 2);
+        assert_eq!(
+            telemetry["current"]["counters"]["wdsp_resume_flush_failures"],
+            0
+        );
+        assert_eq!(telemetry["current"]["counters"]["adc_overflow_events"], 12);
+        let counters = telemetry["current"]["counters"].as_object().unwrap();
+        assert!(!counters.contains_key("ddc_dma_errors"));
+        assert!(!counters.contains_key("ddc_send_errors"));
+        assert!(!counters.contains_key("ddc_partial_sends"));
+        assert_eq!(counters["duc_fifo_faults"], 0);
+        assert_eq!(
+            telemetry["current"]["gauges"]["fpga_fifo_v29"]["occupancy_words"]["ddc"],
+            42
+        );
+        assert_eq!(
+            telemetry["current"]["gauges"]["fpga_adc_v30"]["clock_hz"],
+            122_880_000
+        );
         assert_eq!(
             telemetry["current"]["gauges"]["bridge"]["build_git_sha"],
             "d570b4e6c58f09e71b03e2fdcc0ac66bbb9f5d1c"

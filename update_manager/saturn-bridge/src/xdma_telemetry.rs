@@ -63,7 +63,7 @@ pub(crate) fn record_probe_outcome(
     PROBE_OUTCOME_RECORDED.store(true, Ordering::Release);
     let path = snapshot_path();
     let document = serialize_snapshot(phase, probe, status, cleanup, error, metrics);
-    if let Err(write_error) = write_snapshot_atomic(&path, document.as_bytes()) {
+    if let Err(write_error) = write_snapshot_atomic(&path, document.as_bytes(), true) {
         eprintln!(
             "saturn-bridge: could not persist XDMA telemetry snapshot {}: {}",
             path.display(),
@@ -81,7 +81,7 @@ pub(crate) fn record_probe_failure_if_unrecorded(phase: u8, probe: &str, error: 
     }
     let path = snapshot_path();
     let document = serialize_snapshot(phase, probe, "failed", "guarded", Some(error), &[]);
-    if let Err(write_error) = write_snapshot_atomic(&path, document.as_bytes()) {
+    if let Err(write_error) = write_snapshot_atomic(&path, document.as_bytes(), true) {
         eprintln!(
             "saturn-bridge: could not persist XDMA telemetry snapshot {}: {}",
             path.display(),
@@ -129,7 +129,10 @@ pub(crate) fn record_runtime_readiness(
     } else {
         document.push_str("\n  }\n}\n");
     }
-    write_snapshot_atomic(path, document.as_bytes())
+    // Runtime records live in /run and are regenerated every second. Atomic
+    // rename provides reader coherence; forcing an fsync adds latency to the
+    // RX owner without useful crash durability for ephemeral data.
+    write_snapshot_atomic(path, document.as_bytes(), false)
 }
 
 pub(crate) fn record_runtime_performance(
@@ -221,7 +224,7 @@ fn unix_time_ms() -> u64 {
         .unwrap_or(0)
 }
 
-fn write_snapshot_atomic(path: &Path, contents: &[u8]) -> io::Result<()> {
+fn write_snapshot_atomic(path: &Path, contents: &[u8], durable: bool) -> io::Result<()> {
     let parent = path.parent().ok_or_else(|| {
         io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -244,7 +247,9 @@ fn write_snapshot_atomic(path: &Path, contents: &[u8]) -> io::Result<()> {
             .open(&temporary)?;
         file.set_permissions(fs::Permissions::from_mode(0o644))?;
         file.write_all(contents)?;
-        file.sync_all()?;
+        if durable {
+            file.sync_all()?;
+        }
         drop(file);
         fs::rename(&temporary, path)
     })();
@@ -292,8 +297,8 @@ mod tests {
             std::process::id()
         ));
         let path = root.join("xdma-telemetry.json");
-        write_snapshot_atomic(&path, b"{\"status\":\"first\"}\n").unwrap();
-        write_snapshot_atomic(&path, b"{\"status\":\"second\"}\n").unwrap();
+        write_snapshot_atomic(&path, b"{\"status\":\"first\"}\n", true).unwrap();
+        write_snapshot_atomic(&path, b"{\"status\":\"second\"}\n", true).unwrap();
         assert_eq!(
             fs::read_to_string(&path).unwrap(),
             "{\"status\":\"second\"}\n"

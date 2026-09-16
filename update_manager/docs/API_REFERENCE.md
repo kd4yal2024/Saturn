@@ -246,8 +246,12 @@ Notes:
   - for the direct-XDMA backend, fresh PID-matched telemetry from the atomic
     `/run/saturn-bridge/perf.json` snapshot, including client/split-lane state,
     processing mode, DMA/IQ/audio rates, queues/drops, FPGA identity, and exact
-    Saturn/WDSP source provenance; older bridge builds fall back to the latest
-    journal diagnostic line
+    Saturn/WDSP source provenance; direct host-ring/parser/FIFO values are
+    exported as cumulative counters so the UI reports per-sample deltas, and
+    marker-gated V29 FIFO/V30 ADC hardware snapshots retain their native
+    coherence and boot-lifetime semantics; WDSP input-gap resumes expose their
+    cumulative count, last/maximum latency, and flush-failure count; older
+    bridge builds fall back to the latest journal diagnostic line
 - `app_telemetry.current` includes:
   - runtime flags and feature flags
   - port/DDC/wideband routing shape

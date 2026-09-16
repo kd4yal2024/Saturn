@@ -19,8 +19,26 @@ void OpenChannel(int32_t channel, int32_t in_size, int32_t dsp_size,
 }
 
 void CloseChannel(int32_t channel) { (void)channel; }
+static uint64_t saturn_wdsp_stub_dmode_one_calls = 0;
 int32_t SetChannelState(int32_t channel, int32_t state, int32_t dmode) {
-  (void)channel; (void)state; (void)dmode; return 0;
+  (void)channel; (void)state;
+  if (dmode == 1) saturn_wdsp_stub_dmode_one_calls += 1;
+  return 0;
+}
+void saturn_wdsp_stub_reset_channel_state_calls(void) {
+  saturn_wdsp_stub_dmode_one_calls = 0;
+}
+uint64_t saturn_wdsp_stub_dmode_one_call_count(void) {
+  return saturn_wdsp_stub_dmode_one_calls;
+}
+void SetInputBuffsize(int32_t channel, int32_t in_size) {
+  (void)channel; (void)in_size;
+}
+void SetInputSamplerate(int32_t channel, int32_t samplerate) {
+  (void)channel; (void)samplerate;
+}
+void SetDSPSamplerate(int32_t channel, int32_t samplerate) {
+  (void)channel; (void)samplerate;
 }
 void fexchange0(int32_t channel, const double *input, double *output,
                 int32_t *error) {

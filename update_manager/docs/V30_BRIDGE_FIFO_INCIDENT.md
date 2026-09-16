@@ -166,9 +166,9 @@ The repaired runtime preserves the quality boundary explicitly:
   bounded ring and the parser continues validating headers, sequence, frame
   layout, and loss counters without expanding every 24-bit sample to `f32`;
 - one decoded block every 100 ms maintains a labeled raw-IQ meter estimate;
-- after any intentional WDSP input gap, the channel is force-reset before
-  audio processing resumes so stale AGC, NR, or filter history cannot leak
-  into the new stream.
+- after any intentional WDSP input gap, the channel is cleanly down-slewed,
+  flushed, and restarted before audio processing resumes so stale AGC, NR, or
+  filter history cannot leak into the new stream.
 
 The bridge now writes `/run/saturn-bridge/perf.json` atomically every second.
 It includes the service PID, exact Saturn build commit and dirty state, pinned
@@ -192,3 +192,41 @@ lower idle CPU number as an audio-quality result:
 
 No claimed performance gain is considered accepted until those appliance
 measurements are captured with the new provenance fields.
+
+The first active-audio capture from commit `40a208f` correctly identified the
+binary and workload but also exposed two follow-up defects. P2-only counters
+that did not exist in the direct backend were rendered as zero, while the
+direct host-ring counters were visible only as boot/process-lifetime gauge
+values. More importantly, the lifetime values showed a full 256-buffer host
+ring, 95 reclaimed buffers (389120 bytes), four parser discontinuities, and two
+header resynchronizations. A single capture cannot establish whether those
+events were confined to startup or still increasing, but it is not a passing
+quality result.
+
+The follow-up maps the direct counters into explicit cumulative application
+counters so Performance Lab can calculate interval deltas and fail on new loss
+rather than on old lifetime history. It also samples and presents the existing
+marker-gated V29 FIFO and V30 ADC banks from the exclusive direct-XDMA register
+owner. To reduce diagnostic interference, ephemeral `/run` snapshots keep
+atomic rename but omit crash-durability `fsync`, the duplicate immediate
+startup writes are removed, and the compatibility journal line runs every five
+seconds while the authoritative file remains at one-second cadence. A new
+appliance run must demonstrate zero deltas for buffer drops, discontinuities,
+pool starvation, and FIFO faults before performance qualification continues.
+
+Code review then identified a matching producer/consumer failure mechanism.
+When an audio client arrived after an intentional IQ-only or idle interval, the
+direct backend restarted WDSP with `SetChannelState(channel, 0, 1)`. In this
+single-threaded WDSP caller, `dmode=1` waits for exchange work that the same
+blocked thread must supply; the pinned WDSP implementation times out before
+taking its force-reset path. During that wait the dedicated XDMA reader keeps
+producing buffers while the only ring consumer is stopped. This violates the
+existing channel-state contract and can fill the 256-buffer ring, matching the
+captured high-water mark and reclaimed-buffer loss.
+
+Input-gap resume now uses `SetChannelState(channel, 0, 0)`, feeds a bounded set
+of zero-input exchange blocks to complete the normal down-slew and native
+buffer flush, then performs the state-1 up-slew. This is the same nonblocking
+pattern already used for RX/TX suspension and rate changes. Process-lifetime
+resume count, last/maximum elapsed microseconds, and flush failures are exported
+so the appliance test can verify the corrected path directly.

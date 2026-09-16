@@ -47,6 +47,30 @@ const ADC1_RX_ATTENUATION_MASK: u32 = 0x1f;
 const ADC_OVERFLOW_REGISTER: u64 = 0x5000;
 const ADC1_PEAK_REGISTER: u64 = 0x5004;
 const ADC2_PEAK_REGISTER: u64 = 0x5008;
+const ADC_V30_SNAPSHOT_STATUS_REGISTER: u64 = 0x5010;
+const ADC_V30_BUILD_ID_REGISTER: u64 = 0x5020;
+const ADC_V30_EPISODE_COUNT_BASE: u64 = 0x5024;
+const ADC_V30_TOTAL_HIGH_CLOCKS_BASE: u64 = 0x502c;
+const ADC_V30_LONGEST_EPISODE_BASE: u64 = 0x5034;
+const ADC_V30_LATEST_EPISODE_BASE: u64 = 0x503c;
+const ADC_V30_LATEST_PEAK_BASE: u64 = 0x5044;
+const ADC_V30_EPISODE_STATE_REGISTER: u64 = 0x504c;
+const ADC_V30_CLOCK_HZ_REGISTER: u64 = 0x5050;
+const ADC_V30_EXPECTED_BUILD_ID: u32 = 0x5633_3000;
+const ADC_V30_SNAPSHOT_RETRY_LIMIT: usize = 3;
+const FIFO_V29_SNAPSHOT_CONTROL_REGISTER: u64 = 0x9020;
+const FIFO_V29_OCCUPANCY_BASE: u64 = 0x9024;
+const FIFO_V29_MINIMUM_BASE: u64 = 0x9034;
+const FIFO_V29_MAXIMUM_BASE: u64 = 0x9044;
+const FIFO_V29_EVENTS_BASE: u64 = 0x9054;
+const FIFO_V29_BUILD_ID_REGISTER: u64 = 0x9064;
+const FIFO_V29_EXPECTED_BUILD_ID: u32 = 0x5632_3900;
+const FIFO_V29_SNAPSHOT_REQUEST: u32 = 1;
+const FIFO_V29_SNAPSHOT_POLL_LIMIT: usize = 50;
+const FIFO_V29_SNAPSHOT_POLL_INTERVAL: Duration = Duration::from_micros(100);
+const EXTENDED_SNAPSHOT_VALID: u32 = 1 << 31;
+const EXTENDED_FIFO_CHANNELS: usize = 4;
+const EXTENDED_ADC_CHANNELS: usize = 2;
 const DDC_FIFO_RESET_BIT: u32 = 1 << 2;
 const DDC_STREAM_ENABLE_BIT: u32 = 1 << 30;
 const DDC6_ADC_MASK: u32 = 0x3 << (DIRECT_DDC_INDEX * 2);
@@ -69,6 +93,71 @@ const DIRECT_RX_RT_PRIORITY: i32 = 22;
 const READER_START_TIMEOUT: Duration = Duration::from_secs(2);
 
 const RATE_CODES_TO_SAMPLE_WORDS: [usize; 8] = [0, 1, 2, 4, 8, 16, 32, 0];
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum ExtendedTelemetryStatus {
+    #[default]
+    Unsupported,
+    MarkerMismatch,
+    Available,
+}
+
+impl ExtendedTelemetryStatus {
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Unsupported => "unsupported",
+            Self::MarkerMismatch => "marker_mismatch",
+            Self::Available => "available",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+pub(crate) struct FpgaFifoV29Telemetry {
+    pub(crate) status: ExtendedTelemetryStatus,
+    pub(crate) build_id: u32,
+    pub(crate) snapshot_valid: bool,
+    pub(crate) snapshot_generation: u16,
+    pub(crate) snapshot_timeout_count: u64,
+    pub(crate) occupancy_words: [u32; EXTENDED_FIFO_CHANNELS],
+    pub(crate) minimum_words: [u32; EXTENDED_FIFO_CHANNELS],
+    pub(crate) maximum_words: [u32; EXTENDED_FIFO_CHANNELS],
+    pub(crate) event_transitions: [u32; EXTENDED_FIFO_CHANNELS],
+}
+
+impl FpgaFifoV29Telemetry {
+    pub(crate) fn available(&self) -> bool {
+        self.status == ExtendedTelemetryStatus::Available
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+pub(crate) struct FpgaAdcV30ChannelTelemetry {
+    pub(crate) episode_count: u32,
+    pub(crate) total_high_clocks: u32,
+    pub(crate) longest_episode_clocks: u32,
+    pub(crate) latest_episode_clocks: u32,
+    pub(crate) latest_episode_peak: u32,
+    pub(crate) episode_active: bool,
+    pub(crate) episode_valid: bool,
+}
+
+#[derive(Clone, Debug, Default)]
+pub(crate) struct FpgaAdcV30Telemetry {
+    pub(crate) status: ExtendedTelemetryStatus,
+    pub(crate) build_id: u32,
+    pub(crate) snapshot_valid: bool,
+    pub(crate) snapshot_generation: u16,
+    pub(crate) snapshot_retry_failure_count: u64,
+    pub(crate) clock_hz: u32,
+    pub(crate) channels: [FpgaAdcV30ChannelTelemetry; EXTENDED_ADC_CHANNELS],
+}
+
+impl FpgaAdcV30Telemetry {
+    pub(crate) fn available(&self) -> bool {
+        self.status == ExtendedTelemetryStatus::Available
+    }
+}
 
 #[derive(Clone, Copy, Debug)]
 struct RxProbeConfig {
@@ -837,6 +926,127 @@ impl Drop for RxDdcSession<'_> {
     }
 }
 
+fn probe_fifo_v29_telemetry(
+    registers: &XdmaRegisterDevice,
+    firmware_minor: u16,
+) -> Result<FpgaFifoV29Telemetry, XdmaError> {
+    let mut telemetry = FpgaFifoV29Telemetry::default();
+    if firmware_minor < 29 {
+        return Ok(telemetry);
+    }
+    telemetry.build_id = registers.read_register(FIFO_V29_BUILD_ID_REGISTER)?;
+    telemetry.status = if telemetry.build_id == FIFO_V29_EXPECTED_BUILD_ID {
+        ExtendedTelemetryStatus::Available
+    } else {
+        ExtendedTelemetryStatus::MarkerMismatch
+    };
+    Ok(telemetry)
+}
+
+fn sample_fifo_v29_telemetry(
+    registers: &XdmaRegisterDevice,
+    telemetry: &mut FpgaFifoV29Telemetry,
+) -> Result<(), XdmaError> {
+    if !telemetry.available() {
+        return Ok(());
+    }
+    let before = registers.read_register(FIFO_V29_SNAPSHOT_CONTROL_REGISTER)?;
+    let before_generation = before as u16;
+    registers.write_register(
+        FIFO_V29_SNAPSHOT_CONTROL_REGISTER,
+        FIFO_V29_SNAPSHOT_REQUEST,
+    )?;
+    for poll in 0..FIFO_V29_SNAPSHOT_POLL_LIMIT {
+        let status = registers.read_register(FIFO_V29_SNAPSHOT_CONTROL_REGISTER)?;
+        let generation = status as u16;
+        if status & EXTENDED_SNAPSHOT_VALID != 0 && generation != before_generation {
+            for channel in 0..EXTENDED_FIFO_CHANNELS {
+                let offset = (channel * 4) as u64;
+                telemetry.occupancy_words[channel] =
+                    registers.read_register(FIFO_V29_OCCUPANCY_BASE + offset)?;
+                telemetry.minimum_words[channel] =
+                    registers.read_register(FIFO_V29_MINIMUM_BASE + offset)?;
+                telemetry.maximum_words[channel] =
+                    registers.read_register(FIFO_V29_MAXIMUM_BASE + offset)?;
+                telemetry.event_transitions[channel] =
+                    registers.read_register(FIFO_V29_EVENTS_BASE + offset)?;
+            }
+            telemetry.snapshot_valid = true;
+            telemetry.snapshot_generation = generation;
+            return Ok(());
+        }
+        if poll + 1 < FIFO_V29_SNAPSHOT_POLL_LIMIT {
+            thread::sleep(FIFO_V29_SNAPSHOT_POLL_INTERVAL);
+        }
+    }
+    telemetry.snapshot_valid = false;
+    telemetry.snapshot_timeout_count += 1;
+    Ok(())
+}
+
+fn probe_adc_v30_telemetry(
+    registers: &XdmaRegisterDevice,
+    firmware_minor: u16,
+) -> Result<FpgaAdcV30Telemetry, XdmaError> {
+    let mut telemetry = FpgaAdcV30Telemetry::default();
+    if firmware_minor < 30 {
+        return Ok(telemetry);
+    }
+    telemetry.build_id = registers.read_register(ADC_V30_BUILD_ID_REGISTER)?;
+    telemetry.status = if telemetry.build_id == ADC_V30_EXPECTED_BUILD_ID {
+        ExtendedTelemetryStatus::Available
+    } else {
+        ExtendedTelemetryStatus::MarkerMismatch
+    };
+    Ok(telemetry)
+}
+
+fn sample_adc_v30_telemetry(
+    registers: &XdmaRegisterDevice,
+    telemetry: &mut FpgaAdcV30Telemetry,
+) -> Result<(), XdmaError> {
+    if !telemetry.available() {
+        return Ok(());
+    }
+    for _ in 0..ADC_V30_SNAPSHOT_RETRY_LIMIT {
+        let before = registers.read_register(ADC_V30_SNAPSHOT_STATUS_REGISTER)?;
+        if before & EXTENDED_SNAPSHOT_VALID == 0 {
+            telemetry.snapshot_valid = false;
+            return Ok(());
+        }
+        let mut candidate = telemetry.clone();
+        for channel in 0..EXTENDED_ADC_CHANNELS {
+            let offset = (channel * 4) as u64;
+            candidate.channels[channel].episode_count =
+                registers.read_register(ADC_V30_EPISODE_COUNT_BASE + offset)?;
+            candidate.channels[channel].total_high_clocks =
+                registers.read_register(ADC_V30_TOTAL_HIGH_CLOCKS_BASE + offset)?;
+            candidate.channels[channel].longest_episode_clocks =
+                registers.read_register(ADC_V30_LONGEST_EPISODE_BASE + offset)?;
+            candidate.channels[channel].latest_episode_clocks =
+                registers.read_register(ADC_V30_LATEST_EPISODE_BASE + offset)?;
+            candidate.channels[channel].latest_episode_peak =
+                registers.read_register(ADC_V30_LATEST_PEAK_BASE + offset)?;
+        }
+        let state = registers.read_register(ADC_V30_EPISODE_STATE_REGISTER)?;
+        candidate.clock_hz = registers.read_register(ADC_V30_CLOCK_HZ_REGISTER)?;
+        let after = registers.read_register(ADC_V30_SNAPSHOT_STATUS_REGISTER)?;
+        if after == before {
+            candidate.snapshot_valid = true;
+            candidate.snapshot_generation = after as u16;
+            for channel in 0..EXTENDED_ADC_CHANNELS {
+                candidate.channels[channel].episode_active = state & (1 << channel) != 0;
+                candidate.channels[channel].episode_valid = state & (1 << (8 + channel)) != 0;
+            }
+            *telemetry = candidate;
+            return Ok(());
+        }
+    }
+    telemetry.snapshot_valid = false;
+    telemetry.snapshot_retry_failure_count += 1;
+    Ok(())
+}
+
 /// Owned, receive-only XDMA DDC session used by the operational backend.
 ///
 /// The register device remains armed for emergency receive-safe cleanup for
@@ -851,6 +1061,8 @@ pub(crate) struct OperationalRxSession {
     reader: Option<JoinHandle<()>>,
     reader_result: Option<Receiver<Result<(), XdmaError>>>,
     identity: SaturnIdentity,
+    fifo_v29_telemetry: FpgaFifoV29Telemetry,
+    adc_v30_telemetry: FpgaAdcV30Telemetry,
     fifo_policy: FifoStatusPolicy,
     last_dma_sequence: Option<u64>,
     frequency_hz: u32,
@@ -885,6 +1097,15 @@ impl OperationalRxSession {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .identity()
             .clone();
+        let (fifo_v29_telemetry, adc_v30_telemetry) = {
+            let device = registers
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            (
+                probe_fifo_v29_telemetry(&device, identity.firmware_minor)?,
+                probe_adc_v30_telemetry(&device, identity.firmware_minor)?,
+            )
+        };
         let fifo_policy = FifoStatusPolicy::for_identity(&identity);
         let dma = OpenOptions::new()
             .read(true)
@@ -908,6 +1129,8 @@ impl OperationalRxSession {
             reader: None,
             reader_result: None,
             identity,
+            fifo_v29_telemetry,
+            adc_v30_telemetry,
             fifo_policy,
             last_dma_sequence: None,
             frequency_hz,
@@ -1030,6 +1253,23 @@ impl OperationalRxSession {
             .read_register(ADC2_PEAK_REGISTER)?
             .min(u32::from(u16::MAX)) as u16;
         Ok((overflow, adc1_peak, adc2_peak))
+    }
+
+    pub(crate) fn sample_extended_telemetry(&mut self) -> Result<(), XdmaError> {
+        let registers = self
+            .registers
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        sample_fifo_v29_telemetry(&registers, &mut self.fifo_v29_telemetry)?;
+        sample_adc_v30_telemetry(&registers, &mut self.adc_v30_telemetry)
+    }
+
+    pub(crate) fn fifo_v29_telemetry(&self) -> &FpgaFifoV29Telemetry {
+        &self.fifo_v29_telemetry
+    }
+
+    pub(crate) fn adc_v30_telemetry(&self) -> &FpgaAdcV30Telemetry {
+        &self.adc_v30_telemetry
     }
 
     pub(crate) fn read_iq(
