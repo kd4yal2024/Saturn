@@ -1315,9 +1315,34 @@ fn write_performance(
                 TelemetryValue::number(stats.header_resyncs),
             ),
             ("header_errors", TelemetryValue::number(stats.header_errors)),
+            ("rx_fifo_hwm", TelemetryValue::number(stats.fifo_depth_hwm)),
+            (
+                "rx_fifo_thresholds",
+                TelemetryValue::number(stats.fifo_over_threshold),
+            ),
+            (
+                "rx_fifo_almost_full",
+                TelemetryValue::number(stats.fifo_almost_full),
+            ),
+            (
+                "rx_fifo_empty_observations",
+                TelemetryValue::number(stats.fifo_empty_observations),
+            ),
+            (
+                "rx_fifo_faults",
+                TelemetryValue::number(stats.fifo_overflows.saturating_add(stats.fifo_underflows)),
+            ),
+            (
+                "rx_host_ring_hwm",
+                TelemetryValue::number(stats.host_ring_depth_hwm),
+            ),
             (
                 "host_buffer_drops",
                 TelemetryValue::number(stats.host_buffer_drops),
+            ),
+            (
+                "host_buffer_drop_bytes",
+                TelemetryValue::number(stats.host_buffer_drop_bytes),
             ),
             (
                 "host_discontinuities",
