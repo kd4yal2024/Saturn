@@ -80,3 +80,31 @@ XDMA backend at 384 ksps that:
 The original V30 artifact and logs remain historical evidence. A repaired
 artifact must carry a new Git SHA and manifest and must not overwrite the
 `a904f42b` build.
+
+## Repaired-FPGA field follow-up
+
+The repaired FPGA artifact built from commit
+`104d5c569054909aef0de27a3458844d0fd4df17` passed implementation with
+WNS `+0.119 ns`, WHS `+0.049 ns`, and all DRC, CDC, methodology, and telemetry
+netlist gates clear. Its primary-slot image is
+`saturn-primary-v30-104d5c56.bin`, SHA-256
+`d80eebf7eb126e23e9922bf05c155a5a7bfa29f190a4eb0d850b0cd1d5f82974`.
+
+After that FPGA was loaded, the browser completed one split-WebSocket session
+and received 384 kHz IQ, confirming that TLS, authentication, proxy routing,
+split-lane pairing, and V30 DDC output could all operate. A later reboot still
+used the old installed bridge binary
+`ca2c859d91ca7827339c67722818095bbf48a7ad1958bdcaba416243c2b4dd1a` and the
+old service ceiling `LimitRTPRIO=21`. That bridge repeatedly exited with:
+
+```text
+operational XDMA RX FIFO remained over threshold after 16 bounded startup drains
+```
+
+Systemd restarted it five times and then marked `saturn-bridge.service`
+failed. `saturn-go.service` remained active and its subsequent proxy attempts
+failed with connection refused because no bridge listener remained. This is
+the expected incomplete state when only the FPGA half of the two-part repair
+is installed; it is not evidence that the repaired FPGA reintroduced the
+original bit-31 failure. Hardware qualification begins only after the matching
+priority-22 dedicated-reader bridge and service unit are deployed.
