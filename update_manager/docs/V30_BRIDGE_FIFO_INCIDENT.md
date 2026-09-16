@@ -137,3 +137,58 @@ the probe or operational DDC stream. Failure to establish the byte order is
 fatal before samples are published. Correcting the sample representation also
 removes the false near-full-scale input that drove WDSP's meter to the observed
 `S9+51` level; ordinary per-radio S-meter calibration remains a separate trim.
+
+## Direct-RX performance and provenance follow-up
+
+After the byte-order repair restored usable stations, the first Web Manager
+capture incorrectly reported `client=n/a`, `connections=n/a`, no application
+telemetry, and "waiting for a Protocol 2 client" while a paired split control/
+media session was actually connected. The direct backend emitted only its
+five-second `xdma status` line; Web Manager still inferred bridge activity from
+the one-second `saturn-bridge: diag` line emitted by the Protocol 2 backend.
+This made the displayed workload and provenance false, not merely incomplete.
+
+Read-only process attribution on the G2 also found approximately 55% of one
+core in the bridge during the observed workload. The largest worker consumed
+about 29%, the main thread about 9%, and the dedicated XDMA reader about 7%.
+Source review showed that direct RX called `WdspRxEngine::push_iq()` for every
+384 kHz sample block before `publish_audio_frame()` checked whether any client
+had requested audio. The hardware drain and framing checks were necessary;
+unconditional floating-point expansion and WDSP audio work were not.
+
+The repaired runtime preserves the quality boundary explicitly:
+
+- an audio consumer receives the unchanged full-rate decoded IQ -> WDSP ->
+  audio path;
+- an IQ-only consumer receives every decoded IQ sample, but WDSP audio work is
+  bypassed;
+- with no media consumer, the dedicated C2H owner continues draining the same
+  bounded ring and the parser continues validating headers, sequence, frame
+  layout, and loss counters without expanding every 24-bit sample to `f32`;
+- one decoded block every 100 ms maintains a labeled raw-IQ meter estimate;
+- after any intentional WDSP input gap, the channel is force-reset before
+  audio processing resumes so stale AGC, NR, or filter history cannot leak
+  into the new stream.
+
+The bridge now writes `/run/saturn-bridge/perf.json` atomically every second.
+It includes the service PID, exact Saturn build commit and dirty state, pinned
+WDSP flavor and source commit, FPGA product/PCB/firmware/date/clock identity,
+client and split-lane state, processing mode, DMA/IQ/audio rates, queue depths,
+drops, framing/loss counters, and TX state. Web Manager accepts it only when
+the schema/source/backend are correct, it is no more than five seconds old,
+and its PID matches `saturn-bridge.service`; older deployments retain the
+journal fallback.
+
+Qualification must measure three workloads separately rather than treating a
+lower idle CPU number as an audio-quality result:
+
+1. active IQ plus audio: no regression in received stations, spectrum, audio,
+   S-meter behavior, drops, discontinuities, or FIFO/framing counters;
+2. IQ-only: full-rate spectrum with zero WDSP-audio processing and a material
+   CPU reduction from the active-audio baseline;
+3. no-client standby: continuously advancing DMA/IQ validation, zero hardware
+   or host-ring loss, approximately 10 Hz meter decoding, and a material CPU
+   reduction from both active modes.
+
+No claimed performance gain is considered accepted until those appliance
+measurements are captured with the new provenance fields.

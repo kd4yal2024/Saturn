@@ -196,6 +196,7 @@ pub(crate) struct RxCaptureStats {
     pub(crate) host_ring_depth_hwm: usize,
     pub(crate) host_pool_starvations: u64,
     power_sum: f64,
+    power_samples: u64,
     peak: f32,
 }
 
@@ -230,10 +231,10 @@ impl RxCaptureStats {
     }
 
     fn rms_dbfs(&self) -> f32 {
-        if self.samples == 0 {
+        if self.power_samples == 0 {
             return -200.0;
         }
-        let mean_power = (self.power_sum / self.samples as f64).max(1.0e-20);
+        let mean_power = (self.power_sum / self.power_samples as f64).max(1.0e-20);
         (10.0 * mean_power.log10()) as f32
     }
 }
@@ -256,6 +257,18 @@ impl DdcStreamParser {
     }
 
     fn feed(&mut self, bytes: &[u8], iq_samples: &mut Vec<f32>) -> Result<(), XdmaError> {
+        self.feed_inner(bytes, Some(iq_samples))
+    }
+
+    fn feed_discard(&mut self, bytes: &[u8]) -> Result<(), XdmaError> {
+        self.feed_inner(bytes, None)
+    }
+
+    fn feed_inner(
+        &mut self,
+        bytes: &[u8],
+        mut iq_samples: Option<&mut Vec<f32>>,
+    ) -> Result<(), XdmaError> {
         if !bytes.len().is_multiple_of(FIFO_WORD_BYTES) {
             return Err(XdmaError::Incompatible(format!(
                 "DDC DMA read length {} is not a multiple of {FIFO_WORD_BYTES}",
@@ -311,17 +324,20 @@ impl DdcStreamParser {
                 return Ok(());
             }
 
-            for sample_word in
-                self.pending[FIFO_WORD_BYTES..frame_bytes].chunks_exact(FIFO_WORD_BYTES)
-            {
-                let i = signed_24_be(&sample_word[0..3]) as f32 / 8_388_608.0;
-                let q = signed_24_be(&sample_word[3..6]) as f32 / 8_388_608.0;
-                iq_samples.push(i);
-                iq_samples.push(q);
-                self.stats.power_sum += ((i * i + q * q) * 0.5) as f64;
-                self.stats.peak = self.stats.peak.max(i.abs()).max(q.abs());
-                self.stats.samples += 1;
+            let sample_bytes = &self.pending[FIFO_WORD_BYTES..frame_bytes];
+            let sample_count = sample_bytes.len() / FIFO_WORD_BYTES;
+            if let Some(output) = iq_samples.as_deref_mut() {
+                for sample_word in sample_bytes.chunks_exact(FIFO_WORD_BYTES) {
+                    let i = signed_24_be(&sample_word[0..3]) as f32 / 8_388_608.0;
+                    let q = signed_24_be(&sample_word[3..6]) as f32 / 8_388_608.0;
+                    output.push(i);
+                    output.push(q);
+                    self.stats.power_sum += ((i * i + q * q) * 0.5) as f64;
+                    self.stats.peak = self.stats.peak.max(i.abs()).max(q.abs());
+                    self.stats.power_samples += 1;
+                }
             }
+            self.stats.samples += sample_count as u64;
             self.stats.frames += 1;
             self.pending.drain(..frame_bytes);
         }
@@ -845,6 +861,7 @@ pub(crate) struct OperationalRxSession {
 
 pub(crate) struct OperationalRxRead {
     pub(crate) samples_ready: bool,
+    pub(crate) sample_pairs: u64,
     pub(crate) requires_drain: bool,
 }
 
@@ -942,6 +959,7 @@ impl OperationalRxSession {
         combined.header_errors = self.parser.stats.header_errors;
         combined.host_discontinuities = self.parser.stats.host_discontinuities;
         combined.power_sum = self.parser.stats.power_sum;
+        combined.power_samples = self.parser.stats.power_samples;
         combined.peak = self.parser.stats.peak;
         combined
     }
@@ -1018,11 +1036,28 @@ impl OperationalRxSession {
         &mut self,
         iq_samples: &mut Vec<f32>,
     ) -> Result<OperationalRxRead, XdmaError> {
-        iq_samples.clear();
+        self.read_iq_inner(Some(iq_samples))
+    }
+
+    /// Drain and validate one queued DMA buffer without expanding 24-bit IQ
+    /// into floating point samples. Framing, sequence, FIFO, and loss counters
+    /// remain identical to the decoded path.
+    pub(crate) fn read_iq_discard(&mut self) -> Result<OperationalRxRead, XdmaError> {
+        self.read_iq_inner(None)
+    }
+
+    fn read_iq_inner(
+        &mut self,
+        mut iq_samples: Option<&mut Vec<f32>>,
+    ) -> Result<OperationalRxRead, XdmaError> {
+        if let Some(output) = iq_samples.as_deref_mut() {
+            output.clear();
+        }
         self.check_reader_result()?;
         let Some(filled) = self.pool.try_take_ready() else {
             return Ok(OperationalRxRead {
                 samples_ready: false,
+                sample_pairs: 0,
                 requires_drain: false,
             });
         };
@@ -1036,13 +1071,17 @@ impl OperationalRxSession {
             self.parser.mark_host_discontinuity();
         }
         self.last_dma_sequence = Some(filled.sequence);
-        let parse_result = self
-            .parser
-            .feed(filled.buffer.as_slice(filled.len), iq_samples);
+        let samples_before = self.parser.stats.samples;
+        let parse_result = if let Some(output) = iq_samples.as_deref_mut() {
+            self.parser.feed(filled.buffer.as_slice(filled.len), output)
+        } else {
+            self.parser.feed_discard(filled.buffer.as_slice(filled.len))
+        };
         self.pool.recycle(filled.buffer);
         parse_result?;
         Ok(OperationalRxRead {
-            samples_ready: !iq_samples.is_empty(),
+            samples_ready: self.parser.stats.samples != samples_before,
+            sample_pairs: self.parser.stats.samples.saturating_sub(samples_before),
             requires_drain: self.pool.ready_len() != 0,
         })
     }
@@ -1504,6 +1543,24 @@ mod tests {
         let error = parser.feed(&malformed, &mut iq_samples).unwrap_err();
         assert!(error.to_string().contains("DDC stream framing error"));
         assert_eq!(parser.stats.header_errors, 1);
+    }
+
+    #[test]
+    fn parser_discard_path_preserves_framing_and_can_resume_decoding() {
+        let frame = test_frame();
+        let mut parser = DdcStreamParser::new(direct_ddc_rate_word());
+        parser.feed_discard(&frame).unwrap();
+        assert_eq!(parser.stats.frames, 1);
+        assert_eq!(parser.stats.samples, 8);
+        assert_eq!(parser.stats.power_samples, 0);
+
+        let mut iq_samples = Vec::new();
+        parser.feed(&frame, &mut iq_samples).unwrap();
+        assert_eq!(parser.stats.frames, 2);
+        assert_eq!(parser.stats.samples, 16);
+        assert_eq!(parser.stats.power_samples, 8);
+        assert_eq!(iq_samples.len(), 16);
+        assert_eq!(parser.stats.header_errors, 0);
     }
 
     #[test]

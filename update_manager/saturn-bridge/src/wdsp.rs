@@ -964,6 +964,19 @@ impl WdspRxEngine {
         self.output_buffer.fill(0.0);
     }
 
+    /// Reset WDSP after the direct backend intentionally stopped feeding RX
+    /// samples while no audio consumer existed. A forced state reset prevents
+    /// stale AGC/NR/filter history from leaking into newly resumed audio.
+    pub fn restart_after_input_gap(&mut self) {
+        self.reset_stream_buffers();
+        unsafe {
+            SetChannelState(self.channel_id, 0, 1);
+            SetChannelState(self.channel_id, 1, 0);
+        }
+        self.last_meter_dbm = None;
+        self.wbfm_stereo_detected = false;
+    }
+
     pub fn reset_audio_packetizer(&mut self) {
         self.pending_audio.clear();
     }

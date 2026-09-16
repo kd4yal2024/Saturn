@@ -243,6 +243,11 @@ Notes:
   - host/process/network/XDMA snapshots used for baseline deltas
   - `workload` metadata derived from the deployed `current` symlink and the `p2app.service` drop-in (`selected_app`, startup mode, panel mode, workload key)
   - `app_telemetry` parsed from `/dev/shm/saturn_p23_perf_stats.json` when the running `p2app`-compatible app exports live counters
+  - for the direct-XDMA backend, fresh PID-matched telemetry from the atomic
+    `/run/saturn-bridge/perf.json` snapshot, including client/split-lane state,
+    processing mode, DMA/IQ/audio rates, queues/drops, FPGA identity, and exact
+    Saturn/WDSP source provenance; older bridge builds fall back to the latest
+    journal diagnostic line
 - `app_telemetry.current` includes:
   - runtime flags and feature flags
   - port/DDC/wideband routing shape

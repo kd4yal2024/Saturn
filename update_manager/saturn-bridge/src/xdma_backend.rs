@@ -9,16 +9,16 @@ use crate::config::BridgeConfig;
 use crate::radio_model::{DemodMode, NoiseReductionMode, PureSignalState, RadioModel, TxPhase};
 use crate::rx_thread::correct_smeter_dbm;
 use crate::sync_ext::MutexExt;
-use crate::tci::{TciCommand, TciFrontend};
+use crate::tci::{TciClientSnapshot, TciCommand, TciFrontend, TciMediaDemand};
 use crate::tx_audio::{TxAudioIngress, TxAudioSource};
 use crate::tx_thread::{self, TxCommand, TxEvent};
 use crate::wdsp::{normalize_audio_frame_float_count, WdspRxEngine, WDSP_AUDIO_RATE_HZ};
 use crate::xdma::{SaturnIdentity, XdmaError};
 use crate::xdma_rx::{
-    OperationalRxSession, DIRECT_DDC_INDEX, DIRECT_DDC_SAMPLE_RATE_KHZ,
+    OperationalRxSession, RxCaptureStats, DIRECT_DDC_INDEX, DIRECT_DDC_SAMPLE_RATE_KHZ,
     OPERATIONAL_RX_BUFFER_BYTES, OPERATIONAL_RX_BUFFER_COUNT, RUNTIME_HOST_DRAIN_MAX_READS,
 };
-use crate::xdma_telemetry::{record_runtime_readiness, TelemetryValue};
+use crate::xdma_telemetry::{record_runtime_performance, record_runtime_readiness, TelemetryValue};
 use crate::xdma_tx_radio::{DirectTxSnapshot, DirectXdmaTxRadio};
 use std::env;
 use std::error::Error;
@@ -30,12 +30,16 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 const DEFAULT_READY_PATH: &str = "/run/saturn-bridge/xdma-ready.json";
+const DEFAULT_PERF_PATH: &str = "/run/saturn-bridge/perf.json";
 const READY_DMA_READS: u64 = 4;
 const READY_IQ_PAIRS: u64 = 1_024;
 const MAX_COMMANDS_PER_LOOP: usize = 8;
 const IDLE_POLL: Duration = Duration::from_micros(250);
 const READINESS_PERIOD: Duration = Duration::from_secs(1);
 const STATUS_PERIOD: Duration = Duration::from_secs(5);
+const PERF_PERIOD: Duration = Duration::from_secs(1);
+const MEDIA_DEMAND_REFRESH: Duration = Duration::from_millis(10);
+const IDLE_METER_PERIOD: Duration = Duration::from_millis(100);
 const DIRECT_TX_MAX_WATTS: u8 = 100;
 const TX_UPLINK_TIMEOUT: Duration = Duration::from_millis(750);
 const TX_CONTROL_TIMEOUT: Duration = Duration::from_millis(1_500);
@@ -54,6 +58,64 @@ struct CommandEffects {
 struct DirectTxControl {
     requested: bool,
     last_mic_at: Option<Instant>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RxProcessingMode {
+    Audio,
+    IqOnly,
+    MeterOnly,
+    DrainOnly,
+}
+
+impl RxProcessingMode {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Audio => "audio",
+            Self::IqOnly => "iq-only",
+            Self::MeterOnly => "meter-only",
+            Self::DrainOnly => "drain-only",
+        }
+    }
+
+    fn decodes_iq(self) -> bool {
+        self != Self::DrainOnly
+    }
+}
+
+#[derive(Debug, Default)]
+struct DirectRxPerformance {
+    iq_frames_published: u64,
+    audio_frames_published: u64,
+    audio_samples_published: u64,
+    dsp_iq_pairs: u64,
+    bypassed_iq_pairs: u64,
+    meter_only_iq_pairs: u64,
+}
+
+fn rx_processing_mode(demand: TciMediaDemand, meter_due: bool) -> RxProcessingMode {
+    if demand.audio_stream_enabled {
+        RxProcessingMode::Audio
+    } else if demand.iq_stream_enabled {
+        RxProcessingMode::IqOnly
+    } else if meter_due {
+        RxProcessingMode::MeterOnly
+    } else {
+        RxProcessingMode::DrainOnly
+    }
+}
+
+fn iq_rms_dbfs(iq_samples: &[f32]) -> Option<f32> {
+    let mut power = 0.0f64;
+    let mut count = 0u64;
+    for pair in iq_samples.chunks_exact(2) {
+        // Match WDSP's RXA_S_AV convention: mean complex power is I^2 + Q^2,
+        // without an additional real-signal 1/2 factor.  That keeps the
+        // low-rate meter continuous when the audio consumer starts or stops.
+        power += f64::from(pair[0] * pair[0] + pair[1] * pair[1]);
+        count += 1;
+    }
+    (count != 0).then(|| (10.0 * (power / count as f64).max(1.0e-20).log10()) as f32)
 }
 
 impl CommandEffects {
@@ -188,6 +250,9 @@ pub(crate) fn run(config: BridgeConfig) -> Result<(), Box<dyn Error>> {
 
 fn run_inner(mut config: BridgeConfig, ready_path: &Path) -> Result<(), Box<dyn Error>> {
     let _signal_guard = SignalGuard::install()?;
+    let perf_path = env::var_os("SATURN_BRIDGE_PERF_PATH")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(DEFAULT_PERF_PATH));
     let radio_model = Arc::new(Mutex::new(RadioModel::new(
         DIRECT_DDC_INDEX as u8,
         config.ddc0_frequency_hz,
@@ -263,6 +328,15 @@ fn run_inner(mut config: BridgeConfig, ready_path: &Path) -> Result<(), Box<dyn 
     let mut readiness_state = "starting";
     let mut last_readiness = Instant::now() - READINESS_PERIOD;
     let mut last_status = Instant::now();
+    let mut last_perf = Instant::now() - PERF_PERIOD;
+    let mut last_perf_stats = rx.stats();
+    let mut last_media_demand_refresh = Instant::now() - MEDIA_DEMAND_REFRESH;
+    let mut media_demand = TciMediaDemand::default();
+    let mut last_idle_meter = Instant::now() - IDLE_METER_PERIOD;
+    let mut wdsp_input_gap = false;
+    let mut rx_performance = DirectRxPerformance::default();
+    let mut meter_source = "unavailable";
+    let mut current_processing_mode = RxProcessingMode::DrainOnly;
 
     write_readiness(
         ready_path,
@@ -297,27 +371,76 @@ fn run_inner(mut config: BridgeConfig, ready_path: &Path) -> Result<(), Box<dyn 
     let runtime_result = (|| -> Result<(), Box<dyn Error>> {
         while !STOP_REQUESTED.load(Ordering::Relaxed) {
             let mut did_work = false;
+            if last_media_demand_refresh.elapsed() >= MEDIA_DEMAND_REFRESH {
+                media_demand = tci.media_demand();
+                last_media_demand_refresh = Instant::now();
+            }
             // Consume a bounded slice of the host ring before client control
             // work. The dedicated reader continues servicing the hardware FIFO
             // during every DSP, publication, command, and filesystem operation.
             for _ in 0..RUNTIME_HOST_DRAIN_MAX_READS {
-                let outcome = rx.read_iq(&mut iq_samples)?;
+                let mode = rx_processing_mode(
+                    media_demand,
+                    last_idle_meter.elapsed() >= IDLE_METER_PERIOD,
+                );
+                current_processing_mode = mode;
+                let outcome = if mode.decodes_iq() {
+                    rx.read_iq(&mut iq_samples)?
+                } else {
+                    rx.read_iq_discard()?
+                };
                 if outcome.samples_ready {
                     did_work = true;
-                    tci.publish_iq_frame(DIRECT_DDC_SAMPLE_RATE_KHZ * 1_000, &iq_samples);
-                    for audio in wdsp.push_iq(&iq_samples) {
-                        tci.publish_audio_frame(wdsp.audio_sample_rate_hz(), &audio);
+                    let meter_due = last_idle_meter.elapsed() >= IDLE_METER_PERIOD;
+                    let raw_meter = (mode != RxProcessingMode::Audio && meter_due)
+                        .then(|| iq_rms_dbfs(&iq_samples))
+                        .flatten();
+                    meter_source = if mode == RxProcessingMode::Audio {
+                        "wdsp"
+                    } else {
+                        "raw-iq-estimate"
+                    };
+                    if media_demand.iq_stream_enabled {
+                        tci.publish_iq_frame(DIRECT_DDC_SAMPLE_RATE_KHZ * 1_000, &iq_samples);
+                        rx_performance.iq_frames_published += 1;
                     }
-                    let mut model = radio_model.lock_unpoisoned();
-                    model.observed.ddc0_packets = rx.stats().dma_reads;
-                    model.observed.ddc0_meter_dbm = wdsp.smeter_dbm().map(|raw_dbm| {
-                        correct_smeter_dbm(
-                            raw_dbm,
-                            model.desired.rx_attenuation_db,
-                            config.smeter_calibration_db,
-                        )
-                    });
-                    model.observed.rx_wbfm_stereo_detected = wdsp.wbfm_stereo_detected();
+                    if mode == RxProcessingMode::Audio {
+                        if wdsp_input_gap {
+                            wdsp.restart_after_input_gap();
+                            wdsp_input_gap = false;
+                        }
+                        rx_performance.dsp_iq_pairs += outcome.sample_pairs;
+                        for audio in wdsp.push_iq(&iq_samples) {
+                            rx_performance.audio_frames_published += 1;
+                            rx_performance.audio_samples_published += audio.len() as u64;
+                            tci.publish_audio_frame(wdsp.audio_sample_rate_hz(), &audio);
+                        }
+                    } else {
+                        wdsp_input_gap = true;
+                        rx_performance.bypassed_iq_pairs += outcome.sample_pairs;
+                        if mode == RxProcessingMode::MeterOnly {
+                            rx_performance.meter_only_iq_pairs += outcome.sample_pairs;
+                        }
+                    }
+                    if meter_due && mode != RxProcessingMode::DrainOnly {
+                        let mut model = radio_model.lock_unpoisoned();
+                        model.observed.ddc0_packets = rx.stats().dma_reads;
+                        let meter = if mode == RxProcessingMode::Audio {
+                            wdsp.smeter_dbm()
+                        } else {
+                            raw_meter
+                        };
+                        if let Some(raw_dbm) = meter {
+                            model.observed.ddc0_meter_dbm = Some(correct_smeter_dbm(
+                                raw_dbm,
+                                model.desired.rx_attenuation_db,
+                                config.smeter_calibration_db,
+                            ));
+                        }
+                        model.observed.rx_wbfm_stereo_detected =
+                            mode == RxProcessingMode::Audio && wdsp.wbfm_stereo_detected();
+                        last_idle_meter = Instant::now();
+                    }
                 }
                 if !outcome.requires_drain {
                     break;
@@ -448,6 +571,80 @@ fn run_inner(mut config: BridgeConfig, ready_path: &Path) -> Result<(), Box<dyn 
                 tci.set_tx_media_priority_active(
                     tx_control.requested || model.desired.tx_phase != TxPhase::Rx,
                 );
+            }
+
+            if last_perf.elapsed() >= PERF_PERIOD {
+                let elapsed = last_perf.elapsed().as_secs_f64().max(0.001);
+                let client = tci.client_snapshot();
+                media_demand = TciMediaDemand {
+                    iq_stream_enabled: client.iq_stream_enabled,
+                    audio_stream_enabled: client.audio_stream_enabled,
+                };
+                let stats = rx.stats();
+                if let Err(error) = write_performance(
+                    &perf_path,
+                    readiness_state,
+                    &identity,
+                    &rx,
+                    tx_radio.snapshot(),
+                    &client,
+                    current_processing_mode,
+                    meter_source,
+                    elapsed,
+                    &stats,
+                    &last_perf_stats,
+                    &rx_performance,
+                ) {
+                    eprintln!(
+                        "saturn-bridge: performance telemetry write failed without interrupting RX: {error}"
+                    );
+                }
+                println!(
+                    "saturn-bridge: diag hp_s=0.0 ddc_s={:.1} rx_audio_frames_s={:.1} rx_audio_samples_s={:.0} tci_mic_frames_s=0.0 tci_mic_samples_s=0 client={} connections={} connection_limit={} connection_rejected={} connection_hwm={} iq={} audio={} split_control={} split_media={} split_paired={} outbound_drops={} safety_p99_us={} control_p99_us={} control_replaced_s={} control_dropped_s={} control_q_hwm={} display_replaced_s={} display_dropped_s={} display_rate_limited_s={} audio_dropped_s={} audio_gaps={} audio_panic={} command_q={} command_q_hwm={} command_coalesced={} command_dropped={} command_mic_dropped={} send_blocked_ms={} out_hwm_bytes={} tcp_outq_hwm_bytes={} safety_depth_overflow={} processing={} dsp_iq_pairs={} bypassed_iq_pairs={} meter_source={}",
+                    stats.dma_reads.saturating_sub(last_perf_stats.dma_reads) as f64 / elapsed,
+                    rx_performance.audio_frames_published as f64 / elapsed,
+                    rx_performance.audio_samples_published as f64 / elapsed,
+                    u8::from(client.active),
+                    client.active_connections,
+                    client.connection_limit,
+                    client.rejected_connections,
+                    client.connection_high_watermark,
+                    u8::from(client.iq_stream_enabled),
+                    u8::from(client.audio_stream_enabled),
+                    client.split_control_clients,
+                    client.split_media_clients,
+                    client.split_paired_sessions,
+                    client.outbound_drops,
+                    client.safety_enqueue_to_write_p99_us,
+                    client.control_enqueue_to_write_p99_us,
+                    client.control_replaced_per_sec,
+                    client.control_dropped_per_sec,
+                    client.control_queue_high_watermark,
+                    client.display_replaced_per_sec,
+                    client.display_dropped_per_sec,
+                    client.display_rate_limited_per_sec,
+                    client.audio_dropped_per_sec,
+                    client.audio_seq_gap_count,
+                    client.audio_panic_drain_count,
+                    client.command_queue_depth,
+                    client.command_queue_high_watermark,
+                    client.command_control_coalesced,
+                    client.command_control_dropped,
+                    client.command_mic_dropped,
+                    client.send_blocked_ms,
+                    client.outbound_high_watermark_bytes,
+                    client.tcp_outq_high_watermark_bytes,
+                    client.safety_queue_depth_overflow_count,
+                    current_processing_mode.label(),
+                    rx_performance.dsp_iq_pairs,
+                    rx_performance.bypassed_iq_pairs,
+                    meter_source,
+                );
+                tci.publish_scheduler_telemetry(&client);
+                tci.publish_tx_uplink_telemetry(&client);
+                last_perf_stats = stats;
+                rx_performance = DirectRxPerformance::default();
+                last_perf = Instant::now();
             }
 
             if readiness_state == "starting"
@@ -972,6 +1169,204 @@ fn handle_command(
     Ok(effects)
 }
 
+#[allow(clippy::too_many_arguments)]
+fn write_performance(
+    path: &Path,
+    status: &str,
+    identity: &SaturnIdentity,
+    rx: &OperationalRxSession,
+    tx: DirectTxSnapshot,
+    client: &TciClientSnapshot,
+    processing_mode: RxProcessingMode,
+    meter_source: &str,
+    elapsed: f64,
+    stats: &RxCaptureStats,
+    previous: &RxCaptureStats,
+    performance: &DirectRxPerformance,
+) -> Result<(), XdmaError> {
+    let dma_reads_per_sec = stats.dma_reads.saturating_sub(previous.dma_reads) as f64 / elapsed;
+    let dma_bytes_per_sec = stats.dma_bytes.saturating_sub(previous.dma_bytes) as f64 / elapsed;
+    let iq_pairs_per_sec = stats.samples.saturating_sub(previous.samples) as f64 / elapsed;
+    let build_dirty = env!("SATURN_BRIDGE_GIT_DIRTY") == "true";
+    record_runtime_performance(
+        path,
+        status,
+        &[
+            ("pid", TelemetryValue::number(std::process::id())),
+            (
+                "build_git_sha",
+                TelemetryValue::text(env!("SATURN_BRIDGE_GIT_SHA")),
+            ),
+            ("build_git_dirty", TelemetryValue::boolean(build_dirty)),
+            (
+                "wdsp_flavor",
+                TelemetryValue::text(env!("SATURN_BRIDGE_WDSP_FLAVOR")),
+            ),
+            (
+                "wdsp_git_sha",
+                TelemetryValue::text(env!("SATURN_BRIDGE_WDSP_COMMIT")),
+            ),
+            (
+                "processing_mode",
+                TelemetryValue::text(processing_mode.label()),
+            ),
+            ("meter_source", TelemetryValue::text(meter_source)),
+            ("client", TelemetryValue::number(u8::from(client.active))),
+            (
+                "connections",
+                TelemetryValue::number(client.active_connections),
+            ),
+            (
+                "connection_limit",
+                TelemetryValue::number(client.connection_limit),
+            ),
+            (
+                "connection_rejected",
+                TelemetryValue::number(client.rejected_connections),
+            ),
+            (
+                "connection_hwm",
+                TelemetryValue::number(client.connection_high_watermark),
+            ),
+            (
+                "iq",
+                TelemetryValue::number(u8::from(client.iq_stream_enabled)),
+            ),
+            (
+                "audio",
+                TelemetryValue::number(u8::from(client.audio_stream_enabled)),
+            ),
+            (
+                "split_control",
+                TelemetryValue::number(client.split_control_clients),
+            ),
+            (
+                "split_media",
+                TelemetryValue::number(client.split_media_clients),
+            ),
+            (
+                "split_paired",
+                TelemetryValue::number(client.split_paired_sessions),
+            ),
+            ("ddc_s", TelemetryValue::number(dma_reads_per_sec)),
+            ("ddc_bytes_s", TelemetryValue::number(dma_bytes_per_sec)),
+            ("iq_pairs_s", TelemetryValue::number(iq_pairs_per_sec)),
+            ("dma_reads", TelemetryValue::number(stats.dma_reads)),
+            ("dma_bytes", TelemetryValue::number(stats.dma_bytes)),
+            ("iq_pairs", TelemetryValue::number(stats.samples)),
+            (
+                "iq_frames_s",
+                TelemetryValue::number(performance.iq_frames_published as f64 / elapsed),
+            ),
+            (
+                "rx_audio_frames_s",
+                TelemetryValue::number(performance.audio_frames_published as f64 / elapsed),
+            ),
+            (
+                "rx_audio_samples_s",
+                TelemetryValue::number(performance.audio_samples_published as f64 / elapsed),
+            ),
+            (
+                "dsp_iq_pairs_s",
+                TelemetryValue::number(performance.dsp_iq_pairs as f64 / elapsed),
+            ),
+            (
+                "bypassed_iq_pairs_s",
+                TelemetryValue::number(performance.bypassed_iq_pairs as f64 / elapsed),
+            ),
+            (
+                "meter_only_iq_pairs_s",
+                TelemetryValue::number(performance.meter_only_iq_pairs as f64 / elapsed),
+            ),
+            (
+                "outbound_drops",
+                TelemetryValue::number(client.outbound_drops),
+            ),
+            (
+                "outbound_queued_bytes",
+                TelemetryValue::number(client.outbound_queued_bytes),
+            ),
+            (
+                "out_hwm_bytes",
+                TelemetryValue::number(client.outbound_high_watermark_bytes),
+            ),
+            (
+                "tcp_outq_hwm_bytes",
+                TelemetryValue::number(client.tcp_outq_high_watermark_bytes),
+            ),
+            (
+                "command_q",
+                TelemetryValue::number(client.command_queue_depth),
+            ),
+            (
+                "command_q_hwm",
+                TelemetryValue::number(client.command_queue_high_watermark),
+            ),
+            (
+                "audio_dropped_s",
+                TelemetryValue::number(client.audio_dropped_per_sec),
+            ),
+            (
+                "display_dropped_s",
+                TelemetryValue::number(client.display_dropped_per_sec),
+            ),
+            (
+                "header_resync",
+                TelemetryValue::number(stats.header_resyncs),
+            ),
+            ("header_errors", TelemetryValue::number(stats.header_errors)),
+            (
+                "host_buffer_drops",
+                TelemetryValue::number(stats.host_buffer_drops),
+            ),
+            (
+                "host_discontinuities",
+                TelemetryValue::number(stats.host_discontinuities),
+            ),
+            (
+                "host_pool_starvations",
+                TelemetryValue::number(stats.host_pool_starvations),
+            ),
+            ("product_id", TelemetryValue::number(identity.product_id)),
+            ("pcb_version", TelemetryValue::number(identity.pcb_version)),
+            ("software_id", TelemetryValue::number(identity.software_id)),
+            (
+                "firmware_major",
+                TelemetryValue::number(identity.firmware_major),
+            ),
+            (
+                "firmware_minor",
+                TelemetryValue::number(identity.firmware_minor),
+            ),
+            ("clock_mask", TelemetryValue::number(identity.clock_mask)),
+            (
+                "date_code_hex",
+                TelemetryValue::text(format!("{:08x}", identity.user_version)),
+            ),
+            (
+                "fallback_config",
+                TelemetryValue::boolean(identity.is_fallback()),
+            ),
+            ("frequency_hz", TelemetryValue::number(rx.frequency_hz())),
+            (
+                "sample_rate_hz",
+                TelemetryValue::number(DIRECT_DDC_SAMPLE_RATE_KHZ * 1_000),
+            ),
+            ("ddc", TelemetryValue::number(DIRECT_DDC_INDEX)),
+            ("adc", TelemetryValue::text("ADC1")),
+            ("tx_stream", TelemetryValue::boolean(tx.stream_active)),
+            ("tx_keyed", TelemetryValue::boolean(tx.keyed)),
+            ("tx_dma_writes", TelemetryValue::number(tx.dma_writes)),
+            ("tx_frames", TelemetryValue::number(tx.frames_written)),
+            ("tx_fifo_faults", TelemetryValue::number(tx.fifo_faults)),
+        ],
+    )
+    .map_err(|source| XdmaError::Io {
+        action: "could not persist direct XDMA performance telemetry",
+        source,
+    })
+}
+
 fn write_readiness(
     path: &Path,
     status: &str,
@@ -1185,10 +1580,44 @@ fn write_readiness(
 mod tests {
     use super::*;
 
+    fn demand(iq: bool, audio: bool) -> TciMediaDemand {
+        TciMediaDemand {
+            iq_stream_enabled: iq,
+            audio_stream_enabled: audio,
+        }
+    }
+
     #[test]
     fn readiness_requires_advancing_dma_and_iq() {
         assert!(READY_DMA_READS > 0);
         assert!(READY_IQ_PAIRS >= READY_DMA_READS);
+    }
+
+    #[test]
+    fn rx_processing_only_runs_wdsp_for_audio_consumers() {
+        assert_eq!(
+            rx_processing_mode(demand(true, true), false),
+            RxProcessingMode::Audio
+        );
+        assert_eq!(
+            rx_processing_mode(demand(true, false), false),
+            RxProcessingMode::IqOnly
+        );
+        assert_eq!(
+            rx_processing_mode(TciMediaDemand::default(), true),
+            RxProcessingMode::MeterOnly
+        );
+        assert_eq!(
+            rx_processing_mode(TciMediaDemand::default(), false),
+            RxProcessingMode::DrainOnly
+        );
+    }
+
+    #[test]
+    fn raw_iq_meter_uses_complex_mean_power() {
+        let meter = iq_rms_dbfs(&[0.5, 0.5, -0.5, -0.5]).unwrap();
+        assert!((meter - -3.0103).abs() < 0.001);
+        assert_eq!(iq_rms_dbfs(&[]), None);
     }
 
     #[test]

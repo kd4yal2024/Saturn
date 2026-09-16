@@ -104,6 +104,12 @@ pub struct TciClientSnapshot {
     pub tx_codec_release_flush_count: u64,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct TciMediaDemand {
+    pub(crate) iq_stream_enabled: bool,
+    pub(crate) audio_stream_enabled: bool,
+}
+
 struct JoinGuard {
     #[allow(dead_code)]
     handle: thread::JoinHandle<()>,
@@ -448,6 +454,21 @@ impl TciFrontend {
                 .values()
                 .map(|client| client.state.tx_codec_release_flush_count)
                 .sum(),
+        }
+    }
+
+    /// Return the media demand without draining the one-second queue metrics.
+    /// Direct-XDMA uses this cheap snapshot to avoid running DSP for media that
+    /// no connected client requested.
+    pub(crate) fn media_demand(&self) -> TciMediaDemand {
+        let clients = self.clients.lock_unpoisoned();
+        TciMediaDemand {
+            iq_stream_enabled: clients
+                .values()
+                .any(|client| client.state.iq_stream_enabled),
+            audio_stream_enabled: clients
+                .values()
+                .any(|client| client.state.audio_stream_enabled),
         }
     }
 

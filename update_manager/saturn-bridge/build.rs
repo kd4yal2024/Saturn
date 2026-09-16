@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 fn main() {
+    emit_build_provenance();
     println!("cargo:rerun-if-env-changed=SATURN_BRIDGE_STUB_NATIVE");
     println!("cargo:rustc-check-cfg=cfg(wdsp_has_rnnr_sbnr)");
     println!("cargo:rustc-check-cfg=cfg(wdsp_has_phrot_auto)");
@@ -86,6 +87,55 @@ fn main() {
     println!("cargo:rustc-link-lib=fftw3f");
     println!("cargo:rustc-link-lib=m");
     println!("cargo:rustc-link-lib=pthread");
+}
+
+fn emit_build_provenance() {
+    let manifest_dir =
+        PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR not set"));
+    let repo_dir = manifest_dir.join("../..");
+    let git_sha = env::var("SATURN_BUILD_COMMIT")
+        .ok()
+        .filter(|value| value.len() == 40 && value.chars().all(|ch| ch.is_ascii_hexdigit()))
+        .or_else(|| git_value(&repo_dir, &["rev-parse", "HEAD"]))
+        .unwrap_or_else(|| "unknown".to_string());
+    let git_dirty = env::var("SATURN_BUILD_DIRTY")
+        .ok()
+        .and_then(|value| match value.as_str() {
+            "true" | "1" => Some(true),
+            "false" | "0" => Some(false),
+            _ => None,
+        })
+        .unwrap_or_else(|| {
+            git_value(&repo_dir, &["status", "--porcelain"])
+                .map(|value| !value.is_empty())
+                .unwrap_or(false)
+        });
+    let wdsp_flavor =
+        env::var("SATURN_BRIDGE_WDSP_FLAVOR").unwrap_or_else(|_| "unknown".to_string());
+    let wdsp_commit =
+        env::var("SATURN_BRIDGE_WDSP_COMMIT").unwrap_or_else(|_| "unknown".to_string());
+
+    println!("cargo:rerun-if-env-changed=SATURN_BUILD_COMMIT");
+    println!("cargo:rerun-if-env-changed=SATURN_BUILD_DIRTY");
+    println!("cargo:rerun-if-env-changed=SATURN_BRIDGE_WDSP_FLAVOR");
+    println!("cargo:rerun-if-env-changed=SATURN_BRIDGE_WDSP_COMMIT");
+    println!("cargo:rustc-env=SATURN_BRIDGE_GIT_SHA={git_sha}");
+    println!("cargo:rustc-env=SATURN_BRIDGE_GIT_DIRTY={git_dirty}");
+    println!("cargo:rustc-env=SATURN_BRIDGE_WDSP_FLAVOR={wdsp_flavor}");
+    println!("cargo:rustc-env=SATURN_BRIDGE_WDSP_COMMIT={wdsp_commit}");
+}
+
+fn git_value(repo_dir: &Path, args: &[&str]) -> Option<String> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(repo_dir)
+        .args(args)
+        .output()
+        .ok()?;
+    output
+        .status
+        .success()
+        .then(|| String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
 fn link_wdsp_dir(wdsp_dir: PathBuf) {

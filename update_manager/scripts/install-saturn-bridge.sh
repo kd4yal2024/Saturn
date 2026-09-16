@@ -303,6 +303,16 @@ verify_bridge_inputs() {
 build_bridge() {
   local cargo_args=(build)
   local native_env=()
+  local build_commit build_dirty
+  build_commit="$(git -C "$SATURN_REPO_ROOT" rev-parse HEAD 2>/dev/null || true)"
+  [[ "$build_commit" =~ ^[0-9a-fA-F]{40}$ ]] \
+    || die "Could not resolve the Saturn source commit for Bridge provenance"
+  if [[ -n "$(git -C "$SATURN_REPO_ROOT" status --porcelain 2>/dev/null)" ]]; then
+    build_dirty=true
+  else
+    build_dirty=false
+  fi
+  native_env+=(SATURN_BUILD_COMMIT="${build_commit,,}" SATURN_BUILD_DIRTY="$build_dirty")
   if [[ "$SATURN_BRIDGE_BUILD_PROFILE" == "release" ]]; then
     cargo_args+=(--release)
   fi
@@ -310,13 +320,21 @@ build_bridge() {
   case "$SATURN_BRIDGE_WDSP_FLAVOR" in
     wdsp2|2.00)
       build_wdsp2
-      native_env+=(SATURN_WDSP_DIR="$SATURN_WDSP2_BUILD_DIR")
+      native_env+=(
+        SATURN_WDSP_DIR="$SATURN_WDSP2_BUILD_DIR"
+        SATURN_BRIDGE_WDSP_FLAVOR="wdsp2-2.00"
+        SATURN_BRIDGE_WDSP_COMMIT="$(git -C "$SATURN_WDSP2_REPO_DIR" rev-parse HEAD)"
+      )
       ;;
     pihpsdr|legacy)
       need_file "$SATURN_PIHPSDR_DIR/wdsp/libwdsp.a" "piHPSDR WDSP archive"
       need_file "$SATURN_PIHPSDR_DIR/rnnoise/librnnoise.a" "piHPSDR rnnoise archive"
       need_file "$SATURN_PIHPSDR_DIR/libspecbleach/libspecbleach.a" "piHPSDR specbleach archive"
-      native_env+=(SATURN_PIHPSDR_DIR="$SATURN_PIHPSDR_DIR")
+      native_env+=(
+        SATURN_PIHPSDR_DIR="$SATURN_PIHPSDR_DIR"
+        SATURN_BRIDGE_WDSP_FLAVOR="pihpsdr-legacy"
+        SATURN_BRIDGE_WDSP_COMMIT="$(git -C "$SATURN_PIHPSDR_DIR" rev-parse HEAD 2>/dev/null || printf unknown)"
+      )
       ;;
     *)
       die "Unsupported SATURN_BRIDGE_WDSP_FLAVOR: $SATURN_BRIDGE_WDSP_FLAVOR"
@@ -511,6 +529,7 @@ Environment=SATURN_BRIDGE_RADIO_HOST=127.0.0.1
 Environment=SATURN_BRIDGE_RADIO_PORT=1024
 Environment=SATURN_BRIDGE_RADIO_BACKEND=p2
 Environment=SATURN_BRIDGE_XDMA_READY_PATH=/run/saturn-bridge/xdma-ready.json
+Environment=SATURN_BRIDGE_PERF_PATH=/run/saturn-bridge/perf.json
 Environment=SATURN_BRIDGE_FFTW_WISDOM_PATH=${SATURN_BRIDGE_FFTW_WISDOM_PATH}
 Environment=SATURN_BRIDGE_CLIENT_HOST=127.0.0.1
 Environment=SATURN_BRIDGE_CLIENT_PORT=12000

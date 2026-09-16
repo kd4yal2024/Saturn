@@ -132,6 +132,14 @@ pub(crate) fn record_runtime_readiness(
     write_snapshot_atomic(path, document.as_bytes())
 }
 
+pub(crate) fn record_runtime_performance(
+    path: &Path,
+    status: &str,
+    metrics: &[(&str, TelemetryValue)],
+) -> io::Result<()> {
+    record_runtime_readiness(path, status, None, metrics)
+}
+
 fn snapshot_path() -> PathBuf {
     env::var_os(SNAPSHOT_PATH_ENV)
         .map(PathBuf::from)

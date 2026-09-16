@@ -3066,6 +3066,132 @@ async fn post_compare_performance_benchmarks(
     }
 }
 
+const SATURN_BRIDGE_PERF_FILE: &str = "/run/saturn-bridge/perf.json";
+const SATURN_BRIDGE_PERF_MAX_AGE_MS: u64 = 5_000;
+
+fn bridge_perf_file_telemetry(
+    path: &Path,
+    main_pid: Option<u32>,
+    now_ms: u64,
+) -> Result<serde_json::Value, String> {
+    let text = fs::read_to_string(path).map_err(|error| error.to_string())?;
+    let document: serde_json::Value =
+        serde_json::from_str(&text).map_err(|error| error.to_string())?;
+    if document
+        .get("schema_version")
+        .and_then(|value| value.as_u64())
+        != Some(1)
+        || document.get("source").and_then(|value| value.as_str()) != Some("saturn-bridge")
+        || document.get("backend").and_then(|value| value.as_str()) != Some("xdma")
+    {
+        return Err("invalid saturn-bridge performance snapshot identity".to_string());
+    }
+    let updated_at_ms = document
+        .get("updated_at_ms")
+        .and_then(|value| value.as_u64())
+        .ok_or_else(|| "missing saturn-bridge performance timestamp".to_string())?;
+    let age_ms = now_ms.saturating_sub(updated_at_ms);
+    if age_ms > SATURN_BRIDGE_PERF_MAX_AGE_MS {
+        return Err(format!(
+            "saturn-bridge performance snapshot is stale ({age_ms}ms)"
+        ));
+    }
+    let metrics = document
+        .get("metrics")
+        .and_then(|value| value.as_object())
+        .ok_or_else(|| "missing saturn-bridge performance metrics".to_string())?;
+    let number = |key: &str| metrics.get(key).and_then(serde_json::Value::as_f64);
+    let integer = |key: &str| metrics.get(key).and_then(serde_json::Value::as_u64);
+    let boolean = |key: &str| metrics.get(key).and_then(serde_json::Value::as_bool);
+    let snapshot_pid = integer("pid");
+    let pid_matches_service = matches!(
+        (main_pid, snapshot_pid),
+        (Some(service_pid), Some(snapshot_pid)) if u64::from(service_pid) == snapshot_pid
+    );
+    if main_pid.is_some() && !pid_matches_service {
+        return Err("saturn-bridge performance PID does not match the service".to_string());
+    }
+    let client = number("client").unwrap_or(0.0);
+    let iq = number("iq").unwrap_or(0.0);
+    let audio = number("audio").unwrap_or(0.0);
+    let ddc_per_sec = number("ddc_s").unwrap_or(0.0);
+    let sdr_active =
+        pid_matches_service && client >= 1.0 && (iq >= 1.0 || audio >= 1.0) && ddc_per_sec > 0.0;
+    let firmware_major = integer("firmware_major");
+    let firmware_minor = integer("firmware_minor");
+    let clock_mask = integer("clock_mask");
+    let sample_rate_hz = integer("sample_rate_hz").unwrap_or(0);
+    let ddc_index = integer("ddc").unwrap_or(6);
+    let modified = fs::metadata(path)
+        .ok()
+        .and_then(|metadata| metadata.modified().ok())
+        .map(|time| chrono::DateTime::<Local>::from(time).to_rfc3339());
+    let metrics_value = serde_json::Value::Object(metrics.clone());
+
+    Ok(serde_json::json!({
+        "snapshot_file": path.display().to_string(),
+        "snapshot_exists": true,
+        "snapshot_readable": true,
+        "read_error": None::<String>,
+        "parse_error": None::<String>,
+        "modified": modified,
+        "pid_matches_service": pid_matches_service,
+        "snapshot_pid": snapshot_pid,
+        "age_seconds": age_ms as f64 / 1000.0,
+        "current": {
+            "pid": snapshot_pid,
+            "timestamp_epoch": updated_at_ms / 1000,
+            "app": "saturn-bridge",
+            "state": {
+                "sdr_active": sdr_active,
+                "tx_mode": boolean("tx_keyed").unwrap_or(false),
+            },
+            "gauges": {
+                "bridge": metrics_value,
+            },
+            "counters": {
+                "ddc_packets": integer("dma_reads").unwrap_or(0),
+                "ddc_bytes": integer("dma_bytes").unwrap_or(0),
+                "ddc_dma_reads": integer("dma_reads").unwrap_or(0),
+                "ddc_dma_read_bytes": integer("dma_bytes").unwrap_or(0),
+                "ddc_header_errors": integer("header_errors").unwrap_or(0),
+                "ddc_dma_errors": 0,
+                "ddc_send_errors": 0,
+                "ddc_partial_sends": 0,
+                "duc_dma_writes": integer("tx_dma_writes").unwrap_or(0),
+                "duc_packets": integer("tx_frames").unwrap_or(0),
+                "duc_dma_errors": integer("tx_fifo_faults").unwrap_or(0),
+            },
+            "features": {
+                "pure_signal": false,
+            },
+            "routing": {
+                "ddc": [{
+                    "id": ddc_index,
+                    "enabled": true,
+                    "interleaved": false,
+                    "sample_rate_khz": sample_rate_hz / 1000,
+                }],
+            },
+            "fpga": {
+                "available": firmware_major.is_some() && firmware_minor.is_some(),
+                "product": "Saturn",
+                "product_id": integer("product_id"),
+                "product_version": integer("pcb_version"),
+                "firmware_name": "Saturn, full function",
+                "firmware_id": integer("software_id"),
+                "firmware_major_version": firmware_major,
+                "firmware_version": firmware_minor,
+                "date_code_hex": metrics.get("date_code_hex"),
+                "clock_mask": clock_mask,
+                "all_clocks_present": clock_mask == Some(15),
+                "fallback_config": boolean("fallback_config"),
+            },
+        },
+        "latest_diag": None::<String>,
+    }))
+}
+
 async fn get_p23_perf(State(_state): State<AppState>) -> Response {
     fn parse_system_cpu() -> Option<(u64, u64, u64)> {
         let raw = fs::read_to_string("/proc/stat").ok()?;
@@ -3577,6 +3703,16 @@ async fn get_p23_perf(State(_state): State<AppState>) -> Response {
                 fields.insert(key.to_string(), parsed);
             }
             fields
+        }
+
+        let now_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_millis() as u64)
+            .unwrap_or(0);
+        if let Ok(snapshot) =
+            bridge_perf_file_telemetry(Path::new(SATURN_BRIDGE_PERF_FILE), main_pid, now_ms)
+        {
+            return snapshot;
         }
 
         let journal = Command::new("journalctl")
@@ -4950,10 +5086,10 @@ async fn disk_imaging_disabled() -> Response {
 mod tests {
     use super::{
         append_script_run_log_line, begin_script_run_log, bind_addr_is_loopback,
-        disk_imaging_disabled, environment_value, parse_xdma_interrupts_text, satp_config_json,
-        script_deadline_seconds, script_run_log_slot, systemd_environment_value,
-        with_request_limit, xdma_operational_is_ready, APPLIANCE_POWER_HELPER,
-        RADIO_BACKEND_SWITCH_HELPER,
+        bridge_perf_file_telemetry, disk_imaging_disabled, environment_value,
+        parse_xdma_interrupts_text, satp_config_json, script_deadline_seconds, script_run_log_slot,
+        systemd_environment_value, with_request_limit, xdma_operational_is_ready,
+        APPLIANCE_POWER_HELPER, RADIO_BACKEND_SWITCH_HELPER,
     };
     use axum::{
         body::{Body, Bytes},
@@ -4970,6 +5106,62 @@ mod tests {
 
     async fn consume_request_body(_body: Bytes) -> StatusCode {
         StatusCode::NO_CONTENT
+    }
+
+    #[test]
+    fn direct_xdma_perf_snapshot_is_authoritative_and_provenanced() {
+        let path = std::env::temp_dir().join(format!(
+            "saturn-bridge-perf-test-{}-{}.json",
+            std::process::id(),
+            std::thread::current().name().unwrap_or("unnamed")
+        ));
+        std::fs::write(
+            &path,
+            r#"{
+                "schema_version":1,
+                "updated_at_ms":10000,
+                "source":"saturn-bridge",
+                "backend":"xdma",
+                "status":"ready",
+                "metrics":{
+                    "pid":42,"client":1,"connections":2,"iq":1,"audio":1,
+                    "ddc_s":844.0,"dma_reads":100,"dma_bytes":409600,
+                    "firmware_major":1,"firmware_minor":30,"clock_mask":15,
+                    "product_id":1,"pcb_version":2,"software_id":4,
+                    "date_code_hex":"09122026","fallback_config":false,
+                    "sample_rate_hz":384000,"ddc":6,
+                    "build_git_sha":"d570b4e6c58f09e71b03e2fdcc0ac66bbb9f5d1c",
+                    "wdsp_flavor":"wdsp2-2.00"
+                }
+            }"#,
+        )
+        .unwrap();
+        let telemetry = bridge_perf_file_telemetry(&path, Some(42), 11_000).unwrap();
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(telemetry["snapshot_readable"], true);
+        assert_eq!(telemetry["pid_matches_service"], true);
+        assert_eq!(telemetry["current"]["state"]["sdr_active"], true);
+        assert_eq!(telemetry["current"]["fpga"]["firmware_version"], 30);
+        assert_eq!(
+            telemetry["current"]["gauges"]["bridge"]["build_git_sha"],
+            "d570b4e6c58f09e71b03e2fdcc0ac66bbb9f5d1c"
+        );
+    }
+
+    #[test]
+    fn direct_xdma_perf_snapshot_rejects_stale_or_wrong_pid_data() {
+        let path = std::env::temp_dir().join(format!(
+            "saturn-bridge-perf-stale-test-{}.json",
+            std::process::id()
+        ));
+        std::fs::write(
+            &path,
+            r#"{"schema_version":1,"updated_at_ms":1000,"source":"saturn-bridge","backend":"xdma","metrics":{"pid":7}}"#,
+        )
+        .unwrap();
+        assert!(bridge_perf_file_telemetry(&path, Some(7), 7_000).is_err());
+        assert!(bridge_perf_file_telemetry(&path, Some(8), 1_100).is_err());
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]

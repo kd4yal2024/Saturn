@@ -4,6 +4,18 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
 
 ## [Unreleased]
 ### Changed
+- Direct-XDMA RX now keeps the dedicated C2H drain and framing/loss checks
+  active while making sample expansion, WDSP receive processing, and media
+  publication consumer-driven. Audio clients retain the full existing WDSP
+  path; IQ-only clients retain every decoded spectrum sample without paying
+  the WDSP audio cost; no-client standby validates raw frames and decodes only
+  a 10 Hz meter sample. Audio resumption force-resets WDSP after an intentional
+  input gap so the optimization cannot reuse stale AGC/NR/filter state.
+  `/run/saturn-bridge/perf.json` now atomically records the actual client/lane
+  state, rates, queues, drops, processing mode, V30 identity, exact Saturn Git
+  commit, and pinned WDSP source commit. Performance Lab prefers this fresh,
+  PID-matched record over journal inference. The original regression evidence
+  and measurement gates are retained in `docs/V30_BRIDGE_FIFO_INCIDENT.md`.
 - Direct-XDMA RX now explicitly selects and verifies P2-compatible network
   byte order before enabling the DDC stream. Previously it decoded signed
   24-bit network-order samples but inherited the FPGA's global byte-order bit;
