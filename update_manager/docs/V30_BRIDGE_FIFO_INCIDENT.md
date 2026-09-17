@@ -346,3 +346,15 @@ exchange and worker-wakeup frequency from 750 to 187.5 calls/second at the
 strict floating-point behavior are unchanged. The larger exchange adds about
 4 ms of buffering relative to the 64-sample setting and is exported as
 `wdsp_rx_dsp_size` so appliance results are attributable.
+
+The deployed 256-sample candidate at commit `7417ad5` produced a repeatable,
+modest gain. Three consecutive 30-second active IQ-plus-audio windows measured
+53.30%, 55.00%, and 51.66% of one core (53.32% average), 4.0% below the matched
+55.56% control and 6.4% below the original 56.98% baseline. `Wchan0` averaged
+27.16% instead of the control's 30.26%. IQ remained approximately 384,500
+pairs/second and audio approximately 96,250 stereo floats/second. All interval
+deltas remained zero for host-buffer drops/bytes, discontinuities, pool
+starvation, header errors/resynchronizations, RX FIFO faults/thresholds/almost-
+full observations, outbound/audio/display drops, and WDSP resume-flush
+failures. Automated quality and continuity therefore pass; subjective audio
+latency and listening quality remain an operator acceptance item.
