@@ -230,3 +230,30 @@ buffer flush, then performs the state-1 up-slew. This is the same nonblocking
 pattern already used for RX/TX suspension and rate changes. Process-lifetime
 resume count, last/maximum elapsed microseconds, and flush failures are exported
 so the appliance test can verify the corrected path directly.
+
+## Web telemetry presentation follow-up
+
+The Direct-XDMA backend already exported coherent V30 ADC episode telemetry and
+V29 FIFO telemetry, but two prominent Radio Telemetry rows still consumed only
+P2app's shared-memory schema. The ADC card therefore reported that it was
+waiting for a Protocol 2 client, and the DUC queue row rendered `n/a`, even
+while the bridge-owned telemetry was current and valid. These were frontend
+schema-selection errors, not missing FPGA observations.
+
+The ADC card and runtime row now select `fpga_adc_v30` whenever Direct-XDMA is
+the active backend. The P2-only Enable/Disable controls are disabled and
+explicitly identify V30 episode telemetry as always active. The Direct-XDMA DUC
+row now combines the coherent V29 DUC occupancy snapshot with its boot-lifetime
+minimum, maximum, and transition accumulators plus bridge TX stream/key state,
+DMA writes, frames, FIFO low/high-water observations, faults, and startup
+underflows. Host queue depth, age, and mode remain labeled uninstrumented rather
+than being fabricated from unlike data.
+
+The same review found that the Performance Lab's second poll could throw after
+an optional-delta helper was declared inside one sibling block and referenced
+from another. The fetch succeeded, but the page-level catch hid the JavaScript
+`ReferenceError` behind a generic telemetry fault. The helper is now scoped for
+both branches, and every inline template script is parsed and checked for
+unresolved identifiers in CI. A separate undeclared timeout variable in the
+keyed-transmit safety path was replaced with the configured, clamped transmit
+duration and covered by a regression assertion.

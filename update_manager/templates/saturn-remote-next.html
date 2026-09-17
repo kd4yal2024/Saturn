@@ -17412,7 +17412,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
                 logEvent(`TX timeout — max duration ${state.txTimeoutSeconds} s reached, cancelling MOX`);
                 void setPtt(false);
               }
-            }, delayMs);
+            }, Math.max(10, Number(state.txTimeoutSeconds) || 180) * 1000);
           }
         }
       }

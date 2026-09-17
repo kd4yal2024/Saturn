@@ -494,7 +494,7 @@
             <div class="section-kicker">ADC Telemetry</div>
             <h2 style="margin:4px 0 0 0; font-size: 20px;">Latest Snapshot</h2>
           </div>
-          <div class="row">
+          <div class="row" id="p23-adc-controls">
             <button id="p23-adc-enable" class="btn">Enable</button>
             <button id="p23-adc-disable" class="btn">Disable</button>
           </div>
@@ -1324,15 +1324,11 @@ async function loadP23Status(){
     latestP23Status = p;
     setStatusSummary(formatP23StatusSummary(p), false);
     setStatusView({ p23: p });
-    const adc = p.adc_peak_telemetry || {};
-    setAdcSummary(formatAdcTelemetrySummary(adc), ['unreadable', 'invalid'].includes(adc.state));
-    setAdcView({ adc_peak_telemetry: p.adc_peak_telemetry || {} });
-    $('p23-adc-enable').disabled = !!adc.enabled;
-    $('p23-adc-disable').disabled = !adc.enabled;
+    updateAdcTelemetryOverview();
   }catch(e){
     latestP23Status = null;
     setStatusSummary('Failed to load p2app status: ' + e.message, true);
-    setAdcSummary('Failed to load ADC telemetry: ' + e.message, true);
+    updateAdcTelemetryOverview(e.message);
   }finally{
     statusPollInFlight = false;
   }
@@ -1472,7 +1468,56 @@ function fpgaAdcV30Presentation(value, firmwareVersion){
     detail:`${adc('adc1')} | ${adc('adc2')} | ${number(value.clock_hz)} Hz observation clock`,
   };
 }
+function adcTelemetryOverviewPresentation(perf, p23Status, statusError=''){
+  const app = perf?.app_telemetry?.current || {};
+  const selectedApp = String(perf?.workload?.selected_app || app?.app || '').toLowerCase();
+  if (selectedApp === 'xdma' || app?.app === 'saturn-bridge'){
+    const value = app?.gauges?.fpga_adc_v30;
+    const presentation = fpgaAdcV30Presentation(value, app?.fpga?.firmware_version);
+    return {
+      source:'fpga_v30',
+      summary:`V30 FPGA episode monitor · always active under Direct-XDMA · ${presentation.summary}. ${presentation.detail}`,
+      view:{ source:'direct-xdma', fpga_adc_v30:value || null },
+      controlsEnabled:false,
+      error:presentation.state !== 'available',
+    };
+  }
+  const legacy = p23Status?.adc_peak_telemetry || {};
+  const state = String(legacy.state || '');
+  return {
+    source:'p2_peak',
+    summary:statusError ? `Failed to load ADC telemetry: ${statusError}` : formatAdcTelemetrySummary(legacy),
+    view:{ adc_peak_telemetry:legacy },
+    controlsEnabled:true,
+    enableDisabled:!!legacy.enabled,
+    disableDisabled:!legacy.enabled,
+    error:!!statusError || ['unreadable', 'invalid'].includes(state),
+  };
+}
 /* FPGA_ADC_V30_PRESENTATION_END */
+function updateAdcTelemetryOverview(statusError=''){
+  const presentation = adcTelemetryOverviewPresentation(latestP23Perf, latestP23Status, statusError);
+  setAdcSummary(presentation.summary, presentation.error);
+  setAdcView(presentation.view);
+  const enable = $('p23-adc-enable');
+  const disable = $('p23-adc-disable');
+  const controls = $('p23-adc-controls');
+  if (presentation.controlsEnabled){
+    enable.disabled = presentation.enableDisabled;
+    disable.disabled = presentation.disableDisabled;
+    enable.title = '';
+    disable.title = '';
+    if (controls) controls.title = '';
+  } else {
+    const title = 'V30 FPGA ADC episode telemetry is always active under Direct-XDMA.';
+    enable.disabled = true;
+    disable.disabled = true;
+    enable.title = title;
+    disable.title = title;
+    if (controls) controls.title = title;
+  }
+  return presentation;
+}
 function updateFpgaAdcV30Summary(perf){
   const app = perf?.app_telemetry?.current || {};
   const presentation = fpgaAdcV30Presentation(app?.gauges?.fpga_adc_v30, app?.fpga?.firmware_version);
@@ -1480,6 +1525,24 @@ function updateFpgaAdcV30Summary(perf){
   if (element) element.textContent = `V30 FPGA ADC episode telemetry: ${presentation.summary}. ${presentation.detail}`;
   return presentation;
 }
+/* DIRECT_XDMA_DUC_PRESENTATION_BEGIN */
+function directXdmaDucPresentation(value){
+  const number = (input)=>Number.isFinite(Number(input)) ? Math.round(Number(input)) : 'n/a';
+  if (!value || value.available !== true){
+    return {
+      state:'unavailable',
+      summary:'telemetry unavailable',
+      detail:'Direct-XDMA DUC telemetry requires the V29 FIFO monitor and a telemetry-enabled bridge.',
+    };
+  }
+  const txState = value.keyed ? 'keyed' : (value.stream_active ? 'streaming' : 'RX idle');
+  return {
+    state:'available',
+    summary:`${number(value.fifo_occupancy_words)} FPGA FIFO words · ${txState}`,
+    detail:`coherent generation ${number(value.snapshot_generation)} · ${value.snapshot_valid ? 'valid' : 'not valid'} | boot min/max ${number(value.fifo_minimum_words)}/${number(value.fifo_maximum_words)} words · transitions ${number(value.fifo_event_transitions)} | TX writes/frames ${number(value.dma_writes)}/${number(value.frames_written)} · FIFO low/high ${number(value.tx_fifo_lwm)}/${number(value.tx_fifo_hwm)} · faults ${number(value.fifo_faults)} · startup underflows ${number(value.startup_underflows)} | host queue depth/age/mode not instrumented by Direct-XDMA`,
+  };
+}
+/* DIRECT_XDMA_DUC_PRESENTATION_END */
 /* SPEAKER_PACING_PRESENTATION_BEGIN */
 function speakerPacingPresentation(value){
   const number = (input)=>Number.isFinite(Number(input)) ? Math.round(Number(input)) : 'n/a';
@@ -1580,6 +1643,7 @@ function buildPerfSnapshot(){
     current_sample: jsonSafe(latestDerivedPerf),
     fpga_fifo_v29: jsonSafe(latestP23Perf?.app_telemetry?.current?.gauges?.fpga_fifo_v29 || null),
     fpga_adc_v30: jsonSafe(latestP23Perf?.app_telemetry?.current?.gauges?.fpga_adc_v30 || null),
+    direct_xdma_duc: jsonSafe(latestP23Perf?.app_telemetry?.current?.gauges?.direct_xdma_duc || null),
     speaker_pacing_diagnostics: jsonSafe(latestP23Perf?.app_telemetry?.current?.gauges?.speaker_pacing_diagnostics || null),
     baseline: jsonSafe(serializePerfBaseline(perfBaseline)),
     service_runtime: jsonSafe(latestP23Status?.service_runtime || null),
@@ -1617,6 +1681,7 @@ function buildBaselineSnapshot(){
     } : null),
     latest_fpga_fifo_v29: jsonSafe(latestP23Perf?.app_telemetry?.current?.gauges?.fpga_fifo_v29 || null),
     latest_fpga_adc_v30: jsonSafe(latestP23Perf?.app_telemetry?.current?.gauges?.fpga_adc_v30 || null),
+    latest_direct_xdma_duc: jsonSafe(latestP23Perf?.app_telemetry?.current?.gauges?.direct_xdma_duc || null),
     latest_speaker_pacing_diagnostics: jsonSafe(latestP23Perf?.app_telemetry?.current?.gauges?.speaker_pacing_diagnostics || null),
     alerts: jsonSafe(latestPerfAlertState?.alerts || []),
   };
@@ -2489,6 +2554,14 @@ function perfCounters(perf){
 function derivePerf(current){
   if (!current || !current.process) return null;
   const c = perfCounters(current);
+  const optionalDeltaCounter = (key)=>{
+    const currentValue = c.appCounters?.[key];
+    const previousValue = perfPrevSample?.appCounters?.[key];
+    return typeof currentValue === 'number' && Number.isFinite(currentValue)
+      && typeof previousValue === 'number' && Number.isFinite(previousValue)
+      ? currentValue - previousValue
+      : NaN;
+  };
   let dtSec = NaN;
   let cpuPctCore = NaN;
   let cpuPctTotal = NaN;
@@ -2607,14 +2680,6 @@ function derivePerf(current){
       }
       if (c.appPidMatchesService && perfPrevSample.appPidMatchesService){
         const deltaCounter = (key)=> counterValue(c.appCounters, key) - counterValue(perfPrevSample.appCounters, key);
-        const optionalDeltaCounter = (key)=>{
-          const currentValue = c.appCounters?.[key];
-          const previousValue = perfPrevSample.appCounters?.[key];
-          return typeof currentValue === 'number' && Number.isFinite(currentValue)
-            && typeof previousValue === 'number' && Number.isFinite(previousValue)
-            ? currentValue - previousValue
-            : NaN;
-        };
         const rate = (key)=> deltaCounter(key) / dtSec;
         hpPps = rate('high_priority_packets');
         micPps = rate('mic_packets');
@@ -2864,6 +2929,8 @@ function renderPerfDashboard(d, perf, alertState, baseline){
   const ducQueue = app?.gauges?.duc_queue || {};
   const speakerQueue = app?.gauges?.speaker_underrun || {};
   const fifoV29 = fpgaFifoV29Presentation(app?.gauges?.fpga_fifo_v29, fpga?.firmware_version);
+  const adcV30 = fpgaAdcV30Presentation(app?.gauges?.fpga_adc_v30, fpga?.firmware_version);
+  const directDuc = directXdmaDucPresentation(app?.gauges?.direct_xdma_duc);
   const speakerPacing = speakerPacingPresentation(app?.gauges?.speaker_pacing_diagnostics);
   const ddc = Array.isArray(app?.routing?.ddc) ? app.routing.ddc : [];
   const enabledCount = ddc.filter((item)=>item?.enabled).length;
@@ -2949,12 +3016,18 @@ function renderPerfDashboard(d, perf, alertState, baseline){
   const fpgaHealthSub = fpga?.available
     ? `${fpga?.firmware_name || 'firmware'} v${fpga?.firmware_version ?? 'n/a'} · clocks ${fpga?.all_clocks_present ? 'good' : 'check'} · ${fpga?.fallback_config ? 'fallback image' : 'primary image'}`
     : 'Firmware and die-temperature data require the current telemetry-enabled application.';
+  const adcRuntimeRow = d.selectedApp === 'xdma'
+    ? runtimeRow('V30 ADC episodes', adcV30.summary, adcV30.detail)
+    : runtimeRow('ADC peaks', `ADC1 ${formatAdcDbfs(adc?.peak1)} · ADC2 ${formatAdcDbfs(adc?.peak2)}`, `raw ${fmtInt(adc?.peak1)} / ${fmtInt(adc?.peak2)} · overflow bits ${fmtInt(adc?.overflow_bits)} · peak values update with active high-priority status`);
+  const ducRuntimeRow = d.selectedApp === 'xdma'
+    ? runtimeRow('DUC queue / FIFO', directDuc.summary, directDuc.detail)
+    : runtimeRow('Queue context', `DUC ${fmtInt(ducQueue?.last_queue_frames)} queued · ${fmtInt(ducQueue?.last_fifo_frames)} FIFO`, `age ${fmtInt(ducQueue?.last_queue_age_us)} µs · mode ${ducQueue?.last_mode || 'unknown'} · speaker ${fmtInt(speakerQueue?.last_queue_frames)} queued / ${fmtInt(speakerQueue?.last_fifo_frames)} FIFO · gap ${speakerQueue?.last_gap_active ? 'active' : 'clear'}`);
   const radioRows = [
     runtimeRow('Application', `${workloadIdentity} · ${appMode}`, `${workloadSubPrefix}mode ${d.startupMode || 'n/a'} · panel ${d.panelMode || 'n/a'} · uptime ${fmtInt(app?.uptime_sec)} s · ${pureSignalState}`),
     runtimeRow('Receive path', activity.active ? `${fmtNum(d.ddcPps)} DDC pkt/s` : '— Waiting for client', activity.active ? `HP ${fmtNum(d.hpPps)} pkt/s · Mic ${fmtNum(d.micPps)} pkt/s · WB ${fmtNum(d.wbPps)} pkt/s · DDC DMA ${fmtNum(d.ddcDmaMiBs)} MiB/s · ${fmtNum(d.ddcDmaReadsPerSec)} ops/s @ ${fmtNum(d.ddcDmaAvgKiB)} KiB/op` : 'Packet and DMA rates appear once the Protocol 2 start bit is received.'),
     runtimeRow('Ingest path', activity.active ? `${fmtNum(d.ducPps)} DUC pkt/s` : '— Idle', activity.active ? `Speaker ${fmtNum(d.spkrPps)} pkt/s · DUC ${fmtNum(d.ducDmaWritesPerSec)} DMA/s @ ${fmtNum(d.ducDmaAvgKiB)} KiB/op · speaker ${fmtNum(d.spkrDmaWritesPerSec)} DMA/s @ ${fmtNum(d.spkrDmaAvgKiB)} KiB/op` : 'Transmit and speaker paths are inactive.'),
-    runtimeRow('ADC peaks', `ADC1 ${formatAdcDbfs(adc?.peak1)} · ADC2 ${formatAdcDbfs(adc?.peak2)}`, `raw ${fmtInt(adc?.peak1)} / ${fmtInt(adc?.peak2)} · overflow bits ${fmtInt(adc?.overflow_bits)} · peak values update with active high-priority status`),
-    runtimeRow('Queue context', `DUC ${fmtInt(ducQueue?.last_queue_frames)} queued · ${fmtInt(ducQueue?.last_fifo_frames)} FIFO`, `age ${fmtInt(ducQueue?.last_queue_age_us)} µs · mode ${ducQueue?.last_mode || 'unknown'} · speaker ${fmtInt(speakerQueue?.last_queue_frames)} queued / ${fmtInt(speakerQueue?.last_fifo_frames)} FIFO · gap ${speakerQueue?.last_gap_active ? 'active' : 'clear'}`),
+    adcRuntimeRow,
+    ducRuntimeRow,
     runtimeRow('Speaker pacing', speakerPacing.summary, speakerPacing.detail),
     runtimeRow('V29 FPGA FIFO monitor', fifoV29.summary, fifoV29.detail),
     runtimeRow('Routing', `${enabledCount} DDC enabled · ${wbState}`, `${interleavedCount} interleaved · features ${featureBits} · ${formatAudioRtSummary(serviceRuntime)}`),
@@ -3004,6 +3077,7 @@ async function loadP23Perf(){
       updateFpgaFifoV29Summary(perf);
       updateFpgaAdcV30Summary(perf);
       updateSpeakerPacingSummary(perf);
+      updateAdcTelemetryOverview();
       setPerfRawText(JSON.stringify({ perf }, null, 2));
       setTelemetryHealth(perf);
       return;
@@ -3028,6 +3102,7 @@ async function loadP23Perf(){
     updateFpgaFifoV29Summary(perf);
     updateFpgaAdcV30Summary(perf);
     updateSpeakerPacingSummary(perf);
+    updateAdcTelemetryOverview();
     baselinePush(perfBaseline.cpuPctCore, d.cpuPctCore);
     baselinePush(perfBaseline.rssMb, d.rssMb);
     baselinePush(perfBaseline.schedDelayMsPerSec, d.schedDelayMsPerSec);

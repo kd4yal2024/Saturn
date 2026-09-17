@@ -4,6 +4,13 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
 
 ## [Unreleased]
 ### Changed
+- Radio Telemetry now presents Direct-XDMA's live V30 ADC episode monitor in
+  the ADC card and maps coherent V29 DUC FIFO occupancy, boot-lifetime extrema
+  and transitions, and bridge TX FIFO/write counters into a backend-specific
+  DUC row. P2-only peak toggles and host queue age/mode are no longer shown as
+  working Direct-XDMA controls. Inline template scripts now receive static
+  scope validation, and the Saturn Remote keyed-TX duration cutoff again arms
+  from the configured timeout instead of referencing an undeclared variable.
 - Direct-XDMA Performance Lab now exposes per-interval host-ring, parser,
   FIFO, and extended FPGA counter deltas instead of presenting absent P2-only
   counters as zero. The direct hardware owner now samples the marker-gated V29

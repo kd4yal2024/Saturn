@@ -3196,6 +3196,25 @@ fn bridge_perf_file_telemetry(
         (Some(adc1), Some(adc2)) => Some(adc1.saturating_add(adc2)),
         _ => None,
     };
+    let direct_xdma_duc = serde_json::json!({
+        "available": boolean("fifo_v29_available").unwrap_or(false),
+        "status": text("fifo_v29_status").unwrap_or("unavailable"),
+        "snapshot_valid": boolean("fifo_v29_snapshot_valid").unwrap_or(false),
+        "snapshot_generation": integer("fifo_v29_snapshot_generation").unwrap_or(0),
+        "fifo_occupancy_words": integer("fifo_v29_occupancy_duc").unwrap_or(0),
+        "fifo_minimum_words": integer("fifo_v29_minimum_duc").unwrap_or(0),
+        "fifo_maximum_words": integer("fifo_v29_maximum_duc").unwrap_or(0),
+        "fifo_event_transitions": integer("fifo_v29_events_duc").unwrap_or(0),
+        "stream_active": boolean("tx_stream").unwrap_or(false),
+        "keyed": boolean("tx_keyed").unwrap_or(false),
+        "dma_writes": integer("tx_dma_writes").unwrap_or(0),
+        "frames_written": integer("tx_frames").unwrap_or(0),
+        "tx_fifo_lwm": integer("tx_fifo_lwm").unwrap_or(0),
+        "tx_fifo_hwm": integer("tx_fifo_hwm").unwrap_or(0),
+        "fifo_faults": integer("tx_fifo_faults").unwrap_or(0),
+        "startup_underflows": integer("tx_fifo_startup_underflows").unwrap_or(0),
+        "host_queue_instrumented": false,
+    });
 
     Ok(serde_json::json!({
         "snapshot_file": path.display().to_string(),
@@ -3219,6 +3238,7 @@ fn bridge_perf_file_telemetry(
                 "bridge": metrics_value,
                 "fpga_fifo_v29": fifo_v29,
                 "fpga_adc_v30": adc_v30,
+                "direct_xdma_duc": direct_xdma_duc,
             },
             "counters": {
                 "ddc_packets": integer("dma_reads").unwrap_or(0),
@@ -5220,7 +5240,12 @@ mod tests {
                     "fifo_v29_available":true,"fifo_v29_status":"available",
                     "fifo_v29_build_id":1446131968,"fifo_v29_snapshot_valid":true,
                     "fifo_v29_snapshot_generation":12,"fifo_v29_snapshot_timeout_count":0,
-                    "fifo_v29_occupancy_ddc":42,
+                    "fifo_v29_occupancy_ddc":42,"fifo_v29_occupancy_duc":77,
+                    "fifo_v29_minimum_duc":0,"fifo_v29_maximum_duc":992,
+                    "fifo_v29_events_duc":5,
+                    "tx_stream":false,"tx_keyed":false,"tx_dma_writes":8,"tx_frames":16,
+                    "tx_fifo_lwm":120,"tx_fifo_hwm":900,"tx_fifo_faults":0,
+                    "tx_fifo_startup_underflows":0,
                     "adc_v30_available":true,"adc_v30_status":"available",
                     "adc_v30_build_id":1446195200,"adc_v30_snapshot_valid":true,
                     "adc_v30_snapshot_generation":13,"adc_v30_snapshot_retry_failure_count":0,
@@ -5257,6 +5282,30 @@ mod tests {
         assert_eq!(
             telemetry["current"]["gauges"]["fpga_adc_v30"]["clock_hz"],
             122_880_000
+        );
+        assert_eq!(
+            telemetry["current"]["gauges"]["direct_xdma_duc"]["fifo_occupancy_words"],
+            77
+        );
+        assert_eq!(
+            telemetry["current"]["gauges"]["direct_xdma_duc"]["fifo_maximum_words"],
+            992
+        );
+        assert_eq!(
+            telemetry["current"]["gauges"]["direct_xdma_duc"]["fifo_event_transitions"],
+            5
+        );
+        assert_eq!(
+            telemetry["current"]["gauges"]["direct_xdma_duc"]["tx_fifo_lwm"],
+            120
+        );
+        assert_eq!(
+            telemetry["current"]["gauges"]["direct_xdma_duc"]["tx_fifo_hwm"],
+            900
+        );
+        assert_eq!(
+            telemetry["current"]["gauges"]["direct_xdma_duc"]["host_queue_instrumented"],
+            false
         );
         assert_eq!(
             telemetry["current"]["gauges"]["bridge"]["build_git_sha"],

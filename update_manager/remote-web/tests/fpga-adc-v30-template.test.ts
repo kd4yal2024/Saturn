@@ -15,6 +15,10 @@ const present = context.fpgaAdcV30Presentation as (
   value: Record<string, unknown> | undefined,
   firmware: number,
 ) => { state: string; summary: string; detail: string };
+const overview = context.adcTelemetryOverviewPresentation as (
+  perf: Record<string, unknown>,
+  status: Record<string, unknown>,
+) => { source: string; summary: string; controlsEnabled: boolean; error: boolean };
 
 describe('V30 FPGA ADC episode telemetry presentation', () => {
   it('handles absent fields compatibly', () => {
@@ -69,5 +73,34 @@ describe('V30 FPGA ADC episode telemetry presentation', () => {
   it('includes the ADC object in captured telemetry JSON', () => {
     expect(template).toContain('fpga_adc_v30: jsonSafe(');
     expect(template).toContain('id="p23-fpga-adc-v30-summary"');
+  });
+
+  it('uses V30 episode telemetry for the Direct-XDMA ADC overview', () => {
+    const result = overview({
+      workload: { selected_app: 'xdma' },
+      app_telemetry: {
+        current: {
+          app: 'saturn-bridge',
+          fpga: { firmware_version: 30 },
+          gauges: {
+            fpga_adc_v30: {
+              available: true,
+              status: 'available',
+              snapshot_valid: true,
+              snapshot_generation: 99,
+              snapshot_retry_failure_count: 0,
+              clock_hz: 122880000,
+              adc1: { episode_count: 3, total_high_clocks: 5, longest_episode_clocks: 2, latest_episode_clocks: 2, latest_episode_peak: 32768 },
+              adc2: { episode_count: 0, total_high_clocks: 0, longest_episode_clocks: 0, latest_episode_clocks: 0, latest_episode_peak: 0 },
+            },
+          },
+        },
+      },
+    }, {});
+    expect(result.source).toBe('fpga_v30');
+    expect(result.controlsEnabled).toBe(false);
+    expect(result.error).toBe(false);
+    expect(result.summary).toContain('generation 99');
+    expect(result.summary).toContain('ADC1 episodes 3');
   });
 });

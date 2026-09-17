@@ -1604,7 +1604,13 @@ fn write_performance(
             ("tx_keyed", TelemetryValue::boolean(tx.keyed)),
             ("tx_dma_writes", TelemetryValue::number(tx.dma_writes)),
             ("tx_frames", TelemetryValue::number(tx.frames_written)),
+            ("tx_fifo_lwm", TelemetryValue::number(tx.fifo_lwm)),
+            ("tx_fifo_hwm", TelemetryValue::number(tx.fifo_hwm)),
             ("tx_fifo_faults", TelemetryValue::number(tx.fifo_faults)),
+            (
+                "tx_fifo_startup_underflows",
+                TelemetryValue::number(tx.fifo_startup_underflows),
+            ),
         ],
     )
     .map_err(|source| XdmaError::Io {
