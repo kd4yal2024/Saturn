@@ -48,6 +48,7 @@ describe('Saturn Go performance lab template', () => {
     expect(template).toContain('Full-rate TCI IQ');
     expect(template).toContain('iq_tci_pairs_s');
     expect(template).toContain('iq_tci_pairs_per_frame');
+    expect(template).toContain('display_rate_limited_s');
     expect(template).toContain('full-rate TCI IQ loss');
     expect(template).toContain("showLabPanel('performance')");
   });

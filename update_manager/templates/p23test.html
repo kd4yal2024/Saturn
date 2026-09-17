@@ -2903,6 +2903,7 @@ function computePerfAlerts(d, baseline){
       Number(bridge.iq_tci_suppressed_frames_s),
       Number(bridge.display_replaced_s),
       Number(bridge.display_dropped_s),
+      Number(bridge.display_rate_limited_s),
     ].filter(Number.isFinite).reduce((sum, value)=>sum + value, 0);
     if (tciIqLossRate > 0){
       alerts.push(`CRIT full-rate TCI IQ loss ${fmtNum(tciIqLossRate)} frame(s)/s`);
@@ -3035,7 +3036,7 @@ function renderPerfDashboard(d, perf, alertState, baseline){
   const radioRows = [
     runtimeRow('Application', `${workloadIdentity} · ${appMode}`, `${workloadSubPrefix}mode ${d.startupMode || 'n/a'} · panel ${d.panelMode || 'n/a'} · uptime ${fmtInt(app?.uptime_sec)} s · ${pureSignalState}`),
     runtimeRow('Receive path', activity.active ? `${fmtNum(d.ddcPps)} DDC pkt/s` : '— Waiting for client', activity.active ? `HP ${fmtNum(d.hpPps)} pkt/s · Mic ${fmtNum(d.micPps)} pkt/s · WB ${fmtNum(d.wbPps)} pkt/s · DDC DMA ${fmtNum(d.ddcDmaMiBs)} MiB/s · ${fmtNum(d.ddcDmaReadsPerSec)} ops/s @ ${fmtNum(d.ddcDmaAvgKiB)} KiB/op` : 'Packet and DMA rates appear once the Protocol 2 start bit is received.'),
-    ...(d.selectedApp === 'xdma' ? [runtimeRow('Full-rate TCI IQ', `${fmtNum(Number(bridge?.iq_tci_pairs_s),0)} pairs/s · ${fmtNum(Number(bridge?.iq_tci_frames_s))} frames/s`, `${fmtInt(Number(bridge?.iq_tci_pairs_per_frame))} pairs/frame · ${fmtBytes(Number(bridge?.iq_tci_frame_bytes))} · pending ${fmtInt(Number(bridge?.iq_tci_pending_pairs))} pairs · suppressed/replaced/dropped ${fmtNum(Number(bridge?.iq_tci_suppressed_frames_s))} / ${fmtNum(Number(bridge?.display_replaced_s))} / ${fmtNum(Number(bridge?.display_dropped_s))} frames/s`)] : []),
+    ...(d.selectedApp === 'xdma' ? [runtimeRow('Full-rate TCI IQ', `${fmtNum(Number(bridge?.iq_tci_pairs_s),0)} pairs/s · ${fmtNum(Number(bridge?.iq_tci_frames_s))} frames/s`, `${fmtInt(Number(bridge?.iq_tci_pairs_per_frame))} pairs/frame · ${fmtBytes(Number(bridge?.iq_tci_frame_bytes))} · pending ${fmtInt(Number(bridge?.iq_tci_pending_pairs))} pairs · suppressed/replaced/dropped/rate-limited ${fmtNum(Number(bridge?.iq_tci_suppressed_frames_s))} / ${fmtNum(Number(bridge?.display_replaced_s))} / ${fmtNum(Number(bridge?.display_dropped_s))} / ${fmtNum(Number(bridge?.display_rate_limited_s))} frames/s`)] : []),
     runtimeRow('Ingest path', activity.active ? `${fmtNum(d.ducPps)} DUC pkt/s` : '— Idle', activity.active ? `Speaker ${fmtNum(d.spkrPps)} pkt/s · DUC ${fmtNum(d.ducDmaWritesPerSec)} DMA/s @ ${fmtNum(d.ducDmaAvgKiB)} KiB/op · speaker ${fmtNum(d.spkrDmaWritesPerSec)} DMA/s @ ${fmtNum(d.spkrDmaAvgKiB)} KiB/op` : 'Transmit and speaker paths are inactive.'),
     adcRuntimeRow,
     ducRuntimeRow,
