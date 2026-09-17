@@ -4,6 +4,10 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
 
 ## [Unreleased]
 ### Changed
+- Saturn Bridge release builds now target the G2 CM4's Cortex-A72 in both Rust
+  and pinned WDSP 2.00 code, with thin LTO and one Rust codegen unit. DSP
+  algorithms and strict floating-point semantics are unchanged, and runtime
+  telemetry records the selected build CPU for appliance A/B measurements.
 - Saturn Go self-deployment now refuses to stage a bridge binary when the
   installed root-owned deployment broker has an older service contract. The
   broker and standalone installer also verify the effective 16 MiB memlock and

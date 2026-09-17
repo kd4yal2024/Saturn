@@ -114,15 +114,18 @@ fn emit_build_provenance() {
         env::var("SATURN_BRIDGE_WDSP_FLAVOR").unwrap_or_else(|_| "unknown".to_string());
     let wdsp_commit =
         env::var("SATURN_BRIDGE_WDSP_COMMIT").unwrap_or_else(|_| "unknown".to_string());
+    let target_cpu = env::var("SATURN_BRIDGE_TARGET_CPU").unwrap_or_else(|_| "generic".to_string());
 
     println!("cargo:rerun-if-env-changed=SATURN_BUILD_COMMIT");
     println!("cargo:rerun-if-env-changed=SATURN_BUILD_DIRTY");
     println!("cargo:rerun-if-env-changed=SATURN_BRIDGE_WDSP_FLAVOR");
     println!("cargo:rerun-if-env-changed=SATURN_BRIDGE_WDSP_COMMIT");
+    println!("cargo:rerun-if-env-changed=SATURN_BRIDGE_TARGET_CPU");
     println!("cargo:rustc-env=SATURN_BRIDGE_GIT_SHA={git_sha}");
     println!("cargo:rustc-env=SATURN_BRIDGE_GIT_DIRTY={git_dirty}");
     println!("cargo:rustc-env=SATURN_BRIDGE_WDSP_FLAVOR={wdsp_flavor}");
     println!("cargo:rustc-env=SATURN_BRIDGE_WDSP_COMMIT={wdsp_commit}");
+    println!("cargo:rustc-env=SATURN_BRIDGE_TARGET_CPU={target_cpu}");
 }
 
 fn git_value(repo_dir: &Path, args: &[&str]) -> Option<String> {

@@ -7,3 +7,10 @@ build = "build.rs"
 [dependencies]
 libc = "0.2"
 tungstenite = "=0.29.0"
+
+[profile.release]
+# Preserve Rust/WDSP numerical behavior while allowing cross-crate optimization
+# of the bridge control, framing, conversion, and publication paths.
+opt-level = 3
+lto = "thin"
+codegen-units = 1

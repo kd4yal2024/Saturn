@@ -1238,6 +1238,10 @@ fn write_performance(
             ),
             ("build_git_dirty", TelemetryValue::boolean(build_dirty)),
             (
+                "build_target_cpu",
+                TelemetryValue::text(env!("SATURN_BRIDGE_TARGET_CPU")),
+            ),
+            (
                 "wdsp_flavor",
                 TelemetryValue::text(env!("SATURN_BRIDGE_WDSP_FLAVOR")),
             ),

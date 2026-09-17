@@ -285,3 +285,26 @@ with `SATURN_SATURNGO_BUILD_BRIDGE=0`. Both deployment paths also verify the
 effective priority and locked-memory limits before accepting or starting the
 new bridge. Updating the trusted broker remains an explicit privileged
 installation step rather than executing staged root code.
+
+## Performance baseline and first optimization
+
+On 2026-09-17 the recovered bridge at commit `de5c6f0`, running active 384 kHz
+IQ plus WDSP audio, consumed approximately 57.0% of one CM4 core over an
+eight-second thread sample. WDSP worker `Wchan0` accounted for 30.6%, the main
+bridge/control thread 10.9%, the dedicated XDMA reader 6.6%, and the remaining
+WebSocket/TX workers 9.9%. The stream delivered approximately 384,445 IQ
+pairs/second. Over a separate ten-second interval, host-buffer drops,
+discontinuities, pool starvation, header errors/resynchronizations, FIFO
+faults/thresholds, outbound drops, and WDSP resume failures all had zero delta.
+Process-lifetime history still contained 50 reclaimed host buffers and two
+discontinuities, so qualification remains delta-based until the next clean
+candidate restart.
+
+The first optimization deliberately changes no DSP setting or data-path
+algorithm. Release builds target the appliance's Cortex-A72 for both Rust and
+the pinned WDSP C archive, and Rust uses thin LTO with one codegen unit. Unsafe
+floating-point reassociation is explicitly excluded. Telemetry exports the
+selected CPU target so baseline and candidate binaries cannot be confused.
+The initial acceptance target is active IQ plus audio below 45% of one core
+with the existing 384 kHz IQ rate, 48 kHz stereo audio, filters, AGC, NR, FFT
+configuration, and all integrity-counter deltas unchanged.
