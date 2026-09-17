@@ -44,6 +44,12 @@ const PERF_PERIOD: Duration = Duration::from_secs(1);
 const DIAG_PERIOD: Duration = Duration::from_secs(5);
 const MEDIA_DEMAND_REFRESH: Duration = Duration::from_millis(10);
 const IDLE_METER_PERIOD: Duration = Duration::from_millis(100);
+const DIRECT_TCI_IQ_FRAME_RATE_HZ: usize = 30;
+const DIRECT_TCI_IQ_SAMPLE_RATE_HZ: usize = DIRECT_DDC_SAMPLE_RATE_KHZ as usize * 1_000;
+const DIRECT_TCI_IQ_PAIRS_PER_FRAME: usize =
+    DIRECT_TCI_IQ_SAMPLE_RATE_HZ / DIRECT_TCI_IQ_FRAME_RATE_HZ;
+const DIRECT_TCI_IQ_FLOATS_PER_FRAME: usize = DIRECT_TCI_IQ_PAIRS_PER_FRAME * 2;
+const DIRECT_TCI_IQ_FRAME_BYTES: usize = 64 + DIRECT_TCI_IQ_FLOATS_PER_FRAME * size_of::<f32>();
 const DIRECT_TX_MAX_WATTS: u8 = 100;
 const TX_UPLINK_TIMEOUT: Duration = Duration::from_millis(750);
 const TX_CONTROL_TIMEOUT: Duration = Duration::from_millis(1_500);
@@ -90,11 +96,62 @@ impl RxProcessingMode {
 #[derive(Debug, Default)]
 struct DirectRxPerformance {
     iq_frames_published: u64,
+    iq_pairs_published: u64,
+    iq_frames_suppressed: u64,
+    iq_pairs_suppressed: u64,
     audio_frames_published: u64,
     audio_samples_published: u64,
     dsp_iq_pairs: u64,
     bypassed_iq_pairs: u64,
     meter_only_iq_pairs: u64,
+}
+
+/// Repacketizes the complete direct-XDMA IQ stream into display-cadence TCI
+/// messages without downsampling or discarding samples. The buffer is reused,
+/// so the high-rate hardware read cadence does not become the WebSocket frame
+/// or allocation cadence.
+#[derive(Debug)]
+struct DirectIqPacketizer {
+    samples: Box<[f32]>,
+    filled: usize,
+}
+
+impl Default for DirectIqPacketizer {
+    fn default() -> Self {
+        debug_assert_eq!(
+            DIRECT_TCI_IQ_SAMPLE_RATE_HZ % DIRECT_TCI_IQ_FRAME_RATE_HZ,
+            0
+        );
+        Self {
+            samples: vec![0.0; DIRECT_TCI_IQ_FLOATS_PER_FRAME].into_boxed_slice(),
+            filled: 0,
+        }
+    }
+}
+
+impl DirectIqPacketizer {
+    fn push(&mut self, mut input: &[f32], mut publish: impl FnMut(&[f32])) {
+        while !input.is_empty() {
+            let available = self.samples.len() - self.filled;
+            let copied = available.min(input.len());
+            self.samples[self.filled..self.filled + copied].copy_from_slice(&input[..copied]);
+            self.filled += copied;
+            input = &input[copied..];
+
+            if self.filled == self.samples.len() {
+                publish(&self.samples);
+                self.filled = 0;
+            }
+        }
+    }
+
+    fn reset(&mut self) {
+        self.filled = 0;
+    }
+
+    fn pending_pairs(&self) -> usize {
+        self.filled / 2
+    }
 }
 
 #[derive(Debug, Default)]
@@ -347,6 +404,7 @@ fn run_inner(mut config: BridgeConfig, ready_path: &Path) -> Result<(), Box<dyn 
     let mut media_demand = TciMediaDemand::default();
     let mut last_idle_meter = Instant::now() - IDLE_METER_PERIOD;
     let mut wdsp_input_gap = false;
+    let mut iq_packetizer = DirectIqPacketizer::default();
     let mut rx_performance = DirectRxPerformance::default();
     let mut wdsp_resume_performance = WdspResumePerformance::default();
     let mut meter_source = "unavailable";
@@ -389,6 +447,11 @@ fn run_inner(mut config: BridgeConfig, ready_path: &Path) -> Result<(), Box<dyn 
                 media_demand = tci.media_demand();
                 last_media_demand_refresh = Instant::now();
             }
+            if !media_demand.iq_stream_enabled || tci.tx_media_priority_active() {
+                // Do not carry pre-client or receive-suppressed samples into a
+                // later RX frame. Once active, every accepted sample is kept.
+                iq_packetizer.reset();
+            }
             // Consume a bounded slice of the host ring before client control
             // work. The dedicated reader continues servicing the hardware FIFO
             // during every DSP, publication, command, and filesystem operation.
@@ -414,9 +477,20 @@ fn run_inner(mut config: BridgeConfig, ready_path: &Path) -> Result<(), Box<dyn 
                     } else {
                         "raw-iq-estimate"
                     };
-                    if media_demand.iq_stream_enabled {
-                        tci.publish_iq_frame(DIRECT_DDC_SAMPLE_RATE_KHZ * 1_000, &iq_samples);
-                        rx_performance.iq_frames_published += 1;
+                    if media_demand.iq_stream_enabled && !tci.tx_media_priority_active() {
+                        iq_packetizer.push(&iq_samples, |frame| {
+                            let pairs = (frame.len() / 2) as u64;
+                            if tci.publish_full_rate_iq_frame(
+                                DIRECT_DDC_SAMPLE_RATE_KHZ * 1_000,
+                                frame,
+                            ) {
+                                rx_performance.iq_frames_published += 1;
+                                rx_performance.iq_pairs_published += pairs;
+                            } else {
+                                rx_performance.iq_frames_suppressed += 1;
+                                rx_performance.iq_pairs_suppressed += pairs;
+                            }
+                        });
                     }
                     if mode == RxProcessingMode::Audio {
                         if wdsp_input_gap {
@@ -516,6 +590,10 @@ fn run_inner(mut config: BridgeConfig, ready_path: &Path) -> Result<(), Box<dyn 
                     if command_effects.radio_state_dirty {
                         tci.publish_radio_state(&model);
                     }
+                }
+                if command_effects.tuning_dirty {
+                    // A frame must never straddle two RF center frequencies.
+                    iq_packetizer.reset();
                 }
                 let command_elapsed = command_started.elapsed();
                 if command_elapsed >= Duration::from_millis(5) {
@@ -627,6 +705,7 @@ fn run_inner(mut config: BridgeConfig, ready_path: &Path) -> Result<(), Box<dyn 
                     &stats,
                     &last_perf_stats,
                     &rx_performance,
+                    iq_packetizer.pending_pairs(),
                     &wdsp_resume_performance,
                     rx.fifo_v29_telemetry(),
                     rx.adc_v30_telemetry(),
@@ -1222,6 +1301,7 @@ fn write_performance(
     stats: &RxCaptureStats,
     previous: &RxCaptureStats,
     performance: &DirectRxPerformance,
+    iq_packetizer_pending_pairs: usize,
     wdsp_resume: &WdspResumePerformance,
     fifo_v29: &FpgaFifoV29Telemetry,
     adc_v30: &FpgaAdcV30Telemetry,
@@ -1306,6 +1386,38 @@ fn write_performance(
                 TelemetryValue::number(performance.iq_frames_published as f64 / elapsed),
             ),
             (
+                "iq_tci_frames_s",
+                TelemetryValue::number(performance.iq_frames_published as f64 / elapsed),
+            ),
+            (
+                "iq_tci_pairs_s",
+                TelemetryValue::number(performance.iq_pairs_published as f64 / elapsed),
+            ),
+            (
+                "iq_tci_suppressed_frames_s",
+                TelemetryValue::number(performance.iq_frames_suppressed as f64 / elapsed),
+            ),
+            (
+                "iq_tci_suppressed_pairs_s",
+                TelemetryValue::number(performance.iq_pairs_suppressed as f64 / elapsed),
+            ),
+            (
+                "iq_tci_target_frame_rate_hz",
+                TelemetryValue::number(DIRECT_TCI_IQ_FRAME_RATE_HZ),
+            ),
+            (
+                "iq_tci_pairs_per_frame",
+                TelemetryValue::number(DIRECT_TCI_IQ_PAIRS_PER_FRAME),
+            ),
+            (
+                "iq_tci_frame_bytes",
+                TelemetryValue::number(DIRECT_TCI_IQ_FRAME_BYTES),
+            ),
+            (
+                "iq_tci_pending_pairs",
+                TelemetryValue::number(iq_packetizer_pending_pairs),
+            ),
+            (
                 "rx_audio_frames_s",
                 TelemetryValue::number(performance.audio_frames_published as f64 / elapsed),
             ),
@@ -1372,6 +1484,14 @@ fn write_performance(
             (
                 "display_dropped_s",
                 TelemetryValue::number(client.display_dropped_per_sec),
+            ),
+            (
+                "display_replaced_s",
+                TelemetryValue::number(client.display_replaced_per_sec),
+            ),
+            (
+                "display_rate_limited_s",
+                TelemetryValue::number(client.display_rate_limited_per_sec),
             ),
             (
                 "header_resync",
@@ -1878,6 +1998,43 @@ mod tests {
         let meter = iq_rms_dbfs(&[0.5, 0.5, -0.5, -0.5]).unwrap();
         assert!((meter - -3.0103).abs() < 0.001);
         assert_eq!(iq_rms_dbfs(&[]), None);
+    }
+
+    #[test]
+    fn direct_iq_packetizer_preserves_every_sample_in_order() {
+        let mut packetizer = DirectIqPacketizer::default();
+        let input: Vec<f32> = (0..DIRECT_TCI_IQ_FLOATS_PER_FRAME * 2 + 14)
+            .map(|value| value as f32)
+            .collect();
+        let mut published = Vec::new();
+
+        for chunk in input.chunks(997) {
+            packetizer.push(chunk, |frame| published.extend_from_slice(frame));
+        }
+
+        assert_eq!(published.len(), DIRECT_TCI_IQ_FLOATS_PER_FRAME * 2);
+        assert_eq!(published, input[..published.len()]);
+        assert_eq!(packetizer.pending_pairs(), 7);
+    }
+
+    #[test]
+    fn direct_iq_packetizer_geometry_is_exact_and_bounded() {
+        assert_eq!(
+            DIRECT_TCI_IQ_PAIRS_PER_FRAME * DIRECT_TCI_IQ_FRAME_RATE_HZ,
+            DIRECT_TCI_IQ_SAMPLE_RATE_HZ
+        );
+        assert_eq!(DIRECT_TCI_IQ_PAIRS_PER_FRAME, 12_800);
+        assert_eq!(DIRECT_TCI_IQ_FRAME_BYTES, 102_464);
+        assert!(DIRECT_TCI_IQ_FRAME_BYTES < crate::tci::MAX_TCI_INBOUND_FRAME_BYTES);
+    }
+
+    #[test]
+    fn direct_iq_packetizer_reset_discards_only_the_partial_frame() {
+        let mut packetizer = DirectIqPacketizer::default();
+        packetizer.push(&[1.0, -1.0, 2.0, -2.0], |_| unreachable!());
+        assert_eq!(packetizer.pending_pairs(), 2);
+        packetizer.reset();
+        assert_eq!(packetizer.pending_pairs(), 0);
     }
 
     #[test]

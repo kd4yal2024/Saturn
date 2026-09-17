@@ -987,6 +987,21 @@ impl TciFrontend {
         });
     }
 
+    /// Publish an IQ frame whose caller has already aggregated the stream to
+    /// the desired display cadence. Direct-XDMA uses this path so the generic
+    /// snapshot rate limiter cannot discard most of a full-rate IQ stream.
+    pub fn publish_full_rate_iq_frame(&self, sample_rate_hz: u32, iq_samples: &[f32]) -> bool {
+        if !self.is_iq_stream_enabled() {
+            return false;
+        }
+
+        self.send_message(OutboundMessage::IqFrame {
+            receiver: 0,
+            sample_rate: sample_rate_hz,
+            iq_samples: iq_samples.to_vec(),
+        }) != 0
+    }
+
     pub fn publish_tx_iq_frame(&self, sample_rate_hz: u32, iq_samples: &[f32]) {
         if !self.is_iq_stream_enabled() {
             return;
@@ -1110,16 +1125,35 @@ impl TciFrontend {
         }
     }
 
-    fn send_message(&self, message: OutboundMessage) {
+    fn send_message(&self, message: OutboundMessage) -> usize {
         let tx_media_priority_active = self.tx_media_priority_active();
-        let clients = self.clients.lock_unpoisoned();
-        for client in clients.values() {
-            if !client_wants_outbound_message(client, &message, tx_media_priority_active) {
-                continue;
-            }
-            let drops = client.outbound.enqueue(message.clone());
+        let outbounds: Vec<_> = self
+            .clients
+            .lock_unpoisoned()
+            .values()
+            .filter(|client| {
+                client_wants_outbound_message(client, &message, tx_media_priority_active)
+            })
+            .map(|client| client.outbound.clone())
+            .collect();
+        let recipients = outbounds.len();
+        let mut message = Some(message);
+        for (index, outbound) in outbounds.into_iter().enumerate() {
+            // A normal split session has one eligible media socket. Move the
+            // large binary payload into that queue instead of cloning it; only
+            // true multi-viewer delivery pays for additional payload copies.
+            let queued = if index + 1 == recipients {
+                message.take().expect("outbound message is available")
+            } else {
+                message
+                    .as_ref()
+                    .expect("outbound message is available")
+                    .clone()
+            };
+            let drops = outbound.enqueue(queued);
             self.drop_count.fetch_add(drops, Ordering::Relaxed);
         }
+        recipients
     }
 }
 

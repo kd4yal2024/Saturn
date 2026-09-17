@@ -45,6 +45,10 @@ describe('Saturn Go performance lab template', () => {
     expect(template).toContain("optionalDeltaCounter('wdsp_resume_flush_failures')");
     expect(template).toContain("optionalDeltaCounter('duc_fifo_faults')");
     expect(template).toContain('wdsp_resume_max_us');
+    expect(template).toContain('Full-rate TCI IQ');
+    expect(template).toContain('iq_tci_pairs_s');
+    expect(template).toContain('iq_tci_pairs_per_frame');
+    expect(template).toContain('full-rate TCI IQ loss');
     expect(template).toContain("showLabPanel('performance')");
   });
 });

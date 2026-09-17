@@ -358,3 +358,42 @@ starvation, header errors/resynchronizations, RX FIFO faults/thresholds/almost-
 full observations, outbound/audio/display drops, and WDSP resume-flush
 failures. Automated quality and continuity therefore pass; subjective audio
 latency and listening quality remain an operator acceptance item.
+
+## Full-rate TCI IQ transport candidate
+
+Source review after the 256-sample WDSP result found that Direct-XDMA decoded
+approximately 384,000 complex pairs/second and called `publish_iq_frame` for
+each roughly 4 KiB DMA block, but the shared TCI display limiter admitted only
+about 30 of those calls per second. The browser therefore received periodic
+small snapshots rather than a continuous IQ stream. The old `iq_frames_s`
+field counted calls before that limiter and could report approximately 844
+frames/second even though those frames did not reach the WebSocket.
+
+The candidate packetizes every accepted Direct-XDMA RX sample in original
+order into exactly 30 frames/second: 12,800 complex pairs, 25,600 `f32` values,
+and 102,464 bytes including the 64-byte TCI header per frame. The packetizer
+uses one fixed reusable buffer and bypasses the generic snapshot limiter only
+after it has formed a complete frame. Tuning, loss of the IQ consumer, or TX
+media-priority suppression clears an incomplete frame so a later frame cannot
+mix RF centers or pre/post-session data. The bounded per-client display queue
+remains the backpressure boundary; any replacement or send drop is explicit
+failure evidence rather than silent rate limiting.
+
+`iq_frames_s` now means completed TCI frames offered to at least one eligible
+media client. The bridge additionally exports `iq_tci_frames_s`,
+`iq_tci_pairs_s`, fixed packet geometry, pending pairs, suppressed frames and
+pairs, plus display replacement, drop, and rate-limit rates. A passing active
+RX interval requires approximately 30 frames/second and 384,000 pairs/second,
+with suppressed/replaced/dropped/rate-limited values all zero. The expected
+wire payload is approximately 3.07 MB/s (24.6 Mbit/s) before WebSocket/TCP
+overhead, so this is a quality/transport candidate—not yet a CPU-performance
+claim—and must be compared against commit `7417ad5` on the appliance.
+
+Saturn Remote already accepts variable-size TCI IQ messages. Its render path
+now retains one copy of each incoming frame and extracts the newest contiguous
+FFT-sized window instead of allowing a large frame to make the FFT stride
+across time. This preserves the existing 4096-sample spectrum analysis
+boundary while the complete IQ stream remains available at the TCI boundary.
+The Saturn Go split-WebSocket relay also moves the common `Bytes` payload
+directly between Tungstenite and Axum, removing one full-frame allocation and
+copy on each proxy hop.

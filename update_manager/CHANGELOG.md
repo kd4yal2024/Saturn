@@ -4,6 +4,17 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
 
 ## [Unreleased]
 ### Changed
+- Direct-XDMA RX now aggregates the complete 384 kHz complex stream into 30
+  TCI IQ messages per second (12,800 pairs / 102,464 bytes each) instead of
+  feeding the generic display snapshot limiter hundreds of small blocks per
+  second. No IQ samples are intentionally downsampled or skipped; frequency,
+  client, and TX-suppression boundaries discard only an incomplete packet so
+  unlike RF contexts cannot be mixed. Runtime telemetry reports transported
+  pairs, pending samples, suppression, replacement, and drop rates. Saturn
+  Remote retains only the newest contiguous FFT window from each larger frame
+  and removes a redundant browser-side IQ copy. The Saturn Go split-WebSocket
+  relay now moves shared byte buffers between Axum and Tungstenite instead of
+  copying every binary frame in both directions.
 - Saturn Bridge RX uses a 256-sample WDSP exchange block and exports the value
   as `wdsp_rx_dsp_size`, reducing native exchange/wakeup frequency from 750 to
   187.5 calls per second. Hardware/audio rates, client packet boundaries, and

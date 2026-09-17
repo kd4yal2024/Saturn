@@ -1236,7 +1236,7 @@ async fn proxy_bridge_socket(
                         continue;
                     }
                     bridge_tx
-                        .send(TungsteniteMessage::Binary(bytes.to_vec().into()))
+                        .send(TungsteniteMessage::Binary(bytes))
                         .await
                         .map_err(|err| format!("bridge websocket send failed: {err}"))?;
                 }
@@ -1245,7 +1245,7 @@ async fn proxy_bridge_socket(
                         continue;
                     }
                     bridge_tx
-                        .send(TungsteniteMessage::Ping(bytes.to_vec().into()))
+                        .send(TungsteniteMessage::Ping(bytes))
                         .await
                         .map_err(|err| format!("bridge websocket ping failed: {err}"))?;
                 }
@@ -1254,7 +1254,7 @@ async fn proxy_bridge_socket(
                         continue;
                     }
                     bridge_tx
-                        .send(TungsteniteMessage::Pong(bytes.to_vec().into()))
+                        .send(TungsteniteMessage::Pong(bytes))
                         .await
                         .map_err(|err| format!("bridge websocket pong failed: {err}"))?;
                 }
@@ -1290,7 +1290,7 @@ async fn proxy_bridge_socket(
                         continue;
                     }
                     client_tx
-                        .send(AxumMessage::Binary(bytes.to_vec().into()))
+                        .send(AxumMessage::Binary(bytes))
                         .await
                         .map_err(|err| format!("client websocket send failed: {err}"))?;
                 }
@@ -1299,7 +1299,7 @@ async fn proxy_bridge_socket(
                         continue;
                     }
                     client_tx
-                        .send(AxumMessage::Ping(bytes.to_vec().into()))
+                        .send(AxumMessage::Ping(bytes))
                         .await
                         .map_err(|err| format!("client websocket ping failed: {err}"))?;
                 }
@@ -1308,7 +1308,7 @@ async fn proxy_bridge_socket(
                         continue;
                     }
                     client_tx
-                        .send(AxumMessage::Pong(bytes.to_vec().into()))
+                        .send(AxumMessage::Pong(bytes))
                         .await
                         .map_err(|err| format!("client websocket pong failed: {err}"))?;
                 }

@@ -17694,8 +17694,9 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     function displayIqForSource(iq, sourceKind) {
       // piHPSDR feeds WDSP TX IQ output directly to Spectrum0 without
       // conjugation.  The bin reversal in visibleBinsForDisplay handles
-      // sideband orientation for both RX and TX.
-      return new Float32Array(iq);
+      // sideband orientation for both RX and TX. appendIqPacket makes the one
+      // retained copy; copying here as well doubles full-rate TCI IQ traffic.
+      return iq;
     }
 
     function buildRenderIqWindow() {
@@ -17704,13 +17705,15 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       }
 
       const desiredComplexSamples = displayFftTargetSize();
+      const desiredFloats = desiredComplexSamples * 2;
       const selected = [];
       let totalFloats = 0;
       for (let i = state.iqPackets.length - 1; i >= 0; i -= 1) {
         const packet = state.iqPackets[i];
-        selected.push(packet);
-        totalFloats += packet.length;
-        if ((totalFloats / 2) >= desiredComplexSamples) {
+        const take = Math.min(packet.length, desiredFloats - totalFloats);
+        selected.push({ packet, start: packet.length - take, take });
+        totalFloats += take;
+        if (totalFloats >= desiredFloats) {
           break;
         }
       }
@@ -17718,9 +17721,9 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       selected.reverse();
       const combined = new Float32Array(totalFloats);
       let offset = 0;
-      for (const packet of selected) {
-        combined.set(packet, offset);
-        offset += packet.length;
+      for (const part of selected) {
+        combined.set(part.packet.subarray(part.start, part.start + part.take), offset);
+        offset += part.take;
       }
       return combined;
     }
