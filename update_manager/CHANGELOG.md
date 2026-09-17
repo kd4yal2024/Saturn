@@ -4,6 +4,12 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
 
 ## [Unreleased]
 ### Changed
+- Saturn Bridge RX now stages IQ directly into its fixed WDSP input buffer and
+  publishes audio from a reusable packet buffer. This removes the two
+  per-sample deque paths and per-frame heap allocation without changing WDSP's
+  block size, DSP configuration, audio packet boundaries, or floating-point
+  behavior. The preceding Cortex-A72-only appliance result and the separate
+  acceptance gate are recorded in the V30 incident document.
 - Saturn Bridge release builds now target the G2 CM4's Cortex-A72 in both Rust
   and pinned WDSP 2.00 code, with thin LTO and one Rust codegen unit. DSP
   algorithms and strict floating-point semantics are unchanged, and runtime

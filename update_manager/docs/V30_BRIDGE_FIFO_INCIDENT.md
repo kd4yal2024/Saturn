@@ -308,3 +308,25 @@ selected CPU target so baseline and candidate binaries cannot be confused.
 The initial acceptance target is active IQ plus audio below 45% of one core
 with the existing 384 kHz IQ rate, 48 kHz stereo audio, filters, AGC, NR, FFT
 configuration, and all integrity-counter deltas unchanged.
+
+The deployed Cortex-A72 candidate at commit `de317d6` passed the integrity
+gate but did not produce a material standalone CPU improvement. A 30-second
+active IQ-plus-audio sample consumed 55.56% of one core: `Wchan0` 30.26%, the
+main bridge thread 10.30%, the XDMA reader 6.07%, and all other workers 8.93%.
+It sustained approximately 384,064 IQ pairs/second with zero interval deltas
+for host-buffer drops, discontinuities, pool starvation, header errors or
+resynchronizations, RX FIFO faults, outbound drops, and display/audio drops.
+The compiler result is retained as a valid build improvement, but it is not
+claimed as the requested performance gain.
+
+The next isolated candidate removes allocation and queue-copy overhead around
+the unchanged WDSP call. Interleaved `f32` IQ now converts directly into the
+reused fixed-size `f64` WDSP input buffer instead of entering a `VecDeque` and
+then being copied out. Stereo output fills one reusable frame buffer and is
+published through a synchronous callback instead of allocating a new `Vec`
+for every frame and pushing/popping every sample through a second deque. The
+WDSP DSP size remains 64, output packet boundaries remain client-selected,
+and all demodulator, filter, AGC, noise-reduction, FFT, sample-rate, and
+floating-point behavior remains unchanged. This candidate must pass the same
+active-workload quality counters and an appliance A/B measurement before it
+can be accepted.

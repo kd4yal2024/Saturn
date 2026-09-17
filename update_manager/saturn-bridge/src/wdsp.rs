@@ -610,9 +610,10 @@ pub struct WdspRxEngine {
     input_complex_samples: usize,
     output_audio_frames: usize,
     input_buffer: Vec<f64>,
+    input_buffer_fill: usize,
     output_buffer: Vec<f64>,
-    pending_iq: VecDeque<f64>,
-    pending_audio: VecDeque<f32>,
+    audio_frame_buffer: Vec<f32>,
+    audio_frame_fill: usize,
     frame_float_count: usize,
     last_meter_dbm: Option<f32>,
     nb_initialized: bool,
@@ -658,9 +659,10 @@ impl WdspRxEngine {
             input_complex_samples: 0,
             output_audio_frames: 0,
             input_buffer: Vec::new(),
+            input_buffer_fill: 0,
             output_buffer: Vec::new(),
-            pending_iq: VecDeque::new(),
-            pending_audio: VecDeque::new(),
+            audio_frame_buffer: vec![0.0; WDSP_AUDIO_FRAME_FLOATS],
+            audio_frame_fill: 0,
             frame_float_count: WDSP_AUDIO_FRAME_FLOATS,
             last_meter_dbm: None,
             nb_initialized: false,
@@ -846,8 +848,8 @@ impl WdspRxEngine {
                 "saturn-bridge: RX channel down-slew flush did not complete within {SLEW_FLUSH_BLOCKS_RX} blocks"
             );
         }
-        self.pending_iq.clear();
-        self.pending_audio.clear();
+        self.input_buffer_fill = 0;
+        self.audio_frame_fill = 0;
     }
 
     /// Restart the RX channel after MOX (Phase 0B B1 §2.2). Idempotent.
@@ -856,28 +858,46 @@ impl WdspRxEngine {
             return;
         }
         self.rx_suspended = false;
-        self.pending_iq.clear();
-        self.pending_audio.clear();
+        self.input_buffer_fill = 0;
+        self.audio_frame_fill = 0;
         unsafe {
             SetChannelState(self.channel_id, 1, 0);
         }
     }
 
-    pub fn push_iq(&mut self, iq_samples: &[f32]) -> Vec<Vec<f32>> {
+    /// Process interleaved IQ and deliver each complete stereo audio frame.
+    ///
+    /// The staging buffers are fixed and reused. This keeps the RX hot path
+    /// allocation-free after configuration while preserving the exact WDSP
+    /// block size and audio packet boundaries used before this optimization.
+    pub fn process_iq<F>(&mut self, iq_samples: &[f32], mut on_audio_frame: F)
+    where
+        F: FnMut(&[f32]),
+    {
         // Defensive: a suspended channel's fexchange0 is a no-op that leaves
         // the output buffer stale with error == 0 (iobuffs.c:471); never
         // consume it (B1 INV-2 analogue for RX).
         if self.rx_suspended {
-            return Vec::new();
+            return;
         }
-        self.pending_iq
-            .extend(iq_samples.iter().map(|&sample| sample as f64));
 
-        let mut ready_frames = Vec::new();
-        let needed_floats = self.input_complex_samples * 2;
+        let mut source_offset = 0;
+        while source_offset < iq_samples.len() {
+            let copy_count = (self.input_buffer.len() - self.input_buffer_fill)
+                .min(iq_samples.len() - source_offset);
+            let source = &iq_samples[source_offset..source_offset + copy_count];
+            let destination =
+                &mut self.input_buffer[self.input_buffer_fill..self.input_buffer_fill + copy_count];
+            for (output, &input) in destination.iter_mut().zip(source) {
+                *output = input as f64;
+            }
+            source_offset += copy_count;
+            self.input_buffer_fill += copy_count;
 
-        while self.pending_iq.len() >= needed_floats {
-            drain_front_into(&mut self.pending_iq, &mut self.input_buffer);
+            if self.input_buffer_fill != self.input_buffer.len() {
+                continue;
+            }
+            self.input_buffer_fill = 0;
 
             let mut error = 0;
             unsafe {
@@ -921,31 +941,33 @@ impl WdspRxEngine {
             if self.mode == DemodMode::Wfm && wbfm_supported() {
                 // RXA WBFM outputs true L/R audio and bypasses the panel gain block.
                 let gain = panel_gain_for_volume_db(self.volume_db) as f32;
-                for sample_pair in self.output_buffer.chunks_exact(2) {
-                    self.pending_audio
-                        .push_back((sample_pair[0] as f32 * gain).clamp(-1.0, 1.0));
-                    self.pending_audio
-                        .push_back((sample_pair[1] as f32 * gain).clamp(-1.0, 1.0));
+                for index in (0..self.output_buffer.len()).step_by(2) {
+                    let left = (self.output_buffer[index] as f32 * gain).clamp(-1.0, 1.0);
+                    let right = (self.output_buffer[index + 1] as f32 * gain).clamp(-1.0, 1.0);
+                    self.push_audio_pair(left, right, &mut on_audio_frame);
                 }
             } else {
                 // Voice modes are mono; duplicate the left channel for browser stereo audio.
-                for sample_pair in self.output_buffer.chunks_exact(2) {
-                    let mono = (sample_pair[0] as f32).clamp(-1.0, 1.0);
-                    self.pending_audio.push_back(mono);
-                    self.pending_audio.push_back(mono);
+                for index in (0..self.output_buffer.len()).step_by(2) {
+                    let mono = (self.output_buffer[index] as f32).clamp(-1.0, 1.0);
+                    self.push_audio_pair(mono, mono, &mut on_audio_frame);
                 }
-            }
-
-            while self.pending_audio.len() >= self.frame_float_count {
-                let mut frame = Vec::with_capacity(self.frame_float_count);
-                for _ in 0..self.frame_float_count {
-                    frame.push(self.pending_audio.pop_front().unwrap_or(0.0));
-                }
-                ready_frames.push(frame);
             }
         }
+    }
 
-        ready_frames
+    #[inline]
+    fn push_audio_pair<F>(&mut self, left: f32, right: f32, on_audio_frame: &mut F)
+    where
+        F: FnMut(&[f32]),
+    {
+        self.audio_frame_buffer[self.audio_frame_fill] = left;
+        self.audio_frame_buffer[self.audio_frame_fill + 1] = right;
+        self.audio_frame_fill += 2;
+        if self.audio_frame_fill == self.frame_float_count {
+            on_audio_frame(&self.audio_frame_buffer);
+            self.audio_frame_fill = 0;
+        }
     }
 
     pub fn audio_sample_rate_hz(&self) -> u32 {
@@ -956,14 +978,15 @@ impl WdspRxEngine {
         let normalized = normalize_audio_frame_float_count(frame_float_count);
         if normalized != self.frame_float_count {
             self.frame_float_count = normalized;
-            self.pending_audio.clear();
+            self.audio_frame_buffer.resize(normalized, 0.0);
+            self.audio_frame_fill = 0;
         }
         normalized
     }
 
     pub fn reset_stream_buffers(&mut self) {
-        self.pending_iq.clear();
-        self.pending_audio.clear();
+        self.input_buffer_fill = 0;
+        self.audio_frame_fill = 0;
         self.input_buffer.fill(0.0);
         self.output_buffer.fill(0.0);
     }
@@ -1000,7 +1023,7 @@ impl WdspRxEngine {
     }
 
     pub fn reset_audio_packetizer(&mut self) {
-        self.pending_audio.clear();
+        self.audio_frame_fill = 0;
     }
 
     fn reconfigure(&mut self, model: &RadioModel) -> Result<(), WdspError> {
@@ -1089,9 +1112,10 @@ impl WdspRxEngine {
         self.input_complex_samples = (input_ratio as usize) * WDSP_DSP_SIZE;
         self.output_audio_frames = WDSP_DSP_SIZE / output_ratio as usize;
         self.input_buffer = vec![0.0; self.input_complex_samples * 2];
+        self.input_buffer_fill = 0;
         self.output_buffer = vec![0.0; self.output_audio_frames * 2];
-        self.pending_iq.clear();
-        self.pending_audio.clear();
+        self.audio_frame_buffer.resize(self.frame_float_count, 0.0);
+        self.audio_frame_fill = 0;
 
         unsafe {
             if first_open {
@@ -2541,6 +2565,34 @@ mod tests {
         assert_eq!(normalize_audio_frame_float_count(511), 510);
         assert_eq!(normalize_audio_frame_float_count(512), 512);
         assert_eq!(normalize_audio_frame_float_count(100_000), 8192);
+    }
+
+    #[cfg(saturn_bridge_stub_native)]
+    #[test]
+    fn rx_staging_preserves_blocks_across_fragmented_input_without_allocating_frames() {
+        let model = RadioModel::new(2, 7_200_000, 0, 384, 24, 2048, true, 4096, true);
+        let mut engine = WdspRxEngine::new(&model).expect("RX engine");
+        assert_eq!(engine.set_audio_frame_float_count(256), 256);
+        let input_block_floats = engine.input_buffer.len();
+        let mut frame_lengths = Vec::new();
+
+        engine.process_iq(&vec![0.25; input_block_floats - 1], |frame| {
+            frame_lengths.push(frame.len());
+        });
+        assert!(frame_lengths.is_empty());
+        assert_eq!(engine.input_buffer_fill, input_block_floats - 1);
+
+        engine.process_iq(&[0.25], |frame| frame_lengths.push(frame.len()));
+        assert!(frame_lengths.is_empty());
+        assert_eq!(engine.input_buffer_fill, 0);
+        assert_eq!(engine.audio_frame_fill, 128);
+
+        engine.process_iq(&vec![0.25; input_block_floats], |frame| {
+            frame_lengths.push(frame.len());
+        });
+        assert_eq!(frame_lengths, vec![256]);
+        assert_eq!(engine.input_buffer_fill, 0);
+        assert_eq!(engine.audio_frame_fill, 0);
     }
 
     #[cfg(saturn_bridge_stub_native)]

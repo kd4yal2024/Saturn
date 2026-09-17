@@ -435,11 +435,12 @@ fn run_inner(mut config: BridgeConfig, ready_path: &Path) -> Result<(), Box<dyn 
                             wdsp_input_gap = false;
                         }
                         rx_performance.dsp_iq_pairs += outcome.sample_pairs;
-                        for audio in wdsp.push_iq(&iq_samples) {
+                        let audio_sample_rate_hz = wdsp.audio_sample_rate_hz();
+                        wdsp.process_iq(&iq_samples, |audio| {
                             rx_performance.audio_frames_published += 1;
                             rx_performance.audio_samples_published += audio.len() as u64;
-                            tci.publish_audio_frame(wdsp.audio_sample_rate_hz(), &audio);
-                        }
+                            tci.publish_audio_frame(audio_sample_rate_hz, audio);
+                        });
                     } else {
                         wdsp_input_gap = true;
                         rx_performance.bypassed_iq_pairs += outcome.sample_pairs;
