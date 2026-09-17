@@ -18,7 +18,7 @@ const WDSP_RX_CHANNEL: i32 = 0;
 const WDSP_TX_CHANNEL: i32 = 1;
 const WDSP_DEXP_ID: i32 = 1;
 pub const WDSP_AUDIO_RATE_HZ: u32 = 48_000;
-const WDSP_DSP_SIZE: usize = 64;
+pub const WDSP_RX_DSP_SIZE: usize = 256;
 pub const TX_MIC_SAMPLES_PER_DSP_BLOCK: usize = 512;
 const WDSP_TX_DSP_SIZE: usize = 2048;
 const WDSP_TX_DSP_RATE_HZ: u32 = 96_000;
@@ -32,10 +32,10 @@ const WDSP_PS_SATURN_HW_PEAK: f64 = 0.6121;
 // blocks fed through fexchange0 after SetChannelState(ch, 0, 0) so the WDSP
 // down-slew can complete and its flushChannel thread can reset the ring
 // buffers. Slew is tslewdown=0.010s: TX completes within ~1 call (2048 IQ out
-// vs 1920-sample slew), RX needs ~8 calls (64 audio out vs 480-sample slew);
-// both include DSP_MULT pipeline-depth margin.
+// vs 1920-sample slew), while RX needs 2 calls (256 audio out vs 480-sample
+// slew). Both retain a 2x DSP_MULT pipeline-depth margin.
 const SLEW_FLUSH_BLOCKS_TX: usize = 8;
-const SLEW_FLUSH_BLOCKS_RX: usize = 16;
+const SLEW_FLUSH_BLOCKS_RX: usize = 4;
 const WDSP_AUDIO_FRAME_FLOATS: usize = 512;
 const WDSP_ANR_TAPS: i32 = 64;
 const WDSP_ANR_DELAY: i32 = 16;
@@ -1109,8 +1109,8 @@ impl WdspRxEngine {
         self.filter_high_hz = model.desired.filter_high_hz;
         self.ssql_enabled = model.desired.rx_ssql_enabled;
         self.ssql_threshold = model.desired.rx_ssql_threshold;
-        self.input_complex_samples = (input_ratio as usize) * WDSP_DSP_SIZE;
-        self.output_audio_frames = WDSP_DSP_SIZE / output_ratio as usize;
+        self.input_complex_samples = (input_ratio as usize) * WDSP_RX_DSP_SIZE;
+        self.output_audio_frames = WDSP_RX_DSP_SIZE / output_ratio as usize;
         self.input_buffer = vec![0.0; self.input_complex_samples * 2];
         self.input_buffer_fill = 0;
         self.output_buffer = vec![0.0; self.output_audio_frames * 2];
@@ -1122,7 +1122,7 @@ impl WdspRxEngine {
                 OpenChannel(
                     self.channel_id,
                     self.input_complex_samples as i32,
-                    WDSP_DSP_SIZE as i32,
+                    WDSP_RX_DSP_SIZE as i32,
                     self.input_sample_rate_hz as i32,
                     self.dsp_sample_rate_hz as i32,
                     WDSP_AUDIO_RATE_HZ as i32,
@@ -2572,7 +2572,12 @@ mod tests {
     fn rx_staging_preserves_blocks_across_fragmented_input_without_allocating_frames() {
         let model = RadioModel::new(2, 7_200_000, 0, 384, 24, 2048, true, 4096, true);
         let mut engine = WdspRxEngine::new(&model).expect("RX engine");
-        assert_eq!(engine.set_audio_frame_float_count(256), 256);
+        let output_block_floats = engine.output_buffer.len();
+        let packet_floats = output_block_floats * 2;
+        assert_eq!(
+            engine.set_audio_frame_float_count(packet_floats),
+            packet_floats
+        );
         let input_block_floats = engine.input_buffer.len();
         let mut frame_lengths = Vec::new();
 
@@ -2585,12 +2590,12 @@ mod tests {
         engine.process_iq(&[0.25], |frame| frame_lengths.push(frame.len()));
         assert!(frame_lengths.is_empty());
         assert_eq!(engine.input_buffer_fill, 0);
-        assert_eq!(engine.audio_frame_fill, 128);
+        assert_eq!(engine.audio_frame_fill, output_block_floats);
 
         engine.process_iq(&vec![0.25; input_block_floats], |frame| {
             frame_lengths.push(frame.len());
         });
-        assert_eq!(frame_lengths, vec![256]);
+        assert_eq!(frame_lengths, vec![packet_floats]);
         assert_eq!(engine.input_buffer_fill, 0);
         assert_eq!(engine.audio_frame_fill, 0);
     }

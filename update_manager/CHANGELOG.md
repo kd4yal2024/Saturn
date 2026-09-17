@@ -4,6 +4,11 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
 
 ## [Unreleased]
 ### Changed
+- Saturn Bridge RX uses a 256-sample WDSP exchange block and exports the value
+  as `wdsp_rx_dsp_size`, reducing native exchange/wakeup frequency from 750 to
+  187.5 calls per second. Hardware/audio rates, client packet boundaries, and
+  DSP feature configuration remain unchanged; the latency and A/B acceptance
+  boundary are recorded in the V30 incident document.
 - Saturn Bridge RX now stages IQ directly into its fixed WDSP input buffer and
   publishes audio from a reusable packet buffer. This removes the two
   per-sample deque paths and per-frame heap allocation without changing WDSP's

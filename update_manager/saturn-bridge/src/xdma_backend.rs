@@ -12,7 +12,9 @@ use crate::sync_ext::MutexExt;
 use crate::tci::{TciClientSnapshot, TciCommand, TciFrontend, TciMediaDemand};
 use crate::tx_audio::{TxAudioIngress, TxAudioSource};
 use crate::tx_thread::{self, TxCommand, TxEvent};
-use crate::wdsp::{normalize_audio_frame_float_count, WdspRxEngine, WDSP_AUDIO_RATE_HZ};
+use crate::wdsp::{
+    normalize_audio_frame_float_count, WdspRxEngine, WDSP_AUDIO_RATE_HZ, WDSP_RX_DSP_SIZE,
+};
 use crate::xdma::{SaturnIdentity, XdmaError};
 use crate::xdma_rx::{
     FpgaAdcV30Telemetry, FpgaFifoV29Telemetry, OperationalRxSession, RxCaptureStats,
@@ -1250,6 +1252,7 @@ fn write_performance(
                 "wdsp_git_sha",
                 TelemetryValue::text(env!("SATURN_BRIDGE_WDSP_COMMIT")),
             ),
+            ("wdsp_rx_dsp_size", TelemetryValue::number(WDSP_RX_DSP_SIZE)),
             (
                 "processing_mode",
                 TelemetryValue::text(processing_mode.label()),

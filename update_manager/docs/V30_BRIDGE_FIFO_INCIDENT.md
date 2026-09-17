@@ -330,3 +330,19 @@ and all demodulator, filter, AGC, noise-reduction, FFT, sample-rate, and
 floating-point behavior remains unchanged. This candidate must pass the same
 active-workload quality counters and an appliance A/B measurement before it
 can be accepted.
+
+That allocation-free candidate sustained three consecutive 30-second active
+IQ-plus-audio windows at 55.30%, 57.40%, and 55.76% of one core (56.15%
+average), all at approximately 384 kHz with zero summed integrity deltas. Its
+main-thread cost remained effectively unchanged, demonstrating that staging
+allocation was not a material CPU contributor. The reusable buffers remain
+useful for bounded allocation behavior, but no CPU gain is claimed.
+
+The next candidate targets the dominant `Wchan0` cost without changing DSP
+features. WDSP's RX exchange size increases from 64 to 256 samples, reducing
+exchange and worker-wakeup frequency from 750 to 187.5 calls/second at the
+48 kHz DSP rate. The 384 kHz hardware input and 48 kHz stereo output rates,
+2048-float client audio packet boundary, FFT/filter/AGC/NR configuration, and
+strict floating-point behavior are unchanged. The larger exchange adds about
+4 ms of buffering relative to the 64-sample setting and is exported as
+`wdsp_rx_dsp_size` so appliance results are attributable.
