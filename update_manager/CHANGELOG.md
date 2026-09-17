@@ -4,6 +4,11 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
 
 ## [Unreleased]
 ### Changed
+- Saturn Go self-deployment now refuses to stage a bridge binary when the
+  installed root-owned deployment broker has an older service contract. The
+  broker and standalone installer also verify the effective 16 MiB memlock and
+  priority-22 ceilings before accepting the runtime, preventing a new locked-
+  ring bridge from entering a restart loop under an obsolete systemd unit.
 - Radio Telemetry now presents Direct-XDMA's live V30 ADC episode monitor in
   the ADC card and maps coherent V29 DUC FIFO occupancy, boot-lifetime extrema
   and transitions, and bridge TX FIFO/write counters into a backend-specific

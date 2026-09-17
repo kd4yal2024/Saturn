@@ -8,6 +8,12 @@ set -Eeuo pipefail
 CONFIG_FILE="${SATURN_GO_DEPLOY_CONFIG:-/etc/default/saturn-go-deploy}"
 VALIDATE_ONLY=0
 
+# Increment this whenever the trusted broker's payload or runtime contract
+# changes incompatibly.  The unprivileged updater compares this value with the
+# source broker before it stages a bridge binary, preventing an older installed
+# broker from pairing a new executable with an obsolete systemd unit.
+SATURN_GO_DEPLOY_BROKER_CONTRACT_VERSION=2
+
 die(){ printf '[saturn-go-deploy] ERROR: %s\n' "$*" >&2; exit 1; }
 info(){ printf '[saturn-go-deploy] %s\n' "$*"; }
 
@@ -40,6 +46,8 @@ NGINX_SERVICE="nginx.service"
 BRIDGE_MAX_RATE_KHZ="192"
 BRIDGE_OPUS_ENABLED="1"
 BRIDGE_RF_TX_ENABLED="1"
+BRIDGE_REQUIRED_RTPRIO=22
+BRIDGE_REQUIRED_MEMLOCK_BYTES=16777216
 SATURN_GO_HEALTH_URL="http://127.0.0.1:8080/readyz"
 
 load_root_config(){
@@ -333,6 +341,21 @@ listener_owned_by_service(){
   ss -ltnp "sport = :$port" 2>/dev/null | grep -Fq "pid=$pid,"
 }
 
+require_service_limit(){
+  local service="$1" property="$2" minimum="$3" actual
+  actual="$(systemctl show --property="$property" --value "$service")"
+  [[ "$actual" == "infinity" ]] && return 0
+  [[ "$actual" =~ ^[0-9]+$ ]] \
+    || die "$service returned an invalid $property value: ${actual:-empty}"
+  (( actual >= minimum )) \
+    || die "$service $property=$actual is below the required minimum $minimum"
+}
+
+verify_bridge_service_contract(){
+  require_service_limit "$BRIDGE_SERVICE" LimitRTPRIO "$BRIDGE_REQUIRED_RTPRIO"
+  require_service_limit "$BRIDGE_SERVICE" LimitMEMLOCK "$BRIDGE_REQUIRED_MEMLOCK_BYTES"
+}
+
 if [[ "${BASH_SOURCE[0]}" != "$0" ]]; then
   return 0
 fi
@@ -404,6 +427,10 @@ done < <(find "$STAGE_DIR/scripts" -mindepth 1 -maxdepth 1 -type f | sort)
 
 systemctl daemon-reload
 if [[ -f "$STAGE_DIR/saturn-bridge" ]]; then
+  # Check the effective unit before starting the replacement binary.  This
+  # catches stale or conflicting unit/drop-in policy and rolls the complete
+  # payload back instead of entering a restart loop after deployment.
+  verify_bridge_service_contract
   if (( BRIDGE_WAS_ACTIVE )); then
     systemctl start "$BRIDGE_SERVICE"
     systemctl is-active --quiet "$BRIDGE_SERVICE"

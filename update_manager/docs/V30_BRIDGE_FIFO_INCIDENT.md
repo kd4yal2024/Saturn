@@ -257,3 +257,31 @@ both branches, and every inline template script is parsed and checked for
 unresolved identifiers in CI. A separate undeclared timeout variable in the
 keyed-transmit safety path was replaced with the configured, clamped transmit
 duration and covered by a regression assertion.
+
+## Bridge service-contract deployment follow-up
+
+On 2026-09-16 a Saturn Go self-deploy installed the current bridge binary but
+regenerated `saturn-bridge.service` through the older root-owned deployment
+broker already present on the appliance. The source-tree broker and standalone
+installer granted `LimitRTPRIO=22` and `LimitMEMLOCK=16M`; the installed broker
+still generated priority 21 with systemd's 8 MiB locked-memory default. The new
+Direct-XDMA bridge therefore exited before radio initialization with:
+
+```text
+could not lock aligned XDMA buffer in memory: Cannot allocate memory
+```
+
+This was not ordinary RAM exhaustion: the appliance had hundreds of MiB
+available and no pages locked after each failed process exited. It was a
+binary/systemd contract mismatch. The self-update trust boundary deliberately
+does not replace its own root-owned broker from an unprivileged staged payload,
+but it previously had no version handshake to prove that the installed broker
+could deploy the source tree's bridge service contract.
+
+The deployment broker now carries an explicit contract version. A bridge-
+inclusive self-update fails before build or service mutation when the installed
+and source broker versions differ; a Saturn Go/web-only update remains possible
+with `SATURN_SATURNGO_BUILD_BRIDGE=0`. Both deployment paths also verify the
+effective priority and locked-memory limits before accepting or starting the
+new bridge. Updating the trusted broker remains an explicit privileged
+installation step rather than executing staged root code.

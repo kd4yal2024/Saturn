@@ -23,6 +23,8 @@ SATURN_RUST_TOOLCHAIN_HELPER="${SATURN_RUST_TOOLCHAIN_HELPER:-${SATURN_REPO_ROOT
 SATURN_BRIDGE_RF_TX_ENABLED="${SATURN_BRIDGE_RF_TX_ENABLED:-1}"
 SATURN_BRIDGE_TX_OPUS_DECODE_ENABLED="${SATURN_BRIDGE_TX_OPUS_DECODE_ENABLED:-1}"
 SATURN_BRIDGE_MAX_CLIENT_DDC0_SAMPLE_RATE_KHZ="${SATURN_BRIDGE_MAX_CLIENT_DDC0_SAMPLE_RATE_KHZ:-192}"
+SATURN_BRIDGE_REQUIRED_RTPRIO=22
+SATURN_BRIDGE_REQUIRED_MEMLOCK_BYTES=16777216
 SATURN_BRIDGE_BUILD_ONLY="${SATURN_BRIDGE_BUILD_ONLY:-0}"
 SATURN_BRIDGE_OUTPUT_BIN="${SATURN_BRIDGE_OUTPUT_BIN:-}"
 SATURN_BRIDGE_WDSP_FLAVOR="${SATURN_BRIDGE_WDSP_FLAVOR:-wdsp2}"
@@ -544,6 +546,10 @@ WantedBy=multi-user.target
 EOF
   chmod 0644 "$SATURN_BRIDGE_SERVICE"
   systemctl daemon-reload
+  # Validate the effective policy before the backend transaction can start the
+  # replacement binary.  A conflicting drop-in must fail the install rather
+  # than leave Direct-XDMA cycling on mlock or scheduling errors.
+  verify_service_contract
   # The backend transaction owns both the active and boot-time service policy.
   # P2 is deliberately P2app-only at boot; the browser bridge is started on
   # demand. Direct XDMA instead enables the bridge and disables P2app.
@@ -554,6 +560,24 @@ EOF
     systemctl restart "$service_name"
     log "Enabled and restarted $service_name (backend broker not installed)"
   fi
+}
+
+require_service_limit() {
+  local service="$1" property="$2" minimum="$3" actual
+  actual="$(systemctl show --property="$property" --value "$service")"
+  [[ "$actual" == "infinity" ]] && return 0
+  [[ "$actual" =~ ^[0-9]+$ ]] \
+    || die "$service returned an invalid $property value: ${actual:-empty}"
+  (( actual >= minimum )) \
+    || die "$service $property=$actual is below the required minimum $minimum"
+}
+
+verify_service_contract() {
+  local service_name
+  service_name="$(basename "$SATURN_BRIDGE_SERVICE")"
+  require_service_limit "$service_name" LimitRTPRIO "$SATURN_BRIDGE_REQUIRED_RTPRIO"
+  require_service_limit "$service_name" LimitMEMLOCK "$SATURN_BRIDGE_REQUIRED_MEMLOCK_BYTES"
+  log "Verified service limits: RT priority >= $SATURN_BRIDGE_REQUIRED_RTPRIO, locked memory >= $SATURN_BRIDGE_REQUIRED_MEMLOCK_BYTES bytes"
 }
 
 verify_runtime() {

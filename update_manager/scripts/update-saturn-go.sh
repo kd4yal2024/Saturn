@@ -5,7 +5,7 @@ set -euo pipefail
 # Rebuild and redeploy Saturn Update Manager (saturn-go) from the active Saturn repo.
 # Intended to be run from the web UI via /run (SSE terminal output).
 
-SCRIPT_VERSION="1.2.1"
+SCRIPT_VERSION="1.2.2"
 
 SKIP_GIT=0
 SKIP_BUILD=0
@@ -254,6 +254,26 @@ cargo_build_prefix_display(){
     "$BUILD_JOBS" "$BUILD_TMP_DIR" "$BUILD_TARGET_DIR" "$BUILD_NICE" "$BUILD_IONICE_CLASS"
 }
 
+deploy_broker_contract_version(){
+  local broker="$1"
+  sed -n 's/^SATURN_GO_DEPLOY_BROKER_CONTRACT_VERSION=\([0-9][0-9]*\)$/\1/p' "$broker" \
+    | tail -n 1
+}
+
+require_deploy_broker_contract(){
+  local source_version installed_version
+  source_version="$(deploy_broker_contract_version "$DEPLOY_ROOT_BROKER_SRC")"
+  [[ "$source_version" =~ ^[1-9][0-9]*$ ]] \
+    || die "Source deploy broker has no valid contract version: $DEPLOY_ROOT_BROKER_SRC"
+  [[ -x "$DEPLOY_ROOT_BROKER" ]] \
+    || die "Installed root deploy broker is missing; rerun install_saturn_go_nginx.sh: $DEPLOY_ROOT_BROKER"
+  installed_version="$(deploy_broker_contract_version "$DEPLOY_ROOT_BROKER")"
+  if [[ "$installed_version" != "$source_version" ]]; then
+    die "Installed root deploy broker contract is ${installed_version:-legacy}, but source requires $source_version. Refresh the root-owned broker with install_saturn_go_nginx.sh before deploying Saturn Bridge, or set SATURN_SATURNGO_BUILD_BRIDGE=0 for a Saturn Go/web-only update."
+  fi
+  info "Deploy broker contract: $installed_version (compatible)"
+}
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --skip-git) SKIP_GIT=1; shift ;;
@@ -408,6 +428,15 @@ BUILD_COMMIT="$(git -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null || true)"
   || die "Could not resolve a full Git commit for the staged Saturn Go release: ${BUILD_COMMIT:-unknown}"
 BUILD_COMMIT="${BUILD_COMMIT,,}"
 info "Release commit: $BUILD_COMMIT"
+
+if flag_enabled "$BUILD_BRIDGE" \
+    && (( ! DRY_RUN && ! SKIP_DEPLOY && ! STAGE_ONLY )); then
+  # The root-owned broker deliberately cannot update itself from an
+  # unprivileged stage.  Refuse the bridge payload before spending build time
+  # when that trusted broker cannot supply the service contract expected by
+  # the source tree.
+  require_deploy_broker_contract
+fi
 
 if (( ! SKIP_BUILD )); then
   STATUS_PHASE="build"

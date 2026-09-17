@@ -363,5 +363,7 @@ grep -Fq 'LimitRTPRIO=22' \
   "$REPO_ROOT/update_manager/scripts/install-saturn-bridge.sh"
 grep -Fq 'LimitMEMLOCK=16M' \
   "$REPO_ROOT/update_manager/scripts/install-saturn-bridge.sh"
+grep -Fq 'verify_service_contract' \
+  "$REPO_ROOT/update_manager/scripts/install-saturn-bridge.sh"
 
 printf 'Saturn radio backend transaction tests passed\n'
