@@ -46,6 +46,16 @@ void fexchange0(int32_t channel, const double *input, double *output,
   if (error) *error = 0;
 }
 
+// The RX engine invokes both external noise blankers in place when the
+// configured mode enables them. CI exercises staging rather than DSP math, so
+// preserving the in-place buffer unchanged is the faithful stub behavior.
+void xanbEXT(int32_t channel, const double *input, double *output) {
+  (void)channel; (void)input; (void)output;
+}
+void xnobEXT(int32_t channel, const double *input, double *output) {
+  (void)channel; (void)input; (void)output;
+}
+
 #define STUB_VOID_I32_I32(name) void name(int32_t a, int32_t b) { (void)a; (void)b; }
 #define STUB_VOID_I32_F64(name) void name(int32_t a, double b) { (void)a; (void)b; }
 #define STUB_VOID_I32_F32(name) void name(int32_t a, float b) { (void)a; (void)b; }
