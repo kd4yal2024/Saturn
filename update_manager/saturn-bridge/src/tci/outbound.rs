@@ -5,6 +5,7 @@ use std::net::TcpStream;
 use std::os::fd::AsRawFd;
 #[cfg(target_os = "linux")]
 use std::os::raw::{c_int, c_ulong};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -21,6 +22,11 @@ pub(crate) enum OutboundMessage {
     SafetyText(String),
     Close,
     IqFrame {
+        receiver: u32,
+        sample_rate: u32,
+        iq_samples: Vec<f32>,
+    },
+    FullRateIqFrame {
         receiver: u32,
         sample_rate: u32,
         iq_samples: Vec<f32>,
@@ -44,6 +50,7 @@ pub(crate) enum OutboundClass {
     Safety,
     Control,
     Audio,
+    FullRateIq,
     Display,
 }
 
@@ -52,8 +59,8 @@ impl OutboundClass {
         matches!(self, Self::Safety | Self::Control)
     }
 
-    pub(crate) fn is_never_drop(self) -> bool {
-        matches!(self, Self::Safety)
+    pub(crate) fn requeues_on_would_block(self) -> bool {
+        matches!(self, Self::Safety | Self::FullRateIq)
     }
 }
 
@@ -64,6 +71,7 @@ impl OutboundMessage {
             Self::SafetyText(_) => OutboundClass::Safety,
             Self::Text(_) => OutboundClass::Control,
             Self::AudioFrame { .. } => OutboundClass::Audio,
+            Self::FullRateIqFrame { .. } => OutboundClass::FullRateIq,
             Self::IqFrame { .. } | Self::TxIqFrame { .. } => OutboundClass::Display,
         }
     }
@@ -72,7 +80,9 @@ impl OutboundMessage {
         match self {
             Self::Close => 0,
             Self::Text(text) | Self::SafetyText(text) => text.len(),
-            Self::IqFrame { iq_samples, .. } | Self::TxIqFrame { iq_samples, .. } => {
+            Self::IqFrame { iq_samples, .. }
+            | Self::FullRateIqFrame { iq_samples, .. }
+            | Self::TxIqFrame { iq_samples, .. } => {
                 64 + iq_samples.len() * std::mem::size_of::<f32>()
             }
             Self::AudioFrame { audio_samples, .. } => {
@@ -184,7 +194,7 @@ impl ClientSchedulerStats {
         match class {
             OutboundClass::Safety => inner.safety_latencies_us.push(latency_us),
             OutboundClass::Control => inner.control_latencies_us.push(latency_us),
-            OutboundClass::Audio | OutboundClass::Display => {}
+            OutboundClass::Audio | OutboundClass::FullRateIq | OutboundClass::Display => {}
         }
     }
 
@@ -255,11 +265,66 @@ impl ClientSchedulerStats {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct FullRateIqTransportSnapshot {
+    pub(crate) enqueued_deliveries_total: u64,
+    pub(crate) written_deliveries_total: u64,
+    pub(crate) dropped_deliveries_total: u64,
+    pub(crate) dropped_deliveries_interval: u64,
+    pub(crate) queue_high_watermark: u64,
+}
+
+#[derive(Default, Debug)]
+pub(crate) struct FullRateIqTransportStats {
+    enqueued_deliveries_total: AtomicU64,
+    written_deliveries_total: AtomicU64,
+    dropped_deliveries_total: AtomicU64,
+    dropped_deliveries_interval: AtomicU64,
+    queue_high_watermark: AtomicU64,
+}
+
+impl FullRateIqTransportStats {
+    fn record_enqueued(&self, queue_depth: usize) {
+        self.enqueued_deliveries_total
+            .fetch_add(1, Ordering::Relaxed);
+        self.queue_high_watermark
+            .fetch_max(queue_depth as u64, Ordering::Relaxed);
+    }
+
+    fn record_written(&self) {
+        self.written_deliveries_total
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn record_dropped(&self, count: u64) {
+        if count == 0 {
+            return;
+        }
+        self.dropped_deliveries_total
+            .fetch_add(count, Ordering::Relaxed);
+        self.dropped_deliveries_interval
+            .fetch_add(count, Ordering::Relaxed);
+    }
+
+    pub(crate) fn snapshot_and_drain_interval(&self) -> FullRateIqTransportSnapshot {
+        FullRateIqTransportSnapshot {
+            enqueued_deliveries_total: self.enqueued_deliveries_total.load(Ordering::Relaxed),
+            written_deliveries_total: self.written_deliveries_total.load(Ordering::Relaxed),
+            dropped_deliveries_total: self.dropped_deliveries_total.load(Ordering::Relaxed),
+            dropped_deliveries_interval: self
+                .dropped_deliveries_interval
+                .swap(0, Ordering::Relaxed),
+            queue_high_watermark: self.queue_high_watermark.load(Ordering::Relaxed),
+        }
+    }
+}
+
 #[derive(Debug)]
 pub(crate) struct OutboundQueues {
     pub(crate) safety: VecDeque<QueuedOutbound>,
     pub(crate) control: VecDeque<QueuedOutbound>,
     pub(crate) audio: VecDeque<QueuedOutbound>,
+    pub(crate) full_rate_iq: VecDeque<QueuedOutbound>,
     pub(crate) display: Option<QueuedOutbound>,
     pub(crate) queued_bytes: usize,
     pub(crate) audio_queued_frames: usize,
@@ -273,6 +338,7 @@ impl Default for OutboundQueues {
             safety: VecDeque::new(),
             control: VecDeque::new(),
             audio: VecDeque::new(),
+            full_rate_iq: VecDeque::new(),
             display: None,
             queued_bytes: 0,
             audio_queued_frames: 0,
@@ -286,13 +352,21 @@ impl Default for OutboundQueues {
 pub(crate) struct ClientOutbound {
     pub(crate) queues: Mutex<OutboundQueues>,
     pub(crate) stats: ClientSchedulerStats,
+    full_rate_iq_stats: Arc<FullRateIqTransportStats>,
 }
 
 impl ClientOutbound {
     pub(crate) fn new() -> Arc<Self> {
+        Self::new_with_full_rate_iq_stats(Arc::new(FullRateIqTransportStats::default()))
+    }
+
+    pub(crate) fn new_with_full_rate_iq_stats(
+        full_rate_iq_stats: Arc<FullRateIqTransportStats>,
+    ) -> Arc<Self> {
         Arc::new(Self {
             queues: Mutex::new(OutboundQueues::default()),
             stats: ClientSchedulerStats::default(),
+            full_rate_iq_stats,
         })
     }
 
@@ -378,6 +452,20 @@ impl ClientOutbound {
             OutboundClass::Audio => {
                 dropped += self.enqueue_audio_locked(&mut queues, item);
             }
+            OutboundClass::FullRateIq => {
+                while queues.full_rate_iq.len() >= MAX_FULL_RATE_IQ_QUEUE_MESSAGES {
+                    let Some(old) = queues.full_rate_iq.pop_front() else {
+                        break;
+                    };
+                    queues.queued_bytes = queues.queued_bytes.saturating_sub(old.estimated_bytes);
+                    dropped += 1;
+                    self.full_rate_iq_stats.record_dropped(1);
+                }
+                queues.queued_bytes = queues.queued_bytes.saturating_add(item.estimated_bytes);
+                queues.full_rate_iq.push_back(item);
+                self.full_rate_iq_stats
+                    .record_enqueued(queues.full_rate_iq.len());
+            }
             OutboundClass::Display => {
                 if let Some(old) = queues.display.replace(item) {
                     queues.queued_bytes = queues.queued_bytes.saturating_sub(old.estimated_bytes);
@@ -440,6 +528,8 @@ impl ClientOutbound {
                 queues.audio_queued_frames =
                     queues.audio_queued_frames.saturating_sub(item.audio_frames);
                 Some(item)
+            } else if let Some(item) = queues.full_rate_iq.pop_front() {
+                Some(item)
             } else {
                 queues.display.take()
             }
@@ -476,6 +566,16 @@ impl ClientOutbound {
                     queues.audio_queued_frames.saturating_add(item.audio_frames);
                 queues.audio.push_front(item);
             }
+            OutboundClass::FullRateIq => {
+                queues.full_rate_iq.push_front(item);
+                while queues.full_rate_iq.len() > MAX_FULL_RATE_IQ_QUEUE_MESSAGES {
+                    let Some(old) = queues.full_rate_iq.pop_back() else {
+                        break;
+                    };
+                    queues.queued_bytes = queues.queued_bytes.saturating_sub(old.estimated_bytes);
+                    self.full_rate_iq_stats.record_dropped(1);
+                }
+            }
             OutboundClass::Display => {
                 if let Some(old) = queues.display.replace(item) {
                     queues.queued_bytes = queues.queued_bytes.saturating_sub(old.estimated_bytes);
@@ -489,6 +589,7 @@ impl ClientOutbound {
     pub(crate) fn record_bulk_send_drop(&self, class: OutboundClass) {
         match class {
             OutboundClass::Audio => self.stats.record_audio_dropped(1),
+            OutboundClass::FullRateIq => self.full_rate_iq_stats.record_dropped(1),
             OutboundClass::Display => self.stats.record_display_dropped(),
             OutboundClass::Control => self.stats.record_control_dropped(),
             OutboundClass::Safety => {}
@@ -496,6 +597,9 @@ impl ClientOutbound {
     }
 
     pub(crate) fn record_write(&self, class: OutboundClass, latency: Duration) {
+        if class == OutboundClass::FullRateIq {
+            self.full_rate_iq_stats.record_written();
+        }
         self.stats.record_write(class, latency);
     }
 
@@ -514,11 +618,23 @@ impl ClientOutbound {
     pub(crate) fn queued_bytes(&self) -> u64 {
         self.queues.lock_unpoisoned().queued_bytes as u64
     }
+
+    pub(crate) fn full_rate_iq_queue_depth(&self) -> u64 {
+        self.queues.lock_unpoisoned().full_rate_iq.len() as u64
+    }
+}
+
+impl Drop for ClientOutbound {
+    fn drop(&mut self) {
+        let pending = self.queues.lock_unpoisoned().full_rate_iq.len() as u64;
+        self.full_rate_iq_stats.record_dropped(pending);
+    }
 }
 
 pub(crate) const MAX_SAFETY_QUEUE_MESSAGES: usize = 16;
 pub(crate) const MAX_CONTROL_QUEUE_MESSAGES: usize = 256;
 pub(crate) const MAX_CONTROL_QUEUE_BYTES: usize = 256 * 1024;
+pub(crate) const MAX_FULL_RATE_IQ_QUEUE_MESSAGES: usize = 4;
 
 fn safety_coalesce_key(message: &OutboundMessage) -> Option<String> {
     match message {
@@ -653,7 +769,15 @@ pub(crate) fn queued_bytes_without_audio(queues: &OutboundQueues) -> usize {
         .as_ref()
         .map(|item| item.estimated_bytes)
         .unwrap_or(0);
-    safety.saturating_add(control).saturating_add(display)
+    let full_rate_iq = queues
+        .full_rate_iq
+        .iter()
+        .map(|item| item.estimated_bytes)
+        .sum::<usize>();
+    safety
+        .saturating_add(control)
+        .saturating_add(full_rate_iq)
+        .saturating_add(display)
 }
 
 pub(crate) fn percentile_us(samples: &mut [u64], percentile: usize) -> u64 {
@@ -707,7 +831,9 @@ pub(crate) fn client_wants_outbound_message(
         OutboundMessage::Text(_) | OutboundMessage::SafetyText(_) => {
             lane != Some(SplitSocketKind::Media)
         }
-        OutboundMessage::IqFrame { .. } | OutboundMessage::TxIqFrame { .. } => {
+        OutboundMessage::IqFrame { .. }
+        | OutboundMessage::FullRateIqFrame { .. }
+        | OutboundMessage::TxIqFrame { .. } => {
             lane != Some(SplitSocketKind::Control)
                 && client.state.iq_stream_enabled
                 && !tx_media_priority_active
@@ -750,6 +876,13 @@ pub(crate) fn send_outbound(
             websocket.send(Message::Text(text.clone().into()))
         }
         OutboundMessage::IqFrame {
+            receiver,
+            sample_rate,
+            iq_samples,
+        } => websocket.send(Message::Binary(
+            build_tci_iq_frame(*receiver, *sample_rate, iq_samples).into(),
+        )),
+        OutboundMessage::FullRateIqFrame {
             receiver,
             sample_rate,
             iq_samples,

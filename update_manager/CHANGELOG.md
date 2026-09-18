@@ -4,6 +4,14 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
 
 ## [Unreleased]
 ### Changed
+- Full-rate Direct-XDMA TCI IQ now uses a dedicated ordered four-frame FIFO
+  instead of the legacy latest-display-frame slot. This absorbs up to roughly
+  133 ms of transient socket backpressure without replacing IQ, while keeping
+  legacy snapshot and TX display traffic at depth one. The bridge exports
+  cumulative formed, suppressed, enqueued, written, and dropped totals plus
+  queue depth/high-water/capacity, and requeues an in-flight IQ frame after a
+  nonblocking socket stall. Any bounded-FIFO overflow remains explicit and
+  permanently visible for soak qualification.
 - Direct-XDMA RX now aggregates the complete 384 kHz complex stream into 30
   TCI IQ messages per second (12,800 pairs / 102,464 bytes each) instead of
   feeding the generic display snapshot limiter hundreds of small blocks per

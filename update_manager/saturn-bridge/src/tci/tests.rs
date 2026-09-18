@@ -235,6 +235,85 @@ fn outbound_scheduler_replaces_display_depth_one() {
 }
 
 #[test]
+fn outbound_scheduler_buffers_full_rate_iq_in_order_and_bounds_latency() {
+    let stats = Arc::new(FullRateIqTransportStats::default());
+    let outbound = ClientOutbound::new_with_full_rate_iq_stats(Arc::clone(&stats));
+
+    for frame in 1..=MAX_FULL_RATE_IQ_QUEUE_MESSAGES + 1 {
+        let dropped = outbound.enqueue(OutboundMessage::FullRateIqFrame {
+            receiver: 0,
+            sample_rate: frame as u32,
+            iq_samples: vec![frame as f32, -(frame as f32)],
+        });
+        assert_eq!(dropped, u64::from(frame > MAX_FULL_RATE_IQ_QUEUE_MESSAGES));
+    }
+
+    let snapshot = stats.snapshot_and_drain_interval();
+    assert_eq!(
+        snapshot.enqueued_deliveries_total,
+        (MAX_FULL_RATE_IQ_QUEUE_MESSAGES + 1) as u64
+    );
+    assert_eq!(snapshot.dropped_deliveries_total, 1);
+    assert_eq!(snapshot.dropped_deliveries_interval, 1);
+    assert_eq!(
+        snapshot.queue_high_watermark,
+        MAX_FULL_RATE_IQ_QUEUE_MESSAGES as u64
+    );
+    assert_eq!(
+        outbound.full_rate_iq_queue_depth(),
+        MAX_FULL_RATE_IQ_QUEUE_MESSAGES as u64
+    );
+
+    let mut retained = Vec::new();
+    while let Some(item) = outbound.next_message(true) {
+        assert_eq!(item.class, OutboundClass::FullRateIq);
+        match item.message {
+            OutboundMessage::FullRateIqFrame { sample_rate, .. } => retained.push(sample_rate),
+            _ => panic!("expected full-rate IQ frame"),
+        }
+        outbound.record_write(item.class, Duration::ZERO);
+    }
+    assert_eq!(retained, vec![2, 3, 4, 5]);
+    assert_eq!(
+        stats.snapshot_and_drain_interval().written_deliveries_total,
+        MAX_FULL_RATE_IQ_QUEUE_MESSAGES as u64
+    );
+}
+
+#[test]
+fn outbound_scheduler_requeues_blocked_full_rate_iq_without_reordering() {
+    let stats = Arc::new(FullRateIqTransportStats::default());
+    let outbound = ClientOutbound::new_with_full_rate_iq_stats(Arc::clone(&stats));
+    for frame in 1..=MAX_FULL_RATE_IQ_QUEUE_MESSAGES {
+        outbound.enqueue(OutboundMessage::FullRateIqFrame {
+            receiver: 0,
+            sample_rate: frame as u32,
+            iq_samples: vec![frame as f32, -(frame as f32)],
+        });
+    }
+
+    let blocked = outbound.next_message(true).unwrap();
+    outbound.enqueue(OutboundMessage::FullRateIqFrame {
+        receiver: 0,
+        sample_rate: 5,
+        iq_samples: vec![5.0, -5.0],
+    });
+    outbound.requeue_front(blocked);
+
+    let mut retained = Vec::new();
+    while let Some(item) = outbound.next_message(true) {
+        match item.message {
+            OutboundMessage::FullRateIqFrame { sample_rate, .. } => retained.push(sample_rate),
+            _ => panic!("expected full-rate IQ frame"),
+        }
+    }
+    assert_eq!(retained, vec![1, 2, 3, 4]);
+    let snapshot = stats.snapshot_and_drain_interval();
+    assert_eq!(snapshot.dropped_deliveries_total, 1);
+    assert_eq!(snapshot.dropped_deliveries_interval, 1);
+}
+
+#[test]
 fn outbound_scheduler_coalesces_control_state_and_keeps_latest() {
     let outbound = ClientOutbound::new();
     assert_eq!(

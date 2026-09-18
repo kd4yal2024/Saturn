@@ -134,6 +134,7 @@ pub(crate) fn handle_client(
     operator_control_at: &Arc<Mutex<Option<Instant>>>,
     radio_model: &Arc<Mutex<RadioModel>>,
     drop_count: &Arc<AtomicU64>,
+    full_rate_iq_stats: &Arc<FullRateIqTransportStats>,
     remote_tx_rf_enabled: bool,
     tx_codec_runtime_flags: TxCodecRuntimeFlags,
     satp_advertisement: (bool, u16),
@@ -150,7 +151,8 @@ pub(crate) fn handle_client(
     );
     match accept_result {
         Ok(mut websocket) => {
-            let outbound = ClientOutbound::new();
+            let outbound =
+                ClientOutbound::new_with_full_rate_iq_stats(Arc::clone(full_rate_iq_stats));
             let operator_eligible = addr.ip().is_loopback();
             let (role, first_client, client_count) = register_client(
                 clients,
@@ -265,7 +267,7 @@ pub(crate) fn handle_client(
                             bulk_pause_until = Some(
                                 Instant::now() + Duration::from_millis(BULK_BACKPRESSURE_PAUSE_MS),
                             );
-                            if item.class.is_never_drop() {
+                            if item.class.requeues_on_would_block() {
                                 outbound.requeue_front(item);
                             } else {
                                 outbound.record_bulk_send_drop(item.class);
@@ -274,6 +276,10 @@ pub(crate) fn handle_client(
                             break;
                         }
                         Err(error) => {
+                            if item.class == OutboundClass::FullRateIq {
+                                outbound.record_bulk_send_drop(item.class);
+                                drop_count.fetch_add(1, Ordering::Relaxed);
+                            }
                             eprintln!("saturn-bridge: TCI websocket send error to {addr}: {error}");
                             pending_flush = true;
                             client_closed = true;

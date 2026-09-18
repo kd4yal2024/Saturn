@@ -106,6 +106,14 @@ struct DirectRxPerformance {
     meter_only_iq_pairs: u64,
 }
 
+#[derive(Debug, Default)]
+struct DirectIqTransportTotals {
+    frames_published: u64,
+    pairs_published: u64,
+    frames_suppressed: u64,
+    pairs_suppressed: u64,
+}
+
 /// Repacketizes the complete direct-XDMA IQ stream into display-cadence TCI
 /// messages without downsampling or discarding samples. The buffer is reused,
 /// so the high-rate hardware read cadence does not become the WebSocket frame
@@ -406,6 +414,7 @@ fn run_inner(mut config: BridgeConfig, ready_path: &Path) -> Result<(), Box<dyn 
     let mut wdsp_input_gap = false;
     let mut iq_packetizer = DirectIqPacketizer::default();
     let mut rx_performance = DirectRxPerformance::default();
+    let mut iq_transport_totals = DirectIqTransportTotals::default();
     let mut wdsp_resume_performance = WdspResumePerformance::default();
     let mut meter_source = "unavailable";
     let mut current_processing_mode = RxProcessingMode::DrainOnly;
@@ -486,9 +495,13 @@ fn run_inner(mut config: BridgeConfig, ready_path: &Path) -> Result<(), Box<dyn 
                             ) {
                                 rx_performance.iq_frames_published += 1;
                                 rx_performance.iq_pairs_published += pairs;
+                                iq_transport_totals.frames_published += 1;
+                                iq_transport_totals.pairs_published += pairs;
                             } else {
                                 rx_performance.iq_frames_suppressed += 1;
                                 rx_performance.iq_pairs_suppressed += pairs;
+                                iq_transport_totals.frames_suppressed += 1;
+                                iq_transport_totals.pairs_suppressed += pairs;
                             }
                         });
                     }
@@ -705,6 +718,7 @@ fn run_inner(mut config: BridgeConfig, ready_path: &Path) -> Result<(), Box<dyn 
                     &stats,
                     &last_perf_stats,
                     &rx_performance,
+                    &iq_transport_totals,
                     iq_packetizer.pending_pairs(),
                     &wdsp_resume_performance,
                     rx.fifo_v29_telemetry(),
@@ -716,7 +730,7 @@ fn run_inner(mut config: BridgeConfig, ready_path: &Path) -> Result<(), Box<dyn 
                 }
                 if last_diag.elapsed() >= DIAG_PERIOD {
                     println!(
-                    "saturn-bridge: diag hp_s=0.0 ddc_s={:.1} rx_audio_frames_s={:.1} rx_audio_samples_s={:.0} tci_mic_frames_s=0.0 tci_mic_samples_s=0 client={} connections={} connection_limit={} connection_rejected={} connection_hwm={} iq={} audio={} split_control={} split_media={} split_paired={} outbound_drops={} safety_p99_us={} control_p99_us={} control_replaced_s={} control_dropped_s={} control_q_hwm={} display_replaced_s={} display_dropped_s={} display_rate_limited_s={} audio_dropped_s={} audio_gaps={} audio_panic={} command_q={} command_q_hwm={} command_coalesced={} command_dropped={} command_mic_dropped={} send_blocked_ms={} out_hwm_bytes={} tcp_outq_hwm_bytes={} safety_depth_overflow={} processing={} dsp_iq_pairs={} bypassed_iq_pairs={} meter_source={}",
+                    "saturn-bridge: diag hp_s=0.0 ddc_s={:.1} rx_audio_frames_s={:.1} rx_audio_samples_s={:.0} tci_mic_frames_s=0.0 tci_mic_samples_s=0 client={} connections={} connection_limit={} connection_rejected={} connection_hwm={} iq={} audio={} split_control={} split_media={} split_paired={} outbound_drops={} safety_p99_us={} control_p99_us={} control_replaced_s={} control_dropped_s={} control_q_hwm={} display_replaced_s={} display_dropped_s={} display_rate_limited_s={} iq_queue={}/{} iq_queue_hwm={} iq_queue_drop_s={} iq_queue_drop_total={} iq_queue_written_total={} audio_dropped_s={} audio_gaps={} audio_panic={} command_q={} command_q_hwm={} command_coalesced={} command_dropped={} command_mic_dropped={} send_blocked_ms={} out_hwm_bytes={} tcp_outq_hwm_bytes={} safety_depth_overflow={} processing={} dsp_iq_pairs={} bypassed_iq_pairs={} meter_source={}",
                     stats.dma_reads.saturating_sub(last_perf_stats.dma_reads) as f64 / elapsed,
                     rx_performance.audio_frames_published as f64 / elapsed,
                     rx_performance.audio_samples_published as f64 / elapsed,
@@ -739,6 +753,12 @@ fn run_inner(mut config: BridgeConfig, ready_path: &Path) -> Result<(), Box<dyn 
                     client.display_replaced_per_sec,
                     client.display_dropped_per_sec,
                     client.display_rate_limited_per_sec,
+                    client.full_rate_iq_queue_depth,
+                    client.full_rate_iq_queue_capacity_per_client,
+                    client.full_rate_iq_queue_high_watermark,
+                    client.full_rate_iq_dropped_deliveries_per_sec,
+                    client.full_rate_iq_dropped_deliveries_total,
+                    client.full_rate_iq_written_deliveries_total,
                     client.audio_dropped_per_sec,
                     client.audio_seq_gap_count,
                     client.audio_panic_drain_count,
@@ -1301,6 +1321,7 @@ fn write_performance(
     stats: &RxCaptureStats,
     previous: &RxCaptureStats,
     performance: &DirectRxPerformance,
+    iq_transport_totals: &DirectIqTransportTotals,
     iq_packetizer_pending_pairs: usize,
     wdsp_resume: &WdspResumePerformance,
     fifo_v29: &FpgaFifoV29Telemetry,
@@ -1400,6 +1421,52 @@ fn write_performance(
             (
                 "iq_tci_suppressed_pairs_s",
                 TelemetryValue::number(performance.iq_pairs_suppressed as f64 / elapsed),
+            ),
+            (
+                "iq_tci_frames_published_total",
+                TelemetryValue::number(iq_transport_totals.frames_published),
+            ),
+            (
+                "iq_tci_pairs_published_total",
+                TelemetryValue::number(iq_transport_totals.pairs_published),
+            ),
+            (
+                "iq_tci_frames_suppressed_total",
+                TelemetryValue::number(iq_transport_totals.frames_suppressed),
+            ),
+            (
+                "iq_tci_pairs_suppressed_total",
+                TelemetryValue::number(iq_transport_totals.pairs_suppressed),
+            ),
+            (
+                "iq_tci_queue_enqueued_deliveries_total",
+                TelemetryValue::number(client.full_rate_iq_enqueued_deliveries_total),
+            ),
+            (
+                "iq_tci_queue_written_deliveries_total",
+                TelemetryValue::number(client.full_rate_iq_written_deliveries_total),
+            ),
+            (
+                "iq_tci_queue_dropped_deliveries_total",
+                TelemetryValue::number(client.full_rate_iq_dropped_deliveries_total),
+            ),
+            (
+                "iq_tci_queue_dropped_deliveries_s",
+                TelemetryValue::number(
+                    client.full_rate_iq_dropped_deliveries_per_sec as f64 / elapsed,
+                ),
+            ),
+            (
+                "iq_tci_queue_depth",
+                TelemetryValue::number(client.full_rate_iq_queue_depth),
+            ),
+            (
+                "iq_tci_queue_high_watermark",
+                TelemetryValue::number(client.full_rate_iq_queue_high_watermark),
+            ),
+            (
+                "iq_tci_queue_capacity_per_client",
+                TelemetryValue::number(client.full_rate_iq_queue_capacity_per_client),
             ),
             (
                 "iq_tci_target_frame_rate_hz",

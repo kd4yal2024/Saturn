@@ -430,3 +430,22 @@ the earlier journal segment had already rotated, so their timing cannot be
 classified as startup/session-boundary or steady-state loss. A repeat soak
 must capture start/end counter deltas and retain the complete diagnostic log
 before the overall zero-loss qualification can pass.
+
+The follow-up transport revision separates continuous Direct-XDMA IQ from the
+legacy latest-display-frame scheduler. Full-rate IQ now has an ordered bounded
+FIFO of four 102,464-byte frames per eligible media client, covering roughly
+133 ms at 30 frames/second with about 410 KiB maximum queued IQ memory per
+client. Safety and control remain higher priority, RX audio remains ahead of
+IQ, and snapshot/TX display traffic retains its depth-one replacement behavior.
+An IQ frame that encounters a nonblocking socket write is requeued at the
+front; concurrent arrivals remain ordered, and the newest frame is discarded
+only if the four-frame bound is already full. That discard is an explicit
+per-interval and cumulative qualification failure.
+
+New process-lifetime telemetry records formed/published and suppressed IQ
+frames/pairs, queue enqueued/written/dropped delivery totals, current depth,
+high-water mark, and per-client capacity. These totals persist across browser
+baseline resets and client reconnects for the lifetime of the bridge process.
+The Performance Lab permanently raises a critical alert after any cumulative
+full-rate queue loss, removing the prior dependence on catching a one-second
+replacement pulse.

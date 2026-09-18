@@ -37,6 +37,7 @@ pub struct TciFrontend {
     active_connections: Arc<AtomicU64>,
     rejected_connections: Arc<AtomicU64>,
     connection_high_watermark: Arc<AtomicU64>,
+    full_rate_iq_stats: Arc<FullRateIqTransportStats>,
     display_rate_limited_count: AtomicU64,
     // TX media priority is derived from the bridge's authoritative
     // TX intent/armed/keyed state, not from a browser command. While active,
@@ -81,6 +82,13 @@ pub struct TciClientSnapshot {
     pub outbound_queued_bytes: u64,
     pub tcp_outq_high_watermark_bytes: u64,
     pub display_rate_limited_per_sec: u64,
+    pub full_rate_iq_enqueued_deliveries_total: u64,
+    pub full_rate_iq_written_deliveries_total: u64,
+    pub full_rate_iq_dropped_deliveries_total: u64,
+    pub full_rate_iq_dropped_deliveries_per_sec: u64,
+    pub full_rate_iq_queue_depth: u64,
+    pub full_rate_iq_queue_high_watermark: u64,
+    pub full_rate_iq_queue_capacity_per_client: u64,
     pub safety_queue_depth_overflow_count: u64,
     pub control_queue_high_watermark: u64,
     pub command_queue_depth: u64,
@@ -173,6 +181,7 @@ impl TciFrontend {
         let active_connections = Arc::new(AtomicU64::new(0));
         let rejected_connections = Arc::new(AtomicU64::new(0));
         let connection_high_watermark = Arc::new(AtomicU64::new(0));
+        let full_rate_iq_stats = Arc::new(FullRateIqTransportStats::default());
         let remote_tx_rf_enabled = config.remote_tx_rf_enabled;
         let satp_advertisement = (config.satp_enabled, config.satp_bind_addr.port());
         let tx_codec_runtime_flags = TxCodecRuntimeFlags {
@@ -187,6 +196,7 @@ impl TciFrontend {
         let active_connection_counter = active_connections.clone();
         let rejected_connection_counter = rejected_connections.clone();
         let connection_high_water = connection_high_watermark.clone();
+        let full_rate_iq_transport_stats = Arc::clone(&full_rate_iq_stats);
         let radio_model = radio_model.clone();
         let handle = thread::spawn(move || loop {
             let mut accepted_connection = false;
@@ -220,6 +230,7 @@ impl TciFrontend {
                         let tx_codec_runtime_flags = tx_codec_runtime_flags;
                         let satp_advertisement = satp_advertisement;
                         let active_connections = active_connection_counter.clone();
+                        let full_rate_iq_stats = Arc::clone(&full_rate_iq_transport_stats);
 
                         thread::spawn(move || {
                             handle_client(
@@ -232,6 +243,7 @@ impl TciFrontend {
                                 &operator_control_at,
                                 &radio_model,
                                 &drop_count,
+                                &full_rate_iq_stats,
                                 remote_tx_rf_enabled,
                                 tx_codec_runtime_flags,
                                 satp_advertisement,
@@ -260,6 +272,7 @@ impl TciFrontend {
             active_connections,
             rejected_connections,
             connection_high_watermark,
+            full_rate_iq_stats,
             display_rate_limited_count: AtomicU64::new(0),
             tx_media_priority_active: AtomicBool::new(false),
             tx_power_meter_scale: config.tx_power_meter_scale,
@@ -320,6 +333,7 @@ impl TciFrontend {
 
     pub fn client_snapshot(&self) -> TciClientSnapshot {
         let clients = self.clients.lock_unpoisoned();
+        let full_rate_iq = self.full_rate_iq_stats.snapshot_and_drain_interval();
         let now = Instant::now();
         let mut safety_latencies_us = Vec::new();
         let mut control_latencies_us = Vec::new();
@@ -399,6 +413,16 @@ impl TciFrontend {
             display_rate_limited_per_sec: self
                 .display_rate_limited_count
                 .swap(0, Ordering::Relaxed),
+            full_rate_iq_enqueued_deliveries_total: full_rate_iq.enqueued_deliveries_total,
+            full_rate_iq_written_deliveries_total: full_rate_iq.written_deliveries_total,
+            full_rate_iq_dropped_deliveries_total: full_rate_iq.dropped_deliveries_total,
+            full_rate_iq_dropped_deliveries_per_sec: full_rate_iq.dropped_deliveries_interval,
+            full_rate_iq_queue_depth: clients
+                .values()
+                .map(|client| client.outbound.full_rate_iq_queue_depth())
+                .sum(),
+            full_rate_iq_queue_high_watermark: full_rate_iq.queue_high_watermark,
+            full_rate_iq_queue_capacity_per_client: MAX_FULL_RATE_IQ_QUEUE_MESSAGES as u64,
             safety_queue_depth_overflow_count,
             control_queue_high_watermark,
             command_queue_depth: command_queue.total_depth as u64,
@@ -995,7 +1019,7 @@ impl TciFrontend {
             return false;
         }
 
-        self.send_message(OutboundMessage::IqFrame {
+        self.send_message(OutboundMessage::FullRateIqFrame {
             receiver: 0,
             sample_rate: sample_rate_hz,
             iq_samples: iq_samples.to_vec(),

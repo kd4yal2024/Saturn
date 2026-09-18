@@ -48,7 +48,12 @@ describe('Saturn Go performance lab template', () => {
     expect(template).toContain('Full-rate TCI IQ');
     expect(template).toContain('iq_tci_pairs_s');
     expect(template).toContain('iq_tci_pairs_per_frame');
-    expect(template).toContain('display_rate_limited_s');
+    expect(template).toContain('iq_tci_queue_written_deliveries_total');
+    expect(template).toContain('iq_tci_queue_dropped_deliveries_total');
+    expect(template).toContain('iq_tci_queue_capacity_per_client');
+    expect(template).toContain('iq_tci_frames_suppressed_total');
+    expect(template).toContain('cumulative queue loss');
+    expect(template).toContain('cumulative suppression');
     expect(template).toContain('full-rate TCI IQ loss');
     expect(template).toContain("showLabPanel('performance')");
   });
