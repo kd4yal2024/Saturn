@@ -397,3 +397,36 @@ boundary while the complete IQ stream remains available at the TCI boundary.
 The Saturn Go split-WebSocket relay also moves the common `Bytes` payload
 directly between Tungstenite and Axum, removing one full-frame allocation and
 copy on each proxy hop.
+
+### Full-rate TCI IQ soak evidence (2026-09-18)
+
+Commit `ab51b13d519f7d6fb50d3aab16b64d34462ae8b3` ran continuously under an
+active 384 kHz RX/IQ/audio workload with PID 1365058 from 2026-09-17 20:13:20
+EDT. The captured 14,409,376,632 complex pairs represent 37,524.418 seconds
+(10.423 hours) of full-rate input. A live sample reported 29.991 TCI frames/s,
+383,886 transported pairs/s, the exact 12,800-pair / 102,464-byte geometry,
+and zero suppressed, dropped, replaced, or rate-limited frames. Ethernet TX
+was 26.28 Mbit/s, consistent with the expected 24.59 Mbit/s IQ payload plus
+audio, control, WebSocket, TLS, and TCP overhead. The bridge remained on the
+same PID with zero systemd restarts.
+
+Process CPU time divided by the active-IQ duration gives a long-run estimate
+of 51.03% of one Cortex-A72 core. This is 2.29 percentage points (4.29%) below
+the prior 53.318% 256-sample candidate average while transporting the complete
+IQ stream rather than periodic small snapshots. The dashboard's instantaneous
+56.63% CPU value came from one interval after its browser baseline had reset
+and is not the long-run average.
+
+The strict continuous-loss gate is not yet a clean pass. The retained journal
+window from 02:02:51 through 06:42:30 EDT contained 3,354 diagnostic samples
+with zero outbound drops, display drops, display rate limiting, audio loss,
+or command loss, but two intervals reported `display_replaced_s=1` (06:25:29
+and 06:28:30). Each coincided with an incomplete local WebSocket handshake and
+132-140 ms of accumulated send blocking; the evidence establishes correlation,
+not causation. The process-lifetime counters also contained 136 host-ring drops
+(557,056 bytes), four host discontinuities, and four header resynchronizations.
+Those totals did not change during a subsequent read-only 20-second check, but
+the earlier journal segment had already rotated, so their timing cannot be
+classified as startup/session-boundary or steady-state loss. A repeat soak
+must capture start/end counter deltas and retain the complete diagnostic log
+before the overall zero-loss qualification can pass.
