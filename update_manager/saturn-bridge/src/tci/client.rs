@@ -120,6 +120,12 @@ pub(crate) const MAX_TCI_INBOUND_MESSAGE_BYTES: usize = 256 * 1024;
 
 pub(crate) const MAX_TCI_INBOUND_FRAME_BYTES: usize = 256 * 1024;
 
+// Tungstenite 0.29 zero-fills this scratch space before each read, including
+// nonblocking reads that return WouldBlock. Avoid its 128 KiB default in our
+// 2 ms polling loop. This is NOT a frame/message limit: larger inbound messages
+// are still assembled up to the existing limits, and outgoing IQ is unchanged.
+pub(crate) const TCI_READ_BUFFER_BYTES: usize = 8 * 1024;
+
 pub(crate) const TX_CODEC_DECODE_ERROR_FORCE_RX_LIMIT: u64 = 10;
 
 pub(crate) const TX_CODEC_DECODE_ERROR_WINDOW: Duration = Duration::from_secs(1);
@@ -1179,6 +1185,7 @@ pub(crate) fn record_client_tx_mic_frame(
 
 pub(crate) fn tci_websocket_config() -> WebSocketConfig {
     WebSocketConfig::default()
+        .read_buffer_size(TCI_READ_BUFFER_BYTES)
         .max_message_size(Some(MAX_TCI_INBOUND_MESSAGE_BYTES))
         .max_frame_size(Some(MAX_TCI_INBOUND_FRAME_BYTES))
 }

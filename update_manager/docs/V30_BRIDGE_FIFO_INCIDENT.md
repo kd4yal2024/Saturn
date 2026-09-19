@@ -730,3 +730,43 @@ separate tail-latency target. No matched old-build capture exists here, so
 49.05% must not be presented as a proven percentage improvement over earlier
 WAN/LAN or different-feature measurements. Preserve full-rate IQ, DSP
 features, and TX safety behavior throughout further optimization.
+
+### 2026-09-19 — resolved libc hotspot; smaller WebSocket read scratch
+
+Disassembly of the installed G2 libc places offset 0xa4094 at `dc zva`
+inside a zero-fill loop. Offsets around 0xa3180 are vector load/store copy
+loops, not the unrelated preceding exported `__xpg_strerror_r` symbol.
+A second 20-second 99 Hz user-CPU profile with 4096-byte DWARF stacks
+collected 681 samples, zero lost, at
+`/tmp/saturn-rx-callers.PcRlWF/perf.data`. The zero-fill hotspot accounted
+for 11.89% of sampled user CPU and its caller was TCI `handle_client`.
+
+Pinned Tungstenite 0.29.0 source explains the mechanism: `FrameCodec::read_in`
+resizes its input buffer with zero fill before calling Read, then truncates
+back after WouldBlock. Our 2 ms nonblocking client loop uses its default
+128 KiB read scratch even for empty sockets. This is repeated initialization,
+not DSP processing or the outgoing full-rate IQ payload.
+
+Candidate sets only `WebSocketConfig.read_buffer_size` to 8 KiB. That reduces
+scratch bytes exposed/initialized per empty attempt by 16x. It does NOT imply
+a 16x application speedup or a measured CPU saving yet. Incoming frame and
+message limits stay 256 KiB; larger messages assemble across multiple reads.
+Outgoing IQ packetization, audio/DSP, socket polling interval, RF safeguards,
+and DMA polling remain unchanged. Larger inbound messages may need more
+read syscalls, so TX microphone/control traffic needs qualification too.
+
+Five new executable tests exercise the actual pinned codec: 1000 empty
+WouldBlock reads with bounded scratch, byte-exact maximum-size binary
+delivery, fragmented 200000-byte delivery across 997-byte reads/WouldBlock,
+oversized frame rejection, and oversized fragmented-message rejection.
+All 267 bridge tests passed with native DSP stubs; formatting and diff checks
+passed. This does not test native DSP/RF quality. Production remains build
+0c0e2e5, PID 2437349. At telemetry timestamp 1789838185473 ms, host drops,
+discontinuities, header errors, IQ delivery drops, and RX FIFO faults remained
+zero; audio_dropped_s was zero and ADC1 episode count remained 362736.
+
+Next field gate: deploy through the existing installer with RF TX disabled,
+then compare matching LAN IQ+audio workload CPU/thread statistics, libc
+zero-fill sample share, control latency, and continuity counters. Preserve
+the current installed binary for rollback first. DMA polling changes are
+deferred to isolate this directly measured, smaller-scope optimization.

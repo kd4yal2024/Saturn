@@ -570,8 +570,155 @@ fn rejects_unknown_tci_mic_sample_type() {
 #[test]
 fn websocket_config_limits_inbound_message_size() {
     let config = tci_websocket_config();
+    assert_eq!(config.read_buffer_size, 8 * 1024);
     assert_eq!(config.max_message_size, Some(MAX_TCI_INBOUND_MESSAGE_BYTES));
     assert_eq!(config.max_frame_size, Some(MAX_TCI_INBOUND_FRAME_BYTES));
+}
+
+// Exercise the real WebSocket codec, including partial reads and WouldBlock.
+// Counting attempted read bytes also guards against reintroducing large
+// zero-filled scratch buffers in the idle polling path.
+#[derive(Default)]
+struct TestWsInput {
+    bytes: std::io::Cursor<Vec<u8>>,
+    attempted_bytes: usize,
+    chunk_limit: usize,
+    block_next: bool,
+}
+
+impl std::io::Read for TestWsInput {
+    fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
+        self.attempted_bytes += out.len();
+        if self.block_next || self.bytes.position() as usize == self.bytes.get_ref().len() {
+            self.block_next = false;
+            return Err(std::io::ErrorKind::WouldBlock.into());
+        }
+        self.block_next = true;
+        let len = out.len().min(self.chunk_limit);
+        std::io::Read::read(&mut self.bytes, &mut out[..len])
+    }
+}
+
+impl std::io::Write for TestWsInput {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        Ok(bytes.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+fn encoded_ws_messages(messages: Vec<Message>) -> Vec<u8> {
+    let mut client = tungstenite::WebSocket::from_raw_socket(
+        std::io::Cursor::new(Vec::new()),
+        tungstenite::protocol::Role::Client,
+        None,
+    );
+    for message in messages {
+        client.send(message).unwrap();
+    }
+    client.into_inner().into_inner()
+}
+
+fn decode_test_ws(bytes: Vec<u8>) -> Result<Message, tungstenite::Error> {
+    let mut server = tungstenite::WebSocket::from_raw_socket(
+        TestWsInput {
+            bytes: std::io::Cursor::new(bytes),
+            chunk_limit: 997,
+            ..Default::default()
+        },
+        tungstenite::protocol::Role::Server,
+        Some(tci_websocket_config()),
+    );
+    for _ in 0..2048 {
+        match server.read() {
+            Err(tungstenite::Error::Io(error))
+                if error.kind() == std::io::ErrorKind::WouldBlock => {}
+            result => return result,
+        }
+    }
+    panic!("WebSocket did not finish within bounded partial reads");
+}
+
+#[test]
+fn websocket_idle_reads_use_small_scratch_buffer() {
+    let mut server = tungstenite::WebSocket::from_raw_socket(
+        TestWsInput::default(),
+        tungstenite::protocol::Role::Server,
+        Some(tci_websocket_config()),
+    );
+    for _ in 0..1000 {
+        assert!(matches!(server.read(), Err(tungstenite::Error::Io(error))
+            if error.kind() == std::io::ErrorKind::WouldBlock));
+    }
+    assert_eq!(server.get_ref().attempted_bytes, 1000 * 8 * 1024);
+}
+
+#[test]
+fn websocket_small_read_buffer_preserves_maximum_binary_message() {
+    let payload: Vec<u8> = (0..MAX_TCI_INBOUND_MESSAGE_BYTES)
+        .map(|i| i as u8)
+        .collect();
+    let expected = Message::Binary(payload.into());
+    assert_eq!(
+        decode_test_ws(encoded_ws_messages(vec![expected.clone()])).unwrap(),
+        expected
+    );
+}
+
+#[test]
+fn websocket_small_read_buffer_preserves_fragmented_message() {
+    use tungstenite::protocol::frame::{
+        coding::{Data, OpCode},
+        Frame,
+    };
+    let first = vec![0x55; 100_000];
+    let second = vec![0xaa; 100_000];
+    let expected = [first.as_slice(), second.as_slice()].concat();
+    let wire = encoded_ws_messages(vec![
+        Message::Frame(Frame::message(first, OpCode::Data(Data::Binary), false)),
+        Message::Frame(Frame::message(second, OpCode::Data(Data::Continue), true)),
+    ]);
+    assert_eq!(
+        decode_test_ws(wire).unwrap(),
+        Message::Binary(expected.into())
+    );
+}
+
+#[test]
+fn websocket_small_read_buffer_still_rejects_oversized_messages() {
+    let wire = encoded_ws_messages(vec![Message::Binary(
+        vec![0; MAX_TCI_INBOUND_MESSAGE_BYTES + 1].into(),
+    )]);
+    assert!(matches!(
+        decode_test_ws(wire),
+        Err(tungstenite::Error::Capacity(_))
+    ));
+}
+
+#[test]
+fn websocket_small_read_buffer_still_limits_fragmented_total() {
+    use tungstenite::protocol::frame::{
+        coding::{Data, OpCode},
+        Frame,
+    };
+    // Each frame fits independently, but their combined message must fail.
+    let wire = encoded_ws_messages(vec![
+        Message::Frame(Frame::message(
+            vec![0; 150_000],
+            OpCode::Data(Data::Binary),
+            false,
+        )),
+        Message::Frame(Frame::message(
+            vec![0; 150_000],
+            OpCode::Data(Data::Continue),
+            true,
+        )),
+    ]);
+    assert!(matches!(
+        decode_test_ws(wire),
+        Err(tungstenite::Error::Capacity(_))
+    ));
 }
 
 #[test]
