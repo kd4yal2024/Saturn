@@ -619,3 +619,37 @@ scheduled outside a live quality soak because the benchmark itself consumes
 CPU. Only then integrate a source-guarded production patch and requalify
 bridge performance, audio/RF behavior, and continuity. No G2 writes or
 service changes were performed during this experiment.
+
+### 2026-09-19 — native Cortex-A72 benchmark gate passed
+
+Following operator approval, copied only the isolated benchmark runner/harness
+to `/tmp/saturn-hbres-arm.p47ncW` on G2. Ran at nice 19 using Debian GCC
+14.2.0 with `-O3 -mcpu=cortex-a72` against the pinned native source Git object.
+No bridge archive/binary, radio configuration, or services were changed.
+Unlike the initial plan to defer until outside the soak, this isolated test
+ran alongside RX at low priority with five-second telemetry checks; this
+interval must not be treated as an undisturbed soak baseline.
+
+All exhaustive index checks and all 80 output/ring-state equivalence cases
+passed on ARM. Four alternating-order 384k->48k kernel timings:
+
+| Trial | Reference ms | Candidate ms | Speedup |
+|---|---:|---:|---:|
+| 0 | 2116.303 | 1149.806 | 1.84x |
+| 1 | 2116.566 | 1149.444 | 1.84x |
+| 2 | 2118.783 | 1149.965 | 1.84x |
+| 3 | 2116.101 | 1149.641 | 1.84x |
+
+Approximately 46% less elapsed time in this isolated kernel, NOT 46% less
+whole-bridge CPU. Benchmark exit status was zero. Across telemetry timestamps
+1789820184663 through 1789820214688 ms, PID stayed 1688709; deltas were zero
+for host drops, discontinuities, header resync/errors, FIFO faults, IQ queue
+drops, and ADC1 episodes. Each sampled audio_dropped_s was zero. These are
+server-side counters, not an independent listening or browser-render test.
+
+The candidate is now eligible for guarded build integration. It is still
+absent from the production build path and has not been deployed. Next step:
+share one source-hash-guarded transformation between benchmark and WDSP build,
+test rejection on source drift, then perform a controlled bridge deployment
+and matched before/after CPU and audio-quality soak. Retain the original
+archive/binary for rollback before deployment.
