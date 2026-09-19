@@ -770,3 +770,35 @@ then compare matching LAN IQ+audio workload CPU/thread statistics, libc
 zero-fill sample share, control latency, and continuity counters. Preserve
 the current installed binary for rollback first. DMA polling changes are
 deferred to isolate this directly measured, smaller-scope optimization.
+
+### 2026-09-19 — smaller WebSocket buffer deployed and measured
+
+Operator installation succeeded. Readback confirms clean build
+6f4bf9f6b1b2f158368cee8060237a478df82637, PID 2463156, NRestarts=0,
+ExecMainStatus=0. Installed and build-tree binaries both hash to
+ba30ff051e0c6fa8aa02cc85dd69e3a692633c9b90b2e03668345c6d447ab8be.
+Startup log confirms RF-inhibited operation. Workload remained ADC1/DDC6,
+384 kHz, 7.200 MHz, one split client with IQ and audio enabled.
+
+First 20-second pidstat sample overlapping a 99 Hz user-CPU profile averaged
+45.25% of one core. A separate 20-second pidstat sample without perf recording
+averaged 44.30% versus the preceding 49.05% baseline: 4.75 percentage points,
+approximately 9.7% less CPU in these short observations. Combined WebSocket
+client threads fell from 9.05% to 5.05%; WDSP Wchan0 stayed similar at 20.90%
+versus 21.10%, and DMA reader at 6.55% versus 6.70%. This is encouraging
+mechanism-consistent field evidence, not a controlled repeated A/B benchmark.
+
+Profile `/tmp/saturn-rx-small-buffer.KDGRzS/perf.data` contains 588 user-CPU
+samples, zero lost. The libc zero-fill address 0xa4094 fell from 12.44% of
+samples in the earlier profile to 0.34%, now attributed to Wchan0 rather
+than the WebSocket client. Resampler remains the largest named hotspot.
+
+Important qualification exception: IQ delivery drop total is ONE, not zero.
+The journal first reports it at 13:25:33, shortly after client connection
+at 13:25:25–26. Its cause has not been established. It was already present
+before profiling and stayed at one through telemetry timestamp 1789838850580.
+From timestamp 1789838783514 through that endpoint, host drops/discontinuities,
+header errors, RX FIFO faults stayed zero, sampled audio_dropped_s was zero,
+and ADC1 episode count stayed 362736. Do not call this a zero-loss soak pass
+or dismiss the IQ drop as harmless startup behavior. Continue observing
+counter deltas and investigate reconnection queue pressure separately.
