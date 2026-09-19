@@ -8898,6 +8898,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     };
     let browserTimingProbeStarted = false;
     const displayTimingBuckets = { fft: [], drawCpu: [], arrivalToDraw: [] };
+    const displaySlowFrames = [];
     let displayFirstIqAt = null;
     let displayFirstIqToDrawMs = null;
     let browserTimingLastRafAt = 0;
@@ -9634,6 +9635,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     let fftProcessor = new FftProcessor(1024);
 
     function resetDisplayHistory() {
+      displaySlowFrames.length = 0;
       displayFirstIqAt = null;
       displayFirstIqToDrawMs = null;
       for (const bucket of Object.values(displayTimingBuckets)) bucket.length = 0;
@@ -10249,21 +10251,33 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     }
 
     function buildPerfSnapshot() {
+      const displayPipeline = displayPipelineSnapshot();
       flushBrowserTimingStats();
       return {
         ..._next.buildPerfSnapshot(state, performance.now()),
-        displayPipeline: {
-          samples: displayTimingBuckets.fft.length,
-          fftMs: timingStats(displayTimingBuckets.fft),
-          drawCpuMs: timingStats(displayTimingBuckets.drawCpu),
-          newestIqArrivalToDrawMs: timingStats(displayTimingBuckets.arrivalToDraw),
-          firstIqToDrawMs: displayFirstIqToDrawMs,
-          // Browser-local draw submission timing; excludes FPGA/network age
-          // and GPU presentation time. No cross-clock latency claim.
-          timingScope: "browser-arrival-to-draw-submission",
-          fftSize: fftProcessor.size,
-          waterfallBackend: waterfallRenderer.backend,
-        },
+        displayPipeline,
+      };
+    }
+
+    function displayPipelineSnapshot(now = performance.now()) {
+      return {
+        samples: displayTimingBuckets.fft.length,
+        fftMs: timingStats(displayTimingBuckets.fft),
+        drawCpuMs: timingStats(displayTimingBuckets.drawCpu),
+        newestIqArrivalToDrawMs: timingStats(displayTimingBuckets.arrivalToDraw),
+        firstIqToDrawMs: displayFirstIqToDrawMs,
+        // Browser-local draw submission timing; excludes FPGA/network age
+        // and GPU presentation time. No cross-clock latency claim.
+        timingScope: "browser-arrival-to-draw-submission",
+        fftSize: fftProcessor.size,
+        waterfallBackend: waterfallRenderer.backend,
+        ...displayProfileDiagnostics(now),
+        browserMainLagMs: timingStats(browserTimingBuckets.mainLag),
+        browserRafIntervalMs: timingStats(browserTimingBuckets.rafInterval),
+        audioQueueMs: audioLeadMs(),
+        audioContextBaseLatencyMs: state.audioContextBaseLatencyMs,
+        audioContextOutputLatencyMs: state.audioContextOutputLatencyMs,
+        slowFrames: displaySlowFrames.map((frame) => ({ ...frame })),
       };
     }
 
@@ -10309,6 +10323,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       },
       clear() {
         state.perfSnapshots = [];
+        displaySlowFrames.length = 0;
         for (const bucket of Object.values(displayTimingBuckets)) bucket.length = 0;
       },
       start(options = {}) {
@@ -13643,6 +13658,44 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       return DISPLAY_BASE_FFT_SIZE;
     }
 
+    function displayProfileDiagnostics(now = performance.now()) {
+      const phoneWan = phoneWanLiteActive(now);
+      const wan = wanDisplayActive(now);
+      const reasons = [];
+      const freshRtt = state.bridgeRttMs != null && now - state.bridgeRttAt <= BRIDGE_RTT_STALE_MS;
+      if (state.streamMode === "wan") reasons.push("RX Transport is set to WAN");
+      if (tailnetTransportActive()) reasons.push("Page uses a Tailscale host");
+      if (freshRtt && state.bridgeRttMs > (phoneWan ? 180 : 250)) reasons.push("Recent bridge RTT exceeds display threshold");
+      return {
+        profile: phoneWan ? "phone-wan" : (wan ? "wan" : "lan"),
+        profileReasons: reasons.length ? reasons : ["LAN display defaults"],
+        streamMode: state.streamMode,
+        targetFftSize: displayFftTargetSize(now),
+        targetRenderIntervalMs: displayRenderIntervalMs(now),
+        sampleRateHz: displaySampleRateHz(),
+        binSpacingHz: displaySampleRateHz() / fftProcessor.size,
+        bridgeRttMs: state.bridgeRttMs,
+        bridgeRttFresh: freshRtt,
+      };
+    }
+
+    function recordDisplaySlowFrame(rafGapMs, fftMs, drawCpuMs, arrivalToDrawMs) {
+      if (Math.max(rafGapMs, fftMs + drawCpuMs, arrivalToDrawMs) < 100) return;
+      displaySlowFrames.push({
+        capturedAtIso: new Date().toISOString(),
+        visibility: document.visibilityState,
+        rafGapMs: roundedTimingMs(rafGapMs),
+        fftMs: roundedTimingMs(fftMs),
+        drawCpuMs: roundedTimingMs(drawCpuMs),
+        arrivalToDrawMs: roundedTimingMs(arrivalToDrawMs),
+        audioQueueMs: audioLeadMs(),
+        audioUnderruns: state.rxWorkletUnderruns,
+        bridgeQueuedBytes: state.bridgeOutboundQueuedBytes,
+        profile: displayProfileDiagnostics().profile,
+      });
+      if (displaySlowFrames.length > 16) displaySlowFrames.shift();
+    }
+
     function displayPacketHistoryLimit(now = performance.now()) {
       if (phoneWanLiteActive(now)) {
         return DISPLAY_PHONE_WAN_PACKET_HISTORY;
@@ -13891,6 +13944,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     }
 
     function operatorDetailGroups(now = performance.now()) {
+      const display = displayPipelineSnapshot(now);
       const band = vfoBandState();
       const readyMs = txReadyRemainingMs();
       const leadMs = audioLeadMs();
@@ -13963,6 +14017,9 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
             operatorDetailItem("Media Backlog", `Bridge ${state.bridgeOutboundQueuedBytes} B / browser ${state.wsMediaBacklogBytes} B`, `Bridge high-water ${state.outboundHighWatermarkBytes} B; TCP outq high-water ${state.bridgeTcpOutqHighWatermarkBytes} B`, state.bridgeOutboundQueuedBytes > 32768 || state.wsMediaBacklogBytes > 32768 ? "warn" : "ok"),
             operatorDetailItem("Recovery", recoveryMs == null ? "None" : `${Math.round(recoveryMs)} ms`, state.connectionLossStartedAt ? "Connection is currently down" : `${state.connectionLossCount} unexpected loss event(s)`, state.connectionLossStartedAt ? "warn" : "ok"),
             operatorDetailItem("Profiles", `${networkProfileLabel(now)} / ${audioProfileLabel()}`, `Display ${Math.round(state.sampleRate / 1000)} kHz; ${audioPath} audio path`, "rx"),
+            operatorDetailItem("Display Profile", `${display.profile.toUpperCase()} · ${display.fftSize} bins`, `${display.profileReasons.join("; ")}. Target ${display.targetFftSize} bins; ${display.binSpacingHz.toFixed(2)} Hz/bin.`, "rx"),
+            operatorDetailItem("Display Timing", display.samples ? `${display.newestIqArrivalToDrawMs.p99} ms arrival → draw p99` : "Waiting for IQ", `FFT ${display.fftMs.p99} ms; draw CPU ${display.drawCpuMs.p99} ms p99. Browser-local submission timing.`, "rx"),
+            operatorDetailItem("Slow Display Frames", `${display.slowFrames.length} retained`, "Last 16 draws with ≥100 ms animation gap, processing, or arrival-to-draw time. Included in Copy Network Diagnostics.", display.slowFrames.length ? "warn" : "ok"),
           ],
         },
         {
@@ -13993,7 +14050,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         : state.connectionRecoveryMs;
       const audioDropEvents = state.audioBackpressureDrops + state.rxWorkletDrops +
         state.audioSeqResyncCount;
-      return _next.formatRxLatencyDiagnostic({
+      const audioDiagnostic = _next.formatRxLatencyDiagnostic({
         capturedAtIso: new Date().toISOString(),
         connection: reconnectConnectionState(now).label,
         bridgeUrl: state.wsUrl || window.location.host || "Default",
@@ -14029,6 +14086,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         reconnectAttempt: reconnectSnapshot.attempt,
         reconnectReason: reconnectSnapshot.lastReason,
       });
+      return `${audioDiagnostic}\n\nDisplay pipeline (browser timing, not audio/display synchronization):\n${JSON.stringify(displayPipelineSnapshot(now), null, 2)}`;
     }
 
     async function copyRxLatencyDiagnostic() {
@@ -17848,6 +17906,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     }
 
     function animationLoop(now) {
+      const rafGapMs = browserTimingLastRafAt > 0 ? now - browserTimingLastRafAt : 0;
       recordRafTiming(now);
       updateMeterVisualState(now);
       const phoneWanLite = phoneWanLiteActive(now);
@@ -17918,6 +17977,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
             const drawEndedAt = performance.now();
             recordBrowserTimingSample(displayTimingBuckets.drawCpu, drawEndedAt - drawStartedAt);
             recordBrowserTimingSample(displayTimingBuckets.arrivalToDraw, drawEndedAt - state.lastFrameAt);
+            recordDisplaySlowFrame(rafGapMs, drawStartedAt - fftStartedAt, drawEndedAt - drawStartedAt, drawEndedAt - state.lastFrameAt);
             if (displayFirstIqToDrawMs === null && displayFirstIqAt !== null) {
               displayFirstIqToDrawMs = roundedTimingMs(drawEndedAt - displayFirstIqAt);
             }

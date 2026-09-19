@@ -521,3 +521,39 @@ check startup response, tuning, audio continuity, and transport counter deltas.
 Use those timings to decide whether an FFT worker or selectable larger FFTs
 are warranted. Bridge-generated spectrum transport remains a separate future
 option rather than silently reducing the requested full-rate TCI IQ feed.
+
+### 2026-09-19 — display profile and intermittent-stall diagnosis
+
+The operator's deployed browser capture reports WebGL2, FFT size 2048,
+FFT p99 0.24 ms, draw CPU p99 2.04 ms, newest-IQ arrival-to-draw p99
+32.02 ms (maximum 173.62 ms), and first-IQ-to-draw 30.22 ms. These
+measurements do not establish end-to-end latency or audio/display alignment.
+They do not identify FFT computation as the cause of the isolated delay.
+
+Read-only G2 inspection found `streamMode: "wan"` in
+`/var/lib/saturn-state/remote_settings.json`; the bridge remained PID 1688709
+with NRestarts=0. Persisted WAN mode selects the lower-resolution display
+even on a LAN address. Browser-local settings can override persisted settings,
+so the actual profile and all selection reasons must be captured in-browser.
+For local operation, Setup → Network → RX Transport → LAN selects the
+existing higher-resolution profile and higher-bandwidth audio option, unless
+another profile trigger such as fresh high RTT applies. No live settings,
+services, or assets were changed during this investigation.
+
+The diagnostics drawer now reports actual/target FFT size, bin spacing,
+profile selection reasons, and browser-local FFT/draw/arrival timing.
+Copy Network Diagnostics includes that snapshot plus the last 16 draws with
+at least 100 ms animation gap, processing time, or arrival-to-draw time.
+Each event includes visibility, audio queue/underruns, and bridge queue context.
+This instrumentation does not change IQ rate, FFT resolution policy, audio
+processing, or rendering effects. Browser RAF/main-thread timing and audio
+latency estimates are context, not a shared-clock synchronization measurement.
+
+Next field check: use the same station/browser with the LAN setting, compare
+actual FFT size and display response, and copy diagnostics if a stall occurs.
+Do not declare the 173.62 ms outlier fixed without that capture.
+
+Validation: 465 tests in 59 files passed, including six executable profile
+and slow-frame regression tests. Type checking, template seam/scope checks,
+production build, and all 22 browser layout scenarios passed. Changes are
+web-only and require deployment before the new diagnostics appear on the G2.
