@@ -570,7 +570,7 @@ export function createAppState(): AppState {
     spectrumGlassSheen: 0,
     waterfallContrast: 100,
     waterfallSmoothing: 0,
-    spectrumAverageBypassFrames: 0,
+    spectrumAverageBypassFrames: 1,
     waterfallAutoRange: true,
     waterfallFloorDb: -200,
     waterfallCeilingDb: -120,

@@ -8286,6 +8286,7 @@
     const DISPLAY_WAN_PACKET_HISTORY = 18;
     const DISPLAY_PHONE_WAN_PACKET_HISTORY = 8;
     const DISPLAY_BASE_RENDER_INTERVAL_MS = 33;
+    const DISPLAY_STATUS_REFRESH_INTERVAL_MS = 250;
     const DISPLAY_WAN_RENDER_INTERVAL_MS = 50;
     const DISPLAY_PHONE_WAN_RENDER_INTERVAL_MS = 33;
     const DISPLAY_PHONE_WAN_WATERFALL_INTERVAL_MS = 50;
@@ -8896,6 +8897,9 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       txDroppedFrames: 0,
     };
     let browserTimingProbeStarted = false;
+    const displayTimingBuckets = { fft: [], drawCpu: [], arrivalToDraw: [] };
+    let displayFirstIqAt = null;
+    let displayFirstIqToDrawMs = null;
     let browserTimingLastRafAt = 0;
     let remoteSettingsSaveTimer = null;
     let freqEntryBuffer = "";
@@ -9197,6 +9201,8 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         this.texture = null;
         this.textureWidth = 1024;
         this.textureHeight = 512;
+        this.textureHead = 0;
+        this.headLocation = null;
         this.textureData = new Uint8Array(this.textureWidth * this.textureHeight * 4);
         this.pendingBins = null;
         this.pendingFloorDb = -180;
@@ -9233,15 +9239,23 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         `);
         const fragmentShader = this.compile(gl.FRAGMENT_SHADER, `
           #version 300 es
-          precision mediump float;
+          precision highp float;
           uniform sampler2D u_texture;
+          uniform float u_head;
           in vec2 v_uv;
           out vec4 outColor;
           void main() {
-            outColor = texture(u_texture, vec2(v_uv.x, 1.0 - v_uv.y));
+            float height = float(textureSize(u_texture, 0).y);
+            // Clamp in logical history coordinates so the oldest and newest
+            // rows never blend at the display edges. REPEAT joins the physical
+            // ring seam when adjacent historical rows straddle the texture.
+            float row = clamp((1.0 - v_uv.y) * height - 0.5, 0.0, height - 1.0);
+            float y = (u_head + row + 0.5) / height;
+            outColor = texture(u_texture, vec2(v_uv.x, y));
           }
         `);
         this.program = this.link(vertexShader, fragmentShader);
+        this.headLocation = gl.getUniformLocation(this.program, "u_head");
         this.positionBuffer = gl.createBuffer();
         gl.bindBuffer(gl.ARRAY_BUFFER, this.positionBuffer);
         gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([
@@ -9255,7 +9269,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.REPEAT);
         gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, this.textureWidth, this.textureHeight, 0, gl.RGBA, gl.UNSIGNED_BYTE, this.textureData);
       }
 
@@ -9312,6 +9326,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
           return;
         }
         this.textureWidth = width;
+        this.textureHead = 0;
         this.textureData = new Uint8Array(this.textureWidth * this.textureHeight * 4);
         const gl = this.gl;
         gl.bindTexture(gl.TEXTURE_2D, this.texture);
@@ -9320,6 +9335,8 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
 
       clear() {
         this.smoothedBins = null;
+        this.pendingBins = null;
+        this.textureHead = 0;
         if (this.gl) {
           this.textureData.fill(0);
           const gl = this.gl;
@@ -9420,10 +9437,11 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         }
         this.ensureWidth(renderedBins.length);
         const rowBytes = this.textureWidth * 4;
-        this.textureData.copyWithin(rowBytes, 0, rowBytes * (this.textureHeight - 1));
+        this.textureHead = (this.textureHead + this.textureHeight - 1) % this.textureHeight;
+        const rowOffset = this.textureHead * rowBytes;
         for (let i = 0; i < this.textureWidth; i += 1) {
           const color = this.colorForDb(renderedBins[i], floorDb, ceilingDb, palette, contrast);
-          const offset = i * 4;
+          const offset = rowOffset + i * 4;
           this.textureData[offset] = color[0];
           this.textureData[offset + 1] = color[1];
           this.textureData[offset + 2] = color[2];
@@ -9431,7 +9449,8 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         }
         const gl = this.gl;
         gl.bindTexture(gl.TEXTURE_2D, this.texture);
-        gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, this.textureWidth, this.textureHeight, gl.RGBA, gl.UNSIGNED_BYTE, this.textureData);
+        gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, this.textureHead, this.textureWidth, 1, gl.RGBA, gl.UNSIGNED_BYTE,
+          this.textureData.subarray(rowOffset, rowOffset + rowBytes));
       }
 
       colorForDb(db, floorDb, ceilingDb, palette = "classic", contrast = 100) {
@@ -9446,7 +9465,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
           }
           if (t < 0.78) {
             const u = (t - 0.45) / 0.33;
-            return [Math.round(120 + u * 110), Math.round(52 + u * 90), Math.round(38 + u * 24)];
+            return [Math.round(120 + u * 120), Math.round(52 + u * 92), Math.round(38 + u * 24)];
           }
           const u = (t - 0.78) / 0.22;
           return [240, Math.round(144 + u * 90), Math.round(62 + u * 92)];
@@ -9468,7 +9487,8 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
           return [Math.round(40 + u * 200), Math.round(142 + u * 90), Math.round(64 - u * 22)];
         }
         if (t < 0.28) {
-          return [4, Math.round(26 + t * 50), Math.round(58 + t * 120)];
+          const u = t / 0.28;
+          return [Math.round(4 + u * 4), Math.round(26 + u * 14), Math.round(58 + u * 70)];
         }
         if (t < 0.58) {
           const u = (t - 0.28) / 0.30;
@@ -9507,6 +9527,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         gl.clearColor(0.02, 0.05, 0.07, 1.0);
         gl.clear(gl.COLOR_BUFFER_BIT);
         gl.useProgram(this.program);
+        gl.uniform1f(this.headLocation, this.textureHead);
         gl.bindBuffer(gl.ARRAY_BUFFER, this.positionBuffer);
         const positionLocation = gl.getAttribLocation(this.program, "a_position");
         gl.enableVertexAttribArray(positionLocation);
@@ -9541,6 +9562,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
           ctx.fillStyle = `rgb(${color[0]}, ${color[1]}, ${color[2]})`;
           ctx.fillRect(x, 0, 1, 1);
         }
+        this.pendingBins = null;
       }
     }
 
@@ -9612,10 +9634,15 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     let fftProcessor = new FftProcessor(1024);
 
     function resetDisplayHistory() {
+      displayFirstIqAt = null;
+      displayFirstIqToDrawMs = null;
+      for (const bucket of Object.values(displayTimingBuckets)) bucket.length = 0;
       state.iqPackets = [];
       state.displayIqSource = "rx";
       state.txDisplaySettleFrames = 0;
       state.latestBins = new Float32Array(fftProcessor.size);
+      state.latestBins.fill(state.displayFloorDb);
+      state.spectrumAverageBypassFrames = 1;
       state.fftWidth = state.latestBins.length;
       state.lastSpectrumRenderAt = 0;
       state.lastRenderedIqFrameVersion = -1;
@@ -9868,10 +9895,8 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       }
       const avgFrames = clampSpectrumAverage(state.spectrumAverage);
       let bins = new Float32Array(rawBins.length);
-      if (!state.latestBins || state.latestBins.length !== rawBins.length) {
-        state.latestBins = new Float32Array(rawBins.length);
-      }
-      const bypassAverage = state.spectrumAverageBypassFrames > 0;
+      const hasHistory = state.latestBins?.length === rawBins.length;
+      const bypassAverage = !hasHistory || state.spectrumAverageBypassFrames > 0;
       if (avgFrames > 1 && !bypassAverage && state.latestBins.length === rawBins.length) {
         const alpha = 1 / avgFrames;
         for (let i = 0; i < rawBins.length; i += 1) {
@@ -9879,7 +9904,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         }
       } else {
         bins.set(rawBins);
-        if (bypassAverage) {
+        if (state.spectrumAverageBypassFrames > 0) {
           state.spectrumAverageBypassFrames -= 1;
         }
       }
@@ -10225,7 +10250,21 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
 
     function buildPerfSnapshot() {
       flushBrowserTimingStats();
-      return _next.buildPerfSnapshot(state, performance.now());
+      return {
+        ..._next.buildPerfSnapshot(state, performance.now()),
+        displayPipeline: {
+          samples: displayTimingBuckets.fft.length,
+          fftMs: timingStats(displayTimingBuckets.fft),
+          drawCpuMs: timingStats(displayTimingBuckets.drawCpu),
+          newestIqArrivalToDrawMs: timingStats(displayTimingBuckets.arrivalToDraw),
+          firstIqToDrawMs: displayFirstIqToDrawMs,
+          // Browser-local draw submission timing; excludes FPGA/network age
+          // and GPU presentation time. No cross-clock latency claim.
+          timingScope: "browser-arrival-to-draw-submission",
+          fftSize: fftProcessor.size,
+          waterfallBackend: waterfallRenderer.backend,
+        },
+      };
     }
 
     function recordPerfSnapshot() {
@@ -10270,6 +10309,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       },
       clear() {
         state.perfSnapshots = [];
+        for (const bucket of Object.values(displayTimingBuckets)) bucket.length = 0;
       },
       start(options = {}) {
         state.perfCaptureEnabled = true;
@@ -17728,6 +17768,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       return combined;
     }
 
+    let lastIqUiRefreshAt = -Infinity;
     function handleIqFrame(buffer, sourceKind = "rx") {
       if (buffer.byteLength < 64) {
         return;
@@ -17765,12 +17806,17 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         logEvent(`Received ${sourceKind.toUpperCase()} IQ frame: ${samplePairs} complex samples @ ${Math.round(sampleRate / 1000)} kHz`);
       }
       state.lastFrameAt = performance.now();
+      if (displayFirstIqAt === null) displayFirstIqAt = state.lastFrameAt;
       state.iqFrameVersion = (state.iqFrameVersion || 0) + 1;
       state.frameCounter += 1;
       state.displayCaption = sourceKind === "tx"
         ? `Live TX IQ: ${samplePairs} samples at ${Math.round(sampleRate / 1000)} kHz, display ±${Math.round(TX_DISPLAY_SPAN_HZ / 2000)} kHz`
         : `Live RX IQ frame: ${samplePairs} complex samples at ${Math.round(sampleRate / 1000)} kHz`;
-      updateUi();
+      const now = performance.now();
+      if (sourceChanged || nextDisplayRate !== prevDisplayRate || now - lastIqUiRefreshAt >= DISPLAY_STATUS_REFRESH_INTERVAL_MS) {
+        lastIqUiRefreshAt = now;
+        scheduleUiRefresh();
+      }
     }
 
     function renderIdleFrame(now) {
@@ -17827,7 +17873,10 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
             if (fftSize !== fftProcessor.size) {
               fftProcessor = new FftProcessor(fftSize);
             }
+            const fftStartedAt = performance.now();
             const bins = fftProcessor.transform(iqWindow);
+            const drawStartedAt = performance.now();
+            recordBrowserTimingSample(displayTimingBuckets.fft, drawStartedAt - fftStartedAt);
             const visibleBins = visibleBinsForDisplay(bins);
             const processedBins = processedDisplayBins(visibleBins);
             updateDisplayRange(processedBins);
@@ -17866,6 +17915,12 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
             }
             state.lastRenderedIqFrameVersion = state.iqFrameVersion;
             state.lastSpectrumRenderAt = now;
+            const drawEndedAt = performance.now();
+            recordBrowserTimingSample(displayTimingBuckets.drawCpu, drawEndedAt - drawStartedAt);
+            recordBrowserTimingSample(displayTimingBuckets.arrivalToDraw, drawEndedAt - state.lastFrameAt);
+            if (displayFirstIqToDrawMs === null && displayFirstIqAt !== null) {
+              displayFirstIqToDrawMs = roundedTimingMs(drawEndedAt - displayFirstIqAt);
+            }
           }
         }
       } else if (txDisplayActive) {

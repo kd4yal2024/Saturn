@@ -449,3 +449,75 @@ baseline resets and client reconnects for the lifetime of the bridge process.
 The Performance Lab permanently raises a critical alert after any cumulative
 full-rate queue loss, removing the prior dependence on catching a one-second
 replacement pulse.
+
+### Browser panadapter/waterfall response candidate (2026-09-19)
+
+The operator reported slow display startup and a spectrum/waterfall that
+appeared to trail RX audio. Source inspection on `v30-bridge-fifo-integration`
+at `1ac4e2a` identified three browser costs independently of the ongoing
+full-rate IQ transport qualification:
+
+- `FftProcessor` applied a hard-coded 0.82 previous / 0.18 current temporal
+  average before the user-selected spectrum average. Its 90% step settling
+  takes 12 updates (400 ms at 30 Hz), even with the visible average set to one.
+  Zero-filled initial dB bins also produced a false startup transition.
+- Every waterfall row shifted and uploaded the entire 512-row RGBA texture.
+  At 4096 bins this is an 8 MiB upload per line (240 MiB/s at 30 lines/s), plus
+  the CPU history copy. These are calculated transfer volumes, not measured
+  browser or G2 CPU results.
+- Each received IQ frame called the full `updateUi()` synchronously.
+
+The candidate removes the hidden FFT average and seeds the visible average
+from the first real spectrum after startup, reset, or a bin-count change.
+The window, FFT scaling, orientation, 4096-bin default, and IQ sample rate
+remain unchanged. User averaging, peak hold, and waterfall cleanup remain
+available. With averaging set to one, spectrum steps now appear on the next
+processed frame rather than settling through a second hidden filter.
+
+The WebGL waterfall stores history in a circular texture and uploads only
+one row per update (16 KiB at 4096 bins, a 512-fold reduction in normal upload
+volume). The shader addresses the circular history with clamped logical
+edges and interpolation across the physical wrap. Full uploads remain for
+clear/resize and horizontal tuning shifts. Canvas2D now consumes each pending
+row once; redraws cannot duplicate a row or replay a cleared pending line.
+Classic and Ember color ramps no longer jump at their segment boundaries.
+This improves gradient continuity without claiming increased hardware color
+depth.
+
+Routine IQ-triggered status updates are coalesced to at most four per second;
+source/rate changes request an immediate animation-frame refresh. IQ samples,
+frame counts, FFT rendering, and control-event refreshes continue independently.
+
+`window.SaturnRemotePerf.snapshot().displayPipeline` and the existing sample
+export include rolling p95/p99/max FFT and CPU draw-submission times, newest-IQ
+browser-arrival-to-draw time, first-IQ-to-draw time, FFT size, and renderer
+backend. These are browser-local measurements; they exclude FPGA/network
+sample age and GPU presentation time. They cannot establish the audio/display
+offset by themselves. A matched on-radio browser capture remains necessary.
+
+Local regression coverage executes the actual template averaging and IQ
+handler, and checks FFT silence/tone levels and immediate transitions.
+`npm run validate:waterfall` executes the shipped renderer in headless Chrome
+with software WebGL2, reads pixels across a full ring wrap, checks scaled
+interpolation and tuning shifts, verifies single-row uploads, and exercises
+the Canvas2D fallback. It fails if WebGL2 is unavailable. The separate layout
+validation covers all 22 phone/tablet/desktop scenarios.
+
+Validation completed: 459 tests in 58 files passed; TypeScript type checking,
+production bundle build, template/bundle seam and scope checks passed. All 22
+layout scenarios and the six real-browser waterfall checks passed, including
+pixel-level interpolation at the circular texture seam. These results verify
+local behavior, not a live G2 latency improvement.
+
+Deployment must publish both `saturn-remote-next.html` and the matching rebuilt
+`saturn-remote-next.js` bundle/checksum through the web deployment path. This
+candidate requires no FPGA rebuild or bridge binary change. The G2 has not
+been modified as part of this browser change. Full-rate IQ queue-loss soak
+qualification remains separate and is not resolved by these display changes.
+
+Next acceptance: capture matching browser performance samples before/after
+with the same RF frequency, zoom, average, cleanup, browser, and viewport;
+check startup response, tuning, audio continuity, and transport counter deltas.
+Use those timings to decide whether an FFT worker or selectable larger FFTs
+are warranted. Bridge-generated spectrum transport remains a separate future
+option rather than silently reducing the requested full-rate TCI IQ feed.
