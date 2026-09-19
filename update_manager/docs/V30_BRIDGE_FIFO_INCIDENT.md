@@ -683,3 +683,50 @@ Deployment/rollback and matched-soak instructions are in
 `saturn-bridge/scripts/benchmark-hbres.md`. RF TX remains disabled for this
 qualification. Production activation has NOT happened; end-to-end CPU and
 audio-quality acceptance remain field-test gates, not established results.
+
+### 2026-09-19 — post-integration RX profiling baseline
+
+Read-only runtime inspection now confirms production build
+`0c0e2e5e9053dd221a578c4457b23b588df3fb00`, clean build, PID 2437349,
+NRestarts=0. This supersedes the preceding entry's activation status;
+deployment occurred outside this profiling operation. Workload: one client,
+two split connections, IQ+audio active, DDC6/ADC1 at 384 kHz, 7.200 MHz,
+WDSP 2.00, TX unkeyed. No settings, binaries, or services were changed.
+
+A 20-second `pidstat -t -u -w` baseline averaged 49.05% of one CPU core
+(about 12.3% of four-core capacity): Wchan0 21.10%, main thread 10.10%,
+XDMA reader 6.70%, two other bridge threads 6.05% and 3.00%, PureSignal
+1.25%, TX thread 0.75%. Reader voluntary context switches averaged
+4463.55/s; TX and PureSignal each averaged 985.05/s while TX was inactive.
+The reader polls FIFO status and sleeps 250 us when less than a minimum
+4 KiB DMA read is available. This identifies a wakeup optimization candidate,
+not proof that increasing batch size is latency-neutral.
+
+Unprivileged `perf record -F 99 -e cpu-clock:u` for 20 seconds collected
+675 samples with zero lost samples. Data remains on G2 at
+`/tmp/saturn-rx-profile.IBmd8V/perf.data`. Shares of sampled USER CPU:
+xHBResampler 18.81%, xfircore 6.96%, xanb.part.0 4.44%, xemnr 4.00%,
+getKey 3.70%, DdcStreamParser::feed_inner 3.11%. An unresolved libc address
+0xa4094 accounts for 12.44%; nearby libc addresses also appear. Dynamic
+symbol lookup does not identify these internal routines reliably. Obtain
+matching symbols/callers before labeling them as copies or locking overhead.
+These percentages exclude kernel CPU and are not whole-core utilization.
+Sudo was unavailable noninteractively; no permission changes were made.
+Unprivileged perf-stat context-switch zeros are not valid substitutes for
+the nonzero pidstat thread measurements.
+
+Telemetry endpoints at 1789836621038 and 1789836673085 ms retained the same
+PID/build and zero host drops/discontinuities, header errors, IQ delivery
+drops, and RX FIFO faults. Sampled audio_dropped_s was zero. ADC1 episode
+count stayed 362736; high-clock total stayed 1438946. FPGA DDC/DUC event
+totals stayed 64/113. Historical FPGA counts are not this process's errors.
+This short interval does not certify all-day soak or audible quality.
+
+Next priorities: resolve the libc hotspot, then benchmark additional
+bit-equivalent resampler/parser changes and reduce reader polling overhead
+with explicit latency/FIFO acceptance gates. Full-state publication still
+runs in the RX control path (recent batches around 7–12 ms), making it a
+separate tail-latency target. No matched old-build capture exists here, so
+49.05% must not be presented as a proven percentage improvement over earlier
+WAN/LAN or different-feature measurements. Preserve full-rate IQ, DSP
+features, and TX safety behavior throughout further optimization.
