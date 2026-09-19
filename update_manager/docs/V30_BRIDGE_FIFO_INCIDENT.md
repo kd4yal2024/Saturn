@@ -594,3 +594,28 @@ signal-quality tests, then examine event-driven host buffer wakeups and
 bounded reader polling. Preserve full-rate TCI IQ, filter/alias rejection,
 audio bandwidth, and TX safety. Do not simply disable DSP features or
 increase DMA batches without latency and FIFO-headroom measurements.
+
+### 2026-09-19 — isolated half-band indexing candidate
+
+The pinned reshb.c hot loop computes circular indices using repeated runtime
+integer modulo operations. Index bounds allow replacing these expressions
+with one conditional addition for negative indices. Added the standalone
+`saturn-bridge/scripts/benchmark-hbres.py` runner, C harness, and usage notes.
+The runner reads the exact pinned Git object, checks its SHA-256, and builds
+both implementations in a temporary directory; the installed WDSP archive
+and production build path remain unchanged.
+
+Initial x86_64 GCC 11.4 -O3 timing of the 384k->48k cascade measured
+4.73–4.88x kernel speedup over four alternating-order trials. This is NOT
+a Cortex-A72 or whole-bridge speedup. Output bits and internal ring state
+matched across 80 rate/block/in-place cases, six signal patterns, and 32
+consecutive blocks per pattern. Exhaustive index checks cover pinned tap
+counts 3, 19, 23, 27, 35, 319. AddressSanitizer and UndefinedBehaviorSanitizer
+also passed. No coefficient, rate, floating-point operation order, or
+sample-count changes were made by the candidate transformation.
+
+Required next gate: isolated native Cortex-A72 equivalence and benchmark,
+scheduled outside a live quality soak because the benchmark itself consumes
+CPU. Only then integrate a source-guarded production patch and requalify
+bridge performance, audio/RF behavior, and continuity. No G2 writes or
+service changes were performed during this experiment.
