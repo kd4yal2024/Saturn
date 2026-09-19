@@ -557,3 +557,40 @@ Validation: 465 tests in 59 files passed, including six executable profile
 and slow-frame regression tests. Type checking, template seam/scope checks,
 production build, and all 22 browser layout scenarios passed. Changes are
 web-only and require deployment before the new diagnostics appear on the G2.
+
+### 2026-09-19 — live RX performance baseline
+
+Read-only sampling, no service restart or settings changes. PID 1688709,
+bridge build 1ac4e2a254759f474a962453c26e3cf3f50e0234, WDSP 2.00,
+384 kHz RX at 3.910 MHz, one client/two split connections, IQ and audio on.
+Ten-second pidstat average: process 54.25% of one CPU; Wchan0 26.07%,
+main thread 10.59%, XDMA reader 6.79%, two client threads 2.80% and 5.69%.
+Reader voluntary context switches approximately 4457/s, main 2900/s;
+idle TX and PURESIGNAL threads each approximately 984/s. Source inspection
+finds 250 us poll sleeps in both the reader and main RX loop.
+
+Unprivileged `perf record -e cpu-clock:u -F 99 -p 1688709 -o - -- sleep 20`
+piped directly to `perf report --stdio -i - --no-children` collected 816
+samples with zero lost samples. Largest sampled user-space symbols:
+xHBResampler 26.47%, xfircore 5.27%, xnob 5.27%, xanf 4.53%,
+getKey 3.55%, LambdaD 3.19%, DdcStreamParser::feed_inner 2.82%.
+Several libc offsets remained unresolved. This is a short flat user-space
+profile, not call-chain attribution or kernel CPU measurement; percentages
+are sample shares, not total machine CPU or guaranteed achievable savings.
+Privileged perf was unavailable because sudo requires a password. No kernel
+permission settings were changed. User-only perf stat context-switch zeros
+are not valid evidence of no switches; use pidstat for that measurement.
+
+Separate telemetry interval 1789819463036–1789819478049 ms: same PID,
+12667 DMA reads and 5764896 IQ pairs, no increments in host drops,
+discontinuities, header errors/resyncs, FIFO faults, IQ queue drops, or ADC1
+episodes/high clocks. Current audio_dropped_s was zero. Lifetime IQ queue
+drops were 17 and ADC1 episodes 362736; their timing/cause is not established
+by this short capture. Do not describe the entire soak as lossless.
+
+Next investigation: inspect the pinned half-band resampler implementation
+and its rate/configuration, benchmark equivalent ARM optimization with
+signal-quality tests, then examine event-driven host buffer wakeups and
+bounded reader polling. Preserve full-rate TCI IQ, filter/alias rejection,
+audio bandwidth, and TX safety. Do not simply disable DSP features or
+increase DMA batches without latency and FIFO-headroom measurements.
