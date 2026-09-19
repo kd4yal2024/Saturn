@@ -86,6 +86,9 @@ pub struct TciClientSnapshot {
     pub full_rate_iq_written_deliveries_total: u64,
     pub full_rate_iq_dropped_deliveries_total: u64,
     pub full_rate_iq_dropped_deliveries_per_sec: u64,
+    pub full_rate_iq_drops_by_reason: [u64; 5],
+    pub full_rate_iq_last_drop_epoch_ms: u64,
+    pub full_rate_iq_in_flight: u64,
     pub full_rate_iq_queue_depth: u64,
     pub full_rate_iq_queue_high_watermark: u64,
     pub full_rate_iq_queue_capacity_per_client: u64,
@@ -417,6 +420,9 @@ impl TciFrontend {
             full_rate_iq_written_deliveries_total: full_rate_iq.written_deliveries_total,
             full_rate_iq_dropped_deliveries_total: full_rate_iq.dropped_deliveries_total,
             full_rate_iq_dropped_deliveries_per_sec: full_rate_iq.dropped_deliveries_interval,
+            full_rate_iq_drops_by_reason: full_rate_iq.drops_by_reason,
+            full_rate_iq_last_drop_epoch_ms: full_rate_iq.last_drop_epoch_ms,
+            full_rate_iq_in_flight: full_rate_iq.in_flight,
             full_rate_iq_queue_depth: clients
                 .values()
                 .map(|client| client.outbound.full_rate_iq_queue_depth())

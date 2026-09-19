@@ -58,10 +58,15 @@ impl OutboundClass {
     pub(crate) fn records_enqueue_to_write_latency(self) -> bool {
         matches!(self, Self::Safety | Self::Control)
     }
+}
 
-    pub(crate) fn requeues_on_would_block(self) -> bool {
-        matches!(self, Self::Safety | Self::FullRateIq)
-    }
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum IqDropReason {
+    QueueOverflow = 0,
+    RequeueOverflow = 1,
+    SendError = 2,
+    FlushError = 3,
+    ConnectionClosed = 4,
 }
 
 impl OutboundMessage {
@@ -267,6 +272,9 @@ impl ClientSchedulerStats {
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct FullRateIqTransportSnapshot {
+    pub(crate) drops_by_reason: [u64; 5],
+    pub(crate) last_drop_epoch_ms: u64,
+    pub(crate) in_flight: u64,
     pub(crate) enqueued_deliveries_total: u64,
     pub(crate) written_deliveries_total: u64,
     pub(crate) dropped_deliveries_total: u64,
@@ -276,6 +284,10 @@ pub(crate) struct FullRateIqTransportSnapshot {
 
 #[derive(Default, Debug)]
 pub(crate) struct FullRateIqTransportStats {
+    drops_by_reason: [AtomicU64; 5],
+    last_drop_epoch_ms: AtomicU64,
+    last_drop_log_ms: AtomicU64,
+    in_flight: AtomicU64,
     enqueued_deliveries_total: AtomicU64,
     written_deliveries_total: AtomicU64,
     dropped_deliveries_total: AtomicU64,
@@ -296,9 +308,26 @@ impl FullRateIqTransportStats {
             .fetch_add(1, Ordering::Relaxed);
     }
 
-    fn record_dropped(&self, count: u64) {
+    fn record_dropped(&self, count: u64, reason: IqDropReason) {
         if count == 0 {
             return;
+        }
+        let epoch_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+        self.drops_by_reason[reason as usize].fetch_add(count, Ordering::Relaxed);
+        self.last_drop_epoch_ms
+            .fetch_max(epoch_ms, Ordering::Relaxed);
+        // Keep exact counters, but bound logging during a sustained overflow.
+        let last_log = self.last_drop_log_ms.load(Ordering::Relaxed);
+        if epoch_ms.saturating_sub(last_log) >= 1000
+            && self
+                .last_drop_log_ms
+                .compare_exchange(last_log, epoch_ms, Ordering::Relaxed, Ordering::Relaxed)
+                .is_ok()
+        {
+            eprintln!("saturn-bridge: IQ delivery drop reason={reason:?} count={count} epoch_ms={epoch_ms} (logs limited to 1/s; counters exact)");
         }
         self.dropped_deliveries_total
             .fetch_add(count, Ordering::Relaxed);
@@ -308,6 +337,11 @@ impl FullRateIqTransportStats {
 
     pub(crate) fn snapshot_and_drain_interval(&self) -> FullRateIqTransportSnapshot {
         FullRateIqTransportSnapshot {
+            drops_by_reason: std::array::from_fn(|i| {
+                self.drops_by_reason[i].load(Ordering::Relaxed)
+            }),
+            last_drop_epoch_ms: self.last_drop_epoch_ms.load(Ordering::Relaxed),
+            in_flight: self.in_flight.load(Ordering::Relaxed),
             enqueued_deliveries_total: self.enqueued_deliveries_total.load(Ordering::Relaxed),
             written_deliveries_total: self.written_deliveries_total.load(Ordering::Relaxed),
             dropped_deliveries_total: self.dropped_deliveries_total.load(Ordering::Relaxed),
@@ -459,7 +493,8 @@ impl ClientOutbound {
                     };
                     queues.queued_bytes = queues.queued_bytes.saturating_sub(old.estimated_bytes);
                     dropped += 1;
-                    self.full_rate_iq_stats.record_dropped(1);
+                    self.full_rate_iq_stats
+                        .record_dropped(1, IqDropReason::QueueOverflow);
                 }
                 queues.queued_bytes = queues.queued_bytes.saturating_add(item.estimated_bytes);
                 queues.full_rate_iq.push_back(item);
@@ -573,7 +608,8 @@ impl ClientOutbound {
                         break;
                     };
                     queues.queued_bytes = queues.queued_bytes.saturating_sub(old.estimated_bytes);
-                    self.full_rate_iq_stats.record_dropped(1);
+                    self.full_rate_iq_stats
+                        .record_dropped(1, IqDropReason::RequeueOverflow);
                 }
             }
             OutboundClass::Display => {
@@ -586,10 +622,10 @@ impl ClientOutbound {
         self.stats.record_high_watermark(queues.queued_bytes);
     }
 
-    pub(crate) fn record_bulk_send_drop(&self, class: OutboundClass) {
+    pub(crate) fn record_bulk_send_drop(&self, class: OutboundClass, reason: IqDropReason) {
         match class {
             OutboundClass::Audio => self.stats.record_audio_dropped(1),
-            OutboundClass::FullRateIq => self.full_rate_iq_stats.record_dropped(1),
+            OutboundClass::FullRateIq => self.full_rate_iq_stats.record_dropped(1, reason),
             OutboundClass::Display => self.stats.record_display_dropped(),
             OutboundClass::Control => self.stats.record_control_dropped(),
             OutboundClass::Safety => {}
@@ -627,7 +663,8 @@ impl ClientOutbound {
 impl Drop for ClientOutbound {
     fn drop(&mut self) {
         let pending = self.queues.lock_unpoisoned().full_rate_iq.len() as u64;
-        self.full_rate_iq_stats.record_dropped(pending);
+        self.full_rate_iq_stats
+            .record_dropped(pending, IqDropReason::ConnectionClosed);
     }
 }
 
@@ -866,8 +903,121 @@ pub(crate) fn tcp_outq_bytes(_stream: &TcpStream) -> io::Result<usize> {
     Ok(0)
 }
 
-pub(crate) fn send_outbound(
-    websocket: &mut tungstenite::WebSocket<std::net::TcpStream>,
+// At most one library-owned message is outstanding per socket. A successful
+// flush means handed to the transport, not acknowledged by the browser.
+pub(crate) struct BufferedSender {
+    outbound: Arc<ClientOutbound>,
+    pending: Option<QueuedOutbound>,
+    general_drop_count: Option<Arc<AtomicU64>>,
+}
+
+impl BufferedSender {
+    pub(crate) fn new(outbound: Arc<ClientOutbound>) -> Self {
+        Self {
+            outbound,
+            pending: None,
+            general_drop_count: None,
+        }
+    }
+
+    pub(crate) fn with_drop_counter(outbound: Arc<ClientOutbound>, drops: Arc<AtomicU64>) -> Self {
+        let mut sender = Self::new(outbound);
+        sender.general_drop_count = Some(drops);
+        sender
+    }
+
+    pub(crate) fn is_pending(&self) -> bool {
+        self.pending.is_some()
+    }
+
+    fn take_pending(&mut self) -> Option<QueuedOutbound> {
+        let item = self.pending.take()?;
+        if item.class == OutboundClass::FullRateIq {
+            self.outbound
+                .full_rate_iq_stats
+                .in_flight
+                .fetch_sub(1, Ordering::Relaxed);
+        }
+        Some(item)
+    }
+
+    fn complete(&mut self) -> bool {
+        let Some(item) = self.take_pending() else {
+            return false;
+        };
+        self.outbound
+            .record_write(item.class, item.enqueued_at.elapsed());
+        matches!(item.message, OutboundMessage::Close)
+    }
+
+    fn fail(&mut self, reason: IqDropReason) {
+        if let Some(item) = self.take_pending() {
+            self.outbound.record_bulk_send_drop(item.class, reason);
+            if let Some(drops) = &self.general_drop_count {
+                drops.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+    }
+
+    pub(crate) fn send<S: io::Read + io::Write>(
+        &mut self,
+        ws: &mut tungstenite::WebSocket<S>,
+        item: QueuedOutbound,
+    ) -> Result<bool, WsError> {
+        assert!(
+            self.pending.is_none(),
+            "flush the library-owned frame before sending another"
+        );
+        if item.class == OutboundClass::FullRateIq {
+            self.outbound
+                .full_rate_iq_stats
+                .in_flight
+                .fetch_add(1, Ordering::Relaxed);
+        }
+        self.pending = Some(item);
+        match send_outbound(ws, &self.pending.as_ref().unwrap().message) {
+            Ok(()) => Ok(self.complete()),
+            Err(WsError::Io(error)) if error.kind() == io::ErrorKind::WouldBlock => Ok(false),
+            Err(WsError::WriteBufferFull(_)) => {
+                // Unlike WouldBlock, the codec explicitly did not accept this
+                // message. It is safe to return it to the application queue.
+                let item = self.take_pending().unwrap();
+                self.outbound.requeue_front(item);
+                Err(WsError::Io(io::ErrorKind::WouldBlock.into()))
+            }
+            Err(error) => {
+                self.fail(IqDropReason::SendError);
+                Err(error)
+            }
+        }
+    }
+
+    pub(crate) fn flush<S: io::Read + io::Write>(
+        &mut self,
+        ws: &mut tungstenite::WebSocket<S>,
+    ) -> Result<bool, WsError> {
+        match ws.flush() {
+            Ok(()) => Ok(self.complete()),
+            Err(WsError::Io(error)) if error.kind() == io::ErrorKind::WouldBlock => {
+                self.outbound.record_send_blocked(Duration::from_millis(2));
+                Ok(false)
+            }
+            Err(error) => {
+                self.fail(IqDropReason::FlushError);
+                Err(error)
+            }
+        }
+    }
+}
+
+impl Drop for BufferedSender {
+    fn drop(&mut self) {
+        self.fail(IqDropReason::ConnectionClosed);
+    }
+}
+
+pub(crate) fn send_outbound<S: io::Read + io::Write>(
+    websocket: &mut tungstenite::WebSocket<S>,
     message: &OutboundMessage,
 ) -> Result<(), WsError> {
     match message {

@@ -851,3 +851,57 @@ the queue or suppress the loss counter. Production code remains unchanged.
 
 Validation: all 268 Rust tests passed with native DSP stubs; formatting and
 diff checks passed. The added test is diagnostic coverage, not a deployed fix.
+
+### 2026-09-19 — buffered-send correctness fix and reason telemetry
+
+Implemented a per-socket BufferedSender shared by the production client loop
+and deterministic codec tests. An Io/WouldBlock from send transfers the
+application item into a single pending/library-owned slot; only flush may
+complete that item. It is never requeued or passed to send a second time.
+No subsequent application frame is submitted until that slot clears. The
+loop still reads inbound commands while output is blocked, so inbound dekey
+is not deliberately suspended. Safety priority remains at the next frame
+boundary; a partially transmitted frame cannot safely be interrupted.
+Close is considered sent only after its buffered write flushes.
+
+WriteBufferFull is handled separately: Tungstenite explicitly rejected that
+message, so it can be requeued. Existing application queue bounds remain;
+a genuine overflow is still counted, not hidden. Send/flush fatal errors and
+connection teardown account for any pending item exactly once. The existing
+written count now includes a stalled item only after successful flush. It
+means handed to the transport, never an acknowledgment from the browser.
+
+Added cumulative metrics to `/run/saturn-bridge/perf.json`:
+
+- `iq_tci_drop_queue_overflow_total`
+- `iq_tci_drop_requeue_overflow_total` (only unaccepted WriteBufferFull retries)
+- `iq_tci_drop_send_error_total`
+- `iq_tci_drop_flush_error_total`
+- `iq_tci_drop_connection_closed_total` (pending or queued at teardown)
+- `iq_tci_last_drop_epoch_ms` (zero before the first drop)
+- `iq_tci_in_flight_deliveries` (separate from application queue depth)
+
+Existing aggregate and interval counters remain. The web server already
+copies bridge metrics into `gauges.bridge`, so diagnostic JSON carries these
+fields without a web deployment. Drop journal messages identify reason,
+count, and epoch time; logs are limited to one per second while counters
+remain exact. These are host-side accounting categories, not proof of
+delivery or non-delivery at the browser. Atomic fields can be sampled across
+an update; evaluate settled snapshots/deltas rather than demanding exact
+conservation during a concurrent enqueue/write.
+
+Six new tests cover partial writes/repeated WouldBlock with four concurrent
+new IQ arrivals, byte-exact ordered delivery without duplicates, inbound
+control during an output stall, safety priority, pending close flush,
+WriteBufferFull retry, fatal send/flush, queued/pending teardown, per-reason
+totals, and stalled audio/control messages. All 274 bridge tests passed with
+native DSP stubs; cargo check, formatting, and diff checks passed. Cargo
+check retains the pre-existing unused ClientOutbound constructor and stub
+function warnings. No DSP, RF, FIFO/DMA, IQ rate, or performance tuning was
+changed. This patch is not deployed; the historical drop cannot be assigned
+retrospectively to one of the new reason counters.
+
+Field acceptance remains: preserve rollback binary, install with RF TX
+disabled, deliberately reconnect under operator control, and compare fresh
+reason counters, sequence/continuity behavior, and audio. Do not call a
+local deterministic test a completed live reconnect or RF qualification.

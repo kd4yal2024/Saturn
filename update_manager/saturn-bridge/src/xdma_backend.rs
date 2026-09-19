@@ -1451,6 +1451,34 @@ fn write_performance(
                 TelemetryValue::number(client.full_rate_iq_dropped_deliveries_total),
             ),
             (
+                "iq_tci_drop_queue_overflow_total",
+                TelemetryValue::number(client.full_rate_iq_drops_by_reason[0]),
+            ),
+            (
+                "iq_tci_drop_requeue_overflow_total",
+                TelemetryValue::number(client.full_rate_iq_drops_by_reason[1]),
+            ),
+            (
+                "iq_tci_drop_send_error_total",
+                TelemetryValue::number(client.full_rate_iq_drops_by_reason[2]),
+            ),
+            (
+                "iq_tci_drop_flush_error_total",
+                TelemetryValue::number(client.full_rate_iq_drops_by_reason[3]),
+            ),
+            (
+                "iq_tci_drop_connection_closed_total",
+                TelemetryValue::number(client.full_rate_iq_drops_by_reason[4]),
+            ),
+            (
+                "iq_tci_last_drop_epoch_ms",
+                TelemetryValue::number(client.full_rate_iq_last_drop_epoch_ms),
+            ),
+            (
+                "iq_tci_in_flight_deliveries",
+                TelemetryValue::number(client.full_rate_iq_in_flight),
+            ),
+            (
                 "iq_tci_queue_dropped_deliveries_s",
                 TelemetryValue::number(
                     client.full_rate_iq_dropped_deliveries_per_sec as f64 / elapsed,

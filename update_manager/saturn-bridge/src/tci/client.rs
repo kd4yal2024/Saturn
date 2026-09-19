@@ -200,8 +200,23 @@ pub(crate) fn handle_client(
             }
 
             let mut bulk_pause_until: Option<Instant> = None;
+            let mut sender =
+                BufferedSender::with_drop_counter(Arc::clone(&outbound), Arc::clone(drop_count));
             loop {
-                let mut pending_flush = false;
+                // Complete a partially written frame before accepting another
+                // application message. Never re-send library-owned data.
+                if sender.is_pending() {
+                    match sender.flush(&mut websocket) {
+                        Ok(true) => break,
+                        Ok(false) => {}
+                        Err(error) => {
+                            eprintln!(
+                                "saturn-bridge: TCI websocket flush error for {addr}: {error}"
+                            );
+                            break;
+                        }
+                    }
+                }
                 let mut client_closed = false;
                 for _ in 0..64 {
                     match websocket.read() {
@@ -238,7 +253,7 @@ pub(crate) fn handle_client(
                     break;
                 }
 
-                loop {
+                while !sender.is_pending() {
                     let now = Instant::now();
                     if bulk_pause_until.map(|until| now >= until).unwrap_or(false) {
                         bulk_pause_until = None;
@@ -257,37 +272,25 @@ pub(crate) fn handle_client(
                     let Some(item) = outbound.next_message(allow_bulk) else {
                         break;
                     };
-                    let closes_client = matches!(&item.message, OutboundMessage::Close);
-                    match send_outbound(&mut websocket, &item.message) {
-                        Ok(()) => {
-                            outbound.record_write(item.class, item.enqueued_at.elapsed());
-                            pending_flush = true;
-                            if closes_client {
-                                client_closed = true;
-                                break;
-                            }
+                    match sender.send(&mut websocket, item) {
+                        Ok(true) => {
+                            client_closed = true;
+                            break;
+                        }
+                        Ok(false) if !sender.is_pending() => {}
+                        Ok(false) => {
+                            outbound.record_send_blocked(Duration::from_millis(2));
+                            break;
                         }
                         Err(WsError::Io(error)) if error.kind() == io::ErrorKind::WouldBlock => {
-                            pending_flush = true;
                             outbound.record_send_blocked(Duration::from_millis(2));
                             bulk_pause_until = Some(
                                 Instant::now() + Duration::from_millis(BULK_BACKPRESSURE_PAUSE_MS),
                             );
-                            if item.class.requeues_on_would_block() {
-                                outbound.requeue_front(item);
-                            } else {
-                                outbound.record_bulk_send_drop(item.class);
-                                drop_count.fetch_add(1, Ordering::Relaxed);
-                            }
                             break;
                         }
                         Err(error) => {
-                            if item.class == OutboundClass::FullRateIq {
-                                outbound.record_bulk_send_drop(item.class);
-                                drop_count.fetch_add(1, Ordering::Relaxed);
-                            }
                             eprintln!("saturn-bridge: TCI websocket send error to {addr}: {error}");
-                            pending_flush = true;
                             client_closed = true;
                             break;
                         }
@@ -297,34 +300,26 @@ pub(crate) fn handle_client(
                     break;
                 }
 
-                if pending_flush {
-                    match websocket.flush() {
-                        Ok(()) => {
-                            if bulk_pause_until
-                                .map(|until| Instant::now() >= until)
-                                .unwrap_or(false)
-                            {
-                                bulk_pause_until = None;
-                            }
+                match sender.flush(&mut websocket) {
+                    Ok(true) => break,
+                    Ok(false) => {
+                        if bulk_pause_until
+                            .map(|until| Instant::now() >= until)
+                            .unwrap_or(false)
+                        {
+                            bulk_pause_until = None;
                         }
-                        Err(WsError::Io(error)) if error.kind() == io::ErrorKind::WouldBlock => {
-                            outbound.record_send_blocked(Duration::from_millis(2));
-                            bulk_pause_until = Some(
-                                Instant::now() + Duration::from_millis(BULK_BACKPRESSURE_PAUSE_MS),
-                            );
-                        }
-                        Err(WsError::ConnectionClosed) | Err(WsError::AlreadyClosed) => break,
-                        Err(error) => {
-                            eprintln!(
-                                "saturn-bridge: TCI websocket flush error for {addr}: {error}"
-                            );
-                            break;
-                        }
+                    }
+                    Err(error) => {
+                        eprintln!("saturn-bridge: TCI websocket flush error for {addr}: {error}");
+                        break;
                     }
                 }
 
                 thread::sleep(Duration::from_millis(2));
             }
+
+            drop(sender);
 
             let disconnect = unregister_client(clients, operator_client_id, client_id);
             if disconnect.was_operator {
