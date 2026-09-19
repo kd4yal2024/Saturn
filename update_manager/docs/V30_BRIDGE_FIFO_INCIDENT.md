@@ -802,3 +802,52 @@ header errors, RX FIFO faults stayed zero, sampled audio_dropped_s was zero,
 and ADC1 episode count stayed 362736. Do not call this a zero-loss soak pass
 or dismiss the IQ drop as harmless startup behavior. Continue observing
 counter deltas and investigate reconnection queue pressure separately.
+
+### 2026-09-19 — reconnect-drop investigation; send retry defect confirmed
+
+No live reconnect, restart, settings change, or optimization was performed.
+The journal narrows the first IQ drop to 13:25:28–13:25:33: zero at the
+first diagnostic and one at the second. Both original split clients remain
+connected; no send error or disconnect appears in this window. Client 3's
+13:25:29 incomplete handshake never registers an outbound queue and cannot
+itself discard a queued IQ delivery. Settings/control work in this window
+includes 17 logged batches, summed elapsed time 231.047 ms, maximum batch
+72.470 ms. These elapsed times are not all contiguous or CPU-only time.
+The IQ queue reached its four-message bound. FPGA/host drop counters stayed
+zero. This points to outbound queue pressure, not evidence of FPGA loss.
+
+Found a separate, definite send-retry correctness defect relevant to that
+pressure: `send_outbound` calls Tungstenite `WebSocket::send`. In pinned
+0.29.0, a transport WouldBlock can occur AFTER the frame has entered the
+library's write buffer. `handle_client` nevertheless requeues FullRateIq
+(and safety messages). Later resend can deliver an already-buffered frame
+again. `requeue_front` can additionally evict a newly queued IQ frame when
+another frame arrives while the original is out of the application queue.
+
+Added a deterministic test using the actual pinned WebSocket codec and a
+blocked writer with a full-size 102464-byte TCI IQ message. Flushing after
+unblocking delivers one message; resending after unblocking delivers two
+byte-identical messages. The existing scheduler test independently confirms
+that pop/enqueue/requeue at capacity increments IQ drops by one and removes
+the newer frame. Both tests pass and demonstrate the mechanisms; they do
+NOT prove which branch caused this historical field drop. Current counters
+combine enqueue eviction, requeue eviction, failed sends, and queue teardown.
+General outbound_drops is interval-reset and cannot exclude an earlier drop.
+
+At telemetry timestamp 1789839407078, PID remained 2463156, enqueued=20420,
+written=20419, dropped=1, pending=0; host drops/discontinuities and RX FIFO
+faults stayed zero. Library write acceptance is not browser receipt, so these
+counts cannot detect duplicate wire messages or certify end-to-end IQ order.
+
+Recommended next correctness patch (not implemented in this investigation):
+track library-owned pending writes and flush them on WouldBlock without
+reenqueueing the same application message; distinguish WriteBufferFull,
+where the library explicitly returns an unaccepted message. Preserve safety
+priority and bounded backpressure. Add a deterministic full send-loop test
+for partial writes, repeated WouldBlock, concurrent arrivals, exact-once
+ordered IQ, and safety/close behavior. Add drop-reason counters/timestamps
+before another controlled reconnect qualification. Do not simply enlarge
+the queue or suppress the loss counter. Production code remains unchanged.
+
+Validation: all 268 Rust tests passed with native DSP stubs; formatting and
+diff checks passed. The added test is diagnostic coverage, not a deployed fix.

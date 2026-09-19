@@ -575,6 +575,67 @@ fn websocket_config_limits_inbound_message_size() {
     assert_eq!(config.max_frame_size, Some(MAX_TCI_INBOUND_FRAME_BYTES));
 }
 
+#[test]
+fn tungstenite_would_block_retains_iq_and_resending_duplicates_it() {
+    #[derive(Default)]
+    struct BlockedWriter {
+        blocked: bool,
+        bytes: Vec<u8>,
+    }
+    impl std::io::Read for BlockedWriter {
+        fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+            Err(std::io::ErrorKind::WouldBlock.into())
+        }
+    }
+    impl std::io::Write for BlockedWriter {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            if self.blocked {
+                return Err(std::io::ErrorKind::WouldBlock.into());
+            }
+            self.bytes.extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    for resend in [false, true] {
+        let mut sender = tungstenite::WebSocket::from_raw_socket(
+            BlockedWriter {
+                blocked: true,
+                ..Default::default()
+            },
+            tungstenite::protocol::Role::Server,
+            Some(tci_websocket_config()),
+        );
+        let iq = Message::Binary(build_tci_iq_frame(0, 384_000, &vec![0.25; 25_600]).into());
+        assert!(
+            matches!(sender.send(iq.clone()), Err(tungstenite::Error::Io(error))
+            if error.kind() == std::io::ErrorKind::WouldBlock)
+        );
+        assert!(sender.get_ref().bytes.is_empty());
+        sender.get_mut().blocked = false;
+        // Flush alone delivers the original. Sending the message again, as
+        // the current application requeue path does, delivers it twice.
+        if resend {
+            sender.send(iq.clone()).unwrap();
+        } else {
+            sender.flush().unwrap();
+        }
+        let mut receiver = tungstenite::WebSocket::from_raw_socket(
+            std::io::Cursor::new(sender.into_inner().bytes),
+            tungstenite::protocol::Role::Client,
+            None,
+        );
+        assert_eq!(receiver.read().unwrap(), iq);
+        if resend {
+            assert_eq!(receiver.read().unwrap(), iq);
+        }
+        assert!(receiver.read().is_err(), "unexpected extra wire message");
+    }
+}
+
 // Exercise the real WebSocket codec, including partial reads and WouldBlock.
 // Counting attempted read bytes also guards against reintroducing large
 // zero-filled scratch buffers in the idle polling path.
