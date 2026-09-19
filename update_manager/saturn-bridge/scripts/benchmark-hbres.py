@@ -7,31 +7,7 @@ import re
 import shlex
 import subprocess
 import tempfile
-
-PIN = "584e8aca5ba1c4c6bc66fc0cc164ce567c8ba1e3"
-SOURCE_SHA256 = "3cd128001a52c31c84151052e444fa956ea8d67b259e1fbb0424492bf988918c"
-
-
-def candidate(source):
-    # For 0 <= ring_ptr < N and 0 <= center +/- j <= N-1, each
-    # unwrapped index lies in [-(N-1), N-1]. One conditional addition
-    # therefore exactly replaces the double modulo, with no upper wrap.
-    replacements = {
-        "h_center_idx = (r->ring_ptr - center + r->N) % r->N;":
-        "h_center_idx = r->ring_ptr - center;\n"
-        "            if (h_center_idx < 0) h_center_idx += r->N;",
-        "idx_left  = ((r->ring_ptr - (center - j)) % r->N + r->N) % r->N;":
-        "idx_left = r->ring_ptr - (center - j);\n"
-        "                if (idx_left < 0) idx_left += r->N;",
-        "idx_right = ((r->ring_ptr - (center + j)) % r->N + r->N) % r->N;":
-        "idx_right = r->ring_ptr - (center + j);\n"
-        "                if (idx_right < 0) idx_right += r->N;",
-    }
-    for old, new in replacements.items():
-        if source.count(old) != 1:
-            raise ValueError("Pinned resampler index expression changed")
-        source = source.replace(old, new)
-    return source
+from wdsp_hbres_index import PIN, SOURCE_SHA256, candidate
 
 
 def main():

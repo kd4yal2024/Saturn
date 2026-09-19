@@ -32,10 +32,14 @@ if ! pkg-config --exists fftw3; then
   exit 1
 fi
 
+# Fail before touching the existing archive if the pinned resampler changed.
+python3 "${SCRIPT_DIR}/wdsp_hbres_index.py" --check "${WDSP2_SOURCE_DIR}/reshb.c"
+
 rm -rf "${BUILD_DIR}"
 mkdir -p "${BUILD_DIR}"
 cp -a "${WDSP2_SOURCE_DIR}/." "${BUILD_DIR}/"
 cp "${PIHPSDR_WDSP_DIR}/linux_port.c" "${PIHPSDR_WDSP_DIR}/linux_port.h" "${BUILD_DIR}/"
+python3 "${SCRIPT_DIR}/wdsp_hbres_index.py" "${BUILD_DIR}/reshb.c"
 
 python3 - "${BUILD_DIR}" <<'PY'
 from pathlib import Path

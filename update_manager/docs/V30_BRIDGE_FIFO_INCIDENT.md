@@ -653,3 +653,33 @@ share one source-hash-guarded transformation between benchmark and WDSP build,
 test rejection on source drift, then perform a controlled bridge deployment
 and matched before/after CPU and audio-quality soak. Retain the original
 archive/binary for rollback before deployment.
+
+### 2026-09-19 — guarded production build integration
+
+Moved the benchmark transformation into shared `scripts/wdsp_hbres_index.py`.
+The WDSP build validates its input before removing an existing build archive,
+then transforms only the freshly copied build-directory `reshb.c`. Original
+source SHA-256 is `3cd128001a52c31c84151052e444fa956ea8d67b259e1fbb0424492bf988918c`;
+optimized output must be `45462ec55fcf5c8b241351ecbb2d8857b9248a04fb641d589c2796f808b6f255`.
+Only CRLF-to-LF checkout normalization is allowed. Unknown source, changed
+expressions/output, and double application fail closed. Build logs identify
+the patch as `hbres-index-wrap-v1`. No floating-point flags, coefficients,
+sample rates, safety policy, or Rust signal-processing code were changed.
+
+Validation completed:
+
+- Six executable guard/CLI tests passed, including preservation of an existing
+  archive when the build receives unexpected source. Added to CI.
+- Shared-transformation numerical benchmark passed all 80 configurations and
+  exhaustive ring-index checks on x86; output hash is the exact ARM-tested
+  candidate from the preceding entry.
+- All 262 Rust bridge tests passed with native DSP stubs (not an RF test).
+- Low-memory build contract, Bash syntax, and ShellCheck passed.
+- Built the complete modified WDSP archive on G2 in isolated temporary staging
+  at nice 19. All installer-required symbols plus xHBResampler and optimized
+  source hash verified. No installed binaries, settings, or services changed.
+
+Deployment/rollback and matched-soak instructions are in
+`saturn-bridge/scripts/benchmark-hbres.md`. RF TX remains disabled for this
+qualification. Production activation has NOT happened; end-to-end CPU and
+audio-quality acceptance remain field-test gates, not established results.
