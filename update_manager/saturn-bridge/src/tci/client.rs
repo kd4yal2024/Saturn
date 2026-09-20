@@ -202,7 +202,11 @@ pub(crate) fn handle_client(
             let mut bulk_pause_until: Option<Instant> = None;
             let mut sender =
                 BufferedSender::with_drop_counter(Arc::clone(&outbound), Arc::clone(drop_count));
+            let mut previous_loop = Instant::now();
             loop {
+                let loop_started = Instant::now();
+                sender.record_writer_loop_gap(loop_started.duration_since(previous_loop));
+                previous_loop = loop_started;
                 // Complete a partially written frame before accepting another
                 // application message. Never re-send library-owned data.
                 if sender.is_pending() {

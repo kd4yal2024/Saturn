@@ -280,6 +280,7 @@ pub(crate) struct FullRateIqTransportSnapshot {
     pub(crate) dropped_deliveries_total: u64,
     pub(crate) dropped_deliveries_interval: u64,
     pub(crate) queue_high_watermark: u64,
+    pub(crate) stall_max_us: [u64; 4],
 }
 
 #[derive(Default, Debug)]
@@ -293,9 +294,40 @@ pub(crate) struct FullRateIqTransportStats {
     dropped_deliveries_total: AtomicU64,
     dropped_deliveries_interval: AtomicU64,
     queue_high_watermark: AtomicU64,
+    stall_max_us: [AtomicU64; 4],
+    last_stall_log_ms: AtomicU64,
 }
 
 impl FullRateIqTransportStats {
+    // Process-lifetime wall-time maxima, shared across clients. These include
+    // descheduling; they are not CPU time or end-to-end delivery latency.
+    fn record_stall_timing(&self, kind: usize, elapsed: Duration) {
+        let us = elapsed.as_micros().min(u128::from(u64::MAX)) as u64;
+        self.stall_max_us[kind].fetch_max(us, Ordering::Relaxed);
+        if us < 50_000 {
+            return;
+        }
+        let epoch_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+        let previous = self.last_stall_log_ms.load(Ordering::Relaxed);
+        if epoch_ms.saturating_sub(previous) >= 1000
+            && self
+                .last_stall_log_ms
+                .compare_exchange(previous, epoch_ms, Ordering::Relaxed, Ordering::Relaxed)
+                .is_ok()
+        {
+            let phase = [
+                "iq_queue_wait",
+                "iq_pending",
+                "writer_loop_gap",
+                "socket_call",
+            ][kind];
+            eprintln!("saturn-bridge: transport stall observation phase={phase} elapsed_us={us} epoch_ms={epoch_ms} (wall time; logs limited to 1/s)");
+        }
+    }
+
     fn record_enqueued(&self, queue_depth: usize) {
         self.enqueued_deliveries_total
             .fetch_add(1, Ordering::Relaxed);
@@ -349,6 +381,7 @@ impl FullRateIqTransportStats {
                 .dropped_deliveries_interval
                 .swap(0, Ordering::Relaxed),
             queue_high_watermark: self.queue_high_watermark.load(Ordering::Relaxed),
+            stall_max_us: std::array::from_fn(|i| self.stall_max_us[i].load(Ordering::Relaxed)),
         }
     }
 }
@@ -908,6 +941,7 @@ pub(crate) fn tcp_outq_bytes(_stream: &TcpStream) -> io::Result<usize> {
 pub(crate) struct BufferedSender {
     outbound: Arc<ClientOutbound>,
     pending: Option<QueuedOutbound>,
+    pending_since: Option<Instant>,
     general_drop_count: Option<Arc<AtomicU64>>,
 }
 
@@ -916,6 +950,7 @@ impl BufferedSender {
         Self {
             outbound,
             pending: None,
+            pending_since: None,
             general_drop_count: None,
         }
     }
@@ -930,8 +965,30 @@ impl BufferedSender {
         self.pending.is_some()
     }
 
+    pub(crate) fn record_writer_loop_gap(&self, elapsed: Duration) {
+        self.outbound
+            .full_rate_iq_stats
+            .record_stall_timing(2, elapsed);
+    }
+
+    fn observe_pending(&self) {
+        if self
+            .pending
+            .as_ref()
+            .is_some_and(|item| item.class == OutboundClass::FullRateIq)
+        {
+            if let Some(started) = self.pending_since {
+                self.outbound
+                    .full_rate_iq_stats
+                    .record_stall_timing(1, started.elapsed());
+            }
+        }
+    }
+
     fn take_pending(&mut self) -> Option<QueuedOutbound> {
+        self.observe_pending();
         let item = self.pending.take()?;
+        self.pending_since = None;
         if item.class == OutboundClass::FullRateIq {
             self.outbound
                 .full_rate_iq_stats
@@ -971,11 +1028,20 @@ impl BufferedSender {
         if item.class == OutboundClass::FullRateIq {
             self.outbound
                 .full_rate_iq_stats
+                .record_stall_timing(0, item.enqueued_at.elapsed());
+            self.outbound
+                .full_rate_iq_stats
                 .in_flight
                 .fetch_add(1, Ordering::Relaxed);
         }
         self.pending = Some(item);
-        match send_outbound(ws, &self.pending.as_ref().unwrap().message) {
+        self.pending_since = Some(Instant::now());
+        let started = Instant::now();
+        let result = send_outbound(ws, &self.pending.as_ref().unwrap().message);
+        self.outbound
+            .full_rate_iq_stats
+            .record_stall_timing(3, started.elapsed());
+        match result {
             Ok(()) => Ok(self.complete()),
             Err(WsError::Io(error)) if error.kind() == io::ErrorKind::WouldBlock => Ok(false),
             Err(WsError::WriteBufferFull(_)) => {
@@ -996,7 +1062,13 @@ impl BufferedSender {
         &mut self,
         ws: &mut tungstenite::WebSocket<S>,
     ) -> Result<bool, WsError> {
-        match ws.flush() {
+        self.observe_pending();
+        let started = Instant::now();
+        let result = ws.flush();
+        self.outbound
+            .full_rate_iq_stats
+            .record_stall_timing(3, started.elapsed());
+        match result {
             Ok(()) => Ok(self.complete()),
             Err(WsError::Io(error)) if error.kind() == io::ErrorKind::WouldBlock => {
                 self.outbound.record_send_blocked(Duration::from_millis(2));
@@ -1056,5 +1128,51 @@ pub(crate) fn send_outbound<S: io::Read + io::Write>(
             build_tci_audio_frame(*receiver, *sample_rate, *channels, audio_samples, *sequence)
                 .into(),
         )),
+    }
+}
+
+#[cfg(test)]
+mod stall_timing_tests {
+    use super::*;
+
+    #[test]
+    fn maxima_survive_interval_drains_without_changing_delivery_counters() {
+        let stats = FullRateIqTransportStats::default();
+        for kind in 0..4 {
+            stats.record_stall_timing(kind, Duration::from_micros(100 + kind as u64));
+            stats.record_stall_timing(kind, Duration::from_micros(50));
+        }
+        for _ in 0..2 {
+            let snapshot = stats.snapshot_and_drain_interval();
+            assert_eq!(snapshot.stall_max_us, [100, 101, 102, 103]);
+            assert_eq!(snapshot.dropped_deliveries_total, 0);
+            assert_eq!(snapshot.written_deliveries_total, 0);
+        }
+    }
+
+    #[test]
+    fn pending_age_is_observable_before_completion_and_does_not_include_queue_wait() {
+        let stats = Arc::new(FullRateIqTransportStats::default());
+        let outbound = ClientOutbound::new_with_full_rate_iq_stats(stats.clone());
+        let mut item = QueuedOutbound::new(OutboundMessage::FullRateIqFrame {
+            receiver: 0,
+            sample_rate: 384_000,
+            iq_samples: vec![0.0, 0.0],
+        });
+        item.enqueued_at = Instant::now() - Duration::from_secs(1);
+        stats.in_flight.store(1, Ordering::Relaxed);
+        let mut sender = BufferedSender::new(outbound);
+        sender.pending = Some(item);
+        sender.pending_since = Some(Instant::now() - Duration::from_millis(60));
+        sender.observe_pending();
+        let snapshot = stats.snapshot_and_drain_interval();
+        assert!(snapshot.stall_max_us[1] >= 60_000);
+        assert_eq!(snapshot.stall_max_us[0], 0);
+        assert_eq!(snapshot.in_flight, 1);
+        assert_eq!(snapshot.dropped_deliveries_total, 0);
+        sender.take_pending().unwrap();
+        assert!(sender.pending_since.is_none());
+        assert_eq!(stats.snapshot_and_drain_interval().in_flight, 0);
+        assert_eq!(stats.snapshot_and_drain_interval().stall_max_us[0], 0);
     }
 }

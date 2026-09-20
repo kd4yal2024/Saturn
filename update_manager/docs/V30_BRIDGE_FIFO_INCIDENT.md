@@ -965,3 +965,59 @@ bridge evidence. If existing data is insufficient, add narrowly scoped actual
 send/flush age, client-loop delay, queue oldest-age and command/DSP/publication
 timings. Preserve TX inhibit, FIFO/signal rates and rollback artifact. Do not
 increase buffers merely to hide losses or call this fully qualified yet.
+
+## Supervised reproduction and diagnostic-only follow-up
+
+September 19, 2026 (EDT), same deployed 6b58866 build and PID 2629435:
+
+- Operator confirmed two deliberate reconnects: disconnect 21:19:43,
+  reconnect 21:19:48, IQ at 21:19:49; disconnect 21:20:12,
+  reconnect 21:20:18, IQ at 21:20:19. No new IQ drop reasons, host-buffer
+  losses, discontinuities, resyncs, header errors or FIFO faults. Two WDSP
+  resumes, no resume-flush failures, and no service restart.
+- Supervised band recalls at 21:22:05 and 21:22:24, followed by tuning
+  through 21:22:50, also produced no new losses. The largest observed
+  control batches were 74731 and 78400 us. End frequency was 7.200 MHz;
+  audio-gap count remained zero and TX remained inhibited.
+- Operator reported markedly faster panadapter/waterfall response. This is
+  a useful responsiveness result, not a reproduction or resolution of the
+  earlier intermittent unattended and tune/start stalls.
+
+Evidence is in ignored lab results `supervised-reconnect-start-2026-09-20T01-19-17.040Z.json`,
+`supervised-reconnect-result-2026-09-20T01-21-02.148Z.json`, and
+`supervised-tune-result-2026-09-20T01-23-31.284Z.json`.
+
+The local follow-up adds measurements only; it is not deployed. New direct
+XDMA performance metrics are process-lifetime maxima shared across TCI
+clients and retained across disconnects and interval drains:
+
+| Metric | Meaning |
+| --- | --- |
+| `iq_queue_wait_max_us` | IQ enqueue to a send attempt; requeue retries retain the original enqueue time. Frames discarded before a send attempt are not sampled. |
+| `iq_pending_max_us` | Age since an IQ send attempt, observed while pending and on completion/failure/requeue; includes the initial send call, not just WouldBlock time. |
+| `writer_loop_gap_max_us` | Time between client writer-loop starts, including ordinary work, sleep and descheduling; applies to control and media clients. |
+| `socket_call_max_us` | Elapsed synchronous outbound send or flush call, including serialization for sends; all outbound message classes, not inbound read calls. |
+
+These use monotonic wall time, not CPU time, TCP acknowledgement time or
+browser playback latency. Maxima are not an atomic cross-field snapshot.
+Observations at least 50 ms produce timestamped phase logs, limited to one
+log per second across clients/phases. Suppressed logs do not suppress the
+maxima. A long pending operation can be observed repeatedly; logs are not
+an exact event counter. Existing `send_blocked_ms` remains unchanged and
+must still not be interpreted as measured stall duration.
+
+Existing control-batch logs retain their 5 ms threshold and add
+`handling_us`, `model_lock_us`, `dsp_sync_us`, and `publish_us`. Handling
+includes command-handler locks and side effects; model-lock timing covers
+the subsequent shared-model acquisition; publication combines tuning, TX
+and radio-state publication. These are elapsed time, not DSP CPU profiling.
+
+Validation: all 276 bridge tests pass with `SATURN_BRIDGE_STUB_NATIVE=1`,
+including exact-once buffered-send/retry/failure tests, queue-wait timing,
+pending-age observation, and preservation of timing maxima across drains.
+Native-stub tests do not qualify actual WDSP performance or live RF/audio.
+No queue sizes, signal rates, scheduling policy, DSP algorithms, firmware,
+send ownership, or drop classifications are changed. Next step is an
+operator-approved diagnostic build deployment followed by the same controlled
+reconnect/tune test and a fresh unattended baseline; retain the current
+working binary for rollback. Do not introduce another optimization first.

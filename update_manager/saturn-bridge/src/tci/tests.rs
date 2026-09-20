@@ -646,10 +646,11 @@ fn buffered_sender_partial_stalls_keep_exact_once_iq_and_safety_priority() {
         Some(tci_websocket_config()),
     );
     queued_test_iq(&outbound, 1);
-    assert!(!sender
-        .send(&mut ws, outbound.next_message(true).unwrap())
-        .unwrap());
+    let mut first = outbound.next_message(true).unwrap();
+    first.enqueued_at = Instant::now() - Duration::from_millis(60);
+    assert!(!sender.send(&mut ws, first).unwrap());
     assert!(sender.is_pending());
+    assert!(stats.snapshot_and_drain_interval().stall_max_us[0] >= 60_000);
     // An outgoing stall must not prevent receiving a dekey/control message.
     ws.get_mut().incoming = std::io::Cursor::new(encoded_ws_messages(vec![Message::Text(
         "trx:0,false;".into(),

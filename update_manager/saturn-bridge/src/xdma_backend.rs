@@ -585,15 +585,24 @@ fn run_inner(mut config: BridgeConfig, ready_path: &Path) -> Result<(), Box<dyn 
                 )?);
             }
             if command_count != 0 {
+                let handling_us = command_started.elapsed().as_micros();
+                let mut model_lock_us = 0;
+                let mut dsp_sync_us = 0;
+                let mut publish_us = 0;
                 if command_effects.dsp_dirty
                     || command_effects.tuning_dirty
                     || command_effects.tx_state_dirty
                     || command_effects.radio_state_dirty
                 {
+                    let lock_started = Instant::now();
                     let model = radio_model.lock_unpoisoned();
+                    model_lock_us = lock_started.elapsed().as_micros();
                     if command_effects.dsp_dirty {
+                        let sync_started = Instant::now();
                         wdsp.sync_model(&model)?;
+                        dsp_sync_us = sync_started.elapsed().as_micros();
                     }
+                    let publish_started = Instant::now();
                     if command_effects.tuning_dirty {
                         tci.publish_tuning_state(&model);
                     }
@@ -603,6 +612,7 @@ fn run_inner(mut config: BridgeConfig, ready_path: &Path) -> Result<(), Box<dyn 
                     if command_effects.radio_state_dirty {
                         tci.publish_radio_state(&model);
                     }
+                    publish_us = publish_started.elapsed().as_micros();
                 }
                 if command_effects.tuning_dirty {
                     // A frame must never straddle two RF center frequencies.
@@ -611,13 +621,14 @@ fn run_inner(mut config: BridgeConfig, ready_path: &Path) -> Result<(), Box<dyn 
                 let command_elapsed = command_started.elapsed();
                 if command_elapsed >= Duration::from_millis(5) {
                     println!(
-                    "saturn-bridge: xdma_rx control batch commands={} dsp_sync={} tuning_publish={} tx_publish={} radio_publish={} elapsed_us={}",
+                    "saturn-bridge: xdma_rx control batch commands={} dsp_sync={} tuning_publish={} tx_publish={} radio_publish={} elapsed_us={} handling_us={} model_lock_us={} dsp_sync_us={} publish_us={}",
                     command_count,
                     u8::from(command_effects.dsp_dirty),
                     u8::from(command_effects.tuning_dirty),
                     u8::from(command_effects.tx_state_dirty),
                     u8::from(command_effects.radio_state_dirty),
                     command_elapsed.as_micros(),
+                    handling_us, model_lock_us, dsp_sync_us, publish_us,
                 );
                 }
             }
@@ -1477,6 +1488,22 @@ fn write_performance(
             (
                 "iq_tci_in_flight_deliveries",
                 TelemetryValue::number(client.full_rate_iq_in_flight),
+            ),
+            (
+                "iq_queue_wait_max_us",
+                TelemetryValue::number(client.transport_stall_max_us[0]),
+            ),
+            (
+                "iq_pending_max_us",
+                TelemetryValue::number(client.transport_stall_max_us[1]),
+            ),
+            (
+                "writer_loop_gap_max_us",
+                TelemetryValue::number(client.transport_stall_max_us[2]),
+            ),
+            (
+                "socket_call_max_us",
+                TelemetryValue::number(client.transport_stall_max_us[3]),
             ),
             (
                 "iq_tci_queue_dropped_deliveries_s",
