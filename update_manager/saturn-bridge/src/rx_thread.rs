@@ -219,15 +219,16 @@ fn handle_event(
                 // Keep display IQ live during MOX. The RX WDSP channel is
                 // suspended (state 0) while tx_active, so AGC/NR neither pump
                 // on local TX energy nor slew to maximum on zero input;
-                // push_iq is additionally self-guarded while suspended.
+                // process_iq is additionally self-guarded while suspended.
                 if !tx_active {
-                    for audio_frame in wdsp.push_iq(&frame.iq_samples) {
+                    let audio_sample_rate_hz = wdsp.audio_sample_rate_hz();
+                    wdsp.process_iq(&frame.iq_samples, |audio_frame| {
                         stats.audio_frames.fetch_add(1, Ordering::Relaxed);
                         stats
                             .audio_samples
                             .fetch_add(audio_frame.len() as u64, Ordering::Relaxed);
-                        tci.publish_audio_frame(wdsp.audio_sample_rate_hz(), &audio_frame);
-                    }
+                        tci.publish_audio_frame(audio_sample_rate_hz, audio_frame);
+                    });
                 }
                 let mut model = radio_model.lock_unpoisoned();
                 if let Some(raw_dbm) = wdsp.smeter_dbm() {

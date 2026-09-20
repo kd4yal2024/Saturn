@@ -37,6 +37,7 @@ pub struct TciFrontend {
     active_connections: Arc<AtomicU64>,
     rejected_connections: Arc<AtomicU64>,
     connection_high_watermark: Arc<AtomicU64>,
+    full_rate_iq_stats: Arc<FullRateIqTransportStats>,
     display_rate_limited_count: AtomicU64,
     // TX media priority is derived from the bridge's authoritative
     // TX intent/armed/keyed state, not from a browser command. While active,
@@ -81,6 +82,17 @@ pub struct TciClientSnapshot {
     pub outbound_queued_bytes: u64,
     pub tcp_outq_high_watermark_bytes: u64,
     pub display_rate_limited_per_sec: u64,
+    pub full_rate_iq_enqueued_deliveries_total: u64,
+    pub full_rate_iq_written_deliveries_total: u64,
+    pub full_rate_iq_dropped_deliveries_total: u64,
+    pub full_rate_iq_dropped_deliveries_per_sec: u64,
+    pub full_rate_iq_drops_by_reason: [u64; 5],
+    pub full_rate_iq_last_drop_epoch_ms: u64,
+    pub full_rate_iq_in_flight: u64,
+    pub transport_stall_max_us: [u64; 4],
+    pub full_rate_iq_queue_depth: u64,
+    pub full_rate_iq_queue_high_watermark: u64,
+    pub full_rate_iq_queue_capacity_per_client: u64,
     pub safety_queue_depth_overflow_count: u64,
     pub control_queue_high_watermark: u64,
     pub command_queue_depth: u64,
@@ -102,6 +114,12 @@ pub struct TciClientSnapshot {
     pub tx_codec_decode_error_count: u64,
     pub tx_codec_stale_drop_count: u64,
     pub tx_codec_release_flush_count: u64,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct TciMediaDemand {
+    pub(crate) iq_stream_enabled: bool,
+    pub(crate) audio_stream_enabled: bool,
 }
 
 struct JoinGuard {
@@ -167,6 +185,7 @@ impl TciFrontend {
         let active_connections = Arc::new(AtomicU64::new(0));
         let rejected_connections = Arc::new(AtomicU64::new(0));
         let connection_high_watermark = Arc::new(AtomicU64::new(0));
+        let full_rate_iq_stats = Arc::new(FullRateIqTransportStats::default());
         let remote_tx_rf_enabled = config.remote_tx_rf_enabled;
         let satp_advertisement = (config.satp_enabled, config.satp_bind_addr.port());
         let tx_codec_runtime_flags = TxCodecRuntimeFlags {
@@ -181,6 +200,7 @@ impl TciFrontend {
         let active_connection_counter = active_connections.clone();
         let rejected_connection_counter = rejected_connections.clone();
         let connection_high_water = connection_high_watermark.clone();
+        let full_rate_iq_transport_stats = Arc::clone(&full_rate_iq_stats);
         let radio_model = radio_model.clone();
         let handle = thread::spawn(move || loop {
             let mut accepted_connection = false;
@@ -214,6 +234,7 @@ impl TciFrontend {
                         let tx_codec_runtime_flags = tx_codec_runtime_flags;
                         let satp_advertisement = satp_advertisement;
                         let active_connections = active_connection_counter.clone();
+                        let full_rate_iq_stats = Arc::clone(&full_rate_iq_transport_stats);
 
                         thread::spawn(move || {
                             handle_client(
@@ -226,6 +247,7 @@ impl TciFrontend {
                                 &operator_control_at,
                                 &radio_model,
                                 &drop_count,
+                                &full_rate_iq_stats,
                                 remote_tx_rf_enabled,
                                 tx_codec_runtime_flags,
                                 satp_advertisement,
@@ -254,6 +276,7 @@ impl TciFrontend {
             active_connections,
             rejected_connections,
             connection_high_watermark,
+            full_rate_iq_stats,
             display_rate_limited_count: AtomicU64::new(0),
             tx_media_priority_active: AtomicBool::new(false),
             tx_power_meter_scale: config.tx_power_meter_scale,
@@ -314,6 +337,7 @@ impl TciFrontend {
 
     pub fn client_snapshot(&self) -> TciClientSnapshot {
         let clients = self.clients.lock_unpoisoned();
+        let full_rate_iq = self.full_rate_iq_stats.snapshot_and_drain_interval();
         let now = Instant::now();
         let mut safety_latencies_us = Vec::new();
         let mut control_latencies_us = Vec::new();
@@ -393,6 +417,20 @@ impl TciFrontend {
             display_rate_limited_per_sec: self
                 .display_rate_limited_count
                 .swap(0, Ordering::Relaxed),
+            full_rate_iq_enqueued_deliveries_total: full_rate_iq.enqueued_deliveries_total,
+            full_rate_iq_written_deliveries_total: full_rate_iq.written_deliveries_total,
+            full_rate_iq_dropped_deliveries_total: full_rate_iq.dropped_deliveries_total,
+            full_rate_iq_dropped_deliveries_per_sec: full_rate_iq.dropped_deliveries_interval,
+            full_rate_iq_drops_by_reason: full_rate_iq.drops_by_reason,
+            full_rate_iq_last_drop_epoch_ms: full_rate_iq.last_drop_epoch_ms,
+            full_rate_iq_in_flight: full_rate_iq.in_flight,
+            transport_stall_max_us: full_rate_iq.stall_max_us,
+            full_rate_iq_queue_depth: clients
+                .values()
+                .map(|client| client.outbound.full_rate_iq_queue_depth())
+                .sum(),
+            full_rate_iq_queue_high_watermark: full_rate_iq.queue_high_watermark,
+            full_rate_iq_queue_capacity_per_client: MAX_FULL_RATE_IQ_QUEUE_MESSAGES as u64,
             safety_queue_depth_overflow_count,
             control_queue_high_watermark,
             command_queue_depth: command_queue.total_depth as u64,
@@ -448,6 +486,21 @@ impl TciFrontend {
                 .values()
                 .map(|client| client.state.tx_codec_release_flush_count)
                 .sum(),
+        }
+    }
+
+    /// Return the media demand without draining the one-second queue metrics.
+    /// Direct-XDMA uses this cheap snapshot to avoid running DSP for media that
+    /// no connected client requested.
+    pub(crate) fn media_demand(&self) -> TciMediaDemand {
+        let clients = self.clients.lock_unpoisoned();
+        TciMediaDemand {
+            iq_stream_enabled: clients
+                .values()
+                .any(|client| client.state.iq_stream_enabled),
+            audio_stream_enabled: clients
+                .values()
+                .any(|client| client.state.audio_stream_enabled),
         }
     }
 
@@ -966,6 +1019,21 @@ impl TciFrontend {
         });
     }
 
+    /// Publish an IQ frame whose caller has already aggregated the stream to
+    /// the desired display cadence. Direct-XDMA uses this path so the generic
+    /// snapshot rate limiter cannot discard most of a full-rate IQ stream.
+    pub fn publish_full_rate_iq_frame(&self, sample_rate_hz: u32, iq_samples: &[f32]) -> bool {
+        if !self.is_iq_stream_enabled() {
+            return false;
+        }
+
+        self.send_message(OutboundMessage::FullRateIqFrame {
+            receiver: 0,
+            sample_rate: sample_rate_hz,
+            iq_samples: iq_samples.to_vec(),
+        }) != 0
+    }
+
     pub fn publish_tx_iq_frame(&self, sample_rate_hz: u32, iq_samples: &[f32]) {
         if !self.is_iq_stream_enabled() {
             return;
@@ -1089,16 +1157,35 @@ impl TciFrontend {
         }
     }
 
-    fn send_message(&self, message: OutboundMessage) {
+    fn send_message(&self, message: OutboundMessage) -> usize {
         let tx_media_priority_active = self.tx_media_priority_active();
-        let clients = self.clients.lock_unpoisoned();
-        for client in clients.values() {
-            if !client_wants_outbound_message(client, &message, tx_media_priority_active) {
-                continue;
-            }
-            let drops = client.outbound.enqueue(message.clone());
+        let outbounds: Vec<_> = self
+            .clients
+            .lock_unpoisoned()
+            .values()
+            .filter(|client| {
+                client_wants_outbound_message(client, &message, tx_media_priority_active)
+            })
+            .map(|client| client.outbound.clone())
+            .collect();
+        let recipients = outbounds.len();
+        let mut message = Some(message);
+        for (index, outbound) in outbounds.into_iter().enumerate() {
+            // A normal split session has one eligible media socket. Move the
+            // large binary payload into that queue instead of cloning it; only
+            // true multi-viewer delivery pays for additional payload copies.
+            let queued = if index + 1 == recipients {
+                message.take().expect("outbound message is available")
+            } else {
+                message
+                    .as_ref()
+                    .expect("outbound message is available")
+                    .clone()
+            };
+            let drops = outbound.enqueue(queued);
             self.drop_count.fetch_add(drops, Ordering::Relaxed);
         }
+        recipients
     }
 }
 

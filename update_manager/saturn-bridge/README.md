@@ -109,6 +109,31 @@ The saturn-tx thread owns the TX DSP chain and DUC IQ pacing.
 p2app / radio firmware
 ```
 
+When the transactional owner selects Direct XDMA, P2app and its legacy client
+path remain stopped and unchanged. The receive side instead uses this bounded
+pipeline:
+
+```text
+/dev/xdma0_c2h_0
+        │  exclusive owner
+        ▼
+saturn-xdma-rx (SCHED_FIFO 22)
+        │  raw, page-aligned buffers
+        ▼
+256-buffer / 8 MiB locked ring
+        │
+        ▼
+DDC parser → WDSP → TCI IQ/audio publication
+```
+
+The C2H owner performs no DSP, network, or filesystem work. If downstream work
+uses the complete bounded reserve, it reclaims the oldest unread buffer and
+records a host discontinuity rather than allowing client scheduling to stop
+hardware draining. FPGA FIFO faults, DMA failures, and framing errors remain
+fatal. Firmware 1.29 uses its version-specific FIFO status policy; V30 uses the
+restored V27 legacy policy. V29/V30 Direct-XDMA RF TX stays inhibited until a
+separate dummy-load qualification explicitly advances that safety gate.
+
 ## Same-Host P2 Port Map
 
 | Traffic              | Direction        | Port  |

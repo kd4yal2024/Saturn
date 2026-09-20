@@ -5,6 +5,26 @@ All notable changes from the hardened app convergence pass are documented here.
 This changelog originated under `P3_app` and now follows the converged
 `P2_app` implementation.
 
+## [2026-09-13] V30 FPGA ADC Episode Telemetry
+
+### Changed
+
+- Incremented the P2 application version from 51 to 52. This version adds
+  telemetry only; the speaker refill and batching policy remains unchanged.
+- Added a read-only, marker-gated V30 ADC sampler that rejects incoherent host
+  reads if the FPGA snapshot generation changes during the register sequence.
+- Published per-ADC boot-lifetime physical episode count, total high clocks,
+  longest episode, latest/current episode duration and peak, active/valid
+  state, and the 122.88 MHz observation clock under `gauges.fpga_adc_v30`.
+
+### Verified
+
+- Mocked register tests cover firmware gating, marker mismatch, coherent
+  decoding, bounded retries, read-only behavior, and the JSON field/unit
+  contract.
+- The RTL regression distinguishes separate high intervals from repeated
+  reads during one sustained high interval and retains the V29 legacy map.
+
 ## [2026-09-13] Speaker Pacing Diagnostics
 
 ### Added

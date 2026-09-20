@@ -5,6 +5,7 @@ use std::net::TcpStream;
 use std::os::fd::AsRawFd;
 #[cfg(target_os = "linux")]
 use std::os::raw::{c_int, c_ulong};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -21,6 +22,11 @@ pub(crate) enum OutboundMessage {
     SafetyText(String),
     Close,
     IqFrame {
+        receiver: u32,
+        sample_rate: u32,
+        iq_samples: Vec<f32>,
+    },
+    FullRateIqFrame {
         receiver: u32,
         sample_rate: u32,
         iq_samples: Vec<f32>,
@@ -44,6 +50,7 @@ pub(crate) enum OutboundClass {
     Safety,
     Control,
     Audio,
+    FullRateIq,
     Display,
 }
 
@@ -51,10 +58,15 @@ impl OutboundClass {
     pub(crate) fn records_enqueue_to_write_latency(self) -> bool {
         matches!(self, Self::Safety | Self::Control)
     }
+}
 
-    pub(crate) fn is_never_drop(self) -> bool {
-        matches!(self, Self::Safety)
-    }
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum IqDropReason {
+    QueueOverflow = 0,
+    RequeueOverflow = 1,
+    SendError = 2,
+    FlushError = 3,
+    ConnectionClosed = 4,
 }
 
 impl OutboundMessage {
@@ -64,6 +76,7 @@ impl OutboundMessage {
             Self::SafetyText(_) => OutboundClass::Safety,
             Self::Text(_) => OutboundClass::Control,
             Self::AudioFrame { .. } => OutboundClass::Audio,
+            Self::FullRateIqFrame { .. } => OutboundClass::FullRateIq,
             Self::IqFrame { .. } | Self::TxIqFrame { .. } => OutboundClass::Display,
         }
     }
@@ -72,7 +85,9 @@ impl OutboundMessage {
         match self {
             Self::Close => 0,
             Self::Text(text) | Self::SafetyText(text) => text.len(),
-            Self::IqFrame { iq_samples, .. } | Self::TxIqFrame { iq_samples, .. } => {
+            Self::IqFrame { iq_samples, .. }
+            | Self::FullRateIqFrame { iq_samples, .. }
+            | Self::TxIqFrame { iq_samples, .. } => {
                 64 + iq_samples.len() * std::mem::size_of::<f32>()
             }
             Self::AudioFrame { audio_samples, .. } => {
@@ -118,6 +133,9 @@ pub(crate) struct QueuedOutbound {
     pub(crate) enqueued_at: Instant,
     pub(crate) estimated_bytes: usize,
     pub(crate) audio_frames: usize,
+    // Text is immutable while queued (including requeue). Parse once instead
+    // of allocating a key for every existing item on every queue scan.
+    control_key: Option<String>,
 }
 
 impl QueuedOutbound {
@@ -125,12 +143,14 @@ impl QueuedOutbound {
         let class = message.class();
         let estimated_bytes = message.estimated_bytes();
         let audio_frames = message.audio_frame_count();
+        let control_key = control_coalesce_key(&message);
         Self {
             message,
             class,
             enqueued_at: Instant::now(),
             estimated_bytes,
             audio_frames,
+            control_key,
         }
     }
 }
@@ -184,7 +204,7 @@ impl ClientSchedulerStats {
         match class {
             OutboundClass::Safety => inner.safety_latencies_us.push(latency_us),
             OutboundClass::Control => inner.control_latencies_us.push(latency_us),
-            OutboundClass::Audio | OutboundClass::Display => {}
+            OutboundClass::Audio | OutboundClass::FullRateIq | OutboundClass::Display => {}
         }
     }
 
@@ -255,11 +275,128 @@ impl ClientSchedulerStats {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct FullRateIqTransportSnapshot {
+    pub(crate) drops_by_reason: [u64; 5],
+    pub(crate) last_drop_epoch_ms: u64,
+    pub(crate) in_flight: u64,
+    pub(crate) enqueued_deliveries_total: u64,
+    pub(crate) written_deliveries_total: u64,
+    pub(crate) dropped_deliveries_total: u64,
+    pub(crate) dropped_deliveries_interval: u64,
+    pub(crate) queue_high_watermark: u64,
+    pub(crate) stall_max_us: [u64; 4],
+}
+
+#[derive(Default, Debug)]
+pub(crate) struct FullRateIqTransportStats {
+    drops_by_reason: [AtomicU64; 5],
+    last_drop_epoch_ms: AtomicU64,
+    last_drop_log_ms: AtomicU64,
+    in_flight: AtomicU64,
+    enqueued_deliveries_total: AtomicU64,
+    written_deliveries_total: AtomicU64,
+    dropped_deliveries_total: AtomicU64,
+    dropped_deliveries_interval: AtomicU64,
+    queue_high_watermark: AtomicU64,
+    stall_max_us: [AtomicU64; 4],
+    last_stall_log_ms: AtomicU64,
+}
+
+impl FullRateIqTransportStats {
+    // Process-lifetime wall-time maxima, shared across clients. These include
+    // descheduling; they are not CPU time or end-to-end delivery latency.
+    fn record_stall_timing(&self, kind: usize, elapsed: Duration) {
+        let us = elapsed.as_micros().min(u128::from(u64::MAX)) as u64;
+        self.stall_max_us[kind].fetch_max(us, Ordering::Relaxed);
+        if us < 50_000 {
+            return;
+        }
+        let epoch_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+        let previous = self.last_stall_log_ms.load(Ordering::Relaxed);
+        if epoch_ms.saturating_sub(previous) >= 1000
+            && self
+                .last_stall_log_ms
+                .compare_exchange(previous, epoch_ms, Ordering::Relaxed, Ordering::Relaxed)
+                .is_ok()
+        {
+            let phase = [
+                "iq_queue_wait",
+                "iq_pending",
+                "writer_loop_gap",
+                "socket_call",
+            ][kind];
+            eprintln!("saturn-bridge: transport stall observation phase={phase} elapsed_us={us} epoch_ms={epoch_ms} (wall time; logs limited to 1/s)");
+        }
+    }
+
+    fn record_enqueued(&self, queue_depth: usize) {
+        self.enqueued_deliveries_total
+            .fetch_add(1, Ordering::Relaxed);
+        self.queue_high_watermark
+            .fetch_max(queue_depth as u64, Ordering::Relaxed);
+    }
+
+    fn record_written(&self) {
+        self.written_deliveries_total
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn record_dropped(&self, count: u64, reason: IqDropReason) {
+        if count == 0 {
+            return;
+        }
+        let epoch_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+        self.drops_by_reason[reason as usize].fetch_add(count, Ordering::Relaxed);
+        self.last_drop_epoch_ms
+            .fetch_max(epoch_ms, Ordering::Relaxed);
+        // Keep exact counters, but bound logging during a sustained overflow.
+        let last_log = self.last_drop_log_ms.load(Ordering::Relaxed);
+        if epoch_ms.saturating_sub(last_log) >= 1000
+            && self
+                .last_drop_log_ms
+                .compare_exchange(last_log, epoch_ms, Ordering::Relaxed, Ordering::Relaxed)
+                .is_ok()
+        {
+            eprintln!("saturn-bridge: IQ delivery drop reason={reason:?} count={count} epoch_ms={epoch_ms} (logs limited to 1/s; counters exact)");
+        }
+        self.dropped_deliveries_total
+            .fetch_add(count, Ordering::Relaxed);
+        self.dropped_deliveries_interval
+            .fetch_add(count, Ordering::Relaxed);
+    }
+
+    pub(crate) fn snapshot_and_drain_interval(&self) -> FullRateIqTransportSnapshot {
+        FullRateIqTransportSnapshot {
+            drops_by_reason: std::array::from_fn(|i| {
+                self.drops_by_reason[i].load(Ordering::Relaxed)
+            }),
+            last_drop_epoch_ms: self.last_drop_epoch_ms.load(Ordering::Relaxed),
+            in_flight: self.in_flight.load(Ordering::Relaxed),
+            enqueued_deliveries_total: self.enqueued_deliveries_total.load(Ordering::Relaxed),
+            written_deliveries_total: self.written_deliveries_total.load(Ordering::Relaxed),
+            dropped_deliveries_total: self.dropped_deliveries_total.load(Ordering::Relaxed),
+            dropped_deliveries_interval: self
+                .dropped_deliveries_interval
+                .swap(0, Ordering::Relaxed),
+            queue_high_watermark: self.queue_high_watermark.load(Ordering::Relaxed),
+            stall_max_us: std::array::from_fn(|i| self.stall_max_us[i].load(Ordering::Relaxed)),
+        }
+    }
+}
+
 #[derive(Debug)]
 pub(crate) struct OutboundQueues {
     pub(crate) safety: VecDeque<QueuedOutbound>,
     pub(crate) control: VecDeque<QueuedOutbound>,
     pub(crate) audio: VecDeque<QueuedOutbound>,
+    pub(crate) full_rate_iq: VecDeque<QueuedOutbound>,
     pub(crate) display: Option<QueuedOutbound>,
     pub(crate) queued_bytes: usize,
     pub(crate) audio_queued_frames: usize,
@@ -273,6 +410,7 @@ impl Default for OutboundQueues {
             safety: VecDeque::new(),
             control: VecDeque::new(),
             audio: VecDeque::new(),
+            full_rate_iq: VecDeque::new(),
             display: None,
             queued_bytes: 0,
             audio_queued_frames: 0,
@@ -286,13 +424,21 @@ impl Default for OutboundQueues {
 pub(crate) struct ClientOutbound {
     pub(crate) queues: Mutex<OutboundQueues>,
     pub(crate) stats: ClientSchedulerStats,
+    full_rate_iq_stats: Arc<FullRateIqTransportStats>,
 }
 
 impl ClientOutbound {
     pub(crate) fn new() -> Arc<Self> {
+        Self::new_with_full_rate_iq_stats(Arc::new(FullRateIqTransportStats::default()))
+    }
+
+    pub(crate) fn new_with_full_rate_iq_stats(
+        full_rate_iq_stats: Arc<FullRateIqTransportStats>,
+    ) -> Arc<Self> {
         Arc::new(Self {
             queues: Mutex::new(OutboundQueues::default()),
             stats: ClientSchedulerStats::default(),
+            full_rate_iq_stats,
         })
     }
 
@@ -346,10 +492,12 @@ impl ClientOutbound {
                 }
             }
             OutboundClass::Control => {
-                if let Some(key) = control_coalesce_key(&item.message) {
-                    if let Some(position) = queues.control.iter().position(|queued| {
-                        control_coalesce_key(&queued.message) == Some(key.clone())
-                    }) {
+                if let Some(key) = item.control_key.as_ref() {
+                    if let Some(position) = queues
+                        .control
+                        .iter()
+                        .position(|queued| queued.control_key.as_ref() == Some(key))
+                    {
                         let old = std::mem::replace(&mut queues.control[position], item);
                         queues.queued_bytes = queues
                             .queued_bytes
@@ -377,6 +525,21 @@ impl ClientOutbound {
             }
             OutboundClass::Audio => {
                 dropped += self.enqueue_audio_locked(&mut queues, item);
+            }
+            OutboundClass::FullRateIq => {
+                while queues.full_rate_iq.len() >= MAX_FULL_RATE_IQ_QUEUE_MESSAGES {
+                    let Some(old) = queues.full_rate_iq.pop_front() else {
+                        break;
+                    };
+                    queues.queued_bytes = queues.queued_bytes.saturating_sub(old.estimated_bytes);
+                    dropped += 1;
+                    self.full_rate_iq_stats
+                        .record_dropped(1, IqDropReason::QueueOverflow);
+                }
+                queues.queued_bytes = queues.queued_bytes.saturating_add(item.estimated_bytes);
+                queues.full_rate_iq.push_back(item);
+                self.full_rate_iq_stats
+                    .record_enqueued(queues.full_rate_iq.len());
             }
             OutboundClass::Display => {
                 if let Some(old) = queues.display.replace(item) {
@@ -440,6 +603,8 @@ impl ClientOutbound {
                 queues.audio_queued_frames =
                     queues.audio_queued_frames.saturating_sub(item.audio_frames);
                 Some(item)
+            } else if let Some(item) = queues.full_rate_iq.pop_front() {
+                Some(item)
             } else {
                 queues.display.take()
             }
@@ -476,6 +641,17 @@ impl ClientOutbound {
                     queues.audio_queued_frames.saturating_add(item.audio_frames);
                 queues.audio.push_front(item);
             }
+            OutboundClass::FullRateIq => {
+                queues.full_rate_iq.push_front(item);
+                while queues.full_rate_iq.len() > MAX_FULL_RATE_IQ_QUEUE_MESSAGES {
+                    let Some(old) = queues.full_rate_iq.pop_back() else {
+                        break;
+                    };
+                    queues.queued_bytes = queues.queued_bytes.saturating_sub(old.estimated_bytes);
+                    self.full_rate_iq_stats
+                        .record_dropped(1, IqDropReason::RequeueOverflow);
+                }
+            }
             OutboundClass::Display => {
                 if let Some(old) = queues.display.replace(item) {
                     queues.queued_bytes = queues.queued_bytes.saturating_sub(old.estimated_bytes);
@@ -486,9 +662,10 @@ impl ClientOutbound {
         self.stats.record_high_watermark(queues.queued_bytes);
     }
 
-    pub(crate) fn record_bulk_send_drop(&self, class: OutboundClass) {
+    pub(crate) fn record_bulk_send_drop(&self, class: OutboundClass, reason: IqDropReason) {
         match class {
             OutboundClass::Audio => self.stats.record_audio_dropped(1),
+            OutboundClass::FullRateIq => self.full_rate_iq_stats.record_dropped(1, reason),
             OutboundClass::Display => self.stats.record_display_dropped(),
             OutboundClass::Control => self.stats.record_control_dropped(),
             OutboundClass::Safety => {}
@@ -496,6 +673,9 @@ impl ClientOutbound {
     }
 
     pub(crate) fn record_write(&self, class: OutboundClass, latency: Duration) {
+        if class == OutboundClass::FullRateIq {
+            self.full_rate_iq_stats.record_written();
+        }
         self.stats.record_write(class, latency);
     }
 
@@ -514,11 +694,24 @@ impl ClientOutbound {
     pub(crate) fn queued_bytes(&self) -> u64 {
         self.queues.lock_unpoisoned().queued_bytes as u64
     }
+
+    pub(crate) fn full_rate_iq_queue_depth(&self) -> u64 {
+        self.queues.lock_unpoisoned().full_rate_iq.len() as u64
+    }
+}
+
+impl Drop for ClientOutbound {
+    fn drop(&mut self) {
+        let pending = self.queues.lock_unpoisoned().full_rate_iq.len() as u64;
+        self.full_rate_iq_stats
+            .record_dropped(pending, IqDropReason::ConnectionClosed);
+    }
 }
 
 pub(crate) const MAX_SAFETY_QUEUE_MESSAGES: usize = 16;
 pub(crate) const MAX_CONTROL_QUEUE_MESSAGES: usize = 256;
 pub(crate) const MAX_CONTROL_QUEUE_BYTES: usize = 256 * 1024;
+pub(crate) const MAX_FULL_RATE_IQ_QUEUE_MESSAGES: usize = 4;
 
 fn safety_coalesce_key(message: &OutboundMessage) -> Option<String> {
     match message {
@@ -653,7 +846,15 @@ pub(crate) fn queued_bytes_without_audio(queues: &OutboundQueues) -> usize {
         .as_ref()
         .map(|item| item.estimated_bytes)
         .unwrap_or(0);
-    safety.saturating_add(control).saturating_add(display)
+    let full_rate_iq = queues
+        .full_rate_iq
+        .iter()
+        .map(|item| item.estimated_bytes)
+        .sum::<usize>();
+    safety
+        .saturating_add(control)
+        .saturating_add(full_rate_iq)
+        .saturating_add(display)
 }
 
 pub(crate) fn percentile_us(samples: &mut [u64], percentile: usize) -> u64 {
@@ -707,7 +908,9 @@ pub(crate) fn client_wants_outbound_message(
         OutboundMessage::Text(_) | OutboundMessage::SafetyText(_) => {
             lane != Some(SplitSocketKind::Media)
         }
-        OutboundMessage::IqFrame { .. } | OutboundMessage::TxIqFrame { .. } => {
+        OutboundMessage::IqFrame { .. }
+        | OutboundMessage::FullRateIqFrame { .. }
+        | OutboundMessage::TxIqFrame { .. } => {
             lane != Some(SplitSocketKind::Control)
                 && client.state.iq_stream_enabled
                 && !tx_media_priority_active
@@ -740,8 +943,160 @@ pub(crate) fn tcp_outq_bytes(_stream: &TcpStream) -> io::Result<usize> {
     Ok(0)
 }
 
-pub(crate) fn send_outbound(
-    websocket: &mut tungstenite::WebSocket<std::net::TcpStream>,
+// At most one library-owned message is outstanding per socket. A successful
+// flush means handed to the transport, not acknowledged by the browser.
+pub(crate) struct BufferedSender {
+    outbound: Arc<ClientOutbound>,
+    pending: Option<QueuedOutbound>,
+    pending_since: Option<Instant>,
+    general_drop_count: Option<Arc<AtomicU64>>,
+}
+
+impl BufferedSender {
+    pub(crate) fn new(outbound: Arc<ClientOutbound>) -> Self {
+        Self {
+            outbound,
+            pending: None,
+            pending_since: None,
+            general_drop_count: None,
+        }
+    }
+
+    pub(crate) fn with_drop_counter(outbound: Arc<ClientOutbound>, drops: Arc<AtomicU64>) -> Self {
+        let mut sender = Self::new(outbound);
+        sender.general_drop_count = Some(drops);
+        sender
+    }
+
+    pub(crate) fn is_pending(&self) -> bool {
+        self.pending.is_some()
+    }
+
+    pub(crate) fn record_writer_loop_gap(&self, elapsed: Duration) {
+        self.outbound
+            .full_rate_iq_stats
+            .record_stall_timing(2, elapsed);
+    }
+
+    fn observe_pending(&self) {
+        if self
+            .pending
+            .as_ref()
+            .is_some_and(|item| item.class == OutboundClass::FullRateIq)
+        {
+            if let Some(started) = self.pending_since {
+                self.outbound
+                    .full_rate_iq_stats
+                    .record_stall_timing(1, started.elapsed());
+            }
+        }
+    }
+
+    fn take_pending(&mut self) -> Option<QueuedOutbound> {
+        self.observe_pending();
+        let item = self.pending.take()?;
+        self.pending_since = None;
+        if item.class == OutboundClass::FullRateIq {
+            self.outbound
+                .full_rate_iq_stats
+                .in_flight
+                .fetch_sub(1, Ordering::Relaxed);
+        }
+        Some(item)
+    }
+
+    fn complete(&mut self) -> bool {
+        let Some(item) = self.take_pending() else {
+            return false;
+        };
+        self.outbound
+            .record_write(item.class, item.enqueued_at.elapsed());
+        matches!(item.message, OutboundMessage::Close)
+    }
+
+    fn fail(&mut self, reason: IqDropReason) {
+        if let Some(item) = self.take_pending() {
+            self.outbound.record_bulk_send_drop(item.class, reason);
+            if let Some(drops) = &self.general_drop_count {
+                drops.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+    }
+
+    pub(crate) fn send<S: io::Read + io::Write>(
+        &mut self,
+        ws: &mut tungstenite::WebSocket<S>,
+        item: QueuedOutbound,
+    ) -> Result<bool, WsError> {
+        assert!(
+            self.pending.is_none(),
+            "flush the library-owned frame before sending another"
+        );
+        if item.class == OutboundClass::FullRateIq {
+            self.outbound
+                .full_rate_iq_stats
+                .record_stall_timing(0, item.enqueued_at.elapsed());
+            self.outbound
+                .full_rate_iq_stats
+                .in_flight
+                .fetch_add(1, Ordering::Relaxed);
+        }
+        self.pending = Some(item);
+        self.pending_since = Some(Instant::now());
+        let started = Instant::now();
+        let result = send_outbound(ws, &self.pending.as_ref().unwrap().message);
+        self.outbound
+            .full_rate_iq_stats
+            .record_stall_timing(3, started.elapsed());
+        match result {
+            Ok(()) => Ok(self.complete()),
+            Err(WsError::Io(error)) if error.kind() == io::ErrorKind::WouldBlock => Ok(false),
+            Err(WsError::WriteBufferFull(_)) => {
+                // Unlike WouldBlock, the codec explicitly did not accept this
+                // message. It is safe to return it to the application queue.
+                let item = self.take_pending().unwrap();
+                self.outbound.requeue_front(item);
+                Err(WsError::Io(io::ErrorKind::WouldBlock.into()))
+            }
+            Err(error) => {
+                self.fail(IqDropReason::SendError);
+                Err(error)
+            }
+        }
+    }
+
+    pub(crate) fn flush<S: io::Read + io::Write>(
+        &mut self,
+        ws: &mut tungstenite::WebSocket<S>,
+    ) -> Result<bool, WsError> {
+        self.observe_pending();
+        let started = Instant::now();
+        let result = ws.flush();
+        self.outbound
+            .full_rate_iq_stats
+            .record_stall_timing(3, started.elapsed());
+        match result {
+            Ok(()) => Ok(self.complete()),
+            Err(WsError::Io(error)) if error.kind() == io::ErrorKind::WouldBlock => {
+                self.outbound.record_send_blocked(Duration::from_millis(2));
+                Ok(false)
+            }
+            Err(error) => {
+                self.fail(IqDropReason::FlushError);
+                Err(error)
+            }
+        }
+    }
+}
+
+impl Drop for BufferedSender {
+    fn drop(&mut self) {
+        self.fail(IqDropReason::ConnectionClosed);
+    }
+}
+
+pub(crate) fn send_outbound<S: io::Read + io::Write>(
+    websocket: &mut tungstenite::WebSocket<S>,
     message: &OutboundMessage,
 ) -> Result<(), WsError> {
     match message {
@@ -750,6 +1105,13 @@ pub(crate) fn send_outbound(
             websocket.send(Message::Text(text.clone().into()))
         }
         OutboundMessage::IqFrame {
+            receiver,
+            sample_rate,
+            iq_samples,
+        } => websocket.send(Message::Binary(
+            build_tci_iq_frame(*receiver, *sample_rate, iq_samples).into(),
+        )),
+        OutboundMessage::FullRateIqFrame {
             receiver,
             sample_rate,
             iq_samples,
@@ -773,5 +1135,140 @@ pub(crate) fn send_outbound(
             build_tci_audio_frame(*receiver, *sample_rate, *channels, audio_samples, *sequence)
                 .into(),
         )),
+    }
+}
+
+#[cfg(test)]
+mod control_key_tests {
+    use super::*;
+
+    #[test]
+    fn cached_control_scan_matches_original_scan_and_queue_order() {
+        let outbound = ClientOutbound::new();
+        let mut reference: VecDeque<OutboundMessage> = VecDeque::new();
+        for round in 0..4 {
+            let mut texts: Vec<String> = (0..280)
+                .map(|index| format!("rx_eq_band:0,{index},{round};"))
+                .collect();
+            texts.extend([
+                format!("vfo:0,0,{round};"),
+                format!("vfo:0,1,{round};"),
+                format!("rx_filter_band:0,50,{};", 3000 + round),
+                format!("rx_filter_band:0,100,{};", 3000 + round),
+                format!("tx_fault:0,watchdog,{round};"),
+                format!("remote_backpressure:{round};"),
+                format!("remote_tx_uplink:{round};"),
+                "vfo:0,0,1;vfo:0,1,2;".into(),
+                "ready;".into(),
+                "broken:".into(),
+                " : ; ".into(),
+                "  rx_volume:0,0,-10;  ".into(),
+                "rx_volume:0,0,-20".into(),
+            ]);
+            // Run the same snapshot again while it is still queued, exercising
+            // both replacements and count-limit eviction with the legacy scan.
+            texts.extend(texts.clone());
+            for text in texts {
+                let message = OutboundMessage::Text(text);
+                let key = control_coalesce_key(&message);
+                let position = key.as_ref().and_then(|key| {
+                    reference
+                        .iter()
+                        .position(|old| control_coalesce_key(old).as_ref() == Some(key))
+                });
+                let expected = if let Some(position) = position {
+                    reference[position] = message.clone();
+                    1
+                } else {
+                    reference.push_back(message.clone());
+                    if reference.len() > MAX_CONTROL_QUEUE_MESSAGES {
+                        reference.pop_front();
+                        1
+                    } else {
+                        0
+                    }
+                };
+                assert_eq!(outbound.enqueue(message), expected);
+            }
+            while let Some(expected) = reference.pop_front() {
+                let actual = outbound.next_message(true).unwrap();
+                assert_eq!(actual.control_key, control_coalesce_key(&expected));
+                match (actual.message, expected) {
+                    (OutboundMessage::Text(actual), OutboundMessage::Text(expected)) => {
+                        assert_eq!(actual, expected)
+                    }
+                    _ => panic!("control text changed class"),
+                }
+            }
+            assert!(outbound.next_message(true).is_none());
+            assert_eq!(outbound.queues.lock_unpoisoned().queued_bytes, 0);
+        }
+    }
+
+    #[test]
+    fn requeued_control_keeps_key_and_latest_replacement() {
+        let outbound = ClientOutbound::new();
+        outbound.enqueue(OutboundMessage::Text("vfo:0,0,7100000;".into()));
+        let item = outbound.next_message(true).unwrap();
+        let enqueued_at = item.enqueued_at;
+        outbound.requeue_front(item);
+        {
+            let queues = outbound.queues.lock_unpoisoned();
+            assert_eq!(queues.control[0].enqueued_at, enqueued_at);
+            assert_eq!(queues.control[0].control_key.as_deref(), Some("vfo:0,0"));
+        }
+        assert_eq!(
+            outbound.enqueue(OutboundMessage::Text("vfo:0,0,7200000;".into())),
+            1
+        );
+        let item = outbound.next_message(true).unwrap();
+        assert!(matches!(item.message, OutboundMessage::Text(text) if text == "vfo:0,0,7200000;"));
+        assert!(outbound.next_message(true).is_none());
+    }
+}
+
+#[cfg(test)]
+mod stall_timing_tests {
+    use super::*;
+
+    #[test]
+    fn maxima_survive_interval_drains_without_changing_delivery_counters() {
+        let stats = FullRateIqTransportStats::default();
+        for kind in 0..4 {
+            stats.record_stall_timing(kind, Duration::from_micros(100 + kind as u64));
+            stats.record_stall_timing(kind, Duration::from_micros(50));
+        }
+        for _ in 0..2 {
+            let snapshot = stats.snapshot_and_drain_interval();
+            assert_eq!(snapshot.stall_max_us, [100, 101, 102, 103]);
+            assert_eq!(snapshot.dropped_deliveries_total, 0);
+            assert_eq!(snapshot.written_deliveries_total, 0);
+        }
+    }
+
+    #[test]
+    fn pending_age_is_observable_before_completion_and_does_not_include_queue_wait() {
+        let stats = Arc::new(FullRateIqTransportStats::default());
+        let outbound = ClientOutbound::new_with_full_rate_iq_stats(stats.clone());
+        let mut item = QueuedOutbound::new(OutboundMessage::FullRateIqFrame {
+            receiver: 0,
+            sample_rate: 384_000,
+            iq_samples: vec![0.0, 0.0],
+        });
+        item.enqueued_at = Instant::now() - Duration::from_secs(1);
+        stats.in_flight.store(1, Ordering::Relaxed);
+        let mut sender = BufferedSender::new(outbound);
+        sender.pending = Some(item);
+        sender.pending_since = Some(Instant::now() - Duration::from_millis(60));
+        sender.observe_pending();
+        let snapshot = stats.snapshot_and_drain_interval();
+        assert!(snapshot.stall_max_us[1] >= 60_000);
+        assert_eq!(snapshot.stall_max_us[0], 0);
+        assert_eq!(snapshot.in_flight, 1);
+        assert_eq!(snapshot.dropped_deliveries_total, 0);
+        sender.take_pending().unwrap();
+        assert!(sender.pending_since.is_none());
+        assert_eq!(stats.snapshot_and_drain_interval().in_flight, 0);
+        assert_eq!(stats.snapshot_and_drain_interval().stall_max_us[0], 0);
     }
 }

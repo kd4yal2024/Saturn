@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Read-only P2 V51 / FPGA V29 RX soak collector. Uses only /p23_perf."""
+"""Read-only parameterized P2/FPGA RX soak collector. Uses only /p23_perf."""
 
 from __future__ import annotations
 
@@ -19,7 +19,8 @@ from pathlib import Path
 DEFAULT_ENDPOINT = "http://127.0.0.1:8080/p23_perf"
 DEFAULT_INTERVAL = 5.0
 DEFAULT_DURATION = 1800.0
-EXPECTED_BUILD_ID = 1446131968
+EXPECTED_V29_BUILD_ID = 0x56323900
+EXPECTED_V30_ADC_BUILD_ID = 0x56333000
 FIFO_DEPTHS = {"ddc": 16384, "duc": 4096, "mic": 256, "speaker": 1024}
 V29_CHANNELS = ("ddc", "duc", "mic", "speaker")
 PROFILES = ("controlled", "antenna")
@@ -93,7 +94,7 @@ def ddc_expectation(value: str) -> tuple[int, int, bool]:
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Collect a read-only P2 V51 / FPGA V29 RX soak. The controlled "
+            "Collect a read-only P2/FPGA RX soak. The controlled "
             "profile gates ADC overflow; the antenna profile records it without "
             "assigning speaker-test causality."
         )
@@ -102,6 +103,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--output", type=Path, required=True,
                         help="new or empty artifact directory")
     parser.add_argument("--endpoint", default=DEFAULT_ENDPOINT)
+    parser.add_argument("--expect-p2-version", type=int, default=51)
+    parser.add_argument("--expect-fpga-version", type=int, default=29)
+    parser.add_argument("--expect-bit-date", default="09122026",
+                        help="expected FPGA BIT date as MMDDYYYY hex digits")
     parser.add_argument("--duration", type=positive_float, default=DEFAULT_DURATION,
                         help="planned duration in seconds (default: 1800)")
     parser.add_argument("--interval", type=sample_interval, default=DEFAULT_INTERVAL,
@@ -204,6 +209,9 @@ def gate_violations(
     profile: str,
     expected_ddcs: tuple[tuple[int, int, bool], ...] = DEFAULT_DDC_EXPECTATIONS,
     endpoint_status: str | None = "ok",
+    expected_p2_version: int = 51,
+    expected_fpga_version: int = 29,
+    expected_bit_date: str = "09122026",
 ) -> list[str]:
     problems: list[str] = []
     if endpoint_status != "ok":
@@ -215,18 +223,19 @@ def gate_violations(
     fpga = app.get("fpga", {})
     state = app.get("state", {})
     v29 = deep_get(app, "gauges", "fpga_fifo_v29", default={})
+    v30 = deep_get(app, "gauges", "fpga_adc_v30", default={})
     xdma = perf.get("xdma", {})
     workload = perf.get("workload", {})
 
     checks = (
         (app.get("app") == "p2", "active application is not p2"),
-        (app.get("version") == 51, "P2 application version is not 51"),
+        (app.get("version") == expected_p2_version, f"P2 application version is not {expected_p2_version}"),
         (state.get("tx_mode") is False, "tx_mode became true"),
         (state.get("pure_signal_enabled") is False, "PureSignal became active"),
         (state.get("exit_requested") is False, "P2 exit was requested"),
         (state.get("thread_error") is False, "P2 reported a thread error"),
-        (fpga.get("firmware_version") == 29, "FPGA firmware is not V29"),
-        (fpga.get("date_code_hex") == "09122026", "FPGA BIT date changed"),
+        (fpga.get("firmware_version") == expected_fpga_version, f"FPGA firmware is not V{expected_fpga_version}"),
+        (fpga.get("date_code_hex") == expected_bit_date, "FPGA BIT date changed"),
         (fpga.get("fallback_config") is False, "FPGA fallback became active"),
         (fpga.get("all_clocks_present") is True, "an FPGA clock disappeared"),
         (
@@ -239,7 +248,7 @@ def gate_violations(
         (deep_get(xdma, "pcie", "current_link_speed") == "5.0 GT/s PCIe", "PCIe speed changed"),
         (deep_get(xdma, "pcie", "current_link_width") == "1", "PCIe width changed"),
         (v29.get("available") is True and v29.get("status") == "available", "fpga_fifo_v29 is not available"),
-        (v29.get("build_id") == EXPECTED_BUILD_ID, "fpga_fifo_v29 build ID changed"),
+        (v29.get("build_id") == EXPECTED_V29_BUILD_ID, "fpga_fifo_v29 build ID changed"),
         (v29.get("snapshot_valid") is True, "V29 occupancy snapshot became invalid"),
         (
             is_number(app.get("counters", {}).get("adc_overflow_events")),
@@ -257,6 +266,16 @@ def gate_violations(
     )
     problems.extend(message for ok, message in checks if not ok)
 
+    if expected_fpga_version >= 30:
+        v30_checks = (
+            (v30.get("available") is True and v30.get("status") == "available", "fpga_adc_v30 is not available"),
+            (v30.get("build_id") == EXPECTED_V30_ADC_BUILD_ID, "fpga_adc_v30 build ID changed"),
+            (v30.get("snapshot_valid") is True, "V30 ADC snapshot became invalid"),
+            (v30.get("clock_hz") == 122880000, "V30 ADC observation clock changed"),
+            (is_number(v30.get("snapshot_retry_failure_count")), "V30 ADC retry-failure counter is missing"),
+        )
+        problems.extend(message for ok, message in v30_checks if not ok)
+
     if profile == "controlled" and number(deep_get(app, "gauges", "adc", "overflow_bits")) != 0:
         problems.append("ADC overflow bits became nonzero")
 
@@ -273,6 +292,15 @@ def gate_violations(
         timeout_delta = number(v29.get("snapshot_timeout_count")) - number(deep_get(base_app, "gauges", "fpga_fifo_v29", "snapshot_timeout_count"))
         if timeout_delta != 0:
             problems.append(f"V29 snapshot timeout count changed by {timeout_delta}")
+        if expected_fpga_version >= 30:
+            retry_delta = number(v30.get("snapshot_retry_failure_count")) - number(deep_get(base_app, "gauges", "fpga_adc_v30", "snapshot_retry_failure_count"))
+            if retry_delta != 0:
+                problems.append(f"V30 ADC snapshot retry-failure count changed by {retry_delta}")
+            for adc_name in ("adc1", "adc2"):
+                for field in ("episode_count", "total_high_clocks", "longest_episode_clocks"):
+                    delta = number(deep_get(v30, adc_name, field)) - number(deep_get(base_app, "gauges", "fpga_adc_v30", adc_name, field))
+                    if delta < 0:
+                        problems.append(f"V30 {adc_name} {field} moved backward by {delta}")
         base_counters = base_app.get("counters", {})
         counters = app.get("counters", {})
         for name in gated_loss_counters(profile):
@@ -303,6 +331,12 @@ def gate_violations(
         advance = (int(new_generation) - int(old_generation)) & 0xFFFF
         if advance == 0 or advance >= 0x8000:
             problems.append(f"V29 occupancy snapshot generation did not advance ({old_generation} -> {new_generation})")
+        if expected_fpga_version >= 30:
+            old_adc_generation = number(deep_get(current(previous), "gauges", "fpga_adc_v30", "snapshot_generation"))
+            new_adc_generation = number(v30.get("snapshot_generation"))
+            adc_advance = (int(new_adc_generation) - int(old_adc_generation)) & 0xFFFF
+            if adc_advance == 0 or adc_advance >= 0x8000:
+                problems.append(f"V30 ADC snapshot generation did not advance ({old_adc_generation} -> {new_adc_generation})")
     return problems
 
 
@@ -488,6 +522,8 @@ def main(argv: list[str] | None = None) -> int:
             problems = gate_violations(
                 perf, baseline, previous, args.profile, args.expected_ddcs,
                 payload.get("status"),
+                args.expect_p2_version, args.expect_fpga_version,
+                args.expect_bit_date,
             )
             if problems:
                 failures.extend({"utc_timestamp": timestamp, "sample_index": index, "reason": reason} for reason in problems)
@@ -518,6 +554,8 @@ def main(argv: list[str] | None = None) -> int:
     }
     first_v29 = deep_get(first_app, "gauges", "fpga_fifo_v29", default={})
     last_v29 = deep_get(last_app, "gauges", "fpga_fifo_v29", default={})
+    first_v30 = deep_get(first_app, "gauges", "fpga_adc_v30", default={})
+    last_v30 = deep_get(last_app, "gauges", "fpga_adc_v30", default={})
     transitions = {
         channel: {
             "start": deep_get(first_v29, "event_transitions", channel),
@@ -536,7 +574,7 @@ def main(argv: list[str] | None = None) -> int:
     completed = not failures and len(records) == planned_samples and records[-1]["elapsed_seconds"] >= args.duration
     verdict = "PASS" if completed else "FAIL"
     summary = {
-        "test": "P2 V51 FPGA V29 read-only RX soak",
+        "test": f"P2 V{args.expect_p2_version} FPGA V{args.expect_fpga_version} read-only RX soak",
         "scope": "RX qualification only; no raw XDMA access and no accumulator clear",
         "overall_verdict": verdict,
         "artifact_directory": str(out),
@@ -580,10 +618,21 @@ def main(argv: list[str] | None = None) -> int:
         "captured_occupancy_at_or_beyond_depth": occupancy_at_or_beyond_depth,
         "counter_deltas": all_counter_deltas,
         "adc_observations": {
-            "classification": "sampled report clusters; not independent physical clip episodes",
+            "classification": "legacy sampled report clusters; not independent physical clip episodes",
             "gating": args.profile == "controlled",
             "report_count": all_counter_deltas.get("adc_overflow_events"),
             "sampled_report_clusters": adc_report_clusters,
+        },
+        "adc_physical_episodes_v30": {
+            "available": last_v30.get("available") is True,
+            "classification": "FPGA boot-lifetime low-to-high episode counters and 122.88 MHz high-clock durations",
+            "snapshot_generation_start": first_v30.get("snapshot_generation"),
+            "snapshot_generation_end": last_v30.get("snapshot_generation"),
+            "snapshot_retry_failure_count_start": first_v30.get("snapshot_retry_failure_count"),
+            "snapshot_retry_failure_count_end": last_v30.get("snapshot_retry_failure_count"),
+            "clock_hz": last_v30.get("clock_hz"),
+            "adc1": {"start": first_v30.get("adc1"), "end": last_v30.get("adc1")},
+            "adc2": {"start": first_v30.get("adc2"), "end": last_v30.get("adc2")},
         },
         "host_activity_increase_timestamps": activity_increases,
         "network_start": first_perf.get("network"), "network_end": last_perf.get("network"),
@@ -599,7 +648,7 @@ def main(argv: list[str] | None = None) -> int:
     atomic_json(out / "summary.json", summary)
 
     lines = [
-        "# P2 V51 / FPGA V29 Read-Only RX Soak", "",
+        f"# P2 V{args.expect_p2_version} / FPGA V{args.expect_fpga_version} Read-Only RX Soak", "",
         f"Overall verdict: **{verdict}**", "",
         f"- Validation profile: {args.profile}",
         f"- ADC policy: {summary['adc_gate_policy']}",
@@ -640,6 +689,18 @@ def main(argv: list[str] | None = None) -> int:
                 f"bits {item['sampled_overflow_bits']}; peaks "
                 f"ADC1={item['sampled_adc1_peak']}, ADC2={item['sampled_adc2_peak']}"
             )
+        if last_v30.get("available") is True:
+            lines += ["", "## V30 physical ADC overrange episodes", ""]
+            for adc_name in ("adc1", "adc2"):
+                before = first_v30.get(adc_name, {})
+                after = last_v30.get(adc_name, {})
+                episode_delta = number(after.get("episode_count")) - number(before.get("episode_count"))
+                high_delta = number(after.get("total_high_clocks")) - number(before.get("total_high_clocks"))
+                lines.append(
+                    f"- {adc_name.upper()}: episodes {before.get('episode_count')} -> {after.get('episode_count')} "
+                    f"(delta {episode_delta}); high clocks delta {high_delta}; longest {after.get('longest_episode_clocks')}; "
+                    f"latest {after.get('latest_episode_clocks')} clocks at peak {after.get('latest_episode_peak')}"
+                )
     lines += ["", "## Captured occupancy at or beyond configured depth", ""]
     if occupancy_at_or_beyond_depth:
         for item in occupancy_at_or_beyond_depth:

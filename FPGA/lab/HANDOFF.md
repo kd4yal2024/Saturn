@@ -4,6 +4,30 @@ Updated 2026-09-13. This file describes the V29 source and RX hardware
 qualification state on branch `fpga-v29-lab`. Historical V27/V28 investigation
 details remain available in Git history; they are not current release claims.
 
+## V30 development branch
+
+Branch `fpga-v30-adc-telemetry` advances the source identity to FPGA V30 and
+P2 V52 without changing the V29 signal path or the deferred speaker refill
+policy. It adds physical ADC overrange episode, high-clock duration, and
+associated peak telemetry so lightning/static bursts can be distinguished
+from repeated software observation of one sustained condition. The V30
+compatibility candidate also restores the complete V27 legacy FIFO boundary:
+read-to-clear behavior is retained and legacy bit 31 remains zero, matching the
+V27 block design where its monitor inputs were tied low. Almost-full and
+configured-capacity transitions remain in the extended event counters. No V30
+build, package, G2 load, or hardware qualification is claimed here until those
+gates are completed and recorded separately.
+
+The first V30 default-strategy implementation completed routing but failed the
+setup gate at WNS `-0.373 ns`; the worst path was entirely inside the generated
+XDMA PCIe receive-valid filter, with routing contributing 76% of its data-path
+delay. Reimplementing the same synthesized V30 netlist with
+`ExtraNetDelay_high` placement and `AggressiveExplore` physical optimization
+and routing passed at WNS `+0.109 ns`, WHS `+0.049 ns`, with zero DRC, unwaived
+CDC, or methodology critical findings. Those directives are now the V30 build
+defaults. PROM export additionally requires a clean, current, hash-matching
+successful-build manifest so a failed rebuild cannot package stale output.
+
 ## Current state
 
 - V29 is running on Jerry's G2 with P2 V51. Runtime inventory reports firmware

@@ -1076,7 +1076,7 @@ pub(crate) fn pin_current_thread(cpu: usize) -> Result<(), XdmaError> {
     };
     if result != 0 {
         return Err(XdmaError::Io {
-            action: "could not pin XDMA DUC probe to its dedicated CPU",
+            action: "could not pin XDMA real-time thread to its dedicated CPU",
             source: io::Error::last_os_error(),
         });
     }
@@ -1092,7 +1092,7 @@ pub(crate) fn enable_realtime_fifo(priority: i32) -> Result<(), XdmaError> {
     let result = unsafe { libc::sched_setscheduler(0, libc::SCHED_FIFO, &parameter) };
     if result != 0 {
         return Err(XdmaError::Io {
-            action: "could not enable SCHED_FIFO for XDMA DUC thread (run as root or configure LimitRTPRIO)",
+            action: "could not enable SCHED_FIFO for XDMA real-time thread (run as root or configure LimitRTPRIO)",
             source: io::Error::last_os_error(),
         });
     }
@@ -1108,7 +1108,7 @@ pub(crate) fn current_scheduler() -> Result<(&'static str, i32), XdmaError> {
         let result = libc::sched_getparam(0, &mut parameter);
         if policy == -1 || result != 0 {
             return Err(XdmaError::Io {
-                action: "could not query XDMA DUC probe scheduler",
+                action: "could not query XDMA real-time thread scheduler",
                 source: io::Error::last_os_error(),
             });
         }

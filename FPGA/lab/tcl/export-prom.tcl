@@ -14,9 +14,11 @@ set golden_bit [saturn_lab::env_or SATURN_GOLDEN_BIT \
     [file join $repo_dir FPGA multiboot_address_table saturn_top_wrapper_golden.bit]]
 set current_sha [string range [saturn_lab::git_value rev-parse HEAD] 0 7]
 set primary_bit [saturn_lab::env_or SATURN_PRIMARY_BIT \
-    [file join $repo_dir FPGA lab results vivado "saturn-v29-${current_sha}.bit"]]
+    [file join $repo_dir FPGA lab results vivado "saturn-v30-${current_sha}.bit"]]
+set build_manifest [saturn_lab::env_or SATURN_BUILD_MANIFEST \
+    [file join $repo_dir FPGA lab results vivado manifest.json]]
 set primary_bin [saturn_lab::env_or SATURN_PRIMARY_BIN \
-    [file join $repo_dir FPGA lab results vivado "saturn-primary-v29-${current_sha}.bin"]]
+    [file join $repo_dir FPGA lab results vivado "saturn-primary-v30-${current_sha}.bin"]]
 set timer1 [saturn_lab::env_or SATURN_TIMER1 \
     [file join $repo_dir FPGA multiboot_address_table timer1.bin]]
 set timer2 [saturn_lab::env_or SATURN_TIMER2 \
@@ -34,6 +36,46 @@ set primary_flash_limit 0x01300000
 foreach input [list $golden_bit $primary_bit $timer1 $timer2] {
     saturn_lab::require_file $input "configuration input"
 }
+saturn_lab::require_file $build_manifest "successful build manifest"
+
+# Refuse to package an old same-name bitstream after a failed build, a dirty
+# build, or a build from a different commit. The manifest is emitted only
+# after every implementation and routed-netlist quality gate passes.
+set manifest_stream [open $build_manifest r]
+set manifest_text [read $manifest_stream]
+close $manifest_stream
+foreach {label pattern} [list \
+    git_sha {"git_sha"[[:space:]]*:[[:space:]]*"([^"]+)"} \
+    git_dirty {"git_dirty"[[:space:]]*:[[:space:]]*(true|false)} \
+    firmware_version {"firmware_version"[[:space:]]*:[[:space:]]*([0-9]+)} \
+    artifact {"artifact"[[:space:]]*:[[:space:]]*"([^"]+)"} \
+    sha256 {"sha256"[[:space:]]*:[[:space:]]*"([0-9A-Fa-f]+)"}] {
+    if {![regexp $pattern $manifest_text -> value]} {
+        error "Build manifest is missing a valid $label field: $build_manifest"
+    }
+    set manifest_$label $value
+}
+set current_git_sha [saturn_lab::git_value rev-parse HEAD]
+if {$manifest_git_sha ne $current_git_sha} {
+    error "Build manifest commit is $manifest_git_sha; current commit is $current_git_sha"
+}
+if {$manifest_git_dirty ne "false"} {
+    error "Build manifest is dirty; refusing PROM export"
+}
+if {[saturn_lab::git_dirty]} {
+    error "Current Git worktree is dirty; refusing PROM export"
+}
+if {$manifest_firmware_version != 30} {
+    error "Build manifest firmware version is $manifest_firmware_version; expected 30"
+}
+if {$manifest_artifact ne [file tail $primary_bit]} {
+    error "Build manifest artifact is $manifest_artifact; selected primary bitstream is [file tail $primary_bit]"
+}
+set primary_bit_sha [saturn_lab::sha256 $primary_bit]
+if {[string tolower $manifest_sha256] ne [string tolower $primary_bit_sha]} {
+    error "Primary bitstream SHA256 is $primary_bit_sha; build manifest records $manifest_sha256"
+}
+puts "Build manifest gate: commit=$current_git_sha firmware=30 artifact=$manifest_artifact sha256=$primary_bit_sha clean=1"
 file mkdir [file dirname $output_bin]
 
 puts "Generating primary-slot BIN for load-FPGA: $primary_bin"
@@ -76,7 +118,7 @@ puts $stream "  \"created_utc\": \"[clock format [clock seconds] -gmt true -form
 puts $stream "  \"git_sha\": \"[saturn_lab::json_escape [saturn_lab::git_value rev-parse HEAD]]\","
 puts $stream "  \"git_dirty\": [saturn_lab::git_dirty],"
 puts $stream "  \"vivado\": \"[saturn_lab::json_escape [version -short]]\","
-puts $stream "  \"firmware_version\": 29,"
+puts $stream "  \"firmware_version\": 30,"
 puts $stream "  \"format\": \"bin\","
 puts $stream "  \"interface\": \"SPIx1\","
 puts $stream "  \"size_mbit\": 32,"

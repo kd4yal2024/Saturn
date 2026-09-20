@@ -77,6 +77,7 @@ typedef struct
   bool DieTempValid;
   float DieTempC;
   TFPGAFifoV29Snapshot FPGAFifoV29;
+  TFPGAADCV30Snapshot FPGAADCV30;
 } TP23PerfState;
 
 static const char *g_port_names[P23_PERF_MAX_PORTS] =
@@ -288,6 +289,57 @@ static const char *FPGAFifoV29StatusJSON(EFPGAFifoV29Status Status)
   }
 }
 
+static const char *FPGAADCV30StatusJSON(EFPGAADCV30Status Status)
+{
+  switch (Status)
+  {
+    case eFPGAADCV30Available:
+      return "available";
+    case eFPGAADCV30MarkerMismatch:
+      return "marker_mismatch";
+    default:
+      return "unsupported";
+  }
+}
+
+void P23PerfTelemetryWriteFPGAADCV30JSON(FILE *File, const TFPGAADCV30Snapshot *Snapshot)
+{
+  if ((File == NULL) || (Snapshot == NULL))
+    return;
+
+  fprintf(File,
+          "    \"fpga_adc_v30\": {\n"
+          "      \"available\": %s,\n"
+          "      \"status\": \"%s\",\n"
+          "      \"build_id\": %" PRIu32 ",\n"
+          "      \"snapshot_valid\": %s,\n"
+          "      \"snapshot_generation\": %" PRIu16 ",\n"
+          "      \"snapshot_retry_failure_count\": %" PRIu64 ",\n"
+          "      \"lifetime_scope\": \"fpga_boot\",\n"
+          "      \"duration_unit\": \"adc_clocks\",\n"
+          "      \"clock_hz\": %" PRIu32 ",\n"
+          "      \"adc1\": { \"episode_count\": %" PRIu32 ", \"total_high_clocks\": %" PRIu32 ", \"longest_episode_clocks\": %" PRIu32 ", \"latest_episode_clocks\": %" PRIu32 ", \"latest_episode_peak\": %" PRIu32 ", \"episode_active\": %s, \"episode_valid\": %s },\n"
+          "      \"adc2\": { \"episode_count\": %" PRIu32 ", \"total_high_clocks\": %" PRIu32 ", \"longest_episode_clocks\": %" PRIu32 ", \"latest_episode_clocks\": %" PRIu32 ", \"latest_episode_peak\": %" PRIu32 ", \"episode_active\": %s, \"episode_valid\": %s }\n"
+          "    },\n",
+          Snapshot->Available ? "true" : "false",
+          FPGAADCV30StatusJSON(Snapshot->Status),
+          Snapshot->BuildId,
+          Snapshot->SnapshotValid ? "true" : "false",
+          Snapshot->SnapshotGeneration,
+          Snapshot->SnapshotRetryFailureCount,
+          Snapshot->ClockHz,
+          Snapshot->EpisodeCount[0], Snapshot->TotalHighClocks[0],
+          Snapshot->LongestEpisodeClocks[0], Snapshot->LatestEpisodeClocks[0],
+          Snapshot->LatestEpisodePeak[0],
+          Snapshot->EpisodeActive[0] ? "true" : "false",
+          Snapshot->EpisodeValid[0] ? "true" : "false",
+          Snapshot->EpisodeCount[1], Snapshot->TotalHighClocks[1],
+          Snapshot->LongestEpisodeClocks[1], Snapshot->LatestEpisodeClocks[1],
+          Snapshot->LatestEpisodePeak[1],
+          Snapshot->EpisodeActive[1] ? "true" : "false",
+          Snapshot->EpisodeValid[1] ? "true" : "false");
+}
+
 void P23PerfTelemetryWriteFPGAFifoV29JSON(FILE *File, const TFPGAFifoV29Snapshot *Snapshot)
 {
   static const char *Names[FPGA_FIFO_V29_CHANNEL_COUNT] = {"ddc", "duc", "mic", "speaker"};
@@ -496,6 +548,16 @@ void P23PerfTelemetrySetFPGAFifoV29(const TFPGAFifoV29Snapshot *Snapshot)
 
   pthread_mutex_lock(&g_perf_mutex);
   g_perf_state.FPGAFifoV29 = *Snapshot;
+  pthread_mutex_unlock(&g_perf_mutex);
+}
+
+void P23PerfTelemetrySetFPGAADCV30(const TFPGAADCV30Snapshot *Snapshot)
+{
+  if (Snapshot == NULL)
+    return;
+
+  pthread_mutex_lock(&g_perf_mutex);
+  g_perf_state.FPGAADCV30 = *Snapshot;
   pthread_mutex_unlock(&g_perf_mutex);
 }
 
@@ -909,6 +971,7 @@ void P23PerfTelemetryMaybeWrite(void)
           Snapshot.SpeakerUnderGapActive ? "true" : "false");
 
   P23PerfTelemetryWriteSpeakerPacingJSON(File, &SpeakerPacingSnapshot);
+  P23PerfTelemetryWriteFPGAADCV30JSON(File, &Snapshot.FPGAADCV30);
   P23PerfTelemetryWriteFPGAFifoV29JSON(File, &Snapshot.FPGAFifoV29);
   fprintf(File, "  },\n");
 

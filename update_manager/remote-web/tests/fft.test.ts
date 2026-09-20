@@ -19,7 +19,7 @@ describe('FftProcessor', () => {
     const iq = new Float32Array(128);
     const result = fft.transform(iq);
     for (let i = 0; i < result.length; i += 1) {
-      expect(result[i]).toBeLessThan(0);
+      expect(result[i]).toBeCloseTo(-160, 4);
     }
   });
 
@@ -32,26 +32,23 @@ describe('FftProcessor', () => {
       iq[i * 2] = Math.cos(phase);
       iq[i * 2 + 1] = Math.sin(phase);
     }
-    // Run a few times to let smoothing settle
-    let result = fft.transform(iq);
-    result = fft.transform(iq);
-    result = fft.transform(iq);
+    const result = fft.transform(iq);
     const max = Math.max(...result);
     const min = Math.min(...result);
     expect(max).toBeGreaterThan(min + 10);
+    expect(result[size / 2 + 10]).toBeCloseTo(20 * Math.log10((size - 1) / (2 * size)), 3);
+    expect(fft.transform(iq)).toEqual(result);
   });
 
-  it('resetSmoothing clears previous bins', () => {
+  it('follows a tone-to-silence transition immediately without hidden averaging', () => {
     const fft = new FftProcessor(64);
     const iq = new Float32Array(128);
     for (let i = 0; i < 128; i++) iq[i] = 1.0;
     fft.transform(iq);
-    fft.resetSmoothing();
     const silence = new Float32Array(128);
     const result = fft.transform(silence);
-    // After reset, should not carry previous high values
     for (let i = 0; i < result.length; i++) {
-      expect(result[i]).toBeLessThan(-20);
+      expect(result[i]).toBeCloseTo(-160, 4);
     }
   });
 });

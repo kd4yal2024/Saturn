@@ -10,6 +10,16 @@ set impl_name [saturn_lab::env_or SATURN_IMPL_RUN impl_1_copy_1]
 set output_dir [file join $saturn_lab::results_dir vivado]
 file mkdir $output_dir
 
+# A failed rebuild must not leave the preceding successful manifest looking
+# current. Preserve it for diagnosis, but require this invocation to create a
+# new manifest before PROM export can proceed.
+set manifest_path [file join $output_dir manifest.json]
+if {[file isfile $manifest_path]} {
+    set previous_manifest [file join $output_dir manifest.previous.json]
+    file rename -force $manifest_path $previous_manifest
+    puts "Preserved preceding build manifest as $previous_manifest"
+}
+
 puts "Opening $project_file"
 open_project $project_file
 saturn_lab::ensure_managed_wrapper
@@ -17,7 +27,7 @@ saturn_lab::ensure_managed_wrapper
 # The host uses this constant as the public firmware revision.  Keep it tied to
 # the telemetry ABI implemented by this candidate instead of silently emitting
 # a new image that still advertises the legacy V27 contract.
-set expected_firmware_version 29
+set expected_firmware_version 30
 set firmware_version_ip [get_ips -quiet saturn_top_xlconstant_5_0]
 if {[llength $firmware_version_ip] != 1} {
     error "Expected one firmware-version IP saturn_top_xlconstant_5_0; found [llength $firmware_version_ip]"
@@ -26,7 +36,7 @@ set actual_firmware_version [get_property CONFIG.CONST_VAL $firmware_version_ip]
 if {$actual_firmware_version != $expected_firmware_version} {
     error "Firmware identity mismatch: expected $expected_firmware_version, found $actual_firmware_version"
 }
-puts "Firmware identity: version=$actual_firmware_version, USR_ACCESS date=09122026"
+puts "Firmware identity: version=$actual_firmware_version, USR_ACCESS date=09132026"
 
 set synth_run [saturn_lab::require_run $synth_name]
 set impl_run [saturn_lab::require_run $impl_name]
@@ -36,7 +46,7 @@ if {$reuse_synth ni {0 1}} {
     error "SATURN_REUSE_SYNTH must be 0 or 1"
 }
 
-set synth_identity "firmware_version=$expected_firmware_version\nusr_access=09122026"
+set synth_identity "firmware_version=$expected_firmware_version\nusr_access=09132026"
 set synth_identity_stamp [file join $output_dir synth-identity.txt]
 if {$reuse_synth} {
     if {![file isfile $synth_identity_stamp]} {
@@ -81,23 +91,35 @@ if {!$reuse_synth} {
     puts "Refreshing telemetry module references"
     update_module_reference $telemetry_module_refs
 }
-update_compile_order -fileset sources_1
-
-# Allow a timing-closure retry to select stronger implementation directives
-# while keeping the production defaults in the project. Vivado validates each
-# value when it is assigned, so misspelled or unsupported directives fail fast.
-foreach {environment property} {
-    SATURN_PLACE_DIRECTIVE STEPS.PLACE_DESIGN.ARGS.DIRECTIVE
-    SATURN_PHYSOPT_DIRECTIVE STEPS.PHYS_OPT_DESIGN.ARGS.DIRECTIVE
-    SATURN_ROUTE_DIRECTIVE STEPS.ROUTE_DESIGN.ARGS.DIRECTIVE
-    SATURN_POST_ROUTE_PHYSOPT_DIRECTIVE STEPS.POST_ROUTE_PHYS_OPT_DESIGN.ARGS.DIRECTIVE
-} {
-    set directive [saturn_lab::env_or $environment ""]
-    if {$directive ne ""} {
-        puts "Setting $property=$directive on $impl_name"
-        set_property $property $directive $impl_run
-    }
+if {!$reuse_synth} {
+    update_compile_order -fileset sources_1
+} else {
+    # A completed synthesis checkpoint already fixes the compile order. Older
+    # Vivado projects can stall while refreshing it during a reuse-only pass,
+    # even though no synthesis will run.
+    puts "Reusing the synthesized compile order"
 }
+
+# V30's first default-strategy route missed setup timing by 0.373 ns in the
+# generated XDMA PCIe receive-valid filter. The same synthesized netlist met
+# timing with the strategy below (WNS 0.109 ns, WHS 0.049 ns). Make that
+# proven strategy the reproducible V30 default while retaining explicit
+# environment overrides for controlled implementation experiments. Vivado
+# validates every value when assigned, so invalid directives fail fast.
+set strategy_path [file join $output_dir implementation-strategy.txt]
+set strategy_stream [open $strategy_path w]
+foreach {environment property production_default} {
+    SATURN_PLACE_DIRECTIVE STEPS.PLACE_DESIGN.ARGS.DIRECTIVE ExtraNetDelay_high
+    SATURN_PHYSOPT_DIRECTIVE STEPS.PHYS_OPT_DESIGN.ARGS.DIRECTIVE AggressiveExplore
+    SATURN_ROUTE_DIRECTIVE STEPS.ROUTE_DESIGN.ARGS.DIRECTIVE AggressiveExplore
+    SATURN_POST_ROUTE_PHYSOPT_DIRECTIVE STEPS.POST_ROUTE_PHYS_OPT_DESIGN.ARGS.DIRECTIVE AggressiveExplore
+} {
+    set directive [saturn_lab::env_or $environment $production_default]
+    puts "Implementation directive: $environment=$directive ($property on $impl_name)"
+    puts $strategy_stream "$environment\t$directive\t$property"
+    set_property $property $directive $impl_run
+}
+close $strategy_stream
 
 if {[saturn_lab::env_or SATURN_SKIP_RESET 0] ne "1"} {
     reset_run $impl_run
@@ -132,8 +154,15 @@ if {!$reuse_synth} {
     close $stamp_stream
 }
 
-launch_runs $impl_run -to_step write_bitstream -jobs [saturn_lab::jobs]
-wait_on_run $impl_run
+if {$reuse_synth && [saturn_lab::env_or SATURN_SKIP_RESET 0] eq "1"} {
+    # Do not relaunch an already-completed implementation during an explicit
+    # reuse-only pass. Vivado 2023.1 can stall while re-evaluating the old
+    # project's run dependencies even though there is no work to schedule.
+    puts "Reusing completed implementation run $impl_name"
+} else {
+    launch_runs $impl_run -to_step write_bitstream -jobs [saturn_lab::jobs]
+    wait_on_run $impl_run
+}
 saturn_lab::assert_run_complete $impl_run
 
 open_run $impl_run
@@ -153,10 +182,14 @@ if {[file isfile $preferred]} {
     set bitstream [lindex $candidates 0]
 }
 
-set short_sha [string range [saturn_lab::git_value rev-parse HEAD] 0 7]
+set build_git_sha [saturn_lab::git_value rev-parse HEAD]
+if {![regexp {^[0-9A-Fa-f]{40}$} $build_git_sha]} {
+    error "Cannot determine the 40-character Git commit for the bitstream artifact"
+}
+set short_sha [string range $build_git_sha 0 7]
 set artifact [file join $output_dir "saturn-v${expected_firmware_version}-${short_sha}.bit"]
 file copy -force $bitstream $artifact
-saturn_lab::write_manifest [file join $output_dir manifest.json] $artifact \
+saturn_lab::write_manifest $manifest_path $artifact \
     $vivado_version $synth_name $impl_name $expected_firmware_version
 
 puts "SATURN_LAB_BUILD_OK artifact=$artifact"

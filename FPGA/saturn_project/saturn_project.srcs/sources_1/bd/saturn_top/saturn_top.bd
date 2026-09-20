@@ -8694,7 +8694,7 @@
             "inst_hier_path": "PCIe/xlconstant_swversion",
             "parameters": {
               "CONST_VAL": {
-                "value": "29"
+                "value": "30"
               },
               "CONST_WIDTH": {
                 "value": "16"

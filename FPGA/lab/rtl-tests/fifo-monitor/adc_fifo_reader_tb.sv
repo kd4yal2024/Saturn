@@ -39,6 +39,20 @@ module adc_fifo_reader_tb;
     end
   endtask
 
+  task automatic drive_adc1_episode(input integer clocks, input [15:0] first_sample,
+                                    input [15:0] peak_sample);
+    integer index;
+    begin
+      @(negedge clk); overflows[0] = 1'b1; adc1 = first_sample;
+      for (index = 1; index < clocks; index = index + 1) begin
+        @(negedge clk);
+        adc1 = (index == clocks - 1) ? peak_sample : first_sample;
+      end
+      @(negedge clk); overflows[0] = 1'b0; adc1 = 0;
+      @(posedge clk);
+    end
+  endtask
+
   reg [31:0] value, held_value;
   integer code;
   integer expected_magnitude;
@@ -103,7 +117,81 @@ module adc_fifo_reader_tb;
     if (value[1] !== 1'b1)
       $fatal(1, "event after snapshot boundary was lost: %h", value);
 
-    $display("SATURN_ADC_TELEMETRY_OK adc1=32768 adc2=32767");
+    // Start a clean V30 measurement interval, then prove that two physical
+    // high intervals are two episodes regardless of status-read frequency.
+    @(negedge clk); resetn = 0; adc1 = 0; adc2 = 0; overflows = 0;
+    repeat (3) @(posedge clk);
+    @(negedge clk); resetn = 1;
+    drive_adc1_episode(3, 16'd1000, 16'd5000);
+    axi_read(16'h00, value);
+    if (value[0] !== 1'b1) $fatal(1, "first episode legacy status %h", value);
+    drive_adc1_episode(5, 16'd2000, 16'h8000);
+    axi_read(16'h00, value);
+    if (value[0] !== 1'b1) $fatal(1, "second episode legacy status %h", value);
+    axi_read(16'h20, value);
+    if (value !== 32'h56333000) $fatal(1, "V30 marker %h", value);
+    axi_read(16'h24, value);
+    if (value !== 32'd2) $fatal(1, "ADC1 episode count %0d", value);
+    axi_read(16'h2c, value);
+    if (value !== 32'd8) $fatal(1, "ADC1 total high clocks %0d", value);
+    axi_read(16'h34, value);
+    if (value !== 32'd5) $fatal(1, "ADC1 longest episode %0d", value);
+    axi_read(16'h3c, value);
+    if (value !== 32'd5) $fatal(1, "ADC1 latest episode length %0d", value);
+    axi_read(16'h44, value);
+    if (value !== 32'd32768) $fatal(1, "ADC1 latest episode peak %0d", value);
+    axi_read(16'h4c, value);
+    if (value !== 32'h00000100) $fatal(1, "ADC1 completed state %h", value);
+    axi_read(16'h50, value);
+    if (value !== 32'd122880000) $fatal(1, "episode clock frequency %0d", value);
+
+    // Snapshot twice during one sustained ADC2 condition. The count stays at
+    // one while the current duration and peak continue to advance.
+    @(negedge clk); overflows[1] = 1'b1; adc2 = 16'd7000;
+    repeat (4) @(posedge clk);
+    axi_read(16'h00, value);
+    axi_read(16'h28, value);
+    if (value !== 32'd1) $fatal(1, "active ADC2 episode count %0d", value);
+    axi_read(16'h40, value);
+    if (value < 32'd4) $fatal(1, "active ADC2 duration too short %0d", value);
+    axi_read(16'h48, value);
+    if (value !== 32'd7000) $fatal(1, "active ADC2 peak %0d", value);
+    axi_read(16'h4c, value);
+    if ((value & 32'h00000202) !== 32'h00000202) $fatal(1, "ADC2 active state %h", value);
+    @(negedge clk); adc2 = 16'd30000;
+    repeat (3) @(posedge clk);
+    axi_read(16'h00, value);
+    axi_read(16'h28, value);
+    if (value !== 32'd1) $fatal(1, "status reads split sustained ADC2 episode %0d", value);
+    axi_read(16'h48, value);
+    if (value !== 32'd30000) $fatal(1, "active ADC2 peak did not advance %0d", value);
+    @(negedge clk); overflows[1] = 1'b0; adc2 = 0;
+    repeat (2) @(posedge clk);
+    axi_read(16'h00, value);
+    axi_read(16'h28, value);
+    if (value !== 32'd1) $fatal(1, "completed ADC2 episode count %0d", value);
+    axi_read(16'h40, value);
+    if (value < 32'd7) $fatal(1, "completed ADC2 duration too short %0d", value);
+    axi_read(16'h48, value);
+    if (value !== 32'd30000) $fatal(1, "completed ADC2 peak %0d", value);
+    axi_read(16'h4c, value);
+    if (value !== 32'h00000300) $fatal(1, "ADC2 completed state %h", value);
+
+    // Boot-lifetime counters stop at all ones rather than wrapping and
+    // falsely looking like an FPGA reset.
+    @(negedge clk);
+    dut.ADC1episodecountreg = 32'hfffffffe;
+    dut.ADC1totalhighreg = 32'hfffffffe;
+    dut.ADC1overflowprev = 1'b0;
+    overflows[0] = 1'b1;
+    repeat (2) @(posedge clk);
+    axi_read(16'h00, value);
+    axi_read(16'h24, value);
+    if (value !== 32'hffffffff) $fatal(1, "ADC1 episode count did not saturate %h", value);
+    axi_read(16'h2c, value);
+    if (value !== 32'hffffffff) $fatal(1, "ADC1 total clocks did not saturate %h", value);
+
+    $display("SATURN_ADC_TELEMETRY_OK adc1=32768 adc2=32767 v30_episodes=ok");
     $finish;
   end
 endmodule

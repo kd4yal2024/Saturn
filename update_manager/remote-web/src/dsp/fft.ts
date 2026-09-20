@@ -6,7 +6,6 @@ export class FftProcessor {
   private sinTable: Float32Array;
   private scratchRe: Float32Array;
   private scratchIm: Float32Array;
-  private prevBins: Float32Array;
 
   constructor(size: number) {
     this.size = size;
@@ -16,7 +15,6 @@ export class FftProcessor {
     this.sinTable = new Float32Array(size / 2);
     this.scratchRe = new Float32Array(size);
     this.scratchIm = new Float32Array(size);
-    this.prevBins = new Float32Array(size);
 
     for (let i = 0; i < size; i += 1) {
       this.window[i] = 0.5 - 0.5 * Math.cos((2 * Math.PI * i) / (size - 1));
@@ -81,14 +79,10 @@ export class FftProcessor {
       const im = this.scratchIm[shiftedIndex] ?? 0;
       const magnitude = Math.hypot(re, im) / this.size;
       const db = 20 * Math.log10(magnitude + 1e-8);
-      const smoothed = (this.prevBins[i] ?? 0) * 0.82 + db * 0.18;
-      this.prevBins[i] = smoothed;
-      shifted[i] = smoothed;
+      // Temporal averaging belongs to the visible display setting. Applying
+      // it here too delays both the trace and waterfall, even with averaging off.
+      shifted[i] = db;
     }
     return shifted;
-  }
-
-  resetSmoothing(): void {
-    this.prevBins.fill(0);
   }
 }

@@ -50,4 +50,11 @@ describe('responsive panadapter workspace template', () => {
     expect(template).toContain('grid-template-columns: minmax(300px, 1.38fr) minmax(340px, 1fr);');
     expect(template).toContain('.band-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }');
   });
+
+  it('retains one IQ copy and selects the newest contiguous FFT window', () => {
+    expect(template).toContain('return iq;');
+    expect(template).toContain('const desiredFloats = desiredComplexSamples * 2;');
+    expect(template).toContain('start: packet.length - take');
+    expect(template).toContain('part.packet.subarray(part.start, part.start + part.take)');
+  });
 });

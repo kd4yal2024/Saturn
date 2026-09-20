@@ -67,16 +67,17 @@ make lint          # warnings reported; syntax/semantic errors fail
 make lint-strict   # warnings also fail
 make formal        # watchdog safety proof and expiry cover trace
 make python-test   # numerical measurement regression
-make check         # lint + formal + Python + V29 telemetry regression
+make check         # lint + formal + Python + V29/V30 telemetry regression
 ```
 
-The Phase 0 lint gate covers `activitywatchdog.v`, `FIFO_Monitor.v`,
-`DDCMux.v`, and `I2S_rcv.v`. `make check` also runs the self-checking V29
-FIFO/ADC/I2S telemetry regression (`make telemetry-test`).
+The Phase 0 lint gate covers `activitywatchdog.v`, `FIFO_Monitor.v`, the ADC
+overflow reader, `DDCMux.v`, and `I2S_rcv.v`. `make check` also runs the
+self-checking V29/V30 FIFO/ADC/I2S telemetry regression
+(`make telemetry-test`).
 
 ## Hardware RX soak profiles
 
-`scripts/rx-soak.py` captures a read-only P2 V51 / FPGA V29 RX soak from the
+`scripts/rx-soak.py` captures a read-only, version-pinned P2/FPGA RX soak from the
 Saturn Go `/p23_perf` endpoint. It does not read raw XDMA registers, clear FPGA
 accumulators, restart services, or change RX/TX state. The operator must place
 the radio in the required RX-only workload and declare every expected DDC
@@ -130,6 +131,14 @@ intentional multi-receiver run; any later routing drift still fails closed:
 --expect-ddc 2:384 --expect-ddc 3:384
 ```
 
+The historical defaults remain P2 V51 / FPGA V29 / BIT `09122026`. For a V30
+candidate, pin all three identity fields explicitly; V30 runs also require the
+guarded physical-episode telemetry and a stable, advancing coherent snapshot:
+
+```bash
+--expect-p2-version 52 --expect-fpga-version 30 --expect-bit-date 09132026
+```
+
 An optional third field accepts `interleaved` or `noninterleaved`, for example
 `--expect-ddc 2:384:interleaved`.
 
@@ -168,8 +177,28 @@ runs:
 - synthesis: `synth_2_copy_1`
 - implementation: `impl_1_copy_1`
 
+The WSL launcher passes the commit, branch, and dirty state explicitly to
+Windows Vivado. This keeps artifact provenance intact for linked Git worktrees,
+whose `.git` file can contain a WSL-only path. Keep Windows-side checkout or
+worktree paths short (for example, `C:\V30`); Vivado 2023.1 rejects generated
+IP paths longer than 260 bytes.
+
 Set `SATURN_VIVADO_JOBS` to change the default of eight jobs. Set
 `SATURN_SKIP_RESET=1` only when intentionally resuming existing run products.
+When `SATURN_REUSE_SYNTH=1` is selected, the build retains the compile order
+captured by that completed synthesis checkpoint instead of asking an older
+project to refresh it during the reuse-only pass. Combining it with
+`SATURN_SKIP_RESET=1` also reuses a completed implementation rather than
+relaunching a run that has no pending steps.
+
+The V30 build applies its qualified timing-closure strategy by default:
+`ExtraNetDelay_high` placement plus `AggressiveExplore` pre-route physical
+optimization, routing, and post-route physical optimization. The selected
+values are written to `results/vivado/implementation-strategy.txt` and printed
+in the console log. `SATURN_PLACE_DIRECTIVE`, `SATURN_PHYSOPT_DIRECTIVE`,
+`SATURN_ROUTE_DIRECTIVE`, and `SATURN_POST_ROUTE_PHYSOPT_DIRECTIVE` are retained
+only for controlled experiments; a release build should use the checked-in
+defaults.
 
 `make vivado-validate` skips compile-order refresh by default because Vivado
 can hang while migrating older projects. Set
@@ -181,17 +210,24 @@ Generated files under `results/vivado/` include:
 - hierarchical utilization
 - DRC, clock interaction, methodology, and raw/reviewed/waived CDC reports
 - machine-readable setup/hold, DRC, CDC, and methodology quality gate
+- exact implementation-directive record
 - copied `.bit` artifact
 - JSON manifest containing Git identity, dirty state, Vivado version, and SHA256
 
 PROM/BIN export is scripted in `tcl/export-prom.tcl` and recorded in
 `PROM_BIN_EXPORT.md`. It produces both a slot-relative
-`saturn-primary-v29-<sha>.bin` for the default `load-FPGA` primary destination and
+`saturn-primary-v30-<sha>.bin` for the default `load-FPGA` primary destination and
 an uncompressed 32-Mbit `saturn-lab.bin` complete multiboot image (golden at
 `0x00000000`, primary at `0x00980000`, timers at `0x0097FC00` and
 `0x01300000`). Never pass the complete image to `load-FPGA`; the loader adds
 the primary offset itself. Run export only after a validated Vivado 2023.1
 bitstream build.
+
+PROM export fails closed unless `manifest.json` proves that the selected V30
+bitstream came from the current clean commit, passed the build gates, and still
+matches its recorded SHA256. Starting a rebuild moves the preceding manifest to
+`manifest.previous.json`, preventing a failed same-SHA rebuild from authorizing
+an older bitstream.
 
 The automated quality gate rejects negative setup or hold slack, DRC errors or
 critical warnings, unwaived CDC Critical findings, and methodology Critical

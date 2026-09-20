@@ -8,6 +8,12 @@ NATIVE_SOURCE_ROOT="${SATURN_BRIDGE_NATIVE_SOURCE_ROOT:-${BRIDGE_DIR}/target/nat
 WDSP2_SOURCE_DIR="${WDSP2_SOURCE_DIR:-${NATIVE_SOURCE_ROOT}/OpenHPSDR-wdsp/wdsp 2.00/Source}"
 PIHPSDR_WDSP_DIR="${PIHPSDR_WDSP_DIR:-${NATIVE_SOURCE_ROOT}/pihpsdr/wdsp}"
 BUILD_DIR="${WDSP2_BUILD_DIR:-${BRIDGE_DIR}/target/wdsp2-linux-arm}"
+TARGET_CPU="${SATURN_WDSP_TARGET_CPU:-cortex-a72}"
+
+if [[ ! "$TARGET_CPU" =~ ^[A-Za-z0-9._+-]+$ ]]; then
+  echo "ERROR: invalid SATURN_WDSP_TARGET_CPU: ${TARGET_CPU}" >&2
+  exit 1
+fi
 
 if [[ ! -d "${WDSP2_SOURCE_DIR}" ]]; then
   echo "ERROR: WDSP 2.00 source directory not found: ${WDSP2_SOURCE_DIR}" >&2
@@ -26,10 +32,14 @@ if ! pkg-config --exists fftw3; then
   exit 1
 fi
 
+# Fail before touching the existing archive if the pinned resampler changed.
+python3 "${SCRIPT_DIR}/wdsp_hbres_index.py" --check "${WDSP2_SOURCE_DIR}/reshb.c"
+
 rm -rf "${BUILD_DIR}"
 mkdir -p "${BUILD_DIR}"
 cp -a "${WDSP2_SOURCE_DIR}/." "${BUILD_DIR}/"
 cp "${PIHPSDR_WDSP_DIR}/linux_port.c" "${PIHPSDR_WDSP_DIR}/linux_port.h" "${BUILD_DIR}/"
+python3 "${SCRIPT_DIR}/wdsp_hbres_index.py" "${BUILD_DIR}/reshb.c"
 
 python3 - "${BUILD_DIR}" <<'PY'
 from pathlib import Path
@@ -193,7 +203,10 @@ PY
 
 cd "${BUILD_DIR}"
 mapfile -t sources < <(find . -maxdepth 1 -name '*.c' -printf '%f\n' | sort)
-cflags=(-pthread -O3 -D_GNU_SOURCE -Wno-parentheses -Wcast-align)
+# Cortex-A72 scheduling and vector selection are safe for the Saturn G2 CM4.
+# Do not add unsafe floating-point optimizations: WDSP numerical behavior is
+# part of the radio-quality contract and is deliberately unchanged here.
+cflags=(-pthread -O3 "-mcpu=${TARGET_CPU}" -D_GNU_SOURCE -Wno-parentheses -Wcast-align)
 if [[ -d "${PIHPSDR_WDSP_DIR}/../rnnoise/include" ]]; then
   cflags+=("-I${PIHPSDR_WDSP_DIR}/../rnnoise/include")
 fi
@@ -212,6 +225,7 @@ ranlib libwdsp.a
 
 echo "Built WDSP 2.00 Linux/ARM archive:"
 echo "  ${BUILD_DIR}/libwdsp.a"
+echo "  target CPU: ${TARGET_CPU}"
 echo
 echo "Build Saturn Bridge against it with:"
 echo "  SATURN_WDSP_DIR=${BUILD_DIR} cargo build --release"

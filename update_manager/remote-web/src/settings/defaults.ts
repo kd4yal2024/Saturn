@@ -84,6 +84,7 @@ export const DEFAULT_DISPLAY_PREFS: DisplayPrefs = {
   waterfallPalette: 'classic',
   spectrumPeakHold: false,
   spectrumTraceColor: '#8b3fb2',
+  spectrumEnhancedColors: false,
   spectrumTraceSmoothing: 0,
   spectrumTraceFill: 0,
   spectrumPeakGlow: 0,

@@ -235,6 +235,89 @@ fn outbound_scheduler_replaces_display_depth_one() {
 }
 
 #[test]
+fn outbound_scheduler_buffers_full_rate_iq_in_order_and_bounds_latency() {
+    let stats = Arc::new(FullRateIqTransportStats::default());
+    let outbound = ClientOutbound::new_with_full_rate_iq_stats(Arc::clone(&stats));
+
+    for frame in 1..=MAX_FULL_RATE_IQ_QUEUE_MESSAGES + 1 {
+        let dropped = outbound.enqueue(OutboundMessage::FullRateIqFrame {
+            receiver: 0,
+            sample_rate: frame as u32,
+            iq_samples: vec![frame as f32, -(frame as f32)],
+        });
+        assert_eq!(dropped, u64::from(frame > MAX_FULL_RATE_IQ_QUEUE_MESSAGES));
+    }
+
+    let snapshot = stats.snapshot_and_drain_interval();
+    assert_eq!(
+        snapshot.enqueued_deliveries_total,
+        (MAX_FULL_RATE_IQ_QUEUE_MESSAGES + 1) as u64
+    );
+    assert_eq!(snapshot.dropped_deliveries_total, 1);
+    assert_eq!(snapshot.dropped_deliveries_interval, 1);
+    assert_eq!(
+        snapshot.queue_high_watermark,
+        MAX_FULL_RATE_IQ_QUEUE_MESSAGES as u64
+    );
+    assert_eq!(
+        outbound.full_rate_iq_queue_depth(),
+        MAX_FULL_RATE_IQ_QUEUE_MESSAGES as u64
+    );
+
+    let mut retained = Vec::new();
+    while let Some(item) = outbound.next_message(true) {
+        assert_eq!(item.class, OutboundClass::FullRateIq);
+        match item.message {
+            OutboundMessage::FullRateIqFrame { sample_rate, .. } => retained.push(sample_rate),
+            _ => panic!("expected full-rate IQ frame"),
+        }
+        outbound.record_write(item.class, Duration::ZERO);
+    }
+    assert_eq!(retained, vec![2, 3, 4, 5]);
+    assert_eq!(
+        stats.snapshot_and_drain_interval().written_deliveries_total,
+        MAX_FULL_RATE_IQ_QUEUE_MESSAGES as u64
+    );
+}
+
+#[test]
+fn outbound_scheduler_requeues_blocked_full_rate_iq_without_reordering() {
+    let stats = Arc::new(FullRateIqTransportStats::default());
+    let outbound = ClientOutbound::new_with_full_rate_iq_stats(Arc::clone(&stats));
+    for frame in 1..=MAX_FULL_RATE_IQ_QUEUE_MESSAGES {
+        outbound.enqueue(OutboundMessage::FullRateIqFrame {
+            receiver: 0,
+            sample_rate: frame as u32,
+            iq_samples: vec![frame as f32, -(frame as f32)],
+        });
+    }
+
+    let blocked = outbound.next_message(true).unwrap();
+    outbound.enqueue(OutboundMessage::FullRateIqFrame {
+        receiver: 0,
+        sample_rate: 5,
+        iq_samples: vec![5.0, -5.0],
+    });
+    outbound.requeue_front(blocked);
+
+    let mut retained = Vec::new();
+    while let Some(item) = outbound.next_message(true) {
+        match item.message {
+            OutboundMessage::FullRateIqFrame { sample_rate, .. } => retained.push(sample_rate),
+            _ => panic!("expected full-rate IQ frame"),
+        }
+    }
+    assert_eq!(retained, vec![1, 2, 3, 4]);
+    let snapshot = stats.snapshot_and_drain_interval();
+    assert_eq!(snapshot.dropped_deliveries_total, 1);
+    assert_eq!(snapshot.dropped_deliveries_interval, 1);
+    assert_eq!(
+        snapshot.drops_by_reason[IqDropReason::RequeueOverflow as usize],
+        1
+    );
+}
+
+#[test]
 fn outbound_scheduler_coalesces_control_state_and_keeps_latest() {
     let outbound = ClientOutbound::new();
     assert_eq!(
@@ -272,6 +355,28 @@ fn outbound_scheduler_bounds_unique_control_messages() {
     assert_eq!(
         delta.control_queue_high_watermark,
         MAX_CONTROL_QUEUE_MESSAGES as u64
+    );
+}
+
+// Explicit local microbenchmark: not a live-radio performance qualification.
+#[test]
+#[ignore]
+fn benchmark_control_state_publication_queue() {
+    let outbound = ClientOutbound::new();
+    let started = Instant::now();
+    for round in 0..1000 {
+        for index in 0..128 {
+            std::hint::black_box(
+                outbound.enqueue(OutboundMessage::Text(format!("state_{index}:0,{round};"))),
+            );
+        }
+        while let Some(item) = outbound.next_message(true) {
+            std::hint::black_box(item);
+        }
+    }
+    println!(
+        "control_queue_benchmark rounds=1000 fields=128 elapsed_us={}",
+        started.elapsed().as_micros()
     );
 }
 
@@ -491,8 +596,495 @@ fn rejects_unknown_tci_mic_sample_type() {
 #[test]
 fn websocket_config_limits_inbound_message_size() {
     let config = tci_websocket_config();
+    assert_eq!(config.read_buffer_size, 8 * 1024);
     assert_eq!(config.max_message_size, Some(MAX_TCI_INBOUND_MESSAGE_BYTES));
     assert_eq!(config.max_frame_size, Some(MAX_TCI_INBOUND_FRAME_BYTES));
+}
+
+#[derive(Default)]
+struct PartialWsWriter {
+    allowance: usize,
+    fail: bool,
+    bytes: Vec<u8>,
+    incoming: std::io::Cursor<Vec<u8>>,
+}
+impl std::io::Read for PartialWsWriter {
+    fn read(&mut self, bytes: &mut [u8]) -> std::io::Result<usize> {
+        if self.incoming.position() as usize == self.incoming.get_ref().len() {
+            Err(std::io::ErrorKind::WouldBlock.into())
+        } else {
+            std::io::Read::read(&mut self.incoming, bytes)
+        }
+    }
+}
+impl std::io::Write for PartialWsWriter {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        if self.fail {
+            return Err(std::io::ErrorKind::BrokenPipe.into());
+        }
+        if self.allowance == 0 {
+            return Err(std::io::ErrorKind::WouldBlock.into());
+        }
+        let n = bytes.len().min(self.allowance);
+        self.bytes.extend_from_slice(&bytes[..n]);
+        self.allowance -= n;
+        Ok(n)
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+fn queued_test_iq(outbound: &ClientOutbound, number: u32) {
+    outbound.enqueue(OutboundMessage::FullRateIqFrame {
+        receiver: 0,
+        sample_rate: number,
+        iq_samples: vec![0.25; 25_600],
+    });
+}
+
+fn decode_server_wire(bytes: Vec<u8>, count: usize) -> Vec<Message> {
+    let mut receiver = tungstenite::WebSocket::from_raw_socket(
+        std::io::Cursor::new(bytes),
+        tungstenite::protocol::Role::Client,
+        None,
+    );
+    let messages = (0..count).map(|_| receiver.read().unwrap()).collect();
+    assert!(receiver.read().is_err(), "unexpected duplicate on wire");
+    messages
+}
+
+#[test]
+fn buffered_sender_partial_stalls_keep_exact_once_iq_and_safety_priority() {
+    let stats = Arc::new(FullRateIqTransportStats::default());
+    let outbound = ClientOutbound::new_with_full_rate_iq_stats(stats.clone());
+    let mut sender = BufferedSender::new(outbound.clone());
+    let mut ws = tungstenite::WebSocket::from_raw_socket(
+        PartialWsWriter {
+            allowance: 17,
+            ..Default::default()
+        },
+        tungstenite::protocol::Role::Server,
+        Some(tci_websocket_config()),
+    );
+    queued_test_iq(&outbound, 1);
+    let mut first = outbound.next_message(true).unwrap();
+    first.enqueued_at = Instant::now() - Duration::from_millis(60);
+    assert!(!sender.send(&mut ws, first).unwrap());
+    assert!(sender.is_pending());
+    assert!(stats.snapshot_and_drain_interval().stall_max_us[0] >= 60_000);
+    // An outgoing stall must not prevent receiving a dekey/control message.
+    ws.get_mut().incoming = std::io::Cursor::new(encoded_ws_messages(vec![Message::Text(
+        "trx:0,false;".into(),
+    )]));
+    assert_eq!(ws.read().unwrap(), Message::Text("trx:0,false;".into()));
+    for number in 2..=5 {
+        queued_test_iq(&outbound, number);
+    }
+    outbound.enqueue(OutboundMessage::SafetyText("trx:0,false;".into()));
+    for _ in 0..3 {
+        assert!(!sender.flush(&mut ws).unwrap());
+        assert!(sender.is_pending());
+    }
+    let snapshot = stats.snapshot_and_drain_interval();
+    assert_eq!(snapshot.in_flight, 1);
+    assert_eq!(snapshot.written_deliveries_total, 0);
+    assert_eq!(snapshot.dropped_deliveries_total, 0);
+    assert_eq!(outbound.full_rate_iq_queue_depth(), 4);
+    ws.get_mut().allowance = usize::MAX;
+    assert!(!sender.flush(&mut ws).unwrap());
+    assert!(!sender.is_pending());
+    while let Some(item) = outbound.next_message(true) {
+        sender.send(&mut ws, item).unwrap();
+    }
+    let wire = decode_server_wire(ws.into_inner().bytes, 6);
+    assert_eq!(wire[1], Message::Text("trx:0,false;".into()));
+    for (index, number) in [(0, 1), (2, 2), (3, 3), (4, 4), (5, 5)] {
+        assert_eq!(
+            wire[index],
+            Message::Binary(build_tci_iq_frame(0, number, &vec![0.25; 25_600]).into())
+        );
+    }
+    let snapshot = stats.snapshot_and_drain_interval();
+    assert_eq!(snapshot.written_deliveries_total, 5);
+    assert_eq!(snapshot.in_flight, 0);
+    assert_eq!(snapshot.dropped_deliveries_total, 0);
+}
+
+#[test]
+fn buffered_sender_counts_send_flush_and_teardown_failures_once() {
+    for reason in [
+        IqDropReason::SendError,
+        IqDropReason::FlushError,
+        IqDropReason::ConnectionClosed,
+    ] {
+        let stats = Arc::new(FullRateIqTransportStats::default());
+        let outbound = ClientOutbound::new_with_full_rate_iq_stats(stats.clone());
+        let mut sender = BufferedSender::new(outbound.clone());
+        let mut ws = tungstenite::WebSocket::from_raw_socket(
+            PartialWsWriter {
+                fail: matches!(reason, IqDropReason::SendError),
+                allowance: 17,
+                ..Default::default()
+            },
+            tungstenite::protocol::Role::Server,
+            Some(tci_websocket_config()),
+        );
+        queued_test_iq(&outbound, 1);
+        let result = sender.send(&mut ws, outbound.next_message(true).unwrap());
+        if matches!(reason, IqDropReason::SendError) {
+            assert!(result.is_err());
+        } else {
+            assert!(result.is_ok());
+            assert!(sender.is_pending());
+        }
+        if matches!(reason, IqDropReason::FlushError) {
+            ws.get_mut().fail = true;
+            assert!(sender.flush(&mut ws).is_err());
+        }
+        drop(sender);
+        drop(outbound);
+        let snapshot = stats.snapshot_and_drain_interval();
+        assert_eq!(snapshot.dropped_deliveries_total, 1);
+        assert_eq!(snapshot.drops_by_reason[reason as usize], 1);
+        assert_eq!(snapshot.drops_by_reason.iter().sum::<u64>(), 1);
+        assert_eq!(snapshot.in_flight, 0);
+        assert!(snapshot.last_drop_epoch_ms > 0);
+        assert_eq!(
+            stats
+                .snapshot_and_drain_interval()
+                .dropped_deliveries_interval,
+            0
+        );
+    }
+}
+
+#[test]
+fn buffered_sender_only_requeues_explicitly_unaccepted_writes() {
+    let stats = Arc::new(FullRateIqTransportStats::default());
+    let outbound = ClientOutbound::new_with_full_rate_iq_stats(stats.clone());
+    let mut sender = BufferedSender::new(outbound.clone());
+    let mut ws = tungstenite::WebSocket::from_raw_socket(
+        PartialWsWriter {
+            allowance: usize::MAX,
+            ..Default::default()
+        },
+        tungstenite::protocol::Role::Server,
+        Some(
+            tci_websocket_config()
+                .write_buffer_size(0)
+                .max_write_buffer_size(1024),
+        ),
+    );
+    queued_test_iq(&outbound, 1);
+    assert!(
+        matches!(sender.send(&mut ws, outbound.next_message(true).unwrap()),
+        Err(tungstenite::Error::Io(error)) if error.kind() == std::io::ErrorKind::WouldBlock)
+    );
+    assert!(!sender.is_pending());
+    assert_eq!(outbound.full_rate_iq_queue_depth(), 1);
+    assert!(ws.get_ref().bytes.is_empty());
+    ws.set_config(|config| config.max_write_buffer_size = usize::MAX);
+    sender
+        .send(&mut ws, outbound.next_message(true).unwrap())
+        .unwrap();
+    decode_server_wire(ws.into_inner().bytes, 1);
+    let snapshot = stats.snapshot_and_drain_interval();
+    assert_eq!(snapshot.written_deliveries_total, 1);
+    assert_eq!(snapshot.dropped_deliveries_total, 0);
+}
+
+#[test]
+fn buffered_sender_flushes_close_before_reporting_closed() {
+    let outbound = ClientOutbound::new();
+    let mut sender = BufferedSender::new(outbound.clone());
+    let mut ws = tungstenite::WebSocket::from_raw_socket(
+        PartialWsWriter {
+            allowance: 1,
+            ..Default::default()
+        },
+        tungstenite::protocol::Role::Server,
+        Some(tci_websocket_config()),
+    );
+    outbound.enqueue(OutboundMessage::Close);
+    assert!(!sender
+        .send(&mut ws, outbound.next_message(true).unwrap())
+        .unwrap());
+    assert!(sender.is_pending());
+    ws.get_mut().allowance = usize::MAX;
+    assert!(sender.flush(&mut ws).unwrap());
+    assert!(!sender.is_pending());
+    assert_eq!(
+        decode_server_wire(ws.into_inner().bytes, 1),
+        vec![Message::Close(None)]
+    );
+}
+
+#[test]
+fn iq_drop_reasons_account_for_queue_overflow_and_shutdown() {
+    let stats = Arc::new(FullRateIqTransportStats::default());
+    let outbound = ClientOutbound::new_with_full_rate_iq_stats(stats.clone());
+    for number in 1..=5 {
+        queued_test_iq(&outbound, number);
+    }
+    let snapshot = stats.snapshot_and_drain_interval();
+    assert_eq!(snapshot.dropped_deliveries_total, 1);
+    assert_eq!(
+        snapshot.drops_by_reason[IqDropReason::QueueOverflow as usize],
+        1
+    );
+    assert_eq!(snapshot.dropped_deliveries_interval, 1);
+    drop(outbound);
+    let snapshot = stats.snapshot_and_drain_interval();
+    assert_eq!(
+        snapshot.drops_by_reason[IqDropReason::ConnectionClosed as usize],
+        4
+    );
+    assert_eq!(snapshot.dropped_deliveries_interval, 4);
+    assert_eq!(snapshot.dropped_deliveries_total, 5);
+    assert_eq!(snapshot.drops_by_reason.iter().sum::<u64>(), 5);
+}
+
+#[test]
+fn buffered_sender_stalled_audio_and_control_are_not_dropped_or_duplicated() {
+    for message in [
+        OutboundMessage::Text("vfo:0,0,7200000;".into()),
+        OutboundMessage::AudioFrame {
+            receiver: 0,
+            sample_rate: 48_000,
+            channels: 2,
+            audio_samples: vec![0.25; 2048],
+            sequence: 7,
+        },
+    ] {
+        let outbound = ClientOutbound::new();
+        let drops = Arc::new(AtomicU64::new(0));
+        let mut sender = BufferedSender::with_drop_counter(outbound.clone(), drops.clone());
+        let mut ws = tungstenite::WebSocket::from_raw_socket(
+            PartialWsWriter::default(),
+            tungstenite::protocol::Role::Server,
+            Some(tci_websocket_config()),
+        );
+        outbound.enqueue(message);
+        assert!(!sender
+            .send(&mut ws, outbound.next_message(true).unwrap())
+            .unwrap());
+        assert!(sender.is_pending());
+        assert_eq!(drops.load(Ordering::Relaxed), 0);
+        ws.get_mut().allowance = usize::MAX;
+        sender.flush(&mut ws).unwrap();
+        assert!(!sender.is_pending());
+        decode_server_wire(ws.into_inner().bytes, 1);
+        drop(sender);
+        assert_eq!(drops.load(Ordering::Relaxed), 0);
+    }
+}
+
+#[test]
+fn tungstenite_would_block_retains_iq_and_resending_duplicates_it() {
+    #[derive(Default)]
+    struct BlockedWriter {
+        blocked: bool,
+        bytes: Vec<u8>,
+    }
+    impl std::io::Read for BlockedWriter {
+        fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+            Err(std::io::ErrorKind::WouldBlock.into())
+        }
+    }
+    impl std::io::Write for BlockedWriter {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            if self.blocked {
+                return Err(std::io::ErrorKind::WouldBlock.into());
+            }
+            self.bytes.extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    for resend in [false, true] {
+        let mut sender = tungstenite::WebSocket::from_raw_socket(
+            BlockedWriter {
+                blocked: true,
+                ..Default::default()
+            },
+            tungstenite::protocol::Role::Server,
+            Some(tci_websocket_config()),
+        );
+        let iq = Message::Binary(build_tci_iq_frame(0, 384_000, &vec![0.25; 25_600]).into());
+        assert!(
+            matches!(sender.send(iq.clone()), Err(tungstenite::Error::Io(error))
+            if error.kind() == std::io::ErrorKind::WouldBlock)
+        );
+        assert!(sender.get_ref().bytes.is_empty());
+        sender.get_mut().blocked = false;
+        // Flush alone delivers the original. Sending the message again, as
+        // the current application requeue path does, delivers it twice.
+        if resend {
+            sender.send(iq.clone()).unwrap();
+        } else {
+            sender.flush().unwrap();
+        }
+        let mut receiver = tungstenite::WebSocket::from_raw_socket(
+            std::io::Cursor::new(sender.into_inner().bytes),
+            tungstenite::protocol::Role::Client,
+            None,
+        );
+        assert_eq!(receiver.read().unwrap(), iq);
+        if resend {
+            assert_eq!(receiver.read().unwrap(), iq);
+        }
+        assert!(receiver.read().is_err(), "unexpected extra wire message");
+    }
+}
+
+// Exercise the real WebSocket codec, including partial reads and WouldBlock.
+// Counting attempted read bytes also guards against reintroducing large
+// zero-filled scratch buffers in the idle polling path.
+#[derive(Default)]
+struct TestWsInput {
+    bytes: std::io::Cursor<Vec<u8>>,
+    attempted_bytes: usize,
+    chunk_limit: usize,
+    block_next: bool,
+}
+
+impl std::io::Read for TestWsInput {
+    fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
+        self.attempted_bytes += out.len();
+        if self.block_next || self.bytes.position() as usize == self.bytes.get_ref().len() {
+            self.block_next = false;
+            return Err(std::io::ErrorKind::WouldBlock.into());
+        }
+        self.block_next = true;
+        let len = out.len().min(self.chunk_limit);
+        std::io::Read::read(&mut self.bytes, &mut out[..len])
+    }
+}
+
+impl std::io::Write for TestWsInput {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        Ok(bytes.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+fn encoded_ws_messages(messages: Vec<Message>) -> Vec<u8> {
+    let mut client = tungstenite::WebSocket::from_raw_socket(
+        std::io::Cursor::new(Vec::new()),
+        tungstenite::protocol::Role::Client,
+        None,
+    );
+    for message in messages {
+        client.send(message).unwrap();
+    }
+    client.into_inner().into_inner()
+}
+
+fn decode_test_ws(bytes: Vec<u8>) -> Result<Message, tungstenite::Error> {
+    let mut server = tungstenite::WebSocket::from_raw_socket(
+        TestWsInput {
+            bytes: std::io::Cursor::new(bytes),
+            chunk_limit: 997,
+            ..Default::default()
+        },
+        tungstenite::protocol::Role::Server,
+        Some(tci_websocket_config()),
+    );
+    for _ in 0..2048 {
+        match server.read() {
+            Err(tungstenite::Error::Io(error))
+                if error.kind() == std::io::ErrorKind::WouldBlock => {}
+            result => return result,
+        }
+    }
+    panic!("WebSocket did not finish within bounded partial reads");
+}
+
+#[test]
+fn websocket_idle_reads_use_small_scratch_buffer() {
+    let mut server = tungstenite::WebSocket::from_raw_socket(
+        TestWsInput::default(),
+        tungstenite::protocol::Role::Server,
+        Some(tci_websocket_config()),
+    );
+    for _ in 0..1000 {
+        assert!(matches!(server.read(), Err(tungstenite::Error::Io(error))
+            if error.kind() == std::io::ErrorKind::WouldBlock));
+    }
+    assert_eq!(server.get_ref().attempted_bytes, 1000 * 8 * 1024);
+}
+
+#[test]
+fn websocket_small_read_buffer_preserves_maximum_binary_message() {
+    let payload: Vec<u8> = (0..MAX_TCI_INBOUND_MESSAGE_BYTES)
+        .map(|i| i as u8)
+        .collect();
+    let expected = Message::Binary(payload.into());
+    assert_eq!(
+        decode_test_ws(encoded_ws_messages(vec![expected.clone()])).unwrap(),
+        expected
+    );
+}
+
+#[test]
+fn websocket_small_read_buffer_preserves_fragmented_message() {
+    use tungstenite::protocol::frame::{
+        coding::{Data, OpCode},
+        Frame,
+    };
+    let first = vec![0x55; 100_000];
+    let second = vec![0xaa; 100_000];
+    let expected = [first.as_slice(), second.as_slice()].concat();
+    let wire = encoded_ws_messages(vec![
+        Message::Frame(Frame::message(first, OpCode::Data(Data::Binary), false)),
+        Message::Frame(Frame::message(second, OpCode::Data(Data::Continue), true)),
+    ]);
+    assert_eq!(
+        decode_test_ws(wire).unwrap(),
+        Message::Binary(expected.into())
+    );
+}
+
+#[test]
+fn websocket_small_read_buffer_still_rejects_oversized_messages() {
+    let wire = encoded_ws_messages(vec![Message::Binary(
+        vec![0; MAX_TCI_INBOUND_MESSAGE_BYTES + 1].into(),
+    )]);
+    assert!(matches!(
+        decode_test_ws(wire),
+        Err(tungstenite::Error::Capacity(_))
+    ));
+}
+
+#[test]
+fn websocket_small_read_buffer_still_limits_fragmented_total() {
+    use tungstenite::protocol::frame::{
+        coding::{Data, OpCode},
+        Frame,
+    };
+    // Each frame fits independently, but their combined message must fail.
+    let wire = encoded_ws_messages(vec![
+        Message::Frame(Frame::message(
+            vec![0; 150_000],
+            OpCode::Data(Data::Binary),
+            false,
+        )),
+        Message::Frame(Frame::message(
+            vec![0; 150_000],
+            OpCode::Data(Data::Continue),
+            true,
+        )),
+    ]);
+    assert!(matches!(
+        decode_test_ws(wire),
+        Err(tungstenite::Error::Capacity(_))
+    ));
 }
 
 #[test]

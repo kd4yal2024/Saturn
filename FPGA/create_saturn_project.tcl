@@ -7110,7 +7110,7 @@ proc create_hier_cell_PCIe { parentCell nameHier } {
   # Create instance: xlconstant_swversion, and set properties
   set xlconstant_swversion [ create_bd_cell -type ip -vlnv xilinx.com:ip:xlconstant:1.1 xlconstant_swversion ]
   set_property -dict [list \
-    CONFIG.CONST_VAL {29} \
+    CONFIG.CONST_VAL {30} \
     CONFIG.CONST_WIDTH {16} \
   ] $xlconstant_swversion
 

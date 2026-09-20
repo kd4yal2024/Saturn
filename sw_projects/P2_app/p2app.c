@@ -71,7 +71,7 @@
 #include "frontpanelhandler.h"
 #include "controller_lease.h"
 
-#define P2APPVERSION 51
+#define P2APPVERSION 52
 #define FWREQUIREDMAJORVERSION 1                  // major version that is required. Only altered if programming interface changes.
 //
 // the Firmware version is a protection to make sure that if a p2app update is required by the new firmware,
@@ -1246,6 +1246,7 @@ int main(int argc, char *argv[])
   unsigned int PCBVersion;
   TVersionInfoSnapshot VersionInfo;
   TFPGAFifoV29Snapshot FifoV29Snapshot;
+  TFPGAADCV30Snapshot ADCV30Snapshot;
 
   //
   // initialise register access semaphores
@@ -1274,6 +1275,9 @@ int main(int argc, char *argv[])
   FPGAFifoV29Init(VersionInfo.FirmwareVersion);
   FPGAFifoV29GetSnapshot(&FifoV29Snapshot);
   P23PerfTelemetrySetFPGAFifoV29(&FifoV29Snapshot);
+  FPGAADCV30Init(VersionInfo.FirmwareVersion);
+  FPGAADCV30GetSnapshot(&ADCV30Snapshot);
+  P23PerfTelemetrySetFPGAADCV30(&ADCV30Snapshot);
   PrintVersionInfo();
   PCBVersion = GetPCBVersionNumber();
   printf("p2app client app software Version:%d Build Date:%s\n", P2APPVERSION, BuildDate);

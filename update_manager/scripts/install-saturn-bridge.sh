@@ -23,6 +23,10 @@ SATURN_RUST_TOOLCHAIN_HELPER="${SATURN_RUST_TOOLCHAIN_HELPER:-${SATURN_REPO_ROOT
 SATURN_BRIDGE_RF_TX_ENABLED="${SATURN_BRIDGE_RF_TX_ENABLED:-1}"
 SATURN_BRIDGE_TX_OPUS_DECODE_ENABLED="${SATURN_BRIDGE_TX_OPUS_DECODE_ENABLED:-1}"
 SATURN_BRIDGE_MAX_CLIENT_DDC0_SAMPLE_RATE_KHZ="${SATURN_BRIDGE_MAX_CLIENT_DDC0_SAMPLE_RATE_KHZ:-192}"
+SATURN_BRIDGE_TARGET_CPU="${SATURN_BRIDGE_TARGET_CPU:-cortex-a72}"
+SATURN_BRIDGE_RUSTFLAGS="${SATURN_BRIDGE_RUSTFLAGS:-}"
+SATURN_BRIDGE_REQUIRED_RTPRIO=22
+SATURN_BRIDGE_REQUIRED_MEMLOCK_BYTES=16777216
 SATURN_BRIDGE_BUILD_ONLY="${SATURN_BRIDGE_BUILD_ONLY:-0}"
 SATURN_BRIDGE_OUTPUT_BIN="${SATURN_BRIDGE_OUTPUT_BIN:-}"
 SATURN_BRIDGE_WDSP_FLAVOR="${SATURN_BRIDGE_WDSP_FLAVOR:-wdsp2}"
@@ -182,6 +186,8 @@ ensure_low_memory_build_capacity() {
   require_nonnegative_integer SATURN_BRIDGE_BUILD_NICE "$SATURN_BRIDGE_BUILD_NICE"
   [[ "$SATURN_BRIDGE_BUILD_IONICE_CLASS" =~ ^[0-3]$ ]] \
     || die "SATURN_BRIDGE_BUILD_IONICE_CLASS must be between 0 and 3, got: $SATURN_BRIDGE_BUILD_IONICE_CLASS"
+  [[ "$SATURN_BRIDGE_TARGET_CPU" =~ ^[A-Za-z0-9._+-]+$ ]] \
+    || die "SATURN_BRIDGE_TARGET_CPU contains unsupported characters: $SATURN_BRIDGE_TARGET_CPU"
   need_file "$helper" "Rust build preflight helper"
 
   if [[ "$(id -u)" -eq 0 ]]; then
@@ -204,7 +210,7 @@ ensure_low_memory_build_capacity() {
     fi
   fi
 
-  log "Rust build settings: CARGO_BUILD_JOBS=$SATURN_BRIDGE_BUILD_JOBS TMPDIR=$SATURN_BRIDGE_BUILD_TMP_DIR CARGO_TARGET_DIR=$SATURN_BRIDGE_CARGO_TARGET_DIR nice -n $SATURN_BRIDGE_BUILD_NICE ionice -c $SATURN_BRIDGE_BUILD_IONICE_CLASS"
+  log "Rust build settings: target_cpu=$SATURN_BRIDGE_TARGET_CPU LTO=thin codegen_units=1 CARGO_BUILD_JOBS=$SATURN_BRIDGE_BUILD_JOBS TMPDIR=$SATURN_BRIDGE_BUILD_TMP_DIR CARGO_TARGET_DIR=$SATURN_BRIDGE_CARGO_TARGET_DIR nice -n $SATURN_BRIDGE_BUILD_NICE ionice -c $SATURN_BRIDGE_BUILD_IONICE_CLASS"
 }
 
 ensure_pinned_sparse_checkout() {
@@ -282,6 +288,7 @@ build_wdsp2() {
     WDSP2_SOURCE_DIR="$SATURN_WDSP2_SOURCE_DIR" \
     PIHPSDR_WDSP_DIR="$SATURN_PIHPSDR_WDSP_DIR" \
     WDSP2_BUILD_DIR="$SATURN_WDSP2_BUILD_DIR" \
+    SATURN_WDSP_TARGET_CPU="$SATURN_BRIDGE_TARGET_CPU" \
     bash "$helper"
   verify_wdsp2_archive
 }
@@ -303,6 +310,17 @@ verify_bridge_inputs() {
 build_bridge() {
   local cargo_args=(build)
   local native_env=()
+  local build_commit build_dirty rustflags
+  build_commit="$(git -C "$SATURN_REPO_ROOT" rev-parse HEAD 2>/dev/null || true)"
+  [[ "$build_commit" =~ ^[0-9a-fA-F]{40}$ ]] \
+    || die "Could not resolve the Saturn source commit for Bridge provenance"
+  if [[ -n "$(git -C "$SATURN_REPO_ROOT" status --porcelain 2>/dev/null)" ]]; then
+    build_dirty=true
+  else
+    build_dirty=false
+  fi
+  native_env+=(SATURN_BUILD_COMMIT="${build_commit,,}" SATURN_BUILD_DIRTY="$build_dirty")
+  rustflags="${SATURN_BRIDGE_RUSTFLAGS:+$SATURN_BRIDGE_RUSTFLAGS }-C target-cpu=$SATURN_BRIDGE_TARGET_CPU"
   if [[ "$SATURN_BRIDGE_BUILD_PROFILE" == "release" ]]; then
     cargo_args+=(--release)
   fi
@@ -310,13 +328,21 @@ build_bridge() {
   case "$SATURN_BRIDGE_WDSP_FLAVOR" in
     wdsp2|2.00)
       build_wdsp2
-      native_env+=(SATURN_WDSP_DIR="$SATURN_WDSP2_BUILD_DIR")
+      native_env+=(
+        SATURN_WDSP_DIR="$SATURN_WDSP2_BUILD_DIR"
+        SATURN_BRIDGE_WDSP_FLAVOR="wdsp2-2.00"
+        SATURN_BRIDGE_WDSP_COMMIT="$(git -C "$SATURN_WDSP2_REPO_DIR" rev-parse HEAD)"
+      )
       ;;
     pihpsdr|legacy)
       need_file "$SATURN_PIHPSDR_DIR/wdsp/libwdsp.a" "piHPSDR WDSP archive"
       need_file "$SATURN_PIHPSDR_DIR/rnnoise/librnnoise.a" "piHPSDR rnnoise archive"
       need_file "$SATURN_PIHPSDR_DIR/libspecbleach/libspecbleach.a" "piHPSDR specbleach archive"
-      native_env+=(SATURN_PIHPSDR_DIR="$SATURN_PIHPSDR_DIR")
+      native_env+=(
+        SATURN_PIHPSDR_DIR="$SATURN_PIHPSDR_DIR"
+        SATURN_BRIDGE_WDSP_FLAVOR="pihpsdr-legacy"
+        SATURN_BRIDGE_WDSP_COMMIT="$(git -C "$SATURN_PIHPSDR_DIR" rev-parse HEAD 2>/dev/null || printf unknown)"
+      )
       ;;
     *)
       die "Unsupported SATURN_BRIDGE_WDSP_FLAVOR: $SATURN_BRIDGE_WDSP_FLAVOR"
@@ -328,6 +354,8 @@ build_bridge() {
     CARGO_BUILD_JOBS="$SATURN_BRIDGE_BUILD_JOBS" \
     CARGO_TARGET_DIR="$SATURN_BRIDGE_CARGO_TARGET_DIR" \
     TMPDIR="$SATURN_BRIDGE_BUILD_TMP_DIR" \
+    RUSTFLAGS="$rustflags" \
+    SATURN_BRIDGE_TARGET_CPU="$SATURN_BRIDGE_TARGET_CPU" \
     "${native_env[@]}" \
     nice -n "$SATURN_BRIDGE_BUILD_NICE" \
     ionice -c "$SATURN_BRIDGE_BUILD_IONICE_CLASS" \
@@ -498,7 +526,8 @@ Restart=on-failure
 RestartSec=5
 RuntimeDirectory=saturn-bridge
 RuntimeDirectoryMode=0750
-LimitRTPRIO=21
+LimitRTPRIO=22
+LimitMEMLOCK=16M
 NoNewPrivileges=yes
 PrivateTmp=yes
 ProtectSystem=strict
@@ -510,6 +539,7 @@ Environment=SATURN_BRIDGE_RADIO_HOST=127.0.0.1
 Environment=SATURN_BRIDGE_RADIO_PORT=1024
 Environment=SATURN_BRIDGE_RADIO_BACKEND=p2
 Environment=SATURN_BRIDGE_XDMA_READY_PATH=/run/saturn-bridge/xdma-ready.json
+Environment=SATURN_BRIDGE_PERF_PATH=/run/saturn-bridge/perf.json
 Environment=SATURN_BRIDGE_FFTW_WISDOM_PATH=${SATURN_BRIDGE_FFTW_WISDOM_PATH}
 Environment=SATURN_BRIDGE_CLIENT_HOST=127.0.0.1
 Environment=SATURN_BRIDGE_CLIENT_PORT=12000
@@ -524,6 +554,10 @@ WantedBy=multi-user.target
 EOF
   chmod 0644 "$SATURN_BRIDGE_SERVICE"
   systemctl daemon-reload
+  # Validate the effective policy before the backend transaction can start the
+  # replacement binary.  A conflicting drop-in must fail the install rather
+  # than leave Direct-XDMA cycling on mlock or scheduling errors.
+  verify_service_contract
   # The backend transaction owns both the active and boot-time service policy.
   # P2 is deliberately P2app-only at boot; the browser bridge is started on
   # demand. Direct XDMA instead enables the bridge and disables P2app.
@@ -534,6 +568,24 @@ EOF
     systemctl restart "$service_name"
     log "Enabled and restarted $service_name (backend broker not installed)"
   fi
+}
+
+require_service_limit() {
+  local service="$1" property="$2" minimum="$3" actual
+  actual="$(systemctl show --property="$property" --value "$service")"
+  [[ "$actual" == "infinity" ]] && return 0
+  [[ "$actual" =~ ^[0-9]+$ ]] \
+    || die "$service returned an invalid $property value: ${actual:-empty}"
+  (( actual >= minimum )) \
+    || die "$service $property=$actual is below the required minimum $minimum"
+}
+
+verify_service_contract() {
+  local service_name
+  service_name="$(basename "$SATURN_BRIDGE_SERVICE")"
+  require_service_limit "$service_name" LimitRTPRIO "$SATURN_BRIDGE_REQUIRED_RTPRIO"
+  require_service_limit "$service_name" LimitMEMLOCK "$SATURN_BRIDGE_REQUIRED_MEMLOCK_BYTES"
+  log "Verified service limits: RT priority >= $SATURN_BRIDGE_REQUIRED_RTPRIO, locked memory >= $SATURN_BRIDGE_REQUIRED_MEMLOCK_BYTES bytes"
 }
 
 verify_runtime() {

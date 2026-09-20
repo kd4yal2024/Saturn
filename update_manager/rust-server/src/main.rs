@@ -3066,6 +3066,232 @@ async fn post_compare_performance_benchmarks(
     }
 }
 
+const SATURN_BRIDGE_PERF_FILE: &str = "/run/saturn-bridge/perf.json";
+const SATURN_BRIDGE_PERF_MAX_AGE_MS: u64 = 5_000;
+
+fn bridge_perf_file_telemetry(
+    path: &Path,
+    main_pid: Option<u32>,
+    now_ms: u64,
+) -> Result<serde_json::Value, String> {
+    let text = fs::read_to_string(path).map_err(|error| error.to_string())?;
+    let document: serde_json::Value =
+        serde_json::from_str(&text).map_err(|error| error.to_string())?;
+    if document
+        .get("schema_version")
+        .and_then(|value| value.as_u64())
+        != Some(1)
+        || document.get("source").and_then(|value| value.as_str()) != Some("saturn-bridge")
+        || document.get("backend").and_then(|value| value.as_str()) != Some("xdma")
+    {
+        return Err("invalid saturn-bridge performance snapshot identity".to_string());
+    }
+    let updated_at_ms = document
+        .get("updated_at_ms")
+        .and_then(|value| value.as_u64())
+        .ok_or_else(|| "missing saturn-bridge performance timestamp".to_string())?;
+    let age_ms = now_ms.saturating_sub(updated_at_ms);
+    if age_ms > SATURN_BRIDGE_PERF_MAX_AGE_MS {
+        return Err(format!(
+            "saturn-bridge performance snapshot is stale ({age_ms}ms)"
+        ));
+    }
+    let metrics = document
+        .get("metrics")
+        .and_then(|value| value.as_object())
+        .ok_or_else(|| "missing saturn-bridge performance metrics".to_string())?;
+    let number = |key: &str| metrics.get(key).and_then(serde_json::Value::as_f64);
+    let integer = |key: &str| metrics.get(key).and_then(serde_json::Value::as_u64);
+    let boolean = |key: &str| metrics.get(key).and_then(serde_json::Value::as_bool);
+    let text = |key: &str| metrics.get(key).and_then(serde_json::Value::as_str);
+    let snapshot_pid = integer("pid");
+    let pid_matches_service = matches!(
+        (main_pid, snapshot_pid),
+        (Some(service_pid), Some(snapshot_pid)) if u64::from(service_pid) == snapshot_pid
+    );
+    if main_pid.is_some() && !pid_matches_service {
+        return Err("saturn-bridge performance PID does not match the service".to_string());
+    }
+    let client = number("client").unwrap_or(0.0);
+    let iq = number("iq").unwrap_or(0.0);
+    let audio = number("audio").unwrap_or(0.0);
+    let ddc_per_sec = number("ddc_s").unwrap_or(0.0);
+    let sdr_active =
+        pid_matches_service && client >= 1.0 && (iq >= 1.0 || audio >= 1.0) && ddc_per_sec > 0.0;
+    let firmware_major = integer("firmware_major");
+    let firmware_minor = integer("firmware_minor");
+    let clock_mask = integer("clock_mask");
+    let sample_rate_hz = integer("sample_rate_hz").unwrap_or(0);
+    let ddc_index = integer("ddc").unwrap_or(6);
+    let modified = fs::metadata(path)
+        .ok()
+        .and_then(|metadata| metadata.modified().ok())
+        .map(|time| chrono::DateTime::<Local>::from(time).to_rfc3339());
+    let metrics_value = serde_json::Value::Object(metrics.clone());
+    let fifo_v29 = serde_json::json!({
+        "available": boolean("fifo_v29_available").unwrap_or(false),
+        "status": text("fifo_v29_status").unwrap_or("unavailable"),
+        "build_id": integer("fifo_v29_build_id").unwrap_or(0),
+        "snapshot_valid": boolean("fifo_v29_snapshot_valid").unwrap_or(false),
+        "snapshot_generation": integer("fifo_v29_snapshot_generation").unwrap_or(0),
+        "snapshot_timeout_count": integer("fifo_v29_snapshot_timeout_count").unwrap_or(0),
+        "occupancy_words": {
+            "ddc": integer("fifo_v29_occupancy_ddc").unwrap_or(0),
+            "duc": integer("fifo_v29_occupancy_duc").unwrap_or(0),
+            "mic": integer("fifo_v29_occupancy_mic").unwrap_or(0),
+            "speaker": integer("fifo_v29_occupancy_speaker").unwrap_or(0),
+        },
+        "minimum_words": {
+            "ddc": integer("fifo_v29_minimum_ddc").unwrap_or(0),
+            "duc": integer("fifo_v29_minimum_duc").unwrap_or(0),
+            "mic": integer("fifo_v29_minimum_mic").unwrap_or(0),
+            "speaker": integer("fifo_v29_minimum_speaker").unwrap_or(0),
+        },
+        "maximum_words": {
+            "ddc": integer("fifo_v29_maximum_ddc").unwrap_or(0),
+            "duc": integer("fifo_v29_maximum_duc").unwrap_or(0),
+            "mic": integer("fifo_v29_maximum_mic").unwrap_or(0),
+            "speaker": integer("fifo_v29_maximum_speaker").unwrap_or(0),
+        },
+        "event_transitions": {
+            "ddc": integer("fifo_v29_events_ddc").unwrap_or(0),
+            "duc": integer("fifo_v29_events_duc").unwrap_or(0),
+            "mic": integer("fifo_v29_events_mic").unwrap_or(0),
+            "speaker": integer("fifo_v29_events_speaker").unwrap_or(0),
+        },
+    });
+    let adc_v30 = serde_json::json!({
+        "available": boolean("adc_v30_available").unwrap_or(false),
+        "status": text("adc_v30_status").unwrap_or("unavailable"),
+        "build_id": integer("adc_v30_build_id").unwrap_or(0),
+        "snapshot_valid": boolean("adc_v30_snapshot_valid").unwrap_or(false),
+        "snapshot_generation": integer("adc_v30_snapshot_generation").unwrap_or(0),
+        "snapshot_retry_failure_count": integer("adc_v30_snapshot_retry_failure_count").unwrap_or(0),
+        "lifetime_scope": "fpga_boot",
+        "duration_unit": "adc_clocks",
+        "clock_hz": integer("adc_v30_clock_hz").unwrap_or(0),
+        "adc1": {
+            "episode_count": integer("adc_v30_adc1_episode_count").unwrap_or(0),
+            "total_high_clocks": integer("adc_v30_adc1_total_high_clocks").unwrap_or(0),
+            "longest_episode_clocks": integer("adc_v30_adc1_longest_episode_clocks").unwrap_or(0),
+            "latest_episode_clocks": integer("adc_v30_adc1_latest_episode_clocks").unwrap_or(0),
+            "latest_episode_peak": integer("adc_v30_adc1_latest_episode_peak").unwrap_or(0),
+            "episode_active": boolean("adc_v30_adc1_episode_active").unwrap_or(false),
+            "episode_valid": boolean("adc_v30_adc1_episode_valid").unwrap_or(false),
+        },
+        "adc2": {
+            "episode_count": integer("adc_v30_adc2_episode_count").unwrap_or(0),
+            "total_high_clocks": integer("adc_v30_adc2_total_high_clocks").unwrap_or(0),
+            "longest_episode_clocks": integer("adc_v30_adc2_longest_episode_clocks").unwrap_or(0),
+            "latest_episode_clocks": integer("adc_v30_adc2_latest_episode_clocks").unwrap_or(0),
+            "latest_episode_peak": integer("adc_v30_adc2_latest_episode_peak").unwrap_or(0),
+            "episode_active": boolean("adc_v30_adc2_episode_active").unwrap_or(false),
+            "episode_valid": boolean("adc_v30_adc2_episode_valid").unwrap_or(false),
+        },
+    });
+    let adc_episode_count = match (
+        integer("adc_v30_adc1_episode_count"),
+        integer("adc_v30_adc2_episode_count"),
+    ) {
+        (Some(adc1), Some(adc2)) => Some(adc1.saturating_add(adc2)),
+        _ => None,
+    };
+    let direct_xdma_duc = serde_json::json!({
+        "available": boolean("fifo_v29_available").unwrap_or(false),
+        "status": text("fifo_v29_status").unwrap_or("unavailable"),
+        "snapshot_valid": boolean("fifo_v29_snapshot_valid").unwrap_or(false),
+        "snapshot_generation": integer("fifo_v29_snapshot_generation").unwrap_or(0),
+        "fifo_occupancy_words": integer("fifo_v29_occupancy_duc").unwrap_or(0),
+        "fifo_minimum_words": integer("fifo_v29_minimum_duc").unwrap_or(0),
+        "fifo_maximum_words": integer("fifo_v29_maximum_duc").unwrap_or(0),
+        "fifo_event_transitions": integer("fifo_v29_events_duc").unwrap_or(0),
+        "stream_active": boolean("tx_stream").unwrap_or(false),
+        "keyed": boolean("tx_keyed").unwrap_or(false),
+        "dma_writes": integer("tx_dma_writes").unwrap_or(0),
+        "frames_written": integer("tx_frames").unwrap_or(0),
+        "tx_fifo_lwm": integer("tx_fifo_lwm").unwrap_or(0),
+        "tx_fifo_hwm": integer("tx_fifo_hwm").unwrap_or(0),
+        "fifo_faults": integer("tx_fifo_faults").unwrap_or(0),
+        "startup_underflows": integer("tx_fifo_startup_underflows").unwrap_or(0),
+        "host_queue_instrumented": false,
+    });
+
+    Ok(serde_json::json!({
+        "snapshot_file": path.display().to_string(),
+        "snapshot_exists": true,
+        "snapshot_readable": true,
+        "read_error": None::<String>,
+        "parse_error": None::<String>,
+        "modified": modified,
+        "pid_matches_service": pid_matches_service,
+        "snapshot_pid": snapshot_pid,
+        "age_seconds": age_ms as f64 / 1000.0,
+        "current": {
+            "pid": snapshot_pid,
+            "timestamp_epoch": updated_at_ms / 1000,
+            "app": "saturn-bridge",
+            "state": {
+                "sdr_active": sdr_active,
+                "tx_mode": boolean("tx_keyed").unwrap_or(false),
+            },
+            "gauges": {
+                "bridge": metrics_value,
+                "fpga_fifo_v29": fifo_v29,
+                "fpga_adc_v30": adc_v30,
+                "direct_xdma_duc": direct_xdma_duc,
+            },
+            "counters": {
+                "ddc_packets": integer("dma_reads").unwrap_or(0),
+                "ddc_bytes": integer("dma_bytes").unwrap_or(0),
+                "ddc_dma_reads": integer("dma_reads").unwrap_or(0),
+                "ddc_dma_read_bytes": integer("dma_bytes").unwrap_or(0),
+                "ddc_header_errors": integer("header_errors").unwrap_or(0),
+                "ddc_header_resyncs": integer("header_resync"),
+                "ddc_host_buffer_drops": integer("host_buffer_drops"),
+                "ddc_host_buffer_drop_bytes": integer("host_buffer_drop_bytes"),
+                "ddc_host_discontinuities": integer("host_discontinuities"),
+                "ddc_host_pool_starvations": integer("host_pool_starvations"),
+                "ddc_fifo_threshold_events": integer("rx_fifo_thresholds"),
+                "ddc_fifo_almost_full_events": integer("rx_fifo_almost_full"),
+                "ddc_fifo_empty_observations": integer("rx_fifo_empty_observations"),
+                "ddc_fifo_faults": integer("rx_fifo_faults"),
+                "wdsp_resume_events": integer("wdsp_resume_count"),
+                "wdsp_resume_flush_failures": integer("wdsp_resume_flush_failures"),
+                "adc_overflow_events": adc_episode_count,
+                "duc_dma_writes": integer("tx_dma_writes").unwrap_or(0),
+                "duc_packets": integer("tx_frames").unwrap_or(0),
+                "duc_fifo_faults": integer("tx_fifo_faults").unwrap_or(0),
+            },
+            "features": {
+                "pure_signal": false,
+            },
+            "routing": {
+                "ddc": [{
+                    "id": ddc_index,
+                    "enabled": true,
+                    "interleaved": false,
+                    "sample_rate_khz": sample_rate_hz / 1000,
+                }],
+            },
+            "fpga": {
+                "available": firmware_major.is_some() && firmware_minor.is_some(),
+                "product": "Saturn",
+                "product_id": integer("product_id"),
+                "product_version": integer("pcb_version"),
+                "firmware_name": "Saturn, full function",
+                "firmware_id": integer("software_id"),
+                "firmware_major_version": firmware_major,
+                "firmware_version": firmware_minor,
+                "date_code_hex": metrics.get("date_code_hex"),
+                "clock_mask": clock_mask,
+                "all_clocks_present": clock_mask == Some(15),
+                "fallback_config": boolean("fallback_config"),
+            },
+        },
+        "latest_diag": None::<String>,
+    }))
+}
+
 async fn get_p23_perf(State(_state): State<AppState>) -> Response {
     fn parse_system_cpu() -> Option<(u64, u64, u64)> {
         let raw = fs::read_to_string("/proc/stat").ok()?;
@@ -3577,6 +3803,16 @@ async fn get_p23_perf(State(_state): State<AppState>) -> Response {
                 fields.insert(key.to_string(), parsed);
             }
             fields
+        }
+
+        let now_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_millis() as u64)
+            .unwrap_or(0);
+        if let Ok(snapshot) =
+            bridge_perf_file_telemetry(Path::new(SATURN_BRIDGE_PERF_FILE), main_pid, now_ms)
+        {
+            return snapshot;
         }
 
         let journal = Command::new("journalctl")
@@ -4950,10 +5186,10 @@ async fn disk_imaging_disabled() -> Response {
 mod tests {
     use super::{
         append_script_run_log_line, begin_script_run_log, bind_addr_is_loopback,
-        disk_imaging_disabled, environment_value, parse_xdma_interrupts_text, satp_config_json,
-        script_deadline_seconds, script_run_log_slot, systemd_environment_value,
-        with_request_limit, xdma_operational_is_ready, APPLIANCE_POWER_HELPER,
-        RADIO_BACKEND_SWITCH_HELPER,
+        bridge_perf_file_telemetry, disk_imaging_disabled, environment_value,
+        parse_xdma_interrupts_text, satp_config_json, script_deadline_seconds, script_run_log_slot,
+        systemd_environment_value, with_request_limit, xdma_operational_is_ready,
+        APPLIANCE_POWER_HELPER, RADIO_BACKEND_SWITCH_HELPER,
     };
     use axum::{
         body::{Body, Bytes},
@@ -4970,6 +5206,127 @@ mod tests {
 
     async fn consume_request_body(_body: Bytes) -> StatusCode {
         StatusCode::NO_CONTENT
+    }
+
+    #[test]
+    fn direct_xdma_perf_snapshot_is_authoritative_and_provenanced() {
+        let path = std::env::temp_dir().join(format!(
+            "saturn-bridge-perf-test-{}-{}.json",
+            std::process::id(),
+            std::thread::current().name().unwrap_or("unnamed")
+        ));
+        std::fs::write(
+            &path,
+            r#"{
+                "schema_version":1,
+                "updated_at_ms":10000,
+                "source":"saturn-bridge",
+                "backend":"xdma",
+                "status":"ready",
+                "metrics":{
+                    "pid":42,"client":1,"connections":2,"iq":1,"audio":1,
+                    "ddc_s":844.0,"dma_reads":100,"dma_bytes":409600,
+                    "firmware_major":1,"firmware_minor":30,"clock_mask":15,
+                    "product_id":1,"pcb_version":2,"software_id":4,
+                    "date_code_hex":"09122026","fallback_config":false,
+                    "sample_rate_hz":384000,"ddc":6,
+                    "header_resync":2,"host_buffer_drops":3,
+                    "host_buffer_drop_bytes":12288,"host_discontinuities":1,
+                    "host_pool_starvations":0,"rx_fifo_thresholds":4,
+                    "rx_fifo_almost_full":0,"rx_fifo_empty_observations":0,
+                    "rx_fifo_faults":0,
+                    "wdsp_resume_count":2,"wdsp_resume_flush_failures":0,
+                    "wdsp_resume_last_us":6100,"wdsp_resume_max_us":6400,
+                    "fifo_v29_available":true,"fifo_v29_status":"available",
+                    "fifo_v29_build_id":1446131968,"fifo_v29_snapshot_valid":true,
+                    "fifo_v29_snapshot_generation":12,"fifo_v29_snapshot_timeout_count":0,
+                    "fifo_v29_occupancy_ddc":42,"fifo_v29_occupancy_duc":77,
+                    "fifo_v29_minimum_duc":0,"fifo_v29_maximum_duc":992,
+                    "fifo_v29_events_duc":5,
+                    "tx_stream":false,"tx_keyed":false,"tx_dma_writes":8,"tx_frames":16,
+                    "tx_fifo_lwm":120,"tx_fifo_hwm":900,"tx_fifo_faults":0,
+                    "tx_fifo_startup_underflows":0,
+                    "adc_v30_available":true,"adc_v30_status":"available",
+                    "adc_v30_build_id":1446195200,"adc_v30_snapshot_valid":true,
+                    "adc_v30_snapshot_generation":13,"adc_v30_snapshot_retry_failure_count":0,
+                    "adc_v30_clock_hz":122880000,"adc_v30_adc1_episode_count":5,
+                    "adc_v30_adc2_episode_count":7,
+                    "build_git_sha":"d570b4e6c58f09e71b03e2fdcc0ac66bbb9f5d1c",
+                    "wdsp_flavor":"wdsp2-2.00"
+                }
+            }"#,
+        )
+        .unwrap();
+        let telemetry = bridge_perf_file_telemetry(&path, Some(42), 11_000).unwrap();
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(telemetry["snapshot_readable"], true);
+        assert_eq!(telemetry["pid_matches_service"], true);
+        assert_eq!(telemetry["current"]["state"]["sdr_active"], true);
+        assert_eq!(telemetry["current"]["fpga"]["firmware_version"], 30);
+        assert_eq!(telemetry["current"]["counters"]["ddc_host_buffer_drops"], 3);
+        assert_eq!(telemetry["current"]["counters"]["wdsp_resume_events"], 2);
+        assert_eq!(
+            telemetry["current"]["counters"]["wdsp_resume_flush_failures"],
+            0
+        );
+        assert_eq!(telemetry["current"]["counters"]["adc_overflow_events"], 12);
+        let counters = telemetry["current"]["counters"].as_object().unwrap();
+        assert!(!counters.contains_key("ddc_dma_errors"));
+        assert!(!counters.contains_key("ddc_send_errors"));
+        assert!(!counters.contains_key("ddc_partial_sends"));
+        assert_eq!(counters["duc_fifo_faults"], 0);
+        assert_eq!(
+            telemetry["current"]["gauges"]["fpga_fifo_v29"]["occupancy_words"]["ddc"],
+            42
+        );
+        assert_eq!(
+            telemetry["current"]["gauges"]["fpga_adc_v30"]["clock_hz"],
+            122_880_000
+        );
+        assert_eq!(
+            telemetry["current"]["gauges"]["direct_xdma_duc"]["fifo_occupancy_words"],
+            77
+        );
+        assert_eq!(
+            telemetry["current"]["gauges"]["direct_xdma_duc"]["fifo_maximum_words"],
+            992
+        );
+        assert_eq!(
+            telemetry["current"]["gauges"]["direct_xdma_duc"]["fifo_event_transitions"],
+            5
+        );
+        assert_eq!(
+            telemetry["current"]["gauges"]["direct_xdma_duc"]["tx_fifo_lwm"],
+            120
+        );
+        assert_eq!(
+            telemetry["current"]["gauges"]["direct_xdma_duc"]["tx_fifo_hwm"],
+            900
+        );
+        assert_eq!(
+            telemetry["current"]["gauges"]["direct_xdma_duc"]["host_queue_instrumented"],
+            false
+        );
+        assert_eq!(
+            telemetry["current"]["gauges"]["bridge"]["build_git_sha"],
+            "d570b4e6c58f09e71b03e2fdcc0ac66bbb9f5d1c"
+        );
+    }
+
+    #[test]
+    fn direct_xdma_perf_snapshot_rejects_stale_or_wrong_pid_data() {
+        let path = std::env::temp_dir().join(format!(
+            "saturn-bridge-perf-stale-test-{}.json",
+            std::process::id()
+        ));
+        std::fs::write(
+            &path,
+            r#"{"schema_version":1,"updated_at_ms":1000,"source":"saturn-bridge","backend":"xdma","metrics":{"pid":7}}"#,
+        )
+        .unwrap();
+        assert!(bridge_perf_file_telemetry(&path, Some(7), 7_000).is_err());
+        assert!(bridge_perf_file_telemetry(&path, Some(8), 1_100).is_err());
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]

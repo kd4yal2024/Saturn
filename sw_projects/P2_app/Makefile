@@ -13,7 +13,7 @@ LDFLAGS = -lm -lpthread
         test-controller-lease-asan test-protocol2-control \
         test-protocol2-command test-protocol2-command-asan \
         test-protocol2-high-priority test-protocol2-high-priority-asan \
-        test-fpga-fifo-v29 test-speaker-pacing-diagnostics smoke-shutdown
+        test-fpga-fifo-v29 test-fpga-adc-v30 test-speaker-pacing-diagnostics smoke-shutdown
 
 # NOTE (2026-01): keep "local" libs here. libgpiod link flags are added below
 #                 via pkg-config (with a safe fallback).
@@ -23,7 +23,7 @@ TARGET = p2app
 VPATH=.:../common
 GIT_DATE := $(wordlist 2,5, $(shell git log -1 --format=%cd --date=rfc))
 
-BASE_SRCS = p2app.c controller_lease.c protocol2_control.c protocol2_command.c hwaccess.c saturnregisters.c codecwrite.c saturndrivers.c version.c generalpacket.c IncomingDDCSpecific.c IncomingDUCSpecific.c InHighPriority.c InDUCIQ.c InSpkrAudio.c OutMicAudio.c OutDDCIQ.c OutHighPriority.c debugaids.c auxadc.c cathandler.c frontpanelhandler.c catmessages.c LDGATU.c g2v2panel.c i2cdriver.c andromedacatmessages.c Outwideband.c serialport.c AriesATU.c GanymedePAControl.c p23_perf_telemetry.c fpga_fifo_v29.c
+BASE_SRCS = p2app.c controller_lease.c protocol2_control.c protocol2_command.c hwaccess.c saturnregisters.c codecwrite.c saturndrivers.c version.c generalpacket.c IncomingDDCSpecific.c IncomingDUCSpecific.c InHighPriority.c InDUCIQ.c InSpkrAudio.c OutMicAudio.c OutDDCIQ.c OutHighPriority.c debugaids.c auxadc.c cathandler.c frontpanelhandler.c catmessages.c LDGATU.c g2v2panel.c i2cdriver.c andromedacatmessages.c Outwideband.c serialport.c AriesATU.c GanymedePAControl.c p23_perf_telemetry.c fpga_fifo_v29.c fpga_adc_v30.c
 
 # for cppcheck
 CPP_OPTIONS= --inline-suppr --enable=all --suppress=unmatchedSuppression
@@ -146,6 +146,12 @@ test-fpga-fifo-v29:
 	./tests/fpga_fifo_v29_test
 	rm -f tests/fpga_fifo_v29_test
 
+test-fpga-adc-v30:
+	$(CC) $(CFLAGS) -I. -I../common tests/fpga_adc_v30_test.c \
+		../common/fpga_adc_v30.c ../common/p23_perf_telemetry.c -lpthread -o tests/fpga_adc_v30_test
+	./tests/fpga_adc_v30_test
+	rm -f tests/fpga_adc_v30_test
+
 test-speaker-pacing-diagnostics:
 	$(CC) $(CFLAGS) -I. -I../common tests/speaker_pacing_diagnostics_test.c \
 		../common/p23_perf_telemetry.c -lpthread -o tests/speaker_pacing_diagnostics_test
@@ -153,13 +159,13 @@ test-speaker-pacing-diagnostics:
 	rm -f tests/speaker_pacing_diagnostics_test
 
 test: test-controller-lease test-protocol2-control test-protocol2-command \
-	test-protocol2-high-priority test-fpga-fifo-v29 test-speaker-pacing-diagnostics
+	test-protocol2-high-priority test-fpga-fifo-v29 test-fpga-adc-v30 test-speaker-pacing-diagnostics
 
 clean:
 	rm -rf $(TARGET) *.o *.d *.bin tests/controller_lease_test tests/protocol2_control_test \
 		tests/protocol2_command_test tests/protocol2_command_test_asan \
 		tests/protocol2_high_priority_test tests/protocol2_high_priority_test_asan \
-		tests/fpga_fifo_v29_test tests/speaker_pacing_diagnostics_test
+		tests/fpga_fifo_v29_test tests/fpga_adc_v30_test tests/speaker_pacing_diagnostics_test
 
 smoke-shutdown: all
 	bash ./tools/shutdown_smoke.sh ./$(TARGET)

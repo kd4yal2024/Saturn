@@ -3648,6 +3648,121 @@
         height: 190px;
       }
     }
+    /* Operator center: one instrument strip, without changing control IDs or
+       the phone layout. Keep sizing intrinsic so meter content cannot spill
+       over the panadapter on shorter desktop windows. */
+    @media (min-width: 1024px) {
+      :root:not([data-layout="phone"]) .command-strip > .panel-body {
+        height: auto;
+        padding: 6px;
+      }
+      :root:not([data-layout="phone"]) .strip-grid {
+        grid-template-columns: minmax(270px, 0.8fr) minmax(0, 1.2fr);
+        grid-template-areas: "vfo meter" "secondary meter";
+        grid-template-rows: auto auto;
+        height: auto;
+        gap: 4px 10px;
+      }
+      :root:not([data-layout="phone"]) .primary-deck {
+        grid-area: vfo;
+        height: auto;
+        min-height: 100px;
+        padding: 6px 10px;
+        grid-template-areas: "top" "readout" "sub";
+        grid-template-rows: 16px auto 20px;
+      }
+      :root:not([data-layout="phone"]) .primary-deck .deck-top { display: flex; min-height: 16px; }
+      :root:not([data-layout="phone"]) .primary-deck .deck-frequency {
+        font-size: clamp(30px, 2.5vw, 46px);
+        letter-spacing: 0.025em;
+        font-variant-numeric: tabular-nums;
+      }
+      :root:not([data-layout="phone"]) .secondary-deck {
+        grid-area: secondary;
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 4px 10px;
+        padding: 4px 10px;
+        min-height: 32px;
+        height: auto;
+        background: transparent;
+      }
+      :root:not([data-layout="phone"]) .secondary-deck .deck-top { margin: 0; }
+      :root:not([data-layout="phone"]) .secondary-deck .deck-frequency { font-size: 18px; margin: 0; }
+      :root:not([data-layout="phone"]) .secondary-deck .deck-subline { display: none; }
+      :root:not([data-layout="phone"]) .control-cluster {
+        grid-area: meter;
+        display: block;
+        position: relative;
+        padding: 0;
+        height: auto;
+      }
+      :root:not([data-layout="phone"]) .launch-grid {
+        position: absolute;
+        top: 1px;
+        right: 2px;
+        display: flex;
+        height: 28px;
+        gap: 4px;
+        z-index: 5;
+      }
+      :root:not([data-layout="phone"]) .launch-grid > .btn,
+      :root:not([data-layout="phone"]) .launch-grid .setup-anchor,
+      :root:not([data-layout="phone"]) .launch-grid .setup-anchor > .btn {
+        min-height: 28px;
+        height: 28px;
+        padding: 3px 8px;
+      }
+      :root:not([data-layout="phone"]) .top-meter-bank { height: auto; padding: 0; border: 0; gap: 3px; }
+      :root:not([data-layout="phone"]) .instrument-state-line { min-height: 30px; padding-right: 150px; }
+      :root:not([data-layout="phone"]) .instrument-state-frequency { display: none; }
+      :root:not([data-layout="phone"]) .multimeter-workbench {
+        grid-template-columns: minmax(140px, 1fr) minmax(170px, 0.8fr);
+        padding: 3px 5px;
+      }
+      :root:not([data-layout="phone"]) .top-meter-bank .multimeter-workbench > .multimeter-svg {
+        height: 104px !important;
+        max-height: 104px !important;
+      }
+      :root:not([data-layout="phone"]) .multimeter-control-stack {
+        grid-template-columns: 1fr 1fr;
+        grid-template-rows: auto auto;
+        padding: 3px;
+        align-items: center;
+      }
+      :root:not([data-layout="phone"]) .multimeter-control-stack > .meter-name { display: none; }
+      :root:not([data-layout="phone"]) .multimeter-digital { grid-column: 2; grid-row: 1 / 3; padding: 4px; }
+      :root:not([data-layout="phone"]) .multimeter-digital .instrument-primary-readout { font-size: 20px; }
+      :root:not([data-layout="phone"]) .meter-response-label { display: none; }
+      :root:not([data-layout="phone"]) .multimeter-console {
+        grid-template-columns: minmax(110px, 0.6fr) minmax(0, 1.4fr);
+        padding: 3px;
+      }
+      :root:not([data-layout="phone"]) .tx-tool-dock { display: grid; grid-template-columns: 1fr; gap: 2px; }
+      :root:not([data-layout="phone"]) .display-card.scope-frame {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 180px;
+        grid-template-rows: auto auto minmax(0, 1fr);
+      }
+      :root:not([data-layout="phone"]) .display-head { grid-column: 1; padding: 5px 8px; min-width: 0; }
+      :root:not([data-layout="phone"]) .display-head > div:first-child { display: none; }
+      :root:not([data-layout="phone"]) .display-pill-row { flex-wrap: wrap; justify-content: flex-start; gap: 4px; }
+      :root:not([data-layout="phone"]) .display-pill-row > * { min-height: 28px; padding: 3px 7px; font-size: 10px; }
+      :root:not([data-layout="phone"]) .display-zoom { grid-column: 2; grid-row: 1; padding: 4px 8px; align-self: center; }
+      :root:not([data-layout="phone"]) .frequency-ruler { grid-column: 1 / -1; padding: 3px 10px; }
+      :root:not([data-layout="phone"]) .ruler-main { display: none; }
+      :root:not([data-layout="phone"]) .display-stack { grid-column: 1 / -1; min-width: 0; }
+    }
+    .meter-details { min-width: 0; }
+    .meter-details > summary {
+      padding: 5px 8px;
+      color: var(--text-secondary);
+      font: 600 10px/1.4 var(--font-instrument);
+      cursor: pointer;
+      border-top: 1px solid var(--border-subtle);
+    }
+    .meter-details > summary:focus-visible { outline: 2px solid var(--rx-cyan); outline-offset: -2px; }
   </style>
   <style id="saturn-operator-layout-v2">
     :root {
@@ -6732,6 +6847,38 @@
       .multimeter-console .top-meter-telemetry { display: none !important; }
     }
   </style>
+  <style>
+    /* Meter preview: one instrument face, with controls and readings sharing its space. */
+    @media (min-width: 1024px) {
+      :root:not([data-layout="phone"]) .multimeter-workbench {
+        grid-template-columns: minmax(0, 1fr) minmax(140px, .35fr);
+        grid-template-rows: 28px 170px;
+        gap: 3px 10px;
+        padding: 4px 8px;
+        background: linear-gradient(180deg, #0b171e, #050b0f);
+      }
+      :root:not([data-layout="phone"]) .multimeter-control-stack { display: contents; }
+      :root:not([data-layout="phone"]) #instrument-meter-mode {
+        grid-column: 1; grid-row: 1; width: min(100%, 200px); min-height: 28px;
+      }
+      :root:not([data-layout="phone"]) .meter-response-control { grid-column: 2; grid-row: 1; }
+      :root:not([data-layout="phone"]) .top-meter-bank .multimeter-workbench > .multimeter-svg {
+        grid-column: 1; grid-row: 2; height: 170px !important; max-height: 170px !important;
+      }
+      :root:not([data-layout="phone"]) .multimeter-control-stack > .multimeter-digital {
+        grid-column: 2; grid-row: 2; border: 0; background: transparent;
+        box-shadow: none; align-self: center; padding: 8px 0;
+      }
+      :root:not([data-layout="phone"]) .multimeter-digital .instrument-primary-readout { font-size: clamp(22px, 1.6vw, 30px); }
+      :root:not([data-layout="phone"]) .multimeter-digital #meter-readout { font-size: 13px; color: var(--text-secondary); }
+      :root:not([data-layout="phone"]) .multimeter-shell > .instrument-rx-audio {
+        display: grid; grid-template-columns: 1fr 1fr; gap: 12px; padding: 6px 10px;
+      }
+      :root:not([data-layout="phone"]) .multimeter-console { grid-template-columns: 1fr; }
+      :root:not([data-layout="phone"]) .multimeter-svg > rect,
+      :root:not([data-layout="phone"]) .multimeter-svg > ellipse { opacity: 0; }
+    }
+  </style>
 </head>
 <body>
   <div class="page console-page">
@@ -6917,6 +7064,11 @@
                     <div class="setup-panel" id="setup-panel-display" data-setup-panel-id="display" role="tabpanel" aria-labelledby="setup-tab-display" hidden>
                       <div class="setup-section">
                         <div class="setup-section-title">Panadapter / Waterfall</div>
+                        <div class="setup-row">
+                          <button class="btn ghost" id="display-transceiver-clarity" type="button">Transceiver clarity</button>
+                          <button class="btn ghost" id="display-appearance-undo" type="button" disabled>Undo appearance</button>
+                          <div class="setup-readout">Enhanced trace, subtle gradient fill and Enhanced waterfall. No added smoothing; audio, averaging and RF settings stay unchanged.</div>
+                        </div>
                         <div class="setup-grid">
                           <label class="toggle-field"><span>Spectrum Auto Range</span><input id="display-spectrum-auto-range" type="checkbox" /></label>
                           <label class="toggle-field"><span>Waterfall Auto Range</span><input id="display-waterfall-auto-range" type="checkbox" /></label>
@@ -6985,7 +7137,7 @@
                           <div class="setup-row">
                             <label class="label" for="display-waterfall-smoothing">Waterfall Noise Cleanup</label>
                             <input id="display-waterfall-smoothing" type="range" min="0" max="100" step="1" value="0"
-                              title="Display-only smoothing and adaptive background suppression. High values can hide very weak signals." />
+                              title="Display-only smoothing of small level fluctuations. Preserves steady-level colors; changes of 6 dB or more pass immediately. Higher settings can soften small, brief signals." />
                             <div class="setup-readout" id="display-waterfall-smoothing-readout">Off</div>
                           </div>
                         </div>
@@ -6994,12 +7146,14 @@
                             <label class="label" for="display-waterfall-palette">Waterfall Palette</label>
                             <select class="field" id="display-waterfall-palette">
                               <option value="classic">Classic</option>
+                              <option value="enhanced">Enhanced (Thetis-style)</option>
                               <option value="ember">Ember</option>
                               <option value="ice">Ice</option>
                               <option value="forest">Forest</option>
                             </select>
                           </div>
                           <label class="toggle-field"><span>Spectrum Peak Hold</span><input id="display-spectrum-peak-hold" type="checkbox" /></label>
+                          <label class="toggle-field"><span>Enhanced Trace / Fill Colors</span><input id="display-spectrum-enhanced-colors" type="checkbox" /></label>
                           <label class="toggle-field"><span>Peak Tuning Assist</span><input id="display-peak-tune-assist" type="checkbox" /></label>
                           <label class="toggle-field"><span>Show Grid</span><input id="display-show-grid" type="checkbox" /></label>
                           <label class="toggle-field"><span>Show Center Line</span><input id="display-show-center-line" type="checkbox" /></label>
@@ -7391,7 +7545,6 @@
                   </div>
                 </div>
 
-                <div class="multimeter-console">
                   <div class="instrument-rx-audio" aria-label="Receiver audio stereo peak meters">
                     <div class="rx-audio-meter-row">
                       <span class="rx-audio-channel">L</span>
@@ -7405,6 +7558,9 @@
                     </div>
                   </div>
 
+                <details class="meter-details">
+                  <summary>More meter details &amp; TX tools</summary>
+                <div class="multimeter-console">
                   <div class="top-meter-telemetry">
                   <div class="top-meter-telemetry-head">
                     <span class="top-meter-telemetry-title">Telemetry</span>
@@ -7443,6 +7599,7 @@
                   </select>
                 </div>
               </div>
+                </details>
             </div>
           </div>
         </div>
@@ -8286,6 +8443,7 @@
     const DISPLAY_WAN_PACKET_HISTORY = 18;
     const DISPLAY_PHONE_WAN_PACKET_HISTORY = 8;
     const DISPLAY_BASE_RENDER_INTERVAL_MS = 33;
+    const DISPLAY_STATUS_REFRESH_INTERVAL_MS = 250;
     const DISPLAY_WAN_RENDER_INTERVAL_MS = 50;
     const DISPLAY_PHONE_WAN_RENDER_INTERVAL_MS = 33;
     const DISPLAY_PHONE_WAN_WATERFALL_INTERVAL_MS = 50;
@@ -8325,7 +8483,7 @@
     const CSRF_HEADER_VALUE = "1";
     const ALLOWED_SAMPLE_RATES = Object.freeze([48000, 96000, 192000, 384000]);
     const ALLOWED_DEMOD_MODES = Object.freeze(["USB", "LSB", "AM", "SAM", "FM", "WFM", "DIGU", "DIGL", "CWU", "CWL"]);
-    const WATERFALL_PALETTES = Object.freeze(["classic", "ember", "ice", "forest"]);
+    const WATERFALL_PALETTES = Object.freeze(["classic", "ember", "ice", "forest", "enhanced"]);
     const HAM_BAND_EDGES_HZ = Object.freeze([
       { start: 1800000, end: 2000000, label: "160m" },
       { start: 3500000, end: 4000000, label: "80m" },
@@ -8896,6 +9054,10 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       txDroppedFrames: 0,
     };
     let browserTimingProbeStarted = false;
+    const displayTimingBuckets = { fft: [], drawCpu: [], arrivalToDraw: [] };
+    const displaySlowFrames = [];
+    let displayFirstIqAt = null;
+    let displayFirstIqToDrawMs = null;
     let browserTimingLastRafAt = 0;
     let remoteSettingsSaveTimer = null;
     let freqEntryBuffer = "";
@@ -8964,14 +9126,32 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
           #version 300 es
           precision highp float;
           uniform vec4 u_color;
+          uniform bool u_enhanced;
+          uniform float u_height;
+          uniform vec4 u_stops[8];
           out vec4 outColor;
           void main() {
             outColor = u_color;
+            if (u_enhanced) {
+              float level = clamp(gl_FragCoord.y / u_height, 0.0, 1.0);
+              for (int i = 1; i < 8; i++) {
+                if (level <= u_stops[i].x) {
+                  float fraction = (level - u_stops[i-1].x) / (u_stops[i].x - u_stops[i-1].x);
+                  outColor.rgb = mix(u_stops[i-1].yzw, u_stops[i].yzw, fraction);
+                  break;
+                }
+              }
+            }
           }
         `);
         this.program = this.link(vertexShader, fragmentShader);
         this.positionLocation = gl.getAttribLocation(this.program, "a_position");
         this.colorLocation = gl.getUniformLocation(this.program, "u_color");
+        this.enhancedLocation = gl.getUniformLocation(this.program, "u_enhanced");
+        this.heightLocation = gl.getUniformLocation(this.program, "u_height");
+        gl.useProgram(this.program);
+        gl.uniform4fv(gl.getUniformLocation(this.program, "u_stops[0]"),
+          new Float32Array(WaterfallRenderer.enhancedStops.flatMap(([level, r, g, b]) => [level, r / 255, g / 255, b / 255])));
         this.offsetLocation = gl.getUniformLocation(this.program, "u_offset");
         this.vertexBuffer = gl.createBuffer();
       }
@@ -9049,8 +9229,8 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         const vertices = new Float32Array(renderedBins.length * 2);
         for (let i = 0; i < renderedBins.length; i += 1) {
           const x = (i / (renderedBins.length - 1)) * 2 - 1;
-          const normalized = (renderedBins[i] - floorDb) / (ceilingDb - floorDb);
-          const y = Math.max(-1, Math.min(1, normalized * 1.8 - 0.9));
+          const normalized = (renderedBins[i] - floorDb) / Math.max(1, ceilingDb - floorDb);
+          const y = Math.max(-1, Math.min(1, normalized * 2 - 1));
           const index = i * 2;
           vertices[index] = x;
           vertices[index + 1] = y;
@@ -9060,6 +9240,8 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         gl.clear(gl.COLOR_BUFFER_BIT);
         gl.useProgram(this.program);
         gl.bindBuffer(gl.ARRAY_BUFFER, this.vertexBuffer);
+        gl.uniform1i(this.enhancedLocation, state.spectrumEnhancedColors ? 1 : 0);
+        gl.uniform1f(this.heightLocation, this.canvas.height);
         gl.enableVertexAttribArray(this.positionLocation);
         gl.vertexAttribPointer(this.positionLocation, 2, gl.FLOAT, false, 0, 0);
         gl.enable(gl.BLEND);
@@ -9138,9 +9320,16 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         const dpr = Math.max(1, window.devicePixelRatio || 1);
         const glow = _next.clampSpectrumVisualEffect(state.spectrumPeakGlow) / 100;
         const fill = _next.clampSpectrumVisualEffect(state.spectrumTraceFill) / 100;
+        let paint = traceColor;
+        if (state.spectrumEnhancedColors) {
+          paint = ctx.createLinearGradient(0, height, 0, 0);
+          for (const [level, r, g, b] of WaterfallRenderer.enhancedStops) {
+            paint.addColorStop(level, `rgb(${r}, ${g}, ${b})`);
+          }
+        }
         if (fill > 0) {
           ctx.globalAlpha = fill;
-          ctx.fillStyle = traceColor;
+          ctx.fillStyle = paint;
           ctx.beginPath();
           ctx.moveTo(0, height);
           for (let i = 0; i < bins.length; i += 1) {
@@ -9154,8 +9343,8 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
           ctx.fill();
           ctx.globalAlpha = 1;
         }
-        ctx.strokeStyle = traceColor;
-        ctx.lineWidth = 2;
+        ctx.strokeStyle = paint;
+        ctx.lineWidth = dpr;
         ctx.lineJoin = "round";
         ctx.lineCap = "round";
         ctx.shadowColor = traceColor;
@@ -9188,6 +9377,21 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     }
 
     class WaterfallRenderer {
+      // Thetis Enhanced's signal-level breakpoints, expressed as a continuous
+      // color ramp. Reference: Thetis display.cs, ColorScheme.enhanced.
+      // Use one consistent pale-purple endpoint (Thetis has a small endpoint
+      // jump). These are display colors, not changes to the input FFT values.
+      static enhancedStops = [
+        [0, 0, 0, 0],
+        [2 / 9, 0, 0, 255],
+        [3 / 9, 0, 255, 255],
+        [4 / 9, 0, 255, 0],
+        [5 / 9, 255, 255, 0],
+        [7 / 9, 255, 0, 0],
+        [8 / 9, 255, 0, 255],
+        [1, 192, 124, 255],
+      ];
+
       constructor(canvas) {
         this.canvas = canvas;
         this.gl = null;
@@ -9197,6 +9401,8 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         this.texture = null;
         this.textureWidth = 1024;
         this.textureHeight = 512;
+        this.textureHead = 0;
+        this.headLocation = null;
         this.textureData = new Uint8Array(this.textureWidth * this.textureHeight * 4);
         this.pendingBins = null;
         this.pendingFloorDb = -180;
@@ -9233,15 +9439,23 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         `);
         const fragmentShader = this.compile(gl.FRAGMENT_SHADER, `
           #version 300 es
-          precision mediump float;
+          precision highp float;
           uniform sampler2D u_texture;
+          uniform float u_head;
           in vec2 v_uv;
           out vec4 outColor;
           void main() {
-            outColor = texture(u_texture, vec2(v_uv.x, 1.0 - v_uv.y));
+            float height = float(textureSize(u_texture, 0).y);
+            // Clamp in logical history coordinates so the oldest and newest
+            // rows never blend at the display edges. REPEAT joins the physical
+            // ring seam when adjacent historical rows straddle the texture.
+            float row = clamp((1.0 - v_uv.y) * height - 0.5, 0.0, height - 1.0);
+            float y = (u_head + row + 0.5) / height;
+            outColor = texture(u_texture, vec2(v_uv.x, y));
           }
         `);
         this.program = this.link(vertexShader, fragmentShader);
+        this.headLocation = gl.getUniformLocation(this.program, "u_head");
         this.positionBuffer = gl.createBuffer();
         gl.bindBuffer(gl.ARRAY_BUFFER, this.positionBuffer);
         gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([
@@ -9255,7 +9469,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.REPEAT);
         gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, this.textureWidth, this.textureHeight, 0, gl.RGBA, gl.UNSIGNED_BYTE, this.textureData);
       }
 
@@ -9312,6 +9526,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
           return;
         }
         this.textureWidth = width;
+        this.textureHead = 0;
         this.textureData = new Uint8Array(this.textureWidth * this.textureHeight * 4);
         const gl = this.gl;
         gl.bindTexture(gl.TEXTURE_2D, this.texture);
@@ -9320,6 +9535,8 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
 
       clear() {
         this.smoothedBins = null;
+        this.pendingBins = null;
+        this.textureHead = 0;
         if (this.gl) {
           this.textureData.fill(0);
           const gl = this.gl;
@@ -9420,10 +9637,11 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         }
         this.ensureWidth(renderedBins.length);
         const rowBytes = this.textureWidth * 4;
-        this.textureData.copyWithin(rowBytes, 0, rowBytes * (this.textureHeight - 1));
+        this.textureHead = (this.textureHead + this.textureHeight - 1) % this.textureHeight;
+        const rowOffset = this.textureHead * rowBytes;
         for (let i = 0; i < this.textureWidth; i += 1) {
           const color = this.colorForDb(renderedBins[i], floorDb, ceilingDb, palette, contrast);
-          const offset = i * 4;
+          const offset = rowOffset + i * 4;
           this.textureData[offset] = color[0];
           this.textureData[offset + 1] = color[1];
           this.textureData[offset + 2] = color[2];
@@ -9431,7 +9649,8 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         }
         const gl = this.gl;
         gl.bindTexture(gl.TEXTURE_2D, this.texture);
-        gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, this.textureWidth, this.textureHeight, gl.RGBA, gl.UNSIGNED_BYTE, this.textureData);
+        gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, this.textureHead, this.textureWidth, 1, gl.RGBA, gl.UNSIGNED_BYTE,
+          this.textureData.subarray(rowOffset, rowOffset + rowBytes));
       }
 
       colorForDb(db, floorDb, ceilingDb, palette = "classic", contrast = 100) {
@@ -9439,6 +9658,21 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         const contrastScale = clampWaterfallContrast(contrast) / 100;
         const t = Math.max(0, Math.min(1, 0.5 + (rawT - 0.5) * contrastScale));
         const normalizedPalette = normalizeWaterfallPalette(palette);
+        if (normalizedPalette === "enhanced") {
+          const level = Number.isFinite(t) ? t : 0;
+          const stops = WaterfallRenderer.enhancedStops;
+          for (let i = 1; i < stops.length; i += 1) {
+            const high = stops[i];
+            if (level > high[0]) continue;
+            const low = stops[i - 1];
+            const mix = (level - low[0]) / (high[0] - low[0]);
+            return [
+              Math.round(low[1] + (high[1] - low[1]) * mix),
+              Math.round(low[2] + (high[2] - low[2]) * mix),
+              Math.round(low[3] + (high[3] - low[3]) * mix),
+            ];
+          }
+        }
         if (normalizedPalette === "ember") {
           if (t < 0.45) {
             const u = t / 0.45;
@@ -9446,7 +9680,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
           }
           if (t < 0.78) {
             const u = (t - 0.45) / 0.33;
-            return [Math.round(120 + u * 110), Math.round(52 + u * 90), Math.round(38 + u * 24)];
+            return [Math.round(120 + u * 120), Math.round(52 + u * 92), Math.round(38 + u * 24)];
           }
           const u = (t - 0.78) / 0.22;
           return [240, Math.round(144 + u * 90), Math.round(62 + u * 92)];
@@ -9468,7 +9702,8 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
           return [Math.round(40 + u * 200), Math.round(142 + u * 90), Math.round(64 - u * 22)];
         }
         if (t < 0.28) {
-          return [4, Math.round(26 + t * 50), Math.round(58 + t * 120)];
+          const u = t / 0.28;
+          return [Math.round(4 + u * 4), Math.round(26 + u * 14), Math.round(58 + u * 70)];
         }
         if (t < 0.58) {
           const u = (t - 0.28) / 0.30;
@@ -9507,6 +9742,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         gl.clearColor(0.02, 0.05, 0.07, 1.0);
         gl.clear(gl.COLOR_BUFFER_BIT);
         gl.useProgram(this.program);
+        gl.uniform1f(this.headLocation, this.textureHead);
         gl.bindBuffer(gl.ARRAY_BUFFER, this.positionBuffer);
         const positionLocation = gl.getAttribLocation(this.program, "a_position");
         gl.enableVertexAttribArray(positionLocation);
@@ -9541,6 +9777,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
           ctx.fillStyle = `rgb(${color[0]}, ${color[1]}, ${color[2]})`;
           ctx.fillRect(x, 0, 1, 1);
         }
+        this.pendingBins = null;
       }
     }
 
@@ -9612,10 +9849,16 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     let fftProcessor = new FftProcessor(1024);
 
     function resetDisplayHistory() {
+      displaySlowFrames.length = 0;
+      displayFirstIqAt = null;
+      displayFirstIqToDrawMs = null;
+      for (const bucket of Object.values(displayTimingBuckets)) bucket.length = 0;
       state.iqPackets = [];
       state.displayIqSource = "rx";
       state.txDisplaySettleFrames = 0;
       state.latestBins = new Float32Array(fftProcessor.size);
+      state.latestBins.fill(state.displayFloorDb);
+      state.spectrumAverageBypassFrames = 1;
       state.fftWidth = state.latestBins.length;
       state.lastSpectrumRenderAt = 0;
       state.lastRenderedIqFrameVersion = -1;
@@ -9868,10 +10111,8 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       }
       const avgFrames = clampSpectrumAverage(state.spectrumAverage);
       let bins = new Float32Array(rawBins.length);
-      if (!state.latestBins || state.latestBins.length !== rawBins.length) {
-        state.latestBins = new Float32Array(rawBins.length);
-      }
-      const bypassAverage = state.spectrumAverageBypassFrames > 0;
+      const hasHistory = state.latestBins?.length === rawBins.length;
+      const bypassAverage = !hasHistory || state.spectrumAverageBypassFrames > 0;
       if (avgFrames > 1 && !bypassAverage && state.latestBins.length === rawBins.length) {
         const alpha = 1 / avgFrames;
         for (let i = 0; i < rawBins.length; i += 1) {
@@ -9879,7 +10120,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         }
       } else {
         bins.set(rawBins);
-        if (bypassAverage) {
+        if (state.spectrumAverageBypassFrames > 0) {
           state.spectrumAverageBypassFrames -= 1;
         }
       }
@@ -10224,8 +10465,34 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     }
 
     function buildPerfSnapshot() {
+      const displayPipeline = displayPipelineSnapshot();
       flushBrowserTimingStats();
-      return _next.buildPerfSnapshot(state, performance.now());
+      return {
+        ..._next.buildPerfSnapshot(state, performance.now()),
+        displayPipeline,
+      };
+    }
+
+    function displayPipelineSnapshot(now = performance.now()) {
+      return {
+        samples: displayTimingBuckets.fft.length,
+        fftMs: timingStats(displayTimingBuckets.fft),
+        drawCpuMs: timingStats(displayTimingBuckets.drawCpu),
+        newestIqArrivalToDrawMs: timingStats(displayTimingBuckets.arrivalToDraw),
+        firstIqToDrawMs: displayFirstIqToDrawMs,
+        // Browser-local draw submission timing; excludes FPGA/network age
+        // and GPU presentation time. No cross-clock latency claim.
+        timingScope: "browser-arrival-to-draw-submission",
+        fftSize: fftProcessor.size,
+        waterfallBackend: waterfallRenderer.backend,
+        ...displayProfileDiagnostics(now),
+        browserMainLagMs: timingStats(browserTimingBuckets.mainLag),
+        browserRafIntervalMs: timingStats(browserTimingBuckets.rafInterval),
+        audioQueueMs: audioLeadMs(),
+        audioContextBaseLatencyMs: state.audioContextBaseLatencyMs,
+        audioContextOutputLatencyMs: state.audioContextOutputLatencyMs,
+        slowFrames: displaySlowFrames.map((frame) => ({ ...frame })),
+      };
     }
 
     function recordPerfSnapshot() {
@@ -10270,6 +10537,8 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       },
       clear() {
         state.perfSnapshots = [];
+        displaySlowFrames.length = 0;
+        for (const bucket of Object.values(displayTimingBuckets)) bucket.length = 0;
       },
       start(options = {}) {
         state.perfCaptureEnabled = true;
@@ -11903,6 +12172,24 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         : prefs;
     }
 
+    // Appearance only: do not change signal processing, range, zoom or cadence.
+    function transceiverClarityAppearance() {
+      return {
+        spectrumTraceColor: "#72e5ff",
+        spectrumEnhancedColors: true,
+        spectrumTraceFill: 15,
+        spectrumTraceSmoothing: 0,
+        spectrumPeakGlow: 0,
+        spectrumGlassSheen: 0,
+        waterfallPalette: "enhanced",
+        waterfallContrast: 100,
+        waterfallSmoothing: 0,
+        showGrid: true,
+        showCenterLine: true,
+        showBandEdges: true,
+      };
+    }
+
     function currentDisplayPrefs() {
       return _next.displayPrefsFromState(state);
     }
@@ -12510,6 +12797,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       setChecked("display-spectrum-auto-range", prefs.spectrumAutoRange);
       setChecked("display-waterfall-auto-range", prefs.waterfallAutoRange);
       setChecked("display-spectrum-peak-hold", prefs.spectrumPeakHold);
+      setChecked("display-spectrum-enhanced-colors", prefs.spectrumEnhancedColors);
       setChecked("display-peak-tune-assist", prefs.peakTuneAssistEnabled);
       setChecked("display-show-grid", prefs.showGrid);
       setChecked("display-show-center-line", prefs.showCenterLine);
@@ -13603,6 +13891,44 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       return DISPLAY_BASE_FFT_SIZE;
     }
 
+    function displayProfileDiagnostics(now = performance.now()) {
+      const phoneWan = phoneWanLiteActive(now);
+      const wan = wanDisplayActive(now);
+      const reasons = [];
+      const freshRtt = state.bridgeRttMs != null && now - state.bridgeRttAt <= BRIDGE_RTT_STALE_MS;
+      if (state.streamMode === "wan") reasons.push("RX Transport is set to WAN");
+      if (tailnetTransportActive()) reasons.push("Page uses a Tailscale host");
+      if (freshRtt && state.bridgeRttMs > (phoneWan ? 180 : 250)) reasons.push("Recent bridge RTT exceeds display threshold");
+      return {
+        profile: phoneWan ? "phone-wan" : (wan ? "wan" : "lan"),
+        profileReasons: reasons.length ? reasons : ["LAN display defaults"],
+        streamMode: state.streamMode,
+        targetFftSize: displayFftTargetSize(now),
+        targetRenderIntervalMs: displayRenderIntervalMs(now),
+        sampleRateHz: displaySampleRateHz(),
+        binSpacingHz: displaySampleRateHz() / fftProcessor.size,
+        bridgeRttMs: state.bridgeRttMs,
+        bridgeRttFresh: freshRtt,
+      };
+    }
+
+    function recordDisplaySlowFrame(rafGapMs, fftMs, drawCpuMs, arrivalToDrawMs) {
+      if (Math.max(rafGapMs, fftMs + drawCpuMs, arrivalToDrawMs) < 100) return;
+      displaySlowFrames.push({
+        capturedAtIso: new Date().toISOString(),
+        visibility: document.visibilityState,
+        rafGapMs: roundedTimingMs(rafGapMs),
+        fftMs: roundedTimingMs(fftMs),
+        drawCpuMs: roundedTimingMs(drawCpuMs),
+        arrivalToDrawMs: roundedTimingMs(arrivalToDrawMs),
+        audioQueueMs: audioLeadMs(),
+        audioUnderruns: state.rxWorkletUnderruns,
+        bridgeQueuedBytes: state.bridgeOutboundQueuedBytes,
+        profile: displayProfileDiagnostics().profile,
+      });
+      if (displaySlowFrames.length > 16) displaySlowFrames.shift();
+    }
+
     function displayPacketHistoryLimit(now = performance.now()) {
       if (phoneWanLiteActive(now)) {
         return DISPLAY_PHONE_WAN_PACKET_HISTORY;
@@ -13851,6 +14177,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     }
 
     function operatorDetailGroups(now = performance.now()) {
+      const display = displayPipelineSnapshot(now);
       const band = vfoBandState();
       const readyMs = txReadyRemainingMs();
       const leadMs = audioLeadMs();
@@ -13923,6 +14250,9 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
             operatorDetailItem("Media Backlog", `Bridge ${state.bridgeOutboundQueuedBytes} B / browser ${state.wsMediaBacklogBytes} B`, `Bridge high-water ${state.outboundHighWatermarkBytes} B; TCP outq high-water ${state.bridgeTcpOutqHighWatermarkBytes} B`, state.bridgeOutboundQueuedBytes > 32768 || state.wsMediaBacklogBytes > 32768 ? "warn" : "ok"),
             operatorDetailItem("Recovery", recoveryMs == null ? "None" : `${Math.round(recoveryMs)} ms`, state.connectionLossStartedAt ? "Connection is currently down" : `${state.connectionLossCount} unexpected loss event(s)`, state.connectionLossStartedAt ? "warn" : "ok"),
             operatorDetailItem("Profiles", `${networkProfileLabel(now)} / ${audioProfileLabel()}`, `Display ${Math.round(state.sampleRate / 1000)} kHz; ${audioPath} audio path`, "rx"),
+            operatorDetailItem("Display Profile", `${display.profile.toUpperCase()} · ${display.fftSize} bins`, `${display.profileReasons.join("; ")}. Target ${display.targetFftSize} bins; ${display.binSpacingHz.toFixed(2)} Hz/bin.`, "rx"),
+            operatorDetailItem("Display Timing", display.samples ? `${display.newestIqArrivalToDrawMs.p99} ms arrival → draw p99` : "Waiting for IQ", `FFT ${display.fftMs.p99} ms; draw CPU ${display.drawCpuMs.p99} ms p99. Browser-local submission timing.`, "rx"),
+            operatorDetailItem("Slow Display Frames", `${display.slowFrames.length} retained`, "Last 16 draws with ≥100 ms animation gap, processing, or arrival-to-draw time. Included in Copy Network Diagnostics.", display.slowFrames.length ? "warn" : "ok"),
           ],
         },
         {
@@ -13953,7 +14283,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         : state.connectionRecoveryMs;
       const audioDropEvents = state.audioBackpressureDrops + state.rxWorkletDrops +
         state.audioSeqResyncCount;
-      return _next.formatRxLatencyDiagnostic({
+      const audioDiagnostic = _next.formatRxLatencyDiagnostic({
         capturedAtIso: new Date().toISOString(),
         connection: reconnectConnectionState(now).label,
         bridgeUrl: state.wsUrl || window.location.host || "Default",
@@ -13989,6 +14319,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         reconnectAttempt: reconnectSnapshot.attempt,
         reconnectReason: reconnectSnapshot.lastReason,
       });
+      return `${audioDiagnostic}\n\nDisplay pipeline (browser timing, not audio/display synchronization):\n${JSON.stringify(displayPipelineSnapshot(now), null, 2)}`;
     }
 
     async function copyRxLatencyDiagnostic() {
@@ -17412,7 +17743,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
                 logEvent(`TX timeout — max duration ${state.txTimeoutSeconds} s reached, cancelling MOX`);
                 void setPtt(false);
               }
-            }, delayMs);
+            }, Math.max(10, Number(state.txTimeoutSeconds) || 180) * 1000);
           }
         }
       }
@@ -17694,8 +18025,9 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     function displayIqForSource(iq, sourceKind) {
       // piHPSDR feeds WDSP TX IQ output directly to Spectrum0 without
       // conjugation.  The bin reversal in visibleBinsForDisplay handles
-      // sideband orientation for both RX and TX.
-      return new Float32Array(iq);
+      // sideband orientation for both RX and TX. appendIqPacket makes the one
+      // retained copy; copying here as well doubles full-rate TCI IQ traffic.
+      return iq;
     }
 
     function buildRenderIqWindow() {
@@ -17704,13 +18036,15 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       }
 
       const desiredComplexSamples = displayFftTargetSize();
+      const desiredFloats = desiredComplexSamples * 2;
       const selected = [];
       let totalFloats = 0;
       for (let i = state.iqPackets.length - 1; i >= 0; i -= 1) {
         const packet = state.iqPackets[i];
-        selected.push(packet);
-        totalFloats += packet.length;
-        if ((totalFloats / 2) >= desiredComplexSamples) {
+        const take = Math.min(packet.length, desiredFloats - totalFloats);
+        selected.push({ packet, start: packet.length - take, take });
+        totalFloats += take;
+        if (totalFloats >= desiredFloats) {
           break;
         }
       }
@@ -17718,13 +18052,14 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       selected.reverse();
       const combined = new Float32Array(totalFloats);
       let offset = 0;
-      for (const packet of selected) {
-        combined.set(packet, offset);
-        offset += packet.length;
+      for (const part of selected) {
+        combined.set(part.packet.subarray(part.start, part.start + part.take), offset);
+        offset += part.take;
       }
       return combined;
     }
 
+    let lastIqUiRefreshAt = -Infinity;
     function handleIqFrame(buffer, sourceKind = "rx") {
       if (buffer.byteLength < 64) {
         return;
@@ -17762,12 +18097,17 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         logEvent(`Received ${sourceKind.toUpperCase()} IQ frame: ${samplePairs} complex samples @ ${Math.round(sampleRate / 1000)} kHz`);
       }
       state.lastFrameAt = performance.now();
+      if (displayFirstIqAt === null) displayFirstIqAt = state.lastFrameAt;
       state.iqFrameVersion = (state.iqFrameVersion || 0) + 1;
       state.frameCounter += 1;
       state.displayCaption = sourceKind === "tx"
         ? `Live TX IQ: ${samplePairs} samples at ${Math.round(sampleRate / 1000)} kHz, display ±${Math.round(TX_DISPLAY_SPAN_HZ / 2000)} kHz`
         : `Live RX IQ frame: ${samplePairs} complex samples at ${Math.round(sampleRate / 1000)} kHz`;
-      updateUi();
+      const now = performance.now();
+      if (sourceChanged || nextDisplayRate !== prevDisplayRate || now - lastIqUiRefreshAt >= DISPLAY_STATUS_REFRESH_INTERVAL_MS) {
+        lastIqUiRefreshAt = now;
+        scheduleUiRefresh();
+      }
     }
 
     function renderIdleFrame(now) {
@@ -17799,6 +18139,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     }
 
     function animationLoop(now) {
+      const rafGapMs = browserTimingLastRafAt > 0 ? now - browserTimingLastRafAt : 0;
       recordRafTiming(now);
       updateMeterVisualState(now);
       const phoneWanLite = phoneWanLiteActive(now);
@@ -17824,7 +18165,10 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
             if (fftSize !== fftProcessor.size) {
               fftProcessor = new FftProcessor(fftSize);
             }
+            const fftStartedAt = performance.now();
             const bins = fftProcessor.transform(iqWindow);
+            const drawStartedAt = performance.now();
+            recordBrowserTimingSample(displayTimingBuckets.fft, drawStartedAt - fftStartedAt);
             const visibleBins = visibleBinsForDisplay(bins);
             const processedBins = processedDisplayBins(visibleBins);
             updateDisplayRange(processedBins);
@@ -17863,6 +18207,13 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
             }
             state.lastRenderedIqFrameVersion = state.iqFrameVersion;
             state.lastSpectrumRenderAt = now;
+            const drawEndedAt = performance.now();
+            recordBrowserTimingSample(displayTimingBuckets.drawCpu, drawEndedAt - drawStartedAt);
+            recordBrowserTimingSample(displayTimingBuckets.arrivalToDraw, drawEndedAt - state.lastFrameAt);
+            recordDisplaySlowFrame(rafGapMs, drawStartedAt - fftStartedAt, drawEndedAt - drawStartedAt, drawEndedAt - state.lastFrameAt);
+            if (displayFirstIqToDrawMs === null && displayFirstIqAt !== null) {
+              displayFirstIqToDrawMs = roundedTimingMs(drawEndedAt - displayFirstIqAt);
+            }
           }
         }
       } else if (txDisplayActive) {
@@ -18652,6 +19003,34 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         persistLocalSettingsFallback(currentRemoteSettings());
         scheduleRemoteSettingsSave();
       };
+      let previousDisplayAppearance = null;
+      $("display-spectrum-enhanced-colors").addEventListener("change", () => {
+        state.spectrumEnhancedColors = $("display-spectrum-enhanced-colors").checked;
+        refreshSpectrumAppearance();
+      });
+      const applyAppearance = (appearance) => {
+        Object.assign(state, appearance);
+        waterfallRenderer.smoothedBins = null;
+        syncSetupMenuFields();
+        updateDisplayDecorations();
+        refreshSpectrumAppearance();
+      };
+      $("display-transceiver-clarity").addEventListener("click", () => {
+        const appearance = transceiverClarityAppearance();
+        if (!previousDisplayAppearance) {
+          previousDisplayAppearance = Object.fromEntries(
+            Object.keys(appearance).map((key) => [key, state[key]]),
+          );
+        }
+        applyAppearance(appearance);
+        $("display-appearance-undo").disabled = false;
+      });
+      $("display-appearance-undo").addEventListener("click", () => {
+        if (!previousDisplayAppearance) return;
+        applyAppearance(previousDisplayAppearance);
+        previousDisplayAppearance = null;
+        $("display-appearance-undo").disabled = true;
+      });
       $("display-spectrum-trace-color").addEventListener("input", () => {
         state.spectrumTraceColor = normalizeSpectrumTraceColor($("display-spectrum-trace-color").value);
         $("display-spectrum-trace-color-readout").textContent = state.spectrumTraceColor;

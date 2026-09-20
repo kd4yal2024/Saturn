@@ -80,6 +80,23 @@ grep -Fq 'ensure_low_memory_build_capacity' "$BRIDGE_INSTALLER" \
 # shellcheck disable=SC2016
 grep -Fq 'cargo "${cargo_args[@]}" -j "$SATURN_BRIDGE_BUILD_JOBS"' "$BRIDGE_INSTALLER" \
   || fail "Saturn Bridge Cargo invocation does not enforce bounded jobs"
+grep -Fq 'SATURN_BRIDGE_TARGET_CPU="${SATURN_BRIDGE_TARGET_CPU:-cortex-a72}"' "$BRIDGE_INSTALLER" \
+  || fail "Saturn Bridge installer does not default to the G2 Cortex-A72 target"
+grep -Fq 'RUSTFLAGS="$rustflags"' "$BRIDGE_INSTALLER" \
+  || fail "Saturn Bridge installer does not pass its target CPU to rustc"
+grep -Fq 'SATURN_WDSP_TARGET_CPU="$SATURN_BRIDGE_TARGET_CPU"' "$BRIDGE_INSTALLER" \
+  || fail "Saturn Bridge installer does not align WDSP and Rust CPU targets"
+grep -Fq '"-mcpu=${TARGET_CPU}"' \
+  "$REPO_ROOT/update_manager/saturn-bridge/scripts/build-wdsp2-linux-arm.sh" \
+  || fail "WDSP build does not target the selected appliance CPU"
+if grep -Fq -- '-ffast-math' \
+  "$REPO_ROOT/update_manager/saturn-bridge/scripts/build-wdsp2-linux-arm.sh"; then
+  fail "WDSP performance build weakens floating-point semantics"
+fi
+grep -Fq 'lto = "thin"' "$REPO_ROOT/update_manager/saturn-bridge/Cargo.toml" \
+  || fail "Saturn Bridge release profile does not enable thin LTO"
+grep -Fq 'codegen-units = 1' "$REPO_ROOT/update_manager/saturn-bridge/Cargo.toml" \
+  || fail "Saturn Bridge release profile does not use one codegen unit"
 # Boot enablement belongs to the transactional radio-owner helper. In P2 mode
 # it enables only P2app; in direct-XDMA mode it enables Saturn Bridge.
 # shellcheck disable=SC2016

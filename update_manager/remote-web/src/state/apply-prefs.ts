@@ -125,6 +125,7 @@ export interface DisplayPrefsTarget {
   waterfallPalette: string;
   spectrumPeakHold: boolean;
   spectrumTraceColor: string;
+  spectrumEnhancedColors: boolean;
   spectrumTraceSmoothing: number;
   spectrumTraceFill: number;
   spectrumPeakGlow: number;
@@ -290,6 +291,7 @@ export function applyDisplayPrefsToState(
   state.waterfallPalette = normalizeWaterfallPalette(prefs.waterfallPalette ?? state.waterfallPalette);
   state.spectrumPeakHold = Boolean(prefs.spectrumPeakHold ?? state.spectrumPeakHold);
   state.spectrumTraceColor = normalizeSpectrumTraceColor(prefs.spectrumTraceColor ?? state.spectrumTraceColor);
+  state.spectrumEnhancedColors = (prefs.spectrumEnhancedColors ?? state.spectrumEnhancedColors) === true;
   state.spectrumTraceSmoothing = clampSpectrumVisualEffect(
     prefs.spectrumTraceSmoothing ?? state.spectrumTraceSmoothing,
   );
@@ -420,6 +422,7 @@ export function normalizeAppStateInPlace(state: NormalizableState): void {
   state.waterfallPalette = normalizeWaterfallPalette(state.waterfallPalette);
   state.spectrumPeakHold = Boolean(state.spectrumPeakHold);
   state.spectrumTraceColor = normalizeSpectrumTraceColor(state.spectrumTraceColor);
+  state.spectrumEnhancedColors = state.spectrumEnhancedColors === true;
   state.spectrumTraceSmoothing = clampSpectrumVisualEffect(state.spectrumTraceSmoothing);
   state.spectrumTraceFill = clampSpectrumVisualEffect(state.spectrumTraceFill);
   state.spectrumPeakGlow = clampSpectrumVisualEffect(state.spectrumPeakGlow);

@@ -62,6 +62,17 @@ namespace eval saturn_lab {
 
     proc git_value {args} {
         variable repo_dir
+        set command [join $args " "]
+        if {$command eq "rev-parse HEAD" &&
+                [info exists ::env(SATURN_GIT_SHA)] &&
+                $::env(SATURN_GIT_SHA) ne ""} {
+            return $::env(SATURN_GIT_SHA)
+        }
+        if {$command eq "branch --show-current" &&
+                [info exists ::env(SATURN_GIT_BRANCH)] &&
+                $::env(SATURN_GIT_BRANCH) ne ""} {
+            return $::env(SATURN_GIT_BRANCH)
+        }
         if {[catch {exec git -C $repo_dir {*}$args} output]} {
             return "unknown"
         }

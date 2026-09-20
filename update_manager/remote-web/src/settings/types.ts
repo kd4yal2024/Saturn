@@ -10,7 +10,7 @@ export type WbfmDeemphasis = 'OFF' | 'NA_75US' | 'EU_50US';
 export type NoiseBlankerMode = 'OFF' | 'NB1' | 'NB2' | 'NB3';
 export type AgcMode = 'OFF' | 'LONG' | 'SLOW' | 'MEDIUM' | 'FAST';
 export type TxMeterMode = 'peak' | 'avg';
-export type WaterfallPalette = 'classic' | 'ember' | 'ice' | 'forest';
+export type WaterfallPalette = 'classic' | 'ember' | 'ice' | 'forest' | 'enhanced';
 
 export type PhonePanels = {
   radio: boolean;
@@ -96,6 +96,7 @@ export type DisplayPrefs = {
   waterfallPalette: WaterfallPalette;
   spectrumPeakHold: boolean;
   spectrumTraceColor: string;
+  spectrumEnhancedColors: boolean;
   spectrumTraceSmoothing: number;
   spectrumTraceFill: number;
   spectrumPeakGlow: number;

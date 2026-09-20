@@ -18,9 +18,10 @@
 //  addr 8         Status register 3 (read only, with side effect)
 //  addr C         Status register 4 (read only, with side effect)
 //     bit(15:0)   Current FIFO Depth
-//     bit 29      1 id an underflow has occurred, from depth
-//     bit 30      1 if an overflow has occurred, from depth 
-//     bit 31      1 if an overflow has occurred, from FIFO flag. 
+//     bit 29      1 if the FIFO has been observed empty, from depth
+//     bit 30      1 if the programmed depth threshold has been reached
+//     bit 31      Reserved and held at 0 for the V27 legacy host contract.
+//                 Capacity/almost-full evidence is available in the extended bank.
 //     bits 29-31 Cleared by read.
 //
 //  addr 10         Control register 1 (read/write, with no read side effect)
@@ -41,7 +42,8 @@
 //
 // FIFO Interface signals:
 //     FIFOn_Words(31:0)      current FIFO depth (note only 16 bits considered valid)
-//     FIFOn_Overflow         if 1, an over(or under) flow has occurred 
+//     FIFOn_Overflow         asynchronous almost-full diagnostic input. It contributes
+//                           to the extended event counter, but not legacy status bit 31.
 
 // Dependencies: 
 // 
@@ -93,13 +95,13 @@ module FIFO_Monitor #
   // note the Xilinx FIFO reports the number of words held through both read and write side
   //
   input wire [31:0]                fifo1_count,    // current number of words in FIFO
-  input wire                       fifo1_overflow, // if 1, an over(or under) flow has occurred 
+  input wire                       fifo1_overflow, // extended almost-full event source
   input wire [31:0]                fifo2_count,    // current number of words in FIFO
-  input wire                       fifo2_overflow, // if 1, an over(or under) flow has occurred 
+  input wire                       fifo2_overflow, // extended almost-full event source
   input wire [31:0]                fifo3_count,    // current number of words in FIFO
-  input wire                       fifo3_overflow, // if 1, an over(or under) flow has occurred 
+  input wire                       fifo3_overflow, // extended almost-full event source
   input wire [31:0]                fifo4_count,    // current number of words in FIFO
-  input wire                       fifo4_overflow, // if 1, an over(or under) flow has occurred 
+  input wire                       fifo4_overflow, // extended almost-full event source
 
 // interrupt
   output wire                      int1_out,       // interrupt output 1 for interrupt
@@ -111,7 +113,7 @@ module FIFO_Monitor #
   reg [15:0] fifo1_threshold;                // writable register - threshold to trigger intr
   reg [15:0] fifo1_count_reg;                // current FIFO word count
   reg int1_enable;                           // 1 enables interrupt generation
-  reg fifo1_overflowed;                      // set true if FIFO has under/overflowed (from FIFO bit)
+  reg fifo1_overflowed;                      // V27-compatible legacy bit 31; held clear
   reg fifo1_over_threshold;                  // set if FIFO exceeds threshold
   reg fifo1_underflowed;                     // set if FIFO emptied (from count)
   reg interrupt1_out;                        // interrupt bit out 
@@ -119,7 +121,7 @@ module FIFO_Monitor #
   reg [15:0] fifo2_threshold; // writable register - threshold to trigger intr
   reg [15:0] fifo2_count_reg; // current FIFO word count
   reg int2_enable;                           // 1 enables interrupt generation
-  reg fifo2_overflowed;                      // set true if FIFO has under/overflowed
+  reg fifo2_overflowed;                      // V27-compatible legacy bit 31; held clear
   reg fifo2_over_threshold;                  // set if FIFO exceeds threshold
   reg fifo2_underflowed;                     // set if FIFO emptied (from count)
   reg interrupt2_out;                        // interrupt bit out 
@@ -127,7 +129,7 @@ module FIFO_Monitor #
   reg [15:0] fifo3_threshold; // writable register - threshold to trigger intr
   reg [15:0] fifo3_count_reg; // current FIFO word count
   reg int3_enable;                           // 1 enables interrupt generation
-  reg fifo3_overflowed;                      // set true if FIFO has under/overflowed
+  reg fifo3_overflowed;                      // V27-compatible legacy bit 31; held clear
   reg fifo3_over_threshold;                  // set if FIFO exceeds threshold
   reg fifo3_underflowed;                     // set if FIFO emptied (from count)
   reg interrupt3_out;                        // interrupt bit out 
@@ -135,7 +137,7 @@ module FIFO_Monitor #
   reg [15:0] fifo4_threshold; // writable register - threshold to trigger intr
   reg [15:0] fifo4_count_reg; // current FIFO word count
   reg int4_enable;                           // 1 enables interrupt generation
-  reg fifo4_overflowed;                      // set true if FIFO has under/overflowed
+  reg fifo4_overflowed;                      // V27-compatible legacy bit 31; held clear
   reg fifo4_over_threshold;                  // set if FIFO exceeds threshold
   reg fifo4_underflowed;                     // set if FIFO emptied (from count)
   reg interrupt4_out;                        // interrupt bit out 
@@ -318,9 +320,6 @@ module FIFO_Monitor #
 // FIFO 1
 //
       fifo1_count_reg <= fifo1_count[15:0];     // legacy register exposes low 16 bits
-      if(fifo1_overflow_sync)                   // synchronized FIFO overflow flag
-        fifo1_overflowed <= 1'b1;               // set persistently
-
       if(fifo1_count_reg >= fifo1_threshold)
         fifo1_over_threshold <= 1'b1;
       else if(fifo1_count_reg == 0)
@@ -330,9 +329,6 @@ module FIFO_Monitor #
 // FIFO 2
 //
       fifo2_count_reg <= fifo2_count[15:0];     // legacy register exposes low 16 bits
-      if(fifo2_overflow_sync)                   // synchronized FIFO overflow flag
-        fifo2_overflowed <= 1'b1;               // set persistently
-
       if(fifo2_count_reg >= fifo2_threshold)
         fifo2_over_threshold <= 1'b1;
       else if(fifo2_count_reg == 0)
@@ -342,9 +338,6 @@ module FIFO_Monitor #
 // FIFO 3
 //
       fifo3_count_reg <= fifo3_count[15:0];     // legacy register exposes low 16 bits
-      if(fifo3_overflow_sync)                   // synchronized FIFO overflow flag
-        fifo3_overflowed <= 1'b1;               // set persistently
-
       if(fifo3_count_reg >= fifo3_threshold)
         fifo3_over_threshold <= 1'b1;
       else if(fifo3_count_reg == 0)
@@ -354,18 +347,18 @@ module FIFO_Monitor #
 // FIFO 4
 //
       fifo4_count_reg <= fifo4_count[15:0];     // legacy register exposes low 16 bits
-      if(fifo4_overflow_sync)                   // synchronized FIFO overflow flag
-        fifo4_overflowed <= 1'b1;               // set persistently
-
       if(fifo4_count_reg >= fifo4_threshold)
         fifo4_over_threshold <= 1'b1;
       else if(fifo4_count_reg == 0)
         fifo4_underflowed <= 1'b1;
       interrupt4_out <= (int4_enable & (fifo4_overflowed | fifo4_over_threshold | fifo4_underflowed));
 
-      // Continuous telemetry accumulation.  Full/empty transitions provide
-      // useful overflow/underflow evidence for Xilinx AXIS FIFOs, whose native
-      // overflow pins are not available in every configuration.
+      // Continuous telemetry accumulation. Almost-full, full, and empty
+      // transitions remain available through the V29 extended bank. The
+      // almost-full and full observations are deliberately excluded from
+      // legacy status bit 31. V27 tied the monitor overflow inputs low, so
+      // existing hosts never observed that bit. Preserve that exact boundary
+      // and retain the useful evidence in extrema and transition counters.
       if (fifo1_count < fifo1_min) fifo1_min <= fifo1_count;
       if (fifo2_count < fifo2_min) fifo2_min <= fifo2_count;
       if (fifo3_count < fifo3_min) fifo3_min <= fifo3_count;
@@ -378,10 +371,6 @@ module FIFO_Monitor #
       if (fifo2_event && !(&fifo2_events)) fifo2_events <= fifo2_events + 32'd1;
       if (fifo3_event && !(&fifo3_events)) fifo3_events <= fifo3_events + 32'd1;
       if (fifo4_event && !(&fifo4_events)) fifo4_events <= fifo4_events + 32'd1;
-      if (fifo1_full_now) fifo1_overflowed <= 1'b1;
-      if (fifo2_full_now) fifo2_overflowed <= 1'b1;
-      if (fifo3_full_now) fifo3_overflowed <= 1'b1;
-      if (fifo4_full_now) fifo4_overflowed <= 1'b1;
       fifo1_overflow_prev <= fifo1_overflow_sync;
       fifo2_overflow_prev <= fifo2_overflow_sync;
       fifo3_overflow_prev <= fifo3_overflow_sync;
@@ -461,29 +450,29 @@ module FIFO_Monitor #
         rdatareg <= {(AXI_DATA_WIDTH){1'b0}};
         case (raddrreg[6:2])
           0: begin 
-                // A condition present on the transfer edge belongs to the
-                // next observation window, so a legacy read cannot erase it.
-                fifo1_overflowed <= fifo1_overflow_sync | fifo1_full_now;
-                fifo1_over_threshold <= (fifo1_count >= fifo1_threshold);
-                fifo1_underflowed <= fifo1_empty_now;
+                // Preserve the V27 legacy read-to-clear contract. Extended
+                // extrema and event counters retain boundary diagnostics.
+                fifo1_overflowed <= 1'b0;
+                fifo1_over_threshold <= 1'b0;
+                fifo1_underflowed <= 1'b0;
           end             // clear on data transfer
 
           1: begin 
-                fifo2_overflowed <= fifo2_overflow_sync | fifo2_full_now;
-                fifo2_over_threshold <= (fifo2_count >= fifo2_threshold);
-                fifo2_underflowed <= fifo2_empty_now;
+                fifo2_overflowed <= 1'b0;
+                fifo2_over_threshold <= 1'b0;
+                fifo2_underflowed <= 1'b0;
           end             // clear on data transfer
 
           2: begin 
-                fifo3_overflowed <= fifo3_overflow_sync | fifo3_full_now;
-                fifo3_over_threshold <= (fifo3_count >= fifo3_threshold);
-                fifo3_underflowed <= fifo3_empty_now;
+                fifo3_overflowed <= 1'b0;
+                fifo3_over_threshold <= 1'b0;
+                fifo3_underflowed <= 1'b0;
           end             // clear on data transfer
 
           3: begin 
-                fifo4_overflowed <= fifo4_overflow_sync | fifo4_full_now;
-                fifo4_over_threshold <= (fifo4_count >= fifo4_threshold);
-                fifo4_underflowed <= fifo4_empty_now;
+                fifo4_overflowed <= 1'b0;
+                fifo4_over_threshold <= 1'b0;
+                fifo4_underflowed <= 1'b0;
           end             // clear on data transfer
         endcase
       end

@@ -231,6 +231,7 @@ export interface AppState {
   spectrumAverage: number;
   spectrumPeakHold: boolean;
   spectrumTraceColor: string;
+  spectrumEnhancedColors: boolean;
   spectrumTraceSmoothing: number;
   spectrumTraceFill: number;
   spectrumPeakGlow: number;
@@ -564,13 +565,14 @@ export function createAppState(): AppState {
     spectrumAverage: 1,
     spectrumPeakHold: false,
     spectrumTraceColor: '#8b3fb2',
+    spectrumEnhancedColors: false,
     spectrumTraceSmoothing: 0,
     spectrumTraceFill: 0,
     spectrumPeakGlow: 0,
     spectrumGlassSheen: 0,
     waterfallContrast: 100,
     waterfallSmoothing: 0,
-    spectrumAverageBypassFrames: 0,
+    spectrumAverageBypassFrames: 1,
     waterfallAutoRange: true,
     waterfallFloorDb: -200,
     waterfallCeilingDb: -120,

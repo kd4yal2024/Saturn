@@ -38,4 +38,12 @@ describe('TX safety control surface', () => {
     expect(template).toContain('void setPtt(false, { lockAfter: "pointer-blur" })');
     expect(template).toContain('void setPtt(false, { lockAfter: "page-hidden" })');
   });
+
+  it('arms the keyed-transmit duration cutoff with the configured timeout', () => {
+    const start = template.indexOf('function syncTciUiSideEffects(');
+    const end = template.indexOf('function clearTxTimeouts()', start);
+    const handler = template.slice(start, end);
+    expect(handler).toContain('Math.max(10, Number(state.txTimeoutSeconds) || 180) * 1000');
+    expect(handler).not.toContain('}, delayMs);');
+  });
 });

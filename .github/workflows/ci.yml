@@ -259,6 +259,9 @@ jobs:
       - name: Test direct-XDMA operational client framing
         run: python3 update_manager/scripts/saturn-xdma-operational-client.py --self-test
 
+      - name: Test pinned WDSP resampler optimization guards
+        run: python3 tests/test-wdsp-hbres-index.py
+
       - name: Test unified provisioning contract
         run: tests/test-provisioning-contract.sh
 

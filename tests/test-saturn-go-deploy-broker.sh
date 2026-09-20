@@ -78,11 +78,37 @@ expect_rejected "$stage" "staged executable helper"
 # rewrite helper against both legacy and already-canonical redirect lines.
 # shellcheck disable=SC1090
 source "$BROKER"
+[[ "$SATURN_GO_DEPLOY_BROKER_CONTRACT_VERSION" == "2" ]]
 bridge_unit="$TMP_ROOT/saturn-bridge.service"
 write_bridge_unit "$bridge_unit"
 grep -Fxq 'RuntimeDirectory=saturn-bridge' "$bridge_unit"
 grep -Fxq 'RuntimeDirectoryMode=0750' "$bridge_unit"
-grep -Fxq 'LimitRTPRIO=21' "$bridge_unit"
+grep -Fxq 'LimitRTPRIO=22' "$bridge_unit"
+grep -Fxq 'LimitMEMLOCK=16M' "$bridge_unit"
+
+# The broker must reject an effective service policy too small for the locked
+# direct-XDMA ring, even when its generated unit text is correct.
+systemctl(){
+  case " $* " in
+    *" --property=LimitRTPRIO "*) printf '%s\n' "${TEST_RTPRIO:-22}" ;;
+    *" --property=LimitMEMLOCK "*) printf '%s\n' "${TEST_MEMLOCK:-16777216}" ;;
+    *) return 1 ;;
+  esac
+}
+verify_bridge_service_contract
+if (TEST_MEMLOCK=8388608; verify_bridge_service_contract >/dev/null 2>&1); then
+  printf 'broker accepted an insufficient bridge memory-lock limit\n' >&2
+  exit 1
+fi
+if (TEST_RTPRIO=21; verify_bridge_service_contract >/dev/null 2>&1); then
+  printf 'broker accepted an insufficient bridge real-time priority limit\n' >&2
+  exit 1
+fi
+
+grep -Fq 'require_deploy_broker_contract' \
+  "$REPO_ROOT/update_manager/scripts/update-saturn-go.sh"
+grep -Fq 'SATURN_SATURNGO_BUILD_BRIDGE=0 for a Saturn Go/web-only update' \
+  "$REPO_ROOT/update_manager/scripts/update-saturn-go.sh"
 running_status="$(render_status_json "running" "Installing payload" "2026-07-30T18:00:00-04:00" "null")"
 success_status="$(render_status_json "success" "Installed payload" "2026-07-30T18:01:00-04:00" "0")"
 python3 - "$running_status" "$success_status" <<'PY'

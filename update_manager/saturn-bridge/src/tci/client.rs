@@ -120,6 +120,12 @@ pub(crate) const MAX_TCI_INBOUND_MESSAGE_BYTES: usize = 256 * 1024;
 
 pub(crate) const MAX_TCI_INBOUND_FRAME_BYTES: usize = 256 * 1024;
 
+// Tungstenite 0.29 zero-fills this scratch space before each read, including
+// nonblocking reads that return WouldBlock. Avoid its 128 KiB default in our
+// 2 ms polling loop. This is NOT a frame/message limit: larger inbound messages
+// are still assembled up to the existing limits, and outgoing IQ is unchanged.
+pub(crate) const TCI_READ_BUFFER_BYTES: usize = 8 * 1024;
+
 pub(crate) const TX_CODEC_DECODE_ERROR_FORCE_RX_LIMIT: u64 = 10;
 
 pub(crate) const TX_CODEC_DECODE_ERROR_WINDOW: Duration = Duration::from_secs(1);
@@ -134,6 +140,7 @@ pub(crate) fn handle_client(
     operator_control_at: &Arc<Mutex<Option<Instant>>>,
     radio_model: &Arc<Mutex<RadioModel>>,
     drop_count: &Arc<AtomicU64>,
+    full_rate_iq_stats: &Arc<FullRateIqTransportStats>,
     remote_tx_rf_enabled: bool,
     tx_codec_runtime_flags: TxCodecRuntimeFlags,
     satp_advertisement: (bool, u16),
@@ -150,7 +157,8 @@ pub(crate) fn handle_client(
     );
     match accept_result {
         Ok(mut websocket) => {
-            let outbound = ClientOutbound::new();
+            let outbound =
+                ClientOutbound::new_with_full_rate_iq_stats(Arc::clone(full_rate_iq_stats));
             let operator_eligible = addr.ip().is_loopback();
             let (role, first_client, client_count) = register_client(
                 clients,
@@ -192,8 +200,27 @@ pub(crate) fn handle_client(
             }
 
             let mut bulk_pause_until: Option<Instant> = None;
+            let mut sender =
+                BufferedSender::with_drop_counter(Arc::clone(&outbound), Arc::clone(drop_count));
+            let mut previous_loop = Instant::now();
             loop {
-                let mut pending_flush = false;
+                let loop_started = Instant::now();
+                sender.record_writer_loop_gap(loop_started.duration_since(previous_loop));
+                previous_loop = loop_started;
+                // Complete a partially written frame before accepting another
+                // application message. Never re-send library-owned data.
+                if sender.is_pending() {
+                    match sender.flush(&mut websocket) {
+                        Ok(true) => break,
+                        Ok(false) => {}
+                        Err(error) => {
+                            eprintln!(
+                                "saturn-bridge: TCI websocket flush error for {addr}: {error}"
+                            );
+                            break;
+                        }
+                    }
+                }
                 let mut client_closed = false;
                 for _ in 0..64 {
                     match websocket.read() {
@@ -230,7 +257,7 @@ pub(crate) fn handle_client(
                     break;
                 }
 
-                loop {
+                while !sender.is_pending() {
                     let now = Instant::now();
                     if bulk_pause_until.map(|until| now >= until).unwrap_or(false) {
                         bulk_pause_until = None;
@@ -249,33 +276,25 @@ pub(crate) fn handle_client(
                     let Some(item) = outbound.next_message(allow_bulk) else {
                         break;
                     };
-                    let closes_client = matches!(&item.message, OutboundMessage::Close);
-                    match send_outbound(&mut websocket, &item.message) {
-                        Ok(()) => {
-                            outbound.record_write(item.class, item.enqueued_at.elapsed());
-                            pending_flush = true;
-                            if closes_client {
-                                client_closed = true;
-                                break;
-                            }
+                    match sender.send(&mut websocket, item) {
+                        Ok(true) => {
+                            client_closed = true;
+                            break;
+                        }
+                        Ok(false) if !sender.is_pending() => {}
+                        Ok(false) => {
+                            outbound.record_send_blocked(Duration::from_millis(2));
+                            break;
                         }
                         Err(WsError::Io(error)) if error.kind() == io::ErrorKind::WouldBlock => {
-                            pending_flush = true;
                             outbound.record_send_blocked(Duration::from_millis(2));
                             bulk_pause_until = Some(
                                 Instant::now() + Duration::from_millis(BULK_BACKPRESSURE_PAUSE_MS),
                             );
-                            if item.class.is_never_drop() {
-                                outbound.requeue_front(item);
-                            } else {
-                                outbound.record_bulk_send_drop(item.class);
-                                drop_count.fetch_add(1, Ordering::Relaxed);
-                            }
                             break;
                         }
                         Err(error) => {
                             eprintln!("saturn-bridge: TCI websocket send error to {addr}: {error}");
-                            pending_flush = true;
                             client_closed = true;
                             break;
                         }
@@ -285,34 +304,26 @@ pub(crate) fn handle_client(
                     break;
                 }
 
-                if pending_flush {
-                    match websocket.flush() {
-                        Ok(()) => {
-                            if bulk_pause_until
-                                .map(|until| Instant::now() >= until)
-                                .unwrap_or(false)
-                            {
-                                bulk_pause_until = None;
-                            }
+                match sender.flush(&mut websocket) {
+                    Ok(true) => break,
+                    Ok(false) => {
+                        if bulk_pause_until
+                            .map(|until| Instant::now() >= until)
+                            .unwrap_or(false)
+                        {
+                            bulk_pause_until = None;
                         }
-                        Err(WsError::Io(error)) if error.kind() == io::ErrorKind::WouldBlock => {
-                            outbound.record_send_blocked(Duration::from_millis(2));
-                            bulk_pause_until = Some(
-                                Instant::now() + Duration::from_millis(BULK_BACKPRESSURE_PAUSE_MS),
-                            );
-                        }
-                        Err(WsError::ConnectionClosed) | Err(WsError::AlreadyClosed) => break,
-                        Err(error) => {
-                            eprintln!(
-                                "saturn-bridge: TCI websocket flush error for {addr}: {error}"
-                            );
-                            break;
-                        }
+                    }
+                    Err(error) => {
+                        eprintln!("saturn-bridge: TCI websocket flush error for {addr}: {error}");
+                        break;
                     }
                 }
 
                 thread::sleep(Duration::from_millis(2));
             }
+
+            drop(sender);
 
             let disconnect = unregister_client(clients, operator_client_id, client_id);
             if disconnect.was_operator {
@@ -1173,6 +1184,7 @@ pub(crate) fn record_client_tx_mic_frame(
 
 pub(crate) fn tci_websocket_config() -> WebSocketConfig {
     WebSocketConfig::default()
+        .read_buffer_size(TCI_READ_BUFFER_BYTES)
         .max_message_size(Some(MAX_TCI_INBOUND_MESSAGE_BYTES))
         .max_frame_size(Some(MAX_TCI_INBOUND_FRAME_BYTES))
 }

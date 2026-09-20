@@ -4,9 +4,104 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
 
 ## [Unreleased]
 ### Changed
+- Merge integration with main's primary PCB2 firmware 1.27–1.30 TX permission
+  policy. RF output still requires runtime enablement and existing interlocks;
+  firmware permission is not evidence of hardware TX qualification.
 - Pin the optional Tailscale installer to a verified immutable upstream commit
   and refresh its SHA-256, avoiding failures when Tailscale changes the
   contents served by its mutable `install.sh` URL.
+- Full-rate Direct-XDMA TCI IQ now uses a dedicated ordered four-frame FIFO
+  instead of the legacy latest-display-frame slot. This absorbs up to roughly
+  133 ms of transient socket backpressure without replacing IQ, while keeping
+  legacy snapshot and TX display traffic at depth one. The bridge exports
+  cumulative formed, suppressed, enqueued, written, and dropped totals plus
+  queue depth/high-water/capacity, and requeues an in-flight IQ frame after a
+  nonblocking socket stall. Any bounded-FIFO overflow remains explicit and
+  permanently visible for soak qualification.
+- Direct-XDMA RX now aggregates the complete 384 kHz complex stream into 30
+  TCI IQ messages per second (12,800 pairs / 102,464 bytes each) instead of
+  feeding the generic display snapshot limiter hundreds of small blocks per
+  second. No IQ samples are intentionally downsampled or skipped; frequency,
+  client, and TX-suppression boundaries discard only an incomplete packet so
+  unlike RF contexts cannot be mixed. Runtime telemetry reports transported
+  pairs, pending samples, suppression, replacement, and drop rates. Saturn
+  Remote retains only the newest contiguous FFT window from each larger frame
+  and removes a redundant browser-side IQ copy. The Saturn Go split-WebSocket
+  relay now moves shared byte buffers between Axum and Tungstenite instead of
+  copying every binary frame in both directions.
+- Saturn Bridge RX uses a 256-sample WDSP exchange block and exports the value
+  as `wdsp_rx_dsp_size`, reducing native exchange/wakeup frequency from 750 to
+  187.5 calls per second. Hardware/audio rates, client packet boundaries, and
+  DSP feature configuration remain unchanged; the latency and A/B acceptance
+  boundary are recorded in the V30 incident document.
+- Saturn Bridge RX now stages IQ directly into its fixed WDSP input buffer and
+  publishes audio from a reusable packet buffer. This removes the two
+  per-sample deque paths and per-frame heap allocation without changing WDSP's
+  block size, DSP configuration, audio packet boundaries, or floating-point
+  behavior. The preceding Cortex-A72-only appliance result and the separate
+  acceptance gate are recorded in the V30 incident document.
+- Saturn Bridge release builds now target the G2 CM4's Cortex-A72 in both Rust
+  and pinned WDSP 2.00 code, with thin LTO and one Rust codegen unit. DSP
+  algorithms and strict floating-point semantics are unchanged, and runtime
+  telemetry records the selected build CPU for appliance A/B measurements.
+- Saturn Go self-deployment now refuses to stage a bridge binary when the
+  installed root-owned deployment broker has an older service contract. The
+  broker and standalone installer also verify the effective 16 MiB memlock and
+  priority-22 ceilings before accepting the runtime, preventing a new locked-
+  ring bridge from entering a restart loop under an obsolete systemd unit.
+- Radio Telemetry now presents Direct-XDMA's live V30 ADC episode monitor in
+  the ADC card and maps coherent V29 DUC FIFO occupancy, boot-lifetime extrema
+  and transitions, and bridge TX FIFO/write counters into a backend-specific
+  DUC row. P2-only peak toggles and host queue age/mode are no longer shown as
+  working Direct-XDMA controls. Inline template scripts now receive static
+  scope validation, and the Saturn Remote keyed-TX duration cutoff again arms
+  from the configured timeout instead of referencing an undeclared variable.
+- Direct-XDMA Performance Lab now exposes per-interval host-ring, parser,
+  FIFO, and extended FPGA counter deltas instead of presenting absent P2-only
+  counters as zero. The direct hardware owner now samples the marker-gated V29
+  FIFO snapshot and V30 ADC episode banks, with their original coherence and
+  lifetime semantics. Runtime telemetry no longer forces an fsync on ephemeral
+  `/run` snapshots, duplicate startup snapshots are removed, and the verbose
+  journal fallback is reduced to five-second cadence to protect the RX consumer
+  from diagnostic I/O stalls. Resuming WDSP after an intentional input gap now
+  uses the bounded fed down-slew already required by the channel-state contract,
+  rather than the blocking `dmode=1` reset that can starve the sole host-ring
+  consumer; resume count, latency, and flush-failure telemetry were added.
+- Direct-XDMA RX now keeps the dedicated C2H drain and framing/loss checks
+  active while making sample expansion, WDSP receive processing, and media
+  publication consumer-driven. Audio clients retain the full existing WDSP
+  path; IQ-only clients retain every decoded spectrum sample without paying
+  the WDSP audio cost; no-client standby validates raw frames and decodes only
+  a 10 Hz meter sample. Audio resumption force-resets WDSP after an intentional
+  input gap so the optimization cannot reuse stale AGC/NR/filter state.
+  `/run/saturn-bridge/perf.json` now atomically records the actual client/lane
+  state, rates, queues, drops, processing mode, V30 identity, exact Saturn Git
+  commit, and pinned WDSP source commit. Performance Lab prefers this fresh,
+  PID-matched record over journal inference. The original regression evidence
+  and measurement gates are retained in `docs/V30_BRIDGE_FIFO_INCIDENT.md`.
+- Direct-XDMA RX now explicitly selects and verifies P2-compatible network
+  byte order before enabling the DDC stream. Previously it decoded signed
+  24-bit network-order samples but inherited the FPGA's global byte-order bit;
+  a cold boot could therefore publish byte-reversed, near-full-scale noise
+  while all DMA framing and FIFO health checks still passed. The field
+  evidence and V27 inheritance trap are retained in
+  `docs/V30_BRIDGE_FIFO_INCIDENT.md`.
+- Decoupled operational Direct-XDMA receive draining from WDSP, WebSocket,
+  control, telemetry, and filesystem work. A dedicated priority-22 C2H owner
+  now feeds a preallocated, page-aligned, locked 256-buffer/8 MiB ring. If the
+  downstream consumer exhausts that bounded reserve, the owner discards the
+  oldest unread host buffer, records the dropped bytes and parser-visible
+  discontinuity, and continues draining the FPGA. The service grants 16 MiB
+  of locked memory and retains the existing transactional P2/Direct-XDMA
+  ownership boundary, so legacy P2 clients are unchanged.
+- Scope the V29 FIFO-status exception to firmware 1.29 exactly. The V30
+  compatibility image now matches the complete V27 legacy contract, including
+  a zero legacy bit 31; full and almost-full evidence remains in the extended
+  telemetry bank. The 2026-09-15 failure mechanism and qualification gap are
+  retained in `docs/V30_BRIDGE_FIFO_INCIDENT.md`. Direct-XDMA
+  RX can start on primary PCB2 V29/V30, while RF TX is forcibly inhibited on
+  both until each image completes separate dummy-load TX qualification; V27
+  retains its existing production TX qualification.
 - Performance Lab now displays and exports P2 speaker pacing diagnostics,
   including process-lifetime loop/receive/DMA maxima and threshold counts,
   speaker-thread scheduling identity, peak software-queue depth, and the full
@@ -43,7 +138,8 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
   shared priority-20 XDMA completion kthread. Live RF diagnostics showed that
   equal-priority completion work could delay an awakened H2C writer by 6--10
   ms while continuous C2H completions were serviced, eventually draining the
-  DUC FIFO; the installed service now grants `LimitRTPRIO=21`.
+  DUC FIFO. TX requires priority 21; the service ceiling is now 22 for the
+  dedicated C2H reader described above.
 - Batch up to eight consecutive, distinct direct-XDMA DUC IQ frames while
   preserving three-frame FIFO ceiling headroom. Pacing writes the largest safe
   partial batch immediately instead of draining the FIFO until the whole batch

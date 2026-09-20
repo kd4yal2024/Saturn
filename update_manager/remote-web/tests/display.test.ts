@@ -118,21 +118,41 @@ describe('smoothWaterfallBins', () => {
     expect(smoothWaterfallBins(bins, new Float32Array([-140, -140]), 0)).toBe(bins);
   });
 
-  it('reduces frame-to-frame speckle and suppresses the measured background', () => {
+  it('reduces small frame-to-frame speckle without suppressing the background', () => {
     const previous = new Float32Array([-120, -120, -120, -120]);
-    const current = new Float32Array([-100, -120, -140, -120]);
+    const current = new Float32Array([-118, -120, -122, -120]);
     const result = smoothWaterfallBins(current, previous, 100);
-    expect(result).toHaveLength(current.length);
-    expect(result[0]).toBeLessThan(-100);
-    expect(result[1]).toBeLessThan(-120);
-    expect(result[2]).toBeGreaterThan(-158);
+    expect(Array.from(result)).toEqual([-119, -120, -121, -120]);
+    expect(Array.from(previous)).toEqual([-120, -120, -120, -120]);
+    expect(Array.from(current)).toEqual([-118, -120, -122, -120]);
   });
 
-  it('protects persistent signals well above the estimated noise floor', () => {
+  it('preserves every steady level through repeated feedback, including weak signals', () => {
     const bins = new Float32Array([-120, -121, -119, -120, -100]);
-    const result = smoothWaterfallBins(bins, bins, 100);
-    expect(result[0]).toBeLessThan(-130);
-    expect(result[4]).toBeCloseTo(-100, 4);
+    for (const amount of [1, 25, 50, 100]) {
+      let history: Float32Array = bins;
+      for (let frame = 0; frame < 1000; frame++) history = smoothWaterfallBins(bins, history, amount);
+      expect(history).toEqual(bins);
+    }
+  });
+
+  it('passes strong onsets and departures immediately', () => {
+    const current = new Float32Array([-100, -120, -114]);
+    expect(smoothWaterfallBins(current, new Float32Array([-120, -100, -120]), 100)).toEqual(current);
+  });
+
+  it('starts fresh without compatible history and recovers from invalid history', () => {
+    const bins = new Float32Array([-120, -100]);
+    expect(smoothWaterfallBins(bins, null, 100)).toBe(bins);
+    expect(smoothWaterfallBins(bins, new Float32Array(1), 100)).toBe(bins);
+    expect(smoothWaterfallBins(bins, new Float32Array([NaN, Infinity]), 100)).toEqual(bins);
+  });
+
+  it('converges to a small steady change without level drift', () => {
+    const bins = new Float32Array([-118]);
+    let history: Float32Array = new Float32Array([-120]);
+    for (let frame = 0; frame < 20; frame++) history = smoothWaterfallBins(bins, history, 100);
+    expect(history[0]).toBeCloseTo(-118, 4);
   });
 });
 

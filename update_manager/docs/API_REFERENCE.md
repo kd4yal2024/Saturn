@@ -243,6 +243,15 @@ Notes:
   - host/process/network/XDMA snapshots used for baseline deltas
   - `workload` metadata derived from the deployed `current` symlink and the `p2app.service` drop-in (`selected_app`, startup mode, panel mode, workload key)
   - `app_telemetry` parsed from `/dev/shm/saturn_p23_perf_stats.json` when the running `p2app`-compatible app exports live counters
+  - for the direct-XDMA backend, fresh PID-matched telemetry from the atomic
+    `/run/saturn-bridge/perf.json` snapshot, including client/split-lane state,
+    processing mode, DMA/IQ/audio rates, queues/drops, FPGA identity, and exact
+    Saturn/WDSP source provenance; direct host-ring/parser/FIFO values are
+    exported as cumulative counters so the UI reports per-sample deltas, and
+    marker-gated V29 FIFO/V30 ADC hardware snapshots retain their native
+    coherence and boot-lifetime semantics; WDSP input-gap resumes expose their
+    cumulative count, last/maximum latency, and flush-failure count; older
+    bridge builds fall back to the latest journal diagnostic line
 - `app_telemetry.current` includes:
   - runtime flags and feature flags
   - port/DDC/wideband routing shape
@@ -255,6 +264,14 @@ Notes:
     accumulators read separately from the coherent occupancy snapshot. Event
     counters combine overflow-signal, full, and empty transitions and are not
     sample-loss counters.
+  - `gauges.fpga_adc_v30`, when supported: a guarded V30 build marker, coherent
+    snapshot generation, the 122.88 MHz observation clock, and per-ADC
+    boot-lifetime overrange episode count, total high clocks, longest episode,
+    and latest/current episode duration and peak. One episode is one sampled
+    low-to-high transition followed by consecutive high clocks; software
+    polling does not create additional episodes. Snapshot retry failures mean
+    the host observed a generation change while reading the bank and rejected
+    that sample.
   - cumulative counters for high-priority, mic, DDC, wideband, DUC, and speaker packet/DMA/error activity
 
 ## Settings, Source, Release Backup, and Transactional Restore

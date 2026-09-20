@@ -32,6 +32,25 @@
 // addr 14         ADC1 peak amplitude value (17 bit unsigned)
 // addr 18         ADC2 peak amplitude value (17 bit unsigned)
 // addr 1C         Coherent overflow snapshot (bits 15:0)
+// addr 20         V30 ADC telemetry build ID ("V30\0")
+// addr 24         ADC1 boot-lifetime overrange episode count
+// addr 28         ADC2 boot-lifetime overrange episode count
+// addr 2C         ADC1 boot-lifetime overrange clocks
+// addr 30         ADC2 boot-lifetime overrange clocks
+// addr 34         ADC1 longest continuous overrange episode, clocks
+// addr 38         ADC2 longest continuous overrange episode, clocks
+// addr 3C         ADC1 latest/current overrange episode length, clocks
+// addr 40         ADC2 latest/current overrange episode length, clocks
+// addr 44         ADC1 latest/current overrange episode peak (17 bit)
+// addr 48         ADC2 latest/current overrange episode peak (17 bit)
+// addr 4C         Episode state (bits 1:0 active, bits 9:8 valid)
+// addr 50         Episode clock frequency, Hz (122880000)
+//
+// Registers 24..4C are captured coherently at the same accepted addr 0 read
+// boundary as the legacy overflow and peak snapshot. Counters saturate and
+// clear only on FPGA reset. An episode is one sampled low-to-high transition
+// followed by all consecutive high clocks; repeated status reads cannot
+// create additional episodes.
 
 
 //
@@ -113,6 +132,35 @@ module AXI_FIFO_overflow_reader #
   reg [16:0]               ADC2snapshotpeakreg;
   reg [15:0]               snapshot_sequence;
   reg                      snapshot_valid;
+  reg                      ADC1overflowprev;
+  reg                      ADC2overflowprev;
+  reg                      ADC1episodevalid;
+  reg                      ADC2episodevalid;
+  reg [31:0]               ADC1episodecountreg;
+  reg [31:0]               ADC2episodecountreg;
+  reg [31:0]               ADC1totalhighreg;
+  reg [31:0]               ADC2totalhighreg;
+  reg [31:0]               ADC1currentrunreg;
+  reg [31:0]               ADC2currentrunreg;
+  reg [31:0]               ADC1longestrunreg;
+  reg [31:0]               ADC2longestrunreg;
+  reg [31:0]               ADC1latestrunreg;
+  reg [31:0]               ADC2latestrunreg;
+  reg [16:0]               ADC1episodepeakreg;
+  reg [16:0]               ADC2episodepeakreg;
+  reg [16:0]               ADC1latestepisodepeakreg;
+  reg [16:0]               ADC2latestepisodepeakreg;
+  reg [31:0]               ADC1episodecountsnapshotreg;
+  reg [31:0]               ADC2episodecountsnapshotreg;
+  reg [31:0]               ADC1totalhighsnapshotreg;
+  reg [31:0]               ADC2totalhighsnapshotreg;
+  reg [31:0]               ADC1longestrunsnapshotreg;
+  reg [31:0]               ADC2longestrunsnapshotreg;
+  reg [31:0]               ADC1latestrunsnapshotreg;
+  reg [31:0]               ADC2latestrunsnapshotreg;
+  reg [16:0]               ADC1latestpeaksnapshotreg;
+  reg [16:0]               ADC2latestpeaksnapshotreg;
+  reg [9:0]                ADCepisodestatesnapshotreg;
   reg arreadyreg;                           // false when write address has been latched
   reg rvalidreg;                            // true when read data out is valid
 
@@ -122,6 +170,54 @@ module AXI_FIFO_overflow_reader #
     overflow8, overflow7, overflow6, overflow5,
     overflow4, overflow3, overflow2, overflow1
   };
+
+  function [31:0] saturating_increment;
+    input [31:0] value;
+    begin
+      saturating_increment = (&value) ? value : value + 32'd1;
+    end
+  endfunction
+
+  wire [16:0] ADC1inputmagnitude = ADC1data[15]
+    ? {1'b0, (~ADC1data + 16'd1)} : {1'b0, ADC1data};
+  wire [16:0] ADC2inputmagnitude = ADC2data[15]
+    ? {1'b0, (~ADC2data + 16'd1)} : {1'b0, ADC2data};
+  wire ADC1episoderising = overflow1 & ~ADC1overflowprev;
+  wire ADC2episoderising = overflow2 & ~ADC2overflowprev;
+  wire [31:0] ADC1episoderunnext = overflow1
+    ? (ADC1episoderising ? 32'd1 : saturating_increment(ADC1currentrunreg)) : 32'd0;
+  wire [31:0] ADC2episoderunnext = overflow2
+    ? (ADC2episoderising ? 32'd1 : saturating_increment(ADC2currentrunreg)) : 32'd0;
+  wire [16:0] ADC1episodepeaknext = ADC1episoderising
+    ? ADC1inputmagnitude
+    : ((ADC1inputmagnitude > ADC1episodepeakreg) ? ADC1inputmagnitude : ADC1episodepeakreg);
+  wire [16:0] ADC2episodepeaknext = ADC2episoderising
+    ? ADC2inputmagnitude
+    : ((ADC2inputmagnitude > ADC2episodepeakreg) ? ADC2inputmagnitude : ADC2episodepeakreg);
+  wire [31:0] ADC1episodecountnext = ADC1episoderising
+    ? saturating_increment(ADC1episodecountreg) : ADC1episodecountreg;
+  wire [31:0] ADC2episodecountnext = ADC2episoderising
+    ? saturating_increment(ADC2episodecountreg) : ADC2episodecountreg;
+  wire [31:0] ADC1totalhighnext = overflow1
+    ? saturating_increment(ADC1totalhighreg) : ADC1totalhighreg;
+  wire [31:0] ADC2totalhighnext = overflow2
+    ? saturating_increment(ADC2totalhighreg) : ADC2totalhighreg;
+  wire [31:0] ADC1longestrunnext = (ADC1episoderunnext > ADC1longestrunreg)
+    ? ADC1episoderunnext : ADC1longestrunreg;
+  wire [31:0] ADC2longestrunnext = (ADC2episoderunnext > ADC2longestrunreg)
+    ? ADC2episoderunnext : ADC2longestrunreg;
+  wire [31:0] ADC1latestobservablelength = overflow1
+    ? ADC1episoderunnext
+    : ((ADC1overflowprev & ~overflow1) ? ADC1currentrunreg : ADC1latestrunreg);
+  wire [31:0] ADC2latestobservablelength = overflow2
+    ? ADC2episoderunnext
+    : ((ADC2overflowprev & ~overflow2) ? ADC2currentrunreg : ADC2latestrunreg);
+  wire [16:0] ADC1latestobservablepeak = overflow1
+    ? ADC1episodepeaknext
+    : ((ADC1overflowprev & ~overflow1) ? ADC1episodepeakreg : ADC1latestepisodepeakreg);
+  wire [16:0] ADC2latestobservablepeak = overflow2
+    ? ADC2episodepeaknext
+    : ((ADC2overflowprev & ~overflow2) ? ADC2episodepeakreg : ADC2latestepisodepeakreg);
 
 //
 // AXI read strategy:
@@ -175,6 +271,35 @@ module AXI_FIFO_overflow_reader #
       ADC2snapshotpeakreg <= 0;
       snapshot_sequence <= 16'd0;
       snapshot_valid <= 1'b0;
+      ADC1overflowprev <= 1'b0;
+      ADC2overflowprev <= 1'b0;
+      ADC1episodevalid <= 1'b0;
+      ADC2episodevalid <= 1'b0;
+      ADC1episodecountreg <= 0;
+      ADC2episodecountreg <= 0;
+      ADC1totalhighreg <= 0;
+      ADC2totalhighreg <= 0;
+      ADC1currentrunreg <= 0;
+      ADC2currentrunreg <= 0;
+      ADC1longestrunreg <= 0;
+      ADC2longestrunreg <= 0;
+      ADC1latestrunreg <= 0;
+      ADC2latestrunreg <= 0;
+      ADC1episodepeakreg <= 0;
+      ADC2episodepeakreg <= 0;
+      ADC1latestepisodepeakreg <= 0;
+      ADC2latestepisodepeakreg <= 0;
+      ADC1episodecountsnapshotreg <= 0;
+      ADC2episodecountsnapshotreg <= 0;
+      ADC1totalhighsnapshotreg <= 0;
+      ADC2totalhighsnapshotreg <= 0;
+      ADC1longestrunsnapshotreg <= 0;
+      ADC2longestrunsnapshotreg <= 0;
+      ADC1latestrunsnapshotreg <= 0;
+      ADC2latestrunsnapshotreg <= 0;
+      ADC1latestpeaksnapshotreg <= 0;
+      ADC2latestpeaksnapshotreg <= 0;
+      ADCepisodestatesnapshotreg <= 0;
       arreadyreg <= 1'b1;                           // ready for address transfer
       rvalidreg <= 1'b0;                            // not ready to transfer read data
     end
@@ -234,6 +359,52 @@ module AXI_FIFO_overflow_reader #
       if(ADC2magnitudereg > ADC2currentpeakreg)
         ADC2currentpeakreg <= ADC2magnitudereg;
 
+// V30 ADC overrange episode telemetry. These counters are independent of the
+// legacy read-to-clear latch above and therefore reflect physical sampled
+// overrange intervals rather than software polling frequency.
+      ADC1overflowprev <= overflow1;
+      ADC2overflowprev <= overflow2;
+
+      if (overflow1)
+      begin
+        ADC1episodecountreg <= ADC1episodecountnext;
+        ADC1episodevalid <= 1'b1;
+        ADC1totalhighreg <= ADC1totalhighnext;
+        ADC1currentrunreg <= ADC1episoderunnext;
+        ADC1episodepeakreg <= ADC1episodepeaknext;
+        ADC1longestrunreg <= ADC1longestrunnext;
+      end
+      else
+      begin
+        if (ADC1overflowprev)
+        begin
+          ADC1latestrunreg <= ADC1currentrunreg;
+          ADC1latestepisodepeakreg <= ADC1episodepeakreg;
+        end
+        ADC1currentrunreg <= 0;
+        ADC1episodepeakreg <= 0;
+      end
+
+      if (overflow2)
+      begin
+        ADC2episodecountreg <= ADC2episodecountnext;
+        ADC2episodevalid <= 1'b1;
+        ADC2totalhighreg <= ADC2totalhighnext;
+        ADC2currentrunreg <= ADC2episoderunnext;
+        ADC2episodepeakreg <= ADC2episodepeaknext;
+        ADC2longestrunreg <= ADC2longestrunnext;
+      end
+      else
+      begin
+        if (ADC2overflowprev)
+        begin
+          ADC2latestrunreg <= ADC2currentrunreg;
+          ADC2latestepisodepeakreg <= ADC2episodepeakreg;
+        end
+        ADC2currentrunreg <= 0;
+        ADC2episodepeakreg <= 0;
+      end
+
 //
 // step 1d. Register overflow bits to same pipeline depth
 //
@@ -247,7 +418,7 @@ module AXI_FIFO_overflow_reader #
       begin
         arreadyreg <= 1'b0;                     // clear when address transaction happens
         raddrreg <= s_axi_araddr;               // latch the required read address
-        if (s_axi_araddr[5:2] == 0)
+        if (s_axi_araddr[6:2] == 0)
         begin
           // The accepted status address is the exact sample/clear boundary.
           // Events already visible on this edge belong to this snapshot;
@@ -259,6 +430,23 @@ module AXI_FIFO_overflow_reader #
           ADC2latchedpeakreg <= {{(AXI_DATA_WIDTH-17){1'b0}}, ADC2currentpeakreg};
           snapshot_sequence <= snapshot_sequence + 16'd1;
           snapshot_valid <= 1'b1;
+          ADC1episodecountsnapshotreg <= ADC1episodecountnext;
+          ADC2episodecountsnapshotreg <= ADC2episodecountnext;
+          ADC1totalhighsnapshotreg <= ADC1totalhighnext;
+          ADC2totalhighsnapshotreg <= ADC2totalhighnext;
+          ADC1longestrunsnapshotreg <= ADC1longestrunnext;
+          ADC2longestrunsnapshotreg <= ADC2longestrunnext;
+          ADC1latestrunsnapshotreg <= ADC1latestobservablelength;
+          ADC2latestrunsnapshotreg <= ADC2latestobservablelength;
+          ADC1latestpeaksnapshotreg <= ADC1latestobservablepeak;
+          ADC2latestpeaksnapshotreg <= ADC2latestobservablepeak;
+          ADCepisodestatesnapshotreg <= {
+            (ADC2episodevalid | ADC2episoderising),
+            (ADC1episodevalid | ADC1episoderising),
+            6'b000000,
+            overflow2,
+            overflow1
+          };
           overflowdatareg <= {(AXI_DATA_WIDTH){1'b0}};
           ADC1currentpeakreg <= 0;
           ADC2currentpeakreg <= 0;
@@ -269,7 +457,7 @@ module AXI_FIFO_overflow_reader #
       if(!arreadyreg & !rvalidreg)              // latch exactly one response per address
       begin
         rvalidreg <= 1'b1;                                  // signal ready to complete data
-        case (raddrreg[5:2])
+        case (raddrreg[6:2])
             0: rdatareg <= overflowsnapshotreg;
             1: rdatareg <= ADC1latchedpeakreg;
             2: rdatareg <= ADC2latchedpeakreg;
@@ -278,7 +466,20 @@ module AXI_FIFO_overflow_reader #
             5: rdatareg <= {{(AXI_DATA_WIDTH-17){1'b0}}, ADC1snapshotpeakreg};
             6: rdatareg <= {{(AXI_DATA_WIDTH-17){1'b0}}, ADC2snapshotpeakreg};
             7: rdatareg <= overflowsnapshotreg;
-            
+            8: rdatareg <= 32'h56333000;
+            9: rdatareg <= ADC1episodecountsnapshotreg;
+           10: rdatareg <= ADC2episodecountsnapshotreg;
+           11: rdatareg <= ADC1totalhighsnapshotreg;
+           12: rdatareg <= ADC2totalhighsnapshotreg;
+           13: rdatareg <= ADC1longestrunsnapshotreg;
+           14: rdatareg <= ADC2longestrunsnapshotreg;
+           15: rdatareg <= ADC1latestrunsnapshotreg;
+           16: rdatareg <= ADC2latestrunsnapshotreg;
+           17: rdatareg <= {{(AXI_DATA_WIDTH-17){1'b0}}, ADC1latestpeaksnapshotreg};
+           18: rdatareg <= {{(AXI_DATA_WIDTH-17){1'b0}}, ADC2latestpeaksnapshotreg};
+           19: rdatareg <= {{(AXI_DATA_WIDTH-10){1'b0}}, ADCepisodestatesnapshotreg};
+           20: rdatareg <= 32'd122880000;
+          default: rdatareg <= {(AXI_DATA_WIDTH){1'b0}};
         endcase
       end
 

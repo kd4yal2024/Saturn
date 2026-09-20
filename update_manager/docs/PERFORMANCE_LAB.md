@@ -27,12 +27,13 @@ sensitivity, RMDR, phase noise, IMD, or spectral purity.
 6. Save a baseline before the change, repeat the same workload after the change,
    and compare the candidate to the baseline.
 
-The browser will not start until it can fingerprint the P2app executable. Saturn
-Go reads `/proc/<pid>/exe` where host permissions allow it; hardened appliances
-fall back to the effective systemd `ExecStart` path, restricted to Saturn's
-managed deployment roots. It aborts a run if the service PID, application
-telemetry, active-radio state, or workload identity changes. A minimum of five
-valid samples is required.
+The browser will not start until it can fingerprint the running radio backend
+executable. Saturn Go reads `/proc/<pid>/exe` where host permissions allow it;
+hardened appliances fall back to the effective systemd `ExecStart` path,
+restricted to Saturn's managed deployment roots. Direct-XDMA snapshots also
+carry the exact Saturn and pinned WDSP source commits. A run aborts if the
+service PID, application telemetry, active-radio state, or workload identity
+changes. A minimum of five valid samples is required.
 
 ## Stored evidence
 
@@ -63,10 +64,18 @@ backup/restore and managed-state migration.
 - XDMA interrupts per second and interrupts per MiB;
 - DDC/DUC packet and DMA rates;
 - average DDC/DUC DMA operation size;
+- direct-XDMA host-ring high-water mark and per-interval buffer-drop,
+  discontinuity, pool-starvation, parser-resynchronization, and FIFO event
+  deltas;
+- direct-XDMA WDSP input-gap resume count, bounded-flush failures, and
+  last/maximum resume latency;
 - process-lifetime speaker-loop, socket-receive, and DMA-write timing maxima and
   threshold counters, plus thread scheduling identity and last-underrun context;
 - SoC temperature and CPU frequency;
 - ADC1/ADC2 peak dBFS when available.
+- FPGA V30 per-ADC physical overrange episode counts, total/longest/latest
+  duration in 122.88 MHz clocks, associated latest/current peak, and active
+  state when supported by the running firmware and host.
 
 ## Verdict rules
 

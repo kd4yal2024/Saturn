@@ -14,6 +14,23 @@ Configuration artifacts and their purposes:
 
 Version history:
 
+V30 ADC telemetry source candidate, 13/09/2026: preserves the V29 signal path
+and legacy ADC status/peak registers while adding boot-lifetime, saturating
+per-ADC physical overrange episode counts, total overrange clocks, longest
+continuous episode, and coherent latest/current episode duration and peak.
+Durations use the exported 122.88 MHz observation clock. P2 V52 exposes the
+guarded V30 bank and does not change the deferred speaker refill policy. The
+V30 compatibility revision restores the complete V27 FIFO legacy boundary:
+read-to-clear behavior is retained and legacy bit 31 remains zero, matching the
+V27 block design where all monitor overflow inputs were tied low. Almost-full
+and configured-capacity transitions remain visible in extended telemetry rather
+than becoming terminal legacy status. This entry does not claim a qualified bitstream or hardware result until
+the full build, packaging, load, and controlled/antenna validation gates pass.
+The initial V30 implementation missed setup timing inside generated XDMA PCIe
+logic; the checked-in V30 build flow now uses the timing strategy that closed
+the same synthesized design at positive setup and hold slack and prevents PROM
+export without a clean, matching successful-build manifest.
+
 V29 RX-qualified candidate, 12/09/2026: fixes I2S receive AXI-Stream
 backpressure, makes FIFO/ADC AXI-Lite read responses stable under stalls,
 defines no-loss read-clear boundaries, adds coherent FIFO/ADC diagnostics,

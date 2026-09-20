@@ -50,7 +50,10 @@ const operationsScenarios = viewportScenarios
     setupOpen: false,
     operationsAudioOpen: true,
   }));
-const allScenarios = [...drawerScenarios, ...setupScenarios, ...operationsScenarios];
+const meterScenarios = viewportScenarios
+  .filter((scenario) => ['desktop-hd', 'tablet-landscape'].includes(scenario.name))
+  .map((scenario) => ({ ...scenario, name: `${scenario.name}-meter-details`, meterDetailsOpen: true }));
+const allScenarios = [...drawerScenarios, ...setupScenarios, ...operationsScenarios, ...meterScenarios];
 const requestedScenarioNames = new Set(
   `${process.env.SATURN_LAYOUT_SCENARIOS || ''}`
     .split(',')
@@ -252,6 +255,8 @@ function validationScript(scenario) {
     };
   }
   function runValidation() {
+    const meterDetails = document.querySelector('.meter-details');
+    if (meterDetails) meterDetails.open = Boolean(scenario.meterDetailsOpen);
     const page = document.querySelector(".page.console-page");
     const strip = document.querySelector(".operator-state-strip");
     const pills = Array.from(document.querySelectorAll(".operator-pill"));
@@ -282,7 +287,18 @@ function validationScript(scenario) {
       .map((box) => box.id);
     const layout = document.documentElement.dataset.layout || "";
     const pageRect = page ? rectFor(page) : null;
+    const centerOverlaps = [];
+    if (scenario.layout !== 'phone' && window.innerWidth >= 1024) {
+      const meter = rectFor(document.getElementById('instrument-meter-deck'));
+      const display = rectFor(document.querySelector('.display-card'));
+      const primary = rectFor(document.querySelector('.primary-deck'));
+      const secondary = rectFor(document.querySelector('.secondary-deck'));
+      if (overlap(meter, display)) centerOverlaps.push('meter overlaps display');
+      if (overlap(primary, secondary)) centerOverlaps.push('VFO readouts overlap');
+      if (overlap(primary, meter) || overlap(secondary, meter)) centerOverlaps.push('VFO overlaps meter');
+    }
     const failures = {
+      centerOverlaps,
       missing,
       invisible,
       geometryOverlaps,
@@ -355,6 +371,24 @@ function validationScript(scenario) {
 }
 
 function makeScenarioHtml(template, scenario) {
+  // Draw the real meter scales without starting the radio/network runtime.
+  const meterStart = template.indexOf("    const NS = 'http://www.w3.org/2000/svg';");
+  const meterEnd = template.indexOf('    function selectedInstrumentMeterValue()', meterStart);
+  if (meterStart < 0 || meterEnd < 0) throw new Error('meter fixture source boundaries missing');
+  const meterScript = `<script src="${pathToFileURL(resolve(remoteWebRoot, 'dist/saturn-remote-next.js')).href}"></script>
+<script>(() => {
+  const { svgArcPath, instrumentMeterDegrees, MULTI_START, MULTI_END } = window.SaturnRemoteNext;
+  const $ = (id) => document.getElementById(id);
+  const instrumentMeterMode = 'signal';
+  function updateInstrumentMultimeter() {
+    $('smeter-needle').style.transform = 'rotate(' + (instrumentMeterDegrees('signal', -13) - 270) + 'deg)';
+    document.querySelectorAll('.multimeter-scale').forEach((scale) => {
+      scale.dataset.active = String(scale.dataset.meterScale === 'signal');
+    });
+  }
+  ${template.slice(meterStart, meterEnd)}
+  initMultimeter();
+})();</script>`;
   const staticStateScript = `<script>
 (() => {
   document.documentElement.dataset.layout = ${JSON.stringify(scenario.layout)};
@@ -383,7 +417,7 @@ function makeScenarioHtml(template, scenario) {
   }
   const meterSReadout = document.getElementById("meter-s-readout");
   const meterDbmReadout = document.getElementById("meter-readout");
-  if (meterSReadout) meterSReadout.textContent = "S10 +60";
+  if (meterSReadout) meterSReadout.textContent = "S9 +60";
   if (meterDbmReadout) meterDbmReadout.textContent = "-13.0 dBm";
   const consoleLayout = document.querySelector(".console-layout");
   const rightRail = document.querySelector(".right-rail");
@@ -546,7 +580,7 @@ function makeScenarioHtml(template, scenario) {
       .replace(/  <link rel="preconnect" href="https:\/\/fonts\.googleapis\.com">\n/g, '')
       .replace(/  <link rel="preconnect" href="https:\/\/fonts\.gstatic\.com" crossorigin>\n/g, '')
       .replace(/  <link href="https:\/\/fonts\.googleapis\.com[^"]+" rel="stylesheet">\n/g, '') +
-    `\n  <!-- Static state-strip validation harness. Runtime scripts intentionally removed. -->\n  ${staticStateScript}\n  ${validationScript(scenario)}\n` +
+    `\n  <!-- Static state-strip validation harness. Radio runtime intentionally removed. -->\n  ${meterScript}\n  ${staticStateScript}\n  ${validationScript(scenario)}\n` +
     template.slice(bodyEnd)
   );
 }

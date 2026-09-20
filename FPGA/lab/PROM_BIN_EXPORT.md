@@ -31,13 +31,21 @@ vivado -mode batch -nolog -nojournal -source FPGA/lab/tcl/export-prom.tcl
 ```
 
 The script defaults to the known golden bitstream, the current-HEAD lab
-bitstream (`results/vivado/saturn-v29-<git-sha>.bit`), and the checked-in timer
+bitstream (`results/vivado/saturn-v30-<git-sha>.bit`), and the checked-in timer
 payloads. It creates two deliberately distinct artifacts:
 
-- `saturn-primary-v29-<git-sha>.bin`: slot-relative primary payload; this is the
+- `saturn-primary-v30-<git-sha>.bin`: slot-relative primary payload; this is the
   only generated artifact suitable for `load-FPGA -b ... -v` without `-f`.
 - `saturn-lab.bin`: complete address-zero multiboot image for archival or an
   external programmer; never pass this file to the default `load-FPGA` path.
+
+Before creating either output, export requires the successful-build
+`manifest.json`. Its Git SHA must equal the current clean checkout, its firmware
+version and artifact name must select V30, and its recorded bitstream SHA256
+must match the input file. A failed rebuild cannot silently authorize a stale
+same-name bitstream because `build.tcl` retires the preceding manifest when a
+new build starts. `SATURN_BUILD_MANIFEST` may select an alternate manifest only
+when deliberately exporting an alternate, equally qualified build.
 
 To
 export a different primary bitstream, set `SATURN_PRIMARY_BIT` to its path and
