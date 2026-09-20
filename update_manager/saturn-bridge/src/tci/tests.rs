@@ -358,6 +358,28 @@ fn outbound_scheduler_bounds_unique_control_messages() {
     );
 }
 
+// Explicit local microbenchmark: not a live-radio performance qualification.
+#[test]
+#[ignore]
+fn benchmark_control_state_publication_queue() {
+    let outbound = ClientOutbound::new();
+    let started = Instant::now();
+    for round in 0..1000 {
+        for index in 0..128 {
+            std::hint::black_box(
+                outbound.enqueue(OutboundMessage::Text(format!("state_{index}:0,{round};"))),
+            );
+        }
+        while let Some(item) = outbound.next_message(true) {
+            std::hint::black_box(item);
+        }
+    }
+    println!(
+        "control_queue_benchmark rounds=1000 fields=128 elapsed_us={}",
+        started.elapsed().as_micros()
+    );
+}
+
 #[test]
 fn bridge_connection_slots_are_globally_bounded() {
     let active = AtomicU64::new(0);

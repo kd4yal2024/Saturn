@@ -1021,3 +1021,62 @@ send ownership, or drop classifications are changed. Next step is an
 operator-approved diagnostic build deployment followed by the same controlled
 reconnect/tune test and a fresh unattended baseline; retain the current
 working binary for rollback. Do not introduce another optimization first.
+
+## September 20: accepted overnight RX baseline and control-key follow-up
+
+The operator deployed `4c5dd5e3a1f5d37b448c45a9eec74e820da442b5` with
+RF TX inhibited. PID 2685570 started September 19 at 21:42:06 EDT;
+installed and locally built binary hashes matched
+`5b8390596487baf8038553cdf64173a9ddae7631181f52985c28cec6993251cc`.
+All three reconnects were confirmed intentional. Subsequent 40m/80m tuning
+ended at 3.899 MHz without IQ drops, host losses, resyncs or FIFO faults.
+The largest inspected tune batch was 43329 us, including DSP sync 35277 us
+and publication 8017 us. One 58291 us writer-loop gap occurred during
+reconnection without recorded losses.
+
+At September 20 06:12:34 EDT, the same build/PID remained active with zero
+restarts. Since the post-tune snapshot (September 19 21:59:34), 8 h 13 min
+elapsed and 887377 additional IQ deliveries completed. All cumulative IQ
+drop reasons, host losses, header errors/resyncs and operational FIFO faults
+remained zero. Latest client-reported audio gaps were zero; no new matching
+disconnect or >=50 ms transport-stall log entries appeared after the prior
+23:51:25 check. ADC episode count was unchanged. This qualifies that observed
+RX interval, not the historical intermittent stall or RF TX. Full local
+snapshots remain in `FPGA/lab/results/stall-diagnostics-*.json`.
+
+The operator approved moving on to a local review of repeated state
+publication cost, retaining that build as the overnight-tested baseline.
+Inspection found that every control enqueue scanned queued messages and
+reparsed their text keys, allocating strings and argument vectors for each
+comparison. About 128 unique queued fields imply 8128 existing-item key
+parses while filling an initially empty queue, in addition to incoming keys.
+
+The narrow patch caches the existing control-coalescing key in each
+`QueuedOutbound`. Text remains immutable while queued; requeue retains the
+key. Scans compare borrowed cached keys. The parser and its semantics are
+unchanged, including malformed/multi-command messages that cannot coalesce.
+This retains some key storage for the lifetime of each queued control item
+and adds a field to queued items; it does not change wire-byte accounting or
+queue limits. Safety coalescing, publication cadence, message content,
+routing, full-rate IQ, DSP, FIFO/DMA and buffered-send ownership are unchanged.
+
+Local WSL release microbenchmark (native DSP stubs, 1000 enqueue/drain rounds
+of 128 unique control fields): original scan 921495 and 961858 us; cached
+scan 48601 and 46054 us. This is approximately 19–21x faster in that synthetic
+queue workload only. It does not establish end-to-end publication time,
+G2 CPU reduction, scheduler latency or live audio quality. The benchmark is
+an explicitly ignored test so correctness tests have no timing threshold:
+
+```bash
+SATURN_BRIDGE_STUB_NATIVE=1 cargo test --release --locked \
+  benchmark_control_state_publication_queue -- --ignored --nocapture
+```
+
+All 278 regular bridge tests pass with native DSP stubs (one benchmark
+ignored). Added tests compare the cached scan with the original scan across
+replacement, count eviction, malformed/multi-command text and ordering;
+another checks requeue key retention and subsequent replacement. Existing
+safety priority and buffered-send exact-once tests still pass. This patch
+is local only, not deployed. Field acceptance should compare `publish_us`,
+CPU under the same workload, loss counters, and reconnect/tune behavior
+against 4c5dd5e before claiming a production gain.

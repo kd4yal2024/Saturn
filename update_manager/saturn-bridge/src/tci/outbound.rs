@@ -133,6 +133,9 @@ pub(crate) struct QueuedOutbound {
     pub(crate) enqueued_at: Instant,
     pub(crate) estimated_bytes: usize,
     pub(crate) audio_frames: usize,
+    // Text is immutable while queued (including requeue). Parse once instead
+    // of allocating a key for every existing item on every queue scan.
+    control_key: Option<String>,
 }
 
 impl QueuedOutbound {
@@ -140,12 +143,14 @@ impl QueuedOutbound {
         let class = message.class();
         let estimated_bytes = message.estimated_bytes();
         let audio_frames = message.audio_frame_count();
+        let control_key = control_coalesce_key(&message);
         Self {
             message,
             class,
             enqueued_at: Instant::now(),
             estimated_bytes,
             audio_frames,
+            control_key,
         }
     }
 }
@@ -487,10 +492,12 @@ impl ClientOutbound {
                 }
             }
             OutboundClass::Control => {
-                if let Some(key) = control_coalesce_key(&item.message) {
-                    if let Some(position) = queues.control.iter().position(|queued| {
-                        control_coalesce_key(&queued.message) == Some(key.clone())
-                    }) {
+                if let Some(key) = item.control_key.as_ref() {
+                    if let Some(position) = queues
+                        .control
+                        .iter()
+                        .position(|queued| queued.control_key.as_ref() == Some(key))
+                    {
                         let old = std::mem::replace(&mut queues.control[position], item);
                         queues.queued_bytes = queues
                             .queued_bytes
@@ -1128,6 +1135,95 @@ pub(crate) fn send_outbound<S: io::Read + io::Write>(
             build_tci_audio_frame(*receiver, *sample_rate, *channels, audio_samples, *sequence)
                 .into(),
         )),
+    }
+}
+
+#[cfg(test)]
+mod control_key_tests {
+    use super::*;
+
+    #[test]
+    fn cached_control_scan_matches_original_scan_and_queue_order() {
+        let outbound = ClientOutbound::new();
+        let mut reference: VecDeque<OutboundMessage> = VecDeque::new();
+        for round in 0..4 {
+            let mut texts: Vec<String> = (0..280)
+                .map(|index| format!("rx_eq_band:0,{index},{round};"))
+                .collect();
+            texts.extend([
+                format!("vfo:0,0,{round};"),
+                format!("vfo:0,1,{round};"),
+                format!("rx_filter_band:0,50,{};", 3000 + round),
+                format!("rx_filter_band:0,100,{};", 3000 + round),
+                format!("tx_fault:0,watchdog,{round};"),
+                format!("remote_backpressure:{round};"),
+                format!("remote_tx_uplink:{round};"),
+                "vfo:0,0,1;vfo:0,1,2;".into(),
+                "ready;".into(),
+                "broken:".into(),
+                " : ; ".into(),
+                "  rx_volume:0,0,-10;  ".into(),
+                "rx_volume:0,0,-20".into(),
+            ]);
+            // Run the same snapshot again while it is still queued, exercising
+            // both replacements and count-limit eviction with the legacy scan.
+            texts.extend(texts.clone());
+            for text in texts {
+                let message = OutboundMessage::Text(text);
+                let key = control_coalesce_key(&message);
+                let position = key.as_ref().and_then(|key| {
+                    reference
+                        .iter()
+                        .position(|old| control_coalesce_key(old).as_ref() == Some(key))
+                });
+                let expected = if let Some(position) = position {
+                    reference[position] = message.clone();
+                    1
+                } else {
+                    reference.push_back(message.clone());
+                    if reference.len() > MAX_CONTROL_QUEUE_MESSAGES {
+                        reference.pop_front();
+                        1
+                    } else {
+                        0
+                    }
+                };
+                assert_eq!(outbound.enqueue(message), expected);
+            }
+            while let Some(expected) = reference.pop_front() {
+                let actual = outbound.next_message(true).unwrap();
+                assert_eq!(actual.control_key, control_coalesce_key(&expected));
+                match (actual.message, expected) {
+                    (OutboundMessage::Text(actual), OutboundMessage::Text(expected)) => {
+                        assert_eq!(actual, expected)
+                    }
+                    _ => panic!("control text changed class"),
+                }
+            }
+            assert!(outbound.next_message(true).is_none());
+            assert_eq!(outbound.queues.lock_unpoisoned().queued_bytes, 0);
+        }
+    }
+
+    #[test]
+    fn requeued_control_keeps_key_and_latest_replacement() {
+        let outbound = ClientOutbound::new();
+        outbound.enqueue(OutboundMessage::Text("vfo:0,0,7100000;".into()));
+        let item = outbound.next_message(true).unwrap();
+        let enqueued_at = item.enqueued_at;
+        outbound.requeue_front(item);
+        {
+            let queues = outbound.queues.lock_unpoisoned();
+            assert_eq!(queues.control[0].enqueued_at, enqueued_at);
+            assert_eq!(queues.control[0].control_key.as_deref(), Some("vfo:0,0"));
+        }
+        assert_eq!(
+            outbound.enqueue(OutboundMessage::Text("vfo:0,0,7200000;".into())),
+            1
+        );
+        let item = outbound.next_message(true).unwrap();
+        assert!(matches!(item.message, OutboundMessage::Text(text) if text == "vfo:0,0,7200000;"));
+        assert!(outbound.next_message(true).is_none());
     }
 }
 
