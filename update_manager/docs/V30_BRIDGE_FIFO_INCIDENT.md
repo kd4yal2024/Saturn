@@ -905,3 +905,63 @@ Field acceptance remains: preserve rollback binary, install with RF TX
 disabled, deliberately reconnect under operator control, and compare fresh
 reason counters, sequence/continuity behavior, and audio. Do not call a
 local deterministic test a completed live reconnect or RF qualification.
+
+## September 19 field qualification and unresolved stalls
+
+Deployed bridge: clean `6b5886698a3eb8f425ce3831e3cea54325879ed7`,
+Cortex-A72, WDSP 2.00 with the existing pinned optimization. No additional
+optimization, FPGA change, or deployment was performed during this review.
+
+All times below are EDT on September 19, 2026. Full snapshots are retained
+locally under `FPGA/lab/results/`; this tracked summary preserves their
+important results independently of ignored lab output.
+
+| Interval/event | Observation |
+| --- | --- |
+| Dummy-load baseline 16:44:45, PID 2480366 | 14.2 MHz, ADC1/DDC6, 384 kHz, split IQ/audio; historical connection-closed IQ drop=1; host losses=0; ADC1 episodes=365143 |
+| Unattended event 18:16:35 | 22 new QueueOverflow IQ drops; first log epoch_ms=1789856195139, last drop epoch_ms=1789856195844; queue HWM reached 4; no host losses, header errors or RX FIFO faults; client-reported audio gaps increased 0 to 1 by 18:16:39 |
+| Antenna interval 18:56:51–19:22:24 | 7.205 MHz, same process/build; 45972 additional IQ frames written, zero new drop reasons/host losses/ADC episodes; zero restarts; audio-gap total remained 1 |
+| P2 switch / bridge return | Old bridge stopped at 19:22:53; new bridge started at 19:39:51 as PID 2629435; P2 inactive afterward |
+| Remote connection failure after return | Browser reported ERR_CERT_AUTHORITY_INVALID before either lane opened; bridge RX was ready with zero subscribers. Fresh tab restored connectivity. Served certificate was self-signed and lacked IP SAN 192.168.0.139. Exact browser exception-state behavior not established; this is separate from streaming drops |
+| Tune/start event 19:45:10 | iq_start/audio_start and settings sequence, frequency 14.2 to 7.205 MHz; one QueueOverflow IQ drop; first subsequent host report had 15 dropped buffers / 61440 bytes, one discontinuity and one header resync |
+| Restarted antenna baseline 19:49:41 | PID 2629435, includes those historical one IQ drop and 15 host drops; ADC1 episodes=365273 |
+| Check 21:09:33 | Same PID/build; 143772 additional IQ frames written, zero NEW IQ drops, host losses, discontinuities, header errors/resyncs, FIFO faults or ADC episodes; audio gaps=0 and zero restarts |
+
+The 80-minute clean segment is a steady-state RX success, not proof that the
+earlier unattended or tune/start failures are fixed. The operator was absent
+during the unattended event and reported no intentional client/network action.
+
+### Investigation findings (no code fix asserted)
+
+1. The full-rate IQ application queue holds four frames (about 133 ms at
+   30 frames/s, excluding in-flight and downstream buffers). QueueOverflow
+   removes oldest queued frames. The 22 drops identify where loss occurred,
+   not why the consumer stalled. Requeue/send/flush-error counters stayed zero.
+2. `send_blocked_ms` increments by synthetic 2 ms steps at selected paths;
+   it is NOT measured wall-clock stall duration. A small value cannot exclude
+   a long scheduling pause or serialization/lock delay.
+3. `audio_gaps` aggregates client-reported `audio_seq_gap_count`; it is not
+   a direct measurement of speaker silence or FPGA sample loss.
+4. Operational RX drains at most 16 host buffers per loop, then executes up
+   to eight commands and conditional DSP synchronization/publication on the
+   same consumer loop. The independent DMA reader continues filling the ring.
+   At approximately 844 four-KiB reads/s, 16 reads represent about 19 ms of
+   incoming data and 256 buffer slots roughly 303 ms when initially empty.
+   Actual headroom depends on current occupancy and transfer sizes.
+5. The 19:45:10 command burst included a 109100 us DSP-sync batch and a
+   40711 us batch plus multiple smaller batches. This establishes a consumer
+   service-budget risk consistent with host-ring saturation. Batch elapsed
+   time includes command handling, DSP sync and publication; it does not
+   isolate which operation incurred the delay. `sync_model` already checks
+   individual setting changes, so do not assume every sync rebuilds filters.
+6. The 18:16 incident had no corresponding DSP/tuning burst in the inspected
+   logs. A radio-state publication batch took 26887 us immediately before the
+   drop, but no host-ring loss occurred. Do not assign both events one cause.
+   Kernel journal query for 18:16:20–18:16:50 returned no entries; this does
+   not rule out transient network, scheduler, proxy or browser problems.
+
+Next: supervised reconnect/tune reproduction with synchronized browser and
+bridge evidence. If existing data is insufficient, add narrowly scoped actual
+send/flush age, client-loop delay, queue oldest-age and command/DSP/publication
+timings. Preserve TX inhibit, FIFO/signal rates and rollback artifact. Do not
+increase buffers merely to hide losses or call this fully qualified yet.
