@@ -12,6 +12,8 @@ VALIDATE_ONLY=0
 # changes incompatibly.  The unprivileged updater compares this value with the
 # source broker before it stages a bridge binary, preventing an older installed
 # broker from pairing a new executable with an obsolete systemd unit.
+# Read externally by the updater, not by this script.
+# shellcheck disable=SC2034
 SATURN_GO_DEPLOY_BROKER_CONTRACT_VERSION=2
 
 die(){ printf '[saturn-go-deploy] ERROR: %s\n' "$*" >&2; exit 1; }

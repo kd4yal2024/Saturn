@@ -80,12 +80,17 @@ grep -Fq 'ensure_low_memory_build_capacity' "$BRIDGE_INSTALLER" \
 # shellcheck disable=SC2016
 grep -Fq 'cargo "${cargo_args[@]}" -j "$SATURN_BRIDGE_BUILD_JOBS"' "$BRIDGE_INSTALLER" \
   || fail "Saturn Bridge Cargo invocation does not enforce bounded jobs"
+# These assertions match literal shell source, not expanded variable values.
+# shellcheck disable=SC2016
 grep -Fq 'SATURN_BRIDGE_TARGET_CPU="${SATURN_BRIDGE_TARGET_CPU:-cortex-a72}"' "$BRIDGE_INSTALLER" \
   || fail "Saturn Bridge installer does not default to the G2 Cortex-A72 target"
+# shellcheck disable=SC2016
 grep -Fq 'RUSTFLAGS="$rustflags"' "$BRIDGE_INSTALLER" \
   || fail "Saturn Bridge installer does not pass its target CPU to rustc"
+# shellcheck disable=SC2016
 grep -Fq 'SATURN_WDSP_TARGET_CPU="$SATURN_BRIDGE_TARGET_CPU"' "$BRIDGE_INSTALLER" \
   || fail "Saturn Bridge installer does not align WDSP and Rust CPU targets"
+# shellcheck disable=SC2016
 grep -Fq '"-mcpu=${TARGET_CPU}"' \
   "$REPO_ROOT/update_manager/saturn-bridge/scripts/build-wdsp2-linux-arm.sh" \
   || fail "WDSP build does not target the selected appliance CPU"
