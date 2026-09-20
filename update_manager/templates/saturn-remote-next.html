@@ -6917,6 +6917,11 @@
                     <div class="setup-panel" id="setup-panel-display" data-setup-panel-id="display" role="tabpanel" aria-labelledby="setup-tab-display" hidden>
                       <div class="setup-section">
                         <div class="setup-section-title">Panadapter / Waterfall</div>
+                        <div class="setup-row">
+                          <button class="btn ghost" id="display-transceiver-clarity" type="button">Transceiver clarity</button>
+                          <button class="btn ghost" id="display-appearance-undo" type="button" disabled>Undo appearance</button>
+                          <div class="setup-readout">Enhanced trace, subtle gradient fill and Enhanced waterfall. No added smoothing; audio, averaging and RF settings stay unchanged.</div>
+                        </div>
                         <div class="setup-grid">
                           <label class="toggle-field"><span>Spectrum Auto Range</span><input id="display-spectrum-auto-range" type="checkbox" /></label>
                           <label class="toggle-field"><span>Waterfall Auto Range</span><input id="display-waterfall-auto-range" type="checkbox" /></label>
@@ -6985,7 +6990,7 @@
                           <div class="setup-row">
                             <label class="label" for="display-waterfall-smoothing">Waterfall Noise Cleanup</label>
                             <input id="display-waterfall-smoothing" type="range" min="0" max="100" step="1" value="0"
-                              title="Display-only smoothing and adaptive background suppression. High values can hide very weak signals." />
+                              title="Display-only smoothing of small level fluctuations. Preserves steady-level colors; changes of 6 dB or more pass immediately. Higher settings can soften small, brief signals." />
                             <div class="setup-readout" id="display-waterfall-smoothing-readout">Off</div>
                           </div>
                         </div>
@@ -6994,12 +6999,14 @@
                             <label class="label" for="display-waterfall-palette">Waterfall Palette</label>
                             <select class="field" id="display-waterfall-palette">
                               <option value="classic">Classic</option>
+                              <option value="enhanced">Enhanced (Thetis-style)</option>
                               <option value="ember">Ember</option>
                               <option value="ice">Ice</option>
                               <option value="forest">Forest</option>
                             </select>
                           </div>
                           <label class="toggle-field"><span>Spectrum Peak Hold</span><input id="display-spectrum-peak-hold" type="checkbox" /></label>
+                          <label class="toggle-field"><span>Enhanced Trace / Fill Colors</span><input id="display-spectrum-enhanced-colors" type="checkbox" /></label>
                           <label class="toggle-field"><span>Peak Tuning Assist</span><input id="display-peak-tune-assist" type="checkbox" /></label>
                           <label class="toggle-field"><span>Show Grid</span><input id="display-show-grid" type="checkbox" /></label>
                           <label class="toggle-field"><span>Show Center Line</span><input id="display-show-center-line" type="checkbox" /></label>
@@ -8326,7 +8333,7 @@
     const CSRF_HEADER_VALUE = "1";
     const ALLOWED_SAMPLE_RATES = Object.freeze([48000, 96000, 192000, 384000]);
     const ALLOWED_DEMOD_MODES = Object.freeze(["USB", "LSB", "AM", "SAM", "FM", "WFM", "DIGU", "DIGL", "CWU", "CWL"]);
-    const WATERFALL_PALETTES = Object.freeze(["classic", "ember", "ice", "forest"]);
+    const WATERFALL_PALETTES = Object.freeze(["classic", "ember", "ice", "forest", "enhanced"]);
     const HAM_BAND_EDGES_HZ = Object.freeze([
       { start: 1800000, end: 2000000, label: "160m" },
       { start: 3500000, end: 4000000, label: "80m" },
@@ -8969,14 +8976,32 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
           #version 300 es
           precision highp float;
           uniform vec4 u_color;
+          uniform bool u_enhanced;
+          uniform float u_height;
+          uniform vec4 u_stops[8];
           out vec4 outColor;
           void main() {
             outColor = u_color;
+            if (u_enhanced) {
+              float level = clamp(gl_FragCoord.y / u_height, 0.0, 1.0);
+              for (int i = 1; i < 8; i++) {
+                if (level <= u_stops[i].x) {
+                  float fraction = (level - u_stops[i-1].x) / (u_stops[i].x - u_stops[i-1].x);
+                  outColor.rgb = mix(u_stops[i-1].yzw, u_stops[i].yzw, fraction);
+                  break;
+                }
+              }
+            }
           }
         `);
         this.program = this.link(vertexShader, fragmentShader);
         this.positionLocation = gl.getAttribLocation(this.program, "a_position");
         this.colorLocation = gl.getUniformLocation(this.program, "u_color");
+        this.enhancedLocation = gl.getUniformLocation(this.program, "u_enhanced");
+        this.heightLocation = gl.getUniformLocation(this.program, "u_height");
+        gl.useProgram(this.program);
+        gl.uniform4fv(gl.getUniformLocation(this.program, "u_stops[0]"),
+          new Float32Array(WaterfallRenderer.enhancedStops.flatMap(([level, r, g, b]) => [level, r / 255, g / 255, b / 255])));
         this.offsetLocation = gl.getUniformLocation(this.program, "u_offset");
         this.vertexBuffer = gl.createBuffer();
       }
@@ -9054,8 +9079,8 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         const vertices = new Float32Array(renderedBins.length * 2);
         for (let i = 0; i < renderedBins.length; i += 1) {
           const x = (i / (renderedBins.length - 1)) * 2 - 1;
-          const normalized = (renderedBins[i] - floorDb) / (ceilingDb - floorDb);
-          const y = Math.max(-1, Math.min(1, normalized * 1.8 - 0.9));
+          const normalized = (renderedBins[i] - floorDb) / Math.max(1, ceilingDb - floorDb);
+          const y = Math.max(-1, Math.min(1, normalized * 2 - 1));
           const index = i * 2;
           vertices[index] = x;
           vertices[index + 1] = y;
@@ -9065,6 +9090,8 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         gl.clear(gl.COLOR_BUFFER_BIT);
         gl.useProgram(this.program);
         gl.bindBuffer(gl.ARRAY_BUFFER, this.vertexBuffer);
+        gl.uniform1i(this.enhancedLocation, state.spectrumEnhancedColors ? 1 : 0);
+        gl.uniform1f(this.heightLocation, this.canvas.height);
         gl.enableVertexAttribArray(this.positionLocation);
         gl.vertexAttribPointer(this.positionLocation, 2, gl.FLOAT, false, 0, 0);
         gl.enable(gl.BLEND);
@@ -9143,9 +9170,16 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         const dpr = Math.max(1, window.devicePixelRatio || 1);
         const glow = _next.clampSpectrumVisualEffect(state.spectrumPeakGlow) / 100;
         const fill = _next.clampSpectrumVisualEffect(state.spectrumTraceFill) / 100;
+        let paint = traceColor;
+        if (state.spectrumEnhancedColors) {
+          paint = ctx.createLinearGradient(0, height, 0, 0);
+          for (const [level, r, g, b] of WaterfallRenderer.enhancedStops) {
+            paint.addColorStop(level, `rgb(${r}, ${g}, ${b})`);
+          }
+        }
         if (fill > 0) {
           ctx.globalAlpha = fill;
-          ctx.fillStyle = traceColor;
+          ctx.fillStyle = paint;
           ctx.beginPath();
           ctx.moveTo(0, height);
           for (let i = 0; i < bins.length; i += 1) {
@@ -9159,8 +9193,8 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
           ctx.fill();
           ctx.globalAlpha = 1;
         }
-        ctx.strokeStyle = traceColor;
-        ctx.lineWidth = 2;
+        ctx.strokeStyle = paint;
+        ctx.lineWidth = dpr;
         ctx.lineJoin = "round";
         ctx.lineCap = "round";
         ctx.shadowColor = traceColor;
@@ -9193,6 +9227,21 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     }
 
     class WaterfallRenderer {
+      // Thetis Enhanced's signal-level breakpoints, expressed as a continuous
+      // color ramp. Reference: Thetis display.cs, ColorScheme.enhanced.
+      // Use one consistent pale-purple endpoint (Thetis has a small endpoint
+      // jump). These are display colors, not changes to the input FFT values.
+      static enhancedStops = [
+        [0, 0, 0, 0],
+        [2 / 9, 0, 0, 255],
+        [3 / 9, 0, 255, 255],
+        [4 / 9, 0, 255, 0],
+        [5 / 9, 255, 255, 0],
+        [7 / 9, 255, 0, 0],
+        [8 / 9, 255, 0, 255],
+        [1, 192, 124, 255],
+      ];
+
       constructor(canvas) {
         this.canvas = canvas;
         this.gl = null;
@@ -9459,6 +9508,21 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         const contrastScale = clampWaterfallContrast(contrast) / 100;
         const t = Math.max(0, Math.min(1, 0.5 + (rawT - 0.5) * contrastScale));
         const normalizedPalette = normalizeWaterfallPalette(palette);
+        if (normalizedPalette === "enhanced") {
+          const level = Number.isFinite(t) ? t : 0;
+          const stops = WaterfallRenderer.enhancedStops;
+          for (let i = 1; i < stops.length; i += 1) {
+            const high = stops[i];
+            if (level > high[0]) continue;
+            const low = stops[i - 1];
+            const mix = (level - low[0]) / (high[0] - low[0]);
+            return [
+              Math.round(low[1] + (high[1] - low[1]) * mix),
+              Math.round(low[2] + (high[2] - low[2]) * mix),
+              Math.round(low[3] + (high[3] - low[3]) * mix),
+            ];
+          }
+        }
         if (normalizedPalette === "ember") {
           if (t < 0.45) {
             const u = t / 0.45;
@@ -11958,6 +12022,24 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         : prefs;
     }
 
+    // Appearance only: do not change signal processing, range, zoom or cadence.
+    function transceiverClarityAppearance() {
+      return {
+        spectrumTraceColor: "#72e5ff",
+        spectrumEnhancedColors: true,
+        spectrumTraceFill: 15,
+        spectrumTraceSmoothing: 0,
+        spectrumPeakGlow: 0,
+        spectrumGlassSheen: 0,
+        waterfallPalette: "enhanced",
+        waterfallContrast: 100,
+        waterfallSmoothing: 0,
+        showGrid: true,
+        showCenterLine: true,
+        showBandEdges: true,
+      };
+    }
+
     function currentDisplayPrefs() {
       return _next.displayPrefsFromState(state);
     }
@@ -12565,6 +12647,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       setChecked("display-spectrum-auto-range", prefs.spectrumAutoRange);
       setChecked("display-waterfall-auto-range", prefs.waterfallAutoRange);
       setChecked("display-spectrum-peak-hold", prefs.spectrumPeakHold);
+      setChecked("display-spectrum-enhanced-colors", prefs.spectrumEnhancedColors);
       setChecked("display-peak-tune-assist", prefs.peakTuneAssistEnabled);
       setChecked("display-show-grid", prefs.showGrid);
       setChecked("display-show-center-line", prefs.showCenterLine);
@@ -18770,6 +18853,34 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         persistLocalSettingsFallback(currentRemoteSettings());
         scheduleRemoteSettingsSave();
       };
+      let previousDisplayAppearance = null;
+      $("display-spectrum-enhanced-colors").addEventListener("change", () => {
+        state.spectrumEnhancedColors = $("display-spectrum-enhanced-colors").checked;
+        refreshSpectrumAppearance();
+      });
+      const applyAppearance = (appearance) => {
+        Object.assign(state, appearance);
+        waterfallRenderer.smoothedBins = null;
+        syncSetupMenuFields();
+        updateDisplayDecorations();
+        refreshSpectrumAppearance();
+      };
+      $("display-transceiver-clarity").addEventListener("click", () => {
+        const appearance = transceiverClarityAppearance();
+        if (!previousDisplayAppearance) {
+          previousDisplayAppearance = Object.fromEntries(
+            Object.keys(appearance).map((key) => [key, state[key]]),
+          );
+        }
+        applyAppearance(appearance);
+        $("display-appearance-undo").disabled = false;
+      });
+      $("display-appearance-undo").addEventListener("click", () => {
+        if (!previousDisplayAppearance) return;
+        applyAppearance(previousDisplayAppearance);
+        previousDisplayAppearance = null;
+        $("display-appearance-undo").disabled = true;
+      });
       $("display-spectrum-trace-color").addEventListener("input", () => {
         state.spectrumTraceColor = normalizeSpectrumTraceColor($("display-spectrum-trace-color").value);
         $("display-spectrum-trace-color-readout").textContent = state.spectrumTraceColor;

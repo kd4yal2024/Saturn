@@ -9,7 +9,7 @@ import { spawnSync } from 'node:child_process';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const template = readFileSync(resolve(root, '../templates/saturn-remote-next.html'), 'utf8');
-const start = template.indexOf('    class WaterfallRenderer {');
+const start = template.indexOf('    class SpectrumRenderer {');
 const end = template.indexOf('    const spectrumRenderer =', start);
 if (start < 0 || end < 0) throw new Error('Could not locate the shipped waterfall renderer');
 const renderer = template.slice(start, end);
@@ -33,14 +33,76 @@ function validate() {
   assert(waterfall.gl, 'WebGL2 is required for this validation');
   const gl = waterfall.gl;
   gl.disable(gl.DITHER);
-  for (const [palette, boundaries] of [['classic', [0.28, 0.58, 0.82]], ['ember', [0.45, 0.78]]]) {
+  for (const [palette, boundaries] of [['classic', [0.28, 0.58, 0.82]], ['ember', [0.45, 0.78]], ['enhanced', [2/9, 3/9, 4/9, 5/9, 7/9, 8/9, 1]]]) {
     for (const boundary of boundaries) {
       const before = waterfall.colorForDb(boundary - 1e-6, 0, 1, palette);
       const after = waterfall.colorForDb(boundary + 1e-6, 0, 1, palette);
       assert(before.every((value, i) => Math.abs(value - after[i]) <= 1), `Discontinuous ${palette} palette at ${boundary}`);
     }
   }
-  checks.push('continuous Classic and Ember color ramps');
+  checks.push('continuous Classic, Ember and Enhanced color ramps');
+  const levels = new Float32Array([0, 2/9, 3/9, 4/9, 5/9, 7/9, 8/9, 1]);
+  const expectedColors = [[0,0,0], [0,0,255], [0,255,255], [0,255,0], [255,255,0], [255,0,0], [255,0,255], [192,124,255]];
+  for (const fallback of [false, true]) {
+    const element = canvas(8, 512);
+    if (fallback) {
+      const getContext = element.getContext.bind(element);
+      element.getContext = (kind, ...args) => kind === 'webgl2' ? null : getContext(kind, ...args);
+    }
+    const ramp = new WaterfallRenderer(element);
+    if (ramp.gl) ramp.gl.disable(ramp.gl.DITHER);
+    ramp.pushLine(levels, 0, 1, 'enhanced');
+    ramp.render();
+    let bytes;
+    if (ramp.gl) {
+      bytes = new Uint8Array(32);
+      ramp.gl.readPixels(0, 511, 8, 1, ramp.gl.RGBA, ramp.gl.UNSIGNED_BYTE, bytes);
+      assert(ramp.gl.getError() === ramp.gl.NO_ERROR, 'Enhanced WebGL error');
+    } else {
+      bytes = ramp.ctx.getImageData(0, 0, 8, 1).data;
+    }
+    expectedColors.forEach((color, x) => color.forEach((channel, c) => {
+      assert(Math.abs(bytes[x * 4 + c] - channel) <= 1, `Enhanced color ${x}/${c} incorrect, fallback=${fallback}`);
+    }));
+  }
+  checks.push('Enhanced reference colors in WebGL2 and Canvas2D');
+  for (const fallback of [false, true]) {
+    const element = canvas(32, 512);
+    if (fallback) {
+      const getContext = element.getContext.bind(element);
+      element.getContext = (kind, ...args) => kind === 'webgl2' ? null : getContext(kind, ...args);
+    }
+    const spectrum = new SpectrumRenderer(element);
+    assert(fallback ? spectrum.ctx : spectrum.gl, 'Spectrum backend failed to initialize');
+    function spectrumPixels() {
+      if (spectrum.gl) {
+        const bytes = new Uint8Array(32 * 512 * 4);
+        spectrum.gl.readPixels(0, 0, 32, 512, spectrum.gl.RGBA, spectrum.gl.UNSIGNED_BYTE, bytes);
+        assert(spectrum.gl.getError() === spectrum.gl.NO_ERROR, 'Spectrum WebGL error');
+        return (y) => bytes.slice((y * 32 + 16) * 4, (y * 32 + 16) * 4 + 3);
+      }
+      const bytes = spectrum.ctx.getImageData(0, 0, 32, 512).data;
+      return (y) => bytes.slice(((511 - y) * 32 + 16) * 4, ((511 - y) * 32 + 16) * 4 + 3);
+    }
+    state.spectrumEnhancedColors = true;
+    state.spectrumTraceFill = 100;
+    spectrum.render(new Float32Array([0, 0]), -100, 0);
+    let sample = spectrumPixels();
+    for (const y of [20, 100, 170, 240, 310, 400, 480]) {
+      const expected = waterfall.colorForDb((y + 0.5) / 512, 0, 1, 'enhanced');
+      assert(sample(y).every((c, i) => Math.abs(c - expected[i]) <= 3), `Spectrum gradient mismatch y=${y}, fallback=${fallback}`);
+    }
+    state.spectrumEnhancedColors = false;
+    state.spectrumTraceFill = 0;
+    for (const level of [0.1, 0.25, 0.5, 0.75, 0.9]) {
+      spectrum.render(new Float32Array([-100 + level * 100, -100 + level * 100]), -100, 0);
+      sample = spectrumPixels();
+      const lit = [];
+      for (let y = 0; y < 512; y++) if (sample(y)[0] > 60) lit.push(y);
+      assert(lit.length > 0 && lit.every(y => Math.abs(y + 0.5 - level * 512) <= 2), `Spectrum scale mismatch level=${level}, fallback=${fallback}`);
+    }
+  }
+  checks.push('Spectrum gradient and dB alignment in WebGL2 and Canvas2D');
   waterfall.colorForDb = (db) => [db, 0, 0];
   const uploads = [];
   const upload = gl.texSubImage2D.bind(gl);
@@ -116,7 +178,15 @@ function validate() {
 }
 
 writeFileSync(page, `<!doctype html><body><pre id="result"></pre><script>
-const _next = { smoothWaterfallBins: (bins) => bins };
+const _next = {
+  smoothWaterfallBins: (bins) => bins,
+  smoothSpectrumTrace: (bins) => bins,
+  normalizeSpectrumTraceColor: (color) => color,
+  clampSpectrumVisualEffect: (value) => value,
+};
+const state = { spectrumTraceColor: '#ffffff', spectrumTraceSmoothing: 0,
+  spectrumPeakGlow: 0, spectrumGlassSheen: 0, showGrid: false, showCenterLine: false };
+const $ = () => null;
 const normalizeWaterfallPalette = (palette) => palette;
 const clampWaterfallContrast = (contrast) => contrast;
 ${renderer}

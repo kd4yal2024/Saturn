@@ -231,6 +231,7 @@ export interface AppState {
   spectrumAverage: number;
   spectrumPeakHold: boolean;
   spectrumTraceColor: string;
+  spectrumEnhancedColors: boolean;
   spectrumTraceSmoothing: number;
   spectrumTraceFill: number;
   spectrumPeakGlow: number;
@@ -564,6 +565,7 @@ export function createAppState(): AppState {
     spectrumAverage: 1,
     spectrumPeakHold: false,
     spectrumTraceColor: '#8b3fb2',
+    spectrumEnhancedColors: false,
     spectrumTraceSmoothing: 0,
     spectrumTraceFill: 0,
     spectrumPeakGlow: 0,
