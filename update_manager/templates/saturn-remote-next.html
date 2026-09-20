@@ -3648,6 +3648,121 @@
         height: 190px;
       }
     }
+    /* Operator center: one instrument strip, without changing control IDs or
+       the phone layout. Keep sizing intrinsic so meter content cannot spill
+       over the panadapter on shorter desktop windows. */
+    @media (min-width: 1024px) {
+      :root:not([data-layout="phone"]) .command-strip > .panel-body {
+        height: auto;
+        padding: 6px;
+      }
+      :root:not([data-layout="phone"]) .strip-grid {
+        grid-template-columns: minmax(270px, 0.8fr) minmax(0, 1.2fr);
+        grid-template-areas: "vfo meter" "secondary meter";
+        grid-template-rows: auto auto;
+        height: auto;
+        gap: 4px 10px;
+      }
+      :root:not([data-layout="phone"]) .primary-deck {
+        grid-area: vfo;
+        height: auto;
+        min-height: 100px;
+        padding: 6px 10px;
+        grid-template-areas: "top" "readout" "sub";
+        grid-template-rows: 16px auto 20px;
+      }
+      :root:not([data-layout="phone"]) .primary-deck .deck-top { display: flex; min-height: 16px; }
+      :root:not([data-layout="phone"]) .primary-deck .deck-frequency {
+        font-size: clamp(30px, 2.5vw, 46px);
+        letter-spacing: 0.025em;
+        font-variant-numeric: tabular-nums;
+      }
+      :root:not([data-layout="phone"]) .secondary-deck {
+        grid-area: secondary;
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 4px 10px;
+        padding: 4px 10px;
+        min-height: 32px;
+        height: auto;
+        background: transparent;
+      }
+      :root:not([data-layout="phone"]) .secondary-deck .deck-top { margin: 0; }
+      :root:not([data-layout="phone"]) .secondary-deck .deck-frequency { font-size: 18px; margin: 0; }
+      :root:not([data-layout="phone"]) .secondary-deck .deck-subline { display: none; }
+      :root:not([data-layout="phone"]) .control-cluster {
+        grid-area: meter;
+        display: block;
+        position: relative;
+        padding: 0;
+        height: auto;
+      }
+      :root:not([data-layout="phone"]) .launch-grid {
+        position: absolute;
+        top: 1px;
+        right: 2px;
+        display: flex;
+        height: 28px;
+        gap: 4px;
+        z-index: 5;
+      }
+      :root:not([data-layout="phone"]) .launch-grid > .btn,
+      :root:not([data-layout="phone"]) .launch-grid .setup-anchor,
+      :root:not([data-layout="phone"]) .launch-grid .setup-anchor > .btn {
+        min-height: 28px;
+        height: 28px;
+        padding: 3px 8px;
+      }
+      :root:not([data-layout="phone"]) .top-meter-bank { height: auto; padding: 0; border: 0; gap: 3px; }
+      :root:not([data-layout="phone"]) .instrument-state-line { min-height: 30px; padding-right: 150px; }
+      :root:not([data-layout="phone"]) .instrument-state-frequency { display: none; }
+      :root:not([data-layout="phone"]) .multimeter-workbench {
+        grid-template-columns: minmax(140px, 1fr) minmax(170px, 0.8fr);
+        padding: 3px 5px;
+      }
+      :root:not([data-layout="phone"]) .top-meter-bank .multimeter-workbench > .multimeter-svg {
+        height: 104px !important;
+        max-height: 104px !important;
+      }
+      :root:not([data-layout="phone"]) .multimeter-control-stack {
+        grid-template-columns: 1fr 1fr;
+        grid-template-rows: auto auto;
+        padding: 3px;
+        align-items: center;
+      }
+      :root:not([data-layout="phone"]) .multimeter-control-stack > .meter-name { display: none; }
+      :root:not([data-layout="phone"]) .multimeter-digital { grid-column: 2; grid-row: 1 / 3; padding: 4px; }
+      :root:not([data-layout="phone"]) .multimeter-digital .instrument-primary-readout { font-size: 20px; }
+      :root:not([data-layout="phone"]) .meter-response-label { display: none; }
+      :root:not([data-layout="phone"]) .multimeter-console {
+        grid-template-columns: minmax(110px, 0.6fr) minmax(0, 1.4fr);
+        padding: 3px;
+      }
+      :root:not([data-layout="phone"]) .tx-tool-dock { display: grid; grid-template-columns: 1fr; gap: 2px; }
+      :root:not([data-layout="phone"]) .display-card.scope-frame {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 180px;
+        grid-template-rows: auto auto minmax(0, 1fr);
+      }
+      :root:not([data-layout="phone"]) .display-head { grid-column: 1; padding: 5px 8px; min-width: 0; }
+      :root:not([data-layout="phone"]) .display-head > div:first-child { display: none; }
+      :root:not([data-layout="phone"]) .display-pill-row { flex-wrap: wrap; justify-content: flex-start; gap: 4px; }
+      :root:not([data-layout="phone"]) .display-pill-row > * { min-height: 28px; padding: 3px 7px; font-size: 10px; }
+      :root:not([data-layout="phone"]) .display-zoom { grid-column: 2; grid-row: 1; padding: 4px 8px; align-self: center; }
+      :root:not([data-layout="phone"]) .frequency-ruler { grid-column: 1 / -1; padding: 3px 10px; }
+      :root:not([data-layout="phone"]) .ruler-main { display: none; }
+      :root:not([data-layout="phone"]) .display-stack { grid-column: 1 / -1; min-width: 0; }
+    }
+    .meter-details { min-width: 0; }
+    .meter-details > summary {
+      padding: 5px 8px;
+      color: var(--text-secondary);
+      font: 600 10px/1.4 var(--font-instrument);
+      cursor: pointer;
+      border-top: 1px solid var(--border-subtle);
+    }
+    .meter-details > summary:focus-visible { outline: 2px solid var(--rx-cyan); outline-offset: -2px; }
   </style>
   <style id="saturn-operator-layout-v2">
     :root {
@@ -6732,6 +6847,38 @@
       .multimeter-console .top-meter-telemetry { display: none !important; }
     }
   </style>
+  <style>
+    /* Meter preview: one instrument face, with controls and readings sharing its space. */
+    @media (min-width: 1024px) {
+      :root:not([data-layout="phone"]) .multimeter-workbench {
+        grid-template-columns: minmax(0, 1fr) minmax(140px, .35fr);
+        grid-template-rows: 28px 170px;
+        gap: 3px 10px;
+        padding: 4px 8px;
+        background: linear-gradient(180deg, #0b171e, #050b0f);
+      }
+      :root:not([data-layout="phone"]) .multimeter-control-stack { display: contents; }
+      :root:not([data-layout="phone"]) #instrument-meter-mode {
+        grid-column: 1; grid-row: 1; width: min(100%, 200px); min-height: 28px;
+      }
+      :root:not([data-layout="phone"]) .meter-response-control { grid-column: 2; grid-row: 1; }
+      :root:not([data-layout="phone"]) .top-meter-bank .multimeter-workbench > .multimeter-svg {
+        grid-column: 1; grid-row: 2; height: 170px !important; max-height: 170px !important;
+      }
+      :root:not([data-layout="phone"]) .multimeter-control-stack > .multimeter-digital {
+        grid-column: 2; grid-row: 2; border: 0; background: transparent;
+        box-shadow: none; align-self: center; padding: 8px 0;
+      }
+      :root:not([data-layout="phone"]) .multimeter-digital .instrument-primary-readout { font-size: clamp(22px, 1.6vw, 30px); }
+      :root:not([data-layout="phone"]) .multimeter-digital #meter-readout { font-size: 13px; color: var(--text-secondary); }
+      :root:not([data-layout="phone"]) .multimeter-shell > .instrument-rx-audio {
+        display: grid; grid-template-columns: 1fr 1fr; gap: 12px; padding: 6px 10px;
+      }
+      :root:not([data-layout="phone"]) .multimeter-console { grid-template-columns: 1fr; }
+      :root:not([data-layout="phone"]) .multimeter-svg > rect,
+      :root:not([data-layout="phone"]) .multimeter-svg > ellipse { opacity: 0; }
+    }
+  </style>
 </head>
 <body>
   <div class="page console-page">
@@ -7398,7 +7545,6 @@
                   </div>
                 </div>
 
-                <div class="multimeter-console">
                   <div class="instrument-rx-audio" aria-label="Receiver audio stereo peak meters">
                     <div class="rx-audio-meter-row">
                       <span class="rx-audio-channel">L</span>
@@ -7412,6 +7558,9 @@
                     </div>
                   </div>
 
+                <details class="meter-details">
+                  <summary>More meter details &amp; TX tools</summary>
+                <div class="multimeter-console">
                   <div class="top-meter-telemetry">
                   <div class="top-meter-telemetry-head">
                     <span class="top-meter-telemetry-title">Telemetry</span>
@@ -7450,6 +7599,7 @@
                   </select>
                 </div>
               </div>
+                </details>
             </div>
           </div>
         </div>
