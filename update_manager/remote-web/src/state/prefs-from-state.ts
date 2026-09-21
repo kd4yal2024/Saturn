@@ -1,3 +1,4 @@
+import { normalizeTerrain, type TerrainSettings } from '../settings/terrain';
 import type { RadioPrefs, DisplayPrefs } from '../settings/types';
 import {
   clampSampleRateHz,
@@ -114,6 +115,7 @@ export interface DisplayPrefsSource {
   waterfallCeilingDb: number;
   spectrumAverage: number;
   waterfallSpeed: number;
+  terrain?: TerrainSettings;
   waterfallPalette: string;
   spectrumPeakHold: boolean;
   spectrumTraceColor: string;
@@ -205,6 +207,7 @@ export function displayPrefsFromState(s: DisplayPrefsSource): DisplayPrefs {
     waterfallCeilingDb: clampDisplayDb(s.waterfallCeilingDb, -120),
     spectrumAverage: clampSpectrumAverage(s.spectrumAverage),
     waterfallSpeed: clampWaterfallSpeed(s.waterfallSpeed),
+    terrain: normalizeTerrain(s.terrain),
     waterfallPalette: normalizeWaterfallPalette(s.waterfallPalette),
     spectrumPeakHold: Boolean(s.spectrumPeakHold),
     spectrumTraceColor: normalizeSpectrumTraceColor(s.spectrumTraceColor),

@@ -13,6 +13,7 @@ const start = template.indexOf('    class SpectrumRenderer {');
 const end = template.indexOf('    const spectrumRenderer =', start);
 if (start < 0 || end < 0) throw new Error('Could not locate the shipped waterfall renderer');
 const renderer = template.slice(start, end);
+const runtimeBundle = pathToFileURL(resolve(root, 'dist/saturn-remote-next.js')).href;
 const output = mkdtempSync(join(tmpdir(), 'saturn-waterfall-'));
 const page = join(output, 'test.html');
 
@@ -33,14 +34,14 @@ function validate() {
   assert(waterfall.gl, 'WebGL2 is required for this validation');
   const gl = waterfall.gl;
   gl.disable(gl.DITHER);
-  for (const [palette, boundaries] of [['classic', [0.28, 0.58, 0.82]], ['ember', [0.45, 0.78]], ['enhanced', [2/9, 3/9, 4/9, 5/9, 7/9, 8/9, 1]]]) {
+  for (const [palette, boundaries] of [['classic', [0.28, 0.58, 0.82]], ['ember', [0.45, 0.78]], ['enhanced', [2/9, 3/9, 4/9, 5/9, 7/9, 8/9, 1]], ['reference', [.12,.30,.48,.62,.76,.87,.96,1]]]) {
     for (const boundary of boundaries) {
       const before = waterfall.colorForDb(boundary - 1e-6, 0, 1, palette);
       const after = waterfall.colorForDb(boundary + 1e-6, 0, 1, palette);
       assert(before.every((value, i) => Math.abs(value - after[i]) <= 1), `Discontinuous ${palette} palette at ${boundary}`);
     }
   }
-  checks.push('continuous Classic, Ember and Enhanced color ramps');
+  checks.push('continuous Classic, Ember, Enhanced and Reference Rainbow color ramps');
   const levels = new Float32Array([0, 2/9, 3/9, 4/9, 5/9, 7/9, 8/9, 1]);
   const expectedColors = [[0,0,0], [0,0,255], [0,255,255], [0,255,0], [255,255,0], [255,0,0], [255,0,255], [192,124,255]];
   for (const fallback of [false, true]) {
@@ -177,8 +178,9 @@ function validate() {
   return checks;
 }
 
-writeFileSync(page, `<!doctype html><body><pre id="result"></pre><script>
+writeFileSync(page, `<!doctype html><body><pre id="result"></pre><script src="${runtimeBundle}"></script><script>
 const _next = {
+  referenceColor: globalThis.SaturnRemoteNext.referenceColor,
   smoothWaterfallBins: (bins) => bins,
   smoothSpectrumTrace: (bins) => bins,
   normalizeSpectrumTraceColor: (color) => color,
@@ -210,3 +212,8 @@ writeFileSync(join(output, 'result.json'), JSON.stringify(report, null, 2));
 if (!report.pass) throw new Error(`${report.error}\nArtifacts: ${output}`);
 for (const check of report.checks) console.log(`PASS ${check}`);
 console.log(`Output: ${output}`);
+
+// Extend the legacy gate with the integrated numerical 3D path; none of the
+// existing checks above are skipped or replaced.
+const terrainResult = spawnSync(process.execPath, [resolve(root, 'scripts/validate-terrain.mjs')], { stdio: 'inherit', timeout: 180000 });
+if (terrainResult.status !== 0) throw new Error('Integrated terrain browser validation failed');

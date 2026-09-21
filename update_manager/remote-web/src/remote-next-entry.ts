@@ -1,3 +1,6 @@
+import { SpectrumHistory } from './dsp/spectrum-history';
+import { TerrainRenderer } from './render/terrain';
+import { normalizeTerrain, referenceColor } from './settings/terrain';
 
 
 
@@ -224,6 +227,7 @@ import {
 import { preferredResponsiveLayout } from './ui/responsive-layout';
 
 const api = {
+  SpectrumHistory, TerrainRenderer, normalizeTerrain, referenceColor,
   // Controller / runtime
 
   // TCI parsing

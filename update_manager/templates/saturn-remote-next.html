@@ -3763,6 +3763,7 @@
       border-top: 1px solid var(--border-subtle);
     }
     .meter-details > summary:focus-visible { outline: 2px solid var(--rx-cyan); outline-offset: -2px; }
+
   </style>
   <style id="saturn-operator-layout-v2">
     :root {
@@ -4584,6 +4585,7 @@
       .spectrum-shell { height: 290px; }
       .waterfall-shell { height: 180px; }
     }
+
   </style>
   <style id="saturn-transceiver-shell-v1">
     :root {
@@ -6846,6 +6848,7 @@
 
       .multimeter-console .top-meter-telemetry { display: none !important; }
     }
+
   </style>
   <style>
     /* Meter preview: one instrument face, with controls and readings sharing its space. */
@@ -6878,7 +6881,35 @@
       :root:not([data-layout="phone"]) .multimeter-svg > rect,
       :root:not([data-layout="phone"]) .multimeter-svg > ellipse { opacity: 0; }
     }
+
   </style>
+<style>
+    .terrain-toolbar { display:flex; flex-wrap:wrap; gap:5px; align-items:center; padding:6px 12px; font-size:11px; }
+    .terrain-toolbar .btn { font-size:11px; padding:5px 8px; min-height:30px; }
+    .terrain-toolbar [aria-pressed="true"] { border-color:var(--accent, #45cfea); color:#7edff2; }
+    #terrain-status { padding:2px 12px; color:#a9bdd1; }
+    .display-stack { position:relative; }
+    #terrain-canvas { position:absolute; inset:0; width:100%; height:100%; pointer-events:none; z-index:1; }
+    #terrain-cursor { position:absolute; bottom:4px; left:8px; z-index:15; pointer-events:none; font-size:11px; background:#070d18df; color:#e3edfa; }
+    [data-terrain="true"] #spectrum-canvas, [data-terrain="true"] #waterfall-canvas,
+    [data-terrain="true"] .display-grid-overlay, [data-terrain="true"] #spectrum-glass-sheen,
+    [data-terrain="true"] #spectrum-db-scale { visibility:hidden; }
+    [data-terrain="true"] .spectrum-shell, [data-terrain="true"] .waterfall-shell { background:transparent; z-index:2; }
+    [data-terrain="true"] #filter-window { top:auto; height:26px; bottom:0; }
+    [data-terrain="true"] .spectrum-waterfall-resizer { min-height:0; overflow:visible; }
+    #terrain-settings { max-width:560px; width:calc(100% - 24px); max-height:85vh; overflow:auto; background:#0c1422; color:#d9e8f6; border:1px solid #3f586e; border-radius:10px; padding:18px; }
+    #terrain-settings::backdrop { background:#0009; }
+    #terrain-settings label { display:grid; grid-template-columns:minmax(120px,1fr) minmax(80px,1fr); gap:12px; align-items:center; margin:12px 0; font-size:13px; }
+    #terrain-settings input, #terrain-settings select { width:100%; min-width:0; }
+    #terrain-legend { height:10px; margin-top:6px; }
+    #terrain-diagnostics { white-space:pre-wrap; font-size:11px; }
+
+    .display-head { flex-wrap:wrap; }
+    .display-head > .terrain-toolbar { flex:1 0 100%; padding:3px 0; }
+    #terrain-status { padding:0; max-width:230px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    [data-terrain="true"] .spectrum-shell, [data-terrain="true"] .waterfall-shell { background:none !important; }
+    #terrain-canvas[hidden], #terrain-status[hidden], #terrain-cursor[hidden] { display:none !important; }
+</style>
 </head>
 <body>
   <div class="page console-page">
@@ -7146,6 +7177,7 @@
                             <label class="label" for="display-waterfall-palette">Waterfall Palette</label>
                             <select class="field" id="display-waterfall-palette">
                               <option value="classic">Classic</option>
+                              <option value="reference">Reference Rainbow</option>
                               <option value="enhanced">Enhanced (Thetis-style)</option>
                               <option value="ember">Ember</option>
                               <option value="ice">Ice</option>
@@ -7843,6 +7875,14 @@
               <button class="btn eq-enable-btn" id="freq-lock-btn" type="button" style="font-size:11px;padding:4px 10px;">Lock</button>
               <button class="btn eq-enable-btn waterfall-toggle-btn" id="waterfall-toggle-btn" type="button" style="font-size:11px;padding:4px 10px;" aria-label="Change phone spectrum and waterfall balance">View Both</button>
             </div>
+          <div class="terrain-toolbar" role="group" aria-label="Display view">
+            <span>View:</span>
+            <button type="button" class="btn" id="view-traditional" aria-pressed="true">Traditional</button>
+            <button type="button" class="btn" id="view-3d" aria-pressed="false">High-Res 3D</button>
+            <button type="button" class="btn" id="terrain-settings-open">Display Settings</button>
+            <button type="button" class="btn" id="display-pause" aria-pressed="false">Pause</button>
+            <span id="terrain-status" class="small mono" role="status" hidden></span>
+          </div>
           </div>
           <div class="display-zoom">
             <div class="row spread">
@@ -7860,6 +7900,8 @@
             </div>
           </div>
           <div class="display-stack">
+            <canvas id="terrain-canvas" aria-label="Live frequency, signal level and recent history" hidden></canvas>
+            <output id="terrain-cursor" class="mono" hidden></output>
             <div class="spectrum-shell" id="spectrum-shell" tabindex="0" aria-label="Spectrum panadapter">
               <div class="display-grid-overlay"></div>
               <canvas id="spectrum-canvas"></canvas>
@@ -8302,6 +8344,30 @@
     </div>
   </div>
 
+
+  <dialog id="terrain-settings" aria-labelledby="terrain-settings-title">
+    <form method="dialog"><button class="btn" style="float:right">Close</button></form>
+    <h3 id="terrain-settings-title">Display Settings</h3>
+    <button class="btn" type="button" id="terrain-traditional-settings">Traditional appearance settings</button>
+    <p class="small">Frequency → · Height: relative dB · Older spectra recede. Newest waterfall row is at the top. Recent time ranges overlap.</p>
+    <label>View <select id="terrain-mode"><option value="traditional">Traditional</option><option value="3d">High-Res 3D</option></select></label>
+    <label>Surface height <input id="terrain-height" type="range" min="0" max="1" step="0.01"></label>
+    <label>Recent rows <input id="terrain-depth" type="number" min="8" max="256" step="1"></label>
+    <label>Camera elevation <input id="terrain-elevation" type="range" min="15" max="60" step="1"></label>
+    <label>Floor (relative dB) <input id="terrain-floor" type="number" min="-200" max="19"></label>
+    <label>Ceiling (relative dB) <input id="terrain-ceiling" type="number" min="-199" max="20"></label>
+    <label>Color gamma <input id="terrain-gamma" type="range" min="0.3" max="3" step="0.05"></label>
+    <label>Spatial smoothing <input id="terrain-smoothing" type="range" min="0" max="1" step="0.05"></label>
+    <label>Palette <select id="terrain-palette"><option value="reference">Reference Rainbow</option><option value="classic">Classic</option><option value="ember">Ember</option><option value="ice">Ice</option><option value="forest">Forest</option><option value="enhanced">Enhanced</option></select></label>
+    <div id="terrain-legend" aria-label="Unlit amplitude color legend"></div><output id="terrain-legend-label" class="small"></output>
+    <label>Spectrum / waterfall split <input id="terrain-split" type="range" min="0.2" max="0.65" step="0.01"></label>
+    <label>Quality <select id="terrain-quality"><option value="auto">Auto</option><option value="performance">Performance (30 fps target)</option><option value="balanced">Balanced (60 fps target)</option><option value="high">High (60 fps target)</option></select></label>
+    <label>Diagnostics <input id="terrain-diagnostics-enabled" type="checkbox"></label>
+    <p class="small">Manual range remaps retained levels. More display pixels do not increase FFT resolution. Row cadence follows the existing waterfall speed setting; per-bin maxima aggregate measurements within each interval.</p>
+    <button class="btn" type="button" id="terrain-reset">Reset 3D view</button>
+    <pre id="terrain-diagnostics" hidden></pre>
+  </dialog>
+
   <!-- Runtime provided by SaturnRemoteNext bundle -->
 
   <script>
@@ -8502,7 +8568,7 @@
     const CSRF_HEADER_VALUE = "1";
     const ALLOWED_SAMPLE_RATES = Object.freeze([48000, 96000, 192000, 384000]);
     const ALLOWED_DEMOD_MODES = Object.freeze(["USB", "LSB", "AM", "SAM", "FM", "WFM", "DIGU", "DIGL", "CWU", "CWL"]);
-    const WATERFALL_PALETTES = Object.freeze(["classic", "ember", "ice", "forest", "enhanced"]);
+    const WATERFALL_PALETTES = Object.freeze(["classic", "ember", "ice", "forest", "enhanced", "reference"]);
     const HAM_BAND_EDGES_HZ = Object.freeze([
       { start: 1800000, end: 2000000, label: "160m" },
       { start: 3500000, end: 4000000, label: "80m" },
@@ -9268,6 +9334,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       }
 
       render(bins, floorDb, ceilingDb) {
+        if (state.terrainActive || state.displayPaused) return;
         if (!this.supported || !bins || bins.length < 2) {
           return;
         }
@@ -9684,6 +9751,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       }
 
       pushLine(bins, floorDb, ceilingDb, palette = "classic", contrast = 100, smoothing = 0) {
+        if (state.displayPaused) return;
         if (!this.supported || !bins || bins.length === 0) {
           return;
         }
@@ -9720,6 +9788,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         const contrastScale = clampWaterfallContrast(contrast) / 100;
         const t = Math.max(0, Math.min(1, 0.5 + (rawT - 0.5) * contrastScale));
         const normalizedPalette = normalizeWaterfallPalette(palette);
+        if (normalizedPalette === "reference") return _next.referenceColor(t);
         if (normalizedPalette === "enhanced") {
           const level = Number.isFinite(t) ? t : 0;
           const stops = WaterfallRenderer.enhancedStops;
@@ -9792,6 +9861,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       }
 
       render() {
+        if (state.terrainActive || state.displayPaused) return;
         if (!this.supported) {
           return;
         }
@@ -9845,6 +9915,233 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
 
     const spectrumRenderer = new SpectrumRenderer($("spectrum-canvas"));
     const waterfallRenderer = new WaterfallRenderer($("waterfall-canvas"));
+
+    // Renderer-independent display adapter. Production calls only after an accepted
+    // live FFT; offline decorative spectra are deliberately never ingested here.
+    const spectrumHistory = new _next.SpectrumHistory();
+    let terrainRenderer = null;
+    let terrainDisposeTimer = null;
+    let terrainBound = false;
+    let terrainFailure = "";
+    let terrainLastStatus = 0;
+    const terrainTuneAnchors = new WeakMap();
+    state.terrainActive = false;
+    state.displayPaused = false;
+    function acceptSpectrumFrame(bins, timestamp, sequence, sourceBins) {
+      const accepted = spectrumHistory.accept({ bins, timestamp, sequence, sourceBins,
+        receiver: `${state.displayIqSource || "rx"}:0`, centerHz: state.dds,
+        spanHz: displaySpanHz(), sampleRate: state.displayIqSource === "tx" ? WDSP_TX_IQ_RATE_HZ : displaySampleRateHz(), units: "relative dB",
+      }, displayRenderIntervalMs() * clampWaterfallSpeed(state.waterfallSpeed));
+      if (spectrumHistory.rejected && !accepted && state.terrainActive) {
+        fallbackTerrain("3D numerical history exceeds its 32 MiB limit or has invalid metadata");
+      }
+      return accepted;
+    }
+    function beginTerrainTune(event, element) {
+      terrainTuneAnchors.delete(element);
+      if (!state.terrainActive || element.id !== "spectrum-shell" || !terrainRenderer) return;
+      const rect = element.getBoundingClientRect();
+      const x = (event.clientX - rect.left) / rect.width, y = (event.clientY - rect.top) / rect.height;
+      const hit = event.clientY - rect.top <= 24 ? { fraction: x, age: 0 } : terrainRenderer.pick(x, y);
+      if (!hit) return;
+      // Preserve the picked frequency plane for this drag: a QSY legitimately
+      // segments history, but must not destroy the ongoing tuning gesture.
+      terrainTuneAnchors.set(element, {
+        x: event.clientX, hz: state.dds + (hit.fraction - .5) * displaySpanHz(),
+        hzPerPixel: displaySpanHz() * (1 + .18 * hit.age / Math.max(1, terrainRenderer.rows - 1)) / rect.width,
+      });
+    }
+    function terrainColor(t, palette) {
+      return palette === "reference" ? _next.referenceColor(t) : waterfallRenderer.colorForDb(t, 0, 1, palette, 100);
+    }
+    function disposeTerrain() {
+      clearTimeout(terrainDisposeTimer); terrainDisposeTimer = null;
+      terrainRenderer?.dispose(); terrainRenderer = null;
+      const old = $("terrain-canvas");
+      const fresh = old.cloneNode(false); old.replaceWith(fresh);
+    }
+    function fallbackTerrain(reason) {
+      terrainFailure = reason;
+      setTerrainMode("traditional", false);
+      disposeTerrain();
+      $("terrain-status").hidden = false; $("terrain-status").textContent = reason;
+    }
+    function recoverTraditionalContext(renderer, Renderer) {
+      if (renderer.supported && !renderer.gl?.isContextLost()) return false;
+      // A driver reset can lose all three contexts. Reuse the existing Canvas2D
+      // renderer on a fresh canvas: a canvas already bound to WebGL cannot switch
+      // context types, even after context loss. Keep the renderer object identity.
+      const canvas = renderer.canvas.cloneNode(false);
+      renderer.canvas.replaceWith(canvas);
+      const nativeGetContext = canvas.getContext.bind(canvas);
+      canvas.getContext = (kind, ...args) => kind === "webgl2" ? null : nativeGetContext(kind, ...args);
+      try { Object.assign(renderer, new Renderer(canvas)); }
+      finally { delete canvas.getContext; }
+      renderer.resize();
+      return true;
+    }
+    function setTerrainMode(mode, persist = true) {
+      const settings = _next.normalizeTerrain({ ...state.terrain, mode });
+      clearTimeout(terrainDisposeTimer); terrainDisposeTimer = null;
+      let recoveredTraditional = false;
+      if (settings.mode === "traditional") {
+        const spectrumRecovered = recoverTraditionalContext(spectrumRenderer, SpectrumRenderer);
+        const waterfallRecovered = recoverTraditionalContext(waterfallRenderer, WaterfallRenderer);
+        recoveredTraditional = spectrumRecovered || waterfallRecovered;
+      }
+      if (settings.mode === "3d") {
+        try {
+          if (waterfallRenderer.ctx && waterfallRenderer.canvas.height > spectrumHistory.capacity) {
+            throw new Error("Traditional Canvas2D retention exceeds the 3D history capacity; retaining Traditional history");
+          }
+          if (!terrainRenderer) terrainRenderer = new _next.TerrainRenderer($("terrain-canvas"), spectrumHistory, terrainColor, fallbackTerrain);
+          terrainRenderer.configure(settings); terrainRenderer.setActive(true);
+          // Compile/upload/draw while the working Traditional surfaces remain visible.
+          $("terrain-canvas").hidden = false;
+          terrainRenderer.render(performance.now(), layoutTerrainCanvas(), true);
+          terrainFailure = "";
+        } catch (error) { fallbackTerrain(`High-Res 3D unavailable: ${error.message || error}`); return false; }
+      } else if (terrainRenderer) {
+        terrainRenderer.setActive(false);
+        // One bounded warm cache; release it after 30s inactive. No extra RAF loop.
+        terrainDisposeTimer = setTimeout(disposeTerrain, 30000);
+      }
+      const wasActive = state.terrainActive;
+      state.terrain = settings; state.terrainActive = settings.mode === "3d";
+      document.documentElement.dataset.terrain = `${state.terrainActive}`;
+      $("terrain-canvas").hidden = !state.terrainActive;
+      $("terrain-cursor").hidden = true;
+      $("view-traditional").setAttribute("aria-pressed", `${!state.terrainActive}`);
+      $("view-3d").setAttribute("aria-pressed", `${state.terrainActive}`);
+      $("terrain-status").hidden = !state.terrainActive && !terrainFailure;
+      syncDisplayWorkspaceRatio(); scheduleDisplaySurfaceResize();
+      if ((wasActive || recoveredTraditional) && !state.terrainActive && waterfallRenderer.ctx) {
+        // Canvas2D has no authoritative image ring; rebuild its cache from numbers.
+        waterfallRenderer.clear(); waterfallRenderer.resize();
+        const paused = state.displayPaused; state.displayPaused = false;
+        for (let age = Math.min(spectrumHistory.count, waterfallRenderer.canvas.height) - 1; age >= 0; age--) {
+          const row = spectrumHistory.row(age);
+          waterfallRenderer.pushLine(row || new Float32Array(spectrumHistory.width).fill(-1000), state.waterfallFloorDb,
+            state.waterfallCeilingDb, state.waterfallPalette, state.waterfallContrast, state.waterfallSmoothing);
+          waterfallRenderer.render2d();
+        }
+        state.displayPaused = paused;
+      }
+      if ((wasActive || recoveredTraditional) && !state.terrainActive) {
+        const paused = state.displayPaused; state.displayPaused = false;
+        spectrumRenderer.render(state.latestBins, state.displayFloorDb, state.displayCeilingDb);
+        waterfallRenderer.render(); state.displayPaused = paused;
+      }
+      if (persist) saveTerrainSettings();
+      syncTerrainControls();
+      return true;
+    }
+    function saveTerrainSettings() {
+      persistLocalSettingsFallback(currentRemoteSettings());
+      scheduleRemoteSettingsSave();
+    }
+    function syncTerrainControls() {
+      const s = _next.normalizeTerrain(state.terrain);
+      for (const key of ["mode", "height", "depth", "elevation", "floor", "ceiling", "gamma", "smoothing", "palette", "split", "quality"]) {
+        $("terrain-" + key).value = `${s[key]}`;
+      }
+      $("terrain-diagnostics-enabled").checked = s.diagnostics;
+      $("terrain-diagnostics").hidden = !s.diagnostics;
+      const stops = Array.from({length:33}, (_, i) => `rgb(${terrainColor(Math.pow(i/32,s.gamma),s.palette).join(",")}) ${i/32*100}%`);
+      $("terrain-legend").style.background = `linear-gradient(to right, ${stops.join(",")})`;
+      $("terrain-legend-label").textContent = `${s.floor} → ${s.ceiling} relative dB · unlit`;
+    }
+    function layoutTerrainCanvas() {
+      const stack = document.querySelector(".display-stack").getBoundingClientRect();
+      const upper = $("spectrum-shell").getBoundingClientRect(), lower = $("waterfall-shell").getBoundingClientRect();
+      const canvas = $("terrain-canvas");
+      canvas.style.left = `${upper.left - stack.left}px`; canvas.style.top = `${upper.top - stack.top}px`;
+      canvas.style.width = `${upper.width}px`; canvas.style.height = `${lower.bottom - upper.top}px`;
+      return upper.height;
+    }
+    function terrainDiagnostics() {
+      const detail = terrainRenderer?.diagnostics() || {};
+      const traditionalHistory = waterfallRenderer.textureData.byteLength * (waterfallRenderer.gl ? 2 : 1);
+      const traditionalTargets = [spectrumRenderer.canvas, waterfallRenderer.canvas]
+        .reduce((bytes, canvas) => bytes + canvas.width * canvas.height * 12, 0);
+      const traditionalGeometry = (spectrumRenderer.fillVertices?.byteLength || 0) * 2 + spectrumHistory.width * 8;
+      return { ...detail, traditionalEstimatedBytes: traditionalHistory + traditionalTargets + traditionalGeometry,
+        combinedDisplayEstimatedBytes: (detail.bytes || spectrumHistory.bytes) + traditionalHistory + traditionalTargets + traditionalGeometry,
+        allocationNote: "Includes retained Traditional CPU/GPU image, geometry and estimated double color/depth targets. Driver overhead is not measurable here." };
+    }
+    function renderTerrain(now) {
+      const mapping = spectrumHistory.rows[spectrumHistory.head];
+      if (mapping && (mapping.centerHz !== state.dds || mapping.spanHz !== displaySpanHz() ||
+          mapping.receiver !== `${state.displayIqSource || "rx"}:0` ||
+          mapping.sampleRate !== (state.displayIqSource === "tx" ? WDSP_TX_IQ_RATE_HZ : displaySampleRateHz()))) {
+        spectrumHistory.clear("RF mapping changed — new history segment");
+      }
+      if (!state.terrainActive || !terrainRenderer || document.hidden) return;
+      try {
+        terrainRenderer.configure(state.terrain);
+        terrainRenderer.render(now, layoutTerrainCanvas());
+        if (now - terrainLastStatus > 1000) {
+          terrainLastStatus = now;
+          $("terrain-status").textContent = `${state.displayPaused ? "Paused · " : ""}${spectrumHistory.count ? "Newest at seam · older ↑ / ↓ · " : "Waiting for live IQ · "}${(spectrumHistory.retainedMs / 1000).toFixed(1)} s retained · ${spectrumHistory.boundary}`;
+          if (state.terrain.diagnostics) $("terrain-diagnostics").textContent = JSON.stringify(terrainDiagnostics(), null, 2);
+        }
+      } catch (error) { fallbackTerrain(`High-Res 3D stopped: ${error.message || error}`); }
+    }
+    function bindTerrainControls() {
+      if (terrainBound) return; terrainBound = true;
+      $("view-traditional").addEventListener("click", () => setTerrainMode("traditional"));
+      $("view-3d").addEventListener("click", () => setTerrainMode("3d"));
+      $("terrain-traditional-settings").addEventListener("click", () => {
+        $("terrain-settings").close(); setSetupPanel("display"); setSetupMenuOpen(true);
+      });
+      $("terrain-settings-open").addEventListener("click", () => { syncTerrainControls(); $("terrain-settings").showModal(); });
+      $("display-pause").addEventListener("click", () => {
+        state.displayPaused = !state.displayPaused;
+        $("display-pause").textContent = state.displayPaused ? "Resume" : "Pause";
+        $("display-pause").setAttribute("aria-pressed", `${state.displayPaused}`);
+      });
+      for (const key of ["mode", "height", "depth", "elevation", "floor", "ceiling", "gamma", "smoothing", "palette", "split", "quality"]) {
+        $("terrain-" + key).addEventListener(["floor", "ceiling", "depth"].includes(key) ? "change" : "input", () => {
+          const raw = $("terrain-" + key).value;
+          if (!raw.trim()) return;
+          const value = ["mode", "palette", "quality"].includes(key) ? raw : Number(raw);
+          if (key === "mode") { setTerrainMode(value); return; }
+          state.terrain = _next.normalizeTerrain({ ...state.terrain, [key]: value });
+          syncDisplayWorkspaceRatio(); syncTerrainControls(); saveTerrainSettings();
+        });
+      }
+      $("terrain-diagnostics-enabled").addEventListener("change", () => {
+        state.terrain.diagnostics = $("terrain-diagnostics-enabled").checked;
+        syncTerrainControls(); saveTerrainSettings();
+      });
+      $("terrain-reset").addEventListener("click", () => {
+        state.terrain = _next.normalizeTerrain({mode: state.terrain.mode});
+        syncTerrainControls(); syncDisplayWorkspaceRatio(); saveTerrainSettings();
+      });
+      for (const id of ["spectrum-shell", "waterfall-shell"]) {
+        const element = $(id);
+        element.addEventListener("pointermove", event => {
+          if (!state.terrainActive || !terrainRenderer) return;
+          const rect = element.getBoundingClientRect();
+          const x = (event.clientX - rect.left) / rect.width, y = (event.clientY - rect.top) / rect.height;
+          if (x < 0 || x > 1 || y < 0 || y > 1) { $("terrain-cursor").hidden = true; return; }
+          let hit = id === "spectrum-shell" ? terrainRenderer.pick(x, y) : null;
+          if (id === "waterfall-shell") {
+            const age = Math.min(511, Math.floor(y * 512)), row = spectrumHistory.row(age);
+            if (row) hit = {fraction:x, age, db: row[Math.min(row.length-1, Math.max(0, Math.floor(x*row.length)))]};
+          }
+          if (hit && (!Number.isFinite(hit.db) || hit.db <= -999)) hit = null;
+          const output = $("terrain-cursor"); output.hidden = !hit;
+          if (hit) output.textContent = `${(state.dds + (hit.fraction-.5)*displaySpanHz()).toFixed(0)} Hz · ${hit.db.toFixed(2)} relative dB (sampled bucket max) · ${(hit.age*spectrumHistory.cadenceMs/1000).toFixed(2)} s ago`;
+        });
+        element.addEventListener("pointerleave", () => { $("terrain-cursor").hidden = true; });
+      }
+      window.addEventListener("pagehide", disposeTerrain);
+      window.addEventListener("pageshow", event => {
+        if (event.persisted && state.terrainActive) setTerrainMode("3d", false);
+      });
+      setTerrainMode(state.terrain?.mode || "traditional", false);
+    }
 
     const _storageKey = "saturn.remote.settings";
     function runtimeStorageApi() {
@@ -9911,6 +10208,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     let fftProcessor = new FftProcessor(1024);
 
     function resetDisplayHistory() {
+      spectrumHistory.clear("Display source / span reset");
       displaySlowFrames.length = 0;
       displayFirstIqAt = null;
       displayFirstIqToDrawMs = null;
@@ -10030,7 +10328,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     function updateSpectrumFrequencyScale() {
       const scale = $("spectrum-frequency-scale");
       if (!scale) return;
-      const ticks = _next.frequencyScaleTicks(state.dds, displaySpanHz(), 5);
+      const ticks = _next.frequencyScaleTicks(state.dds, displaySpanHz(), state.terrainActive && state.layoutMode === "phone" ? 3 : 5);
       const signature = ticks.map((tick) => `${Math.round(tick.hz)}@${tick.percent}`).join("|");
       if (scale.dataset.labels === signature) return;
       scale.dataset.labels = signature;
@@ -10928,17 +11226,19 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       const stack = document.querySelector(".display-stack");
       const separator = $("spectrum-waterfall-resizer");
       const phone = state.layoutMode === "phone";
-      const ratio = phone
+      const ratio = state.terrainActive ? state.terrain.split : phone
         ? phoneSpectrumRatio(state.phoneSpectrumMode)
         : clampSpectrumWaterfallRatio(state.spectrumWaterfallRatio);
-      const spectrumMinimum = phone ? 140 : 180;
+      const spectrumMinimum = state.terrainActive ? 80 : phone ? 140 : 180;
       const waterfallMinimum = phone ? 96 : 120;
-      const separatorSize = phone ? 0 : 12;
+      const separatorSize = state.terrainActive ? 0 : phone ? 0 : 12;
       if (stack) {
         stack.style.gridTemplateRows = `minmax(${spectrumMinimum}px, ${ratio.toFixed(3)}fr) ${separatorSize}px minmax(${waterfallMinimum}px, ${(1 - ratio).toFixed(3)}fr)`;
       }
       if (separator) {
         const percent = Math.round(ratio * 100);
+        separator.setAttribute("aria-valuemin", state.terrainActive ? "20" : "34");
+        separator.setAttribute("aria-valuemax", state.terrainActive ? "65" : "78");
         separator.setAttribute("aria-valuenow", `${percent}`);
         separator.setAttribute("aria-valuetext", `${percent}% spectrum, ${100 - percent}% waterfall`);
       }
@@ -11003,6 +11303,11 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     }
 
     function setSpectrumWaterfallRatio(value, persist = true) {
+      if (state.terrainActive) {
+        state.terrain = _next.normalizeTerrain({ ...state.terrain, split: value });
+        if (persist) saveTerrainSettings();
+        syncDisplayWorkspaceRatio(); scheduleDisplaySurfaceResize(); return;
+      }
       state.spectrumWaterfallRatio = clampSpectrumWaterfallRatio(
         value,
         state.spectrumWaterfallRatio,
@@ -11026,7 +11331,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       const updateFromPointer = (event, persist = false) => {
         const rect = stack.getBoundingClientRect();
         setSpectrumWaterfallRatio(
-          spectrumWaterfallRatioFromPointer(
+          state.terrainActive ? (event.clientY - rect.top) / rect.height : spectrumWaterfallRatioFromPointer(
             event.clientY,
             rect.top,
             rect.height,
@@ -11063,7 +11368,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         if (pointerId !== event.pointerId) return;
         pointerId = null;
         separator.dataset.dragging = "false";
-        setSpectrumWaterfallRatio(state.spectrumWaterfallRatio, true);
+        setSpectrumWaterfallRatio(state.terrainActive ? state.terrain.split : state.spectrumWaterfallRatio, true);
       });
       separator.addEventListener("keydown", (event) => {
         const deltas = {
@@ -11074,16 +11379,16 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         };
         if (event.key === "Home") {
           event.preventDefault();
-          setSpectrumWaterfallRatio(0.34);
+          setSpectrumWaterfallRatio(state.terrainActive ? 0.2 : 0.34);
         } else if (event.key === "End") {
           event.preventDefault();
-          setSpectrumWaterfallRatio(0.78);
+          setSpectrumWaterfallRatio(state.terrainActive ? 0.65 : 0.78);
         } else if (event.key in deltas) {
           event.preventDefault();
-          setSpectrumWaterfallRatio(state.spectrumWaterfallRatio + deltas[event.key]);
+          setSpectrumWaterfallRatio((state.terrainActive ? state.terrain.split : state.spectrumWaterfallRatio) + deltas[event.key]);
         }
       });
-      separator.addEventListener("dblclick", () => setSpectrumWaterfallRatio(0.62));
+      separator.addEventListener("dblclick", () => setSpectrumWaterfallRatio(state.terrainActive ? 0.3 : 0.62));
 
       if (typeof ResizeObserver === "function") {
         displayWorkspaceResizeObserver = new ResizeObserver(scheduleDisplaySurfaceResize);
@@ -11775,7 +12080,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       if (isFrequencyTextTarget(target)) {
         return true;
       }
-      if (target.closest(".shortcut-sheet, .frequency-entry-sheet, .operator-detail-sheet, .setup-menu")) {
+      if (target.closest(".shortcut-sheet, .frequency-entry-sheet, .operator-detail-sheet, .setup-menu, #terrain-settings")) {
         return true;
       }
       if (target.closest("button, a, [role='button']")) {
@@ -12291,6 +12596,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
 
     function applyDisplayPrefsObject(prefs) {
       const result = _next.applyDisplayPrefsToState(prefs, state);
+      if (terrainBound) setTerrainMode(state.terrain?.mode || "traditional", false);
       if (result.peakHoldCleared) {
         resetPeakHoldBins();
       }
@@ -13411,6 +13717,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     }
 
     function shiftDisplayForCenterChange(nextCenterHz) {
+      if (nextCenterHz !== state.dds) spectrumHistory.clear("Center frequency changed — new history segment");
       const spanHz = displaySpanHz();
       const deltaHz = state.dds - nextCenterHz;
       if (!Number.isFinite(deltaHz) || deltaHz === 0 || !Number.isFinite(spanHz) || spanHz <= 0) {
@@ -13497,8 +13804,8 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       }
     }
 
-    function applyPanadapterTune(clientX, element, immediate = false) {
-      const nextHz = snapTuneFrequencyHz(tunedFrequencyFromDisplayPoint(clientX, element));
+    function applyPanadapterTune(clientX, element, immediate = false, clientY = null) {
+      const nextHz = snapTuneFrequencyHz(tunedFrequencyFromDisplayPoint(clientX, element, clientY));
       if (nextHz === activeVfoFrequency() && !immediate) return nextHz;
       setFrequency(nextHz, false, { send: false, rememberBand: false, lightweight: true });
       if (immediate) {
@@ -13520,6 +13827,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       const next = Math.max(1, Math.min(32, Math.round(Number(value) || 1)));
       if (next === state.displayZoom) return false;
       state.displayZoom = next;
+      spectrumHistory.clear("Zoom changed — new frequency segment");
       state.spectrumShiftCarryBins = 0;
       state.waterfallShiftCarryPixels = 0;
       state.waterfallSettleFrames = 0;
@@ -13554,12 +13862,19 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       setDisplayZoomValue(state.displayZoom + direction);
     }
 
-    function frequencyFromDisplayPoint(clientX, element) {
+    function frequencyFromDisplayPoint(clientX, element, clientY = null) {
+      const anchor = state.terrainActive && clientY != null ? terrainTuneAnchors.get(element) : null;
+      if (anchor) return anchor.hz + (clientX - anchor.x) * anchor.hzPerPixel;
       const rect = element.getBoundingClientRect();
       if (!rect.width) {
         return activeVfoFrequency();
       }
-      const normalized = (clientX - rect.left) / rect.width;
+      let normalized = (clientX - rect.left) / rect.width;
+      if (state.terrainActive && element.id === "spectrum-shell" && clientY != null && clientY - rect.top > 24) {
+        const hit = terrainRenderer?.pick(normalized, (clientY - rect.top) / rect.height);
+        if (!hit) return activeVfoFrequency() + clickTuneCarrierOffsetHz(state.mode);
+        normalized = hit.fraction;
+      }
       const offsetHz = (normalized - 0.5) * displaySpanHz();
       return state.dds + offsetHz;
     }
@@ -13569,8 +13884,8 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       return (passband.lowHz + passband.highHz) / 2;
     }
 
-    function tunedFrequencyFromDisplayPoint(clientX, element) {
-      return frequencyFromDisplayPoint(clientX, element) - clickTuneCarrierOffsetHz(state.mode);
+    function tunedFrequencyFromDisplayPoint(clientX, element, clientY = null) {
+      return frequencyFromDisplayPoint(clientX, element, clientY) - clickTuneCarrierOffsetHz(state.mode);
     }
 
     function displayOffsetFromPoint(clientX, element) {
@@ -18275,6 +18590,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     }
 
     function renderIdleFrame(now) {
+      if (state.terrainActive || state.displayPaused) return;
       const bins = new Float32Array(state.fftWidth || 1024);
       const width = bins.length;
       for (let i = 0; i < width; i += 1) {
@@ -18315,6 +18631,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         state.displayIqSource = "rx";
       }
       const canRenderIq =
+        !state.displayPaused &&
         state.connected &&
         state.iqStreaming &&
         state.iqPackets.length !== 0 &&
@@ -18334,6 +18651,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
             const drawStartedAt = performance.now();
             recordBrowserTimingSample(displayTimingBuckets.fft, drawStartedAt - fftStartedAt);
             const visibleBins = visibleBinsForDisplay(bins);
+            if (!state.displayPaused) acceptSpectrumFrame(visibleBins, state.lastFrameAt, state.iqFrameVersion, bins.length);
             const processedBins = processedDisplayBins(visibleBins);
             updateDisplayRange(processedBins);
             spectrumRenderer.render(processedBins, state.displayFloorDb, state.displayCeilingDb);
@@ -18392,6 +18710,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       } else if (waterfallEnabled && !phoneWanLite) {
         waterfallRenderer.render();
       }
+      renderTerrain(now);
       const txMeterValue = state.txMeterMode === "avg" ? state.txPowerAvg : state.txPowerPeak;
       $("tx-power-readout").textContent = txMeterValue == null ? "-- W" : `${txMeterValue.toFixed(1)} W`;
       $("swr-readout").textContent = state.swrVisual == null ? "-- : 1" : `${state.swrVisual.toFixed(2)} : 1`;
@@ -19339,6 +19658,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
           element.focus({ preventScroll: true });
 
           if (pointers.size === 2) {
+            terrainTuneAnchors.delete(element);
             clearLongPress();
             gestureConsumed = true;
             const [first, second] = Array.from(pointers.values());
@@ -19356,6 +19676,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
           }
 
           if (pointers.size !== 1) return;
+          beginTerrainTune(event, element);
           gestureConsumed = false;
           primaryPointerId = event.pointerId;
           gestureStart = { x: event.clientX, y: event.clientY, pointerType: event.pointerType };
@@ -19365,14 +19686,14 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
           if (dragging) {
             event.preventDefault();
             try { element.setPointerCapture(event.pointerId); } catch {}
-            applyPanadapterTune(event.clientX, element);
+            applyPanadapterTune(event.clientX, element, false, event.clientY);
           } else {
             longPressTimer = setTimeout(() => {
               longPressTimer = null;
               if (dragging || scrolling || pointers.size !== 1 || state.frequencyLock) return;
               longPressTriggered = true;
               gestureConsumed = true;
-              const targetHz = snapTuneFrequencyHz(tunedFrequencyFromDisplayPoint(gestureStart.x, element));
+              const targetHz = snapTuneFrequencyHz(tunedFrequencyFromDisplayPoint(gestureStart.x, element, gestureStart.y));
               openFrequencyEntry(frequencyEntrySeedFromHz(targetHz));
             }, 650);
           }
@@ -19402,7 +19723,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
           }
           if (!dragging) return;
           event.preventDefault();
-          applyPanadapterTune(event.clientX, element);
+          applyPanadapterTune(event.clientX, element, false, event.clientY);
         });
         const finishPanadapterTune = (event) => {
           if (!pointers.has(event.pointerId)) return;
@@ -19415,7 +19736,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
             if (pointers.size < 2) pinchStart = null;
           } else if (dragging && primaryPointerId === event.pointerId) {
             event.preventDefault();
-            applyPanadapterTune(event.clientX, element, true);
+            applyPanadapterTune(event.clientX, element, true, event.clientY);
           } else if (!scrolling && !longPressTriggered && !gestureConsumed && primaryPointerId === event.pointerId) {
             event.preventDefault();
             const now = performance.now();
@@ -19424,10 +19745,11 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
               lastTap = null;
               $("display-center-btn").click();
             } else {
-              applyPanadapterTune(event.clientX, element, true);
+              applyPanadapterTune(event.clientX, element, true, event.clientY);
               lastTap = currentTap;
             }
           }
+          terrainTuneAnchors.delete(element);
           try { element.releasePointerCapture(event.pointerId); } catch {}
           if (primaryPointerId === event.pointerId) primaryPointerId = null;
           if (pointers.size === 0) {
@@ -19441,6 +19763,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         };
         element.addEventListener("pointerup", finishPanadapterTune);
         element.addEventListener("pointercancel", (event) => {
+          terrainTuneAnchors.delete(element);
           pointers.delete(event.pointerId);
           clearLongPress();
           if (primaryPointerId === event.pointerId) primaryPointerId = null;
@@ -20258,6 +20581,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       logEvent(`Display backends: spectrum=${spectrumRenderer.backend}, waterfall=${waterfallRenderer.backend}`);
       initAnalogMeters();
       initInteractions();
+      bindTerrainControls();
       refreshAudioDeviceLists();
       document.addEventListener("visibilitychange", () => {
         void syncWakeLock(false);

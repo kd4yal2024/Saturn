@@ -10,7 +10,8 @@
     "typecheck": "tsc --noEmit",
     "check:seam": "node scripts/check-template-seam.mjs",
     "validate:remote-next-layout": "node scripts/validate-remote-next-layout.mjs",
-    "validate:waterfall": "node scripts/validate-waterfall.mjs"
+    "validate:waterfall": "node scripts/validate-waterfall.mjs",
+    "validate:terrain": "node scripts/validate-terrain.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",

@@ -142,3 +142,12 @@ browser runtimes in TypeScript. Move additional DOM/WebGL/AudioWorklet code only
 when it can be tested without weakening the current fail-closed operator and TX
 safety behavior. Any promotion of `/remote-next` to the stable `/remote` path
 requires the full automated suite plus the Apple Safari validation runbook.
+
+## Optional High-Res 3D display
+
+The live display now offers Traditional / High-Res 3D without reconnecting or
+changing radio settings. Traditional remains the default. See
+[High-Res 3D operator and architecture notes](HIGH_RES_3D.md) for axes, raw level
+units, history cadence, validated settings, quality limits, failure handling,
+validation and the disable path. `npm run validate:waterfall` now also validates
+the integrated 3D renderer; `npm run validate:terrain` runs that portion alone.

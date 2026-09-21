@@ -1,3 +1,4 @@
+import { type TerrainSettings } from '../settings/terrain';
 import type { DemodMode } from '../radio/passband';
 
 export type LayoutMode = 'desktop' | 'phone';
@@ -10,7 +11,7 @@ export type WbfmDeemphasis = 'OFF' | 'NA_75US' | 'EU_50US';
 export type NoiseBlankerMode = 'OFF' | 'NB1' | 'NB2' | 'NB3';
 export type AgcMode = 'OFF' | 'LONG' | 'SLOW' | 'MEDIUM' | 'FAST';
 export type TxMeterMode = 'peak' | 'avg';
-export type WaterfallPalette = 'classic' | 'ember' | 'ice' | 'forest' | 'enhanced';
+export type WaterfallPalette = 'classic' | 'ember' | 'ice' | 'forest' | 'enhanced' | 'reference';
 
 export type PhonePanels = {
   radio: boolean;
@@ -85,6 +86,7 @@ export type RadioPrefs = {
 };
 
 export type DisplayPrefs = {
+  terrain?: TerrainSettings;
   spectrumAutoRange: boolean;
   spectrumFloorDb: number;
   spectrumCeilingDb: number;

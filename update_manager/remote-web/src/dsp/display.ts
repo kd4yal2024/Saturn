@@ -47,7 +47,9 @@ export function visibleBinsForDisplay(
   displayZoom: number,
 ): Float32Array | null {
   if (!bins || bins.length === 0) return bins;
-  const visibleCount = Math.max(128, Math.floor(bins.length / Math.max(1, displayZoom)));
+  // Do not force 128 bins into a narrower ruler span on WAN/TX zoom.
+  // Two samples are sufficient for a trace; more vertices do not add RF resolution.
+  const visibleCount = Math.max(2, Math.floor(bins.length / Math.max(1, displayZoom)));
   const source =
     visibleCount >= bins.length
       ? bins

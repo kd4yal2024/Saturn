@@ -1,3 +1,4 @@
+import { TERRAIN_DEFAULTS } from './terrain';
 import type { DisplayPrefs, PhonePanels, RadioPrefs, SettingsState } from './types';
 
 export const DEFAULT_PHONE_PANELS: PhonePanels = {
@@ -73,6 +74,7 @@ export const DEFAULT_RADIO_PREFS: RadioPrefs = {
 };
 
 export const DEFAULT_DISPLAY_PREFS: DisplayPrefs = {
+  terrain: { ...TERRAIN_DEFAULTS },
   spectrumAutoRange: true,
   spectrumFloorDb: -200,
   spectrumCeilingDb: -120,
@@ -114,7 +116,7 @@ export function createDefaultSettingsState(): SettingsState {
       txEqBands: DEFAULT_RADIO_PREFS.txEqBands.slice(),
       cfcBands: DEFAULT_RADIO_PREFS.cfcBands.slice(),
     },
-    displayPrefs: { ...DEFAULT_DISPLAY_PREFS },
+    displayPrefs: { ...DEFAULT_DISPLAY_PREFS, terrain: { ...TERRAIN_DEFAULTS } },
     bandMemory: {},
   };
 }

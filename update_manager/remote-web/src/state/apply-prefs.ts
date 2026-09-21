@@ -1,3 +1,4 @@
+import { normalizeTerrain, type TerrainSettings } from '../settings/terrain';
 /**
  * Pure state-mutation helpers for applying and normalizing prefs on AppState.
  *
@@ -122,6 +123,7 @@ export interface DisplayPrefsTarget {
   waterfallCeilingDb: number;
   spectrumAverage: number;
   waterfallSpeed: number;
+  terrain?: TerrainSettings;
   waterfallPalette: string;
   spectrumPeakHold: boolean;
   spectrumTraceColor: string;
@@ -288,6 +290,7 @@ export function applyDisplayPrefsToState(
   state.waterfallCeilingDb = clampDisplayDb(prefs.waterfallCeilingDb ?? state.waterfallCeilingDb, -120);
   state.spectrumAverage = clampSpectrumAverage(prefs.spectrumAverage ?? state.spectrumAverage);
   state.waterfallSpeed = clampWaterfallSpeed(prefs.waterfallSpeed ?? state.waterfallSpeed);
+  state.terrain = normalizeTerrain(prefs.terrain);
   state.waterfallPalette = normalizeWaterfallPalette(prefs.waterfallPalette ?? state.waterfallPalette);
   state.spectrumPeakHold = Boolean(prefs.spectrumPeakHold ?? state.spectrumPeakHold);
   state.spectrumTraceColor = normalizeSpectrumTraceColor(prefs.spectrumTraceColor ?? state.spectrumTraceColor);

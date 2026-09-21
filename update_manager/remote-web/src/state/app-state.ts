@@ -1,3 +1,4 @@
+import { normalizeTerrain, type TerrainSettings } from '../settings/terrain';
 /**
  * Typed application state for Saturn Remote.
  *
@@ -247,6 +248,7 @@ export interface AppState {
   waterfallFloorDb: number;
   waterfallCeilingDb: number;
   waterfallSpeed: number;
+  terrain?: TerrainSettings;
   waterfallPalette: string;
   showGrid: boolean;
   showCenterLine: boolean;
@@ -584,6 +586,7 @@ export function createAppState(): AppState {
     waterfallFloorDb: -200,
     waterfallCeilingDb: -120,
     waterfallSpeed: 1,
+    terrain: normalizeTerrain(null),
     waterfallPalette: 'classic',
     showGrid: true,
     showCenterLine: true,
