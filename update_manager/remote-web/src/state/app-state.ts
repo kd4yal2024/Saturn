@@ -102,6 +102,7 @@ export interface AppState {
   txDrive: number;
   remoteTxRfEnabled: boolean | null;
   txMicGainDb: number;
+  satp?: import('../audio/satp').SatpState;
   txMonitorSupported: boolean;
   txMonitorEnabled: boolean;
   txMonitorLevelDb: number;

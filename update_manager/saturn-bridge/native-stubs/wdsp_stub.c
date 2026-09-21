@@ -20,13 +20,19 @@ void OpenChannel(int32_t channel, int32_t in_size, int32_t dsp_size,
 
 void CloseChannel(int32_t channel) { (void)channel; }
 static uint64_t saturn_wdsp_stub_dmode_one_calls = 0;
+static _Thread_local uint64_t saturn_wdsp_stub_state_calls = 0;
 int32_t SetChannelState(int32_t channel, int32_t state, int32_t dmode) {
   (void)channel; (void)state;
+  saturn_wdsp_stub_state_calls += 1;
   if (dmode == 1) saturn_wdsp_stub_dmode_one_calls += 1;
   return 0;
 }
 void saturn_wdsp_stub_reset_channel_state_calls(void) {
   saturn_wdsp_stub_dmode_one_calls = 0;
+  saturn_wdsp_stub_state_calls = 0;
+}
+uint64_t saturn_wdsp_stub_channel_state_call_count(void) {
+  return saturn_wdsp_stub_state_calls;
 }
 uint64_t saturn_wdsp_stub_dmode_one_call_count(void) {
   return saturn_wdsp_stub_dmode_one_calls;

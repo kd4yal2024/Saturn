@@ -21,6 +21,42 @@ fn test_client_registry(client_id: u64) -> ClientRegistry {
     Arc::new(Mutex::new(clients))
 }
 
+#[test]
+fn satp_control_requires_operator_role_and_strict_actions() {
+    let clients = test_client_registry(7);
+    let (tx, rx) = mpsc::channel();
+    for action in ["pair", "renew", "tci", "satp"] {
+        parse_tci_command(
+            &format!("saturn_satp_control:{action}"),
+            &tx,
+            &clients,
+            7,
+            false,
+        );
+        assert!(rx.try_recv().is_err());
+        parse_tci_command(
+            &format!("saturn_satp_control:{action}"),
+            &tx,
+            &clients,
+            7,
+            true,
+        );
+        assert!(
+            matches!(rx.try_recv().unwrap(),TciCommand::SatpControl{client_id:7,action:a} if a==action)
+        );
+    }
+    for invalid in ["pair,extra", "unknown", ""] {
+        parse_tci_command(
+            &format!("saturn_satp_control:{invalid}"),
+            &tx,
+            &clients,
+            7,
+            true,
+        );
+        assert!(rx.try_recv().is_err());
+    }
+}
+
 fn opus_wb_runtime_available() -> bool {
     let mut decoder = TxCodecDecoder::new_with_flags(
         TxMicCodec::OpusWb,
@@ -2591,8 +2627,17 @@ fn monitor_commands_are_operator_only_bounded_and_not_tx_commands() {
     parse_tci_command("tx_monitor:0,true", &tx, &clients, 9, true);
     assert!(matches!(rx.try_recv(), Ok(TciCommand::SetTxMonitor(true))));
     parse_tci_command("tx_monitor_level:0,40", &tx, &clients, 9, true);
-    assert!(matches!(rx.try_recv(), Ok(TciCommand::SetTxMonitorLevel(-6.0))));
-    for command in ["tx_monitor:1,true", "tx_monitor:0,bogus", "tx_monitor_level:0,NaN", "tx_monitor_level:0,inf", "tx_monitor_level:0"] {
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(TciCommand::SetTxMonitorLevel(-6.0))
+    ));
+    for command in [
+        "tx_monitor:1,true",
+        "tx_monitor:0,bogus",
+        "tx_monitor_level:0,NaN",
+        "tx_monitor_level:0,inf",
+        "tx_monitor_level:0",
+    ] {
         parse_tci_command(command, &tx, &clients, 9, true);
         assert!(rx.try_recv().is_err(), "accepted {command}");
     }
@@ -2941,7 +2986,9 @@ fn initial_snapshot_includes_remote_tx_rf_state() {
         initial_snapshot_messages(&model, true, 8, TciClientRole::Operator, (true, 50100));
 
     assert!(disabled.contains(&"remote_tx_rf_enabled:0,false;".to_string()));
-    assert!(disabled.contains(&"tx_monitor_supported:0,false;tx_monitor:0,false;tx_monitor_level:0,-30.0;".to_string()));
+    assert!(disabled.contains(
+        &"tx_monitor_supported:0,false;tx_monitor:0,false;tx_monitor_level:0,-30.0;".to_string()
+    ));
     assert!(enabled.contains(&"remote_tx_rf_enabled:0,true;".to_string()));
     assert!(disabled.contains(&"remote_client_role:0,viewer,7;".to_string()));
     assert!(enabled.contains(&"remote_client_role:0,operator,8;".to_string()));
@@ -2953,7 +3000,7 @@ fn initial_snapshot_includes_remote_tx_rf_state() {
     assert!(enabled.contains(&"tx_cessb:0,false;".to_string()));
     assert!(disabled.contains(&"saturn_satp_enabled:false;".to_string()));
     assert!(enabled.contains(&"saturn_satp_enabled:true;".to_string()));
-    assert!(enabled.contains(&"saturn_satp_version:1;".to_string()));
+    assert!(enabled.contains(&"saturn_satp_version:2;".to_string()));
     assert!(enabled.contains(&"saturn_satp_tx_port:50100;".to_string()));
     assert!(enabled.contains(&"saturn_satp_tx_format:48000,float32_le,1,128;".to_string()));
 }

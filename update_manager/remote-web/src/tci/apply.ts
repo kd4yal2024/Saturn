@@ -1,4 +1,5 @@
 import { parseTciText, type TciCommand, booleanArg, numericArg, trailingArg } from './parser';
+import { parseSatpState } from '../audio/satp';
 import { clampDemodMode, decomposeSignedPassbandWithShift, uiCutsFromSignedPassband } from '../radio/passband';
 import {
   clampAgcGain,
@@ -269,6 +270,9 @@ export function applyTciCommand(command: TciCommand, current: TciRadioState): Tc
     next.adcOverflowMask = Math.max(0, Math.round(numericArg(argAt(args, offset)) ?? 0));
     next.adc1Peak = Math.max(0, Math.round(numericArg(argAt(args, offset + 1)) ?? 0));
     next.adc2Peak = Math.max(0, Math.round(numericArg(argAt(args, offset + 2)) ?? 0));
+  } else if (command.name === 'saturn_satp_state') {
+    const value = parseSatpState(args);
+    if (value) next.satp = value;
   } else if (command.name === 'tx_monitor_supported') {
     const value = booleanArg(argAt(args, 1));
     if (value != null) next.txMonitorSupported = value;

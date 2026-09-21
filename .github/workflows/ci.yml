@@ -52,6 +52,13 @@ jobs:
         run: cargo test --locked
         working-directory: ${{ matrix.crate }}
 
+      - name: Test SATP preflight and installer failure recovery
+        if: ${{ matrix.crate == 'update_manager/saturn-bridge' }}
+        run: |
+          python3 scripts/test-satp-preflight.py
+          python3 scripts/test-satp-installer.py
+        working-directory: ${{ matrix.crate }}
+
   rust-supply-chain:
     name: Rust supply chain
     runs-on: ubuntu-latest
@@ -174,6 +181,9 @@ jobs:
             update_manager/scripts/saturn-xdma-backend-switch-smoke.sh \
             update_manager/scripts/saturn-xdma-operational-rx-smoke.sh \
             update_manager/scripts/saturn-tailscale.sh \
+            update_manager/saturn-bridge/scripts/build-satp-staged.sh \
+            update_manager/saturn-bridge/scripts/preflight-satp-staged.sh \
+            update_manager/saturn-bridge/scripts/deploy-satp-staged.sh \
             sw_tools/p2app-control/install.sh \
             tests/test-admin-password-policy.sh \
             tests/test-saturn-backup-types.sh \

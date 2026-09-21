@@ -42,6 +42,11 @@ fn voice_mode(mode: DemodMode) -> bool {
     )
 }
 
+fn monitor_keyed_voice(model: &RadioModel) -> bool {
+    // Source-independent: both browser and SATP feed the same processed TX IQ.
+    model.desired.tx_enabled && !model.desired.two_tone_enabled && voice_mode(model.desired.mode)
+}
+
 /// Demodulate the *processed* 192 kHz complex TX signal, then low-pass and
 /// decimate to the codec's 48 kHz. No raw microphone loopback. SSB takes I;
 /// AM uses envelope detection; FM uses a conjugate phase discriminator.
@@ -180,7 +185,7 @@ impl TxMonitor {
                         (
                             m.desired.tx_monitor_enabled,
                             m.desired.tx_monitor_level_db,
-                            m.desired.tx_enabled && !m.desired.two_tone_enabled,
+                            monitor_keyed_voice(&m),
                             m.desired.tx_monitor_available,
                         )
                     };
@@ -605,6 +610,26 @@ mod tests {
             unrelated | AUDIO_MUTE_BIT
         );
         assert_eq!(c.registers.read_register(0x7000).unwrap() & 2, 2);
+    }
+
+    #[test]
+    fn native_and_browser_mic_mon_share_the_processed_voice_gate() {
+        use crate::tx_audio::TxAudioSource;
+        let mut model = RadioModel::new(2, 14_200_000, 0, 192, 24, 2048, true, 4096, true);
+        for source in [TxAudioSource::Tci, TxAudioSource::Satp] {
+            model.satp.source = source;
+            model.desired.mode = DemodMode::Usb;
+            model.desired.tx_enabled = false;
+            model.desired.two_tone_enabled = false;
+            assert!(!monitor_keyed_voice(&model));
+            model.desired.tx_enabled = true;
+            assert!(monitor_keyed_voice(&model));
+            model.desired.two_tone_enabled = true;
+            assert!(!monitor_keyed_voice(&model));
+            model.desired.two_tone_enabled = false;
+            model.desired.mode = DemodMode::Cwu;
+            assert!(!monitor_keyed_voice(&model));
+        }
     }
 
     #[test]

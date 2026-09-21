@@ -23,6 +23,10 @@ pub struct TciMicFrame {
 
 #[derive(Clone, Debug)]
 pub enum TciCommand {
+    SatpControl {
+        client_id: u64,
+        action: String,
+    },
     SetVfoA(u32),
     SetVfoB(u32),
     SetActiveVfo(u8),
@@ -220,6 +224,14 @@ pub(crate) fn parse_tci_command_with_roles(
         return;
     }
     match name.as_str() {
+        "saturn_satp_control" => {
+            if args.len() == 1 && matches!(args[0], "pair" | "renew" | "tci" | "satp") {
+                let _ = command_tx.send(TciCommand::SatpControl {
+                    client_id,
+                    action: args[0].to_owned(),
+                });
+            }
+        }
         "vfo" => {
             if args.len() >= 3 {
                 if let Ok(freq_hz) = args[2].trim().parse::<u32>() {
@@ -795,7 +807,9 @@ pub(crate) fn parse_tci_command_with_roles(
             if args.len() == 2 && args[0].trim() == "0" {
                 if let Ok(level) = args[1].trim().parse::<f64>() {
                     if level.is_finite() {
-                        let _ = command_tx.send(TciCommand::SetTxMonitorLevel(crate::tx_monitor::clamp_level(level)));
+                        let _ = command_tx.send(TciCommand::SetTxMonitorLevel(
+                            crate::tx_monitor::clamp_level(level),
+                        ));
                     }
                 }
             }

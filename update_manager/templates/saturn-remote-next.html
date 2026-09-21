@@ -7969,6 +7969,18 @@
                   <div class="tx-meter-mini-bar" id="tx-zone-swr-bar" data-tone="idle" aria-hidden="true"><span></span></div>
                 </div>
               </div>
+              <div class="row" aria-label="Transmit audio source">
+                <label for="tx-audio-source">TX audio</label>
+                <select id="tx-audio-source" disabled><option value="tci">Browser microphone</option><option value="satp">Native SATP</option></select>
+                <button class="btn ghost" id="satp-pair-btn" type="button" disabled>Pair native sender</button>
+              </div>
+              <div class="small muted" id="satp-status" role="status">Browser microphone</div>
+              <div id="satp-pairing" hidden>
+                <label class="small" for="satp-key">Temporary pairing key — paste into native sender Network settings, then start audio</label>
+                <input id="satp-key" type="password" readonly autocomplete="off" spellcheck="false" />
+                <button class="btn ghost" id="satp-copy-key" type="button">Copy key</button>
+                <button class="btn ghost" id="satp-hide-key" type="button">Hide key</button>
+              </div>
               <div class="row" aria-label="G2 transmit headphone monitor">
                 <button class="btn ghost" id="tx-mon-btn" type="button" aria-pressed="false" disabled title="Monitor processed TX audio at G2 headphones; does not key TX">MON OFF</button>
                 <label class="small" for="tx-mon-level">MON level</label>
@@ -8563,6 +8575,13 @@ class SaturnRxProcessor extends AudioWorkletProcessor {
     this.underruns = 0;
     this.overflows = 0;
     this.telemetryFrames = 0;
+    // Metadata only: never retain PCM in the diagnostic recorder.
+    this.rxHistory = [];
+    this.rxEpisodes = [];
+    this.rxEpisode = null;
+    this.rxLastFlush = null;
+    this.rxMissingFrames = 0;
+    this.rxQueueMin = Infinity;
     this.port.onmessage = (e) => this._onMessage(e.data);
   }
 
@@ -8574,6 +8593,10 @@ class SaturnRxProcessor extends AudioWorkletProcessor {
       this.ringLen = this.ringF32.length;
       this.useSab  = true;
     } else if (msg.type === 'audio') {
+      this.rxHistory.push({ ...msg.diagnostic, receivedContextMs: currentTime * 1000,
+        deliveryContextDelayMs: msg.diagnostic ? currentTime * 1000 - msg.diagnostic.sentContextMs : null,
+        queuedBeforeFrames: this._queuedFrames(), frames: msg.left.length });
+      if (this.rxHistory.length > 96) this.rxHistory.shift();
       this.started = true;
       this.msgQueue.push({ left: msg.left, right: msg.right, offset: 0 });
       while (this.msgQueue.length > this.msgQueueMax) {
@@ -8587,6 +8610,7 @@ class SaturnRxProcessor extends AudioWorkletProcessor {
     } else if (msg.type === 'mute') {
       this._msgMuted = msg.value;
     } else if (msg.type === 'flush') {
+      this.rxLastFlush = { reason: msg.reason || 'unspecified', contextMs: currentTime * 1000 };
       this.msgQueue.length = 0;
       this.msgOffset = 0;
     }
@@ -8615,6 +8639,27 @@ class SaturnRxProcessor extends AudioWorkletProcessor {
     this.inUnderrun = active;
   }
 
+  _recordShortfall(missingFrames) {
+    if (!this.started) return;
+    const now = currentTime * 1000;
+    if (missingFrames > 0) {
+      this.rxMissingFrames += missingFrames;
+      if (!this.rxEpisode) {
+        this.rxEpisode = { startContextMs: now, missingFrames: 0,
+          lastFlush: this.rxLastFlush, before: this.rxHistory.slice(-48) };
+      }
+      this.rxEpisode.missingFrames += missingFrames;
+      this.rxEpisode.lastContextMs = now;
+    } else if (this.rxEpisode) {
+      const event = { ...this.rxEpisode, recoveredContextMs: now,
+        missingMs: this.rxEpisode.missingFrames / sampleRate * 1000,
+        recovery: this.rxHistory.slice(-8) };
+      this.rxEpisodes.push(event);
+      if (this.rxEpisodes.length > 8) this.rxEpisodes.shift();
+      this.rxEpisode = null;
+    }
+  }
+
   _queuedFrames() {
     if (this.useSab && this.ctrlU32 && this.ringLen > 0) {
       const cap = this.ringLen >>> 1;
@@ -8630,6 +8675,7 @@ class SaturnRxProcessor extends AudioWorkletProcessor {
   }
 
   _publishTelemetry(renderedFrames) {
+    this.rxQueueMin = Math.min(this.rxQueueMin, this._queuedFrames());
     this.telemetryFrames += renderedFrames;
     if (this.telemetryFrames < sampleRate / 4) return;
     this.telemetryFrames = 0;
@@ -8639,8 +8685,13 @@ class SaturnRxProcessor extends AudioWorkletProcessor {
       queuedFrames,
       queuedMs: (queuedFrames / sampleRate) * 1000,
       underruns: this.underruns,
-      overflows: this.overflows
+      overflows: this.overflows,
+      diagnostic: { contextMs: currentTime * 1000, queueMinFrames: this.rxQueueMin,
+        missingFrames: this.rxMissingFrames, activeEpisode: this.rxEpisode,
+        episodes: this.rxEpisodes }
     });
+    this.rxQueueMin = Infinity;
+    this.rxEpisodes = [];
   }
 
   _processSab(outL, outR, len) {
@@ -8662,10 +8713,12 @@ class SaturnRxProcessor extends AudioWorkletProcessor {
       outL.fill(0);
       outR.fill(0);
       this._setUnderrun(true);
+      this._recordShortfall(len);
       return;
     }
 
     this._setUnderrun(false);
+    this._recordShortfall(0);
 
     for (let i = 0; i < len; i++) {
       const idx = rd * 2;
@@ -8705,6 +8758,7 @@ class SaturnRxProcessor extends AudioWorkletProcessor {
       outR[i] = 0;
     }
     this._setUnderrun(written < len);
+    this._recordShortfall(len - written);
   }
 }
 registerProcessor('saturn-rx-player', SaturnRxProcessor);
@@ -8901,6 +8955,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       enabled: RX_AUDIO_ADAPTIVE_RATE,
       targetQueueMs: 42,
     });
+    const rxAudioRecorder = { generation: 0, packetId: 0, latest: null, events: [] };
     globalThis.saturnRemoteNextApiDebug = {
       directKeys: Object.keys(globalThis.SaturnRemoteNext || {}).slice(0, 24),
       bundleKeys: Object.keys(globalThis.SaturnRemoteNextBundle || {}).slice(0, 24),
@@ -12582,7 +12637,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       if (state.connected && state.bridgeReady) {
         sendTci(`iq_samplerate:${effectiveIqSampleRate()};`);
         if (state.audioStreaming) {
-          flushRxAudioQueue();
+          flushRxAudioQueue("network-profile-change");
           state.lastAudioSequence = null;
           state.lastAudioArrivalAt = 0;
           sendTci(rxAudioStartCommand());
@@ -14326,7 +14381,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         reconnectAttempt: reconnectSnapshot.attempt,
         reconnectReason: reconnectSnapshot.lastReason,
       });
-      return `${audioDiagnostic}\n\nDisplay pipeline (browser timing, not audio/display synchronization):\n${JSON.stringify(displayPipelineSnapshot(now), null, 2)}`;
+      return `${audioDiagnostic}\n\nDisplay pipeline (browser timing, not audio/display synchronization):\n${JSON.stringify(displayPipelineSnapshot(now), null, 2)}\n\nRX underrun recorder (context-clock delivery delay excludes time while AudioContext is suspended; bounded metadata, no audio):\n${JSON.stringify(rxAudioRecorder, null, 2)}`;
     }
 
     async function copyRxLatencyDiagnostic() {
@@ -14852,7 +14907,44 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       }
     }
 
+    let satpSourceRequestAt = 0;
+    let satpRequestedSource = null;
+    let satpKeyReceivedAt = 0;
+    function clearSatpKey() {
+      $("satp-key").value = "";
+      $("satp-pairing").hidden = true;
+      satpKeyReceivedAt = 0;
+    }
+    function resetSatpState() {
+      state.satp = undefined;
+      satpSourceRequestAt = 0;
+      satpRequestedSource = null;
+      clearSatpKey();
+    }
+    function satpCanConfigure() {
+      return state.connected && state.bridgeReady && state.remoteClientRole === "operator"
+        && !state.moxRequested && !state.txEnabled && (!state.txPhase || state.txPhase === "rx")
+        && !state.satp?.pending;
+    }
+    function updateSatpUi() {
+      const s = state.satp;
+      const fresh = s && performance.now() - s.receivedAt < 1500;
+      const waiting = satpSourceRequestAt && performance.now() - satpSourceRequestAt < 3000;
+      $("tx-audio-source").disabled = !satpCanConfigure() || !fresh || !!waiting;
+      $("tx-audio-source").value = s?.source || "tci";
+      $("tx-audio-source").querySelector('[value="satp"]').disabled = !s?.enabled || !s?.paired || !s?.ready;
+      $("satp-pair-btn").disabled = !satpCanConfigure() || !fresh || !s?.enabled;
+      $("satp-status").textContent = !s ? "Browser microphone · native source requires bridge support"
+        : !fresh ? "TX source status stale — TX blocked"
+        : waiting || s.pending ? "Waiting for source acknowledgement…"
+        : `TX: ${s.source === "satp" ? "Native SATP" : "Browser mic"} · Native: ${s.enabled ? s.health : "disabled in Settings"} · ${s.peakDb.toFixed(1)} dBFS · buffer ${(s.bufferFrames / 48).toFixed(1)} ms · missing ${s.missingPackets} · MON: G2 headphones`;
+      if (!state.connected || state.remoteClientRole !== "operator"
+        || (s && !s.paired && performance.now() - satpKeyReceivedAt > 1000)
+        || (satpKeyReceivedAt && performance.now() - satpKeyReceivedAt > 60000)) clearSatpKey();
+    }
+
     function updateUi() {
+      updateSatpUi();
       normalizeUiState();
       syncPhoneWaterfall();
       updateOperatorStateStrip();
@@ -15292,6 +15384,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         return;
       }
       state.bridgeRttNonce = (state.bridgeRttNonce || 0) + 1;
+      if (state.satp?.paired && state.remoteClientRole === "operator") sendTci("saturn_satp_control:renew;");
       sendTci(`saturn_ping:${state.bridgeRttNonce},${performance.now().toFixed(3)};`);
     }
 
@@ -15506,7 +15599,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       const txActive = txMicSendAllowed();
       return txActive
         ? BRIDGE_RTT_PING_INTERVAL_DURING_TX_MS
-        : BRIDGE_RTT_PING_INTERVAL_MS;
+        : (state.satp?.paired ? Math.min(1000, BRIDGE_RTT_PING_INTERVAL_MS) : BRIDGE_RTT_PING_INTERVAL_MS);
     }
 
     function scheduleNextBridgeRttPing() {
@@ -15950,6 +16043,8 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         });
         node.connect(rxAudioOutputTarget(ctx));
         state.rxWorkletNode = node;
+        rxAudioRecorder.generation += 1;
+        rxAudioRecorder.latest = null;
         node.port.onmessage = (event) => {
           const data = event.data || {};
           if (data.type !== "telemetry" || node !== state.rxWorkletNode) return;
@@ -15957,6 +16052,16 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
           state.rxWorkletUnderruns = Math.max(0, Math.round(Number(data.underruns) || 0));
           state.rxWorkletOverflows = Math.max(0, Math.round(Number(data.overflows) || 0));
           state.rxWorkletTelemetryAt = performance.now();
+          if (data.diagnostic) {
+            const { episodes, ...latest } = data.diagnostic;
+            rxAudioRecorder.latest = { ...latest, receivedAtIso: new Date().toISOString(),
+              visibility: document.visibilityState, contextState: ctx.state };
+            for (const episode of episodes || []) {
+              rxAudioRecorder.events.push({ ...episode, generation: rxAudioRecorder.generation,
+                receivedAtIso: new Date().toISOString() });
+            }
+            while (rxAudioRecorder.events.length > 8) rxAudioRecorder.events.shift();
+          }
           observeRxPlaybackQueue(state.rxWorkletQueuedMs, state.rxWorkletTelemetryAt);
         };
 
@@ -16060,7 +16165,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       if (notifyBridge) {
         sendTci("audio_stop:0;");
       }
-      flushRxAudioQueue();
+      flushRxAudioQueue("audio-stop");
       state.audioStreaming = false;
       state.audioFramesPlayed = 0;
       state.audioNextTime = 0;
@@ -16068,7 +16173,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       state.audioWorkletMode = null;
       state.rxWorkletDrops = 0;
       if (state.rxWorkletNode) {
-        state.rxWorkletNode.port.postMessage({ type: "flush" });
+        state.rxWorkletNode.port.postMessage({ type: "flush", reason: "audio-stop" });
         state.rxWorkletNode.disconnect();
         state.rxWorkletNode = null;
       }
@@ -16095,7 +16200,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       updateUi();
     }
 
-    function flushRxAudioQueue() {
+    function flushRxAudioQueue(reason = "unspecified") {
       rxAdaptiveRateController.reset();
       updateRxAdaptiveRateTelemetry(rxAdaptiveRateController.telemetry());
       for (const source of state.audioSources) {
@@ -16113,7 +16218,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       }
       state.audioSources.clear();
       if (state.rxWorkletNode && state.audioWorkletMode === "msg") {
-        state.rxWorkletNode.port.postMessage({ type: "flush" });
+        state.rxWorkletNode.port.postMessage({ type: "flush", reason });
       }
       if (state.audioWorkletMode === "sab" && state.rxCtrlU32) {
         const wr = Atomics.load(state.rxCtrlU32, CTRL_WRITE_IDX);
@@ -16127,7 +16232,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     }
 
     function muteRxAudioForMox() {
-      flushRxAudioQueue();
+      flushRxAudioQueue("tx-mute");
       if (state.audioWorkletMode === "sab" && state.rxCtrlU32) {
         Atomics.store(state.rxCtrlU32, CTRL_MUTED_IDX, 1);
       } else if (state.audioWorkletMode === "msg" && state.rxWorkletNode) {
@@ -16168,7 +16273,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     }
 
     function recoverRxAfterMox() {
-      flushRxAudioQueue();
+      flushRxAudioQueue("tx-recovery");
       resetRxWorkletRing(RX_AUDIO_MOX_RECOVERY_DROP_MS);
       state.displayIqSource = "rx";
       state.spectrumAverageBypassFrames = 2;
@@ -17025,7 +17130,13 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     }
 
     async function setPtt(active, options = {}) {
-      const useMic = options.useMic !== false;
+      const voiceRequested = options.useMic !== false;
+      const useMic = _next.txUsesBrowserMic(state.satp, voiceRequested);
+      if (active) {
+        const reason = (satpSourceRequestAt && performance.now() - satpSourceRequestAt < 3000)
+          ? "Waiting for TX source acknowledgement" : _next.satpTxBlockReason(state.satp);
+        if (reason && voiceRequested) { logEvent(reason); return false; }
+      }
       if (!active) {
         const wasActive = state.moxRequested || state.txEnabled || state.micCapturing;
         const hadKeyboardPtt = state.keyboardPttActive;
@@ -17113,7 +17224,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         muteRxAudioForMox();
         switchDisplayToTxArm();
         updateUi();
-        if (useMic && generatedTxSourceActive()) {
+        if (voiceRequested && generatedTxSourceActive()) {
           sendTci("tx_two_tone:0,false;");
         }
         sendTci("trx:0,true,tci;");
@@ -17521,6 +17632,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         state.connectPending = false;
         state.connected = false;
         state.bridgeReady = false;
+        resetSatpState();
         state.txMonitorSupported = false;
         state.txMonitorEnabled = false;
         state.iqStreaming = false;
@@ -17593,6 +17705,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       }
       state.connected = false;
       state.bridgeReady = false;
+      resetSatpState();
       state.txMonitorSupported = false;
       state.txMonitorEnabled = false;
       state.iqStreaming = false;
@@ -17624,6 +17737,20 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     }
 
     function handleTciText(text) {
+      // Pairing material stays out of application state, diagnostics and logs.
+      text = text.split(";").filter(command => {
+        if (command.startsWith("saturn_satp_key:")) {
+          const key = command.slice("saturn_satp_key:".length);
+          if (/^[a-f0-9]{64}$/.test(key)) { $("satp-key").value = key; $("satp-pairing").hidden = false; satpKeyReceivedAt = performance.now(); }
+          return false;
+        }
+        if (command.startsWith("saturn_satp_error:")) {
+          satpSourceRequestAt = 0;
+          logEvent(`SATP: ${command.slice("saturn_satp_error:".length).replace(/_/g, " ")}`);
+          return false;
+        }
+        return true;
+      }).join(";");
       const previous = {
         ...state,
         rxEqBands: state.rxEqBands.slice(),
@@ -17632,6 +17759,9 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       };
       const result = _next.applyTciText(text, state);
       syncTciUiSideEffects(previous, result.state, result);
+      if (state.satp && !state.satp.pending && state.satp.source === satpRequestedSource) satpSourceRequestAt = 0;
+      if (!previous.satp?.paired && state.satp?.paired) scheduleNextBridgeRttPing();
+      if (previous.satp?.source !== "satp" && state.satp?.source === "satp") stopMicCapture();
       scheduleUiRefresh();
     }
 
@@ -17861,7 +17991,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
           const missingPackets = sequence > expected ? sequence - expected : 1;
           state.audioSeqMissingPacketCount =
             (state.audioSeqMissingPacketCount || 0) + missingPackets;
-          flushRxAudioQueue();
+          flushRxAudioQueue("sequence-gap");
           recordOperatorFault("Audio sequence gap", "warn");
           sendTci(`audio_seq_gap_count:0,${state.audioSeqGapCount};`);
           const now = performance.now();
@@ -17887,7 +18017,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         return;
       }
       if (txReceiveSuppressionActive()) {
-        flushRxAudioQueue();
+        flushRxAudioQueue("tx-receive-suppression");
         return;
       }
       if (state.audioCtx.state === "suspended") {
@@ -17899,6 +18029,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         return;
       }
       const arrivedAt = performance.now();
+      const arrivalGapMs = state.lastAudioArrivalAt ? arrivedAt - state.lastAudioArrivalAt : null;
       const sourceRate = Math.max(1, Number(frame.header.sampleRate) || 48000);
       const packetDurationMs = _next.audioFramesToMilliseconds(frame.frames, sourceRate);
       const expectedDurationMs = state.lastAudioPacketDurationMs || packetDurationMs;
@@ -17942,7 +18073,14 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       }
       if (state.audioWorkletMode === "msg" && state.rxWorkletNode) {
         state.rxWorkletNode.port.postMessage(
-          { type: "audio", left: playback.left, right: playback.right },
+          { type: "audio", left: playback.left, right: playback.right,
+            diagnostic: { id: ++rxAudioRecorder.packetId, sequence: frame.header.sequence,
+              arrivedAtMs: arrivedAt, arrivedAtIso: new Date().toISOString(), arrivalGapMs,
+              sourceFrames: frame.frames, sourceRate, targetRate,
+              sentContextMs: state.audioCtx.currentTime * 1000,
+              handlerMs: performance.now() - arrivedAt,
+              ratio: state.rxAdaptiveRateRatio, visibility: document.visibilityState,
+              contextState: state.audioCtx.state } },
           [playback.left.buffer, playback.right.buffer]
         );
         state.audioFramesPlayed += 1;
@@ -19343,6 +19481,21 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       bindKeyboardTuneControls();
       bindKeyboardPttControls();
       bindKeyboardMoxControls();
+      $("tx-audio-source").addEventListener("change", () => {
+        if (!satpCanConfigure()) return;
+        satpRequestedSource = $("tx-audio-source").value;
+        satpSourceRequestAt = performance.now();
+        sendTci(`saturn_satp_control:${satpRequestedSource};`);
+        updateSatpUi();
+      });
+      $("satp-pair-btn").addEventListener("click", () => {
+        if (satpCanConfigure() && state.satp?.enabled) sendTci("saturn_satp_control:pair;");
+      });
+      $("satp-copy-key").addEventListener("click", async () => {
+        try { await navigator.clipboard.writeText($("satp-key").value); }
+        catch { logEvent("Clipboard unavailable; select the pairing key field to copy it."); }
+      });
+      $("satp-hide-key").addEventListener("click", clearSatpKey);
       $("tx-mon-btn").addEventListener("click", () => {
         if (!state.connected || !state.bridgeReady || state.remoteClientRole !== "operator" || !state.txMonitorSupported) return;
         // Wait for bridge acknowledgement; never persist/re-arm MON on reconnect.

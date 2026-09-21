@@ -203,7 +203,18 @@ pub(crate) fn handle_client(
             let mut sender =
                 BufferedSender::with_drop_counter(Arc::clone(&outbound), Arc::clone(drop_count));
             let mut previous_loop = Instant::now();
+            let mut satp_status_at = Instant::now() - Duration::from_secs(1);
             loop {
+                if connect_lane_hint != Some(SplitSocketKind::Media)
+                    && satp_status_at.elapsed() >= Duration::from_millis(250)
+                {
+                    let message = radio_model
+                        .lock_unpoisoned()
+                        .satp
+                        .message(client_id, Instant::now());
+                    outbound.enqueue(OutboundMessage::Text(message));
+                    satp_status_at = Instant::now();
+                }
                 let loop_started = Instant::now();
                 sender.record_writer_loop_gap(loop_started.duration_since(previous_loop));
                 previous_loop = loop_started;
@@ -327,6 +338,7 @@ pub(crate) fn handle_client(
 
             let disconnect = unregister_client(clients, operator_client_id, client_id);
             if disconnect.was_operator {
+                radio_model.lock_unpoisoned().satp.revoke_owner(client_id);
                 *operator_control_at.lock_unpoisoned() = None;
                 let _ = command_tx.send(TciCommand::SetTxEnabled(false));
             }
@@ -472,10 +484,11 @@ pub(crate) fn initial_snapshot_messages(
         "modulations_list:LSB,USB,CWL,CWU,AM,SAM,FM,NFM,DIGL,DIGU,WFM;".to_string(),
         "saturn_satp_supported:true;".to_string(),
         format!("saturn_satp_enabled:{};", satp_advertisement.0),
-        "saturn_satp_version:1;".to_string(),
+        "saturn_satp_version:2;".to_string(),
         format!("saturn_satp_tx_port:{};", satp_advertisement.1),
         "saturn_satp_tx_format:48000,float32_le,1,128;".to_string(),
         "saturn_satp_feedback:false;".to_string(),
+        model.satp.message(client_id, Instant::now()),
         remote_client_role_message(client_id, role),
         format!("vfo:0,0,{};", model.desired.vfo_a_hz),
         format!("vfo:0,1,{};", model.desired.vfo_b_hz),
@@ -566,8 +579,12 @@ pub(crate) fn initial_snapshot_messages(
         format!("tx_enable:0,{remote_tx_rf_enabled};"),
         format!("tx_mic_gain:0,{:.1};", model.desired.tx_mic_gain_db),
         format!("trx:0,{};", model.desired.tx_enabled),
-        format!("tx_monitor_supported:0,{};tx_monitor:0,{};tx_monitor_level:0,{:.1};",
-            model.desired.tx_monitor_available, model.desired.tx_monitor_enabled, model.desired.tx_monitor_level_db),
+        format!(
+            "tx_monitor_supported:0,{};tx_monitor:0,{};tx_monitor_level:0,{:.1};",
+            model.desired.tx_monitor_available,
+            model.desired.tx_monitor_enabled,
+            model.desired.tx_monitor_level_db
+        ),
         format!("tx_frequency:{};", model.desired.tx_frequency_hz),
         format!("tx_state:0,{};", model.desired.tx_phase),
         format!(

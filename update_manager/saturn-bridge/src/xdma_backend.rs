@@ -256,6 +256,7 @@ fn command_effects(command: &TciCommand) -> CommandEffects {
         radio_state_dirty: !matches!(
             command,
             TciCommand::MicAudioFrame(_)
+                | TciCommand::SatpControl { .. }
                 | TciCommand::SaturnPing { .. }
                 | TciCommand::RequestRadioState { .. }
         ),
@@ -350,7 +351,10 @@ fn run_inner(mut config: BridgeConfig, ready_path: &Path) -> Result<(), Box<dyn 
         model.desired.pure_signal_enabled = false;
         model.observed.pure_signal_state = PureSignalState::Off;
     }
-    let tx_radio = Arc::new(DirectXdmaTxRadio::open(config.tx_power_meter_scale, radio_model.clone())?);
+    let tx_radio = Arc::new(DirectXdmaTxRadio::open(
+        config.tx_power_meter_scale,
+        radio_model.clone(),
+    )?);
     let requested_tx_rf_enabled = config.remote_tx_rf_enabled;
     let remote_tx_rf_enabled =
         effective_direct_tx_rf_enabled(requested_tx_rf_enabled, tx_radio.rf_tx_qualified());
@@ -581,7 +585,6 @@ fn run_inner(mut config: BridgeConfig, ready_path: &Path) -> Result<(), Box<dyn 
                     &tx_cmd_tx,
                     &mut tx_control,
                     remote_tx_rf_enabled,
-                    config.tx_audio_source,
                     &tx_audio_ingress,
                 )?);
             }
@@ -675,7 +678,7 @@ fn run_inner(mut config: BridgeConfig, ready_path: &Path) -> Result<(), Box<dyn 
 
             if tx_control.requested {
                 let now = Instant::now();
-                let mic_stale = config.tx_audio_source == TxAudioSource::Tci
+                let mic_stale = radio_model.lock_unpoisoned().satp.source == TxAudioSource::Tci
                     && tx_control.last_mic_at.is_some_and(|last| {
                         now.saturating_duration_since(last) > TX_UPLINK_TIMEOUT
                     });
@@ -699,8 +702,11 @@ fn run_inner(mut config: BridgeConfig, ready_path: &Path) -> Result<(), Box<dyn 
             }
             {
                 let model = radio_model.lock_unpoisoned();
-                let monitor_state = (model.desired.tx_monitor_available,
-                    model.desired.tx_monitor_enabled, model.desired.tx_monitor_level_db);
+                let monitor_state = (
+                    model.desired.tx_monitor_available,
+                    model.desired.tx_monitor_enabled,
+                    model.desired.tx_monitor_level_db,
+                );
                 if monitor_state != last_monitor_state {
                     // Includes worker-side faults, which otherwise have no TCI
                     // command to trigger publication of the disabled state.
@@ -936,7 +942,6 @@ fn handle_command(
     tx_cmd_tx: &mpsc::Sender<TxCommand>,
     tx_control: &mut DirectTxControl,
     remote_tx_rf_enabled: bool,
-    tx_audio_source: TxAudioSource,
     tx_audio_ingress: &TxAudioIngress,
 ) -> Result<CommandEffects, Box<dyn Error>> {
     let effects = command_effects(&command);
@@ -944,7 +949,7 @@ fn handle_command(
         TciCommand::MicAudioFrame(frame) => {
             if tx_control.requested {
                 tx_control.last_mic_at = Some(frame.received_at);
-                if tx_audio_source == TxAudioSource::Tci {
+                if radio_model.lock_unpoisoned().satp.source == TxAudioSource::Tci {
                     let _ = tx_audio_ingress.write_frame(
                         TxAudioSource::Tci,
                         frame.samples,
@@ -971,6 +976,9 @@ fn handle_command(
     };
     let mut model = radio_model.lock_unpoisoned();
     match command {
+        TciCommand::SatpControl { client_id, action } => {
+            crate::satp_control::handle(&action, client_id, &mut model, tci, tx_cmd_tx);
+        }
         TciCommand::SetVfoA(frequency_hz) => {
             model.desired.vfo_a_hz = frequency_hz;
             model.sync_vfo_routes();
@@ -1134,6 +1142,10 @@ fn handle_command(
             model.desired.tx_phase = TxPhase::Rx;
         }
         TciCommand::SetTxEnabled(enabled) => {
+            if enabled && !model.satp.permits_tx(model.desired.two_tone_enabled, Instant::now()) {
+                tci.publish_satp_not_ready();
+                return Ok(effects);
+            }
             if enabled && model.desired.mode == DemodMode::Wfm {
                 eprintln!("saturn-bridge: refusing direct XDMA TX while WFM receive mode is active");
                 model.desired.tx_enabled = false;

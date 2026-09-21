@@ -4,6 +4,16 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
 
 ## [Unreleased]
 ### Changed
+- Integrate authenticated SATP v2 native TX audio with Saturn Remote: temporary
+  operator-owned pairing, RX-only source selection, health/loss interlocks, and
+  the shared processed-voice MON path at G2's physical headphone jack. The native
+  Windows sender must be updated separately; legacy SATP v1 radio input is rejected.
+- Preserve WDSP RX state across idle subscription gaps, reject stale/pre-arm TX
+  microphone frames, and add bounded browser RX underrun delivery diagnostics.
+- Add checksummed ARM staging/preflight and matched bridge/UI installation with
+  verified RX startup, automatic rollback attempts, and guarded manual recovery.
+  The operator confirmed smooth native-microphone MON playback; off-air RF audio
+  and end-to-end latency qualification remain separate acceptance steps.
 - Merge integration with main's primary PCB2 firmware 1.27–1.30 TX permission
   policy. RF output still requires runtime enablement and existing interlocks;
   firmware permission is not evidence of hardware TX qualification.

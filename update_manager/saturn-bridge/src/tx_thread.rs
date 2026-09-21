@@ -8,7 +8,7 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use crate::p2::session::P2Session;
-use crate::radio_model::{PureSignalState, RadioModel};
+use crate::radio_model::{PureSignalState, RadioModel, TxPhase};
 use crate::sync_ext::MutexExt;
 use crate::tx_audio::{TxAudioIngressStats, TxAudioMessage, TxAudioSource};
 use crate::wdsp::{
@@ -48,7 +48,6 @@ const MAX_TX_SOURCE_STALL: Duration = Duration::from_millis(10_000);
 const MAX_DUC_PACKETS_PER_LOOP: usize = 8;
 const MAX_TX_COMMANDS_PER_LOOP: usize = 128;
 const MAX_TX_AUDIO_MESSAGES_PER_LOOP: usize = 128;
-const TX_MIC_INPUT_QUEUE_MAX_SAMPLES: usize = 48_000;
 const DEFAULT_TX_MIC_PREFILL_SAMPLES: usize = 2_048;
 const MIN_TX_MIC_PREFILL_MS: u64 = 20;
 const MAX_TX_MIC_PREFILL_MS: u64 = 250;
@@ -268,6 +267,7 @@ fn settle_wdsp_tx(wdsp_tx: &mut WdspTxEngine, blocks: usize) {
 }
 
 pub enum TxCommand {
+    SelectAudioSource(TxAudioSource),
     /// PTT pressed — arm WDSP TX channel, wait for DUC IQ before keying.
     Arm {
         rf_enabled: bool,
@@ -513,6 +513,9 @@ fn run(
     let mut rf_enabled = false;
     let mut two_tone = false;
     let mut last_mic_audio_at = Instant::now();
+    let mut mic_accept_after = Instant::now();
+    let mut stale_mic_frames = 0u64;
+    let mut backlog_dropped_samples = 0usize;
     let mut next_mic_dsp_at = Instant::now();
     let mut next_duc_iq_at = Instant::now();
     let mut pending_mic_samples: VecDeque<f32> = VecDeque::new();
@@ -545,10 +548,13 @@ fn run(
     let tx_source_stall_limit = tx_source_stall_limit();
     let mut tx_source_stall_count = 0u64;
     let tx_mic_prefill_samples = tx_mic_prefill_samples();
+    let mic_queue_limit = mic_input_queue_limit(tx_mic_prefill_samples);
+    let mic_max_age = Duration::from_secs_f64(mic_queue_limit as f64 / 48_000.0);
     let tx_mic_prefill_ms = tx_mic_prefill_samples as f64 / 48.0;
     // SATP is a separate capture clock and always requires the existing WDSP
     // variable-rate matcher. Preserve the production-default bypass for TCI
     // browser audio unless its explicit experimental opt-in is set.
+    let mut audio_source = audio_source;
     let mut mic_rmatch = tx_audio_requires_rmatch(audio_source, tx_mic_rmatch_enabled())
         .then(|| MicRateMatcher::new(tx_mic_prefill_samples));
     let startup_settle_blocks = session.startup_settle_blocks();
@@ -582,6 +588,24 @@ fn run(
         // the fixed-cadence DUC IQ producer.
         for _ in 0..MAX_TX_COMMANDS_PER_LOOP {
             match cmd_rx.try_recv() {
+                Ok(TxCommand::SelectAudioSource(source)) => {
+                    let mut model = radio_model.lock_unpoisoned();
+                    if state == TxState::Idle
+                        && model.desired.tx_phase == TxPhase::Rx
+                        && !model.desired.tx_enabled
+                    {
+                        audio_source = source;
+                        session.stop_monitor();
+                        pending_mic_samples.clear();
+                        wdsp_tx.pending_iq.clear();
+                        mic_accept_after = Instant::now();
+                        mic_rmatch = tx_audio_requires_rmatch(source, tx_mic_rmatch_enabled())
+                            .then(|| MicRateMatcher::new(tx_mic_prefill_samples));
+                        model.satp.source = source;
+                        model.satp.generation = model.satp.generation.wrapping_add(1);
+                    }
+                    model.satp.pending_source = false;
+                }
                 Ok(TxCommand::Arm {
                     rf_enabled: arm_rf_enabled,
                 }) => {
@@ -621,6 +645,13 @@ fn run(
                                 startup_settle_blocks
                             );
                         }
+                        // Native setup may take a second. Start a fresh ingress
+                        // epoch and pacing clock AFTER it completes; queued
+                        // pre-setup speech must not become delayed on-air audio.
+                        let now = Instant::now();
+                        mic_accept_after = now;
+                        stale_mic_frames = 0;
+                        backlog_dropped_samples = 0;
                         last_mic_audio_at = now;
                         next_mic_dsp_at = now;
                         next_duc_iq_at = now;
@@ -828,6 +859,17 @@ fn run(
                         continue;
                     }
 
+                    if !mic_frame_is_fresh(
+                        frame.enqueued_at,
+                        mic_accept_after,
+                        Instant::now(),
+                        mic_max_age,
+                    ) {
+                        stale_mic_frames = stale_mic_frames.saturating_add(1);
+                        did_work = true;
+                        continue;
+                    }
+
                     let channels = frame.channels;
                     let sample_rate_hz = frame.sample_rate_hz;
                     let source = frame.source;
@@ -849,10 +891,15 @@ fn run(
                     if let Some(matcher) = mic_rmatch.as_mut() {
                         matcher.feed(&mono);
                     } else {
-                        extend_mic_input_queue(&mut pending_mic_samples, &mono);
+                        backlog_dropped_samples =
+                            backlog_dropped_samples.saturating_add(extend_mic_input_queue(
+                                &mut pending_mic_samples,
+                                &mono,
+                                mic_queue_limit,
+                            ));
                     }
                     mic_frame_count = mic_frame_count.saturating_add(1);
-                    last_mic_audio_at = Instant::now();
+                    last_mic_audio_at = frame.enqueued_at;
                     if first_mic_audio_at.is_none() {
                         first_mic_audio_at = Some(last_mic_audio_at);
                     }
@@ -860,7 +907,7 @@ fn run(
                     {
                         let diag = wdsp_tx.diagnostics();
                         println!(
-                            "saturn-bridge: TX diag source={} mic_frame={} channels={} sample_rate={}Hz mono_samples={} queue_samples={} underruns={} total_samples={} input_peak={:.4} output_peak={:.4} wdsp_mic_pk={:.1}dB wdsp_out_pk={:.1}dB iq_pairs={}",
+                            "saturn-bridge: TX diag source={} mic_frame={} channels={} sample_rate={}Hz mono_samples={} queue_samples={} underruns={} total_samples={} input_peak={:.4} output_peak={:.4} wdsp_mic_pk={:.1}dB wdsp_out_pk={:.1}dB iq_pairs={} queue_limit={} stale_frames={} backlog_dropped_samples={}",
                             source.as_str(),
                             mic_frame_count,
                             channels,
@@ -873,7 +920,10 @@ fn run(
                             diag.output_peak,
                             diag.mic_peak_db,
                             diag.out_peak_db,
-                            diag.total_output_pairs
+                            diag.total_output_pairs,
+                            mic_queue_limit,
+                            stale_mic_frames,
+                            backlog_dropped_samples
                         );
                         last_diag_at = Instant::now();
                     }
@@ -1539,14 +1589,30 @@ fn mic_samples_to_mono(samples: &[f32], channels: u32) -> Cow<'_, [f32]> {
     )
 }
 
-fn extend_mic_input_queue(queue: &mut VecDeque<f32>, samples: &[f32]) {
+fn mic_input_queue_limit(prefill_samples: usize) -> usize {
+    // Keep configured jitter reserve plus two DSP blocks (21.3 ms), not a
+    // permanent one-second backlog after startup or a scheduler pause.
+    prefill_samples + 2 * TX_MIC_SAMPLES_PER_DSP_BLOCK
+}
+
+fn mic_frame_is_fresh(
+    enqueued_at: Instant,
+    epoch: Instant,
+    now: Instant,
+    max_age: Duration,
+) -> bool {
+    enqueued_at >= epoch && now.saturating_duration_since(enqueued_at) <= max_age
+}
+
+fn extend_mic_input_queue(queue: &mut VecDeque<f32>, samples: &[f32], limit: usize) -> usize {
     let overflow = queue
         .len()
         .saturating_add(samples.len())
-        .saturating_sub(TX_MIC_INPUT_QUEUE_MAX_SAMPLES);
+        .saturating_sub(limit);
     let queued_overflow = overflow.min(queue.len());
     drop(queue.drain(..queued_overflow));
     queue.extend(samples[overflow - queued_overflow..].iter().copied());
+    overflow
 }
 
 fn do_unkey(
@@ -1754,6 +1820,8 @@ mod tests {
 
     #[test]
     fn mic_input_queue_bulk_extend_drops_oldest_samples() {
+        const TX_MIC_INPUT_QUEUE_MAX_SAMPLES: usize =
+            DEFAULT_TX_MIC_PREFILL_SAMPLES + 2 * TX_MIC_SAMPLES_PER_DSP_BLOCK;
         let mut queue: VecDeque<f32> = (0..TX_MIC_INPUT_QUEUE_MAX_SAMPLES)
             .map(|sample| sample as f32)
             .collect();
@@ -1763,6 +1831,7 @@ mod tests {
                 TX_MIC_INPUT_QUEUE_MAX_SAMPLES as f32,
                 (TX_MIC_INPUT_QUEUE_MAX_SAMPLES + 1) as f32,
             ],
+            TX_MIC_INPUT_QUEUE_MAX_SAMPLES,
         );
 
         assert_eq!(queue.len(), TX_MIC_INPUT_QUEUE_MAX_SAMPLES);
@@ -1776,7 +1845,7 @@ mod tests {
             .map(|sample| sample as f32)
             .collect();
         queue.clear();
-        extend_mic_input_queue(&mut queue, &oversized);
+        extend_mic_input_queue(&mut queue, &oversized, TX_MIC_INPUT_QUEUE_MAX_SAMPLES);
 
         assert_eq!(queue.len(), TX_MIC_INPUT_QUEUE_MAX_SAMPLES);
         assert_eq!(queue.front(), Some(&2.0));
@@ -1784,6 +1853,44 @@ mod tests {
             queue.back(),
             Some(&((TX_MIC_INPUT_QUEUE_MAX_SAMPLES + 1) as f32))
         );
+    }
+
+    #[test]
+    fn mic_backlog_is_bounded_to_prefill_plus_two_blocks() {
+        for prefill in [960, DEFAULT_TX_MIC_PREFILL_SAMPLES, 12_000] {
+            let limit = mic_input_queue_limit(prefill);
+            assert_eq!(limit, prefill + 1024);
+            assert!(limit < 48_000);
+            let mut queue = VecDeque::new();
+            let mut dropped = 0;
+            for n in 0..50 {
+                dropped += extend_mic_input_queue(&mut queue, &vec![n as f32; 1024], limit);
+                assert!(queue.len() <= limit);
+            }
+            assert_eq!(dropped + queue.len(), 50 * 1024);
+            assert_eq!(queue.back(), Some(&49.0));
+        }
+    }
+
+    #[test]
+    fn slow_arm_and_previous_transmission_audio_cannot_enter_new_epoch() {
+        let old_arm = Instant::now();
+        let ready = old_arm + Duration::from_secs(1);
+        let max_age = Duration::from_millis(64);
+        for n in 0..50 {
+            let enqueued = old_arm + Duration::from_millis(n * 20);
+            assert!(!mic_frame_is_fresh(enqueued, ready, ready, max_age));
+        }
+        assert!(mic_frame_is_fresh(ready, ready, ready, max_age));
+        assert!(mic_frame_is_fresh(ready, ready, ready + max_age, max_age));
+        assert!(!mic_frame_is_fresh(
+            ready,
+            ready,
+            ready + max_age + Duration::from_nanos(1),
+            max_age
+        ));
+        let next_arm = ready + Duration::from_secs(2);
+        assert!(!mic_frame_is_fresh(ready, next_arm, next_arm, max_age));
     }
 
     #[test]

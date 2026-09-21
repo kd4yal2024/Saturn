@@ -12,6 +12,7 @@ export type TciClientRole = 'operator' | 'viewer';
 export type TxCodecName = 'pcm' | 'opus_nb' | 'opus_wb';
 
 export type TciRadioState = {
+  satp?: import('../audio/satp').SatpState;
   mode: DemodMode;
   vfoA: number;
   vfoB: number;

@@ -6,6 +6,8 @@ build = "build.rs"
 
 [dependencies]
 libc = "0.2"
+hmac = "0.12"
+sha2 = "0.10"
 tungstenite = "=0.29.0"
 
 [profile.release]

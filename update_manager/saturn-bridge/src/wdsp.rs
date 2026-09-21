@@ -110,6 +110,8 @@ unsafe extern "C" {
     fn saturn_wdsp_stub_reset_channel_state_calls();
     #[cfg(saturn_bridge_stub_native)]
     fn saturn_wdsp_stub_dmode_one_call_count() -> u64;
+    #[cfg(saturn_bridge_stub_native)]
+    fn saturn_wdsp_stub_channel_state_call_count() -> u64;
     // State-preserving rate/size setters (pinned channel.c:168/197/211):
     // they rebuild only the pre/post-main I/O scaffolding and propagate the
     // new value into the existing RXA/TXA blocks — AGC/NR/notch adapted
@@ -991,35 +993,20 @@ impl WdspRxEngine {
         self.output_buffer.fill(0.0);
     }
 
-    /// Reset WDSP after the direct backend intentionally stopped feeding RX
-    /// samples while no audio consumer existed. Complete the normal down-slew
-    /// by feeding zero-input blocks before restarting. `dmode = 1` is not safe
-    /// here: this is the same thread that must feed `fexchange0`, so the native
-    /// wait times out and can block the sole direct-XDMA ring consumer long
-    /// enough to lose input buffers.
+    /// Resume after an idle media subscription gap. WDSP has no wall-clock
+    /// input requirement: its worker waits for the next input block. Keep that
+    /// channel running and discard only our partial input/audio packets.
+    ///
+    /// Do NOT down-slew/flush/restart here. Native flushChannel runs
+    /// asynchronously and can set exec_bypass after SetChannelState(1), leaving
+    /// fexchange0 waiting forever for output from a bypassed DSP worker. An
+    /// arbitrary sleep is not a flush-completion barrier. Subscription changes
+    /// do not require that channel lifecycle transition (unlike MOX/retuning).
     pub fn restart_after_input_gap(&mut self) -> bool {
         self.reset_stream_buffers();
-        unsafe {
-            SetChannelState(self.channel_id, 0, 0);
-        }
-        let flushed = feed_slew_flush_blocks(
-            self.channel_id,
-            self.input_buffer.len(),
-            &mut self.output_buffer,
-            SLEW_FLUSH_BLOCKS_RX,
-        );
-        if !flushed {
-            eprintln!(
-                "saturn-bridge: RX input-gap down-slew flush did not complete within {SLEW_FLUSH_BLOCKS_RX} blocks"
-            );
-        }
-        self.reset_stream_buffers();
-        unsafe {
-            SetChannelState(self.channel_id, 1, 0);
-        }
         self.last_meter_dbm = None;
         self.wbfm_stereo_detected = false;
-        flushed
+        true
     }
 
     pub fn reset_audio_packetizer(&mut self) {
@@ -2607,15 +2594,51 @@ mod tests {
 
     #[cfg(saturn_bridge_stub_native)]
     #[test]
-    fn input_gap_restart_never_uses_blocking_channel_state_mode() {
+    fn input_gap_resume_clears_partial_packets_without_native_state_changes() {
         let model = RadioModel::new(2, 7_200_000, 0, 384, 24, 2048, true, 4096, true);
         let mut engine = WdspRxEngine::new(&model).expect("RX engine");
         unsafe {
             super::saturn_wdsp_stub_reset_channel_state_calls();
         }
-
+        engine.input_buffer_fill = 10;
+        engine.audio_frame_fill = 10;
+        engine.input_buffer.fill(0.5);
+        engine.output_buffer.fill(0.5);
         assert!(engine.restart_after_input_gap());
+        assert_eq!(engine.input_buffer_fill, 0);
+        assert_eq!(engine.audio_frame_fill, 0);
+        assert!(engine.input_buffer.iter().all(|s| *s == 0.0));
+        assert!(engine.output_buffer.iter().all(|s| *s == 0.0));
+        assert_eq!(
+            unsafe { super::saturn_wdsp_stub_channel_state_call_count() },
+            0
+        );
         assert_eq!(unsafe { super::saturn_wdsp_stub_dmode_one_call_count() }, 0);
+    }
+
+    #[cfg(not(saturn_bridge_stub_native))]
+    #[test]
+    #[ignore = "native WDSP lifecycle test; run alone under an external timeout"]
+    fn native_rx_reconnect_after_idle_keeps_producing_audio() {
+        crate::fftw_wisdom::import_configured();
+        eprintln!("native RX: opening channel");
+        let model = RadioModel::new(2, 7_200_000, 0, 384, 24, 2048, true, 4096, true);
+        let mut engine = WdspRxEngine::new(&model).expect("RX engine");
+        eprintln!("native RX: channel open");
+        let input = vec![0.01f32; engine.input_buffer.len()];
+        for cycle in 0..30 {
+            eprintln!("native RX: idle/resume cycle {cycle}");
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            assert!(engine.restart_after_input_gap(), "cycle {cycle}");
+            let mut frames = 0;
+            for _ in 0..32 {
+                engine.process_iq(&input, |audio| {
+                    assert!(audio.iter().all(|sample| sample.is_finite()));
+                    frames += 1;
+                });
+            }
+            assert!(frames > 0, "no audio on cycle {cycle}");
+        }
     }
 
     #[test]

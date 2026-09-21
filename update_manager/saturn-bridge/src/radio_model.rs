@@ -486,6 +486,7 @@ pub struct ObservedRadioState {
 
 #[derive(Clone, Debug)]
 pub struct RadioModel {
+    pub satp: crate::satp_control::SatpControl,
     pub desired: DesiredRadioState,
     pub observed: ObservedRadioState,
 }
@@ -526,6 +527,7 @@ impl RadioModel {
         let (filter_low_hz, filter_high_hz) = mode.default_filter_band();
         let (tx_filter_low_hz, tx_filter_high_hz) = mode.default_tx_filter_band();
         Self {
+            satp: crate::satp_control::SatpControl::default(),
             desired: DesiredRadioState {
                 running: false,
                 tx_enabled: false,

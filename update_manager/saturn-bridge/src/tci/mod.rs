@@ -166,6 +166,12 @@ impl TciFrontend {
         config: &BridgeConfig,
         radio_model: Arc<Mutex<RadioModel>>,
     ) -> io::Result<(Self, TciCommandMailboxReceiver)> {
+        {
+            let mut model = radio_model.lock_unpoisoned();
+            model.satp.enabled = config.satp_enabled;
+            model.satp.source = config.tx_audio_source;
+            model.satp.loss_timeout = config.satp_audio_loss_timeout;
+        }
         let listeners = listener_addrs(config.tci_bind_addr)
             .into_iter()
             .map(|addr| {
@@ -635,8 +641,12 @@ impl TciFrontend {
             model.desired.tx_mic_gain_db
         ));
         self.send_text(format!("trx:0,{};", model.desired.tx_enabled));
-        self.send_text(format!("tx_monitor_supported:0,{};tx_monitor:0,{};tx_monitor_level:0,{:.1};",
-            model.desired.tx_monitor_available, model.desired.tx_monitor_enabled, model.desired.tx_monitor_level_db));
+        self.send_text(format!(
+            "tx_monitor_supported:0,{};tx_monitor:0,{};tx_monitor_level:0,{:.1};",
+            model.desired.tx_monitor_available,
+            model.desired.tx_monitor_enabled,
+            model.desired.tx_monitor_level_db
+        ));
         self.send_text(format!("tx_frequency:{};", model.desired.tx_frequency_hz));
         self.send_text(format!("tx_state:0,{};", model.desired.tx_phase));
         self.send_text(format!(
@@ -990,6 +1000,18 @@ impl TciFrontend {
 
     pub fn publish_saturn_pong(&self, client_id: u64, nonce: &str, sent_at: &str) {
         self.send_text_to(client_id, format!("saturn_pong:{nonce},{sent_at};"));
+    }
+
+    pub fn is_operator(&self, client_id: u64) -> bool {
+        client_id != 0 && self.operator_client_id.load(Ordering::SeqCst) == client_id
+    }
+
+    pub fn publish_satp_reply(&self, client_id: u64, text: String) {
+        self.send_text_to(client_id, text);
+    }
+
+    pub fn publish_satp_not_ready(&self) {
+        self.send_safety_text("tx_fault:0,satp_not_ready;".into());
     }
 
     pub fn publish_tx_power_trip(&self, forward_watts: f32, limit_watts: f32) {

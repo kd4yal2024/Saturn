@@ -45,6 +45,7 @@ import {
 } from './settings/normalize';
 import { parseTciText } from './tci/parser';
 import { applyTciText } from './tci/apply';
+import { satpTxBlockReason, txUsesBrowserMic } from './audio/satp';
 import { decodeAudioFrame } from './transport/rx-frame';
 
 
@@ -228,6 +229,8 @@ const api = {
   // TCI parsing
   parseTciText,
   applyTciText,
+  satpTxBlockReason,
+  txUsesBrowserMic,
 
   // TCI command builders
   buildRxFilterBandCommand,

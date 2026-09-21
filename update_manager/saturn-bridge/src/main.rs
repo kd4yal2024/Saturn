@@ -4,6 +4,7 @@ mod p2;
 mod radio_model;
 mod rx_thread;
 mod satp;
+mod satp_control;
 mod sync_ext;
 mod tci;
 mod tx_audio;
@@ -549,6 +550,9 @@ fn main() -> Result<(), Box<dyn Error>> {
             let mut reconfigure_ddc = false;
 
             match command {
+                TciCommand::SatpControl { client_id, action } => {
+                    crate::satp_control::handle(&action, client_id, &mut model, &tci, &tx_cmd_tx);
+                }
                 TciCommand::SetVfoA(freq_hz) => {
                     model.desired.vfo_a_hz = freq_hz;
                     model.sync_vfo_routes();
@@ -803,6 +807,14 @@ fn main() -> Result<(), Box<dyn Error>> {
                     }
                 }
                 TciCommand::SetTxEnabled(enabled) => {
+                    if enabled
+                        && !model
+                            .satp
+                            .permits_tx(model.desired.two_tone_enabled, Instant::now())
+                    {
+                        tci.publish_satp_not_ready();
+                        continue;
+                    }
                     if enabled && !controller_owned {
                         eprintln!("saturn-bridge: refusing TX without P2 controller ownership");
                         model.desired.tx_enabled = false;
@@ -913,7 +925,8 @@ fn main() -> Result<(), Box<dyn Error>> {
                 }
                 TciCommand::SetTxMonitor(enabled) => {
                     // Hardware MON is currently implemented only by direct XDMA.
-                    model.desired.tx_monitor_enabled = enabled && model.desired.tx_monitor_available;
+                    model.desired.tx_monitor_enabled =
+                        enabled && model.desired.tx_monitor_available;
                 }
                 TciCommand::SetTxMonitorLevel(level) => {
                     model.desired.tx_monitor_level_db = crate::tx_monitor::clamp_level(level);
@@ -1096,6 +1109,9 @@ fn main() -> Result<(), Box<dyn Error>> {
                     let _ = tx_cmd_tx.send(TxCommand::ModelChanged);
                 }
                 TciCommand::MicAudioFrame(frame) => {
+                    if model.satp.source != TxAudioSource::Tci {
+                        continue;
+                    }
                     if !tx_requested.load(Ordering::Relaxed) {
                         continue;
                     }
@@ -1303,7 +1319,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 tx_uplink_late_since = None;
                 tx_uplink_fault_active = false;
                 tx_control_watchdog_fault_active = false;
-            } else if config.tx_audio_source == TxAudioSource::Tci && !tx_uplink_fault_active {
+            } else if model.satp.source == TxAudioSource::Tci && !tx_uplink_fault_active {
                 if let Some(age) = update_tx_uplink_late_detector(
                     on_air,
                     last_operator_mic_at,

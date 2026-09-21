@@ -1,6 +1,7 @@
 use std::io;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc};
+use std::time::Instant;
 
 pub const TX_AUDIO_INGRESS_CAPACITY: usize = 256;
 
@@ -28,6 +29,8 @@ impl TxAudioSource {
 }
 
 pub struct TxAudioFrame {
+    /// Arrival at the bounded bridge ingress, not the later DSP dequeue time.
+    pub enqueued_at: Instant,
     pub source: TxAudioSource,
     pub samples: TxAudioSamples,
     pub channels: u32,
@@ -355,6 +358,7 @@ impl TxAudioIngress {
         let sample_count = samples.len();
         let depth = self.stats.queue_depth.fetch_add(1, Ordering::Relaxed) + 1;
         match self.sender.try_send(TxAudioMessage::Frames(TxAudioFrame {
+            enqueued_at: Instant::now(),
             source,
             samples,
             channels,
@@ -390,6 +394,7 @@ impl TxAudioIngress {
         let sample_count = samples.len();
         let depth = self.stats.queue_depth.fetch_add(1, Ordering::Relaxed) + 1;
         match self.sender.try_send(TxAudioMessage::Frames(TxAudioFrame {
+            enqueued_at: Instant::now(),
             source,
             samples: TxAudioSamples::Satp(samples),
             channels: 1,

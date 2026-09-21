@@ -96,11 +96,14 @@
       <div class="card p-5">
         <h2 class="text-xl font-semibold mb-2">Native TX Audio — SATP</h2>
         <p class="text-sm opacity-80 mb-4">
-          SATP v1 can feed the existing bounded WDSP/DUC transmit chain when
-          Native SATP is explicitly selected below. SATP never keys the radio;
+          SATP v2 feeds the existing bounded WDSP/DUC transmit chain using an
+          authenticated native sender. Enable the listener here, then pair and
+          select Native SATP in Saturn Remote while in RX. SATP never keys the radio;
           TCI/PTT and the existing TX watchdogs remain authoritative.
           Protocol values are fixed at 48 kHz, float32 little-endian, mono,
-          128 frames per packet.
+          128 frames per packet. Both bridge and native sender must support v2;
+          legacy unauthenticated v1 packets are rejected. Use a trusted LAN or VPN;
+          audio is authenticated, not encrypted. MON uses G2's physical headphones.
         </p>
         <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 items-end mb-3">
           <label class="text-sm"><span class="block mb-1">Receiver</span><input id="satp-enabled" type="checkbox" /> Enable SATP</label>

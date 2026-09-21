@@ -583,16 +583,23 @@ mod tests {
         let values = [
             (RF_GPIO_REGISTER, MOX_BIT | TX_ENABLE_BIT | 0x55),
             (KEYER_CONFIG_REGISTER, CW_KEYER_ENABLE_BIT | 0x33),
-            (TX_CONFIG_REGISTER, DUC_STREAM_ENABLE_BIT | TX_AMPLITUDE_MASK | 7),
+            (
+                TX_CONFIG_REGISTER,
+                DUC_STREAM_ENABLE_BIT | TX_AMPLITUDE_MASK | 7,
+            ),
         ];
-        for (register, value) in values { fixture.write(register, value); }
+        for (register, value) in values {
+            fixture.write(register, value);
+        }
         {
             let peripheral = XdmaRegisterDevice::open_peripheral(&fixture.path).unwrap();
             for (register, value) in values {
                 assert_eq!(peripheral.read_register(register).unwrap(), value);
             }
         }
-        for (register, value) in values { assert_eq!(fixture.read(register), value); }
+        for (register, value) in values {
+            assert_eq!(fixture.read(register), value);
+        }
     }
 
     #[test]

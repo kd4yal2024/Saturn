@@ -12,8 +12,7 @@ use crate::config::BridgeConfig;
 use crate::radio_model::{RadioModel, TxPhase};
 use crate::sync_ext::MutexExt;
 use crate::tx_audio::{
-    NullTxAudioSink, TxAudioIngress, TxAudioSink, TxAudioSource, TxThreadAudioSink,
-    TX_AUDIO_INGRESS_CAPACITY,
+    TxAudioIngress, TxAudioSink, TxAudioSource, TxThreadAudioSink, TX_AUDIO_INGRESS_CAPACITY,
 };
 use crate::tx_thread::TxCommand;
 
@@ -101,7 +100,7 @@ fn parse_packet(bytes: &[u8]) -> Result<SatpPacket, PacketError> {
     if &bytes[0..4] != SATP_MAGIC {
         return Err(PacketError::Magic);
     }
-    if bytes[4] != SATP_VERSION {
+    if bytes[4] != SATP_VERSION && bytes[4] != 2 {
         return Err(PacketError::Version);
     }
     let header = SatpHeader {
@@ -656,7 +655,7 @@ impl SatpRuntime {
             write_status_file(&snapshot);
         }
         println!(
-            "saturn-bridge: SATP v1 receiver listening on {} sink={} rf_enabled={} target={} capacity={} SO_RCVBUF={}",
+            "saturn-bridge: authenticated SATP v2 receiver listening on {} sink={} rf_enabled={} target={} capacity={} SO_RCVBUF={}",
             config.satp_bind_addr,
             status.lock_unpoisoned().sink,
             u8::from(config.remote_tx_rf_enabled),
@@ -671,7 +670,6 @@ impl SatpRuntime {
         let jitter_target_frames = config.satp_jitter_target_frames;
         let jitter_capacity_frames = config.satp_jitter_capacity_frames;
         let audio_loss_timeout = config.satp_audio_loss_timeout;
-        let tx_chain_connected = config.tx_audio_source == TxAudioSource::Satp;
         let worker = thread::Builder::new()
             .name("saturn-satp".into())
             .spawn(move || {
@@ -684,7 +682,7 @@ impl SatpRuntime {
                     radio_model,
                     tx_audio_ingress,
                     tx_cmd_tx,
-                    tx_chain_connected,
+                    true,
                     worker_status,
                     worker_stop,
                 );
@@ -721,17 +719,13 @@ fn run_receiver(
     radio_model: Arc<Mutex<RadioModel>>,
     tx_audio_ingress: TxAudioIngress,
     tx_cmd_tx: mpsc::Sender<TxCommand>,
-    tx_chain_connected: bool,
+    persist_status: bool,
     status: Arc<Mutex<SatpStatus>>,
     stop: Arc<AtomicBool>,
 ) {
     let mut ring = PacketRing::new(jitter_target_frames, jitter_capacity_frames);
     let mut rate_control = PlayoutRateControl::new(jitter_target_frames);
-    let mut sink: Box<dyn TxAudioSink> = if tx_chain_connected {
-        Box::new(TxThreadAudioSink::new(tx_audio_ingress.clone()))
-    } else {
-        Box::new(NullTxAudioSink::default())
-    };
+    let mut sink: Box<dyn TxAudioSink> = Box::new(TxThreadAudioSink::new(tx_audio_ingress.clone()));
     status.lock_unpoisoned().sink = sink.name();
     let mut receive_buffer = [0u8; RECEIVE_BUFFER_BYTES];
     let startup_delay =
@@ -748,6 +742,7 @@ fn run_receiver(
     let mut audio_loss_dekey_latched = false;
     let mut rate_measurement = RateMeasurement::new(Instant::now());
     let mut previous_playout_was_silence = false;
+    let mut lease_generation = radio_model.lock_unpoisoned().satp.generation;
     let mut last_arrival_timeline: Option<(u32, u64)> = None;
 
     while !stop.load(Ordering::Relaxed) {
@@ -766,13 +761,39 @@ fn run_receiver(
                 status.lock_unpoisoned().invalid += 1;
                 continue;
             }
-            let packet = match parse_packet(&receive_buffer[..size]) {
+            if size != SATP_DATAGRAM_BYTES + 32 {
+                status.lock_unpoisoned().invalid += 1;
+                continue;
+            }
+            let packet = match parse_packet(&receive_buffer[..SATP_DATAGRAM_BYTES]) {
                 Ok(packet) => packet,
                 Err(_) => {
                     status.lock_unpoisoned().invalid += 1;
                     continue;
                 }
             };
+            {
+                let mut model = radio_model.lock_unpoisoned();
+                if !model
+                    .satp
+                    .authenticate(&receive_buffer[..size], source, Instant::now())
+                {
+                    status.lock_unpoisoned().invalid += 1;
+                    continue;
+                }
+                if lease_generation != model.satp.generation {
+                    lease_generation = model.satp.generation;
+                    ring.clear();
+                    playout_clock.reset();
+                    rate_control.reset();
+                    session_id = None;
+                }
+                let peak = packet.samples.iter().fold(0.0f32, |p, s| p.max(s.abs()));
+                model
+                    .satp
+                    .progress(packet.header.sample_counter, peak, Instant::now());
+                last_packet_at = model.satp.last_progress;
+            }
             if active_source.is_some_and(|active| active.ip() != source.ip())
                 && session_id == Some(packet.header.session_id)
             {
@@ -898,12 +919,16 @@ fn run_receiver(
                 }
             }
             rate_measurement.observe(header.sample_counter);
-            last_packet_at = Some(now);
         }
 
-        let radio_tx_requested = {
+        let (radio_tx_requested, tx_chain_connected, lease_live) = {
             let model = radio_model.lock_unpoisoned();
-            model.desired.tx_phase != TxPhase::Rx || model.desired.tx_enabled
+            (
+                (model.desired.tx_phase != TxPhase::Rx || model.desired.tx_enabled)
+                    && !model.desired.two_tone_enabled,
+                model.satp.source == TxAudioSource::Satp,
+                model.satp.live(Instant::now()),
+            )
         };
         let tx_authorized = satp_tx_authorized(
             radio_tx_requested,
@@ -911,6 +936,7 @@ fn run_receiver(
             tx_audio_ingress.pipeline_accepting_audio(),
         );
         if tx_authorized && !previous_tx_authorized {
+            radio_model.lock_unpoisoned().satp.begin_tx_epoch();
             ring.clear();
             let _ = sink.flush();
             playout_clock.reset();
@@ -919,14 +945,17 @@ fn run_receiver(
         previous_tx_authorized = tx_authorized;
 
         let now = Instant::now();
-        let audio_lost =
-            last_packet_at.is_some_and(|at| now.saturating_duration_since(at) > audio_loss_timeout);
+        let audio_lost = !lease_live
+            || last_packet_at
+                .is_none_or(|at| now.saturating_duration_since(at) > audio_loss_timeout);
         if audio_lost && !audio_loss_latched {
             ring.clear();
             let _ = sink.flush();
             playout_clock.reset();
             previous_playout_was_silence = false;
-            status.lock_unpoisoned().audio_loss_events += 1;
+            if last_packet_at.is_some() {
+                status.lock_unpoisoned().audio_loss_events += 1;
+            }
             audio_loss_latched = true;
         } else if !audio_lost {
             audio_loss_latched = false;
@@ -987,6 +1016,7 @@ fn run_receiver(
 
         {
             let mut snapshot = status.lock_unpoisoned();
+            snapshot.tx_chain_connected = tx_chain_connected;
             let current = ring.frames();
             snapshot.buffer_current = current;
             snapshot.buffer_min = snapshot.buffer_min.min(current);
@@ -1032,9 +1062,17 @@ fn run_receiver(
             }
         }
 
+        {
+            let mut model = radio_model.lock_unpoisoned();
+            model.satp.buffer_frames = ring.frames();
+            model.satp.missing_packets = status.lock_unpoisoned().packets_missing;
+        }
+
         if last_status_write.elapsed() >= STATUS_WRITE_PERIOD {
             let snapshot = status.lock_unpoisoned().clone();
-            write_status_file(&snapshot);
+            if persist_status {
+                write_status_file(&snapshot);
+            }
             last_status_write = Instant::now();
         }
         if !did_work {
@@ -1044,7 +1082,9 @@ fn run_receiver(
     {
         let mut snapshot = status.lock_unpoisoned();
         snapshot.running = false;
-        write_status_file(&snapshot);
+        if persist_status {
+            write_status_file(&snapshot);
+        }
     }
     println!("saturn-bridge: SATP receiver stopped");
 }
@@ -1097,6 +1137,7 @@ fn status_json(status: &SatpStatus) -> String {
         concat!(
             "{{\n",
             "  \"version\": 1,\n",
+            "  \"wire_version\": 2,\n  \"authentication\": \"hmac-sha256\",\n",
             "  \"enabled\": {},\n  \"running\": {},\n  \"sink\": {},\n",
             "  \"tx_chain_connected\": {},\n  \"rf_enabled\": {},\n",
             "  \"bind\": {},\n  \"requested_socket_buffer_bytes\": {},\n  \"actual_socket_buffer_bytes\": {},\n",
@@ -1232,6 +1273,76 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn authenticated_udp_reaches_bounded_tx_ingress_and_replay_triggers_disarm_without_rf() {
+        use hmac::{Hmac, Mac};
+        use sha2::Sha256;
+        let receiver = UdpSocket::bind("127.0.0.1:0").unwrap();
+        receiver.set_nonblocking(true).unwrap();
+        let destination = receiver.local_addr().unwrap();
+        let sender = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let mut m = RadioModel::new(2, 14_200_000, 0, 192, 24, 2048, true, 4096, true);
+        m.satp.enabled = true;
+        m.satp.source = TxAudioSource::Satp;
+        let key_hex = m.satp.pair(1, Instant::now()).unwrap();
+        let key: Vec<u8> = (0..32)
+            .map(|i| u8::from_str_radix(&key_hex[i * 2..i * 2 + 2], 16).unwrap())
+            .collect();
+        let model = Arc::new(Mutex::new(m));
+        let (ingress, audio_rx, stats) = TxAudioIngress::bounded();
+        let (tx, commands) = mpsc::channel();
+        let status = Arc::new(Mutex::new(SatpStatus::new(&BridgeConfig::default())));
+        let stop = Arc::new(AtomicBool::new(false));
+        let worker_stop = stop.clone();
+        let worker_status = status.clone();
+        let worker_model = model.clone();
+        let worker = thread::spawn(move || {
+            run_receiver(
+                receiver,
+                None,
+                128,
+                4096,
+                Duration::from_millis(100),
+                worker_model,
+                ingress,
+                tx,
+                false,
+                worker_status,
+                worker_stop,
+            )
+        });
+        let mut last = Vec::new();
+        for n in 0..32 {
+            if n == 16 {
+                let mut m = model.lock_unpoisoned();
+                assert!(m.satp.ready(Instant::now()));
+                m.desired.tx_phase = TxPhase::Armed; // model-only; no radio/WDSP worker
+                stats.mark_pipeline_armed(false); // RF explicitly inhibited
+                assert!(commands.try_recv().is_err());
+            }
+            let mut bytes = packet(n, n as u64 * 128, 0.25);
+            bytes[4] = 2;
+            let mut mac = Hmac::<Sha256>::new_from_slice(&key).unwrap();
+            mac.update(&bytes);
+            bytes.extend_from_slice(&mac.finalize().into_bytes());
+            sender.send_to(&bytes, destination).unwrap();
+            last = bytes;
+            thread::sleep(Duration::from_millis(3));
+        }
+        // Replay valid authenticated media: it must not keep a dead mic alive.
+        for _ in 0..40 {
+            sender.send_to(&last, destination).unwrap();
+            thread::sleep(Duration::from_millis(5));
+        }
+        stop.store(true, Ordering::Relaxed);
+        worker.join().unwrap();
+        assert!(status.lock_unpoisoned().frames_delivered > 0);
+        assert_eq!(status.lock_unpoisoned().dekey_requests, 1);
+        assert!(!stats.snapshot().pipeline_rf_enabled);
+        assert!(commands.try_iter().any(|c| matches!(c, TxCommand::Disarm)));
+        assert!(audio_rx.try_iter().any(|m| matches!(m,crate::tx_audio::TxAudioMessage::Frames(f) if f.source==TxAudioSource::Satp && f.samples.as_slice()[0]==0.25)));
+    }
 
     fn packet(sequence: u32, sample_counter: u64, fill: f32) -> Vec<u8> {
         let mut bytes = vec![0u8; SATP_DATAGRAM_BYTES];
