@@ -135,3 +135,19 @@ describe('3D amplitude diagnostics and geometry contract', () => {
     expect(source).not.toContain('readPixels');
   });
 });
+
+
+describe('Reference Blue / Rainbow presentation', () => {
+  it('retains the previous dark palette exactly while lifting low-level blue detail', () => {
+    expect(referenceColor(.12,'reference-dark')).toEqual([6,13,24]);
+    expect(referenceColor(.3,'reference-dark')).toEqual([24,48,80]);
+    expect(referenceColor(.62,'reference-dark')).toEqual([75,160,102]);
+    const background=referenceColor(.06), dark=referenceColor(.06,'reference-dark');
+    expect(background[2]).toBeGreaterThan(dark[2]!+70);
+    expect(background[2]).toBeGreaterThan(background[0]! * 10);
+    expect(referenceColor(.06)[0]).toBeLessThan(10);
+    expect(referenceColor(.28)[2]).toBe(245);
+    expect(normalizeTerrain({palette:'reference-dark'}).palette).toBe('reference-dark');
+    expect(normalizeWaterfallPalette('reference-dark')).toBe('reference-dark');
+  });
+});

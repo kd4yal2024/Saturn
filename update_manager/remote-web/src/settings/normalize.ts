@@ -21,7 +21,7 @@ import {
 import { clampDemodMode } from '../radio/passband';
 
 const ALLOWED_SAMPLE_RATES = [48000, 96000, 192000, 384000] as const;
-const WATERFALL_PALETTES: readonly WaterfallPalette[] = ['classic', 'ember', 'ice', 'forest', 'enhanced', 'reference'];
+const WATERFALL_PALETTES: readonly WaterfallPalette[] = ['classic', 'ember', 'ice', 'forest', 'enhanced', 'reference', 'reference-dark'];
 const HAM_BAND_LABELS = new Set(['160m', '80m', '60m', '40m', '30m', '20m', '17m', '15m', '12m', '10m', '6m', 'FM']);
 
 export function safeFiniteNumber(value: unknown, fallback = 0): number {

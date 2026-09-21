@@ -11,7 +11,7 @@ export type WbfmDeemphasis = 'OFF' | 'NA_75US' | 'EU_50US';
 export type NoiseBlankerMode = 'OFF' | 'NB1' | 'NB2' | 'NB3';
 export type AgcMode = 'OFF' | 'LONG' | 'SLOW' | 'MEDIUM' | 'FAST';
 export type TxMeterMode = 'peak' | 'avg';
-export type WaterfallPalette = 'classic' | 'ember' | 'ice' | 'forest' | 'enhanced' | 'reference';
+export type WaterfallPalette = 'classic' | 'ember' | 'ice' | 'forest' | 'enhanced' | 'reference' | 'reference-dark';
 
 export type PhonePanels = {
   radio: boolean;

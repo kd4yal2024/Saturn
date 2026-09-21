@@ -6904,6 +6904,17 @@
     [data-terrain="true"] .band-plan-region { background:none; }
     [data-terrain="true"] .spectrum-waterfall-resizer { opacity:.3; }
     [data-terrain="true"] #filter-window .passband-label { font-size:9px; padding:1px 3px; }
+    [data-terrain="true"] #filter-window:not(.tx-filter-window),
+    [data-terrain="true"] #waterfall-filter-window:not(.tx-filter-window) {
+      border-radius:0; border-top:0; border-bottom:0;
+      border-left:1px solid rgba(98,208,255,.42); border-right:1px solid rgba(98,208,255,.42);
+      background:rgba(98,208,255,.04); box-shadow:none;
+    }
+    [data-terrain="true"] #waterfall-filter-window { top:0; bottom:0; }
+    [data-terrain="true"] #filter-window .passband-label {
+      width:max-content; max-width:min(200px, calc(100vw - 48px));
+      border-radius:2px; bottom:28px;
+    }
     #terrain-settings { max-width:560px; width:calc(100% - 24px); max-height:85vh; overflow:auto; background:#0c1422; color:#d9e8f6; border:1px solid #3f586e; border-radius:10px; padding:18px; }
     #terrain-settings::backdrop { background:#0009; }
     #terrain-settings label { display:grid; grid-template-columns:minmax(120px,1fr) minmax(80px,1fr); gap:12px; align-items:center; margin:12px 0; font-size:13px; }
@@ -7184,7 +7195,7 @@
                             <label class="label" for="display-waterfall-palette">Waterfall Palette</label>
                             <select class="field" id="display-waterfall-palette">
                               <option value="classic">Classic</option>
-                              <option value="reference">Reference Rainbow</option>
+                              <option value="reference">Reference Blue / Rainbow</option><option value="reference-dark">Reference Dark</option>
                               <option value="enhanced">Enhanced (Thetis-style)</option>
                               <option value="ember">Ember</option>
                               <option value="ice">Ice</option>
@@ -8367,7 +8378,7 @@
     <output id="terrain-fit-status" class="small" role="status"></output>
     <label>Color gamma <input id="terrain-gamma" type="range" min="0.3" max="3" step="0.05"></label>
     <label>Spatial smoothing <input id="terrain-smoothing" type="range" min="0" max="1" step="0.05"></label>
-    <label>Palette <select id="terrain-palette"><option value="reference">Reference Rainbow</option><option value="classic">Classic</option><option value="ember">Ember</option><option value="ice">Ice</option><option value="forest">Forest</option><option value="enhanced">Enhanced</option></select></label>
+    <label>Palette <select id="terrain-palette"><option value="reference">Reference Blue / Rainbow</option><option value="reference-dark">Reference Dark</option><option value="classic">Classic</option><option value="ember">Ember</option><option value="ice">Ice</option><option value="forest">Forest</option><option value="enhanced">Enhanced</option></select></label>
     <div id="terrain-legend" aria-label="Unlit amplitude color legend"></div><output id="terrain-legend-label" class="small"></output>
     <label>Spectrum / waterfall split <input id="terrain-split" type="range" min="0.2" max="0.65" step="0.01"></label>
     <label>Quality <select id="terrain-quality"><option value="auto">Auto</option><option value="performance">Performance (30 fps target)</option><option value="balanced">Balanced (60 fps target)</option><option value="high">High (60 fps target)</option></select></label>
@@ -9798,7 +9809,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         const contrastScale = clampWaterfallContrast(contrast) / 100;
         const t = Math.max(0, Math.min(1, 0.5 + (rawT - 0.5) * contrastScale));
         const normalizedPalette = normalizeWaterfallPalette(palette);
-        if (normalizedPalette === "reference") return _next.referenceColor(t);
+        if (normalizedPalette === "reference" || normalizedPalette === "reference-dark") return _next.referenceColor(t, normalizedPalette);
         if (normalizedPalette === "enhanced") {
           const level = Number.isFinite(t) ? t : 0;
           const stops = WaterfallRenderer.enhancedStops;
@@ -9962,7 +9973,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       });
     }
     function terrainColor(t, palette) {
-      return palette === "reference" ? _next.referenceColor(t) : waterfallRenderer.colorForDb(t, 0, 1, palette, 100);
+      return palette === "reference" || palette === "reference-dark" ? _next.referenceColor(t, palette) : waterfallRenderer.colorForDb(t, 0, 1, palette, 100);
     }
     function disposeTerrain() {
       clearTimeout(terrainDisposeTimer); terrainDisposeTimer = null;
@@ -14116,11 +14127,12 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         element.style.width = windowWidth;
         element.classList.toggle("tx-filter-window", txOverlay);
         element.classList.toggle("filter-drag-disabled", txOverlay);
-        element.title = txOverlay ? "TX filter window" : "Drag RX filter edges or body";
+        element.title = `${label} · ${txOverlay ? "TX filter window" : "Drag RX filter edges or body"}`;
       }
       const labelElement = $("filter-window-label");
       if (labelElement) {
         labelElement.textContent = label;
+        labelElement.title = label;
       }
       document.querySelectorAll("[data-passband-drag]").forEach((control) => {
         control.setAttribute("aria-disabled", txOverlay ? "true" : "false");

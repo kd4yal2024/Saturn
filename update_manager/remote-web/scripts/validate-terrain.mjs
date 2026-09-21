@@ -228,7 +228,7 @@ try {
     const raw=new Float32Array(spectrumHistory.latestRaw),revision=spectrumHistory.revision;
     const beforeRadio=JSON.stringify(currentRadioPrefs());
     $('view-traditional').click();$('view-3d').click();
-    for(const [id,value] of [['height','0.5'],['gridOpacity','0.3'],['elevation','30'],['gamma','1.2'],['smoothing','0'],['palette','ember'],['palette','reference']]) {
+    for(const [id,value] of [['height','0.5'],['gridOpacity','0.3'],['elevation','30'],['gamma','1.2'],['smoothing','0'],['palette','ember'],['palette','reference-dark'],['palette','reference']]) {
       $('terrain-'+id).value=value;$('terrain-'+id).dispatchEvent(new Event('input',{bubbles:true}));
     }
     for(const [id,value] of [['floor','-145'],['ceiling','-35'],['depth','96']]) { $('terrain-'+id).value=value;$('terrain-'+id).dispatchEvent(new Event('change',{bubbles:true})); }
@@ -259,6 +259,24 @@ try {
     if(!$('terrain-cursor').hidden)throw Error('Cursor mislabeled out-of-span sample');
   })()`);
   report.checks.push('raw cursor appears on sampled data and hides outside the frequency span');
+  report.passbandPresentation=await evaluate(`(()=>{
+    const mode=state.mode,low=state.filterLow,high=state.filterHigh;
+    const results=[];
+    for(const selected of ['USB','LSB']) {
+      state.mode=selected;state.filterLow=50;state.filterHigh=3050;updateFilterOverlay();
+      const coordinates=displayPassbandHz(),element=$('waterfall-filter-window'),label=$('filter-window-label');
+      const before={left:element.style.left,width:element.style.width};
+      setTerrainMode('traditional',false);updateFilterOverlay();
+      if(element.style.left!==before.left||element.style.width!==before.width)throw Error('3D changed passband frequency coordinates');
+      setTerrainMode('3d',false);updateFilterOverlay();
+      const style=getComputedStyle(element);
+      if(style.borderRadius!=='0px'||style.backgroundColor!=='rgba(98, 208, 255, 0.04)'||style.backgroundImage!=='none')throw Error('Passband is not the restrained rectangular overlay');
+      if(!element.title.includes('50–3050 Hz')||!label.title.includes('50–3050 Hz'))throw Error('Actual filter values missing from tooltip');
+      if(selected==='LSB'&&coordinates.endHz>0)throw Error('LSB passband was recentered');
+      results.push({mode:selected,coordinates,...before,fill:style.backgroundColor,label:label.textContent});
+    }
+    state.mode=mode;state.filterLow=low;state.filterHigh=high;updateFilterOverlay();return results;
+  })()`);
   report.tuning=await evaluate(`(()=>{
     const element=$('spectrum-shell'),rect=element.getBoundingClientRect();
     terrainRenderer.configure(state.terrain);terrainRenderer.render(performance.now(),layoutTerrainCanvas(),true);

@@ -32,8 +32,8 @@ command belongs to the view selector. The current server already redirects
   the 20th/99.5th percentiles with headroom and a minimum 45 dB range so quiet
   noise is not expanded across the palette. Strong isolated carriers can saturate
   visually; raw readouts remain unchanged. Use this if the initial range looks
-  predominantly blue. Reference Rainbow uses restrained saturation; gamma 0.85
-  is the new default. Existing saved range/gamma values remain intact until edited.
+  predominantly blue. Reference Blue / Rainbow provides vivid low-level blues; Reference Dark keeps
+  the earlier subdued colors. Gamma 0.85 remains the default. Existing saved range/gamma values remain intact until edited.
 - **Pause** freezes display ingestion/drawing without stopping audio. Changing
   view retains pause. Resume preserves retained history and records elapsed
   missing intervals when the next spectrum arrives. This page had no previous
@@ -229,3 +229,13 @@ as a palette issue. The range remains fixed until explicitly edited or fitted.
 **Grid opacity** is independent of Traditional preferences and defaults to zero.
 Lower waterfall band badges are suppressed while boundary lines remain visible;
 the short history status has a tooltip explaining time direction and boundaries.
+
+
+## Reference Blue / Rainbow and passband refinement
+
+See the [same-data comparisons and validation](REFERENCE_BLUE_REFINEMENT.md).
+Choose **Reference Blue / Rainbow** for vivid instrument colors or **Reference
+Dark** for the preceding subdued palette. Both are unlit and use the same levels
+and height mapping. The 3D RX passband uses a 4% rectangular fill with thin side
+boundaries; full filter values are also available in its tooltip. USB/LSB
+coordinates and all operating gestures are unchanged.

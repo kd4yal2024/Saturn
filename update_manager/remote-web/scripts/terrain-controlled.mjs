@@ -9,15 +9,17 @@ export async function controlled({evaluate, call, output, report, phase}) {
     controlledStyle.textContent='[data-terrain="true"] .display-stack .spectrum-shell > :not(canvas),[data-terrain="true"] .display-stack .waterfall-shell > :not(canvas){visibility:hidden!important}';
     document.head.appendChild(controlledStyle);
   })()`);
-  for(const kind of ['constant','noise','carriers','pulse']) {
+  for(const kind of ['constant','noise','carrier-flat','carriers','broadband','pulse']) {
     const result=await evaluate(`(()=>{
       const kind=${JSON.stringify(kind)},r=terrainRenderer,h=spectrumHistory;
       h.clear('Controlled '+kind);r.configure(state.terrain);
       const bins=new Float32Array(4096);window.controlledRecorded=[];
       for(let t=0;t<1800;t++) {
         for(let i=0;i<bins.length;i++) {
-          let db=kind==='constant'?-110:-134+1.5*Math.sin(i*1.99+t*.31)+.8*Math.sin(i*.17+t*.47);
+          let db=kind==='constant'?-110:kind==='carrier-flat'?-134:-134+1.5*Math.sin(i*1.99+t*.31)+.8*Math.sin(i*.17+t*.47);
           if(kind==='carriers') {if(i===738)db=-112;if(i===2170)db=-58;}
+          if(kind==='carrier-flat' && i===2170)db=-58;
+          if(kind==='broadband' && t>=1675 && t<=1680)db=-104;
           if(kind==='pulse' && t===1680)db=-60;
           bins[i]=db;
         }
@@ -34,6 +36,13 @@ export async function controlled({evaluate, call, output, report, phase}) {
       for(let age=0;age<512;age++) {
         const row=h.row(age),record=controlledRecorded[511-age];
         if(!row || row.some((v,i)=>v!==record.bins[i]) || h.rows[h.physical(age)].timestamp!==record.timestamp)throw Error('Ring chronology differs from recorded frames at '+age);
+      }
+      if(kind==='broadband')for(let age=0;age<512;age++) {
+        const elevated=h.row(age)[100]>-110;
+        if(elevated!==(age>=119&&age<=124))throw Error('Broadband increase has incorrect measured duration');
+      }
+      if(kind==='carrier-flat')for(let age=0;age<512;age++) {
+        if(h.row(age)[2170]!==-58 || h.row(age)[100]!==-134)throw Error('Stationary carrier acquired time variation');
       }
       const front=r.project(0,Math.floor(r.columns/2));const fence=new Uint8Array(4);
       r.gl.readPixels(Math.floor(w/2),lower+Math.max(1,Math.floor((1-front[1])*upper*.5)),1,1,r.gl.RGBA,r.gl.UNSIGNED_BYTE,fence);
@@ -64,6 +73,19 @@ export async function controlled({evaluate, call, output, report, phase}) {
     })()`);
     writeFileSync(join(output,kind+'-raw.png'),Buffer.from(await evaluate('controlledPng'),'base64'));
     const shot=await call('Page.captureScreenshot',{format:'png'});writeFileSync(join(output,kind+'-overlays-off.png'),Buffer.from(shot.data,'base64'));
+    if(phase==='after') {
+      const comparison=await evaluate(`(()=>{
+        const r=terrainRenderer,h=spectrumHistory,revision=h.revision;
+        const before=JSON.stringify([r.project(0,Math.floor(r.columns/2)),r.project(100,Math.floor(r.columns/2))]);
+        r.configure({...state.terrain,palette:'reference-dark'});r.render(performance.now(),layoutTerrainCanvas(),true);
+        window.controlledDarkPng=r.canvas.toDataURL('image/png').split(',')[1];
+        if(before!==JSON.stringify([r.project(0,Math.floor(r.columns/2)),r.project(100,Math.floor(r.columns/2))])||revision!==h.revision)throw Error('Palette changed geometry or history');
+        r.configure(state.terrain);r.render(performance.now(),layoutTerrainCanvas(),true);
+        return {geometryUnchanged:true,historyUnchanged:true};
+      })()`);
+      writeFileSync(join(output,kind+'-dark-raw.png'),Buffer.from(await evaluate('controlledDarkPng'),'base64'));
+      result.paletteIsolation=comparison;
+    }
     report.controlled.push(result);
   }
   // Identical CPU frames fed to the Traditional waterfall with identical palette/range.
