@@ -7,6 +7,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { controlled } from './terrain-controlled.mjs';
+import { cleanupFixtures } from './terrain-cleanup-fixtures.mjs';
 const root=resolve(dirname(fileURLToPath(import.meta.url)),'..');
 const argument = name => process.argv.find(value => value.startsWith('--'+name+'='))?.slice(name.length+3);
 const soakSeconds = Number(argument('soak') || process.env.SATURN_TERRAIN_SOAK_SECONDS || 0);
@@ -53,7 +54,7 @@ window.fixtureFeed=(count=1)=>{
   state.connected=true; state.iqStreaming=false; state.demoMode=false;
   state.dds=14200000; state.vfoA=14200000; state.sampleRate=48000; state.displayZoom=1; state.frequencyLock=false;
   fixtureFeed(600);
-  state.terrain=_next.normalizeTerrain({mode:'3d',diagnostics:true,quality:'balanced'});
+  state.terrain=_next.normalizeTerrain({mode:'3d',diagnostics:true,quality:'balanced',cleanup:0});
   if(!setTerrainMode('3d',false)) throw Error(terrainFailure);
   updateAxes(); updateFilterOverlay(); renderBandEdges();
   const label=document.createElement('div');label.textContent='SYNTHETIC FIXTURE — NOT LIVE RF';label.style.cssText='position:fixed;right:4px;top:2px;z-index:99999;background:#382009;color:#ffe1a1;padding:3px 7px;font:11px monospace';document.body.appendChild(label);
@@ -101,7 +102,9 @@ try {
   const errors=await evaluate('window.fixtureErrors');if(errors?.length)throw Error(errors.join('\n'));
   if(!await evaluate('window.fixtureDone && state.terrainActive'))throw Error('3D initialization did not finish: '+await evaluate('document.body.innerText.slice(-1000)'));
   report.checks.push('actual application initializes the shipped 3D renderer through live display adapter');
-  if(argument('controlled')) {
+  if(argument('cleanup')) {
+    await cleanupFixtures({evaluate,call,output,report,phase:argument('cleanup')});
+  } else if(argument('controlled')) {
     await controlled({evaluate,call,output,report,phase:argument('controlled')});
   } else {
   if(process.env.SATURN_TERRAIN_BASELINE) {
@@ -228,13 +231,17 @@ try {
     const raw=new Float32Array(spectrumHistory.latestRaw),revision=spectrumHistory.revision;
     const beforeRadio=JSON.stringify(currentRadioPrefs());
     $('view-traditional').click();$('view-3d').click();
-    for(const [id,value] of [['height','0.5'],['gridOpacity','0.3'],['elevation','30'],['gamma','1.2'],['smoothing','0'],['palette','ember'],['palette','reference-dark'],['palette','reference']]) {
+    for(const [id,value] of [['height','0.5'],['cleanup','0.6'],['gridOpacity','0.3'],['elevation','30'],['gamma','1.2'],['smoothing','0'],['palette','ember'],['palette','reference-dark'],['palette','reference']]) {
       $('terrain-'+id).value=value;$('terrain-'+id).dispatchEvent(new Event('input',{bubbles:true}));
     }
     for(const [id,value] of [['floor','-145'],['ceiling','-35'],['depth','96']]) { $('terrain-'+id).value=value;$('terrain-'+id).dispatchEvent(new Event('change',{bubbles:true})); }
     if(state.terrain.floor!==-145 || state.terrain.ceiling!==-35 || state.terrain.depth!==96)throw Error('Numeric 3D controls failed to commit');
     $('display-pause').click();$('view-traditional').click();$('view-3d').click();
     if(!state.displayPaused)throw Error('Switch lost pause');$('display-pause').click();
+    $('terrain-cleanupBaseline').value='-129';$('terrain-cleanupBaseline').dispatchEvent(new Event('change',{bubbles:true}));
+    if(state.terrain.cleanupBaseline!==-129)throw Error('Manual cleanup baseline failed');
+    $('terrain-noise-estimate').click();
+    if(state.terrain.cleanupBaseline!==null||spectrumHistory.noiseFloor===null)throw Error('Noise re-estimate failed');
     $('terrain-fit-range').click();
     const fitted=_next.fitTerrainRange(raw);
     if(!fitted || state.terrain.floor!==fitted.floor || state.terrain.ceiling!==fitted.ceiling || state.terrain.gamma!==fitted.gamma)throw Error('One-shot range fit failed');

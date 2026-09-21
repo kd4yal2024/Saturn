@@ -220,3 +220,6 @@ if (terrainResult.status !== 0) throw new Error('Integrated terrain browser vali
 
 const controlledResult = spawnSync(process.execPath, [resolve(root, 'scripts/validate-terrain.mjs'), '--controlled=after'], { stdio: 'inherit', timeout: 180000 });
 if (controlledResult.status !== 0) throw new Error('Controlled terrain mapping/geometry validation failed');
+
+const cleanupResult = spawnSync(process.execPath, [resolve(root, 'scripts/validate-terrain.mjs'), '--cleanup=after'], { stdio: 'inherit', timeout: 180000 });
+if (cleanupResult.status !== 0) throw new Error('Noise cleanup weak-signal browser validation failed');

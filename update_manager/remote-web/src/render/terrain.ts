@@ -1,3 +1,4 @@
+import { cleanupNormalized, CLEANUP_GLSL } from '../dsp/display-cleanup';
 import { SpectrumHistory, MISSING_LEVEL, levelStatistics } from '../dsp/spectrum-history';
 import { normalizeTerrain, type TerrainSettings } from '../settings/terrain';
 
@@ -10,6 +11,7 @@ uniform float floorDb, ceilingDb, exaggeration, elevation, smoothing;
 uniform bool terrain, outline;
 out float level;
 out float valid;
+${CLEANUP_GLSL}
 float sampleLevel(int age, int col) {
   if(age >= count) return -1000.0;
   int physical = (head - age + capacity) % capacity;
@@ -34,7 +36,7 @@ void main() {
   float z = float(age) / float(rows-1);
   level = sampleLevel(age, col);
   valid = level > -999.0 ? 1.0 : 0.0;
-  float h = clamp((level-floorDb)/(ceilingDb-floorDb),0.0,1.0);
+  float h = displayNormalized(level);
   float w = 1.0 + 0.18*z;
   // Front/seam z=0 spans the complete frequency ruler. Older rows recede.
   float x = float(col)/float(columns-1)*2.0-1.0;
@@ -53,6 +55,7 @@ uniform bool terrain;
 in float level;
 in float valid;
 out vec4 color;
+${CLEANUP_GLSL}
 void main() {
   float db = level;
   if(terrain) { if(valid < 0.999) discard; }
@@ -77,7 +80,7 @@ void main() {
     }
     if(missing || db < -999.0) { color=vec4(0.08,0.085,0.10,1); return; }
   }
-  float t = pow(clamp((db-floorDb)/(ceilingDb-floorDb),0.0,1.0),gammaValue);
+  float t = pow(displayNormalized(db),gammaValue);
   color = texture(palette,vec2((t*1023.0+0.5)/1024.0,0.5));
 }`;
 
@@ -201,6 +204,7 @@ export class TerrainRenderer {
     const ints = { head: history.head, width: history.width, capacity: history.capacity, count: history.count, columns: this.columns, rows: this.rows };
     for (const [key, value] of Object.entries(ints)) gl.uniform1i(this.location(key), value);
     const floats = { floorDb: this.settings.floor, ceilingDb: this.settings.ceiling, gammaValue: this.settings.gamma,
+      noiseFloor: this.noiseBaseline, cleanupStrength: this.settings.cleanup,
       exaggeration: this.settings.height, elevation: this.settings.elevation, smoothing: this.settings.smoothing };
     for (const [key, value] of Object.entries(floats)) gl.uniform1f(this.location(key), value);
     gl.disable(gl.SCISSOR_TEST); gl.clearColor(.004,.012,.047,1); gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
@@ -232,11 +236,12 @@ export class TerrainRenderer {
     }
     this.lastDraw = now; return true;
   }
+  get noiseBaseline(): number { return this.settings.cleanupBaseline ?? this.history.noiseFloor ?? this.settings.floor; }
   /** CPU projection exactly matches the vertex shader; used for ray/triangle picking. */
   project(age: number, col: number): [number, number, number] {
     const z = age / Math.max(1, this.rows - 1), w = 1 + .18 * z;
     const db = this.history.peak(age, col, this.columns, this.settings.smoothing);
-    const h = Math.max(0, Math.min(1, (db - this.settings.floor) / (this.settings.ceiling - this.settings.floor)));
+    const h = cleanupNormalized(db, this.settings.floor, this.settings.ceiling, this.noiseBaseline, this.settings.cleanup);
     return [((col / (this.columns - 1) * 2 - 1) / w + 1) / 2,
       (1 - (-1 + z * (.5 + this.settings.elevation / 100) + h * this.settings.height * .75) / w) / 2, z * .8 / w];
   }
@@ -280,7 +285,10 @@ export class TerrainRenderer {
       storedBucket: levelStatistics(this.history.row(0) ?? new Float32Array(), this.settings.floor, this.settings.ceiling),
       floor: this.settings.floor, ceiling: this.settings.ceiling, colorGamma: this.settings.gamma,
       heightControl: this.settings.height, heightScale: this.settings.height * .75,
-      heightOffset: 0, heightMapping: 'linear clamped dB normalization; scale is clip-space height',
+      heightOffset: 0, heightMapping: 'clamped dB normalization with optional display-only soft knee; scale is clip-space height',
+      cleanupStrength: this.settings.cleanup, cleanupBaseline: this.noiseBaseline,
+      baselineSource: this.settings.cleanupBaseline === null ? 'held first-frame median / explicit re-estimate' : 'manual',
+      kneeStartDb: Math.min(this.noiseBaseline+8,this.settings.ceiling)-4, unchangedAboveDb: Math.min(this.noiseBaseline+8,this.settings.ceiling),
       scalarTexture: 'R32F / highp sampler2D / NEAREST texelFetch',
     };
     const rect = this.canvas.getBoundingClientRect();

@@ -1,3 +1,4 @@
+import { estimateNoiseFloor } from './display-cleanup';
 export type SpectrumMapping = {
   receiver: string; centerHz: number; spanHz: number; sampleRate: number;
   sourceBins: number; units: 'relative dB';
@@ -15,6 +16,8 @@ export const MISSING_LEVEL = -1000;
 export class SpectrumHistory {
   readonly capacity = 512;
   readonly maxBytes = 32 * 1024 * 1024;
+  noiseFloor: number | null = null;
+  reestimateNoiseFloor(): void { this.noiseFloor = estimateNoiseFloor(this.latestRaw); }
   width = 0; head = -1; count = 0; epoch = 0; revision = 0;
   cadenceMs = 50; accepted = 0; aggregated = 0; missing = 0; rejected = 0;
   boundary = 'Waiting for live spectrum';
@@ -25,6 +28,7 @@ export class SpectrumHistory {
   private lastTimestamp = -Infinity; private firstTimestamp = NaN;
   coalescedSourceUpdates = 0;
   clear(reason: string): void {
+    this.noiseFloor = null;
     this.head = -1; this.count = 0; this.bucket = -Infinity;
     this.lastSequence = -1; this.lastTimestamp = -Infinity; this.firstTimestamp = NaN;
     this.rows.fill(null); this.data.fill(MISSING_LEVEL); this.latestRaw.fill(MISSING_LEVEL);
@@ -52,6 +56,7 @@ export class SpectrumHistory {
     if (!Number.isFinite(this.firstTimestamp)) this.firstTimestamp = timestamp;
     this.lastSequence = sequence; this.lastTimestamp = timestamp;
     this.latestRaw.set(bins); this.accepted++;
+    if (this.noiseFloor === null) this.reestimateNoiseFloor();
     const bucket = Math.floor(timestamp / cadence);
     const steps = this.head < 0 ? 1 : Math.max(0, bucket - this.bucket);
     if (steps === 0) this.aggregated++;

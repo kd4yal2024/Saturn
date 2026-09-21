@@ -88,9 +88,10 @@ intervals are never joined by a surface.
 
 The constrained projection leaves the front frequency edge horizontal. The
 front edge is a thin measured outline, with no opaque skirt or per-row walls.
-The surface and waterfall share unlit amplitude colors. The height remains linear
-in clamped dB normalization, with zero height offset and a clip-space multiplier
-of 0.75 times the Surface height control. CPU picking uses the same projection, perspective-correct
+The surface and waterfall share unlit amplitude colors. With cleanup Off, height remains linear
+in clamped dB normalization. Optional cleanup applies the documented monotone
+soft knee near a held noise baseline before color and height mapping. There is
+zero height offset and a clip-space multiplier of 0.75 times Surface height. CPU picking uses the same projection, perspective-correct
 triangle interpolation and sampled source levels; there are no runtime GPU
 readbacks. Peak reduction across source bins is used for mesh columns and
 waterfall pixels. When the waterfall is shorter than its 512 rows, each pixel
@@ -239,3 +240,14 @@ Dark** for the preceding subdued palette. Both are unlit and use the same levels
 and height mapping. The 3D RX passband uses a 4% rectangular fill with thin side
 boundaries; full filter values are also available in its tooltip. USB/LSB
 coordinates and all operating gestures are unchanged.
+
+
+## Noise-floor cleanup
+
+See [mapping, weak-signal proof and identical-data comparisons](NOISE_FLOOR_CLEANUP.md).
+**Noise-floor cleanup** defaults to 60%; set it to zero for the preceding view.
+The baseline estimate is held per history segment, with an explicit **Re-estimate
+noise baseline** button and manual override. No blur or time averaging is added.
+Palette/gamma, height exaggeration and floor/ceiling remain separate controls.
+Measurements and the raw cursor stay unchanged; cleanup softens only the displayed
+near-floor values. Above baseline +8 dB, the original mapping is restored.

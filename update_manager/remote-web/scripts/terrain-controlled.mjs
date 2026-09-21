@@ -4,7 +4,7 @@ import { join } from 'node:path';
 export async function controlled({evaluate, call, output, report, phase}) {
   report.controlled=[];
   await evaluate(`(()=>{
-    state.terrain={...state.terrain,floor:-140,ceiling:-40,gamma:1,height:.65,smoothing:0,quality:'balanced',depth:128};
+    state.terrain={...state.terrain,floor:-140,ceiling:-40,gamma:1,cleanup:0,height:.65,smoothing:0,quality:'balanced',depth:128};
     window.controlledStyle=document.createElement('style');
     controlledStyle.textContent='[data-terrain="true"] .display-stack .spectrum-shell > :not(canvas),[data-terrain="true"] .display-stack .waterfall-shell > :not(canvas){visibility:hidden!important}';
     document.head.appendChild(controlledStyle);

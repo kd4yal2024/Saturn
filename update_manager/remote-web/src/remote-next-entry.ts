@@ -1,3 +1,4 @@
+import { cleanupNormalized } from './dsp/display-cleanup';
 import { SpectrumHistory } from './dsp/spectrum-history';
 import { TerrainRenderer } from './render/terrain';
 import { normalizeTerrain, referenceColor, fitTerrainRange } from './settings/terrain';
@@ -227,7 +228,7 @@ import {
 import { preferredResponsiveLayout } from './ui/responsive-layout';
 
 const api = {
-  SpectrumHistory, TerrainRenderer, normalizeTerrain, referenceColor, fitTerrainRange,
+  SpectrumHistory, TerrainRenderer, cleanupNormalized, normalizeTerrain, referenceColor, fitTerrainRange,
   // Controller / runtime
 
   // TCI parsing
