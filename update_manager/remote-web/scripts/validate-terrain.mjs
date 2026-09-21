@@ -6,13 +6,14 @@ import { dirname, resolve, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
+import { controlled } from './terrain-controlled.mjs';
 const root=resolve(dirname(fileURLToPath(import.meta.url)),'..');
 const argument = name => process.argv.find(value => value.startsWith('--'+name+'='))?.slice(name.length+3);
 const soakSeconds = Number(argument('soak') || process.env.SATURN_TERRAIN_SOAK_SECONDS || 0);
 const output=argument('output') || process.env.SATURN_TERRAIN_OUTPUT || mkdtempSync(join(tmpdir(),'saturn-terrain-'));
 mkdirSync(output,{recursive:true});
-const bundle=readFileSync(join(root,'dist/saturn-remote-next.js'),'utf8');
-const source=readFileSync(resolve(root,'../templates/saturn-remote-next.html'),'utf8');
+const bundle=readFileSync(argument('bundle') || join(root,'dist/saturn-remote-next.js'),'utf8');
+const source=readFileSync(argument('template') || resolve(root,'../templates/saturn-remote-next.html'),'utf8');
 const fixture = `
 window.fixtureDone=false;
 window.fixtureErrors=[];
@@ -100,6 +101,9 @@ try {
   const errors=await evaluate('window.fixtureErrors');if(errors?.length)throw Error(errors.join('\n'));
   if(!await evaluate('window.fixtureDone && state.terrainActive'))throw Error('3D initialization did not finish: '+await evaluate('document.body.innerText.slice(-1000)'));
   report.checks.push('actual application initializes the shipped 3D renderer through live display adapter');
+  if(argument('controlled')) {
+    await controlled({evaluate,call,output,report,phase:argument('controlled')});
+  } else {
   if(process.env.SATURN_TERRAIN_BASELINE) {
     const baseline=readFileSync(process.env.SATURN_TERRAIN_BASELINE,'utf8');
     const start=baseline.indexOf('    class SpectrumRenderer {'),end=baseline.indexOf('    const spectrumRenderer =',start);
@@ -179,10 +183,10 @@ try {
       const rect=r.canvas.getBoundingClientRect(),upper=Math.round($('spectrum-shell').getBoundingClientRect().height/rect.height*r.canvas.height),lower=r.canvas.height-upper;
       const bytes=new Uint8Array(upper*4);r.gl.readPixels(Math.floor(r.canvas.width/2),lower,1,upper,r.gl.RGBA,r.gl.UNSIGNED_BYTE,bytes);
       let raised=0;for(let y=0;y<upper;y++)if(bytes[y*4+2]>30)raised=y+1;
-      const expected=(db+140)/100*.65*1.25/2*upper;
+      const expected=(db+140)/100*.65*.75/2*upper;
       if(Math.abs(raised-expected)>2)throw Error('GPU height disagrees with dB level: '+db+' height='+raised+' expected='+expected);
       const color=terrainColor((db+140)/100,'reference');
-      if(color.some((v,i)=>Math.abs(v-bytes[4+i])>3))throw Error('GPU color disagrees with sampled dB level');
+      if(color.some((v,i)=>Math.abs(v-bytes[(raised-1)*4+i])>3))throw Error('GPU color disagrees with sampled dB level');
       results.push({db,raisedPixels:raised,expectedPixels:expected});
     }
     const raw=spectrumHistory.row(0)[0];
@@ -191,7 +195,7 @@ try {
     state.terrain=saved;fixtureFeed(600);terrainRenderer.configure(saved);terrainRenderer.render(performance.now(),layoutTerrainCanvas(),true);
     return results;
   })()`);
-  report.checks.push('actual GPU front-curtain heights and colors track known 20 dB amplitude steps within 2 pixels / 3 RGB units');
+  report.checks.push('actual GPU leading-outline heights and colors track known 20 dB amplitude steps within 2 pixels / 3 RGB units');
   report.impulse=await evaluate(`(()=>{
     const r=terrainRenderer;r.configure(state.terrain);r.render(performance.now(),layoutTerrainCanvas(),true);
     const rect=r.canvas.getBoundingClientRect(),upper=Math.round($('spectrum-shell').getBoundingClientRect().height/rect.height*r.canvas.height),lower=r.canvas.height-upper;
@@ -224,7 +228,7 @@ try {
     const raw=new Float32Array(spectrumHistory.latestRaw),revision=spectrumHistory.revision;
     const beforeRadio=JSON.stringify(currentRadioPrefs());
     $('view-traditional').click();$('view-3d').click();
-    for(const [id,value] of [['height','0.5'],['elevation','30'],['gamma','1.2'],['smoothing','0'],['palette','ember'],['palette','reference']]) {
+    for(const [id,value] of [['height','0.5'],['gridOpacity','0.3'],['elevation','30'],['gamma','1.2'],['smoothing','0'],['palette','ember'],['palette','reference']]) {
       $('terrain-'+id).value=value;$('terrain-'+id).dispatchEvent(new Event('input',{bubbles:true}));
     }
     for(const [id,value] of [['floor','-145'],['ceiling','-35'],['depth','96']]) { $('terrain-'+id).value=value;$('terrain-'+id).dispatchEvent(new Event('change',{bubbles:true})); }
@@ -357,6 +361,7 @@ try {
     return {traditional:!state.terrainActive,reason:terrainFailure,historyPreserved:spectrumHistory.revision===revision};
   })()`);
   report.checks.push('unsupported WebGL2 stays Traditional with a visible reason and retained history');
+  }
   report.errors=await evaluate('fixtureErrors');if(report.errors.length)throw Error(report.errors.join('\n'));
   report.pass=true;
 }catch(error){report.pass=false;report.errors.push(String(error.stack||error));process.exitCode=1;}

@@ -217,3 +217,6 @@ console.log(`Output: ${output}`);
 // existing checks above are skipped or replaced.
 const terrainResult = spawnSync(process.execPath, [resolve(root, 'scripts/validate-terrain.mjs')], { stdio: 'inherit', timeout: 180000 });
 if (terrainResult.status !== 0) throw new Error('Integrated terrain browser validation failed');
+
+const controlledResult = spawnSync(process.execPath, [resolve(root, 'scripts/validate-terrain.mjs'), '--controlled=after'], { stdio: 'inherit', timeout: 180000 });
+if (controlledResult.status !== 0) throw new Error('Controlled terrain mapping/geometry validation failed');

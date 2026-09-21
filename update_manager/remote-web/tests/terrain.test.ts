@@ -113,3 +113,25 @@ describe('manual 3D range fit', () => {
     expect(fitTerrainRange(new Float32Array([-1000, NaN, -112]))).toEqual({floor: -118, ceiling: -73, gamma: .85});
   });
 });
+
+
+describe('3D amplitude diagnostics and geometry contract', () => {
+  it('reports signed raw levels and clipping without changing samples', async () => {
+    const {levelStatistics}=await import('../src/dsp/spectrum-history');
+    const raw=new Float32Array([-150,-140,-120,-100,-40,-30,NaN,-1000]);
+    const before=raw.slice();
+    expect(levelStatistics(raw,-140,-40)).toEqual({samples:6,min:-150,median:-120,p95:-40,max:-30,
+      normalizedMedian:.2,clampedNormalizedMedian:.2,clippedFloorPercent:100/3,clippedCeilingPercent:100/3});
+    expect(raw).toEqual(before);
+    expect(levelStatistics(new Float32Array([-1000,NaN]),-140,-40)).toBeNull();
+    expect(normalizeTerrain({gridOpacity:4}).gridOpacity).toBe(1);
+    expect(normalizeTerrain({gridOpacity:NaN}).gridOpacity).toBe(0);
+  });
+  it('uses high precision scalar sampling and an outline without skirts', () => {
+    const source=readFileSync('src/render/terrain.ts','utf8');
+    expect(source.match(/uniform highp sampler2D levels;/g)).toHaveLength(2);
+    expect(source).toContain('gl.drawArrays(gl.LINE_STRIP, 0, this.columns)');
+    expect(source).not.toContain('skirt');
+    expect(source).not.toContain('readPixels');
+  });
+});

@@ -104,3 +104,15 @@ export class SpectrumHistory {
   get retainedMs(): number { return Math.max(0, this.count - 1) * this.cadenceMs; }
   get bytes(): number { return this.data.byteLength + this.latestRaw.byteLength + this.versions.byteLength + this.capacity * 128; }
 }
+
+/** On-demand CPU diagnostics; never reads GPU pixels or changes source levels. */
+export function levelStatistics(levels: Float32Array, floor: number, ceiling: number) {
+  const values = Array.from(levels).filter(v => Number.isFinite(v) && v > -999).sort((a,b) => a-b);
+  if (!values.length) return null;
+  const q = (fraction: number) => values[Math.floor((values.length-1)*fraction)]!;
+  const normalizedMedian = (q(.5)-floor)/(ceiling-floor);
+  return { samples: values.length, min: values[0], median: q(.5), p95: q(.95), max: values[values.length-1],
+    normalizedMedian, clampedNormalizedMedian: Math.max(0,Math.min(1,normalizedMedian)),
+    clippedFloorPercent: 100*values.filter(v=>v<=floor).length/values.length,
+    clippedCeilingPercent: 100*values.filter(v=>v>=ceiling).length/values.length };
+}

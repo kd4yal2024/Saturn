@@ -1,13 +1,13 @@
-import { SpectrumHistory, MISSING_LEVEL } from '../dsp/spectrum-history';
+import { SpectrumHistory, MISSING_LEVEL, levelStatistics } from '../dsp/spectrum-history';
 import { normalizeTerrain, type TerrainSettings } from '../settings/terrain';
 
 const VERTEX = `#version 300 es
 precision highp float;
 precision highp int;
-uniform sampler2D levels;
+uniform highp sampler2D levels;
 uniform int head, width, columns, rows, capacity, count;
 uniform float floorDb, ceilingDb, exaggeration, elevation, smoothing;
-uniform bool terrain, skirt;
+uniform bool terrain, outline;
 out float level;
 out float valid;
 float sampleLevel(int age, int col) {
@@ -29,8 +29,8 @@ void main() {
     vec2 p = vec2(float((gl_VertexID << 1) & 2), float(gl_VertexID & 2));
     gl_Position = vec4(p * 2.0 - 1.0, 0, 1); level = 0.0; valid = 1.0; return;
   }
-  int col = skirt ? gl_VertexID / 2 : gl_VertexID % columns;
-  int age = skirt ? 0 : gl_VertexID / columns;
+  int col = gl_VertexID % columns;
+  int age = outline ? 0 : gl_VertexID / columns;
   float z = float(age) / float(rows-1);
   level = sampleLevel(age, col);
   valid = level > -999.0 ? 1.0 : 0.0;
@@ -38,14 +38,14 @@ void main() {
   float w = 1.0 + 0.18*z;
   // Front/seam z=0 spans the complete frequency ruler. Older rows recede.
   float x = float(col)/float(columns-1)*2.0-1.0;
-  if(skirt && (gl_VertexID % 2) == 0) h = 0.0;
-  float y = -1.0 + z*(0.5+elevation/100.0) + h*exaggeration*1.25;
+  float y = -1.0 + z*(0.5+elevation/100.0) + h*exaggeration*.75;
   gl_Position = vec4(x, y, z*0.8, w);
 }`;
 const FRAGMENT = `#version 300 es
 precision highp float;
 precision highp int;
-uniform sampler2D levels, palette;
+uniform highp sampler2D levels;
+uniform lowp sampler2D palette;
 uniform int head, width, capacity, count;
 uniform float floorDb, ceilingDb, gammaValue;
 uniform vec2 viewport;
@@ -210,10 +210,11 @@ export class TerrainRenderer {
     gl.drawArrays(gl.TRIANGLES, 0, 3);
     gl.viewport(0, lower, w, upper); gl.enable(gl.DEPTH_TEST); gl.depthFunc(gl.LEQUAL);
     gl.uniform1i(this.location('terrain'), 1);
-    gl.uniform1i(this.location('skirt'), 0);
+    gl.uniform1i(this.location('outline'), 0);
     gl.drawElements(gl.TRIANGLE_STRIP, this.indexCount, gl.UNSIGNED_INT, 0);
-    gl.uniform1i(this.location('skirt'), 1);
-    gl.drawArrays(gl.TRIANGLE_STRIP, 0, this.columns * 2);
+    gl.uniform1i(this.location('outline'), 1);
+    // Only the measured leading edge; no opaque wall to the baseline.
+    gl.drawArrays(gl.LINE_STRIP, 0, this.columns);
     const elapsed = performance.now() - started;
     this.samples.push(elapsed); if (this.samples.length > 240) this.samples.shift();
     if (Number.isFinite(this.lastDraw)) { this.intervals.push(now - this.lastDraw); if (this.intervals.length > 240) this.intervals.shift(); }
@@ -237,7 +238,7 @@ export class TerrainRenderer {
     const db = this.history.peak(age, col, this.columns, this.settings.smoothing);
     const h = Math.max(0, Math.min(1, (db - this.settings.floor) / (this.settings.ceiling - this.settings.floor)));
     return [((col / (this.columns - 1) * 2 - 1) / w + 1) / 2,
-      (1 - (-1 + z * (.5 + this.settings.elevation / 100) + h * this.settings.height * 1.25) / w) / 2, z * .8 / w];
+      (1 - (-1 + z * (.5 + this.settings.elevation / 100) + h * this.settings.height * .75) / w) / 2, z * .8 / w];
   }
   pick(x: number, y: number): { fraction: number; age: number; db: number } | null {
     let best: { fraction: number; age: number; db: number } | null = null, depth = Infinity;
@@ -267,21 +268,25 @@ export class TerrainRenderer {
         best = { fraction, age: rowAge, db: raw[Math.min(raw.length-1,Math.max(0,Math.round(fraction*(raw.length-1))))]! }; depth=d;
       }
     }
-    if (!best && this.history.row(0) && x >= 0 && x <= 1) {
-      const col = Math.min(this.columns - 2, Math.floor(x * (this.columns - 1)));
-      const a = this.project(0, col), b = this.project(0, col + 1);
-      const top = a[1] + (b[1] - a[1]) * (x - a[0]) / (b[0] - a[0]);
-      if (y >= top && y <= 1) {
-        const raw = this.history.row(0)!;
-        best = { fraction: x, age: 0, db: raw[Math.round(x * (raw.length - 1))]! };
-      }
-    }
     return best;
   }
   diagnostics(): Record<string, unknown> {
     const sorted = [...this.samples].sort((a,b)=>a-b), intervals=[...this.intervals].sort((a,b)=>a-b);
     const p = (a:number[], q:number) => a[Math.min(a.length-1,Math.floor(a.length*q))] ?? 0;
-    return { quality: this.tier, requestedQuality: this.settings.quality, targetFps: TIERS[this.tier].fps,
+    const mapping = this.history.rows[this.history.head];
+    const amplitude = {
+      units: mapping?.units ?? 'relative dB',
+      source: levelStatistics(this.history.latestRaw, this.settings.floor, this.settings.ceiling),
+      storedBucket: levelStatistics(this.history.row(0) ?? new Float32Array(), this.settings.floor, this.settings.ceiling),
+      floor: this.settings.floor, ceiling: this.settings.ceiling, colorGamma: this.settings.gamma,
+      heightControl: this.settings.height, heightScale: this.settings.height * .75,
+      heightOffset: 0, heightMapping: 'linear clamped dB normalization; scale is clip-space height',
+      scalarTexture: 'R32F / highp sampler2D / NEAREST texelFetch',
+    };
+    const rect = this.canvas.getBoundingClientRect();
+    return { amplitude, cssSize: `${rect.width} × ${rect.height}`, devicePixelRatio: window.devicePixelRatio,
+      effectivePixelRatio: rect.width ? this.canvas.width / rect.width : 0,
+      quality: this.tier, requestedQuality: this.settings.quality, targetFps: TIERS[this.tier].fps,
       backingStore: `${this.canvas.width} × ${this.canvas.height}`, maxTextureDimension: this.maxDimension,
       recentSeconds: Math.max(0, Math.min(this.rows, this.history.count) - 1) * this.history.cadenceMs / 1000,
       historyEpoch: this.history.epoch, historyBoundary: this.history.boundary, reason: this.reason, sourceBins: this.history.rows[this.history.head]?.sourceBins ?? 0,

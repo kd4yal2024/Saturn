@@ -87,8 +87,10 @@ restart, and invalid-data triangles are discarded: newest/oldest or missing
 intervals are never joined by a surface.
 
 The constrained projection leaves the front frequency edge horizontal. The
-front curtain closes the raised surface to the waterfall. Both share unlit
-amplitude colors. CPU picking uses the same projection, perspective-correct
+front edge is a thin measured outline, with no opaque skirt or per-row walls.
+The surface and waterfall share unlit amplitude colors. The height remains linear
+in clamped dB normalization, with zero height offset and a clip-space multiplier
+of 0.75 times the Surface height control. CPU picking uses the same projection, perspective-correct
 triangle interpolation and sampled source levels; there are no runtime GPU
 readbacks. Peak reduction across source bins is used for mesh columns and
 waterfall pixels. When the waterfall is shorter than its 512 rows, each pixel
@@ -180,7 +182,7 @@ loads the full current template and built runtime, blocks socket construction,
 labels screenshots **synthetic**, and exercises the production adapter and
 renderer. It includes steady and nearby carriers, a voice-like envelope, a weak
 carrier, impulses, drifting tone, known amplitude steps and missing intervals.
-It checks numerical waterfall pixels, GPU heights at known amplitude steps,
+It checks numerical waterfall pixels, GPU leading-outline heights at known amplitude steps,
 compressed single-row impulses, projection, 100 view cycles, presentation
 command isolation, pause state, hidden drawing, loss/recovery, unsupported
 WebGL2, actual 30-second inactive-cache expiry, page-restoration handlers,
@@ -212,3 +214,18 @@ within 30 seconds. To restore an old exported profile, import it: missing terrai
 settings default to Traditional. For code rollback, revert the feature's source,
 HTML and seam changes together, then rebuild the bundle and run `check:seam`.
 No backend, radio firmware, service or route rollback is needed.
+
+
+## Targeted rendering correction
+
+See [rendering diagnosis and controlled before/after evidence](RENDERING_CORRECTION.md).
+**Display Settings → Level / rendering diagnostics** shows CPU source and stored
+bucket distributions, floor/ceiling, normalized median, clipping percentages,
+height scale/offset, and effective pixel density. It updates once per second
+while enabled. It performs no GPU readback. Use these values before fitting a
+manual range; an unexpectedly high normalized background must not be dismissed
+as a palette issue. The range remains fixed until explicitly edited or fitted.
+
+**Grid opacity** is independent of Traditional preferences and defaults to zero.
+Lower waterfall band badges are suppressed while boundary lines remain visible;
+the short history status has a tooltip explaining time direction and boundaries.
