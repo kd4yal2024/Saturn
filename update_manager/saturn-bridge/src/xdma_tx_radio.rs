@@ -872,13 +872,21 @@ impl Drop for DirectTxState {
 }
 
 pub(crate) struct DirectXdmaTxRadio {
+    // Stop/join the codec worker before releasing hardware ownership.
+    monitor: crate::tx_monitor::TxMonitor,
     state: Mutex<DirectTxState>,
 }
 
 impl DirectXdmaTxRadio {
-    pub(crate) fn open(power_meter_scale: f32) -> Result<Self, XdmaError> {
+    pub(crate) fn open(
+        power_meter_scale: f32,
+        model: std::sync::Arc<Mutex<RadioModel>>,
+    ) -> Result<Self, XdmaError> {
+        let state = DirectTxState::open(power_meter_scale)?;
+        let monitor = crate::tx_monitor::TxMonitor::spawn(model)?;
         Ok(Self {
-            state: Mutex::new(DirectTxState::open(power_meter_scale)?),
+            state: Mutex::new(state),
+            monitor,
         })
     }
 
@@ -909,6 +917,12 @@ impl DirectXdmaTxRadio {
 }
 
 impl TxRadio for DirectXdmaTxRadio {
+    fn monitor_iq(&self, iq: &[f32], mode: crate::radio_model::DemodMode) {
+        self.monitor.push(iq, mode);
+    }
+    fn stop_monitor(&self) {
+        self.monitor.stop();
+    }
     fn configure_puresignal_feedback(&self) -> TxRadioResult {
         Err("PureSignal is not supported by the production direct-XDMA backend".into())
     }

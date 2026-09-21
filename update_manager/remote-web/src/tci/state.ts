@@ -104,6 +104,9 @@ export type TciRadioState = {
   remoteClientRole: TciClientRole | null;
   remoteClientId: string | null;
   txDrive: number;
+  txMonitorSupported?: boolean;
+  txMonitorEnabled?: boolean;
+  txMonitorLevelDb?: number;
   remoteTxRfEnabled: boolean | null;
   txEnabled: boolean;
   moxRequested: boolean;

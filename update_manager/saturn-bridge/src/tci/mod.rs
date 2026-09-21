@@ -635,6 +635,8 @@ impl TciFrontend {
             model.desired.tx_mic_gain_db
         ));
         self.send_text(format!("trx:0,{};", model.desired.tx_enabled));
+        self.send_text(format!("tx_monitor_supported:0,{};tx_monitor:0,{};tx_monitor_level:0,{:.1};",
+            model.desired.tx_monitor_available, model.desired.tx_monitor_enabled, model.desired.tx_monitor_level_db));
         self.send_text(format!("tx_frequency:{};", model.desired.tx_frequency_hz));
         self.send_text(format!("tx_state:0,{};", model.desired.tx_phase));
         self.send_text(format!(

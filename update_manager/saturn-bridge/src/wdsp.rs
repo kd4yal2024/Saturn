@@ -2225,6 +2225,11 @@ impl WdspTxEngine {
         }
     }
 
+    /// Actual DSP mode; requested changes may be deferred until the next arm.
+    pub(crate) fn monitor_mode(&self) -> DemodMode {
+        self.mode
+    }
+
     pub fn diagnostics(&self) -> TxDspDiagnostics {
         unsafe {
             TxDspDiagnostics {

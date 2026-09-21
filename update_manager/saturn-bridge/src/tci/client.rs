@@ -566,6 +566,8 @@ pub(crate) fn initial_snapshot_messages(
         format!("tx_enable:0,{remote_tx_rf_enabled};"),
         format!("tx_mic_gain:0,{:.1};", model.desired.tx_mic_gain_db),
         format!("trx:0,{};", model.desired.tx_enabled),
+        format!("tx_monitor_supported:0,{};tx_monitor:0,{};tx_monitor_level:0,{:.1};",
+            model.desired.tx_monitor_available, model.desired.tx_monitor_enabled, model.desired.tx_monitor_level_db),
         format!("tx_frequency:{};", model.desired.tx_frequency_hz),
         format!("tx_state:0,{};", model.desired.tx_phase),
         format!(

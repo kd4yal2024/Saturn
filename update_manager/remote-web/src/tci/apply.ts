@@ -269,6 +269,16 @@ export function applyTciCommand(command: TciCommand, current: TciRadioState): Tc
     next.adcOverflowMask = Math.max(0, Math.round(numericArg(argAt(args, offset)) ?? 0));
     next.adc1Peak = Math.max(0, Math.round(numericArg(argAt(args, offset + 1)) ?? 0));
     next.adc2Peak = Math.max(0, Math.round(numericArg(argAt(args, offset + 2)) ?? 0));
+  } else if (command.name === 'tx_monitor_supported') {
+    const value = booleanArg(argAt(args, 1));
+    if (value != null) next.txMonitorSupported = value;
+    if (value === false) next.txMonitorEnabled = false;
+  } else if (command.name === 'tx_monitor') {
+    const value = booleanArg(argAt(args, 1));
+    if (value != null) next.txMonitorEnabled = value;
+  } else if (command.name === 'tx_monitor_level') {
+    const value = numericArg(argAt(args, 1));
+    if (value != null && Number.isFinite(value)) next.txMonitorLevelDb = Math.max(-60, Math.min(-6, value));
   } else if (command.name === 'tx_drive') {
     const value = numericArg(argAt(args, 1) ?? trailingArg(args));
     if (value != null) next.txDrive = clampTxDriveWatts(value);

@@ -8,6 +8,7 @@ mod sync_ext;
 mod tci;
 mod tx_audio;
 mod tx_codec;
+mod tx_monitor;
 mod tx_thread;
 mod wdsp;
 mod xdma;
@@ -909,6 +910,13 @@ fn main() -> Result<(), Box<dyn Error>> {
                 TciCommand::SetTxMicGain(gain_db) => {
                     model.desired.tx_mic_gain_db = gain_db.clamp(-20.0, 20.0);
                     let _ = tx_cmd_tx.send(TxCommand::ModelChanged);
+                }
+                TciCommand::SetTxMonitor(enabled) => {
+                    // Hardware MON is currently implemented only by direct XDMA.
+                    model.desired.tx_monitor_enabled = enabled && model.desired.tx_monitor_available;
+                }
+                TciCommand::SetTxMonitorLevel(level) => {
+                    model.desired.tx_monitor_level_db = crate::tx_monitor::clamp_level(level);
                 }
                 TciCommand::SetTxFilterBand { low_hz, high_hz } => {
                     model.desired.tx_filter_low_hz = low_hz;

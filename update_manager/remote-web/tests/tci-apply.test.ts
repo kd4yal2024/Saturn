@@ -139,6 +139,18 @@ function createState(): TciRadioState {
 }
 
 describe('applyTciText', () => {
+  it('acknowledges G2 MON independently of transmit and bounds its level', () => {
+    const initial = createState();
+    const { state } = applyTciText('tx_monitor_supported:0,true;tx_monitor:0,true;tx_monitor_level:0,-24;', initial);
+    expect(state.txMonitorSupported).toBe(true);
+    expect(state.txMonitorEnabled).toBe(true);
+    expect(state.txMonitorLevelDb).toBe(-24);
+    expect(state.txEnabled).toBe(initial.txEnabled);
+    expect(state.txDrive).toBe(initial.txDrive);
+    expect(applyTciText('tx_monitor_level:0,50;', state).state.txMonitorLevelDb).toBe(-6);
+    expect(applyTciText('tx_monitor_level:0,NaN;', state).state.txMonitorLevelDb).toBe(-24);
+    expect(applyTciText('tx_monitor_supported:0,false;', state).state.txMonitorEnabled).toBe(false);
+  });
   it('marks ready and updates vfo/dds', () => {
     const result = applyTciText('ready;vfo:0,0,7100000;vfo:0,1,7200000;dds:0,7150000;', createState());
     expect(result.ready).toBe(true);

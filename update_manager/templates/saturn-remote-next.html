@@ -7969,6 +7969,13 @@
                   <div class="tx-meter-mini-bar" id="tx-zone-swr-bar" data-tone="idle" aria-hidden="true"><span></span></div>
                 </div>
               </div>
+              <div class="row" aria-label="G2 transmit headphone monitor">
+                <button class="btn ghost" id="tx-mon-btn" type="button" aria-pressed="false" disabled title="Monitor processed TX audio at G2 headphones; does not key TX">MON OFF</button>
+                <label class="small" for="tx-mon-level">MON level</label>
+                <input id="tx-mon-level" type="range" min="-60" max="-6" step="1" value="-30" disabled style="min-width: 60px; width: 100px; flex: 1;" />
+                <span class="mono small" id="tx-mon-level-readout">-30 dB</span>
+              </div>
+              <div class="small muted" id="tx-mon-note">G2 headphone MON requires bridge support.</div>
               <div class="tx-zone-footer">
                 <span class="tx-zone-hint" id="tx-zone-hint">Connect before transmit</span>
                 <button class="btn ghost tx-lock-button" id="tx-lock-btn" type="button">Lock TX</button>
@@ -14967,6 +14974,19 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       $("filter-high-readout").textContent = wfmActive ? "180 kHz RF" : `${state.filterHigh} Hz`;
       $("tx-drive-readout").textContent = `${state.txDrive} W`;
       $("tx-mic-gain-readout").textContent = `${safeFixed(state.txMicGainDb, 1, "0.0")} dB`;
+      const monAllowed = state.connected && state.bridgeReady && state.remoteClientRole === "operator" && state.txMonitorSupported;
+      $("tx-mon-btn").disabled = !monAllowed;
+      $("tx-mon-level").disabled = !monAllowed;
+      $("tx-mon-btn").textContent = state.txMonitorEnabled ? "MON ON" : "MON OFF";
+      $("tx-mon-btn").classList.toggle("active", !!state.txMonitorEnabled);
+      $("tx-mon-btn").setAttribute("aria-pressed", String(!!state.txMonitorEnabled));
+      if (document.activeElement !== $("tx-mon-level")) {
+        $("tx-mon-level").value = String(state.txMonitorLevelDb ?? -30);
+      }
+      $("tx-mon-level-readout").textContent = `${$("tx-mon-level").value} dB`;
+      $("tx-mon-note").textContent = !state.txMonitorSupported ? "G2 headphone MON unavailable (requires supported direct-XDMA bridge)."
+        : state.txMonitorEnabled ? "G2 headphones · processed voice TX only · silent in RX, CW and two-tone."
+        : "G2 headphones · MON off · does not key TX.";
       $("tx-filter-low-readout").textContent = `${state.txFilterLow} Hz`;
       $("tx-filter-high-readout").textContent = `${state.txFilterHigh} Hz`;
       const txAdvancedStatus = $("tx-advanced-status");
@@ -17372,6 +17392,8 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       }
       state.intentionalDisconnect = false;
       state.bridgeReady = false;
+      state.txMonitorSupported = false;
+      state.txMonitorEnabled = false;
       state.connectionGeneration = connectionGeneration;
       state.connectionAttemptStartedAt = performance.now();
       state.connectPending = true;
@@ -17499,6 +17521,8 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         state.connectPending = false;
         state.connected = false;
         state.bridgeReady = false;
+        state.txMonitorSupported = false;
+        state.txMonitorEnabled = false;
         state.iqStreaming = false;
         state.ws = null;
         state.wsMediaBacklogBytes = 0;
@@ -17569,6 +17593,8 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       }
       state.connected = false;
       state.bridgeReady = false;
+      state.txMonitorSupported = false;
+      state.txMonitorEnabled = false;
       state.iqStreaming = false;
       state.ws = null;
       state.wsMediaBacklogBytes = 0;
@@ -19317,6 +19343,19 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       bindKeyboardTuneControls();
       bindKeyboardPttControls();
       bindKeyboardMoxControls();
+      $("tx-mon-btn").addEventListener("click", () => {
+        if (!state.connected || !state.bridgeReady || state.remoteClientRole !== "operator" || !state.txMonitorSupported) return;
+        // Wait for bridge acknowledgement; never persist/re-arm MON on reconnect.
+        sendTci(`tx_monitor:0,${!state.txMonitorEnabled};`);
+      });
+      $("tx-mon-level").addEventListener("input", () => {
+        $("tx-mon-level-readout").textContent = `${$("tx-mon-level").value} dB`;
+      });
+      $("tx-mon-level").addEventListener("change", () => {
+        if (!state.connected || !state.bridgeReady || state.remoteClientRole !== "operator" || !state.txMonitorSupported) return;
+        const level = Math.max(-60, Math.min(-6, Number($("tx-mon-level").value)));
+        sendTci(`tx_monitor_level:0,${level};`);
+      });
       $("tx-drive").addEventListener("input", () => {
         state.txDrive = clampTxDriveWatts($("tx-drive").value);
         $("tx-drive-readout").textContent = `${state.txDrive} W`;

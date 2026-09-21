@@ -2533,6 +2533,8 @@ fn viewer_commands_are_limited_to_streaming_and_ping() {
     let clients = test_client_registry(9);
 
     parse_tci_command("trx:0,true,tci;", &tx, &clients, 9, false);
+    parse_tci_command("tx_monitor:0,true", &tx, &clients, 9, false);
+    parse_tci_command("tx_monitor_level:0,-6", &tx, &clients, 9, false);
     assert!(rx.try_recv().is_err());
 
     parse_tci_command("iq_start:0;", &tx, &clients, 9, false);
@@ -2580,6 +2582,20 @@ fn viewer_commands_are_limited_to_streaming_and_ping() {
     // on the bridge after the source-of-truth refactor, but the
     // viewer filter must still drop it.
     parse_tci_command("remote_tx_media_priority:0,true", &tx, &clients, 9, false);
+}
+
+#[test]
+fn monitor_commands_are_operator_only_bounded_and_not_tx_commands() {
+    let (tx, rx) = mpsc::channel();
+    let clients = test_client_registry(9);
+    parse_tci_command("tx_monitor:0,true", &tx, &clients, 9, true);
+    assert!(matches!(rx.try_recv(), Ok(TciCommand::SetTxMonitor(true))));
+    parse_tci_command("tx_monitor_level:0,40", &tx, &clients, 9, true);
+    assert!(matches!(rx.try_recv(), Ok(TciCommand::SetTxMonitorLevel(-6.0))));
+    for command in ["tx_monitor:1,true", "tx_monitor:0,bogus", "tx_monitor_level:0,NaN", "tx_monitor_level:0,inf", "tx_monitor_level:0"] {
+        parse_tci_command(command, &tx, &clients, 9, true);
+        assert!(rx.try_recv().is_err(), "accepted {command}");
+    }
 }
 
 #[test]
@@ -2925,6 +2941,7 @@ fn initial_snapshot_includes_remote_tx_rf_state() {
         initial_snapshot_messages(&model, true, 8, TciClientRole::Operator, (true, 50100));
 
     assert!(disabled.contains(&"remote_tx_rf_enabled:0,false;".to_string()));
+    assert!(disabled.contains(&"tx_monitor_supported:0,false;tx_monitor:0,false;tx_monitor_level:0,-30.0;".to_string()));
     assert!(enabled.contains(&"remote_tx_rf_enabled:0,true;".to_string()));
     assert!(disabled.contains(&"remote_client_role:0,viewer,7;".to_string()));
     assert!(enabled.contains(&"remote_client_role:0,operator,8;".to_string()));

@@ -64,6 +64,9 @@ pub type TxRadioResult = Result<(), String>;
 /// the same arm, mic/IQ, watchdog, unkey, and diagnostics logic while changing
 /// only how radio configuration and DUC IQ reach the FPGA.
 pub trait TxRadio: Send + Sync {
+    /// Optional local headphone monitor. Implementations must never block TX.
+    fn monitor_iq(&self, _iq: &[f32], _mode: crate::radio_model::DemodMode) {}
+    fn stop_monitor(&self) {}
     fn configure_puresignal_feedback(&self) -> TxRadioResult;
     fn send_duc_specific(&self, model: &RadioModel) -> TxRadioResult;
     fn send_high_priority(&self, model: &RadioModel) -> TxRadioResult;
@@ -1239,6 +1242,9 @@ fn run(
                     }
                 }
                 duc_packet_count = duc_packet_count.saturating_add(batch_packets as u64);
+                if state == TxState::Keyed && !two_tone {
+                    session.monitor_iq(&chunk, wdsp_tx.monitor_mode());
+                }
                 if duc_packet_count == batch_packets as u64
                     || last_diag_at.elapsed() >= Duration::from_millis(500)
                 {
@@ -1550,6 +1556,7 @@ fn do_unkey(
     event_tx: &Sender<TxEvent>,
     prev_state: TxState,
 ) {
+    session.stop_monitor();
     wdsp_tx.set_puresignal_mox(false);
     wdsp_tx.set_active(false);
 

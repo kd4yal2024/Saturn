@@ -102,6 +102,9 @@ export interface AppState {
   txDrive: number;
   remoteTxRfEnabled: boolean | null;
   txMicGainDb: number;
+  txMonitorSupported: boolean;
+  txMonitorEnabled: boolean;
+  txMonitorLevelDb: number;
   txMeterMode: string;
   micStream: MediaStream | null;
   micNode: { ctx: AudioContext; source: MediaStreamAudioSourceNode; proc: AudioNode; silentGain: GainNode } | null;
@@ -439,6 +442,9 @@ export function createAppState(): AppState {
     txDrive: 10,
     remoteTxRfEnabled: null,
     txMicGainDb: -12,
+    txMonitorSupported: false,
+    txMonitorEnabled: false,
+    txMonitorLevelDb: -30,
     txMeterMode: 'peak',
     micStream: null,
     micNode: null,

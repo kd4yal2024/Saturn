@@ -182,6 +182,16 @@ pub struct XdmaRegisterDevice {
 
 impl XdmaRegisterDevice {
     pub fn open(path: impl AsRef<Path>) -> Result<Self, XdmaError> {
+        let mut device = Self::open_peripheral(path)?;
+        device.armed_for_cleanup = true;
+        device.force_safe_receive_state()?;
+        Ok(device)
+    }
+
+    /// Non-owning register access for a peripheral inside an already-owned
+    /// direct-XDMA session. Opening/dropping this handle must never change RF.
+    /// The session's owning handle remains responsible for fail-safe shutdown.
+    pub(crate) fn open_peripheral(path: impl AsRef<Path>) -> Result<Self, XdmaError> {
         let path = path.as_ref().to_path_buf();
         let file = OpenOptions::new()
             .read(true)
@@ -197,14 +207,12 @@ impl XdmaRegisterDevice {
         let identity = SaturnIdentity::decode(software, product, user_version);
         identity.validate()?;
 
-        let mut device = Self {
+        Ok(Self {
             file,
             path,
             identity,
-            armed_for_cleanup: true,
-        };
-        device.force_safe_receive_state()?;
-        Ok(device)
+            armed_for_cleanup: false,
+        })
     }
 
     pub fn identity(&self) -> &SaturnIdentity {
@@ -446,6 +454,10 @@ fn update_register(
     update: impl FnOnce(u32) -> u32,
     action: &'static str,
 ) -> Result<(), XdmaError> {
+    // Separate RX, TX and headphone descriptors share FPGA registers. Serialize
+    // RMW sequences so changing a codec/FIFO bit cannot restore stale RF bits.
+    static REGISTER_UPDATE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _guard = REGISTER_UPDATE.lock().unwrap_or_else(|e| e.into_inner());
     let current = read_u32(file, offset)?;
     let next = update(current);
     if next != current {
@@ -562,6 +574,25 @@ mod tests {
         assert_eq!(identity.clock_mask, 0x0F);
         assert!(!identity.is_fallback());
         identity.validate().unwrap();
+    }
+
+    #[test]
+    fn peripheral_open_and_drop_leave_rf_and_keyer_registers_unchanged() {
+        let fixture = Fixture::new();
+        fixture.install_valid_identity();
+        let values = [
+            (RF_GPIO_REGISTER, MOX_BIT | TX_ENABLE_BIT | 0x55),
+            (KEYER_CONFIG_REGISTER, CW_KEYER_ENABLE_BIT | 0x33),
+            (TX_CONFIG_REGISTER, DUC_STREAM_ENABLE_BIT | TX_AMPLITUDE_MASK | 7),
+        ];
+        for (register, value) in values { fixture.write(register, value); }
+        {
+            let peripheral = XdmaRegisterDevice::open_peripheral(&fixture.path).unwrap();
+            for (register, value) in values {
+                assert_eq!(peripheral.read_register(register).unwrap(), value);
+            }
+        }
+        for (register, value) in values { assert_eq!(fixture.read(register), value); }
     }
 
     #[test]

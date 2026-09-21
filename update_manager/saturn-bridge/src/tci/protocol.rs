@@ -91,6 +91,8 @@ pub enum TciCommand {
     SetAgcGain(f64),
     SetTxDrive(u8),
     SetTxMicGain(f64),
+    SetTxMonitor(bool),
+    SetTxMonitorLevel(f64),
     SetTxFilterBand {
         low_hz: i32,
         high_hz: i32,
@@ -779,6 +781,22 @@ pub(crate) fn parse_tci_command_with_roles(
             if let Some(drive_text) = drive_arg {
                 if let Ok(drive) = drive_text.trim().parse::<u8>() {
                     let _ = command_tx.send(TciCommand::SetTxDrive(drive));
+                }
+            }
+        }
+        "tx_monitor" => {
+            if args.len() == 2 && args[0].trim() == "0" {
+                if let Some(enabled) = parse_tci_bool(args[1]) {
+                    let _ = command_tx.send(TciCommand::SetTxMonitor(enabled));
+                }
+            }
+        }
+        "tx_monitor_level" => {
+            if args.len() == 2 && args[0].trim() == "0" {
+                if let Ok(level) = args[1].trim().parse::<f64>() {
+                    if level.is_finite() {
+                        let _ = command_tx.send(TciCommand::SetTxMonitorLevel(crate::tx_monitor::clamp_level(level)));
+                    }
                 }
             }
         }

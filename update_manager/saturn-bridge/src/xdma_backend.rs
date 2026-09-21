@@ -350,7 +350,7 @@ fn run_inner(mut config: BridgeConfig, ready_path: &Path) -> Result<(), Box<dyn 
         model.desired.pure_signal_enabled = false;
         model.observed.pure_signal_state = PureSignalState::Off;
     }
-    let tx_radio = Arc::new(DirectXdmaTxRadio::open(config.tx_power_meter_scale)?);
+    let tx_radio = Arc::new(DirectXdmaTxRadio::open(config.tx_power_meter_scale, radio_model.clone())?);
     let requested_tx_rf_enabled = config.remote_tx_rf_enabled;
     let remote_tx_rf_enabled =
         effective_direct_tx_rf_enabled(requested_tx_rf_enabled, tx_radio.rf_tx_qualified());
@@ -386,6 +386,7 @@ fn run_inner(mut config: BridgeConfig, ready_path: &Path) -> Result<(), Box<dyn 
         tx_cmd_tx.clone(),
     )?;
     let mut tx_control = DirectTxControl::default();
+    let mut last_monitor_state = (false, false, -30.0);
     let mut wdsp = {
         let model = radio_model.lock_unpoisoned();
         WdspRxEngine::new(&model)?
@@ -698,6 +699,14 @@ fn run_inner(mut config: BridgeConfig, ready_path: &Path) -> Result<(), Box<dyn 
             }
             {
                 let model = radio_model.lock_unpoisoned();
+                let monitor_state = (model.desired.tx_monitor_available,
+                    model.desired.tx_monitor_enabled, model.desired.tx_monitor_level_db);
+                if monitor_state != last_monitor_state {
+                    // Includes worker-side faults, which otherwise have no TCI
+                    // command to trigger publication of the disabled state.
+                    tci.publish_radio_state(&model);
+                    last_monitor_state = monitor_state;
+                }
                 tci.set_tx_media_priority_active(
                     tx_control.requested || model.desired.tx_phase != TxPhase::Rx,
                 );
@@ -1117,6 +1126,7 @@ fn handle_command(
         }
         TciCommand::ClientConnected => model.desired.running = true,
         TciCommand::ClientDisconnected => {
+            model.desired.tx_monitor_enabled = false;
             tx_control.requested = false;
             tx_control.last_mic_at = None;
             let _ = tx_cmd_tx.send(TxCommand::Disarm);
@@ -1195,6 +1205,12 @@ fn handle_command(
         TciCommand::SetTxMicGain(gain_db) => {
             model.desired.tx_mic_gain_db = gain_db.clamp(-20.0, 20.0);
             let _ = tx_cmd_tx.send(TxCommand::ModelChanged);
+        }
+        TciCommand::SetTxMonitor(enabled) => {
+            model.desired.tx_monitor_enabled = enabled && model.desired.tx_monitor_available;
+        }
+        TciCommand::SetTxMonitorLevel(level) => {
+            model.desired.tx_monitor_level_db = crate::tx_monitor::clamp_level(level);
         }
         TciCommand::SetTxFilterBand { low_hz, high_hz } => {
             model.desired.tx_filter_low_hz = low_hz;
