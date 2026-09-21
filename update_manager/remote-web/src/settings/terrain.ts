@@ -7,7 +7,7 @@ export type TerrainSettings = {
 };
 export const TERRAIN_DEFAULTS: TerrainSettings = {
   mode: 'traditional', height: 0.65, depth: 128, elevation: 35,
-  floor: -140, ceiling: -40, gamma: 1, smoothing: 0,
+  floor: -140, ceiling: -40, gamma: 0.85, smoothing: 0,
   palette: 'reference', split: 0.3, quality: 'auto', diagnostics: false,
 };
 export function normalizeTerrain(input: unknown): TerrainSettings {
@@ -27,9 +27,9 @@ export function normalizeTerrain(input: unknown): TerrainSettings {
   };
 }
 export const REFERENCE_STOPS = [
-  [0, 1, 3, 12], [0.12, 3, 10, 48], [0.30, 7, 40, 168],
-  [0.48, 0, 190, 230], [0.62, 30, 205, 70], [0.76, 245, 220, 25],
-  [0.87, 255, 110, 10], [0.96, 240, 25, 20], [1, 255, 255, 255],
+  [0, 1, 3, 12], [0.12, 6, 13, 24], [0.30, 24, 48, 80],
+  [0.48, 35, 132, 153], [0.62, 75, 160, 102], [0.76, 208, 190, 79],
+  [0.87, 231, 133, 58], [0.96, 222, 65, 48], [1, 255, 255, 255],
 ];
 export function referenceColor(t: number): number[] {
   const v = Math.max(0, Math.min(1, Number.isFinite(t) ? t : 0));
@@ -38,4 +38,18 @@ export function referenceColor(t: number): number[] {
     if (v <= b[0]!) return [1, 2, 3].map(c => Math.round(a[c]! + (b[c]! - a[c]!) * (v - a[0]!) / (b[0]! - a[0]!)));
   }
   return [255, 255, 255];
+}
+
+/** One-shot visual range fit. Never changes samples or continuously follows RF. */
+export function fitTerrainRange(bins: Float32Array): Pick<TerrainSettings, 'floor' | 'ceiling' | 'gamma'> | null {
+  const levels = Array.from(bins).filter(v => Number.isFinite(v) && v > -999).sort((a, b) => a - b);
+  if (!levels.length) return null;
+  // Place typical background below the blue/cyan transition. A minimum 45 dB
+  // range prevents quiet bands from becoming high-contrast noise. Robust upper
+  // percentile leaves isolated strong carriers hot without letting one spike
+  // compress every weak/moderate signal into navy.
+  const percentile = (q: number) => levels[Math.floor((levels.length - 1) * q)]!;
+  const floor = Math.max(-200, Math.min(-25, Math.floor(percentile(0.2) - 6)));
+  const ceiling = Math.min(20, Math.max(floor + 45, Math.ceil(percentile(0.995) + 8)));
+  return { floor, ceiling, gamma: 0.85 };
 }

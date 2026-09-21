@@ -27,6 +27,13 @@ command belongs to the view selector. The current server already redirects
   range is a starting point, not a measured hardware calibration. It also links to the existing
   Traditional appearance controls. The divider remains adjustable with pointer
   and keyboard; the split slider also works on phones.
+- **Fit range to current signals** samples the current numerical spectrum once,
+  places the background near the dark end, and holds that manual range. It uses
+  the 20th/99.5th percentiles with headroom and a minimum 45 dB range so quiet
+  noise is not expanded across the palette. Strong isolated carriers can saturate
+  visually; raw readouts remain unchanged. Use this if the initial range looks
+  predominantly blue. Reference Rainbow uses restrained saturation; gamma 0.85
+  is the new default. Existing saved range/gamma values remain intact until edited.
 - **Pause** freezes display ingestion/drawing without stopping audio. Changing
   view retains pause. Resume preserves retained history and records elapsed
   missing intervals when the next spectrum arrives. This page had no previous

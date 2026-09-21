@@ -231,6 +231,10 @@ try {
     if(state.terrain.floor!==-145 || state.terrain.ceiling!==-35 || state.terrain.depth!==96)throw Error('Numeric 3D controls failed to commit');
     $('display-pause').click();$('view-traditional').click();$('view-3d').click();
     if(!state.displayPaused)throw Error('Switch lost pause');$('display-pause').click();
+    $('terrain-fit-range').click();
+    const fitted=_next.fitTerrainRange(raw);
+    if(!fitted || state.terrain.floor!==fitted.floor || state.terrain.ceiling!==fitted.ceiling || state.terrain.gamma!==fitted.gamma)throw Error('One-shot range fit failed');
+    if(!$('terrain-fit-status').textContent.includes('Held until'))throw Error('Range fit stability is not explained');
     $('terrain-reset').click();
     if(commands.length)throw Error('Presentation controls issued commands: '+commands);
     if(beforeRadio!==JSON.stringify(currentRadioPrefs()))throw Error('Presentation altered radio state');
@@ -242,7 +246,7 @@ try {
     if(terrainRenderer.diagnostics().draws!==before)throw Error('Hidden display drew a frame');
     return {commands,measurementsPreserved:true,pausePreserved:true,hiddenGuard:true};
   })()`);
-  report.checks.push('actual selector, camera, palette, reset and pause controls send no commands or measurement edits; hidden guard suppresses drawing');
+  report.checks.push('actual selector, camera, palette, range fit, reset and pause controls send no commands or measurement edits; hidden guard suppresses drawing');
   await evaluate(`(()=>{
     const shell=$('waterfall-shell'),rect=shell.getBoundingClientRect();
     shell.dispatchEvent(new PointerEvent('pointermove',{clientX:rect.left+10,clientY:rect.top+2}));

@@ -8356,6 +8356,8 @@
     <label>Camera elevation <input id="terrain-elevation" type="range" min="15" max="60" step="1"></label>
     <label>Floor (relative dB) <input id="terrain-floor" type="number" min="-200" max="19"></label>
     <label>Ceiling (relative dB) <input id="terrain-ceiling" type="number" min="-199" max="20"></label>
+    <button class="btn" type="button" id="terrain-fit-range">Fit range to current signals</button>
+    <output id="terrain-fit-status" class="small" role="status"></output>
     <label>Color gamma <input id="terrain-gamma" type="range" min="0.3" max="3" step="0.05"></label>
     <label>Spatial smoothing <input id="terrain-smoothing" type="range" min="0" max="1" step="0.05"></label>
     <label>Palette <select id="terrain-palette"><option value="reference">Reference Rainbow</option><option value="classic">Classic</option><option value="ember">Ember</option><option value="ice">Ice</option><option value="forest">Forest</option><option value="enhanced">Enhanced</option></select></label>
@@ -10113,6 +10115,16 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       $("terrain-diagnostics-enabled").addEventListener("change", () => {
         state.terrain.diagnostics = $("terrain-diagnostics-enabled").checked;
         syncTerrainControls(); saveTerrainSettings();
+      });
+      $("terrain-fit-range").addEventListener("click", () => {
+        const range = _next.fitTerrainRange(spectrumHistory.latestRaw);
+        if (!range) {
+          $("terrain-fit-status").textContent = "Waiting for measured spectrum. Start the radio display, then try again.";
+          return;
+        }
+        state.terrain = _next.normalizeTerrain({ ...state.terrain, ...range });
+        syncTerrainControls(); saveTerrainSettings();
+        $("terrain-fit-status").textContent = `Range fitted once: ${range.floor} to ${range.ceiling} relative dB. Held until you change it.`;
       });
       $("terrain-reset").addEventListener("click", () => {
         state.terrain = _next.normalizeTerrain({mode: state.terrain.mode});

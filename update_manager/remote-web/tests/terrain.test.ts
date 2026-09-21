@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { SpectrumHistory, type SpectrumFrame } from '../src/dsp/spectrum-history';
-import { normalizeTerrain, referenceColor } from '../src/settings/terrain';
+import { normalizeTerrain, referenceColor, fitTerrainRange } from '../src/settings/terrain';
 import { normalizeDisplayPrefs, normalizeWaterfallPalette } from '../src/settings/normalize';
 import { visibleBinsForDisplay } from '../src/dsp/display';
 import { FftProcessor } from '../src/dsp/fft';
@@ -74,7 +74,7 @@ describe('presentation settings', () => {
   it('defaults old profiles and validates imports', () => {
     expect(normalizeDisplayPrefs({}).terrain?.mode).toBe('traditional');
     const s=normalizeTerrain({height:Infinity, floor:19, ceiling:-100, depth:-9, gamma:NaN,mode:'broken',quality:'ultra'});
-    expect(s.height).toBe(.65); expect(s.ceiling).toBe(20); expect(s.depth).toBe(8); expect(s.gamma).toBe(1); expect(s.quality).toBe('auto');
+    expect(s.height).toBe(.65); expect(s.ceiling).toBe(20); expect(s.depth).toBe(8); expect(s.gamma).toBe(.85); expect(s.quality).toBe('auto');
   });
   it('round trips without changing Traditional or radio preferences', () => {
     const state=createAppState(), before=radioPrefsFromState(state), palette=state.waterfallPalette;
@@ -94,5 +94,22 @@ describe('presentation settings', () => {
     expect(live.indexOf('acceptSpectrumFrame')).toBeLessThan(live.indexOf('processedDisplayBins'));
     const selector=html.slice(html.indexOf('function setTerrainMode'),html.indexOf('function saveTerrainSettings'));
     expect(selector).not.toMatch(/sendTci|setFrequency|connect\(|moxRequested\s*=/);
+  });
+});
+
+
+describe('manual 3D range fit', () => {
+  it('keeps background subdued and weak signals visible without mutating levels', () => {
+    const bins = new Float32Array(4096).fill(-112); bins[10] = -90; bins[11] = -30;
+    const before = bins.slice(), range = fitTerrainRange(bins)!;
+    expect(range).toEqual({floor: -118, ceiling: -73, gamma: .85});
+    expect(bins).toEqual(before);
+    expect((bins[10]! - range.floor)/(range.ceiling-range.floor)).toBeGreaterThan(.5);
+    const quiet = fitTerrainRange(new Float32Array(100).fill(-140))!;
+    expect(quiet.ceiling - quiet.floor).toBe(45);
+  });
+  it('ignores missing/nonfinite values and refuses a fit without measurements', () => {
+    expect(fitTerrainRange(new Float32Array([-1000, NaN, Infinity]))).toBeNull();
+    expect(fitTerrainRange(new Float32Array([-1000, NaN, -112]))).toEqual({floor: -118, ceiling: -73, gamma: .85});
   });
 });

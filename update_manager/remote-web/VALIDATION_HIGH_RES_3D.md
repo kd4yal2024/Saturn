@@ -118,3 +118,21 @@ Safari/iOS testing. The existing mobile TX tab remains accessible; the full TX
 panel follows the existing scrolling layout. Exact resemblance to the absent
 reference image remains an operator review item. These limitations are not
 inferred away from fixture screenshots or unit tests.
+
+## Follow-up: reduced blue saturation and manual range fit
+
+After operator feedback that the initial colors were excessively blue, Reference
+Rainbow's blue/cyan saturation and abrupt brightness differences were reduced.
+New/reset profiles use gamma 0.85. Existing saved values are preserved. A new
+**Fit range to current signals** button sets a stable manual range from actual
+samples, with a 45 dB minimum span to avoid exaggerating noise on a quiet band.
+
+Validation: 513 tests passed, typecheck, 185-export seam check, production build,
+full waterfall/3D browser validator and all 24 layout scenarios passed. The
+browser test clicks the new button and verifies unchanged measurements and radio
+state and no radio commands. The original 30-minute soak was not repeated for
+this palette/UI follow-up; shader geometry and scheduling are unchanged.
+[Updated synthetic desktop](../../FPGA/lab/results/remote-highres3d-color-fix/desktop.png)
+and [browser results](../../FPGA/lab/results/remote-highres3d-color-fix/result.json)
+are available in the ignored lab artifacts. Live G2 appearance still needs
+operator confirmation after deployment.
