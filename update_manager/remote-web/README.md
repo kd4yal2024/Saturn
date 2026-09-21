@@ -85,8 +85,16 @@ the complete Saturn Go stack:
 
 ```bash
 cd ~/github/Saturn
-sudo bash update_manager/install_saturn_go_nginx.sh
+git pull --ff-only
+sudo ./install.sh
 ```
+
+The canonical `install.sh` calls the shared provisioner, which invokes the web
+manager installer. High-Res 3D and noise-floor cleanup are included automatically
+from the TypeScript sources; no manual `scp`, extra runtime files, or separate 3D
+installation is required. Generated `dist/` files are intentionally not committed.
+Normal appliance installation can restart services; use an appropriate downtime
+window and reload the browser after it finishes.
 
 The installer and `scripts/update-saturn-go.sh` both:
 
