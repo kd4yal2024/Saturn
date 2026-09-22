@@ -1,4 +1,4 @@
-import { cleanupNormalized, CLEANUP_GLSL } from '../dsp/display-cleanup';
+import { cleanupNormalized, CLEANUP_GLSL, WATERFALL_CLEANUP_GLSL } from '../dsp/display-cleanup';
 import { SpectrumHistory, MISSING_LEVEL, levelStatistics } from '../dsp/spectrum-history';
 import { normalizeTerrain, type TerrainSettings } from '../settings/terrain';
 
@@ -56,15 +56,18 @@ in float level;
 in float valid;
 out vec4 color;
 ${CLEANUP_GLSL}
+${WATERFALL_CLEANUP_GLSL}
 void main() {
   float db = level;
   if(terrain) { if(valid < 0.999) discard; }
   else {
-    // A pixel covers an explicit time interval. Peak reduction over every
-    // intersected bucket preserves one-row impulses when history is compressed.
-    // Any missing bucket marks that pixel unknown; never interpolate over gaps.
-    int ageLo = max(0, int(floor((1.0-(gl_FragCoord.y+0.5)/viewport.y)*float(capacity))));
-    int ageHi = min(count, max(ageLo+1, int(ceil((1.0-(gl_FragCoord.y-0.5)/viewport.y)*float(capacity)))));
+    // Top pixel is newest. Integer, disjoint bucket partitions when reducing
+    // history: each measured row belongs to exactly one output row. Ceil of
+    // the far edge would reuse boundary buckets in adjacent pixels (time dilation).
+    // When enlarged, repeat the owning bucket without temporal interpolation.
+    int top = int(viewport.y) - 1 - int(gl_FragCoord.y);
+    int ageLo = top * capacity / int(viewport.y);
+    int ageHi = min(count, max(ageLo+1, (top+1)*capacity/int(viewport.y)));
     if(ageLo >= count) { color=vec4(0.004,0.012,0.047,1); return; }
     int lo = int(floor(gl_FragCoord.x-0.5)*float(width)/viewport.x);
     int hi = max(lo+1,int(floor(gl_FragCoord.x+0.5)*float(width)/viewport.x));
@@ -80,15 +83,15 @@ void main() {
     }
     if(missing || db < -999.0) { color=vec4(0.08,0.085,0.10,1); return; }
   }
-  float t = pow(displayNormalized(db),gammaValue);
+  float t = pow(terrain ? displayNormalized(db) : waterfallNormalized(db),gammaValue);
   color = texture(palette,vec2((t*1023.0+0.5)/1024.0,0.5));
 }`;
 
 type Tier = 'performance' | 'balanced' | 'high';
 const TIERS = {
-  performance: { columns: 512, rows: 48, dpr: 1, fps: 30, pixels: 1_500_000 },
-  balanced: { columns: 1024, rows: 128, dpr: 1.5, fps: 60, pixels: 3_000_000 },
-  high: { columns: 2048, rows: 256, dpr: 2, fps: 60, pixels: 5_000_000 },
+  performance: { columns: 512, rows: 48, fps: 30 },
+  balanced: { columns: 1024, rows: 128, fps: 60 },
+  high: { columns: 2048, rows: 256, fps: 60 },
 };
 /** Shared R32F cache. Float nearest sampling needs neither float filtering nor float render targets. */
 export class TerrainRenderer {
@@ -100,6 +103,7 @@ export class TerrainRenderer {
   private paletteKey = ''; private maxDimension: number; private settings = normalizeTerrain(null);
   private indexBytes = 0; private lastDraw = -Infinity; private active = true; private disposed = false;
   private tier: Tier = 'balanced'; private lastAdjust = 0; private slow = 0;
+  private resolutionReason = '';
   private recoveryWait = 20000; private recoveryTrial = false;
   private samples: number[] = []; private intervals: number[] = []; private draws = 0;
   columns = 0; rows = 0; skipped = 0; missedRenderDeadlines = 0; reason = ''; uploadRows = 0;
@@ -176,9 +180,13 @@ export class TerrainRenderer {
     if (!history.width || history.head < 0) { gl.clearColor(.004,.012,.047,1); gl.clear(gl.COLOR_BUFFER_BIT); return true; }
     if (history.width > this.maxDimension) throw new Error(`Source ${history.width} bins exceeds GPU texture limit ${this.maxDimension}`);
     const rect = this.canvas.getBoundingClientRect();
-    let scale = Math.min(window.devicePixelRatio || 1, tier.dpr);
-    const pixelBudget = Math.min(tier.pixels, Math.max(4, (96 * 1024 * 1024 - history.bytes - history.data.byteLength - 5 * 1024 * 1024) / 12));
+    // Keep the operating waterfall at device resolution in every tier. Quality
+    // limits terrain topology and refresh; it must not soften the entire canvas.
+    const requestedScale = window.devicePixelRatio || 1;
+    let scale = requestedScale;
+    const pixelBudget = Math.min(8_000_000, Math.max(4, (96 * 1024 * 1024 - history.bytes - history.data.byteLength - 5 * 1024 * 1024) / 12));
     scale = Math.min(scale, Math.sqrt(pixelBudget / Math.max(1, rect.width * rect.height)), this.maxDimension / Math.max(rect.width, rect.height, 1));
+    this.resolutionReason = scale < requestedScale ? 'Backing resolution limited by 96 MiB view budget / 8M pixels / GPU dimensions' : '';
     const w = Math.max(2, Math.round(rect.width * scale)), h = Math.max(2, Math.round(rect.height * scale));
     if (this.canvas.width !== w || this.canvas.height !== h) { this.canvas.width = w; this.canvas.height = h; }
     gl.bindVertexArray(this.vao); gl.useProgram(this.program); this.topology();
@@ -205,6 +213,7 @@ export class TerrainRenderer {
     for (const [key, value] of Object.entries(ints)) gl.uniform1i(this.location(key), value);
     const floats = { floorDb: this.settings.floor, ceilingDb: this.settings.ceiling, gammaValue: this.settings.gamma,
       noiseFloor: this.noiseBaseline, cleanupStrength: this.settings.cleanup,
+      waterfallCleanupStrength: this.settings.waterfallCleanup,
       exaggeration: this.settings.height, elevation: this.settings.elevation, smoothing: this.settings.smoothing };
     for (const [key, value] of Object.entries(floats)) gl.uniform1f(this.location(key), value);
     gl.disable(gl.SCISSOR_TEST); gl.clearColor(.004,.012,.047,1); gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
@@ -230,13 +239,14 @@ export class TerrainRenderer {
     if (this.settings.quality === 'auto' && now - this.lastAdjust > 5000 && this.slow > 20 && this.tier !== 'performance') {
       this.tier = this.tier === 'high' ? 'balanced' : 'performance'; this.lastAdjust = now; this.slow = 0;
       if (this.recoveryTrial) this.recoveryWait = Math.min(300000, this.recoveryWait * 2);
-      this.recoveryTrial = false; this.reason = 'Auto reduced geometry / pixels / refresh after sustained slow frames';
+      this.recoveryTrial = false; this.reason = 'Auto reduced geometry / refresh after sustained slow frames';
     } else if (this.settings.quality === 'auto' && now - this.lastAdjust > this.recoveryWait && this.slow === 0 && this.tier === 'performance' && elapsed < 8) {
       this.tier = 'balanced'; this.lastAdjust = now; this.recoveryTrial = true; this.reason = `Auto recovery trial after ${this.recoveryWait / 1000} seconds`;
     }
     this.lastDraw = now; return true;
   }
   get noiseBaseline(): number { return this.settings.cleanupBaseline ?? this.history.noiseFloor ?? this.settings.floor; }
+  get maxHistoryWidth(): number { return this.maxDimension; }
   /** CPU projection exactly matches the vertex shader; used for ray/triangle picking. */
   project(age: number, col: number): [number, number, number] {
     const z = age / Math.max(1, this.rows - 1), w = 1 + .18 * z;
@@ -287,6 +297,8 @@ export class TerrainRenderer {
       heightControl: this.settings.height, heightScale: this.settings.height * .75,
       heightOffset: 0, heightMapping: 'clamped dB normalization with optional display-only soft knee; scale is clip-space height',
       cleanupStrength: this.settings.cleanup, cleanupBaseline: this.noiseBaseline,
+      waterfallCleanupStrength: this.settings.waterfallCleanup,
+      waterfallMapping: 'pointwise attenuation below held baseline / linear 24 dB shoulder / full levels above shoulder',
       baselineSource: this.settings.cleanupBaseline === null ? 'held first-frame median / explicit re-estimate' : 'manual',
       kneeStartDb: Math.min(this.noiseBaseline+8,this.settings.ceiling)-4, unchangedAboveDb: Math.min(this.noiseBaseline+8,this.settings.ceiling),
       scalarTexture: 'R32F / highp sampler2D / NEAREST texelFetch',
@@ -294,6 +306,8 @@ export class TerrainRenderer {
     const rect = this.canvas.getBoundingClientRect();
     return { amplitude, cssSize: `${rect.width} × ${rect.height}`, devicePixelRatio: window.devicePixelRatio,
       effectivePixelRatio: rect.width ? this.canvas.width / rect.width : 0,
+      resolutionReason: this.resolutionReason, historyTexture: `${this.history.width} × ${this.history.capacity} R32F`,
+      waterfallSampling: 'disjoint time buckets / per-pixel bin maxima / no temporal or spatial smoothing',
       quality: this.tier, requestedQuality: this.settings.quality, targetFps: TIERS[this.tier].fps,
       backingStore: `${this.canvas.width} × ${this.canvas.height}`, maxTextureDimension: this.maxDimension,
       recentSeconds: Math.max(0, Math.min(this.rows, this.history.count) - 1) * this.history.cadenceMs / 1000,

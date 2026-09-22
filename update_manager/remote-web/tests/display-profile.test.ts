@@ -6,9 +6,11 @@ const template = readFileSync(new URL('../../templates/saturn-remote-next.html',
 const start = template.indexOf('    function tailnetTransportActive()');
 const end = template.indexOf('    function displayPacketHistoryLimit(', start);
 
-function diagnostics(options: { mode?: string; host?: string; rtt?: number; rttAt?: number; phone?: boolean } = {}) {
+function diagnostics(options: { mode?: string; host?: string; rtt?: number; rttAt?: number;
+  phone?: boolean; terrain?: boolean; rate?: number; pixels?: number; zoom?: number } = {}) {
   const state = {
     streamMode: options.mode ?? 'lan', layoutMode: options.phone ? 'phone' : 'desktop',
+    terrainActive: options.terrain ?? false,
     bridgeRttMs: options.rtt ?? null, bridgeRttAt: options.rttAt ?? 1000,
     rxWorkletUnderruns: 0, bridgeOutboundQueuedBytes: 0,
   };
@@ -22,7 +24,10 @@ function diagnostics(options: { mode?: string; host?: string; rtt?: number; rttA
     BRIDGE_RTT_STALE_MS: 5000,
     DISPLAY_BASE_FFT_SIZE: 4096, DISPLAY_WAN_FFT_SIZE: 2048, DISPLAY_PHONE_WAN_FFT_SIZE: 1024,
     DISPLAY_BASE_RENDER_INTERVAL_MS: 33, DISPLAY_WAN_RENDER_INTERVAL_MS: 50, DISPLAY_PHONE_WAN_RENDER_INTERVAL_MS: 33,
-    fftProcessor: { size: 2048 }, displaySampleRateHz: () => 384000,
+    fftProcessor: { size: 2048 }, displaySampleRateHz: () => options.rate ?? 384000,
+    terrainRenderer: { canvas: { width: options.pixels ?? 1828 }, maxHistoryWidth: 8192 },
+    spectrumHistory: { maxBytes: 32 * 1024 * 1024, capacity: 512 },
+    effectiveDisplayZoom: () => options.zoom ?? 4,
     roundedTimingMs: (value: number) => value, audioLeadMs: () => 40,
   });
 }
@@ -35,6 +40,20 @@ describe('display profile diagnosis', () => {
     expect(info.targetFftSize).toBe(2048);
     expect(info.targetRenderIntervalMs).toBe(50);
     expect(info.binSpacingHz).toBe(187.5);
+  });
+  it('uses measured source detail for desktop High-Res 3D without changing Traditional', () => {
+    const wan = diagnostics({ mode: 'wan', terrain: true, pixels: 1828, zoom: 4 }).profile();
+    expect(wan.profile).toBe('wan');
+    expect(wan.targetFftSize).toBe(16384);
+    expect(wan.targetFftSize / 4).toBeGreaterThan(1828);
+    expect(diagnostics({ mode: 'wan', pixels: 1828, zoom: 4 }).profile().targetFftSize).toBe(2048);
+    expect(diagnostics({ terrain: true, pixels: 1828, zoom: 4 }).profile().targetFftSize).toBe(16384);
+    expect(diagnostics({ terrain: true, pixels: 1828, zoom: 1 }).profile().targetFftSize).toBe(8192);
+  });
+  it('bounds the FFT time aperture on lower-rate WAN sources', () => {
+    expect(diagnostics({ mode: 'wan', terrain: true, rate: 96000 }).profile().targetFftSize).toBe(4096);
+    expect(diagnostics({ mode: 'wan', terrain: true, rate: 48000 }).profile().targetFftSize).toBe(2048);
+    expect(diagnostics({ mode: 'wan', terrain: true, rate: 384000, phone: true }).profile().targetFftSize).toBe(1024);
   });
   it('reports LAN defaults separately from the current FFT size', () => {
     const info = diagnostics().profile();

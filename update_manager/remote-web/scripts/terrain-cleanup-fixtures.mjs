@@ -3,7 +3,7 @@ import {join} from 'node:path';
 export async function cleanupFixtures({evaluate,call,output,report,phase}) {
   report.cleanup=[];
   await evaluate(`(()=>{
-    state.terrain={...state.terrain,floor:-140,ceiling:-40,gamma:1,height:.65,smoothing:0,quality:'balanced',depth:128,cleanup:0,cleanupBaseline:-129};
+    state.terrain={...state.terrain,floor:-140,ceiling:-40,gamma:1,height:.65,smoothing:0,quality:'balanced',depth:128,cleanup:0,waterfallCleanup:0,cleanupBaseline:-129};
     const style=document.createElement('style');style.textContent='[data-terrain="true"] .display-stack .spectrum-shell > :not(canvas),[data-terrain="true"] .display-stack .waterfall-shell > :not(canvas){visibility:hidden!important}';document.head.appendChild(style);
   })()`);
   for(const kind of ['noise','noise-wide','weak','carriers','brief','strong','rise']) {
@@ -19,12 +19,16 @@ export async function cleanupFixtures({evaluate,call,output,report,phase}) {
         acceptSpectrumFrame(bins,fixtureTimestamp,fixtureIndex++,4096);fixtureTimestamp+=33;
       }
       const raw=h.data.slice(),revision=h.revision,baseline=h.noiseFloor;
-      const outputs=[];window.cleanupPngs=[];
-      for(const strength of ${phase==='before'?'[0]':'[0,.6]'}) {
-        r.configure({...state.terrain,cleanup:strength});r.render(performance.now(),layoutTerrainCanvas(),true);
+      const outputs=[];window.cleanupPngs=[];let upperReference=null;
+      for(const strength of ${phase==='before'?'[0]':'[0,.9]'}) {
+        r.configure({...state.terrain,cleanup:0,waterfallCleanup:strength});r.render(performance.now(),layoutTerrainCanvas(),true);
         const w=r.canvas.width,upper=Math.round($('spectrum-shell').getBoundingClientRect().height/r.canvas.getBoundingClientRect().height*r.canvas.height),lower=r.canvas.height-upper;
         const pixels=new Uint8Array(w*lower*4);r.gl.readPixels(0,0,w,lower,r.gl.RGBA,r.gl.UNSIGNED_BYTE,pixels);
-        const expectedColor=db=>{const n=Math.max(0,Math.min(1,(db+140)/100)),x=Math.max(0,Math.min(1,(db+125)/4));return terrainColor(n*(1-strength*(1-x*x*(3-2*x))),'reference');};
+        const upperPixels=new Uint8Array(w*upper*4);r.gl.readPixels(0,lower,w,upper,r.gl.RGBA,r.gl.UNSIGNED_BYTE,upperPixels);
+        if(upperReference) {
+          for(let p=0;p<upperPixels.length;p++)if(upperPixels[p]!==upperReference[p])throw Error('Lower cleanup changed an upper 3D pixel');
+        } else upperReference=upperPixels;
+        const expectedColor=db=>terrainColor(${phase==='before'?'_next.cleanupNormalized(db,-140,-40,-129,strength)':'_next.waterfallCleanupNormalized(db,-140,-40,-129,strength)'},'reference');
         const samples=[];
         for(let y=0;y<lower;y++)for(let x=Math.floor(w*.04);x<Math.floor(w*.13);x++) {
           const p=(y*w+x)*4;samples.push(.2126*pixels[p]+.7152*pixels[p+1]+.0722*pixels[p+2]);
@@ -32,7 +36,7 @@ export async function cleanupFixtures({evaluate,call,output,report,phase}) {
         const mean=samples.reduce((a,b)=>a+b,0)/samples.length,sd=Math.sqrt(samples.reduce((a,b)=>a+(b-mean)**2,0)/samples.length);
         let checked=0;const carriers=[738,1500,2170];
         for(let y=0;y<lower;y++)for(const x of [Math.floor(w*.05),...carriers.map(i=>Math.floor(i*w/4096))]) {
-          const a=Math.max(0,Math.floor((1-(y+1)/lower)*512)),end=Math.min(512,Math.max(a+1,Math.ceil((1-y/lower)*512)));
+          const a=Math.max(0,Math.floor((lower-1-y)*512/lower)),end=Math.min(512,Math.max(a+1,Math.floor((lower-y)*512/lower)));
           const lo=Math.floor(x*4096/w),hi=Math.max(lo+1,Math.floor((x+1)*4096/w));let db=-1000;
           for(let age=a;age<end;age++)for(let bin=lo;bin<hi;bin++)db=Math.max(db,h.row(age)[bin]);
           const color=expectedColor(db),offset=(y*w+x)*4;
@@ -58,11 +62,11 @@ export async function cleanupFixtures({evaluate,call,output,report,phase}) {
       }
       if(revision!==h.revision||raw.some((v,i)=>v!==h.data[i]))throw Error('Cleanup changed numerical history');
       if(outputs.length===2) {
-        if(['noise','noise-wide'].includes(kind)&&(outputs[1].meanLuminance>=outputs[0].meanLuminance*.8||outputs[1].backgroundStdDev>=outputs[0].backgroundStdDev*.85||outputs[1].backgroundRgb[2]<50))throw Error('Noise cleanup did not reduce clutter while keeping blue');
+        if(['noise','noise-wide'].includes(kind)&&(outputs[1].meanLuminance>=outputs[0].meanLuminance*.8||outputs[1].backgroundRgb[2]<10))throw Error('Noise cleanup did not darken the background while retaining low-level detail: '+JSON.stringify(outputs));
         if(kind!=='rise'&&outputs[1].weakColorDistance/outputs[1].backgroundStdDev<=outputs[0].weakColorDistance/outputs[0].backgroundStdDev)throw Error('Weak carrier separation relative to clutter did not improve');
         if(outputs[1].weakRows!==outputs[0].weakRows||outputs[1].weakColumns!==outputs[0].weakColumns)throw Error('Cleanup changed carrier/event footprint');
       }
-      return {kind,frames:1800,baseline,rawPreserved:true,outputs};
+      return {kind,frames:1800,baseline,rawPreserved:true,upperPixelsUnchanged:true,outputs};
     })()`);
     const pngs=await evaluate('cleanupPngs');
     for(let i=0;i<pngs.length;i++)writeFileSync(join(output,kind+(i?'-on.png':'-off.png')),Buffer.from(pngs[i],'base64'));

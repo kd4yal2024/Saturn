@@ -30,6 +30,31 @@ describe('numeric history and chronology', () => {
     h.accept(frame(602*50,new Float32Array([602])),50); expect(h.row(1)).toBeNull(); expect(h.row(2)).toBeNull(); expect(h.missing).toBe(2);
     h.accept(frame(99999999,new Float32Array([1000])),50); expect(h.count).toBe(512); expect(h.row(511)).toBeNull();
   });
+  it('timestamps decimated WAN display rows at presentation without hiding real IQ stalls', () => {
+    const html=readFileSync('../templates/saturn-remote-next.html','utf8');
+    expect(html).toContain('acceptSpectrumFrame(visibleBins, now, state.iqFrameVersion, bins.length)');
+    const arrivalHistory=new SpectrumHistory(), displayHistory=new SpectrumHistory();
+    let latestArrival=-Infinity, version=0, lastDrawnVersion=0, lastDraw=-Infinity;
+    // A 30 Hz source and 60 Hz RAF with a 50 ms WAN display gate. Source
+    // timestamps skip and repeat 50 ms buckets even though no IQ is lost.
+    for(let tick=0;tick<=120;tick++) {
+      const now=tick*1000/60;
+      if(tick%2===0) { latestArrival=now; version++; }
+      if(version!==lastDrawnVersion && now-lastDraw>=49) {
+        arrivalHistory.accept(frame(latestArrival,new Float32Array([-120]),version),50);
+        displayHistory.accept(frame(now,new Float32Array([-120]),version),50);
+        lastDrawnVersion=version; lastDraw=now;
+      }
+    }
+    expect(arrivalHistory.missing).toBeGreaterThan(0);
+    expect(arrivalHistory.aggregated).toBeGreaterThan(0);
+    expect(displayHistory.missing).toBe(0);
+    expect(displayHistory.aggregated).toBe(0);
+    // If the source actually stops, hasNewIq prevents rows until it resumes.
+    displayHistory.accept(frame(2500,new Float32Array([-120]),version+1),50);
+    expect(displayHistory.missing).toBeGreaterThan(0);
+    expect(displayHistory.row(1)).toBeNull();
+  });
   it('segments every incompatible RF mapping and cadence instead of stretching history', () => {
     for(const delta of [{centerHz:14201000},{spanHz:24000},{sampleRate:96000},{sourceBins:8},{receiver:'tx:0'}]) {
       const h=new SpectrumHistory(); h.accept(frame(0),50); h.accept({...frame(50),...delta},50);
@@ -78,9 +103,11 @@ describe('presentation settings', () => {
   });
   it('round trips without changing Traditional or radio preferences', () => {
     const state=createAppState(), before=radioPrefsFromState(state), palette=state.waterfallPalette;
-    state.terrain=normalizeTerrain({mode:'3d',gamma:1.4});
+    state.terrain=normalizeTerrain({mode:'3d',gamma:1.4,cleanup:.8,waterfallCleanup:.95});
     const prefs=displayPrefsFromState(state); applyDisplayPrefsToState(prefs,state);
-    expect(state.terrain?.gamma).toBe(1.4); expect(state.waterfallPalette).toBe(palette); expect(radioPrefsFromState(state)).toEqual(before);
+    expect(state.terrain?.gamma).toBe(1.4); expect(state.terrain?.cleanup).toBe(.8);
+    expect(state.terrain?.waterfallCleanup).toBe(.95);
+    expect(state.waterfallPalette).toBe(palette); expect(radioPrefsFromState(state)).toEqual(before);
   });
   it('adds a continuous palette without altering existing choices', () => {
     expect(normalizeWaterfallPalette('reference')).toBe('reference'); expect(referenceColor(0)).toEqual([1,3,12]); expect(referenceColor(1)).toEqual([255,255,255]);

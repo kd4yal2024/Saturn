@@ -3,12 +3,13 @@ export type TerrainSettings = {
   mode: 'traditional' | '3d'; height: number; depth: number; elevation: number;
   floor: number; ceiling: number; gamma: number; smoothing: number;
   palette: string; split: number; quality: 'auto' | 'performance' | 'balanced' | 'high';
-  diagnostics: boolean; gridOpacity: number; cleanup: number; cleanupBaseline: number | null;
+  diagnostics: boolean; gridOpacity: number; cleanup: number; waterfallCleanup: number; cleanupBaseline: number | null;
 };
 export const TERRAIN_DEFAULTS: TerrainSettings = {
   mode: 'traditional', height: 0.65, depth: 128, elevation: 35,
   floor: -140, ceiling: -40, gamma: 0.85, smoothing: 0,
-  palette: 'reference', split: 0.3, quality: 'auto', diagnostics: false, gridOpacity: 0, cleanup: 0.6, cleanupBaseline: null,
+  palette: 'reference', split: 0.3, quality: 'auto', diagnostics: false, gridOpacity: 0,
+  cleanup: 0.6, waterfallCleanup: 0.9, cleanupBaseline: null,
 };
 export function normalizeTerrain(input: unknown): TerrainSettings {
   const s = input && typeof input === 'object' ? input as Record<string, unknown> : {};
@@ -25,6 +26,7 @@ export function normalizeTerrain(input: unknown): TerrainSettings {
     quality: s.quality === 'performance' || s.quality === 'balanced' || s.quality === 'high' ? s.quality : 'auto',
     diagnostics: s.diagnostics === true, gridOpacity: n('gridOpacity', 0, 1),
     cleanup: n('cleanup', 0, .85),
+    waterfallCleanup: n('waterfallCleanup', 0, 1),
     cleanupBaseline: typeof s.cleanupBaseline === 'number' && Number.isFinite(s.cleanupBaseline) ? Math.max(-200,Math.min(20,s.cleanupBaseline)) : null,
   };
 }

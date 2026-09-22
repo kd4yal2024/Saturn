@@ -6919,7 +6919,7 @@
     #terrain-settings::backdrop { background:#0009; }
     #terrain-settings label { display:grid; grid-template-columns:minmax(120px,1fr) minmax(80px,1fr); gap:12px; align-items:center; margin:12px 0; font-size:13px; }
     #terrain-settings input, #terrain-settings select { width:100%; min-width:0; }
-    #terrain-legend { height:10px; margin-top:6px; }
+    #terrain-legend, #terrain-waterfall-legend { height:10px; margin-top:6px; }
     #terrain-diagnostics { white-space:pre-wrap; font-size:11px; }
 
     .display-head { flex-wrap:wrap; }
@@ -8377,14 +8377,16 @@
     <button class="btn" type="button" id="terrain-fit-range">Fit range to current signals</button>
     <output id="terrain-fit-status" class="small" role="status"></output>
     <label>Color gamma <input id="terrain-gamma" type="range" min="0.3" max="3" step="0.05"></label>
-    <label>Noise-floor cleanup <input id="terrain-cleanup" type="range" min="0" max="0.85" step="0.05"></label>
+    <label>Upper surface noise-floor cleanup <input id="terrain-cleanup" type="range" min="0" max="0.85" step="0.05"></label>
+    <label>Lower waterfall cleanup <input id="terrain-waterfallCleanup" type="range" min="0" max="1" step="0.05"></label>
     <label>Cleanup baseline (relative dB) <input id="terrain-cleanupBaseline" type="number" min="-200" max="20" step="0.1" placeholder="Held estimate"></label>
     <button class="btn" type="button" id="terrain-noise-estimate">Re-estimate noise baseline</button>
     <output id="terrain-noise-status" class="small" role="status"></output>
-    <p class="small">Cleanup 0 = Off. Soft display compression near the held baseline; levels 8 dB above it are unchanged. No averaging or blur. Blank baseline uses the held estimate.</p>
+    <p class="small">Cleanup 0 = Off. Upper surface cleanup leaves levels 8 dB above the held baseline unchanged. Lower waterfall cleanup uses a wider 24 dB transition to retain weak detail as the background darkens. Neither setting averages or blurs samples. Blank baseline uses the held estimate.</p>
     <label>Spatial smoothing <input id="terrain-smoothing" type="range" min="0" max="1" step="0.05"></label>
     <label>Palette <select id="terrain-palette"><option value="reference">Reference Blue / Rainbow</option><option value="reference-dark">Reference Dark</option><option value="classic">Classic</option><option value="ember">Ember</option><option value="ice">Ice</option><option value="forest">Forest</option><option value="enhanced">Enhanced</option></select></label>
-    <div id="terrain-legend" aria-label="Unlit amplitude color legend"></div><output id="terrain-legend-label" class="small"></output>
+    <div id="terrain-legend" aria-label="Upper surface amplitude color legend"></div><output id="terrain-legend-label" class="small"></output>
+    <div id="terrain-waterfall-legend" aria-label="Lower waterfall amplitude color legend"></div><output id="terrain-waterfall-legend-label" class="small"></output>
     <label>Spectrum / waterfall split <input id="terrain-split" type="range" min="0.2" max="0.65" step="0.01"></label>
     <label>Quality <select id="terrain-quality"><option value="auto">Auto</option><option value="performance">Performance (30 fps target)</option><option value="balanced">Balanced (60 fps target)</option><option value="high">High (60 fps target)</option></select></label>
     <label>Grid opacity <input id="terrain-gridOpacity" type="range" min="0" max="1" step="0.05"></label>
@@ -10068,19 +10070,28 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     }
     function updateTerrainColorLegend() {
       const s = state.terrain;
-      const stops = Array.from({length:33}, (_, i) => `rgb(${terrainColor(_next.cleanupNormalized(s.floor+i/32*(s.ceiling-s.floor),s.floor,s.ceiling,s.cleanupBaseline ?? spectrumHistory.noiseFloor ?? s.floor,s.cleanup) ** s.gamma,s.palette).join(",")}) ${i/32*100}%`);
-      $("terrain-legend").style.background = `linear-gradient(to right, ${stops.join(",")})`;
-      $("terrain-legend-label").textContent = `${s.floor} → ${s.ceiling} relative dB · unlit`;
+      const baseline = s.cleanupBaseline ?? spectrumHistory.noiseFloor ?? s.floor;
+      const legend = (element, mapper) => {
+        const stops = Array.from({length:33}, (_, i) => {
+          const db = s.floor+i/32*(s.ceiling-s.floor);
+          return `rgb(${terrainColor(mapper(db,s.floor,s.ceiling,baseline) ** s.gamma,s.palette).join(",")}) ${i/32*100}%`;
+        });
+        $(element).style.background = `linear-gradient(to right, ${stops.join(",")})`;
+      };
+      legend("terrain-legend", (db,floor,ceiling,held) => _next.cleanupNormalized(db,floor,ceiling,held,s.cleanup));
+      legend("terrain-waterfall-legend", (db,floor,ceiling,held) => _next.waterfallCleanupNormalized(db,floor,ceiling,held,s.waterfallCleanup));
+      $("terrain-legend-label").textContent = `Upper surface · ${s.floor} → ${s.ceiling} relative dB`;
+      $("terrain-waterfall-legend-label").textContent = `Lower waterfall · ${s.floor} → ${s.ceiling} relative dB`;
     }
     function updateTerrainNoiseStatus() {
       updateTerrainColorLegend();
       const s = state.terrain;
       const baseline = s.cleanupBaseline ?? spectrumHistory.noiseFloor;
-      $("terrain-noise-status").textContent = `Cleanup ${Math.round(s.cleanup*100)}% · ${baseline == null ? "Waiting for spectrum" : `${s.cleanupBaseline == null ? "Held" : "Manual"} baseline ${baseline.toFixed(1)} relative dB`}`;
+      $("terrain-noise-status").textContent = `Upper ${Math.round(s.cleanup*100)}% · Lower ${Math.round(s.waterfallCleanup*100)}% · ${baseline == null ? "Waiting for spectrum" : `${s.cleanupBaseline == null ? "Held" : "Manual"} baseline ${baseline.toFixed(1)} relative dB`}`;
     }
     function syncTerrainControls() {
       const s = _next.normalizeTerrain(state.terrain);
-      for (const key of ["mode", "height", "depth", "elevation", "floor", "ceiling", "gamma", "smoothing", "palette", "split", "quality", "gridOpacity", "cleanup", "cleanupBaseline"]) {
+      for (const key of ["mode", "height", "depth", "elevation", "floor", "ceiling", "gamma", "smoothing", "palette", "split", "quality", "gridOpacity", "cleanup", "waterfallCleanup", "cleanupBaseline"]) {
         $("terrain-" + key).value = `${s[key] ?? ""}`;
       }
       document.documentElement.style.setProperty("--terrain-grid-opacity", s.gridOpacity);
@@ -10099,11 +10110,16 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     }
     function terrainDiagnostics() {
       const detail = terrainRenderer?.diagnostics() || {};
+      const visibleBins = spectrumHistory.width;
+      const backingWidth = terrainRenderer?.canvas.width || 0;
       const traditionalHistory = waterfallRenderer.textureData.byteLength * (waterfallRenderer.gl ? 2 : 1);
       const traditionalTargets = [spectrumRenderer.canvas, waterfallRenderer.canvas]
         .reduce((bytes, canvas) => bytes + canvas.width * canvas.height * 12, 0);
       const traditionalGeometry = (spectrumRenderer.fillVertices?.byteLength || 0) * 2 + spectrumHistory.width * 8;
-      return { ...detail, traditionalEstimatedBytes: traditionalHistory + traditionalTargets + traditionalGeometry,
+      return { ...detail, displayProfile: displayProfileDiagnostics(),
+        visibleBinsPerBackingPixel: backingWidth ? visibleBins / backingWidth : null,
+        fftWindowMs: fftProcessor.size / Math.max(1, displaySampleRateHz()) * 1000,
+        traditionalEstimatedBytes: traditionalHistory + traditionalTargets + traditionalGeometry,
         combinedDisplayEstimatedBytes: (detail.bytes || spectrumHistory.bytes) + traditionalHistory + traditionalTargets + traditionalGeometry,
         allocationNote: "Includes retained Traditional CPU/GPU image, geometry and estimated double color/depth targets. Driver overhead is not measurable here." };
     }
@@ -10140,7 +10156,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         $("display-pause").textContent = state.displayPaused ? "Resume" : "Pause";
         $("display-pause").setAttribute("aria-pressed", `${state.displayPaused}`);
       });
-      for (const key of ["mode", "height", "depth", "elevation", "floor", "ceiling", "gamma", "smoothing", "palette", "split", "quality", "gridOpacity", "cleanup", "cleanupBaseline"]) {
+      for (const key of ["mode", "height", "depth", "elevation", "floor", "ceiling", "gamma", "smoothing", "palette", "split", "quality", "gridOpacity", "cleanup", "waterfallCleanup", "cleanupBaseline"]) {
         $("terrain-" + key).addEventListener(["floor", "ceiling", "depth", "cleanupBaseline"].includes(key) ? "change" : "input", () => {
           const raw = $("terrain-" + key).value;
           if (!raw.trim() && key !== "cleanupBaseline") return;
@@ -14314,13 +14330,23 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     }
 
     function displayFftTargetSize(now = performance.now()) {
-      if (phoneWanLiteActive(now)) {
-        return DISPLAY_PHONE_WAN_FFT_SIZE;
-      }
-      if (wanDisplayActive(now)) {
-        return DISPLAY_WAN_FFT_SIZE;
-      }
-      return DISPLAY_BASE_FFT_SIZE;
+      const base = phoneWanLiteActive(now) ? DISPLAY_PHONE_WAN_FFT_SIZE
+        : wanDisplayActive(now) ? DISPLAY_WAN_FFT_SIZE : DISPLAY_BASE_FFT_SIZE;
+      if (!state.terrainActive || state.layoutMode === "phone") return base;
+      // High-Res 3D must not magnify a WAN-size spectrum across a device-density
+      // waterfall. Cover roughly one 30 Hz IQ frame, but bound the FFT window
+      // to 50 ms so low-rate sources do not smear several history rows together.
+      const pixels = terrainRenderer?.canvas.width || 0;
+      const rate = displaySampleRateHz();
+      if (pixels < 2 || !Number.isFinite(rate) || rate <= 0) return base;
+      const zoom = effectiveDisplayZoom();
+      const desired = Math.max(pixels * zoom, rate * 0.033);
+      const byDetail = 2 ** Math.ceil(Math.log2(Math.max(2, desired)));
+      const byTime = 2 ** Math.floor(Math.log2(Math.max(2, rate * 0.05)));
+      const maxVisibleBins = Math.min(terrainRenderer.maxHistoryWidth,
+        spectrumHistory.maxBytes / (4 * spectrumHistory.capacity));
+      const byTexture = 2 ** Math.floor(Math.log2(Math.max(2, maxVisibleBins * zoom)));
+      return Math.max(32, Math.min(16384, byTexture, Math.max(base, Math.min(byDetail, byTime))));
     }
 
     function displayProfileDiagnostics(now = performance.now()) {
@@ -18693,7 +18719,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         (!txDisplayActive || state.displayIqSource === "tx");
       if (canRenderIq) {
         const hasNewIq = state.iqFrameVersion !== state.lastRenderedIqFrameVersion;
-        if (hasNewIq && now - state.lastSpectrumRenderAt >= displayRenderIntervalMs(now)) {
+        if (hasNewIq && now - state.lastSpectrumRenderAt >= displayRenderIntervalMs(now) - (state.terrainActive ? 1 : 0)) {
           const iqWindow = buildRenderIqWindow();
           if (iqWindow && iqWindow.length >= 64) {
             const samplePairs = Math.floor(iqWindow.length / 2);
@@ -18706,7 +18732,12 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
             const drawStartedAt = performance.now();
             recordBrowserTimingSample(displayTimingBuckets.fft, drawStartedAt - fftStartedAt);
             const visibleBins = visibleBinsForDisplay(bins);
-            if (!state.displayPaused) acceptSpectrumFrame(visibleBins, state.lastFrameAt, state.iqFrameVersion, bins.length);
+            // History buckets describe when a selected FFT was displayed. At
+            // 30 IQ frames/s and a 50 ms WAN display cadence, source-arrival
+            // timestamps alternate between skipped and repeated 50 ms buckets,
+            // producing artificial horizontal gray bands despite continuous IQ.
+            // A real IQ stall still creates a gap: hasNewIq prevents ingestion.
+            if (!state.displayPaused) acceptSpectrumFrame(visibleBins, now, state.iqFrameVersion, bins.length);
             const processedBins = processedDisplayBins(visibleBins);
             updateDisplayRange(processedBins);
             spectrumRenderer.render(processedBins, state.displayFloorDb, state.displayCeilingDb);

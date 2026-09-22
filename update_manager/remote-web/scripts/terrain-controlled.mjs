@@ -4,7 +4,7 @@ import { join } from 'node:path';
 export async function controlled({evaluate, call, output, report, phase}) {
   report.controlled=[];
   await evaluate(`(()=>{
-    state.terrain={...state.terrain,floor:-140,ceiling:-40,gamma:1,cleanup:0,height:.65,smoothing:0,quality:'balanced',depth:128};
+    state.terrain={...state.terrain,floor:-140,ceiling:-40,gamma:1,cleanup:0,waterfallCleanup:0,height:.65,smoothing:0,quality:'balanced',depth:128};
     window.controlledStyle=document.createElement('style');
     controlledStyle.textContent='[data-terrain="true"] .display-stack .spectrum-shell > :not(canvas),[data-terrain="true"] .display-stack .waterfall-shell > :not(canvas){visibility:hidden!important}';
     document.head.appendChild(controlledStyle);
@@ -49,7 +49,7 @@ export async function controlled({evaluate, call, output, report, phase}) {
       if(${JSON.stringify(phase)}==='after' && kind==='constant' && fence[2]>15)throw Error('Opaque front fence remains');
       let checkedPixels=0;
       for(let y=0;y<lower;y++)for(const x of [0,Math.floor(w*.18),Math.floor(w*.53),w-1]) {
-        const ageLo=Math.max(0,Math.floor((1-(y+1)/lower)*512)),ageHi=Math.min(512,Math.max(ageLo+1,Math.ceil((1-y/lower)*512)));
+        const ageLo=Math.max(0,Math.floor((lower-1-y)*512/lower)),ageHi=Math.min(512,Math.max(ageLo+1,Math.floor((lower-y)*512/lower)));
         const lo=Math.floor(x*4096/w),hi=Math.max(lo+1,Math.floor((x+1)*4096/w));let db=-1000;
         for(let age=ageLo;age<ageHi;age++)for(let bin=lo;bin<hi;bin++)db=Math.max(db,h.row(age)[bin]);
         const expected=terrainColor((db+140)/100,'reference'),offset=(y*w+x)*4;

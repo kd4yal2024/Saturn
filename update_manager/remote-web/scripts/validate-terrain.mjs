@@ -6,6 +6,9 @@ import { dirname, resolve, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
+import { sharpness } from './terrain-sharpness.mjs';
+import { wanZoom } from './terrain-wan-zoom.mjs';
+import { cadenceFlicker } from './terrain-cadence-flicker.mjs';
 import { controlled } from './terrain-controlled.mjs';
 import { cleanupFixtures } from './terrain-cleanup-fixtures.mjs';
 const root=resolve(dirname(fileURLToPath(import.meta.url)),'..');
@@ -54,7 +57,7 @@ window.fixtureFeed=(count=1)=>{
   state.connected=true; state.iqStreaming=false; state.demoMode=false;
   state.dds=14200000; state.vfoA=14200000; state.sampleRate=48000; state.displayZoom=1; state.frequencyLock=false;
   fixtureFeed(600);
-  state.terrain=_next.normalizeTerrain({mode:'3d',diagnostics:true,quality:'balanced',cleanup:0});
+  state.terrain=_next.normalizeTerrain({mode:'3d',diagnostics:true,quality:'balanced',cleanup:0,waterfallCleanup:0});
   if(!setTerrainMode('3d',false)) throw Error(terrainFailure);
   updateAxes(); updateFilterOverlay(); renderBandEdges();
   const label=document.createElement('div');label.textContent='SYNTHETIC FIXTURE — NOT LIVE RF';label.style.cssText='position:fixed;right:4px;top:2px;z-index:99999;background:#382009;color:#ffe1a1;padding:3px 7px;font:11px monospace';document.body.appendChild(label);
@@ -102,7 +105,13 @@ try {
   const errors=await evaluate('window.fixtureErrors');if(errors?.length)throw Error(errors.join('\n'));
   if(!await evaluate('window.fixtureDone && state.terrainActive'))throw Error('3D initialization did not finish: '+await evaluate('document.body.innerText.slice(-1000)'));
   report.checks.push('actual application initializes the shipped 3D renderer through live display adapter');
-  if(argument('cleanup')) {
+  if(argument('cadence-flicker')) {
+    await cadenceFlicker({evaluate,call,output,report});
+  } else if(argument('wan-sharpness')) {
+    await wanZoom({evaluate,call,output,report});
+  } else if(argument('sharpness')) {
+    await sharpness({evaluate,call,output,report,phase:argument('sharpness')});
+  } else if(argument('cleanup')) {
     await cleanupFixtures({evaluate,call,output,report,phase:argument('cleanup')});
   } else if(argument('controlled')) {
     await controlled({evaluate,call,output,report,phase:argument('controlled')});
@@ -153,7 +162,7 @@ try {
     const upper=Math.round($('spectrum-shell').getBoundingClientRect().height/canvasRect.height*r.canvas.height);
     const lower=r.canvas.height-upper;
     for(const y of [0,10,Math.floor(lower/3),lower-1])for(const x of [20,Math.floor(r.canvas.width*.18),Math.floor(r.canvas.width*.53),r.canvas.width-10]) {
-      const age=Math.max(0,Math.floor((1-(y+1)/lower)*512)),ageHi=Math.min(h.count,Math.max(age+1,Math.ceil((1-y/lower)*512)));
+      const age=Math.max(0,Math.floor((lower-1-y)*512/lower)),ageHi=Math.min(h.count,Math.max(age+1,Math.floor((lower-y)*512/lower)));
       const lo=Math.floor(x*h.width/r.canvas.width),hi=Math.max(lo+1,Math.floor((x+1)*h.width/r.canvas.width));
       let db=-1000,missing=false;
       for(let a=age;a<ageHi;a++) {
@@ -231,7 +240,7 @@ try {
     const raw=new Float32Array(spectrumHistory.latestRaw),revision=spectrumHistory.revision;
     const beforeRadio=JSON.stringify(currentRadioPrefs());
     $('view-traditional').click();$('view-3d').click();
-    for(const [id,value] of [['height','0.5'],['cleanup','0.6'],['gridOpacity','0.3'],['elevation','30'],['gamma','1.2'],['smoothing','0'],['palette','ember'],['palette','reference-dark'],['palette','reference']]) {
+    for(const [id,value] of [['height','0.5'],['cleanup','0.6'],['waterfallCleanup','0.9'],['gridOpacity','0.3'],['elevation','30'],['gamma','1.2'],['smoothing','0'],['palette','ember'],['palette','reference-dark'],['palette','reference']]) {
       $('terrain-'+id).value=value;$('terrain-'+id).dispatchEvent(new Event('input',{bubbles:true}));
     }
     for(const [id,value] of [['floor','-145'],['ceiling','-35'],['depth','96']]) { $('terrain-'+id).value=value;$('terrain-'+id).dispatchEvent(new Event('change',{bubbles:true})); }

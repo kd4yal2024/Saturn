@@ -1,5 +1,11 @@
 # Display-only noise-floor cleanup
 
+This document records the original shared cleanup pass. The current High-Res
+3D view has separate upper-surface and lower-waterfall cleanup controls; see
+[WATERFALL_SHARPNESS.md](WATERFALL_SHARPNESS.md) for the later lower-waterfall
+transfer curve and validation. The measurements below remain historical results
+for the original mapping.
+
 This pass starts from `d24a76c`. It preserves the rich Reference palette,
 Traditional mode, fence-free connected surface, passband presentation and radio
 controls. It changes only the display mapping near a held baseline. There is

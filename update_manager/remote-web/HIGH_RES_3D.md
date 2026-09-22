@@ -22,7 +22,8 @@ command belongs to the view selector. The current server already redirects
   Camera adjustments use the settings only.
 - **Display Settings** contains surface height, recent-history depth, camera
   elevation, manual floor/ceiling, gamma, spatial smoothing (including zero),
-  palette, split, quality, diagnostics, and reset. Start the floor near the raw
+  palette, separate upper-surface and lower-waterfall cleanup, split, quality,
+  diagnostics, and reset. Start the floor near the raw
   noise level and the ceiling near strong signals; the default −140 / −40 dB
   range is a starting point, not a measured hardware calibration. It also links to the existing
   Traditional appearance controls. The divider remains adjustable with pointer
@@ -88,15 +89,17 @@ intervals are never joined by a surface.
 
 The constrained projection leaves the front frequency edge horizontal. The
 front edge is a thin measured outline, with no opaque skirt or per-row walls.
-The surface and waterfall share unlit amplitude colors. With cleanup Off, height remains linear
-in clamped dB normalization. Optional cleanup applies the documented monotone
+The surface and waterfall share the selected unlit palette but have separate
+pointwise cleanup transfer curves. With upper cleanup Off, height remains linear
+in clamped dB normalization. Upper cleanup applies the documented monotone
 soft knee near a held noise baseline before color and height mapping. There is
 zero height offset and a clip-space multiplier of 0.75 times Surface height. CPU picking uses the same projection, perspective-correct
 triangle interpolation and sampled source levels; there are no runtime GPU
 readbacks. Peak reduction across source bins is used for mesh columns and
 waterfall pixels. When the waterfall is shorter than its 512 rows, each pixel
-takes the peak over the explicit timestamp buckets it intersects, so one-row
-impulses are not skipped. Pixels touching a missing bucket are conservatively
+takes the peak over a disjoint group of timestamp buckets, so one-row
+impulses are not skipped or reused in adjacent pixels. Enlarged history repeats
+the owning bucket without interpolation. Pixels containing a missing bucket are conservatively
 marked gray. This is display reduction; the cursor still samples the original
 numeric frequency/time bucket. Optional spatial smoothing is convex and display-only; no
 spline overshoot or temporal peak-hold mountains are introduced.
@@ -137,18 +140,28 @@ limits applied. Overlays remain normal DOM pixels even when mesh resolution is
 reduced. No new transport, framework, 3D engine, runtime dependency or CDN asset
 is used.
 
-| Quality | Maximum mesh columns × rows | DPR cap | Pixel cap | Refresh target |
-| --- | --- | --- | --- | --- |
-| Performance | 512 × 48 | 1 | 1.5 million | 30 fps |
-| Balanced | 1024 × 128 | 1.5 | 3 million | 60 fps |
-| High | 2048 × 256 | 2 | 5 million | 60 fps |
-| Auto | Starts Balanced; reduces to Performance | tier dependent | tier dependent | tier dependent |
+| Quality | Maximum mesh columns × rows | Refresh target |
+| --- | --- | --- |
+| Performance | 512 × 48 | 30 fps |
+| Balanced | 1024 × 128 | 60 fps |
+| High | 2048 × 256 | 60 fps |
+| Auto | Starts Balanced; reduces to Performance | tier dependent |
+
+All tiers use device pixel density for the canvas. The shared backing store is
+bounded by eight million pixels, the 96 MiB view budget and GPU dimension limits.
+Diagnostics explicitly report any resource-driven resolution reduction. Quality
+reduces upper mesh detail and refresh without upscaling the waterfall.
+For desktop High-Res 3D, the source FFT also follows the actual backing width
+and display zoom, bounded to 16384 points and a 50-ms input window. This prevents
+the WAN profile's 2048-point FFT from being stretched across a high-density
+waterfall. Traditional and the phone WAN profile retain their existing FFTs;
+neither the IQ transport rate nor radio commands change.
 
 Actual geometry is also limited by available bins and the chosen recent depth.
 Auto demotes after sustained slow frames with a five-second holdoff. It attempts
 recovery only after twenty seconds of stability, doubling the recovery wait
-(up to five minutes) after unsuccessful trials to avoid repeated oscillation. It changes geometry, pixel
-resolution and visual refresh, never radio/DSP settings, row cadence or stored
+(up to five minutes) after unsuccessful trials to avoid repeated oscillation. It changes geometry
+and visual refresh, never radio/DSP settings, row cadence or stored
 levels. Targets are not claims of hardware performance.
 
 The 3D view budgets at most approximately 96 MiB for its numeric CPU/GPU copies,
@@ -245,9 +258,17 @@ coordinates and all operating gestures are unchanged.
 ## Noise-floor cleanup
 
 See [mapping, weak-signal proof and identical-data comparisons](NOISE_FLOOR_CLEANUP.md).
-**Noise-floor cleanup** defaults to 60%; set it to zero for the preceding view.
+**Upper surface noise-floor cleanup** defaults to 60%; set it to zero for the preceding view.
 The baseline estimate is held per history segment, with an explicit **Re-estimate
 noise baseline** button and manual override. No blur or time averaging is added.
 Palette/gamma, height exaggeration and floor/ceiling remain separate controls.
-Measurements and the raw cursor stay unchanged; cleanup softens only the displayed
-near-floor values. Above baseline +8 dB, the original mapping is restored.
+Measurements and the raw cursor stay unchanged; upper cleanup softens only the
+displayed near-floor values. Above baseline +8 dB, the original upper mapping
+is restored. **Lower waterfall cleanup** is independent, defaults to 90% and
+can be adjusted from Off to 100%. It darkens levels below the same held
+baseline and restores the original lower mapping over a 24 dB shoulder, without
+changing the upper surface, source samples, history, row spacing or palette.
+Two legends show the distinct upper and lower color transfer curves.
+
+For the lower-waterfall sampling correction, reproducible comparisons and current
+backing-store measurements, see [WATERFALL_SHARPNESS.md](WATERFALL_SHARPNESS.md).
