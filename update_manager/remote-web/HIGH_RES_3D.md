@@ -96,12 +96,14 @@ soft knee near a held noise baseline before color and height mapping. There is
 zero height offset and a clip-space multiplier of 0.75 times Surface height. CPU picking uses the same projection, perspective-correct
 triangle interpolation and sampled source levels; there are no runtime GPU
 readbacks. Peak reduction across source bins is used for mesh columns and
-waterfall pixels. When the waterfall is shorter than its 512 rows, each pixel
-takes the peak over a disjoint group of timestamp buckets, so one-row
-impulses are not skipped or reused in adjacent pixels. Enlarged history repeats
-the owning bucket without interpolation. Pixels containing a missing bucket are conservatively
-marked gray. This is display reduction; the cursor still samples the original
-numeric frequency/time bucket. Optional spatial smoothing is convex and display-only; no
+waterfall pixels. The lower waterfall gives every displayed timestamp bucket a
+fixed integer physical-pixel height. It shows as many of the newest retained
+rows as fit instead of fractionally stretching or compressing all 512 rows.
+This prevents a descending row from alternating between one and two pixels at
+fractional device scales. No adjacent times are averaged or interpolated, and
+a one-row impulse retains exactly one fixed stripe. Missing buckets are marked
+gray. Diagnostics report the row pitch, visible row count and displayed time;
+the cursor uses the same raster mapping. Optional spatial smoothing is convex and display-only; no
 spline overshoot or temporal peak-hold mountains are introduced.
 
 The shared visible-bin helper also fixes an existing high-zoom error on smaller
@@ -197,7 +199,7 @@ labels screenshots **synthetic**, and exercises the production adapter and
 renderer. It includes steady and nearby carriers, a voice-like envelope, a weak
 carrier, impulses, drifting tone, known amplitude steps and missing intervals.
 It checks numerical waterfall pixels, GPU leading-outline heights at known amplitude steps,
-compressed single-row impulses, projection, 100 view cycles, presentation
+fixed-pitch single-row impulses and exact integer descent at DPR 1.5, projection, 100 view cycles, presentation
 command isolation, pause state, hidden drawing, loss/recovery, unsupported
 WebGL2, actual 30-second inactive-cache expiry, page-restoration handlers,
 and desktop/phone layouts. With `SATURN_TERRAIN_BASELINE` pointing to a frozen

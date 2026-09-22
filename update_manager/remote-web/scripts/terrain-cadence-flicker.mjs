@@ -33,9 +33,10 @@ export async function cadenceFlicker({ evaluate, call, output, report }) {
       r.render(performance.now(),layoutTerrainCanvas(),true);
       const rect=r.canvas.getBoundingClientRect();
       const upper=Math.round($('spectrum-shell').getBoundingClientRect().height/rect.height*r.canvas.height);
-      const lower=r.canvas.height-upper, pixel=new Uint8Array(4), grayAges=[];
+      const lower=r.canvas.height-upper,rowPixels=r.diagnostics().waterfallRowPixels,pixel=new Uint8Array(4),grayAges=[];
       for(let age=0;age<h.count;age++) {
-        const top=Math.ceil(age*lower/h.capacity);
+        const top=age*rowPixels;
+        if(top>=lower)break;
         r.gl.readPixels(100,lower-1-top,1,1,r.gl.RGBA,r.gl.UNSIGNED_BYTE,pixel);
         const gray=Math.abs(pixel[0]-20)<=1 && Math.abs(pixel[1]-22)<=1 && Math.abs(pixel[2]-26)<=1;
         if(gray) grayAges.push(age);

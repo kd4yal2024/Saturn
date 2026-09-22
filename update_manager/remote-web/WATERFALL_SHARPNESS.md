@@ -228,5 +228,41 @@ were verified: JS
 `151da35180130ada869222b9ea57b88b0559b97b8c32ff2118f40f53bd10bc77`
 and HTML
 `5a1a1daf3c3b93c302378ccbb07cfdd6ceb441a7c9ff2f6ba8b3417cd90ee857`.
-The live visual result has **not yet been reported**; the controlled tests do
-not establish that all on-air flicker is gone.
+The operator subsequently reported substantial residual flicker, prompting the
+row-raster follow-up below; the controlled tests did not establish that all
+on-air flicker was gone.
+
+## Follow-up: stable descending row raster
+
+The operator then reported that substantial horizontal flicker remained. The
+earlier cadence correction had already eliminated missing and aggregated rows,
+and live diagnostics showed a full-density backing store with no filtering of
+the numerical history. One raster instability remained: a lower viewport such
+as 655 or approximately 744 physical pixels was stretching the 512 retained
+rows by a fractional ratio. As a row descended, its nearest-sampled footprint
+therefore alternated between one and two pixels. The samples were sharp, but
+their horizontal edges changed thickness from step to step.
+
+The lower shader now assigns each displayed timestamp bucket one fixed integer
+physical-pixel stripe. A 655- or 744-pixel lower viewport uses two pixels per
+row and displays the newest 328 or 372 retained rows respectively. A viewport
+at or below 512 pixels uses one pixel per row. Older retained rows that do not
+fit remain in the numerical ring for the upper surface and Traditional rebuild;
+they are not compressed into the lower viewport. This intentionally trades
+some lower displayed time for stable row geometry. It adds no time averaging,
+interpolation, blur, invented samples or radio/DSP change. Cursor age mapping
+uses the identical pitch.
+
+The controlled Chromium fixture at DPR 1.5 produced a 655-pixel lower viewport
+and a two-pixel pitch. After one new history bucket, 2,612 compared RGBA channel
+values translated by exactly two pixels with maximum difference zero. Constant,
+noise, stationary/nearby carrier, weak one-bin carrier, broadband rise, brief
+event, pulse, missing-interval and cadence fixtures passed. After the G2 deployment
+instructions, the operator reported “that is better.” This establishes a reported
+visual improvement, not elimination of all flicker or a live RF soak result.
+The full integrated
+browser validator also passed mode switching, cursor chronology, tuning, pause,
+cache expiry, page lifecycle and context-loss recovery. Candidate hashes are JS
+`2ec2f2cce4cae28fc1fa578a715aaa077c57399186e48b068e2c0ea1c5f47d2d`
+and HTML
+`8f35e44f0dfdcb2897fc81296fcc43dabd78c0d1731d615afae0e2621d1aa166`.

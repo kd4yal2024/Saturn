@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { SpectrumHistory, type SpectrumFrame } from '../src/dsp/spectrum-history';
 import { normalizeTerrain, referenceColor, fitTerrainRange } from '../src/settings/terrain';
+import { waterfallRowLayout } from '../src/render/terrain';
 import { normalizeDisplayPrefs, normalizeWaterfallPalette } from '../src/settings/normalize';
 import { visibleBinsForDisplay } from '../src/dsp/display';
 import { FftProcessor } from '../src/dsp/fft';
@@ -160,6 +161,18 @@ describe('3D amplitude diagnostics and geometry contract', () => {
     expect(source).toContain('gl.drawArrays(gl.LINE_STRIP, 0, this.columns)');
     expect(source).not.toContain('skirt');
     expect(source).not.toContain('readPixels');
+  });
+  it('uses a fixed integer raster pitch for descending waterfall rows', () => {
+    expect(waterfallRowLayout(744,512)).toEqual({rowPixels:2,visibleRows:372});
+    expect(waterfallRowLayout(655,512)).toEqual({rowPixels:2,visibleRows:328});
+    expect(waterfallRowLayout(420,512)).toEqual({rowPixels:1,visibleRows:420});
+    expect(waterfallRowLayout(1024,512)).toEqual({rowPixels:2,visibleRows:512});
+    const source=readFileSync('src/render/terrain.ts','utf8');
+    expect(source).toContain('int ageLo = top / waterfallRowPixels;');
+    expect(source).not.toContain('top * capacity / int(viewport.y)');
+    const html=readFileSync('../templates/saturn-remote-next.html','utf8');
+    expect(html).toContain('const age = terrainRenderer.waterfallAgeAt(y)');
+    expect(html).not.toContain('Math.floor(y * 512)');
   });
 });
 

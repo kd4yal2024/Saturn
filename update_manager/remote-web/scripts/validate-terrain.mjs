@@ -160,9 +160,9 @@ try {
     if(gl.getError()!==gl.NO_ERROR)throw Error('WebGL error');
     const canvasRect=r.canvas.getBoundingClientRect();
     const upper=Math.round($('spectrum-shell').getBoundingClientRect().height/canvasRect.height*r.canvas.height);
-    const lower=r.canvas.height-upper;
+    const lower=r.canvas.height-upper,rowPixels=r.diagnostics().waterfallRowPixels;
     for(const y of [0,10,Math.floor(lower/3),lower-1])for(const x of [20,Math.floor(r.canvas.width*.18),Math.floor(r.canvas.width*.53),r.canvas.width-10]) {
-      const age=Math.max(0,Math.floor((lower-1-y)*512/lower)),ageHi=Math.min(h.count,Math.max(age+1,Math.floor((lower-y)*512/lower)));
+      const age=Math.max(0,Math.floor((lower-1-y)/rowPixels)),ageHi=Math.min(h.count,age+1);
       const lo=Math.floor(x*h.width/r.canvas.width),hi=Math.max(lo+1,Math.floor((x+1)*h.width/r.canvas.width));
       let db=-1000,missing=false;
       for(let a=age;a<ageHi;a++) {
@@ -211,21 +211,21 @@ try {
   report.impulse=await evaluate(`(()=>{
     const r=terrainRenderer;r.configure(state.terrain);r.render(performance.now(),layoutTerrainCanvas(),true);
     const rect=r.canvas.getBoundingClientRect(),upper=Math.round($('spectrum-shell').getBoundingClientRect().height/rect.height*r.canvas.height),lower=r.canvas.height-upper;
-    const nearestRows=new Set(Array.from({length:lower},(_,y)=>Math.floor((1-(y+.5)/lower)*512)));
-    const age=Array.from({length:490},(_,i)=>i+10).find(a=>!nearestRows.has(a));
-    if(age===undefined)throw Error('Impulse fixture must compress history');
-    spectrumHistory.clear('Single-row compressed impulse fixture');
+    const rowPixels=r.diagnostics().waterfallRowPixels;
+    const age=Math.min(200,Math.floor(lower/rowPixels)-10);
+    if(age<1)throw Error('Impulse fixture needs a visible history row');
+    spectrumHistory.clear('Single-row raster impulse fixture');
     const bins=new Float32Array(4096);
     for(let t=0;t<512;t++) {bins.fill(t===511-age?-60:-130);acceptSpectrumFrame(bins,fixtureTimestamp,fixtureIndex++,4096);fixtureTimestamp+=33;}
     if(spectrumHistory.row(age)[0]!==-60)throw Error('Impulse fixture chronology is incorrect');
     r.render(performance.now(),layoutTerrainCanvas(),true);
     const bytes=new Uint8Array(lower*4);r.gl.readPixels(Math.floor(r.canvas.width/2),0,1,lower,r.gl.RGBA,r.gl.UNSIGNED_BYTE,bytes);
     const rows=[];for(let y=0;y<lower;y++)if(bytes[y*4]>200)rows.push(y);
-    if(rows.length<1||rows.length>3)throw Error('Compressed single-row impulse was lost or lingered: '+rows);
+    if(rows.length!==rowPixels||rows.some((y,i)=>i&&y!==rows[i-1]+1))throw Error('Single-row impulse changed raster thickness: '+rows);
     fixtureFeed(600);r.render(performance.now(),layoutTerrainCanvas(),true);
-    return {sourceAge:age,visiblePixelRows:rows,nearestSamplingWouldLoseIt:true};
+    return {sourceAge:age,visiblePixelRows:rows,rowPixels};
   })()`);
-  report.checks.push('a single-row impulse skipped by nearest sampling survives compressed waterfall rendering without a lingering trail');
+  report.checks.push('a single-row impulse occupies exactly the fixed integer waterfall-row pitch without a lingering trail');
   report.switches=await evaluate(`(()=>{
     const snapshot=JSON.stringify({radio:currentRadioPrefs(),dds:state.dds,zoom:state.displayZoom,history:spectrumHistory.revision,paused:state.displayPaused});
     const times=[];const renderer=terrainRenderer;

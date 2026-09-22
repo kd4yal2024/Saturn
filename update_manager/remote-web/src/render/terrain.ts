@@ -48,7 +48,7 @@ precision highp float;
 precision highp int;
 uniform highp sampler2D levels;
 uniform lowp sampler2D palette;
-uniform int head, width, capacity, count;
+uniform int head, width, capacity, count, waterfallRowPixels;
 uniform float floorDb, ceilingDb, gammaValue;
 uniform vec2 viewport;
 uniform bool terrain;
@@ -61,13 +61,13 @@ void main() {
   float db = level;
   if(terrain) { if(valid < 0.999) discard; }
   else {
-    // Top pixel is newest. Integer, disjoint bucket partitions when reducing
-    // history: each measured row belongs to exactly one output row. Ceil of
-    // the far edge would reuse boundary buckets in adjacent pixels (time dilation).
-    // When enlarged, repeat the owning bucket without temporal interpolation.
+    // Top pixel is newest. Every measured row owns an integer-height stripe,
+    // so its raster thickness cannot alternate as it descends. Fractionally
+    // stretching all 512 rows made horizontal edges shimmer at common DPRs.
+    // Older retained rows outside the viewport are intentionally not compressed.
     int top = int(viewport.y) - 1 - int(gl_FragCoord.y);
-    int ageLo = top * capacity / int(viewport.y);
-    int ageHi = min(count, max(ageLo+1, (top+1)*capacity/int(viewport.y)));
+    int ageLo = top / waterfallRowPixels;
+    int ageHi = min(count, ageLo+1);
     if(ageLo >= count) { color=vec4(0.004,0.012,0.047,1); return; }
     int lo = int(floor(gl_FragCoord.x-0.5)*float(width)/viewport.x);
     int hi = max(lo+1,int(floor(gl_FragCoord.x+0.5)*float(width)/viewport.x));
@@ -93,6 +93,12 @@ const TIERS = {
   balanced: { columns: 1024, rows: 128, fps: 60 },
   high: { columns: 2048, rows: 256, fps: 60 },
 };
+export function waterfallRowLayout(height: number, capacity: number): { rowPixels: number; visibleRows: number } {
+  const pixels = Math.max(1, Math.floor(Number.isFinite(height) ? height : 1));
+  const retained = Math.max(1, Math.floor(Number.isFinite(capacity) ? capacity : 1));
+  const rowPixels = Math.max(1, Math.ceil(pixels / retained));
+  return { rowPixels, visibleRows: Math.min(retained, Math.ceil(pixels / rowPixels)) };
+}
 /** Shared R32F cache. Float nearest sampling needs neither float filtering nor float render targets. */
 export class TerrainRenderer {
   readonly gl: WebGL2RenderingContext;
@@ -106,6 +112,7 @@ export class TerrainRenderer {
   private resolutionReason = '';
   private recoveryWait = 20000; private recoveryTrial = false;
   private samples: number[] = []; private intervals: number[] = []; private draws = 0;
+  private waterfallRowPixels = 1; private waterfallVisibleRows = 0; private waterfallPixelHeight = 0;
   columns = 0; rows = 0; skipped = 0; missedRenderDeadlines = 0; reason = ''; uploadRows = 0;
   private lost = (event: Event) => {
     event.preventDefault(); this.active = false; this.onFailure('3D context lost; Traditional is available. Select 3D to retry.');
@@ -209,7 +216,11 @@ export class TerrainRenderer {
       gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, 1024, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, bytes);
       this.paletteKey = this.settings.palette;
     }
-    const ints = { head: history.head, width: history.width, capacity: history.capacity, count: history.count, columns: this.columns, rows: this.rows };
+    const upper = Math.max(1, Math.min(h - 1, Math.round(upperCssHeight / Math.max(1, rect.height) * h))), lower = h - upper;
+    const waterfall = waterfallRowLayout(lower, history.capacity);
+    this.waterfallRowPixels = waterfall.rowPixels; this.waterfallVisibleRows = waterfall.visibleRows; this.waterfallPixelHeight = lower;
+    const ints = { head: history.head, width: history.width, capacity: history.capacity, count: history.count,
+      columns: this.columns, rows: this.rows, waterfallRowPixels: waterfall.rowPixels };
     for (const [key, value] of Object.entries(ints)) gl.uniform1i(this.location(key), value);
     const floats = { floorDb: this.settings.floor, ceilingDb: this.settings.ceiling, gammaValue: this.settings.gamma,
       noiseFloor: this.noiseBaseline, cleanupStrength: this.settings.cleanup,
@@ -217,7 +228,6 @@ export class TerrainRenderer {
       exaggeration: this.settings.height, elevation: this.settings.elevation, smoothing: this.settings.smoothing };
     for (const [key, value] of Object.entries(floats)) gl.uniform1f(this.location(key), value);
     gl.disable(gl.SCISSOR_TEST); gl.clearColor(.004,.012,.047,1); gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
-    const upper = Math.max(1, Math.min(h - 1, Math.round(upperCssHeight / Math.max(1, rect.height) * h))), lower = h - upper;
     gl.viewport(0, 0, w, lower); gl.disable(gl.DEPTH_TEST);
     gl.uniform1i(this.location('terrain'), 0); gl.uniform2f(this.location('viewport'), w, lower);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
@@ -247,6 +257,11 @@ export class TerrainRenderer {
   }
   get noiseBaseline(): number { return this.settings.cleanupBaseline ?? this.history.noiseFloor ?? this.settings.floor; }
   get maxHistoryWidth(): number { return this.maxDimension; }
+  waterfallAgeAt(fraction: number): number {
+    const pixel = Math.min(Math.max(0, this.waterfallPixelHeight - 1),
+      Math.floor(Math.max(0, Math.min(1, fraction)) * this.waterfallPixelHeight));
+    return Math.min(Math.max(0, this.waterfallVisibleRows - 1), Math.floor(pixel / this.waterfallRowPixels));
+  }
   /** CPU projection exactly matches the vertex shader; used for ray/triangle picking. */
   project(age: number, col: number): [number, number, number] {
     const z = age / Math.max(1, this.rows - 1), w = 1 + .18 * z;
@@ -307,7 +322,9 @@ export class TerrainRenderer {
     return { amplitude, cssSize: `${rect.width} × ${rect.height}`, devicePixelRatio: window.devicePixelRatio,
       effectivePixelRatio: rect.width ? this.canvas.width / rect.width : 0,
       resolutionReason: this.resolutionReason, historyTexture: `${this.history.width} × ${this.history.capacity} R32F`,
-      waterfallSampling: 'disjoint time buckets / per-pixel bin maxima / no temporal or spatial smoothing',
+      waterfallSampling: 'one history bucket per integer-height pixel stripe / per-pixel bin maxima / no temporal or spatial smoothing',
+      waterfallRowPixels: this.waterfallRowPixels, waterfallVisibleRows: this.waterfallVisibleRows,
+      waterfallSeconds: Math.max(0, Math.min(this.waterfallVisibleRows, this.history.count) - 1) * this.history.cadenceMs / 1000,
       quality: this.tier, requestedQuality: this.settings.quality, targetFps: TIERS[this.tier].fps,
       backingStore: `${this.canvas.width} × ${this.canvas.height}`, maxTextureDimension: this.maxDimension,
       recentSeconds: Math.max(0, Math.min(this.rows, this.history.count) - 1) * this.history.cadenceMs / 1000,

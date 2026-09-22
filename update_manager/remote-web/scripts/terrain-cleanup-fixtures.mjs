@@ -24,6 +24,7 @@ export async function cleanupFixtures({evaluate,call,output,report,phase}) {
         r.configure({...state.terrain,cleanup:0,waterfallCleanup:strength});r.render(performance.now(),layoutTerrainCanvas(),true);
         const w=r.canvas.width,upper=Math.round($('spectrum-shell').getBoundingClientRect().height/r.canvas.getBoundingClientRect().height*r.canvas.height),lower=r.canvas.height-upper;
         const pixels=new Uint8Array(w*lower*4);r.gl.readPixels(0,0,w,lower,r.gl.RGBA,r.gl.UNSIGNED_BYTE,pixels);
+        const rowPixels=r.diagnostics().waterfallRowPixels;
         const upperPixels=new Uint8Array(w*upper*4);r.gl.readPixels(0,lower,w,upper,r.gl.RGBA,r.gl.UNSIGNED_BYTE,upperPixels);
         if(upperReference) {
           for(let p=0;p<upperPixels.length;p++)if(upperPixels[p]!==upperReference[p])throw Error('Lower cleanup changed an upper 3D pixel');
@@ -36,7 +37,7 @@ export async function cleanupFixtures({evaluate,call,output,report,phase}) {
         const mean=samples.reduce((a,b)=>a+b,0)/samples.length,sd=Math.sqrt(samples.reduce((a,b)=>a+(b-mean)**2,0)/samples.length);
         let checked=0;const carriers=[738,1500,2170];
         for(let y=0;y<lower;y++)for(const x of [Math.floor(w*.05),...carriers.map(i=>Math.floor(i*w/4096))]) {
-          const a=Math.max(0,Math.floor((lower-1-y)*512/lower)),end=Math.min(512,Math.max(a+1,Math.floor((lower-y)*512/lower)));
+          const a=Math.max(0,Math.floor((lower-1-y)/rowPixels)),end=Math.min(512,a+1);
           const lo=Math.floor(x*4096/w),hi=Math.max(lo+1,Math.floor((x+1)*4096/w));let db=-1000;
           for(let age=a;age<end;age++)for(let bin=lo;bin<hi;bin++)db=Math.max(db,h.row(age)[bin]);
           const color=expectedColor(db),offset=(y*w+x)*4;

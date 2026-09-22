@@ -26,12 +26,13 @@ export async function sharpness({evaluate,call,output,report,phase}) {
         r.render(performance.now(),layoutTerrainCanvas(),true);
         const w=r.canvas.width,upper=Math.round($('spectrum-shell').getBoundingClientRect().height/r.canvas.getBoundingClientRect().height*r.canvas.height),lower=r.canvas.height-upper;
         const pixels=new Uint8Array(w*lower*4);r.gl.readPixels(0,0,w,lower,r.gl.RGBA,r.gl.UNSIGNED_BYTE,pixels);
+        const rowPixels=r.diagnostics().waterfallRowPixels||null;
         const color=db=>terrainColor(${phase==='before'?'_next.cleanupNormalized(db,-140,-40,-129,.6)':'_next.waterfallCleanupNormalized(db,-140,-40,-129,.6)'},'reference');
         let spread=0,checked=0;const eventRows=[];
         for(let y=0;y<lower;y++) {
           const top=lower-1-y;
-          const a=${phase==='before'?'Math.floor((1-(y+1)/lower)*512)':'Math.floor(top*512/lower)'};
-          const end=${phase==='before'?'Math.ceil((1-y/lower)*512)':'Math.max(a+1,Math.floor((top+1)*512/lower))'};
+          const a=rowPixels==null?Math.floor((1-(y+1)/lower)*512):Math.floor(top/rowPixels);
+          const end=rowPixels==null?Math.ceil((1-y/lower)*512):a+1;
           for(const x of [0,...[738,2170,2190].flatMap(bin=>[-1,0,1].map(dx=>Math.ceil((bin+1)*w/4096)-1+dx)),w-1]) {
             let db=-1000,missing=false;
             for(let age=a;age<end;age++) {

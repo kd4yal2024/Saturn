@@ -31,6 +31,7 @@ export async function controlled({evaluate, call, output, report, phase}) {
       const w=r.canvas.width,height=r.canvas.height;
       const upper=Math.round($('spectrum-shell').getBoundingClientRect().height/r.canvas.getBoundingClientRect().height*height),lower=height-upper;
       const pixels=new Uint8Array(w*lower*4);r.gl.readPixels(0,0,w,lower,r.gl.RGBA,r.gl.UNSIGNED_BYTE,pixels);
+      const rowPixels=r.diagnostics().waterfallRowPixels;
       let spread=0;for(let i=0;i<pixels.length;i++)if(i%4!==3)spread=Math.max(spread,Math.abs(pixels[i]-pixels[i%4]));
       if(kind==='constant' && spread>1)throw Error('Constant waterfall contains stripes: '+spread);
       for(let age=0;age<512;age++) {
@@ -49,7 +50,7 @@ export async function controlled({evaluate, call, output, report, phase}) {
       if(${JSON.stringify(phase)}==='after' && kind==='constant' && fence[2]>15)throw Error('Opaque front fence remains');
       let checkedPixels=0;
       for(let y=0;y<lower;y++)for(const x of [0,Math.floor(w*.18),Math.floor(w*.53),w-1]) {
-        const ageLo=Math.max(0,Math.floor((lower-1-y)*512/lower)),ageHi=Math.min(512,Math.max(ageLo+1,Math.floor((lower-y)*512/lower)));
+        const ageLo=Math.max(0,Math.floor((lower-1-y)/rowPixels)),ageHi=Math.min(512,ageLo+1);
         const lo=Math.floor(x*4096/w),hi=Math.max(lo+1,Math.floor((x+1)*4096/w));let db=-1000;
         for(let age=ageLo;age<ageHi;age++)for(let bin=lo;bin<hi;bin++)db=Math.max(db,h.row(age)[bin]);
         const expected=terrainColor((db+140)/100,'reference'),offset=(y*w+x)*4;
@@ -136,5 +137,36 @@ export async function controlled({evaluate, call, output, report, phase}) {
       return {width:${width},dpr:${dpr},zoom:${zoom},maxErrorHz,backing:[r.canvas.width,r.canvas.height],css:[r.canvas.getBoundingClientRect().width,r.canvas.getBoundingClientRect().height]};
     })()`));
   }
+
+  // At the operator's DPR-1.5 layout, advancing one history bucket must move
+  // every retained pixel stripe by one constant integer pitch. The former
+  // fractional 512-row stretch could not satisfy this: row thickness alternated
+  // as content descended, which presented as horizontal shimmer.
+  await call('Emulation.setDeviceMetricsOverride',{width:1280,height:900,deviceScaleFactor:1.5,mobile:false});
+  await evaluate("applyLayout('desktop',false,false);syncDisplayWorkspaceRatio();new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)))");
+  report.rowStability=await evaluate(`(()=>{
+    const h=spectrumHistory,r=terrainRenderer,bins=new Float32Array(4096);
+    state.displayZoom=1;state.terrain={...state.terrain,quality:'balanced',floor:-140,ceiling:-40,gamma:1,cleanup:0,waterfallCleanup:0};
+    h.clear('Integer waterfall row-pitch fixture');
+    for(let t=0;t<512;t++) {
+      bins.fill(-136+(t%24)*3);
+      acceptSpectrumFrame(bins,fixtureTimestamp,fixtureIndex++,4096);fixtureTimestamp+=33;
+    }
+    r.configure(state.terrain);r.render(performance.now(),layoutTerrainCanvas(),true);
+    const rect=r.canvas.getBoundingClientRect(),upper=Math.round($('spectrum-shell').getBoundingClientRect().height/rect.height*r.canvas.height);
+    const lower=r.canvas.height-upper,rowPixels=r.diagnostics().waterfallRowPixels,x=Math.floor(r.canvas.width*.4);
+    const before=new Uint8Array(lower*4),after=new Uint8Array(lower*4);
+    r.gl.readPixels(x,0,1,lower,r.gl.RGBA,r.gl.UNSIGNED_BYTE,before);
+    bins.fill(-55);acceptSpectrumFrame(bins,fixtureTimestamp,fixtureIndex++,4096);fixtureTimestamp+=33;
+    r.render(performance.now(),layoutTerrainCanvas(),true);
+    r.gl.readPixels(x,0,1,lower,r.gl.RGBA,r.gl.UNSIGNED_BYTE,after);
+    let compared=0,maxDifference=0;
+    for(let y=0;y<lower-rowPixels;y++)for(let c=0;c<4;c++) {
+      maxDifference=Math.max(maxDifference,Math.abs(after[y*4+c]-before[(y+rowPixels)*4+c]));compared++;
+    }
+    if(maxDifference!==0)throw Error('Waterfall rows do not descend by one fixed integer pitch: '+maxDifference);
+    return {dpr:devicePixelRatio,lowerPixels:lower,rowPixels,compared,maxDifference};
+  })()`);
+  report.checks.push('advancing one bucket translates every lower-waterfall stripe by one exact integer pixel pitch at DPR 1.5');
 
 }

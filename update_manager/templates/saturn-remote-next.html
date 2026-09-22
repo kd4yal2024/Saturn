@@ -8541,7 +8541,7 @@
     })();
   </script>
   <script
-    src="/remote-assets/remote-next.js?v=audio-devices-1"
+    src="/remote-assets/remote-next.js?v=waterfall-row-raster-1"
     onload="window.saturnRemoteBundleLoaded=true"
     onerror="window.saturnRemoteBundleError=true; window.saturnDiagLastError='remote-next.js failed to load'; window.saturnSetWsDiag && window.saturnSetWsDiag('JS error: remote-next.js failed to load')"
   ></script>
@@ -10197,7 +10197,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
           if (x < 0 || x > 1 || y < 0 || y > 1) { $("terrain-cursor").hidden = true; return; }
           let hit = id === "spectrum-shell" ? terrainRenderer.pick(x, y) : null;
           if (id === "waterfall-shell") {
-            const age = Math.min(511, Math.floor(y * 512)), row = spectrumHistory.row(age);
+            const age = terrainRenderer.waterfallAgeAt(y), row = spectrumHistory.row(age);
             if (row) hit = {fraction:x, age, db: row[Math.min(row.length-1, Math.max(0, Math.floor(x*row.length)))]};
           }
           if (hit && (!Number.isFinite(hit.db) || hit.db <= -999)) hit = null;
