@@ -11,7 +11,7 @@ use crate::xdma::{
 use crate::xdma_duc::{
     allowed_cpu_ids, current_scheduler, enable_realtime_fifo, pin_current_thread,
 };
-use crate::xdma_telemetry::{record_probe_outcome, TelemetryValue};
+use crate::xdma_telemetry::{record_probe_outcome, LatencyHistogram, TelemetryValue};
 use std::alloc::{alloc_zeroed, dealloc, Layout};
 use std::collections::VecDeque;
 use std::env;
@@ -77,6 +77,7 @@ const DDC6_ADC_MASK: u32 = 0x3 << (DIRECT_DDC_INDEX * 2);
 
 const DMA_ALIGNMENT: usize = 4096;
 const DMA_MIN_READ_BYTES: usize = 4096;
+const DMA_MIN_READ_BYTES_ENV: &str = "SATURN_BRIDGE_XDMA_RX_MIN_READ_BYTES";
 const DMA_MAX_READ_BYTES: usize = 32768;
 const FIFO_WORD_BYTES: usize = 8;
 const FIFO_POLL_INTERVAL: Duration = Duration::from_micros(250);
@@ -284,6 +285,13 @@ pub(crate) struct RxCaptureStats {
     pub(crate) host_discontinuities: u64,
     pub(crate) host_ring_depth_hwm: usize,
     pub(crate) host_pool_starvations: u64,
+    pub(crate) dma_min_read_bytes: usize,
+    pub(crate) dma_read_latency: LatencyHistogram,
+    /// Successful C2H completion to next successful completion, including
+    /// polling, scheduling, and time waiting for a minimum-sized block.
+    pub(crate) dma_completion_gap: LatencyHistogram,
+    pub(crate) host_queue_age: LatencyHistogram,
+    pub(crate) parser_latency: LatencyHistogram,
     power_sum: f64,
     power_samples: u64,
     peak: f32,
@@ -365,34 +373,37 @@ impl DdcStreamParser {
             )));
         }
         self.pending.extend_from_slice(bytes);
-
-        loop {
+        // Walk the DMA block in place. Compact only once, including on error,
+        // so larger catch-up reads do not repeatedly move the same tail.
+        let mut consumed = 0;
+        let result = (|| loop {
             if !self.synchronized {
-                let Some(offset) = find_rate_header(&self.pending, self.expected_rate_word) else {
-                    let retain = self.pending.len().min(FIFO_WORD_BYTES);
-                    if self.pending.len() > retain {
-                        let discard = self.pending.len() - retain;
-                        self.pending.drain(..discard);
+                let remaining = &self.pending[consumed..];
+                let Some(offset) = find_rate_header(remaining, self.expected_rate_word) else {
+                    let retain = remaining.len().min(FIFO_WORD_BYTES);
+                    if remaining.len() > retain {
+                        consumed += remaining.len() - retain;
                         self.stats.header_resyncs += 1;
                     }
                     return Ok(());
                 };
                 if offset != 0 {
-                    self.pending.drain(..offset);
+                    consumed += offset;
                     self.stats.header_resyncs += 1;
                 }
                 self.synchronized = true;
             }
 
-            if self.pending.len() < FIFO_WORD_BYTES {
+            let remaining = &self.pending[consumed..];
+            if remaining.len() < FIFO_WORD_BYTES {
                 return Ok(());
             }
-            let rate_word = u32::from_le_bytes(self.pending[0..4].try_into().unwrap());
-            if self.pending[7] != 0x80 || rate_word != self.expected_rate_word {
+            let rate_word = u32::from_le_bytes(remaining[0..4].try_into().unwrap());
+            if remaining[7] != 0x80 || rate_word != self.expected_rate_word {
                 self.stats.header_errors += 1;
                 return Err(XdmaError::Incompatible(format!(
                     "DDC stream framing error after synchronization: header=0x{:02x} rate=0x{rate_word:08x} expected_rate=0x{:08x}",
-                    self.pending[7], self.expected_rate_word
+                    remaining[7], self.expected_rate_word
                 )));
             }
 
@@ -409,11 +420,11 @@ impl DdcStreamParser {
                 )));
             }
             let frame_bytes = (frame_words + 1) * FIFO_WORD_BYTES;
-            if self.pending.len() < frame_bytes {
+            if remaining.len() < frame_bytes {
                 return Ok(());
             }
 
-            let sample_bytes = &self.pending[FIFO_WORD_BYTES..frame_bytes];
+            let sample_bytes = &remaining[FIFO_WORD_BYTES..frame_bytes];
             let sample_count = sample_bytes.len() / FIFO_WORD_BYTES;
             if let Some(output) = iq_samples.as_deref_mut() {
                 for sample_word in sample_bytes.chunks_exact(FIFO_WORD_BYTES) {
@@ -428,8 +439,10 @@ impl DdcStreamParser {
             }
             self.stats.samples += sample_count as u64;
             self.stats.frames += 1;
-            self.pending.drain(..frame_bytes);
-        }
+            consumed += frame_bytes;
+        })();
+        self.pending.drain(..consumed);
+        result
     }
 
     fn mark_host_discontinuity(&mut self) {
@@ -517,6 +530,7 @@ struct FilledRxBuffer {
     buffer: AlignedBuffer,
     len: usize,
     sequence: u64,
+    completed_at: Instant,
 }
 
 struct OperationalRxBufferPoolState {
@@ -621,19 +635,20 @@ fn configure_operational_reader_scheduling() -> Result<(usize, &'static str, i32
 }
 
 fn run_operational_reader(
-    registers: Arc<Mutex<XdmaRegisterDevice>>,
+    registers: XdmaRegisterDevice,
     dma: File,
     fifo_policy: FifoStatusPolicy,
+    min_read_bytes: usize,
     pool: Arc<OperationalRxBufferPool>,
     stats: Arc<Mutex<RxCaptureStats>>,
     stop: Arc<AtomicBool>,
 ) -> Result<(), XdmaError> {
     let mut sequence = 0u64;
+    let mut last_completion = None;
     while !stop.load(Ordering::Relaxed) {
-        let fifo_value = registers
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .read_register(DDC_FIFO_MONITOR_REGISTER)?;
+        // This non-owning register handle reads only 0x9000. It does not share
+        // the control/snapshot mutex, and does not perform RF cleanup on drop.
+        let fifo_value = registers.read_register(DDC_FIFO_MONITOR_REGISTER)?;
         let fifo = FifoSnapshot::decode(fifo_value);
         {
             let mut reader_stats = stats
@@ -650,7 +665,7 @@ fn run_operational_reader(
                 u8::from(fifo.underflow)
             )));
         }
-        let read_bytes = dma_read_size(fifo.depth_words);
+        let read_bytes = dma_read_size_for_min(fifo.depth_words, min_read_bytes);
         if read_bytes == 0 {
             thread::sleep(FIFO_POLL_INTERVAL);
             continue;
@@ -669,10 +684,12 @@ fn run_operational_reader(
             continue;
         };
         let target = buffer.as_mut_slice(read_bytes);
+        let read_started = Instant::now();
         let read = dma.read_at(target, 0).map_err(|source| XdmaError::Io {
             action: "could not read operational XDMA DDC receive stream",
             source,
         })?;
+        let completed_at = Instant::now();
         if read != read_bytes {
             return Err(XdmaError::Io {
                 action: "operational XDMA DDC receive stream returned a short read",
@@ -686,6 +703,7 @@ fn run_operational_reader(
             buffer,
             len: read,
             sequence,
+            completed_at,
         });
         sequence = sequence.wrapping_add(1);
         let mut reader_stats = stats
@@ -693,6 +711,15 @@ fn run_operational_reader(
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         reader_stats.dma_reads += 1;
         reader_stats.dma_bytes += read as u64;
+        reader_stats
+            .dma_read_latency
+            .record(completed_at.duration_since(read_started));
+        if let Some(previous) = last_completion {
+            reader_stats
+                .dma_completion_gap
+                .record(completed_at.duration_since(previous));
+        }
+        last_completion = Some(completed_at);
         reader_stats.host_ring_depth_hwm = reader_stats.host_ring_depth_hwm.max(ring_depth);
         if dropped_bytes != 0 {
             reader_stats.host_buffer_drops += 1;
@@ -703,9 +730,10 @@ fn run_operational_reader(
 }
 
 fn spawn_operational_reader(
-    registers: Arc<Mutex<XdmaRegisterDevice>>,
+    registers: XdmaRegisterDevice,
     dma: File,
     fifo_policy: FifoStatusPolicy,
+    min_read_bytes: usize,
     pool: Arc<OperationalRxBufferPool>,
     stats: Arc<Mutex<RxCaptureStats>>,
     stop: Arc<AtomicBool>,
@@ -718,8 +746,15 @@ fn spawn_operational_reader(
         .spawn(move || match configure_operational_reader_scheduling() {
             Ok((cpu, policy, priority)) => {
                 let _ = startup_tx.send(Ok((cpu, policy, priority)));
-                let result =
-                    run_operational_reader(registers, dma, fifo_policy, pool, stats, thread_stop);
+                let result = run_operational_reader(
+                    registers,
+                    dma,
+                    fifo_policy,
+                    min_read_bytes,
+                    pool,
+                    stats,
+                    thread_stop,
+                );
                 let _ = result_tx.send(result);
             }
             Err(error) => {
@@ -736,7 +771,7 @@ fn spawn_operational_reader(
     match startup_rx.recv_timeout(READER_START_TIMEOUT) {
         Ok(Ok((cpu, policy, priority))) => {
             println!(
-                "saturn-bridge: XDMA RX reader scheduling cpu={cpu} policy={policy} priority={priority} buffers={OPERATIONAL_RX_BUFFER_COUNT} locked_bytes={OPERATIONAL_RX_BUFFER_BYTES}"
+                "saturn-bridge: XDMA RX reader scheduling cpu={cpu} policy={policy} priority={priority} buffers={OPERATIONAL_RX_BUFFER_COUNT} locked_bytes={OPERATIONAL_RX_BUFFER_BYTES} min_read_bytes={min_read_bytes}"
             );
             Ok((worker, result_rx))
         }
@@ -1085,6 +1120,8 @@ impl OperationalRxSession {
     ) -> Result<Self, XdmaError> {
         ensure_p2app_inactive()?;
         validate_frequency(frequency_hz)?;
+        let min_read_bytes =
+            parse_dma_min_read_bytes(env::var_os(DMA_MIN_READ_BYTES_ENV).as_deref())?;
         let register_path = env::var_os("SATURN_BRIDGE_XDMA_USER_DEVICE")
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from("/dev/xdma0_user"));
@@ -1092,6 +1129,10 @@ impl OperationalRxSession {
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from(DEFAULT_DDC_DEVICE));
         let registers = Arc::new(Mutex::new(XdmaRegisterDevice::open(&register_path)?));
+        // A second BAR register descriptor within this same radio owner is
+        // not a second C2H owner. Snapshot request/polling stays on the control
+        // handle; only the reader consumes read-to-clear 0x9000 during RX.
+        let reader_registers = XdmaRegisterDevice::open_peripheral(&register_path)?;
         let identity = registers
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -1118,7 +1159,10 @@ impl OperationalRxSession {
             OPERATIONAL_RX_BUFFER_COUNT,
             true,
         )?);
-        let reader_stats = Arc::new(Mutex::new(RxCaptureStats::default()));
+        let reader_stats = Arc::new(Mutex::new(RxCaptureStats {
+            dma_min_read_bytes: min_read_bytes,
+            ..RxCaptureStats::default()
+        }));
         let reader_stop = Arc::new(AtomicBool::new(false));
         let mut session = Self {
             registers,
@@ -1143,9 +1187,10 @@ impl OperationalRxSession {
             return Err(error);
         }
         match spawn_operational_reader(
-            session.registers.clone(),
+            reader_registers,
             dma,
             session.fifo_policy,
+            min_read_bytes,
             session.pool.clone(),
             session.reader_stats.clone(),
             session.reader_stop.clone(),
@@ -1181,6 +1226,8 @@ impl OperationalRxSession {
         combined.header_resyncs = self.parser.stats.header_resyncs;
         combined.header_errors = self.parser.stats.header_errors;
         combined.host_discontinuities = self.parser.stats.host_discontinuities;
+        combined.host_queue_age = self.parser.stats.host_queue_age.clone();
+        combined.parser_latency = self.parser.stats.parser_latency.clone();
         combined.power_sum = self.parser.stats.power_sum;
         combined.power_samples = self.parser.stats.power_samples;
         combined.peak = self.parser.stats.peak;
@@ -1301,6 +1348,10 @@ impl OperationalRxSession {
                 requires_drain: false,
             });
         };
+        self.parser
+            .stats
+            .host_queue_age
+            .record(filled.completed_at.elapsed());
 
         let discontinuity = self
             .last_dma_sequence
@@ -1312,11 +1363,16 @@ impl OperationalRxSession {
         }
         self.last_dma_sequence = Some(filled.sequence);
         let samples_before = self.parser.stats.samples;
+        let parse_started = Instant::now();
         let parse_result = if let Some(output) = iq_samples.as_deref_mut() {
             self.parser.feed(filled.buffer.as_slice(filled.len), output)
         } else {
             self.parser.feed_discard(filled.buffer.as_slice(filled.len))
         };
+        self.parser
+            .stats
+            .parser_latency
+            .record(parse_started.elapsed());
         self.pool.recycle(filled.buffer);
         parse_result?;
         Ok(OperationalRxRead {
@@ -1627,8 +1683,26 @@ fn frequency_to_phase_word(frequency_hz: u32) -> u32 {
 }
 
 fn dma_read_size(depth_words: usize) -> usize {
+    dma_read_size_for_min(depth_words, DMA_MIN_READ_BYTES)
+}
+
+fn parse_dma_min_read_bytes(value: Option<&std::ffi::OsStr>) -> Result<usize, XdmaError> {
+    match value {
+        None => Ok(DMA_MIN_READ_BYTES),
+        Some(value) => match value.to_str() {
+            Some("4096") => Ok(4096),
+            Some("8192") => Ok(8192),
+            Some("16384") => Ok(16384),
+            _ => Err(XdmaError::Incompatible(format!(
+                "{DMA_MIN_READ_BYTES_ENV} must be 4096, 8192, or 16384 bytes"
+            ))),
+        },
+    }
+}
+
+fn dma_read_size_for_min(depth_words: usize, min_read_bytes: usize) -> usize {
     let available_bytes = depth_words.saturating_mul(FIFO_WORD_BYTES);
-    if available_bytes < DMA_MIN_READ_BYTES {
+    if available_bytes < min_read_bytes {
         0
     } else if available_bytes >= DMA_MAX_READ_BYTES {
         DMA_MAX_READ_BYTES
@@ -1786,6 +1860,101 @@ mod tests {
     }
 
     #[test]
+    fn parser_preserves_exact_samples_and_partial_tails_at_all_chunk_sizes() {
+        let mut stream = vec![0x55; 16];
+        let mut expected = Vec::new();
+        let mut seed = 0x1234_5678u32;
+        let edge_values = [-8_388_608, -8_388_607, -1, 0, 1, 8_388_606, 8_388_607];
+        for frame_index in 0..1024 {
+            let mut frame = test_frame();
+            for (index, word) in frame[8..].as_chunks_mut::<8>().0.iter_mut().enumerate() {
+                for component in 0..2 {
+                    seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                    let value = if frame_index == 0 {
+                        edge_values[(index + component) % edge_values.len()]
+                    } else {
+                        (seed as i32) >> 8
+                    };
+                    write_i24_be(&mut word[component * 3..component * 3 + 3], value);
+                    expected.push(value as f32 / 8_388_608.0);
+                }
+            }
+            stream.extend_from_slice(&frame);
+        }
+        let expected_power = expected
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .fold(0.0f64, |sum, pair| {
+                sum + ((pair[0] * pair[0] + pair[1] * pair[1]) * 0.5) as f64
+            });
+        for size in [8, 16, 24, 64, 72, 80, 4096, 8192, 16384, 32768] {
+            let mut parser = DdcStreamParser::new(direct_ddc_rate_word());
+            let capacity = parser.pending.capacity();
+            let mut actual = Vec::new();
+            for chunk in stream.chunks(size) {
+                parser.feed(chunk, &mut actual).unwrap();
+                assert!(parser.pending.len() < 72);
+            }
+            assert_eq!(actual, expected, "chunk size {size}");
+            assert_eq!(parser.stats.frames, 1024);
+            assert_eq!(parser.stats.samples, 8192);
+            assert_eq!(parser.stats.header_errors, 0);
+            assert_eq!(parser.stats.power_samples, 8192);
+            assert_eq!(parser.stats.power_sum, expected_power);
+            assert_eq!(parser.stats.peak, 1.0);
+            assert_eq!(parser.pending.capacity(), capacity);
+            assert!(parser.pending.is_empty());
+            let mut discard = DdcStreamParser::new(direct_ddc_rate_word());
+            for chunk in stream.chunks(size) {
+                discard.feed_discard(chunk).unwrap();
+            }
+            assert_eq!(discard.stats.frames, parser.stats.frames);
+            assert_eq!(discard.stats.samples, parser.stats.samples);
+            assert_eq!(discard.stats.header_resyncs, parser.stats.header_resyncs);
+            assert_eq!(discard.stats.power_samples, 0);
+            assert!(discard.pending.is_empty());
+        }
+    }
+
+    #[test]
+    fn parser_compacts_completed_frames_but_retains_fatal_header() {
+        for discard in [false, true] {
+            for corrupt_rate in [false, true] {
+                let frame = test_frame();
+                let mut malformed = frame.clone();
+                malformed[if corrupt_rate { 0 } else { 7 }] ^= 1;
+                let stream = [frame.clone(), frame, malformed.clone()].concat();
+                let mut parser = DdcStreamParser::new(direct_ddc_rate_word());
+                let mut iq = Vec::new();
+                let result = if discard {
+                    parser.feed_discard(&stream)
+                } else {
+                    parser.feed(&stream, &mut iq)
+                };
+                assert!(result.unwrap_err().to_string().contains("framing error"));
+                assert_eq!(parser.stats.frames, 2);
+                assert_eq!(parser.stats.samples, 16);
+                assert_eq!(parser.stats.header_errors, 1);
+                assert_eq!(parser.pending, malformed);
+                assert_eq!(iq.len(), if discard { 0 } else { 32 });
+            }
+        }
+    }
+
+    #[test]
+    fn parser_rejects_unaligned_input_without_consuming_partial_frame() {
+        let frame = test_frame();
+        let mut parser = DdcStreamParser::new(direct_ddc_rate_word());
+        parser.feed_discard(&frame[..16]).unwrap();
+        assert!(parser.feed_discard(&frame[16..17]).is_err());
+        assert_eq!(parser.pending, frame[..16]);
+        parser.feed_discard(&frame[16..]).unwrap();
+        assert_eq!(parser.stats.frames, 1);
+        assert!(parser.pending.is_empty());
+    }
+
+    #[test]
     fn parser_discard_path_preserves_framing_and_can_resume_decoding() {
         let frame = test_frame();
         let mut parser = DdcStreamParser::new(direct_ddc_rate_word());
@@ -1815,6 +1984,43 @@ mod tests {
         assert_eq!(dma_read_size(1024), 8192);
         assert_eq!(dma_read_size(2048), 16384);
         assert_eq!(dma_read_size(4096), 32768);
+    }
+
+    #[test]
+    fn experimental_read_threshold_is_strict_and_never_exceeds_available_data() {
+        use std::ffi::OsStr;
+        assert_eq!(parse_dma_min_read_bytes(None).unwrap(), 4096);
+        for min_bytes in [4096, 8192, 16384] {
+            assert_eq!(
+                parse_dma_min_read_bytes(Some(OsStr::new(&min_bytes.to_string()))).unwrap(),
+                min_bytes
+            );
+            for depth in 0..=16385 {
+                let size = dma_read_size_for_min(depth, min_bytes);
+                assert_eq!(size % DMA_ALIGNMENT, 0);
+                assert!(size <= depth * FIFO_WORD_BYTES);
+                assert!(size <= DMA_MAX_READ_BYTES);
+                assert!(size == 0 || size >= min_bytes);
+                assert_eq!(size == 0, depth * FIFO_WORD_BYTES < min_bytes);
+                if min_bytes == 4096 {
+                    let legacy_size = match depth {
+                        0..=511 => 0,
+                        512..=1023 => 4096,
+                        1024..=2047 => 8192,
+                        2048..=4095 => 16384,
+                        _ => 32768,
+                    };
+                    assert_eq!(size, legacy_size);
+                }
+            }
+            assert_eq!(
+                dma_read_size_for_min(usize::MAX, min_bytes),
+                DMA_MAX_READ_BYTES
+            );
+        }
+        for bad in ["", "0", "4095", "32768", "-4096", "4K", "8192 "] {
+            assert!(parse_dma_min_read_bytes(Some(OsStr::new(bad))).is_err());
+        }
     }
 
     #[test]
@@ -1947,6 +2153,7 @@ mod tests {
             buffer: first,
             len: 4096,
             sequence: 0,
+            completed_at: Instant::now(),
         });
         let (second, dropped) = pool.acquire_for_reader().unwrap();
         assert_eq!(dropped, 0);
@@ -1954,6 +2161,7 @@ mod tests {
             buffer: second,
             len: 8192,
             sequence: 1,
+            completed_at: Instant::now(),
         });
 
         let (reclaimed, dropped) = pool.acquire_for_reader().unwrap();
@@ -1962,6 +2170,7 @@ mod tests {
             buffer: reclaimed,
             len: 16_384,
             sequence: 2,
+            completed_at: Instant::now(),
         });
         assert_eq!(pool.ready_len(), 2);
         assert_eq!(pool.try_take_ready().unwrap().sequence, 1);
@@ -1979,5 +2188,42 @@ mod tests {
         assert_eq!(parser.stats.host_discontinuities, 1);
         assert_eq!(parser.stats.frames, 1);
         assert_eq!(parser.stats.header_errors, 0);
+    }
+
+    /// Pure parser benchmark: no devices, WDSP calls, scheduling or RF access.
+    /// Run the same test in release mode on baseline and candidate revisions.
+    #[test]
+    #[ignore = "explicit CPU benchmark; do not run during a live quality soak"]
+    fn benchmark_ddc_parser() {
+        use std::hint::black_box;
+        let frame = test_frame();
+        let stream = frame.repeat(32_768); // continuous, complete 72-byte frames
+        for discard in [false, true] {
+            for bytes in [4096, 8192, 16384, 32768] {
+                for trial in 0..3 {
+                    let mut parser = DdcStreamParser::new(direct_ddc_rate_word());
+                    let mut iq = Vec::with_capacity(DMA_MAX_READ_BYTES / 4);
+                    let started = Instant::now();
+                    for _ in 0..16 {
+                        for chunk in stream.chunks(bytes) {
+                            iq.clear();
+                            if discard {
+                                parser.feed_discard(black_box(chunk)).unwrap();
+                            } else {
+                                parser.feed(black_box(chunk), &mut iq).unwrap();
+                                black_box(&iq);
+                            }
+                        }
+                    }
+                    let elapsed_ns = started.elapsed().as_nanos();
+                    assert_eq!(parser.stats.frames, 32_768 * 16);
+                    assert_eq!(parser.stats.samples, 32_768 * 16 * 8);
+                    assert_eq!(parser.stats.header_errors, 0);
+                    assert!(parser.pending.is_empty());
+                    println!("ddc_parser discard={discard} bytes={bytes} trial={trial} input_bytes={} elapsed_ns={elapsed_ns}", stream.len() * 16);
+                    black_box(parser.stats);
+                }
+            }
+        }
     }
 }

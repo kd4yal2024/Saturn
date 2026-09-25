@@ -134,6 +134,18 @@ fatal. Firmware 1.29 uses its version-specific FIFO status policy; V30 uses the
 restored V27 legacy policy. V29/V30 Direct-XDMA RF TX stays inhibited until a
 separate dummy-load qualification explicitly advances that safety gate.
 
+The DDC parser compacts a partial frame once per DMA block instead of moving
+the remaining bytes after every frame. The reader uses a non-owning BAR
+register descriptor, separate from the control/snapshot mutex. Only the
+reader consumes the legacy read-to-clear FIFO status during steady RX; the
+snapshot protocol and RF cleanup ownership are unchanged.
+
+`perf.json` includes bounded timing histograms for DMA calls, completion gaps,
+host queue age, parsing, DSP/audio publication, IQ publication, control batches,
+and FPGA snapshots. The default DMA minimum remains 4096 bytes. See
+[the RX benchmark and hardware comparison procedure](scripts/benchmark-xdma-rx.md)
+for measurements, metric definitions, and the opt-in 8192/16384-byte experiments.
+
 ## Same-Host P2 Port Map
 
 | Traffic              | Direction        | Port  |
@@ -199,6 +211,7 @@ falls back to normal runtime planning if import fails.
 | `SATURN_BRIDGE_ENABLE_DISCOVERY` | `true` | send P2 discovery on start |
 | `SATURN_BRIDGE_HP_PERIOD_MS` | `200` | high-priority send interval |
 | `SATURN_BRIDGE_RX_DDC_INDEX` | `2` | DDC stream index (0–9) |
+| `SATURN_BRIDGE_XDMA_RX_MIN_READ_BYTES` | `4096` | Direct-XDMA operational RX only: experimental minimum read threshold; accepts exactly `4096`, `8192`, or `16384`. Catch-up reads remain bounded at 32768 bytes. Does not affect P2 or isolated RX probes. |
 | `SATURN_BRIDGE_DDC0_FREQUENCY_HZ` | `14200000` | initial VFO frequency |
 | `SATURN_BRIDGE_DDC0_ADC` | `0` | ADC selection (0=ADC1, 1=ADC2) |
 | `SATURN_BRIDGE_DDC0_SAMPLE_RATE_KHZ` | `192` | IQ sample rate kHz |

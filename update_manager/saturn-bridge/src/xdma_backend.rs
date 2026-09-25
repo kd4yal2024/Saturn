@@ -21,7 +21,9 @@ use crate::xdma_rx::{
     DIRECT_DDC_INDEX, DIRECT_DDC_SAMPLE_RATE_KHZ, OPERATIONAL_RX_BUFFER_BYTES,
     OPERATIONAL_RX_BUFFER_COUNT, RUNTIME_HOST_DRAIN_MAX_READS,
 };
-use crate::xdma_telemetry::{record_runtime_performance, record_runtime_readiness, TelemetryValue};
+use crate::xdma_telemetry::{
+    record_runtime_performance, record_runtime_readiness, LatencyHistogram, TelemetryValue,
+};
 use crate::xdma_tx_radio::{DirectTxSnapshot, DirectXdmaTxRadio};
 use std::env;
 use std::error::Error;
@@ -104,6 +106,10 @@ struct DirectRxPerformance {
     dsp_iq_pairs: u64,
     bypassed_iq_pairs: u64,
     meter_only_iq_pairs: u64,
+    iq_publish_latency: LatencyHistogram,
+    dsp_audio_latency: LatencyHistogram,
+    control_batch_latency: LatencyHistogram,
+    snapshot_latency: LatencyHistogram,
 }
 
 #[derive(Debug, Default)]
@@ -492,6 +498,7 @@ fn run_inner(mut config: BridgeConfig, ready_path: &Path) -> Result<(), Box<dyn 
                         "raw-iq-estimate"
                     };
                     if media_demand.iq_stream_enabled && !tci.tx_media_priority_active() {
+                        let publish_started = Instant::now();
                         iq_packetizer.push(&iq_samples, |frame| {
                             let pairs = (frame.len() / 2) as u64;
                             if tci.publish_full_rate_iq_frame(
@@ -509,6 +516,9 @@ fn run_inner(mut config: BridgeConfig, ready_path: &Path) -> Result<(), Box<dyn 
                                 iq_transport_totals.pairs_suppressed += pairs;
                             }
                         });
+                        rx_performance
+                            .iq_publish_latency
+                            .record(publish_started.elapsed());
                     }
                     if mode == RxProcessingMode::Audio {
                         if wdsp_input_gap {
@@ -530,11 +540,15 @@ fn run_inner(mut config: BridgeConfig, ready_path: &Path) -> Result<(), Box<dyn 
                         }
                         rx_performance.dsp_iq_pairs += outcome.sample_pairs;
                         let audio_sample_rate_hz = wdsp.audio_sample_rate_hz();
+                        let dsp_started = Instant::now();
                         wdsp.process_iq(&iq_samples, |audio| {
                             rx_performance.audio_frames_published += 1;
                             rx_performance.audio_samples_published += audio.len() as u64;
                             tci.publish_audio_frame(audio_sample_rate_hz, audio);
                         });
+                        rx_performance
+                            .dsp_audio_latency
+                            .record(dsp_started.elapsed());
                     } else {
                         wdsp_input_gap = true;
                         rx_performance.bypassed_iq_pairs += outcome.sample_pairs;
@@ -623,6 +637,7 @@ fn run_inner(mut config: BridgeConfig, ready_path: &Path) -> Result<(), Box<dyn 
                     iq_packetizer.reset();
                 }
                 let command_elapsed = command_started.elapsed();
+                rx_performance.control_batch_latency.record(command_elapsed);
                 if command_elapsed >= Duration::from_millis(5) {
                     println!(
                     "saturn-bridge: xdma_rx control batch commands={} dsp_sync={} tuning_publish={} tx_publish={} radio_publish={} elapsed_us={} handling_us={} model_lock_us={} dsp_sync_us={} publish_us={}",
@@ -725,11 +740,15 @@ fn run_inner(mut config: BridgeConfig, ready_path: &Path) -> Result<(), Box<dyn 
                     iq_stream_enabled: client.iq_stream_enabled,
                     audio_stream_enabled: client.audio_stream_enabled,
                 };
+                let snapshot_started = Instant::now();
                 if let Err(error) = rx.sample_extended_telemetry() {
                     eprintln!(
                         "saturn-bridge: extended FPGA telemetry read failed without interrupting RX: {error}"
                     );
                 }
+                rx_performance
+                    .snapshot_latency
+                    .record(snapshot_started.elapsed());
                 let stats = rx.stats();
                 if let Err(error) = write_performance(
                     &perf_path,
@@ -1370,6 +1389,25 @@ fn write_performance(
     let dma_bytes_per_sec = stats.dma_bytes.saturating_sub(previous.dma_bytes) as f64 / elapsed;
     let iq_pairs_per_sec = stats.samples.saturating_sub(previous.samples) as f64 / elapsed;
     let build_dirty = env!("SATURN_BRIDGE_GIT_DIRTY") == "true";
+    let timing_metrics = [
+        stats.dma_read_latency.fields("rx_dma_read_session"),
+        stats
+            .dma_completion_gap
+            .fields("rx_dma_completion_gap_session"),
+        stats.host_queue_age.fields("rx_host_queue_age_session"),
+        stats.parser_latency.fields("rx_parser_session"),
+        performance
+            .iq_publish_latency
+            .fields("rx_iq_publish_interval"),
+        performance
+            .dsp_audio_latency
+            .fields("rx_dsp_audio_interval"),
+        performance
+            .control_batch_latency
+            .fields("rx_control_batch_interval"),
+        performance.snapshot_latency.fields("rx_snapshot_interval"),
+    ]
+    .concat();
     record_runtime_performance(
         path,
         status,
@@ -1670,6 +1708,10 @@ fn write_performance(
                 TelemetryValue::number(stats.host_ring_depth_hwm),
             ),
             (
+                "rx_dma_min_read_bytes",
+                TelemetryValue::number(stats.dma_min_read_bytes),
+            ),
+            (
                 "host_buffer_drops",
                 TelemetryValue::number(stats.host_buffer_drops),
             ),
@@ -1889,7 +1931,14 @@ fn write_performance(
                 "tx_fifo_startup_underflows",
                 TelemetryValue::number(tx.fifo_startup_underflows),
             ),
-        ],
+        ]
+        .into_iter()
+        .chain(
+            timing_metrics
+                .iter()
+                .map(|(name, value)| (name.as_str(), value.clone())),
+        )
+        .collect::<Vec<_>>(),
     )
     .map_err(|source| XdmaError::Io {
         action: "could not persist direct XDMA performance telemetry",

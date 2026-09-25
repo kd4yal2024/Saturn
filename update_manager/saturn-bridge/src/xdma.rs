@@ -603,6 +603,25 @@ mod tests {
     }
 
     #[test]
+    fn peripheral_fifo_read_progresses_while_control_handle_is_locked() {
+        let fixture = Fixture::new();
+        fixture.install_valid_identity();
+        fixture.write(0x9000, 512);
+        let control = std::sync::Mutex::new(XdmaRegisterDevice::open(&fixture.path).unwrap());
+        let reader = XdmaRegisterDevice::open_peripheral(&fixture.path).unwrap();
+        let held = control.lock().unwrap();
+        let (send, receive) = std::sync::mpsc::sync_channel(1);
+        let worker = std::thread::spawn(move || {
+            send.send(reader.read_register(0x9000)).unwrap();
+        });
+        let value = receive.recv_timeout(std::time::Duration::from_secs(2));
+        drop(held);
+        worker.join().unwrap();
+        assert_eq!(value.unwrap().unwrap(), 512);
+        control.lock().unwrap().verify_safe_receive_state().unwrap();
+    }
+
+    #[test]
     fn rejects_non_saturn_and_missing_clocks() {
         let not_saturn = SaturnIdentity::decode((1 << 25) | (4 << 20) | 0x0F, 2 << 16, 0);
         assert!(not_saturn.validate().is_err());

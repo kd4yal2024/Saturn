@@ -10,12 +10,71 @@ use std::io::{self, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 const DEFAULT_SNAPSHOT_PATH: &str = "/var/lib/saturn-state/xdma-telemetry.json";
 const SNAPSHOT_PATH_ENV: &str = "SATURN_BRIDGE_XDMA_TELEMETRY_PATH";
 
 static PROBE_OUTCOME_RECORDED: AtomicBool = AtomicBool::new(false);
+
+/// Fixed storage and no allocation on the measured path. Durations round up
+/// to microseconds; p99 is the upper bound of a power-of-two bucket, not an
+/// exact percentile. The last bucket uses the observed maximum as its bound.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct LatencyHistogram {
+    buckets: [u64; 32],
+    count: u64,
+    max_us: u64,
+}
+
+impl LatencyHistogram {
+    pub(crate) fn record(&mut self, duration: Duration) {
+        let us = duration
+            .as_nanos()
+            .div_ceil(1_000)
+            .min(u128::from(u64::MAX)) as u64;
+        let bucket = (u64::BITS - us.saturating_sub(1).leading_zeros()).min(31) as usize;
+        self.buckets[bucket] = self.buckets[bucket].saturating_add(1);
+        self.count = self.count.saturating_add(1);
+        self.max_us = self.max_us.max(us);
+    }
+
+    fn p99_upper_us(&self) -> u64 {
+        // ceil(count * 99 / 100), without overflowing the product.
+        let rank = self.count - self.count / 100;
+        let mut cumulative = 0u64;
+        for (index, count) in self.buckets.iter().enumerate() {
+            cumulative = cumulative.saturating_add(*count);
+            if cumulative >= rank {
+                return if index == 31 {
+                    self.max_us
+                } else {
+                    (1u64 << index).min(self.max_us)
+                };
+            }
+        }
+        self.max_us
+    }
+
+    /// Formatting is only for the low-rate telemetry publisher, never the
+    /// reader. Prefixes distinguish session totals from reporting intervals.
+    pub(crate) fn fields(&self, prefix: &str) -> [(String, TelemetryValue); 3] {
+        [
+            (
+                format!("{prefix}_count"),
+                TelemetryValue::number(self.count),
+            ),
+            (
+                format!("{prefix}_max_us"),
+                TelemetryValue::number(self.max_us),
+            ),
+            (
+                format!("{prefix}_p99_upper_us"),
+                TelemetryValue::number(self.p99_upper_us()),
+            ),
+        ]
+    }
+}
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum TelemetryValue {
@@ -261,9 +320,38 @@ fn write_snapshot_atomic(path: &Path, contents: &[u8], durable: bool) -> io::Res
 
 #[cfg(test)]
 mod tests {
-    use super::{serialize_snapshot, write_snapshot_atomic, TelemetryValue};
+    use super::{serialize_snapshot, write_snapshot_atomic, LatencyHistogram, TelemetryValue};
     use std::fs;
-    use std::time::{SystemTime, UNIX_EPOCH};
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn latency_histogram_reports_bounded_p99_and_exact_rounded_max() {
+        let mut latency = LatencyHistogram::default();
+        assert_eq!(latency.p99_upper_us(), 0);
+        latency.record(Duration::ZERO);
+        latency.record(Duration::from_nanos(1));
+        latency.record(Duration::from_nanos(1001));
+        assert_eq!(latency.buckets[0], 2);
+        assert_eq!(latency.buckets[1], 1);
+        assert_eq!(latency.max_us, 2);
+        assert_eq!(latency.p99_upper_us(), 2);
+
+        let mut latency = LatencyHistogram::default();
+        for _ in 0..99 {
+            latency.record(Duration::from_micros(9));
+        }
+        latency.record(Duration::from_micros(1000));
+        assert_eq!(latency.count, 100);
+        assert_eq!(latency.p99_upper_us(), 16);
+        assert_eq!(latency.max_us, 1000);
+        assert_eq!(
+            latency.fields("test")[2],
+            ("test_p99_upper_us".into(), TelemetryValue::number(16))
+        );
+        let mut long = LatencyHistogram::default();
+        long.record(Duration::MAX);
+        assert_eq!(long.p99_upper_us(), u64::MAX);
+    }
 
     #[test]
     fn snapshot_json_escapes_errors_and_preserves_metric_types() {
