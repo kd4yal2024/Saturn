@@ -39,6 +39,60 @@ default_env(){
   export "${name?}"
 }
 
+# Warn when the install source is a stale checkout.
+#
+# On 2026-09-25 an install run from a checkpoint branch 52 commits behind main
+# silently deployed an older web UI and removed the High-Res 3D waterfall from a
+# live appliance. The hard guarantee is the deployed-content assertion in
+# update_manager/scripts/saturn-go-web-assets.sh; this preflight makes the cause
+# obvious before anything is touched. A rebased local branch can be ahead and
+# behind at once with identical content, so staleness is a warning unless
+# SATURN_REQUIRE_CURRENT_CHECKOUT=1. Pinned or rollback installs can silence it
+# with SATURN_ALLOW_STALE_CHECKOUT=1. Release ref: SATURN_INSTALL_RELEASE_REF.
+check_source_checkout(){
+  local release_ref="${SATURN_INSTALL_RELEASE_REF:-origin/main}"
+  local counts ahead behind branch
+
+  case "${SATURN_ALLOW_STALE_CHECKOUT:-0}" in
+    1|true|TRUE|yes|YES|on|ON)
+      info "stale-checkout guard disabled (SATURN_ALLOW_STALE_CHECKOUT=1)"
+      return 0
+      ;;
+  esac
+
+  command -v git >/dev/null 2>&1 || return 0
+  git -C "$REPO_ROOT" rev-parse --show-toplevel >/dev/null 2>&1 || return 0
+  if ! git -C "$REPO_ROOT" rev-parse --verify --quiet "${release_ref}^{commit}" >/dev/null; then
+    warn "install source $REPO_ROOT has no '$release_ref' ref; checkout freshness not verified"
+    return 0
+  fi
+
+  counts="$(git -C "$REPO_ROOT" rev-list --left-right --count "HEAD...${release_ref}" 2>/dev/null || true)"
+  [[ -n "$counts" ]] || return 0
+  ahead="${counts%%[[:space:]]*}"
+  behind="${counts##*[[:space:]]}"
+  [[ "$ahead" =~ ^[0-9]+$ && "$behind" =~ ^[0-9]+$ ]] || return 0
+  branch="$(git -C "$REPO_ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null || printf 'detached')"
+
+  if (( behind > 0 )); then
+    # A rebase can leave HEAD "behind" while shipping identical content.
+    if git -C "$REPO_ROOT" diff --quiet HEAD "$release_ref" 2>/dev/null; then
+      info "install source is $behind commit(s) behind $release_ref but the tree matches; treating as current"
+      return 0
+    fi
+    warn "install source may be stale: $REPO_ROOT is $behind commit(s) behind $release_ref (ahead $ahead) on '$branch'"
+    git -C "$REPO_ROOT" log -1 --format='[saturn-install]   HEAD  : %h %ad %s' --date=short >&2 || true
+    git -C "$REPO_ROOT" log -1 --format="[saturn-install]   ${release_ref}: %h %ad %s" --date=short "$release_ref" >&2 || true
+    warn "update it first: git -C $REPO_ROOT fetch origin && git -C $REPO_ROOT checkout main && git -C $REPO_ROOT pull --ff-only"
+    warn "silence (pinned/rollback): SATURN_ALLOW_STALE_CHECKOUT=1"
+    if bool_true "${SATURN_REQUIRE_CURRENT_CHECKOUT:-0}"; then
+      die "SATURN_REQUIRE_CURRENT_CHECKOUT=1 and the install source is $behind commit(s) behind $release_ref"
+    fi
+  fi
+
+  info "install source: ${branch}@$(git -C "$REPO_ROOT" rev-parse --short HEAD) ($(if [[ -n "$(git -C "$REPO_ROOT" status --porcelain 2>/dev/null)" ]]; then printf 'dirty'; else printf 'clean'; fi))"
+}
+
 usage(){
   cat <<'EOF'
 Usage: sudo ./install.sh [options]
@@ -119,6 +173,7 @@ esac
 
 [[ -f "$REPO_ROOT/sw_projects/P2_app/Makefile" ]] || die "invalid Saturn checkout: $REPO_ROOT"
 [[ -x "$PROVISIONER" ]] || die "shared provisioner not found or executable: $PROVISIONER"
+check_source_checkout
 getent passwd "$SATURN_USER" >/dev/null || die "user does not exist: $SATURN_USER"
 SATURN_HOME="$(getent passwd "$SATURN_USER" | cut -d: -f6)"
 SATURN_GROUP="$(id -gn "$SATURN_USER")"

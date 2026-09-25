@@ -570,6 +570,45 @@ Default URL:
   and installing `saturn-bridge.service`
 - `SATURN_REQUIRE_BRIDGE` defaults to `SATURN_INSTALL_BRIDGE`; when enabled,
   native source/build failures fail the full installation
+
+## Installing from a checkout (UI downgrade guard)
+
+`sudo ./install.sh` deploys the web UI from **the checkout it is run in**
+(`SATURN_REPO_DIR`, propagated as `SATURN_UPDATE_MANAGER_SOURCE_DIR`), and it
+always rebuilds `remote-web/dist` from that source. A checkout that is parked on
+a stale branch therefore installs a stale UI and backend — on 2026-09-25 an
+install from a `checkpoint/…` branch 52 commits behind `main` silently removed
+the High-Res 3D waterfall and its display settings from a live appliance.
+
+Guards now in place:
+
+- The installer refuses to deploy `saturn-remote-next.html`/`.js` unless the
+  deployed page contains the High-Res 3D markers (`terrain-canvas`, `view-3d`)
+  and the bundle contains `TerrainRenderer`. This is the hard guarantee for all
+  paths that copy the web assets (install, self-deploy stage, release build).
+  Deliberately reduced build: `SATURN_ALLOW_LEGACY_WEB_ASSETS=1`.
+- A stale install source (behind `SATURN_INSTALL_RELEASE_REF`, default
+  `origin/main`) warns loudly with the exact fix commands; a rebased branch that
+  ships an identical tree is reported as current instead. Enforce it for
+  production installs with `SATURN_REQUIRE_CURRENT_CHECKOUT=1`, or silence it
+  for a pinned/rollback install with `SATURN_ALLOW_STALE_CHECKOUT=1`.
+- The deployed revision is recorded in `/var/lib/saturn-web/.saturn-web-revision`
+  (`branch`, `commit`, `worktree`, `release_ref`, `installed_utc`).
+
+Keep the appliance checkout on `main`:
+
+```bash
+git -C /home/pi/github/Saturn fetch origin
+git -C /home/pi/github/Saturn checkout main
+git -C /home/pi/github/Saturn pull --ff-only
+```
+
+For a two-file UI refresh without a full install (both paths run the same
+content guard):
+
+```bash
+sudo update_manager/remote-web/deploy-remote-next.sh
+```
 - `SATURN_READY_REQUIRE_BRIDGE` defaults to `0`; Bridge state is reported by
   `/readyz` and Overview but does not gate Saturn Go process readiness because
   P2-only startup intentionally leaves Bridge stopped

@@ -561,6 +561,12 @@ systemd-tmpfiles --create "$SATURN_MAINTENANCE_TMPFILES"
 ok "Directories ready"
 
 info "Copying web assets..."
+if declare -F saturn_go_check_source_checkout >/dev/null; then
+  if ! saturn_go_check_source_checkout "$SOURCE_DIR"; then
+    err "Install source checkout failed the freshness check (see above)"
+    exit 1
+  fi
+fi
 saturn_go_build_remote_web_assets "$SOURCE_DIR"
 if ! saturn_go_copy_required_web_assets "$SOURCE_DIR/templates" "$SOURCE_DIR" "$WEB_ROOT"; then
   err "Missing required web asset in $SOURCE_DIR/templates or $SOURCE_DIR"
@@ -571,8 +577,11 @@ if ! saturn_go_copy_shared_assets "$SOURCE_DIR/templates" "$WEB_ROOT"; then
   exit 1
 fi
 if ! saturn_go_verify_remote_web_bundle "$WEB_ROOT"; then
-  err "Deployed remote-web bundle checksum verification failed"
+  err "Deployed remote-web bundle verification failed"
   exit 1
+fi
+if declare -F saturn_go_record_source_revision >/dev/null; then
+  saturn_go_record_source_revision "$SOURCE_DIR" "$WEB_ROOT"
 fi
 
 if [[ -f "$SOURCE_DIR/scripts/config.json" ]]; then
