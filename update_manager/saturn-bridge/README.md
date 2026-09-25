@@ -146,6 +146,30 @@ and FPGA snapshots. The default DMA minimum remains 4096 bytes. See
 [the RX benchmark and hardware comparison procedure](scripts/benchmark-xdma-rx.md)
 for measurements, metric definitions, and the opt-in 8192/16384-byte experiments.
 
+### WAN display spectrum rows (Direct-XDMA)
+
+Raw display IQ is 12,800 pairs at 30 frames/s, about 24.6 Mbit/s per IQ client.
+LAN clients keep that stream byte-for-byte. A client that negotiates WAN display
+instead receives server-computed rows (Saturn binary stream type 16, u8 dB,
+64-byte TCI-compatible header), about 0.34 Mbit/s for 2048 bins at 20 rows/s.
+
+| Direction | Message | Meaning |
+|---|---|---|
+| bridge → client | `saturn_display_caps:spectrum_u8;` | Sent before `ready;` on Direct-XDMA only |
+| client → bridge | `saturn_display:spectrum,<fft>,<ms>;` | Opt in; fft is a power of two from 256 to 4096, interval is 33–250 ms |
+| client → bridge | `saturn_display:iq;` | Revert to raw IQ (also the default for every new socket) |
+| bridge → client | `saturn_display:0,spectrum,<fft>,<ms>;` / `saturn_display:0,iq;` | Effective mode echo |
+| client → bridge | `saturn_display_ack:<seq>;` | Row credit; the bridge keeps at most 2 unacknowledged rows in flight |
+
+The RX loop only feeds a lock-free ring; the `display-spectrum` worker computes
+FFTs that match `remote-web/src/dsp/fft.ts`. Each client has one latest-wins row
+slot below audio priority. Rows older than two intervals are dropped at dequeue.
+After a 2 s ack stall the bridge probes with one row per second and widens the
+window to 4. Split sessions deliver rows to the media lane and inherit the mode
+from the control lane at pairing. The raw-IQ packetizer runs and resets only
+while some client still receives raw IQ. `perf.json` reports
+`display_spectrum_*` counters and the `display_spectrum_fft_session` histogram.
+
 ## Same-Host P2 Port Map
 
 | Traffic              | Direction        | Port  |

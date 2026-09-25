@@ -1,4 +1,5 @@
 mod config;
+mod display_spectrum;
 mod fftw_wisdom;
 mod p2;
 mod radio_model;

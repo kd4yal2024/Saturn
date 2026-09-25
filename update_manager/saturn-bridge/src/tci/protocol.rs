@@ -3,6 +3,10 @@ use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
 use std::time::Instant;
 
+use crate::display_spectrum::{
+    clamp_spectrum_fft_size, clamp_spectrum_interval_ms, SpectrumRow, SPECTRUM_DB_OFFSET,
+    SPECTRUM_DB_STEP, SPECTRUM_FORMAT_U8_DB, TCI_STREAM_SPECTRUM_ROW,
+};
 use crate::radio_model::{
     AgcMode, DemodMode, NoiseBlankerMode, NoiseReductionMode, Nr2GainMethod, Nr2NpeMethod,
     WbfmDeemphasis,
@@ -506,6 +510,20 @@ pub(crate) fn parse_tci_command_with_roles(
                 if let Ok(rate_hz) = rate_text.trim().parse::<u32>() {
                     let _ = command_tx.send(TciCommand::SetIqSampleRate(rate_hz));
                 }
+            }
+        }
+        "saturn_display" => {
+            if let Some(requested) = parse_display_mode_request(&args) {
+                let effective = set_client_display_mode(clients, client_id, requested);
+                send_text_to_client(clients, client_id, effective.echo_message());
+            }
+        }
+        "saturn_display_ack" => {
+            if let Some(sequence) = args
+                .first()
+                .and_then(|text| text.trim().parse::<u32>().ok())
+            {
+                record_client_display_ack(clients, client_id, sequence);
             }
         }
         "iq_start" => {
@@ -1201,6 +1219,8 @@ pub(crate) fn viewer_tci_command_allowed(name: &str) -> bool {
     matches!(
         name,
         "saturn_ping"
+            | "saturn_display"
+            | "saturn_display_ack"
             | "iq_start"
             | "iq_stop"
             | "audio_start"
@@ -1446,6 +1466,48 @@ pub(crate) fn build_tci_audio_frame(
     sequence: u32,
 ) -> Vec<u8> {
     build_tci_float_frame(receiver, sample_rate, audio_samples, 1, channels, sequence)
+}
+
+/// `saturn_display:spectrum,<fft_size>,<interval_ms>` or `saturn_display:iq`.
+/// Values are clamped to the WAN display contract; malformed requests are
+/// ignored so the client keeps its current mode.
+pub(crate) fn parse_display_mode_request(args: &[&str]) -> Option<DisplayMode> {
+    match args.first()?.trim().to_ascii_lowercase().as_str() {
+        "iq" => Some(DisplayMode::RawIq),
+        "spectrum" => {
+            let fft_size = args.get(1)?.trim().parse::<u32>().ok()?;
+            let interval_ms = args.get(2)?.trim().parse::<u32>().ok()?;
+            Some(DisplayMode::Spectrum {
+                fft_size: clamp_spectrum_fft_size(fft_size),
+                interval_ms: clamp_spectrum_interval_ms(interval_ms),
+            })
+        }
+        _ => None,
+    }
+}
+
+/// Saturn stream type 16: one server-computed RX spectrum row. The first 32
+/// bytes keep the standard TCI binary header layout so existing parsers can
+/// read the stream type and ignore it.
+pub(crate) fn build_tci_spectrum_row_frame(row: &SpectrumRow, sequence: u32) -> Vec<u8> {
+    let mut frame = vec![0u8; 64 + row.codes.len()];
+    write_u32_le(&mut frame, 0, 0);
+    write_u32_le(&mut frame, 4, row.span_hz);
+    write_u32_le(&mut frame, 8, SPECTRUM_FORMAT_U8_DB);
+    write_u32_le(&mut frame, 12, row.fft_size);
+    write_u32_le(&mut frame, 16, 1);
+    write_u32_le(&mut frame, 20, row.codes.len() as u32);
+    write_u32_le(&mut frame, 24, TCI_STREAM_SPECTRUM_ROW);
+    write_u32_le(&mut frame, 28, 1);
+    write_u32_le(&mut frame, 32, sequence);
+    write_u32_le(&mut frame, 36, row.center_hz as u32);
+    write_u32_le(&mut frame, 40, (row.center_hz >> 32) as u32);
+    frame[44..48].copy_from_slice(&SPECTRUM_DB_OFFSET.to_le_bytes());
+    frame[48..52].copy_from_slice(&SPECTRUM_DB_STEP.to_le_bytes());
+    write_u32_le(&mut frame, 52, row.capture_to_enqueue_us);
+    write_u32_le(&mut frame, 56, row.server_ms);
+    frame[64..].copy_from_slice(&row.codes);
+    frame
 }
 
 pub(crate) fn build_tci_float_frame(

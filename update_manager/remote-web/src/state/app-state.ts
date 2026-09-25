@@ -268,6 +268,51 @@ export interface AppState {
   waterfallSettleFrames: number;
   waterfallFrameSkipCounter: number;
 
+  // ── WAN display transport (server spectrum rows) ────────────────────────
+  // The bridge advertises `saturn_display_caps:spectrum_u8;` on Direct-XDMA;
+  // a WAN browser may then request server-computed rows instead of raw IQ.
+  // LAN never opts in, so every field stays at its "raw IQ" default there.
+  displayCapsSpectrum: boolean;
+  displayRequested: string;
+  displayEchoMode: 'iq' | 'spectrum';
+  displayEchoFftSize: number;
+  displayEchoIntervalMs: number;
+  displayEchoReceived: boolean;
+  displayEchoPending: boolean;
+  displayRenderSource: 'iq' | 'server';
+  displayServerBins: Float32Array | null;
+  displayServerFftSize: number;
+  /// Center frequency the current server row was captured at; the drawn bins
+  /// are shifted by (center - state.dds) while tuning so rows that lag the
+  /// optimistic tune stay on screen instead of freezing the display.
+  displayServerCenterHz: number;
+  displayServerSeq: number;
+  /// Monotonic across both sources: SpectrumHistory rejects any frame whose
+  /// sequence does not advance, so the counter must not be per-source.
+  displaySequence: number;
+  displayServerRowVersion: number;
+  displayServerLastRowAt: number;
+  displayServerBytes: number;
+  displayServerRowsWindow: number;
+  displayServerBytesWindow: number;
+  displayServerRowsReceived: number;
+  displayServerRowsAccepted: number;
+  displayServerRowsDroppedCenter: number;
+  displayServerRowsShiftedCenter: number;
+  displayServerRowsRejected: number;
+  displayServerSeqGaps: number;
+  /// Highest sequence seen on any valid row, accepted or not, so center-dropped
+  /// rows are not miscounted as gaps.
+  displayServerLastReceivedSeq: number;
+  displayServerAckSeq: number;
+  displayServerAckCount: number;
+  /// Last accepted sequence minus last acked sequence. Acks are synchronous,
+  /// so this stays 0-1; the bridge owns true in-flight accounting.
+  displayServerAckLag: number;
+  displayServerRowRate: number;
+  displayServerByteRate: number;
+  displayIqStartDeferred: boolean;
+
   // ── Audio ───────────────────────────────────────────────────────────────
   audioFramesPlayed: number;
   audioSampleRate: number;
@@ -604,6 +649,38 @@ export function createAppState(): AppState {
     waterfallShiftCarryPixels: 0,
     waterfallSettleFrames: 0,
     waterfallFrameSkipCounter: 0,
+
+    displayCapsSpectrum: false,
+    displayRequested: '',
+    displayEchoMode: 'iq',
+    displayEchoFftSize: 0,
+    displayEchoIntervalMs: 0,
+    displayEchoReceived: false,
+    displayEchoPending: false,
+    displayRenderSource: 'iq',
+    displayServerBins: null,
+    displayServerFftSize: 0,
+    displayServerCenterHz: 0,
+    displayServerSeq: 0,
+    displaySequence: 0,
+    displayServerRowVersion: 0,
+    displayServerLastRowAt: 0,
+    displayServerBytes: 0,
+    displayServerRowsWindow: 0,
+    displayServerBytesWindow: 0,
+    displayServerRowsReceived: 0,
+    displayServerRowsAccepted: 0,
+    displayServerRowsDroppedCenter: 0,
+    displayServerRowsShiftedCenter: 0,
+    displayServerRowsRejected: 0,
+    displayServerSeqGaps: 0,
+    displayServerLastReceivedSeq: 0,
+    displayServerAckSeq: 0,
+    displayServerAckCount: 0,
+    displayServerAckLag: 0,
+    displayServerRowRate: 0,
+    displayServerByteRate: 0,
+    displayIqStartDeferred: false,
 
     audioFramesPlayed: 0,
     audioSampleRate: 48000,

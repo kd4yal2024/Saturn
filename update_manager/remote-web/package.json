@@ -11,7 +11,8 @@
     "check:seam": "node scripts/check-template-seam.mjs",
     "validate:remote-next-layout": "node scripts/validate-remote-next-layout.mjs",
     "validate:waterfall": "node scripts/validate-waterfall.mjs",
-    "validate:terrain": "node scripts/validate-terrain.mjs"
+    "validate:terrain": "node scripts/validate-terrain.mjs",
+    "validate:wan-display": "node scripts/validate-wan-display.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",

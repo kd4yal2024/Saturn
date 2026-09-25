@@ -8560,6 +8560,9 @@
     const DISPLAY_WAN_RENDER_INTERVAL_MS = 50;
     const DISPLAY_PHONE_WAN_RENDER_INTERVAL_MS = 33;
     const DISPLAY_PHONE_WAN_WATERFALL_INTERVAL_MS = 50;
+    // WAN display negotiation: wait this long for the bridge's
+    // `saturn_display:` echo before falling back to raw IQ.
+    const DISPLAY_ECHO_TIMEOUT_MS = 1000;
     const PHONE_PANEL_DEFAULTS = Object.freeze({
       session: false,
       audio: false,
@@ -9124,6 +9127,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     state.txDisplaySettleFrames = 0;
     state.iqFrameVersion = 0;
     state.lastRenderedIqFrameVersion = -1;
+    state.lastRenderedServerRowVersion = -1;
     state.lastWaterfallLineAt = 0;
     state.rxMediaResumeLastAt = 0;
     state.rxMediaResumeRetryToken = 0;
@@ -10292,6 +10296,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       state.fftWidth = state.latestBins.length;
       state.lastSpectrumRenderAt = 0;
       state.lastRenderedIqFrameVersion = -1;
+      state.lastRenderedServerRowVersion = -1;
       state.spectrumShiftCarryBins = 0;
       state.waterfallShiftCarryPixels = 0;
       state.waterfallSettleFrames = 0;
@@ -10914,6 +10919,28 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         // and GPU presentation time. No cross-clock latency claim.
         timingScope: "browser-arrival-to-draw-submission",
         fftSize: fftProcessor.size,
+        // WAN spectrum-row source: bytes/s, rows/s, sequence gaps and the
+        // ack lag. True in-flight/credit accounting lives bridge-side
+        // (`display_spectrum_*`); acks here are synchronous, so ackLag stays 0-1.
+        serverDisplay: {
+          mode: state.displayEchoMode,
+          requested: state.displayRequested,
+          fftSize: state.displayServerFftSize,
+          centerHz: state.displayServerCenterHz,
+          rowsPerSec: state.displayServerRowRate,
+          bytesPerSec: state.displayServerByteRate,
+          rowsReceived: state.displayServerRowsReceived,
+          rowsAccepted: state.displayServerRowsAccepted,
+          rowsDroppedCenter: state.displayServerRowsDroppedCenter,
+          rowsShiftedCenter: state.displayServerRowsShiftedCenter,
+          rowsRejected: state.displayServerRowsRejected,
+          sequenceGaps: state.displayServerSeqGaps,
+          ackLag: state.displayServerAckLag,
+          ackCount: state.displayServerAckCount,
+          lastRowAgeMs: state.displayServerLastRowAt
+            ? Math.round(now - state.displayServerLastRowAt)
+            : null,
+        },
         waterfallBackend: waterfallRenderer.backend,
         ...displayProfileDiagnostics(now),
         browserMainLagMs: timingStats(browserTimingBuckets.mainLag),
@@ -13019,6 +13046,9 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
           sendTci(rxAudioStartCommand());
         }
       }
+      // LAN↔WAN toggle re-negotiates the display transport: WAN asks for
+      // spectrum rows, LAN reverts to raw IQ (`saturn_display:iq;`).
+      requestDisplayTransport("transport mode", true);
       if (changed) {
         logEvent(`RX network profile changed to ${normalized.toUpperCase()} (${reason})`);
       }
@@ -14352,6 +14382,11 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     function displayProfileDiagnostics(now = performance.now()) {
       const phoneWan = phoneWanLiteActive(now);
       const wan = wanDisplayActive(now);
+      // While the render source is server rows, the effective FFT is the row's
+      // fft_size (no local FftProcessor ran), so bin spacing follows it.
+      const activeFftSize = state.displayRenderSource === "server" && state.displayServerFftSize > 0
+        ? state.displayServerFftSize
+        : fftProcessor.size;
       const reasons = [];
       const freshRtt = state.bridgeRttMs != null && now - state.bridgeRttAt <= BRIDGE_RTT_STALE_MS;
       if (state.streamMode === "wan") reasons.push("RX Transport is set to WAN");
@@ -14364,7 +14399,9 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         targetFftSize: displayFftTargetSize(now),
         targetRenderIntervalMs: displayRenderIntervalMs(now),
         sampleRateHz: displaySampleRateHz(),
-        binSpacingHz: displaySampleRateHz() / fftProcessor.size,
+        binSpacingHz: displaySampleRateHz() / activeFftSize,
+        displaySource: state.displayRenderSource,
+        displayFftSize: activeFftSize,
         bridgeRttMs: state.bridgeRttMs,
         bridgeRttFresh: freshRtt,
       };
@@ -14386,6 +14423,253 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       });
       if (displaySlowFrames.length > 16) displaySlowFrames.shift();
     }
+
+    // ---- WAN display transport: server spectrum rows (stream type 16) ----
+    // Opt-in only: a Direct-XDMA bridge advertises
+    // `saturn_display_caps:spectrum_u8;`, and only a WAN session asks for
+    // server rows. LAN and legacy sessions send nothing and stay byte-for-byte
+    // on today's raw IQ path.
+    let displayEchoFallbackTimer = null;
+
+    function displayTransportRequested() {
+      return Boolean(state.displayCapsSpectrum) && state.streamMode === "wan";
+    }
+
+    function desiredDisplayFftSize() {
+      return _next.clampSpectrumFftSize(Math.min(_next.SPECTRUM_FFT_MAX, displayFftTargetSize()));
+    }
+
+    function desiredDisplayIntervalMs() {
+      // Terrain rows run at 10 Hz (100 ms) so the WAN display stays inside the
+      // 0.5 Mbit/s budget even at the 4096-bin cap.
+      return _next.clampSpectrumIntervalMs(state.terrainActive ? 100 : displayRenderIntervalMs());
+    }
+
+    function desiredDisplayCommand() {
+      return displayTransportRequested()
+        ? _next.spectrumDisplayCommand(desiredDisplayFftSize(), desiredDisplayIntervalMs())
+        : _next.SPECTRUM_DISPLAY_IQ_COMMAND;
+    }
+
+    function clearDisplayEchoFallback() {
+      if (displayEchoFallbackTimer !== null) {
+        window.clearTimeout(displayEchoFallbackTimer);
+        displayEchoFallbackTimer = null;
+      }
+    }
+
+    function armDisplayEchoFallback() {
+      clearDisplayEchoFallback();
+      displayEchoFallbackTimer = window.setTimeout(() => {
+        displayEchoFallbackTimer = null;
+        if (state.displayEchoReceived) return;
+        // No echo inside the contract window: fall back to raw IQ so a slow or
+        // non-negotiating bridge can never leave the display without IQ.
+        state.displayEchoReceived = true;
+        state.displayEchoPending = false;
+        state.displayRenderSource = "iq";
+        state.displayRequested = "";
+        logEvent("WAN display negotiation timed out; using raw IQ");
+        flushDeferredIqStart();
+      }, DISPLAY_ECHO_TIMEOUT_MS);
+    }
+
+    function requestDisplayTransport(reason = "sync", force = false) {
+      if (!state.connected || !state.bridgeReady) {
+        return false;
+      }
+      if (!state.displayCapsSpectrum) {
+        // No spectrum support (P2 or an older bridge): send nothing at all.
+        state.displayRequested = "";
+        state.displayEchoReceived = false;
+        state.displayEchoPending = false;
+        clearDisplayEchoFallback();
+        return false;
+      }
+      const command = desiredDisplayCommand();
+      if (!force) {
+        // Never re-send while an echo is outstanding: the fallback timer owns
+        // that window. Otherwise only send when the request or the confirmed
+        // mode has drifted (a superseded echo, a size/interval change, or a
+        // bridge that never echoed).
+        if (state.displayEchoPending) {
+          return false;
+        }
+        const wanted = displayTransportRequested() ? "spectrum" : "iq";
+        if (command === state.displayRequested && state.displayEchoReceived && state.displayEchoMode === wanted) {
+          return false;
+        }
+      }
+      state.displayRequested = command;
+      state.displayEchoReceived = false;
+      state.displayEchoPending = true;
+      sendTci(command);
+      armDisplayEchoFallback();
+      if (force) logEvent(`WAN display mode requested (${reason}): ${command}`);
+      return true;
+    }
+
+    function applyDisplayEcho(args) {
+      const echo = _next.parseDisplayEcho(args);
+      if (!echo) return false;
+      state.displayEchoReceived = true;
+      state.displayEchoPending = false;
+      clearDisplayEchoFallback();
+      if (echo.mode === "spectrum") {
+        state.displayEchoMode = "spectrum";
+        state.displayEchoFftSize = echo.fftSize;
+        state.displayEchoIntervalMs = echo.intervalMs;
+        // Render server rows only after the echo, never on the request alone.
+        state.displayRenderSource = "server";
+      } else {
+        state.displayEchoMode = "iq";
+        state.displayRenderSource = "iq";
+        state.displayServerBins = null;
+        state.displayServerFftSize = 0;
+        state.displayServerCenterHz = 0;
+      }
+      flushDeferredIqStart();
+      scheduleUiRefresh();
+      return true;
+    }
+
+    function resetDisplayTransport(reason = "disconnect") {
+      clearDisplayEchoFallback();
+      state.displayCapsSpectrum = false;
+      state.displayRequested = "";
+      state.displayEchoReceived = false;
+      state.displayEchoMode = "iq";
+      state.displayEchoFftSize = 0;
+      state.displayEchoIntervalMs = 0;
+      state.displayEchoPending = false;
+      state.displayRenderSource = "iq";
+      state.displayServerBins = null;
+      state.displayServerFftSize = 0;
+      state.displayServerCenterHz = 0;
+      state.displayServerSeq = 0;
+      state.displayServerAckSeq = 0;
+      state.displayServerLastReceivedSeq = 0;
+      state.displayIqStartDeferred = false;
+      updateWsDiagMarker(`Display transport reset (${reason})`, 1000);
+    }
+
+    function iqStartGated() {
+      return state.displayCapsSpectrum && state.streamMode === "wan" && !state.displayEchoReceived;
+    }
+
+    function sendIqStart() {
+      if (iqStartGated()) {
+        state.displayIqStartDeferred = true;
+        // `ready;` has already requested the mode; only ask again if no echo is
+        // outstanding, otherwise the bridge sees a duplicate request and the
+        // fallback timer is re-armed for nothing.
+        if (!state.displayEchoPending) requestDisplayTransport("iq_start gate", true);
+        return false;
+      }
+      sendTci("iq_start:0;");
+      return true;
+    }
+
+    function flushDeferredIqStart() {
+      if (!state.displayIqStartDeferred) return;
+      state.displayIqStartDeferred = false;
+      if (!state.connected || !state.bridgeReady) return;
+      sendTci("iq_start:0;");
+    }
+
+    function sendDisplayAck(sequence) {
+      if (!Number.isFinite(sequence)) return;
+      state.displayServerAckCount += 1;
+      state.displayServerAckSeq = sequence;
+      sendTci(_next.spectrumDisplayAckCommand(sequence));
+    }
+
+    function handleSpectrumRow(buffer) {
+      const now = performance.now();
+      const header = _next.parseSpectrumRowHeader(buffer);
+      if (!header) {
+        state.displayServerRowsRejected += 1;
+        // Still ack a rejected row when we can read its sequence, so a protocol
+        // bug can never stall the bridge's per-client credit window.
+        const seq = _next.spectrumRowSequence(buffer);
+        if (seq !== null) sendDisplayAck(seq);
+        return;
+      }
+      state.displayServerRowsReceived += 1;
+      state.displayServerRowsWindow += 1;
+      state.displayServerBytes += buffer.byteLength;
+      state.displayServerBytesWindow += buffer.byteLength;
+      const sequence = header.sequence;
+      const previousReceived = state.displayServerLastReceivedSeq;
+      if (sequence < previousReceived) {
+        // The bridge restarts the per-client sequence at 1 on every new media
+        // socket. Rows arrive in order over one TCP socket, so the only
+        // backward step possible is a stream restart: rebase instead of leaving
+        // gap accounting silently disabled for the rest of the session.
+        state.displayServerLastReceivedSeq = sequence;
+      } else {
+        if (previousReceived > 0 && sequence > previousReceived + 1) {
+          state.displayServerSeqGaps += sequence - previousReceived - 1;
+        }
+        if (sequence > previousReceived) state.displayServerLastReceivedSeq = sequence;
+      }
+      // Rows carry the bridge's center, which lags an optimistic tune
+      // (`setFrequency` sets state.dds immediately). Drop only when the row no
+      // longer covers the display; otherwise keep it and let the draw step
+      // shift it, so tuning the WAN display stays live instead of freezing.
+      const centerDeltaHz = header.centerHz - state.dds;
+      const rowSpanHz = header.spanHz > 0 ? header.spanHz : state.sampleRate;
+      if (Number.isFinite(centerDeltaHz) && Math.abs(centerDeltaHz) >= rowSpanHz / 2) {
+        state.displayServerRowsDroppedCenter += 1;
+        sendDisplayAck(sequence);
+        return;
+      }
+      if (centerDeltaHz !== 0) state.displayServerRowsShiftedCenter += 1;
+      const bins = state.displayServerBins && state.displayServerBins.length === header.binCount
+        ? state.displayServerBins
+        : new Float32Array(header.binCount);
+      _next.dequantizeSpectrumRow(buffer, header, bins);
+      state.displayServerBins = bins;
+      state.displayServerFftSize = header.fftSize;
+      state.displayServerCenterHz = header.centerHz;
+      state.displayServerSeq = sequence;
+      state.displayServerRowVersion += 1;
+      state.displayServerLastRowAt = now;
+      state.displayServerRowsAccepted += 1;
+      if (state.displayIqSource !== "tx" && header.spanHz > 0) {
+        state.sampleRate = header.spanHz;
+      }
+      state.lastFrameAt = now;
+      if (displayFirstIqAt === null) displayFirstIqAt = now;
+      state.frameCounter += 1;
+      state.displayCaption = `WAN spectrum row: ${header.binCount} bins at ${Math.round(header.spanHz / 1000)} kHz`;
+      sendDisplayAck(sequence);
+      const now2 = performance.now();
+      if (now2 - lastIqUiRefreshAt >= DISPLAY_STATUS_REFRESH_INTERVAL_MS) {
+        lastIqUiRefreshAt = now2;
+        scheduleUiRefresh();
+      }
+    }
+
+    function scanDisplayTransportText(text) {
+      if (!text) return;
+      for (const raw of text.split(";")) {
+        const command = raw.trim();
+        if (!command) continue;
+        if (command.startsWith("saturn_display_caps:")) {
+          if (_next.spectrumCapsAdvertised(command.slice("saturn_display_caps:".length))) {
+            state.displayCapsSpectrum = true;
+          }
+        } else if (command.startsWith("saturn_display:")) {
+          applyDisplayEcho(command.slice("saturn_display:".length).split(","));
+        } else if (command.startsWith("session_paired:")) {
+          // The coupled media lane is where rows are delivered; re-assert the
+          // mode so a control-lane reconnect cannot leave a stale pairing.
+          requestDisplayTransport("pairing", true);
+        }
+      }
+    }
+    // ---- end WAN display transport ----
 
     function displayPacketHistoryLimit(now = performance.now()) {
       if (phoneWanLiteActive(now)) {
@@ -15595,6 +15879,9 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       } else if (wanDisplayActive()) {
         $("display-resolution").textContent += ` | WAN ${displayFftTargetSize()} FFT`;
       }
+      if (state.displayRenderSource === "server") {
+        $("display-resolution").textContent += ` | WAN rows ${state.displayServerFftSize} FFT @ ${state.displayEchoIntervalMs} ms`;
+      }
       $("display-resolution").textContent += ` | S ${safeFixed(state.displayFloorDb, 0, "-200")}..${safeFixed(state.displayCeilingDb, 0, "-120")} dB`;
       $("display-resolution").textContent += waterfallRenderEnabled()
         ? ` | W ${safeFixed(state.waterfallFloorDb, 0, "-200")}..${safeFixed(state.waterfallCeilingDb, 0, "-120")} dB`
@@ -16133,7 +16420,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         return;
       }
       state.iqStreaming = true;
-      sendTci("iq_start:0;");
+      sendIqStart();
       updateUi();
     }
 
@@ -16144,7 +16431,8 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       resetDisplayHistory();
       if (shouldAutoStartIq()) {
         state.iqStreaming = true;
-        sendTci(`iq_samplerate:${effectiveIqSampleRate()};iq_start:0;`);
+        sendTci(`iq_samplerate:${effectiveIqSampleRate()};`);
+        sendIqStart();
       }
       if (shouldAutoStartRxAudio()) {
         if (state.audioStreaming) {
@@ -18028,6 +18316,9 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         state.connectPending = false;
         state.connected = false;
         state.bridgeReady = false;
+        // The negotiated display mode belongs to this socket; the next ready
+        // re-negotiates. Reverting here also stops rendering stale server rows.
+        resetDisplayTransport("socket closed");
         resetSatpState();
         state.txMonitorSupported = false;
         state.txMonitorEnabled = false;
@@ -18101,6 +18392,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       }
       state.connected = false;
       state.bridgeReady = false;
+      resetDisplayTransport("manual disconnect");
       resetSatpState();
       state.txMonitorSupported = false;
       state.txMonitorEnabled = false;
@@ -18147,6 +18439,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         }
         return true;
       }).join(";");
+      scanDisplayTransportText(text);
       const previous = {
         ...state,
         rxEqBands: state.rxEqBands.slice(),
@@ -18184,6 +18477,10 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       if (events.ready) {
         state.bridgeReady = true;
         logEvent(readinessAccepted ? "Bridge reported ready; RX session recovery starting" : "Bridge reported ready");
+        // Re-assert the WAN display mode on every ready: a reconnected bridge
+        // starts clients on raw IQ, and the request also arms the echo gate
+        // that withholds iq_start until the mode is confirmed.
+        requestDisplayTransport("bridge ready", true);
       }
       if (readinessAccepted) {
         const readyAt = performance.now();
@@ -18503,6 +18800,13 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       const sampleRate = view.getUint32(4, true);
       const floatCount = view.getUint32(20, true);
       state.wsDiagBinaryFrames = (state.wsDiagBinaryFrames || 0) + 1;
+      if (frameType === _next.SPECTRUM_ROW_STREAM_TYPE) {
+        // Server-computed WAN display rows bypass iqPackets, the FFT and the
+        // whole raw-IQ copy path; the payload is already the dB spectrum.
+        updateWsDiagMarker(`App WAN spectrum row bytes=${buffer.byteLength}`, 1000);
+        handleSpectrumRow(buffer);
+        return;
+      }
       if (frameType === TCI_STREAM_AUDIO_RX) {
         updateWsDiagMarker(`App audio frame bytes=${buffer.byteLength}`, 1000);
         handleAudioFrame(buffer);
@@ -18699,6 +19003,75 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       }
     }
 
+    // Shared display entry point for both sources. Local FFT bins and server
+    // spectrum rows both arrive here as fftshifted dB bins; everything after
+    // this point (history, averaging, renderers) is identical.
+    function drawDisplayBins(bins, now, waterfallEnabled, phoneWanLite, centerShiftHz = 0) {
+      const drawStartedAt = performance.now();
+      let visibleBins = visibleBinsForDisplay(bins);
+      // Server rows carry the bridge's capture center, which lags an optimistic
+      // tune. Shift the already-display-oriented bins by (row center - dds) so a
+      // lagging row still lands on the ruler instead of freezing the display.
+      // Same convention as shiftDisplayForCenterChange, which shifts on-screen
+      // bins by (old center - new center).
+      if (visibleBins && centerShiftHz) {
+        const spanHz = displaySpanHz();
+        if (Number.isFinite(spanHz) && spanHz > 0) {
+          const shiftBins = Math.round((centerShiftHz / spanHz) * visibleBins.length);
+          if (shiftBins !== 0) {
+            visibleBins = shiftBinsHorizontally(visibleBins, shiftBins, state.displayFloorDb);
+          }
+        }
+      }
+      // History buckets describe when a selected FFT was displayed. At 30 IQ
+      // frames/s and a 50 ms WAN display cadence, source-arrival timestamps
+      // alternate between skipped and repeated 50 ms buckets, producing
+      // artificial horizontal gray bands despite continuous IQ. A real IQ stall
+      // still creates a gap: the version gate prevents ingestion.
+      // The sequence is shared by both sources: SpectrumHistory rejects any
+      // frame whose sequence does not advance, and per-source counters can go
+      // backwards when the render source switches over an identical mapping.
+      state.displaySequence += 1;
+      if (!state.displayPaused) acceptSpectrumFrame(visibleBins, now, state.displaySequence, bins.length);
+      const processedBins = processedDisplayBins(visibleBins);
+      updateDisplayRange(processedBins);
+      spectrumRenderer.render(processedBins, state.displayFloorDb, state.displayCeilingDb);
+      if (!waterfallEnabled) {
+        state.waterfallSettleFrames = 0;
+        state.waterfallFrameSkipCounter = 0;
+      } else if (phoneWanLite) {
+        if (shouldPushWaterfallLine(now)) {
+          waterfallRenderer.pushLine(
+            processedBins,
+            state.waterfallFloorDb,
+            state.waterfallCeilingDb,
+            state.waterfallPalette,
+            state.waterfallContrast,
+            state.waterfallSmoothing,
+          );
+          waterfallRenderer.render();
+          state.lastWaterfallLineAt = now;
+        }
+      } else if (state.waterfallSettleFrames > 0) {
+        state.waterfallSettleFrames -= 1;
+      } else {
+        state.waterfallFrameSkipCounter = (state.waterfallFrameSkipCounter + 1) % clampWaterfallSpeed(state.waterfallSpeed);
+        if (state.waterfallFrameSkipCounter === 0) {
+          waterfallRenderer.pushLine(
+            processedBins,
+            state.waterfallFloorDb,
+            state.waterfallCeilingDb,
+            state.waterfallPalette,
+            state.waterfallContrast,
+            state.waterfallSmoothing,
+          );
+          waterfallRenderer.render();
+        }
+      }
+      state.lastSpectrumRenderAt = now;
+      return drawStartedAt;
+    }
+
     function animationLoop(now) {
       const rafGapMs = browserTimingLastRafAt > 0 ? now - browserTimingLastRafAt : 0;
       recordRafTiming(now);
@@ -18717,7 +19090,37 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         state.iqStreaming &&
         state.iqPackets.length !== 0 &&
         (!txDisplayActive || state.displayIqSource === "tx");
-      if (canRenderIq) {
+      const canRenderServer =
+        !state.displayPaused &&
+        state.connected &&
+        state.iqStreaming &&
+        state.displayRenderSource === "server" &&
+        Boolean(state.displayServerBins) &&
+        !txDisplayActive;
+      if (canRenderServer) {
+        // WAN server rows: the payload is already the fftshifted dB spectrum,
+        // so buildRenderIqWindow, FftProcessor and the raw-IQ copy are skipped.
+        const hasNewRow = state.displayServerRowVersion !== state.lastRenderedServerRowVersion;
+        if (hasNewRow && now - state.lastSpectrumRenderAt >= displayRenderIntervalMs(now) - (state.terrainActive ? 1 : 0)) {
+          const drawStartedAt = drawDisplayBins(
+            state.displayServerBins,
+            now,
+            waterfallEnabled,
+            phoneWanLite,
+            state.displayServerCenterHz - state.dds,
+          );
+          state.lastRenderedServerRowVersion = state.displayServerRowVersion;
+          const drawEndedAt = performance.now();
+          recordBrowserTimingSample(displayTimingBuckets.drawCpu, drawEndedAt - drawStartedAt);
+          recordBrowserTimingSample(displayTimingBuckets.arrivalToDraw, drawEndedAt - state.lastFrameAt);
+          // No local FFT ran for this source, so the FFT bucket stays untouched
+          // and the slow-frame entry reports fftMs = 0.
+          recordDisplaySlowFrame(rafGapMs, 0, drawEndedAt - drawStartedAt, drawEndedAt - state.lastFrameAt);
+          if (displayFirstIqToDrawMs === null && displayFirstIqAt !== null) {
+            displayFirstIqToDrawMs = roundedTimingMs(drawEndedAt - displayFirstIqAt);
+          }
+        }
+      } else if (canRenderIq) {
         const hasNewIq = state.iqFrameVersion !== state.lastRenderedIqFrameVersion;
         if (hasNewIq && now - state.lastSpectrumRenderAt >= displayRenderIntervalMs(now) - (state.terrainActive ? 1 : 0)) {
           const iqWindow = buildRenderIqWindow();
@@ -18731,50 +19134,8 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
             const bins = fftProcessor.transform(iqWindow);
             const drawStartedAt = performance.now();
             recordBrowserTimingSample(displayTimingBuckets.fft, drawStartedAt - fftStartedAt);
-            const visibleBins = visibleBinsForDisplay(bins);
-            // History buckets describe when a selected FFT was displayed. At
-            // 30 IQ frames/s and a 50 ms WAN display cadence, source-arrival
-            // timestamps alternate between skipped and repeated 50 ms buckets,
-            // producing artificial horizontal gray bands despite continuous IQ.
-            // A real IQ stall still creates a gap: hasNewIq prevents ingestion.
-            if (!state.displayPaused) acceptSpectrumFrame(visibleBins, now, state.iqFrameVersion, bins.length);
-            const processedBins = processedDisplayBins(visibleBins);
-            updateDisplayRange(processedBins);
-            spectrumRenderer.render(processedBins, state.displayFloorDb, state.displayCeilingDb);
-            if (!waterfallEnabled) {
-              state.waterfallSettleFrames = 0;
-              state.waterfallFrameSkipCounter = 0;
-            } else if (phoneWanLite) {
-              if (shouldPushWaterfallLine(now)) {
-                waterfallRenderer.pushLine(
-                  processedBins,
-                  state.waterfallFloorDb,
-                  state.waterfallCeilingDb,
-                  state.waterfallPalette,
-                  state.waterfallContrast,
-                  state.waterfallSmoothing,
-                );
-                waterfallRenderer.render();
-                state.lastWaterfallLineAt = now;
-              }
-            } else if (state.waterfallSettleFrames > 0) {
-              state.waterfallSettleFrames -= 1;
-            } else {
-              state.waterfallFrameSkipCounter = (state.waterfallFrameSkipCounter + 1) % clampWaterfallSpeed(state.waterfallSpeed);
-              if (state.waterfallFrameSkipCounter === 0) {
-                waterfallRenderer.pushLine(
-                  processedBins,
-                  state.waterfallFloorDb,
-                  state.waterfallCeilingDb,
-                  state.waterfallPalette,
-                  state.waterfallContrast,
-                  state.waterfallSmoothing,
-                );
-                waterfallRenderer.render();
-              }
-            }
+            drawDisplayBins(bins, now, waterfallEnabled, phoneWanLite);
             state.lastRenderedIqFrameVersion = state.iqFrameVersion;
-            state.lastSpectrumRenderAt = now;
             const drawEndedAt = performance.now();
             recordBrowserTimingSample(displayTimingBuckets.drawCpu, drawEndedAt - drawStartedAt);
             recordBrowserTimingSample(displayTimingBuckets.arrivalToDraw, drawEndedAt - state.lastFrameAt);
@@ -18814,9 +19175,18 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       refreshRxAudioJitterSummary(now);
       const elapsed = now - state.lastSummaryAt;
       if (elapsed >= 1000) {
+        const seconds = Math.max(0.001, elapsed / 1000);
         state.frameRate = state.frameCounter * (1000 / Math.max(1, elapsed));
+        state.displayServerRowRate = state.displayServerRowsWindow / seconds;
+        state.displayServerByteRate = state.displayServerBytesWindow / seconds;
+        state.displayServerAckLag = Math.max(0, state.displayServerSeq - state.displayServerAckSeq);
+        state.displayServerRowsWindow = 0;
+        state.displayServerBytesWindow = 0;
         state.frameCounter = 0;
         state.lastSummaryAt = now;
+        // Cheap convergence check: only sends when the desired size/interval
+        // actually changed (terrain, layout, transport, sample rate).
+        requestDisplayTransport("periodic");
         if (state.perfCaptureEnabled) {
           recordPerfSnapshot();
         }

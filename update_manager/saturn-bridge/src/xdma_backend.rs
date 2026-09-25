@@ -6,6 +6,7 @@
 //! H2C/DUC output.
 
 use crate::config::BridgeConfig;
+use crate::display_spectrum::{LatestIqRing, SpectrumWorker, SpectrumWorkerStats};
 use crate::radio_model::{DemodMode, NoiseReductionMode, PureSignalState, RadioModel, TxPhase};
 use crate::rx_thread::correct_smeter_dbm;
 use crate::sync_ext::MutexExt;
@@ -373,7 +374,8 @@ fn run_inner(mut config: BridgeConfig, ready_path: &Path) -> Result<(), Box<dyn 
     // merely the configured request, so legacy clients cannot mistake an
     // unqualified firmware image for an RF-enabled backend.
     config.remote_tx_rf_enabled = remote_tx_rf_enabled;
-    let (tci, command_rx) = TciFrontend::bind(&config, radio_model.clone())?;
+    let (tci, command_rx) =
+        TciFrontend::bind_with_display_spectrum(&config, radio_model.clone(), true)?;
     let tci = Arc::new(tci);
     let (tx_cmd_tx, tx_cmd_rx) = mpsc::channel();
     let (tx_audio_ingress, tx_audio_rx, tx_audio_stats) = TxAudioIngress::bounded();
@@ -410,6 +412,16 @@ fn run_inner(mut config: BridgeConfig, ready_path: &Path) -> Result<(), Box<dyn 
         )
     };
     let mut rx = OperationalRxSession::open(rx_frequency_hz, rx_antenna, rx_attenuation_db)?;
+    // WAN spectrum rows: the RX loop only feeds this lock-free ring; FFTs run
+    // on the worker so LAN raw-IQ and audio timing are untouched.
+    let spectrum_ring = Arc::new(LatestIqRing::new(u64::from(rx_frequency_hz)));
+    let spectrum_worker = SpectrumWorker::spawn(
+        Arc::clone(&tci),
+        Arc::clone(&spectrum_ring),
+        DIRECT_DDC_SAMPLE_RATE_KHZ * 1_000,
+    )?;
+    let mut spectrum_feed_active = false;
+    let mut spectrum_center_hz = u64::from(rx_frequency_hz);
     let identity = rx.identity().clone();
     let mut iq_samples = Vec::with_capacity(8_192);
     rx.drain_startup_fifo(&mut iq_samples)?;
@@ -467,10 +479,20 @@ fn run_inner(mut config: BridgeConfig, ready_path: &Path) -> Result<(), Box<dyn 
                 media_demand = tci.media_demand();
                 last_media_demand_refresh = Instant::now();
             }
-            if !media_demand.iq_stream_enabled || tci.tx_media_priority_active() {
+            if !media_demand.raw_iq_stream_enabled || tci.tx_media_priority_active() {
                 // Do not carry pre-client or receive-suppressed samples into a
                 // later RX frame. Once active, every accepted sample is kept.
+                // Keyed to raw demand so a spectrum-only session cannot leave a
+                // stale partial frame for a LAN client that attaches later.
                 iq_packetizer.reset();
+            }
+            if media_demand.spectrum_stream_enabled != spectrum_feed_active {
+                spectrum_feed_active = media_demand.spectrum_stream_enabled;
+                if spectrum_feed_active {
+                    spectrum_center_hz =
+                        u64::from(radio_model.lock_unpoisoned().desired.iq_center_hz);
+                    spectrum_ring.restart(spectrum_center_hz);
+                }
             }
             // Consume a bounded slice of the host ring before client control
             // work. The dedicated reader continues servicing the hardware FIFO
@@ -497,7 +519,10 @@ fn run_inner(mut config: BridgeConfig, ready_path: &Path) -> Result<(), Box<dyn 
                     } else {
                         "raw-iq-estimate"
                     };
-                    if media_demand.iq_stream_enabled && !tci.tx_media_priority_active() {
+                    if spectrum_feed_active && mode.decodes_iq() {
+                        spectrum_ring.push(&iq_samples);
+                    }
+                    if media_demand.raw_iq_stream_enabled && !tci.tx_media_priority_active() {
                         let publish_started = Instant::now();
                         iq_packetizer.push(&iq_samples, |frame| {
                             let pairs = (frame.len() / 2) as u64;
@@ -635,6 +660,13 @@ fn run_inner(mut config: BridgeConfig, ready_path: &Path) -> Result<(), Box<dyn 
                 if command_effects.tuning_dirty {
                     // A frame must never straddle two RF center frequencies.
                     iq_packetizer.reset();
+                    // Rows must not straddle centers either; VFO moves inside
+                    // the span keep the ring.
+                    let center_hz = u64::from(radio_model.lock_unpoisoned().desired.iq_center_hz);
+                    if center_hz != spectrum_center_hz {
+                        spectrum_center_hz = center_hz;
+                        spectrum_ring.restart(center_hz);
+                    }
                 }
                 let command_elapsed = command_started.elapsed();
                 rx_performance.control_batch_latency.record(command_elapsed);
@@ -736,10 +768,7 @@ fn run_inner(mut config: BridgeConfig, ready_path: &Path) -> Result<(), Box<dyn 
             if last_perf.elapsed() >= PERF_PERIOD {
                 let elapsed = last_perf.elapsed().as_secs_f64().max(0.001);
                 let client = tci.client_snapshot();
-                media_demand = TciMediaDemand {
-                    iq_stream_enabled: client.iq_stream_enabled,
-                    audio_stream_enabled: client.audio_stream_enabled,
-                };
+                media_demand = tci.media_demand();
                 let snapshot_started = Instant::now();
                 if let Err(error) = rx.sample_extended_telemetry() {
                     eprintln!(
@@ -765,6 +794,7 @@ fn run_inner(mut config: BridgeConfig, ready_path: &Path) -> Result<(), Box<dyn 
                     &rx_performance,
                     &iq_transport_totals,
                     iq_packetizer.pending_pairs(),
+                    &spectrum_worker.stats,
                     &wdsp_resume_performance,
                     rx.fifo_v29_telemetry(),
                     rx.adc_v30_telemetry(),
@@ -1381,6 +1411,7 @@ fn write_performance(
     performance: &DirectRxPerformance,
     iq_transport_totals: &DirectIqTransportTotals,
     iq_packetizer_pending_pairs: usize,
+    spectrum_worker: &SpectrumWorkerStats,
     wdsp_resume: &WdspResumePerformance,
     fifo_v29: &FpgaFifoV29Telemetry,
     adc_v30: &FpgaAdcV30Telemetry,
@@ -1406,8 +1437,39 @@ fn write_performance(
             .control_batch_latency
             .fields("rx_control_batch_interval"),
         performance.snapshot_latency.fields("rx_snapshot_interval"),
+        spectrum_worker
+            .fft_latency
+            .lock_unpoisoned()
+            .fields("display_spectrum_fft_session"),
     ]
     .concat();
+    let spectrum = &client.spectrum;
+    let spectrum_metrics = [
+        ("display_spectrum_clients", client.display_spectrum_clients),
+        (
+            "display_spectrum_rows_computed",
+            spectrum_worker.rows_computed.load(Ordering::Relaxed),
+        ),
+        (
+            "display_spectrum_captures_skipped",
+            spectrum_worker.captures_skipped.load(Ordering::Relaxed),
+        ),
+        ("display_spectrum_rows_enqueued", spectrum.enqueued),
+        ("display_spectrum_rows_replaced", spectrum.replaced),
+        (
+            "display_spectrum_rows_dropped_stale",
+            spectrum.dropped_stale,
+        ),
+        (
+            "display_spectrum_rows_credit_blocked",
+            spectrum.credit_blocked,
+        ),
+        ("display_spectrum_probes", spectrum.probes),
+        ("display_spectrum_rows_written", spectrum.written),
+        ("display_spectrum_bytes_written", spectrum.bytes_written),
+        ("display_spectrum_acks", spectrum.acks),
+        ("display_spectrum_in_flight_max", spectrum.in_flight_max),
+    ];
     record_runtime_performance(
         path,
         status,
@@ -1938,6 +2000,11 @@ fn write_performance(
                 .iter()
                 .map(|(name, value)| (name.as_str(), value.clone())),
         )
+        .chain(
+            spectrum_metrics
+                .iter()
+                .map(|&(name, value)| (name, TelemetryValue::number(value))),
+        )
         .collect::<Vec<_>>(),
     )
     .map_err(|source| XdmaError::Io {
@@ -2163,6 +2230,7 @@ mod tests {
         TciMediaDemand {
             iq_stream_enabled: iq,
             audio_stream_enabled: audio,
+            ..TciMediaDemand::default()
         }
     }
 

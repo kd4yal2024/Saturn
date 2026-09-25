@@ -17,6 +17,50 @@ use crate::tx_codec::{tx_codec_frame_is_stale, TxCodecDecoder, TxCodecRuntimeFla
 
 use super::*;
 
+/// How a client receives the RX display. Every client starts as `RawIq`,
+/// which is today's full-rate IQ stream byte-for-byte. Only a client that
+/// explicitly negotiates `saturn_display:spectrum` receives server rows.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum DisplayMode {
+    #[default]
+    RawIq,
+    Spectrum {
+        fft_size: u32,
+        interval_ms: u32,
+    },
+}
+
+impl DisplayMode {
+    pub(crate) fn spectrum_group(self) -> Option<(u32, u32)> {
+        match self {
+            Self::RawIq => None,
+            Self::Spectrum {
+                fft_size,
+                interval_ms,
+            } => Some((fft_size, interval_ms)),
+        }
+    }
+
+    pub(crate) fn echo_message(self) -> String {
+        match self {
+            Self::RawIq => "saturn_display:0,iq;".to_string(),
+            Self::Spectrum {
+                fft_size,
+                interval_ms,
+            } => format!("saturn_display:0,spectrum,{fft_size},{interval_ms};"),
+        }
+    }
+}
+
+pub(crate) const DISPLAY_SPECTRUM_CAPS_MESSAGE: &str = "saturn_display_caps:spectrum_u8;";
+
+/// Per-bridge display capabilities handed to every client thread.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct DisplayTransport {
+    pub(crate) spectrum_supported: bool,
+    pub(crate) spectrum_stats: Arc<SpectrumTransportStats>,
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct ClientState {
     /// Only trusted loopback clients may become the radio operator. Raw TCI
@@ -54,6 +98,9 @@ pub(crate) struct ClientState {
     /// same-origin proxy dials with these paths; direct clients use `/` and
     /// stay on the legacy any-lane behavior.
     pub(crate) connect_lane_hint: Option<SplitSocketKind>,
+    pub(crate) display_mode: DisplayMode,
+    /// Set at registration from the backend; P2 never offers spectrum rows.
+    pub(crate) display_spectrum_supported: bool,
 }
 
 impl Default for ClientState {
@@ -96,6 +143,8 @@ impl ClientState {
             tx_codec_release_flush_count: 0,
             split: None,
             connect_lane_hint: None,
+            display_mode: DisplayMode::RawIq,
+            display_spectrum_supported: false,
         }
     }
 }
@@ -144,6 +193,7 @@ pub(crate) fn handle_client(
     remote_tx_rf_enabled: bool,
     tx_codec_runtime_flags: TxCodecRuntimeFlags,
     satp_advertisement: (bool, u16),
+    display: &DisplayTransport,
 ) {
     let _ = stream.set_nonblocking(true);
     let mut connect_lane_hint = None;
@@ -157,8 +207,10 @@ pub(crate) fn handle_client(
     );
     match accept_result {
         Ok(mut websocket) => {
-            let outbound =
-                ClientOutbound::new_with_full_rate_iq_stats(Arc::clone(full_rate_iq_stats));
+            let outbound = ClientOutbound::new_with_transport_stats(
+                Arc::clone(full_rate_iq_stats),
+                Arc::clone(&display.spectrum_stats),
+            );
             let operator_eligible = addr.ip().is_loopback();
             let (role, first_client, client_count) = register_client(
                 clients,
@@ -169,6 +221,11 @@ pub(crate) fn handle_client(
                 connect_lane_hint,
                 operator_eligible,
             );
+            if display.spectrum_supported {
+                if let Some(client) = clients.lock_unpoisoned().get_mut(&client_id) {
+                    client.state.display_spectrum_supported = true;
+                }
+            }
             println!(
                 "saturn-bridge: TCI client {client_id} assigned {} role ({client_count} connected){}",
                 role.as_tci(),
@@ -182,13 +239,23 @@ pub(crate) fn handle_client(
             // A media-lane socket must never carry text; the paired control
             // socket receives the snapshot instead.
             if connect_lane_hint != Some(SplitSocketKind::Media) {
-                for message in initial_snapshot_messages(
+                let mut snapshot = initial_snapshot_messages(
                     &radio_model.lock_unpoisoned(),
                     remote_tx_rf_enabled,
                     client_id,
                     role,
                     satp_advertisement,
-                ) {
+                );
+                if display.spectrum_supported {
+                    // Advertise before `ready;` so the browser knows whether it
+                    // may withhold iq_start for display negotiation.
+                    let ready_at = snapshot
+                        .iter()
+                        .position(|message| message == "ready;")
+                        .unwrap_or(snapshot.len());
+                    snapshot.insert(ready_at, DISPLAY_SPECTRUM_CAPS_MESSAGE.to_string());
+                }
+                for message in snapshot {
                     let drops = outbound.enqueue(OutboundMessage::Text(message));
                     drop_count.fetch_add(drops, Ordering::Relaxed);
                 }
@@ -835,6 +902,42 @@ pub(crate) fn set_client_iq_stream_enabled(
     clients
         .values()
         .any(|client| client.state.iq_stream_enabled)
+}
+
+/// Apply a `saturn_display:` request and return the effective mode, which is
+/// always `RawIq` on backends without spectrum support. Mirrored to the
+/// paired media client, which is where display rows are delivered.
+pub(crate) fn set_client_display_mode(
+    clients: &ClientRegistry,
+    client_id: u64,
+    requested: DisplayMode,
+) -> DisplayMode {
+    let mut clients = clients.lock_unpoisoned();
+    let Some(client) = clients.get_mut(&client_id) else {
+        return DisplayMode::RawIq;
+    };
+    let effective = if client.state.display_spectrum_supported {
+        requested
+    } else {
+        DisplayMode::RawIq
+    };
+    client.state.display_mode = effective;
+    if let Some(media_id) = split_paired_media_client_id(&clients, client_id) {
+        if let Some(media) = clients.get_mut(&media_id) {
+            media.state.display_mode = effective;
+        }
+    }
+    effective
+}
+
+/// Route a display ack to the socket that actually carries the rows: the
+/// paired media client for split sessions, otherwise the sender itself.
+pub(crate) fn record_client_display_ack(clients: &ClientRegistry, client_id: u64, sequence: u32) {
+    let clients = clients.lock_unpoisoned();
+    let target = split_paired_media_client_id(&clients, client_id).unwrap_or(client_id);
+    if let Some(client) = clients.get(&target) {
+        client.outbound.record_spectrum_ack(sequence);
+    }
 }
 
 pub(crate) fn set_client_audio_stream_enabled(

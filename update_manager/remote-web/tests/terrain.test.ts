@@ -33,7 +33,13 @@ describe('numeric history and chronology', () => {
   });
   it('timestamps decimated WAN display rows at presentation without hiding real IQ stalls', () => {
     const html=readFileSync('../templates/saturn-remote-next.html','utf8');
-    expect(html).toContain('acceptSpectrumFrame(visibleBins, now, state.iqFrameVersion, bins.length)');
+    // Both sources feed history through the shared draw helper, timestamped at
+    // presentation with one monotonic sequence (SpectrumHistory rejects frames
+    // whose sequence does not advance, so it must not be per-source).
+    expect(html).toContain('state.displaySequence += 1;');
+    expect(html).toContain('acceptSpectrumFrame(visibleBins, now, state.displaySequence, bins.length)');
+    expect(html).toContain('drawDisplayBins(bins, now, waterfallEnabled, phoneWanLite)');
+    expect(html).toContain('state.displayServerCenterHz - state.dds');
     const arrivalHistory=new SpectrumHistory(), displayHistory=new SpectrumHistory();
     let latestArrival=-Infinity, version=0, lastDrawnVersion=0, lastDraw=-Infinity;
     // A 30 Hz source and 60 Hz RAF with a 50 ms WAN display gate. Source
@@ -116,10 +122,16 @@ describe('presentation settings', () => {
   });
   it('integrates before display-only peak hold, not in the offline animation', () => {
     const html=readFileSync('../templates/saturn-remote-next.html','utf8');
-    const idle=html.slice(html.indexOf('function renderIdleFrame'),html.indexOf('function animationLoop'));
+    // The offline idle renderer must never feed spectrum history. The live
+    // sources (local FFT and WAN server rows) both funnel through the shared
+    // drawDisplayBins helper, which feeds history before peak hold runs.
+    const idle=html.slice(html.indexOf('function renderIdleFrame'),html.indexOf('function drawDisplayBins'));
     expect(idle).not.toContain('acceptSpectrumFrame');
-    const live=html.slice(html.indexOf('const bins = fftProcessor.transform(iqWindow)'));
-    expect(live.indexOf('acceptSpectrumFrame')).toBeLessThan(live.indexOf('processedDisplayBins'));
+    const shared=html.slice(html.indexOf('function drawDisplayBins'),html.indexOf('function animationLoop'));
+    expect(shared.indexOf('acceptSpectrumFrame')).toBeGreaterThanOrEqual(0);
+    expect(shared.indexOf('acceptSpectrumFrame')).toBeLessThan(shared.indexOf('processedDisplayBins'));
+    const iqPath=html.slice(html.indexOf('const bins = fftProcessor.transform(iqWindow)'),html.indexOf('} else if (txDisplayActive)'));
+    expect(iqPath).toContain('drawDisplayBins(bins,');
     const selector=html.slice(html.indexOf('function setTerrainMode'),html.indexOf('function saveTerrainSettings'));
     expect(selector).not.toMatch(/sendTci|setFrequency|connect\(|moxRequested\s*=/);
   });

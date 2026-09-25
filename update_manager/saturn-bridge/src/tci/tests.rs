@@ -3103,3 +3103,394 @@ fn parses_standard_tci_control_aliases() {
         TciCommand::SetAnfEnabled(true)
     ));
 }
+
+fn spectrum_test_row(fft_size: u32, interval_ms: u64, age: Duration) -> Arc<SpectrumRow> {
+    Arc::new(SpectrumRow {
+        span_hz: 384_000,
+        fft_size,
+        interval: Duration::from_millis(interval_ms),
+        center_hz: 14_200_000,
+        captured_at: Instant::now() - age,
+        capture_to_enqueue_us: 12,
+        server_ms: 34,
+        codes: (0..fft_size).map(|bin| bin as u8).collect(),
+    })
+}
+
+fn spectrum_message(row: &Arc<SpectrumRow>) -> OutboundMessage {
+    OutboundMessage::SpectrumRow {
+        row: Arc::clone(row),
+        sequence: 0,
+        credit_blocked: false,
+    }
+}
+
+fn spectrum_client_registry(client_id: u64) -> ClientRegistry {
+    let clients = test_client_registry(client_id);
+    clients
+        .lock_unpoisoned()
+        .get_mut(&client_id)
+        .unwrap()
+        .state
+        .display_spectrum_supported = true;
+    clients
+}
+
+fn drain_texts(outbound: &ClientOutbound) -> Vec<String> {
+    let mut texts = Vec::new();
+    while let Some(item) = outbound.next_message(false) {
+        if let OutboundMessage::Text(text) = item.message {
+            texts.push(text);
+        }
+    }
+    texts
+}
+
+#[test]
+fn display_negotiation_clamps_echoes_and_reverts() {
+    let (tx, _rx) = mpsc::channel();
+    let clients = spectrum_client_registry(3);
+    let outbound = clients.lock_unpoisoned()[&3].outbound.clone();
+    assert_eq!(
+        clients.lock_unpoisoned()[&3].state.display_mode,
+        DisplayMode::RawIq
+    );
+
+    // Viewers may negotiate their own display transport.
+    parse_tci_command("saturn_display:spectrum,3000,10", &tx, &clients, 3, false);
+    assert_eq!(
+        clients.lock_unpoisoned()[&3].state.display_mode,
+        DisplayMode::Spectrum {
+            fft_size: 2048,
+            interval_ms: 33
+        }
+    );
+    assert_eq!(
+        drain_texts(&outbound),
+        vec!["saturn_display:0,spectrum,2048,33;".to_string()]
+    );
+
+    parse_tci_command("saturn_display:spectrum,abc,50", &tx, &clients, 3, true);
+    assert!(drain_texts(&outbound).is_empty());
+    assert!(clients.lock_unpoisoned()[&3]
+        .state
+        .display_mode
+        .spectrum_group()
+        .is_some());
+
+    parse_tci_command("saturn_display:iq", &tx, &clients, 3, true);
+    assert_eq!(
+        clients.lock_unpoisoned()[&3].state.display_mode,
+        DisplayMode::RawIq
+    );
+    assert_eq!(
+        drain_texts(&outbound),
+        vec!["saturn_display:0,iq;".to_string()]
+    );
+}
+
+#[test]
+fn display_negotiation_without_backend_support_stays_raw_iq() {
+    let (tx, _rx) = mpsc::channel();
+    let clients = test_client_registry(4);
+    let outbound = clients.lock_unpoisoned()[&4].outbound.clone();
+    parse_tci_command("saturn_display:spectrum,2048,50", &tx, &clients, 4, true);
+    assert_eq!(
+        clients.lock_unpoisoned()[&4].state.display_mode,
+        DisplayMode::RawIq
+    );
+    assert_eq!(
+        drain_texts(&outbound),
+        vec!["saturn_display:0,iq;".to_string()]
+    );
+}
+
+#[test]
+fn display_routing_keeps_raw_iq_for_default_clients_only() {
+    let mut raw = ClientConnection {
+        outbound: ClientOutbound::new(),
+        state: ClientState::default(),
+    };
+    raw.state.iq_stream_enabled = true;
+    let mut wan = raw.clone();
+    wan.state.display_mode = DisplayMode::Spectrum {
+        fft_size: 2048,
+        interval_ms: 50,
+    };
+    let mut control = wan.clone();
+    control.state.connect_lane_hint = Some(SplitSocketKind::Control);
+
+    let full_rate = OutboundMessage::FullRateIqFrame {
+        receiver: 0,
+        sample_rate: 384_000,
+        iq_samples: vec![0.0; 4],
+    };
+    let matching = spectrum_message(&spectrum_test_row(2048, 50, Duration::ZERO));
+    let other_size = spectrum_message(&spectrum_test_row(1024, 50, Duration::ZERO));
+    let other_interval = spectrum_message(&spectrum_test_row(2048, 100, Duration::ZERO));
+
+    assert!(client_wants_outbound_message(&raw, &full_rate, false));
+    assert!(!client_wants_outbound_message(&raw, &matching, false));
+    assert!(!client_wants_outbound_message(&wan, &full_rate, false));
+    assert!(client_wants_outbound_message(&wan, &matching, false));
+    assert!(!client_wants_outbound_message(&wan, &other_size, false));
+    assert!(!client_wants_outbound_message(&wan, &other_interval, false));
+    assert!(!client_wants_outbound_message(&wan, &matching, true));
+    assert!(!client_wants_outbound_message(&control, &matching, false));
+
+    assert!(client_receives_raw_iq(&raw));
+    assert!(!client_receives_display_spectrum(&raw));
+    assert!(!client_receives_raw_iq(&wan));
+    assert!(client_receives_display_spectrum(&wan));
+    assert!(!client_receives_display_spectrum(&control));
+    wan.state.iq_stream_enabled = false;
+    assert!(!client_receives_display_spectrum(&wan));
+}
+
+#[test]
+fn raw_iq_delivery_is_unchanged_by_a_concurrent_spectrum_client() {
+    // Mirrors TciFrontend::send_message routing for a LAN client alone and
+    // alongside a WAN spectrum client; the LAN byte stream must be identical.
+    let frames: Vec<Vec<f32>> = (0..6)
+        .map(|frame| (0..64).map(|v| (frame * 64 + v) as f32).collect())
+        .collect();
+    let deliver = |with_wan: bool| {
+        let mut lan = ClientConnection {
+            outbound: ClientOutbound::new(),
+            state: ClientState::default(),
+        };
+        lan.state.iq_stream_enabled = true;
+        let mut clients = vec![lan];
+        if with_wan {
+            let mut wan = clients[0].clone();
+            wan.outbound = ClientOutbound::new();
+            wan.state.display_mode = DisplayMode::Spectrum {
+                fft_size: 2048,
+                interval_ms: 50,
+            };
+            clients.push(wan);
+        }
+        let mut lan_bytes = Vec::new();
+        for samples in &frames {
+            let message = OutboundMessage::FullRateIqFrame {
+                receiver: 0,
+                sample_rate: 384_000,
+                iq_samples: samples.clone(),
+            };
+            for client in &clients {
+                if client_wants_outbound_message(client, &message, false) {
+                    client.outbound.enqueue(message.clone());
+                }
+            }
+            if with_wan {
+                assert!(clients[1].outbound.next_message(true).is_none());
+            }
+            while let Some(item) = clients[0].outbound.next_message(true) {
+                let OutboundMessage::FullRateIqFrame {
+                    receiver,
+                    sample_rate,
+                    iq_samples,
+                } = item.message
+                else {
+                    panic!("unexpected LAN message");
+                };
+                lan_bytes.push(build_tci_iq_frame(receiver, sample_rate, &iq_samples));
+            }
+        }
+        lan_bytes
+    };
+    let alone = deliver(false);
+    assert_eq!(alone.len(), frames.len());
+    assert_eq!(alone, deliver(true));
+}
+
+#[test]
+fn spectrum_rows_are_latest_wins_in_the_display_slot() {
+    let outbound = ClientOutbound::new();
+    let rows: Vec<_> = (0..50)
+        .map(|_| spectrum_test_row(256, 50, Duration::ZERO))
+        .collect();
+    for row in &rows {
+        outbound.enqueue(spectrum_message(row));
+    }
+    assert_eq!(outbound.queued_bytes(), 64 + 256);
+    let item = outbound.next_message(true).unwrap();
+    let OutboundMessage::SpectrumRow { row, sequence, .. } = item.message else {
+        panic!("expected spectrum row");
+    };
+    assert!(Arc::ptr_eq(&row, rows.last().unwrap()));
+    assert_eq!(sequence, 1);
+    assert!(outbound.next_message(true).is_none());
+    assert_eq!(outbound.queued_bytes(), 0);
+    let stats = outbound.spectrum_stats_snapshot();
+    assert_eq!((stats.enqueued, stats.replaced), (50, 49));
+}
+
+#[test]
+fn spectrum_credit_blocks_until_ack_and_replaced_rows_cost_nothing() {
+    let outbound = ClientOutbound::new();
+    for expected in 1..=2 {
+        // Rows replaced before the writer takes one never consume credit.
+        for _ in 0..3 {
+            outbound.enqueue(spectrum_message(&spectrum_test_row(
+                256,
+                50,
+                Duration::ZERO,
+            )));
+        }
+        let item = outbound.next_message(true).unwrap();
+        assert!(matches!(
+            item.message,
+            OutboundMessage::SpectrumRow { sequence, .. } if sequence == expected
+        ));
+    }
+    assert_eq!(outbound.spectrum_in_flight(), 2);
+
+    outbound.enqueue(spectrum_message(&spectrum_test_row(
+        256,
+        50,
+        Duration::ZERO,
+    )));
+    assert!(outbound.next_message(true).is_none());
+    assert!(outbound.next_message(true).is_none());
+    assert_eq!(outbound.spectrum_stats_snapshot().credit_blocked, 1);
+
+    // Audio is never held behind display credit.
+    outbound.enqueue(OutboundMessage::AudioFrame {
+        receiver: 0,
+        sample_rate: 48_000,
+        channels: 2,
+        audio_samples: vec![0.0; 256],
+        sequence: 0,
+    });
+    assert_eq!(
+        outbound.next_message(true).unwrap().class,
+        OutboundClass::Audio
+    );
+
+    outbound.record_spectrum_ack(1);
+    let item = outbound.next_message(true).unwrap();
+    assert!(matches!(
+        item.message,
+        OutboundMessage::SpectrumRow { sequence: 3, .. }
+    ));
+    // Stale or duplicate acks never widen the window.
+    outbound.record_spectrum_ack(1);
+    outbound.record_spectrum_ack(9);
+    assert_eq!(outbound.spectrum_in_flight(), 2);
+}
+
+#[test]
+fn stale_spectrum_row_is_dropped_at_dequeue() {
+    let outbound = ClientOutbound::new();
+    outbound.enqueue(spectrum_message(&spectrum_test_row(
+        256,
+        50,
+        Duration::from_millis(150),
+    )));
+    assert!(outbound.next_message(true).is_none());
+    assert_eq!(outbound.queued_bytes(), 0);
+    assert_eq!(outbound.spectrum_in_flight(), 0);
+    assert_eq!(outbound.spectrum_stats_snapshot().dropped_stale, 1);
+}
+
+#[test]
+fn requeued_spectrum_row_returns_credit_and_never_displaces_newer_row() {
+    let outbound = ClientOutbound::new();
+    let first = spectrum_test_row(256, 50, Duration::ZERO);
+    outbound.enqueue(spectrum_message(&first));
+    let taken = outbound.next_message(true).unwrap();
+    assert_eq!(outbound.spectrum_in_flight(), 1);
+    outbound.requeue_front(taken);
+    assert_eq!(outbound.spectrum_in_flight(), 0);
+    let retaken = outbound.next_message(true).unwrap();
+    assert!(matches!(
+        retaken.message,
+        OutboundMessage::SpectrumRow { sequence: 1, .. }
+    ));
+
+    let newer = spectrum_test_row(256, 50, Duration::ZERO);
+    outbound.enqueue(spectrum_message(&newer));
+    outbound.requeue_front(retaken);
+    let OutboundMessage::SpectrumRow { row, .. } = outbound.next_message(true).unwrap().message
+    else {
+        panic!("expected spectrum row");
+    };
+    assert!(Arc::ptr_eq(&row, &newer));
+}
+
+#[test]
+fn spectrum_row_frame_header_matches_wire_contract() {
+    let row = spectrum_test_row(256, 50, Duration::ZERO);
+    let frame = build_tci_spectrum_row_frame(&row, 7);
+    let u32_at = |offset: usize| u32::from_le_bytes(frame[offset..offset + 4].try_into().unwrap());
+    let f32_at = |offset: usize| f32::from_le_bytes(frame[offset..offset + 4].try_into().unwrap());
+    assert_eq!(frame.len(), 64 + 256);
+    assert_eq!(u32_at(0), 0);
+    assert_eq!(u32_at(4), 384_000);
+    assert_eq!(u32_at(8), 0x5301);
+    assert_eq!(u32_at(12), 256);
+    assert_eq!(u32_at(16), 1);
+    assert_eq!(u32_at(20), 256);
+    assert_eq!(u32_at(24), 16);
+    assert_eq!(u32_at(28), 1);
+    assert_eq!(u32_at(32), 7);
+    assert_eq!(
+        u64::from(u32_at(36)) | (u64::from(u32_at(40)) << 32),
+        14_200_000
+    );
+    assert_eq!(f32_at(44), -160.0);
+    assert_eq!(f32_at(48), 0.625);
+    assert_eq!(u32_at(52), 12);
+    assert_eq!(u32_at(56), 34);
+    assert_eq!(u32_at(60), 0);
+    assert_eq!(&frame[64..], &row.codes[..]);
+}
+
+#[test]
+fn split_media_lane_inherits_display_mode_and_receives_acks() {
+    let (tx, _rx) = mpsc::channel();
+    let clients = spectrum_client_registry(71);
+    let mut media_state = ClientState::default();
+    media_state.display_spectrum_supported = true;
+    let media_outbound = ClientOutbound::new();
+    clients.lock_unpoisoned().insert(
+        72,
+        ClientConnection {
+            outbound: media_outbound.clone(),
+            state: media_state,
+        },
+    );
+
+    parse_tci_command("session_lane:wan-1,control", &tx, &clients, 71, true);
+    parse_tci_command("saturn_display:spectrum,1024,33", &tx, &clients, 71, true);
+    assert_eq!(
+        clients.lock_unpoisoned()[&72].state.display_mode,
+        DisplayMode::RawIq
+    );
+    parse_tci_command("session_lane:wan-1,media", &tx, &clients, 72, false);
+    let expected = DisplayMode::Spectrum {
+        fft_size: 1024,
+        interval_ms: 33,
+    };
+    assert_eq!(clients.lock_unpoisoned()[&72].state.display_mode, expected);
+
+    // After pairing, changes on the control lane mirror to the media lane.
+    parse_tci_command("saturn_display:iq", &tx, &clients, 71, true);
+    assert_eq!(
+        clients.lock_unpoisoned()[&72].state.display_mode,
+        DisplayMode::RawIq
+    );
+    parse_tci_command("saturn_display:spectrum,1024,33", &tx, &clients, 71, true);
+    assert_eq!(clients.lock_unpoisoned()[&72].state.display_mode, expected);
+
+    media_outbound.enqueue(spectrum_message(&spectrum_test_row(
+        1024,
+        33,
+        Duration::ZERO,
+    )));
+    assert!(media_outbound.next_message(true).is_some());
+    assert_eq!(media_outbound.spectrum_in_flight(), 1);
+    parse_tci_command("saturn_display_ack:1", &tx, &clients, 71, false);
+    assert_eq!(media_outbound.spectrum_in_flight(), 0);
+}

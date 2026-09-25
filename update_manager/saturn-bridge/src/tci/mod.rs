@@ -9,6 +9,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use crate::config::BridgeConfig;
+use crate::display_spectrum::SpectrumRow;
 use crate::radio_model::{NoiseReductionMode, RadioModel};
 use crate::sync_ext::MutexExt;
 use crate::tx_codec::TxCodecRuntimeFlags;
@@ -38,6 +39,7 @@ pub struct TciFrontend {
     rejected_connections: Arc<AtomicU64>,
     connection_high_watermark: Arc<AtomicU64>,
     full_rate_iq_stats: Arc<FullRateIqTransportStats>,
+    display: DisplayTransport,
     display_rate_limited_count: AtomicU64,
     // TX media priority is derived from the bridge's authoritative
     // TX intent/armed/keyed state, not from a browser command. While active,
@@ -114,12 +116,19 @@ pub struct TciClientSnapshot {
     pub tx_codec_decode_error_count: u64,
     pub tx_codec_stale_drop_count: u64,
     pub tx_codec_release_flush_count: u64,
+    pub(crate) display_spectrum_clients: u64,
+    pub(crate) spectrum: SpectrumTransportSnapshot,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct TciMediaDemand {
+    /// Some client wants RX IQ in any form, so the backend must decode it.
     pub(crate) iq_stream_enabled: bool,
     pub(crate) audio_stream_enabled: bool,
+    /// Some media/legacy client still receives the full-rate raw IQ stream.
+    pub(crate) raw_iq_stream_enabled: bool,
+    /// Some media/legacy client receives server-computed spectrum rows.
+    pub(crate) spectrum_stream_enabled: bool,
 }
 
 struct JoinGuard {
@@ -166,6 +175,16 @@ impl TciFrontend {
         config: &BridgeConfig,
         radio_model: Arc<Mutex<RadioModel>>,
     ) -> io::Result<(Self, TciCommandMailboxReceiver)> {
+        Self::bind_with_display_spectrum(config, radio_model, false)
+    }
+
+    /// Direct-XDMA passes `true` so the capability is known before the first
+    /// client can connect; P2 keeps raw IQ only.
+    pub fn bind_with_display_spectrum(
+        config: &BridgeConfig,
+        radio_model: Arc<Mutex<RadioModel>>,
+        display_spectrum_supported: bool,
+    ) -> io::Result<(Self, TciCommandMailboxReceiver)> {
         {
             let mut model = radio_model.lock_unpoisoned();
             model.satp.enabled = config.satp_enabled;
@@ -192,6 +211,11 @@ impl TciFrontend {
         let rejected_connections = Arc::new(AtomicU64::new(0));
         let connection_high_watermark = Arc::new(AtomicU64::new(0));
         let full_rate_iq_stats = Arc::new(FullRateIqTransportStats::default());
+        let display = DisplayTransport {
+            spectrum_supported: display_spectrum_supported,
+            spectrum_stats: Arc::new(SpectrumTransportStats::default()),
+        };
+        let client_display = display.clone();
         let remote_tx_rf_enabled = config.remote_tx_rf_enabled;
         let satp_advertisement = (config.satp_enabled, config.satp_bind_addr.port());
         let tx_codec_runtime_flags = TxCodecRuntimeFlags {
@@ -241,6 +265,7 @@ impl TciFrontend {
                         let satp_advertisement = satp_advertisement;
                         let active_connections = active_connection_counter.clone();
                         let full_rate_iq_stats = Arc::clone(&full_rate_iq_transport_stats);
+                        let display = client_display.clone();
 
                         thread::spawn(move || {
                             handle_client(
@@ -257,6 +282,7 @@ impl TciFrontend {
                                 remote_tx_rf_enabled,
                                 tx_codec_runtime_flags,
                                 satp_advertisement,
+                                &display,
                             );
                             active_connections.fetch_sub(1, Ordering::AcqRel);
                         });
@@ -283,6 +309,7 @@ impl TciFrontend {
             rejected_connections,
             connection_high_watermark,
             full_rate_iq_stats,
+            display,
             display_rate_limited_count: AtomicU64::new(0),
             tx_media_priority_active: AtomicBool::new(false),
             tx_power_meter_scale: config.tx_power_meter_scale,
@@ -492,6 +519,11 @@ impl TciFrontend {
                 .values()
                 .map(|client| client.state.tx_codec_release_flush_count)
                 .sum(),
+            display_spectrum_clients: clients
+                .values()
+                .filter(|client| client_receives_display_spectrum(client))
+                .count() as u64,
+            spectrum: self.display.spectrum_stats.snapshot(),
         }
     }
 
@@ -507,7 +539,35 @@ impl TciFrontend {
             audio_stream_enabled: clients
                 .values()
                 .any(|client| client.state.audio_stream_enabled),
+            raw_iq_stream_enabled: clients.values().any(client_receives_raw_iq),
+            spectrum_stream_enabled: clients.values().any(client_receives_display_spectrum),
         }
+    }
+
+    /// Distinct (fft_size, interval_ms) groups the spectrum worker must serve.
+    /// Empty while TX media priority suppresses RX display.
+    pub(crate) fn spectrum_groups(&self) -> Vec<(u32, u32)> {
+        if self.tx_media_priority_active() {
+            return Vec::new();
+        }
+        let clients = self.clients.lock_unpoisoned();
+        let mut groups: Vec<_> = clients
+            .values()
+            .filter(|client| client_receives_display_spectrum(client))
+            .filter_map(|client| client.state.display_mode.spectrum_group())
+            .collect();
+        groups.sort_unstable();
+        groups.dedup();
+        groups
+    }
+
+    /// Latest-wins delivery of one row to every client in its group.
+    pub(crate) fn publish_spectrum_row(&self, row: Arc<SpectrumRow>) {
+        self.send_message(OutboundMessage::SpectrumRow {
+            row,
+            sequence: 0,
+            credit_blocked: false,
+        });
     }
 
     pub fn publish_radio_state(&self, model: &RadioModel) {

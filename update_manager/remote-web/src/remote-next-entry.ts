@@ -51,6 +51,20 @@ import { parseTciText } from './tci/parser';
 import { applyTciText } from './tci/apply';
 import { satpTxBlockReason, txUsesBrowserMic } from './audio/satp';
 import { decodeAudioFrame } from './transport/rx-frame';
+import {
+  SPECTRUM_DISPLAY_IQ_COMMAND,
+  SPECTRUM_FFT_MAX,
+  SPECTRUM_ROW_STREAM_TYPE,
+  clampSpectrumFftSize,
+  clampSpectrumIntervalMs,
+  dequantizeSpectrumRow,
+  parseDisplayEcho,
+  parseSpectrumRowHeader,
+  spectrumCapsAdvertised,
+  spectrumDisplayAckCommand,
+  spectrumDisplayCommand,
+  spectrumRowSequence,
+} from './transport/spectrum-row';
 
 
 import {
@@ -265,6 +279,18 @@ const api = {
   SPLIT_TRANSPORT_STORAGE_KEY,
   createSplitSessionId,
   splitTransportEnabled,
+  SPECTRUM_ROW_STREAM_TYPE,
+  SPECTRUM_FFT_MAX,
+  SPECTRUM_DISPLAY_IQ_COMMAND,
+  clampSpectrumFftSize,
+  clampSpectrumIntervalMs,
+  spectrumDisplayCommand,
+  spectrumDisplayAckCommand,
+  spectrumCapsAdvertised,
+  parseDisplayEcho,
+  parseSpectrumRowHeader,
+  spectrumRowSequence,
+  dequantizeSpectrumRow,
 
   // Radio
   bandKeyForFrequency,

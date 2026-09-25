@@ -12,6 +12,7 @@ use std::time::{Duration, Instant};
 use tungstenite::error::Error as WsError;
 use tungstenite::Message;
 
+use crate::display_spectrum::SpectrumRow;
 use crate::sync_ext::MutexExt;
 
 use super::*;
@@ -42,6 +43,13 @@ pub(crate) enum OutboundMessage {
         channels: u32,
         audio_samples: Vec<f32>,
         sequence: u32,
+    },
+    /// Server-computed WAN display row. `sequence` is 0 while queued and is
+    /// assigned per client when the writer takes the row under credit.
+    SpectrumRow {
+        row: Arc<SpectrumRow>,
+        sequence: u32,
+        credit_blocked: bool,
     },
 }
 
@@ -77,7 +85,9 @@ impl OutboundMessage {
             Self::Text(_) => OutboundClass::Control,
             Self::AudioFrame { .. } => OutboundClass::Audio,
             Self::FullRateIqFrame { .. } => OutboundClass::FullRateIq,
-            Self::IqFrame { .. } | Self::TxIqFrame { .. } => OutboundClass::Display,
+            Self::IqFrame { .. } | Self::TxIqFrame { .. } | Self::SpectrumRow { .. } => {
+                OutboundClass::Display
+            }
         }
     }
 
@@ -93,6 +103,7 @@ impl OutboundMessage {
             Self::AudioFrame { audio_samples, .. } => {
                 64 + audio_samples.len() * std::mem::size_of::<f32>()
             }
+            Self::SpectrumRow { row, .. } => 64 + row.codes.len(),
         }
     }
 
@@ -391,6 +402,125 @@ impl FullRateIqTransportStats {
     }
 }
 
+/// Process-lifetime WAN spectrum-row counters, shared across clients.
+#[derive(Default, Debug)]
+pub(crate) struct SpectrumTransportStats {
+    pub(crate) enqueued: AtomicU64,
+    pub(crate) replaced: AtomicU64,
+    pub(crate) dropped_stale: AtomicU64,
+    pub(crate) credit_blocked: AtomicU64,
+    pub(crate) probes: AtomicU64,
+    pub(crate) written: AtomicU64,
+    pub(crate) bytes_written: AtomicU64,
+    pub(crate) acks: AtomicU64,
+    pub(crate) in_flight_max: AtomicU64,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct SpectrumTransportSnapshot {
+    pub(crate) enqueued: u64,
+    pub(crate) replaced: u64,
+    pub(crate) dropped_stale: u64,
+    pub(crate) credit_blocked: u64,
+    pub(crate) probes: u64,
+    pub(crate) written: u64,
+    pub(crate) bytes_written: u64,
+    pub(crate) acks: u64,
+    pub(crate) in_flight_max: u64,
+}
+
+impl SpectrumTransportStats {
+    pub(crate) fn snapshot(&self) -> SpectrumTransportSnapshot {
+        SpectrumTransportSnapshot {
+            enqueued: self.enqueued.load(Ordering::Relaxed),
+            replaced: self.replaced.load(Ordering::Relaxed),
+            dropped_stale: self.dropped_stale.load(Ordering::Relaxed),
+            credit_blocked: self.credit_blocked.load(Ordering::Relaxed),
+            probes: self.probes.load(Ordering::Relaxed),
+            written: self.written.load(Ordering::Relaxed),
+            bytes_written: self.bytes_written.load(Ordering::Relaxed),
+            acks: self.acks.load(Ordering::Relaxed),
+            in_flight_max: self.in_flight_max.load(Ordering::Relaxed),
+        }
+    }
+}
+
+pub(crate) const SPECTRUM_CREDIT_WINDOW: u32 = 2;
+pub(crate) const SPECTRUM_DEGRADED_CREDIT_WINDOW: u32 = 4;
+pub(crate) const SPECTRUM_ACK_STALL: Duration = Duration::from_secs(2);
+pub(crate) const SPECTRUM_PROBE_INTERVAL: Duration = Duration::from_secs(1);
+
+/// End-to-end display credit for one media socket. The bridge's TIOCOUTQ
+/// check sees only the loopback hop to the same-origin proxy, so rows could
+/// otherwise pile up in proxy and WAN TCP buffers. Rows count as in flight
+/// when the writer takes them, never at enqueue, so a row replaced in the
+/// latest-wins slot cannot leak credit.
+#[derive(Debug, Default)]
+pub(crate) struct SpectrumCredit {
+    written_seq: u32,
+    acked_seq: u32,
+    last_progress_at: Option<Instant>,
+    last_probe_at: Option<Instant>,
+    degraded: bool,
+}
+
+impl SpectrumCredit {
+    pub(crate) fn in_flight(&self) -> u32 {
+        self.written_seq.wrapping_sub(self.acked_seq)
+    }
+
+    /// Returns the sequence for the next row, or `None` while out of credit.
+    /// After an ack stall, one probe row per second is allowed and the window
+    /// widens so a lost ack degrades the display instead of freezing it.
+    fn try_take(&mut self, now: Instant, stats: &SpectrumTransportStats) -> Option<u32> {
+        let window = if self.degraded {
+            SPECTRUM_DEGRADED_CREDIT_WINDOW
+        } else {
+            SPECTRUM_CREDIT_WINDOW
+        };
+        if self.in_flight() >= window {
+            let stalled = self
+                .last_progress_at
+                .is_none_or(|at| now.saturating_duration_since(at) >= SPECTRUM_ACK_STALL);
+            let probe_due = self
+                .last_probe_at
+                .is_none_or(|at| now.saturating_duration_since(at) >= SPECTRUM_PROBE_INTERVAL);
+            if !(stalled && probe_due) {
+                return None;
+            }
+            self.degraded = true;
+            self.last_probe_at = Some(now);
+            stats.probes.fetch_add(1, Ordering::Relaxed);
+        } else if self.in_flight() == 0 {
+            self.last_progress_at = Some(now);
+        }
+        self.written_seq = self.written_seq.wrapping_add(1);
+        stats
+            .in_flight_max
+            .fetch_max(u64::from(self.in_flight()), Ordering::Relaxed);
+        Some(self.written_seq)
+    }
+
+    /// Return credit for a row the codec refused before writing any of it.
+    fn unwind(&mut self, sequence: u32) {
+        if sequence != 0 && sequence == self.written_seq {
+            self.written_seq = self.written_seq.wrapping_sub(1);
+        }
+    }
+
+    pub(crate) fn ack(&mut self, sequence: u32, now: Instant) -> bool {
+        let advances = (sequence.wrapping_sub(self.acked_seq) as i32) > 0;
+        let written = (self.written_seq.wrapping_sub(sequence) as i32) >= 0;
+        if !(advances && written) {
+            return false;
+        }
+        self.acked_seq = sequence;
+        self.last_progress_at = Some(now);
+        self.degraded = false;
+        true
+    }
+}
+
 #[derive(Debug)]
 pub(crate) struct OutboundQueues {
     pub(crate) safety: VecDeque<QueuedOutbound>,
@@ -402,6 +532,7 @@ pub(crate) struct OutboundQueues {
     pub(crate) audio_queued_frames: usize,
     pub(crate) audio_sequence: u32,
     pub(crate) writer_started: bool,
+    pub(crate) spectrum_credit: SpectrumCredit,
 }
 
 impl Default for OutboundQueues {
@@ -416,6 +547,7 @@ impl Default for OutboundQueues {
             audio_queued_frames: 0,
             audio_sequence: 0,
             writer_started: false,
+            spectrum_credit: SpectrumCredit::default(),
         }
     }
 }
@@ -425,20 +557,34 @@ pub(crate) struct ClientOutbound {
     pub(crate) queues: Mutex<OutboundQueues>,
     pub(crate) stats: ClientSchedulerStats,
     full_rate_iq_stats: Arc<FullRateIqTransportStats>,
+    spectrum_stats: Arc<SpectrumTransportStats>,
 }
 
 impl ClientOutbound {
+    #[cfg(test)]
     pub(crate) fn new() -> Arc<Self> {
         Self::new_with_full_rate_iq_stats(Arc::new(FullRateIqTransportStats::default()))
     }
 
+    #[cfg(test)]
     pub(crate) fn new_with_full_rate_iq_stats(
         full_rate_iq_stats: Arc<FullRateIqTransportStats>,
+    ) -> Arc<Self> {
+        Self::new_with_transport_stats(
+            full_rate_iq_stats,
+            Arc::new(SpectrumTransportStats::default()),
+        )
+    }
+
+    pub(crate) fn new_with_transport_stats(
+        full_rate_iq_stats: Arc<FullRateIqTransportStats>,
+        spectrum_stats: Arc<SpectrumTransportStats>,
     ) -> Arc<Self> {
         Arc::new(Self {
             queues: Mutex::new(OutboundQueues::default()),
             stats: ClientSchedulerStats::default(),
             full_rate_iq_stats,
+            spectrum_stats,
         })
     }
 
@@ -542,10 +688,16 @@ impl ClientOutbound {
                     .record_enqueued(queues.full_rate_iq.len());
             }
             OutboundClass::Display => {
+                if matches!(item.message, OutboundMessage::SpectrumRow { .. }) {
+                    self.spectrum_stats.enqueued.fetch_add(1, Ordering::Relaxed);
+                }
                 if let Some(old) = queues.display.replace(item) {
                     queues.queued_bytes = queues.queued_bytes.saturating_sub(old.estimated_bytes);
                     dropped += 1;
                     self.stats.record_display_replaced();
+                    if matches!(old.message, OutboundMessage::SpectrumRow { .. }) {
+                        self.spectrum_stats.replaced.fetch_add(1, Ordering::Relaxed);
+                    }
                 }
                 if let Some(display) = queues.display.as_ref() {
                     queues.queued_bytes =
@@ -606,7 +758,7 @@ impl ClientOutbound {
             } else if let Some(item) = queues.full_rate_iq.pop_front() {
                 Some(item)
             } else {
-                queues.display.take()
+                self.take_display_locked(&mut queues)
             }
         } else {
             None
@@ -617,8 +769,97 @@ impl ClientOutbound {
         item
     }
 
+    /// The display slot is latest-wins. Spectrum rows additionally expire
+    /// after two intervals and wait in the slot, still replaceable, while the
+    /// client is out of end-to-end credit.
+    fn take_display_locked(&self, queues: &mut OutboundQueues) -> Option<QueuedOutbound> {
+        let Some(QueuedOutbound {
+            message: OutboundMessage::SpectrumRow { row, .. },
+            ..
+        }) = queues.display.as_ref()
+        else {
+            return queues.display.take();
+        };
+        let now = Instant::now();
+        if row.is_stale(now) {
+            if let Some(old) = queues.display.take() {
+                queues.queued_bytes = queues.queued_bytes.saturating_sub(old.estimated_bytes);
+            }
+            self.spectrum_stats
+                .dropped_stale
+                .fetch_add(1, Ordering::Relaxed);
+            return None;
+        }
+        let taken = queues.spectrum_credit.try_take(now, &self.spectrum_stats);
+        let Some(QueuedOutbound {
+            message:
+                OutboundMessage::SpectrumRow {
+                    sequence,
+                    credit_blocked,
+                    ..
+                },
+            ..
+        }) = queues.display.as_mut()
+        else {
+            unreachable!("display slot held a spectrum row");
+        };
+        match taken {
+            Some(next) => {
+                *sequence = next;
+                queues.display.take()
+            }
+            None => {
+                if !*credit_blocked {
+                    *credit_blocked = true;
+                    self.spectrum_stats
+                        .credit_blocked
+                        .fetch_add(1, Ordering::Relaxed);
+                }
+                None
+            }
+        }
+    }
+
+    pub(crate) fn record_spectrum_ack(&self, sequence: u32) {
+        if self
+            .queues
+            .lock_unpoisoned()
+            .spectrum_credit
+            .ack(sequence, Instant::now())
+        {
+            self.spectrum_stats.acks.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn spectrum_stats_snapshot(&self) -> SpectrumTransportSnapshot {
+        self.spectrum_stats.snapshot()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn spectrum_in_flight(&self) -> u32 {
+        self.queues.lock_unpoisoned().spectrum_credit.in_flight()
+    }
+
     pub(crate) fn requeue_front(&self, item: QueuedOutbound) {
         let mut queues = self.queues.lock_unpoisoned();
+        if let OutboundMessage::SpectrumRow { sequence, .. } = &item.message {
+            // The codec refused the row before writing it: return its credit
+            // and never let an older row displace a newer queued one.
+            queues.spectrum_credit.unwind(*sequence);
+            if queues.display.is_some() {
+                self.spectrum_stats.replaced.fetch_add(1, Ordering::Relaxed);
+                return;
+            }
+            let mut item = item;
+            if let OutboundMessage::SpectrumRow { sequence, .. } = &mut item.message {
+                *sequence = 0;
+            }
+            queues.queued_bytes = queues.queued_bytes.saturating_add(item.estimated_bytes);
+            queues.display = Some(item);
+            self.stats.record_high_watermark(queues.queued_bytes);
+            return;
+        }
         queues.queued_bytes = queues.queued_bytes.saturating_add(item.estimated_bytes);
         match item.class {
             OutboundClass::Safety => queues.safety.push_front(item),
@@ -677,6 +918,13 @@ impl ClientOutbound {
             self.full_rate_iq_stats.record_written();
         }
         self.stats.record_write(class, latency);
+    }
+
+    pub(crate) fn record_spectrum_written(&self, bytes: usize) {
+        self.spectrum_stats.written.fetch_add(1, Ordering::Relaxed);
+        self.spectrum_stats
+            .bytes_written
+            .fetch_add(bytes as u64, Ordering::Relaxed);
     }
 
     pub(crate) fn record_send_blocked(&self, duration: Duration) {
@@ -908,12 +1156,25 @@ pub(crate) fn client_wants_outbound_message(
         OutboundMessage::Text(_) | OutboundMessage::SafetyText(_) => {
             lane != Some(SplitSocketKind::Media)
         }
-        OutboundMessage::IqFrame { .. }
-        | OutboundMessage::FullRateIqFrame { .. }
-        | OutboundMessage::TxIqFrame { .. } => {
+        OutboundMessage::IqFrame { .. } | OutboundMessage::TxIqFrame { .. } => {
             lane != Some(SplitSocketKind::Control)
                 && client.state.iq_stream_enabled
                 && !tx_media_priority_active
+        }
+        // A WAN spectrum client never also receives the full-rate stream it
+        // opted out of; every other client keeps raw IQ byte-for-byte.
+        OutboundMessage::FullRateIqFrame { .. } => {
+            lane != Some(SplitSocketKind::Control)
+                && client.state.iq_stream_enabled
+                && !tx_media_priority_active
+                && client.state.display_mode == DisplayMode::RawIq
+        }
+        OutboundMessage::SpectrumRow { row, .. } => {
+            lane != Some(SplitSocketKind::Control)
+                && client.state.iq_stream_enabled
+                && !tx_media_priority_active
+                && client.state.display_mode.spectrum_group()
+                    == Some((row.fft_size, row.interval.as_millis() as u32))
         }
         OutboundMessage::AudioFrame { .. } => {
             lane != Some(SplitSocketKind::Control)
@@ -921,6 +1182,27 @@ pub(crate) fn client_wants_outbound_message(
                 && !tx_media_priority_active
         }
     }
+}
+
+/// Demand probes ignore TX priority: the backend keeps its stream state
+/// across TX so RX display resumes without renegotiation.
+pub(crate) fn client_receives_raw_iq(client: &ClientConnection) -> bool {
+    let probe = OutboundMessage::FullRateIqFrame {
+        receiver: 0,
+        sample_rate: 0,
+        iq_samples: Vec::new(),
+    };
+    client_wants_outbound_message(client, &probe, false)
+}
+
+pub(crate) fn client_receives_display_spectrum(client: &ClientConnection) -> bool {
+    let probe = OutboundMessage::IqFrame {
+        receiver: 0,
+        sample_rate: 0,
+        iq_samples: Vec::new(),
+    };
+    client.state.display_mode.spectrum_group().is_some()
+        && client_wants_outbound_message(client, &probe, false)
 }
 
 pub(crate) fn bulk_allowed_for_tcp_outq(tcp_outq_bytes: usize) -> bool {
@@ -1011,6 +1293,9 @@ impl BufferedSender {
         };
         self.outbound
             .record_write(item.class, item.enqueued_at.elapsed());
+        if matches!(item.message, OutboundMessage::SpectrumRow { .. }) {
+            self.outbound.record_spectrum_written(item.estimated_bytes);
+        }
         matches!(item.message, OutboundMessage::Close)
     }
 
@@ -1134,6 +1419,9 @@ pub(crate) fn send_outbound<S: io::Read + io::Write>(
         } => websocket.send(Message::Binary(
             build_tci_audio_frame(*receiver, *sample_rate, *channels, audio_samples, *sequence)
                 .into(),
+        )),
+        OutboundMessage::SpectrumRow { row, sequence, .. } => websocket.send(Message::Binary(
+            build_tci_spectrum_row_frame(row, *sequence).into(),
         )),
     }
 }
@@ -1270,5 +1558,60 @@ mod stall_timing_tests {
         assert!(sender.pending_since.is_none());
         assert_eq!(stats.snapshot_and_drain_interval().in_flight, 0);
         assert_eq!(stats.snapshot_and_drain_interval().stall_max_us[0], 0);
+    }
+}
+
+#[cfg(test)]
+mod spectrum_credit_tests {
+    use super::*;
+
+    #[test]
+    fn stalled_acks_probe_once_per_second_with_a_wider_window() {
+        let stats = SpectrumTransportStats::default();
+        let mut credit = SpectrumCredit::default();
+        let start = Instant::now();
+        assert_eq!(credit.try_take(start, &stats), Some(1));
+        assert_eq!(credit.try_take(start, &stats), Some(2));
+        assert_eq!(
+            credit.try_take(start + Duration::from_millis(1900), &stats),
+            None
+        );
+
+        let stalled = start + SPECTRUM_ACK_STALL;
+        assert_eq!(credit.try_take(stalled, &stats), Some(3));
+        // Degraded window is 4, so one more row may go before the next probe.
+        assert_eq!(credit.try_take(stalled, &stats), Some(4));
+        assert_eq!(
+            credit.try_take(stalled + Duration::from_millis(500), &stats),
+            None
+        );
+        assert_eq!(
+            credit.try_take(stalled + SPECTRUM_PROBE_INTERVAL, &stats),
+            Some(5)
+        );
+        assert_eq!(stats.probes.load(Ordering::Relaxed), 2);
+
+        // An ack restores the normal window.
+        assert!(credit.ack(5, stalled + SPECTRUM_PROBE_INTERVAL));
+        assert_eq!(credit.in_flight(), 0);
+        let later = stalled + SPECTRUM_PROBE_INTERVAL;
+        assert_eq!(credit.try_take(later, &stats), Some(6));
+        assert_eq!(credit.try_take(later, &stats), Some(7));
+        assert_eq!(credit.try_take(later, &stats), None);
+    }
+
+    #[test]
+    fn sequence_wraps_without_breaking_credit() {
+        let stats = SpectrumTransportStats::default();
+        let mut credit = SpectrumCredit {
+            written_seq: u32::MAX - 1,
+            acked_seq: u32::MAX - 1,
+            ..SpectrumCredit::default()
+        };
+        let now = Instant::now();
+        assert_eq!(credit.try_take(now, &stats), Some(u32::MAX));
+        assert_eq!(credit.try_take(now, &stats), Some(0));
+        assert!(credit.ack(0, now));
+        assert_eq!(credit.in_flight(), 0);
     }
 }

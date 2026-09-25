@@ -378,6 +378,17 @@ pub(crate) fn set_client_split_session_lane(
         return false;
     }
     metadata.lane = Some(lane);
+    // A display mode negotiated on the control lane before the media lane
+    // joined must reach the socket that carries the rows.
+    if let Some(pair) = split_session_pair_in_clients(&clients, &session_id) {
+        let display_mode = clients
+            .get(&pair.control_client_id)
+            .map(|control| control.state.display_mode)
+            .unwrap_or_default();
+        if let Some(media) = clients.get_mut(&pair.media_client_id) {
+            media.state.display_mode = display_mode;
+        }
+    }
     true
 }
 
