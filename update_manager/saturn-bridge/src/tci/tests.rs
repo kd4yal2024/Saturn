@@ -153,7 +153,7 @@ fn mixed_clients_receive_independent_lan_and_wan_audio_shapes() {
 
     let source = vec![0.25; 2_048];
     assert_eq!(
-        enqueue_rx_audio_for_clients(&clients, 48_000, &source, 48_000, 2, false),
+        enqueue_rx_audio_for_clients(&clients, 48_000, &source, 48_000, 2, false, 0.0),
         0
     );
 
@@ -460,6 +460,29 @@ fn outbound_scheduler_panic_drains_stale_audio() {
     let delta = outbound.drain_stats();
     assert_eq!(delta.audio_panic_drain, 1);
     assert_eq!(delta.audio_dropped, 1);
+}
+
+#[test]
+fn outbound_scheduler_keeps_only_eighty_milliseconds_of_opus() {
+    let outbound = ClientOutbound::new();
+    for sequence in 0..5 {
+        outbound.enqueue(OutboundMessage::OpusAudioFrame {
+            receiver: 0,
+            sample_rate: 48_000,
+            channels: 2,
+            packet: vec![1, 2, 3],
+            sequence,
+        });
+    }
+    let mut sequences = Vec::new();
+    while let Some(item) = outbound.next_message(true) {
+        match item.message {
+            OutboundMessage::OpusAudioFrame { sequence, .. } => sequences.push(sequence),
+            _ => panic!("expected Opus audio frame"),
+        }
+    }
+    assert_eq!(sequences, vec![2, 3, 4, 5]);
+    assert_eq!(outbound.drain_stats().audio_dropped, 1);
 }
 
 #[test]
@@ -3493,4 +3516,271 @@ fn split_media_lane_inherits_display_mode_and_receives_acks() {
     assert_eq!(media_outbound.spectrum_in_flight(), 1);
     parse_tci_command("saturn_display_ack:1", &tx, &clients, 71, false);
     assert_eq!(media_outbound.spectrum_in_flight(), 0);
+}
+
+#[test]
+fn opus_audio_wire_header_uses_payload_byte_count() {
+    let packet = [0x11, 0x22, 0x33, 0x44, 0x55];
+    let frame = build_tci_opus_audio_frame(0, 48_000, 1, &packet, 19);
+    assert_eq!(frame.len(), 69);
+    assert_eq!(u32::from_le_bytes(frame[4..8].try_into().unwrap()), 48_000);
+    assert_eq!(u32::from_le_bytes(frame[8..12].try_into().unwrap()), 20);
+    assert_eq!(u32::from_le_bytes(frame[12..16].try_into().unwrap()), 0);
+    assert_eq!(u32::from_le_bytes(frame[16..20].try_into().unwrap()), 960);
+    assert_eq!(u32::from_le_bytes(frame[20..24].try_into().unwrap()), 5);
+    assert_eq!(u32::from_le_bytes(frame[24..28].try_into().unwrap()), 17);
+    assert_eq!(u32::from_le_bytes(frame[28..32].try_into().unwrap()), 1);
+    assert_eq!(u32::from_le_bytes(frame[32..36].try_into().unwrap()), 19);
+    assert_eq!(&frame[64..], &packet);
+}
+
+#[test]
+fn rx_audio_codec_requires_client_gain_and_echoes_selection() {
+    let clients = test_client_registry(110);
+    let (tx, _) = mpsc::channel();
+    parse_tci_command("audio_codec:opus;", &tx, &clients, 110, false);
+    assert_eq!(
+        clients
+            .lock_unpoisoned()
+            .get(&110)
+            .unwrap()
+            .state
+            .rx_audio_codec,
+        RxAudioCodec::Pcm
+    );
+    let outbound = clients
+        .lock_unpoisoned()
+        .get(&110)
+        .unwrap()
+        .outbound
+        .clone();
+    assert!(
+        matches!(outbound.next_message(true).unwrap().message, OutboundMessage::Text(ref text) if text == "audio_codec:pcm;")
+    );
+    parse_tci_command("audio_gain:client;", &tx, &clients, 110, false);
+    let echo = outbound.next_message(true).unwrap().message;
+    assert!(matches!(echo, OutboundMessage::Text(ref text) if text == "audio_gain:client;"));
+    parse_tci_command("audio_codec:opus;", &tx, &clients, 110, false);
+    let selected = clients
+        .lock_unpoisoned()
+        .get(&110)
+        .unwrap()
+        .state
+        .rx_audio_codec;
+    assert_eq!(
+        selected == RxAudioCodec::Opus,
+        RxOpusTransport::global().available(2)
+    );
+    let echo = outbound.next_message(true).unwrap().message;
+    assert!(
+        matches!(echo, OutboundMessage::Text(ref text) if text == if selected == RxAudioCodec::Opus { "audio_codec:opus;audio_samplerate:48000;" } else { "audio_codec:pcm;" })
+    );
+    parse_tci_command("audio_codec:pcm;", &tx, &clients, 110, false);
+    assert_eq!(
+        clients
+            .lock_unpoisoned()
+            .get(&110)
+            .unwrap()
+            .state
+            .rx_audio_codec,
+        RxAudioCodec::Pcm
+    );
+}
+
+#[test]
+fn mixed_clients_apply_bridge_volume_once_to_pcm_only() {
+    let clients = test_client_registry(111);
+    {
+        let mut clients = clients.lock_unpoisoned();
+        clients.get_mut(&111).unwrap().state.audio_stream_enabled = true;
+        clients.insert(
+            112,
+            ClientConnection {
+                outbound: ClientOutbound::new(),
+                state: ClientState {
+                    audio_stream_enabled: true,
+                    rx_audio_gain: RxAudioGain::Client,
+                    ..ClientState::default()
+                },
+            },
+        );
+    }
+    // Distinct L/R samples exercise the WBFM stereo transport path too.
+    let source = vec![0.25, 0.5, 0.25, 0.5];
+    assert_eq!(
+        enqueue_rx_audio_for_clients(&clients, 48_000, &source, 48_000, 2, false, 6.0),
+        0
+    );
+    let clients = clients.lock_unpoisoned();
+    let samples = |id| {
+        let client = clients.get(&id).unwrap();
+        let queues = client.outbound.queues.lock_unpoisoned();
+        match &queues.audio.front().unwrap().message {
+            OutboundMessage::AudioFrame { audio_samples, .. } => audio_samples.clone(),
+            _ => panic!("expected PCM"),
+        }
+    };
+    let legacy = samples(111);
+    let neutral = samples(112);
+    assert!((legacy[0] - 0.4988).abs() < 0.001);
+    assert!((legacy[1] - 0.9976).abs() < 0.001);
+    assert_eq!(neutral, source);
+}
+
+#[test]
+fn split_rx_audio_negotiation_mirrors_to_media_and_resets_on_pcm() {
+    let clients: ClientRegistry = Arc::new(Mutex::new(BTreeMap::new()));
+    insert_split_paired_client(
+        &clients,
+        113,
+        "rx-opus",
+        SplitSocketKind::Control,
+        Some(TciClientRole::Operator),
+    );
+    insert_split_paired_client(&clients, 114, "rx-opus", SplitSocketKind::Media, None);
+    assert_eq!(
+        set_client_rx_audio_gain(&clients, 113, RxAudioGain::Client),
+        RxAudioGain::Client
+    );
+    let selected = set_client_rx_audio_codec(&clients, 113, RxAudioCodec::Opus);
+    {
+        let clients = clients.lock_unpoisoned();
+        assert_eq!(
+            clients.get(&113).unwrap().state.rx_audio_gain,
+            RxAudioGain::Client
+        );
+        assert_eq!(
+            clients.get(&114).unwrap().state.rx_audio_gain,
+            RxAudioGain::Client
+        );
+        assert_eq!(clients.get(&114).unwrap().state.rx_audio_codec, selected);
+    }
+    assert_eq!(
+        set_client_rx_audio_codec(&clients, 113, RxAudioCodec::Pcm),
+        RxAudioCodec::Pcm
+    );
+    let clients = clients.lock_unpoisoned();
+    assert_eq!(
+        clients.get(&114).unwrap().state.rx_audio_codec,
+        RxAudioCodec::Pcm
+    );
+}
+
+#[test]
+fn failed_shared_opus_profile_falls_back_on_control_and_drains_media() {
+    let clients: ClientRegistry = Arc::new(Mutex::new(BTreeMap::new()));
+    insert_split_paired_client(
+        &clients,
+        115,
+        "rx-fallback",
+        SplitSocketKind::Control,
+        Some(TciClientRole::Operator),
+    );
+    insert_split_paired_client(&clients, 116, "rx-fallback", SplitSocketKind::Media, None);
+    {
+        let mut clients = clients.lock_unpoisoned();
+        for id in [115, 116] {
+            clients.get_mut(&id).unwrap().state.rx_audio_codec = RxAudioCodec::Opus;
+        }
+        clients
+            .get(&116)
+            .unwrap()
+            .outbound
+            .enqueue(OutboundMessage::OpusAudioFrame {
+                receiver: 0,
+                sample_rate: 48_000,
+                channels: 2,
+                packet: vec![1, 2, 3],
+                sequence: 0,
+            });
+        fallback_failed_rx_opus_clients(&mut clients, |_| false);
+        assert_eq!(
+            clients.get(&115).unwrap().state.rx_audio_codec,
+            RxAudioCodec::Pcm
+        );
+        assert_eq!(
+            clients.get(&116).unwrap().state.rx_audio_codec,
+            RxAudioCodec::Pcm
+        );
+        assert!(clients
+            .get(&116)
+            .unwrap()
+            .outbound
+            .queues
+            .lock_unpoisoned()
+            .audio
+            .is_empty());
+        let echo = clients
+            .get(&115)
+            .unwrap()
+            .outbound
+            .next_message(true)
+            .unwrap()
+            .message;
+        assert!(matches!(echo, OutboundMessage::Text(ref text) if text == "audio_codec:pcm;"));
+        assert!(clients
+            .get(&116)
+            .unwrap()
+            .outbound
+            .next_message(true)
+            .is_none());
+    }
+}
+
+#[test]
+fn late_split_media_pair_inherits_rx_audio_negotiation() {
+    let clients: ClientRegistry = Arc::new(Mutex::new(BTreeMap::new()));
+    insert_split_paired_client(
+        &clients,
+        117,
+        "rx-late",
+        SplitSocketKind::Control,
+        Some(TciClientRole::Operator),
+    );
+    set_client_audio_sample_rate(&clients, 117, 12_000);
+    set_client_audio_channels(&clients, 117, 1);
+    set_client_audio_stream_enabled(&clients, 117, true);
+    set_client_rx_audio_gain(&clients, 117, RxAudioGain::Client);
+    let selected = set_client_rx_audio_codec(&clients, 117, RxAudioCodec::Opus);
+    insert_split_paired_client(&clients, 118, "rx-late", SplitSocketKind::Media, None);
+    assert!(set_client_split_session_lane(
+        &clients,
+        118,
+        "rx-late",
+        SplitSocketKind::Media
+    ));
+    let clients = clients.lock_unpoisoned();
+    let media = &clients.get(&118).unwrap().state;
+    assert_eq!(media.rx_audio_gain, RxAudioGain::Client);
+    assert_eq!(media.rx_audio_codec, selected);
+    assert_eq!(media.audio_channels, 1);
+    assert_eq!(media.audio_sample_rate_hz, 12_000);
+    assert!(media.audio_stream_enabled);
+}
+
+#[test]
+fn switching_back_to_bridge_gain_resets_codec_and_audio_queue() {
+    let clients = test_client_registry(119);
+    set_client_rx_audio_gain(&clients, 119, RxAudioGain::Client);
+    let _ = set_client_rx_audio_codec(&clients, 119, RxAudioCodec::Opus);
+    {
+        let clients = clients.lock_unpoisoned();
+        clients
+            .get(&119)
+            .unwrap()
+            .outbound
+            .enqueue(OutboundMessage::AudioFrame {
+                receiver: 0,
+                sample_rate: 48_000,
+                channels: 2,
+                audio_samples: vec![0.1; 1920],
+                sequence: 0,
+            });
+    }
+    set_client_rx_audio_gain(&clients, 119, RxAudioGain::Bridge);
+    let clients = clients.lock_unpoisoned();
+    let client = clients.get(&119).unwrap();
+    assert_eq!(client.state.rx_audio_gain, RxAudioGain::Bridge);
+    assert_eq!(client.state.rx_audio_codec, RxAudioCodec::Pcm);
+    assert!(client.outbound.queues.lock_unpoisoned().audio.is_empty());
 }

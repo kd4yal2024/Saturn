@@ -44,6 +44,13 @@ pub(crate) enum OutboundMessage {
         audio_samples: Vec<f32>,
         sequence: u32,
     },
+    OpusAudioFrame {
+        receiver: u32,
+        sample_rate: u32,
+        channels: u32,
+        packet: Vec<u8>,
+        sequence: u32,
+    },
     /// Server-computed WAN display row. `sequence` is 0 while queued and is
     /// assigned per client when the writer takes the row under credit.
     SpectrumRow {
@@ -83,7 +90,7 @@ impl OutboundMessage {
             Self::Close => OutboundClass::Safety,
             Self::SafetyText(_) => OutboundClass::Safety,
             Self::Text(_) => OutboundClass::Control,
-            Self::AudioFrame { .. } => OutboundClass::Audio,
+            Self::AudioFrame { .. } | Self::OpusAudioFrame { .. } => OutboundClass::Audio,
             Self::FullRateIqFrame { .. } => OutboundClass::FullRateIq,
             Self::IqFrame { .. } | Self::TxIqFrame { .. } | Self::SpectrumRow { .. } => {
                 OutboundClass::Display
@@ -103,6 +110,7 @@ impl OutboundMessage {
             Self::AudioFrame { audio_samples, .. } => {
                 64 + audio_samples.len() * std::mem::size_of::<f32>()
             }
+            Self::OpusAudioFrame { packet, .. } => 64 + packet.len(),
             Self::SpectrumRow { row, .. } => 64 + row.codes.len(),
         }
     }
@@ -114,24 +122,31 @@ impl OutboundMessage {
                 channels,
                 ..
             } => audio_samples.len() / usize::try_from((*channels).max(1)).unwrap_or(2),
+            Self::OpusAudioFrame { .. } => 960,
             _ => 0,
         }
     }
 
     pub(crate) fn audio_sample_rate(&self) -> u32 {
         match self {
-            Self::AudioFrame { sample_rate, .. } => *sample_rate,
+            Self::AudioFrame { sample_rate, .. } | Self::OpusAudioFrame { sample_rate, .. } => {
+                *sample_rate
+            }
             _ => 0,
         }
     }
 
     pub(crate) fn with_audio_sequence(mut self, sequence: u32) -> Self {
-        if let Self::AudioFrame {
-            sequence: frame_sequence,
-            ..
-        } = &mut self
-        {
-            *frame_sequence = sequence;
+        match &mut self {
+            Self::AudioFrame {
+                sequence: frame_sequence,
+                ..
+            }
+            | Self::OpusAudioFrame {
+                sequence: frame_sequence,
+                ..
+            } => *frame_sequence = sequence,
+            _ => {}
         }
         self
     }
@@ -592,6 +607,22 @@ impl ClientOutbound {
         self.queues.lock_unpoisoned().writer_started = true;
     }
 
+    pub(crate) fn clear_audio(&self) {
+        let mut queues = self.queues.lock_unpoisoned();
+        let dropped = queues.audio.len() as u64;
+        let bytes = queues
+            .audio
+            .iter()
+            .map(|item| item.estimated_bytes)
+            .sum::<usize>();
+        queues.audio.clear();
+        queues.audio_queued_frames = 0;
+        queues.queued_bytes = queues.queued_bytes.saturating_sub(bytes);
+        if dropped > 0 {
+            self.stats.record_audio_dropped(dropped);
+        }
+    }
+
     pub(crate) fn enqueue(&self, message: OutboundMessage) -> u64 {
         let mut message = message;
         let class = message.class();
@@ -714,10 +745,16 @@ impl ClientOutbound {
         queues: &mut OutboundQueues,
         item: QueuedOutbound,
     ) -> u64 {
-        let max_frames = max_audio_queued_frames(item.message.audio_sample_rate());
+        let is_opus = matches!(item.message, OutboundMessage::OpusAudioFrame { .. });
+        let max_frames = if is_opus {
+            // Four 20 ms packets keep a slow socket from replaying stale RX audio.
+            (item.message.audio_sample_rate() as usize / 50) * 4
+        } else {
+            max_audio_queued_frames(item.message.audio_sample_rate())
+        };
         let mut dropped = 0;
 
-        if queues.audio_queued_frames >= max_frames && !queues.audio.is_empty() {
+        if !is_opus && queues.audio_queued_frames >= max_frames && !queues.audio.is_empty() {
             dropped += queues.audio.len() as u64;
             self.stats.record_audio_panic_drain();
             self.stats.record_audio_dropped(queues.audio.len() as u64);
@@ -1005,6 +1042,18 @@ pub(crate) fn max_audio_queued_frames(sample_rate_hz: u32) -> usize {
     (sample_rate / 4).max(1)
 }
 
+pub(crate) fn apply_rx_volume_to_transport(samples: &mut [f32], volume_db: f64) {
+    let volume_db = volume_db.clamp(-40.0, 12.0);
+    let gain = if volume_db <= -39.5 {
+        0.0
+    } else {
+        10.0f64.powf(0.05 * volume_db) as f32
+    };
+    for sample in samples {
+        *sample = (*sample * gain).clamp(-1.0, 1.0);
+    }
+}
+
 pub(crate) fn shape_rx_audio_for_transport(
     samples: &[f32],
     source_rate_hz: u32,
@@ -1176,7 +1225,7 @@ pub(crate) fn client_wants_outbound_message(
                 && client.state.display_mode.spectrum_group()
                     == Some((row.fft_size, row.interval.as_millis() as u32))
         }
-        OutboundMessage::AudioFrame { .. } => {
+        OutboundMessage::AudioFrame { .. } | OutboundMessage::OpusAudioFrame { .. } => {
             lane != Some(SplitSocketKind::Control)
                 && client.state.audio_stream_enabled
                 && !tx_media_priority_active
@@ -1418,6 +1467,16 @@ pub(crate) fn send_outbound<S: io::Read + io::Write>(
             sequence,
         } => websocket.send(Message::Binary(
             build_tci_audio_frame(*receiver, *sample_rate, *channels, audio_samples, *sequence)
+                .into(),
+        )),
+        OutboundMessage::OpusAudioFrame {
+            receiver,
+            sample_rate,
+            channels,
+            packet,
+            sequence,
+        } => websocket.send(Message::Binary(
+            build_tci_opus_audio_frame(*receiver, *sample_rate, *channels, packet, *sequence)
                 .into(),
         )),
         OutboundMessage::SpectrumRow { row, sequence, .. } => websocket.send(Message::Binary(

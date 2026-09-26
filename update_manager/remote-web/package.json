@@ -12,7 +12,8 @@
     "validate:remote-next-layout": "node scripts/validate-remote-next-layout.mjs",
     "validate:waterfall": "node scripts/validate-waterfall.mjs",
     "validate:terrain": "node scripts/validate-terrain.mjs",
-    "validate:wan-display": "node scripts/validate-wan-display.mjs"
+    "validate:wan-display": "node scripts/validate-wan-display.mjs",
+    "validate:rx-audio-ab": "node scripts/validate-rx-audio-ab.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",

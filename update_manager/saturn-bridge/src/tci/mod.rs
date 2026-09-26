@@ -18,6 +18,7 @@ mod client;
 mod command_queue;
 mod outbound;
 mod protocol;
+mod rx_codec;
 mod session_pair;
 
 #[cfg(test)]
@@ -27,6 +28,7 @@ pub(crate) use client::*;
 pub(crate) use command_queue::*;
 pub(crate) use outbound::*;
 pub(crate) use protocol::*;
+pub(crate) use rx_codec::*;
 pub(crate) use session_pair::*;
 
 pub struct TciFrontend {
@@ -79,6 +81,8 @@ pub struct TciClientSnapshot {
     pub audio_dropped_per_sec: u64,
     pub audio_seq_gap_count: u64,
     pub audio_panic_drain_count: u64,
+    pub rx_opus_overflow_samples_total: u64,
+    pub rx_opus_contention_drops_total: u64,
     pub send_blocked_ms: u64,
     pub outbound_high_watermark_bytes: u64,
     pub outbound_queued_bytes: u64,
@@ -332,6 +336,7 @@ impl TciFrontend {
     pub fn set_tx_media_priority_active(&self, active: bool) {
         self.tx_media_priority_active
             .store(active, Ordering::Relaxed);
+        set_rx_opus_tx_priority(active);
     }
 
     pub fn tx_media_priority_active(&self) -> bool {
@@ -413,6 +418,10 @@ impl TciFrontend {
         }
 
         let command_queue = self.command_queue.snapshot();
+        let (rx_opus_overflow_samples_total, rx_opus_contention_drops_total) =
+            RxOpusTransport::current()
+                .map(RxOpusTransport::drop_counts)
+                .unwrap_or_default();
 
         TciClientSnapshot {
             active: !clients.is_empty(),
@@ -443,6 +452,8 @@ impl TciFrontend {
                 .map(|client| client.state.audio_seq_gap_count)
                 .sum(),
             audio_panic_drain_count,
+            rx_opus_overflow_samples_total,
+            rx_opus_contention_drops_total,
             send_blocked_ms,
             outbound_high_watermark_bytes,
             outbound_queued_bytes,
@@ -1009,6 +1020,10 @@ impl TciFrontend {
 
     pub fn publish_scheduler_telemetry(&self, snapshot: &TciClientSnapshot) {
         self.send_text(format!(
+            "rx_opus_ingress:0,{},{};",
+            snapshot.rx_opus_overflow_samples_total, snapshot.rx_opus_contention_drops_total,
+        ));
+        self.send_text(format!(
             "remote_backpressure:0,{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{};",
             snapshot.safety_enqueue_to_write_p50_us,
             snapshot.safety_enqueue_to_write_p95_us,
@@ -1157,7 +1172,7 @@ impl TciFrontend {
         self.send_text("audio_stop:0;".to_string());
     }
 
-    pub fn publish_audio_frame(&self, sample_rate_hz: u32, audio_samples: &[f32]) {
+    pub fn publish_audio_frame(&self, sample_rate_hz: u32, audio_samples: &[f32], volume_db: f64) {
         if !self.is_audio_stream_enabled() {
             return;
         }
@@ -1169,11 +1184,15 @@ impl TciFrontend {
             self.rx_audio_transport_rate_hz,
             self.rx_audio_transport_channels,
             self.tx_media_priority_active(),
+            volume_db,
         );
         self.drop_count.fetch_add(drops, Ordering::Relaxed);
     }
 
     fn effective_audio_profile(&self, state: &ClientState, source_rate_hz: u32) -> (u32, u32) {
+        if state.rx_audio_codec == RxAudioCodec::Opus {
+            return (48_000, state.audio_channels.clamp(1, 2));
+        }
         effective_rx_audio_transport_profile(
             state.audio_sample_rate_hz,
             state.audio_channels,
@@ -1280,9 +1299,15 @@ fn enqueue_rx_audio_for_clients(
     rate_cap_hz: u32,
     channel_cap: u32,
     tx_media_priority_active: bool,
+    volume_db: f64,
 ) -> u64 {
+    let opus = RxOpusTransport::current();
     let targets = {
-        let clients = clients.lock_unpoisoned();
+        let mut clients = clients.lock_unpoisoned();
+        fallback_failed_rx_opus_clients(&mut clients, |channels| {
+            opus.map(|transport| transport.available(channels))
+                .unwrap_or(false)
+        });
         let routing_probe = OutboundMessage::AudioFrame {
             receiver: 0,
             sample_rate: sample_rate_hz,
@@ -1298,39 +1323,110 @@ fn enqueue_rx_audio_for_clients(
             .map(|client| {
                 (
                     client.outbound.clone(),
-                    effective_rx_audio_transport_profile(
-                        client.state.audio_sample_rate_hz,
-                        client.state.audio_channels,
-                        sample_rate_hz,
-                        rate_cap_hz,
-                        channel_cap,
-                    ),
+                    if client.state.rx_audio_codec == RxAudioCodec::Opus {
+                        (48_000, client.state.audio_channels.clamp(1, 2))
+                    } else {
+                        effective_rx_audio_transport_profile(
+                            client.state.audio_sample_rate_hz,
+                            client.state.audio_channels,
+                            sample_rate_hz,
+                            rate_cap_hz,
+                            channel_cap,
+                        )
+                    },
+                    client.state.rx_audio_gain,
+                    client.state.rx_audio_codec,
                 )
             })
             .collect::<Vec<_>>()
     };
 
-    let mut shaped = BTreeMap::<(u32, u32), OutboundMessage>::new();
+    let mut shaped = BTreeMap::<(u32, u32, bool), OutboundMessage>::new();
+    let mut opus_recipients: [Vec<Arc<ClientOutbound>>; 2] = [Vec::new(), Vec::new()];
     let mut drops = 0u64;
-    for (outbound, profile) in targets {
-        let message = shaped.entry(profile).or_insert_with(|| {
-            let (transport_rate_hz, transport_channels, transport_samples) =
-                shape_rx_audio_for_transport(
-                    audio_samples,
-                    sample_rate_hz,
-                    2,
-                    profile.0,
-                    profile.1,
-                );
-            OutboundMessage::AudioFrame {
-                receiver: 0,
-                sample_rate: transport_rate_hz,
-                channels: transport_channels,
-                audio_samples: transport_samples,
-                sequence: 0,
-            }
-        });
+    for (outbound, profile, gain_mode, codec) in targets {
+        if codec == RxAudioCodec::Opus {
+            opus_recipients[(profile.1.clamp(1, 2) - 1) as usize].push(outbound);
+            continue;
+        }
+        let apply_gain = gain_mode == RxAudioGain::Bridge;
+        let message = shaped
+            .entry((profile.0, profile.1, apply_gain))
+            .or_insert_with(|| {
+                let (transport_rate_hz, transport_channels, transport_samples) =
+                    shape_rx_audio_for_transport(
+                        audio_samples,
+                        sample_rate_hz,
+                        2,
+                        profile.0,
+                        profile.1,
+                    );
+                let mut transport_samples = transport_samples;
+                if apply_gain {
+                    apply_rx_volume_to_transport(&mut transport_samples, volume_db);
+                }
+                OutboundMessage::AudioFrame {
+                    receiver: 0,
+                    sample_rate: transport_rate_hz,
+                    channels: transport_channels,
+                    audio_samples: transport_samples,
+                    sequence: 0,
+                }
+            });
         drops = drops.saturating_add(outbound.enqueue(message.clone()));
     }
+    for (index, recipients) in opus_recipients.into_iter().enumerate() {
+        if recipients.is_empty() {
+            continue;
+        }
+        let channels = index as u32 + 1;
+        let count = recipients.len() as u64;
+        let (_, _, samples) =
+            shape_rx_audio_for_transport(audio_samples, sample_rate_hz, 2, 48_000, channels);
+        if !opus
+            .and_then(|transport| transport.profile(channels))
+            .map(|profile| profile.offer(&samples, recipients))
+            .unwrap_or(false)
+        {
+            drops = drops.saturating_add(count);
+        }
+    }
     drops
+}
+
+fn fallback_failed_rx_opus_clients(
+    clients: &mut BTreeMap<u64, ClientConnection>,
+    available: impl Fn(u32) -> bool,
+) {
+    let fallback_ids = clients
+        .iter()
+        .filter(|(_, client)| {
+            client.state.rx_audio_codec == RxAudioCodec::Opus
+                && !available(client.state.audio_channels.clamp(1, 2))
+        })
+        .map(|(&id, _)| id)
+        .collect::<Vec<_>>();
+    let mut echo_ids = Vec::new();
+    for id in fallback_ids {
+        let control_id = split_session_pair_for_client_in_clients(clients, id)
+            .map(|pair| pair.control_client_id)
+            .unwrap_or(id);
+        if let Some(client) = clients.get_mut(&id) {
+            client.outbound.clear_audio();
+            client.state.rx_audio_codec = RxAudioCodec::Pcm;
+        }
+        if let Some(control) = clients.get_mut(&control_id) {
+            control.state.rx_audio_codec = RxAudioCodec::Pcm;
+        }
+        echo_ids.push(control_id);
+    }
+    echo_ids.sort_unstable();
+    echo_ids.dedup();
+    for id in echo_ids {
+        if let Some(control) = clients.get(&id) {
+            control
+                .outbound
+                .enqueue(OutboundMessage::Text("audio_codec:pcm;".into()));
+        }
+    }
 }

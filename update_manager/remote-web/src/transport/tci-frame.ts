@@ -4,6 +4,7 @@ export const enum TciStreamType {
   Iq = 0,
   AudioLeft = 1,
   AudioRight = 2,
+  AudioOpus = 17,
 }
 
 export type TciBinaryFrameHeader = {

@@ -541,6 +541,57 @@ pub(crate) fn parse_tci_command_with_roles(
             println!("saturn-bridge: TCI audio_start requested");
             let _ = command_tx.send(TciCommand::SetAudioStreaming(audio_enabled));
         }
+        "audio_gain" => {
+            let value = args
+                .last()
+                .copied()
+                .unwrap_or_default()
+                .trim()
+                .trim_end_matches(';');
+            let gain = match value {
+                "client" => Some(RxAudioGain::Client),
+                "bridge" => Some(RxAudioGain::Bridge),
+                _ => None,
+            };
+            if let Some(gain) = gain {
+                let selected = set_client_rx_audio_gain(clients, client_id, gain);
+                let text = if selected == RxAudioGain::Client {
+                    "audio_gain:client;"
+                } else {
+                    "audio_gain:bridge;"
+                };
+                send_text_to_client(clients, client_id, text.into());
+                if selected == RxAudioGain::Bridge {
+                    send_text_to_client(clients, client_id, "audio_codec:pcm;".into());
+                }
+            }
+        }
+        "audio_codec" => {
+            let value = args
+                .last()
+                .copied()
+                .unwrap_or_default()
+                .trim()
+                .trim_end_matches(';');
+            let requested = match value {
+                "opus" => Some(RxAudioCodec::Opus),
+                "pcm" => Some(RxAudioCodec::Pcm),
+                _ => None,
+            };
+            if let Some(requested) = requested {
+                let selected = set_client_rx_audio_codec(clients, client_id, requested);
+                send_text_to_client(
+                    clients,
+                    client_id,
+                    if selected == RxAudioCodec::Opus {
+                        "audio_codec:opus;audio_samplerate:48000;"
+                    } else {
+                        "audio_codec:pcm;"
+                    }
+                    .into(),
+                );
+            }
+        }
         "audio_stop" => {
             let audio_enabled = set_client_audio_stream_enabled(clients, client_id, false);
             println!("saturn-bridge: TCI audio_stop requested");
@@ -1224,6 +1275,8 @@ pub(crate) fn viewer_tci_command_allowed(name: &str) -> bool {
             | "iq_start"
             | "iq_stop"
             | "audio_start"
+            | "audio_gain"
+            | "audio_codec"
             | "audio_stop"
             | "audio_samplerate"
             | "audio_stream_samples"
@@ -1466,6 +1519,29 @@ pub(crate) fn build_tci_audio_frame(
     sequence: u32,
 ) -> Vec<u8> {
     build_tci_float_frame(receiver, sample_rate, audio_samples, 1, channels, sequence)
+}
+
+/// RX Opus payload. Type 17 preserves the 64-byte TCI header but byte count
+/// at offset 20 describes the compressed payload, unlike PCM sample count.
+pub(crate) fn build_tci_opus_audio_frame(
+    receiver: u32,
+    sample_rate: u32,
+    channels: u32,
+    packet: &[u8],
+    sequence: u32,
+) -> Vec<u8> {
+    let mut frame = vec![0u8; 64 + packet.len()];
+    write_u32_le(&mut frame, 0, receiver);
+    write_u32_le(&mut frame, 4, sample_rate);
+    write_u32_le(&mut frame, 8, 20); // frame duration, ms
+    write_u32_le(&mut frame, 12, 0); // flags: FEC and DTX disabled
+    write_u32_le(&mut frame, 16, sample_rate / 50); // samples per channel
+    write_u32_le(&mut frame, 20, packet.len() as u32);
+    write_u32_le(&mut frame, 24, 17);
+    write_u32_le(&mut frame, 28, channels);
+    write_u32_le(&mut frame, 32, sequence);
+    frame[64..].copy_from_slice(packet);
+    frame
 }
 
 /// `saturn_display:spectrum,<fft_size>,<interval_ms>` or `saturn_display:iq`.

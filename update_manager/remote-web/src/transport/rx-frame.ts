@@ -18,8 +18,11 @@ export type AudioFrame = {
 
 export type DecodedRxFrame = IqFrame | AudioFrame;
 
-export function classifyFrame(header: TciBinaryFrameHeader): 'audio' | 'iq' {
-  return header.frameType === TciStreamType.AudioLeft ? 'audio' : 'iq';
+export function classifyFrame(header: TciBinaryFrameHeader): 'audio' | 'iq' | 'opus' | 'unsupported' {
+  if (header.frameType === TciStreamType.AudioLeft) return 'audio';
+  if (header.frameType === TciStreamType.AudioOpus) return 'opus';
+  if (header.frameType === TciStreamType.Iq) return 'iq';
+  return 'unsupported';
 }
 
 export function decodeIqFrame(buffer: ArrayBuffer): IqFrame | null {
@@ -79,5 +82,8 @@ export function decodeAudioFrame(buffer: ArrayBuffer): AudioFrame | null {
 
 export function decodeRxFrame(buffer: ArrayBuffer): DecodedRxFrame | null {
   const header = parseTciBinaryFrameHeader(buffer);
-  return classifyFrame(header) === 'audio' ? decodeAudioFrame(buffer) : decodeIqFrame(buffer);
+  const kind = classifyFrame(header);
+  if (kind === 'audio') return decodeAudioFrame(buffer);
+  if (kind === 'iq') return decodeIqFrame(buffer);
+  return null;
 }

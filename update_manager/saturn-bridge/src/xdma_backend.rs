@@ -565,11 +565,12 @@ fn run_inner(mut config: BridgeConfig, ready_path: &Path) -> Result<(), Box<dyn 
                         }
                         rx_performance.dsp_iq_pairs += outcome.sample_pairs;
                         let audio_sample_rate_hz = wdsp.audio_sample_rate_hz();
+                        let rx_volume_db = wdsp.rx_volume_db();
                         let dsp_started = Instant::now();
                         wdsp.process_iq(&iq_samples, |audio| {
                             rx_performance.audio_frames_published += 1;
                             rx_performance.audio_samples_published += audio.len() as u64;
-                            tci.publish_audio_frame(audio_sample_rate_hz, audio);
+                            tci.publish_audio_frame(audio_sample_rate_hz, audio, rx_volume_db);
                         });
                         rx_performance
                             .dsp_audio_latency

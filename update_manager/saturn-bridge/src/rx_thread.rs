@@ -222,12 +222,13 @@ fn handle_event(
                 // process_iq is additionally self-guarded while suspended.
                 if !tx_active {
                     let audio_sample_rate_hz = wdsp.audio_sample_rate_hz();
+                    let rx_volume_db = wdsp.rx_volume_db();
                     wdsp.process_iq(&frame.iq_samples, |audio_frame| {
                         stats.audio_frames.fetch_add(1, Ordering::Relaxed);
                         stats
                             .audio_samples
                             .fetch_add(audio_frame.len() as u64, Ordering::Relaxed);
-                        tci.publish_audio_frame(audio_sample_rate_hz, audio_frame);
+                        tci.publish_audio_frame(audio_sample_rate_hz, audio_frame, rx_volume_db);
                     });
                 }
                 let mut model = radio_model.lock_unpoisoned();

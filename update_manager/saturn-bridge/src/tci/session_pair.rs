@@ -381,12 +381,64 @@ pub(crate) fn set_client_split_session_lane(
     // A display mode negotiated on the control lane before the media lane
     // joined must reach the socket that carries the rows.
     if let Some(pair) = split_session_pair_in_clients(&clients, &session_id) {
-        let display_mode = clients
+        let (
+            display_mode,
+            audio_gain,
+            audio_codec,
+            audio_channels,
+            audio_stream_enabled,
+            audio_sample_rate_hz,
+        ) = clients
             .get(&pair.control_client_id)
-            .map(|control| control.state.display_mode)
-            .unwrap_or_default();
+            .map(|control| {
+                (
+                    control.state.display_mode,
+                    control.state.rx_audio_gain,
+                    control.state.rx_audio_codec,
+                    control.state.audio_channels,
+                    control.state.audio_stream_enabled,
+                    control.state.audio_sample_rate_hz,
+                )
+            })
+            .unwrap_or((
+                DisplayMode::default(),
+                RxAudioGain::Bridge,
+                RxAudioCodec::Pcm,
+                2,
+                false,
+                48_000,
+            ));
+        let mut opus_fell_back = false;
         if let Some(media) = clients.get_mut(&pair.media_client_id) {
             media.state.display_mode = display_mode;
+            media.state.rx_audio_gain = audio_gain;
+            media.state.rx_audio_codec = audio_codec;
+            media.state.audio_channels = audio_channels;
+            media.state.audio_sample_rate_hz = audio_sample_rate_hz;
+            media.state.audio_stream_enabled = audio_stream_enabled;
+            if audio_codec == RxAudioCodec::Opus
+                && !RxOpusTransport::global().available(audio_channels.clamp(1, 2))
+            {
+                media.state.rx_audio_codec = RxAudioCodec::Pcm;
+                opus_fell_back = true;
+            }
+        }
+        // The media socket just reverted to PCM above. The browser's codec
+        // session belief came from an earlier echo on the control lane
+        // ("opus" accepted before this media lane paired), so left alone it
+        // will silently drop every PCM frame it now receives, believing
+        // itself still in Opus mode. Correct both the bridge's own record and
+        // the client, mirroring the echo `set_client_audio_channels` sends on
+        // the same kind of fallback.
+        if opus_fell_back {
+            if let Some(control) = clients.get_mut(&pair.control_client_id) {
+                control.state.rx_audio_codec = RxAudioCodec::Pcm;
+            }
+            if let Some(control) = clients.get(&pair.control_client_id) {
+                control
+                    .outbound
+                    .enqueue(OutboundMessage::Text("audio_codec:pcm;".into()));
+            }
         }
     }
     true

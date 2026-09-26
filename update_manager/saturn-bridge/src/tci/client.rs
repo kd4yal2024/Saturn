@@ -54,6 +54,20 @@ impl DisplayMode {
 
 pub(crate) const DISPLAY_SPECTRUM_CAPS_MESSAGE: &str = "saturn_display_caps:spectrum_u8;";
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum RxAudioGain {
+    #[default]
+    Bridge,
+    Client,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum RxAudioCodec {
+    #[default]
+    Pcm,
+    Opus,
+}
+
 /// Per-bridge display capabilities handed to every client thread.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct DisplayTransport {
@@ -72,6 +86,8 @@ pub(crate) struct ClientState {
     pub(crate) audio_sample_rate_hz: u32,
     pub(crate) audio_frame_float_count: u32,
     pub(crate) audio_channels: u32,
+    pub(crate) rx_audio_gain: RxAudioGain,
+    pub(crate) rx_audio_codec: RxAudioCodec,
     pub(crate) audio_seq_gap_count: u64,
     pub(crate) tx_uplink_degraded: bool,
     pub(crate) tx_mic_browser_last_seq: u32,
@@ -118,6 +134,8 @@ impl ClientState {
             audio_sample_rate_hz: 48_000,
             audio_frame_float_count: 2048,
             audio_channels: 2,
+            rx_audio_gain: RxAudioGain::Bridge,
+            rx_audio_codec: RxAudioCodec::Pcm,
             audio_seq_gap_count: 0,
             tx_uplink_degraded: false,
             tx_mic_browser_last_seq: 0,
@@ -994,14 +1012,93 @@ pub(crate) fn set_client_audio_frame_float_count(
 
 pub(crate) fn set_client_audio_channels(clients: &ClientRegistry, client_id: u64, channels: u32) {
     let mut clients = clients.lock_unpoisoned();
+    let media_id = split_paired_media_client_id(&clients, client_id);
     if let Some(client) = clients.get_mut(&client_id) {
         client.state.audio_channels = channels;
     }
-    if let Some(media_id) = split_paired_media_client_id(&clients, client_id) {
+    if let Some(media_id) = media_id {
         if let Some(media) = clients.get_mut(&media_id) {
             media.state.audio_channels = channels;
         }
     }
+    // A channel change can switch between shared mono and stereo encoders.
+    let mut fell_back = false;
+    for id in [Some(client_id), media_id].into_iter().flatten() {
+        if let Some(client) = clients.get_mut(&id) {
+            if client.state.rx_audio_codec == RxAudioCodec::Opus
+                && !RxOpusTransport::global().available(channels.clamp(1, 2))
+            {
+                client.outbound.clear_audio();
+                client.state.rx_audio_codec = RxAudioCodec::Pcm;
+                fell_back = true;
+            }
+        }
+    }
+    if fell_back {
+        let control_id = split_session_pair_for_client_in_clients(&clients, client_id)
+            .map(|pair| pair.control_client_id)
+            .unwrap_or(client_id);
+        if let Some(control) = clients.get(&control_id) {
+            control
+                .outbound
+                .enqueue(OutboundMessage::Text("audio_codec:pcm;".into()));
+        }
+    }
+}
+
+pub(crate) fn set_client_rx_audio_gain(
+    clients: &ClientRegistry,
+    client_id: u64,
+    gain: RxAudioGain,
+) -> RxAudioGain {
+    let mut clients = clients.lock_unpoisoned();
+    let media_id = split_paired_media_client_id(&clients, client_id);
+    for id in [Some(client_id), media_id].into_iter().flatten() {
+        if let Some(client) = clients.get_mut(&id) {
+            if client.state.rx_audio_gain != gain {
+                client.outbound.clear_audio();
+            }
+            client.state.rx_audio_gain = gain;
+            if gain == RxAudioGain::Bridge {
+                client.state.rx_audio_codec = RxAudioCodec::Pcm;
+            }
+        }
+    }
+    gain
+}
+
+pub(crate) fn set_client_rx_audio_codec(
+    clients: &ClientRegistry,
+    client_id: u64,
+    requested: RxAudioCodec,
+) -> RxAudioCodec {
+    let mut clients = clients.lock_unpoisoned();
+    let media_id = split_paired_media_client_id(&clients, client_id);
+    let eligible = requested == RxAudioCodec::Opus
+        && clients
+            .get(&client_id)
+            .map(|client| client.state.rx_audio_gain == RxAudioGain::Client)
+            .unwrap_or(false)
+        && clients
+            .get(&client_id)
+            .map(|client| {
+                RxOpusTransport::global().available(client.state.audio_channels.clamp(1, 2))
+            })
+            .unwrap_or(false);
+    let selected = if eligible {
+        RxAudioCodec::Opus
+    } else {
+        RxAudioCodec::Pcm
+    };
+    for id in [Some(client_id), media_id].into_iter().flatten() {
+        if let Some(client) = clients.get_mut(&id) {
+            if client.state.rx_audio_codec != selected {
+                client.outbound.clear_audio();
+            }
+            client.state.rx_audio_codec = selected;
+        }
+    }
+    selected
 }
 
 pub(crate) fn set_client_audio_seq_gap_count(clients: &ClientRegistry, client_id: u64, gaps: u64) {

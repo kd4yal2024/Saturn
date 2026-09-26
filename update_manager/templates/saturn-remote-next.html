@@ -8641,6 +8641,7 @@
     const BRIDGE_RTT_STALE_MS = 6500;
     const TCI_STREAM_IQ_RX = 0;
     const TCI_STREAM_AUDIO_RX = 1;
+    const TCI_STREAM_AUDIO_OPUS_RX = 17;
     const TCI_STREAM_IQ_TX = 3;
 
     // AudioWorklet ring-buffer constants.
@@ -9102,6 +9103,15 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     );
 
     const state = _next.createAppState();
+    const rxAudioCodecSession = _next.createRxAudioCodecSession();
+    const rxAudioCodecPreference = `${pageQueryValue("rx_audio_codec") || "auto"}`.trim().toLowerCase();
+    const rxOpus = {
+      capability: "probing", gainEcho: false, probeSupported: false, fallbackReason: "", decoder: null,
+      decoderChannels: 0, epoch: 0, socketEpoch: 0, pending: new Map(),
+      pcmBytes: 0, opusBytes: 0, pcmWindowBytes: 0, opusWindowBytes: 0,
+      pcmBytesPerSec: 0, opusBytesPerSec: 0, decodedFrames: 0, pcmFrames: 0, opusFrames: 0,
+      malformedFrames: 0, malformedRun: 0, decodeErrors: 0, lateDrops: 0, resyncs: 0,
+    };
     let instrumentMeterMode = _next.normalizeInstrumentMeterMode(
       safeLocalStorageGet(INSTRUMENT_METER_MODE_KEY)
     );
@@ -10251,11 +10261,16 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
           if (data instanceof ArrayBuffer) {
             if (data.byteLength < 64) return { kind: "ignored", accepted: false };
             const view = new DataView(data);
+            const streamType = view.getUint32(24, true);
             return {
               kind: "binary",
               accepted: true,
               buffer: data,
-              frameType: view.getUint32(24, true) === 1 ? "audio" : "iq",
+              streamType,
+              frameType: streamType === TCI_STREAM_AUDIO_RX ? "audio"
+                : streamType === TCI_STREAM_AUDIO_OPUS_RX ? "opus"
+                : streamType === TCI_STREAM_IQ_RX || streamType === TCI_STREAM_IQ_TX ? "iq"
+                : "unsupported",
             };
           }
           return { kind: "ignored", accepted: false };
@@ -10905,6 +10920,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       return {
         ..._next.buildPerfSnapshot(state, performance.now()),
         displayPipeline,
+        rxAudioCodec: rxAudioCodecSnapshot(),
       };
     }
 
@@ -14986,6 +15002,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
             operatorDetailItem("Auto Reconnect", reconnectState.label, reconnectDetail, reconnectSnapshot.phase === "online" ? "ok" : (reconnectSnapshot.active ? "warn" : "rx")),
             operatorDetailItem("RTT", state.bridgeRttMs == null ? "None" : `${Math.round(state.bridgeRttMs)} ms`, bridgeRttAge == null ? "No pong yet" : `${bridgeRttAge} ms old`, state.bridgeRttMs == null ? "warn" : (state.bridgeRttMs > 600 ? "alarm" : (state.bridgeRttMs > 250 ? "warn" : "ok"))),
             operatorDetailItem("Packet Jitter", `${state.rxAudioJitterP50Ms.toFixed(1)} / ${state.rxAudioJitterP95Ms.toFixed(1)} / ${state.rxAudioJitterP99Ms.toFixed(1)} ms`, `p50 / p95 / p99 from ${state.rxAudioJitterSamples.length} packet interval(s)`, state.rxAudioJitterP99Ms > 40 ? "warn" : "ok"),
+            operatorDetailItem("RX Audio Codec", rxAudioCodecSession.accepted.toUpperCase(), `${rxOpus.capability}; ${rxOpus.opusBytesPerSec || rxOpus.pcmBytesPerSec} B/s; ${rxOpus.fallbackReason || "no fallback"}`, rxOpus.fallbackReason ? "warn" : "ok"),
             operatorDetailItem("Audio Queue", leadMs == null ? "None" : `${leadMs} ms`, `${state.rxWorkletUnderruns} underrun(s), ${dropCount} overflow/resync/drop event(s)`, audioStripState().tone),
             operatorDetailItem("AudioContext", baseLatency == null ? "Unavailable" : `${baseLatency.toFixed(1)} ms base`, outputLatency == null ? "Output latency not reported by this browser" : `${outputLatency.toFixed(1)} ms output`, baseLatency == null && outputLatency == null ? "warn" : "ok"),
             operatorDetailItem("Frame Age", `Audio ${audioAge == null ? "--" : `${audioAge} ms`} / IQ ${iqAge == null ? "--" : `${iqAge} ms`}`, "Time since the most recent browser frame arrival", audioAge != null && audioAge > 1000 ? "warn" : "ok"),
@@ -15061,7 +15078,8 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         reconnectAttempt: reconnectSnapshot.attempt,
         reconnectReason: reconnectSnapshot.lastReason,
       });
-      return `${audioDiagnostic}\n\nDisplay pipeline (browser timing, not audio/display synchronization):\n${JSON.stringify(displayPipelineSnapshot(now), null, 2)}\n\nRX underrun recorder (context-clock delivery delay excludes time while AudioContext is suspended; bounded metadata, no audio):\n${JSON.stringify(rxAudioRecorder, null, 2)}`;
+      const codecDiagnostic = rxAudioCodecSnapshot();
+      return `${audioDiagnostic}\n\nRX codec A/B (set ?rx_audio_codec=pcm for PCM, reload for Opus auto):\n${JSON.stringify(codecDiagnostic, null, 2)}\n\nDisplay pipeline (browser timing, not audio/display synchronization):\n${JSON.stringify(displayPipelineSnapshot(now), null, 2)}\n\nRX underrun recorder (context-clock delivery delay excludes time while AudioContext is suspended; bounded metadata, no audio):\n${JSON.stringify(rxAudioRecorder, null, 2)}`;
     }
 
     async function copyRxLatencyDiagnostic() {
@@ -16642,6 +16660,141 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       updateRxAdaptiveRateTelemetry(rxAdaptiveRateController.telemetry());
     }
 
+    function closeRxOpusDecoder() {
+      rxOpus.epoch += 1;
+      const decoder = rxOpus.decoder;
+      rxOpus.decoder = null;
+      rxOpus.decoderChannels = 0;
+      rxOpus.pending.clear();
+      if (decoder) {
+        try { decoder.close(); } catch (_) {}
+      }
+    }
+
+    function resetRxAudioCodecTransport() {
+      rxOpus.socketEpoch += 1;
+      closeRxOpusDecoder();
+      rxAudioCodecSession.reset();
+      rxOpus.capability = "probing";
+      rxOpus.gainEcho = false;
+      rxOpus.probeSupported = false;
+      rxOpus.fallbackReason = "";
+      rxOpus.pcmWindowBytes = 0;
+      rxOpus.opusWindowBytes = 0;
+      rxOpus.pcmBytesPerSec = 0;
+      rxOpus.opusBytesPerSec = 0;
+      state.lastAudioSequence = null;
+      state.lastAudioArrivalAt = 0;
+      state.lastAudioPacketDurationMs = 0;
+    }
+
+    function switchRxAudioCodec(codec, reason) {
+      closeRxOpusDecoder();
+      flushRxAudioQueue(`audio-codec-${codec}`);
+      resetRxLatencyTelemetry();
+      state.lastAudioSequence = null;
+      logEvent(`RX audio codec ${codec}: ${reason}`);
+    }
+
+    function fallbackRxAudioToPcm(reason) {
+      const wasOpus = rxAudioCodecSession.accepted === "opus";
+      if (!rxAudioCodecSession.fallback()) return;
+      rxOpus.fallbackReason = reason;
+      rxOpus.capability = rxOpus.capability === "supported" ? "decode failed" : rxOpus.capability;
+      if (wasOpus) switchRxAudioCodec("pcm", reason);
+      else closeRxOpusDecoder();
+      sendTci("audio_codec:pcm;");
+      recordOperatorFault("RX Opus fallback", "warn");
+      logEvent(`RX Opus fallback to PCM: ${reason}`);
+      scheduleUiRefresh();
+    }
+
+    function sendRequestedRxOpusCodec() {
+      if (!rxOpus.gainEcho || !rxOpus.probeSupported || rxAudioCodecSession.failed ||
+          rxAudioCodecSession.requested === "opus") return;
+      if (rxAudioCodecSession.requestOpus()) sendTci("audio_codec:opus;");
+    }
+
+    async function requestRxAudioCodec(ws) {
+      sendTci("audio_gain:client;");
+      if (rxAudioCodecPreference === "pcm") {
+        rxOpus.capability = "forced PCM";
+        sendTci("audio_codec:pcm;");
+        return;
+      }
+      const socketEpoch = rxOpus.socketEpoch;
+      const supported = typeof globalThis.AudioDecoder === "function" &&
+        typeof globalThis.EncodedAudioChunk === "function" &&
+        await _next.probeRxOpusDecoder(globalThis.AudioDecoder);
+      if (ws !== state.ws || socketEpoch !== rxOpus.socketEpoch || !state.connected) return;
+      rxOpus.capability = supported ? "supported" : "WebCodecs unavailable";
+      rxOpus.probeSupported = supported;
+      if (!supported) {
+        rxOpus.fallbackReason = "WebCodecs Opus decoder unavailable";
+        sendTci("audio_codec:pcm;");
+        return;
+      }
+      sendRequestedRxOpusCodec();
+      scheduleUiRefresh();
+    }
+
+    function handleRxAudioCodecEcho(text) {
+      const commands = _next.parseTciText(text);
+      for (const command of commands) {
+        const value = command.args?.[0] === "0" ? command.args?.[1] : command.args?.[0];
+        if (command.name === "audio_gain" && value === "client") {
+          rxOpus.gainEcho = true;
+          sendRequestedRxOpusCodec();
+        }
+        if (command.name !== "audio_codec") continue;
+        const codec = value;
+        if (codec !== "opus" && codec !== "pcm") continue;
+        if (codec === "pcm" && rxAudioCodecSession.requested === "opus" && !rxAudioCodecSession.failed) {
+          // The bridge refused Opus (no encoder for this profile, or the client
+          // is not on client-side gain). Latch PCM for this socket and say why.
+          rxOpus.fallbackReason = "bridge selected PCM";
+          rxOpus.capability = "bridge refused";
+          rxAudioCodecSession.fallback();
+          switchRxAudioCodec("pcm", "bridge refused Opus");
+          recordOperatorFault("RX Opus refused by bridge", "warn");
+        }
+        if (rxAudioCodecSession.acceptEcho(codec)) switchRxAudioCodec(codec, "bridge echo");
+      }
+    }
+
+    // Single source of truth for the RX codec A/B readout: the operator
+    // diagnostics text and window.SaturnRemotePerf.snapshot() both use this.
+    function rxAudioCodecSnapshot() {
+      return {
+        preference: rxAudioCodecPreference,
+        requested: rxAudioCodecSession.requested,
+        accepted: rxAudioCodecSession.accepted,
+        capability: rxOpus.capability,
+        clientGainEcho: rxOpus.gainEcho,
+        fallbackReason: rxOpus.fallbackReason,
+        pcmBytes: rxOpus.pcmBytes,
+        opusBytes: rxOpus.opusBytes,
+        pcmBytesPerSec: rxOpus.pcmBytesPerSec,
+        opusBytesPerSec: rxOpus.opusBytesPerSec,
+        pcmFrames: rxOpus.pcmFrames,
+        opusFrames: rxOpus.opusFrames,
+        decodedFrames: rxOpus.decodedFrames,
+        malformedFrames: rxOpus.malformedFrames,
+        malformedRun: rxOpus.malformedRun,
+        decoderErrors: rxOpus.decodeErrors,
+        lateDrops: rxOpus.lateDrops,
+        resyncs: rxOpus.resyncs,
+        pendingPackets: rxOpus.pending.size,
+        decoderChannels: rxOpus.decoderChannels,
+        sequenceGaps: state.audioSeqGapCount,
+        missingPackets: state.audioSeqMissingPacketCount,
+        jitterP99Ms: state.rxAudioJitterP99Ms,
+        workletUnderruns: state.rxWorkletUnderruns,
+        workletOverflows: state.rxWorkletOverflows,
+        queueMs: audioLeadMs(),
+      };
+    }
+
     function updateRxAdaptiveRateTelemetry(telemetry) {
       state.rxAdaptiveRateEnabled = Boolean(telemetry.enabled);
       state.rxAdaptiveRateRatio = Number(telemetry.ratio) || 1;
@@ -16846,6 +16999,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     }
 
     async function stopRxAudio(notifyBridge = true, closeContext = true) {
+      closeRxOpusDecoder();
       if (notifyBridge) {
         sendTci("audio_stop:0;");
       }
@@ -18275,10 +18429,12 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         state.bridgeReady = false;
         state.remoteClientRole = null;
         state.remoteClientId = null;
+        resetRxAudioCodecTransport();
         lockTx("reconnect", false);
         resetDisplayHistory();
         logEvent(splitSessionId ? "Split WebSockets connected" : "WebSocket connected");
         logEvent(`TX transport active: ${splitSessionId ? "split WebSockets" : (forceLegacyWs ? "legacy diagnostic" : "single WebSocket")}`);
+        void requestRxAudioCodec(ws);
         requestFullState();
         sendTxCodecCaps();
         sendTxOpusLabTxAudioToBridgeOnce("socket open");
@@ -18298,6 +18454,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       };
       ws.onclose = (event) => {
         if (ws !== state.ws) return;
+        resetRxAudioCodecTransport();
         const closedAt = performance.now();
         const wasTxActive = state.moxRequested || state.txEnabled || state.micCapturing;
         const unexpectedDisconnect = !state.intentionalDisconnect && reconnectSnapshot.active;
@@ -18379,6 +18536,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     window.saturnConnectBridgeDiagnostic = beginBridgeSession;
 
     async function disconnectBridge() {
+      resetRxAudioCodecTransport();
       state.intentionalDisconnect = true;
       reconnectSupervisor.stop("manual disconnect");
       reconnectRxPlan = null;
@@ -18425,6 +18583,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     }
 
     function handleTciText(text) {
+      handleRxAudioCodecEcho(text);
       // Pairing material stays out of application state, diagnostics and logs.
       text = text.split(";").filter(command => {
         if (command.startsWith("saturn_satp_key:")) {
@@ -18674,11 +18833,13 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     function recordAudioSequence(frame) {
       const sequence = Number(frame?.header?.sequence || 0);
       if (!Number.isFinite(sequence) || sequence <= 0) {
-        return;
+        return false;
       }
+      let gap = false;
       if (state.lastAudioSequence != null) {
         const expected = (state.lastAudioSequence + 1) >>> 0;
         if (sequence !== expected) {
+          gap = true;
           state.audioSeqGapCount = (state.audioSeqGapCount || 0) + 1;
           state.audioSeqResyncCount = (state.audioSeqResyncCount || 0) + 1;
           const missingPackets = sequence > expected ? sequence - expected : 1;
@@ -18703,25 +18864,10 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         }
       }
       state.lastAudioSequence = sequence;
+      return gap;
     }
 
-    function handleAudioFrame(buffer) {
-      if (!state.audioCtx || !state.audioStreaming) {
-        return;
-      }
-      if (txReceiveSuppressionActive()) {
-        flushRxAudioQueue("tx-receive-suppression");
-        return;
-      }
-      if (state.audioCtx.state === "suspended") {
-        void state.audioCtx.resume();
-      }
-
-      const frame = _next.decodeAudioFrame(buffer);
-      if (!frame) {
-        return;
-      }
-      const arrivedAt = performance.now();
+    function recordRxAudioArrival(frame, arrivedAt) {
       const arrivalGapMs = state.lastAudioArrivalAt ? arrivedAt - state.lastAudioArrivalAt : null;
       const sourceRate = Math.max(1, Number(frame.header.sampleRate) || 48000);
       const packetDurationMs = _next.audioFramesToMilliseconds(frame.frames, sourceRate);
@@ -18739,9 +18885,20 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       state.lastAudioFrameAt = arrivedAt;
       state.lastAudioPacketDurationMs = packetDurationMs;
       refreshRxAudioJitterSummary(arrivedAt);
-      recordAudioSequence(frame);
+      const sequenceGap = recordAudioSequence(frame);
       state.audioSampleRate = frame.header.sampleRate;
       state.audioChannels = Math.max(1, Number(frame.header.channels) || 1);
+      return { arrivalGapMs, sequenceGap };
+    }
+
+    function playRxDecodedAudio(frame, arrivedAt, arrivalGapMs) {
+      if (!state.audioCtx || !state.audioStreaming || rxAudioCodecSession.accepted !== frame.codec) return;
+      if (txReceiveSuppressionActive()) {
+        flushRxAudioQueue("tx-receive-suppression");
+        return;
+      }
+      if (state.audioCtx.state === "suspended") void state.audioCtx.resume();
+      const sourceRate = Math.max(1, Number(frame.header.sampleRate) || 48000);
       const targetRate = Math.max(1, Number(state.audioCtx?.sampleRate) || sourceRate);
       if (!state.audioWorkletMode) {
         observeRxPlaybackQueue(
@@ -18786,6 +18943,134 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       scheduleAudioPlayback(audioBuffer);
     }
 
+    function handleAudioFrame(buffer) {
+      if (!state.audioCtx || !state.audioStreaming || rxAudioCodecSession.accepted !== "pcm") return;
+      if (txReceiveSuppressionActive()) {
+        flushRxAudioQueue("tx-receive-suppression");
+        return;
+      }
+      let frame;
+      try { frame = _next.decodeAudioFrame(buffer); } catch (_) { return; }
+      if (!frame) return;
+      const arrivedAt = performance.now();
+      rxOpus.pcmBytes += buffer.byteLength;
+      rxOpus.pcmWindowBytes += buffer.byteLength;
+      rxOpus.pcmFrames += 1;
+      const { arrivalGapMs } = recordRxAudioArrival(frame, arrivedAt);
+      playRxDecodedAudio({ ...frame, codec: "pcm" }, arrivedAt, arrivalGapMs);
+    }
+
+    function createRxOpusDecoder(channels) {
+      const epoch = rxOpus.epoch;
+      let decoder;
+      try {
+        decoder = new globalThis.AudioDecoder({
+          output(data) {
+            try {
+              if (epoch !== rxOpus.epoch || decoder !== rxOpus.decoder ||
+                  rxAudioCodecSession.accepted !== "opus") return;
+              const metadata = rxOpus.pending.get(data.timestamp);
+              if (!metadata) return;
+              rxOpus.pending.delete(data.timestamp);
+              if (performance.now() - metadata.arrivedAt > 250) {
+                rxOpus.lateDrops += 1;
+                return;
+              }
+              const pcm = _next.copyRxOpusAudio(data);
+              if (!pcm || pcm.frames !== metadata.frames || pcm.sampleRate !== metadata.sampleRate ||
+                  data.numberOfChannels !== metadata.channels) {
+                fallbackRxAudioToPcm("decoder output format mismatch");
+                return;
+              }
+              rxOpus.decodedFrames += 1;
+              playRxDecodedAudio({
+                codec: "opus", frames: pcm.frames, left: pcm.left, right: pcm.right,
+                header: { sampleRate: pcm.sampleRate, channels: metadata.channels, sequence: metadata.sequence },
+              }, metadata.arrivedAt, metadata.arrivalGapMs);
+            } catch (error) {
+              fallbackRxAudioToPcm(`decoder output: ${error?.message || error}`);
+            } finally {
+              data.close();
+            }
+          },
+          error(error) {
+            if (epoch !== rxOpus.epoch || decoder !== rxOpus.decoder) return;
+            rxOpus.decodeErrors += 1;
+            fallbackRxAudioToPcm(`decoder error: ${error?.message || error}`);
+          },
+        });
+        decoder.configure({ codec: "opus", sampleRate: 48000, numberOfChannels: channels });
+      } catch (error) {
+        if (decoder) try { decoder.close(); } catch (_) {}
+        rxOpus.decodeErrors += 1;
+        fallbackRxAudioToPcm(`decoder setup: ${error?.message || error}`);
+        return null;
+      }
+      rxOpus.decoder = decoder;
+      rxOpus.decoderChannels = channels;
+      return decoder;
+    }
+
+    function handleOpusAudioFrame(buffer) {
+      if (!state.audioCtx || !state.audioStreaming || rxAudioCodecSession.accepted !== "opus") return;
+      if (txReceiveSuppressionActive()) {
+        flushRxAudioQueue("tx-receive-suppression");
+        return;
+      }
+      const packet = _next.parseRxOpusPacket(buffer);
+      if (!packet) {
+        rxOpus.malformedFrames += 1;
+        rxOpus.malformedRun += 1;
+        // One corrupt packet is a dropped 20 ms frame. A sustained run means the
+        // wire contract is not what this browser expects, and PCM is the safe mode.
+        if (_next.rxOpusMalformedAction(rxOpus.malformedRun) === "fallback") {
+          fallbackRxAudioToPcm(`malformed Opus frame x${rxOpus.malformedRun}`);
+        } else {
+          logEvent(`RX Opus: dropped malformed frame (${rxOpus.malformedRun} in a row)`);
+        }
+        return;
+      }
+      rxOpus.malformedRun = 0;
+      rxOpus.opusFrames += 1;
+      if (rxOpus.decoder && rxOpus.decoderChannels !== packet.channels) {
+        switchRxAudioCodec("opus", "channel change");
+      }
+      const arrivedAt = performance.now();
+      rxOpus.opusBytes += buffer.byteLength;
+      rxOpus.opusWindowBytes += buffer.byteLength;
+      const frame = {
+        frames: packet.frames,
+        header: { sampleRate: packet.sampleRate, channels: packet.channels, sequence: packet.sequence },
+      };
+      const { arrivalGapMs, sequenceGap } = recordRxAudioArrival(frame, arrivedAt);
+      if (sequenceGap) closeRxOpusDecoder();
+      const decoder = rxOpus.decoder || createRxOpusDecoder(packet.channels);
+      if (!decoder) return;
+      const timestamp = packet.sequence * _next.RX_OPUS_FRAME_DURATION_US;
+      rxOpus.pending.set(timestamp, {
+        arrivedAt, arrivalGapMs, frames: packet.frames, sampleRate: packet.sampleRate,
+        channels: packet.channels, sequence: packet.sequence,
+      });
+      const backlogPackets = rxOpus.pending.size;
+      if (_next.rxOpusBacklogAction(backlogPackets) === "resync") {
+        // Skip-and-resume: drop the stalled decoder and its pending packets
+        // instead of abandoning Opus for the rest of the socket.
+        rxOpus.resyncs += 1;
+        closeRxOpusDecoder();
+        logEvent(`RX Opus resync: decoder backlog ${backlogPackets} packets`);
+        return;
+      }
+      try {
+        decoder.decode(new globalThis.EncodedAudioChunk({
+          type: "key", timestamp, duration: _next.RX_OPUS_FRAME_DURATION_US,
+          data: packet.payload,
+        }));
+      } catch (error) {
+        rxOpus.decodeErrors += 1;
+        fallbackRxAudioToPcm(`decode submission: ${error?.message || error}`);
+      }
+    }
+
     function handleBinaryFrame(buffer) {
       if (!(buffer instanceof ArrayBuffer)) {
         updateWsDiagMarker("App ignored binary: not ArrayBuffer", 1000);
@@ -18810,6 +19095,11 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       if (frameType === TCI_STREAM_AUDIO_RX) {
         updateWsDiagMarker(`App audio frame bytes=${buffer.byteLength}`, 1000);
         handleAudioFrame(buffer);
+        return;
+      }
+      if (frameType === TCI_STREAM_AUDIO_OPUS_RX) {
+        updateWsDiagMarker(`App Opus audio frame bytes=${buffer.byteLength}`, 1000);
+        handleOpusAudioFrame(buffer);
         return;
       }
       if (frameType === TCI_STREAM_IQ_TX) {
@@ -19176,6 +19466,10 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       const elapsed = now - state.lastSummaryAt;
       if (elapsed >= 1000) {
         const seconds = Math.max(0.001, elapsed / 1000);
+        rxOpus.pcmBytesPerSec = Math.round(rxOpus.pcmWindowBytes / seconds);
+        rxOpus.opusBytesPerSec = Math.round(rxOpus.opusWindowBytes / seconds);
+        rxOpus.pcmWindowBytes = 0;
+        rxOpus.opusWindowBytes = 0;
         state.frameRate = state.frameCounter * (1000 / Math.max(1, elapsed));
         state.displayServerRowRate = state.displayServerRowsWindow / seconds;
         state.displayServerByteRate = state.displayServerBytesWindow / seconds;

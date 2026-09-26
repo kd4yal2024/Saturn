@@ -4,6 +4,19 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
 
 ## [Unreleased]
 ### Changed
+- Add negotiated RX Opus audio over the existing WebSocket media lane for
+  browsers with WebCodecs decoding. A shared bridge worker encodes 20 ms mono
+  or stereo packets for clients that opt into browser-side gain; PCM remains
+  the fallback. The bridge now applies RX volume once per legacy PCM client
+  while the browser applies it once for client-gain sessions, including WBFM.
+  At the same slider setting, browser RX audio is louder by the gain that was
+  previously applied twice (about 10 dB at the default -10 dB setting). Mono
+  Opus targets 24 kbit/s mono or 80 kbit/s stereo payload, or about 50/106
+  kbit/s on the wire after the 64-byte TCI header per 20 ms packet. Network
+  diagnostics report codec rate,
+  gaps, jitter, and recovery; use `?rx_audio_codec=pcm` for a live comparison.
+  WebRTC RX remains gated on that WAN comparison, and WebRTC TX remains a
+  separate safety design.
 - Integrate authenticated SATP v2 native TX audio with Saturn Remote: temporary
   operator-owned pairing, RX-only source selection, health/loss interlocks, and
   the shared processed-voice MON path at G2's physical headphone jack. The native

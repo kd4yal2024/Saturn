@@ -718,7 +718,7 @@ impl WdspRxEngine {
         if (model.desired.rx_volume_db - self.volume_db).abs() > f64::EPSILON {
             self.volume_db = model.desired.rx_volume_db;
             unsafe {
-                SetRXAPanelGain1(self.channel_id, panel_gain_for_volume_db(self.volume_db));
+                SetRXAPanelGain1(self.channel_id, 1.0);
             }
         }
 
@@ -867,6 +867,10 @@ impl WdspRxEngine {
         }
     }
 
+    pub fn rx_volume_db(&self) -> f64 {
+        self.volume_db
+    }
+
     /// Process interleaved IQ and deliver each complete stereo audio frame.
     ///
     /// The staging buffers are fixed and reused. This keeps the RX hot path
@@ -942,10 +946,9 @@ impl WdspRxEngine {
 
             if self.mode == DemodMode::Wfm && wbfm_supported() {
                 // RXA WBFM outputs true L/R audio and bypasses the panel gain block.
-                let gain = panel_gain_for_volume_db(self.volume_db) as f32;
                 for index in (0..self.output_buffer.len()).step_by(2) {
-                    let left = (self.output_buffer[index] as f32 * gain).clamp(-1.0, 1.0);
-                    let right = (self.output_buffer[index + 1] as f32 * gain).clamp(-1.0, 1.0);
+                    let left = (self.output_buffer[index] as f32).clamp(-1.0, 1.0);
+                    let right = (self.output_buffer[index + 1] as f32).clamp(-1.0, 1.0);
                     self.push_audio_pair(left, right, &mut on_audio_frame);
                 }
             } else {
@@ -1136,7 +1139,7 @@ impl WdspRxEngine {
             SetRXAPanelRun(self.channel_id, 1);
             SetRXAPanelSelect(self.channel_id, 3); // use both I and Q input
             SetRXAPanelCopy(self.channel_id, 1); // copy I→Q so both speakers get audio
-            SetRXAPanelGain1(self.channel_id, panel_gain_for_volume_db(self.volume_db));
+            SetRXAPanelGain1(self.channel_id, 1.0);
             RXASetNC(self.channel_id, model.desired.rx_fft_size as i32);
             // Thetis defaults to Low_Latency (MP=1) for both RX and TX.
             // Linear phase (MP=0) adds NC/2 samples of group delay;

@@ -75,6 +75,7 @@ function makeHarness(options: {
   const sent: string[] = [];
   const logs: string[] = [];
   const audioFrames: number[] = [];
+  const opusFrames: number[] = [];
   const iqFrames: number[] = [];
   const sandbox: Record<string, unknown> = {
     _next: spectrumRow,
@@ -133,9 +134,11 @@ function makeHarness(options: {
     displayFirstIqAt: null,
     lastIqUiRefreshAt: -Infinity,
     TCI_STREAM_AUDIO_RX: 1,
+    TCI_STREAM_AUDIO_OPUS_RX: 17,
     TCI_STREAM_IQ_TX: 3,
     TCI_STREAM_IQ_RX: 0,
     handleAudioFrame: (buffer: ArrayBuffer) => { audioFrames.push(buffer.byteLength); },
+    handleOpusAudioFrame: (buffer: ArrayBuffer) => { opusFrames.push(buffer.byteLength); },
     handleIqFrame: (buffer: ArrayBuffer) => { iqFrames.push(buffer.byteLength); },
     txReceiveSuppressionActive: () => false,
     // Share the host realm's binary types so `instanceof` and typed-array
@@ -151,7 +154,7 @@ function makeHarness(options: {
       'sendIqStart, flushDeferredIqStart, handleSpectrumRow, handleBinaryFrame, scanDisplayTransportText, resetDisplayTransport })',
     sandbox,
   ) as unknown as HarnessApi;
-  return { api, sandbox, sent, logs, audioFrames, iqFrames, state: sandbox.state as Record<string, unknown> };
+  return { api, sandbox, sent, logs, audioFrames, opusFrames, iqFrames, state: sandbox.state as Record<string, unknown> };
 }
 
 describe('WAN display transport negotiation', () => {
@@ -360,12 +363,16 @@ describe('spectrum row handling in the template', () => {
     expect(h.sent).toEqual(['saturn_display_ack:11;']);
   });
 
-  it('routes type 16 through handleBinaryFrame and ignores unknown types', () => {
+  it('routes type 16 and Opus audio independently, and ignores unknown types', () => {
     const h = makeHarness();
     h.api.handleBinaryFrame(buildRow({ binCount: 256 }));
     expect(h.state.displayServerBins).toBeInstanceOf(Float32Array);
     expect(h.iqFrames).toEqual([]);
     expect(h.audioFrames).toEqual([]);
+
+    h.api.handleBinaryFrame(buildRow({ binCount: 64, streamType: 17 }));
+    expect(h.opusFrames).toEqual([128]);
+    expect(h.iqFrames).toEqual([]);
 
     const before = h.state.displayServerRowsReceived;
     const unknown = buildRow({ binCount: 64 });

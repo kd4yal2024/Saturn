@@ -52,6 +52,15 @@ import { applyTciText } from './tci/apply';
 import { satpTxBlockReason, txUsesBrowserMic } from './audio/satp';
 import { decodeAudioFrame } from './transport/rx-frame';
 import {
+  parseRxOpusPacket,
+  probeRxOpusDecoder,
+  createRxAudioCodecSession,
+  copyRxOpusAudio,
+  rxOpusBacklogAction,
+  rxOpusMalformedAction,
+  RX_OPUS_FRAME_DURATION_US,
+} from './audio/rx-opus';
+import {
   SPECTRUM_DISPLAY_IQ_COMMAND,
   SPECTRUM_FFT_MAX,
   SPECTRUM_ROW_STREAM_TYPE,
@@ -262,6 +271,13 @@ const api = {
 
   // Transport
   decodeAudioFrame,
+  parseRxOpusPacket,
+  probeRxOpusDecoder,
+  createRxAudioCodecSession,
+  copyRxOpusAudio,
+  rxOpusBacklogAction,
+  rxOpusMalformedAction,
+  RX_OPUS_FRAME_DURATION_US,
   buildTxMicPcmS16Frame,
   decideTxMicSend,
   detectTxCodecCapabilities,
