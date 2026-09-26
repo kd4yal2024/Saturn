@@ -69,9 +69,18 @@ if command -v git >/dev/null 2>&1 && git -C "$REPO_ROOT" rev-parse --show-toplev
     printf 'commit=%s\n' "$(git -C "$REPO_ROOT" rev-parse HEAD)"
     printf 'installed_utc=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   } >"$WEB_ROOT/.saturn-web-revision"
-  chown root:root "$WEB_ROOT/.saturn-web-revision"
-  chmod 0644 "$WEB_ROOT/.saturn-web-revision"
+else
+  # Staged/trial source that is not a git checkout: record where it came from
+  # and what was installed, so the revision file is never stale or misleading.
+  {
+    printf 'source=%s\n' "$REPO_ROOT"
+    printf 'source_kind=staged (not a git checkout)\n'
+    printf 'bundle_sha256=%s\n' "$(sha256sum "$WEB_ROOT/saturn-remote-next.js" | awk '{print $1}')"
+    printf 'installed_utc=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  } >"$WEB_ROOT/.saturn-web-revision"
 fi
+chown root:root "$WEB_ROOT/.saturn-web-revision"
+chmod 0644 "$WEB_ROOT/.saturn-web-revision"
 
 echo "--- verify ---"
 printf 'template terrain-canvas: %s\n' "$(grep -c 'terrain-canvas' "$WEB_ROOT/saturn-remote-next.html")"
