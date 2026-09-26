@@ -3,10 +3,11 @@ export type TerrainSettings = {
   mode: 'traditional' | '3d'; height: number; depth: number; elevation: number;
   floor: number; ceiling: number; gamma: number; smoothing: number;
   palette: string; split: number; quality: 'auto' | 'performance' | 'balanced' | 'high';
+  perspective: number;
   diagnostics: boolean; gridOpacity: number; cleanup: number; waterfallCleanup: number; cleanupBaseline: number | null;
 };
 export const TERRAIN_DEFAULTS: TerrainSettings = {
-  mode: 'traditional', height: 0.65, depth: 128, elevation: 35,
+  mode: 'traditional', height: 0.65, depth: 128, elevation: 35, perspective: 0.1,
   floor: -140, ceiling: -40, gamma: 0.85, smoothing: 0,
   palette: 'reference', split: 0.3, quality: 'auto', diagnostics: false, gridOpacity: 0,
   cleanup: 0.6, waterfallCleanup: 0.9, cleanupBaseline: null,
@@ -19,7 +20,8 @@ export function normalizeTerrain(input: unknown): TerrainSettings {
   const floor = n('floor', -200, 19);
   return {
     mode: s.mode === '3d' ? '3d' : 'traditional', height: n('height', 0, 1),
-    depth: Math.round(n('depth', 8, 256)), elevation: n('elevation', 15, 60),
+    depth: Math.round(n('depth', 8, 256)), elevation: n('elevation', 10, 70),
+    perspective: n('perspective', 0, 0.2),
     floor, ceiling: Math.max(floor + 1, n('ceiling', -199, 20)), gamma: n('gamma', 0.3, 3),
     smoothing: n('smoothing', 0, 1), split: n('split', 0.2, 0.65),
     palette: ['reference', 'reference-dark', 'classic', 'ember', 'ice', 'forest', 'enhanced'].includes(String(s.palette)) ? String(s.palette) : 'reference',

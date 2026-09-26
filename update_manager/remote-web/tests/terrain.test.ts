@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { SpectrumHistory, type SpectrumFrame } from '../src/dsp/spectrum-history';
 import { normalizeTerrain, referenceColor, fitTerrainRange } from '../src/settings/terrain';
-import { waterfallRowLayout } from '../src/render/terrain';
+import { terrainMeshAgeRange, terrainRowBudget, waterfallRowLayout } from '../src/render/terrain';
 import { normalizeDisplayPrefs, normalizeWaterfallPalette } from '../src/settings/normalize';
 import { visibleBinsForDisplay } from '../src/dsp/display';
 import { FftProcessor } from '../src/dsp/fft';
@@ -185,6 +185,35 @@ describe('3D amplitude diagnostics and geometry contract', () => {
     const html=readFileSync('../templates/saturn-remote-next.html','utf8');
     expect(html).toContain('const age = terrainRenderer.waterfallAgeAt(y)');
     expect(html).not.toContain('Math.floor(y * 512)');
+  });
+  it('caps projected surface rows so the far edge never goes sub-pixel', () => {
+    // High quality + full depth in a short pane used to place 256 rows in a
+    // 150 px pane (0.59 px per row) and smear the far field.
+    const shortPane = terrainRowBudget(150, 256, 256);
+    expect(shortPane.resolvable).toBe(120);
+    expect(shortPane.rows).toBe(120);
+    expect(shortPane.rowPixels).toBeGreaterThanOrEqual(1.25);
+    // A tall pane keeps the requested rows untouched.
+    const tallPane = terrainRowBudget(600, 128, 128);
+    expect(tallPane.rows).toBe(128);
+    expect(tallPane.rowPixels).toBeGreaterThan(4);
+    // Depth is still a bound when it is the smallest of the three.
+    expect(terrainRowBudget(600, 256, 48).rows).toBe(48);
+    // Degenerate inputs never produce fewer than two rows.
+    expect(terrainRowBudget(0, 256, 256).rows).toBe(2);
+    expect(terrainRowBudget(Number.NaN, 0, 0).rows).toBe(2);
+  });
+  it('keeps the newest edge exact and covers every older row when decimated', () => {
+    for (const rows of [2, 16, 51, 120, 256]) {
+      const ranges = Array.from({ length: rows }, (_, meshRow) => terrainMeshAgeRange(meshRow, rows, 256));
+      expect(ranges[0]).toEqual({ start: 0, end: 1 });
+      expect(ranges.at(-1)?.end).toBe(256);
+      for (let meshRow = 1; meshRow < rows; meshRow++) {
+        expect(ranges[meshRow]?.start).toBe(ranges[meshRow - 1]?.end);
+        expect(ranges[meshRow]!.end).toBeGreaterThan(ranges[meshRow]!.start);
+      }
+    }
+    expect(terrainMeshAgeRange(5, 120, 3)).toEqual({ start: 3, end: 3 });
   });
 });
 

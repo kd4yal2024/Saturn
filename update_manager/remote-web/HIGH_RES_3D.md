@@ -22,8 +22,8 @@ command belongs to the view selector. The current server already redirects
   Camera adjustments use the settings only.
 - **Display Settings** contains surface height, recent-history depth, camera
   elevation, manual floor/ceiling, gamma, spatial smoothing (including zero),
-  palette, separate upper-surface and lower-waterfall cleanup, split, quality,
-  diagnostics, and reset. Start the floor near the raw
+  palette, far-field width, separate upper-surface and lower-waterfall cleanup,
+  split, quality, diagnostics, and reset. Start the floor near the raw
   noise level and the ceiling near strong signals; the default −140 / −40 dB
   range is a starting point, not a measured hardware calibration. It also links to the existing
   Traditional appearance controls. The divider remains adjustable with pointer
@@ -51,6 +51,28 @@ command belongs to the view selector. The current server already redirects
   not a value reconstructed from color or mesh height. It is not a power meter.
 
 ## Data and rendering boundary
+
+### Far-field definition
+
+The projected surface spreads its mesh rows over the upper pane, so the far
+(older) edge is the first thing to lose definition: too many rows in too few
+pixels turns them into sub-pixel strips that shimmer and smear. Two
+geometry-only controls address that:
+
+- The mesh row budget is capped at the number of rows the pane can resolve
+  (at least 1.25 device pixels each). When quality and depth ask for more, the
+  mesh keeps the requested history span and gives each row a range of history
+  rows, taking their peak — so a brief signal is never dropped by decimation.
+  `terrainRenderer.diagnostics()` reports `surfaceMeshRows`,
+  `surfaceHistorySpan` and `surfaceRowPixels`.
+- **Far-field width** (`perspective`, 0–0.20, default 0.10) replaces the
+  previous fixed 0.18 horizontal compression toward the far edge. Lower values
+  keep distant rows wider, which spends more screen pixels per bin at the top.
+
+Definition stays geometry-only: color never varies with depth, because a
+constant surface must render one color at every age
+(`scripts/terrain-controlled.mjs` enforces it). Far-field brightness remains a
+gamma / floor / ceiling / palette decision applied uniformly to every row.
 
 `handleIqFrame` retains the existing bounded IQ packet window. The existing
 animation scheduler transforms each accepted new IQ version with `FftProcessor`.

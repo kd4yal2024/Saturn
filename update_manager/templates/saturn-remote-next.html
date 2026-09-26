@@ -8371,7 +8371,8 @@
     <label>View <select id="terrain-mode"><option value="traditional">Traditional</option><option value="3d">High-Res 3D</option></select></label>
     <label>Surface height <input id="terrain-height" type="range" min="0" max="1" step="0.01"></label>
     <label>Recent rows <input id="terrain-depth" type="number" min="8" max="256" step="1"></label>
-    <label>Camera elevation <input id="terrain-elevation" type="range" min="15" max="60" step="1"></label>
+    <label>Camera elevation <input id="terrain-elevation" type="range" min="10" max="70" step="1"></label>
+    <label>Far-field width <input id="terrain-perspective" type="range" min="0" max="0.2" step="0.005"></label>
     <label>Floor (relative dB) <input id="terrain-floor" type="number" min="-200" max="19"></label>
     <label>Ceiling (relative dB) <input id="terrain-ceiling" type="number" min="-199" max="20"></label>
     <button class="btn" type="button" id="terrain-fit-range">Fit range to current signals</button>
@@ -8541,7 +8542,7 @@
     })();
   </script>
   <script
-    src="/remote-assets/remote-next.js?v=waterfall-row-raster-1"
+    src="/remote-assets/remote-next.js?v=terrain-farfield-1"
     onload="window.saturnRemoteBundleLoaded=true"
     onerror="window.saturnRemoteBundleError=true; window.saturnDiagLastError='remote-next.js failed to load'; window.saturnSetWsDiag && window.saturnSetWsDiag('JS error: remote-next.js failed to load')"
   ></script>
@@ -10105,7 +10106,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     }
     function syncTerrainControls() {
       const s = _next.normalizeTerrain(state.terrain);
-      for (const key of ["mode", "height", "depth", "elevation", "floor", "ceiling", "gamma", "smoothing", "palette", "split", "quality", "gridOpacity", "cleanup", "waterfallCleanup", "cleanupBaseline"]) {
+      for (const key of ["mode", "height", "depth", "elevation", "perspective", "floor", "ceiling", "gamma", "smoothing", "palette", "split", "quality", "gridOpacity", "cleanup", "waterfallCleanup", "cleanupBaseline"]) {
         $("terrain-" + key).value = `${s[key] ?? ""}`;
       }
       document.documentElement.style.setProperty("--terrain-grid-opacity", s.gridOpacity);
@@ -10170,7 +10171,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         $("display-pause").textContent = state.displayPaused ? "Resume" : "Pause";
         $("display-pause").setAttribute("aria-pressed", `${state.displayPaused}`);
       });
-      for (const key of ["mode", "height", "depth", "elevation", "floor", "ceiling", "gamma", "smoothing", "palette", "split", "quality", "gridOpacity", "cleanup", "waterfallCleanup", "cleanupBaseline"]) {
+      for (const key of ["mode", "height", "depth", "elevation", "perspective", "floor", "ceiling", "gamma", "smoothing", "palette", "split", "quality", "gridOpacity", "cleanup", "waterfallCleanup", "cleanupBaseline"]) {
         $("terrain-" + key).addEventListener(["floor", "ceiling", "depth", "cleanupBaseline"].includes(key) ? "change" : "input", () => {
           const raw = $("terrain-" + key).value;
           if (!raw.trim() && key !== "cleanupBaseline") return;
