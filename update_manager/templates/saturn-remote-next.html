@@ -4893,7 +4893,8 @@
     }
 
     .operations-tab,
-    .mobile-dock-button {
+    .mobile-dock-button,
+    .mobile-connect-button {
       min-height: 36px;
       padding: 6px 11px;
       border: 1px solid transparent;
@@ -4911,6 +4912,26 @@
       border-color: var(--border-active);
       color: var(--rx-cyan);
       background: color-mix(in srgb, var(--accent) 10%, transparent);
+    }
+
+    .mobile-connect-button {
+      border-color: var(--rx-cyan);
+      background: var(--rx-cyan);
+      color: var(--bg-0);
+      white-space: normal;
+      line-height: 1.05;
+    }
+
+    .mobile-connect-button[data-connection-action="offline"] {
+      border-color: var(--border-strong);
+      background: transparent;
+      color: var(--text-primary);
+    }
+
+    .mobile-connect-button[data-connection-action="cancel"] {
+      border-color: var(--warning-amber);
+      background: color-mix(in srgb, var(--warning-amber) 14%, var(--bg-panel));
+      color: var(--warning-amber);
     }
 
     .operations-close-button {
@@ -5113,7 +5134,7 @@
         bottom: max(8px, env(safe-area-inset-bottom));
         left: 10px;
         display: grid;
-        grid-template-columns: repeat(5, minmax(0, 1fr));
+        grid-template-columns: repeat(6, minmax(0, 1fr));
         gap: 3px;
         order: 7;
         padding: 4px;
@@ -5122,7 +5143,8 @@
         background: color-mix(in srgb, var(--bg-panel) 97%, transparent);
         box-shadow: none;
       }
-      .mobile-dock-button { min-height: 48px; }
+      .mobile-dock-button,
+      .mobile-connect-button { min-height: 48px; }
     }
 
     @media (max-width: 767px), (pointer: coarse) and (max-height: 599px) and (max-width: 1023px) {
@@ -5171,6 +5193,20 @@
         width: auto;
         min-width: 68px;
         padding-inline: 8px;
+      }
+
+      .console-header > #go-live-btn {
+        flex-shrink: 0;
+        min-width: 108px;
+        min-height: var(--control-touch);
+        border-color: var(--rx-cyan);
+        color: var(--text-primary);
+        font-weight: 600;
+      }
+
+      .console-header > #go-live-btn.primary {
+        background: var(--rx-cyan);
+        color: var(--bg-0);
       }
 
       .operator-state-strip {
@@ -5325,7 +5361,7 @@
         bottom: max(6px, env(safe-area-inset-bottom));
         left: 6px;
         display: grid;
-        grid-template-columns: repeat(5, minmax(0, 1fr));
+        grid-template-columns: repeat(6, minmax(0, 1fr));
         gap: 2px;
         padding: 4px;
         border: 1px solid color-mix(in srgb, var(--accent) 22%, transparent);
@@ -5336,7 +5372,8 @@
       }
       .context-tabs { display: none; }
 
-      .mobile-dock-button { min-height: 54px; padding: 5px 3px; font-size: var(--fs-caption); line-height: var(--lh-caption); }
+      .mobile-dock-button,
+      .mobile-connect-button { min-height: 54px; padding: 5px 3px; font-size: var(--fs-caption); line-height: var(--lh-caption); }
       .mobile-dock-button[data-shell-target="tx"] { color: var(--warning-amber); }
     }
 
@@ -6565,6 +6602,21 @@
       :root:not([data-layout="phone"]) .multimeter-svg > ellipse { opacity: 0; }
     }
 
+    @media (max-width: 767px) {
+      .console-header,
+      :root[data-layout="phone"] .console-header {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+      }
+      .console-header > div:first-child { grid-column: 1; }
+      .console-header > .hero-actions { grid-column: 2; }
+      .console-header > .operator-state-strip,
+      .console-header > #go-live-btn {
+        grid-column: 1 / -1;
+        width: 100%;
+      }
+    }
+
 </style>
 <style>
     .terrain-toolbar { display:flex; flex-wrap:wrap; gap:5px; align-items:center; padding:6px 12px; font-size: var(--fs-caption); line-height: var(--lh-caption); }
@@ -6690,7 +6742,7 @@
   </style>
   <!-- The blocking local bundle installs token CSS before the body can paint. -->
   <script
-    src="/remote-assets/remote-next.js?v=mox-inline-1"
+    src="/remote-assets/remote-next.js?v=phone-connect-1"
     onload="window.saturnRemoteBundleLoaded=true"
     onerror="window.saturnRemoteBundleError=true; window.saturnDiagLastError='remote-next.js failed to load'; window.saturnSetWsDiag && window.saturnSetWsDiag('JS error: remote-next.js failed to load')"
   ></script>
@@ -8484,6 +8536,7 @@
       <button class="mobile-dock-button" type="button" data-shell-target="tx">TX</button>
       <button class="mobile-dock-button" type="button" data-shell-target="dsp">DSP</button>
       <button class="mobile-dock-button" type="button" data-shell-target="more">More</button>
+      <button class="mobile-connect-button" type="button" data-mobile-connect data-connection-action="live" aria-label="Go Live">Go Live</button>
     </nav>
     <div class="mobile-radio-quickbar" id="mobile-radio-quickbar" aria-label="Receiver quick controls">
       <button class="mobile-quick-button" id="mobile-att-btn" type="button">ATT Off</button>
@@ -12323,15 +12376,21 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         phoneGoLiveHome = document.createComment("phone connection control home");
         goLive.before(phoneGoLiveHome);
       }
+      const compactViewport = window.matchMedia?.(
+        "(max-width: 767px), (pointer: coarse) and (max-height: 599px) and (max-width: 1023px)"
+      ).matches;
       if (state.layoutMode === "phone") {
         const session = document.querySelector(".command-strip");
-        const header = document.querySelector(".console-header");
         if (session && quickbar && quickbar.previousElementSibling !== session) session.after(quickbar);
-        if (header && goLive && goLive.parentElement !== header) header.append(goLive);
       } else {
         if (quickbar && phoneQuickbarHome?.parentNode && quickbar.previousSibling !== phoneQuickbarHome) {
           phoneQuickbarHome.after(quickbar);
         }
+      }
+      if (state.layoutMode === "phone" || compactViewport) {
+        const header = document.querySelector(".console-header");
+        if (header && goLive && goLive.parentElement !== header) header.append(goLive);
+      } else {
         if (goLive && phoneGoLiveHome?.parentNode && goLive.previousSibling !== phoneGoLiveHome) {
           phoneGoLiveHome.after(goLive);
         }
@@ -17182,6 +17241,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       const goLiveBtn = $("go-live-btn");
       const systemGoLiveBtn = $("system-go-live-btn");
       const systemOfflineBtn = $("system-go-offline-btn");
+      const mobileConnectBtn = document.querySelector("[data-mobile-connect]");
       if (state.connected && state.bridgeReady) {
         goLiveBtn.textContent = "Go Offline";
         goLiveBtn.className = "btn ghost";
@@ -17203,6 +17263,14 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         systemGoLiveBtn.className = goLiveBtn.className;
         systemGoLiveBtn.hidden = state.connected && state.bridgeReady ? true : goLiveBtn.hidden;
         systemGoLiveBtn.disabled = goLiveBtn.disabled;
+      }
+      if (mobileConnectBtn) {
+        mobileConnectBtn.textContent = goLiveBtn.textContent;
+        mobileConnectBtn.setAttribute("aria-label", goLiveBtn.textContent);
+        mobileConnectBtn.title = goLiveBtn.textContent;
+        mobileConnectBtn.dataset.connectionAction = state.connected && state.bridgeReady
+          ? "offline" : (reconnectSnapshot.active ? "cancel" : "live");
+        mobileConnectBtn.disabled = goLiveBtn.disabled;
       }
       $("display-resolution").textContent = `Display: ${Math.max(1, Math.round(window.devicePixelRatio || 1))}x DPR`;
       if (phoneWanLiteActive()) {
@@ -21118,6 +21186,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       initSettingsSections();
       initMainScreenLayout();
       $("go-live-btn").addEventListener("click", goLive);
+      document.querySelector("[data-mobile-connect]")?.addEventListener("click", () => $("go-live-btn")?.click());
       $("system-go-live-btn")?.addEventListener("click", () => $("go-live-btn")?.click());
       $("system-go-offline-btn")?.addEventListener("click", goLive);
       $("setup-menu-btn").addEventListener("click", (event) => {
@@ -22025,6 +22094,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         }, { passive: false });
       }
       window.addEventListener("resize", () => {
+        placePhoneControls();
         syncPhonePanels();
         syncDisplayWorkspaceRatio();
         scheduleDisplaySurfaceResize();

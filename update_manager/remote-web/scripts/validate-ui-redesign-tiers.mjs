@@ -128,6 +128,7 @@ for (const scenario of systemRouteScenarios) {
   writeFileSync(scenario.file, fullRuntimePageFor(scenario));
 }
 const phoneUsabilityScenarios = [
+  { name: 'phone-usability-320', width: 320, height: 640, theme: 'dark', layout: 'phone' },
   { name: 'phone-usability-360', width: 360, height: 640, theme: 'dark', layout: 'phone' },
   { name: 'phone-usability-390', width: 390, height: 844, theme: 'dark', layout: 'phone' },
   { name: 'phone-usability-landscape', width: 844, height: 390, theme: 'dark', layout: 'phone' },
@@ -1667,6 +1668,7 @@ try {
       const header = document.querySelector('.console-header');
       const goLive = document.getElementById('go-live-btn');
       const dock = document.getElementById('mobile-control-dock');
+      const dockConnect = document.querySelector('[data-mobile-connect]');
       const host = document.getElementById('tx-safety-host');
       const arm = document.getElementById('tx-arm-btn');
       const ptt = document.getElementById('ptt-btn');
@@ -1683,6 +1685,7 @@ try {
         connectInHeader: goLive.parentElement === header,
         connectCount: document.querySelectorAll('#go-live-btn').length,
         connectHit: hit(goLive), connect: rect(goLive),
+        dockConnectHit: hit(dockConnect), dockConnect: rect(dockConnect),
         visibleStatusCount: [...document.querySelector('.operator-state-strip').children]
           .filter(node => node.getClientRects().length > 0 && getComputedStyle(node).display !== 'none').length,
         pageWidth: document.documentElement.scrollWidth,
@@ -1697,13 +1700,38 @@ try {
       const buttons = [...quickbar.querySelectorAll('button')];
       const shortcuts = { visible: buttons.every(button => button.getClientRects().length > 0),
         touchHeight: Math.min(...buttons.map(button => button.getBoundingClientRect().height)),
-        topHit: hit(buttons[0]), lastHit: hit(buttons.at(-1)) };
+        topHit: hit(buttons[0]), lastHit: hit(buttons.at(-1)), dockConnectHit: hit(dockConnect) };
+      let delegatedClicks = 0;
+      goLive.addEventListener('click', event => {
+        delegatedClicks++;
+        event.stopImmediatePropagation();
+      }, { capture: true, once: true });
+      dockConnect.click();
       window.applyLayout('desktop', false, false);
       const restored = quickbar.previousElementSibling === dock;
-      const restoredConnect = goLive.parentElement?.classList.contains('launch-grid');
+      const restoredConnect = goLive.parentElement === header;
       window.applyLayout('phone', false, false);
-      return { initial, statusDetails, shortcuts, restored, restoredConnect,
+      return { initial, statusDetails, shortcuts, restored, restoredConnect, delegatedClicks,
         movedAgain: quickbar.previousElementSibling === session && goLive.parentElement === header };
+    })()`);
+    await evaluate("localStorage.setItem('saturn.remote.layout', 'desktop')");
+    await call('Page.reload', { ignoreCache: true });
+    for (let attempt = 0; attempt < 160; attempt++) {
+      await pause(50);
+      if (await evaluate('document.readyState === "complete" && typeof window.applyLayout === "function"').catch(() => false)) break;
+    }
+    const savedDesktopConnect = await evaluate(`(() => {
+      window.applyLayout('desktop', false, false);
+      const button = document.getElementById('go-live-btn');
+      window.scrollTo(0, 0);
+      const bounds = button.getBoundingClientRect();
+      const hit = document.elementFromPoint(bounds.left + bounds.width / 2, bounds.top + bounds.height / 2);
+      return { layout: document.documentElement.dataset.layout,
+        compact: matchMedia('(max-width: 767px), (pointer: coarse) and (max-height: 599px) and (max-width: 1023px)').matches,
+        inHeader: button.parentElement === document.querySelector('.console-header'),
+        visible: !!button.getClientRects().length && !button.closest('[hidden]'),
+        reachable: hit === button || button.contains(hit),
+        height: bounds.height, text: button.textContent.trim() };
     })()`);
     const png = await call('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
     writeFileSync(join(output, `${scenario.name}.png`), Buffer.from(png.data, 'base64'));
@@ -1712,6 +1740,7 @@ try {
       !result.initial.quickbarAfterSession || result.initial.quickbarCount !== 1 ||
       result.initial.buttonCount !== 6 || !result.initial.connectInHeader ||
       result.initial.connectCount !== 1 || !result.initial.connectHit ||
+      !result.initial.dockConnectHit || result.initial.dockConnect.height < 44 ||
       result.initial.connect.bottom > result.initial.host.top ||
       result.initial.visibleStatusCount !== 2 ||
       result.initial.pageWidth > scenario.width + 1)
@@ -1725,10 +1754,14 @@ try {
       result.initial.host.top < 0 || !result.initial.arm || !result.initial.ptt)
       failures.push('phone-tx-or-dock-overlap');
     if (!result.shortcuts.visible || result.shortcuts.touchHeight < 44 ||
-      !result.shortcuts.topHit || !result.shortcuts.lastHit || !result.restored ||
-      !result.restoredConnect || !result.movedAgain)
+      !result.shortcuts.topHit || !result.shortcuts.lastHit || !result.shortcuts.dockConnectHit || !result.restored ||
+      !result.restoredConnect || !result.movedAgain || result.delegatedClicks !== 1)
       failures.push('phone-shortcuts-unreachable-or-layout-switch-broken');
-    const report = { scenario: scenario.name, result, failures, ok: failures.length === 0 };
+    if (savedDesktopConnect.layout !== 'desktop' || !savedDesktopConnect.compact || !savedDesktopConnect.inHeader ||
+      !savedDesktopConnect.visible || !savedDesktopConnect.reachable ||
+      savedDesktopConnect.height < 44 || savedDesktopConnect.text !== 'Go Live')
+      failures.push('saved-desktop-phone-connect-not-visible');
+    const report = { scenario: scenario.name, result, savedDesktopConnect, failures, ok: failures.length === 0 };
     phoneUsabilityReports.push(report);
     console.log(`${report.ok ? 'PASS' : 'FAIL'} ${scenario.name}: ${failures.join(', ') || 'scrollable shortcuts, compact TX, dock, layout switching'}`);
     await evaluate("localStorage.setItem('saturn.remote.layout', 'desktop')");

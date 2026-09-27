@@ -717,7 +717,7 @@
   left: 50%;
   z-index: var(--z-menu);
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(6, minmax(0, 1fr));
   gap: var(--sp-1);
   width: min(calc(100vw - var(--sp-3)), var(--legacy-phone-max-width));
   padding: var(--sp-1);
