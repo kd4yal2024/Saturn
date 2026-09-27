@@ -828,11 +828,9 @@ try {
         document.getElementById('vfo-band-tag').click();
         const bandPillFocus = document.activeElement?.dataset.band;
         const meter = document.getElementById('instrument-meter-mode');
-        meter.value = 'analog';
-        meter.dispatchEvent(new Event('change', { bubbles: true }));
-        const analog = { open: document.getElementById('meter-analog-option').open,
-          svgVisible: visible(document.getElementById('smeter-svg')),
-          focused: document.activeElement?.tagName.toLowerCase(), restoredType: meter.value };
+        const analog = { selectable: !!meter.querySelector('option[value="analog"]'),
+          detailsVisible: visible(document.getElementById('meter-analog-option')),
+          svgVisible: visible(document.getElementById('smeter-svg')) };
         return { before, expanded, mode, band, modePillFocus, bandPillFocus, analog,
           errors: window.__presentationFixture.errors.slice() }; })()`);
       await evaluate('new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))');
@@ -856,9 +854,8 @@ try {
         failures.push('band-arrow-did-not-run-original-handler');
       if (interactions.modePillFocus !== 'LSB' || interactions.bandPillFocus !== interactions.band.expectedNextBand)
         failures.push('vfo-pill-did-not-focus-active-choice');
-      if (!interactions.analog.open || !interactions.analog.svgVisible ||
-        interactions.analog.focused !== 'summary' || interactions.analog.restoredType !== 'signal')
-        failures.push('analog-option-did-not-open-preserved-svg');
+      if (interactions.analog.selectable || interactions.analog.detailsVisible || interactions.analog.svgVisible)
+        failures.push('analog-meter-still-visible');
       if (interactions.errors.length) failures.push('presentation-console-errors');
     } else {
       for (const control of [geometry.goLive, geometry.setup]) {
@@ -1549,7 +1546,9 @@ try {
       state.bridgeReady = true;
       updateUi();
       const live = { connected: state.connected, ready: state.bridgeReady,
-        goLiveHidden: goLiveButton.hidden, systemShown: !systemButton.hidden };
+        goLiveShown: !goLiveButton.hidden, goLiveText: goLiveButton.textContent.trim(),
+        goLiveRendered: visible(goLiveButton), systemShown: !systemButton.hidden,
+        systemGoLiveHidden: systemGoLiveButton.hidden };
       let route;
       if (${scenario.width} < 600) {
         const trigger = document.getElementById('phone-menu-btn');
@@ -1570,10 +1569,15 @@ try {
           systemVisible: visible(systemButton), systemHit: hit(systemButton) };
       }
       window.confirm = message => { prompts.push(message); return false; };
+      if (${scenario.width} >= 600) goLiveButton.click();
+      const mainCancelled = { connected: state.connected, ready: state.bridgeReady,
+        disconnectCalls: calls.length, promptCount: prompts.length,
+        buttonText: goLiveButton.textContent.trim() };
       systemButton.click();
       const cancelled = { connected: state.connected, ready: state.bridgeReady,
         disconnectCalls: calls.length, promptCount: prompts.length,
-        goLiveHidden: goLiveButton.hidden, systemShown: !systemButton.hidden };
+        goLiveShown: !goLiveButton.hidden, goLiveText: goLiveButton.textContent.trim(),
+        systemShown: !systemButton.hidden };
       window.confirm = message => { prompts.push(message); return true; };
       systemButton.click();
       if (disconnectPromise) await disconnectPromise;
@@ -1585,7 +1589,7 @@ try {
         disconnectError };
       window.confirm = originalConfirm;
       window.disconnectBridge = originalDisconnect;
-      return { offline, live, route, cancelled, accepted, prompts,
+      return { offline, live, route, mainCancelled, cancelled, accepted, prompts,
         disconnectOverridden: window.disconnectBridge === originalDisconnect,
         layout: document.documentElement.dataset.layout };
     })()`);
@@ -1595,18 +1599,25 @@ try {
       result.offline?.systemGoLiveText !== 'Go Live' ||
       !result.offline?.systemHidden || result.offline?.goLiveCount !== 1 || result.offline?.systemCount !== 1)
       failures.push('offline-go-live-or-system-baseline-failed');
-    if (!result.live?.connected || !result.live?.ready || !result.live?.goLiveHidden ||
+    if (!result.live?.connected || !result.live?.ready || !result.live?.goLiveShown ||
+      result.live?.goLiveText !== 'Go Offline' || !result.live?.systemGoLiveHidden ||
+      (scenario.width >= 600 && !result.live?.goLiveRendered) ||
       !result.live?.systemShown || !result.route?.sameMenu || !result.route?.systemVisible ||
       !result.route?.systemHit || (scenario.width < 600 &&
         (!result.route?.routeVisible || !result.route?.sheetOpen || !result.route?.hostVisible)) ||
       (scenario.width >= 600 && !result.route?.detailsOpen))
       failures.push('live-system-action-not-reachable');
+    if (scenario.width >= 600 && (!result.mainCancelled?.connected || !result.mainCancelled?.ready ||
+      result.mainCancelled?.disconnectCalls !== 0 || result.mainCancelled?.promptCount !== 1 ||
+      result.mainCancelled?.buttonText !== 'Go Offline')) failures.push('main-go-offline-cancel');
+    const expectedCancelPrompts = scenario.width >= 600 ? 2 : 1;
     if (!result.cancelled?.connected || !result.cancelled?.ready ||
-      result.cancelled?.disconnectCalls !== 0 || result.cancelled?.promptCount !== 1 ||
-      !result.cancelled?.goLiveHidden || !result.cancelled?.systemShown)
+      result.cancelled?.disconnectCalls !== 0 || result.cancelled?.promptCount !== expectedCancelPrompts ||
+      !result.cancelled?.goLiveShown || result.cancelled?.goLiveText !== 'Go Offline' ||
+      !result.cancelled?.systemShown)
       failures.push('cancel-disconnected-or-changed-live-state');
     if (result.accepted?.connected || result.accepted?.ready ||
-      result.accepted?.disconnectCalls !== 1 || result.accepted?.promptCount !== 2 ||
+      result.accepted?.disconnectCalls !== 1 || result.accepted?.promptCount !== expectedCancelPrompts + 1 ||
       !result.accepted?.goLiveVisible || result.accepted?.goLiveText !== 'Go Live' ||
       !result.accepted?.systemHidden || !result.accepted?.sameGoLiveButton ||
       result.accepted?.disconnectError ||
@@ -1704,6 +1715,25 @@ try {
         trayVisible: !!row && !row.closest('[hidden]') && row.getClientRects().length > 0,
         proxy: !!proxy, proxyValue: proxy?.value, sourceValue: source?.value,
         sourceCount: document.querySelectorAll('#setup-dsp-nr-level').length };
+      const mox = document.getElementById('mox-btn');
+      const moxHome = mox.parentElement;
+      if (!check('transmit.mox').checked) check('transmit.mox').click();
+      const pinnedMox = { checked: check('transmit.mox').checked,
+        originalNode: document.getElementById('mox-btn') === mox,
+        inTray: !!mox.closest('#main-screen-pins'),
+        visible: !!mox.getClientRects().length && !mox.closest('[hidden]'),
+        count: document.querySelectorAll('#mox-btn').length, homeHidden: moxHome.hidden };
+      check('transmit.mox').click();
+      const unpinnedMox = { checked: check('transmit.mox').checked, home: mox.parentElement === moxHome,
+        count: document.querySelectorAll('#mox-btn').length, homeHidden: moxHome.hidden };
+      check('transmit.mox').click();
+      window.applyLayout('phone', false, false);
+      const separatePhoneMox = { home: mox.parentElement === moxHome,
+        count: document.querySelectorAll('#mox-btn').length, homeHidden: moxHome.hidden };
+      window.applyLayout('desktop', false, false);
+      window.applyMainScreenLayout();
+      const responsiveMox = { inTray: !!mox.closest('#main-screen-pins'),
+        visible: !!mox.getClientRects().length && !mox.closest('[hidden]') };
       document.querySelector('.settings-section-tab[data-settings-section="interface"]').click();
       const orderBefore = [...document.querySelectorAll('[data-toolbar-order]')].map(node => node.dataset.toolbarOrder);
       const up = document.querySelector('[data-toolbar-order="display.peakToolbar"] button[aria-label$=" up"]');
@@ -1712,7 +1742,8 @@ try {
       up?.addEventListener('click', () => window.__mainKeyEvents.push({ click: 'up' }));
       up?.focus();
       return { before, bothOn, bothOff, restored, otherTier, back,
-        sliderBefore, sliderAfter, orderBefore, toolbarBefore: toolbar(),
+        sliderBefore, sliderAfter, pinnedMox, unpinnedMox, separatePhoneMox, responsiveMox,
+        orderBefore, toolbarBefore: toolbar(),
         focusedUp: document.activeElement === up, upDisabled: up?.disabled,
         storage: localStorage.getItem('saturn.ui.layout.' + current) };
     })()`);
@@ -1781,6 +1812,8 @@ try {
         toolbar: [...document.querySelector('.display-pill-row').children].map(node => node.id),
         sliderRow: [...document.querySelectorAll('#main-screen-pins .main-screen-pin')]
           .some(node => node.textContent.includes('Noise reduction level') && !!node.querySelector('input[type="range"]')),
+        moxPinned: !!document.getElementById('mox-btn')?.closest('#main-screen-pins'),
+        moxCount: document.querySelectorAll('#mox-btn').length,
         storage: localStorage.getItem('saturn.ui.layout.${tier}') };
     })()`);
     const screenPng = await call('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
@@ -1807,6 +1840,15 @@ try {
       !changed.sliderAfter.trayVisible || !changed.sliderAfter.proxy ||
       changed.sliderAfter.proxyValue !== changed.sliderAfter.sourceValue ||
       changed.sliderAfter.sourceCount !== 1) failures.push('pinned-slider-proxy');
+    if (!changed.pinnedMox.checked || !changed.pinnedMox.originalNode ||
+      !changed.pinnedMox.inTray || !changed.pinnedMox.visible ||
+      changed.pinnedMox.count !== 1 || !changed.pinnedMox.homeHidden ||
+      changed.unpinnedMox.checked || !changed.unpinnedMox.home ||
+      changed.unpinnedMox.count !== 1 || changed.unpinnedMox.homeHidden ||
+      !changed.separatePhoneMox.home || changed.separatePhoneMox.count !== 1 ||
+      changed.separatePhoneMox.homeHidden || !changed.responsiveMox.inTray ||
+      !changed.responsiveMox.visible || !reloaded.moxPinned || reloaded.moxCount !== 1)
+      failures.push('pinned-mox-original-control-or-persistence');
     const peak = 'display.peakToolbar';
     const beforePeak = changed.orderBefore.indexOf(peak);
     if (!spaceUpFocused || changed.upDisabled || beforePeak < 1 ||
@@ -2069,15 +2111,10 @@ try {
       await new Promise(resolve => setTimeout(resolve, 300));
       entries.history.live = { source: historyTarget.textContent.trim(),
         mirror: rowFor('display.history')?.querySelector('.settings-entry-value')?.textContent?.trim() || '' };
-      const analogEvents = [];
-      document.addEventListener('change', event => {
-        if (event.target?.id === 'instrument-meter-mode') analogEvents.push(event.target.value);
-      }, true);
-      entries.analog = await route('meter.analog', 'meter');
-      entries.analog.action = { open: document.getElementById('meter-analog-option').open,
-        userOpen: document.getElementById('meter-analog-option').dataset.userOpen,
-        focused: document.activeElement === rowFor('meter.analog'),
-        selectValue: document.getElementById('instrument-meter-mode').value, changeValues: analogEvents };
+      entries.analogRemoved = !window.SaturnRemoteNextBundle.SaturnRemoteNext.SETTINGS_REGISTRY
+        .some(entry => entry.id === 'meter.analog') &&
+        !document.getElementById('instrument-meter-mode').querySelector('option[value="analog"]') &&
+        !visible(document.getElementById('meter-analog-option'));
       entries.dbfsBars = await route('meter.dbfsBars', 'meter');
       state.audioFramesPlayed = 1;
       state.rxAudioScopeLeftPeak = 0.8;
@@ -2145,10 +2182,7 @@ try {
       failures.push('band-edges-action');
     if (!entries.history.rowFound || entries.history.targetId !== 'terrain-status' ||
       entries.history.live.mirror !== entries.history.live.source) failures.push('history-live-readout');
-    if (!entries.analog.rowFound || entries.analog.targetId !== 'meter-analog-option' ||
-      !entries.analog.action.open || entries.analog.action.userOpen !== 'true' ||
-      !entries.analog.action.focused ||
-      !entries.analog.action.changeValues.includes('analog')) failures.push('analog-settings-action');
+    if (!entries.analogRemoved) failures.push('analog-meter-removal');
     if (!entries.dbfsBars.rowFound || entries.dbfsBars.targetId !== 'instrument-rx-audio-meters' ||
       !entries.dbfsBars.live.left.includes('-12.3 dBFS') ||
       !entries.dbfsBars.live.right.includes('-24.6 dBFS') ||
@@ -2174,7 +2208,7 @@ try {
       failures.push('dbfs-main-pin');
     const report = { scenario: scenario.name, result, failures, ok: failures.length === 0 };
     pendingEntryReports.push(report);
-    console.log((report.ok ? 'PASS ' : 'FAIL ') + scenario.name + ': ' + (failures.join(', ') || 'eight entries and two live pins'));
+    console.log((report.ok ? 'PASS ' : 'FAIL ') + scenario.name + ': ' + (failures.join(', ') || 'seven entries, analog removal, and two live pins'));
   }
   for (const registryRouteScenario of registryRouteScenarios) {
   await call('Emulation.setDeviceMetricsOverride', {
@@ -2268,8 +2302,7 @@ try {
         result.reachable = !!mirror;
         if (!mirror) result.reason = 'missing-readout-mirror';
       } else if (protectedAction(entry) ||
-        (target.matches('button') && !target.closest('[data-setup-panel-id]') &&
-          entry.id !== 'meter.analog')) {
+        (target.matches('button') && !target.closest('[data-setup-panel-id]'))) {
         result.route = 'protected-action';
         result.reachable = true;
         result.reason = 'action-not-activated';
@@ -2290,12 +2323,9 @@ try {
         const panel = target.closest('[data-setup-panel-id]');
         const panelActive = !!panel && !panel.hidden && !document.getElementById('setup-menu').hidden;
         const focus = document.activeElement === target || target.contains(document.activeElement);
-        const analog = entry.id === 'meter.analog' &&
-          document.getElementById('meter-analog-option')?.open &&
-          document.activeElement === row;
         const legacyPhoneDock = entry.id === 'shell.mobileDock' &&
           document.documentElement.dataset.layout === 'phone' && visible(target) && focus;
-        result.reachable = (visible(target) && focus) || panelActive || analog || legacyPhoneDock;
+        result.reachable = (visible(target) && focus) || panelActive || legacyPhoneDock;
         result.targetVisible = visible(target);
         result.targetFocused = focus;
         result.panelActive = panelActive;

@@ -7526,7 +7526,6 @@
                       <option value="alc">ALC</option>
                       <option value="compression">Compression</option>
                       <option value="mic">Microphone level</option>
-                      <option value="analog">Analog view</option>
                     </select>
                     <div class="multimeter-digital meter-dBm-row" aria-live="polite">
                       <span class="instrument-primary-readout" id="meter-s-readout">--</span>
@@ -7541,7 +7540,7 @@
                       </div>
                     </div>
                   </div>
-                  <details class="meter-analog-option" id="meter-analog-option" open>
+                  <details class="meter-analog-option" id="meter-analog-option" hidden aria-hidden="true">
                     <summary>Analog meter</summary>
                 <svg id="smeter-svg" class="multimeter-svg" viewBox="0 0 620 320" xmlns="http://www.w3.org/2000/svg" aria-labelledby="multimeter-title">
                   <title id="multimeter-title">Selectable Saturn radio multimeter</title>
@@ -8023,26 +8022,6 @@
             }
 
             byId('app-tx-state-badge')?.addEventListener('click', () => byId('operator-rf-pill')?.click());
-            const meterSelect = byId('instrument-meter-mode');
-            const analog = byId('meter-analog-option');
-            analog?.addEventListener('toggle', () => {
-              if (document.documentElement.dataset.layout !== 'phone') analog.dataset.userOpen = String(analog.open);
-            });
-            const syncAnalogViewLayout = () => {
-              if (analog) analog.open = document.documentElement.dataset.layout === 'phone';
-            };
-            new MutationObserver(syncAnalogViewLayout).observe(document.documentElement, { attributes: true, attributeFilter: ['data-layout'] });
-            syncAnalogViewLayout();
-            let previousMeterType = meterSelect?.value || 'signal';
-            meterSelect?.addEventListener('change', (event) => {
-              if (meterSelect.value === 'analog') {
-                event.stopImmediatePropagation();
-                analog.dataset.userOpen = 'true';
-                analog.open = true;
-                meterSelect.value = previousMeterType;
-                analog.querySelector('summary')?.focus();
-              } else previousMeterType = meterSelect.value;
-            }, true);
             const responseGroup = document.querySelector('.meter-response-switches');
             const responseButtons = [byId('instrument-meter-average-btn'), byId('instrument-meter-peak-btn')];
             function syncMeterResponse() {
@@ -8263,7 +8242,7 @@
           <div class="panel-body">
             <div class="tx-zone-frequency" id="tx-zone-frequency">TX 14.200.000 USB</div>
             <div class="tx-arm-note" id="tx-arm-note">Arming does not transmit</div>
-            <div class="row" aria-label="Manual MOX transmit">
+            <div class="row tx-mox-home" aria-label="Manual MOX transmit">
               <button class="btn ghost tx-mox-secondary" id="mox-btn" type="button" aria-describedby="tx-zone-hint" aria-pressed="false" disabled>MOX</button>
             </div>
             <div class="tx-meter-mini-grid" aria-label="Transmit quick meters">
@@ -12313,6 +12292,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     function applyLayout(mode, persist = true, refresh = true) {
       state.layoutMode = mode === "phone" ? "phone" : "desktop";
       document.documentElement.dataset.layout = state.layoutMode;
+      if (state.layoutMode === "phone") restorePinnedMox();
       if (persist) {
         localStorage.setItem("saturn.remote.layout", state.layoutMode);
         scheduleRemoteSettingsSave();
@@ -13851,6 +13831,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     const mainPinReadouts = new Map();
     const mainPinReadoutObservers = [];
     let mainPinReadoutSyncPending = false;
+    let mainPinMoxPlaceholder = null;
     const layoutToolbarTargets = {
       "display.span": "sample-rate-readout",
       "display.zoom": "zoom-toolbar-readout",
@@ -13913,6 +13894,14 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       markers.forEach((marker, index) => marker.replaceWith(nodes[index]));
     }
 
+    function restorePinnedMox() {
+      const mox = $("mox-btn");
+      const placeholder = mainPinMoxPlaceholder;
+      if (!mox || !placeholder?.parentNode) return;
+      placeholder.parentNode.insertBefore(mox, placeholder.nextSibling);
+      placeholder.parentElement.hidden = false;
+    }
+
     function renderMainPinTray(tier, preferences) {
       const rail = document.querySelector(".context-rail");
       if (!rail) return;
@@ -13924,6 +13913,9 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         tray.setAttribute("aria-label", "Pinned controls");
         rail.prepend(tray);
       }
+      // Move the one original MOX button back before rebuilding the tray. Its
+      // existing handler and TX gate remain attached to that same DOM node.
+      restorePinnedMox();
       tray.replaceChildren();
       mainPinProxies.clear();
       mainPinReadouts.clear();
@@ -13938,13 +13930,22 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         const target = $(entry.targetId);
         const readout = ["readout", "indicator"].includes(entry.targetKind);
         if (!target || (target.hidden && !readout)
-          || (target.getClientRects().length && !target.closest("#setup-menu") && !readout)) return;
+          || (target.getClientRects().length && !target.closest("#setup-menu") && !readout
+            && entry.id !== "transmit.mox")) return;
         const row = document.createElement("div");
         row.className = "main-screen-pin";
         const label = document.createElement("span");
         label.textContent = entry.label;
         row.append(label);
-        if (mainPinProxyTarget(entry, target)) {
+        if (entry.id === "transmit.mox") {
+          if (!mainPinMoxPlaceholder) {
+            mainPinMoxPlaceholder = document.createComment("original MOX position");
+            target.before(mainPinMoxPlaceholder);
+          }
+          row.classList.add("main-screen-pin-mox");
+          row.append(target);
+          mainPinMoxPlaceholder.parentElement.hidden = true;
+        } else if (mainPinProxyTarget(entry, target)) {
           const proxy = document.createElement(target.tagName.toLowerCase());
           proxy.className = "settings-entry-control";
           proxy.setAttribute("aria-label", entry.label);
@@ -14017,7 +14018,11 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     }
 
     function applyMainScreenLayout() {
-      if (typeof _next.loadLayout !== "function" || document.documentElement.dataset.layout === "phone") return;
+      if (document.documentElement.dataset.layout === "phone") {
+        restorePinnedMox();
+        return;
+      }
+      if (typeof _next.loadLayout !== "function") return;
       const tier = currentMainScreenTier();
       const preferences = _next.loadLayout(tier);
       const hidden = new Set(preferences.hidden);
@@ -14464,7 +14469,6 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         const directControl = settingsProxyTarget(entry, target);
         const staticReadout = settingsStaticReadout(entry, target);
         const directAction = settingsActionProxyTarget(entry, target);
-        const analogAction = entry.id === "meter.analog" && target?.id === "meter-analog-option";
         const row = document.createElement(target && !directControl && !staticReadout ? "button" : "div");
         row.className = "settings-entry-row";
         row.dataset.settingsEntry = entry.id;
@@ -14495,19 +14499,6 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
           mirror.className = "settings-entry-value";
           row.append(label, detail, mirror);
           settingsReadoutMirrors.set(target.id, { target, mirror });
-        } else if (analogAction) {
-          row.append(label, detail);
-          row.addEventListener("click", () => {
-            const select = $("instrument-meter-mode");
-            if (!select || select.disabled) return;
-            select.value = "analog";
-            select.dispatchEvent(new Event("change", { bubbles: true }));
-            target.open = true;
-            row.setAttribute("aria-pressed", "true");
-            requestAnimationFrame(() => {
-              if (!$('setup-menu')?.hidden) row.focus({ preventScroll: true });
-            });
-          });
         } else if (directAction) {
           row.append(label, detail);
           settingsActionProxies.set(entry.id, { target, proxy: row });
@@ -17167,7 +17158,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       if (state.connected && state.bridgeReady) {
         goLiveBtn.textContent = "Go Offline";
         goLiveBtn.className = "btn ghost";
-        goLiveBtn.hidden = true;
+        goLiveBtn.hidden = false;
         if (systemOfflineBtn) systemOfflineBtn.hidden = false;
       } else if (reconnectSnapshot.active) {
         goLiveBtn.textContent = reconnectSnapshot.phase === "waiting" ? "Cancel Retry" : "Cancel Connect";
@@ -17183,7 +17174,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       if (systemGoLiveBtn) {
         systemGoLiveBtn.textContent = goLiveBtn.textContent;
         systemGoLiveBtn.className = goLiveBtn.className;
-        systemGoLiveBtn.hidden = goLiveBtn.hidden;
+        systemGoLiveBtn.hidden = state.connected && state.bridgeReady ? true : goLiveBtn.hidden;
         systemGoLiveBtn.disabled = goLiveBtn.disabled;
       }
       $("display-resolution").textContent = `Display: ${Math.max(1, Math.round(window.devicePixelRatio || 1))}x DPR`;

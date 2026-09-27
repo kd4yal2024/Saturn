@@ -98,6 +98,10 @@ lines.push('phone and desktop widths, and focused probes exercise safe native co
 lines.push('original actions. Actions that require a live radio, transmit, or disconnection are');
 lines.push('reserved for hardware QA; this offline evidence does not claim those actions ran.');
 lines.push('');
+lines.push('**Owner-approved removal.** The analog meter was removed from the visible meter picker');
+lines.push('and Settings after the owner requested it. The signal, power, SWR, ALC, compression,');
+lines.push('microphone, and L/R audio meter readouts remain available.');
+lines.push('');
 
 for (const section of SETTINGS_SECTIONS) {
   const entries = SETTINGS_REGISTRY.filter((entry) => entry.section === section.id);

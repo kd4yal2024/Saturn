@@ -45,6 +45,13 @@
   width: 100%;
 }
 
+.app .tx-mox-home[hidden] { display: none; }
+.app #meter-analog-option { display: none !important; }
+:root:not([data-layout="phone"]) .app .main-screen-pin-mox > #mox-btn {
+  min-height: var(--control-min-coarse);
+  padding-inline: var(--sp-3);
+}
+
 :root:not([data-layout="phone"]) .app .main-pin-meter {
   display: grid;
   grid-column: 1 / -1;

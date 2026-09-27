@@ -20,6 +20,10 @@ phone and desktop widths, and focused probes exercise safe native controls and s
 original actions. Actions that require a live radio, transmit, or disconnection are
 reserved for hardware QA; this offline evidence does not claim those actions ran.
 
+**Owner-approved removal.** The analog meter was removed from the visible meter picker
+and Settings after the owner requested it. The signal, power, SWR, ALC, compression,
+microphone, and L/R audio meter readouts remain available.
+
 ## Display (61)
 
 Spectrum, waterfall and 3D view behaviour
@@ -88,7 +92,7 @@ Spectrum, waterfall and 3D view behaviour
 | Frequency lock toggle | id `freq-lock-btn` | main screen, pinnable | Display → legacy display panel | wired | Settings route covered by browser sweep; original handler retained. Live-radio action requires hardware QA |
 | Traditional waterfall settings | id `terrain-traditional-settings` | Settings only | Display → legacy display panel | wired | Settings route covered by browser sweep; original handler retained. Live-radio action requires hardware QA |
 
-## Meter (8)
+## Meter (7)
 
 S-meter, TX meters and meter details
 
@@ -96,7 +100,6 @@ S-meter, TX meters and meter details
 | --- | --- | --- | --- | --- | --- |
 | Meter type | id `instrument-meter-mode` | main screen, pinnable | Meter → route to the original control | wired | Settings route covered by browser sweep; original handler retained. Live-radio action requires hardware QA |
 | Meter averaging | id `instrument-meter-average-btn` | main screen, pinnable | Meter → route to the original control | wired | Settings route covered by browser sweep; original handler retained. Live-radio action requires hardware QA |
-| Analog multimeter | id `meter-analog-option` | main screen, pinnable | Meter → route to the original control | wired | Settings route covered by browser sweep; original handler retained. Live-radio action requires hardware QA |
 | Meter readout | id `meter-readout` | main screen, default | Meter → route to the original control | wired | Settings route covered by browser sweep; original handler retained. Live-radio action requires hardware QA |
 | Left and right dBFS bars | id `instrument-rx-audio-meters` | main screen, pinnable | Meter → route to the original control | wired | Settings route covered by browser sweep; original handler retained. Live-radio action requires hardware QA |
 | More meter details and TX tools | id `meter-details-disclosure` | main screen, pinnable | Meter → route to the original control | wired | Settings route covered by browser sweep; original handler retained. Live-radio action requires hardware QA |

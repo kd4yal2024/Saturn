@@ -52,7 +52,6 @@ const CORRECTED_TARGETS: Record<string, { targetId: string; tag: string; notTarg
   'transmit.pairNative': { targetId: 'satp-pair-btn', tag: 'button', notTargetId: 'tx-audio-profile-status' },
   'display.span': { targetId: 'sample-rate-readout', tag: 'span', notTargetId: 'display-resolution' },
   'display.history': { targetId: 'terrain-status', tag: 'span', notTargetId: 'display-caption' },
-  'meter.analog': { targetId: 'meter-analog-option', tag: 'details', notTargetId: 'multimeter-face' },
   'meter.details': { targetId: 'meter-details-disclosure', tag: 'details', notTargetId: 'instrument-meter-deck' },
   'meter.dbfsBars': { targetId: 'instrument-rx-audio-meters', tag: 'div', notTargetId: 'audio-buffer-meter' },
 };
