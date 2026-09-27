@@ -11,6 +11,7 @@ pub enum DemodMode {
     Cwl,
     Am,
     Sam,
+    Dsb,
     Fm,
     Wfm,
     DigU,
@@ -33,6 +34,7 @@ impl fmt::Display for DemodMode {
             Self::Cwl => "CWL",
             Self::Am => "AM",
             Self::Sam => "SAM",
+            Self::Dsb => "DSB",
             Self::Fm => "FM",
             Self::Wfm => "WFM",
             Self::DigU => "DIGU",
@@ -52,6 +54,10 @@ impl DemodMode {
             "CWL" => Self::Cwl,
             "AM" => Self::Am,
             "SAM" => Self::Sam,
+            // DSB is one mode. DSB-SC and DSB-FC are accepted as aliases: the
+            // receive path is identical (symmetric passband, I-only detection),
+            // and the only WDSP DSB transmit path is suppressed carrier.
+            "DSB" | "DSB-SC" | "DSB-FC" => Self::Dsb,
             "FM" | "NFM" => Self::Fm,
             "WFM" | "WBFM" | "FM_STEREO" => Self::Wfm,
             "DIGU" => Self::DigU,
@@ -68,6 +74,8 @@ impl DemodMode {
             Self::Cwl => (-800, -200),
             Self::Cwu => (200, 800),
             Self::Am | Self::Sam => (-4000, 4000),
+            // Thetis's default DSB preset (Filter F5, "6.6k").
+            Self::Dsb => (-3300, 3300),
             Self::Fm => (-6000, 6000),
             Self::Wfm => (-90_000, 90_000),
         }
@@ -82,6 +90,7 @@ impl DemodMode {
             Self::Cwl => (-800, -200),
             Self::Cwu => (200, 800),
             Self::Am | Self::Sam => (-3000, 3000),
+            Self::Dsb => (-3300, 3300),
             Self::Fm | Self::Wfm => (-3000, 3000),
         }
     }

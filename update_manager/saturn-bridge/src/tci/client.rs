@@ -566,7 +566,7 @@ pub(crate) fn initial_snapshot_messages(
             model.desired.ddc0_sample_rate_khz as u32 * 500,
             model.desired.ddc0_sample_rate_khz as u32 * 500
         ),
-        "modulations_list:LSB,USB,CWL,CWU,AM,SAM,FM,NFM,DIGL,DIGU,WFM;".to_string(),
+        "modulations_list:LSB,USB,CWL,CWU,AM,SAM,DSB,FM,NFM,DIGL,DIGU,WFM;".to_string(),
         "saturn_satp_supported:true;".to_string(),
         format!("saturn_satp_enabled:{};", satp_advertisement.0),
         "saturn_satp_version:2;".to_string(),

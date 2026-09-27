@@ -2296,6 +2296,11 @@ pub fn wdsp_mode(mode: DemodMode) -> i32 {
     match mode {
         DemodMode::Lsb => 0,
         DemodMode::Usb => 1,
+        // WDSP implements DSB as the SSB/panel path with a symmetric passband:
+        // `SetRXAMode(RXA_DSB)` enables no demodulator, so the I-only panel
+        // output doubles as the double-sideband product detector. This mirrors
+        // Thetis (Console/radio.cs + Source/wdsp/RXA.c), which does the same.
+        DemodMode::Dsb => 2,
         DemodMode::Cwl => 3,
         DemodMode::Cwu => 4,
         DemodMode::Fm => 5,
@@ -2362,7 +2367,12 @@ fn wdsp_tx_mode(mode: DemodMode) -> i32 {
 fn tx_voice_processing_supported(mode: DemodMode) -> bool {
     matches!(
         mode,
-        DemodMode::Usb | DemodMode::Lsb | DemodMode::Am | DemodMode::Sam | DemodMode::Fm
+        DemodMode::Usb
+            | DemodMode::Lsb
+            | DemodMode::Am
+            | DemodMode::Sam
+            | DemodMode::Dsb
+            | DemodMode::Fm
     )
 }
 
@@ -2422,7 +2432,8 @@ mod tests {
         nr2_factor_for_level, nr2_nlevel_for_level, nr2_rate_for_level, nr2_taper_for_level,
         nr4_post_threshold_for_level, nr4_reduction_amount_for_level, panel_gain_for_volume_db,
         rx_dsp_rate_for_mode, speech_squelch_supported_for_mode, tx_voice_processing_supported,
-        wbfm_supported, wdsp_mode, MicRateMatcher, WdspRxEngine, WdspTxEngine, WDSP_AUDIO_RATE_HZ,
+        wbfm_supported, wdsp_mode, wdsp_tx_mode, MicRateMatcher, WdspRxEngine, WdspTxEngine,
+        WDSP_AUDIO_RATE_HZ,
     };
     use crate::radio_model::{DemodMode, PureSignalState, RadioModel};
 
@@ -2497,6 +2508,7 @@ mod tests {
             DemodMode::Cwl,
             DemodMode::Am,
             DemodMode::Sam,
+            DemodMode::Dsb,
             DemodMode::DigU,
             DemodMode::DigL,
             DemodMode::Unknown,
@@ -2526,6 +2538,7 @@ mod tests {
         assert!(speech_squelch_supported_for_mode(DemodMode::Usb));
         assert!(speech_squelch_supported_for_mode(DemodMode::Lsb));
         assert!(!speech_squelch_supported_for_mode(DemodMode::Am));
+        assert!(!speech_squelch_supported_for_mode(DemodMode::Dsb));
         assert!(!speech_squelch_supported_for_mode(DemodMode::Fm));
         assert!(!speech_squelch_supported_for_mode(DemodMode::Wfm));
         assert!(!speech_squelch_supported_for_mode(DemodMode::Cwu));
@@ -2538,6 +2551,7 @@ mod tests {
             DemodMode::Lsb,
             DemodMode::Am,
             DemodMode::Sam,
+            DemodMode::Dsb,
             DemodMode::Fm,
         ] {
             assert!(tx_voice_processing_supported(mode));
@@ -2550,6 +2564,24 @@ mod tests {
             DemodMode::Wfm,
         ] {
             assert!(!tx_voice_processing_supported(mode));
+        }
+    }
+
+    #[test]
+    fn dsb_maps_to_wdsp_dsb_with_symmetric_defaults() {
+        // WDSP RXA_DSB and TXA_DSB are both 2; Thetis drives DSB the same way.
+        assert_eq!(wdsp_mode(DemodMode::Dsb), 2);
+        assert_eq!(wdsp_tx_mode(DemodMode::Dsb), 2);
+        assert_eq!(rx_dsp_rate_for_mode(DemodMode::Dsb), WDSP_AUDIO_RATE_HZ);
+        assert_eq!(DemodMode::Dsb.default_filter_band(), (-3300, 3300));
+        assert_eq!(DemodMode::Dsb.default_tx_filter_band(), (-3300, 3300));
+        assert_eq!(format!("{}", DemodMode::Dsb), "DSB");
+    }
+
+    #[test]
+    fn dsb_accepts_sc_and_fc_tci_aliases() {
+        for text in ["DSB", "dsb", "DSB-SC", "dsb-sc", "DSB-FC", " dsb-fc "] {
+            assert_eq!(DemodMode::from_tci(text), DemodMode::Dsb, "{text}");
         }
     }
 

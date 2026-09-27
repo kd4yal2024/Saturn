@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   decomposeSignedPassbandWithShift,
+  defaultSignedRxPassbandForMode,
+  defaultSignedTxPassbandForMode,
   normalizeDemodMode,
   shiftedSignedPassbandFromUiCuts,
   signedPassbandFromUiCuts,
@@ -31,6 +33,14 @@ describe('passband helpers', () => {
     expect(normalizeDemodMode('wfm')).toBe('WFM');
     expect(signedPassbandFromUiCuts(50, 3050, 'WFM')).toEqual({ lowHz: -90_000, highHz: 90_000 });
     expect(uiCutsFromSignedPassband(-90_000, 90_000, 'WFM')).toEqual({ lowHz: 0, highHz: 90_000 });
+  });
+
+  it('treats DSB as a symmetric mode with a 3.3 kHz default', () => {
+    expect(normalizeDemodMode('dsb')).toBe('DSB');
+    expect(signedPassbandFromUiCuts(50, 3300, 'DSB')).toEqual({ lowHz: -3300, highHz: 3300 });
+    expect(uiCutsFromSignedPassband(-3300, 3300, 'DSB')).toEqual({ lowHz: 0, highHz: 3300 });
+    expect(defaultSignedRxPassbandForMode('DSB')).toEqual({ lowHz: -3300, highHz: 3300 });
+    expect(defaultSignedTxPassbandForMode('DSB')).toEqual({ lowHz: -3300, highHz: 3300 });
   });
 
   it('applies signed RX filter shift without changing filter width', () => {

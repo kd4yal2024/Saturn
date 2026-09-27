@@ -1,14 +1,14 @@
-export type DemodMode = 'USB' | 'LSB' | 'AM' | 'SAM' | 'FM' | 'WFM' | 'DIGU' | 'DIGL' | 'CWU' | 'CWL';
+export type DemodMode = 'USB' | 'LSB' | 'AM' | 'SAM' | 'DSB' | 'FM' | 'WFM' | 'DIGU' | 'DIGL' | 'CWU' | 'CWL';
 
 export type Passband = {
   lowHz: number;
   highHz: number;
 };
 
-export const DEMOD_MODES: readonly DemodMode[] = ['USB', 'LSB', 'AM', 'SAM', 'FM', 'WFM', 'DIGU', 'DIGL', 'CWU', 'CWL'];
+export const DEMOD_MODES: readonly DemodMode[] = ['USB', 'LSB', 'AM', 'SAM', 'DSB', 'FM', 'WFM', 'DIGU', 'DIGL', 'CWU', 'CWL'];
 
 const NEGATIVE_PASSBAND_MODES = new Set<DemodMode>(['LSB', 'DIGL', 'CWL']);
-const SYMMETRIC_PASSBAND_MODES = new Set<DemodMode>(['AM', 'SAM', 'FM', 'WFM']);
+const SYMMETRIC_PASSBAND_MODES = new Set<DemodMode>(['AM', 'SAM', 'DSB', 'FM', 'WFM']);
 
 export function normalizeDemodMode(value: string | undefined | null): DemodMode {
   const normalized = String(value || '').trim().toUpperCase();
@@ -135,6 +135,9 @@ export function defaultSignedRxPassbandForMode(mode: string): Passband {
     case 'AM':
     case 'SAM':
       return { lowHz: -4000, highHz: 4000 };
+    // Thetis's default DSB preset (Filter F5, "6.6k").
+    case 'DSB':
+      return { lowHz: -3300, highHz: 3300 };
     case 'FM':
       return { lowHz: -6000, highHz: 6000 };
     case 'WFM':
@@ -158,6 +161,9 @@ export function defaultSignedTxPassbandForMode(mode: string): Passband {
     case 'FM':
     case 'WFM':
       return { lowHz: -3000, highHz: 3000 };
+    // Thetis's default DSB preset (Filter F5, "6.6k").
+    case 'DSB':
+      return { lowHz: -3300, highHz: 3300 };
     case 'CWL':
       return { lowHz: -800, highHz: -200 };
     case 'CWU':

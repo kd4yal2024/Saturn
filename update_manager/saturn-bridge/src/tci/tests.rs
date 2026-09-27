@@ -3046,7 +3046,7 @@ fn initial_snapshot_has_standard_tci_initialization_before_ready() {
         "channel_count:2;",
         "vfo_limits:10000,61440000;",
         "if_limits:-96000,96000;",
-        "modulations_list:LSB,USB,CWL,CWU,AM,SAM,FM,NFM,DIGL,DIGU,WFM;",
+        "modulations_list:LSB,USB,CWL,CWU,AM,SAM,DSB,FM,NFM,DIGL,DIGU,WFM;",
     ] {
         assert!(
             messages.iter().any(|message| message == required),
