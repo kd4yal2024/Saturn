@@ -20228,26 +20228,42 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       bindDisplayToggle("display-show-grid", (value) => { state.showGrid = value; });
       bindDisplayToggle("display-show-center-line", (value) => { state.showCenterLine = value; });
       bindDisplayToggle("display-show-band-edges", (value) => { state.showBandEdges = value; });
+      // A manual floor/ceiling change is an explicit choice, so switch that
+      // pane's auto range off. Otherwise the per-frame auto range in
+      // updateDisplayRange() overwrites the value a moment later, saves the
+      // computed numbers, and the setting looks like it reverted after a reload.
+      const takeManualRangeOverride = (pane) => {
+        const autoRangeKey = pane === "waterfall" ? "waterfallAutoRange" : "spectrumAutoRange";
+        if (state[autoRangeKey] === false) return;
+        state[autoRangeKey] = false;
+        const toggle = $(pane === "waterfall" ? "display-waterfall-auto-range" : "display-spectrum-auto-range");
+        if (toggle) toggle.checked = false;
+        logEvent(`${pane === "waterfall" ? "Waterfall" : "Spectrum"} auto range turned off by a manual range change`);
+      };
       $("display-spectrum-floor").addEventListener("input", () => {
         state.displayFloorDb = clampDisplayDb($("display-spectrum-floor").value, -200);
+        takeManualRangeOverride("spectrum");
         $("display-spectrum-floor-readout").textContent = `${Math.round(state.displayFloorDb)} dB`;
         persistLocalSettingsFallback(currentRemoteSettings());
         scheduleRemoteSettingsSave();
       });
       $("display-spectrum-ceiling").addEventListener("input", () => {
         state.displayCeilingDb = clampDisplayDb($("display-spectrum-ceiling").value, -120);
+        takeManualRangeOverride("spectrum");
         $("display-spectrum-ceiling-readout").textContent = `${Math.round(state.displayCeilingDb)} dB`;
         persistLocalSettingsFallback(currentRemoteSettings());
         scheduleRemoteSettingsSave();
       });
       $("display-waterfall-floor").addEventListener("input", () => {
         state.waterfallFloorDb = clampDisplayDb($("display-waterfall-floor").value, -200);
+        takeManualRangeOverride("waterfall");
         $("display-waterfall-floor-readout").textContent = `${Math.round(state.waterfallFloorDb)} dB`;
         persistLocalSettingsFallback(currentRemoteSettings());
         scheduleRemoteSettingsSave();
       });
       $("display-waterfall-ceiling").addEventListener("input", () => {
         state.waterfallCeilingDb = clampDisplayDb($("display-waterfall-ceiling").value, -120);
+        takeManualRangeOverride("waterfall");
         $("display-waterfall-ceiling-readout").textContent = `${Math.round(state.waterfallCeilingDb)} dB`;
         persistLocalSettingsFallback(currentRemoteSettings());
         scheduleRemoteSettingsSave();
