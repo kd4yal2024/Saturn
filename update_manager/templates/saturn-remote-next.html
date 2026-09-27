@@ -12289,9 +12289,39 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       bindDisplayWorkspaceResizer();
     }
 
+    let phoneQuickbarHome = null;
+    let phoneGoLiveHome = null;
+
+    function placePhoneControls() {
+      const quickbar = $("mobile-radio-quickbar");
+      const goLive = $("go-live-btn");
+      if (quickbar && !phoneQuickbarHome) {
+        phoneQuickbarHome = document.createComment("phone quick controls home");
+        quickbar.before(phoneQuickbarHome);
+      }
+      if (goLive && !phoneGoLiveHome) {
+        phoneGoLiveHome = document.createComment("phone connection control home");
+        goLive.before(phoneGoLiveHome);
+      }
+      if (state.layoutMode === "phone") {
+        const session = document.querySelector(".command-strip");
+        const header = document.querySelector(".console-header");
+        if (session && quickbar && quickbar.previousElementSibling !== session) session.after(quickbar);
+        if (header && goLive && goLive.parentElement !== header) header.append(goLive);
+      } else {
+        if (quickbar && phoneQuickbarHome?.parentNode && quickbar.previousSibling !== phoneQuickbarHome) {
+          phoneQuickbarHome.after(quickbar);
+        }
+        if (goLive && phoneGoLiveHome?.parentNode && goLive.previousSibling !== phoneGoLiveHome) {
+          phoneGoLiveHome.after(goLive);
+        }
+      }
+    }
+
     function applyLayout(mode, persist = true, refresh = true) {
       state.layoutMode = mode === "phone" ? "phone" : "desktop";
       document.documentElement.dataset.layout = state.layoutMode;
+      placePhoneControls();
       if (state.layoutMode === "phone") restorePinnedMox();
       if (persist) {
         localStorage.setItem("saturn.remote.layout", state.layoutMode);

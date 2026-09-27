@@ -127,6 +127,15 @@ for (const scenario of systemRouteScenarios) {
   scenario.file = join(output, `${scenario.name}.html`);
   writeFileSync(scenario.file, fullRuntimePageFor(scenario));
 }
+const phoneUsabilityScenarios = [
+  { name: 'phone-usability-360', width: 360, height: 640, theme: 'dark', layout: 'phone' },
+  { name: 'phone-usability-390', width: 390, height: 844, theme: 'dark', layout: 'phone' },
+  { name: 'phone-usability-landscape', width: 844, height: 390, theme: 'dark', layout: 'phone' },
+];
+for (const scenario of phoneUsabilityScenarios) {
+  scenario.file = join(output, `${scenario.name}.html`);
+  writeFileSync(scenario.file, fullRuntimePageFor(scenario));
+}
 const mainScreenScenarios = [390, 1280].map(width => ({
   name: `main-screen-${width}`, width, height: heightFor(width), theme: 'dark', layout: 'desktop',
 }));
@@ -599,6 +608,7 @@ const vfoReports = [];
 const settingsIndexReports = [];
 const exactEntryReports = [];
 const systemRouteReports = [];
+const phoneUsabilityReports = [];
 const mainScreenReports = [];
 const restoreReports = [];
 const pendingEntryReports = [];
@@ -1627,6 +1637,97 @@ try {
     systemRouteReports.push(report);
     console.log(`${report.ok ? 'PASS' : 'FAIL'} ${scenario.name}: ${failures.join(', ') || 'offline Go Live, live System route, cancel/accept disconnect'}`);
   }
+  for (const scenario of phoneUsabilityScenarios) {
+    await call('Emulation.setDeviceMetricsOverride', {
+      width: scenario.width, height: scenario.height, deviceScaleFactor: 1, mobile: scenario.width < 600,
+    });
+    await call('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 1 });
+    await call('Page.navigate', { url: pathToFileURL(scenario.file).href });
+    let ready = false;
+    for (let attempt = 0; attempt < 160; attempt++) {
+      await pause(50);
+      ready = await evaluate('document.readyState === "complete" && typeof window.applyLayout === "function"').catch(() => false);
+      if (ready) break;
+    }
+    if (!ready) throw new Error(scenario.name + ': Phone runtime did not initialize');
+    await evaluate(`window.applyLayout('phone', false, true);
+      new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))`);
+    const initialPng = await call('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
+    writeFileSync(join(output, `${scenario.name}-initial.png`), Buffer.from(initialPng.data, 'base64'));
+    const result = await evaluate(`(async () => {
+      window.applyLayout('phone', false, true);
+      await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      const quickbar = document.getElementById('mobile-radio-quickbar');
+      const session = document.querySelector('.command-strip');
+      const header = document.querySelector('.console-header');
+      const goLive = document.getElementById('go-live-btn');
+      const dock = document.getElementById('mobile-control-dock');
+      const host = document.getElementById('tx-safety-host');
+      const arm = document.getElementById('tx-arm-btn');
+      const ptt = document.getElementById('ptt-btn');
+      const rect = node => { const r = node.getBoundingClientRect();
+        return { top: r.top, bottom: r.bottom, left: r.left, right: r.right, height: r.height }; };
+      const hit = node => { const r = node.getBoundingClientRect();
+        const target = document.elementFromPoint((r.left + r.right) / 2, (r.top + r.bottom) / 2);
+        return target === node || node.contains(target); };
+      const initial = { layout: document.documentElement.dataset.layout,
+        quickbarInFlow: getComputedStyle(quickbar).position === 'static',
+        quickbarAfterSession: quickbar.previousElementSibling === session,
+        quickbarCount: document.querySelectorAll('#mobile-radio-quickbar').length,
+        buttonCount: quickbar.querySelectorAll('button').length,
+        connectInHeader: goLive.parentElement === header,
+        connectCount: document.querySelectorAll('#go-live-btn').length,
+        connectHit: hit(goLive), connect: rect(goLive),
+        visibleStatusCount: [...document.querySelector('.operator-state-strip').children]
+          .filter(node => node.getClientRects().length > 0 && getComputedStyle(node).display !== 'none').length,
+        pageWidth: document.documentElement.scrollWidth,
+        dock: rect(dock), host: rect(host), arm: hit(arm), ptt: hit(ptt) };
+      document.getElementById('phone-menu-btn').click();
+      document.getElementById('phone-menu-status-btn').click();
+      const statusDetails = { open: !document.getElementById('operator-detail-overlay').hidden,
+        rows: document.querySelectorAll('#operator-detail-grid .operator-detail-row').length };
+      document.getElementById('operator-detail-close-btn').click();
+      quickbar.scrollIntoView({ block: 'start' });
+      await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      const buttons = [...quickbar.querySelectorAll('button')];
+      const shortcuts = { visible: buttons.every(button => button.getClientRects().length > 0),
+        touchHeight: Math.min(...buttons.map(button => button.getBoundingClientRect().height)),
+        topHit: hit(buttons[0]), lastHit: hit(buttons.at(-1)) };
+      window.applyLayout('desktop', false, false);
+      const restored = quickbar.previousElementSibling === dock;
+      const restoredConnect = goLive.parentElement?.classList.contains('launch-grid');
+      window.applyLayout('phone', false, false);
+      return { initial, statusDetails, shortcuts, restored, restoredConnect,
+        movedAgain: quickbar.previousElementSibling === session && goLive.parentElement === header };
+    })()`);
+    const png = await call('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
+    writeFileSync(join(output, `${scenario.name}.png`), Buffer.from(png.data, 'base64'));
+    const failures = [];
+    if (result.initial.layout !== 'phone' || !result.initial.quickbarInFlow ||
+      !result.initial.quickbarAfterSession || result.initial.quickbarCount !== 1 ||
+      result.initial.buttonCount !== 6 || !result.initial.connectInHeader ||
+      result.initial.connectCount !== 1 || !result.initial.connectHit ||
+      result.initial.connect.bottom > result.initial.host.top ||
+      result.initial.visibleStatusCount !== 2 ||
+      result.initial.pageWidth > scenario.width + 1)
+      failures.push('phone-shortcuts-not-in-flow');
+    if (!result.statusDetails.open || result.statusDetails.rows < 8)
+      failures.push('phone-status-details-unreachable');
+    const barsSeparated = scenario.width >= 600 && scenario.height <= 500
+      ? result.initial.host.right <= result.initial.dock.left + 1
+      : result.initial.host.bottom <= result.initial.dock.top + 1;
+    if (!barsSeparated ||
+      result.initial.host.top < 0 || !result.initial.arm || !result.initial.ptt)
+      failures.push('phone-tx-or-dock-overlap');
+    if (!result.shortcuts.visible || result.shortcuts.touchHeight < 44 ||
+      !result.shortcuts.topHit || !result.shortcuts.lastHit || !result.restored ||
+      !result.restoredConnect || !result.movedAgain)
+      failures.push('phone-shortcuts-unreachable-or-layout-switch-broken');
+    const report = { scenario: scenario.name, result, failures, ok: failures.length === 0 };
+    phoneUsabilityReports.push(report);
+    console.log(`${report.ok ? 'PASS' : 'FAIL'} ${scenario.name}: ${failures.join(', ') || 'scrollable shortcuts, compact TX, dock, layout switching'}`);
+    await evaluate("localStorage.setItem('saturn.remote.layout', 'desktop')");
+  }
   for (const scenario of mainScreenScenarios) {
     const tier = scenario.width < 600 ? 'phone' : 'desktop';
     await call('Emulation.setDeviceMetricsOverride', {
@@ -1638,8 +1739,7 @@ try {
       for (let attempt = 0; attempt < 160; attempt++) {
         await pause(50);
         if (await evaluate(`document.readyState === 'complete' &&
-          document.querySelectorAll('#settings-section-tabs .settings-section-tab').length === 11 &&
-          !!document.getElementById('main-screen-pins')`).catch(() => false)) return;
+          document.querySelectorAll('#settings-section-tabs .settings-section-tab').length === 11`).catch(() => false)) return;
       }
       throw new Error(`${scenario.name}: main-screen runtime did not initialize`);
     };
@@ -1654,6 +1754,7 @@ try {
     await waitForMainScreen();
     const initial = await evaluate(`(() => {
       window.applyLayout('desktop', false, false);
+      window.applyMainScreenLayout();
       const visible = node => !!node && !node.closest('[hidden]') && node.getClientRects().length > 0;
       let trigger = ['header-setup-btn', 'setup-menu-btn'].map(id => document.getElementById(id)).find(visible);
       if (trigger) trigger.click();
@@ -1804,6 +1905,7 @@ try {
     await waitForMainScreen();
     const reloaded = await evaluate(`(() => {
       window.applyLayout('desktop', false, false);
+      window.applyMainScreenLayout();
       const state = id => { const node = document.getElementById(id); return {
         display: getComputedStyle(node).display, hidden: node.dataset.mainLayoutHidden,
         pinned: node.dataset.mainLayoutPinned,
@@ -2367,7 +2469,7 @@ try {
     ': ' + registryResult.idBacked + ' ID-backed rows; ' +
     Object.entries(registryGroups).map(([cause, ids]) => cause + '=' + ids.length).join(', '));
   }
-  writeFileSync(join(output, 'summary.json'), JSON.stringify({ generatedAt: new Date().toISOString(), reports, pttReports, settingsReports, presentationReports, disclosureReports, vfoReports, settingsIndexReports, exactEntryReports, systemRouteReports, mainScreenReports, restoreReports, pendingEntryReports, registryRouteReports }, null, 2));
+  writeFileSync(join(output, 'summary.json'), JSON.stringify({ generatedAt: new Date().toISOString(), reports, pttReports, settingsReports, presentationReports, disclosureReports, vfoReports, settingsIndexReports, exactEntryReports, systemRouteReports, phoneUsabilityReports, mainScreenReports, restoreReports, pendingEntryReports, registryRouteReports }, null, 2));
 } catch (error) {
   console.error(error instanceof Error ? error.stack : String(error));
   process.exitCode = 2;
@@ -2387,6 +2489,7 @@ failures.push(...vfoReports.flatMap(report => report.failures.map(failure => `${
 failures.push(...settingsIndexReports.flatMap(report => report.failures.map(failure => `${report.scenario}: ${failure}`)));
 failures.push(...exactEntryReports.flatMap(report => report.failures.map(failure => `${report.scenario}: ${failure}`)));
 failures.push(...systemRouteReports.flatMap(report => report.failures.map(failure => `${report.scenario}: ${failure}`)));
+failures.push(...phoneUsabilityReports.flatMap(report => report.failures.map(failure => `${report.scenario}: ${failure}`)));
 failures.push(...mainScreenReports.flatMap(report => report.failures.map(failure => `${report.scenario}: ${failure}`)));
 failures.push(...restoreReports.flatMap(report => report.failures.map(failure => `${report.scenario}: ${failure}`)));
 failures.push(...pendingEntryReports.flatMap(report => report.failures.map(failure => `${report.scenario}: ${failure}`)));
@@ -2402,6 +2505,7 @@ console.log(`VFO runtime cases: ${vfoReports.filter(report => report.ok).length}
 console.log(`Settings index cases: ${settingsIndexReports.filter(report => report.ok).length}/${settingsIndexReports.length} passed`);
 console.log(`RX exact-entry cases: ${exactEntryReports.filter(report => report.ok).length}/${exactEntryReports.length} passed`);
 console.log(`System route cases: ${systemRouteReports.filter(report => report.ok).length}/${systemRouteReports.length} passed`);
+console.log(`Phone usability cases: ${phoneUsabilityReports.filter(report => report.ok).length}/${phoneUsabilityReports.length} passed`);
 console.log(`Main screen cases: ${mainScreenReports.filter(report => report.ok).length}/${mainScreenReports.length} passed`);
 console.log(`Restore defaults cases: ${restoreReports.filter(report => report.ok).length}/${restoreReports.length} passed`);
 console.log(`Pending entry cases: ${pendingEntryReports.filter(report => report.ok).length}/${pendingEntryReports.length} passed`);

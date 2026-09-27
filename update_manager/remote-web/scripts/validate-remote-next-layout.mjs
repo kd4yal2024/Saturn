@@ -75,9 +75,11 @@ function validationScript(scenario) {
 (() => {
   const scenario = ${JSON.stringify(scenario)};
   const expectedPills = ${JSON.stringify(expectedPills)};
-  const expectedVisiblePills = scenario.layout === 'phone' || scenario.width >= 1440
-    ? expectedPills
-    : scenario.width < 960
+  const expectedVisiblePills = scenario.layout === 'phone' && (scenario.width < 600 || scenario.height < 500)
+    ? ['operator-conn-pill']
+    : scenario.layout === 'phone' || scenario.width >= 1440
+      ? expectedPills
+      : scenario.width < 960
       ? ['operator-conn-pill']
       : expectedPills.filter((id) => !['operator-rxtx-pill', 'operator-rf-pill', 'operator-transport-pill'].includes(id));
   function round(value) {

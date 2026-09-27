@@ -648,13 +648,23 @@
 :root[data-layout="phone"] .app .console-header {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
-  grid-template-areas: "title actions" "state state";
+  grid-template-areas: "title actions" "state state" "connect connect";
   gap: var(--sp-2);
   align-items: center;
   width: 100%;
   min-height: 0;
   height: auto;
   padding: var(--sp-2);
+}
+@media (min-width: 600px) and (max-height: 500px) {
+  :root[data-layout="phone"] .app .console-header {
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas: "title actions" "state connect";
+  }
+
+  :root[data-layout="phone"] .app .console-header > #go-live-btn {
+    min-width: calc(var(--sp-6) * 4);
+  }
 }
 :root[data-layout="phone"] .app .console-header > div:first-child { grid-area: title; min-width: 0; }
 :root[data-layout="phone"] .app .console-header .hero-actions {
