@@ -9108,7 +9108,8 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     const rxAudioCodecPreference = `${pageQueryValue("rx_audio_codec") || "auto"}`.trim().toLowerCase();
     const rxOpus = {
       capability: "probing", gainEcho: false, probeSupported: false, fallbackReason: "", decoder: null,
-      decoderChannels: 0, epoch: 0, socketEpoch: 0, pending: new Map(),
+      decoderChannels: 0, decoderFramesSubmitted: 0, decoderFramesOutput: 0,
+      epoch: 0, socketEpoch: 0, pending: _next.createRxOpusPendingQueue(),
       pcmBytes: 0, opusBytes: 0, pcmWindowBytes: 0, opusWindowBytes: 0,
       pcmBytesPerSec: 0, opusBytesPerSec: 0, decodedFrames: 0, pcmFrames: 0, opusFrames: 0,
       malformedFrames: 0, malformedRun: 0, decodeErrors: 0, lateDrops: 0, resyncs: 0,
@@ -16666,6 +16667,8 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       const decoder = rxOpus.decoder;
       rxOpus.decoder = null;
       rxOpus.decoderChannels = 0;
+      rxOpus.decoderFramesSubmitted = 0;
+      rxOpus.decoderFramesOutput = 0;
       rxOpus.pending.clear();
       if (decoder) {
         try { decoder.close(); } catch (_) {}
@@ -16785,6 +16788,9 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         decoderErrors: rxOpus.decodeErrors,
         lateDrops: rxOpus.lateDrops,
         resyncs: rxOpus.resyncs,
+        orphanOutputs: rxOpus.pending.orphanOutputs,
+        prunedPending: rxOpus.pending.prunedEntries,
+        timestampRewrites: rxOpus.pending.timestampRewrites,
         pendingPackets: rxOpus.pending.size,
         decoderChannels: rxOpus.decoderChannels,
         sequenceGaps: state.audioSeqGapCount,
@@ -18970,9 +18976,9 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
             try {
               if (epoch !== rxOpus.epoch || decoder !== rxOpus.decoder ||
                   rxAudioCodecSession.accepted !== "opus") return;
-              const metadata = rxOpus.pending.get(data.timestamp);
+              // Paired in order, not by timestamp: see createRxOpusPendingQueue.
+              const metadata = rxOpus.pending.take(data.timestamp);
               if (!metadata) return;
-              rxOpus.pending.delete(data.timestamp);
               if (performance.now() - metadata.arrivedAt > 250) {
                 rxOpus.lateDrops += 1;
                 return;
@@ -18984,6 +18990,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
                 return;
               }
               rxOpus.decodedFrames += 1;
+              rxOpus.decoderFramesOutput += 1;
               playRxDecodedAudio({
                 codec: "opus", frames: pcm.frames, left: pcm.left, right: pcm.right,
                 header: { sampleRate: pcm.sampleRate, channels: metadata.channels, sequence: metadata.sequence },
@@ -19048,7 +19055,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       const decoder = rxOpus.decoder || createRxOpusDecoder(packet.channels);
       if (!decoder) return;
       const timestamp = packet.sequence * _next.RX_OPUS_FRAME_DURATION_US;
-      rxOpus.pending.set(timestamp, {
+      rxOpus.pending.submit(timestamp, arrivedAt, {
         arrivedAt, arrivalGapMs, frames: packet.frames, sampleRate: packet.sampleRate,
         channels: packet.channels, sequence: packet.sequence,
       });
@@ -19066,6 +19073,12 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
           type: "key", timestamp, duration: _next.RX_OPUS_FRAME_DURATION_US,
           data: packet.payload,
         }));
+        rxOpus.decoderFramesSubmitted += 1;
+        // Use this decoder's counters: transport totals survive reconnects and
+        // would otherwise hide a silent decoder after one successful session.
+        if (_next.rxOpusStalled(rxOpus.decoderFramesSubmitted, rxOpus.decoderFramesOutput)) {
+          fallbackRxAudioToPcm(`decoder produced no audio after ${rxOpus.decoderFramesSubmitted} packets`);
+        }
       } catch (error) {
         rxOpus.decodeErrors += 1;
         fallbackRxAudioToPcm(`decode submission: ${error?.message || error}`);

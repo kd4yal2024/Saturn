@@ -55,9 +55,11 @@ import {
   parseRxOpusPacket,
   probeRxOpusDecoder,
   createRxAudioCodecSession,
+  createRxOpusPendingQueue,
   copyRxOpusAudio,
   rxOpusBacklogAction,
   rxOpusMalformedAction,
+  rxOpusStalled,
   RX_OPUS_FRAME_DURATION_US,
 } from './audio/rx-opus';
 import {
@@ -274,9 +276,11 @@ const api = {
   parseRxOpusPacket,
   probeRxOpusDecoder,
   createRxAudioCodecSession,
+  createRxOpusPendingQueue,
   copyRxOpusAudio,
   rxOpusBacklogAction,
   rxOpusMalformedAction,
+  rxOpusStalled,
   RX_OPUS_FRAME_DURATION_US,
   buildTxMicPcmS16Frame,
   decideTxMicSend,

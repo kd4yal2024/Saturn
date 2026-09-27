@@ -111,3 +111,58 @@ is re-sent on every 20 ms packet, so a 60-byte mono Opus payload costs 124 bytes
 on the wire and a 200-byte stereo payload costs 264. The advertised 16×/38× are
 against payload only; on the wire they are about 8.3× and 29.3×. This matters for
 the Phase 1 decision, because the mono WAN stream is ~50 kbit/s, not ~24 kbit/s.
+
+## Live probe without the authenticated proxy
+
+The bridge's TCI server listens on loopback, so the real browser code can be
+driven against the real bridge, real libopus and the real WebCodecs decoder with
+no proxy session and no radio reconfiguration:
+
+```bash
+ssh -N -L 127.0.0.1:15001:127.0.0.1:50001 pi@<radio> &
+npm run build
+node scripts/live-rx-opus-probe.mjs --ws ws://127.0.0.1:15001/ --mode lan --seconds 20
+node scripts/live-rx-opus-probe.mjs --ws ws://127.0.0.1:15001/ --mode wan --seconds 20
+```
+
+It loads the real template and bundle in headless Chrome, disables split
+transport (the loopback TCI is a single lane), starts RX audio, and reports both
+the browser's `rxAudioCodec` snapshot and a trace of every WebCodecs decode
+timestamp versus every output timestamp. It listens only: RX audio and display,
+no keying, no state changes. It does add one RX audio listener while it runs.
+
+## Live findings that the stub harness could not see
+
+**Chrome's Opus decoder does not always echo `EncodedAudioChunk.timestamp` on the
+output `AudioData`.** Measured on the live LAN profile (20 s, ~1050 packets):
+1045 outputs for 1046 decodes, and 42 input timestamps that never appeared on any
+output — the decoder renumbers a subset of frames.
+
+The first implementation keyed its pending-packet map by input timestamp and
+looked it up by `data.timestamp`, so every renumbered output leaked one entry
+forever. Pending grew monotonically until the backlog guard fired a resync, which
+discarded real audio: on the radio this showed up as
+`RX Opus resync: decoder backlog 33 packets` every ~17 seconds, each one dropping
+~660 ms of audio (and 42 worklet underruns, 17 overflows, a 216 ms worst-case
+output gap in a 20 s window).
+
+Fix: pair decoder output to packets **in order** (`createRxOpusPendingQueue`),
+count timestamp disagreement as `timestampRewrites` instead of breaking the map,
+age out undecoded packets after 1 s, and escalate to PCM if the decoder consumes
+100 packets without producing a single frame of audio. The stub harness could not
+have caught this because its fake decoder echoed timestamps; it now has an arm
+that deliberately renumbers them (`opus-renumbered-timestamps-still-decode`).
+
+Same probe, same link, before and after (LAN stereo, 20 s):
+
+| Measurement | Before | After |
+|---|---|---|
+| Resyncs | 1 (and repeating every ~17 s) | 0 |
+| Packets stuck pending | 10 | 0 |
+| Worklet underruns | 42 | 5 |
+| Worklet overflows | 17 | 0 |
+| Worst output gap | 216 ms | 87 ms |
+| Timestamp renumbers handled | 42 leaked | 39 counted |
+
+WAN mono, 15 s after the fix: 821 packets, 821 decoded, 0 resyncs, 0 pending,
+3 underruns, 21 renumbers counted, p50 output interval 20 ms.

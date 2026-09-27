@@ -5,10 +5,12 @@ import {
   RX_OPUS_FRAME_DURATION_US,
   copyRxOpusAudio,
   createRxAudioCodecSession,
+  createRxOpusPendingQueue,
   parseRxOpusPacket,
   probeRxOpusDecoder,
   rxOpusBacklogAction,
   rxOpusMalformedAction,
+  rxOpusStalled,
 } from '../src/audio/rx-opus';
 import { audioFramesToMilliseconds, rxAudioArrivalJitterMs } from '../src/audio/rx-telemetry';
 import { parseTciText } from '../src/tci/parser';
@@ -37,16 +39,32 @@ const INGEST_REGION = slice(
 
 type DecoderBehaviour = 'ok' | 'silent' | 'silent-stereo-mismatch' | 'throw' | 'short';
 
+// Chrome's Opus decoder was observed renumbering output timestamps for a subset
+// of packets; this fake models that so the regression is covered.
+class FakeEncodedAudioChunk {
+  readonly type: string;
+  readonly timestamp: number;
+  readonly duration: number;
+  readonly data: Uint8Array;
+  constructor(init: { type?: string; timestamp: number; duration?: number; data: Uint8Array }) {
+    this.type = init.type ?? 'key';
+    this.timestamp = init.timestamp;
+    this.duration = init.duration ?? 0;
+    this.data = init.data;
+  }
+}
+
 // Minimal WebCodecs stand-in. `decode()` invokes the decoder output callback
 // synchronously so assertions stay deterministic.
 class FakeAudioDecoder {
-  static behaviour: DecoderBehaviour = 'ok';
+  static behaviour: DecoderBehaviour | 'rewrite-stamps' = 'ok';
   static instances: FakeAudioDecoder[] = [];
   static async isConfigSupported() { return { supported: true }; }
-  static reset(behaviour: DecoderBehaviour = 'ok') {
+  static reset(behaviour: DecoderBehaviour | 'rewrite-stamps' = 'ok') {
     FakeAudioDecoder.behaviour = behaviour;
     FakeAudioDecoder.instances = [];
   }
+  static rewriteCount = 0;
   readonly init: { output: (data: unknown) => void; error: (error: unknown) => void };
   config: { codec?: string; sampleRate?: number; numberOfChannels?: number } | null = null;
   closed = false;
@@ -66,8 +84,16 @@ class FakeAudioDecoder {
     if (behaviour === 'throw') throw new Error('decode boom');
     const channels = this.config?.numberOfChannels ?? 1;
     const frames = behaviour === 'short' ? 480 : 960;
+    // Model a decoder that renumbers output timestamps for part of the stream:
+    // the live LAN trace showed 42 of 1046 outputs landing on a timestamp no
+    // input ever used, which used to leak pending entries and drop audio.
+    let outputTimestamp = chunk.timestamp;
+    if (behaviour === 'rewrite-stamps') {
+      FakeAudioDecoder.rewriteCount += 1;
+      outputTimestamp = chunk.timestamp + (FakeAudioDecoder.rewriteCount % 3 === 0 ? 1000 : 0);
+    }
     this.init.output({
-      timestamp: chunk.timestamp,
+      timestamp: outputTimestamp,
       sampleRate: 48_000,
       numberOfChannels: channels,
       numberOfFrames: frames,
@@ -76,19 +102,6 @@ class FakeAudioDecoder {
       },
       close() {},
     });
-  }
-}
-
-class FakeEncodedAudioChunk {
-  readonly type: string;
-  readonly timestamp: number;
-  readonly duration: number;
-  readonly data: Uint8Array;
-  constructor(init: { type?: string; timestamp: number; duration?: number; data: Uint8Array }) {
-    this.type = init.type ?? 'key';
-    this.timestamp = init.timestamp;
-    this.duration = init.duration ?? 0;
-    this.data = init.data;
   }
 }
 
@@ -142,18 +155,25 @@ function makeHarness(options: { preference?: string } = {}) {
   };
   const rxOpus: Record<string, unknown> = {
     capability: 'probing', gainEcho: false, probeSupported: false, fallbackReason: '',
-    decoder: null, decoderChannels: 0, epoch: 0, socketEpoch: 0, pending: new Map(),
+    decoder: null, decoderChannels: 0, decoderFramesSubmitted: 0, decoderFramesOutput: 0,
+    epoch: 0, socketEpoch: 0,
+    pending: createRxOpusPendingQueue(),
     pcmBytes: 0, opusBytes: 0, pcmWindowBytes: 0, opusWindowBytes: 0,
     pcmBytesPerSec: 0, opusBytesPerSec: 0, decodedFrames: 0,
+    pcmFrames: 0, opusFrames: 0,
     malformedFrames: 0, malformedRun: 0, decodeErrors: 0, lateDrops: 0, resyncs: 0,
   };
   const rxAudioCodecSession = createRxAudioCodecSession();
+  // Packet time is driven by the test so age-based pruning is deterministic.
+  const clock = { value: 1000 };
   const sandbox: Record<string, unknown> = {
     _next: {
       parseRxOpusPacket,
       copyRxOpusAudio,
       rxOpusBacklogAction,
       rxOpusMalformedAction,
+      createRxOpusPendingQueue,
+      rxOpusStalled,
       decodeAudioFrame,
       parseTciText,
       probeRxOpusDecoder,
@@ -185,7 +205,7 @@ function makeHarness(options: { preference?: string } = {}) {
         left, right, frames, sampleRate,
       }),
     },
-    performance: { now: () => 1000 },
+    performance: { now: () => clock.value },
     AudioDecoder: FakeAudioDecoder,
     EncodedAudioChunk: FakeEncodedAudioChunk,
     ArrayBuffer,
@@ -207,7 +227,7 @@ function makeHarness(options: { preference?: string } = {}) {
     closeRxOpusDecoder: () => void;
     resetRxAudioCodecTransport: () => void;
   };
-  return { api, sandbox, sent, logs, faults, played, flushes, state, rxOpus, rxAudioCodecSession };
+  return { api, sandbox, sent, logs, faults, played, flushes, state, rxOpus, rxAudioCodecSession, clock };
 }
 
 async function connectWithOpus(harness: ReturnType<typeof makeHarness>) {
@@ -217,6 +237,22 @@ async function connectWithOpus(harness: ReturnType<typeof makeHarness>) {
   await harness.api.requestRxAudioCodec(ws);
   harness.api.handleRxAudioCodecEcho('audio_gain:client;');
   harness.api.handleRxAudioCodecEcho('audio_codec:opus;audio_samplerate:48000;');
+}
+
+// Feeds frames at a realistic 20 ms packet cadence so age-based pruning sees the
+// same clock progression it would on a live link.
+function pushFrames(
+  harness: ReturnType<typeof makeHarness>,
+  count: number,
+  options: { channels?: number; payloadBytes?: number; startSequence?: number } = {},
+) {
+  const start = options.startSequence ?? 1;
+  for (let index = 0; index < count; index += 1) {
+    harness.clock.value += 20;
+    harness.api.handleOpusAudioFrame(
+      opusFrame(options.payloadBytes ?? 60, options.channels ?? 1, start + index),
+    );
+  }
 }
 
 describe('RX Opus negotiation in the template', () => {
@@ -286,9 +322,7 @@ describe('RX Opus ingest resilience in the template', () => {
   it('decodes type 17 packets into the shared playback sink', async () => {
     const h = makeHarness();
     await connectWithOpus(h);
-    for (let sequence = 1; sequence <= 3; sequence += 1) {
-      h.api.handleOpusAudioFrame(opusFrame(60, 1, sequence));
-    }
+    pushFrames(h, 3);
     expect(h.rxOpus.decodedFrames).toBe(3);
     expect(h.rxOpus.malformedFrames).toBe(0);
     expect(h.played).toEqual([960, 960, 960]);
@@ -299,11 +333,11 @@ describe('RX Opus ingest resilience in the template', () => {
   it('drops a single corrupt packet instead of abandoning Opus', async () => {
     const h = makeHarness();
     await connectWithOpus(h);
-    h.api.handleOpusAudioFrame(opusFrame(60, 1, 1));
+    pushFrames(h, 1);
     const corrupt = opusFrame(60, 1, 2);
     new DataView(corrupt).setUint32(20, 999, true);
     h.api.handleOpusAudioFrame(corrupt);
-    h.api.handleOpusAudioFrame(opusFrame(60, 1, 3));
+    pushFrames(h, 1, { startSequence: 3 });
 
     expect(h.rxOpus.malformedFrames).toBe(1);
     expect(h.rxOpus.malformedRun).toBe(0);
@@ -349,19 +383,61 @@ describe('RX Opus ingest resilience in the template', () => {
     expect(h.faults).toEqual(['RX Opus fallback']);
   });
 
-  it('resyncs a stalled decoder instead of abandoning Opus', async () => {
+  it('pairs decoder output in order when the decoder renumbers timestamps', async () => {
+    // Regression for the live failure: Chrome's Opus decoder returned 1045
+    // outputs for 1046 decodes with 42 input timestamps never appearing on any
+    // output. Timestamp-keyed matching leaked pending entries until the backlog
+    // guard fired, dropping ~660 ms of audio on a timer.
     const h = makeHarness();
     await connectWithOpus(h);
-    FakeAudioDecoder.behaviour = 'silent';
-    for (let sequence = 1; sequence <= 40; sequence += 1) {
-      h.api.handleOpusAudioFrame(opusFrame(60, 1, sequence));
-    }
-    // 33 pending packets trip the backlog guard once; the map is then cleared.
-    expect(h.rxOpus.resyncs).toBe(1);
-    expect(h.rxOpus.decodedFrames).toBe(0);
+    FakeAudioDecoder.reset('rewrite-stamps');
+    pushFrames(h, 200);
+    const snapshot = h.api.rxAudioCodecSnapshot();
+    expect(snapshot.timestampRewrites as number).toBeGreaterThan(0);
+    expect(h.rxOpus.decodedFrames).toBe(200);
+    expect(h.rxOpus.resyncs).toBe(0);
+    expect(snapshot.pendingPackets).toBe(0);
     expect(h.sent).not.toContain('audio_codec:pcm;');
     expect(h.rxAudioCodecSession.accepted).toBe('opus');
-    expect((h.rxOpus.pending as Map<number, unknown>).size).toBe(7);
+  });
+
+  it('resyncs once when the safety limit is reached with no packet ageing', async () => {
+    const h = makeHarness();
+    await connectWithOpus(h);
+    FakeAudioDecoder.reset('silent');
+    // Frozen clock: nothing ages out, so the safety limit is what protects us.
+    for (let sequence = 1; sequence <= 70; sequence += 1) {
+      h.api.handleOpusAudioFrame(opusFrame(60, 1, sequence));
+    }
+    expect(h.rxOpus.resyncs).toBe(1);
+    expect(h.rxOpus.decodedFrames).toBe(0);
+    expect((h.rxOpus.pending as { size: number }).size).toBeLessThanOrEqual(64);
+    expect(h.rxAudioCodecSession.accepted).toBe('opus');
+  });
+
+  it('falls back to PCM when the decoder never produces audio', async () => {
+    const h = makeHarness();
+    await connectWithOpus(h);
+    FakeAudioDecoder.reset('silent');
+    pushFrames(h, 120);
+    expect(h.rxOpus.decodedFrames).toBe(0);
+    expect(h.rxAudioCodecSession.accepted).toBe('pcm');
+    expect(String(h.rxOpus.fallbackReason)).toMatch(/decoder produced no audio/);
+    expect(h.sent).toContain('audio_codec:pcm;');
+    expect(h.faults).toEqual(['RX Opus fallback']);
+  });
+
+  it('falls back if a decoder stalls after an earlier decoder produced audio', async () => {
+    const h = makeHarness();
+    await connectWithOpus(h);
+    pushFrames(h, 3);
+    expect(h.rxOpus.decodedFrames).toBe(3);
+    h.api.closeRxOpusDecoder();
+    FakeAudioDecoder.reset('silent');
+    pushFrames(h, 120, { startSequence: 4 });
+    expect(h.rxAudioCodecSession.accepted).toBe('pcm');
+    expect(String(h.rxOpus.fallbackReason)).toMatch(/decoder produced no audio/);
+    expect(h.sent).toContain('audio_codec:pcm;');
   });
 
   it('falls back when decoded output does not match the packet contract', async () => {
@@ -390,9 +466,11 @@ describe('RX Opus ingest resilience in the template', () => {
       decodedFrames: 1,
       malformedFrames: 0,
       resyncs: 0,
+      orphanOutputs: 0,
       sequenceGaps: 0,
       workletUnderruns: 0,
     });
     expect(snapshot.opusBytes).toBe(184);
+    expect(snapshot.pendingPackets).toBe(0);
   });
 });

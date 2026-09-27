@@ -189,7 +189,8 @@ const STUB_SOCKET = `
         return Boolean(stereo.supported && mono.supported);
       } catch (_) { return false; }
     })();
-    if (CONFIG.decoder === 'fake' || CONFIG.decoder === 'silent') {
+    if (CONFIG.decoder === 'fake' || CONFIG.decoder === 'silent' || CONFIG.decoder === 'rewrite') {
+      let renumbered = 0;
       class FakeAudioDecoder {
         static async isConfigSupported() { return { supported: true }; }
         constructor(init) { this.init = init; this.channels = 1; }
@@ -197,8 +198,15 @@ const STUB_SOCKET = `
         close() {}
         decode(chunk) {
           if (CONFIG.decoder === 'silent') return;
+          // Model Chrome's Opus decoder renumbering some output timestamps; the
+          // browser must pair output to packets in order, not by timestamp.
+          let timestamp = chunk.timestamp;
+          if (CONFIG.decoder === 'rewrite') {
+            renumbered += 1;
+            if (renumbered % 25 === 0) timestamp = chunk.timestamp + 1000;
+          }
           this.init.output({
-            timestamp: chunk.timestamp,
+            timestamp,
             sampleRate: 48000,
             numberOfChannels: this.channels,
             numberOfFrames: 960,
@@ -398,8 +406,25 @@ const SCENARIOS = [
     pcmChannels: 1,
     pcmSamples: 240,
     malformedFrames: 0,
-    frames: 40,
+    // 70 packets with no clock movement: nothing ages out, so the safety limit
+    // (64) is what trips. This arm pins the last-resort resync, not the normal path.
+    frames: 70,
     ready: 'codec && codec.resyncs >= 1',
+  },
+  {
+    name: 'opus-renumbered-timestamps-still-decode',
+    query: '',
+    streamMode: 'lan',
+    mode: 'opus',
+    decoder: 'rewrite',
+    opusPayloadBytes: 200,
+    opusChannels: 2,
+    pcmRate: 48000,
+    pcmChannels: 2,
+    pcmSamples: 960,
+    malformedFrames: 0,
+    frames: 40,
+    ready: 'codec && codec.opusFrames >= 40',
   },
 ];
 
@@ -593,6 +618,15 @@ async function main() {
       check(codec.resyncs >= 1, `${label}: decoder backlog did not resync`);
       check(!sent.includes('audio_codec:pcm;'), `${label}: abandoned Opus on a decoder stall`);
       check(codec.decodedFrames === 0, `${label}: silent decoder reported decoded frames`);
+    }
+
+    if (scenario.name === 'opus-renumbered-timestamps-still-decode') {
+      check(codec.accepted === 'opus', `${label}: accepted codec is ${codec.accepted}`);
+      check(codec.decodedFrames >= 40, `${label}: only ${codec.decodedFrames} frames decoded`);
+      check(codec.resyncs === 0, `${label}: ${codec.resyncs} resyncs on a renumbered stream`);
+      check(codec.pendingPackets === 0, `${label}: ${codec.pendingPackets} packets stuck pending`);
+      check((codec.timestampRewrites || 0) > 0, `${label}: the renumbering path was never exercised`);
+      check(!sent.includes('audio_codec:pcm;'), `${label}: fell back to PCM unnecessarily`);
     }
   }
 

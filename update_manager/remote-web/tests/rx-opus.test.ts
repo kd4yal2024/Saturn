@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   copyRxOpusAudio, createRxAudioCodecSession, parseRxOpusPacket, probeRxOpusDecoder,
-  rxOpusBacklogAction, rxOpusMalformedAction,
+  createRxOpusPendingQueue, rxOpusBacklogAction, rxOpusMalformedAction, rxOpusStalled,
 } from '../src/audio/rx-opus';
 import { decodeRxFrame } from '../src/transport/rx-frame';
 
@@ -112,8 +112,43 @@ describe('RX Opus transport', () => {
 
   it('resyncs a stalled decoder instead of abandoning Opus', () => {
     expect(rxOpusBacklogAction(0)).toBe('none');
-    expect(rxOpusBacklogAction(32)).toBe('none');
-    expect(rxOpusBacklogAction(33)).toBe('resync');
+    expect(rxOpusBacklogAction(64)).toBe('none');
+    expect(rxOpusBacklogAction(65)).toBe('resync');
     expect(rxOpusBacklogAction(4, 3)).toBe('resync');
+  });
+
+  it('only declares the decoder stalled after it has had a fair chance', () => {
+    expect(rxOpusStalled(99, 0)).toBe(false);
+    expect(rxOpusStalled(100, 0)).toBe(true);
+    expect(rxOpusStalled(500, 1)).toBe(false);
+    expect(rxOpusStalled(2, 0, 2)).toBe(true);
+  });
+
+  it('pairs decoder output in order and survives renumbered timestamps', () => {
+    const queue = createRxOpusPendingQueue<{ sequence: number }>();
+    for (let index = 0; index < 4; index += 1) {
+      queue.submit(index * 20_000, 1000 + index * 20, { sequence: index + 1 });
+    }
+    // An output whose timestamp the decoder renumbered still consumes the
+    // oldest packet rather than leaking it.
+    expect(queue.take(999_999)).toEqual({ sequence: 1 });
+    expect(queue.timestampRewrites).toBe(1);
+    expect(queue.take(20_000)).toEqual({ sequence: 2 });
+    expect(queue.timestampRewrites).toBe(1);
+    expect(queue.take(40_000)).toEqual({ sequence: 3 });
+    expect(queue.size).toBe(1);
+  });
+
+  it('drops undecoded packets once they age out and counts orphan output', () => {
+    const queue = createRxOpusPendingQueue<number>({ maxAgeMs: 100 });
+    queue.submit(0, 1000, 1);
+    queue.submit(20_000, 1200, 2);
+    expect(queue.prunedEntries).toBe(1);
+    expect(queue.size).toBe(1);
+    expect(queue.take(20_000)).toBe(2);
+    expect(queue.take(20_000)).toBeNull();
+    expect(queue.orphanOutputs).toBe(1);
+    queue.clear();
+    expect(queue.size).toBe(0);
   });
 });

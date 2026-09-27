@@ -121,10 +121,14 @@ export function copyRxOpusAudio(data: RxDecodedAudio): {left: Float32Array; righ
 // codec. A run of them means the wire contract is not what this browser thinks
 // it is, so fall back to PCM. Falling back is latched until the socket reopens.
 export const RX_OPUS_MALFORMED_FALLBACK_LIMIT = 5;
-// The decoder pending map is keyed by packet timestamp; entries leave it when
-// the decoder emits output. A map this deep means the decoder stalled, which is
-// a resync (drop what is pending and keep Opus), not a contract mismatch.
-export const RX_OPUS_BACKLOG_RESYNC_LIMIT = 32;
+// Safety net only: an age-pruned queue should never reach this. If it does, the
+// decoder stalled and a resync (drop what is pending, keep Opus) is warranted.
+export const RX_OPUS_BACKLOG_RESYNC_LIMIT = 64;
+// Undecoded packets older than this are dropped instead of waiting forever.
+export const RX_OPUS_PENDING_MAX_AGE_MS = 1000;
+// If the decoder has consumed this many packets without producing one frame of
+// audio, it is not going to recover: hand the session back to PCM.
+export const RX_OPUS_STALL_FRAMES = 100;
 
 export function rxOpusMalformedAction(
   consecutiveMalformed: number,
@@ -138,4 +142,70 @@ export function rxOpusBacklogAction(
   limit = RX_OPUS_BACKLOG_RESYNC_LIMIT,
 ): 'none' | 'resync' {
   return pendingEntries > limit ? 'resync' : 'none';
+}
+
+/** A stalled decoder must not hold the session silent indefinitely. */
+export function rxOpusStalled(
+  opusFrames: number,
+  decodedFrames: number,
+  limit = RX_OPUS_STALL_FRAMES,
+): boolean {
+  return decodedFrames <= 0 && opusFrames >= limit;
+}
+
+export type RxOpusPendingEntry<T> = { value: T; timestamp: number; arrivedAt: number };
+
+/**
+ * Matches decoder output to submitted packets **in order**.
+ *
+ * WebCodecs normally echoes `EncodedAudioChunk.timestamp` on the output
+ * `AudioData`, but Chrome's Opus decoder was observed renumbering timestamps for
+ * a subset of packets (live LAN measurement: 1045 outputs for 1046 decodes, with
+ * 42 input timestamps never appearing on any output). Timestamp-keyed matching
+ * therefore leaked entries forever and tripped the backlog guard, dropping real
+ * audio on a timer. Opus decodes one frame at a time in sequence, so consuming
+ * the oldest pending entry is the correct pairing; timestamp disagreement is
+ * counted for diagnostics instead of breaking the map.
+ */
+export type RxOpusPendingQueue<T> = {
+  submit(timestamp: number, arrivedAt: number, value: T): void;
+  take(timestamp: number): T | null;
+  clear(): void;
+  readonly size: number;
+  readonly orphanOutputs: number;
+  readonly prunedEntries: number;
+  readonly timestampRewrites: number;
+};
+
+export function createRxOpusPendingQueue<T>(
+  options: { maxAgeMs?: number } = {},
+): RxOpusPendingQueue<T> {
+  const maxAgeMs = options.maxAgeMs ?? RX_OPUS_PENDING_MAX_AGE_MS;
+  const entries: RxOpusPendingEntry<T>[] = [];
+  let orphanOutputs = 0;
+  let prunedEntries = 0;
+  let timestampRewrites = 0;
+  return {
+    submit(timestamp, arrivedAt, value) {
+      while (entries.length > 0 && arrivedAt - (entries[0] as RxOpusPendingEntry<T>).arrivedAt > maxAgeMs) {
+        entries.shift();
+        prunedEntries += 1;
+      }
+      entries.push({value, timestamp, arrivedAt});
+    },
+    take(timestamp) {
+      if (entries.length === 0) {
+        orphanOutputs += 1;
+        return null;
+      }
+      const entry = entries.shift() as RxOpusPendingEntry<T>;
+      if (entry.timestamp !== timestamp) timestampRewrites += 1;
+      return entry.value;
+    },
+    clear() { entries.length = 0; },
+    get size() { return entries.length; },
+    get orphanOutputs() { return orphanOutputs; },
+    get prunedEntries() { return prunedEntries; },
+    get timestampRewrites() { return timestampRewrites; },
+  };
 }
