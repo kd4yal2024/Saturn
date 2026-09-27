@@ -5,6 +5,8 @@
   "type": "module",
   "scripts": {
     "build": "vite build",
+    "postbuild": "npm run check:ui-assets",
+    "check:ui-assets": "node scripts/check-ui-asset-budget.mjs",
     "test": "vitest run",
     "smoke:remote-next": "vitest run tests/remote-next-smoke.test.ts",
     "typecheck": "tsc --noEmit",

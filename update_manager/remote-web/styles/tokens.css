@@ -1,0 +1,216 @@
+/* IBM Plex Latin-1 faces, vendored under assets/fonts (SIL OFL 1.1). */
+@font-face {
+  font-family: "IBM Plex Sans";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("../assets/fonts/IBMPlexSans-Regular-Latin1.woff2") format("woff2");
+  unicode-range: U+0000-00FF;
+}
+@font-face {
+  font-family: "IBM Plex Sans";
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("../assets/fonts/IBMPlexSans-Medium-Latin1.woff2") format("woff2");
+  unicode-range: U+0000-00FF;
+}
+@font-face {
+  font-family: "IBM Plex Mono";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("../assets/fonts/IBMPlexMono-Regular-Latin1.woff2") format("woff2");
+  unicode-range: U+0000-00FF;
+}
+@font-face {
+  font-family: "IBM Plex Mono";
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("../assets/fonts/IBMPlexMono-Medium-Latin1.woff2") format("woff2");
+  unicode-range: U+0000-00FF;
+}
+
+:root {
+  color-scheme: dark;
+
+  --bg-app: #0E1116;
+  --bg-panel: #151A21;
+  --bg-raised: #1B212A;
+  --bg-inset: #0A0D12;
+  --bg-display: #061022;
+  --display-foreground: #E6EAF0;
+  --border: #252C36;
+  --border-strong: #343D4A;
+  --text-primary: #E6EAF0;
+  --text-secondary: #A3ACB9;
+  --text-muted: #6B7584;
+  --accent: #4C9AFF;
+  --accent-bg: #16294A;
+  --accent-text: #9CC5FF;
+  --ok: #3FB27F;
+  --caution: #E0A526;
+  --caution-bg: #3A2C0C;
+  --caution-text: #F4CD74;
+  --danger: #E5484D;
+  --danger-bg: #3D1416;
+  --danger-text: #FF9A9D;
+  --text-on-accent: #FFFFFF;
+
+  --font-sans: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --fs-caption: 11px;
+  --lh-caption: 16px;
+  --fs-body: 13px;
+  --lh-body: 20px;
+  --fs-emph: 15px;
+  --lh-emph: 22px;
+  --fs-readout: 18px;
+  --lh-readout: 24px;
+  --fs-vfo: clamp(28px, 6cqi, 44px);
+  --lh-vfo: 1.1;
+
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 24px;
+  --sp-6: 32px;
+  --r-control: 6px;
+  --r-panel: 10px;
+  --r-pill: 999px;
+  --dur-fast: 120ms;
+  --dur-base: 180ms;
+  --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+  --z-sticky: 10;
+  --z-menu: 20;
+  --z-sheet: 30;
+  --z-toast: 40;
+  --z-tx-overlay: 50;
+  --control-min: 36px;
+  --control-min-coarse: 44px;
+  --control-pad-block: 6px;
+  --control-pad-inline: 10px;
+  --button-pad-inline: 12px;
+  --icon-size: 16px;
+  --icon-button-size: 20px;
+  --slider-track-size: 4px;
+  --slider-thumb-size: 16px;
+  --slider-thumb-size-coarse: 22px;
+  --overlay-backdrop: rgba(0, 0, 0, 0.58);
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+
+  --bg-app: #F3F5F8;
+  --bg-panel: #FFFFFF;
+  --bg-raised: #EEF1F5;
+  --bg-inset: #E3E7ED;
+  --bg-display: #061022;
+  --display-foreground: #E6EAF0;
+  --border: #DDE2E9;
+  --border-strong: #C5CCD6;
+  --text-primary: #131820;
+  --text-secondary: #4B5563;
+  --text-muted: #7B8594;
+  --accent: #1F6FEB;
+  --accent-bg: #E3EEFF;
+  --accent-text: #0B4DB5;
+  --ok: #1E8A5A;
+  --caution: #B7791F;
+  --caution-bg: #FDF1D8;
+  --caution-text: #7A4E0B;
+  --danger: #D1343A;
+  --danger-bg: #FDE3E4;
+  --danger-text: #9A1C21;
+  --overlay-backdrop: rgba(19, 24, 32, 0.42);
+}
+
+/* Compatibility bridge for the existing inline console CSS. Keep both theme
+   selectors: the old light overrides have higher specificity than plain :root. */
+:root,
+:root[data-theme="light"] {
+  --bg-0: var(--bg-app);
+  --bg-1: var(--bg-panel);
+  --bg-2: var(--bg-raised);
+  --bg-3: var(--bg-inset);
+  --card: var(--bg-panel);
+  --line: var(--border);
+  --line-strong: var(--border-strong);
+  --text: var(--text-primary);
+  --muted: var(--text-secondary);
+  --accent-warm: var(--accent);
+  --good: var(--ok);
+  --warn: var(--caution);
+  --shadow: transparent;
+  --sans: var(--font-sans);
+  --mono: var(--font-mono);
+  --display: var(--font-sans);
+  --control-desktop: 34px;
+  --control-touch: 44px;
+  --ptt-touch: 68px;
+  --header-height: 44px;
+
+  --bg-chassis: var(--bg-app);
+  --bg-workspace: var(--bg-panel);
+  --bg-control: var(--bg-inset);
+  --border-subtle: var(--border);
+  --border-active: var(--accent);
+  --font-ui: var(--font-sans);
+  --font-instrument: var(--font-mono);
+  --rx-cyan: var(--accent);
+  --vfo-blue: var(--accent);
+  --subrx-green: var(--ok);
+  --safe-green: var(--ok);
+  --warning-amber: var(--caution);
+  --tx-orange: var(--caution);
+  --fault-red: var(--danger);
+  --saturn-rx: var(--accent);
+  --saturn-tx: var(--caution);
+  --saturn-tx-keyed: var(--danger);
+  --saturn-caution: var(--caution);
+  --saturn-alarm: var(--danger);
+  --saturn-ok: var(--ok);
+
+  --theme-body-bg: var(--bg-app);
+  --theme-subtitle: var(--text-secondary);
+  --theme-command-border: var(--border);
+  --theme-command-bg: var(--bg-panel);
+  --theme-command-shadow: none;
+  --theme-cluster-border: var(--border);
+  --theme-cluster-bg: var(--bg-panel);
+  --theme-cluster-overlay: none;
+  --theme-secondary-deck-bg: var(--bg-raised);
+  --theme-deck-label: var(--text-secondary);
+  --theme-deck-frequency: var(--text-primary);
+  --theme-deck-frequency-secondary: var(--text-secondary);
+  --theme-freq-hover: var(--accent-bg);
+  --theme-freq-separator: var(--border-strong);
+  --theme-status-border: var(--border);
+  --theme-status-bg: var(--bg-raised);
+  --theme-status-ghost-bg: var(--bg-panel);
+  --theme-status-text: var(--text-secondary);
+  --theme-panel-bg: var(--bg-panel);
+  --theme-panel-border: var(--border);
+  --theme-panel-shadow: none;
+  --theme-panel-title: var(--text-primary);
+  --theme-panel-meta: var(--text-secondary);
+  --theme-field-bg: var(--bg-inset);
+  --theme-field-border: var(--border-strong);
+  --theme-metric-bg: var(--bg-raised);
+  --theme-scope-bg: var(--bg-display);
+  --theme-scope-shadow: none;
+  --theme-display-pill-border: var(--border-strong);
+  --theme-display-pill-bg: var(--accent-bg);
+  --theme-display-pill-text: var(--accent-text);
+  --theme-ruler-main: var(--text-on-accent);
+  --theme-display-shell-border: var(--border-strong);
+  --theme-display-shell-bg: var(--bg-display);
+  --theme-scope-stat-border: var(--border);
+  --theme-scope-stat-bg: var(--bg-raised);
+  --theme-scope-stat-value: var(--text-primary);
+  --theme-console-log-border: var(--border);
+  --theme-console-log-bg: var(--bg-inset);
+}

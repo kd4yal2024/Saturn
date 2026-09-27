@@ -1,0 +1,51 @@
+# Saturn Remote UI redesign decisions
+
+The owner's version 1.0 build sheet is the implementation authority. Record an exact chosen value here whenever it supplies a rule rather than a value. Decisions that require the owner remain open until answered; source conflicts are not silently resolved.
+
+## Phase 0 and Phase 1 boundary
+
+| Topic | Decision and reason | Status |
+| --- | --- | --- |
+| TX safety stop | Phase 0 stopped and reported because arm/PTT/MOX/release handlers live in the inline UI script. A later owner request to continue opens Phase 1, but TX behavior is held for Phase 3 safety review. Bridge watchdogs act on stale traffic only; they cannot substitute for immediate browser release. | Recorded |
+| Source branch | Work in the isolated UI redesign branch, based on published `origin/main`. Reconcile with published main at each phase boundary before changing the template, then verify the deploy provenance. Do not push or deploy from a stale checkout. | Chosen as team workflow |
+| Build system | Keep the existing Vite IIFE plus HTML template; no framework migration or new build system. | Existing architecture |
+| Fonts and icons | The Rust asset route serves only the existing JS bundle and Inter font, while the spec forbids backend edits. `styles/tokens.css`, four IBM Plex Latin-1 WOFF2 faces, and the Lucide sprite are embedded in the existing Vite IIFE. The build gate measured 116,382 encoded font/icon bytes against the 250,000-byte budget, with no extra CSS/font/SVG URL. | Phase 1 verified |
+| Terrain perspective, color and depth | Preserve deployed `9e650c9` behavior: perspective width `1 / (1 + perspective * z)` with default perspective 0.10, no depth-based coloring, performance/balanced/high tiers of 48/128/256 rows at 30/60/60 fps, user depth default 128 and range 8–256, and the 1.25-device-pixel resolvable-row limit. Section 11.3's fixed width/baseline, depth fade, and 64/48/28 rows with 128 cap conflict with that tested baseline. Ask the owner to judge geometry defaults after the Phase 4 side-by-side review. | Source conflict flagged; preserve behavior |
+| TX control migration | Keep existing arm/PTT/MOX/lock DOM nodes and IDs where possible; keep release logic in `setPtt`/`lockTx`. Test pointer and lifecycle releases before any Phase 3 move. This is a review direction, not authorization to alter TX logic now. | Proposed for Phase 3 |
+| Existing keyed-fault bug | Current `tx_fault` parsing emits both fault and release; release handling then renews the five-minute ready lease and clears the fault lock. Reproduced by two independent reviews. Fix and test on a separate safety branch before Phase 3; do not mix a TX behavior change into the presentation rebuild. | Confirmed; separate fix in progress |
+| Existing bands and reference | The current DOM has 12 visible band choices including FM, versus 13 in section 9. “Reference” is a VFO B status label, with no separate button. Preserve current behavior; owner confirmation of any unlisted bands was requested. | Pending owner response |
+| Typography | IBM Plex Sans/Mono in section 5.4 intentionally replaces Inter. Use only weights 400 and 500 and the specified scale. | Explicit spec |
+| Muted label contrast | The prescribed `--text-muted` reaches only 3.47:1 on dark raised surfaces and 3.42:1 on the light app background; even on panels it is 3.75:1 dark and 3.73:1 light. Section 13 requires 4.5:1 for 11px labels. Keep the exact palette values and use `--text-secondary` for all readable small labels, captions, and units; reserve muted for nonessential decoration. Audit rendered text on every surface in Phase 5, with display text checked separately against the fixed dark well. GoldMarsh and RubyMill concurred. | Team decision; build-sheet conflict flagged |
+| Theme migration | `saturn.ui.theme` stores Auto/Dark/Light. On first load, an existing `saturn.remote.theme` dark/light choice is honored; with neither key, use the sheet's Dark default. Auto tracks `prefers-color-scheme`; the legacy key continues to store the effective dark/light theme. Startup settings sync respects the device's saved UI preference, while deliberately applying a named profile still applies and persists its theme. | Chosen for Phase 1 |
+| Phase 1 CSS scope | Tokenize palette, typography, radii, shadows, and safe spacing while keeping current structural widths, heights, and breakpoints. Section 16 requires no layout change in Phase 1; remaining layout dimensions move to the exact tier/container system in Phase 2. | Chosen to preserve phase order |
+| Colormap | Define the seven-stop map once in a JS LUT module; WebGL views consume a LUT texture and Canvas 2D views consume the same array. Preserve Classic as a separate selectable LUT. | Chosen for Phase 4 |
+| Render fallback | Hi-Res 3D currently requires WebGL2. Canvas 2D fallback on context loss is new work specified by section 11.7, not an existing parity behavior. | Chosen for Phase 4 |
+| Settings scope | Radio and Transmit sections will say changes affect the radio immediately. Restore defaults will only cover UI preferences, never radio state. | Chosen for Phase 3 |
+| Phone default | Responsive console becomes default after phone-width parity is verified for quick actions, keypad, and panel layout. Separate Phone view stays available, and the operator's explicit choice persists per device. | Owner preference requested; team recommendation |
+| DSP main-screen defaults | Start with the DSP controls visible on the current main screen; keep advanced controls in Settings and expose pinning. | Owner preference requested; team recommendation |
+| Space-bar PTT | Preserve the existing hold-to-key action and first-press-to-arm behavior under the zero-feature-loss rule. | Existing behavior; owner preference requested |
+| Accessibility | TX transitions alone use assertive live announcements. Meter `aria-valuenow` uses S-units and `aria-valuetext` includes S-units and dBm. `engaging` must announce a key request in flight without claiming “On air.” | Chosen for Phase 3/5 |
+| TX visual states | Map by behavior and reason, not code-state name: code `disabled` → visual Locked; code `locked` with explicit `operator-lock` → visual Locked, but eligible never-armed or idle-expired → visual Disarmed with reconfirmation hint; code `armed` → visual Armed; code `engaging` → Armed color with distinct “Keying…” text; code `transmitting` only after bridge keyed → visual On air; code `fault` → visual Fault. Preserve the ready countdown, idle expiry, reason strings, and release during engaging. | Proposed for Phase 3 safety review |
+| Legacy keyed color selectors | Existing `.tx-zone[data-tx-state="keyed"]`, top meter TX line, and keyed operator detail styles still mix caution and danger. `--tx-orange` is also used for selecting the TX control context, so remapping that alias globally would mislabel a nontransmitting state. Fix the specific keyed selectors during Phase 3 visual-state work and verify all five states together. | Phase 3 review item |
+| Fault banner precedence | The separate TX fault lock patch deliberately keeps a fault latched through release and disconnect until successful manual Arm. A later disconnect or role/RF block still prevents arming, but its reason may be masked by the older fault banner. Phase 3 may separate the mandatory re-arm latch from the currently actionable reason without weakening the gate. | Nonblocking follow-up from RubyMill and GoldMarsh review |
+
+## Owner questions
+
+- Phase 2: owner confirmation of the recommended responsive-console default. Both views stay available.
+- Phase 3: owner confirmation of default pinned DSP controls, existing Space-bar PTT, and any band choices beyond the 12 visible today.
+- Phase 4: judge 3D depth/tilt/height and Default versus Classic colormap after a side-by-side build.
+
+## Validation rules carried forward
+
+- Every existing control, handler, query parameter, and storage key has a Settings home and a migration row before Phase 3 is accepted.
+- The `terrain-canvas`, `view-3d`, and `TerrainRenderer` deployment checks remain meaningful; any rename updates the checks in the same phase commit.
+- Measure display budgets separately for LAN raw IQ and WAN server spectrum rows. Record warmed-up heap growth and browser-specific instrumentation in `perf.md`.
+- The Phase 3 TX release matrix is an automated acceptance gate: pointerup, pointercancel, mouse pointerleave, lost pointer capture, blur, hidden tab, pagehide, Escape, and socket loss. It must verify key/mic state is off, operator fault text survives, and release while `engaging` cannot later become a keyed confirmation.
+- The current five-minute TX-ready countdown, idle-timeout behavior, and reason strings `idle-timeout`, `operator-lock`, `rf-disabled`, `viewer`, `role-pending`, and `bridge-sync` need migration rows.
+
+## Phase 1 acceptance evidence
+
+- `npm run typecheck`, `npm test` (589/589), `npm run build`, and `npm run check:seam` (208 API entries, 26 inline scripts) passed.
+- Chrome parsed the five template style blocks in dark and light themes. The full existing layout validator passed 24 scenarios; after final palette refinements, targeted phone and desktop scenarios passed again.
+- The synthetic WebGL2 terrain validator passed after its passband assertion was changed to measure restrained overlay opacity rather than require the pre-redesign cyan color. It verified mode cycling, history, tuning, passband coordinates, context-loss recovery, and no TX command from display release. This is a software renderer check, not a hardware performance claim.
+- The template and CSS contain no external script, stylesheet, or font URL. The four fonts, token CSS, primitives, icon sprite, and licenses are in the served IIFE.

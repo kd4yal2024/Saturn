@@ -1,3 +1,8 @@
+import tokenCss from '../styles/tokens.css?inline';
+import primitiveCss from '../styles/primitives.css?inline';
+import iconSprite from '../assets/icons/sprite.svg?raw';
+import plexLicense from '../assets/fonts/OFL.txt?raw';
+import iconLicense from '../assets/icons/LICENSE.txt?raw';
 import { cleanupNormalized, waterfallCleanupNormalized } from './dsp/display-cleanup';
 import { SpectrumHistory } from './dsp/spectrum-history';
 import { TerrainRenderer } from './render/terrain';
@@ -447,6 +452,34 @@ const api = {
   TX_POWER_ATTACK_PER_SEC, TX_POWER_RELEASE_PER_SEC, TX_POWER_PEAK_HOLD_MS, TX_POWER_PEAK_DROP_PER_SEC,
   SWR_ATTACK_PER_SEC, SWR_RELEASE_PER_SEC,
 };
+
+// The existing page serves one library script. Install the presentation assets
+// synchronously when it runs, before the following inline app script starts.
+function installUiFoundation(): void {
+  if (typeof document === 'undefined') return;
+
+  if (!document.getElementById('saturn-ui-foundation')) {
+    const style = document.createElement('style');
+    style.id = 'saturn-ui-foundation';
+    style.textContent = `${tokenCss}\n${primitiveCss}`;
+    document.head.append(style);
+  }
+
+  const mountSprite = () => {
+    if (!document.body || document.getElementById('saturn-ui-icon-sprite')) return;
+    document.body.insertAdjacentHTML('afterbegin', iconSprite);
+    // Keep the complete third-party notices with the delivered single-file UI.
+    const notices = document.createElement('template');
+    notices.id = 'saturn-ui-asset-notices';
+    notices.textContent = `IBM Plex fonts (SIL OFL 1.1):\n${plexLicense}\nLucide icons (ISC/MIT):\n${iconLicense}`;
+    document.body.append(notices);
+  };
+
+  if (document.body) mountSprite();
+  else document.addEventListener('DOMContentLoaded', mountSprite, { once: true });
+}
+
+installUiFoundation();
 
 export const SaturnRemoteNext = api;
 
