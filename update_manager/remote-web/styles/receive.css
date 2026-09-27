@@ -1,0 +1,185 @@
+/* Receive panel presentation. Radio and audio behavior stays in the existing handlers. */
+:root:not([data-layout="phone"]) .app .audio-control-strip {
+  margin: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--r-panel);
+  background: var(--bg-panel);
+  box-shadow: none;
+}
+
+:root:not([data-layout="phone"]) .app .audio-control-strip > .panel-head {
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-3) var(--sp-4);
+  border-bottom: 1px solid var(--border);
+}
+
+:root:not([data-layout="phone"]) .app .audio-control-strip .panel-title {
+  color: var(--text-primary);
+  font-size: var(--fs-emph);
+  line-height: var(--lh-emph);
+  font-weight: 500;
+}
+
+:root:not([data-layout="phone"]) .app .audio-control-strip .panel-meta {
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: var(--fs-caption);
+  line-height: var(--lh-caption);
+  font-variant-numeric: tabular-nums;
+}
+
+:root:not([data-layout="phone"]) .app .audio-control-strip .audio-control-status {
+  gap: var(--sp-1);
+  justify-content: flex-end;
+}
+
+:root:not([data-layout="phone"]) .app .audio-control-strip .rx-audio-toggle {
+  min-height: var(--control-min);
+  padding: var(--control-pad-block) var(--button-pad-inline);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-control);
+  background: transparent;
+  color: var(--text-primary);
+  font-size: var(--fs-body);
+  line-height: var(--lh-body);
+}
+
+:root:not([data-layout="phone"]) .app .audio-control-strip > .panel-body {
+  padding: var(--sp-2) var(--sp-4) var(--sp-3);
+}
+
+:root:not([data-layout="phone"]) .app .audio-control-grid {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0;
+}
+
+:root:not([data-layout="phone"]) .app .audio-control {
+  gap: var(--sp-2);
+  padding: var(--sp-3) 0;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  border-radius: 0;
+  background: transparent;
+}
+
+:root:not([data-layout="phone"]) .app .audio-control:last-child {
+  border-bottom: 0;
+}
+
+:root:not([data-layout="phone"]) .app .audio-control-title {
+  gap: var(--sp-2);
+  min-height: var(--lh-body);
+}
+
+:root:not([data-layout="phone"]) .app .audio-control-title .label,
+:root:not([data-layout="phone"]) .app .audio-health-label {
+  color: var(--text-secondary);
+  font-size: var(--fs-caption);
+  line-height: var(--lh-caption);
+  font-weight: 400;
+}
+
+:root:not([data-layout="phone"]) .app .audio-control-title .mono,
+:root:not([data-layout="phone"]) .app .audio-health-value {
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: var(--fs-caption);
+  line-height: var(--lh-caption);
+  font-variant-numeric: tabular-nums;
+}
+
+:root:not([data-layout="phone"]) .app .exact-slider-value {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--control-min);
+  cursor: text;
+  touch-action: manipulation;
+}
+
+:root:not([data-layout="phone"]) .app .exact-slider-value[hidden] {
+  display: none;
+}
+
+:root:not([data-layout="phone"]) .app .exact-slider-value:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+:root:not([data-layout="phone"]) .app .exact-slider-input {
+  width: min(100%, var(--readout-entry-width));
+  min-height: var(--control-min);
+  padding: var(--control-pad-block) var(--control-pad-inline);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-control);
+  background: var(--bg-raised);
+  color: var(--text-primary);
+  font: 400 var(--fs-body)/var(--lh-body) var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+:root:not([data-layout="phone"]) .app .exact-slider-input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+:root:not([data-layout="phone"]) .app .audio-control .squelch-title {
+  margin-top: var(--sp-2);
+}
+
+:root:not([data-layout="phone"]) .app .audio-health-grid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--sp-1);
+}
+
+:root:not([data-layout="phone"]) .app .audio-health-cell {
+  display: grid;
+  align-content: start;
+  min-width: 0;
+  padding: var(--sp-2) var(--sp-1);
+  border: 1px solid var(--border);
+  border-radius: var(--r-control);
+  background: var(--bg-raised);
+}
+
+:root:not([data-layout="phone"]) .app .audio-health-value {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+:root:not([data-layout="phone"]) .app .audio-buffer-meter {
+  grid-column: 1 / -1;
+  height: var(--slider-track-size);
+  border-radius: var(--r-pill);
+  background: var(--bg-inset);
+}
+
+:root:not([data-layout="phone"]) .app .audio-buffer-meter > span {
+  background: var(--ok);
+}
+
+:root:not([data-layout="phone"]) .app .audio-buffer-meter[data-tone="warn"] > span {
+  background: var(--caution);
+}
+
+:root:not([data-layout="phone"]) .app .audio-control .nr-grid {
+  gap: var(--sp-1);
+}
+
+:root:not([data-layout="phone"]) .app .audio-control .nr-grid > button,
+:root:not([data-layout="phone"]) .app .audio-control .eq-enable-btn {
+  min-height: var(--control-min);
+}
+
+@media (pointer: coarse) {
+  :root:not([data-layout="phone"]) .app .exact-slider-value,
+  :root:not([data-layout="phone"]) .app .exact-slider-input {
+    min-height: var(--control-min-coarse);
+  }
+  :root:not([data-layout="phone"]) .app .audio-control-strip .rx-audio-toggle,
+  :root:not([data-layout="phone"]) .app .audio-control .nr-grid > button,
+  :root:not([data-layout="phone"]) .app .audio-control .eq-enable-btn {
+    min-height: var(--control-min-coarse);
+  }
+}

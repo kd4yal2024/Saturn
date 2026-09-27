@@ -706,3 +706,31 @@
     bottom: calc(var(--legacy-dock-clearance) + var(--legacy-quickbar-clearance) + env(safe-area-inset-bottom));
   }
 }
+
+/* The responsive console has its own phone disclosure state. The separate
+   Phone view keeps its established panel state and controls. */
+@container app (max-width: 599px) {
+  :root:not([data-layout="phone"]) .app [data-phone-panel="audio"] > .panel-head > .panel-toggle-btn,
+  :root:not([data-layout="phone"]) .app [data-phone-panel="tx"] > .panel-head > .panel-toggle-btn {
+    display: inline-flex;
+    min-height: var(--control-min-coarse);
+    padding: var(--control-pad-block) var(--control-pad-inline);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--r-control);
+    background: var(--bg-raised);
+    color: var(--text-secondary);
+    font: 400 var(--fs-body)/var(--lh-body) var(--font-sans);
+    letter-spacing: normal;
+  }
+
+  :root:not([data-layout="phone"]) .app [data-phone-panel="audio"][data-phone-collapsed="true"] > .panel-body,
+  :root:not([data-layout="phone"]) .app [data-phone-panel="tx"][data-phone-collapsed="true"] > .panel-body {
+    display: none;
+  }
+}
+/* The connection action has one active surface per state. */
+.app #go-live-btn[hidden],
+.app #system-go-live-btn[hidden],
+.app #system-go-offline-btn[hidden] {
+  display: none;
+}

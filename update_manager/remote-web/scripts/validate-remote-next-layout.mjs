@@ -75,6 +75,11 @@ function validationScript(scenario) {
 (() => {
   const scenario = ${JSON.stringify(scenario)};
   const expectedPills = ${JSON.stringify(expectedPills)};
+  const expectedVisiblePills = scenario.layout === 'phone' || scenario.width >= 1440
+    ? expectedPills
+    : scenario.width < 960
+      ? ['operator-conn-pill']
+      : expectedPills.filter((id) => !['operator-rxtx-pill', 'operator-rf-pill', 'operator-transport-pill'].includes(id));
   function round(value) {
     return Math.round(value * 100) / 100;
   }
@@ -263,17 +268,18 @@ function validationScript(scenario) {
     const stripRect = strip ? rectFor(strip) : null;
     const boxes = pills.map((element) => ({ id: element.id, rect: rectFor(element), visible: visible(element) }));
     const missing = expectedPills.filter((id) => !document.getElementById(id));
-    const invisible = boxes.filter((box) => !box.visible).map((box) => box.id);
+    const invisible = boxes.filter((box) => expectedVisiblePills.includes(box.id) && !box.visible).map((box) => box.id);
     const geometryOverlaps = [];
-    for (let i = 0; i < boxes.length; i += 1) {
-      for (let j = i + 1; j < boxes.length; j += 1) {
-        if (overlap(boxes[i].rect, boxes[j].rect)) {
-          geometryOverlaps.push([boxes[i].id, boxes[j].id]);
+    const visibleBoxes = boxes.filter((box) => box.visible);
+    for (let i = 0; i < visibleBoxes.length; i += 1) {
+      for (let j = i + 1; j < visibleBoxes.length; j += 1) {
+        if (overlap(visibleBoxes[i].rect, visibleBoxes[j].rect)) {
+          geometryOverlaps.push([visibleBoxes[i].id, visibleBoxes[j].id]);
         }
       }
     }
     const stripOverflow = stripRect
-      ? boxes
+      ? visibleBoxes
           .filter((box) =>
             box.rect.left < stripRect.left - 1 ||
             box.rect.top < stripRect.top - 1 ||
@@ -282,7 +288,7 @@ function validationScript(scenario) {
           )
           .map((box) => box.id)
       : expectedPills;
-    const viewportOverflow = boxes
+    const viewportOverflow = visibleBoxes
       .filter((box) => box.rect.left < -1 || box.rect.top < -1 || box.rect.right > window.innerWidth + 1)
       .map((box) => box.id);
     const layout = document.documentElement.dataset.layout || "";

@@ -2,6 +2,16 @@
 
 The owner's version 1.0 build sheet is the implementation authority. Record an exact chosen value here whenever it supplies a rule rather than a value. Decisions that require the owner remain open until answered; source conflicts are not silently resolved.
 
+## Current Phase 3 edit ownership
+
+| Owner | Shared worktree scope |
+| --- | --- |
+| SilverForge | Receive panel, `styles/receive.css`, integration and validation |
+| RubyMill | Settings Interface body and functions, `styles/settings.css`, layout preferences and tests |
+| GoldMarsh | Transmit panel markup, `updateTxZone` presentation, `styles/panels.css`, TX tests (audit complete; no new edits planned) |
+
+Use targeted patches in the shared template and recheck the touched region before editing. Agent Mail is pull-based, so check it before declaring a handoff complete.
+
 ## Phase 0 and Phase 1 boundary
 
 | Topic | Decision and reason | Status |
@@ -21,7 +31,17 @@ The owner's version 1.0 build sheet is the implementation authority. Record an e
 | Colormap | Define the seven-stop map once in a JS LUT module; WebGL views consume a LUT texture and Canvas 2D views consume the same array. Preserve Classic as a separate selectable LUT. | Chosen for Phase 4 |
 | Render fallback | Hi-Res 3D currently requires WebGL2. Canvas 2D fallback on context loss is new work specified by section 11.7, not an existing parity behavior. | Chosen for Phase 4 |
 | Settings scope | Radio and Transmit sections will say changes affect the radio immediately. Restore defaults will only cover UI preferences, never radio state. | Chosen for Phase 3 |
-| Phone default | Responsive console becomes default after phone-width parity is verified for quick actions, keypad, and panel layout. Separate Phone view stays available, and the operator's explicit choice persists per device. | Owner preference requested; team recommendation |
+| Restore defaults scope | Per-section and global restore remove only the sixteen `saturn.ui.*` presentation keys listed in §15, then apply the live Dark theme, meter Signal view, responsive phone disclosure, and default per-tier layout as relevant. Sections with no UI preference key have no restore action. Legacy `saturn.remote.*` radio/device state, frequency, band, TX state and profile data are left intact. | Chosen for Phase 3 |
+| Settings and TX safety | Section 8.11 asks for a Settings path to every feature, while sections 0 and 10 forbid a new keying path. Present live Arm/PTT/MOX state and a navigation link to the original safety controls inside Settings; do not clone PTT or dispatch a synthetic keying event. Mirror only non-keying TX preferences. This interpretation is under GoldMarsh/RubyMill safety review. | Conflict flagged for Phase 3 review |
+| Settings navigation width | Use a 128px section list inside the exact 420px desktop side sheet. At 600–959px use the specified 60% width, and under 600px make it full screen with a horizontal section list. The fixed values live in tokens.css. | Chosen for Phase 3 |
+| Settings section persistence | Store the new 11-section Settings selection in `saturn.ui.settings.lastSection`; continue reading and writing the legacy seven-panel selection only through `saturn.remote.setupPanel`. An index row navigates to the one original DOM control and returns through a Back button, preserving existing handlers and avoiding duplicate IDs. Direct non-keying counterparts and per-tier pinning are implemented. | Phase 3 implemented |
+| Receive exact slider entry | Use a 96px numeric input beside the six Receive slider value readouts when opened by double-click, double-tap, Enter, or Space. Commit through each original slider's existing input/change handlers; cancel on Escape or blur. The value readout remains in the DOM so the existing state update path keeps working. | Chosen for Phase 3 |
+| Phone views | Owner explicitly wants both the responsive console and the separate Phone view. Keep the Phone control and expose the choice in Interface settings. Which view opens first on a phone is still pending the owner's answer; preserve existing default until then. | Owner confirmed both views on 2026-09-27; default pending |
+| Main-screen layout scope | `saturn.ui.layout.phone` configures the responsive console below 600px. The separate legacy Phone view keeps its existing panel and dock behavior under the build sheet's Phone-view non-goal; pin and reorder choices do not modify that view. A pinned advanced Receive setting appears as a live native control in the responsive console and forwards through its original handler. Pinned overlays, network and system actions, and other non-native controls open their original Settings location. | Chosen for Phase 3; reviewed with RubyMill |
+| Toolbar tier defaults | Keep Span and Center available on the responsive phone toolbar; put AVG, Peak, Tune Peak, Stay Awake and Lock in Settings by default there. Tablet keeps Zoom in its toolbar, matching §7.4. The original controls remain in the DOM and Settings routes them through their existing handlers. | Chosen for Phase 3 after browser default-visibility probe |
+| Phone first viewport | Place the existing Mode and Band choices in compact single-row panels after VFO and meter, before the display. The More button and segment row each retain 44px touch height. Move the redundant signal-chain caption and receiver-state line into their existing Radio/Settings and app-bar routes on phone. This brings the 3D canvas into the first viewport without changing tuning handlers or reordering the display ahead of Mode/Band. | Chosen for Phase 3 after 390px browser measurement |
+| Phone meter extras | Meter type and Avg/Peak remain available from Settings and can be pinned onto the phone main screen. Their desktop and tablet defaults remain visible. The analog meter stays optional. | Chosen for Phase 3 |
+| Tablet display space | At 600–959px, the existing Go Live control is reached through System and Settings is in the app bar, so the duplicate launch row does not consume the first screen. The display caption remains in Settings, while the ruler's three axis labels use one row. The original nodes and handlers stay intact. | Chosen for Phase 3 after 768px browser measurement |
 | DSP main-screen defaults | Start with the DSP controls visible on the current main screen; keep advanced controls in Settings and expose pinning. | Owner preference requested; team recommendation |
 | Space-bar PTT | Preserve the existing hold-to-key action and first-press-to-arm behavior under the zero-feature-loss rule. | Existing behavior; owner preference requested |
 | Accessibility | TX transitions alone use assertive live announcements. Meter `aria-valuenow` uses S-units and `aria-valuetext` includes S-units and dBm. `engaging` must announce a key request in flight without claiming “On air.” | Chosen for Phase 3/5 |
@@ -29,7 +49,7 @@ The owner's version 1.0 build sheet is the implementation authority. Record an e
 | Legacy keyed color selectors | Existing `.tx-zone[data-tx-state="keyed"]`, top meter TX line, and keyed operator detail styles still mix caution and danger. `--tx-orange` is also used for selecting the TX control context, so remapping that alias globally would mislabel a nontransmitting state. Fix the specific keyed selectors during Phase 3 visual-state work and verify all five states together. | Phase 3 review item |
 | RX status dot | The RX operator pill indicates receiver mode, not signal presence or healthy connection. Use neutral `--text-secondary` for its dot; keep green for connection health and blue for selection. This resolves the alias collision RubyMill found without changing the meaning of `--rx-cyan` in other legacy controls. | Team decision, applied in Phase 2 |
 | Fault banner precedence | The separate TX fault lock patch deliberately keeps a fault latched through release and disconnect until successful manual Arm. A later disconnect or role/RF block still prevents arming, but its reason may be masked by the older fault banner. Phase 3 may separate the mandatory re-arm latch from the currently actionable reason without weakening the gate. | Nonblocking follow-up from RubyMill and GoldMarsh review |
-| Phase 2 shell | Keep `.app` as the named inline-size query container and add one `.app-shell` child for the responsive grid. Reuse existing control nodes and IDs. The legacy `data-layout="phone"` view remains separate and available; the new console is exercised at phone width without changing the default until owner preference and phone parity are settled. | Phase 2 in progress |
+| Phase 2 shell | Keep `.app` as the named inline-size query container and add one `.app-shell` child for the responsive grid. Reuse existing control nodes and IDs. The legacy `data-layout="phone"` view remains separate and available; the new console is exercised at phone width without changing the default until owner preference and phone parity are settled. | Phase 2 committed as `9ccb91a` |
 | Forced Phone view width | Center the separate Phone view in a 560px maximum column even when selected from a wide viewport. Keep its navigation dock and transmit bar centered to the same column. | Chosen for Phase 2 |
 | Display workspace minima | Keep the existing adjustable split ratio. At phone console width, enforce 180px 3D and 80px waterfall minima; at tablet and larger widths, use 240px and 120px. Preserve the separate Phone view's existing minima. | Chosen for Phase 2 |
 | Transitional desktop height | Keep all legacy panel internals visible during Phase 2, which makes the desktop console vertically scrollable. Treat the older validator's single 1920px page-bottom check as a documented warning for the new `.app-shell`; continue to fail clipped text, inaccessible drawer controls, and horizontal overflow. Phase 3 panel compaction should restore an above-the-fold display and operations bar. | Chosen for Phase 2; revisit in Phase 3 |
@@ -42,9 +62,19 @@ The owner's version 1.0 build sheet is the implementation authority. Record an e
 
 ## Owner questions
 
-- Phase 2: owner confirmation of the recommended responsive-console default. Both views stay available.
+- Phase 2: owner confirmed both views stay available; the first view shown on a phone remains an open choice.
 - Phase 3: owner confirmation of default pinned DSP controls, existing Space-bar PTT, and any band choices beyond the 12 visible today.
 - Phase 4: judge 3D depth/tilt/height and Default versus Classic colormap after a side-by-side build.
+
+## Decision register
+
+Standing owner decisions, restated in several messages this session; reference by row instead of re-explaining. Each is restated in the shared thread until the owner answers, not re-litigated by the team.
+
+| Decision | Recommendation | Who decides | What it blocks |
+| --- | --- | --- | --- |
+| Push the unpushed local `main` commits to `origin/main` | Push — none change shipped source (RX Opus docs/tooling notes, the Phase 3 TX release-matrix test, the merged TX fault-lock fix); it is bookkeeping, not a behavior change | Owner | Nothing directly; `origin/main` stays behind local history until answered. Owner said "not yet" on 2026-09-27. |
+| Deploy the merged TX fault-lock safety fix (`57e34e5`) to the radio | Deploy — reviewed independently by two agents, 42+ focused tests, fixes a confirmed live bug where a TX fault silently re-arms with no visible warning | Owner | The radio keeps running with the known bug until deployed. Owner deferred on 2026-09-27; still merged and untested-on-hardware. |
+| RX audio Phase 1 (WebRTC) gate | Undecided; Phase 0 (Opus over the existing transport) is shipped and soak-verified. Decide whether to pursue Phase 1 at all, and if so, what WAN-like test satisfies the gate | Owner | Any further RX-audio work; the team holds here pending an answer, not blocked on capability. |
 
 ## Validation rules carried forward
 
@@ -68,3 +98,11 @@ The owner's version 1.0 build sheet is the implementation authority. Record an e
 - The older 24-scenario layout validator passed, including tablet status text and desktop Operations Close visibility. It records one explicit Phase 2 warning at desktop HD: the page bottom is about 1871px in a 937px viewport while legacy panel internals remain full size. Phase 3 panel compaction will revisit that height.
 - The full browser suite passed 598 tests after integrating the TX host; typecheck, seam (208 API entries, 27 inline script blocks), production build, asset budget (116,195/250,000 encoded font/icon bytes), and synthetic terrain validator passed. The terrain run used SwiftShader and is not hardware performance evidence.
 - A read-only safety audit found the original Arm/PTT nodes and handlers intact, with one startup right-rail move before binding and CSS-only breakpoint changes afterward. The release paths were unchanged. Cross-viewport pointer-capture QA and the visibility of hints/countdown in collapsed Transmit details remain Phase 3 review items.
+
+## Phase 3 acceptance evidence
+
+- The app bar, VFO, meter, band and mode controls, Receive, Transmit, radio path, and Operations use the Phase 3 panel styling while retaining the original radio and safety handlers. The original Arm, Hold PTT, MOX, and Lock nodes remain the only transmit controls; Settings routes to them without creating another keying path.
+- Settings has 11 sections, search with old-name synonyms, direct counterparts for safe native controls, live readout mirrors, and links to original actions. Main-screen pinning is persisted per tier; six safety entries cannot be hidden. Toolbar reordering changes the original non-TX nodes and defers a move while a pointer or focus is active. Section and global restore clear only presentation preferences after confirmation.
+- The generated migration inventory indexes 236 entries and explicitly excludes 55 duplicate or navigation controls added since discovery. The strict parity audit covers all 274 discovery rows: 169 identified controls indexed, 31 identified controls explicitly excluded with reasons, and all 74 anonymous rows mapped. No existing feature remains unclassified. A browser route sweep checks the registry entries with DOM targets at 390px and 1280px, including event forwarding for safe native proxies and navigation visibility; it leaves destructive, transmit, and live-radio actions unactivated in the offline fixture.
+- The 20-scenario responsive browser matrix covers the specified width tiers in both themes and the separate Phone view. Focused probes cover Settings search and routes, default toolbar visibility, pinning and reorder persistence, UI-only restore, System Go Offline confirmation, eight formerly pending controls, and the TX visual and release paths. A touch-emulated 390×844 runtime showed 120px of 3D canvas above the sticky TX bar, with both More controls 44px high and touch-operable. The full unit suite passes 662 tests; typecheck, production build, asset budget, template seam, migration drift check, and strict feature parity check pass.
+- Browser validation uses an offline Chromium fixture. Hardware radio actions and visual quality across Firefox, Safari, iPadOS, Android, and iOS remain for the final QA pass. Owner choices for the initial phone view, default DSP pins, full band list, and Space-bar PTT were asked and remain open; current behavior is preserved until answered.

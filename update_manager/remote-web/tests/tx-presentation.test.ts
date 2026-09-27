@@ -2,6 +2,10 @@ import { describe, expect, it } from 'vitest';
 import {
   txActionAvailability,
   txControlPresentationState,
+  txVisualState,
+  TX_VISUAL_STATE_BADGE_TEXT,
+  TX_VISUAL_STATE_ANNOUNCEMENT,
+  type TxVisualState,
 } from '../src/ui/tx-presentation';
 
 const base = {
@@ -57,5 +61,43 @@ describe('txActionAvailability', () => {
     expect(txActionAvailability('transmitting', 'ptt').ptt).toBe(true);
     expect(txActionAvailability('transmitting', 'ptt').mox).toBe(false);
     expect(txActionAvailability('engaging', 'mox').mox).toBe(true);
+  });
+});
+
+describe('txVisualState', () => {
+  it('maps code disabled to visual Locked regardless of reason', () => {
+    expect(txVisualState('disabled', '')).toBe('locked');
+    expect(txVisualState('disabled', 'rf-disabled')).toBe('locked');
+  });
+
+  it('splits code locked on reason: operator-lock stays Locked, everything else is Disarmed', () => {
+    expect(txVisualState('locked', 'operator-lock')).toBe('locked');
+    expect(txVisualState('locked', 'idle-timeout')).toBe('disarmed');
+    expect(txVisualState('locked', '')).toBe('disarmed');
+  });
+
+  it('passes armed, engaging, transmitting, and fault through unchanged', () => {
+    expect(txVisualState('armed', '')).toBe('armed');
+    expect(txVisualState('engaging', '')).toBe('engaging');
+    expect(txVisualState('transmitting', '')).toBe('transmitting');
+    expect(txVisualState('fault', '')).toBe('fault');
+  });
+
+  it('keeps engaging visually distinct from armed', () => {
+    expect(TX_VISUAL_STATE_BADGE_TEXT.engaging).not.toBe(TX_VISUAL_STATE_BADGE_TEXT.armed);
+    expect(TX_VISUAL_STATE_BADGE_TEXT.engaging.toLowerCase()).not.toContain('on air');
+  });
+
+  it('never lets engaging claim "on air"', () => {
+    expect(TX_VISUAL_STATE_ANNOUNCEMENT.engaging.toLowerCase()).not.toContain('on air');
+    expect(TX_VISUAL_STATE_ANNOUNCEMENT.transmitting.toLowerCase()).toContain('on air');
+  });
+
+  it('has badge and announcement text for every visual state, with no empty strings', () => {
+    const states: TxVisualState[] = ['locked', 'disarmed', 'armed', 'engaging', 'transmitting', 'fault'];
+    for (const s of states) {
+      expect(TX_VISUAL_STATE_BADGE_TEXT[s]).toBeTruthy();
+      expect(TX_VISUAL_STATE_ANNOUNCEMENT[s]).toBeTruthy();
+    }
   });
 });

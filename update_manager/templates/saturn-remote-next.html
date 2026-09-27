@@ -1138,9 +1138,12 @@
       color: var(--saturn-rx);
     }
 
-    .operator-detail-row[data-tone="tx"] .operator-detail-value,
-    .operator-detail-row[data-tone="keyed"] .operator-detail-value {
+    .operator-detail-row[data-tone="tx"] .operator-detail-value {
       color: var(--saturn-tx);
+    }
+
+    .operator-detail-row[data-tone="keyed"] .operator-detail-value {
+      color: var(--saturn-alarm);
     }
 
     .operator-detail-row[data-tone="warn"] .operator-detail-value {
@@ -2071,9 +2074,9 @@
     }
 
     .tx-zone[data-tx-state="keyed"] {
-      border-color: color-mix(in srgb, var(--caution) 72%, transparent);
+      border-color: color-mix(in srgb, var(--danger) 72%, transparent);
       background:
-        linear-gradient(135deg, color-mix(in srgb, var(--caution) 28%, transparent), color-mix(in srgb, var(--danger) 18%, transparent)),
+        linear-gradient(135deg, color-mix(in srgb, var(--danger) 28%, transparent), color-mix(in srgb, var(--caution) 12%, transparent)),
         color-mix(in srgb, var(--bg-inset) 88%, transparent);
       box-shadow: none;
     }
@@ -3891,9 +3894,9 @@
     }
 
     .top-meter-bank[data-operating-state="tx"] .instrument-state-line {
-      border-color: color-mix(in srgb, var(--caution) 48%, transparent);
-      color: var(--tx-orange);
-      background: color-mix(in srgb, var(--danger) 8%, transparent);
+      border-color: color-mix(in srgb, var(--danger) 48%, transparent);
+      color: var(--danger);
+      background: color-mix(in srgb, var(--danger) 12%, transparent);
     }
 
     .top-meter-bank[data-operating-state="tx"] .instrument-state-line::before {
@@ -4711,7 +4714,7 @@
     }
     .tx-zone[data-tx-state="locked"] { border-color: color-mix(in srgb, var(--caution) 45%, transparent); }
     .tx-zone[data-tx-state="armed"] { border-color: var(--warning-amber); }
-    .tx-zone[data-tx-state="keyed"] { border-color: var(--tx-orange); }
+    .tx-zone[data-tx-state="keyed"] { border-color: var(--danger); }
     .tx-zone[data-tx-state="fault"] { border-color: var(--fault-red); }
     .tx-zone[data-tx-state="disabled"] { border-color: color-mix(in srgb, var(--danger) 30%, transparent); }
     .tx-ptt-primary { min-height: 54px; }
@@ -6140,6 +6143,7 @@
     }
 
     .header-diagnostics-menu #static-wsdiag-marker,
+    .header-diagnostics-menu #system-go-live-btn,
     .header-diagnostics-menu #static-wsdiag-btn,
     .header-diagnostics-menu #static-wsdiag-copy-btn,
     .header-diagnostics-menu #saturn-manage-home,
@@ -6678,6 +6682,8 @@
 <body>
   <div class="page console-page app">
     <div class="app-shell">
+    <div id="tx-on-air-bar" aria-hidden="true" hidden></div>
+    <div id="tx-state-live" class="sr-only" role="status" aria-live="assertive" aria-atomic="true"></div>
     <header class="console-header">
       <div>
         <div class="kicker">Saturn G2</div>
@@ -6697,8 +6703,10 @@
           <summary class="btn ghost" aria-label="Open system and diagnostic tools">System</summary>
           <div class="header-diagnostics-menu">
             <span class="status-chip ghost" id="static-wsdiag-marker">Diag loading</span>
+            <button class="btn primary" id="system-go-live-btn" type="button">Go Live</button>
             <button class="btn ghost" id="static-wsdiag-btn" type="button">WS Probe</button>
             <button class="btn ghost" id="static-wsdiag-copy-btn" type="button">Copy Log</button>
+            <button class="btn ghost" id="system-go-offline-btn" type="button" hidden>Go offline</button>
             <a class="nav-link" id="saturn-manage-home" href="#" title="Open the Saturn Go management UI">Saturn Go</a>
             <a class="nav-link" id="saturn-manage-monitor" href="#" title="Open system monitoring">Monitor</a>
           </div>
@@ -6708,6 +6716,57 @@
         <button class="btn ghost" id="theme-btn" type="button">Theme: Dark</button>
         <button class="btn ghost" id="header-setup-btn" type="button" aria-label="Open Saturn Remote settings" aria-controls="setup-menu" aria-expanded="false" title="Settings">&#9881;</button>
       </div>
+    <section class="operator-state-strip" aria-label="Operator state">
+      <div class="operator-pill" id="operator-conn-pill" data-tone="warn" role="button" tabindex="0" aria-haspopup="dialog" aria-controls="operator-detail-overlay">
+        <div>
+          <span class="operator-pill-label">Connection</span>
+          <span class="operator-pill-value" id="operator-conn-value">Idle</span>
+        </div>
+      </div>
+      <div class="operator-pill" id="operator-owner-pill" data-tone="rx" role="button" tabindex="0" aria-haspopup="dialog" aria-controls="operator-detail-overlay">
+        <div>
+          <span class="operator-pill-label">Ownership</span>
+          <span class="operator-pill-value" id="operator-owner-value">Operator</span>
+        </div>
+      </div>
+      <div class="operator-pill" id="operator-rxtx-pill" data-tone="rx" role="button" tabindex="0" aria-haspopup="dialog" aria-controls="operator-detail-overlay">
+        <div>
+          <span class="operator-pill-label">RX/TX</span>
+          <span class="operator-pill-value" id="operator-rxtx-value">RX</span>
+        </div>
+      </div>
+      <div class="operator-pill" id="operator-rf-pill" data-tone="warn" role="button" tabindex="0" aria-haspopup="dialog" aria-controls="operator-detail-overlay">
+        <div>
+          <span class="operator-pill-label">RF State</span>
+          <span class="operator-pill-value" id="operator-rf-value">TX gated</span>
+        </div>
+      </div>
+      <div class="operator-pill" id="operator-transport-pill" data-tone="rx" role="button" tabindex="0" aria-haspopup="dialog" aria-controls="operator-detail-overlay">
+        <div>
+          <span class="operator-pill-label">Transport</span>
+          <span class="operator-pill-value" id="operator-transport-value">LAN IQ</span>
+        </div>
+      </div>
+      <div class="operator-pill" id="operator-latency-pill" data-tone="warn" role="button" tabindex="0" aria-haspopup="dialog" aria-controls="operator-detail-overlay">
+        <div>
+          <span class="operator-pill-label">Latency</span>
+          <span class="operator-pill-value" id="operator-latency-value">No IQ</span>
+        </div>
+      </div>
+      <div class="operator-pill" id="operator-audio-pill" data-tone="warn" role="button" tabindex="0" aria-haspopup="dialog" aria-controls="operator-detail-overlay">
+        <div>
+          <span class="operator-pill-label">Audio</span>
+          <span class="operator-pill-value" id="operator-audio-value">Stopped</span>
+        </div>
+      </div>
+      <div class="operator-pill" id="operator-fault-pill" data-tone="ok" role="button" tabindex="0" aria-haspopup="dialog" aria-controls="operator-detail-overlay">
+        <div>
+          <span class="operator-pill-label">Fault</span>
+          <span class="operator-pill-value" id="operator-fault-value">Clear</span>
+        </div>
+      </div>
+      <button class="app-tx-badge" id="app-tx-state-badge" type="button" data-tx-visual-state="locked" aria-label="TX locked">TX locked</button>
+    </section>
     </header>
 
     <!-- Phase 2: phone overflow menu. Routes click the existing controls so their
@@ -6915,57 +6974,6 @@
       })();
     </script>
 
-    <section class="operator-state-strip" aria-label="Operator state">
-      <div class="operator-pill" id="operator-conn-pill" data-tone="warn" role="button" tabindex="0" aria-haspopup="dialog" aria-controls="operator-detail-overlay">
-        <div>
-          <span class="operator-pill-label">Connection</span>
-          <span class="operator-pill-value" id="operator-conn-value">Idle</span>
-        </div>
-      </div>
-      <div class="operator-pill" id="operator-owner-pill" data-tone="rx" role="button" tabindex="0" aria-haspopup="dialog" aria-controls="operator-detail-overlay">
-        <div>
-          <span class="operator-pill-label">Ownership</span>
-          <span class="operator-pill-value" id="operator-owner-value">Operator</span>
-        </div>
-      </div>
-      <div class="operator-pill" id="operator-rxtx-pill" data-tone="rx" role="button" tabindex="0" aria-haspopup="dialog" aria-controls="operator-detail-overlay">
-        <div>
-          <span class="operator-pill-label">RX/TX</span>
-          <span class="operator-pill-value" id="operator-rxtx-value">RX</span>
-        </div>
-      </div>
-      <div class="operator-pill" id="operator-rf-pill" data-tone="warn" role="button" tabindex="0" aria-haspopup="dialog" aria-controls="operator-detail-overlay">
-        <div>
-          <span class="operator-pill-label">RF State</span>
-          <span class="operator-pill-value" id="operator-rf-value">TX gated</span>
-        </div>
-      </div>
-      <div class="operator-pill" id="operator-transport-pill" data-tone="rx" role="button" tabindex="0" aria-haspopup="dialog" aria-controls="operator-detail-overlay">
-        <div>
-          <span class="operator-pill-label">Transport</span>
-          <span class="operator-pill-value" id="operator-transport-value">LAN IQ</span>
-        </div>
-      </div>
-      <div class="operator-pill" id="operator-latency-pill" data-tone="warn" role="button" tabindex="0" aria-haspopup="dialog" aria-controls="operator-detail-overlay">
-        <div>
-          <span class="operator-pill-label">Latency</span>
-          <span class="operator-pill-value" id="operator-latency-value">No IQ</span>
-        </div>
-      </div>
-      <div class="operator-pill" id="operator-audio-pill" data-tone="warn" role="button" tabindex="0" aria-haspopup="dialog" aria-controls="operator-detail-overlay">
-        <div>
-          <span class="operator-pill-label">Audio</span>
-          <span class="operator-pill-value" id="operator-audio-value">Stopped</span>
-        </div>
-      </div>
-      <div class="operator-pill" id="operator-fault-pill" data-tone="ok" role="button" tabindex="0" aria-haspopup="dialog" aria-controls="operator-detail-overlay">
-        <div>
-          <span class="operator-pill-label">Fault</span>
-          <span class="operator-pill-value" id="operator-fault-value">Clear</span>
-        </div>
-      </div>
-    </section>
-
     <section class="command-strip panel" data-phone-panel="session">
       <div class="panel-head" data-phone-panel-head>
         <h2 class="panel-title">Session</h2>
@@ -6976,14 +6984,16 @@
           <div class="vfo-deck primary-deck">
             <div class="deck-top">
               <span class="deck-label" id="active-vfo-label">VFO A</span>
+              <span class="vfo-status-tags" aria-label="Mode, band, and antenna shortcuts">
+                <button class="vfo-mode-tag mono" id="vfo-mode-tag" type="button" aria-label="Choose mode">USB</button>
+                <button class="vfo-band-tag mono" id="vfo-band-tag" data-band-state="ok" type="button" aria-label="Choose band">20m</button>
+                <button class="vfo-band-tag mono" id="vfo-antenna-pill" type="button" aria-label="Choose RX antenna">ANT1</button>
+              </span>
               <span class="status-chip ghost" id="connection-summary">Idle</span>
             </div>
             <div class="vfo-readout-row">
-              <div class="deck-frequency mono freq-readout" id="dds-readout">14.200.000</div>
-              <span class="vfo-status-tags">
-                <span class="vfo-mode-tag mono" id="vfo-mode-tag">USB</span>
-                <span class="vfo-band-tag mono" id="vfo-band-tag" data-band-state="ok">20m</span>
-              </span>
+              <div class="deck-frequency mono freq-readout" id="dds-readout" role="spinbutton" tabindex="0" aria-label="VFO frequency" aria-valuemin="0" aria-valuemax="122.88" aria-valuenow="14.2" aria-valuetext="14 point 200 megahertz">14.200.000</div>
+              <span class="vfo-unit">MHz</span>
             </div>
             <div class="deck-subline">
               <span><span id="path-summary">ADC1 • ANT1 • 192 kHz IQ</span> <button class="vfo-path-button" id="rx-att-quick-btn" type="button">ATT Off</button></span>
@@ -7018,13 +7028,17 @@
                 <div class="setup-menu" id="setup-menu" role="dialog" aria-modal="true" aria-labelledby="setup-title" hidden>
                   <div class="setup-menu-head">
                     <div>
-                      <div class="setup-title" id="setup-title">Saturn Remote Setup</div>
-                      <div class="setup-meta">Operator preferences and advanced radio configuration</div>
+                      <div class="setup-title" id="setup-title">Settings</div>
+                      <div class="setup-meta">Controls and preferences for Saturn Remote</div>
                     </div>
                     <button class="btn ghost" id="setup-close-btn" type="button">Close</button>
+                    <label class="sr-only" for="settings-search">Search settings</label>
+                    <input class="settings-search" id="settings-search" type="search" placeholder="Search settings" autocomplete="off" aria-controls="settings-search-results" />
                   </div>
+                  <div class="settings-search-results" id="settings-search-results" role="region" aria-label="Settings search results" hidden></div>
                   <div class="setup-menu-body">
                     <div class="setup-nav" role="tablist" aria-label="Setup sections">
+                      <div class="settings-section-tabs" id="settings-section-tabs" role="presentation"></div>
                       <button class="setup-tab-btn active" id="setup-tab-profiles" role="tab" aria-selected="true" aria-controls="setup-panel-profiles" data-setup-panel="profiles" type="button">Profiles</button>
                       <button class="setup-tab-btn" id="setup-tab-display" role="tab" aria-selected="false" aria-controls="setup-panel-display" data-setup-panel="display" type="button">Display</button>
                       <button class="setup-tab-btn" id="setup-tab-dsp" role="tab" aria-selected="false" aria-controls="setup-panel-dsp" data-setup-panel="dsp" type="button">DSP</button>
@@ -7033,7 +7047,9 @@
                       <button class="setup-tab-btn" id="setup-tab-audio" role="tab" aria-selected="false" aria-controls="setup-panel-audio" data-setup-panel="audio" type="button">Audio</button>
                       <button class="setup-tab-btn" id="setup-tab-advanced" role="tab" aria-selected="false" aria-controls="setup-panel-advanced" data-setup-panel="advanced" type="button">Advanced</button>
                     </div>
-                    <div class="setup-stack">
+                    <div class="setup-stack" data-index-active="true">
+                    <div class="settings-section-page" id="settings-section-page" role="tabpanel" aria-label="Settings section" tabindex="-1"></div>
+                    <button class="btn ghost" id="settings-index-return" type="button" hidden>Back to Settings sections</button>
                     <div class="setup-panel" id="setup-panel-profiles" data-setup-panel-id="profiles" role="tabpanel" aria-labelledby="setup-tab-profiles">
                       <div class="setup-section">
                         <div class="setup-section-title">Profiles</div>
@@ -7479,7 +7495,54 @@
                 <span class="instrument-state-frequency" id="instrument-state-frequency">RX 14.200.000 USB</span>
               </div>
               <div class="analog-meter-shell multimeter-shell">
+                <div class="meter-horizontal" id="meter-horizontal">
+                  <div class="meter-signal-track" id="meter-signal-track" role="meter" aria-label="Signal strength" aria-valuemin="-121" aria-valuemax="-13" aria-valuenow="-121" aria-valuetext="No live measurement">
+                    <span class="meter-signal-fill" id="meter-signal-fill"></span>
+                    <span class="meter-over-fill" id="meter-over-fill"></span>
+                    <span class="meter-peak-tick" id="meter-peak-tick"></span>
+                  </div>
+                  <div class="meter-tx-summary" id="meter-tx-summary" hidden>
+                    <span id="meter-tx-power">-- W</span>
+                    <span id="meter-tx-swr">SWR -- : 1</span>
+                  </div>
+                  <div class="meter-tx-track" id="meter-tx-track" role="meter" aria-label="Transmit power" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-valuetext="No live measurement" hidden>
+                    <span id="meter-tx-fill"></span>
+                  </div>
+                  <div class="meter-swr-track" id="meter-swr-track" role="meter" aria-label="Standing wave ratio" aria-valuemin="1" aria-valuemax="5" aria-valuenow="1" aria-valuetext="No live measurement" hidden>
+                    <span id="meter-swr-fill"></span>
+                  </div>
+                  <div class="meter-scale-labels" aria-hidden="true"><span>1</span><span>3</span><span>5</span><span>7</span><span>9</span><span>+20</span><span>+40</span><span>+60</span></div>
+                </div>
                 <div class="multimeter-workbench">
+
+
+                  <div class="multimeter-control-stack">
+                    <label class="meter-name" for="instrument-meter-mode">Meter type</label>
+                    <select id="instrument-meter-mode" class="field" aria-label="Meter type">
+                      <option value="signal">Signal strength</option>
+                      <option value="power">Forward power</option>
+                      <option value="reflected">Reflected power</option>
+                      <option value="swr">SWR</option>
+                      <option value="alc">ALC</option>
+                      <option value="compression">Compression</option>
+                      <option value="mic">Microphone level</option>
+                      <option value="analog">Analog view</option>
+                    </select>
+                    <div class="multimeter-digital meter-dBm-row" aria-live="polite">
+                      <span class="instrument-primary-readout" id="meter-s-readout">--</span>
+                      <span class="mono" id="meter-readout">-- dBm</span>
+                      <span class="status-chip" id="adc-overload-annunciator" data-tone="fault" hidden>OVF</span>
+                    </div>
+                    <div class="meter-response-control">
+                      <span class="meter-response-label">Response</span>
+                      <div class="meter-response-switches" role="radiogroup" aria-label="Meter response">
+                        <button class="vfo-annunciator" id="instrument-meter-average-btn" type="button" role="radio" aria-checked="false" aria-pressed="false" tabindex="-1">Avg</button>
+                        <button class="vfo-annunciator" id="instrument-meter-peak-btn" type="button" role="radio" aria-checked="true" aria-pressed="true" tabindex="0">Peak</button>
+                      </div>
+                    </div>
+                  </div>
+                  <details class="meter-analog-option" id="meter-analog-option" open>
+                    <summary>Analog meter</summary>
                 <svg id="smeter-svg" class="multimeter-svg" viewBox="0 0 620 320" xmlns="http://www.w3.org/2000/svg" aria-labelledby="multimeter-title">
                   <title id="multimeter-title">Selectable Saturn radio multimeter</title>
                   <defs>
@@ -7519,34 +7582,14 @@
                   <circle cx="310" cy="296" r="3" fill="#d5e2e8"/>
                   <ellipse cx="220" cy="72" rx="155" ry="38" fill="rgba(255,255,255,0.022)" transform="rotate(-8,220,72)"/>
                 </svg>
-
-                  <div class="multimeter-control-stack">
-                    <label class="meter-name" for="instrument-meter-mode">METER FUNCTION</label>
-                    <select id="instrument-meter-mode" class="field" aria-label="Analog meter function">
-                      <option value="signal">Signal strength</option>
-                      <option value="power">Forward power</option>
-                      <option value="reflected">Reflected power</option>
-                      <option value="swr">SWR</option>
-                      <option value="alc">ALC</option>
-                      <option value="compression">Compression</option>
-                      <option value="mic">Microphone level</option>
-                    </select>
-                    <div class="multimeter-digital meter-dBm-row" aria-live="polite">
-                      <span class="instrument-primary-readout" id="meter-s-readout">--</span>
-                      <span class="mono" id="meter-readout">-- dBm</span>
-                      <span class="status-chip" id="adc-overload-annunciator" data-tone="fault" hidden>OVF</span>
-                    </div>
-                    <div class="meter-response-control">
-                      <span class="meter-response-label">METER RESPONSE</span>
-                      <div class="meter-response-switches" role="group" aria-label="Meter response">
-                        <button class="vfo-annunciator" id="instrument-meter-average-btn" type="button" aria-pressed="false">AVG</button>
-                        <button class="vfo-annunciator" id="instrument-meter-peak-btn" type="button" aria-pressed="true">PEAK</button>
-                      </div>
-                    </div>
-                  </div>
+                  </details>
                 </div>
 
-                  <div class="instrument-rx-audio" aria-label="Receiver audio stereo peak meters">
+
+
+                <details class="meter-details" id="meter-details-disclosure">
+                  <summary>More meter details and TX tools</summary>
+                  <div class="instrument-rx-audio" id="instrument-rx-audio-meters" aria-label="Receiver audio stereo peak meters">
                     <div class="rx-audio-meter-row">
                       <span class="rx-audio-channel">L</span>
                       <span class="rx-audio-meter"><span id="instrument-rx-audio-left-fill"></span></span>
@@ -7558,9 +7601,6 @@
                       <span class="rx-audio-peak mono" id="instrument-rx-audio-right-peak">-- dBFS</span>
                     </div>
                   </div>
-
-                <details class="meter-details">
-                  <summary>More meter details &amp; TX tools</summary>
                 <div class="multimeter-console">
                   <div class="top-meter-telemetry">
                   <div class="top-meter-telemetry-head">
@@ -7610,8 +7650,8 @@
     <section class="audio-control-strip panel" data-phone-panel="audio">
       <div class="panel-head" data-phone-panel-head>
         <div>
-          <h2 class="panel-title">RX Audio</h2>
-          <div class="panel-meta">Volume / AGC / NR / NB / filter</div>
+          <h2 class="panel-title">Receive</h2>
+          <div class="panel-meta" id="receive-header-meta">RX audio -- · buffer --</div>
         </div>
         <div class="audio-control-status" aria-label="Audio status">
           <span class="status-chip" id="audio-strip-status">Audio stopped</span>
@@ -7623,7 +7663,7 @@
         <div class="audio-control-grid">
           <div class="audio-control" data-control-context="rx">
             <div class="audio-control-title">
-              <span class="label">RX Volume</span>
+              <label class="label" for="rx-volume">Volume</label>
               <span class="mono small" id="rx-volume-readout">-10.0 dB</span>
             </div>
             <input id="rx-volume" type="range" min="-40" max="12" step="0.5" value="-10" />
@@ -7648,8 +7688,8 @@
                 <span id="audio-buffer-fill"></span>
               </div>
             </div>
-            <div class="audio-control-title" style="margin-top:10px;">
-              <button class="btn eq-enable-btn" id="rx-ssql-btn" type="button">SQL Off</button>
+            <div class="audio-control-title squelch-title">
+              <button class="btn eq-enable-btn" id="rx-ssql-btn" type="button">Voice squelch off</button>
               <span class="mono small" id="rx-ssql-readout">SQL 16</span>
             </div>
             <input id="rx-ssql-threshold" type="range" min="0" max="100" step="1" value="16" aria-label="Squelch threshold" />
@@ -7657,10 +7697,10 @@
 
           <div class="audio-control" data-control-context="rx">
             <div class="audio-control-title">
-              <span class="label">AGC / ANF</span>
+              <span class="label">AGC</span>
               <button class="btn eq-enable-btn compact-control" id="rx-anf-btn" type="button">ANF Off</button>
             </div>
-            <div class="nr-grid" id="rx-agc-grid">
+            <div class="nr-grid" id="rx-agc-grid" role="radiogroup" aria-label="AGC mode">
               <button class="mode-btn" data-agc-mode="OFF" type="button">Off</button>
               <button class="mode-btn" data-agc-mode="LONG" type="button">Long</button>
               <button class="mode-btn" data-agc-mode="SLOW" type="button">Slow</button>
@@ -7668,7 +7708,7 @@
               <button class="mode-btn" data-agc-mode="FAST" type="button">Fast</button>
             </div>
             <div class="audio-control-title">
-              <span class="label">AGC Gain</span>
+              <label class="label" for="agc-gain">AGC gain</label>
               <span class="mono small" id="agc-gain-readout">80</span>
             </div>
             <input id="agc-gain" type="range" min="0" max="100" step="1" value="80" />
@@ -7676,42 +7716,42 @@
 
           <div class="audio-control" data-control-context="dsp">
             <div class="audio-control-title">
-              <span class="label">Noise Reduction</span>
+              <span class="label">Noise reduction</span>
               <span class="mono small" id="rx-nr-readout">Off</span>
             </div>
-            <div class="nr-grid" id="rx-nr-grid">
+            <div class="nr-grid" id="rx-nr-grid" role="radiogroup" aria-label="Noise reduction mode">
               <button class="mode-btn" data-nr-mode="OFF" type="button">Off</button>
               <button class="mode-btn" data-nr-mode="NR1" type="button">NR1</button>
               <button class="mode-btn active" data-nr-mode="NR2" type="button">NR2</button>
               <button class="mode-btn" data-nr-mode="NR3" type="button">NR3</button>
               <button class="mode-btn" data-nr-mode="NR4" type="button">NR4</button>
             </div>
-            <input id="rx-nr-level" type="range" min="0" max="100" step="1" value="100" />
+            <input id="rx-nr-level" type="range" min="0" max="100" step="1" value="100" aria-label="Noise reduction level" />
             <div class="audio-control-title">
-              <span class="label">Noise Blanker</span>
+              <span class="label">Noise blanker</span>
               <span class="mono small" id="rx-nb-threshold-readout">4.95</span>
             </div>
-            <div class="nr-grid" id="rx-nb-grid">
+            <div class="nr-grid" id="rx-nb-grid" role="radiogroup" aria-label="Noise blanker mode">
               <button class="mode-btn active" data-nb-mode="OFF" type="button">Off</button>
               <button class="mode-btn" data-nb-mode="NB1" type="button">NB1</button>
               <button class="mode-btn" data-nb-mode="NB2" type="button">NB2</button>
               <button class="mode-btn" data-nb-mode="NB3" type="button" title="Spectral noise blanker">NB3</button>
             </div>
-            <input id="rx-nb-threshold" type="range" min="2.5" max="82.5" step="0.05" value="4.95" />
+            <input id="rx-nb-threshold" type="range" min="2.5" max="82.5" step="0.05" value="4.95" aria-label="Noise blanker threshold" />
           </div>
 
           <div class="audio-control" data-control-context="rx">
             <div class="audio-control-title">
-              <span class="label">RX Filter</span>
+              <span class="label">RX filter</span>
               <span class="mono small">Passband</span>
             </div>
             <div class="audio-control-title">
-              <span class="label">Low Cut</span>
+              <label class="label" for="filter-low">Low cut</label>
               <span class="mono small" id="filter-low-readout">50 Hz</span>
             </div>
             <input id="filter-low" type="range" min="0" max="300" step="50" value="50" />
             <div class="audio-control-title">
-              <span class="label">High Cut</span>
+              <label class="label" for="filter-high">High cut</label>
               <span class="mono small" id="filter-high-readout">3050 Hz</span>
             </div>
             <input id="filter-high" type="range" min="500" max="6000" step="50" value="3050" />
@@ -7759,26 +7799,27 @@
 
         <div class="panel" data-phone-panel="tuning">
           <div class="panel-head" data-phone-panel-head>
-            <h2 class="panel-title">Bands</h2>
+            <h2 class="panel-title">Band</h2>
             <div class="panel-meta">Band recall</div>
+            <button class="btn band-more-btn" id="band-more-btn" type="button" aria-controls="band-grid" aria-expanded="false">More bands</button>
           </div>
           <div class="panel-body">
             <div class="field-row">
               <div>
                 <label class="label">Band</label>
-                <div class="band-grid" id="band-grid">
-                  <button class="band-btn" data-band="1840000" type="button">160m</button>
-                  <button class="band-btn" data-band="3800000" type="button">80m</button>
-                  <button class="band-btn" data-band="5357500" type="button">60m</button>
-                  <button class="band-btn" data-band="7150000" type="button">40m</button>
-                  <button class="band-btn" data-band="10125000" type="button">30m</button>
-                  <button class="band-btn" data-band="14200000" type="button">20m</button>
-                  <button class="band-btn" data-band="17100000" type="button">17m</button>
-                  <button class="band-btn" data-band="21300000" type="button">15m</button>
-                  <button class="band-btn" data-band="24940000" type="button">12m</button>
-                  <button class="band-btn" data-band="28400000" type="button">10m</button>
-                  <button class="band-btn" data-band="50150000" type="button">6m</button>
-                  <button class="band-btn" data-band="99500000" data-mode="WFM" type="button">FM</button>
+                <div class="band-grid" id="band-grid" role="radiogroup" aria-label="Band">
+                  <button class="band-btn" data-band="1840000" type="button" role="radio" aria-checked="false">160m</button>
+                  <button class="band-btn" data-band="3800000" type="button" role="radio" aria-checked="false">80m</button>
+                  <button class="band-btn" role="radio" aria-checked="false" data-band="5357500" type="button">60m</button>
+                  <button class="band-btn" data-band="7150000" type="button" role="radio" aria-checked="false">40m</button>
+                  <button class="band-btn" data-band="10125000" type="button" role="radio" aria-checked="false">30m</button>
+                  <button class="band-btn" data-band="14200000" type="button" role="radio" aria-checked="true">20m</button>
+                  <button class="band-btn" data-band="17100000" type="button" role="radio" aria-checked="false">17m</button>
+                  <button class="band-btn" data-band="21300000" type="button" role="radio" aria-checked="false">15m</button>
+                  <button class="band-btn" data-band="24940000" type="button" role="radio" aria-checked="false">12m</button>
+                  <button class="band-btn" data-band="28400000" type="button" role="radio" aria-checked="false">10m</button>
+                  <button class="band-btn" data-band="50150000" type="button" role="radio" aria-checked="false">6m</button>
+                  <button class="band-btn" data-band="99500000" data-mode="WFM" type="button" role="radio" aria-checked="false">FM</button>
                 </div>
               </div>
             </div>
@@ -7787,23 +7828,24 @@
 
         <div class="panel" data-phone-panel="demod">
           <div class="panel-head" data-phone-panel-head>
-            <h2 class="panel-title">Demod</h2>
+            <h2 class="panel-title">Mode</h2>
             <div class="panel-meta">Mode</div>
+            <button class="btn mode-more-btn" id="mode-more-btn" type="button" aria-controls="mode-grid" aria-expanded="false">More modes</button>
           </div>
           <div class="panel-body">
             <div class="field-row">
               <label class="label">Mode</label>
-              <div class="mode-grid" id="mode-grid">
-                <button class="mode-btn active" data-mode="USB" type="button">USB</button>
-                <button class="mode-btn" data-mode="LSB" type="button">LSB</button>
-                <button class="mode-btn" data-mode="AM" type="button">AM</button>
-                <button class="mode-btn warm" data-mode="SAM" type="button">SAM</button>
-                <button class="mode-btn" data-mode="FM" type="button">FM</button>
-                <button class="mode-btn" id="wfm-mode-btn" data-mode="WFM" type="button" disabled>WFM</button>
-                <button class="mode-btn" data-mode="DIGU" type="button">DIGU</button>
-                <button class="mode-btn" data-mode="DIGL" type="button">DIGL</button>
-                <button class="mode-btn" data-mode="CWU" type="button">CWU</button>
-                <button class="mode-btn" data-mode="CWL" type="button">CWL</button>
+              <div class="mode-grid" id="mode-grid" role="radiogroup" aria-label="Demodulation mode">
+                <button class="mode-btn active" data-mode="USB" type="button" role="radio" aria-checked="true">USB</button>
+                <button class="mode-btn" data-mode="LSB" type="button" role="radio" aria-checked="false">LSB</button>
+                <button class="mode-btn" data-mode="AM" type="button" role="radio" aria-checked="false">AM</button>
+                <button class="mode-btn warm" data-mode="SAM" type="button" role="radio" aria-checked="false">SAM</button>
+                <button class="mode-btn" data-mode="FM" type="button" role="radio" aria-checked="false">FM</button>
+                <button class="mode-btn" id="wfm-mode-btn" data-mode="WFM" type="button" role="radio" aria-checked="false" disabled>WFM</button>
+                <button class="mode-btn" data-mode="DIGU" type="button" role="radio" aria-checked="false">DIGU</button>
+                <button class="mode-btn" data-mode="DIGL" type="button" role="radio" aria-checked="false">DIGL</button>
+                <button class="mode-btn" data-mode="CWU" type="button" role="radio" aria-checked="false">CWU</button>
+                <button class="mode-btn" data-mode="CWL" type="button" role="radio" aria-checked="false">CWL</button>
               </div>
             </div>
             <div class="wbfm-controls" id="wbfm-controls" hidden>
@@ -7820,6 +7862,262 @@
             </div>
           </div>
         </div>
+
+        <script>
+          (function wireTuneAndMeterPresentation() {
+            const byId = (id) => document.getElementById(id);
+            const activeRadio = (buttons) => buttons.find((button) => button.classList.contains('active')) || buttons[0];
+            function wireRadioGroup(gridId, selector) {
+              const grid = byId(gridId);
+              if (!grid) return;
+              const buttons = () => Array.from(grid.querySelectorAll(selector));
+              const sync = () => {
+                const all = buttons();
+                const active = activeRadio(all);
+                all.forEach((button) => {
+                  const checked = button === active;
+                  button.setAttribute('aria-checked', String(checked));
+                  button.tabIndex = checked ? 0 : -1;
+                });
+              };
+              grid.addEventListener('keydown', (event) => {
+                if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End'].includes(event.key)) return;
+                const visible = buttons().filter((button) => !button.disabled && button.getClientRects().length > 0);
+                if (!visible.length) return;
+                const current = visible.indexOf(document.activeElement);
+                let next = current < 0 ? 0 : current;
+                if (event.key === 'Home') next = 0;
+                else if (event.key === 'End') next = visible.length - 1;
+                else next = (next + (event.key === 'ArrowRight' || event.key === 'ArrowDown' ? 1 : -1) + visible.length) % visible.length;
+                event.preventDefault();
+                visible[next].focus();
+                visible[next].click();
+              });
+              new MutationObserver(sync).observe(grid, { subtree: true, childList: true, attributes: true, attributeFilter: ['class', 'disabled'] });
+              sync();
+            }
+            wireRadioGroup('band-grid', '.band-btn');
+            wireRadioGroup('mode-grid', '.mode-btn');
+
+            const bandGrid = byId('band-grid');
+            const canonicalBands = Array.from(bandGrid.querySelectorAll('.band-btn'));
+            const recentBandKey = 'saturn.ui.recentBands';
+            let recentBands = [];
+            try {
+              const saved = JSON.parse(localStorage.getItem(recentBandKey) || '[]');
+              if (Array.isArray(saved)) recentBands = saved.filter((value) => canonicalBands.some((button) => button.dataset.band === String(value))).slice(0, 4);
+            } catch {}
+            function applyRecentBandOrder() {
+              const app = document.querySelector('.app');
+              const phone = app && app.clientWidth < 600 && document.documentElement.dataset.layout !== 'phone';
+              const focusedBand = bandGrid.contains(document.activeElement) ? document.activeElement : null;
+              const activeBand = canonicalBands.find((button) => button.classList.contains('active'));
+              const priority = activeBand
+                ? [activeBand.dataset.band, ...recentBands.filter((band) => band !== activeBand.dataset.band)]
+                : recentBands;
+              const ordered = phone
+                ? [...canonicalBands].sort((a, b) => {
+                    const ai = priority.indexOf(a.dataset.band);
+                    const bi = priority.indexOf(b.dataset.band);
+                    return (ai < 0 ? 100 + canonicalBands.indexOf(a) : ai) - (bi < 0 ? 100 + canonicalBands.indexOf(b) : bi);
+                  })
+                : canonicalBands;
+              ordered.forEach((button, index) => {
+                if (bandGrid.children[index] !== button) bandGrid.insertBefore(button, bandGrid.children[index] || null);
+              });
+              focusedBand?.focus({ preventScroll: true });
+            }
+            bandGrid.addEventListener('click', (event) => {
+              const button = event.target.closest('.band-btn');
+              if (!button || button.disabled) return;
+              recentBands = [button.dataset.band, ...recentBands.filter((band) => band !== button.dataset.band)].slice(0, 4);
+              try { localStorage.setItem(recentBandKey, JSON.stringify(recentBands)); } catch {}
+              applyRecentBandOrder();
+            });
+            const app = document.querySelector('.app');
+            if (app && typeof ResizeObserver === 'function') new ResizeObserver(applyRecentBandOrder).observe(app);
+            new MutationObserver(applyRecentBandOrder).observe(bandGrid, { subtree: true, attributes: true, attributeFilter: ['class'] });
+            applyRecentBandOrder();
+
+            for (const [triggerId, gridId, noun] of [
+              ['band-more-btn', 'band-grid', 'bands'],
+              ['mode-more-btn', 'mode-grid', 'modes'],
+            ]) {
+              const trigger = byId(triggerId);
+              const grid = byId(gridId);
+              trigger?.addEventListener('click', () => {
+                const expanded = grid.classList.toggle('is-expanded');
+                trigger.setAttribute('aria-expanded', String(expanded));
+                trigger.textContent = expanded ? `Fewer ${noun}` : `More ${noun}`;
+              });
+            }
+
+            function focusPicker(gridId, selector) {
+              const grid = byId(gridId);
+              const current = grid?.querySelector(`${selector}.active`) || grid?.querySelector(selector);
+              if (!current) return;
+              current.scrollIntoView({ block: 'nearest', behavior: 'auto' });
+              current.focus();
+            }
+            byId('vfo-mode-tag')?.addEventListener('click', () => focusPicker('mode-grid', '.mode-btn'));
+            byId('vfo-band-tag')?.addEventListener('click', () => focusPicker('band-grid', '.band-btn'));
+            const antenna = byId('rx-antenna');
+            const antennaPill = byId('vfo-antenna-pill');
+            const syncAntenna = () => {
+              if (antennaPill && antenna) antennaPill.textContent = antenna.selectedOptions[0]?.textContent || 'Antenna';
+            };
+            antenna?.addEventListener('change', syncAntenna);
+            const pathSummary = byId('path-summary');
+            if (pathSummary) new MutationObserver(syncAntenna).observe(pathSummary, { childList: true, characterData: true, subtree: true });
+            syncAntenna();
+            antennaPill?.addEventListener('click', () => {
+              if (!antenna.getClientRects().length) byId('phone-menu-radio-path-btn')?.click();
+              antenna.scrollIntoView({ block: 'nearest', behavior: 'auto' });
+              antenna.focus();
+            });
+
+            const frequency = byId('dds-readout');
+            function syncFrequencyName() {
+              if (!frequency) return;
+              const digits = frequency.textContent.replace(/[^0-9]/g, '');
+              if (!digits) return;
+              const hz = Number(digits);
+              const whole = Math.floor(hz / 1000000);
+              const paddedFraction = String(hz % 1000000).padStart(6, '0');
+              const fraction = paddedFraction.slice(0, 3) + paddedFraction.slice(3).replace(/0+$/, '');
+              frequency.setAttribute('aria-valuenow', String(hz / 1000000));
+              frequency.setAttribute('aria-valuetext', `${whole}${fraction ? ` point ${fraction}` : ''} megahertz`);
+            }
+            if (frequency) {
+              new MutationObserver(syncFrequencyName).observe(frequency, { childList: true, characterData: true, subtree: true });
+              syncFrequencyName();
+              frequency.addEventListener('keydown', (event) => {
+                const digits = Array.from(frequency.querySelectorAll('.freq-digit'));
+                if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
+                  const index = digits.indexOf(document.activeElement);
+                  if (index < 0) return;
+                  event.preventDefault();
+                  digits[Math.max(0, Math.min(digits.length - 1, index + (event.key === 'ArrowRight' ? 1 : -1)))]?.focus();
+                } else if (event.target === frequency && (event.key === 'ArrowUp' || event.key === 'ArrowDown')) {
+                  event.preventDefault();
+                  const current = frequency.querySelector('.freq-digit.active-step') || digits[digits.length - 1];
+                  current?.dispatchEvent(new window.KeyboardEvent('keydown', { key: event.key, bubbles: true, cancelable: true }));
+                } else if (event.target === frequency && (event.key === 'Enter' || event.key === ' ')) {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  window.openFrequencyEntry?.();
+                }
+              });
+              frequency.addEventListener('wheel', (event) => {
+                const digit = event.target.closest('.freq-digit');
+                if (!event.shiftKey || !digit) return;
+                const coarse = frequency.querySelector(`.freq-digit[data-step="${Number(digit.dataset.step) * 10}"]`);
+                if (!coarse) return;
+                event.preventDefault();
+                event.stopImmediatePropagation();
+                coarse.dispatchEvent(new window.WheelEvent('wheel', { bubbles: true, cancelable: true, deltaY: event.deltaY }));
+              }, { capture: true, passive: false });
+              frequency.addEventListener('dblclick', (event) => {
+                if (!event.target.closest('.freq-digit')) window.openFrequencyEntry?.();
+              });
+            }
+
+            byId('app-tx-state-badge')?.addEventListener('click', () => byId('operator-rf-pill')?.click());
+            const meterSelect = byId('instrument-meter-mode');
+            const analog = byId('meter-analog-option');
+            analog?.addEventListener('toggle', () => {
+              if (document.documentElement.dataset.layout !== 'phone') analog.dataset.userOpen = String(analog.open);
+            });
+            const syncAnalogViewLayout = () => {
+              if (analog) analog.open = document.documentElement.dataset.layout === 'phone';
+            };
+            new MutationObserver(syncAnalogViewLayout).observe(document.documentElement, { attributes: true, attributeFilter: ['data-layout'] });
+            syncAnalogViewLayout();
+            let previousMeterType = meterSelect?.value || 'signal';
+            meterSelect?.addEventListener('change', (event) => {
+              if (meterSelect.value === 'analog') {
+                event.stopImmediatePropagation();
+                analog.dataset.userOpen = 'true';
+                analog.open = true;
+                meterSelect.value = previousMeterType;
+                analog.querySelector('summary')?.focus();
+              } else previousMeterType = meterSelect.value;
+            }, true);
+            const responseGroup = document.querySelector('.meter-response-switches');
+            const responseButtons = [byId('instrument-meter-average-btn'), byId('instrument-meter-peak-btn')];
+            function syncMeterResponse() {
+              responseButtons.forEach((button) => {
+                const checked = button.getAttribute('aria-pressed') === 'true';
+                button.setAttribute('aria-checked', String(checked));
+                button.tabIndex = checked && !button.disabled ? 0 : -1;
+              });
+            }
+            responseGroup?.addEventListener('keydown', (event) => {
+              if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(event.key)) return;
+              const enabled = responseButtons.filter((button) => !button.disabled);
+              if (enabled.length < 2) return;
+              event.preventDefault();
+              const next = enabled.find((button) => button !== document.activeElement) || enabled[0];
+              next.focus();
+              next.click();
+            });
+            responseButtons.forEach((button) => new MutationObserver(syncMeterResponse).observe(button, { attributes: true, attributeFilter: ['aria-pressed', 'disabled'] }));
+            syncMeterResponse();
+
+            const meterDeck = byId('instrument-meter-deck');
+            const clamp = (value, low, high) => Math.max(low, Math.min(high, value));
+            function syncHorizontalMeter() {
+              const tx = meterDeck?.dataset.operatingState === 'tx';
+              const signal = byId('meter-signal-track');
+              const scale = document.querySelector('#meter-horizontal .meter-scale-labels');
+              const txSummary = byId('meter-tx-summary');
+              const txTrack = byId('meter-tx-track');
+              const swrTrack = byId('meter-swr-track');
+              signal.hidden = tx;
+              scale.hidden = tx;
+              txSummary.hidden = !tx;
+              txTrack.hidden = !tx;
+              swrTrack.hidden = !tx;
+              if (tx) {
+                const powerText = byId('tx-power-readout')?.textContent || '-- W';
+                const swrText = byId('swr-readout')?.textContent || '-- : 1';
+                const power = parseFloat(powerText);
+                const swr = parseFloat(swrText);
+                byId('meter-tx-power').textContent = powerText;
+                byId('meter-tx-swr').textContent = `SWR ${swrText}`;
+                byId('meter-tx-fill').style.width = `${Number.isFinite(power) ? clamp(power, 0, 100) : 0}%`;
+                byId('meter-swr-fill').style.width = `${Number.isFinite(swr) ? clamp((swr - 1) * 25, 0, 100) : 0}%`;
+                txTrack.setAttribute('aria-valuenow', String(Number.isFinite(power) ? clamp(power, 0, 100) : 0));
+                txTrack.setAttribute('aria-valuetext', powerText);
+                swrTrack.setAttribute('aria-valuenow', String(Number.isFinite(swr) ? clamp(swr, 1, 5) : 1));
+                swrTrack.setAttribute('aria-valuetext', swrText);
+                return;
+              }
+              const secondary = byId('meter-readout')?.textContent || '';
+              const dbm = parseFloat(secondary);
+              const level = Number.isFinite(dbm) ? clamp((dbm + 121) / 108 * 100, 0, 100) : 0;
+              const sEnd = Math.min(level, 44.44);
+              byId('meter-signal-fill').style.width = `${sEnd}%`;
+              byId('meter-over-fill').style.width = `${Math.max(0, level - 44.44)}%`;
+              const peakMatch = secondary.match(/pk S9\+(\d+)/);
+              const peakDbm = peakMatch ? -73 + Number(peakMatch[1]) : dbm;
+              byId('meter-peak-tick').style.left = `${Number.isFinite(peakDbm) ? clamp((peakDbm + 121) / 108 * 100, 0, 100) : 0}%`;
+              signal.setAttribute('aria-valuenow', String(Number.isFinite(dbm) ? clamp(dbm, -121, -13) : -121));
+              signal.setAttribute('aria-valuetext', `${byId('meter-s-readout')?.textContent || '--'}, ${secondary || 'No live measurement'}`);
+            }
+            let meterTimer = 0;
+            const scheduleMeter = () => {
+              if (meterTimer) return;
+              meterTimer = setTimeout(() => { meterTimer = 0; syncHorizontalMeter(); }, 50);
+            };
+            for (const id of ['meter-s-readout', 'meter-readout', 'tx-power-readout', 'swr-readout']) {
+              const source = byId(id);
+              if (source) new MutationObserver(scheduleMeter).observe(source, { childList: true, characterData: true, subtree: true });
+            }
+            if (meterDeck) new MutationObserver(scheduleMeter).observe(meterDeck, { attributes: true, attributeFilter: ['data-operating-state'] });
+            syncHorizontalMeter();
+          })();
+        </script>
 
       </div>
 
@@ -8541,6 +8839,9 @@
     const ACTIVE_PROFILE_KEY = "saturn.remote.activeProfile";
     const OPERATIONS_DRAWER_PREF_KEY = "saturn.remote.operationsDrawer";
     const SETUP_PANEL_PREF_KEY = "saturn.remote.setupPanel";
+    const UI_SETTINGS_LAST_SECTION_KEY = "saturn.ui.settings.lastSection";
+    const UI_PHONE_RX_OPEN_KEY = "saturn.ui.phone.rxOpen";
+    const UI_PHONE_TX_OPEN_KEY = "saturn.ui.phone.txOpen";
     const INSTRUMENT_METER_MODE_KEY = "saturn.remote.instrumentMeterMode";
     const REMOTE_SETTINGS_PATH = "/remote_settings";
     const REMOTE_PROFILES_PATH = "/remote_profiles";
@@ -10115,7 +10416,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       $("view-traditional").addEventListener("click", () => setTerrainMode("traditional"));
       $("view-3d").addEventListener("click", () => setTerrainMode("3d"));
       $("terrain-traditional-settings").addEventListener("click", () => {
-        $("terrain-settings").close(); setSetupPanel("display"); setSetupMenuOpen(true);
+        $("terrain-settings").close(); setSetupMenuOpen(true); setSetupPanel("display");
       });
       $("terrain-settings-open").addEventListener("click", () => { syncTerrainControls(); $("terrain-settings").showModal(); });
       $("display-pause").addEventListener("click", () => {
@@ -11272,6 +11573,26 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       }
     }
 
+    let responsivePhoneDisclosure = { audio: true, tx: false };
+
+    function loadResponsivePhoneDisclosure() {
+      try {
+        const rx = localStorage.getItem(UI_PHONE_RX_OPEN_KEY);
+        const tx = localStorage.getItem(UI_PHONE_TX_OPEN_KEY);
+        responsivePhoneDisclosure = {
+          audio: rx == null ? true : rx === "true",
+          tx: tx == null ? false : tx === "true",
+        };
+      } catch {
+        responsivePhoneDisclosure = { audio: true, tx: false };
+      }
+    }
+
+    function isResponsivePhoneConsole() {
+      return state.layoutMode !== "phone"
+        && (document.querySelector(".app")?.clientWidth || window.innerWidth) < 600;
+    }
+
     function savePhonePanelState() {
       localStorage.setItem("saturn.remote.phonePanels", JSON.stringify(state.phonePanels));
     }
@@ -11469,7 +11790,9 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     function syncPhonePanels() {
       document.querySelectorAll("[data-phone-panel]").forEach((panel) => {
         const key = panel.dataset.phonePanel;
-        const collapsed = Boolean(state.phonePanels[key]);
+        const collapsed = isResponsivePhoneConsole() && (key === "audio" || key === "tx")
+          ? !responsivePhoneDisclosure[key]
+          : Boolean(state.phonePanels[key]);
         const label = panel.querySelector(".panel-title")?.textContent?.trim() || key;
         panel.dataset.phoneCollapsed = collapsed ? "true" : "false";
         const button = panel.querySelector(".panel-toggle-btn");
@@ -11486,6 +11809,19 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       if (!(key in state.phonePanels)) {
         return;
       }
+      if (isResponsivePhoneConsole() && (key === "audio" || key === "tx")) {
+        responsivePhoneDisclosure[key] = !responsivePhoneDisclosure[key];
+        try {
+          localStorage.setItem(key === "audio" ? UI_PHONE_RX_OPEN_KEY : UI_PHONE_TX_OPEN_KEY,
+            String(responsivePhoneDisclosure[key]));
+        } catch {}
+        syncPhonePanels();
+        requestAnimationFrame(() => {
+          spectrumRenderer.resize();
+          waterfallRenderer.resize();
+        });
+        return;
+      }
       state.phonePanels[key] = !state.phonePanels[key];
       savePhonePanelState();
       scheduleRemoteSettingsSave();
@@ -11498,6 +11834,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
 
     function initPhonePanels() {
       state.phonePanels = loadPhonePanelState();
+      loadResponsivePhoneDisclosure();
       document.querySelectorAll("[data-phone-panel]").forEach((panel) => {
         const head = panel.querySelector("[data-phone-panel-head]") || panel.querySelector(".panel-head");
         if (!head || head.querySelector(".panel-toggle-btn")) {
@@ -11981,6 +12318,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       }
       if (refresh) {
         requestAnimationFrame(() => {
+          if (state.layoutMode !== "phone") applyMainScreenLayout();
           spectrumRenderer.resize();
           waterfallRenderer.resize();
           updateUi();
@@ -13445,6 +13783,13 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     }
 
     function syncSetupPanels() {
+      const indexActive = document.querySelector(".setup-stack")?.dataset.indexActive !== "false";
+      const menuBody = $("setup-menu")?.querySelector(".setup-menu-body");
+      if (menuBody) menuBody.dataset.indexActive = indexActive ? "true" : "false";
+      const indexPage = $("settings-section-page");
+      const indexReturn = $("settings-index-return");
+      if (indexPage) indexPage.hidden = !indexActive;
+      if (indexReturn) indexReturn.hidden = indexActive;
       document.querySelectorAll("[data-setup-panel]").forEach((button) => {
         const active = button.dataset.setupPanel === state.setupPanel;
         button.classList.toggle("active", active);
@@ -13452,7 +13797,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         button.tabIndex = active ? 0 : -1;
       });
       document.querySelectorAll("[data-setup-panel-id]").forEach((panel) => {
-        panel.hidden = panel.dataset.setupPanelId !== state.setupPanel;
+        panel.hidden = indexActive || panel.dataset.setupPanelId !== state.setupPanel;
       });
       document.querySelectorAll("[data-setup-dsp-panel]").forEach((button) => {
         button.classList.toggle("active", button.dataset.setupDspPanel === state.setupDspPanel);
@@ -13464,8 +13809,12 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
 
     function setSetupPanel(panelId, persist = true) {
       state.setupPanel = normalizeSetupPanelId(panelId);
+      const stack = document.querySelector(".setup-stack");
+      if (stack) stack.dataset.indexActive = "false";
       if (persist) {
-        try { localStorage.setItem(SETUP_PANEL_PREF_KEY, state.setupPanel); } catch {}
+        try {
+          localStorage.setItem(SETUP_PANEL_PREF_KEY, state.setupPanel);
+        } catch {}
       }
       syncSetupPanels();
     }
@@ -13475,6 +13824,874 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       syncSetupPanels();
     }
 
+    let settingsSection = "display";
+    const uiPreferenceKeysBySection = {
+      display: ["saturn.ui.display.view", "saturn.ui.display.split", "saturn.ui.display.rows",
+        "saturn.ui.display.colormap", "saturn.ui.display.fpsCap", "saturn.ui.display.geometry"],
+      meter: ["saturn.ui.meter.type"],
+      receive: [UI_PHONE_RX_OPEN_KEY],
+      transmit: [UI_PHONE_TX_OPEN_KEY],
+      radio: ["saturn.ui.recentBands"],
+      interface: [UI_THEME_KEY, UI_SETTINGS_LAST_SECTION_KEY, "saturn.ui.layout.phone",
+        "saturn.ui.layout.tablet", "saturn.ui.layout.desktop", "saturn.ui.layout.wide"],
+    };
+    let layoutSelectedTier = null;
+    let appliedLayoutTier = null;
+    let mainToolbarPointerActive = false;
+    let mainToolbarReorderPending = false;
+    const layoutOpenGroups = new Set(["display"]);
+    const mainPinProxies = new Map();
+    const mainPinReadouts = new Map();
+    const mainPinReadoutObservers = [];
+    let mainPinReadoutSyncPending = false;
+    const layoutToolbarTargets = {
+      "display.span": "sample-rate-readout",
+      "display.zoom": "zoom-toolbar-readout",
+      "display.averageToolbar": "spectrum-average-toolbar-btn",
+      "display.peakToolbar": "spectrum-peak-toolbar-btn",
+      "display.tunePeakToolbar": "spectrum-tune-peak-btn",
+      "display.centerAction": "display-center-btn",
+      "display.wakeLockAction": "wake-lock-btn",
+      "display.freqLockAction": "freq-lock-btn",
+      "display.waterfallToggle": "waterfall-toggle-btn",
+    };
+
+    function currentMainScreenTier() {
+      const width = document.querySelector(".app")?.clientWidth || window.innerWidth;
+      return width >= 1440 ? "wide" : width >= 960 ? "desktop" : width >= 600 ? "tablet" : "phone";
+    }
+
+    function syncMainPinProxies() {
+      for (const pair of mainPinProxies.values()) {
+        syncSettingsProxy(pair);
+        if (pair.value) pair.value.textContent = pair.proxy.value;
+      }
+      for (const { target, mirror, entryId } of mainPinReadouts.values()) {
+        if (!target.isConnected || !mirror.isConnected) continue;
+        if (entryId === "meter.dbfsBars") {
+          for (const side of ["left", "right"]) {
+            const sourceValue = $(`instrument-rx-audio-${side}-peak`);
+            const sourceFill = $(`instrument-rx-audio-${side}-fill`);
+            const value = mirror.querySelector(`[data-meter-side="${side}"] .main-pin-meter-value`);
+            const fill = mirror.querySelector(`[data-meter-side="${side}"] .main-pin-meter-fill`);
+            if (value) value.textContent = sourceValue?.textContent || "-- dBFS";
+            if (fill) fill.style.width = sourceFill?.style.width || "0%";
+          }
+        } else {
+          mirror.textContent = target.textContent?.trim() || target.getAttribute("aria-label") || "Waiting for data";
+        }
+      }
+    }
+
+    function mainPinProxyTarget(entry, target) {
+      return target && !["transmit", "network", "about"].includes(entry.section)
+        && target.matches("select, input[type='range'], input[type='number'], input[type='checkbox']")
+        && ["slider", "select", "toggle"].includes(entry.targetKind);
+    }
+
+    function reorderMainToolbar(preferences) {
+      const toolbar = document.querySelector(".display-pill-row");
+      if (!toolbar) return;
+      if (mainToolbarPointerActive || toolbar.contains(document.activeElement)) {
+        mainToolbarReorderPending = true;
+        return;
+      }
+      mainToolbarReorderPending = false;
+      const ids = preferences.pinned.filter((id) => layoutToolbarTargets[id]);
+      const nodes = ids.map((id) => $(layoutToolbarTargets[id])).filter((node) => node?.parentElement === toolbar);
+      if (nodes.length < 2) return;
+      const slots = Array.from(toolbar.children).filter((node) => nodes.includes(node));
+      const markers = slots.map(() => document.createComment("toolbar position"));
+      slots.forEach((node, index) => node.replaceWith(markers[index]));
+      markers.forEach((marker, index) => marker.replaceWith(nodes[index]));
+    }
+
+    function renderMainPinTray(tier, preferences) {
+      const rail = document.querySelector(".context-rail");
+      if (!rail) return;
+      let tray = $("main-screen-pins");
+      if (!tray) {
+        tray = document.createElement("section");
+        tray.id = "main-screen-pins";
+        tray.className = "main-screen-pins panel";
+        tray.setAttribute("aria-label", "Pinned controls");
+        rail.prepend(tray);
+      }
+      tray.replaceChildren();
+      mainPinProxies.clear();
+      mainPinReadouts.clear();
+      mainPinReadoutObservers.splice(0).forEach((observer) => observer.disconnect());
+      const defaults = new Set(_next.defaultLayout(tier).pinned);
+      const registry = Array.isArray(_next.SETTINGS_REGISTRY) ? _next.SETTINGS_REGISTRY : [];
+      const additions = preferences.pinned
+        .filter((id) => !defaults.has(id))
+        .map((id) => registry.find((entry) => entry.id === id))
+        .filter((entry) => entry && entry.mainScreen !== "settings-only");
+      additions.forEach((entry) => {
+        const target = $(entry.targetId);
+        const readout = ["readout", "indicator"].includes(entry.targetKind);
+        if (!target || (target.hidden && !readout)
+          || (target.getClientRects().length && !target.closest("#setup-menu") && !readout)) return;
+        const row = document.createElement("div");
+        row.className = "main-screen-pin";
+        const label = document.createElement("span");
+        label.textContent = entry.label;
+        row.append(label);
+        if (mainPinProxyTarget(entry, target)) {
+          const proxy = document.createElement(target.tagName.toLowerCase());
+          proxy.className = "settings-entry-control";
+          proxy.setAttribute("aria-label", entry.label);
+          if (target instanceof window.HTMLInputElement) proxy.type = target.type;
+          const value = target.matches("input[type='range'], input[type='number']")
+            ? document.createElement("span") : null;
+          if (value) {
+            value.className = "main-screen-pin-value";
+            row.append(value);
+          }
+          row.append(proxy);
+          const pair = { target, proxy, value };
+          mainPinProxies.set(entry.id, pair);
+          syncSettingsProxy(pair, true);
+          if (value) value.textContent = proxy.value;
+          proxy.addEventListener("input", (event) => {
+            forwardSettingsProxyEvent(target, proxy, event);
+            if (value) value.textContent = proxy.value;
+          });
+          proxy.addEventListener("change", (event) => {
+            forwardSettingsProxyEvent(target, proxy, event);
+            if (value) value.textContent = proxy.value;
+          });
+        } else if (["readout", "indicator"].includes(entry.targetKind)) {
+          const mirror = document.createElement("span");
+          mirror.className = entry.id === "meter.dbfsBars" ? "main-pin-meter" : "main-screen-pin-value";
+          if (entry.id === "meter.dbfsBars") {
+            for (const side of ["left", "right"]) {
+              const meterRow = document.createElement("span");
+              meterRow.className = "main-pin-meter-row";
+              meterRow.dataset.meterSide = side;
+              const channel = document.createElement("span");
+              channel.textContent = side === "left" ? "L" : "R";
+              const track = document.createElement("span");
+              track.className = "main-pin-meter-track";
+              const fill = document.createElement("span");
+              fill.className = "main-pin-meter-fill";
+              track.append(fill);
+              const value = document.createElement("span");
+              value.className = "main-pin-meter-value";
+              meterRow.append(channel, track, value);
+              mirror.append(meterRow);
+            }
+          }
+          row.append(mirror);
+          mainPinReadouts.set(entry.id, { target, mirror, entryId: entry.id });
+          const observer = new MutationObserver(() => {
+            if (mainPinReadoutSyncPending) return;
+            mainPinReadoutSyncPending = true;
+            requestAnimationFrame(() => {
+              mainPinReadoutSyncPending = false;
+              syncMainPinProxies();
+            });
+          });
+          observer.observe(target, { childList: true, characterData: true, attributes: true, subtree: true });
+          mainPinReadoutObservers.push(observer);
+        } else {
+          const button = document.createElement("button");
+          button.className = "btn";
+          button.type = "button";
+          button.textContent = "Open";
+          button.setAttribute("aria-label", `Open ${entry.label}`);
+          button.addEventListener("click", () => revealSettingsEntry(entry));
+          row.append(button);
+        }
+        tray.append(row);
+      });
+      syncMainPinProxies();
+      tray.hidden = !tray.childElementCount;
+    }
+
+    function applyMainScreenLayout() {
+      if (typeof _next.loadLayout !== "function" || document.documentElement.dataset.layout === "phone") return;
+      const tier = currentMainScreenTier();
+      const preferences = _next.loadLayout(tier);
+      const hidden = new Set(preferences.hidden);
+      const protectedIds = new Set(_next.LAYOUT_SAFETY_PINNED_IDS || []);
+      for (const entry of _next.SETTINGS_REGISTRY || []) {
+        if (entry.mainScreen === "settings-only" || protectedIds.has(entry.id)) continue;
+        const target = $(entry.targetId);
+        if (!target || target.closest("#setup-menu")) continue;
+        const pinned = preferences.pinned.includes(entry.id) && !hidden.has(entry.id);
+        const overflowedToolbar = Boolean(layoutToolbarTargets[entry.id]) && !pinned;
+        target.dataset.mainLayoutHidden = hidden.has(entry.id) || overflowedToolbar ? "true" : "false";
+        target.dataset.mainLayoutPinned = pinned ? "true" : "false";
+        if (layoutToolbarTargets[entry.id]) {
+          const toolbarNode = $(layoutToolbarTargets[entry.id]);
+          if (toolbarNode && toolbarNode !== target) {
+            toolbarNode.dataset.mainLayoutHidden = target.dataset.mainLayoutHidden;
+            toolbarNode.dataset.mainLayoutPinned = target.dataset.mainLayoutPinned;
+          }
+        }
+      }
+      reorderMainToolbar(preferences);
+      renderMainPinTray(tier, preferences);
+      appliedLayoutTier = tier;
+    }
+
+    function renderMainScreenLayoutEditor(page) {
+      if (typeof _next.loadLayout !== "function") return;
+      const tier = layoutSelectedTier || currentMainScreenTier();
+      layoutSelectedTier = tier;
+      let preferences = _next.loadLayout(tier);
+      const editor = document.createElement("section");
+      editor.className = "settings-layout-editor";
+      const heading = document.createElement("h3");
+      heading.textContent = "Main screen";
+      const intro = document.createElement("p");
+      intro.textContent = "Choose controls for each screen size. Transmit safety controls stay visible.";
+      const selector = document.createElement("select");
+      selector.className = "settings-layout-tier";
+      selector.setAttribute("aria-label", "Main screen size");
+      for (const value of _next.LAYOUT_TIERS) {
+        const option = document.createElement("option");
+        option.value = value;
+        option.textContent = value[0].toUpperCase() + value.slice(1);
+        selector.append(option);
+      }
+      selector.value = tier;
+      selector.addEventListener("change", () => {
+        layoutSelectedTier = selector.value;
+        renderSettingsSection();
+      });
+      editor.append(heading, intro, selector);
+      const registry = Array.isArray(_next.SETTINGS_REGISTRY) ? _next.SETTINGS_REGISTRY : [];
+      const safety = new Set(_next.LAYOUT_SAFETY_PINNED_IDS || []);
+      for (const section of _next.SETTINGS_SECTIONS || []) {
+        const candidates = registry.filter((entry) => entry.section === section.id && entry.mainScreen !== "settings-only");
+        if (!candidates.length) continue;
+        const group = document.createElement("details");
+        group.className = "settings-layout-group";
+        group.open = layoutOpenGroups.has(section.id);
+        group.addEventListener("toggle", () => {
+          if (group.open) layoutOpenGroups.add(section.id);
+          else layoutOpenGroups.delete(section.id);
+        });
+        const summary = document.createElement("summary");
+        summary.textContent = section.label;
+        group.append(summary);
+        for (const entry of candidates) {
+          const label = document.createElement("label");
+          label.className = "settings-layout-item";
+          const checkbox = document.createElement("input");
+          checkbox.type = "checkbox";
+          checkbox.dataset.layoutPin = entry.id;
+          checkbox.checked = preferences.pinned.includes(entry.id) && !preferences.hidden.includes(entry.id);
+          checkbox.disabled = safety.has(entry.id);
+          const name = document.createElement("span");
+          name.textContent = entry.label;
+          label.append(checkbox, name);
+          if (safety.has(entry.id)) {
+            const locked = document.createElement("small");
+            locked.textContent = "Always shown";
+            label.append(locked);
+          }
+          checkbox.addEventListener("change", () => {
+            preferences = checkbox.checked
+              ? _next.pinItem(preferences, entry.id, tier)
+              : _next.unpinItem(preferences, entry.id, tier).preferences;
+            _next.saveLayout(tier, preferences);
+            if (tier === currentMainScreenTier()) applyMainScreenLayout();
+            const restoreFocus = document.activeElement === checkbox;
+            renderSettingsSection();
+            requestAnimationFrame(() => {
+              if (restoreFocus && document.activeElement === document.body) {
+                document.querySelector(`[data-layout-pin="${entry.id}"]`)?.focus();
+              }
+            });
+          });
+          group.append(label);
+        }
+        editor.append(group);
+      }
+      const toolbarIds = (preferences.pinned || []).filter((id) => layoutToolbarTargets[id]);
+      if (toolbarIds.length > 1) {
+        const title = document.createElement("h3");
+        title.textContent = "Display toolbar order";
+        editor.append(title);
+        const orderList = document.createElement("div");
+        orderList.className = "settings-toolbar-order";
+        const changeOrder = (id, nextIndex) => {
+          const order = [...toolbarIds];
+          const index = order.indexOf(id);
+          if (index < 0 || nextIndex < 0 || nextIndex >= order.length) return;
+          order.splice(index, 1);
+          order.splice(nextIndex, 0, id);
+          preferences = _next.reorderToolbar(preferences, order, tier);
+          _next.saveLayout(tier, preferences);
+          if (tier === currentMainScreenTier()) applyMainScreenLayout();
+          const focusDirection = document.activeElement?.dataset?.orderDirection;
+          renderSettingsSection();
+          requestAnimationFrame(() => {
+            if (focusDirection && document.activeElement === document.body) {
+              document.querySelector(`.settings-toolbar-order-row[data-toolbar-order="${id}"] button[data-order-direction="${focusDirection}"]`)?.focus();
+            }
+          });
+        };
+        toolbarIds.forEach((id, index) => {
+          const row = document.createElement("div");
+          row.className = "settings-toolbar-order-row";
+          row.draggable = true;
+          row.dataset.toolbarOrder = id;
+          row.addEventListener("dragstart", (event) => event.dataTransfer?.setData("text/plain", id));
+          row.addEventListener("dragover", (event) => event.preventDefault());
+          row.addEventListener("drop", (event) => {
+            event.preventDefault();
+            const dragged = event.dataTransfer?.getData("text/plain");
+            if (dragged && toolbarIds.includes(dragged)) changeOrder(dragged, index);
+          });
+          const handle = document.createElement("span");
+          handle.className = "settings-toolbar-drag";
+          handle.textContent = "Drag";
+          handle.title = "Drag to reorder";
+          const name = document.createElement("span");
+          name.textContent = registry.find((entry) => entry.id === id)?.label || id;
+          const up = document.createElement("button");
+          up.type = "button";
+          up.dataset.orderDirection = "up";
+          up.textContent = "Move up";
+          up.setAttribute("aria-label", `Move ${name.textContent} up`);
+          up.disabled = index === 0;
+          up.addEventListener("click", () => changeOrder(id, index - 1));
+          const down = document.createElement("button");
+          down.type = "button";
+          down.dataset.orderDirection = "down";
+          down.textContent = "Move down";
+          down.setAttribute("aria-label", `Move ${name.textContent} down`);
+          down.disabled = index === toolbarIds.length - 1;
+          down.addEventListener("click", () => changeOrder(id, index + 1));
+          row.append(handle, name, up, down);
+          orderList.append(row);
+        });
+        editor.append(orderList);
+      }
+      page.append(editor);
+    }
+
+    function initMainScreenLayout() {
+      if (typeof _next.loadLayout !== "function") return;
+      const toolbar = document.querySelector(".display-pill-row");
+      if (toolbar) {
+        const finishPointer = () => {
+          mainToolbarPointerActive = false;
+          if (mainToolbarReorderPending) {
+            requestAnimationFrame(() => reorderMainToolbar(_next.loadLayout(currentMainScreenTier())));
+          }
+        };
+        toolbar.addEventListener("pointerdown", () => { mainToolbarPointerActive = true; }, true);
+        toolbar.addEventListener("pointerup", finishPointer, true);
+        toolbar.addEventListener("pointercancel", finishPointer, true);
+        toolbar.addEventListener("lostpointercapture", finishPointer, true);
+        toolbar.addEventListener("focusout", () => {
+          if (mainToolbarReorderPending) {
+            requestAnimationFrame(() => reorderMainToolbar(_next.loadLayout(currentMainScreenTier())));
+          }
+        });
+      }
+      applyMainScreenLayout();
+      const app = document.querySelector(".app");
+      if (app && typeof ResizeObserver !== "undefined") {
+        new ResizeObserver(() => {
+          const tier = currentMainScreenTier();
+          if (tier === appliedLayoutTier) return;
+          applyMainScreenLayout();
+          if (settingsSection === "interface" && !$('setup-menu')?.hidden) renderSettingsSection();
+        }).observe(app);
+      }
+    }
+
+    function restoreUiDefaults(sectionId = null) {
+      const keys = sectionId
+        ? uiPreferenceKeysBySection[sectionId] || []
+        : Object.values(uiPreferenceKeysBySection).flat();
+      if (!keys.length) return;
+      const label = sectionId ? `${sectionId} interface` : "all interface";
+      if (!window.confirm(`Restore ${label} defaults? Radio frequency, band and transmit state will stay as they are.`)) return;
+      try { keys.forEach((key) => localStorage.removeItem(key)); } catch {}
+      if (!sectionId || sectionId === "interface") applyTheme("dark");
+      if (!sectionId || sectionId === "receive" || sectionId === "transmit") {
+        loadResponsivePhoneDisclosure();
+        syncPhonePanels();
+      }
+      if (!sectionId || sectionId === "meter") {
+        const meter = $("instrument-meter-mode");
+        if (meter) {
+          meter.value = "signal";
+          meter.dispatchEvent(new Event("change", { bubbles: true }));
+        }
+      }
+      layoutSelectedTier = currentMainScreenTier();
+      applyMainScreenLayout();
+      updateUi();
+      renderSettingsSection();
+    }
+
+    // The original control remains the sole owner of state and radio handlers.
+    // These Settings controls forward native events to it and mirror its state.
+    const settingsControlProxies = new Map();
+    const settingsReadoutMirrors = new Map();
+    const settingsActionProxies = new Map();
+    let settingsProxyRefreshTimer = 0;
+
+    function settingsProxyTarget(entry, target) {
+      if (!target || entry.section === "transmit" || target.closest("[data-setup-panel-id]")) return false;
+      return target.matches("select, input[type='range'], input[type='number'], input[type='checkbox']")
+        && ["slider", "select", "toggle"].includes(entry.targetKind);
+    }
+
+    function settingsStaticReadout(entry, target) {
+      return target && ["readout", "indicator"].includes(entry.targetKind)
+        && !target.matches("button, a[href], input, select, textarea, [role='button'], [role='spinbutton'], [tabindex]:not([tabindex='-1'])");
+    }
+
+    const settingsSafeActionIds = new Set([
+      "display.view", "display.3d.perspective.band", "display.pause",
+      "display.terrainSettings", "meter.average", "meter.peakButton",
+      "display.centerAction", "display.averageToolbar", "display.peakToolbar",
+      "display.tunePeakToolbar", "display.wakeLockAction", "display.freqLockAction",
+      "display.waterfallToggle", "receive.anf", "receive.nb", "receive.voiceSquelch",
+      "radio.reference", "radio.split", "radio.vfoB", "interface.theme",
+    ]);
+
+    function settingsActionProxyTarget(entry, target) {
+      return target && settingsSafeActionIds.has(entry.id) && target.matches("button");
+    }
+
+    function syncSettingsActionProxies() {
+      for (const { target, proxy } of settingsActionProxies.values()) {
+        if (!target.isConnected || !proxy.isConnected) continue;
+        proxy.disabled = target.disabled;
+        const pressed = target.getAttribute("aria-pressed");
+        if (pressed !== null) proxy.setAttribute("aria-pressed", pressed);
+        else proxy.removeAttribute("aria-pressed");
+      }
+    }
+
+    function syncSettingsReadoutMirrors() {
+      for (const { target, mirror } of settingsReadoutMirrors.values()) {
+        if (!target.isConnected || !mirror.isConnected) continue;
+        const value = target.textContent?.trim() || target.getAttribute("aria-label") || "";
+        if (mirror.textContent !== value) mirror.textContent = value;
+        mirror.hidden = !value;
+      }
+    }
+
+    function syncSettingsProxy(pair, force = false) {
+      const { target, proxy } = pair;
+      if (!target.isConnected) return;
+      proxy.disabled = target.matches(":disabled");
+      if (target instanceof window.HTMLSelectElement) {
+        const sourceOptions = Array.from(target.options);
+        const optionsChanged = sourceOptions.length !== proxy.options.length
+          || sourceOptions.some((option, index) => {
+            const copy = proxy.options[index];
+            return !copy || option.value !== copy.value || option.text !== copy.text
+              || option.disabled !== copy.disabled;
+          });
+        if (optionsChanged) proxy.replaceChildren(...sourceOptions.map((option) => option.cloneNode(true)));
+      } else {
+        for (const property of ["min", "max", "step"]) {
+          if (proxy[property] !== target[property]) proxy[property] = target[property];
+        }
+      }
+      if (!force && document.activeElement === proxy) return;
+      if (target.type === "checkbox") proxy.checked = target.checked;
+      else if (proxy.value !== target.value) proxy.value = target.value;
+    }
+
+    function forwardSettingsProxyEvent(target, proxy, event) {
+      if (target.matches(":disabled")) {
+        syncSettingsProxy({ target, proxy }, true);
+        return;
+      }
+      if (target.type === "checkbox") target.checked = proxy.checked;
+      else target.value = proxy.value;
+      target.dispatchEvent(new window.Event(event.type, { bubbles: true }));
+      syncSettingsProxy({ target, proxy }, true);
+    }
+
+    function syncSettingsControlProxies() {
+      if (document.hidden) return;
+      for (const pair of settingsControlProxies.values()) syncSettingsProxy(pair);
+      syncSettingsReadoutMirrors();
+      syncSettingsActionProxies();
+    }
+
+    function initSettingsProxySync() {
+      const menu = $("setup-menu");
+      if (!menu) return;
+      const updateTimer = () => {
+        if (settingsProxyRefreshTimer) window.clearInterval(settingsProxyRefreshTimer);
+        settingsProxyRefreshTimer = 0;
+        if (!menu.hidden && !document.hidden) {
+          syncSettingsControlProxies();
+          settingsProxyRefreshTimer = window.setInterval(syncSettingsControlProxies, 250);
+        }
+      };
+      new window.MutationObserver(updateTimer).observe(menu, { attributes: true, attributeFilter: ["hidden"] });
+      document.addEventListener("visibilitychange", updateTimer);
+      for (const type of ["input", "change"]) {
+        document.addEventListener(type, (event) => {
+          const pair = settingsControlProxies.get(event.target?.id);
+          if (pair) syncSettingsProxy(pair, true);
+        }, true);
+      }
+      updateTimer();
+    }
+
+    function revealSettingsEntry(entry) {
+      const target = entry.target || $(entry.targetId);
+      if (!target) return;
+      if (entry.id === "radio.keypad") {
+        setSetupMenuOpen(false);
+        openFrequencyEntry();
+        requestAnimationFrame(() => {
+          if (!$('freq-entry-overlay')?.hidden) $('freq-entry-cancel-btn')?.focus({ preventScroll: true });
+        });
+        return;
+      }
+      if (entry.id === "shell.mobileDock") {
+        setSetupMenuOpen(false);
+        applyLayout("phone");
+        requestAnimationFrame(() => target.querySelector("button")?.focus({ preventScroll: true }));
+        return;
+      }
+      if (entry.id === "network.goLive") {
+        setSetupMenuOpen(false);
+        const details = document.querySelector(".header-diagnostics");
+        if (!details?.getClientRects().length) {
+          if ($("phone-menu-sheet")?.hidden) $("phone-menu-btn")?.click();
+          if ($("phone-menu-system-host")?.hidden) $("phone-menu-system-btn")?.click();
+        } else {
+          details.open = true;
+        }
+        requestAnimationFrame(() => {
+          const live = $("system-go-live-btn");
+          (live?.hidden ? $("system-go-offline-btn") : live)?.focus({ preventScroll: true });
+        });
+        return;
+      }
+      if (target.closest(".header-diagnostics-menu") &&
+          !document.querySelector(".header-diagnostics")?.getClientRects().length) {
+        setSetupMenuOpen(false);
+        if ($("phone-menu-sheet")?.hidden) $("phone-menu-btn")?.click();
+        if ($("phone-menu-system-host")?.hidden) $("phone-menu-system-btn")?.click();
+        requestAnimationFrame(() => target.focus({ preventScroll: true }));
+        return;
+      }
+      for (let node = target; node; node = node.parentElement) {
+        if (node.dataset?.mainLayoutHidden === "true") node.dataset.layoutReveal = "true";
+      }
+      if (target.closest("#terrain-settings")) {
+        setSetupMenuOpen(false);
+        $("terrain-settings-open")?.click();
+        requestAnimationFrame(() => {
+          target.scrollIntoView({ block: "center" });
+          target.focus({ preventScroll: true });
+        });
+        return;
+      }
+      const setupPanel = entry.existingSetupPanel
+        || target.closest("[data-setup-panel-id]")?.dataset.setupPanelId;
+      if (setupPanel) {
+        setSetupMenuOpen(true);
+        setSetupPanel(setupPanel);
+        const subpanel = target.closest("[data-setup-dsp-panel-id]");
+        if (subpanel) setSetupDspPanel(subpanel.dataset.setupDspPanelId);
+      } else {
+        setSetupMenuOpen(false);
+        const drawer = target.closest("#operations-drawer");
+        if (drawer) {
+          const drawerTarget = target.dataset.operationsTarget
+            || target.closest("[data-operations-panel]")?.dataset.operationsPanel
+            || drawer.dataset.activePanel || "memory";
+          applyOperationsDrawerSelection({ open: true, target: drawerTarget });
+        }
+        const shellPanel = target.closest("[data-phone-panel]");
+        if (shellPanel) revealShellPanel(shellPanel);
+        const details = target.closest("details");
+        if (details) details.open = true;
+      }
+      requestAnimationFrame(() => {
+        target.scrollIntoView({ block: "center" });
+        if (!target.hasAttribute("tabindex") && !target.matches("button, input, select, textarea, a[href]")) {
+          target.setAttribute("tabindex", "-1");
+        }
+        target.focus({ preventScroll: true });
+      });
+    }
+
+    function renderSettingsSection() {
+      const page = $("settings-section-page");
+      if (!page) return;
+      const sections = Array.isArray(_next.SETTINGS_SECTIONS) ? _next.SETTINGS_SECTIONS : [];
+      const section = sections.find((item) => item.id === settingsSection) || sections[0];
+      if (!section) return;
+      settingsControlProxies.clear();
+      settingsReadoutMirrors.clear();
+      settingsActionProxies.clear();
+      page.replaceChildren();
+      page.setAttribute("aria-label", `${section.label} settings`);
+      const heading = document.createElement("h2");
+      heading.className = "settings-section-heading";
+      heading.textContent = section.label;
+      const description = document.createElement("p");
+      description.className = "settings-section-description";
+      description.textContent = section.description;
+      const list = document.createElement("div");
+      list.className = "settings-entry-list";
+      const entries = Array.isArray(_next.SETTINGS_REGISTRY) ? _next.SETTINGS_REGISTRY : [];
+      entries.filter((entry) => entry.section === section.id).forEach((entry) => {
+        const target = $(entry.targetId);
+        const directControl = settingsProxyTarget(entry, target);
+        const staticReadout = settingsStaticReadout(entry, target);
+        const directAction = settingsActionProxyTarget(entry, target);
+        const analogAction = entry.id === "meter.analog" && target?.id === "meter-analog-option";
+        const row = document.createElement(target && !directControl && !staticReadout ? "button" : "div");
+        row.className = "settings-entry-row";
+        row.dataset.settingsEntry = entry.id;
+        if (target && !directControl && !staticReadout) row.type = "button";
+        else row.dataset.static = "true";
+        const label = document.createElement(directControl ? "label" : "span");
+        label.className = "settings-entry-label";
+        label.textContent = entry.label;
+        const detail = document.createElement("span");
+        detail.className = "settings-entry-description";
+        detail.textContent = entry.description;
+        if (directControl) {
+          const proxy = document.createElement(target.tagName.toLowerCase());
+          const proxyId = `settings-control-${entry.id.replace(/[^a-zA-Z0-9_-]/g, "-")}`;
+          proxy.id = proxyId;
+          proxy.className = "settings-entry-control";
+          if (target instanceof window.HTMLInputElement) proxy.type = target.type;
+          label.htmlFor = proxyId;
+          detail.id = `${proxyId}-description`;
+          proxy.setAttribute("aria-describedby", detail.id);
+          row.append(label, detail, proxy);
+          settingsControlProxies.set(target.id, { target, proxy });
+          syncSettingsProxy({ target, proxy }, true);
+          proxy.addEventListener("input", (event) => forwardSettingsProxyEvent(target, proxy, event));
+          proxy.addEventListener("change", (event) => forwardSettingsProxyEvent(target, proxy, event));
+        } else if (staticReadout) {
+          const mirror = document.createElement("span");
+          mirror.className = "settings-entry-value";
+          row.append(label, detail, mirror);
+          settingsReadoutMirrors.set(target.id, { target, mirror });
+        } else if (analogAction) {
+          row.append(label, detail);
+          row.addEventListener("click", () => {
+            const select = $("instrument-meter-mode");
+            if (!select || select.disabled) return;
+            select.value = "analog";
+            select.dispatchEvent(new Event("change", { bubbles: true }));
+            target.open = true;
+            row.setAttribute("aria-pressed", "true");
+            requestAnimationFrame(() => {
+              if (!$('setup-menu')?.hidden) row.focus({ preventScroll: true });
+            });
+          });
+        } else if (directAction) {
+          row.append(label, detail);
+          settingsActionProxies.set(entry.id, { target, proxy: row });
+          row.addEventListener("click", () => {
+            if (target.disabled) return;
+            target.click();
+            syncSettingsActionProxies();
+          });
+        } else {
+          row.append(label, detail);
+          if (target) row.addEventListener("click", () => revealSettingsEntry(entry));
+        }
+        if (entry.mainScreen !== "settings-only" && typeof _next.loadLayout === "function") {
+          const shell = document.createElement("div");
+          shell.className = "settings-entry-shell";
+          const pin = document.createElement("button");
+          pin.className = "settings-entry-pin";
+          pin.type = "button";
+          const tier = layoutSelectedTier || currentMainScreenTier();
+          const safety = (_next.LAYOUT_SAFETY_PINNED_IDS || []).includes(entry.id);
+          const current = _next.loadLayout(tier);
+          const pinned = current.pinned.includes(entry.id) && !current.hidden.includes(entry.id);
+          pin.textContent = pinned ? "Pinned" : "Pin";
+          pin.setAttribute("aria-label", `${pinned ? "Hide" : "Show"} ${entry.label} on ${tier} main screen`);
+          pin.setAttribute("aria-pressed", pinned ? "true" : "false");
+          pin.disabled = safety;
+          if (safety) pin.title = "Always shown for transmit safety";
+          pin.addEventListener("click", () => {
+            const before = _next.loadLayout(tier);
+            const after = before.pinned.includes(entry.id) && !before.hidden.includes(entry.id)
+              ? _next.unpinItem(before, entry.id, tier).preferences
+              : _next.pinItem(before, entry.id, tier);
+            _next.saveLayout(tier, after);
+            if (tier === currentMainScreenTier()) applyMainScreenLayout();
+            const restoreFocus = document.activeElement === pin;
+            renderSettingsSection();
+            requestAnimationFrame(() => {
+              if (restoreFocus && document.activeElement === document.body) {
+                document.querySelector(`[data-settings-entry="${entry.id}"]`)?.parentElement
+                  ?.querySelector(".settings-entry-pin")?.focus();
+              }
+            });
+          });
+          shell.append(row, pin);
+          list.append(shell);
+        } else {
+          list.append(row);
+        }
+      });
+      page.append(heading, description, list);
+      if (section.id === "interface") renderMainScreenLayoutEditor(page);
+      const resetKeys = uiPreferenceKeysBySection[section.id] || [];
+      if (resetKeys.length) {
+        const footer = document.createElement("div");
+        footer.className = "settings-restore-footer";
+        const note = document.createElement("p");
+        note.textContent = "Restores browser interface choices only. Radio state stays unchanged.";
+        const reset = document.createElement("button");
+        reset.type = "button";
+        reset.textContent = `Restore ${section.label.toLowerCase()} defaults`;
+        reset.addEventListener("click", () => restoreUiDefaults(section.id));
+        footer.append(note, reset);
+        if (section.id === "interface") {
+          const global = document.createElement("button");
+          global.type = "button";
+          global.textContent = "Restore all interface defaults";
+          global.addEventListener("click", () => restoreUiDefaults());
+          footer.append(global);
+        }
+        page.append(footer);
+      }
+      syncSettingsReadoutMirrors();
+      syncSettingsActionProxies();
+      document.querySelectorAll(".settings-section-tab").forEach((button) => {
+        const active = button.dataset.settingsSection === section.id;
+        button.setAttribute("aria-selected", active ? "true" : "false");
+        button.tabIndex = active ? 0 : -1;
+      });
+    }
+
+    function setSettingsSection(sectionId, persist = true) {
+      const sections = Array.isArray(_next.SETTINGS_SECTIONS) ? _next.SETTINGS_SECTIONS : [];
+      settingsSection = sections.some((item) => item.id === sectionId) ? sectionId : "display";
+      const stack = document.querySelector(".setup-stack");
+      if (stack) stack.dataset.indexActive = "true";
+      if (persist) {
+        try { localStorage.setItem(UI_SETTINGS_LAST_SECTION_KEY, settingsSection); } catch {}
+      }
+      renderSettingsSection();
+      syncSetupPanels();
+    }
+
+    function initSettingsSections() {
+      const tabs = $("settings-section-tabs");
+      const sections = Array.isArray(_next.SETTINGS_SECTIONS) ? _next.SETTINGS_SECTIONS : [];
+      if (!tabs || !sections.length) return;
+      tabs.replaceChildren();
+      sections.forEach((section, index) => {
+        const button = document.createElement("button");
+        button.className = "settings-section-tab";
+        button.type = "button";
+        button.role = "tab";
+        button.dataset.settingsSection = section.id;
+        button.setAttribute("aria-controls", "settings-section-page");
+        button.textContent = section.label;
+        button.addEventListener("click", () => setSettingsSection(section.id));
+        button.addEventListener("keydown", (event) => {
+          const delta = event.key === "ArrowRight" || event.key === "ArrowDown" ? 1
+            : event.key === "ArrowLeft" || event.key === "ArrowUp" ? -1 : 0;
+          const next = event.key === "Home" ? 0 : event.key === "End" ? sections.length - 1
+            : delta ? (index + delta + sections.length) % sections.length : -1;
+          if (next < 0) return;
+          event.preventDefault();
+          setSettingsSection(sections[next].id);
+          tabs.children[next]?.focus();
+        });
+        tabs.append(button);
+      });
+      try { settingsSection = localStorage.getItem(UI_SETTINGS_LAST_SECTION_KEY) || "display"; } catch {}
+      initSettingsProxySync();
+      setSettingsSection(settingsSection, false);
+    }
+
+    function setupSearchEntries() {
+      const entries = [];
+      const seen = new Set();
+      document.querySelectorAll("[data-setup-panel-id]").forEach((panel) => {
+        const section = panel.dataset.setupPanelId;
+        const sectionLabel = $("setup-tab-" + section)?.textContent?.trim() || section;
+        panel.querySelectorAll("input[id], select[id], button[id]").forEach((target) => {
+          if (seen.has(target.id)) return;
+          seen.add(target.id);
+          const explicitLabel = Array.from(panel.querySelectorAll("label[for]"))
+            .find((label) => label.htmlFor === target.id);
+          const label = explicitLabel?.textContent?.trim()
+            || target.closest("label")?.textContent?.trim()
+            || target.getAttribute("aria-label")
+            || target.textContent?.trim()
+            || target.id;
+          const description = target.closest(".setup-row")
+            ?.querySelector(".setup-readout")?.textContent?.trim() || target.title || "";
+          entries.push({ target, section, sectionLabel, label, description });
+        });
+      });
+      return entries;
+    }
+
+    function updateSetupSearch() {
+      const input = $("settings-search");
+      const results = $("settings-search-results");
+      const body = $("setup-menu")?.querySelector(".setup-menu-body");
+      if (!input || !results || !body) return;
+      const query = input.value.trim().toLocaleLowerCase();
+      body.hidden = Boolean(query);
+      results.hidden = !query;
+      results.replaceChildren();
+      if (!query) return;
+      const registry = Array.isArray(_next.SETTINGS_REGISTRY) ? _next.SETTINGS_REGISTRY : [];
+      const matches = registry.length && typeof _next.searchSettings === "function"
+        ? _next.searchSettings(query)
+        : setupSearchEntries().filter((entry) =>
+          `${entry.label} ${entry.description} ${entry.sectionLabel}`.toLocaleLowerCase().includes(query));
+      if (!matches.length) {
+        const empty = document.createElement("p");
+        empty.className = "settings-search-empty";
+        empty.textContent = "No settings found";
+        results.append(empty);
+        return;
+      }
+      matches.forEach((entry) => {
+        const target = entry.target || $(entry.targetId);
+        const sectionLabel = entry.sectionLabel || _next.SETTINGS_SECTIONS
+          ?.find((section) => section.id === entry.section)?.label || entry.section;
+        const row = document.createElement(target ? "button" : "div");
+        if (target) row.type = "button";
+        row.className = "settings-search-result";
+        if (!target) row.dataset.static = "true";
+        const label = document.createElement("span");
+        label.className = "settings-search-result-label";
+        label.textContent = entry.label;
+        const description = document.createElement("span");
+        description.className = "settings-search-result-description";
+        description.textContent = entry.description || sectionLabel;
+        row.append(label, description);
+        if (target) row.addEventListener("click", () => {
+          input.value = "";
+          updateSetupSearch();
+          revealSettingsEntry(entry);
+        });
+        results.append(row);
+      });
+    }
+
+    let setupMenuTrigger = null;
+
     function setSetupMenuOpen(open) {
       const menu = $("setup-menu");
       const button = $("setup-menu-btn");
@@ -13483,6 +14700,17 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         return;
       }
       const next = Boolean(open);
+      if (next) document.querySelectorAll("[data-layout-reveal]").forEach((node) => delete node.dataset.layoutReveal);
+      const closeButton = $("setup-close-btn");
+      if (closeButton) {
+        closeButton.textContent = isResponsivePhoneConsole() ? "Back" : "Close";
+        closeButton.setAttribute("aria-label", isResponsivePhoneConsole() ? "Back to console" : "Close settings");
+      }
+      if (next && menu.hidden) {
+        const focused = document.activeElement;
+        setupMenuTrigger = focused && focused !== document.body && !menu.contains(focused)
+          ? focused : null;
+      }
       menu.hidden = !next;
       const scrim = $("setup-scrim");
       if (scrim) scrim.hidden = !next;
@@ -13490,11 +14718,18 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       button?.setAttribute("aria-expanded", next ? "true" : "false");
       headerButton?.setAttribute("aria-expanded", next ? "true" : "false");
       if (next) {
+        setSettingsSection(settingsSection, false);
+        if ($("settings-search")) $("settings-search").value = "";
+        updateSetupSearch();
         syncSetupMenuFields();
         requestAnimationFrame(() => $("setup-close-btn")?.focus({ preventScroll: true }));
       } else if (document.activeElement && menu.contains(document.activeElement)) {
-        (headerButton || button)?.focus({ preventScroll: true });
+        const visible = (node) => node?.isConnected && node.getClientRects().length > 0;
+        const trigger = visible(setupMenuTrigger) ? setupMenuTrigger
+          : visible(headerButton) ? headerButton : visible(button) ? button : null;
+        trigger?.focus({ preventScroll: true });
       }
+      if (!next) setupMenuTrigger = null;
     }
 
     function toggleSetupMenu() {
@@ -14822,6 +16057,10 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       const pathLabel = state.audioStreaming
         ? (state.audioWorkletMode === "sab" ? "SAB" : (state.audioWorkletMode === "msg" ? "MSG" : "Legacy"))
         : "Idle";
+      const headerMeta = $("receive-header-meta");
+      if (headerMeta) {
+        headerMeta.textContent = `RX audio ${state.audioStreaming ? rateLabel : "off"} · buffer ${leadMs == null ? "--" : `${leadMs} ms`}`;
+      }
       const statusEl = $("audio-strip-status");
       if (statusEl) {
         statusEl.textContent = state.audioStreaming && state.audioCtx?.state === "running"
@@ -15416,6 +16655,31 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       updateOperatorStateDetail();
     }
 
+    // txVisualState()/TX_VISUAL_STATE_BADGE_TEXT/TX_VISUAL_STATE_ANNOUNCEMENT live in
+    // src/ui/tx-presentation.ts (decisions.md "TX visual states"), exposed here via _next
+    // the same way txControlPresentationState already is.
+    //
+    // Assertive live-region text must only change on a real transition; the shared badge
+    // node may not exist yet on every base this file is built from (app-bar patch lands
+    // separately), so every lookup below is guarded and a no-op when the node is absent.
+    let lastAnnouncedTxVisualState = null;
+
+    function updateTxAppBarHooks(visualState) {
+      const badge = $("app-tx-state-badge");
+      if (badge) {
+        badge.dataset.txVisualState = visualState === "engaging" ? "armed" : visualState;
+        badge.textContent = _next.TX_VISUAL_STATE_BADGE_TEXT[visualState];
+        badge.setAttribute("aria-label", _next.TX_VISUAL_STATE_BADGE_TEXT[visualState]);
+      }
+      const onAirBar = $("tx-on-air-bar");
+      if (onAirBar) onAirBar.hidden = visualState !== "transmitting";
+      const liveRegion = $("tx-state-live");
+      if (liveRegion && visualState !== lastAnnouncedTxVisualState) {
+        liveRegion.textContent = _next.TX_VISUAL_STATE_ANNOUNCEMENT[visualState];
+      }
+      lastAnnouncedTxVisualState = visualState;
+    }
+
     function updateTxZone() {
       const txZone = $("tx-zone");
       if (!txZone) return;
@@ -15447,11 +16711,14 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         engaging: "armed",
         transmitting: "keyed",
       }[presentationState];
+      const visualState = _next.txVisualState(presentationState, state.txLockReason);
       const actions = txActionAvailability(presentationState, source);
       txZone.dataset.txState = txState;
       txZone.dataset.txPresentation = presentationState;
+      txZone.dataset.txVisualState = visualState;
       txZone.dataset.txSource = source || "none";
-      let stateLabel = "TX LOCKED";
+      updateTxAppBarHooks(visualState);
+      let stateLabel = visualState === "disarmed" ? "TX DISARMED" : "TX LOCKED";
       if (presentationState === "fault") {
         stateLabel = "TX FAULT";
       } else if (wfmRxOnly) {
@@ -15514,7 +16781,9 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       } else if (state.connected && ready) {
         txHint = "Hold PTT to transmit, or tap MOX to latch";
       } else if (state.connected) {
-        txHint = `Tap ARM to enable transmit after ${txLockReasonLabel(state.txLockReason)}`;
+        txHint = visualState === "disarmed"
+          ? "Reconfirm to arm transmit before you can key up"
+          : `Tap ARM to enable transmit after ${txLockReasonLabel(state.txLockReason)}`;
       }
       $("tx-zone-hint").textContent = txHint;
       const arm = $("tx-arm-btn");
@@ -15727,15 +16996,19 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       $("freq-lock-btn").classList.toggle("active", state.frequencyLock);
       $("rx-volume-readout").textContent = `${safeFixed(state.rxVolumeDb, 1, "-10.0")} dB`;
       const squelchKind = modeAwareSquelchKind();
-      $("rx-ssql-btn").textContent = squelchKind ? `${squelchKind} SQL ${state.rxSsqlEnabled ? "On" : "Off"}` : "SQL N/A";
+      $("rx-ssql-btn").textContent = squelchKind
+        ? `${squelchKind} squelch ${state.rxSsqlEnabled ? "on" : "off"}`
+        : "Squelch unavailable";
       $("rx-ssql-btn").disabled = !squelchKind;
       $("rx-ssql-btn").classList.toggle("active", Boolean(squelchKind) && state.rxSsqlEnabled);
+      $("rx-ssql-btn").setAttribute("aria-pressed", Boolean(squelchKind) && state.rxSsqlEnabled ? "true" : "false");
       $("rx-ssql-threshold").disabled = !squelchKind;
       $("rx-ssql-readout").textContent = `${squelchKind || "SQL"} ${Math.round(state.rxSsqlThreshold)}`;
       $("rx-nr-readout").textContent = noiseReductionLabel();
       $("rx-nb-threshold-readout").textContent = safeFixed(state.rxNbThreshold, 2, "0.00");
       $("rx-anf-btn").textContent = state.anfEnabled ? "ANF On" : "ANF Off";
       $("rx-anf-btn").classList.toggle("active", state.anfEnabled);
+      $("rx-anf-btn").setAttribute("aria-pressed", state.anfEnabled ? "true" : "false");
       $("agc-gain-readout").textContent = `${state.agcGain}`;
       $("zoom-readout").textContent = `${safeFixed(state.displayZoom, 1, "1.0")}x`;
       $("zoom-toolbar-readout").textContent = `ZOOM ${safeFixed(state.displayZoom, 1, "1.0")}x`;
@@ -15876,15 +17149,29 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       const connDot = $("conn-dot");
       connDot.className = "dot " + (state.connected && state.bridgeReady ? "live" : (reconnectSnapshot.active || state.demoMode ? "warn" : "dead"));
       const goLiveBtn = $("go-live-btn");
+      const systemGoLiveBtn = $("system-go-live-btn");
+      const systemOfflineBtn = $("system-go-offline-btn");
       if (state.connected && state.bridgeReady) {
         goLiveBtn.textContent = "Go Offline";
         goLiveBtn.className = "btn ghost";
+        goLiveBtn.hidden = true;
+        if (systemOfflineBtn) systemOfflineBtn.hidden = false;
       } else if (reconnectSnapshot.active) {
         goLiveBtn.textContent = reconnectSnapshot.phase === "waiting" ? "Cancel Retry" : "Cancel Connect";
         goLiveBtn.className = "btn ghost";
+        goLiveBtn.hidden = false;
+        if (systemOfflineBtn) systemOfflineBtn.hidden = true;
       } else {
         goLiveBtn.textContent = "Go Live";
         goLiveBtn.className = "btn primary";
+        goLiveBtn.hidden = false;
+        if (systemOfflineBtn) systemOfflineBtn.hidden = true;
+      }
+      if (systemGoLiveBtn) {
+        systemGoLiveBtn.textContent = goLiveBtn.textContent;
+        systemGoLiveBtn.className = goLiveBtn.className;
+        systemGoLiveBtn.hidden = goLiveBtn.hidden;
+        systemGoLiveBtn.disabled = goLiveBtn.disabled;
       }
       $("display-resolution").textContent = `Display: ${Math.max(1, Math.round(window.devicePixelRatio || 1))}x DPR`;
       if (phoneWanLiteActive()) {
@@ -16066,6 +17353,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
           if (tv) tv.textContent = `${state.txEqBands[i]}`;
         }
       }
+      syncMainPinProxies();
     }
 
     function sendTci(text) {
@@ -18288,6 +19576,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         reconnectSnapshot.active ||
         (state.ws && state.ws.readyState === WebSocket.CONNECTING);
       if (isConnectingOrLive) {
+        if (state.connected && !window.confirm("Go offline and disconnect from the bridge?")) return;
         void disconnectBridge();
       } else {
         // Create/resume AudioContext directly inside the operator's click so
@@ -19658,16 +20947,170 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       });
     }
 
+    function initReceiveExactSliderEntry() {
+      const values = [
+        ["rx-volume-readout", "rx-volume", "Volume"],
+        ["rx-ssql-readout", "rx-ssql-threshold", "Voice squelch level"],
+        ["agc-gain-readout", "agc-gain", "AGC gain"],
+        ["rx-nb-threshold-readout", "rx-nb-threshold", "Noise blanker threshold"],
+        ["filter-low-readout", "filter-low", "RX filter low cut"],
+        ["filter-high-readout", "filter-high", "RX filter high cut"],
+      ];
+      values.forEach(([readoutId, sliderId, label]) => {
+        const readout = $(readoutId);
+        const slider = $(sliderId);
+        if (!readout || !slider) return;
+        readout.classList.add("exact-slider-value");
+        readout.setAttribute("role", "button");
+        readout.setAttribute("tabindex", "0");
+        readout.setAttribute("aria-label", `Enter exact ${label} value`);
+        readout.title = "Double-click or double-tap to enter an exact value";
+        let activeInput = null;
+        let lastTouch = null;
+        const open = () => {
+          if (activeInput || slider.disabled) return;
+          const input = document.createElement("input");
+          input.className = "exact-slider-input";
+          input.type = "number";
+          input.min = slider.min;
+          input.max = slider.max;
+          input.step = slider.step;
+          input.value = slider.value;
+          input.setAttribute("aria-label", `Exact ${label} value`);
+          activeInput = input;
+          readout.after(input);
+          readout.hidden = true;
+          input.focus();
+          input.select();
+          const close = (commit) => {
+            if (activeInput !== input) return;
+            activeInput = null;
+            if (commit && !slider.disabled && input.value.trim()) {
+              const value = Number(input.value);
+              if (Number.isFinite(value)) {
+                const lower = Number(slider.min);
+                const upper = Number(slider.max);
+                slider.value = String(Math.min(upper, Math.max(lower, value)));
+                slider.dispatchEvent(new Event("input", { bubbles: true }));
+                slider.dispatchEvent(new Event("change", { bubbles: true }));
+              }
+            }
+            input.remove();
+            readout.hidden = false;
+            readout.focus({ preventScroll: true });
+          };
+          input.addEventListener("keydown", (event) => {
+            if (event.key === "Enter") {
+              event.preventDefault();
+              event.stopPropagation();
+              close(true);
+            } else if (event.key === "Escape") {
+              event.preventDefault();
+              event.stopPropagation();
+              close(false);
+            }
+          });
+          input.addEventListener("blur", () => close(false), { once: true });
+        };
+        readout.addEventListener("dblclick", (event) => {
+          event.preventDefault();
+          open();
+        });
+        readout.addEventListener("pointerup", (event) => {
+          if (event.pointerType !== "touch") return;
+          const now = performance.now();
+          const nearby = lastTouch && Math.hypot(event.clientX - lastTouch.x, event.clientY - lastTouch.y) < 24;
+          if (nearby && now - lastTouch.time < 350) {
+            event.preventDefault();
+            lastTouch = null;
+            open();
+          } else {
+            lastTouch = { time: now, x: event.clientX, y: event.clientY };
+          }
+        });
+        readout.addEventListener("keydown", (event) => {
+          if (event.key !== "Enter" && event.key !== " ") return;
+          event.preventDefault();
+          open();
+        });
+      });
+    }
+
+    function initReceiveRadioGroups() {
+      ["rx-agc-grid", "rx-nr-grid", "rx-nb-grid"].forEach((id) => {
+        const grid = $(id);
+        if (!grid) return;
+        const buttons = Array.from(grid.querySelectorAll("button"));
+        const sync = () => {
+          const selected = buttons.find((button) => button.classList.contains("active") && !button.disabled)
+            || buttons.find((button) => !button.disabled);
+          buttons.forEach((button) => {
+            button.setAttribute("role", "radio");
+            button.setAttribute("aria-checked", button === selected ? "true" : "false");
+            button.tabIndex = button === selected ? 0 : -1;
+          });
+        };
+        grid.addEventListener("keydown", (event) => {
+          const current = event.target.closest("button");
+          if (!buttons.includes(current)) return;
+          const choices = buttons.filter((button) => !button.disabled);
+          if (!choices.length) return;
+          const index = Math.max(0, choices.indexOf(current));
+          let nextIndex = index;
+          if (event.key === "ArrowRight" || event.key === "ArrowDown") {
+            nextIndex = (index + 1) % choices.length;
+          } else if (event.key === "ArrowLeft" || event.key === "ArrowUp") {
+            nextIndex = (index - 1 + choices.length) % choices.length;
+          } else if (event.key === "Home") {
+            nextIndex = 0;
+          } else if (event.key === "End") {
+            nextIndex = choices.length - 1;
+          } else {
+            return;
+          }
+          event.preventDefault();
+          choices[nextIndex].focus();
+          choices[nextIndex].click();
+        });
+        new MutationObserver(sync).observe(grid, {
+          subtree: true,
+          attributes: true,
+          attributeFilter: ["class", "disabled"],
+        });
+        sync();
+      });
+    }
+
     function initInteractions() {
+      initReceiveRadioGroups();
+      initReceiveExactSliderEntry();
+      initSettingsSections();
+      initMainScreenLayout();
       $("go-live-btn").addEventListener("click", goLive);
+      $("system-go-live-btn")?.addEventListener("click", () => $("go-live-btn")?.click());
+      $("system-go-offline-btn")?.addEventListener("click", goLive);
       $("setup-menu-btn").addEventListener("click", (event) => {
         event.preventDefault();
         event.stopPropagation();
         toggleSetupMenu();
       });
       $("header-setup-btn")?.addEventListener("click", () => setSetupMenuOpen(true));
+      $("settings-search")?.addEventListener("input", updateSetupSearch);
+      document.addEventListener("keydown", (event) => {
+        if (event.key !== "," || event.altKey || event.ctrlKey || event.metaKey) return;
+        const focused = document.activeElement;
+        if (focused?.matches("input, select, textarea, [contenteditable='true']")) return;
+        event.preventDefault();
+        setSetupMenuOpen(true);
+        $("settings-search")?.focus({ preventScroll: true });
+      });
       $("setup-close-btn").addEventListener("click", () => {
         setSetupMenuOpen(false);
+      });
+      $("settings-index-return")?.addEventListener("click", () => {
+        setSettingsSection(settingsSection, false);
+        document.querySelector(`.settings-section-tab[data-settings-section="${settingsSection}"]`)
+          ?.focus({ preventScroll: true });
       });
       $("setup-scrim")?.addEventListener("click", () => setSetupMenuOpen(false));
       const setupTabs = Array.from(document.querySelectorAll("[data-setup-panel]"));
@@ -20551,6 +21994,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         }, { passive: false });
       }
       window.addEventListener("resize", () => {
+        syncPhonePanels();
         syncDisplayWorkspaceRatio();
         scheduleDisplaySurfaceResize();
         updateUi();
@@ -21303,7 +22747,9 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       $("tx-noise-gate-threshold-readout").textContent = `${state.txNoiseGateThresholdDb} dB`;
        $("tx-filter-low").value = `${state.txFilterLow}`;
        $("tx-filter-high").value = `${state.txFilterHigh}`;
-       state.setupPanel = normalizeSetupPanelId(localStorage.getItem(SETUP_PANEL_PREF_KEY));
+       let savedSetupPanel = "profiles";
+       try { savedSetupPanel = localStorage.getItem(SETUP_PANEL_PREF_KEY) || "profiles"; } catch {}
+       state.setupPanel = normalizeSetupPanelId(savedSetupPanel);
        initPhonePanels();
       initResponsiveShell();
       buildEqGrid("rx-eq-grid", "rx");

@@ -98,6 +98,7 @@
   --slider-track-size: 4px;
   --slider-thumb-size: 16px;
   --slider-thumb-size-coarse: 22px;
+  --readout-entry-width: 96px;
   --overlay-backdrop: rgba(0, 0, 0, 0.58);
 
   /* Responsive shell geometry; layout.css consumes these at each container tier. */
@@ -114,11 +115,15 @@
   --display-tablet-waterfall-min: 120px;
   --display-splitter-size: 12px;
   --tx-phone-bar-height: 68px;
+  --tx-on-air-bar-height: 3px;
+  --meter-peak-tick-width: 2px;
   --tx-phone-clearance: 80px;
   --legacy-dock-clearance: 72px;
   --legacy-quickbar-clearance: 56px;
   --legacy-phone-max-width: 560px;
   --phone-menu-max-height: 82dvh;
+  --settings-desktop-width: 420px;
+  --settings-nav-width: 128px;
   --display-shell-chrome-height: 340px;
 }
 
