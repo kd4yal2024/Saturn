@@ -68,13 +68,18 @@ Browser side, from the `RX codec A/B` diagnostic block:
 | `workletUnderruns` / `workletOverflows` | Playback ring-buffer health |
 | `queueMs` | Playback lead in ms |
 
-Bridge side, from `perf.json`:
+Bridge side:
 
-| Field | Meaning |
-|---|---|
-| `rx_opus_overflow_samples_total` | Encoder-feed samples dropped because the 80 ms queue was full |
-| `rx_opus_contention_drops_total` | Encoder-feed offers skipped because the RX callback lost the queue lock |
-| audio drop/queue counters | Existing per-client audio queue health |
+| Field | Where it comes from | Meaning |
+|---|---|---|
+| `rx_opus_ingress:0,<overflow>,<contention>;` | Live text line pushed to connected clients — **not** in `perf.json` | Encoder-feed samples dropped because the 80 ms queue was full, and offers skipped because the RX callback lost the queue lock |
+| `rx_audio_frames_s`, `rx_audio_samples_s`, `audio_dropped_s` | `perf.json` | Aggregate WDSP audio rate and per-client queue drops |
+| `rx_fifo_*`, `host_buffer_drops`, `header_errors` | `perf.json` | Data-plane health, to separate a radio problem from an audio-path problem |
+
+The per-client `rx_opus_*` totals are only ever sent as that text line; they were
+never wired into `perf.json`. The browser receives the line but does not yet
+surface it in the diagnostics snapshot, so for a manual capture read it from the
+client's WebSocket trace, or add it to the snapshot in a follow-up change.
 
 Latency and recovery are browser-side observations: `queueMs` plus
 `audioContextBaseLatencyMs` for the playback budget, and the recovery check for
