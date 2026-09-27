@@ -17170,6 +17170,11 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     }
 
     function normalizeTxReadyState(now = performance.now()) {
+      if (state.txLockReason === "tx-fault") {
+        state.txReadyExpiresAt = 0;
+        clearTxReadyTimer();
+        return false;
+      }
       if (rfDisabledBlocksTx()) {
         if (state.txReadyExpiresAt > 0) {
           state.txReadyExpiresAt = 0;
@@ -17213,7 +17218,10 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
 
     function lockTx(reason = "operator-lock", refresh = true) {
       state.txReadyExpiresAt = 0;
-      state.txLockReason = reason;
+      // Only a successful, deliberate Arm action may clear a bridge fault.
+      if (state.txLockReason !== "tx-fault" || reason === "tx-fault") {
+        state.txLockReason = reason;
+      }
       clearTxReadyTimer();
       if (refresh) {
         updateUi();
@@ -17222,7 +17230,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
 
     function armTxReady(reason = "operator") {
       if (rfDisabledBlocksTx()) {
-        state.txLockReason = "rf-disabled";
+        if (state.txLockReason !== "tx-fault") state.txLockReason = "rf-disabled";
         logEvent("TX cannot arm because bridge RF output is disabled");
         recordOperatorFault("RF disabled", "warn", false);
         updateUi();
@@ -17230,14 +17238,14 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       }
       if (clientRoleBlocksTx()) {
         const reason = clientRoleLockReason();
-        state.txLockReason = reason;
+        if (state.txLockReason !== "tx-fault") state.txLockReason = reason;
         logEvent(`TX cannot arm because bridge role is ${state.remoteClientRole || "pending"}`);
         recordOperatorFault(txLockReasonLabel(reason), "warn", false);
         updateUi();
         return false;
       }
       if (!state.connected || !state.ws || state.ws.readyState !== WebSocket.OPEN) {
-        state.txLockReason = "connect";
+        if (state.txLockReason !== "tx-fault") state.txLockReason = "connect";
         updateUi();
         return false;
       }
@@ -17254,6 +17262,9 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         lockTx("connect", false);
         return;
       }
+      // A bridge fault can also signal TX release. Keep its reconfirmation gate
+      // closed while release cleanup restores RX.
+      if (state.txLockReason === "tx-fault") return;
       state.txReadyExpiresAt = performance.now() + TX_READY_WINDOW_MS;
       state.txLockReason = "";
       scheduleTxReadyTimer();
@@ -18055,7 +18066,8 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
           return false;
         }
         if (!normalizeTxReadyState()) {
-          armTxReady("operator");
+          // Fault recovery requires the separate Arm control, not a PTT press.
+          if (state.txLockReason !== "tx-fault") armTxReady("operator");
           return false;
         }
         const requestId = state.pttRequestId + 1;
