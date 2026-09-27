@@ -1823,22 +1823,17 @@ try {
         sourceCount: document.querySelectorAll('#setup-dsp-nr-level').length };
       const mox = document.getElementById('mox-btn');
       const moxHome = mox.parentElement;
-      if (!check('transmit.mox').checked) check('transmit.mox').click();
-      const pinnedMox = { checked: check('transmit.mox').checked,
-        originalNode: document.getElementById('mox-btn') === mox,
-        inTray: !!mox.closest('#main-screen-pins'),
+      const moxPin = check('transmit.mox');
+      const inlineMox = { checked: moxPin.checked, disabled: moxPin.disabled,
+        home: !!moxHome.closest('.tx-action-row'),
         visible: !!mox.getClientRects().length && !mox.closest('[hidden]'),
-        count: document.querySelectorAll('#mox-btn').length, homeHidden: moxHome.hidden };
-      check('transmit.mox').click();
-      const unpinnedMox = { checked: check('transmit.mox').checked, home: mox.parentElement === moxHome,
-        count: document.querySelectorAll('#mox-btn').length, homeHidden: moxHome.hidden };
-      check('transmit.mox').click();
+        count: document.querySelectorAll('#mox-btn').length };
       window.applyLayout('phone', false, false);
       const separatePhoneMox = { home: mox.parentElement === moxHome,
         count: document.querySelectorAll('#mox-btn').length, homeHidden: moxHome.hidden };
       window.applyLayout('desktop', false, false);
       window.applyMainScreenLayout();
-      const responsiveMox = { inTray: !!mox.closest('#main-screen-pins'),
+      const responsiveMox = { home: mox.parentElement === moxHome,
         visible: !!mox.getClientRects().length && !mox.closest('[hidden]') };
       document.querySelector('.settings-section-tab[data-settings-section="interface"]').click();
       const orderBefore = [...document.querySelectorAll('[data-toolbar-order]')].map(node => node.dataset.toolbarOrder);
@@ -1848,7 +1843,7 @@ try {
       up?.addEventListener('click', () => window.__mainKeyEvents.push({ click: 'up' }));
       up?.focus();
       return { before, bothOn, bothOff, restored, otherTier, back,
-        sliderBefore, sliderAfter, pinnedMox, unpinnedMox, separatePhoneMox, responsiveMox,
+        sliderBefore, sliderAfter, inlineMox, separatePhoneMox, responsiveMox,
         orderBefore, toolbarBefore: toolbar(),
         focusedUp: document.activeElement === up, upDisabled: up?.disabled,
         storage: localStorage.getItem('saturn.ui.layout.' + current) };
@@ -1919,9 +1914,21 @@ try {
         toolbar: [...document.querySelector('.display-pill-row').children].map(node => node.id),
         sliderRow: [...document.querySelectorAll('#main-screen-pins .main-screen-pin')]
           .some(node => node.textContent.includes('Noise reduction level') && !!node.querySelector('input[type="range"]')),
-        moxPinned: !!document.getElementById('mox-btn')?.closest('#main-screen-pins'),
+        moxInline: !!document.getElementById('mox-btn')?.closest('.tx-action-row'),
         moxCount: document.querySelectorAll('#mox-btn').length,
         storage: localStorage.getItem('saturn.ui.layout.${tier}') };
+    })()`);
+    const legacyMox = await evaluate(`(() => {
+      const key = 'saturn.ui.layout.${tier}';
+      const stored = JSON.parse(localStorage.getItem(key));
+      stored.pinned = [...new Set([...stored.pinned, 'transmit.mox'])];
+      localStorage.setItem(key, JSON.stringify(stored));
+      window.applyMainScreenLayout();
+      const mox = document.getElementById('mox-btn');
+      return { savedPin: stored.pinned.includes('transmit.mox'),
+        inline: !!mox?.closest('.tx-action-row'),
+        visible: !!mox?.getClientRects().length && !mox?.closest('[hidden]'),
+        count: document.querySelectorAll('#mox-btn').length };
     })()`);
     const screenPng = await call('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
     writeFileSync(join(output, `${scenario.name}-reloaded.png`), Buffer.from(screenPng.data, 'base64'));
@@ -1930,7 +1937,7 @@ try {
     const isHidden = item => item?.display === 'none' && item?.hidden === 'true';
     if (!initial.menuOpen || initial.selector !== tier || initial.layout !== 'desktop' ||
       initial.options.join(',') !== 'phone,tablet,desktop,wide') failures.push('tier-selector-or-settings-route');
-    if (initial.safety.length !== 6 || initial.safety.some(item => !item.found || !item.disabled || !item.checked))
+    if (initial.safety.length !== 7 || initial.safety.some(item => !item.found || !item.disabled || !item.checked))
       failures.push('safety-pins-not-locked');
     if ((initial.avg && !isShown(changed.before.avg)) || (!initial.avg && !isHidden(changed.before.avg)) ||
       (initial.peak && !isShown(changed.before.peak)) || (!initial.peak && !isHidden(changed.before.peak)))
@@ -1947,15 +1954,13 @@ try {
       !changed.sliderAfter.trayVisible || !changed.sliderAfter.proxy ||
       changed.sliderAfter.proxyValue !== changed.sliderAfter.sourceValue ||
       changed.sliderAfter.sourceCount !== 1) failures.push('pinned-slider-proxy');
-    if (!changed.pinnedMox.checked || !changed.pinnedMox.originalNode ||
-      !changed.pinnedMox.inTray || !changed.pinnedMox.visible ||
-      changed.pinnedMox.count !== 1 || !changed.pinnedMox.homeHidden ||
-      changed.unpinnedMox.checked || !changed.unpinnedMox.home ||
-      changed.unpinnedMox.count !== 1 || changed.unpinnedMox.homeHidden ||
+    if (!changed.inlineMox.checked || !changed.inlineMox.disabled || !changed.inlineMox.home ||
+      !changed.inlineMox.visible || changed.inlineMox.count !== 1 ||
       !changed.separatePhoneMox.home || changed.separatePhoneMox.count !== 1 ||
-      changed.separatePhoneMox.homeHidden || !changed.responsiveMox.inTray ||
-      !changed.responsiveMox.visible || !reloaded.moxPinned || reloaded.moxCount !== 1)
-      failures.push('pinned-mox-original-control-or-persistence');
+      changed.separatePhoneMox.homeHidden || !changed.responsiveMox.home ||
+      !changed.responsiveMox.visible || !reloaded.moxInline || reloaded.moxCount !== 1 ||
+      !legacyMox.savedPin || !legacyMox.inline || !legacyMox.visible || legacyMox.count !== 1)
+      failures.push('mox-must-remain-beside-ptt');
     const peak = 'display.peakToolbar';
     const beforePeak = changed.orderBefore.indexOf(peak);
     if (!spaceUpFocused || changed.upDisabled || beforePeak < 1 ||
@@ -1980,7 +1985,7 @@ try {
       reloaded.toolbar.indexOf('spectrum-average-toolbar-btn') >=
         reloaded.toolbar.indexOf('spectrum-peak-toolbar-btn')) failures.push('reload-persistence');
     const report = { scenario: scenario.name, initial, changed, spaceUpFocused, moved, afterDown,
-      focusedEnterUp, enterUp, enterDown, reloaded,
+      focusedEnterUp, enterUp, enterDown, reloaded, legacyMox,
       failures, ok: failures.length === 0 };
     mainScreenReports.push(report);
     console.log(`${report.ok ? 'PASS' : 'FAIL'} ${scenario.name}: ${failures.join(', ') || 'tier, pin visibility, toolbar keys, safety, slider, persistence'}`);

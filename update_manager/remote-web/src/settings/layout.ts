@@ -36,6 +36,7 @@ export const LAYOUT_SAFETY_PINNED_IDS: readonly string[] = [
   'transmit.appBarBadge',
   'transmit.arm',
   'transmit.ptt',
+  'transmit.mox',
   'shell.onAirBar',
   'shell.settings',
 ];
