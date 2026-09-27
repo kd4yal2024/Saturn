@@ -5,7 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BRIDGE_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 NATIVE_SOURCE_ROOT="${SATURN_BRIDGE_NATIVE_SOURCE_ROOT:-${BRIDGE_DIR}/target/native-src}"
-WDSP2_SOURCE_DIR="${WDSP2_SOURCE_DIR:-${NATIVE_SOURCE_ROOT}/OpenHPSDR-wdsp/wdsp 2.00/Source}"
+WDSP2_SOURCE_DIR="${WDSP2_SOURCE_DIR:-${NATIVE_SOURCE_ROOT}/OpenHPSDR-wdsp/wdsp 2.10/Source}"
 PIHPSDR_WDSP_DIR="${PIHPSDR_WDSP_DIR:-${NATIVE_SOURCE_ROOT}/pihpsdr/wdsp}"
 BUILD_DIR="${WDSP2_BUILD_DIR:-${BRIDGE_DIR}/target/wdsp2-linux-arm}"
 TARGET_CPU="${SATURN_WDSP_TARGET_CPU:-cortex-a72}"
@@ -16,7 +16,7 @@ if [[ ! "$TARGET_CPU" =~ ^[A-Za-z0-9._+-]+$ ]]; then
 fi
 
 if [[ ! -d "${WDSP2_SOURCE_DIR}" ]]; then
-  echo "ERROR: WDSP 2.00 source directory not found: ${WDSP2_SOURCE_DIR}" >&2
+  echo "ERROR: WDSP 2.10 source directory not found: ${WDSP2_SOURCE_DIR}" >&2
   exit 1
 fi
 if [[ ! -f "${PIHPSDR_WDSP_DIR}/linux_port.c" || ! -f "${PIHPSDR_WDSP_DIR}/linux_port.h" ]]; then
@@ -197,7 +197,7 @@ new_dmph_update = (
     "\t\tLeaveCriticalSection(&ch[channel].csDSP);\n"
 )
 if old_dmph_update not in text:
-    raise RuntimeError("WDSP 2.00 SetRXAWBFMdmph implementation changed")
+    raise RuntimeError("WDSP 2.10 SetRXAWBFMdmph implementation changed")
 wbfm.write_text(text.replace(old_dmph_update, new_dmph_update, 1))
 PY
 
@@ -216,14 +216,28 @@ fi
 read -r -a fftw_cflags <<<"$(pkg-config --cflags fftw3)"
 cflags+=("${fftw_cflags[@]}")
 
+# WDSP 2.10 ships the NNR engine plus two embedded neural-network models
+# (nnr_model_0.c ~11 MB, nnr_model_1.c ~24 MB of hex literals, i.e. ~6.8 MB of
+# const data). Those translation units are pure data: optimizing them at -O3
+# costs minutes and hundreds of MB of RAM on the CM4 with no runtime benefit,
+# and the G2 has ~1 GB total with the bridge running. Build them at -O1 while
+# every other WDSP source keeps the standard -O3 numerical/scheduling flags.
 for source in "${sources[@]}"; do
-  cc "${cflags[@]}" -c -o "${source%.c}.o" "${source}"
+  file_cflags=("${cflags[@]}")
+  case "$source" in
+    nnr_model_*.c)
+      for index in "${!file_cflags[@]}"; do
+        [[ "${file_cflags[$index]}" == "-O3" ]] && file_cflags[$index]="-O1"
+      done
+      ;;
+  esac
+  cc "${file_cflags[@]}" -c -o "${source%.c}.o" "${source}"
 done
 
 ar rcs libwdsp.a ./*.o
 ranlib libwdsp.a
 
-echo "Built WDSP 2.00 Linux/ARM archive:"
+echo "Built WDSP 2.10 Linux/ARM archive:"
 echo "  ${BUILD_DIR}/libwdsp.a"
 echo "  target CPU: ${TARGET_CPU}"
 echo

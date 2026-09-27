@@ -81,7 +81,7 @@ SATURN_READY_REQUIRE_BRIDGE="${SATURN_READY_REQUIRE_BRIDGE:-0}"
 SATURN_DEFER_FINAL_READINESS="${SATURN_DEFER_FINAL_READINESS:-0}"
 SATURN_BRIDGE_WDSP_FLAVOR="${SATURN_BRIDGE_WDSP_FLAVOR:-wdsp2}"
 SATURN_WDSP2_REPO_URL="${SATURN_WDSP2_REPO_URL:-https://github.com/TAPR/OpenHPSDR-wdsp.git}"
-SATURN_WDSP2_REF="${SATURN_WDSP2_REF:-584e8aca5ba1c4c6bc66fc0cc164ce567c8ba1e3}"
+SATURN_WDSP2_REF="${SATURN_WDSP2_REF:-b02d5bac675dd2f33ec2bab2b339f79a597c47dd}"
 SATURN_PIHPSDR_PORT_REPO_URL="${SATURN_PIHPSDR_PORT_REPO_URL:-https://github.com/dl1ycf/pihpsdr.git}"
 SATURN_PIHPSDR_PORT_REF="${SATURN_PIHPSDR_PORT_REF:-974acbac07fe7dd3e24f28f3956a9ffb3a1ebaf1}"
 
@@ -409,7 +409,7 @@ saturn_remote_bridge_preflight() {
   warn "Saturn Remote bridge prerequisites are missing:"
   printf '  - %s\n' "${missing[@]}" >&2
   warn "Remote pages can load, but /remote and /remote-next will not work until saturn-bridge is installed."
-  warn "The installer provisions pinned WDSP 2.00 and Linux-port sources; no piHPSDR build or cloud-init step is required."
+  warn "The installer provisions pinned WDSP 2.10 and Linux-port sources; no piHPSDR build or cloud-init step is required."
 
   if env_flag_enabled "$SATURN_REQUIRE_BRIDGE"; then
     err "SATURN_REQUIRE_BRIDGE=1 and Saturn Remote bridge prerequisites are missing."

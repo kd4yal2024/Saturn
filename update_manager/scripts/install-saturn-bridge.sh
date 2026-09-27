@@ -48,18 +48,18 @@ SATURN_BRIDGE_FFTW_WISDOM_GENERATE_ON_INSTALL="${SATURN_BRIDGE_FFTW_WISDOM_GENER
 # These commits are part of the Saturn Bridge native build contract. Updating
 # either pin requires rebuilding and re-running the WDSP/bridge test matrix.
 SATURN_WDSP2_REPO_URL="${SATURN_WDSP2_REPO_URL:-https://github.com/TAPR/OpenHPSDR-wdsp.git}"
-SATURN_WDSP2_REF="${SATURN_WDSP2_REF:-584e8aca5ba1c4c6bc66fc0cc164ce567c8ba1e3}"
+SATURN_WDSP2_REF="${SATURN_WDSP2_REF:-b02d5bac675dd2f33ec2bab2b339f79a597c47dd}"
 SATURN_PIHPSDR_PORT_REPO_URL="${SATURN_PIHPSDR_PORT_REPO_URL:-https://github.com/dl1ycf/pihpsdr.git}"
 SATURN_PIHPSDR_PORT_REF="${SATURN_PIHPSDR_PORT_REF:-974acbac07fe7dd3e24f28f3956a9ffb3a1ebaf1}"
 SATURN_BRIDGE_NATIVE_SOURCE_ROOT="${SATURN_BRIDGE_NATIVE_SOURCE_ROOT:-${SATURN_BRIDGE_CARGO_TARGET_DIR}/native-src}"
 SATURN_WDSP2_REPO_DIR="${SATURN_WDSP2_REPO_DIR:-${SATURN_BRIDGE_NATIVE_SOURCE_ROOT}/OpenHPSDR-wdsp}"
 SATURN_PIHPSDR_PORT_REPO_DIR="${SATURN_PIHPSDR_PORT_REPO_DIR:-${SATURN_BRIDGE_NATIVE_SOURCE_ROOT}/pihpsdr}"
-SATURN_WDSP2_SOURCE_DIR="${SATURN_WDSP2_SOURCE_DIR:-${SATURN_WDSP2_REPO_DIR}/wdsp 2.00/Source}"
+SATURN_WDSP2_SOURCE_DIR="${SATURN_WDSP2_SOURCE_DIR:-${SATURN_WDSP2_REPO_DIR}/wdsp 2.10/Source}"
 SATURN_PIHPSDR_WDSP_DIR="${SATURN_PIHPSDR_WDSP_DIR:-${SATURN_PIHPSDR_PORT_REPO_DIR}/wdsp}"
 SATURN_WDSP2_BUILD_DIR="${SATURN_WDSP2_BUILD_DIR:-${SATURN_BRIDGE_CARGO_TARGET_DIR}/wdsp2-linux-arm}"
 
 # Legacy opt-in only. The default installer does not need a prebuilt piHPSDR
-# checkout and always uses the pinned WDSP 2.00 path above.
+# checkout and always uses the pinned WDSP 2.10 path above.
 SATURN_PIHPSDR_DIR="${SATURN_PIHPSDR_DIR:-${SATURN_USER_HOME}/github/pihpsdr}"
 
 log(){ printf '[install-saturn-bridge] %s\n' "$*"; }
@@ -251,12 +251,12 @@ ensure_pinned_sparse_checkout() {
 prepare_wdsp2_sources() {
   ensure_pinned_sparse_checkout \
     "$SATURN_WDSP2_REPO_URL" "$SATURN_WDSP2_REF" "$SATURN_WDSP2_REPO_DIR" \
-    '/wdsp 2.00/Source/'
+    '/wdsp 2.10/Source/'
   ensure_pinned_sparse_checkout \
     "$SATURN_PIHPSDR_PORT_REPO_URL" "$SATURN_PIHPSDR_PORT_REF" "$SATURN_PIHPSDR_PORT_REPO_DIR" \
     '/wdsp/linux_port.c' '/wdsp/linux_port.h'
 
-  need_dir "$SATURN_WDSP2_SOURCE_DIR" "WDSP 2.00 source directory"
+  need_dir "$SATURN_WDSP2_SOURCE_DIR" "WDSP 2.10 source directory"
   need_file "$SATURN_PIHPSDR_WDSP_DIR/linux_port.c" "piHPSDR Linux port source"
   need_file "$SATURN_PIHPSDR_WDSP_DIR/linux_port.h" "piHPSDR Linux port header"
 }
@@ -264,7 +264,7 @@ prepare_wdsp2_sources() {
 verify_wdsp2_archive() {
   local archive="$SATURN_WDSP2_BUILD_DIR/libwdsp.a"
   local symbols
-  need_file "$archive" "WDSP 2.00 archive"
+  need_file "$archive" "WDSP 2.10 archive"
   symbols="$(nm -g --defined-only "$archive")"
   local symbol
   for symbol in \
@@ -273,17 +273,17 @@ verify_wdsp2_archive() {
     pscc SetPSMox SetPSControl GetPSInfo SetPSFeedbackRate \
     create_rmatchV destroy_rmatchV xrmatchIN xrmatchOUT getRMatchDiags resetRMatchDiags setRMatchRingsize
   do
-    grep -Eq "[[:space:]]${symbol}$" <<<"$symbols" || die "WDSP 2.00 archive is missing required symbol: $symbol"
+    grep -Eq "[[:space:]]${symbol}$" <<<"$symbols" || die "WDSP 2.10 archive is missing required symbol: $symbol"
   done
-  log "WDSP 2.00 archive symbol verification passed."
+  log "WDSP 2.10 archive symbol verification passed."
 }
 
 build_wdsp2() {
   local helper="$SATURN_BRIDGE_SOURCE_DIR/scripts/build-wdsp2-linux-arm.sh"
-  need_file "$helper" "WDSP 2.00 Linux/ARM build helper"
-  [[ -x "$helper" ]] || die "WDSP 2.00 build helper is not executable: $helper"
+  need_file "$helper" "WDSP 2.10 Linux/ARM build helper"
+  [[ -x "$helper" ]] || die "WDSP 2.10 build helper is not executable: $helper"
   prepare_wdsp2_sources
-  log "Building pinned WDSP 2.00 Linux/ARM archive"
+  log "Building pinned WDSP 2.10 Linux/ARM archive"
   run_as_bridge_user env \
     WDSP2_SOURCE_DIR="$SATURN_WDSP2_SOURCE_DIR" \
     PIHPSDR_WDSP_DIR="$SATURN_PIHPSDR_WDSP_DIR" \
@@ -326,11 +326,11 @@ build_bridge() {
   fi
 
   case "$SATURN_BRIDGE_WDSP_FLAVOR" in
-    wdsp2|2.00)
+    wdsp2|2.00|2.10)
       build_wdsp2
       native_env+=(
         SATURN_WDSP_DIR="$SATURN_WDSP2_BUILD_DIR"
-        SATURN_BRIDGE_WDSP_FLAVOR="wdsp2-2.00"
+        SATURN_BRIDGE_WDSP_FLAVOR="wdsp2-2.10"
         SATURN_BRIDGE_WDSP_COMMIT="$(git -C "$SATURN_WDSP2_REPO_DIR" rev-parse HEAD)"
       )
       ;;
@@ -375,11 +375,11 @@ verify_built_bridge() {
   local built_bin
   built_bin="$(built_bridge_path)"
   need_file "$built_bin" "built saturn-bridge binary"
-  if [[ "$SATURN_BRIDGE_WDSP_FLAVOR" == "wdsp2" || "$SATURN_BRIDGE_WDSP_FLAVOR" == "2.00" ]]; then
+  if [[ "$SATURN_BRIDGE_WDSP_FLAVOR" == "wdsp2" || "$SATURN_BRIDGE_WDSP_FLAVOR" == "2.00" || "$SATURN_BRIDGE_WDSP_FLAVOR" == "2.10" ]]; then
     local symbol symbols
     symbols="$(nm -a "$built_bin")"
     for symbol in SetRXAWBFMdmph SetTXAPHROTAutoMode pscc SetPSControl create_rmatchV xrmatchIN xrmatchOUT; do
-      grep -Eq "[[:space:]]${symbol}$" <<<"$symbols" || die "Built bridge is missing WDSP 2.00 symbol: $symbol"
+      grep -Eq "[[:space:]]${symbol}$" <<<"$symbols" || die "Built bridge is missing WDSP 2.10 symbol: $symbol"
     done
   fi
 }
@@ -510,7 +510,7 @@ install_service() {
   service_name="$(basename "$SATURN_BRIDGE_SERVICE")"
   cat >"$SATURN_BRIDGE_SERVICE" <<EOF
 [Unit]
-Description=Saturn Bridge (WDSP 2.00)
+Description=Saturn Bridge (WDSP 2.10)
 After=network-online.target
 Wants=network-online.target
 StartLimitIntervalSec=60

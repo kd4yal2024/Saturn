@@ -15,7 +15,7 @@ read -r SATURN_BUILD_COMMIT < source-commit.txt
 export SATURN_BUILD_COMMIT
 export SATURN_BUILD_DIRTY=true
 export SATURN_BRIDGE_WDSP_FLAVOR=wdsp2
-export SATURN_BRIDGE_WDSP_COMMIT=584e8aca5ba1c4c6bc66fc0cc164ce567c8ba1e3
+export SATURN_BRIDGE_WDSP_COMMIT=b02d5bac675dd2f33ec2bab2b339f79a597c47dd
 export SATURN_WDSP_DIR=/home/pi/github/Saturn/update_manager/saturn-bridge/target-local/wdsp2-linux-arm
 export CARGO_TARGET_DIR="$stage/target"
 export SATURN_BRIDGE_SATP_STATUS_PATH="$stage/test-output/satp-status.json"

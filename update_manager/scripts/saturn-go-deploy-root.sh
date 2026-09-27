@@ -292,7 +292,7 @@ write_bridge_unit(){
   local tmp="$1"
   cat >"$tmp" <<EOF
 [Unit]
-Description=Saturn Bridge (WDSP 2.00)
+Description=Saturn Bridge (WDSP 2.10)
 After=network-online.target
 Wants=network-online.target
 StartLimitIntervalSec=60

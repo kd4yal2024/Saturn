@@ -4,7 +4,7 @@ import argparse
 import hashlib
 from pathlib import Path
 
-PIN = "584e8aca5ba1c4c6bc66fc0cc164ce567c8ba1e3"
+PIN = "b02d5bac675dd2f33ec2bab2b339f79a597c47dd"
 SOURCE_SHA256 = "3cd128001a52c31c84151052e444fa956ea8d67b259e1fbb0424492bf988918c"
 OPTIMIZED_SHA256 = "45462ec55fcf5c8b241351ecbb2d8857b9248a04fb641d589c2796f808b6f255"
 PATCH_ID = "hbres-index-wrap-v1"

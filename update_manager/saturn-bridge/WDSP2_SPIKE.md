@@ -1,6 +1,6 @@
-# WDSP 2.00 Linux/ARM Integration
+# WDSP 2.10 Linux/ARM Integration
 
-Saturn Bridge uses WDSP 2.00 by default in the Saturn Go installer. The native
+Saturn Bridge uses WDSP 2.10 by default in the Saturn Go installer. The native
 build is reproducible and does not depend on cloud-init, a prebuilt piHPSDR
 checkout, or files under another user's home directory.
 
@@ -9,10 +9,10 @@ checkout, or files under another user's home directory.
 `update_manager/scripts/install-saturn-bridge.sh` provisions sparse checkouts
 at exact upstream commits under the bridge Cargo target directory:
 
-- TAPR OpenHPSDR WDSP: `584e8aca5ba1c4c6bc66fc0cc164ce567c8ba1e3`
+- TAPR OpenHPSDR WDSP: `b02d5bac675dd2f33ec2bab2b339f79a597c47dd` (Release Version 2.10)
 - piHPSDR Linux port shim: `974acbac07fe7dd3e24f28f3956a9ffb3a1ebaf1`
 
-Only `wdsp 2.00/Source` and `wdsp/linux_port.c` / `linux_port.h` are checked
+Only `wdsp 2.10/Source` and `wdsp/linux_port.c` / `linux_port.h` are checked
 out. The helper copies and patches those sources into an ignored build
 directory; upstream checkouts remain unchanged. Changing either pin is a
 native dependency update and requires the complete bridge test matrix.
@@ -28,7 +28,7 @@ Set `SATURN_INSTALL_BRIDGE=0` to opt out. `SATURN_REQUIRE_BRIDGE` defaults to
 the same value, so the normal installation fails rather than publishing a
 Remote UI that has no matching backend.
 
-## Build WDSP 2.00
+## Build WDSP 2.10
 
 The bridge installer is the supported entry point for a native build-only
 artifact:
@@ -48,14 +48,14 @@ update_manager/saturn-bridge/scripts/build-wdsp2-linux-arm.sh
 
 Default cache/build locations:
 
-- WDSP 2.00 source: `target/native-src/OpenHPSDR-wdsp/wdsp 2.00/Source`
+- WDSP 2.10 source: `target/native-src/OpenHPSDR-wdsp/wdsp 2.10/Source`
 - piHPSDR Linux port shim: `target/native-src/pihpsdr/wdsp`
 - output archive: `update_manager/saturn-bridge/target/wdsp2-linux-arm/libwdsp.a`
 
 Override those paths with `WDSP2_SOURCE_DIR`, `PIHPSDR_WDSP_DIR`, and
 `WDSP2_BUILD_DIR`.
 
-## Build Saturn Bridge Against WDSP 2.00
+## Build Saturn Bridge Against WDSP 2.10
 
 ```sh
 cd update_manager/saturn-bridge
@@ -73,7 +73,7 @@ directory. Override those locations with `SATURN_RNNOISE_DIR` and
 
 ## Saturn Remote Controls
 
-The bridge and `/remote-next` client expose these WDSP 2.00 controls through
+The bridge and `/remote-next` client expose these WDSP 2.10 controls through
 TCI and saved radio profiles:
 
 - NR2 gain method: Gaussian, Gaussian Log, Gamma, or Trained
@@ -108,13 +108,28 @@ changes are rejected while TX is armed. A feedback outage bypasses correction
 without interrupting uncorrected TX, reports a fault to the UI, and restarts
 calibration when synchronized feedback returns.
 
-The Linux/ARM build helper patches the WDSP 2.00 de-emphasis setter in its
+The Linux/ARM build helper patches the WDSP 2.10 de-emphasis setter in its
 staged source tree so a runtime 75 us/50 us change reaches both WFM audio
 channels. The upstream source checkout is not modified.
 
+## WDSP 2.10 Notes
+
+WDSP 2.10 adds an NNR (neural-network noise reduction) engine with two embedded
+models (`nnr_model_0.c`, `nnr_model_1.c`). Saturn Bridge does not drive NNR: the
+block is created with `run = 0` and the bridge never calls `SetRXANNR*`. The
+models still link into the archive (~6.8 MB of `.rodata`), so the Linux/ARM
+build helper compiles `nnr_model_*.c` at `-O1` while every other WDSP source
+keeps `-O3`; the model units are pure data and optimizing them at `-O3` costs
+minutes and hundreds of MB of RAM on the CM4 for no runtime benefit.
+
+2.10 also reworks the PureSignal calibration engine (`calcc` and the NURBS
+helpers), the TX/RX CFIR/ICFIR impulse builders, and the NR2/EMNR `post2`
+noise generator, and makes several internal structs opaque behind accessors.
+The exported control API used by the bridge is unchanged.
+
 ## Current Limitation
 
-WDSP 2.00 does not include piHPSDR's `RNNR` / `SBNR` symbols. Saturn Bridge now
+WDSP 2.10 does not include piHPSDR's `RNNR` / `SBNR` symbols. Saturn Bridge now
 detects those symbols at build time. If they are absent, NR3 and NR4 requests
 fall back to EMNR so the bridge can link and run, but NR3/NR4 are not equivalent
 to the current piHPSDR WDSP 1.29 behavior.
