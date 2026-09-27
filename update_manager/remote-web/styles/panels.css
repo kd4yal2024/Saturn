@@ -418,9 +418,9 @@
 :root:not([data-layout="phone"]) .app .meter-analog-option > .multimeter-svg {
   display: none;
   width: 100%;
+  max-width: var(--meter-analog-max-width);
   height: auto;
-  max-height: none;
-  margin-top: var(--sp-2);
+  margin: var(--sp-2) auto 0;
   border-radius: var(--r-panel);
 }
 :root:not([data-layout="phone"]) .app .meter-analog-option[open][data-user-open="true"] > .multimeter-svg { display: block; }

@@ -105,6 +105,7 @@
   --app-bar-phone: 44px;
   --app-bar-desktop: 48px;
   --app-left-rail: 240px;
+  --app-session-vfo-width: clamp(280px, 25cqi, 320px);
   --app-right-rail: 300px;
   --app-right-rail-wide: 340px;
   --display-phone-height-min: 272px;
@@ -117,6 +118,7 @@
   --tx-phone-bar-height: 68px;
   --tx-on-air-bar-height: 3px;
   --meter-peak-tick-width: 2px;
+  --meter-analog-max-width: 480px;
   --tx-phone-clearance: 80px;
   --legacy-dock-clearance: 72px;
   --legacy-quickbar-clearance: 56px;

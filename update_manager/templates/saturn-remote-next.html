@@ -10240,8 +10240,8 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       const x = (event.clientX - rect.left) / rect.width, y = (event.clientY - rect.top) / rect.height;
       const hit = event.clientY - rect.top <= 24 ? { fraction: x, age: 0 } : terrainRenderer.pick(x, y);
       if (!hit) return;
-      // Preserve the picked frequency plane for this drag: a QSY legitimately
-      // segments history, but must not destroy the ongoing tuning gesture.
+      // Preserve the picked frequency plane for this drag even when tuning
+      // shifts the visible history beneath the pointer.
       terrainTuneAnchors.set(element, {
         x: event.clientX, hz: state.dds + (hit.fraction - .5) * displaySpanHz(),
         hzPerPixel: displaySpanHz() * (1 + .18 * hit.age / Math.max(1, terrainRenderer.rows - 1)) / rect.width,
@@ -10396,7 +10396,12 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       if (mapping && (mapping.centerHz !== state.dds || mapping.spanHz !== displaySpanHz() ||
           mapping.receiver !== `${state.displayIqSource || "rx"}:0` ||
           mapping.sampleRate !== (state.displayIqSource === "tx" ? WDSP_TX_IQ_RATE_HZ : displaySampleRateHz()))) {
-        spectrumHistory.clear("RF mapping changed — new history segment");
+        const centerOnly = mapping.spanHz === displaySpanHz() &&
+          mapping.receiver === `${state.displayIqSource || "rx"}:0` &&
+          mapping.sampleRate === (state.displayIqSource === "tx" ? WDSP_TX_IQ_RATE_HZ : displaySampleRateHz());
+        if (!centerOnly || !spectrumHistory.recenter(state.dds)) {
+          spectrumHistory.clear("RF mapping changed — new history segment");
+        }
       }
       if (!state.terrainActive || !terrainRenderer || document.hidden) return;
       try {
@@ -11880,22 +11885,24 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         button.tabIndex = active ? 0 : -1;
       });
 
-      // The responsive console shows Receive beside Transmit. The separate
-      // legacy Phone view retains its RX/DSP/TX tab behavior.
-      audioStrip.hidden = !responsiveConsole && context === "tx";
+      // Each side-panel tab owns its details. The original Arm/PTT safety
+      // strip remains outside the Transmit details panel at every width.
+      audioStrip.hidden = context === "tx";
       audioStrip.querySelectorAll("[data-control-context]").forEach((control) => {
-        control.hidden = responsiveConsole
-          ? control.dataset.controlContext === "dsp" && context !== "dsp"
-          : control.dataset.controlContext !== context;
+        control.hidden = control.dataset.controlContext !== context;
       });
+      const audioStatus = audioStrip.querySelector(".audio-control-status");
+      if (audioStatus) audioStatus.hidden = context !== "rx";
       const audioTitle = audioStrip.querySelector(".panel-title");
-      if (audioTitle) audioTitle.textContent = context === "dsp" ? (responsiveConsole ? "Receive and DSP" : "DSP") : "Receive";
+      if (audioTitle) audioTitle.textContent = context === "dsp" ? "DSP" : "Receive";
       const audioMeta = audioStrip.querySelector(".panel-meta");
       if (audioMeta) {
-        audioMeta.textContent = context === "dsp" && !responsiveConsole
+        audioMeta.textContent = context === "dsp"
           ? "Noise reduction / blanker"
           : "Audio / AGC / filter";
       }
+      const txPanel = rightRail.querySelector('[data-phone-panel="tx"]');
+      if (txPanel) txPanel.hidden = context !== "tx";
       rightRail.dataset.contextCompact = responsiveConsole || context === "tx" ? "false" : "true";
 
       if (persist) localStorage.setItem("saturn.remote.controlContext", context);
@@ -14415,6 +14422,10 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
           applyOperationsDrawerSelection({ open: true, target: drawerTarget });
         }
         const shellPanel = target.closest("[data-phone-panel]");
+        if (shellPanel?.dataset.phonePanel === "tx") applyControlContext("tx");
+        if (shellPanel?.dataset.phonePanel === "audio") {
+          applyControlContext(target.closest("[data-control-context]")?.dataset.controlContext === "dsp" ? "dsp" : "rx");
+        }
         if (shellPanel) revealShellPanel(shellPanel);
         const details = target.closest("details");
         if (details) details.open = true;
@@ -14703,8 +14714,8 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       if (next) document.querySelectorAll("[data-layout-reveal]").forEach((node) => delete node.dataset.layoutReveal);
       const closeButton = $("setup-close-btn");
       if (closeButton) {
-        closeButton.textContent = isResponsivePhoneConsole() ? "Back" : "Close";
-        closeButton.setAttribute("aria-label", isResponsivePhoneConsole() ? "Back to console" : "Close settings");
+        closeButton.textContent = "Close";
+        closeButton.setAttribute("aria-label", "Close settings");
       }
       if (next && menu.hidden) {
         const focused = document.activeElement;
@@ -15063,7 +15074,9 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     }
 
     function shiftDisplayForCenterChange(nextCenterHz) {
-      if (nextCenterHz !== state.dds) spectrumHistory.clear("Center frequency changed — new history segment");
+      if (nextCenterHz !== state.dds && !spectrumHistory.recenter(nextCenterHz)) {
+        spectrumHistory.clear("Center frequency changed — new history segment");
+      }
       const spanHz = displaySpanHz();
       const deltaHz = state.dds - nextCenterHz;
       if (!Number.isFinite(deltaHz) || deltaHz === 0 || !Number.isFinite(spanHz) || spanHz <= 0) {

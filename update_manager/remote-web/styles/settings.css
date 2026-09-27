@@ -1,4 +1,8 @@
 /* Responsive Settings sheet around the existing setup controls. */
+:root:not([data-layout="phone"]) body.setup-open .app .app-shell > .command-strip {
+  z-index: var(--z-sheet);
+}
+
 :root:not([data-layout="phone"]) .app [data-main-layout-hidden="true"]:not([data-layout-reveal="true"]) {
   display: none !important;
 }

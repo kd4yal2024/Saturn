@@ -69,6 +69,28 @@ describe('numeric history and chronology', () => {
     }
     const h=new SpectrumHistory(); h.accept(frame(0),50); h.accept(frame(50),100); expect(h.count).toBe(1);
   });
+  it('retains and aligns 3D rows through small VFO steps, then accepts the new center', () => {
+    const h = new SpectrumHistory();
+    const bins = new Float32Array([-120, -120, -120, -20, -120, -120, -120, -120]);
+    const first = { ...frame(0, bins), spanHz: 800 };
+    h.accept(first, 50);
+    h.accept({ ...first, timestamp: 50, sequence: 50 }, 50);
+    const epoch = h.epoch;
+    for (const hz of [14200025, 14200050, 14200075, 14200100]) {
+      expect(h.recenter(hz)).toBe(true);
+    }
+    expect(h.count).toBe(2);
+    expect(h.epoch).toBe(epoch);
+    expect(h.row(0)?.[2]).toBe(-20);
+    expect(h.row(1)?.[2]).toBe(-20);
+    expect(h.latestRaw[2]).toBe(-20);
+    expect(h.rows[h.head]?.centerHz).toBe(14200100);
+    h.accept({ ...frame(100, bins), centerHz: 14200100, spanHz: 800 }, 50);
+    expect(h.count).toBe(3);
+    expect(h.epoch).toBe(epoch);
+    expect(h.recenter(14200300)).toBe(false);
+    expect(h.count).toBe(3);
+  });
   it('rejects invalid inputs and oversized allocations', () => {
     const h=new SpectrumHistory(); expect(h.accept(frame(NaN),50)).toBe(false);
     expect(h.accept(frame(0,new Float32Array(32768)),50)).toBe(false); expect(h.bytes).toBeLessThan(100000);

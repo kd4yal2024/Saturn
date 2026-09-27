@@ -56,6 +56,10 @@ const phonePanelStart = source.indexOf('    function loadPhonePanelState() {');
 const phonePanelEnd = source.indexOf('    function revealShellPanel(', phonePanelStart);
 if (phonePanelStart < 0 || phonePanelEnd < 0) throw new Error('Template phone disclosure handlers missing');
 const phonePanelSource = source.slice(phonePanelStart, phonePanelEnd);
+const controlContextStart = source.indexOf('    function applyControlContext(value, persist = true) {');
+const controlContextEnd = source.indexOf('    function initControlContextRail() {', controlContextStart);
+if (controlContextStart < 0 || controlContextEnd < 0) throw new Error('Template context handler markers missing');
+const controlContextSource = source.slice(controlContextStart, controlContextEnd);
 
 function pageFor(scenario) {
   // Remove radio runtime to prevent socket/audio requests. The fixture below
@@ -205,6 +209,11 @@ const pause = (ms) => new Promise((done) => setTimeout(done, ms));
 const watchdog = setTimeout(() => { console.error('Chromium timed out:', stderr.slice(-2000)); chrome.kill(); process.exit(2); }, 180_000);
 
 const prepareFixtureExpression = (scenario) => `(() => {
+  const state = { layoutMode: ${JSON.stringify(scenario.layout)} };
+  const $ = id => document.getElementById(id);
+  const normalizeRadioControlContext = globalThis.SaturnRemoteNextBundle?.SaturnRemoteNext?.normalizeRadioControlContext;
+  if (typeof normalizeRadioControlContext !== 'function') throw Error('Context normalizer missing from bundle');
+  ${controlContextSource}
   const consoleLayout = document.querySelector('.console-layout');
   const audioStrip = document.querySelector('[data-phone-panel="audio"]');
   const rightRail = document.querySelector('.right-rail');
@@ -234,22 +243,7 @@ const prepareFixtureExpression = (scenario) => `(() => {
   }
   rail.appendChild(audioStrip);
   rail.appendChild(rightRail);
-  const responsiveConsole = ${JSON.stringify(scenario.layout !== 'phone')};
-  window.__uiFixtureApplyControlContext = context => {
-    rail.dataset.activeContext = context;
-    rail.querySelectorAll('.context-tab').forEach(button => {
-      const active = button.dataset.controlContext === context;
-      button.setAttribute('aria-selected', active ? 'true' : 'false');
-      button.tabIndex = active ? 0 : -1;
-    });
-    audioStrip.hidden = !responsiveConsole && context === 'tx';
-    audioStrip.querySelectorAll('[data-control-context]').forEach(control => {
-      control.hidden = responsiveConsole
-        ? control.dataset.controlContext === 'dsp' && context !== 'dsp'
-        : control.dataset.controlContext !== context;
-    });
-    rightRail.dataset.contextCompact = responsiveConsole || context === 'tx' ? 'false' : 'true';
-  };
+  window.__uiFixtureApplyControlContext = context => applyControlContext(context, false);
   window.__uiFixtureApplyControlContext('rx');
   return { railParent: rail.parentElement?.className, audioParent: audioStrip.parentElement?.id,
     txParent: rightRail.parentElement?.id };
@@ -420,8 +414,6 @@ const measureExpression = (scenario) => `(() => {
   const ptt = document.getElementById('ptt-btn');
   const stickyTx = firstVisible(['#tx-safety-host.phone-tx-bar', '#tx-sticky-bar', '#tx-safety-bar', '#mobile-tx-bar', '.tx-sticky-bar', '.tx-safety-bar', '.mobile-tx-bar', '[data-tx-sticky]']);
   const audioStrip = document.querySelector('.audio-control-strip');
-  const txSurfaceSelectors = ['#tx-safety-host.phone-tx-bar', '.right-rail [data-phone-panel="tx"]', '#tx-zone'];
-  const txSurface = firstVisible(txSurfaceSelectors);
   const rail = document.getElementById('radio-context-rail');
   const ids = [...document.querySelectorAll('[id]')].map(e => e.id);
   const duplicateIds = [...new Set(ids.filter((id, index) => ids.indexOf(id) !== index))];
@@ -463,22 +455,30 @@ const measureExpression = (scenario) => `(() => {
   check(missingIds.length === 0, 'old-control-ids-missing', missingIds);
   check(duplicateIds.length === 0, 'duplicate-dom-ids', duplicateIds);
   check(duplicateTxIds.length === 0, 'duplicate-tx-ids', duplicateTxIds);
-  let simultaneousRxTx = null;
+  let exclusiveContexts = null;
   let armedPttSpan = null;
   let overlayHits = null;
   if (scenario.layout !== 'phone') {
     check(!!rail && audioStrip?.parentElement === rail && document.querySelector('.right-rail')?.parentElement === rail,
       'context-rail-reparent-missing', { audioParent: audioStrip?.parentElement?.id, txParent: document.querySelector('.right-rail')?.parentElement?.id });
-    const rxVisible = visible(audioStrip) && visible(txSurface);
+    const txPanel = document.querySelector('.right-rail [data-phone-panel="tx"]');
+    const rxControl = audioStrip.querySelector('[data-control-context="rx"]');
+    const dspControl = audioStrip.querySelector('[data-control-context="dsp"]');
+    const status = audioStrip.querySelector('.audio-control-status');
+    const rxState = { receive: visible(rxControl), dsp: visible(dspControl), transmit: visible(txPanel),
+      safety: visible(txHost), audioStatus: visible(status) };
+    window.__uiFixtureApplyControlContext('dsp');
+    const dspState = { receive: visible(rxControl), dsp: visible(dspControl), transmit: visible(txPanel),
+      safety: visible(txHost), audioStatus: visible(status) };
     window.__uiFixtureApplyControlContext('tx');
-    const txSurfaceAfter = firstVisible(txSurfaceSelectors);
-    const txVisible = visible(audioStrip) && visible(txSurfaceAfter);
-    const txContext = rail?.dataset.activeContext;
+    const txState = { receive: visible(rxControl), dsp: visible(dspControl), transmit: visible(txPanel),
+      safety: visible(txHost), audioStatus: visible(status), selected: rail?.dataset.activeContext };
     window.__uiFixtureApplyControlContext('rx');
-    simultaneousRxTx = { rxVisible, txVisible, txContext, audioSelector: selector(audioStrip),
-      txSelectorRx: selector(txSurface), txSelectorTx: selector(txSurfaceAfter), contextRail: selector(rail) };
-    check(rxVisible && txVisible && txContext === 'tx', 'rx-tx-not-simultaneous',
-      { ...simultaneousRxTx, audio: rect(audioStrip), tx: rect(txSurfaceAfter) });
+    exclusiveContexts = { rxState, dspState, txState };
+    check(rxState.receive && !rxState.dsp && !rxState.transmit && rxState.safety && rxState.audioStatus &&
+      !dspState.receive && dspState.dsp && !dspState.transmit && dspState.safety && !dspState.audioStatus &&
+      !txState.receive && !txState.dsp && txState.transmit && txState.safety && txState.selected === 'tx',
+      'radio-context-details-not-exclusive', exclusiveContexts);
     check(innerWidth <= scenario.width + 1, 'viewport-auto-scaled', { requestedWidth: scenario.width, layoutViewportWidth: innerWidth, visualScale: visualViewport?.scale });
     check(pageWidth <= scenario.width + 1, 'horizontal-scroll', { pageWidth, requestedWidth: scenario.width });
     check(visible(vfo) && insideX(vfo), 'vfo-not-visible', { selector: selector(vfo), rect: rect(vfo) });
@@ -581,7 +581,7 @@ const measureExpression = (scenario) => `(() => {
     viewport: { requestedWidth: scenario.width, requestedHeight: scenario.height,
       layoutWidth: innerWidth, layoutHeight: innerHeight, visualScale: visualViewport?.scale }, pageWidth,
     ids: { expected: baselineIds.length, missing: missingIds },
-    duplicateIds, simultaneousRxTx, armedPttSpan, overlayHits,
+    duplicateIds, exclusiveContexts, armedPttSpan, overlayHits,
     controls: { visible: visibleControls.length, offscreen: offscreenControls },
     hitTests: { txHost: hitTest(txHost), txArm: hitTest(txArm), ptt: hitTest(ptt), dock: hitTest(dock) },
     regions: Object.fromEntries(Object.entries({ app, bar, left, center, right, vfo, txBadge, display, spectrum, waterfall, dock, txHost, stickyTx })
@@ -741,6 +741,13 @@ try {
       tabSelected: document.getElementById('setup-tab-display').getAttribute('aria-selected'),
       focus: document.activeElement?.id, resultsHidden: document.getElementById('settings-search-results').hidden,
       searchValue: document.getElementById('settings-search').value }))()`));
+    const closeHit = await evaluate(`(() => {
+      const button = document.getElementById('setup-close-btn');
+      const r = button.getBoundingClientRect();
+      const top = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+      return { label: button.textContent.trim(), onTop: top === button || button.contains(top),
+        hitId: top?.id || null, width: r.width, height: r.height };
+    })()`);
     const png = await call('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
     writeFileSync(join(output, `${scenario.name}.png`), Buffer.from(png.data, 'base64'));
     const closed = await evaluate(`(() => {
@@ -754,9 +761,11 @@ try {
     if (!selected.clicked || selected.panel !== 'display' || !selected.panelVisible ||
       selected.tabSelected !== 'true' || selected.focus !== 'display-spectrum-floor' ||
       !selected.resultsHidden || selected.searchValue) failures.push('search-result-did-not-focus-display-control');
+    if (closeHit.label !== 'Close' || !closeHit.onTop || closeHit.width < 36 || closeHit.height < 36)
+      failures.push('settings-close-obscured-or-unlabeled');
     if (!closed.menuClosed || closed.focus !== opened.trigger) failures.push('settings-close-did-not-restore-trigger-focus');
     if (closed.errors.length) failures.push('settings-console-errors');
-    const report = { scenario: scenario.name, opened, searched, selected, closed, failures, ok: failures.length === 0 };
+    const report = { scenario: scenario.name, opened, searched, selected, closeHit, closed, failures, ok: failures.length === 0 };
     settingsReports.push(report);
     console.log(`${report.ok ? 'PASS' : 'FAIL'} ${scenario.name}: ${failures.join(', ') || 'search, target focus, and focus return'}`);
   }
@@ -910,16 +919,20 @@ try {
     const initial = await snapshot();
     const png = await call('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
     writeFileSync(join(output, `${scenario.name}.png`), Buffer.from(png.data, 'base64'));
+    await evaluate(`window.__uiFixtureApplyControlContext('tx')`);
+    const txInitial = await snapshot();
     await evaluate(`document.querySelector('[data-phone-panel="tx"] .panel-toggle-btn').click()`);
     await evaluate('new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))');
     const toggled = await snapshot();
     await load();
+    await evaluate(`window.__uiFixtureApplyControlContext('tx')`);
     const reloaded = await snapshot();
     const failures = [];
     if (scenario.layout !== 'phone') {
       if (initial.audioCollapsed !== 'false' || !initial.audioBodyVisible ||
         initial.txCollapsed !== 'true' || initial.txBodyVisible ||
-        !initial.audioToggleVisible || !initial.txToggleVisible || !initial.armOnTop || !initial.pttOnTop)
+        !initial.audioToggleVisible || initial.txToggleVisible || !initial.armOnTop || !initial.pttOnTop ||
+        txInitial.txToggleVisible !== true || txInitial.txBodyVisible !== false)
         failures.push('responsive-phone-disclosure-default-or-sticky-tx');
       if (toggled.txCollapsed !== 'false' || !toggled.txBodyVisible || toggled.responsiveTxKey !== 'true' ||
         toggled.legacyPanels.tx !== false) failures.push('responsive-tx-disclosure-not-independent');
@@ -927,15 +940,15 @@ try {
         failures.push('responsive-tx-disclosure-not-persisted');
     } else {
       if (initial.audioCollapsed !== 'true' || initial.audioBodyVisible ||
-        initial.txCollapsed !== 'false' || !initial.txBodyVisible ||
-        !initial.armOnTop || !initial.pttOnTop)
+        initial.txCollapsed !== 'false' || initial.txBodyVisible ||
+        !initial.armOnTop || !initial.pttOnTop || !txInitial.txToggleVisible || !txInitial.txBodyVisible)
         failures.push('legacy-phone-state-affected-by-responsive-keys');
       if (toggled.txCollapsed !== 'true' || toggled.txBodyVisible || toggled.legacyPanels.tx !== true ||
         toggled.responsiveTxKey !== 'true') failures.push('legacy-phone-toggle-not-independent');
       if (reloaded.txCollapsed !== 'true' || reloaded.txBodyVisible ||
         !reloaded.armOnTop || !reloaded.pttOnTop) failures.push('legacy-phone-state-not-persisted');
     }
-    const report = { scenario: scenario.name, initial, toggled, reloaded, failures, ok: failures.length === 0 };
+    const report = { scenario: scenario.name, initial, txInitial, toggled, reloaded, failures, ok: failures.length === 0 };
     disclosureReports.push(report);
     console.log(`${report.ok ? 'PASS' : 'FAIL'} ${scenario.name}: ${failures.join(', ') || 'panel visibility, sticky TX, and independent persistence'}`);
   }
@@ -2198,6 +2211,15 @@ try {
     const open = () => {
       if (document.getElementById('setup-menu').hidden) document.getElementById('header-setup-btn').click();
     };
+    document.querySelector('#radio-context-rail .context-tab[data-control-context="tx"]')?.click();
+    open();
+    document.querySelector('.settings-section-tab[data-settings-section="receive"]')?.click();
+    const agcRoute = document.querySelector('#settings-section-page [data-settings-entry="receive.agc"]');
+    agcRoute?.click();
+    await raf();
+    const receiveRouteRecovery = { row: !!agcRoute,
+      selected: document.getElementById('radio-context-rail')?.dataset.activeContext,
+      agcVisible: visible(document.getElementById('rx-agc-grid')) };
     const protectedAction = entry => entry.section === 'transmit'
       || /(?:ptt|mox|arm|disconnect|goLive|goOffline|delete|reset|wakeLock|freqLock)/i.test(entry.id + ' ' + entry.targetId);
     for (const entry of entries) {
@@ -2296,9 +2318,13 @@ try {
       results.push(result);
     }
     return { totalRegistry: api.SETTINGS_REGISTRY.length, idBacked: entries.length,
-      results, layout: document.documentElement.dataset.layout };
+      receiveRouteRecovery, results, layout: document.documentElement.dataset.layout };
   })()`);
   const registryGroups = {};
+  if (!registryResult.receiveRouteRecovery.row || registryResult.receiveRouteRecovery.selected !== 'rx' ||
+    !registryResult.receiveRouteRecovery.agcVisible) {
+    registryGroups['receive-route-did-not-reveal-rx-tab'] = [registryResult.receiveRouteRecovery];
+  }
   for (const item of registryResult.results) {
     if (!item.reason || ['action-not-activated', 'disabled-or-transmit-proxy-skipped'].includes(item.reason)) continue;
     (registryGroups[item.reason] ||= []).push(item.id);

@@ -246,14 +246,10 @@
   display: none;
 }
 
-/* Keep the full Transmit panel available while Receive is the active context. */
-:root:not([data-layout="phone"]) .app .context-rail:not([data-active-context="tx"]) .right-rail [data-phone-panel="tx"] > .panel-body > .field-row {
-  display: grid;
-}
-
-:root:not([data-layout="phone"]) .app .context-rail:not([data-active-context="tx"]) .right-rail [data-phone-panel="tx"] > .panel-body > .tx-advanced-card,
-:root:not([data-layout="phone"]) .app .context-rail:not([data-active-context="tx"]) .tx-arm-note {
-  display: block;
+/* Only the selected side-panel details are exposed; TX safety stays visible. */
+.app .context-rail .right-rail > [data-phone-panel="tx"][hidden],
+.app .context-rail .audio-control-status[hidden] {
+  display: none;
 }
 
 :root:not([data-layout="phone"]) .app .app-shell > .operations-drawer {
@@ -501,7 +497,7 @@
   }
 
   :root:not([data-layout="phone"]) .app .command-strip > .panel-body > .strip-grid {
-    grid-template-columns: var(--app-left-rail) minmax(0, 1fr) var(--app-right-rail);
+    grid-template-columns: var(--app-session-vfo-width) minmax(0, 1fr) var(--app-right-rail);
     grid-template-areas:
       "vfo-a meter launch"
       "vfo-b meter launch";
@@ -541,7 +537,7 @@
   }
 
   :root:not([data-layout="phone"]) .app .command-strip > .panel-body > .strip-grid {
-    grid-template-columns: var(--app-left-rail) minmax(0, 1fr) var(--app-right-rail-wide);
+    grid-template-columns: var(--app-session-vfo-width) minmax(0, 1fr) var(--app-right-rail-wide);
   }
 
   :root:not([data-layout="phone"]) .app .top-meter-bank {

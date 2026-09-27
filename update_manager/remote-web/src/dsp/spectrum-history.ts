@@ -26,13 +26,53 @@ export class SpectrumHistory {
   versions = new Float64Array(this.capacity);
   private mapping = ''; private bucket = -Infinity; private lastSequence = -1;
   private lastTimestamp = -Infinity; private firstTimestamp = NaN;
+  private centerShiftCarryBins = 0;
   coalescedSourceUpdates = 0;
   clear(reason: string): void {
     this.noiseFloor = null;
     this.head = -1; this.count = 0; this.bucket = -Infinity;
     this.lastSequence = -1; this.lastTimestamp = -Infinity; this.firstTimestamp = NaN;
+    this.centerShiftCarryBins = 0;
     this.rows.fill(null); this.data.fill(MISSING_LEVEL); this.latestRaw.fill(MISSING_LEVEL);
     this.epoch++; this.revision++; this.versions.fill(this.revision); this.boundary = reason;
+  }
+  /** Keep the visible frequency plane aligned during a small VFO tune. */
+  recenter(nextCenterHz: number): boolean {
+    if (!Number.isFinite(nextCenterHz) || this.head < 0 || this.width < 1) return false;
+    const current = this.rows[this.head];
+    if (!current || !(current.spanHz > 0)) return false;
+    const deltaHz = current.centerHz - nextCenterHz;
+    if (deltaHz === 0) return true;
+    // Beyond one eighth of the visible span, the old spectrum is no longer a
+    // useful backdrop for the new frequency plane. The caller starts a segment.
+    if (Math.abs(deltaHz) >= current.spanHz / 8) return false;
+    const shiftedFloat = deltaHz / current.spanHz * this.width + this.centerShiftCarryBins;
+    const shiftBins = Math.trunc(shiftedFloat);
+    this.centerShiftCarryBins = shiftedFloat - shiftBins;
+    const shift = (values: Float32Array, offset: number, width: number) => {
+      if (shiftBins > 0) {
+        values.copyWithin(offset + shiftBins, offset, offset + width - shiftBins);
+        values.fill(MISSING_LEVEL, offset, offset + shiftBins);
+      } else if (shiftBins < 0) {
+        values.copyWithin(offset, offset - shiftBins, offset + width);
+        values.fill(MISSING_LEVEL, offset + width + shiftBins, offset + width);
+      }
+    };
+    for (let age = 0; age < this.count; age++) {
+      const physical = this.physical(age);
+      const row = this.rows[physical];
+      if (!row) continue;
+      row.centerHz = nextCenterHz;
+      if (shiftBins !== 0) {
+        shift(this.data, physical * this.width, this.width);
+        this.versions[physical] = ++this.revision;
+      }
+    }
+    if (shiftBins !== 0) shift(this.latestRaw, 0, this.width);
+    this.mapping = JSON.stringify([current.receiver, nextCenterHz, current.spanHz,
+      current.sampleRate, current.sourceBins, this.width, current.units, this.cadenceMs]);
+    this.boundary = 'History retained across small VFO tune';
+    return true;
   }
   accept(frame: SpectrumFrame, cadenceMs: number): boolean {
     const { bins, timestamp, sequence } = frame;
