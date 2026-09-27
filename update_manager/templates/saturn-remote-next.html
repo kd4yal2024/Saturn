@@ -2244,15 +2244,33 @@
     }
 
     .tx-action-row {
-      display: grid;
-      grid-template-columns: minmax(0, 1fr) minmax(64px, 0.34fr);
+      display: flex;
       gap: 8px;
       align-items: stretch;
       min-width: 0;
     }
 
     .tx-action-row .tx-ptt-primary {
+      flex: 1 1 auto;
+      min-width: 0;
       min-height: 66px;
+    }
+
+    /* MOX sits beside PTT. The wrapper exists so the optional "pin MOX to the
+       main screen" action can lift just this button out of the row; when it is
+       pinned the wrapper hides and PTT reclaims the full width. */
+    .tx-mox-home {
+      flex: 0 1 34%;
+      min-width: 64px;
+      display: grid;
+    }
+
+    .tx-mox-home[hidden] {
+      display: none;
+    }
+
+    .tx-mox-home .tx-mox-secondary {
+      width: 100%;
     }
 
     .tx-mox-secondary {
@@ -3352,8 +3370,12 @@
     }
 
     :root[data-layout="phone"] .tx-action-row {
-      grid-template-columns: minmax(0, 1fr) minmax(60px, 0.32fr);
       gap: 7px;
+    }
+
+    :root[data-layout="phone"] .tx-mox-home {
+      flex-basis: 32%;
+      min-width: 60px;
     }
 
     :root[data-layout="phone"] .tx-ptt-primary {
@@ -8232,6 +8254,9 @@
               <button class="btn tx-arm-button" id="tx-arm-btn" type="button" aria-describedby="tx-arm-note" disabled>TX UNAVAILABLE</button>
               <div class="tx-action-row">
                 <button class="btn ptt-btn tx-ptt-primary" id="ptt-btn" type="button" aria-describedby="tx-zone-hint" aria-pressed="false" disabled>HOLD PTT</button>
+                <div class="tx-mox-home" aria-label="Manual MOX transmit">
+                  <button class="btn ghost tx-mox-secondary" id="mox-btn" type="button" aria-describedby="tx-zone-hint" aria-pressed="false" disabled>MOX</button>
+                </div>
               </div>
             </div>
         </div>
@@ -8243,9 +8268,6 @@
           <div class="panel-body">
             <div class="tx-zone-frequency" id="tx-zone-frequency">TX 14.200.000 USB</div>
             <div class="tx-arm-note" id="tx-arm-note">Arming does not transmit</div>
-            <div class="row tx-mox-home" aria-label="Manual MOX transmit">
-              <button class="btn ghost tx-mox-secondary" id="mox-btn" type="button" aria-describedby="tx-zone-hint" aria-pressed="false" disabled>MOX</button>
-            </div>
             <div class="tx-meter-mini-grid" aria-label="Transmit quick meters">
               <div class="tx-meter-mini">
                 <span class="tx-meter-mini-label">Mic</span>
