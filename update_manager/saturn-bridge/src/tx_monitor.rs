@@ -38,6 +38,7 @@ fn voice_mode(mode: DemodMode) -> bool {
             | DemodMode::DigL
             | DemodMode::Am
             | DemodMode::Sam
+            | DemodMode::Dsb
             | DemodMode::Fm
     )
 }
@@ -105,7 +106,11 @@ impl MonitorDsp {
                             / (2.0 * std::f32::consts::PI * 5000.0)
                     }
                 }
-                DemodMode::Usb | DemodMode::Lsb | DemodMode::DigU | DemodMode::DigL => i,
+                DemodMode::Usb
+                | DemodMode::Lsb
+                | DemodMode::Dsb
+                | DemodMode::DigU
+                | DemodMode::DigL => i,
                 _ => 0.0,
             };
             self.previous_iq = [i, q];
@@ -690,7 +695,23 @@ mod tests {
         assert!(!voice_mode(DemodMode::Cwu));
         assert!(!voice_mode(DemodMode::Wfm));
         assert!(voice_mode(DemodMode::Lsb));
+        assert!(voice_mode(DemodMode::Dsb));
         assert!(voice_mode(DemodMode::Fm));
+    }
+    #[test]
+    fn dsb_monitor_uses_the_processed_i_channel() {
+        let iq: Vec<f32> = (0..19200)
+            .flat_map(|n| {
+                let phase = 2.0 * std::f32::consts::PI * 1000.0 * n as f32 / RATE;
+                [0.4 * phase.sin(), 0.2 * phase.cos()]
+            })
+            .collect();
+        let mut dsb = VecDeque::new();
+        let mut usb = VecDeque::new();
+        MonitorDsp::new().process(&iq, DemodMode::Dsb, -10.0, &mut dsb);
+        MonitorDsp::new().process(&iq, DemodMode::Usb, -10.0, &mut usb);
+        assert_eq!(dsb, usb);
+        assert!(dsb.iter().skip(1000).any(|sample| sample.abs() > 0.02));
     }
     #[test]
     fn closed_gate_old_generation_and_stale_audio_are_rejected() {

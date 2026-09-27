@@ -1265,7 +1265,7 @@ impl WdspRxEngine {
         let slider = self.ssql_threshold.clamp(0.0, 100.0);
         let enabled = self.ssql_enabled;
         let voice = enabled && speech_squelch_supported_for_mode(self.mode);
-        let am = enabled && matches!(self.mode, DemodMode::Am | DemodMode::Sam);
+        let am = enabled && am_squelch_supported_for_mode(self.mode);
         let fm = enabled && matches!(self.mode, DemodMode::Fm | DemodMode::Wfm);
         unsafe {
             // Voice SQL uses a normalized voice/noise classifier threshold.
@@ -2330,6 +2330,10 @@ fn speech_squelch_supported_for_mode(mode: DemodMode) -> bool {
     )
 }
 
+fn am_squelch_supported_for_mode(mode: DemodMode) -> bool {
+    matches!(mode, DemodMode::Am | DemodMode::Sam | DemodMode::Dsb)
+}
+
 fn rx_dsp_rate_for_mode(mode: DemodMode) -> u32 {
     if mode == DemodMode::Fm || (mode == DemodMode::Wfm && wbfm_supported()) {
         192_000
@@ -2428,12 +2432,12 @@ fn nr4_post_threshold_for_level(level_percent: f64) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::{
-        channel_slew_timing, mic_rmatch_ring_size, normalize_audio_frame_float_count,
-        nr2_factor_for_level, nr2_nlevel_for_level, nr2_rate_for_level, nr2_taper_for_level,
-        nr4_post_threshold_for_level, nr4_reduction_amount_for_level, panel_gain_for_volume_db,
-        rx_dsp_rate_for_mode, speech_squelch_supported_for_mode, tx_voice_processing_supported,
-        wbfm_supported, wdsp_mode, wdsp_tx_mode, MicRateMatcher, WdspRxEngine, WdspTxEngine,
-        WDSP_AUDIO_RATE_HZ,
+        am_squelch_supported_for_mode, channel_slew_timing, mic_rmatch_ring_size,
+        normalize_audio_frame_float_count, nr2_factor_for_level, nr2_nlevel_for_level,
+        nr2_rate_for_level, nr2_taper_for_level, nr4_post_threshold_for_level,
+        nr4_reduction_amount_for_level, panel_gain_for_volume_db, rx_dsp_rate_for_mode,
+        speech_squelch_supported_for_mode, tx_voice_processing_supported, wbfm_supported,
+        wdsp_mode, wdsp_tx_mode, MicRateMatcher, WdspRxEngine, WdspTxEngine, WDSP_AUDIO_RATE_HZ,
     };
     use crate::radio_model::{DemodMode, PureSignalState, RadioModel};
 
@@ -2545,6 +2549,14 @@ mod tests {
     }
 
     #[test]
+    fn dsb_uses_am_signal_squelch() {
+        assert!(am_squelch_supported_for_mode(DemodMode::Am));
+        assert!(am_squelch_supported_for_mode(DemodMode::Sam));
+        assert!(am_squelch_supported_for_mode(DemodMode::Dsb));
+        assert!(!am_squelch_supported_for_mode(DemodMode::Usb));
+    }
+
+    #[test]
     fn tx_voice_processing_excludes_digital_cw_and_wide_fm_modes() {
         for mode in [
             DemodMode::Usb,
@@ -2579,10 +2591,12 @@ mod tests {
     }
 
     #[test]
-    fn dsb_accepts_sc_and_fc_tci_aliases() {
-        for text in ["DSB", "dsb", "DSB-SC", "dsb-sc", "DSB-FC", " dsb-fc "] {
+    fn dsb_accepts_suppressed_carrier_tci_alias() {
+        for text in ["DSB", "dsb", "DSB-SC", "dsb-sc"] {
             assert_eq!(DemodMode::from_tci(text), DemodMode::Dsb, "{text}");
         }
+        assert_eq!(DemodMode::from_tci(" dsb-fc "), DemodMode::Am);
+        assert_eq!(wdsp_tx_mode(DemodMode::from_tci("DSB-FC")), 6);
     }
 
     #[test]

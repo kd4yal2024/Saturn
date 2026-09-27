@@ -54,10 +54,10 @@ impl DemodMode {
             "CWL" => Self::Cwl,
             "AM" => Self::Am,
             "SAM" => Self::Sam,
-            // DSB is one mode. DSB-SC and DSB-FC are accepted as aliases: the
-            // receive path is identical (symmetric passband, I-only detection),
-            // and the only WDSP DSB transmit path is suppressed carrier.
-            "DSB" | "DSB-SC" | "DSB-FC" => Self::Dsb,
+            // WDSP DSB transmits with suppressed carrier. A client explicitly
+            // requesting full carrier gets the existing AM mode instead.
+            "DSB" | "DSB-SC" => Self::Dsb,
+            "DSB-FC" => Self::Am,
             "FM" | "NFM" => Self::Fm,
             "WFM" | "WBFM" | "FM_STEREO" => Self::Wfm,
             "DIGU" => Self::DigU,
