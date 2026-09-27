@@ -1,0 +1,708 @@
+/* Responsive console shell. The separate data-layout="phone" view keeps its own layout. */
+:root:not([data-layout="phone"]),
+:root:not([data-layout="phone"]) body {
+  height: auto;
+  overflow: visible;
+}
+
+:root:not([data-layout="phone"]) .app.page.console-page {
+  container-type: inline-size;
+  container-name: app;
+  display: block;
+  grid-template: none;
+  grid-template-areas: none;
+  width: 100%;
+  max-width: none;
+  min-width: 0;
+  min-height: 100dvh;
+  height: auto;
+  margin: 0;
+  padding: 0;
+  overflow: visible;
+  background: var(--bg-app);
+}
+
+:root:not([data-layout="phone"]) .app .app-shell {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-areas:
+    "bar"
+    "state"
+    "session"
+    "tune"
+    "display"
+    "context"
+    "operations";
+  gap: var(--sp-2);
+  align-items: start;
+  width: 100%;
+  min-width: 0;
+  padding: var(--sp-2);
+}
+
+:root:not([data-layout="phone"]) .app .app-shell > *,
+:root:not([data-layout="phone"]) .app .app-shell .console-layout > *,
+:root:not([data-layout="phone"]) .app .context-rail > * {
+  order: 0;
+  min-width: 0;
+  max-width: 100%;
+}
+
+:root:not([data-layout="phone"]) .app .app-shell > .console-header {
+  grid-area: bar;
+  position: sticky;
+  top: 0;
+  z-index: var(--z-sticky);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  min-height: var(--app-bar-phone);
+  height: var(--app-bar-phone);
+  margin: 0;
+  padding: 0;
+  background: var(--bg-app);
+}
+
+:root:not([data-layout="phone"]) .app .console-header > div:first-child {
+  min-width: 0;
+}
+
+:root:not([data-layout="phone"]) .app .hero-actions {
+  min-width: 0;
+  justify-content: flex-end;
+}
+
+:root:not([data-layout="phone"]) .app .app-shell > .operator-state-strip {
+  grid-area: state;
+  position: static;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--sp-1);
+  width: 100%;
+  min-width: 0;
+  margin: 0;
+}
+
+/* The TX status item remains visible in the status grid at every width. */
+:root:not([data-layout="phone"]) .app #operator-rf-pill {
+  display: grid;
+}
+
+:root:not([data-layout="phone"]) .app .operator-pill-value {
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+  overflow-wrap: anywhere;
+}
+
+:root:not([data-layout="phone"]) .app .app-shell > .command-strip {
+  grid-area: session;
+  z-index: auto;
+  width: 100%;
+  min-width: 0;
+  margin: 0;
+}
+
+:root:not([data-layout="phone"]) .app .command-strip > .panel-body {
+  height: auto;
+}
+
+:root:not([data-layout="phone"]) .app .command-strip > .panel-body > .strip-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-areas:
+    "vfo-a"
+    "vfo-b"
+    "meter"
+    "launch";
+  gap: var(--sp-2);
+  min-width: 0;
+}
+
+:root:not([data-layout="phone"]) .app .strip-grid > .control-cluster {
+  display: contents;
+}
+
+:root:not([data-layout="phone"]) .app .strip-grid > .primary-deck { grid-area: vfo-a; }
+:root:not([data-layout="phone"]) .app .strip-grid > .secondary-deck { grid-area: vfo-b; }
+:root:not([data-layout="phone"]) .app .strip-grid .top-meter-bank { grid-area: meter; }
+:root:not([data-layout="phone"]) .app .strip-grid .launch-grid { grid-area: launch; }
+
+:root:not([data-layout="phone"]) .app .strip-grid > .vfo-deck,
+:root:not([data-layout="phone"]) .app .top-meter-bank,
+:root:not([data-layout="phone"]) .app .launch-grid {
+  min-width: 0;
+  width: 100%;
+}
+
+/* The legacy multimeter's fixed minimum columns overflow a tablet half-width. */
+:root:not([data-layout="phone"]) .app .multimeter-workbench,
+:root:not([data-layout="phone"]) .app .multimeter-console {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+:root:not([data-layout="phone"]) .app .app-shell > .console-layout {
+  display: contents;
+}
+
+:root:not([data-layout="phone"]) .app .console-layout > .left-rail {
+  grid-area: tune;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--sp-2);
+  width: 100%;
+  min-width: 0;
+  margin: 0;
+}
+
+:root:not([data-layout="phone"]) .app .left-rail > [data-phone-panel="demod"] { order: 1; }
+:root:not([data-layout="phone"]) .app .left-rail > [data-phone-panel="tuning"] { order: 2; }
+:root:not([data-layout="phone"]) .app .left-rail > [data-phone-panel="routing"] { order: 3; }
+
+:root:not([data-layout="phone"]) .app .console-layout > .console-stage {
+  grid-area: display;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--sp-2);
+  width: 100%;
+  min-width: 0;
+  margin: 0;
+  height: auto;
+  overflow: visible;
+}
+
+:root:not([data-layout="phone"]) .app .display-card.scope-frame {
+  height: auto;
+}
+
+:root:not([data-layout="phone"]) .app .display-card,
+:root:not([data-layout="phone"]) .app .display-stack,
+:root:not([data-layout="phone"]) .app .display-stack > * {
+  min-width: 0;
+  max-width: 100%;
+}
+
+:root:not([data-layout="phone"]) .app .display-stack {
+  --display-workspace-height: max(var(--display-phone-height-min), 40dvh);
+  display: grid;
+  grid-template-rows: minmax(var(--display-phone-3d-min), 0.65fr) var(--display-splitter-size) minmax(var(--display-phone-waterfall-min), 0.35fr);
+  height: var(--display-workspace-height);
+}
+
+:root:not([data-layout="phone"]) .app .context-rail {
+  grid-area: context;
+  position: static;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--sp-2);
+  align-content: start;
+  width: 100%;
+  max-width: none;
+  max-height: none;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  overflow: visible;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+:root:not([data-layout="phone"]) .app .context-rail > .context-tabs,
+:root:not([data-layout="phone"]) .app .context-rail > .audio-control-strip,
+:root:not([data-layout="phone"]) .app .context-rail > .right-rail {
+  position: static;
+  display: block;
+  width: 100%;
+  min-width: 0;
+  max-width: none;
+  max-height: none;
+  margin: 0;
+  overflow: visible;
+}
+
+:root:not([data-layout="phone"]) .app .context-rail > .context-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-1);
+}
+
+:root:not([data-layout="phone"]) .app .context-rail .audio-control-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--sp-2);
+}
+
+:root:not([data-layout="phone"]) .app .context-rail .right-rail {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--sp-2);
+}
+
+:root:not([data-layout="phone"]) .app .context-rail > .audio-control-strip[hidden] {
+  display: none;
+}
+
+/* Keep the full Transmit panel available while Receive is the active context. */
+:root:not([data-layout="phone"]) .app .context-rail:not([data-active-context="tx"]) .right-rail [data-phone-panel="tx"] > .panel-body > .field-row {
+  display: grid;
+}
+
+:root:not([data-layout="phone"]) .app .context-rail:not([data-active-context="tx"]) .right-rail [data-phone-panel="tx"] > .panel-body > .tx-advanced-card,
+:root:not([data-layout="phone"]) .app .context-rail:not([data-active-context="tx"]) .tx-arm-note {
+  display: block;
+}
+
+:root:not([data-layout="phone"]) .app .app-shell > .operations-drawer {
+  grid-area: operations;
+  position: relative;
+  width: 100%;
+  min-width: 0;
+  margin: 0;
+}
+
+:root:not([data-layout="phone"]) .app .operations-drawer-nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-1);
+}
+
+:root:not([data-layout="phone"]) .app .mobile-control-dock,
+:root:not([data-layout="phone"]) .app .mobile-radio-quickbar {
+  position: static;
+  width: 100%;
+  max-width: 100%;
+}
+
+/* The old dock belongs to the separate Phone view; its controls stay in that view. */
+:root:not([data-layout="phone"]) .app .mobile-control-dock { display: none; }
+
+:root:not([data-layout="phone"]) .app .phone-tx-bar {
+  position: fixed;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  z-index: var(--z-sticky);
+  display: block;
+  width: 100%;
+  min-height: var(--tx-phone-bar-height);
+  padding: var(--sp-2) var(--sp-3) calc(var(--sp-2) + env(safe-area-inset-bottom));
+  border-top: 1px solid var(--border-strong);
+  background: var(--bg-panel);
+}
+
+:root:not([data-layout="phone"]) .app .phone-tx-bar :is(#tx-arm-btn, #ptt-btn) {
+  min-width: 0;
+  min-height: var(--control-min-coarse);
+  touch-action: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
+
+:root:not([data-layout="phone"]) .app .app-shell {
+  padding-bottom: calc(var(--tx-phone-clearance) + env(safe-area-inset-bottom));
+}
+
+/* Landscape phone: the spectrum keeps the full short display well. */
+@container app (max-width: 599px) {
+  :root:not([data-layout="phone"]) .app #tx-safety-host.phone-tx-bar {
+    display: block;
+    position: fixed;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    z-index: var(--z-menu);
+    padding: 0 var(--sp-2) env(safe-area-inset-bottom);
+    box-shadow: none;
+  }
+
+  :root:not([data-layout="phone"]) .app #tx-safety-host #tx-zone {
+    position: relative;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr);
+    grid-template-areas: "status status" "arm ptt";
+    gap: var(--sp-1);
+    margin: 0;
+    padding: var(--sp-1);
+  }
+
+  :root:not([data-layout="phone"]) .app #tx-safety-host .tx-zone-head { grid-area: status; }
+  :root:not([data-layout="phone"]) .app #tx-safety-host .tx-zone-state {
+    padding: 0 var(--sp-1);
+  }
+  :root:not([data-layout="phone"]) .app #tx-safety-host #tx-arm-btn {
+    grid-area: arm;
+    min-height: var(--control-min-coarse);
+  }
+  :root:not([data-layout="phone"]) .app #tx-safety-host .tx-action-row {
+    grid-area: ptt;
+    grid-template-columns: minmax(0, 1fr);
+  }
+  :root:not([data-layout="phone"]) .app #tx-safety-host #ptt-btn {
+    width: 100%;
+    min-height: var(--control-min-coarse);
+  }
+  :root:not([data-layout="phone"]) .app #tx-safety-host #tx-arm-btn[hidden] + .tx-action-row {
+    grid-column: 1 / -1;
+  }
+
+  :root:not([data-layout="phone"]) .app .hero-actions > :not(#phone-menu-btn) {
+    display: none;
+  }
+
+  :root:not([data-layout="phone"]) .app #phone-menu-btn {
+    display: inline-flex;
+  }
+
+  :root:not([data-layout="phone"]) .app .app-shell > .operations-drawer:not([data-open="true"]) {
+    display: none;
+  }
+
+  :root:not([data-layout="phone"]) .app .app-shell > .operations-drawer[data-open="true"] {
+    position: fixed;
+    right: 0;
+    bottom: calc(var(--tx-phone-bar-height) + env(safe-area-inset-bottom));
+    left: 0;
+    z-index: var(--z-sheet);
+    display: grid;
+    grid-template-rows: auto minmax(0, 1fr);
+    max-height: calc(100dvh - var(--app-bar-phone) - var(--tx-phone-bar-height) - env(safe-area-inset-bottom));
+    padding: 0;
+    overflow: hidden;
+    border: 1px solid var(--border-strong);
+    border-radius: var(--r-panel) var(--r-panel) 0 0;
+    background: var(--bg-panel);
+  }
+
+  :root:not([data-layout="phone"]) .app .operations-drawer[data-open="true"] .operations-drawer-content {
+    min-height: 0;
+    max-height: none;
+    overflow: auto;
+  }
+
+  @media (max-height: 499px) {
+    :root:not([data-layout="phone"]) .app .display-stack {
+      --display-workspace-height: max(var(--display-phone-3d-min), 55dvh);
+      grid-template-rows: minmax(var(--display-phone-3d-min), 1fr) 0 0;
+    }
+    :root:not([data-layout="phone"]) .app .waterfall-shell,
+    :root:not([data-layout="phone"]) .app .spectrum-waterfall-resizer {
+      display: none;
+    }
+  }
+}
+
+@container app (min-width: 600px) {
+  :root:not([data-layout="phone"]) .app .app-shell {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-areas:
+      "bar bar"
+      "state state"
+      "session session"
+      "tune tune"
+      "display display"
+      "context context"
+      "operations operations";
+    gap: var(--sp-3);
+    padding-bottom: 0;
+  }
+
+  :root:not([data-layout="phone"]) .app .app-shell > .console-header {
+    min-height: var(--app-bar-desktop);
+    height: var(--app-bar-desktop);
+  }
+
+  :root:not([data-layout="phone"]) .app .app-shell > .operator-state-strip {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  :root:not([data-layout="phone"]) .app .command-strip > .panel-body > .strip-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-areas:
+      "vfo-a meter"
+      "vfo-b meter"
+      "launch launch";
+  }
+
+  :root:not([data-layout="phone"]) .app .console-layout > .left-rail {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  :root:not([data-layout="phone"]) .app .left-rail > [data-phone-panel="routing"] {
+    grid-column: 1 / -1;
+  }
+
+  :root:not([data-layout="phone"]) .app .display-stack {
+    --display-workspace-height: max(var(--display-tablet-height-min), 55dvh);
+    grid-template-rows: minmax(var(--display-tablet-3d-min), 0.65fr) var(--display-splitter-size) minmax(var(--display-tablet-waterfall-min), 0.35fr);
+  }
+
+  :root:not([data-layout="phone"]) .app .top-meter-bank {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  :root:not([data-layout="phone"]) .app .context-rail {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  :root:not([data-layout="phone"]) .app .context-rail > .context-tabs {
+    grid-column: 1 / -1;
+  }
+
+  :root:not([data-layout="phone"]) .app .phone-tx-bar {
+    position: static;
+    display: block;
+    min-height: 0;
+    padding: 0;
+    border: 0;
+    background: transparent;
+  }
+
+  :root:not([data-layout="phone"]) .app #tx-safety-host.phone-tx-bar {
+    display: block;
+    position: static;
+    right: auto;
+    bottom: auto;
+    left: auto;
+    z-index: auto;
+    box-shadow: none;
+  }
+}
+
+@container app (min-width: 960px) {
+  :root:not([data-layout="phone"]) .app .app-shell {
+    grid-template-columns: var(--app-left-rail) minmax(0, 1fr) var(--app-right-rail);
+    grid-template-areas:
+      "bar bar bar"
+      "state state state"
+      "session session session"
+      "tune display context"
+      "operations operations operations";
+    gap: var(--sp-3);
+    align-items: start;
+  }
+
+  :root:not([data-layout="phone"]) .app .app-shell > .operator-state-strip {
+    grid-template-columns: repeat(8, minmax(0, 1fr));
+  }
+
+  :root:not([data-layout="phone"]) .app .app-shell > .operations-drawer[data-open="true"] {
+    position: fixed;
+    right: var(--sp-2);
+    bottom: var(--sp-2);
+    left: var(--sp-2);
+    z-index: var(--z-sheet);
+    display: grid;
+    grid-template-rows: auto minmax(0, 1fr);
+    width: auto;
+    max-height: 52dvh;
+  }
+
+  :root:not([data-layout="phone"]) .app .command-strip > .panel-body > .strip-grid {
+    grid-template-columns: var(--app-left-rail) minmax(0, 1fr) var(--app-right-rail);
+    grid-template-areas:
+      "vfo-a meter launch"
+      "vfo-b meter launch";
+  }
+
+  :root:not([data-layout="phone"]) .app .console-layout > .left-rail {
+    grid-template-columns: minmax(0, 1fr);
+    align-content: start;
+  }
+
+  :root:not([data-layout="phone"]) .app .left-rail > [data-phone-panel="routing"] {
+    grid-column: auto;
+  }
+
+  :root:not([data-layout="phone"]) .app .display-stack {
+    --display-workspace-height: max(var(--display-tablet-height-min), calc(100dvh - var(--display-shell-chrome-height)));
+    grid-template-rows: minmax(var(--display-tablet-3d-min), 0.65fr) var(--display-splitter-size) minmax(var(--display-tablet-waterfall-min), 0.35fr);
+  }
+
+  :root:not([data-layout="phone"]) .app .context-rail {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  :root:not([data-layout="phone"]) .app .context-rail > .context-tabs {
+    grid-column: auto;
+  }
+
+  :root:not([data-layout="phone"]) .app .top-meter-bank {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@container app (min-width: 1440px) {
+  :root:not([data-layout="phone"]) .app .app-shell {
+    grid-template-columns: var(--app-left-rail) minmax(0, 1fr) var(--app-right-rail-wide);
+    gap: var(--sp-4);
+  }
+
+  :root:not([data-layout="phone"]) .app .command-strip > .panel-body > .strip-grid {
+    grid-template-columns: var(--app-left-rail) minmax(0, 1fr) var(--app-right-rail-wide);
+  }
+
+  :root:not([data-layout="phone"]) .app .top-meter-bank {
+    grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr);
+  }
+
+  :root:not([data-layout="phone"]) .app .multimeter-workbench {
+    grid-template-columns: minmax(0, 1.75fr) minmax(0, 0.55fr);
+  }
+
+  :root:not([data-layout="phone"]) .app .multimeter-console {
+    grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.35fr);
+  }
+}
+
+/* The legacy Phone view remains separate; its static TX host clears the dock. */
+:root[data-layout="phone"],
+:root[data-layout="phone"] body {
+  height: auto;
+  overflow: visible;
+}
+
+:root[data-layout="phone"] .app.page.console-page {
+  display: block;
+  grid-template: none;
+  width: 100%;
+  max-width: var(--legacy-phone-max-width);
+  height: auto;
+  margin-inline: auto;
+  padding-bottom: calc(var(--legacy-dock-clearance) + var(--tx-phone-clearance) + env(safe-area-inset-bottom));
+  overflow: visible;
+}
+
+:root[data-layout="phone"] .app .app-shell {
+  width: 100%;
+  min-width: 0;
+}
+
+:root[data-layout="phone"] .app .app-shell > * {
+  min-width: 0;
+  max-width: 100%;
+}
+
+:root[data-layout="phone"] .app .command-strip > .panel-body {
+  height: auto;
+}
+
+:root[data-layout="phone"] .app .command-strip {
+  z-index: auto;
+}
+
+:root[data-layout="phone"] .app .command-strip > .panel-body > .strip-grid,
+:root[data-layout="phone"] .app .control-cluster,
+:root[data-layout="phone"] .app .top-meter-bank,
+:root[data-layout="phone"] .app .multimeter-workbench,
+:root[data-layout="phone"] .app .multimeter-console {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+:root[data-layout="phone"] .app .strip-grid,
+:root[data-layout="phone"] .app .control-cluster,
+:root[data-layout="phone"] .app .top-meter-bank,
+:root[data-layout="phone"] .app .multimeter-workbench,
+:root[data-layout="phone"] .app .multimeter-console {
+  min-width: 0;
+  max-width: 100%;
+}
+
+:root[data-layout="phone"] .app .control-cluster {
+  grid-template-areas: "meters" "launch";
+}
+
+:root[data-layout="phone"] .app .launch-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+:root[data-layout="phone"] .app .context-rail,
+:root[data-layout="phone"] .app .right-rail {
+  max-height: none;
+  overflow: visible;
+}
+
+:root[data-layout="phone"] .app .context-rail {
+  position: static;
+  top: auto;
+  z-index: auto;
+}
+
+:root[data-layout="phone"] .app #tx-safety-host.phone-tx-bar {
+  display: block;
+  position: fixed;
+  right: auto;
+  bottom: calc(var(--legacy-dock-clearance) + env(safe-area-inset-bottom));
+  left: 50%;
+  z-index: var(--z-menu);
+  width: min(100vw, var(--legacy-phone-max-width));
+  min-height: var(--tx-phone-bar-height);
+  padding: 0 var(--sp-2) env(safe-area-inset-bottom);
+  overflow: visible;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-panel);
+  background: var(--bg-panel);
+  box-shadow: none;
+  transform: translateX(-50%);
+}
+
+:root[data-layout="phone"] .app #tx-safety-host #tx-zone {
+  position: relative;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr);
+  grid-template-areas: "status status" "arm ptt";
+  gap: var(--sp-1);
+  margin: 0;
+  padding: var(--sp-1);
+}
+
+:root[data-layout="phone"] .app #tx-safety-host .tx-zone-head { grid-area: status; }
+:root[data-layout="phone"] .app #tx-safety-host .tx-zone-state {
+  padding: 0 var(--sp-1);
+}
+:root[data-layout="phone"] .app #tx-safety-host #tx-arm-btn {
+  grid-area: arm;
+  min-height: var(--control-min-coarse);
+}
+:root[data-layout="phone"] .app #tx-safety-host .tx-action-row {
+  grid-area: ptt;
+  grid-template-columns: minmax(0, 1fr);
+}
+:root[data-layout="phone"] .app #tx-safety-host #ptt-btn {
+  width: 100%;
+  min-height: var(--control-min-coarse);
+}
+
+:root[data-layout="phone"] .app #tx-safety-host #tx-arm-btn[hidden] + .tx-action-row {
+  grid-column: 1 / -1;
+}
+
+:root[data-layout="phone"] .app .mobile-control-dock {
+  position: fixed;
+  right: auto;
+  bottom: max(var(--sp-1), env(safe-area-inset-bottom));
+  left: 50%;
+  z-index: var(--z-menu);
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: var(--sp-1);
+  width: min(calc(100vw - var(--sp-3)), var(--legacy-phone-max-width));
+  padding: var(--sp-1);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-control);
+  background: var(--bg-panel);
+  box-shadow: none;
+  backdrop-filter: none;
+  transform: translateX(-50%);
+}
+
+@media (max-width: 767px), (pointer: coarse) and (max-height: 599px) and (max-width: 1023px) {
+  :root[data-layout="phone"] .app.page.console-page {
+    padding-bottom: calc(var(--legacy-dock-clearance) + var(--legacy-quickbar-clearance) + var(--tx-phone-clearance) + env(safe-area-inset-bottom));
+  }
+
+  :root[data-layout="phone"] .app #tx-safety-host.phone-tx-bar {
+    bottom: calc(var(--legacy-dock-clearance) + var(--legacy-quickbar-clearance) + env(safe-area-inset-bottom));
+  }
+}

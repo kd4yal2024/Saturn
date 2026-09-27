@@ -1,5 +1,6 @@
 import tokenCss from '../styles/tokens.css?inline';
 import primitiveCss from '../styles/primitives.css?inline';
+import layoutCss from '../styles/layout.css?inline';
 import iconSprite from '../assets/icons/sprite.svg?raw';
 import plexLicense from '../assets/fonts/OFL.txt?raw';
 import iconLicense from '../assets/icons/LICENSE.txt?raw';
@@ -461,7 +462,7 @@ function installUiFoundation(): void {
   if (!document.getElementById('saturn-ui-foundation')) {
     const style = document.createElement('style');
     style.id = 'saturn-ui-foundation';
-    style.textContent = `${tokenCss}\n${primitiveCss}`;
+    style.textContent = `${tokenCss}\n${primitiveCss}\n${layoutCss}`;
     document.head.append(style);
   }
 

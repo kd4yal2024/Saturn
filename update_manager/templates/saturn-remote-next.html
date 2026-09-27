@@ -4467,7 +4467,7 @@
     .operator-pill-label { color: var(--text-secondary); font-size: var(--fs-caption); line-height: var(--lh-caption); }
     .operator-pill-value { color: var(--text-secondary); font-size: var(--fs-caption); line-height: var(--lh-caption); }
     .operator-pill[data-tone="ok"]::before { background: var(--safe-green); }
-    .operator-pill[data-tone="rx"]::before { background: var(--rx-cyan); }
+    .operator-pill[data-tone="rx"]::before { background: var(--text-secondary); }
     .operator-pill[data-tone="tx"]::before { background: var(--warning-amber); }
     .operator-pill[data-tone="keyed"]::before { background: var(--tx-orange); }
     .operator-pill[data-tone="warn"]::before { background: var(--warning-amber); }
@@ -5316,13 +5316,6 @@
         backdrop-filter: blur(14px);
       }
       .context-tabs { display: none; }
-
-      .context-rail[data-active-context="tx"] .tx-zone {
-        position: sticky;
-        z-index: 35;
-        bottom: calc(68px + env(safe-area-inset-bottom));
-        box-shadow: none;
-      }
 
       .mobile-dock-button { min-height: 54px; padding: 5px 3px; font-size: var(--fs-caption); line-height: var(--lh-caption); }
       .mobile-dock-button[data-shell-target="tx"] { color: var(--warning-amber); }
@@ -6614,6 +6607,67 @@
     .display-head, .display-zoom, #terrain-settings { background: var(--bg-panel); }
     .top-meter-bank .multimeter-workbench > .multimeter-svg { background: var(--bg-display); border-radius: var(--r-panel); }
 </style>
+  <!-- Phase 2 phone menu: trigger, bottom sheet, and routes to existing controls.
+       Scoped to [data-phone-menu="on"] so layout.css can supersede it. -->
+  <style id="saturn-phone-menu-v1">
+    #phone-menu-btn { display: none; }
+    .console-page[data-phone-menu="on"] #phone-menu-btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+    }
+    @media (pointer: coarse) {
+      .console-page[data-phone-menu="on"] #phone-menu-btn { min-width: var(--control-min-coarse); min-height: var(--control-min-coarse); }
+    }
+    .console-page[data-phone-menu="on"] .hero-actions > :not(#phone-menu-btn) { display: none; }
+    .phone-menu-sheet {
+      position: fixed;
+      inset: 0;
+      z-index: var(--z-sheet);
+      display: flex;
+      flex-direction: column;
+      justify-content: flex-end;
+      background: var(--overlay-backdrop);
+    }
+    .phone-menu-sheet[hidden] { display: none; }
+    .phone-menu-panel {
+      max-height: var(--phone-menu-max-height);
+      overflow-y: auto;
+      background: var(--bg-panel);
+      border-top: 1px solid var(--border-strong);
+      border-radius: var(--r-panel) var(--r-panel) 0 0;
+      padding: var(--sp-3) var(--sp-4) calc(var(--sp-4) + env(safe-area-inset-bottom));
+    }
+    .phone-menu-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: var(--sp-3);
+      margin-bottom: var(--sp-3);
+    }
+    .phone-menu-head-actions { display: flex; align-items: center; gap: var(--sp-2); }
+    .phone-menu-group { display: grid; gap: var(--sp-2); margin-bottom: var(--sp-3); }
+    .phone-menu-group-title {
+      font: 500 var(--fs-caption) / var(--lh-caption) var(--font-sans);
+      color: var(--text-secondary);
+    }
+    .phone-menu-item {
+      min-height: var(--control-min-coarse);
+      justify-content: flex-start;
+      text-align: left;
+      width: 100%;
+    }
+    /* The hosted header menu keeps its own absolute positioning rules, which
+       would place it outside the sheet. Scope them back to a normal flow block. */
+    #phone-menu-system-host .header-diagnostics-menu {
+      position: static;
+      top: auto;
+      right: auto;
+      width: 100%;
+      max-width: 100%;
+      box-shadow: none;
+    }
+  </style>
   <!-- The blocking local bundle installs token CSS before the body can paint. -->
   <script
     src="/remote-assets/remote-next.js?v=terrain-farfield-1"
@@ -6622,13 +6676,23 @@
   ></script>
 </head>
 <body>
-  <div class="page console-page">
+  <div class="page console-page app">
+    <div class="app-shell">
     <header class="console-header">
       <div>
         <div class="kicker">Saturn G2</div>
         <h1>Saturn Remote</h1>
       </div>
       <div class="hero-actions">
+        <button
+          class="btn ghost sr-icon-button"
+          id="phone-menu-btn"
+          type="button"
+          aria-label="Open menu"
+          aria-haspopup="dialog"
+          aria-controls="phone-menu-sheet"
+          aria-expanded="false"
+        ><svg class="sr-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#sr-icon-menu"></use></svg></button>
         <details class="header-diagnostics">
           <summary class="btn ghost" aria-label="Open system and diagnostic tools">System</summary>
           <div class="header-diagnostics-menu">
@@ -6645,6 +6709,201 @@
         <button class="btn ghost" id="header-setup-btn" type="button" aria-label="Open Saturn Remote settings" aria-controls="setup-menu" aria-expanded="false" title="Settings">&#9881;</button>
       </div>
     </header>
+
+    <!-- Phase 2: phone overflow menu. Routes click the existing controls so their
+         handlers stay the single source of truth; nothing is re-implemented here. -->
+    <div class="phone-menu-sheet" id="phone-menu-sheet" role="dialog" aria-modal="true" aria-label="Menu" hidden>
+      <div class="phone-menu-panel" id="phone-menu-panel">
+        <div class="phone-menu-head">
+          <h2 class="panel-title">Menu</h2>
+          <div class="phone-menu-head-actions">
+            <button class="btn ghost" id="phone-menu-back-btn" type="button" hidden>Back</button>
+            <button class="btn ghost" id="phone-menu-close-btn" type="button" aria-label="Close menu">Close</button>
+          </div>
+        </div>
+        <div id="phone-menu-groups">
+        <div class="phone-menu-group" role="group" aria-label="Status">
+          <span class="phone-menu-group-title">Status</span>
+          <button class="btn phone-menu-item" id="phone-menu-status-btn" type="button" data-phone-route="status">Status details</button>
+        </div>
+        <div class="phone-menu-group" role="group" aria-label="Tools">
+          <span class="phone-menu-group-title">Tools</span>
+          <button class="btn phone-menu-item" id="phone-menu-system-btn" type="button" data-phone-route="system">System</button>
+          <button class="btn phone-menu-item" id="phone-menu-help-btn" type="button" data-phone-route="help">Help</button>
+          <button class="btn phone-menu-item" id="phone-menu-phone-btn" type="button" data-phone-route="phone">Phone view</button>
+          <button class="btn phone-menu-item" id="phone-menu-theme-btn" type="button" data-phone-route="theme">Theme</button>
+          <button class="btn phone-menu-item" id="phone-menu-settings-btn" type="button" data-phone-route="settings">Settings</button>
+        </div>
+        <div class="phone-menu-group" role="group" aria-label="Radio path">
+          <span class="phone-menu-group-title">Radio path</span>
+          <button class="btn phone-menu-item" id="phone-menu-radio-path-btn" type="button" data-phone-route="radioPath">RX input, antenna, attenuator</button>
+        </div>
+        <div class="phone-menu-group" role="group" aria-label="Operations">
+          <span class="phone-menu-group-title">Operations</span>
+          <button class="btn phone-menu-item" id="phone-menu-ops-memory-btn" type="button" data-phone-route="opsMemory">Memory</button>
+          <button class="btn phone-menu-item" id="phone-menu-ops-audio-btn" type="button" data-phone-route="opsAudio">Audio</button>
+          <button class="btn phone-menu-item" id="phone-menu-ops-network-btn" type="button" data-phone-route="opsNetwork">Network</button>
+          <button class="btn phone-menu-item" id="phone-menu-ops-dsp-btn" type="button" data-phone-route="opsDsp">DSP</button>
+          <button class="btn phone-menu-item" id="phone-menu-ops-radio-btn" type="button" data-phone-route="opsRadio">Radio</button>
+          <button class="btn phone-menu-item" id="phone-menu-ops-log-btn" type="button" data-phone-route="opsLog">Log</button>
+        </div>
+        </div>
+        <!-- The System route hosts the original header diagnostics menu node here
+             while phone mode is active, so nothing is duplicated or lost. -->
+        <div class="phone-menu-group" id="phone-menu-system-host" role="group" aria-label="System" hidden></div>
+      </div>
+    </div>
+    <script>
+      (function wirePhoneMenu(){
+        var trigger = document.getElementById('phone-menu-btn');
+        var sheet = document.getElementById('phone-menu-sheet');
+        if (!trigger || !sheet) return;
+        // Prefer the container-query wrapper once layout.css provides it.
+        var page = document.querySelector('.app') || document.querySelector('.console-page') || document.body;
+        var closeBtn = document.getElementById('phone-menu-close-btn');
+        var backBtn = document.getElementById('phone-menu-back-btn');
+        var groupsHost = document.getElementById('phone-menu-groups');
+        var systemHost = document.getElementById('phone-menu-system-host');
+        var systemSource = document.querySelector('.header-diagnostics-menu');
+        var lastFocus = null;
+
+        // The System entry shows the real header diagnostics menu inside the sheet,
+        // rather than opening a <details> that phone mode hides.
+        function enterSystemView(){
+          if (!systemHost || !systemSource) return false;
+          if (systemSource.parentElement !== systemHost) systemHost.appendChild(systemSource);
+          if (groupsHost) groupsHost.hidden = true;
+          systemHost.hidden = false;
+          if (backBtn) backBtn.hidden = false;
+          var first = systemHost.querySelector('button, a[href], [tabindex]:not([tabindex="-1"])');
+          if (first && first.focus) first.focus({ preventScroll: true });
+          return true;
+        }
+        function leaveSystemView(){
+          if (!systemHost) return;
+          var details = document.querySelector('.header-diagnostics');
+          if (systemSource && details && systemSource.parentElement === systemHost) {
+            details.appendChild(systemSource);
+          }
+          systemHost.hidden = true;
+          if (groupsHost) groupsHost.hidden = false;
+          if (backBtn) backBtn.hidden = true;
+        }
+
+        function focusables(){
+          var nodes = sheet.querySelectorAll('button, [href], input, select, [tabindex]:not([tabindex="-1"])');
+          return Array.prototype.filter.call(nodes, function(node){
+            return !node.disabled && node.offsetParent !== null;
+          });
+        }
+        function isOpen(){ return sheet.hidden === false; }
+        function open(){
+          if (isOpen()) return;
+          lastFocus = document.activeElement;
+          sheet.hidden = false;
+          trigger.setAttribute('aria-expanded', 'true');
+          var first = focusables()[0] || closeBtn;
+          if (first && first.focus) first.focus({ preventScroll: true });
+        }
+        function close(){
+          if (!isOpen()) return;
+          leaveSystemView();
+          sheet.hidden = true;
+          trigger.setAttribute('aria-expanded', 'false');
+          var target = (lastFocus && lastFocus.focus) ? lastFocus : trigger;
+          if (target && target.focus) target.focus({ preventScroll: true });
+          lastFocus = null;
+        }
+        function clickById(id){
+          var node = document.getElementById(id);
+          if (node && node.click) node.click();
+        }
+        // Every route delegates to the control that already owns the behaviour.
+        var routes = {
+          status: function(){ clickById('operator-conn-pill'); },
+          system: function(){ enterSystemView(); },
+          help: function(){ clickById('shortcut-help-btn'); },
+          phone: function(){ clickById('layout-btn'); },
+          theme: function(){ clickById('theme-btn'); },
+          settings: function(){ clickById('header-setup-btn'); },
+          radioPath: function(){
+            var panel = document.querySelector('[data-phone-panel="routing"]');
+            if (!panel) return;
+            var toggle = panel.querySelector('.panel-toggle-btn');
+            if (panel.dataset.phoneCollapsed === 'true' && toggle && toggle.click) toggle.click();
+            if (panel.scrollIntoView) panel.scrollIntoView({ behavior: 'smooth', block: 'start' });
+          },
+          opsMemory: function(){ clickById('operations-tab-memory'); },
+          opsAudio: function(){ clickById('operations-tab-audio'); },
+          opsNetwork: function(){ clickById('operations-tab-network'); },
+          opsDsp: function(){ clickById('operations-tab-dsp'); },
+          opsRadio: function(){ clickById('operations-tab-radio'); },
+          opsLog: function(){ clickById('operations-tab-log'); }
+        };
+
+        sheet.addEventListener('click', function(event){
+          var target = event.target;
+          var routeButton = target && target.closest ? target.closest('[data-phone-route]') : null;
+          if (routeButton) {
+            var key = routeButton.getAttribute('data-phone-route');
+            var handler = routes[key];
+            // The System entry keeps the sheet open and swaps in the hosted menu.
+            if (key === 'system') { if (handler) handler(); return; }
+            close();
+            if (handler) handler();
+            return;
+          }
+          if (target === sheet) close();
+        });
+        if (closeBtn) closeBtn.addEventListener('click', close);
+        if (backBtn) {
+          backBtn.addEventListener('click', function(){
+            leaveSystemView();
+            var first = focusables()[0];
+            if (first && first.focus) first.focus({ preventScroll: true });
+          });
+        }
+        trigger.addEventListener('click', function(){ if (isOpen()) close(); else open(); });
+        document.addEventListener('keydown', function(event){
+          if (!isOpen()) return;
+          if (event.key === 'Escape') { event.preventDefault(); close(); return; }
+          if (event.key !== 'Tab') return;
+          var items = focusables();
+          if (items.length === 0) return;
+          var first = items[0];
+          var last = items[items.length - 1];
+          if (event.shiftKey && document.activeElement === first) {
+            event.preventDefault();
+            last.focus();
+          } else if (!event.shiftKey && document.activeElement === last) {
+            event.preventDefault();
+            first.focus();
+          }
+        });
+
+        // Container width decides which menu is live; <600px uses this sheet.
+        var PHONE_MENU_MAX_PX = 600;
+        function applyWidth(width){
+          var on = Number(width) > 0 && width < PHONE_MENU_MAX_PX;
+          page.setAttribute('data-phone-menu', on ? 'on' : 'off');
+          if (!on) close();
+        }
+        applyWidth(page.clientWidth || window.innerWidth || 0);
+        if (typeof ResizeObserver === 'function') {
+          new ResizeObserver(function(entries){
+            for (var index = 0; index < entries.length; index += 1) {
+              var rect = entries[index].contentRect;
+              applyWidth(rect ? rect.width : 0);
+            }
+          }).observe(page);
+        } else {
+          window.addEventListener('resize', function(){
+            applyWidth(page.clientWidth || window.innerWidth || 0);
+          });
+        }
+        window.saturnPhoneMenu = { open: open, close: close, isOpen: isOpen, routes: routes };
+      })();
+    </script>
 
     <script>
       (function wireSaturnManagementLinks(){
@@ -7683,12 +7942,7 @@
       </div>
 
       <div class="stack right-rail">
-        <div class="panel" data-phone-panel="tx">
-          <div class="panel-head" data-phone-panel-head>
-            <h2 class="panel-title">Transmit</h2>
-            <div class="panel-meta" id="tx-status-meta">RX</div>
-          </div>
-          <div class="panel-body">
+        <div id="tx-safety-host" class="phone-tx-bar">
             <div class="tx-zone" id="tx-zone" data-tx-state="disabled">
               <div class="tx-zone-head">
                 <span class="tx-zone-head-main">
@@ -7697,57 +7951,66 @@
                 </span>
                 <span class="tx-zone-state" id="tx-zone-state" role="status" aria-live="polite" aria-atomic="true">RX ready</span>
               </div>
-              <div class="tx-zone-frequency" id="tx-zone-frequency">TX 14.200.000 USB</div>
               <button class="btn tx-arm-button" id="tx-arm-btn" type="button" aria-describedby="tx-arm-note" disabled>TX UNAVAILABLE</button>
-              <div class="tx-arm-note" id="tx-arm-note">Arming does not transmit</div>
               <div class="tx-action-row">
                 <button class="btn ptt-btn tx-ptt-primary" id="ptt-btn" type="button" aria-describedby="tx-zone-hint" aria-pressed="false" disabled>HOLD PTT</button>
-                <button class="btn ghost tx-mox-secondary" id="mox-btn" type="button" aria-describedby="tx-zone-hint" aria-pressed="false" disabled>MOX</button>
               </div>
-              <div class="tx-meter-mini-grid" aria-label="Transmit quick meters">
-                <div class="tx-meter-mini">
-                  <span class="tx-meter-mini-label">Mic</span>
-                  <span class="tx-meter-mini-value"><span class="tx-mic-dot" id="tx-zone-mic-dot"></span><span id="tx-zone-mic-value">Idle</span></span>
-                  <div class="tx-meter-mini-bar" id="tx-zone-mic-bar" data-tone="idle" aria-hidden="true"><span></span></div>
-                </div>
-                <div class="tx-meter-mini">
-                  <span class="tx-meter-mini-label">Power</span>
-                  <span class="tx-meter-mini-value" id="tx-zone-power-value">-- W</span>
-                  <div class="tx-meter-mini-bar" id="tx-zone-power-bar" data-tone="idle" aria-hidden="true"><span></span></div>
-                </div>
-                <div class="tx-meter-mini">
-                  <span class="tx-meter-mini-label">SWR</span>
-                  <span class="tx-meter-mini-value" id="tx-zone-swr-value">-- : 1</span>
-                  <div class="tx-meter-mini-bar" id="tx-zone-swr-bar" data-tone="idle" aria-hidden="true"><span></span></div>
-                </div>
+            </div>
+        </div>
+        <div class="panel" data-phone-panel="tx">
+          <div class="panel-head" data-phone-panel-head>
+            <h2 class="panel-title">Transmit</h2>
+            <div class="panel-meta" id="tx-status-meta">RX</div>
+          </div>
+          <div class="panel-body">
+            <div class="tx-zone-frequency" id="tx-zone-frequency">TX 14.200.000 USB</div>
+            <div class="tx-arm-note" id="tx-arm-note">Arming does not transmit</div>
+            <div class="row" aria-label="Manual MOX transmit">
+              <button class="btn ghost tx-mox-secondary" id="mox-btn" type="button" aria-describedby="tx-zone-hint" aria-pressed="false" disabled>MOX</button>
+            </div>
+            <div class="tx-meter-mini-grid" aria-label="Transmit quick meters">
+              <div class="tx-meter-mini">
+                <span class="tx-meter-mini-label">Mic</span>
+                <span class="tx-meter-mini-value"><span class="tx-mic-dot" id="tx-zone-mic-dot"></span><span id="tx-zone-mic-value">Idle</span></span>
+                <div class="tx-meter-mini-bar" id="tx-zone-mic-bar" data-tone="idle" aria-hidden="true"><span></span></div>
               </div>
-              <div class="row" aria-label="Transmit audio source">
-                <label for="tx-audio-source">TX audio</label>
-                <select id="tx-audio-source" disabled><option value="tci">Browser microphone</option><option value="satp">Native SATP</option></select>
-                <button class="btn ghost" id="satp-pair-btn" type="button" disabled>Pair native sender</button>
+              <div class="tx-meter-mini">
+                <span class="tx-meter-mini-label">Power</span>
+                <span class="tx-meter-mini-value" id="tx-zone-power-value">-- W</span>
+                <div class="tx-meter-mini-bar" id="tx-zone-power-bar" data-tone="idle" aria-hidden="true"><span></span></div>
               </div>
-              <div class="small muted" id="satp-status" role="status">Browser microphone</div>
-              <div id="satp-pairing" hidden>
-                <label class="small" for="satp-key">Temporary pairing key — paste into native sender Network settings, then start audio</label>
-                <input id="satp-key" type="password" readonly autocomplete="off" spellcheck="false" />
-                <button class="btn ghost" id="satp-copy-key" type="button">Copy key</button>
-                <button class="btn ghost" id="satp-hide-key" type="button">Hide key</button>
+              <div class="tx-meter-mini">
+                <span class="tx-meter-mini-label">SWR</span>
+                <span class="tx-meter-mini-value" id="tx-zone-swr-value">-- : 1</span>
+                <div class="tx-meter-mini-bar" id="tx-zone-swr-bar" data-tone="idle" aria-hidden="true"><span></span></div>
               </div>
-              <div class="row" aria-label="G2 transmit headphone monitor">
-                <button class="btn ghost" id="tx-mon-btn" type="button" aria-pressed="false" disabled title="Monitor processed TX audio at G2 headphones; does not key TX">MON OFF</button>
-                <label class="small" for="tx-mon-level">MON level</label>
-                <input id="tx-mon-level" type="range" min="-60" max="-6" step="1" value="-30" disabled style="min-width: 60px; width: 100px; flex: 1;" />
-                <span class="mono small" id="tx-mon-level-readout">-30 dB</span>
-              </div>
-              <div class="small muted" id="tx-mon-note">G2 headphone MON requires bridge support.</div>
-              <div class="tx-zone-footer">
-                <span class="tx-zone-hint" id="tx-zone-hint">Connect before transmit</span>
-                <button class="btn ghost tx-lock-button" id="tx-lock-btn" type="button">Lock TX</button>
-              </div>
-              <div class="tx-ready-meter" id="tx-ready-meter" hidden aria-hidden="true">
-                <div class="tx-ready-track" aria-hidden="true"><span id="tx-ready-fill"></span></div>
-                <span class="tx-ready-countdown" id="tx-ready-countdown">Ready window 0:00</span>
-              </div>
+            </div>
+            <div class="row" aria-label="Transmit audio source">
+              <label for="tx-audio-source">TX audio</label>
+              <select id="tx-audio-source" disabled><option value="tci">Browser microphone</option><option value="satp">Native SATP</option></select>
+              <button class="btn ghost" id="satp-pair-btn" type="button" disabled>Pair native sender</button>
+            </div>
+            <div class="small muted" id="satp-status" role="status">Browser microphone</div>
+            <div id="satp-pairing" hidden>
+              <label class="small" for="satp-key">Temporary pairing key — paste into native sender Network settings, then start audio</label>
+              <input id="satp-key" type="password" readonly autocomplete="off" spellcheck="false" />
+              <button class="btn ghost" id="satp-copy-key" type="button">Copy key</button>
+              <button class="btn ghost" id="satp-hide-key" type="button">Hide key</button>
+            </div>
+            <div class="row" aria-label="G2 transmit headphone monitor">
+              <button class="btn ghost" id="tx-mon-btn" type="button" aria-pressed="false" disabled title="Monitor processed TX audio at G2 headphones; does not key TX">MON OFF</button>
+              <label class="small" for="tx-mon-level">MON level</label>
+              <input id="tx-mon-level" type="range" min="-60" max="-6" step="1" value="-30" disabled style="min-width: 60px; width: 100px; flex: 1;" />
+              <span class="mono small" id="tx-mon-level-readout">-30 dB</span>
+            </div>
+            <div class="small muted" id="tx-mon-note">G2 headphone MON requires bridge support.</div>
+            <div class="tx-zone-footer">
+              <span class="tx-zone-hint" id="tx-zone-hint">Connect before transmit</span>
+              <button class="btn ghost tx-lock-button" id="tx-lock-btn" type="button">Lock TX</button>
+            </div>
+            <div class="tx-ready-meter" id="tx-ready-meter" hidden aria-hidden="true">
+              <div class="tx-ready-track" aria-hidden="true"><span id="tx-ready-fill"></span></div>
+              <span class="tx-ready-countdown" id="tx-ready-countdown">Ready window 0:00</span>
             </div>
             <div class="field-row">
               <div class="range-wrap">
@@ -7935,6 +8198,7 @@
       <button class="mobile-quick-button" id="mobile-anf-btn" type="button">ANF Off</button>
       <button class="mobile-quick-button" id="mobile-filter-btn" type="button">FIL 3.0k</button>
       <button class="mobile-quick-button" id="mobile-wake-lock-btn" type="button" aria-pressed="false">Awake Off</button>
+    </div>
     </div>
   </div>
 
@@ -11027,13 +11291,16 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     function syncDisplayWorkspaceRatio() {
       const stack = document.querySelector(".display-stack");
       const separator = $("spectrum-waterfall-resizer");
-      const phone = state.layoutMode === "phone";
-      const ratio = state.terrainActive ? state.terrain.split : phone
+      const legacyPhone = state.layoutMode === "phone";
+      const appWidth = document.querySelector(".app")?.clientWidth || window.innerWidth;
+      const responsivePhone = !legacyPhone && appWidth < 600;
+      const ratio = state.terrainActive ? state.terrain.split : legacyPhone
         ? phoneSpectrumRatio(state.phoneSpectrumMode)
         : clampSpectrumWaterfallRatio(state.spectrumWaterfallRatio);
-      const spectrumMinimum = state.terrainActive ? 80 : phone ? 140 : 180;
-      const waterfallMinimum = phone ? 96 : 120;
-      const separatorSize = state.terrainActive ? 0 : phone ? 0 : 12;
+      const spectrumMinimum = legacyPhone ? (state.terrainActive ? 80 : 140)
+        : responsivePhone ? 180 : 240;
+      const waterfallMinimum = legacyPhone ? 96 : responsivePhone ? 80 : 120;
+      const separatorSize = state.terrainActive || legacyPhone ? 0 : 12;
       if (stack) {
         stack.style.gridTemplateRows = `minmax(${spectrumMinimum}px, ${ratio.toFixed(3)}fr) ${separatorSize}px minmax(${waterfallMinimum}px, ${(1 - ratio).toFixed(3)}fr)`;
       }
@@ -11263,6 +11530,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
 
     function applyControlContext(value, persist = true) {
       const context = normalizeRadioControlContext(value);
+      const responsiveConsole = state.layoutMode !== "phone";
       const rail = $("radio-context-rail");
       const audioStrip = document.querySelector('[data-phone-panel="audio"]');
       const rightRail = document.querySelector(".right-rail");
@@ -11275,19 +11543,23 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         button.tabIndex = active ? 0 : -1;
       });
 
-      audioStrip.hidden = context === "tx";
+      // The responsive console shows Receive beside Transmit. The separate
+      // legacy Phone view retains its RX/DSP/TX tab behavior.
+      audioStrip.hidden = !responsiveConsole && context === "tx";
       audioStrip.querySelectorAll("[data-control-context]").forEach((control) => {
-        control.hidden = control.dataset.controlContext !== context;
+        control.hidden = responsiveConsole
+          ? control.dataset.controlContext === "dsp" && context !== "dsp"
+          : control.dataset.controlContext !== context;
       });
       const audioTitle = audioStrip.querySelector(".panel-title");
-      if (audioTitle) audioTitle.textContent = context === "dsp" ? "DSP" : "Receive";
+      if (audioTitle) audioTitle.textContent = context === "dsp" ? (responsiveConsole ? "Receive and DSP" : "DSP") : "Receive";
       const audioMeta = audioStrip.querySelector(".panel-meta");
       if (audioMeta) {
-        audioMeta.textContent = context === "dsp"
+        audioMeta.textContent = context === "dsp" && !responsiveConsole
           ? "Noise reduction / blanker"
           : "Audio / AGC / filter";
       }
-      rightRail.dataset.contextCompact = context === "tx" ? "false" : "true";
+      rightRail.dataset.contextCompact = responsiveConsole || context === "tx" ? "false" : "true";
 
       if (persist) localStorage.setItem("saturn.remote.controlContext", context);
       return context;
@@ -11704,6 +11976,9 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       updateLayoutButton();
       syncPhoneWaterfall();
       syncPhonePanels();
+      if ($("radio-context-rail")) {
+        applyControlContext($("radio-context-rail").dataset.activeContext || "rx", false);
+      }
       if (refresh) {
         requestAnimationFrame(() => {
           spectrumRenderer.resize();

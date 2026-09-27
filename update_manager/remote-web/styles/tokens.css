@@ -99,6 +99,27 @@
   --slider-thumb-size: 16px;
   --slider-thumb-size-coarse: 22px;
   --overlay-backdrop: rgba(0, 0, 0, 0.58);
+
+  /* Responsive shell geometry; layout.css consumes these at each container tier. */
+  --app-bar-phone: 44px;
+  --app-bar-desktop: 48px;
+  --app-left-rail: 240px;
+  --app-right-rail: 300px;
+  --app-right-rail-wide: 340px;
+  --display-phone-height-min: 272px;
+  --display-phone-3d-min: 180px;
+  --display-phone-waterfall-min: 80px;
+  --display-tablet-height-min: 360px;
+  --display-tablet-3d-min: 240px;
+  --display-tablet-waterfall-min: 120px;
+  --display-splitter-size: 12px;
+  --tx-phone-bar-height: 68px;
+  --tx-phone-clearance: 80px;
+  --legacy-dock-clearance: 72px;
+  --legacy-quickbar-clearance: 56px;
+  --legacy-phone-max-width: 560px;
+  --phone-menu-max-height: 82dvh;
+  --display-shell-chrome-height: 340px;
 }
 
 :root[data-theme="light"] {

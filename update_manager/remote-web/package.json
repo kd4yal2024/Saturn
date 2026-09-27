@@ -11,6 +11,7 @@
     "smoke:remote-next": "vitest run tests/remote-next-smoke.test.ts",
     "typecheck": "tsc --noEmit",
     "check:seam": "node scripts/check-template-seam.mjs",
+    "validate:ui-tiers": "node scripts/validate-ui-redesign-tiers.mjs",
     "validate:remote-next-layout": "node scripts/validate-remote-next-layout.mjs",
     "validate:waterfall": "node scripts/validate-waterfall.mjs",
     "validate:terrain": "node scripts/validate-terrain.mjs",

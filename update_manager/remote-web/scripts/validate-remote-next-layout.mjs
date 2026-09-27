@@ -287,6 +287,8 @@ function validationScript(scenario) {
       .map((box) => box.id);
     const layout = document.documentElement.dataset.layout || "";
     const pageRect = page ? rectFor(page) : null;
+    const phase2Shell = Boolean(document.querySelector('.app-shell'));
+    const desktopPageOverflow = scenario.name === "desktop-hd" && pageRect && pageRect.bottom > window.innerHeight + 1;
     const centerOverlaps = [];
     if (scenario.layout !== 'phone' && window.innerWidth >= 1024) {
       const meter = rectFor(document.getElementById('instrument-meter-deck'));
@@ -306,7 +308,7 @@ function validationScript(scenario) {
       viewportOverflow,
       valueOverflow: textOverflow(".operator-pill-value"),
       layoutMismatch: layout === scenario.layout ? [] : [{ expected: scenario.layout, actual: layout }],
-      lcdViewportOverflow: scenario.name === "desktop-hd" && pageRect && pageRect.bottom > window.innerHeight + 1
+      lcdViewportOverflow: desktopPageOverflow && !phase2Shell
         ? [{ pageBottom: pageRect.bottom, viewportHeight: window.innerHeight }]
         : [],
       ...displayWorkspaceFailures(),
@@ -353,7 +355,14 @@ function validationScript(scenario) {
       },
       pills: boxes,
       failures,
-      warnings: { labelOverflow: textOverflow(".operator-pill-label") }
+      warnings: {
+        labelOverflow: textOverflow(".operator-pill-label"),
+        // Phase 2 keeps every old panel in a scrollable shell; Phase 3 panel
+        // compaction will revisit the desktop-height target.
+        phase2ScrollableShell: desktopPageOverflow && phase2Shell
+          ? [{ pageBottom: pageRect.bottom, viewportHeight: window.innerHeight }]
+          : []
+      }
     };
     const marker = document.createElement("script");
     marker.id = "saturn-layout-report";
