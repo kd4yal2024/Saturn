@@ -2241,6 +2241,14 @@ try {
       entries.mode.action = { mode: state.mode, active: modeOption.classList.contains('active'),
         ariaChecked: modeOption.getAttribute('aria-checked'),
         vfoTag: document.getElementById('vfo-mode-tag').textContent.trim() };
+      const dsbOption = document.querySelector('#mode-grid .mode-btn[data-mode="DSB"]');
+      dsbOption?.click(); updateUi(); await raf();
+      entries.dsb = { count: document.querySelectorAll('#mode-grid .mode-btn[data-mode="DSB"]').length,
+        mode: state.mode, active: dsbOption?.classList.contains('active'),
+        visible: !!dsbOption?.getClientRects().length,
+        ariaChecked: dsbOption?.getAttribute('aria-checked'),
+        vfoTag: document.getElementById('vfo-mode-tag').textContent.trim() };
+      modeOption.click(); updateUi(); await raf();
       open(); section('display');
       const pin = id => rowFor(id)?.closest('.settings-entry-shell')?.querySelector('.settings-entry-pin');
       const historyPin = pin('display.history');
@@ -2301,6 +2309,9 @@ try {
     if (entries.mode.action.mode !== 'LSB' || !entries.mode.action.active ||
       entries.mode.action.ariaChecked !== 'true' || !entries.mode.action.vfoTag.includes('LSB'))
       failures.push('mode-original-action');
+    if (entries.dsb.count !== 1 || entries.dsb.mode !== 'DSB' || !entries.dsb.active ||
+      !entries.dsb.visible || entries.dsb.ariaChecked !== 'true' ||
+      !entries.dsb.vfoTag.includes('DSB')) failures.push('dsb-mode-action');
     if (!result.pinned.history.stored || !result.pinned.history.row ||
       !result.pinned.history.value.includes('history')) failures.push('history-main-pin');
     if (!result.pinned.dbfsBars.stored || !result.pinned.dbfsBars.row ||

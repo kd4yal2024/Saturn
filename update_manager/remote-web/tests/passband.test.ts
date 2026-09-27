@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   decomposeSignedPassbandWithShift,
+  defaultSignedRxPassbandForMode,
+  defaultSignedTxPassbandForMode,
   normalizeDemodMode,
   shiftedSignedPassbandFromUiCuts,
   signedPassbandFromUiCuts,
@@ -25,6 +27,14 @@ describe('passband helpers', () => {
   it('uses symmetric passbands for AM-like modes', () => {
     expect(signedPassbandFromUiCuts(50, 5000, 'AM')).toEqual({ lowHz: -5000, highHz: 5000 });
     expect(uiCutsFromSignedPassband(-5000, 5000, 'AM')).toEqual({ lowHz: 0, highHz: 5000 });
+  });
+
+  it('uses the symmetric 3.3 kHz DSB receive and transmit defaults', () => {
+    expect(normalizeDemodMode('dsb')).toBe('DSB');
+    expect(signedPassbandFromUiCuts(50, 3300, 'DSB')).toEqual({ lowHz: -3300, highHz: 3300 });
+    expect(uiCutsFromSignedPassband(-3300, 3300, 'DSB')).toEqual({ lowHz: 0, highHz: 3300 });
+    expect(defaultSignedRxPassbandForMode('DSB')).toEqual({ lowHz: -3300, highHz: 3300 });
+    expect(defaultSignedTxPassbandForMode('DSB')).toEqual({ lowHz: -3300, highHz: 3300 });
   });
 
   it('uses the fixed 180 kHz WFM channel width', () => {

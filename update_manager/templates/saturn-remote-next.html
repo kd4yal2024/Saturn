@@ -7839,6 +7839,7 @@
                 <button class="mode-btn" data-mode="LSB" type="button" role="radio" aria-checked="false">LSB</button>
                 <button class="mode-btn" data-mode="AM" type="button" role="radio" aria-checked="false">AM</button>
                 <button class="mode-btn warm" data-mode="SAM" type="button" role="radio" aria-checked="false">SAM</button>
+                <button class="mode-btn" data-mode="DSB" type="button" role="radio" aria-checked="false">DSB</button>
                 <button class="mode-btn" data-mode="FM" type="button" role="radio" aria-checked="false">FM</button>
                 <button class="mode-btn" id="wfm-mode-btn" data-mode="WFM" type="button" role="radio" aria-checked="false" disabled>WFM</button>
                 <button class="mode-btn" data-mode="DIGU" type="button" role="radio" aria-checked="false">DIGU</button>
@@ -8830,7 +8831,7 @@
     const CSRF_HEADER_NAME = "X-Saturn-CSRF";
     const CSRF_HEADER_VALUE = "1";
     const ALLOWED_SAMPLE_RATES = Object.freeze([48000, 96000, 192000, 384000]);
-    const ALLOWED_DEMOD_MODES = Object.freeze(["USB", "LSB", "AM", "SAM", "FM", "WFM", "DIGU", "DIGL", "CWU", "CWL"]);
+    const ALLOWED_DEMOD_MODES = Object.freeze(["USB", "LSB", "AM", "SAM", "DSB", "FM", "WFM", "DIGU", "DIGL", "CWU", "CWL"]);
     const WATERFALL_PALETTES = Object.freeze(["classic", "ember", "ice", "forest", "enhanced", "reference"]);
     const HAM_BAND_EDGES_HZ = Object.freeze([
       { start: 1800000, end: 2000000, label: "160m" },
@@ -12461,7 +12462,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
 
     function modeAwareSquelchKind() {
       if (["USB", "LSB", "DIGU", "DIGL"].includes(state.mode)) return "Voice";
-      if (["AM", "SAM"].includes(state.mode)) return "AM";
+      if (["AM", "SAM", "DSB"].includes(state.mode)) return "AM";
       if (["FM", "WFM"].includes(state.mode)) return "FM";
       return null;
     }
