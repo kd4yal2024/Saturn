@@ -421,6 +421,7 @@ const measureExpression = (scenario) => `(() => {
   const txHost = document.querySelector('#tx-safety-host.phone-tx-bar');
   const txArm = document.getElementById('tx-arm-btn');
   const ptt = document.getElementById('ptt-btn');
+  const mox = document.getElementById('mox-btn');
   const stickyTx = firstVisible(['#tx-safety-host.phone-tx-bar', '#tx-sticky-bar', '#tx-safety-bar', '#mobile-tx-bar', '.tx-sticky-bar', '.tx-safety-bar', '.mobile-tx-bar', '[data-tx-sticky]']);
   const audioStrip = document.querySelector('.audio-control-strip');
   const rail = document.getElementById('radio-context-rail');
@@ -445,20 +446,24 @@ const measureExpression = (scenario) => `(() => {
     overlay.hidden = wasHidden;
     return result;
   };
-  const pttSpanWithArmHidden = () => {
+  const txActionsWithArmHidden = () => {
     const zone = txHost?.querySelector('#tx-zone');
     const row = ptt?.closest('.tx-action-row');
-    if (!zone || !row || !txArm) return { spans: false, reason: 'TX geometry missing' };
+    if (!zone || !row || !txArm || !mox) return { spans: false, reason: 'TX geometry missing' };
     const wasHidden = txArm.hidden;
     txArm.hidden = true;
     const style = getComputedStyle(zone);
     const available = zone.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
     const actual = row.getBoundingClientRect().width;
     const pttWidth = ptt.getBoundingClientRect().width;
+    const moxWidth = mox.getBoundingClientRect().width;
     const pttHit = hitTest(ptt);
+    const moxHit = hitTest(mox);
     txArm.hidden = wasHidden;
-    return { spans: actual >= available - 6 && pttWidth >= actual - 2 && pttHit.onTop,
-      available: round(available), rowWidth: round(actual), pttWidth: round(pttWidth), pttHit };
+    return { spans: actual >= available - 6 && pttWidth >= 100 && moxWidth >= 44
+        && pttHit.onTop && moxHit.onTop && row.contains(mox),
+      available: round(available), rowWidth: round(actual), pttWidth: round(pttWidth),
+      moxWidth: round(moxWidth), pttHit, moxHit };
   };
   check(!!document.getElementById('saturn-ui-foundation'), 'bundle-css-missing', null);
   check(missingIds.length === 0, 'old-control-ids-missing', missingIds);
@@ -514,11 +519,11 @@ const measureExpression = (scenario) => `(() => {
         'legacy-phone-tx-host-not-above-dock', { host: rect(txHost), dock: rect(dock) });
       check(hitTest(txHost).onTop, 'legacy-phone-tx-host-occluded',
         { host: rect(txHost), hit: hitTest(txHost).hit });
-      check(hitTest(txArm).onTop && hitTest(ptt).onTop, 'legacy-phone-tx-controls-occluded',
-        { arm: hitTest(txArm), ptt: hitTest(ptt) });
+      check(hitTest(txArm).onTop && hitTest(ptt).onTop && hitTest(mox).onTop, 'legacy-phone-tx-controls-occluded',
+        { arm: hitTest(txArm), ptt: hitTest(ptt), mox: hitTest(mox) });
       if (scenario.width === 390) {
-        armedPttSpan = pttSpanWithArmHidden();
-        check(armedPttSpan.spans, 'legacy-phone-armed-ptt-not-full-width', armedPttSpan);
+        armedPttSpan = txActionsWithArmHidden();
+        check(armedPttSpan.spans, 'legacy-phone-armed-tx-actions-not-reachable', armedPttSpan);
       }
       overlayHits = { menu: overlayAboveHost('phone-menu-sheet'), detail: overlayAboveHost('operator-detail-overlay') };
       check(overlayHits.menu.above && overlayHits.detail.above,
@@ -558,11 +563,11 @@ const measureExpression = (scenario) => `(() => {
           'phone-tx-bar-not-sticky', { position: stickyStyle.position, rect: rect(stickyTx) });
         check(hitTest(stickyTx).onTop, 'phone-tx-bar-occluded',
           { host: rect(stickyTx), hit: hitTest(stickyTx).hit });
-        check(hitTest(txArm).onTop && hitTest(ptt).onTop, 'phone-tx-controls-occluded',
-          { arm: hitTest(txArm), ptt: hitTest(ptt) });
+        check(hitTest(txArm).onTop && hitTest(ptt).onTop && hitTest(mox).onTop, 'phone-tx-controls-occluded',
+          { arm: hitTest(txArm), ptt: hitTest(ptt), mox: hitTest(mox) });
         if (scenario.width <= 390) {
-          armedPttSpan = pttSpanWithArmHidden();
-          check(armedPttSpan.spans, 'phone-armed-ptt-not-full-width', armedPttSpan);
+          armedPttSpan = txActionsWithArmHidden();
+          check(armedPttSpan.spans, 'phone-armed-tx-actions-not-reachable', armedPttSpan);
         }
         overlayHits = { menu: overlayAboveHost('phone-menu-sheet'), detail: overlayAboveHost('operator-detail-overlay') };
         check(overlayHits.menu.above && overlayHits.detail.above,
