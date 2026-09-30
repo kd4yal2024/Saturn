@@ -44,6 +44,11 @@ if ! grep -q "TerrainRenderer" "$SRC_JS"; then
   echo "[ERR] Rebuild remote-web, then re-run this script." >&2
   exit 1
 fi
+if ! grep -q 'id="phone-menu-btn"' "$SRC_HTML" || ! grep -q 'saturn-ui-foundation' "$SRC_JS"; then
+  echo "[ERR] The source assets lack the redesigned Saturn Remote UI; refusing to replace the live page" >&2
+  echo "[ERR] Build and deploy from a checkout containing the redesigned UI, not a pre-redesign main." >&2
+  exit 1
+fi
 
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 mkdir -p "$WEB_ROOT"

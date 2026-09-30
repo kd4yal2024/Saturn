@@ -584,7 +584,8 @@ Guards now in place:
 
 - The installer refuses to deploy `saturn-remote-next.html`/`.js` unless the
   deployed page contains the High-Res 3D markers (`terrain-canvas`, `view-3d`)
-  and the bundle contains `TerrainRenderer`. This is the hard guarantee for all
+  and redesigned console marker (`phone-menu-btn`), and the bundle contains
+  `TerrainRenderer` and `saturn-ui-foundation`. This is the hard guarantee for all
   paths that copy the web assets (install, self-deploy stage, release build).
   Deliberately reduced build: `SATURN_ALLOW_LEGACY_WEB_ASSETS=1`.
 - A stale install source (behind `SATURN_INSTALL_RELEASE_REF`, default

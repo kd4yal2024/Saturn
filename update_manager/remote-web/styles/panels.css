@@ -1,0 +1,711 @@
+/* Phase 3 presentation for the app bar, tuning controls, and meter. */
+.app #tx-on-air-bar {
+  position: fixed;
+  inset: 0 0 auto;
+  z-index: var(--z-tx-overlay);
+  height: var(--tx-on-air-bar-height);
+  background: var(--danger);
+}
+.app #tx-on-air-bar[hidden] { display: none; }
+.app .sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+:root:not([data-layout="phone"]) .app .app-shell {
+  grid-template-areas: "bar" "session" "tune" "display" "context" "operations";
+}
+:root:not([data-layout="phone"]) .app .app-shell > .console-header {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: var(--sp-2);
+  height: var(--app-bar-phone);
+  min-height: var(--app-bar-phone);
+  padding: 0 var(--sp-2);
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-app);
+}
+:root:not([data-layout="phone"]) .app .console-header > div:first-child {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-2);
+  overflow: hidden;
+  white-space: nowrap;
+}
+:root:not([data-layout="phone"]) .app .console-header .kicker {
+  order: 2;
+  color: var(--text-secondary);
+  font: 400 var(--fs-caption)/var(--lh-caption) var(--font-sans);
+  letter-spacing: normal;
+  text-transform: none;
+}
+:root:not([data-layout="phone"]) .app .console-header h1 {
+  order: 1;
+  margin: 0;
+  color: var(--text-primary);
+  font: 500 var(--fs-emph)/var(--lh-emph) var(--font-sans);
+  letter-spacing: normal;
+  white-space: nowrap;
+}
+:root:not([data-layout="phone"]) .app .hero-actions {
+  grid-column: 2;
+  display: flex;
+  flex-wrap: nowrap;
+  justify-content: flex-end;
+  gap: var(--sp-1);
+  overflow: visible;
+}
+:root:not([data-layout="phone"]) .app .operator-state-strip {
+  grid-area: auto;
+  grid-row: auto;
+  grid-column: 3;
+  position: static;
+  top: auto;
+  z-index: auto;
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--sp-1);
+  width: auto;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  backdrop-filter: none;
+}
+:root:not([data-layout="phone"]) .app .operator-pill {
+  display: inline-flex;
+  align-items: center;
+  width: auto;
+  min-width: 0;
+  min-height: var(--control-min);
+  padding: 0 var(--sp-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-pill);
+  background: var(--bg-panel);
+  color: var(--text-secondary);
+  font: 400 var(--fs-caption)/var(--lh-caption) var(--font-sans);
+  letter-spacing: normal;
+  text-transform: none;
+  cursor: pointer;
+}
+:root:not([data-layout="phone"]) .app .operator-pill-label { display: none; }
+:root:not([data-layout="phone"]) .app .operator-pill-value {
+  color: inherit;
+  white-space: nowrap;
+  overflow-wrap: normal;
+}
+:root:not([data-layout="phone"]) .app .operator-pill[data-tone="ok"] { color: var(--ok); }
+:root:not([data-layout="phone"]) .app .operator-pill[data-tone="warn"] { color: var(--caution); }
+:root:not([data-layout="phone"]) .app .operator-pill[data-tone="fault"] { color: var(--danger); }
+:root:not([data-layout="phone"]) .app .operator-pill[data-tone="rx"] { color: var(--text-secondary); }
+.app .app-tx-badge {
+  flex: none;
+  min-height: var(--control-min);
+  padding: 0 var(--sp-2);
+  border: 1px solid var(--caution);
+  border-radius: var(--r-pill);
+  background: var(--caution-bg);
+  color: var(--caution-text);
+  font: 500 var(--fs-caption)/var(--lh-caption) var(--font-sans);
+  white-space: nowrap;
+  cursor: pointer;
+}
+.app .app-tx-badge[data-tx-visual-state="disarmed"] {
+  border-color: var(--border-strong);
+  background: var(--bg-raised);
+  color: var(--text-secondary);
+}
+.app .app-tx-badge[data-tx-visual-state="transmitting"],
+.app .app-tx-badge[data-tx-visual-state="fault"] {
+  border-color: var(--danger);
+  background: var(--danger-bg);
+  color: var(--danger-text);
+}
+
+:root:not([data-layout="phone"]) .app .command-strip > .panel-head { display: none; }
+:root:not([data-layout="phone"]) .app .command-strip > .panel-body { padding: var(--sp-3); }
+:root:not([data-layout="phone"]) .app .strip-grid > .control-cluster { display: contents; }
+:root:not([data-layout="phone"]) .app .strip-grid .launch-grid {
+  grid-area: launch;
+  position: static;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--sp-2);
+  width: 100%;
+  height: auto;
+  align-self: start;
+  align-content: start;
+  grid-auto-rows: auto;
+  margin: 0;
+  padding: 0;
+}
+:root:not([data-layout="phone"]) .app .strip-grid .launch-grid > .btn,
+:root:not([data-layout="phone"]) .app .strip-grid .launch-grid .setup-anchor,
+:root:not([data-layout="phone"]) .app .strip-grid .launch-grid .setup-anchor > .btn {
+  width: 100%;
+  min-height: var(--control-min);
+  height: auto;
+}
+:root:not([data-layout="phone"]) .app .strip-grid .launch-grid .setup-anchor { display: block; }
+:root:not([data-layout="phone"]) .app .strip-grid .launch-grid #setup-menu-btn { display: inline-flex; }
+:root:not([data-layout="phone"]) .app .vfo-deck {
+  border: 1px solid var(--border);
+  border-radius: var(--r-panel);
+  background: var(--bg-panel);
+  padding: var(--sp-3);
+}
+:root:not([data-layout="phone"]) .app .vfo-deck.primary-deck {
+  container-type: inline-size;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-areas: "top" "readout" "sub";
+  grid-template-rows: auto auto auto;
+  gap: var(--sp-2);
+  min-height: 0;
+  height: auto;
+}
+:root:not([data-layout="phone"]) .app .primary-deck .deck-top {
+  grid-area: top;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  margin: 0;
+}
+:root:not([data-layout="phone"]) .app .primary-deck .deck-label {
+  color: var(--text-secondary);
+  font: 500 var(--fs-caption)/var(--lh-caption) var(--font-sans);
+  letter-spacing: normal;
+  text-transform: none;
+}
+:root:not([data-layout="phone"]) .app .primary-deck #connection-summary { display: none; }
+:root:not([data-layout="phone"]) .app .vfo-status-tags {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: var(--sp-1);
+}
+:root:not([data-layout="phone"]) .app .vfo-status-tags > button {
+  min-height: var(--control-min);
+  padding: 0 var(--sp-2);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-pill);
+  background: var(--bg-raised);
+  color: var(--text-secondary);
+  font: 400 var(--fs-caption)/var(--lh-caption) var(--font-mono);
+  cursor: pointer;
+}
+:root:not([data-layout="phone"]) .app .vfo-status-tags > button:hover { color: var(--accent-text); background: var(--accent-bg); }
+:root:not([data-layout="phone"]) .app .primary-deck .vfo-readout-row {
+  grid-area: readout;
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-2);
+  overflow: hidden;
+}
+:root:not([data-layout="phone"]) .app #dds-readout {
+  margin: 0;
+  min-width: 0;
+  overflow-x: auto;
+  color: var(--text-primary);
+  font: 500 var(--fs-vfo)/var(--lh-vfo) var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+:root:not([data-layout="phone"]) .app #dds-readout .freq-separator { color: var(--text-secondary); }
+:root:not([data-layout="phone"]) .app .vfo-unit {
+  flex: none;
+  color: var(--text-secondary);
+  font: 400 var(--fs-caption)/var(--lh-caption) var(--font-sans);
+}
+:root:not([data-layout="phone"]) .app .deck-subline {
+  color: var(--text-secondary);
+  font: 400 var(--fs-caption)/var(--lh-caption) var(--font-sans);
+  letter-spacing: normal;
+  text-transform: none;
+}
+:root:not([data-layout="phone"]) .app .primary-deck .deck-subline { grid-area: sub; }
+:root:not([data-layout="phone"]) .app .strip-grid > .secondary-deck {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  align-content: center;
+  gap: var(--sp-1) var(--sp-2);
+  min-height: 0;
+  height: auto;
+  padding: var(--sp-2) var(--sp-3);
+}
+:root:not([data-layout="phone"]) .app .secondary-deck .deck-top {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  width: auto;
+  min-height: 0;
+  margin: 0;
+}
+:root:not([data-layout="phone"]) .app .secondary-deck .deck-label {
+  color: var(--text-secondary);
+  font: 400 var(--fs-caption)/var(--lh-caption) var(--font-sans);
+  letter-spacing: normal;
+  text-transform: none;
+}
+:root:not([data-layout="phone"]) .app .secondary-deck #vfo-b-state { display: none; }
+:root:not([data-layout="phone"]) .app .secondary-deck .deck-frequency {
+  margin: 0;
+  font: 500 var(--fs-body)/var(--lh-body) var(--font-mono);
+}
+:root:not([data-layout="phone"]) .app .secondary-deck .vfo-annunciator-row { margin-left: auto; }
+:root:not([data-layout="phone"]) .app .secondary-deck .deck-subline { display: none; }
+:root:not([data-layout="phone"]) .app .primary-deck .deck-subline > :last-child { display: none; }
+:root:not([data-layout="phone"]) .app .secondary-deck .deck-frequency {
+  color: var(--text-primary);
+  font: 500 var(--fs-readout)/var(--lh-readout) var(--font-mono);
+}
+:root:not([data-layout="phone"]) .app .vfo-annunciator-row,
+:root:not([data-layout="phone"]) .app .meter-response-switches { display: inline-flex; gap: 0; }
+:root:not([data-layout="phone"]) .app .vfo-annunciator {
+  min-height: var(--control-min);
+  padding: 0 var(--sp-2);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-control);
+  background: transparent;
+  color: var(--text-secondary);
+  font: 400 var(--fs-body)/var(--lh-body) var(--font-sans);
+  letter-spacing: normal;
+  text-transform: none;
+}
+:root:not([data-layout="phone"]) .app .vfo-annunciator.active,
+:root:not([data-layout="phone"]) .app .vfo-annunciator[aria-pressed="true"] {
+  background: var(--accent-bg);
+  color: var(--accent-text);
+}
+
+/* The current multimeter remains available, with the horizontal readout first. */
+:root:not([data-layout="phone"]) .app .top-meter-bank {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--sp-2);
+  padding: 0;
+  border: 0;
+}
+:root:not([data-layout="phone"]) .app .instrument-state-line {
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-secondary);
+  font: 400 var(--fs-caption)/var(--lh-caption) var(--font-sans);
+  letter-spacing: normal;
+  text-transform: none;
+}
+:root:not([data-layout="phone"]) .app .instrument-state-line::before {
+  background: var(--ok);
+}
+:root:not([data-layout="phone"]) .app .top-meter-bank[data-operating-state="armed"] .instrument-state-line::before { background: var(--caution); }
+:root:not([data-layout="phone"]) .app .top-meter-bank[data-operating-state="tx"] .instrument-state-line::before { background: var(--danger); }
+:root:not([data-layout="phone"]) .app .analog-meter-shell.multimeter-shell {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas: "title response" "type response" "readout readout" "bar bar" "analog analog" "details details";
+  gap: var(--sp-2);
+  min-width: 0;
+  padding: var(--sp-3);
+  border: 1px solid var(--border);
+  border-radius: var(--r-panel);
+  background: var(--bg-panel);
+}
+:root:not([data-layout="phone"]) .app .multimeter-workbench,
+:root:not([data-layout="phone"]) .app .multimeter-control-stack { display: contents; }
+:root:not([data-layout="phone"]) .app .meter-name {
+  grid-area: title;
+  color: var(--text-secondary);
+  font: 400 var(--fs-caption)/var(--lh-caption) var(--font-sans);
+  letter-spacing: normal;
+  text-transform: none;
+}
+:root:not([data-layout="phone"]) .app #instrument-meter-mode { grid-area: type; min-width: 0; }
+:root:not([data-layout="phone"]) .app .meter-response-control {
+  grid-area: response;
+  display: grid;
+  align-content: center;
+  gap: var(--sp-1);
+  min-width: 0;
+}
+:root:not([data-layout="phone"]) .app .meter-response-label {
+  color: var(--text-secondary);
+  font: 400 var(--fs-caption)/var(--lh-caption) var(--font-sans);
+  letter-spacing: normal;
+  text-transform: none;
+}
+:root:not([data-layout="phone"]) .app .meter-dBm-row {
+  grid-area: readout;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--sp-1);
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+:root:not([data-layout="phone"]) .app .meter-dBm-row .instrument-primary-readout {
+  min-width: 0;
+  color: var(--text-primary);
+  font: 500 var(--fs-readout)/var(--lh-readout) var(--font-mono);
+  text-align: left;
+}
+:root:not([data-layout="phone"]) .app .meter-dBm-row #meter-readout {
+  color: var(--text-secondary);
+  font: 400 var(--fs-caption)/var(--lh-caption) var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+:root:not([data-layout="phone"]) .app .meter-horizontal {
+  grid-area: bar;
+  display: grid;
+  gap: var(--sp-1);
+  min-width: 0;
+}
+:root:not([data-layout="phone"]) .app .meter-signal-track {
+  position: relative;
+  height: var(--sp-2);
+  overflow: hidden;
+  border-radius: var(--r-control);
+  background: var(--bg-inset);
+}
+:root:not([data-layout="phone"]) .app .meter-signal-fill,
+:root:not([data-layout="phone"]) .app .meter-over-fill,
+:root:not([data-layout="phone"]) .app .meter-peak-tick {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+}
+:root:not([data-layout="phone"]) .app .meter-signal-fill { left: 0; width: 0; background: var(--accent); }
+:root:not([data-layout="phone"]) .app .meter-over-fill { left: 44.44%; width: 0; background: var(--caution); }
+:root:not([data-layout="phone"]) .app .meter-peak-tick { left: 0; width: var(--meter-peak-tick-width); background: var(--text-primary); }
+:root:not([data-layout="phone"]) .app .meter-scale-labels {
+  display: flex;
+  justify-content: space-between;
+  color: var(--text-secondary);
+  font: 400 var(--fs-caption)/var(--lh-caption) var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+:root:not([data-layout="phone"]) .app .meter-tx-summary { display: flex; justify-content: space-between; gap: var(--sp-2); font: 500 var(--fs-caption)/var(--lh-caption) var(--font-mono); }
+:root:not([data-layout="phone"]) .app .meter-tx-track,
+:root:not([data-layout="phone"]) .app .meter-swr-track { height: var(--sp-1); overflow: hidden; border-radius: var(--r-control); background: var(--bg-inset); }
+:root:not([data-layout="phone"]) .app #meter-tx-fill,
+:root:not([data-layout="phone"]) .app #meter-swr-fill { display: block; width: 0; height: 100%; background: var(--danger); }
+:root:not([data-layout="phone"]) .app #meter-swr-fill { background: var(--caution); }
+:root:not([data-layout="phone"]) .app .meter-horizontal [hidden] { display: none; }
+:root:not([data-layout="phone"]) .app .meter-analog-option { grid-area: analog; }
+:root:not([data-layout="phone"]) .app .meter-analog-option > summary,
+:root:not([data-layout="phone"]) .app .meter-details > summary {
+  min-height: var(--control-min);
+  padding: var(--sp-2);
+  color: var(--text-secondary);
+  font: 400 var(--fs-body)/var(--lh-body) var(--font-sans);
+  cursor: pointer;
+}
+:root:not([data-layout="phone"]) .app .meter-analog-option > .multimeter-svg {
+  display: none;
+  width: 100%;
+  max-width: var(--meter-analog-max-width);
+  height: auto;
+  margin: var(--sp-2) auto 0;
+  border-radius: var(--r-panel);
+}
+:root:not([data-layout="phone"]) .app .meter-analog-option[open][data-user-open="true"] > .multimeter-svg { display: block; }
+:root:not([data-layout="phone"]) .app .meter-details { grid-area: details; }
+:root:not([data-layout="phone"]) .app .instrument-rx-audio { margin: var(--sp-2) 0; }
+
+:root:not([data-layout="phone"]) .app #band-grid,
+:root:not([data-layout="phone"]) .app #mode-grid {
+  display: grid;
+  gap: var(--sp-1);
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+:root:not([data-layout="phone"]) .app #mode-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+:root:not([data-layout="phone"]) .app :is(#band-grid .band-btn, #mode-grid .mode-btn) {
+  min-width: 0;
+  min-height: var(--control-min);
+  padding: var(--control-pad-block) var(--sp-1);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-control);
+  background: transparent;
+  color: var(--text-secondary);
+  font: 400 var(--fs-body)/var(--lh-body) var(--font-sans);
+  letter-spacing: normal;
+  text-transform: none;
+}
+:root:not([data-layout="phone"]) .app :is(#band-grid .band-btn, #mode-grid .mode-btn).active {
+  background: var(--accent-bg);
+  color: var(--accent-text);
+}
+:root:not([data-layout="phone"]) .app :is(#band-grid .band-btn, #mode-grid .mode-btn):disabled { opacity: 0.5; }
+:root:not([data-layout="phone"]) .app :is(.band-more-btn, .mode-more-btn) { display: none; }
+
+@container app (max-width: 599px) {
+  :root:not([data-layout="phone"]) .app .app-shell { grid-template-areas: "bar" "session" "tune" "display" "context" "operations"; }
+  :root:not([data-layout="phone"]) .app .console-header .kicker { display: none; }
+  :root:not([data-layout="phone"]) .app .operator-state-strip > :not(#operator-conn-pill):not(#app-tx-state-badge) { display: none; }
+  :root:not([data-layout="phone"]) .app #operator-conn-pill { width: var(--sp-6); padding: 0; justify-content: center; }
+  :root:not([data-layout="phone"]) .app #operator-conn-pill .operator-pill-value { font-size: 0; }
+  :root:not([data-layout="phone"]) .app #operator-conn-pill::before { width: var(--sp-2); height: var(--sp-2); margin: 0; border-radius: var(--r-pill); background: var(--ok); content: ""; }
+  :root:not([data-layout="phone"]) .app #operator-conn-pill[data-tone="warn"]::before { background: var(--caution); }
+  :root:not([data-layout="phone"]) .app #operator-conn-pill[data-tone="fault"]::before { background: var(--danger); }
+  :root:not([data-layout="phone"]) .app #band-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  :root:not([data-layout="phone"]) .app #mode-grid { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+  :root:not([data-layout="phone"]) .app #band-grid:not(.is-expanded) > :nth-child(n+5):not(.active),
+  :root:not([data-layout="phone"]) .app #mode-grid:not(.is-expanded) > :nth-child(n+6):not(.active) { display: none; }
+  :root:not([data-layout="phone"]) .app :is(.band-more-btn, .mode-more-btn) { display: inline-flex; margin-top: var(--sp-2); }
+  :root:not([data-layout="phone"]) .app .primary-deck .deck-top { gap: var(--sp-1); }
+  :root:not([data-layout="phone"]) .app .primary-deck .vfo-status-tags > button { min-height: var(--sp-6); }
+  :root:not([data-layout="phone"]) .app .meter-response-control { align-content: start; }
+}
+@container app (min-width: 600px) and (max-width: 959px) {
+  :root:not([data-layout="phone"]) .app .app-shell { grid-template-areas: "bar bar" "session session" "tune tune" "display display" "context context" "operations operations"; }
+  :root:not([data-layout="phone"]) .app .app-shell > .console-header { height: var(--app-bar-desktop); min-height: var(--app-bar-desktop); }
+  :root:not([data-layout="phone"]) .app .operator-state-strip > :not(#operator-conn-pill):not(#app-tx-state-badge) { display: none; }
+  :root:not([data-layout="phone"]) .app #band-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  :root:not([data-layout="phone"]) .app #mode-grid { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+  :root:not([data-layout="phone"]) .app #band-grid:not(.is-expanded) > :nth-child(n+9):not(.active),
+  :root:not([data-layout="phone"]) .app #mode-grid:not(.is-expanded) > :nth-child(n+7):not(.active) { display: none; }
+  :root:not([data-layout="phone"]) .app :is(.band-more-btn, .mode-more-btn) { display: inline-flex; margin-top: var(--sp-2); }
+}
+@container app (min-width: 960px) {
+  :root:not([data-layout="phone"]) .app .app-shell { grid-template-areas: "bar bar bar" "session session session" "tune display context" "operations operations operations"; }
+  :root:not([data-layout="phone"]) .app .app-shell > .console-header { height: var(--app-bar-desktop); min-height: var(--app-bar-desktop); }
+  :root:not([data-layout="phone"]) .app .operator-state-strip > :is(#operator-rxtx-pill, #operator-rf-pill, #operator-transport-pill) { display: none; }
+}
+@container app (min-width: 1440px) {
+  :root:not([data-layout="phone"]) .app .operator-state-strip > :is(#operator-rxtx-pill, #operator-rf-pill, #operator-transport-pill) { display: inline-flex; }
+}
+@media (pointer: coarse) {
+  :root:not([data-layout="phone"]) .app :is(.operator-pill, .app-tx-badge, .vfo-status-tags > button, .vfo-annunciator, #band-grid .band-btn, #mode-grid .mode-btn, .band-more-btn, .mode-more-btn, .meter-analog-option > summary, .meter-details > summary) { min-height: var(--control-min-coarse); }
+}
+
+/* Keep tune choices ahead of the display while moving the long radio-path
+   form below it on phone and tablet. The original form remains available from
+   the phone Radio path menu and every control keeps its original handler. */
+@container app (max-width: 959px) {
+  :root:not([data-layout="phone"]) .app .console-layout > .left-rail {
+    display: contents;
+    grid-area: auto;
+  }
+  :root:not([data-layout="phone"]) .app .left-rail > [data-phone-panel="demod"] { grid-area: mode; }
+  :root:not([data-layout="phone"]) .app .left-rail > [data-phone-panel="tuning"] { grid-area: band; }
+  :root:not([data-layout="phone"]) .app .left-rail > [data-phone-panel="routing"] { grid-area: routing; }
+  :root:not([data-layout="phone"]) .app .left-rail > :is([data-phone-panel="demod"], [data-phone-panel="tuning"]) .panel-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--sp-1);
+    min-height: 0;
+    padding: var(--sp-1) var(--sp-2) 0;
+  }
+  :root:not([data-layout="phone"]) .app .left-rail > :is([data-phone-panel="demod"], [data-phone-panel="tuning"]) .panel-meta,
+  :root:not([data-layout="phone"]) .app .left-rail > :is([data-phone-panel="demod"], [data-phone-panel="tuning"]) .field-row .label {
+    display: none;
+  }
+  :root:not([data-layout="phone"]) .app .left-rail > :is([data-phone-panel="demod"], [data-phone-panel="tuning"]) .panel-body {
+    padding: var(--sp-1) var(--sp-2) var(--sp-2);
+  }
+  :root:not([data-layout="phone"]) .app .left-rail > :is([data-phone-panel="demod"], [data-phone-panel="tuning"]) .field-row {
+    gap: var(--sp-1);
+    margin: 0;
+  }
+  :root:not([data-layout="phone"]) .app :is(.band-more-btn, .mode-more-btn) { margin: 0 0 0 auto; }
+  :root:not([data-layout="phone"]) .app .frequency-ruler .ruler-main { display: none; }
+  :root:not([data-layout="phone"]) .app .frequency-ruler { padding: var(--sp-1) var(--sp-2); }
+}
+@container app (max-width: 599px) {
+  :root:not([data-layout="phone"]) .app .app-shell {
+    grid-template-areas: "bar" "session" "mode" "band" "display" "routing" "context" "operations";
+  }
+  :root:not([data-layout="phone"]) .app .primary-deck .deck-subline,
+  :root:not([data-layout="phone"]) .app .instrument-state-line {
+    display: none;
+  }
+  :root:not([data-layout="phone"]) .app .left-rail > :is([data-phone-panel="demod"], [data-phone-panel="tuning"]) {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: center;
+    gap: var(--sp-1);
+    min-width: 0;
+    padding: var(--sp-1);
+  }
+  :root:not([data-layout="phone"]) .app .left-rail > :is([data-phone-panel="demod"], [data-phone-panel="tuning"]) .panel-head {
+    display: contents;
+  }
+  :root:not([data-layout="phone"]) .app .left-rail > :is([data-phone-panel="demod"], [data-phone-panel="tuning"]) .panel-title {
+    display: none;
+  }
+  :root:not([data-layout="phone"]) .app :is(.band-more-btn, .mode-more-btn) {
+    grid-column: 1;
+    grid-row: 1;
+    min-height: var(--control-min-coarse);
+    margin: 0;
+    padding: 0 var(--sp-1);
+    font: 400 var(--fs-caption)/var(--lh-caption) var(--font-sans);
+  }
+  :root:not([data-layout="phone"]) .app .left-rail > :is([data-phone-panel="demod"], [data-phone-panel="tuning"]) .panel-body {
+    grid-column: 2;
+    grid-row: 1;
+    min-width: 0;
+    padding: 0;
+  }
+  :root:not([data-layout="phone"]) .app .strip-grid .launch-grid,
+  :root:not([data-layout="phone"]) .app .strip-grid .launch-grid .setup-anchor {
+    min-height: 0;
+    height: 0;
+    padding: 0;
+  }
+  :root:not([data-layout="phone"]) .app .strip-grid .launch-grid > #go-live-btn,
+  :root:not([data-layout="phone"]) .app .strip-grid .launch-grid #setup-menu-btn {
+    display: none;
+  }
+  :root:not([data-layout="phone"]) .app .analog-meter-shell.multimeter-shell {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas: "readout" "bar" "analog" "details";
+    gap: var(--sp-1);
+    padding: var(--sp-2);
+  }
+  :root:not([data-layout="phone"]) .app .analog-meter-shell .meter-name,
+  :root:not([data-layout="phone"]) .app #instrument-meter-mode:not([data-main-layout-pinned="true"]),
+  :root:not([data-layout="phone"]) .app .meter-response-control:not(:has([data-main-layout-pinned="true"])),
+  :root:not([data-layout="phone"]) .app .meter-analog-option:not([data-user-open="true"]),
+  :root:not([data-layout="phone"]) .app .meter-details:not([open]) {
+    display: none;
+  }
+  :root:not([data-layout="phone"]) .app .display-head {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--sp-1);
+    min-height: 0;
+    padding: var(--sp-1) var(--sp-2);
+  }
+  :root:not([data-layout="phone"]) .app .display-head > div:first-child,
+  :root:not([data-layout="phone"]) .app #display-pause:not([data-main-layout-pinned="true"]) {
+    display: none;
+  }
+  :root:not([data-layout="phone"]) .app .display-head .panel-title,
+  :root:not([data-layout="phone"]) .app .display-head #mode-readout,
+  :root:not([data-layout="phone"]) .app .display-head #wbfm-stereo-pill,
+  :root:not([data-layout="phone"]) .app .display-head .terrain-toolbar > span:first-child,
+  :root:not([data-layout="phone"]) .app #terrain-settings-open,
+  :root:not([data-layout="phone"]) .app .display-zoom,
+  :root:not([data-layout="phone"]) .app .frequency-ruler .ruler-main {
+    display: none;
+  }
+  :root:not([data-layout="phone"]) .app .display-pill-row,
+  :root:not([data-layout="phone"]) .app .terrain-toolbar {
+    gap: var(--sp-1);
+    margin: 0;
+    padding: 0;
+  }
+  :root:not([data-layout="phone"]) .app .frequency-ruler {
+    padding: var(--sp-1) var(--sp-2);
+  }
+}
+@container app (min-width: 600px) and (max-width: 959px) {
+  :root:not([data-layout="phone"]) .app .app-shell {
+    grid-template-areas:
+      "bar bar"
+      "session session"
+      "mode band"
+      "display display"
+      "routing routing"
+      "context context"
+      "operations operations";
+  }
+  :root:not([data-layout="phone"]) .app .strip-grid .launch-grid,
+  :root:not([data-layout="phone"]) .app .strip-grid .launch-grid .setup-anchor {
+    min-height: 0;
+    height: 0;
+    padding: 0;
+  }
+  :root:not([data-layout="phone"]) .app .strip-grid .launch-grid > #go-live-btn,
+  :root:not([data-layout="phone"]) .app .strip-grid .launch-grid #setup-menu-btn,
+  :root:not([data-layout="phone"]) .app .display-head > div:first-child {
+    display: none;
+  }
+  :root:not([data-layout="phone"]) .app .frequency-ruler .ruler-sub {
+    flex-direction: row;
+    align-items: center;
+  }
+}
+
+/* The separate Phone view keeps its former two-row header and analog face. */
+:root[data-layout="phone"] .app .console-header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas: "title actions" "state state" "connect connect";
+  gap: var(--sp-2);
+  align-items: center;
+  width: 100%;
+  min-height: 0;
+  height: auto;
+  padding: var(--sp-2);
+}
+@media (min-width: 600px) and (max-height: 500px) {
+  :root[data-layout="phone"] .app .console-header {
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas: "title actions" "state connect";
+  }
+
+  :root[data-layout="phone"] .app .console-header > #go-live-btn {
+    min-width: calc(var(--sp-6) * 4);
+  }
+}
+:root[data-layout="phone"] .app .console-header > div:first-child { grid-area: title; min-width: 0; }
+:root[data-layout="phone"] .app .console-header .hero-actions {
+  grid-area: actions;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--sp-1);
+  min-width: 0;
+}
+:root[data-layout="phone"] .app .console-header .operator-state-strip {
+  grid-area: state;
+  position: static;
+  top: auto;
+  right: auto;
+  left: auto;
+  z-index: auto;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--sp-1);
+  width: 100%;
+  min-width: 0;
+  margin: 0;
+  padding: var(--sp-1);
+  overflow: visible;
+  backdrop-filter: none;
+}
+:root[data-layout="phone"] .app .operator-state-strip > .operator-pill { min-width: 0; }
+:root[data-layout="phone"] .app .operator-state-strip > .app-tx-badge {
+  grid-column: 1 / -1;
+  justify-self: start;
+}
+:root[data-layout="phone"] .app .meter-horizontal { display: none; }
+:root[data-layout="phone"] .app .meter-analog-option { display: contents; }
+:root[data-layout="phone"] .app .meter-analog-option > summary { display: none; }
+:root[data-layout="phone"] .app .meter-analog-option > .multimeter-svg {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  height: auto;
+  max-height: var(--display-phone-3d-min);
+  margin-inline: auto;
+  border-radius: var(--r-panel);
+}

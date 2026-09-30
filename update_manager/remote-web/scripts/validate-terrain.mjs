@@ -286,7 +286,10 @@ try {
       if(element.style.left!==before.left||element.style.width!==before.width)throw Error('3D changed passband frequency coordinates');
       setTerrainMode('3d',false);updateFilterOverlay();
       const style=getComputedStyle(element);
-      if(style.borderRadius!=='0px'||style.backgroundColor!=='rgba(98, 208, 255, 0.04)'||style.backgroundImage!=='none')throw Error('Passband is not the restrained rectangular overlay');
+      const sample=document.createElement('canvas');sample.width=sample.height=1;
+      const context=sample.getContext('2d');context.fillStyle=style.backgroundColor;context.fillRect(0,0,1,1);
+      const fillAlpha=context.getImageData(0,0,1,1).data[3]/255;
+      if(style.borderRadius!=='0px'||fillAlpha<0.03||fillAlpha>0.06||style.backgroundImage!=='none')throw Error('Passband is not the restrained rectangular overlay');
       if(!element.title.includes('50–3050 Hz')||!label.title.includes('50–3050 Hz'))throw Error('Actual filter values missing from tooltip');
       if(selected==='LSB'&&coordinates.endHz>0)throw Error('LSB passband was recentered');
       results.push({mode:selected,coordinates,...before,fill:style.backgroundColor,label:label.textContent});

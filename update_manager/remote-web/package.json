@@ -5,16 +5,22 @@
   "type": "module",
   "scripts": {
     "build": "vite build",
+    "postbuild": "npm run check:ui-assets",
+    "check:ui-assets": "node scripts/check-ui-asset-budget.mjs",
     "test": "vitest run",
     "smoke:remote-next": "vitest run tests/remote-next-smoke.test.ts",
     "typecheck": "tsc --noEmit",
     "check:seam": "node scripts/check-template-seam.mjs",
+    "validate:ui-tiers": "node scripts/validate-ui-redesign-tiers.mjs",
+    "audit:ui-parity": "node scripts/validate-ui-feature-parity.mjs --strict",
     "validate:remote-next-layout": "node scripts/validate-remote-next-layout.mjs",
     "validate:waterfall": "node scripts/validate-waterfall.mjs",
     "validate:terrain": "node scripts/validate-terrain.mjs",
     "validate:wan-display": "node scripts/validate-wan-display.mjs",
     "validate:rx-audio-ab": "node scripts/validate-rx-audio-ab.mjs",
-    "probe:rx-opus-live": "node scripts/live-rx-opus-probe.mjs"
+    "probe:rx-opus-live": "node scripts/live-rx-opus-probe.mjs",
+    "generate:migration": "vite-node scripts/generate-migration-doc.mts",
+    "check:migration": "vite-node scripts/generate-migration-doc.mts --check"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",

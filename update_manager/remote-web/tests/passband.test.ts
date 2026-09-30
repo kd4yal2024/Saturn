@@ -29,6 +29,14 @@ describe('passband helpers', () => {
     expect(uiCutsFromSignedPassband(-5000, 5000, 'AM')).toEqual({ lowHz: 0, highHz: 5000 });
   });
 
+  it('uses the symmetric 3.3 kHz DSB receive and transmit defaults', () => {
+    expect(normalizeDemodMode('dsb')).toBe('DSB');
+    expect(signedPassbandFromUiCuts(50, 3300, 'DSB')).toEqual({ lowHz: -3300, highHz: 3300 });
+    expect(uiCutsFromSignedPassband(-3300, 3300, 'DSB')).toEqual({ lowHz: 0, highHz: 3300 });
+    expect(defaultSignedRxPassbandForMode('DSB')).toEqual({ lowHz: -3300, highHz: 3300 });
+    expect(defaultSignedTxPassbandForMode('DSB')).toEqual({ lowHz: -3300, highHz: 3300 });
+  });
+
   it('uses the fixed 180 kHz WFM channel width', () => {
     expect(normalizeDemodMode('wfm')).toBe('WFM');
     expect(signedPassbandFromUiCuts(50, 3050, 'WFM')).toEqual({ lowHz: -90_000, highHz: 90_000 });

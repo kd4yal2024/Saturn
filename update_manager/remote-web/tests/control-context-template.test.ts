@@ -15,18 +15,21 @@ describe('responsive radio control context', () => {
     expect(template.match(/id="mox-btn"/g)).toHaveLength(1);
   });
 
-  it('keeps the authoritative TX zone in the rail when RX or DSP is selected', () => {
+  it('keeps the authoritative TX safety controls in the rail on every tab', () => {
     expect(template).toContain('.context-rail:not([data-active-context="tx"]) .tx-zone');
     expect(template).toContain('rail.appendChild(rightRail)');
     expect(template).toContain('applyControlContext(controlContext)');
+    expect(template).toContain('txPanel.hidden = context !== "tx"');
+    expect(template).toContain('audioStrip.hidden = context === "tx"');
+    expect(template).toContain('control.hidden = control.dataset.controlContext !== context');
   });
 
-  it('keeps the complete desktop RX context visible beside the TX safety surface', () => {
-    expect(template).toContain('Phase 14: keep the complete RX context and TX safety surface in view.');
+  it('keeps the selected RX or DSP content beside the TX safety surface', () => {
     expect(template).toContain('.context-rail:not([data-active-context="tx"]) .audio-control-strip');
     expect(template).toContain('max-height: none;');
     expect(template).toContain('.context-rail[data-active-context="rx"] .audio-health-grid');
     expect(template).toContain('grid-template-columns: repeat(4, minmax(0, 1fr));');
+    expect(template).toContain('audioStatus.hidden = context !== "rx"');
   });
 
   it('persists a separate UI context preference', () => {

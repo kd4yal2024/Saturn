@@ -1,3 +1,24 @@
+import tokenCss from '../styles/tokens.css?inline';
+import primitiveCss from '../styles/primitives.css?inline';
+import layoutCss from '../styles/layout.css?inline';
+import panelsCss from '../styles/panels.css?inline';
+import receiveCss from '../styles/receive.css?inline';
+import settingsCss from '../styles/settings.css?inline';
+import { SETTINGS_REGISTRY, SETTINGS_SECTIONS } from './settings/registry';
+import { searchSettings } from './settings/search';
+import {
+  LAYOUT_TIERS,
+  LAYOUT_SAFETY_PINNED_IDS,
+  defaultLayout,
+  loadLayout,
+  saveLayout,
+  pinItem,
+  unpinItem,
+  reorderToolbar,
+} from './settings/layout';
+import iconSprite from '../assets/icons/sprite.svg?raw';
+import plexLicense from '../assets/fonts/OFL.txt?raw';
+import iconLicense from '../assets/icons/LICENSE.txt?raw';
 import { cleanupNormalized, waterfallCleanupNormalized } from './dsp/display-cleanup';
 import { SpectrumHistory } from './dsp/spectrum-history';
 import { TerrainRenderer } from './render/terrain';
@@ -227,6 +248,9 @@ import {
 import {
   txActionAvailability,
   txControlPresentationState,
+  txVisualState,
+  TX_VISUAL_STATE_BADGE_TEXT,
+  TX_VISUAL_STATE_ANNOUNCEMENT,
 } from './ui/tx-presentation';
 import {
   normalizeOperationsDrawerTarget,
@@ -429,11 +453,25 @@ const api = {
   radioControlContextForTarget,
   txActionAvailability,
   txControlPresentationState,
+  txVisualState,
+  TX_VISUAL_STATE_BADGE_TEXT,
+  TX_VISUAL_STATE_ANNOUNCEMENT,
   normalizeOperationsDrawerTarget,
   restoreOperationsDrawerSelection,
   selectOperationsDrawerTarget,
   adjacentSetupPanelId,
   normalizeSetupPanelId,
+  SETTINGS_REGISTRY,
+  SETTINGS_SECTIONS,
+  searchSettings,
+  LAYOUT_TIERS,
+  LAYOUT_SAFETY_PINNED_IDS,
+  defaultLayout,
+  loadLayout,
+  saveLayout,
+  pinItem,
+  unpinItem,
+  reorderToolbar,
   clampSpectrumWaterfallRatio,
   nextPhoneSpectrumMode,
   normalizePhoneSpectrumMode,
@@ -451,6 +489,34 @@ const api = {
   TX_POWER_ATTACK_PER_SEC, TX_POWER_RELEASE_PER_SEC, TX_POWER_PEAK_HOLD_MS, TX_POWER_PEAK_DROP_PER_SEC,
   SWR_ATTACK_PER_SEC, SWR_RELEASE_PER_SEC,
 };
+
+// The existing page serves one library script. Install the presentation assets
+// synchronously when it runs, before the following inline app script starts.
+function installUiFoundation(): void {
+  if (typeof document === 'undefined') return;
+
+  if (!document.getElementById('saturn-ui-foundation')) {
+    const style = document.createElement('style');
+    style.id = 'saturn-ui-foundation';
+    style.textContent = `${tokenCss}\n${primitiveCss}\n${layoutCss}\n${panelsCss}\n${receiveCss}\n${settingsCss}`;
+    document.head.append(style);
+  }
+
+  const mountSprite = () => {
+    if (!document.body || document.getElementById('saturn-ui-icon-sprite')) return;
+    document.body.insertAdjacentHTML('afterbegin', iconSprite);
+    // Keep the complete third-party notices with the delivered single-file UI.
+    const notices = document.createElement('template');
+    notices.id = 'saturn-ui-asset-notices';
+    notices.textContent = `IBM Plex fonts (SIL OFL 1.1):\n${plexLicense}\nLucide icons (ISC/MIT):\n${iconLicense}`;
+    document.body.append(notices);
+  };
+
+  if (document.body) mountSprite();
+  else document.addEventListener('DOMContentLoaded', mountSprite, { once: true });
+}
+
+installUiFoundation();
 
 export const SaturnRemoteNext = api;
 

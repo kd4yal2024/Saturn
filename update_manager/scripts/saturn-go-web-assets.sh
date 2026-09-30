@@ -150,12 +150,13 @@ saturn_go_verify_remote_web_bundle() {
 #
 # On 2026-09-25 a `sudo ./install.sh` on a live appliance deployed these assets
 # from a checkout parked on a stale side branch, which silently removed the
-# High-Res 3D waterfall and its display settings from the served page. Asserting
-# the content here turns that class of downgrade into a failed install.
+# High-Res 3D waterfall and its display settings from the served page. On
+# 2026-09-30, deploying from pre-redesign main also replaced the live redesigned
+# UI. Asserting both feature sets turns those downgrades into failed installs.
 #
 # Override only for a deliberately reduced UI: SATURN_ALLOW_LEGACY_WEB_ASSETS=1
-SATURN_GO_REQUIRED_TEMPLATE_MARKERS=("terrain-canvas" "view-3d")
-SATURN_GO_REQUIRED_BUNDLE_MARKERS=("TerrainRenderer")
+SATURN_GO_REQUIRED_TEMPLATE_MARKERS=("terrain-canvas" "view-3d" 'id="phone-menu-btn"')
+SATURN_GO_REQUIRED_BUNDLE_MARKERS=("TerrainRenderer" "saturn-ui-foundation")
 
 saturn_go_assert_remote_web_features() {
   local dest_dir="$1"
@@ -169,7 +170,7 @@ saturn_go_assert_remote_web_features() {
 
   for marker in "${SATURN_GO_REQUIRED_TEMPLATE_MARKERS[@]}"; do
     if ! grep -q -- "$marker" "$html" 2>/dev/null; then
-      echo "[ERR] $html is missing the High-Res 3D UI marker '$marker'" >&2
+      echo "[ERR] $html is missing required remote UI marker '$marker'" >&2
       failures=$((failures + 1))
     fi
   done
@@ -182,10 +183,9 @@ saturn_go_assert_remote_web_features() {
 
   if (( failures > 0 )); then
     cat >&2 <<'EOF'
-[ERR] Refusing to ship a remote-next UI without the High-Res 3D waterfall.
+[ERR] Refusing to ship a remote-next UI without the High-Res 3D waterfall and redesigned console.
 [ERR] The install source is most likely a stale checkout or a stale dist bundle.
-[ERR] Fix:  git -C <install-repo> fetch origin
-[ERR]       git -C <install-repo> checkout main && git -C <install-repo> pull --ff-only
+[ERR] Fix:  use a checkout containing the current redesigned Remote UI and rebuild remote-web.
 [ERR] Then re-run the install.
 [ERR] Override for a deliberate legacy build: SATURN_ALLOW_LEGACY_WEB_ASSETS=1
 EOF
