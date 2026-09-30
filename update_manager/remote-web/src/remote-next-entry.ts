@@ -163,6 +163,7 @@ import {
 } from './audio/tx-audio-profile';
 import { volumeAmplitudeFromDb } from './audio/constants';
 import { FftProcessor } from './dsp/fft';
+import { RxSpectrumAccumulator, compareRxSpectrumCaptures, rxSpectrumSettingsMatch } from './dsp/rx-spectrum-measure';
 import {
   detectPeakInPassband,
   emptyPeakAssistTrackingState,
@@ -398,6 +399,9 @@ const api = {
 
   // DSP
   FftProcessor,
+  RxSpectrumAccumulator,
+  compareRxSpectrumCaptures,
+  rxSpectrumSettingsMatch,
   detectPeakInPassband,
   emptyPeakAssistTrackingState,
   trackPeakAssist,

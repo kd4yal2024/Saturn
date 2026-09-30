@@ -3024,6 +3024,26 @@
       color: var(--theme-scope-stat-value);
     }
 
+    .rx-spectrum-panel {
+      display: grid;
+      gap: 10px;
+      padding: 12px 16px 16px;
+      border-top: 1px solid var(--theme-scope-stat-border);
+      font-size: 12px;
+    }
+    .rx-spectrum-panel[hidden] { display: none; }
+    .rx-spectrum-controls {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      align-items: end;
+    }
+    .rx-spectrum-controls label { display: grid; gap: 4px; }
+    .rx-spectrum-controls input[type="text"] { min-width: 160px; }
+    .rx-spectrum-panel output,
+    .rx-spectrum-panel pre { font-family: var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; }
+    .rx-spectrum-panel pre { margin: 0; max-height: 220px; overflow: auto; }
+
     .console-log pre {
       min-height: 210px;
       max-height: 210px;
@@ -7888,6 +7908,7 @@
               <button class="btn eq-enable-btn" id="spectrum-average-toolbar-btn" type="button" title="Cycle spectrum averaging">AVG 1</button>
               <button class="btn eq-enable-btn" id="spectrum-peak-toolbar-btn" type="button" aria-pressed="false" title="Toggle spectrum peak hold">PEAK OFF</button>
               <button class="btn eq-enable-btn" id="spectrum-tune-peak-btn" type="button" aria-pressed="false" title="Tune the strongest signal inside the RX passband">Tune Peak</button>
+              <button class="btn eq-enable-btn" id="rx-spectrum-toggle-btn" type="button" aria-expanded="false" aria-controls="rx-spectrum-panel" title="Measure raw RX IQ without changing radio settings">RX Measure</button>
               <span class="display-pill mono" id="peak-tune-readout" hidden>PEAK --</span>
               <button class="btn eq-enable-btn" id="display-center-btn" type="button" title="Reset the display span">Center</button>
               <button class="btn eq-enable-btn" id="wake-lock-btn" type="button" style="font-size:11px;padding:4px 10px;">Stay Awake</button>
@@ -7980,6 +8001,22 @@
               <div class="scope-stat-value mono"><span id="display-resolution">--</span> • TCI IQ</div>
             </div>
           </div>
+          <section class="rx-spectrum-panel" id="rx-spectrum-panel" aria-label="RX spectrum measurement" hidden>
+            <div>Capture the unsmoothed RX IQ spectrum. Levels are relative FFT dB, not calibrated dBm. Keep the antenna, frequency, attenuation, RF gain, mode, and filter fixed for both firmware runs.</div>
+            <div class="rx-spectrum-controls">
+              <label>Firmware label <input class="field" id="rx-spectrum-label" type="text" maxlength="80" placeholder="e.g. 22/Q24 ID 0x53460002" /></label>
+              <label>Duration <select class="field" id="rx-spectrum-duration"><option value="30">30 seconds</option><option value="120">120 seconds</option></select></label>
+              <button class="btn" id="rx-spectrum-start-btn" type="button">Start capture</button>
+              <button class="btn ghost" id="rx-spectrum-download-btn" type="button" disabled>Download capture</button>
+            </div>
+            <output id="rx-spectrum-status" role="status">Ready for raw RX IQ.</output>
+            <pre id="rx-spectrum-result" hidden></pre>
+            <div class="rx-spectrum-controls">
+              <label>Baseline JSON <input id="rx-spectrum-baseline-file" type="file" accept=".json,application/json" /></label>
+              <label>Candidate JSON <input id="rx-spectrum-candidate-file" type="file" accept=".json,application/json" /></label>
+              <button class="btn ghost" id="rx-spectrum-compare-btn" type="button">Compare captures</button>
+            </div>
+          </section>
         </div>
 
         <div class="panel log-card console-log" data-phone-panel="log">
@@ -10298,6 +10335,165 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       }
     }
     let fftProcessor = new FftProcessor(1024);
+    let rxSpectrumAccumulator = null;
+    let rxSpectrumCapture = null;
+    let rxSpectrumTimer = null;
+
+    function rxSpectrumCurrentSettings() {
+      const passband = currentRxPassbandHz();
+      return {
+        centerHz: state.dds,
+        sampleRateHz: state.sampleRate,
+        fftSize: fftProcessor.size,
+        adc: state.rxAdc,
+        antenna: state.rxAntenna,
+        attenuationDb: state.rxAttenuationDb,
+        agcMode: state.agcMode,
+        agcGain: state.agcGain,
+        noiseReductionMode: state.rxNoiseReductionMode,
+        noiseBlankerMode: state.rxNbMode,
+        mode: state.mode,
+        filterLowHz: state.filterLow,
+        filterHighHz: state.filterHigh,
+        filterShiftHz: state.rxFilterShiftHz,
+        passbandLowHz: passband.lowHz,
+        passbandHighHz: passband.highHz,
+        source: "raw-rx-iq",
+      };
+    }
+
+    function rxSpectrumSourceReady() {
+      return state.connected && state.iqStreaming && state.displayRenderSource === "iq" &&
+        state.displayIqSource === "rx" && !state.displayPaused && !txReceiveSuppressionActive();
+    }
+
+    function stopRxSpectrumTimer() {
+      if (rxSpectrumTimer !== null) {
+        window.clearInterval(rxSpectrumTimer);
+        rxSpectrumTimer = null;
+      }
+    }
+
+    function abortRxSpectrumCapture(reason) {
+      if (!rxSpectrumAccumulator) return;
+      rxSpectrumAccumulator = null;
+      stopRxSpectrumTimer();
+      $("rx-spectrum-start-btn").disabled = false;
+      $("rx-spectrum-status").textContent = `Capture stopped: ${reason}. No comparison file was saved.`;
+    }
+
+    function finishRxSpectrumCapture() {
+      if (!rxSpectrumAccumulator) return;
+      try {
+        rxSpectrumCapture = rxSpectrumAccumulator.finish();
+        const result = rxSpectrumCapture;
+        $("rx-spectrum-download-btn").disabled = false;
+        $("rx-spectrum-status").textContent = `${result.samples} raw IQ spectra captured (${result.quality} coverage). Download the JSON for a matched comparison.`;
+        const s = result.summary;
+        $("rx-spectrum-result").textContent =
+          `Adjacent floor: ${s.adjacentNoiseFloorMedianDb.toFixed(2)} relative dB\n` +
+          `Passband over floor: ${s.passbandExcessMedianDb.toFixed(2)} dB\n` +
+          `Wideband burst rise (p99 - median): ${s.widebandBurstRiseDb.toFixed(2)} dB`;
+        $("rx-spectrum-result").hidden = false;
+      } catch (error) {
+        $("rx-spectrum-status").textContent = `Capture failed: ${error.message || error}`;
+      } finally {
+        rxSpectrumAccumulator = null;
+        stopRxSpectrumTimer();
+        $("rx-spectrum-start-btn").disabled = false;
+      }
+    }
+
+    function startRxSpectrumCapture() {
+      if (rxSpectrumAccumulator) return;
+      if (!rxSpectrumSourceReady() || performance.now() - state.lastFrameAt > 1500) {
+        $("rx-spectrum-status").textContent = "Start RX IQ on the raw IQ display path before capturing.";
+        return;
+      }
+      if (state.mode === "WFM") {
+        $("rx-spectrum-status").textContent = "RX Measure currently supports narrowband RX modes.";
+        return;
+      }
+      const label = $("rx-spectrum-label").value.trim();
+      if (!label) {
+        $("rx-spectrum-status").textContent = "Enter the current firmware label before capturing.";
+        $("rx-spectrum-label").focus();
+        return;
+      }
+      const durationMs = Number($("rx-spectrum-duration").value) * 1000;
+      try {
+        rxSpectrumAccumulator = new _next.RxSpectrumAccumulator(
+          rxSpectrumCurrentSettings(), label, performance.now(), durationMs
+        );
+        rxSpectrumCapture = null;
+        $("rx-spectrum-download-btn").disabled = true;
+        $("rx-spectrum-start-btn").disabled = true;
+        $("rx-spectrum-result").hidden = true;
+        $("rx-spectrum-status").textContent = `Capturing ${durationMs / 1000} seconds of raw RX IQ...`;
+        rxSpectrumTimer = window.setInterval(() => {
+          if (!rxSpectrumAccumulator) return;
+          if (!rxSpectrumSourceReady() ||
+              !_next.rxSpectrumSettingsMatch(rxSpectrumAccumulator.settings, rxSpectrumCurrentSettings())) {
+            abortRxSpectrumCapture("stream or RX settings changed");
+            return;
+          }
+          const elapsed = performance.now() - rxSpectrumAccumulator.startedAtMs;
+          if (elapsed >= rxSpectrumAccumulator.durationMs) {
+            finishRxSpectrumCapture();
+          } else {
+            $("rx-spectrum-status").textContent =
+              `Capturing... ${Math.floor(elapsed / 1000)}/${rxSpectrumAccumulator.durationMs / 1000} s, ${rxSpectrumAccumulator.samples} spectra`;
+          }
+        }, 250);
+      } catch (error) {
+        rxSpectrumAccumulator = null;
+        $("rx-spectrum-status").textContent = `Cannot start capture: ${error.message || error}`;
+      }
+    }
+
+    function sampleRxSpectrum(bins, now) {
+      if (!rxSpectrumAccumulator) return;
+      if (!rxSpectrumSourceReady()) {
+        abortRxSpectrumCapture("RX IQ stream stopped");
+        return;
+      }
+      if (!rxSpectrumAccumulator.shouldSample(now)) return;
+      try {
+        // FFT bins are fftshifted. Display orientation reverses them; use the
+        // full span at zoom 1, before any display averaging or smoothing.
+        rxSpectrumAccumulator.addFrame(
+          _visibleBinsForDisplay(bins, 1), now, rxSpectrumCurrentSettings()
+        );
+      } catch (error) {
+        abortRxSpectrumCapture(error.message || String(error));
+      }
+    }
+
+    async function compareRxSpectrumFiles() {
+      const baseline = $("rx-spectrum-baseline-file").files?.[0];
+      const candidate = $("rx-spectrum-candidate-file").files?.[0];
+      if (!baseline || !candidate) {
+        $("rx-spectrum-status").textContent = "Choose a baseline and candidate JSON capture.";
+        return;
+      }
+      try {
+        const [base, next] = await Promise.all([
+          baseline.text().then(JSON.parse), candidate.text().then(JSON.parse),
+        ]);
+        const result = _next.compareRxSpectrumCaptures(base, next);
+        $("rx-spectrum-result").textContent =
+          `${result.candidateLabel} minus ${result.baselineLabel}\n` +
+          `Coverage: ${result.baselineQuality} (${result.baselineSamples}) / ${result.candidateQuality} (${result.candidateSamples}) spectra\n` +
+          `Adjacent floor: ${result.noiseFloorDeltaDb.toFixed(2)} dB\n` +
+          `Passband over floor: ${result.passbandExcessDeltaDb.toFixed(2)} dB\n` +
+          `Wideband burst rise: ${result.burstRiseDeltaDb.toFixed(2)} dB\n` +
+          result.caveat;
+        $("rx-spectrum-result").hidden = false;
+        $("rx-spectrum-status").textContent = "Matched RX settings. Differences are candidate minus baseline.";
+      } catch (error) {
+        $("rx-spectrum-status").textContent = `Comparison failed: ${error.message || error}`;
+      }
+    }
 
     function resetDisplayHistory() {
       spectrumHistory.clear("Display source / span reset");
@@ -19449,6 +19645,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
             }
             const fftStartedAt = performance.now();
             const bins = fftProcessor.transform(iqWindow);
+            sampleRxSpectrum(bins, now);
             const drawStartedAt = performance.now();
             recordBrowserTimingSample(displayTimingBuckets.fft, drawStartedAt - fftStartedAt);
             drawDisplayBins(bins, now, waterfallEnabled, phoneWanLite);
@@ -20034,6 +20231,23 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       });
       $("freq-lock-btn").addEventListener("click", () => {
         setFrequencyLock(!state.frequencyLock);
+      });
+      $("rx-spectrum-toggle-btn").addEventListener("click", () => {
+        const panel = $("rx-spectrum-panel");
+        panel.hidden = !panel.hidden;
+        $("rx-spectrum-toggle-btn").setAttribute("aria-expanded", String(!panel.hidden));
+      });
+      $("rx-spectrum-start-btn").addEventListener("click", startRxSpectrumCapture);
+      $("rx-spectrum-download-btn").addEventListener("click", () => {
+        if (!rxSpectrumCapture) return;
+        downloadTextFile(
+          perfDownloadFilename("saturn-rx-spectrum", "json"),
+          JSON.stringify(rxSpectrumCapture, null, 2),
+          "application/json;charset=utf-8"
+        );
+      });
+      $("rx-spectrum-compare-btn").addEventListener("click", () => {
+        void compareRxSpectrumFiles();
       });
       $("waterfall-toggle-btn").addEventListener("click", togglePhoneWaterfall);
       $("setup-stream-mode").addEventListener("change", () => {
