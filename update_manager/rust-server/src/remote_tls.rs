@@ -28,7 +28,7 @@ use tokio_tungstenite::{connect_async, tungstenite::Message as TungsteniteMessag
 use tracing::{error, info, warn};
 
 use crate::{
-    delete_remote_profile, get_remote_profiles, get_remote_settings,
+    delete_remote_profile, get_remote_fpga_identity, get_remote_profiles, get_remote_settings,
     health::{healthz, livez, readyz},
     middleware::csrf_protect,
     pages::{serve_page, REMOTE_NEXT_DEFAULT_QUERY},
@@ -410,6 +410,7 @@ pub fn remote_tls_router(state: AppState) -> Router {
         .route("/remote_settings", get(remote_settings_get_handler))
         .route("/remote_settings", post(remote_settings_post_handler))
         .route("/remote_metrics", get(remote_metrics_handler))
+        .route("/remote_fpga_identity", get(remote_fpga_identity_handler))
         .route("/remote_profiles", get(remote_profiles_get_handler))
         .route("/remote_profiles/save", post(remote_profiles_save_handler))
         .route(
@@ -469,6 +470,16 @@ async fn remote_page_response(headers: HeaderMap, state: AppState, page: &str) -
         HeaderValue::from_static("credentialless"),
     );
     resp
+}
+
+async fn remote_fpga_identity_handler(
+    headers: HeaderMap,
+    State(state): State<AppState>,
+) -> Response {
+    if let Err(rejection) = check_remote_auth(&headers) {
+        return rejection;
+    }
+    get_remote_fpga_identity(State(state)).await
 }
 
 async fn remote_asset_handler(

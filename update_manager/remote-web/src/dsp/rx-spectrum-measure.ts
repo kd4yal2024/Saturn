@@ -22,6 +22,7 @@ export type RxSpectrumSettings = {
 export type RxSpectrumCapture = {
   format: 'saturn-rx-spectrum-v1';
   firmwareLabel: string;
+  fpgaIdentity: RxSpectrumFpgaIdentity;
   startedAtIso: string;
   endedAtIso: string;
   durationMs: number;
@@ -40,6 +41,15 @@ export type RxSpectrumCapture = {
     widebandBurstRiseDb: number;
   };
   meanSpectrumDb: number[];
+};
+
+export type RxSpectrumFpgaIdentity = {
+  firmware: string;
+  subversion: number | null;
+  rxFilter: string | null;
+  buildIdRaw: number;
+  buildIdHex: string;
+  status: 'identified' | 'unidentified';
 };
 
 const SAMPLE_INTERVAL_MS = 100;
@@ -74,6 +84,7 @@ export function rxSpectrumSettingsMatch(a: RxSpectrumSettings, b: RxSpectrumSett
 export class RxSpectrumAccumulator {
   readonly settings: RxSpectrumSettings;
   readonly firmwareLabel: string;
+  readonly fpgaIdentity: RxSpectrumFpgaIdentity;
   readonly durationMs: number;
   readonly startedAtIso: string;
   readonly startedAtMs: number;
@@ -85,14 +96,25 @@ export class RxSpectrumAccumulator {
   private nextSampleAtMs: number;
   private lastSampleAtMs: number;
 
-  constructor(settings: RxSpectrumSettings, firmwareLabel: string, startedAtMs: number, durationMs = 30_000) {
+  constructor(settings: RxSpectrumSettings, fpgaIdentity: RxSpectrumFpgaIdentity, startedAtMs: number, durationMs = 30_000) {
     if (!Number.isInteger(settings.fftSize) || settings.fftSize < 64 ||
         !Number.isFinite(settings.sampleRateHz) || settings.sampleRateHz <= 0 ||
         !Number.isFinite(startedAtMs) || !Number.isFinite(durationMs) || durationMs < 1000) {
       throw new Error('Invalid RX spectrum capture settings');
     }
     this.settings = { ...settings };
-    this.firmwareLabel = firmwareLabel.trim().slice(0, 80) || 'unlabeled';
+    if (!Number.isInteger(fpgaIdentity.buildIdRaw) || fpgaIdentity.buildIdRaw < 0 ||
+        fpgaIdentity.buildIdRaw > 0xFFFFFFFF ||
+        fpgaIdentity.buildIdHex !== `0x${fpgaIdentity.buildIdRaw.toString(16).toUpperCase().padStart(8, '0')}` ||
+        !fpgaIdentity.firmware || !['identified', 'unidentified'].includes(fpgaIdentity.status) ||
+        (fpgaIdentity.status === 'identified' &&
+          (!Number.isInteger(fpgaIdentity.subversion) || !fpgaIdentity.rxFilter)) ||
+        (fpgaIdentity.status === 'unidentified' &&
+          (fpgaIdentity.subversion !== null || fpgaIdentity.rxFilter !== null))) {
+      throw new Error('Invalid FPGA identity for RX spectrum capture');
+    }
+    this.fpgaIdentity = { ...fpgaIdentity };
+    this.firmwareLabel = `${fpgaIdentity.firmware} · ${fpgaIdentity.rxFilter || 'RX filter unidentified'} · ${fpgaIdentity.buildIdHex}`;
     this.durationMs = durationMs;
     this.startedAtMs = startedAtMs;
     this.startedAtIso = new Date().toISOString();
@@ -172,6 +194,7 @@ export class RxSpectrumAccumulator {
     return {
       format: 'saturn-rx-spectrum-v1',
       firmwareLabel: this.firmwareLabel,
+      fpgaIdentity: { ...this.fpgaIdentity },
       startedAtIso: this.startedAtIso,
       endedAtIso,
       durationMs: this.durationMs,

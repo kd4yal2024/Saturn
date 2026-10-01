@@ -1,6 +1,7 @@
 mod auth;
 mod backup;
 mod bounded_output;
+mod fpga_image_identity;
 mod health;
 mod maintenance_jobs;
 mod maintenance_lock;
@@ -572,6 +573,7 @@ fn application_router(state: AppState, restore_request_max_bytes: usize) -> Rout
         .route("/appliance_power", post(set_appliance_power))
         .route("/p23_status", get(get_p23_status))
         .route("/p23_perf", get(get_p23_perf))
+        .route("/remote_fpga_identity", get(get_remote_fpga_identity))
         .route("/p23_adc_telemetry", post(set_p23_adc_telemetry))
         .route("/performance_benchmarks", get(get_performance_benchmarks))
         .route("/performance_benchmarks", post(post_performance_benchmark))
@@ -3282,6 +3284,7 @@ fn bridge_perf_file_telemetry(
                 "firmware_id": integer("software_id"),
                 "firmware_major_version": firmware_major,
                 "firmware_version": firmware_minor,
+                "build_id_raw": integer("fpga_build_id"),
                 "date_code_hex": metrics.get("date_code_hex"),
                 "clock_mask": clock_mask,
                 "all_clocks_present": clock_mask == Some(15),
@@ -3290,6 +3293,28 @@ fn bridge_perf_file_telemetry(
         },
         "latest_diag": None::<String>,
     }))
+}
+
+async fn get_remote_fpga_identity(State(state): State<AppState>) -> Response {
+    let perf_response = get_p23_perf(State(state)).await;
+    let Ok(body) = axum::body::to_bytes(perf_response.into_body(), 8 * 1024 * 1024).await else {
+        return (StatusCode::BAD_GATEWAY, "FPGA telemetry unavailable").into_response();
+    };
+    let Ok(payload) = serde_json::from_slice::<serde_json::Value>(&body) else {
+        return (StatusCode::BAD_GATEWAY, "FPGA telemetry invalid").into_response();
+    };
+    let perf = payload.get("perf");
+    let telemetry = perf.and_then(|value| value.get("app_telemetry"));
+    Json(serde_json::json!({
+        "backend": perf.and_then(|value| value.get("service")).and_then(|service| service.get("backend")),
+        "pid_matches_service": telemetry.and_then(|value| value.get("pid_matches_service")),
+        "age_seconds": telemetry.and_then(|value| value.get("age_seconds")),
+        "telemetry_timestamp_epoch": telemetry.and_then(|value| value.get("current"))
+            .and_then(|current| current.get("timestamp_epoch")),
+        "fpga": telemetry.and_then(|value| value.get("current"))
+            .and_then(|current| current.get("fpga")),
+    }))
+    .into_response()
 }
 
 async fn get_p23_perf(State(_state): State<AppState>) -> Response {
@@ -3947,11 +3972,12 @@ async fn get_p23_perf(State(_state): State<AppState>) -> Response {
     } else {
         ("p2app.service", None, "none")
     };
-    let app_telemetry = if backend == "xdma" {
+    let mut app_telemetry = if backend == "xdma" {
         bridge_app_perf_telemetry(main_pid).await
     } else {
         p23_app_perf_telemetry(main_pid)
     };
+    fpga_image_identity::annotate(&mut app_telemetry);
     let workload = if backend == "xdma" {
         bridge_workload_info(main_pid, &app_telemetry)
     } else {

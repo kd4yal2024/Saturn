@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SCRIPT_VERSION="1.7"
+SCRIPT_VERSION="1.8"
 PERF_URL="${SATURN_LOCAL_P23_PERF_URL:-http://127.0.0.1:8080/p23_perf}"
 CURRENT_TARGET="$(readlink -f /opt/saturn-go/p23-apps/current 2>/dev/null || true)"
 REPO_ROOT="${SATURN_ACTIVE_REPO_ROOT:-${SATURN_REPO_ROOT:-/home/pi/github/Saturn}}"
@@ -175,13 +175,25 @@ print(f"  Startup mode: {startup_mode}")
 print(f"  Panel mode: {panel_mode}")
 if fpga.get("available"):
     print(f"  FPGA product: {fpga.get('product', 'unknown')}; Version = {fpga.get('product_version', 'unknown')}")
-    print(
-        "  FPGA firmware: "
-        f"{fpga.get('firmware_name', 'unknown')}; "
-        f"FW Version = {fpga.get('firmware_version', 'unknown')}, "
-        f"major version = {fpga.get('firmware_major_version', 'unknown')}"
-    )
-    if fpga.get("date_code_hex"):
+    print(f"  FPGA image: {fpga.get('firmware_name', 'unknown')}")
+    identity_status = fpga.get("build_identity_status")
+    if identity_status in ("identified", "unidentified"):
+        print(f"  FPGA firmware: {fpga.get('firmware_display')}")
+        print(f"  RX filter: {fpga.get('rx_filter') or 'unidentified'}")
+        print(f"  Build ID: {fpga.get('build_id_hex')}")
+    elif identity_status == "stale":
+        print("  FPGA firmware: live build identity unavailable (telemetry stale)")
+        print("  RX filter: unidentified")
+        print(f"  Build ID (stale telemetry): {fpga.get('build_id_hex')}")
+    else:
+        print(
+            "  FPGA firmware: "
+            f"{fpga.get('firmware_major_version', 'unknown')}."
+            f"{fpga.get('firmware_version', 'unknown')} — build ID unavailable"
+        )
+        print("  RX filter: unidentified")
+        print("  Build ID: unavailable")
+    if fpga.get("date_code_hex") and not fpga.get("build_id_hex"):
         print(f"  FPGA BIT file date code: {fpga.get('date_code_hex')}")
     if fpga.get("all_clocks_present") is True:
         print("  FPGA clocks: all present")
@@ -264,13 +276,13 @@ LAST_KNOWN_STARTUP_LINES=""
 if [[ -n "${ACTIVE_SINCE}" ]]; then
   CURRENT_STARTUP_LINES="$(
     journalctl -u p2app.service --since "${ACTIVE_SINCE}" --no-pager -o cat 2>/dev/null \
-      | grep -E 'FPGA BIT file data code| Product:| FPGA Firmware loaded:|All clocks present|Die Temp =' || true
+      | grep -E 'FPGA BIT file data code|FPGA Build ID| Product:| FPGA Firmware loaded:|All clocks present|Die Temp =' || true
   )"
 fi
 LAST_KNOWN_STARTUP_LINES="$(
   journalctl -u p2app.service --no-pager -o cat 2>/dev/null \
-    | grep -E 'FPGA BIT file data code| Product:| FPGA Firmware loaded:|All clocks present|Die Temp =' \
-    | tail -n 5 || true
+    | grep -E 'FPGA BIT file data code|FPGA Build ID| Product:| FPGA Firmware loaded:|All clocks present|Die Temp =' \
+    | tail -n 6 || true
 )"
 printf '%s\n' "${LAST_KNOWN_STARTUP_LINES}" > "${TMP_BANNER}"
 

@@ -1,0 +1,26 @@
+{
+  "format": "saturn-fpga-image-identity-v1",
+  "build_id_register": "0x4004",
+  "verified_source_manifest_sha256": "75c866b6616627af33d12a5f847e5f77a5b1a73bc6899a1d6e8353c3f08f2e6f",
+  "verified_source_manifest": "silverforge_identity_readiness_20260929T2158EDT/identity_manifest.json",
+  "images": [
+    {
+      "build_id": "0x53460001",
+      "firmware_major": 1,
+      "firmware_minor": 30,
+      "firmware_subversion": 1,
+      "rx_filter": "18/Q20",
+      "bin_sha256": "7bc6aea0659b81e30c5b19ad547d4946eb56b4d2c41d237fd0606c730fbbd1f4",
+      "bit_sha256": "b5e1c9e2e8db585f40980bd5e84966ba92e02239b6b5d6191a40ece6007d313d"
+    },
+    {
+      "build_id": "0x53460002",
+      "firmware_major": 1,
+      "firmware_minor": 30,
+      "firmware_subversion": 2,
+      "rx_filter": "22/Q24",
+      "bin_sha256": "8d472d4f1484d6edd8300cdebe1802795bf65ffaac21f0d7c4939baa5be9d31d",
+      "bit_sha256": "897943526ffb5da09aa9066f93797faefdd9e8cb710304ba1ec586df850de39a"
+    }
+  ]
+}

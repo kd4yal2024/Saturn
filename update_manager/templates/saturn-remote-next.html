@@ -8554,7 +8554,7 @@
           <div class="operations-panel-head"><h2 class="operations-panel-title">RX Measure</h2><span class="operations-panel-meta">Raw RX IQ spectrum capture and comparison</span></div>
           <div>Capture the unsmoothed RX IQ spectrum. Levels are relative FFT dB, not calibrated dBm. Keep the antenna, frequency, attenuation, RF gain, mode, and filter fixed for both firmware runs.</div>
           <div class="rx-spectrum-controls">
-            <label>Firmware label <input class="field" id="rx-spectrum-label" type="text" maxlength="80" placeholder="e.g. 22/Q24 ID 0x53460002" /></label>
+            <span>FPGA identity is read automatically when capture starts.</span>
             <label>Duration <select class="field" id="rx-spectrum-duration"><option value="30">30 seconds</option><option value="120">120 seconds</option></select></label>
             <button class="btn" id="rx-spectrum-start-btn" type="button">Start capture</button>
             <button class="btn ghost" id="rx-spectrum-download-btn" type="button" disabled>Download capture</button>
@@ -10715,7 +10715,30 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       }
     }
 
-    function startRxSpectrumCapture() {
+    async function rxSpectrumLiveIdentity() {
+      const response = await fetch("/remote_fpga_identity", { cache: "no-store", credentials: "same-origin" });
+      if (!response.ok) throw new Error(`FPGA identity request failed (HTTP ${response.status})`);
+      const payload = await response.json();
+      const telemetry = payload;
+      if (telemetry?.pid_matches_service !== true ||
+          !Number.isFinite(telemetry.age_seconds) || telemetry.age_seconds < 0 || telemetry.age_seconds > 5) {
+        throw new Error("Live FPGA identity is unavailable or stale");
+      }
+      const fpga = telemetry.fpga;
+      if (fpga?.build_identity_status !== "identified" && fpga?.build_identity_status !== "unidentified") {
+        throw new Error("Running FPGA build ID is unavailable");
+      }
+      return {
+        firmware: fpga.firmware_display,
+        subversion: fpga.firmware_subversion ?? null,
+        rxFilter: fpga.rx_filter ?? null,
+        buildIdRaw: fpga.build_id_raw,
+        buildIdHex: fpga.build_id_hex,
+        status: fpga.build_identity_status,
+      };
+    }
+
+    async function startRxSpectrumCapture() {
       if (rxSpectrumAccumulator) return;
       if (!rxSpectrumSourceReady() || performance.now() - state.lastFrameAt > 1500) {
         $("rx-spectrum-status").textContent = "Start RX IQ on the raw IQ display path before capturing.";
@@ -10725,22 +10748,23 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         $("rx-spectrum-status").textContent = "RX Measure currently supports narrowband RX modes.";
         return;
       }
-      const label = $("rx-spectrum-label").value.trim();
-      if (!label) {
-        $("rx-spectrum-status").textContent = "Enter the current firmware label before capturing.";
-        $("rx-spectrum-label").focus();
-        return;
-      }
       const durationMs = Number($("rx-spectrum-duration").value) * 1000;
+      $("rx-spectrum-start-btn").disabled = true;
+      $("rx-spectrum-status").textContent = "Reading the running FPGA identity...";
       try {
+        const identity = await rxSpectrumLiveIdentity();
+        if (!rxSpectrumSourceReady() || performance.now() - state.lastFrameAt > 1500) {
+          throw new Error("Raw RX IQ stream stopped while reading FPGA identity");
+        }
         rxSpectrumAccumulator = new _next.RxSpectrumAccumulator(
-          rxSpectrumCurrentSettings(), label, performance.now(), durationMs
+          rxSpectrumCurrentSettings(), identity, performance.now(), durationMs
         );
         rxSpectrumCapture = null;
         $("rx-spectrum-download-btn").disabled = true;
         $("rx-spectrum-start-btn").disabled = true;
         $("rx-spectrum-result").hidden = true;
-        $("rx-spectrum-status").textContent = `Capturing ${durationMs / 1000} seconds of raw RX IQ...`;
+        $("rx-spectrum-status").textContent = `Capturing ${durationMs / 1000} seconds of raw RX IQ · FPGA ${identity.firmware} · ${identity.rxFilter || 'RX filter unidentified'} · ${identity.buildIdHex}`;
+        logEvent(`RX spectrum capture FPGA ${identity.firmware}, RX filter ${identity.rxFilter || 'unidentified'}, build ID ${identity.buildIdHex}`);
         rxSpectrumTimer = window.setInterval(() => {
           if (!rxSpectrumAccumulator) return;
           if (!rxSpectrumSourceReady() ||
@@ -10758,6 +10782,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         }, 250);
       } catch (error) {
         rxSpectrumAccumulator = null;
+        $("rx-spectrum-start-btn").disabled = false;
         $("rx-spectrum-status").textContent = `Cannot start capture: ${error.message || error}`;
       }
     }

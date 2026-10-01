@@ -87,7 +87,6 @@ export const NON_SETTING_CONTROLS: readonly NonSettingControl[] = [
   control({ id: 'two-tone-level', reason: 'child-of-indexed', coveredBy: 'transmit.twoToneEnable', note: 'Two-tone generator parameter.' }),
   control({ id: 'two-tone-delay', reason: 'child-of-indexed', coveredBy: 'transmit.twoToneEnable', note: 'Two-tone generator parameter.' }),
   control({ id: 'two-tone-invert-lsb', reason: 'child-of-indexed', coveredBy: 'transmit.twoToneEnable', note: 'Two-tone generator parameter.' }),
-  control({ id: 'rx-spectrum-label', reason: 'child-of-indexed', coveredBy: 'display.rxMeasure', note: 'Firmware label for an RX spectrum capture.' }),
   control({ id: 'rx-spectrum-duration', reason: 'child-of-indexed', coveredBy: 'display.rxMeasure', note: 'Duration for an RX spectrum capture.' }),
   control({ id: 'rx-spectrum-start-btn', reason: 'child-of-indexed', coveredBy: 'display.rxMeasure', note: 'Starts the RX spectrum capture.' }),
   control({ id: 'rx-spectrum-download-btn', reason: 'child-of-indexed', coveredBy: 'display.rxMeasure', note: 'Downloads the completed RX spectrum capture.' }),

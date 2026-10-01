@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   RxSpectrumAccumulator,
   compareRxSpectrumCaptures,
+  type RxSpectrumFpgaIdentity,
   type RxSpectrumSettings,
 } from '../src/dsp/rx-spectrum-measure';
 
@@ -37,9 +38,14 @@ function frame(noiseDb = -100, passbandDb = -80): Float32Array {
 }
 
 function capture(label: string, noiseDb = -100, passbandDb = -80) {
-  const recorder = new RxSpectrumAccumulator(settings, label, 0, 3000);
+  const recorder = new RxSpectrumAccumulator(settings, identity(label), 0, 3000);
   for (let ms = 0; ms <= 3000; ms += 100) recorder.addFrame(frame(noiseDb, passbandDb), ms, settings);
   return recorder.finish();
+}
+
+function identity(rxFilter = '22/Q24'): RxSpectrumFpgaIdentity {
+  return { firmware: '1.30.002', subversion: 2, rxFilter, buildIdRaw: 0x53460002,
+    buildIdHex: '0x53460002', status: 'identified' };
 }
 
 describe('RX spectrum measurement', () => {
@@ -55,7 +61,7 @@ describe('RX spectrum measurement', () => {
   });
 
   it('samples at most ten frames per second and reveals burst rise', () => {
-    const recorder = new RxSpectrumAccumulator(settings, '22/Q24', 0, 3000);
+    const recorder = new RxSpectrumAccumulator(settings, identity(), 0, 3000);
     for (let ms = 0; ms <= 3000; ms += 50) {
       recorder.addFrame(frame(ms === 1500 ? -50 : -100), ms, settings);
     }
@@ -65,7 +71,7 @@ describe('RX spectrum measurement', () => {
   });
 
   it('marks sparse captures limited without inventing percentile values', () => {
-    const recorder = new RxSpectrumAccumulator(settings, '22/Q24', 0, 3000);
+    const recorder = new RxSpectrumAccumulator(settings, identity(), 0, 3000);
     recorder.addFrame(frame(), 0, settings);
     const result = recorder.finish();
     expect(result.quality).toBe('limited');
@@ -73,8 +79,24 @@ describe('RX spectrum measurement', () => {
     expect(result.summary.widebandBurstRiseDb).toBe(0);
   });
 
+  it('records an unidentified build without assigning it a filter', () => {
+    const recorder = new RxSpectrumAccumulator(settings, {
+      firmware: '1.30 — build unidentified',
+      subversion: null,
+      rxFilter: null,
+      buildIdRaw: 0x53460003,
+      buildIdHex: '0x53460003',
+      status: 'unidentified',
+    }, 0, 3000);
+    recorder.addFrame(frame(), 0, settings);
+    const result = recorder.finish();
+    expect(result.fpgaIdentity.rxFilter).toBeNull();
+    expect(result.fpgaIdentity.buildIdHex).toBe('0x53460003');
+    expect(result.firmwareLabel).toContain('RX filter unidentified');
+  });
+
   it('rejects changed receive settings and mismatched comparison files', () => {
-    const recorder = new RxSpectrumAccumulator(settings, '22/Q24', 0, 3000);
+    const recorder = new RxSpectrumAccumulator(settings, identity(), 0, 3000);
     expect(() => recorder.addFrame(frame(), 0, { ...settings, attenuationDb: 20 })).toThrow(/settings changed/);
     const baseline = capture('18/Q20', -100, -80);
     const candidate = capture('22/Q24', -103, -78);
