@@ -7,12 +7,35 @@ Configuration artifacts and their purposes:
 - `saturnfallback.bin`: complete fallback image. Do not program this during
   normal development.
 - `saturn-primary-vXX-<sha>.bin`: slot-relative primary image created by the
-  guarded lab export. This is the only generated BIN intended for the
-  loader's default primary destination.
+  guarded lab export for the loader's default primary destination.
+- `saturnprimary2026v30.bin`: archived 1.30.002 / 22/Q24 slot-relative primary
+  image with embedded build ID `0x53460002`; see the version entry below.
 - `saturn-lab.bin`: complete multiboot image for archival or an external
   programmer. Do not give this file to the default primary loader path.
 
 Version history:
+
+V30 identified RX image, 30/09/2026: `saturnprimary2026v30.bin` contains the
+1.30.002 primary image. Compared with the V30 18/Q20 baseline, its receive
+DDC FIR uses 22-bit coefficients with 24 fractional bits instead of 18-bit
+coefficients with 20 fractional bits. The 1024-tap, 8:1 decimation structure
+is retained across all ten instantiated FIRs. The generated FIR latency is 32
+clocks instead of 30. The 22/Q24 build changed the DDC block design and FIR
+compiler configuration; it did not include a DDS or transmit-path change.
+
+The image's FPGA build ID is `0x53460002` (register `0x4004`). The identified
+BIT was generated from the routed 22/Q24 checkpoint by changing only
+`BITSTREAM.CONFIG.USR_ACCESS`, then exported as a slot-relative SPIx1 BIN for
+the primary flash destination at `0x00980000`. The 9,730,652-byte BIN is
+byte-for-byte the generated BIT payload; SHA256:
+`8d472d4f1484d6edd8300cdebe1802795bf65ffaac21f0d7c4939baa5be9d31d`.
+The embedded ID and hash match the verified image identity manifest in
+`update_manager/release/fpga-image-identity-v1.json`. G2 live telemetry and a
+new RX capture reported this ID and label on 01/10/2026. This commit archives
+the BIN and README entry, not the separately frozen 22/Q24 source patch or lab
+files. The ID identifies the build; it does not by itself attest the flash
+contents or establish a measured rejection improvement or complete TX and
+recovery qualification.
 
 V30 ADC telemetry source candidate, 13/09/2026: preserves the V29 signal path
 and legacy ADC status/peak registers while adding boot-lifetime, saturating
