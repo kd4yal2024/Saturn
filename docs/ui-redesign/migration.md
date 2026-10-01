@@ -88,7 +88,7 @@ Spectrum, waterfall and 3D view behaviour
 | Averaging toolbar control | id `spectrum-average-toolbar-btn` | main screen, pinnable | Display → legacy display panel | wired | Settings route covered by browser sweep; original handler retained. Live-radio action requires hardware QA |
 | Peak toolbar control | id `spectrum-peak-toolbar-btn` | main screen, pinnable | Display → legacy display panel | wired | Settings route covered by browser sweep; original handler retained. Live-radio action requires hardware QA |
 | Tune peak toolbar control | id `spectrum-tune-peak-btn` | main screen, pinnable | Display → legacy display panel | wired | Settings route covered by browser sweep; original handler retained. Live-radio action requires hardware QA |
-| RX Measure | id `rx-spectrum-toggle-btn` | main screen, pinnable | Display → route to the original control | wired | Settings route covered by browser sweep; original handler retained. Live-radio action requires hardware QA |
+| RX Measure | id `operations-tab-rx-measure` | main screen, pinnable | Display → route to the original control | wired | Settings route covered by browser sweep; original handler retained. Live-radio action requires hardware QA |
 | Wake lock toggle | id `wake-lock-btn` | main screen, pinnable | Display → legacy display panel | wired | Settings route covered by browser sweep; original handler retained. Live-radio action requires hardware QA |
 | Frequency lock toggle | id `freq-lock-btn` | main screen, pinnable | Display → legacy display panel | wired | Settings route covered by browser sweep; original handler retained. Live-radio action requires hardware QA |
 | Traditional waterfall settings | id `terrain-traditional-settings` | Settings only | Display → legacy display panel | wired | Settings route covered by browser sweep; original handler retained. Live-radio action requires hardware QA |
@@ -348,12 +348,12 @@ Device, versions, diagnostics
 
 ## Coverage
 
-232 interactive elements carry an id in the template: **170 indexed** and **62 explicitly excluded**, so nothing is unaccounted for.
+233 interactive elements carry an id in the template: **170 indexed** and **63 explicitly excluded**, so nothing is unaccounted for.
 The registry test fails if a template control is neither indexed nor excluded, and also fails on a stale exclusion, so this total is enforced rather than asserted here.
 
 ## Excluded controls, with reasons
 
-### Navigation and modal chrome (37)
+### Navigation and modal chrome (38)
 
 | Control | Covered by | Reason it is not a separate setting |
 | --- | --- | --- |
@@ -373,6 +373,7 @@ The registry test fails if a template control is neither indexed nor excluded, a
 | `phone-menu-ops-dsp-btn` | DSP panel | Operations route. |
 | `phone-menu-ops-radio-btn` | Radio panel | Operations route. |
 | `phone-menu-ops-log-btn` | Live client trace | Operations route. |
+| `phone-menu-ops-rx-measure-btn` | RX Measure | Opens the RX Measure tab from the phone menu. |
 | `setup-menu-btn` | Settings | Legacy settings trigger. |
 | `settings-search` | Settings | Search field for the Settings index. |
 | `settings-index-return` | Settings | Returns from an original setup panel to the Settings section index. |

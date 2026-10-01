@@ -39,6 +39,7 @@ export const NON_SETTING_CONTROLS: readonly NonSettingControl[] = [
   control({ id: 'phone-menu-ops-dsp-btn', reason: 'navigation', coveredBy: 'receive.dspTab', note: 'Operations route.' }),
   control({ id: 'phone-menu-ops-radio-btn', reason: 'navigation', coveredBy: 'radio.operationsTab', note: 'Operations route.' }),
   control({ id: 'phone-menu-ops-log-btn', reason: 'navigation', coveredBy: 'log.liveTrace', note: 'Operations route.' }),
+  control({ id: 'phone-menu-ops-rx-measure-btn', reason: 'navigation', coveredBy: 'display.rxMeasure', note: 'Opens the RX Measure tab from the phone menu.' }),
   control({ id: 'system-go-live-btn', reason: 'duplicate', coveredBy: 'network.goLive', note: 'System-menu entry forwards to the original Go Live, Cancel Connect or Cancel Retry handler.' }),
 
   // Legacy settings shell chrome.

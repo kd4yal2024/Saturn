@@ -8,6 +8,7 @@ import {
 describe('operations drawer model', () => {
   it('normalizes known targets and rejects stale values', () => {
     expect(normalizeOperationsDrawerTarget(' NETWORK ')).toBe('network');
+    expect(normalizeOperationsDrawerTarget(' RX-MEASURE ')).toBe('rx-measure');
     expect(normalizeOperationsDrawerTarget('engineering')).toBe('memory');
   });
 

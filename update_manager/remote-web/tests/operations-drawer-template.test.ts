@@ -6,7 +6,7 @@ const template = readFileSync(
   'utf8',
 );
 
-const targets = ['memory', 'audio', 'network', 'dsp', 'radio', 'log'];
+const targets = ['memory', 'audio', 'network', 'dsp', 'radio', 'log', 'rx-measure'];
 
 describe('responsive operations drawer template', () => {
   it('provides one tab and one panel for every operations view', () => {
@@ -43,7 +43,7 @@ describe('responsive operations drawer template', () => {
   });
 
   it('renders each telemetry view only while that drawer panel is open', () => {
-    expect(template).toContain('if (!selection.open || selection.target === "log") return');
+    expect(template).toContain('if (!selection.open || selection.target === "log" || selection.target === "rx-measure") return');
     expect(template).toContain('now - operationsDrawerLastRenderAt < 500');
     expect(template).toContain('updateOperationsDrawer();');
   });

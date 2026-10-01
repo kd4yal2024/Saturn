@@ -5,6 +5,7 @@ export const OPERATIONS_DRAWER_TARGETS = [
   'dsp',
   'radio',
   'log',
+  'rx-measure',
 ] as const;
 
 export type OperationsDrawerTarget = (typeof OPERATIONS_DRAWER_TARGETS)[number];

@@ -32,6 +32,7 @@ const ROUTE_TARGETS: Record<string, string[]> = {
   opsDsp: ['id="operations-tab-dsp"'],
   opsRadio: ['id="operations-tab-radio"'],
   opsLog: ['id="operations-tab-log"'],
+  opsRxMeasure: ['id="operations-tab-rx-measure"'],
 };
 
 describe('Phase 2 phone overflow menu', () => {

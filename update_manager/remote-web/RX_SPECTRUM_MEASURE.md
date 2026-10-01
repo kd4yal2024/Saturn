@@ -1,6 +1,6 @@
 # RX spectrum measurement in Saturn Remote
 
-The **RX Measure** button in the Panadapter / Waterfall toolbar opens a local browser measurement panel. It observes the raw RX IQ FFT before display averaging, trace smoothing, peak hold, waterfall cleanup, auto range, color mapping, or zoom. It does not send a radio command or change RX settings. The measurement is available while the display uses raw IQ in a narrowband RX mode; the server spectrum display path and WFM are not accepted.
+The **RX Measure** tab in the lower Operations toolbar, beside Memory, Audio, Network, DSP, Radio, and Log, opens a local browser measurement panel. On a narrow phone screen, open the phone menu and choose Operations → RX Measure. It observes the raw RX IQ FFT before display averaging, trace smoothing, peak hold, waterfall cleanup, auto range, color mapping, or zoom. It does not send a radio command or change RX settings. The measurement is available while the display uses raw IQ in a narrowband RX mode; the server spectrum display path and WFM are not accepted.
 
 ## Capture and compare
 

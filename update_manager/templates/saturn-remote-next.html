@@ -6893,6 +6893,7 @@
           <button class="btn phone-menu-item" id="phone-menu-ops-dsp-btn" type="button" data-phone-route="opsDsp">DSP</button>
           <button class="btn phone-menu-item" id="phone-menu-ops-radio-btn" type="button" data-phone-route="opsRadio">Radio</button>
           <button class="btn phone-menu-item" id="phone-menu-ops-log-btn" type="button" data-phone-route="opsLog">Log</button>
+          <button class="btn phone-menu-item" id="phone-menu-ops-rx-measure-btn" type="button" data-phone-route="opsRxMeasure">RX Measure</button>
         </div>
         </div>
         <!-- The System route hosts the original header diagnostics menu node here
@@ -6985,7 +6986,8 @@
           opsNetwork: function(){ clickById('operations-tab-network'); },
           opsDsp: function(){ clickById('operations-tab-dsp'); },
           opsRadio: function(){ clickById('operations-tab-radio'); },
-          opsLog: function(){ clickById('operations-tab-log'); }
+          opsLog: function(){ clickById('operations-tab-log'); },
+          opsRxMeasure: function(){ clickById('operations-tab-rx-measure'); }
         };
 
         sheet.addEventListener('click', function(event){
@@ -8204,7 +8206,6 @@
               <button class="btn eq-enable-btn" id="spectrum-average-toolbar-btn" type="button" title="Cycle spectrum averaging">AVG 1</button>
               <button class="btn eq-enable-btn" id="spectrum-peak-toolbar-btn" type="button" aria-pressed="false" title="Toggle spectrum peak hold">PEAK OFF</button>
               <button class="btn eq-enable-btn" id="spectrum-tune-peak-btn" type="button" aria-pressed="false" title="Tune the strongest signal inside the RX passband">Tune Peak</button>
-              <button class="btn eq-enable-btn" id="rx-spectrum-toggle-btn" type="button" aria-expanded="false" aria-controls="rx-spectrum-panel" title="Measure raw RX IQ without changing radio settings">RX Measure</button>
               <span class="display-pill mono" id="peak-tune-readout" hidden>PEAK --</span>
               <button class="btn eq-enable-btn" id="display-center-btn" type="button" title="Reset the display span">Center</button>
               <button class="btn eq-enable-btn compact-control" id="wake-lock-btn" type="button">Stay Awake</button>
@@ -8297,22 +8298,6 @@
               <div class="scope-stat-value mono"><span id="display-resolution">--</span> • TCI IQ</div>
             </div>
           </div>
-          <section class="rx-spectrum-panel" id="rx-spectrum-panel" aria-label="RX spectrum measurement" hidden>
-            <div>Capture the unsmoothed RX IQ spectrum. Levels are relative FFT dB, not calibrated dBm. Keep the antenna, frequency, attenuation, RF gain, mode, and filter fixed for both firmware runs.</div>
-            <div class="rx-spectrum-controls">
-              <label>Firmware label <input class="field" id="rx-spectrum-label" type="text" maxlength="80" placeholder="e.g. 22/Q24 ID 0x53460002" /></label>
-              <label>Duration <select class="field" id="rx-spectrum-duration"><option value="30">30 seconds</option><option value="120">120 seconds</option></select></label>
-              <button class="btn" id="rx-spectrum-start-btn" type="button">Start capture</button>
-              <button class="btn ghost" id="rx-spectrum-download-btn" type="button" disabled>Download capture</button>
-            </div>
-            <output id="rx-spectrum-status" role="status">Ready for raw RX IQ.</output>
-            <pre id="rx-spectrum-result" hidden></pre>
-            <div class="rx-spectrum-controls">
-              <label>Baseline JSON <input id="rx-spectrum-baseline-file" type="file" accept=".json,application/json" /></label>
-              <label>Candidate JSON <input id="rx-spectrum-candidate-file" type="file" accept=".json,application/json" /></label>
-              <button class="btn ghost" id="rx-spectrum-compare-btn" type="button">Compare captures</button>
-            </div>
-          </section>
         </div>
 
         <div class="panel log-card console-log" data-phone-panel="log">
@@ -8515,6 +8500,7 @@
         <button class="operations-tab" id="operations-tab-dsp" type="button" role="tab" data-operations-target="dsp" aria-selected="false" aria-controls="operations-panel-dsp">DSP</button>
         <button class="operations-tab" id="operations-tab-radio" type="button" role="tab" data-operations-target="radio" aria-selected="false" aria-controls="operations-panel-radio">Radio</button>
         <button class="operations-tab" id="operations-tab-log" type="button" role="tab" data-operations-target="log" aria-selected="false" aria-controls="operations-panel-log">Log</button>
+        <button class="operations-tab" id="operations-tab-rx-measure" type="button" role="tab" data-operations-target="rx-measure" aria-selected="false" aria-controls="operations-panel-rx-measure">RX Measure</button>
         <button class="btn ghost operations-close-button" id="operations-close-btn" type="button" aria-label="Close Operations drawer" onclick="collapseOperationsDrawer()">Close</button>
       </nav>
       <div class="operations-drawer-content" id="operations-drawer-content">
@@ -8564,6 +8550,23 @@
           <div class="operator-detail-grid" id="operations-radio-grid"></div>
         </section>
         <section class="operations-panel" id="operations-panel-log" role="tabpanel" aria-labelledby="operations-tab-log" data-operations-panel="log" hidden></section>
+        <section class="operations-panel rx-spectrum-panel" id="operations-panel-rx-measure" role="tabpanel" aria-labelledby="operations-tab-rx-measure" data-operations-panel="rx-measure" hidden>
+          <div class="operations-panel-head"><h2 class="operations-panel-title">RX Measure</h2><span class="operations-panel-meta">Raw RX IQ spectrum capture and comparison</span></div>
+          <div>Capture the unsmoothed RX IQ spectrum. Levels are relative FFT dB, not calibrated dBm. Keep the antenna, frequency, attenuation, RF gain, mode, and filter fixed for both firmware runs.</div>
+          <div class="rx-spectrum-controls">
+            <label>Firmware label <input class="field" id="rx-spectrum-label" type="text" maxlength="80" placeholder="e.g. 22/Q24 ID 0x53460002" /></label>
+            <label>Duration <select class="field" id="rx-spectrum-duration"><option value="30">30 seconds</option><option value="120">120 seconds</option></select></label>
+            <button class="btn" id="rx-spectrum-start-btn" type="button">Start capture</button>
+            <button class="btn ghost" id="rx-spectrum-download-btn" type="button" disabled>Download capture</button>
+          </div>
+          <output id="rx-spectrum-status" role="status">Ready for raw RX IQ.</output>
+          <pre id="rx-spectrum-result" hidden></pre>
+          <div class="rx-spectrum-controls">
+            <label>Baseline JSON <input id="rx-spectrum-baseline-file" type="file" accept=".json,application/json" /></label>
+            <label>Candidate JSON <input id="rx-spectrum-candidate-file" type="file" accept=".json,application/json" /></label>
+            <button class="btn ghost" id="rx-spectrum-compare-btn" type="button">Compare captures</button>
+          </div>
+        </section>
       </div>
     </section>
 
@@ -12275,7 +12278,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
 
     function updateOperationsDrawer(force = false) {
       const selection = operationsDrawerSelectionFromDom();
-      if (!selection.open || selection.target === "log") return;
+      if (!selection.open || selection.target === "log" || selection.target === "rx-measure") return;
       const now = performance.now();
       if (!force && now - operationsDrawerLastRenderAt < 500) return;
       operationsDrawerLastRenderAt = now;
@@ -21766,11 +21769,6 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       });
       $("freq-lock-btn").addEventListener("click", () => {
         setFrequencyLock(!state.frequencyLock);
-      });
-      $("rx-spectrum-toggle-btn").addEventListener("click", () => {
-        const panel = $("rx-spectrum-panel");
-        panel.hidden = !panel.hidden;
-        $("rx-spectrum-toggle-btn").setAttribute("aria-expanded", String(!panel.hidden));
       });
       $("rx-spectrum-start-btn").addEventListener("click", startRxSpectrumCapture);
       $("rx-spectrum-download-btn").addEventListener("click", () => {
