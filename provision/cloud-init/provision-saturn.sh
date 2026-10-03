@@ -1537,7 +1537,7 @@ install_pihpsdr_runtime() {
   local script="/opt/saturn-go/scripts/update-pihpsdr.py"
 
   [[ -f "$script" ]] || die "Installed piHPSDR updater not found: $script"
-  log "Installing piHPSDR runtime and native DSP libraries required by Saturn Remote"
+  log "Installing optional piHPSDR runtime"
   env \
     HOME="$saturn_home" \
     SUDO_USER="$SATURN_USER" \
@@ -1549,7 +1549,6 @@ install_pihpsdr_runtime() {
   fi
 
   [[ -f "$saturn_home/github/pihpsdr/wdsp/libwdsp.a" ]] || die "piHPSDR build did not produce wdsp/libwdsp.a"
-  [[ -f "$saturn_home/github/pihpsdr/rnnoise/librnnoise.a" ]] || die "piHPSDR build did not produce rnnoise/librnnoise.a"
   [[ -f "$saturn_home/github/pihpsdr/libspecbleach/libspecbleach.a" ]] || die "piHPSDR build did not produce libspecbleach/libspecbleach.a"
 }
 
