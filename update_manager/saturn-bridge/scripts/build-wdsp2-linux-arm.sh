@@ -182,14 +182,25 @@ text = text.replace(
 )
 linux_port_c.write_text(text)
 
-extrapolate = root / "extrapolate.c"
-text = extrapolate.read_text()
-include = '#include "extrapolate.h"'
-if text.count(include) != 1:
-    raise RuntimeError("WDSP 2.10 extrapolate.c includes changed")
-# Unlike the other WDSP sources, extrapolate.c does not include comm.h, so it
-# misses the Linux definitions of _aligned_malloc and _aligned_free.
-extrapolate.write_text(text.replace(include, '#include "linux_port.h"\n' + include, 1))
+# These standalone WDSP sources use _aligned_malloc/_aligned_free without
+# including comm.h, which supplies the Linux definitions through linux_port.h.
+for name, include in (
+    ("extrapolate.c", '#include "extrapolate.h"'),
+    ("nurbs_fit.c", '#include "nurbs_fit.h"'),
+    ("nurbs_spline.c", '#include "nurbs_spline.h"'),
+):
+    source = root / name
+    text = source.read_text()
+    if text.count(include) != 1:
+        raise RuntimeError(f"WDSP 2.10 {name} includes changed")
+    source.write_text(text.replace(include, '#include "linux_port.h"\n' + include, 1))
+
+for source in root.glob("*.c"):
+    text = source.read_text()
+    if ("_aligned_malloc" in text or "_aligned_free" in text) and not (
+        '#include "comm.h"' in text or '#include "linux_port.h"' in text
+    ):
+        raise RuntimeError(f"WDSP 2.10 {source.name} uses aligned allocation without Linux definitions")
 
 snoop = root / "snoop.c"
 if snoop.exists():
