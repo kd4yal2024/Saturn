@@ -138,6 +138,14 @@ new_wait_for_single_object = (
 if old_wait_for_single_object not in text:
     raise RuntimeError("piHPSDR LinuxWaitForSingleObject implementation changed")
 text = text.replace(old_wait_for_single_object, new_wait_for_single_object, 1)
+sendbuf_declaration = "void sendbuf(void *arg); // declared in analyzer.c but not in header file\n"
+if text.count(sendbuf_declaration) != 1:
+    raise RuntimeError("piHPSDR thread-name declarations changed")
+text = text.replace(
+    sendbuf_declaration,
+    sendbuf_declaration + "\tvoid doPSCorrChange(void *arg); // declared in WDSP 2.10 calcc.c\n",
+    1,
+)
 text = text.replace(
     "#if defined(linux) || defined(__APPLE__)\n\n",
     "#if defined(linux) || defined(__APPLE__)\n\n"
@@ -173,6 +181,15 @@ text = text.replace(
     "sem_t *LinuxCreateSemaphore",
 )
 linux_port_c.write_text(text)
+
+extrapolate = root / "extrapolate.c"
+text = extrapolate.read_text()
+include = '#include "extrapolate.h"'
+if text.count(include) != 1:
+    raise RuntimeError("WDSP 2.10 extrapolate.c includes changed")
+# Unlike the other WDSP sources, extrapolate.c does not include comm.h, so it
+# misses the Linux definitions of _aligned_malloc and _aligned_free.
+extrapolate.write_text(text.replace(include, '#include "linux_port.h"\n' + include, 1))
 
 snoop = root / "snoop.c"
 if snoop.exists():
