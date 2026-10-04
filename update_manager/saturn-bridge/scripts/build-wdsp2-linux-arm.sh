@@ -34,12 +34,16 @@ fi
 
 # Fail before touching the existing archive if the pinned resampler changed.
 python3 "${SCRIPT_DIR}/wdsp_hbres_index.py" --check "${WDSP2_SOURCE_DIR}/reshb.c"
+# The pinned FM pre-emphasis resize frees its filter but fails to retain the
+# replacement, crashing Bridge's TX initialization when NC changes 2048->4096.
+python3 "${SCRIPT_DIR}/wdsp_emph_fix.py" --check "${WDSP2_SOURCE_DIR}/emph.c"
 
 rm -rf "${BUILD_DIR}"
 mkdir -p "${BUILD_DIR}"
 cp -a "${WDSP2_SOURCE_DIR}/." "${BUILD_DIR}/"
 cp "${PIHPSDR_WDSP_DIR}/linux_port.c" "${PIHPSDR_WDSP_DIR}/linux_port.h" "${BUILD_DIR}/"
 python3 "${SCRIPT_DIR}/wdsp_hbres_index.py" "${BUILD_DIR}/reshb.c"
+python3 "${SCRIPT_DIR}/wdsp_emph_fix.py" "${BUILD_DIR}/emph.c"
 
 python3 - "${BUILD_DIR}" <<'PY'
 from pathlib import Path
