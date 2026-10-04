@@ -10,10 +10,65 @@ Configuration artifacts and their purposes:
   guarded lab export for the loader's default primary destination.
 - `saturnprimary2026v30.bin`: archived 1.30.002 / 22/Q24 slot-relative primary
   image with embedded build ID `0x53460002`; see the version entry below.
+- `saturnprimary2026v31.bin`: archived 1.31.001 slot-relative primary image
+  (22/Q24 RX FIR with saturating receiver output) with embedded build ID
+  `0x53460003`; see the version entry below.
 - `saturn-lab.bin`: complete multiboot image for archival or an external
   programmer. Do not give this file to the default primary loader path.
 
 Version history:
+
+V31 identified RX image, 04/10/2026: `saturnprimary2026v31.bin` contains the
+1.31.001 primary image, "1.31 — 22/Q24 RX FIR with saturating receiver
+output". It is the 1.30.002 design with one receive-path change in all ten
+DDCs. The final 27-to-24-bit DDC output conversion (`axis_subset_converter_0`,
+`tdata[23:0]`) wrapped on overflow and is replaced by a saturating conversion.
+Values from -8,388,608 to +8,388,607 pass unchanged, bit for bit; values
+outside that range clamp to the nearest endpoint instead of reversing sign.
+The output format, sample rates, sample timing and I/Q order are unchanged.
+The 22/Q24 FIR, the DDS and the transmit path are unchanged.
+
+The image's FPGA build ID is `0x53460003` (register `0x4004`). It is set by
+`BITSTREAM.CONFIG.USR_ACCESS` during the build rather than stamped
+afterwards. The software-information register `0xC000` decodes as firmware
+1.31:
+- bits [31:25]: major version 1;
+- bits [24:20]: software ID 4;
+- bits [19:4]: version 31;
+- bits [3:0]: live clock-monitor status.
+
+The raw value is therefore `0x024001F0` plus the status bits, not 31. The
+FIFO (`0x56323900`) and ADC (`0x56333000`) telemetry markers are unchanged.
+
+The image was built offline with the full lab flow (`FPGA/lab/tcl/build.tcl`)
+from a fresh copy of the 1.30.002 source, plus the saturating-output change
+and the 1.31 identity. It passed the lab gates:
+- setup WNS +0.108 ns and hold WHS +0.047 ns;
+- no DRC errors or critical warnings;
+- no unwaived CDC critical findings;
+- no methodology critical warnings;
+- the telemetry netlist gate.
+
+Compared with 1.30.002 it uses 255 more LUTs and 30 more flip-flops; block RAM
+and DSP use are unchanged. The BIT SHA256 is
+`1c8d19a9f253cdc8b36a7ec99bc5d5290f5843680e1435c42d5bcb8fccfb7af7`. It was
+exported as a slot-relative SPIx1 BIN for the primary flash destination at
+`0x00980000`. The 9,730,652-byte BIN is byte-for-byte the BIT configuration
+payload; SHA256:
+`5fe07f14c119766481afa1ceff46113bfc085af87ee91fab1fe42eb67c75172d`.
+The ID and hashes match the 1.31.001 entry in
+`update_manager/release/fpga-image-identity-v1.json`.
+
+This image has not yet been installed or verified on the G2. Initial radio
+validation must be receive-only. The Saturn Bridge admits 1.31 for RX and
+blocks RF TX, but that block does not by itself prevent transmission through
+P2/Thetis. Transmit needs a focused regression check before it is enabled for
+this build.
+
+This commit archives the BIN and README entry, not the separately frozen 1.31
+source change set or lab files. The saturating output changes behaviour only
+during digital overload. It does not prevent ADC overload, and it does not
+establish a sensitivity, rejection or audio improvement.
 
 V30 identified RX image, 30/09/2026: `saturnprimary2026v30.bin` contains the
 1.30.002 primary image. Compared with the V30 18/Q20 baseline, its receive
