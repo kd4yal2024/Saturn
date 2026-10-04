@@ -4,6 +4,8 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#define P2_FIRMWARE_REQUIRED_MAJOR 1U
+
 typedef struct
 {
     bool Run;
@@ -17,6 +19,7 @@ typedef struct
 } TP2SequenceTracker;
 
 TP2RunState P2DecodeRunState(uint8_t Flags);
+bool P2FirmwareProtocolCompatible(unsigned int Major, unsigned int Minor);
 void P2SequenceReset(TP2SequenceTracker *Tracker);
 bool P2SequenceAccept(TP2SequenceTracker *Tracker, uint32_t Sequence, uint32_t *MissingPackets);
 bool P2ControlSequenceAccept(TP2SequenceTracker *Tracker, uint32_t Sequence, uint32_t *MissingPackets);

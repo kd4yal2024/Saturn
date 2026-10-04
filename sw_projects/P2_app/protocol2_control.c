@@ -2,6 +2,14 @@
 
 #include <stddef.h>
 
+bool P2FirmwareProtocolCompatible(unsigned int Major, unsigned int Minor)
+{
+    // Minor 31 keeps the major-1 Protocol 2 and TX register interface.
+    // Do not add a minor-version TX hold to this compatibility check.
+    (void)Minor;
+    return Major == P2_FIRMWARE_REQUIRED_MAJOR;
+}
+
 TP2RunState P2DecodeRunState(uint8_t Flags)
 {
     TP2RunState State;

@@ -59,13 +59,16 @@ payload; SHA256:
 The ID and hashes match the 1.31.001 entry in
 `update_manager/release/fpga-image-identity-v1.json`.
 
-This image has not yet been installed or verified on the G2. Initial radio
-validation must be receive-only. The Saturn Bridge admits 1.31 for RX and
-blocks RF TX, but that block does not by itself prevent transmission through
-P2/Thetis. Transmit needs a focused regression check before it is enabled for
-this build.
+GoldMarsh reports that the image has been programmed on the G2: live readback
+showed primary configuration, firmware 1.31 and build ID `0x53460003`. That
+checks identity, not receive performance or RF output. The matching host
+change permits RF TX through Bridge XDMA only for this exact identified
+primary PCB2 image; P2/Thetis already accepts major-1 firmware and has no
+minor-31 TX hold. Neither path's host permission is a hardware TX validation.
+A focused, supervised dummy-load TX regression remains necessary before
+normal transmit operation.
 
-This commit archives the BIN and README entry, not the separately frozen 1.31
+The archival commit contains the BIN and README entry, not the separately frozen 1.31
 source change set or lab files. The saturating output changes behaviour only
 during digital overload. It does not prevent ADC overload, and it does not
 establish a sensitivity, rejection or audio improvement.

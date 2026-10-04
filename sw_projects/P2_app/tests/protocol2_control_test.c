@@ -21,6 +21,14 @@ static void test_run_state_requires_run_for_transmit(void)
     assert(State.Run && State.Transmit);
 }
 
+static void test_firmware_major_one_keeps_tx_protocol_compatible_on_minor_31(void)
+{
+    assert(P2FirmwareProtocolCompatible(1U, 30U));
+    assert(P2FirmwareProtocolCompatible(1U, 31U));
+    assert(!P2FirmwareProtocolCompatible(0U, 31U));
+    assert(!P2FirmwareProtocolCompatible(2U, 31U));
+}
+
 static void test_sequence_acceptance_and_gaps(void)
 {
     TP2SequenceTracker Tracker = {0};
@@ -97,6 +105,7 @@ static void test_fifo_sample_scaling(void)
 int main(void)
 {
     test_run_state_requires_run_for_transmit();
+    test_firmware_major_one_keeps_tx_protocol_compatible_on_minor_31();
     test_sequence_acceptance_and_gaps();
     test_sequence_wrap_and_reset();
     test_control_sequence_accepts_thetis_constant_zero();

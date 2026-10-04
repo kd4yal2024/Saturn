@@ -70,9 +70,9 @@
 #include "GanymedePAControl.h"
 #include "frontpanelhandler.h"
 #include "controller_lease.h"
+#include "protocol2_control.h"
 
 #define P2APPVERSION 52
-#define FWREQUIREDMAJORVERSION 1                  // major version that is required. Only altered if programming interface changes.
 //
 // the Firmware version is a protection to make sure that if a p2app update is required by the new firmware,
 // it won't work with an old version. This means p2app will always need to be updated if the firmware is updated to new major version.
@@ -1317,13 +1317,13 @@ int main(int argc, char *argv[])
   }  
 
 
-  if (MajorVersion != FWREQUIREDMAJORVERSION)
+  if (!P2FirmwareProtocolCompatible(MajorVersion, Version))
   {
     printf("\n***************************************************************************\n");
     printf("***************************************************************************\n");
     printf("Incompatible Saturn FPGA firmware v%d; major version%d\n",
              Version,  MajorVersion);
-    printf("This version of p2app requires major version = %d\n", FWREQUIREDMAJORVERSION);
+    printf("This version of p2app requires major version = %u\n", P2_FIRMWARE_REQUIRED_MAJOR);
     printf("You must update your copy of p2app to use that firmware version - see User manual\n");
     printf("p2app will refuse a connection request until this is resolved!\n");
     printf("\n\n\n***************************************************************************\n");
