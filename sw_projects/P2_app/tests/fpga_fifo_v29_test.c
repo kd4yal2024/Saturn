@@ -125,6 +125,18 @@ static void test_snapshot_decoding_and_generation(void)
   }
 }
 
+static void test_v31_retains_v29_telemetry_abi(void)
+{
+  TFPGAFifoV29Snapshot snapshot;
+  reset_mock();
+  FPGAFifoV29Init(31U);
+  assert(FPGAFifoV29Sample());
+  FPGAFifoV29GetSnapshot(&snapshot);
+  assert(snapshot.Available);
+  assert(snapshot.BuildId == FPGA_FIFO_V29_EXPECTED_BUILD_ID);
+  assert(snapshot.SnapshotValid);
+}
+
 static void test_timeout_is_bounded(void)
 {
   TFPGAFifoV29Snapshot snapshot;
@@ -163,6 +175,7 @@ int main(void)
   test_pre_v29_does_not_read();
   test_marker_mismatch_stops_after_marker();
   test_snapshot_decoding_and_generation();
+  test_v31_retains_v29_telemetry_abi();
   test_timeout_is_bounded();
   test_json_names_and_word_units();
   puts("fpga_fifo_v29 tests passed");

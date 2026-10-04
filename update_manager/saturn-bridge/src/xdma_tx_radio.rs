@@ -4,8 +4,9 @@
 //! The runtime owns a separate register descriptor and H2C0 descriptor, but
 //! shares their proven FIFO geometry, sample packing, register ordering, and
 //! fail-safe receive cleanup. Primary PCB2 firmware 1.27 through 1.30 is
-//! permitted by the production firmware policy. Hardware TX acceptance remains
-//! a separate supervised dummy-load test; this gate is not proof of qualification.
+//! permitted by the production firmware policy. The 1.31 candidate image is
+//! admitted for RX only when its proposed USR_ACCESS ID matches; RF TX remains
+//! inhibited pending separate supervised hardware qualification.
 
 use crate::radio_model::RadioModel;
 use crate::tx_thread::{TxRadio, TxRadioResult};
@@ -28,6 +29,8 @@ const DEFAULT_DUC_DEVICE: &str = "/dev/xdma0_h2c_0";
 const DEFAULT_USER_DEVICE: &str = "/dev/xdma0_user";
 const DIRECT_RUNTIME_MIN_FIRMWARE_MINOR: u16 = 27;
 const DIRECT_RUNTIME_MAX_FIRMWARE_MINOR: u16 = 30;
+const RX_ONLY_CANDIDATE_FIRMWARE_MINOR: u16 = 31;
+const RX_ONLY_CANDIDATE_BUILD_ID: u32 = 0x5346_0003;
 
 const TX_CONFIG_REGISTER: u64 = 0x2008;
 const TX_DUC_REGISTER: u64 = 0x200c;
@@ -208,10 +211,11 @@ impl DirectTxState {
         let identity = registers.identity();
         if !direct_runtime_is_supported(identity) {
             return Err(XdmaError::Incompatible(format!(
-                "direct XDMA runtime supports primary Saturn PCB2 firmware 1.{DIRECT_RUNTIME_MIN_FIRMWARE_MINOR} through 1.{DIRECT_RUNTIME_MAX_FIRMWARE_MINOR}; found pcb={} firmware={}.{} image={}",
+                "direct XDMA runtime supports primary Saturn PCB2 firmware 1.{DIRECT_RUNTIME_MIN_FIRMWARE_MINOR} through 1.{DIRECT_RUNTIME_MAX_FIRMWARE_MINOR}, or RX-only 1.{RX_ONLY_CANDIDATE_FIRMWARE_MINOR} with USR_ACCESS 0x{RX_ONLY_CANDIDATE_BUILD_ID:08x}; found pcb={} firmware={}.{} build_id=0x{:08x} image={}",
                 identity.pcb_version,
                 identity.firmware_major,
                 identity.firmware_minor,
+                identity.user_version,
                 if identity.is_fallback() { "fallback" } else { "primary" }
             )));
         }
@@ -837,12 +841,15 @@ fn direct_runtime_is_supported(identity: &SaturnIdentity) -> bool {
     !identity.is_fallback()
         && identity.pcb_version == 2
         && identity.firmware_major == 1
-        && (DIRECT_RUNTIME_MIN_FIRMWARE_MINOR..=DIRECT_RUNTIME_MAX_FIRMWARE_MINOR)
+        && ((DIRECT_RUNTIME_MIN_FIRMWARE_MINOR..=DIRECT_RUNTIME_MAX_FIRMWARE_MINOR)
             .contains(&identity.firmware_minor)
+            || (identity.firmware_minor == RX_ONLY_CANDIDATE_FIRMWARE_MINOR
+                && identity.user_version == RX_ONLY_CANDIDATE_BUILD_ID))
 }
 
 fn direct_rf_tx_is_qualified(identity: &SaturnIdentity) -> bool {
     direct_runtime_is_supported(identity)
+        && identity.firmware_minor <= DIRECT_RUNTIME_MAX_FIRMWARE_MINOR
 }
 
 fn steady_state_fifo_fault(snapshot: FifoSnapshot, underflow_is_fault: bool) -> bool {
@@ -1193,14 +1200,24 @@ mod tests {
     }
 
     #[test]
-    fn direct_runtime_accepts_primary_pcb2_v27_through_v30() {
+    fn direct_runtime_preserves_v27_through_v30_and_accepts_only_the_v31_candidate_id() {
         for firmware_minor in 27..=30 {
             assert!(direct_runtime_is_supported(&primary_pcb2_identity(
                 firmware_minor
             )));
         }
+        let mut baseline = primary_pcb2_identity(30);
+        baseline.user_version = 0x5346_0002;
+        assert!(direct_runtime_is_supported(&baseline));
         assert!(!direct_runtime_is_supported(&primary_pcb2_identity(26)));
         assert!(!direct_runtime_is_supported(&primary_pcb2_identity(31)));
+        let mut candidate = primary_pcb2_identity(31);
+        candidate.user_version = RX_ONLY_CANDIDATE_BUILD_ID;
+        assert!(direct_runtime_is_supported(&candidate));
+        candidate.user_version = 0x5346_0002;
+        assert!(!direct_runtime_is_supported(&candidate));
+        candidate.user_version = 0x5346_0004;
+        assert!(!direct_runtime_is_supported(&candidate));
     }
 
     #[test]
@@ -1215,6 +1232,10 @@ mod tests {
                 firmware_minor
             )));
         }
+        let mut candidate = primary_pcb2_identity(31);
+        candidate.user_version = RX_ONLY_CANDIDATE_BUILD_ID;
+        assert!(direct_runtime_is_supported(&candidate));
+        assert!(!direct_rf_tx_is_qualified(&candidate));
         let mut identity = primary_pcb2_identity(30);
         identity.software_id = 3;
         assert!(!direct_rf_tx_is_qualified(&identity));

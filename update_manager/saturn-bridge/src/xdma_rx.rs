@@ -2103,6 +2103,10 @@ mod tests {
             FifoStatusPolicy::for_identity(&identity(30)),
             FifoStatusPolicy::Legacy
         );
+        assert_eq!(
+            FifoStatusPolicy::for_identity(&identity(31)),
+            FifoStatusPolicy::Legacy
+        );
     }
 
     #[test]

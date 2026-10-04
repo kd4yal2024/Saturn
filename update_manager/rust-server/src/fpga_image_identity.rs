@@ -171,7 +171,25 @@ mod tests {
         assert!(fpga["rx_filter"].is_null());
         assert_eq!(fpga["build_id_hex"], "0x53460003");
 
+        // The separately built 1.31 image is identified only with the exact
+        // USR_ACCESS and firmware major/minor pair in the verified manifest.
+        known["current"]["fpga"]["firmware_version"] = json!(31);
+        annotate(&mut known);
+        let fpga = &known["current"]["fpga"];
+        assert_eq!(fpga["build_identity_status"], "identified");
+        assert_eq!(fpga["firmware_display"], "1.31.001");
+        assert_eq!(fpga["rx_filter"], "22/Q24 saturated");
+        assert_eq!(fpga["build_id_hex"], "0x53460003");
+
+        known["current"]["fpga"]["build_id_raw"] = json!(0x53460004_u32);
+        annotate(&mut known);
+        assert_eq!(known["current"]["fpga"]["build_identity_status"], "unidentified");
+        assert!(known["current"]["fpga"]["rx_filter"].is_null());
+
         known["current"]["fpga"]["build_id_raw"] = json!(0x53460002_u32);
+        annotate(&mut known);
+        assert_eq!(known["current"]["fpga"]["build_identity_status"], "unidentified");
+
         known["current"]["fpga"]["firmware_version"] = json!(29);
         annotate(&mut known);
         assert_eq!(

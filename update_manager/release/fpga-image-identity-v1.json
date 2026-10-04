@@ -21,6 +21,17 @@
       "rx_filter": "22/Q24",
       "bin_sha256": "8d472d4f1484d6edd8300cdebe1802795bf65ffaac21f0d7c4939baa5be9d31d",
       "bit_sha256": "897943526ffb5da09aa9066f93797faefdd9e8cb710304ba1ec586df850de39a"
+    },
+    {
+      "build_id": "0x53460003",
+      "firmware_major": 1,
+      "firmware_minor": 31,
+      "firmware_subversion": 1,
+      "rx_filter": "22/Q24 saturated",
+      "bin_sha256": "5fe07f14c119766481afa1ceff46113bfc085af87ee91fab1fe42eb67c75172d",
+      "bit_sha256": "1c8d19a9f253cdc8b36a7ec99bc5d5290f5843680e1435c42d5bcb8fccfb7af7",
+      "verified_source_manifest": "goldmarsh_fw131_20261004T130938Z/artifacts/identity_manifest_1_31_001.json",
+      "verified_source_manifest_sha256": "04bf23010e618b2dbee8b2658d054bab88e509976b4d60f18b8fe24ff75f9cc0"
     }
   ]
 }

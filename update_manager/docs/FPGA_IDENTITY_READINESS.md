@@ -37,3 +37,20 @@ These checks validate the host change against the running G2 hardware in an isol
 - `bash -n update_manager/scripts/g2-version-info.sh`
 
 No FPGA image is selected or programmed by this change. Production host deployment and a post-deployment display/capture check remain separate actions.
+
+## Firmware 1.31.001 offline-verified host readiness (2026-10-04)
+
+GoldMarsh built the 1.31.001 test image from the 1.30.002 source with the ten DDC final 27-to-24-bit output conversions changed from wrap to saturating clamp (`-8,388,608..+8,388,607`). The 22/Q24 RX FIR, 24-bit I/Q transport, channel ordering, register map, FIFO telemetry ABIs, DDS, and TX path are intended to remain unchanged. Those properties passed GoldMarsh's offline acceptance; **the new image has not been installed or tested on a radio**. No clamp-event counter is exported.
+
+The built image has firmware major `1`, minor `31`, subversion `1`, and USR_ACCESS at `0x4004` equal to `0x53460003`. The version register `0xC000` is field-encoded: the expected value is `0x024001F0 | clock_mon`, not the integer 31. FIFO_Monitor BUILD_ID `0x56323900` and ADC_V30 BUILD_ID `0x56333000` identify telemetry register ABIs and are not image IDs. The offline-verified entry in `fpga-image-identity-v1.json` is backed by GoldMarsh's `goldmarsh_fw131_20261004T130938Z/REPORT.md` and identity manifest SHA-256 `04bf23010e618b2dbee8b2658d054bab88e509976b4d60f18b8fe24ff75f9cc0`. The original top-level manifest provenance still refers to the two 1.30 images; the 1.31 entry carries its own provenance fields.
+
+The 1.31 BIT SHA-256 is `1c8d19a9f253cdc8b36a7ec99bc5d5290f5843680e1435c42d5bcb8fccfb7af7`; the BIN SHA-256 is `5fe07f14c119766481afa1ceff46113bfc085af87ee91fab1fe42eb67c75172d`. I independently hashed the local BIT, BIN, source identity manifest, and packaged 1.30.002 restoration BIT/BIN; all matched GoldMarsh's values and the previous 1.30.002 record. The BIN also compares byte-for-byte with the BIT configuration payload. This verifies the local handoff files, not hardware behavior. Fresh matching host telemetry will now label the image `1.31.001` with `22/Q24 saturated`; unknown or stale IDs remain unidentified, and the telemetry screen captures the raw identity.
+
+| Host path | 1.30.002 baseline | 1.31.001 test image |
+| --- | --- | --- |
+| P2 app | Major-1 acceptance; existing FIFO/ADC ABI probes | Same major-1 acceptance and ABI probes; no P2 runtime change needed |
+| Bridge direct XDMA | Primary PCB2 firmware minors 27–30 remain accepted and RF-TX-qualified under the existing host policy | Primary PCB2 minor 31 accepted for RX only when USR_ACCESS is `0x53460003`; RF TX remains inhibited pending separate supervised qualification |
+| Saturn Go identity | Exact verified match gives `1.30.002`, `22/Q24` | Exact `0x53460003` and major/minor 1/31 match gives `1.31.001`, `22/Q24 saturated` |
+| XDMA kernel module | Generic register/DMA transport | No driver version gate or wire-format change; no driver edit justified by this firmware delta |
+
+Offline checks for this staged host set: Bridge unit tests cover both existing 1.30 acceptance and exact-ID 1.31 RX-only acceptance, with RF-TX still blocked; P2 tests exercise the unchanged FIFO and ADC marker contracts on minor 31; Saturn Go tests identify 1.31 only for the exact ID and version pair; web tests distinguish identified 1.30.002, identified 1.31.001, and unknown images. None of these tests qualifies RF TX or validates the physical radio. The Bridge TX gate alone does not prevent P2/Thetis TX, so the first radio procedure must be explicitly receive-only. A combined firmware/host review and exact 1.30.002 restoration image are required before any authorized test installation.

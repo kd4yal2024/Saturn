@@ -123,6 +123,18 @@ static void test_coherent_snapshot_decode(void)
   }
 }
 
+static void test_v31_retains_v30_telemetry_abi(void)
+{
+  TFPGAADCV30Snapshot snapshot;
+  reset_mock();
+  FPGAADCV30Init(31U);
+  assert(FPGAADCV30Sample());
+  FPGAADCV30GetSnapshot(&snapshot);
+  assert(snapshot.Available);
+  assert(snapshot.BuildId == FPGA_ADC_V30_EXPECTED_BUILD_ID);
+  assert(snapshot.SnapshotValid);
+}
+
 static void test_generation_change_is_bounded(void)
 {
   TFPGAADCV30Snapshot snapshot;
@@ -160,6 +172,7 @@ int main(void)
   test_pre_v30_does_not_read();
   test_marker_mismatch_stops_after_marker();
   test_coherent_snapshot_decode();
+  test_v31_retains_v30_telemetry_abi();
   test_generation_change_is_bounded();
   test_json_contract();
   puts("fpga_adc_v30 tests passed");
