@@ -1,7 +1,8 @@
 # G2 local headphone output
 
-The waterfall now has an operator-only **G2 Headphones** checkbox. On a
-supported direct-XDMA PCB2 G2, it plays the Bridge's decoded 48 kHz RX audio
+The display toolbar has an operator-only **Headphones Off/On** toggle beside
+the frequency Lock button. The button highlights after Bridge acknowledgement.
+On a supported direct-XDMA PCB2 G2, it plays the Bridge's decoded 48 kHz RX audio
 through the rear headphone jack. It uses the current RX volume and follows
 mode, filter and DSP settings, but does not affect browser audio. It starts
 off, is not persisted, and is disabled on operator disconnect. The Bridge
@@ -14,7 +15,7 @@ No second codec writer, RF keying, mic loopback or transmit setting is added.
 Codec errors disable both local headphone modes. Headphone and line outputs
 share the AIC23B DAC, so external speakers should be off during first test.
 Start with the G2 volume low and headphones off-ear; verify RX audio on both
-channels, TX mute, checkbox off and disconnect before relying on the feature.
+channels, TX mute, button off and disconnect before relying on the feature.
 
 ## TX MON background
 
