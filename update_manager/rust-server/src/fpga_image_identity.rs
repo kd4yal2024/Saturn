@@ -183,12 +183,18 @@ mod tests {
 
         known["current"]["fpga"]["build_id_raw"] = json!(0x53460004_u32);
         annotate(&mut known);
-        assert_eq!(known["current"]["fpga"]["build_identity_status"], "unidentified");
+        assert_eq!(
+            known["current"]["fpga"]["build_identity_status"],
+            "unidentified"
+        );
         assert!(known["current"]["fpga"]["rx_filter"].is_null());
 
         known["current"]["fpga"]["build_id_raw"] = json!(0x53460002_u32);
         annotate(&mut known);
-        assert_eq!(known["current"]["fpga"]["build_identity_status"], "unidentified");
+        assert_eq!(
+            known["current"]["fpga"]["build_identity_status"],
+            "unidentified"
+        );
 
         known["current"]["fpga"]["firmware_version"] = json!(29);
         annotate(&mut known);
